@@ -1307,4 +1307,79 @@ mod direct_rcs_fail_closed_tests {
         assert_eq!(batch[2], (marker_gpu >> 32) as u32);
         assert_eq!(batch[3], SPRITE_QUAD_WORKLIST_PRE_MARKER);
     }
+
+    #[test]
+    fn sprite_walker_payload_slots_are_aligned_and_non_overlapping() {
+        assert_eq!(SPRITE_QUAD_WORKLIST_INDIRECT_BYTES, 224);
+        assert_eq!(SPRITE_QUAD_WORKLIST_PAYLOAD_STRIDE_BYTES, 256);
+
+        for descriptor in 0..SPRITE_QUAD_WORKLIST_MAX_DESCS {
+            let offset = sprite_quad_worklist_payload_offset(
+                SPRITE_QUAD_WORKLIST_SINGLE_PAYLOAD_BASE_OFFSET_BYTES,
+                descriptor,
+            )
+            .unwrap();
+            assert!(offset.is_multiple_of(GPGPU_WALKER_INDIRECT_ALIGNMENT_BYTES));
+            assert!(offset + SPRITE_QUAD_WORKLIST_INDIRECT_BYTES <= DIRECT_RCS_BATCH_BYTES);
+            if descriptor + 1 < SPRITE_QUAD_WORKLIST_MAX_DESCS {
+                let next = sprite_quad_worklist_payload_offset(
+                    SPRITE_QUAD_WORKLIST_SINGLE_PAYLOAD_BASE_OFFSET_BYTES,
+                    descriptor + 1,
+                )
+                .unwrap();
+                assert_eq!(next - offset, SPRITE_QUAD_WORKLIST_PAYLOAD_STRIDE_BYTES);
+                assert!(offset + SPRITE_QUAD_WORKLIST_INDIRECT_BYTES <= next);
+            }
+        }
+    }
+
+    #[test]
+    fn sprite_multi_run_payload_slots_are_aligned_and_non_overlapping() {
+        for run_count in 1..=SPRITE_QUAD_WORKLIST_MAX_DESCS {
+            let state_bytes = run_count * SPRITE_QUAD_WORKLIST_RUN_STATE_BLOCK_BYTES;
+            let payload_base = align_up(
+                SPRITE_QUAD_WORKLIST_STATE_BASE_OFFSET_BYTES + state_bytes,
+                GPGPU_WALKER_INDIRECT_ALIGNMENT_BYTES,
+            )
+            .unwrap();
+            assert!(payload_base.is_multiple_of(GPGPU_WALKER_INDIRECT_ALIGNMENT_BYTES));
+
+            let first = sprite_quad_worklist_payload_offset(payload_base, 0).unwrap();
+            let last = sprite_quad_worklist_payload_offset(
+                payload_base,
+                SPRITE_QUAD_WORKLIST_MAX_DESCS - 1,
+            )
+            .unwrap();
+            assert_eq!(first, payload_base);
+            assert!(last.is_multiple_of(GPGPU_WALKER_INDIRECT_ALIGNMENT_BYTES));
+            assert!(last + SPRITE_QUAD_WORKLIST_INDIRECT_BYTES <= DIRECT_RCS_BATCH_BYTES);
+        }
+    }
+
+    #[test]
+    fn sprite_walker_rejects_a_misaligned_indirect_start() {
+        let mut batch = [0u32; 15];
+        let mut cursor = 0usize;
+        assert!(!direct_rcs_push_sprite_quad_worklist_walker(
+            &mut batch,
+            &mut cursor,
+            SPRITE_QUAD_WORKLIST_SINGLE_PAYLOAD_BASE_OFFSET_BYTES + 32,
+            1,
+            1,
+            GPGPU_WALKER_SIMD16_MASK,
+        ));
+        assert_eq!(cursor, 0);
+
+        assert!(direct_rcs_push_sprite_quad_worklist_walker(
+            &mut batch,
+            &mut cursor,
+            SPRITE_QUAD_WORKLIST_SINGLE_PAYLOAD_BASE_OFFSET_BYTES,
+            1,
+            1,
+            GPGPU_WALKER_SIMD16_MASK,
+        ));
+        assert_eq!(cursor, batch.len());
+        assert_eq!(batch[2], SPRITE_QUAD_WORKLIST_INDIRECT_BYTES as u32);
+        assert_eq!(batch[3], SPRITE_QUAD_WORKLIST_SINGLE_PAYLOAD_BASE_OFFSET_BYTES as u32,);
+    }
 }

@@ -107,27 +107,21 @@ pub(crate) fn broker_ui4_surface_acquire(
 ) -> Result<v::vgpu::SurfaceInfo, i32> {
     let owner = ui4_owner(principal)?;
     let descriptor = crate::ui4::blueprint_text::begin_vgpu_surface_import(owner, window_id)?;
-    let imported = match vgpu::import_ui4_surface(
-        principal,
-        DeviceHandle::from_raw(device),
-        descriptor,
-    ) {
-        Ok(imported) => imported,
-        Err(error) => {
-            crate::ui4::blueprint_text::abort_vgpu_surface_import(owner, window_id);
-            return Err(error.errno());
-        }
-    };
+    let imported =
+        match vgpu::import_ui4_surface(principal, DeviceHandle::from_raw(device), descriptor) {
+            Ok(imported) => imported,
+            Err(error) => {
+                crate::ui4::blueprint_text::abort_vgpu_surface_import(owner, window_id);
+                return Err(error.errno());
+            }
+        };
     if let Err(error) = crate::ui4::blueprint_text::commit_vgpu_surface_import(
         owner,
         window_id,
         imported.handle.raw(),
     ) {
-        let _ = vgpu::discard_ui4_surface(
-            principal,
-            DeviceHandle::from_raw(device),
-            imported.handle,
-        );
+        let _ =
+            vgpu::discard_ui4_surface(principal, DeviceHandle::from_raw(device), imported.handle);
         crate::ui4::blueprint_text::abort_vgpu_surface_import(owner, window_id);
         return Err(error);
     }
@@ -141,11 +135,7 @@ pub(crate) fn broker_ui4_surface_acquire(
     })
 }
 
-pub(crate) fn broker_ui4_surface_discard(
-    principal: Principal,
-    device: u64,
-    surface: u64,
-) -> i32 {
+pub(crate) fn broker_ui4_surface_discard(principal: Principal, device: u64, surface: u64) -> i32 {
     let owner = match ui4_owner(principal) {
         Ok(owner) => owner,
         Err(error) => return error,
@@ -206,9 +196,13 @@ pub(crate) fn broker_shader_module_create(
 }
 
 pub(crate) fn broker_shader_module_destroy(principal: Principal, device: u64, shader: u64) -> i32 {
-    vgpu::destroy_shader_module(principal, DeviceHandle::from_raw(device), ShaderModuleHandle::from_raw(shader))
-        .map(|()| 0)
-        .unwrap_or_else(|error| error.errno())
+    vgpu::destroy_shader_module(
+        principal,
+        DeviceHandle::from_raw(device),
+        ShaderModuleHandle::from_raw(shader),
+    )
+    .map(|()| 0)
+    .unwrap_or_else(|error| error.errno())
 }
 
 pub(crate) fn broker_render_pipeline_create(
@@ -229,10 +223,18 @@ pub(crate) fn broker_render_pipeline_create(
     .map_err(|error| error.errno())
 }
 
-pub(crate) fn broker_render_pipeline_destroy(principal: Principal, device: u64, pipeline: u64) -> i32 {
-    vgpu::destroy_render_pipeline(principal, DeviceHandle::from_raw(device), RenderPipelineHandle::from_raw(pipeline))
-        .map(|()| 0)
-        .unwrap_or_else(|error| error.errno())
+pub(crate) fn broker_render_pipeline_destroy(
+    principal: Principal,
+    device: u64,
+    pipeline: u64,
+) -> i32 {
+    vgpu::destroy_render_pipeline(
+        principal,
+        DeviceHandle::from_raw(device),
+        RenderPipelineHandle::from_raw(pipeline),
+    )
+    .map(|()| 0)
+    .unwrap_or_else(|error| error.errno())
 }
 
 pub(crate) fn broker_ui4_indexed_submit(
@@ -622,12 +624,7 @@ pub unsafe extern "C" fn trueos_cabi_vgpu_ui4_surface_acquire(
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_vgpu_ui4_surface_discard(device: u64, surface: u64) -> i32 {
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        guest_rc(
-            trueos_vm::vmcall::OP_BP_VGPU_UI4_SURFACE_DISCARD,
-            device,
-            surface,
-            &[],
-        )
+        guest_rc(trueos_vm::vmcall::OP_BP_VGPU_UI4_SURFACE_DISCARD, device, surface, &[])
     } else {
         broker_ui4_surface_discard(direct_principal(), device, surface)
     }
@@ -655,13 +652,7 @@ pub unsafe extern "C" fn trueos_cabi_vgpu_ui4_surface_clear_submit(
             &payload,
         )
     } else {
-        broker_ui4_surface_clear_submit(
-            direct_principal(),
-            device,
-            queue,
-            surface,
-            rgba8_srgb,
-        )
+        broker_ui4_surface_clear_submit(direct_principal(), device, queue, surface, rgba8_srgb)
     };
     match result {
         Ok(point) => {
@@ -678,13 +669,26 @@ pub unsafe extern "C" fn trueos_cabi_vgpu_shader_module_create(
     package_digest: u64,
     out_shader: *mut u64,
 ) -> i32 {
-    if out_shader.is_null() { return -14; }
+    if out_shader.is_null() {
+        return -14;
+    }
     let result = if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        guest_handle(trueos_vm::vmcall::OP_BP_VGPU_SHADER_MODULE_CREATE, device, package_digest, &[])
+        guest_handle(
+            trueos_vm::vmcall::OP_BP_VGPU_SHADER_MODULE_CREATE,
+            device,
+            package_digest,
+            &[],
+        )
     } else {
         broker_shader_module_create(direct_principal(), device, package_digest)
     };
-    match result { Ok(handle) => { unsafe { out_shader.write(handle) }; 0 }, Err(rc) => rc }
+    match result {
+        Ok(handle) => {
+            unsafe { out_shader.write(handle) };
+            0
+        }
+        Err(rc) => rc,
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -704,16 +708,30 @@ pub unsafe extern "C" fn trueos_cabi_vgpu_render_pipeline_create(
     position_offset: u32,
     out_pipeline: *mut u64,
 ) -> i32 {
-    if out_pipeline.is_null() { return -14; }
+    if out_pipeline.is_null() {
+        return -14;
+    }
     let mut payload = [0u8; 8];
     payload[..4].copy_from_slice(&vertex_stride.to_le_bytes());
     payload[4..].copy_from_slice(&position_offset.to_le_bytes());
     let result = if crate::hv::current_hull_guest_context_vm_id().is_some() {
         guest_handle(trueos_vm::vmcall::OP_BP_VGPU_RENDER_PIPELINE_CREATE, device, shader, &payload)
     } else {
-        broker_render_pipeline_create(direct_principal(), device, shader, vertex_stride, position_offset)
+        broker_render_pipeline_create(
+            direct_principal(),
+            device,
+            shader,
+            vertex_stride,
+            position_offset,
+        )
     };
-    match result { Ok(handle) => { unsafe { out_pipeline.write(handle) }; 0 }, Err(rc) => rc }
+    match result {
+        Ok(handle) => {
+            unsafe { out_pipeline.write(handle) };
+            0
+        }
+        Err(rc) => rc,
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -732,7 +750,9 @@ pub unsafe extern "C" fn trueos_cabi_vgpu_ui4_indexed_submit(
     draw: *const v::vgpu::IndexedDraw,
     out_point: *mut v::vgpu::TimelinePoint,
 ) -> i32 {
-    if draw.is_null() || out_point.is_null() { return -14; }
+    if draw.is_null() || out_point.is_null() {
+        return -14;
+    }
     let draw = unsafe { draw.read() };
     let payload = unsafe {
         core::slice::from_raw_parts(
@@ -745,7 +765,13 @@ pub unsafe extern "C" fn trueos_cabi_vgpu_ui4_indexed_submit(
     } else {
         broker_ui4_indexed_submit(direct_principal(), device, queue, draw)
     };
-    match result { Ok(point) => { unsafe { out_point.write(point) }; 0 }, Err(rc) => rc }
+    match result {
+        Ok(point) => {
+            unsafe { out_point.write(point) };
+            0
+        }
+        Err(rc) => rc,
+    }
 }
 
 #[unsafe(no_mangle)]

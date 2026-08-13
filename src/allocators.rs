@@ -574,6 +574,43 @@ impl FreeList {
         }
     }
 
+    /// Return the payload capacity recorded in the allocator-owned in-band
+    /// tag. Unlike the C ABI allocation ledger, this metadata lives with the
+    /// allocation in the shared heap and therefore follows a pointer across
+    /// Hull and host-carrier execution realms.
+    unsafe fn allocation_usable_size(
+        &mut self,
+        domain: AllocDomain,
+        ptr: *const u8,
+    ) -> Option<usize> {
+        let ptr_addr = ptr as usize;
+        let (heap_start, heap_len) = self.ensure_heap_backing();
+        let heap_end = heap_start.checked_add(heap_len)?;
+        let tag_addr = ptr_addr.checked_sub(size_of::<AllocTag>())?;
+        if heap_start == 0
+            || ptr_addr < heap_start
+            || ptr_addr >= heap_end
+            || tag_addr < heap_start
+            || tag_addr.checked_add(size_of::<AllocTag>())? > heap_end
+        {
+            return None;
+        }
+
+        let tag = unsafe { (tag_addr as *const AllocTag).read() };
+        let block_end = tag.block_start.checked_add(tag.block_size)?;
+        if tag.payload_start != ptr_addr
+            || alloc_domain_from_tag(&tag) != Some(domain)
+            || !self.is_plausible_alloc_block(tag.block_start, tag.block_size)
+            || tag_addr < tag.block_start
+            || ptr_addr >= block_end
+            || !unsafe { self.allocation_block_is_live(tag.block_start, block_end) }
+        {
+            return None;
+        }
+
+        block_end.checked_sub(ptr_addr)
+    }
+
     unsafe fn pin_dma_range(
         &mut self,
         domain: AllocDomain,
@@ -1305,6 +1342,18 @@ pub unsafe fn dealloc_raw(ptr: *mut u8) {
         return;
     };
     unsafe { allocator_for_domain(domain).lock().dealloc(domain, ptr) }
+}
+
+/// Obtain allocator-owned payload capacity without relying on realm-local ABI
+/// bookkeeping. The address selects the owning heap before its lock is taken,
+/// and the in-band tag is fully validated while that lock is held.
+pub fn allocation_usable_size(ptr: *const u8) -> Option<usize> {
+    if ptr.is_null() {
+        return None;
+    }
+    let (domain, _) = alloc_domain_for_address(ptr as usize)?;
+    let mut guard = allocator_for_domain(domain).lock();
+    unsafe { guard.allocation_usable_size(domain, ptr) }
 }
 
 #[derive(Copy, Clone, Debug)]

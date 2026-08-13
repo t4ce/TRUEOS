@@ -62,6 +62,12 @@ impl<K: Copy + Eq, V, const N: usize> FixedKeyMap<K, V, N> {
         self.entries[index].take().map(|entry| entry.value)
     }
 
+    pub fn values(&self) -> impl Iterator<Item = &V> {
+        self.entries
+            .iter()
+            .filter_map(|entry| entry.as_ref().map(|entry| &entry.value))
+    }
+
     fn find_index(&self, key: K) -> Option<usize> {
         self.entries
             .iter()

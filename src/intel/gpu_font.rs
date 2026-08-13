@@ -2687,7 +2687,8 @@ pub(crate) fn render_prepared_text_stamp_to_ui4(
                 mesh: &mesh,
                 rgba: color,
                 sampled_texture: None,
-                fragment_contract: crate::intel::render::ResidentSceneFragmentContract::ConstantRgba,
+                fragment_contract:
+                    crate::intel::render::ResidentSceneFragmentContract::ConstantRgba,
                 viewport_translation_px: [0.0, 0.0],
             };
             let frame = match crate::intel::render::render_resident_triangle_scene_frame_premultiplied_msaa4_with_coverage_to_surface(

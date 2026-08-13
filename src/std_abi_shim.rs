@@ -42,6 +42,7 @@ static SOCKET_FDS: Mutex<FixedKeyMap<c_int, SocketFd, SOCKET_FD_CAPACITY>> =
     Mutex::new(FixedKeyMap::new());
 static LOGGED_PTHREAD_SYNC: AtomicI32 = AtomicI32::new(0);
 static LOGGED_C_ALLOCATION_TRACK_OVERFLOW: AtomicI32 = AtomicI32::new(0);
+static LOGGED_C_REALLOC_TAG_FALLBACK: AtomicI32 = AtomicI32::new(0);
 static PTHREAD_SYNC_TRACE_COUNT: AtomicUsize = AtomicUsize::new(0);
 static PTHREAD_CREATE_TRACE_COUNT: AtomicUsize = AtomicUsize::new(0);
 static PTHREAD_NEXT_THREAD_ID: AtomicUsize = AtomicUsize::new(1);
@@ -487,6 +488,40 @@ impl OpenFile {
             Self::UnixSocket { rx, .. } => rx.lock().bytes.len(),
         }
     }
+}
+
+/// Remove one descriptor and report which shared pipe directions lost their
+/// final descriptor reference. `dup`/`fcntl(F_DUPFD)` clone `OpenFile`, so a
+/// close must not poison an endpoint while another descriptor still aliases
+/// the same open file description.
+fn remove_open_file_for_close(fd: c_int) -> Option<(OpenFile, bool, bool)> {
+    let mut table = OPEN_FILES.lock();
+    let file = table.remove(fd)?;
+    let (close_read, close_write) = match &file {
+        OpenFile::Regular { .. } => (false, false),
+        OpenFile::PipeRead { pipe, .. } => {
+            let aliased = table.values().any(|candidate| {
+                matches!(candidate, OpenFile::PipeRead { pipe: other, .. } if Arc::ptr_eq(pipe, other))
+            });
+            (!aliased, false)
+        }
+        OpenFile::PipeWrite { pipe, .. } => {
+            let aliased = table.values().any(|candidate| {
+                matches!(candidate, OpenFile::PipeWrite { pipe: other, .. } if Arc::ptr_eq(pipe, other))
+            });
+            (false, !aliased)
+        }
+        OpenFile::UnixSocket { rx, tx, .. } => {
+            let read_aliased = table.values().any(|candidate| {
+                matches!(candidate, OpenFile::UnixSocket { rx: other, .. } if Arc::ptr_eq(rx, other))
+            });
+            let write_aliased = table.values().any(|candidate| {
+                matches!(candidate, OpenFile::UnixSocket { tx: other, .. } if Arc::ptr_eq(tx, other))
+            });
+            (!read_aliased, !write_aliased)
+        }
+    };
+    Some((file, close_read, close_write))
 }
 
 fn write_platform_fd(fd: u32, bytes: &[u8]) {
@@ -1062,7 +1097,30 @@ fn c_realloc_ptr(ptr: *mut c_void, size: usize) -> *mut c_void {
         c_free_ptr(ptr);
         return ptr::null_mut();
     }
-    let Some(old) = c_allocation_get(ptr) else {
+    let old = c_allocation_get(ptr).or_else(|| {
+        let usable = crate::allocators::allocation_usable_size(ptr.cast::<u8>())?;
+        if LOGGED_C_REALLOC_TAG_FALLBACK
+            .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            crate::log!(
+                "std-abi: realloc recovered cross-realm allocation ptr=0x{:X} usable={} new_size={} source=shared-allocator-tag\n",
+                ptr as usize,
+                usable,
+                size,
+            );
+        }
+        Some(AllocationRecord {
+            size: usable,
+            align: TRUEOS_C_MALLOC_ALIGN,
+        })
+    });
+    let Some(old) = old else {
+        crate::log!(
+            "std-abi: realloc rejected unknown allocation ptr=0x{:X} new_size={}\n",
+            ptr as usize,
+            size,
+        );
         TRUEOS_ERRNO.store(12, Ordering::Relaxed);
         return ptr::null_mut();
     };
@@ -1147,6 +1205,7 @@ pub unsafe extern "C" fn trueos_cabi_malloc_usable_size(ptr: *const u8) -> usize
     }
     c_allocation_get(ptr as *mut c_void)
         .map(|record| record.size)
+        .or_else(|| crate::allocators::allocation_usable_size(ptr))
         .unwrap_or(0)
 }
 
@@ -2771,10 +2830,7 @@ pub unsafe extern "C" fn socket(domain: c_int, socket_type: c_int, protocol: c_i
         TRUEOS_ERRNO.store(TRUEOS_EAGAIN, Ordering::Relaxed);
         return -1;
     }
-    crate::hv::hvlogf(format_args!(
-        "std-abi socket-open fd={} backend={}",
-        fd, backend
-    ));
+    crate::hv::hvlogf(format_args!("std-abi socket-open fd={} backend={}", fd, backend));
     TRUEOS_ERRNO.store(0, Ordering::Relaxed);
     fd
 }
@@ -3009,6 +3065,35 @@ pub unsafe extern "C" fn send(
         return -1;
     }
 
+    // `std::os::unix::net::UnixStream::write` is implemented with `send(2)`,
+    // not `write(2)`. Tokio's Unix signal driver uses a socketpair as its
+    // self-pipe, so keep local Unix sockets on the virtual FD path instead of
+    // accidentally looking them up as TCP sockets. In particular, the signal
+    // handler intentionally ignores a failed wake-byte write; returning EBADF
+    // here therefore turns a successfully delivered signal into a silent
+    // receive timeout.
+    let unix_tx = {
+        let files = OPEN_FILES.lock();
+        match files.get(socket_id) {
+            Some(OpenFile::UnixSocket { tx, .. }) => Some(Arc::clone(tx)),
+            _ => None,
+        }
+    };
+    if let Some(tx) = unix_tx {
+        let Some(input) = abi_read_bytes(buf.cast::<u8>(), len) else {
+            TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+            return -1;
+        };
+        let mut tx = tx.lock();
+        if !tx.write_open || !tx.read_open {
+            TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+            return -1;
+        }
+        tx.bytes.extend_from_slice(input);
+        TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+        return input.len() as isize;
+    }
+
     let (backend, is_mio) = {
         let sockets = SOCKET_FDS.lock();
         match sockets.get(socket_id) {
@@ -3033,11 +3118,7 @@ pub unsafe extern "C" fn send(
             )
         }
     } else {
-        crate::r::net::socket_cabi::trueos_cabi_socket_tcp_send(
-            backend,
-            buf.cast::<u8>(),
-            len,
-        )
+        crate::r::net::socket_cabi::trueos_cabi_socket_tcp_send(backend, buf.cast::<u8>(), len)
     };
     let result = if is_mio {
         posix_mio_isize(raw)
@@ -3075,6 +3156,33 @@ pub unsafe extern "C" fn recv(
     if len != 0 && buf.is_null() {
         TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
         return -1;
+    }
+
+    // See the matching Unix-socket branch in `send`. The Tokio signal driver
+    // drains its registered socketpair receiver through `recv(2)` after Mio's
+    // poll-backed selector reports it readable.
+    let unix_rx = {
+        let files = OPEN_FILES.lock();
+        match files.get(socket_id) {
+            Some(OpenFile::UnixSocket { rx, flags, .. }) => Some((Arc::clone(rx), *flags)),
+            _ => None,
+        }
+    };
+    if let Some((rx, descriptor_flags)) = unix_rx {
+        let Some(output) = abi_write_bytes(buf.cast::<u8>(), len) else {
+            TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+            return -1;
+        };
+        let mut rx = rx.lock();
+        let copied = core::cmp::min(output.len(), rx.bytes.len());
+        if copied == 0 && descriptor_flags & TRUEOS_O_NONBLOCK != 0 && rx.write_open {
+            TRUEOS_ERRNO.store(TRUEOS_EAGAIN, Ordering::Relaxed);
+            return -1;
+        }
+        output[..copied].copy_from_slice(&rx.bytes[..copied]);
+        rx.bytes.drain(..copied);
+        TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+        return copied as isize;
     }
 
     let (backend, is_mio) = {
@@ -3130,6 +3238,59 @@ pub unsafe extern "C" fn recv(
         ));
     }
     result
+}
+
+#[cfg(test)]
+mod unix_socket_syscall_tests {
+    use super::*;
+
+    #[test]
+    fn duplicated_nonblocking_socketpair_wakes_through_send_poll_recv() {
+        const AF_UNIX: c_int = 1;
+        const SOCK_STREAM: c_int = 1;
+        const SOCK_NONBLOCK: c_int = 0o4000;
+        const SOCK_CLOEXEC: c_int = 0o2000000;
+        const POLLIN: i16 = 0x0001;
+
+        let mut pair = [-1; 2];
+        assert_eq!(
+            unsafe {
+                crate::unix_abi_shim::socketpair(
+                    AF_UNIX,
+                    SOCK_STREAM | SOCK_NONBLOCK | SOCK_CLOEXEC,
+                    0,
+                    pair.as_mut_ptr(),
+                )
+            },
+            0
+        );
+
+        // Tokio retains the original global receiver and registers a dup with
+        // each runtime's Mio selector.
+        let receiver = unsafe { fcntl(pair[0], TRUEOS_F_DUPFD_CLOEXEC, 0) };
+        assert!(receiver >= 0);
+
+        let wake = [1u8];
+        assert_eq!(unsafe { send(pair[1], wake.as_ptr().cast(), wake.len(), 0) }, 1);
+
+        let mut pollfd = crate::unix_abi_shim::PollFd {
+            fd: receiver,
+            events: POLLIN,
+            revents: 0,
+        };
+        assert_eq!(unsafe { crate::unix_abi_shim::poll(&mut pollfd, 1, 0) }, 1);
+        assert_eq!(pollfd.revents & POLLIN, POLLIN);
+
+        let mut received = [0u8; 1];
+        assert_eq!(unsafe { recv(receiver, received.as_mut_ptr().cast(), received.len(), 0) }, 1);
+        assert_eq!(received, wake);
+        assert_eq!(unsafe { recv(receiver, received.as_mut_ptr().cast(), received.len(), 0) }, -1);
+        assert_eq!(TRUEOS_ERRNO.load(Ordering::Relaxed), TRUEOS_EAGAIN);
+
+        assert_eq!(unsafe { close(receiver) }, 0);
+        assert_eq!(unsafe { close(pair[0]) }, 0);
+        assert_eq!(unsafe { close(pair[1]) }, 0);
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -3416,7 +3577,7 @@ pub unsafe extern "C" fn close(fd: c_int) -> c_int {
             0
         };
     }
-    let Some(file) = OPEN_FILES.lock().remove(fd) else {
+    let Some((file, close_read, close_write)) = remove_open_file_for_close(fd) else {
         TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
         return -1;
     };
@@ -3469,14 +3630,22 @@ pub unsafe extern "C" fn close(fd: c_int) -> c_int {
             cleanup_regular_file_world(path.as_deref(), &world);
         }
         OpenFile::PipeRead { pipe, .. } => {
-            pipe.lock().read_open = false;
+            if close_read {
+                pipe.lock().read_open = false;
+            }
         }
         OpenFile::PipeWrite { pipe, .. } => {
-            pipe.lock().write_open = false;
+            if close_write {
+                pipe.lock().write_open = false;
+            }
         }
         OpenFile::UnixSocket { rx, tx, .. } => {
-            rx.lock().read_open = false;
-            tx.lock().write_open = false;
+            if close_read {
+                rx.lock().read_open = false;
+            }
+            if close_write {
+                tx.lock().write_open = false;
+            }
         }
     }
     TRUEOS_ERRNO.store(0, Ordering::Relaxed);
@@ -3491,7 +3660,7 @@ pub async fn close_async(fd: c_int) -> c_int {
     if SOCKET_FDS.lock().get(fd).is_some() {
         return unsafe { close(fd) };
     }
-    let Some(file) = OPEN_FILES.lock().remove(fd) else {
+    let Some((file, close_read, close_write)) = remove_open_file_for_close(fd) else {
         TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
         return -1;
     };
@@ -3522,14 +3691,22 @@ pub async fn close_async(fd: c_int) -> c_int {
             cleanup_regular_file_world(path.as_deref(), &world);
         }
         OpenFile::PipeRead { pipe, .. } => {
-            pipe.lock().read_open = false;
+            if close_read {
+                pipe.lock().read_open = false;
+            }
         }
         OpenFile::PipeWrite { pipe, .. } => {
-            pipe.lock().write_open = false;
+            if close_write {
+                pipe.lock().write_open = false;
+            }
         }
         OpenFile::UnixSocket { rx, tx, .. } => {
-            rx.lock().read_open = false;
-            tx.lock().write_open = false;
+            if close_read {
+                rx.lock().read_open = false;
+            }
+            if close_write {
+                tx.lock().write_open = false;
+            }
         }
     }
     TRUEOS_ERRNO.store(0, Ordering::Relaxed);

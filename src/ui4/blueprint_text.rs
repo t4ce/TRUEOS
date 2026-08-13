@@ -47,12 +47,10 @@ use super::{
     create_frame, create_gpu_full_overwrite_frame, create_window, destroy_frame,
     finish_window_session, finish_window_session_with_request, focused_keyboard_state,
     gpgpu_rgba_surface, mark_frame_buffer_cpu_authored, mark_frame_buffer_fully_opaque,
-    publish_frame_buffer, publish_resident_scene_frame_buffer,
-    publish_gpgpu_scene_frame_buffer, publish_window_frame, replace_window_frame,
-    set_window_cursor_icon, set_window_custom_cursor, set_window_placement,
-    set_window_hit_testable,
-    take_owner_input_events, take_window_first_presentation, window_input_routes, window_placement,
-    writable_rgba_view,
+    publish_frame_buffer, publish_gpgpu_scene_frame_buffer, publish_resident_scene_frame_buffer,
+    publish_window_frame, replace_window_frame, set_window_cursor_icon, set_window_custom_cursor,
+    set_window_hit_testable, set_window_placement, take_owner_input_events,
+    take_window_first_presentation, window_input_routes, window_placement, writable_rgba_view,
 };
 
 const MAX_SURFACES: usize = 32;
@@ -273,9 +271,11 @@ pub struct TrueosUi4PanEvent {
 
 const _: () = assert!(core::mem::size_of::<TrueosUi4PanEvent>() == 13 * 4);
 
-/// One broker-requested frame extent transition. The Blueprint may ignore the
-/// event and retain its old 1:1 backing allocation, or replace that allocation
-/// through `trueos_cabi_ui4_scene_frame_resize`.
+/// One broker-requested final frame extent. UI4 may animate the already-live
+/// surface toward this geometry in its presentation plane, but never emits
+/// intermediate animation sizes to the Blueprint. The Blueprint may ignore
+/// the event or replace its allocation through
+/// `trueos_cabi_ui4_scene_frame_resize` exactly once.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
 pub struct TrueosUi4ResizeEvent {
@@ -748,53 +748,6 @@ struct Rgba8Upload {
 struct SpriteSceneUpload {
     expected: usize,
     quads: Vec<TrueosUi4SpriteQuad>,
-}
-
-struct BlueprintSpriteOwnedRun {
-    source: GpgpuRgba8Surface,
-    descriptors: Vec<GpgpuSpriteQuadWorklistDesc>,
-}
-
-#[derive(Copy, Clone)]
-enum BlueprintSpritePreparedOp {
-    Alpha {
-        sprite_id: u32,
-        source: GpgpuRgba8Surface,
-        descriptor: GpgpuAlphaBlendWorklistDesc,
-    },
-    Quad {
-        sprite_id: u32,
-        source: GpgpuRgba8Surface,
-        descriptor: GpgpuSpriteQuadWorklistDesc,
-    },
-}
-
-enum BlueprintSpritePreparedBatch {
-    Alpha {
-        source: GpgpuRgba8Surface,
-        descriptors: Vec<GpgpuAlphaBlendWorklistDesc>,
-    },
-    Quad {
-        groups: Vec<BlueprintSpriteOwnedRun>,
-    },
-}
-
-impl BlueprintSpritePreparedBatch {
-    fn descriptor_count(&self) -> usize {
-        match self {
-            Self::Alpha { descriptors, .. } => descriptors.len(),
-            Self::Quad { groups } => groups
-                .iter()
-                .fold(0usize, |total, group| total.saturating_add(group.descriptors.len())),
-        }
-    }
-
-    fn backend(&self) -> &'static str {
-        match self {
-            Self::Alpha { .. } => "gpgpu-alpha-rect-worklist",
-            Self::Quad { .. } => "gpgpu-arbitrary-quad-fallback",
-        }
-    }
 }
 
 static SURFACES: Mutex<Vec<BlueprintSceneSurface>> = Mutex::new(Vec::new());
@@ -4218,7 +4171,8 @@ pub unsafe extern "C" fn trueos_cabi_image_source_info(
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
         return unsafe { guest_image_source_info(name_ptr, name_len, out) };
     }
-    let Ok(name) = core::str::from_utf8(unsafe { core::slice::from_raw_parts(name_ptr, name_len) }) else {
+    let Ok(name) = core::str::from_utf8(unsafe { core::slice::from_raw_parts(name_ptr, name_len) })
+    else {
         return ERROR_INVALID;
     };
     match blueprint_image_source_info(name) {
@@ -4243,7 +4197,8 @@ pub unsafe extern "C" fn trueos_cabi_image_source_read(
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
         return unsafe { guest_image_source_read(name_ptr, name_len, offset, out_ptr, out_cap) };
     }
-    let Ok(name) = core::str::from_utf8(unsafe { core::slice::from_raw_parts(name_ptr, name_len) }) else {
+    let Ok(name) = core::str::from_utf8(unsafe { core::slice::from_raw_parts(name_ptr, name_len) })
+    else {
         return ERROR_INVALID as isize;
     };
     let out = unsafe { core::slice::from_raw_parts_mut(out_ptr, out_cap) };
@@ -5295,95 +5250,55 @@ fn retained_font_canvas_surface(surface: &BlueprintSceneSurface) -> Option<Gpgpu
         })
 }
 
-fn same_blueprint_sprite_source(
-    left_id: u32,
-    left: GpgpuRgba8Surface,
-    right_id: u32,
-    right: GpgpuRgba8Surface,
-) -> bool {
-    left_id == right_id
-        && left.phys == right.phys
-        && left.gpu == right.gpu
-        && left.bytes == right.bytes
-        && left.width == right.width
-        && left.height == right.height
-        && left.pitch_bytes == right.pitch_bytes
-        && left.storage_order == right.storage_order
-}
+pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
+    struct OwnedRun {
+        sprite_id: u32,
+        source: GpgpuRgba8Surface,
+        descriptors: Vec<GpgpuSpriteQuadWorklistDesc>,
+    }
 
-fn prepare_blueprint_sprite_batches(
-    prepared: &[BlueprintSpritePreparedOp],
-    batch_capacity: usize,
-) -> Vec<BlueprintSpritePreparedBatch> {
-    let mut batches = Vec::new();
-    let mut cursor = 0usize;
-    while cursor < prepared.len() && batch_capacity != 0 {
-        match prepared[cursor] {
-            BlueprintSpritePreparedOp::Alpha {
-                sprite_id, source, ..
-            } => {
-                let mut descriptors = Vec::new();
-                while cursor < prepared.len() && descriptors.len() < batch_capacity {
-                    let BlueprintSpritePreparedOp::Alpha {
-                        sprite_id: next_sprite_id,
-                        source: next_source,
-                        descriptor,
-                    } = prepared[cursor]
-                    else {
-                        break;
-                    };
-                    if !same_blueprint_sprite_source(sprite_id, source, next_sprite_id, next_source)
-                    {
-                        break;
-                    }
-                    descriptors.push(descriptor);
-                    cursor = cursor.saturating_add(1);
-                }
-                batches.push(BlueprintSpritePreparedBatch::Alpha {
-                    source,
-                    descriptors,
-                });
+    #[derive(Copy, Clone)]
+    enum PreparedOp {
+        Alpha {
+            sprite_id: u32,
+            source: GpgpuRgba8Surface,
+            descriptor: GpgpuAlphaBlendWorklistDesc,
+        },
+        Quad {
+            sprite_id: u32,
+            source: GpgpuRgba8Surface,
+            descriptor: GpgpuSpriteQuadWorklistDesc,
+        },
+    }
+
+    enum PreparedBatch {
+        Alpha {
+            source: GpgpuRgba8Surface,
+            descriptors: Vec<GpgpuAlphaBlendWorklistDesc>,
+        },
+        Quad {
+            groups: Vec<OwnedRun>,
+        },
+    }
+
+    impl PreparedBatch {
+        fn descriptor_count(&self) -> usize {
+            match self {
+                Self::Alpha { descriptors, .. } => descriptors.len(),
+                Self::Quad { groups } => groups
+                    .iter()
+                    .fold(0usize, |total, group| total.saturating_add(group.descriptors.len())),
             }
-            BlueprintSpritePreparedOp::Quad {
-                sprite_id, source, ..
-            } => {
-                let mut descriptors = Vec::new();
-                while cursor < prepared.len() && descriptors.len() < batch_capacity {
-                    let BlueprintSpritePreparedOp::Quad {
-                        sprite_id: next_sprite_id,
-                        source: next_source,
-                        descriptor,
-                    } = prepared[cursor]
-                    else {
-                        break;
-                    };
-                    if !same_blueprint_sprite_source(sprite_id, source, next_sprite_id, next_source)
-                    {
-                        break;
-                    }
-                    descriptors.push(descriptor);
-                    cursor = cursor.saturating_add(1);
-                }
+        }
 
-                // One immutable source per submission is intentional. XeLP's
-                // repeated MEDIA_INTERFACE_DESCRIPTOR_LOAD path can retire its
-                // marker while a later source transition loses either the
-                // font canvas or the trailing overlay. Retiring each source
-                // run separately gives the next submission a full GPGPU
-                // prologue/cache invalidate and preserves painter order.
-                batches.push(BlueprintSpritePreparedBatch::Quad {
-                    groups: alloc::vec![BlueprintSpriteOwnedRun {
-                        source,
-                        descriptors,
-                    }],
-                });
+        fn backend(&self) -> &'static str {
+            match self {
+                Self::Alpha { .. } => "gpgpu-alpha-rect-worklist",
+                Self::Quad { .. } => "gpgpu-arbitrary-quad-fallback",
             }
         }
     }
-    batches
-}
 
-pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
     let backbuffer = render_retained_text_backbuffer_for_surface(owner, window_id);
     if backbuffer != 0 {
         return backbuffer;
@@ -5455,7 +5370,7 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
     };
     let mut prepared = Vec::with_capacity(upload.quads.len().saturating_add(1));
     if !full_frame_copy {
-        prepared.push(BlueprintSpritePreparedOp::Quad {
+        prepared.push(PreparedOp::Quad {
             sprite_id: 0,
             source: solid.surface,
             descriptor: gpgpu_sprite_quad_descriptor(clear, false),
@@ -5492,15 +5407,13 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
             alpha_rect_descriptor(quad, source, destination)
         };
         match conversion {
-            AlphaRectConversion::Exact(descriptor) => {
-                prepared.push(BlueprintSpritePreparedOp::Alpha {
-                    sprite_id: quad.sprite_id,
-                    source,
-                    descriptor,
-                })
-            }
+            AlphaRectConversion::Exact(descriptor) => prepared.push(PreparedOp::Alpha {
+                sprite_id: quad.sprite_id,
+                source,
+                descriptor,
+            }),
             AlphaRectConversion::Clipped => {}
-            AlphaRectConversion::Unsupported => prepared.push(BlueprintSpritePreparedOp::Quad {
+            AlphaRectConversion::Unsupported => prepared.push(PreparedOp::Quad {
                 sprite_id: quad.sprite_id,
                 source,
                 descriptor: gpgpu_sprite_quad_descriptor(
@@ -5512,7 +5425,67 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
     }
 
     let batch_capacity = alpha_blend_worklist_max_descs().min(sprite_quad_worklist_max_descs());
-    let batches = prepare_blueprint_sprite_batches(&prepared, batch_capacity);
+    let mut batches = Vec::<PreparedBatch>::new();
+    let mut cursor = 0usize;
+    while cursor < prepared.len() {
+        match prepared[cursor] {
+            PreparedOp::Alpha {
+                sprite_id, source, ..
+            } => {
+                let mut descriptors = Vec::new();
+                while cursor < prepared.len() && descriptors.len() < batch_capacity {
+                    let PreparedOp::Alpha {
+                        sprite_id: next_sprite_id,
+                        source: next_source,
+                        descriptor,
+                    } = prepared[cursor]
+                    else {
+                        break;
+                    };
+                    if next_sprite_id != sprite_id
+                        || next_source.gpu != source.gpu
+                        || next_source.phys != source.phys
+                    {
+                        break;
+                    }
+                    descriptors.push(descriptor);
+                    cursor = cursor.saturating_add(1);
+                }
+                batches.push(PreparedBatch::Alpha {
+                    source,
+                    descriptors,
+                });
+            }
+            PreparedOp::Quad { .. } => {
+                let mut groups = Vec::<OwnedRun>::new();
+                let mut descriptor_count = 0usize;
+                while cursor < prepared.len() && descriptor_count < batch_capacity {
+                    let PreparedOp::Quad {
+                        sprite_id,
+                        source,
+                        descriptor,
+                    } = prepared[cursor]
+                    else {
+                        break;
+                    };
+                    if let Some(group) = groups.last_mut()
+                        && group.sprite_id == sprite_id
+                    {
+                        group.descriptors.push(descriptor);
+                    } else {
+                        groups.push(OwnedRun {
+                            sprite_id,
+                            source,
+                            descriptors: alloc::vec![descriptor],
+                        });
+                    }
+                    descriptor_count = descriptor_count.saturating_add(1);
+                    cursor = cursor.saturating_add(1);
+                }
+                batches.push(PreparedBatch::Quad { groups });
+            }
+        }
+    }
 
     let batch_count = batches.len();
     let mut final_release = None;
@@ -5520,11 +5493,11 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
         let descriptor_count = batch.descriptor_count();
         let backend = batch.backend();
         let queued = match batch {
-            BlueprintSpritePreparedBatch::Alpha {
+            PreparedBatch::Alpha {
                 source,
                 descriptors,
             } => queue_blueprint_alpha_batch(*source, destination, descriptors),
-            BlueprintSpritePreparedBatch::Quad { groups } => {
+            PreparedBatch::Quad { groups } => {
                 let runs = groups
                     .iter()
                     .map(|group| GpgpuSpriteQuadWorklistRun {
@@ -5734,12 +5707,6 @@ fn queue_blueprint_sprite_batch(
     destination: GpgpuRgba8Surface,
     runs: &[GpgpuSpriteQuadWorklistRun<'_>],
 ) -> Result<Ui4CompositorSubmission, Ui4CompositorSubmitError> {
-    // Blueprint scene ordering is retired one immutable source at a time.
-    // Keep the unproven repeated-IDD source transition out of this ABI even if
-    // its batch planner is refactored later.
-    if runs.len() != 1 {
-        return Err(Ui4CompositorSubmitError::InvalidWorklist);
-    }
     let started = crate::chronos::monotonic_nanos();
     loop {
         match queue_ui4_blueprint_sprite_scene(destination, runs) {
@@ -6427,70 +6394,5 @@ mod tests {
             descriptor.flags,
             SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER | SPRITE_QUAD_WORKLIST_FLAG_PREMUL_SRC,
         );
-    }
-
-    fn sprite_batch_test_surface(phys: u64, gpu: u64) -> GpgpuRgba8Surface {
-        GpgpuRgba8Surface::new(phys, gpu, 4096, 1, 1, 64).unwrap()
-    }
-
-    #[test]
-    fn sprite_batches_retire_each_source_transition_separately() {
-        let solid = sprite_batch_test_surface(0x1000, 0x3000_0000);
-        let font = sprite_batch_test_surface(0x2000, 0x0A00_0000);
-        let descriptor = GpgpuSpriteQuadWorklistDesc::default();
-        let prepared = [
-            BlueprintSpritePreparedOp::Quad {
-                sprite_id: 0,
-                source: solid,
-                descriptor,
-            },
-            BlueprintSpritePreparedOp::Quad {
-                sprite_id: TEXT_BACKBUFFER_SPRITE_ID,
-                source: font,
-                descriptor,
-            },
-            BlueprintSpritePreparedOp::Quad {
-                sprite_id: 0,
-                source: solid,
-                descriptor,
-            },
-        ];
-
-        let batches = prepare_blueprint_sprite_batches(&prepared, 256);
-
-        assert_eq!(batches.len(), 3);
-        for (batch, expected_source_gpu) in batches
-            .iter()
-            .zip([solid.gpu, font.gpu, solid.gpu])
-        {
-            let BlueprintSpritePreparedBatch::Quad { groups } = batch else {
-                panic!("source-over sprite unexpectedly changed backend");
-            };
-            assert_eq!(groups.len(), 1);
-            assert_eq!(groups[0].source.gpu, expected_source_gpu);
-            assert_eq!(groups[0].descriptors.len(), 1);
-        }
-    }
-
-    #[test]
-    fn sprite_batches_keep_the_descriptor_cap_with_one_source() {
-        let solid = sprite_batch_test_surface(0x1000, 0x3000_0000);
-        let prepared = alloc::vec![
-            BlueprintSpritePreparedOp::Quad {
-                sprite_id: 0,
-                source: solid,
-                descriptor: GpgpuSpriteQuadWorklistDesc::default(),
-            };
-            257
-        ];
-
-        let batches = prepare_blueprint_sprite_batches(&prepared, 256);
-
-        assert_eq!(batches.len(), 2);
-        assert_eq!(batches[0].descriptor_count(), 256);
-        assert_eq!(batches[1].descriptor_count(), 1);
-        assert!(batches.iter().all(|batch| {
-            matches!(batch, BlueprintSpritePreparedBatch::Quad { groups } if groups.len() == 1)
-        }));
     }
 }

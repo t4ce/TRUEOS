@@ -644,9 +644,7 @@ pub(crate) fn mark_frame_buffer_cpu_authored(lease: FrameWriteLease) -> Result<(
 /// Mark a leased frame as fully opaque after the producer has overwritten the
 /// complete allocation with alpha 255. Later GPU source-over rendering retains
 /// this invariant, enabling an ordered copy fallback for the slot-0 stack.
-pub(crate) fn mark_frame_buffer_fully_opaque(
-    lease: FrameWriteLease,
-) -> Result<(), FramePoolError> {
+pub(crate) fn mark_frame_buffer_fully_opaque(lease: FrameWriteLease) -> Result<(), FramePoolError> {
     let mut pool = FRAME_POOL.lock();
     let frame = pool.checked_mut(lease.frame)?;
     checked_lease(frame, lease)?;
@@ -878,10 +876,7 @@ const _: () = {
         super::FrameCadence::Immutable,
         super::FrameBuffering::Single,
     ));
-    assert!(blueprint_gpu_release_plan(
-        super::FrameCadence::Dirty,
-        super::FrameBuffering::Double,
-    ));
+    assert!(blueprint_gpu_release_plan(super::FrameCadence::Dirty, super::FrameBuffering::Double,));
     assert!(blueprint_gpu_release_plan(
         super::FrameCadence::Streaming,
         super::FrameBuffering::Triple,

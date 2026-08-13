@@ -32,7 +32,9 @@ pub struct CacheEntry {
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]
 pub enum CacheError {
-    DigestMismatch { actual: [u8; 32] },
+    DigestMismatch {
+        actual: [u8; 32],
+    },
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     QueueFull,
     Missing,
@@ -93,9 +95,7 @@ enum CacheRequest {
         expected_sha256: [u8; 32],
     },
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-    Load {
-        key: CacheKey,
-    },
+    Load { key: CacheKey },
 }
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]

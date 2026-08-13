@@ -122,7 +122,8 @@ pub(crate) use window_broker::{
     WindowBrokerError, WindowCreate, WindowId,
     WindowInteraction, WindowOwner, WindowPlacement, WindowPlane, WindowSessionCloseRequest,
     WindowSessionId, WindowSnapshot, WindowState, acknowledge_window_frame,
-    advance_window_close_transitions, application_windows_for_output_with_revision,
+    advance_window_close_transitions, advance_window_placement_transitions,
+    application_windows_for_output_with_revision,
     begin_additional_window_session, begin_window_session, close_window,
     commit_window_frame_replacement, create_window, finish_window_session,
     finish_window_session_with_request, move_window,
@@ -131,8 +132,8 @@ pub(crate) use window_broker::{
     take_window_first_presentation, toggle_window_maximized,
     ui4_window_broker_snapshot_service_task, visible_windows_for_output,
     wait_for_window_composition_change,
-    wait_for_window_first_presentation, window_close_transitions_active,
-    window_composition_revision, window_placement,
+    wait_for_window_first_presentation, window_composition_revision, window_placement,
+    window_transitions_active,
 };
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]

@@ -504,7 +504,10 @@ enum CppFontRushLayerStage {
     /// Three 3x section signs with a foreground color step every 100 ms.
     SectionPulse,
     /// Build one fixed 32-glyph slice of the run-owned final RGBA8 cache.
-    #[expect(dead_code, reason = "raw Font Rush now bypasses the cache-charge experiment")]
+    #[expect(
+        dead_code,
+        reason = "raw Font Rush now bypasses the cache-charge experiment"
+    )]
     CacheCharge {
         class: u8,
         batch: u8,
@@ -4203,7 +4206,10 @@ fn queue_cpp_font_rush_showcase_sprite(
     Ok(())
 }
 
-#[expect(dead_code, reason = "raw Font Rush now routes terminal waves through the plan pool")]
+#[expect(
+    dead_code,
+    reason = "raw Font Rush now routes terminal waves through the plan pool"
+)]
 fn queue_cpp_font_rush_cached_blast(
     preview: &mut ActivePreview,
     sequence: u64,
@@ -4888,8 +4894,8 @@ fn cpp_font_rush_plan_request(
                 } else {
                     (base_y + region_height.div_ceil(2)) % region_height
                 };
-                let scalar = char::from_u32(0x21 + (seed % 94) as u32)
-                    .ok_or("font-rush-raw-scalar")?;
+                let scalar =
+                    char::from_u32(0x21 + (seed % 94) as u32).ok_or("font-rush-raw-scalar")?;
                 cells.push(
                     FontPlanCellRequest::fixed(
                         [

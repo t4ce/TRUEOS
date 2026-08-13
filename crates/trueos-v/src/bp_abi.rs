@@ -175,6 +175,8 @@ pub struct TrueosUi4PanEvent {
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
+/// One final producer extent. UI4-owned presentation animation never appears
+/// as a stream of intermediate application resize events.
 pub struct TrueosUi4ResizeEvent {
     pub old_width: u32,
     pub old_height: u32,

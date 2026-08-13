@@ -123,21 +123,14 @@ pub(crate) fn start_read(owner: u32, path: String) -> i32 {
     {
         let vm_bits = owner & !0x8000_0000;
         if owner & 0x8000_0000 == 0 || vm_bits > u8::MAX as u32 {
-            crate::log!(
-                "async-fs: vFile launch rejected owner=0x{:08x}\n",
-                owner
-            );
+            crate::log!("async-fs: vFile launch rejected owner=0x{:08x}\n", owner);
             return FS_ERR_NOT_FOUND;
         }
         let Some(script) = crate::hv::take_blueprint_launch_script(vm_bits as u8) else {
             crate::log!("async-fs: vFile launch absent vm={}\n", vm_bits);
             return FS_ERR_NOT_FOUND;
         };
-        crate::log!(
-            "async-fs: vFile launch served vm={} bytes={}\n",
-            vm_bits,
-            script.len()
-        );
+        crate::log!("async-fs: vFile launch served vm={} bytes={}\n", vm_bits, script.len());
         return start_completed_read(owner, script.into_bytes());
     }
     start(owner, RequestKind::Read { path })
@@ -539,7 +532,10 @@ pub unsafe extern "C" fn trueos_cabi_async_fs_read_start(
     {
         let raw_path = unsafe { core::slice::from_raw_parts(path_ptr, path_len) };
         if raw_path == VMX_LAUNCH_SCRIPT_VFILE.as_bytes() {
-            return guest_start(trueos_vm::vmcall::OP_BP_ASYNC_FS_READ_START, VMX_LAUNCH_SCRIPT_VFILE);
+            return guest_start(
+                trueos_vm::vmcall::OP_BP_ASYNC_FS_READ_START,
+                VMX_LAUNCH_SCRIPT_VFILE,
+            );
         }
     }
     let path = match parse_path(path_ptr, path_len, false) {

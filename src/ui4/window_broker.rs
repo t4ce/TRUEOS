@@ -317,7 +317,13 @@ pub(crate) struct WindowSnapshot {
     pub(crate) buffering: FrameBuffering,
     pub(crate) output: OutputId,
     pub(crate) plane: WindowPlane,
+    /// Producer/input authority. Extent changes here are delivered to the
+    /// application exactly once and are never stepped by a UI4 animation.
     pub(crate) placement: WindowPlacement,
+    /// Display-only geometry for the currently published surface. UI4 may
+    /// advance this independently while `placement` already names the final
+    /// logical target.
+    pub(crate) presentation_placement: WindowPlacement,
     pub(crate) interaction: WindowInteraction,
     pub(crate) state: WindowState,
     pub(crate) revision: u64,
@@ -434,7 +440,17 @@ struct WindowRecord {
     first_presentation_taken: bool,
     damage: Option<DamageRegion>,
     restore_placement: Option<WindowPlacement>,
+    placement_transition: Option<WindowPlacementAnimation>,
     close_transition: Option<WindowCloseTransition>,
+}
+
+#[derive(Copy, Clone)]
+struct WindowPlacementAnimation {
+    initial: WindowPlacement,
+    target: WindowPlacement,
+    current: WindowPlacement,
+    started_ms: u64,
+    duration_ms: u64,
 }
 
 #[derive(Copy, Clone)]
@@ -467,6 +483,10 @@ struct WindowSessionFinish {
 }
 
 const CLOSE_TRANSITION_DURATION_MS: u64 = 300;
+/// Short enough to feel immediate, long enough for a resize-capable producer
+/// to allocate, redraw, and publish its one replacement SURFLIVE frame while
+/// UI4 scales the previously published frame toward the target.
+const MAXIMIZE_TRANSITION_DURATION_MS: u64 = 180;
 const CLOSE_TRANSITION_SHRINK_PER_MILLE: u64 = 900;
 const DIRECT_PLANE_CLOSE_WAVE_DURATION_MS: u64 = 200;
 // Gen12/13 pipe scalers top out just below 3x downscale. Ending at 35%
@@ -1017,12 +1037,18 @@ impl WindowBroker {
                         },
                     )
                 };
+                let presentation = window
+                    .placement_transition
+                    .map_or(window.placement, |transition| {
+                        placement_transition_placement(transition, started_ms)
+                    });
+                window.placement_transition = None;
                 let transition = if animate && window.state == WindowState::Ready {
                     super::acquire_published_frame(window.frame)
                         .ok()
                         .map(|lease| WindowCloseTransition {
                             lease,
-                            initial: window.placement,
+                            initial: presentation,
                             started_ms,
                             delay_ms,
                             duration_ms,
@@ -1034,6 +1060,7 @@ impl WindowBroker {
                 };
                 if let Some(transition) = transition {
                     window.state = WindowState::Closing;
+                    window.placement = presentation;
                     window.close_transition = Some(transition);
                     window.damage = Some(DamageRegion::FULL);
                     animation_duration_ms = animation_duration_ms
@@ -1140,6 +1167,28 @@ impl WindowBroker {
             super::input_broker::notify_slot4_visual_change();
         }
         retirements
+    }
+
+    fn advance_placement_transitions(&mut self, now_ms: u64) -> usize {
+        let mut advanced = 0usize;
+        for window in &mut self.windows {
+            let Some(mut transition) = window.placement_transition else {
+                continue;
+            };
+            let placement = placement_transition_placement(transition, now_ms);
+            let complete = now_ms.saturating_sub(transition.started_ms) >= transition.duration_ms;
+            if placement != transition.current || complete {
+                transition.current = placement;
+                window.damage = Some(DamageRegion::FULL);
+                window.revision = next_serial(window.revision);
+                advanced = advanced.saturating_add(1);
+            }
+            window.placement_transition = (!complete).then_some(transition);
+        }
+        if advanced != 0 {
+            self.mark_composition_changed();
+        }
+        advanced
     }
 
     fn snapshots(&self, output: OutputId) -> Vec<WindowSnapshot> {
@@ -1280,6 +1329,7 @@ impl WindowRecord {
             first_presentation_taken: false,
             damage: None,
             restore_placement: None,
+            placement_transition: None,
             close_transition: None,
         }
     }
@@ -1295,6 +1345,9 @@ impl WindowRecord {
             output: self.output,
             plane: self.plane,
             placement: self.placement,
+            presentation_placement: self
+                .placement_transition
+                .map_or(self.placement, |transition| transition.current),
             interaction: self.interaction,
             state: self.state,
             revision: self.revision,
@@ -1469,6 +1522,14 @@ pub(crate) fn advance_window_close_transitions() {
     );
 }
 
+/// Advance UI4-owned placement visuals without changing producer geometry.
+/// The application has already received its single final resize request; only
+/// the display projection moves at compositor cadence here.
+pub(crate) fn advance_window_placement_transitions() {
+    let now_ms = embassy_time::Instant::now().as_millis();
+    let _ = WINDOW_BROKER.lock().advance_placement_transitions(now_ms);
+}
+
 fn complete_transition_retirements(retirements: Vec<WindowTransitionRetirement>) {
     let mut frames = Vec::new();
     for retirement in retirements {
@@ -1604,9 +1665,7 @@ pub(crate) fn commit_window_frame_replacement(
     let pending = window.damage.get_or_insert(DamageRegion::EMPTY);
     pending.add(damage);
     let publish_serial = window.publish_serial;
-    let notify_resize = window.interaction.receives_input
-        && (previous_placement.width != placement.width
-            || previous_placement.height != placement.height);
+    let notify_resize = producer_resize_required(window.interaction, previous_placement, placement);
     broker.mark_composition_changed();
     drop(broker);
     if notify_resize {
@@ -1645,11 +1704,11 @@ pub(crate) fn set_window_placement(
     let mut broker = WINDOW_BROKER.lock();
     let window = broker.checked_window_mut(owner, id)?;
     let previous = window.placement;
-    let notify_resize = window.interaction.receives_input
-        && (previous.width != placement.width || previous.height != placement.height);
+    let notify_resize = producer_resize_required(window.interaction, previous, placement);
     let changed = window.placement != placement;
     if changed {
         window.placement = placement;
+        window.placement_transition = None;
         window.revision = next_serial(window.revision);
     }
     if changed {
@@ -1768,6 +1827,7 @@ pub(crate) fn move_window(
     let changed = window.placement != placement;
     if changed {
         window.placement = placement;
+        window.placement_transition = None;
         window.revision = next_serial(window.revision);
         broker.mark_composition_changed();
     }
@@ -1807,6 +1867,15 @@ pub(super) fn maximized_window_placement(
     }
 }
 
+const fn producer_resize_required(
+    interaction: WindowInteraction,
+    previous: WindowPlacement,
+    placement: WindowPlacement,
+) -> bool {
+    interaction.receives_input
+        && (previous.width != placement.width || previous.height != placement.height)
+}
+
 /// Toggle one broker window between its saved geometry and its generic
 /// maximize geometry. Gesture recognition stays in the input broker; this
 /// function owns the atomic placement/restore transition and emits resize
@@ -1822,12 +1891,16 @@ pub(crate) fn toggle_window_maximized(
     if output_width == 0 || output_height == 0 {
         return Err(WindowBrokerError::EmptyExtent);
     }
+    let started_ms = embassy_time::Instant::now().as_millis();
     let mut broker = WINDOW_BROKER.lock();
     let window = broker.checked_window_mut(owner, id)?;
     if !window.interaction.maximizable {
         return Err(WindowBrokerError::InteractionDenied);
     }
     let previous = window.placement;
+    let presentation = window
+        .placement_transition
+        .map_or(previous, |transition| placement_transition_placement(transition, started_ms));
     let (placement, maximized) = if let Some(restore) = window.restore_placement.take() {
         (
             restore_center.map_or(restore, |(cursor_x, cursor_y)| {
@@ -1851,11 +1924,19 @@ pub(crate) fn toggle_window_maximized(
     let changed = previous != placement;
     if changed {
         window.placement = placement;
+        window.placement_transition =
+            (presentation != placement).then_some(WindowPlacementAnimation {
+                initial: presentation,
+                target: placement,
+                current: presentation,
+                started_ms,
+                duration_ms: MAXIMIZE_TRANSITION_DURATION_MS,
+            });
+        window.damage = Some(DamageRegion::FULL);
         window.revision = next_serial(window.revision);
     }
-    let notify_resize = window.interaction.receives_input
-        && window.interaction.resize_on_maximize
-        && (previous.width != placement.width || previous.height != placement.height);
+    let notify_resize = window.interaction.resize_on_maximize
+        && producer_resize_required(window.interaction, previous, placement);
     if changed {
         broker.mark_composition_changed();
     }
@@ -2096,7 +2177,7 @@ pub(crate) fn window_composition_revision() -> u64 {
     WINDOW_BROKER.lock().composition_revision
 }
 
-pub(crate) fn window_close_transitions_active() -> bool {
+pub(crate) fn window_transitions_active() -> bool {
     if !TRANSITION_RETIRED_FRAMES.lock().is_empty() {
         return true;
     }
@@ -2104,7 +2185,7 @@ pub(crate) fn window_close_transitions_active() -> bool {
         .lock()
         .windows
         .iter()
-        .any(|window| window.close_transition.is_some())
+        .any(|window| window.close_transition.is_some() || window.placement_transition.is_some())
 }
 
 pub(crate) async fn wait_for_window_composition_change() {
@@ -2263,6 +2344,53 @@ pub(crate) fn take_window_first_presentation(
     }
     window.first_presentation_taken = true;
     Ok(true)
+}
+
+fn placement_transition_placement(
+    transition: WindowPlacementAnimation,
+    now_ms: u64,
+) -> WindowPlacement {
+    let elapsed_ms = now_ms.saturating_sub(transition.started_ms);
+    if elapsed_ms >= transition.duration_ms {
+        return transition.target;
+    }
+    let linear = elapsed_ms
+        .saturating_mul(1_000)
+        .checked_div(transition.duration_ms.max(1))
+        .unwrap_or(1_000)
+        .min(1_000);
+    // Cubic ease-out makes the gesture answer immediately while leaving a
+    // short, quiet landing window for the producer's replacement frame.
+    let remaining = 1_000u64.saturating_sub(linear);
+    let eased = 1_000u64.saturating_sub(
+        remaining
+            .saturating_mul(remaining)
+            .saturating_mul(remaining)
+            / 1_000_000,
+    );
+    WindowPlacement {
+        x: lerp_i32(transition.initial.x, transition.target.x, eased),
+        y: lerp_i32(transition.initial.y, transition.target.y, eased),
+        width: lerp_u32(transition.initial.width, transition.target.width, eased).max(1),
+        height: lerp_u32(transition.initial.height, transition.target.height, eased).max(1),
+        ..transition.target
+    }
+}
+
+fn lerp_i32(initial: i32, target: i32, per_mille: u64) -> i32 {
+    let initial = i64::from(initial);
+    let delta = i64::from(target).saturating_sub(initial);
+    initial
+        .saturating_add(delta.saturating_mul(per_mille as i64) / 1_000)
+        .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
+}
+
+fn lerp_u32(initial: u32, target: u32, per_mille: u64) -> u32 {
+    let initial = i64::from(initial);
+    let delta = i64::from(target).saturating_sub(initial);
+    initial
+        .saturating_add(delta.saturating_mul(per_mille as i64) / 1_000)
+        .clamp(0, i64::from(u32::MAX)) as u32
 }
 
 fn close_transition_placement(
@@ -2444,6 +2572,116 @@ mod tests {
 
         let bottom_right = center_restored_window_on_cursor(restore, 2_550, 1_430, 2_560, 1_440);
         assert_eq!((bottom_right.x, bottom_right.y), (1_920, 1_080));
+    }
+
+    #[test]
+    fn maximize_animation_keeps_logical_target_and_steps_only_presentation() {
+        let owner = WindowOwner::GPGPU_PREVIEW;
+        let mut broker = WindowBroker::new();
+        let session = broker.begin_additional_session(owner).unwrap();
+        let id = broker
+            .create(test_window(owner, session, 1, 0, 0, true), FrameBuffering::Double, 0)
+            .unwrap();
+        let (slot, _) = unpack_handle(id.raw()).unwrap();
+        let initial = broker.windows[slot].placement;
+        let target = WindowPlacement {
+            x: 0,
+            y: 0,
+            width: 2_560,
+            height: 1_440,
+            ..initial
+        };
+        broker.windows[slot].interaction = WindowInteraction::APPLICATION;
+        broker.windows[slot].placement = target;
+        broker.windows[slot].placement_transition = Some(WindowPlacementAnimation {
+            initial,
+            target,
+            current: initial,
+            started_ms: 1_000,
+            duration_ms: MAXIMIZE_TRANSITION_DURATION_MS,
+        });
+
+        let before = broker.windows[slot].snapshot(slot).unwrap();
+        assert_eq!(before.placement, target);
+        assert_eq!(before.presentation_placement, initial);
+
+        assert_eq!(broker.advance_placement_transitions(1_090), 1);
+        let midway = broker.windows[slot].snapshot(slot).unwrap();
+        assert_eq!(midway.placement, target);
+        assert!(midway.presentation_placement.width > initial.width);
+        assert!(midway.presentation_placement.width < target.width);
+        assert!(broker.windows[slot].placement_transition.is_some());
+
+        assert_eq!(broker.advance_placement_transitions(1_180), 1);
+        let complete = broker.windows[slot].snapshot(slot).unwrap();
+        assert_eq!(complete.placement, target);
+        assert_eq!(complete.presentation_placement, target);
+        assert!(broker.windows[slot].placement_transition.is_none());
+    }
+
+    #[test]
+    fn interrupted_placement_animation_continues_from_its_visible_sample() {
+        let initial = WindowPlacement {
+            x: 100,
+            y: 80,
+            width: 800,
+            height: 600,
+            z: 2,
+            opacity: u8::MAX,
+            visible: true,
+        };
+        let target = WindowPlacement {
+            x: 0,
+            y: 0,
+            width: 2_560,
+            height: 1_440,
+            ..initial
+        };
+        let transition = WindowPlacementAnimation {
+            initial,
+            target,
+            current: initial,
+            started_ms: 1_000,
+            duration_ms: 180,
+        };
+        let visible = placement_transition_placement(transition, 1_060);
+        assert_ne!(visible, initial);
+        assert_ne!(visible, target);
+
+        let restore = WindowPlacementAnimation {
+            initial: visible,
+            target: initial,
+            current: visible,
+            started_ms: 1_060,
+            duration_ms: 180,
+        };
+        assert_eq!(placement_transition_placement(restore, 1_060), visible);
+        assert_eq!(placement_transition_placement(restore, 1_240), initial);
+    }
+
+    #[test]
+    fn maximize_resize_is_requested_once_before_replacement_commit() {
+        let previous = WindowPlacement {
+            x: 40,
+            y: 30,
+            width: 960,
+            height: 720,
+            z: 0,
+            opacity: u8::MAX,
+            visible: true,
+        };
+        let target = WindowPlacement {
+            x: 0,
+            y: 0,
+            width: 2_560,
+            height: 1_440,
+            ..previous
+        };
+        assert!(producer_resize_required(WindowInteraction::APPLICATION, previous, target,));
+        // The replacement commit observes that logical placement already is
+        // the target, so it cannot emit a second resize for the same action.
+        assert!(!producer_resize_required(WindowInteraction::APPLICATION, target, target,));
+        assert!(!producer_resize_required(WindowInteraction::MOVABLE_FRAME, previous, target,));
     }
 
     #[test]

@@ -603,11 +603,24 @@ pub(crate) fn fs_write_abort_host(handle: u32) -> i32 {
 }
 
 pub(crate) fn fs_create_dir_all_host(path: &str) -> i32 {
-    crate::log_error!(target: "filesystem";
-        "fs-cabi: gotcha! synchronous create_dir_all host surface called path={} action=noop migrate=async-fs\n",
-        path,
-    );
-    0
+    if path.len() > QJS_ASYNC_FS_MAX_PATH {
+        log_fs_cabi_path_fail(
+            "create_dir_all",
+            path,
+            None,
+            "reason=raw-path-too-large",
+            FS_ERR_TOO_LARGE,
+        );
+        return FS_ERR_TOO_LARGE;
+    }
+    match super::kfs::create_dir_all(path) {
+        Ok(()) => 0,
+        Err(error) => {
+            let rc = fs_error_to_code(error);
+            log_fs_cabi_path_fail("create_dir_all", path, None, "", rc);
+            rc
+        }
+    }
 }
 
 pub(crate) fn fs_exists_host(path: &str) -> i32 {

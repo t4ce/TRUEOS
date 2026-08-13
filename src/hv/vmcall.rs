@@ -1190,11 +1190,8 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         }
         OP_BP_VGPU_UI4_SURFACE_ACQUIRE => {
             let principal = crate::gpu::vgpu::Principal::HullGuest(vm_id as u16);
-            match crate::r::io::vgpu_cabi::broker_ui4_surface_acquire(
-                principal,
-                arg0,
-                arg1 as u32,
-            ) {
+            match crate::r::io::vgpu_cabi::broker_ui4_surface_acquire(principal, arg0, arg1 as u32)
+            {
                 Ok(info) => write_record_response(vm_id, seq, 0, &info),
                 Err(rc) => write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0),
             }
@@ -1243,15 +1240,20 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             let principal = crate::gpu::vgpu::Principal::HullGuest(vm_id as u16);
             let parsed = request_payload(vm_id, req_len)
                 .filter(|payload| payload.len() == 8)
-                .map(|payload| (
-                    u32::from_le_bytes(payload[..4].try_into().unwrap()),
-                    u32::from_le_bytes(payload[4..].try_into().unwrap()),
-                ));
-            let data = parsed.ok_or(-22).and_then(|(stride, position)| {
-                crate::r::io::vgpu_cabi::broker_render_pipeline_create(
-                    principal, arg0, arg1, stride, position,
-                )
-            }).unwrap_or_else(|rc| (rc as i64) as u64);
+                .map(|payload| {
+                    (
+                        u32::from_le_bytes(payload[..4].try_into().unwrap()),
+                        u32::from_le_bytes(payload[4..].try_into().unwrap()),
+                    )
+                });
+            let data = parsed
+                .ok_or(-22)
+                .and_then(|(stride, position)| {
+                    crate::r::io::vgpu_cabi::broker_render_pipeline_create(
+                        principal, arg0, arg1, stride, position,
+                    )
+                })
+                .unwrap_or_else(|rc| (rc as i64) as u64);
             write_response(vm_id, seq, STATUS_OK, data, 0);
             DispatchOutcome::Resume
         }
@@ -2321,7 +2323,11 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 return DispatchOutcome::Resume;
             }
             let mut bytes = alloc::vec![0u8; capacity];
-            match crate::ui4::blueprint_text::copy_blueprint_image_source(name, arg0 as usize, &mut bytes) {
+            match crate::ui4::blueprint_text::copy_blueprint_image_source(
+                name,
+                arg0 as usize,
+                &mut bytes,
+            ) {
                 Ok(copied) => {
                     write_record_slice_response(vm_id, seq, copied as u64, &bytes[..copied])
                 }

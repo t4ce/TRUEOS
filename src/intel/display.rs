@@ -5142,18 +5142,19 @@ pub(crate) fn queue_ui4_static_primary_composition_bcs0(
     if copies.is_empty() {
         return Err(Ui4AsyncCompositionError::Unavailable);
     }
-    let blit = crate::intel::queue_guc_bcs0_rgba_copies(destination, &copies).map_err(|error| {
-        match error {
-            crate::intel::GucBcs0CopySubmitError::Busy => Ui4AsyncCompositionError::Busy,
-            crate::intel::GucBcs0CopySubmitError::Unavailable => {
-                Ui4AsyncCompositionError::Unavailable
-            }
-            crate::intel::GucBcs0CopySubmitError::InvalidRequest
-            | crate::intel::GucBcs0CopySubmitError::SubmitFailed => {
-                Ui4AsyncCompositionError::Failed
-            }
-        }
-    })?;
+    let blit =
+        crate::intel::queue_guc_bcs0_rgba_copies(destination, &copies).map_err(
+            |error| match error {
+                crate::intel::GucBcs0CopySubmitError::Busy => Ui4AsyncCompositionError::Busy,
+                crate::intel::GucBcs0CopySubmitError::Unavailable => {
+                    Ui4AsyncCompositionError::Unavailable
+                }
+                crate::intel::GucBcs0CopySubmitError::InvalidRequest
+                | crate::intel::GucBcs0CopySubmitError::SubmitFailed => {
+                    Ui4AsyncCompositionError::Failed
+                }
+            },
+        )?;
     Ok(Ui4AsyncComposition {
         work: Some(Ui4AsyncCompositionWork::GucBcs(blit)),
         target: Ui4AsyncCompositionTarget::Primary {

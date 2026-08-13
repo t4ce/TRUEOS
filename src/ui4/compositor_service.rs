@@ -332,7 +332,7 @@ pub(crate) async fn ui4_compositor_service_task() {
         runtime.immediate_rescan = false;
         let timed_wait_ms = if runtime.pending.is_some() || immediate_rescan {
             Some(PENDING_POLL_PERIOD_MS)
-        } else if consecutive_failures != 0 || super::window_close_transitions_active() {
+        } else if consecutive_failures != 0 || super::window_transitions_active() {
             Some(CLOSE_TRANSITION_PERIOD_MS)
         } else {
             None
@@ -428,6 +428,7 @@ fn prepare_async_frame(runtime: &mut Runtime) -> Result<Option<PendingFrame>, Ui
     let output = OutputId::from_slot(0).expect("UI4 D01 must exist");
     let phase_started_ns = crate::chronos::monotonic_nanos();
     super::advance_window_close_transitions();
+    super::advance_window_placement_transitions();
     runtime.profile.close_ns = runtime
         .profile
         .close_ns
@@ -1370,9 +1371,10 @@ fn direct_overlay_geometry_eligible(window: WindowSnapshot, view: FrameRgbaView)
         return false;
     };
     let exact_size = placement.width == view.width && placement.height == view.height;
-    let scaler_safe_maximize = window.maximized
-        && window.interaction.resize_on_maximize
-        && half_scale_backing_matches(placement.width, placement.height, view.width, view.height);
+    let scaler_safe_resize = window.interaction.resize_on_maximize
+        && matches!(window.plane.slot(), 1..=3)
+        && bounded_direct_plane_scale(view.width, placement.width)
+        && bounded_direct_plane_scale(view.height, placement.height);
     let scaler_safe_close = window.state == super::WindowState::Closing
         && placement.width >= 8
         && placement.height >= 8
@@ -1382,7 +1384,7 @@ fn direct_overlay_geometry_eligible(window: WindowSnapshot, view: FrameRgbaView)
         && u64::from(view.height) < u64::from(placement.height).saturating_mul(3);
     placement.x >= 0
         && placement.y >= 0
-        && (exact_size || scaler_safe_maximize || scaler_safe_close)
+        && (exact_size || scaler_safe_resize || scaler_safe_close)
         && (placement.x as u32)
             .checked_add(placement.width)
             .is_some_and(|right| right <= output_width)
@@ -1391,53 +1393,24 @@ fn direct_overlay_geometry_eligible(window: WindowSnapshot, view: FrameRgbaView)
             .is_some_and(|bottom| bottom <= output_height)
 }
 
-/// A resize-capable producer may need several service turns to replace its
-/// complete Frame ring after maximize. A deliberate half-resolution backing
-/// is scaled to the logical extent by the direct display plane. Any other old
-/// allocation remains centered at 1:1 until the replacement arrives.
+/// Resolve the broker's display-only geometry. Logical placement has already
+/// moved to the final target and generated at most one producer resize; this
+/// projection alone advances at compositor cadence. The old published frame
+/// is therefore useful throughout maximize instead of snapping to the target
+/// or sitting centered at 1:1 while the producer prepares its replacement.
 pub(super) fn presentation_placement(
     window: WindowSnapshot,
-    backing_width: u32,
-    backing_height: u32,
+    _backing_width: u32,
+    _backing_height: u32,
 ) -> WindowPlacement {
-    let placement = window.placement;
-    if !window.maximized
-        || !window.interaction.resize_on_maximize
-        || (placement.width == backing_width && placement.height == backing_height)
-        || half_scale_backing_matches(
-            placement.width,
-            placement.height,
-            backing_width,
-            backing_height,
-        )
-        || backing_width > placement.width
-        || backing_height > placement.height
-    {
-        return placement;
-    }
-    WindowPlacement {
-        x: placement
-            .x
-            .saturating_add(placement.width.saturating_sub(backing_width) as i32 / 2),
-        y: placement
-            .y
-            .saturating_add(placement.height.saturating_sub(backing_height) as i32 / 2),
-        width: backing_width,
-        height: backing_height,
-        ..placement
-    }
+    window.presentation_placement
 }
 
-const fn half_scale_backing_matches(
-    logical_width: u32,
-    logical_height: u32,
-    backing_width: u32,
-    backing_height: u32,
-) -> bool {
-    logical_width > backing_width
-        && logical_height > backing_height
-        && logical_width.div_ceil(2) == backing_width
-        && logical_height.div_ceil(2) == backing_height
+fn bounded_direct_plane_scale(source: u32, destination: u32) -> bool {
+    source >= 8
+        && destination >= 8
+        && u64::from(destination) <= u64::from(source).saturating_mul(2)
+        && u64::from(source) < u64::from(destination).saturating_mul(3)
 }
 
 const fn overlay_async_reason(slot: usize) -> &'static str {
@@ -1802,11 +1775,12 @@ mod damage_tests {
     }
 
     #[test]
-    fn maximized_half_resolution_backing_is_an_explicit_two_x_scale() {
-        assert!(half_scale_backing_matches(2560, 1440, 1280, 720));
-        assert!(half_scale_backing_matches(2559, 1439, 1280, 720));
-        assert!(!half_scale_backing_matches(2560, 1440, 640, 400));
-        assert!(!half_scale_backing_matches(2560, 1440, 2560, 1440));
+    fn direct_resize_scale_matches_the_display_pipe_bounds() {
+        assert!(bounded_direct_plane_scale(1280, 2560));
+        assert!(bounded_direct_plane_scale(2560, 1280));
+        assert!(!bounded_direct_plane_scale(640, 2560));
+        assert!(!bounded_direct_plane_scale(2560, 800));
+        assert!(!bounded_direct_plane_scale(7, 8));
     }
 
     #[test]

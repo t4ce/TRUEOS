@@ -68,8 +68,7 @@ static FONT_REGISTRY_WATCH: Watch<
     u64,
     FONT_REGISTRY_WATCH_RECEIVERS,
 > = Watch::new_with(0);
-static FONT_REGISTRY_EPOCH: core::sync::atomic::AtomicU64 =
-    core::sync::atomic::AtomicU64::new(0);
+static FONT_REGISTRY_EPOCH: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 
 #[derive(Clone, Copy)]
 enum FontWarmJob {
@@ -1093,7 +1092,9 @@ fn register_warmed_font(
         return endstate.summary(existing, "warm-cache", 0, 0, 0);
     }
     registry.fonts.push(Arc::new(prepared));
-    let epoch = FONT_REGISTRY_EPOCH.fetch_add(1, Ordering::AcqRel).saturating_add(1);
+    let epoch = FONT_REGISTRY_EPOCH
+        .fetch_add(1, Ordering::AcqRel)
+        .saturating_add(1);
     FONT_REGISTRY_WATCH.sender().send(epoch);
     summary
 }

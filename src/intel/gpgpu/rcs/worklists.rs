@@ -347,6 +347,21 @@ fn direct_rcs_write_ui4_compose_layers_payload_at(
     true
 }
 
+fn sprite_quad_worklist_payload_offset(payload_base: usize, descriptor: usize) -> Option<usize> {
+    let offset = descriptor
+        .checked_mul(SPRITE_QUAD_WORKLIST_PAYLOAD_STRIDE_BYTES)?
+        .checked_add(payload_base)?;
+    offset
+        .is_multiple_of(GPGPU_WALKER_INDIRECT_ALIGNMENT_BYTES)
+        .then_some(offset)
+}
+
+fn sprite_quad_worklist_payload_end(payload_base: usize, descriptor_count: usize) -> Option<usize> {
+    descriptor_count
+        .checked_mul(SPRITE_QUAD_WORKLIST_PAYLOAD_STRIDE_BYTES)?
+        .checked_add(payload_base)
+}
+
 fn direct_rcs_encode_sprite_quad_worklist_batch(
     state: DirectRcsState,
     upload: UploadedKernelArtifact,
@@ -359,8 +374,9 @@ fn direct_rcs_encode_sprite_quad_worklist_batch(
     if desc_count == 0 || sprite_quad_worklist_walker_count(desc_count) != desc_count {
         return false;
     }
-    let Some(payload_end) = SPRITE_QUAD_WORKLIST_SINGLE_PAYLOAD_BASE_OFFSET_BYTES.checked_add(
-        desc_count.saturating_mul(SPRITE_QUAD_WORKLIST_PAYLOAD_STRIDE_BYTES),
+    let Some(payload_end) = sprite_quad_worklist_payload_end(
+        SPRITE_QUAD_WORKLIST_SINGLE_PAYLOAD_BASE_OFFSET_BYTES,
+        desc_count,
     ) else {
         return false;
     };
@@ -461,9 +477,7 @@ fn direct_rcs_encode_sprite_quad_worklist_runs_batch(
     else {
         return false;
     };
-    let Some(payload_end) = payload_base.checked_add(
-        total_descs.saturating_mul(SPRITE_QUAD_WORKLIST_PAYLOAD_STRIDE_BYTES),
-    ) else {
+    let Some(payload_end) = sprite_quad_worklist_payload_end(payload_base, total_descs) else {
         return false;
     };
     if payload_end > DIRECT_RCS_BATCH_BYTES {
