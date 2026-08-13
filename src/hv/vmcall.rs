@@ -77,6 +77,7 @@ pub const OP_BP_VGPU_SHADER_MODULE_DESTROY: u32 = 0x128; // arg0 device,arg1 sha
 pub const OP_BP_VGPU_RENDER_PIPELINE_CREATE: u32 = 0x129; // arg0 device,arg1 shader,payload stride+position -> pipeline
 pub const OP_BP_VGPU_RENDER_PIPELINE_DESTROY: u32 = 0x12A; // arg0 device,arg1 pipeline -> rc
 pub const OP_BP_VGPU_UI4_INDEXED_SUBMIT: u32 = 0x12B; // arg0 device,arg1 queue,payload IndexedDraw -> TimelinePoint
+pub const OP_BP_ASYNC_FS_RECORD_KEY_START: u32 = 0x12C; // payload resolved file path -> operation id/rc
 pub const OP_BP_UI4_SOLARA_FONT_SIZES: u32 = 0xB2; // arg0 cap -> count + FontSize payload
 pub const OP_BP_UI4_SOLARA_FRAME_OPEN: u32 = 0xB3; // arg0 x/y,arg1 width/height -> window
 pub const OP_BP_UI4_SOLARA_FRAME_BEGIN: u32 = 0xB4; // arg0 window,arg1 clear RGBA -> rc
@@ -3542,7 +3543,8 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         }
         OP_BP_ASYNC_FS_CREATE_DIR_ALL_START
         | OP_BP_ASYNC_FS_STAT_START
-        | OP_BP_ASYNC_FS_LIST_DIR_START => {
+        | OP_BP_ASYNC_FS_LIST_DIR_START
+        | OP_BP_ASYNC_FS_RECORD_KEY_START => {
             let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
             let Some(p) = host_ptr(vm_id) else {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
@@ -3576,7 +3578,13 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                     crate::r::io::async_fs_cabi::start_create_dir_all(owner, path)
                 }
                 OP_BP_ASYNC_FS_STAT_START => crate::r::io::async_fs_cabi::start_stat(owner, path),
-                _ => crate::r::io::async_fs_cabi::start_list_dir(owner, path),
+                OP_BP_ASYNC_FS_LIST_DIR_START => {
+                    crate::r::io::async_fs_cabi::start_list_dir(owner, path)
+                }
+                OP_BP_ASYNC_FS_RECORD_KEY_START => {
+                    crate::r::io::async_fs_cabi::start_record_key(owner, path)
+                }
+                _ => unreachable!(),
             };
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume

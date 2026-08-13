@@ -21,32 +21,23 @@ pub(crate) static mut TRUEOS_ENVIRON: *mut *mut c_char =
     core::ptr::addr_of_mut!(TRUEOS_EMPTY_ENVIRON) as *mut *mut c_char;
 static C_ALLOCATIONS: Mutex<FixedKeyMap<usize, AllocationRecord, C_ALLOCATION_CAPACITY>> =
     Mutex::new(FixedKeyMap::new());
-static PTHREAD_KEYS: Mutex<FixedKeyMap<usize, usize, PTHREAD_KEY_CAPACITY>> =
-    Mutex::new(FixedKeyMap::new());
-static PTHREAD_TLS_VALUES: Mutex<FixedKeyMap<PthreadTlsSlot, usize, PTHREAD_TLS_VALUE_CAPACITY>> =
-    Mutex::new(FixedKeyMap::new());
-static PTHREAD_THREADS: Mutex<FixedKeyMap<usize, PthreadThreadState, PTHREAD_THREAD_CAPACITY>> =
-    Mutex::new(FixedKeyMap::new());
-static SIGNAL_ACTIONS: Mutex<
-    FixedKeyMap<SignalActionKey, TrueosSigAction, SIGNAL_ACTION_CAPACITY>,
-> = Mutex::new(FixedKeyMap::new());
-pub(crate) static OPEN_FILES: Mutex<FixedKeyMap<c_int, OpenFile, OPEN_FILE_CAPACITY>> =
-    Mutex::new(FixedKeyMap::new());
-static REGULAR_FILE_WORLDS: Mutex<RegularFileWorldRegistry> =
-    Mutex::new(RegularFileWorldRegistry::new());
-static FD_FLAGS: Mutex<FixedKeyMap<c_int, c_int, FD_FLAG_CAPACITY>> =
-    Mutex::new(FixedKeyMap::new());
-pub(crate) static STD_FD_FLAGS: [AtomicI32; 3] =
-    [AtomicI32::new(0), AtomicI32::new(0), AtomicI32::new(0)];
-static SOCKET_FDS: Mutex<FixedKeyMap<c_int, SocketFd, SOCKET_FD_CAPACITY>> =
-    Mutex::new(FixedKeyMap::new());
+static PTHREAD_KEYS: ProcessPthreadKeys = ProcessPthreadKeys;
+static PTHREAD_TLS_VALUES: ProcessPthreadTlsValues = ProcessPthreadTlsValues;
+static PTHREAD_THREADS: ProcessPthreadThreads = ProcessPthreadThreads;
+static SIGNAL_ACTIONS: ProcessSignalActions = ProcessSignalActions;
+pub(crate) static OPEN_FILES: ProcessOpenFiles = ProcessOpenFiles;
+static REGULAR_FILE_WORLDS: ProcessRegularFileWorlds = ProcessRegularFileWorlds;
+static FD_FLAGS: ProcessFdFlags = ProcessFdFlags;
+pub(crate) static STD_FD_FLAGS: ProcessStdFdFlags = ProcessStdFdFlags;
+static SOCKET_FDS: ProcessSocketFds = ProcessSocketFds;
 static LOGGED_PTHREAD_SYNC: AtomicI32 = AtomicI32::new(0);
 static LOGGED_C_ALLOCATION_TRACK_OVERFLOW: AtomicI32 = AtomicI32::new(0);
 static LOGGED_C_REALLOC_TAG_FALLBACK: AtomicI32 = AtomicI32::new(0);
 static PTHREAD_SYNC_TRACE_COUNT: AtomicUsize = AtomicUsize::new(0);
 static PTHREAD_CREATE_TRACE_COUNT: AtomicUsize = AtomicUsize::new(0);
-static PTHREAD_NEXT_THREAD_ID: AtomicUsize = AtomicUsize::new(1);
-static NEXT_FILE_FD: AtomicI32 = AtomicI32::new(3);
+static HOST_PROCESS_STATE: ProcessSharedState = ProcessSharedState::new();
+static BLUEPRINT_PROCESS_STATES: [ProcessSharedState; crate::allcaps::hv::VM_ID_LIMIT] =
+    [const { ProcessSharedState::new() }; crate::allcaps::hv::VM_ID_LIMIT];
 
 const PTHREAD_SYNC_TRACE_LIMIT: usize = 48;
 const PTHREAD_CREATE_TRACE_LIMIT: usize = 16;
@@ -406,6 +397,165 @@ enum SocketFd {
     MioStream {
         backend: u32,
     },
+}
+
+/// One process-wide Unix namespace shared by the Hull and all of its host
+/// service-lane pthread carriers. Each state is page isolated so the selected
+/// VM's pages can be mapped into its otherwise-private Hull RW image.
+#[repr(C, align(4096))]
+struct ProcessSharedState {
+    pthread_keys: Mutex<FixedKeyMap<usize, usize, PTHREAD_KEY_CAPACITY>>,
+    pthread_tls_values: Mutex<FixedKeyMap<PthreadTlsSlot, usize, PTHREAD_TLS_VALUE_CAPACITY>>,
+    pthread_threads: Mutex<FixedKeyMap<usize, PthreadThreadState, PTHREAD_THREAD_CAPACITY>>,
+    signal_actions: Mutex<FixedKeyMap<SignalActionKey, TrueosSigAction, SIGNAL_ACTION_CAPACITY>>,
+    next_pthread_key: AtomicUsize,
+    next_thread_id: AtomicUsize,
+    open_files: Mutex<FixedKeyMap<c_int, OpenFile, OPEN_FILE_CAPACITY>>,
+    regular_file_worlds: Mutex<RegularFileWorldRegistry>,
+    fd_flags: Mutex<FixedKeyMap<c_int, c_int, FD_FLAG_CAPACITY>>,
+    std_fd_flags: [AtomicI32; 3],
+    socket_fds: Mutex<FixedKeyMap<c_int, SocketFd, SOCKET_FD_CAPACITY>>,
+    next_file_fd: AtomicI32,
+}
+
+impl ProcessSharedState {
+    const fn new() -> Self {
+        Self {
+            pthread_keys: Mutex::new(FixedKeyMap::new()),
+            pthread_tls_values: Mutex::new(FixedKeyMap::new()),
+            pthread_threads: Mutex::new(FixedKeyMap::new()),
+            signal_actions: Mutex::new(FixedKeyMap::new()),
+            next_pthread_key: AtomicUsize::new(1),
+            next_thread_id: AtomicUsize::new(1),
+            open_files: Mutex::new(FixedKeyMap::new()),
+            regular_file_worlds: Mutex::new(RegularFileWorldRegistry::new()),
+            fd_flags: Mutex::new(FixedKeyMap::new()),
+            std_fd_flags: [AtomicI32::new(0), AtomicI32::new(0), AtomicI32::new(0)],
+            socket_fds: Mutex::new(FixedKeyMap::new()),
+            next_file_fd: AtomicI32::new(3),
+        }
+    }
+}
+
+const _: () = assert!(core::mem::size_of::<ProcessSharedState>().is_multiple_of(4096));
+const _: () = assert!(core::mem::align_of::<ProcessSharedState>() == 4096);
+
+fn process_state() -> &'static ProcessSharedState {
+    crate::hv::current_guest_execution_context_vm_id()
+        .and_then(|vm_id| BLUEPRINT_PROCESS_STATES.get(vm_id as usize))
+        .unwrap_or(&HOST_PROCESS_STATE)
+}
+
+pub(crate) fn blueprint_process_state_span(vm_id: u8) -> Option<(u64, usize)> {
+    let state = BLUEPRINT_PROCESS_STATES.get(vm_id as usize)?;
+    Some(((state as *const _) as u64, core::mem::size_of_val(state)))
+}
+
+pub(crate) fn reset_blueprint_process_state(vm_id: u8) {
+    let Some(state) = BLUEPRINT_PROCESS_STATES.get(vm_id as usize) else {
+        return;
+    };
+    state.pthread_keys.lock().clear();
+    state.pthread_tls_values.lock().clear();
+    state.pthread_threads.lock().clear();
+    state.signal_actions.lock().clear();
+    state.next_pthread_key.store(1, Ordering::Release);
+    state.next_thread_id.store(1, Ordering::Release);
+    state.open_files.lock().clear();
+    *state.regular_file_worlds.lock() = RegularFileWorldRegistry::new();
+    state.fd_flags.lock().clear();
+    for flags in &state.std_fd_flags {
+        flags.store(0, Ordering::Release);
+    }
+    state.socket_fds.lock().clear();
+    state.next_file_fd.store(3, Ordering::Release);
+}
+
+struct ProcessPthreadKeys;
+
+impl ProcessPthreadKeys {
+    fn lock(&self) -> spin::MutexGuard<'static, FixedKeyMap<usize, usize, PTHREAD_KEY_CAPACITY>> {
+        process_state().pthread_keys.lock()
+    }
+}
+
+struct ProcessPthreadTlsValues;
+
+impl ProcessPthreadTlsValues {
+    fn lock(
+        &self,
+    ) -> spin::MutexGuard<'static, FixedKeyMap<PthreadTlsSlot, usize, PTHREAD_TLS_VALUE_CAPACITY>>
+    {
+        process_state().pthread_tls_values.lock()
+    }
+}
+
+struct ProcessPthreadThreads;
+
+impl ProcessPthreadThreads {
+    fn lock(
+        &self,
+    ) -> spin::MutexGuard<'static, FixedKeyMap<usize, PthreadThreadState, PTHREAD_THREAD_CAPACITY>>
+    {
+        process_state().pthread_threads.lock()
+    }
+}
+
+struct ProcessSignalActions;
+
+impl ProcessSignalActions {
+    fn lock(
+        &self,
+    ) -> spin::MutexGuard<
+        'static,
+        FixedKeyMap<SignalActionKey, TrueosSigAction, SIGNAL_ACTION_CAPACITY>,
+    > {
+        process_state().signal_actions.lock()
+    }
+}
+
+pub(crate) struct ProcessOpenFiles;
+
+impl ProcessOpenFiles {
+    pub(crate) fn lock(
+        &self,
+    ) -> spin::MutexGuard<'static, FixedKeyMap<c_int, OpenFile, OPEN_FILE_CAPACITY>> {
+        process_state().open_files.lock()
+    }
+}
+
+struct ProcessRegularFileWorlds;
+
+impl ProcessRegularFileWorlds {
+    fn lock(&self) -> spin::MutexGuard<'static, RegularFileWorldRegistry> {
+        process_state().regular_file_worlds.lock()
+    }
+}
+
+struct ProcessFdFlags;
+
+impl ProcessFdFlags {
+    fn lock(&self) -> spin::MutexGuard<'static, FixedKeyMap<c_int, c_int, FD_FLAG_CAPACITY>> {
+        process_state().fd_flags.lock()
+    }
+}
+
+pub(crate) struct ProcessStdFdFlags;
+
+impl core::ops::Index<usize> for ProcessStdFdFlags {
+    type Output = AtomicI32;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &process_state().std_fd_flags[index]
+    }
+}
+
+struct ProcessSocketFds;
+
+impl ProcessSocketFds {
+    fn lock(&self) -> spin::MutexGuard<'static, FixedKeyMap<c_int, SocketFd, SOCKET_FD_CAPACITY>> {
+        process_state().socket_fds.lock()
+    }
 }
 
 impl SocketFd {
@@ -772,8 +922,10 @@ fn pthread_create_trace(thread_id: usize, rc: c_int) {
 }
 
 fn pthread_next_thread_id() -> usize {
-    let sequence =
-        PTHREAD_NEXT_THREAD_ID.fetch_add(1, Ordering::AcqRel) & PTHREAD_THREAD_SEQUENCE_MASK;
+    let sequence = process_state()
+        .next_thread_id
+        .fetch_add(1, Ordering::AcqRel)
+        & PTHREAD_THREAD_SEQUENCE_MASK;
     let sequence = sequence.max(1);
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
         sequence
@@ -1754,16 +1906,17 @@ async fn write_file_to_trueosfs_async(path: &str, bytes: &[u8]) -> Result<(), c_
 }
 
 pub(crate) fn next_file_fd() -> c_int {
-    NEXT_FILE_FD.fetch_add(1, Ordering::AcqRel)
+    process_state().next_file_fd.fetch_add(1, Ordering::AcqRel)
 }
 
 fn next_file_fd_at_least(minimum: c_int) -> Option<c_int> {
     let minimum = minimum.max(3);
-    let mut current = NEXT_FILE_FD.load(Ordering::Acquire);
+    let next_file_fd = &process_state().next_file_fd;
+    let mut current = next_file_fd.load(Ordering::Acquire);
     loop {
         let selected = current.max(minimum);
         let next = selected.checked_add(1)?;
-        match NEXT_FILE_FD.compare_exchange_weak(current, next, Ordering::AcqRel, Ordering::Acquire)
+        match next_file_fd.compare_exchange_weak(current, next, Ordering::AcqRel, Ordering::Acquire)
         {
             Ok(_) => return Some(selected),
             Err(actual) => current = actual,
@@ -3290,6 +3443,42 @@ mod unix_socket_syscall_tests {
         assert_eq!(unsafe { close(receiver) }, 0);
         assert_eq!(unsafe { close(pair[0]) }, 0);
         assert_eq!(unsafe { close(pair[1]) }, 0);
+    }
+
+    #[test]
+    fn closing_original_socketpair_descriptors_preserves_dup_aliases() {
+        const AF_UNIX: c_int = 1;
+        const SOCK_STREAM: c_int = 1;
+        const SOCK_NONBLOCK: c_int = 0o4000;
+
+        let mut pair = [-1; 2];
+        assert_eq!(
+            unsafe {
+                crate::unix_abi_shim::socketpair(
+                    AF_UNIX,
+                    SOCK_STREAM | SOCK_NONBLOCK,
+                    0,
+                    pair.as_mut_ptr(),
+                )
+            },
+            0
+        );
+        let receiver = unsafe { dup(pair[0]) };
+        let sender = unsafe { dup(pair[1]) };
+        assert!(receiver >= 0);
+        assert!(sender >= 0);
+
+        assert_eq!(unsafe { close(pair[0]) }, 0);
+        assert_eq!(unsafe { close(pair[1]) }, 0);
+
+        let wake = [0x5au8];
+        assert_eq!(unsafe { send(sender, wake.as_ptr().cast(), wake.len(), 0) }, 1);
+        let mut received = [0u8; 1];
+        assert_eq!(unsafe { recv(receiver, received.as_mut_ptr().cast(), received.len(), 0) }, 1);
+        assert_eq!(received, wake);
+
+        assert_eq!(unsafe { close(receiver) }, 0);
+        assert_eq!(unsafe { close(sender) }, 0);
     }
 }
 
@@ -4964,8 +5153,9 @@ pub unsafe extern "C" fn pthread_key_create(key: *mut u32, _destructor: *const c
     if key.is_null() {
         return TRUEOS_EINVAL;
     }
-    static NEXT_PTHREAD_KEY: AtomicUsize = AtomicUsize::new(1);
-    let next = NEXT_PTHREAD_KEY.fetch_add(1, Ordering::AcqRel);
+    let next = process_state()
+        .next_pthread_key
+        .fetch_add(1, Ordering::AcqRel);
     if next > u32::MAX as usize {
         return TRUEOS_EAGAIN;
     }

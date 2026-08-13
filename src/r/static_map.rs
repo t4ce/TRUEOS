@@ -68,6 +68,12 @@ impl<K: Copy + Eq, V, const N: usize> FixedKeyMap<K, V, N> {
             .filter_map(|entry| entry.as_ref().map(|entry| &entry.value))
     }
 
+    pub fn clear(&mut self) {
+        for entry in &mut self.entries {
+            *entry = None;
+        }
+    }
+
     fn find_index(&self, key: K) -> Option<usize> {
         self.entries
             .iter()

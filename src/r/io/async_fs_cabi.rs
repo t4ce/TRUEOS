@@ -23,6 +23,7 @@ enum RequestKind {
     Write { path: String, bytes: Vec<u8> },
     CreateDirAll { path: String },
     Stat { path: String },
+    RecordKey { path: String },
     ListDir { path: String },
     Remove { path: String },
 }
@@ -256,6 +257,10 @@ pub(crate) fn start_stat(owner: u32, path: String) -> i32 {
     start(owner, RequestKind::Stat { path })
 }
 
+pub(crate) fn start_record_key(owner: u32, path: String) -> i32 {
+    start(owner, RequestKind::RecordKey { path })
+}
+
 pub(crate) fn start_list_dir(owner: u32, path: String) -> i32 {
     let path_for_log = path.clone();
     let id = start(owner, RequestKind::ListDir { path });
@@ -407,6 +412,25 @@ async fn process(request: &Request) -> OperationState {
                     OperationState::Read(bytes)
                 }
                 Err(code) => OperationState::Failed(code),
+            }
+        }
+        RequestKind::RecordKey { path } => {
+            match crate::r::fs::trueosfs::file_info_async(disk, path.as_str()).await {
+                Ok(Some(info)) => {
+                    let mut bytes = Vec::with_capacity(56);
+                    match info.record_key {
+                        crate::r::fs::trueosfs::RecordKey::Ffa => bytes.extend_from_slice(&[0; 56]),
+                        crate::r::fs::trueosfs::RecordKey::Key(key) => {
+                            bytes.push(1);
+                            bytes.extend_from_slice(&[0; 7]);
+                            bytes.extend_from_slice(key.provider.as_bytes());
+                            bytes.extend_from_slice(key.handle.as_bytes());
+                        }
+                    }
+                    OperationState::Read(bytes)
+                }
+                Ok(None) => OperationState::Failed(FS_ERR_NOT_FOUND),
+                Err(error) => OperationState::Failed(map_block_error(error)),
             }
         }
         RequestKind::ListDir { path } => {
@@ -653,6 +677,29 @@ pub unsafe extern "C" fn trueos_cabi_async_fs_stat_start(
         guest_start(trueos_vm::vmcall::OP_BP_ASYNC_FS_STAT_START, path.as_str())
     } else {
         start_stat(direct_owner(), path)
+    }
+}
+
+/// Start a metadata-only read of the `RecordKey` stored in a TRUEOSFS file header.
+///
+/// The result is a fixed 56-byte wire record: kind (0 = FFA, 1 = key), seven
+/// reserved bytes, provider id (16 bytes), and key handle (32 bytes).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_async_fs_record_key_start(
+    path_ptr: *const u8,
+    path_len: usize,
+) -> i32 {
+    let path = match parse_path(path_ptr, path_len, false) {
+        Ok(path) => path,
+        Err(code) => return code,
+    };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        guest_start(
+            trueos_vm::vmcall::OP_BP_ASYNC_FS_RECORD_KEY_START,
+            path.as_str(),
+        )
+    } else {
+        start_record_key(direct_owner(), path)
     }
 }
 

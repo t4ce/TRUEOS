@@ -613,12 +613,58 @@ pub(crate) fn fs_create_dir_all_host(path: &str) -> i32 {
         );
         return FS_ERR_TOO_LARGE;
     }
-    match super::kfs::create_dir_all(path) {
+    let raw = path;
+    let Some(path) = super::env::resolve_fs_path(path, true) else {
+        log_fs_cabi_path_fail(
+            "create_dir_all",
+            raw,
+            None,
+            "reason=resolve-failed",
+            FS_ERR_BAD_PATH,
+        );
+        return FS_ERR_BAD_PATH;
+    };
+    if path.len() > QJS_ASYNC_FS_MAX_PATH {
+        log_fs_cabi_path_fail(
+            "create_dir_all",
+            raw,
+            Some(path.as_str()),
+            "reason=resolved-path-too-large",
+            FS_ERR_TOO_LARGE,
+        );
+        return FS_ERR_TOO_LARGE;
+    }
+    match super::kfs::create_dir_all(path.as_str()) {
         Ok(()) => 0,
         Err(error) => {
             let rc = fs_error_to_code(error);
-            log_fs_cabi_path_fail("create_dir_all", path, None, "", rc);
+            log_fs_cabi_path_fail("create_dir_all", raw, Some(path.as_str()), "", rc);
             rc
+        }
+    }
+}
+
+fn wait_for_guest_create_dir_all(path: &str) -> i32 {
+    let operation = unsafe {
+        super::async_fs_cabi::trueos_cabi_async_fs_create_dir_all_start(path.as_ptr(), path.len())
+    };
+    if operation <= 0 {
+        return operation;
+    }
+    let operation = operation as u32;
+
+    loop {
+        match super::async_fs_cabi::trueos_cabi_async_fs_status(operation) {
+            0 => {
+                let _ = trueos_vm::vmcall::call(trueos_vm::vmcall::OP_YIELD, 0, 0);
+            }
+            1 => {
+                return super::async_fs_cabi::trueos_cabi_async_fs_discard(operation);
+            }
+            rc => {
+                let _ = super::async_fs_cabi::trueos_cabi_async_fs_discard(operation);
+                return rc;
+            }
         }
     }
 }
@@ -1084,6 +1130,9 @@ pub unsafe extern "C" fn trueos_cabi_fs_create_dir_all(
     let Ok(path) = core::str::from_utf8(path_bytes) else {
         return FS_ERR_BAD_UTF8;
     };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return wait_for_guest_create_dir_all(path);
+    }
     fs_create_dir_all_host(path)
 }
 

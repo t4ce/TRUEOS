@@ -127,4 +127,7 @@
 # No runnable artifact could resolve these names. Blueprint line output remains
 # live through trueos_cabi_shell_attached_write; supported input and Shell2
 # frontend contracts are unchanged.
-d42826f7fdd787cc4c48aa7b8e30a5982f9d811e932a4b4781de1bff7db4f8a5
+# The async filesystem record-key start call is strictly additive. It exposes
+# only the bounded metadata already stored in a caller-readable TRUEOSFS file
+# header; older v2 artifacts import neither the CABI symbol nor its new vmcall.
+fe809c46aadfe0150b1b1e290ba0d296e99c6310ed91e87eb56b17b5b7d50550

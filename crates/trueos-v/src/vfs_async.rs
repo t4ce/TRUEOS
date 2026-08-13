@@ -22,6 +22,15 @@ pub struct Metadata {
     pub len: u64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RecordKey {
+    Ffa,
+    Key {
+        provider: [u8; 16],
+        handle: [u8; 32],
+    },
+}
+
 impl Metadata {
     pub const fn is_file(self) -> bool {
         self.kind == 1
@@ -231,6 +240,41 @@ pub async fn metadata(path: &[u8]) -> Result<Metadata, i32> {
         kind: u32::from_le_bytes(result[..4].try_into().map_err(|_| ERR_IO)?),
         len: u64::from_le_bytes(result[4..].try_into().map_err(|_| ERR_IO)?),
     })
+}
+
+/// Read the access key persisted in a TRUEOSFS file's on-disk record header.
+pub async fn record_key(path: &[u8]) -> Result<RecordKey, i32> {
+    let mut operation = Operation::from_start(unsafe {
+        vcabi::trueos_cabi_async_fs_record_key_start(path.as_ptr(), path.len())
+    })?;
+    operation.ready().await?;
+
+    let len = unsafe { vcabi::trueos_cabi_async_fs_result_len(operation.id) };
+    if len < 0 {
+        return Err(len as i32);
+    }
+    if len != 56 {
+        return Err(ERR_IO);
+    }
+    let mut result = [0u8; 56];
+    let got = unsafe {
+        vcabi::trueos_cabi_async_fs_result_read(operation.id, 0, result.as_mut_ptr(), result.len())
+    };
+    if got != result.len() as isize {
+        return Err(if got < 0 { got as i32 } else { ERR_IO });
+    }
+    operation.discard();
+    match result[0] {
+        0 if result[1..].iter().all(|byte| *byte == 0) => Ok(RecordKey::Ffa),
+        1 if result[1..8].iter().all(|byte| *byte == 0) => {
+            let mut provider = [0u8; 16];
+            provider.copy_from_slice(&result[8..24]);
+            let mut handle = [0u8; 32];
+            handle.copy_from_slice(&result[24..56]);
+            Ok(RecordKey::Key { provider, handle })
+        }
+        _ => Err(ERR_IO),
+    }
 }
 
 pub async fn exists(path: &[u8]) -> Result<bool, i32> {

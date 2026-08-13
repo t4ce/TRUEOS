@@ -843,6 +843,12 @@ fn patch_guest_hull_rw_dynamic_state(vm_id: u8, arena_virt: usize, guest_start: 
             vm_id, guest_addr, len
         ));
     }
+    if let Some((guest_addr, len)) = crate::std_abi_shim::blueprint_process_state_span(vm_id) {
+        hvlogf(format_args!(
+            "hv: vm{} reporting: hull rw shared blueprint-process-state guest=0x{:016X} bytes={}",
+            vm_id, guest_addr, len
+        ));
+    }
     if crate::hv::blueprint_launch_active(vm_id) {
         let (guest_addr, len) = crate::hv::blueprint_launch_states_span();
         patch_guest_hull_rw_bytes(arena_virt, guest_start, bytes, guest_addr, len);
@@ -907,14 +913,18 @@ fn patch_guest_hull_rw_bytes(
 fn guest_hull_rw_page_uses_kernel_backing(vm_id: u8, page_va: u64) -> bool {
     let page_start = page_align_down(page_va);
     let page_end = page_start.saturating_add(PAGE_SIZE_4K as u64);
-    let Some((span_start, span_len)) = crate::allocators::hv_guest_allocator_state_span(vm_id)
-    else {
-        return false;
-    };
-    let span_end = span_start.saturating_add(span_len as u64);
-    let shared_start = page_align_down(span_start);
-    let shared_end = page_align_up_4k(span_end);
-    page_start < shared_end && page_end > shared_start
+    [
+        crate::allocators::hv_guest_allocator_state_span(vm_id),
+        crate::std_abi_shim::blueprint_process_state_span(vm_id),
+    ]
+    .into_iter()
+    .flatten()
+    .any(|(span_start, span_len)| {
+        let span_end = span_start.saturating_add(span_len as u64);
+        let shared_start = page_align_down(span_start);
+        let shared_end = page_align_up_4k(span_end);
+        page_start < shared_end && page_end > shared_start
+    })
 }
 
 pub fn ensure_guest_hull_rw_template_ready() -> Result<(), &'static str> {

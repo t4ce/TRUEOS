@@ -3870,6 +3870,7 @@ fn clear_blueprint_process_context(vm_id: u8) {
     // Explicit detach supports reattachment while the VM is alive. VM teardown
     // closes the generation and returns its interpreter worker to the pool.
     let _ = crate::shell2::backends::session_pool::close_owner(vm_id);
+    crate::std_abi_shim::reset_blueprint_process_state(vm_id);
     if let Some(log_slot) = BLUEPRINT_CONSOLE_LOG_BUFFERS.get(vm_id as usize) {
         let _ = log_slot.lock().take();
     }
