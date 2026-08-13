@@ -303,6 +303,36 @@ fn page() -> *mut CommPage {
     COMM_PAGE_VA as *mut CommPage
 }
 
+/// Serializes access to the single communication page shared by every Hull
+/// vthread in a VM. `request_pad` is transport-private and starts at zero when
+/// the host prepares the page.
+struct CommPageGuard {
+    lock: *const AtomicU32,
+}
+
+impl CommPageGuard {
+    #[inline]
+    fn acquire(page: *mut CommPage) -> Self {
+        let lock = unsafe {
+            AtomicU32::from_ptr(core::ptr::addr_of_mut!((*page).request_pad)) as *const AtomicU32
+        };
+        while unsafe { &*lock }
+            .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
+            core::hint::spin_loop();
+        }
+        Self { lock }
+    }
+}
+
+impl Drop for CommPageGuard {
+    #[inline]
+    fn drop(&mut self) {
+        unsafe { &*self.lock }.store(0, Ordering::Release);
+    }
+}
+
 pub fn hull_bss_anchor() -> u64 {
     core::ptr::addr_of!(SEQ) as u64
 }
@@ -317,8 +347,9 @@ pub fn hull_bss_anchor_range() -> (u64, u64) {
 /// Synchronous: host writes response before vmresume, so data is ready
 /// on return.
 pub fn call(op: u32, arg0: u64, arg1: u64) -> (u32, u64) {
-    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     let p = page();
+    let guard = CommPageGuard::acquire(p);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     unsafe {
         core::ptr::write_volatile(&mut (*p).request_arg0, arg0);
         core::ptr::write_volatile(&mut (*p).request_arg1, arg1);
@@ -327,6 +358,13 @@ pub fn call(op: u32, arg0: u64, arg1: u64) -> (u32, u64) {
         // op written last — host treats this as the trigger
         core::ptr::write_volatile(&mut (*p).request_op, op);
         core::arch::asm!("vmcall", options(nostack, preserves_flags));
+        // Yield/sleep requests are complete once the host has captured them.
+        // The host releases the page before parking this vthread, and these
+        // calls intentionally have no response value to preserve.
+        if matches!(op, OP_YIELD | OP_SLEEP_MS) {
+            core::mem::forget(guard);
+            return (STATUS_OK, 0);
+        }
         // vmcall is synchronous; response is ready on return
         let status = core::ptr::read_volatile(&(*p).response_status);
         let data = core::ptr::read_volatile(&(*p).response_data);
@@ -335,8 +373,9 @@ pub fn call(op: u32, arg0: u64, arg1: u64) -> (u32, u64) {
 }
 
 pub fn call_with_payload(op: u32, arg0: u64, arg1: u64, req: &[u8], out: &mut [u8]) -> (u32, u64) {
-    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     let p = page();
+    let _guard = CommPageGuard::acquire(p);
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     unsafe {
         let req_n = core::cmp::min(req.len(), PAYLOAD_CAP);
         if req_n != 0 {
@@ -434,6 +473,7 @@ pub fn net_tcp_read(out: &mut [u8]) -> usize {
 #[inline(never)]
 pub fn preserve() {
     let p = page();
+    let _guard = CommPageGuard::acquire(p);
     unsafe {
         core::ptr::write_volatile(&mut (*p).request_len, 0);
         core::ptr::write_volatile(&mut (*p).request_seq, 0xFFFF_FFFF);

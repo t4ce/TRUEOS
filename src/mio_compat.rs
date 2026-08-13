@@ -504,6 +504,11 @@ fn guest_mio_socket_out(op: u32, addr: TrueosMioSocketAddr, out_socket_id: *mut 
     let (status, data) =
         trueos_vm::vmcall::call_with_payload(op, 0, 0, addr_bytes(&addr), &mut out);
     if status != trueos_vm::vmcall::STATUS_OK {
+        crate::log!(
+            "mio_compat: guest socket bind transport failed op=0x{:x} status={}\n",
+            op,
+            status
+        );
         return STATUS_INVALID_INPUT;
     }
     let rc = vmcall_i32(data);
@@ -514,6 +519,11 @@ fn guest_mio_socket_out(op: u32, addr: TrueosMioSocketAddr, out_socket_id: *mut 
             STATUS_INVALID_INPUT
         }
     } else {
+        crate::log!(
+            "mio_compat: guest socket bind rejected op=0x{:x} status={}\n",
+            op,
+            rc
+        );
         rc
     }
 }

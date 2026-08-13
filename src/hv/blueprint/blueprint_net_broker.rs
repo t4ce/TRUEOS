@@ -76,6 +76,22 @@ impl VmxBroker {
         let mut request = [0u8; trueos_vm::vmcall::PAYLOAD_CAP];
         let len =
             crate::blueprint_net_wire::encode_command(command, &mut request).map_err(|_| ())?;
+
+        // The bridge is created by the Hull and therefore owns a VMX session,
+        // but Tokio may later poll it from a host-carried worker. Such a worker
+        // retains the Blueprint VM identity while running in VMX root and must
+        // enter the same host session directly; executing `vmcall` there is
+        // invalid. Keeping the original session also preserves socket/event
+        // ordering across Hull and worker execution realms.
+        if crate::hv::current_hull_guest_context_vm_id().is_none() {
+            let vm_id = crate::hv::current_guest_execution_context_vm_id().ok_or(())?;
+            return crate::hv::blueprint_net::submit(
+                vm_id,
+                self.session_id,
+                &request[..len],
+            );
+        }
+
         let mut response = [0u8; 1];
         let (status, _) = trueos_vm::vmcall::call_with_payload(
             trueos_vm::vmcall::OP_BP_NET_SUBMIT,
@@ -93,6 +109,18 @@ impl VmxBroker {
 
     fn pop_event(&self) -> Option<api::Event> {
         let mut response = [0u8; trueos_vm::vmcall::PAYLOAD_CAP];
+
+        if crate::hv::current_hull_guest_context_vm_id().is_none() {
+            let vm_id = crate::hv::current_guest_execution_context_vm_id()?;
+            let len = crate::hv::blueprint_net::poll_event(
+                vm_id,
+                self.session_id,
+                &mut response,
+            )
+            .ok()??;
+            return crate::blueprint_net_wire::decode_event(&response[..len]).ok();
+        }
+
         let (status, has_event) = trueos_vm::vmcall::call_with_payload(
             trueos_vm::vmcall::OP_BP_NET_POLL,
             self.session_id as u64,

@@ -415,6 +415,14 @@ fn write_response(vm_id: u8, seq: u32, status: u32, data: u64, len: u32) {
     }
 }
 
+fn release_guest_comm_page(vm_id: u8) {
+    let Some(p) = host_ptr(vm_id) else {
+        return;
+    };
+    let lock = unsafe { AtomicU32::from_ptr(core::ptr::addr_of_mut!((*p).request_pad)) };
+    lock.store(0, Ordering::Release);
+}
+
 fn write_record_response<T: Copy>(vm_id: u8, seq: u32, data: u64, value: &T) {
     let len = core::mem::size_of::<T>();
     if len > PAYLOAD_CAP {
@@ -490,8 +498,27 @@ fn handle_vlayer_text_read_vmcall(
 }
 
 pub fn guest_call(op: u32, arg0: u64, arg1: u64) -> (u32, u64) {
-    let seq = GUEST_CABI_SEQ.fetch_add(1, Ordering::Relaxed);
     let p = comm_page_guest_va() as *mut CommPage;
+    // The Hull has one comm page per VM, shared by all of its vthreads and by
+    // both guest-side call paths. Use the transport-private request padding as
+    // the common lock word so payloads and responses cannot cross-contaminate.
+    let lock = unsafe {
+        AtomicU32::from_ptr(core::ptr::addr_of_mut!((*p).request_pad)) as *const AtomicU32
+    };
+    while unsafe { &*lock }
+        .compare_exchange_weak(0, 1, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
+        core::hint::spin_loop();
+    }
+    struct Unlock(*const AtomicU32);
+    impl Drop for Unlock {
+        fn drop(&mut self) {
+            unsafe { &*self.0 }.store(0, Ordering::Release);
+        }
+    }
+    let unlock = Unlock(lock);
+    let seq = GUEST_CABI_SEQ.fetch_add(1, Ordering::Relaxed);
     unsafe {
         core::ptr::write_volatile(&mut (*p).request_arg0, arg0);
         core::ptr::write_volatile(&mut (*p).request_arg1, arg1);
@@ -499,6 +526,10 @@ pub fn guest_call(op: u32, arg0: u64, arg1: u64) -> (u32, u64) {
         core::ptr::write_volatile(&mut (*p).request_seq, seq);
         core::ptr::write_volatile(&mut (*p).request_op, op);
         core::arch::asm!("vmcall", options(nostack, preserves_flags));
+        if matches!(op, OP_YIELD | OP_SLEEP_MS) {
+            core::mem::forget(unlock);
+            return (STATUS_OK, 0);
+        }
         let status = core::ptr::read_volatile(&(*p).response_status);
         let data = core::ptr::read_volatile(&(*p).response_data);
         (status, data)
@@ -2467,11 +2498,13 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         }
         OP_YIELD => {
             write_response(vm_id, seq, STATUS_OK, 0, 0);
+            release_guest_comm_page(vm_id);
             DispatchOutcome::Yield
         }
         OP_SLEEP_MS => {
             let sleep_ms = arg0.min(MAX_GUEST_SLEEP_MS);
             write_response(vm_id, seq, STATUS_OK, sleep_ms, 0);
+            release_guest_comm_page(vm_id);
             DispatchOutcome::SleepMs(sleep_ms)
         }
         OP_RAND_BYTES => {
