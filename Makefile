@@ -53,7 +53,10 @@ GUC_FW_HOST_PATH ?= firmware/i915/tgl_guc_70.bin
 GUC_FW_ISO_REL_PATH ?= EFI/BOOT/tgl_guc_70.bin
 HORIZON_BP_HOST_PATH ?= ../TRUEOS-Blueprints/dist/horizon.bp
 HORIZON_BP_ISO_REL_PATH ?= EFI/BOOT/apps/horizon.bp
+WEAVE_HELLO_BP_HOST_PATH ?= ../TRUEOS-Blueprints/dist/weave_hello.bp
+WEAVE_HELLO_BP_ISO_REL_PATH ?= EFI/BOOT/apps/weave_hello.bp
 ENABLE_BLUEPRINTS ?= 0
+ENABLE_WEAVE_HELLO ?= 1
 QEMU_RUNNER := tools/qemu/run.sh
 QEMU_BIN ?= qemu-system-x86_64
 QEMU_MEMORY ?= 12000M
@@ -454,6 +457,19 @@ iso: artifacts images limine
 	else \
 		echo "iso: skipping Blueprint modules (ENABLE_BLUEPRINTS=0)"; \
 	fi
+	@if [ "$(ENABLE_WEAVE_HELLO)" = "1" ]; then \
+		if [ ! -f "$(WEAVE_HELLO_BP_HOST_PATH)" ]; then \
+			echo "error: Weave hello blueprint not found at $(WEAVE_HELLO_BP_HOST_PATH)"; \
+			echo "       run: cd ../TRUEOS-Blueprints && cargo bp weave_hello"; \
+			exit 1; \
+		fi; \
+		mkdir -p "$(ISO_BOOT_DIR)/$(dir $(WEAVE_HELLO_BP_ISO_REL_PATH))"; \
+		cp "$(WEAVE_HELLO_BP_HOST_PATH)" "$(ISO_BOOT_DIR)/$(WEAVE_HELLO_BP_ISO_REL_PATH)"; \
+		mkdir -p "$(ISO_DIR)/$(dir $(WEAVE_HELLO_BP_ISO_REL_PATH))"; \
+		cp "$(WEAVE_HELLO_BP_HOST_PATH)" "$(ISO_DIR)/$(WEAVE_HELLO_BP_ISO_REL_PATH)"; \
+	else \
+		echo "iso: skipping Weave hello Blueprint (ENABLE_WEAVE_HELLO=0)"; \
+	fi
 	cp "$(LIMINE_CFG)" "$(LIMINE_CFG_GENERATED)"
 	printf '%s\n%s\n' \
 		"module_path: boot():/$(ISO_EFI_IMG)" \
@@ -463,6 +479,12 @@ iso: artifacts images limine
 		printf '%s\n%s\n' \
 			"module_path: boot():/$(HORIZON_BP_ISO_REL_PATH)" \
 			"module_string: trueos.app.horizon" \
+			>> "$(LIMINE_CFG_GENERATED)"; \
+	fi
+	@if [ "$(ENABLE_WEAVE_HELLO)" = "1" ]; then \
+		printf '%s\n%s\n' \
+			"module_path: boot():/$(WEAVE_HELLO_BP_ISO_REL_PATH)" \
+			"module_string: trueos.app.weave_hello" \
 			>> "$(LIMINE_CFG_GENERATED)"; \
 	fi
 	cp $(LIMINE_CFG_GENERATED) $(ISO_BOOT_DIR)/limine.conf

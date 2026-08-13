@@ -102,6 +102,7 @@ define_started_flags!(
     USER_INPUT_RECORD_WRITER_STARTED,
     TRUEOSFS_RW_PROBE_STARTED,
     BP_AUTOSTART_STARTED,
+    WEAVE_HELLO_AUTOSTART_STARTED,
     APP_VM_RUN_QUEUE_STARTED,
     FACTORY_RAM_PROBE_STARTED,
     NET_TCP_SHELL_STARTED,
@@ -1482,6 +1483,37 @@ fn spawn_bp_autostart(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |spawner| bp_autostart_task(spawner))
 }
 
+#[embassy_executor::task]
+async fn weave_hello_autostart_task() {
+    // Let the app-VM queue task enter its receive loop before submitting the
+    // first Windows personality Blueprint. The module itself is a Limine boot
+    // module, so this path does not depend on TRUEOSFS being mounted.
+    Timer::after(EmbassyDuration::from_millis(250)).await;
+    let target =
+        crate::shell2::matrix_target_for_slot_name(crate::shell2::OUTPUT_SYSTEM_MASK, "wve");
+    crate::log!("spawn-svc: weave-hello-autostart begin archive=weave_hello.bp slot=wve\n");
+    match crate::shell2::cmds::run::submit_archive_name_to_target_prefer_embedded_async(
+        target,
+        "weave_hello.bp",
+        Vec::new(),
+    )
+    .await
+    {
+        Ok(source) => crate::log!(
+            "spawn-svc: weave-hello-autostart queued archive=weave_hello.bp slot=wve source={}\n",
+            source
+        ),
+        Err(err) => crate::log!(
+            "spawn-svc: weave-hello-autostart failed archive=weave_hello.bp slot=wve err={}\n",
+            err
+        ),
+    }
+}
+
+fn spawn_weave_hello_autostart(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| weave_hello_autostart_task())
+}
+
 fn spawn_net_tcp_shell(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |spawner| {
         crate::shell2::task(spawner, &crate::shell2::NET_TCP_SHELL_BACKEND)
@@ -1678,7 +1710,7 @@ const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 73
+const TASK_COUNT: usize = 74
     + cfg!(feature = "trueos_h264_encode_stream") as usize
     + cfg!(feature = "trueos_lumen") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
@@ -1863,6 +1895,12 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     ),
     unix_fd_probe_task_spec(),
     TaskSpec::enabled("app-vm-run-queue", 0, &APP_VM_RUN_QUEUE_STARTED, spawn_app_vm_run_queue),
+    TaskSpec::enabled(
+        "weave-hello-autostart",
+        crate::r::readiness::BACKGROUND_AP_WORKER_READY | crate::r::readiness::VTHREAD_HW_TAG_READY,
+        &WEAVE_HELLO_AUTOSTART_STARTED,
+        spawn_weave_hello_autostart,
+    ),
     TaskSpec::disabled(
         "bp-autostart",
         BP_AUTOSTART_READY,
