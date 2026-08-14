@@ -348,21 +348,23 @@ async fn prepare_scanout(mut job: PrepareJob) {
             ENCODE_NV12_BYTES,
         );
     } else {
-        let capture_started_ns = crate::chronos::monotonic_nanos();
-        let capture_result = {
+        let composition_started_ns = crate::chronos::monotonic_nanos();
+        let composition_result = {
             let source = job
                 .source_rgba
                 .as_mut()
                 .expect("checked source DMA allocation");
-            super::screenshot::capture_stream_scanout_rgba_into(source.as_mut_slice())
+            super::screenshot::compose_realtime_encode_rgba_into(source.as_mut_slice())
         };
-        capture_us = crate::chronos::monotonic_nanos().saturating_sub(capture_started_ns) / 1_000;
-        match capture_result {
-            Ok(capture) => {
-                source_width = capture.width;
-                source_height = capture.height;
-                slot0_scanout_pixels = capture.slot0_scanout_pixels;
-                spirit_overlay_pixels = capture.spirit_overlay_pixels;
+        capture_us = crate::chronos::monotonic_nanos()
+            .saturating_sub(composition_started_ns)
+            / 1_000;
+        match composition_result {
+            Ok(composition) => {
+                source_width = composition.width;
+                source_height = composition.height;
+                slot0_scanout_pixels = composition.slot0_scanout_pixels;
+                spirit_overlay_pixels = composition.spirit_overlay_pixels;
                 let source = job
                     .source_rgba
                     .as_ref()
@@ -373,9 +375,9 @@ async fn prepare_scanout(mut job: PrepareJob) {
                     source.phys,
                     crate::intel::gpgpu::UI4_COMPOSITOR_NV12_SOURCE_GPU_BASE,
                     source.bytes,
-                    capture.width,
-                    capture.height,
-                    capture.width.saturating_mul(4),
+                    composition.width,
+                    composition.height,
+                    composition.width.saturating_mul(4),
                 );
                 let destination_surface = crate::intel::gpgpu::GpgpuNv12LinearSurface::new(
                     destination.phys,
@@ -461,8 +463,8 @@ async fn prepare_scanout(mut job: PrepareJob) {
                         "intel/media-encode: live frame rejected session={} sequence={} stage=guc-rcs-surface-contract source={}x{} destination={}x{} software_fallback=0\n",
                         job.session_id,
                         job.sequence,
-                        capture.width,
-                        capture.height,
+                        composition.width,
+                        composition.height,
                         ENCODE_WIDTH,
                         ENCODE_HEIGHT,
                     );
@@ -470,7 +472,7 @@ async fn prepare_scanout(mut job: PrepareJob) {
             }
             Err(error) => {
                 crate::log_error!(target: "intel/media-encode";
-                    "intel/media-encode: live frame rejected session={} sequence={} stage=ui4-scanout-capture error={:?} filesystem_writes=0 software_fallback=0\n",
+                    "intel/media-encode: live frame rejected session={} sequence={} stage=ui4-realtime-encode-composition error={:?} filesystem_writes=0 software_fallback=0\n",
                     job.session_id,
                     job.sequence,
                     error,

@@ -527,17 +527,17 @@ pub(super) fn spirit_cursor_rearm_needed(channel: u8) -> Result<bool, SpiritCurs
     Ok(contract_lost)
 }
 
-pub(super) fn with_stream_overlay_pipe_a_surflive<R>(
-    read: impl FnOnce(super::SpiritStreamOverlay<'_>) -> R,
+pub(super) fn with_realtime_encode_overlay_pipe_a_surflive<R>(
+    read: impl FnOnce(super::SpiritRealtimeEncodeOverlay<'_>) -> R,
 ) -> Option<R> {
-    // The fixed test-rig stream source is D01, currently driven by display
-    // pipe A. Cursor ownership and registers are per-pipe on this platform.
-    const STREAM_PIPE: usize = 0;
+    // The fixed test-rig real-time encode source is D01, currently driven by
+    // display pipe A. Cursor ownership and registers are per-pipe here.
+    const REALTIME_ENCODE_PIPE: usize = 0;
 
     let dev = crate::intel::claimed_device()?;
     let state = SPIRIT_CURSOR_STATE.lock();
-    let pipe_state = &state.channels[STREAM_PIPE];
-    let regs = cursor_regs(STREAM_PIPE);
+    let pipe_state = &state.channels[REALTIME_ENCODE_PIPE];
+    let regs = cursor_regs(REALTIME_ENCODE_PIPE);
     if crate::intel::mmio_read(dev, regs.ctl) & CURSOR_MODE_MASK == 0 {
         return None;
     }
@@ -557,7 +557,7 @@ pub(super) fn with_stream_overlay_pipe_a_surflive<R>(
     crate::intel::dma_flush(surface.virt, surface.byte_len);
     let bgra_premultiplied =
         unsafe { core::slice::from_raw_parts(surface.virt.cast_const(), surface.byte_len) };
-    Some(read(super::SpiritStreamOverlay {
+    Some(read(super::SpiritRealtimeEncodeOverlay {
         left,
         top,
         width: surface.width,

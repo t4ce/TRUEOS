@@ -220,19 +220,22 @@ struct CapturedWindowRgba {
     rgba_premultiplied: Vec<u8>,
 }
 
-/// One immutable logical snapshot of D01, composed in the same hardware-plane
-/// order as UI4 presentation. The encoder consumes this in memory; it never
-/// enters the screenshot queue or filesystem worker.
-pub(super) struct StreamScanoutCapture {
+/// Metadata for one off-screen D01 composition built specifically for the
+/// real-time encoder. This path gathers the independently presented hardware
+/// planes in UI4 presentation order; it is not a physical scanout capture and
+/// never enters the screenshot queue or filesystem worker.
+pub(super) struct RealtimeEncodeComposition {
     pub(super) width: u32,
     pub(super) height: u32,
     pub(super) slot0_scanout_pixels: usize,
     pub(super) spirit_overlay_pixels: usize,
 }
 
-pub(super) fn capture_stream_scanout_rgba_into(
+/// Compose the current D01 hardware-plane/UI4 state into the encoder's reusable
+/// premultiplied-RGBA staging surface.
+pub(super) fn compose_realtime_encode_rgba_into(
     rgba_premultiplied: &mut [u8],
-) -> Result<StreamScanoutCapture, CaptureError> {
+) -> Result<RealtimeEncodeComposition, CaptureError> {
     let output = super::OutputId::from_slot(0).ok_or(CaptureError::NoScanout)?;
     let (width, height) =
         crate::intel::active_scanout_dimensions().ok_or(CaptureError::NoScanout)?;
@@ -267,9 +270,9 @@ pub(super) fn capture_stream_scanout_rgba_into(
             .map(published_rgba_view)
             .collect::<Result<Vec<FrameRgbaView>, _>>()?;
         let slot0_scanout_pixels =
-            copy_stream_pipe_a_slot0_premultiplied(rgba_premultiplied, width, height);
+            copy_realtime_encode_pipe_a_slot0_premultiplied(rgba_premultiplied, width, height);
         if slot0_scanout_pixels == 0 {
-            // The reusable stream buffer still contains the preceding frame.
+            // The reusable encoder buffer still contains the preceding frame.
             // Clear only when the full-screen physical base could not replace
             // it; the normal SURFLIVE path overwrites every destination byte.
             rgba_premultiplied.fill(0);
@@ -284,13 +287,13 @@ pub(super) fn capture_stream_scanout_rgba_into(
             blend_visual_rect(rgba_premultiplied, stride, width, height, rect);
         }
         let spirit_overlay_pixels =
-            blend_stream_spirit_overlay_premultiplied(rgba_premultiplied, width, height);
+            blend_realtime_encode_spirit_overlay_premultiplied(rgba_premultiplied, width, height);
         Ok::<_, CaptureError>((slot0_scanout_pixels, spirit_overlay_pixels))
     })();
     release_leases(&leases);
     let (slot0_scanout_pixels, spirit_overlay_pixels) = result?;
 
-    Ok(StreamScanoutCapture {
+    Ok(RealtimeEncodeComposition {
         width,
         height,
         slot0_scanout_pixels,
@@ -298,7 +301,7 @@ pub(super) fn capture_stream_scanout_rgba_into(
     })
 }
 
-fn copy_stream_pipe_a_slot0_premultiplied(
+fn copy_realtime_encode_pipe_a_slot0_premultiplied(
     destination: &mut [u8],
     width: u32,
     height: u32,
@@ -306,7 +309,7 @@ fn copy_stream_pipe_a_slot0_premultiplied(
     let Some(row_bytes) = (width as usize).checked_mul(4) else {
         return 0;
     };
-    crate::intel::with_ui4_stream_pipe_a_slot0_surflive(|slot0| {
+    crate::intel::with_ui4_realtime_encode_pipe_a_slot0_surflive(|slot0| {
         if slot0.width != width
             || slot0.height != height
             || (slot0.pitch_bytes as usize) < row_bytes
@@ -334,13 +337,13 @@ fn copy_stream_pipe_a_slot0_premultiplied(
     .unwrap_or(0)
 }
 
-fn blend_stream_spirit_overlay_premultiplied(
+fn blend_realtime_encode_spirit_overlay_premultiplied(
     destination: &mut [u8],
     width: u32,
     height: u32,
 ) -> usize {
     let destination_stride = width as usize * 4;
-    crate::spirit::with_stream_overlay_pipe_a(|overlay| {
+    crate::spirit::with_realtime_encode_overlay_pipe_a(|overlay| {
         let left = i64::from(overlay.left).max(0);
         let top = i64::from(overlay.top).max(0);
         let right = (i64::from(overlay.left) + i64::from(overlay.width)).min(i64::from(width));
@@ -543,7 +546,7 @@ fn capture_scope_log_fields(selection: CaptureSelection) -> (&'static str, u32, 
 fn capture_windows(
     windows: &[WindowSnapshot],
     rects: &[crate::intel::LiveOverlayRect],
-    stream_capture: bool,
+    realtime_encode_composition: bool,
 ) -> Result<CapturedComposition, CaptureError> {
     let (width, height) =
         crate::intel::active_scanout_dimensions().ok_or(CaptureError::NoScanout)?;
@@ -583,8 +586,8 @@ fn capture_windows(
         // D01's original pipe-A primary is the immutable opaque background.
         // The fixed test rig has no broker windows on slot 0; a changed
         // SURFLIVE therefore rejects this copy in the display accessor.
-        let slot0_scanout_pixels = if stream_capture {
-            copy_stream_pipe_a_slot0_premultiplied(&mut rgba, width, height)
+        let slot0_scanout_pixels = if realtime_encode_composition {
+            copy_realtime_encode_pipe_a_slot0_premultiplied(&mut rgba, width, height)
         } else {
             0
         };
@@ -598,14 +601,14 @@ fn capture_windows(
             blend_visual_rect(&mut rgba, stride, width, height, *rect);
         }
         // The encoder composites premultiplied RGB directly onto black. Keep
-        // that representation for stream capture and reserve the expensive
+        // that representation for real-time encoding and reserve the expensive
         // straight-alpha conversion for exported screenshots.
-        let spirit_overlay_pixels = if stream_capture {
-            blend_stream_spirit_overlay_premultiplied(&mut rgba, width, height)
+        let spirit_overlay_pixels = if realtime_encode_composition {
+            blend_realtime_encode_spirit_overlay_premultiplied(&mut rgba, width, height)
         } else {
             0
         };
-        if !stream_capture {
+        if !realtime_encode_composition {
             unpremultiply_rgba(&mut rgba);
         }
         Ok::<_, CaptureError>((rgba, slot0_scanout_pixels, spirit_overlay_pixels))

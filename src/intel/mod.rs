@@ -599,13 +599,14 @@ pub(crate) fn copy_engine_activity_snapshot() -> self::blt::CopyEngineActivitySn
 pub(crate) use self::display::{
     CompositionDamageRect, CompositionDamageRegion, LiveOverlayRect, RgbaOverlayTile,
     Ui4AsyncComposition, Ui4AsyncCompositionError, Ui4AsyncCompositionPoll, Ui4DirectRgbaFrame,
-    Ui4LiveOverlayFlip, Ui4LiveOverlayFlipPoll, Ui4PlaneSurfaceFlipPoll, Ui4StreamSlot0View,
+    Ui4LiveOverlayFlip, Ui4LiveOverlayFlipPoll, Ui4PlaneSurfaceFlipPoll,
+    Ui4RealtimeEncodeSlot0View,
 };
 
-pub(crate) fn with_ui4_stream_pipe_a_slot0_surflive<R>(
-    read: impl FnOnce(Ui4StreamSlot0View<'_>) -> R,
+pub(crate) fn with_ui4_realtime_encode_pipe_a_slot0_surflive<R>(
+    read: impl FnOnce(Ui4RealtimeEncodeSlot0View<'_>) -> R,
 ) -> Option<R> {
-    self::display::with_ui4_stream_pipe_a_slot0_surflive(read)
+    self::display::with_ui4_realtime_encode_pipe_a_slot0_surflive(read)
 }
 
 pub(crate) fn set_pipe_a_bottom_color_rgb8(red: u8, green: u8, blue: u8) -> bool {

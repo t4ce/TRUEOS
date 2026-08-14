@@ -395,7 +395,7 @@ pub(crate) struct PrimarySurfaceBgra8Snapshot {
 /// This is intentionally the fixed D01 test-rig contract: after the one-time
 /// XRGB-to-RGBA handoff, the original primary allocation remains the opaque
 /// full-output logo/background and the broker places no windows on slot 0.
-pub(crate) struct Ui4StreamSlot0View<'a> {
+pub(crate) struct Ui4RealtimeEncodeSlot0View<'a> {
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) pitch_bytes: u32,
@@ -693,13 +693,13 @@ fn active_primary_surface() -> Option<PrimarySurface> {
     PRIMARY_SURFACES.iter().find_map(|owner| *owner.lock())
 }
 
-pub(crate) fn with_ui4_stream_pipe_a_slot0_surflive<R>(
-    read: impl FnOnce(Ui4StreamSlot0View<'_>) -> R,
+pub(crate) fn with_ui4_realtime_encode_pipe_a_slot0_surflive<R>(
+    read: impl FnOnce(Ui4RealtimeEncodeSlot0View<'_>) -> R,
 ) -> Option<R> {
-    const STREAM_PIPE: usize = 0;
+    const REALTIME_ENCODE_PIPE: usize = 0;
 
     let dev = crate::intel::claimed_device()?;
-    let pipe = PIPES[STREAM_PIPE];
+    let pipe = PIPES[REALTIME_ENCODE_PIPE];
     if !ui4_rgba8_plane_stack_ready(pipe) {
         return None;
     }
@@ -730,7 +730,7 @@ pub(crate) fn with_ui4_stream_pipe_a_slot0_surflive<R>(
     }
     let rgba_premultiplied =
         unsafe { core::slice::from_raw_parts(surface.virt.cast_const(), visible_bytes) };
-    Some(read(Ui4StreamSlot0View {
+    Some(read(Ui4RealtimeEncodeSlot0View {
         width: surface.width,
         height: surface.height,
         pitch_bytes: surface.pitch_bytes,
