@@ -21,6 +21,16 @@ pub enum BmpDecodeError {
     LimitExceeded,
 }
 
+impl BmpDecodeError {
+    pub const fn code(self) -> i32 {
+        match self {
+            Self::Invalid => -7,
+            Self::Unsupported => -8,
+            Self::LimitExceeded => -9,
+        }
+    }
+}
+
 /// Decode the canonical browser-facing BMP subset into tightly packed RGBA8.
 ///
 /// V1 deliberately accepts only uncompressed 24-bit BGR and 32-bit BGRX/BGRA

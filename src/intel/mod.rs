@@ -877,11 +877,9 @@ pub(crate) fn hw_pic_service()
     self::hw_pic::hw_pic_service()
 }
 
-pub(crate) async fn hw_jpeg_decode_rgba(
-    encoded: &[u8],
-    timeout_ms: u64,
-) -> Result<self::hw_pic::HwJpegImage, i32> {
-    self::hw_pic::decode_jpeg_rgba(encoded, timeout_ms).await
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
+pub(crate) fn hw_pic_submit_jpeg(encoded: &[u8]) -> Result<u32, i32> {
+    self::hw_pic::submit_jpeg(encoded)
 }
 
 pub(crate) fn hw_pic_submit_h264_in_media_session(

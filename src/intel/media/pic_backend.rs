@@ -8,7 +8,6 @@
 use super::xelp_media2_ngin::{
     self as media, MediaBitstreamBacking, MediaEngineDescriptor, MediaGpuWindowLayout,
 };
-use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
 
 const AVC_COMPLETION_POLL_DELAY_MS: u64 = 1;
@@ -108,8 +107,8 @@ pub(super) struct MediaEncodedStreamProof {
     pub forcewake_awake_count: usize,
 }
 
-#[derive(Debug)]
-pub(super) struct MediaJpegDecodeSubmitProof {
+#[derive(Copy, Clone, Debug)]
+pub(super) struct MediaJpegSmokeSubmitProof {
     pub engine_name: &'static str,
     pub batch_gpu_addr: u64,
     pub result_gpu_addr: u64,
@@ -129,8 +128,6 @@ pub(super) struct MediaJpegDecodeSubmitProof {
     pub jpeg_bsd_dw4: u32,
     pub output_surface_pitch: usize,
     pub output_surface_bytes: usize,
-    pub rgba_stride_bytes: u32,
-    pub rgba: Vec<u8>,
     pub surface_dw2: u32,
     pub surface_dw3: u32,
     pub surface_dw4: u32,
@@ -844,63 +841,6 @@ pub(super) fn parse_jpeg_scan_info(encoded: &[u8]) -> Option<JpegScanInfo> {
     None
 }
 
-/// The owned RGBA handoff currently covers the common baseline, interleaved
-/// YCbCr 4:2:0 form. Other JPEG layouts remain valid inputs to the public media
-/// service, but use its software backend until their IMC3 plane geometry is
-/// staged explicitly too.
-pub(super) fn jpeg_supports_owned_rgba_staging(encoded: &[u8]) -> bool {
-    let mut idx = 2usize;
-    let mut baseline_sof = false;
-    while idx + 3 < encoded.len() {
-        if encoded[idx] != 0xFF {
-            idx += 1;
-            continue;
-        }
-        while idx < encoded.len() && encoded[idx] == 0xFF {
-            idx += 1;
-        }
-        if idx >= encoded.len() {
-            return false;
-        }
-        let marker = encoded[idx];
-        idx += 1;
-        if marker == 0xDA {
-            break;
-        }
-        if marker == 0xD9 {
-            return false;
-        }
-        if matches!(marker, 0x01 | 0xD0..=0xD7) {
-            continue;
-        }
-        if idx + 1 >= encoded.len() {
-            return false;
-        }
-        let segment_len = u16::from_be_bytes([encoded[idx], encoded[idx + 1]]) as usize;
-        if segment_len < 2 || idx.saturating_add(segment_len) > encoded.len() {
-            return false;
-        }
-        if matches!(marker, 0xC0..=0xC3 | 0xC5..=0xC7 | 0xC9..=0xCB | 0xCD..=0xCF) {
-            if marker != 0xC0 || baseline_sof {
-                return false;
-            }
-            baseline_sof = true;
-        }
-        idx += segment_len;
-    }
-
-    let Some(scan) = parse_jpeg_scan_info(encoded) else {
-        return false;
-    };
-    baseline_sof
-        && scan.input_format == 1
-        && scan.scan_component_count == 3
-        && scan.scan_component_mask & 0x07 == 0x07
-        && scan.interleaved
-        && parse_jpeg_quant_tables(encoded).is_some()
-        && parse_jpeg_huff_tables(encoded).is_some()
-}
-
 pub(super) fn default_decode_engine_and_window()
 -> (super::xelp_media2_ngin::MediaEngineDescriptor, super::xelp_media2_ngin::MediaGpuWindowLayout) {
     super::xelp_media2_ngin::default_decode_engine_and_window()
@@ -933,7 +873,7 @@ const MFX_CMD_LEN_JPEG_HUFF_TABLE_STATE: u32 = 51;
 const MFX_PIPE_MODE_CODEC_JPEG: u32 = 3;
 const MFX_PIPE_MODE_LONG_FORMAT: u32 = 1 << 17;
 const MFX_PIPE_MODE_PRE_DEBLOCK_OUTPUT: u32 = 1 << 8;
-const MEDIA_STAGE_FLAG_JPEG_DECODE: u32 = 1 << 8;
+const MEDIA_STAGE_FLAG_JPEG_SMOKE: u32 = 1 << 8;
 const MEDIA_STAGE_FLAG_JPEG_PIC_STATE: u32 = 1 << 9;
 const MEDIA_STAGE_FLAG_JPEG_QM_STATE: u32 = 1 << 10;
 const MEDIA_STAGE_FLAG_JPEG_HUFF_STATE: u32 = 1 << 11;
@@ -1038,78 +978,6 @@ fn imc3_tiled_surface_layout(coded_height: u32, output_pitch: usize) -> Option<(
     Some((chroma_y_offset as u32, cr_y_offset as u32, bytes))
 }
 
-#[inline(always)]
-fn imc3_ytile_offset(byte_x: usize, row_y: usize, tiles_per_row: usize) -> usize {
-    const YTILE_W: usize = 128;
-    const YTILE_H: usize = 32;
-
-    let tile_col = byte_x / YTILE_W;
-    let tile_row = row_y / YTILE_H;
-    let in_x = byte_x % YTILE_W;
-    let in_y = row_y % YTILE_H;
-    let oword_col = in_x / 16;
-    let byte_in_oword = in_x % 16;
-    let within_tile = oword_col * 512 + in_y * 16 + byte_in_oword;
-    (tile_row * tiles_per_row + tile_col) * 4096 + within_tile
-}
-
-fn stage_imc3_420_to_rgba8(
-    surface: &[u8],
-    coded_width: u32,
-    coded_height: u32,
-    output_pitch: usize,
-) -> Option<(u32, Vec<u8>)> {
-    const YTILE_W: usize = 128;
-
-    let width = coded_width as usize;
-    let height = coded_height as usize;
-    if width == 0 || height == 0 || output_pitch < width || !output_pitch.is_multiple_of(YTILE_W) {
-        return None;
-    }
-    let (cb_y_offset, cr_y_offset, needed) = imc3_tiled_surface_layout(coded_height, output_pitch)?;
-    if surface.len() < needed {
-        return None;
-    }
-    let rgba_len = width.checked_mul(height)?.checked_mul(4)?;
-    let rgba_stride_bytes = coded_width.checked_mul(4)?;
-    let mut rgba = Vec::new();
-    rgba.try_reserve_exact(rgba_len).ok()?;
-    rgba.resize(rgba_len, 0);
-
-    let tiles_per_row = output_pitch / YTILE_W;
-    let cb_y_offset = cb_y_offset as usize;
-    let cr_y_offset = cr_y_offset as usize;
-    for y in 0..height {
-        for x in 0..width {
-            let luma = i32::from(*surface.get(imc3_ytile_offset(x, y, tiles_per_row))?);
-            let chroma_x = x / 2;
-            let chroma_y = y / 2;
-            let cb = i32::from(*surface.get(imc3_ytile_offset(
-                chroma_x,
-                cb_y_offset + chroma_y,
-                tiles_per_row,
-            ))?) - 128;
-            let cr = i32::from(*surface.get(imc3_ytile_offset(
-                chroma_x,
-                cr_y_offset + chroma_y,
-                tiles_per_row,
-            ))?) - 128;
-
-            // JPEG YCbCr is full-range. These fixed-point coefficients are the
-            // JFIF/BT.601 matrix with eight fractional bits.
-            let red = ((256 * luma + 359 * cr + 128) >> 8).clamp(0, 255) as u8;
-            let green = ((256 * luma - 88 * cb - 183 * cr + 128) >> 8).clamp(0, 255) as u8;
-            let blue = ((256 * luma + 454 * cb + 128) >> 8).clamp(0, 255) as u8;
-            let dst = (y * width + x) * 4;
-            rgba[dst] = red;
-            rgba[dst + 1] = green;
-            rgba[dst + 2] = blue;
-            rgba[dst + 3] = 0xFF;
-        }
-    }
-    Some((rgba_stride_bytes, rgba))
-}
-
 fn clear_output_surface_to_imc3_black(
     output_surface_virt: *mut u8,
     output_surface_bytes: usize,
@@ -1118,6 +986,19 @@ fn clear_output_surface_to_imc3_black(
     output_pitch: usize,
 ) -> bool {
     const YTILE_W: usize = 128;
+    const YTILE_H: usize = 32;
+
+    #[inline(always)]
+    fn ytile_offset(byte_x: usize, row_y: usize, tiles_per_row: usize) -> usize {
+        let tile_col = byte_x / YTILE_W;
+        let tile_row = row_y / YTILE_H;
+        let in_x = byte_x % YTILE_W;
+        let in_y = row_y % YTILE_H;
+        let oword_col = in_x / 16;
+        let byte_in_oword = in_x % 16;
+        let within_tile = oword_col * 512 + in_y * 16 + byte_in_oword;
+        (tile_row * tiles_per_row + tile_col) * 4096 + within_tile
+    }
 
     if output_surface_virt.is_null()
         || coded_width == 0
@@ -1150,8 +1031,8 @@ fn clear_output_surface_to_imc3_black(
         let cb_row = chroma_y_offset + chroma_row;
         let cr_row = cr_y_offset + chroma_row;
         for byte_x in 0..coded_width {
-            let cb_offset = imc3_ytile_offset(byte_x, cb_row, tiles_per_row);
-            let cr_offset = imc3_ytile_offset(byte_x, cr_row, tiles_per_row);
+            let cb_offset = ytile_offset(byte_x, cb_row, tiles_per_row);
+            let cr_offset = ytile_offset(byte_x, cr_row, tiles_per_row);
             unsafe {
                 core::ptr::write_volatile(output_surface_virt.add(cb_offset), 0x80);
                 core::ptr::write_volatile(output_surface_virt.add(cr_offset), 0x80);
@@ -1224,7 +1105,7 @@ fn clear_output_surface_to_tiled_nv12_black(
     true
 }
 
-fn build_jpeg_decode_batch(
+fn build_jpeg_smoke_batch_skeleton(
     batch_virt: *mut u8,
     batch_bytes: usize,
     result_gpu_addr: u64,
@@ -1261,7 +1142,7 @@ fn build_jpeg_decode_batch(
         jpeg_frame_blocks_minus1(jpeg_input_format, coded_width, coded_height);
     let pipe_mode_dw1 =
         MFX_PIPE_MODE_LONG_FORMAT | MFX_PIPE_MODE_PRE_DEBLOCK_OUTPUT | MFX_PIPE_MODE_CODEC_JPEG;
-    let mut stage_flags = MEDIA_STAGE_FLAG_JPEG_DECODE
+    let mut stage_flags = MEDIA_STAGE_FLAG_JPEG_SMOKE
         | MEDIA_STAGE_FLAG_JPEG_PIC_STATE
         | MEDIA_STAGE_FLAG_JPEG_QM_STATE;
     if jpeg_huff_tables.is_some() {
@@ -2148,14 +2029,14 @@ pub(super) async fn submit_avc_single_idr_batch(
     Some(proof)
 }
 
-pub(super) fn submit_jpeg_decode_batch(
+pub(super) fn submit_jpeg_smoke_batch(
     dev: crate::intel::Dev,
     engine: MediaEngineDescriptor,
     windows: MediaGpuWindowLayout,
     backing: MediaBitstreamBacking,
     bitstream_bytes: usize,
     submit_token: u32,
-) -> Option<MediaJpegDecodeSubmitProof> {
+) -> Option<MediaJpegSmokeSubmitProof> {
     if bitstream_bytes == 0 || bitstream_bytes > backing.bitstream_bytes {
         return None;
     }
@@ -2230,7 +2111,7 @@ pub(super) fn submit_jpeg_decode_batch(
         jpeg_pic_state_dw1(jpeg_input_format, jpeg_output_format, coded_width, coded_height);
     let jpeg_pic_dw2 = frame_width_blocks_minus1 | (frame_height_blocks_minus1 << 16);
 
-    let batch_tail_bytes = build_jpeg_decode_batch(
+    let batch_tail_bytes = build_jpeg_smoke_batch_skeleton(
         backing.batch_virt,
         backing.batch_bytes,
         windows.result_gpu_addr,
@@ -2349,11 +2230,6 @@ pub(super) fn submit_jpeg_decode_batch(
     let output_surface = unsafe {
         core::slice::from_raw_parts(backing.output_surface_virt as *const u8, output_surface_bytes)
     };
-    let (rgba_stride_bytes, rgba) = if retired {
-        stage_imc3_420_to_rgba8(output_surface, coded_width, coded_height, output_surface_pitch)?
-    } else {
-        (0, Vec::new())
-    };
     let (output_surface_detail, output_surface_signature, output_surface_nonzero_samples) =
         if media::output_surface_probes_enabled() {
             let output_surface_probe = media::probe_tiled_nv12_output_surface(
@@ -2441,7 +2317,7 @@ pub(super) fn submit_jpeg_decode_batch(
         ring_tail_bytes,
     );
 
-    let proof = MediaJpegDecodeSubmitProof {
+    let proof = MediaJpegSmokeSubmitProof {
         engine_name: engine.name,
         batch_gpu_addr: windows.batch_gpu_addr,
         result_gpu_addr: windows.result_gpu_addr,
@@ -2479,8 +2355,6 @@ pub(super) fn submit_jpeg_decode_batch(
         jpeg_bsd_dw4: jpeg_scan_info.as_ref().map(jpeg_bsd_dw4).unwrap_or(0),
         output_surface_pitch,
         output_surface_bytes,
-        rgba_stride_bytes,
-        rgba,
         surface_dw2,
         surface_dw3,
         surface_dw4: chroma_y_offset,

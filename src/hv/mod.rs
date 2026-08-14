@@ -1652,7 +1652,6 @@ pub fn eject(vm_id: u8) -> Result<bool, EjectError> {
     clear_blueprint_lifecycle_capability(vm_id);
     let _ = crate::r::lumen_service::close(vm_id);
     let _ = crate::r::gridpaper_service::release_owner_lifecycle(vm_id);
-    let _ = crate::r::media_service::release_vm(vm_id);
     let _ = crate::ui4::release_owner_resources(crate::ui4::WindowOwner::Vm(vm_id));
     memory::clear_snapshot_state_for_vm(vm_id);
     let _ = memory::release_guest_hull_rw_for_vm(vm_id);
@@ -4201,13 +4200,6 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
             hvlogf(format_args!(
                 "hv: vm{} lifecycle: gridpaper cleanup released={}",
                 vm_id, gridpaper_released
-            ));
-        }
-        let media_released = crate::r::media_service::release_vm(vm_id);
-        if media_released != 0 {
-            hvlogf(format_args!(
-                "hv: vm{} lifecycle: vmedia cleanup released_operations={}",
-                vm_id, media_released
             ));
         }
         let _ = crate::shell2::qjs_workbench::close(vm_id);

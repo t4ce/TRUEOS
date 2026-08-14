@@ -7,17 +7,14 @@ use spin::Mutex;
 
 const HW_PIC_PENDING_CAP: usize = 16;
 const HW_PIC_OUTPUT_CAP: usize = 32;
-const HW_JPEG_OUTPUT_CAP: usize = 16;
 
 static NEXT_ID: AtomicU32 = AtomicU32::new(1);
 static SERVICE_STARTED: AtomicBool = AtomicBool::new(false);
 static DETAILED_LOGGING_ENABLED: AtomicBool = AtomicBool::new(true);
 static PENDING: Mutex<VecDeque<HwPicJob>> = Mutex::new(VecDeque::new());
 static OUTPUTS: Mutex<VecDeque<HwPicOutput>> = Mutex::new(VecDeque::new());
-static JPEG_OUTPUTS: Mutex<VecDeque<HwJpegCompletion>> = Mutex::new(VecDeque::new());
 static WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
 static OUTPUT_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
-static JPEG_OUTPUT_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
 static AVC_DPB: Mutex<AvcDpbState> = Mutex::new(AvcDpbState::new());
 static AVC_PRESENTATION_HOLDS: AtomicU16 = AtomicU16::new(0);
 
@@ -34,6 +31,7 @@ macro_rules! hw_pic_info {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum HwPicCodec {
+    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Jpeg,
     H264,
 }
@@ -118,24 +116,6 @@ pub(crate) struct HwPicOutput {
     pub surface_slot: u8,
     pub error_code: i32,
     pub timing: HwPicTiming,
-}
-
-#[derive(Debug)]
-pub(crate) struct HwJpegImage {
-    pub width: u32,
-    pub height: u32,
-    pub stride_bytes: u32,
-    pub rgba: Vec<u8>,
-}
-
-struct HwJpegCompletion {
-    id: u32,
-    result: Result<HwJpegImage, i32>,
-}
-
-struct ProcessedHwPicJob {
-    output: HwPicOutput,
-    jpeg: Option<Result<HwJpegImage, i32>>,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -383,39 +363,14 @@ fn submit_encoded_with_media_session(
     Ok(id)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn submit_encoded(codec: HwPicCodec, encoded: &[u8]) -> Result<u32, i32> {
     submit_encoded_with_media_session(codec, encoded, None)
 }
 
+#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn submit_jpeg(encoded: &[u8]) -> Result<u32, i32> {
-    if !super::xelp_media2_ngin_hw_pic::jpeg_supports_owned_rgba_staging(encoded) {
-        return Err(-8);
-    }
     submit_encoded(HwPicCodec::Jpeg, encoded)
-}
-
-fn take_jpeg_output_for_id(id: u32) -> Option<Result<HwJpegImage, i32>> {
-    let mut outputs = JPEG_OUTPUTS.lock();
-    let pos = outputs.iter().position(|output| output.id == id)?;
-    outputs.remove(pos).map(|output| output.result)
-}
-
-async fn wait_jpeg_output_for_id(id: u32, timeout_ms: u64) -> Option<Result<HwJpegImage, i32>> {
-    loop {
-        if let Some(output) = take_jpeg_output_for_id(id) {
-            return Some(output);
-        }
-        if timeout_ms == 0 {
-            JPEG_OUTPUT_WAIT.wait_for_event().await;
-        } else if !JPEG_OUTPUT_WAIT.wait_for_event_timeout(timeout_ms).await {
-            return None;
-        }
-    }
-}
-
-pub(crate) async fn decode_jpeg_rgba(encoded: &[u8], timeout_ms: u64) -> Result<HwJpegImage, i32> {
-    let id = submit_jpeg(encoded)?;
-    wait_jpeg_output_for_id(id, timeout_ms).await.ok_or(-10)?
 }
 
 pub(crate) fn submit_h264_in_media_session(
@@ -474,16 +429,6 @@ fn push_output(output: HwPicOutput) {
     OUTPUT_WAIT.notify_all();
 }
 
-fn push_jpeg_output(id: u32, result: Result<HwJpegImage, i32>) {
-    let mut outputs = JPEG_OUTPUTS.lock();
-    while outputs.len() >= HW_JPEG_OUTPUT_CAP {
-        outputs.pop_front();
-    }
-    outputs.push_back(HwJpegCompletion { id, result });
-    drop(outputs);
-    JPEG_OUTPUT_WAIT.notify_all();
-}
-
 #[embassy_executor::task]
 pub(crate) async fn hw_pic_service() {
     if SERVICE_STARTED.swap(true, Ordering::AcqRel) {
@@ -505,8 +450,7 @@ async fn hw_pic_service_inner() {
         let queue_wait_us =
             hw_pic_ticks_to_micros(hw_pic_now_ticks().saturating_sub(job.submitted_tick));
         let process_start = hw_pic_now_ticks();
-        let mut processed = process_job(job).await;
-        let output = &mut processed.output;
+        let mut output = process_job(job).await;
         output.timing.queue_wait_us = queue_wait_us;
         output.timing.process_us =
             hw_pic_ticks_to_micros(hw_pic_now_ticks().saturating_sub(process_start));
@@ -543,30 +487,15 @@ async fn hw_pic_service_inner() {
             output.timing.backend_post_us,
             output.timing.backend_poll_iters
         );
-        if let Some(result) = processed.jpeg {
-            // JPEG completion is an owned RGBA allocation. Do not enqueue the
-            // internal IMC3/raw-address descriptor in the generic output path.
-            push_jpeg_output(output.id, result);
-        } else {
-            push_output(*output);
-        }
+        push_output(output);
         embassy_time::Timer::after_millis(1).await;
     }
 }
 
-async fn process_job(job: HwPicJob) -> ProcessedHwPicJob {
+async fn process_job(job: HwPicJob) -> HwPicOutput {
     match job.codec {
-        HwPicCodec::Jpeg => {
-            let (output, result) = process_jpeg_job(job);
-            ProcessedHwPicJob {
-                output,
-                jpeg: Some(result),
-            }
-        }
-        HwPicCodec::H264 => ProcessedHwPicJob {
-            output: process_h264_job(job).await,
-            jpeg: None,
-        },
+        HwPicCodec::Jpeg => process_jpeg_job(job),
+        HwPicCodec::H264 => process_h264_job(job).await,
     }
 }
 
@@ -1708,15 +1637,11 @@ async fn process_h264_job(job: HwPicJob) -> HwPicOutput {
     }
 }
 
-fn failed_jpeg_job(job: &HwPicJob, code: i32) -> (HwPicOutput, Result<HwJpegImage, i32>) {
-    (failed_output(job, code), Err(code))
-}
-
-fn process_jpeg_job(job: HwPicJob) -> (HwPicOutput, Result<HwJpegImage, i32>) {
+fn process_jpeg_job(job: HwPicJob) -> HwPicOutput {
     log_stage(job.id, "job-start", true, "codec=jpeg", 0);
     let Some(dev) = super::claimed_device() else {
         log_stage(job.id, "device", false, "claimed_device=none", -2);
-        return failed_jpeg_job(&job, -2);
+        return failed_output(&job, -2);
     };
     log_stage(job.id, "device", true, "claimed_device=ok", 0);
 
@@ -1735,7 +1660,7 @@ fn process_jpeg_job(job: HwPicJob) -> (HwPicOutput, Result<HwJpegImage, i32>) {
 
     let Some(backing) = super::xelp_media2_ngin_hw_pic::ensure_decode_backing(dev, windows) else {
         log_stage(job.id, "backing", false, "alloc-or-map-failed", -5);
-        return failed_jpeg_job(&job, -5);
+        return failed_output(&job, -5);
     };
     hw_pic_info!(
         "intel/hw_pic-stage: id={} stage=backing accepted=1 ring=0x{:X}/0x{:X} ctx=0x{:X}/0x{:X} batch=0x{:X}/0x{:X} bitstream=0x{:X}/0x{:X} output=0x{:X}/0x{:X} result=0x{:X}/0x{:X}\n",
@@ -1756,7 +1681,7 @@ fn process_jpeg_job(job: HwPicJob) -> (HwPicOutput, Result<HwJpegImage, i32>) {
 
     if job.encoded.len() > backing.bitstream_bytes {
         log_stage(job.id, "input", false, "encoded-larger-than-bitstream", -12);
-        return failed_jpeg_job(&job, -12);
+        return failed_output(&job, -12);
     }
     hw_pic_info!(
         "intel/hw_pic-stage: id={} stage=input accepted=1 encoded=0x{:X} bitstream_capacity=0x{:X}\n",
@@ -1773,7 +1698,7 @@ fn process_jpeg_job(job: HwPicJob) -> (HwPicOutput, Result<HwJpegImage, i32>) {
         job.encoded.as_slice(),
     ) else {
         log_stage(job.id, "stream", false, "copy-to-bitstream-failed", -6);
-        return failed_jpeg_job(&job, -6);
+        return failed_output(&job, -6);
     };
 
     hw_pic_info!(
@@ -1802,8 +1727,8 @@ fn process_jpeg_job(job: HwPicJob) -> (HwPicOutput, Result<HwJpegImage, i32>) {
         proof.forcewake_awake_count
     );
 
-    log_stage(job.id, "submit", true, "enter-media-jpeg-decode-batch", 0);
-    let Some(smoke) = super::xelp_media2_ngin_hw_pic::submit_jpeg_decode_batch(
+    log_stage(job.id, "submit", true, "enter-media-jpeg-smoke-batch", 0);
+    let Some(smoke) = super::xelp_media2_ngin_hw_pic::submit_jpeg_smoke_batch(
         dev,
         engine,
         windows,
@@ -1811,8 +1736,8 @@ fn process_jpeg_job(job: HwPicJob) -> (HwPicOutput, Result<HwJpegImage, i32>) {
         proof.bytes_written,
         job.id,
     ) else {
-        log_stage(job.id, "submit", false, "media-jpeg-decode-batch-failed", -7);
-        return failed_jpeg_job(&job, -7);
+        log_stage(job.id, "submit", false, "media-jpeg-smoke-batch-failed", -7);
+        return failed_output(&job, -7);
     };
 
     hw_pic_info!(
@@ -1881,7 +1806,7 @@ fn process_jpeg_job(job: HwPicJob) -> (HwPicOutput, Result<HwJpegImage, i32>) {
         smoke.fault_gen12
     );
     hw_pic_info!(
-        "intel/hw_pic: jpeg decode-submit id={} engine={} retired={} polls={} batch_gpu=0x{:X} result_gpu=0x{:X} bitstream_gpu=0x{:X} output_gpu=0x{:X} bytes=0x{:X} coded={}x{} jpeg_in={} jpeg_out={} scan_components={} interleaved={} dri={} mcu_count={} surface=0x{:08X}/0x{:08X} jpeg_pic=0x{:08X}/0x{:08X} batch_bytes=0x{:X} ring_bytes=0x{:X} kickoff=0x{:08X}/0x{:08X} presubmit=0x{:08X}/0x{:08X} postsubmit=0x{:08X}/0x{:08X} complete=0x{:08X}/0x{:08X} stage_flags=0x{:08X} el=0x{:08X}:0x{:08X} start=0x{:08X} ctl=0x{:08X} hws=0x{:08X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} acthd64=0x{:016X} acthd_region={} acthd_off=0x{:X} acthd_dword=0x{:08X} bbaddr64=0x{:016X} dma_fadd64=0x{:016X} bbstate=0x{:08X} esr=0x{:08X} instps=0x{:08X} psmi_ctl=0x{:08X} nopid=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} fault8=0x{:08X} fault12=0x{:08X} fault8_tlb=0x{:08X}/0x{:08X} fault12_tlb=0x{:08X}/0x{:08X} bitstream_dword0=0x{:08X}\n",
+        "intel/hw_pic: jpeg smoke-submit id={} engine={} retired={} polls={} batch_gpu=0x{:X} result_gpu=0x{:X} bitstream_gpu=0x{:X} output_gpu=0x{:X} bytes=0x{:X} coded={}x{} jpeg_in={} jpeg_out={} scan_components={} interleaved={} dri={} mcu_count={} surface=0x{:08X}/0x{:08X} jpeg_pic=0x{:08X}/0x{:08X} batch_bytes=0x{:X} ring_bytes=0x{:X} kickoff=0x{:08X}/0x{:08X} presubmit=0x{:08X}/0x{:08X} postsubmit=0x{:08X}/0x{:08X} complete=0x{:08X}/0x{:08X} stage_flags=0x{:08X} el=0x{:08X}:0x{:08X} start=0x{:08X} ctl=0x{:08X} hws=0x{:08X} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} acthd64=0x{:016X} acthd_region={} acthd_off=0x{:X} acthd_dword=0x{:08X} bbaddr64=0x{:016X} dma_fadd64=0x{:016X} bbstate=0x{:08X} esr=0x{:08X} instps=0x{:08X} psmi_ctl=0x{:08X} nopid=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} fault8=0x{:08X} fault12=0x{:08X} fault8_tlb=0x{:08X}/0x{:08X} fault12_tlb=0x{:08X}/0x{:08X} bitstream_dword0=0x{:08X}\n",
         job.id,
         smoke.engine_name,
         smoke.retired as u8,
@@ -1959,25 +1884,7 @@ fn process_jpeg_job(job: HwPicJob) -> (HwPicOutput, Result<HwJpegImage, i32>) {
         },
         if output_ready { 0 } else { -13 }
     );
-    let result = if output_ready {
-        hw_pic_info!(
-            "intel/hw_pic-stage: id={} stage=rgba-owned accepted=1 size={}x{} stride={} bytes={} source=imc3-ytile address_exposed=0\n",
-            job.id,
-            smoke.coded_width,
-            smoke.coded_height,
-            smoke.rgba_stride_bytes,
-            smoke.rgba.len(),
-        );
-        Ok(HwJpegImage {
-            width: smoke.coded_width,
-            height: smoke.coded_height,
-            stride_bytes: smoke.rgba_stride_bytes,
-            rgba: smoke.rgba,
-        })
-    } else {
-        Err(-13)
-    };
-    let output = HwPicOutput {
+    HwPicOutput {
         id: job.id,
         codec: job.codec,
         status: if output_ready {
@@ -2011,6 +1918,5 @@ fn process_jpeg_job(job: HwPicJob) -> (HwPicOutput, Result<HwJpegImage, i32>) {
         surface_slot: AVC_INVALID_SURFACE_SLOT,
         error_code: if output_ready { 0 } else { -13 },
         timing: HwPicTiming::default(),
-    };
-    (output, result)
+    }
 }
