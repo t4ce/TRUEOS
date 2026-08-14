@@ -36,6 +36,7 @@ pub enum DecodeBackend {
     Png = 1,
     ZuneJpeg = 2,
     Bmp = 3,
+    XeLpJpeg = 4,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -120,6 +121,7 @@ impl Operation {
             1 => DecodeBackend::Png,
             2 => DecodeBackend::ZuneJpeg,
             3 => DecodeBackend::Bmp,
+            4 => DecodeBackend::XeLpJpeg,
             _ => return Err(ERR_FAILED),
         };
         if raw.pixel_format != 1
