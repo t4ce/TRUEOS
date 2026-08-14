@@ -15,6 +15,7 @@ pub const PIXEL_FORMAT_RGBA8: u32 = 1;
 pub const BACKEND_PNG: u32 = 1;
 pub const BACKEND_ZUNE_JPEG: u32 = 2;
 pub const BACKEND_BMP: u32 = 3;
+pub const BACKEND_XELP_JPEG: u32 = 4;
 
 pub const STATUS_PENDING: i32 = 0;
 pub const STATUS_READY: i32 = 1;
@@ -31,6 +32,7 @@ const MAX_ENCODED_BYTES: usize = 16 * 1024 * 1024;
 const MAX_RGBA_BYTES: usize = 64 * 1024 * 1024;
 const MAX_DIMENSION: u32 = 8_192;
 const IDLE_MS: u64 = 10;
+const XELP_JPEG_TIMEOUT_MS: u64 = 1_000;
 
 static NEXT_ID: AtomicU32 = AtomicU32::new(1);
 static OPERATIONS: Mutex<Vec<Operation>> = Mutex::new(Vec::new());
@@ -256,6 +258,22 @@ pub fn discard(owner: u32, id: u32) -> i32 {
     0
 }
 
+/// Revoke every upload, queued request, and completed raster owned by one
+/// principal. A request already executing may finish its private work, but its
+/// result can no longer be published after the operation entry is removed.
+pub fn release_owner(owner: u32) -> usize {
+    let mut requests = REQUESTS.lock();
+    let mut operations = OPERATIONS.lock();
+    let before = operations.len();
+    operations.retain(|operation| operation.owner != owner);
+    requests.retain(|request| request.owner != owner);
+    before.saturating_sub(operations.len())
+}
+
+pub fn release_vm(vm_id: u8) -> usize {
+    release_owner(crate::r::io::async_fs_cabi::owner_for_vm(vm_id))
+}
+
 fn mark_running(owner: u32, id: u32) -> bool {
     let mut operations = OPERATIONS.lock();
     let Some(operation) = operations
@@ -313,26 +331,58 @@ fn validated_image(
     })
 }
 
-fn decode(request: &DecodeRequest) -> Result<DecodedImage, i32> {
+async fn decode(request: &DecodeRequest) -> Result<DecodedImage, i32> {
     match request.format {
         FORMAT_PNG => crate::graphics::png_codec::decode_png_rgba(request.encoded.as_slice())
-            .map_err(|error| error.code())
+            .map_err(|error| match error {
+                crate::graphics::png_codec::PngDecodeError::Invalid => ERR_INVALID,
+                crate::graphics::png_codec::PngDecodeError::Unsupported => ERR_UNSUPPORTED,
+                crate::graphics::png_codec::PngDecodeError::DecodeFailed => ERR_FAILED,
+            })
             .and_then(|image| {
                 validated_image(FORMAT_PNG, BACKEND_PNG, image.width, image.height, image.rgba)
             }),
-        FORMAT_JPEG => crate::graphics::jpeg_codec::decode_jpeg_rgba(request.encoded.as_slice())
-            .map_err(|error| error.code())
-            .and_then(|image| {
-                validated_image(
+        FORMAT_JPEG => {
+            if crate::intel::has_media_decode_engine()
+                && let Ok(image) = crate::intel::hw_jpeg_decode_rgba(
+                    request.encoded.as_slice(),
+                    XELP_JPEG_TIMEOUT_MS,
+                )
+                .await
+                && image.width.checked_mul(4) == Some(image.stride_bytes)
+                && let Ok(decoded) = validated_image(
                     FORMAT_JPEG,
-                    BACKEND_ZUNE_JPEG,
+                    BACKEND_XELP_JPEG,
                     image.width,
                     image.height,
                     image.rgba,
                 )
-            }),
+            {
+                return Ok(decoded);
+            }
+
+            crate::graphics::jpeg_codec::decode_jpeg_rgba(request.encoded.as_slice())
+                .map_err(|error| match error {
+                    crate::graphics::jpeg_codec::JpegDecodeError::Invalid => ERR_INVALID,
+                    crate::graphics::jpeg_codec::JpegDecodeError::Unsupported => ERR_UNSUPPORTED,
+                    crate::graphics::jpeg_codec::JpegDecodeError::DecodeFailed => ERR_FAILED,
+                })
+                .and_then(|image| {
+                    validated_image(
+                        FORMAT_JPEG,
+                        BACKEND_ZUNE_JPEG,
+                        image.width,
+                        image.height,
+                        image.rgba,
+                    )
+                })
+        }
         FORMAT_BMP => crate::graphics::bmp_codec::decode_bmp_rgba(request.encoded.as_slice())
-            .map_err(|error| error.code())
+            .map_err(|error| match error {
+                crate::graphics::bmp_codec::BmpDecodeError::Invalid => ERR_INVALID,
+                crate::graphics::bmp_codec::BmpDecodeError::Unsupported => ERR_UNSUPPORTED,
+                crate::graphics::bmp_codec::BmpDecodeError::LimitExceeded => ERR_TOO_LARGE,
+            })
             .and_then(|image| {
                 validated_image(FORMAT_BMP, BACKEND_BMP, image.width, image.height, image.rgba)
             }),
@@ -344,7 +394,7 @@ fn decode(request: &DecodeRequest) -> Result<DecodedImage, i32> {
 pub async fn worker_task(worker_id: usize, worker_slot: u32, core_kind: u8) {
     crate::log_info!(
         target: "service";
-        "vmedia: worker={} online image=png,jpeg,bmp pool=2 worker_slot={} core_kind={} jpeg_backend=zune-rgba xelp_media=deferred-until-image-lease\n",
+        "vmedia: worker={} online image=png,jpeg,bmp pool=2 worker_slot={} core_kind={} jpeg_backend=xelp-vdbox-owned-rgba+zune-fallback\n",
         worker_id,
         worker_slot,
         core_kind,
@@ -353,7 +403,7 @@ pub async fn worker_task(worker_id: usize, worker_slot: u32, core_kind: u8) {
         let request = REQUESTS.lock().pop_front();
         if let Some(request) = request {
             if mark_running(request.owner, request.id) {
-                let result = decode(&request);
+                let result = decode(&request).await;
                 complete(request.owner, request.id, result);
             }
         } else {
@@ -377,5 +427,18 @@ mod tests {
         assert_eq!(commit(7, id), ERR_INVALID);
         assert_eq!(write(7, id, 2, b"xx"), 0);
         assert_eq!(discard(7, id), 0);
+    }
+
+    #[test]
+    fn owner_release_revokes_all_visible_operations() {
+        let first = begin(21, FORMAT_JPEG, 4);
+        let second = begin(21, FORMAT_PNG, 4);
+        let other = begin(22, FORMAT_BMP, 4);
+        assert!(first > 0 && second > 0 && other > 0);
+        assert_eq!(release_owner(21), 2);
+        assert_eq!(status(21, first as u32), ERR_NOT_FOUND);
+        assert_eq!(status(21, second as u32), ERR_NOT_FOUND);
+        assert_eq!(status(22, other as u32), STATUS_PENDING);
+        assert_eq!(discard(22, other as u32), 0);
     }
 }
