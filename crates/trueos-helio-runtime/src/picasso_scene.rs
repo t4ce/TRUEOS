@@ -7,7 +7,7 @@
 
 #![allow(clippy::too_many_arguments)]
 
-use alloc::vec::Vec;
+use alloc::{string::String, vec::Vec};
 use core::cmp::Ordering;
 
 use crate::scene_db::{EpochExhausted, PublishedScene, SceneHandle, SceneStore};
@@ -16,6 +16,9 @@ use crate::scene_db::{EpochExhausted, PublishedScene, SceneHandle, SceneStore};
 pub const MAX_LOWERED_COMMANDS: usize = 8_192;
 /// Logical primitive budget before bounded compatibility lowering.
 pub const MAX_SCENE_PRIMITIVES: usize = 8_192;
+/// Per-row CPU SceneDB payload cap. This owned Unicode payload is never a GPU
+/// row or guest wire ABI; lowering emits its stable [`PrimitiveRef`] instead.
+pub const MAX_FONT_LOOKUP_BYTES: usize = 16 * 1024;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Rect {
@@ -122,6 +125,69 @@ pub struct Color {
     pub alpha: u8,
 }
 
+/// Stable selectors for the one boot-warmed FontKernel face registry.
+///
+/// Scene producers carry this compact identity plus Unicode. They deliberately
+/// do not manufacture TTF glyph IDs or copy warmed outline commands into the
+/// scene. FontKernel remains authoritative for both operations.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[repr(u32)]
+pub enum FontFace {
+    Default = 1,
+    NotoSansSc = 2,
+    #[default]
+    Inconsolata = 3,
+}
+
+impl FontFace {
+    pub const fn from_id(id: u32) -> Option<Self> {
+        match id {
+            1 => Some(Self::Default),
+            2 => Some(Self::NotoSansSc),
+            3 => Some(Self::Inconsolata),
+            _ => None,
+        }
+    }
+}
+
+/// V0 CSS slant selectors. The raster shear remains a FontKernel policy;
+/// producers retain semantic style identity rather than baking geometry.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[repr(u32)]
+pub enum FontSlant {
+    #[default]
+    Normal = 0,
+    Italic = 1,
+}
+
+impl FontSlant {
+    /// Current synthetic shear used when the warmed face has no separate
+    /// italic registration. This conversion belongs at the kernel bridge.
+    pub const fn kernel_shear(self) -> f32 {
+        match self {
+            Self::Normal => 0.0,
+            Self::Italic => 0.15,
+        }
+    }
+}
+
+/// One compact, logical text resource lookup retained in SceneDB.
+///
+/// `rect` is the producer's scene-space bounds/clip and `origin` is the text
+/// position in the same coordinate system. Only this Unicode/style row is
+/// copied on publication. Size-independent outline ops and derived R8 atlas
+/// bytes stay in the shared kernel-owned font caches.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FontLookupRun {
+    pub rect: Rect,
+    pub origin: [f32; 2],
+    pub text: String,
+    pub face: FontFace,
+    pub slant: FontSlant,
+    pub font_pixels: f32,
+    pub color: Color,
+}
+
 impl Color {
     pub const fn rgba(red: u8, green: u8, blue: u8, alpha: u8) -> Self {
         Self {
@@ -152,7 +218,7 @@ pub struct FontCanvas {
     pub rect: Rect,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Primitive {
     SolidRect {
         rect: Rect,
@@ -171,6 +237,8 @@ pub enum Primitive {
     },
     /// Ordered marker for the separately retained FontKernel canvas.
     FontCanvas(FontCanvas),
+    /// Unicode lookup row resolved through FontKernel's boot-warmed outlines.
+    FontLookup(FontLookupRun),
 }
 
 impl Primitive {
@@ -195,11 +263,15 @@ impl Primitive {
         Self::FontCanvas(FontCanvas { rect })
     }
 
-    fn validate(self) -> Result<(), SceneError> {
+    pub fn font_lookup(run: FontLookupRun) -> Self {
+        Self::FontLookup(run)
+    }
+
+    fn validate(&self) -> Result<(), SceneError> {
         match self {
-            Self::SolidRect { rect, .. } => validate_nonempty_rect(rect),
+            Self::SolidRect { rect, .. } => validate_nonempty_rect(*rect),
             Self::RoundedRect { rect, radii, .. } => {
-                validate_nonempty_rect(rect)?;
+                validate_nonempty_rect(*rect)?;
                 if !radii.is_valid() {
                     return Err(SceneError::InvalidRadii);
                 }
@@ -208,16 +280,28 @@ impl Primitive {
             Self::RoundedBorder {
                 rect, radii, width, ..
             } => {
-                validate_nonempty_rect(rect)?;
+                validate_nonempty_rect(*rect)?;
                 if !radii.is_valid() {
                     return Err(SceneError::InvalidRadii);
                 }
-                if !width.is_finite() || width <= 0.0 {
+                if !width.is_finite() || *width <= 0.0 {
                     return Err(SceneError::InvalidBorderWidth);
                 }
                 Ok(())
             }
             Self::FontCanvas(canvas) => validate_nonempty_rect(canvas.rect),
+            Self::FontLookup(run) => {
+                validate_nonempty_rect(run.rect)?;
+                if run.text.is_empty()
+                    || run.text.len() > MAX_FONT_LOOKUP_BYTES
+                    || !run.origin.into_iter().all(f32::is_finite)
+                    || !run.font_pixels.is_finite()
+                    || run.font_pixels <= 0.0
+                {
+                    return Err(SceneError::InvalidFontLookup);
+                }
+                Ok(())
+            }
         }
     }
 }
@@ -230,7 +314,7 @@ fn validate_nonempty_rect(rect: Rect) -> Result<(), SceneError> {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PrimitiveRow {
     pub order: u32,
     pub primitive: Primitive,
@@ -251,6 +335,7 @@ pub enum SceneError {
     InvalidRadii,
     InvalidBorderWidth,
     InvalidColor,
+    InvalidFontLookup,
     DuplicateOrder,
     OrderNotIncreasing,
     GeometryAfterFontCanvas,
@@ -308,6 +393,17 @@ pub enum LoweredCommand {
         width: u32,
         height: u32,
     },
+    /// Viewport-visible logical text row. The renderer resolves this compact
+    /// lookup through FontKernel and retains the returned resource leases for
+    /// its render ticket; no outline or atlas bytes transit SceneDB.
+    FontLookup {
+        order: u32,
+        x: u32,
+        y: u32,
+        width: u32,
+        height: u32,
+        lookup: PrimitiveRef,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -341,13 +437,41 @@ impl PicassoScene {
         self.rows.get(primitive_ref.0)
     }
 
+    /// Resolve a lowered font handle while the scene publication is retained.
+    /// The caller may then copy only the compact Unicode/style lookup into its
+    /// asynchronous kernel request; outline and atlas resources never leave
+    /// FontKernel ownership.
+    pub fn font_lookup(&self, primitive_ref: PrimitiveRef) -> Option<&FontLookupRun> {
+        match &self.get(primitive_ref)?.primitive {
+            Primitive::FontLookup(run) => Some(run),
+            _ => None,
+        }
+    }
+
+    /// Iterate logical text lookups directly in paint order.
+    ///
+    /// Font request export must not depend on compatibility geometry lowering:
+    /// a rounded-border span budget cannot make unrelated text unavailable.
+    pub fn font_lookup_rows(&self) -> impl Iterator<Item = (PrimitiveRef, &FontLookupRun)> + '_ {
+        let mut rows = self
+            .rows
+            .iter_with_handles()
+            .filter_map(|(handle, row)| match &row.primitive {
+                Primitive::FontLookup(run) => Some((row.order, PrimitiveRef(handle), run)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        rows.sort_unstable_by_key(|(order, _, _)| *order);
+        rows.into_iter().map(|(_, lookup, run)| (lookup, run))
+    }
+
     pub fn insert(&mut self, row: PrimitiveRow) -> Result<PrimitiveRef, SceneError> {
         if self.rows.live_count() >= MAX_SCENE_PRIMITIVES {
             return Err(SceneError::PrimitiveLimit {
                 limit: MAX_SCENE_PRIMITIVES,
             });
         }
-        self.validate_candidate(None, row)?;
+        self.validate_candidate(None, &row)?;
         Ok(PrimitiveRef(self.rows.insert(row)))
     }
 
@@ -359,7 +483,7 @@ impl PicassoScene {
         if !self.rows.contains(primitive_ref.0) {
             return Err(SceneError::StalePrimitive);
         }
-        self.validate_candidate(Some(primitive_ref.0), row)?;
+        self.validate_candidate(Some(primitive_ref.0), &row)?;
         self.rows
             .update(primitive_ref.0, row)
             .map_err(|_| SceneError::StalePrimitive)
@@ -418,16 +542,16 @@ impl PicassoScene {
             return Err(LowerError::InvalidViewport);
         }
         let limit = max_commands.min(MAX_LOWERED_COMMANDS);
-        let mut ordered: Vec<_> = self.rows.iter().copied().collect();
-        ordered.sort_unstable_by_key(|row| row.order);
+        let mut ordered: Vec<_> = self.rows.iter_with_handles().collect();
+        ordered.sort_unstable_by_key(|(_, row)| row.order);
         let mut output = Vec::new();
-        for row in ordered {
-            match row.primitive {
+        for (handle, row) in ordered {
+            match &row.primitive {
                 Primitive::SolidRect { rect, color } => {
-                    lower_solid_rect(row.order, rect, color, viewport, limit, &mut output)?;
+                    lower_solid_rect(row.order, *rect, *color, viewport, limit, &mut output)?;
                 }
                 Primitive::RoundedRect { rect, radii, color } => {
-                    lower_fill(row.order, rect, radii, color, viewport, limit, &mut output)?;
+                    lower_fill(row.order, *rect, *radii, *color, viewport, limit, &mut output)?;
                 }
                 Primitive::RoundedBorder {
                     rect,
@@ -437,10 +561,10 @@ impl PicassoScene {
                 } => {
                     lower_border(
                         row.order,
-                        rect,
-                        radii,
-                        width,
-                        color,
+                        *rect,
+                        *radii,
+                        *width,
+                        *color,
                         viewport,
                         limit,
                         &mut output,
@@ -465,6 +589,22 @@ impl PicassoScene {
                         )?;
                     }
                 }
+                Primitive::FontLookup(run) => {
+                    if let Some((x, y, width, height)) = clipped_integer_rect(run.rect, viewport) {
+                        push_bounded(
+                            &mut output,
+                            LoweredCommand::FontLookup {
+                                order: row.order,
+                                x,
+                                y,
+                                width,
+                                height,
+                                lookup: PrimitiveRef(handle),
+                            },
+                            limit,
+                        )?;
+                    }
+                }
             }
         }
         Ok(output)
@@ -473,16 +613,16 @@ impl PicassoScene {
     fn validate_candidate(
         &self,
         replaced: Option<SceneHandle>,
-        candidate: PrimitiveRow,
+        candidate: &PrimitiveRow,
     ) -> Result<(), SceneError> {
         candidate.primitive.validate()?;
         let mut rows = Vec::with_capacity(self.rows.live_count() + usize::from(replaced.is_none()));
         for (handle, row) in self.rows.iter_with_handles() {
             if Some(handle) != replaced {
-                rows.push(*row);
+                rows.push(row.clone());
             }
         }
-        rows.push(candidate);
+        rows.push(candidate.clone());
         rows.sort_unstable_by_key(|row| row.order);
         validate_ordered_rows(&rows)
     }
@@ -506,9 +646,14 @@ fn validate_ordered_rows(rows: &[PrimitiveRow]) -> Result<(), SceneError> {
                 Ordering::Greater => {}
             }
         }
-        match row.primitive {
+        match &row.primitive {
             Primitive::FontCanvas(_) if saw_font => return Err(SceneError::MultipleFontCanvases),
             Primitive::FontCanvas(_) => saw_font = true,
+            // FontCanvas is the fallback/shadow representation. Native lookup
+            // rows deliberately follow it, while geometry remains forbidden,
+            // so a consumer selects one text representation without changing
+            // DOM paint order.
+            Primitive::FontLookup(_) => {}
             _ if saw_font => return Err(SceneError::GeometryAfterFontCanvas),
             _ => {}
         }
@@ -798,7 +943,8 @@ mod tests {
             .iter()
             .map(|command| match command {
                 LoweredCommand::SolidSpan { order, .. }
-                | LoweredCommand::FontCanvas { order, .. } => *order,
+                | LoweredCommand::FontCanvas { order, .. }
+                | LoweredCommand::FontLookup { order, .. } => *order,
             })
             .collect();
         assert!(orders.windows(2).all(|pair| pair[0] <= pair[1]));
@@ -884,7 +1030,7 @@ mod tests {
         let commands = scene.lower(Viewport::new(0.0, 0.0, 8, 6), 64).unwrap();
         assert!(commands.iter().all(|command| match command {
             LoweredCommand::SolidSpan { width, .. } => *width > 0,
-            LoweredCommand::FontCanvas { .. } => false,
+            LoweredCommand::FontCanvas { .. } | LoweredCommand::FontLookup { .. } => false,
         }));
         assert!(
             commands
@@ -916,7 +1062,7 @@ mod tests {
                 height,
                 ..
             } => *x < 8 && *y < 6 && x + width <= 8 && y + height <= 6,
-            LoweredCommand::FontCanvas { .. } => false,
+            LoweredCommand::FontCanvas { .. } | LoweredCommand::FontLookup { .. } => false,
         }));
     }
 
@@ -1074,5 +1220,103 @@ mod tests {
             })
         );
         assert_eq!(scene.live_count(), 0);
+    }
+
+    #[test]
+    fn font_lookup_lowers_to_stable_handle_without_copying_unicode() {
+        let mut scene = PicassoScene::new();
+        let lookup = scene
+            .insert(PrimitiveRow::new(
+                1,
+                Primitive::font_lookup(FontLookupRun {
+                    rect: Rect::new(100.0, 200.0, 80.0, 24.0),
+                    origin: [100.0, 218.0],
+                    text: String::from("SceneDB text"),
+                    face: FontFace::Inconsolata,
+                    slant: FontSlant::Italic,
+                    font_pixels: 18.0,
+                    color: BLUE,
+                }),
+            ))
+            .unwrap();
+        let commands = scene.lower(Viewport::new(110.0, 200.0, 40, 24), 8).unwrap();
+        assert_eq!(
+            commands,
+            alloc::vec![LoweredCommand::FontLookup {
+                order: 1,
+                x: 0,
+                y: 0,
+                width: 40,
+                height: 24,
+                lookup,
+            }]
+        );
+        let run = scene.font_lookup(lookup).unwrap();
+        assert_eq!(run.text, "SceneDB text");
+        assert_eq!(run.slant.kernel_shear(), 0.15);
+    }
+
+    #[test]
+    fn font_lookup_payload_is_bounded_and_not_a_gpu_row() {
+        let mut scene = PicassoScene::new();
+        let result = scene.insert(PrimitiveRow::new(
+            1,
+            Primitive::font_lookup(FontLookupRun {
+                rect: Rect::new(0.0, 0.0, 10.0, 10.0),
+                origin: [0.0, 8.0],
+                text: "x".repeat(MAX_FONT_LOOKUP_BYTES + 1),
+                face: FontFace::Default,
+                slant: FontSlant::Normal,
+                font_pixels: 8.0,
+                color: RED,
+            }),
+        ));
+        assert_eq!(result, Err(SceneError::InvalidFontLookup));
+        assert_eq!(core::mem::size_of::<LoweredCommand>(), 32);
+    }
+
+    #[test]
+    fn font_lookup_export_is_paint_ordered_and_independent_of_geometry_lowering() {
+        let mut scene = PicassoScene::new();
+        for order in 0..4 {
+            scene
+                .insert(PrimitiveRow::new(
+                    order,
+                    Primitive::rounded_border(
+                        Rect::new(0.0, 0.0, 64.0, 64.0),
+                        CornerRadii::all(8.0),
+                        1.0,
+                        RED,
+                    ),
+                ))
+                .unwrap();
+        }
+        for (order, text) in [(20, "later"), (10, "earlier")] {
+            scene
+                .insert(PrimitiveRow::new(
+                    order,
+                    Primitive::font_lookup(FontLookupRun {
+                        rect: Rect::new(0.0, 0.0, 64.0, 20.0),
+                        origin: [0.0, 16.0],
+                        text: String::from(text),
+                        face: FontFace::Default,
+                        slant: FontSlant::Normal,
+                        font_pixels: 16.0,
+                        color: BLUE,
+                    }),
+                ))
+                .unwrap();
+        }
+        assert_eq!(
+            scene.lower(Viewport::new(0.0, 0.0, 64, 64), 1),
+            Err(LowerError::CommandLimit { limit: 1 })
+        );
+        assert_eq!(
+            scene
+                .font_lookup_rows()
+                .map(|(_, row)| row.text.as_str())
+                .collect::<Vec<_>>(),
+            alloc::vec!["earlier", "later"]
+        );
     }
 }

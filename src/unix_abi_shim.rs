@@ -26,6 +26,9 @@ const TRUEOS_TCSETSW: usize = 0x5403;
 const TRUEOS_TCSETSF: usize = 0x5404;
 const TRUEOS_TIOCGWINSZ: usize = 0x5413;
 const TRUEOS_FIONREAD: usize = 0x541b;
+const TRUEOS_FIONBIO: usize = 0x5421;
+const TRUEOS_FIONCLEX: usize = 0x5450;
+const TRUEOS_FIOCLEX: usize = 0x5451;
 const TRUEOS_TERMIOS_BYTES: usize = 64;
 const TRUEOS_TERMIOS_IFLAG_OFFSET: usize = 0;
 const TRUEOS_TERMIOS_OFLAG_OFFSET: usize = 4;
@@ -374,6 +377,31 @@ pub unsafe extern "C" fn ioctl(fd: c_int, request: usize, argp: *mut c_void) -> 
             }
             TRUEOS_ERRNO.store(0, Ordering::Relaxed);
             0
+        }
+        TRUEOS_FIONBIO => {
+            let Some(value) = abi_read_bytes(argp.cast::<u8>(), core::mem::size_of::<c_int>())
+            else {
+                TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+                return -1;
+            };
+            let nonblocking = c_int::from_ne_bytes([value[0], value[1], value[2], value[3]]) != 0;
+            match crate::std_abi_shim::socket_set_nonblocking(fd, nonblocking) {
+                Ok(()) => {
+                    TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+                    0
+                }
+                Err(errno) => {
+                    TRUEOS_ERRNO.store(errno, Ordering::Relaxed);
+                    -1
+                }
+            }
+        }
+        TRUEOS_FIONCLEX | TRUEOS_FIOCLEX => {
+            // Rust's Unix fd layer issues these argumentless ioctls when a
+            // newly-created socket cannot request SOCK_CLOEXEC atomically.
+            // Route them through the same descriptor-flag state as fcntl.
+            let cloexec = c_int::from(request == TRUEOS_FIOCLEX);
+            unsafe { crate::std_abi_shim::fcntl(fd, 2, cloexec) }
         }
         TRUEOS_TCGETS => unsafe { tcgetattr(fd, argp) },
         TRUEOS_TCSETS | TRUEOS_TCSETSW | TRUEOS_TCSETSF => unsafe {

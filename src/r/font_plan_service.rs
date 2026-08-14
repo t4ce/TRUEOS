@@ -600,6 +600,45 @@ fn publish_font_recipe(
     published
 }
 
+/// Resolve one exact recipe through the same shared, sharded single-flight
+/// cache used by producer batches.
+///
+/// FontKernel calls this only from its leased blocking service lane while
+/// preparing retained SceneDB resources. The key already names a glyph in the
+/// append-only boot-warmed outline registry; no TTF bytes or outline commands
+/// are supplied by the scene producer.
+#[derive(Clone)]
+pub(crate) struct WarmedFontRecipeLease {
+    recipe: Arc<GpuFontGlyphRecipe>,
+}
+
+impl WarmedFontRecipeLease {
+    pub(crate) fn key(&self) -> GpuFontGlyphRecipeKey {
+        self.recipe.key()
+    }
+
+    #[cfg(test)]
+    fn shares_allocation(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.recipe, &other.recipe)
+    }
+}
+
+pub(crate) fn resolve_warmed_font_recipe(
+    key: GpuFontGlyphRecipeKey,
+) -> Result<WarmedFontRecipeLease, FontPlanError> {
+    match probe_font_recipe(key) {
+        FontRecipeProbe::Hit(recipe) => Ok(WarmedFontRecipeLease { recipe }),
+        FontRecipeProbe::Build(build_id) => {
+            let built = crate::intel::gpu_font::build_gpu_font_glyph_recipe(key);
+            publish_font_recipe(key, build_id, built)
+                .map(|recipe| WarmedFontRecipeLease { recipe })
+                .map_err(FontPlanError::BuildFailed)
+        }
+        FontRecipeProbe::Wait | FontRecipeProbe::Saturated => Err(FontPlanError::PoolFull),
+        FontRecipeProbe::Failed(reason) => Err(FontPlanError::BuildFailed(reason)),
+    }
+}
+
 /// Timing and fairness evidence produced alongside one sealed plan.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct FontPlanBuildStats {
@@ -1552,7 +1591,7 @@ pub(crate) fn start_font_plan_workers() -> Result<bool, SpawnError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{FontPlanCellRequest, GlyphSelectionState};
+    use super::{FontPlanCellRequest, GlyphSelectionState, resolve_warmed_font_recipe};
 
     #[test]
     fn exact_scalar_is_attempted_once_without_random_fallback() {
@@ -1570,5 +1609,19 @@ mod tests {
             FontPlanCellRequest::fixed([1.0, 2.0], 16.0, 0.0, 10, 'T').with_worker_affinity(31);
         assert_eq!(exact.worker_affinity(), Some(31));
         assert_eq!(exact.fixed_scalar(), Some('T'));
+    }
+
+    #[test]
+    fn repeated_scene_lookup_pins_the_same_shared_recipe() {
+        let font = crate::intel::gpu_font::GpuFontFace::Default;
+        crate::intel::gpu_font::ensure_font_face_available(font).unwrap();
+        let key = crate::intel::gpu_font::gpu_font_centered_glyph_recipe_key(
+            'S', font, 24.0, 0.0, 320, 200, 640, 400,
+        )
+        .unwrap();
+        let first = resolve_warmed_font_recipe(key).unwrap();
+        let second = resolve_warmed_font_recipe(key).unwrap();
+        assert!(first.shares_allocation(&second));
+        assert_eq!(first.key(), key);
     }
 }

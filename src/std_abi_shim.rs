@@ -78,6 +78,7 @@ const TRUEOS_EAI_NONAME: c_int = 8;
 const TRUEOS_EAI_SERVICE: c_int = 9;
 const TRUEOS_EAI_SOCKTYPE: c_int = 10;
 const TRUEOS_ETIMEDOUT: c_int = 110;
+const TRUEOS_EINPROGRESS: c_int = 115;
 const TRUEOS_SIG_DFL: usize = 0;
 const TRUEOS_SIG_IGN: usize = 1;
 const TRUEOS_SIG_ERR: usize = usize::MAX;
@@ -166,10 +167,21 @@ struct TrueosAddrInfo {
     ai_socktype: c_int,
     ai_protocol: c_int,
     ai_addrlen: u32,
-    ai_canonname: *mut c_char,
+    // TRUEOS targets the x86_64 Linux-like/musl libc ABI.  In that ABI
+    // `ai_addr` precedes `ai_canonname`; reversing them makes Rust's
+    // `LookupHost` read a null canonname as the socket-address pointer.
     ai_addr: *mut c_void,
+    ai_canonname: *mut c_char,
     ai_next: *mut TrueosAddrInfo,
 }
+
+const _: () = {
+    assert!(core::mem::size_of::<TrueosAddrInfo>() == 48);
+    assert!(core::mem::align_of::<TrueosAddrInfo>() == 8);
+    assert!(core::mem::offset_of!(TrueosAddrInfo, ai_addr) == 24);
+    assert!(core::mem::offset_of!(TrueosAddrInfo, ai_canonname) == 32);
+    assert!(core::mem::offset_of!(TrueosAddrInfo, ai_next) == 40);
+};
 
 // The TRUEOS target intentionally uses the x86_64 musl POSIX ABI. Keep this
 // layout in lockstep with libc::sigaction for that target: handler, 1024-bit
@@ -384,13 +396,14 @@ impl RegularFileWorldRegistry {
 }
 
 enum SocketFd {
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Cabi {
         backend: u32,
+        nonblocking: bool,
     },
     PendingListener {
         backend: u32,
         local: Option<SocketAddrV4>,
+        nonblocking: bool,
     },
     PendingUdp,
     MioListener {
@@ -567,7 +580,7 @@ impl ProcessSocketFds {
 impl SocketFd {
     fn backend(&self) -> u32 {
         match self {
-            Self::Cabi { backend }
+            Self::Cabi { backend, .. }
             | Self::PendingListener { backend, .. }
             | Self::MioListener { backend, .. }
             | Self::MioStream { backend }
@@ -2911,17 +2924,31 @@ pub(crate) fn socket_poll_events(fd: c_int, events: i16) -> Option<i16> {
     const POLLERR: i16 = 0x0008;
     const POLLHUP: i16 = 0x0010;
 
-    let backend = {
+    let (backend, cabi) = {
         let sockets = SOCKET_FDS.lock();
         match sockets.get(fd)? {
             SocketFd::MioListener { backend, .. }
             | SocketFd::MioStream { backend }
-            | SocketFd::MioUdp { backend } => *backend,
-            SocketFd::Cabi { .. } | SocketFd::PendingListener { .. } | SocketFd::PendingUdp => {
+            | SocketFd::MioUdp { backend } => (*backend, false),
+            SocketFd::Cabi { backend, .. } => (*backend, true),
+            SocketFd::PendingListener { .. } | SocketFd::PendingUdp => {
                 return Some(0);
             }
         }
     };
+    if cabi {
+        if events & POLLOUT == 0 {
+            return Some(0);
+        }
+        let rc = crate::r::net::socket_cabi::trueos_cabi_socket_tcp_poll_connect(backend, 0);
+        return Some(if rc == 0 {
+            POLLOUT
+        } else if rc == -TRUEOS_ETIMEDOUT || rc == -TRUEOS_EINPROGRESS {
+            0
+        } else {
+            POLLERR
+        });
+    }
     let mut interests = 0u8;
     if events & POLLIN != 0 {
         interests |= crate::mio_compat::READY_READABLE;
@@ -3001,6 +3028,7 @@ pub unsafe extern "C" fn socket(domain: c_int, socket_type: c_int, protocol: c_i
             SocketFd::PendingListener {
                 backend: backend as u32,
                 local: None,
+                nonblocking: false,
             },
         )
         .is_err()
@@ -3145,10 +3173,12 @@ pub unsafe extern "C" fn listen(socket_id: c_int, _backlog: c_int) -> c_int {
             SocketFd::PendingListener {
                 backend,
                 local: Some(local),
+                ..
             } => (*local, *backend),
             SocketFd::PendingListener {
                 backend,
                 local: None,
+                ..
             } => (
                 SocketAddrV4 {
                     addr: [0, 0, 0, 0],
@@ -3263,9 +3293,23 @@ pub unsafe extern "C" fn shutdown(socket_id: c_int, how: c_int) -> c_int {
         TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
         return -1;
     }
-    if SOCKET_FDS.lock().get(socket_id).is_none() {
-        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
-        return -1;
+    let cabi_backend = {
+        let sockets = SOCKET_FDS.lock();
+        match sockets.get(socket_id) {
+            Some(SocketFd::Cabi { backend, .. } | SocketFd::PendingListener { backend, .. }) => {
+                Some(*backend)
+            }
+            Some(_) => None,
+            None => {
+                TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
+                return -1;
+            }
+        }
+    };
+    if let Some(backend) = cabi_backend {
+        return posix_rc_i32(crate::r::net::socket_cabi::trueos_cabi_socket_tcp_shutdown(
+            backend, how as u32,
+        ));
     }
     // Mio closes the backend when the owning TcpStream is dropped. Treat the
     // half-close as successful until the virtual TCP API grows half-close support.
@@ -3283,38 +3327,129 @@ pub unsafe extern "C" fn connect(socket_id: c_int, addr: *const c_void, addr_len
         TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
         return -1;
     };
-    let udp_backend = {
+    let socket = {
         let sockets = SOCKET_FDS.lock();
         match sockets.get(socket_id) {
-            Some(SocketFd::MioUdp { backend }) => Some(*backend),
+            Some(SocketFd::MioUdp { backend }) => (Some(*backend), None),
             Some(SocketFd::PendingUdp) => {
                 TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
                 return -1;
             }
-            Some(_) => None,
+            Some(SocketFd::PendingListener {
+                backend,
+                nonblocking,
+                ..
+            })
+            | Some(SocketFd::Cabi {
+                backend,
+                nonblocking,
+            }) => (None, Some((*backend, *nonblocking))),
+            Some(SocketFd::MioListener { .. } | SocketFd::MioStream { .. }) => {
+                TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+                return -1;
+            }
             None => {
                 TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
                 return -1;
             }
         }
     };
-    let Some(backend) = udp_backend else {
-        TRUEOS_ERRNO.store(TRUEOS_ENOSYS, Ordering::Relaxed);
+    if let Some(backend) = socket.0 {
+        let rc = unsafe {
+            crate::mio_compat::mio_udp_socket_connect_host(backend, socket_v4_to_mio(peer))
+        };
+        return posix_mio_i32(rc);
+    }
+
+    let Some((backend, nonblocking)) = socket.1 else {
+        TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
         return -1;
     };
-    let rc =
-        unsafe { crate::mio_compat::mio_udp_socket_connect_host(backend, socket_v4_to_mio(peer)) };
-    posix_mio_i32(rc)
+    let rc = crate::r::net::socket_cabi::trueos_cabi_socket_tcp_connect_v4(
+        backend,
+        u32::from_be_bytes(peer.addr),
+        peer.port.to_be(),
+        u32::from(nonblocking),
+    );
+    if rc == 0 || rc == -TRUEOS_EINPROGRESS {
+        let mut sockets = SOCKET_FDS.lock();
+        if matches!(sockets.get(socket_id), Some(SocketFd::PendingListener { .. })) {
+            let _ = sockets.insert(
+                socket_id,
+                SocketFd::Cabi {
+                    backend,
+                    nonblocking,
+                },
+            );
+        }
+    }
+    crate::hv::hvlogf(format_args!(
+        "std-abi socket-connect fd={} backend={} peer={}.{}.{}.{}:{} nonblocking={} rc={}",
+        socket_id,
+        backend,
+        peer.addr[0],
+        peer.addr[1],
+        peer.addr[2],
+        peer.addr[3],
+        peer.port,
+        nonblocking,
+        rc,
+    ));
+    posix_rc_i32(rc)
+}
+
+pub(crate) fn socket_set_nonblocking(fd: c_int, nonblocking: bool) -> Result<(), c_int> {
+    let backend = {
+        let sockets = SOCKET_FDS.lock();
+        match sockets.get(fd) {
+            Some(SocketFd::PendingListener { backend, .. } | SocketFd::Cabi { backend, .. }) => {
+                Some(*backend)
+            }
+            Some(
+                SocketFd::MioListener { .. }
+                | SocketFd::MioStream { .. }
+                | SocketFd::MioUdp { .. }
+                | SocketFd::PendingUdp,
+            ) => None,
+            None => return Err(TRUEOS_EBADF),
+        }
+    };
+    if let Some(backend) = backend {
+        let rc = crate::r::net::socket_cabi::trueos_cabi_socket_tcp_set_nonblocking(
+            backend,
+            u32::from(nonblocking),
+        );
+        if rc < 0 {
+            return Err(rc.saturating_neg());
+        }
+    }
+    let mut sockets = SOCKET_FDS.lock();
+    match sockets.get_mut(fd) {
+        Some(
+            SocketFd::PendingListener {
+                nonblocking: value, ..
+            }
+            | SocketFd::Cabi {
+                nonblocking: value, ..
+            },
+        ) => *value = nonblocking,
+        Some(_) => {}
+        None => return Err(TRUEOS_EBADF),
+    }
+    Ok(())
 }
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn getsockopt(
     socket_id: c_int,
-    _level: c_int,
-    _optname: c_int,
+    level: c_int,
+    optname: c_int,
     optval: *mut c_void,
     optlen: *mut u32,
 ) -> c_int {
+    const SOL_SOCKET: c_int = 1;
+    const SO_ERROR: c_int = 4;
+
     if socket_id < 0 || SOCKET_FDS.lock().get(socket_id).is_none() {
         TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
         return -1;
@@ -3328,8 +3463,23 @@ pub unsafe extern "C" fn getsockopt(
         return -1;
     };
     let len = u32::from_ne_bytes([len_bytes[0], len_bytes[1], len_bytes[2], len_bytes[3]]);
+    let value: c_int = if level == SOL_SOCKET && optname == SO_ERROR {
+        let backend = {
+            let sockets = SOCKET_FDS.lock();
+            match sockets.get(socket_id) {
+                Some(SocketFd::Cabi { backend, .. }) => Some(*backend),
+                _ => None,
+            }
+        };
+        backend
+            .map(|backend| crate::r::net::socket_cabi::trueos_cabi_socket_tcp_take_error(backend))
+            .unwrap_or(0)
+            .max(0)
+    } else {
+        0
+    };
     if len < core::mem::size_of::<c_int>() as u32
-        || !copy_to_abi_out(optval.cast::<u8>(), &0i32.to_ne_bytes())
+        || !copy_to_abi_out(optval.cast::<u8>(), &value.to_ne_bytes())
         || !copy_to_abi_out(
             optlen.cast::<u8>(),
             &(core::mem::size_of::<c_int>() as u32).to_ne_bytes(),
@@ -4042,7 +4192,7 @@ pub unsafe extern "C" fn close(fd: c_int) -> c_int {
     let _ = FD_FLAGS.lock().remove(fd);
     if let Some(socket) = SOCKET_FDS.lock().remove(fd) {
         let rc = match socket {
-            SocketFd::Cabi { backend } | SocketFd::PendingListener { backend, .. } => {
+            SocketFd::Cabi { backend, .. } | SocketFd::PendingListener { backend, .. } => {
                 crate::r::net::socket_cabi::trueos_cabi_socket_tcp_close(backend)
             }
             SocketFd::MioListener { backend, .. }
@@ -4405,13 +4555,34 @@ pub unsafe extern "C" fn getpeername(
             TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
             return -1;
         };
-        let backend = socket.backend();
-        let mut mio_addr = crate::mio_compat::TrueosMioSocketAddr::default();
-        let rc = unsafe { crate::mio_compat::mio_socket_peer_addr_host(backend, &mut mio_addr) };
-        if rc == 0 {
-            socket_v4_from_mio(mio_addr)
-        } else {
-            None
+        match socket {
+            SocketFd::Cabi { backend, .. } => {
+                let mut addr_be = 0u32;
+                let mut port_be = 0u16;
+                let rc = crate::r::net::socket_cabi::trueos_cabi_socket_tcp_peer_v4(
+                    *backend,
+                    &mut addr_be,
+                    &mut port_be,
+                );
+                (rc == 0).then_some(SocketAddrV4 {
+                    addr: addr_be.to_be_bytes(),
+                    port: u16::from_be(port_be),
+                })
+            }
+            SocketFd::PendingListener { .. } | SocketFd::PendingUdp => None,
+            SocketFd::MioListener { backend, .. }
+            | SocketFd::MioStream { backend }
+            | SocketFd::MioUdp { backend } => {
+                let mut mio_addr = crate::mio_compat::TrueosMioSocketAddr::default();
+                let rc = unsafe {
+                    crate::mio_compat::mio_socket_peer_addr_host(*backend, &mut mio_addr)
+                };
+                if rc == 0 {
+                    socket_v4_from_mio(mio_addr)
+                } else {
+                    None
+                }
+            }
         }
     };
     let Some(peer) = peer else {
@@ -5063,8 +5234,8 @@ pub unsafe extern "C" fn getaddrinfo(
             ai_socktype: socktype,
             ai_protocol: protocol,
             ai_addrlen: core::mem::size_of::<TrueosSockAddrIn>() as u32,
-            ai_canonname: ptr::null_mut(),
             ai_addr: addr_ptr.cast::<c_void>(),
+            ai_canonname: ptr::null_mut(),
             ai_next: ptr::null_mut(),
         };
     }

@@ -3261,6 +3261,43 @@ fn font_canvas_internal_layer_count(rows: &[BlueprintFontCanvasRow]) -> usize {
 }
 
 fn font_canvas_request(description: &BlueprintFontCanvasDescription) -> FontStampRequest {
+    use trueos_helio_runtime::picasso_scene::{Color, FontFace, FontLookupRun, FontSlant, Rect};
+
+    let face = match description.font {
+        GpuFontFace::Default => FontFace::Default,
+        GpuFontFace::NotoSansSc => FontFace::NotoSansSc,
+        GpuFontFace::Inconsolata => FontFace::Inconsolata,
+    };
+    let lookup_rows = description
+        .rows
+        .iter()
+        .map(|row| {
+            let [red, green, blue, alpha] = row.color_rgba.to_le_bytes();
+            FontLookupRun {
+                rect: Rect::new(0.0, 0.0, description.width as f32, description.height as f32),
+                origin: row.position,
+                text: row.text.clone(),
+                face,
+                slant: FontSlant::Normal,
+                font_pixels: row.font_pixels,
+                color: Color::rgba(red, green, blue, alpha),
+            }
+        })
+        .collect::<Vec<_>>();
+    if let Ok(request) = crate::r::font_kernel_service::picasso_font_lookup_canvas_request(
+        lookup_rows.as_slice(),
+        description.width,
+        description.height,
+        description.width,
+        description.height,
+    ) {
+        return request;
+    }
+
+    // Compatibility safety net for an already-validated legacy description.
+    // Native Picasso lookup integration uses the typed path above; retaining
+    // this construction means an optional cache/grouping optimization can
+    // never turn a formerly valid visual canvas into a frame failure.
     let mut groups = Vec::<(u32, Vec<RetainedFontRun>)>::new();
     for row in &description.rows {
         let group_index = match groups.iter_mut().position(|(color_rgba, runs)| {

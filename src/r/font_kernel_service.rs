@@ -562,6 +562,88 @@ pub(crate) struct FontStampRequest {
     pub(crate) fit: FontStampFit,
 }
 
+/// Convert CPU-owned Picasso Unicode rows into the existing one-release
+/// FontKernel canvas request.
+///
+/// This is the compatibility visual bridge while native Picasso glyph
+/// instances are still waiting for compositor release/dependency integration.
+/// Rows are grouped by face and color, retain per-run slant, and copy Unicode
+/// once at service admission. SceneDB never carries TTF glyph IDs, outline
+/// commands, recipe keys, or R8 atlas bytes.
+pub(crate) fn picasso_font_lookup_canvas_request(
+    rows: &[trueos_helio_runtime::picasso_scene::FontLookupRun],
+    viewport_width: u32,
+    viewport_height: u32,
+    raster_width: u32,
+    raster_height: u32,
+) -> Result<FontStampRequest, FontKernelError> {
+    use trueos_helio_runtime::picasso_scene::FontFace;
+
+    if rows.is_empty()
+        || viewport_width == 0
+        || viewport_height == 0
+        || raster_width == 0
+        || raster_height == 0
+    {
+        return Err(FontKernelError::InvalidRequest("font-picasso-lookup-contract"));
+    }
+    let mut layers: Vec<(GpuFontFace, GpuFontRgba, Vec<RetainedFontRun>)> = Vec::new();
+    for row in rows {
+        let font = match row.face {
+            FontFace::Default => GpuFontFace::Default,
+            FontFace::NotoSansSc => GpuFontFace::NotoSansSc,
+            FontFace::Inconsolata => GpuFontFace::Inconsolata,
+        };
+        let color =
+            GpuFontRgba::new(row.color.red, row.color.green, row.color.blue, row.color.alpha);
+        let group = layers
+            .iter()
+            .position(|(candidate_font, candidate_color, runs)| {
+                *candidate_font == font
+                    && *candidate_color == color
+                    && runs.len() < FONT_KERNEL_MAX_RUNS
+            });
+        let group = match group {
+            Some(group) => group,
+            None => {
+                if layers.len() >= FONT_KERNEL_MAX_STAMP_LAYERS {
+                    return Err(FontKernelError::InvalidRequest(
+                        "font-picasso-lookup-layer-softcap",
+                    ));
+                }
+                layers.push((font, color, Vec::new()));
+                layers.len() - 1
+            }
+        };
+        layers[group].2.push(RetainedFontRun {
+            text: row.text.clone(),
+            position: row.origin,
+            font_pixels: row.font_pixels,
+            slant: row.slant.kernel_shear(),
+        });
+    }
+    let request = FontStampRequest {
+        layers: layers
+            .into_iter()
+            .map(|(font, foreground, runs)| FontStampLayer {
+                scene: RetainSceneRequest {
+                    runs,
+                    font,
+                    viewport_width,
+                    viewport_height,
+                    raster_width,
+                    raster_height,
+                    positioning: RetainedFontPositioning::SceneOrigin,
+                },
+                foreground,
+            })
+            .collect(),
+        fit: FontStampFit::Canvas,
+    };
+    validate_stamp_request(&request)?;
+    Ok(request)
+}
+
 /// Ownership carried by a direct-frame request after admission.
 ///
 /// A normal request still performs its generic validation before this value is
@@ -722,6 +804,12 @@ impl FontRushCacheCharge {
 /// masks resident, then composite them together as one draw-time layer batch.
 pub(crate) struct FontKernelRetainedScene {
     masks: Vec<GpuFontRetainedScene>,
+    /// CPU recipe resources resolved from the shared warmed-outline cache.
+    /// Holding these leases makes their exact policy revision available to a
+    /// future RenderTicket without copying outline ops into SceneDB. The R8
+    /// atlas tile remains a later renderer-owned pin because this retained
+    /// compatibility path still produces its own union masks.
+    _lookup_recipes: Vec<crate::r::font_plan_service::WarmedFontRecipeLease>,
 }
 
 impl FontKernelRetainedScene {
@@ -1687,9 +1775,13 @@ fn process_retain_scene(
 ) -> Result<FontKernelRetainedScene, FontKernelError> {
     ensure_font_rcs_lane_available()?;
     let glyph_runs = expand_origin_runs(ticket, request)?;
+    let lookup_recipes = resolve_scene_lookup_recipes(request, glyph_runs.as_slice());
     let mut masks = Vec::new();
     process_retain_scene_partition(ticket, request, glyph_runs.as_slice(), &mut masks)?;
-    Ok(FontKernelRetainedScene { masks })
+    Ok(FontKernelRetainedScene {
+        masks,
+        _lookup_recipes: lookup_recipes,
+    })
 }
 
 fn expand_origin_runs(
@@ -1779,6 +1871,14 @@ fn process_retain_scene_runs(
 ) -> Result<GpuFontRetainedScene, FontKernelError> {
     set_active_stage(ticket, "font-warm");
     ensure_font_face_available(request.font).map_err(FontKernelError::Unavailable)?;
+    // A Picasso FontLookup row remains Unicode/style data. Resolve its exact
+    // glyph recipe identity here, on FontKernel's leased blocking lane, and
+    // seed the same shared recipe cache used by prepared producers before the
+    // compatibility retained-canvas draw. No outline ops or atlas bytes cross
+    // the SceneDB boundary. The visual fallback below deliberately retains its
+    // existing single release/fence contract.
+    set_active_stage(ticket, "scene-lookup-prewarm");
+    let _ = prewarm_scene_lookup_recipes(request, runs);
     set_active_stage(ticket, "coverage");
     let entries = runs
         .iter()
@@ -1808,6 +1908,72 @@ fn process_retain_scene_runs(
         ),
     };
     result.map_err(FontKernelError::Unavailable)
+}
+
+fn prewarm_scene_lookup_recipes(request: &RetainSceneRequest, runs: &[RetainedFontRun]) -> usize {
+    let mut warmed = 0usize;
+    for run in runs {
+        for scalar in run.text.chars() {
+            if scalar.is_control() || scalar.is_whitespace() {
+                continue;
+            }
+            let Ok(key) = crate::intel::gpu_font::gpu_font_centered_glyph_recipe_key(
+                scalar,
+                request.font,
+                run.font_pixels,
+                run.slant,
+                request.viewport_width,
+                request.viewport_height,
+                request.raster_width,
+                request.raster_height,
+            ) else {
+                // Analytical lookup is an optional acceleration. The retained
+                // canvas below still owns validation and its mesh/union
+                // fallback, including sizes outside the R8 recipe range.
+                continue;
+            };
+            if crate::r::font_plan_service::resolve_warmed_font_recipe(key).is_ok() {
+                warmed = warmed.saturating_add(1);
+            }
+            // Wait/saturation/build failures must never reject an otherwise
+            // valid text request. A later frame can hit the shared cache, and
+            // the compatibility retained-canvas path remains authoritative.
+        }
+    }
+    warmed
+}
+
+fn resolve_scene_lookup_recipes(
+    request: &RetainSceneRequest,
+    runs: &[RetainedFontRun],
+) -> Vec<crate::r::font_plan_service::WarmedFontRecipeLease> {
+    let mut leases: Vec<crate::r::font_plan_service::WarmedFontRecipeLease> = Vec::new();
+    for run in runs {
+        for scalar in run.text.chars() {
+            if scalar.is_control() || scalar.is_whitespace() {
+                continue;
+            }
+            let Ok(key) = crate::intel::gpu_font::gpu_font_centered_glyph_recipe_key(
+                scalar,
+                request.font,
+                run.font_pixels,
+                run.slant,
+                request.viewport_width,
+                request.viewport_height,
+                request.raster_width,
+                request.raster_height,
+            ) else {
+                continue;
+            };
+            if leases.iter().any(|lease| lease.key() == key) {
+                continue;
+            }
+            if let Ok(lease) = crate::r::font_plan_service::resolve_warmed_font_recipe(key) {
+                leases.push(lease);
+            }
+        }
+    }
+    leases
 }
 
 fn collect_stamp_scenes(
@@ -3455,6 +3621,41 @@ mod tests {
             validate_stamp_request(&stamp),
             Err(FontKernelError::InvalidRequest("font-stamp-extent-softcap"))
         );
+    }
+
+    #[test]
+    fn picasso_lookup_canvas_groups_face_and_color_but_preserves_slant() {
+        use trueos_helio_runtime::picasso_scene::{
+            Color, FontFace, FontLookupRun, FontSlant, Rect,
+        };
+
+        let row = |text: &str, face, slant, color| FontLookupRun {
+            rect: Rect::new(0.0, 0.0, 120.0, 24.0),
+            origin: [4.0, 20.0],
+            text: String::from(text),
+            face,
+            slant,
+            font_pixels: 18.0,
+            color,
+        };
+        let rows = alloc::vec![
+            row("normal", FontFace::Inconsolata, FontSlant::Normal, Color::rgba(10, 20, 30, 255),),
+            row("italic", FontFace::Inconsolata, FontSlant::Italic, Color::rgba(10, 20, 30, 255),),
+            row("default", FontFace::Default, FontSlant::Normal, Color::rgba(10, 20, 30, 255),),
+        ];
+        let request = picasso_font_lookup_canvas_request(&rows, 320, 200, 640, 400).unwrap();
+        assert_eq!(request.fit, FontStampFit::Canvas);
+        assert_eq!(request.layers.len(), 2);
+        let inconsolata = request
+            .layers
+            .iter()
+            .find(|layer| layer.scene.font == GpuFontFace::Inconsolata)
+            .unwrap();
+        assert_eq!(inconsolata.scene.runs.len(), 2);
+        assert_eq!(inconsolata.scene.runs[0].slant, 0.0);
+        assert_eq!(inconsolata.scene.runs[1].slant, 0.15);
+        assert_eq!(inconsolata.scene.viewport_width, 320);
+        assert_eq!(inconsolata.scene.raster_width, 640);
     }
 
     #[test]
