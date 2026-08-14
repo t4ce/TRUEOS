@@ -52,6 +52,7 @@ pub mod vinput;
 #[doc(hidden)]
 pub mod vio;
 pub mod vmail;
+pub mod vmedia;
 pub mod vnet;
 pub mod vnetfs;
 pub mod vshell;

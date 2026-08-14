@@ -23,6 +23,8 @@ pub mod lfm25_hybrid_cpu_backend;
 pub mod lfm25_model;
 pub mod lfm25_tokenizer;
 pub mod lumen_service;
+pub mod media_cabi;
+pub mod media_service;
 pub mod mouse_motion_service;
 pub mod net;
 pub mod pat;

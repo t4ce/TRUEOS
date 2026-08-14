@@ -40,7 +40,31 @@ pub(super) const CONTEXT_MENU_ROW_HEIGHT_PX: u32 = 27;
 
 static OWNER_QUEUE_DROPS: AtomicU32 = AtomicU32::new(0);
 static KEYBOARD_TEXT_FORWARDS: AtomicU32 = AtomicU32::new(0);
-static DESKTOP_SHELL_LAUNCH_REQUESTS: Mutex<Vec<Ui4CursorSource, MAX_CURSOR_ROUTES>> =
+static DESKTOP_SHELL_LAUNCH_SEQUENCE: AtomicU32 = AtomicU32::new(0);
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct DesktopShellLaunchRequest {
+    source: Ui4CursorSource,
+    x: u32,
+    y: u32,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(super) struct DesktopShellLaunch {
+    pub(super) source: Ui4CursorSource,
+    pub(super) x: u32,
+    pub(super) y: u32,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct DesktopShellLaunchIntent {
+    token: u32,
+    launch: DesktopShellLaunch,
+}
+
+static DESKTOP_SHELL_LAUNCH_REQUESTS: Mutex<Vec<DesktopShellLaunchRequest, MAX_CURSOR_ROUTES>> =
+    Mutex::new(Vec::new());
+static DESKTOP_SHELL_LAUNCH_INTENTS: Mutex<Vec<DesktopShellLaunchIntent, MAX_CURSOR_ROUTES>> =
     Mutex::new(Vec::new());
 static DESKTOP_SHELL_LAUNCH_SIGNAL: Signal<crate::wait::EmbassySpinRawMutex, ()> = Signal::new();
 
@@ -566,7 +590,9 @@ impl InputBroker {
                         DesktopContextMenuAction::ColorPicker => {
                             super::color_picker::request_open(source, anchor);
                         }
-                        DesktopContextMenuAction::Shell => request_desktop_shell_launch(source),
+                        DesktopContextMenuAction::Shell => {
+                            request_desktop_shell_launch(source, x, y)
+                        }
                     }
                 }
             }
@@ -1025,38 +1051,32 @@ impl InputBroker {
             super::screenshot::request_window_capture(window, route.x, route.y);
             return;
         }
-        let matched_route = self
-            .cursors
-            .iter()
-            .enumerate()
-            .filter_map(|(index, route)| {
-                if !super::cursor_frame_inout::source_selected(route.source) {
-                    return None;
-                }
-                let matches = if combo_id != 0 {
-                    cursor_hut_metadata(route.source).0 == combo_id
-                } else {
-                    route.source.controller_id == event.controller_id
-                        && route.source.slot_id == event.slot_id
-                };
-                matches.then_some((route.selection_serial, index))
-            })
-            .max_by_key(|(serial, _)| *serial)
-            .map(|(_, index)| index);
-        let route_index = matched_route.or_else(|| {
-            if combo_id != 0 {
-                return None;
+        if event.kind == crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY
+            && event.key_code == crate::r::keyboard::KEYBOARD_KEY_START
+        {
+            let route_index = self.keyboard_route_index(&event, combo_id, false);
+            let Some(route_index) = route_index else {
+                crate::log_warn!(target: "ui4";
+                    "ui4/input: Start ignored reason=no-paired-cursor keyboard_ctrl={} keyboard_slot={} combo={}\n",
+                    event.controller_id,
+                    event.slot_id,
+                    combo_id,
+                );
+                return;
+            };
+            let route = self.cursors[route_index];
+            let shell_selected = super::cursor_frame_inout::source_selected(route.source)
+                && super::selected_frame_for_source(route.source)
+                    .and_then(|key| window_snapshot_for_target(key.into()))
+                    .is_some_and(|window| {
+                        window.state == WindowState::Ready && owner_is_shell(window.owner)
+                    });
+            if !shell_selected {
+                request_desktop_shell_launch(route.source, route.x, route.y);
+                return;
             }
-            self.cursors
-                .iter()
-                .enumerate()
-                .filter_map(|(index, route)| {
-                    super::cursor_frame_inout::source_selected(route.source)
-                        .then_some((route.selection_serial, index))
-                })
-                .max_by_key(|(serial, _)| *serial)
-                .map(|(_, index)| index)
-        });
+        }
+        let route_index = self.keyboard_route_index(&event, combo_id, true);
         let Some(route_index) = route_index else {
             return;
         };
@@ -1134,6 +1154,46 @@ impl InputBroker {
                 virtual_keyboard,
             }),
         );
+    }
+
+    fn keyboard_route_index(
+        &self,
+        event: &crate::r::keyboard::TrueosKeyboardOutputEvent,
+        combo_id: u32,
+        selected_only: bool,
+    ) -> Option<usize> {
+        let matched = self
+            .cursors
+            .iter()
+            .enumerate()
+            .filter_map(|(index, route)| {
+                if selected_only && !super::cursor_frame_inout::source_selected(route.source) {
+                    return None;
+                }
+                let matches = if combo_id != 0 {
+                    cursor_hut_metadata(route.source).0 == combo_id
+                } else {
+                    route.source.controller_id == event.controller_id
+                        && route.source.slot_id == event.slot_id
+                };
+                matches.then_some((route.selection_serial, index))
+            })
+            .max_by_key(|(serial, _)| *serial)
+            .map(|(_, index)| index);
+        matched.or_else(|| {
+            if combo_id != 0 {
+                return None;
+            }
+            self.cursors
+                .iter()
+                .enumerate()
+                .filter_map(|(index, route)| {
+                    (!selected_only || super::cursor_frame_inout::source_selected(route.source))
+                        .then_some((route.selection_serial, index))
+                })
+                .max_by_key(|(serial, _)| *serial)
+                .map(|(_, index)| index)
+        })
     }
 
     fn focused_keyboard_state(
@@ -1323,15 +1383,20 @@ pub(crate) async fn ui4_input_service_task(ap1_spawner: crate::workers::WorkerSp
     }
 }
 
-fn request_desktop_shell_launch(source: Ui4CursorSource) {
-    let queued = DESKTOP_SHELL_LAUNCH_REQUESTS.lock().push(source).is_ok();
+fn request_desktop_shell_launch(source: Ui4CursorSource, x: u32, y: u32) {
+    let queued = DESKTOP_SHELL_LAUNCH_REQUESTS
+        .lock()
+        .push(DesktopShellLaunchRequest { source, x, y })
+        .is_ok();
     if queued {
         DESKTOP_SHELL_LAUNCH_SIGNAL.signal(());
         crate::log_info!(target: "ui4";
-            "ui4/input: desktop shell launch requested cursor={}:{}:{} action=online-shell\n",
+            "ui4/input: desktop shell launch requested cursor={}:{}:{} position={},{} action=online-shell\n",
             source.controller_id,
             source.slot_id,
             source.ep_target,
+            x,
+            y,
         );
     } else {
         crate::log_warn!(target: "ui4";
@@ -1361,26 +1426,89 @@ async fn ui4_desktop_shell_launcher_task() {
 
         let target =
             crate::shell2::matrix_target_for_slot_name(crate::shell2::OUTPUT_SYSTEM_MASK, "");
+        let token = DESKTOP_SHELL_LAUNCH_SEQUENCE
+            .fetch_add(1, Ordering::Relaxed)
+            .wrapping_add(1)
+            .max(1);
+        let instance_name = alloc::format!("ui4_shell_{token}");
+        {
+            let mut intents = DESKTOP_SHELL_LAUNCH_INTENTS.lock();
+            if intents.is_full() {
+                intents.remove(0);
+            }
+            let _ = intents.push(DesktopShellLaunchIntent {
+                token,
+                launch: DesktopShellLaunch {
+                    source: request.source,
+                    x: request.x,
+                    y: request.y,
+                },
+            });
+        }
         match crate::shell2::submit_online_to_send_target(
             &shell_spawner,
             target,
-            alloc::vec![alloc::string::String::from("shell")],
+            alloc::vec![
+                alloc::string::String::from("new"),
+                alloc::string::String::from("shell"),
+                instance_name,
+            ],
         ) {
             Ok(()) => crate::log_info!(target: "ui4";
                 "ui4/input: desktop shell queued cursor={}:{}:{} action=online-shell\n",
-                request.controller_id,
-                request.slot_id,
-                request.ep_target,
+                request.source.controller_id,
+                request.source.slot_id,
+                request.source.ep_target,
             ),
-            Err(error) => crate::log_warn!(target: "ui4";
-                "ui4/input: desktop shell launch rejected cursor={}:{}:{} action=online-shell error={:?}\n",
-                request.controller_id,
-                request.slot_id,
-                request.ep_target,
-                error,
-            ),
+            Err(error) => {
+                DESKTOP_SHELL_LAUNCH_INTENTS
+                    .lock()
+                    .retain(|intent| intent.token != token);
+                crate::log_warn!(target: "ui4";
+                    "ui4/input: desktop shell launch rejected cursor={}:{}:{} action=online-shell error={:?}\n",
+                    request.source.controller_id,
+                    request.source.slot_id,
+                    request.source.ep_target,
+                    error,
+                );
+            }
         }
     }
+}
+
+pub(super) fn claim_desktop_shell_launch(owner: WindowOwner) -> Option<DesktopShellLaunch> {
+    let WindowOwner::Vm(vm_id) = owner else {
+        return None;
+    };
+    let archive = crate::hv::blueprint_process_arg(vm_id, 0)?;
+    if !archive
+        .rsplit('/')
+        .next()
+        .unwrap_or(archive.as_str())
+        .trim_end_matches(".bp")
+        .eq_ignore_ascii_case("shell")
+    {
+        return None;
+    }
+    let identity = crate::hv::blueprint_instance_identity(vm_id)?;
+    let token: u32 = identity.name?.strip_prefix("ui4_shell_")?.parse().ok()?;
+    let mut intents = DESKTOP_SHELL_LAUNCH_INTENTS.lock();
+    let index = intents.iter().position(|intent| intent.token == token)?;
+    Some(intents.remove(index).launch)
+}
+
+fn owner_is_shell(owner: WindowOwner) -> bool {
+    let WindowOwner::Vm(vm_id) = owner else {
+        return false;
+    };
+    crate::hv::blueprint_process_arg(vm_id, 0).is_some_and(|archive| {
+        archive
+            .rsplit('/')
+            .next()
+            .unwrap_or(archive.as_str())
+            .trim_end_matches(".bp")
+            .eq_ignore_ascii_case("shell")
+    })
 }
 
 pub(super) async fn wait_slot4_visual_change() {

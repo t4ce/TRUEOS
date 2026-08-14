@@ -14,6 +14,7 @@ pub(crate) const UI_SURFACE_GPU_BASE: u64 = 0x1200_0000;
 // the former 32 MiB-per-handle VA waste and makes room for normal UI4 growth.
 pub(crate) const UI_SURFACE_GPU_LIMIT: u64 = 0x2000_0000;
 const UI_SURFACE_MAX_BYTES: u64 = 0x0200_0000;
+const UI_SURFACE_MAX_PHYS_EXCLUSIVE: u64 = 1u64 << 39;
 const UI_SURFACE_BYTES_PER_PIXEL: u32 = 4;
 
 const _: () = {
@@ -23,6 +24,7 @@ const _: () = {
     assert!(UI_SURFACE_GPU_BASE < UI_SURFACE_GPU_LIMIT);
     assert!(UI_SURFACE_MAX_BYTES <= UI_SURFACE_GPU_LIMIT - UI_SURFACE_GPU_BASE);
     assert!(UI_SURFACE_GPU_LIMIT <= crate::intel::gpgpu::DIRECT_RCS_PPGTT_LIMIT_BYTES);
+    assert!(UI_SURFACE_MAX_PHYS_EXCLUSIVE <= 1u64 << 46);
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -96,6 +98,7 @@ static SURFACE_TOO_LARGE_REJECTIONS: AtomicU64 = AtomicU64::new(0);
 static HANDLE_CAPACITY_REJECTIONS: AtomicU64 = AtomicU64::new(0);
 static PRODUCER_VA_CAPACITY_REJECTIONS: AtomicU64 = AtomicU64::new(0);
 static DMA_CAPACITY_REJECTIONS: AtomicU64 = AtomicU64::new(0);
+static HIGH_PHYSICAL_ADMISSIONS: AtomicU64 = AtomicU64::new(0);
 
 pub fn create_surface(width: u32, height: u32, format: UiSurfaceFormat) -> Result<UiSurfaceHandle> {
     create_surface_with_initialization(width, height, format, true)
@@ -148,7 +151,7 @@ fn create_surface_with_initialization(
         log_allocation_rejected("producer-va-capacity", active, width, height, pitch, byte_len);
         return Err(Error::OutOfMemory);
     };
-    let Some((phys, virt)) = crate::dma::alloc(byte_len, crate::intel::WARM_ALIGN) else {
+    let Some((phys, virt)) = allocate_surface_backing(byte_len) else {
         drop(surfaces);
         log_allocation_rejected("dma-capacity", active, width, height, pitch, byte_len);
         return Err(Error::OutOfMemory);
@@ -179,6 +182,35 @@ fn create_surface_with_initialization(
         byte_len,
     });
     Ok(UiSurfaceHandle::from_slot(slot))
+}
+
+fn allocate_surface_backing(byte_len: usize) -> Option<(u64, *mut u8)> {
+    // UI4 frame pixels are not consumed by a legacy 32-bit DMA device. The
+    // producer imports them through a private Gen12 PPGTT and presentation
+    // imports the selected front buffer through the Gen12 display GGTT. Both
+    // page-table formats carry physical addresses above 4 GiB. Prefer the low
+    // DMA arena while it has space, but preserve UI admission by falling back
+    // to ordinary system memory within XeLP's conservative 39-bit range.
+    crate::dma::alloc(byte_len, crate::intel::WARM_ALIGN).or_else(|| {
+        let allocation = crate::dma::alloc_with_max(
+            byte_len,
+            crate::intel::WARM_ALIGN,
+            Some(UI_SURFACE_MAX_PHYS_EXCLUSIVE),
+        )?;
+        let occurrence = HIGH_PHYSICAL_ADMISSIONS
+            .fetch_add(1, Ordering::Relaxed)
+            .saturating_add(1);
+        if occurrence <= 8 || occurrence.is_power_of_two() {
+            crate::log_info!(
+                target: "ui4";
+                "ui4 trusted-surface backing admitted from high physical memory occurrence={} phys=0x{:X} bytes=0x{:X} reason=sub4g-dma-capacity ownership=producer-ppgtt+display-ggtt\n",
+                occurrence,
+                allocation.0,
+                byte_len,
+            );
+        }
+        Some(allocation)
+    })
 }
 
 fn allocate_surface_gpu_va(surfaces: &[Option<TrustedUiSurface>], byte_len: usize) -> Option<u64> {
@@ -224,7 +256,7 @@ fn log_allocation_rejected(
         _ => &DMA_CAPACITY_REJECTIONS,
     };
     let occurrences = counter.fetch_add(1, Ordering::Relaxed).saturating_add(1);
-    if occurrences == 1 {
+    if occurrences <= 8 {
         crate::log_warn!(
             target: "ui4";
             "ui4 trusted-surface allocation rejected reason={} occurrences={} active={} requested={} handle_max={} request={}x{} pitch=0x{:X} bytes=0x{:X} max_surface_bytes=0x{:X} producer_va=0x{:X}..0x{:X} action=reject-create\n",

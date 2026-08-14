@@ -2078,22 +2078,59 @@ fn prepare_stamp_scenes(
     Ok((scenes, glyphs))
 }
 
+fn allocate_font_stamp_output(
+    ticket: FontKernelTicket,
+    width: u32,
+    height: u32,
+) -> Result<crate::intel::gpgpu::GpgpuOwnedRgba8Surface, FontKernelError> {
+    let Some(storage) = crate::intel::gpgpu::allocate_font_instance_rgba8_surface(width, height)
+    else {
+        let stats = crate::phys::pmm_stats();
+        crate::log_warn!(
+            target: "global";
+            "font-kernel-service: output allocation rejected ticket={} extent={}x{} rgba_bytes={} pmm_free_bytes={} pmm_largest_free_bytes={} pmm_free_regions={} admission=before-temporary-masks\n",
+            ticket.raw(),
+            width,
+            height,
+            u64::from(width).saturating_mul(u64::from(height)).saturating_mul(4),
+            stats.map_or(0, |value| value.free_bytes),
+            stats.map_or(0, |value| value.largest_free_region),
+            stats.map_or(0, |value| value.free_regions),
+        );
+        return Err(FontKernelError::Unavailable("font-stamp-output-allocation"));
+    };
+    Ok(storage)
+}
+
 fn process_stamp(
     ticket: FontKernelTicket,
     request: &FontStampRequest,
 ) -> Result<FontStampedBuffer, FontKernelError> {
     ensure_font_rcs_lane_available()?;
-    let (scenes, glyphs) = prepare_stamp_scenes(ticket, request)?;
-    let (origin_px, width, height) = match request.fit {
-        FontStampFit::Canvas => {
-            let scene = &request.layers[0].scene;
-            ([0, 0], scene.raster_width, scene.raster_height)
-        }
-        FontStampFit::Tight => tight_stamp_bounds(scenes.as_slice())?,
+    // A canvas-fit request already names its exact final allocation. Reserve
+    // that largest contiguous resource before temporary retained masks can
+    // fragment the shared DMA/Font-RCS VA arenas. This also keeps the
+    // admission order aligned with the RenderTicket contract: secure the
+    // destination first, then admit dependent GPU work. Tight-fit requests
+    // still have to derive their bounds from the prepared masks.
+    let canvas_output = if request.fit == FontStampFit::Canvas {
+        let scene = &request.layers[0].scene;
+        set_active_stage(ticket, "output-allocate");
+        Some(allocate_font_stamp_output(ticket, scene.raster_width, scene.raster_height)?)
+    } else {
+        None
     };
-    set_active_stage(ticket, "output-allocate");
-    let storage = crate::intel::gpgpu::allocate_font_instance_rgba8_surface(width, height)
-        .ok_or(FontKernelError::Unavailable("font-stamp-output-allocation"))?;
+    let (scenes, glyphs) = prepare_stamp_scenes(ticket, request)?;
+    let (origin_px, storage) = match (request.fit, canvas_output) {
+        (FontStampFit::Canvas, Some(storage)) => ([0, 0], storage),
+        (FontStampFit::Tight, None) => {
+            let (origin_px, width, height) = tight_stamp_bounds(scenes.as_slice())?;
+            set_active_stage(ticket, "output-allocate");
+            let storage = allocate_font_stamp_output(ticket, width, height)?;
+            (origin_px, storage)
+        }
+        _ => return Err(FontKernelError::InvalidRequest("font-stamp-fit-state")),
+    };
     let surface = storage.surface();
     // The owned RGBA allocation is zeroed and DMA-flushed before return.
     // Dispatching another GPU clear here only adds direct-RCS contention.

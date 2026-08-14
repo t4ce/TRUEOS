@@ -1162,6 +1162,7 @@ impl WindowBroker {
         }
         if composition_changed {
             self.mark_composition_changed();
+            super::cursor_frame_inout::selection_strip_stack_changed();
         }
         if interaction_changed {
             super::input_broker::notify_slot4_visual_change();
@@ -1187,6 +1188,7 @@ impl WindowBroker {
         }
         if advanced != 0 {
             self.mark_composition_changed();
+            super::cursor_frame_inout::selection_strip_stack_changed();
         }
         advanced
     }
@@ -1654,6 +1656,7 @@ pub(crate) fn commit_window_frame_replacement(
         WindowState::Pending | WindowState::Ready => {}
     }
     let previous_placement = current.placement;
+    let stack_changed = current.state == WindowState::Pending || previous_placement != placement;
     // The plane follows this window's lease, not its frame plan.
     let window = &mut broker.windows[slot];
     window.frame = frame;
@@ -1668,6 +1671,9 @@ pub(crate) fn commit_window_frame_replacement(
     let notify_resize = producer_resize_required(window.interaction, previous_placement, placement);
     broker.mark_composition_changed();
     drop(broker);
+    if stack_changed {
+        super::cursor_frame_inout::selection_strip_stack_changed();
+    }
     if notify_resize {
         super::input_broker::enqueue_window_resize(
             owner,
@@ -1726,7 +1732,7 @@ pub(crate) fn set_window_placement(
         );
     }
     if changed {
-        super::cursor_frame_inout::frame_visual_changed(owner, id);
+        super::cursor_frame_inout::selection_strip_stack_changed();
     }
     Ok(())
 }
@@ -1795,11 +1801,15 @@ pub(crate) fn set_windows_visible(
     if !changed_ids.is_empty() {
         broker.mark_composition_changed();
     }
+    let stack_changed = !changed_ids.is_empty();
     let composition_revision = broker.composition_revision;
     drop(broker);
 
     for id in changed_ids {
         super::cursor_frame_inout::frame_visual_changed(owner, id);
+    }
+    if stack_changed {
+        super::cursor_frame_inout::selection_strip_stack_changed();
     }
     Ok(composition_revision)
 }
@@ -1833,7 +1843,7 @@ pub(crate) fn move_window(
     }
     drop(broker);
     if changed {
-        super::cursor_frame_inout::frame_visual_changed(owner, id);
+        super::cursor_frame_inout::selection_strip_stack_changed();
     }
     Ok(())
 }
@@ -1952,7 +1962,7 @@ pub(crate) fn toggle_window_maximized(
         );
     }
     if changed {
-        super::cursor_frame_inout::frame_visual_changed(owner, id);
+        super::cursor_frame_inout::selection_strip_stack_changed();
     }
     Ok(WindowPlacementTransition {
         previous,
@@ -1985,6 +1995,7 @@ pub(crate) fn publish_window_frame(
     }
     let mut broker = WINDOW_BROKER.lock();
     let window = broker.checked_window_mut(owner, id)?;
+    let became_ready = window.state == WindowState::Pending;
     window.state = WindowState::Ready;
     window.publish_serial = next_serial(window.publish_serial);
     window.revision = next_serial(window.revision);
@@ -1993,6 +2004,9 @@ pub(crate) fn publish_window_frame(
     let publish_serial = window.publish_serial;
     broker.mark_composition_changed();
     drop(broker);
+    if became_ready {
+        super::cursor_frame_inout::selection_strip_stack_changed();
+    }
     super::cursor_frame_inout::frame_visual_changed(owner, id);
     Ok(publish_serial)
 }
@@ -2010,6 +2024,7 @@ pub(crate) fn publish_window_frames(
         return Err(WindowBrokerError::EmptyDamage);
     }
     let mut broker = WINDOW_BROKER.lock();
+    let mut stack_changed = false;
     for (index, (id, _)) in publications.iter().copied().enumerate() {
         if publications[..index]
             .iter()
@@ -2029,7 +2044,8 @@ pub(crate) fn publish_window_frames(
             return Err(WindowBrokerError::OwnerMismatch);
         }
         match window.state {
-            WindowState::Pending | WindowState::Ready => {}
+            WindowState::Pending => stack_changed = true,
+            WindowState::Ready => {}
             WindowState::Closing => return Err(WindowBrokerError::SessionClosed),
             WindowState::Closed => return Err(WindowBrokerError::Closed),
         }
@@ -2047,6 +2063,9 @@ pub(crate) fn publish_window_frames(
         broker.mark_composition_changed();
     }
     drop(broker);
+    if stack_changed {
+        super::cursor_frame_inout::selection_strip_stack_changed();
+    }
     for (id, _) in publications.iter().copied() {
         super::cursor_frame_inout::frame_visual_changed(owner, id);
     }
@@ -2137,6 +2156,7 @@ fn note_window_interaction(
             id.raw(),
         );
         super::cursor_frame_inout::frame_visual_changed(owner, id);
+        super::cursor_frame_inout::selection_strip_stack_changed();
         return Ok(raised);
     }
     let Some(plane) = broker.claim_lease(id, now_ms) else {
@@ -2167,6 +2187,7 @@ fn note_window_interaction(
         LEASE_IDLE_GRACE_MS,
     );
     super::cursor_frame_inout::frame_visual_changed(owner, id);
+    super::cursor_frame_inout::selection_strip_stack_changed();
     Ok(plane)
 }
 

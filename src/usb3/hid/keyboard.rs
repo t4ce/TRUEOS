@@ -122,7 +122,40 @@ fn hid_boot_keycode_to_ascii(key: u8, shift: bool) -> Option<char> {
         0x36 => Some(if shift { '<' } else { ',' }),
         0x37 => Some(if shift { '>' } else { '.' }),
         0x38 => Some(if shift { '?' } else { '/' }),
+        // The boot report carries keypad keys as ordinary HID usages. NumLock
+        // is a host-owned LED state and is not present in the input report, so
+        // TRUEOS treats the numeric pad as text input by default.
+        0x54 => Some('/'),
+        0x55 => Some('*'),
+        0x56 => Some('-'),
+        0x57 => Some('+'),
+        0x59 => Some('1'),
+        0x5A => Some('2'),
+        0x5B => Some('3'),
+        0x5C => Some('4'),
+        0x5D => Some('5'),
+        0x5E => Some('6'),
+        0x5F => Some('7'),
+        0x60 => Some('8'),
+        0x61 => Some('9'),
+        0x62 => Some('0'),
+        0x63 => Some('.'),
+        0x67 => Some('='),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::boot_ascii_for_keys;
+
+    #[test]
+    fn keypad_usages_project_to_text() {
+        assert_eq!(boot_ascii_for_keys(0, [0x5C, 0x5D, 0x5E, 0x54, 0x55, 0x56]), *b"456/*-");
+        assert_eq!(
+            boot_ascii_for_keys(0, [0x57, 0x59, 0x62, 0x63, 0x67, 0]),
+            [b'+', b'1', b'0', b'.', b'=', 0]
+        );
     }
 }
 

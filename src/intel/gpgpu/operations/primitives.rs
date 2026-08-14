@@ -366,7 +366,24 @@ pub(crate) fn allocate_font_instance_rgba8_surface_cleared(
     if bytes > DIRECT_RCS_FONT_COVERAGE_MASK_MAX_BYTES {
         return None;
     }
-    let (phys, virt) = crate::dma::alloc(bytes, super::WARM_ALIGN)?;
+    // This allocation is an ordinary Font-RCS PPGTT resource, not a legacy
+    // 32-bit device DMA or direct-display surface. Prefer low physical memory
+    // for continuity with the other small font resources, but do not reject a
+    // large document canvas merely because the sub-4-GiB PMM ranges became
+    // fragmented late in boot. Gen12 PPGTT leaves carry high physical page
+    // addresses and the HHDM maps the backing for CPU initialization. Keep
+    // the fallback within XeLP's conservative 39-bit physical-address range.
+    let (phys, virt) = crate::dma::alloc(bytes, super::WARM_ALIGN).or_else(|| {
+        let allocation =
+            crate::dma::alloc_with_max(bytes, super::WARM_ALIGN, Some(1u64 << 39))?;
+        crate::log_info!(
+            target: "gpgpu";
+            "intel/gpgpu: font RGBA backing admitted from high physical memory phys=0x{:X} bytes=0x{:X} reason=sub4g-fragmented ownership=font-ppgtt-only\n",
+            allocation.0,
+            bytes,
+        );
+        Some(allocation)
+    })?;
     let Some(gpu) = reserve_font_coverage_gpu_va(bytes) else {
         crate::dma::dealloc(virt, bytes);
         return None;

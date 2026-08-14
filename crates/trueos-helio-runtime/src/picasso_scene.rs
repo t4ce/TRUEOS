@@ -218,6 +218,14 @@ pub struct FontCanvas {
     pub rect: Rect,
 }
 
+/// Stable reference into the producer-owned image-resource SceneStore.
+///
+/// The primitive table retains only this logical identity. Encoded bytes,
+/// decoded RGBA, UI4 sprite ids and eventual GPU leases remain resource-table
+/// or renderer facts rather than primitive-row payload.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ImageResourceRef(pub SceneHandle);
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Primitive {
     SolidRect {
@@ -234,6 +242,12 @@ pub enum Primitive {
         radii: CornerRadii,
         width: f32,
         color: Color,
+    },
+    Image {
+        rect: Rect,
+        source: Rect,
+        resource: ImageResourceRef,
+        opacity: u8,
     },
     /// Ordered marker for the separately retained FontKernel canvas.
     FontCanvas(FontCanvas),
@@ -256,6 +270,15 @@ impl Primitive {
             radii,
             width,
             color,
+        }
+    }
+
+    pub const fn image(rect: Rect, source: Rect, resource: ImageResourceRef, opacity: u8) -> Self {
+        Self::Image {
+            rect,
+            source,
+            resource,
+            opacity,
         }
     }
 
@@ -288,6 +311,13 @@ impl Primitive {
                     return Err(SceneError::InvalidBorderWidth);
                 }
                 Ok(())
+            }
+            Self::Image { rect, source, .. } => {
+                validate_nonempty_rect(*rect)?;
+                if source.x < 0.0 || source.y < 0.0 {
+                    return Err(SceneError::InvalidRect);
+                }
+                validate_nonempty_rect(*source)
             }
             Self::FontCanvas(canvas) => validate_nonempty_rect(canvas.rect),
             Self::FontLookup(run) => {
@@ -393,6 +423,20 @@ pub enum LoweredCommand {
         width: u32,
         height: u32,
     },
+    /// Viewport-local crop of one revisioned image resource.
+    Image {
+        order: u32,
+        x: u16,
+        y: u16,
+        width: u16,
+        height: u16,
+        source_x: u16,
+        source_y: u16,
+        source_width: u16,
+        source_height: u16,
+        resource: ImageResourceRef,
+        opacity: u8,
+    },
     /// Viewport-visible logical text row. The renderer resolves this compact
     /// lookup through FontKernel and retains the returned resource leases for
     /// its render ticket; no outline or atlas bytes transit SceneDB.
@@ -409,6 +453,7 @@ pub enum LoweredCommand {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LowerError {
     InvalidViewport,
+    ImageCoordinateOverflow,
     CommandLimit { limit: usize },
 }
 
@@ -570,6 +615,64 @@ impl PicassoScene {
                         &mut output,
                     )?;
                 }
+                Primitive::Image {
+                    rect,
+                    source,
+                    resource,
+                    opacity,
+                } => {
+                    if let Some((
+                        x,
+                        y,
+                        width,
+                        height,
+                        source_x,
+                        source_y,
+                        source_width,
+                        source_height,
+                    )) = image_crop(*rect, *source, viewport)
+                    {
+                        let [
+                            x,
+                            y,
+                            width,
+                            height,
+                            source_x,
+                            source_y,
+                            source_width,
+                            source_height,
+                        ] = [
+                            x,
+                            y,
+                            width,
+                            height,
+                            source_x,
+                            source_y,
+                            source_width,
+                            source_height,
+                        ]
+                        .map(|value| {
+                            u16::try_from(value).map_err(|_| LowerError::ImageCoordinateOverflow)
+                        });
+                        push_bounded(
+                            &mut output,
+                            LoweredCommand::Image {
+                                order: row.order,
+                                x: x?,
+                                y: y?,
+                                width: width?,
+                                height: height?,
+                                source_x: source_x?,
+                                source_y: source_y?,
+                                source_width: source_width?,
+                                source_height: source_height?,
+                                resource: *resource,
+                                opacity: *opacity,
+                            },
+                            limit,
+                        )?;
+                    }
+                }
                 Primitive::FontCanvas(canvas) => {
                     if let Some((x, y, source_x, source_y, width, height)) =
                         font_canvas_crop(canvas.rect, viewport)
@@ -653,7 +756,7 @@ fn validate_ordered_rows(rows: &[PrimitiveRow]) -> Result<(), SceneError> {
             // rows deliberately follow it, while geometry remains forbidden,
             // so a consumer selects one text representation without changing
             // DOM paint order.
-            Primitive::FontLookup(_) => {}
+            Primitive::FontLookup(_) | Primitive::Image { .. } => {}
             _ if saw_font => return Err(SceneError::GeometryAfterFontCanvas),
             _ => {}
         }
@@ -912,6 +1015,37 @@ fn font_canvas_crop(rect: Rect, viewport: Viewport) -> Option<(u32, u32, u32, u3
     ))
 }
 
+fn image_crop(
+    rect: Rect,
+    source: Rect,
+    viewport: Viewport,
+) -> Option<(u32, u32, u32, u32, u32, u32, u32, u32)> {
+    let (x, y, width, height) = clipped_integer_rect(rect, viewport)?;
+    let scene_left = viewport.x + x as f32;
+    let scene_top = viewport.y + y as f32;
+    let scene_right = scene_left + width as f32;
+    let scene_bottom = scene_top + height as f32;
+    let map_x = |scene: f32| source.x + (scene - rect.x) * source.width / rect.width;
+    let map_y = |scene: f32| source.y + (scene - rect.y) * source.height / rect.height;
+    let source_left = libm::floorf(map_x(scene_left).max(source.x));
+    let source_top = libm::floorf(map_y(scene_top).max(source.y));
+    let source_right = libm::ceilf(map_x(scene_right).min(source.x + source.width));
+    let source_bottom = libm::ceilf(map_y(scene_bottom).min(source.y + source.height));
+    if source_right <= source_left || source_bottom <= source_top {
+        return None;
+    }
+    Some((
+        x,
+        y,
+        width,
+        height,
+        source_left as u32,
+        source_top as u32,
+        (source_right - source_left) as u32,
+        (source_bottom - source_top) as u32,
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -944,6 +1078,7 @@ mod tests {
             .map(|command| match command {
                 LoweredCommand::SolidSpan { order, .. }
                 | LoweredCommand::FontCanvas { order, .. }
+                | LoweredCommand::Image { order, .. }
                 | LoweredCommand::FontLookup { order, .. } => *order,
             })
             .collect();
@@ -958,6 +1093,48 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn image_resource_lowers_after_font_canvas_with_exact_crop() {
+        let resource = ImageResourceRef(SceneHandle {
+            slot: 3,
+            generation: 2,
+        });
+        let mut scene = PicassoScene::new();
+        scene
+            .replace_ordered([
+                PrimitiveRow::new(10, Primitive::font_canvas(Rect::new(0.0, 0.0, 200.0, 100.0))),
+                PrimitiveRow::new(
+                    20,
+                    Primitive::image(
+                        Rect::new(10.0, 20.0, 100.0, 50.0),
+                        Rect::new(0.0, 0.0, 200.0, 100.0),
+                        resource,
+                        192,
+                    ),
+                ),
+            ])
+            .unwrap();
+
+        let commands = scene.lower(Viewport::new(35.0, 30.0, 40, 20), 2).unwrap();
+        assert_eq!(commands.len(), 2);
+        assert_eq!(
+            commands[1],
+            LoweredCommand::Image {
+                order: 20,
+                x: 0,
+                y: 0,
+                width: 40,
+                height: 20,
+                source_x: 50,
+                source_y: 20,
+                source_width: 80,
+                source_height: 40,
+                resource,
+                opacity: 192,
+            }
+        );
     }
 
     #[test]
@@ -1030,7 +1207,9 @@ mod tests {
         let commands = scene.lower(Viewport::new(0.0, 0.0, 8, 6), 64).unwrap();
         assert!(commands.iter().all(|command| match command {
             LoweredCommand::SolidSpan { width, .. } => *width > 0,
-            LoweredCommand::FontCanvas { .. } | LoweredCommand::FontLookup { .. } => false,
+            LoweredCommand::FontCanvas { .. }
+            | LoweredCommand::Image { .. }
+            | LoweredCommand::FontLookup { .. } => false,
         }));
         assert!(
             commands
@@ -1062,7 +1241,9 @@ mod tests {
                 height,
                 ..
             } => *x < 8 && *y < 6 && x + width <= 8 && y + height <= 6,
-            LoweredCommand::FontCanvas { .. } | LoweredCommand::FontLookup { .. } => false,
+            LoweredCommand::FontCanvas { .. }
+            | LoweredCommand::Image { .. }
+            | LoweredCommand::FontLookup { .. } => false,
         }));
     }
 

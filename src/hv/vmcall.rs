@@ -192,6 +192,13 @@ pub const OP_BP_UI4_CONTEXT_MENU_EVENT_TAKE: u32 = 0x120; // arg0 window -> rc +
 pub const OP_BP_IMAGE_SOURCE_INFO: u32 = 0x121; // payload source name -> ImageSourceInfo
 pub const OP_BP_IMAGE_SOURCE_READ: u32 = 0x122; // arg0 offset,arg1 cap,payload source name -> bytes
 pub const OP_BP_UI4_SCENE_FRAME_SET_HIT_TESTABLE: u32 = 0x123; // arg0 window,arg1 enabled -> rc
+pub const OP_BP_VMEDIA_IMAGE_DECODE_BEGIN: u32 = 0x12D; // arg0 format,arg1 encoded bytes -> operation id/rc
+pub const OP_BP_VMEDIA_IMAGE_DECODE_WRITE: u32 = 0x12E; // arg0 operation,arg1 offset,payload encoded chunk -> rc
+pub const OP_BP_VMEDIA_IMAGE_DECODE_COMMIT: u32 = 0x12F; // arg0 operation -> rc
+pub const OP_BP_VMEDIA_IMAGE_DECODE_STATUS: u32 = 0x130; // arg0 operation -> pending/ready/rc
+pub const OP_BP_VMEDIA_IMAGE_DECODE_INFO: u32 = 0x131; // arg0 operation -> ImageInfo payload/rc
+pub const OP_BP_VMEDIA_IMAGE_DECODE_READ: u32 = 0x132; // arg0 operation,arg1 hi32 offset/lo32 cap -> RGBA bytes
+pub const OP_BP_VMEDIA_IMAGE_DECODE_DISCARD: u32 = 0x133; // arg0 operation -> rc
 pub const OP_NET_TCP_WRITE: u32 = 0x10; // request payload -> net tcp shell tx
 pub const OP_NET_TCP_READ: u32 = 0x11; // net tcp shell rx -> response payload
 pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
@@ -2365,6 +2372,73 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 }
                 Err(error) => write_response(vm_id, seq, STATUS_OK, (error as i64) as u64, 0),
             }
+            DispatchOutcome::Resume
+        }
+        OP_BP_VMEDIA_IMAGE_DECODE_BEGIN => {
+            let owner = crate::r::io::async_fs_cabi::owner_for_vm(vm_id);
+            let rc = crate::r::media_service::begin(owner, arg0 as u32, arg1 as usize);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_VMEDIA_IMAGE_DECODE_WRITE => {
+            let Some(payload) = request_payload(vm_id, req_len) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let owner = crate::r::io::async_fs_cabi::owner_for_vm(vm_id);
+            let rc = crate::r::media_service::write(owner, arg0 as u32, arg1 as usize, payload);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_VMEDIA_IMAGE_DECODE_COMMIT => {
+            let owner = crate::r::io::async_fs_cabi::owner_for_vm(vm_id);
+            let rc = crate::r::media_service::commit(owner, arg0 as u32);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_VMEDIA_IMAGE_DECODE_STATUS => {
+            let owner = crate::r::io::async_fs_cabi::owner_for_vm(vm_id);
+            let rc = crate::r::media_service::status(owner, arg0 as u32);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_VMEDIA_IMAGE_DECODE_INFO => {
+            let owner = crate::r::io::async_fs_cabi::owner_for_vm(vm_id);
+            match crate::r::media_service::info(owner, arg0 as u32) {
+                Ok(info) => write_record_response(vm_id, seq, 0, &info),
+                Err(error) => write_response(vm_id, seq, STATUS_OK, (error as i64) as u64, 0),
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_VMEDIA_IMAGE_DECODE_READ => {
+            let owner = crate::r::io::async_fs_cabi::owner_for_vm(vm_id);
+            let offset = (arg1 >> 32) as usize;
+            let capacity = (arg1 as u32 as usize).min(PAYLOAD_CAP);
+            if capacity == 0 {
+                write_response(
+                    vm_id,
+                    seq,
+                    STATUS_OK,
+                    (crate::r::media_service::ERR_INVALID as i64) as u64,
+                    0,
+                );
+                return DispatchOutcome::Resume;
+            }
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let out = unsafe { &mut (&mut (*p).payload)[..capacity] };
+            match crate::r::media_service::read(owner, arg0 as u32, offset, out) {
+                Ok(copied) => write_response(vm_id, seq, STATUS_OK, copied as u64, copied as u32),
+                Err(error) => write_response(vm_id, seq, STATUS_OK, (error as i64) as u64, 0),
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_VMEDIA_IMAGE_DECODE_DISCARD => {
+            let owner = crate::r::io::async_fs_cabi::owner_for_vm(vm_id);
+            let rc = crate::r::media_service::discard(owner, arg0 as u32);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_QJS_WORKBENCH_EVAL_V1 => {

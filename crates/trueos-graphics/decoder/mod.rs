@@ -3,6 +3,7 @@
 //! These modules keep the current decoding behavior intact while giving PNG
 //! and JPEG a shared graphics home.
 
+pub(crate) mod bmp;
 pub(crate) mod jpeg;
 pub(crate) mod jpeg_layout;
 pub(crate) mod png;

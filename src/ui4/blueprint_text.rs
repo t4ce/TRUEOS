@@ -516,6 +516,7 @@ struct BlueprintSceneSurface {
     vgpu_surface: Option<u64>,
     particle_craft: Option<GpgpuOwnedParticleCraftState>,
     placement: WindowPlacement,
+    launch_selection: Option<(Ui4CursorSource, u32, u32)>,
     skybox: Option<OwnedRgb565Surface>,
     skybox_upload: Option<Rgb565Upload>,
     sprites: Vec<(u32, OwnedRgba8Surface)>,
@@ -987,6 +988,15 @@ fn open_blueprint_frame(
             return 0;
         }
     };
+    let desktop_shell_launch = super::input_broker::claim_desktop_shell_launch(owner);
+    let (x, y) = desktop_shell_launch.map_or((x, y), |launch| {
+        let (screen_width, screen_height) =
+            crate::intel::active_scanout_dimensions().unwrap_or((width, height));
+        (
+            launch.x.min(screen_width.saturating_sub(width)) as i32,
+            launch.y.min(screen_height.saturating_sub(height)) as i32,
+        )
+    });
     let placement = WindowPlacement {
         x,
         y,
@@ -1047,6 +1057,8 @@ fn open_blueprint_frame(
                 vgpu_surface: None,
                 particle_craft: None,
                 placement,
+                launch_selection: desktop_shell_launch
+                    .map(|launch| (launch.source, launch.x, launch.y)),
                 skybox: None,
                 skybox_upload: None,
                 sprites: Vec::new(),
@@ -1091,6 +1103,7 @@ fn open_blueprint_frame(
         vgpu_surface: None,
         particle_craft: None,
         placement,
+        launch_selection: desktop_shell_launch.map(|launch| (launch.source, launch.x, launch.y)),
         skybox: None,
         skybox_upload: None,
         sprites: Vec::new(),
@@ -4190,6 +4203,33 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_publish(
     surface.stamped_text_cursor = 0;
     surface.stamped_text_pending = None;
     surface.stamped_text_rendered = false;
+    let launch_selection = surface.launch_selection.take();
+    let launched_window = surface.window;
+    drop(surfaces);
+    if let Some((source, x, y)) = launch_selection {
+        match super::input_broker::select_window_for_cursor_at(source, owner, launched_window, x, y)
+        {
+            Ok(_) => crate::log_info!(target: "ui4";
+                "ui4/input: desktop shell selected owner={:?} window={} cursor={}:{}:{} position={},{} trigger=desktop-shell-launch\n",
+                owner,
+                launched_window.raw(),
+                source.controller_id,
+                source.slot_id,
+                source.ep_target,
+                x,
+                y,
+            ),
+            Err(error) => crate::log_warn!(target: "ui4";
+                "ui4/input: desktop shell selection failed owner={:?} window={} cursor={}:{}:{} error={:?}\n",
+                owner,
+                launched_window.raw(),
+                source.controller_id,
+                source.slot_id,
+                source.ep_target,
+                error,
+            ),
+        }
+    }
     0
 }
 

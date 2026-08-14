@@ -22,6 +22,12 @@ pub(crate) fn prebind_import_readiness(name: &str) -> u32 {
             | crate::r::readiness::BACKGROUND_AP_WORKER_READY;
     }
 
+    if name.starts_with("trueos_cabi_vmedia_") {
+        // Raster decode is owner-scoped and serviced by the background media
+        // worker pool; it never executes a decoder in the VMCALL handler.
+        mask |= crate::r::readiness::BACKGROUND_AP_WORKER_READY;
+    }
+
     if name.starts_with("trueos_cabi_net_fetch_") {
         mask |= crate::r::readiness::NET_ANY_CONFIGURED
             | crate::r::readiness::NET_SOCKET_READY

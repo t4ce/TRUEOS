@@ -389,19 +389,7 @@ fn software_cursor_rects() -> Slot4Rects {
 
     if let Some(output) = super::OutputId::from_slot(0) {
         for strip in super::selection_strips(output, screen_w, screen_h) {
-            let count = strip.colors.len() as u64;
-            for (index, color) in strip.colors.iter().copied().enumerate() {
-                let start = u64::from(strip.width).saturating_mul(index as u64) / count;
-                let end = u64::from(strip.width).saturating_mul(index as u64 + 1) / count;
-                push_overlay_rect(
-                    &mut rects,
-                    strip.x.saturating_add(start as u32),
-                    strip.y,
-                    end.saturating_sub(start) as u32,
-                    1,
-                    color,
-                );
-            }
+            push_overlay_rect(&mut rects, strip.x, strip.y, strip.width, 1, strip.color);
         }
     }
 

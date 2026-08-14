@@ -130,4 +130,9 @@
 # The async filesystem record-key start call is strictly additive. It exposes
 # only the bounded metadata already stored in a caller-readable TRUEOSFS file
 # header; older v2 artifacts import neither the CABI symbol nor its new vmcall.
-fe809c46aadfe0150b1b1e290ba0d296e99c6310ed91e87eb56b17b5b7d50550
+# The vmedia image-decode operation calls are strictly additive. They transfer
+# bounded encoded chunks into an owner-scoped background operation and copy a
+# validated RGBA8 result back in bounded chunks. No decoder runs in a VMCALL,
+# and no kernel pointer, GPU address, UI4 frame, or display authority crosses
+# the ABI. Older v2 artifacts import none of these seven symbols.
+257ee9cb1002cc50d18e6b09b9caab8591cf034e2b389f67e0ef18d1fe7fa3c6

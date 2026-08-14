@@ -350,6 +350,7 @@ fn hid_boot_keycode_to_named_key(key: u8) -> Option<u16> {
         0x50 => Some(KEYBOARD_KEY_ARROW_LEFT),
         0x51 => Some(KEYBOARD_KEY_ARROW_DOWN),
         0x52 => Some(KEYBOARD_KEY_ARROW_UP),
+        0x58 => Some(KEYBOARD_KEY_ENTER),
         _ => None,
     }
 }

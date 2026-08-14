@@ -118,7 +118,12 @@ pub(crate) struct CursorSelectionStrip {
     pub(crate) x: u32,
     pub(crate) y: u32,
     pub(crate) width: u32,
-    pub(crate) colors: Vec<crate::graphics::primitives::Rgba8, MAX_CURSOR_SOURCES>,
+    pub(crate) color: crate::graphics::primitives::Rgba8,
+}
+
+struct GroupedCursorSelectionStrip {
+    key: CursorFrameKey,
+    colors: Vec<crate::graphics::primitives::Rgba8, MAX_CURSOR_SOURCES>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -449,55 +454,152 @@ pub(crate) fn selection_strips(
     output: OutputId,
     screen_width: u32,
     screen_height: u32,
-) -> Vec<CursorSelectionStrip, MAX_CURSOR_SOURCES> {
+) -> alloc::vec::Vec<CursorSelectionStrip> {
     let selectors = CURSOR_FRAME_RIG.lock().selecting_cursors.clone();
-    let mut strips: Vec<(CursorFrameKey, CursorSelectionStrip), MAX_CURSOR_SOURCES> = Vec::new();
+    let windows = super::window_broker::visible_windows_for_output(output);
+    let mut grouped: Vec<GroupedCursorSelectionStrip, MAX_CURSOR_SOURCES> = Vec::new();
     for selector in selectors {
-        if let Some((_, strip)) = strips.iter_mut().find(|(key, _)| *key == selector.selected) {
-            let _ = strip.colors.push(selector.color);
-            continue;
-        }
-        let Some(window) = super::window_broker::window_snapshot(
-            selector.selected.owner,
-            selector.selected.window,
-        ) else {
-            continue;
-        };
-        if window.output != output
-            || window.state != WindowState::Ready
-            || !window.placement.visible
-            || window.placement.y <= 0
+        if let Some(strip) = grouped
+            .iter_mut()
+            .find(|strip| strip.key == selector.selected)
         {
-            continue;
-        }
-        let top = window.placement.y - 1;
-        if top < 0 || top as u32 >= screen_height {
-            continue;
-        }
-        let left = i64::from(window.placement.x).clamp(0, i64::from(screen_width));
-        let right = i64::from(window.placement.x)
-            .saturating_add(i64::from(window.placement.width))
-            .clamp(0, i64::from(screen_width));
-        if right <= left {
+            let _ = strip.colors.push(selector.color);
             continue;
         }
         let mut colors = Vec::new();
         let _ = colors.push(selector.color);
-        let _ = strips.push((
-            selector.selected,
-            CursorSelectionStrip {
-                x: left as u32,
-                y: top as u32,
-                width: (right - left) as u32,
-                colors,
-            },
-        ));
+        let _ = grouped.push(GroupedCursorSelectionStrip {
+            key: selector.selected,
+            colors,
+        });
     }
-    let mut output = Vec::new();
-    for (_, strip) in strips {
-        let _ = output.push(strip);
+
+    let mut output_strips = alloc::vec::Vec::new();
+    for strip in grouped {
+        let Some(window) = windows
+            .iter()
+            .find(|window| CursorFrameKey::new(window.owner, window.id) == strip.key)
+        else {
+            continue;
+        };
+        let placement = window.presentation_placement;
+        if window.output != output
+            || window.state != WindowState::Ready
+            || !placement.visible
+            || placement.y <= 0
+        {
+            continue;
+        }
+        let top = placement.y - 1;
+        if top < 0 || top as u32 >= screen_height {
+            continue;
+        }
+        let left = i64::from(placement.x).clamp(0, i64::from(screen_width));
+        let right = i64::from(placement.x)
+            .saturating_add(i64::from(placement.width))
+            .clamp(0, i64::from(screen_width));
+        if right <= left {
+            continue;
+        }
+        let left = left as u32;
+        let right = right as u32;
+        let strip_y = top as u32;
+        let target_stack = window_stack_key(*window);
+        let mut occluders = windows
+            .iter()
+            .copied()
+            .filter(|candidate| candidate.id != window.id || candidate.owner != window.owner)
+            .filter(|candidate| window_stack_key(*candidate) > target_stack)
+            .filter_map(|candidate| {
+                let candidate = candidate.presentation_placement;
+                if !candidate.visible || candidate.opacity == 0 {
+                    return None;
+                }
+                let candidate_top = i64::from(candidate.y);
+                let candidate_bottom = candidate_top.saturating_add(i64::from(candidate.height));
+                let strip_y = i64::from(strip_y);
+                if strip_y < candidate_top || strip_y >= candidate_bottom {
+                    return None;
+                }
+                let occluder_left = i64::from(candidate.x).clamp(i64::from(left), i64::from(right));
+                let occluder_right = i64::from(candidate.x)
+                    .saturating_add(i64::from(candidate.width))
+                    .clamp(i64::from(left), i64::from(right));
+                (occluder_right > occluder_left)
+                    .then_some((occluder_left as u32, occluder_right as u32))
+            })
+            .collect::<alloc::vec::Vec<_>>();
+        merge_horizontal_occluders(&mut occluders);
+
+        let color_count = strip.colors.len() as u64;
+        let strip_width = u64::from(right - left);
+        for (index, color) in strip.colors.iter().copied().enumerate() {
+            let color_left = u64::from(left)
+                .saturating_add(strip_width.saturating_mul(index as u64) / color_count)
+                as u32;
+            let color_right = u64::from(left)
+                .saturating_add(strip_width.saturating_mul(index as u64 + 1) / color_count)
+                as u32;
+            for (visible_left, visible_right) in
+                visible_horizontal_spans(color_left, color_right, &occluders)
+            {
+                output_strips.push(CursorSelectionStrip {
+                    x: visible_left,
+                    y: strip_y,
+                    width: visible_right - visible_left,
+                    color,
+                });
+            }
+        }
     }
-    output
+    output_strips
+}
+
+fn window_stack_key(window: super::WindowSnapshot) -> (usize, i32, WindowId) {
+    (window.plane.slot(), window.placement.z, window.id)
+}
+
+fn merge_horizontal_occluders(occluders: &mut alloc::vec::Vec<(u32, u32)>) {
+    occluders.sort_unstable();
+    let mut write = 0usize;
+    for read in 0..occluders.len() {
+        let (left, right) = occluders[read];
+        if write != 0 && left <= occluders[write - 1].1 {
+            occluders[write - 1].1 = occluders[write - 1].1.max(right);
+            continue;
+        }
+        occluders[write] = (left, right);
+        write += 1;
+    }
+    occluders.truncate(write);
+}
+
+fn visible_horizontal_spans(
+    left: u32,
+    right: u32,
+    occluders: &[(u32, u32)],
+) -> alloc::vec::Vec<(u32, u32)> {
+    let mut spans = alloc::vec::Vec::new();
+    let mut cursor = left;
+    for &(occluder_left, occluder_right) in occluders {
+        if occluder_right <= cursor {
+            continue;
+        }
+        if occluder_left >= right {
+            break;
+        }
+        if occluder_left > cursor {
+            spans.push((cursor, occluder_left.min(right)));
+        }
+        cursor = cursor.max(occluder_right);
+        if cursor >= right {
+            return spans;
+        }
+    }
+    if cursor < right {
+        spans.push((cursor, right));
+    }
+    spans
 }
 
 pub(super) fn frame_visual_changed(owner: WindowOwner, window: WindowId) {
@@ -508,6 +610,14 @@ pub(super) fn frame_visual_changed(owner: WindowOwner, window: WindowId) {
         .iter()
         .any(|cursor| cursor.selected == key)
     {
+        signal_visual_change();
+    }
+}
+
+/// Wake slot 4 when application geometry or hardware-plane ownership changes
+/// can expose or cover part of a selected frame's one-pixel strip.
+pub(super) fn selection_strip_stack_changed() {
+    if !CURSOR_FRAME_RIG.lock().selecting_cursors.is_empty() {
         signal_visual_change();
     }
 }
@@ -679,5 +789,22 @@ mod tests {
 
         assert_eq!(rig.cursor_icon(frame, source(1)), Ui4CursorIcon::Loading);
         assert_eq!(rig.cursor_icon(frame, source(2)), Ui4CursorIcon::ResizeHorizontal);
+    }
+
+    #[test]
+    fn strip_visibility_can_keep_left_right_both_or_nothing() {
+        assert_eq!(visible_horizontal_spans(10, 90, &[]), [(10, 90)]);
+        assert_eq!(visible_horizontal_spans(10, 90, &[(0, 25)]), [(25, 90)]);
+        assert_eq!(visible_horizontal_spans(10, 90, &[(75, 100)]), [(10, 75)]);
+        assert_eq!(visible_horizontal_spans(10, 90, &[(35, 55)]), [(10, 35), (55, 90)]);
+        assert!(visible_horizontal_spans(10, 90, &[(0, 100)]).is_empty());
+    }
+
+    #[test]
+    fn overlapping_occluders_merge_before_strip_clipping() {
+        let mut occluders = alloc::vec![(50, 70), (20, 40), (35, 60), (80, 90)];
+        merge_horizontal_occluders(&mut occluders);
+        assert_eq!(occluders, [(20, 70), (80, 90)]);
+        assert_eq!(visible_horizontal_spans(10, 100, &occluders), [(10, 20), (70, 80), (90, 100)]);
     }
 }

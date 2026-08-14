@@ -50,6 +50,7 @@ define_started_flags!(
     SMP_HLT_HISTORY_STARTED,
     RAM_USAGE_HISTORY_STARTED,
     CODEC_SERVICE_STARTED,
+    VMEDIA_SERVICE_STARTED,
     QJS_ASYNC_FS_SERVICE_STARTED,
     TRUEOSFS_MOUNT_SERVICE_STARTED,
     TRUEOSFS_INDEX_SERVICE_STARTED,
@@ -417,6 +418,50 @@ fn spawn_codec_service(spawner: Spawner) -> SpawnAttempt {
         }
     }
 
+    if spawned == 0 {
+        SpawnAttempt::Skipped
+    } else {
+        SpawnAttempt::Spawned
+    }
+}
+
+fn spawn_vmedia_service(spawner: Spawner) -> SpawnAttempt {
+    let _ = spawner;
+    if !crate::workers::all_topology_spawners_registered() {
+        return SpawnAttempt::Skipped;
+    }
+    let worker_spawners = crate::workers::pick_background_spawners_with_slots(2);
+    if worker_spawners.is_empty() {
+        return SpawnAttempt::Skipped;
+    }
+
+    let mut spawned = 0usize;
+    for (worker_id, (worker_slot, core_kind, worker_spawner)) in
+        worker_spawners.into_iter().enumerate()
+    {
+        match crate::r::media_service::worker_task(worker_id, worker_slot, core_kind) {
+            Ok(token) => {
+                worker_spawner.spawn(token);
+                spawned = spawned.saturating_add(1);
+                crate::log_info!(
+                    target: "service";
+                    "vmedia: worker={} scheduled worker_slot={} core_kind={} policy=background-pcore-preferred\n",
+                    worker_id,
+                    worker_slot,
+                    core_kind,
+                );
+            }
+            Err(error) if spawned == 0 => return SpawnAttempt::Failed(error),
+            Err(error) => {
+                crate::log_warn!(
+                    target: "service";
+                    "vmedia: worker={} spawn failed err={:?}\n",
+                    worker_id,
+                    error,
+                );
+            }
+        }
+    }
     if spawned == 0 {
         SpawnAttempt::Skipped
     } else {
@@ -1710,7 +1755,7 @@ const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 74
+const TASK_COUNT: usize = 75
     + cfg!(feature = "trueos_h264_encode_stream") as usize
     + cfg!(feature = "trueos_lumen") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
@@ -1792,6 +1837,12 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         crate::r::readiness::BACKGROUND_AP_WORKER_READY,
         &CODEC_SERVICE_STARTED,
         spawn_codec_service,
+    ),
+    TaskSpec::enabled(
+        "vmedia-service",
+        crate::r::readiness::BACKGROUND_AP_WORKER_READY,
+        &VMEDIA_SERVICE_STARTED,
+        spawn_vmedia_service,
     ),
     TaskSpec::enabled("factory-ram-probe", 0, &FACTORY_RAM_PROBE_STARTED, spawn_factory_ram_probe),
     TaskSpec::enabled(
