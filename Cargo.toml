@@ -45,6 +45,7 @@ half = { version = "2.7.1", default-features = false }
 skrifa = { version = "0.44.0", default-features = false, features = ["libm"] }
 hashbrown = { version = "0.17.0", default-features = false }
 memchr = { version = "2.8.0", default-features = false }
+microfont = "3.7.8"
 object = { version = "0.39.1", default-features = false, features = ["read_core", "elf"] }
 regex-automata = { version = "0.4.14", default-features = false, features = ["alloc", "meta", "syntax"] }
 unicode-segmentation = { version = "1", default-features = false }

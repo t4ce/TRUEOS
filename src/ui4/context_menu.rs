@@ -18,9 +18,9 @@ use super::{Ui4CursorSource, Ui4VisualRect, WindowId, WindowOwner};
 
 pub(crate) const MAX_CONTEXT_MENU_ENTRIES: usize = 16;
 pub(super) const MENU_OFFSET_PX: u32 = 14;
-pub(super) const MENU_WIDTH_PX: u32 = 196;
+pub(super) const MENU_WIDTH_PX: u32 = super::input_broker::CONTEXT_MENU_WIDTH_PX;
 pub(super) const MENU_BORDER_PX: u32 = 2;
-pub(super) const MENU_ROW_HEIGHT_PX: u32 = 24;
+pub(super) const MENU_ROW_HEIGHT_PX: u32 = super::input_broker::CONTEXT_MENU_ROW_HEIGHT_PX;
 pub(super) const MENU_TEXT_INSET_PX: u32 = 10;
 pub(super) const MENU_RENDER_LABEL_CHARS: usize = 20;
 
@@ -559,13 +559,13 @@ mod tests {
 
     #[test]
     fn geometry_clamps_and_maps_each_visible_row() {
-        let rect = menu_rect((95, 75), 3, 100, 80);
+        let rect = menu_rect((95, 75), 3, 100, 1000);
         assert_eq!(rect.width, 100);
-        assert_eq!(rect.height, 76);
+        assert_eq!(rect.height, 2 * MENU_BORDER_PX + MENU_ROW_HEIGHT_PX * 3);
         assert_eq!(rect.x, 0);
-        assert_eq!(rect.y, 4);
-        assert_eq!(entry_rect(rect, 0).unwrap().y, 6);
-        assert_eq!(entry_rect(rect, 2).unwrap().y, 54);
-        assert!(entry_rect(rect, 3).is_none());
+        assert_eq!(rect.y, 89);
+        assert_eq!(entry_rect(rect, 0).unwrap().y, rect.y + MENU_BORDER_PX);
+        assert_eq!(entry_rect(rect, 2).unwrap().y, rect.y + MENU_BORDER_PX + MENU_ROW_HEIGHT_PX * 2);
+        assert_eq!(entry_rect(rect, 3), None);
     }
 }

@@ -6,6 +6,7 @@ pub(crate) mod cpp;
 pub(crate) mod cry;
 pub(crate) mod disc;
 pub(crate) mod format;
+#[cfg(test)]
 pub(crate) mod fslog;
 pub(crate) mod grid;
 pub(crate) mod gridp;

@@ -2562,7 +2562,8 @@ pub(super) async fn index_path_snapshot_async(
     Ok(Some(out))
 }
 
-pub async fn raw_log_scan_async(
+#[cfg(test)]
+pub(crate) async fn raw_log_scan_async(
     disk: block::DeviceHandle,
     max_records: usize,
 ) -> Result<Option<trueos_fs::RawLogScan>, block::Error> {

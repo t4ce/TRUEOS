@@ -20,12 +20,12 @@ use super::{
 const OWNER: WindowOwner = WindowOwner::COLOR_PICKER_SERVICE;
 const PRIMARY_BUTTON_MASK: u32 = 1;
 const SERVICE_POLL_MS: u64 = 16;
-const PICKER_WIDTH: u32 = 256;
+pub(super) const PICKER_WIDTH: u32 = 256;
 const SV_HEIGHT: u32 = 256;
 const PANEL_GAP: u32 = 8;
 const HUE_HEIGHT: u32 = 32;
 const HUE_Y: u32 = SV_HEIGHT + PANEL_GAP;
-const PICKER_HEIGHT: u32 = HUE_Y + HUE_HEIGHT + PANEL_GAP;
+pub(super) const PICKER_HEIGHT: u32 = HUE_Y + HUE_HEIGHT + PANEL_GAP;
 const PICKER_MARGIN: u32 = 24;
 const MAX_ACTIVE_GESTURES: usize = 32;
 

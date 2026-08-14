@@ -4836,7 +4836,7 @@ pub(crate) fn begin_sprite_rgba8_upload(
         return ERROR_INVALID;
     }
 
-    let gpu = {
+    let (gpu, retained_bytes, retained_sprites) = {
         let surfaces = SURFACES.lock();
         let Some(surface) = surfaces
             .iter()
@@ -4848,11 +4848,46 @@ pub(crate) fn begin_sprite_rgba8_upload(
             return ERROR_BUSY;
         }
         let Some(gpu) = allocate_sprite_gpu_va(surface, sprite_id, bytes) else {
+            let retained_bytes = surface
+                .sprites
+                .iter()
+                .fold(0usize, |total, (_, owned)| total.saturating_add(owned.bytes));
+            crate::log_error!(target: "ui4/blueprint-frame";
+                "sprite allocation failed owner={:?} window={} sprite={} extent={}x{} requested_bytes={} retained_sprites={} retained_bytes={} stage=ppgtt-va arena_bytes={}\n",
+                owner,
+                window_id,
+                sprite_id,
+                width,
+                height,
+                bytes,
+                surface.sprites.len(),
+                retained_bytes,
+                UI4_SCENE_SPRITE_MAX_BYTES,
+            );
             return ERROR_UI4;
         };
-        gpu
+        let retained_bytes = surface
+            .sprites
+            .iter()
+            .fold(0usize, |total, (_, owned)| total.saturating_add(owned.bytes));
+        (gpu, retained_bytes, surface.sprites.len())
     };
-    let Some((phys, virt)) = crate::dma::alloc(bytes, crate::intel::WARM_ALIGN) else {
+    let Some((phys, virt)) = crate::dma::alloc_ppgtt(bytes, crate::intel::WARM_ALIGN) else {
+        let pmm = crate::phys::pmm_stats();
+        crate::log_error!(target: "ui4/blueprint-frame";
+            "sprite allocation failed owner={:?} window={} sprite={} extent={}x{} requested_bytes={} retained_sprites={} retained_bytes={} stage=system-memory address_scope=all-pmm pmm_free_bytes={} pmm_largest_free_region={} pmm_free_regions={}\n",
+            owner,
+            window_id,
+            sprite_id,
+            width,
+            height,
+            bytes,
+            retained_sprites,
+            retained_bytes,
+            pmm.map_or(0, |stats| stats.free_bytes),
+            pmm.map_or(0, |stats| stats.largest_free_region),
+            pmm.map_or(0, |stats| stats.free_regions),
+        );
         return ERROR_UI4;
     };
     unsafe { core::ptr::write_bytes(virt, 0, bytes) };
@@ -5001,13 +5036,14 @@ pub(crate) fn finish_sprite_rgba8_upload(
         destroy_rgba8_surface(old);
     }
     crate::log_trace!(target: "ui4/blueprint-frame";
-        "sprite source ready owner={:?} window={} sprite={} extent={}x{} bytes={} gpu=0x{:X}\n",
+        "sprite source ready owner={:?} window={} sprite={} extent={}x{} bytes={} phys=0x{:X} gpu=0x{:X} backing=all-pmm-contiguous+ppgtt\n",
         owner,
         window_id,
         sprite_id,
         upload.owned.surface.width,
         upload.owned.surface.height,
         upload.owned.bytes,
+        upload.owned.surface.phys,
         upload.owned.surface.gpu,
     );
     0

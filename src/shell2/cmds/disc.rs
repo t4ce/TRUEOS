@@ -11,7 +11,7 @@ const DEFAULT_RAMDISC_BYTES: u64 = 128 * 1024 * 1024;
 fn print_usage(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
-        "disc: usage `disc` | `disc format <disc-id>` | `disc ramdisc [size]` | `disc log [disc-id] [--max N]`",
+        "disc: usage `disc` | `disc format <disc-id>` | `disc ramdisc [size]`",
     );
 }
 
@@ -165,7 +165,6 @@ pub(crate) fn try_parse(
             super::format::start_format_session_for_disk(io, disk, "disc format")
         }
         Some("ramdisc") | Some("ramdisk") => create_ramdisc(io, args),
-        Some("log") | Some("fslog") => super::fslog::try_parse_as(io, "disc log", args),
         Some(_) => {
             print_usage(io);
             ParseOutcome::Handled

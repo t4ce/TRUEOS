@@ -22,6 +22,15 @@ pub fn alloc(size: usize, align: usize) -> Option<(u64, *mut u8)> {
     alloc_with_max(size, align, Some(DMA_MAX_PHYS))
 }
 
+/// Allocate contiguous system memory for an integrated-GPU PPGTT mapping.
+///
+/// PPGTT supplies the device-visible address, so these allocations do not
+/// inherit the generic 32-bit DMA ceiling. Callers must still prove that their
+/// page-table format accepts the returned physical range.
+pub fn alloc_ppgtt(size: usize, align: usize) -> Option<(u64, *mut u8)> {
+    alloc_with_max(size, align, None)
+}
+
 pub fn alloc_with_max(
     size: usize,
     align: usize,

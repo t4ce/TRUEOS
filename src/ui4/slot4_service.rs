@@ -407,6 +407,11 @@ fn software_cursor_rects() -> Slot4Rects {
             continue;
         };
         let menu_rect = super::input_broker::context_menu_rect((x, y), screen_w, screen_h);
+        let row_height = super::input_broker::CONTEXT_MENU_ROW_HEIGHT_PX;
+        let horizontal_inset = super::input_broker::DESKTOP_CONTEXT_MENU_HORIZONTAL_INSET_PX;
+        let vertical_inset = super::input_broker::DESKTOP_CONTEXT_MENU_VERTICAL_INSET_PX;
+        let row_text_y = 0;
+        let row_top = menu_rect.y.saturating_add(vertical_inset);
         push_overlay_rect(
             &mut rects,
             menu_rect.x,
@@ -415,36 +420,40 @@ fn software_cursor_rects() -> Slot4Rects {
             menu_rect.height,
             Rgba8::new(22, 25, 33, 235),
         );
-        push_rect_border(&mut rects, menu_rect, 2, visual.color);
-        for row in 1..4u32 {
+        push_rect_border(&mut rects, menu_rect, 1, visual.color);
+        for row in 1..super::input_broker::DESKTOP_CONTEXT_MENU_ENTRY_COUNT {
             push_overlay_rect(
                 &mut rects,
-                menu_rect.x.saturating_add(12),
-                menu_rect.y.saturating_add(
-                    row.saturating_mul(super::input_broker::CONTEXT_MENU_ROW_HEIGHT_PX),
-                ),
-                menu_rect.width.saturating_sub(24),
+                menu_rect.x.saturating_add(horizontal_inset),
+                row_top.saturating_add(row.saturating_mul(row_height)),
+                menu_rect
+                    .width
+                    .saturating_sub(horizontal_inset.saturating_mul(2)),
                 1,
                 Rgba8::new(180, 188, 204, 150),
             );
         }
-        push_tiny_menu_text(
-            &mut rects,
-            menu_rect.x.saturating_add(12),
-            menu_rect.y.saturating_add(7),
-            "COLOR PICKER",
-            Rgba8::new(236, 240, 248, 245),
-        );
-        push_tiny_menu_text(
-            &mut rects,
-            menu_rect.x.saturating_add(12),
-            menu_rect
-                .y
-                .saturating_add(super::input_broker::CONTEXT_MENU_ROW_HEIGHT_PX)
-                .saturating_add(7),
-            "SHELL",
-            Rgba8::new(236, 240, 248, 245),
-        );
+        for (row, label) in [(0u32, "COLOR PICKER"), (1u32, "SHELL")] {
+            let y = row_top
+                .saturating_add(row.saturating_mul(row_height))
+                .saturating_add(row_text_y);
+            let width = menu_rect
+                .width
+                .saturating_sub(horizontal_inset.saturating_mul(2));
+            let x = menu_rect.x.saturating_add(horizontal_inset);
+            if row == 0 {
+                push_microfont_rainbow_menu_text(&mut rects, x, y, width, label);
+            } else {
+                push_microfont_menu_text(
+                    &mut rects,
+                    x,
+                    y,
+                    width,
+                    label,
+                    Rgba8::new(255, 55, 255, 255),
+                );
+            }
+        }
     }
 
     if let Some(menu) = super::context_menu::visual() {
@@ -476,7 +485,7 @@ fn push_requested_context_menu(
         menu_rect.height,
         Rgba8::new(22, 25, 33, 245),
     );
-    push_rect_border(rects, menu_rect, 2, menu.color);
+    push_rect_border(rects, menu_rect, 1, menu.color);
 
     for (index, entry) in menu.entries.iter().enumerate() {
         let Some(row) = super::context_menu::entry_rect(menu_rect, index) else {
@@ -507,105 +516,194 @@ fn push_requested_context_menu(
         } else {
             Rgba8::new(125, 132, 146, 210)
         };
-        push_tiny_menu_text(
+        let scaled_font_height = (microfont::FHEIGHT as u32).saturating_mul(2);
+        let row_text_y = row.height.saturating_sub(scaled_font_height) / 2;
+        push_microfont_menu_text(
             rects,
             row.x
                 .saturating_add(super::context_menu::MENU_TEXT_INSET_PX),
-            row.y.saturating_add(7),
+            row.y.saturating_add(row_text_y),
+            row.width.saturating_sub(super::context_menu::MENU_TEXT_INSET_PX),
             entry.label.as_str(),
             text_color,
         );
     }
 }
 
-fn push_tiny_menu_text(
+fn push_microfont_menu_text(
     rects: &mut Slot4Rects,
     x: u32,
     y: u32,
+    width: u32,
     text: &str,
     color: crate::graphics::primitives::Rgba8,
 ) {
-    const SCALE: u32 = 2;
-    const ADVANCE: u32 = 8;
+    let text = menu_label_prefix(text, super::context_menu::MENU_RENDER_LABEL_CHARS);
+    if text.is_empty() || width == 0 {
+        return;
+    }
 
-    for (character_index, ch) in text
-        .chars()
-        .take(super::context_menu::MENU_RENDER_LABEL_CHARS)
-        .enumerate()
+    let width = usize::try_from(width).ok().unwrap_or(0);
+    let height = microfont::FHEIGHT;
+    let Some(pixel_count) = width.checked_mul(height) else {
+        return;
+    };
+    let mut pixels = vec![0u8; pixel_count];
+    if microfont::stamp_text(
+        &mut pixels,
+        width,
+        height,
+        0,
+        0,
+        text,
+        1u8,
+    )
+    .is_err()
     {
-        let glyph = tiny_menu_glyph(ch);
-        let glyph_x = x.saturating_add((character_index as u32).saturating_mul(ADVANCE));
-        for (row, bits) in glyph.into_iter().enumerate() {
-            let mut column = 0u32;
-            while column < 3 {
-                if bits & (1 << (2 - column)) == 0 {
-                    column += 1;
-                    continue;
-                }
-                let start = column;
-                while column < 3 && bits & (1 << (2 - column)) != 0 {
-                    column += 1;
-                }
-                push_overlay_rect(
-                    rects,
-                    glyph_x.saturating_add(start.saturating_mul(SCALE)),
-                    y.saturating_add((row as u32).saturating_mul(SCALE)),
-                    column.saturating_sub(start).saturating_mul(SCALE),
-                    SCALE,
-                    color,
-                );
+        return;
+    }
+
+    for (row, scanline) in pixels.chunks_exact(width).take(height).enumerate() {
+        let mut col = 0usize;
+        let y = y.saturating_add(
+            u32::try_from(row)
+                .unwrap_or(0)
+                .saturating_mul(2),
+        );
+        while col < width {
+            if scanline[col] == 0 {
+                col = col.saturating_add(1);
+                continue;
             }
+            let run_start = col;
+            while col < width && scanline[col] != 0 {
+                col = col.saturating_add(1);
+            }
+            push_overlay_rect(
+                rects,
+                x.saturating_add(
+                    u32::try_from(run_start)
+                        .unwrap_or(0)
+                        .saturating_mul(2),
+                ),
+                y,
+                u32::try_from(col.saturating_sub(run_start)).unwrap_or(0).saturating_mul(2),
+                2,
+                color,
+            );
         }
     }
 }
 
-fn tiny_menu_glyph(ch: char) -> [u8; 5] {
-    match ch.to_ascii_uppercase() {
-        'A' => [0b111, 0b101, 0b111, 0b101, 0b101],
-        'B' => [0b110, 0b101, 0b110, 0b101, 0b110],
-        'C' => [0b111, 0b100, 0b100, 0b100, 0b111],
-        'D' => [0b110, 0b101, 0b101, 0b101, 0b110],
-        'E' => [0b111, 0b100, 0b110, 0b100, 0b111],
-        'F' => [0b111, 0b100, 0b110, 0b100, 0b100],
-        'G' => [0b111, 0b100, 0b101, 0b101, 0b111],
-        'H' => [0b101, 0b101, 0b111, 0b101, 0b101],
-        'I' => [0b111, 0b010, 0b010, 0b010, 0b111],
-        'J' => [0b001, 0b001, 0b001, 0b101, 0b010],
-        'K' => [0b101, 0b101, 0b110, 0b101, 0b101],
-        'L' => [0b100, 0b100, 0b100, 0b100, 0b111],
-        'M' => [0b101, 0b111, 0b111, 0b101, 0b101],
-        'N' => [0b101, 0b111, 0b111, 0b111, 0b101],
-        'O' => [0b111, 0b101, 0b101, 0b101, 0b111],
-        'P' => [0b111, 0b101, 0b111, 0b100, 0b100],
-        'Q' => [0b111, 0b101, 0b101, 0b111, 0b001],
-        'R' => [0b111, 0b101, 0b111, 0b110, 0b101],
-        'S' => [0b111, 0b100, 0b111, 0b001, 0b111],
-        'T' => [0b111, 0b010, 0b010, 0b010, 0b010],
-        'U' => [0b101, 0b101, 0b101, 0b101, 0b111],
-        'V' => [0b101, 0b101, 0b101, 0b101, 0b010],
-        'W' => [0b101, 0b101, 0b111, 0b111, 0b101],
-        'X' => [0b101, 0b101, 0b010, 0b101, 0b101],
-        'Y' => [0b101, 0b101, 0b010, 0b010, 0b010],
-        'Z' => [0b111, 0b001, 0b010, 0b100, 0b111],
-        '0' => [0b111, 0b101, 0b101, 0b101, 0b111],
-        '1' => [0b010, 0b110, 0b010, 0b010, 0b111],
-        '2' => [0b111, 0b001, 0b111, 0b100, 0b111],
-        '3' => [0b111, 0b001, 0b111, 0b001, 0b111],
-        '4' => [0b101, 0b101, 0b111, 0b001, 0b001],
-        '5' => [0b111, 0b100, 0b111, 0b001, 0b111],
-        '6' => [0b111, 0b100, 0b111, 0b101, 0b111],
-        '7' => [0b111, 0b001, 0b010, 0b010, 0b010],
-        '8' => [0b111, 0b101, 0b111, 0b101, 0b111],
-        '9' => [0b111, 0b101, 0b111, 0b001, 0b111],
-        '-' => [0b000, 0b000, 0b111, 0b000, 0b000],
-        '_' => [0b000, 0b000, 0b000, 0b000, 0b111],
-        '.' => [0b000, 0b000, 0b000, 0b000, 0b010],
-        ':' => [0b000, 0b010, 0b000, 0b010, 0b000],
-        '/' => [0b001, 0b001, 0b010, 0b100, 0b100],
-        '(' => [0b010, 0b100, 0b100, 0b100, 0b010],
-        ')' => [0b010, 0b001, 0b001, 0b001, 0b010],
-        ' ' => [0; 5],
-        _ => [0b111, 0b001, 0b010, 0b000, 0b010],
+fn push_microfont_rainbow_menu_text(
+    rects: &mut Slot4Rects,
+    x: u32,
+    y: u32,
+    width: u32,
+    text: &str,
+) {
+    let text = menu_label_prefix(text, super::context_menu::MENU_RENDER_LABEL_CHARS);
+    if text.is_empty() || width == 0 {
+        return;
+    }
+
+    let width = usize::try_from(width).ok().unwrap_or(0);
+    let height = microfont::FHEIGHT;
+    let Some(pixel_count) = width.checked_mul(height) else {
+        return;
+    };
+    let mut pixels = vec![0u8; pixel_count];
+    if microfont::stamp_text(
+        &mut pixels,
+        width,
+        height,
+        0,
+        0,
+        text,
+        1u8,
+    )
+    .is_err()
+    {
+        return;
+    }
+
+    let width_u32 = u32::try_from(width).ok().unwrap_or(0);
+    for (row, scanline) in pixels.chunks_exact(width).take(height).enumerate() {
+        let mut col = 0usize;
+        let y = y.saturating_add(
+            u32::try_from(row)
+                .unwrap_or(0)
+                .saturating_mul(2),
+        );
+        while col < width {
+            if scanline[col] == 0 {
+                col = col.saturating_add(1);
+                continue;
+            }
+            let run_start = col;
+            while col < width && scanline[col] != 0 {
+                col = col.saturating_add(1);
+            }
+            let run_width = col.saturating_sub(run_start);
+            let run_midpoint = run_start.saturating_add(run_width / 2);
+            let hue = if width_u32 == 0 {
+                0
+            } else {
+                (u32::try_from(run_midpoint)
+                    .unwrap_or(0)
+                    .saturating_mul(360))
+                    .saturating_div(width_u32)
+            };
+            let color = rainbow_color(hue);
+            push_overlay_rect(
+                rects,
+                x.saturating_add(
+                    u32::try_from(run_start)
+                        .unwrap_or(0)
+                        .saturating_mul(2),
+                ),
+                y,
+                u32::try_from(run_width).unwrap_or(0).saturating_mul(2),
+                2,
+                color,
+            );
+        }
+    }
+}
+
+fn rainbow_color(hue: u32) -> crate::graphics::primitives::Rgba8 {
+    let hue = hue % 360;
+    let c = 255u32;
+    let sector = hue / 60;
+    let within_sector = hue % 60;
+    let two_sector = within_sector.saturating_mul(2);
+    let x = {
+        let diff = if two_sector >= 60 {
+            two_sector.saturating_sub(60)
+        } else {
+            60u32.saturating_sub(two_sector)
+        };
+        (c.saturating_mul(60u32.saturating_sub(diff))).saturating_div(60)
+    };
+    let (r, g, b) = match sector {
+        0 => (c, x, 0),
+        1 => (x, c, 0),
+        2 => (0, c, x),
+        3 => (0, x, c),
+        4 => (x, 0, c),
+        _ => (c, 0, x),
+    };
+    crate::graphics::primitives::Rgba8::new(r as u8, g as u8, b as u8, 255)
+}
+
+fn menu_label_prefix<'a>(text: &'a str, char_limit: usize) -> &'a str {
+    if char_limit == 0 {
+        return "";
+    }
+    let mut chars = text.char_indices();
+    match chars.nth(char_limit) {
+        Some((end, _)) => &text[..end],
+        None => text,
     }
 }
 

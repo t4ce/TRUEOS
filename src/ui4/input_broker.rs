@@ -33,10 +33,16 @@ const SCREENSHOT_BUTTON_MASK: u32 = (1 << 3) | (1 << 4);
 const INTERACTIVE_SCREENSHOT_ENABLED: bool = false;
 const FRAME_DRAG_GESTURE_MIN_TRAVEL_PX: u32 = 8;
 const MAXIMIZE_LATCH_TOP_PX: u32 = 48;
+const CONTEXT_MENU_BORDER_PX: u32 = 2;
 pub(super) const CONTEXT_MENU_OFFSET_PX: u32 = 14;
-pub(super) const CONTEXT_MENU_WIDTH_PX: u32 = 196;
-pub(super) const CONTEXT_MENU_HEIGHT_PX: u32 = 116;
-pub(super) const CONTEXT_MENU_ROW_HEIGHT_PX: u32 = 27;
+pub(super) const CONTEXT_MENU_WIDTH_PX: u32 = super::color_picker::PICKER_WIDTH;
+pub(super) const CONTEXT_MENU_ROW_GAP_PX: u32 = 2;
+pub(super) const CONTEXT_MENU_ROW_HEIGHT_PX: u32 = (microfont::FHEIGHT as u32)
+    .saturating_mul(2)
+    .saturating_add(CONTEXT_MENU_ROW_GAP_PX);
+pub(super) const DESKTOP_CONTEXT_MENU_ENTRY_COUNT: u32 = 2;
+pub(super) const DESKTOP_CONTEXT_MENU_HORIZONTAL_INSET_PX: u32 = 12;
+pub(super) const DESKTOP_CONTEXT_MENU_VERTICAL_INSET_PX: u32 = 12;
 
 static OWNER_QUEUE_DROPS: AtomicU32 = AtomicU32::new(0);
 static KEYBOARD_TEXT_FORWARDS: AtomicU32 = AtomicU32::new(0);
@@ -1879,6 +1885,12 @@ pub(crate) fn context_menu_rect(
     screen_width: u32,
     screen_height: u32,
 ) -> Ui4VisualRect {
+    let menu_rows = DESKTOP_CONTEXT_MENU_ENTRY_COUNT.max(1);
+    let menu_height = CONTEXT_MENU_BORDER_PX
+        .saturating_mul(2)
+        .saturating_add(DESKTOP_CONTEXT_MENU_VERTICAL_INSET_PX.saturating_mul(2))
+        .saturating_add(CONTEXT_MENU_ROW_HEIGHT_PX.saturating_mul(menu_rows))
+        .min(screen_height);
     Ui4VisualRect {
         x: anchor
             .0
@@ -1887,9 +1899,9 @@ pub(crate) fn context_menu_rect(
         y: anchor
             .1
             .saturating_add(CONTEXT_MENU_OFFSET_PX)
-            .min(screen_height.saturating_sub(CONTEXT_MENU_HEIGHT_PX)),
+            .min(screen_height.saturating_sub(menu_height)),
         width: CONTEXT_MENU_WIDTH_PX.min(screen_width),
-        height: CONTEXT_MENU_HEIGHT_PX.min(screen_height),
+        height: menu_height,
     }
 }
 
@@ -1901,7 +1913,11 @@ fn desktop_context_menu_action_at(
     if !visual_rect_contains(menu, x, y) {
         return None;
     }
-    match y.saturating_sub(menu.y) / CONTEXT_MENU_ROW_HEIGHT_PX {
+    match y
+        .saturating_sub(menu.y)
+        .saturating_sub(DESKTOP_CONTEXT_MENU_VERTICAL_INSET_PX)
+        / CONTEXT_MENU_ROW_HEIGHT_PX
+    {
         0 => Some(DesktopContextMenuAction::ColorPicker),
         1 => Some(DesktopContextMenuAction::Shell),
         _ => None,
