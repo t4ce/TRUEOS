@@ -192,28 +192,6 @@ pub(crate) struct SpiritSurfaceLayout {
     pub(crate) byte_len: usize,
 }
 
-/// One borrowed view of the exact Spirit cursor surface currently latched by
-/// one display pipe. The cursor-state lock remains held for the callback, so
-/// that pipe's live buffer cannot become the producer's next back buffer
-/// mid-read.
-pub(crate) struct SpiritRealtimeEncodeOverlay<'a> {
-    pub(crate) left: i32,
-    pub(crate) top: i32,
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-    pub(crate) pitch_bytes: u32,
-    pub(crate) bgra_premultiplied: &'a [u8],
-}
-
-/// Borrow Spirit's current pipe-A CUR_SURFLIVE image and actual CUR_POS without
-/// waiting for a newer Spirit frame. An absent or transiently invalid cursor
-/// plane remains a cheap `None`, allowing real-time composition to keep cadence.
-pub(crate) fn with_realtime_encode_overlay_pipe_a<R>(
-    read: impl FnOnce(SpiritRealtimeEncodeOverlay<'_>) -> R,
-) -> Option<R> {
-    intel_cursor::with_realtime_encode_overlay_pipe_a_surflive(read)
-}
-
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SpiritFrameLease {
     fence: SpiritFence,
