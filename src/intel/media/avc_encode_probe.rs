@@ -768,7 +768,7 @@ async fn run_with_source(source_kind: AvcFrameSource) -> AvcEncodeProbeReport {
         core::ptr::write_bytes(backing.ring_virt, 0, RING_BYTES);
         core::ptr::write_bytes(backing.context_virt, 0, CONTEXT_BYTES);
     }
-    clear_arena_work_ranges(backing.arena_virt);
+    clear_frame_result(backing.arena_virt);
 
     let arena_source_phys = backing.arena_phys.saturating_add(SOURCE_OFFSET as u64);
     let source_virt = unsafe { backing.arena_virt.add(SOURCE_OFFSET) };
@@ -861,7 +861,7 @@ async fn run_with_source(source_kind: AvcFrameSource) -> AvcEncodeProbeReport {
     }
     report.context_ready = true;
 
-    flush_arena_work_ranges(backing.arena_virt);
+    flush_cpu_authored_frame_ranges(backing.arena_virt, primary_batch_bytes, batch_bytes);
     if !matches!(source_kind, AvcFrameSource::Dma(_)) {
         crate::intel::dma_flush(source_virt, SOURCE_BYTES);
     }
@@ -1002,6 +1002,13 @@ fn build_backing(dev: crate::intel::Dev) -> Option<ProbeBacking> {
     let (context_phys, context_virt) = crate::dma::alloc(CONTEXT_BYTES, crate::intel::WARM_ALIGN)?;
     let (arena_phys, arena_virt) = crate::dma::alloc(ARENA_BYTES, crate::intel::WARM_ALIGN)?;
 
+    // Establish deterministic first-use contents once. Recon, downscale,
+    // bitstream, statistics, and row-store ranges are subsequently owned by
+    // VDEnc/MFX. Re-clearing and flushing those GPU outputs for every frame
+    // adds no visibility to the terminal media fence and burns a 7.7 MiB CPU
+    // zero plus a 7.7 MiB cache flush for every 40 Hz encode.
+    initialize_arena_work_ranges(arena_virt);
+
     if !crate::intel::map_ggtt(dev, ring_phys, RING_BYTES, RING_GPU)
         || !crate::intel::map_ggtt(dev, context_phys, CONTEXT_BYTES, CONTEXT_GPU)
     {
@@ -1023,19 +1030,32 @@ fn build_backing(dev: crate::intel::Dev) -> Option<ProbeBacking> {
     })
 }
 
-fn clear_arena_work_ranges(arena_virt: *mut u8) {
+fn initialize_arena_work_ranges(arena_virt: *mut u8) {
     for (offset, bytes) in ARENA_WORK_RANGES {
         unsafe {
             core::ptr::write_bytes(arena_virt.add(offset), 0, bytes);
         }
+        crate::intel::dma_flush(unsafe { arena_virt.add(offset) }, bytes);
     }
 }
 
-fn flush_arena_work_ranges(arena_virt: *mut u8) {
-    for (offset, bytes) in ARENA_WORK_RANGES {
-        let region = unsafe { arena_virt.add(offset) };
-        crate::intel::dma_flush(region, bytes);
+fn clear_frame_result(arena_virt: *mut u8) {
+    unsafe {
+        core::ptr::write_bytes(arena_virt.add(RESULT_OFFSET), 0, RESULT_BYTES);
     }
+}
+
+fn flush_cpu_authored_frame_ranges(
+    arena_virt: *mut u8,
+    primary_batch_bytes: usize,
+    codec_batch_bytes: usize,
+) {
+    crate::intel::dma_flush(unsafe { arena_virt.add(BATCH_OFFSET) }, primary_batch_bytes);
+    crate::intel::dma_flush(
+        unsafe { arena_virt.add(BATCH_OFFSET + CODEC_BATCH_OFFSET) },
+        codec_batch_bytes,
+    );
+    crate::intel::dma_flush(unsafe { arena_virt.add(RESULT_OFFSET) }, RESULT_BYTES);
 }
 
 /// Build a legal-range moving-pattern seed without linking a diagnostic file
@@ -1077,7 +1097,6 @@ fn build_idr_batch(batch_virt: *mut u8) -> Option<(usize, usize)> {
             CODEC_BATCH_BYTES / core::mem::size_of::<u32>(),
         )
     };
-    batch.fill(0);
     let mut idx = 0usize;
     let mut packet_count = 0usize;
 

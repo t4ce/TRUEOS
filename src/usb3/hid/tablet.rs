@@ -205,7 +205,7 @@ pub(crate) fn handle_report(runtime: &mut HidRuntime, data: &[u8], now_ms: u32) 
         );
     }
 
-    push_cursor_event(TrueosHidCursorEvent {
+    let cursor_event = TrueosHidCursorEvent {
         t_ms: now_ms,
         seq: runtime.seq as u32,
         controller_id: runtime.controller_id,
@@ -220,7 +220,7 @@ pub(crate) fn handle_report(runtime: &mut HidRuntime, data: &[u8], now_ms: u32) 
         x: runtime.mouse_x,
         y: runtime.mouse_y,
         flags,
-    });
+    };
     super::input::push_event(super::input::InputEvent::Tablet(super::input::TabletEvent {
         slot_id: runtime.slot_id,
         buttons: decoded.buttons,
@@ -246,4 +246,7 @@ pub(crate) fn handle_report(runtime: &mut HidRuntime, data: &[u8], now_ms: u32) 
         "tablet",
         false,
     );
+    // Keep absolute position promotion ahead of the sequence-ring publish so
+    // an event-driven UI4 consumer never observes stale HUT/snapshot state.
+    push_cursor_event(cursor_event);
 }

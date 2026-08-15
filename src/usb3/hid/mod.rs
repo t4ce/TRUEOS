@@ -2,6 +2,7 @@
 
 extern crate alloc;
 use alloc::vec::Vec;
+use embassy_sync::signal::Signal;
 use spin::Mutex;
 pub mod boot;
 pub mod eyetracker;
@@ -99,6 +100,7 @@ impl HidRuntime {
 static HID_RUNTIMES: Mutex<Vec<HidRuntime>> = Mutex::new(Vec::new());
 static CURSOR_EVENT_RING: Mutex<CursorEventRing> = Mutex::new(CursorEventRing::new());
 static CURSOR_EVENT_POP_SEQ: Mutex<u64> = Mutex::new(0);
+static CURSOR_EVENT_READY: Signal<crate::wait::EmbassySpinRawMutex, ()> = Signal::new();
 
 pub(crate) const HID_UDP_CONTROLLER_ID: u32 = 0x5544_5048; // "UDPH"
 const HID_UDP_SLOT_BASE: u32 = 0x5500_0000;
@@ -185,6 +187,20 @@ fn push_cursor_event(event: TrueosHidCursorEvent) {
     ring.write_seq = ring.write_seq.wrapping_add(1);
     let idx = ((ring.write_seq - 1) as usize) % CURSOR_EVENT_RING_CAP;
     ring.buf[idx] = event;
+}
+
+/// Wake UI4 after a cursor report and its HUT/snapshot state are coherent.
+///
+/// Keeping this separate from `push_cursor_event` lets producers finish the
+/// metadata side of the publish before a consumer on another core observes
+/// the sequence-ring entry.
+#[inline]
+fn notify_cursor_event_ready() {
+    CURSOR_EVENT_READY.signal(());
+}
+
+pub(crate) async fn wait_cursor_event_ready() {
+    CURSOR_EVENT_READY.wait().await;
 }
 
 #[inline]
@@ -278,7 +294,6 @@ pub(crate) fn inject_virtual_cursor_event(
         y: clamp01(y),
         flags,
     };
-    push_cursor_event(event);
     crate::r::cursor::upsert_snapshot(0, slot_id, 0, HID_KIND_VIRTUAL_CURSOR, x, y, buttons_down);
     self::hut::upsert_mouse_state(
         0,
@@ -291,6 +306,8 @@ pub(crate) fn inject_virtual_cursor_event(
         "ai",
         true,
     );
+    push_cursor_event(event);
+    notify_cursor_event_ready();
 }
 
 /// Retire one mediated virtual cursor through the same lifecycle stream UI4
@@ -299,7 +316,7 @@ pub(crate) fn inject_virtual_cursor_event(
 /// Virtual cursors do not own a `HidRuntime`, so `remove_hid_slot` cannot
 /// discover them and synthesize this event on their behalf.
 pub(crate) fn retire_virtual_cursor(slot_id: u32) {
-    push_cursor_event(TrueosHidCursorEvent {
+    let event = TrueosHidCursorEvent {
         t_ms: now_ms_u32(),
         seq: 0,
         controller_id: 0,
@@ -314,10 +331,12 @@ pub(crate) fn retire_virtual_cursor(slot_id: u32) {
         x: 0.0,
         y: 0.0,
         flags: HID_CURSOR_EVENT_FLAG_DEVICE_LOST,
-    });
+    };
     let legacy_events = self::input::remove_slot(slot_id);
     let hut_removed = self::hut::remove_slot(0, slot_id);
     let cursors_removed = crate::r::cursor::remove_snapshots(0, slot_id);
+    push_cursor_event(event);
+    notify_cursor_event_ready();
     crate::log_info!(target: "input";
         "virtual-cursor: device-lost signal controller=0 slot={} legacy_events={} cursors={} hut={}\n",
         slot_id,
@@ -341,7 +360,7 @@ pub(crate) fn inject_udp_mouse_boot_report(
 ) {
     let slot_id = hid_udp_slot_id(udp_device_id);
     let report = [buttons, dx as u8, dy as u8, wheel as u8];
-    handle_mouse_boot_report(HID_UDP_CONTROLLER_ID, slot_id, 0, &report);
+    handle_mouse_boot_report_inner(HID_UDP_CONTROLLER_ID, slot_id, 0, &report);
     if let Some((x, y)) =
         crate::r::cursor::cursor_source_pos(HID_UDP_CONTROLLER_ID, slot_id, 0, HID_KIND_MOUSE)
     {
@@ -357,6 +376,7 @@ pub(crate) fn inject_udp_mouse_boot_report(
             true,
         );
     }
+    notify_cursor_event_ready();
 }
 
 pub(crate) fn inject_udp_keyboard_boot_report(udp_device_id: u16, modifiers: u8, keys: [u8; 6]) {
@@ -427,7 +447,7 @@ pub(crate) fn inject_udp_tablet_absolute_event(
         runtime.seq as u32
     };
 
-    push_cursor_event(TrueosHidCursorEvent {
+    let event = TrueosHidCursorEvent {
         t_ms: now_ms,
         seq,
         controller_id: HID_UDP_CONTROLLER_ID,
@@ -442,7 +462,7 @@ pub(crate) fn inject_udp_tablet_absolute_event(
         x,
         y,
         flags,
-    });
+    };
     self::input::push_event(self::input::InputEvent::Tablet(self::input::TabletEvent {
         slot_id,
         buttons,
@@ -476,6 +496,8 @@ pub(crate) fn inject_udp_tablet_absolute_event(
         "udp",
         true,
     );
+    push_cursor_event(event);
+    notify_cursor_event_ready();
 }
 
 pub(crate) fn handle_keyboard_boot_report(
@@ -498,6 +520,11 @@ pub(crate) fn handle_mouse_boot_report(
     ep_target: u32,
     data: &[u8],
 ) {
+    handle_mouse_boot_report_inner(controller_id, slot_id, ep_target, data);
+    notify_cursor_event_ready();
+}
+
+fn handle_mouse_boot_report_inner(controller_id: u32, slot_id: u32, ep_target: u32, data: &[u8]) {
     let now_ms = now_ms_u32();
     let mut runtimes = HID_RUNTIMES.lock();
     let runtime =
@@ -522,6 +549,7 @@ pub(crate) fn handle_mouse_report_values(
         runtime_mut_or_insert(&mut runtimes, controller_id, slot_id, ep_target, HID_KIND_MOUSE);
     runtime.seq = runtime.seq.wrapping_add(1);
     mouse::handle_decoded_report(runtime, buttons, dx, dy, wheel, has_wheel, now_ms);
+    notify_cursor_event_ready();
 }
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
@@ -550,6 +578,7 @@ pub(crate) fn handle_tablet_boot_report(
         runtime_mut_or_insert(&mut runtimes, controller_id, slot_id, ep_target, HID_KIND_TABLET);
     runtime.seq = runtime.seq.wrapping_add(1);
     tablet::handle_report(runtime, data, now_ms);
+    notify_cursor_event_ready();
 }
 
 pub(crate) fn remove_hid_slot(controller_id: u32, slot_id: u32) {
@@ -570,29 +599,31 @@ pub(crate) fn remove_hid_slot(controller_id: u32, slot_id: u32) {
         .retain(|runtime| !(runtime.controller_id == controller_id && runtime.slot_id == slot_id));
     drop(runtimes);
 
-    if cursor_runtime_count != 0 {
-        push_cursor_event(TrueosHidCursorEvent {
-            t_ms: now_ms_u32(),
-            seq: 0,
-            controller_id,
-            slot_id,
-            ep_target: 0,
-            hid_kind: 0,
-            reserved0: 0,
-            reserved1: 0,
-            buttons_down: 0,
-            wheel: 0,
-            reserved2: 0,
-            x: 0.0,
-            y: 0.0,
-            flags: HID_CURSOR_EVENT_FLAG_DEVICE_LOST,
-        });
-    }
+    let cursor_lost_event = (cursor_runtime_count != 0).then_some(TrueosHidCursorEvent {
+        t_ms: now_ms_u32(),
+        seq: 0,
+        controller_id,
+        slot_id,
+        ep_target: 0,
+        hid_kind: 0,
+        reserved0: 0,
+        reserved1: 0,
+        buttons_down: 0,
+        wheel: 0,
+        reserved2: 0,
+        x: 0.0,
+        y: 0.0,
+        flags: HID_CURSOR_EVENT_FLAG_DEVICE_LOST,
+    });
 
     let legacy_events = self::input::remove_slot(slot_id);
     let hut_removed = self::hut::remove_slot(controller_id, slot_id);
     let cursors_removed = crate::r::cursor::remove_snapshots(controller_id, slot_id);
     let keyboard_loss_signals = crate::r::keyboard::signal_device_lost(controller_id, slot_id);
+    if let Some(event) = cursor_lost_event {
+        push_cursor_event(event);
+        notify_cursor_event_ready();
+    }
     crate::log_info!(target: "usb";
         "crabusb: hid device-lost signal ctrl={} slot={} runtimes={} cursor_signals={} keyboard_signals={} legacy_events={} cursors={} hut={}\n",
         controller_id,

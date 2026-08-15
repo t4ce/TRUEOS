@@ -156,7 +156,7 @@ pub(crate) fn handle_decoded_report(
         );
     }
 
-    push_cursor_event(TrueosHidCursorEvent {
+    let cursor_event = TrueosHidCursorEvent {
         t_ms: now_ms,
         seq: runtime.seq as u32,
         controller_id: runtime.controller_id as u32,
@@ -171,7 +171,7 @@ pub(crate) fn handle_decoded_report(
         x: runtime.mouse_x,
         y: runtime.mouse_y,
         flags,
-    });
+    };
     super::input::push_event(super::input::InputEvent::Mouse(super::input::MouseEvent {
         slot_id: runtime.slot_id,
         buttons,
@@ -200,6 +200,9 @@ pub(crate) fn handle_decoded_report(
         "human",
         false,
     );
+    // Publish to UI4 last: the absolute snapshot and HUT identity above are
+    // already coherent if the input consumer runs concurrently on its core.
+    push_cursor_event(cursor_event);
 }
 
 #[inline]

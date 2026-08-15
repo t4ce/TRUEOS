@@ -10,7 +10,7 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use embassy_sync::signal::Signal;
-use embassy_time::Timer;
+use embassy_time::{Duration, with_timeout};
 use heapless::Vec;
 use spin::Mutex;
 
@@ -1375,17 +1375,24 @@ pub(crate) async fn ui4_input_service_task(ap1_spawner: crate::workers::WorkerSp
         ),
     }
     crate::log_info!(target: "ui4";
-        "ui4/input: service online source=hid-sequence-rings pump_hz={} pump_clock=absolute-fractional selection=per-cursor-zero-or-one-frame+most-recent-input-focus first-click=absorb-select keyboard=global-hooks-before-ui4/hut-combo/exact-slot/recent-selector-fallback cursor=slot4-software/all-active-sources/per-frame-per-cursor hardware-cursor=preferred-physical-source/concurrent virtual=vcursor frame_drag=secondary-button/per-cursor-selected-frame-only maximize=interaction-capability-gated outline=primary-button/selected-frame-only desktop_menu=per-cursor/color-picker+shell owner_events=selected-frame-only screenshot=parked\n",
+        "ui4/input: service online source=hid-sequence-rings cursor_wake=producer-signal keyboard_watchdog_hz={} selection=per-cursor-zero-or-one-frame+most-recent-input-focus first-click=absorb-select keyboard=global-hooks-before-ui4/hut-combo/exact-slot/recent-selector-fallback cursor=slot4-software/all-active-sources/per-frame-per-cursor hardware-cursor=preferred-physical-source/concurrent virtual=vcursor frame_drag=secondary-button/per-cursor-selected-frame-only maximize=interaction-capability-gated outline=primary-button/selected-frame-only desktop_menu=per-cursor/color-picker+shell owner_events=selected-frame-only screenshot=parked\n",
         super::INTERACTION_CADENCE_HZ,
     );
-    let mut cadence = super::InteractionCadence::new();
     loop {
         let cursor_activity = INPUT_BROKER.lock().pump();
         super::context_menu::dispatch_pending_callbacks();
         if cursor_activity {
             SLOT4_VISUAL_CHANGE.signal(());
         }
-        Timer::at(cadence.next_deadline()).await;
+        // Cursor reports wake the broker as soon as their absolute snapshot
+        // and HUT identity are published. The timeout preserves the existing
+        // bounded-latency path for keyboard/general HID producers and acts as
+        // a lost-wakeup watchdog without turning cursor ingestion into a poll.
+        let _ = with_timeout(
+            Duration::from_hz(super::INTERACTION_CADENCE_HZ),
+            crate::usb2::hid::wait_cursor_event_ready(),
+        )
+        .await;
     }
 }
 
