@@ -1,10 +1,10 @@
 //! Gen12 AVC/VDEnc command, coded-output, and surface-upload executor.
 //!
 //! Boot proves the fixed-CQP IDR graph with one procedural NV12 frame. The
-//! resident UI4 service then serially reuses the same fixed backing for live
-//! 2560x1440 NV12 frames. Every submission stores authoritative MFC result
-//! registers and validates its Annex-B access unit before it can be handed to
-//! the network transport.
+//! resident UI4 service then uses a 40-picture IDR-P GOP with ping-pong recon
+//! and 4x reference surfaces for live 2560x1440 NV12 frames. Every submission
+//! stores authoritative MFC result registers and validates its Annex-B access
+//! unit before it can be handed to the network transport.
 
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU8, Ordering};
@@ -21,7 +21,7 @@ const CONTEXT_GPU: u64 = 0x4101_0000;
 const ARENA_GPU: u64 = 0x4110_0000;
 const RING_BYTES: usize = 16 * 1024;
 const CONTEXT_BYTES: usize = 22 * 4096;
-const ARENA_BYTES: usize = 16 * 1024 * 1024;
+const ARENA_BYTES: usize = 32 * 1024 * 1024;
 
 const BATCH_OFFSET: usize = 0x0000_0000;
 const BATCH_BYTES: usize = 64 * 1024;
@@ -37,7 +37,8 @@ const FRAME_WIDTH_MBS: usize = FRAME_WIDTH / 16;
 const FRAME_HEIGHT_MBS: usize = FRAME_HEIGHT / 16;
 const FRAME_MACROBLOCKS: usize = FRAME_WIDTH_MBS * FRAME_HEIGHT_MBS;
 const SOURCE_BYTES: usize = FRAME_WIDTH * FRAME_HEIGHT * 3 / 2;
-const RECON_OFFSET: usize = 0x0058_0000;
+const RECON_0_OFFSET: usize = 0x0058_0000;
+const RECON_1_OFFSET: usize = 0x00af_0000;
 const RECON_BYTES: usize = SOURCE_BYTES;
 const DS_WIDTH: usize = FRAME_WIDTH / 4;
 const DS_LOGICAL_HEIGHT: usize = FRAME_HEIGHT / 4;
@@ -46,50 +47,85 @@ const DS_LOGICAL_HEIGHT: usize = FRAME_HEIGHT / 4;
 // aligned to 32 rows, then doubled.
 const DS_HEIGHT: usize = 384;
 const DS_PITCH: usize = 640;
-const DS_OFFSET: usize = 0x00ae_0000;
+const DS_0_OFFSET: usize = 0x0104_0000;
+const DS_1_OFFSET: usize = 0x010a_0000;
 const DS_BYTES: usize = DS_PITCH * DS_HEIGHT * 3 / 2;
-const BITSTREAM_OFFSET: usize = 0x00b4_0000;
+const BITSTREAM_OFFSET: usize = 0x0110_0000;
 const BITSTREAM_BYTES: usize = 4 * 1024 * 1024;
-const MFX_STATS_OFFSET: usize = 0x00f4_0000;
-const VDENC_STATS_OFFSET: usize = 0x00f5_0000;
-const SLICE_SIZE_OFFSET: usize = 0x00f6_0000;
+const MFX_STATS_OFFSET: usize = 0x0150_0000;
+const VDENC_STATS_OFFSET: usize = 0x0151_0000;
+const SLICE_SIZE_OFFSET: usize = 0x0152_0000;
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-const INTRA_ROWSTORE_OFFSET: usize = 0x00f7_0000;
+const INTRA_ROWSTORE_OFFSET: usize = 0x0153_0000;
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-const DEBLOCK_ROWSTORE_OFFSET: usize = 0x00f8_0000;
-const BSP_ROWSTORE_OFFSET: usize = 0x00f9_0000;
+const DEBLOCK_ROWSTORE_OFFSET: usize = 0x0154_0000;
+const BSP_ROWSTORE_OFFSET: usize = 0x0155_0000;
+const MV_OBJECT_OFFSET: usize = 0x0156_0000;
+// Gen12 AVC allocates two page-aligned field MV regions at 128 bytes per
+// macroblock. The progressive frame still uses the field-safe allocation.
+const FIELD_MACROBLOCKS: usize = FRAME_WIDTH_MBS * FRAME_HEIGHT_MBS.div_ceil(2);
+const MV_OBJECT_FIELD_BYTES: usize = (FIELD_MACROBLOCKS * 128).next_multiple_of(4096);
+const MV_OBJECT_BYTES: usize = MV_OBJECT_FIELD_BYTES * 2;
+const DMV_0_OFFSET: usize = 0x0173_0000;
+const DMV_1_OFFSET: usize = 0x0182_0000;
+const MPR_ROWSTORE_OFFSET: usize = 0x0191_0000;
+// AVC direct-MV storage is 64 bytes per macroblock, with an even MB height.
+const DMV_BYTES: usize = FRAME_WIDTH_MBS * FRAME_HEIGHT_MBS.next_multiple_of(2) * 64;
 const SCRATCH_BYTES: usize = 64 * 1024;
-const ARENA_WORK_RANGES: [(usize, usize); 6] = [
+// Gen12 exposes two AVC ILDB stream-out bases. Keep both valid for P pictures
+// even when stream-out is nominally disabled: the first inter-picture traces
+// show a zero-base access while PIPE_BUF_ADDR_STATE is active. One cache line
+// per macroblock covers the diagnostic sink without aliasing live statistics.
+const ILDB_STREAMOUT_BYTES: usize = (FRAME_MACROBLOCKS * 64).next_multiple_of(4096);
+const ILDB_STREAMOUT_0_OFFSET: usize = 0x0192_0000;
+const ILDB_STREAMOUT_1_OFFSET: usize = 0x01a1_0000;
+const ARENA_WORK_RANGES: [(usize, usize); 14] = [
     (BATCH_OFFSET, BATCH_BYTES),
     (RESULT_OFFSET, RESULT_BYTES),
-    (RECON_OFFSET, RECON_BYTES),
-    (DS_OFFSET, DS_BYTES),
+    (RECON_0_OFFSET, RECON_BYTES),
+    (RECON_1_OFFSET, RECON_BYTES),
+    (DS_0_OFFSET, DS_BYTES),
+    (DS_1_OFFSET, DS_BYTES),
     (BITSTREAM_OFFSET, BITSTREAM_BYTES),
     (MFX_STATS_OFFSET, BSP_ROWSTORE_OFFSET + SCRATCH_BYTES - MFX_STATS_OFFSET),
+    (MV_OBJECT_OFFSET, MV_OBJECT_BYTES),
+    (DMV_0_OFFSET, DMV_BYTES),
+    (DMV_1_OFFSET, DMV_BYTES),
+    (MPR_ROWSTORE_OFFSET, SCRATCH_BYTES),
+    (ILDB_STREAMOUT_0_OFFSET, ILDB_STREAMOUT_BYTES),
+    (ILDB_STREAMOUT_1_OFFSET, ILDB_STREAMOUT_BYTES),
 ];
 
 const BATCH_GPU: u64 = ARENA_GPU + BATCH_OFFSET as u64;
 const CODEC_BATCH_GPU: u64 = BATCH_GPU + CODEC_BATCH_OFFSET as u64;
 const RESULT_GPU: u64 = ARENA_GPU + RESULT_OFFSET as u64;
 const SOURCE_GPU: u64 = ARENA_GPU + SOURCE_OFFSET as u64;
-const RECON_GPU: u64 = ARENA_GPU + RECON_OFFSET as u64;
-const DS_GPU: u64 = ARENA_GPU + DS_OFFSET as u64;
+const RECON_0_GPU: u64 = ARENA_GPU + RECON_0_OFFSET as u64;
+const RECON_1_GPU: u64 = ARENA_GPU + RECON_1_OFFSET as u64;
+const DS_0_GPU: u64 = ARENA_GPU + DS_0_OFFSET as u64;
+const DS_1_GPU: u64 = ARENA_GPU + DS_1_OFFSET as u64;
 const BITSTREAM_GPU: u64 = ARENA_GPU + BITSTREAM_OFFSET as u64;
 const MFX_STATS_GPU: u64 = ARENA_GPU + MFX_STATS_OFFSET as u64;
 const VDENC_STATS_GPU: u64 = ARENA_GPU + VDENC_STATS_OFFSET as u64;
 const SLICE_SIZE_GPU: u64 = ARENA_GPU + SLICE_SIZE_OFFSET as u64;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
+const MV_OBJECT_GPU: u64 = ARENA_GPU + MV_OBJECT_OFFSET as u64;
+const DMV_0_GPU: u64 = ARENA_GPU + DMV_0_OFFSET as u64;
+const DMV_1_GPU: u64 = ARENA_GPU + DMV_1_OFFSET as u64;
+const MPR_ROWSTORE_GPU: u64 = ARENA_GPU + MPR_ROWSTORE_OFFSET as u64;
 const INTRA_ROWSTORE_GPU: u64 = ARENA_GPU + INTRA_ROWSTORE_OFFSET as u64;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const DEBLOCK_ROWSTORE_GPU: u64 = ARENA_GPU + DEBLOCK_ROWSTORE_OFFSET as u64;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const BSP_ROWSTORE_GPU: u64 = ARENA_GPU + BSP_ROWSTORE_OFFSET as u64;
+const ILDB_STREAMOUT_0_GPU: u64 = ARENA_GPU + ILDB_STREAMOUT_0_OFFSET as u64;
+const ILDB_STREAMOUT_1_GPU: u64 = ARENA_GPU + ILDB_STREAMOUT_1_OFFSET as u64;
 
 const TIMEOUT_NS: u64 = 100_000_000;
 const POLL_LIMIT: u32 = 2_000_000;
-const EXPECTED_CODEC_PACKETS: usize = 32;
-const EXPECTED_BATCH_BYTES: usize = 2_548;
+const EXPECTED_IDR_CODEC_PACKETS: usize = 32;
+const EXPECTED_IDR_BATCH_BYTES: usize = 2_628;
+const EXPECTED_P_CODEC_PACKETS: usize = 32;
+const EXPECTED_P_BATCH_BYTES: usize = 2_896;
 const EXPECTED_PRIMARY_BATCH_BYTES: usize = 40;
+pub(crate) const GOP_PICTURES: u32 = 40;
 
 const _: () = {
     assert!(RING_GPU % crate::intel::WARM_ALIGN as u64 == 0);
@@ -101,6 +137,7 @@ const _: () = {
     assert!(FRAME_WIDTH_MBS == 160);
     assert!(FRAME_HEIGHT_MBS == 90);
     assert!(FRAME_MACROBLOCKS == 14_400);
+    assert!(GOP_PICTURES > 1 && GOP_PICTURES <= 128);
     assert!(DS_WIDTH % 16 == 0);
     assert!(DS_LOGICAL_HEIGHT == 360);
     assert!(DS_HEIGHT >= DS_LOGICAL_HEIGHT);
@@ -110,11 +147,19 @@ const _: () = {
     assert!(EXPECTED_PRIMARY_BATCH_BYTES <= PRIMARY_BATCH_BYTES);
     assert!(BATCH_OFFSET + BATCH_BYTES <= RESULT_OFFSET);
     assert!(RESULT_OFFSET + RESULT_BYTES <= SOURCE_OFFSET);
-    assert!(SOURCE_OFFSET + SOURCE_BYTES <= RECON_OFFSET);
-    assert!(RECON_OFFSET + RECON_BYTES <= DS_OFFSET);
-    assert!(DS_OFFSET + DS_BYTES <= BITSTREAM_OFFSET);
+    assert!(SOURCE_OFFSET + SOURCE_BYTES <= RECON_0_OFFSET);
+    assert!(RECON_0_OFFSET + RECON_BYTES <= RECON_1_OFFSET);
+    assert!(RECON_1_OFFSET + RECON_BYTES <= DS_0_OFFSET);
+    assert!(DS_0_OFFSET + DS_BYTES <= DS_1_OFFSET);
+    assert!(DS_1_OFFSET + DS_BYTES <= BITSTREAM_OFFSET);
     assert!(BITSTREAM_OFFSET + BITSTREAM_BYTES <= MFX_STATS_OFFSET);
-    assert!(BSP_ROWSTORE_OFFSET + SCRATCH_BYTES <= ARENA_BYTES);
+    assert!(BSP_ROWSTORE_OFFSET + SCRATCH_BYTES <= MV_OBJECT_OFFSET);
+    assert!(MV_OBJECT_OFFSET + MV_OBJECT_BYTES <= DMV_0_OFFSET);
+    assert!(DMV_0_OFFSET + DMV_BYTES <= DMV_1_OFFSET);
+    assert!(DMV_1_OFFSET + DMV_BYTES <= MPR_ROWSTORE_OFFSET);
+    assert!(MPR_ROWSTORE_OFFSET + SCRATCH_BYTES <= ILDB_STREAMOUT_0_OFFSET);
+    assert!(ILDB_STREAMOUT_0_OFFSET + ILDB_STREAMOUT_BYTES <= ILDB_STREAMOUT_1_OFFSET);
+    assert!(ILDB_STREAMOUT_1_OFFSET + ILDB_STREAMOUT_BYTES <= ARENA_BYTES);
     assert!(ARENA_GPU + ARENA_BYTES as u64 <= 0x5000_0000);
 };
 
@@ -158,6 +203,81 @@ const MFX_SURFACE_RECON: [u32; 6] = mfx_surface_state(0, FRAME_WIDTH, FRAME_HEIG
 const MFX_SURFACE_SOURCE: [u32; 6] = mfx_surface_state(4, FRAME_WIDTH, FRAME_HEIGHT, FRAME_WIDTH);
 const MFX_SURFACE_DS: [u32; 6] = mfx_surface_state(5, DS_WIDTH, DS_HEIGHT, DS_PITCH);
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct AvcPicture {
+    is_idr: bool,
+    frame_num: u8,
+}
+
+impl AvcPicture {
+    const BOOT_IDR: Self = Self {
+        is_idr: true,
+        frame_num: 0,
+    };
+
+    const fn for_sequence(sequence: u32) -> Self {
+        let gop_position = sequence % GOP_PICTURES;
+        Self {
+            is_idr: gop_position == 0,
+            frame_num: gop_position as u8,
+        }
+    }
+
+    const fn current_recon_gpu(self) -> u64 {
+        if self.frame_num & 1 == 0 {
+            RECON_0_GPU
+        } else {
+            RECON_1_GPU
+        }
+    }
+
+    const fn reference_recon_gpu(self) -> Option<u64> {
+        if self.is_idr {
+            None
+        } else if self.frame_num & 1 == 0 {
+            Some(RECON_1_GPU)
+        } else {
+            Some(RECON_0_GPU)
+        }
+    }
+
+    const fn current_ds_gpu(self) -> u64 {
+        if self.frame_num & 1 == 0 {
+            DS_0_GPU
+        } else {
+            DS_1_GPU
+        }
+    }
+
+    const fn reference_ds_gpu(self) -> Option<u64> {
+        if self.is_idr {
+            None
+        } else if self.frame_num & 1 == 0 {
+            Some(DS_1_GPU)
+        } else {
+            Some(DS_0_GPU)
+        }
+    }
+
+    const fn current_dmv_gpu(self) -> u64 {
+        if self.frame_num & 1 == 0 {
+            DMV_0_GPU
+        } else {
+            DMV_1_GPU
+        }
+    }
+
+    const fn reference_dmv_gpu(self) -> Option<u64> {
+        if self.is_idr {
+            None
+        } else if self.frame_num & 1 == 0 {
+            Some(DMV_1_GPU)
+        } else {
+            Some(DMV_0_GPU)
+        }
+    }
+}
+
 const fn mfx_surface_state(surface_id: u32, width: usize, height: usize, pitch: usize) -> [u32; 6] {
     [
         0x7001_0004,
@@ -169,7 +289,7 @@ const fn mfx_surface_state(surface_id: u32, width: usize, height: usize, pitch: 
     ]
 }
 
-const MFX_AVC_IMG_STATE: [u32; 21] = {
+const MFX_AVC_IMG_STATE_BASE: [u32; 21] = {
     let mut words = [
         0x7100_0013,
         0,
@@ -197,7 +317,7 @@ const MFX_AVC_IMG_STATE: [u32; 21] = {
     words[2] = (((FRAME_HEIGHT_MBS - 1) as u32) << 16) | (FRAME_WIDTH_MBS - 1) as u32;
     words
 };
-const MFX_AVC_SLICE_STATE: [u32; 11] = {
+const MFX_AVC_SLICE_STATE_BASE: [u32; 11] = {
     let mut words = [
         0x7103_0009,
         0x0000_0002,
@@ -214,6 +334,40 @@ const MFX_AVC_SLICE_STATE: [u32; 11] = {
     words[5] = (FRAME_HEIGHT_MBS as u32) << 16;
     words
 };
+const MFX_AVC_REF_IDX_STATE_L0: [u32; 10] = [
+    0x7104_0008,
+    0,
+    0x8080_8000,
+    0x8080_8080,
+    0x8080_8080,
+    0x8080_8080,
+    0x8080_8080,
+    0x8080_8080,
+    0x8080_8080,
+    0x8080_8080,
+];
+
+fn mfx_avc_img_state(picture: AvcPicture) -> [u32; 21] {
+    let mut words = MFX_AVC_IMG_STATE_BASE;
+    // Match the SPS: one reference frame, pic_order_cnt_type=2 and an
+    // eight-bit frame_num (log2_max_frame_num_minus4=4).
+    words[13] = 1 << 24;
+    words[14] = (4 << 16) | (2 << 2);
+    words[15] = u32::from(picture.frame_num) << 16;
+    if !picture.is_idr {
+        words[13] |= 1 << 8;
+    }
+    words
+}
+
+fn mfx_avc_slice_state(picture: AvcPicture) -> [u32; 11] {
+    let mut words = MFX_AVC_SLICE_STATE_BASE;
+    if !picture.is_idr {
+        words[1] = 0;
+        words[2] = 1 << 16;
+    }
+    words
+}
 
 const VDENC_PIPE_MODE_SELECT: [u32; 6] = [0x7080_0004, 0x0122_00a2, 0x002b_030a, 0x0700_0303, 0, 0];
 const VDENC_SRC_SURFACE_STATE: [u32; 6] =
@@ -260,7 +414,7 @@ const VDENC_CMD3: [u32; 61] = {
     words[11] = 0x0000_534a;
     words
 };
-const VDENC_IMG_STATE: [u32; 35] = {
+const VDENC_IMG_STATE_BASE: [u32; 35] = {
     let mut words = [
         0x7085_0021,
         0x0000_0040,
@@ -303,6 +457,16 @@ const VDENC_IMG_STATE: [u32; 35] = {
     words[6] = (FRAME_HEIGHT_MBS - 1) as u32;
     words
 };
+
+fn vdenc_img_state(picture: AvcPicture) -> [u32; 35] {
+    let mut words = VDENC_IMG_STATE_BASE;
+    if !picture.is_idr {
+        words[4] |= 0x0024_3000;
+        words[5] |= 1 << 29;
+        words[8] |= (1 << 5) | (1 << 6);
+    }
+    words
+}
 const VDENC_WEIGHTS_OFFSETS_STATE: [u32; 3] = [0x7088_0001, 0x0001_0001, 0x0000_0001];
 const VDENC_WALKER_STATE: [u32; 27] = {
     let mut words = [
@@ -351,14 +515,17 @@ const MI_FLUSH_DW_NO_POSTSYNC: [u32; 5] = [0x1300_0002, 0, 0, 0, media::MI_NOOP]
 const SPS_VUI_FRAME_RATE_HZ: usize = 40;
 // 2560x1440 at 40 fps is 576,000 macroblocks/s. Level 5.0 admits both the
 // 14,400-macroblock frame and that rate; Level 4.1 does not. Since 1440 is
-// already macroblock-aligned, the SPS carries no frame crop.
+// already macroblock-aligned, the SPS carries no frame crop. One short-term
+// reference frame supports the IDR-P GOP without changing the decoded raster.
 const SPS: [u8; 30] = [
-    0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x40, 0x32, 0x95, 0xc0, 0x28, 0x00, 0xb5, 0xb0, 0x16, 0x88,
-    0x00, 0x00, 0x03, 0x00, 0x08, 0x00, 0x00, 0x03, 0x02, 0x84, 0x78, 0x40, 0x21, 0x50,
+    0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x40, 0x32, 0x95, 0xa0, 0x0a, 0x00, 0x2d, 0x6c, 0x05, 0xa2,
+    0x00, 0x00, 0x03, 0x00, 0x02, 0x00, 0x00, 0x03, 0x00, 0xa1, 0x1e, 0x10, 0x08, 0x54,
 ];
 const _: () = assert!(SPS_VUI_FRAME_RATE_HZ == crate::allcaps::media_encode::REALTIME_HZ);
 const PPS: [u8; 8] = [0x00, 0x00, 0x00, 0x01, 0x68, 0xce, 0x38, 0x80];
 const IDR_SLICE_HEADER: [u8; 8] = [0x00, 0x00, 0x01, 0x65, 0x88, 0x80, 0x48, 0x00];
+const IDR_SLICE_HEADER_BITS: usize = 53;
+const P_SLICE_HEADER_BITS: usize = 51;
 // SPS/PPS use HeaderLengthExcludeFrmSize, matching Intel's production AVC
 // path. MFC_BITSTREAM_BYTECOUNT_FRAME therefore excludes these two inserts,
 // while the emulated slice-header insert remains included.
@@ -518,7 +685,7 @@ impl AvcEncodeProbeFailure {
             Self::ForcewakeUnavailable => "vcs0-forcewake-unavailable",
             Self::BackingAllocation => "encode-probe-backing-allocation",
             Self::SurfaceConversion => "nv12-surface-preparation",
-            Self::BatchBuild => "avc-idr-batch-build",
+            Self::BatchBuild => "avc-picture-batch-build",
             Self::ContextBuild => "vcs0-context-build",
             Self::RegisterRejected => "guc-register-rejected",
             Self::SubmitRejected => "guc-submit-rejected",
@@ -548,6 +715,8 @@ pub(crate) struct AvcEncodeProbeReport {
     pub(crate) coded_bytes: usize,
     pub(crate) coded_fnv1a32: u32,
     pub(crate) coded_nal_flags: u8,
+    pub(crate) idr_picture: bool,
+    pub(crate) frame_num: u8,
     pub(crate) excluded_header_bytes: usize,
     pub(crate) mfc_bitstream_bytecount_frame: u32,
     pub(crate) mfx_error: u32,
@@ -591,6 +760,8 @@ impl AvcEncodeProbeReport {
         coded_bytes: 0,
         coded_fnv1a32: 0,
         coded_nal_flags: 0,
+        idr_picture: false,
+        frame_num: 0,
         excluded_header_bytes: EXCLUDED_HEADER_BYTES,
         mfc_bitstream_bytecount_frame: 0,
         mfx_error: 0,
@@ -682,11 +853,14 @@ pub(crate) fn snapshot() -> AvcEncodeProbeReport {
 /// The caller retains the DMA allocation until the submission retires, but
 /// fence completion is awaited cooperatively. No CPU-side full-frame copy is
 /// performed.
-pub(crate) async fn run_nv12_dma_frame(surface: AvcNv12DmaSurface) -> AvcEncodeProbeReport {
-    run_live_frame(AvcFrameSource::Dma(surface)).await
+pub(crate) async fn run_nv12_dma_frame(
+    surface: AvcNv12DmaSurface,
+    sequence: u32,
+) -> AvcEncodeProbeReport {
+    run_live_frame(AvcFrameSource::Dma(surface), AvcPicture::for_sequence(sequence)).await
 }
 
-async fn run_live_frame(source: AvcFrameSource) -> AvcEncodeProbeReport {
+async fn run_live_frame(source: AvcFrameSource, picture: AvcPicture) -> AvcEncodeProbeReport {
     let state = AvcEncodeProbeState::from_raw(STATE.load(Ordering::Acquire));
     if state == AvcEncodeProbeState::Passed {
         STATE.store(AvcEncodeProbeState::NotRun as u8, Ordering::Release);
@@ -695,14 +869,14 @@ async fn run_live_frame(source: AvcFrameSource) -> AvcEncodeProbeReport {
     }
 
     *CODED_ACCESS_UNIT.lock() = None;
-    run_with_source(source).await
+    run_with_source(source, picture).await
 }
 
 pub(crate) async fn run_once() -> AvcEncodeProbeReport {
-    run_with_source(AvcFrameSource::BootProof).await
+    run_with_source(AvcFrameSource::BootProof, AvcPicture::BOOT_IDR).await
 }
 
-async fn run_with_source(source_kind: AvcFrameSource) -> AvcEncodeProbeReport {
+async fn run_with_source(source_kind: AvcFrameSource, picture: AvcPicture) -> AvcEncodeProbeReport {
     let current = AvcEncodeProbeState::from_raw(STATE.load(Ordering::Acquire));
     if current != AvcEncodeProbeState::NotRun {
         return snapshot();
@@ -757,6 +931,13 @@ async fn run_with_source(source_kind: AvcFrameSource) -> AvcEncodeProbeReport {
     let started_ns = crate::chronos::monotonic_nanos();
     let mut report = AvcEncodeProbeReport {
         state: AvcEncodeProbeState::Preparing,
+        idr_picture: picture.is_idr,
+        frame_num: picture.frame_num,
+        excluded_header_bytes: if picture.is_idr {
+            EXCLUDED_HEADER_BYTES
+        } else {
+            0
+        },
         ..AvcEncodeProbeReport::EMPTY
     };
     publish(report);
@@ -820,7 +1001,7 @@ async fn run_with_source(source_kind: AvcFrameSource) -> AvcEncodeProbeReport {
     report.source_nv12_fnv1a32 = source_hash;
 
     let batch_virt = unsafe { backing.arena_virt.add(BATCH_OFFSET + CODEC_BATCH_OFFSET) };
-    let Some((batch_bytes, codec_packets)) = build_idr_batch(batch_virt) else {
+    let Some((batch_bytes, codec_packets)) = build_picture_batch(batch_virt, picture) else {
         return fail(report, AvcEncodeProbeFailure::BatchBuild, started_ns);
     };
     report.batch_ready = true;
@@ -975,7 +1156,7 @@ async fn run_with_source(source_kind: AvcFrameSource) -> AvcEncodeProbeReport {
     report.mfc_bitstream_bytecount_frame =
         media::read_result_dword(result_virt, RESULT_MFC_FRAME_BYTES_SLOT);
     let coded_bytes = (report.mfc_bitstream_bytecount_frame as usize)
-        .checked_add(EXCLUDED_HEADER_BYTES)
+        .checked_add(report.excluded_header_bytes)
         .unwrap_or(BITSTREAM_BYTES.saturating_add(1));
     let bitstream_virt = unsafe { backing.arena_virt.add(BITSTREAM_OFFSET) };
     crate::intel::dma_flush(
@@ -992,12 +1173,14 @@ async fn run_with_source(source_kind: AvcFrameSource) -> AvcEncodeProbeReport {
     report.coded_nal_flags = annex_b_nal_flags(coded);
     let parameter_sets_present = report.coded_nal_flags & 0b0011 == 0b0011;
     let idr_present = report.coded_nal_flags & 0b0100 != 0;
-    let macroblock_payload_present = coded_bytes > EXCLUDED_HEADER_BYTES.saturating_add(64);
-    if report.mfx_error != 0
-        || !parameter_sets_present
-        || !idr_present
-        || !macroblock_payload_present
-    {
+    let p_present = report.coded_nal_flags & 0b1000 != 0;
+    let expected_nal_present = if picture.is_idr {
+        parameter_sets_present && idr_present && !p_present
+    } else {
+        !parameter_sets_present && !idr_present && p_present
+    };
+    let macroblock_payload_present = coded_bytes > report.excluded_header_bytes.saturating_add(64);
+    if report.mfx_error != 0 || !expected_nal_present || !macroblock_payload_present {
         return fail(report, AvcEncodeProbeFailure::CodedOutputInvalid, started_ns);
     }
     *CODED_ACCESS_UNIT.lock() = Some(coded.to_vec());
@@ -1104,7 +1287,7 @@ fn fill_boot_proof_nv12(nv12: &mut [u8]) -> bool {
     true
 }
 
-fn build_idr_batch(batch_virt: *mut u8) -> Option<(usize, usize)> {
+fn build_picture_batch(batch_virt: *mut u8, picture: AvcPicture) -> Option<(usize, usize)> {
     let batch = unsafe {
         core::slice::from_raw_parts_mut(
             batch_virt.cast::<u32>(),
@@ -1137,23 +1320,25 @@ fn build_idr_batch(batch_virt: *mut u8) -> Option<(usize, usize)> {
     push_packet(batch, &mut idx, &MFX_SURFACE_SOURCE, &mut packet_count)?;
     push_packet(batch, &mut idx, &MFX_SURFACE_DS, &mut packet_count)?;
 
-    let mfx_pipe_buf = mfx_pipe_buf_addr_state();
+    let mfx_pipe_buf = mfx_pipe_buf_addr_state(picture);
     push_packet(batch, &mut idx, &mfx_pipe_buf, &mut packet_count)?;
-    let mfx_ind_obj = mfx_ind_obj_base_addr_state();
+    let mfx_ind_obj = mfx_ind_obj_base_addr_state(picture);
     push_packet(batch, &mut idx, &mfx_ind_obj, &mut packet_count)?;
-    let mfx_bsp = mfx_bsp_buf_base_addr_state();
+    let mfx_bsp = mfx_bsp_buf_base_addr_state(picture);
     push_packet(batch, &mut idx, &mfx_bsp, &mut packet_count)?;
 
     push_packet(batch, &mut idx, &VDENC_PIPE_MODE_SELECT, &mut packet_count)?;
     push_packet(batch, &mut idx, &VDENC_SRC_SURFACE_STATE, &mut packet_count)?;
     push_packet(batch, &mut idx, &VDENC_REF_SURFACE_STATE, &mut packet_count)?;
     push_packet(batch, &mut idx, &VDENC_DS_REF_SURFACE_STATE, &mut packet_count)?;
-    let vdenc_pipe_buf = vdenc_pipe_buf_addr_state();
+    let vdenc_pipe_buf = vdenc_pipe_buf_addr_state(picture);
     push_packet(batch, &mut idx, &vdenc_pipe_buf, &mut packet_count)?;
 
     push_packet(batch, &mut idx, &VDENC_CMD3, &mut packet_count)?;
-    push_packet(batch, &mut idx, &MFX_AVC_IMG_STATE, &mut packet_count)?;
-    push_packet(batch, &mut idx, &VDENC_IMG_STATE, &mut packet_count)?;
+    let mfx_img = mfx_avc_img_state(picture);
+    push_packet(batch, &mut idx, &mfx_img, &mut packet_count)?;
+    let vdenc_img = vdenc_img_state(picture);
+    push_packet(batch, &mut idx, &vdenc_img, &mut packet_count)?;
     for matrix_type in 0..4u32 {
         let qm = mfx_qm_state(matrix_type);
         push_packet(batch, &mut idx, &qm, &mut packet_count)?;
@@ -1163,12 +1348,41 @@ fn build_idr_batch(batch_virt: *mut u8) -> Option<(usize, usize)> {
         push_packet(batch, &mut idx, &fqm, &mut packet_count)?;
     }
 
-    push_packet(batch, &mut idx, &MFX_AVC_SLICE_STATE, &mut packet_count)?;
-    push_pak_insert(batch, &mut idx, &SPS, SPS.len() * 8, false, false, 5, false)?;
-    packet_count += 1;
-    push_pak_insert(batch, &mut idx, &PPS, PPS.len() * 8, false, false, 0, false)?;
-    packet_count += 1;
-    push_pak_insert(batch, &mut idx, &IDR_SLICE_HEADER, 53, true, true, 8, true)?;
+    if !picture.is_idr {
+        let directmode = mfx_avc_directmode_state(picture);
+        push_packet(batch, &mut idx, &directmode, &mut packet_count)?;
+        push_packet(batch, &mut idx, &MFX_AVC_REF_IDX_STATE_L0, &mut packet_count)?;
+    }
+    let mfx_slice = mfx_avc_slice_state(picture);
+    push_packet(batch, &mut idx, &mfx_slice, &mut packet_count)?;
+    if picture.is_idr {
+        push_pak_insert(batch, &mut idx, &SPS, SPS.len() * 8, false, false, 5, false)?;
+        packet_count += 1;
+        push_pak_insert(batch, &mut idx, &PPS, PPS.len() * 8, false, false, 0, false)?;
+        packet_count += 1;
+        push_pak_insert(
+            batch,
+            &mut idx,
+            &IDR_SLICE_HEADER,
+            IDR_SLICE_HEADER_BITS,
+            true,
+            true,
+            8,
+            true,
+        )?;
+    } else {
+        let p_slice_header = p_slice_header(picture.frame_num);
+        push_pak_insert(
+            batch,
+            &mut idx,
+            &p_slice_header,
+            P_SLICE_HEADER_BITS,
+            true,
+            true,
+            8,
+            true,
+        )?;
+    }
     packet_count += 1;
 
     push_packet(batch, &mut idx, &VDENC_WEIGHTS_OFFSETS_STATE, &mut packet_count)?;
@@ -1229,9 +1443,12 @@ fn build_idr_batch(batch_virt: *mut u8) -> Option<(usize, usize)> {
     batch[idx + 2] = media::MI_NOOP;
     idx += 3;
     let batch_bytes = idx * core::mem::size_of::<u32>();
-    if packet_count != EXPECTED_CODEC_PACKETS
-        || batch_bytes != EXPECTED_BATCH_BYTES + 5 * 4 * core::mem::size_of::<u32>()
-    {
+    let expected = if picture.is_idr {
+        (EXPECTED_IDR_CODEC_PACKETS, EXPECTED_IDR_BATCH_BYTES)
+    } else {
+        (EXPECTED_P_CODEC_PACKETS, EXPECTED_P_BATCH_BYTES)
+    };
+    if (packet_count, batch_bytes) != expected {
         return None;
     }
     Some((batch_bytes, packet_count))
@@ -1276,47 +1493,124 @@ fn set_addr(words: &mut [u32], dword: usize, gpu: u64) {
     words[dword + 1] = (gpu >> 32) as u32;
 }
 
-fn mfx_pipe_buf_addr_state() -> [u32; 68] {
+fn mfx_pipe_buf_addr_state(picture: AvcPicture) -> [u32; 68] {
     let mut words = [0u32; 68];
     words[0] = 0x7002_0042;
     for (dword, gpu, attr_dword, attr) in [
-        (1, RECON_GPU, 3, 6),
-        (4, RECON_GPU, 6, 6),
+        (1, picture.current_recon_gpu(), 3, 6),
+        (4, picture.current_recon_gpu(), 6, 6),
         (7, SOURCE_GPU, 9, 6),
         (10, MFX_STATS_GPU, 12, 6),
         (52, MFX_STATS_GPU, 54, 6),
-        (62, DS_GPU, 64, 4),
+        (62, picture.current_ds_gpu(), 64, 4),
         (65, SLICE_SIZE_GPU, 67, 12),
     ] {
         set_addr(&mut words, dword, gpu);
         words[attr_dword] = attr;
     }
-    words[13] = 0x0000_8000;
-    words[15] = 0x0000_1000;
-    words[16] = 0x0000_c000;
-    words[18] = 0x0000_1000;
+    if picture.is_idr {
+        words[13] = 0x0000_8000;
+        words[15] = 0x0000_1000;
+        words[16] = 0x0000_c000;
+        words[18] = 0x0000_1000;
+    } else {
+        // ACTHD advances to the end of PIPE_BUF_ADDR_STATE before the first
+        // P-picture low-address fault. Keep both MFX row stores in mapped
+        // PPGTT storage instead of the internal-cache address window.
+        set_addr(&mut words, 13, INTRA_ROWSTORE_GPU);
+        words[15] = 6;
+        set_addr(&mut words, 16, DEBLOCK_ROWSTORE_GPU);
+        words[18] = 6;
+    }
+    if let Some(reference) = picture.reference_recon_gpu() {
+        // MFX exposes sixteen frame-store reference addresses at DW19..DW50.
+        // Intel's AVC encode path aliases every unused entry to the first
+        // valid reconstruction for error concealment; hardware may touch an
+        // entry beyond the one selected by REF_IDX_STATE.  Leaving those
+        // entries zero faults the first P picture at a low GPU address.
+        for dword in (19..=49).step_by(2) {
+            set_addr(&mut words, dword, reference);
+        }
+        words[51] = 6;
+    }
+    if !picture.is_idr {
+        // The P-picture CAT advances through the external row stores, then
+        // reports a 0x5000 write while this command is active. These are the
+        // only remaining zero-backed writable bases in PIPE_BUF_ADDR_STATE.
+        set_addr(&mut words, 55, ILDB_STREAMOUT_0_GPU);
+        words[57] = 6;
+        set_addr(&mut words, 58, ILDB_STREAMOUT_1_GPU);
+        words[60] = 6;
+    }
     words
 }
 
-fn mfx_ind_obj_base_addr_state() -> [u32; 26] {
+fn mfx_ind_obj_base_addr_state(picture: AvcPicture) -> [u32; 26] {
     let mut words = [0u32; 26];
     words[0] = 0x7003_0018;
+    if !picture.is_idr {
+        set_addr(&mut words, 6, MV_OBJECT_GPU);
+        words[8] = 10;
+        set_addr(&mut words, 9, MV_OBJECT_GPU.saturating_add(MV_OBJECT_BYTES as u64));
+    }
     set_addr(&mut words, 21, BITSTREAM_GPU);
     words[23] = 10;
     set_addr(&mut words, 24, BITSTREAM_GPU.saturating_add(BITSTREAM_BYTES as u64));
     words
 }
 
-fn mfx_bsp_buf_base_addr_state() -> [u32; 10] {
-    let mut words = [0u32; 10];
-    words[0] = 0x7004_0008;
-    words[3] = 0x0000_1000;
-    words[4] = 0x0000_4000;
-    words[6] = 0x0000_1000;
+fn mfx_avc_directmode_state(picture: AvcPicture) -> [u32; 71] {
+    debug_assert!(!picture.is_idr && picture.frame_num > 0);
+    let mut words = [0u32; 71];
+    words[0] = 0x7102_0045;
+
+    // Although encoder mode does not semantically require colocated DMV data,
+    // keep every hardware address slot valid. The first inter-picture traces
+    // show a direct-MV-sized access through a zero base before retirement.
+    if let Some(reference) = picture.reference_dmv_gpu() {
+        for dword in (1..=31).step_by(2) {
+            set_addr(&mut words, dword, reference);
+        }
+        words[33] = 10;
+    }
+    set_addr(&mut words, 34, picture.current_dmv_gpu());
+    words[36] = 10;
+
+    // The POC table remains picture state. With pic_order_cnt_type=2,
+    // progressive short-term pictures advance by two and reference the
+    // preceding picture.
+    let reference_poc = u32::from(picture.frame_num - 1) * 2;
+    let current_poc = u32::from(picture.frame_num) * 2;
+    words[37] = reference_poc;
+    words[38] = reference_poc;
+    words[69] = current_poc;
+    words[70] = current_poc;
     words
 }
 
-fn vdenc_pipe_buf_addr_state() -> [u32; 71] {
+fn mfx_bsp_buf_base_addr_state(picture: AvcPicture) -> [u32; 10] {
+    let mut words = [0u32; 10];
+    words[0] = 0x7004_0008;
+    if picture.is_idr {
+        words[3] = 0x0000_1000;
+        words[4] = 0x0000_4000;
+        words[6] = 0x0000_1000;
+    } else {
+        // The first P-picture trace stops with BBADDR on this command's DW1
+        // and a low PPGTT fault. Bind the encoder's BSD/MPC row store
+        // explicitly instead of relying on the internal-media cache path.
+        set_addr(&mut words, 1, BSP_ROWSTORE_GPU);
+        words[3] = 6;
+        // With DW1 externally backed, the next run advances from a 0x7000 to
+        // a 0x9000 low-address fault while remaining in this command. Back
+        // the nominally decoder-only MPR row store as observed by this mode.
+        set_addr(&mut words, 4, MPR_ROWSTORE_GPU);
+        words[6] = 6;
+    }
+    words
+}
+
+fn vdenc_pipe_buf_addr_state(picture: AvcPicture) -> [u32; 71] {
     let mut words = [0u32; 71];
     words[0] = 0x7084_0045;
     for (dword, gpu, attr_dword) in [(10, SOURCE_GPU, 12), (34, VDENC_STATS_GPU, 36)] {
@@ -1326,7 +1620,20 @@ fn vdenc_pipe_buf_addr_state() -> [u32; 71] {
     words[16] = 0x0001_4000;
     words[18] = 0x0000_1000;
     words[61] = 0xc0;
+    if let Some(reference) = picture.reference_recon_gpu() {
+        set_addr(&mut words, 22, reference);
+        words[24] = 6;
+    }
+    if let Some(reference) = picture.reference_ds_gpu() {
+        set_addr(&mut words, 1, reference);
+        words[3] = 6;
+    }
     words
+}
+
+fn p_slice_header(frame_num: u8) -> [u8; 7] {
+    debug_assert!(frame_num > 0 && u32::from(frame_num) < GOP_PICTURES);
+    [0x00, 0x00, 0x01, 0x41, 0x9a, frame_num << 1, 0x20]
 }
 
 fn mfx_qm_state(matrix_type: u32) -> [u32; 18] {

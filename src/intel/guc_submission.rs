@@ -119,6 +119,7 @@ impl GucContextToken {
 pub(crate) enum GucSubmissionError {
     TransportNotReady,
     DeviceFaulted,
+    EngineFaulted,
     ContextRegistryFull,
     InvalidContext,
     OwnershipConflict,
@@ -137,6 +138,7 @@ impl GucSubmissionError {
         match self {
             Self::TransportNotReady => "transport-not-ready",
             Self::DeviceFaulted => "device-faulted",
+            Self::EngineFaulted => "engine-faulted",
             Self::ContextRegistryFull => "context-registry-full",
             Self::InvalidContext => "invalid-context",
             Self::OwnershipConflict => "ownership-conflict",
@@ -191,6 +193,7 @@ pub(crate) struct GucSchedulerStatus {
     pub(crate) deregistrations: u64,
     pub(crate) failures: u64,
     pub(crate) async_events: u64,
+    pub(crate) coalesced_async_events: u64,
     pub(crate) async_event_errors: u64,
     pub(crate) memory_cat_faults: u64,
     pub(crate) unattributed_faults: u64,
@@ -290,6 +293,7 @@ struct GucSubmissionState {
     deregistrations: u64,
     failures: u64,
     async_events: u64,
+    coalesced_async_events: u64,
     async_event_errors: u64,
     memory_cat_faults: u64,
     unattributed_faults: u64,
@@ -305,6 +309,7 @@ static CONTEXTS: Mutex<GucSubmissionState> = Mutex::new(GucSubmissionState {
     deregistrations: 0,
     failures: 0,
     async_events: 0,
+    coalesced_async_events: 0,
     async_event_errors: 0,
     memory_cat_faults: 0,
     unattributed_faults: 0,
@@ -421,6 +426,9 @@ pub(crate) fn register_context(
     drain_g2h_events(&mut state);
     if state.gt_faulted {
         return Err(GucSubmissionError::DeviceFaulted);
+    }
+    if engine_lane_is_quarantined(&state, engine) {
+        return Err(GucSubmissionError::EngineFaulted);
     }
     if let Some((slot, context)) =
         state
@@ -646,6 +654,9 @@ pub(crate) fn submit_context(
     };
     if !context.registered || context.generation != generation {
         return Err(GucSubmissionError::InvalidContext);
+    }
+    if engine_lane_is_quarantined(&state, context.engine) {
+        return Err(GucSubmissionError::EngineFaulted);
     }
     if context.destroy_requested
         || context.pending_disable
@@ -1051,6 +1062,9 @@ fn drain_g2h_events(state: &mut GucSubmissionState) {
         process_g2h_event(state, event);
     });
     state.async_events = state.async_events.saturating_add(result.events as u64);
+    state.coalesced_async_events = state
+        .coalesced_async_events
+        .saturating_add(result.coalesced_events);
     let transport_errors = result
         .malformed_messages
         .saturating_add(result.dropped_events)
@@ -1505,6 +1519,9 @@ fn mark_exact_context_fault(
             context.cat_hw_type = hw_type;
         }
     }
+    if let Some(lane) = engine_lane_bit(state.contexts[slot].engine) {
+        state.quarantined_engine_lanes |= lane;
+    }
     if newly_reported {
         state.failures = state.failures.saturating_add(1);
     }
@@ -1774,6 +1791,7 @@ pub(crate) fn scheduler_status() -> GucSchedulerStatus {
         deregistrations: state.deregistrations,
         failures: state.failures,
         async_events: state.async_events,
+        coalesced_async_events: state.coalesced_async_events,
         async_event_errors: state.async_event_errors,
         memory_cat_faults: state.memory_cat_faults,
         unattributed_faults: state.unattributed_faults,

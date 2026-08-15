@@ -98,6 +98,7 @@ impl CtbG2hEvent {
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct CtbG2hPollResult {
     pub(crate) events: usize,
+    pub(crate) coalesced_events: u64,
     pub(crate) malformed_messages: u64,
     pub(crate) dropped_events: u64,
     pub(crate) unsolicited_responses: u64,
@@ -107,6 +108,7 @@ struct CtbG2hEventQueue {
     entries: [CtbG2hEvent; CT_G2H_EVENT_QUEUE_CAPACITY],
     head: usize,
     len: usize,
+    coalesced_events: u64,
     malformed_messages: u64,
     dropped_events: u64,
     unsolicited_responses: u64,
@@ -117,12 +119,24 @@ impl CtbG2hEventQueue {
         entries: [CtbG2hEvent::EMPTY; CT_G2H_EVENT_QUEUE_CAPACITY],
         head: 0,
         len: 0,
+        coalesced_events: 0,
         malformed_messages: 0,
         dropped_events: 0,
         unsolicited_responses: 0,
     };
 
     fn push(&mut self, event: CtbG2hEvent) {
+        // GuC may publish the same sticky CAT/reset notification repeatedly
+        // until the exact context DISABLE reaches firmware. Retain one copy:
+        // duplicate notifications carry no additional ownership evidence and
+        // must not crowd an unrelated engine's event out of this queue.
+        if (0..self.len).any(|offset| {
+            let index = (self.head + offset) % CT_G2H_EVENT_QUEUE_CAPACITY;
+            self.entries[index] == event
+        }) {
+            self.coalesced_events = self.coalesced_events.saturating_add(1);
+            return;
+        }
         if self.len == CT_G2H_EVENT_QUEUE_CAPACITY {
             self.dropped_events = self.dropped_events.saturating_add(1);
             return;
@@ -334,9 +348,11 @@ pub(crate) fn poll_g2h_events(mut visit: impl FnMut(CtbG2hEvent)) -> CtbG2hPollR
     }
 
     let mut queue = G2H_EVENTS.lock();
+    result.coalesced_events = queue.coalesced_events;
     result.malformed_messages = queue.malformed_messages;
     result.dropped_events = queue.dropped_events;
     result.unsolicited_responses = queue.unsolicited_responses;
+    queue.coalesced_events = 0;
     queue.malformed_messages = 0;
     queue.dropped_events = 0;
     queue.unsolicited_responses = 0;

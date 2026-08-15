@@ -39,7 +39,8 @@ subscriber-driven kernel service:
    frame overlap Gen12 VDEnc/MFX encode and UDP egress of the preceding frame.
    VDBOX completion is awaited cooperatively on that worker, so preparation
    and egress remain runnable while hardware owns the encode interval.
-   The consumer emits a fresh IDR access unit on each absolute 40 Hz deadline.
+   The consumer emits one IDR followed by 39 reference-backed P pictures on
+   absolute 40 Hz deadlines, then begins the next GOP with a fresh IDR.
    The first frame is prepared before cadence measurement begins, and the
    producer cannot advance more than one frame ahead of the consumer.
 
