@@ -111,8 +111,8 @@ const TIMEOUT_NS: u64 = 100_000_000;
 const POLL_LIMIT: u32 = 2_000_000;
 const EXPECTED_IDR_CODEC_PACKETS: usize = 32;
 const EXPECTED_IDR_BATCH_BYTES: usize = 2_628;
-const EXPECTED_P_CODEC_PACKETS: usize = 32;
-const EXPECTED_P_BATCH_BYTES: usize = 2_896;
+const EXPECTED_P_CODEC_PACKETS: usize = 31;
+const EXPECTED_P_BATCH_BYTES: usize = 2_612;
 const EXPECTED_PRIMARY_BATCH_BYTES: usize = 40;
 pub(crate) const GOP_PICTURES: u32 = 40;
 
@@ -449,7 +449,9 @@ fn vdenc_img_state(picture: AvcPicture) -> [u32; 35] {
     let mut words = VDENC_IMG_STATE_BASE;
     if !picture.is_idr {
         words[4] |= 0x0024_3000;
-        words[5] |= 1 << 29;
+        // This stream binds exactly one L0 reference and leaves Ref1 absent.
+        // Gen12 requires HME Ref1 to be disabled in that non-perf P mode.
+        words[5] |= (1 << 29) | (1 << 17);
         words[8] |= (1 << 5) | (1 << 6);
     }
     words
@@ -610,6 +612,10 @@ pub(crate) struct AvcEncodeTimeoutDiagnostics {
     pub(crate) mfx_stats_head: [u32; 4],
     pub(crate) vdenc_stats_head: [u32; 4],
     pub(crate) slice_size_head: [u32; 4],
+    pub(crate) current_recon_sample: u32,
+    pub(crate) reference_recon_sample: u32,
+    pub(crate) current_ds_sample: u32,
+    pub(crate) reference_ds_sample: u32,
 }
 
 impl AvcEncodeTimeoutDiagnostics {
@@ -656,6 +662,10 @@ impl AvcEncodeTimeoutDiagnostics {
         mfx_stats_head: [0; 4],
         vdenc_stats_head: [0; 4],
         slice_size_head: [0; 4],
+        current_recon_sample: 0,
+        reference_recon_sample: 0,
+        current_ds_sample: 0,
+        reference_ds_sample: 0,
     };
 }
 
@@ -788,20 +798,13 @@ unsafe impl Send for ProbeBacking {}
 #[derive(Copy, Clone)]
 pub(crate) struct AvcNv12DmaSurface {
     phys: u64,
-    virt: *mut u8,
     bytes: usize,
 }
 
-unsafe impl Send for AvcNv12DmaSurface {}
-unsafe impl Sync for AvcNv12DmaSurface {}
-
 impl AvcNv12DmaSurface {
-    pub(crate) fn new(phys: u64, virt: *mut u8, bytes: usize) -> Option<Self> {
-        (phys != 0
-            && !virt.is_null()
-            && phys.is_multiple_of(crate::intel::WARM_ALIGN as u64)
-            && bytes == SOURCE_BYTES)
-            .then_some(Self { phys, virt, bytes })
+    pub(crate) fn new(phys: u64, bytes: usize) -> Option<Self> {
+        (phys != 0 && phys.is_multiple_of(crate::intel::WARM_ALIGN as u64) && bytes == SOURCE_BYTES)
+            .then_some(Self { phys, bytes })
     }
 }
 
@@ -966,10 +969,13 @@ async fn run_with_source(source_kind: AvcFrameSource, picture: AvcPicture) -> Av
             if surface.bytes != SOURCE_BYTES {
                 return fail(report, AvcEncodeProbeFailure::SurfaceConversion, started_ns);
             }
-            crate::intel::dma_flush(surface.virt, surface.bytes);
-            let bytes =
-                unsafe { core::slice::from_raw_parts(surface.virt.cast_const(), surface.bytes) };
-            (surface.phys, fnv1a32_sampled(bytes))
+            // The live surface is produced by RCS, whose terminal PIPE_CONTROL
+            // drains HDC/L3 before its completion marker is published. VDBOX
+            // consumes the same DMA allocation directly after that marker.
+            // Do not walk all 5.5 MiB through CPU CLFLUSH or sample it between
+            // those two GPU owners; live source-change telemetry is collected
+            // from the CPU-authored RGBA composition before RCS submission.
+            (surface.phys, 0)
         }
     };
     if backing
@@ -1115,7 +1121,7 @@ async fn run_with_source(source_kind: AvcFrameSource, picture: AvcPicture) -> Av
     report.codec_end = media::read_result_dword(result_virt, media::MEDIA_RESULT_POSTSUBMIT_SLOT);
     report.complete = media::read_result_dword(result_virt, media::MEDIA_RESULT_COMPLETE_SLOT);
     if !report.retired {
-        report.timeout_diagnostics = capture_timeout_diagnostics(dev, engine, backing);
+        report.timeout_diagnostics = capture_timeout_diagnostics(dev, engine, backing, picture);
         return quarantine(lane, report, AvcEncodeProbeFailure::CompletionTimeout, started_ns);
     }
 
@@ -1309,7 +1315,7 @@ fn build_picture_batch(batch_virt: *mut u8, picture: AvcPicture) -> Option<(usiz
 
     let mfx_pipe_buf = mfx_pipe_buf_addr_state(picture);
     push_packet(batch, &mut idx, &mfx_pipe_buf, &mut packet_count)?;
-    let mfx_ind_obj = mfx_ind_obj_base_addr_state(picture);
+    let mfx_ind_obj = mfx_ind_obj_base_addr_state();
     push_packet(batch, &mut idx, &mfx_ind_obj, &mut packet_count)?;
     let mfx_bsp = mfx_bsp_buf_base_addr_state(picture);
     push_packet(batch, &mut idx, &mfx_bsp, &mut packet_count)?;
@@ -1336,8 +1342,10 @@ fn build_picture_batch(batch_virt: *mut u8, picture: AvcPicture) -> Option<(usiz
     }
 
     if !picture.is_idr {
-        let directmode = mfx_avc_directmode_state(picture);
-        push_packet(batch, &mut idx, &directmode, &mut packet_count)?;
+        // Gen12's AVC VDEnc path emits DIRECTMODE_STATE for B pictures only.
+        // A P picture has an L0 reference list, but no colocated direct-mode
+        // prediction state. Do not carry the decode-shaped DMV table into the
+        // first inter-picture command stream.
         push_packet(batch, &mut idx, &MFX_AVC_REF_IDX_STATE_L0, &mut packet_count)?;
     }
     let mfx_slice = mfx_avc_slice_state(picture);
@@ -1523,46 +1531,15 @@ fn mfx_pipe_buf_addr_state(picture: AvcPicture) -> [u32; 68] {
     words
 }
 
-fn mfx_ind_obj_base_addr_state(picture: AvcPicture) -> [u32; 26] {
+fn mfx_ind_obj_base_addr_state() -> [u32; 26] {
     let mut words = [0u32; 26];
     words[0] = 0x7003_0018;
-    if !picture.is_idr {
-        set_addr(&mut words, 6, MV_OBJECT_GPU);
-        words[8] = 10;
-        set_addr(&mut words, 9, MV_OBJECT_GPU.saturating_add(MV_OBJECT_BYTES as u64));
-    }
+    // Gen12 AVC VDEnc supplies motion-estimation data through VDEnc's own
+    // picture resources. MFX_IND_OBJ_BASE_ADDR_STATE binds only the PAK coded
+    // output; its decode/IT MV-object input range remains disabled for P.
     set_addr(&mut words, 21, BITSTREAM_GPU);
     words[23] = 10;
     set_addr(&mut words, 24, BITSTREAM_GPU.saturating_add(BITSTREAM_BYTES as u64));
-    words
-}
-
-fn mfx_avc_directmode_state(picture: AvcPicture) -> [u32; 71] {
-    debug_assert!(!picture.is_idr && picture.frame_num > 0);
-    let mut words = [0u32; 71];
-    words[0] = 0x7102_0045;
-
-    // Although encoder mode does not semantically require colocated DMV data,
-    // keep every hardware address slot valid. The first inter-picture traces
-    // show a direct-MV-sized access through a zero base before retirement.
-    if let Some(reference) = picture.reference_dmv_gpu() {
-        for dword in (1..=31).step_by(2) {
-            set_addr(&mut words, dword, reference);
-        }
-        words[33] = 10;
-    }
-    set_addr(&mut words, 34, picture.current_dmv_gpu());
-    words[36] = 10;
-
-    // The POC table remains picture state. With pic_order_cnt_type=2,
-    // progressive short-term pictures advance by two and reference the
-    // preceding picture.
-    let reference_poc = u32::from(picture.frame_num - 1) * 2;
-    let current_poc = u32::from(picture.frame_num) * 2;
-    words[37] = reference_poc;
-    words[38] = reference_poc;
-    words[69] = current_poc;
-    words[70] = current_poc;
     words
 }
 
@@ -1579,11 +1556,8 @@ fn mfx_bsp_buf_base_addr_state(picture: AvcPicture) -> [u32; 10] {
         // explicitly instead of relying on the internal-media cache path.
         set_addr(&mut words, 1, BSP_ROWSTORE_GPU);
         words[3] = 6;
-        // With DW1 externally backed, the next run advances from a 0x7000 to
-        // a 0x9000 low-address fault while remaining in this command. Back
-        // the nominally decoder-only MPR row store as observed by this mode.
-        set_addr(&mut words, 4, MPR_ROWSTORE_GPU);
-        words[6] = 6;
+        // Gen12 AVC encode binds only the BSD/MPC row store. MPR is a decoder
+        // resource and remains disabled in this mode.
     }
     words
 }
@@ -1725,6 +1699,7 @@ fn capture_timeout_diagnostics(
     dev: crate::intel::Dev,
     engine: media::MediaEngineDescriptor,
     backing: &ProbeBacking,
+    picture: AvcPicture,
 ) -> AvcEncodeTimeoutDiagnostics {
     let bitstream_virt = unsafe { backing.arena_virt.add(BITSTREAM_OFFSET) };
     let mfx_stats_virt = unsafe { backing.arena_virt.add(MFX_STATS_OFFSET) };
@@ -1787,7 +1762,34 @@ fn capture_timeout_diagnostics(
         mfx_stats_head: read_dword_head::<4>(mfx_stats_virt),
         vdenc_stats_head: read_dword_head::<4>(vdenc_stats_virt),
         slice_size_head: read_dword_head::<4>(slice_size_virt),
+        current_recon_sample: sampled_gpu_surface(
+            backing,
+            picture.current_recon_gpu(),
+            RECON_BYTES,
+        ),
+        reference_recon_sample: picture
+            .reference_recon_gpu()
+            .map_or(0, |gpu| sampled_gpu_surface(backing, gpu, RECON_BYTES)),
+        current_ds_sample: sampled_gpu_surface(backing, picture.current_ds_gpu(), DS_BYTES),
+        reference_ds_sample: picture
+            .reference_ds_gpu()
+            .map_or(0, |gpu| sampled_gpu_surface(backing, gpu, DS_BYTES)),
     }
+}
+
+fn sampled_gpu_surface(backing: &ProbeBacking, gpu: u64, bytes: usize) -> u32 {
+    let Some(offset) = gpu.checked_sub(ARENA_GPU).map(|offset| offset as usize) else {
+        return 0;
+    };
+    let Some(end) = offset.checked_add(bytes) else {
+        return 0;
+    };
+    if end > ARENA_BYTES {
+        return 0;
+    }
+    let ptr = unsafe { backing.arena_virt.add(offset) };
+    crate::intel::dma_flush(ptr, bytes);
+    fnv1a32_sampled(unsafe { core::slice::from_raw_parts(ptr, bytes) })
 }
 
 fn classify_acthd(acthd: u64, backing: &ProbeBacking) -> (&'static str, u32, u32) {

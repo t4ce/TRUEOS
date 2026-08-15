@@ -1065,9 +1065,9 @@ async fn encode_prepared_scanout(
         STATE.store(H264EncodeStreamState::Streaming as u8, Ordering::Release);
         return None;
     };
-    let Some(surface) = crate::intel::media::avc_encode_probe::AvcNv12DmaSurface::new(
-        nv12.phys, nv12.virt, nv12.bytes,
-    ) else {
+    let Some(surface) =
+        crate::intel::media::avc_encode_probe::AvcNv12DmaSurface::new(nv12.phys, nv12.bytes)
+    else {
         release_prepared_scanout(&mut prepared);
         STATE.store(H264EncodeStreamState::Streaming as u8, Ordering::Release);
         return None;
@@ -1090,6 +1090,49 @@ async fn encode_prepared_scanout(
             encode.coded_bytes,
             encode.mfx_error,
         );
+        if encode.failure
+            == crate::intel::media::avc_encode_probe::AvcEncodeProbeFailure::CompletionTimeout
+        {
+            let diag = encode.timeout_diagnostics;
+            crate::log_error!(target: "intel/media-encode";
+                "intel/media-encode: live timeout session={} sequence={} markers=0x{:08X}/0x{:08X}/0x{:08X}/0x{:08X} acthd=0x{:08X}:0x{:08X} region={} offset=0x{:X} dword=0x{:08X} ipehr=0x{:08X} instdone=0x{:08X} mfx_error=0x{:08X} mb_count=0x{:08X} frame_bytes=0x{:08X} slice_bytes=0x{:08X} image_control=0x{:08X} slices=0x{:08X} bitstream_head={:08X}/{:08X}/{:08X}/{:08X} mfx_stats={:08X}/{:08X}/{:08X}/{:08X} vdenc_stats={:08X}/{:08X}/{:08X}/{:08X} surface_samples=current_recon:0x{:08X},reference_recon:0x{:08X},current_ds:0x{:08X},reference_ds:0x{:08X}\n",
+                session_id,
+                sequence,
+                encode.kickoff,
+                encode.codec_begin,
+                encode.codec_end,
+                encode.complete,
+                diag.ring_acthd_hi,
+                diag.ring_acthd_lo,
+                diag.acthd_region,
+                diag.acthd_offset_bytes,
+                diag.acthd_dword,
+                diag.ipehr,
+                diag.instdone,
+                diag.mfx_error,
+                diag.mfx_mb_count,
+                diag.mfc_bitstream_bytecount_frame,
+                diag.mfc_bitstream_bytecount_slice,
+                diag.mfc_image_status_control,
+                diag.mfc_avc_num_slices,
+                diag.bitstream_head[0],
+                diag.bitstream_head[1],
+                diag.bitstream_head[2],
+                diag.bitstream_head[3],
+                diag.mfx_stats_head[0],
+                diag.mfx_stats_head[1],
+                diag.mfx_stats_head[2],
+                diag.mfx_stats_head[3],
+                diag.vdenc_stats_head[0],
+                diag.vdenc_stats_head[1],
+                diag.vdenc_stats_head[2],
+                diag.vdenc_stats_head[3],
+                diag.current_recon_sample,
+                diag.reference_recon_sample,
+                diag.current_ds_sample,
+                diag.reference_ds_sample,
+            );
+        }
         return None;
     }
     let Some(annex_b) = crate::intel::media::avc_encode_probe::take_coded_access_unit() else {
