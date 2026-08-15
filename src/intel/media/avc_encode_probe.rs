@@ -2,7 +2,7 @@
 //!
 //! Boot proves the fixed-CQP IDR graph with one procedural NV12 frame. The
 //! resident UI4 service then serially reuses the same fixed backing for live
-//! 1920x1088 NV12 frames. Every submission stores authoritative MFC result
+//! 2560x1440 NV12 frames. Every submission stores authoritative MFC result
 //! registers and validates its Annex-B access unit before it can be handed to
 //! the network transport.
 
@@ -31,33 +31,33 @@ const CODEC_BATCH_BYTES: usize = BATCH_BYTES - CODEC_BATCH_OFFSET;
 const RESULT_OFFSET: usize = 0x0001_0000;
 const RESULT_BYTES: usize = 4096;
 const SOURCE_OFFSET: usize = 0x0002_0000;
-const FRAME_WIDTH: usize = 1920;
-const FRAME_HEIGHT: usize = 1088;
+const FRAME_WIDTH: usize = 2560;
+const FRAME_HEIGHT: usize = 1440;
 const FRAME_WIDTH_MBS: usize = FRAME_WIDTH / 16;
 const FRAME_HEIGHT_MBS: usize = FRAME_HEIGHT / 16;
 const FRAME_MACROBLOCKS: usize = FRAME_WIDTH_MBS * FRAME_HEIGHT_MBS;
 const SOURCE_BYTES: usize = FRAME_WIDTH * FRAME_HEIGHT * 3 / 2;
-const RECON_OFFSET: usize = 0x0032_0000;
+const RECON_OFFSET: usize = 0x0058_0000;
 const RECON_BYTES: usize = SOURCE_BYTES;
 const DS_WIDTH: usize = FRAME_WIDTH / 4;
 const DS_LOGICAL_HEIGHT: usize = FRAME_HEIGHT / 4;
 // Intel's AVC VDEnc path allocates the 4x surface as field-safe Tile-Y
-// geometry even for a progressive frame: ceil(ceil(272 / 16) / 2) * 16,
+// geometry even for a progressive frame: ceil(ceil(360 / 16) / 2) * 16,
 // aligned to 32 rows, then doubled.
-const DS_HEIGHT: usize = 320;
-const DS_PITCH: usize = 512;
-const DS_OFFSET: usize = 0x0062_0000;
+const DS_HEIGHT: usize = 384;
+const DS_PITCH: usize = 640;
+const DS_OFFSET: usize = 0x00ae_0000;
 const DS_BYTES: usize = DS_PITCH * DS_HEIGHT * 3 / 2;
-const BITSTREAM_OFFSET: usize = 0x0066_0000;
+const BITSTREAM_OFFSET: usize = 0x00b4_0000;
 const BITSTREAM_BYTES: usize = 4 * 1024 * 1024;
-const MFX_STATS_OFFSET: usize = 0x00a6_0000;
-const VDENC_STATS_OFFSET: usize = 0x00a7_0000;
-const SLICE_SIZE_OFFSET: usize = 0x00a8_0000;
+const MFX_STATS_OFFSET: usize = 0x00f4_0000;
+const VDENC_STATS_OFFSET: usize = 0x00f5_0000;
+const SLICE_SIZE_OFFSET: usize = 0x00f6_0000;
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-const INTRA_ROWSTORE_OFFSET: usize = 0x00a9_0000;
+const INTRA_ROWSTORE_OFFSET: usize = 0x00f7_0000;
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-const DEBLOCK_ROWSTORE_OFFSET: usize = 0x00aa_0000;
-const BSP_ROWSTORE_OFFSET: usize = 0x00ab_0000;
+const DEBLOCK_ROWSTORE_OFFSET: usize = 0x00f8_0000;
+const BSP_ROWSTORE_OFFSET: usize = 0x00f9_0000;
 const SCRATCH_BYTES: usize = 64 * 1024;
 const ARENA_WORK_RANGES: [(usize, usize); 6] = [
     (BATCH_OFFSET, BATCH_BYTES),
@@ -98,11 +98,11 @@ const _: () = {
     assert!(CODEC_BATCH_OFFSET + CODEC_BATCH_BYTES == BATCH_BYTES);
     assert!(FRAME_WIDTH % 16 == 0);
     assert!(FRAME_HEIGHT % 16 == 0);
-    assert!(FRAME_WIDTH_MBS == 120);
-    assert!(FRAME_HEIGHT_MBS == 68);
-    assert!(FRAME_MACROBLOCKS == 8_160);
+    assert!(FRAME_WIDTH_MBS == 160);
+    assert!(FRAME_HEIGHT_MBS == 90);
+    assert!(FRAME_MACROBLOCKS == 14_400);
     assert!(DS_WIDTH % 16 == 0);
-    assert!(DS_LOGICAL_HEIGHT == 272);
+    assert!(DS_LOGICAL_HEIGHT == 360);
     assert!(DS_HEIGHT >= DS_LOGICAL_HEIGHT);
     assert!(DS_HEIGHT % 32 == 0);
     assert!(DS_PITCH >= DS_WIDTH);
@@ -154,96 +154,96 @@ const GEN12_FAULT_TLB_DATA1: usize = 0x0000_CEBC;
 
 const MI_FORCE_WAKEUP_MFX: [u32; 2] = [0x0e80_0000, 0x0300_0200];
 const MFX_PIPE_MODE_SELECT: [u32; 5] = [0x7000_0003, 0x0002_22d2, 0, 0, 0];
-const MFX_SURFACE_RECON: [u32; 6] = [
-    0x7001_0004,
-    0,
-    0x10fc_77f0,
-    0x4800_3bf8,
-    0x0000_0440,
-    0x0000_0440,
-];
-const MFX_SURFACE_SOURCE: [u32; 6] = [
-    0x7001_0004,
-    4,
-    0x10fc_77f0,
-    0x4800_3bf8,
-    0x0000_0440,
-    0x0000_0440,
-];
-const MFX_SURFACE_DS: [u32; 6] = [
-    0x7001_0004,
-    5,
-    0x04fc_1df0,
-    0x4800_0ff8,
-    0x0000_0140,
-    0x0000_0140,
-];
-const MFX_AVC_IMG_STATE: [u32; 21] = [
-    0x7100_0013,
-    0x0000_1fe0,
-    0x0043_0077,
-    0x0000_2000,
-    0x0000_1514,
-    0x0800_008f,
-    0x0fff_0a8c,
-    0,
-    0,
-    0,
-    0xffff_c000,
-    0x8000_0000,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0x0000_0100,
-    0,
-    0,
-    0,
-];
-const MFX_AVC_SLICE_STATE: [u32; 11] = [
-    0x7103_0009,
-    0x0000_0002,
-    0,
-    0x001a_0000,
-    0,
-    0x0044_0000,
-    0x000b_3000,
-    0,
-    0,
-    0x2d00_0000,
-    0,
-];
+const MFX_SURFACE_RECON: [u32; 6] = mfx_surface_state(0, FRAME_WIDTH, FRAME_HEIGHT, FRAME_WIDTH);
+const MFX_SURFACE_SOURCE: [u32; 6] = mfx_surface_state(4, FRAME_WIDTH, FRAME_HEIGHT, FRAME_WIDTH);
+const MFX_SURFACE_DS: [u32; 6] = mfx_surface_state(5, DS_WIDTH, DS_HEIGHT, DS_PITCH);
+
+const fn mfx_surface_state(surface_id: u32, width: usize, height: usize, pitch: usize) -> [u32; 6] {
+    [
+        0x7001_0004,
+        surface_id,
+        (((height - 1) as u32) << 18) | (((width - 1) as u32) << 4),
+        0x4800_0000 | (((pitch - 1) as u32) << 3),
+        height as u32,
+        height as u32,
+    ]
+}
+
+const MFX_AVC_IMG_STATE: [u32; 21] = {
+    let mut words = [
+        0x7100_0013,
+        0,
+        0,
+        0x0000_2000,
+        0x0000_1514,
+        0x0800_008f,
+        0x0fff_0a8c,
+        0,
+        0,
+        0,
+        0xffff_c000,
+        0x8000_0000,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0x0000_0100,
+        0,
+        0,
+        0,
+    ];
+    words[1] = FRAME_MACROBLOCKS as u32;
+    words[2] = (((FRAME_HEIGHT_MBS - 1) as u32) << 16) | (FRAME_WIDTH_MBS - 1) as u32;
+    words
+};
+const MFX_AVC_SLICE_STATE: [u32; 11] = {
+    let mut words = [
+        0x7103_0009,
+        0x0000_0002,
+        0,
+        0x001a_0000,
+        0,
+        0,
+        0x000b_3000,
+        0,
+        0,
+        0x2d00_0000,
+        0,
+    ];
+    words[5] = (FRAME_HEIGHT_MBS as u32) << 16;
+    words
+};
 
 const VDENC_PIPE_MODE_SELECT: [u32; 6] = [0x7080_0004, 0x0122_00a2, 0x002b_030a, 0x0700_0303, 0, 0];
-const VDENC_SRC_SURFACE_STATE: [u32; 6] = [
-    0x7081_0004,
-    0,
-    0x10fc_77f8,
-    0x2070_3bf8,
-    0x0000_0440,
-    0x0000_0440,
-];
-const VDENC_REF_SURFACE_STATE: [u32; 6] = [
-    0x7082_0004,
-    0,
-    0x10fc_77f0,
-    0x2000_3bf8,
-    0x0000_0440,
-    0x0000_0440,
-];
-const VDENC_DS_REF_SURFACE_STATE: [u32; 10] = [
-    0x7083_0008,
-    0,
-    0x04fc_1df0,
-    0x2000_0ff8,
-    0x0000_0140,
-    0x0000_0140,
-    0,
-    3,
-    0,
-    0,
-];
+const VDENC_SRC_SURFACE_STATE: [u32; 6] =
+    vdenc_surface_state(0x7081_0004, FRAME_WIDTH, FRAME_HEIGHT, FRAME_WIDTH, 0x2070_0000, 0x8);
+const VDENC_REF_SURFACE_STATE: [u32; 6] =
+    vdenc_surface_state(0x7082_0004, FRAME_WIDTH, FRAME_HEIGHT, FRAME_WIDTH, 0x2000_0000, 0);
+const VDENC_DS_REF_SURFACE_STATE: [u32; 10] = {
+    let surface = vdenc_surface_state(0x7083_0008, DS_WIDTH, DS_HEIGHT, DS_PITCH, 0x2000_0000, 0);
+    [
+        surface[0], surface[1], surface[2], surface[3], surface[4], surface[5], 0, 3, 0, 0,
+    ]
+};
+
+const fn vdenc_surface_state(
+    command: u32,
+    width: usize,
+    height: usize,
+    pitch: usize,
+    pitch_flags: u32,
+    dimension_flags: u32,
+) -> [u32; 6] {
+    [
+        command,
+        0,
+        (((height - 1) as u32) << 18) | (((width - 1) as u32) << 4) | dimension_flags,
+        pitch_flags | (((pitch - 1) as u32) << 3),
+        height as u32,
+        height as u32,
+    ]
+}
 const VDENC_CMD3: [u32; 61] = {
     let mut words = [0u32; 61];
     words[0] = 0x7086_003b;
@@ -260,73 +260,84 @@ const VDENC_CMD3: [u32; 61] = {
     words[11] = 0x0000_534a;
     words
 };
-const VDENC_IMG_STATE: [u32; 35] = [
-    0x7085_0021,
-    0x0000_0040,
-    0,
-    0x0078_0000,
-    0x708a_0000,
-    0x0001_0043,
-    0x0000_0043,
-    0,
-    2,
-    0x2e01_000c,
-    0,
-    0,
-    0,
-    0,
-    0x0000_001a,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0x0004_0c24,
-    0,
-    0xffff_0000,
-    0,
-    0,
-    0,
-    0,
-    0x0400_2000,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0x0f00_0a33,
-    0,
-];
+const VDENC_IMG_STATE: [u32; 35] = {
+    let mut words = [
+        0x7085_0021,
+        0x0000_0040,
+        0,
+        0,
+        0x708a_0000,
+        0,
+        0,
+        0,
+        2,
+        0x2e01_000c,
+        0,
+        0,
+        0,
+        0,
+        0x0000_001a,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0x0004_0c24,
+        0,
+        0xffff_0000,
+        0,
+        0,
+        0,
+        0,
+        0x0400_2000,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0x0f00_0a33,
+        0,
+    ];
+    words[3] = (FRAME_WIDTH_MBS as u32) << 16;
+    words[5] = 0x0001_0000 | (FRAME_HEIGHT_MBS - 1) as u32;
+    words[6] = (FRAME_HEIGHT_MBS - 1) as u32;
+    words
+};
 const VDENC_WEIGHTS_OFFSETS_STATE: [u32; 3] = [0x7088_0001, 0x0001_0001, 0x0000_0001];
-const VDENC_WALKER_STATE: [u32; 27] = [
-    0x7087_0019,
-    0,
-    0x0000_0044,
-    0,
-    0,
-    0x0000_077f,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0x3f40_0000,
-    0,
-    0x003f_3f3f,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-    0,
-];
+const VDENC_WALKER_STATE: [u32; 27] = {
+    let mut words = [
+        0x7087_0019,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0x3f40_0000,
+        0,
+        0x003f_3f3f,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+    ];
+    words[2] = FRAME_HEIGHT_MBS as u32;
+    words[5] = (FRAME_WIDTH - 1) as u32;
+    words
+};
 const VD_PIPELINE_FLUSH: [u32; 2] = [0x7780_0000, 0x0002_001a];
 // Intel's Gen12 AVC path follows VD_PIPELINE_FLUSH with two non-postsync
 // MI_FLUSH_DW commands before sampling MFC status registers. The first also
@@ -338,9 +349,12 @@ const MI_FLUSH_DW_NO_POSTSYNC: [u32; 5] = [0x1300_0002, 0, 0, 0, media::MI_NOOP]
 // VUI timing matches the 40 fps live-stream cadence soft cap:
 // time_scale / (2 * num_units_in_tick) = 80 / 2.
 const SPS_VUI_FRAME_RATE_HZ: usize = 40;
-const SPS: [u8; 29] = [
-    0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x40, 0x28, 0x95, 0xc0, 0x78, 0x02, 0x26, 0xc0, 0x5a, 0x20,
-    0x00, 0x00, 0x03, 0x00, 0x20, 0x00, 0x00, 0x0a, 0x11, 0xe1, 0x00, 0x85, 0x40,
+// 2560x1440 at 40 fps is 576,000 macroblocks/s. Level 5.0 admits both the
+// 14,400-macroblock frame and that rate; Level 4.1 does not. Since 1440 is
+// already macroblock-aligned, the SPS carries no frame crop.
+const SPS: [u8; 30] = [
+    0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x40, 0x32, 0x95, 0xc0, 0x28, 0x00, 0xb5, 0xb0, 0x16, 0x88,
+    0x00, 0x00, 0x03, 0x00, 0x08, 0x00, 0x00, 0x03, 0x02, 0x84, 0x78, 0x40, 0x21, 0x50,
 ];
 const _: () = assert!(SPS_VUI_FRAME_RATE_HZ == crate::allcaps::media_encode::REALTIME_HZ);
 const PPS: [u8; 8] = [0x00, 0x00, 0x00, 0x01, 0x68, 0xce, 0x38, 0x80];

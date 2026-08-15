@@ -18,9 +18,9 @@ const TEST_RIG_SCANOUT_WIDTH: u32 = 2560;
 const TEST_RIG_SCANOUT_HEIGHT: u32 = 1440;
 const SOURCE_RGBA_BYTES: usize =
     TEST_RIG_SCANOUT_WIDTH as usize * TEST_RIG_SCANOUT_HEIGHT as usize * 4;
-const ENCODE_WIDTH: usize = 1920;
-const ENCODE_HEIGHT: usize = 1088;
-const ACTIVE_HEIGHT: usize = 1080;
+const ENCODE_WIDTH: usize = TEST_RIG_SCANOUT_WIDTH as usize;
+const ENCODE_HEIGHT: usize = TEST_RIG_SCANOUT_HEIGHT as usize;
+const ACTIVE_HEIGHT: usize = ENCODE_HEIGHT;
 const ACTIVE_TOP: usize = (ENCODE_HEIGHT - ACTIVE_HEIGHT) / 2;
 const ENCODE_LUMA_BYTES: usize = ENCODE_WIDTH * ENCODE_HEIGHT;
 const ENCODE_NV12_BYTES: usize = ENCODE_LUMA_BYTES * 3 / 2;
@@ -42,12 +42,10 @@ static PREPARE_PIPELINE: Mutex<PreparePipeline> = Mutex::new(PreparePipeline::ne
 const _: () = {
     assert!(ENCODE_WIDTH % 16 == 0);
     assert!(ENCODE_HEIGHT % 16 == 0);
-    assert!(ENCODE_WIDTH <= TEST_RIG_SCANOUT_WIDTH as usize);
-    assert!(ENCODE_HEIGHT <= TEST_RIG_SCANOUT_HEIGHT as usize);
-    assert!(TEST_RIG_SCANOUT_WIDTH as usize * 3 == ENCODE_WIDTH * 4);
-    assert!(TEST_RIG_SCANOUT_HEIGHT as usize * 3 == ACTIVE_HEIGHT * 4);
-    assert!(ACTIVE_TOP == 4);
-    assert!((ENCODE_HEIGHT - ACTIVE_HEIGHT - ACTIVE_TOP) == 4);
+    assert!(ENCODE_WIDTH == TEST_RIG_SCANOUT_WIDTH as usize);
+    assert!(ENCODE_HEIGHT == TEST_RIG_SCANOUT_HEIGHT as usize);
+    assert!(ACTIVE_TOP == 0);
+    assert!((ENCODE_HEIGHT - ACTIVE_HEIGHT - ACTIVE_TOP) == 0);
 };
 
 #[derive(Default)]
@@ -265,7 +263,7 @@ pub(crate) async fn ui4_h264_encode_prepare_task(assigned_slot: u32) {
         .unwrap_or("unknown");
     PREPARE_WORKER_SLOT.store(worker_slot, Ordering::Release);
     crate::log_info!(target: "intel/media-encode";
-        "intel/media-encode: preparation service online carrier=lastap assigned_slot={} worker_slot={} worker_kind={} pipeline=rgba-to-nv12 engine=guc-rcs kernel=cpp-linear-rgba8-to-nv12 cpu_pixel_math=0 dma_buffers=persistent producer buffering=double slots={} encode_size={}x{} mapping=full-frame-nearest-downscale active_size={}x{} padding=top:4,bottom:4 slot0_base=pipe-a-plane0-surflive-primary-rgba-premultiplied slot0_windows=hardcoded-none spirit_overlay=pipe-a-cur-surflive-bgra-premultiplied synchronization=completion-marker-before-vdbox\n",
+        "intel/media-encode: preparation service online carrier=lastap assigned_slot={} worker_slot={} worker_kind={} pipeline=rgba-to-nv12 engine=guc-rcs kernel=cpp-linear-rgba8-to-nv12 cpu_pixel_math=0 dma_buffers=persistent producer buffering=double slots={} encode_size={}x{} mapping=native-identity active_size={}x{} padding=top:0,bottom:0 slot0_base=pipe-a-plane0-surflive-primary-rgba-premultiplied slot0_windows=hardcoded-none spirit_overlay=pipe-a-cur-surflive-bgra-premultiplied synchronization=completion-marker-before-vdbox\n",
         assigned_slot,
         worker_slot,
         worker_kind,
@@ -356,9 +354,8 @@ async fn prepare_scanout(mut job: PrepareJob) {
                 .expect("checked source DMA allocation");
             super::screenshot::compose_realtime_encode_rgba_into(source.as_mut_slice())
         };
-        capture_us = crate::chronos::monotonic_nanos()
-            .saturating_sub(composition_started_ns)
-            / 1_000;
+        capture_us =
+            crate::chronos::monotonic_nanos().saturating_sub(composition_started_ns) / 1_000;
         match composition_result {
             Ok(composition) => {
                 source_width = composition.width;
@@ -370,6 +367,7 @@ async fn prepare_scanout(mut job: PrepareJob) {
                     .as_ref()
                     .expect("checked source DMA allocation");
                 let destination = job.nv12.as_ref().expect("checked NV12 DMA allocation");
+                source_fnv1a32 = fnv1a32_sampled(source.as_slice());
                 crate::intel::dma_flush(source.virt, source.bytes);
                 let source_surface = crate::intel::gpgpu::GpgpuRgba8Surface::new(
                     source.phys,
@@ -420,8 +418,12 @@ async fn prepare_scanout(mut job: PrepareJob) {
                                     Timer::after(Duration::from_millis(1)).await;
                                 }
                                 crate::intel::gpgpu::Ui4CompositorCompletion::Complete(stats) => {
-                                    crate::intel::dma_flush(destination.virt, destination.bytes);
-                                    source_fnv1a32 = fnv1a32_sampled(destination.as_slice());
+                                    // RCS is the producer and VDBOX is the consumer. The
+                                    // terminal RCS marker orders its writes, and VDBOX maps
+                                    // this same DMA allocation directly. Avoid invalidating
+                                    // the complete NV12 surface on the CPU merely for change
+                                    // telemetry; the bounded sample above uses the CPU-owned
+                                    // RGBA source before its release flush.
                                     convert_gpu_us = stats.probe.gpu_walker_us;
                                     convert_wall_us = crate::chronos::monotonic_nanos()
                                         .saturating_sub(conversion_started_ns)
@@ -960,7 +962,7 @@ pub(crate) async fn ui4_h264_encode_stream_task() {
             Ordering::Release,
         );
         crate::log_info!(target: "intel/media-encode";
-            "intel/media-encode: udp-live complete accepted={} delivery_complete={} cadence_target_met={} retry_free={} source=ui4-logical-scanout-d01 source_size={}x{} encode_size={}x{} mapping=full-frame-nearest-downscale conversion=guc-rcs-cpp-linear-rgba8-to-nv12 cpu_pixel_math=0 dma_buffers=persistent vdbox_source=gpu-dma-direct cpu_nv12_copy_bytes=0 active_size={}x{} padding=top:4,bottom:4 slot0_base=pipe-a-plane0-surflive-primary-rgba-premultiplied slot0_windows=hardcoded-none slot0_scanout_frames={} slot0_scanout_pixels={} spirit_overlay=pipe-a-cur-surflive-bgra-premultiplied spirit_overlay_frames={} spirit_overlay_pixels={} synchronization=rcs-completion-before-vdbox format=nv12 target_fps={} measured_millifps={} backend=gen12-vdenc-mfx engine=vcs0 submission_owner=guc direct_execlist_submit=0 hardware_encode=1 all_idr=1 protocol=tme1 version=1 egress_path=smoltcp-borrowed-direct-nic-dma-fill session={} queued_units={} sent_units={} sent_datagrams={} sent_payload_bytes={} dropped_units={} dropped_bytes={} high_water_units={} high_water_bytes={} producer_queue_wait_events={} producer_queue_wait_us={} submit_retries={} adapter_backpressure_events={} adapter_send_errors={} network_waits={} subscriber_wait_polls={} late_units={} max_late_us={} elapsed_us={} source_first_sampled_fnv1a32=0x{:08X} source_last_sampled_fnv1a32=0x{:08X} source_changes={} capture_avg_us={} capture_max_us={} convert_wall_avg_us={} convert_wall_max_us={} convert_gpu_avg_us={} convert_gpu_max_us={} encode_avg_us={} encode_max_us={} coded_avg_bytes={} coded_max_bytes={} peer={}.{}.{}.{}:{} bounded_seconds={} pipeline=prepare+encode+independent-egress buffering=double+bounded-au-queue prepare_slots={} prepare_worker_slot={} encode_worker_slot={} encode_worker_kind={} egress_worker_slot={} filesystem_writes=0 software_fallback=0 surflive_payload=0\n",
+            "intel/media-encode: udp-live complete accepted={} delivery_complete={} cadence_target_met={} retry_free={} source=ui4-logical-scanout-d01 source_size={}x{} encode_size={}x{} mapping=native-identity conversion=guc-rcs-cpp-linear-rgba8-to-nv12 cpu_pixel_math=0 dma_buffers=persistent vdbox_source=gpu-dma-direct cpu_nv12_copy_bytes=0 active_size={}x{} padding=top:0,bottom:0 slot0_base=pipe-a-plane0-surflive-primary-rgba-premultiplied slot0_windows=hardcoded-none slot0_scanout_frames={} slot0_scanout_pixels={} spirit_overlay=pipe-a-cur-surflive-bgra-premultiplied spirit_overlay_frames={} spirit_overlay_pixels={} synchronization=rcs-completion-before-vdbox format=nv12 target_fps={} measured_millifps={} backend=gen12-vdenc-mfx engine=vcs0 submission_owner=guc direct_execlist_submit=0 hardware_encode=1 all_idr=1 protocol=tme1 version=1 egress_path=smoltcp-borrowed-direct-nic-dma-fill session={} queued_units={} sent_units={} sent_datagrams={} sent_payload_bytes={} dropped_units={} dropped_bytes={} high_water_units={} high_water_bytes={} producer_queue_wait_events={} producer_queue_wait_us={} submit_retries={} adapter_backpressure_events={} adapter_send_errors={} network_waits={} subscriber_wait_polls={} late_units={} max_late_us={} elapsed_us={} source_first_sampled_fnv1a32=0x{:08X} source_last_sampled_fnv1a32=0x{:08X} source_changes={} capture_avg_us={} capture_max_us={} convert_wall_avg_us={} convert_wall_max_us={} convert_gpu_avg_us={} convert_gpu_max_us={} encode_avg_us={} encode_max_us={} coded_avg_bytes={} coded_max_bytes={} peer={}.{}.{}.{}:{} bounded_seconds={} pipeline=prepare+encode+independent-egress buffering=double+bounded-au-queue prepare_slots={} prepare_worker_slot={} encode_worker_slot={} encode_worker_kind={} egress_worker_slot={} filesystem_writes=0 software_fallback=0 surflive_payload=0\n",
             delivered as u8,
             delivered as u8,
             cadence_target_met as u8,

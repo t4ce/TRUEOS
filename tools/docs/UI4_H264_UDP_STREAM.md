@@ -3,7 +3,7 @@
 The default `trueos_h264_encode_stream` feature stages a resident,
 subscriber-driven kernel service:
 
-1. At boot, TRUEOS procedurally fills one 1920x1088 NV12 surface and submits it
+1. At boot, TRUEOS procedurally fills one 2560x1440 NV12 surface and submits it
    through Intel Gen12 VDEnc/MFX on VCS0. The service proceeds only after GuC
    submission, command-stream status writeback, Annex-B structure, and coded
    output all validate. No diagnostic media file or software encoder is linked
@@ -23,16 +23,16 @@ subscriber-driven kernel service:
    blends that 256x256 premultiplied-BGRA sprite without waiting for a newer
    Spirit frame. The composition is written directly into one of two persistent
    DMA-backed premultiplied-RGBA surfaces. A C++ for OpenCL kernel then runs
-   through the isolated UI4 GuC/RCS context, applies the fixed 4:3
-   center-sampled nearest downscale, converts directly to limited-range BT.601
-   NV12, and fills four black rows above and below the centered 1920x1080 image
-   in the macroblock-aligned 1920x1088 surface. Ordinary screenshots still
-   export straight-alpha RGBA.
+   through the isolated UI4 GuC/RCS context and converts it directly to
+   limited-range BT.601 NV12 at the native 2560x1440 extent. Both dimensions
+   are already macroblock-aligned, so the H.264 surface needs no crop or black
+   padding rows. Ordinary screenshots still export straight-alpha RGBA.
 
    RCS completion is observed before the same persistent NV12 allocation is
    mapped directly as the VDBOX source. The encoder performs no full-frame
-   NV12 CPU copy, and bounded change telemetry samples at most 4,096 bytes
-   rather than hashing the complete frame. The RDP destination VA is disjoint
+   NV12 CPU copy or CPU invalidation. Bounded change telemetry samples at most
+   4,096 bytes from the CPU-owned RGBA staging frame before its release flush,
+   rather than reading back the GPU-produced NV12 frame. The RDP destination VA is disjoint
    from both decoder source aliases and the complete UI-surface arena, so local
    playback conversion and RDP conversion cannot remap one another's PPGTT
    pages. Exactly two reusable RGBA/NV12 slot pairs let preparation of the next
@@ -43,8 +43,8 @@ subscriber-driven kernel service:
    The first frame is prepared before cadence measurement begins, and the
    producer cannot advance more than one frame ahead of the consumer.
 
-   This fixed test-rig mapping preserves the native 16:9 composition and avoids
-   dynamic crop selection. The capture follows UI4 plane/z order but is not a
+   This fixed test-rig mapping preserves the native 16:9 composition without
+   scaling or dynamic crop selection. The capture follows UI4 plane/z order but is not a
    bit-exact latch of the physical scanout. The immutable slot-0 base and
    Spirit's dedicated cursor plane are explicit physical-plane inputs; generic
    hardware mouse cursors remain absent.

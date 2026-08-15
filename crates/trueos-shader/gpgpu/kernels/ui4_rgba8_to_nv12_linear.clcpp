@@ -2,9 +2,10 @@
 // Canonical source language: C++ for OpenCL.
 //
 // One SIMD16 work-item produces one 2x2 NV12 macro-pixel from the logical
-// premultiplied RGBA8 scanout.  The fixed 4:3 nearest-neighbour mapping matches
-// the former CPU implementation exactly: 2560x1440 RGBA becomes a centered
-// 1920x1080 picture in a 1920x1088 linear NV12 encoder surface.
+// premultiplied RGBA8 scanout. The center-sampled mapping is parameterized by
+// the source and active destination extents, so the native 2560x1440 path is
+// an identity map while smaller encoder surfaces retain nearest-neighbour
+// scaling without a second kernel.
 
 inline uchar ui4_rgb_to_luma(uchar red, uchar green, uchar blue)
 {
@@ -12,9 +13,9 @@ inline uchar ui4_rgb_to_luma(uchar red, uchar green, uchar blue)
     return (uchar)clamp(value, 16, 235);
 }
 
-inline uint ui4_downscaled_source_coordinate(uint destination)
+inline uint ui4_source_coordinate(uint destination, uint source_extent, uint active_extent)
 {
-    return (destination * 4u + 2u) / 3u;
+    return ((destination * 2u + 1u) * source_extent) / (active_extent * 2u);
 }
 
 __attribute__((intel_reqd_sub_group_size(16)))
@@ -53,10 +54,10 @@ __kernel void ui4_rgba8_to_nv12_linear(
     }
 
     uint active_y = dst_y - active_top;
-    uint src_x_0 = ui4_downscaled_source_coordinate(dst_x);
-    uint src_x_1 = ui4_downscaled_source_coordinate(dst_x + 1u);
-    uint src_y_0 = ui4_downscaled_source_coordinate(active_y);
-    uint src_y_1 = ui4_downscaled_source_coordinate(active_y + 1u);
+    uint src_x_0 = ui4_source_coordinate(dst_x, src_width, dst_width);
+    uint src_x_1 = ui4_source_coordinate(dst_x + 1u, src_width, dst_width);
+    uint src_y_0 = ui4_source_coordinate(active_y, src_height, active_height);
+    uint src_y_1 = ui4_source_coordinate(active_y + 1u, src_height, active_height);
     if (src_x_1 >= src_width || src_y_1 >= src_height) {
         return;
     }
