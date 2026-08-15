@@ -167,6 +167,8 @@ pub(crate) struct PhysicalSchedulerStatus {
     pub(crate) deregistrations: u64,
     pub(crate) failures: u64,
     pub(crate) faulted_contexts: usize,
+    /// Driver-defined physical-engine lane bits quarantined until GT reset.
+    pub(crate) quarantined_engine_lanes: u32,
     pub(crate) owner_handoffs_pending: usize,
     pub(crate) memory_cat_faults: u64,
     pub(crate) unattributed_faults: u64,

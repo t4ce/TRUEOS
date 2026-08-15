@@ -36,6 +36,8 @@ const GUC_HXG_TYPE_EVENT: u32 = 1;
 const GUC_HXG_TYPE_FAST_REQUEST: u32 = 2;
 const GUC_HXG_TYPE_RESPONSE_FAILURE: u32 = 6;
 const GUC_HXG_TYPE_RESPONSE_SUCCESS: u32 = 7;
+const GUC_ACTION_CONTEXT_RESET_NOTIFICATION: u32 = 0x1008;
+const GUC_ACTION_MEMORY_CAT_ERROR: u32 = 0x6000;
 const GEN11_GUC_HOST_INTERRUPT: usize = 0x0019_01F0;
 const GUC_SEND_TRIGGER: u32 = 1 << 0;
 const CT_H2G_ROOM_POLL_ITERS: usize = 8_192;
@@ -130,7 +132,10 @@ impl CtbG2hEventQueue {
         // until the exact context DISABLE reaches firmware. Retain one copy:
         // duplicate notifications carry no additional ownership evidence and
         // must not crowd an unrelated engine's event out of this queue.
-        if (0..self.len).any(|offset| {
+        if matches!(
+            event.action,
+            GUC_ACTION_CONTEXT_RESET_NOTIFICATION | GUC_ACTION_MEMORY_CAT_ERROR
+        ) && (0..self.len).any(|offset| {
             let index = (self.head + offset) % CT_G2H_EVENT_QUEUE_CAPACITY;
             self.entries[index] == event
         }) {
@@ -749,4 +754,32 @@ fn hxg_origin(value: u32) -> u32 {
 
 fn hxg_type(value: u32) -> u32 {
     (value >> 28) & 0x7
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const CAT: CtbG2hEvent = CtbG2hEvent {
+        action: GUC_ACTION_MEMORY_CAT_ERROR,
+        payload_len: 1,
+        payload: [5, 0, 0, 0],
+    };
+
+    #[test]
+    fn sticky_exact_faults_coalesce_without_hiding_distinct_owners() {
+        let mut queue = CtbG2hEventQueue::EMPTY;
+        queue.push(CAT);
+        queue.push(CAT);
+        queue.push(CtbG2hEvent {
+            payload: [6, 0, 0, 0],
+            ..CAT
+        });
+
+        assert_eq!(queue.len, 2);
+        assert_eq!(queue.coalesced_events, 1);
+        assert_eq!(queue.dropped_events, 0);
+        assert_eq!(queue.pop(), Some(CAT));
+        assert_eq!(queue.pop().and_then(|event| event.payload(0)), Some(6));
+    }
 }

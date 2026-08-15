@@ -72,14 +72,7 @@ const MPR_ROWSTORE_OFFSET: usize = 0x0191_0000;
 // AVC direct-MV storage is 64 bytes per macroblock, with an even MB height.
 const DMV_BYTES: usize = FRAME_WIDTH_MBS * FRAME_HEIGHT_MBS.next_multiple_of(2) * 64;
 const SCRATCH_BYTES: usize = 64 * 1024;
-// Gen12 exposes two AVC ILDB stream-out bases. Keep both valid for P pictures
-// even when stream-out is nominally disabled: the first inter-picture traces
-// show a zero-base access while PIPE_BUF_ADDR_STATE is active. One cache line
-// per macroblock covers the diagnostic sink without aliasing live statistics.
-const ILDB_STREAMOUT_BYTES: usize = (FRAME_MACROBLOCKS * 64).next_multiple_of(4096);
-const ILDB_STREAMOUT_0_OFFSET: usize = 0x0192_0000;
-const ILDB_STREAMOUT_1_OFFSET: usize = 0x01a1_0000;
-const ARENA_WORK_RANGES: [(usize, usize); 14] = [
+const ARENA_WORK_RANGES: [(usize, usize); 12] = [
     (BATCH_OFFSET, BATCH_BYTES),
     (RESULT_OFFSET, RESULT_BYTES),
     (RECON_0_OFFSET, RECON_BYTES),
@@ -92,8 +85,6 @@ const ARENA_WORK_RANGES: [(usize, usize); 14] = [
     (DMV_0_OFFSET, DMV_BYTES),
     (DMV_1_OFFSET, DMV_BYTES),
     (MPR_ROWSTORE_OFFSET, SCRATCH_BYTES),
-    (ILDB_STREAMOUT_0_OFFSET, ILDB_STREAMOUT_BYTES),
-    (ILDB_STREAMOUT_1_OFFSET, ILDB_STREAMOUT_BYTES),
 ];
 
 const BATCH_GPU: u64 = ARENA_GPU + BATCH_OFFSET as u64;
@@ -115,8 +106,6 @@ const MPR_ROWSTORE_GPU: u64 = ARENA_GPU + MPR_ROWSTORE_OFFSET as u64;
 const INTRA_ROWSTORE_GPU: u64 = ARENA_GPU + INTRA_ROWSTORE_OFFSET as u64;
 const DEBLOCK_ROWSTORE_GPU: u64 = ARENA_GPU + DEBLOCK_ROWSTORE_OFFSET as u64;
 const BSP_ROWSTORE_GPU: u64 = ARENA_GPU + BSP_ROWSTORE_OFFSET as u64;
-const ILDB_STREAMOUT_0_GPU: u64 = ARENA_GPU + ILDB_STREAMOUT_0_OFFSET as u64;
-const ILDB_STREAMOUT_1_GPU: u64 = ARENA_GPU + ILDB_STREAMOUT_1_OFFSET as u64;
 
 const TIMEOUT_NS: u64 = 100_000_000;
 const POLL_LIMIT: u32 = 2_000_000;
@@ -157,9 +146,7 @@ const _: () = {
     assert!(MV_OBJECT_OFFSET + MV_OBJECT_BYTES <= DMV_0_OFFSET);
     assert!(DMV_0_OFFSET + DMV_BYTES <= DMV_1_OFFSET);
     assert!(DMV_1_OFFSET + DMV_BYTES <= MPR_ROWSTORE_OFFSET);
-    assert!(MPR_ROWSTORE_OFFSET + SCRATCH_BYTES <= ILDB_STREAMOUT_0_OFFSET);
-    assert!(ILDB_STREAMOUT_0_OFFSET + ILDB_STREAMOUT_BYTES <= ILDB_STREAMOUT_1_OFFSET);
-    assert!(ILDB_STREAMOUT_1_OFFSET + ILDB_STREAMOUT_BYTES <= ARENA_BYTES);
+    assert!(MPR_ROWSTORE_OFFSET + SCRATCH_BYTES <= ARENA_BYTES);
     assert!(ARENA_GPU + ARENA_BYTES as u64 <= 0x5000_0000);
 };
 
@@ -1532,15 +1519,6 @@ fn mfx_pipe_buf_addr_state(picture: AvcPicture) -> [u32; 68] {
             set_addr(&mut words, dword, reference);
         }
         words[51] = 6;
-    }
-    if !picture.is_idr {
-        // The P-picture CAT advances through the external row stores, then
-        // reports a 0x5000 write while this command is active. These are the
-        // only remaining zero-backed writable bases in PIPE_BUF_ADDR_STATE.
-        set_addr(&mut words, 55, ILDB_STREAMOUT_0_GPU);
-        words[57] = 6;
-        set_addr(&mut words, 58, ILDB_STREAMOUT_1_GPU);
-        words[60] = 6;
     }
     words
 }

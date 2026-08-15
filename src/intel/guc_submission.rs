@@ -194,6 +194,7 @@ pub(crate) struct GucSchedulerStatus {
     pub(crate) failures: u64,
     pub(crate) async_events: u64,
     pub(crate) coalesced_async_events: u64,
+    pub(crate) quarantined_engine_lanes: u32,
     pub(crate) async_event_errors: u64,
     pub(crate) memory_cat_faults: u64,
     pub(crate) unattributed_faults: u64,
@@ -288,6 +289,10 @@ impl GucContextState {
 
 struct GucSubmissionState {
     contexts: [GucContextState; MAX_GUC_CONTEXTS],
+    /// Sticky physical-engine lanes that may not accept more work until a GT
+    /// reset. An exact context fault sets only its lane; `gt_faulted` remains
+    /// reserved for attribution loss or a genuinely global failure.
+    quarantined_engine_lanes: u32,
     serial: u64,
     registrations: u64,
     deregistrations: u64,
@@ -304,6 +309,7 @@ struct GucSubmissionState {
 
 static CONTEXTS: Mutex<GucSubmissionState> = Mutex::new(GucSubmissionState {
     contexts: [GucContextState::EMPTY; MAX_GUC_CONTEXTS],
+    quarantined_engine_lanes: 0,
     serial: 0,
     registrations: 0,
     deregistrations: 0,
@@ -967,17 +973,37 @@ pub(crate) fn destroy_context(
 }
 
 fn fault_requires_retention(state: &GucSubmissionState, slot: usize) -> bool {
-    context_fault_requires_retention(
-        state.gt_faulted,
-        state
-            .contexts
-            .get(slot)
-            .is_some_and(|context| context.faulted),
-    )
+    state.gt_faulted
+        || state.contexts.get(slot).is_some_and(|context| {
+            context.faulted || engine_lane_is_quarantined(state, context.engine)
+        })
 }
 
 const fn context_fault_requires_retention(gt_faulted: bool, context_faulted: bool) -> bool {
     gt_faulted || context_faulted
+}
+
+const fn engine_lane_bit(engine: crate::gpu::physical::PhysicalEngineId) -> Option<u32> {
+    use crate::gpu::physical::EngineClass;
+
+    let index = match (engine.class, engine.instance) {
+        (EngineClass::RenderCompute, 0) => 0,
+        (EngineClass::VideoDecode, 0) => 1,
+        (EngineClass::VideoDecode, 2) => 2,
+        (EngineClass::Copy, 0) => 3,
+        _ => return None,
+    };
+    Some(1 << index)
+}
+
+const fn engine_lane_is_quarantined(
+    state: &GucSubmissionState,
+    engine: crate::gpu::physical::PhysicalEngineId,
+) -> bool {
+    match engine_lane_bit(engine) {
+        Some(lane) => state.quarantined_engine_lanes & lane != 0,
+        None => true,
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -1296,14 +1322,15 @@ fn process_g2h_event(state: &mut GucSubmissionState, event: crate::intel::guc_ct
             }
             let newly_reported =
                 mark_exact_context_fault(state, slot, GucContextFaultKind::ContextReset, None);
-            crate::log_error!(
-                target: "gpgpu";
-                "intel/guc-submit: context-reset=1 context_id={} engine={:?}:{} duplicate={} action=defer-exact-context-owner-handoff\n",
-                context_id,
-                context.engine.class,
-                context.engine.instance,
-                (!newly_reported) as u8,
-            );
+            if newly_reported {
+                crate::log_error!(
+                    target: "gpgpu";
+                    "intel/guc-submit: context-reset=1 context_id={} engine={:?}:{} duplicate=0 action=defer-exact-context-owner-handoff\n",
+                    context_id,
+                    context.engine.class,
+                    context.engine.instance,
+                );
+            }
         }
         INTEL_GUC_ACTION_MEMORY_CAT_ERROR => {
             if !(event.payload_len == 1 || event.payload_len == 2) || event.truncated() {
@@ -1351,19 +1378,20 @@ fn process_g2h_event(state: &mut GucSubmissionState, event: crate::intel::guc_ct
             // retirement poll to fail loses this evidence when a completion
             // cookie happened to retire just ahead of the fault event.
             if !context.faulted {
-                log_memory_cat_registers(context_id);
+                log_memory_cat_registers(context_id, context.engine);
             }
             let newly_reported =
                 mark_exact_context_fault(state, slot, GucContextFaultKind::MemoryCat, hw_type);
-            crate::log_error!(
-                target: "gpgpu";
-                "intel/guc-submit: memory-cat-error=1 context_id={} engine={:?}:{} hw_type=0x{:08X} duplicate={} action=defer-exact-context-containment\n",
-                context_id,
-                context.engine.class,
-                context.engine.instance,
-                hw_type.unwrap_or(u32::MAX),
-                (!newly_reported) as u8,
-            );
+            if newly_reported {
+                crate::log_error!(
+                    target: "gpgpu";
+                    "intel/guc-submit: memory-cat-error=1 context_id={} engine={:?}:{} hw_type=0x{:08X} duplicate=0 action=defer-exact-context-containment\n",
+                    context_id,
+                    context.engine.class,
+                    context.engine.instance,
+                    hw_type.unwrap_or(u32::MAX),
+                );
+            }
         }
         INTEL_GUC_ACTION_ENGINE_FAILURE_NOTIFICATION => {
             state.failures = state.failures.saturating_add(1);
@@ -1395,49 +1423,143 @@ fn process_g2h_event(state: &mut GucSubmissionState, event: crate::intel::guc_ct
     }
 }
 
-fn log_memory_cat_registers(context_id: u32) {
-    const RCS_RING_BASE: usize = 0x2000;
-    const RCS_RING_ACTHD_UDW: usize = RCS_RING_BASE + 0x5C;
-    const RCS_RING_IPEIR: usize = RCS_RING_BASE + 0x64;
-    const RCS_RING_IPEHR: usize = RCS_RING_BASE + 0x68;
-    const RCS_RING_ACTHD: usize = RCS_RING_BASE + 0x74;
-    const RCS_RING_BBADDR: usize = RCS_RING_BASE + 0x140;
-    const RCS_RING_BBADDR_UDW: usize = RCS_RING_BASE + 0x168;
+#[derive(Copy, Clone)]
+struct CatSnapshotEngine {
+    name: &'static str,
+    ring_base: usize,
+    fault_engine_id: u32,
+}
+
+const fn cat_snapshot_engine(
+    engine: crate::gpu::physical::PhysicalEngineId,
+) -> Option<CatSnapshotEngine> {
+    use crate::gpu::physical::EngineClass;
+
+    match (engine.class, engine.instance) {
+        (EngineClass::RenderCompute, 0) => Some(CatSnapshotEngine {
+            name: "rcs0",
+            ring_base: 0x0000_2000,
+            fault_engine_id: 0,
+        }),
+        (EngineClass::VideoDecode, 0) => Some(CatSnapshotEngine {
+            name: "vcs0",
+            ring_base: 0x001C_0000,
+            fault_engine_id: 1,
+        }),
+        (EngineClass::VideoDecode, 2) => Some(CatSnapshotEngine {
+            name: "vcs2",
+            ring_base: 0x001D_0000,
+            fault_engine_id: 4,
+        }),
+        (EngineClass::Copy, 0) => Some(CatSnapshotEngine {
+            name: "bcs0",
+            ring_base: 0x0002_2000,
+            fault_engine_id: 2,
+        }),
+        _ => None,
+    }
+}
+
+fn log_memory_cat_registers(context_id: u32, engine: crate::gpu::physical::PhysicalEngineId) {
+    const RING_ACTHD_UDW: usize = 0x5C;
+    const RING_IPEIR: usize = 0x64;
+    const RING_IPEHR: usize = 0x68;
+    const RING_ACTHD: usize = 0x74;
+    const RING_BBADDR: usize = 0x140;
+    const RING_BBADDR_UDW: usize = 0x168;
     const GEN12_FAULT_TLB_DATA0: usize = 0xCEB8;
     const GEN12_FAULT_TLB_DATA1: usize = 0xCEBC;
     const GEN12_RING_FAULT_REG: usize = 0xCEC4;
 
-    let Some(dev) = crate::intel::claimed_device() else {
+    let Some(snapshot_engine) = cat_snapshot_engine(engine) else {
+        crate::log_error!(
+            target: "gpgpu";
+            "intel/guc-submit: memory-cat-snapshot context_id={} attributed_engine={:?}:{} snapshot_engine=unavailable snapshot_valid=0 reason=unsupported-physical-engine-bank fault_gpu=unavailable\n",
+            context_id,
+            engine.class,
+            engine.instance,
+        );
         return;
     };
+    let Some(dev) = crate::intel::claimed_device() else {
+        crate::log_error!(
+            target: "gpgpu";
+            "intel/guc-submit: memory-cat-snapshot context_id={} attributed_engine={:?}:{} snapshot_engine={} snapshot_valid=0 reason=physical-device-unavailable fault_gpu=unavailable\n",
+            context_id,
+            engine.class,
+            engine.instance,
+            snapshot_engine.name,
+        );
+        return;
+    };
+    let base = snapshot_engine.ring_base;
     let fault = crate::intel::mmio_read(dev, GEN12_RING_FAULT_REG);
     let data0 = crate::intel::mmio_read(dev, GEN12_FAULT_TLB_DATA0);
     let data1 = crate::intel::mmio_read(dev, GEN12_FAULT_TLB_DATA1);
-    let fault_gpu = (u64::from(data1 & 0xF) << 44) | (u64::from(data0) << 12);
-    let acthd_lo = crate::intel::mmio_read(dev, RCS_RING_ACTHD);
-    let acthd_hi = crate::intel::mmio_read(dev, RCS_RING_ACTHD_UDW);
-    let bbaddr_lo = crate::intel::mmio_read(dev, RCS_RING_BBADDR);
-    let bbaddr_hi = crate::intel::mmio_read(dev, RCS_RING_BBADDR_UDW);
-    crate::log_error!(
-        target: "gpgpu";
-        "intel/guc-submit: memory-cat-snapshot context_id={} fault=0x{:08X} valid={} type={} source_id={} engine_id={} address_space={} fault_gpu=0x{:016X} data0=0x{:08X} data1=0x{:08X} acthd=0x{:08X}{:08X} bbaddr=0x{:08X}{:08X} ipeir=0x{:08X} ipehr=0x{:08X}\n",
-        context_id,
-        fault,
-        fault & 1,
-        (fault >> 1) & 0x3,
-        (fault >> 3) & 0xFF,
-        (fault >> 12) & 0x1F,
-        if data1 & (1 << 4) != 0 { "ggtt" } else { "ppgtt" },
-        fault_gpu,
-        data0,
-        data1,
-        acthd_hi,
-        acthd_lo,
-        bbaddr_hi,
-        bbaddr_lo,
-        crate::intel::mmio_read(dev, RCS_RING_IPEIR),
-        crate::intel::mmio_read(dev, RCS_RING_IPEHR),
-    );
+    let fault_record_valid = fault & 1 != 0;
+    let fault_record_engine_id = (fault >> 12) & 0x7;
+    let fault_record_matches_engine =
+        fault_record_valid && fault_record_engine_id == snapshot_engine.fault_engine_id;
+    let acthd_lo = crate::intel::mmio_read(dev, base + RING_ACTHD);
+    let acthd_hi = crate::intel::mmio_read(dev, base + RING_ACTHD_UDW);
+    let bbaddr_lo = crate::intel::mmio_read(dev, base + RING_BBADDR);
+    let bbaddr_hi = crate::intel::mmio_read(dev, base + RING_BBADDR_UDW);
+    let ipeir = crate::intel::mmio_read(dev, base + RING_IPEIR);
+    let ipehr = crate::intel::mmio_read(dev, base + RING_IPEHR);
+    if fault_record_matches_engine {
+        let fault_gpu = (u64::from(data1 & 0xF) << 44) | (u64::from(data0) << 12);
+        crate::log_error!(
+            target: "gpgpu";
+            "intel/guc-submit: memory-cat-snapshot context_id={} attributed_engine={:?}:{} snapshot_engine={} snapshot_valid=1 ring_base=0x{:08X} fault=0x{:08X} fault_record_valid=1 fault_record_engine_match=1 fault_record_engine_id={} expected_fault_engine_id={} type={} source_id={} address_space={} fault_address_valid=1 fault_gpu=0x{:016X} data0=0x{:08X} data1=0x{:08X} acthd=0x{:08X}{:08X} bbaddr=0x{:08X}{:08X} ipeir=0x{:08X} ipehr=0x{:08X}\n",
+            context_id,
+            engine.class,
+            engine.instance,
+            snapshot_engine.name,
+            base,
+            fault,
+            fault_record_engine_id,
+            snapshot_engine.fault_engine_id,
+            (fault >> 1) & 0x3,
+            (fault >> 3) & 0xFF,
+            if data1 & (1 << 4) != 0 { "ggtt" } else { "ppgtt" },
+            fault_gpu,
+            data0,
+            data1,
+            acthd_hi,
+            acthd_lo,
+            bbaddr_hi,
+            bbaddr_lo,
+            ipeir,
+            ipehr,
+        );
+    } else {
+        crate::log_error!(
+            target: "gpgpu";
+            "intel/guc-submit: memory-cat-snapshot context_id={} attributed_engine={:?}:{} snapshot_engine={} snapshot_valid=1 ring_base=0x{:08X} fault=0x{:08X} fault_record_valid={} fault_record_engine_match=0 fault_record_engine_id={} expected_fault_engine_id={} fault_address_valid=0 fault_gpu=unavailable raw_data0=0x{:08X} raw_data1=0x{:08X} acthd=0x{:08X}{:08X} bbaddr=0x{:08X}{:08X} ipeir=0x{:08X} ipehr=0x{:08X} reason={}\n",
+            context_id,
+            engine.class,
+            engine.instance,
+            snapshot_engine.name,
+            base,
+            fault,
+            fault_record_valid as u8,
+            fault_record_engine_id,
+            snapshot_engine.fault_engine_id,
+            data0,
+            data1,
+            acthd_hi,
+            acthd_lo,
+            bbaddr_hi,
+            bbaddr_lo,
+            ipeir,
+            ipehr,
+            if fault_record_valid {
+                "fault-record-engine-mismatch"
+            } else {
+                "global-fault-record-invalid"
+            },
+        );
+    }
 }
 
 fn note_unattributed_memory_cat(
@@ -1491,6 +1613,9 @@ fn mark_exact_context_fault(
     kind: GucContextFaultKind,
     hw_type: Option<u32>,
 ) -> bool {
+    let engine = state.contexts[slot].engine;
+    let lane = engine_lane_bit(engine);
+    let first_lane_fault = lane.is_some_and(|lane| state.quarantined_engine_lanes & lane == 0);
     let newly_reported = !state.contexts[slot].owner_fault_reported;
     {
         let context = &mut state.contexts[slot];
@@ -1519,8 +1644,19 @@ fn mark_exact_context_fault(
             context.cat_hw_type = hw_type;
         }
     }
-    if let Some(lane) = engine_lane_bit(state.contexts[slot].engine) {
+    if let Some(lane) = lane {
         state.quarantined_engine_lanes |= lane;
+    }
+    if first_lane_fault {
+        crate::log_error!(
+            target: "gpgpu";
+            "intel/guc-submit: physical-engine-lane-quarantined=1 engine={:?}:{} lane_mask=0x{:08X} reason={:?} recovery=gt-reset-required peer_engine_lanes=admissible gt_faulted={}\n",
+            engine.class,
+            engine.instance,
+            state.quarantined_engine_lanes,
+            kind,
+            state.gt_faulted as u8,
+        );
     }
     if newly_reported {
         state.failures = state.failures.saturating_add(1);
@@ -1792,6 +1928,7 @@ pub(crate) fn scheduler_status() -> GucSchedulerStatus {
         failures: state.failures,
         async_events: state.async_events,
         coalesced_async_events: state.coalesced_async_events,
+        quarantined_engine_lanes: state.quarantined_engine_lanes,
         async_event_errors: state.async_event_errors,
         memory_cat_faults: state.memory_cat_faults,
         unattributed_faults: state.unattributed_faults,
@@ -1958,6 +2095,24 @@ const _: () = {
     assert!(context_fault_requires_retention(false, true));
     assert!(!context_fault_requires_retention(false, false));
     assert!(context_fault_requires_retention(true, false));
+    assert!(matches!(engine_lane_bit(crate::gpu::physical::PhysicalEngineId::VCS0), Some(0x2)));
+    assert!(matches!(engine_lane_bit(crate::gpu::physical::PhysicalEngineId::video(2)), Some(0x4)));
+    assert!(matches!(
+        cat_snapshot_engine(crate::gpu::physical::PhysicalEngineId::VCS0),
+        Some(CatSnapshotEngine {
+            name: _,
+            ring_base: 0x001C_0000,
+            fault_engine_id: 1
+        })
+    ));
+    assert!(matches!(
+        cat_snapshot_engine(crate::gpu::physical::PhysicalEngineId::video(2)),
+        Some(CatSnapshotEngine {
+            name: _,
+            ring_base: 0x001D_0000,
+            fault_engine_id: 4
+        })
+    ));
 
     exact_fault.pending_disable = true;
     assert!(!exact_fault_disable_should_enqueue(false, exact_fault));

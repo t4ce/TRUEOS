@@ -46,7 +46,7 @@ fn print_status(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
         format!(
-            "vgpu: physical_ready={} physical_lost={} adapter={} pci=8086:{:04X} rev={:02X} guc={} epoch={} devices={} contexts={}/{} submissions={} failures={} faulted_contexts={} owner_handoffs_pending={} memory_cat_faults={} unattributed_faults={} gt_faulted={}",
+            "vgpu: physical_ready={} physical_lost={} adapter={} pci=8086:{:04X} rev={:02X} guc={} epoch={} devices={} contexts={}/{} submissions={} failures={} faulted_contexts={} quarantined_engine_lanes=0x{:08X} owner_handoffs_pending={} memory_cat_faults={} unattributed_faults={} gt_faulted={}",
             status.physical_ready as u8,
             status.physical_lost as u8,
             status.physical_name,
@@ -60,6 +60,7 @@ fn print_status(io: &'static dyn ShellBackend2) {
             status.scheduler.submissions,
             status.scheduler.failures,
             status.scheduler.faulted_contexts,
+            status.scheduler.quarantined_engine_lanes,
             status.scheduler.owner_handoffs_pending,
             status.scheduler.memory_cat_faults,
             status.scheduler.unattributed_faults,
@@ -293,7 +294,7 @@ fn test_guc(io: &'static dyn ShellBackend2) -> bool {
     print_shell_line(
         io,
         format!(
-            "vgpu guc: ready={} physical_lost={} guc={} registered={} enabled={} capacity={} submissions={} registrations={} failures={} faulted_contexts={} owner_handoffs_pending={} gt_faulted={} context_boundaries={} coherent={} unique_hwlrcas={} unique_ppgtt_roots={} bound={} active={} lost_bound={} helio_render_live={} spirit_execution_live={} font_engine_live={} helio_spirit_hwlrca_distinct={} helio_spirit_ppgtt_distinct={} helio_spirit_coexistence={} font_helio_hwlrca_distinct={} font_helio_ppgtt_distinct={} font_spirit_hwlrca_distinct={} font_spirit_ppgtt_distinct={} font_helio_spirit_coexistence={}",
+            "vgpu guc: ready={} physical_lost={} guc={} registered={} enabled={} capacity={} submissions={} registrations={} failures={} faulted_contexts={} quarantined_engine_lanes=0x{:08X} owner_handoffs_pending={} gt_faulted={} context_boundaries={} coherent={} unique_hwlrcas={} unique_ppgtt_roots={} bound={} active={} lost_bound={} helio_render_live={} spirit_execution_live={} font_engine_live={} helio_spirit_hwlrca_distinct={} helio_spirit_ppgtt_distinct={} helio_spirit_coexistence={} font_helio_hwlrca_distinct={} font_helio_ppgtt_distinct={} font_spirit_hwlrca_distinct={} font_spirit_ppgtt_distinct={} font_helio_spirit_coexistence={}",
             status.physical_ready as u8,
             status.physical_lost as u8,
             status.guc_submission as u8,
@@ -304,6 +305,7 @@ fn test_guc(io: &'static dyn ShellBackend2) -> bool {
             status.scheduler.registrations,
             status.scheduler.failures,
             status.scheduler.faulted_contexts,
+            status.scheduler.quarantined_engine_lanes,
             status.scheduler.owner_handoffs_pending,
             status.scheduler.gt_faulted as u8,
             boundaries.valid() as u8,

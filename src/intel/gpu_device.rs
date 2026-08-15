@@ -54,6 +54,7 @@ impl PhysicalGpuDevice for IntelPhysicalGpuDevice {
             deregistrations: status.deregistrations,
             failures: status.failures,
             faulted_contexts: status.faulted,
+            quarantined_engine_lanes: status.quarantined_engine_lanes,
             owner_handoffs_pending: status.owner_handoffs_pending,
             memory_cat_faults: status.memory_cat_faults,
             unattributed_faults: status.unattributed_faults,
