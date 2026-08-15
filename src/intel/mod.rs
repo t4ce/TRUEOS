@@ -600,13 +600,13 @@ pub(crate) use self::display::{
     CompositionDamageRect, CompositionDamageRegion, LiveOverlayRect, RgbaOverlayTile,
     Ui4AsyncComposition, Ui4AsyncCompositionError, Ui4AsyncCompositionPoll, Ui4DirectRgbaFrame,
     Ui4LiveOverlayFlip, Ui4LiveOverlayFlipPoll, Ui4PlaneSurfaceFlipPoll,
-    Ui4RealtimeEncodeSlot0View,
+    Ui4RealtimeEncodePlaneView,
 };
 
-pub(crate) fn with_ui4_realtime_encode_pipe_a_slot0_surflive<R>(
-    read: impl FnOnce(Ui4RealtimeEncodeSlot0View<'_>) -> R,
+pub(crate) fn with_ui4_realtime_encode_pipe_a_slot3_surflive<R>(
+    read: impl FnOnce(Ui4RealtimeEncodePlaneView) -> R,
 ) -> Option<R> {
-    self::display::with_ui4_realtime_encode_pipe_a_slot0_surflive(read)
+    self::display::with_ui4_realtime_encode_pipe_a_slot3_surflive(read)
 }
 
 pub(crate) fn set_pipe_a_bottom_color_rgb8(red: u8, green: u8, blue: u8) -> bool {

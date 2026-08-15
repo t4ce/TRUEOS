@@ -1172,8 +1172,18 @@ async fn run_with_source(source_kind: AvcFrameSource, picture: AvcPicture) -> Av
     } else {
         !parameter_sets_present && !idr_present && p_present
     };
-    let macroblock_payload_present = coded_bytes > report.excluded_header_bytes.saturating_add(64);
-    if report.mfx_error != 0 || !expected_nal_present || !macroblock_payload_present {
+    // An unchanged P picture can encode every macroblock as skipped and yield
+    // a very small but complete non-IDR slice. Requiring more than 64 payload
+    // bytes incorrectly rejects that legal access unit and tears down an idle
+    // RDP session immediately after its IDR. Keep the stronger size sanity
+    // check for the self-contained IDR proof; for P pictures, the Annex-B
+    // parser finding the expected type-1 slice is the structural payload proof.
+    let picture_payload_present = if picture.is_idr {
+        coded_bytes > report.excluded_header_bytes.saturating_add(64)
+    } else {
+        p_present
+    };
+    if report.mfx_error != 0 || !expected_nal_present || !picture_payload_present {
         return fail(report, AvcEncodeProbeFailure::CodedOutputInvalid, started_ns);
     }
     *CODED_ACCESS_UNIT.lock() = Some(coded.to_vec());

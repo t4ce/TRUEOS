@@ -220,83 +220,40 @@ struct CapturedWindowRgba {
     rgba_premultiplied: Vec<u8>,
 }
 
-/// Metadata for the deliberately incomplete slot-0 observation used by the
+/// Metadata for the deliberately incomplete slot-3 observation used by the
 /// real-time encoder. Independently presented hardware planes and the cursor
 /// are absent until a real display-writeback path exists.
 pub(super) struct RealtimeEncodeComposition {
     pub(super) width: u32,
     pub(super) height: u32,
-    pub(super) slot0_scanout_pixels: usize,
+    pub(super) source: crate::intel::gpgpu::GpgpuRgba8Surface,
+    pub(super) slot3_scanout_pixels: usize,
     pub(super) spirit_overlay_pixels: usize,
 }
 
-/// Copy only pipe A's slot-0 SURFLIVE backing into the encoder staging surface.
-/// This is intentionally not a software reconstruction of the displayed image.
-pub(super) fn compose_realtime_encode_rgba_into(
-    rgba_premultiplied: &mut [u8],
-) -> Result<RealtimeEncodeComposition, CaptureError> {
-    let (width, height) =
-        crate::intel::active_scanout_dimensions().ok_or(CaptureError::NoScanout)?;
-    let stride = usize::try_from(width)
-        .ok()
-        .and_then(|width| width.checked_mul(4))
-        .ok_or(CaptureError::DimensionTooLarge)?;
-    let byte_len = stride
-        .checked_mul(usize::try_from(height).map_err(|_| CaptureError::DimensionTooLarge)?)
-        .ok_or(CaptureError::DimensionTooLarge)?;
-    if rgba_premultiplied.len() != byte_len {
-        return Err(CaptureError::InvalidFrameLayout);
-    }
-    let slot0_scanout_pixels =
-        copy_realtime_encode_pipe_a_slot0_premultiplied(rgba_premultiplied, width, height);
-    if slot0_scanout_pixels == 0 {
-        // Never retain an older observation when slot 0 is temporarily
-        // unavailable or no longer matches the fixed capture contract.
-        rgba_premultiplied.fill(0);
-    }
+/// Import pipe A's slot-3 SURFLIVE backing directly into the isolated RCS
+/// conversion address space. No CPU frame copy or cache sweep participates.
+pub(super) fn realtime_encode_pipe_a_slot3_surface()
+-> Result<RealtimeEncodeComposition, CaptureError> {
+    let view = crate::intel::with_ui4_realtime_encode_pipe_a_slot3_surflive(|view| view)
+        .ok_or(CaptureError::NoScanout)?;
+    let source = crate::intel::gpgpu::GpgpuRgba8Surface::new(
+        view.phys,
+        crate::intel::gpgpu::UI4_COMPOSITOR_NV12_SOURCE_GPU_BASE,
+        view.byte_len,
+        view.width,
+        view.height,
+        view.pitch_bytes,
+    )
+    .ok_or(CaptureError::InvalidFrameLayout)?;
 
     Ok(RealtimeEncodeComposition {
-        width,
-        height,
-        slot0_scanout_pixels,
+        width: view.width,
+        height: view.height,
+        source,
+        slot3_scanout_pixels: (view.width as usize).saturating_mul(view.height as usize),
         spirit_overlay_pixels: 0,
     })
-}
-
-fn copy_realtime_encode_pipe_a_slot0_premultiplied(
-    destination: &mut [u8],
-    width: u32,
-    height: u32,
-) -> usize {
-    let Some(row_bytes) = (width as usize).checked_mul(4) else {
-        return 0;
-    };
-    crate::intel::with_ui4_realtime_encode_pipe_a_slot0_surflive(|slot0| {
-        if slot0.width != width
-            || slot0.height != height
-            || (slot0.pitch_bytes as usize) < row_bytes
-        {
-            return 0;
-        }
-        for row in 0..height as usize {
-            let source_offset = row.saturating_mul(slot0.pitch_bytes as usize);
-            let destination_offset = row.saturating_mul(row_bytes);
-            let Some(source_row) = slot0
-                .rgba_premultiplied
-                .get(source_offset..source_offset + row_bytes)
-            else {
-                return 0;
-            };
-            let Some(destination_row) =
-                destination.get_mut(destination_offset..destination_offset + row_bytes)
-            else {
-                return 0;
-            };
-            destination_row.copy_from_slice(source_row);
-        }
-        (width as usize).saturating_mul(height as usize)
-    })
-    .unwrap_or(0)
 }
 
 /// Arm one composition capture. Calls are bounded so a burst of side-button

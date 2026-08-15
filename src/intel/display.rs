@@ -390,16 +390,15 @@ pub(crate) struct PrimarySurfaceBgra8Snapshot {
     pub(crate) pixels: Vec<u8>,
 }
 
-/// Borrowed view of the immutable UI4 slot-0 base currently latched by pipe A.
-///
-/// This is intentionally the fixed D01 test-rig contract: after the one-time
-/// XRGB-to-RGBA handoff, the original primary allocation remains the opaque
-/// full-output logo/background and the broker places no windows on slot 0.
-pub(crate) struct Ui4RealtimeEncodeSlot0View<'a> {
+/// GPU-import metadata for one UI4 RGBA plane allocation currently latched by
+/// the display engine.
+#[derive(Copy, Clone)]
+pub(crate) struct Ui4RealtimeEncodePlaneView {
+    pub(crate) phys: u64,
+    pub(crate) byte_len: usize,
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) pitch_bytes: u32,
-    pub(crate) rgba_premultiplied: &'a [u8],
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -693,49 +692,69 @@ fn active_primary_surface() -> Option<PrimarySurface> {
     PRIMARY_SURFACES.iter().find_map(|owner| *owner.lock())
 }
 
-pub(crate) fn with_ui4_realtime_encode_pipe_a_slot0_surflive<R>(
-    read: impl FnOnce(Ui4RealtimeEncodeSlot0View<'_>) -> R,
+pub(crate) fn with_ui4_realtime_encode_pipe_a_slot3_surflive<R>(
+    read: impl FnOnce(Ui4RealtimeEncodePlaneView) -> R,
 ) -> Option<R> {
     const REALTIME_ENCODE_PIPE: usize = 0;
+    const REALTIME_ENCODE_PLANE: usize = crate::ui4::RGB_OVERLAY_PLANE_SLOT_3;
 
     let dev = crate::intel::claimed_device()?;
     let pipe = PIPES[REALTIME_ENCODE_PIPE];
     if !ui4_rgba8_plane_stack_ready(pipe) {
         return None;
     }
-    let owner = primary_surface_owner(pipe).lock();
-    let surface = (*owner)?;
-    let plane = pipe.plane(crate::ui4::PRIMARY_PLANE_SLOT);
+    let plane = pipe.plane(REALTIME_ENCODE_PLANE);
     let ctl = crate::intel::mmio_read(dev, plane.ctl());
-    let expected_live = u32::try_from(surface.gpu).ok()?;
-    let expected_stride = plane_stride_reg_value(surface.pitch_bytes)?;
     if ctl & PLANE_CTL_ENABLE == 0
         || ctl & PLANE_CTL_FORMAT_MASK_SKL != PLANE_CTL_FORMAT_XRGB_8888
         || ctl & PLANE_CTL_TILED_MASK != PLANE_CTL_TILED_LINEAR
         || ctl & PLANE_CTL_ORDER_RGBX == 0
-        || crate::intel::mmio_read(dev, plane.surf_live()) != expected_live
-        || crate::intel::mmio_read(dev, plane.stride()) != expected_stride
-        || crate::intel::mmio_read(dev, plane.base() + UNI_PLANE_POS_OFF)
-            != plane_pos_reg_value(0, 0)
-        || crate::intel::mmio_read(dev, plane.base() + UNI_PLANE_SIZE_OFF)
-            != plane_size_reg_value(surface.width, surface.height)
-        || crate::intel::mmio_read(dev, plane.base() + UNI_PLANE_OFFSET_OFF) != 0
-        || crate::intel::mmio_read(dev, plane.base() + UNI_PLANE_CUS_CTL_OFF) != 0
     {
         return None;
     }
-    let visible_bytes = (surface.pitch_bytes as usize).checked_mul(surface.height as usize)?;
-    if surface.virt.is_null() || visible_bytes > surface.byte_len {
-        return None;
+    // SURF may already name the next frame while SURFLIVE still names the
+    // exact allocation being scanned out. Capture follows LIVE and therefore
+    // must not reject this ordinary pending-flip interval.
+    let live = u64::from(crate::intel::mmio_read(dev, plane.surf_live()));
+
+    if let Some(view) = {
+        let pool = ui4_direct_scanout_pool(pipe, REALTIME_ENCODE_PLANE)?.lock();
+        pool.mappings
+            .iter()
+            .enumerate()
+            .filter_map(|(index, mapping)| Some((index, (*mapping)?)))
+            .find_map(|(index, mapping)| {
+                (ui4_direct_scanout_gpu_for_alias(pipe, REALTIME_ENCODE_PLANE, index) == Some(live))
+                    .then_some(Ui4RealtimeEncodePlaneView {
+                        phys: mapping.phys,
+                        byte_len: mapping.byte_len,
+                        width: mapping.width,
+                        height: mapping.height,
+                        pitch_bytes: mapping.pitch_bytes,
+                    })
+            })
+    } {
+        return Some(read(view));
     }
-    let rgba_premultiplied =
-        unsafe { core::slice::from_raw_parts(surface.virt.cast_const(), visible_bytes) };
-    Some(read(Ui4RealtimeEncodeSlot0View {
-        width: surface.width,
-        height: surface.height,
-        pitch_bytes: surface.pitch_bytes,
-        rgba_premultiplied,
-    }))
+
+    let surface = {
+        let pool = overlay_surface_pool(pipe, REALTIME_ENCODE_PLANE)?.lock();
+        pool.surfaces
+            .iter()
+            .flatten()
+            .copied()
+            .find(|surface| surface.gpu == live)?
+    };
+    let visible_bytes = (surface.pitch_bytes as usize).checked_mul(surface.height as usize)?;
+    (visible_bytes <= surface.byte_len).then(|| {
+        read(Ui4RealtimeEncodePlaneView {
+            phys: surface.phys,
+            byte_len: visible_bytes,
+            width: surface.width,
+            height: surface.height,
+            pitch_bytes: surface.pitch_bytes,
+        })
+    })
 }
 
 fn primary_surface_gpu_for_pipe(pipe: PipeInfo) -> Option<u64> {
@@ -979,6 +998,9 @@ struct Ui4DirectOverlaySurface {
 struct Ui4DirectScanoutMapping {
     phys: u64,
     byte_len: usize,
+    width: u32,
+    height: u32,
+    pitch_bytes: u32,
 }
 
 #[derive(Copy, Clone)]
@@ -5658,6 +5680,9 @@ pub(crate) fn queue_ui4_direct_overlay_frame(
         pool.mappings[alias_index] = Some(Ui4DirectScanoutMapping {
             phys: source.phys,
             byte_len: source.byte_len,
+            width: source.width,
+            height: source.height,
+            pitch_bytes: source.pitch_bytes,
         });
     }
     pool.next_alias = (alias_index + 1) % UI4_DIRECT_SCANOUT_ALIAS_COUNT;
