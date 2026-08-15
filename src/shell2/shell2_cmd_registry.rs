@@ -41,7 +41,6 @@ const TOOL_JSON_GRIDP: &str = r#"{"type":"object","properties":{},"additionalPro
 const TOOL_JSON_HELIO: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["start","list","status","stop","monitor","perf","logger"],"description":"Launch, list, inspect, or stop embedded Helio instances, or control Helio's temporary Spirit GPU logger (monitor, perf, and logger are aliases)."},"id":{"type":"integer","minimum":1,"maximum":4,"description":"Example id for action=start; 1 is simple-cube, 2 is churn-benchmark, 3 is shape-battle-royale, and 4 is pendulum-bigcloth."},"instance_id":{"type":"integer","minimum":1,"description":"Generated Helio instance id for action=stop."},"all":{"type":"boolean","description":"For action=stop, stop every live Helio instance instead of one instance_id."},"monitor_action":{"type":"string","enum":["start","status","off"],"description":"Start, inspect, or stop the Spirit 256x256 direct GPU logger."},"seconds":{"type":"integer","minimum":1,"maximum":300,"description":"Temporary logger lifetime in seconds; defaults to 30 and auto-restores Spirit afterward."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_VGPU: &str = r#"{"type":"object","properties":{"command":{"type":"string","enum":["status","test"],"description":"Inspect the vGPU broker or run a runtime test."},"test":{"type":"string","enum":["broker","abi","guc","compute","blit","all"],"description":"Runtime test selected when command=test."}},"required":["command"],"additionalProperties":false}"#;
 const TOOL_JSON_HYPER: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["status","probe"],"description":"Hyper transport view to print."},"url":{"type":"string","description":"Optional URL to download into TRUEOSFS."},"path":{"type":"string","description":"Optional TRUEOSFS destination path."}},"required":[],"additionalProperties":false}"#;
-const TOOL_JSON_LSD: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"Optional TRUEOSFS path to list."},"paths":{"type":"array","items":{"type":"string"},"description":"Optional TRUEOSFS paths to list."},"long":{"type":"boolean","description":"Show file kind, ownership, byte size, and name."},"tree":{"type":"boolean","description":"Walk recursively from the path."},"table":{"type":"boolean","description":"Render the shell2 table view."},"archive7z":{"type":"boolean","description":"Inspect a .7z archive and print its entries without extracting."},"oneline":{"type":"boolean","description":"Show one entry per line."},"directory_only":{"type":"boolean","description":"List directories themselves instead of their contents."},"color":{"type":"string","enum":["always","auto","never"],"description":"Color output mode."},"size":{"type":"string","enum":["default","short","bytes"],"description":"Size display mode."},"permission":{"type":"string","enum":["rwx","octal","attributes","disable"],"description":"Permission display mode."},"sort":{"type":"string","enum":["name","size","extension","none"],"description":"Sort entries."},"reverse":{"type":"boolean","description":"Reverse the selected sort."},"group_dirs":{"type":"string","enum":["none","first","last"],"description":"Group directories before or after files."},"depth":{"type":"integer","minimum":0,"description":"Maximum recursive depth."},"header":{"type":"boolean","description":"Show long-output headers."}},"required":[],"additionalProperties":false}"#;
 #[cfg(feature = "trueos_lumen")]
 const TOOL_JSON_LUM: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
 const TOOL_JSON_MV: &str = r#"{"type":"object","properties":{"src":{"type":"string","description":"Source TRUEOSFS path."},"dst":{"type":"string","description":"Destination TRUEOSFS path."},"regex":{"type":"string","description":"Optional -regx pattern. When set, src and dst are directories."}},"required":["src","dst"],"additionalProperties":false}"#;
@@ -81,10 +80,6 @@ fn dispatch_install(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &st
 fn dispatch_hyper(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let mut args = rest.split_whitespace();
     super::cmds::hyper::try_parse(spawner, io, &mut args)
-}
-
-fn dispatch_lsd(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    super::cmds::lsd::try_parse(io, rest)
 }
 
 #[cfg(feature = "trueos_lumen")]
@@ -339,15 +334,6 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
             "Render an HTTPS, HTTP, TRUEOSFS, or inline HTML source through Solara.",
         ),
         tool_parameters_json: Some(TOOL_JSON_SURF),
-    },
-    BuiltinShell2CmdEntry {
-        name: "lsd",
-        mode: "cmd",
-        color: Some(STATUS_GREEN_RGB),
-        advertised: true,
-        handler: dispatch_lsd,
-        tool_description: Some("List TRUEOSFS paths with the TRUEOS lsd adapter."),
-        tool_parameters_json: Some(TOOL_JSON_LSD),
     },
     BuiltinShell2CmdEntry {
         name: "rm",
@@ -659,9 +645,9 @@ pub(crate) fn try_dispatch(
 
 pub(crate) fn command_names_status_text() -> AllocString {
     const STATUS_ORDER: &[&str] = &[
-        "7z", "lsd", "rm", "mv", "sha", "disc", "cry", "backup", "install", "update", "hyper",
-        "surf", "net", "ssh", "qjs", "grid", "helio", "tts", "stt", "cpp", "vgpu", "aud", "vid",
-        "acpi", "tlb", "ram", "smp", "etc",
+        "7z", "rm", "mv", "sha", "disc", "cry", "backup", "install", "update", "hyper", "surf",
+        "net", "ssh", "qjs", "grid", "helio", "tts", "stt", "cpp", "vgpu", "aud", "vid", "acpi",
+        "tlb", "ram", "smp", "etc",
     ];
 
     let mut out = AllocString::new();

@@ -281,13 +281,27 @@ pub(super) fn compose_realtime_encode_rgba_into(
             crate::intel::dma_flush(view.virt, view.byte_len);
             let pixels =
                 unsafe { core::slice::from_raw_parts(view.virt.cast_const(), view.byte_len) };
-            blend_window(rgba_premultiplied, stride, width, height, *window, *view, pixels);
+            copy_realtime_encode_window_opaque(
+                rgba_premultiplied,
+                stride,
+                width,
+                height,
+                *window,
+                *view,
+                pixels,
+            );
         }
         for rect in rects {
-            blend_visual_rect(rgba_premultiplied, stride, width, height, rect);
+            fill_realtime_encode_visual_rect_opaque(
+                rgba_premultiplied,
+                stride,
+                width,
+                height,
+                rect,
+            );
         }
         let spirit_overlay_pixels =
-            blend_realtime_encode_spirit_overlay_premultiplied(rgba_premultiplied, width, height);
+            copy_realtime_encode_spirit_overlay_binary(rgba_premultiplied, width, height);
         Ok::<_, CaptureError>((slot0_scanout_pixels, spirit_overlay_pixels))
     })();
     release_leases(&leases);
@@ -337,7 +351,87 @@ fn copy_realtime_encode_pipe_a_slot0_premultiplied(
     .unwrap_or(0)
 }
 
-fn blend_realtime_encode_spirit_overlay_premultiplied(
+/// The live encoder is deliberately a cheap observation path, not a second
+/// software compositor. UI4 already orders the windows by hardware plane and
+/// z; each visible source therefore replaces its clipped destination rectangle
+/// and the frontmost source wins. Alpha and placement opacity are intentionally
+/// ignored here.
+fn copy_realtime_encode_window_opaque(
+    destination: &mut [u8],
+    destination_stride: usize,
+    screen_width: u32,
+    screen_height: u32,
+    window: WindowSnapshot,
+    view: FrameRgbaView,
+    source: &[u8],
+) {
+    let placement = window.placement;
+    if !placement.visible || placement.opacity == 0 {
+        return;
+    }
+    let draw_width = view.width.min(placement.width);
+    let draw_height = view.height.min(placement.height);
+    let left = i64::from(placement.x).max(0);
+    let top = i64::from(placement.y).max(0);
+    let right = (i64::from(placement.x) + i64::from(draw_width)).min(i64::from(screen_width));
+    let bottom = (i64::from(placement.y) + i64::from(draw_height)).min(i64::from(screen_height));
+    if right <= left || bottom <= top {
+        return;
+    }
+    let source_x = left.saturating_sub(i64::from(placement.x)) as usize;
+    let source_y = top.saturating_sub(i64::from(placement.y)) as usize;
+    let copy_width_bytes = (right - left) as usize * 4;
+    let copy_height = (bottom - top) as usize;
+
+    for row in 0..copy_height {
+        let source_offset = (source_y + row)
+            .saturating_mul(view.pitch as usize)
+            .saturating_add(source_x.saturating_mul(4));
+        let destination_offset = (top as usize + row)
+            .saturating_mul(destination_stride)
+            .saturating_add(left as usize * 4);
+        let Some(source_row) = source.get(source_offset..source_offset + copy_width_bytes) else {
+            return;
+        };
+        let Some(destination_row) =
+            destination.get_mut(destination_offset..destination_offset + copy_width_bytes)
+        else {
+            return;
+        };
+        destination_row.copy_from_slice(source_row);
+    }
+}
+
+fn fill_realtime_encode_visual_rect_opaque(
+    destination: &mut [u8],
+    destination_stride: usize,
+    screen_width: u32,
+    screen_height: u32,
+    rect: crate::intel::LiveOverlayRect,
+) {
+    let right = rect.x.saturating_add(rect.width).min(screen_width);
+    let bottom = rect.y.saturating_add(rect.height).min(screen_height);
+    if right <= rect.x || bottom <= rect.y || rect.color.a == 0 {
+        return;
+    }
+    let pixel = [rect.color.r, rect.color.g, rect.color.b, u8::MAX];
+    for y in rect.y..bottom {
+        let row_offset = y as usize * destination_stride;
+        let start = row_offset + rect.x as usize * 4;
+        let end = row_offset + right as usize * 4;
+        let Some(row) = destination.get_mut(start..end) else {
+            return;
+        };
+        for destination_pixel in row.chunks_exact_mut(4) {
+            destination_pixel.copy_from_slice(&pixel);
+        }
+    }
+}
+
+/// Spirit remains visually useful in the remote stream, but its cursor plane
+/// does not justify a source-over pass. Transparent texels are empty and every
+/// occupied texel replaces the destination at full opacity.
+fn copy_realtime_encode_spirit_overlay_binary(
     destination: &mut [u8],
     width: u32,
     height: u32,
@@ -356,7 +450,7 @@ fn blend_realtime_encode_spirit_overlay_premultiplied(
         let source_y = top.saturating_sub(i64::from(overlay.top)) as usize;
         let copy_width = (right - left) as usize;
         let copy_height = (bottom - top) as usize;
-        let mut blended_pixels = 0usize;
+        let mut copied_pixels = 0usize;
         for row in 0..copy_height {
             let source_offset = (source_y + row)
                 .saturating_mul(overlay.pitch_bytes as usize)
@@ -368,25 +462,25 @@ fn blend_realtime_encode_spirit_overlay_premultiplied(
                 .bgra_premultiplied
                 .get(source_offset..source_offset + copy_width * 4)
             else {
-                return blended_pixels;
+                return copied_pixels;
             };
             let Some(destination_row) =
                 destination.get_mut(destination_offset..destination_offset + copy_width * 4)
             else {
-                return blended_pixels;
+                return copied_pixels;
             };
-            for (source, destination) in source_row
+            for (source, target) in source_row
                 .chunks_exact(4)
                 .zip(destination_row.chunks_exact_mut(4))
             {
                 if source[3] == 0 {
                     continue;
                 }
-                blend_premultiplied(destination, source[2], source[1], source[0], source[3]);
-                blended_pixels = blended_pixels.saturating_add(1);
+                target.copy_from_slice(&[source[2], source[1], source[0], u8::MAX]);
+                copied_pixels = copied_pixels.saturating_add(1);
             }
         }
-        blended_pixels
+        copied_pixels
     })
     .unwrap_or(0)
 }
@@ -595,16 +689,26 @@ fn capture_windows(
             crate::intel::dma_flush(view.virt, view.byte_len);
             let pixels =
                 unsafe { core::slice::from_raw_parts(view.virt.cast_const(), view.byte_len) };
-            blend_window(&mut rgba, stride, width, height, *window, *view, pixels);
+            if realtime_encode_composition {
+                copy_realtime_encode_window_opaque(
+                    &mut rgba, stride, width, height, *window, *view, pixels,
+                );
+            } else {
+                blend_window(&mut rgba, stride, width, height, *window, *view, pixels);
+            }
         }
         for rect in rects {
-            blend_visual_rect(&mut rgba, stride, width, height, *rect);
+            if realtime_encode_composition {
+                fill_realtime_encode_visual_rect_opaque(&mut rgba, stride, width, height, *rect);
+            } else {
+                blend_visual_rect(&mut rgba, stride, width, height, *rect);
+            }
         }
         // The encoder composites premultiplied RGB directly onto black. Keep
         // that representation for real-time encoding and reserve the expensive
         // straight-alpha conversion for exported screenshots.
         let spirit_overlay_pixels = if realtime_encode_composition {
-            blend_realtime_encode_spirit_overlay_premultiplied(&mut rgba, width, height)
+            copy_realtime_encode_spirit_overlay_binary(&mut rgba, width, height)
         } else {
             0
         };

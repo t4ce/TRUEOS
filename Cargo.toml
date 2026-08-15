@@ -98,7 +98,6 @@ trueos-fs = { path = "crates/trueos-fs" }
 v = { path = "crates/trueos-v" }
 trueos-vm = { path = "crates/trueos-vm" }
 trueos-locale = { path = "crates/trueos-locale", default-features = false }
-trueos-lsd = { path = "crates/trueos-lsd" }
 trueos-helio-artifact = { path = "crates/trueos-helio-artifact" }
 trueos-helio-runtime = { path = "crates/trueos-helio-runtime" }
 parry2d = { version = "0.26", default-features = false, features = ["dim2", "f32"] }

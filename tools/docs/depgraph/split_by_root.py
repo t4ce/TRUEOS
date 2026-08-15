@@ -59,7 +59,6 @@ LEFT_WING_CRATES = {
     "tower",
     "trueos-esp",
     "trueos-io",
-    "trueos-lsd",
     "trueos-vm",
     "v",
     "zune-core",

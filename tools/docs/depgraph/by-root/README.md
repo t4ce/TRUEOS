@@ -57,8 +57,7 @@ Each SVG expands one direct dependency of the TRUEOS root. Blue note nodes are i
 | trueos-esp<br>0.1.0<br>/crates/trueos-esp | [`trueos-esp-v0.1.0.svg`](trueos-esp-v0.1.0.svg) | 1 | 0 | 3 |
 | trueos-fs<br>0.0.1<br>/crates/trueos-fs | [`trueos-fs-v0.0.1.svg`](trueos-fs-v0.0.1.svg) | 1 | 0 | 0 |
 | trueos-io<br>0.1.0<br>/crates/trueos-io | [`trueos-io-v0.1.0.svg`](trueos-io-v0.1.0.svg) | 1 | 4 | 1 |
-| trueos-locale<br>0.1.0<br>/crates/trueos-locale | [`trueos-locale-v0.1.0.svg`](trueos-locale-v0.1.0.svg) | 1 | 1 | 0 |
-| trueos-lsd<br>1.1.5<br>/crates/trueos-lsd | [`trueos-lsd-v1.1.5.svg`](trueos-lsd-v1.1.5.svg) | 1 | 0 | 2 |
+| trueos-locale<br>0.1.0<br>/crates/trueos-locale | [`trueos-locale-v0.1.0.svg`](trueos-locale-v0.1.0.svg) | 1 | 1 | 2 |
 | trueos-math<br>0.1.0<br>/crates/trueos-math | [`trueos-math-v0.1.0.svg`](trueos-math-v0.1.0.svg) | 1 | 1 | 1 |
 | trueos-qjs<br>0.1.0<br>/crates/trueos-qjs | [`trueos-qjs-v0.1.0.svg`](trueos-qjs-v0.1.0.svg) | 11 | 1 | 13 |
 | trueos-vm<br>0.1.0<br>/crates/trueos-vm | [`trueos-vm-v0.1.0.svg`](trueos-vm-v0.1.0.svg) | 1 | 0 | 1 |
@@ -71,5 +70,5 @@ Each SVG expands one direct dependency of the TRUEOS root. Blue note nodes are i
 | zune-core<br>0.5.1<br>/vendor/zune-core-0.5.1 | [`zune-core-v0.5.1.svg`](zune-core-v0.5.1.svg) | 1 | 1 | 0 |
 | zune-jpeg<br>0.5.15<br>/vendor/zune-jpeg-0.5.15 | [`zune-jpeg-v0.5.15.svg`](zune-jpeg-v0.5.15.svg) | 1 | 0 | 1 |
 
-Total direct TRUEOS roots: 64
-Total owned nodes excluding TRUEOS root: 248
+Total direct TRUEOS roots: 63
+Total owned nodes excluding TRUEOS root: 247

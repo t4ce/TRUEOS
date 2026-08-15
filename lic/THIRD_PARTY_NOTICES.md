@@ -11,8 +11,6 @@ Known third-party/provenance areas include:
   files preserved inside each vendored package.
 - `.limine/` and `vendor/limine/`: Limine bootloader material, governed by the
   Limine licenses and notices included in those directories.
-- `crates/trueos-lsd/`: Apache-2.0 licensed material with upstream repository
-  provenance declared in its Cargo manifest.
 - Intel processor microcode update binaries, if bundled with a TRUEOS image or
   boot medium, must remain unmodified and are governed by Intel's microcode
   license. See `licenses/intel-microcode.txt`.

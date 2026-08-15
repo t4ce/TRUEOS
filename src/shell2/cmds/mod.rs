@@ -13,7 +13,6 @@ pub(crate) mod gridp;
 pub(crate) mod helio;
 pub(crate) mod hyper;
 pub(crate) mod install;
-pub(crate) mod lsd;
 #[cfg(feature = "trueos_lumen")]
 pub(crate) mod lum;
 pub(crate) mod mv;

@@ -2125,7 +2125,7 @@ pub async fn read_entry_kind_at_named<D: BlockIo>(
 /// Read the native key metadata from one committed log record header.
 ///
 /// This performs one bounded block read and does not inspect or return payload
-/// bytes. It is used by metadata/index consumers such as TRUEOS LSD.
+/// bytes. It is used by metadata and index consumers.
 pub async fn read_record_key_at<D: BlockIo>(
     dev: &D,
     params: &FsParams,

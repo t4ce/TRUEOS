@@ -577,8 +577,6 @@ ConWhite 	FF_FF_FF
   ![trueos io v0.1.0.svg](tools/depgraph/by-root/trueos-io-v0.1.0.svg)
 - `tools/depgraph/by-root/trueos-locale-v0.1.0.svg`  
   ![trueos locale v0.1.0.svg](tools/depgraph/by-root/trueos-locale-v0.1.0.svg)
-- `tools/depgraph/by-root/trueos-lsd-v1.1.5.svg`  
-  ![trueos lsd v1.1.5.svg](tools/depgraph/by-root/trueos-lsd-v1.1.5.svg)
 - `tools/depgraph/by-root/trueos-math-v0.1.0.svg`  
   ![trueos math v0.1.0.svg](tools/depgraph/by-root/trueos-math-v0.1.0.svg)
 - `tools/depgraph/by-root/trueos-qjs-v0.1.0.svg`  

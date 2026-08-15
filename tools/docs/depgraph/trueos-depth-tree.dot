@@ -207,7 +207,7 @@ digraph trueos_depth_graph {
   n156 [label=<<FONT POINT-SIZE="58"><B>trait-ffi</B></FONT><BR/><FONT POINT-SIZE="54">0.2.11</FONT><BR/><FONT POINT-SIZE="50">proc-macro</FONT><BR/><FONT POINT-SIZE="50">#d445a016</FONT>>, fillcolor="#f0e6ff", color="#8656c9", margin="0.58,0.45"];
   n157 [label=<<FONT POINT-SIZE="58"><B>trueos-esp</B></FONT><BR/><FONT POINT-SIZE="54">0.1.0</FONT><BR/><FONT POINT-SIZE="50">/crates/trueos-esp</FONT>>, fillcolor="#e7f7e7", color="#3f8f46", margin="0.58,0.45"];
   n158 [label=<<FONT POINT-SIZE="58"><B>trueos-io</B></FONT><BR/><FONT POINT-SIZE="54">0.1.0</FONT><BR/><FONT POINT-SIZE="50">/crates/trueos-io</FONT>>, fillcolor="#e7f7e7", color="#3f8f46", margin="0.58,0.45"];
-  n159 [label=<<FONT POINT-SIZE="58"><B>trueos-lsd</B></FONT><BR/><FONT POINT-SIZE="54">1.1.5</FONT><BR/><FONT POINT-SIZE="50">/crates/trueos-lsd</FONT>>, fillcolor="#e7f7e7", color="#3f8f46", margin="0.58,0.45"];
+  n159 [label=<<FONT POINT-SIZE="58"><B>trueos-locale</B></FONT><BR/><FONT POINT-SIZE="54">0.1.0</FONT><BR/><FONT POINT-SIZE="50">/crates/trueos-locale</FONT>>, fillcolor="#e7f7e7", color="#3f8f46", margin="0.58,0.45"];
   n160 [label=<<FONT POINT-SIZE="58"><B>trueos-math</B></FONT><BR/><FONT POINT-SIZE="54">0.1.0</FONT><BR/><FONT POINT-SIZE="50">/crates/trueos-math</FONT>>, fillcolor="#e7f7e7", color="#3f8f46", margin="0.58,0.45"];
   n161 [label=<<TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="0"><TR><TD><FONT POINT-SIZE="58"><B>trueos-qjs</B></FONT></TD></TR>
 <TR><TD><FONT POINT-SIZE="54">0.1.0</FONT></TD></TR>
@@ -276,7 +276,7 @@ digraph trueos_depth_graph {
   n0 -> n155 [constraint=false, tailport=w, headport=e];
   n0 -> n157 [style=invis, constraint=false];
   n0 -> n158 [constraint=false, tailport=w, headport=e];
-  n0 -> n159 [style=invis, constraint=false];
+  n0 -> n159;
   n0 -> n160;
   n0 -> n161;
   n0 -> n162 [style=invis, constraint=false];
@@ -675,6 +675,7 @@ digraph trueos_depth_graph {
   n161 -> n85;
   n161 -> n105;
   n161 -> n144;
+  n161 -> n159;
   n161 -> n160;
   n161 -> n165;
   n161 -> n166 [constraint=false, tailport=w, headport=e];
@@ -706,7 +707,7 @@ digraph trueos_depth_graph {
   n172 -> n117;
   n172 -> n118;
   n172 -> n151;
-  n48 -> n50 [style=invis, weight=900, minlen=2];
+  n50 -> n48 [style=invis, weight=900, minlen=2];
   n54 -> n76 [style=invis, weight=900, minlen=2];
   left_column_0 [label="", shape=point, width=0.01, height=0.01, style=invis];
   left_column_1 [label="", shape=point, width=0.01, height=0.01, style=invis];
@@ -715,15 +716,15 @@ digraph trueos_depth_graph {
   left_column_3 -> left_column_2 -> left_column_1 -> left_column_0 -> n0 [style=invis, weight=1000];
   {
     rank=same;
-    left_column_0; n92; n124; n143; n155; n157; n159; n162; n173;
+    left_column_0; n92; n124; n143; n155; n157; n162; n173;
   }
   {
     rank=same;
-    left_column_1; n134; n158; n166;
+    left_column_1; n136; n158; n166;
   }
   {
     rank=same;
-    left_column_2; n21; n136;
+    left_column_2; n21; n134;
   }
   {
     rank=same;
@@ -738,16 +739,14 @@ digraph trueos_depth_graph {
   n158 -> n143 [style=invis, weight=300, minlen=1];
   n166 -> n157 [style=invis, weight=300, minlen=1];
   n21 -> n158 [style=invis, weight=300, minlen=1];
-  n158 -> n159 [style=invis, weight=300, minlen=1];
-  n166 -> n159 [style=invis, weight=300, minlen=1];
   n166 -> n162 [style=invis, weight=300, minlen=1];
   n134 -> n166 [style=invis, weight=300, minlen=1];
   n136 -> n166 [style=invis, weight=300, minlen=1];
   architecture_irrelevant [label=<<TABLE BORDER="1" CELLBORDER="0" CELLSPACING="0" CELLPADDING="36" COLOR="#b7bec9" STYLE="ROUNDED"><TR><TD><FONT POINT-SIZE="54"><B>irrelevant to architecture</B></FONT></TD></TR><TR><TD><FONT POINT-SIZE="50"><B>log</B></FONT> <FONT POINT-SIZE="45">0.4.33</FONT></TD></TR></TABLE>>, shape=plain, fontcolor="#334155"];
-  // collapsed leaf ends: 75
+  // collapsed leaf ends: 74
   // shared two-input leaf ends: 9
-  // parent-attached one-input nodes: 56
+  // parent-attached one-input nodes: 55
   // left-wing root-shared leaf ends: 0
-  // pinned left-wing crates: 15
+  // pinned left-wing crates: 14
   // architecture-irrelevant bucket entries: 1
 }

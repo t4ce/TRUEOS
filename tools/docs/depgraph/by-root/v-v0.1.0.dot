@@ -11,7 +11,7 @@ digraph "v-v0.1.0" {
   n0 -> out2 [style=dashed, color="#d19922"];
   in3 [label=<from trueos-esp-v0.1.0.svg<BR/><B>v</B><BR/>0.1.0<BR/>/crates/trueos-v>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
   in3 -> n0 [style=dashed, color="#4b8fc5"];
-  in4 [label=<from trueos-lsd-v1.1.5.svg<BR/><B>v</B><BR/>0.1.0<BR/>/crates/trueos-v>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in4 [label=<from trueos-locale-v0.1.0.svg<BR/><B>v</B><BR/>0.1.0<BR/>/crates/trueos-v>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
   in4 -> n0 [style=dashed, color="#4b8fc5"];
   in5 [label=<from trueos-qjs-v0.1.0.svg<BR/><B>v</B><BR/>0.1.0<BR/>/crates/trueos-v>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
   in5 -> n0 [style=dashed, color="#4b8fc5"];

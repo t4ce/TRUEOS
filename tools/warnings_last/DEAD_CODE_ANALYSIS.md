@@ -20,14 +20,6 @@ build output.
 - Most explicit first-party dead-code allows outside this cleanup are under
   `src/spirit/`.
 
-## Dormant source outside the build graph
-
-`crates/trueos-lsd` has a large legacy tree which is not compiled. Its active
-library includes only `glob`, `runtime_config`, and `runtime_config_parse`, and
-`autobins = false` excludes the legacy binary. The dormant `main.rs`, `git.rs`,
-`core.rs`, `display.rs`, `flags/`, and `meta/` tree is a strong future archive
-candidate. Its `sudo` and `no-git` cfgs do not describe the active crate.
-
 ## Dependency candidates
 
 The following direct root dependencies merit a dedicated removal check:

@@ -529,7 +529,6 @@
 1trueos-fs v0.0.1 (/home/t4ce/REPOS/TRUEOS/crates/trueos-fs)
 1trueos-io v0.1.0 (/home/t4ce/REPOS/TRUEOS/crates/trueos-io) (*)
 1trueos-locale v0.1.0 (/home/t4ce/REPOS/TRUEOS/crates/trueos-locale)
-1trueos-lsd v1.1.5 (/home/t4ce/REPOS/TRUEOS/crates/trueos-lsd)
 2trueos-io v0.1.0 (/home/t4ce/REPOS/TRUEOS/crates/trueos-io) (*)
 2v v0.1.0 (/home/t4ce/REPOS/TRUEOS/crates/trueos-v) (*)
 1trueos-math v0.1.0 (/home/t4ce/REPOS/TRUEOS/crates/trueos-math)

@@ -241,12 +241,6 @@ pub struct SevenZEntry {
     pub bytes: Vec<u8>,
 }
 
-pub struct SevenZEntryInfo {
-    pub name: String,
-    pub unpacked_size: usize,
-    pub crc: Option<u32>,
-}
-
 struct FolderInfo {
     method: Method,
     unpacked_size: u64,
@@ -1299,19 +1293,6 @@ pub fn extract_all_to_vec_bounded(
         out.push(SevenZEntry {
             name: archive.name.clone(),
             bytes: extract_archive_substream_to_vec(archive, cached_folder.as_slice())?,
-        });
-    }
-    Ok(out)
-}
-
-pub fn list_entries(payload: &[u8]) -> Result<Vec<SevenZEntryInfo>, SevenZError> {
-    let archives = parse_archive(payload)?;
-    let mut out = Vec::with_capacity(archives.len());
-    for archive in &archives {
-        out.push(SevenZEntryInfo {
-            name: archive.name.clone(),
-            unpacked_size: archive.substream_size,
-            crc: archive.substream_crc,
         });
     }
     Ok(out)
