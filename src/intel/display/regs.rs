@@ -5,6 +5,7 @@ pub(in crate::intel) const PIPE_B_SRC: usize = 0x6101C;
 pub(in crate::intel) const PIPE_C_SRC: usize = 0x6201C;
 pub(in crate::intel) const PIPE_D_SRC: usize = 0x6301C;
 pub(in crate::intel) const PIPECONF_A: usize = 0x70008;
+pub(in crate::intel) const PIPE_CHICKEN_A: usize = 0x70038;
 pub(in crate::intel) const TRANS_HTOTAL_A: usize = 0x60000;
 pub(in crate::intel) const TRANS_HSYNC_A: usize = 0x60008;
 pub(in crate::intel) const TRANS_VTOTAL_A: usize = 0x6000C;
@@ -33,6 +34,10 @@ pub(in crate::intel) const SKL_FUSE_STATUS: usize = 0x42000;
 pub(in crate::intel) const CUR_SURFLIVE_A: usize = 0x700AC;
 pub(in crate::intel) const PIPE_FRMCOUNT_A: usize = 0x70040;
 pub(in crate::intel) const PIPE_MMIO_STRIDE: usize = 0x1000;
+pub(in crate::intel) const PIPECONF_STATE: u32 = 1 << 30;
+pub(in crate::intel) const PIPE_CHICKEN_UNDERRUN_RECOVERY_DISABLE_ADLP: u32 = 1 << 30;
+pub(in crate::intel) const PIPE_CHICKEN_PIXEL_ROUNDING_TRUNC_FB_PASSTHRU: u32 = 1 << 15;
+pub(in crate::intel) const PIPE_CHICKEN_PER_PIXEL_ALPHA_BYPASS: u32 = 1 << 7;
 pub(in crate::intel) const SKL_BOTTOM_COLOR_A: usize = 0x70034;
 pub(in crate::intel) const SKL_BOTTOM_COLOR_PIPE_STRIDE: usize = 0x1000;
 pub(in crate::intel) const UNI_PLANE_BASE: usize = 0x70180;
@@ -163,6 +168,32 @@ pub(in crate::intel) const PLANE_DBUF_SLOT_3_END: u16 = 819;
 pub(in crate::intel) const PLANE_DBUF_SLOT_4_START: u16 = 820;
 pub(in crate::intel) const PLANE_DBUF_SLOT_4_END: u16 =
     crate::intel::SPIRIT_CURSOR_DBUF_S1_START - 1;
+// DBUF S2 is the independent 1024-block fetch domain used by pipes C/D.
+// Spirit owns its final 16 blocks (2032..2047), exactly as it owns the final
+// 16 blocks of S1 for pipes A/B.  A headless Pipe C mirror therefore applies
+// the same five-plane partition with a 1024-block base offset.
+pub(in crate::intel) const PLANE_DBUF_S2_BASE: u16 = 1024;
+pub(in crate::intel) const PLANE_DBUF_S2_SLOT_0_START: u16 =
+    PLANE_DBUF_S2_BASE + PLANE_DBUF_SLOT_0_START;
+pub(in crate::intel) const PLANE_DBUF_S2_SLOT_0_END: u16 =
+    PLANE_DBUF_S2_BASE + PLANE_DBUF_SLOT_0_END;
+pub(in crate::intel) const PLANE_DBUF_S2_SLOT_1_START: u16 =
+    PLANE_DBUF_S2_BASE + PLANE_DBUF_SLOT_1_START;
+pub(in crate::intel) const PLANE_DBUF_S2_SLOT_1_END: u16 =
+    PLANE_DBUF_S2_BASE + PLANE_DBUF_SLOT_1_END;
+pub(in crate::intel) const PLANE_DBUF_S2_SLOT_2_START: u16 =
+    PLANE_DBUF_S2_BASE + PLANE_DBUF_SLOT_2_START;
+pub(in crate::intel) const PLANE_DBUF_S2_SLOT_2_END: u16 =
+    PLANE_DBUF_S2_BASE + PLANE_DBUF_SLOT_2_END;
+pub(in crate::intel) const PLANE_DBUF_S2_SLOT_3_START: u16 =
+    PLANE_DBUF_S2_BASE + PLANE_DBUF_SLOT_3_START;
+pub(in crate::intel) const PLANE_DBUF_S2_SLOT_3_END: u16 =
+    PLANE_DBUF_S2_BASE + PLANE_DBUF_SLOT_3_END;
+pub(in crate::intel) const PLANE_DBUF_S2_SLOT_4_START: u16 =
+    PLANE_DBUF_S2_BASE + PLANE_DBUF_SLOT_4_START;
+pub(in crate::intel) const PLANE_DBUF_S2_SLOT_4_END: u16 =
+    PLANE_DBUF_S2_BASE + PLANE_DBUF_SLOT_4_END;
+const _: () = assert!(PLANE_DBUF_S2_SLOT_4_END == 2031);
 const _: () =
     assert!(PLANE_DBUF_SLOT_0_END - PLANE_DBUF_SLOT_0_START + 1 == PLANE_DBUF_BALANCED_BLOCKS);
 const _: () =

@@ -37,6 +37,7 @@ const FRAME_WIDTH_MBS: usize = FRAME_WIDTH / 16;
 const FRAME_HEIGHT_MBS: usize = FRAME_HEIGHT / 16;
 const FRAME_MACROBLOCKS: usize = FRAME_WIDTH_MBS * FRAME_HEIGHT_MBS;
 const SOURCE_BYTES: usize = FRAME_WIDTH * FRAME_HEIGHT * 3 / 2;
+const XYUV8888_SOURCE_BYTES: usize = FRAME_WIDTH * FRAME_HEIGHT * 4;
 const RECON_0_OFFSET: usize = 0x0058_0000;
 const RECON_1_OFFSET: usize = 0x00af_0000;
 const RECON_BYTES: usize = SOURCE_BYTES;
@@ -55,9 +56,7 @@ const BITSTREAM_BYTES: usize = 4 * 1024 * 1024;
 const MFX_STATS_OFFSET: usize = 0x0150_0000;
 const VDENC_STATS_OFFSET: usize = 0x0151_0000;
 const SLICE_SIZE_OFFSET: usize = 0x0152_0000;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const INTRA_ROWSTORE_OFFSET: usize = 0x0153_0000;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const DEBLOCK_ROWSTORE_OFFSET: usize = 0x0154_0000;
 const BSP_ROWSTORE_OFFSET: usize = 0x0155_0000;
 const MV_OBJECT_OFFSET: usize = 0x0156_0000;
@@ -91,6 +90,11 @@ const BATCH_GPU: u64 = ARENA_GPU + BATCH_OFFSET as u64;
 const CODEC_BATCH_GPU: u64 = BATCH_GPU + CODEC_BATCH_OFFSET as u64;
 const RESULT_GPU: u64 = ARENA_GPU + RESULT_OFFSET as u64;
 const SOURCE_GPU: u64 = ARENA_GPU + SOURCE_OFFSET as u64;
+// Packed XYUV8888 is 14.06 MiB and cannot occupy SOURCE_GPU without overlapping
+// the resident reconstruction window. External WD frames therefore use a
+// separate sparse PPGTT aperture while keeping every codec-owned allocation
+// at its already-proven address.
+const XYUV8888_SOURCE_GPU: u64 = 0x5000_0000;
 const RECON_0_GPU: u64 = ARENA_GPU + RECON_0_OFFSET as u64;
 const RECON_1_GPU: u64 = ARENA_GPU + RECON_1_OFFSET as u64;
 const DS_0_GPU: u64 = ARENA_GPU + DS_0_OFFSET as u64;
@@ -187,7 +191,6 @@ const GEN12_FAULT_TLB_DATA1: usize = 0x0000_CEBC;
 const MI_FORCE_WAKEUP_MFX: [u32; 2] = [0x0e80_0000, 0x0300_0200];
 const MFX_PIPE_MODE_SELECT: [u32; 5] = [0x7000_0003, 0x0002_22d2, 0, 0, 0];
 const MFX_SURFACE_RECON: [u32; 6] = mfx_surface_state(0, FRAME_WIDTH, FRAME_HEIGHT, FRAME_WIDTH);
-const MFX_SURFACE_SOURCE: [u32; 6] = mfx_surface_state(4, FRAME_WIDTH, FRAME_HEIGHT, FRAME_WIDTH);
 const MFX_SURFACE_DS: [u32; 6] = mfx_surface_state(5, DS_WIDTH, DS_HEIGHT, DS_PITCH);
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -357,8 +360,6 @@ fn mfx_avc_slice_state(picture: AvcPicture) -> [u32; 11] {
 }
 
 const VDENC_PIPE_MODE_SELECT: [u32; 6] = [0x7080_0004, 0x0122_00a2, 0x002b_030a, 0x0700_0303, 0, 0];
-const VDENC_SRC_SURFACE_STATE: [u32; 6] =
-    vdenc_surface_state(0x7081_0004, FRAME_WIDTH, FRAME_HEIGHT, FRAME_WIDTH, 0x2070_0000, 0x8);
 const VDENC_REF_SURFACE_STATE: [u32; 6] =
     vdenc_surface_state(0x7082_0004, FRAME_WIDTH, FRAME_HEIGHT, FRAME_WIDTH, 0x2000_0000, 0);
 const VDENC_DS_REF_SURFACE_STATE: [u32; 10] = {
@@ -721,8 +722,8 @@ pub(crate) struct AvcEncodeProbeReport {
     pub(crate) mfc_bitstream_bytecount_slice: u32,
     pub(crate) mfc_avc_num_slices: u32,
     pub(crate) bitstream_head: [u32; 20],
-    pub(crate) source_nv12_bytes: usize,
-    pub(crate) source_nv12_fnv1a32: u32,
+    pub(crate) source_dma_bytes: usize,
+    pub(crate) source_dma_fnv1a32: u32,
     pub(crate) batch_bytes: usize,
     pub(crate) primary_batch_bytes: usize,
     pub(crate) ring_bytes: usize,
@@ -766,8 +767,8 @@ impl AvcEncodeProbeReport {
         mfc_bitstream_bytecount_slice: 0,
         mfc_avc_num_slices: 0,
         bitstream_head: [0; 20],
-        source_nv12_bytes: 0,
-        source_nv12_fnv1a32: 0,
+        source_dma_bytes: 0,
+        source_dma_fnv1a32: 0,
         batch_bytes: 0,
         primary_batch_bytes: 0,
         ring_bytes: 0,
@@ -795,10 +796,68 @@ struct ProbeBacking {
 
 unsafe impl Send for ProbeBacking {}
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum AvcRawSurfaceFormat {
+    Nv12,
+    Xyuv8888,
+}
+
+impl AvcRawSurfaceFormat {
+    const fn bytes(self) -> usize {
+        match self {
+            Self::Nv12 => SOURCE_BYTES,
+            Self::Xyuv8888 => XYUV8888_SOURCE_BYTES,
+        }
+    }
+
+    const fn pitch(self) -> usize {
+        match self {
+            Self::Nv12 => FRAME_WIDTH,
+            Self::Xyuv8888 => FRAME_WIDTH * 4,
+        }
+    }
+
+    const fn vdenc_format(self) -> u32 {
+        match self {
+            Self::Nv12 => 4,
+            Self::Xyuv8888 => 2,
+        }
+    }
+
+    const fn mfx_format(self) -> u32 {
+        match self {
+            Self::Nv12 => 4,
+            Self::Xyuv8888 => 0,
+        }
+    }
+
+    const fn gpu(self) -> u64 {
+        match self {
+            Self::Nv12 => SOURCE_GPU,
+            Self::Xyuv8888 => XYUV8888_SOURCE_GPU,
+        }
+    }
+}
+
 #[derive(Copy, Clone)]
 pub(crate) struct AvcNv12DmaSurface {
     phys: u64,
     bytes: usize,
+}
+
+#[derive(Copy, Clone)]
+pub(crate) struct AvcXyuv8888DmaSurface {
+    phys: u64,
+    bytes: usize,
+}
+
+impl AvcXyuv8888DmaSurface {
+    pub(crate) fn new(phys: u64, bytes: usize) -> Option<Self> {
+        (phys != 0
+            && phys.is_multiple_of(crate::intel::WARM_ALIGN as u64)
+            && bytes == XYUV8888_SOURCE_BYTES)
+            .then_some(Self { phys, bytes })
+    }
 }
 
 impl AvcNv12DmaSurface {
@@ -811,7 +870,17 @@ impl AvcNv12DmaSurface {
 #[derive(Copy, Clone)]
 enum AvcFrameSource {
     BootProof,
-    Dma(AvcNv12DmaSurface),
+    Nv12Dma(AvcNv12DmaSurface),
+    Xyuv8888Dma(AvcXyuv8888DmaSurface),
+}
+
+impl AvcFrameSource {
+    const fn raw_format(self) -> AvcRawSurfaceFormat {
+        match self {
+            Self::BootProof | Self::Nv12Dma(_) => AvcRawSurfaceFormat::Nv12,
+            Self::Xyuv8888Dma(_) => AvcRawSurfaceFormat::Xyuv8888,
+        }
+    }
 }
 
 static STATE: AtomicU8 = AtomicU8::new(AvcEncodeProbeState::NotRun as u8);
@@ -847,7 +916,18 @@ pub(crate) async fn run_nv12_dma_frame(
     surface: AvcNv12DmaSurface,
     sequence: u32,
 ) -> AvcEncodeProbeReport {
-    run_live_frame(AvcFrameSource::Dma(surface), AvcPicture::for_sequence(sequence)).await
+    run_live_frame(AvcFrameSource::Nv12Dma(surface), AvcPicture::for_sequence(sequence)).await
+}
+
+/// Submit a completed WD XYUV8888 surface directly as VDEnc's raw source.
+/// XYUV8888's X:Y:U:V layout matches VDEnc's packed A:Y:U:V YUV444 input;
+/// Gen12 performs the 4:4:4 to 4:2:0 chroma downsample in its fixed-function
+/// source path; no VEBOX, RCS shader, or CPU full-frame conversion is involved.
+pub(crate) async fn run_xyuv8888_dma_frame(
+    surface: AvcXyuv8888DmaSurface,
+    sequence: u32,
+) -> AvcEncodeProbeReport {
+    run_live_frame(AvcFrameSource::Xyuv8888Dma(surface), AvcPicture::for_sequence(sequence)).await
 }
 
 async fn run_live_frame(source: AvcFrameSource, picture: AvcPicture) -> AvcEncodeProbeReport {
@@ -958,6 +1038,7 @@ async fn run_with_source(source_kind: AvcFrameSource, picture: AvcPicture) -> Av
     let arena_source_phys = backing.arena_phys.saturating_add(SOURCE_OFFSET as u64);
     let source_virt = unsafe { backing.arena_virt.add(SOURCE_OFFSET) };
     let source = unsafe { core::slice::from_raw_parts_mut(source_virt, SOURCE_BYTES) };
+    let raw_format = source_kind.raw_format();
     let (source_phys, source_hash) = match source_kind {
         AvcFrameSource::BootProof => {
             if !fill_boot_proof_nv12(source) {
@@ -965,7 +1046,7 @@ async fn run_with_source(source_kind: AvcFrameSource, picture: AvcPicture) -> Av
             }
             (arena_source_phys, fnv1a32(source))
         }
-        AvcFrameSource::Dma(surface) => {
+        AvcFrameSource::Nv12Dma(surface) => {
             if surface.bytes != SOURCE_BYTES {
                 return fail(report, AvcEncodeProbeFailure::SurfaceConversion, started_ns);
             }
@@ -977,24 +1058,36 @@ async fn run_with_source(source_kind: AvcFrameSource, picture: AvcPicture) -> Av
             // from the CPU-authored RGBA composition before RCS submission.
             (surface.phys, 0)
         }
+        AvcFrameSource::Xyuv8888Dma(surface) => {
+            if surface.bytes != XYUV8888_SOURCE_BYTES {
+                return fail(report, AvcEncodeProbeFailure::SurfaceConversion, started_ns);
+            }
+            (surface.phys, 0)
+        }
     };
-    if backing
-        .ppgtt
-        .map_range(crate::intel::ppgtt::PpgttRange {
-            gpu: SOURCE_GPU,
-            phys: source_phys,
-            bytes: SOURCE_BYTES,
-        })
-        .is_none()
-    {
+    let source_range = crate::intel::ppgtt::PpgttRange {
+        gpu: raw_format.gpu(),
+        phys: source_phys,
+        bytes: raw_format.bytes(),
+    };
+    // WD is an external display-engine writer, not an RCS producer with a
+    // terminal HDC/L3 flush. Map that aperture UC so consecutive captures
+    // cannot be satisfied from stale VDBOX/cache lines. The established NV12
+    // producer path keeps its ordinary WB mapping.
+    let mapped = match raw_format {
+        AvcRawSurfaceFormat::Nv12 => backing.ppgtt.map_range(source_range),
+        AvcRawSurfaceFormat::Xyuv8888 => backing.ppgtt.map_scanout_range(source_range),
+    };
+    if mapped.is_none() {
         return fail(report, AvcEncodeProbeFailure::SurfaceConversion, started_ns);
     }
     report.surface_uploaded = true;
-    report.source_nv12_bytes = SOURCE_BYTES;
-    report.source_nv12_fnv1a32 = source_hash;
+    report.source_dma_bytes = raw_format.bytes();
+    report.source_dma_fnv1a32 = source_hash;
 
     let batch_virt = unsafe { backing.arena_virt.add(BATCH_OFFSET + CODEC_BATCH_OFFSET) };
-    let Some((batch_bytes, codec_packets)) = build_picture_batch(batch_virt, picture) else {
+    let Some((batch_bytes, codec_packets)) = build_picture_batch(batch_virt, picture, raw_format)
+    else {
         return fail(report, AvcEncodeProbeFailure::BatchBuild, started_ns);
     };
     report.batch_ready = true;
@@ -1050,7 +1143,7 @@ async fn run_with_source(source_kind: AvcFrameSource, picture: AvcPicture) -> Av
     report.context_ready = true;
 
     flush_cpu_authored_frame_ranges(backing.arena_virt, primary_batch_bytes, batch_bytes);
-    if !matches!(source_kind, AvcFrameSource::Dma(_)) {
+    if matches!(source_kind, AvcFrameSource::BootProof) {
         crate::intel::dma_flush(source_virt, SOURCE_BYTES);
     }
     crate::intel::dma_flush(backing.ring_virt, ring_tail_bytes);
@@ -1290,7 +1383,11 @@ fn fill_boot_proof_nv12(nv12: &mut [u8]) -> bool {
     true
 }
 
-fn build_picture_batch(batch_virt: *mut u8, picture: AvcPicture) -> Option<(usize, usize)> {
+fn build_picture_batch(
+    batch_virt: *mut u8,
+    picture: AvcPicture,
+    raw_format: AvcRawSurfaceFormat,
+) -> Option<(usize, usize)> {
     let batch = unsafe {
         core::slice::from_raw_parts_mut(
             batch_virt.cast::<u32>(),
@@ -1320,10 +1417,16 @@ fn build_picture_batch(batch_virt: *mut u8, picture: AvcPicture) -> Option<(usiz
     }
     packet_count += 1;
     push_packet(batch, &mut idx, &MFX_SURFACE_RECON, &mut packet_count)?;
-    push_packet(batch, &mut idx, &MFX_SURFACE_SOURCE, &mut packet_count)?;
+    let mut mfx_source = mfx_surface_state(4, FRAME_WIDTH, FRAME_HEIGHT, raw_format.pitch());
+    // MFX ignores these raw-source format fields for video codecs. Keep its
+    // established YCRCB_NORMAL/interleaved setup; VDENC_SRC_SURFACE_STATE is
+    // the command that describes packed XYUV8888/YUV444 input.
+    mfx_source[3] =
+        (raw_format.mfx_format() << 28) | (1 << 27) | (((raw_format.pitch() - 1) as u32) << 3);
+    push_packet(batch, &mut idx, &mfx_source, &mut packet_count)?;
     push_packet(batch, &mut idx, &MFX_SURFACE_DS, &mut packet_count)?;
 
-    let mfx_pipe_buf = mfx_pipe_buf_addr_state(picture);
+    let mfx_pipe_buf = mfx_pipe_buf_addr_state(picture, raw_format.gpu());
     push_packet(batch, &mut idx, &mfx_pipe_buf, &mut packet_count)?;
     let mfx_ind_obj = mfx_ind_obj_base_addr_state();
     push_packet(batch, &mut idx, &mfx_ind_obj, &mut packet_count)?;
@@ -1331,10 +1434,18 @@ fn build_picture_batch(batch_virt: *mut u8, picture: AvcPicture) -> Option<(usiz
     push_packet(batch, &mut idx, &mfx_bsp, &mut packet_count)?;
 
     push_packet(batch, &mut idx, &VDENC_PIPE_MODE_SELECT, &mut packet_count)?;
-    push_packet(batch, &mut idx, &VDENC_SRC_SURFACE_STATE, &mut packet_count)?;
+    let vdenc_source = vdenc_surface_state(
+        0x7081_0004,
+        FRAME_WIDTH,
+        FRAME_HEIGHT,
+        raw_format.pitch(),
+        (raw_format.vdenc_format() << 27) | (7 << 20),
+        0x8,
+    );
+    push_packet(batch, &mut idx, &vdenc_source, &mut packet_count)?;
     push_packet(batch, &mut idx, &VDENC_REF_SURFACE_STATE, &mut packet_count)?;
     push_packet(batch, &mut idx, &VDENC_DS_REF_SURFACE_STATE, &mut packet_count)?;
-    let vdenc_pipe_buf = vdenc_pipe_buf_addr_state(picture);
+    let vdenc_pipe_buf = vdenc_pipe_buf_addr_state(picture, raw_format.gpu());
     push_packet(batch, &mut idx, &vdenc_pipe_buf, &mut packet_count)?;
 
     push_packet(batch, &mut idx, &VDENC_CMD3, &mut packet_count)?;
@@ -1498,13 +1609,13 @@ fn set_addr(words: &mut [u32], dword: usize, gpu: u64) {
     words[dword + 1] = (gpu >> 32) as u32;
 }
 
-fn mfx_pipe_buf_addr_state(picture: AvcPicture) -> [u32; 68] {
+fn mfx_pipe_buf_addr_state(picture: AvcPicture, source_gpu: u64) -> [u32; 68] {
     let mut words = [0u32; 68];
     words[0] = 0x7002_0042;
     for (dword, gpu, attr_dword, attr) in [
         (1, picture.current_recon_gpu(), 3, 6),
         (4, picture.current_recon_gpu(), 6, 6),
-        (7, SOURCE_GPU, 9, 6),
+        (7, source_gpu, 9, 6),
         (10, MFX_STATS_GPU, 12, 6),
         (52, MFX_STATS_GPU, 54, 6),
         (62, picture.current_ds_gpu(), 64, 4),
@@ -1572,10 +1683,10 @@ fn mfx_bsp_buf_base_addr_state(picture: AvcPicture) -> [u32; 10] {
     words
 }
 
-fn vdenc_pipe_buf_addr_state(picture: AvcPicture) -> [u32; 71] {
+fn vdenc_pipe_buf_addr_state(picture: AvcPicture, source_gpu: u64) -> [u32; 71] {
     let mut words = [0u32; 71];
     words[0] = 0x7084_0045;
-    for (dword, gpu, attr_dword) in [(10, SOURCE_GPU, 12), (34, VDENC_STATS_GPU, 36)] {
+    for (dword, gpu, attr_dword) in [(10, source_gpu, 12), (34, VDENC_STATS_GPU, 36)] {
         set_addr(&mut words, dword, gpu);
         words[attr_dword] = 6;
     }

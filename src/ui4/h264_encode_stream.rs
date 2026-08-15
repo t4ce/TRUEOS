@@ -1,10 +1,10 @@
 //! Resident UI4 scanout-to-Intel-H.264-to-UDP service.
 //!
 //! After a boot-time hardware proof, each subscriber receives a fresh,
-//! deadline-paced ten-second session. Pipe A's slot-3 SURFLIVE allocation is
-//! imported directly into RCS, converted to NV12, encoded by Gen12 VDEnc/MFX,
-//! and handed to the bounded TME1 transport. No CPU frame copy, filesystem, or
-//! software-codec stage participates.
+//! deadline-paced ten-second session. MirrorMapDPEngine reflects Pipe A's six
+//! display slots through Pipe C into WD0's packed-XYUV8888 surface; Gen12 VDEnc
+//! consumes that surface directly and hands AVC to the bounded TME1 transport.
+//! No CPU frame copy, RCS conversion, filesystem, or software codec participates.
 
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
@@ -20,11 +20,13 @@ const ENCODE_WIDTH: usize = TEST_RIG_SCANOUT_WIDTH as usize;
 const ENCODE_HEIGHT: usize = TEST_RIG_SCANOUT_HEIGHT as usize;
 const ACTIVE_HEIGHT: usize = ENCODE_HEIGHT;
 const ACTIVE_TOP: usize = (ENCODE_HEIGHT - ACTIVE_HEIGHT) / 2;
-const ENCODE_LUMA_BYTES: usize = ENCODE_WIDTH * ENCODE_HEIGHT;
-const ENCODE_NV12_BYTES: usize = ENCODE_LUMA_BYTES * 3 / 2;
 const CADENCE_TOLERANCE_PERCENT: u64 = 5;
 const PREPARE_IDLE_POLL_MS: u64 = 1;
-const PREPARE_SLOT_COUNT: usize = 2;
+// WD0 currently owns one resident capture surface. Keep capture and VDEnc
+// strictly serialized so the next writeback cannot overwrite a frame that
+// VCS0 is still reading.
+const PREPARE_SLOT_COUNT: usize = 1;
+const WD_CAPTURE_TIMEOUT_MS: u64 = 100;
 // A foreground decode stream owns a session-level VCS0 reservation. Keep the
 // boot proof retryable until that stream drains instead of permanently parking
 // the encoder after an arbitrary startup window.
@@ -90,7 +92,7 @@ struct PrepareSlot {
     slot3_scanout_pixels: usize,
     spirit_overlay_pixels: usize,
     valid: bool,
-    nv12: Option<EncodeDmaBuffer>,
+    xyuv8888: Option<crate::intel::media::wd_xyuv8888::WdXyuv8888DmaSurface>,
 }
 
 impl PrepareSlot {
@@ -108,7 +110,7 @@ impl PrepareSlot {
             slot3_scanout_pixels: 0,
             spirit_overlay_pixels: 0,
             valid: false,
-            nv12: None,
+            xyuv8888: None,
         }
     }
 
@@ -141,7 +143,7 @@ impl PreparePipeline {
             session_id: 0,
             access_unit_count: 0,
             next_sequence: 0,
-            slots: [PrepareSlot::new(), PrepareSlot::new()],
+            slots: [PrepareSlot::new()],
         }
     }
 }
@@ -151,7 +153,6 @@ struct PrepareJob {
     generation: u64,
     session_id: u32,
     sequence: u32,
-    nv12: Option<EncodeDmaBuffer>,
 }
 
 struct PreparedScanout {
@@ -167,47 +168,7 @@ struct PreparedScanout {
     slot3_scanout_pixels: usize,
     spirit_overlay_pixels: usize,
     valid: bool,
-    nv12: Option<EncodeDmaBuffer>,
-}
-
-struct EncodeDmaBuffer {
-    phys: u64,
-    virt: *mut u8,
-    bytes: usize,
-}
-
-unsafe impl Send for EncodeDmaBuffer {}
-unsafe impl Sync for EncodeDmaBuffer {}
-
-impl EncodeDmaBuffer {
-    fn allocate_nv12_black() -> Option<Self> {
-        let (phys, virt) = crate::dma::alloc(ENCODE_NV12_BYTES, crate::intel::WARM_ALIGN)?;
-        let mut buffer = Self {
-            phys,
-            virt,
-            bytes: ENCODE_NV12_BYTES,
-        };
-        buffer.fill_nv12_black();
-        Some(buffer)
-    }
-
-    fn fill_nv12_black(&mut self) {
-        unsafe {
-            core::ptr::write_bytes(self.virt, 16, ENCODE_LUMA_BYTES);
-            core::ptr::write_bytes(
-                self.virt.add(ENCODE_LUMA_BYTES),
-                128,
-                ENCODE_NV12_BYTES - ENCODE_LUMA_BYTES,
-            );
-        }
-        crate::intel::dma_flush(self.virt, self.bytes);
-    }
-}
-
-impl Drop for EncodeDmaBuffer {
-    fn drop(&mut self) {
-        crate::dma::dealloc(self.virt, self.bytes);
-    }
+    xyuv8888: Option<crate::intel::media::wd_xyuv8888::WdXyuv8888DmaSurface>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -258,15 +219,13 @@ pub(crate) async fn ui4_h264_encode_prepare_task(assigned_slot: u32) {
         .unwrap_or("unknown");
     PREPARE_WORKER_SLOT.store(worker_slot, Ordering::Release);
     crate::log_info!(target: "intel/media-encode";
-        "intel/media-encode: preparation service online carrier=lastap assigned_slot={} worker_slot={} worker_kind={} pipeline=rgba-to-nv12 engine=guc-rcs kernel=cpp-linear-rgba8-to-nv12 cpu_pixel_math=0 source_scope=pipe-a-slot3-surflive-only omitted=lower-planes+visual-rects+cursor-plane cpu_rgba_copy_bytes=0 cpu_rgba_flush_bytes=0 source_import=surflive-phys-to-rcs-ppgtt dma_buffers=nv12-only-persistent producer buffering=double slots={} encode_size={}x{} mapping=source-scale-to-encode active_size={}x{} padding=top:0,bottom:0 slot3_base=pipe-a-plane3-surflive-rgba-premultiplied synchronization=completion-marker-before-vdbox\n",
+        "intel/media-encode: preparation service online carrier=lastap assigned_slot={} worker_slot={} worker_kind={} pipeline=pipe-c-wd0-xyuv8888-to-vdenc cpu_pixel_math=0 gpu_shader=0 source_scope=mirror-map-slots0-5 dma_buffers=wd-xyuv8888-resident producer_buffering=serialized slots={} encode_size={}x{} mapping=one-to-one synchronization=wd-frame-complete-before-vdbox\n",
         assigned_slot,
         worker_slot,
         worker_kind,
         PREPARE_SLOT_COUNT,
         ENCODE_WIDTH,
         ENCODE_HEIGHT,
-        ENCODE_WIDTH,
-        ACTIVE_HEIGHT,
     );
     if worker_slot != assigned_slot {
         crate::log_error!(target: "intel/media-encode";
@@ -310,149 +269,98 @@ fn take_prepare_job() -> Option<PrepareJob> {
         generation,
         session_id,
         sequence,
-        nv12: slot.nv12.take(),
     })
 }
 
-async fn prepare_scanout(mut job: PrepareJob) {
+async fn prepare_scanout(job: PrepareJob) {
     let mut source_width = 0;
     let mut source_height = 0;
-    let mut capture_us = 0;
-    let mut convert_wall_us = 0;
-    let mut convert_gpu_us = 0;
-    let mut slot3_scanout_pixels = 0;
-    let mut spirit_overlay_pixels = 0;
-    if job.nv12.is_none() {
-        job.nv12 = EncodeDmaBuffer::allocate_nv12_black();
-    }
-
+    let capture_started_ns = crate::chronos::monotonic_nanos();
+    let mut xyuv8888 = None;
     let mut valid = false;
-    if job.nv12.is_none() {
+    let mut reset_wd = false;
+    let capture_start = crate::intel::start_ui4_wd_xyuv8888_capture();
+    if let Err(error) = capture_start {
         crate::log_error!(target: "intel/media-encode";
-            "intel/media-encode: live frame rejected session={} sequence={} stage=guc-rcs-dma-allocation nv12_bytes={} software_fallback=0\n",
+            "intel/media-encode: live frame rejected session={} sequence={} stage=wd-start error={:?} software_fallback=0\n",
             job.session_id,
             job.sequence,
-            ENCODE_NV12_BYTES,
+            error,
+        );
+    } else if let Err(error) = crate::intel::begin_ui4_wd_xyuv8888_capture() {
+        crate::log_error!(target: "intel/media-encode";
+            "intel/media-encode: live frame rejected session={} sequence={} stage=wd-trigger error={:?} software_fallback=0\n",
+            job.session_id,
+            job.sequence,
+            error,
         );
     } else {
-        let composition_started_ns = crate::chronos::monotonic_nanos();
-        let composition_result = super::screenshot::realtime_encode_pipe_a_slot3_surface();
-        capture_us =
-            crate::chronos::monotonic_nanos().saturating_sub(composition_started_ns) / 1_000;
-        match composition_result {
-            Ok(composition) => {
-                source_width = composition.width;
-                source_height = composition.height;
-                slot3_scanout_pixels = composition.slot3_scanout_pixels;
-                spirit_overlay_pixels = composition.spirit_overlay_pixels;
-                let destination = job.nv12.as_ref().expect("checked NV12 DMA allocation");
-                let source_surface = Some(composition.source);
-                let destination_surface = crate::intel::gpgpu::GpgpuNv12LinearSurface::new(
-                    destination.phys,
-                    crate::intel::gpgpu::UI4_STREAM_NV12_DESTINATION_GPU,
-                    destination.bytes,
-                    ENCODE_WIDTH as u32,
-                    ENCODE_HEIGHT as u32,
-                    ENCODE_WIDTH as u32,
-                );
-                if let (Some(source_surface), Some(destination_surface)) =
-                    (source_surface, destination_surface)
-                {
-                    let conversion_started_ns = crate::chronos::monotonic_nanos();
-                    let submission = loop {
-                        match crate::intel::gpgpu::queue_ui4_stream_rgba8_to_nv12_linear(
-                            source_surface,
-                            destination_surface,
-                            ACTIVE_TOP as u32,
-                            ACTIVE_HEIGHT as u32,
-                        ) {
-                            Ok(submission) => break Some(submission),
-                            Err(crate::intel::gpgpu::Ui4CompositorSubmitError::Busy) => {
-                                Timer::after(Duration::from_millis(1)).await;
-                            }
-                            Err(error) => {
-                                crate::log_error!(target: "intel/media-encode";
-                                    "intel/media-encode: live frame rejected session={} sequence={} stage=guc-rcs-rgba-to-nv12-submit error={:?} software_fallback=0\n",
-                                    job.session_id,
-                                    job.sequence,
-                                    error,
-                                );
-                                break None;
-                            }
-                        }
-                    };
-                    if let Some(submission) = submission {
-                        loop {
-                            match crate::intel::gpgpu::poll_ui4_compositor_submission(submission) {
-                                crate::intel::gpgpu::Ui4CompositorCompletion::Pending => {
-                                    Timer::after(Duration::from_millis(1)).await;
-                                }
-                                crate::intel::gpgpu::Ui4CompositorCompletion::Complete(stats) => {
-                                    // RCS is the producer and VDBOX is the consumer. The
-                                    // terminal RCS marker orders its writes, and VDBOX maps
-                                    // this same DMA allocation directly. Neither the imported
-                                    // scanout source nor NV12 destination is read by the CPU.
-                                    convert_gpu_us = stats.probe.gpu_walker_us;
-                                    convert_wall_us = crate::chronos::monotonic_nanos()
-                                        .saturating_sub(conversion_started_ns)
-                                        / 1_000;
-                                    crate::log_trace!(target: "intel/media-encode";
-                                        "intel/media-encode: rgba-to-nv12 retired session={} sequence={} engine=guc-rcs kernel=cpp-linear-rgba8-to-nv12 submit_ms={} convert_wall_us={} gpu_walker_us={} cpu_pixel_math=0 cpu_validation_bytes=0 source_bytes={} destination_bytes={}\n",
-                                        job.session_id,
-                                        job.sequence,
-                                        stats.submit_ms,
-                                        convert_wall_us,
-                                        stats.probe.gpu_walker_us,
-                                        composition.source.bytes,
-                                        destination.bytes,
-                                    );
-                                    valid = true;
-                                    break;
-                                }
-                                crate::intel::gpgpu::Ui4CompositorCompletion::Failed
-                                | crate::intel::gpgpu::Ui4CompositorCompletion::InvalidSubmission =>
-                                {
-                                    crate::log_error!(target: "intel/media-encode";
-                                        "intel/media-encode: live frame rejected session={} sequence={} stage=guc-rcs-rgba-to-nv12-completion action=quarantine-dma-buffers software_fallback=0\n",
-                                        job.session_id,
-                                        job.sequence,
-                                    );
-                                    if let Some(destination) = job.nv12.take() {
-                                        core::mem::forget(destination);
-                                    }
-                                    break;
-                                }
-                            }
-                        }
+        loop {
+            match crate::intel::poll_ui4_wd_xyuv8888_capture() {
+                crate::intel::WdCapturePoll::Pending => {
+                    if crate::chronos::monotonic_nanos().saturating_sub(capture_started_ns)
+                        >= WD_CAPTURE_TIMEOUT_MS * 1_000_000
+                    {
+                        crate::log_error!(target: "intel/media-encode";
+                            "intel/media-encode: live frame rejected session={} sequence={} stage=wd-completion reason=timeout timeout_ms={} software_fallback=0\n",
+                            job.session_id,
+                            job.sequence,
+                            WD_CAPTURE_TIMEOUT_MS,
+                        );
+                        reset_wd = true;
+                        break;
                     }
-                } else {
+                    Timer::after(Duration::from_millis(1)).await;
+                }
+                crate::intel::WdCapturePoll::Complete(frame) => {
+                    source_width = frame.width;
+                    source_height = frame.height;
+                    xyuv8888 = unsafe {
+                        crate::intel::media::wd_xyuv8888::WdXyuv8888DmaSurface::from_writeback(
+                            frame,
+                        )
+                    };
+                    if let Some(surface) = xyuv8888 {
+                        let _ = crate::intel::media::wd_xyuv8888::try_refresh_requested_screenshot(
+                            surface,
+                        );
+                        valid = surface.encoder_surface().is_some();
+                    }
+                    break;
+                }
+                crate::intel::WdCapturePoll::Failed { status } => {
                     crate::log_error!(target: "intel/media-encode";
-                        "intel/media-encode: live frame rejected session={} sequence={} stage=guc-rcs-surface-contract source={}x{} destination={}x{} software_fallback=0\n",
+                        "intel/media-encode: live frame rejected session={} sequence={} stage=wd-completion status=0x{:08X} software_fallback=0\n",
                         job.session_id,
                         job.sequence,
-                        composition.width,
-                        composition.height,
-                        ENCODE_WIDTH,
-                        ENCODE_HEIGHT,
+                        status,
                     );
+                    reset_wd = true;
+                    break;
                 }
-            }
-            Err(error) => {
-                if let Some(destination) = job.nv12.as_mut() {
-                    destination.fill_nv12_black();
-                    source_width = ENCODE_WIDTH as u32;
-                    source_height = ENCODE_HEIGHT as u32;
-                    valid = true;
+                crate::intel::WdCapturePoll::Idle => {
+                    reset_wd = true;
+                    break;
                 }
-                crate::log_warn!(target: "intel/media-encode";
-                    "intel/media-encode: live source unavailable session={} sequence={} stage=slot3-surflive-import error={:?} fallback=opaque-black-nv12 connection_preserved={} filesystem_writes=0 software_fallback=0\n",
-                    job.session_id,
-                    job.sequence,
-                    error,
-                    valid as u8,
-                );
             }
         }
+    }
+    if reset_wd {
+        let _ = crate::intel::stop_ui4_wd_xyuv8888_capture();
+    }
+    let capture_us = crate::chronos::monotonic_nanos().saturating_sub(capture_started_ns) / 1_000;
+    if let Some(surface) = xyuv8888 {
+        crate::log_trace!(target: "intel/media-encode";
+            "intel/media-encode: wd-xyuv8888 retired session={} sequence={} wd_sequence={} source={}x{} pitch={} bytes={} capture_us={} next=vcs0-vdenc-xyuv8888 software_fallback=0\n",
+            job.session_id,
+            job.sequence,
+            surface.sequence(),
+            source_width,
+            source_height,
+            crate::intel::media::wd_xyuv8888::WD_XYUV8888_PITCH,
+            crate::intel::media::wd_xyuv8888::WD_XYUV8888_BYTES,
+            capture_us,
+        );
     }
 
     let mut pipeline = PREPARE_PIPELINE.lock();
@@ -468,12 +376,12 @@ async fn prepare_scanout(mut job: PrepareJob) {
         slot.source_width = source_width;
         slot.source_height = source_height;
         slot.capture_us = capture_us;
-        slot.convert_wall_us = convert_wall_us;
-        slot.convert_gpu_us = convert_gpu_us;
-        slot.slot3_scanout_pixels = slot3_scanout_pixels;
-        slot.spirit_overlay_pixels = spirit_overlay_pixels;
+        slot.convert_wall_us = 0;
+        slot.convert_gpu_us = 0;
+        slot.slot3_scanout_pixels = 0;
+        slot.spirit_overlay_pixels = 0;
         slot.valid = valid;
-        slot.nv12 = job.nv12;
+        slot.xyuv8888 = xyuv8888;
         slot.state = PrepareSlotState::Ready;
     }
 }
@@ -542,7 +450,7 @@ fn take_prepared_scanout(session_id: u32, sequence: u32) -> Option<PreparedScano
         slot3_scanout_pixels: slot.slot3_scanout_pixels,
         spirit_overlay_pixels: slot.spirit_overlay_pixels,
         valid: slot.valid,
-        nv12: slot.nv12.take(),
+        xyuv8888: slot.xyuv8888.take(),
     })
 }
 
@@ -557,7 +465,7 @@ fn release_prepared_scanout(prepared: &mut PreparedScanout) {
         && slot.generation == prepared.generation
         && slot.sequence == prepared.sequence
     {
-        slot.nv12 = prepared.nv12.take();
+        slot.xyuv8888 = prepared.xyuv8888.take();
         slot.state = PrepareSlotState::Empty;
         slot.reset_metadata();
     }
@@ -571,7 +479,7 @@ pub(crate) async fn ui4_h264_encode_stream_task() {
         .map(|profile| profile.core_kind_name())
         .unwrap_or("unknown");
     crate::log_info!(target: "intel/media-encode";
-        "intel/media-encode: service online carrier=lastap worker_slot={} worker_kind={} exclusive_carrier=1 feature=trueos_h264_encode_stream boot_proof=procedural-nv12-hardware-only live_source=pipe-a-slot3-surflive-only encode_size={}x{} target_fps={} backend=gen12-vdenc-mfx completion_wait=cooperative-fence-yield output=udp-only live_high_water_cap={} pipeline=prepare-producer+encode-producer+udp-egress-consumer preparation=cooperative-lastap-double-buffer slots={} encoder_arena_cpu_maintenance=one-time-output-init+per-frame-command-result-only filesystem_writes=0 software_fallback=0 embedded_probe_asset_bytes=0 udp_protocol=tme1 udp_port={} start_delay_ms={}\n",
+        "intel/media-encode: service online carrier=lastap worker_slot={} worker_kind={} exclusive_carrier=1 feature=trueos_h264_encode_stream boot_proof=procedural-nv12-hardware-only live_source=pipe-c-wd0-xyuv8888-mirror-map-slots0-5 encode_size={}x{} target_fps={} backend=gen12-vdenc-mfx completion_wait=cooperative-fence-yield output=udp-only live_high_water_cap={} pipeline=wd-capture+encode-producer+udp-egress-consumer preparation=cooperative-lastap-serialized slots={} encoder_arena_cpu_maintenance=one-time-output-init+per-frame-command-result-only filesystem_writes=0 software_fallback=0 embedded_probe_asset_bytes=0 udp_protocol=tme1 udp_port={} start_delay_ms={}\n",
         worker_slot,
         worker_kind,
         ENCODE_WIDTH,
@@ -670,8 +578,8 @@ pub(crate) async fn ui4_h264_encode_stream_task() {
                 ENCODE_WIDTH,
                 ENCODE_HEIGHT,
                 ENCODE_WIDTH,
-                avc_probe.source_nv12_bytes,
-                avc_probe.source_nv12_fnv1a32,
+                avc_probe.source_dma_bytes,
+                avc_probe.source_dma_fnv1a32,
                 avc_probe.backing_ready as u8,
                 avc_probe.surface_uploaded as u8,
                 avc_probe.batch_ready as u8,
@@ -876,7 +784,7 @@ pub(crate) async fn ui4_h264_encode_stream_task() {
         park().await;
     };
     ENCODE_US.store(avc_probe.elapsed_us, Ordering::Release);
-    SOURCE_BYTES.store(avc_probe.source_nv12_bytes, Ordering::Release);
+    SOURCE_BYTES.store(avc_probe.source_dma_bytes, Ordering::Release);
     ENCODED_BYTES.store(probe_annex_b.len(), Ordering::Release);
     drop(probe_annex_b);
 
@@ -929,7 +837,7 @@ pub(crate) async fn ui4_h264_encode_stream_task() {
             Ordering::Release,
         );
         crate::log_info!(target: "intel/media-encode";
-            "intel/media-encode: udp-live complete accepted={} delivery_complete={} cadence_target_met={} retry_free={} source=pipe-a-slot3-surflive-only source_size={}x{} encode_size={}x{} mapping=source-scale-to-encode conversion=guc-rcs-cpp-linear-rgba8-to-nv12 cpu_pixel_math=0 omitted=lower-planes+visual-rects+cursor-plane cpu_rgba_copy_bytes=0 cpu_rgba_flush_bytes=0 source_import=surflive-phys-to-rcs-ppgtt source_sampling=none dma_buffers=nv12-only-persistent vdbox_source=gpu-dma-direct cpu_nv12_copy_bytes=0 active_size={}x{} padding=top:0,bottom:0 slot3_base=pipe-a-plane3-surflive-rgba-premultiplied slot3_scanout_frames={} slot3_scanout_pixels={} spirit_overlay_frames={} spirit_overlay_pixels={} synchronization=rcs-completion-before-vdbox format=nv12 target_fps={} measured_millifps={} backend=gen12-vdenc-mfx engine=vcs0 submission_owner=guc direct_execlist_submit=0 hardware_encode=1 gop=idr+p gop_pictures={} idr_units={} p_units={} protocol=tme1 version=1 egress_path=smoltcp-borrowed-direct-nic-dma-fill session={} queued_units={} sent_units={} sent_datagrams={} sent_payload_bytes={} dropped_units={} dropped_bytes={} high_water_units={} high_water_bytes={} producer_queue_wait_events={} producer_queue_wait_us={} submit_retries={} adapter_backpressure_events={} adapter_send_errors={} network_waits={} subscriber_wait_polls={} late_units={} max_late_us={} elapsed_us={} capture_avg_us={} capture_max_us={} convert_wall_avg_us={} convert_wall_max_us={} convert_gpu_avg_us={} convert_gpu_max_us={} encode_avg_us={} encode_max_us={} coded_avg_bytes={} coded_max_bytes={} peer={}.{}.{}.{}:{} bounded_seconds={} pipeline=prepare+encode+independent-egress buffering=double+bounded-au-queue prepare_slots={} prepare_worker_slot={} encode_worker_slot={} encode_worker_kind={} egress_worker_slot={} filesystem_writes=0 software_fallback=0 surflive_payload=0\n",
+            "intel/media-encode: udp-live complete accepted={} delivery_complete={} cadence_target_met={} retry_free={} source=pipe-c-wd0-xyuv8888-mirror-map-slots0-5 source_size={}x{} encode_size={}x{} mapping=one-to-one conversion=vdenc-fixed-function-xyuv8888-to-avc420 cpu_pixel_math=0 omitted=none cpu_rgba_copy_bytes=0 cpu_rgba_flush_bytes=0 source_import=wd-phys-to-vcs0-ppgtt-uc source_sampling=none dma_buffers=xyuv8888-resident-single vdbox_source=packed-xyuv8888-dma-direct cpu_nv12_copy_bytes=0 active_size={}x{} padding=top:0,bottom:0 legacy_slot3_frames={} legacy_slot3_pixels={} spirit_overlay_frames={} spirit_overlay_pixels={} synchronization=wd-frame-complete-before-vdbox format=xyuv8888-raw-to-avc420 target_fps={} measured_millifps={} backend=gen12-vdenc-mfx engine=vcs0 submission_owner=guc direct_execlist_submit=0 hardware_encode=1 gop=idr+p gop_pictures={} idr_units={} p_units={} protocol=tme1 version=1 egress_path=smoltcp-borrowed-direct-nic-dma-fill session={} queued_units={} sent_units={} sent_datagrams={} sent_payload_bytes={} dropped_units={} dropped_bytes={} high_water_units={} high_water_bytes={} producer_queue_wait_events={} producer_queue_wait_us={} submit_retries={} adapter_backpressure_events={} adapter_send_errors={} network_waits={} subscriber_wait_polls={} late_units={} max_late_us={} elapsed_us={} capture_avg_us={} capture_max_us={} convert_wall_avg_us={} convert_wall_max_us={} convert_gpu_avg_us={} convert_gpu_max_us={} encode_avg_us={} encode_max_us={} coded_avg_bytes={} coded_max_bytes={} peer={}.{}.{}.{}:{} bounded_seconds={} pipeline=capture+encode+independent-egress buffering=serialized+bounded-au-queue prepare_slots={} prepare_worker_slot={} encode_worker_slot={} encode_worker_kind={} egress_worker_slot={} filesystem_writes=0 software_fallback=0 surflive_payload=0\n",
             delivered as u8,
             delivered as u8,
             cadence_target_met as u8,
@@ -1022,19 +930,18 @@ async fn encode_prepared_scanout(
     }
 
     STATE.store(H264EncodeStreamState::Encoding as u8, Ordering::Release);
-    let Some(nv12) = prepared.nv12.as_ref() else {
+    let Some(xyuv8888) = prepared.xyuv8888 else {
         release_prepared_scanout(&mut prepared);
         STATE.store(H264EncodeStreamState::Streaming as u8, Ordering::Release);
         return None;
     };
-    let Some(surface) =
-        crate::intel::media::avc_encode_probe::AvcNv12DmaSurface::new(nv12.phys, nv12.bytes)
-    else {
+    let Some(surface) = xyuv8888.encoder_surface() else {
         release_prepared_scanout(&mut prepared);
         STATE.store(H264EncodeStreamState::Streaming as u8, Ordering::Release);
         return None;
     };
-    let encode = crate::intel::media::avc_encode_probe::run_nv12_dma_frame(surface, sequence).await;
+    let encode =
+        crate::intel::media::avc_encode_probe::run_xyuv8888_dma_frame(surface, sequence).await;
     STATE.store(H264EncodeStreamState::Streaming as u8, Ordering::Release);
     release_prepared_scanout(&mut prepared);
     if encode.state != crate::intel::media::avc_encode_probe::AvcEncodeProbeState::Passed
@@ -1138,7 +1045,7 @@ async fn encode_prepared_scanout(
     stats.coded_bytes = stats.coded_bytes.saturating_add(annex_b.len());
     stats.coded_max_bytes = stats.coded_max_bytes.max(annex_b.len());
     ENCODE_US.store(encode.elapsed_us, Ordering::Release);
-    SOURCE_BYTES.store(ENCODE_NV12_BYTES, Ordering::Release);
+    SOURCE_BYTES.store(crate::intel::media::wd_xyuv8888::WD_XYUV8888_BYTES, Ordering::Release);
     ENCODED_BYTES.store(annex_b.len(), Ordering::Release);
     Some(annex_b)
 }

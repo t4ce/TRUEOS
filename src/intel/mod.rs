@@ -597,10 +597,12 @@ pub(crate) fn copy_engine_activity_snapshot() -> self::blt::CopyEngineActivitySn
 }
 
 pub(crate) use self::display::{
-    CompositionDamageRect, CompositionDamageRegion, LiveOverlayRect, RgbaOverlayTile,
-    Ui4AsyncComposition, Ui4AsyncCompositionError, Ui4AsyncCompositionPoll, Ui4DirectRgbaFrame,
-    Ui4LiveOverlayFlip, Ui4LiveOverlayFlipPoll, Ui4PlaneSurfaceFlipPoll,
-    Ui4RealtimeEncodePlaneView,
+    CompositionDamageRect, CompositionDamageRegion, LiveOverlayRect, MirrorMapMode,
+    RgbaOverlayTile, Ui4AsyncComposition, Ui4AsyncCompositionError, Ui4AsyncCompositionPoll,
+    Ui4DirectRgbaFrame, Ui4LiveOverlayFlip, Ui4LiveOverlayFlipPoll, Ui4PlaneSurfaceFlipPoll,
+    Ui4RealtimeEncodePlaneView, WdCaptureError, WdCapturePoll, WdCaptureStatus, WdXyuv8888Frame,
+    begin_ui4_wd_xyuv8888_capture, poll_ui4_wd_xyuv8888_capture, set_mirror_map_mode,
+    start_ui4_wd_xyuv8888_capture, stop_ui4_wd_xyuv8888_capture, ui4_wd_xyuv8888_capture_status,
 };
 
 pub(crate) fn with_ui4_realtime_encode_pipe_a_slot3_surflive<R>(
