@@ -14,8 +14,8 @@ use spin::Mutex;
 
 const PROBE_START_DELAY_MS: u64 = 15_000;
 const VCS0_PROBE_RETRY_MS: u64 = 50;
-const TEST_RIG_SCANOUT_WIDTH: u32 = 2560;
-const TEST_RIG_SCANOUT_HEIGHT: u32 = 1440;
+const TEST_RIG_SCANOUT_WIDTH: u32 = crate::intel::media::avc_encode_probe::FRAME_WIDTH as u32;
+const TEST_RIG_SCANOUT_HEIGHT: u32 = crate::intel::media::avc_encode_probe::FRAME_HEIGHT as u32;
 const SOURCE_RGBA_BYTES: usize =
     TEST_RIG_SCANOUT_WIDTH as usize * TEST_RIG_SCANOUT_HEIGHT as usize * 4;
 const ENCODE_WIDTH: usize = TEST_RIG_SCANOUT_WIDTH as usize;
@@ -42,8 +42,12 @@ static PREPARE_PIPELINE: Mutex<PreparePipeline> = Mutex::new(PreparePipeline::ne
 const _: () = {
     assert!(ENCODE_WIDTH % 16 == 0);
     assert!(ENCODE_HEIGHT % 16 == 0);
-    assert!(ENCODE_WIDTH == TEST_RIG_SCANOUT_WIDTH as usize);
-    assert!(ENCODE_HEIGHT == TEST_RIG_SCANOUT_HEIGHT as usize);
+    assert!(
+        ENCODE_WIDTH == crate::intel::media::avc_encode_probe::FRAME_WIDTH
+    );
+    assert!(
+        ENCODE_HEIGHT == crate::intel::media::avc_encode_probe::FRAME_HEIGHT
+    );
     assert!(ACTIVE_TOP == 0);
     assert!((ENCODE_HEIGHT - ACTIVE_HEIGHT - ACTIVE_TOP) == 0);
 };
