@@ -50,6 +50,7 @@ const TOOL_JSON_RAM: &str = r#"{"type":"object","properties":{"scope":{"type":"s
 const TOOL_JSON_RM: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS file or directory path."},"regex":{"type":"string","description":"Optional -regx pattern to match children under path."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_SET: &str = r#"{"type":"object","properties":{"width":{"type":"integer","minimum":50,"maximum":500,"description":"Shell line width."}},"required":["width"],"additionalProperties":false}"#;
 const TOOL_JSON_SHA: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS file to hash with SHA-256."}},"required":["path"],"additionalProperties":false}"#;
+const TOOL_JSON_SHOT: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
 const TOOL_JSON_SMP: &str = r#"{"type":"object","properties":{"slot":{"type":"integer","minimum":0,"description":"Optional SMP slot. Omit to list all slots."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_SSH: &str = r#"{"type":"object","properties":{"endpoint":{"type":"string","description":"SSH target in [user@]host[:port] form. Port 22 is used when omitted."}},"required":["endpoint"],"additionalProperties":false}"#;
 const TOOL_JSON_SURF: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["https","http","file","html"],"description":"Surf input type."},"input":{"type":"string","description":"Host, URL, TRUEOSFS path, or inline HTML selected by subcommand."}},"required":["subcommand","input"],"additionalProperties":false}"#;
@@ -118,6 +119,29 @@ fn dispatch_set(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> Pars
 
 fn dispatch_sha(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     super::cmds::sha::try_parse(io, rest)
+}
+
+fn dispatch_shot(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    let rest = rest.trim();
+    if matches!(rest, "help" | "-h" | "--help") {
+        super::print_shell_line(
+            io,
+            "shot: capture the next Pipe-C/WD post-blend frame to trueosfs:/screenshots",
+        );
+        return ParseOutcome::Handled;
+    }
+    if !rest.is_empty() {
+        super::print_shell_line(io, "shot: usage `shot`");
+        return ParseOutcome::Handled;
+    }
+    match crate::ui4::request_wd_postblend_capture() {
+        Ok(()) => super::print_shell_line(
+            io,
+            "shot: armed; next WD frame will be saved under trueosfs:/screenshots",
+        ),
+        Err(reason) => super::print_shell_line(io, alloc::format!("shot: {reason}").as_str()),
+    }
+    ParseOutcome::Handled
 }
 
 fn dispatch_smp(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -352,6 +376,17 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         handler: dispatch_sha,
         tool_description: Some("Hash a TRUEOSFS file with SHA-256."),
         tool_parameters_json: Some(TOOL_JSON_SHA),
+    },
+    BuiltinShell2CmdEntry {
+        name: "shot",
+        mode: "cmd",
+        color: Some(STATUS_GREEN_RGB),
+        advertised: true,
+        handler: dispatch_shot,
+        tool_description: Some(
+            "Capture one Pipe-C/WD post-blend frame and save a diagnostic PNG to TRUEOSFS.",
+        ),
+        tool_parameters_json: Some(TOOL_JSON_SHOT),
     },
     BuiltinShell2CmdEntry {
         name: "remove",
@@ -645,7 +680,7 @@ pub(crate) fn try_dispatch(
 
 pub(crate) fn command_names_status_text() -> AllocString {
     const STATUS_ORDER: &[&str] = &[
-        "7z", "rm", "mv", "sha", "disc", "cry", "backup", "install", "update", "hyper", "surf",
+        "7z", "rm", "mv", "sha", "shot", "disc", "cry", "backup", "install", "update", "hyper", "surf",
         "net", "ssh", "qjs", "grid", "helio", "tts", "stt", "cpp", "vgpu", "aud", "vid", "acpi",
         "tlb", "ram", "smp", "etc",
     ];

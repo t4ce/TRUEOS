@@ -273,6 +273,12 @@ fn take_prepare_job() -> Option<PrepareJob> {
 }
 
 async fn prepare_scanout(job: PrepareJob) {
+    // A shell `shot` that arrived before the subscriber owns WD for only one
+    // frame. Do not race its trigger or backing teardown; resume the stream as
+    // soon as that bounded manual capture releases the display path.
+    while !crate::intel::media::wd_xyuv8888::try_claim_stream_capture() {
+        Timer::after(Duration::from_millis(1)).await;
+    }
     let mut source_width = 0;
     let mut source_height = 0;
     let capture_started_ns = crate::chronos::monotonic_nanos();
@@ -321,9 +327,14 @@ async fn prepare_scanout(job: PrepareJob) {
                         )
                     };
                     if let Some(surface) = xyuv8888 {
-                        let _ = crate::intel::media::wd_xyuv8888::try_refresh_requested_screenshot(
+                        if crate::intel::media::wd_xyuv8888::try_refresh_requested_screenshot(
                             surface,
-                        );
+                        ) {
+                            crate::log_info!(target: "ui4/screenshot";
+                                "ui4/screenshot: raw WD frame acquired route=live-rdp borrow=next-completed-frame wd_sequence={} encode_flow=unchanged\n",
+                                surface.sequence(),
+                            );
+                        }
                         valid = surface.encoder_surface().is_some();
                     }
                     break;
@@ -387,6 +398,7 @@ async fn prepare_scanout(job: PrepareJob) {
 }
 
 fn begin_preparation_session(session_id: u32, access_unit_count: usize) {
+    let _ = crate::intel::media::wd_xyuv8888::try_claim_stream_capture();
     let mut pipeline = PREPARE_PIPELINE.lock();
     pipeline.generation = pipeline.generation.wrapping_add(1);
     pipeline.active = true;
@@ -418,6 +430,11 @@ fn end_preparation_session(session_id: u32) {
         slot.generation = generation;
         slot.reset_metadata();
     }
+    drop(pipeline);
+    // No subscriber owns subsequent frames. Tear down the headless mirror so
+    // an on-demand screenshot has an unambiguous one-frame lifecycle.
+    let _ = crate::intel::stop_ui4_wd_xyuv8888_capture();
+    crate::intel::media::wd_xyuv8888::release_stream_capture();
 }
 
 fn prepared_scanout_ready(session_id: u32, sequence: u32) -> bool {

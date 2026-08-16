@@ -26,10 +26,8 @@ const KEYBOARD_BATCH: usize = 64;
 const PRIMARY_BUTTON_MASK: u32 = 1 << 0;
 const SECONDARY_BUTTON_MASK: u32 = 1 << 1;
 const MIDDLE_BUTTON_MASK: u32 = 1 << 2;
-const SCREENSHOT_BUTTON_MASK: u32 = (1 << 3) | (1 << 4);
-// The screenshot worker remains intentionally parked during frame/window
-// reintegration. Do not consume F1 or side buttons into an undrained capture
-// queue; this switch can move with the worker when that producer returns.
+// Exact-window F1 capture remains outside the current UI input contract. Full
+// display capture is deliberately available only through Shell2 `shot`.
 const INTERACTIVE_SCREENSHOT_ENABLED: bool = false;
 const FRAME_DRAG_GESTURE_MIN_TRAVEL_PX: u32 = 8;
 const MAXIMIZE_LATCH_TOP_PX: u32 = 48;
@@ -526,18 +524,7 @@ impl InputBroker {
         let (combo_id, vcursor) = cursor_hut_metadata(source);
         let index = self.cursor_index(source, x, y);
         let previous_buttons = self.cursors[index].buttons_down;
-        let screenshot_pressed = event.buttons_down & !previous_buttons & SCREENSHOT_BUTTON_MASK;
-        if INTERACTIVE_SCREENSHOT_ENABLED && screenshot_pressed != 0 {
-            // Coalesce a simultaneous button-4/button-5 transition into one
-            // global capture request. Side buttons are consumed by UI4 and do
-            // not change application focus or pointer capture.
-            super::screenshot::request_capture(screenshot_pressed.trailing_zeros() as u8 + 1);
-        }
-        let routed_button_mask = if INTERACTIVE_SCREENSHOT_ENABLED {
-            !SCREENSHOT_BUTTON_MASK
-        } else {
-            u32::MAX
-        };
+        let routed_button_mask = u32::MAX;
         let buttons_down = event.buttons_down & routed_button_mask;
         let previous_routed_buttons = previous_buttons & routed_button_mask;
         let pressed = buttons_down & !previous_routed_buttons;

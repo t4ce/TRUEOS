@@ -2070,7 +2070,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &UI4_SLOT4_SERVICE_STARTED,
         spawn_ui4_slot4_service_task,
     ),
-    TaskSpec::disabled(
+    TaskSpec::enabled(
         "ui4-screenshot-service",
         crate::r::readiness::BACKGROUND_AP_WORKER_READY,
         &UI4_SCREENSHOT_SERVICE_STARTED,

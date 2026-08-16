@@ -23,12 +23,12 @@ A constant influx of resources, money, and safety.
 ## Download TRUEOS
 
 > [!TIP]
-> **Ready-to-boot ISO:** [Download TRUEOS 0.0.178 (`.7z`, 6 MB)](https://github.com/t4ce/TRUEOS/releases/download/v0.0.178/TrueOS-0.0.178.7z)
+> **Ready-to-boot ISO:** [Download TRUEOS 0.0.189 (`.7z`, 6 MB)](https://github.com/t4ce/TRUEOS/releases/tag/v0.0.189)
 >
-> [Latest release and notes](https://github.com/t4ce/TRUEOS/releases/latest) ·
+> [Latest release and notes](https://github.com/t4ce/TRUEOS/releases/tag/v0.0.189) ·
 > [All releases](https://github.com/t4ce/TRUEOS/releases) ·
-> [SHA-256 checksums](https://github.com/t4ce/TRUEOS/releases/download/v0.0.178/SHA256SUMS) ·
-> [Release public key](https://github.com/t4ce/TRUEOS/releases/download/v0.0.178/TRUEOS-release-public-key.json)
+> [SHA-256 checksums](https://github.com/t4ce/TRUEOS/releases/download/v0.0.189/SHA256SUMS) ·
+> [Release public key](https://github.com/t4ce/TRUEOS/releases/download/v0.0.189/TRUEOS-release-public-key.json)
 
 The release archive contains the bootable ISO, provenance record, firmware, and
 one-command launchers for Linux and macOS. Use the latest-release link for

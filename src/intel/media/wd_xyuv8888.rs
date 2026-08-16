@@ -97,6 +97,10 @@ static SCREENSHOT: StaticScreenshotBytes =
     StaticScreenshotBytes(UnsafeCell::new([0; WD_XYUV8888_BYTES]));
 static SCREENSHOT_STATE: AtomicU8 = AtomicU8::new(ScreenshotState::Idle as u8);
 static SCREENSHOT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+const CAPTURE_DRIVER_IDLE: u8 = 0;
+const CAPTURE_DRIVER_STREAM: u8 = 1;
+const CAPTURE_DRIVER_MANUAL_SHOT: u8 = 2;
+static CAPTURE_DRIVER: AtomicU8 = AtomicU8::new(CAPTURE_DRIVER_IDLE);
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ScreenshotRequestError {
@@ -120,6 +124,62 @@ pub(crate) fn request_screenshot() -> Result<(), ScreenshotRequestError> {
             Err(next) => state = next,
         }
     }
+}
+
+/// Reserve WD for an RDP session. A manual one-frame capture already in
+/// progress wins briefly; the stream preparation worker retries cooperatively.
+pub(crate) fn try_claim_stream_capture() -> bool {
+    let driver = CAPTURE_DRIVER.load(Ordering::Acquire);
+    driver == CAPTURE_DRIVER_STREAM
+        || (driver == CAPTURE_DRIVER_IDLE
+            && CAPTURE_DRIVER
+                .compare_exchange(
+                    CAPTURE_DRIVER_IDLE,
+                    CAPTURE_DRIVER_STREAM,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                )
+                .is_ok())
+}
+
+pub(crate) fn release_stream_capture() {
+    let _ = CAPTURE_DRIVER.compare_exchange(
+        CAPTURE_DRIVER_STREAM,
+        CAPTURE_DRIVER_IDLE,
+        Ordering::AcqRel,
+        Ordering::Acquire,
+    );
+}
+
+/// Claim one pending manual screenshot only when no RDP session owns WD.
+pub(crate) fn try_claim_manual_screenshot_capture() -> bool {
+    SCREENSHOT_STATE.load(Ordering::Acquire) == ScreenshotState::Requested as u8
+        && CAPTURE_DRIVER
+            .compare_exchange(
+                CAPTURE_DRIVER_IDLE,
+                CAPTURE_DRIVER_MANUAL_SHOT,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
+            .is_ok()
+}
+
+pub(crate) fn release_manual_screenshot_capture() {
+    let _ = CAPTURE_DRIVER.compare_exchange(
+        CAPTURE_DRIVER_MANUAL_SHOT,
+        CAPTURE_DRIVER_IDLE,
+        Ordering::AcqRel,
+        Ordering::Acquire,
+    );
+}
+
+pub(crate) fn cancel_requested_screenshot() {
+    let _ = SCREENSHOT_STATE.compare_exchange(
+        ScreenshotState::Requested as u8,
+        ScreenshotState::Idle as u8,
+        Ordering::AcqRel,
+        Ordering::Acquire,
+    );
 }
 
 /// Refresh the single static slot from one completed WD frame.
@@ -157,7 +217,7 @@ pub(crate) fn try_refresh_requested_screenshot(source: WdXyuv8888DmaSurface) -> 
     true
 }
 
-/// Borrow the latest explicitly captured raw XYUV8888 image without allocating.
+/// Consume the latest explicitly captured raw XYUV8888 image without allocating.
 /// The slot is fixed at 2560x1440, pitch 10240, and has no preview consumer.
 pub(crate) fn with_screenshot<R>(read: impl FnOnce(u64, &[u8]) -> R) -> Option<R> {
     if SCREENSHOT_STATE
@@ -174,6 +234,8 @@ pub(crate) fn with_screenshot<R>(read: impl FnOnce(u64, &[u8]) -> R) -> Option<R
 
     let sequence = SCREENSHOT_SEQUENCE.load(Ordering::Acquire);
     let result = unsafe { read(sequence, &*SCREENSHOT.0.get()) };
-    SCREENSHOT_STATE.store(ScreenshotState::Ready as u8, Ordering::Release);
+    // This is a one-shot slot. Returning it to Ready would make the screenshot
+    // service encode and save the same 14 MiB frame on every poll forever.
+    SCREENSHOT_STATE.store(ScreenshotState::Idle as u8, Ordering::Release);
     Some(result)
 }
