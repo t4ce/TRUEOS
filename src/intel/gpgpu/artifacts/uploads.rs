@@ -239,20 +239,6 @@ pub(crate) fn upload_ui4_nv12_tile64_to_rgba8_frame_kernel() -> Option<UploadedK
     Some(upload)
 }
 
-pub(crate) fn upload_ui4_rgba8_to_nv12_linear_kernel() -> Option<UploadedKernelArtifact> {
-    if let Some(upload) = *UI4_RGBA8_TO_NV12_LINEAR_UPLOAD.lock() {
-        return Some(upload);
-    }
-    let dev = super::claimed_device()?;
-    let upload = upload_artifact(
-        dev,
-        UI4_RGBA8_TO_NV12_LINEAR_ADLS_ARTIFACT,
-        UI4_RGBA8_TO_NV12_LINEAR_ADLS_GPU,
-    )?;
-    *UI4_RGBA8_TO_NV12_LINEAR_UPLOAD.lock() = Some(upload);
-    Some(upload)
-}
-
 pub(crate) fn upload_sprite_quad_worklist_rgba8_kernel() -> Option<UploadedKernelArtifact> {
     if let Some(upload) = *SPRITE_QUAD_WORKLIST_RGBA8_UPLOAD.lock() {
         return Some(upload);
@@ -633,7 +619,6 @@ const GPGPU_KNOWN_ARTIFACT_NAMES: &[&str] = &[
     GRADIENT_RECT_WORKLIST_RGBA8_KERNEL_NAME,
     ALPHA_BLEND_WORKLIST_RGBA8_KERNEL_NAME,
     GLYPH_MASK_RGBA8_KERNEL_NAME,
-    UI4_RGBA8_TO_NV12_LINEAR_KERNEL_NAME,
     SPRITE_QUAD_WORKLIST_RGBA8_KERNEL_NAME,
     UI4_COMPOSE_LAYERS_RGBA8_KERNEL_NAME,
     MANDEL64_WORKLIST_RGBA8_KERNEL_NAME,
@@ -716,7 +701,6 @@ fn known_artifact_address_space(name: &str) -> GpgpuArtifactAddressSpace {
         | GLYPH_MASK_RGBA8_KERNEL_NAME
         | FONT_INSTANCE_RGBA8_KERNEL_NAME
         | UI4_NV12_TILE64_TO_RGBA8_FRAME_KERNEL_NAME
-        | UI4_RGBA8_TO_NV12_LINEAR_KERNEL_NAME
         | SPRITE_QUAD_WORKLIST_RGBA8_KERNEL_NAME
         | UI4_COMPOSE_LAYERS_RGBA8_KERNEL_NAME
         | MANDEL64_WORKLIST_RGBA8_KERNEL_NAME
@@ -784,11 +768,6 @@ fn known_artifact_slot(name: &str) -> Option<GpgpuKnownArtifactSlot> {
             artifact: GLYPH_MASK_RGBA8_ADLS_ARTIFACT,
             gpu: GLYPH_MASK_RGBA8_ADLS_GPU,
             upload: &GLYPH_MASK_RGBA8_UPLOAD,
-        }),
-        UI4_RGBA8_TO_NV12_LINEAR_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
-            artifact: UI4_RGBA8_TO_NV12_LINEAR_ADLS_ARTIFACT,
-            gpu: UI4_RGBA8_TO_NV12_LINEAR_ADLS_GPU,
-            upload: &UI4_RGBA8_TO_NV12_LINEAR_UPLOAD,
         }),
         FONT_INSTANCE_RGBA8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
             artifact: FONT_INSTANCE_RGBA8_ADLS_ARTIFACT,

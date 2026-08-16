@@ -34,7 +34,6 @@ single_entry_kernels=(
   sprite_quad_worklist_rgba8
   ui4_compose_layers_rgba8
   ui4_nv12_tile64_to_rgba8_frame
-  ui4_rgba8_to_nv12_linear
 )
 
 for kernel in "${single_entry_kernels[@]}"; do

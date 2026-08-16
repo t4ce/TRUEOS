@@ -144,14 +144,6 @@ pub(crate) const UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_ARTIFACT: GpgpuKernelArtifa
         &UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_CPP_ABI_CONTRACT,
     );
 
-pub(crate) const UI4_RGBA8_TO_NV12_LINEAR_ADLS_ARTIFACT: GpgpuKernelArtifact =
-    GpgpuKernelArtifact::contracted(
-        UI4_RGBA8_TO_NV12_LINEAR_KERNEL_NAME,
-        UI4_RGBA8_TO_NV12_LINEAR_ADLS_BIN,
-        UI4_RGBA8_TO_NV12_LINEAR_ADLS_SPV,
-        &UI4_RGBA8_TO_NV12_LINEAR_ADLS_CPP_ABI_CONTRACT,
-    );
-
 pub(crate) const SPRITE_QUAD_WORKLIST_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
     GpgpuKernelArtifact::contracted(
         SPRITE_QUAD_WORKLIST_RGBA8_KERNEL_NAME,

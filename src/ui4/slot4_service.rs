@@ -300,10 +300,6 @@ fn add_overlay_rect_damage(
     damage.add(crate::intel::CompositionDamageRect::new(rect.x, rect.y, rect.width, rect.height));
 }
 
-pub(super) fn presented_rects() -> Slot4Rects {
-    PRESENTED_RECTS.lock().clone()
-}
-
 fn slot4_windows() -> Vec<super::WindowSnapshot> {
     let Some(output) = super::OutputId::from_slot(0) else {
         return Vec::new();

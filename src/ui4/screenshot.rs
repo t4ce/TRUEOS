@@ -1,11 +1,9 @@
 //! UI4 composition, window-frame, and opt-in final-frame screenshots.
 //!
-//! Input only arms a request. The compositor consumes one request after a
-//! successful frame, copies either the composition or one exact leased UI4
-//! window buffer into an RGBA image, and queues that immutable image for the
-//! filesystem worker. Session teardown can likewise copy its last published
-//! buffers after broker detach and before producer frame destruction. Encoding
-//! and TRUEOSFS I/O therefore never run in the composition or teardown path.
+//! Full-display requests are captured from display writeback. Exact-window and
+//! final-frame requests retain their published UI4 buffer leases and queue an
+//! immutable RGBA image for the filesystem worker. Encoding and TRUEOSFS I/O
+//! therefore never run in the composition or teardown path.
 
 use alloc::collections::VecDeque;
 use alloc::format;
@@ -18,8 +16,8 @@ use embassy_time::{Duration, Timer};
 use spin::Mutex;
 
 use super::{
-    FramePoolError, FrameReadLease, FrameRgbaView, WindowSnapshot, acquire_published_frame,
-    published_rgba_view, release_published_frame,
+    FramePoolError, WindowSnapshot, acquire_published_frame, published_rgba_view,
+    release_published_frame,
 };
 
 const MAX_PENDING_REQUESTS: usize = 4;
@@ -161,14 +159,7 @@ impl From<FramePoolError> for CaptureError {
 }
 
 #[derive(Copy, Clone)]
-enum CaptureTrigger {
-    MouseButton(u8),
-    F1,
-}
-
-#[derive(Copy, Clone)]
 enum CaptureSelection {
-    Composition,
     Window {
         #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
         id: super::WindowId,
@@ -179,15 +170,12 @@ enum CaptureSelection {
 
 #[derive(Copy, Clone)]
 struct CaptureRequest {
-    trigger: CaptureTrigger,
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     selection: CaptureSelection,
 }
 
 #[derive(Copy, Clone)]
 enum CaptureScope {
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-    Composition,
     Window {
         id: super::WindowId,
         plane_slot: usize,
@@ -205,10 +193,6 @@ struct CapturedComposition {
     scope: CaptureScope,
     path_override: Option<String>,
     release_interactive_gate: bool,
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-    slot0_scanout_pixels: usize,
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-    spirit_overlay_pixels: usize,
 }
 
 /// Tight native premultiplied RGBA copied while holding one published-frame
@@ -220,55 +204,24 @@ struct CapturedWindowRgba {
     rgba_premultiplied: Vec<u8>,
 }
 
-/// Metadata for the deliberately incomplete slot-3 observation used by the
-/// real-time encoder. Independently presented hardware planes and the cursor
-/// are absent until a real display-writeback path exists.
-pub(super) struct RealtimeEncodeComposition {
-    pub(super) width: u32,
-    pub(super) height: u32,
-    pub(super) source: crate::intel::gpgpu::GpgpuRgba8Surface,
-    pub(super) slot3_scanout_pixels: usize,
-    pub(super) spirit_overlay_pixels: usize,
-}
-
-/// Import pipe A's slot-3 SURFLIVE backing directly into the isolated RCS
-/// conversion address space. No CPU frame copy or cache sweep participates.
-pub(super) fn realtime_encode_pipe_a_slot3_surface()
--> Result<RealtimeEncodeComposition, CaptureError> {
-    let view = crate::intel::with_ui4_realtime_encode_pipe_a_slot3_surflive(|view| view)
-        .ok_or(CaptureError::NoScanout)?;
-    let source = crate::intel::gpgpu::GpgpuRgba8Surface::new(
-        view.phys,
-        crate::intel::gpgpu::UI4_COMPOSITOR_NV12_SOURCE_GPU_BASE,
-        view.byte_len,
-        view.width,
-        view.height,
-        view.pitch_bytes,
-    )
-    .ok_or(CaptureError::InvalidFrameLayout)?;
-
-    Ok(RealtimeEncodeComposition {
-        width: view.width,
-        height: view.height,
-        source,
-        slot3_scanout_pixels: (view.width as usize).saturating_mul(view.height as usize),
-        spirit_overlay_pixels: 0,
-    })
-}
-
-/// Arm one composition capture. Calls are bounded so a burst of side-button
-/// transitions cannot retain an unbounded number of full-screen images.
+/// Arm one best-effort post-blend display-writeback capture.
 pub(super) fn request_capture(mouse_button: u8) {
-    enqueue_request(CaptureRequest {
-        trigger: CaptureTrigger::MouseButton(mouse_button),
-        selection: CaptureSelection::Composition,
-    });
+    match crate::intel::media::wd_xyuv8888::request_screenshot() {
+        Ok(()) => crate::log_info!(target: "ui4/screenshot";
+            "ui4/screenshot: request armed trigger=mouse-button-{} capture=next-wd-postblend-frame\n",
+            mouse_button,
+        ),
+        Err(error) => crate::log_warn!(target: "ui4/screenshot";
+            "ui4/screenshot: request dropped trigger=mouse-button-{} reason={:?}\n",
+            mouse_button,
+            error,
+        ),
+    }
 }
 
 /// Arm a capture of one exact UI4 window on the next composed frame.
 pub(super) fn request_window_capture(window: WindowSnapshot, cursor_x: u32, cursor_y: u32) {
     let pending = enqueue_request(CaptureRequest {
-        trigger: CaptureTrigger::F1,
         selection: CaptureSelection::Window {
             id: window.id,
             plane_slot: window.plane.slot(),
@@ -290,36 +243,20 @@ pub(super) fn request_window_capture(window: WindowSnapshot, cursor_x: u32, curs
 fn enqueue_request(request: CaptureRequest) -> Option<usize> {
     let mut requests = CAPTURE_REQUESTS.lock();
     if requests.len() >= MAX_PENDING_REQUESTS {
-        match request.trigger {
-            CaptureTrigger::MouseButton(button) => crate::log_warn!(target: "ui4/screenshot";
-                "ui4/screenshot: request dropped trigger=mouse-button-{} reason=request-queue-full pending={}\n",
-                button,
-                requests.len(),
-            ),
-            CaptureTrigger::F1 => crate::log_warn!(target: "ui4/screenshot";
-                "ui4/screenshot: request dropped trigger=F1 reason=request-queue-full pending={}\n",
-                requests.len(),
-            ),
-        }
+        crate::log_warn!(target: "ui4/screenshot";
+            "ui4/screenshot: request dropped trigger=F1 reason=request-queue-full pending={}\n",
+            requests.len(),
+        );
         return None;
     }
     requests.push_back(request);
     let pending = requests.len();
-    if let CaptureTrigger::MouseButton(button) = request.trigger {
-        crate::log_info!(target: "ui4/screenshot";
-            "ui4/screenshot: request armed trigger=mouse-button-{} pending={} capture=next-composed-frame\n",
-            button,
-            pending,
-        );
-    }
     Some(pending)
 }
 
 /// Capture at most one request from this compositor frame.
 ///
-/// `windows` is the immutable broker snapshot used for the frame. Slot 4 is
-/// sampled from its independent service only after a capture request is
-/// actually consumed. The hardware mouse cursor remains intentionally absent.
+/// `windows` is the immutable broker snapshot used for the frame.
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(super) fn capture_compositor_frame(windows: &[WindowSnapshot]) {
     let request = {
@@ -338,13 +275,7 @@ pub(super) fn capture_compositor_frame(windows: &[WindowSnapshot]) {
         return;
     };
 
-    let started_ns = crate::chronos::monotonic_nanos();
-    let rects = match request.selection {
-        CaptureSelection::Composition => super::slot4_service::presented_rects(),
-        CaptureSelection::Window { .. } => heapless::Vec::new(),
-    };
     let result = match request.selection {
-        CaptureSelection::Composition => capture_windows(windows, &rects),
         CaptureSelection::Window { id, plane_slot } => windows
             .iter()
             .copied()
@@ -374,7 +305,7 @@ pub(super) fn capture_compositor_frame(windows: &[WindowSnapshot]) {
             drop(queue);
             let (scope, window, plane_slot) = capture_scope_log_fields(request.selection);
             crate::log_info!(target: "ui4/screenshot";
-                "ui4/screenshot: frame captured sequence={} scope={} window={} plane_slot={} size={}x{} rgba_bytes={} windows={} visuals={} copy_us={} alpha=straight\n",
+                "ui4/screenshot: frame captured sequence={} scope={} window={} plane_slot={} size={}x{} rgba_bytes={} windows={} alpha=straight\n",
                 sequence,
                 scope,
                 window,
@@ -383,17 +314,14 @@ pub(super) fn capture_compositor_frame(windows: &[WindowSnapshot]) {
                 height,
                 bytes,
                 windows.len(),
-                rects.len(),
-                crate::chronos::monotonic_nanos().saturating_sub(started_ns) / 1_000,
             );
         }
         Err(error) => {
             CAPTURE_IN_FLIGHT.store(false, Ordering::Release);
             crate::log_warn!(target: "ui4/screenshot";
-                "ui4/screenshot: capture failed error={:?} windows={} visuals={}\n",
+                "ui4/screenshot: capture failed error={:?} windows={}\n",
                 error,
                 windows.len(),
-                rects.len(),
             );
         }
     }
@@ -402,79 +330,8 @@ pub(super) fn capture_compositor_frame(windows: &[WindowSnapshot]) {
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn capture_scope_log_fields(selection: CaptureSelection) -> (&'static str, u32, usize) {
     match selection {
-        CaptureSelection::Composition => ("composition", 0, 0),
         CaptureSelection::Window { id, plane_slot } => ("window", id.raw(), plane_slot),
     }
-}
-
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-fn capture_windows(
-    windows: &[WindowSnapshot],
-    rects: &[crate::intel::LiveOverlayRect],
-) -> Result<CapturedComposition, CaptureError> {
-    let (width, height) =
-        crate::intel::active_scanout_dimensions().ok_or(CaptureError::NoScanout)?;
-    let stride = usize::try_from(width)
-        .ok()
-        .and_then(|width| width.checked_mul(4))
-        .ok_or(CaptureError::DimensionTooLarge)?;
-    let byte_len = stride
-        .checked_mul(usize::try_from(height).map_err(|_| CaptureError::DimensionTooLarge)?)
-        .ok_or(CaptureError::DimensionTooLarge)?;
-
-    // Hardware planes impose an order across otherwise independent z stacks.
-    // Retain that order in the exported logical composition as well.
-    let mut ordered_windows = windows.to_vec();
-    ordered_windows
-        .sort_unstable_by_key(|window| (window.plane.slot(), window.placement.z, window.id));
-
-    // Hold all front buffers simultaneously. Producers may continue into
-    // other cadence buffers, but none of these pixels can change mid-copy.
-    let mut leases = Vec::with_capacity(ordered_windows.len());
-    for window in &ordered_windows {
-        match acquire_published_frame(window.frame) {
-            Ok(lease) => leases.push(lease),
-            Err(error) => {
-                release_leases(&leases);
-                return Err(error.into());
-            }
-        }
-    }
-    let result = (|| {
-        let views = leases
-            .iter()
-            .copied()
-            .map(published_rgba_view)
-            .collect::<Result<Vec<FrameRgbaView>, _>>()?;
-        let mut rgba = alloc::vec![0u8; byte_len];
-        for (window, view) in ordered_windows.iter().zip(views.iter()) {
-            crate::intel::dma_flush(view.virt, view.byte_len);
-            let pixels =
-                unsafe { core::slice::from_raw_parts(view.virt.cast_const(), view.byte_len) };
-            blend_window(&mut rgba, stride, width, height, *window, *view, pixels);
-        }
-        for rect in rects {
-            blend_visual_rect(&mut rgba, stride, width, height, *rect);
-        }
-        unpremultiply_rgba(&mut rgba);
-        Ok::<_, CaptureError>(rgba)
-    })();
-    release_leases(&leases);
-    let rgba = result?;
-
-    Ok(CapturedComposition {
-        sequence: CAPTURE_SEQUENCE.fetch_add(1, Ordering::AcqRel) + 1,
-        unix_seconds: crate::chronos::best_effort_unix_time_seconds(),
-        monotonic_ms: crate::chronos::monotonic_nanos() / 1_000_000,
-        width,
-        height,
-        rgba,
-        scope: CaptureScope::Composition,
-        path_override: None,
-        release_interactive_gate: true,
-        slot0_scanout_pixels: 0,
-        spirit_overlay_pixels: 0,
-    })
 }
 
 /// Capture and encode one exact broker window as a compact RGB PNG carrying a
@@ -577,8 +434,6 @@ fn capture_window(window: WindowSnapshot) -> Result<CapturedComposition, Capture
         },
         path_override: None,
         release_interactive_gate: true,
-        slot0_scanout_pixels: 0,
-        spirit_overlay_pixels: 0,
     })
 }
 
@@ -1025,135 +880,9 @@ fn final_frame_path(identity: &str, index: usize, count: usize) -> String {
     }
 }
 
-fn release_leases(leases: &[FrameReadLease]) {
-    for lease in leases {
-        let _ = release_published_frame(*lease);
-    }
-}
-
-fn blend_window(
-    destination: &mut [u8],
-    destination_stride: usize,
-    screen_width: u32,
-    screen_height: u32,
-    window: WindowSnapshot,
-    view: FrameRgbaView,
-    source: &[u8],
-) {
-    let placement = window.placement;
-    if !placement.visible || placement.opacity == 0 {
-        return;
-    }
-    let draw_width = view.width.min(placement.width);
-    let draw_height = view.height.min(placement.height);
-    let left = i64::from(placement.x).max(0);
-    let top = i64::from(placement.y).max(0);
-    let right = (i64::from(placement.x) + i64::from(draw_width)).min(i64::from(screen_width));
-    let bottom = (i64::from(placement.y) + i64::from(draw_height)).min(i64::from(screen_height));
-    if right <= left || bottom <= top {
-        return;
-    }
-    let source_x = left.saturating_sub(i64::from(placement.x)) as usize;
-    let source_y = top.saturating_sub(i64::from(placement.y)) as usize;
-    let copy_width = (right - left) as usize;
-    let copy_height = (bottom - top) as usize;
-    let opacity = placement.opacity;
-
-    for row in 0..copy_height {
-        let source_offset = (source_y + row)
-            .saturating_mul(view.pitch as usize)
-            .saturating_add(source_x.saturating_mul(4));
-        let destination_offset = (top as usize + row)
-            .saturating_mul(destination_stride)
-            .saturating_add(left as usize * 4);
-        let Some(source_row) = source.get(source_offset..source_offset + copy_width * 4) else {
-            return;
-        };
-        let Some(destination_row) =
-            destination.get_mut(destination_offset..destination_offset + copy_width * 4)
-        else {
-            return;
-        };
-        if opacity == u8::MAX
-            && source_row
-                .chunks_exact(4)
-                .all(|source| source[3] == u8::MAX)
-        {
-            destination_row.copy_from_slice(source_row);
-            continue;
-        }
-        for (src, dst) in source_row
-            .chunks_exact(4)
-            .zip(destination_row.chunks_exact_mut(4))
-        {
-            if src[3] == 0 {
-                continue;
-            }
-            if opacity == u8::MAX {
-                if src[3] == u8::MAX {
-                    dst.copy_from_slice(src);
-                } else {
-                    blend_premultiplied(dst, src[0], src[1], src[2], src[3]);
-                }
-            } else {
-                let scale = |value: u8| multiply_u8(value, opacity);
-                blend_premultiplied(
-                    dst,
-                    scale(src[0]),
-                    scale(src[1]),
-                    scale(src[2]),
-                    scale(src[3]),
-                );
-            }
-        }
-    }
-}
-
-fn blend_visual_rect(
-    destination: &mut [u8],
-    destination_stride: usize,
-    screen_width: u32,
-    screen_height: u32,
-    rect: crate::intel::LiveOverlayRect,
-) {
-    let right = rect.x.saturating_add(rect.width).min(screen_width);
-    let bottom = rect.y.saturating_add(rect.height).min(screen_height);
-    if right <= rect.x || bottom <= rect.y || rect.color.a == 0 {
-        return;
-    }
-    let alpha = rect.color.a;
-    let r = multiply_u8(rect.color.r, alpha);
-    let g = multiply_u8(rect.color.g, alpha);
-    let b = multiply_u8(rect.color.b, alpha);
-    for y in rect.y..bottom {
-        let row_offset = y as usize * destination_stride;
-        for x in rect.x..right {
-            let offset = row_offset + x as usize * 4;
-            blend_premultiplied(&mut destination[offset..offset + 4], r, g, b, alpha);
-        }
-    }
-}
-
 #[inline]
 fn multiply_u8(value: u8, factor: u8) -> u8 {
     ((u16::from(value) * u16::from(factor) + 127) / 255) as u8
-}
-
-#[inline]
-fn blend_premultiplied(destination: &mut [u8], r: u8, g: u8, b: u8, a: u8) {
-    let inverse_alpha = u8::MAX - a;
-    destination[0] = u16::from(r)
-        .saturating_add(u16::from(multiply_u8(destination[0], inverse_alpha)))
-        .min(255) as u8;
-    destination[1] = u16::from(g)
-        .saturating_add(u16::from(multiply_u8(destination[1], inverse_alpha)))
-        .min(255) as u8;
-    destination[2] = u16::from(b)
-        .saturating_add(u16::from(multiply_u8(destination[2], inverse_alpha)))
-        .min(255) as u8;
-    destination[3] = u16::from(a)
-        .saturating_add(u16::from(multiply_u8(destination[3], inverse_alpha)))
-        .min(255) as u8;
 }
 
 fn unpremultiply_rgba(rgba: &mut [u8]) {
@@ -1177,10 +906,6 @@ fn screenshot_path(capture: &CapturedComposition) -> String {
     }
     let wall = capture.unix_seconds.unwrap_or(0);
     match capture.scope {
-        CaptureScope::Composition => format!(
-            "{}/ui4-{}-{}-{:06}.png",
-            SCREENSHOT_DIRECTORY, wall, capture.monotonic_ms, capture.sequence
-        ),
         CaptureScope::Window { id, plane_slot } => format!(
             "{}/ui4-frame-w{}-slot{}-{}-{}-{:06}.png",
             SCREENSHOT_DIRECTORY,
@@ -1210,7 +935,7 @@ fn writable_capture_root_handle() -> Option<crate::disc::block::DeviceHandle> {
 #[embassy_executor::task(pool_size = 1)]
 pub(crate) async fn ui4_screenshot_service_task() {
     crate::log_info!(target: "ui4/screenshot";
-        "ui4/screenshot: service online trigger=F1/topmost-window-below-cursor+mouse-buttons-4-or-5/composition+opt-in-session-close capture=next-composed-or-coherent-final-frame format=png-rgba destination=trueosfs:/screenshots|/finalframes worker=background final_frame_overwrite=1\n"
+        "ui4/screenshot: service online trigger=F1/topmost-window-below-cursor+opt-in-session-close capture=exact-published-window format=png-rgba destination=trueosfs:/screenshots|/finalframes worker=background final_frame_overwrite=1 full-display-source=wd-postblend\n"
     );
     let mut root_wait_logged = false;
     loop {

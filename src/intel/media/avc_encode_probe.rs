@@ -837,6 +837,16 @@ impl AvcRawSurfaceFormat {
             Self::Xyuv8888 => XYUV8888_SOURCE_GPU,
         }
     }
+
+    const fn chroma_y_offset(self) -> u32 {
+        match self {
+            Self::Nv12 => FRAME_HEIGHT as u32,
+            // XYUV8888 is a single packed A:Y:U:V-compatible plane. Leaving
+            // NV12's height offset here makes VDEnc fetch U/V from beyond the
+            // packed pixels even though SurfaceFormat says YUV444.
+            Self::Xyuv8888 => 0,
+        }
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -1423,6 +1433,8 @@ fn build_picture_batch(
     // the command that describes packed XYUV8888/YUV444 input.
     mfx_source[3] =
         (raw_format.mfx_format() << 28) | (1 << 27) | (((raw_format.pitch() - 1) as u32) << 3);
+    mfx_source[4] = raw_format.chroma_y_offset();
+    mfx_source[5] = raw_format.chroma_y_offset();
     push_packet(batch, &mut idx, &mfx_source, &mut packet_count)?;
     push_packet(batch, &mut idx, &MFX_SURFACE_DS, &mut packet_count)?;
 
@@ -1434,7 +1446,7 @@ fn build_picture_batch(
     push_packet(batch, &mut idx, &mfx_bsp, &mut packet_count)?;
 
     push_packet(batch, &mut idx, &VDENC_PIPE_MODE_SELECT, &mut packet_count)?;
-    let vdenc_source = vdenc_surface_state(
+    let mut vdenc_source = vdenc_surface_state(
         0x7081_0004,
         FRAME_WIDTH,
         FRAME_HEIGHT,
@@ -1442,6 +1454,8 @@ fn build_picture_batch(
         (raw_format.vdenc_format() << 27) | (7 << 20),
         0x8,
     );
+    vdenc_source[4] = raw_format.chroma_y_offset();
+    vdenc_source[5] = raw_format.chroma_y_offset();
     push_packet(batch, &mut idx, &vdenc_source, &mut packet_count)?;
     push_packet(batch, &mut idx, &VDENC_REF_SURFACE_STATE, &mut packet_count)?;
     push_packet(batch, &mut idx, &VDENC_DS_REF_SURFACE_STATE, &mut packet_count)?;

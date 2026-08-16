@@ -13,7 +13,6 @@ const CHART_SINE_RGBA8_ADLS_GPU: u64 = 0x0D39_0000;
 const PIXEL_PLASMA_RGBA8_ADLS_GPU: u64 = 0x0D3A_0000;
 const FONT_OUTLINE_COVERAGE_R8_ADLS_GPU: u64 = 0x0D3D_0000;
 const UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_GPU: u64 = 0x0D40_0000;
-const UI4_RGBA8_TO_NV12_LINEAR_ADLS_GPU: u64 = 0x0D41_8000;
 const LAB256_MULTIPHASE_ADLS_GPU: u64 = 0x0D42_0000;
 const SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_GPU: u64 = 0x0D43_0000;
 // Give both Spirit images dedicated, non-overlapping instruction windows.
@@ -95,8 +94,6 @@ const FONT_OUTLINE_COVERAGE_R8_TEXT_OFFSET_BYTES: u64 =
     FONT_OUTLINE_COVERAGE_R8_ADLS_CPP_ABI_CONTRACT.entry_offset;
 const UI4_NV12_TILE64_TO_RGBA8_FRAME_TEXT_OFFSET_BYTES: u64 =
     UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_CPP_ABI_CONTRACT.entry_offset;
-const UI4_RGBA8_TO_NV12_LINEAR_TEXT_OFFSET_BYTES: u64 =
-    UI4_RGBA8_TO_NV12_LINEAR_ADLS_CPP_ABI_CONTRACT.entry_offset;
 const FILL_RECT_RGBA8_TEXT_OFFSET_BYTES: u64 = FILL_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT.entry_offset;
 const FILL_RECT_WORKLIST_RGBA8_TEXT_OFFSET_BYTES: u64 =
     FILL_RECT_WORKLIST_RGBA8_ADLS_CPP_ABI_CONTRACT.entry_offset;
@@ -421,24 +418,6 @@ const UI4_NV12_PRIMARY_CROSS_THREAD_BYTES: usize = UI4_NV12_PRIMARY_CROSS_THREAD
 const UI4_NV12_PRIMARY_PER_THREAD_BYTES: usize = 96;
 const UI4_NV12_PRIMARY_INDIRECT_BYTES: usize =
     UI4_NV12_PRIMARY_CROSS_THREAD_BYTES + UI4_NV12_PRIMARY_PER_THREAD_BYTES;
-const UI4_RGBA8_TO_NV12_CROSS_THREAD_BYTES: usize =
-    UI4_RGBA8_TO_NV12_LINEAR_ADLS_CPP_ABI_CONTRACT.cross_thread_data_bytes as usize;
-const UI4_RGBA8_TO_NV12_CROSS_THREAD_GRFS: u32 = (UI4_RGBA8_TO_NV12_CROSS_THREAD_BYTES / 32) as u32;
-const UI4_RGBA8_TO_NV12_PER_THREAD_BYTES: usize =
-    UI4_RGBA8_TO_NV12_LINEAR_ADLS_CPP_ABI_CONTRACT.per_thread_data_bytes as usize;
-const UI4_RGBA8_TO_NV12_INDIRECT_BYTES: usize =
-    UI4_RGBA8_TO_NV12_CROSS_THREAD_BYTES + UI4_RGBA8_TO_NV12_PER_THREAD_BYTES;
-const _: () = {
-    assert!(matches!(UI4_RGBA8_TO_NV12_LINEAR_ADLS_CPP_ABI_CONTRACT.validate(), Ok(())));
-    assert!(UI4_RGBA8_TO_NV12_CROSS_THREAD_BYTES == 96);
-    assert!(UI4_RGBA8_TO_NV12_CROSS_THREAD_GRFS == 3);
-    assert!(UI4_RGBA8_TO_NV12_PER_THREAD_BYTES == 96);
-};
-const _: () = assert!(
-    UI4_RGBA8_TO_NV12_LINEAR_ADLS_GPU + UI4_RGBA8_TO_NV12_LINEAR_ADLS_BIN.len() as u64
-        <= LAB256_MULTIPHASE_ADLS_GPU
-);
-
 // GridPaper can retain 17 independently colored layers for each of its three
 // font faces (51 total). Keep enough room to submit the complete scene once.
 pub(crate) const GLYPH_MASK_BATCH_MAX_LAYERS: usize = 64;
@@ -1405,10 +1384,6 @@ pub(crate) const UI4_COMPOSITOR_RCS_JOB_SLOTS: usize = 2;
 // disjoint from both persistent font resources and UI4 RGBA VAs.
 pub(crate) const UI4_COMPOSITOR_NV12_SOURCE_GPU_BASE: u64 = 0x1000_0000;
 const UI4_COMPOSITOR_NV12_SOURCE_MAX_BYTES: usize = 16 * 1024 * 1024;
-// Keep the encoder destination outside both decoder source slots and the
-// complete UI-surface arena. The former base+one-slot address collided with
-// decoder slot 1 whenever local playback and RDP conversion overlapped.
-pub(crate) const UI4_STREAM_NV12_DESTINATION_GPU: u64 = crate::r::ui_surface::UI_SURFACE_GPU_LIMIT;
 const _: () = assert!(UI4_COMPOSITOR_NV12_SOURCE_GPU_BASE.is_multiple_of(4096));
 const _: () = assert!(
     UI4_COMPOSITOR_NV12_SOURCE_GPU_BASE
@@ -1416,10 +1391,6 @@ const _: () = assert!(
         <= crate::r::ui_surface::UI_SURFACE_GPU_BASE
 );
 const _: () = assert!(UI4_COMPOSITOR_NV12_SOURCE_GPU_BASE >= DIRECT_RCS_GPU_VA_FONT_COVERAGE_LIMIT);
-const _: () = assert!(
-    UI4_STREAM_NV12_DESTINATION_GPU + UI4_COMPOSITOR_NV12_SOURCE_MAX_BYTES as u64
-        <= DIRECT_RCS_PPGTT_LIMIT_BYTES
-);
 const _: () = assert!(
     UI4_COMPOSITOR_RCS_GPU_VA_RESULT_BASE
         + (UI4_COMPOSITOR_RCS_JOB_SLOTS * DIRECT_RCS_RESULT_BYTES) as u64

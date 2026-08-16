@@ -23,9 +23,6 @@ pub(crate) const UI4_NV12_TILE64_TO_RGBA8_FRAME_KERNEL_NAME: &str =
     "ui4_nv12_tile64_to_rgba8_frame";
 pub(crate) const UI4_NV12_TILE64_TO_RGBA8_FRAME_OPENCL_SOURCE: &str =
     include_str!("kernels/ui4_nv12_tile64_to_rgba8_frame.clcpp");
-pub(crate) const UI4_RGBA8_TO_NV12_LINEAR_KERNEL_NAME: &str = "ui4_rgba8_to_nv12_linear";
-pub(crate) const UI4_RGBA8_TO_NV12_LINEAR_OPENCL_SOURCE: &str =
-    include_str!("kernels/ui4_rgba8_to_nv12_linear.clcpp");
 pub(crate) const SPRITE_QUAD_WORKLIST_RGBA8_KERNEL_NAME: &str = "sprite_quad_worklist_rgba8";
 pub(crate) const SPRITE_QUAD_WORKLIST_RGBA8_OPENCL_SOURCE: &str =
     include_str!("kernels/sprite_quad_worklist_rgba8.clcpp");
@@ -132,7 +129,6 @@ pub(crate) fn kernel_opencl_source(name: &str) -> Option<&'static str> {
         UI4_NV12_TILE64_TO_RGBA8_FRAME_KERNEL_NAME => {
             Some(UI4_NV12_TILE64_TO_RGBA8_FRAME_OPENCL_SOURCE)
         }
-        UI4_RGBA8_TO_NV12_LINEAR_KERNEL_NAME => Some(UI4_RGBA8_TO_NV12_LINEAR_OPENCL_SOURCE),
         SPRITE_QUAD_WORKLIST_RGBA8_KERNEL_NAME => Some(SPRITE_QUAD_WORKLIST_RGBA8_OPENCL_SOURCE),
         UI4_COMPOSE_LAYERS_RGBA8_KERNEL_NAME => Some(UI4_COMPOSE_LAYERS_RGBA8_OPENCL_SOURCE),
         MANDEL64_WORKLIST_RGBA8_KERNEL_NAME => Some(MANDEL64_WORKLIST_RGBA8_OPENCL_SOURCE),
@@ -177,9 +173,6 @@ pub(crate) fn kernel_source_path(name: &str) -> Option<&'static str> {
         GLYPH_MASK_RGBA8_KERNEL_NAME => Some("src/intel/gpgpu/kernels/glyph_mask_rgba8.clcpp"),
         UI4_NV12_TILE64_TO_RGBA8_FRAME_KERNEL_NAME => {
             Some("src/intel/gpgpu/kernels/ui4_nv12_tile64_to_rgba8_frame.clcpp")
-        }
-        UI4_RGBA8_TO_NV12_LINEAR_KERNEL_NAME => {
-            Some("src/intel/gpgpu/kernels/ui4_rgba8_to_nv12_linear.clcpp")
         }
         SPRITE_QUAD_WORKLIST_RGBA8_KERNEL_NAME => {
             Some("src/intel/gpgpu/kernels/sprite_quad_worklist_rgba8.clcpp")
@@ -237,7 +230,6 @@ include!("kernels/artifacts/adls/cpp/skybox_sample_rgb565.contract.rs");
 include!("kernels/artifacts/adls/cpp/sprite_quad_worklist_rgba8.contract.rs");
 include!("kernels/artifacts/adls/cpp/ui4_compose_layers_rgba8.contract.rs");
 include!("kernels/artifacts/adls/cpp/ui4_nv12_tile64_to_rgba8_frame.contract.rs");
-include!("kernels/artifacts/adls/cpp/ui4_rgba8_to_nv12_linear.contract.rs");
 pub(crate) const COPY_RECT_RGBA8_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/cpp/copy_rect_rgba8.bin");
 pub(crate) const COPY_RECT_RGBA8_ADLS_SPV: &[u8] =
@@ -342,17 +334,6 @@ pub(crate) const UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/cpp/ui4_nv12_tile64_to_rgba8_frame.bin");
 pub(crate) const UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_SPV: &[u8] =
     include_bytes!("kernels/artifacts/adls/cpp/ui4_nv12_tile64_to_rgba8_frame.spv");
-const UI4_RGBA8_TO_NV12_LINEAR_ADLS_BIN_BYTES: usize =
-    include_bytes!("kernels/artifacts/adls/cpp/ui4_rgba8_to_nv12_linear.bin").len();
-#[used]
-#[unsafe(link_section = ".gpgpu_artifacts")]
-static UI4_RGBA8_TO_NV12_LINEAR_ADLS_BIN_STORAGE: [u8; UI4_RGBA8_TO_NV12_LINEAR_ADLS_BIN_BYTES] =
-    *include_bytes!("kernels/artifacts/adls/cpp/ui4_rgba8_to_nv12_linear.bin");
-pub(crate) const UI4_RGBA8_TO_NV12_LINEAR_ADLS_BIN: &[u8] =
-    &UI4_RGBA8_TO_NV12_LINEAR_ADLS_BIN_STORAGE;
-pub(crate) const UI4_RGBA8_TO_NV12_LINEAR_ADLS_SPV: &[u8] =
-    include_bytes!("kernels/artifacts/adls/cpp/ui4_rgba8_to_nv12_linear.spv");
-
 pub(crate) const SPRITE_QUAD_WORKLIST_RGBA8_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/cpp/sprite_quad_worklist_rgba8.bin");
 pub(crate) const SPRITE_QUAD_WORKLIST_RGBA8_ADLS_SPV: &[u8] =
@@ -824,9 +805,6 @@ pub(crate) const GLYPH_MASK_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
     GLYPH_MASK_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
 pub(crate) const UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_BIN_SHA256: [u8; 32] =
     UI4_NV12_TILE64_TO_RGBA8_FRAME_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
-pub(crate) const UI4_RGBA8_TO_NV12_LINEAR_ADLS_BIN_SHA256: [u8; 32] =
-    UI4_RGBA8_TO_NV12_LINEAR_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
-
 pub(crate) const SPRITE_QUAD_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
     SPRITE_QUAD_WORKLIST_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
 pub(crate) const UI4_COMPOSE_LAYERS_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
