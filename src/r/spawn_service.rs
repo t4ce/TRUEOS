@@ -1288,7 +1288,7 @@ fn spawn_unix_fd_probe(spawner: Spawner) -> SpawnAttempt {
 
 const fn unix_fd_probe_task_spec() -> TaskSpec {
     if crate::allcaps::probes::UNIX_FD_PROBE {
-        TaskSpec::enabled(
+        TaskSpec::disabled(
             "unix-fd-probe",
             crate::r::readiness::TRUEOSFS_ROOT_MOUNTED | crate::r::readiness::TRUEOSFS_INDEX_READY,
             &UNIX_FD_PROBE_STARTED,
@@ -1335,7 +1335,7 @@ const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
         settle_ms: 250,
     },
     BlueprintAutostart {
-        enabled: true,
+        enabled: false,
         label: "img",
         archive: "img.bp",
         online_selector: Some("img"),
@@ -1402,16 +1402,6 @@ const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
         archive: "hello_world.bp",
         online_selector: None,
         slot: "h_w",
-        args: &[],
-        launch_script: None,
-        settle_ms: 750,
-    },
-    BlueprintAutostart {
-        enabled: false,
-        label: "chatserver",
-        archive: "chatserver.bp",
-        online_selector: None,
-        slot: "cht",
         args: &[],
         launch_script: None,
         settle_ms: 750,
@@ -1946,7 +1936,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     ),
     unix_fd_probe_task_spec(),
     TaskSpec::enabled("app-vm-run-queue", 0, &APP_VM_RUN_QUEUE_STARTED, spawn_app_vm_run_queue),
-    TaskSpec::enabled(
+    TaskSpec::disabled(
         "weave-hello-autostart",
         crate::r::readiness::BACKGROUND_AP_WORKER_READY | crate::r::readiness::VTHREAD_HW_TAG_READY,
         &WEAVE_HELLO_AUTOSTART_STARTED,
