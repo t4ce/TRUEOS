@@ -2732,6 +2732,47 @@ pub(super) fn build_ring_batch_start_words(
     Some(ring_offset + ring_job_bytes)
 }
 
+/// Append one persistent-context ring entry and wrap on a power-of-two ring
+/// boundary. The 64-byte stride divides every supported media ring size and
+/// leaves the unused tail as MI_NOOPs.
+pub(super) fn append_ring_batch_start_words(
+    ring_virt: *mut u8,
+    ring_bytes: usize,
+    ring_offset: usize,
+    result_gpu_addr: u64,
+    prelaunch_marker: u32,
+    batch_gpu_addr: u64,
+    mode: MediaJobMode,
+) -> Option<usize> {
+    const ENTRY_BYTES: usize = 64;
+    if ring_bytes < ENTRY_BYTES
+        || !ring_bytes.is_power_of_two()
+        || !ring_bytes.is_multiple_of(ENTRY_BYTES)
+        || ring_offset >= ring_bytes
+        || !ring_offset.is_multiple_of(ENTRY_BYTES)
+    {
+        return None;
+    }
+    let written_tail = build_ring_batch_start_words(
+        ring_virt,
+        ring_bytes,
+        ring_offset,
+        result_gpu_addr,
+        prelaunch_marker,
+        batch_gpu_addr,
+        mode,
+    )?;
+    let padding_bytes = ring_offset + ENTRY_BYTES - written_tail;
+    unsafe {
+        let padding = core::slice::from_raw_parts_mut(
+            ring_virt.add(written_tail).cast::<u32>(),
+            padding_bytes / core::mem::size_of::<u32>(),
+        );
+        padding.fill(MI_NOOP);
+    }
+    Some((ring_offset + ENTRY_BYTES) & (ring_bytes - 1))
+}
+
 /// Build a first-level trampoline for a codec secondary. The ring enters this
 /// primary as a normal first-level batch; MI_BATCH_BUFFER_START then selects
 /// the codec batch's second-level storage. MI_BATCH_BUFFER_END in the codec
@@ -2941,6 +2982,56 @@ pub(super) fn init_gen12_video_context_image(
     state[CTX_RING_CTL_DW] = ring_ctl;
     state[idx] = MI_BATCH_BUFFER_END | 1;
     true
+}
+
+/// Publish only TAIL in a previously registered video HWLRCA. GuC owns HEAD
+/// and the remainder of the context image after first registration.
+pub(super) fn write_gen12_video_context_ring_tail(
+    context_virt: *mut u8,
+    context_len: usize,
+    ring_tail: u32,
+) -> bool {
+    const LRC_STATE_OFFSET_DWORDS: usize = 4096 / core::mem::size_of::<u32>();
+    const LRC_CONTEXT_CONTROL_VALUE_DW: usize = 3;
+    const LRC_RING_TAIL_VALUE_DW: usize = 7;
+    let total_dwords = context_len / core::mem::size_of::<u32>();
+    let first = LRC_STATE_OFFSET_DWORDS + LRC_CONTEXT_CONTROL_VALUE_DW;
+    let last = LRC_STATE_OFFSET_DWORDS + LRC_RING_TAIL_VALUE_DW;
+    if context_virt.is_null() || total_dwords <= last {
+        return false;
+    }
+    let dwords =
+        unsafe { core::slice::from_raw_parts_mut(context_virt.cast::<u32>(), total_dwords) };
+    let context_control = dwords[first];
+    dwords[last] = ring_tail;
+    dwords[first] = context_control;
+    unsafe {
+        crate::intel::dma_flush(
+            context_virt.add(first * core::mem::size_of::<u32>()),
+            (last - first + 1) * core::mem::size_of::<u32>(),
+        );
+    }
+    true
+}
+
+/// Read the ring HEAD last saved by GuC into a video HWLRCA.
+pub(super) fn read_gen12_video_context_ring_head(
+    context_virt: *mut u8,
+    context_len: usize,
+) -> Option<u32> {
+    const LRC_STATE_OFFSET_DWORDS: usize = 4096 / core::mem::size_of::<u32>();
+    const LRC_RING_HEAD_VALUE_DW: usize = 5;
+    let index = LRC_STATE_OFFSET_DWORDS + LRC_RING_HEAD_VALUE_DW;
+    if context_virt.is_null() || context_len / core::mem::size_of::<u32>() <= index {
+        return None;
+    }
+    unsafe {
+        crate::intel::dma_flush(
+            context_virt.add(index * core::mem::size_of::<u32>()),
+            core::mem::size_of::<u32>(),
+        );
+        Some(core::ptr::read_volatile(context_virt.cast::<u32>().add(index)))
+    }
 }
 
 pub(super) fn emit_store_dword_ppgtt(

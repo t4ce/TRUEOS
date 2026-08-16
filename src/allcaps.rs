@@ -59,8 +59,8 @@ pub mod ttstt {
 }
 
 pub mod media_encode {
-    // Experimental live-stream cadence soft cap. The fixed AVC SPS VUI timing
-    // in `intel/media/avc_encode_probe.rs` must advertise the same rate.
+    // Single source of truth for stream pacing and AVC SPS VUI timing.
+    // The encoder currently validates the 40, 50 and 60 Hz operating points.
     pub const REALTIME_HZ: usize = 50;
     pub const STREAM_MAX_ACCESS_UNIT_BYTES: usize = 4 * 1024 * 1024;
     pub const VALIDATION_SESSION_SECONDS: usize = 10;

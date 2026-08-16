@@ -48,6 +48,41 @@ const EGRESS_QUEUE_POLL_MS: u64 = 1;
 // of the 64 KiB byte ring and can be admitted in one network-service turn.
 const UDP_RECEIPT_WINDOW_FRAGMENTS: usize = 8;
 
+/// Preserve an exact average cadence when the timer frequency is not evenly
+/// divisible by the requested frame rate (notably 60 Hz).
+struct FractionalCadenceTicks {
+    whole: u64,
+    remainder: u64,
+    divisor: u64,
+    phase: u64,
+}
+
+impl FractionalCadenceTicks {
+    fn new(timer_hz: u64, target_hz: usize) -> Self {
+        let divisor = target_hz as u64;
+        Self {
+            whole: (timer_hz / divisor).max(1),
+            remainder: if timer_hz >= divisor {
+                timer_hz % divisor
+            } else {
+                0
+            },
+            divisor,
+            phase: 0,
+        }
+    }
+
+    fn next(&mut self) -> u64 {
+        let mut ticks = self.whole;
+        self.phase += self.remainder;
+        if self.phase >= self.divisor {
+            self.phase -= self.divisor;
+            ticks += 1;
+        }
+        ticks
+    }
+}
+
 #[derive(Debug)]
 struct EncodedAccessUnit {
     sequence: u32,
@@ -453,7 +488,7 @@ where
         prefill_us,
     );
 
-    let period_ticks = (embassy_time::TICK_HZ / target_hz as u64).max(1);
+    let mut cadence = FractionalCadenceTicks::new(embassy_time::TICK_HZ, target_hz);
     let started_ns = crate::chronos::monotonic_nanos();
     mark_egress_cadence_started(session_id, started_ns);
     let mut next_deadline = Instant::now();
@@ -463,7 +498,7 @@ where
     let mut producer_dropped_bytes = 0usize;
     for index in 0..access_unit_count {
         if index != 0 {
-            next_deadline += Duration::from_ticks(period_ticks);
+            next_deadline += Duration::from_ticks(cadence.next());
             let now = Instant::now();
             if now < next_deadline {
                 Timer::at(next_deadline).await;
@@ -901,5 +936,12 @@ mod tests {
             CheckedSendReceipt::Backpressure
         );
         assert_eq!(classify_checked_send_result(Err("link down")), CheckedSendReceipt::Failed);
+    }
+
+    #[test]
+    fn sixty_hz_fractional_period_preserves_one_second() {
+        let mut cadence = FractionalCadenceTicks::new(1_000, 60);
+        let ticks = (0..60).map(|_| cadence.next()).sum::<u64>();
+        assert_eq!(ticks, 1_000);
     }
 }

@@ -500,18 +500,55 @@ const VD_PIPELINE_FLUSH: [u32; 2] = [0x7780_0000, 0x0002_001a];
 const MI_FLUSH_DW_VIDEO_CACHE_INVALIDATE: [u32; 5] = [0x1300_0082, 0, 0, 0, media::MI_NOOP];
 const MI_FLUSH_DW_NO_POSTSYNC: [u32; 5] = [0x1300_0002, 0, 0, 0, media::MI_NOOP];
 
-// VUI timing matches the 40 fps live-stream cadence soft cap:
-// time_scale / (2 * num_units_in_tick) = 80 / 2.
-const SPS_VUI_FRAME_RATE_HZ: usize = 40;
-// 2560x1440 at 40 fps is 576,000 macroblocks/s. Level 5.0 admits both the
-// 14,400-macroblock frame and that rate; Level 4.1 does not. Since 1440 is
-// already macroblock-aligned, the SPS carries no frame crop. One short-term
-// reference frame supports the IDR-P GOP without changing the decoded raster.
+// The SPS timing is derived from the same knob as the producer cadence:
+// time_scale / (2 * num_units_in_tick) = (2 * REALTIME_HZ) / 2.
+// At this bit position the final time_scale byte also contains the fixed-rate
+// flag, hence `(time_scale << 1) | 1`. The three validated operating points do
+// not require another emulation-prevention byte.
+const SPS_VUI_FRAME_RATE_HZ: usize = crate::allcaps::media_encode::REALTIME_HZ;
+const SPS_VUI_TIME_SCALE_AND_FIXED_RATE: u8 = (SPS_VUI_FRAME_RATE_HZ * 4 + 1) as u8;
+// 2560x1440 is 14,400 macroblocks/frame. Level 5.0 covers 40 fps; 50 and
+// 60 fps require Level 5.1 for their higher macroblock processing rate.
+const SPS_LEVEL_IDC: u8 = if SPS_VUI_FRAME_RATE_HZ <= 40 {
+    0x32
+} else {
+    0x33
+};
+const _: () = assert!(matches!(SPS_VUI_FRAME_RATE_HZ, 40 | 50 | 60));
+// Since 1440 is macroblock-aligned, the SPS carries no frame crop. One
+// short-term reference frame supports the IDR-P GOP without changing raster.
 const SPS: [u8; 30] = [
-    0x00, 0x00, 0x00, 0x01, 0x67, 0x42, 0x40, 0x32, 0x95, 0xa0, 0x0a, 0x00, 0x2d, 0x6c, 0x05, 0xa2,
-    0x00, 0x00, 0x03, 0x00, 0x02, 0x00, 0x00, 0x03, 0x00, 0xa1, 0x1e, 0x10, 0x08, 0x54,
+    0x00,
+    0x00,
+    0x00,
+    0x01,
+    0x67,
+    0x42,
+    0x40,
+    SPS_LEVEL_IDC,
+    0x95,
+    0xa0,
+    0x0a,
+    0x00,
+    0x2d,
+    0x6c,
+    0x05,
+    0xa2,
+    0x00,
+    0x00,
+    0x03,
+    0x00,
+    0x02,
+    0x00,
+    0x00,
+    0x03,
+    0x00,
+    SPS_VUI_TIME_SCALE_AND_FIXED_RATE,
+    0x1e,
+    0x10,
+    0x08,
+    0x54,
 ];
-const _: () = assert!(SPS_VUI_FRAME_RATE_HZ == crate::allcaps::media_encode::REALTIME_HZ);
 const PPS: [u8; 8] = [0x00, 0x00, 0x00, 0x01, 0x68, 0xce, 0x38, 0x80];
 const IDR_SLICE_HEADER: [u8; 8] = [0x00, 0x00, 0x01, 0x65, 0x88, 0x80, 0x48, 0x00];
 const IDR_SLICE_HEADER_BITS: usize = 53;
@@ -792,6 +829,10 @@ struct ProbeBacking {
     arena_phys: u64,
     arena_virt: *mut u8,
     ppgtt: crate::intel::ppgtt::SparsePpgtt,
+    guc_token: Option<crate::intel::guc_submission::GucContextToken>,
+    context_initialized: bool,
+    ring_tail_bytes: usize,
+    submissions: u64,
 }
 
 unsafe impl Send for ProbeBacking {}
@@ -1039,9 +1080,11 @@ async fn run_with_source(source_kind: AvcFrameSource, picture: AvcPicture) -> Av
         media::reset_media_engine(dev, engine, backing.context_virt);
     }
 
-    unsafe {
-        core::ptr::write_bytes(backing.ring_virt, 0, RING_BYTES);
-        core::ptr::write_bytes(backing.context_virt, 0, CONTEXT_BYTES);
+    if !backing.context_initialized {
+        unsafe {
+            core::ptr::write_bytes(backing.ring_virt, 0, RING_BYTES);
+            core::ptr::write_bytes(backing.context_virt, 0, CONTEXT_BYTES);
+        }
     }
     clear_frame_result(backing.arena_virt);
 
@@ -1121,10 +1164,11 @@ async fn run_with_source(source_kind: AvcFrameSource, picture: AvcPicture) -> Av
     }
     report.primary_batch_bytes = primary_batch_bytes;
 
-    let Some(ring_tail_bytes) = media::build_ring_batch_start_words(
+    let old_ring_tail_bytes = backing.ring_tail_bytes;
+    let Some(ring_tail_bytes) = media::append_ring_batch_start_words(
         backing.ring_virt,
         RING_BYTES,
-        0,
+        old_ring_tail_bytes,
         RESULT_GPU,
         KICKOFF_MARKER,
         BATCH_GPU,
@@ -1132,11 +1176,19 @@ async fn run_with_source(source_kind: AvcFrameSource, picture: AvcPicture) -> Av
     ) else {
         return fail(report, AvcEncodeProbeFailure::ContextBuild, started_ns);
     };
-    report.ring_bytes = ring_tail_bytes;
+    report.ring_bytes = 64;
     let Some(ring_ctl) = media::ring_ctl_value_for_size(RING_BYTES) else {
         return fail(report, AvcEncodeProbeFailure::ContextBuild, started_ns);
     };
-    if !media::init_gen12_video_context_image(
+    if backing.context_initialized {
+        if !media::write_gen12_video_context_ring_tail(
+            backing.context_virt,
+            CONTEXT_BYTES,
+            ring_tail_bytes as u32,
+        ) {
+            return fail(report, AvcEncodeProbeFailure::ContextBuild, started_ns);
+        }
+    } else if !media::init_gen12_video_context_image(
         backing.context_virt,
         CONTEXT_BYTES,
         engine.ring_base,
@@ -1156,46 +1208,63 @@ async fn run_with_source(source_kind: AvcFrameSource, picture: AvcPicture) -> Av
     if matches!(source_kind, AvcFrameSource::BootProof) {
         crate::intel::dma_flush(source_virt, SOURCE_BYTES);
     }
-    crate::intel::dma_flush(backing.ring_virt, ring_tail_bytes);
-    crate::intel::dma_flush(backing.context_virt, CONTEXT_BYTES);
+    unsafe {
+        crate::intel::dma_flush(backing.ring_virt.add(old_ring_tail_bytes), report.ring_bytes);
+    }
+    if !backing.context_initialized {
+        crate::intel::dma_flush(backing.context_virt, CONTEXT_BYTES);
+    }
     crate::intel::ggtt_invalidate(dev);
     core::sync::atomic::fence(Ordering::SeqCst);
 
     let (hwlrca_lo, hwlrca_hi) = media::build_media_guc_context_descriptor(CONTEXT_GPU);
     report.hwlrca_lo = hwlrca_lo;
     report.hwlrca_hi = hwlrca_hi;
-    let token = match crate::intel::guc_submission::INTEL_GUC_SCHEDULER.register(
-        dev,
-        crate::gpu::physical::PhysicalEngineId::VCS0,
-        hwlrca_lo,
-        hwlrca_hi,
-        crate::gpu::physical::PhysicalContextPriority::KernelNormal,
-    ) {
-        Ok(token) => token,
-        Err(_) => return fail(report, AvcEncodeProbeFailure::RegisterRejected, started_ns),
+    let first_registration = backing.guc_token.is_none();
+    let token = match backing.guc_token {
+        Some(token) => token,
+        None => match crate::intel::guc_submission::INTEL_GUC_SCHEDULER.register(
+            dev,
+            crate::gpu::physical::PhysicalEngineId::VCS0,
+            hwlrca_lo,
+            hwlrca_hi,
+            crate::gpu::physical::PhysicalContextPriority::KernelNormal,
+        ) {
+            Ok(token) => {
+                backing.guc_token = Some(token);
+                token
+            }
+            Err(_) => return fail(report, AvcEncodeProbeFailure::RegisterRejected, started_ns),
+        },
     };
     report.registered = true;
+    backing.context_initialized = true;
+    // Once TAIL is published to a live GuC context it must never be rolled
+    // back, even if the schedule acknowledgement itself becomes ambiguous.
+    backing.ring_tail_bytes = ring_tail_bytes;
 
     let submission = match crate::intel::guc_submission::INTEL_GUC_SCHEDULER.submit(dev, token) {
         Ok(submission) => submission,
         Err(_) => {
-            report.context_destroyed = crate::intel::guc_submission::INTEL_GUC_SCHEDULER
-                .destroy(dev, token)
-                .is_ok();
-            if !report.context_destroyed {
-                return quarantine(
-                    lane,
-                    report,
-                    AvcEncodeProbeFailure::ContextTeardown,
-                    started_ns,
-                );
-            }
-            return fail(report, AvcEncodeProbeFailure::SubmitRejected, started_ns);
+            return quarantine(lane, report, AvcEncodeProbeFailure::SubmitRejected, started_ns);
         }
     };
     report.state = AvcEncodeProbeState::Submitted;
     report.submitted = true;
     report.serial = submission.serial;
+    backing.submissions = backing.submissions.saturating_add(1);
+    if first_registration || backing.submissions.is_power_of_two() {
+        crate::log_info!(target: "intel/media-encode";
+            "intel/media-encode: persistent-vcs0-context submission={} first_registration={} token=0x{:X} old_tail={} new_tail={} ring_job_bytes={} source={:?} action=resubmit-retained-hwlrca\n",
+            backing.submissions,
+            first_registration as u8,
+            token.raw(),
+            old_ring_tail_bytes,
+            ring_tail_bytes,
+            report.ring_bytes,
+            raw_format,
+        );
+    }
     publish(report);
 
     let result_virt = unsafe { backing.arena_virt.add(RESULT_OFFSET) };
@@ -1228,12 +1297,25 @@ async fn run_with_source(source_kind: AvcFrameSource, picture: AvcPicture) -> Av
         return quarantine(lane, report, AvcEncodeProbeFailure::CompletionTimeout, started_ns);
     }
 
-    report.context_destroyed = crate::intel::guc_submission::INTEL_GUC_SCHEDULER
-        .destroy(dev, token)
-        .is_ok();
-    if !report.context_destroyed {
-        return quarantine(lane, report, AvcEncodeProbeFailure::ContextTeardown, started_ns);
+    // The terminal batch marker proves execution, but GuC still owns the
+    // cache line containing saved HEAD and software TAIL. Observe saved HEAD
+    // before a later picture advances that line in place.
+    let context_save_deadline = crate::chronos::monotonic_nanos().saturating_add(TIMEOUT_NS);
+    loop {
+        let saved_head =
+            media::read_gen12_video_context_ring_head(backing.context_virt, CONTEXT_BYTES)
+                .unwrap_or(u32::MAX)
+                & (RING_BYTES as u32 - 1);
+        if saved_head == ring_tail_bytes as u32 {
+            break;
+        }
+        if crate::chronos::monotonic_nanos() >= context_save_deadline {
+            return quarantine(lane, report, AvcEncodeProbeFailure::ContextTeardown, started_ns);
+        }
+        Timer::after(Duration::from_micros(0)).await;
     }
+    // False now means deliberately retained rather than teardown failure.
+    report.context_destroyed = false;
 
     if report.kickoff != KICKOFF_MARKER
         || report.codec_begin != CODEC_BEGIN_MARKER
@@ -1330,6 +1412,10 @@ fn build_backing(dev: crate::intel::Dev) -> Option<ProbeBacking> {
         arena_phys,
         arena_virt,
         ppgtt,
+        guc_token: None,
+        context_initialized: false,
+        ring_tail_bytes: 0,
+        submissions: 0,
     })
 }
 
