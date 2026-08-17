@@ -514,7 +514,7 @@ const SPS_LEVEL_IDC: u8 = if SPS_VUI_FRAME_RATE_HZ <= 40 {
 } else {
     0x33
 };
-const _: () = assert!(matches!(SPS_VUI_FRAME_RATE_HZ, 40 | 50 | 60));
+const _: () = assert!(matches!(SPS_VUI_FRAME_RATE_HZ, 33 | 40 | 50 | 60));
 // Since 1440 is macroblock-aligned, the SPS carries no frame crop. One
 // short-term reference frame supports the IDR-P GOP without changing raster.
 const SPS: [u8; 30] = [

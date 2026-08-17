@@ -379,8 +379,15 @@ impl<'a> AlignedWriter<'a> {
     }
 
     fn mode_commands_text(&self, mode: ShellMode2) -> AllocString {
+        let available_width = self
+            .line_width()
+            .saturating_sub(banner_left_visible_width(self.io.output_mask()))
+            .saturating_sub(BANNER_GROUP_GAP_WIDTH);
         match mode {
             ShellMode2::Apps => shell2_apps::command_names_text(),
+            ShellMode2::Cmd if (self.io.output_mask() & OUTPUT_LOCAL_MASK) != 0 => {
+                shell2_cmd_registry::command_names_status_text_fitting(available_width)
+            }
             ShellMode2::Cmd => command_names_status_text(),
         }
     }

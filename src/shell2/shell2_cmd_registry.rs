@@ -722,6 +722,60 @@ pub(crate) fn command_names_status_text() -> AllocString {
     out
 }
 
+/// Return complete, colorized command tokens that fit one titlebar segment.
+/// The local UI4 frontend has fewer columns than the desktop terminal, so a
+/// full legend must be shortened without splitting ANSI escape sequences.
+pub(crate) fn command_names_status_text_fitting(max_width: usize) -> AllocString {
+    let full = command_names_status_text();
+    if super::ecma48::visible_width(full.as_str()) <= max_width {
+        return full;
+    }
+
+    const STATUS_ORDER: &[&str] = &[
+        "7z", "rm", "mv", "sha", "shot", "disc", "cry", "backup", "install", "update", "hyper", "surf",
+        "net", "ssh", "qjs", "grid", "helio", "tts", "stt", "cpp", "vgpu", "aud", "vid", "acpi",
+        "tlb", "ram", "smp", "etc",
+    ];
+
+    let content_width = max_width.saturating_sub(3);
+    let mut out = AllocString::new();
+    for name in STATUS_ORDER {
+        if *name == "mv" {
+            continue;
+        }
+        let mut token = AllocString::new();
+        if *name == "backup" {
+            push_colored_status_token(&mut token, name, STATUS_PINK_RGB);
+        } else if let Some(entry) = BUILTIN_CMD_REGISTRY
+            .iter()
+            .find(|entry| entry.advertised && entry.name == *name)
+        {
+            if entry.name == "rm" {
+                push_rm_mv_status_token(&mut token);
+            } else {
+                push_status_command_name(&mut token, entry);
+            }
+        } else {
+            continue;
+        }
+
+        let separator = if out.is_empty() { "" } else { " " };
+        let candidate_width = super::ecma48::visible_width(out.as_str())
+            .saturating_add(separator.len())
+            .saturating_add(super::ecma48::visible_width(token.as_str()));
+        if candidate_width > content_width {
+            break;
+        }
+        out.push_str(separator);
+        out.push_str(token.as_str());
+    }
+    if out.is_empty() {
+        return AllocString::from("...");
+    }
+    out.push_str("...");
+    out
+}
+
 fn push_rm_mv_status_token(out: &mut AllocString) {
     for ch in "(r[m)v]".chars() {
         let mut glyph = [0u8; 4];
