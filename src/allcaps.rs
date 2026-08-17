@@ -61,7 +61,7 @@ pub mod ttstt {
 pub mod media_encode {
     // Single source of truth for stream pacing and AVC SPS VUI timing.
     // The encoder currently validates the 40, 50 and 60 Hz operating points.
-    pub const REALTIME_HZ: usize = 50;
+    pub const REALTIME_HZ: usize = 33;
     pub const STREAM_MAX_ACCESS_UNIT_BYTES: usize = 4 * 1024 * 1024;
     pub const VALIDATION_SESSION_SECONDS: usize = 10;
     pub const VALIDATION_SESSION_ACCESS_UNITS: usize = REALTIME_HZ * VALIDATION_SESSION_SECONDS;
