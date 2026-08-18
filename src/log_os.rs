@@ -72,7 +72,7 @@ pub(crate) mod flags {
     pub(crate) const NET_LOG_LEVEL: LogLevelPolicy = if BOOT_DIAG_PROFILE_ENABLED {
         LogLevelPolicy::up(LevelFilter::Trace)
     } else {
-        LogLevelPolicy::up(LevelFilter::Error)
+        LogLevelPolicy::up(LevelFilter::Info)
     };
     pub(crate) const USB_LOG_LEVEL: LogLevelPolicy = if USB_UAS_DIAG_PROFILE_ENABLED {
         LogLevelPolicy::up(LevelFilter::Trace)

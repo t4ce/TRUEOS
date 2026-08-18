@@ -503,6 +503,11 @@ pub enum TerminalReentry {
     Ready(TerminalLease),
 }
 
+/// Atomically claim the launch-reserved terminal and return its first lease.
+///
+/// Until this call succeeds, Shell2 remains the visible/input owner and the
+/// Blueprint may perform ordinary fallible initialization without blacking
+/// out the launching terminal.
 pub fn terminal_initial_lease() -> Result<TerminalLease, TerminalLeaseError> {
     let mut epoch = 0;
     let rc = unsafe { vcabi::trueos_cabi_blueprint_terminal_lease_current_v1(0, &mut epoch) };

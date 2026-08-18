@@ -52,6 +52,9 @@ pub(crate) fn prebind_import_readiness(name: &str) -> u32 {
 }
 
 pub(crate) fn prebind_import_error(name: &str) -> Option<&'static str> {
+    if let Some(reason) = crate::unix_compat::unsupported_unix_import_reason(name) {
+        return Some(reason);
+    }
     if name.starts_with("trueos_cabi_fs_") || name.starts_with("trueos_cabi_trueosfs_") {
         return Some(
             "synchronous Blueprint filesystem ABI removed; rebuild against trueos::async_fs",
@@ -69,6 +72,25 @@ fn is_rayon_import(name: &str) -> bool {
     name.starts_with("trueos_cabi_rayon_") || name.starts_with("trueos_rayon_")
 }
 
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn directory_stream_imports_fail_prebind_before_guest_execution() {
+        for name in [
+            "opendir",
+            "fdopendir",
+            "readdir",
+            "readdir_r",
+            "closedir",
+            "dirfd",
+        ] {
+            let error = super::prebind_import_error(name)
+                .unwrap_or_else(|| panic!("{name} was accepted as a functional import"));
+            assert!(error.contains("directory-stream"), "unexpected error: {error}");
+        }
+    }
+}
+
 pub(crate) fn prebind_required_readiness(module_bytes: &[u8]) -> Result<u32, String> {
     let module = super::parse_blueprint(module_bytes).map_err(String::from)?;
     let unpacked = super::unpack_blueprint(&module).map_err(String::from)?;
@@ -83,7 +105,7 @@ pub(crate) fn prebind_required_readiness(module_bytes: &[u8]) -> Result<u32, Str
     let imports = super::elf_imports(unpacked.as_slice()).map_err(String::from)?;
     for import in imports.iter() {
         if let Some(err) = prebind_import_error(import.name) {
-            return Err(String::from(err));
+            return Err(alloc::format!("unsupported Blueprint import {}: {}", import.name, err));
         }
         required |= prebind_import_readiness(import.name);
     }

@@ -203,6 +203,7 @@ pub const OP_BP_TERMINAL_LEASE_CURRENT_V1: u32 = 0x134; // arg0 ready epoch or 0
 pub const OP_BP_TERMINAL_LEASE_RELEASE_V1: u32 = 0x135; // arg0 expected active epoch -> parking ticket/error
 pub const OP_BP_TERMINAL_LEASE_POLL_REENTRY_V1: u32 = 0x136; // arg0 parking ticket -> pending/active epoch/error
 pub const OP_BP_TERMINAL_SURFACE_SNAPSHOT_V1: u32 = 0x137; // active terminal surface generation + geometry record/error
+pub const OP_BP_LOG_RECORD_V1: u32 = 0x138; // arg0 level,arg1 target bytes,payload target || message -> host LogOs
 pub const OP_NET_TCP_WRITE: u32 = 0x10; // request payload -> net tcp shell tx
 pub const OP_NET_TCP_READ: u32 = 0x11; // net tcp shell rx -> response payload
 pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
@@ -3280,6 +3281,63 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             write_response(vm_id, seq, STATUS_OK, packed, 0);
             DispatchOutcome::Resume
         }
+        OP_BP_LOG_RECORD_V1 => {
+            const TARGET_MAX: usize = 256;
+            let Some(data) = request_payload(vm_id, req_len) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let target_len = arg1 as usize;
+            let level = match arg0 {
+                1 => log::Level::Error,
+                2 => log::Level::Warn,
+                3 => log::Level::Info,
+                4 => log::Level::Debug,
+                5 => log::Level::Trace,
+                _ => {
+                    write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                    return DispatchOutcome::Resume;
+                }
+            };
+            if target_len == 0 || target_len > TARGET_MAX || target_len > data.len() {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            }
+            let Ok(target) = core::str::from_utf8(&data[..target_len]) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let Ok(message) = core::str::from_utf8(&data[target_len..]) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let message = message.trim_end_matches(&['\r', '\n'][..]);
+            if target == "texplo-startup-probe" {
+                // This sparse, enumerated startup channel exists specifically
+                // to distinguish pre-lease app initialization from terminal
+                // transport and first-frame readiness. Reject control bytes so
+                // an application cannot forge adjacent LogOs records.
+                if !message.bytes().all(|byte| {
+                    byte.is_ascii_alphanumeric() || matches!(byte, b'=' | b'-' | b'_' | b':' | b' ')
+                }) {
+                    write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                    return DispatchOutcome::Resume;
+                }
+                crate::log_os::blueprint_important_line(format_args!(
+                    "texplo-startup-probe: vm={} {}\n",
+                    vm_id, message
+                ));
+            } else {
+                crate::log_os::log_with_area_purpose(
+                    crate::log_os::flags::LogArea::Apps,
+                    level,
+                    Some(crate::log_os::purpose_for_level(level)),
+                    format_args!("vm{} {}: {}\n", vm_id, target, message),
+                );
+            }
+            write_response(vm_id, seq, STATUS_OK, data.len() as u64, 0);
+            DispatchOutcome::Resume
+        }
         OP_BP_EXIT_REASON => {
             let Some(data) = request_payload(vm_id, req_len) else {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
@@ -3304,15 +3362,39 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             } else {
                 core::str::from_utf8(data).unwrap_or("non-utf8-shutdown-reason")
             };
+            // VM teardown is the authoritative terminal-owner revocation
+            // boundary.  Do this before accepting the stop request so an
+            // application that exits before its own RAII guard is built (or
+            // whose Rust entry point terminates through `_exit`) cannot leave
+            // the launching shell's terminal attached to a stopped guest.
+            // `clear_blueprint_process_context` remains the final backstop if
+            // an exact backend refuses this first release.
+            crate::log_os::blueprint_important_line(format_args!(
+                "terminal-lifecycle: vm={} phase=shutdown-enter state=stop-requested\n",
+                vm_id
+            ));
+            let terminal_returned = crate::hv::blueprint_console_return_to_cli(vm_id);
             crate::hv::blueprint_console_set_exit_reason(vm_id, reason);
             crate::hv::mark_blueprint_clean_exit(vm_id);
             write_response(vm_id, seq, STATUS_OK, data.len() as u64, 0);
+            crate::log_os::blueprint_important_line(format_args!(
+                "terminal-lifecycle: vm={} phase=shutdown-ack state=stopping terminal_returned={}\n",
+                vm_id, terminal_returned as u8
+            ));
             DispatchOutcome::Stop
         }
         OP_BP_RETURN_TO_CLI => {
+            crate::log_os::blueprint_important_line(format_args!(
+                "terminal-lifecycle: vm={} phase=return-to-cli-enter state=release-requested\n",
+                vm_id
+            ));
             let changed = crate::hv::blueprint_console_return_to_cli(vm_id);
             if changed {
                 write_response(vm_id, seq, STATUS_OK, 1, 0);
+                crate::log_os::blueprint_important_line(format_args!(
+                    "terminal-lifecycle: vm={} phase=return-to-cli-ack state=returned\n",
+                    vm_id
+                ));
             } else {
                 write_response(
                     vm_id,
@@ -3321,6 +3403,10 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                     crate::hv::BlueprintTerminalLeaseError::NotActive.code(),
                     0,
                 );
+                crate::log_os::blueprint_important_line(format_args!(
+                    "terminal-lifecycle: vm={} phase=return-to-cli-failed state=not-active\n",
+                    vm_id
+                ));
             }
             DispatchOutcome::Resume
         }

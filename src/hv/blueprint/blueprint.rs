@@ -1359,6 +1359,12 @@ fn resolve_known_import(name: &str) -> Option<usize> {
 }
 
 fn resolve_import(name: &str) -> Option<usize> {
+    // Imports that are deliberately classified as unsupported must not fall
+    // through to the generic unresolved/Joker stub. Prebind rejects them on
+    // the normal launch path; this check keeps every direct loader path honest.
+    if crate::unix_compat::unsupported_unix_import_reason(name).is_some() {
+        return None;
+    }
     resolve_known_import(name).or_else(|| resolve_unresolved_import(name))
 }
 

@@ -1,3 +1,4 @@
+use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 use core::sync::atomic::Ordering;
 
@@ -8,16 +9,88 @@ use crate::net::adapter::{
     NetCommand, NetEvent, NetHandle, NetQueue, SocketKind, register_app_queues,
 };
 use crate::shell2::backends::net_tcp::{
-    NET_SHELL_STARTED, NET_SHELL_STATE, NET_SHELL_TCP_PORT, NetShellOwnershipSnapshot,
-    enqueue_net_shell_rx_if_unchanged, net_shell_begin_connection, net_shell_direct_reset_terminal,
-    net_shell_ownership_snapshot, net_shell_terminal_size_query, net_shell_write_bytes,
-    update_net_shell_surface_size,
+    NET_SHELL_STARTED, NET_SHELL_STATE, NET_SHELL_TCP_PORT, NetShellDirectControlToken,
+    NetShellOwnershipSnapshot, admit_net_shell_tx_chunk, enqueue_net_shell_rx_if_unchanged,
+    net_shell_begin_connection, net_shell_direct_reset_terminal, net_shell_ownership_snapshot,
+    net_shell_terminal_size_query, net_shell_write_bytes, update_net_shell_surface_size,
 };
 
 const TERMINAL_SIZE_QUERY: &[u8] = b"\x1b[18t";
 const INITIAL_REPAINT_WAIT_TICKS: u32 = 8;
 const RESIZE_QUERY_TICKS: u32 = 100;
 const TX_CHUNK_BYTES: usize = 8 * 1024;
+
+/// One command accepted by the adapter queue.  `TcpSent` reports byte counts,
+/// not command IDs, so this FIFO retains the explicit control token until the
+/// corresponding bytes are reported as flushed from the adapter/socket.
+struct PendingTcpWrite {
+    handle: NetHandle,
+    remaining: usize,
+    len: usize,
+    direct_control: Option<NetShellDirectControlToken>,
+}
+
+fn account_tcp_sent(
+    pending: &mut VecDeque<PendingTcpWrite>,
+    handle: NetHandle,
+    mut sent: usize,
+    mut control_complete: impl FnMut(NetShellDirectControlToken, usize),
+) {
+    while sent > 0 {
+        // Events from separate TCP handles can interleave.  Keep FIFO order
+        // *within* one handle, but never let an old socket's pending entry
+        // block accounting for a new socket before its Closed event is seen.
+        let Some(index) = pending.iter().position(|entry| entry.handle == handle) else {
+            break;
+        };
+        let complete = {
+            let Some(entry) = pending.get_mut(index) else {
+                break;
+            };
+            let consumed = sent.min(entry.remaining);
+            entry.remaining -= consumed;
+            sent -= consumed;
+            entry.remaining == 0
+        };
+        if !complete {
+            break;
+        }
+        if let Some(entry) = pending.remove(index)
+            && let Some(token) = entry.direct_control
+        {
+            control_complete(token, entry.len);
+        }
+    }
+}
+
+fn forget_tcp_handle(pending: &mut VecDeque<PendingTcpWrite>, handle: NetHandle) {
+    pending.retain(|entry| entry.handle != handle);
+}
+
+fn log_direct_control_probe(
+    probe: &str,
+    token: NetShellDirectControlToken,
+    handle: NetHandle,
+    bytes: usize,
+) {
+    if let Some(vm) = token.blueprint_vm() {
+        crate::log_os::service_important_line(format_args!(
+            "terminal-handoff probe={} owner_kind=blueprint owner={} vm={} epoch={} handle={} surface_generation={} bytes={}\n",
+            probe, token.owner, vm, token.epoch, handle.0, token.surface_generation, bytes,
+        ));
+    } else {
+        crate::log_os::service_important_line(format_args!(
+            "terminal-handoff probe={} owner_kind=stream owner={} session={} epoch={} handle={} surface_generation={} bytes={}\n",
+            probe,
+            token.owner,
+            token.stream_session().unwrap_or_default(),
+            token.epoch,
+            handle.0,
+            token.surface_generation,
+            bytes,
+        ));
+    }
+}
 
 fn parse_terminal_size_report(data: &[u8]) -> Option<(usize, usize, usize, usize)> {
     let start = data.windows(2).position(|w| w == b"\x1b[")?;
@@ -169,6 +242,9 @@ pub async fn net_shell_task() {
         let mut logged_first_rx: bool = false;
         let mut logged_first_wire_rx: bool = false;
         let mut tx_log_budget: u32 = 16;
+        let mut pending_tcp_writes: VecDeque<PendingTcpWrite> = VecDeque::new();
+        let mut direct_control_admitted: Option<NetShellDirectControlToken> = None;
+        let mut direct_control_sent: Option<NetShellDirectControlToken> = None;
         let mut tcp_handle: Option<NetHandle> = None;
         let mut initial_repaint_handle: Option<NetHandle> = None;
         let mut initial_repaint_ticks: u32 = 0;
@@ -369,6 +445,20 @@ pub async fn net_shell_task() {
                         }
                     }
                     NetEvent::TcpSent { handle, len } => {
+                        account_tcp_sent(&mut pending_tcp_writes, handle, len, |token, bytes| {
+                            if direct_control_sent != Some(token) {
+                                direct_control_sent = Some(token);
+                                // TcpSent is an adapter/socket flush, not a peer ACK or
+                                // physical-wire receipt.  The tag makes this precise
+                                // boundary attributable without inspecting payload bytes.
+                                log_direct_control_probe(
+                                    "direct-control-socket-flushed",
+                                    token,
+                                    handle,
+                                    bytes,
+                                );
+                            }
+                        });
                         if tx_log_budget > 0 {
                             tx_log_budget -= 1;
                             crate::log!(
@@ -380,6 +470,7 @@ pub async fn net_shell_task() {
                         }
                     }
                     NetEvent::Closed { handle } => {
+                        forget_tcp_handle(&mut pending_tcp_writes, handle);
                         let closed_active = {
                             let mut st = NET_SHELL_STATE.lock();
                             if st.handle == Some(handle) {
@@ -437,39 +528,39 @@ pub async fn net_shell_task() {
             // snapshot, admission, and dequeue under the transport lock: a
             // direct-owner claim clears this queue and must not allow a stale
             // pre-claim chunk to reach the wire afterwards.
-            let tx_admission = {
-                let mut st = NET_SHELL_STATE.lock();
-                match st.handle {
-                    None => None,
-                    Some(_handle) if st.tx.is_empty() => None,
-                    Some(handle) => {
-                        let mut chunk = Vec::with_capacity(TX_CHUNK_BYTES);
-                        for &byte in st.tx.iter().take(TX_CHUNK_BYTES) {
-                            chunk.push(byte);
-                        }
-                        let chunk_len = chunk.len();
-                        let admitted = cmds
-                            .push(NetCommand::SendTcp {
-                                handle,
-                                data: chunk,
-                            })
-                            .is_ok();
-                        if admitted {
-                            for _ in 0..chunk_len {
-                                let _ = st.tx.pop_front();
-                            }
-                        }
-                        Some((handle, chunk_len, admitted))
+            let tx_admission = admit_net_shell_tx_chunk(TX_CHUNK_BYTES, |handle, data| {
+                cmds.push(NetCommand::SendTcp { handle, data }).is_ok()
+            });
+
+            if let Some(admission) = tx_admission {
+                if admission.admitted {
+                    pending_tcp_writes.push_back(PendingTcpWrite {
+                        handle: admission.handle,
+                        remaining: admission.len,
+                        len: admission.len,
+                        direct_control: admission.direct_control,
+                    });
+                    if let Some(token) = admission.direct_control
+                        && direct_control_admitted != Some(token)
+                    {
+                        direct_control_admitted = Some(token);
+                        log_direct_control_probe(
+                            "direct-control-admitted",
+                            token,
+                            admission.handle,
+                            admission.len,
+                        );
                     }
                 }
-            };
-
-            if let Some((handle, chunk_len, admitted)) = tx_admission {
                 if tx_log_budget > 0 {
                     tx_log_budget -= 1;
-                    crate::log!("net-shell: tx queue handle={} len={}\n", handle.0, chunk_len);
+                    crate::log!(
+                        "net-shell: tx queue handle={} len={}\n",
+                        admission.handle.0,
+                        admission.len
+                    );
                 }
-                if !admitted {
+                if !admission.admitted {
                     // Bytes remain in NET_SHELL_STATE and will be retried.
                     crate::log!("net-shell: tx queue full (will retry)\n");
                 }

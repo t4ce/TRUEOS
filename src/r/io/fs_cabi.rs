@@ -232,13 +232,13 @@ pub unsafe extern "C" fn trueos_cabi_write(stream: u32, bytes: *const u8, len: u
 /// rich terminal's byte stream. The numeric levels match `trueos::logl`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_log(
-    level: u32,
+    level_code: u32,
     target_ptr: *const u8,
     target_len: usize,
     message_ptr: *const u8,
     message_len: usize,
 ) -> i32 {
-    let level = match level {
+    let level = match level_code {
         1 => log::Level::Error,
         2 => log::Level::Warn,
         3 => log::Level::Info,
@@ -270,33 +270,42 @@ pub unsafe extern "C" fn trueos_cabi_log(
     let message = message.trim_end_matches(&['\r', '\n'][..]);
     let purpose = crate::log_os::purpose_for_level(level);
 
-    // Keep Blueprint application records visible in the global diagnostic
-    // stream as well. The Apps area is commonly filtered more aggressively,
-    // which otherwise hides startup failures before terminal handoff.
-    if let Some(vm_id) = crate::hv::current_hull_guest_context_vm_id() {
-        // A Hull executes with a private kernel data image, so the ordinary
-        // log router is not the BSP's global stream. Forward through the Hull
-        // reporting path used by the loader itself.
-        crate::hv::hvlogf(format_args!("blueprint-app: vm{} {}: {}", vm_id, target, message));
-    } else {
-        crate::log!("blueprint-app: {}: {}\n", target, message);
+    // A Hull owns a private copy of kernel static state. Routing a structured
+    // Blueprint record through the guest's local LogOs instance therefore
+    // cannot publish it to the BSP diagnostic stream. Use one atomic, typed
+    // VMCall record so the host is the sole LogOs owner and the message never
+    // enters the attached terminal data plane.
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let target_len = target_bytes.len().min(trueos_vm::vmcall::PAYLOAD_CAP);
+        let mut message_len = message
+            .len()
+            .min(trueos_vm::vmcall::PAYLOAD_CAP.saturating_sub(target_len));
+        while !message.is_char_boundary(message_len) {
+            message_len = message_len.saturating_sub(1);
+        }
+        let mut record = Vec::with_capacity(target_len.saturating_add(message_len));
+        record.extend_from_slice(&target_bytes[..target_len]);
+        record.extend_from_slice(&message.as_bytes()[..message_len]);
+        let (status, accepted) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_LOG_RECORD_V1,
+            u64::from(level_code),
+            target_len as u64,
+            record.as_slice(),
+            &mut [],
+        );
+        return if status == trueos_vm::vmcall::STATUS_OK && accepted as usize == record.len() {
+            0
+        } else {
+            -1
+        };
     }
 
-    if let Some(vm_id) = crate::hv::current_hull_guest_context_vm_id() {
-        crate::log_os::log_with_area_purpose(
-            crate::log_os::flags::LogArea::Apps,
-            level,
-            Some(purpose),
-            format_args!("vm{} {}: {}\n", vm_id, target, message),
-        );
-    } else {
-        crate::log_os::log_with_area_purpose(
-            crate::log_os::flags::LogArea::Apps,
-            level,
-            Some(purpose),
-            format_args!("{}: {}\n", target, message),
-        );
-    }
+    crate::log_os::log_with_area_purpose(
+        crate::log_os::flags::LogArea::Apps,
+        level,
+        Some(purpose),
+        format_args!("{}: {}\n", target, message),
+    );
     0
 }
 

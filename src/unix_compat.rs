@@ -4,6 +4,24 @@
 //! libc/POSIX-shaped imports emitted by Rust std, libc crates, and bundled C
 //! artifacts, then forwards them to the current shim implementations.
 
+/// Directory streams are deliberately not part of the supported POSIX
+/// compatibility surface yet.
+///
+/// `trueos_cabi_fs_list_dir` is a typed, whole-listing ABI.  It is not a
+/// substitute for POSIX `DIR *`: Rust's fallback Unix backend calls
+/// `readdir_r` with a caller-owned, target-libc-defined `dirent` object.  Until
+/// TRUEOS publishes and tests that object layout and the associated stream
+/// lifetime contract, resolving these symbols would turn a successful REL
+/// preflight into a later, misleading application failure.
+pub(crate) fn unsupported_unix_import_reason(name: &str) -> Option<&'static str> {
+    match name {
+        "opendir" | "fdopendir" | "readdir" | "readdir_r" | "closedir" | "dirfd" => Some(
+            "POSIX directory-stream ABI is unavailable; rebuild against the typed TRUEOS VFS directory API",
+        ),
+        _ => None,
+    }
+}
+
 pub(crate) fn is_unix_import(name: &str) -> bool {
     matches!(
         name,
@@ -169,6 +187,11 @@ pub(crate) fn is_unix_import(name: &str) -> bool {
 }
 
 pub(crate) fn resolve_import(name: &str) -> Option<usize> {
+    // Keep the symbols classified as Unix-shaped imports for diagnostics, but
+    // never advertise the historical ENOSYS stubs as resolved functionality.
+    if unsupported_unix_import_reason(name).is_some() {
+        return None;
+    }
     match name {
         "__errno" => Some(crate::std_abi_shim::__errno as *const () as usize),
         "__errno_location" => Some(crate::std_abi_shim::__errno_location as *const () as usize),
@@ -394,6 +417,22 @@ mod tests {
         ] {
             assert!(super::is_unix_import(name), "{name} is not classified as a UNIX import");
             assert!(super::resolve_import(name).is_some(), "{name} has no typed resolver");
+        }
+    }
+
+    #[test]
+    fn directory_stream_imports_are_not_advertised_as_functional() {
+        for name in [
+            "opendir",
+            "fdopendir",
+            "readdir",
+            "readdir_r",
+            "closedir",
+            "dirfd",
+        ] {
+            assert!(super::is_unix_import(name), "{name} lost Unix classification");
+            assert!(super::unsupported_unix_import_reason(name).is_some());
+            assert!(super::resolve_import(name).is_none());
         }
     }
 }
