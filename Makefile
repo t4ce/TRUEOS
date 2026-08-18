@@ -86,7 +86,7 @@ BAREMETAL_LOG_RETRY_DELAY ?= 1
 BAREMETAL_LOG_DIR ?= bld/baremetal-logs
 BAREMETAL_LOG_SLOTS ?= 3
 BAREMETAL_LOG_WAIT_TIMEOUT ?= 180
-BAREMETAL_BOOT_MARKER ?= [service] [info] spawn-svc: started net-shell-listener
+BAREMETAL_BOOT_MARKER ?= [service] [important] spawn-svc: started net-shell-listener
 # Test-rig reset contract: the ESP32 sends the bytes "probe" to host UDP/7777.
 # Replying "ack" to ESP32 UDP/7777 latches its physical reset-button circuit.
 # This hardware button is the normal reboot path; it is not a Shell2 command.

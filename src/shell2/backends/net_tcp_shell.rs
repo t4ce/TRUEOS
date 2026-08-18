@@ -8,8 +8,10 @@ use crate::net::adapter::{
     NetCommand, NetEvent, NetHandle, NetQueue, SocketKind, register_app_queues,
 };
 use crate::shell2::backends::net_tcp::{
-    NET_SHELL_STARTED, NET_SHELL_STATE, NET_SHELL_TCP_PORT, net_shell_direct_reset_terminal,
-    net_shell_write_bytes,
+    NET_SHELL_STARTED, NET_SHELL_STATE, NET_SHELL_TCP_PORT, NetShellOwnershipSnapshot,
+    enqueue_net_shell_rx_if_unchanged, net_shell_begin_connection, net_shell_direct_reset_terminal,
+    net_shell_ownership_snapshot, net_shell_terminal_size_query, net_shell_write_bytes,
+    update_net_shell_surface_size,
 };
 
 const TERMINAL_SIZE_QUERY: &[u8] = b"\x1b[18t";
@@ -171,8 +173,10 @@ pub async fn net_shell_task() {
         let mut initial_repaint_handle: Option<NetHandle> = None;
         let mut initial_repaint_ticks: u32 = 0;
         let mut initial_rx_probe: Vec<u8> = Vec::new();
+        let mut initial_rx_owner: Option<NetShellOwnershipSnapshot> = None;
         let mut resize_query_ticks: u32 = 0;
         let mut resize_rx_probe: Vec<u8> = Vec::new();
+        let mut resize_rx_owner: Option<NetShellOwnershipSnapshot> = None;
 
         loop {
             for ev in events.drain(32) {
@@ -188,34 +192,28 @@ pub async fn net_shell_task() {
                         }
                     }
                     NetEvent::TcpEstablished { handle, .. } => {
-                        let mut schedule_initial_repaint = false;
-                        let direct_mode =
-                            crate::shell2::backends::net_tcp::net_shell_direct_active();
-                        {
-                            let mut st = NET_SHELL_STATE.lock();
-                            let is_new_conn = st.handle != Some(handle);
-                            st.handle = Some(handle);
-                            if is_new_conn {
-                                st.rx.clear();
-                                st.tx.clear();
-                                schedule_initial_repaint = true;
+                        let (schedule_initial_repaint, ownership) =
+                            net_shell_begin_connection(handle);
+                        if schedule_initial_repaint {
+                            initial_repaint_ticks = 0;
+                            initial_rx_probe.clear();
+                            initial_rx_owner = None;
+                            resize_rx_probe.clear();
+                            resize_rx_owner = None;
+                            resize_query_ticks = 0;
+                            if ownership.direct_active() {
+                                let _ = net_shell_direct_reset_terminal();
+                                let _ = net_shell_terminal_size_query();
+                                initial_repaint_handle = None;
+                            } else if net_shell_write_bytes(TERMINAL_SIZE_QUERY) {
+                                initial_repaint_handle = Some(handle);
+                            } else {
+                                // A direct claim won after the locked snapshot;
+                                // its claim reset is authoritative, and this
+                                // narrowly scoped query refreshes its geometry.
+                                let _ = net_shell_terminal_size_query();
+                                initial_repaint_handle = None;
                             }
-                        }
-                        if schedule_initial_repaint && direct_mode {
-                            net_shell_direct_reset_terminal();
-                            net_shell_write_bytes(TERMINAL_SIZE_QUERY);
-                            initial_repaint_handle = None;
-                            initial_repaint_ticks = 0;
-                            initial_rx_probe.clear();
-                            resize_rx_probe.clear();
-                            resize_query_ticks = 0;
-                        } else if schedule_initial_repaint {
-                            net_shell_write_bytes(TERMINAL_SIZE_QUERY);
-                            initial_repaint_handle = Some(handle);
-                            initial_repaint_ticks = 0;
-                            initial_rx_probe.clear();
-                            resize_rx_probe.clear();
-                            resize_query_ticks = 0;
                         }
                         logged_first_rx = false;
                         logged_first_wire_rx = false;
@@ -241,20 +239,33 @@ pub async fn net_shell_task() {
                             );
                         }
                         let mut rx_data = data;
-                        let direct_mode =
-                            crate::shell2::backends::net_tcp::net_shell_direct_active();
-                        let direct_passthrough =
-                            crate::shell2::backends::net_tcp::net_shell_direct_passthrough_active();
+                        let ownership = net_shell_ownership_snapshot();
+                        let direct_mode = ownership.direct_active();
+                        let direct_passthrough = ownership.direct_passthrough_active();
+                        if initial_rx_owner.is_some_and(|owner| owner != ownership) {
+                            initial_rx_probe.clear();
+                            initial_rx_owner = None;
+                        }
+                        if resize_rx_owner.is_some_and(|owner| owner != ownership) {
+                            resize_rx_probe.clear();
+                            resize_rx_owner = None;
+                        }
                         if direct_passthrough {
                             initial_repaint_handle = None;
                             initial_repaint_ticks = 0;
                             initial_rx_probe.clear();
+                            initial_rx_owner = None;
                             resize_rx_probe.clear();
+                            resize_rx_owner = None;
                         } else if initial_repaint_handle == Some(handle) && !direct_mode {
+                            if initial_rx_probe.is_empty() {
+                                initial_rx_owner = Some(ownership);
+                            }
                             initial_rx_probe.extend_from_slice(&rx_data);
                             if let Some((cols, rows, start, end)) =
                                 parse_terminal_size_report(&initial_rx_probe)
                             {
+                                let _ = update_net_shell_surface_size(cols, rows);
                                 if !crate::shell2::backends::net_tcp::net_shell_frontend_active() {
                                     crate::shell2::apply_reported_terminal_size_for_backend(
                                         &crate::shell2::NET_TCP_SHELL_BACKEND,
@@ -272,10 +283,12 @@ pub async fn net_shell_task() {
                                 filtered.extend_from_slice(&initial_rx_probe[end..]);
                                 rx_data = filtered;
                                 initial_rx_probe.clear();
+                                initial_rx_owner = None;
                             } else if initial_rx_probe.len() <= 32 {
                                 continue;
                             } else {
                                 rx_data = core::mem::take(&mut initial_rx_probe);
+                                initial_rx_owner = None;
                             }
                         } else {
                             if !resize_rx_probe.is_empty() {
@@ -283,6 +296,7 @@ pub async fn net_shell_task() {
                                 if let Some((cols, rows, start, end)) =
                                     parse_terminal_size_report(&resize_rx_probe)
                                 {
+                                    let _ = update_net_shell_surface_size(cols, rows);
                                     if !crate::shell2::backends::net_tcp::net_shell_frontend_active(
                                     ) && crate::shell2::apply_reported_terminal_size_for_backend(
                                         &crate::shell2::NET_TCP_SHELL_BACKEND,
@@ -299,16 +313,19 @@ pub async fn net_shell_task() {
                                     filtered.extend_from_slice(&resize_rx_probe[end..]);
                                     rx_data = filtered;
                                     resize_rx_probe.clear();
+                                    resize_rx_owner = None;
                                 } else if resize_rx_probe.len() <= 32
                                     && looks_like_incomplete_terminal_size_report(&resize_rx_probe)
                                 {
                                     continue;
                                 } else {
                                     rx_data = core::mem::take(&mut resize_rx_probe);
+                                    resize_rx_owner = None;
                                 }
                             } else if let Some((cols, rows, start, end)) =
                                 parse_terminal_size_report(&rx_data)
                             {
+                                let _ = update_net_shell_surface_size(cols, rows);
                                 if !crate::shell2::backends::net_tcp::net_shell_frontend_active()
                                     && crate::shell2::apply_reported_terminal_size_for_backend(
                                         &crate::shell2::NET_TCP_SHELL_BACKEND,
@@ -325,36 +342,30 @@ pub async fn net_shell_task() {
                             } else if rx_data.len() <= 32
                                 && looks_like_incomplete_terminal_size_report(&rx_data)
                             {
+                                resize_rx_owner = Some(ownership);
                                 resize_rx_probe.extend_from_slice(&rx_data);
                                 continue;
                             }
                         }
-                        {
-                            let mut st = NET_SHELL_STATE.lock();
-                            if st.handle.is_none() {
-                                st.handle = Some(handle);
-                            }
-                            if st.handle != Some(handle) {
-                                continue;
-                            }
+                        if !enqueue_net_shell_rx_if_unchanged(ownership, handle, &rx_data) {
+                            // A claim/release occurred while this packet was
+                            // being parsed. Never feed its bytes (or a partial
+                            // terminal-size report) to the next owner.
+                            initial_rx_probe.clear();
+                            initial_rx_owner = None;
+                            resize_rx_probe.clear();
+                            resize_rx_owner = None;
+                            continue;
+                        }
 
-                            if !logged_first_rx {
-                                logged_first_rx = true;
-                                crate::log!(
-                                    "net-shell: first rx {} bytes (including {:?}) ms={}\n",
-                                    rx_data.len(),
-                                    rx_data.first().copied(),
-                                    Instant::now().as_millis()
-                                );
-                            }
-
-                            const MAX_RX: usize = 8 * 1024;
-                            for b in rx_data {
-                                if st.rx.len() >= MAX_RX {
-                                    let _ = st.rx.pop_front();
-                                }
-                                st.rx.push_back(b);
-                            }
+                        if !logged_first_rx {
+                            logged_first_rx = true;
+                            crate::log!(
+                                "net-shell: first rx {} bytes (including {:?}) ms={}\n",
+                                rx_data.len(),
+                                rx_data.first().copied(),
+                                Instant::now().as_millis()
+                            );
                         }
                     }
                     NetEvent::TcpSent { handle, len } => {
@@ -369,16 +380,24 @@ pub async fn net_shell_task() {
                         }
                     }
                     NetEvent::Closed { handle } => {
-                        let mut st = NET_SHELL_STATE.lock();
-                        if st.handle == Some(handle) {
-                            st.handle = None;
-                            st.rx.clear();
-                            if initial_repaint_handle == Some(handle) {
-                                initial_repaint_handle = None;
-                                initial_repaint_ticks = 0;
-                                initial_rx_probe.clear();
-                                resize_rx_probe.clear();
+                        let closed_active = {
+                            let mut st = NET_SHELL_STATE.lock();
+                            if st.handle == Some(handle) {
+                                st.handle = None;
+                                st.established_handle = None;
+                                st.rx.clear();
+                                true
+                            } else {
+                                false
                             }
+                        };
+                        if closed_active && initial_repaint_handle == Some(handle) {
+                            initial_repaint_handle = None;
+                            initial_repaint_ticks = 0;
+                            initial_rx_probe.clear();
+                            initial_rx_owner = None;
+                            resize_rx_probe.clear();
+                            resize_rx_owner = None;
                         }
 
                         if tcp_handle == Some(handle) {
@@ -414,51 +433,45 @@ pub async fn net_shell_task() {
             }
 
             // Flush buffered TX to the active TCP connection. Once the command is
-            // queued successfully, the adapter owns those bytes.
-            let (handle, chunk) = {
-                let st = NET_SHELL_STATE.lock();
+            // queued successfully, the adapter owns those bytes. Keep the
+            // snapshot, admission, and dequeue under the transport lock: a
+            // direct-owner claim clears this queue and must not allow a stale
+            // pre-claim chunk to reach the wire afterwards.
+            let tx_admission = {
+                let mut st = NET_SHELL_STATE.lock();
                 match st.handle {
-                    None => (None, Vec::new()),
+                    None => None,
+                    Some(_handle) if st.tx.is_empty() => None,
                     Some(handle) => {
-                        if st.tx.is_empty() {
-                            (Some(handle), Vec::new())
-                        } else {
-                            let mut v = Vec::with_capacity(TX_CHUNK_BYTES);
-                            for &b in st.tx.iter().take(TX_CHUNK_BYTES) {
-                                v.push(b);
-                            }
-                            (Some(handle), v)
+                        let mut chunk = Vec::with_capacity(TX_CHUNK_BYTES);
+                        for &byte in st.tx.iter().take(TX_CHUNK_BYTES) {
+                            chunk.push(byte);
                         }
+                        let chunk_len = chunk.len();
+                        let admitted = cmds
+                            .push(NetCommand::SendTcp {
+                                handle,
+                                data: chunk,
+                            })
+                            .is_ok();
+                        if admitted {
+                            for _ in 0..chunk_len {
+                                let _ = st.tx.pop_front();
+                            }
+                        }
+                        Some((handle, chunk_len, admitted))
                     }
                 }
             };
 
-            if let Some(handle) = handle
-                && !chunk.is_empty()
-            {
-                let chunk_len = chunk.len();
-
+            if let Some((handle, chunk_len, admitted)) = tx_admission {
                 if tx_log_budget > 0 {
                     tx_log_budget -= 1;
                     crate::log!("net-shell: tx queue handle={} len={}\n", handle.0, chunk_len);
                 }
-
-                if cmds
-                    .push(NetCommand::SendTcp {
-                        handle,
-                        data: chunk,
-                    })
-                    .is_err()
-                {
+                if !admitted {
                     // Bytes remain in NET_SHELL_STATE and will be retried.
                     crate::log!("net-shell: tx queue full (will retry)\n");
-                } else {
-                    let mut st = NET_SHELL_STATE.lock();
-                    if st.handle == Some(handle) {
-                        for _ in 0..chunk_len {
-                            let _ = st.tx.pop_front();
-                        }
-                    }
                 }
             }
 
@@ -467,7 +480,9 @@ pub async fn net_shell_task() {
                     initial_repaint_handle = None;
                     initial_repaint_ticks = 0;
                     initial_rx_probe.clear();
+                    initial_rx_owner = None;
                     resize_rx_probe.clear();
+                    resize_rx_owner = None;
                     let _ = handle;
                 } else {
                     initial_repaint_ticks = initial_repaint_ticks.wrapping_add(1);
@@ -478,13 +493,13 @@ pub async fn net_shell_task() {
                         initial_repaint_handle = None;
                         initial_repaint_ticks = 0;
                         if !initial_rx_probe.is_empty() {
-                            let mut st = NET_SHELL_STATE.lock();
-                            const MAX_RX: usize = 8 * 1024;
-                            for b in initial_rx_probe.drain(..) {
-                                if st.rx.len() >= MAX_RX {
-                                    let _ = st.rx.pop_front();
-                                }
-                                st.rx.push_back(b);
+                            let bytes = core::mem::take(&mut initial_rx_probe);
+                            if let Some(snapshot) = initial_rx_owner.take() {
+                                let _ = enqueue_net_shell_rx_if_unchanged(
+                                    snapshot,
+                                    handle,
+                                    bytes.as_slice(),
+                                );
                             }
                         }
                         let _ = handle;
@@ -495,6 +510,7 @@ pub async fn net_shell_task() {
             if crate::shell2::backends::net_tcp::net_shell_direct_passthrough_active() {
                 resize_query_ticks = 0;
                 resize_rx_probe.clear();
+                resize_rx_owner = None;
             } else if initial_repaint_handle.is_none() {
                 let active_handle = {
                     let st = NET_SHELL_STATE.lock();
@@ -504,7 +520,11 @@ pub async fn net_shell_task() {
                     resize_query_ticks = resize_query_ticks.wrapping_add(1);
                     if resize_query_ticks >= RESIZE_QUERY_TICKS {
                         resize_query_ticks = 0;
-                        net_shell_write_bytes(TERMINAL_SIZE_QUERY);
+                        if crate::shell2::backends::net_tcp::net_shell_direct_active() {
+                            let _ = net_shell_terminal_size_query();
+                        } else {
+                            let _ = net_shell_write_bytes(TERMINAL_SIZE_QUERY);
+                        }
                     }
                 } else {
                     resize_query_ticks = 0;

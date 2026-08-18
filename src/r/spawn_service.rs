@@ -2306,11 +2306,22 @@ pub async fn spawn_service_task(spawner: Spawner) {
                 match (spec.spawn)(spawner) {
                     SpawnAttempt::Spawned => {
                         started_any = true;
-                        crate::log!(
-                            "spawn-svc: started {} (mask=0x{:08X})\n",
-                            spec.name,
-                            spec.required
-                        );
+                        if spec.name == "net-shell-listener" {
+                            // Stable fresh-boot provenance for the physical log
+                            // collector. Routine service Info is intentionally
+                            // filtered in the normal profile, so this exact-once
+                            // milestone uses LogOs' sparse Important class.
+                            crate::log_os::service_important_line(format_args!(
+                                "spawn-svc: started {} (mask=0x{:08X})\n",
+                                spec.name, spec.required
+                            ));
+                        } else {
+                            crate::log!(
+                                "spawn-svc: started {} (mask=0x{:08X})\n",
+                                spec.name,
+                                spec.required
+                            );
+                        }
                         if matches!(
                             spec.name,
                             "gfx_loadscreen"

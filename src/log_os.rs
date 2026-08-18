@@ -50,7 +50,7 @@ pub(crate) mod flags {
     /// ladders needed to distinguish artifact upload, PPGTT residency, GuC
     /// admission and kernel-probe failures. Keep it explicit: GFX Debug can
     /// include per-frame/display state that is too noisy for normal boots.
-    pub(crate) const HELIO_GFX_DIAG_PROFILE_ENABLED: bool = true;
+    pub(crate) const HELIO_GFX_DIAG_PROFILE_ENABLED: bool = false;
 
     pub(crate) const GLOBAL_LOG_LEVEL: LogLevelPolicy =
         if USB_UAS_DIAG_PROFILE_ENABLED || UI4_DIAG_PROFILE_ENABLED {
@@ -72,7 +72,7 @@ pub(crate) mod flags {
     pub(crate) const NET_LOG_LEVEL: LogLevelPolicy = if BOOT_DIAG_PROFILE_ENABLED {
         LogLevelPolicy::up(LevelFilter::Trace)
     } else {
-        LogLevelPolicy::up(LevelFilter::Warn)
+        LogLevelPolicy::up(LevelFilter::Error)
     };
     pub(crate) const USB_LOG_LEVEL: LogLevelPolicy = if USB_UAS_DIAG_PROFILE_ENABLED {
         LogLevelPolicy::up(LevelFilter::Trace)
@@ -103,9 +103,9 @@ pub(crate) mod flags {
     };
     pub(crate) const HDA_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
     pub(crate) const HV_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Info);
-    pub(crate) const APPS_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
+    pub(crate) const APPS_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Info);
     pub(crate) const EXECUTOR_REALM_LOG_LEVEL: LogLevelPolicy =
-        LogLevelPolicy::up(LevelFilter::Warn);
+        LogLevelPolicy::up(LevelFilter::Info);
     pub(crate) const EXECUTOR_CACHE_LOG_LEVEL: LogLevelPolicy =
         LogLevelPolicy::up(LevelFilter::Warn);
     pub(crate) const INTEL_MEDIA_NGIN_LOG_LEVEL: LogLevelPolicy =
@@ -369,6 +369,18 @@ pub(crate) fn hypervisor_line(level: log::Level, args: fmt::Arguments<'_>) {
 
 pub(crate) fn blueprint_line(level: log::Level, args: fmt::Arguments<'_>) {
     log_with_area_level(flags::LogArea::Blueprint, level, args);
+}
+
+/// Emit a low-volume Blueprint lifecycle marker that must survive ordinary
+/// Info-level filtering while remaining distinguishable from routine output.
+pub(crate) fn blueprint_important_line(args: fmt::Arguments<'_>) {
+    log_with_area_purpose(flags::LogArea::Blueprint, log::Level::Info, Some("important"), args);
+}
+
+/// Emit a sparse service lifecycle marker under the ordinary Service/Warn
+/// policy while keeping it distinct from failures and routine diagnostics.
+pub(crate) fn service_important_line(args: fmt::Arguments<'_>) {
+    log_with_area_purpose(flags::LogArea::Service, log::Level::Warn, Some("important"), args);
 }
 
 pub(crate) fn printer_discovered(name: &str, uri: &str) {

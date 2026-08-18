@@ -76,7 +76,9 @@ pub(crate) trait ShellBackend2: ShellIo2 {
         false
     }
 
-    fn release_terminal_handoff(&self, _owner: TerminalHandoffOwner) {}
+    fn release_terminal_handoff(&self, _owner: TerminalHandoffOwner) -> bool {
+        false
+    }
 
     fn terminal_handoff_active(&self) -> bool {
         false

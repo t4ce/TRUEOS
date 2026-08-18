@@ -199,6 +199,10 @@ pub const OP_BP_VMEDIA_IMAGE_DECODE_STATUS: u32 = 0x130; // arg0 operation -> pe
 pub const OP_BP_VMEDIA_IMAGE_DECODE_INFO: u32 = 0x131; // arg0 operation -> ImageInfo payload/rc
 pub const OP_BP_VMEDIA_IMAGE_DECODE_READ: u32 = 0x132; // arg0 operation,arg1 hi32 offset/lo32 cap -> RGBA bytes
 pub const OP_BP_VMEDIA_IMAGE_DECODE_DISCARD: u32 = 0x133; // arg0 operation -> rc
+pub const OP_BP_TERMINAL_LEASE_CURRENT_V1: u32 = 0x134; // arg0 ready epoch or 0 -> active epoch/error
+pub const OP_BP_TERMINAL_LEASE_RELEASE_V1: u32 = 0x135; // arg0 expected active epoch -> parking ticket/error
+pub const OP_BP_TERMINAL_LEASE_POLL_REENTRY_V1: u32 = 0x136; // arg0 parking ticket -> pending/active epoch/error
+pub const OP_BP_TERMINAL_SURFACE_SNAPSHOT_V1: u32 = 0x137; // active terminal surface generation + geometry record/error
 pub const OP_NET_TCP_WRITE: u32 = 0x10; // request payload -> net tcp shell tx
 pub const OP_NET_TCP_READ: u32 = 0x11; // net tcp shell rx -> response payload
 pub const OP_BP_NET_OPEN: u32 = 0x20; // host-owned blueprint vnet session
@@ -3307,7 +3311,50 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         }
         OP_BP_RETURN_TO_CLI => {
             let changed = crate::hv::blueprint_console_return_to_cli(vm_id);
-            write_response(vm_id, seq, STATUS_OK, changed as u64, 0);
+            if changed {
+                write_response(vm_id, seq, STATUS_OK, 1, 0);
+            } else {
+                write_response(
+                    vm_id,
+                    seq,
+                    STATUS_BAD_ARG,
+                    crate::hv::BlueprintTerminalLeaseError::NotActive.code(),
+                    0,
+                );
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_TERMINAL_LEASE_CURRENT_V1 => {
+            match crate::hv::blueprint_terminal_lease_current(vm_id, arg0) {
+                Ok(epoch) => write_response(vm_id, seq, STATUS_OK, epoch, 0),
+                Err(error) => write_response(vm_id, seq, STATUS_BAD_ARG, error.code(), 0),
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_TERMINAL_LEASE_RELEASE_V1 => {
+            match crate::hv::blueprint_terminal_lease_release(vm_id, arg0) {
+                Ok(ticket) => write_response(vm_id, seq, STATUS_OK, ticket, 0),
+                Err(error) => write_response(vm_id, seq, STATUS_BAD_ARG, error.code(), 0),
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_TERMINAL_LEASE_POLL_REENTRY_V1 => {
+            match crate::hv::blueprint_terminal_lease_poll_reentry(vm_id, arg0) {
+                Ok(crate::hv::BlueprintTerminalReentryPoll::Pending) => {
+                    write_response(vm_id, seq, STATUS_OK, 0, 0);
+                }
+                Ok(crate::hv::BlueprintTerminalReentryPoll::Ready(epoch)) => {
+                    write_response(vm_id, seq, STATUS_OK, epoch, 0);
+                }
+                Err(error) => write_response(vm_id, seq, STATUS_BAD_ARG, error.code(), 0),
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_TERMINAL_SURFACE_SNAPSHOT_V1 => {
+            match crate::hv::blueprint_terminal_surface_snapshot(vm_id) {
+                Ok(snapshot) => write_record_response(vm_id, seq, 0, &snapshot),
+                Err(error) => write_response(vm_id, seq, STATUS_BAD_ARG, error.code(), 0),
+            }
             DispatchOutcome::Resume
         }
         OP_BP_AUDIO_WRITE_I16_STEREO_48K => {

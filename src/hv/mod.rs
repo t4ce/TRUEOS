@@ -137,6 +137,13 @@ static BLUEPRINT_VMX_LAUNCH_SCRIPTS: [Mutex<Option<AllocString>>; TRUEOS_VM_ID_L
     [const { Mutex::new(None) }; TRUEOS_VM_ID_LIMIT];
 static BLUEPRINT_PROCESS_CONTEXTS: [Mutex<Option<BlueprintProcessContext>>; TRUEOS_VM_ID_LIMIT] =
     [const { Mutex::new(None) }; TRUEOS_VM_ID_LIMIT];
+// Serialize every host-side terminal ownership transition for one VM across
+// context publication, lifecycle detach/reattach, and lease park/reentry.
+// Backend owner identities are intentionally compact (VM id plus target
+// lifetime), so allowing two external claims for the same VM to overlap would
+// make a stale rollback indistinguishable from the newer valid claim.
+static BLUEPRINT_TERMINAL_TRANSITIONS: [Mutex<()>; TRUEOS_VM_ID_LIMIT] =
+    [const { Mutex::new(()) }; TRUEOS_VM_ID_LIMIT];
 static BLUEPRINT_CONSOLE_LOG_BUFFERS: [Mutex<Option<AllocString>>; TRUEOS_VM_ID_LIMIT] =
     [const { Mutex::new(None) }; TRUEOS_VM_ID_LIMIT];
 static BLUEPRINT_LIFECYCLE_ARCHIVES: [Mutex<Option<AllocString>>; TRUEOS_VM_ID_LIMIT] =
@@ -402,6 +409,7 @@ pub enum StartError {
     UnsupportedVmId,
     AlreadyRunning,
     ConsoleBusy,
+    ConsoleUnsupported,
     VmxUnsupported,
     MissingGuestModule,
     GuestMemoryUnavailable,
@@ -510,7 +518,6 @@ pub(crate) enum BlueprintConsoleSurface {
 }
 
 pub(crate) const BLUEPRINT_VMX_MINISHELL_ARG: &str = "--vmx-minishell";
-pub(crate) const BLUEPRINT_TUI_REENTER_BYTE: u8 = 0x1f;
 
 impl BlueprintConsoleSurface {
     fn is_terminal(self) -> bool {
@@ -522,6 +529,104 @@ impl BlueprintConsoleSurface {
 enum BlueprintConsoleRoute {
     Matrix,
     NetShellDirect,
+}
+
+/// Host-authoritative ownership state for a Blueprint terminal surface.
+///
+/// The epoch identifies one active terminal session. Parking preserves that
+/// epoch as an opaque ticket. A Shell2 `tui` request allocates the next epoch,
+/// but Shell2 keeps ownership until the guest poll accepts it.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum BlueprintTerminalLeaseState {
+    Unsupported,
+    Active {
+        epoch: u64,
+        observed: bool,
+        ready: bool,
+    },
+    Releasing {
+        epoch: u64,
+    },
+    Parked {
+        ticket: u64,
+    },
+    ReentryRequested {
+        ticket: u64,
+        epoch: u64,
+    },
+    Claiming {
+        ticket: u64,
+        epoch: u64,
+        direct: bool,
+    },
+}
+
+impl BlueprintTerminalLeaseState {
+    const fn for_surface(surface: BlueprintConsoleSurface) -> Self {
+        match surface {
+            BlueprintConsoleSurface::Text => Self::Unsupported,
+            BlueprintConsoleSurface::Terminal => Self::Active {
+                epoch: 1,
+                observed: false,
+                ready: false,
+            },
+        }
+    }
+
+    /// A parked/reentry transition deliberately leaves Shell2 interactive.
+    /// Guest terminal paint must therefore never be routed into its Matrix
+    /// surface until the lease becomes Active again.
+    const fn suppresses_terminal_output(self) -> bool {
+        matches!(
+            self,
+            Self::Releasing { .. }
+                | Self::Parked { .. }
+                | Self::ReentryRequested { .. }
+                | Self::Claiming { .. }
+        )
+    }
+}
+
+#[repr(u64)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum BlueprintTerminalLeaseError {
+    Unsupported = 1,
+    NotActive = 2,
+    Stale = 3,
+    Detached = 4,
+    Busy = 5,
+}
+
+impl BlueprintTerminalLeaseError {
+    pub(crate) const fn code(self) -> u64 {
+        self as u64
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum BlueprintTerminalReentryPoll {
+    Pending,
+    Ready(u64),
+}
+
+/// Pointer-free V1 terminal-surface record returned through the VMCall payload.
+/// Its generation describes presentation identity, independently of the
+/// terminal-lease epoch that describes ownership authority.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BlueprintTerminalSurfaceSnapshot {
+    pub(crate) generation: u64,
+    pub(crate) cols: u32,
+    pub(crate) rows: u32,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum BlueprintTerminalReentryRequest {
+    Requested { ticket: u64, epoch: u64 },
+    AlreadyRequested,
+    NotParked,
+    Detached,
+    Unsupported,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -589,12 +694,52 @@ pub(crate) struct BlueprintProcessContext {
     console_surface: BlueprintConsoleSurface,
     console_route: BlueprintConsoleRoute,
     console_attached: bool,
+    console_attach_generation: u64,
+    console_attach_inflight: bool,
     app_command_passthrough: bool,
-    terminal_reentry_ready: bool,
+    terminal_lease: BlueprintTerminalLeaseState,
+    terminal_surface_generation: u64,
     console_input: VecDeque<u8>,
     control_shell_line: AllocVec<u8>,
     tui_demo: Option<BlueprintTuiDemo>,
     exit_reason: Option<AllocString>,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct BlueprintTerminalCleanup {
+    context_present: bool,
+    backend_release_expected: bool,
+    backend_released: bool,
+    matrix_unbind_expected: bool,
+    matrix_unbind_result: Option<crate::shell2::MatrixVmUnbindResult>,
+}
+
+impl BlueprintTerminalCleanup {
+    const fn empty() -> Self {
+        Self {
+            context_present: false,
+            backend_release_expected: false,
+            backend_released: true,
+            matrix_unbind_expected: false,
+            matrix_unbind_result: None,
+        }
+    }
+
+    const fn complete(self) -> bool {
+        (!self.backend_release_expected || self.backend_released)
+            && (!self.matrix_unbind_expected
+                || matches!(
+                    self.matrix_unbind_result,
+                    Some(result) if result.owner_absent()
+                ))
+    }
+
+    const fn matrix_unbind_marker(self) -> &'static str {
+        match self.matrix_unbind_result {
+            Some(result) => result.marker(),
+            None => "not-needed",
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -2350,6 +2495,12 @@ pub fn stage_blueprint_launch(
     let Some(process_slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) else {
         return Err(StartError::UnsupportedVmId);
     };
+    let Some(transition_slot) = BLUEPRINT_TERMINAL_TRANSITIONS.get(vm_id as usize) else {
+        return Err(StartError::UnsupportedVmId);
+    };
+    // This outer gate is held only across synchronous state/backend calls; no
+    // await or guest execution is allowed while it is held.
+    let _transition = transition_slot.lock();
     let Some(launch_script_slot) = BLUEPRINT_VMX_LAUNCH_SCRIPTS.get(vm_id as usize) else {
         return Err(StartError::UnsupportedVmId);
     };
@@ -2358,12 +2509,23 @@ pub fn stage_blueprint_launch(
         .app_args
         .iter()
         .any(|arg| arg == BLUEPRINT_VMX_MINISHELL_ARG);
-    let console_route =
-        if blueprint_uses_net_shell_direct_path(console_surface, console_target.as_ref()) {
-            BlueprintConsoleRoute::NetShellDirect
-        } else {
-            BlueprintConsoleRoute::Matrix
-        };
+    let direct_terminal_handoff =
+        blueprint_uses_net_shell_direct_path(console_surface, console_target.as_ref());
+    let local_terminal_handoff = !direct_terminal_handoff
+        && blueprint_uses_local_terminal_handoff(console_surface, console_target.as_ref());
+    if console_surface.is_terminal() && !direct_terminal_handoff && !local_terminal_handoff {
+        hvwarnf(format_args!(
+            "hv: vm{} console route: terminal surface has no exact-owner backend",
+            vm_id
+        ));
+        return Err(StartError::ConsoleUnsupported);
+    }
+    let console_route = if direct_terminal_handoff {
+        BlueprintConsoleRoute::NetShellDirect
+    } else {
+        BlueprintConsoleRoute::Matrix
+    };
+    let console_target_present = console_target.is_some();
     let Some(guest_state) = crate::allocators::with_hv_guest_alloc_domain(vm_id, || state.clone())
     else {
         return Err(StartError::GuestMemoryUnavailable);
@@ -2374,13 +2536,25 @@ pub fn stage_blueprint_launch(
         hvwarnf(format_args!("hv: vm{} console route: terminal direct net-shell busy", vm_id));
         return Err(StartError::ConsoleBusy);
     }
-    if !console_route.is_net_shell_direct()
-        && blueprint_uses_local_terminal_handoff(console_surface, console_target.as_ref())
+    if local_terminal_handoff
         && !console_target.as_ref().is_some_and(|target| {
             crate::shell2::claim_matrix_target_terminal_handoff(target, vm_id)
         })
     {
         hvwarnf(format_args!("hv: vm{} console route: local terminal handoff busy", vm_id));
+        return Err(StartError::ConsoleBusy);
+    }
+    // Input routing is part of terminal-lease admission, not a best-effort
+    // follow-up after publishing the process context. Otherwise a failed bind
+    // leaves an apparently Active app with no way to receive terminal bytes.
+    if !console_route.is_net_shell_direct()
+        && let Some(target) = console_target.as_ref()
+        && !crate::shell2::bind_matrix_target_vm_input(target, vm_id)
+    {
+        if local_terminal_handoff {
+            let _ = crate::shell2::release_matrix_target_terminal_handoff(target, vm_id);
+        }
+        hvwarnf(format_args!("hv: vm{} console route: matrix input bind busy", vm_id));
         return Err(StartError::ConsoleBusy);
     }
     let process_context = BlueprintProcessContext {
@@ -2397,38 +2571,38 @@ pub fn stage_blueprint_launch(
         console_surface,
         console_route,
         console_attached: true,
+        console_attach_generation: 0,
+        console_attach_inflight: false,
         app_command_passthrough,
-        terminal_reentry_ready: false,
+        terminal_lease: BlueprintTerminalLeaseState::for_surface(console_surface),
+        terminal_surface_generation: 1,
         console_input: VecDeque::new(),
         control_shell_line: AllocVec::new(),
         tui_demo: None,
         exit_reason: None,
     };
-    let console_target = process_context.console_target.clone();
     *launch_script_slot.lock() = state.launch_script.clone();
     *slot.lock() = Some(guest_state);
     *process_slot.lock() = Some(process_context);
     if let Some(log_slot) = BLUEPRINT_CONSOLE_LOG_BUFFERS.get(vm_id as usize) {
         let _ = log_slot.lock().take();
     }
-    if !console_route.is_net_shell_direct()
-        && let Some(target) = console_target.as_ref()
-    {
-        crate::shell2::bind_matrix_target_vm_input(target, vm_id);
-    }
-    crate::log_os::blueprint_line(
-        log::Level::Info,
-        format_args!(
-            "apps: vm{} console handoff cli->{} target={}\n",
-            vm_id,
-            if console_route.is_net_shell_direct() {
-                "terminal"
-            } else {
-                "matrix"
-            },
-            console_target.is_some() as u8
-        ),
-    );
+    crate::log_os::blueprint_important_line(format_args!(
+        "terminal-lifecycle: vm={} phase=launch-claim state={} epoch={} handoff=cli->terminal route={} target={}\n",
+        vm_id,
+        if console_surface.is_terminal() {
+            "active"
+        } else {
+            "unsupported"
+        },
+        u64::from(console_surface.is_terminal()),
+        if console_route.is_net_shell_direct() {
+            "net-shell-direct"
+        } else {
+            "matrix"
+        },
+        console_target_present as u8
+    ));
     Ok(())
 }
 
@@ -2864,6 +3038,12 @@ fn blueprint_console_hunt_log(vm_id: u8, data: &[u8]) -> bool {
         return false;
     };
     let message = message.trim_end_matches(&['\r', '\n'][..]);
+    if purpose == "crossterm-resize-probe" && message == "typed surface change -> resize event" {
+        crate::log_os::blueprint_important_line(format_args!(
+            "terminal-lifecycle: vm={} phase=surface-change state=resize-delivered\n",
+            vm_id
+        ));
+    }
     crate::log_os::log_with_area_purpose(
         crate::log_os::flags::LogArea::Blueprint,
         log::Level::Info,
@@ -2874,7 +3054,7 @@ fn blueprint_console_hunt_log(vm_id: u8, data: &[u8]) -> bool {
 }
 
 pub(crate) fn blueprint_console_write(vm_id: u8, data: &[u8]) -> usize {
-    let (target, surface, route) = {
+    let (target, surface, route, lease) = {
         let context = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize);
         context
             .and_then(|slot| {
@@ -2884,16 +3064,32 @@ pub(crate) fn blueprint_console_write(vm_id: u8, data: &[u8]) -> usize {
                     context.console_target.clone(),
                     context.console_surface,
                     context.console_route,
+                    context.terminal_lease,
                 ))
             })
-            .unwrap_or((None, BlueprintConsoleSurface::Text, BlueprintConsoleRoute::Matrix))
+            .unwrap_or((
+                None,
+                BlueprintConsoleSurface::Text,
+                BlueprintConsoleRoute::Matrix,
+                BlueprintTerminalLeaseState::Unsupported,
+            ))
     };
     if blueprint_console_hunt_log(vm_id, data) {
         return data.len();
     }
-    if route.is_net_shell_direct() {
-        crate::shell2::backends::net_tcp::net_shell_write_bytes(data);
+    if lease.suppresses_terminal_output() {
+        // A parked Blueprint may keep working headlessly, but its ordinary
+        // text belongs in LogOs; Shell2 owns the visible prompt. Raw terminal
+        // bytes are accepted and deliberately sunk below.
+        blueprint_console_text_lines(vm_id, None, data);
         return data.len();
+    }
+    if route.is_net_shell_direct() {
+        return if crate::shell2::backends::net_tcp::net_shell_direct_write(vm_id, data) {
+            data.len()
+        } else {
+            0
+        };
     }
     if surface.is_terminal() {
         let written = blueprint_console_write_raw_to_target(vm_id, target.as_ref(), data);
@@ -2906,7 +3102,7 @@ pub(crate) fn blueprint_console_write(vm_id: u8, data: &[u8]) -> usize {
 }
 
 pub(crate) fn blueprint_console_raw_write(vm_id: u8, data: &[u8]) -> usize {
-    let (target, surface, route) = {
+    let (target, surface, route, lease) = {
         let context = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize);
         context
             .and_then(|slot| {
@@ -2916,13 +3112,27 @@ pub(crate) fn blueprint_console_raw_write(vm_id: u8, data: &[u8]) -> usize {
                     context.console_target.clone(),
                     context.console_surface,
                     context.console_route,
+                    context.terminal_lease,
                 ))
             })
-            .unwrap_or((None, BlueprintConsoleSurface::Text, BlueprintConsoleRoute::Matrix))
+            .unwrap_or((
+                None,
+                BlueprintConsoleSurface::Text,
+                BlueprintConsoleRoute::Matrix,
+                BlueprintTerminalLeaseState::Unsupported,
+            ))
     };
-    if route.is_net_shell_direct() {
-        crate::shell2::backends::net_tcp::net_shell_write_bytes(data);
+    if lease.suppresses_terminal_output() {
+        // Keep guest terminal guards deterministic while Shell2 owns the
+        // surface: raw paint reports completion but cannot corrupt its prompt.
         return data.len();
+    }
+    if route.is_net_shell_direct() {
+        return if crate::shell2::backends::net_tcp::net_shell_direct_write(vm_id, data) {
+            data.len()
+        } else {
+            0
+        };
     }
     if surface.is_terminal() {
         blueprint_console_write_raw_to_target(vm_id, target.as_ref(), data)
@@ -2933,16 +3143,23 @@ pub(crate) fn blueprint_console_raw_write(vm_id: u8, data: &[u8]) -> usize {
 }
 
 pub(crate) fn blueprint_console_konsole_size(vm_id: u8) -> (u32, u32) {
-    let (target, route) = {
+    let (target, route, suppress_terminal_output) = {
         let context = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize);
         context
             .and_then(|slot| {
                 let guard = slot.lock();
                 let context = guard.as_ref()?;
-                Some((context.console_target.clone(), context.console_route))
+                Some((
+                    context.console_target.clone(),
+                    context.console_route,
+                    context.terminal_lease.suppresses_terminal_output(),
+                ))
             })
-            .unwrap_or((None, BlueprintConsoleRoute::Matrix))
+            .unwrap_or((None, BlueprintConsoleRoute::Matrix, false))
     };
+    if suppress_terminal_output {
+        return (180, 24);
+    }
     if route.is_net_shell_direct() {
         let (cols, rows) = crate::shell2::net_shell_terminal_size();
         return (cols.min(u32::MAX as usize) as u32, rows.min(u32::MAX as usize) as u32);
@@ -2960,16 +3177,26 @@ pub(crate) fn blueprint_console_konsole_begin_frame(
     rows: usize,
     terminal_handoff: bool,
 ) -> (u32, u32) {
-    let (target, route) = {
+    let (target, route, suppress_terminal_output) = {
         let context = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize);
         context
             .and_then(|slot| {
                 let guard = slot.lock();
                 let context = guard.as_ref()?;
-                Some((context.console_target.clone(), context.console_route))
+                Some((
+                    context.console_target.clone(),
+                    context.console_route,
+                    context.terminal_lease.suppresses_terminal_output(),
+                ))
             })
-            .unwrap_or((None, BlueprintConsoleRoute::Matrix))
+            .unwrap_or((None, BlueprintConsoleRoute::Matrix, false))
     };
+    if suppress_terminal_output {
+        return (
+            cols.max(1).min(u32::MAX as usize) as u32,
+            rows.max(1).min(u32::MAX as usize) as u32,
+        );
+    }
     if route.is_net_shell_direct() {
         let (cols, rows) = crate::shell2::net_shell_terminal_size();
         return (cols.min(u32::MAX as usize) as u32, rows.min(u32::MAX as usize) as u32);
@@ -3000,76 +3227,399 @@ pub(crate) fn blueprint_console_set_exit_reason(vm_id: u8, reason: &str) -> bool
     }
     context.exit_reason = Some(stored.clone());
     hvlogf(format_args!("hv: vm{} lifecycle: blueprint exit reason={}", vm_id, stored));
+    crate::log_os::blueprint_important_line(format_args!(
+        "terminal-lifecycle: vm={} phase=exit-request reason={}\n",
+        vm_id, stored
+    ));
     true
 }
 
-pub(crate) fn blueprint_console_return_to_cli(vm_id: u8) -> bool {
+pub(crate) fn blueprint_terminal_lease_current(
+    vm_id: u8,
+    ready_epoch: u64,
+) -> Result<u64, BlueprintTerminalLeaseError> {
     let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) else {
-        return false;
+        return Err(BlueprintTerminalLeaseError::Unsupported);
     };
-    let (target, was_direct, was_local_handoff) = {
+    let marker = {
         let mut guard = slot.lock();
         let Some(context) = guard.as_mut() else {
-            return false;
+            return Err(BlueprintTerminalLeaseError::Unsupported);
         };
+        if !context.console_attached {
+            return Err(BlueprintTerminalLeaseError::Detached);
+        }
+        let BlueprintTerminalLeaseState::Active {
+            epoch,
+            observed,
+            ready,
+        } = &mut context.terminal_lease
+        else {
+            return Err(match context.terminal_lease {
+                BlueprintTerminalLeaseState::Unsupported => {
+                    BlueprintTerminalLeaseError::Unsupported
+                }
+                _ => BlueprintTerminalLeaseError::NotActive,
+            });
+        };
+        if ready_epoch != 0 && ready_epoch != *epoch {
+            return Err(BlueprintTerminalLeaseError::Stale);
+        }
+        let marker = if ready_epoch == 0 && !*observed {
+            *observed = true;
+            Some("app-observed")
+        } else if ready_epoch != 0 && !*ready {
+            *observed = true;
+            *ready = true;
+            Some("app-ready")
+        } else {
+            None
+        };
+        (*epoch, marker)
+    };
+    if let Some(phase) = marker.1 {
+        crate::log_os::blueprint_important_line(format_args!(
+            "terminal-lifecycle: vm={} phase={} state=active epoch={}\n",
+            vm_id, phase, marker.0
+        ));
+    }
+    Ok(marker.0)
+}
+
+pub(crate) fn blueprint_terminal_surface_snapshot(
+    vm_id: u8,
+) -> Result<BlueprintTerminalSurfaceSnapshot, BlueprintTerminalLeaseError> {
+    let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) else {
+        return Err(BlueprintTerminalLeaseError::Unsupported);
+    };
+    let (route, target, generation) = {
+        let guard = slot.lock();
+        let Some(context) = guard.as_ref() else {
+            return Err(BlueprintTerminalLeaseError::Unsupported);
+        };
+        if !context.console_attached {
+            return Err(BlueprintTerminalLeaseError::Detached);
+        }
+        match context.terminal_lease {
+            BlueprintTerminalLeaseState::Active { .. } => {}
+            BlueprintTerminalLeaseState::Unsupported => {
+                return Err(BlueprintTerminalLeaseError::Unsupported);
+            }
+            _ => return Err(BlueprintTerminalLeaseError::NotActive),
+        }
+        (
+            context.console_route,
+            context.console_target.clone(),
+            context.terminal_surface_generation.max(1),
+        )
+    };
+
+    // Backend state is sampled only after dropping the process-context lock.
+    // Terminal ownership code relies on that lock order during claim/release.
+    if route.is_net_shell_direct() {
+        let snapshot = crate::shell2::backends::net_tcp::net_shell_direct_surface_snapshot(vm_id)
+            .ok_or(BlueprintTerminalLeaseError::Busy)?;
+        return Ok(BlueprintTerminalSurfaceSnapshot {
+            generation: snapshot.generation,
+            cols: snapshot.cols,
+            rows: snapshot.rows,
+        });
+    }
+
+    let (cols, rows) = target
+        .as_ref()
+        .map(crate::shell2::konsole_viewport_size_for_target)
+        .unwrap_or((180, 24));
+    Ok(BlueprintTerminalSurfaceSnapshot {
+        generation,
+        cols: cols.max(1).min(u32::MAX as usize) as u32,
+        rows: rows.max(1).min(u32::MAX as usize) as u32,
+    })
+}
+
+pub(crate) fn blueprint_terminal_lease_release(
+    vm_id: u8,
+    expected_epoch: u64,
+) -> Result<u64, BlueprintTerminalLeaseError> {
+    let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) else {
+        return Err(BlueprintTerminalLeaseError::Unsupported);
+    };
+    let Some(transition_slot) = BLUEPRINT_TERMINAL_TRANSITIONS.get(vm_id as usize) else {
+        return Err(BlueprintTerminalLeaseError::Unsupported);
+    };
+    let _transition = transition_slot.lock();
+    let (ticket, target, was_direct, was_local_handoff) = {
+        let mut guard = slot.lock();
+        let Some(context) = guard.as_mut() else {
+            return Err(BlueprintTerminalLeaseError::Unsupported);
+        };
+        if !context.console_attached {
+            return Err(BlueprintTerminalLeaseError::Detached);
+        }
+        let epoch = match context.terminal_lease {
+            BlueprintTerminalLeaseState::Active { epoch, .. } => epoch,
+            BlueprintTerminalLeaseState::Unsupported => {
+                return Err(BlueprintTerminalLeaseError::Unsupported);
+            }
+            BlueprintTerminalLeaseState::Releasing { .. }
+            | BlueprintTerminalLeaseState::Parked { .. }
+            | BlueprintTerminalLeaseState::ReentryRequested { .. }
+            | BlueprintTerminalLeaseState::Claiming { .. } => {
+                return Err(BlueprintTerminalLeaseError::NotActive);
+            }
+        };
+        if expected_epoch != 0 && expected_epoch != epoch {
+            return Err(BlueprintTerminalLeaseError::Stale);
+        }
         let was_direct = context.console_route.is_net_shell_direct();
         let was_local_handoff = !was_direct
             && blueprint_uses_local_terminal_handoff(
                 context.console_surface,
                 context.console_target.as_ref(),
             );
-        if !was_direct && context.console_surface == BlueprintConsoleSurface::Text {
-            return false;
-        }
-        context.console_surface = BlueprintConsoleSurface::Text;
-        context.console_route = BlueprintConsoleRoute::Matrix;
-        context.terminal_reentry_ready = true;
-        context.console_input.clear();
-        context.control_shell_line.clear();
-        (context.console_target.clone(), was_direct, was_local_handoff)
+        // Keep the active presentation recorded until the exact backend owner
+        // acknowledges release. Teardown can therefore still identify and
+        // clean a release that races suspension or process exit.
+        context.terminal_lease = BlueprintTerminalLeaseState::Releasing { epoch };
+        (epoch, context.console_target.clone(), was_direct, was_local_handoff)
     };
 
-    // The Blueprint keeps its VM and selected Matrix slot; only terminal
-    // presentation ownership returns to shell2. Keeping the VM bound without
-    // direct input exposes its mini-shell and lets `tui` re-enter later.
-    if was_direct {
-        crate::shell2::backends::net_tcp::release_net_shell_direct(vm_id);
+    // The VM remains alive while terminal ownership returns to Shell2. The
+    // parking ticket is the only authority that can accept a later reentry.
+    let released = if was_direct {
+        crate::shell2::backends::net_tcp::release_net_shell_direct(vm_id)
+    } else if was_local_handoff {
+        target.as_ref().is_some_and(|target| {
+            crate::shell2::release_matrix_target_terminal_handoff(target, vm_id)
+        })
+    } else {
+        true
+    };
+    let shell_bound = released
+        && target
+            .as_ref()
+            .map(|target| crate::shell2::bind_matrix_target_vm(target, vm_id))
+            .unwrap_or(true);
+    let committed = {
+        let mut guard = slot.lock();
+        match guard.as_mut() {
+            Some(context)
+                if context.console_attached
+                    && context.terminal_lease
+                        == (BlueprintTerminalLeaseState::Releasing { epoch: ticket }) =>
+            {
+                if released && shell_bound {
+                    context.console_surface = BlueprintConsoleSurface::Text;
+                    context.console_route = BlueprintConsoleRoute::Matrix;
+                    context.terminal_lease = BlueprintTerminalLeaseState::Parked { ticket };
+                    context.console_input.clear();
+                    context.control_shell_line.clear();
+                    Ok(())
+                } else {
+                    // Never retain a false Active claim after the backend
+                    // rejected our owner. The app receives a hard error and
+                    // cannot wait forever on a ticket never established.
+                    context.console_surface = BlueprintConsoleSurface::Text;
+                    context.console_route = BlueprintConsoleRoute::Matrix;
+                    context.terminal_lease = BlueprintTerminalLeaseState::Unsupported;
+                    Err(BlueprintTerminalLeaseError::Busy)
+                }
+            }
+            _ => Err(BlueprintTerminalLeaseError::Detached),
+        }
+    };
+    if let Err(error) = committed {
+        // Binding happens outside the process-context lock by design. If
+        // suspension won the transition, remove that late bind rather than
+        // re-binding Shell2 to a detached VM.
+        if shell_bound && let Some(target) = target.as_ref() {
+            crate::shell2::unbind_matrix_target_vm(target, vm_id);
+        }
+        crate::log_os::blueprint_important_line(format_args!(
+            "terminal-lifecycle: vm={} phase=park-failed state=lease-lost epoch={} released={} shell_bound={}\n",
+            vm_id, ticket, released as u8, shell_bound as u8
+        ));
+        return Err(error);
     }
-    if was_local_handoff && let Some(target) = target.as_ref() {
-        crate::shell2::release_matrix_target_terminal_handoff(target, vm_id);
-    }
-    if let Some(target) = target.as_ref() {
-        crate::shell2::bind_matrix_target_vm(target, vm_id);
-    }
-    crate::log_os::blueprint_line(
-        log::Level::Info,
-        format_args!(
-            "apps: vm{} console handoff terminal->shell2 target={}\n",
-            vm_id,
-            target.is_some() as u8
-        ),
-    );
-    true
+    crate::log_os::blueprint_important_line(format_args!(
+        "terminal-lifecycle: vm={} phase=park-ack state=parked ticket={} handoff=terminal->shell2 target={}\n",
+        vm_id,
+        ticket,
+        target.is_some() as u8
+    ));
+    Ok(ticket)
 }
 
-pub(crate) fn blueprint_console_enter_tui(vm_id: u8) -> bool {
+pub(crate) fn blueprint_console_return_to_cli(vm_id: u8) -> bool {
+    match blueprint_terminal_lease_release(vm_id, 0) {
+        Ok(_) => true,
+        Err(BlueprintTerminalLeaseError::NotActive) => BLUEPRINT_PROCESS_CONTEXTS
+            .get(vm_id as usize)
+            .and_then(|slot| {
+                let guard = slot.lock();
+                let context = guard.as_ref()?;
+                Some(matches!(
+                    context.terminal_lease,
+                    BlueprintTerminalLeaseState::Parked { .. }
+                        | BlueprintTerminalLeaseState::ReentryRequested { .. }
+                ))
+            })
+            .unwrap_or(false),
+        Err(_) => false,
+    }
+}
+
+fn blueprint_console_request_tui(vm_id: u8) -> BlueprintTerminalReentryRequest {
     let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) else {
-        return false;
+        return BlueprintTerminalReentryRequest::Unsupported;
     };
-    let target = {
-        let guard = slot.lock();
-        let Some(context) = guard.as_ref() else {
+    let Some(transition_slot) = BLUEPRINT_TERMINAL_TRANSITIONS.get(vm_id as usize) else {
+        return BlueprintTerminalReentryRequest::Unsupported;
+    };
+    let _transition = transition_slot.lock();
+    let request = {
+        let mut guard = slot.lock();
+        let Some(context) = guard.as_mut() else {
+            return BlueprintTerminalReentryRequest::Unsupported;
+        };
+        if !context.console_attached {
+            return BlueprintTerminalReentryRequest::Detached;
+        }
+        match context.terminal_lease {
+            BlueprintTerminalLeaseState::Parked { ticket } => {
+                let epoch = ticket.wrapping_add(1).max(1);
+                context.terminal_lease =
+                    BlueprintTerminalLeaseState::ReentryRequested { ticket, epoch };
+                BlueprintTerminalReentryRequest::Requested { ticket, epoch }
+            }
+            BlueprintTerminalLeaseState::ReentryRequested { .. } => {
+                BlueprintTerminalReentryRequest::AlreadyRequested
+            }
+            BlueprintTerminalLeaseState::Claiming { .. } => {
+                BlueprintTerminalReentryRequest::AlreadyRequested
+            }
+            BlueprintTerminalLeaseState::Active { .. }
+            | BlueprintTerminalLeaseState::Releasing { .. } => {
+                BlueprintTerminalReentryRequest::NotParked
+            }
+            BlueprintTerminalLeaseState::Unsupported => {
+                BlueprintTerminalReentryRequest::Unsupported
+            }
+        }
+    };
+    if let BlueprintTerminalReentryRequest::Requested { ticket, epoch } = request {
+        crate::log_os::blueprint_important_line(format_args!(
+            "terminal-lifecycle: vm={} phase=reentry-request state=pending ticket={} epoch={} owner=shell2\n",
+            vm_id, ticket, epoch
+        ));
+    }
+    request
+}
+
+fn log_blueprint_terminal_reentry_failed(vm_id: u8, ticket: u64, epoch: u64, reason: &str) {
+    crate::log_os::blueprint_important_line(format_args!(
+        "terminal-lifecycle: vm={} phase=reentry-failed state=terminal ticket={} epoch={} reason={}\n",
+        vm_id, ticket, epoch, reason
+    ));
+}
+
+pub(crate) fn blueprint_terminal_lease_poll_reentry(
+    vm_id: u8,
+    ticket: u64,
+) -> Result<BlueprintTerminalReentryPoll, BlueprintTerminalLeaseError> {
+    let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) else {
+        return Err(BlueprintTerminalLeaseError::Unsupported);
+    };
+    let Some(transition_slot) = BLUEPRINT_TERMINAL_TRANSITIONS.get(vm_id as usize) else {
+        return Err(BlueprintTerminalLeaseError::Unsupported);
+    };
+    let _transition = transition_slot.lock();
+    let (epoch, target, direct) = {
+        let mut guard = slot.lock();
+        let Some(context) = guard.as_mut() else {
+            return Err(BlueprintTerminalLeaseError::Unsupported);
+        };
+        if !context.console_attached {
+            return Err(BlueprintTerminalLeaseError::Detached);
+        }
+        match context.terminal_lease {
+            BlueprintTerminalLeaseState::Parked { ticket: current } => {
+                return if current == ticket {
+                    Ok(BlueprintTerminalReentryPoll::Pending)
+                } else {
+                    Err(BlueprintTerminalLeaseError::Stale)
+                };
+            }
+            BlueprintTerminalLeaseState::ReentryRequested {
+                ticket: current,
+                epoch,
+            } if current == ticket => {
+                let target = context.console_target.clone();
+                let direct = blueprint_uses_net_shell_direct_path(
+                    BlueprintConsoleSurface::Terminal,
+                    target.as_ref(),
+                );
+                context.terminal_lease = BlueprintTerminalLeaseState::Claiming {
+                    ticket,
+                    epoch,
+                    direct,
+                };
+                (epoch, target, direct)
+            }
+            BlueprintTerminalLeaseState::ReentryRequested { .. } => {
+                return Err(BlueprintTerminalLeaseError::Stale);
+            }
+            BlueprintTerminalLeaseState::Claiming {
+                ticket: current, ..
+            } if current == ticket => {
+                return Err(BlueprintTerminalLeaseError::Busy);
+            }
+            BlueprintTerminalLeaseState::Claiming { .. } => {
+                return Err(BlueprintTerminalLeaseError::Stale);
+            }
+            BlueprintTerminalLeaseState::Active { epoch, .. } if epoch > ticket => {
+                return Ok(BlueprintTerminalReentryPoll::Ready(epoch));
+            }
+            BlueprintTerminalLeaseState::Active { .. } => {
+                return Err(BlueprintTerminalLeaseError::Stale);
+            }
+            BlueprintTerminalLeaseState::Releasing { .. } => {
+                return Err(BlueprintTerminalLeaseError::NotActive);
+            }
+            BlueprintTerminalLeaseState::Unsupported => {
+                return Err(BlueprintTerminalLeaseError::Unsupported);
+            }
+        }
+    };
+
+    // Reentry is two-phase: Shell2 records the request, but this guest poll is
+    // what actually claims and commits terminal ownership. If the app never
+    // polls, Shell2 remains interactive instead of handing input away.
+    let restore_request = || {
+        let mut guard = slot.lock();
+        let Some(context) = guard.as_mut() else {
             return false;
         };
-        if !context.console_attached || !context.terminal_reentry_ready {
+        if !context.console_attached
+            || context.terminal_lease
+                != (BlueprintTerminalLeaseState::Claiming {
+                    ticket,
+                    epoch,
+                    direct,
+                })
+        {
             return false;
         }
-        context.console_target.clone()
+        context.terminal_lease = BlueprintTerminalLeaseState::ReentryRequested { ticket, epoch };
+        true
     };
-    let direct =
-        blueprint_uses_net_shell_direct_path(BlueprintConsoleSurface::Terminal, target.as_ref());
     if direct && !crate::shell2::backends::net_tcp::claim_net_shell_direct(vm_id) {
-        return false;
+        return if restore_request() {
+            log_blueprint_terminal_reentry_failed(vm_id, ticket, epoch, "claim-busy");
+            Err(BlueprintTerminalLeaseError::Busy)
+        } else {
+            Err(BlueprintTerminalLeaseError::Detached)
+        };
     }
     let local_handoff = !direct
         && blueprint_uses_local_terminal_handoff(
@@ -3081,28 +3631,75 @@ pub(crate) fn blueprint_console_enter_tui(vm_id: u8) -> bool {
             crate::shell2::claim_matrix_target_terminal_handoff(target, vm_id)
         })
     {
-        return false;
+        return if restore_request() {
+            log_blueprint_terminal_reentry_failed(vm_id, ticket, epoch, "claim-busy");
+            Err(BlueprintTerminalLeaseError::Busy)
+        } else {
+            Err(BlueprintTerminalLeaseError::Detached)
+        };
+    }
+    let input_bound = direct
+        || target
+            .as_ref()
+            .map(|target| crate::shell2::bind_matrix_target_vm_input(target, vm_id))
+            .unwrap_or(true);
+    if !input_bound {
+        if local_handoff && let Some(target) = target.as_ref() {
+            let _ = crate::shell2::release_matrix_target_terminal_handoff(target, vm_id);
+        }
+        let failed = {
+            let mut guard = slot.lock();
+            if let Some(context) = guard.as_mut()
+                && context.console_attached
+                && context.terminal_lease
+                    == (BlueprintTerminalLeaseState::Claiming {
+                        ticket,
+                        epoch,
+                        direct,
+                    })
+            {
+                context.terminal_lease = BlueprintTerminalLeaseState::Unsupported;
+                true
+            } else {
+                false
+            }
+        };
+        if failed {
+            log_blueprint_terminal_reentry_failed(vm_id, ticket, epoch, "input-bind");
+            return Err(BlueprintTerminalLeaseError::Busy);
+        }
+        return Err(BlueprintTerminalLeaseError::Detached);
     }
 
     let committed = {
         let mut guard = slot.lock();
         if let Some(context) = guard.as_mut() {
-            if !context.console_attached || !context.terminal_reentry_ready {
-                false
-            } else {
+            if context.console_attached
+                && context.terminal_lease
+                    == (BlueprintTerminalLeaseState::Claiming {
+                        ticket,
+                        epoch,
+                        direct,
+                    })
+            {
                 context.console_surface = BlueprintConsoleSurface::Terminal;
                 context.console_route = if direct {
                     BlueprintConsoleRoute::NetShellDirect
                 } else {
                     BlueprintConsoleRoute::Matrix
                 };
-                context.terminal_reentry_ready = false;
+                context.terminal_lease = BlueprintTerminalLeaseState::Active {
+                    epoch,
+                    observed: true,
+                    ready: false,
+                };
+                context.terminal_surface_generation =
+                    context.terminal_surface_generation.saturating_add(1).max(1);
                 context.console_input.clear();
                 context.control_shell_line.clear();
-                if !direct {
-                    context.console_input.push_back(BLUEPRINT_TUI_REENTER_BYTE);
-                }
                 true
+            } else {
+                false
             }
         } else {
             false
@@ -3110,44 +3707,25 @@ pub(crate) fn blueprint_console_enter_tui(vm_id: u8) -> bool {
     };
     if !committed {
         if direct {
-            crate::shell2::backends::net_tcp::release_net_shell_direct(vm_id);
+            let _ = crate::shell2::backends::net_tcp::release_net_shell_direct(vm_id);
         }
         if local_handoff && let Some(target) = target.as_ref() {
-            crate::shell2::release_matrix_target_terminal_handoff(target, vm_id);
+            let _ = crate::shell2::release_matrix_target_terminal_handoff(target, vm_id);
         }
-        return false;
-    }
-
-    if direct
-        && !crate::shell2::backends::net_tcp::net_shell_direct_inject_input(
-            vm_id,
-            &[BLUEPRINT_TUI_REENTER_BYTE],
-        )
-    {
-        if let Some(context) = slot.lock().as_mut() {
-            context.console_surface = BlueprintConsoleSurface::Text;
-            context.console_route = BlueprintConsoleRoute::Matrix;
-            context.terminal_reentry_ready = true;
+        if !direct && let Some(target) = target.as_ref() {
+            crate::shell2::unbind_matrix_target_vm(target, vm_id);
         }
-        crate::shell2::backends::net_tcp::release_net_shell_direct(vm_id);
-        if let Some(target) = target.as_ref() {
-            crate::shell2::bind_matrix_target_vm(target, vm_id);
-        }
-        return false;
+        log_blueprint_terminal_reentry_failed(vm_id, ticket, epoch, "commit-stale");
+        return Err(BlueprintTerminalLeaseError::Stale);
     }
-
-    if !direct && let Some(target) = target.as_ref() {
-        crate::shell2::bind_matrix_target_vm_input(target, vm_id);
-    }
-    crate::log_os::blueprint_line(
-        log::Level::Info,
-        format_args!(
-            "apps: vm{} console handoff shell2->terminal target={}\n",
-            vm_id,
-            target.is_some() as u8
-        ),
-    );
-    true
+    crate::log_os::blueprint_important_line(format_args!(
+        "terminal-lifecycle: vm={} phase=reentry-claim state=active ticket={} epoch={} handoff=shell2->terminal target={}\n",
+        vm_id,
+        ticket,
+        epoch,
+        target.is_some() as u8
+    ));
+    Ok(BlueprintTerminalReentryPoll::Ready(epoch))
 }
 
 fn blueprint_console_write_raw_to_target(
@@ -3320,18 +3898,6 @@ fn blueprint_console_exit_tui_demo(vm_id: u8, message: &str) -> bool {
     }
     blueprint_control_shell_line(vm_id, message);
     true
-}
-
-fn blueprint_console_tui_reentry_ready(vm_id: u8) -> bool {
-    BLUEPRINT_PROCESS_CONTEXTS
-        .get(vm_id as usize)
-        .and_then(|slot| {
-            let guard = slot.lock();
-            guard
-                .as_ref()
-                .map(|context| context.console_attached && context.terminal_reentry_ready)
-        })
-        .unwrap_or(false)
 }
 
 pub(crate) fn blueprint_console_submit_tui_demo_input(vm_id: u8, byte: u8) -> bool {
@@ -3561,16 +4127,42 @@ fn blueprint_control_shell_vmx_command(vm_id: u8, raw: &str) {
                 }
             } else if argument.is_some() {
                 blueprint_control_shell_line(vm_id, "usage: vmx_tui [demo]");
-            } else if !blueprint_console_tui_reentry_ready(vm_id) {
-                blueprint_control_shell_line(
-                    vm_id,
-                    "vmx-shell: this Blueprint has not implemented the TUI capability; run \"tui demo\" for the built-in terminal UI preview",
-                );
-            } else if !blueprint_console_enter_tui(vm_id) {
-                blueprint_control_shell_line(
-                    vm_id,
-                    "vmx-shell: the Blueprint terminal UI is temporarily unavailable",
-                );
+            } else {
+                match blueprint_console_request_tui(vm_id) {
+                    BlueprintTerminalReentryRequest::Requested { epoch, .. } => {
+                        blueprint_control_shell_line(
+                            vm_id,
+                            alloc::format!(
+                                "vmx-shell: terminal reentry requested epoch={epoch}; waiting for Blueprint acknowledgement"
+                            )
+                            .as_str(),
+                        );
+                    }
+                    BlueprintTerminalReentryRequest::AlreadyRequested => {
+                        blueprint_control_shell_line(
+                            vm_id,
+                            "vmx-shell: terminal reentry is already awaiting Blueprint acknowledgement",
+                        );
+                    }
+                    BlueprintTerminalReentryRequest::NotParked => {
+                        blueprint_control_shell_line(
+                            vm_id,
+                            "vmx-shell: the Blueprint terminal UI is already active",
+                        );
+                    }
+                    BlueprintTerminalReentryRequest::Detached => {
+                        blueprint_control_shell_line(
+                            vm_id,
+                            "vmx-shell: the Blueprint console is detached",
+                        );
+                    }
+                    BlueprintTerminalReentryRequest::Unsupported => {
+                        blueprint_control_shell_line(
+                            vm_id,
+                            "vmx-shell: this Blueprint has not implemented the TUI capability; run \"tui demo\" for the built-in terminal UI preview",
+                        );
+                    }
+                }
             }
         }
         "stop" => match stop(vm_id) {
@@ -3690,65 +4282,6 @@ pub(crate) fn blueprint_console_submit_stdin(vm_id: u8, data: &[u8]) -> usize {
     data.len()
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-pub(crate) fn blueprint_console_submit_input(vm_id: u8, data: &[u8]) -> usize {
-    const MAX_CONSOLE_INPUT: usize = 64 * 1024;
-    if data.is_empty() {
-        return 0;
-    }
-    let target = {
-        let context = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize);
-        context.and_then(|slot| {
-            let guard = slot.lock();
-            let context = guard.as_ref()?;
-            context
-                .console_attached
-                .then(|| context.console_target.clone())?
-        })
-    };
-    let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) else {
-        return 0;
-    };
-    let mut guard = slot.lock();
-    let Some(context) = guard.as_mut() else {
-        return 0;
-    };
-    if !context.console_attached {
-        return 0;
-    }
-    for &byte in data {
-        match byte {
-            b'\r' | b'\n' => {
-                let _ = blueprint_console_write_raw_to_target(vm_id, target.as_ref(), b"\r\n");
-                let line_bytes = core::mem::take(&mut context.control_shell_line);
-                drop(guard);
-                let line = core::str::from_utf8(line_bytes.as_slice()).unwrap_or("");
-                blueprint_control_shell_command(vm_id, line);
-                return data.len();
-            }
-            0x08 | 0x7f => {
-                if context.control_shell_line.pop().is_some() {
-                    let _ =
-                        blueprint_console_write_raw_to_target(vm_id, target.as_ref(), b"\x08 \x08");
-                }
-            }
-            byte if byte.is_ascii_graphic() || byte == b' ' => {
-                if context.control_shell_line.len() < 512 {
-                    context.control_shell_line.push(byte);
-                    let _ = blueprint_console_write_raw_to_target(vm_id, target.as_ref(), &[byte]);
-                }
-            }
-            _ => {
-                if context.console_input.len() >= MAX_CONSOLE_INPUT {
-                    let _ = context.console_input.pop_front();
-                }
-                context.console_input.push_back(byte);
-            }
-        }
-    }
-    data.len()
-}
-
 pub(crate) fn blueprint_console_read_byte(vm_id: u8) -> Option<u8> {
     let mut byte = [0u8; 1];
     (blueprint_console_read(vm_id, &mut byte) == 1).then_some(byte[0])
@@ -3811,35 +4344,38 @@ pub(crate) fn blueprint_console_read(vm_id: u8, out: &mut [u8]) -> usize {
 }
 
 pub(crate) fn blueprint_console_readable_len(vm_id: u8) -> usize {
-    if let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) {
-        let guard = slot.lock();
-        if let Some(context) = guard.as_ref() {
+    let snapshot = BLUEPRINT_PROCESS_CONTEXTS
+        .get(vm_id as usize)
+        .and_then(|slot| {
+            let guard = slot.lock();
+            let context = guard.as_ref()?;
             if !context.console_attached {
-                return 0;
+                return None;
             }
-            if context.console_route.is_net_shell_direct() {
-                return crate::shell2::backends::net_tcp::net_shell_direct_readable_len(vm_id);
-            }
-            if blueprint_uses_local_terminal_handoff(
+            let local_target = blueprint_uses_local_terminal_handoff(
                 context.console_surface,
                 context.console_target.as_ref(),
-            ) {
-                return context.console_input.len().saturating_add(
-                    context
-                        .console_target
-                        .as_ref()
-                        .map(|target| {
-                            crate::shell2::matrix_target_terminal_handoff_readable_len(
-                                target, vm_id,
-                            )
-                        })
-                        .unwrap_or(0),
-                );
-            }
-            return context.console_input.len();
-        }
+            )
+            .then(|| context.console_target.clone())
+            .flatten();
+            Some((
+                context.console_input.len(),
+                context.console_route.is_net_shell_direct(),
+                local_target,
+            ))
+        });
+    let Some((buffered, direct, local_target)) = snapshot else {
+        return 0;
+    };
+    if direct {
+        return crate::shell2::backends::net_tcp::net_shell_direct_readable_len(vm_id);
     }
-    0
+    if let Some(target) = local_target.as_ref() {
+        return buffered.saturating_add(
+            crate::shell2::matrix_target_terminal_handoff_readable_len(target, vm_id),
+        );
+    }
+    buffered
 }
 
 pub(crate) fn blueprint_console_print_line(vm_id: u8, line: &str) {
@@ -3867,109 +4403,276 @@ pub(crate) fn blueprint_process_context(vm_id: u8) -> Option<BlueprintProcessCon
         .cloned()
 }
 
-fn clear_blueprint_process_context(vm_id: u8) {
-    // Explicit detach supports reattachment while the VM is alive. VM teardown
-    // closes the generation and returns its interpreter worker to the pool.
-    let _ = crate::shell2::backends::session_pool::close_owner(vm_id);
-    crate::std_abi_shim::reset_blueprint_process_state(vm_id);
-    if let Some(log_slot) = BLUEPRINT_CONSOLE_LOG_BUFFERS.get(vm_id as usize) {
-        let _ = log_slot.lock().take();
-    }
+fn clear_blueprint_process_context(vm_id: u8) -> BlueprintTerminalCleanup {
+    let mut cleanup = BlueprintTerminalCleanup::empty();
+    let Some(transition_slot) = BLUEPRINT_TERMINAL_TRANSITIONS.get(vm_id as usize) else {
+        return cleanup;
+    };
+    let _transition = transition_slot.lock();
     if let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) {
         let previous = slot.lock().take();
         if let Some(context) = previous {
+            cleanup.context_present = true;
             if context.tui_demo.is_some()
                 && let Some(target) = context.console_target.as_ref()
             {
                 crate::shell2::clear_matrix_target_transient_lines(target);
             }
-            if context.console_attached && context.console_route.is_net_shell_direct() {
-                crate::shell2::backends::net_tcp::release_net_shell_direct(vm_id);
-            }
-            if context.console_attached
+            let claiming_direct = match context.terminal_lease {
+                BlueprintTerminalLeaseState::Claiming { direct, .. } => Some(direct),
+                _ => None,
+            };
+            let ownership_may_be_inflight =
+                context.console_attached || context.console_attach_inflight;
+            if ownership_may_be_inflight
+                && (context.console_route.is_net_shell_direct() || claiming_direct == Some(true))
+            {
+                cleanup.backend_release_expected = true;
+                cleanup.backend_released =
+                    crate::shell2::backends::net_tcp::release_net_shell_direct(vm_id);
+            } else if ownership_may_be_inflight
                 && !context.console_route.is_net_shell_direct()
-                && blueprint_uses_local_terminal_handoff(
-                    context.console_surface,
-                    context.console_target.as_ref(),
-                )
+                && (claiming_direct == Some(false)
+                    || blueprint_uses_local_terminal_handoff(
+                        context.console_surface,
+                        context.console_target.as_ref(),
+                    ))
                 && let Some(target) = context.console_target.as_ref()
             {
-                crate::shell2::release_matrix_target_terminal_handoff(target, vm_id);
+                cleanup.backend_release_expected = true;
+                cleanup.backend_released =
+                    crate::shell2::release_matrix_target_terminal_handoff(target, vm_id);
             }
-            if context.console_attached
-                && let Some(target) = context.console_target.as_ref()
-            {
-                crate::shell2::unbind_matrix_target_vm(target, vm_id);
+            if ownership_may_be_inflight && let Some(target) = context.console_target.as_ref() {
+                cleanup.matrix_unbind_expected = true;
+                cleanup.matrix_unbind_result =
+                    Some(crate::shell2::unbind_matrix_target_vm(target, vm_id));
             }
         }
     }
+    // Release an exact terminal handoff before closing its local session. The
+    // close path clears the owner record, so reversing this order would turn a
+    // real cleanup into an unobservable false failure and could drop its reset.
+    let _ = crate::shell2::backends::session_pool::close_owner(vm_id);
+    crate::std_abi_shim::reset_blueprint_process_state(vm_id);
+    if let Some(log_slot) = BLUEPRINT_CONSOLE_LOG_BUFFERS.get(vm_id as usize) {
+        let _ = log_slot.lock().take();
+    }
+    cleanup
 }
 
 fn suspend_blueprint_process_context(vm_id: u8) {
     let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) else {
         return;
     };
+    let Some(transition_slot) = BLUEPRINT_TERMINAL_TRANSITIONS.get(vm_id as usize) else {
+        return;
+    };
+    let _transition = transition_slot.lock();
     let detached = {
         let mut guard = slot.lock();
         let Some(context) = guard.as_mut() else {
             return;
         };
         if !context.console_attached {
+            if context.console_attach_inflight {
+                context.console_attach_generation =
+                    context.console_attach_generation.wrapping_add(1).max(1);
+                context.console_attach_inflight = false;
+            }
             return;
         }
+        let route = context.console_route;
+        let surface = context.console_surface;
+        let claiming_direct = match context.terminal_lease {
+            BlueprintTerminalLeaseState::Claiming {
+                ticket,
+                epoch,
+                direct,
+            } => {
+                context.terminal_lease =
+                    BlueprintTerminalLeaseState::ReentryRequested { ticket, epoch };
+                Some(direct)
+            }
+            BlueprintTerminalLeaseState::Releasing { epoch } => {
+                context.console_surface = BlueprintConsoleSurface::Text;
+                context.console_route = BlueprintConsoleRoute::Matrix;
+                context.terminal_lease = BlueprintTerminalLeaseState::Parked { ticket: epoch };
+                None
+            }
+            _ => None,
+        };
         context.console_attached = false;
-        (context.console_route, context.console_target.clone())
+        context.console_attach_inflight = false;
+        (route, surface, context.console_target.clone(), claiming_direct)
     };
-    if detached.0.is_net_shell_direct() {
-        crate::shell2::backends::net_tcp::release_net_shell_direct(vm_id);
-    } else if let Some(target) = detached.1.as_ref() {
-        crate::shell2::release_matrix_target_terminal_handoff(target, vm_id);
-        crate::shell2::unbind_matrix_target_vm(target, vm_id);
+    let mut cleanup = BlueprintTerminalCleanup::empty();
+    cleanup.context_present = true;
+    if detached.0.is_net_shell_direct() || detached.3 == Some(true) {
+        cleanup.backend_release_expected = true;
+        cleanup.backend_released =
+            crate::shell2::backends::net_tcp::release_net_shell_direct(vm_id);
+    } else if let Some(target) = detached.2.as_ref() {
+        if detached.3 == Some(false)
+            || blueprint_uses_local_terminal_handoff(detached.1, Some(target))
+        {
+            cleanup.backend_release_expected = true;
+            cleanup.backend_released =
+                crate::shell2::release_matrix_target_terminal_handoff(target, vm_id);
+        }
+        cleanup.matrix_unbind_expected = true;
+        cleanup.matrix_unbind_result = Some(crate::shell2::unbind_matrix_target_vm(target, vm_id));
     }
+    crate::log_os::blueprint_important_line(format_args!(
+        "terminal-lifecycle: vm={} phase=terminal-cleanup state=retained owner_returned={} backend_expected={} backend_released={} matrix_expected={} matrix_result={}\n",
+        vm_id,
+        cleanup.complete() as u8,
+        cleanup.backend_release_expected as u8,
+        cleanup.backend_released as u8,
+        cleanup.matrix_unbind_expected as u8,
+        cleanup.matrix_unbind_marker(),
+    ));
 }
 
 fn resume_blueprint_process_context(vm_id: u8) {
     let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) else {
         return;
     };
+    let Some(transition_slot) = BLUEPRINT_TERMINAL_TRANSITIONS.get(vm_id as usize) else {
+        return;
+    };
+    let _transition = transition_slot.lock();
     let presentation = {
-        let guard = slot.lock();
-        let Some(context) = guard.as_ref() else {
+        let mut guard = slot.lock();
+        let Some(context) = guard.as_mut() else {
             return;
         };
-        if context.console_attached {
+        if context.console_attached || context.console_attach_inflight {
             return;
         }
-        (context.console_route, context.console_surface, context.console_target.clone())
+        context.console_attach_generation =
+            context.console_attach_generation.wrapping_add(1).max(1);
+        context.console_attach_inflight = true;
+        (
+            context.console_attach_generation,
+            context.console_route,
+            context.console_surface,
+            context.console_target.clone(),
+            context.terminal_lease,
+        )
     };
-    let attached = if presentation.0.is_net_shell_direct() {
-        crate::shell2::backends::net_tcp::claim_net_shell_direct(vm_id)
+    let (attached, backend_claimed, matrix_bound) = if presentation.1.is_net_shell_direct() {
+        let claimed = crate::shell2::backends::net_tcp::claim_net_shell_direct(vm_id);
+        (claimed, claimed, false)
     } else {
         let local_handoff =
-            blueprint_uses_local_terminal_handoff(presentation.1, presentation.2.as_ref());
+            blueprint_uses_local_terminal_handoff(presentation.2, presentation.3.as_ref());
         let claimed = !local_handoff
-            || presentation.2.as_ref().is_some_and(|target| {
+            || presentation.3.as_ref().is_some_and(|target| {
                 crate::shell2::claim_matrix_target_terminal_handoff(target, vm_id)
             });
-        if claimed && let Some(target) = presentation.2.as_ref() {
-            if presentation.1.is_terminal() {
-                crate::shell2::bind_matrix_target_vm_input(target, vm_id);
-            } else {
-                crate::shell2::bind_matrix_target_vm(target, vm_id);
-            }
+        let bound = claimed
+            && presentation
+                .3
+                .as_ref()
+                .map(|target| {
+                    if presentation.2.is_terminal() {
+                        crate::shell2::bind_matrix_target_vm_input(target, vm_id)
+                    } else {
+                        crate::shell2::bind_matrix_target_vm(target, vm_id)
+                    }
+                })
+                .unwrap_or(true);
+        if claimed
+            && !bound
+            && local_handoff
+            && let Some(target) = presentation.3.as_ref()
+        {
+            let _ = crate::shell2::release_matrix_target_terminal_handoff(target, vm_id);
         }
-        claimed
+        (bound, bound && local_handoff, bound && presentation.3.is_some())
     };
-    if attached {
-        if let Some(context) = slot.lock().as_mut() {
-            context.console_attached = true;
+
+    if !attached {
+        let mut guard = slot.lock();
+        if let Some(context) = guard.as_mut()
+            && context.console_attach_inflight
+            && context.console_attach_generation == presentation.0
+        {
+            context.console_attach_inflight = false;
         }
-    } else {
         hvwarnf(format_args!(
             "hv: vm{} lifecycle: retained console reattach pending (route busy)",
             vm_id
         ));
+        return;
     }
+
+    let committed = {
+        let mut guard = slot.lock();
+        if let Some(context) = guard.as_mut() {
+            let target_matches = match (context.console_target.as_ref(), presentation.3.as_ref()) {
+                (None, None) => true,
+                (Some(current), Some(expected)) => {
+                    crate::shell2::matrix_targets_same_slot_lifetime(current, expected)
+                }
+                _ => false,
+            };
+            if !context.console_attached
+                && context.console_attach_inflight
+                && context.console_attach_generation == presentation.0
+                && context.console_route == presentation.1
+                && context.console_surface == presentation.2
+                && target_matches
+                && context.terminal_lease == presentation.4
+            {
+                context.console_attached = true;
+                context.console_attach_inflight = false;
+                if context.console_surface.is_terminal()
+                    && !context.console_route.is_net_shell_direct()
+                {
+                    context.terminal_surface_generation =
+                        context.terminal_surface_generation.saturating_add(1).max(1);
+                }
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    };
+    if committed {
+        return;
+    }
+
+    // A clear/suspend/remutation won after the external claim. Roll back the
+    // exact resources acquired from the detached snapshot; never attach them
+    // to whatever context might now occupy the VM slot.
+    if backend_claimed {
+        if presentation.1.is_net_shell_direct() {
+            let _ = crate::shell2::backends::net_tcp::release_net_shell_direct(vm_id);
+        } else if let Some(target) = presentation.3.as_ref() {
+            let _ = crate::shell2::release_matrix_target_terminal_handoff(target, vm_id);
+        }
+    }
+    if matrix_bound && let Some(target) = presentation.3.as_ref() {
+        let _ = crate::shell2::unbind_matrix_target_vm(target, vm_id);
+    }
+    // A non-lifecycle remutation (for example a concurrent readiness update)
+    // can still invalidate the snapshot while this transition gate is held.
+    // Clear only our own single-flight marker after its resources are gone so
+    // a later resume can retry cleanly.
+    {
+        let mut guard = slot.lock();
+        if let Some(context) = guard.as_mut()
+            && context.console_attach_inflight
+            && context.console_attach_generation == presentation.0
+        {
+            context.console_attach_inflight = false;
+        }
+    }
+    hvwarnf(format_args!("hv: vm{} lifecycle: discarded stale console reattach", vm_id));
 }
 
 pub(crate) fn blueprint_launch_states_span() -> (u64, usize) {
@@ -4264,22 +4967,49 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
         vm_id,
         vm.pause_latched.load(Ordering::Acquire) as u8
     ));
+    let retained_for_resume = vm.pause_latched.load(Ordering::Acquire);
+    let preserve_exit = vm.preserve_exit.load(Ordering::Acquire);
     clear_blueprint_pending_launch(vm_id);
-    if vm.pause_latched.load(Ordering::Acquire) {
+    let terminal_cleanup = if retained_for_resume {
         hvlogf(format_args!(
             "hv: vm{} lifecycle: retained blueprint launch/process context for resume",
             vm_id
         ));
+        None
     } else {
         memory::release_guest_rel_exec_for_vm(vm_id);
         let _ = take_blueprint_launch(vm_id);
         clear_blueprint_launch_script(vm_id);
-        clear_blueprint_process_context(vm_id);
+        let cleanup = clear_blueprint_process_context(vm_id);
         if let Some(identity) = BLUEPRINT_INSTANCE_IDENTITIES.get(vm_id as usize) {
             let _ = identity.lock().take();
         }
-    }
+        Some(cleanup)
+    };
     hvlogf(format_args!("hv: vm{} lifecycle: state cleanup complete", vm_id));
+    crate::log_os::blueprint_important_line(format_args!(
+        "terminal-lifecycle: vm={} phase=process-stop state={} clean_exit={} preserve_exit={}\n",
+        vm_id,
+        if retained_for_resume {
+            "retained"
+        } else {
+            "stopped"
+        },
+        clean_exit as u8,
+        preserve_exit as u8,
+    ));
+    if let Some(cleanup) = terminal_cleanup {
+        crate::log_os::blueprint_important_line(format_args!(
+            "terminal-lifecycle: vm={} phase=terminal-cleanup state=stopped owner_returned={} context={} backend_expected={} backend_released={} matrix_expected={} matrix_result={}\n",
+            vm_id,
+            cleanup.complete() as u8,
+            cleanup.context_present as u8,
+            cleanup.backend_release_expected as u8,
+            cleanup.backend_released as u8,
+            cleanup.matrix_unbind_expected as u8,
+            cleanup.matrix_unbind_marker(),
+        ));
+    }
     vm.starting.store(false, Ordering::Release);
     vm.stop_req.store(false, Ordering::Release);
     vm.preserve_req.store(false, Ordering::Release);

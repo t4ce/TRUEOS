@@ -135,4 +135,10 @@
 # validated RGBA8 result back in bounded chunks. No decoder runs in a VMCALL,
 # and no kernel pointer, GPU address, UI4 frame, or display authority crosses
 # the ABI. Older v2 artifacts import none of these seven symbols.
-257ee9cb1002cc50d18e6b09b9caab8591cf034e2b389f67e0ef18d1fe7fa3c6
+# The terminal-lease current, release, and nonblocking reentry-poll calls are
+# strictly additive. They replace in-band control bytes with host-issued epochs
+# while older v2 artifacts retain the legacy return-to-CLI entry point.
+# The terminal-surface snapshot call is likewise strictly additive. It returns
+# only a monotonic presentation generation and cell geometry; reconnect and
+# resize detection require no signal emulation or in-band terminal bytes.
+2e64e7076e7c153143012ca2ba760db6dbb00135b31232e9887d0e19753d78cf

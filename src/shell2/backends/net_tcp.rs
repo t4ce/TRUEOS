@@ -15,7 +15,6 @@ static NET_TCP_LAST_WAS_CR: AtomicBool = AtomicBool::new(false);
 pub(crate) static NET_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
 static NET_SHELL_DIRECT_OWNER: AtomicU32 = AtomicU32::new(0);
 static NET_SHELL_DIRECT_RX_LAST_WAS_CR: AtomicBool = AtomicBool::new(false);
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const NET_SHELL_RX_CAP: usize = 8 * 1024;
 const NET_SHELL_FRONTEND_REPLAY_CAP: usize = 256 * 1024;
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
@@ -25,10 +24,11 @@ pub(crate) const NET_SHELL_FRONTEND_FLAG_HANDOFF: u32 = 1 << 1;
 // Direct terminal apps may stop before their userspace guard flushes its
 // cleanup, and release_net_shell_direct intentionally drops queued app paint.
 // Restore every terminal mode that shell2 relies on before repainting it.
-const NET_SHELL_DIRECT_TERMINAL_RESET: &[u8] = b"\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1004l\x1b[?1006l\x1b[?1015l\x1b[?2004l\x1b[?1049l\x1b[0m\x1b[39;49m\x1b[r\x1b[?25h";
+const NET_SHELL_DIRECT_TERMINAL_RESET: &[u8] = b"\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1004l\x1b[?1006l\x1b[?1015l\x1b[?2004l\x1b[?1049l\x1b[?7h\x1b[0m\x1b[39;49m\x1b[r\x1b[?25h";
 
 pub(crate) struct NetShellState {
     pub(crate) handle: Option<NetHandle>,
+    pub(crate) established_handle: Option<NetHandle>,
     pub(crate) rx: VecDeque<u8>,
     pub(crate) tx: VecDeque<u8>,
     frontend_owner: Option<u8>,
@@ -36,10 +36,15 @@ pub(crate) struct NetShellState {
     frontend_base_seq: u64,
     frontend_next_seq: u64,
     frontend_replay: VecDeque<u8>,
+    handoff_epoch: u64,
+    surface_generation: u64,
+    surface_cols: u32,
+    surface_rows: u32,
 }
 
 pub(crate) static NET_SHELL_STATE: spin::Mutex<NetShellState> = spin::Mutex::new(NetShellState {
     handle: None,
+    established_handle: None,
     rx: VecDeque::new(),
     tx: VecDeque::new(),
     frontend_owner: None,
@@ -47,7 +52,37 @@ pub(crate) static NET_SHELL_STATE: spin::Mutex<NetShellState> = spin::Mutex::new
     frontend_base_seq: 0,
     frontend_next_seq: 0,
     frontend_replay: VecDeque::new(),
+    handoff_epoch: 0,
+    surface_generation: 0,
+    surface_cols: 180,
+    surface_rows: 51,
 });
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct NetShellSurfaceSnapshot {
+    pub(crate) generation: u64,
+    pub(crate) cols: u32,
+    pub(crate) rows: u32,
+}
+
+/// A locked snapshot of the direct-owner boundary. The epoch prevents an
+/// owner ABA (`shell -> app -> shell`) from admitting a packet parsed across
+/// that transition into the later queue incarnation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct NetShellOwnershipSnapshot {
+    owner: u32,
+    epoch: u64,
+}
+
+impl NetShellOwnershipSnapshot {
+    pub(crate) const fn direct_active(self) -> bool {
+        self.owner != 0
+    }
+
+    pub(crate) const fn direct_passthrough_active(self) -> bool {
+        (self.owner & TerminalHandoffOwner::STREAM_KIND) != 0
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
@@ -63,6 +98,10 @@ fn reset_frontend_replay(st: &mut NetShellState) {
     st.frontend_base_seq = 0;
     st.frontend_next_seq = 0;
     st.frontend_replay.clear();
+}
+
+fn advance_surface_generation(st: &mut NetShellState) {
+    st.surface_generation = st.surface_generation.saturating_add(1).max(1);
 }
 
 fn append_frontend_replay(st: &mut NetShellState, bytes: &[u8]) {
@@ -178,77 +217,207 @@ pub(crate) fn release_net_shell_frontend(vm_id: u8) -> i32 {
 }
 
 pub(crate) fn net_shell_read_byte() -> Option<u8> {
-    if net_shell_direct_active() {
-        return None;
+    let mut st = NET_SHELL_STATE.lock();
+    if NET_SHELL_DIRECT_OWNER.load(Ordering::Acquire) == 0 {
+        st.rx.pop_front()
+    } else {
+        None
     }
-    NET_SHELL_STATE.lock().rx.pop_front()
 }
 
 pub(crate) fn net_shell_readable_len() -> usize {
-    if net_shell_direct_active() {
-        return 0;
+    let st = NET_SHELL_STATE.lock();
+    if NET_SHELL_DIRECT_OWNER.load(Ordering::Acquire) == 0 {
+        st.rx.len()
+    } else {
+        0
     }
-    NET_SHELL_STATE.lock().rx.len()
 }
 
-pub(crate) fn net_shell_write_bytes(bytes: &[u8]) {
-    const MAX_TX: usize = 2 * 1024 * 1024;
+pub(crate) fn net_shell_ownership_snapshot() -> NetShellOwnershipSnapshot {
+    let st = NET_SHELL_STATE.lock();
+    NetShellOwnershipSnapshot {
+        owner: NET_SHELL_DIRECT_OWNER.load(Ordering::Acquire),
+        epoch: st.handoff_epoch,
+    }
+}
+
+/// Install a newly established TCP handle and snapshot terminal ownership in
+/// one transport critical section. The caller uses this result to decide
+/// whether its initial repaint belongs to Shell2 or a direct terminal app.
+pub(crate) fn net_shell_begin_connection(handle: NetHandle) -> (bool, NetShellOwnershipSnapshot) {
     let mut st = NET_SHELL_STATE.lock();
-    append_frontend_replay(&mut st, bytes);
-    let mut dropped = 0usize;
+    // `TcpData` is allowed to select `handle` before `TcpEstablished` is
+    // drained, so transport identity needs its own established-handle field.
+    // Clearing it on close also makes reuse of the same adapter handle a new
+    // terminal surface incarnation.
+    let is_new_connection = st.established_handle != Some(handle);
+    st.handle = Some(handle);
+    if is_new_connection {
+        st.established_handle = Some(handle);
+        st.rx.clear();
+        st.tx.clear();
+        advance_surface_generation(&mut st);
+    }
+    (
+        is_new_connection,
+        NetShellOwnershipSnapshot {
+            owner: NET_SHELL_DIRECT_OWNER.load(Ordering::Acquire),
+            epoch: st.handoff_epoch,
+        },
+    )
+}
+
+/// Record terminal geometry in the same state object as surface identity.
+/// Geometry is compared independently by Crossterm; only ownership/reconnect
+/// boundaries advance the generation, so a generation change also marks a
+/// safe byte-parser reset point.
+pub(crate) fn update_net_shell_surface_size(cols: usize, rows: usize) -> bool {
+    if cols == 0 || rows == 0 {
+        return false;
+    }
+    let cols = cols.min(u32::MAX as usize) as u32;
+    let rows = rows.min(u32::MAX as usize) as u32;
+    let mut st = NET_SHELL_STATE.lock();
+    if st.surface_cols == cols && st.surface_rows == rows {
+        return false;
+    }
+    st.surface_cols = cols;
+    st.surface_rows = rows;
+    true
+}
+
+/// Return one transport-locked surface snapshot for the exact Blueprint owner.
+pub(crate) fn net_shell_direct_surface_snapshot(vm_id: u8) -> Option<NetShellSurfaceSnapshot> {
+    let st = NET_SHELL_STATE.lock();
+    (NET_SHELL_DIRECT_OWNER.load(Ordering::Acquire) == TerminalHandoffOwner::blueprint(vm_id).raw())
+        .then_some(NetShellSurfaceSnapshot {
+            generation: st.surface_generation.max(1),
+            cols: st.surface_cols.max(1),
+            rows: st.surface_rows.max(1),
+        })
+}
+
+/// Admit one parsed TCP input packet only if the transport ownership has not
+/// changed since its parser took a snapshot. The handle test belongs in the
+/// same critical section so reconnects cannot attach old bytes to a new queue.
+pub(crate) fn enqueue_net_shell_rx_if_unchanged(
+    snapshot: NetShellOwnershipSnapshot,
+    handle: NetHandle,
+    bytes: &[u8],
+) -> bool {
+    let mut st = NET_SHELL_STATE.lock();
+    if st.handoff_epoch != snapshot.epoch
+        || NET_SHELL_DIRECT_OWNER.load(Ordering::Acquire) != snapshot.owner
+    {
+        return false;
+    }
+    if st.handle.is_none() {
+        st.handle = Some(handle);
+    }
+    if st.handle != Some(handle) {
+        return false;
+    }
+    for &byte in bytes {
+        if st.rx.len() >= NET_SHELL_RX_CAP {
+            let _ = st.rx.pop_front();
+        }
+        st.rx.push_back(byte);
+    }
+    true
+}
+
+fn enqueue_net_shell_bytes(st: &mut NetShellState, bytes: &[u8]) {
+    const MAX_TX: usize = 2 * 1024 * 1024;
+    append_frontend_replay(st, bytes);
     for &b in bytes {
         if st.tx.len() >= MAX_TX {
             let _ = st.tx.pop_front();
-            dropped = dropped.saturating_add(1);
         }
         st.tx.push_back(b);
     }
-    if dropped != 0 {
-        crate::log!("net-shell: tx buffer dropped {} bytes at cap={}\n", dropped, MAX_TX);
-    }
 }
 
-pub(crate) fn net_shell_direct_reset_terminal() {
-    net_shell_write_bytes(NET_SHELL_DIRECT_TERMINAL_RESET);
+/// Shell-origin output is admitted only while Shell2 owns the transport. The
+/// state lock closes the check/write race with a direct-owner claim.
+pub(crate) fn net_shell_write_bytes(bytes: &[u8]) -> bool {
+    let mut st = NET_SHELL_STATE.lock();
+    if NET_SHELL_DIRECT_OWNER.load(Ordering::Acquire) != 0 {
+        return false;
+    }
+    enqueue_net_shell_bytes(&mut st, bytes);
+    true
+}
+
+/// Send the one terminal-control sequence that a direct owner needs after a
+/// transport reconnect. This deliberately is not a generic privileged output
+/// API: arbitrary Shell2 bytes must remain suppressed while an app owns the
+/// TCP terminal.
+pub(crate) fn net_shell_direct_reset_terminal() -> bool {
+    let mut st = NET_SHELL_STATE.lock();
+    if NET_SHELL_DIRECT_OWNER.load(Ordering::Acquire) == 0 {
+        return false;
+    }
+    enqueue_net_shell_bytes(&mut st, NET_SHELL_DIRECT_TERMINAL_RESET);
+    true
+}
+
+/// Request terminal geometry for the current direct owner. The TCP reader
+/// already recognizes and removes the matching report before the app's input
+/// queue is exposed, so this control byte cannot leak into Crossterm input.
+pub(crate) fn net_shell_terminal_size_query() -> bool {
+    let mut st = NET_SHELL_STATE.lock();
+    if NET_SHELL_DIRECT_OWNER.load(Ordering::Acquire) == 0 {
+        return false;
+    }
+    enqueue_net_shell_bytes(&mut st, b"\x1b[18t");
+    true
 }
 
 fn claim_net_shell_terminal(owner: TerminalHandoffOwner) -> bool {
     let owner = owner.raw();
-    let previous = NET_SHELL_DIRECT_OWNER
-        .compare_exchange(0, owner, Ordering::AcqRel, Ordering::Acquire)
-        .unwrap_or_else(|current| current);
+    let mut st = NET_SHELL_STATE.lock();
+    let previous = NET_SHELL_DIRECT_OWNER.load(Ordering::Acquire);
     if previous != 0 && previous != owner {
         return false;
     }
 
-    let mut st = NET_SHELL_STATE.lock();
+    // The owner token and its byte queues form one transaction. Publishing
+    // only while this lock is held prevents Shell2 from consuming an app byte
+    // (or an app from painting ahead of the reset) between the ownership
+    // change and queue reset.
     st.rx.clear();
     st.tx.clear();
     reset_frontend_replay(&mut st);
+    st.handoff_epoch = st.handoff_epoch.wrapping_add(1).max(1);
+    advance_surface_generation(&mut st);
     NET_TCP_LAST_WAS_CR.store(false, Ordering::Release);
     NET_SHELL_DIRECT_RX_LAST_WAS_CR.store(false, Ordering::Release);
+    enqueue_net_shell_bytes(&mut st, NET_SHELL_DIRECT_TERMINAL_RESET);
     NET_SHELL_DIRECT_OWNER.store(owner, Ordering::Release);
-    drop(st);
-    net_shell_direct_reset_terminal();
     true
 }
 
-fn release_net_shell_terminal(owner: TerminalHandoffOwner) {
-    if NET_SHELL_DIRECT_OWNER
-        .compare_exchange(owner.raw(), 0, Ordering::AcqRel, Ordering::Acquire)
-        .is_ok()
+fn release_net_shell_terminal(owner: TerminalHandoffOwner) -> bool {
     {
-        {
-            let mut st = NET_SHELL_STATE.lock();
-            st.rx.clear();
-            st.tx.clear();
-            reset_frontend_replay(&mut st);
+        let mut st = NET_SHELL_STATE.lock();
+        if NET_SHELL_DIRECT_OWNER.load(Ordering::Acquire) != owner.raw() {
+            return false;
         }
+        st.rx.clear();
+        st.tx.clear();
+        reset_frontend_replay(&mut st);
+        st.handoff_epoch = st.handoff_epoch.wrapping_add(1).max(1);
+        advance_surface_generation(&mut st);
         NET_TCP_LAST_WAS_CR.store(false, Ordering::Release);
         NET_SHELL_DIRECT_RX_LAST_WAS_CR.store(false, Ordering::Release);
-        net_shell_direct_reset_terminal();
-        crate::shell2::repaint_backend_screen(&NET_TCP_SHELL_BACKEND);
+        // Queue the reset before publishing Shell2 ownership. A shell writer
+        // which acquires the lock next therefore always follows the reset.
+        enqueue_net_shell_bytes(&mut st, NET_SHELL_DIRECT_TERMINAL_RESET);
+        NET_SHELL_DIRECT_OWNER.store(0, Ordering::Release);
     }
+    crate::shell2::repaint_backend_screen(&NET_TCP_SHELL_BACKEND);
+    true
 }
 
 pub(crate) fn net_shell_direct_active() -> bool {
@@ -259,15 +428,14 @@ pub(crate) fn net_shell_direct_passthrough_active() -> bool {
     (NET_SHELL_DIRECT_OWNER.load(Ordering::Acquire) & TerminalHandoffOwner::STREAM_KIND) != 0
 }
 
-fn net_shell_terminal_owned_by(owner: TerminalHandoffOwner) -> bool {
-    NET_SHELL_DIRECT_OWNER.load(Ordering::Acquire) == owner.raw()
-}
-
 fn net_shell_terminal_read(owner: TerminalHandoffOwner, out: &mut [u8]) -> usize {
-    if out.is_empty() || !net_shell_terminal_owned_by(owner) {
+    if out.is_empty() {
         return 0;
     }
     let mut st = NET_SHELL_STATE.lock();
+    if NET_SHELL_DIRECT_OWNER.load(Ordering::Acquire) != owner.raw() {
+        return 0;
+    }
     let read = out.len().min(st.rx.len());
     for byte in &mut out[..read] {
         *byte = st.rx.pop_front().unwrap_or_default();
@@ -276,10 +444,11 @@ fn net_shell_terminal_read(owner: TerminalHandoffOwner, out: &mut [u8]) -> usize
 }
 
 fn net_shell_terminal_write(owner: TerminalHandoffOwner, bytes: &[u8]) -> bool {
-    if !net_shell_terminal_owned_by(owner) {
+    let mut st = NET_SHELL_STATE.lock();
+    if NET_SHELL_DIRECT_OWNER.load(Ordering::Acquire) != owner.raw() {
         return false;
     }
-    net_shell_write_bytes(bytes);
+    enqueue_net_shell_bytes(&mut st, bytes);
     true
 }
 
@@ -287,27 +456,24 @@ pub(crate) fn claim_net_shell_direct(vm_id: u8) -> bool {
     claim_net_shell_terminal(TerminalHandoffOwner::blueprint(vm_id))
 }
 
-pub(crate) fn release_net_shell_direct(vm_id: u8) {
-    release_net_shell_terminal(TerminalHandoffOwner::blueprint(vm_id));
+pub(crate) fn release_net_shell_direct(vm_id: u8) -> bool {
+    release_net_shell_terminal(TerminalHandoffOwner::blueprint(vm_id))
 }
 
-pub(crate) fn net_shell_direct_owned_by(vm_id: u8) -> bool {
-    net_shell_terminal_owned_by(TerminalHandoffOwner::blueprint(vm_id))
-}
-
-pub(crate) fn net_shell_direct_inject_input(vm_id: u8, bytes: &[u8]) -> bool {
-    if !net_shell_direct_owned_by(vm_id) {
-        return false;
-    }
-    NET_SHELL_STATE.lock().rx.extend(bytes.iter().copied());
-    true
+pub(crate) fn net_shell_direct_write(vm_id: u8, bytes: &[u8]) -> bool {
+    net_shell_terminal_write(TerminalHandoffOwner::blueprint(vm_id), bytes)
 }
 
 pub(crate) fn net_shell_direct_read(vm_id: u8, out: &mut [u8]) -> usize {
-    if out.is_empty() || !net_shell_direct_owned_by(vm_id) {
+    if out.is_empty() {
         return 0;
     }
     let mut st = NET_SHELL_STATE.lock();
+    if NET_SHELL_DIRECT_OWNER.load(Ordering::Acquire)
+        != TerminalHandoffOwner::blueprint(vm_id).raw()
+    {
+        return 0;
+    }
     let mut read = 0usize;
     let mut last_was_cr = NET_SHELL_DIRECT_RX_LAST_WAS_CR.load(Ordering::Acquire);
     while read < out.len() {
@@ -340,10 +506,14 @@ pub(crate) fn net_shell_direct_read(vm_id: u8, out: &mut [u8]) -> usize {
 }
 
 pub(crate) fn net_shell_direct_readable_len(vm_id: u8) -> usize {
-    if !net_shell_direct_owned_by(vm_id) {
-        return 0;
+    let st = NET_SHELL_STATE.lock();
+    if NET_SHELL_DIRECT_OWNER.load(Ordering::Acquire)
+        == TerminalHandoffOwner::blueprint(vm_id).raw()
+    {
+        st.rx.len()
+    } else {
+        0
     }
-    NET_SHELL_STATE.lock().rx.len()
 }
 
 impl ShellIo2 for NetTcpShellBackend {
@@ -358,7 +528,7 @@ impl ShellIo2 for NetTcpShellBackend {
     #[inline]
     fn raw_write_str(&self, s: &str) {
         crate::shell2::crlf::write_bytes_crlf(s.as_bytes(), &NET_TCP_LAST_WAS_CR, |chunk| {
-            net_shell_write_bytes(chunk);
+            let _ = net_shell_write_bytes(chunk);
         });
     }
 
@@ -372,7 +542,7 @@ impl ShellIo2 for NetTcpShellBackend {
                     s.as_bytes(),
                     &NET_TCP_LAST_WAS_CR,
                     |chunk| {
-                        net_shell_write_bytes(chunk);
+                        let _ = net_shell_write_bytes(chunk);
                     },
                 );
                 Ok(())
@@ -387,14 +557,14 @@ impl ShellIo2 for NetTcpShellBackend {
         let mut buf = [0u8; 4];
         let s = ch.encode_utf8(&mut buf);
         crate::shell2::crlf::write_bytes_crlf(s.as_bytes(), &NET_TCP_LAST_WAS_CR, |chunk| {
-            net_shell_write_bytes(chunk);
+            let _ = net_shell_write_bytes(chunk);
         });
     }
 
     #[inline]
     fn raw_write_byte(&self, b: u8) {
         crate::shell2::crlf::write_bytes_crlf(&[b], &NET_TCP_LAST_WAS_CR, |chunk| {
-            net_shell_write_bytes(chunk);
+            let _ = net_shell_write_bytes(chunk);
         });
     }
 }
@@ -412,8 +582,8 @@ impl ShellBackend2 for NetTcpShellBackend {
         claim_net_shell_terminal(owner)
     }
 
-    fn release_terminal_handoff(&self, owner: TerminalHandoffOwner) {
-        release_net_shell_terminal(owner);
+    fn release_terminal_handoff(&self, owner: TerminalHandoffOwner) -> bool {
+        release_net_shell_terminal(owner)
     }
 
     fn terminal_handoff_active(&self) -> bool {

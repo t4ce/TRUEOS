@@ -865,13 +865,13 @@ pub(crate) fn unbind_live_slot_vm(
     slot_id: &MatrixSlotId,
     lifetime_generation: u64,
     vm_id: u8,
-) -> bool {
+) -> super::MatrixVmUnbindResult {
     let mut guard = state().lock();
     let Some(idx) = guard.slots.iter().position(|slot| slot.id == *slot_id) else {
-        return false;
+        return super::MatrixVmUnbindResult::TargetExpired;
     };
     if guard.slots[idx].lifetime_generation != lifetime_generation {
-        return false;
+        return super::MatrixVmUnbindResult::TargetExpired;
     }
     if guard.slots[idx].vm_id == Some(vm_id) {
         guard.slots[idx].vm_id = None;
@@ -879,8 +879,12 @@ pub(crate) fn unbind_live_slot_vm(
         guard.slots[idx].vm_launch_reserved = false;
         guard.slots[idx].app_label = None;
         bump_slot_revision(&mut guard, idx);
+        super::MatrixVmUnbindResult::Unbound
+    } else if guard.slots[idx].vm_id.is_none() {
+        super::MatrixVmUnbindResult::AlreadyAbsent
+    } else {
+        super::MatrixVmUnbindResult::DifferentOwner
     }
-    true
 }
 
 pub(crate) fn slot_views(output_mask: super::OutputMask) -> Vec<MatrixSlotView> {

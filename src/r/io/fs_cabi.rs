@@ -1899,6 +1899,127 @@ pub extern "C" fn trueos_cabi_blueprint_return_to_cli() -> i32 {
     -1
 }
 
+const TERMINAL_LEASE_CABI_TRANSPORT_ERROR: i32 = -6;
+
+unsafe fn blueprint_terminal_lease_v1(
+    operation: u32,
+    value: u64,
+    out_value: *mut u64,
+    pending_is_success: bool,
+) -> i32 {
+    if out_value.is_null() || crate::hv::current_hull_guest_context_vm_id().is_none() {
+        return TERMINAL_LEASE_CABI_TRANSPORT_ERROR;
+    }
+    let (status, data) = trueos_vm::vmcall::call(operation, value, 0);
+    if status != trueos_vm::vmcall::STATUS_OK {
+        let code = i32::try_from(data).unwrap_or(-TERMINAL_LEASE_CABI_TRANSPORT_ERROR);
+        return -code.max(1);
+    }
+    if data == 0 {
+        return if pending_is_success {
+            1
+        } else {
+            TERMINAL_LEASE_CABI_TRANSPORT_ERROR
+        };
+    }
+    unsafe { out_value.write(data) };
+    0
+}
+
+/// Observe the active terminal epoch (`ready_epoch == 0`) or acknowledge that
+/// the app has restored its TUI for an already-issued epoch.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_blueprint_terminal_lease_current_v1(
+    ready_epoch: u64,
+    out_epoch: *mut u64,
+) -> i32 {
+    unsafe {
+        blueprint_terminal_lease_v1(
+            trueos_vm::vmcall::OP_BP_TERMINAL_LEASE_CURRENT_V1,
+            ready_epoch,
+            out_epoch,
+            false,
+        )
+    }
+}
+
+/// Release one exact active epoch and return its opaque parking ticket.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_blueprint_terminal_lease_release_v1(
+    expected_epoch: u64,
+    out_ticket: *mut u64,
+) -> i32 {
+    unsafe {
+        blueprint_terminal_lease_v1(
+            trueos_vm::vmcall::OP_BP_TERMINAL_LEASE_RELEASE_V1,
+            expected_epoch,
+            out_ticket,
+            false,
+        )
+    }
+}
+
+/// Nonblocking reentry poll. `1` means Shell2 still owns the terminal; `0`
+/// returns the newly acknowledged active epoch. Negative values are errors.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_blueprint_terminal_lease_poll_reentry_v1(
+    ticket: u64,
+    out_epoch: *mut u64,
+) -> i32 {
+    unsafe {
+        blueprint_terminal_lease_v1(
+            trueos_vm::vmcall::OP_BP_TERMINAL_LEASE_POLL_REENTRY_V1,
+            ticket,
+            out_epoch,
+            true,
+        )
+    }
+}
+
+/// Snapshot the active terminal presentation. The generation changes when the
+/// underlying surface identity changes (including a same-size direct TCP
+/// reconnect); columns and rows are returned from the same host snapshot.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_blueprint_terminal_surface_snapshot_v1(
+    out_generation: *mut u64,
+    out_cols: *mut u32,
+    out_rows: *mut u32,
+) -> i32 {
+    if out_generation.is_null()
+        || out_cols.is_null()
+        || out_rows.is_null()
+        || crate::hv::current_hull_guest_context_vm_id().is_none()
+    {
+        return TERMINAL_LEASE_CABI_TRANSPORT_ERROR;
+    }
+
+    let mut record = [0u8; 16];
+    let (status, data) = trueos_vm::vmcall::call_with_payload(
+        trueos_vm::vmcall::OP_BP_TERMINAL_SURFACE_SNAPSHOT_V1,
+        0,
+        0,
+        &[],
+        &mut record,
+    );
+    if status != trueos_vm::vmcall::STATUS_OK {
+        let code = i32::try_from(data).unwrap_or(-TERMINAL_LEASE_CABI_TRANSPORT_ERROR);
+        return -code.max(1);
+    }
+
+    let generation = u64::from_le_bytes(record[..8].try_into().unwrap_or([0; 8]));
+    let cols = u32::from_le_bytes(record[8..12].try_into().unwrap_or([0; 4]));
+    let rows = u32::from_le_bytes(record[12..16].try_into().unwrap_or([0; 4]));
+    if generation == 0 || cols == 0 || rows == 0 {
+        return TERMINAL_LEASE_CABI_TRANSPORT_ERROR;
+    }
+    unsafe {
+        out_generation.write(generation);
+        out_cols.write(cols);
+        out_rows.write(rows);
+    }
+    0
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_konsole_size(out_cols: *mut u32, out_rows: *mut u32) -> i32 {
     if out_cols.is_null() || out_rows.is_null() {

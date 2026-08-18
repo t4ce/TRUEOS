@@ -1190,6 +1190,23 @@ unsafe extern "C" {
     pub fn trueos_cabi_blueprint_exit_reason(data_ptr: *const u8, data_len: usize) -> i32;
     pub fn trueos_cabi_blueprint_shutdown(data_ptr: *const u8, data_len: usize) -> i32;
     pub fn trueos_cabi_blueprint_return_to_cli() -> i32;
+    pub fn trueos_cabi_blueprint_terminal_lease_current_v1(
+        ready_epoch: u64,
+        out_epoch: *mut u64,
+    ) -> i32;
+    pub fn trueos_cabi_blueprint_terminal_lease_release_v1(
+        expected_epoch: u64,
+        out_ticket: *mut u64,
+    ) -> i32;
+    pub fn trueos_cabi_blueprint_terminal_lease_poll_reentry_v1(
+        ticket: u64,
+        out_epoch: *mut u64,
+    ) -> i32;
+    pub fn trueos_cabi_blueprint_terminal_surface_snapshot_v1(
+        out_generation: *mut u64,
+        out_cols: *mut u32,
+        out_rows: *mut u32,
+    ) -> i32;
     pub fn trueos_cabi_konsole_size(out_cols: *mut u32, out_rows: *mut u32) -> i32;
     pub fn trueos_cabi_konsole_begin_frame(cols: u32, rows: u32, reserved_top_rows: u32) -> i32;
     pub fn trueos_cabi_konsole_write_row(

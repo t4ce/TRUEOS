@@ -9,10 +9,7 @@ const RAMDISK_BLOCK_SIZE: u32 = 512;
 const DEFAULT_RAMDISC_BYTES: u64 = 128 * 1024 * 1024;
 
 fn print_usage(io: &'static dyn ShellBackend2) {
-    print_shell_line(
-        io,
-        "disc: usage `disc` | `disc format <disc-id>` | `disc ramdisc [size]`",
-    );
+    print_shell_line(io, "disc: usage `disc` | `disc format <disc-id>` | `disc ramdisc [size]`");
 }
 
 fn print_disc_table(io: &'static dyn ShellBackend2) {

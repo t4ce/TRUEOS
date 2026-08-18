@@ -285,9 +285,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         color: Some(STATUS_GREEN_RGB),
         advertised: true,
         handler: dispatch_disc,
-        tool_description: Some(
-            "List top-level disk devices, format a disk, or create a ramdisc.",
-        ),
+        tool_description: Some("List top-level disk devices, format a disk, or create a ramdisc."),
         tool_parameters_json: Some(TOOL_JSON_DISC),
     },
     BuiltinShell2CmdEntry {
@@ -680,9 +678,9 @@ pub(crate) fn try_dispatch(
 
 pub(crate) fn command_names_status_text() -> AllocString {
     const STATUS_ORDER: &[&str] = &[
-        "7z", "rm", "mv", "sha", "shot", "disc", "cry", "backup", "install", "update", "hyper", "surf",
-        "net", "ssh", "qjs", "grid", "helio", "tts", "stt", "cpp", "vgpu", "aud", "vid", "acpi",
-        "tlb", "ram", "smp", "etc",
+        "7z", "rm", "mv", "sha", "shot", "disc", "cry", "backup", "install", "update", "hyper",
+        "surf", "net", "ssh", "qjs", "grid", "helio", "tts", "stt", "cpp", "vgpu", "aud", "vid",
+        "acpi", "tlb", "ram", "smp", "etc",
     ];
 
     let mut out = AllocString::new();
@@ -732,9 +730,9 @@ pub(crate) fn command_names_status_text_fitting(max_width: usize) -> AllocString
     }
 
     const STATUS_ORDER: &[&str] = &[
-        "7z", "rm", "mv", "sha", "shot", "disc", "cry", "backup", "install", "update", "hyper", "surf",
-        "net", "ssh", "qjs", "grid", "helio", "tts", "stt", "cpp", "vgpu", "aud", "vid", "acpi",
-        "tlb", "ram", "smp", "etc",
+        "7z", "rm", "mv", "sha", "shot", "disc", "cry", "backup", "install", "update", "hyper",
+        "surf", "net", "ssh", "qjs", "grid", "helio", "tts", "stt", "cpp", "vgpu", "aud", "vid",
+        "acpi", "tlb", "ram", "smp", "etc",
     ];
 
     let content_width = max_width.saturating_sub(3);

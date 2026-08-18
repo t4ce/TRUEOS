@@ -959,19 +959,16 @@ pub(crate) fn matrix_targets_same_live_slot(left: &MatrixTarget, right: &MatrixT
             .is_some()
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn matrix_targets_same_slot_lifetime(left: &MatrixTarget, right: &MatrixTarget) -> bool {
     left.slot_id == right.slot_id && left.slot_lifetime_generation == right.slot_lifetime_generation
 }
 
-pub(crate) fn bind_matrix_target_vm(target: &MatrixTarget, vm_id: u8) {
-    let _ =
-        matrix::bind_live_slot_vm(&target.slot_id, target.slot_lifetime_generation, vm_id, false);
+pub(crate) fn bind_matrix_target_vm(target: &MatrixTarget, vm_id: u8) -> bool {
+    matrix::bind_live_slot_vm(&target.slot_id, target.slot_lifetime_generation, vm_id, false)
 }
 
-pub(crate) fn bind_matrix_target_vm_input(target: &MatrixTarget, vm_id: u8) {
-    let _ =
-        matrix::bind_live_slot_vm(&target.slot_id, target.slot_lifetime_generation, vm_id, true);
+pub(crate) fn bind_matrix_target_vm_input(target: &MatrixTarget, vm_id: u8) -> bool {
+    matrix::bind_live_slot_vm(&target.slot_id, target.slot_lifetime_generation, vm_id, true)
 }
 
 fn matrix_target_terminal_backend(
@@ -1001,10 +998,9 @@ pub(crate) fn claim_matrix_target_terminal_handoff(target: &MatrixTarget, vm_id:
         .is_some_and(|(backend, owner)| backend.claim_terminal_handoff(owner))
 }
 
-pub(crate) fn release_matrix_target_terminal_handoff(target: &MatrixTarget, vm_id: u8) {
-    if let Some((backend, owner)) = matrix_target_terminal_handoff(target, vm_id) {
-        backend.release_terminal_handoff(owner);
-    }
+pub(crate) fn release_matrix_target_terminal_handoff(target: &MatrixTarget, vm_id: u8) -> bool {
+    matrix_target_terminal_handoff(target, vm_id)
+        .is_some_and(|(backend, owner)| backend.release_terminal_handoff(owner))
 }
 
 pub(crate) fn read_matrix_target_terminal_handoff(
@@ -1026,8 +1022,39 @@ pub(crate) fn matrix_target_terminal_handoff_readable_len(
         .unwrap_or(0)
 }
 
-pub(crate) fn unbind_matrix_target_vm(target: &MatrixTarget, vm_id: u8) {
-    let _ = matrix::unbind_live_slot_vm(&target.slot_id, target.slot_lifetime_generation, vm_id);
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum MatrixVmUnbindResult {
+    Unbound,
+    AlreadyAbsent,
+    DifferentOwner,
+    TargetExpired,
+}
+
+impl MatrixVmUnbindResult {
+    /// Every result is observed while holding the Matrix state lock. Even when
+    /// the slot was already absent, reassigned, or replaced, the exact
+    /// `(slot, lifetime, vm)` authority presented by the caller is no longer
+    /// live. Keeping the result variant lets lifecycle evidence distinguish an
+    /// actual mutation from an idempotent absence without touching a new owner.
+    pub(crate) const fn owner_absent(self) -> bool {
+        matches!(
+            self,
+            Self::Unbound | Self::AlreadyAbsent | Self::DifferentOwner | Self::TargetExpired
+        )
+    }
+
+    pub(crate) const fn marker(self) -> &'static str {
+        match self {
+            Self::Unbound => "unbound",
+            Self::AlreadyAbsent => "already-absent",
+            Self::DifferentOwner => "different-owner",
+            Self::TargetExpired => "target-expired",
+        }
+    }
+}
+
+pub(crate) fn unbind_matrix_target_vm(target: &MatrixTarget, vm_id: u8) -> MatrixVmUnbindResult {
+    matrix::unbind_live_slot_vm(&target.slot_id, target.slot_lifetime_generation, vm_id)
 }
 
 pub(crate) fn set_matrix_target_app_label(target: &MatrixTarget, label: &str) {
@@ -1630,7 +1657,7 @@ fn apply_matrix_operator_and_refresh(
 
 fn push_input_char(out: &AlignedWriter<'_>, line: &mut HString<MAX_LINE>, ch: char) {
     if line.push(ch).is_ok() {
-       out.user_char(ch);
+        out.user_char(ch);
     }
 }
 
@@ -2119,7 +2146,8 @@ async fn run_shell2(
                                 input.push(b'\n');
                                 const SKIP_VM_SUBMIT_ON_ENTER: bool = true;
                                 if !SKIP_VM_SUBMIT_ON_ENTER {
-                                    let _ = crate::hv::blueprint_console_submit_stdin(vm_id, &input);
+                                    let _ =
+                                        crate::hv::blueprint_console_submit_stdin(vm_id, &input);
                                 }
                                 transcript = current_transcript_for_task(io);
                                 render_active_slot_content(&out, output_mask, &transcript);
@@ -2139,7 +2167,8 @@ async fn run_shell2(
                                 input.push(b'\n');
                                 const SKIP_VM_SUBMIT_ON_ENTER: bool = true;
                                 if !SKIP_VM_SUBMIT_ON_ENTER {
-                                    let _ = crate::hv::blueprint_console_submit_stdin(vm_id, &input);
+                                    let _ =
+                                        crate::hv::blueprint_console_submit_stdin(vm_id, &input);
                                 }
                                 transcript = current_transcript_for_task(io);
                                 render_active_slot_content(&out, output_mask, &transcript);
