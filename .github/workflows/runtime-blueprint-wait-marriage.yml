@@ -1,5 +1,6 @@
 name: Materialize Blueprint VM-lane wait
 
+# This branch-local workflow exists only long enough to materialize one clean commit.
 on:
   push:
     branches:
