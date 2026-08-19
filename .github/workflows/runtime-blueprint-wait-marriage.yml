@@ -8,6 +8,13 @@ on:
     paths:
       - .github/workflows/runtime-blueprint-wait-marriage.yml
       - tools/apply_runtime_blueprint_wait_marriage.py
+  pull_request:
+    branches:
+      - true
+    types:
+      - opened
+      - synchronize
+      - reopened
 
 permissions:
   contents: write
@@ -18,6 +25,7 @@ concurrency:
 
 jobs:
   materialize:
+    if: github.head_ref == 'runtime/blueprint-io-wait' || github.ref_name == 'runtime/blueprint-io-wait'
     runs-on: ubuntu-latest
     steps:
       - name: Check out convergence branch
