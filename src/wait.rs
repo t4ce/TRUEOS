@@ -160,6 +160,48 @@ impl WaitQueue {
         .await
     }
 
+    /// Wait asynchronously for a generation change or a bounded timeout.
+    ///
+    /// This is the async counterpart to the parked blocking wait. It is meant
+    /// for parent executor tasks (notably VMX runtime lanes) that must suspend
+    /// without occupying their AP while a child runtime observes a synchronous
+    /// wait contract. The caller still owns the protected state and must
+    /// recheck it after a `true` return.
+    #[inline]
+    pub async fn wait_after_timeout(&self, observed: u32, timeout_ms: u64) -> bool {
+        if self.seq.load(Ordering::Acquire) != observed {
+            return true;
+        }
+        if timeout_ms == 0 {
+            return false;
+        }
+
+        let mut timeout = core::pin::pin!(embassy_time::Timer::after_millis(timeout_ms));
+        core::future::poll_fn(|cx: &mut Context<'_>| {
+            if self.seq.load(Ordering::Acquire) != observed {
+                return Poll::Ready(true);
+            }
+
+            {
+                let mut wakers = self.wakers.lock();
+                if self.seq.load(Ordering::Acquire) != observed {
+                    return Poll::Ready(true);
+                }
+                register_waker_list(&mut wakers, cx.waker());
+            }
+
+            if self.seq.load(Ordering::Acquire) != observed {
+                return Poll::Ready(true);
+            }
+
+            match timeout.as_mut().poll(cx) {
+                Poll::Ready(()) => Poll::Ready(false),
+                Poll::Pending => Poll::Pending,
+            }
+        })
+        .await
+    }
+
     #[inline]
     pub fn notify_one(&self) -> bool {
         self.seq.fetch_add(1, Ordering::Release);
@@ -435,6 +477,18 @@ pub fn platform_wait_observe_for_vm(vm_id: u8, key: u64) -> u32 {
 pub fn platform_wait_after_for_vm(vm_id: u8, key: u64, observed: u32, timeout_ms: u64) -> bool {
     platform_wait_queue(platform_wait_vm_scope(vm_id), key)
         .wait_for_event_after_blocking_parked(observed, timeout_ms)
+}
+
+#[inline]
+pub async fn platform_wait_after_for_vm_async(
+    vm_id: u8,
+    key: u64,
+    observed: u32,
+    timeout_ms: u64,
+) -> bool {
+    platform_wait_queue(platform_wait_vm_scope(vm_id), key)
+        .wait_after_timeout(observed, timeout_ms)
+        .await
 }
 
 #[inline]
