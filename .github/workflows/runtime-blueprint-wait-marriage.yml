@@ -1,0 +1,47 @@
+name: Materialize Blueprint VM-lane wait
+
+on:
+  push:
+    branches:
+      - runtime/blueprint-io-wait
+    paths:
+      - .github/workflows/runtime-blueprint-wait-marriage.yml
+      - tools/apply_runtime_blueprint_wait_marriage.py
+
+permissions:
+  contents: write
+
+concurrency:
+  group: runtime-blueprint-wait-marriage
+  cancel-in-progress: false
+
+jobs:
+  materialize:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out convergence branch
+        uses: actions/checkout@v4
+        with:
+          ref: runtime/blueprint-io-wait
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Apply the VM-lane wait convergence
+        run: |
+          set -euo pipefail
+          python3 tools/apply_runtime_blueprint_wait_marriage.py
+          rm tools/apply_runtime_blueprint_wait_marriage.py
+          rm .github/workflows/runtime-blueprint-wait-marriage.yml
+          git diff --check
+
+      - name: Publish one clean architecture commit
+        env:
+          BASE_SHA: 6092ca2ea38862862561e864e38de3ff951baf2a
+        run: |
+          set -euo pipefail
+          git config user.name "TRUEOS runtime convergence"
+          git config user.email "runtime-convergence@users.noreply.github.com"
+          git add -A
+          git reset --soft "$BASE_SHA"
+          git commit -m "runtime: suspend Blueprint platform waits on VM lanes"
+          git push --force-with-lease origin HEAD:runtime/blueprint-io-wait
