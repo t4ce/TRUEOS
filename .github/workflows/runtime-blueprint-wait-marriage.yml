@@ -46,6 +46,7 @@ jobs:
       - name: Publish one clean architecture commit
         env:
           BASE_SHA: 6092ca2ea38862862561e864e38de3ff951baf2a
+          OUTPUT_BRANCH: agent/blueprint-vm-lane-wait
         run: |
           set -euo pipefail
           git config user.name "TRUEOS runtime convergence"
@@ -53,4 +54,4 @@ jobs:
           git add -A
           git reset --soft "$BASE_SHA"
           git commit -m "runtime: suspend Blueprint platform waits on VM lanes"
-          git push --force-with-lease origin HEAD:runtime/blueprint-io-wait
+          git push origin "HEAD:refs/heads/$OUTPUT_BRANCH"
