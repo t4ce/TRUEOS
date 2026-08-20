@@ -1,0 +1,38 @@
+helio_gbuffer_dump: physical[0] vendor=0x10DE device=0x2489 type=discrete api=0x00404149 driver=0x94D50000 name="NVIDIA GeForce RTX 3060 Ti"
+helio_gbuffer_dump: physical[1] vendor=0x8086 device=0xA780 type=integrated api=0x0040414F driver=0x06800003 name="Intel(R) Graphics (RPL-S)"
+helio_gbuffer_dump: selected vendor=0x8086 device=0xA780 queue_family=0 name="Intel(R) Graphics (RPL-S)"
+helio_gbuffer_dump: limits color_targets=8 update_after_bind_samplers=402653184 update_after_bind_images=201326592
+helio_gbuffer_dump: pipeline_cache_size=52468
+helio_gbuffer_dump: executable_count=2
+helio_gbuffer_dump: executable[0] stage=vertex name="vertex" desc="SIMD8 vertex shader" subgroup=8
+helio_gbuffer_dump: stat[0][0] name="Instruction Count" value=290
+helio_gbuffer_dump: stat[0][1] name="SEND Count" value=32
+helio_gbuffer_dump: stat[0][2] name="Loop Count" value=0
+helio_gbuffer_dump: stat[0][3] name="Cycle Count" value=1659
+helio_gbuffer_dump: stat[0][4] name="Spill Count" value=0
+helio_gbuffer_dump: stat[0][5] name="Fill Count" value=0
+helio_gbuffer_dump: stat[0][6] name="Scratch Memory Size" value=0
+helio_gbuffer_dump: stat[0][7] name="GRF registers" value=0
+helio_gbuffer_dump: stat[0][8] name="Max dispatch width" value=8
+helio_gbuffer_dump: stat[0][9] name="Max live registers" value=55
+helio_gbuffer_dump: stat[0][10] name="Workgroup Memory Size" value=0
+helio_gbuffer_dump: stat[0][11] name="Non SSA regs after NIR" value=33
+helio_gbuffer_dump: stat[0][12] name="Source hash" value=3138456263
+helio_gbuffer_dump: rep[0][0] name="GEN Assembly" isText=1 size=36069
+helio_gbuffer_dump: executable[1] stage=fragment name="SIMD8 fragment" desc="SIMD8 fragment shader" subgroup=8
+helio_gbuffer_dump: stat[1][0] name="Instruction Count" value=819
+helio_gbuffer_dump: stat[1][1] name="SEND Count" value=64
+helio_gbuffer_dump: stat[1][2] name="Loop Count" value=10
+helio_gbuffer_dump: stat[1][3] name="Cycle Count" value=48869
+helio_gbuffer_dump: stat[1][4] name="Spill Count" value=0
+helio_gbuffer_dump: stat[1][5] name="Fill Count" value=0
+helio_gbuffer_dump: stat[1][6] name="Scratch Memory Size" value=0
+helio_gbuffer_dump: stat[1][7] name="GRF registers" value=0
+helio_gbuffer_dump: stat[1][8] name="Max dispatch width" value=8
+helio_gbuffer_dump: stat[1][9] name="Max live registers" value=84
+helio_gbuffer_dump: stat[1][10] name="Workgroup Memory Size" value=0
+helio_gbuffer_dump: stat[1][11] name="Non SSA regs after NIR" value=92
+helio_gbuffer_dump: stat[1][12] name="Source hash" value=535557302
+helio_gbuffer_dump: rep[1][0] name="Shader push map" isText=1 size=74
+helio_gbuffer_dump: rep[1][1] name="GEN Assembly" isText=1 size=99672
+helio_gbuffer_dump: compiled_only=1 vertex_stride=40 sets=2 textures=256 color_targets=8 depth=VK_FORMAT_D32_SFLOAT

@@ -13,6 +13,13 @@ It also carries `scene/portal-rooms-v1.bin` for example 6.
 program while adding Helio's GPU-native camera/instance/compaction/indirect
 contract and the matching Intel executable and fixed-function state.
 
+`helio-gbuffer/` is independently generated and validated by
+`tools/helio-build/build-gbuffer.sh`. It is the first native compilation of
+Helio's unmodified deferred G-buffer shader against its actual Vulkan ABI:
+two bind groups, 256-wide bindless image/sampler arrays, 40-byte vertices,
+eight color targets, and `D32_SFLOAT` depth. It is compiler evidence and does
+not yet replace either launchable TRUEOS retained program.
+
 The Sprite Dig contract preserves the hosted demo's world dimensions,
 movement, jumping, three-stage mining, inventory/hotbar selection, and block
 placement. UI4 supplies its keyboard, cursor, mouse-button, wheel, focus, and

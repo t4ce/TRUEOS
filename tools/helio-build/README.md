@@ -50,6 +50,24 @@ tools/helio-build/build-churn-forward.sh
 tools/helio-build/build-churn-forward.sh --validate-only
 ```
 
+`build-gbuffer.sh` is the native compiler baseline for Helio's complete
+deferred material path. It feeds the unmodified G-buffer WGSL to vendored
+Naga, then creates an Intel Vulkan pipeline with the real two-group bindless
+layout, 40-byte vertices, eight color targets, and depth attachment. The
+published directory contains hash-bound WGSL, SPIR-V, Intel ISA, assembly, and
+pipeline ABI metadata:
+
+```text
+assets/helio/helio-gbuffer/
+```
+
+Build or validate it with:
+
+```sh
+tools/helio-build/build-gbuffer.sh
+tools/helio-build/build-gbuffer.sh --validate-only
+```
+
 `build-sprite-dig-atlas.sh` selects the complete used Sprite Dig texture set
 from the sibling Helio checkout: terrain, normalized player/mob animation
 groups, bushes, cabin, layered tree variants, background, and the three
@@ -68,9 +86,10 @@ sprite kernel: sky and negative-depth background descriptors precede one
 alpha-composited tilemap descriptor, followed by the depth-ordered retained
 world, animation, cracks, arbitrary placement, and hotbar descriptors.
 
-`make iso` runs the lightweight validation for both checked-in programs and
-the Sprite Dig atlas before linking. It does not repeat the hosted Vulkan
-compilation or atlas extraction on every OS build.
+`make iso` runs the lightweight validation for both checked-in programs, the
+G-buffer compiler baseline, and the Sprite Dig atlas before linking. It does
+not repeat the hosted Vulkan compilation or atlas extraction on every OS
+build.
 Use the explicit build scripts when Helio, WGPU, a shader, or a captured ABI
 changes; a failed rebuild never replaces the last validated asset.
 

@@ -878,21 +878,56 @@ def assembly_code_size(path: Path) -> int:
     return size
 
 
-def find_cache_stage(cache: bytes, stage: int, size: int) -> bytes:
-    candidates: list[bytes] = []
+def assembly_instruction_count(path: Path) -> int:
+    """Count the executable instruction rows in Mesa's offset-free assembly."""
+    count = 0
+    for line in path.read_text(errors="replace").splitlines():
+        if not line or line[0].isspace() or line == "\0" or line.startswith("LABEL"):
+            continue
+        count += 1
+    if count == 0:
+        raise SystemExit(f"no Intel instructions found in {path}")
+    return count
+
+
+def find_cache_stage(
+    cache: bytes,
+    stage: int,
+    size: int,
+    instruction_count: int | None = None,
+) -> bytes:
+    candidates: list[tuple[int, int, bytes]] = []
     for offset in range(0, len(cache) - 8):
         found_stage, found_size = struct.unpack_from("<II", cache, offset)
-        if found_stage != stage or found_size != size or offset + 8 + size > len(cache):
+        if found_stage != stage or found_size == 0 or offset + 8 + found_size > len(cache):
             continue
-        data = cache[offset + 8:offset + 8 + size]
-        if sum(byte != 0 for byte in data) > size // 4:
-            candidates.append(data)
-    if not candidates:
-        raise SystemExit(f"native stage absent from ANV cache: stage={stage} size={size}")
-    # This is the same first-dense-candidate rule as TRUEOS's existing
-    # extract_from_pipeline_cache.py. Require determinism if cache duplicates
-    # the actual machine code.
-    return candidates[0]
+        data = cache[offset + 8:offset + 8 + found_size]
+        if sum(byte != 0 for byte in data) > found_size // 4:
+            candidates.append((offset, found_size, data))
+    exact = [data for _, found_size, data in candidates if found_size == size]
+    if exact:
+        # This is the same first-dense-candidate rule as TRUEOS's existing
+        # extract_from_pipeline_cache.py. Require determinism if cache duplicates
+        # the actual machine code.
+        return exact[0]
+
+    # Mesa 26's textual assembly no longer carries byte offsets, and SEND/sync
+    # rows do not have a one-to-one 8/16-byte relationship in every large
+    # graphics shader. The compacted-row estimate can therefore miss the real
+    # cache record by a small amount. A real Xe instruction occupies 8..16
+    # bytes, so the first dense stage record inside that strict envelope is the
+    # native program. The much larger outer ANV cache-object record is excluded.
+    if instruction_count is not None:
+        minimum = instruction_count * 8
+        maximum = instruction_count * 16
+        bounded = [
+            data
+            for _, found_size, data in candidates
+            if minimum <= found_size <= maximum
+        ]
+        if bounded:
+            return bounded[0]
+    raise SystemExit(f"native stage absent from ANV cache: stage={stage} size={size}")
 
 
 def extract_native(exec_dir: Path, native_dir: Path) -> tuple[bytes, bytes, bytes | None]:
@@ -904,7 +939,9 @@ def extract_native(exec_dir: Path, native_dir: Path) -> tuple[bytes, bytes, byte
             f"expected one VS and at least one PS assembly, got {len(vertex)} and {len(fragments)}"
         )
     vs_size = assembly_code_size(vertex[0])
+    vs_instruction_count = assembly_instruction_count(vertex[0])
     fragment_sizes = [assembly_code_size(path) for path in fragments]
+    fragment_instruction_count = sum(assembly_instruction_count(path) for path in fragments)
     fragment_offsets: list[int] = []
     cursor = 0
     for size in fragment_sizes:
@@ -913,9 +950,18 @@ def extract_native(exec_dir: Path, native_dir: Path) -> tuple[bytes, bytes, byte
         cursor += size
     fragment_span = cursor
     cache = (exec_dir / "pipeline_cache.bin").read_bytes()
-    vs = find_cache_stage(cache, 0, vs_size)
-    combined = find_cache_stage(cache, 4, fragment_span)
-    slices = [combined[offset:offset + size] for offset, size in zip(fragment_offsets, fragment_sizes)]
+    vs = find_cache_stage(cache, 0, vs_size, vs_instruction_count)
+    combined = find_cache_stage(cache, 4, fragment_span, fragment_instruction_count)
+    if len(fragments) == 1 and len(combined) != fragment_sizes[0]:
+        # Preserve the complete cache record when the offset-free assembly
+        # estimate exercised the bounded fallback above. Trimming that record
+        # to the textual estimate would silently discard valid tail bytes.
+        slices = [combined]
+    else:
+        slices = [
+            combined[offset:offset + size]
+            for offset, size in zip(fragment_offsets, fragment_sizes)
+        ]
     native_dir.mkdir(exist_ok=True)
     (native_dir / "simple_cube_vs.bin").write_bytes(vs)
     (native_dir / "simple_cube_ps_simd8.bin").write_bytes(slices[0])

@@ -126,7 +126,7 @@ CARGO_EFFECTIVE_FLAGS = $(strip $(CARGO_BUILD_FLAGS))
 
 IMG_SIZE ?= 25G
 
-.PHONY: images empty-libs kernel trueos-ttstt-host trueos-ttstt-ubuntu cpp aarch64-kernels aarch64-kernel-copy aarch64-kernel-verify aarch64-kernel-test lfm25-cpp lfm25-cpp-verify lfm25-packed-isa-verify lfm25-igpu-packed-verify intel-gpu-bake-migrated-cpp intel-gpu-bake-copy-cpp intel-gpu-bake-cpp-demo intel-gpu-bake-audio-visualizer-cpp intel-gpu-bake-particle-craft-cpp intel-gpu-bake-shadertoy-cpp intel-gpu-bake-font-instance-cpp intel-gpu-bake-lfm25-q8-packed-cpp intel-gpu-bake-spirit-cpp intel-gpu-bake-cpp-artifacts intel-gpu-refresh-cpp-artifacts intel-gpu-verify-cpp-artifacts intel-gpu-verify-copy-cpp intel-gpu-verify-copy-cpp-hardware-log intel-gpu-verify-linked-copy intel-gpu-verify-linked-copy-cpp intel-gpu-verify-packaged-copy intel-gpu-verify-packaged-copy-cpp helio-build-simple-cube helio-build-churn-forward helio-build-sprite-dig-atlas helio-refresh-artifacts helio-verify-artifacts artifacts limine testrig-physical-reset-log baremetal-reboot-log iso provenance-git-clean provenance verify-provenance release-git-clean release-count release dbg run
+.PHONY: images empty-libs kernel trueos-ttstt-host trueos-ttstt-ubuntu cpp aarch64-kernels aarch64-kernel-copy aarch64-kernel-verify aarch64-kernel-test lfm25-cpp lfm25-cpp-verify lfm25-packed-isa-verify lfm25-igpu-packed-verify intel-gpu-bake-migrated-cpp intel-gpu-bake-copy-cpp intel-gpu-bake-cpp-demo intel-gpu-bake-audio-visualizer-cpp intel-gpu-bake-particle-craft-cpp intel-gpu-bake-shadertoy-cpp intel-gpu-bake-font-instance-cpp intel-gpu-bake-lfm25-q8-packed-cpp intel-gpu-bake-spirit-cpp intel-gpu-bake-cpp-artifacts intel-gpu-refresh-cpp-artifacts intel-gpu-verify-cpp-artifacts intel-gpu-verify-copy-cpp intel-gpu-verify-copy-cpp-hardware-log intel-gpu-verify-linked-copy intel-gpu-verify-linked-copy-cpp intel-gpu-verify-packaged-copy intel-gpu-verify-packaged-copy-cpp helio-build-simple-cube helio-build-churn-forward helio-build-gbuffer helio-build-sprite-dig-atlas helio-refresh-artifacts helio-verify-artifacts artifacts limine testrig-physical-reset-log baremetal-reboot-log iso provenance-git-clean provenance verify-provenance release-git-clean release-count release dbg run
 
 images: $(NVME_IMG)
 
@@ -158,14 +158,18 @@ helio-build-simple-cube:
 helio-build-churn-forward:
 	tools/helio-build/build-churn-forward.sh
 
+helio-build-gbuffer:
+	tools/helio-build/build-gbuffer.sh
+
 helio-build-sprite-dig-atlas:
 	tools/helio-build/build-sprite-dig-atlas.sh
 
-helio-refresh-artifacts: helio-build-simple-cube helio-build-churn-forward helio-build-sprite-dig-atlas
+helio-refresh-artifacts: helio-build-simple-cube helio-build-churn-forward helio-build-gbuffer helio-build-sprite-dig-atlas
 
 helio-verify-artifacts:
 	tools/helio-build/build-simple-cube.sh --validate-only
 	tools/helio-build/build-churn-forward.sh --validate-only
+	tools/helio-build/build-gbuffer.sh --validate-only
 	tools/helio-build/build-sprite-dig-atlas.sh --validate-only
 
 intel-gpu-bake-migrated-cpp:

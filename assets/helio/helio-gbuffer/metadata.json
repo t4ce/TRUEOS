@@ -1,0 +1,218 @@
+{
+  "backend": "Mesa ANV Vulkan graphics pipeline",
+  "bindings": [
+    {
+      "binding": 0,
+      "count": 1,
+      "group": 0,
+      "type": "storage-buffer"
+    },
+    {
+      "binding": 1,
+      "count": 1,
+      "group": 0,
+      "type": "uniform-buffer"
+    },
+    {
+      "binding": 2,
+      "count": 1,
+      "group": 0,
+      "type": "storage-buffer"
+    },
+    {
+      "binding": 3,
+      "count": 1,
+      "group": 0,
+      "type": "storage-buffer"
+    },
+    {
+      "binding": 4,
+      "count": 1,
+      "group": 0,
+      "type": "storage-buffer"
+    },
+    {
+      "binding": 5,
+      "count": 1,
+      "group": 0,
+      "type": "storage-buffer"
+    },
+    {
+      "binding": 6,
+      "count": 1,
+      "group": 0,
+      "type": "storage-buffer"
+    },
+    {
+      "binding": 7,
+      "count": 1,
+      "group": 0,
+      "type": "storage-buffer"
+    },
+    {
+      "binding": 8,
+      "count": 1,
+      "group": 0,
+      "type": "storage-buffer"
+    },
+    {
+      "binding": 0,
+      "count": 1,
+      "group": 1,
+      "type": "storage-buffer"
+    },
+    {
+      "binding": 1,
+      "count": 1,
+      "group": 1,
+      "type": "storage-buffer"
+    },
+    {
+      "binding": 2,
+      "count": 256,
+      "group": 1,
+      "type": "sampled-image",
+      "update_after_bind": true
+    },
+    {
+      "binding": 3,
+      "count": 256,
+      "group": 1,
+      "type": "sampler",
+      "update_after_bind": true
+    }
+  ],
+  "color_targets": [
+    "R8G8B8A8_UNORM",
+    "R16G16B16A16_SFLOAT",
+    "R8G8B8A8_UNORM",
+    "R16G16B16A16_SFLOAT",
+    "R16G16_SFLOAT",
+    "R16G16B16A16_SFLOAT",
+    "R16G16B16A16_SFLOAT",
+    "R16G16_SFLOAT"
+  ],
+  "compile_device": {
+    "device_id": 42880,
+    "name": "Intel(R) Graphics (RPL-S)",
+    "vendor_id": 32902
+  },
+  "compiler_executables": [
+    {
+      "description": "SIMD8 vertex shader",
+      "name": "vertex",
+      "simd_width": 8,
+      "stage": "vertex",
+      "statistics": {
+        "Cycle Count": 1659,
+        "Fill Count": 0,
+        "GRF registers": 0,
+        "Instruction Count": 290,
+        "Loop Count": 0,
+        "Max dispatch width": 8,
+        "Max live registers": 55,
+        "Non SSA regs after NIR": 33,
+        "SEND Count": 32,
+        "Scratch Memory Size": 0,
+        "Source hash": 3138456263,
+        "Spill Count": 0,
+        "Workgroup Memory Size": 0
+      }
+    },
+    {
+      "description": "SIMD8 fragment shader",
+      "name": "SIMD8 fragment",
+      "simd_width": 8,
+      "stage": "fragment",
+      "statistics": {
+        "Cycle Count": 48869,
+        "Fill Count": 0,
+        "GRF registers": 0,
+        "Instruction Count": 819,
+        "Loop Count": 10,
+        "Max dispatch width": 8,
+        "Max live registers": 84,
+        "Non SSA regs after NIR": 92,
+        "SEND Count": 64,
+        "Scratch Memory Size": 0,
+        "Source hash": 535557302,
+        "Spill Count": 0,
+        "Workgroup Memory Size": 0
+      }
+    }
+  ],
+  "entry_points": {
+    "fragment": "fs_main",
+    "vertex": "vs_main"
+  },
+  "files": {
+    "gbuffer.fs.simd8.bin": {
+      "bytes": 13888,
+      "sha256": "aeecf8fc264203532d1f485f8a645b935beb337e28ce18d30548b1823b9e2d51"
+    },
+    "gbuffer.fs.spv": {
+      "bytes": 21216,
+      "sha256": "0cd270b6c047417fafe4a37b3b8bad38a8c1fbcd05e90a3cc45ecce89d2b75f1"
+    },
+    "gbuffer.vs.simd8.bin": {
+      "bytes": 4080,
+      "sha256": "f58e54e5e75df3068ba6b2ff010918bfcf1d736ac51027b027171461385f010e"
+    },
+    "gbuffer.vs.spv": {
+      "bytes": 13676,
+      "sha256": "ef928cef3cd203a8cf63d1ca3db68e8f012774ecf9b711213bd3abaf312570f0"
+    },
+    "gbuffer.wgsl": {
+      "bytes": 21595,
+      "sha256": "683a8a891cb505b46eed726fa25d03ce8503f4ce966e5c10b12512a3fb73473e"
+    }
+  },
+  "frontend": "Helio vendored Naga WGSL-to-SPIR-V",
+  "pipeline_contract": {
+    "bind_group_count": 2,
+    "color_target_count": 8,
+    "depth_compare": "LESS_OR_EQUAL",
+    "depth_format": "D32_SFLOAT",
+    "material_texture_count": 256,
+    "vertex_stride": 40
+  },
+  "producer": "helio-gbuffer-shader-bake",
+  "required_vulkan_features": [
+    "shaderSampledImageArrayNonUniformIndexing",
+    "descriptorBindingSampledImageUpdateAfterBind"
+  ],
+  "schema": 1,
+  "source": "Helio crates/passes/3d/helio-pass-gbuffer/shaders/gbuffer.wgsl",
+  "vertex_attributes": [
+    {
+      "format": "R32G32B32_SFLOAT",
+      "location": 0,
+      "offset": 0
+    },
+    {
+      "format": "R32_SFLOAT",
+      "location": 1,
+      "offset": 12
+    },
+    {
+      "format": "R32G32_SFLOAT",
+      "location": 2,
+      "offset": 16
+    },
+    {
+      "format": "R32G32_SFLOAT",
+      "location": 5,
+      "offset": 24
+    },
+    {
+      "format": "R32_UINT",
+      "location": 3,
+      "offset": 32
+    },
+    {
+      "format": "R32_UINT",
+      "location": 4,
+      "offset": 36
+    }
+  ]
+}
