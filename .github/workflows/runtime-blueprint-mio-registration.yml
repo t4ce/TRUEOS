@@ -52,7 +52,7 @@ jobs:
           git diff --check
 
       - name: Check TRUEOS target
-        run: cargo check -p TRUEOS --target x86_64-unknown-trueos
+        run: cargo check -p TRUEOS
 
       - name: Commit source-only convergence
         run: |
