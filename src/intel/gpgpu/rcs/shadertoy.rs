@@ -32,7 +32,7 @@ fn direct_rcs_write_shadertoy_payload(
         return false;
     }
 
-    let uniforms_gpu = DIRECT_RCS_GPU_VA_BATCH_BASE + SHADERTOY_UNIFORMS_OFFSET_BYTES as u64;
+    let uniforms_gpu = state.gpu_va.batch + SHADERTOY_UNIFORMS_OFFSET_BYTES as u64;
     unsafe {
         let payload = state.batch_virt.add(SHADERTOY_PAYLOAD_OFFSET_BYTES);
         core::ptr::write_bytes(payload, 0, SHADERTOY_INDIRECT_BYTES);
@@ -141,7 +141,7 @@ fn direct_rcs_encode_shadertoy_batch(
             );
         }
     }
-    let uniforms_gpu = DIRECT_RCS_GPU_VA_BATCH_BASE + SHADERTOY_UNIFORMS_OFFSET_BYTES as u64;
+    let uniforms_gpu = state.gpu_va.batch + SHADERTOY_UNIFORMS_OFFSET_BYTES as u64;
     if !direct_rcs_write_buffer_surface_state(
         state,
         SHADERTOY_DST_SURFACE_STATE_OFFSET_BYTES,
@@ -189,8 +189,8 @@ fn direct_rcs_encode_shadertoy_batch(
     ok &= direct_rcs_push_state_base_address(
         batch,
         &mut cursor,
-        DIRECT_RCS_GPU_VA_BATCH_BASE,
-        DIRECT_RCS_GPU_VA_BATCH_BASE,
+        state.gpu_va.batch,
+        state.gpu_va.batch,
         upload.gpu,
     );
     ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_INVALIDATE_BITS);

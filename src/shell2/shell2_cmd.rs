@@ -5,23 +5,15 @@ use super::ShellBackend2;
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CommandSessionKind {
     FormatSure(u32),
-    RemoveSure(u64),
 }
 
 impl CommandSessionKind {
     pub(crate) const fn shows_session_activity(self) -> bool {
         match self {
             Self::FormatSure(_) => true,
-            Self::RemoveSure(_) => true,
         }
     }
 
-    pub(crate) const fn accepts_broadcast_input(self) -> bool {
-        match self {
-            Self::FormatSure(_) => false,
-            Self::RemoveSure(_) => false,
-        }
-    }
 }
 
 pub(crate) enum ParseOutcome {

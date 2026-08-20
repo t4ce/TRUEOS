@@ -22,7 +22,6 @@ struct BuiltinShell2CmdEntry {
 }
 
 const STATUS_GREEN_RGB: (u8, u8, u8) = (60, 220, 120);
-const STATUS_GREEN_SQUARE_BRACKET_RGB: (u8, u8, u8) = (78, 232, 136);
 const STATUS_PINK_RGB: (u8, u8, u8) = (255, 55, 255);
 const STATUS_BLUE_RGB: (u8, u8, u8) = (120, 210, 255);
 const STATUS_NETWORK_RGB: (u8, u8, u8) = (70, 220, 210);
@@ -33,23 +32,19 @@ const STATUS_RAINBOW_COLORS: [u8; 8] = [199, 208, 227, 121, 51, 39, 99, 201];
 
 const TOOL_JSON_ACPI: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["reboot","S1","S2","S3","S4","S5"],"description":"ACPI action to run."}},"required":["action"],"additionalProperties":false}"#;
 const TOOL_JSON_AUD: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
-const TOOL_JSON_7Z: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS path. Non-.7z files compress to a sibling .7z archive; .7z archives extract beside the archive."}},"required":["path"],"additionalProperties":false}"#;
 const TOOL_JSON_CPP: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["list","status","stop","font","spirit","svg"],"description":"Inspect or stop the interactive C++/IGC gallery, stamp/present/rush font RGBA, select Spirit's C++ repass, or control the SVG experiment. Omit action to launch the gallery."},"font_action":{"type":"string","enum":["stamp","present","rush","status","release"],"description":"Create an owned async RGBA stamp, present it through UI4, or control the staged Unicode glyph rush."},"rush_action":{"type":"string","enum":["start","stop"],"description":"Start or stop the font rush when action=font and font_action=rush; start is the default."},"text":{"type":"string","maxLength":4096,"description":"UTF-8 text for action=font; newlines create rows."},"font":{"type":"integer","minimum":1,"maximum":3,"description":"Optional GPU font face for action=font."},"size":{"type":"number","minimum":4,"maximum":2048,"description":"Font pixel size for action=font."},"color":{"type":"string","description":"Font RGBA color encoded as RRGGBBAA."},"canvas":{"type":"string","description":"Optional WIDTHxHEIGHT RGBA8 canvas at or below the UHD/4K soft cap."},"background_id":{"type":"integer","enum":[0,2,3,4,5,6,7,8,9,10,11],"description":"Spirit background ID when action is spirit; 11 is the UTC MagicTimeCircle."},"shader_id":{"type":"integer","minimum":0,"maximum":15,"description":"Spirit sprite shader ID when action is spirit."},"svg_action":{"type":"string","enum":["start","status","stop"],"description":"SVG-experiment lifecycle action when action=svg."},"svg_demo":{"type":"string","enum":["basic","curves","holes"],"description":"Byte-embedded SVG outline experiment selected when action=svg."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_DISC: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["list","format","ramdisc"],"description":"disc action to run."},"disk_id":{"type":"string","description":"Disk id string for action=format."},"size":{"type":"string","description":"Optional ramdisc size like 512MB or 1GiB for action=ramdisc."}},"required":["action"],"additionalProperties":false}"#;
-const TOOL_JSON_GRID: &str = r#"{"type":"object","properties":{"size":{"type":"string","pattern":"^[1-9][0-9]?[xX][1-9][0-9]?$","description":"Optional Gridpaper size from 1x1 through 39x55; defaults to 39x55."},"scale":{"type":"integer","minimum":1,"maximum":800,"description":"Optional scene scale percentage; defaults to native 100%."}},"required":[],"additionalProperties":false}"#;
+const TOOL_JSON_GRID: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
 const TOOL_JSON_GRIDP: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
 const TOOL_JSON_HELIO: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["start","list","status","stop","monitor","perf","logger"],"description":"Launch, list, inspect, or stop embedded Helio instances, or control Helio's temporary Spirit GPU logger (monitor, perf, and logger are aliases)."},"id":{"type":"integer","minimum":1,"maximum":4,"description":"Example id for action=start; 1 is simple-cube, 2 is churn-benchmark, 3 is shape-battle-royale, and 4 is pendulum-bigcloth."},"instance_id":{"type":"integer","minimum":1,"description":"Generated Helio instance id for action=stop."},"all":{"type":"boolean","description":"For action=stop, stop every live Helio instance instead of one instance_id."},"monitor_action":{"type":"string","enum":["start","status","off"],"description":"Start, inspect, or stop the Spirit 256x256 direct GPU logger."},"seconds":{"type":"integer","minimum":1,"maximum":300,"description":"Temporary logger lifetime in seconds; defaults to 30 and auto-restores Spirit afterward."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_VGPU: &str = r#"{"type":"object","properties":{"command":{"type":"string","enum":["status","test"],"description":"Inspect the vGPU broker or run a runtime test."},"test":{"type":"string","enum":["broker","abi","guc","compute","blit","all"],"description":"Runtime test selected when command=test."}},"required":["command"],"additionalProperties":false}"#;
 const TOOL_JSON_HYPER: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["status","probe"],"description":"Hyper transport view to print."},"url":{"type":"string","description":"Optional URL to download into TRUEOSFS."},"path":{"type":"string","description":"Optional TRUEOSFS destination path."}},"required":[],"additionalProperties":false}"#;
 #[cfg(feature = "trueos_lumen")]
 const TOOL_JSON_LUM: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
-const TOOL_JSON_MV: &str = r#"{"type":"object","properties":{"src":{"type":"string","description":"Source TRUEOSFS path."},"dst":{"type":"string","description":"Destination TRUEOSFS path."},"regex":{"type":"string","description":"Optional -regx pattern. When set, src and dst are directories."}},"required":["src","dst"],"additionalProperties":false}"#;
 const TOOL_JSON_NET: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["icmp","irc","nic","hostname"],"description":"net subcommand to run."},"target":{"type":"string","description":"Target host for net icmp."},"selector":{"type":"string","description":"Optional NIC selector like index, vid:pid, or bb:dd.f."},"host":{"type":"string","description":"Host for net irc."},"channel":{"type":"string","description":"Optional channel like #trueos for net irc."},"name":{"type":"string","description":"Optional hostname for net hostname."}},"required":["subcommand"],"additionalProperties":false}"#;
 const TOOL_JSON_QJS: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
 const TOOL_JSON_RAM: &str = r#"{"type":"object","properties":{"scope":{"type":"string","description":"Optional pmm, host, or numeric VM id. Omit to list all configured RAM scopes."}},"required":[],"additionalProperties":false}"#;
-const TOOL_JSON_RM: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS file or directory path."},"regex":{"type":"string","description":"Optional -regx pattern to match children under path."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_SET: &str = r#"{"type":"object","properties":{"width":{"type":"integer","minimum":50,"maximum":500,"description":"Shell line width."}},"required":["width"],"additionalProperties":false}"#;
-const TOOL_JSON_SHA: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS file to hash with SHA-256."}},"required":["path"],"additionalProperties":false}"#;
 const TOOL_JSON_SHOT: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
 const TOOL_JSON_SMP: &str = r#"{"type":"object","properties":{"slot":{"type":"integer","minimum":0,"description":"Optional SMP slot. Omit to list all slots."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_SSH: &str = r#"{"type":"object","properties":{"endpoint":{"type":"string","description":"SSH target in [user@]host[:port] form. Port 22 is used when omitted."}},"required":["endpoint"],"additionalProperties":false}"#;
@@ -70,10 +65,6 @@ fn dispatch_aud(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -
     super::cmds::aud::try_parse(spawner, io, rest)
 }
 
-fn dispatch_7z(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    super::cmds::sevenz::try_parse(io, rest)
-}
-
 fn dispatch_install(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let mut args = rest.split_whitespace();
     super::cmds::install::try_parse(spawner, io, &mut args)
@@ -89,37 +80,9 @@ fn dispatch_lum(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -
     super::cmds::lum::try_parse(spawner, io, rest)
 }
 
-fn dispatch_mv(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    super::cmds::mv::try_parse(io, "mv", rest)
-}
-
-fn dispatch_move(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    super::cmds::mv::try_parse(io, "move", rest)
-}
-
-fn dispatch_rm(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    super::cmds::rm::try_parse(spawner, io, "rm", rest)
-}
-
-fn dispatch_remove(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    super::cmds::rm::try_parse(spawner, io, "remove", rest)
-}
-
-fn dispatch_delete(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    super::cmds::rm::try_parse(spawner, io, "delete", rest)
-}
-
-fn dispatch_del(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    super::cmds::rm::try_parse(spawner, io, "del", rest)
-}
-
 fn dispatch_set(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let mut args = rest.split_whitespace();
     super::cmds::set::try_parse(io, &mut args)
-}
-
-fn dispatch_sha(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    super::cmds::sha::try_parse(io, rest)
 }
 
 fn dispatch_shot(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -234,17 +197,6 @@ fn dispatch_xhci(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) 
 
 const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
     BuiltinShell2CmdEntry {
-        name: "7z",
-        mode: "cmd",
-        color: Some(STATUS_GREEN_RGB),
-        advertised: false,
-        handler: dispatch_7z,
-        tool_description: Some(
-            "Queue a kernel codec job that compresses a TRUEOSFS file or extracts a .7z archive.",
-        ),
-        tool_parameters_json: Some(TOOL_JSON_7Z),
-    },
-    BuiltinShell2CmdEntry {
         name: "acpi",
         mode: "cmd",
         color: Some(STATUS_DARK_RED_RGB),
@@ -299,9 +251,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         color: Some(STATUS_ORANGE_RGB),
         advertised: true,
         handler: dispatch_grid,
-        tool_description: Some(
-            "Launch one Gridpaper Blueprint whose scene is executed by the ten-worker kernel service pool, with optional grid size and raster scale.",
-        ),
+        tool_description: Some("Launch the online Gridpaper app."),
         tool_parameters_json: Some(TOOL_JSON_GRID),
     },
     BuiltinShell2CmdEntry {
@@ -363,24 +313,6 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         tool_parameters_json: Some(TOOL_JSON_SURF),
     },
     BuiltinShell2CmdEntry {
-        name: "rm",
-        mode: "cmd",
-        color: Some(STATUS_GREEN_RGB),
-        advertised: false,
-        handler: dispatch_rm,
-        tool_description: Some("Remove a TRUEOSFS file or directory after confirmation."),
-        tool_parameters_json: Some(TOOL_JSON_RM),
-    },
-    BuiltinShell2CmdEntry {
-        name: "sha",
-        mode: "cmd",
-        color: Some(STATUS_GREEN_RGB),
-        advertised: false,
-        handler: dispatch_sha,
-        tool_description: Some("Hash a TRUEOSFS file with SHA-256."),
-        tool_parameters_json: Some(TOOL_JSON_SHA),
-    },
-    BuiltinShell2CmdEntry {
         name: "shot",
         mode: "cmd",
         color: Some(STATUS_GREEN_RGB),
@@ -408,51 +340,6 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         color: Some(STATUS_GREEN_RGB),
         advertised: false,
         handler: dispatch_tde,
-        tool_description: None,
-        tool_parameters_json: None,
-    },
-    BuiltinShell2CmdEntry {
-        name: "remove",
-        mode: "cmd",
-        color: Some(STATUS_GREEN_RGB),
-        advertised: false,
-        handler: dispatch_remove,
-        tool_description: None,
-        tool_parameters_json: None,
-    },
-    BuiltinShell2CmdEntry {
-        name: "delete",
-        mode: "cmd",
-        color: Some(STATUS_GREEN_RGB),
-        advertised: false,
-        handler: dispatch_delete,
-        tool_description: None,
-        tool_parameters_json: None,
-    },
-    BuiltinShell2CmdEntry {
-        name: "del",
-        mode: "cmd",
-        color: Some(STATUS_GREEN_RGB),
-        advertised: false,
-        handler: dispatch_del,
-        tool_description: None,
-        tool_parameters_json: None,
-    },
-    BuiltinShell2CmdEntry {
-        name: "mv",
-        mode: "cmd",
-        color: Some(STATUS_GREEN_RGB),
-        advertised: false,
-        handler: dispatch_mv,
-        tool_description: Some("Move TRUEOSFS files or directory contents."),
-        tool_parameters_json: Some(TOOL_JSON_MV),
-    },
-    BuiltinShell2CmdEntry {
-        name: "move",
-        mode: "cmd",
-        color: Some(STATUS_GREEN_RGB),
-        advertised: false,
-        handler: dispatch_move,
         tool_description: None,
         tool_parameters_json: None,
     },
@@ -662,7 +549,9 @@ mod tests {
         assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
 
         let registry = command_registry_json();
-        for retired in ["7z", "rm", "mv", "sha"] {
+        for retired in [
+            "7z", "mv", "move", "rm", "remove", "delete", "del", "sha",
+        ] {
             assert!(!registry.contains(alloc::format!("\"name\":\"{retired}\"").as_str()));
         }
         assert!(registry.contains("\"name\":\"tde\""));
@@ -725,10 +614,6 @@ pub(crate) fn command_names_status_text() -> AllocString {
 
     let mut first = true;
     for name in STATUS_ORDER {
-        // `rm` and `mv` remain separate commands; only their statusbar glyphs overlap.
-        if *name == "mv" {
-            continue;
-        }
         if *name == "backup" {
             if !first {
                 out.push(' ');
@@ -748,11 +633,7 @@ pub(crate) fn command_names_status_text() -> AllocString {
             out.push(' ');
         }
         first = false;
-        if entry.name == "rm" {
-            push_rm_mv_status_token(&mut out);
-        } else {
-            push_status_command_name(&mut out, entry);
-        }
+        push_status_command_name(&mut out, entry);
     }
 
     out
@@ -776,9 +657,6 @@ pub(crate) fn command_names_status_text_fitting(max_width: usize) -> AllocString
     let content_width = max_width.saturating_sub(3);
     let mut out = AllocString::new();
     for name in STATUS_ORDER {
-        if *name == "mv" {
-            continue;
-        }
         let mut token = AllocString::new();
         if *name == "backup" {
             push_colored_status_token(&mut token, name, STATUS_PINK_RGB);
@@ -786,11 +664,7 @@ pub(crate) fn command_names_status_text_fitting(max_width: usize) -> AllocString
             .iter()
             .find(|entry| entry.advertised && entry.name == *name)
         {
-            if entry.name == "rm" {
-                push_rm_mv_status_token(&mut token);
-            } else {
-                push_status_command_name(&mut token, entry);
-            }
+            push_status_command_name(&mut token, entry);
         } else {
             continue;
         }
@@ -810,20 +684,6 @@ pub(crate) fn command_names_status_text_fitting(max_width: usize) -> AllocString
     }
     out.push_str("...");
     out
-}
-
-fn push_rm_mv_status_token(out: &mut AllocString) {
-    for ch in "(r[m)v]".chars() {
-        let mut glyph = [0u8; 4];
-        let glyph = ch.encode_utf8(&mut glyph);
-        let color = if matches!(ch, '[' | ']') {
-            STATUS_GREEN_SQUARE_BRACKET_RGB
-        } else {
-            STATUS_GREEN_RGB
-        };
-        let styled = alloc::format!("{}", super::term_style::paint(glyph).bold().color(color));
-        out.push_str(styled.as_str());
-    }
 }
 
 fn push_status_command_name(out: &mut AllocString, entry: &BuiltinShell2CmdEntry) {

@@ -23,7 +23,9 @@ use crate::intel::gpgpu::{
     alpha_blend_worklist_max_descs, glyph_mask_layers_rgba8_2d_mode, particle_craft_rgba8_frame,
     poll_ui4_blueprint_sprite_scene, poll_ui4_compositor_submission,
     queue_ui4_blueprint_alpha_rects, queue_ui4_blueprint_sprite_scene,
-    release_rgba8_surface_for_scanout, shadertoy_rgba8_surface_full, skybox_sample_rgb565_to_rgba8,
+    ShaderToyRgba8Submission, ShaderToyRgba8SubmissionPoll, poll_shadertoy_rgba8_submission,
+    release_rgba8_surface_for_scanout, submit_shadertoy_rgba8_surface_full,
+    skybox_sample_rgb565_to_rgba8,
     sprite_quad_worklist_max_descs,
 };
 use crate::intel::gpu_font::{
@@ -511,6 +513,8 @@ struct BlueprintSceneSurface {
     pending_resize: Option<BlueprintPendingResize>,
     write_lease: Option<FrameWriteLease>,
     pending_gpu_release: Option<GpgpuRgba8ReleaseFence>,
+    pending_shadertoy_submission: Option<ShaderToyRgba8Submission>,
+    pending_compute_publish: Option<DamageRect>,
     pending_render_release: Option<crate::intel::render::ResidentSceneReleaseFence>,
     gpu_submission_unretired: bool,
     vgpu_surface: Option<u64>,
@@ -945,9 +949,9 @@ fn open_blueprint_frame(
     };
 
     let output = OutputId::from_slot(0).expect("UI4 D01 must exist");
-    // Visual compute is a synchronous full-frame producer. It needs one live
-    // front and one producer back, not the generic streaming scene's third
-    // queued allocation.
+    // Visual compute owns one live front and one producer back. ShaderToy may
+    // leave that back buffer in flight while UI4 polls its release fence, so
+    // it still avoids the generic streaming scene's third queued allocation.
     let frame_cadence = if visual_target_hz.is_some() {
         FrameCadence::Dirty
     } else {
@@ -1052,6 +1056,8 @@ fn open_blueprint_frame(
                 pending_resize: None,
                 write_lease: None,
                 pending_gpu_release: None,
+                pending_shadertoy_submission: None,
+                pending_compute_publish: None,
                 pending_render_release: None,
                 gpu_submission_unretired: false,
                 vgpu_surface: None,
@@ -1098,6 +1104,8 @@ fn open_blueprint_frame(
         pending_resize: None,
         write_lease: None,
         pending_gpu_release: None,
+        pending_shadertoy_submission: None,
+        pending_compute_publish: None,
         pending_render_release: None,
         gpu_submission_unretired: false,
         vgpu_surface: None,
@@ -2937,7 +2945,9 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_shadertoy_render(
     let Ok(destination) = gpgpu_rgba_surface(lease) else {
         return ERROR_UI4;
     };
-    let rendered = shadertoy_rgba8_surface_full(destination, params);
+    let Some(submission) = submit_shadertoy_rgba8_surface_full(destination, params) else {
+        return ERROR_BUSY;
+    };
     let mut surfaces = SURFACES.lock();
     let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
         return ERROR_NOT_FOUND;
@@ -2945,29 +2955,17 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_shadertoy_render(
     if surface.write_lease != Some(lease) {
         return ERROR_STATE;
     }
-    if rendered.ok {
-        let Some(release) = rendered.release else {
-            return ERROR_UI4;
-        };
-        surface.pending_gpu_release = Some(release);
-        return 0;
-    }
-    if rendered.submitted {
-        surface.gpu_submission_unretired = true;
-        crate::log_error!(target: "ui4/blueprint-frame";
-            "ShaderToy producer quarantined owner={:?} window={} shader={} frame={} buffer={} marker=0x{:08X} submit_ms={} reason=accepted-submission-not-retired action=no-cpu-fallback+retain-ring\n",
-            owner,
-            window_id,
-            params.shader_id,
-            lease.frame.raw(),
-            lease.buffer_index,
-            rendered.marker,
-            rendered.submit_ms,
-        );
-        ERROR_BUSY
-    } else {
-        ERROR_UI4
-    }
+    surface.pending_shadertoy_submission = Some(submission);
+    surface.gpu_submission_unretired = true;
+    crate::log_trace!(target: "ui4/blueprint-frame";
+        "ShaderToy producer queued owner={:?} window={} shader={} frame={} buffer={} release=async-compute-fence publish=BlueprintScene\n",
+        owner,
+        window_id,
+        params.shader_id,
+        lease.frame.raw(),
+        lease.buffer_index,
+    );
+    0
 }
 
 /// Render one positioned text-row job through the kernel font service and
@@ -4063,38 +4061,31 @@ fn render_stamped_text_for_surface(owner: WindowOwner, window_id: u32) -> i32 {
     0
 }
 
-/// Publish the completed dirty buffer and its window damage.
-pub extern "C" fn trueos_cabi_ui4_solara_frame_publish(
+/// Publish a Blueprint frame whose producer has already completed.  The
+/// compositor calls this directly for an asynchronously released compute
+/// frame, so it receives the owner explicitly instead of relying on a guest
+/// execution context.
+fn publish_blueprint_frame(
+    owner: WindowOwner,
     window_id: u32,
     damage_x: u32,
     damage_y: u32,
     damage_width: u32,
     damage_height: u32,
+    render_text: bool,
 ) -> i32 {
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let mut payload = [0u8; 8];
-        payload[..4].copy_from_slice(&damage_width.to_le_bytes());
-        payload[4..].copy_from_slice(&damage_height.to_le_bytes());
-        return guest_status(
-            trueos_vm::vmcall::OP_BP_UI4_SOLARA_FRAME_PUBLISH,
-            window_id as u64,
-            pack_u32_pair(damage_x, damage_y),
-            &payload,
-        );
-    }
-    let Some(owner) = blueprint_owner() else {
-        return ERROR_CONTEXT;
-    };
     if damage_width == 0 || damage_height == 0 {
         return ERROR_INVALID;
     }
-    let retained_text = render_retained_text_for_surface(owner, window_id);
-    if retained_text != 0 {
-        return retained_text;
-    }
-    let stamped_text = render_stamped_text_for_surface(owner, window_id);
-    if stamped_text != 0 {
-        return stamped_text;
+    if render_text {
+        let retained_text = render_retained_text_for_surface(owner, window_id);
+        if retained_text != 0 {
+            return retained_text;
+        }
+        let stamped_text = render_stamped_text_for_surface(owner, window_id);
+        if stamped_text != 0 {
+            return stamped_text;
+        }
     }
     let mut surfaces = SURFACES.lock();
     let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
@@ -4233,6 +4224,39 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_publish(
     0
 }
 
+/// Publish the completed dirty buffer and its window damage.
+pub extern "C" fn trueos_cabi_ui4_solara_frame_publish(
+    window_id: u32,
+    damage_x: u32,
+    damage_y: u32,
+    damage_width: u32,
+    damage_height: u32,
+) -> i32 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let mut payload = [0u8; 8];
+        payload[..4].copy_from_slice(&damage_width.to_le_bytes());
+        payload[4..].copy_from_slice(&damage_height.to_le_bytes());
+        return guest_status(
+            trueos_vm::vmcall::OP_BP_UI4_SOLARA_FRAME_PUBLISH,
+            window_id as u64,
+            pack_u32_pair(damage_x, damage_y),
+            &payload,
+        );
+    }
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT;
+    };
+    publish_blueprint_frame(
+        owner,
+        window_id,
+        damage_x,
+        damage_y,
+        damage_width,
+        damage_height,
+        true,
+    )
+}
+
 /// Publish the active BlueprintScene lease after its compute producer has
 /// finished writing the exact UI4 RGBA8 surface. This is intentionally not a
 /// RenderScene3d handoff: it requires UI4's compute release fence and the
@@ -4266,13 +4290,84 @@ pub extern "C" fn trueos_cabi_ui4_scene_compute_frame_publish(
         if surface.write_lease.is_none() {
             return ERROR_STATE;
         }
+        if surface.pending_shadertoy_submission.is_some() {
+            if damage_width == 0 || damage_height == 0 || damage_x >= surface.width || damage_y >= surface.height {
+                return ERROR_INVALID;
+            }
+            surface.pending_compute_publish = Some(DamageRect {
+                x: damage_x,
+                y: damage_y,
+                width: damage_width.min(surface.width - damage_x),
+                height: damage_height.min(surface.height - damage_y),
+            });
+            return 0;
+        }
         if surface.pending_gpu_release.is_none() || surface.pending_render_release.is_some() {
             return ERROR_STATE;
         }
     }
-    trueos_cabi_ui4_solara_frame_publish(
-        window_id, damage_x, damage_y, damage_width, damage_height,
+    publish_blueprint_frame(
+        owner,
+        window_id,
+        damage_x,
+        damage_y,
+        damage_width,
+        damage_height,
+        false,
     )
+}
+
+/// Advance ShaderToy producer fences from the UI4 service carrier.  The
+/// guest's `publish_compute` request is retained until the exact RGBA8 write
+/// has both reached its post marker and retired its GuC context.
+pub(crate) fn poll_blueprint_compute_submissions() {
+    let mut ready = Vec::new();
+    {
+        let mut surfaces = SURFACES.lock();
+        for surface in surfaces.iter_mut() {
+            let Some(submission) = surface.pending_shadertoy_submission else {
+                continue;
+            };
+            match poll_shadertoy_rgba8_submission(submission) {
+                ShaderToyRgba8SubmissionPoll::Pending => {}
+                ShaderToyRgba8SubmissionPoll::Complete(release) => {
+                    surface.pending_shadertoy_submission = None;
+                    surface.gpu_submission_unretired = false;
+                    surface.pending_gpu_release = Some(release);
+                    if let Some(damage) = surface.pending_compute_publish.take() {
+                        ready.push((surface.owner, surface.window.raw(), damage));
+                    }
+                }
+                ShaderToyRgba8SubmissionPoll::Failed => {
+                    surface.pending_shadertoy_submission = None;
+                    crate::log_error!(target: "ui4/blueprint-frame";
+                        "ShaderToy producer failed owner={:?} window={} action=retain-write-lease+quarantine-shadertoy-lane\n",
+                        surface.owner,
+                        surface.window.raw(),
+                    );
+                }
+            }
+        }
+    }
+    for (owner, window_id, damage) in ready {
+        let status = publish_blueprint_frame(
+            owner,
+            window_id,
+            damage.x,
+            damage.y,
+            damage.width,
+            damage.height,
+            false,
+        );
+        if status != 0 {
+            crate::log_warn!(target: "ui4/blueprint-frame";
+                "ShaderToy deferred compute publish failed owner={:?} window={} status={} action=retain-state\n",
+                owner,
+                window_id,
+                status,
+            );
+        }
+    }
 }
 
 pub extern "C" fn trueos_cabi_ui4_solara_frame_close(window_id: u32) -> i32 {

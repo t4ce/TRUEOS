@@ -297,6 +297,10 @@ pub(crate) async fn ui4_compositor_service_task() {
     let mut consecutive_failures = 0u32;
     let mut readiness_published = false;
     loop {
+        // ShaderToy uses a producer-owned RCS context.  Its BlueprintScene
+        // frame is handed to UI4 only after this nonblocking release poll;
+        // no producer thread spins for GPU completion.
+        super::blueprint_text::poll_blueprint_compute_submissions();
         let result = advance_async_composition(&mut runtime);
         match result {
             Ok(()) => {

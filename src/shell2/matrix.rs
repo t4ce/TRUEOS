@@ -501,18 +501,6 @@ pub(crate) fn claim_available_app_slot_selected(
     preferred_id
 }
 
-/// Demand a Matrix page and return the generation-bearing lifetime used by
-/// kernel resources attached to it.
-pub(crate) fn demand_slot_lease(requested: &str) -> MatrixSlotLease {
-    let id = normalize_slot_id(requested);
-    let mut guard = state().lock();
-    let idx = ensure_slot_index(&mut guard.slots, &id);
-    MatrixSlotLease {
-        id,
-        lifetime_generation: guard.slots[idx].lifetime_generation,
-    }
-}
-
 pub(crate) fn slot_lease_is_live(lease: &MatrixSlotLease) -> bool {
     state()
         .lock()

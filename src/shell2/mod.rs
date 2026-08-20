@@ -29,7 +29,7 @@ pub(crate) use crate::shell2::backends::{
 pub(crate) use interface::{ShellBackend2, ShellIo2, TerminalHandoffOwner};
 pub(crate) use matrix::{
     MatrixSlotAttachment, MatrixSlotAttachmentError, MatrixSlotAttachmentId, MatrixSlotLease,
-    attach_to_live_slot as attach_matrix_slot_resource, demand_slot_lease as demand_matrix_slot,
+    attach_to_live_slot as attach_matrix_slot_resource,
     detach_from_live_slot as detach_matrix_slot_resource,
     slot_lease_is_live as matrix_slot_is_live,
 };
@@ -104,7 +104,6 @@ struct CommandSession {
 pub(crate) enum CommandSessionInputResult {
     CompleteIdle,
     CompleteRunning,
-    KeepRunning,
 }
 
 #[derive(Clone)]
@@ -1557,37 +1556,6 @@ fn find_command_session_index(
     })
 }
 
-fn find_command_session_indexes(
-    sessions: &[CommandSession],
-    slot_id: &matrix::MatrixSlotId,
-    slot_lifetime_generation: u64,
-) -> alloc::vec::Vec<usize> {
-    sessions
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, session)| {
-            (session.slot_id == *slot_id
-                && session.slot_lifetime_generation == slot_lifetime_generation)
-                .then_some(idx)
-        })
-        .collect()
-}
-
-fn prune_finished_command_sessions(sessions: &mut alloc::vec::Vec<CommandSession>) {
-    sessions.retain(|session| {
-        let keep = match session.kind {
-            shell2_cmd::CommandSessionKind::RemoveSure(id) => {
-                crate::shell2::cmds::rm::session_exists(id)
-            }
-            shell2_cmd::CommandSessionKind::FormatSure(_) => true,
-        };
-        if !keep && session.kind.shows_session_activity() {
-            matrix::set_slot_activity(&session.slot_id, matrix::MatrixSlotActivity::Idle);
-        }
-        keep
-    });
-}
-
 fn retire_command_sessions(sessions: &mut alloc::vec::Vec<CommandSession>) {
     for session in sessions.drain(..) {
         if session.kind.shows_session_activity() {
@@ -1610,9 +1578,6 @@ fn handle_command_session_input(
             crate::shell2::cmds::format::handle_session_input(
                 spawner, io, &target, submitted, disc_id,
             )
-        }
-        shell2_cmd::CommandSessionKind::RemoveSure(session_id) => {
-            crate::shell2::cmds::rm::handle_session_input(spawner, &target, submitted, session_id)
         }
     }
 }
@@ -1892,11 +1857,6 @@ async fn run_shell2(
             }
         }
 
-        // Async command preparation can fail after the parser has established
-        // a confirmation session. Retire those completed sessions without
-        // consuming the user's next command as stale confirmation input.
-        prune_finished_command_sessions(&mut command_sessions);
-
         let Some(matrix_revision) = matrix::try_visible_revision(output_mask) else {
             // A spin lock must not monopolize this executor: NetShell's TCP
             // bridge runs cooperatively and needs a chance to drain output.
@@ -2094,14 +2054,6 @@ async fn run_shell2(
                     let active_slot = matrix::active_slot_id(output_mask);
                     let active_slot_lifetime_generation =
                         matrix::slot_lifetime_generation(&active_slot);
-                    let session_indexes = find_command_session_indexes(
-                        command_sessions.as_slice(),
-                        &active_slot,
-                        active_slot_lifetime_generation,
-                    );
-                    let has_broadcast_sessions = session_indexes
-                        .iter()
-                        .any(|idx| command_sessions[*idx].kind.accepts_broadcast_input());
                     if let Some(operator) = parse_double_section_operator(submitted) {
                         match operator {
                             DoubleSectionOperator::Clear => {
@@ -2180,44 +2132,6 @@ async fn run_shell2(
                                 render_active_slot_content(&out, output_mask, &transcript);
                             }
                         }
-                    } else if has_broadcast_sessions {
-                        if !submitted.is_empty() {
-                            record_user_line_for_active_slot(io, submitted);
-                            transcript = current_transcript_for_task(io);
-                            render_active_slot_content(&out, output_mask, &transcript);
-                        }
-                        let mut remove_indexes: alloc::vec::Vec<usize> = alloc::vec::Vec::new();
-                        for session_idx in session_indexes {
-                            if !command_sessions[session_idx].kind.accepts_broadcast_input() {
-                                continue;
-                            }
-                            match handle_command_session_input(
-                                &spawner,
-                                io,
-                                &command_sessions[session_idx],
-                                submitted,
-                                output_mask,
-                            ) {
-                                CommandSessionInputResult::CompleteIdle => {
-                                    if command_sessions[session_idx].kind.shows_session_activity() {
-                                        matrix::set_slot_activity(
-                                            &command_sessions[session_idx].slot_id,
-                                            matrix::MatrixSlotActivity::Idle,
-                                        );
-                                    }
-                                    remove_indexes.push(session_idx);
-                                }
-                                CommandSessionInputResult::CompleteRunning => {
-                                    remove_indexes.push(session_idx);
-                                }
-                                CommandSessionInputResult::KeepRunning => {}
-                            }
-                        }
-                        remove_indexes.sort_unstable();
-                        remove_indexes.dedup();
-                        for session_idx in remove_indexes.into_iter().rev() {
-                            let _ = command_sessions.remove(session_idx);
-                        }
                     } else if let Some(session_idx) = find_command_session_index(
                         command_sessions.as_slice(),
                         &active_slot,
@@ -2245,7 +2159,6 @@ async fn run_shell2(
                             CommandSessionInputResult::CompleteRunning => {
                                 let _ = command_sessions.remove(session_idx);
                             }
-                            CommandSessionInputResult::KeepRunning => {}
                         }
                     } else if !submitted.is_empty() {
                         if is_matrix_operator(submitted) {

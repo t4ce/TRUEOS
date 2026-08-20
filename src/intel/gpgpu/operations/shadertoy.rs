@@ -53,45 +53,44 @@ impl ShaderToyFrameParams {
     }
 }
 
-/// Render one reviewed ShaderToy Image pass over a complete trusted UI4 RGBA8
-/// allocation. The operation is synchronous through the producer-release
-/// marker, matching the other UI4 compute producers.
-pub(crate) fn shadertoy_rgba8_surface_full(
+/// One accepted ShaderToy dispatch.  Its backing belongs exclusively to the
+/// ShaderToy RCS lane until `poll_shadertoy_rgba8_submission` proves both the
+/// post marker and GuC context retirement.
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct ShaderToyRgba8Submission {
+    state: DirectRcsState,
     dst: GpgpuRgba8Surface,
-    params: ShaderToyFrameParams,
-) -> GpgpuRgba8KernelResult {
-    let start_tick = direct_rcs_now_tick();
-    if !dst.is_valid() || !params.is_valid() {
-        return GpgpuRgba8KernelResult::default();
-    }
-    let outcome = submit_shadertoy_rgba8(dst, params);
-    let ok = outcome.observed == SHADERTOY_POST_MARKER;
-    GpgpuRgba8KernelResult {
-        ok,
-        submitted: outcome.submitted,
-        marker: outcome.observed,
-        submit_ms: direct_rcs_elapsed_ms_since(start_tick),
-        release: ok.then(|| gpgpu_rgba8_release(dst)),
-    }
+    started_tick: u64,
 }
 
-fn submit_shadertoy_rgba8(
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ShaderToyRgba8SubmissionPoll {
+    Pending,
+    Complete(GpgpuRgba8ReleaseFence),
+    Failed,
+}
+
+/// Submit a reviewed ShaderToy Image pass without waiting for producer
+/// retirement.  UI4 owns the later release poll and publication.
+pub(crate) fn submit_shadertoy_rgba8_surface_full(
     dst: GpgpuRgba8Surface,
     params: ShaderToyFrameParams,
-) -> DirectRcsDispatchOutcome {
+) -> Option<ShaderToyRgba8Submission> {
     if !dst.is_valid() || !params.is_valid() {
-        return DirectRcsDispatchOutcome::default();
+        return None;
     }
-
-    let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
+    let _guard = SHADERTOY_RCS_SUBMIT_LOCK.lock();
+    if SHADERTOY_RCS_SUBMIT_RUNTIME.lock().pending.is_some() {
+        return None;
+    }
     let Some(dev) = super::claimed_device() else {
-        return DirectRcsDispatchOutcome::default();
+        return None;
     };
     let Some(upload) = upload_shadertoy_kernel(params.shader_id) else {
-        return DirectRcsDispatchOutcome::default();
+        return None;
     };
-    let Some(state) = direct_rcs_state_once(dev) else {
-        return DirectRcsDispatchOutcome::default();
+    let Some(state) = shadertoy_rcs_state_once(dev) else {
+        return None;
     };
 
     let forcewake_ok = direct_rcs_forcewake(dev);
@@ -102,24 +101,10 @@ fn submit_shadertoy_rgba8(
     let dst_ppgtt_ok =
         kernel_ppgtt_ok && direct_rcs_map_ppgtt_scanout(state, dst.gpu, dst.phys, dst.bytes);
     let batch_ok = dst_ppgtt_ok && direct_rcs_encode_shadertoy_batch(state, upload, dst, params);
-    let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
-    let observed = if submitted {
-        direct_rcs_poll_result_slot_timeout_ms(
-            state,
-            SHADERTOY_POST_MARKER_SLOT,
-            SHADERTOY_POST_MARKER,
-            UI4_COMPUTE_PRODUCER_RETIRE_TIMEOUT_MS,
-        )
-    } else {
-        0
-    };
-
-    if observed != SHADERTOY_POST_MARKER {
-        if submitted {
-            quarantine_direct_rcs_context("shadertoy-marker-timeout");
-        }
+    let submitted = batch_ok && shadertoy_rcs_submit_batch(dev, state);
+    if !submitted {
         crate::log_error!(target: "gpgpu";
-            "intel/gpgpu: shadertoy failed shader={} forcewake={} mapped={} ppgtt={} kernel={} dst={} batch={} submitted={} observed=0x{:08X} want=0x{:08X} extent={}x{} pitch={} artifact={} kernel_gpu=0x{:X} dst_gpu=0x{:X}\n",
+            "intel/gpgpu: shadertoy submit rejected shader={} forcewake={} mapped={} ppgtt={} kernel={} dst={} batch={} extent={}x{} pitch={} artifact={} kernel_gpu=0x{:X} dst_gpu=0x{:X}\n",
             params.shader_id,
             forcewake_ok as u8,
             mapped_ok as u8,
@@ -127,9 +112,6 @@ fn submit_shadertoy_rgba8(
             kernel_ppgtt_ok as u8,
             dst_ppgtt_ok as u8,
             batch_ok as u8,
-            submitted as u8,
-            observed,
-            SHADERTOY_POST_MARKER,
             dst.width,
             dst.height,
             dst.pitch_bytes,
@@ -137,10 +119,48 @@ fn submit_shadertoy_rgba8(
             upload.gpu,
             dst.gpu,
         );
+        return None;
     }
+    Some(ShaderToyRgba8Submission {
+        state,
+        dst,
+        started_tick: direct_rcs_now_tick(),
+    })
+}
 
-    DirectRcsDispatchOutcome {
-        submitted,
-        observed,
+/// Make one nonblocking completion observation.  This replaces the old
+/// 1-second busy wait on the Blueprint producer path.
+pub(crate) fn poll_shadertoy_rgba8_submission(
+    submission: ShaderToyRgba8Submission,
+) -> ShaderToyRgba8SubmissionPoll {
+    let _guard = SHADERTOY_RCS_SUBMIT_LOCK.lock();
+    let observed = direct_rcs_read_result_slot(submission.state, SHADERTOY_POST_MARKER_SLOT);
+    let proof = direct_rcs_retirement_proof_on_lane(
+        submission.state,
+        DirectRcsLane::ShaderToy,
+        observed == SHADERTOY_POST_MARKER,
+    );
+    if proof.complete() {
+        complete_shadertoy_rcs_submission();
+        return ShaderToyRgba8SubmissionPoll::Complete(gpgpu_rgba8_release(submission.dst));
     }
+    if direct_rcs_elapsed_ms_since(submission.started_tick)
+        < UI4_COMPUTE_PRODUCER_RETIRE_TIMEOUT_MS
+    {
+        return ShaderToyRgba8SubmissionPoll::Pending;
+    }
+    let reason = if observed == SHADERTOY_POST_MARKER {
+        "completion-marker-observed-context-save-timeout"
+    } else {
+        "completion-marker-timeout"
+    };
+    quarantine_shadertoy_rcs_context(reason);
+    crate::log_error!(target: "gpgpu";
+        "intel/gpgpu: shadertoy release timeout marker=0x{:08X} want=0x{:08X} saved_head={} published_tail={} action=quarantine-shadertoy-lane\n",
+        observed,
+        SHADERTOY_POST_MARKER,
+        proof.saved_head_bytes,
+        proof.published_tail_bytes,
+    );
+    ShaderToyRgba8SubmissionPoll::Failed
 }

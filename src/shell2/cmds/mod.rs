@@ -15,16 +15,12 @@ pub(crate) mod hyper;
 pub(crate) mod install;
 #[cfg(feature = "trueos_lumen")]
 pub(crate) mod lum;
-pub(crate) mod mv;
 pub(crate) mod net;
 pub(crate) mod qjs;
 pub(crate) mod ram;
 pub(crate) mod rapl;
-pub(crate) mod rm;
 pub(crate) mod run;
 pub(crate) mod set;
-pub(crate) mod sevenz;
-pub(crate) mod sha;
 pub(crate) mod smp;
 pub(crate) mod ssh;
 pub(crate) mod surf;
