@@ -22,6 +22,16 @@ pub struct Metadata {
     pub len: u64,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct MountInfo {
+    /// Selector accepted by every async filesystem operation, for example
+    /// `trueosfs:disc3` for the root and `trueosfs:disc3/apps` below it.
+    pub selector: String,
+    pub label: String,
+    pub primary: bool,
+    pub read_only: bool,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RecordKey {
     Ffa,
@@ -172,6 +182,80 @@ pub async fn list_dir_utf8(path: &[u8]) -> Result<String, i32> {
     }
     operation.discard();
     String::from_utf8(bytes).map_err(|_| ERR_BAD_UTF8)
+}
+
+/// Enumerate host-granted TRUEOSFS root mounts.
+///
+/// Standard `async_fs` paths remain mapped to the app and common roots. The
+/// host launcher must explicitly grant `fs-scope trueosfs` for this call and
+/// for selectors returned by it.
+pub async fn list_mounts() -> Result<Vec<MountInfo>, i32> {
+    let mut operation = Operation::from_start(unsafe {
+        vcabi::trueos_cabi_async_fs_list_mounts_start()
+    })?;
+    operation.ready().await?;
+    let len = unsafe { vcabi::trueos_cabi_async_fs_result_len(operation.id) };
+    if len < 0 {
+        return Err(len as i32);
+    }
+    let mut bytes = vec![0u8; len as usize];
+    let got = unsafe {
+        vcabi::trueos_cabi_async_fs_result_read(operation.id, 0, bytes.as_mut_ptr(), bytes.len())
+    };
+    if got != bytes.len() as isize {
+        return Err(if got < 0 { got as i32 } else { ERR_IO });
+    }
+    operation.discard();
+    let text = String::from_utf8(bytes).map_err(|_| ERR_BAD_UTF8)?;
+    parse_mounts(text.as_str())
+}
+
+fn parse_mounts(text: &str) -> Result<Vec<MountInfo>, i32> {
+    let mut mounts = Vec::new();
+    for line in text.lines().filter(|line| !line.is_empty()) {
+        let mut fields = line.split('\t');
+        let (Some(selector), Some(label), Some(primary), Some(read_only)) =
+            (fields.next(), fields.next(), fields.next(), fields.next())
+        else {
+            return Err(ERR_IO);
+        };
+        if fields.next().is_some()
+            || !selector.starts_with("trueosfs:disc")
+            || !matches!(primary, "0" | "1")
+            || !matches!(read_only, "0" | "1")
+        {
+            return Err(ERR_IO);
+        }
+        mounts.push(MountInfo {
+            selector: String::from(selector),
+            label: String::from(label),
+            primary: primary == "1",
+            read_only: read_only == "1",
+        });
+    }
+    Ok(mounts)
+}
+
+#[cfg(test)]
+mod mount_tests {
+    use super::*;
+
+    #[test]
+    fn parses_mount_records() {
+        let mounts = parse_mounts(
+            "trueosfs:disc2\tSystem\t1\t0\ntrueosfs:disc7\tArchive\t0\t1",
+        )
+        .unwrap();
+        assert_eq!(mounts.len(), 2);
+        assert!(mounts[0].primary);
+        assert!(mounts[1].read_only);
+    }
+
+    #[test]
+    fn rejects_malformed_mount_records() {
+        assert_eq!(parse_mounts("trueosfs:disc2\tSystem\tmaybe\t0"), Err(ERR_IO));
+        assert_eq!(parse_mounts("disc2\tSystem\t1\t0"), Err(ERR_IO));
+    }
 }
 
 /// Replace a complete file without executing storage work on the Blueprint lane.

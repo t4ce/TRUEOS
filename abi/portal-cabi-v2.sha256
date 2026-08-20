@@ -145,4 +145,8 @@
 # The terminal-surface snapshot call is likewise strictly additive. It returns
 # only a monotonic presentation generation and cell geometry; reconnect and
 # resize detection require no signal emulation or in-band terminal bytes.
-0fb43127cbec1a786a5fbf1ab88980d661d498e89c4bbe1d0de8ed0f6d323090
+# Mounted-root enumeration is strictly additive and capability-gated. It
+# exposes bounded labels and opaque selectors only after a host launch grant.
+# Standard v filesystem path resolution remains app/common scoped; hardening
+# raw filesystem vmcalls is a separate compatibility boundary.
+a73655905b68a5626dfd92a784878aa3d370c3312c7ba16e6985882a794803cf

@@ -2555,6 +2555,7 @@ pub fn stage_blueprint_launch(
             state.archive.as_str(),
             Some(app_fs_root.as_str()),
             Some(&state.identity),
+            state.launch_script.as_deref(),
         ),
         console_target,
         console_surface,
@@ -4413,9 +4414,10 @@ pub(crate) fn blueprint_console_submit_control_line(vm_id: u8, line: &str) -> bo
         .and_then(|slot| {
             slot.lock()
                 .as_ref()
-                .filter(|context| {
-                    context.console_attached && !context.terminal_lease.suppresses_terminal_output()
-                })
+                // VMX controls must remain callable while a terminal lease is
+                // parked in Shell2. Ordinary Blueprint command passthrough is
+                // still gated by `blueprint_app_command_passthrough_enabled`.
+                .filter(|context| context.console_attached)
                 .map(|_| ())
         })
         .is_none()

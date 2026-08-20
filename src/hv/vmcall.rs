@@ -31,6 +31,14 @@ fn sampled_text_scene_busy_log() -> bool {
         == 0
 }
 
+fn vm_has_trueosfs_scope(vm_id: u8) -> bool {
+    crate::hv::blueprint_process_env_var(vm_id, "TRUEOS_FS_SCOPE").as_deref() == Some("trueosfs")
+}
+
+fn vm_mount_selector_allowed(vm_id: u8, path: &str) -> bool {
+    !path.starts_with("trueosfs:disc") || vm_has_trueosfs_scope(vm_id)
+}
+
 // ── op codes (u32, written by guest before vmcall) ──────────────────────────
 pub const OP_PRESERVE: u32 = 0x01; // snapshot + stop
 pub const OP_PING: u32 = 0x02; // response_data = 0xCAFE_BABE
@@ -122,6 +130,7 @@ pub const OP_BP_ASYNC_FS_WRITE_COMMIT: u32 = 0xD7; // arg0 operation id -> rc
 pub const OP_BP_ASYNC_FS_CREATE_DIR_ALL_START: u32 = 0xD8; // payload resolved path -> operation id/rc
 pub const OP_BP_ASYNC_FS_STAT_START: u32 = 0xD9; // payload resolved path -> operation id/rc
 pub const OP_BP_ASYNC_FS_LIST_DIR_START: u32 = 0xDA; // payload resolved path -> operation id/rc
+pub const OP_BP_ASYNC_FS_LIST_MOUNTS_START: u32 = 0x139; // no payload -> mounted TRUEOSFS roots
 pub const OP_BP_UI4_SCENE_KEYBOARD_STATE: u32 = 0xDB; // arg0 window -> rc + focused held-key state
 pub const OP_BP_UI4_SCENE_FRAME_OPEN_IMMUTABLE: u32 = 0xDC; // arg0 x/y,arg1 width/height -> window
 pub const OP_BP_UI4_SCENE_SPRITE_UPLOAD_BEGIN: u32 = 0xDD; // arg0 window,arg1 sprite,payload width/height -> rc
@@ -3707,6 +3716,17 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
+        OP_BP_ASYNC_FS_LIST_MOUNTS_START => {
+            let rc = if vm_has_trueosfs_scope(vm_id) {
+                crate::r::io::async_fs_cabi::start_list_mounts(
+                    crate::r::io::async_fs_cabi::owner_for_vm(vm_id),
+                )
+            } else {
+                crate::r::io::cabi::FS_ERR_BAD_PATH
+            };
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
         OP_BP_ASYNC_FS_READ_START | OP_BP_ASYNC_FS_REMOVE_START => {
             let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
             let Some(p) = host_ptr(vm_id) else {
@@ -3742,6 +3762,16 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 };
                 path.to_relative_string()
             };
+            if !vm_mount_selector_allowed(vm_id, path.as_str()) {
+                write_response(
+                    vm_id,
+                    seq,
+                    STATUS_OK,
+                    (crate::r::io::cabi::FS_ERR_BAD_PATH as i64) as u64,
+                    0,
+                );
+                return DispatchOutcome::Resume;
+            }
             let owner = crate::r::io::async_fs_cabi::owner_for_vm(vm_id);
             let rc = if op == OP_BP_ASYNC_FS_READ_START {
                 crate::r::io::async_fs_cabi::start_read(owner, path)
@@ -3778,12 +3808,19 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 );
                 return DispatchOutcome::Resume;
             };
+            let path = path.to_relative_string();
+            if !vm_mount_selector_allowed(vm_id, path.as_str()) {
+                write_response(
+                    vm_id,
+                    seq,
+                    STATUS_OK,
+                    (crate::r::io::cabi::FS_ERR_BAD_PATH as i64) as u64,
+                    0,
+                );
+                return DispatchOutcome::Resume;
+            }
             let owner = crate::r::io::async_fs_cabi::owner_for_vm(vm_id);
-            let rc = crate::r::io::async_fs_cabi::start_write(
-                owner,
-                path.to_relative_string(),
-                arg0 as usize,
-            );
+            let rc = crate::r::io::async_fs_cabi::start_write(owner, path, arg0 as usize);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
@@ -3838,6 +3875,16 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             };
             let owner = crate::r::io::async_fs_cabi::owner_for_vm(vm_id);
             let path = path.to_relative_string();
+            if !vm_mount_selector_allowed(vm_id, path.as_str()) {
+                write_response(
+                    vm_id,
+                    seq,
+                    STATUS_OK,
+                    (crate::r::io::cabi::FS_ERR_BAD_PATH as i64) as u64,
+                    0,
+                );
+                return DispatchOutcome::Resume;
+            }
             let rc = match op {
                 OP_BP_ASYNC_FS_CREATE_DIR_ALL_START => {
                     crate::r::io::async_fs_cabi::start_create_dir_all(owner, path)

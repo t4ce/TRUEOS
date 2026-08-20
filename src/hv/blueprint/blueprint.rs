@@ -1653,6 +1653,7 @@ pub(crate) fn build_process_env(
     archive: &str,
     app_fs_root: Option<&str>,
     identity: Option<&crate::hv::BlueprintInstanceIdentity>,
+    launch_script: Option<&str>,
 ) -> BTreeMap<String, String> {
     let mut vars = BTreeMap::new();
     let app_home = app_fs_root
@@ -1750,6 +1751,20 @@ pub(crate) fn build_process_env(
         vars.insert(String::from("PRISM_MAX_EXPORT_QUBITS"), String::from("26"));
     }
     vars.insert(String::from("TRUEOS_APP_ARCHIVE"), String::from(archive));
+    // Launch scripts are supplied by the host-side launcher, not by the
+    // Blueprint. Treat this exact directive as an explicit filesystem
+    // capability grant while leaving the normal app/common confinement intact.
+    if launch_script.is_some_and(|script| {
+        script
+            .lines()
+            .map(str::trim)
+            .any(|line| line == "fs-scope trueosfs")
+    }) {
+        vars.insert(
+            String::from("TRUEOS_FS_SCOPE"),
+            String::from("trueosfs"),
+        );
+    }
     if let Some(root) = app_fs_root {
         vars.insert(String::from("TRUEOS_APP_FS_ROOT"), String::from(root));
     }

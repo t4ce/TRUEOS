@@ -281,9 +281,10 @@ pub(crate) fn attach(vm_id: u8, cols: usize, rows: usize) -> i32 {
             ..
         } = state.lease
         {
-            if state.handoff_owner.is_some() {
-                return FRONTEND_BUSY_ERROR;
-            }
+            // The UI frontend remains the geometry authority while a direct
+            // terminal owner is active. Window resize and private zoom both
+            // update this existing session; ownership and input routing stay
+            // unchanged while the new grid is reported to the handoff guest.
             state.lease = LeaseState::Active {
                 creator_vm,
                 creator_run_generation,

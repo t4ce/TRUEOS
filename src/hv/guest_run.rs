@@ -487,6 +487,7 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
             state.archive.as_str(),
             Some(app_fs_root.as_str()),
             Some(&state.identity),
+            state.launch_script.as_deref(),
         );
         crate::hv::blueprint::invoke_host_rel(
             unpacked,

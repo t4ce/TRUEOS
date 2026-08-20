@@ -25,6 +25,7 @@ enum RequestKind {
     Stat { path: String },
     RecordKey { path: String },
     ListDir { path: String },
+    ListMounts,
     Remove { path: String },
 }
 
@@ -273,6 +274,10 @@ pub(crate) fn start_list_dir(owner: u32, path: String) -> i32 {
     id
 }
 
+pub(crate) fn start_list_mounts(owner: u32) -> i32 {
+    start(owner, RequestKind::ListMounts)
+}
+
 pub(crate) fn start_remove(owner: u32, path: String) -> i32 {
     start(owner, RequestKind::Remove { path })
 }
@@ -341,29 +346,94 @@ pub(crate) fn discard(owner: u32, id: u32) -> i32 {
     0
 }
 
+fn selected_disk(path: &str) -> Result<(crate::disc::block::DeviceHandle, &str), i32> {
+    const PREFIX: &str = "trueosfs:disc";
+    let Some(selector) = path.strip_prefix(PREFIX) else {
+        return crate::r::fs::trueosfs::primary_root_handle()
+            .map(|disk| (disk, path))
+            .ok_or(FS_ERR_NOT_FOUND);
+    };
+    let (raw, relative) = selector.split_once('/').unwrap_or((selector, ""));
+    let raw = raw.parse::<u32>().map_err(|_| FS_ERR_BAD_PATH)?;
+    let disk_id = crate::disc::block::DiscId::from_raw(raw);
+    if !crate::r::fs::trueosfs::list_roots()
+        .iter()
+        .any(|root| root.disk_id == disk_id)
+    {
+        return Err(FS_ERR_NOT_FOUND);
+    }
+    crate::disc::block::device_handle(disk_id)
+        .map(|disk| (disk, relative))
+        .ok_or(FS_ERR_NOT_FOUND)
+}
+
+fn mounted_roots_text() -> String {
+    use core::fmt::Write as _;
+
+    let primary = crate::r::fs::trueosfs::primary_root_id();
+    let mut out = String::new();
+    for root in crate::r::fs::trueosfs::list_roots() {
+        let Some(disk) = crate::disc::block::device_handle(root.disk_id) else {
+            continue;
+        };
+        let info = disk.info();
+        let label = info
+            .label
+            .as_deref()
+            .unwrap_or("TRUEOSFS")
+            .replace(['\t', '\r', '\n'], " ");
+        let _ = writeln!(
+            out,
+            "trueosfs:disc{}\t{}\t{}\t{}",
+            root.disk_id.raw(),
+            label,
+            u8::from(primary == Some(root.disk_id)),
+            u8::from(info.is_read_only()),
+        );
+    }
+    if out.ends_with('\n') {
+        out.pop();
+    }
+    out
+}
+
 async fn process(request: &Request) -> OperationState {
-    let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
-        return OperationState::Failed(FS_ERR_NOT_FOUND);
+    if matches!(request.kind, RequestKind::ListMounts) {
+        return OperationState::Read(mounted_roots_text().into_bytes());
+    }
+    let path = match &request.kind {
+        RequestKind::Read { path }
+        | RequestKind::Write { path, .. }
+        | RequestKind::CreateDirAll { path }
+        | RequestKind::Stat { path }
+        | RequestKind::RecordKey { path }
+        | RequestKind::ListDir { path }
+        | RequestKind::Remove { path } => path.as_str(),
+        RequestKind::ListMounts => unreachable!(),
+    };
+    let (disk, selected_path) = match selected_disk(path) {
+        Ok(selected) => selected,
+        Err(code) => return OperationState::Failed(code),
     };
     match &request.kind {
-        RequestKind::Read { path } => {
-            match crate::r::fs::trueosfs::file_info_async(disk, path.as_str()).await {
+        RequestKind::Read { path: _ } => {
+            let path = selected_path;
+            match crate::r::fs::trueosfs::file_info_async(disk, path).await {
                 Ok(Some(info)) if info.data_len > ASYNC_FS_MAX_RESULT_BYTES => {
                     OperationState::Failed(FS_ERR_TOO_LARGE)
                 }
-                Ok(Some(_)) => {
-                    match crate::r::fs::trueosfs::file_out_async(disk, path.as_str()).await {
-                        Ok(Some(bytes)) => OperationState::Read(bytes),
-                        Ok(None) => OperationState::Failed(FS_ERR_NOT_FOUND),
-                        Err(error) => OperationState::Failed(map_block_error(error)),
-                    }
-                }
+                Ok(Some(_)) => match crate::r::fs::trueosfs::file_out_async(disk, path).await {
+                    Ok(Some(bytes)) => OperationState::Read(bytes),
+                    Ok(None) => OperationState::Failed(FS_ERR_NOT_FOUND),
+                    Err(error) => OperationState::Failed(map_block_error(error)),
+                },
                 Ok(None) => OperationState::Failed(FS_ERR_NOT_FOUND),
                 Err(error) => OperationState::Failed(map_block_error(error)),
             }
         }
         RequestKind::Write { path, bytes } => {
-            match crate::r::fs::trueosfs::file_in_async(disk, path.as_str(), bytes.as_slice()).await
+            let _ = path;
+            match crate::r::fs::trueosfs::file_in_async(disk, selected_path, bytes.as_slice()).await
             {
                 Ok(true) => OperationState::Unit,
                 Ok(false) => OperationState::Failed(FS_ERR_NO_SPACE),
@@ -371,33 +441,35 @@ async fn process(request: &Request) -> OperationState {
             }
         }
         RequestKind::CreateDirAll { path } => {
-            match crate::r::fs::trueosfs::dir_create_all_async(disk, path.as_str()).await {
+            let _ = path;
+            match crate::r::fs::trueosfs::dir_create_all_async(disk, selected_path).await {
                 Ok(true) => OperationState::Unit,
                 Ok(false) => OperationState::Failed(FS_ERR_NO_SPACE),
                 Err(error) => OperationState::Failed(map_block_error(error)),
             }
         }
         RequestKind::Stat { path } => {
+            let _ = path;
+            let path = selected_path;
             let stat = if path.is_empty() {
                 Ok((2u32, 0u64))
             } else {
-                match crate::r::fs::trueosfs::file_info_async(disk, path.as_str()).await {
+                match crate::r::fs::trueosfs::file_info_async(disk, path).await {
                     Ok(Some(info)) => Ok((1u32, info.data_len)),
                     Ok(None) => {
                         let marker = alloc::format!("{}/.keep", path);
                         match crate::r::fs::trueosfs::file_exists_async(disk, marker.as_str()).await
                         {
                             Ok(true) => Ok((2u32, 0u64)),
-                            Ok(false) => match crate::r::fs::trueosfs::dir_has_children_async(
-                                disk,
-                                path.as_str(),
-                            )
-                            .await
-                            {
-                                Ok(true) => Ok((2u32, 0u64)),
-                                Ok(false) => Err(FS_ERR_NOT_FOUND),
-                                Err(error) => Err(map_block_error(error)),
-                            },
+                            Ok(false) => {
+                                match crate::r::fs::trueosfs::dir_has_children_async(disk, path)
+                                    .await
+                                {
+                                    Ok(true) => Ok((2u32, 0u64)),
+                                    Ok(false) => Err(FS_ERR_NOT_FOUND),
+                                    Err(error) => Err(map_block_error(error)),
+                                }
+                            }
                             Err(error) => Err(map_block_error(error)),
                         }
                     }
@@ -415,7 +487,8 @@ async fn process(request: &Request) -> OperationState {
             }
         }
         RequestKind::RecordKey { path } => {
-            match crate::r::fs::trueosfs::file_info_async(disk, path.as_str()).await {
+            let _ = path;
+            match crate::r::fs::trueosfs::file_info_async(disk, selected_path).await {
                 Ok(Some(info)) => {
                     let mut bytes = Vec::with_capacity(56);
                     match info.record_key {
@@ -433,14 +506,14 @@ async fn process(request: &Request) -> OperationState {
                 Err(error) => OperationState::Failed(map_block_error(error)),
             }
         }
-        RequestKind::ListDir { path } => {
+        RequestKind::ListDir { path: _ } => {
             crate::log_info!(target: "filesystem";
                 "blueprint-async-fs: begin id={} op=list-dir owner={} path={}\n",
                 request.id,
                 request.owner,
-                path
+                selected_path
             );
-            let state = match crate::r::fs::trueosfs::list_dir_async(disk, path.as_str()).await {
+            let state = match crate::r::fs::trueosfs::list_dir_async(disk, selected_path).await {
                 Ok(Some(listing)) if listing.len() as u64 > ASYNC_FS_MAX_RESULT_BYTES => {
                     OperationState::Failed(FS_ERR_TOO_LARGE)
                 }
@@ -466,12 +539,14 @@ async fn process(request: &Request) -> OperationState {
             state
         }
         RequestKind::Remove { path } => {
-            match crate::r::fs::trueosfs::file_delete_async(disk, path.as_str()).await {
+            let _ = path;
+            match crate::r::fs::trueosfs::file_delete_async(disk, selected_path).await {
                 Ok(true) => OperationState::Unit,
                 Ok(false) => OperationState::Failed(FS_ERR_NOT_FOUND),
                 Err(error) => OperationState::Failed(map_block_error(error)),
             }
         }
+        RequestKind::ListMounts => unreachable!(),
     }
 }
 
@@ -713,6 +788,28 @@ pub unsafe extern "C" fn trueos_cabi_async_fs_list_dir_start(
         guest_start(trueos_vm::vmcall::OP_BP_ASYNC_FS_LIST_DIR_START, path.as_str())
     } else {
         start_list_dir(direct_owner(), path)
+    }
+}
+
+/// Enumerate every mounted TRUEOSFS root visible to a host-granted explorer.
+///
+/// The result uses the normal async result functions and contains one UTF-8
+/// TSV record per mount: selector, label, primary flag, read-only flag.
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_async_fs_list_mounts_start() -> i32 {
+    if !super::env::trueosfs_scope_granted() {
+        return FS_ERR_BAD_PATH;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let (call_status, value) =
+            trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_ASYNC_FS_LIST_MOUNTS_START, 0, 0);
+        if call_status == trueos_vm::vmcall::STATUS_OK {
+            (value as i64) as i32
+        } else {
+            FS_ERR_BAD_PARAM
+        }
+    } else {
+        start_list_mounts(direct_owner())
     }
 }
 

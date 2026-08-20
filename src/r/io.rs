@@ -356,6 +356,10 @@ pub mod env {
         }
     }
 
+    pub(crate) fn trueosfs_scope_granted() -> bool {
+        var("TRUEOS_FS_SCOPE").as_deref() == Some("trueosfs")
+    }
+
     pub(crate) unsafe extern "C" fn getenv(name: *const c_char) -> *mut c_char {
         let Some(key) = (unsafe { cstr_to_str(name) }) else {
             return ptr::null_mut();
@@ -402,6 +406,9 @@ pub mod env {
     }
 
     pub(crate) fn resolve_fs_path(path: &str, allow_empty: bool) -> Option<String> {
+        if trueosfs_scope_granted() {
+            return normalize_app_path(path, allow_empty);
+        }
         let Some(root) = current_app_fs_root() else {
             return Some(String::from(path));
         };
@@ -443,11 +450,12 @@ pub mod vgpu_cabi;
 pub mod cabi {
     pub use super::async_fs_cabi::{
         trueos_cabi_async_fs_create_dir_all_start, trueos_cabi_async_fs_discard,
-        trueos_cabi_async_fs_list_dir_start, trueos_cabi_async_fs_read_start,
-        trueos_cabi_async_fs_remove_start, trueos_cabi_async_fs_result_len,
-        trueos_cabi_async_fs_result_read, trueos_cabi_async_fs_stat_start,
-        trueos_cabi_async_fs_status, trueos_cabi_async_fs_write_begin,
-        trueos_cabi_async_fs_write_chunk, trueos_cabi_async_fs_write_commit,
+        trueos_cabi_async_fs_list_dir_start, trueos_cabi_async_fs_list_mounts_start,
+        trueos_cabi_async_fs_read_start, trueos_cabi_async_fs_remove_start,
+        trueos_cabi_async_fs_result_len, trueos_cabi_async_fs_result_read,
+        trueos_cabi_async_fs_stat_start, trueos_cabi_async_fs_status,
+        trueos_cabi_async_fs_write_begin, trueos_cabi_async_fs_write_chunk,
+        trueos_cabi_async_fs_write_commit,
     };
     pub use super::calculator_cabi::*;
     pub use super::fs_cabi::*;
