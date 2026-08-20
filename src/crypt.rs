@@ -473,6 +473,17 @@ pub(crate) fn logout(scope_id: u8) -> bool {
     }
 }
 
+/// Point-in-time authorization decision for kernel services which require an
+/// authenticated two-factor session. The session remains owned by `crypt`;
+/// callers receive neither a cloned credential nor reusable auth material.
+pub(crate) fn has_authenticated_two_factor_session(scope_id: u8) -> bool {
+    let state = CRY_STATE.lock();
+    state.totp.as_ref().is_some_and(|factor| factor.active)
+        && state
+            .session
+            .is_some_and(|session| session.scope_id == scope_id)
+}
+
 pub(crate) fn authenticated_user_input_record_key(scope_id: u8) -> Option<CryUserInputRecordKey> {
     const DOMAIN: &[u8] = b"TRUEOS/user-input-record/chacha20-poly1305/v1";
 

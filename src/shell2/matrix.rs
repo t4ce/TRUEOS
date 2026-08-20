@@ -1,9 +1,10 @@
 use alloc::collections::VecDeque;
 use alloc::string::String as AllocString;
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 
-use heapless::String as HString;
+use heapless::{String as HString, Vec as HVec};
 use spin::Once;
 
 use super::TranscriptEntry;
@@ -13,8 +14,55 @@ const DEFAULT_MATRIX_SLOT_LINE_CAP: usize = 512;
 pub(crate) const DEFAULT_MATRIX_SLOT_LINE_WIDTH: usize = 180;
 pub(crate) const DEFAULT_MATRIX_VIEW_ROWS: usize = 51;
 const LIVE_USER_INPUT_CAP: usize = 10;
+const MATRIX_SLOT_ATTACHMENT_CAP: usize = 8;
 
 pub(crate) type MatrixSlotId = HString<MATRIX_SLOT_ID_MAX>;
+
+/// Identity for one demanded Matrix page lifetime.
+///
+/// The name alone is never sufficient: freeing and re-demanding the same
+/// `§slot§` produces a different generation, so stale resource links cannot
+/// attach to the replacement page (the usual ABA problem).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct MatrixSlotLease {
+    id: MatrixSlotId,
+    lifetime_generation: u64,
+}
+
+impl MatrixSlotLease {
+    pub(crate) fn name(&self) -> &str {
+        self.id.as_str()
+    }
+
+    pub(crate) const fn lifetime_generation(&self) -> u64 {
+        self.lifetime_generation
+    }
+}
+
+/// Matrix-owned attachment identity. This is an internal detach key, not a
+/// user-visible resource handle; [`MatrixSlotLease`] remains the lifecycle
+/// authority presented to kernel services.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct MatrixSlotAttachmentId(u64);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MatrixSlotAttachmentError {
+    TargetExpired,
+    Capacity,
+}
+
+/// Kernel resource hook owned by a Matrix slot.
+///
+/// Implementations must only retire their own kernel-side link. This is not a
+/// guest callback and must never contain a Blueprint/VM code pointer.
+pub(crate) trait MatrixSlotAttachment: Send + Sync {
+    fn on_matrix_slot_freed(&self, lease: &MatrixSlotLease);
+}
+
+struct MatrixSlotAttachmentRecord {
+    id: MatrixSlotAttachmentId,
+    attachment: Arc<dyn MatrixSlotAttachment>,
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MatrixSlotActivity {
@@ -42,6 +90,7 @@ struct MatrixSlot {
     vm_input_attached: bool,
     vm_launch_reserved: bool,
     app_label: Option<AllocString>,
+    attachments: HVec<MatrixSlotAttachmentRecord, MATRIX_SLOT_ATTACHMENT_CAP>,
 }
 
 #[derive(Clone)]
@@ -63,6 +112,21 @@ struct MatrixState {
 
 static MATRIX_STATE: Once<spin::Mutex<MatrixState>> = Once::new();
 static NEXT_SLOT_LIFETIME_GENERATION: AtomicU64 = AtomicU64::new(1);
+static NEXT_SLOT_ATTACHMENT_ID: AtomicU64 = AtomicU64::new(1);
+
+fn next_slot_lifetime_generation() -> u64 {
+    NEXT_SLOT_LIFETIME_GENERATION
+        .fetch_add(1, Ordering::AcqRel)
+        .max(1)
+}
+
+fn next_slot_attachment_id() -> MatrixSlotAttachmentId {
+    MatrixSlotAttachmentId(
+        NEXT_SLOT_ATTACHMENT_ID
+            .fetch_add(1, Ordering::AcqRel)
+            .max(1),
+    )
+}
 
 fn state() -> &'static spin::Mutex<MatrixState> {
     MATRIX_STATE.call_once(|| {
@@ -114,7 +178,7 @@ fn ensure_slot_index(slots: &mut Vec<MatrixSlot>, id: &MatrixSlotId) -> usize {
 
     slots.push(MatrixSlot {
         id: id.clone(),
-        lifetime_generation: NEXT_SLOT_LIFETIME_GENERATION.fetch_add(1, Ordering::AcqRel),
+        lifetime_generation: next_slot_lifetime_generation(),
         revision: 1,
         lines: VecDeque::new(),
         activity: MatrixSlotActivity::Idle,
@@ -124,6 +188,7 @@ fn ensure_slot_index(slots: &mut Vec<MatrixSlot>, id: &MatrixSlotId) -> usize {
         vm_input_attached: false,
         vm_launch_reserved: false,
         app_label: None,
+        attachments: HVec::new(),
     });
     slots.len() - 1
 }
@@ -436,22 +501,100 @@ pub(crate) fn claim_available_app_slot_selected(
     preferred_id
 }
 
+/// Demand a Matrix page and return the generation-bearing lifetime used by
+/// kernel resources attached to it.
+pub(crate) fn demand_slot_lease(requested: &str) -> MatrixSlotLease {
+    let id = normalize_slot_id(requested);
+    let mut guard = state().lock();
+    let idx = ensure_slot_index(&mut guard.slots, &id);
+    MatrixSlotLease {
+        id,
+        lifetime_generation: guard.slots[idx].lifetime_generation,
+    }
+}
+
+pub(crate) fn slot_lease_is_live(lease: &MatrixSlotLease) -> bool {
+    state()
+        .lock()
+        .slots
+        .iter()
+        .any(|slot| slot.id == lease.id && slot.lifetime_generation == lease.lifetime_generation)
+}
+
+/// Attach a kernel-owned resource link to exactly one Matrix slot lifetime.
+/// Freeing that `§slot§` synchronously retires the attachment before
+/// [`free_slot`] returns.
+pub(crate) fn attach_to_live_slot(
+    lease: &MatrixSlotLease,
+    attachment: Arc<dyn MatrixSlotAttachment>,
+) -> Result<MatrixSlotAttachmentId, MatrixSlotAttachmentError> {
+    let mut guard = state().lock();
+    let Some(idx) = guard.slots.iter().position(|slot| slot.id == lease.id) else {
+        return Err(MatrixSlotAttachmentError::TargetExpired);
+    };
+    if guard.slots[idx].lifetime_generation != lease.lifetime_generation {
+        return Err(MatrixSlotAttachmentError::TargetExpired);
+    }
+    if guard.slots[idx].attachments.is_full() {
+        return Err(MatrixSlotAttachmentError::Capacity);
+    }
+
+    let id = next_slot_attachment_id();
+    guard.slots[idx]
+        .attachments
+        .push(MatrixSlotAttachmentRecord { id, attachment })
+        .map_err(|_| MatrixSlotAttachmentError::Capacity)?;
+    Ok(id)
+}
+
+pub(crate) fn detach_from_live_slot(
+    lease: &MatrixSlotLease,
+    attachment_id: MatrixSlotAttachmentId,
+) -> bool {
+    let mut guard = state().lock();
+    let Some(idx) = guard.slots.iter().position(|slot| slot.id == lease.id) else {
+        return false;
+    };
+    if guard.slots[idx].lifetime_generation != lease.lifetime_generation {
+        return false;
+    }
+    let Some(attachment_index) = guard.slots[idx]
+        .attachments
+        .iter()
+        .position(|record| record.id == attachment_id)
+    else {
+        return false;
+    };
+    let _ = guard.slots[idx].attachments.swap_remove(attachment_index);
+    true
+}
+
 pub(crate) fn free_slot(requested: &str) -> (MatrixSlotId, Vec<u8>) {
     let freed_id = normalize_slot_id(requested);
     let default_id = default_slot_id();
     let mut guard = state().lock();
     let mut changed = false;
     let mut vm_ids = Vec::new();
+    let freed_lease;
+    let freed_attachments;
 
     if freed_id == default_id {
         let idx = ensure_slot_index(&mut guard.slots, &default_id);
         let slot = &mut guard.slots[idx];
+        freed_lease = MatrixSlotLease {
+            id: slot.id.clone(),
+            lifetime_generation: slot.lifetime_generation,
+        };
+        freed_attachments = core::mem::replace(&mut slot.attachments, HVec::new());
         if let Some(vm_id) = slot.vm_id {
             vm_ids.push(vm_id);
         }
         if !slot.lines.is_empty()
             || slot.activity != MatrixSlotActivity::Idle
             || slot.running_count != 0
+            || slot.vm_id.is_some()
+            || slot.vm_input_attached
+            || slot.vm_launch_reserved
             || slot.app_label.is_some()
         {
             slot.lines.clear();
@@ -459,15 +602,27 @@ pub(crate) fn free_slot(requested: &str) -> (MatrixSlotId, Vec<u8>) {
             slot.running_count = 0;
             slot.interrupt_generation = 0;
             slot.vm_id = None;
+            slot.vm_input_attached = false;
             slot.vm_launch_reserved = false;
             slot.app_label = None;
-            bump_slot_revision(&mut guard, idx);
         }
+        // The default page cannot be removed from Matrix, so rotate its
+        // generation in place. Old resource leases still expire exactly as
+        // they do for an ordinary removed/re-demanded slot.
+        guard.slots[idx].lifetime_generation = next_slot_lifetime_generation();
+        // A lifetime transition is observable Matrix state even if the page
+        // was visually empty and carried only resource attachments.
+        bump_slot_revision(&mut guard, idx);
     } else if let Some(idx) = guard.slots.iter().position(|slot| slot.id == freed_id) {
-        if let Some(vm_id) = guard.slots[idx].vm_id {
+        let removed = guard.slots.remove(idx);
+        freed_lease = MatrixSlotLease {
+            id: removed.id.clone(),
+            lifetime_generation: removed.lifetime_generation,
+        };
+        freed_attachments = removed.attachments;
+        if let Some(vm_id) = removed.vm_id {
             vm_ids.push(vm_id);
         }
-        let _ = guard.slots.remove(idx);
         for scope_index in 0..super::OUTPUT_SCOPE_COUNT {
             if guard.active_slot_ids[scope_index] == freed_id {
                 guard.active_slot_ids[scope_index] = default_id.clone();
@@ -475,11 +630,19 @@ pub(crate) fn free_slot(requested: &str) -> (MatrixSlotId, Vec<u8>) {
             }
         }
         changed = true;
+    } else {
+        // A free of an absent page has no lifetime to retire.
+        return (freed_id, vm_ids);
     }
 
     let _ = ensure_slot_index(&mut guard.slots, &default_id);
     if changed {
         bump_revision(&mut guard);
+    }
+    drop(guard);
+
+    for record in freed_attachments {
+        record.attachment.on_matrix_slot_freed(&freed_lease);
     }
     (freed_id, vm_ids)
 }

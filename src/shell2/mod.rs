@@ -27,6 +27,12 @@ pub(crate) use crate::shell2::backends::{
     container_shell_read_output_byte, container_shell_submit_input, crlf,
 };
 pub(crate) use interface::{ShellBackend2, ShellIo2, TerminalHandoffOwner};
+pub(crate) use matrix::{
+    MatrixSlotAttachment, MatrixSlotAttachmentError, MatrixSlotAttachmentId, MatrixSlotLease,
+    attach_to_live_slot as attach_matrix_slot_resource, demand_slot_lease as demand_matrix_slot,
+    detach_from_live_slot as detach_matrix_slot_resource,
+    slot_lease_is_live as matrix_slot_is_live,
+};
 
 const MAX_LINE: usize = 1024;
 const BANNER_ROW: usize = 1;

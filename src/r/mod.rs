@@ -1,6 +1,7 @@
 pub mod ai_activity;
 pub mod archive_cabi;
 pub mod blocking;
+pub mod clipboard_service;
 pub mod codec;
 pub mod cursor;
 pub mod disc;
