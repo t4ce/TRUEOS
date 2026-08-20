@@ -78,6 +78,9 @@ pub const OP_BP_VGPU_RENDER_PIPELINE_CREATE: u32 = 0x129; // arg0 device,arg1 sh
 pub const OP_BP_VGPU_RENDER_PIPELINE_DESTROY: u32 = 0x12A; // arg0 device,arg1 pipeline -> rc
 pub const OP_BP_VGPU_UI4_INDEXED_SUBMIT: u32 = 0x12B; // arg0 device,arg1 queue,payload IndexedDraw -> TimelinePoint
 pub const OP_BP_ASYNC_FS_RECORD_KEY_START: u32 = 0x12C; // payload resolved file path -> operation id/rc
+// arg0 window,arg1 x/y,payload w/h -> rc. The active BlueprintScene producer
+// is identified by its release proof, not by a UI toolkit or render engine.
+pub const OP_BP_UI4_SCENE_COMPUTE_FRAME_PUBLISH: u32 = 0x12D;
 pub const OP_BP_UI4_SOLARA_FONT_SIZES: u32 = 0xB2; // arg0 cap -> count + FontSize payload
 pub const OP_BP_UI4_SOLARA_FRAME_OPEN: u32 = 0xB3; // arg0 x/y,arg1 width/height -> window
 pub const OP_BP_UI4_SOLARA_FRAME_BEGIN: u32 = 0xB4; // arg0 window,arg1 clear RGBA -> rc
@@ -1837,6 +1840,28 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             let height = u32::from_le_bytes([extent[4], extent[5], extent[6], extent[7]]);
             let (x, y) = unpack_u32_pair(arg1);
             let rc = crate::ui4::blueprint_text::trueos_cabi_ui4_solara_frame_publish(
+                arg0 as u32,
+                x,
+                y,
+                width,
+                height,
+            );
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_SCENE_COMPUTE_FRAME_PUBLISH => {
+            let Some(payload) = request_payload(vm_id, req_len) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let Some(extent) = payload.get(..8) else {
+                write_response(vm_id, seq, STATUS_OK, (-1i64) as u64, 0);
+                return DispatchOutcome::Resume;
+            };
+            let width = u32::from_le_bytes([extent[0], extent[1], extent[2], extent[3]]);
+            let height = u32::from_le_bytes([extent[4], extent[5], extent[6], extent[7]]);
+            let (x, y) = unpack_u32_pair(arg1);
+            let rc = crate::ui4::blueprint_text::trueos_cabi_ui4_scene_compute_frame_publish(
                 arg0 as u32,
                 x,
                 y,

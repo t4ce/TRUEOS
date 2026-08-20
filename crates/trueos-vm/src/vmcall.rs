@@ -53,6 +53,10 @@ pub const OP_BP_VGPU_RENDER_PIPELINE_CREATE: u32 = 0x129;
 pub const OP_BP_VGPU_RENDER_PIPELINE_DESTROY: u32 = 0x12A;
 pub const OP_BP_VGPU_UI4_INDEXED_SUBMIT: u32 = 0x12B;
 pub const OP_BP_ASYNC_FS_RECORD_KEY_START: u32 = 0x12C;
+/// Publish an active BlueprintScene lease after its kernel-owned compute
+/// producer has supplied the exact release proof. This opcode deliberately
+/// names neither the producer nor a UI toolkit.
+pub const OP_BP_UI4_SCENE_COMPUTE_FRAME_PUBLISH: u32 = 0x12D;
 pub const OP_BP_UI4_SOLARA_FONT_SIZES: u32 = 0xB2;
 pub const OP_BP_UI4_SOLARA_FRAME_OPEN: u32 = 0xB3;
 pub const OP_BP_UI4_SOLARA_FRAME_BEGIN: u32 = 0xB4;

@@ -4233,6 +4233,48 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_publish(
     0
 }
 
+/// Publish the active BlueprintScene lease after its compute producer has
+/// finished writing the exact UI4 RGBA8 surface. This is intentionally not a
+/// RenderScene3d handoff: it requires UI4's compute release fence and the
+/// active BlueprintScene write lease.
+pub extern "C" fn trueos_cabi_ui4_scene_compute_frame_publish(
+    window_id: u32,
+    damage_x: u32,
+    damage_y: u32,
+    damage_width: u32,
+    damage_height: u32,
+) -> i32 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let mut payload = [0u8; 8];
+        payload[..4].copy_from_slice(&damage_width.to_le_bytes());
+        payload[4..].copy_from_slice(&damage_height.to_le_bytes());
+        return guest_status(
+            trueos_vm::vmcall::OP_BP_UI4_SCENE_COMPUTE_FRAME_PUBLISH,
+            window_id as u64,
+            pack_u32_pair(damage_x, damage_y),
+            &payload,
+        );
+    }
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT;
+    };
+    {
+        let mut surfaces = SURFACES.lock();
+        let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+            return ERROR_NOT_FOUND;
+        };
+        if surface.write_lease.is_none() {
+            return ERROR_STATE;
+        }
+        if surface.pending_gpu_release.is_none() || surface.pending_render_release.is_some() {
+            return ERROR_STATE;
+        }
+    }
+    trueos_cabi_ui4_solara_frame_publish(
+        window_id, damage_x, damage_y, damage_width, damage_height,
+    )
+}
+
 pub extern "C" fn trueos_cabi_ui4_solara_frame_close(window_id: u32) -> i32 {
     trueos_cabi_ui4_solara_frame_close_requested(window_id, 0)
 }

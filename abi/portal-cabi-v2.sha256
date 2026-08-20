@@ -40,6 +40,10 @@
 # ShaderToy render accepts only a versioned pointer-free 64-byte uniform block
 # and an immutable reviewed catalog id; executable bytes and GPU addresses stay
 # kernel-owned.
+# The UI4 compute-frame publish call is strictly additive. It publishes only a
+# completed BlueprintScene compute lease carrying UI4's exact compute release
+# fence; it neither aliases a Solara presentation API nor admits a retained
+# RenderScene3d release.
 # The visual-frame begin call is strictly additive. It keeps one visual
 # admission request pending in the kernel until the brokered deadline and
 # acquires only the kernel-owned GPU back buffer; older visual producers retain
@@ -141,4 +145,4 @@
 # The terminal-surface snapshot call is likewise strictly additive. It returns
 # only a monotonic presentation generation and cell geometry; reconnect and
 # resize detection require no signal emulation or in-band terminal bytes.
-2e64e7076e7c153143012ca2ba760db6dbb00135b31232e9887d0e19753d78cf
+0fb43127cbec1a786a5fbf1ab88980d661d498e89c4bbe1d0de8ed0f6d323090
