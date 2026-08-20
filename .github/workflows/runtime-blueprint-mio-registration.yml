@@ -6,6 +6,8 @@ on:
       - runtime/blueprint-mio-registration
     paths:
       - tools/apply_blueprint_mio_registration.py
+      - tools/fix_blueprint_mio_materializer.py
+      - tools/finalize_blueprint_mio_registration.py
       - .github/workflows/runtime-blueprint-mio-registration.yml
   pull_request:
     branches:
@@ -24,7 +26,6 @@ concurrency:
 
 jobs:
   materialize:
-    if: github.event_name == 'push' || github.head_ref == 'runtime/blueprint-mio-registration'
     runs-on: ubuntu-latest
     steps:
       - name: Check out convergence branch
@@ -34,17 +35,24 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Materialize VM-lane wait and Mio registration
+      - name: Materialize VM-lane wait and local Mio registration
         run: |
           set -euo pipefail
+          python3 tools/fix_blueprint_mio_materializer.py
           python3 tools/apply_runtime_blueprint_wait_marriage.py
           python3 tools/apply_blueprint_mio_registration.py
+          python3 tools/finalize_blueprint_mio_registration.py
           rm tools/apply_runtime_blueprint_wait_marriage.py
           rm tools/apply_blueprint_mio_registration.py
+          rm tools/fix_blueprint_mio_materializer.py
+          rm tools/finalize_blueprint_mio_registration.py
           rm .github/workflows/runtime-blueprint-wait-marriage.yml
           rm .github/workflows/runtime-blueprint-mio-registration.yml
           cargo fmt --all
           git diff --check
+
+      - name: Check TRUEOS target
+        run: cargo check -p TRUEOS --target x86_64-unknown-trueos
 
       - name: Commit source-only convergence
         run: |
