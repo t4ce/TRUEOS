@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - fix/live-update-review-hardening-20260821
+  pull_request:
+    branches:
+      - true
 
 permissions:
   contents: write
@@ -16,7 +19,7 @@ jobs:
       - name: Check out review branch
         uses: actions/checkout@v5
         with:
-          ref: ${{ github.ref_name }}
+          ref: ${{ github.head_ref || github.ref_name }}
           fetch-depth: 0
 
       - name: Apply and validate reviewed patch
