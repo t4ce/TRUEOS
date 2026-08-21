@@ -768,11 +768,7 @@ fn normalize_slice_bound(bound: i64, dimension: i64) -> i64 {
     }
 }
 
-fn scatter_base(
-    tuple: &[i64],
-    data_shape: Shape,
-    block_elements: usize,
-) -> Result<usize, Error> {
+fn scatter_base(tuple: &[i64], data_shape: Shape, block_elements: usize) -> Result<usize, Error> {
     let mut prefix = 0usize;
     for (axis, &raw_index) in tuple.iter().enumerate() {
         let dimension = data_shape.dims[axis] as i64;
@@ -920,13 +916,8 @@ mod tests {
 
         let style = [10_i32, 20, 30, 40];
         let mut expanded_style = [0_i32; 12];
-        let expanded_shape = expand(
-            &style,
-            Shape::new(&[1, 4]).unwrap(),
-            &[1, 3, 1],
-            &mut expanded_style,
-        )
-        .unwrap();
+        let expanded_shape =
+            expand(&style, Shape::new(&[1, 4]).unwrap(), &[1, 3, 1], &mut expanded_style).unwrap();
         assert_eq!(expanded_shape.dims(), &[1, 3, 4]);
         assert_eq!(expanded_style, [10, 20, 30, 40, 10, 20, 30, 40, 10, 20, 30, 40]);
     }
@@ -1016,27 +1007,13 @@ mod tests {
         let indices_shape = Shape::new(&[2, 1]).unwrap();
         let updates = [100, 101, 102, 103, 200, 201, 202, 203];
         let mut output = [-1_i32; 12];
-        scatter_nd_ordered(
-            &data,
-            data_shape,
-            &indices,
-            indices_shape,
-            &updates,
-            &mut output,
-        )
-        .unwrap();
+        scatter_nd_ordered(&data, data_shape, &indices, indices_shape, &updates, &mut output)
+            .unwrap();
         assert_eq!(output, [100, 101, 102, 103, 4, 5, 6, 7, 200, 201, 202, 203]);
 
         let snapshot = output;
         assert_eq!(
-            scatter_nd_ordered(
-                &data,
-                data_shape,
-                &[-1, 0],
-                indices_shape,
-                &updates,
-                &mut output,
-            ),
+            scatter_nd_ordered(&data, data_shape, &[-1, 0], indices_shape, &updates, &mut output,),
             Err(Error::UnorderedIndices)
         );
         assert_eq!(output, snapshot);

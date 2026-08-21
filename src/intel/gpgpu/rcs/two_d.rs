@@ -163,8 +163,7 @@ fn direct_rcs_encode_font_outline_coverage_runs_r8_2d_batch(
     runs: &[FontOutlineCoverageR8BatchRun],
     mask_bytes: usize,
 ) -> bool {
-    if runs.is_empty() || runs.len() > FONT_OUTLINE_COVERAGE_BATCH_MAX_RUNS
-    {
+    if runs.is_empty() || runs.len() > FONT_OUTLINE_COVERAGE_BATCH_MAX_RUNS {
         return false;
     }
     unsafe {
@@ -174,10 +173,9 @@ fn direct_rcs_encode_font_outline_coverage_runs_r8_2d_batch(
     for (index, run) in runs.iter().enumerate() {
         let state_block = FONT_OUTLINE_COVERAGE_BATCH_STATE_BASE_OFFSET_BYTES
             + index * FONT_OUTLINE_COVERAGE_BATCH_STATE_BLOCK_BYTES;
-        let idd_offset =
-            state_block + FONT_OUTLINE_COVERAGE_BATCH_IDD_OFFSET_IN_BLOCK_BYTES;
-        let binding_table_offset = state_block
-            + FONT_OUTLINE_COVERAGE_BATCH_BINDING_TABLE_OFFSET_IN_BLOCK_BYTES;
+        let idd_offset = state_block + FONT_OUTLINE_COVERAGE_BATCH_IDD_OFFSET_IN_BLOCK_BYTES;
+        let binding_table_offset =
+            state_block + FONT_OUTLINE_COVERAGE_BATCH_BINDING_TABLE_OFFSET_IN_BLOCK_BYTES;
         let ops_surface_offset =
             state_block + FONT_OUTLINE_COVERAGE_BATCH_OPS_SURFACE_OFFSET_IN_BLOCK_BYTES;
         let mask_surface_offset =
@@ -221,15 +219,13 @@ fn direct_rcs_encode_font_outline_coverage_runs_r8_2d_batch(
         COPY_RECT_PRE_MARKER,
     );
     for (index, run) in runs.iter().enumerate() {
-        let Some(dispatch) =
-            fill_rect_2d_dispatch(run.params.rect_width, run.params.rect_height)
+        let Some(dispatch) = fill_rect_2d_dispatch(run.params.rect_width, run.params.rect_height)
         else {
             return false;
         };
         let state_block = FONT_OUTLINE_COVERAGE_BATCH_STATE_BASE_OFFSET_BYTES
             + index * FONT_OUTLINE_COVERAGE_BATCH_STATE_BLOCK_BYTES;
-        let idd_offset =
-            state_block + FONT_OUTLINE_COVERAGE_BATCH_IDD_OFFSET_IN_BLOCK_BYTES;
+        let idd_offset = state_block + FONT_OUTLINE_COVERAGE_BATCH_IDD_OFFSET_IN_BLOCK_BYTES;
         let payload_offset = FONT_OUTLINE_COVERAGE_BATCH_PAYLOAD_BASE_OFFSET_BYTES
             + index * FONT_OUTLINE_COVERAGE_BATCH_PAYLOAD_STRIDE_BYTES;
         ok &= direct_rcs_push(batch, &mut cursor, MEDIA_INTERFACE_DESCRIPTOR_LOAD_CMD);

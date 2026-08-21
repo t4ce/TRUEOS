@@ -519,7 +519,8 @@ fn push_requested_context_menu(
             row.x
                 .saturating_add(super::context_menu::MENU_TEXT_INSET_PX),
             row.y.saturating_add(row_text_y),
-            row.width.saturating_sub(super::context_menu::MENU_TEXT_INSET_PX),
+            row.width
+                .saturating_sub(super::context_menu::MENU_TEXT_INSET_PX),
             entry.label.as_str(),
             text_color,
         );
@@ -545,27 +546,13 @@ fn push_microfont_menu_text(
         return;
     };
     let mut pixels = vec![0u8; pixel_count];
-    if microfont::stamp_text(
-        &mut pixels,
-        width,
-        height,
-        0,
-        0,
-        text,
-        1u8,
-    )
-    .is_err()
-    {
+    if microfont::stamp_text(&mut pixels, width, height, 0, 0, text, 1u8).is_err() {
         return;
     }
 
     for (row, scanline) in pixels.chunks_exact(width).take(height).enumerate() {
         let mut col = 0usize;
-        let y = y.saturating_add(
-            u32::try_from(row)
-                .unwrap_or(0)
-                .saturating_mul(2),
-        );
+        let y = y.saturating_add(u32::try_from(row).unwrap_or(0).saturating_mul(2));
         while col < width {
             if scanline[col] == 0 {
                 col = col.saturating_add(1);
@@ -577,13 +564,11 @@ fn push_microfont_menu_text(
             }
             push_overlay_rect(
                 rects,
-                x.saturating_add(
-                    u32::try_from(run_start)
-                        .unwrap_or(0)
-                        .saturating_mul(2),
-                ),
+                x.saturating_add(u32::try_from(run_start).unwrap_or(0).saturating_mul(2)),
                 y,
-                u32::try_from(col.saturating_sub(run_start)).unwrap_or(0).saturating_mul(2),
+                u32::try_from(col.saturating_sub(run_start))
+                    .unwrap_or(0)
+                    .saturating_mul(2),
                 2,
                 color,
             );
@@ -609,28 +594,14 @@ fn push_microfont_rainbow_menu_text(
         return;
     };
     let mut pixels = vec![0u8; pixel_count];
-    if microfont::stamp_text(
-        &mut pixels,
-        width,
-        height,
-        0,
-        0,
-        text,
-        1u8,
-    )
-    .is_err()
-    {
+    if microfont::stamp_text(&mut pixels, width, height, 0, 0, text, 1u8).is_err() {
         return;
     }
 
     let width_u32 = u32::try_from(width).ok().unwrap_or(0);
     for (row, scanline) in pixels.chunks_exact(width).take(height).enumerate() {
         let mut col = 0usize;
-        let y = y.saturating_add(
-            u32::try_from(row)
-                .unwrap_or(0)
-                .saturating_mul(2),
-        );
+        let y = y.saturating_add(u32::try_from(row).unwrap_or(0).saturating_mul(2));
         while col < width {
             if scanline[col] == 0 {
                 col = col.saturating_add(1);
@@ -645,19 +616,13 @@ fn push_microfont_rainbow_menu_text(
             let hue = if width_u32 == 0 {
                 0
             } else {
-                (u32::try_from(run_midpoint)
-                    .unwrap_or(0)
-                    .saturating_mul(360))
+                (u32::try_from(run_midpoint).unwrap_or(0).saturating_mul(360))
                     .saturating_div(width_u32)
             };
             let color = rainbow_color(hue);
             push_overlay_rect(
                 rects,
-                x.saturating_add(
-                    u32::try_from(run_start)
-                        .unwrap_or(0)
-                        .saturating_mul(2),
-                ),
+                x.saturating_add(u32::try_from(run_start).unwrap_or(0).saturating_mul(2)),
                 y,
                 u32::try_from(run_width).unwrap_or(0).saturating_mul(2),
                 2,

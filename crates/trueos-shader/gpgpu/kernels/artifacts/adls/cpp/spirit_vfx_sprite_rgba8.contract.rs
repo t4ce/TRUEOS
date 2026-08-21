@@ -4,56 +4,99 @@
 // backend: Intel IGC through ocloc -spirv_input
 // normalized commands: [["$CLANG","--target=spir64","-x","clcpp","-cl-std=CLC++","-Wall","-Wextra","-Werror","-Wdate-time","-cl-kernel-arg-info","-fno-discard-value-names","-fno-exceptions","-fno-rtti","-MMD","-MF","$OUT_DIR/spirit_vfx_sprite_rgba8.d","-MT","spirit_vfx_sprite_rgba8.bc","-emit-llvm","-c","spirit_vfx_sprite_rgba8.clcpp","-o","$OUT_DIR/spirit_vfx_sprite_rgba8.bc"],["$LLVM_SPIRV","--preserve-ocl-kernel-arg-type-metadata-through-string","$OUT_DIR/spirit_vfx_sprite_rgba8.bc","-o","$OUT_DIR/spirit_vfx_sprite_rgba8.spv"],["$OCLOC","compile","-file","$OUT_DIR/spirit_vfx_sprite_rgba8.spv","-spirv_input","-device","0x4680","-64","-output","spirit_vfx_sprite_rgba8","-out_dir","$OUT_DIR","-output_no_suffix","-gen_file"],["$OCLOC","validate","-file","$OUT_DIR/spirit_vfx_sprite_rgba8.bin"]]
 
-pub(crate) const SPIRIT_VFX_SPRITE_RGBA8_ADLS_CPP_ABI_CONTRACT: GpgpuKernelAbiContract = GpgpuKernelAbiContract {
-    schema_version: GPGPU_KERNEL_ABI_SCHEMA_VERSION,
-    kernel_name: "spirit_vfx_sprite_rgba8",
-    target: GpgpuKernelTarget {
-        label: "adls",
-        pci_device_ids: &[0x4680],
-        revision_min: 12,
-        revision_max: 12,
-    },
-    ze_info_major: 1,
-    ze_info_minor: 62,
-    zebin_sha256: [
-        0xa5, 0xbc, 0xa7, 0xb1, 0x5a, 0xf0, 0xbc, 0xab,
-        0x95, 0x2d, 0x09, 0x3a, 0x18, 0x48, 0x76, 0xfe,
-        0xd0, 0x1f, 0xbc, 0xe4, 0xe4, 0xc7, 0xd5, 0x5f,
-        0xef, 0xfa, 0xaf, 0x55, 0xc3, 0x3c, 0xe5, 0xf7,
-    ],
-    spv_sha256: [
-        0xc0, 0x22, 0x69, 0x08, 0xa1, 0xe9, 0xba, 0x11,
-        0x0c, 0xdd, 0xfb, 0xec, 0x99, 0x58, 0x67, 0x72,
-        0xb0, 0xd5, 0xd9, 0x36, 0xd3, 0x03, 0x3e, 0x17,
-        0x83, 0x54, 0x4c, 0x70, 0x9b, 0x19, 0xf3, 0x8a,
-    ],
-    text_section_name: ".text.spirit_vfx_sprite_rgba8",
-    text_section_offset: 64,
-    text_section_size: 501760,
-    entry_offset: 64,
-    entry_size: 501616,
-    simd_width: 16,
-    grf_count: 128,
-    scratch_bytes: 0,
-    slm_bytes: 0,
-    cross_thread_data_bytes: 96,
-    per_thread_data_bytes: 96,
-    bindings: &[
-        GpgpuArtifactBinding { arg_index: 0, bti: 0 },
-        GpgpuArtifactBinding { arg_index: 1, bti: 1 },
-        GpgpuArtifactBinding { arg_index: 2, bti: 2 },
-    ],
-    implicit_payload_args: &[
-        GpgpuArtifactImplicitPayloadArg { kind: GpgpuArtifactImplicitArgKind::GlobalIdOffset, offset_bytes: 0, size_bytes: 12 },
-        GpgpuArtifactImplicitPayloadArg { kind: GpgpuArtifactImplicitArgKind::LocalSize, offset_bytes: 12, size_bytes: 12 },
-        GpgpuArtifactImplicitPayloadArg { kind: GpgpuArtifactImplicitArgKind::EnqueuedLocalSize, offset_bytes: 32, size_bytes: 12 },
-    ],
-    per_thread_payload_args: &[
-        GpgpuArtifactPerThreadPayloadArg { kind: GpgpuArtifactPerThreadArgKind::LocalId, offset_bytes: 0, size_bytes: 96 },
-    ],
-    payload_args: &[
-        GpgpuArtifactPayloadArg { arg_index: 0, kind: GpgpuArtifactArgKind::ByPointer, offset_bytes: 48, size_bytes: 8, access: GpgpuArtifactArgAccess::ReadOnly, address_mode: GpgpuArtifactAddressMode::Stateful },
-        GpgpuArtifactPayloadArg { arg_index: 1, kind: GpgpuArtifactArgKind::ByPointer, offset_bytes: 56, size_bytes: 8, access: GpgpuArtifactArgAccess::ReadOnly, address_mode: GpgpuArtifactAddressMode::Stateless },
-        GpgpuArtifactPayloadArg { arg_index: 2, kind: GpgpuArtifactArgKind::ByPointer, offset_bytes: 64, size_bytes: 8, access: GpgpuArtifactArgAccess::ReadWrite, address_mode: GpgpuArtifactAddressMode::Stateful },
-    ],
-};
+pub(crate) const SPIRIT_VFX_SPRITE_RGBA8_ADLS_CPP_ABI_CONTRACT: GpgpuKernelAbiContract =
+    GpgpuKernelAbiContract {
+        schema_version: GPGPU_KERNEL_ABI_SCHEMA_VERSION,
+        kernel_name: "spirit_vfx_sprite_rgba8",
+        target: GpgpuKernelTarget {
+            label: "adls",
+            pci_device_ids: &[0x4680],
+            revision_min: 12,
+            revision_max: 12,
+        },
+        ze_info_major: 1,
+        ze_info_minor: 62,
+        zebin_sha256: [
+            0xa5, 0xbc, 0xa7, 0xb1, 0x5a, 0xf0, 0xbc, 0xab, 0x95, 0x2d, 0x09, 0x3a, 0x18, 0x48,
+            0x76, 0xfe, 0xd0, 0x1f, 0xbc, 0xe4, 0xe4, 0xc7, 0xd5, 0x5f, 0xef, 0xfa, 0xaf, 0x55,
+            0xc3, 0x3c, 0xe5, 0xf7,
+        ],
+        spv_sha256: [
+            0xc0, 0x22, 0x69, 0x08, 0xa1, 0xe9, 0xba, 0x11, 0x0c, 0xdd, 0xfb, 0xec, 0x99, 0x58,
+            0x67, 0x72, 0xb0, 0xd5, 0xd9, 0x36, 0xd3, 0x03, 0x3e, 0x17, 0x83, 0x54, 0x4c, 0x70,
+            0x9b, 0x19, 0xf3, 0x8a,
+        ],
+        text_section_name: ".text.spirit_vfx_sprite_rgba8",
+        text_section_offset: 64,
+        text_section_size: 501760,
+        entry_offset: 64,
+        entry_size: 501616,
+        simd_width: 16,
+        grf_count: 128,
+        scratch_bytes: 0,
+        slm_bytes: 0,
+        cross_thread_data_bytes: 96,
+        per_thread_data_bytes: 96,
+        bindings: &[
+            GpgpuArtifactBinding {
+                arg_index: 0,
+                bti: 0,
+            },
+            GpgpuArtifactBinding {
+                arg_index: 1,
+                bti: 1,
+            },
+            GpgpuArtifactBinding {
+                arg_index: 2,
+                bti: 2,
+            },
+        ],
+        implicit_payload_args: &[
+            GpgpuArtifactImplicitPayloadArg {
+                kind: GpgpuArtifactImplicitArgKind::GlobalIdOffset,
+                offset_bytes: 0,
+                size_bytes: 12,
+            },
+            GpgpuArtifactImplicitPayloadArg {
+                kind: GpgpuArtifactImplicitArgKind::LocalSize,
+                offset_bytes: 12,
+                size_bytes: 12,
+            },
+            GpgpuArtifactImplicitPayloadArg {
+                kind: GpgpuArtifactImplicitArgKind::EnqueuedLocalSize,
+                offset_bytes: 32,
+                size_bytes: 12,
+            },
+        ],
+        per_thread_payload_args: &[GpgpuArtifactPerThreadPayloadArg {
+            kind: GpgpuArtifactPerThreadArgKind::LocalId,
+            offset_bytes: 0,
+            size_bytes: 96,
+        }],
+        payload_args: &[
+            GpgpuArtifactPayloadArg {
+                arg_index: 0,
+                kind: GpgpuArtifactArgKind::ByPointer,
+                offset_bytes: 48,
+                size_bytes: 8,
+                access: GpgpuArtifactArgAccess::ReadOnly,
+                address_mode: GpgpuArtifactAddressMode::Stateful,
+            },
+            GpgpuArtifactPayloadArg {
+                arg_index: 1,
+                kind: GpgpuArtifactArgKind::ByPointer,
+                offset_bytes: 56,
+                size_bytes: 8,
+                access: GpgpuArtifactArgAccess::ReadOnly,
+                address_mode: GpgpuArtifactAddressMode::Stateless,
+            },
+            GpgpuArtifactPayloadArg {
+                arg_index: 2,
+                kind: GpgpuArtifactArgKind::ByPointer,
+                offset_bytes: 64,
+                size_bytes: 8,
+                access: GpgpuArtifactArgAccess::ReadWrite,
+                address_mode: GpgpuArtifactAddressMode::Stateful,
+            },
+        ],
+    };

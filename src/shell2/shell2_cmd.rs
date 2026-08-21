@@ -13,7 +13,6 @@ impl CommandSessionKind {
             Self::FormatSure(_) => true,
         }
     }
-
 }
 
 pub(crate) enum ParseOutcome {

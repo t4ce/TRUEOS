@@ -793,11 +793,7 @@ pub(crate) fn create_resident_triangle_mesh(
     {
         return Err("resident-triangle-shape");
     }
-    create_resident_triangle_mesh_typed(
-        draw_vertices,
-        draw_indices,
-        TriangleVertexFormat::Float3,
-    )
+    create_resident_triangle_mesh_typed(draw_vertices, draw_indices, TriangleVertexFormat::Float3)
 }
 
 /// Upload the authenticated WGPU position+UV vertex contract without
@@ -819,11 +815,7 @@ pub(crate) fn create_resident_textured_triangle_mesh(
     {
         return Err("resident-textured-triangle-shape");
     }
-    create_resident_triangle_mesh_typed(
-        draw_vertices,
-        draw_indices,
-        TriangleVertexFormat::PosUv,
-    )
+    create_resident_triangle_mesh_typed(draw_vertices, draw_indices, TriangleVertexFormat::PosUv)
 }
 
 fn create_resident_triangle_mesh_typed<T: Copy>(

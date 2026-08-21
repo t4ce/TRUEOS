@@ -243,7 +243,10 @@ impl Ticker {
     /// Creates a new ticker that ticks at the specified duration interval.
     pub fn every(duration: Duration) -> Self {
         let expires_at = Instant::now() + duration;
-        Self { expires_at, duration }
+        Self {
+            expires_at,
+            duration,
+        }
     }
 
     /// Resets the ticker back to its original state.

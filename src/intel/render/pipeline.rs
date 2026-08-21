@@ -592,10 +592,7 @@ fn write_triangle_probe_state_with_flush(
         }
     } else if let Some(texture) = draw.sampled_texture {
         let start = surface_state_offset / 4 + 2 * 16;
-        write_triangle_sampled_rgba8_surface_state(
-            &mut dwords[start..start + 16],
-            texture,
-        )?;
+        write_triangle_sampled_rgba8_surface_state(&mut dwords[start..start + 16], texture)?;
     }
 
     let sampler = &mut dwords[sampler_state_offset / 4..sampler_state_offset / 4 + 4];
@@ -769,8 +766,7 @@ fn write_triangle_sampled_rgba8_surface_state(
         // TGL/ADL requires this for UNORM surfaces, including sampler reads.
         // Omitting it is not a legal way to describe a linear RGBA8 texture.
         | (1 << 31);
-    surface[2] = texture.width.saturating_sub(1)
-        | (texture.height.saturating_sub(1) << 16);
+    surface[2] = texture.width.saturating_sub(1) | (texture.height.saturating_sub(1) << 16);
     surface[3] = texture.pitch.saturating_sub(1);
     surface[7] = (SHADER_CHANNEL_ALPHA << 16)
         | (SHADER_CHANNEL_BLUE << 19)
@@ -1579,20 +1575,18 @@ fn encode_triangle_probe_batch(
     let host_pipeline_has_no_varyings = mesa_host_fixed_function
         && !artifact_native_fixed_function
         && pipeline.ps.meta.num_varying_inputs == 0;
-    let sbe_vertex_read_offset = if host_pipeline_has_no_varyings
-        || backend_probe_mode.force_sbe_read0()
-    {
-        0
-    } else {
-        front_end_contract.sbe_read_offset as u32
-    };
-    let sbe_vertex_read_length = if host_pipeline_has_no_varyings
-        || backend_probe_mode.force_sbe_read0()
-    {
-        0
-    } else {
-        front_end_contract.sbe_read_length as u32
-    };
+    let sbe_vertex_read_offset =
+        if host_pipeline_has_no_varyings || backend_probe_mode.force_sbe_read0() {
+            0
+        } else {
+            front_end_contract.sbe_read_offset as u32
+        };
+    let sbe_vertex_read_length =
+        if host_pipeline_has_no_varyings || backend_probe_mode.force_sbe_read0() {
+            0
+        } else {
+            front_end_contract.sbe_read_length as u32
+        };
     let sbe_num_sf_attrs = if backend_probe_mode.force_one_sbe_attribute() {
         pipeline.ps.meta.num_varying_inputs.max(1)
     } else {

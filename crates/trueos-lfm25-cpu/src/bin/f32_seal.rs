@@ -3,12 +3,12 @@ use std::env;
 use std::fs;
 use std::path::Path;
 
-use trueos_lfm25_model::lfm25::{self, TensorFormat};
 use trueos_lfm25_cpu::{
     F32_SIDECAR_BYTES, F32_SIDECAR_ELEMENT_COUNT, F32_SIDECAR_ENTRY_BYTES,
     F32_SIDECAR_HEADER_BYTES, F32_SIDECAR_MAGIC, F32_SIDECAR_PAYLOAD_OFFSET,
     F32_SIDECAR_TENSOR_COUNT, F32_SIDECAR_VERSION, F32Sidecar,
 };
+use trueos_lfm25_model::lfm25::{self, TensorFormat};
 
 const GGUF_F32: u32 = 0;
 const GGUF_Q8_0: u32 = 8;

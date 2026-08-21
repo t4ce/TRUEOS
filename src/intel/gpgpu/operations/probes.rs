@@ -894,10 +894,7 @@ fn submit_sprite_quad_worklist_rgba8_probe(force: bool) -> bool {
     let row2 = direct_rcs_read_worklist_probe_span(state, 2, 10);
     let pre_ok = pre_marker == SPRITE_QUAD_WORKLIST_PRE_MARKER;
     let post_ok = post_marker == SPRITE_QUAD_WORKLIST_POST_MARKER;
-    let pixels_ok = row1[0] == src00
-        && row1[1] == src01
-        && row2[0] == src10
-        && row2[1] == src11;
+    let pixels_ok = row1[0] == src00 && row1[1] == src01 && row2[0] == src10 && row2[1] == src11;
     let ok = submitted && pre_ok && post_ok && pixels_ok;
 
     crate::log_info!(

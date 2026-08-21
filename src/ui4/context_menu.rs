@@ -565,7 +565,10 @@ mod tests {
         assert_eq!(rect.x, 0);
         assert_eq!(rect.y, 89);
         assert_eq!(entry_rect(rect, 0).unwrap().y, rect.y + MENU_BORDER_PX);
-        assert_eq!(entry_rect(rect, 2).unwrap().y, rect.y + MENU_BORDER_PX + MENU_ROW_HEIGHT_PX * 2);
+        assert_eq!(
+            entry_rect(rect, 2).unwrap().y,
+            rect.y + MENU_BORDER_PX + MENU_ROW_HEIGHT_PX * 2
+        );
         assert_eq!(entry_rect(rect, 3), None);
     }
 }

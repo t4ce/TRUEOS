@@ -316,11 +316,11 @@ impl<F: Future + 'static> AvailableTask<F> {
         unsafe {
             self.task.raw.metadata.reset();
             #[cfg(feature = "metadata-name")]
+            self.task.raw.metadata.set_name(core::any::type_name::<F>());
             self.task
                 .raw
-                .metadata
-                .set_name(core::any::type_name::<F>());
-            self.task.raw.migration_target.store(null_mut(), Ordering::Relaxed);
+                .migration_target
+                .store(null_mut(), Ordering::Relaxed);
             self.task.raw.poll_fn.set(Some(TaskStorage::<F>::poll));
             self.task.future.write_in_place(future);
 
@@ -498,9 +498,7 @@ impl SyncExecutor {
     fn note_task_dequeued(&self) {
         let _ = self
             .ready_tasks
-            .try_update(Ordering::AcqRel, Ordering::Acquire, |count| {
-                Some(count.saturating_sub(1))
-            });
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |count| Some(count.saturating_sub(1)));
     }
 
     /// Enqueue a task in the task queue
@@ -586,10 +584,7 @@ impl SyncExecutor {
 
         #[cfg(feature = "trueos-task-profile")]
         unsafe {
-            __trueos_executor_task_poll_begin(
-                self as *const Self as usize,
-                p.as_ptr() as usize,
-            );
+            __trueos_executor_task_poll_begin(self as *const Self as usize, p.as_ptr() as usize);
         }
 
         #[cfg(feature = "_any_trace")]
@@ -599,10 +594,7 @@ impl SyncExecutor {
 
         #[cfg(feature = "trueos-task-profile")]
         unsafe {
-            __trueos_executor_task_poll_end(
-                self as *const Self as usize,
-                p.as_ptr() as usize,
-            );
+            __trueos_executor_task_poll_end(self as *const Self as usize, p.as_ptr() as usize);
         }
 
         #[cfg(feature = "_any_trace")]

@@ -213,8 +213,7 @@ struct CapturedWindowRgba {
 /// The screenshot worker consumes the next completed writeback frame, performs
 /// the diagnostic XYUV8888 -> RGBA conversion, and persists one PNG.
 pub(crate) fn request_wd_postblend_capture() -> Result<(), &'static str> {
-    crate::intel::media::wd_xyuv8888::request_screenshot()
-        .map_err(|_| "WD screenshot slot is busy")
+    crate::intel::media::wd_xyuv8888::request_screenshot().map_err(|_| "WD screenshot slot is busy")
 }
 
 /// Drive Pipe C -> WD for exactly one frame when no RDP session owns it.
@@ -1029,11 +1028,7 @@ fn screenshot_path(capture: &CapturedComposition) -> String {
         ),
         CaptureScope::WdPostBlend { wd_sequence } => format!(
             "{}/wd-postblend-xyuv709-{}-{}-wd{:06}-capture{:06}.png",
-            SCREENSHOT_DIRECTORY,
-            wall,
-            capture.monotonic_ms,
-            wd_sequence,
-            capture.sequence,
+            SCREENSHOT_DIRECTORY, wall, capture.monotonic_ms, wd_sequence, capture.sequence,
         ),
     }
 }

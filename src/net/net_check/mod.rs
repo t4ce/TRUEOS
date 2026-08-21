@@ -5,40 +5,42 @@
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;
-use spin::Mutex;
 use core::sync::atomic::{AtomicBool, Ordering};
+use spin::Mutex;
 
-use super::{Driver, DriverInfo, DriverStatus, DriverCategory, register};
+use super::{Driver, DriverCategory, DriverInfo, DriverStatus, register};
 use crate::pci::PciDevice;
 
 /// Network driver trait - extends base Driver
 pub trait NetworkDriver: Driver {
     /// Get MAC address
     fn mac_address(&self) -> [u8; 6];
-    
+
     /// Check if link is up
     fn link_up(&self) -> bool;
-    
+
     /// Get link speed in Mbps (0 if unknown)
-    fn link_speed(&self) -> u32 { 0 }
-    
+    fn link_speed(&self) -> u32 {
+        0
+    }
+
     /// Send a raw ethernet frame
     fn send(&mut self, data: &[u8]) -> Result<(), &'static str>;
-    
+
     /// Receive a packet (non-blocking)
     fn receive(&mut self) -> Option<Vec<u8>>;
-    
+
     /// Poll for events (TX completion, RX packets)
     fn poll(&mut self);
-    
+
     /// Get statistics
     fn stats(&self) -> NetStats;
-    
+
     /// Enable promiscuous mode
     fn set_promiscuous(&mut self, _enabled: bool) -> Result<(), &'static str> {
         Err("Not supported")
     }
-    
+
     /// Add multicast address
     fn add_multicast(&mut self, _mac: [u8; 6]) -> Result<(), &'static str> {
         Err("Not supported")
@@ -99,8 +101,8 @@ mod rtl8169;
 // Intel WiFi Link 4965AGN (iwl4965)
 // ============================================================================
 
-pub mod wifi;
 pub mod iwl4965;
+pub mod wifi;
 
 // ============================================================================
 // Public API
@@ -130,7 +132,11 @@ pub fn probe_device(pci_dev: &PciDevice) -> bool {
                 match driver.probe(pci_dev) {
                     Ok(()) => {
                         if let Err(e) = driver.start() {
-                            crate::log_warn!("[DRIVERS] Failed to start {}: {}", entry.info.name, e);
+                            crate::log_warn!(
+                                "[DRIVERS] Failed to start {}: {}",
+                                entry.info.name,
+                                e
+                            );
                             return false;
                         }
                         *ACTIVE_DRIVER.lock() = Some(driver);
@@ -159,7 +165,11 @@ pub fn get_mac() -> Option<[u8; 6]> {
 
 /// Check link status
 pub fn link_up() -> bool {
-    ACTIVE_DRIVER.lock().as_ref().map(|d| d.link_up()).unwrap_or(false)
+    ACTIVE_DRIVER
+        .lock()
+        .as_ref()
+        .map(|d| d.link_up())
+        .unwrap_or(false)
 }
 
 /// Send packet via active driver
@@ -184,7 +194,9 @@ pub fn poll() {
 
 /// Get statistics from active driver
 pub fn stats() -> NetStats {
-    ACTIVE_DRIVER.lock().as_ref()
+    ACTIVE_DRIVER
+        .lock()
+        .as_ref()
         .map(|d| d.stats())
         .unwrap_or_default()
 }

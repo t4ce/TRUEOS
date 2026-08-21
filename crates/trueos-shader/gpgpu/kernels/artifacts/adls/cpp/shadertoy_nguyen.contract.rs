@@ -4,56 +4,105 @@
 // backend: Intel IGC through ocloc -spirv_input
 // normalized commands: [["$CLANG","--target=spir64","-x","clcpp","-cl-std=CLC++","-Wall","-Wextra","-Werror","-Wdate-time","-cl-kernel-arg-info","-fno-discard-value-names","-fno-exceptions","-fno-rtti","-MMD","-MF","$OUT_DIR/shadertoy_nguyen.d","-MT","shadertoy_nguyen.bc","-emit-llvm","-c","shadertoy_nguyen.clcpp","-o","$OUT_DIR/shadertoy_nguyen.bc"],["$LLVM_SPIRV","--preserve-ocl-kernel-arg-type-metadata-through-string","$OUT_DIR/shadertoy_nguyen.bc","-o","$OUT_DIR/shadertoy_nguyen.spv"],["$OCLOC","compile","-file","$OUT_DIR/shadertoy_nguyen.spv","-spirv_input","-device","0x4680","-64","-output","shadertoy_nguyen","-out_dir","$OUT_DIR","-output_no_suffix","-gen_file"],["$OCLOC","validate","-file","$OUT_DIR/shadertoy_nguyen.bin"]]
 
-pub(crate) const SHADERTOY_NGUYEN_ADLS_CPP_ABI_CONTRACT: GpgpuKernelAbiContract = GpgpuKernelAbiContract {
-    schema_version: GPGPU_KERNEL_ABI_SCHEMA_VERSION,
-    kernel_name: "shadertoy_nguyen",
-    target: GpgpuKernelTarget {
-        label: "adls",
-        pci_device_ids: &[0x4680],
-        revision_min: 12,
-        revision_max: 12,
-    },
-    ze_info_major: 1,
-    ze_info_minor: 62,
-    zebin_sha256: [
-        0x1d, 0xbc, 0x80, 0xb4, 0x68, 0xdd, 0x89, 0x60,
-        0x73, 0xdd, 0x17, 0xc3, 0x96, 0x3a, 0x5c, 0x7c,
-        0xcc, 0xf8, 0x14, 0x36, 0x5e, 0x21, 0xf0, 0x40,
-        0xe0, 0x5a, 0x35, 0x22, 0xfe, 0xa4, 0xcd, 0x9c,
-    ],
-    spv_sha256: [
-        0x73, 0x4d, 0xba, 0x8e, 0x6b, 0xb9, 0x2b, 0x28,
-        0x84, 0x18, 0x00, 0x03, 0xb4, 0x33, 0xee, 0x2a,
-        0xc0, 0x7a, 0xae, 0x83, 0x59, 0x11, 0x34, 0x51,
-        0x93, 0x00, 0x1c, 0xea, 0x8c, 0x5e, 0x24, 0xcf,
-    ],
-    text_section_name: ".text.shadertoy_nguyen",
-    text_section_offset: 64,
-    text_section_size: 78528,
-    entry_offset: 64,
-    entry_size: 78360,
-    simd_width: 16,
-    grf_count: 128,
-    scratch_bytes: 0,
-    slm_bytes: 0,
-    cross_thread_data_bytes: 96,
-    per_thread_data_bytes: 96,
-    bindings: &[
-        GpgpuArtifactBinding { arg_index: 0, bti: 0 },
-    ],
-    implicit_payload_args: &[
-        GpgpuArtifactImplicitPayloadArg { kind: GpgpuArtifactImplicitArgKind::GlobalIdOffset, offset_bytes: 0, size_bytes: 12 },
-        GpgpuArtifactImplicitPayloadArg { kind: GpgpuArtifactImplicitArgKind::LocalSize, offset_bytes: 12, size_bytes: 12 },
-        GpgpuArtifactImplicitPayloadArg { kind: GpgpuArtifactImplicitArgKind::EnqueuedLocalSize, offset_bytes: 32, size_bytes: 12 },
-    ],
-    per_thread_payload_args: &[
-        GpgpuArtifactPerThreadPayloadArg { kind: GpgpuArtifactPerThreadArgKind::LocalId, offset_bytes: 0, size_bytes: 96 },
-    ],
-    payload_args: &[
-        GpgpuArtifactPayloadArg { arg_index: 0, kind: GpgpuArtifactArgKind::ByPointer, offset_bytes: 48, size_bytes: 8, access: GpgpuArtifactArgAccess::ReadWrite, address_mode: GpgpuArtifactAddressMode::Stateful },
-        GpgpuArtifactPayloadArg { arg_index: 1, kind: GpgpuArtifactArgKind::ByPointer, offset_bytes: 56, size_bytes: 8, access: GpgpuArtifactArgAccess::ReadOnly, address_mode: GpgpuArtifactAddressMode::Stateless },
-        GpgpuArtifactPayloadArg { arg_index: 2, kind: GpgpuArtifactArgKind::ByValue, offset_bytes: 64, size_bytes: 4, access: GpgpuArtifactArgAccess::None, address_mode: GpgpuArtifactAddressMode::None },
-        GpgpuArtifactPayloadArg { arg_index: 3, kind: GpgpuArtifactArgKind::ByValue, offset_bytes: 68, size_bytes: 4, access: GpgpuArtifactArgAccess::None, address_mode: GpgpuArtifactAddressMode::None },
-        GpgpuArtifactPayloadArg { arg_index: 4, kind: GpgpuArtifactArgKind::ByValue, offset_bytes: 72, size_bytes: 4, access: GpgpuArtifactArgAccess::None, address_mode: GpgpuArtifactAddressMode::None },
-    ],
-};
+pub(crate) const SHADERTOY_NGUYEN_ADLS_CPP_ABI_CONTRACT: GpgpuKernelAbiContract =
+    GpgpuKernelAbiContract {
+        schema_version: GPGPU_KERNEL_ABI_SCHEMA_VERSION,
+        kernel_name: "shadertoy_nguyen",
+        target: GpgpuKernelTarget {
+            label: "adls",
+            pci_device_ids: &[0x4680],
+            revision_min: 12,
+            revision_max: 12,
+        },
+        ze_info_major: 1,
+        ze_info_minor: 62,
+        zebin_sha256: [
+            0x1d, 0xbc, 0x80, 0xb4, 0x68, 0xdd, 0x89, 0x60, 0x73, 0xdd, 0x17, 0xc3, 0x96, 0x3a,
+            0x5c, 0x7c, 0xcc, 0xf8, 0x14, 0x36, 0x5e, 0x21, 0xf0, 0x40, 0xe0, 0x5a, 0x35, 0x22,
+            0xfe, 0xa4, 0xcd, 0x9c,
+        ],
+        spv_sha256: [
+            0x73, 0x4d, 0xba, 0x8e, 0x6b, 0xb9, 0x2b, 0x28, 0x84, 0x18, 0x00, 0x03, 0xb4, 0x33,
+            0xee, 0x2a, 0xc0, 0x7a, 0xae, 0x83, 0x59, 0x11, 0x34, 0x51, 0x93, 0x00, 0x1c, 0xea,
+            0x8c, 0x5e, 0x24, 0xcf,
+        ],
+        text_section_name: ".text.shadertoy_nguyen",
+        text_section_offset: 64,
+        text_section_size: 78528,
+        entry_offset: 64,
+        entry_size: 78360,
+        simd_width: 16,
+        grf_count: 128,
+        scratch_bytes: 0,
+        slm_bytes: 0,
+        cross_thread_data_bytes: 96,
+        per_thread_data_bytes: 96,
+        bindings: &[GpgpuArtifactBinding {
+            arg_index: 0,
+            bti: 0,
+        }],
+        implicit_payload_args: &[
+            GpgpuArtifactImplicitPayloadArg {
+                kind: GpgpuArtifactImplicitArgKind::GlobalIdOffset,
+                offset_bytes: 0,
+                size_bytes: 12,
+            },
+            GpgpuArtifactImplicitPayloadArg {
+                kind: GpgpuArtifactImplicitArgKind::LocalSize,
+                offset_bytes: 12,
+                size_bytes: 12,
+            },
+            GpgpuArtifactImplicitPayloadArg {
+                kind: GpgpuArtifactImplicitArgKind::EnqueuedLocalSize,
+                offset_bytes: 32,
+                size_bytes: 12,
+            },
+        ],
+        per_thread_payload_args: &[GpgpuArtifactPerThreadPayloadArg {
+            kind: GpgpuArtifactPerThreadArgKind::LocalId,
+            offset_bytes: 0,
+            size_bytes: 96,
+        }],
+        payload_args: &[
+            GpgpuArtifactPayloadArg {
+                arg_index: 0,
+                kind: GpgpuArtifactArgKind::ByPointer,
+                offset_bytes: 48,
+                size_bytes: 8,
+                access: GpgpuArtifactArgAccess::ReadWrite,
+                address_mode: GpgpuArtifactAddressMode::Stateful,
+            },
+            GpgpuArtifactPayloadArg {
+                arg_index: 1,
+                kind: GpgpuArtifactArgKind::ByPointer,
+                offset_bytes: 56,
+                size_bytes: 8,
+                access: GpgpuArtifactArgAccess::ReadOnly,
+                address_mode: GpgpuArtifactAddressMode::Stateless,
+            },
+            GpgpuArtifactPayloadArg {
+                arg_index: 2,
+                kind: GpgpuArtifactArgKind::ByValue,
+                offset_bytes: 64,
+                size_bytes: 4,
+                access: GpgpuArtifactArgAccess::None,
+                address_mode: GpgpuArtifactAddressMode::None,
+            },
+            GpgpuArtifactPayloadArg {
+                arg_index: 3,
+                kind: GpgpuArtifactArgKind::ByValue,
+                offset_bytes: 68,
+                size_bytes: 4,
+                access: GpgpuArtifactArgAccess::None,
+                address_mode: GpgpuArtifactAddressMode::None,
+            },
+            GpgpuArtifactPayloadArg {
+                arg_index: 4,
+                kind: GpgpuArtifactArgKind::ByValue,
+                offset_bytes: 72,
+                size_bytes: 4,
+                access: GpgpuArtifactArgAccess::None,
+                address_mode: GpgpuArtifactAddressMode::None,
+            },
+        ],
+    };

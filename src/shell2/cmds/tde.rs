@@ -28,8 +28,7 @@ pub(crate) fn try_parse(
     }
 
     let target = matrix_target_for_backend(io);
-    if submit_online_launch_script_to_target(spawner, target, TDE_APP, TDE_LAUNCH_SCRIPT).is_err()
-    {
+    if submit_online_launch_script_to_target(spawner, target, TDE_APP, TDE_LAUNCH_SCRIPT).is_err() {
         print_shell_line(io, "tde: Texplo online launch task unavailable");
     }
     ParseOutcome::Handled

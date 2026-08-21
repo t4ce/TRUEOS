@@ -49,7 +49,9 @@ impl Duration {
 
     /// Creates a duration from the specified number of seconds, rounding up.
     pub const fn from_secs(secs: u64) -> Duration {
-        Duration { ticks: secs * TICK_HZ }
+        Duration {
+            ticks: secs * TICK_HZ,
+        }
     }
 
     /// Creates a duration from the specified number of milliseconds, rounding up.
@@ -77,7 +79,9 @@ impl Duration {
 
     /// Creates a duration from the specified number of seconds, rounding down.
     pub const fn from_secs_floor(secs: u64) -> Duration {
-        Duration { ticks: secs * TICK_HZ }
+        Duration {
+            ticks: secs * TICK_HZ,
+        }
     }
 
     /// Creates a duration from the specified number of milliseconds, rounding down.
@@ -175,28 +179,42 @@ impl Duration {
     /// NOTE: Giving this function a hz >= the TICK_HZ of your platform will clamp the Duration to 1
     /// tick. Doing so will not deadlock, but will certainly not produce the desired output.
     pub const fn from_hz(hz: u64) -> Duration {
-        let ticks = { if hz >= TICK_HZ { 1 } else { (TICK_HZ + hz / 2) / hz } };
+        let ticks = {
+            if hz >= TICK_HZ {
+                1
+            } else {
+                (TICK_HZ + hz / 2) / hz
+            }
+        };
         Duration { ticks }
     }
 
     /// Adds one `Duration` to another, returning a new `Duration` or `None` in the event of an overflow.
     pub fn checked_add(self, rhs: Duration) -> Option<Duration> {
-        self.ticks.checked_add(rhs.ticks).map(|ticks| Duration { ticks })
+        self.ticks
+            .checked_add(rhs.ticks)
+            .map(|ticks| Duration { ticks })
     }
 
     /// Subtracts one `Duration` from another, returning a new `Duration` or `None` in the event of an overflow.
     pub fn checked_sub(self, rhs: Duration) -> Option<Duration> {
-        self.ticks.checked_sub(rhs.ticks).map(|ticks| Duration { ticks })
+        self.ticks
+            .checked_sub(rhs.ticks)
+            .map(|ticks| Duration { ticks })
     }
 
     /// Multiplies one `Duration` by a scalar `u32`, returning a new `Duration` or `None` in the event of an overflow.
     pub fn checked_mul(self, rhs: u32) -> Option<Duration> {
-        self.ticks.checked_mul(rhs as _).map(|ticks| Duration { ticks })
+        self.ticks
+            .checked_mul(rhs as _)
+            .map(|ticks| Duration { ticks })
     }
 
     /// Divides one `Duration` by a scalar `u32`, returning a new `Duration` or `None` in the event of an overflow.
     pub fn checked_div(self, rhs: u32) -> Option<Duration> {
-        self.ticks.checked_div(rhs as _).map(|ticks| Duration { ticks })
+        self.ticks
+            .checked_div(rhs as _)
+            .map(|ticks| Duration { ticks })
     }
 }
 
@@ -204,7 +222,8 @@ impl Add for Duration {
     type Output = Duration;
 
     fn add(self, rhs: Duration) -> Duration {
-        self.checked_add(rhs).expect("overflow when adding durations")
+        self.checked_add(rhs)
+            .expect("overflow when adding durations")
     }
 }
 
@@ -218,7 +237,8 @@ impl Sub for Duration {
     type Output = Duration;
 
     fn sub(self, rhs: Duration) -> Duration {
-        self.checked_sub(rhs).expect("overflow when subtracting durations")
+        self.checked_sub(rhs)
+            .expect("overflow when subtracting durations")
     }
 }
 

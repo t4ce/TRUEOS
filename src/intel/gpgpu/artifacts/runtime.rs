@@ -796,12 +796,7 @@ mod runtime_admission_tests {
             ..artifact
         };
         assert_eq!(
-            admit_kernel_artifact_bytes(
-                wrong_name,
-                0x4680,
-                SELECTED_ADLS_REVISION,
-                wrong_name.bin,
-            ),
+            admit_kernel_artifact_bytes(wrong_name, 0x4680, SELECTED_ADLS_REVISION, wrong_name.bin,),
             Err(GpgpuArtifactAdmissionError::ContractKernelNameMismatch)
         );
 

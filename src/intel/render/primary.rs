@@ -1724,13 +1724,15 @@ fn submit_resident_scene_geometry_batched(
         );
     }
     let prepare_us = crate::chronos::monotonic_nanos().saturating_sub(prepare_started_ns) / 1_000;
-    let submit_name = if draws.iter().any(|draw| {
-        draw.fragment_contract == ResidentSceneFragmentContract::FixedTexelLoadProbe
-    }) {
+    let submit_name = if draws
+        .iter()
+        .any(|draw| draw.fragment_contract == ResidentSceneFragmentContract::FixedTexelLoadProbe)
+    {
         "resident-scene-fixed-texel-probe"
-    } else if draws.iter().any(|draw| {
-        draw.fragment_contract == ResidentSceneFragmentContract::FilteredSample
-    }) {
+    } else if draws
+        .iter()
+        .any(|draw| draw.fragment_contract == ResidentSceneFragmentContract::FilteredSample)
+    {
         "resident-scene-filtered-sample"
     } else {
         "resident-scene"

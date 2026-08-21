@@ -549,9 +549,7 @@ mod tests {
         assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
 
         let registry = command_registry_json();
-        for retired in [
-            "7z", "mv", "move", "rm", "remove", "delete", "del", "sha",
-        ] {
+        for retired in ["7z", "mv", "move", "rm", "remove", "delete", "del", "sha"] {
             assert!(!registry.contains(alloc::format!("\"name\":\"{retired}\"").as_str()));
         }
         assert!(registry.contains("\"name\":\"tde\""));
@@ -605,9 +603,9 @@ pub(crate) fn try_dispatch(
 
 pub(crate) fn command_names_status_text() -> AllocString {
     const STATUS_ORDER: &[&str] = &[
-        "tde", "shot", "disc", "cry", "backup", "install", "update", "hyper",
-        "surf", "net", "ssh", "qjs", "grid", "helio", "tts", "stt", "cpp", "vgpu", "aud", "vid",
-        "acpi", "tlb", "ram", "smp", "etc",
+        "tde", "shot", "disc", "cry", "backup", "install", "update", "hyper", "surf", "net", "ssh",
+        "qjs", "grid", "helio", "tts", "stt", "cpp", "vgpu", "aud", "vid", "acpi", "tlb", "ram",
+        "smp", "etc",
     ];
 
     let mut out = AllocString::new();
@@ -649,9 +647,9 @@ pub(crate) fn command_names_status_text_fitting(max_width: usize) -> AllocString
     }
 
     const STATUS_ORDER: &[&str] = &[
-        "tde", "shot", "disc", "cry", "backup", "install", "update", "hyper",
-        "surf", "net", "ssh", "qjs", "grid", "helio", "tts", "stt", "cpp", "vgpu", "aud", "vid",
-        "acpi", "tlb", "ram", "smp", "etc",
+        "tde", "shot", "disc", "cry", "backup", "install", "update", "hyper", "surf", "net", "ssh",
+        "qjs", "grid", "helio", "tts", "stt", "cpp", "vgpu", "aud", "vid", "acpi", "tlb", "ram",
+        "smp", "etc",
     ];
 
     let content_width = max_width.saturating_sub(3);

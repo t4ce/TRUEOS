@@ -121,27 +121,18 @@ impl<K, V> AvlTree<K, V> {
             is_last: true,
         });
 
-        write_ascii_tree(
-            self,
-            root,
-            out,
-            max_nodes,
-            &mut stack,
-            &mut branches,
-            "nodes",
-            |id, w| {
-                let n = self.node(id);
-                let label = if n.left.is_some() || n.right.is_some() {
-                    "N"
-                } else {
-                    "L"
-                };
-                w.write_str(label)?;
-                w.write_str(" h=")?;
-                write!(w, "{} ", n.height)?;
-                render_key(&n.key, &n.value, w)
-            },
-        )
+        write_ascii_tree(self, root, out, max_nodes, &mut stack, &mut branches, "nodes", |id, w| {
+            let n = self.node(id);
+            let label = if n.left.is_some() || n.right.is_some() {
+                "N"
+            } else {
+                "L"
+            };
+            w.write_str(label)?;
+            w.write_str(" h=")?;
+            write!(w, "{} ", n.height)?;
+            render_key(&n.key, &n.value, w)
+        })
     }
 
     // ── internal arena helpers ──
@@ -612,7 +603,16 @@ mod tests {
         let collected: Vec<(u64, u64)> = t.iter().map(|(&k, &v)| (k, v)).collect();
         assert_eq!(
             collected,
-            alloc::vec![(1, 100), (2, 200), (3, 300), (4, 400), (5, 500), (6, 600), (7, 700), (8, 800)]
+            alloc::vec![
+                (1, 100),
+                (2, 200),
+                (3, 300),
+                (4, 400),
+                (5, 500),
+                (6, 600),
+                (7, 700),
+                (8, 800)
+            ]
         );
     }
 

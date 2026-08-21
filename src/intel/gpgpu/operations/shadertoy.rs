@@ -136,5 +136,8 @@ fn submit_shadertoy_rgba8(
             dst.gpu,
         );
     }
-    DirectRcsDispatchOutcome { submitted, observed }
+    DirectRcsDispatchOutcome {
+        submitted,
+        observed,
+    }
 }

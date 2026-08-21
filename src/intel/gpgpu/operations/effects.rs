@@ -327,4 +327,3 @@ fn submit_pixel_plasma_rgba8(
         observed,
     }
 }
-

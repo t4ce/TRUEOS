@@ -473,11 +473,8 @@ pub(crate) fn upload_kokoro_qgemm_u8_i8_kernel() -> Option<UploadedKernelArtifac
         return None;
     };
 
-    let upload = upload_artifact(
-        dev,
-        KOKORO_QGEMM_U8_I8_ADLS_ARTIFACT,
-        KOKORO_QGEMM_U8_I8_ADLS_GPU,
-    )?;
+    let upload =
+        upload_artifact(dev, KOKORO_QGEMM_U8_I8_ADLS_ARTIFACT, KOKORO_QGEMM_U8_I8_ADLS_GPU)?;
     *KOKORO_QGEMM_U8_I8_UPLOAD.lock() = Some(upload);
     Some(upload)
 }
@@ -495,11 +492,8 @@ pub(crate) fn upload_kokoro_conv1d_u8_u8_kernel() -> Option<UploadedKernelArtifa
         return None;
     };
 
-    let upload = upload_artifact(
-        dev,
-        KOKORO_CONV1D_U8_U8_ADLS_ARTIFACT,
-        KOKORO_CONV1D_U8_U8_ADLS_GPU,
-    )?;
+    let upload =
+        upload_artifact(dev, KOKORO_CONV1D_U8_U8_ADLS_ARTIFACT, KOKORO_CONV1D_U8_U8_ADLS_GPU)?;
     *KOKORO_CONV1D_U8_U8_UPLOAD.lock() = Some(upload);
     Some(upload)
 }

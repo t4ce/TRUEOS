@@ -190,9 +190,8 @@ pub async fn list_dir_utf8(path: &[u8]) -> Result<String, i32> {
 /// host launcher must explicitly grant `fs-scope trueosfs` for this call and
 /// for selectors returned by it.
 pub async fn list_mounts() -> Result<Vec<MountInfo>, i32> {
-    let mut operation = Operation::from_start(unsafe {
-        vcabi::trueos_cabi_async_fs_list_mounts_start()
-    })?;
+    let mut operation =
+        Operation::from_start(unsafe { vcabi::trueos_cabi_async_fs_list_mounts_start() })?;
     operation.ready().await?;
     let len = unsafe { vcabi::trueos_cabi_async_fs_result_len(operation.id) };
     if len < 0 {
@@ -242,10 +241,8 @@ mod mount_tests {
 
     #[test]
     fn parses_mount_records() {
-        let mounts = parse_mounts(
-            "trueosfs:disc2\tSystem\t1\t0\ntrueosfs:disc7\tArchive\t0\t1",
-        )
-        .unwrap();
+        let mounts =
+            parse_mounts("trueosfs:disc2\tSystem\t1\t0\ntrueosfs:disc7\tArchive\t0\t1").unwrap();
         assert_eq!(mounts.len(), 2);
         assert!(mounts[0].primary);
         assert!(mounts[1].read_only);

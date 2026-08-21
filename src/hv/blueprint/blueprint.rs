@@ -1760,10 +1760,7 @@ pub(crate) fn build_process_env(
             .map(str::trim)
             .any(|line| line == "fs-scope trueosfs")
     }) {
-        vars.insert(
-            String::from("TRUEOS_FS_SCOPE"),
-            String::from("trueosfs"),
-        );
+        vars.insert(String::from("TRUEOS_FS_SCOPE"), String::from("trueosfs"));
     }
     if let Some(root) = app_fs_root {
         vars.insert(String::from("TRUEOS_APP_FS_ROOT"), String::from(root));

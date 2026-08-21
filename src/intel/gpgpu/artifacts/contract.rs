@@ -1020,10 +1020,7 @@ mod tests {
 
     #[test]
     fn generated_worklist_contract_without_enqueued_local_size_is_admissible() {
-        assert_eq!(
-            FILL_RECT_WORKLIST_RGBA8_ADLS_CPP_ABI_CONTRACT.validate(),
-            Ok(())
-        );
+        assert_eq!(FILL_RECT_WORKLIST_RGBA8_ADLS_CPP_ABI_CONTRACT.validate(), Ok(()));
         assert_eq!(
             FILL_RECT_WORKLIST_RGBA8_ADLS_CPP_ABI_CONTRACT
                 .implicit_payload_args

@@ -683,8 +683,9 @@ pub(crate) fn lfm25_q8_project_batch(
     if activation.len() != row_bytes {
         return Err(Lfm25Q8ProjectError::InvalidShape);
     }
-    let activation_payload_bytes = trueos_lfm25_cpu::packed_q8x16_activation_bytes(columns as usize)
-        .map_err(|_| Lfm25Q8ProjectError::InvalidShape)?;
+    let activation_payload_bytes =
+        trueos_lfm25_cpu::packed_q8x16_activation_bytes(columns as usize)
+            .map_err(|_| Lfm25Q8ProjectError::InvalidShape)?;
     if activation_payload_bytes > LFM25_Q8_ACTIVATION_ALLOC_BYTES {
         return Err(Lfm25Q8ProjectError::InvalidShape);
     }
@@ -721,12 +722,8 @@ pub(crate) fn lfm25_q8_project_batch(
     let activation_destination = unsafe {
         core::slice::from_raw_parts_mut(runtime.activation.virt, activation_payload_bytes)
     };
-    trueos_lfm25_cpu::pack_q8x16_activation(
-        activation,
-        columns as usize,
-        activation_destination,
-    )
-    .map_err(|_| Lfm25Q8ProjectError::InvalidShape)?;
+    trueos_lfm25_cpu::pack_q8x16_activation(activation, columns as usize, activation_destination)
+        .map_err(|_| Lfm25Q8ProjectError::InvalidShape)?;
     super::dma_flush(runtime.activation.virt, activation_payload_bytes);
 
     let mut params = Vec::new();
@@ -1026,8 +1023,8 @@ fn prepare_lfm25_q8_runtime(
         return Ok(());
     }
     let dev = super::claimed_device().ok_or(Lfm25Q8ProjectError::RuntimeUnavailable)?;
-    let upload = upload_lfm25_q8_project_packed_kernel()
-        .ok_or(Lfm25Q8ProjectError::RuntimeUnavailable)?;
+    let upload =
+        upload_lfm25_q8_project_packed_kernel().ok_or(Lfm25Q8ProjectError::RuntimeUnavailable)?;
     let state = lfm25_rcs_state_once(dev).ok_or(Lfm25Q8ProjectError::RuntimeUnavailable)?;
     let mapped = direct_rcs_forcewake(dev)
         && direct_rcs_map_state(dev, state)
@@ -1087,8 +1084,8 @@ fn submit_lfm25_q8_project(
         return Err(Lfm25Q8ProjectError::CachePolicyUnavailable);
     }
     let dev = super::claimed_device().ok_or(Lfm25Q8ProjectError::RuntimeUnavailable)?;
-    let upload = upload_lfm25_q8_project_packed_kernel()
-        .ok_or(Lfm25Q8ProjectError::RuntimeUnavailable)?;
+    let upload =
+        upload_lfm25_q8_project_packed_kernel().ok_or(Lfm25Q8ProjectError::RuntimeUnavailable)?;
     let state = lfm25_rcs_state_once(dev).ok_or(Lfm25Q8ProjectError::RuntimeUnavailable)?;
     if !runtime.ready || runtime.bound_model != Some(model) {
         return Err(Lfm25Q8ProjectError::RuntimeUnavailable);

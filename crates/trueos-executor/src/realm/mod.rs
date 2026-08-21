@@ -149,10 +149,7 @@ impl Realm {
         let executor = Executor::new(wake.context());
         executor.set_timer_slack_ticks(policy.timer_slack_ticks);
         executor.set_poll_limit_tasks(policy.poll_limit_tasks);
-        Self {
-            wake,
-            executor,
-        }
+        Self { wake, executor }
     }
 
     /// Return this realm's wake flag.

@@ -382,15 +382,9 @@ pub fn start(
             caps.feature_control_vmx_outside_smx
         ));
         let r0 = __cpuid(0);
-        hvlogf(format_args!(
-            "hv: cpuid0 ebx=0x{:X} ecx=0x{:X} edx=0x{:X}",
-            r0.ebx, r0.ecx, r0.edx
-        ));
+        hvlogf(format_args!("hv: cpuid0 ebx=0x{:X} ecx=0x{:X} edx=0x{:X}", r0.ebx, r0.ecx, r0.edx));
         let r1 = __cpuid(1);
-        hvlogf(format_args!(
-            "hv: cpuid1 ecx=0x{:X} edx=0x{:X}",
-            r1.ecx, r1.edx
-        ));
+        hvlogf(format_args!("hv: cpuid1 ecx=0x{:X} edx=0x{:X}", r1.ecx, r1.edx));
         return Err(StartError::VmxUnsupported);
     }
 
@@ -419,9 +413,7 @@ pub fn stop(vm_id: u8) -> Result<bool, StopError> {
         hvlogf(format_args!("hv: vm1 lifecycle: stop requested"));
         Ok(true)
     } else {
-        hvlogf(format_args!(
-            "hv: vm1 lifecycle: stop ignored (not running)"
-        ));
+        hvlogf(format_args!("hv: vm1 lifecycle: stop ignored (not running)"));
         Ok(false)
     }
 }
@@ -517,15 +509,13 @@ fn snapshot_on_preserve_exit() {
                 "hv: vm1 reporting: preserve snapshot saved store=hv-ramdisk path=vm/vm1.snapshot bytes={}",
                 saved
             )),
-            Err(e) => hvlogf(format_args!(
-                "hv: vm1 reporting: preserve snapshot save failed ({:?})",
-                e
-            )),
+            Err(e) => {
+                hvlogf(format_args!("hv: vm1 reporting: preserve snapshot save failed ({:?})", e))
+            }
         },
-        Err(e) => hvlogf(format_args!(
-            "hv: vm1 reporting: preserve snapshot bytes failed ({:?})",
-            e
-        )),
+        Err(e) => {
+            hvlogf(format_args!("hv: vm1 reporting: preserve snapshot bytes failed ({:?})", e))
+        }
     }
 }
 
@@ -556,16 +546,12 @@ async fn vm1_task(_io: &'static dyn ShellBackend2) {
             ));
         }
     }
-    hvlogf(format_args!(
-        "hv: vm1 reporting: vmx preflight ok, stage=m1"
-    ));
-    hvlogf(format_args!(
-        "hv: vm1 reporting: vlayer policy=integrity-first"
-    ));
+    hvlogf(format_args!("hv: vm1 reporting: vmx preflight ok, stage=m1"));
+    hvlogf(format_args!("hv: vm1 reporting: vlayer policy=integrity-first"));
     match vmx_smoke() {
-        Ok(()) => hvlogf(format_args!(
-            "hv: vm1 reporting: vmx smoke ok (vmxon/vmclear/vmptrld/vmxoff)"
-        )),
+        Ok(()) => {
+            hvlogf(format_args!("hv: vm1 reporting: vmx smoke ok (vmxon/vmclear/vmptrld/vmxoff)"))
+        }
         Err(e) => hvlogf(format_args!("hv: vm1 reporting: vmx smoke failed ({})", e)),
     }
     match vmx_launch_once_with_ept() {
@@ -579,18 +565,13 @@ async fn vm1_task(_io: &'static dyn ShellBackend2) {
                 lr.entered, lr.launch_failed, lr.exit_reason, lr.exit_qualification, lr.guest_rip
             ));
         }
-        Err(e) => hvlogf(format_args!(
-            "hv: vm1 reporting: vmlaunch/ept failed ({})",
-            e
-        )),
+        Err(e) => hvlogf(format_args!("hv: vm1 reporting: vmlaunch/ept failed ({})", e)),
     }
 
     if let Some(bytes) = guest {
         if contains_bytes(bytes, MAIN_LOOP_MARKER) {
             VM1_MARKER_SEEN.store(true, Ordering::Release);
-            hvlogf(format_args!(
-                "hv: vm1 reporting: main: entering executor loop"
-            ));
+            hvlogf(format_args!("hv: vm1 reporting: main: entering executor loop"));
         } else {
             hvlogf(format_args!(
                 "hv: vm1 reporting: guest image missing marker '{}'",
@@ -598,9 +579,7 @@ async fn vm1_task(_io: &'static dyn ShellBackend2) {
             ));
         }
     } else {
-        hvlogf(format_args!(
-            "hv: vm1 reporting: guest module missing during task startup"
-        ));
+        hvlogf(format_args!("hv: vm1 reporting: guest module missing during task startup"));
     }
 
     VM1_RUNNING.store(false, Ordering::Release);
@@ -644,13 +623,7 @@ fn vmx_caps() -> (bool, bool, bool, bool, bool) {
         feature_control_vmx_outside_smx = (val & IA32_FEATURE_CONTROL_VMX_OUTSIDE_SMX) != 0;
     }
 
-    (
-        known_compatible,
-        has_msr,
-        has_vmx,
-        feature_control_locked,
-        feature_control_vmx_outside_smx,
-    )
+    (known_compatible, has_msr, has_vmx, feature_control_locked, feature_control_vmx_outside_smx)
 }
 
 fn vmx_launch_once_with_ept() -> Result<LaunchResult, &'static str> {
@@ -755,10 +728,7 @@ fn vmx_launch_once_with_ept() -> Result<LaunchResult, &'static str> {
                     }
                     lr = lr2;
                 }
-                Err(e) => hvlogf(format_args!(
-                    "hv: vm1 reporting: hlt-resume once failed ({})",
-                    e
-                )),
+                Err(e) => hvlogf(format_args!("hv: vm1 reporting: hlt-resume once failed ({})", e)),
             }
         }
     }
@@ -793,10 +763,7 @@ fn setup_vmcs_for_launch(eptp: u64) -> Result<(), &'static str> {
     };
 
     let pin = adjust_vmx_ctrl(pin_msr, 0);
-    let proc = adjust_vmx_ctrl(
-        proc_msr,
-        PROC_BASED_HLT_EXITING | PROC_BASED_ACTIVATE_SECONDARY,
-    );
+    let proc = adjust_vmx_ctrl(proc_msr, PROC_BASED_HLT_EXITING | PROC_BASED_ACTIVATE_SECONDARY);
     let proc2 = adjust_vmx_ctrl(IA32_VMX_PROCBASED_CTLS2, PROC2_BASED_ENABLE_EPT);
     let exit = adjust_vmx_ctrl(exit_msr, EXIT_CTL_HOST_ADDR_SPACE_SIZE);
     let entry = adjust_vmx_ctrl(entry_msr, ENTRY_CTL_IA32E_MODE_GUEST);
@@ -969,10 +936,7 @@ fn setup_vmcs_for_launch(eptp: u64) -> Result<(), &'static str> {
             vmwrite(VMCS_GUEST_CR0, host_cr0)?;
             vmwrite(VMCS_GUEST_CR3, guest_cr3)?;
             vmwrite(VMCS_GUEST_CR4, host_cr4)?;
-            vmwrite(
-                VMCS_GUEST_RFLAGS,
-                (guest_rflags | RFLAGS_RESERVED_BIT1) & !RFLAGS_IF,
-            )?;
+            vmwrite(VMCS_GUEST_RFLAGS, (guest_rflags | RFLAGS_RESERVED_BIT1) & !RFLAGS_IF)?;
             vmwrite(VMCS_GUEST_RIP, guest_rip)?;
             vmwrite(VMCS_GUEST_RSP, guest_rsp)?;
             vmwrite(VMCS_GUEST_DR7, 0x400)?;
@@ -1144,10 +1108,7 @@ fn setup_vmcs_for_launch(eptp: u64) -> Result<(), &'static str> {
     vmwrite(VMCS_GUEST_CR0, host_cr0)?;
     vmwrite(VMCS_GUEST_CR3, guest_cr3)?;
     vmwrite(VMCS_GUEST_CR4, host_cr4)?;
-    vmwrite(
-        VMCS_GUEST_RFLAGS,
-        (guest_rflags | RFLAGS_RESERVED_BIT1) & !RFLAGS_IF,
-    )?;
+    vmwrite(VMCS_GUEST_RFLAGS, (guest_rflags | RFLAGS_RESERVED_BIT1) & !RFLAGS_IF)?;
     vmwrite(VMCS_GUEST_RIP, guest_rip)?;
     vmwrite(VMCS_GUEST_RSP, guest_rsp)?;
     vmwrite(VMCS_GUEST_DR7, 0x400)?;
@@ -1248,10 +1209,7 @@ fn build_ept_identity_4g() -> Result<u64, &'static str> {
     }
 
     let eptp = (pml4_pa & 0x000F_FFFF_FFFF_F000) | 6 | (3 << 3);
-    hvlogf(format_args!(
-        "hv: vm1 reporting: ept v1 identity map ready eptp=0x{:016X}",
-        eptp
-    ));
+    hvlogf(format_args!("hv: vm1 reporting: ept v1 identity map ready eptp=0x{:016X}", eptp));
     Ok(eptp)
 }
 
@@ -1339,21 +1297,13 @@ fn build_guest_cr3(guest_rip: u64, guest_rsp: u64) -> Result<u64, &'static str> 
 
         let code_base = page_align_down(guest_rip);
         let code_pt_base = page_align_down_2m(guest_rip);
-        map_table_entry(
-            core::ptr::addr_of_mut!(GUEST_PML4.0),
-            pml4_index(code_base),
-            high_pdpt_pa,
-        );
+        map_table_entry(core::ptr::addr_of_mut!(GUEST_PML4.0), pml4_index(code_base), high_pdpt_pa);
         map_table_entry(
             core::ptr::addr_of_mut!(GUEST_HIGH_PDPT.0),
             pdpt_index(code_base),
             high_pd_pa,
         );
-        map_table_entry(
-            core::ptr::addr_of_mut!(GUEST_HIGH_PD.0),
-            pd_index(code_base),
-            code_pt_pa,
-        );
+        map_table_entry(core::ptr::addr_of_mut!(GUEST_HIGH_PD.0), pd_index(code_base), code_pt_pa);
         map_region_4k(
             core::ptr::addr_of_mut!(GUEST_CODE_PT.0),
             code_pt_base,
@@ -1738,10 +1688,7 @@ fn push_bytes(out: &mut Vec<u8>, bytes: &[u8]) {
 }
 
 unsafe fn push_guest_page(out: &mut Vec<u8>, page: *const [u64; 512]) {
-    push_bytes(
-        out,
-        core::slice::from_raw_parts(page.cast::<u8>(), PAGE_SIZE_4K),
-    );
+    push_bytes(out, core::slice::from_raw_parts(page.cast::<u8>(), PAGE_SIZE_4K));
 }
 
 fn vmwrite(field: u64, val: u64) -> Result<(), &'static str> {
@@ -2162,10 +2109,7 @@ fn vmx_smoke() -> Result<(), &'static str> {
         ));
         return Err("vmxon");
     }
-    hvlogf(format_args!(
-        "hv: vm1 reporting: vmxon ok rip=0x{:016X}",
-        rip
-    ));
+    hvlogf(format_args!("hv: vm1 reporting: vmxon ok rip=0x{:016X}", rip));
 
     let rip = current_rip();
     if !vmclear(vmcs_pa) {
@@ -2176,10 +2120,7 @@ fn vmx_smoke() -> Result<(), &'static str> {
         let _ = vmxoff();
         return Err("vmclear");
     }
-    hvlogf(format_args!(
-        "hv: vm1 reporting: vmclear ok rip=0x{:016X}",
-        rip
-    ));
+    hvlogf(format_args!("hv: vm1 reporting: vmclear ok rip=0x{:016X}", rip));
 
     let rip = current_rip();
     if !vmptrld(vmcs_pa) {
@@ -2190,19 +2131,13 @@ fn vmx_smoke() -> Result<(), &'static str> {
         let _ = vmxoff();
         return Err("vmptrld");
     }
-    hvlogf(format_args!(
-        "hv: vm1 reporting: vmptrld ok rip=0x{:016X}",
-        rip
-    ));
+    hvlogf(format_args!("hv: vm1 reporting: vmptrld ok rip=0x{:016X}", rip));
 
     let ptr = match vmptrst() {
         Some(v) => v,
         None => {
             let rip = current_rip();
-            hvlogf(format_args!(
-                "hv: vm1 reporting: vmptrst failed rip=0x{:016X}",
-                rip
-            ));
+            hvlogf(format_args!("hv: vm1 reporting: vmptrst failed rip=0x{:016X}", rip));
             let _ = vmxoff();
             return Err("vmptrst");
         }
@@ -2216,17 +2151,11 @@ fn vmx_smoke() -> Result<(), &'static str> {
         let _ = vmxoff();
         return Err("vmptrst mismatch");
     }
-    hvlogf(format_args!(
-        "hv: vm1 reporting: vmptrst ok current_vmcs=0x{:016X}",
-        ptr
-    ));
+    hvlogf(format_args!("hv: vm1 reporting: vmptrst ok current_vmcs=0x{:016X}", ptr));
 
     if !vmxoff() {
         let rip = current_rip();
-        hvlogf(format_args!(
-            "hv: vm1 reporting: vmxoff failed rip=0x{:016X}",
-            rip
-        ));
+        hvlogf(format_args!("hv: vm1 reporting: vmxoff failed rip=0x{:016X}", rip));
         return Err("vmxoff");
     }
     hvlogf(format_args!("hv: vm1 reporting: vmxoff ok"));

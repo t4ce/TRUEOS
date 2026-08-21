@@ -369,16 +369,10 @@ fn direct_rcs_submit_batch_state(
 }
 
 fn font_rcs_submit_batch(dev: super::Dev, state: DirectRcsState) -> bool {
-    matches!(
-        font_rcs_submit_batch_state(dev, state),
-        DirectRcsSubmissionState::Submitted
-    )
+    matches!(font_rcs_submit_batch_state(dev, state), DirectRcsSubmissionState::Submitted)
 }
 
-fn font_rcs_submit_batch_state(
-    dev: super::Dev,
-    state: DirectRcsState,
-) -> DirectRcsSubmissionState {
+fn font_rcs_submit_batch_state(dev: super::Dev, state: DirectRcsState) -> DirectRcsSubmissionState {
     direct_rcs_submit_batch_on_lane_state(dev, state, DirectRcsLane::Font)
 }
 
@@ -1282,14 +1276,8 @@ mod direct_rcs_fail_closed_tests {
     #[test]
     fn sprite_pre_marker_does_not_alias_completion_qword() {
         assert!(SPRITE_QUAD_WORKLIST_POST_MARKER_SLOT.is_multiple_of(2));
-        assert_ne!(
-            SPRITE_QUAD_WORKLIST_PRE_MARKER_SLOT,
-            SPRITE_QUAD_WORKLIST_POST_MARKER_SLOT
-        );
-        assert_ne!(
-            SPRITE_QUAD_WORKLIST_PRE_MARKER_SLOT,
-            SPRITE_QUAD_WORKLIST_POST_MARKER_SLOT + 1
-        );
+        assert_ne!(SPRITE_QUAD_WORKLIST_PRE_MARKER_SLOT, SPRITE_QUAD_WORKLIST_POST_MARKER_SLOT);
+        assert_ne!(SPRITE_QUAD_WORKLIST_PRE_MARKER_SLOT, SPRITE_QUAD_WORKLIST_POST_MARKER_SLOT + 1);
 
         let mut batch = [0u32; 4];
         let mut cursor = 0usize;

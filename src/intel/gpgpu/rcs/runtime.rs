@@ -443,11 +443,7 @@ pub(crate) struct DirectRcsControlGgttPrewarmReport {
 
 impl DirectRcsControlGgttPrewarmReport {
     pub(crate) const fn accepted(self) -> bool {
-        self.system_service
-            && self.font
-            && self.execution
-            && self.lfm25
-            && self.ui4_compositor
+        self.system_service && self.font && self.execution && self.lfm25 && self.ui4_compositor
     }
 }
 

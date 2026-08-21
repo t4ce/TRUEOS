@@ -2154,13 +2154,11 @@ fn is_vf_streamout_submit_name(submit_name: &str) -> bool {
 }
 
 fn is_triangle_debug_submit_name(submit_name: &str) -> bool {
-    matches!(
-        submit_name,
-        "resident-scene-fixed-texel-probe" | "resident-scene-filtered-sample"
-    ) || (submit_name != "resident-scene"
-        && (is_surface_draw_submit_name(submit_name)
-            || is_streamout_submit_name(submit_name)
-            || is_scratch_rt_submit_name(submit_name)))
+    matches!(submit_name, "resident-scene-fixed-texel-probe" | "resident-scene-filtered-sample")
+        || (submit_name != "resident-scene"
+            && (is_surface_draw_submit_name(submit_name)
+                || is_streamout_submit_name(submit_name)
+                || is_scratch_rt_submit_name(submit_name)))
 }
 
 fn fragment_target_variant_base(submit_name: &str) -> Option<&str> {

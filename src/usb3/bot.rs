@@ -278,17 +278,9 @@ pub(crate) async fn command_in(
     }
 
     // Stage 1: CBW on bulk-out.
-    let (cc_cbw, _xfer_cbw) = bulk_xfer(
-        ctx,
-        ring_out,
-        slot_id,
-        ep_out_target,
-        cbw_phys,
-        CBW_LEN as u32,
-        "bot-cbw",
-        800,
-    )
-    .await?;
+    let (cc_cbw, _xfer_cbw) =
+        bulk_xfer(ctx, ring_out, slot_id, ep_out_target, cbw_phys, CBW_LEN as u32, "bot-cbw", 800)
+            .await?;
     if cc_cbw != 1 {
         crate::log!("usb: bot: cbw cc={}\n", cc_cbw);
         goto_cleanup(cbw_virt, csw_virt, data_virt, data_len);
@@ -323,17 +315,9 @@ pub(crate) async fn command_in(
     }
 
     // Stage 3: CSW on bulk-in.
-    let (cc_csw, xfer_csw) = bulk_xfer(
-        ctx,
-        ring_in,
-        slot_id,
-        ep_in_target,
-        csw_phys,
-        CSW_LEN as u32,
-        "bot-csw",
-        1200,
-    )
-    .await?;
+    let (cc_csw, xfer_csw) =
+        bulk_xfer(ctx, ring_in, slot_id, ep_in_target, csw_phys, CSW_LEN as u32, "bot-csw", 1200)
+            .await?;
     if cc_csw != 1 && cc_csw != 13 {
         crate::log!("usb: bot: csw cc={}\n", cc_csw);
         return Err(());
@@ -396,17 +380,9 @@ pub(crate) async fn command_out(
     }
 
     // Stage 1: CBW on bulk-out.
-    let (cc_cbw, _xfer_cbw) = bulk_xfer(
-        ctx,
-        ring_out,
-        slot_id,
-        ep_out_target,
-        cbw_phys,
-        CBW_LEN as u32,
-        "bot-cbw",
-        800,
-    )
-    .await?;
+    let (cc_cbw, _xfer_cbw) =
+        bulk_xfer(ctx, ring_out, slot_id, ep_out_target, cbw_phys, CBW_LEN as u32, "bot-cbw", 800)
+            .await?;
     if cc_cbw != 1 {
         return Err(());
     }
@@ -428,17 +404,9 @@ pub(crate) async fn command_out(
     }
 
     // Stage 3: CSW on bulk-in.
-    let (cc_csw, xfer_csw) = bulk_xfer(
-        ctx,
-        ring_in,
-        slot_id,
-        ep_in_target,
-        csw_phys,
-        CSW_LEN as u32,
-        "bot-csw",
-        1200,
-    )
-    .await?;
+    let (cc_csw, xfer_csw) =
+        bulk_xfer(ctx, ring_in, slot_id, ep_in_target, csw_phys, CSW_LEN as u32, "bot-csw", 1200)
+            .await?;
     if cc_csw != 1 && cc_csw != 13 {
         return Err(());
     }

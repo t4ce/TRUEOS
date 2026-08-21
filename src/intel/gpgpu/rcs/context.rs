@@ -255,11 +255,7 @@ fn direct_rcs_read_lrc_ring_head(state: DirectRcsState) -> u32 {
     if total_dwords <= index {
         return u32::MAX;
     }
-    let address = unsafe {
-        state
-            .context_virt
-            .add(index * core::mem::size_of::<u32>())
-    };
+    let address = unsafe { state.context_virt.add(index * core::mem::size_of::<u32>()) };
     // The context image is GPU-written on save. Evict the CPU cache line
     // before sampling it so wrap telemetry does not report an old CPU copy.
     super::dma_flush(address, core::mem::size_of::<u32>());

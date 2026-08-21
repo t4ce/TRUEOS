@@ -1180,7 +1180,8 @@ impl WindowBroker {
         for window in &mut self.windows {
             if let Some(mut transition) = window.placement_transition {
                 let placement = placement_transition_placement(transition, now_ms);
-                let complete = now_ms.saturating_sub(transition.started_ms) >= transition.duration_ms;
+                let complete =
+                    now_ms.saturating_sub(transition.started_ms) >= transition.duration_ms;
                 if placement != transition.current || complete {
                     transition.current = placement;
                     window.damage = Some(DamageRegion::FULL);
@@ -1966,7 +1967,7 @@ pub(crate) fn toggle_window_maximized(
         window.replacement_presentation = (!maximized
             && window.interaction.resize_on_maximize
             && producer_resize_required(window.interaction, previous, placement))
-            .then_some(previous);
+        .then_some(previous);
         window.damage = Some(DamageRegion::FULL);
         window.revision = next_serial(window.revision);
     }
@@ -2084,11 +2085,8 @@ pub(crate) fn publish_window_frames(
         let (slot, _) = unpack_handle(id.0)?;
         let window = &mut broker.windows[slot];
         if window.state == WindowState::Pending {
-            window.open_transition = Some(open_transition(
-                window.placement,
-                window.plane,
-                started_ms,
-            ));
+            window.open_transition =
+                Some(open_transition(window.placement, window.plane, started_ms));
         }
         window.state = WindowState::Ready;
         window.publish_serial = next_serial(window.publish_serial);

@@ -225,7 +225,8 @@ const _: () = {
     assert!(GPGPU_HELIO_INDIRECT_BYTES == trueos_helio_runtime::DrawIndexedIndirectArgs::BYTE_LEN);
     assert!(
         GPGPU_HELIO_HIERARCHY_NODE_BYTES
-            == core::mem::size_of::<trueos_helio_runtime::retained_transform::RetainedTransformNode>()
+            == core::mem::size_of::<trueos_helio_runtime::retained_transform::RetainedTransformNode>(
+            )
     );
     assert!(
         core::mem::offset_of!(
@@ -255,9 +256,7 @@ const _: () = {
         GPGPU_HELIO_AFFINE_BYTES
             == core::mem::size_of::<trueos_helio_runtime::retained_transform::Affine3x4>()
     );
-    assert!(
-        core::mem::align_of::<trueos_helio_runtime::retained_transform::Affine3x4>() == 16
-    );
+    assert!(core::mem::align_of::<trueos_helio_runtime::retained_transform::Affine3x4>() == 16);
     assert!(
         GPGPU_HELIO_MAX_HIERARCHY_DEPTH
             == trueos_helio_runtime::retained_transform::MAX_RETAINED_TRANSFORM_DEPTH
@@ -374,50 +373,22 @@ impl GpgpuHelioRetainedTransformDispatch {
             let affine_bytes = nodes
                 .checked_mul(GPGPU_HELIO_AFFINE_BYTES)
                 .ok_or(Error::HierarchyLocalAffineBuffer)?;
-            let dirty_local_bytes = graph.dirty_local_count as usize
-                * GPGPU_HELIO_HIERARCHY_INDEX_BYTES;
-            let dirty_world_bytes = graph.dirty_world_count as usize
-                * GPGPU_HELIO_HIERARCHY_INDEX_BYTES;
-            let dirty_row_bytes = graph.dirty_row_count as usize
-                * GPGPU_HELIO_HIERARCHY_INDEX_BYTES;
+            let dirty_local_bytes =
+                graph.dirty_local_count as usize * GPGPU_HELIO_HIERARCHY_INDEX_BYTES;
+            let dirty_world_bytes =
+                graph.dirty_world_count as usize * GPGPU_HELIO_HIERARCHY_INDEX_BYTES;
+            let dirty_row_bytes =
+                graph.dirty_row_count as usize * GPGPU_HELIO_HIERARCHY_INDEX_BYTES;
             let row_leaf_bytes = rows * GPGPU_HELIO_HIERARCHY_INDEX_BYTES;
             for (slice, required, error) in [
                 (graph.nodes, node_bytes, Error::HierarchyNodeBuffer),
-                (
-                    graph.dynamic_bindings,
-                    binding_bytes,
-                    Error::HierarchyDynamicBindingBuffer,
-                ),
-                (
-                    graph.local_affines,
-                    affine_bytes,
-                    Error::HierarchyLocalAffineBuffer,
-                ),
-                (
-                    graph.world_affines,
-                    affine_bytes,
-                    Error::HierarchyWorldAffineBuffer,
-                ),
-                (
-                    graph.dirty_local_nodes,
-                    dirty_local_bytes,
-                    Error::HierarchyDirtyLocalBuffer,
-                ),
-                (
-                    graph.dirty_world_nodes,
-                    dirty_world_bytes,
-                    Error::HierarchyDirtyWorldBuffer,
-                ),
-                (
-                    graph.dirty_rows,
-                    dirty_row_bytes,
-                    Error::HierarchyDirtyRowBuffer,
-                ),
-                (
-                    graph.row_leaf_nodes,
-                    row_leaf_bytes,
-                    Error::HierarchyRowLeafBuffer,
-                ),
+                (graph.dynamic_bindings, binding_bytes, Error::HierarchyDynamicBindingBuffer),
+                (graph.local_affines, affine_bytes, Error::HierarchyLocalAffineBuffer),
+                (graph.world_affines, affine_bytes, Error::HierarchyWorldAffineBuffer),
+                (graph.dirty_local_nodes, dirty_local_bytes, Error::HierarchyDirtyLocalBuffer),
+                (graph.dirty_world_nodes, dirty_world_bytes, Error::HierarchyDirtyWorldBuffer),
+                (graph.dirty_rows, dirty_row_bytes, Error::HierarchyDirtyRowBuffer),
+                (graph.row_leaf_nodes, row_leaf_bytes, Error::HierarchyRowLeafBuffer),
             ] {
                 if required != 0 && !slice.covers(required) {
                     return Err(error);

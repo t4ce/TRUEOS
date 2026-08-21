@@ -4270,9 +4270,7 @@ pub extern "C" fn trueos_cabi_ui4_scene_compute_frame_publish(
             return ERROR_STATE;
         }
     }
-    trueos_cabi_ui4_solara_frame_publish(
-        window_id, damage_x, damage_y, damage_width, damage_height,
-    )
+    trueos_cabi_ui4_solara_frame_publish(window_id, damage_x, damage_y, damage_width, damage_height)
 }
 
 pub extern "C" fn trueos_cabi_ui4_solara_frame_close(window_id: u32) -> i32 {

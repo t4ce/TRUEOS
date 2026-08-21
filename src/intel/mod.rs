@@ -600,9 +600,9 @@ pub(crate) use self::display::{
     CompositionDamageRect, CompositionDamageRegion, LiveOverlayRect, MirrorMapMode,
     RgbaOverlayTile, Ui4AsyncComposition, Ui4AsyncCompositionError, Ui4AsyncCompositionPoll,
     Ui4DirectRgbaFrame, Ui4LiveOverlayFlip, Ui4LiveOverlayFlipPoll, Ui4PlaneSurfaceFlipPoll,
-    WdCaptureError, WdCapturePoll, WdCaptureStatus, WdXyuv8888Frame,
-    begin_ui4_wd_xyuv8888_capture, poll_ui4_wd_xyuv8888_capture, set_mirror_map_mode,
-    start_ui4_wd_xyuv8888_capture, stop_ui4_wd_xyuv8888_capture, ui4_wd_xyuv8888_capture_status,
+    WdCaptureError, WdCapturePoll, WdCaptureStatus, WdXyuv8888Frame, begin_ui4_wd_xyuv8888_capture,
+    poll_ui4_wd_xyuv8888_capture, set_mirror_map_mode, start_ui4_wd_xyuv8888_capture,
+    stop_ui4_wd_xyuv8888_capture, ui4_wd_xyuv8888_capture_status,
 };
 
 pub(crate) fn set_pipe_a_bottom_color_rgb8(red: u8, green: u8, blue: u8) -> bool {
