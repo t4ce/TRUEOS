@@ -5,6 +5,7 @@ pub(crate) mod aud;
 pub(crate) mod cpp;
 pub(crate) mod cry;
 pub(crate) mod disc;
+pub(crate) mod edit;
 pub(crate) mod format;
 #[cfg(test)]
 pub(crate) mod fslog;
@@ -21,6 +22,7 @@ pub(crate) mod ram;
 pub(crate) mod rapl;
 pub(crate) mod run;
 pub(crate) mod set;
+pub(crate) mod shell;
 pub(crate) mod smp;
 pub(crate) mod ssh;
 pub(crate) mod surf;

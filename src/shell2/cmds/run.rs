@@ -370,11 +370,13 @@ fn classify_blueprint_console_surface(
         .iter()
         .any(|import| import.name.starts_with("trueos_cabi_konsole_"));
     let uses_raw_shell2 = import_name_is(imports, "trueos_cabi_shell2_raw_write");
+    let uses_terminal_lease =
+        import_name_is(imports, "trueos_cabi_blueprint_terminal_lease_current_v1");
     let uses_unix_raw_tty = import_name_is(imports, "cfmakeraw")
         || import_name_is(imports, "tcsetattr")
         || (import_name_is(imports, "tcgetattr") && import_name_is(imports, "isatty"));
 
-    if uses_konsole || uses_raw_shell2 || uses_unix_raw_tty {
+    if uses_konsole || uses_raw_shell2 || uses_terminal_lease || uses_unix_raw_tty {
         BlueprintConsoleSurface::Terminal
     } else {
         BlueprintConsoleSurface::Text

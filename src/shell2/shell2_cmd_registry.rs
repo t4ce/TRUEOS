@@ -143,6 +143,14 @@ fn dispatch_disc(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> Par
     super::cmds::disc::try_parse(io, &mut args)
 }
 
+fn dispatch_edit(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::edit::try_parse(spawner, io, rest)
+}
+
+fn dispatch_shell(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::shell::try_parse(spawner, io, rest)
+}
+
 fn dispatch_grid(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     super::cmds::grid::try_parse(spawner, io, rest)
 }
@@ -246,6 +254,15 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         tool_parameters_json: Some(TOOL_JSON_DISC),
     },
     BuiltinShell2CmdEntry {
+        name: "edit",
+        mode: "tui",
+        color: Some(STATUS_GREEN_RGB),
+        advertised: true,
+        handler: dispatch_edit,
+        tool_description: Some("Open the app.db-backed terminal editor."),
+        tool_parameters_json: None,
+    },
+    BuiltinShell2CmdEntry {
         name: "grid",
         mode: "cmd",
         color: Some(STATUS_ORANGE_RGB),
@@ -290,6 +307,17 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         advertised: true,
         handler: dispatch_install,
         tool_description: None,
+        tool_parameters_json: None,
+    },
+    BuiltinShell2CmdEntry {
+        name: "shell",
+        mode: "tui",
+        color: Some(STATUS_PINK_RGB),
+        advertised: true,
+        handler: dispatch_shell,
+        tool_description: Some(
+            "Open a UI4 Shell2 session and enter the same session through the invoking Matrix terminal.",
+        ),
         tool_parameters_json: None,
     },
     BuiltinShell2CmdEntry {
@@ -533,7 +561,7 @@ mod tests {
     #[test]
     fn titlebar_groups_cry_and_display_only_backup_with_pink_commands() {
         let status = command_names_status_text();
-        let positions = ["cry", "backup", "install", "update"].map(|label| {
+        let positions = ["cry", "backup", "install", "update", "shell"].map(|label| {
             let token = alloc::format!("\x1b[1;38;2;255;55;255m{label}\x1b[0m");
             status.find(token.as_str()).unwrap()
         });
@@ -543,9 +571,9 @@ mod tests {
     }
 
     #[test]
-    fn green_filesystem_surface_is_tde_shot_disc() {
+    fn green_file_surface_includes_app_db_edit() {
         let status = command_names_status_text();
-        let positions = ["tde", "shot", "disc"].map(|label| status.find(label).unwrap());
+        let positions = ["tde", "shot", "disc", "edit"].map(|label| status.find(label).unwrap());
         assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
 
         let registry = command_registry_json();
@@ -553,6 +581,7 @@ mod tests {
             assert!(!registry.contains(alloc::format!("\"name\":\"{retired}\"").as_str()));
         }
         assert!(registry.contains("\"name\":\"tde\""));
+        assert!(registry.contains("\"name\":\"edit\""));
     }
 
     #[test]
@@ -603,9 +632,9 @@ pub(crate) fn try_dispatch(
 
 pub(crate) fn command_names_status_text() -> AllocString {
     const STATUS_ORDER: &[&str] = &[
-        "tde", "shot", "disc", "cry", "backup", "install", "update", "hyper", "surf", "net", "ssh",
-        "qjs", "grid", "helio", "tts", "stt", "cpp", "vgpu", "aud", "vid", "acpi", "tlb", "ram",
-        "smp", "etc",
+        "tde", "shot", "disc", "edit", "cry", "backup", "install", "update", "shell", "hyper",
+        "surf", "net", "ssh", "qjs", "grid", "helio", "tts", "stt", "cpp", "vgpu", "aud", "vid",
+        "acpi", "tlb", "ram", "smp", "etc",
     ];
 
     let mut out = AllocString::new();
@@ -647,9 +676,9 @@ pub(crate) fn command_names_status_text_fitting(max_width: usize) -> AllocString
     }
 
     const STATUS_ORDER: &[&str] = &[
-        "tde", "shot", "disc", "cry", "backup", "install", "update", "hyper", "surf", "net", "ssh",
-        "qjs", "grid", "helio", "tts", "stt", "cpp", "vgpu", "aud", "vid", "acpi", "tlb", "ram",
-        "smp", "etc",
+        "tde", "shot", "disc", "edit", "cry", "backup", "install", "update", "shell", "hyper",
+        "surf", "net", "ssh", "qjs", "grid", "helio", "tts", "stt", "cpp", "vgpu", "aud", "vid",
+        "acpi", "tlb", "ram", "smp", "etc",
     ];
 
     let content_width = max_width.saturating_sub(3);
