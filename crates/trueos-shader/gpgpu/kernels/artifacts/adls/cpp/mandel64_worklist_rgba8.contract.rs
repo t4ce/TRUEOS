@@ -4,116 +4,58 @@
 // backend: Intel IGC through ocloc -spirv_input
 // normalized commands: [["$CLANG","--target=spir64","-x","clcpp","-cl-std=CLC++","-Wall","-Wextra","-Werror","-Wdate-time","-cl-kernel-arg-info","-fno-discard-value-names","-fno-exceptions","-fno-rtti","-MMD","-MF","$OUT_DIR/mandel64_worklist_rgba8.d","-MT","mandel64_worklist_rgba8.bc","-emit-llvm","-c","mandel64_worklist_rgba8.clcpp","-o","$OUT_DIR/mandel64_worklist_rgba8.bc"],["$LLVM_SPIRV","--preserve-ocl-kernel-arg-type-metadata-through-string","$OUT_DIR/mandel64_worklist_rgba8.bc","-o","$OUT_DIR/mandel64_worklist_rgba8.spv"],["$OCLOC","compile","-file","$OUT_DIR/mandel64_worklist_rgba8.spv","-spirv_input","-device","0x4680","-64","-output","mandel64_worklist_rgba8","-out_dir","$OUT_DIR","-output_no_suffix","-gen_file"],["$OCLOC","validate","-file","$OUT_DIR/mandel64_worklist_rgba8.bin"]]
 
-pub(crate) const MANDEL64_WORKLIST_RGBA8_ADLS_CPP_ABI_CONTRACT: GpgpuKernelAbiContract =
-    GpgpuKernelAbiContract {
-        schema_version: GPGPU_KERNEL_ABI_SCHEMA_VERSION,
-        kernel_name: "mandel64_worklist_rgba8",
-        target: GpgpuKernelTarget {
-            label: "adls",
-            pci_device_ids: &[0x4680],
-            revision_min: 12,
-            revision_max: 12,
-        },
-        ze_info_major: 1,
-        ze_info_minor: 62,
-        zebin_sha256: [
-            0x3c, 0xb4, 0x4c, 0x1e, 0xb8, 0x79, 0x90, 0x3f, 0x3a, 0x05, 0x96, 0x24, 0x25, 0xe5,
-            0xbe, 0x4b, 0x78, 0x16, 0x4f, 0x97, 0xe9, 0xf5, 0xe9, 0xa5, 0x5d, 0x3d, 0xde, 0x7e,
-            0xff, 0x15, 0xae, 0x02,
-        ],
-        spv_sha256: [
-            0xa3, 0xbc, 0xe4, 0x11, 0x5e, 0xc7, 0x50, 0x89, 0xbe, 0x44, 0x6e, 0xd4, 0x68, 0x19,
-            0xa4, 0x2c, 0xcc, 0x2c, 0x51, 0xfc, 0x93, 0x5c, 0xf9, 0x61, 0x06, 0xa1, 0x3c, 0x6f,
-            0x33, 0xd5, 0xf8, 0x0c,
-        ],
-        text_section_name: ".text.mandel64_worklist_rgba8",
-        text_section_offset: 64,
-        text_section_size: 3264,
-        entry_offset: 64,
-        entry_size: 3088,
-        simd_width: 16,
-        grf_count: 128,
-        scratch_bytes: 0,
-        slm_bytes: 0,
-        cross_thread_data_bytes: 96,
-        per_thread_data_bytes: 96,
-        bindings: &[
-            GpgpuArtifactBinding {
-                arg_index: 0,
-                bti: 0,
-            },
-            GpgpuArtifactBinding {
-                arg_index: 1,
-                bti: 1,
-            },
-        ],
-        implicit_payload_args: &[
-            GpgpuArtifactImplicitPayloadArg {
-                kind: GpgpuArtifactImplicitArgKind::GlobalIdOffset,
-                offset_bytes: 0,
-                size_bytes: 12,
-            },
-            GpgpuArtifactImplicitPayloadArg {
-                kind: GpgpuArtifactImplicitArgKind::LocalSize,
-                offset_bytes: 12,
-                size_bytes: 12,
-            },
-            GpgpuArtifactImplicitPayloadArg {
-                kind: GpgpuArtifactImplicitArgKind::EnqueuedLocalSize,
-                offset_bytes: 32,
-                size_bytes: 12,
-            },
-            GpgpuArtifactImplicitPayloadArg {
-                kind: GpgpuArtifactImplicitArgKind::PrivateBaseStateless,
-                offset_bytes: 80,
-                size_bytes: 8,
-            },
-        ],
-        per_thread_payload_args: &[GpgpuArtifactPerThreadPayloadArg {
-            kind: GpgpuArtifactPerThreadArgKind::LocalId,
-            offset_bytes: 0,
-            size_bytes: 96,
-        }],
-        payload_args: &[
-            GpgpuArtifactPayloadArg {
-                arg_index: 0,
-                kind: GpgpuArtifactArgKind::ByPointer,
-                offset_bytes: 48,
-                size_bytes: 8,
-                access: GpgpuArtifactArgAccess::ReadWrite,
-                address_mode: GpgpuArtifactAddressMode::Stateful,
-            },
-            GpgpuArtifactPayloadArg {
-                arg_index: 1,
-                kind: GpgpuArtifactArgKind::ByPointer,
-                offset_bytes: 56,
-                size_bytes: 8,
-                access: GpgpuArtifactArgAccess::ReadOnly,
-                address_mode: GpgpuArtifactAddressMode::Stateful,
-            },
-            GpgpuArtifactPayloadArg {
-                arg_index: 2,
-                kind: GpgpuArtifactArgKind::ByValue,
-                offset_bytes: 64,
-                size_bytes: 4,
-                access: GpgpuArtifactArgAccess::None,
-                address_mode: GpgpuArtifactAddressMode::None,
-            },
-            GpgpuArtifactPayloadArg {
-                arg_index: 3,
-                kind: GpgpuArtifactArgKind::ByValue,
-                offset_bytes: 68,
-                size_bytes: 4,
-                access: GpgpuArtifactArgAccess::None,
-                address_mode: GpgpuArtifactAddressMode::None,
-            },
-            GpgpuArtifactPayloadArg {
-                arg_index: 4,
-                kind: GpgpuArtifactArgKind::ByValue,
-                offset_bytes: 72,
-                size_bytes: 4,
-                access: GpgpuArtifactArgAccess::None,
-                address_mode: GpgpuArtifactAddressMode::None,
-            },
-        ],
-    };
+pub(crate) const MANDEL64_WORKLIST_RGBA8_ADLS_CPP_ABI_CONTRACT: GpgpuKernelAbiContract = GpgpuKernelAbiContract {
+    schema_version: GPGPU_KERNEL_ABI_SCHEMA_VERSION,
+    kernel_name: "mandel64_worklist_rgba8",
+    target: GpgpuKernelTarget {
+        label: "adls",
+        pci_device_ids: &[0x4680],
+        revision_min: 12,
+        revision_max: 12,
+    },
+    ze_info_major: 1,
+    ze_info_minor: 62,
+    zebin_sha256: [
+        0x3c, 0xb4, 0x4c, 0x1e, 0xb8, 0x79, 0x90, 0x3f,
+        0x3a, 0x05, 0x96, 0x24, 0x25, 0xe5, 0xbe, 0x4b,
+        0x78, 0x16, 0x4f, 0x97, 0xe9, 0xf5, 0xe9, 0xa5,
+        0x5d, 0x3d, 0xde, 0x7e, 0xff, 0x15, 0xae, 0x02,
+    ],
+    spv_sha256: [
+        0xa3, 0xbc, 0xe4, 0x11, 0x5e, 0xc7, 0x50, 0x89,
+        0xbe, 0x44, 0x6e, 0xd4, 0x68, 0x19, 0xa4, 0x2c,
+        0xcc, 0x2c, 0x51, 0xfc, 0x93, 0x5c, 0xf9, 0x61,
+        0x06, 0xa1, 0x3c, 0x6f, 0x33, 0xd5, 0xf8, 0x0c,
+    ],
+    text_section_name: ".text.mandel64_worklist_rgba8",
+    text_section_offset: 64,
+    text_section_size: 3264,
+    entry_offset: 64,
+    entry_size: 3088,
+    simd_width: 16,
+    grf_count: 128,
+    scratch_bytes: 0,
+    slm_bytes: 0,
+    cross_thread_data_bytes: 96,
+    per_thread_data_bytes: 96,
+    bindings: &[
+        GpgpuArtifactBinding { arg_index: 0, bti: 0 },
+        GpgpuArtifactBinding { arg_index: 1, bti: 1 },
+    ],
+    implicit_payload_args: &[
+        GpgpuArtifactImplicitPayloadArg { kind: GpgpuArtifactImplicitArgKind::GlobalIdOffset, offset_bytes: 0, size_bytes: 12 },
+        GpgpuArtifactImplicitPayloadArg { kind: GpgpuArtifactImplicitArgKind::LocalSize, offset_bytes: 12, size_bytes: 12 },
+        GpgpuArtifactImplicitPayloadArg { kind: GpgpuArtifactImplicitArgKind::EnqueuedLocalSize, offset_bytes: 32, size_bytes: 12 },
+        GpgpuArtifactImplicitPayloadArg { kind: GpgpuArtifactImplicitArgKind::PrivateBaseStateless, offset_bytes: 80, size_bytes: 8 },
+    ],
+    per_thread_payload_args: &[
+        GpgpuArtifactPerThreadPayloadArg { kind: GpgpuArtifactPerThreadArgKind::LocalId, offset_bytes: 0, size_bytes: 96 },
+    ],
+    payload_args: &[
+        GpgpuArtifactPayloadArg { arg_index: 0, kind: GpgpuArtifactArgKind::ByPointer, offset_bytes: 48, size_bytes: 8, access: GpgpuArtifactArgAccess::ReadWrite, address_mode: GpgpuArtifactAddressMode::Stateful },
+        GpgpuArtifactPayloadArg { arg_index: 1, kind: GpgpuArtifactArgKind::ByPointer, offset_bytes: 56, size_bytes: 8, access: GpgpuArtifactArgAccess::ReadOnly, address_mode: GpgpuArtifactAddressMode::Stateful },
+        GpgpuArtifactPayloadArg { arg_index: 2, kind: GpgpuArtifactArgKind::ByValue, offset_bytes: 64, size_bytes: 4, access: GpgpuArtifactArgAccess::None, address_mode: GpgpuArtifactAddressMode::None },
+        GpgpuArtifactPayloadArg { arg_index: 3, kind: GpgpuArtifactArgKind::ByValue, offset_bytes: 68, size_bytes: 4, access: GpgpuArtifactArgAccess::None, address_mode: GpgpuArtifactAddressMode::None },
+        GpgpuArtifactPayloadArg { arg_index: 4, kind: GpgpuArtifactArgKind::ByValue, offset_bytes: 72, size_bytes: 4, access: GpgpuArtifactArgAccess::None, address_mode: GpgpuArtifactAddressMode::None },
+    ],
+};
