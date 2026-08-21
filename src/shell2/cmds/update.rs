@@ -78,7 +78,7 @@ pub(crate) fn submit_live_update(spawner: &Spawner, io: &'static dyn ShellBacken
     let target = matrix_target_for_backend(io);
     print_matrix_target_line(
         &target,
-        "update live: starting RAM-only generation replacement; no kernel disk install will run",
+        "update live: step=01/20 command-accepted mode=RAM-only disk-install=disabled",
     );
 
     set_matrix_target_active(&target, true);
@@ -286,7 +286,7 @@ async fn live_update_command_task(target: MatrixTarget, spawner: Spawner) {
         };
         let interrupted = || matrix_target_interrupted(&task_target);
 
-        log("update live: waiting for net and TRUEOSFS checkpoint storage");
+        log("update live: step=02a/20 waiting for net and TRUEOSFS checkpoint storage");
         crate::r::readiness::wait_for(
             crate::r::readiness::NET_V4_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
         )
@@ -295,8 +295,9 @@ async fn live_update_command_task(target: MatrixTarget, spawner: Spawner) {
             log("update live: interrupted before download");
             return;
         }
+        log("update live: step=02b/20 readiness-satisfied net=v4 trueosfs=mounted");
 
-        log(alloc::format!("update live: download {}", LIVE_ISO_URL).as_str());
+        log(alloc::format!("update live: step=03/20 download-begin {}", LIVE_ISO_URL).as_str());
         let payload = match crate::surfer::html_shack::fetch_bytes_via_pool(
             LIVE_ISO_URL,
             120_000,
@@ -319,7 +320,7 @@ async fn live_update_command_task(target: MatrixTarget, spawner: Spawner) {
             return;
         }
         log(alloc::format!(
-            "update live: downloaded payload={} bytes (7z_magic=true)",
+            "update live: step=04a/20 download-complete bytes={} archive=7z transport=https-rustls",
             payload.len(),
         )
         .as_str());
@@ -336,6 +337,7 @@ async fn live_update_command_task(target: MatrixTarget, spawner: Spawner) {
             log("update live: refused (extracted data is not an ISO9660 image)");
             return;
         }
+        log("update live: step=04b/20 ISO9660-verified");
         if interrupted() {
             log("update live: interrupted before candidate extraction");
             return;
@@ -353,7 +355,7 @@ async fn live_update_command_task(target: MatrixTarget, spawner: Spawner) {
             }
         };
         log(alloc::format!(
-            "update live: candidate TRUEOS.elf={} bytes; disk install path skipped",
+            "update live: step=05/20 candidate-ELF-extracted bytes={} disk-install=skipped",
             kernel.len(),
         )
         .as_str());

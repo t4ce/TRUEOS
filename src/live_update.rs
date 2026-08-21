@@ -16,7 +16,7 @@ use core::{
     fmt,
     mem::{offset_of, size_of},
     ptr,
-    sync::atomic::{AtomicBool, AtomicU64, Ordering},
+    sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
 };
 
 use embassy_executor::Spawner;
@@ -51,13 +51,18 @@ const HANDOFF_MAGIC0: u64 = 0x5452_5545_5741_524D; // "TRUEWARM"
 const HANDOFF_MAGIC1: u64 = 0x4655_4C4C_464F_5247; // "FULLFORG"
 const HANDOFF_STATE_COMMITTED: u64 = 1;
 
+const HANDOFF_VALIDATION_UNCHECKED: u8 = 0;
+const HANDOFF_VALIDATION_CHECKING: u8 = 1;
+const HANDOFF_VALIDATION_INVALID: u8 = 2;
+const HANDOFF_VALIDATION_VALID: u8 = 3;
+
 const TRANSITION_PARK: u64 = 1;
 const TRANSITION_ABORT: u64 = 2;
 const TRANSITION_SWITCH_STACKS: u64 = 3;
 const TRANSITION_COMMIT: u64 = 4;
 
 const VM_ID_LIMIT: usize = crate::allcaps::hv::VM_ID_LIMIT;
-const CPU_SLOT_LIMIT: usize = crate::allcaps::hv::VM_CPU_SLOT_LIMIT;
+const CPU_SLOT_LIMIT: usize = crate::percpu::CPU_SLOT_LIMIT;
 const RESTORE_WORDS: usize = (VM_ID_LIMIT + 63) / 64;
 
 #[derive(Clone, Copy)]
@@ -78,7 +83,8 @@ impl WarmReservedRange {
     }
 }
 
-const SHELL_NOTICE: &[u8] = b"\r\nupdate live: hey that worked, new kernel here :)\r\n";
+const SHELL_NOTICE: &[u8] =
+    b"\r\nlive-update: step=20/20 new kernel accepted this fresh TCP connection; VM restore path was armed\r\n";
 
 unsafe extern "C" {
     static __limine_requests_start: u8;
@@ -152,6 +158,7 @@ impl WarmHandoff {
 #[unsafe(link_section = ".live_update_handoff")]
 static mut LIVE_HANDOFF: WarmHandoff = WarmHandoff::EMPTY;
 
+static WARM_HANDOFF_VALIDATION: AtomicU8 = AtomicU8::new(HANDOFF_VALIDATION_UNCHECKED);
 static LIVE_UPDATE_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 static WARM_APS_RELEASED: AtomicBool = AtomicBool::new(false);
 static SHELL_NOTICE_PENDING: AtomicBool = AtomicBool::new(false);
@@ -372,6 +379,17 @@ impl Drop for LiveUpdateRunGuard {
 
 pub(crate) fn interrupt_install(idt: &mut InterruptDescriptorTable) {
     idt[RENDEZVOUS_VECTOR].set_handler_fn(live_update_rendezvous_isr);
+}
+
+/// Emit a transition marker without allocating, taking a lock, or relying on
+/// Embassy/network progress. Steps 12-17 remain observable on COM1 and the
+/// QEMU-style debug port after the ordinary runtime has been frozen.
+#[inline]
+fn transition_marker(marker: &'static [u8]) {
+    crate::uart1_com1::write_bytes(marker);
+    for &byte in marker {
+        unsafe { crate::portio::outb(0xE9, byte) };
+    }
 }
 
 #[allow(non_snake_case)]
@@ -627,7 +645,7 @@ pub fn log_boot_mode() {
     if let Some(handoff) = warm_handoff() {
         crate::log_info!(
             target: "global";
-            "live-update: generation={} candidate_hash=0x{:016X} arena=0x{:016X}+0x{:X} expected_aps={} mode=fullforget-warm\n",
+            "live-update: step=18/20 candidate-kmain-entered generation={} candidate_hash=0x{:016X} arena=0x{:016X}+0x{:X} expected_aps={} mode=fullforget-warm\n",
             handoff.generation,
             handoff.candidate_hash,
             handoff.arena_phys,
@@ -642,7 +660,7 @@ pub fn release_warm_aps() {
         WARM_APS_RELEASED.store(true, Ordering::Release);
         crate::log_info!(
             target: "global";
-            "live-update: released {} parked APs into generation {}\n",
+            "live-update: step=19/20 parked-APs-released count={} generation={}\n",
             handoff.expected_aps,
             handoff.generation,
         );
@@ -654,7 +672,6 @@ pub fn spawn_post_boot(spawner: Spawner) {
         return;
     };
 
-    SHELL_NOTICE_PENDING.store(true, Ordering::Release);
     match restore_after_live_update_task(
         spawner,
         handoff.restore_mask,
@@ -662,7 +679,15 @@ pub fn spawn_post_boot(spawner: Spawner) {
         handoff.transition_slot,
         handoff.generation,
     ) {
-        Ok(token) => spawner.spawn(token),
+        Ok(token) => {
+            spawner.spawn(token);
+            SHELL_NOTICE_PENDING.store(true, Ordering::Release);
+            crate::log_info!(
+                target: "global";
+                "live-update: step=20/20 post-boot-restore-armed generation={} fresh_tcp_notice=armed\n",
+                handoff.generation,
+            );
+        }
         Err(error) => crate::log_warn!(
             target: "global";
             "live-update: restore task unavailable generation={} error={:?}\n",
@@ -830,13 +855,13 @@ pub async fn stage_and_swap(
 
     print_matrix_target_line(
         &target,
-        "update live: staging candidate in RAM; kernel disk image will not be changed",
+        "update live: step=06/20 validating and staging candidate in RAM; disk image remains unchanged",
     );
     let mut staged = stage_candidate(kernel.as_slice())?;
     print_matrix_target_line(
         &target,
         format!(
-            "update live: candidate staged arena=0x{:016X}+{} MiB APs={}",
+            "update live: step=07/20 candidate-staged arena=0x{:016X}+{} MiB APs={}",
             staged.arena_phys,
             staged.arena_len / (1024 * 1024),
             staged.expected_aps,
@@ -847,10 +872,23 @@ pub async fn stage_and_swap(
 
     print_matrix_target_line(
         &target,
-        "update live: checkpointing active VMX apps to TRUEOSFS (candidate remains RAM-only)",
+        "update live: step=08/20 checkpointing active VMX apps to TRUEOSFS",
     );
     let checkpoint = checkpoint_active_vms(&spawner, &target).await?;
+    let checkpoint_count: u32 = checkpoint
+        .restore_mask
+        .iter()
+        .map(|word| word.count_ones())
+        .sum();
     staged.set_vm_plan(checkpoint.restore_mask, checkpoint.resume_mask, checkpoint.vm_heap_ranges);
+    print_matrix_target_line(
+        &target,
+        format!(
+            "update live: step=09/20 VM checkpoints committed count={}",
+            checkpoint_count,
+        )
+        .as_str(),
+    );
 
     if matrix_target_interrupted(&target) {
         resume_checkpointed_vms(&spawner, &target, checkpoint.paused_by_update.as_slice()).await;
@@ -863,7 +901,7 @@ pub async fn stage_and_swap(
     print_matrix_target_line(
         &target,
         format!(
-            "update live: captured {} PCI functions for lock-free DMA containment",
+            "update live: step=10/20 PCI snapshot captured functions={} containment=lock-free",
             pci_snapshot.len(),
         )
         .as_str(),
@@ -871,11 +909,7 @@ pub async fn stage_and_swap(
 
     print_matrix_target_line(
         &target,
-        "update live: final rendezvous next; on success the TCP shell will disconnect",
-    );
-    print_matrix_target_line(
-        &target,
-        "update live: reconnect after boot for: hey that worked, new kernel here :)",
+        "update live: step=11/20 irreversible rendezvous next; TCP must disconnect; COM1 continues with steps 12-17",
     );
     // Flush the final user-facing line while every normal runtime service is
     // still schedulable. After AP rendezvous succeeds the path takes no locks,
@@ -1086,6 +1120,7 @@ async fn resume_checkpointed_vms(spawner: &Spawner, target: &MatrixTarget, vm_id
 
 fn rendezvous_aps(staged: &mut StagedCandidate) -> Result<(), LiveUpdateError> {
     unsafe { install_transition_mapping(staged)? };
+    transition_marker(b"live-update: step=12/20 transition-map-installed\n");
     let control = staged.control();
     control.arrived.store(0, Ordering::Release);
     control.stacked.store(0, Ordering::Release);
@@ -1103,6 +1138,7 @@ fn rendezvous_aps(staged: &mut StagedCandidate) -> Result<(), LiveUpdateError> {
             return Err(LiveUpdateError::ApRendezvous("IPI delivery unavailable"));
         }
     }
+    transition_marker(b"live-update: step=13/20 rendezvous-ipis-sent\n");
 
     // Once an AP has entered the transition trampoline it may be holding an
     // arbitrary old-generation lock. Do not yield to Embassy or execute any
@@ -1124,6 +1160,7 @@ fn rendezvous_aps(staged: &mut StagedCandidate) -> Result<(), LiveUpdateError> {
         }
         core::hint::spin_loop();
     }
+    transition_marker(b"live-update: step=14/20 all-APs-parked\n");
 
     // Success intentionally leaves BSP interrupts disabled. The caller performs
     // only handoff bookkeeping before entering the non-returning commit path.
@@ -1131,6 +1168,7 @@ fn rendezvous_aps(staged: &mut StagedCandidate) -> Result<(), LiveUpdateError> {
 }
 
 fn abort_rendezvous(staged: &mut StagedCandidate, interrupts_were_enabled: bool) {
+    transition_marker(b"live-update: transition-abort-requested\n");
     let control = staged.control();
     control.command.store(TRANSITION_ABORT, Ordering::Release);
     // Prevent a late IPI from acquiring the control pointer while the existing
@@ -1148,6 +1186,7 @@ fn abort_rendezvous(staged: &mut StagedCandidate, interrupts_were_enabled: bool)
             // An AP still executes transition code. Unmapping/freeing the arena
             // would create an immediate use-after-free, so fail-stop and require
             // the same physical reset the operator was already prepared to use.
+            transition_marker(b"live-update: fail-stop=abort-drain-timeout\n");
             loop {
                 unsafe {
                     core::arch::asm!("cli", "hlt", options(nomem, nostack));
@@ -1314,14 +1353,17 @@ unsafe fn commit_fullforget(
     // AP is parked, so no other CPU can race the CF8/CFC transaction; bypassing
     // also avoids deadlock if an AP happened to be interrupted while owning the
     // normal lock.
+    transition_marker(b"live-update: step=15a/20 pci-quiesce-begin\n");
     let dma_failures = crate::pci::fullforget_quiesce_unlocked(pci_snapshot);
     if dma_failures != 0 {
         // Proceeding with a requester that still owns Bus Master Enable would
         // let an old-generation DMA engine overwrite replacement-kernel RAM.
+        transition_marker(b"live-update: fail-stop=pci-bus-master-still-enabled\n");
         loop {
             core::arch::asm!("cli", "hlt", options(nomem, nostack));
         }
     }
+    transition_marker(b"live-update: step=15b/20 pci-quiesce-ok\n");
     let drain_ticks = PCI_DMA_DRAIN_MS
         .saturating_mul(embassy_time_driver::TICK_HZ.max(1))
         .saturating_add(999)
@@ -1330,16 +1372,20 @@ unsafe fn commit_fullforget(
     while embassy_time_driver::now() < drain_deadline {
         core::hint::spin_loop();
     }
+    transition_marker(b"live-update: step=16/20 dma-drain-complete\n");
 
     control
         .command
         .store(TRANSITION_SWITCH_STACKS, Ordering::SeqCst);
+    transition_marker(b"live-update: step=17a/20 AP-stack-switch-commanded\n");
     while control.stacked.load(Ordering::Acquire) < staged.expected_aps {
         core::arch::asm!("pause", options(nomem, nostack, preserves_flags));
     }
+    transition_marker(b"live-update: step=17b/20 AP-transition-stacks-ready\n");
 
     let commit: extern "C" fn(*const TransitionControl) -> ! =
         core::mem::transmute(control.bsp_commit_hhdm as usize);
+    transition_marker(b"live-update: step=17c/20 BSP-commit-trampoline-enter\n");
     commit(control)
 }
 
@@ -1862,7 +1908,42 @@ fn parse_elf(bytes: &[u8]) -> Result<ParsedElf, LiveUpdateError> {
 
 fn warm_handoff() -> Option<&'static WarmHandoff> {
     let handoff = unsafe { &*ptr::addr_of!(LIVE_HANDOFF) };
-    handoff.valid().then_some(handoff)
+    loop {
+        match WARM_HANDOFF_VALIDATION.load(Ordering::Acquire) {
+            HANDOFF_VALIDATION_VALID => return Some(handoff),
+            HANDOFF_VALIDATION_INVALID => return None,
+            HANDOFF_VALIDATION_UNCHECKED => {
+                if WARM_HANDOFF_VALIDATION
+                    .compare_exchange(
+                        HANDOFF_VALIDATION_UNCHECKED,
+                        HANDOFF_VALIDATION_CHECKING,
+                        Ordering::AcqRel,
+                        Ordering::Acquire,
+                    )
+                    .is_ok()
+                {
+                    let valid = handoff.valid();
+                    WARM_HANDOFF_VALIDATION.store(
+                        if valid {
+                            HANDOFF_VALIDATION_VALID
+                        } else {
+                            HANDOFF_VALIDATION_INVALID
+                        },
+                        Ordering::Release,
+                    );
+                    return valid.then_some(handoff);
+                }
+            }
+            HANDOFF_VALIDATION_CHECKING => core::hint::spin_loop(),
+            _ => {
+                WARM_HANDOFF_VALIDATION.store(
+                    HANDOFF_VALIDATION_INVALID,
+                    Ordering::Release,
+                );
+                return None;
+            }
+        }
+    }
 }
 
 fn handoff_checksum(handoff: &WarmHandoff) -> u64 {

@@ -437,7 +437,7 @@ pub fn vmxon(pa: u64) -> bool {
             "setna {fail}",
             pa = in(reg) &pa_ptr,
             fail = lateout(reg_byte) fail,
-            options(nostack, preserves_flags),
+            options(nostack),
         );
         fail == 0
     }
@@ -451,7 +451,7 @@ pub fn vmxoff() -> bool {
             "vmxoff",
             "setna {fail}",
             fail = lateout(reg_byte) fail,
-            options(nostack, preserves_flags),
+            options(nostack),
         );
         fail == 0
     }

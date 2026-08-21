@@ -469,6 +469,13 @@ fn fullforget_read_u16_unlocked(bus: u8, slot: u8, function: u8, offset: u8) -> 
 #[inline]
 fn fullforget_write_u16_unlocked(bus: u8, slot: u8, function: u8, offset: u8, value: u16) {
     let aligned_off = offset & !0x03;
+    if offset == 0x04 {
+        // Command occupies the low half and Status contains RW1C bits in the
+        // high half. Writing zero there preserves pending status instead of
+        // replaying the read value and accidentally acknowledging it.
+        write_u32_unlocked(bus, slot, function, aligned_off, u32::from(value));
+        return;
+    }
     let shift = ((offset & 0x03) as u32) * 8;
     let current = read_u32_unlocked(bus, slot, function, aligned_off);
     let next = (current & !(0xFFFFu32 << shift)) | ((value as u32) << shift);
@@ -498,6 +505,15 @@ fn fullforget_find_capability_unlocked(bus: u8, slot: u8, function: u8, cap_id: 
 pub unsafe fn fullforget_quiesce_unlocked(functions: &[FullforgetPciFunction]) -> usize {
     let mut failures = 0usize;
     for device in functions {
+        let vendor = fullforget_read_u16_unlocked(device.bus, device.slot, device.function, 0x00);
+        if vendor == u16::MAX {
+            continue;
+        }
+        let command = fullforget_read_u16_unlocked(device.bus, device.slot, device.function, 0x04);
+        if command == u16::MAX {
+            continue;
+        }
+
         if let Some(cap) = fullforget_find_capability_unlocked(
             device.bus,
             device.slot,
@@ -541,7 +557,6 @@ pub unsafe fn fullforget_quiesce_unlocked(functions: &[FullforgetPciFunction]) -
             );
         }
 
-        let command = fullforget_read_u16_unlocked(device.bus, device.slot, device.function, 0x04);
         fullforget_write_u16_unlocked(
             device.bus,
             device.slot,
@@ -550,6 +565,9 @@ pub unsafe fn fullforget_quiesce_unlocked(functions: &[FullforgetPciFunction]) -
             (command & !PCI_COMMAND_BUS_MASTER) | PCI_COMMAND_INTX_DISABLE,
         );
         let readback = fullforget_read_u16_unlocked(device.bus, device.slot, device.function, 0x04);
+        if readback == u16::MAX {
+            continue;
+        }
         if (readback & PCI_COMMAND_BUS_MASTER) != 0 {
             failures = failures.saturating_add(1);
         }
