@@ -7,6 +7,12 @@ use embassy_executor::raw::Executor as RawExecutor;
 use x86_64::registers::model_specific::Msr;
 
 const MSR_IA32_GS_BASE: u32 = 0xC000_0101;
+
+/// Host logical-CPU slot ceiling used by fixed per-CPU transition tables.
+///
+/// Keep this host-topology contract independent from VMX guest-slot policy.
+pub const CPU_SLOT_LIMIT: usize = 256;
+
 static TOTAL_SLOTS: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 static CPU_SLOT_TABLE: core::sync::atomic::AtomicPtr<CpuSlot> =
     core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
