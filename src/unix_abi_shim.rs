@@ -66,6 +66,30 @@ pub struct PollFd {
     pub revents: i16,
 }
 
+fn terminal_event_wait_eligible(pollfds: &[PollFd]) -> bool {
+    let table = OPEN_FILES.lock();
+    let mut waits_for_stdin = false;
+    for pollfd in pollfds {
+        if pollfd.fd < 0 {
+            continue;
+        }
+        if pollfd.fd == 0 {
+            waits_for_stdin |= pollfd.events & TRUEOS_POLLIN != 0;
+            continue;
+        }
+        if (1..=2).contains(&pollfd.fd) {
+            continue;
+        }
+        if !matches!(
+            table.get(pollfd.fd),
+            Some(OpenFile::PipeRead { .. } | OpenFile::PipeWrite { .. })
+        ) {
+            return false;
+        }
+    }
+    waits_for_stdin
+}
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct TrueosWinsize {
@@ -227,6 +251,10 @@ pub unsafe extern "C" fn poll(fds: *mut PollFd, nfds: usize, timeout: c_int) -> 
     };
     let pollfds = unsafe { slice::from_raw_parts_mut(pollfds.as_mut_ptr().cast::<PollFd>(), nfds) };
 
+    // Crossterm's TRUEOS source registers stdin beside Mio's internal wake
+    // pipe. No socket or regular-file readiness can be lost in this shape, so
+    // let the attached terminal producer wake the Hull vthread directly.
+    let terminal_event_wait = terminal_event_wait_eligible(pollfds);
     let mut remaining_ms = (timeout >= 0).then_some(timeout as u64);
     loop {
         let ready = {
@@ -280,6 +308,18 @@ pub unsafe extern "C" fn poll(fds: *mut PollFd, nfds: usize, timeout: c_int) -> 
         if ready != 0 {
             TRUEOS_ERRNO.store(0, Ordering::Relaxed);
             return ready;
+        }
+
+        if terminal_event_wait {
+            let wait_ms = remaining_ms.unwrap_or(10_000).max(1);
+            let woke = crate::r::io::fs_cabi::wait_attached_console_readable(wait_ms);
+            if woke && crate::r::io::fs_cabi::trueos_cabi_shell_attached_readable_len() != 0 {
+                continue;
+            }
+            // A typed resize has no byte/token to report. Returning an empty
+            // event set lets Crossterm compare its terminal-surface snapshot.
+            TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+            return 0;
         }
 
         let sleep_ms = match remaining_ms {

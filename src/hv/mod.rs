@@ -28,7 +28,8 @@ use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
 use embassy_executor::{Spawner, task};
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use embassy_sync::signal::Signal;
+use embassy_time::{Duration as EmbassyDuration, Timer, with_timeout};
 use heapless::String;
 use spin::Mutex;
 use x86_64::instructions::tables::{sgdt, sidt};
@@ -137,6 +138,8 @@ static BLUEPRINT_VMX_LAUNCH_SCRIPTS: [Mutex<Option<AllocString>>; TRUEOS_VM_ID_L
     [const { Mutex::new(None) }; TRUEOS_VM_ID_LIMIT];
 static BLUEPRINT_PROCESS_CONTEXTS: [Mutex<Option<BlueprintProcessContext>>; TRUEOS_VM_ID_LIMIT] =
     [const { Mutex::new(None) }; TRUEOS_VM_ID_LIMIT];
+static BLUEPRINT_CONSOLE_INPUT_READY: [Signal<crate::wait::EmbassySpinRawMutex, ()>;
+    TRUEOS_VM_ID_LIMIT] = [const { Signal::new() }; TRUEOS_VM_ID_LIMIT];
 // Serialize every host-side terminal ownership transition for one VM across
 // context publication, lifecycle detach/reattach, and lease park/reentry.
 // Backend owner identities are intentionally compact (VM id plus target
@@ -4233,6 +4236,8 @@ fn blueprint_forward_app_command(vm_id: u8, raw: &str) -> bool {
         }
         context.console_input.push_back(byte);
     }
+    drop(guard);
+    notify_blueprint_console_input(vm_id);
     true
 }
 
@@ -4446,6 +4451,25 @@ pub(crate) fn blueprint_console_submit_control_line(vm_id: u8, line: &str) -> bo
     true
 }
 
+pub(crate) fn notify_blueprint_console_input(vm_id: u8) {
+    if let Some(signal) = BLUEPRINT_CONSOLE_INPUT_READY.get(vm_id as usize) {
+        signal.signal(());
+    }
+}
+
+pub(crate) async fn wait_blueprint_console_input(vm_id: u8, timeout_ms: u64) -> bool {
+    let Some(signal) = BLUEPRINT_CONSOLE_INPUT_READY.get(vm_id as usize) else {
+        return false;
+    };
+    if blueprint_console_readable_len(vm_id) != 0 {
+        signal.reset();
+        return true;
+    }
+    with_timeout(EmbassyDuration::from_millis(timeout_ms.max(1)), signal.wait())
+        .await
+        .is_ok()
+}
+
 pub(crate) fn blueprint_console_submit_stdin(vm_id: u8, data: &[u8]) -> usize {
     const MAX_CONSOLE_INPUT: usize = 64 * 1024;
     if data.is_empty() {
@@ -4467,6 +4491,8 @@ pub(crate) fn blueprint_console_submit_stdin(vm_id: u8, data: &[u8]) -> usize {
         }
         context.console_input.push_back(byte);
     }
+    drop(guard);
+    notify_blueprint_console_input(vm_id);
     data.len()
 }
 
@@ -5570,6 +5596,16 @@ async fn vmx_launch_once_with_ept(
                                 Timer::after(EmbassyDuration::from_millis(ms)).await;
                             }
                             set_current_vm_id(vm_id);
+                            break 'vmcall;
+                        }
+                        crate::hv::vmcall::DispatchOutcome::WaitConsoleInput {
+                            seq,
+                            timeout_ms,
+                        } => {
+                            clear_current_vm_id();
+                            let woke = wait_blueprint_console_input(vm_id, timeout_ms).await;
+                            set_current_vm_id(vm_id);
+                            crate::hv::vmcall::complete_console_input_wait(vm_id, seq, woke);
                             break 'vmcall;
                         }
                         crate::hv::vmcall::DispatchOutcome::RetryAfterMs(ms) => {

@@ -2277,6 +2277,25 @@ pub extern "C" fn trueos_cabi_shell_attached_readable_len() -> usize {
     0
 }
 
+/// Wait for attached terminal input or a typed terminal-surface change.
+///
+/// Hull callers park in VMX root and are resumed by the producer itself; this
+/// is the event-driven primitive used by the TRUEOS terminal-only `poll(2)`
+/// path. Other kernel callers retain a bounded compatibility wait.
+pub(crate) fn wait_attached_console_readable(timeout_ms: u64) -> bool {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let (status, woke) = trueos_vm::vmcall::call(
+            trueos_vm::vmcall::OP_BP_SHELL_ATTACHED_WAIT_READABLE,
+            timeout_ms,
+            0,
+        );
+        return status == trueos_vm::vmcall::STATUS_OK && woke != 0;
+    }
+    crate::wait::spin_until_timeout(timeout_ms.max(1), || {
+        trueos_cabi_shell_attached_readable_len() != 0
+    })
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_shell_attached_retarget_slot(
     slot_ptr: *const u8,

@@ -3,48 +3,22 @@ use alloc::vec::Vec;
 use core::sync::atomic::Ordering;
 
 use embassy_executor::task;
-use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
+use embassy_time::{Duration as EmbassyDuration, Instant, with_timeout};
 
 use crate::net::adapter::{
     NetCommand, NetEvent, NetHandle, NetQueue, SocketKind, register_app_queues,
 };
 use crate::shell2::backends::net_tcp::{
     NET_SHELL_STARTED, NET_SHELL_STATE, NET_SHELL_TCP_PORT, NetShellDirectControlToken,
-    NetShellOwnershipSnapshot, admit_net_shell_tx_chunk, enqueue_net_shell_rx_if_unchanged,
+    NetShellOwnershipSnapshot, admit_net_shell_tx, enqueue_net_shell_rx_if_unchanged,
     net_shell_begin_connection, net_shell_direct_reset_terminal, net_shell_ownership_snapshot,
     net_shell_terminal_size_query, net_shell_write_bytes, update_net_shell_surface_size,
+    wait_for_net_shell_work,
 };
 
 const TERMINAL_SIZE_QUERY: &[u8] = b"\x1b[18t";
-const INITIAL_REPAINT_WAIT_TICKS: u32 = 8;
-const RESIZE_QUERY_TICKS: u32 = 100;
-const TX_CHUNK_BYTES: usize = 8 * 1024;
-// A full terminal repaint often spans several stdout-sized writes.  Admit a
-// bounded burst so those writes reach the network service in one wake, while
-// retaining a strict limit for the other work this task performs each tick.
-const TX_BURST_MAX_CHUNKS: usize = 8;
-const TX_BURST_MAX_BYTES: usize = TX_CHUNK_BYTES * TX_BURST_MAX_CHUNKS;
-
-#[derive(Default)]
-struct TxBurstBudget {
-    chunks: usize,
-    bytes: usize,
-}
-
-impl TxBurstBudget {
-    fn next_limit(&self) -> Option<usize> {
-        if self.chunks >= TX_BURST_MAX_CHUNKS || self.bytes >= TX_BURST_MAX_BYTES {
-            return None;
-        }
-        Some(TX_CHUNK_BYTES.min(TX_BURST_MAX_BYTES - self.bytes))
-    }
-
-    fn record(&mut self, len: usize) {
-        self.chunks = self.chunks.saturating_add(1);
-        self.bytes = self.bytes.saturating_add(len);
-    }
-}
-
+const INITIAL_REPAINT_WAIT_MS: u64 = 80;
+const RESIZE_QUERY_INTERVAL_MS: u64 = 1_000;
 /// One command accepted by the adapter queue.  `TcpSent` reports byte counts,
 /// not command IDs, so this FIFO retains the explicit control token until the
 /// corresponding bytes are reported as flushed from the adapter/socket.
@@ -263,19 +237,22 @@ pub async fn net_shell_task() {
             Instant::now().as_millis()
         );
 
-        let mut ticks: u32 = 0;
+        let mut error_events: u64 = 0;
         let mut logged_first_rx: bool = false;
         let mut logged_first_wire_rx: bool = false;
-        let mut tx_log_budget: u32 = 16;
+        let mut tx_admit_log_budget: u32 = 16;
+        let mut direct_tx_admit_log_budget: u32 = 16;
+        let mut tx_flush_log_budget: u32 = 16;
+        let mut direct_tx_flush_log_budget: u32 = 16;
         let mut pending_tcp_writes: VecDeque<PendingTcpWrite> = VecDeque::new();
         let mut direct_control_admitted: Option<NetShellDirectControlToken> = None;
         let mut direct_control_sent: Option<NetShellDirectControlToken> = None;
         let mut tcp_handle: Option<NetHandle> = None;
         let mut initial_repaint_handle: Option<NetHandle> = None;
-        let mut initial_repaint_ticks: u32 = 0;
+        let mut initial_repaint_deadline: Option<Instant> = None;
         let mut initial_rx_probe: Vec<u8> = Vec::new();
         let mut initial_rx_owner: Option<NetShellOwnershipSnapshot> = None;
-        let mut resize_query_ticks: u32 = 0;
+        let mut next_resize_query: Option<Instant> = None;
         let mut resize_rx_probe: Vec<u8> = Vec::new();
         let mut resize_rx_owner: Option<NetShellOwnershipSnapshot> = None;
 
@@ -296,18 +273,22 @@ pub async fn net_shell_task() {
                         let (schedule_initial_repaint, ownership) =
                             net_shell_begin_connection(handle);
                         if schedule_initial_repaint {
-                            initial_repaint_ticks = 0;
+                            initial_repaint_deadline = None;
                             initial_rx_probe.clear();
                             initial_rx_owner = None;
                             resize_rx_probe.clear();
                             resize_rx_owner = None;
-                            resize_query_ticks = 0;
+                            next_resize_query = None;
                             if ownership.direct_active() {
                                 let _ = net_shell_direct_reset_terminal();
                                 let _ = net_shell_terminal_size_query();
                                 initial_repaint_handle = None;
                             } else if net_shell_write_bytes(TERMINAL_SIZE_QUERY) {
                                 initial_repaint_handle = Some(handle);
+                                initial_repaint_deadline = Some(
+                                    Instant::now()
+                                        + EmbassyDuration::from_millis(INITIAL_REPAINT_WAIT_MS),
+                                );
                             } else {
                                 // A direct claim won after the locked snapshot;
                                 // its claim reset is authoritative, and this
@@ -318,7 +299,10 @@ pub async fn net_shell_task() {
                         }
                         logged_first_rx = false;
                         logged_first_wire_rx = false;
-                        tx_log_budget = 16;
+                        tx_admit_log_budget = 16;
+                        direct_tx_admit_log_budget = 16;
+                        tx_flush_log_budget = 16;
+                        direct_tx_flush_log_budget = 16;
                         crate::log!(
                             "net-shell: tcp established handle={} ms={}\n",
                             handle.0,
@@ -358,7 +342,7 @@ pub async fn net_shell_task() {
                         }
                         if direct_passthrough {
                             initial_repaint_handle = None;
-                            initial_repaint_ticks = 0;
+                            initial_repaint_deadline = None;
                             initial_rx_probe.clear();
                             initial_rx_owner = None;
                             resize_rx_probe.clear();
@@ -383,7 +367,7 @@ pub async fn net_shell_task() {
                                     &crate::shell2::NET_TCP_SHELL_BACKEND,
                                 );
                                 initial_repaint_handle = None;
-                                initial_repaint_ticks = 0;
+                                initial_repaint_deadline = None;
                                 let mut filtered = Vec::new();
                                 filtered.extend_from_slice(&initial_rx_probe[..start]);
                                 filtered.extend_from_slice(&initial_rx_probe[end..]);
@@ -489,12 +473,23 @@ pub async fn net_shell_task() {
                                 );
                             }
                         });
-                        if tx_log_budget > 0 {
-                            tx_log_budget -= 1;
+                        let direct = crate::shell2::backends::net_tcp::net_shell_direct_active();
+                        let log_flush = if direct {
+                            let log = direct_tx_flush_log_budget > 0;
+                            direct_tx_flush_log_budget =
+                                direct_tx_flush_log_budget.saturating_sub(1);
+                            log
+                        } else {
+                            let log = tx_flush_log_budget > 0;
+                            tx_flush_log_budget = tx_flush_log_budget.saturating_sub(1);
+                            log
+                        };
+                        if log_flush {
                             crate::log!(
-                                "net-shell: tx flushed handle={} len={} ms={}\n",
+                                "net-shell: tx flushed handle={} len={} direct={} ms={}\n",
                                 handle.0,
                                 len,
+                                direct as u8,
                                 Instant::now().as_millis()
                             );
                         }
@@ -512,9 +507,12 @@ pub async fn net_shell_task() {
                                 false
                             }
                         };
-                        if closed_active && initial_repaint_handle == Some(handle) {
-                            initial_repaint_handle = None;
-                            initial_repaint_ticks = 0;
+                        if closed_active {
+                            if initial_repaint_handle == Some(handle) {
+                                initial_repaint_handle = None;
+                                initial_repaint_deadline = None;
+                            }
+                            next_resize_query = None;
                             initial_rx_probe.clear();
                             initial_rx_owner = None;
                             resize_rx_probe.clear();
@@ -531,7 +529,8 @@ pub async fn net_shell_task() {
                     }
                     NetEvent::Error { msg } => {
                         // These are useful during bring-up; keep them visible but not too spammy.
-                        if ticks.is_multiple_of(100) {
+                        error_events = error_events.saturating_add(1);
+                        if error_events <= 2 || error_events.is_power_of_two() {
                             crate::log!("net-shell: error {}\n", msg);
                         }
 
@@ -553,15 +552,12 @@ pub async fn net_shell_task() {
                 }
             }
 
-            // Flush a bounded TX burst to the active TCP connection. Once a
-            // command is queued successfully, the adapter owns those bytes. Keep
-            // every snapshot, admission, and dequeue under the transport lock: a
-            // direct-owner claim clears this queue and must not allow a stale
-            // pre-claim chunk to reach the wire afterwards. The explicit budget
-            // prevents one large repaint from starving RX, handoff, or resize work.
-            let mut tx_burst = TxBurstBudget::default();
-            while let Some(limit) = tx_burst.next_limit() {
-                let Some(admission) = admit_net_shell_tx_chunk(limit, |handle, data| {
+            // Drain terminal output to the adapter's real backpressure boundary.
+            // Once a command is accepted, the adapter owns those bytes. Keeping
+            // snapshot, admission, and dequeue under the transport lock prevents
+            // a direct-owner claim from putting stale pre-claim paint on the wire.
+            loop {
+                let Some(admission) = admit_net_shell_tx(|handle, data| {
                     cmds.push(NetCommand::SendTcp { handle, data }).is_ok()
                 }) else {
                     break;
@@ -585,14 +581,30 @@ pub async fn net_shell_task() {
                             admission.len,
                         );
                     }
-                    tx_burst.record(admission.len);
                 }
-                if tx_log_budget > 0 {
-                    tx_log_budget -= 1;
+                let log_admission = if admission.direct {
+                    let log = direct_tx_admit_log_budget > 0;
+                    direct_tx_admit_log_budget = direct_tx_admit_log_budget.saturating_sub(1);
+                    log
+                } else {
+                    let log = tx_admit_log_budget > 0;
+                    tx_admit_log_budget = tx_admit_log_budget.saturating_sub(1);
+                    log
+                };
+                if log_admission {
+                    let queue_wait_us = if admission.queued_at_ns == 0 {
+                        0
+                    } else {
+                        crate::chronos::monotonic_nanos().saturating_sub(admission.queued_at_ns)
+                            / 1_000
+                    };
                     crate::log!(
-                        "net-shell: tx queue handle={} len={}\n",
+                        "net-shell: tx admit handle={} len={} direct={} queue_wait_us={} ms={}\n",
                         admission.handle.0,
-                        admission.len
+                        admission.len,
+                        admission.direct as u8,
+                        queue_wait_us,
+                        Instant::now().as_millis(),
                     );
                 }
                 if !admission.admitted {
@@ -607,37 +619,34 @@ pub async fn net_shell_task() {
             if let Some(handle) = initial_repaint_handle {
                 if crate::shell2::backends::net_tcp::net_shell_direct_active() {
                     initial_repaint_handle = None;
-                    initial_repaint_ticks = 0;
+                    initial_repaint_deadline = None;
                     initial_rx_probe.clear();
                     initial_rx_owner = None;
                     resize_rx_probe.clear();
                     resize_rx_owner = None;
                     let _ = handle;
-                } else {
-                    initial_repaint_ticks = initial_repaint_ticks.wrapping_add(1);
-                    if initial_repaint_ticks >= INITIAL_REPAINT_WAIT_TICKS {
-                        crate::shell2::repaint_backend_screen(
-                            &crate::shell2::NET_TCP_SHELL_BACKEND,
-                        );
-                        initial_repaint_handle = None;
-                        initial_repaint_ticks = 0;
-                        if !initial_rx_probe.is_empty() {
-                            let bytes = core::mem::take(&mut initial_rx_probe);
-                            if let Some(snapshot) = initial_rx_owner.take() {
-                                let _ = enqueue_net_shell_rx_if_unchanged(
-                                    snapshot,
-                                    handle,
-                                    bytes.as_slice(),
-                                );
-                            }
+                } else if initial_repaint_deadline
+                    .is_some_and(|deadline| Instant::now() >= deadline)
+                {
+                    crate::shell2::repaint_backend_screen(&crate::shell2::NET_TCP_SHELL_BACKEND);
+                    initial_repaint_handle = None;
+                    initial_repaint_deadline = None;
+                    if !initial_rx_probe.is_empty() {
+                        let bytes = core::mem::take(&mut initial_rx_probe);
+                        if let Some(snapshot) = initial_rx_owner.take() {
+                            let _ = enqueue_net_shell_rx_if_unchanged(
+                                snapshot,
+                                handle,
+                                bytes.as_slice(),
+                            );
                         }
-                        let _ = handle;
                     }
+                    let _ = handle;
                 }
             }
 
             if crate::shell2::backends::net_tcp::net_shell_direct_passthrough_active() {
-                resize_query_ticks = 0;
+                next_resize_query = None;
                 resize_rx_probe.clear();
                 resize_rx_owner = None;
             } else if initial_repaint_handle.is_none() {
@@ -646,9 +655,13 @@ pub async fn net_shell_task() {
                     st.handle
                 };
                 if active_handle.is_some() {
-                    resize_query_ticks = resize_query_ticks.wrapping_add(1);
-                    if resize_query_ticks >= RESIZE_QUERY_TICKS {
-                        resize_query_ticks = 0;
+                    let now = Instant::now();
+                    if next_resize_query.is_none() {
+                        next_resize_query =
+                            Some(now + EmbassyDuration::from_millis(RESIZE_QUERY_INTERVAL_MS));
+                    } else if next_resize_query.is_some_and(|deadline| now >= deadline) {
+                        next_resize_query =
+                            Some(now + EmbassyDuration::from_millis(RESIZE_QUERY_INTERVAL_MS));
                         if crate::shell2::backends::net_tcp::net_shell_direct_active() {
                             let _ = net_shell_terminal_size_query();
                         } else {
@@ -656,45 +669,27 @@ pub async fn net_shell_task() {
                         }
                     }
                 } else {
-                    resize_query_ticks = 0;
+                    next_resize_query = None;
                 }
+            } else {
+                next_resize_query = None;
             }
 
-            ticks = ticks.wrapping_add(1);
-            Timer::after(EmbassyDuration::from_millis(10)).await;
-            let _ = ticks;
+            // Work wakes this task immediately. When idle, sleep directly until
+            // the next protocol deadline instead of imposing a paint cadence.
+            let maintenance_deadline = match (initial_repaint_deadline, next_resize_query) {
+                (Some(initial), Some(resize)) => Some(initial.min(resize)),
+                (Some(initial), None) => Some(initial),
+                (None, Some(resize)) => Some(resize),
+                (None, None) => None,
+            };
+            if let Some(deadline) = maintenance_deadline {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                let _ = with_timeout(remaining, wait_for_net_shell_work()).await;
+            } else {
+                wait_for_net_shell_work().await;
+            }
         }
     }
     .await;
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{TX_BURST_MAX_BYTES, TX_CHUNK_BYTES, TxBurstBudget};
-
-    #[test]
-    fn tx_burst_allows_eight_full_chunks() {
-        let mut budget = TxBurstBudget::default();
-
-        for _ in 0..8 {
-            assert_eq!(budget.next_limit(), Some(TX_CHUNK_BYTES));
-            budget.record(TX_CHUNK_BYTES);
-        }
-
-        assert_eq!(budget.bytes, TX_BURST_MAX_BYTES);
-        assert_eq!(budget.next_limit(), None);
-    }
-
-    #[test]
-    fn tx_burst_counts_terminal_control_as_work() {
-        let mut budget = TxBurstBudget::default();
-        budget.record(64);
-
-        for _ in 0..7 {
-            assert_eq!(budget.next_limit(), Some(TX_CHUNK_BYTES));
-            budget.record(TX_CHUNK_BYTES);
-        }
-
-        assert_eq!(budget.next_limit(), None);
-    }
 }

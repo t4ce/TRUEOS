@@ -844,6 +844,9 @@ fn push_event(target: &'static str, event: NetEvent) -> bool {
     let guard = APP_QUEUES.lock();
     if let Some(entry) = guard.iter().find(|e| e.name == target) {
         let ok = entry.events.push(event).is_ok();
+        if ok && target == "net-shell" {
+            crate::shell2::backends::net_tcp::notify_net_shell_work();
+        }
         if ok && wakes_mio {
             crate::mio_compat::notify_net_event();
         }

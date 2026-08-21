@@ -2,6 +2,7 @@ use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use embassy_sync::signal::Signal;
 
 use crate::net::adapter::NetHandle;
 use crate::shell2::{ShellBackend2, ShellIo2, TerminalHandoffOwner};
@@ -16,6 +17,8 @@ static NET_TCP_LAST_WAS_CR: AtomicBool = AtomicBool::new(false);
 pub(crate) static NET_SHELL_STARTED: AtomicBool = AtomicBool::new(false);
 static NET_SHELL_DIRECT_OWNER: AtomicU32 = AtomicU32::new(0);
 static NET_SHELL_DIRECT_RX_LAST_WAS_CR: AtomicBool = AtomicBool::new(false);
+static NET_SHELL_DIRECT_RX_TRACE_SEQ: AtomicU32 = AtomicU32::new(0);
+static NET_SHELL_WORK_READY: Signal<crate::wait::EmbassySpinRawMutex, ()> = Signal::new();
 const NET_SHELL_RX_CAP: usize = 8 * 1024;
 const NET_SHELL_FRONTEND_REPLAY_CAP: usize = 256 * 1024;
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
@@ -31,7 +34,9 @@ pub(crate) struct NetShellState {
     pub(crate) handle: Option<NetHandle>,
     pub(crate) established_handle: Option<NetHandle>,
     pub(crate) rx: VecDeque<u8>,
+    rx_oldest_ns: u64,
     pub(crate) tx: VecDeque<u8>,
+    tx_oldest_ns: u64,
     direct_control_tx: VecDeque<NetShellDirectControlToken>,
     frontend_owner: Option<u8>,
     frontend_epoch: u64,
@@ -48,7 +53,9 @@ pub(crate) static NET_SHELL_STATE: spin::Mutex<NetShellState> = spin::Mutex::new
     handle: None,
     established_handle: None,
     rx: VecDeque::new(),
+    rx_oldest_ns: 0,
     tx: VecDeque::new(),
+    tx_oldest_ns: 0,
     direct_control_tx: VecDeque::new(),
     frontend_owner: None,
     frontend_epoch: 0,
@@ -105,7 +112,20 @@ pub(crate) struct NetShellTxAdmission {
     pub(crate) handle: NetHandle,
     pub(crate) len: usize,
     pub(crate) admitted: bool,
+    pub(crate) direct: bool,
     pub(crate) direct_control: Option<NetShellDirectControlToken>,
+    pub(crate) queued_at_ns: u64,
+}
+
+/// Wake the TCP bridge when terminal work arrives. `Signal` is intentionally
+/// level-like here: many stdout writes may collapse into one wake because the
+/// bridge drains the shared queue until it reaches adapter backpressure.
+pub(crate) fn notify_net_shell_work() {
+    NET_SHELL_WORK_READY.signal(());
+}
+
+pub(crate) async fn wait_for_net_shell_work() {
+    NET_SHELL_WORK_READY.wait().await;
 }
 
 /// A locked snapshot of the direct-owner boundary. The epoch prevents an
@@ -124,6 +144,13 @@ impl NetShellOwnershipSnapshot {
 
     pub(crate) const fn direct_passthrough_active(self) -> bool {
         (self.owner & TerminalHandoffOwner::STREAM_KIND) != 0
+    }
+
+    fn blueprint_vm(self) -> Option<u8> {
+        if self.owner == 0 || self.direct_passthrough_active() {
+            return None;
+        }
+        u8::try_from(self.owner - 1).ok()
     }
 }
 
@@ -299,7 +326,9 @@ pub(crate) fn net_shell_begin_connection(handle: NetHandle) -> (bool, NetShellOw
     if is_new_connection {
         st.established_handle = Some(handle);
         st.rx.clear();
+        st.rx_oldest_ns = 0;
         st.tx.clear();
+        st.tx_oldest_ns = 0;
         // A command has not yet been admitted to this connection, so a reset
         // retained from an earlier surface is stale.  The TCP task observes
         // the direct owner below and queues one freshly tagged reset for this
@@ -332,6 +361,14 @@ pub(crate) fn update_net_shell_surface_size(cols: usize, rows: usize) -> bool {
     }
     st.surface_cols = cols;
     st.surface_rows = rows;
+    let owner = NetShellOwnershipSnapshot {
+        owner: NET_SHELL_DIRECT_OWNER.load(Ordering::Acquire),
+        epoch: st.handoff_epoch,
+    };
+    drop(st);
+    if let Some(vm_id) = owner.blueprint_vm() {
+        crate::hv::notify_blueprint_console_input(vm_id);
+    }
     true
 }
 
@@ -366,17 +403,32 @@ pub(crate) fn enqueue_net_shell_rx_if_unchanged(
     if st.handle != Some(handle) {
         return false;
     }
+    let vm_id = snapshot.blueprint_vm();
+    if vm_id.is_some() && st.rx.is_empty() && !bytes.is_empty() {
+        st.rx_oldest_ns = crate::chronos::monotonic_nanos();
+    }
     for &byte in bytes {
         if st.rx.len() >= NET_SHELL_RX_CAP {
             let _ = st.rx.pop_front();
         }
         st.rx.push_back(byte);
     }
+    let vm_id = (!bytes.is_empty()).then_some(vm_id).flatten();
+    drop(st);
+    if let Some(vm_id) = vm_id {
+        crate::hv::notify_blueprint_console_input(vm_id);
+    }
     true
 }
 
 fn enqueue_net_shell_bytes(st: &mut NetShellState, bytes: &[u8]) {
     const MAX_TX: usize = 2 * 1024 * 1024;
+    if bytes.is_empty() {
+        return;
+    }
+    if st.tx.is_empty() {
+        st.tx_oldest_ns = crate::chronos::monotonic_nanos();
+    }
     append_frontend_replay(st, bytes);
     for &b in bytes {
         if st.tx.len() >= MAX_TX {
@@ -405,15 +457,18 @@ fn queue_direct_terminal_reset(st: &mut NetShellState, owner: u32) -> bool {
     true
 }
 
-/// Admit exactly one terminal output chunk while holding the transport lock.
+/// Admit the complete terminal output currently pending under the transport lock.
 /// Direct terminal reset bytes live in a tagged queue, ahead of untagged app
-/// output, so their lifecycle can be proven without scanning payload bytes.
-pub(crate) fn admit_net_shell_tx_chunk<F>(limit: usize, submit: F) -> Option<NetShellTxAdmission>
+/// output, so their lifecycle can be proven without scanning payload bytes. The
+/// adapter queue is the only backpressure boundary; this layer does not pace an
+/// immediate-mode terminal with a manually selected chunk or burst size.
+pub(crate) fn admit_net_shell_tx<F>(submit: F) -> Option<NetShellTxAdmission>
 where
     F: FnOnce(NetHandle, Vec<u8>) -> bool,
 {
     let mut st = NET_SHELL_STATE.lock();
     let handle = st.handle?;
+    let direct = NET_SHELL_DIRECT_OWNER.load(Ordering::Acquire) != 0;
     if let Some(token) = st.direct_control_tx.front().copied() {
         let data = NET_SHELL_DIRECT_TERMINAL_RESET.to_vec();
         let len = data.len();
@@ -425,39 +480,48 @@ where
             handle,
             len,
             admitted,
+            direct,
             direct_control: Some(token),
+            queued_at_ns: 0,
         });
     }
     if st.tx.is_empty() {
         return None;
     }
-    let mut data = Vec::with_capacity(limit);
-    for &byte in st.tx.iter().take(limit) {
-        data.push(byte);
-    }
+    let queued_at_ns = st.tx_oldest_ns;
+    let mut data = Vec::with_capacity(st.tx.len());
+    data.extend(st.tx.iter().copied());
     let len = data.len();
     let admitted = submit(handle, data);
     if admitted {
         for _ in 0..len {
             let _ = st.tx.pop_front();
         }
+        if st.tx.is_empty() {
+            st.tx_oldest_ns = 0;
+        }
     }
     Some(NetShellTxAdmission {
         handle,
         len,
         admitted,
+        direct,
         direct_control: None,
+        queued_at_ns,
     })
 }
 
 /// Shell-origin output is admitted only while Shell2 owns the transport. The
 /// state lock closes the check/write race with a direct-owner claim.
 pub(crate) fn net_shell_write_bytes(bytes: &[u8]) -> bool {
-    let mut st = NET_SHELL_STATE.lock();
-    if NET_SHELL_DIRECT_OWNER.load(Ordering::Acquire) != 0 {
-        return false;
+    {
+        let mut st = NET_SHELL_STATE.lock();
+        if NET_SHELL_DIRECT_OWNER.load(Ordering::Acquire) != 0 {
+            return false;
+        }
+        enqueue_net_shell_bytes(&mut st, bytes);
     }
-    enqueue_net_shell_bytes(&mut st, bytes);
+    notify_net_shell_work();
     true
 }
 
@@ -466,19 +530,28 @@ pub(crate) fn net_shell_write_bytes(bytes: &[u8]) -> bool {
 /// API: arbitrary Shell2 bytes must remain suppressed while an app owns the
 /// TCP terminal.
 pub(crate) fn net_shell_direct_reset_terminal() -> bool {
-    let mut st = NET_SHELL_STATE.lock();
-    queue_direct_terminal_reset(&mut st, NET_SHELL_DIRECT_OWNER.load(Ordering::Acquire))
+    let queued = {
+        let mut st = NET_SHELL_STATE.lock();
+        queue_direct_terminal_reset(&mut st, NET_SHELL_DIRECT_OWNER.load(Ordering::Acquire))
+    };
+    if queued {
+        notify_net_shell_work();
+    }
+    queued
 }
 
 /// Request terminal geometry for the current direct owner. The TCP reader
 /// already recognizes and removes the matching report before the app's input
 /// queue is exposed, so this control byte cannot leak into Crossterm input.
 pub(crate) fn net_shell_terminal_size_query() -> bool {
-    let mut st = NET_SHELL_STATE.lock();
-    if NET_SHELL_DIRECT_OWNER.load(Ordering::Acquire) == 0 {
-        return false;
+    {
+        let mut st = NET_SHELL_STATE.lock();
+        if NET_SHELL_DIRECT_OWNER.load(Ordering::Acquire) == 0 {
+            return false;
+        }
+        enqueue_net_shell_bytes(&mut st, b"\x1b[18t");
     }
-    enqueue_net_shell_bytes(&mut st, b"\x1b[18t");
+    notify_net_shell_work();
     true
 }
 
@@ -496,13 +569,16 @@ fn claim_net_shell_terminal(owner: TerminalHandoffOwner) -> bool {
         // (or an app from painting ahead of the reset) between the ownership
         // change and queue reset.
         st.rx.clear();
+        st.rx_oldest_ns = 0;
         st.tx.clear();
+        st.tx_oldest_ns = 0;
         st.direct_control_tx.clear();
         reset_frontend_replay(&mut st);
         st.handoff_epoch = st.handoff_epoch.wrapping_add(1).max(1);
         advance_surface_generation(&mut st);
         NET_TCP_LAST_WAS_CR.store(false, Ordering::Release);
         NET_SHELL_DIRECT_RX_LAST_WAS_CR.store(false, Ordering::Release);
+        NET_SHELL_DIRECT_RX_TRACE_SEQ.store(0, Ordering::Release);
         let epoch = st.handoff_epoch;
         let handle = st.handle;
         let surface_generation = st.surface_generation;
@@ -510,6 +586,7 @@ fn claim_net_shell_terminal(owner: TerminalHandoffOwner) -> bool {
         NET_SHELL_DIRECT_OWNER.store(owner, Ordering::Release);
         (epoch, handle, surface_generation)
     };
+    notify_net_shell_work();
     // This marker is deliberately after the state lock drops: a diagnostic
     // transport must never extend the handoff critical section.
     if (owner & TerminalHandoffOwner::STREAM_KIND) == 0 {
@@ -541,7 +618,9 @@ fn release_net_shell_terminal(owner: TerminalHandoffOwner) -> bool {
             return false;
         }
         st.rx.clear();
+        st.rx_oldest_ns = 0;
         st.tx.clear();
+        st.tx_oldest_ns = 0;
         st.direct_control_tx.clear();
         reset_frontend_replay(&mut st);
         st.handoff_epoch = st.handoff_epoch.wrapping_add(1).max(1);
@@ -553,6 +632,7 @@ fn release_net_shell_terminal(owner: TerminalHandoffOwner) -> bool {
         enqueue_net_shell_bytes(&mut st, NET_SHELL_DIRECT_TERMINAL_RESET);
         NET_SHELL_DIRECT_OWNER.store(0, Ordering::Release);
     }
+    notify_net_shell_work();
     crate::shell2::repaint_backend_screen(&NET_TCP_SHELL_BACKEND);
     true
 }
@@ -581,11 +661,14 @@ fn net_shell_terminal_read(owner: TerminalHandoffOwner, out: &mut [u8]) -> usize
 }
 
 fn net_shell_terminal_write(owner: TerminalHandoffOwner, bytes: &[u8]) -> bool {
-    let mut st = NET_SHELL_STATE.lock();
-    if NET_SHELL_DIRECT_OWNER.load(Ordering::Acquire) != owner.raw() {
-        return false;
+    {
+        let mut st = NET_SHELL_STATE.lock();
+        if NET_SHELL_DIRECT_OWNER.load(Ordering::Acquire) != owner.raw() {
+            return false;
+        }
+        enqueue_net_shell_bytes(&mut st, bytes);
     }
-    enqueue_net_shell_bytes(&mut st, bytes);
+    notify_net_shell_work();
     true
 }
 
@@ -611,6 +694,7 @@ pub(crate) fn net_shell_direct_read(vm_id: u8, out: &mut [u8]) -> usize {
     {
         return 0;
     }
+    let queued_at_ns = st.rx_oldest_ns;
     let mut read = 0usize;
     let mut last_was_cr = NET_SHELL_DIRECT_RX_LAST_WAS_CR.load(Ordering::Acquire);
     while read < out.len() {
@@ -638,7 +722,25 @@ pub(crate) fn net_shell_direct_read(vm_id: u8, out: &mut [u8]) -> usize {
             }
         }
     }
+    if st.rx.is_empty() {
+        st.rx_oldest_ns = 0;
+    }
     NET_SHELL_DIRECT_RX_LAST_WAS_CR.store(last_was_cr, Ordering::Release);
+    drop(st);
+    if read != 0 {
+        let trace_seq = NET_SHELL_DIRECT_RX_TRACE_SEQ.fetch_add(1, Ordering::Relaxed);
+        if trace_seq < 32 {
+            let queue_wait_us =
+                crate::chronos::monotonic_nanos().saturating_sub(queued_at_ns) / 1_000;
+            crate::log!(
+                "net-shell: direct rx read vm={} len={} queue_wait_us={} seq={}\n",
+                vm_id,
+                read,
+                queue_wait_us,
+                trace_seq,
+            );
+        }
+    }
     read
 }
 

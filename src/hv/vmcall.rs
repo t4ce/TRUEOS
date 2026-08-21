@@ -133,6 +133,7 @@ pub const OP_BP_ASYNC_FS_STAT_START: u32 = 0xD9; // payload resolved path -> ope
 pub const OP_BP_ASYNC_FS_LIST_DIR_START: u32 = 0xDA; // payload resolved path -> operation id/rc
 pub const OP_BP_ASYNC_FS_LIST_MOUNTS_START: u32 = 0x139; // no payload -> mounted TRUEOSFS roots
 pub const OP_BP_ASYNC_FS_RENAME_START: u32 = 0x13A; // payload src-len + resolved src/dst -> operation id/rc
+pub const OP_BP_SHELL_ATTACHED_WAIT_READABLE: u32 = 0x13B; // arg0 timeout ms -> event-driven terminal wake
 pub const OP_BP_UI4_SCENE_KEYBOARD_STATE: u32 = 0xDB; // arg0 window -> rc + focused held-key state
 pub const OP_BP_UI4_SCENE_FRAME_OPEN_IMMUTABLE: u32 = 0xDC; // arg0 x/y,arg1 width/height -> window
 pub const OP_BP_UI4_SCENE_SPRITE_UPLOAD_BEGIN: u32 = 0xDD; // arg0 window,arg1 sprite,payload width/height -> rc
@@ -348,6 +349,12 @@ pub enum DispatchOutcome {
     Preserve,
     Yield,
     SleepMs(u64),
+    /// Park this Hull vthread until its attached terminal receives input, its
+    /// typed surface changes, or the supplied timeout expires.
+    WaitConsoleInput {
+        seq: u32,
+        timeout_ms: u64,
+    },
     /// Keep the current VMCALL pending, sleep in the host, then dispatch the
     /// unchanged request again before the guest resumes.
     RetryAfterMs(u64),
@@ -439,6 +446,10 @@ fn write_response(vm_id: u8, seq: u32, status: u32, data: u64, len: u32) {
         // seq written last — guest may poll this as a completion flag
         core::ptr::write_volatile(&mut (*p).response_seq, seq);
     }
+}
+
+pub(crate) fn complete_console_input_wait(vm_id: u8, seq: u32, woke: bool) {
+    write_response(vm_id, seq, STATUS_OK, u64::from(woke), 0);
 }
 
 fn release_guest_comm_page(vm_id: u8) {
@@ -3633,6 +3644,18 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             let len = crate::hv::blueprint_console_readable_len(vm_id);
             write_response(vm_id, seq, STATUS_OK, len as u64, 0);
             DispatchOutcome::Resume
+        }
+        OP_BP_SHELL_ATTACHED_WAIT_READABLE => {
+            let len = crate::hv::blueprint_console_readable_len(vm_id);
+            if len != 0 || arg0 == 0 {
+                write_response(vm_id, seq, STATUS_OK, u64::from(len != 0), 0);
+                DispatchOutcome::Resume
+            } else {
+                DispatchOutcome::WaitConsoleInput {
+                    seq,
+                    timeout_ms: arg0.min(MAX_GUEST_SLEEP_MS),
+                }
+            }
         }
         OP_BP_ARCHIVE_PACK_START | OP_BP_ARCHIVE_UNPACK_START => {
             let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
