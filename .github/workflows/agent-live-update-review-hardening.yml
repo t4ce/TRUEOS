@@ -1,0 +1,592 @@
+name: Live update review hardening
+
+on:
+  push:
+    branches:
+      - fix/live-update-review-hardening-20260821
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out review branch
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref_name }}
+          fetch-depth: 0
+
+      - name: Verify exact review base
+        env:
+          BASE_SHA: 74c4b5107545b98e1b400c08db162919bfb7c019
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD^)" = "${BASE_SHA}"
+
+      - name: Apply verified minimal fixes
+        run: |
+          set -euo pipefail
+          cat > /tmp/apply_review_fixes.py <<'PY'
+          from pathlib import Path
+
+          ROOT = Path('.')
+
+          def read(path: str) -> str:
+              return (ROOT / path).read_text(encoding='utf-8')
+
+          def write(path: str, text: str) -> None:
+              (ROOT / path).write_text(text, encoding='utf-8')
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected one exact anchor, found {count}')
+              return text.replace(old, new, 1)
+
+          def replace_option_in_function(text: str, signature: str, label: str) -> str:
+              start = text.find(signature)
+              if start < 0:
+                  raise SystemExit(f'{label}: function signature missing')
+              end = text.find('\npub fn ', start + len(signature))
+              if end < 0:
+                  raise SystemExit(f'{label}: next function boundary missing')
+              block = text[start:end]
+              old = 'options(nostack, preserves_flags)'
+              if block.count(old) != 1:
+                  raise SystemExit(f'{label}: expected one preserves_flags option')
+              block = block.replace(old, 'options(nostack)', 1)
+              return text[:start] + block + text[end:]
+
+          path = 'src/hv/vmx.rs'
+          text = read(path)
+          text = replace_option_in_function(text, 'pub fn vmxon(pa: u64) -> bool {', 'vmxon')
+          text = replace_option_in_function(text, 'pub fn vmxoff() -> bool {', 'vmxoff')
+          write(path, text)
+
+          path = 'src/percpu.rs'
+          text = read(path)
+          text = replace_once(
+              text,
+              'const MSR_IA32_GS_BASE: u32 = 0xC000_0101;\n',
+              'const MSR_IA32_GS_BASE: u32 = 0xC000_0101;\n\n'
+              '/// Maximum host logical-CPU slots represented by fixed per-CPU tables.\n'
+              'pub const CPU_SLOT_LIMIT: usize = 256;\n',
+              'percpu host slot limit',
+          )
+          write(path, text)
+
+          path = 'src/live_update.rs'
+          text = read(path)
+          text = replace_once(
+              text,
+              'sync::atomic::{AtomicBool, AtomicU64, Ordering},',
+              'sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},',
+              'AtomicU8 import',
+          )
+          text = replace_once(
+              text,
+              'const CPU_SLOT_LIMIT: usize = crate::allcaps::hv::VM_CPU_SLOT_LIMIT;',
+              'const CPU_SLOT_LIMIT: usize = crate::percpu::CPU_SLOT_LIMIT;',
+              'live-update host slot limit',
+          )
+          text = replace_once(
+              text,
+              'const TRANSITION_COMMIT: u64 = 4;\n',
+              'const TRANSITION_COMMIT: u64 = 4;\n\n'
+              'const HANDOFF_VALIDATION_UNKNOWN: u8 = 0;\n'
+              'const HANDOFF_VALIDATION_CHECKING: u8 = 1;\n'
+              'const HANDOFF_VALIDATION_VALID: u8 = 2;\n'
+              'const HANDOFF_VALIDATION_INVALID: u8 = 3;\n',
+              'handoff validation states',
+          )
+          text = replace_once(
+              text,
+              'const SHELL_NOTICE: &[u8] = b"\\r\\nupdate live: hey that worked, new kernel here :)\\r\\n";',
+              'const SHELL_NOTICE: &[u8] = b"\\r\\nupdate live: replacement kernel booted; fresh TCP shell active; VM restore is running\\r\\n";',
+              'post-boot shell notice',
+          )
+          text = replace_once(
+              text,
+              'static SHELL_NOTICE_PENDING: AtomicBool = AtomicBool::new(false);\n',
+              'static SHELL_NOTICE_PENDING: AtomicBool = AtomicBool::new(false);\n'
+              'static WARM_HANDOFF_VALIDATION: AtomicU8 = AtomicU8::new(HANDOFF_VALIDATION_UNKNOWN);\n',
+              'handoff validation atomic',
+          )
+          text = replace_once(
+              text,
+              '''pub(crate) fn interrupt_install(idt: &mut InterruptDescriptorTable) {
+    idt[RENDEZVOUS_VECTOR].set_handler_fn(live_update_rendezvous_isr);
+}
+''',
+              '''pub(crate) fn interrupt_install(idt: &mut InterruptDescriptorTable) {
+    idt[RENDEZVOUS_VECTOR].set_handler_fn(live_update_rendezvous_isr);
+}
+
+/// Allocation-free marker for the period where normal runtime logging is no
+/// longer safe. COM1 covers bare-metal serial capture; 0xE9 covers emulators.
+#[inline]
+fn transition_marker(bytes: &[u8]) {
+    crate::uart1_com1::write_bytes(bytes);
+    for &byte in bytes {
+        unsafe { crate::outb(0xE9, byte) };
+    }
+}
+''',
+              'transition marker helper',
+          )
+          text = replace_once(
+              text,
+              '"update live: staging candidate in RAM; kernel disk image will not be changed",',
+              '"update live: step=01 candidate-stage-begin mode=ram-only disk-install=skipped",',
+              'stage marker 01',
+          )
+          text = replace_once(
+              text,
+              '"update live: candidate staged arena=0x{:016X}+{} MiB APs={}",',
+              '"update live: step=02 candidate-stage-ready arena=0x{:016X}+{} MiB APs={}",',
+              'stage marker 02',
+          )
+          text = replace_once(
+              text,
+              '"update live: checkpointing active VMX apps to TRUEOSFS (candidate remains RAM-only)",',
+              '"update live: step=03 vm-checkpoint-begin storage=TRUEOSFS candidate=ram-only",',
+              'stage marker 03',
+          )
+          text = replace_once(
+              text,
+              '''    let checkpoint = checkpoint_active_vms(&spawner, &target).await?;
+    staged.set_vm_plan(checkpoint.restore_mask, checkpoint.resume_mask, checkpoint.vm_heap_ranges);
+''',
+              '''    let checkpoint = checkpoint_active_vms(&spawner, &target).await?;
+    let planned_restore = mask_population(&checkpoint.restore_mask);
+    let planned_resume = mask_population(&checkpoint.resume_mask);
+    staged.set_vm_plan(checkpoint.restore_mask, checkpoint.resume_mask, checkpoint.vm_heap_ranges);
+    print_matrix_target_line(
+        &target,
+        format!(
+            "update live: step=04 vm-checkpoint-ready restore={} resume={}",
+            planned_restore, planned_resume,
+        )
+        .as_str(),
+    );
+''',
+              'stage marker 04',
+          )
+          text = replace_once(
+              text,
+              '"update live: captured {} PCI functions for lock-free DMA containment",',
+              '"update live: step=05 pci-snapshot-ready functions={} containment=lock-free",',
+              'stage marker 05',
+          )
+          text = replace_once(
+              text,
+              '''    print_matrix_target_line(
+        &target,
+        "update live: final rendezvous next; on success the TCP shell will disconnect",
+    );
+    print_matrix_target_line(
+        &target,
+        "update live: reconnect after boot for: hey that worked, new kernel here :)",
+    );
+''',
+              '''    print_matrix_target_line(
+        &target,
+        format!(
+            "update live: step=06 ap-rendezvous-begin expected={}; TCP disconnect follows only after commit",
+            staged.expected_aps,
+        )
+        .as_str(),
+    );
+''',
+              'stage marker 06 and fake preboot greeting removal',
+          )
+          text = replace_once(
+              text,
+              '''    for slot in 1..crate::percpu::total_slots() {
+        if !crate::remote_work_wake::send_fixed_x2apic_ipi(slot as u32, RENDEZVOUS_VECTOR) {
+            control.failures.fetch_add(1, Ordering::AcqRel);
+            abort_rendezvous(staged, interrupts_were_enabled);
+            return Err(LiveUpdateError::ApRendezvous("IPI delivery unavailable"));
+        }
+    }
+''',
+              '''    for cpu in crate::percpu::cpu_slots()
+        .iter()
+        .copied()
+        .filter(|cpu| cpu.slot != 0)
+    {
+        if !crate::remote_work_wake::send_fixed_x2apic_ipi(cpu.slot, RENDEZVOUS_VECTOR) {
+            control.failures.fetch_add(1, Ordering::AcqRel);
+            abort_rendezvous(staged, interrupts_were_enabled);
+            return Err(LiveUpdateError::ApRendezvous("IPI delivery unavailable"));
+        }
+    }
+''',
+              'rendezvous topology identifiers',
+          )
+          text = replace_once(
+              text,
+              '''    // Success intentionally leaves BSP interrupts disabled. The caller performs
+    // only handoff bookkeeping before entering the non-returning commit path.
+    Ok(())
+''',
+              '''    // Success intentionally leaves BSP interrupts disabled. The caller performs
+    // only handoff bookkeeping before entering the non-returning commit path.
+    transition_marker(b"live-update: step=07 ap-rendezvous-complete\\n");
+    Ok(())
+''',
+              'transition marker 07',
+          )
+          text = replace_once(
+              text,
+              '''    while embassy_time_driver::now() < drain_deadline {
+        core::hint::spin_loop();
+    }
+
+    control
+''',
+              '''    while embassy_time_driver::now() < drain_deadline {
+        core::hint::spin_loop();
+    }
+    transition_marker(b"live-update: step=08 pci-dma-contained\\n");
+
+    control
+''',
+              'transition marker 08',
+          )
+          text = replace_once(
+              text,
+              '''    while control.stacked.load(Ordering::Acquire) < staged.expected_aps {
+        core::arch::asm!("pause", options(nomem, nostack, preserves_flags));
+    }
+
+    let commit: extern "C" fn(*const TransitionControl) -> ! =
+''',
+              '''    while control.stacked.load(Ordering::Acquire) < staged.expected_aps {
+        core::arch::asm!("pause", options(nomem, nostack, preserves_flags));
+    }
+    transition_marker(b"live-update: step=09 kernel-switch-commit\\n");
+
+    let commit: extern "C" fn(*const TransitionControl) -> ! =
+''',
+              'transition marker 09',
+          )
+          text = replace_once(
+              text,
+              '''    for cpu_slot in 1..crate::percpu::total_slots() {
+        if crate::remote_work_wake::send_fixed_x2apic_ipi(cpu_slot as u32, RENDEZVOUS_VECTOR) {
+            sent = sent.saturating_add(1);
+        }
+    }
+''',
+              '''    for cpu in crate::percpu::cpu_slots()
+        .iter()
+        .copied()
+        .filter(|cpu| cpu.slot != 0)
+    {
+        if crate::remote_work_wake::send_fixed_x2apic_ipi(cpu.slot, RENDEZVOUS_VECTOR) {
+            sent = sent.saturating_add(1);
+        }
+    }
+''',
+              'post-boot TLB topology identifiers',
+          )
+          text = replace_once(
+              text,
+              '''fn warm_handoff() -> Option<&'static WarmHandoff> {
+    let handoff = unsafe { &*ptr::addr_of!(LIVE_HANDOFF) };
+    handoff.valid().then_some(handoff)
+}
+''',
+              '''fn warm_handoff() -> Option<&'static WarmHandoff> {
+    let handoff = unsafe { &*ptr::addr_of!(LIVE_HANDOFF) };
+    loop {
+        match WARM_HANDOFF_VALIDATION.load(Ordering::Acquire) {
+            HANDOFF_VALIDATION_VALID => return Some(handoff),
+            HANDOFF_VALIDATION_INVALID => return None,
+            HANDOFF_VALIDATION_UNKNOWN => {
+                if WARM_HANDOFF_VALIDATION
+                    .compare_exchange(
+                        HANDOFF_VALIDATION_UNKNOWN,
+                        HANDOFF_VALIDATION_CHECKING,
+                        Ordering::AcqRel,
+                        Ordering::Acquire,
+                    )
+                    .is_ok()
+                {
+                    let valid = handoff.valid();
+                    WARM_HANDOFF_VALIDATION.store(
+                        if valid {
+                            HANDOFF_VALIDATION_VALID
+                        } else {
+                            HANDOFF_VALIDATION_INVALID
+                        },
+                        Ordering::Release,
+                    );
+                    return valid.then_some(handoff);
+                }
+            }
+            HANDOFF_VALIDATION_CHECKING => core::hint::spin_loop(),
+            _ => return None,
+        }
+    }
+}
+''',
+              'one-shot warm handoff validation',
+          )
+          text = replace_once(
+              text,
+              '"live-update: generation={} candidate_hash=0x{:016X} arena=0x{:016X}+0x{:X} expected_aps={} mode=fullforget-warm\\n",',
+              '"live-update: step=10 candidate-kmain-entered generation={} candidate_hash=0x{:016X} arena=0x{:016X}+0x{:X} expected_aps={} mode=fullforget-warm\\n",',
+              'post-boot marker 10',
+          )
+          text = replace_once(
+              text,
+              '"live-update: released {} parked APs into generation {}\\n",',
+              '"live-update: step=11 ap-release parked_aps={} generation={}\\n",',
+              'post-boot marker 11',
+          )
+          text = replace_once(
+              text,
+              '''    SHELL_NOTICE_PENDING.store(true, Ordering::Release);
+    match restore_after_live_update_task(
+''',
+              '''    let planned_restore = mask_population(&handoff.restore_mask);
+    let planned_resume = mask_population(&handoff.resume_mask);
+    crate::log_info!(
+        target: "global";
+        "live-update: step=12 restore-task-submit generation={} restore={} resume={}\\n",
+        handoff.generation,
+        planned_restore,
+        planned_resume,
+    );
+    SHELL_NOTICE_PENDING.store(true, Ordering::Release);
+    match restore_after_live_update_task(
+''',
+              'post-boot marker 12',
+          )
+          text = replace_once(
+              text,
+              '''    cleanup_transition_mapping_after_boot(transition_slot as usize).await;
+
+    if restore_mask.iter().all(|word| *word == 0) {
+''',
+              '''    cleanup_transition_mapping_after_boot(transition_slot as usize).await;
+    crate::log_info!(
+        target: "global";
+        "live-update: step=13 transition-retired generation={} topology_ready={}\\n",
+        generation,
+        crate::workers::all_topology_spawners_registered() as u8,
+    );
+
+    if restore_mask.iter().all(|word| *word == 0) {
+''',
+              'post-boot marker 13',
+          )
+          text = replace_once(
+              text,
+              '''            "live-update: generation={} has no VM checkpoints to restore\\n",
+            generation,
+''',
+              '''            "live-update: step=14 restore-pass-complete generation={} planned_restore=0 planned_resume=0\\n",
+            generation,
+''',
+              'post-boot no-restore marker 14',
+          )
+          text = replace_once(
+              text,
+              '''        crate::hv::finish_restore(vm_id);
+    }
+}
+
+fn stage_candidate''',
+              '''        crate::hv::finish_restore(vm_id);
+    }
+    crate::log_info!(
+        target: "global";
+        "live-update: step=14 restore-pass-complete generation={} planned_restore={} planned_resume={}\\n",
+        generation,
+        mask_population(&restore_mask),
+        mask_population(&resume_mask),
+    );
+}
+
+fn stage_candidate''',
+              'post-boot restore-pass marker 14',
+          )
+          text = replace_once(
+              text,
+              '''fn mask_contains(mask: &[u64; RESTORE_WORDS], index: usize) -> bool {
+    mask.get(index / 64)
+        .map(|word| (*word & (1u64 << (index % 64))) != 0)
+        .unwrap_or(false)
+}
+''',
+              '''fn mask_contains(mask: &[u64; RESTORE_WORDS], index: usize) -> bool {
+    mask.get(index / 64)
+        .map(|word| (*word & (1u64 << (index % 64))) != 0)
+        .unwrap_or(false)
+}
+
+fn mask_population(mask: &[u64; RESTORE_WORDS]) -> u32 {
+    mask.iter().map(|word| word.count_ones()).sum()
+}
+''',
+              'mask population helper',
+          )
+          write(path, text)
+
+          path = 'src/pci/pci.rs'
+          text = read(path)
+          text = replace_once(
+              text,
+              '''fn fullforget_write_u16_unlocked(bus: u8, slot: u8, function: u8, offset: u8, value: u16) {
+    let aligned_off = offset & !0x03;
+    let shift = ((offset & 0x03) as u32) * 8;
+    let current = read_u32_unlocked(bus, slot, function, aligned_off);
+    let next = (current & !(0xFFFFu32 << shift)) | ((value as u32) << shift);
+    write_u32_unlocked(bus, slot, function, aligned_off, next);
+}
+''',
+              '''fn fullforget_write_u16_unlocked(bus: u8, slot: u8, function: u8, offset: u8, value: u16) {
+    if offset == 0x04 {
+        // Command occupies the low half; writing zero to Status avoids replaying
+        // RW1C bits sampled from the high half of the configuration dword.
+        write_u32_unlocked(bus, slot, function, 0x04, u32::from(value));
+        return;
+    }
+    let aligned_off = offset & !0x03;
+    let shift = ((offset & 0x03) as u32) * 8;
+    let current = read_u32_unlocked(bus, slot, function, aligned_off);
+    let next = (current & !(0xFFFFu32 << shift)) | ((value as u32) << shift);
+    write_u32_unlocked(bus, slot, function, aligned_off, next);
+}
+''',
+              'PCI command/status write',
+          )
+          text = replace_once(
+              text,
+              '''    let mut failures = 0usize;
+    for device in functions {
+        if let Some(cap) = fullforget_find_capability_unlocked(
+''',
+              '''    let mut failures = 0usize;
+    for device in functions {
+        let vendor =
+            fullforget_read_u16_unlocked(device.bus, device.slot, device.function, 0x00);
+        if vendor == u16::MAX {
+            continue;
+        }
+        if let Some(cap) = fullforget_find_capability_unlocked(
+''',
+              'PCI absent vendor guard',
+          )
+          text = replace_once(
+              text,
+              '''        let command = fullforget_read_u16_unlocked(device.bus, device.slot, device.function, 0x04);
+        fullforget_write_u16_unlocked(
+''',
+              '''        let command = fullforget_read_u16_unlocked(device.bus, device.slot, device.function, 0x04);
+        if command == u16::MAX {
+            continue;
+        }
+        fullforget_write_u16_unlocked(
+''',
+              'PCI absent command guard',
+          )
+          text = replace_once(
+              text,
+              '''        let readback = fullforget_read_u16_unlocked(device.bus, device.slot, device.function, 0x04);
+        if (readback & PCI_COMMAND_BUS_MASTER) != 0 {
+            failures = failures.saturating_add(1);
+        }
+''',
+              '''        let readback = fullforget_read_u16_unlocked(device.bus, device.slot, device.function, 0x04);
+        if readback != u16::MAX && (readback & PCI_COMMAND_BUS_MASTER) != 0 {
+            failures = failures.saturating_add(1);
+        }
+''',
+              'PCI absent readback guard',
+          )
+          write(path, text)
+          PY
+          python3 /tmp/apply_review_fixes.py
+
+      - name: Install pinned Rust formatter
+        run: |
+          set -euo pipefail
+          channel="$(python3 - <<'PY'
+          import tomllib
+          with open('rust-toolchain.toml', 'rb') as handle:
+              print(tomllib.load(handle)['toolchain']['channel'])
+          PY
+          )"
+          rustup toolchain install "${channel}" --profile minimal --component rustfmt
+
+      - name: Format and validate
+        env:
+          BASE_SHA: 74c4b5107545b98e1b400c08db162919bfb7c019
+        run: |
+          set -euo pipefail
+          cargo fmt --all
+          cargo fmt --all -- --check
+          git diff --check
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import subprocess
+
+          vmx = Path('src/hv/vmx.rs').read_text()
+          for name, next_name in [('vmxon', 'vmxoff'), ('vmxoff', 'vmclear')]:
+              block = vmx.split(f'pub fn {name}', 1)[1].split(f'pub fn {next_name}', 1)[0]
+              assert 'preserves_flags' not in block
+              assert 'setna {fail}' in block
+
+          percpu = Path('src/percpu.rs').read_text()
+          live = Path('src/live_update.rs').read_text()
+          pci = Path('src/pci/pci.rs').read_text()
+
+          assert 'pub const CPU_SLOT_LIMIT: usize = 256;' in percpu
+          assert 'const CPU_SLOT_LIMIT: usize = crate::percpu::CPU_SLOT_LIMIT;' in live
+          assert 'crate::allcaps::hv::VM_CPU_SLOT_LIMIT' not in live
+          assert 'static AP_TRANSITION_ENTERED: [AtomicBool; CPU_SLOT_LIMIT]' in live
+          assert live.count('send_fixed_x2apic_ipi(cpu.slot, RENDEZVOUS_VECTOR)') == 2
+          assert 'unsafe {\n                    core::arch::asm!("cli", "hlt", options(nomem, nostack));' in live
+          assert 'WARM_HANDOFF_VALIDATION: AtomicU8' in live
+          assert 'HANDOFF_VALIDATION_CHECKING => core::hint::spin_loop()' in live
+          assert 'reconnect after boot for: hey that worked' not in live
+          for step in range(1, 15):
+              assert f'step={step:02}' in live, step
+          assert 'if offset == 0x04' in pci
+          assert 'if vendor == u16::MAX' in pci
+          assert 'if command == u16::MAX' in pci
+          assert 'if readback != u16::MAX' in pci
+
+          changed = set(subprocess.check_output(
+              ['git', 'diff', '--name-only', os.environ['BASE_SHA']], text=True
+          ).splitlines())
+          expected = {
+              '.github/workflows/agent-live-update-review-hardening.yml',
+              'src/hv/vmx.rs',
+              'src/live_update.rs',
+              'src/pci/pci.rs',
+              'src/percpu.rs',
+          }
+          assert changed == expected, (changed, expected)
+          PY
+
+      - name: Commit reviewed source changes and remove temporary workflow
+        env:
+          BRANCH: fix/live-update-review-hardening-20260821
+        run: |
+          set -euo pipefail
+          git config user.name "OpenAI review agent"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/agent-live-update-review-hardening.yml
+          git add src/hv/vmx.rs src/live_update.rs src/pci/pci.rs src/percpu.rs
+          git diff --cached --check
+          git commit -m "Harden live-update transition review findings"
+          git push origin "HEAD:${BRANCH}"
