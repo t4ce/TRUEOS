@@ -13,6 +13,7 @@ use crate::hv::memory::kernel_va_to_pa;
 use crate::hv::{hvlogf, hvwarnf};
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
+use log_os_core::LogLevel;
 
 const BLUEPRINT_AUDIO_LOG_SAMPLE_EVERY: u32 = 1_000;
 const BLUEPRINT_TEXT_SCENE_BUSY_LOG_SAMPLE_EVERY: u32 = 1_000;
@@ -131,6 +132,7 @@ pub const OP_BP_ASYNC_FS_CREATE_DIR_ALL_START: u32 = 0xD8; // payload resolved p
 pub const OP_BP_ASYNC_FS_STAT_START: u32 = 0xD9; // payload resolved path -> operation id/rc
 pub const OP_BP_ASYNC_FS_LIST_DIR_START: u32 = 0xDA; // payload resolved path -> operation id/rc
 pub const OP_BP_ASYNC_FS_LIST_MOUNTS_START: u32 = 0x139; // no payload -> mounted TRUEOSFS roots
+pub const OP_BP_ASYNC_FS_RENAME_START: u32 = 0x13A; // payload src-len + resolved src/dst -> operation id/rc
 pub const OP_BP_UI4_SCENE_KEYBOARD_STATE: u32 = 0xDB; // arg0 window -> rc + focused held-key state
 pub const OP_BP_UI4_SCENE_FRAME_OPEN_IMMUTABLE: u32 = 0xDC; // arg0 x/y,arg1 width/height -> window
 pub const OP_BP_UI4_SCENE_SPRITE_UPLOAD_BEGIN: u32 = 0xDD; // arg0 window,arg1 sprite,payload width/height -> rc
@@ -3322,12 +3324,14 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 return DispatchOutcome::Resume;
             };
             let target_len = arg1 as usize;
-            let level = match arg0 {
-                1 => log::Level::Error,
-                2 => log::Level::Warn,
-                3 => log::Level::Info,
-                4 => log::Level::Debug,
-                5 => log::Level::Trace,
+            let level = match u32::try_from(arg0).ok() {
+                Some(trueos_vm::vmcall::BP_LOG_LEVEL_ERROR) => LogLevel::Error,
+                Some(trueos_vm::vmcall::BP_LOG_LEVEL_WARN) => LogLevel::Warn,
+                Some(trueos_vm::vmcall::BP_LOG_LEVEL_INFO) => LogLevel::Info,
+                Some(trueos_vm::vmcall::BP_LOG_LEVEL_DEBUG) => LogLevel::Debug,
+                Some(trueos_vm::vmcall::BP_LOG_LEVEL_TRACE) => LogLevel::Trace,
+                Some(trueos_vm::vmcall::BP_LOG_LEVEL_IMPORTANT) => LogLevel::Important,
+                Some(trueos_vm::vmcall::BP_LOG_LEVEL_ONCE) => LogLevel::Once,
                 _ => {
                     write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                     return DispatchOutcome::Resume;
@@ -3713,6 +3717,106 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         OP_BP_ARCHIVE_DISCARD => {
             let owner = crate::r::io::async_fs_cabi::owner_for_vm(vm_id);
             let rc = crate::r::archive_cabi::discard(owner, arg0 as u32);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_ASYNC_FS_RENAME_START => {
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let payload = unsafe { &(&(*p).payload)[..n] };
+            if payload.len() < 4 {
+                write_response(
+                    vm_id,
+                    seq,
+                    STATUS_OK,
+                    (crate::r::io::cabi::FS_ERR_BAD_PARAM as i64) as u64,
+                    0,
+                );
+                return DispatchOutcome::Resume;
+            }
+            let source_len = u32::from_le_bytes(payload[..4].try_into().unwrap()) as usize;
+            let Some(destination_offset) = 4usize.checked_add(source_len) else {
+                write_response(
+                    vm_id,
+                    seq,
+                    STATUS_OK,
+                    (crate::r::io::cabi::FS_ERR_BAD_PARAM as i64) as u64,
+                    0,
+                );
+                return DispatchOutcome::Resume;
+            };
+            if source_len == 0 || destination_offset >= payload.len() {
+                write_response(
+                    vm_id,
+                    seq,
+                    STATUS_OK,
+                    (crate::r::io::cabi::FS_ERR_BAD_PARAM as i64) as u64,
+                    0,
+                );
+                return DispatchOutcome::Resume;
+            }
+            let Ok(source) = core::str::from_utf8(&payload[4..destination_offset]) else {
+                write_response(
+                    vm_id,
+                    seq,
+                    STATUS_OK,
+                    (crate::r::io::cabi::FS_ERR_BAD_UTF8 as i64) as u64,
+                    0,
+                );
+                return DispatchOutcome::Resume;
+            };
+            let Ok(destination) = core::str::from_utf8(&payload[destination_offset..]) else {
+                write_response(
+                    vm_id,
+                    seq,
+                    STATUS_OK,
+                    (crate::r::io::cabi::FS_ERR_BAD_UTF8 as i64) as u64,
+                    0,
+                );
+                return DispatchOutcome::Resume;
+            };
+            let Ok(source) = crate::r::path::FsPath::parse(source, false) else {
+                write_response(
+                    vm_id,
+                    seq,
+                    STATUS_OK,
+                    (crate::r::io::cabi::FS_ERR_BAD_PATH as i64) as u64,
+                    0,
+                );
+                return DispatchOutcome::Resume;
+            };
+            let Ok(destination) = crate::r::path::FsPath::parse(destination, false) else {
+                write_response(
+                    vm_id,
+                    seq,
+                    STATUS_OK,
+                    (crate::r::io::cabi::FS_ERR_BAD_PATH as i64) as u64,
+                    0,
+                );
+                return DispatchOutcome::Resume;
+            };
+            let source = source.to_relative_string();
+            let destination = destination.to_relative_string();
+            if !vm_mount_selector_allowed(vm_id, source.as_str())
+                || !vm_mount_selector_allowed(vm_id, destination.as_str())
+            {
+                write_response(
+                    vm_id,
+                    seq,
+                    STATUS_OK,
+                    (crate::r::io::cabi::FS_ERR_BAD_PATH as i64) as u64,
+                    0,
+                );
+                return DispatchOutcome::Resume;
+            }
+            let rc = crate::r::io::async_fs_cabi::start_rename(
+                crate::r::io::async_fs_cabi::owner_for_vm(vm_id),
+                source,
+                destination,
+            );
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }

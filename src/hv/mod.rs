@@ -1445,22 +1445,22 @@ fn guest_exception_summary() -> Option<(u8, &'static str, u64, u64, u64)> {
 }
 
 pub fn hvlogf(args: core::fmt::Arguments<'_>) {
-    hvlog_at(log::Level::Info, args);
+    hvlog_at(log_os_core::LogLevel::Info, args);
 }
 
 pub fn hvtracef(args: core::fmt::Arguments<'_>) {
-    hvlog_at(log::Level::Trace, args);
+    hvlog_at(log_os_core::LogLevel::Trace, args);
 }
 
 pub fn hvwarnf(args: core::fmt::Arguments<'_>) {
-    hvlog_at(log::Level::Warn, args);
+    hvlog_at(log_os_core::LogLevel::Warn, args);
 }
 
 pub fn hverrorf(args: core::fmt::Arguments<'_>) {
-    hvlog_at(log::Level::Error, args);
+    hvlog_at(log_os_core::LogLevel::Error, args);
 }
 
-fn hvlog_at(level: log::Level, args: core::fmt::Arguments<'_>) {
+fn hvlog_at(level: log_os_core::LogLevel, args: core::fmt::Arguments<'_>) {
     let mut line: String<HV_LOG_LINE> = String::new();
     let _ = line.write_fmt(args);
     if line.is_empty() {
@@ -1480,7 +1480,7 @@ fn hvlog_at(level: log::Level, args: core::fmt::Arguments<'_>) {
     }
 }
 
-fn hvlog_guest_context_write(level: log::Level, line: &str) {
+fn hvlog_guest_context_write(level: log_os_core::LogLevel, line: &str) {
     let _ = trueos_vm::vmcall::net_tcp_write(b"[hv] [");
     let _ = trueos_vm::vmcall::net_tcp_write(crate::log_os::purpose_for_level(level).as_bytes());
     let _ = trueos_vm::vmcall::net_tcp_write(b"] ");
@@ -1488,7 +1488,7 @@ fn hvlog_guest_context_write(level: log::Level, line: &str) {
     let _ = trueos_vm::vmcall::net_tcp_write(b"\n");
 }
 
-fn hvlog_console_enabled(level: log::Level) -> bool {
+fn hvlog_console_enabled(level: log_os_core::LogLevel) -> bool {
     crate::log_os::flags::HV_LOGS
         && crate::log_os::flags::area_log_enabled(crate::log_os::flags::LogArea::Hv, level)
 }
@@ -2351,7 +2351,7 @@ fn estimate_blueprint_memory_profile(
 
 fn log_blueprint_memory_profile_info(profile: BlueprintVmMemoryProfile) {
     crate::log_os::blueprint_line(
-        log::Level::Info,
+        log_os_core::LogLevel::Info,
         format_args!(
             "apps: profile {} heap={}/{}/{}MiB stack={}/{}/{}MiB\n",
             profile.class.label(),
@@ -2380,7 +2380,7 @@ fn clear_blueprint_pending_launch(vm_id: u8) {
 
 fn log_blueprint_launch_line(_target: Option<&MatrixTarget>, args: core::fmt::Arguments<'_>) {
     let line = alloc::format!("{}", args);
-    crate::log_os::blueprint_line(log::Level::Info, format_args!("{}\n", line.as_str()));
+    crate::log_os::blueprint_line(log_os_core::LogLevel::Info, format_args!("{}\n", line.as_str()));
 }
 
 fn prepare_blueprint_launch_on_lane(
@@ -3058,7 +3058,7 @@ fn blueprint_console_hunt_log(vm_id: u8, data: &[u8]) -> bool {
     }
     crate::log_os::log_with_area_purpose(
         crate::log_os::flags::LogArea::Blueprint,
-        log::Level::Info,
+        log_os_core::LogLevel::Info,
         Some(purpose),
         format_args!("vm{}: {}\n", vm_id, message),
     );
@@ -3967,7 +3967,7 @@ fn blueprint_console_text_lines(vm_id: u8, target: Option<&MatrixTarget>, data: 
         }
         crate::log_os::log_with_area_purpose(
             crate::log_os::flags::LogArea::Blueprint,
-            log::Level::Info,
+            log_os_core::LogLevel::Info,
             Some("blueprint"),
             format_args!("vm{}: {}\n", vm_id, line.as_str()),
         );

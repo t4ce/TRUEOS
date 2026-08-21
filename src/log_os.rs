@@ -6,8 +6,8 @@ extern crate alloc;
 pub(crate) mod flags {
     use core::sync::atomic::AtomicBool;
 
-    use log::{Level, LevelFilter};
     pub(crate) use log_os_core::{LogArea, LogLevelPolicy};
+    use log_os_core::{LogLevel, LogLevelFilter};
     use spin::Once;
 
     /// Full forensic USB profile. The exact switch settings are preserved in
@@ -55,62 +55,62 @@ pub(crate) mod flags {
     pub(crate) const GLOBAL_LOG_LEVEL: LogLevelPolicy =
         if USB_UAS_DIAG_PROFILE_ENABLED || UI4_DIAG_PROFILE_ENABLED {
             // Preserve the original USB hunt's full Global side, including Debug.
-            LogLevelPolicy::up(LevelFilter::Trace)
+            LogLevelPolicy::up(LogLevelFilter::Trace)
         } else {
-            LogLevelPolicy::up(LevelFilter::Info)
+            LogLevelPolicy::up(LogLevelFilter::Info)
         };
     pub(crate) const BOOT_LOG_LEVEL: LogLevelPolicy = if BOOT_DIAG_PROFILE_ENABLED {
-        LogLevelPolicy::up(LevelFilter::Trace)
+        LogLevelPolicy::up(LogLevelFilter::Trace)
     } else {
-        LogLevelPolicy::up(LevelFilter::Warn)
+        LogLevelPolicy::up(LogLevelFilter::Warn)
     };
     pub(crate) const SERVICE_LOG_LEVEL: LogLevelPolicy = if LUMEN_PERF_DIAG_PROFILE_ENABLED {
-        LogLevelPolicy::up(LevelFilter::Info)
+        LogLevelPolicy::up(LogLevelFilter::Info)
     } else {
-        LogLevelPolicy::up(LevelFilter::Warn)
+        LogLevelPolicy::up(LogLevelFilter::Warn)
     };
     pub(crate) const NET_LOG_LEVEL: LogLevelPolicy = if BOOT_DIAG_PROFILE_ENABLED {
-        LogLevelPolicy::up(LevelFilter::Trace)
+        LogLevelPolicy::up(LogLevelFilter::Trace)
     } else {
-        LogLevelPolicy::up(LevelFilter::Info)
+        LogLevelPolicy::up(LogLevelFilter::Info)
     };
     pub(crate) const USB_LOG_LEVEL: LogLevelPolicy = if USB_UAS_DIAG_PROFILE_ENABLED {
-        LogLevelPolicy::up(LevelFilter::Trace)
+        LogLevelPolicy::up(LogLevelFilter::Trace)
     } else if USB_RUNTIME_DIAG_PROFILE_ENABLED {
-        LogLevelPolicy::up(LevelFilter::Info)
+        LogLevelPolicy::up(LogLevelFilter::Info)
     } else {
-        LogLevelPolicy::up(LevelFilter::Warn)
+        LogLevelPolicy::up(LogLevelFilter::Warn)
     };
-    pub(crate) const STORAGE_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
+    pub(crate) const STORAGE_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LogLevelFilter::Warn);
     /// The display/cursor side is per-flip chatty, so it normally stays at
     /// Warn; the explicit Helio profile temporarily admits its Debug ladder.
     pub(crate) const GFX_LOG_LEVEL: LogLevelPolicy = if HELIO_GFX_DIAG_PROFILE_ENABLED {
-        LogLevelPolicy::up(LevelFilter::Debug)
+        LogLevelPolicy::up(LogLevelFilter::Debug)
     } else {
-        LogLevelPolicy::up(LevelFilter::Warn)
+        LogLevelPolicy::up(LogLevelFilter::Warn)
     };
     pub(crate) const GPGPU_LOG_LEVEL: LogLevelPolicy = if HELIO_GFX_DIAG_PROFILE_ENABLED {
-        LogLevelPolicy::up(LevelFilter::Debug)
+        LogLevelPolicy::up(LogLevelFilter::Debug)
     } else if LUMEN_PERF_DIAG_PROFILE_ENABLED {
-        LogLevelPolicy::up(LevelFilter::Info)
+        LogLevelPolicy::up(LogLevelFilter::Info)
     } else {
-        LogLevelPolicy::up(LevelFilter::Warn)
+        LogLevelPolicy::up(LogLevelFilter::Warn)
     };
     pub(crate) const RENDER_LOG_LEVEL: LogLevelPolicy = if HELIO_GFX_DIAG_PROFILE_ENABLED {
-        LogLevelPolicy::up(LevelFilter::Debug)
+        LogLevelPolicy::up(LogLevelFilter::Debug)
     } else {
-        LogLevelPolicy::up(LevelFilter::Info)
+        LogLevelPolicy::up(LogLevelFilter::Info)
     };
-    pub(crate) const HDA_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Warn);
-    pub(crate) const HV_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Info);
-    pub(crate) const APPS_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Info);
+    pub(crate) const HDA_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LogLevelFilter::Warn);
+    pub(crate) const HV_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LogLevelFilter::Info);
+    pub(crate) const APPS_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LogLevelFilter::Info);
     pub(crate) const EXECUTOR_REALM_LOG_LEVEL: LogLevelPolicy =
-        LogLevelPolicy::up(LevelFilter::Info);
+        LogLevelPolicy::up(LogLevelFilter::Info);
     pub(crate) const EXECUTOR_CACHE_LOG_LEVEL: LogLevelPolicy =
-        LogLevelPolicy::up(LevelFilter::Warn);
+        LogLevelPolicy::up(LogLevelFilter::Warn);
     pub(crate) const INTEL_MEDIA_NGIN_LOG_LEVEL: LogLevelPolicy =
-        LogLevelPolicy::up(LevelFilter::Info);
-    pub(crate) const BLUEPRINT_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Info);
+        LogLevelPolicy::up(LogLevelFilter::Info);
+    pub(crate) const BLUEPRINT_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LogLevelFilter::Info);
 
     pub(crate) const NET_LOG_RX_TAP: bool = true;
     pub(crate) const NET_LOG_TX_TAP: bool = true;
@@ -162,7 +162,7 @@ pub(crate) mod flags {
         }
     }
 
-    pub(crate) fn area_log_enabled(area: LogArea, level: Level) -> bool {
+    pub(crate) fn area_log_enabled(area: LogArea, level: LogLevel) -> bool {
         log_os_core::level_enabled(area_log_policy(area), level)
     }
 }
@@ -170,6 +170,9 @@ pub(crate) mod flags {
 static LOG_WRITE_LOCK: spin::Mutex<()> = spin::Mutex::new(());
 static UART_LOG_WRITE_LOCK: spin::Mutex<()> = spin::Mutex::new(());
 static EMULATOR_UART_LOGGING: AtomicBool = AtomicBool::new(false);
+const LOG_ONCE_SITE_CAPACITY: usize = 512;
+static LOG_ONCE_STATE: log_os_core::LogOnceState<LOG_ONCE_SITE_CAPACITY> =
+    log_os_core::LogOnceState::new();
 
 struct TcpLogSink;
 
@@ -177,7 +180,7 @@ impl log_os_core::GlobalLogSink for TcpLogSink {
     fn spec(&self) -> log_os_core::GlobalLogSinkSpec {
         log_os_core::GlobalLogSinkSpec::new(
             log_os_core::LogAreaSet::ALL,
-            log_os_core::LogLevelPolicy::up(log::LevelFilter::Trace),
+            log_os_core::LogLevelPolicy::up(log_os_core::LogLevelFilter::Trace),
         )
     }
 
@@ -188,7 +191,7 @@ impl log_os_core::GlobalLogSink for TcpLogSink {
     fn write_accepted(
         &self,
         area: flags::LogArea,
-        _level: log::Level,
+        _level: log_os_core::LogLevel,
         purpose: Option<&str>,
         args: fmt::Arguments<'_>,
     ) {
@@ -202,7 +205,7 @@ impl log_os_core::GlobalLogSink for EmulatorUartLogSink {
     fn spec(&self) -> log_os_core::GlobalLogSinkSpec {
         log_os_core::GlobalLogSinkSpec::new(
             log_os_core::LogAreaSet::ALL,
-            log_os_core::LogLevelPolicy::up(log::LevelFilter::Trace),
+            log_os_core::LogLevelPolicy::up(log_os_core::LogLevelFilter::Trace),
         )
     }
 
@@ -210,14 +213,14 @@ impl log_os_core::GlobalLogSink for EmulatorUartLogSink {
         flags::area_log_policy(area)
     }
 
-    fn accepts(&self, area: flags::LogArea, level: log::Level) -> bool {
+    fn accepts(&self, area: flags::LogArea, level: log_os_core::LogLevel) -> bool {
         EMULATOR_UART_LOGGING.load(Ordering::Acquire) && flags::area_log_enabled(area, level)
     }
 
     fn write_accepted(
         &self,
         area: flags::LogArea,
-        _level: log::Level,
+        _level: log_os_core::LogLevel,
         purpose: Option<&str>,
         args: fmt::Arguments<'_>,
     ) {
@@ -231,15 +234,12 @@ static TRUEOS_LOG_SINKS: [&'static dyn log_os_core::GlobalLogSink; 2] =
     [&TCP_LOG_SINK, &EMULATOR_UART_LOG_SINK];
 static TRUEOS_LOG_ROUTER: log_os_core::GlobalLogRouter =
     log_os_core::GlobalLogRouter::new(&TRUEOS_LOG_SINKS);
-static KERNEL_LOG_FACADE: log_os_core::GlobalLogFacade<log_os_core::GlobalLogRouter> =
-    log_os_core::GlobalLogFacade::new(&TRUEOS_LOG_ROUTER);
-
 #[macro_export]
 macro_rules! log {
     (purpose = $purpose:expr; $($tt:tt)*) => {{
         $crate::log_os::log_with_target_purpose(
             module_path!(),
-            log::Level::Info,
+            $crate::log_os::LogLevel::Info,
             Some($purpose),
             format_args!($($tt)*),
         );
@@ -247,7 +247,7 @@ macro_rules! log {
     ($($tt:tt)*) => {{
         $crate::log_os::log_with_target_level(
             module_path!(),
-            log::Level::Info,
+            $crate::log_os::LogLevel::Info,
             format_args!($($tt)*),
         );
     }};
@@ -258,14 +258,14 @@ macro_rules! log_trace {
     (target: $target:expr; $($tt:tt)*) => {{
         $crate::log_os::log_with_target_level(
             $target,
-            log::Level::Trace,
+            $crate::log_os::LogLevel::Trace,
             format_args!($($tt)*),
         );
     }};
     ($($tt:tt)*) => {{
         $crate::log_os::log_with_target_level(
             "boot",
-            log::Level::Trace,
+            $crate::log_os::LogLevel::Trace,
             format_args!($($tt)*),
         );
     }};
@@ -276,14 +276,14 @@ macro_rules! log_debug {
     (target: $target:expr; $($tt:tt)*) => {{
         $crate::log_os::log_with_target_level(
             $target,
-            log::Level::Debug,
+            $crate::log_os::LogLevel::Debug,
             format_args!($($tt)*),
         );
     }};
     ($($tt:tt)*) => {{
         $crate::log_os::log_with_target_level(
             "boot",
-            log::Level::Debug,
+            $crate::log_os::LogLevel::Debug,
             format_args!($($tt)*),
         );
     }};
@@ -294,14 +294,14 @@ macro_rules! log_info {
     (target: $target:expr; $($tt:tt)*) => {{
         $crate::log_os::log_with_target_level(
             $target,
-            log::Level::Info,
+            $crate::log_os::LogLevel::Info,
             format_args!($($tt)*),
         );
     }};
     ($($tt:tt)*) => {{
         $crate::log_os::log_with_target_level(
             "boot",
-            log::Level::Info,
+            $crate::log_os::LogLevel::Info,
             format_args!($($tt)*),
         );
     }};
@@ -312,14 +312,62 @@ macro_rules! log_warn {
     (target: $target:expr; $($tt:tt)*) => {{
         $crate::log_os::log_with_target_level(
             $target,
-            log::Level::Warn,
+            $crate::log_os::LogLevel::Warn,
             format_args!($($tt)*),
         );
     }};
     ($($tt:tt)*) => {{
         $crate::log_os::log_with_target_level(
             "boot",
-            log::Level::Warn,
+            $crate::log_os::LogLevel::Warn,
+            format_args!($($tt)*),
+        );
+    }};
+}
+
+#[macro_export]
+macro_rules! log_important {
+    (target: $target:expr; $($tt:tt)*) => {{
+        $crate::log_os::log_with_target_level(
+            $target,
+            $crate::log_os::LogLevel::Important,
+            format_args!($($tt)*),
+        );
+    }};
+    ($($tt:tt)*) => {{
+        $crate::log_os::log_with_target_level(
+            "boot",
+            $crate::log_os::LogLevel::Important,
+            format_args!($($tt)*),
+        );
+    }};
+}
+
+#[macro_export]
+macro_rules! log_once {
+    (target: $target:expr; $($tt:tt)*) => {{
+        const SITE: $crate::log_os::LogSiteId = $crate::log_os::LogSiteId::from_location(
+            module_path!(),
+            file!(),
+            line!(),
+            column!(),
+        );
+        let _ = $crate::log_os::log_once_with_target(
+            SITE,
+            $target,
+            format_args!($($tt)*),
+        );
+    }};
+    ($($tt:tt)*) => {{
+        const SITE: $crate::log_os::LogSiteId = $crate::log_os::LogSiteId::from_location(
+            module_path!(),
+            file!(),
+            line!(),
+            column!(),
+        );
+        let _ = $crate::log_os::log_once_with_target(
+            SITE,
+            "boot",
             format_args!($($tt)*),
         );
     }};
@@ -330,14 +378,14 @@ macro_rules! log_error {
     (target: $target:expr; $($tt:tt)*) => {{
         $crate::log_os::log_with_target_level(
             $target,
-            log::Level::Error,
+            $crate::log_os::LogLevel::Error,
             format_args!($($tt)*),
         );
     }};
     ($($tt:tt)*) => {{
         $crate::log_os::log_with_target_level(
             "boot",
-            log::Level::Error,
+            $crate::log_os::LogLevel::Error,
             format_args!($($tt)*),
         );
     }};
@@ -348,7 +396,7 @@ macro_rules! audio_probe {
     ($($tt:tt)*) => {{
         $crate::log_os::log_with_area_purpose(
             $crate::log_os::flags::LogArea::Hda,
-            log::Level::Trace,
+            $crate::log_os::LogLevel::Trace,
             Some("audio"),
             format_args!($($tt)*),
         );
@@ -359,34 +407,34 @@ pub fn log(args: fmt::Arguments<'_>) {
     log_os_core::log(&TRUEOS_LOG_ROUTER, args);
 }
 
-pub(crate) fn purpose_for_level(level: log::Level) -> &'static str {
+pub use log_os_core::{LogLevel, LogSiteId};
+
+pub(crate) fn purpose_for_level(level: LogLevel) -> &'static str {
     log_os_core::purpose_for_level(level)
 }
 
-pub(crate) fn hypervisor_line(level: log::Level, args: fmt::Arguments<'_>) {
+pub(crate) fn hypervisor_line(level: LogLevel, args: fmt::Arguments<'_>) {
     log_with_area_level(flags::LogArea::Hv, level, args);
 }
 
-pub(crate) fn blueprint_line(level: log::Level, args: fmt::Arguments<'_>) {
+pub(crate) fn blueprint_line(level: LogLevel, args: fmt::Arguments<'_>) {
     log_with_area_level(flags::LogArea::Blueprint, level, args);
 }
 
-/// Emit a low-volume Blueprint lifecycle marker that must survive ordinary
-/// Info-level filtering while remaining distinguishable from routine output.
+/// Emit a high-salience Blueprint lifecycle marker that is not a failure.
 pub(crate) fn blueprint_important_line(args: fmt::Arguments<'_>) {
-    log_with_area_purpose(flags::LogArea::Blueprint, log::Level::Info, Some("important"), args);
+    log_with_area_level(flags::LogArea::Blueprint, LogLevel::Important, args);
 }
 
-/// Emit a sparse service lifecycle marker under the ordinary Service/Warn
-/// policy while keeping it distinct from failures and routine diagnostics.
+/// Emit a high-salience service lifecycle marker that is not a failure.
 pub(crate) fn service_important_line(args: fmt::Arguments<'_>) {
-    log_with_area_purpose(flags::LogArea::Service, log::Level::Warn, Some("important"), args);
+    log_with_area_level(flags::LogArea::Service, LogLevel::Important, args);
 }
 
 pub(crate) fn printer_discovered(name: &str, uri: &str) {
     log_with_area_level(
         flags::LogArea::Net,
-        log::Level::Info,
+        LogLevel::Info,
         format_args!("printer: discovered name={} uri={}\n", name, uri),
     );
 }
@@ -394,7 +442,7 @@ pub(crate) fn printer_discovered(name: &str, uri: &str) {
 pub(crate) fn printer_spooler_online() {
     log_with_area_level(
         flags::LogArea::Net,
-        log::Level::Info,
+        LogLevel::Info,
         format_args!(
             "print2d: kernel spooler online policy=single-default transport=ipp format=pwg-raster\n"
         ),
@@ -404,7 +452,7 @@ pub(crate) fn printer_spooler_online() {
 pub(crate) fn gridpaper_print_requested(owner: u8, token: u32, generation: u64) {
     log_with_area_level(
         flags::LogArea::Net,
-        log::Level::Info,
+        LogLevel::Info,
         format_args!(
             "print2d: gridpaper request owner={} token={} generation={} trigger=PrintScreen\n",
             owner, token, generation
@@ -418,7 +466,7 @@ pub(crate) fn print2d_job_state(job_id: u32, state: &str, detail: &str) {
     // a render failure cannot look like a silent printer or missing worker.
     log_with_target_level(
         "print2d",
-        log::Level::Info,
+        LogLevel::Info,
         format_args!("print2d: job={} state={} detail={}\n", job_id, state, detail),
     );
 }
@@ -471,13 +519,13 @@ pub(crate) fn set_emulator_uart_logging(enabled: bool) {
     EMULATOR_UART_LOGGING.store(enabled, Ordering::Release);
 }
 
-pub fn log_with_area_level(area: flags::LogArea, level: log::Level, args: fmt::Arguments<'_>) {
+pub fn log_with_area_level(area: flags::LogArea, level: LogLevel, args: fmt::Arguments<'_>) {
     log_os_core::log_with_area_level(&TRUEOS_LOG_ROUTER, area, level, args);
 }
 
 pub fn log_with_area_purpose(
     area: flags::LogArea,
-    level: log::Level,
+    level: LogLevel,
     purpose: Option<&str>,
     args: fmt::Arguments<'_>,
 ) {
@@ -487,20 +535,30 @@ pub fn log_with_area_purpose(
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn log_with_target_purpose(
     target: &str,
-    level: log::Level,
+    level: LogLevel,
     purpose: Option<&str>,
     args: fmt::Arguments<'_>,
 ) {
     log_os_core::log_with_target_purpose(&TRUEOS_LOG_ROUTER, target, level, purpose, args);
 }
 
-pub fn log_with_target_level(target: &str, level: log::Level, args: fmt::Arguments<'_>) {
+pub fn log_with_target_level(target: &str, level: LogLevel, args: fmt::Arguments<'_>) {
     log_os_core::log_with_target_level(&TRUEOS_LOG_ROUTER, target, level, args);
 }
 
-pub fn init_log_facade() {
-    let _ = log::set_logger(&KERNEL_LOG_FACADE);
-    log::set_max_level(log::LevelFilter::Trace);
+pub fn log_once_with_target(
+    site: log_os_core::LogSiteId,
+    target: &str,
+    args: fmt::Arguments<'_>,
+) -> log_os_core::LogOnceObservation {
+    log_os_core::log_once_with_area_purpose(
+        &TRUEOS_LOG_ROUTER,
+        &LOG_ONCE_STATE,
+        site,
+        log_os_core::target_log_area(target),
+        Some(log_os_core::purpose_for_level(LogLevel::Once)),
+        args,
+    )
 }
 
 pub mod logtotcp {

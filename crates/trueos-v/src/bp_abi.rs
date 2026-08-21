@@ -716,6 +716,12 @@ unsafe extern "C" {
     pub fn trueos_cabi_async_fs_list_dir_start(path_ptr: *const u8, path_len: usize) -> i32;
     pub fn trueos_cabi_async_fs_list_mounts_start() -> i32;
     pub fn trueos_cabi_async_fs_remove_start(path_ptr: *const u8, path_len: usize) -> i32;
+    pub fn trueos_cabi_async_fs_rename_start(
+        source_ptr: *const u8,
+        source_len: usize,
+        destination_ptr: *const u8,
+        destination_len: usize,
+    ) -> i32;
     pub fn trueos_cabi_async_fs_status(id: u32) -> i32;
     pub fn trueos_cabi_async_fs_result_len(id: u32) -> isize;
     pub fn trueos_cabi_async_fs_result_read(

@@ -34,7 +34,6 @@ static STATIC_SINGLE_GPU_RCS_LOGGED: AtomicBool = AtomicBool::new(false);
 /// The stack painter route is the contract's normal steady state, so report it
 /// once at info rather than leaving it only in the per-submission trace.
 static STACK_PAINTER_LOGGED: AtomicBool = AtomicBool::new(false);
-static MIXED_SLOT_COMPOSITION_LOGGED: AtomicBool = AtomicBool::new(false);
 static GPU_SOURCE_RELEASE_INVALID_WARNED: AtomicBool = AtomicBool::new(false);
 static DIRTY_FONT_SHARED_COMPOSITION_LOGGED: AtomicBool = AtomicBool::new(false);
 static DIRTY_FONT_DIRECT_SCANOUT_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -863,11 +862,8 @@ fn queue_async_plane(
     } else {
         None
     };
-    if selected.len() > 1
-        && !all_shared_composable
-        && !MIXED_SLOT_COMPOSITION_LOGGED.swap(true, Ordering::AcqRel)
-    {
-        crate::log_info!(target: "ui4";
+    if selected.len() > 1 && !all_shared_composable {
+        crate::log_once!(target: "ui4";
             "ui4/mixed-slot-composition: slot={} windows={} backend=guc-rcs-rgba8-layers source_ownership=published-read-leases policy=compose-all-in-broker-z-order local_winner=0 cpu_frame_copy=0 log=once\n",
             target_plane_slot(plan.target),
             selected.len(),

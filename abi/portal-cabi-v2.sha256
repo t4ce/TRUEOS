@@ -149,4 +149,9 @@
 # exposes bounded labels and opaque selectors only after a host launch grant.
 # Standard v filesystem path resolution remains app/common scoped; hardening
 # raw filesystem vmcalls is a separate compatibility boundary.
-a73655905b68a5626dfd92a784878aa3d370c3312c7ba16e6985882a794803cf
+# Async filesystem rename is strictly additive. Both paths pass the existing
+# normalization and mount-scope checks, must resolve to one mounted TRUEOSFS
+# root, and never overwrite an existing file or directory. The kernel selects
+# the existing file or directory-tree rename implementation; older v2
+# Blueprints import neither the CABI symbol nor its new vmcall.
+325a84dca9d7e1749caf75b2a9c4bd1575f57202d8ae045a14e3d208ab22af97

@@ -57,8 +57,8 @@ impl PatternPlayer {
         self.current_step = 0;
         self.loop_count = if loops == 0 { 1 } else { loops };
 
-        log::info!(
-            "player: Playing pattern \"{}\" - {} loops, {} BPM",
+        crate::log!(
+            "player: Playing pattern \"{}\" - {} loops, {} BPM\n",
             pattern.name_str(),
             self.loop_count,
             pattern.bpm
@@ -100,15 +100,15 @@ impl PatternPlayer {
 
         let step_ms = pattern.step_duration_ms();
 
-        log::info!(
-            "player: Visual playback \"{}\" - {} loops, {} BPM, {}ms/step",
+        crate::log!(
+            "player: Visual playback \"{}\" - {} loops, {} BPM, {}ms/step\n",
             pattern.name_str(),
             self.loop_count,
             pattern.bpm,
             step_ms
         );
-        log::info!(
-            "player: {} | {} BPM | {} steps | {}",
+        crate::log!(
+            "player: {} | {} BPM | {} steps | {}\n",
             pattern.name_str(),
             pattern.bpm,
             pattern.len(),
@@ -146,7 +146,7 @@ impl PatternPlayer {
                 }
             }
 
-            log::info!("player: {} {}", loop_label, step_visual);
+            crate::log!("player: {} {}\n", loop_label, step_visual);
 
             // Play the entire loop audio
             let duration_ms = pattern.total_duration_ms();
@@ -154,7 +154,7 @@ impl PatternPlayer {
         }
 
         self.state = PlayerState::Stopped;
-        log::info!("player: Stopped");
+        crate::log!("player: Stopped\n");
         Ok(())
     }
 

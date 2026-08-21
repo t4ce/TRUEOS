@@ -521,7 +521,7 @@ fn log_run_target_line(_target: &MatrixTarget, line: &str) {
 }
 
 fn log_blueprint_line(line: &str) {
-    crate::log_os::blueprint_line(log::Level::Info, format_args!("{}\n", line));
+    crate::log_os::blueprint_line(log_os_core::LogLevel::Info, format_args!("{}\n", line));
 }
 
 fn dequeue_request() -> Option<AppVmLaunchRequest> {

@@ -138,7 +138,6 @@ pub extern "C" fn kmain() -> ! {
     // symbols directly. Keep the Rust crate linked; build.rs retains and
     // publishes the native routines through the runtime import resolver.
     core::hint::black_box(&ring::digest::SHA256);
-    log_os::init_log_facade();
     live_update::log_boot_mode();
     crate::log_info!(
         target: "global";

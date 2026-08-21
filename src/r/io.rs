@@ -452,10 +452,10 @@ pub mod cabi {
         trueos_cabi_async_fs_create_dir_all_start, trueos_cabi_async_fs_discard,
         trueos_cabi_async_fs_list_dir_start, trueos_cabi_async_fs_list_mounts_start,
         trueos_cabi_async_fs_read_start, trueos_cabi_async_fs_remove_start,
-        trueos_cabi_async_fs_result_len, trueos_cabi_async_fs_result_read,
-        trueos_cabi_async_fs_stat_start, trueos_cabi_async_fs_status,
-        trueos_cabi_async_fs_write_begin, trueos_cabi_async_fs_write_chunk,
-        trueos_cabi_async_fs_write_commit,
+        trueos_cabi_async_fs_rename_start, trueos_cabi_async_fs_result_len,
+        trueos_cabi_async_fs_result_read, trueos_cabi_async_fs_stat_start,
+        trueos_cabi_async_fs_status, trueos_cabi_async_fs_write_begin,
+        trueos_cabi_async_fs_write_chunk, trueos_cabi_async_fs_write_commit,
     };
     pub use super::calculator_cabi::*;
     pub use super::fs_cabi::*;

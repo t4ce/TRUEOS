@@ -109,7 +109,7 @@ fn run_blocking_job_entry(entry: BlockingJobEntry) {
     if let Some(vm_id) = vm_id {
         crate::log_os::log_with_area_purpose(
             crate::log_os::flags::LogArea::Blueprint,
-            log::Level::Info,
+            log_os_core::LogLevel::Info,
             Some("multi-rt-alloc"),
             format_args!(
                 "guest service job begin id={} vm={} purpose={} alloc_domain=hv-guest\n",
@@ -137,7 +137,7 @@ fn run_blocking_job_entry(entry: BlockingJobEntry) {
         );
         crate::log_os::log_with_area_purpose(
             crate::log_os::flags::LogArea::Blueprint,
-            log::Level::Info,
+            log_os_core::LogLevel::Info,
             Some("multi-rt-alloc"),
             format_args!("guest service job done id={} vm={} purpose={}\n", id, vm_id, purpose),
         );

@@ -1,15 +1,18 @@
 #![no_std]
 
+#[cfg(test)]
+extern crate std;
+
 pub mod flags;
 pub mod global;
 
 pub use flags::{
-    DEFAULT_AREA_LOG_POLICY, LogArea, LogAreaSet, LogLevelPolicy, LogLevelSet, area_tag,
-    default_area_log_policy, level_enabled, module_path_log_area, target_log_area,
-    threshold_down_set, threshold_up_set,
+    DEFAULT_AREA_LOG_POLICY, LogArea, LogAreaSet, LogLevel, LogLevelFilter, LogLevelPolicy,
+    LogLevelSet, area_tag, default_area_log_policy, level_enabled, module_path_log_area,
+    target_log_area, threshold_down_set, threshold_up_set,
 };
 pub use global::{
-    GlobalLogDispatch, GlobalLogFacade, GlobalLogRouter, GlobalLogSink, GlobalLogSinkSpec, log,
-    log_with_area_level, log_with_area_purpose, log_with_target_level, log_with_target_purpose,
-    metadata_log_area, purpose_for_level, record_log_area,
+    GlobalLogDispatch, GlobalLogRouter, GlobalLogSink, GlobalLogSinkSpec, LogOnceObservation,
+    LogOnceState, LogSiteId, log, log_once_with_area_purpose, log_with_area_level,
+    log_with_area_purpose, log_with_target_level, log_with_target_purpose, purpose_for_level,
 };

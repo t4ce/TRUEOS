@@ -119,7 +119,7 @@ pub fn probe_dma_latency() -> u64 {
         let now = crate::gui::engine::now_us();
         if now - start_us > timeout_us {
             let _ = hda::stop();
-            log::info!("sync: DMA probe timeout (200ms)");
+            crate::log!("sync: DMA probe timeout (200ms)\n");
             return 0;
         }
 
@@ -128,8 +128,8 @@ pub fn probe_dma_latency() -> u64 {
             let latency = now - start_us;
             let _ = hda::stop();
             DMA_LATENCY_US.store(latency, Ordering::SeqCst);
-            log::info!(
-                "sync: DMA probe: click at byte {} reached after {} µs ({} ms)",
+            crate::log!(
+                "sync: DMA probe: click at byte {} reached after {} µs ({} ms)\n",
                 click_byte_offset,
                 latency,
                 latency / 1000
@@ -180,8 +180,8 @@ pub fn start_session() {
     SESSION_START_US.store(now, Ordering::SeqCst);
     LAST_BEAT_US.store(0, Ordering::SeqCst);
 
-    log::info!(
-        "sync: Metronome calibration started ({} BPM, {} taps needed)",
+    crate::log!(
+        "sync: Metronome calibration started ({} BPM, {} taps needed)\n",
         METRONOME_BPM,
         TAP_SAMPLES_NEEDED
     );
@@ -196,7 +196,7 @@ pub fn start_session() {
 pub fn cancel_session() {
     SYNC_ACTIVE.store(false, Ordering::SeqCst);
     let _ = crate::hda::stop();
-    log::info!("sync: Calibration cancelled");
+    crate::log!("sync: Calibration cancelled\n");
 }
 
 /// Must be called each frame while a session is active.
@@ -258,8 +258,8 @@ pub fn record_tap(tap_us: u64) {
     }
 
     let count = TAP_COUNT.fetch_add(1, Ordering::SeqCst) + 1;
-    log::info!(
-        "sync: Tap {}/{}: delta = {} µs ({} ms)",
+    crate::log!(
+        "sync: Tap {}/{}: delta = {} µs ({} ms)\n",
         count,
         TAP_SAMPLES_NEEDED,
         delta_us,
@@ -292,7 +292,7 @@ fn finish_session() {
     };
 
     if deltas.is_empty() {
-        log::info!("sync: No taps recorded");
+        crate::log!("sync: No taps recorded\n");
         return;
     }
 
@@ -333,18 +333,18 @@ fn finish_session() {
     COMPUTED_OFFSET_MS.store(offset_ms, Ordering::SeqCst);
     RESULT_READY.store(true, Ordering::SeqCst);
 
-    log::info!("sync: ---- Calibration Results ----");
-    log::info!("sync:   Taps collected: {}", sorted.len());
-    log::info!("sync:   Median tap delta: {} ms", median_us / 1000);
-    log::info!("sync:   Mean tap delta:   {} ms", mean_us / 1000);
-    log::info!("sync:   Std deviation:    {} ms", stddev_ms);
-    log::info!("sync:   Human reaction:  -{} ms (subtracted)", human_reaction_us / 1000);
-    log::info!("sync:   Computed A/V offset: {} ms", offset_ms);
+    crate::log!("sync: ---- Calibration Results ----\n");
+    crate::log!("sync:   Taps collected: {}\n", sorted.len());
+    crate::log!("sync:   Median tap delta: {} ms\n", median_us / 1000);
+    crate::log!("sync:   Mean tap delta:   {} ms\n", mean_us / 1000);
+    crate::log!("sync:   Std deviation:    {} ms\n", stddev_ms);
+    crate::log!("sync:   Human reaction:  -{} ms (subtracted)\n", human_reaction_us / 1000);
+    crate::log!("sync:   Computed A/V offset: {} ms\n", offset_ms);
 
     // DMA latency for reference
     let dma_us = DMA_LATENCY_US.load(Ordering::SeqCst);
     if dma_us > 0 {
-        log::info!("sync:   DMA pipeline:    {} ms (measured)", dma_us / 1000);
+        crate::log!("sync:   DMA pipeline:    {} ms (measured)\n", dma_us / 1000);
     }
 }
 

@@ -1,4 +1,25 @@
-use log::{Level, LevelFilter};
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum LogLevel {
+    Error,
+    Important,
+    Warn,
+    Once,
+    Info,
+    Debug,
+    Trace,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum LogLevelFilter {
+    Off,
+    Error,
+    Important,
+    Warn,
+    Once,
+    Info,
+    Debug,
+    Trace,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LogArea {
@@ -110,33 +131,36 @@ pub struct LogLevelSet(u8);
 impl LogLevelSet {
     pub const NONE: Self = Self(0);
     pub const ERROR: Self = Self(1 << 0);
-    pub const WARN: Self = Self(1 << 1);
-    pub const INFO: Self = Self(1 << 2);
-    pub const DEBUG: Self = Self(1 << 3);
-    pub const TRACE: Self = Self(1 << 4);
+    pub const IMPORTANT: Self = Self(1 << 1);
+    pub const WARN: Self = Self(1 << 2);
+    pub const ONCE: Self = Self(1 << 3);
+    pub const INFO: Self = Self(1 << 4);
+    pub const DEBUG: Self = Self(1 << 5);
+    pub const TRACE: Self = Self(1 << 6);
+    pub const ALL: Self = Self((1 << 7) - 1);
 
     pub const fn union(self, other: Self) -> Self {
         Self(self.0 | other.0)
     }
 
-    pub const fn contains(self, level: Level) -> bool {
+    pub const fn contains(self, level: LogLevel) -> bool {
         (self.0 & level_bit(level).0) != 0
     }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LogLevelPolicy {
-    Up(LevelFilter),
-    Down(LevelFilter),
+    Up(LogLevelFilter),
+    Down(LogLevelFilter),
     Only(LogLevelSet),
 }
 
 impl LogLevelPolicy {
-    pub const fn up(level: LevelFilter) -> Self {
+    pub const fn up(level: LogLevelFilter) -> Self {
         Self::Up(level)
     }
 
-    pub const fn down(level: LevelFilter) -> Self {
+    pub const fn down(level: LogLevelFilter) -> Self {
         Self::Down(level)
     }
 
@@ -145,7 +169,7 @@ impl LogLevelPolicy {
     }
 }
 
-pub const DEFAULT_AREA_LOG_POLICY: LogLevelPolicy = LogLevelPolicy::up(LevelFilter::Info);
+pub const DEFAULT_AREA_LOG_POLICY: LogLevelPolicy = LogLevelPolicy::up(LogLevelFilter::Info);
 
 pub const fn default_area_log_policy(_area: LogArea) -> LogLevelPolicy {
     DEFAULT_AREA_LOG_POLICY
@@ -155,49 +179,69 @@ pub const fn area_tag(area: LogArea) -> &'static str {
     area.tag()
 }
 
-const fn level_bit(level: Level) -> LogLevelSet {
+const fn level_bit(level: LogLevel) -> LogLevelSet {
     match level {
-        Level::Error => LogLevelSet::ERROR,
-        Level::Warn => LogLevelSet::WARN,
-        Level::Info => LogLevelSet::INFO,
-        Level::Debug => LogLevelSet::DEBUG,
-        Level::Trace => LogLevelSet::TRACE,
+        LogLevel::Error => LogLevelSet::ERROR,
+        LogLevel::Important => LogLevelSet::IMPORTANT,
+        LogLevel::Warn => LogLevelSet::WARN,
+        LogLevel::Once => LogLevelSet::ONCE,
+        LogLevel::Info => LogLevelSet::INFO,
+        LogLevel::Debug => LogLevelSet::DEBUG,
+        LogLevel::Trace => LogLevelSet::TRACE,
     }
 }
 
-pub const fn threshold_up_set(filter: LevelFilter) -> LogLevelSet {
+pub const fn threshold_up_set(filter: LogLevelFilter) -> LogLevelSet {
     match filter {
-        LevelFilter::Off => LogLevelSet::NONE,
-        LevelFilter::Error => LogLevelSet::ERROR,
-        LevelFilter::Warn => LogLevelSet::ERROR.union(LogLevelSet::WARN),
-        LevelFilter::Info => LogLevelSet::ERROR
+        LogLevelFilter::Off => LogLevelSet::NONE,
+        LogLevelFilter::Error => LogLevelSet::ERROR,
+        LogLevelFilter::Important => LogLevelSet::ERROR.union(LogLevelSet::IMPORTANT),
+        LogLevelFilter::Warn => LogLevelSet::ERROR
+            .union(LogLevelSet::IMPORTANT)
+            .union(LogLevelSet::WARN),
+        LogLevelFilter::Once => LogLevelSet::ERROR
+            .union(LogLevelSet::IMPORTANT)
             .union(LogLevelSet::WARN)
+            .union(LogLevelSet::ONCE),
+        LogLevelFilter::Info => LogLevelSet::ERROR
+            .union(LogLevelSet::IMPORTANT)
+            .union(LogLevelSet::WARN)
+            .union(LogLevelSet::ONCE)
             .union(LogLevelSet::INFO),
-        LevelFilter::Debug => LogLevelSet::ERROR
+        LogLevelFilter::Debug => LogLevelSet::ERROR
+            .union(LogLevelSet::IMPORTANT)
             .union(LogLevelSet::WARN)
+            .union(LogLevelSet::ONCE)
             .union(LogLevelSet::INFO)
             .union(LogLevelSet::DEBUG),
-        LevelFilter::Trace => LogLevelSet::ERROR
-            .union(LogLevelSet::WARN)
-            .union(LogLevelSet::INFO)
-            .union(LogLevelSet::DEBUG)
-            .union(LogLevelSet::TRACE),
+        LogLevelFilter::Trace => LogLevelSet::ALL,
     }
 }
 
-pub const fn threshold_down_set(filter: LevelFilter) -> LogLevelSet {
+pub const fn threshold_down_set(filter: LogLevelFilter) -> LogLevelSet {
     match filter {
-        LevelFilter::Off => LogLevelSet::NONE,
-        LevelFilter::Error => threshold_up_set(LevelFilter::Trace),
-        LevelFilter::Warn => LogLevelSet::WARN
+        LogLevelFilter::Off => LogLevelSet::NONE,
+        LogLevelFilter::Error => LogLevelSet::ALL,
+        LogLevelFilter::Important => LogLevelSet::IMPORTANT
+            .union(LogLevelSet::WARN)
+            .union(LogLevelSet::ONCE)
             .union(LogLevelSet::INFO)
             .union(LogLevelSet::DEBUG)
             .union(LogLevelSet::TRACE),
-        LevelFilter::Info => LogLevelSet::INFO
+        LogLevelFilter::Warn => LogLevelSet::WARN
+            .union(LogLevelSet::ONCE)
+            .union(LogLevelSet::INFO)
             .union(LogLevelSet::DEBUG)
             .union(LogLevelSet::TRACE),
-        LevelFilter::Debug => LogLevelSet::DEBUG.union(LogLevelSet::TRACE),
-        LevelFilter::Trace => LogLevelSet::TRACE,
+        LogLevelFilter::Once => LogLevelSet::ONCE
+            .union(LogLevelSet::INFO)
+            .union(LogLevelSet::DEBUG)
+            .union(LogLevelSet::TRACE),
+        LogLevelFilter::Info => LogLevelSet::INFO
+            .union(LogLevelSet::DEBUG)
+            .union(LogLevelSet::TRACE),
+        LogLevelFilter::Debug => LogLevelSet::DEBUG.union(LogLevelSet::TRACE),
+        LogLevelFilter::Trace => LogLevelSet::TRACE,
     }
 }
 
@@ -291,7 +335,36 @@ fn path_prefix(path: &str, prefix: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{LogArea, module_path_log_area, target_log_area};
+    use super::{
+        LogArea, LogLevel, LogLevelFilter, LogLevelSet, module_path_log_area, target_log_area,
+        threshold_down_set, threshold_up_set,
+    };
+
+    #[test]
+    fn upward_thresholds_follow_native_level_order() {
+        let warn = threshold_up_set(LogLevelFilter::Warn);
+        assert!(warn.contains(LogLevel::Error));
+        assert!(warn.contains(LogLevel::Important));
+        assert!(warn.contains(LogLevel::Warn));
+        assert!(!warn.contains(LogLevel::Once));
+
+        let info = threshold_up_set(LogLevelFilter::Info);
+        assert!(info.contains(LogLevel::Once));
+        assert!(info.contains(LogLevel::Info));
+        assert!(!info.contains(LogLevel::Debug));
+        assert_eq!(threshold_up_set(LogLevelFilter::Trace), LogLevelSet::ALL);
+    }
+
+    #[test]
+    fn downward_thresholds_follow_native_level_order() {
+        let once = threshold_down_set(LogLevelFilter::Once);
+        assert!(!once.contains(LogLevel::Warn));
+        assert!(once.contains(LogLevel::Once));
+        assert!(once.contains(LogLevel::Info));
+        assert!(once.contains(LogLevel::Trace));
+        assert_eq!(threshold_down_set(LogLevelFilter::Error), LogLevelSet::ALL);
+        assert_eq!(threshold_down_set(LogLevelFilter::Off), LogLevelSet::NONE);
+    }
 
     #[test]
     fn routes_hypervisor_aliases_to_hv_area() {
@@ -329,7 +402,7 @@ mod tests {
     }
 }
 
-pub fn level_enabled(policy: LogLevelPolicy, level: Level) -> bool {
+pub fn level_enabled(policy: LogLevelPolicy, level: LogLevel) -> bool {
     match policy {
         LogLevelPolicy::Up(filter) => threshold_up_set(filter).contains(level),
         LogLevelPolicy::Down(filter) => threshold_down_set(filter).contains(level),

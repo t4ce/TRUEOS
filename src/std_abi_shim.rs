@@ -892,7 +892,7 @@ fn pthread_sync_probe_log() {
     {
         crate::log_os::log_with_area_purpose(
             crate::log_os::flags::LogArea::Blueprint,
-            log::Level::Info,
+            log_os_core::LogLevel::Info,
             Some("pthread-realm"),
             format_args!("mutex/cond shim using inline cross-realm object state\n"),
         );
@@ -904,7 +904,7 @@ fn pthread_sync_trace(op: &str, key: usize) {
     if seq < PTHREAD_SYNC_TRACE_LIMIT {
         crate::log_os::log_with_area_purpose(
             crate::log_os::flags::LogArea::Blueprint,
-            log::Level::Info,
+            log_os_core::LogLevel::Info,
             Some("pthread-realm"),
             format_args!(
                 "sync seq={} op={} key=0x{:x} owner={}\n",
@@ -927,7 +927,7 @@ fn pthread_create_trace(thread_id: usize, rc: c_int) {
         };
         crate::log_os::log_with_area_purpose(
             crate::log_os::flags::LogArea::Blueprint,
-            log::Level::Info,
+            log_os_core::LogLevel::Info,
             Some("pthread-realm"),
             format_args!(
                 "create seq={} thread={} origin={} local_seq={} rc={} owner={}\n",

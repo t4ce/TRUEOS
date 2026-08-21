@@ -4,6 +4,14 @@ use core::fmt::Write as _;
 
 use crate::vcabi;
 
+pub const LOG_LEVEL_ERROR: u32 = 1;
+pub const LOG_LEVEL_WARN: u32 = 2;
+pub const LOG_LEVEL_INFO: u32 = 3;
+pub const LOG_LEVEL_DEBUG: u32 = 4;
+pub const LOG_LEVEL_TRACE: u32 = 5;
+pub const LOG_LEVEL_IMPORTANT: u32 = 6;
+pub const LOG_LEVEL_ONCE: u32 = 7;
+
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConsoleStream {
@@ -60,6 +68,11 @@ pub fn write_stream(stream: u32, bytes: &[u8]) {
 }
 
 #[inline]
+/// Sends one structured log record through the runtime C ABI.
+///
+/// `LOG_LEVEL_ONCE` can be transported here, but this V1 API does not carry a
+/// stable callsite identifier. Callers must not assume that distinct guest
+/// callsites can yet be tracked independently by the host.
 pub fn log_record(level: u32, target: &str, message: &str) -> i32 {
     unsafe {
         vcabi::trueos_cabi_log(

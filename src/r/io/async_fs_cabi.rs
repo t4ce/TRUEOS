@@ -27,6 +27,7 @@ enum RequestKind {
     ListDir { path: String },
     ListMounts,
     Remove { path: String },
+    Rename { source: String, destination: String },
 }
 
 #[derive(Debug)]
@@ -282,6 +283,16 @@ pub(crate) fn start_remove(owner: u32, path: String) -> i32 {
     start(owner, RequestKind::Remove { path })
 }
 
+pub(crate) fn start_rename(owner: u32, source: String, destination: String) -> i32 {
+    start(
+        owner,
+        RequestKind::Rename {
+            source,
+            destination,
+        },
+    )
+}
+
 pub(crate) fn status(owner: u32, id: u32) -> i32 {
     let operations = ASYNC_FS_OPERATIONS.lock();
     let Some(operation) = operations
@@ -367,6 +378,28 @@ fn selected_disk(path: &str) -> Result<(crate::disc::block::DeviceHandle, &str),
         .ok_or(FS_ERR_NOT_FOUND)
 }
 
+/// Resolve a TRUEOSFS path as a file (`Some(true)`), directory
+/// (`Some(false)`), or missing (`None`). Directories are implicit in the log,
+/// with `.keep` representing an otherwise empty directory.
+async fn path_kind_async(
+    disk: crate::disc::block::DeviceHandle,
+    path: &str,
+) -> Result<Option<bool>, crate::disc::block::Error> {
+    if crate::r::fs::trueosfs::file_info_async(disk, path)
+        .await?
+        .is_some()
+    {
+        return Ok(Some(true));
+    }
+    let marker = alloc::format!("{}/.keep", path.trim_end_matches('/'));
+    if crate::r::fs::trueosfs::file_exists_async(disk, marker.as_str()).await?
+        || crate::r::fs::trueosfs::dir_has_children_async(disk, path).await?
+    {
+        return Ok(Some(false));
+    }
+    Ok(None)
+}
+
 fn mounted_roots_text() -> String {
     use core::fmt::Write as _;
 
@@ -401,6 +434,56 @@ async fn process(request: &Request) -> OperationState {
     if matches!(request.kind, RequestKind::ListMounts) {
         return OperationState::Read(mounted_roots_text().into_bytes());
     }
+    if let RequestKind::Rename {
+        source,
+        destination,
+    } = &request.kind
+    {
+        let (source_disk, source_path) = match selected_disk(source) {
+            Ok(selected) => selected,
+            Err(code) => return OperationState::Failed(code),
+        };
+        let (destination_disk, destination_path) = match selected_disk(destination) {
+            Ok(selected) => selected,
+            Err(code) => return OperationState::Failed(code),
+        };
+        if source_disk.id() != destination_disk.id() {
+            return OperationState::Failed(FS_ERR_BAD_PATH);
+        }
+        if source_path.is_empty() || destination_path.is_empty() {
+            return OperationState::Failed(FS_ERR_BAD_PATH);
+        }
+        if source_path == destination_path {
+            return OperationState::Unit;
+        }
+        match path_kind_async(destination_disk, destination_path).await {
+            Ok(Some(_)) => return OperationState::Failed(FS_ERR_ALREADY_EXISTS),
+            Ok(None) => {}
+            Err(error) => return OperationState::Failed(map_block_error(error)),
+        }
+
+        let result = match path_kind_async(source_disk, source_path).await {
+            Ok(Some(true)) => {
+                crate::r::fs::trueosfs::file_rename_async(
+                    source_disk,
+                    source_path,
+                    destination_path,
+                )
+                .await
+            }
+            Ok(Some(false)) => {
+                crate::r::fs::trueosfs::dir_rename_async(source_disk, source_path, destination_path)
+                    .await
+            }
+            Ok(None) => return OperationState::Failed(FS_ERR_NOT_FOUND),
+            Err(error) => return OperationState::Failed(map_block_error(error)),
+        };
+        return match result {
+            Ok(true) => OperationState::Unit,
+            Ok(false) => OperationState::Failed(FS_ERR_NOT_FOUND),
+            Err(error) => OperationState::Failed(map_block_error(error)),
+        };
+    }
     let path = match &request.kind {
         RequestKind::Read { path }
         | RequestKind::Write { path, .. }
@@ -409,7 +492,7 @@ async fn process(request: &Request) -> OperationState {
         | RequestKind::RecordKey { path }
         | RequestKind::ListDir { path }
         | RequestKind::Remove { path } => path.as_str(),
-        RequestKind::ListMounts => unreachable!(),
+        RequestKind::ListMounts | RequestKind::Rename { .. } => unreachable!(),
     };
     let (disk, selected_path) = match selected_disk(path) {
         Ok(selected) => selected,
@@ -547,6 +630,7 @@ async fn process(request: &Request) -> OperationState {
             }
         }
         RequestKind::ListMounts => unreachable!(),
+        RequestKind::Rename { .. } => unreachable!(),
     }
 }
 
@@ -609,6 +693,34 @@ fn guest_write_begin(path: &str, total_len: usize) -> i32 {
         total_len as u64,
         0,
         path.as_bytes(),
+        &mut [],
+    );
+    if status == trueos_vm::vmcall::STATUS_OK {
+        (value as i64) as i32
+    } else {
+        FS_ERR_BAD_PARAM
+    }
+}
+
+fn guest_rename_start(source: &str, destination: &str) -> i32 {
+    let Some(payload_len) = 4usize
+        .checked_add(source.len())
+        .and_then(|len| len.checked_add(destination.len()))
+    else {
+        return FS_ERR_TOO_LARGE;
+    };
+    if payload_len > trueos_vm::vmcall::PAYLOAD_CAP || source.len() > u32::MAX as usize {
+        return FS_ERR_TOO_LARGE;
+    }
+    let mut payload = Vec::with_capacity(payload_len);
+    payload.extend_from_slice(&(source.len() as u32).to_le_bytes());
+    payload.extend_from_slice(source.as_bytes());
+    payload.extend_from_slice(destination.as_bytes());
+    let (status, value) = trueos_vm::vmcall::call_with_payload(
+        trueos_vm::vmcall::OP_BP_ASYNC_FS_RENAME_START,
+        0,
+        0,
+        payload.as_slice(),
         &mut [],
     );
     if status == trueos_vm::vmcall::STATUS_OK {
@@ -826,6 +938,28 @@ pub unsafe extern "C" fn trueos_cabi_async_fs_remove_start(
         guest_start(trueos_vm::vmcall::OP_BP_ASYNC_FS_REMOVE_START, path.as_str())
     } else {
         start_remove(direct_owner(), path)
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_async_fs_rename_start(
+    source_ptr: *const u8,
+    source_len: usize,
+    destination_ptr: *const u8,
+    destination_len: usize,
+) -> i32 {
+    let source = match parse_path(source_ptr, source_len, false) {
+        Ok(path) => path,
+        Err(code) => return code,
+    };
+    let destination = match parse_path(destination_ptr, destination_len, false) {
+        Ok(path) => path,
+        Err(code) => return code,
+    };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        guest_rename_start(source.as_str(), destination.as_str())
+    } else {
+        start_rename(direct_owner(), source, destination)
     }
 }
 

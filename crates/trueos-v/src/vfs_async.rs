@@ -12,6 +12,7 @@ pub const ERR_BAD_UTF8: i32 = -1;
 pub const ERR_IO: i32 = -2;
 pub const ERR_BAD_PARAM: i32 = -4;
 pub const ERR_NOT_FOUND: i32 = -8;
+pub const ERR_ALREADY_EXISTS: i32 = -9;
 
 const READ_CHUNK_BYTES: usize = 64 * 1024;
 const WRITE_CHUNK_BYTES: usize = 64 * 1024;
@@ -370,6 +371,24 @@ pub async fn exists(path: &[u8]) -> Result<bool, i32> {
 pub async fn remove(path: &[u8]) -> Result<(), i32> {
     let mut operation = Operation::from_start(unsafe {
         vcabi::trueos_cabi_async_fs_remove_start(path.as_ptr(), path.len())
+    })?;
+    operation.ready().await?;
+    operation.discard();
+    Ok(())
+}
+
+/// Rename a file or a directory tree through the kernel's native TRUEOSFS service.
+///
+/// Source and destination must resolve to the same mounted TRUEOSFS root. The
+/// operation never overwrites an existing destination.
+pub async fn rename(source: &[u8], destination: &[u8]) -> Result<(), i32> {
+    let mut operation = Operation::from_start(unsafe {
+        vcabi::trueos_cabi_async_fs_rename_start(
+            source.as_ptr(),
+            source.len(),
+            destination.as_ptr(),
+            destination.len(),
+        )
     })?;
     operation.ready().await?;
     operation.discard();

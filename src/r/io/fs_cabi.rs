@@ -9,6 +9,7 @@ use core::{
     fmt,
     sync::atomic::{AtomicU32, Ordering},
 };
+use log_os_core::LogLevel;
 
 #[repr(u32)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -48,18 +49,20 @@ fn current_cpu_key() -> u32 {
     super::runtime_context_key()
 }
 
-fn level_from_tag(level: &str) -> Option<log::Level> {
+fn level_from_tag(level: &str) -> Option<LogLevel> {
     match level {
-        "ERROR" => Some(log::Level::Error),
-        "WARN" => Some(log::Level::Warn),
-        "INFO" => Some(log::Level::Info),
-        "DEBUG" => Some(log::Level::Debug),
-        "TRACE" => Some(log::Level::Trace),
+        "ERROR" => Some(LogLevel::Error),
+        "IMPORTANT" => Some(LogLevel::Important),
+        "WARN" => Some(LogLevel::Warn),
+        "ONCE" => Some(LogLevel::Once),
+        "INFO" => Some(LogLevel::Info),
+        "DEBUG" => Some(LogLevel::Debug),
+        "TRACE" => Some(LogLevel::Trace),
         _ => None,
     }
 }
 
-fn parse_structured_guest_log(line: &str) -> Option<(&str, log::Level, &str)> {
+fn parse_structured_guest_log(line: &str) -> Option<(&str, LogLevel, &str)> {
     let rest = line.strip_prefix('[')?;
     let end = rest.find(']')?;
     let header = &rest[..end];
@@ -73,7 +76,7 @@ fn parse_structured_guest_log(line: &str) -> Option<(&str, log::Level, &str)> {
     Some((source, level, message))
 }
 
-fn emit_guest_log_line(source: &str, level: log::Level, message: &str) {
+fn emit_guest_log_line(source: &str, level: LogLevel, message: &str) {
     crate::log_os::log_with_area_purpose(
         crate::log_os::flags::LogArea::Blueprint,
         level,
@@ -82,18 +85,18 @@ fn emit_guest_log_line(source: &str, level: log::Level, message: &str) {
     );
 }
 
-fn plain_stream_level(stream: ConsoleStream, line: &str) -> log::Level {
+fn plain_stream_level(stream: ConsoleStream, line: &str) -> LogLevel {
     if stream != ConsoleStream::Err {
-        return log::Level::Info;
+        return LogLevel::Info;
     }
 
     let line = line.trim_start();
     if line.starts_with("error[") || line.starts_with("error:") {
-        log::Level::Error
+        LogLevel::Error
     } else if line.starts_with("warning[") || line.starts_with("warning:") {
-        log::Level::Warn
+        LogLevel::Warn
     } else {
-        log::Level::Info
+        LogLevel::Info
     }
 }
 
@@ -239,11 +242,13 @@ pub unsafe extern "C" fn trueos_cabi_log(
     message_len: usize,
 ) -> i32 {
     let level = match level_code {
-        1 => log::Level::Error,
-        2 => log::Level::Warn,
-        3 => log::Level::Info,
-        4 => log::Level::Debug,
-        5 => log::Level::Trace,
+        trueos_vm::vmcall::BP_LOG_LEVEL_ERROR => LogLevel::Error,
+        trueos_vm::vmcall::BP_LOG_LEVEL_WARN => LogLevel::Warn,
+        trueos_vm::vmcall::BP_LOG_LEVEL_INFO => LogLevel::Info,
+        trueos_vm::vmcall::BP_LOG_LEVEL_DEBUG => LogLevel::Debug,
+        trueos_vm::vmcall::BP_LOG_LEVEL_TRACE => LogLevel::Trace,
+        trueos_vm::vmcall::BP_LOG_LEVEL_IMPORTANT => LogLevel::Important,
+        trueos_vm::vmcall::BP_LOG_LEVEL_ONCE => LogLevel::Once,
         _ => return -1,
     };
     if target_ptr.is_null()

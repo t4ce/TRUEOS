@@ -101,6 +101,7 @@ pub const OP_BP_ASYNC_FS_CREATE_DIR_ALL_START: u32 = 0xD8;
 pub const OP_BP_ASYNC_FS_STAT_START: u32 = 0xD9;
 pub const OP_BP_ASYNC_FS_LIST_DIR_START: u32 = 0xDA;
 pub const OP_BP_ASYNC_FS_LIST_MOUNTS_START: u32 = 0x139;
+pub const OP_BP_ASYNC_FS_RENAME_START: u32 = 0x13A;
 pub const OP_BP_UI4_SCENE_KEYBOARD_STATE: u32 = 0xDB;
 pub const OP_BP_UI4_SCENE_FRAME_SET_HIT_TESTABLE: u32 = 0x123;
 pub const OP_BP_VMEDIA_IMAGE_DECODE_BEGIN: u32 = 0x12D;
@@ -115,6 +116,19 @@ pub const OP_BP_TERMINAL_LEASE_RELEASE_V1: u32 = 0x135;
 pub const OP_BP_TERMINAL_LEASE_POLL_REENTRY_V1: u32 = 0x136;
 pub const OP_BP_TERMINAL_SURFACE_SNAPSHOT_V1: u32 = 0x137;
 pub const OP_BP_LOG_RECORD_V1: u32 = 0x138;
+/// Structured Blueprint log levels carried in `OP_BP_LOG_RECORD_V1.arg0`.
+///
+/// Values 1 through 5 are the original wire ABI and must not be renumbered.
+/// V1 carries only the level, target, and message, so `ONCE` does not include
+/// a stable guest callsite identifier; a future protocol revision is required
+/// for host-side once tracking across distinct guest callsites.
+pub const BP_LOG_LEVEL_ERROR: u32 = v::vsys::LOG_LEVEL_ERROR;
+pub const BP_LOG_LEVEL_WARN: u32 = v::vsys::LOG_LEVEL_WARN;
+pub const BP_LOG_LEVEL_INFO: u32 = v::vsys::LOG_LEVEL_INFO;
+pub const BP_LOG_LEVEL_DEBUG: u32 = v::vsys::LOG_LEVEL_DEBUG;
+pub const BP_LOG_LEVEL_TRACE: u32 = v::vsys::LOG_LEVEL_TRACE;
+pub const BP_LOG_LEVEL_IMPORTANT: u32 = v::vsys::LOG_LEVEL_IMPORTANT;
+pub const BP_LOG_LEVEL_ONCE: u32 = v::vsys::LOG_LEVEL_ONCE;
 pub const OP_BP_UI4_SCENE_FRAME_OPEN_IMMUTABLE: u32 = 0xDC;
 pub const OP_BP_UI4_SCENE_SPRITE_UPLOAD_BEGIN: u32 = 0xDD;
 pub const OP_BP_UI4_SCENE_SPRITE_UPLOAD_CHUNK: u32 = 0xDE;

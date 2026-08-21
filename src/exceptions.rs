@@ -233,7 +233,7 @@ fn log_fault_alloc_trace() {
     );
     crate::log_os::log_with_area_purpose(
         crate::log_os::flags::LogArea::Global,
-        log::Level::Info,
+        log_os_core::LogLevel::Info,
         Some("info"),
         format_args!(
             "alloc-trace: seq={} caller=0x{:016X} caller1=0x{:016X} caller2=0x{:016X} size={} align={} stage={} head=0x{:016X} block=0x{:016X} block_size={} next=0x{:016X} payload=0x{:016X} aligned_used={}\n",
