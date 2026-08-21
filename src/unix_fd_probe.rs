@@ -1,7 +1,7 @@
 use core::arch::x86_64::_rdtsc;
 use core::ffi::{c_char, c_void};
 
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use trueos_time::{Duration as EmbassyDuration, Timer};
 
 const PROBE_PATH: &[u8] = b"unix-fd-probe.bin\0";
 const PROBE_PATH_STR: &str = "unix-fd-probe.bin";
@@ -746,7 +746,7 @@ async fn run_once() -> bool {
     ok
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub async fn unix_fd_probe_task() {
     Timer::after(EmbassyDuration::from_secs(15)).await;
 

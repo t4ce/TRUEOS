@@ -1,7 +1,7 @@
 use alloc::boxed::Box;
 use alloc::string::String;
 use core::sync::atomic::{AtomicU32, Ordering};
-use embassy_executor::{SendSpawner, Spawner};
+use trueos_executor::{SendSpawner, Spawner};
 
 use super::{
     MatrixTarget, ShellBackend2, matrix_target_for_backend, print_matrix_target_system_line,
@@ -88,7 +88,7 @@ fn solara_surf_launch_script(tag: &str, source_url: &str) -> Result<String, &'st
     Ok(alloc::format!("{SOLARA_SURF_LAUNCH_HEADER}\n{tag}\n{source_url}"))
 }
 
-#[embassy_executor::task(pool_size = 4)]
+#[trueos_executor::task(pool_size = 4)]
 async fn launch_solara_task(target: MatrixTarget, html: html_shack::Html) {
     let tag = match persist_solara_handoff(&html).await {
         Ok(tag) => tag,

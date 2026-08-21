@@ -10,7 +10,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use chacha20poly1305::aead::{AeadInPlace, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Nonce};
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use trueos_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 use zeroize::Zeroizing;
 
@@ -190,7 +190,7 @@ async fn flush_once() {
     }
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub(crate) async fn writer_task() {
     crate::log_info!(target: "service"; "user-input-record: writer online default=off auth=cry-2fa encryption=chacha20-poly1305\n");
     loop {

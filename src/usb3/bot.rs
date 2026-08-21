@@ -3,7 +3,7 @@
 use super::xhci::{self, Trb, TrbRing, XhciContext, hi, lo, trb_type};
 use core::ptr::{write_bytes, write_volatile};
 use dma_api::{DArray, DeviceDma, DmaDirection};
-use embassy_time::Duration as EmbassyDuration;
+use trueos_time::Duration as EmbassyDuration;
 
 const CBW_SIGNATURE: u32 = 0x4342_5355; // 'USBC'
 const CSW_SIGNATURE: u32 = 0x5342_5355; // 'USBS'

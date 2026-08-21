@@ -34,7 +34,7 @@ pub(crate) unsafe fn from_task(p: TaskRef) -> Waker {
 pub fn task_from_waker(waker: &Waker) -> TaskRef {
     unwrap!(
         try_task_from_waker(waker),
-        "Found waker not created by the Embassy executor. Unless the generic timer queue is enabled, `embassy_time::Timer` only works with the Embassy executor."
+        "Found waker not created by the TRUEOS executor. Unless the generic timer queue is enabled, `trueos_time::Timer` only works with the TRUEOS executor."
     )
 }
 

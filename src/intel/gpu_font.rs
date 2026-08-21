@@ -11,7 +11,7 @@
 use alloc::{boxed::Box, string::String, sync::Arc, vec::Vec};
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use embassy_time::Instant;
+use trueos_time::Instant;
 use spin::Mutex;
 
 use crate::graphics::font::{FontTesselMesh, FontTesselSummary};

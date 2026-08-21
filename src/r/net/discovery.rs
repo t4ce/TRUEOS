@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 
-use embassy_time::{Duration, Timer};
+use trueos_time::{Duration, Timer};
 
 use super::VNet;
 
@@ -27,7 +27,7 @@ fn relay_discovery_packet(
     });
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub async fn lan_discovery_task() {
     crate::r::readiness::wait_for(crate::r::readiness::NET_ANY_CONFIGURED).await;
 

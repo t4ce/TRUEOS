@@ -7,7 +7,7 @@
 use alloc::{collections::VecDeque, sync::Arc, vec::Vec};
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use embassy_time::{Duration, Instant, Timer};
+use trueos_time::{Duration, Instant, Timer};
 use spin::Mutex;
 
 use crate::r::net::{
@@ -488,7 +488,7 @@ where
         prefill_us,
     );
 
-    let mut cadence = FractionalCadenceTicks::new(embassy_time::TICK_HZ, target_hz);
+    let mut cadence = FractionalCadenceTicks::new(trueos_time::TICK_HZ, target_hz);
     let started_ns = crate::chronos::monotonic_nanos();
     mark_egress_cadence_started(session_id, started_ns);
     let mut next_deadline = Instant::now();
@@ -558,7 +558,7 @@ where
     report
 }
 
-#[embassy_executor::task(pool_size = 1)]
+#[trueos_executor::task(pool_size = 1)]
 pub(crate) async fn ui4_h264_encode_udp_egress_task(assigned_slot: u32) {
     let worker = crate::cpu::CpuProfile::current();
     let worker_slot = worker.map(|profile| profile.slot()).unwrap_or(u32::MAX);

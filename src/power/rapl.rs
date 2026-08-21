@@ -2,7 +2,7 @@ use alloc::{string::String, vec::Vec};
 use core::fmt::Write;
 
 use embassy_sync::watch::{Receiver as WatchReceiver, Watch};
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use trueos_time::{Duration as EmbassyDuration, Timer};
 use raw_cpuid::CpuId;
 use spin::{Mutex, Once};
 use x86_64::registers::model_specific::Msr;
@@ -313,7 +313,7 @@ pub unsafe fn log_local_probe() -> bool {
     true
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub async fn raple_service() {
     if crate::intel::is_emulator_environment() {
         crate::log_warn!(

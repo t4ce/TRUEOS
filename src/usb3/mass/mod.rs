@@ -1,7 +1,7 @@
 use alloc::string::String;
 use core::{future::Future, task::Poll};
 use crab_usb::{err::TransferError, usb_if};
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use trueos_time::{Duration as EmbassyDuration, Timer};
 use usb_if::host::ControlSetup;
 
 mod bot;

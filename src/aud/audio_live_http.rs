@@ -2,7 +2,7 @@ extern crate alloc;
 
 use alloc::{collections::VecDeque, format, vec::Vec};
 
-use embassy_time::{Duration, Instant, Timer};
+use trueos_time::{Duration, Instant, Timer};
 use embedded_websocket::{
     WebSocketKey, WebSocketReceiveMessageType, WebSocketSendMessageType, WebSocketServer,
 };
@@ -915,7 +915,7 @@ fn prune_idle_sessions(endpoint: &mut AudioHttpEndpoint, mixer: &mut VoiceMixer)
     }
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub async fn tinyaudio_live_http_task() {
     let mut endpoints: Vec<AudioHttpEndpoint> = Vec::new();
     let mut mixer = VoiceMixer::new();

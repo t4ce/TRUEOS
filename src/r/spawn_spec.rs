@@ -1,6 +1,6 @@
 use core::sync::atomic::AtomicBool;
 
-use embassy_executor::{SpawnError, Spawner};
+use trueos_executor::{SpawnError, Spawner};
 
 fn task_gate_always() -> bool {
     true

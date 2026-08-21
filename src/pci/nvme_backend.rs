@@ -6,7 +6,7 @@ use core::{
     },
 };
 
-use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
+use trueos_time::{Duration as EmbassyDuration, Instant, Timer};
 
 use crate::{disc::block, dma, wait};
 

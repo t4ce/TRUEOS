@@ -1,6 +1,6 @@
 use alloc::string::String as AllocString;
 
-use embassy_executor::Spawner;
+use trueos_executor::Spawner;
 
 use super::ShellBackend2;
 use super::shell2_cmd::ParseOutcome;

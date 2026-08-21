@@ -1,7 +1,7 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use embassy_sync::watch::Watch;
-use embassy_time::{Duration as EmbassyDuration, with_timeout};
+use trueos_time::{Duration as EmbassyDuration, with_timeout};
 
 // V-layer readiness flags.
 //

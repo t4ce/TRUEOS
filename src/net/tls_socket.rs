@@ -9,8 +9,8 @@ use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use core::task::{Context, Poll};
 
 use atomic_waker::AtomicWaker;
-use embassy_executor::task;
-use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
+use trueos_executor::task;
+use trueos_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
 
 use v::vnet;

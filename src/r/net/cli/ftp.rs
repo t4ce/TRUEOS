@@ -3,7 +3,7 @@ extern crate alloc;
 use alloc::{format, string::String, vec::Vec};
 use core::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 
-use embassy_time::{Duration, Instant, Timer};
+use trueos_time::{Duration, Instant, Timer};
 use v::vnet::{Command, EndpointV4, Event, NetHandle, SocketKind};
 
 use crate::r::net::dns::{self, DnsConfig};
@@ -566,7 +566,7 @@ pub fn ftp_server_port() -> u16 {
     ports::FTP_SERVER_PORT
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub async fn ftp_server_task() {
     if FTP_SERVER_STARTED.swap(true, Ordering::SeqCst) {
         return;

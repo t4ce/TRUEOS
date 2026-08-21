@@ -1,6 +1,6 @@
 use alloc::string::String;
-use embassy_executor::Spawner;
-use embassy_time::{Duration as EmbassyDuration, Timer, with_timeout};
+use trueos_executor::Spawner;
+use trueos_time::{Duration as EmbassyDuration, Timer, with_timeout};
 
 use super::super::{
     MatrixTarget, ShellBackend2, print_matrix_target_line, print_shell_line,
@@ -94,7 +94,7 @@ fn submit_format(
     }
 }
 
-#[embassy_executor::task(pool_size = 2)]
+#[trueos_executor::task(pool_size = 2)]
 async fn format_command_task(target: MatrixTarget, disk: DeviceHandle) {
     let task_target = target.clone();
     let result =

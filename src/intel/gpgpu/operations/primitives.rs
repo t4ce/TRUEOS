@@ -694,11 +694,11 @@ pub(crate) fn font_outline_coverage_atlas_tile_r8(
     );
     match retirement {
         GpgpuDispatchRetirement::Complete => {
-            let audit_started_ms = embassy_time::Instant::now().as_millis();
+            let audit_started_ms = trueos_time::Instant::now().as_millis();
             let audit = reservation
                 .nonzero_audit()
                 .ok_or(GpgpuDispatchRetirement::Complete)?;
-            let coverage_audit_ms = embassy_time::Instant::now()
+            let coverage_audit_ms = trueos_time::Instant::now()
                 .as_millis()
                 .saturating_sub(audit_started_ms);
             reservation

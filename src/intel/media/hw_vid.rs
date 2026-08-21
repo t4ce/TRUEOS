@@ -3,7 +3,7 @@ use core::{
     fmt::Write,
     sync::atomic::{AtomicBool, Ordering},
 };
-use embassy_time::{Duration as EmbassyDuration, Instant as EmbassyInstant, Timer};
+use trueos_time::{Duration as EmbassyDuration, Instant as EmbassyInstant, Timer};
 
 const H264_DECODE_TIMEOUT_MS: u64 = 5_000;
 const H264_ONLINE_MEDIA_FETCH_TIMEOUT_MS: u64 = 120_000;

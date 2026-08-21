@@ -435,17 +435,17 @@ pub fn init() {
 pub fn poll_at(index: usize) -> bool {
     const STALL_WARN_MS: u64 = 10;
 
-    let lock_started_ms = embassy_time::Instant::now().as_millis();
+    let lock_started_ms = trueos_time::Instant::now().as_millis();
     let mut guard = DEVICES.lock();
-    let lock_acquired_ms = embassy_time::Instant::now().as_millis();
+    let lock_acquired_ms = trueos_time::Instant::now().as_millis();
     let lock_wait_ms = lock_acquired_ms.saturating_sub(lock_started_ms);
 
     let Some(dev) = guard.get_mut(index) else {
         return false;
     };
-    let driver_started_ms = embassy_time::Instant::now().as_millis();
+    let driver_started_ms = trueos_time::Instant::now().as_millis();
     let busy = dev.poll_rx();
-    let driver_finished_ms = embassy_time::Instant::now().as_millis();
+    let driver_finished_ms = trueos_time::Instant::now().as_millis();
     let driver_poll_ms = driver_finished_ms.saturating_sub(driver_started_ms);
     drop(guard);
 

@@ -3,7 +3,7 @@
 //! Only immutable, reusable assets are prepared here. Conversation state,
 //! prompt prefill, and GPU submissions remain demand-driven.
 
-use embassy_time::{Duration, Instant, Timer};
+use trueos_time::{Duration, Instant, Timer};
 
 fn elapsed_ms_since(started: Instant) -> u64 {
     Instant::now()
@@ -11,7 +11,7 @@ fn elapsed_ms_since(started: Instant) -> u64 {
         .saturating_sub(started.as_millis())
 }
 
-#[embassy_executor::task(pool_size = 1)]
+#[trueos_executor::task(pool_size = 1)]
 pub(crate) async fn service_task(expected_worker_slot: u32) {
     let actual_worker_slot = crate::percpu::current_slot() as u32;
     let actual_core_kind = crate::workers::core_kind_for_slot(actual_worker_slot);

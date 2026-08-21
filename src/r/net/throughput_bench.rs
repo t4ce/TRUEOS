@@ -6,8 +6,8 @@
 //! authoritative upload measurement because `TcpSent` means admitted to
 //! smoltcp, not acknowledged on the wire.
 
-use embassy_executor::task;
-use embassy_time::{Duration, Instant, Timer};
+use trueos_executor::task;
+use trueos_time::{Duration, Instant, Timer};
 use v::vnet as api;
 
 use crate::r::net::VNet;

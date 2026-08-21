@@ -4,8 +4,8 @@ use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-use embassy_executor::{SpawnError, Spawner};
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use trueos_executor::{SpawnError, Spawner};
+use trueos_time::{Duration as EmbassyDuration, Timer};
 use sha2::{Digest, Sha256};
 use spin::Mutex;
 
@@ -219,7 +219,7 @@ pub fn ensure_service_started(spawner: Spawner) -> Result<bool, SpawnError> {
     }
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub async fn cache_service_task() {
     loop {
         while let Some((id, request)) = take_request() {

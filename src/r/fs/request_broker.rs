@@ -617,7 +617,7 @@ fn finish<T>(id: u64, operation: &'static str, completion: Completion<T>, result
     }
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub async fn service_task() {
     BROKER_ONLINE.store(true, Ordering::Release);
     crate::log_info!(target: "filesystem";

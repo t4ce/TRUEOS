@@ -1,6 +1,6 @@
 use core::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
-use embassy_executor::raw::Executor;
+use trueos_executor::raw::Executor;
 
 const BSP_CPU_SLOT: u32 = 0;
 const LOG_SAMPLE_1K: u64 = 1_024;

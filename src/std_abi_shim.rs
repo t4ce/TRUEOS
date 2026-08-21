@@ -1831,8 +1831,8 @@ async fn write_file_to_trueosfs_async(path: &str, bytes: &[u8]) -> Result<(), c_
 
     let mut begin_attempt = 0usize;
     let handle = loop {
-        let begin = match embassy_time::with_timeout(
-            embassy_time::Duration::from_millis(TRUEOS_ASYNC_WRITE_TIMEOUT_MS),
+        let begin = match trueos_time::with_timeout(
+            trueos_time::Duration::from_millis(TRUEOS_ASYNC_WRITE_TIMEOUT_MS),
             crate::r::fs::trueosfs::file_write_begin_async(disk, path.as_str(), bytes.len() as u64),
         )
         .await
@@ -1859,7 +1859,7 @@ async fn write_file_to_trueosfs_async(path: &str, bytes: &[u8]) -> Result<(), c_
                         begin_attempt
                     );
                 }
-                embassy_time::Timer::after(embassy_time::Duration::from_millis(25)).await;
+                trueos_time::Timer::after(trueos_time::Duration::from_millis(25)).await;
             }
             Err(err) => return Err(block_error_to_errno(err)),
         }
@@ -1879,8 +1879,8 @@ async fn write_file_to_trueosfs_async(path: &str, bytes: &[u8]) -> Result<(), c_
             offset,
             end - offset
         );
-        let chunk = embassy_time::with_timeout(
-            embassy_time::Duration::from_millis(TRUEOS_ASYNC_WRITE_TIMEOUT_MS),
+        let chunk = trueos_time::with_timeout(
+            trueos_time::Duration::from_millis(TRUEOS_ASYNC_WRITE_TIMEOUT_MS),
             crate::r::fs::trueosfs::file_write_chunk_async(handle, &bytes[offset..end]),
         )
         .await;
@@ -1904,8 +1904,8 @@ async fn write_file_to_trueosfs_async(path: &str, bytes: &[u8]) -> Result<(), c_
     }
 
     crate::log!("std-abi-shim: async-write stage=finish handle={}\n", handle);
-    let finish = embassy_time::with_timeout(
-        embassy_time::Duration::from_millis(TRUEOS_ASYNC_WRITE_TIMEOUT_MS),
+    let finish = trueos_time::with_timeout(
+        trueos_time::Duration::from_millis(TRUEOS_ASYNC_WRITE_TIMEOUT_MS),
         crate::r::fs::trueosfs::file_write_finish_async(handle),
     )
     .await;

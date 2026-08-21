@@ -21,9 +21,9 @@ x86_64 = { version = "0.15.5", features = ["memory_encryption"] }
 core3 = { version = "0.1.2", default-features = false, features = ["alloc", "utils"] }
 spin = "0.10"
 atomic-waker = { version = "1.1.2", default-features = false }
-embassy-executor = { version = "0.10.0", default-features = false, features = ["executor-thread", "platform-spin", "trueos-task-profile"] }
+trueos-executor = { path = "crates/trueos-executor", default-features = false, features = ["executor-thread", "platform-spin", "trueos-task-profile"] }
 embassy-sync = { version = "0.8.0", default-features = false }
-embassy-time = { version = "0.5.1", default-features = false, features = ["tick-hz-1_000"] }
+trueos-time = { path = "crates/trueos-executor/embassy-time", default-features = false, features = ["tick-hz-1_000"] }
 embassy-time-driver = { version = "0.2.2", default-features = false }
 embedded-io-async = { version = "0.7.0", default-features = false }
 trueos-crypto = { path = "crates/trueos-crypto" }
@@ -116,8 +116,6 @@ debug = false
 opt-level = 2
 
 [patch.crates-io]
-embassy-time = { path = "crates/trueos-executor/embassy-time" }
-embassy-executor = { path = "crates/trueos-executor" }
 png = { path = "vendor/png-0.18.1" }
 fdeflate = { path = "vendor/fdeflate-0.3.7" }
 simd-adler32 = { path = "vendor/simd-adler32-0.3.8" }

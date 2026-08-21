@@ -19,7 +19,7 @@ use alloc::vec::Vec;
 use core::fmt::Write;
 use core::mem::ManuallyDrop;
 
-use embassy_executor::raw::Executor as RawExecutor;
+use trueos_executor::raw::Executor as RawExecutor;
 use trueos_vm::vmcall;
 
 use crate::shell2::{ShellBackend2, ShellIo2};

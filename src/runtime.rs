@@ -8,7 +8,7 @@ fn local_cpu() -> Option<&'static crate::percpu::PerCpu> {
 }
 
 #[inline]
-fn local_executor() -> Option<&'static embassy_executor::raw::Executor> {
+fn local_executor() -> Option<&'static trueos_executor::raw::Executor> {
     let cpu = local_cpu()?;
     let ex_ptr = cpu.executor_ptr();
     if ex_ptr.is_null() {

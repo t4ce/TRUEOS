@@ -13,7 +13,7 @@ use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use core::task::{Context, Poll};
 
 use atomic_waker::AtomicWaker;
-use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
+use trueos_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
 use v::vnet;
 
@@ -991,7 +991,7 @@ async fn resolve_https_host(
 }
 
 async fn fence_https_owner(cmds: &'static Queue<TlsCommand>) -> bool {
-    embassy_time::with_timeout(EmbassyDuration::from_millis(HTTPS_CLIENT_FENCE_TIMEOUT_MS), async {
+    trueos_time::with_timeout(EmbassyDuration::from_millis(HTTPS_CLIENT_FENCE_TIMEOUT_MS), async {
         let completion = Arc::new(TlsCancelCompletion::new());
         let mut command = TlsCommand::CancelOwner {
             completion: completion.clone(),

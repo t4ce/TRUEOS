@@ -8,7 +8,7 @@
 use alloc::vec::Vec as AllocVec;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
-use embassy_time::{Duration, Timer};
+use trueos_time::{Duration, Timer};
 use heapless::{Deque, String, Vec};
 use serde_json::Value;
 use spin::Mutex;
@@ -563,7 +563,7 @@ pub(crate) fn cursor_buttons(
     Ok(cursor.buttons_down)
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub(crate) async fn mouse_motion_service_task() {
     crate::log_info!(target: "input";
         "mouse-control: station online protocol=binary+json paths=teleport,line,quadratic,cubic easing=linear,fastlinear,natural sink=vcursor-ring\n"

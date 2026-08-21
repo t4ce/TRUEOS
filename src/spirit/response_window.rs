@@ -12,7 +12,7 @@ use alloc::{collections::VecDeque, string::String, vec::Vec};
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use embassy_sync::signal::Signal;
-use embassy_time::{Duration, Instant, Timer, with_timeout};
+use trueos_time::{Duration, Instant, Timer, with_timeout};
 use spin::Mutex;
 
 use crate::r::{
@@ -1177,7 +1177,7 @@ async fn present_claimed_response(
     }
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub(crate) async fn spirit_response_window_service_task(expected_slot: u32) {
     let keyboard = request_spirit_keyboard().await;
     super::dobby_ui::register_lilly_keyboard(keyboard);

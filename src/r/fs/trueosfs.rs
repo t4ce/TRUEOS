@@ -3,7 +3,7 @@ use alloc::{boxed::Box, collections::BTreeMap, string::String, vec::Vec};
 use crate::disc::block;
 use crate::r::disc::partition;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use trueos_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 
 pub use trueos_fs::{FileInfo, RecordKey};
@@ -147,7 +147,7 @@ async fn warm_index_async(disk: block::DeviceHandle) {
 }
 
 /// Background task that performs deferred TRUEOSFS probing and mounting.
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub async fn mount_service_task() {
     async move {
         request_mount_existing_visible_roots();
@@ -183,7 +183,7 @@ pub async fn mount_service_task() {
     .await;
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub async fn index_service_task() {
     async move {
         loop {

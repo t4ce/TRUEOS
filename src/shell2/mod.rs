@@ -4,8 +4,8 @@ use alloc::vec::Vec;
 use core::cell::{Cell, RefCell};
 use core::fmt::Write as _;
 use core::sync::atomic::{AtomicU16, Ordering};
-use embassy_executor::Spawner;
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use trueos_executor::Spawner;
+use trueos_time::{Duration as EmbassyDuration, Timer};
 use heapless::String as HString;
 use unicode_segmentation::UnicodeSegmentation;
 pub(crate) mod backends;
@@ -884,17 +884,17 @@ pub(crate) fn submit_online_to_target(
     spawner: &Spawner,
     target: MatrixTarget,
     args: Vec<AllocString>,
-) -> Result<(), embassy_executor::SpawnError> {
+) -> Result<(), trueos_executor::SpawnError> {
     let width = with_matrix_target_lease(&target, || line_width_for_output(target.output_mask))
         .unwrap_or(matrix::DEFAULT_MATRIX_SLOT_LINE_WIDTH);
     shell2_dl::submit_online_to_target(spawner, target, width, args)
 }
 
 pub(crate) fn submit_online_to_send_target(
-    spawner: &embassy_executor::SendSpawner,
+    spawner: &trueos_executor::SendSpawner,
     target: MatrixTarget,
     args: Vec<AllocString>,
-) -> Result<(), embassy_executor::SpawnError> {
+) -> Result<(), trueos_executor::SpawnError> {
     let width = with_matrix_target_lease(&target, || line_width_for_output(target.output_mask))
         .unwrap_or(matrix::DEFAULT_MATRIX_SLOT_LINE_WIDTH);
     shell2_dl::submit_online_to_send_target(spawner, target, width, args)
@@ -905,7 +905,7 @@ pub(crate) fn submit_online_launch_script_to_target(
     target: MatrixTarget,
     selector: &str,
     launch_script: &str,
-) -> Result<(), embassy_executor::SpawnError> {
+) -> Result<(), trueos_executor::SpawnError> {
     let width = with_matrix_target_lease(&target, || line_width_for_output(target.output_mask))
         .unwrap_or(matrix::DEFAULT_MATRIX_SLOT_LINE_WIDTH);
     shell2_dl::submit_online_launch_script_to_target(
@@ -972,7 +972,7 @@ pub(crate) fn switch_matrix_target_slot(target: &MatrixTarget, requested: &str) 
     .unwrap_or_else(|| target.clone())
 }
 
-pub(crate) fn spawn_app_vm_run_queue(spawner: Spawner) -> Result<(), embassy_executor::SpawnError> {
+pub(crate) fn spawn_app_vm_run_queue(spawner: Spawner) -> Result<(), trueos_executor::SpawnError> {
     match cmds::run::app_vm_run_queue_task(spawner) {
         Ok(token) => {
             spawner.spawn(token);
@@ -1805,12 +1805,12 @@ fn cycle_live_history(up: bool, cursor: &mut Option<usize>) -> Option<AllocStrin
     Some(history[next].text.clone())
 }
 
-#[embassy_executor::task(pool_size = 4)]
+#[trueos_executor::task(pool_size = 4)]
 pub async fn task(spawner: Spawner, io: &'static dyn ShellBackend2) {
     run_shell2(spawner, io, None).await;
 }
 
-#[embassy_executor::task(pool_size = 9)]
+#[trueos_executor::task(pool_size = 9)]
 pub async fn local_shell_session_worker(spawner: Spawner, index: usize) {
     loop {
         let generation = backends::session_pool::wait_for_lease(index).await;

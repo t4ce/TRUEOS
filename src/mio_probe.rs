@@ -1,8 +1,8 @@
 use core::net::SocketAddr;
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use embassy_executor::task;
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use trueos_executor::task;
+use trueos_time::{Duration as EmbassyDuration, Timer};
 use mio::{Events, Interest, Poll, Token, Waker};
 
 const MIO_NET_PROBE_PORT: u16 = crate::allports::probes::MIO_NET_PROBE_PORT;

@@ -8,7 +8,7 @@ use core::{
     ptr,
     sync::atomic::{AtomicBool, AtomicU32, Ordering},
 };
-use embassy_executor::Spawner;
+use trueos_executor::Spawner;
 use embassy_sync::{mutex::Mutex as AsyncMutex, signal::Signal};
 
 const DEFAULT_DMA_ALIGNMENT: u32 = 64;
@@ -140,7 +140,7 @@ impl ServicedBlockDeviceFront {
     }
 }
 
-#[embassy_executor::task(pool_size = BLOCK_DEVICE_SERVICE_TASK_POOL)]
+#[trueos_executor::task(pool_size = BLOCK_DEVICE_SERVICE_TASK_POOL)]
 async fn serviced_block_device_task(front: &'static ServicedBlockDeviceFront) {
     let Some(mut driver) = front.driver.lock().take() else {
         front.spawned.store(false, Ordering::Release);

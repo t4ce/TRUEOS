@@ -484,12 +484,12 @@ fn push_jpeg_output(id: u32, result: Result<HwJpegImage, i32>) {
     JPEG_OUTPUT_WAIT.notify_all();
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub(crate) async fn hw_pic_service() {
     if SERVICE_STARTED.swap(true, Ordering::AcqRel) {
         hw_pic_info!("intel/hw_pic: duplicate service task entered; parking\n");
         loop {
-            embassy_time::Timer::after_secs(3600).await;
+            trueos_time::Timer::after_secs(3600).await;
         }
     }
     hw_pic_info!("intel/hw_pic: service started backend=media-vdbox\n");
@@ -550,7 +550,7 @@ async fn hw_pic_service_inner() {
         } else {
             push_output(*output);
         }
-        embassy_time::Timer::after_millis(1).await;
+        trueos_time::Timer::after_millis(1).await;
     }
 }
 

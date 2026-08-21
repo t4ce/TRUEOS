@@ -4,8 +4,8 @@ use alloc::vec::Vec;
 use core::arch::x86_64::__cpuid;
 use core::ptr::null_mut;
 use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, AtomicU32, AtomicUsize, Ordering};
-use embassy_executor::Spawner;
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use trueos_executor::Spawner;
+use trueos_time::{Duration as EmbassyDuration, Timer};
 use raw_cpuid::CpuId;
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
 
@@ -224,7 +224,7 @@ fn enter_ap_runtime(spawner: Spawner) -> ! {
     runtime::run_ap_forever()
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 async fn atomic_bomb_after_restart_task(restart_count: u32) {
     Timer::after(EmbassyDuration::from_secs(2)).await;
 

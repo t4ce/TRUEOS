@@ -5,7 +5,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::str::SplitWhitespace;
 
-use embassy_executor::Spawner;
+use trueos_executor::Spawner;
 
 use super::super::{
     MatrixTarget, ShellBackend2, matrix_target_for_backend, print_matrix_target_line,
@@ -117,7 +117,7 @@ fn submit_download(spawner: &Spawner, io: &'static dyn ShellBackend2, url: Strin
     }
 }
 
-#[embassy_executor::task(pool_size = 2)]
+#[trueos_executor::task(pool_size = 2)]
 async fn hyper_download_task(target: MatrixTarget, url: String, path: String) {
     let log = |line: &str| print_matrix_target_line(&target, line);
 

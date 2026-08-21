@@ -6,7 +6,7 @@ use alloc::collections::{BTreeMap, VecDeque};
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use trueos_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 
 const ASYNC_FS_MAX_OPERATIONS: usize = 64;
@@ -634,7 +634,7 @@ async fn process(request: &Request) -> OperationState {
     }
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub async fn service_task() {
     loop {
         let request = ASYNC_FS_REQUESTS.lock().pop_front();

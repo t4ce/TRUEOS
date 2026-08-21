@@ -4,7 +4,7 @@ use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use embassy_time::{Duration, Timer};
+use trueos_time::{Duration, Timer};
 use spin::Mutex;
 
 pub const FORMAT_JPEG: u32 = 1;
@@ -390,7 +390,7 @@ async fn decode(request: &DecodeRequest) -> Result<DecodedImage, i32> {
     }
 }
 
-#[embassy_executor::task(pool_size = 2)]
+#[trueos_executor::task(pool_size = 2)]
 pub async fn worker_task(worker_id: usize, worker_slot: u32, core_kind: u8) {
     crate::log_info!(
         target: "service";

@@ -12,7 +12,7 @@ extern crate alloc;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
-use embassy_time::{Duration, Instant};
+use trueos_time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use spin::Mutex;
 

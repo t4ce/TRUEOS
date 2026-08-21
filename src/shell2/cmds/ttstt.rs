@@ -6,8 +6,8 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
-use embassy_executor::Spawner;
-use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
+use trueos_executor::Spawner;
+use trueos_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
 
 use super::super::{
@@ -489,7 +489,7 @@ fn tts_shell_queue_status() -> TtsShellQueueStatus {
     }
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 async fn tts_shell_worker_task() {
     loop {
         let request = { TTS_SHELL_QUEUE.lock().pop_front() };
@@ -1079,7 +1079,7 @@ fn parse_stt_file_request(input: &str) -> Result<SttFileCommand, &'static str> {
     })
 }
 
-#[embassy_executor::task(pool_size = 2)]
+#[trueos_executor::task(pool_size = 2)]
 async fn stt_file_task(target: MatrixTarget, command: SttFileCommand) {
     let result = load_wav_mono_16k(command.path.as_str()).await;
     let pcm = match result {

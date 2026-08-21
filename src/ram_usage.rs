@@ -3,7 +3,7 @@
 use alloc::string::String;
 use core::fmt::Write;
 
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use trueos_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 
 pub const HISTORY_LEN: usize = 40;
@@ -176,7 +176,7 @@ pub fn chart_text(percent: u8, history: &str) -> String {
     out
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub async fn history_sampler_task() {
     loop {
         sample_once();

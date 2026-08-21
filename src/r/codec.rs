@@ -5,7 +5,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use trueos_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 
 const CODEC_IDLE_MS: u64 = 25;
@@ -580,7 +580,7 @@ async fn execute_request(request: CodecRequest) {
     complete_operation(owner, id, result);
 }
 
-#[embassy_executor::task(pool_size = 3)]
+#[trueos_executor::task(pool_size = 3)]
 pub async fn codec_worker_task(worker_id: usize, worker_slot: u32, core_kind: u8) {
     crate::log_info!(
         target: "service";

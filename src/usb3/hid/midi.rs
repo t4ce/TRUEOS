@@ -4,8 +4,8 @@ use core::cmp::min;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use crab_usb::Device;
-use embassy_executor::Spawner;
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use trueos_executor::Spawner;
+use trueos_time::{Duration as EmbassyDuration, Timer};
 use heapless::{Deque, Vec};
 use spin::Mutex;
 
@@ -289,7 +289,7 @@ fn piano_play_packet(pkt: [u8; 4]) {
     }
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub async fn piano_drain_loop() {
     async move {
         loop {
@@ -427,7 +427,7 @@ fn handle_midi_packets(adapter: MidiAdapterKind, sample: &[u8]) {
     }
 }
 
-#[embassy_executor::task(pool_size = 4)]
+#[trueos_executor::task(pool_size = 4)]
 pub async fn midi_stream_task(mut device: Device, controller_id: u32, target: MidiTarget) {
     let desc = device.descriptor();
     let vendor_id = desc.vendor_id;

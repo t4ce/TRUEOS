@@ -1,7 +1,7 @@
 use alloc::{format, string::String};
 use core::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 
-use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
+use trueos_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
 use v::vnet;
 
@@ -209,7 +209,7 @@ pub fn kernel_date_day_month_year() -> String {
     format!("{} {} {}", day, month_name, year)
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub async fn ntp_sync_task() {
     crate::r::readiness::wait_for(crate::r::readiness::NET_ANY_CONFIGURED).await;
 

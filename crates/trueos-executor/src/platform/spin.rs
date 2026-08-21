@@ -5,7 +5,7 @@ mod thread {
     use core::arch::asm;
     use core::marker::PhantomData;
 
-    pub use embassy_executor_macros::main_spin as main;
+    pub use trueos_executor_macros::main_spin as main;
 
     struct X86CriticalSection;
 

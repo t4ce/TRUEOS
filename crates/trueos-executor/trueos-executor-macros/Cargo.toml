@@ -1,0 +1,27 @@
+[package]
+name = "trueos-executor-macros"
+version = "0.8.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+description = "macros for creating the entry point and tasks for trueos-executor"
+repository = "https://github.com/embassy-rs/embassy"
+categories = [
+    "embedded",
+    "no-std",
+    "asynchronous",
+]
+
+[dependencies]
+syn = { version = "2.0.15", features = ["full", "visit"] }
+quote = "1.0.9"
+darling = "0.20.1"
+proc-macro2 = "1.0.29"
+
+[lib]
+name = "trueos_executor_macros"
+proc-macro = true
+
+[features]
+nightly = []
+metadata-name = []
+

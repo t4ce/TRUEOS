@@ -25,7 +25,7 @@ static USB_PORT_CHANGE_SEQ: core::sync::atomic::AtomicU32 = core::sync::atomic::
 static BSP_HEADLESS_SKIP_CRABUSB_XHCI_CLAIM: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub async fn usb_controller_service_task() {
     if BSP_HEADLESS_SKIP_CRABUSB_XHCI_CLAIM.load(core::sync::atomic::Ordering::Acquire) {
         crate::log!(
@@ -54,8 +54,8 @@ pub async fn usb_controller_service_task() {
     }
 
     let event_handler = host.create_event_handler();
-    let spawner: embassy_executor::Spawner =
-        unsafe { embassy_executor::Spawner::for_current_executor().await };
+    let spawner: trueos_executor::Spawner =
+        unsafe { trueos_executor::Spawner::for_current_executor().await };
     let event_pump_token = match usb_event_pump_task(event_handler) {
         Ok(token) => token,
         Err(err) => {
@@ -98,13 +98,13 @@ pub async fn usb_controller_service_task() {
 
     let mut observed_port_change_seq =
         USB_PORT_CHANGE_SEQ.load(core::sync::atomic::Ordering::Acquire);
-    let mut next_snapshot = embassy_time::Instant::now()
-        + embassy_time::Duration::from_millis(crate::allcaps::usb::CONTROLLER_SNAPSHOT_CADENCE_MS);
+    let mut next_snapshot = trueos_time::Instant::now()
+        + trueos_time::Duration::from_millis(crate::allcaps::usb::CONTROLLER_SNAPSHOT_CADENCE_MS);
     loop {
         USB_LEGENDARY_LEGACY_SAVEWRAPPER_LMAO(&mut host).await;
-        if embassy_time::Instant::now() >= next_snapshot {
-            next_snapshot = embassy_time::Instant::now()
-                + embassy_time::Duration::from_millis(
+        if trueos_time::Instant::now() >= next_snapshot {
+            next_snapshot = trueos_time::Instant::now()
+                + trueos_time::Duration::from_millis(
                     crate::allcaps::usb::CONTROLLER_SNAPSHOT_CADENCE_MS,
                 );
             if let Err(reason) = lab::refresh_snapshot(&mut host).await {
@@ -147,7 +147,7 @@ pub async fn usb_controller_service_task() {
         // Only consume the sequence after normal probing has actually been
         // admitted. A failed quarantine must leave the rescan pending.
         observed_port_change_seq = next_port_change_seq;
-        embassy_time::Timer::after(embassy_time::Duration::from_millis(HOT_RESCAN_DEBOUNCE_MS))
+        trueos_time::Timer::after(trueos_time::Duration::from_millis(HOT_RESCAN_DEBOUNCE_MS))
             .await;
         crate::log!(
             "crabusb: probe_devices trigger=port-change seq={} quarantine=active\n",
@@ -156,7 +156,7 @@ pub async fn usb_controller_service_task() {
         if let Some(news) = probe_devices_with_log(&mut host, "rescan").await {
             if !news.is_empty() {
                 open_and_handoff_devices(&mut host, news, &spawner).await;
-                embassy_time::Timer::after(embassy_time::Duration::from_millis(
+                trueos_time::Timer::after(trueos_time::Duration::from_millis(
                     HOT_RESCAN_HANDOFF_SETTLE_MS,
                 ))
                 .await;
@@ -175,15 +175,15 @@ pub async fn usb_controller_service_task() {
 
 #[allow(non_snake_case)]
 async fn USB_LEGENDARY_LEGACY_SAVEWRAPPER_LMAO(host: &mut crabusb::USBHost) {
-    let started = embassy_time::Instant::now();
+    let started = trueos_time::Instant::now();
     let budget =
-        embassy_time::Duration::from_millis(crate::allcaps::usb::CONTROLLER_MAINTENANCE_BUDGET_MS);
+        trueos_time::Duration::from_millis(crate::allcaps::usb::CONTROLLER_MAINTENANCE_BUDGET_MS);
     while lab::service_one(host).await {
-        if embassy_time::Instant::now().duration_since(started) >= budget {
+        if trueos_time::Instant::now().duration_since(started) >= budget {
             break;
         }
     }
-    embassy_time::Timer::after(embassy_time::Duration::from_millis(
+    trueos_time::Timer::after(trueos_time::Duration::from_millis(
         crate::allcaps::usb::CONTROLLER_MAINTENANCE_CADENCE_MS,
     ))
     .await;
@@ -193,8 +193,8 @@ async fn probe_devices_with_log(
     host: &mut crabusb::USBHost,
     label: &'static str,
 ) -> Option<alloc::vec::Vec<crabusb::ProbedDevice>> {
-    let news = match embassy_time::with_timeout(
-        embassy_time::Duration::from_secs(2),
+    let news = match trueos_time::with_timeout(
+        trueos_time::Duration::from_secs(2),
         host.probe_devices(),
     )
     .await
@@ -222,7 +222,7 @@ async fn probe_devices_with_log(
 async fn open_and_handoff_devices(
     host: &mut crabusb::USBHost,
     news: alloc::vec::Vec<crabusb::ProbedDevice>,
-    spawner: &embassy_executor::Spawner,
+    spawner: &trueos_executor::Spawner,
 ) {
     for new in news {
         log_probed_device("probed", &new);
@@ -332,7 +332,7 @@ fn log_hub_device_info(hub: &crabusb::HubDeviceInfo) {
     );
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub async fn usb_event_pump_task(handler: crabusb::EventHandler) {
     let mut last_transfer_activity_count = None;
     loop {
@@ -365,9 +365,9 @@ pub async fn usb_event_pump_task(handler: crabusb::EventHandler) {
         }
 
         if active {
-            embassy_time::Timer::after(embassy_time::Duration::from_micros(0)).await;
+            trueos_time::Timer::after(trueos_time::Duration::from_micros(0)).await;
         } else {
-            embassy_time::Timer::after(embassy_time::Duration::from_micros(50)).await;
+            trueos_time::Timer::after(trueos_time::Duration::from_micros(50)).await;
         }
     }
 }

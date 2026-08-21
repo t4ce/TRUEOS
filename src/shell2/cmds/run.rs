@@ -3,8 +3,8 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use embassy_executor::Spawner;
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use trueos_executor::Spawner;
+use trueos_time::{Duration as EmbassyDuration, Timer};
 use sha2::{Digest, Sha256};
 use spin::Mutex;
 
@@ -1082,7 +1082,7 @@ fn readiness_friendly_label(flag: u32, fallback: &'static str) -> &'static str {
     }
 }
 
-#[embassy_executor::task(pool_size = 1)]
+#[trueos_executor::task(pool_size = 1)]
 pub(crate) async fn app_vm_run_queue_task(spawner: Spawner) {
     loop {
         let Some(request) = dequeue_request() else {

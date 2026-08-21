@@ -10,7 +10,7 @@ extern crate alloc;
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use embassy_time::{Duration, Timer};
+use trueos_time::{Duration, Timer};
 use serde::Serialize;
 use spin::Mutex;
 

@@ -5,7 +5,7 @@
 //! ring back to UI4 for SURFLIVE-safe retirement.
 
 use core::sync::atomic::{AtomicBool, Ordering};
-use embassy_time::{Duration, Timer};
+use trueos_time::{Duration, Timer};
 use spin::Mutex;
 
 use super::{
@@ -98,7 +98,7 @@ fn capture_escape(
     }
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub(crate) async fn ui4_color_picker_service_task() {
     crate::log_info!(target: "ui4/color-picker";
         "ui4/color-picker: service online lifecycle=context-menu-open+escape-close owner=kernel-internal presentation=slot4-software-cursor-plane/fixed/no-application-plane-fallback controls=sv256+hue32 commit=button-release target=pipe-a-bottom-color color=rgb\n"

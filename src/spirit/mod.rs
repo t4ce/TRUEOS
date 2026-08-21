@@ -14,7 +14,7 @@ use core::ops::BitOr;
 use core::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 
 use embassy_sync::signal::Signal;
-use embassy_time::{Duration, Instant, Timer};
+use trueos_time::{Duration, Instant, Timer};
 use spin::Mutex;
 
 pub(crate) mod dobby_ui;
@@ -860,7 +860,7 @@ impl SpiritPresentationRate {
 /// Independent Spirit motion executor. It consumes only Spirit's own
 /// latest-state signal and is deliberately absent from the VFX frame loop and
 /// UI4's software-cursor input/presentation path.
-#[embassy_executor::task(pool_size = 1)]
+#[trueos_executor::task(pool_size = 1)]
 pub(crate) async fn spirit_cursor_task(worker_index: u8) {
     if worker_index as usize >= SPIRIT_WORKER_POOL_LIMIT {
         return;
@@ -1005,7 +1005,7 @@ pub(crate) async fn spirit_cursor_task(worker_index: u8) {
 
 /// The macro pool is intentionally one today. Fence/pipe capacity remains
 /// four so later activation is a deliberate pool-limit and spawn-limit change.
-#[embassy_executor::task(pool_size = 1)]
+#[trueos_executor::task(pool_size = 1)]
 pub(crate) async fn spirit_worker_task(worker_index: u8) {
     if worker_index as usize >= SPIRIT_WORKER_POOL_LIMIT {
         return;
@@ -1729,8 +1729,8 @@ fn spirit_gpu_logger_frame_period(phase: &mut u64) -> Duration {
 }
 
 fn spirit_frame_period(phase: &mut u64, hz: u64) -> Duration {
-    let mut ticks = embassy_time::TICK_HZ / hz;
-    *phase = phase.saturating_add(embassy_time::TICK_HZ % hz);
+    let mut ticks = trueos_time::TICK_HZ / hz;
+    *phase = phase.saturating_add(trueos_time::TICK_HZ % hz);
     if *phase >= hz {
         *phase -= hz;
         ticks = ticks.saturating_add(1);

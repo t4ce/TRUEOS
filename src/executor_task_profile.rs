@@ -3,9 +3,9 @@ use core::arch::x86_64::_rdtsc;
 use core::cell::UnsafeCell;
 use core::fmt::Write as _;
 
-use embassy_executor::Spawner;
+use trueos_executor::Spawner;
 use embassy_sync::watch::Watch;
-use embassy_time::{Duration, Instant, Timer};
+use trueos_time::{Duration, Instant, Timer};
 use spin::Mutex;
 
 const TASK_SLOTS: usize = crate::allcaps::executor::BSP_TASK_PROFILE_SLOTS;
@@ -411,7 +411,7 @@ fn cycles_to_us(cycles: u64, tsc_hz: u64) -> u64 {
         as u64
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub async fn bsp_task_profile_reporter_task(spawner: Spawner) {
     let report_ms = crate::allcaps::executor::BSP_TASK_PROFILE_REPORT_MS;
     let tsc_hz = crate::r::time::tsc_hz();

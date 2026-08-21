@@ -4,8 +4,8 @@ use core::{
     sync::atomic::{AtomicU32, AtomicU64, Ordering},
 };
 
-use embassy_executor::task;
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use trueos_executor::task;
+use trueos_time::{Duration as EmbassyDuration, Timer};
 use smoltcp::iface::{
     Config as IfaceConfig, Interface, PollResult, SocketHandle, SocketSet, UdpDispatchError,
 };
@@ -5345,15 +5345,15 @@ pub async fn net_poll_task(index: usize) {
         const STALL_WARN_MS: u64 = 10;
 
         let mut loop_count = 0u64;
-        let mut previous_loop_started_ms = embassy_time::Instant::now().as_millis();
+        let mut previous_loop_started_ms = trueos_time::Instant::now().as_millis();
         loop {
             loop_count = loop_count.saturating_add(1);
-            let loop_started_ms = embassy_time::Instant::now().as_millis();
+            let loop_started_ms = trueos_time::Instant::now().as_millis();
             let loop_gap_ms = loop_started_ms.saturating_sub(previous_loop_started_ms);
 
-            let poll_started_ms = embassy_time::Instant::now().as_millis();
+            let poll_started_ms = trueos_time::Instant::now().as_millis();
             let busy = crate::net::poll_at(index);
-            let poll_finished_ms = embassy_time::Instant::now().as_millis();
+            let poll_finished_ms = trueos_time::Instant::now().as_millis();
             let poll_elapsed_ms = poll_finished_ms.saturating_sub(poll_started_ms);
             let requested_sleep_us = if busy { 0 } else { NET_POLL_IDLE_SOFTCAP_US };
 
@@ -5396,9 +5396,9 @@ pub async fn net_poll_task(index: usize) {
                 );
             }
 
-            let await_started_ms = embassy_time::Instant::now().as_millis();
+            let await_started_ms = trueos_time::Instant::now().as_millis();
             Timer::after(EmbassyDuration::from_micros(requested_sleep_us)).await;
-            let await_finished_ms = embassy_time::Instant::now().as_millis();
+            let await_finished_ms = trueos_time::Instant::now().as_millis();
             let await_elapsed_ms = await_finished_ms.saturating_sub(await_started_ms);
 
             if trace_loop {

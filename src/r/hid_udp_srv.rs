@@ -16,8 +16,8 @@
 
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use embassy_executor::task;
-use embassy_time::{Duration, Timer};
+use trueos_executor::task;
+use trueos_time::{Duration, Timer};
 use heapless::Vec;
 
 use crate::r::net::VNet;

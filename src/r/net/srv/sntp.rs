@@ -1,4 +1,4 @@
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use trueos_time::{Duration as EmbassyDuration, Timer};
 
 use crate::r::net::{
     NetProfile, VNet,
@@ -108,7 +108,7 @@ pub fn build_sntp_response(packet: &[u8]) -> Option<[u8; SNTP_PACKET_LEN]> {
     Some(out)
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub async fn sntp_service_task() {
     crate::log!("sntp: waiting for NET_V4_CONFIGURED\n");
     crate::r::readiness::wait_for(crate::r::readiness::NET_V4_CONFIGURED).await;

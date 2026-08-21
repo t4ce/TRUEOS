@@ -652,9 +652,9 @@ pub mod logtotcp {
         RING.lock().drain_bytes(max)
     }
 
-    #[embassy_executor::task]
+    #[trueos_executor::task]
     pub async fn logtotcp_task() {
-        use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
+        use trueos_time::{Duration as EmbassyDuration, Instant, Timer};
 
         use crate::net::adapter::{
             NetCommand, NetEvent, NetHandle, NetQueue, SocketKind, register_app_queues,

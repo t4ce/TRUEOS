@@ -362,7 +362,7 @@ pub(crate) fn claim_next(
         job_id: AtomicU64::new(0),
         terminal: AtomicU8::new(SESSION_ACTIVE),
         payload: Mutex::new(Some(CapturePayload {
-            claimed_at_ms: embassy_time::Instant::now().as_millis(),
+            claimed_at_ms: trueos_time::Instant::now().as_millis(),
             text: String::from(text),
             voice: String::from(voice),
             speed,
@@ -697,7 +697,7 @@ impl Drop for CaptureInner {
     }
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub(crate) async fn writer_task() {
     if WRITER_ONLINE.swap(true, Ordering::AcqRel) {
         crate::log_warn!(target: "ttstt"; "ttstt-capture: duplicate writer rejected\n");

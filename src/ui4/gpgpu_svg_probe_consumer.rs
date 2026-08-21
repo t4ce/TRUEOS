@@ -6,7 +6,7 @@
 
 use alloc::vec::Vec;
 
-use embassy_time::{Duration, Timer};
+use trueos_time::{Duration, Timer};
 use spin::Mutex;
 
 use super::{
@@ -178,7 +178,7 @@ pub(crate) fn gpgpu_svg_probe_status() -> GpgpuSvgProbeStatus {
     SVG_PROBE_CONTROL.lock().status
 }
 
-#[embassy_executor::task(pool_size = 1)]
+#[trueos_executor::task(pool_size = 1)]
 pub(crate) async fn gpgpu_svg_probe_consumer_service_task(worker_slot: u32) {
     crate::log_info!(
         target: "ui4";

@@ -95,7 +95,7 @@ pub use r::{io, path};
 pub(crate) use usb3 as usb2;
 
 // Imports
-use embassy_executor::{Spawner, raw::Executor};
+use trueos_executor::{Spawner, raw::Executor};
 
 // Provide a known-good BSP stack and switch to it immediately in `_start` for bigger stack
 const BSP_BOOT_STACK_BYTES: usize = crate::allcaps::boot::BSP_BOOT_STACK_BYTES;

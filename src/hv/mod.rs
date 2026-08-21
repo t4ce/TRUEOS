@@ -27,9 +27,9 @@ use core::arch::x86_64::{__cpuid, __cpuid_count};
 use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
-use embassy_executor::{Spawner, task};
+use trueos_executor::{Spawner, task};
 use embassy_sync::signal::Signal;
-use embassy_time::{Duration as EmbassyDuration, Timer, with_timeout};
+use trueos_time::{Duration as EmbassyDuration, Timer, with_timeout};
 use heapless::String;
 use spin::Mutex;
 use x86_64::instructions::tables::{sgdt, sidt};

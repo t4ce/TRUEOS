@@ -4,8 +4,8 @@ use crab_usb::Device;
 use crab_usb::usb_if;
 
 use super::api::{EndpointBulkIn, EndpointBulkOut};
-use embassy_executor::Spawner;
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use trueos_executor::Spawner;
+use trueos_time::{Duration as EmbassyDuration, Timer};
 use heapless::Vec;
 use spin::Mutex;
 
@@ -893,7 +893,7 @@ fn register_block_device(
     handle
 }
 
-#[embassy_executor::task(pool_size = 8)]
+#[trueos_executor::task(pool_size = 8)]
 pub async fn mass_storage_task(
     mut device: Device,
     controller_id: u32,

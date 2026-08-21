@@ -7,7 +7,7 @@
 use alloc::vec::Vec as AllocVec;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
-use embassy_time::{Duration, Timer};
+use trueos_time::{Duration, Timer};
 use heapless::{Deque, String, Vec};
 use serde_json::Value;
 use spin::Mutex;
@@ -545,7 +545,7 @@ pub(crate) fn cancel_program(
     STATION.lock().cancel_program(principal, handle)
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub(crate) async fn keyboard_control_service_task() {
     crate::log_info!(target: "input";
         "keyboard-control: station online protocol=binary+json ops=stroke,down,up,wait,text sink=keyboard-hut+output-ring\n"

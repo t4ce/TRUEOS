@@ -1,6 +1,6 @@
 use alloc::{string::String, vec::Vec};
 
-use embassy_executor::Spawner;
+use trueos_executor::Spawner;
 
 use super::super::{
     MatrixTarget, ShellBackend2, matrix_target_for_backend, print_matrix_target_line,
@@ -226,7 +226,7 @@ fn usage(io: &'static dyn ShellBackend2) {
     );
 }
 
-#[embassy_executor::task(pool_size = 1)]
+#[trueos_executor::task(pool_size = 1)]
 async fn vid_task(target: MatrixTarget, command: VidCommand) {
     let (frame_width, frame_height) = command.source.desired_frame_extent();
     print_matrix_target_line(

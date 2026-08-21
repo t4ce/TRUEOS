@@ -17,8 +17,8 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
-use embassy_executor::{SpawnError, Spawner};
-use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
+use trueos_executor::{SpawnError, Spawner};
+use trueos_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
 
 const MODEL_ROOT: &str = "models";
@@ -1533,7 +1533,7 @@ fn finish_job(queued: QueuedJob, direction: Direction, result: JobProgress) {
     }
 }
 
-#[embassy_executor::task(pool_size = WORKER_TASK_POOL)]
+#[trueos_executor::task(pool_size = WORKER_TASK_POOL)]
 async fn worker_task(slot: u32, core_kind: u8, models: &'static ModelSet) {
     let q8_dispatcher = trueos_ttstt_cpu::Dispatcher::detect();
     let context = WorkerContext {
@@ -1661,7 +1661,7 @@ async fn start_worker_pool(models: &'static ModelSet) -> Result<usize, SpawnErro
 
 /// BSP-resident service controller. The central service registry spawns this
 /// task locally; only the inference workers are placed on AP executors.
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub async fn service_task() {
     crate::r::ttstt_kokoro::install();
     loop {

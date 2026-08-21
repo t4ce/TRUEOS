@@ -36,19 +36,19 @@ struct InteractionCadence {
 impl InteractionCadence {
     fn new() -> Self {
         Self {
-            next_tick: embassy_time::Instant::now().as_ticks(),
+            next_tick: trueos_time::Instant::now().as_ticks(),
             remainder: 0,
         }
     }
 
-    fn next_deadline(&mut self) -> embassy_time::Instant {
-        let now_tick = embassy_time::Instant::now().as_ticks();
+    fn next_deadline(&mut self) -> trueos_time::Instant {
+        let now_tick = trueos_time::Instant::now().as_ticks();
         if self.next_tick < now_tick {
             self.next_tick = now_tick;
             self.remainder = 0;
         }
 
-        let tick_hz = embassy_time::TICK_HZ;
+        let tick_hz = trueos_time::TICK_HZ;
         let mut period_ticks = tick_hz / INTERACTION_CADENCE_HZ;
         self.remainder = self
             .remainder
@@ -56,7 +56,7 @@ impl InteractionCadence {
         period_ticks = period_ticks.saturating_add(self.remainder / INTERACTION_CADENCE_HZ);
         self.remainder %= INTERACTION_CADENCE_HZ;
         self.next_tick = self.next_tick.saturating_add(period_ticks.max(1));
-        embassy_time::Instant::from_ticks(self.next_tick)
+        trueos_time::Instant::from_ticks(self.next_tick)
     }
 }
 

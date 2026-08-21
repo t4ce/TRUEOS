@@ -132,7 +132,7 @@ async fn process_request(request: Request) {
     }
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub async fn service_task() {
     BROKER_ONLINE.store(true, Ordering::Release);
     crate::log_info!(target: "net";

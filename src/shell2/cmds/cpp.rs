@@ -3,7 +3,7 @@ use core::fmt::Write;
 use core::str::SplitWhitespace;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use embassy_executor::Spawner;
+use trueos_executor::Spawner;
 use spin::Mutex;
 
 use super::super::{
@@ -1164,7 +1164,7 @@ fn stop_font_service_rush(io: &'static dyn ShellBackend2) {
     }
 }
 
-#[embassy_executor::task(pool_size = 32)]
+#[trueos_executor::task(pool_size = 32)]
 async fn cpp_font_stamp_task(
     output_target: MatrixTarget,
     pending: crate::r::font_kernel_service::PendingFontStamp,

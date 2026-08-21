@@ -116,9 +116,9 @@ impl Timer {
     ///
     /// Example:
     /// ``` no_run
-    /// use embassy_time::{Duration, Timer};
+    /// use trueos_time::{Duration, Timer};
     ///
-    /// #[embassy_executor::task]
+    /// #[trueos_executor::task]
     /// async fn demo_sleep_seconds() {
     ///     // suspend this task for one second.
     ///     Timer::after(Duration::from_secs(1)).await;
@@ -198,10 +198,10 @@ impl Future for Timer {
 ///
 /// For instance, consider the following code fragment.
 /// ``` no_run
-/// use embassy_time::{Duration, Timer};
+/// use trueos_time::{Duration, Timer};
 /// # fn foo() {}
 ///
-/// #[embassy_executor::task]
+/// #[trueos_executor::task]
 /// async fn ticker_example_0() {
 ///     loop {
 ///         foo();
@@ -216,10 +216,10 @@ impl Future for Timer {
 /// Example using ticker, which will consistently call `foo` once a second.
 ///
 /// ``` no_run
-/// use embassy_time::{Duration, Ticker};
+/// use trueos_time::{Duration, Ticker};
 /// # fn foo(){}
 ///
-/// #[embassy_executor::task]
+/// #[trueos_executor::task]
 /// async fn ticker_example_1() {
 ///     let mut ticker = Ticker::every(Duration::from_secs(1));
 ///     loop {

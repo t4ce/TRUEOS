@@ -8,7 +8,7 @@
 
 use alloc::vec::Vec;
 
-use embassy_time::{Duration, Instant, with_timeout};
+use trueos_time::{Duration, Instant, with_timeout};
 use spin::Mutex;
 
 const SLOT4_RECT_CAPACITY: usize = 3_072;
@@ -53,7 +53,7 @@ impl Slot4State {
     }
 }
 
-#[embassy_executor::task(pool_size = 1)]
+#[trueos_executor::task(pool_size = 1)]
 pub(crate) async fn ui4_slot4_service_task() {
     crate::log_info!(target: "ui4/slot4";
         "ui4/slot4: service online carrier=ap1-ui-core plane=slot4 content=color-picker-rgba8+static-color-crosshairs+selected-frame-strips+selection-outline-1px+maximize-outline-1px+context-menu hardware-cursor=preferred-physical-source/concurrent cadence_hz={} cadence_clock=absolute-fractional wake=input-or-frame-state-change coalesce=display-cadence damage=ordered-linear-diff+window-old-new gpu_submits=0 synthetic-motion=off\n",

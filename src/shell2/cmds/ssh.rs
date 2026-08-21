@@ -8,7 +8,7 @@
 use alloc::string::String;
 use alloc::vec::Vec;
 
-use embassy_executor::{Spawner, task};
+use trueos_executor::{Spawner, task};
 
 use super::super::shell2_cmd::ParseOutcome;
 use super::super::{

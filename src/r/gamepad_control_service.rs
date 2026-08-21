@@ -8,7 +8,7 @@
 use alloc::vec::Vec as AllocVec;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
-use embassy_time::{Duration, Timer};
+use trueos_time::{Duration, Timer};
 use heapless::{Deque, String, Vec};
 use serde_json::Value;
 use spin::Mutex;
@@ -448,7 +448,7 @@ pub(crate) fn gamepad_snapshot(
     Ok(station.gamepads[index].snapshot)
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub(crate) async fn gamepad_control_service_task() {
     crate::log_info!(target: "input";
         "gamepad-control: station online protocol=binary+json ops=set,tween,wait easing=linear,natural sink=capability-snapshot\n"

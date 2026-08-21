@@ -4,8 +4,8 @@ extern crate alloc;
 
 use alloc::{vec, vec::Vec};
 use crab_usb::{Device, DeviceInfo, USBHost, usb_if};
-use embassy_executor::Spawner;
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use trueos_executor::Spawner;
+use trueos_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
@@ -419,7 +419,7 @@ async fn submit_led_phase(device: &mut Device, target: LedProbeTarget, phase: u8
     true
 }
 
-#[embassy_executor::task(pool_size = 2)]
+#[trueos_executor::task(pool_size = 2)]
 async fn led_probe_task(mut device: Device, controller_id: u32, target: LedProbeTarget) {
     let desc = device.descriptor();
     let vendor_id = desc.vendor_id;

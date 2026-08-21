@@ -4,7 +4,7 @@ use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 
-use embassy_executor::{SendSpawner, SpawnToken, Spawner};
+use trueos_executor::{SendSpawner, SpawnToken, Spawner};
 use spin::Mutex;
 
 pub const CORE_KIND_UNKNOWN: u8 = 0;

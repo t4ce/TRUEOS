@@ -1,6 +1,6 @@
 use core::str::SplitWhitespace;
 
-use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
+use trueos_time::{Duration as EmbassyDuration, Instant, Timer};
 use v::vnet as api;
 
 use super::super::{

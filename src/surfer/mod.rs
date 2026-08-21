@@ -1,6 +1,6 @@
 pub(crate) mod html_shack;
 
-use embassy_executor::SpawnError;
+use trueos_executor::SpawnError;
 
 pub(crate) fn spawn_html_fetch_service() -> Result<bool, SpawnError> {
     let mut spawned = false;

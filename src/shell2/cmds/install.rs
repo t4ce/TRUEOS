@@ -1,7 +1,7 @@
 use core::str::SplitWhitespace;
 
-use embassy_executor::Spawner;
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use trueos_executor::Spawner;
+use trueos_time::{Duration as EmbassyDuration, Timer};
 
 use crate::shell2::shell2_cmd::ParseOutcome;
 use crate::shell2::{
@@ -75,7 +75,7 @@ pub(crate) fn submit_install(
     }
 }
 
-#[embassy_executor::task(pool_size = 2)]
+#[trueos_executor::task(pool_size = 2)]
 async fn install_command_task(
     target: MatrixTarget,
     disk: crate::disc::block::DeviceHandle,

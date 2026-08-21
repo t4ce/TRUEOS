@@ -145,7 +145,7 @@ fn handoff_boot_mouse_device(
     pool.insert(PooledUsbBootMouse { device, target })
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub async fn usb_device_pool_worker_task() {
     loop {
         let next = {
@@ -165,7 +165,7 @@ pub async fn usb_device_pool_worker_task() {
             );
             process_opened_device(device).await;
         } else {
-            embassy_time::Timer::after(embassy_time::Duration::from_millis(25)).await;
+            trueos_time::Timer::after(trueos_time::Duration::from_millis(25)).await;
         }
     }
 }
@@ -183,7 +183,7 @@ async fn process_opened_device(device: PooledUsbDevice) {
     }
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub async fn usb_boot_mouse_worker_task() {
     loop {
         let next = {
@@ -194,7 +194,7 @@ pub async fn usb_boot_mouse_worker_task() {
         if let Some(mouse) = next {
             poll_usb3_boot_mouse(mouse).await;
         } else {
-            embassy_time::Timer::after(embassy_time::Duration::from_millis(25)).await;
+            trueos_time::Timer::after(trueos_time::Duration::from_millis(25)).await;
         }
     }
 }
@@ -369,11 +369,11 @@ async fn poll_usb3_boot_mouse(mouse: PooledUsbBootMouse) {
                     pooled.product_id,
                     err
                 );
-                embassy_time::Timer::after(embassy_time::Duration::from_millis(25)).await;
+                trueos_time::Timer::after(trueos_time::Duration::from_millis(25)).await;
             }
         }
 
-        embassy_time::Timer::after(embassy_time::Duration::from_millis(1)).await;
+        trueos_time::Timer::after(trueos_time::Duration::from_millis(1)).await;
     }
 }
 

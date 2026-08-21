@@ -10,14 +10,14 @@
 // This mod MUST go first, so that the others see its macros.
 pub(crate) mod fmt;
 
-pub use embassy_executor_macros::task;
+pub use trueos_executor_macros::task;
 
 #[cfg(feature = "_platform")]
 #[cfg_attr(feature = "platform-spin", path = "platform/spin.rs")]
 mod platform;
 
 #[cfg(not(feature = "_platform"))]
-pub use embassy_executor_macros::main_unspecified as main;
+pub use trueos_executor_macros::main_unspecified as main;
 #[cfg(feature = "_platform")]
 #[allow(unused_imports)] // don't warn if the module is empty.
 pub use platform::*;

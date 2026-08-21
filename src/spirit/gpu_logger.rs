@@ -8,7 +8,7 @@
 
 use alloc::vec::Vec;
 
-use embassy_time::Instant;
+use trueos_time::Instant;
 use spin::Mutex;
 
 use super::SpiritSurfaceLayout;

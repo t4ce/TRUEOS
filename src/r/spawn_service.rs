@@ -4,8 +4,8 @@ use core::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
-use embassy_executor::{SpawnError, SpawnToken, Spawner};
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use trueos_executor::{SpawnError, SpawnToken, Spawner};
+use trueos_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 
 use crate::r::spawn_spec::{SpawnAttempt, TaskSpec};
@@ -1138,7 +1138,7 @@ fn trueosfs_rw_probe_fill(buf: &mut Vec<u8>, len: usize) {
     }
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 async fn trueosfs_rw_probe_task() {
     let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
         crate::log!("trueosfs-rw-probe: result=failed phase=root err=missing\n");
@@ -1428,7 +1428,7 @@ const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
     },
 ];
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 async fn bp_autostart_task(spawner: Spawner) {
     crate::r::readiness::wait_for(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED).await;
 
@@ -1518,7 +1518,7 @@ fn spawn_bp_autostart(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |spawner| bp_autostart_task(spawner))
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 async fn weave_hello_autostart_task() {
     // Let the app-VM queue task enter its receive loop before submitting the
     // first Windows personality Blueprint. The module itself is a Limine boot
@@ -1555,7 +1555,7 @@ fn spawn_net_tcp_shell(spawner: Spawner) -> SpawnAttempt {
     })
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 async fn local_shell_session_pool_bootstrap_task(spawner: Spawner) {
     let spawned = crate::shell2::spawn_local_shell_session_workers(spawner);
     if spawned == crate::shell2::LOCAL_SHELL_SESSION_CAP {
@@ -1576,7 +1576,7 @@ fn spawn_local_shell_session_pool(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |spawner| local_shell_session_pool_bootstrap_task(spawner))
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 async fn atomic_bomb_task() {
     Timer::after(EmbassyDuration::from_secs(5)).await;
 
@@ -1608,10 +1608,10 @@ fn executor_realm_smoke_delay_ms(hop: usize) -> u64 {
     3 + ((mixed >> 16) % 23)
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 async fn executor_realm_migration_smoke_task(
-    bsp_target: embassy_executor::MigrationTarget,
-    ap_target: embassy_executor::MigrationTarget,
+    bsp_target: trueos_executor::MigrationTarget,
+    ap_target: trueos_executor::MigrationTarget,
     ap_slot: u32,
     ap_kind: u8,
     bsp_executor_id: usize,
@@ -1655,7 +1655,7 @@ async fn executor_realm_migration_smoke_task(
         let request_ms = boot_probe_ms();
         // Safety: this smoke task is spawned through SendSpawner below, so the
         // compiler verifies the whole future is Send before it may cross CPUs.
-        let result = unsafe { embassy_executor::migrate_current_task_to(target) }.await;
+        let result = unsafe { trueos_executor::migrate_current_task_to(target) }.await;
         let done_ms = boot_probe_ms();
         let current_slot = crate::percpu::current_slot();
         let hop_ok = result.migrated && current_slot == to_slot;
@@ -2269,7 +2269,7 @@ pub fn latest_system_service_snapshot_text() -> String {
     snapshot.clone()
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub async fn spawn_service_task(spawner: Spawner) {
     async move {
         crate::log_info!(target: "boot";

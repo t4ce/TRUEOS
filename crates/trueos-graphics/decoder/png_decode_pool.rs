@@ -337,7 +337,7 @@ fn spawn_parallel(job: &Arc<RowExpandJob>) {
     }
 }
 
-#[embassy_executor::task(pool_size = PNG_ROW_EXPAND_TASK_POOL_SIZE)]
+#[trueos_executor::task(pool_size = PNG_ROW_EXPAND_TASK_POOL_SIZE)]
 async fn png_row_expand_task(job: Arc<RowExpandJob>, part_index: usize) {
     let result = job.process_part(part_index);
     job.finish_part(part_index, result);

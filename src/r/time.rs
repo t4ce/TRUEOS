@@ -232,7 +232,7 @@ impl Driver for TimeDriver {
         let at = coalesced_wake_tick(
             &queue,
             at,
-            embassy_executor::raw::timer_slack_ticks_for_waker(waker),
+            trueos_executor::raw::timer_slack_ticks_for_waker(waker),
         );
 
         let mut idx = 0;

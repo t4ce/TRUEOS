@@ -217,9 +217,9 @@ pub(crate) fn exercise_bf16_helpers_once() -> Bf16HelperSmoke {
     smoke
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub(crate) async fn bf16_helper_boot_exercise_task() {
-    embassy_time::Timer::after(embassy_time::Duration::from_millis(250)).await;
+    trueos_time::Timer::after(trueos_time::Duration::from_millis(250)).await;
     let start = embassy_time_driver::now();
     let mut last = Bf16HelperSmoke::default();
     for _ in 0..8 {

@@ -7,8 +7,8 @@ use core::future::Future;
 use core::task::Poll;
 
 use crab_usb::{USBHost, usb_if};
-use embassy_executor::Spawner;
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use trueos_executor::Spawner;
+use trueos_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 
 use super::super::api::{InterfaceEndpointError, claim_interface};
@@ -391,7 +391,7 @@ where
     }
 }
 
-#[embassy_executor::task(pool_size = 8)]
+#[trueos_executor::task(pool_size = 8)]
 async fn hid_boot_stream_task(
     mut device: crab_usb::Device,
     controller_id: u32,

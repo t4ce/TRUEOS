@@ -1917,7 +1917,7 @@ pub(super) async fn submit_avc_single_idr_batch(
         if media_backend_now_ticks() >= poll_deadline {
             break value;
         }
-        embassy_time::Timer::after_millis(AVC_COMPLETION_POLL_DELAY_MS).await;
+        trueos_time::Timer::after_millis(AVC_COMPLETION_POLL_DELAY_MS).await;
     };
     let poll_us = media_backend_elapsed_us(poll_start);
     if !retired {

@@ -12,7 +12,7 @@ use alloc::vec::Vec;
 use core::fmt;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use embassy_time::{Duration, Timer};
+use trueos_time::{Duration, Timer};
 use spin::Mutex;
 
 use super::{
@@ -1047,7 +1047,7 @@ fn writable_capture_root_handle() -> Option<crate::disc::block::DeviceHandle> {
         .find(|disk| !disk.info().is_read_only())
 }
 
-#[embassy_executor::task(pool_size = 1)]
+#[trueos_executor::task(pool_size = 1)]
 pub(crate) async fn ui4_screenshot_service_task() {
     crate::log_info!(target: "ui4/screenshot";
         "ui4/screenshot: service online full-display-trigger=shell2-shot-only full-display-source=pipe-c-wd-postblend live-route=borrow-next-rdp-frame idle-route=temporary-wd-one-frame encode=none format=png-rgba destination=trueosfs:/screenshots worker=background\n"

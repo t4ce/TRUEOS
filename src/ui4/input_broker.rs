@@ -10,7 +10,7 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use embassy_sync::signal::Signal;
-use embassy_time::{Duration, with_timeout};
+use trueos_time::{Duration, with_timeout};
 use heapless::Vec;
 use spin::Mutex;
 
@@ -1344,7 +1344,7 @@ static INPUT_BROKER: Mutex<InputBroker> = Mutex::new(InputBroker::new());
 static OWNER_QUEUES: Mutex<Vec<OwnerQueue, MAX_OWNER_QUEUES>> = Mutex::new(Vec::new());
 static SLOT4_VISUAL_CHANGE: Signal<crate::wait::EmbassySpinRawMutex, ()> = Signal::new();
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub(crate) async fn ui4_input_service_task(ap1_spawner: crate::workers::WorkerSpawner) {
     let launcher_spawner = crate::workers::pick_background_spawner().unwrap_or(ap1_spawner);
     match ui4_desktop_shell_launcher_task() {
@@ -1409,9 +1409,9 @@ fn request_desktop_shell_launch(source: Ui4CursorSource, x: u32, y: u32) {
     }
 }
 
-#[embassy_executor::task(pool_size = 1)]
+#[trueos_executor::task(pool_size = 1)]
 async fn ui4_desktop_shell_launcher_task() {
-    let shell_spawner = embassy_executor::SendSpawner::for_current_executor().await;
+    let shell_spawner = trueos_executor::SendSpawner::for_current_executor().await;
     loop {
         let request = loop {
             let request = {

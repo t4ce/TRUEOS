@@ -5,7 +5,7 @@
 //! one-GuC Render submission, and UI4 publication.
 
 use alloc::{collections::VecDeque, vec::Vec};
-use embassy_time::{Duration, Instant, Timer};
+use trueos_time::{Duration, Instant, Timer};
 
 const GAME_ARTIFACT: &[u8] = include_bytes!("../../assets/helio/simple-cube.trueos.intel.helio");
 const CHURN_FORWARD_ARTIFACT: &[u8] =
@@ -3620,7 +3620,7 @@ async fn run_ported_scene(context: InstanceContext) -> Result<(), GameError> {
     result
 }
 
-#[embassy_executor::task(pool_size = INSTANCE_CAPACITY)]
+#[trueos_executor::task(pool_size = INSTANCE_CAPACITY)]
 async fn helio_game_instance_task(context: InstanceContext) {
     let mut last_error = None;
     loop {
@@ -3695,7 +3695,7 @@ async fn helio_game_instance_task(context: InstanceContext) {
 
 /// Dispatches numbered Shell2/Blueprint requests into ten independent Helio
 /// tasks deterministically sharded across exactly three AP2+ executors.
-#[embassy_executor::task(pool_size = CPU_CARRIER_CAPACITY)]
+#[trueos_executor::task(pool_size = CPU_CARRIER_CAPACITY)]
 pub async fn helio_game_service_task(
     cpu_carrier_id: u8,
     carrier_count: u8,
@@ -3762,8 +3762,8 @@ pub async fn helio_game_service_task(
         current_slot,
         core_kind,
     );
-    let spawner: embassy_executor::Spawner =
-        unsafe { embassy_executor::Spawner::for_current_executor().await };
+    let spawner: trueos_executor::Spawner =
+        unsafe { trueos_executor::Spawner::for_current_executor().await };
     loop {
         while let Some(context) = claim_next_launch(cpu_carrier, carrier_count) {
             match helio_game_instance_task(context) {

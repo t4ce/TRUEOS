@@ -2,8 +2,8 @@ use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 use core::sync::atomic::Ordering;
 
-use embassy_executor::task;
-use embassy_time::{Duration as EmbassyDuration, Instant, with_timeout};
+use trueos_executor::task;
+use trueos_time::{Duration as EmbassyDuration, Instant, with_timeout};
 
 use crate::net::adapter::{
     NetCommand, NetEvent, NetHandle, NetQueue, SocketKind, register_app_queues,

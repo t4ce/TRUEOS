@@ -13,8 +13,8 @@ use core::{
     sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering},
 };
 
-use embassy_executor::SpawnError;
-use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
+use trueos_executor::SpawnError;
+use trueos_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
 
 use crate::intel::gpu_font::{
@@ -1464,7 +1464,7 @@ fn plan_diagnostics(
     }
 }
 
-#[embassy_executor::task(pool_size = FONT_PLAN_WORKER_COUNT)]
+#[trueos_executor::task(pool_size = FONT_PLAN_WORKER_COUNT)]
 async fn font_plan_worker_task(worker_id: usize, expected_slot: u32, expected_kind: u8) {
     let bit = 1u32 << worker_id;
     let actual_slot = u32::try_from(crate::percpu::current_slot()).unwrap_or(u32::MAX);

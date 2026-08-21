@@ -7,7 +7,7 @@ use alloc::string::ToString;
 use alloc::{collections::VecDeque, string::String, vec::Vec};
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
+use trueos_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
 
 use crate::trueos_shims::{
@@ -311,7 +311,7 @@ pub fn clear_service_start_claim() {
     SERVICE_STARTED.store(false, Ordering::Release);
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub async fn async_fs_service_task() {
     loop {
         let mut processed = 0usize;

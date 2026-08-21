@@ -5,7 +5,7 @@ use crate::aud::{
     backing_pattern::{BackingPatternRenderSource, backing_config},
     live_piano::LivePianoRenderSource,
 };
-use embassy_time::{Duration, Timer};
+use trueos_time::{Duration, Timer};
 use spin::Mutex;
 use tinyaudio::prelude::*;
 
@@ -629,7 +629,7 @@ async fn write_pcm_dump(path: &'static str, seconds: usize, samples: Vec<i16>) {
     }
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub async fn tinyaudio_service_task() {
     CALLBACKS.store(0, Ordering::Release);
     SAMPLES_WRITTEN.store(0, Ordering::Release);

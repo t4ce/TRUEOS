@@ -3,7 +3,7 @@
 extern crate alloc;
 
 use alloc::{format, string::String, vec::Vec};
-use embassy_time::{Duration, Instant, Timer};
+use trueos_time::{Duration, Instant, Timer};
 
 use super::VNet;
 

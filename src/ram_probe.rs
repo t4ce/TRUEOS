@@ -1,6 +1,6 @@
 use core::cmp::min;
 
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use trueos_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 
 const FACTORY_RAM_PROBE_PAGE_BYTES: usize = 4096;
@@ -87,7 +87,7 @@ fn build_random_sample(page_phys: u64) -> FactoryRamProbeState {
     }
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub async fn boot_factory_ram_probe_task() {
     let Some(page_phys) = crate::phys::alloc_phys_range(
         FACTORY_RAM_PROBE_PAGE_BYTES,

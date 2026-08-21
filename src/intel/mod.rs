@@ -870,7 +870,7 @@ pub(crate) async fn run_media_avc_encode_probe_once()
 }
 
 pub(crate) fn hw_pic_service()
--> Result<embassy_executor::SpawnToken<impl Send>, embassy_executor::SpawnError> {
+-> Result<trueos_executor::SpawnToken<impl Send>, trueos_executor::SpawnError> {
     self::hw_pic::hw_pic_service()
 }
 

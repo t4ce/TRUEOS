@@ -1,4 +1,4 @@
-use embassy_executor::Spawner;
+use trueos_executor::Spawner;
 
 use crate::shell2::{
     MatrixTarget, ShellBackend2, matrix_target_for_backend, print_matrix_target_line,
@@ -17,7 +17,7 @@ pub(crate) fn store(spawner: &Spawner, io: &'static dyn ShellBackend2) {
     }
 }
 
-#[embassy_executor::task(pool_size = 2)]
+#[trueos_executor::task(pool_size = 2)]
 async fn rapl_store_task(target: MatrixTarget) {
     match crate::power::rapl::store_history_to_trueosfs().await {
         Ok(bytes) => print_matrix_target_line(

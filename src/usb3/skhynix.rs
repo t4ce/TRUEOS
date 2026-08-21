@@ -82,7 +82,7 @@ async fn startup_phase_checkpoint(
     phase_started_ms: u64,
     phase: &'static str,
 ) -> u64 {
-    let now_ms = embassy_time::Instant::now().as_millis();
+    let now_ms = trueos_time::Instant::now().as_millis();
     crate::log_info!(target: "usb";
         "crabusb: skhynix-green proof=startup-phase phase={} phase_ms={} total_ms={} yield_ms={}\n",
         phase,
@@ -90,15 +90,15 @@ async fn startup_phase_checkpoint(
         now_ms.saturating_sub(startup_started_ms),
         SKHYNIX_UAS_STARTUP_PHASE_YIELD_MS
     );
-    embassy_time::Timer::after(embassy_time::Duration::from_millis(
+    trueos_time::Timer::after(trueos_time::Duration::from_millis(
         SKHYNIX_UAS_STARTUP_PHASE_YIELD_MS,
     ))
     .await;
-    embassy_time::Instant::now().as_millis()
+    trueos_time::Instant::now().as_millis()
 }
 
 pub(super) async fn start_green_uas(mut pooled: super::dev_gears::PooledUsbDevice) {
-    let startup_started_ms = embassy_time::Instant::now().as_millis();
+    let startup_started_ms = trueos_time::Instant::now().as_millis();
     let mut phase_started_ms = startup_started_ms;
     // Initial configuration and SCSI discovery use the same endpoints as the
     // registered block device. Keep quarantine from cutting across this
@@ -490,7 +490,7 @@ enum MassProbeError {
 }
 
 async fn with_timeout_or_none<F: Future>(fut: F, timeout_ms: u64) -> Option<F::Output> {
-    embassy_time::with_timeout(embassy_time::Duration::from_millis(timeout_ms), fut)
+    trueos_time::with_timeout(trueos_time::Duration::from_millis(timeout_ms), fut)
         .await
         .ok()
 }
@@ -501,8 +501,8 @@ async fn endpoint_wait_submitted(
     timeout_label: &'static str,
     transfer_label: &'static str,
 ) -> Result<usize, MassProbeError> {
-    let mut timeout = core::pin::pin!(embassy_time::Timer::after(
-        embassy_time::Duration::from_millis(UAS_IO_TIMEOUT_MS),
+    let mut timeout = core::pin::pin!(trueos_time::Timer::after(
+        trueos_time::Duration::from_millis(UAS_IO_TIMEOUT_MS),
     ));
 
     core::future::poll_fn(|cx| {
@@ -753,8 +753,8 @@ async fn uas_command_in(
             );
         }
 
-        let mut timeout = core::pin::pin!(embassy_time::Timer::after(
-            embassy_time::Duration::from_millis(UAS_IO_TIMEOUT_MS,)
+        let mut timeout = core::pin::pin!(trueos_time::Timer::after(
+            trueos_time::Duration::from_millis(UAS_IO_TIMEOUT_MS,)
         ));
         let first = core::future::poll_fn(|cx| {
             if let Poll::Ready(result) = data_in.poll_request(data_id, cx) {
@@ -1310,7 +1310,7 @@ async fn probe_mass_uas_skhynix(
     status_in: &mut super::crabusb::Endpoint,
     data_in: &mut super::crabusb::Endpoint,
 ) -> Result<MassProbeInfo, MassProbeError> {
-    let probe_started_ms = embassy_time::Instant::now().as_millis();
+    let probe_started_ms = trueos_time::Instant::now().as_millis();
     let mut phase_started_ms = probe_started_ms;
     let mut inquiry = [0u8; 36];
     let inquiry_cdb = cdb_inquiry(inquiry.len() as u16);

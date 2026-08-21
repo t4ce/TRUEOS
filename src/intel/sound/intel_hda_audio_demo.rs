@@ -1,5 +1,5 @@
 use alloc::vec::Vec;
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use trueos_time::{Duration as EmbassyDuration, Timer};
 
 const HDA_AUDIO_DEMO_WAV_LOOP_ENABLED: bool = false;
 const AUDIO_DEMO_PATTERN_NAME: &str = "arp";
@@ -169,7 +169,7 @@ fn hda_duration_ms_for_samples(sample_count: usize) -> u32 {
     ms.clamp(1, u64::from(u32::MAX)) as u32
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub async fn task() {
     crate::log!(
         "intel/hda-audio-demo: task start wav_loop={} pattern={} piano={} loops={}\n",

@@ -1,4 +1,4 @@
-use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
+use trueos_time::{Duration as EmbassyDuration, Instant, Timer};
 use v::vnet;
 
 use crate::r::net::{SharedNetPayload, VNet};

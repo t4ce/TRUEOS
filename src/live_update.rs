@@ -19,8 +19,8 @@ use core::{
     sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
 };
 
-use embassy_executor::Spawner;
-use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
+use trueos_executor::Spawner;
+use trueos_time::{Duration as EmbassyDuration, Instant, Timer};
 use x86_64::structures::idt::{InterruptDescriptorTable, InterruptStackFrame};
 
 use crate::shell2::{MatrixTarget, matrix_target_interrupted, print_matrix_target_line};
@@ -709,7 +709,7 @@ pub fn rearm_shell_notice() {
     }
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 async fn restore_after_live_update_task(
     spawner: Spawner,
     restore_mask: [u64; RESTORE_WORDS],

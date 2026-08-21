@@ -2362,7 +2362,7 @@ pub unsafe extern "C" fn trueos_tinyaudio_hda_push_samples(
     }
 }
 
-#[embassy_executor::task(pool_size = 4)]
+#[trueos_executor::task(pool_size = 4)]
 async fn tinyaudio_output_pump_task(
     ctx: usize,
     pump: unsafe extern "C" fn(usize) -> i32,
@@ -2372,7 +2372,7 @@ async fn tinyaudio_output_pump_task(
         if unsafe { pump(ctx) } != 0 {
             break;
         }
-        embassy_time::Timer::after(embassy_time::Duration::from_millis(period_ms)).await;
+        trueos_time::Timer::after(trueos_time::Duration::from_millis(period_ms)).await;
     }
 }
 

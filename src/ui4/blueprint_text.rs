@@ -7,7 +7,7 @@
 //! coherent UI4 frame lifecycle.
 
 use alloc::{collections::VecDeque, string::String, vec::Vec};
-use embassy_time::Instant;
+use trueos_time::Instant;
 use spin::Mutex;
 
 use crate::intel::gpgpu::{
@@ -570,8 +570,8 @@ impl BlueprintVisualCadence {
         let remaining_ticks = self.next_tick.saturating_sub(now);
         remaining_ticks
             .saturating_mul(1_000)
-            .saturating_add(embassy_time::TICK_HZ.saturating_sub(1))
-            / embassy_time::TICK_HZ
+            .saturating_add(trueos_time::TICK_HZ.saturating_sub(1))
+            / trueos_time::TICK_HZ
     }
 
     fn consume_admission(&mut self) {
@@ -581,7 +581,7 @@ impl BlueprintVisualCadence {
             self.remainder = 0;
         }
         let hz = self.target_hz as u64;
-        let tick_hz = embassy_time::TICK_HZ;
+        let tick_hz = trueos_time::TICK_HZ;
         let mut period = tick_hz / hz;
         self.remainder = self.remainder.saturating_add(tick_hz % hz);
         period = period.saturating_add(self.remainder / hz);

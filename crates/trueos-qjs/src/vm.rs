@@ -4,7 +4,7 @@ extern crate alloc;
 
 use alloc::rc::Rc;
 use core::marker::PhantomData;
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use trueos_time::{Duration as EmbassyDuration, Timer};
 
 use crate as qjs;
 use crate::node::RuntimeProfile;

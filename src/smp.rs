@@ -1,7 +1,7 @@
 use alloc::{string::String, vec::Vec};
 use core::ptr::null_mut;
 use core::sync::atomic::{AtomicPtr, AtomicU8, AtomicU64, AtomicUsize, Ordering};
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use trueos_time::{Duration as EmbassyDuration, Timer};
 
 pub type CpuCallFn = fn(u64) -> u64;
 
@@ -263,7 +263,7 @@ pub fn hlt_history_text(slot: usize) -> Option<String> {
     Some(out)
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub async fn hlt_history_sampler_task() {
     loop {
         sample_hlt_history();

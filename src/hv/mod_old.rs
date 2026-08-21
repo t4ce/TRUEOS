@@ -7,8 +7,8 @@ use core::arch::x86_64::__cpuid;
 use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use embassy_executor::{Spawner, task};
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use trueos_executor::{Spawner, task};
+use trueos_time::{Duration as EmbassyDuration, Timer};
 use heapless::{Deque, String};
 use spin::Mutex;
 use x86_64::instructions::tables::{sgdt, sidt};

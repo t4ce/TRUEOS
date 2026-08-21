@@ -2,7 +2,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::fmt::Write;
 
-use embassy_executor::Spawner;
+use trueos_executor::Spawner;
 
 use super::cmds::run;
 use super::cmds::tlb_helper::TlbTable;
@@ -388,7 +388,7 @@ async fn print_peer_table(target: &MatrixTarget, width: usize) {
     table.emit_footer(|text| print_matrix_target_line(target, text));
 }
 
-#[embassy_executor::task(pool_size = 2)]
+#[trueos_executor::task(pool_size = 2)]
 async fn peer_app_task(target: MatrixTarget, width: usize, args: Vec<String>, spawner: Spawner) {
     if args.is_empty() {
         print_peer_table(&target, width).await;
@@ -666,7 +666,7 @@ async fn load_vm(spawner: &Spawner, target: &MatrixTarget, vm_id: u8) -> bool {
     }
 }
 
-#[embassy_executor::task(pool_size = 4)]
+#[trueos_executor::task(pool_size = 4)]
 async fn load_vm_task(spawner: Spawner, target: MatrixTarget, vm_id: u8) {
     let _ = load_vm(&spawner, &target, vm_id).await;
     crate::hv::finish_restore(vm_id);
@@ -693,7 +693,7 @@ fn schedule_load_vm(spawner: &Spawner, io: &'static dyn ShellBackend2, vm_id: u8
     }
 }
 
-#[embassy_executor::task(pool_size = 2)]
+#[trueos_executor::task(pool_size = 2)]
 async fn store_persistent_vm_task(target: MatrixTarget, vm_id: u8, name: String) {
     match crate::hv::store::store_persistent_async(vm_id, name.as_str()).await {
         Ok(bytes) => print_matrix_target_line(
@@ -740,7 +740,7 @@ fn schedule_store_persistent(spawner: &Spawner, io: &'static dyn ShellBackend2, 
     }
 }
 
-#[embassy_executor::task(pool_size = 2)]
+#[trueos_executor::task(pool_size = 2)]
 async fn load_persistent_vm_task(spawner: Spawner, target: MatrixTarget, vm_id: u8, name: String) {
     let result = async {
         let image = crate::hv::store::load_persistent_async(name.as_str()).await?;
@@ -817,7 +817,7 @@ fn schedule_load_persistent(
     }
 }
 
-#[embassy_executor::task(pool_size = 2)]
+#[trueos_executor::task(pool_size = 2)]
 async fn delete_persistent_task(target: MatrixTarget, name: String) {
     match crate::hv::store::delete_persistent_async(name.as_str()).await {
         Ok(true) => print_matrix_target_line(
@@ -979,7 +979,7 @@ fn load_remote(io: &'static dyn ShellBackend2, endpoint: &str, vm_id: u8) {
     }
 }
 
-#[embassy_executor::task(pool_size = 2)]
+#[trueos_executor::task(pool_size = 2)]
 async fn start_app_task(
     target: MatrixTarget,
     width: usize,

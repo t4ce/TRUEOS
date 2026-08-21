@@ -9,7 +9,7 @@ extern crate alloc;
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use embassy_time::{Duration, Timer};
+use trueos_time::{Duration, Timer};
 use spin::Mutex;
 
 use crate::lumen::decode::{Lfm25DecodeInput, checkpoint_intel_igc, restore_intel_igc};
@@ -420,7 +420,7 @@ pub(crate) fn spirit_text_present_silent(turn: u64, text: &[u8]) -> i32 {
     0
 }
 
-#[embassy_executor::task(pool_size = TASK_POOL_SIZE)]
+#[trueos_executor::task(pool_size = TASK_POOL_SIZE)]
 async fn lumen_blueprint_worker(owner: u8) {
     let initial = slot(owner).and_then(|slot| slot.lock().request.take());
     let Some(initial) = initial else {

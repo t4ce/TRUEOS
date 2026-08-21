@@ -8,7 +8,7 @@ use alloc::{
 };
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use embassy_time::{Duration, Instant, Timer};
+use trueos_time::{Duration, Instant, Timer};
 use v::vnet::{self, EndpointV4};
 
 use crate::net::tls::{TlsClientConfig, TlsRoots};

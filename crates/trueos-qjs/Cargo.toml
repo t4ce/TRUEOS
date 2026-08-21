@@ -15,8 +15,8 @@ cc = "1.0"
 [dependencies]
 spin = "0.10"
 embassy-time-driver = { version = "0.2.2", default-features = false, optional = true }
-embassy-executor = { version = "0.10.0", default-features = false, optional = true, features = ["executor-thread", "platform-spin"] }
-embassy-time = { version = "0.5.1", default-features = false, optional = true, features = ["tick-hz-1_000"] }
+trueos-executor = { path = "../trueos-executor", default-features = false, optional = true, features = ["executor-thread", "platform-spin"] }
+trueos-time = { path = "../trueos-executor/embassy-time", default-features = false, optional = true, features = ["tick-hz-1_000"] }
 embassy-sync = { version = "0.8.0", default-features = false, optional = true }
 libm = { version = "0.2", default-features = false, optional = true }
 v = { path = "../trueos-v", default-features = false }
@@ -29,8 +29,7 @@ default = []
 lightningcss-native = ["dep:lightningcss"]
 
 # TRUEOS-only helpers (kernel logging via trueos_cabi_write + Complex-backed module smoke).
-trueos = ["dep:trueos-math", "dep:trueos-locale", "dep:embassy-time-driver", "dep:embassy-executor", "dep:embassy-time", "dep:embassy-sync", "dep:libm"]
+trueos = ["dep:trueos-math", "dep:trueos-locale", "dep:embassy-time-driver", "dep:trueos-executor", "dep:trueos-time", "dep:embassy-sync", "dep:libm"]
 
 [patch.crates-io]
-embassy-time = { path = "../trueos-executor/embassy-time" }
 crc32fast = { path = "../../vendor/crc32fast-1.5.0" }

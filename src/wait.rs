@@ -7,7 +7,7 @@ use core::future::Future;
 use core::pin::Pin;
 use core::sync::atomic::{AtomicU32, Ordering};
 use core::task::{Context, Poll, Waker};
-use embassy_executor::task;
+use trueos_executor::task;
 use embassy_sync::blocking_mutex::raw::RawMutex;
 use embassy_time_driver::{TICK_HZ, now};
 use spin::Mutex;
@@ -176,7 +176,7 @@ impl WaitQueue {
             return false;
         }
 
-        let mut timeout = core::pin::pin!(embassy_time::Timer::after_millis(timeout_ms));
+        let mut timeout = core::pin::pin!(trueos_time::Timer::after_millis(timeout_ms));
         core::future::poll_fn(|cx: &mut Context<'_>| {
             if self.seq.load(Ordering::Acquire) != observed {
                 return Poll::Ready(true);

@@ -2,8 +2,8 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt::Write;
 
-use embassy_executor::{SendSpawner, SpawnError, Spawner};
-use embassy_time::Duration as EmbassyDuration;
+use trueos_executor::{SendSpawner, SpawnError, Spawner};
+use trueos_time::Duration as EmbassyDuration;
 use sha2::{Digest, Sha256};
 
 use super::cmds::run;
@@ -347,7 +347,7 @@ async fn write_file(
     }
 }
 
-#[embassy_executor::task(pool_size = 2)]
+#[trueos_executor::task(pool_size = 2)]
 async fn online_run_task(
     target: MatrixTarget,
     width: usize,
@@ -436,7 +436,7 @@ async fn online_run_task(
     set_matrix_target_active(&target, false);
 }
 
-#[embassy_executor::task(pool_size = 2)]
+#[trueos_executor::task(pool_size = 2)]
 async fn download_task(target: MatrixTarget, width: usize, selector: Option<String>) {
     let log = |text: &str| print_matrix_target_line(&target, text);
     if !wait_for_online_ready().await {

@@ -4,7 +4,7 @@ use alloc::boxed::Box;
 use alloc::collections::VecDeque;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use trueos_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 
 pub type BlockingJobFn = Box<dyn FnOnce() + Send + 'static>;
@@ -159,7 +159,7 @@ fn run_blocking_job_entry(entry: BlockingJobEntry) {
     );
 }
 
-#[embassy_executor::task(pool_size = SERVICE_LANE_TASK_POOL)]
+#[trueos_executor::task(pool_size = SERVICE_LANE_TASK_POOL)]
 async fn service_lane_worker_task(slot: u32, core_kind: u8) {
     crate::log_info!(
         target: "service";
@@ -214,7 +214,7 @@ async fn service_lane_worker_task(slot: u32, core_kind: u8) {
     }
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub async fn blocking_job_dispatcher_task() {
     let spawned = start_service_lanes();
     crate::log_info!(

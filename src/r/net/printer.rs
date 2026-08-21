@@ -10,7 +10,7 @@ use alloc::{
 };
 use core::fmt::Write as _;
 
-use embassy_time::{Duration, Instant, Timer};
+use trueos_time::{Duration, Instant, Timer};
 use spin::Mutex;
 
 use super::{
@@ -236,7 +236,7 @@ impl DiscoveryState {
     }
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub async fn printer_discovery_task() {
     crate::r::readiness::wait_for(crate::r::readiness::NET_ANY_CONFIGURED).await;
 
@@ -448,7 +448,7 @@ async fn run_print_job(job: PrintJob) {
     }
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub async fn printer_spooler_task() {
     crate::r::readiness::wait_for(crate::r::readiness::NET_ANY_CONFIGURED).await;
     crate::log_os::printer_spooler_online();

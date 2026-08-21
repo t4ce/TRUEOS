@@ -2,7 +2,7 @@ use crab_usb::usb_if;
 
 use super::super::api::{EndpointBulkIn, EndpointBulkOut};
 use core::task::Poll;
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use trueos_time::{Duration as EmbassyDuration, Timer};
 use usb_if::host::ControlSetup;
 use usb_if::transfer::{Recipient, Request, RequestType};
 

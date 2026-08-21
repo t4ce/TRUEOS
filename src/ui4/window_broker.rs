@@ -9,7 +9,7 @@ use embassy_sync::{
     signal::Signal,
     watch::{Receiver as WatchReceiver, Watch},
 };
-use embassy_time::{Duration, Timer};
+use trueos_time::{Duration, Timer};
 use heapless::Deque;
 use spin::Mutex;
 
@@ -1429,7 +1429,7 @@ pub(crate) fn subscribe_window_broker_snapshots() -> Option<WindowBrokerSnapshot
 
 fn publish_window_broker_snapshot_once() -> WindowBrokerSnapshot {
     let update_count = next_serial(latest_window_broker_snapshot().update_count);
-    let published_at_ms = embassy_time::Instant::now().as_millis();
+    let published_at_ms = trueos_time::Instant::now().as_millis();
     let snapshot = WINDOW_BROKER
         .lock()
         .published_snapshot(update_count, published_at_ms);
@@ -1437,7 +1437,7 @@ fn publish_window_broker_snapshot_once() -> WindowBrokerSnapshot {
     snapshot
 }
 
-#[embassy_executor::task(pool_size = 1)]
+#[trueos_executor::task(pool_size = 1)]
 pub(crate) async fn ui4_window_broker_snapshot_service_task() {
     crate::log_info!(
         target: "ui4";
@@ -1486,7 +1486,7 @@ pub(crate) fn finish_window_session_with_request(
     session: WindowSessionId,
     request: WindowSessionCloseRequest<'_>,
 ) -> Result<usize, WindowBrokerError> {
-    let started_ms = embassy_time::Instant::now().as_millis();
+    let started_ms = trueos_time::Instant::now().as_millis();
     let finish = WINDOW_BROKER.lock().finish_session(
         owner,
         session,
@@ -1536,7 +1536,7 @@ pub(crate) fn finish_window_session_with_request(
 /// cadence so transition geometry and presentation stay in one clock domain.
 pub(crate) fn advance_window_close_transitions() {
     reap_transition_retired_frames();
-    let now_ms = embassy_time::Instant::now().as_millis();
+    let now_ms = trueos_time::Instant::now().as_millis();
     let retirements = WINDOW_BROKER.lock().advance_close_transitions(now_ms);
     if retirements.is_empty() {
         return;
@@ -1560,7 +1560,7 @@ pub(crate) fn advance_window_close_transitions() {
 /// The application has already received its single final resize request; only
 /// the display projection moves at compositor cadence here.
 pub(crate) fn advance_window_placement_transitions() {
-    let now_ms = embassy_time::Instant::now().as_millis();
+    let now_ms = trueos_time::Instant::now().as_millis();
     let _ = WINDOW_BROKER.lock().advance_placement_transitions(now_ms);
 }
 
@@ -1624,7 +1624,7 @@ pub(crate) fn create_window(request: WindowCreate) -> Result<WindowId, WindowBro
     let plan = super::frame_snapshot(request.frame)
         .map_err(|_| WindowBrokerError::InvalidHandle)?
         .plan;
-    let now_ms = embassy_time::Instant::now().as_millis();
+    let now_ms = trueos_time::Instant::now().as_millis();
     let id = WINDOW_BROKER
         .lock()
         .create(request, plan.buffering, now_ms)?;
@@ -2019,7 +2019,7 @@ pub(crate) fn publish_window_frame(
     if !damage.valid() {
         return Err(WindowBrokerError::EmptyDamage);
     }
-    let started_ms = embassy_time::Instant::now().as_millis();
+    let started_ms = trueos_time::Instant::now().as_millis();
     let mut broker = WINDOW_BROKER.lock();
     let window = broker.checked_window_mut(owner, id)?;
     let became_ready = window.state == WindowState::Pending;
@@ -2053,7 +2053,7 @@ pub(crate) fn publish_window_frames(
     if publications.iter().any(|(_, damage)| !damage.valid()) {
         return Err(WindowBrokerError::EmptyDamage);
     }
-    let started_ms = embassy_time::Instant::now().as_millis();
+    let started_ms = trueos_time::Instant::now().as_millis();
     let mut broker = WINDOW_BROKER.lock();
     let mut stack_changed = false;
     for (index, (id, _)) in publications.iter().copied().enumerate() {
@@ -2117,7 +2117,7 @@ pub(crate) fn close_window(owner: WindowOwner, id: WindowId) -> Result<(), Windo
         window.output
     };
     broker.release_lease_of(id);
-    broker.rebalance_application_planes(output, embassy_time::Instant::now().as_millis());
+    broker.rebalance_application_planes(output, trueos_time::Instant::now().as_millis());
     broker.mark_composition_changed();
     drop(broker);
     super::cursor_frame_inout::frame_closed(owner, id);
@@ -2159,7 +2159,7 @@ fn note_window_interaction(
     id: WindowId,
     raise: bool,
 ) -> Result<WindowPlane, WindowBrokerError> {
-    let now_ms = embassy_time::Instant::now().as_millis();
+    let now_ms = trueos_time::Instant::now().as_millis();
     let mut broker = WINDOW_BROKER.lock();
     let (slot, _) = unpack_handle(id.0)?;
     let current = broker.checked_window_mut(owner, id)?.plane;

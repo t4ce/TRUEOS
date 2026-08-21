@@ -2,7 +2,7 @@ extern crate alloc;
 
 use alloc::{format, string::String, vec::Vec};
 
-use embassy_time::{Duration, Timer};
+use trueos_time::{Duration, Timer};
 use embedded_websocket::{
     WebSocketKey, WebSocketReceiveMessageType, WebSocketSendMessageType, WebSocketServer,
 };
@@ -315,7 +315,7 @@ fn try_open_websocket(vnet: &VNet, session: &mut TimeSession) -> bool {
     false
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub async fn ws_time_task() {
     loop {
         let Some(vnet) = VNet::open_primary() else {

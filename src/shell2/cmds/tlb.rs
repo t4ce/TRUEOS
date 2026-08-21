@@ -7,7 +7,7 @@ use alloc::boxed::Box;
 use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use embassy_executor::Spawner;
+use trueos_executor::Spawner;
 
 use super::super::{
     MatrixTarget, ShellBackend2, line_width_for_backend, matrix_target_for_backend,
@@ -1110,7 +1110,7 @@ fn print_menu(io: &'static dyn ShellBackend2) {
     table.emit_footer(|text| line(io, text));
 }
 
-#[embassy_executor::task(pool_size = 2)]
+#[trueos_executor::task(pool_size = 2)]
 async fn cmd_tlb_pci_task(target: MatrixTarget, shell_width: usize) {
     ensure_pci_devices_enumerated();
 
@@ -3535,7 +3535,7 @@ pub(crate) async fn write_dump_bytes_to_default_path(
     }
 }
 
-#[embassy_executor::task(pool_size = 2)]
+#[trueos_executor::task(pool_size = 2)]
 async fn cmd_tlb_dump_task(target: MatrixTarget) {
     let out = build_dump_text().await;
     print_matrix_target_line(

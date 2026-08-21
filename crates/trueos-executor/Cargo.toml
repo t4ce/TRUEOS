@@ -1,6 +1,6 @@
 [package]
 edition = "2024"
-name = "embassy-executor"
+name = "trueos-executor"
 version = "0.10.0"
 description = "async/await executor designed for embedded usage"
 documentation = "https://docs.embassy.dev/embassy-executor"
@@ -20,8 +20,8 @@ defmt = ["dep:defmt"]
 embassy-time-driver = ["dep:embassy-time-driver"]
 executor-thread = []
 log = ["dep:log"]
-metadata-name = ["embassy-executor-macros/metadata-name"]
-nightly = ["embassy-executor-macros/nightly"]
+metadata-name = ["trueos-executor-macros/metadata-name"]
+nightly = ["trueos-executor-macros/nightly"]
 platform-spin = ["_platform"]
 rtos-trace = [
     "_any_trace",
@@ -36,7 +36,7 @@ trueos-task-profile = ["metadata-name"]
 turbowakers = []
 
 [lib]
-name = "embassy_executor"
+name = "trueos_executor"
 path = "src/lib.rs"
 
 [dependencies.cordyceps]
@@ -54,8 +54,8 @@ optional = true
 [dependencies.document-features]
 version = "0.2.7"
 
-[dependencies.embassy-executor-macros]
-version = "0.8.0"
+[dependencies.trueos-executor-macros]
+path = "trueos-executor-macros"
 
 [dependencies.embassy-executor-timer-queue]
 version = "0.1"

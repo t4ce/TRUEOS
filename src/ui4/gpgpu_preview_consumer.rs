@@ -8,7 +8,7 @@
 
 use alloc::{string::String, sync::Arc, vec::Vec};
 
-use embassy_time::{Duration, Instant, Timer};
+use trueos_time::{Duration, Instant, Timer};
 use spin::Mutex;
 
 use super::{
@@ -903,7 +903,7 @@ pub(crate) fn request_gpgpu_lab256_startup(
     if frame_limit == 0 {
         return Err("frame-limit-must-be-nonzero");
     }
-    if target_hz == 0 || target_hz > embassy_time::TICK_HZ {
+    if target_hz == 0 || target_hz > trueos_time::TICK_HZ {
         return Err("target-hz-out-of-range");
     }
     request_gpgpu_preview_start_with_policy(
@@ -959,7 +959,7 @@ pub(crate) fn gpgpu_preview_status() -> GpgpuPreviewStatus {
     PREVIEW_CONTROL.lock().status
 }
 
-#[embassy_executor::task(pool_size = 1)]
+#[trueos_executor::task(pool_size = 1)]
 pub(crate) async fn gpgpu_preview_consumer_service_task(worker_slot: u32) {
     crate::log_info!(
         target: "ui4";
@@ -5663,8 +5663,8 @@ fn schedule_next_render(preview: &mut ActivePreview) {
         Duration::from_millis(preview.config.cadence_ms)
     } else {
         let hz = preview.policy.target_hz;
-        let mut ticks = embassy_time::TICK_HZ / hz;
-        preview.cadence_phase += embassy_time::TICK_HZ % hz;
+        let mut ticks = trueos_time::TICK_HZ / hz;
+        preview.cadence_phase += trueos_time::TICK_HZ % hz;
         if preview.cadence_phase >= hz {
             preview.cadence_phase -= hz;
             ticks += 1;

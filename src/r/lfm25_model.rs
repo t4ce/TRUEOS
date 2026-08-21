@@ -7,7 +7,7 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use trueos_time::{Duration as EmbassyDuration, Timer};
 use sha2::{Digest, Sha256};
 
 pub const NATIVE_IMAGE_PATH: &str = "models/lfm2.5/LFM2.5-350M-Q8_0.native.bin";

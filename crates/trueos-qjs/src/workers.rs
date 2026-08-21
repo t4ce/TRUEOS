@@ -8,8 +8,8 @@ use alloc::vec::Vec;
 use core::ffi::{CStr, c_char, c_int};
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-use embassy_executor::{SendSpawner, Spawner};
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use trueos_executor::{SendSpawner, Spawner};
+use trueos_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
 
 use crate as qjs;
@@ -126,12 +126,12 @@ fn core_kind_name(kind: u8) -> &'static str {
     }
 }
 
-pub fn pick_background_spawner() -> Option<embassy_executor::SendSpawner> {
+pub fn pick_background_spawner() -> Option<trueos_executor::SendSpawner> {
     unsafe { trueos_kernel_worker_pick_background_spawner_with_slot() }
         .map(|(_, _, spawner)| spawner)
 }
 
-pub fn spawner_for_slot(cpu_slot: u32) -> Option<embassy_executor::SendSpawner> {
+pub fn spawner_for_slot(cpu_slot: u32) -> Option<trueos_executor::SendSpawner> {
     unsafe { trueos_kernel_worker_spawner_for_slot(cpu_slot) }
 }
 
@@ -417,7 +417,7 @@ fn mark_exited(worker_id: u32) {
     });
 }
 
-#[embassy_executor::task(pool_size = WORKER_TASK_POOL)]
+#[trueos_executor::task(pool_size = WORKER_TASK_POOL)]
 async fn worker_task(worker_id: u32, scheduled_slot: u32, scheduled_kind: u8) {
     log_str(&format!(
         "qjs-worker: worker#{} executor start slot={} kind={}\n",

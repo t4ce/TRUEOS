@@ -2,8 +2,8 @@ extern crate alloc;
 
 use core::sync::atomic::{AtomicU8, Ordering, fence};
 
-use embassy_executor::{SpawnError, SpawnToken};
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use trueos_executor::{SpawnError, SpawnToken};
+use trueos_time::{Duration as EmbassyDuration, Timer};
 
 use crate::{pci, wait};
 
@@ -984,7 +984,7 @@ fn present_limine_logo() -> Result<(), &'static str> {
     Ok(())
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 async fn fallback_logo_service_task() {
     crate::log_info!(
         target: "gfx";

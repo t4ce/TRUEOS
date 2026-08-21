@@ -3,7 +3,7 @@ use core::fmt::Write;
 use core::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 
 use embassy_sync::watch::{Receiver as WatchReceiver, Watch};
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use trueos_time::{Duration as EmbassyDuration, Timer};
 use raw_cpuid::CpuId;
 use spin::Once;
 use x86_64::registers::model_specific::Msr;
@@ -261,7 +261,7 @@ pub unsafe fn probe_local() -> Option<(Option<u8>, ThermalSample, Option<Thermal
     Some((tj_max, core, package))
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub async fn thermal_service() {
     crate::log_info!(
         target: "boot";

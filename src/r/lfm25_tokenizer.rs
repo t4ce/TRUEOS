@@ -5,7 +5,7 @@ extern crate alloc;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU8, Ordering};
-use embassy_time::{Duration, Timer};
+use trueos_time::{Duration, Timer};
 use sha2::{Digest, Sha256};
 use spin::Mutex;
 

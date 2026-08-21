@@ -1,7 +1,7 @@
 use core::str::SplitWhitespace;
 
-use embassy_executor::Spawner;
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use trueos_executor::Spawner;
+use trueos_time::{Duration as EmbassyDuration, Timer};
 
 use crate::shell2::shell2_cmd::ParseOutcome;
 use crate::shell2::{
@@ -91,7 +91,7 @@ pub(crate) fn submit_live_update(spawner: &Spawner, io: &'static dyn ShellBacken
     }
 }
 
-#[embassy_executor::task(pool_size = 2)]
+#[trueos_executor::task(pool_size = 2)]
 async fn update_command_task(target: MatrixTarget, disk: crate::disc::block::DeviceHandle) {
     let task_target = target.clone();
     async move {
@@ -273,7 +273,7 @@ async fn update_command_task(target: MatrixTarget, disk: crate::disc::block::Dev
     set_matrix_target_active(&target, false);
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 async fn live_update_command_task(target: MatrixTarget, spawner: Spawner) {
     let task_target = target.clone();
     async move {

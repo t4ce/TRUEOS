@@ -9,7 +9,7 @@
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU8, Ordering};
 
-use embassy_time::{Duration, Timer};
+use trueos_time::{Duration, Timer};
 use spin::Mutex;
 
 use super::engine as media;

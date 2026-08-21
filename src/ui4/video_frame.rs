@@ -11,7 +11,7 @@
 use alloc::{collections::VecDeque, vec::Vec};
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use embassy_time::{Duration, Instant, Timer};
+use trueos_time::{Duration, Instant, Timer};
 use spin::Mutex;
 
 use super::{
@@ -36,7 +36,7 @@ pub(crate) const VIDEO_RGBA_BUFFER_COUNT: usize = VIDEO_RGBA_BUFFERING.count();
 /// either conversion lane.
 const VIDEO_CONVERSION_OUTSTANDING_CAP: usize = crate::intel::gpgpu::UI4_COMPOSITOR_RCS_JOB_SLOTS;
 const _: () = assert!(VIDEO_RGBA_BUFFER_COUNT >= VIDEO_CONVERSION_OUTSTANDING_CAP + 2);
-const VIDEO_CONVERSION_ERROR_LOG_INTERVAL_TICKS: u64 = embassy_time::TICK_HZ * 10;
+const VIDEO_CONVERSION_ERROR_LOG_INTERVAL_TICKS: u64 = trueos_time::TICK_HZ * 10;
 const VIDEO_CONVERSION_PRESENT_ERROR: i32 = -34;
 const VIDEO_CONVERSION_PROBE_HISTOGRAM_BUCKET_US: u64 = 250;
 const VIDEO_CONVERSION_PROBE_HISTOGRAM_BUCKETS: usize = 128;
@@ -761,7 +761,7 @@ fn decoded_video_conversion_idle() -> bool {
 }
 
 fn video_conversion_ticks_to_micros(ticks: u64) -> u64 {
-    ((ticks as u128).saturating_mul(1_000_000) / embassy_time::TICK_HZ.max(1) as u128) as u64
+    ((ticks as u128).saturating_mul(1_000_000) / trueos_time::TICK_HZ.max(1) as u128) as u64
 }
 
 fn should_log_video_conversion_error() -> bool {
@@ -940,7 +940,7 @@ async fn wait_decoded_video_conversion_turn(request: DecodedVideoConversionReque
     }
 }
 
-#[embassy_executor::task(pool_size = 2)]
+#[trueos_executor::task(pool_size = 2)]
 pub(crate) async fn ui4_video_conversion_service_task(worker_slot: u32, lane: u8) {
     {
         let mut state = VIDEO_CONVERSION_STATE.lock();

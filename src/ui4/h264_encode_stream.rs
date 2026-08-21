@@ -9,7 +9,7 @@
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
-use embassy_time::{Duration, Timer};
+use trueos_time::{Duration, Timer};
 use spin::Mutex;
 
 const PROBE_START_DELAY_MS: u64 = 15_000;
@@ -210,7 +210,7 @@ pub(crate) fn h264_encode_stream_snapshot() -> H264EncodeStreamSnapshot {
     }
 }
 
-#[embassy_executor::task(pool_size = 1)]
+#[trueos_executor::task(pool_size = 1)]
 pub(crate) async fn ui4_h264_encode_prepare_task(assigned_slot: u32) {
     let worker = crate::cpu::CpuProfile::current();
     let worker_slot = worker.map(|profile| profile.slot()).unwrap_or(u32::MAX);
@@ -488,7 +488,7 @@ fn release_prepared_scanout(prepared: &mut PreparedScanout) {
     }
 }
 
-#[embassy_executor::task(pool_size = 1)]
+#[trueos_executor::task(pool_size = 1)]
 pub(crate) async fn ui4_h264_encode_stream_task() {
     let worker = crate::cpu::CpuProfile::current();
     let worker_slot = worker.map(|profile| profile.slot()).unwrap_or(u32::MAX);

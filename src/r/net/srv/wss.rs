@@ -3,7 +3,7 @@ extern crate alloc;
 use alloc::{boxed::Box, format, string::String, vec, vec::Vec};
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use embassy_time::{Duration, Timer};
+use trueos_time::{Duration, Timer};
 use embedded_websocket::{
     WebSocketClient, WebSocketOptions, WebSocketReceiveMessageType, WebSocketSendMessageType,
 };

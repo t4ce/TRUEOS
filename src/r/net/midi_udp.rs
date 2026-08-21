@@ -4,7 +4,7 @@
 //! audio/MIDI boundary: it translates piano state datagrams into note edges
 //! consumed by the kernel's live HDA synth.
 
-use embassy_time::{Duration, Timer};
+use trueos_time::{Duration, Timer};
 use v::vnet as api;
 
 use super::VNet;
@@ -378,7 +378,7 @@ fn delta_to_velocity_with_attack(delta: i16, prev_delta: i16) -> u8 {
     pressure_velocity.saturating_add(attack_bonus).min(127)
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub async fn midi_piano_udp_task() {
     crate::r::readiness::wait_for(crate::r::readiness::NET_ANY_CONFIGURED).await;
 

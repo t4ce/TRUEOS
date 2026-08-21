@@ -11,7 +11,7 @@ use alloc::{
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use embassy_sync::signal::Signal;
-use embassy_time::{Duration, Instant, Timer};
+use trueos_time::{Duration, Instant, Timer};
 use spin::Mutex;
 
 use super::crabusb::{

@@ -3,7 +3,7 @@ extern crate alloc;
 use alloc::vec;
 use alloc::{format, string::String, string::ToString, vec::Vec};
 
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use trueos_time::{Duration as EmbassyDuration, Timer};
 
 use v::vhttp_srv;
 use v::vnet as api;
@@ -811,7 +811,7 @@ fn http_mount_page(roots_html: &str, has_roots: bool) -> HttpResponsePlan {
     }
 }
 
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub async fn http_trueosfs_task() {
     async move {
         let mut endpoints: Vec<HttpTrueosfsEndpoint> = Vec::new();

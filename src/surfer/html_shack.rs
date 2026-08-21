@@ -10,7 +10,7 @@ use core::convert::Infallible;
 use core::pin::Pin;
 use core::sync::atomic::{AtomicU32, Ordering};
 use core::task::{Context, Poll};
-use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
+use trueos_time::{Duration as EmbassyDuration, Instant, Timer};
 use hyper::body::{Body, Bytes, Frame, SizeHint};
 use hyper::io;
 use hyper::rt::{Read, ReadBufCursor, Write};
@@ -1899,7 +1899,7 @@ async fn handle_html_fetch_request(
     );
 }
 
-#[embassy_executor::task(pool_size = 10)]
+#[trueos_executor::task(pool_size = 10)]
 pub async fn html_fetch_worker_task() {
     let worker_id = HTML_FETCH_WORKER_SEQ
         .fetch_add(1, Ordering::AcqRel)

@@ -3,7 +3,7 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 use alloc::boxed::Box;
 use alloc::vec::Vec;
-use embassy_executor::raw::Executor as RawExecutor;
+use trueos_executor::raw::Executor as RawExecutor;
 use x86_64::registers::model_specific::Msr;
 
 const MSR_IA32_GS_BASE: u32 = 0xC000_0101;

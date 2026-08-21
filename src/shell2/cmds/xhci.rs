@@ -1,7 +1,7 @@
 use alloc::format;
 
-use embassy_executor::Spawner;
-use embassy_time::{Duration, with_timeout};
+use trueos_executor::Spawner;
+use trueos_time::{Duration, with_timeout};
 
 use super::super::{
     MatrixTarget, ShellBackend2, matrix_target_for_backend, print_matrix_target_line,
@@ -202,7 +202,7 @@ fn parse_u64(raw: &str) -> Result<u64, &'static str> {
     }
 }
 
-#[embassy_executor::task(pool_size = 2)]
+#[trueos_executor::task(pool_size = 2)]
 async fn xhci_command_task(output_target: MatrixTarget, pending: PendingLabRequest) {
     let run_id = pending.run_id;
     match with_timeout(Duration::from_secs(COMMAND_TIMEOUT_SECS), pending.wait()).await {

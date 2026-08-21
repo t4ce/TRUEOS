@@ -11,7 +11,7 @@ extern crate alloc;
 use alloc::{format, string::String};
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use embassy_time::Instant;
+use trueos_time::Instant;
 use serde::{Deserialize, Serialize};
 use spin::Mutex;
 

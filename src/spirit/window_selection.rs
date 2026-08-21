@@ -5,7 +5,7 @@
 //! to a Spirit background, flies Spirit's tagged *software* vCursor to the
 //! frame, and invokes UI4 focus directly without synthesizing a mouse click.
 
-use embassy_time::{Duration, Instant, Timer, with_timeout};
+use trueos_time::{Duration, Instant, Timer, with_timeout};
 
 use super::spirit_vfx::SpiritVfxBackgroundEffect;
 
@@ -27,7 +27,7 @@ struct SpiritWindowSelection {
     profile: WindowVfxProfile,
 }
 
-#[embassy_executor::task(pool_size = 1)]
+#[trueos_executor::task(pool_size = 1)]
 pub(crate) async fn spirit_window_selection_task() {
     let source = loop {
         match super::lilly_cursor::selection_source() {

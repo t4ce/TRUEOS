@@ -1089,12 +1089,12 @@ pub(crate) fn poll_ui4_blueprint_sprite_scene(
 /// Backend completion driver for awaitable UI4 GPU fences. Polling remains
 /// dormant while there is no in-flight compositor job. The reaper itself owns
 /// a fence waiter, proving the same wake path that future UI callers consume.
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub(crate) async fn gpu_completion_reaper_task() {
     use core::future::{Future, poll_fn};
     use core::pin::Pin;
     use core::task::Poll;
-    use embassy_time::{Duration, Timer};
+    use trueos_time::{Duration, Timer};
 
     let mut active: Option<(Ui4CompositorSubmission, crate::gpu::executor::GpuFence)> = None;
     loop {

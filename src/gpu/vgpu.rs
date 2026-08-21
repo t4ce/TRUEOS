@@ -9,7 +9,7 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
-use embassy_time::{Duration, Timer};
+use trueos_time::{Duration, Timer};
 use spin::Mutex;
 
 use super::physical::{
@@ -3207,7 +3207,7 @@ fn service_physical_gpu_faults_once() {
 
 /// Boot-owned GuC event/containment pump. It is deliberately independent of
 /// Helio, Spirit, UI4, fonts, and every individual GPU consumer.
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub(crate) async fn gpu_fault_containment_task() {
     loop {
         service_physical_gpu_faults_once();

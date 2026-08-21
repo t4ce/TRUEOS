@@ -10,7 +10,7 @@ use core::{
     sync::atomic::{AtomicBool, AtomicU8, Ordering},
 };
 
-use embassy_executor::SpawnError;
+use trueos_executor::SpawnError;
 use embassy_sync::watch::Watch;
 use skrifa::{
     FontRef, GlyphId, MetadataProvider,
@@ -1121,7 +1121,7 @@ async fn warm_trueosfs_font(job_index: usize, spec_index: usize, slot: u32) {
                 job_index + 1,
                 FONT_WARM_JOB_COUNT,
             );
-            embassy_time::Timer::after(embassy_time::Duration::from_secs(
+            trueos_time::Timer::after(trueos_time::Duration::from_secs(
                 TRUEOSFS_FONT_HEARTBEAT_SECS,
             ))
             .await;
@@ -1140,7 +1140,7 @@ async fn warm_trueosfs_font(job_index: usize, spec_index: usize, slot: u32) {
                 job_index + 1,
                 FONT_WARM_JOB_COUNT,
             );
-            embassy_time::Timer::after(embassy_time::Duration::from_secs(
+            trueos_time::Timer::after(trueos_time::Duration::from_secs(
                 TRUEOSFS_FONT_HEARTBEAT_SECS,
             ))
             .await;
@@ -1228,7 +1228,7 @@ async fn warm_trueosfs_font(job_index: usize, spec_index: usize, slot: u32) {
             ),
         }
 
-        embassy_time::Timer::after(embassy_time::Duration::from_secs(TRUEOSFS_FONT_HEARTBEAT_SECS))
+        trueos_time::Timer::after(trueos_time::Duration::from_secs(TRUEOSFS_FONT_HEARTBEAT_SECS))
             .await;
     }
 }
@@ -1306,7 +1306,7 @@ fn record_font_warm_ready(job_index: usize, slot: u32) {
     }
 }
 
-#[embassy_executor::task(pool_size = FONT_WARM_POOL_SIZE)]
+#[trueos_executor::task(pool_size = FONT_WARM_POOL_SIZE)]
 async fn font_warm_worker_task(worker_index: usize, expected_slot: u32, expected_kind: u8) {
     let actual_slot = crate::percpu::current_slot() as u32;
     let actual_kind = crate::workers::core_kind_for_slot(actual_slot);

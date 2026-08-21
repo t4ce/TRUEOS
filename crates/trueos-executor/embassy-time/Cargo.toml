@@ -1,5 +1,5 @@
 [package]
-name = "embassy-time"
+name = "trueos-time"
 version = "0.5.1"
 edition = "2024"
 description = "TRUEOS-local slim Embassy time facade without embedded-hal delay impls"
@@ -16,7 +16,7 @@ log = []
 tick-hz-1_000 = ["embassy-time-driver/tick-hz-1_000"]
 
 [lib]
-name = "embassy_time"
+name = "trueos_time"
 path = "src/lib.rs"
 
 [dependencies.defmt]

@@ -8,7 +8,7 @@
 
 use alloc::{collections::VecDeque, string::String, vec, vec::Vec};
 
-use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
+use trueos_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
 
 use crate::intel::gpu_font::{
@@ -5863,7 +5863,7 @@ fn publish_runtime(runtime: &mut GridPaperRuntime, now_ms: u64) {
     }
 }
 
-#[embassy_executor::task(pool_size = GRIDPAPER_POOL_SOFT_CAP)]
+#[trueos_executor::task(pool_size = GRIDPAPER_POOL_SOFT_CAP)]
 async fn gridpaper_instance_worker_task(pool_slot: usize) {
     let mut observed_lease_epoch = 0u64;
     let mut last_unpresentable_epoch = 0u64;
@@ -6049,7 +6049,7 @@ fn spawn_gridpaper_instance_pool() -> usize {
 /// slots, each retaining its own UI4 frame and scene worker. Compute
 /// presentation and print-resolution rendering are admitted by their own GuC
 /// context rather than through the unrelated font service.
-#[embassy_executor::task]
+#[trueos_executor::task]
 pub async fn gridpaper_service_task() {
     let spawned = spawn_gridpaper_instance_pool();
     crate::log_info!(

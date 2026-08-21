@@ -1,4 +1,4 @@
-use embassy_executor::Spawner;
+use trueos_executor::Spawner;
 
 use super::super::shell2_cmd::ParseOutcome;
 use super::super::shell2_surf::{self, SurfPromptPrefix, SurfSubmit};
