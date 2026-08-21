@@ -28,8 +28,79 @@ jobs:
         run: |
           set -euo pipefail
           git merge-base --is-ancestor "${BASE_SHA}" HEAD
-          git apply --check tools/agent-live-update-review-fixes.patch
-          git apply tools/agent-live-update-review-fixes.patch
+          python3 - <<'PY'
+          from pathlib import Path
+
+          source = Path('tools/agent-live-update-review-fixes.patch')
+          patch = source.read_text()
+
+          old_static = '''@@ -154,7 +160,9 @@ impl WarmHandoff {
+           #[unsafe(link_section = ".live_update_handoff")]
+           static mut LIVE_HANDOFF: WarmHandoff = WarmHandoff::EMPTY;
+           
+          +static WARM_HANDOFF_VALIDATION: AtomicU8 = AtomicU8::new(HANDOFF_VALIDATION_UNCHECKED);
+           static LIVE_UPDATE_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+          +// Candidate AP release is independent from old-generation update admission.
+           static WARM_APS_RELEASED: AtomicBool = AtomicBool::new(false);
+           static SHELL_NOTICE_PENDING: AtomicBool = AtomicBool::new(false);
+           static ACTIVE_CONTROL_HHDM: AtomicU64 = AtomicU64::new(0);
+          '''
+          new_static = '''@@ -154,6 +160,7 @@ impl WarmHandoff {
+           #[unsafe(link_section = ".live_update_handoff")]
+           static mut LIVE_HANDOFF: WarmHandoff = WarmHandoff::EMPTY;
+           
+          +static WARM_HANDOFF_VALIDATION: AtomicU8 = AtomicU8::new(HANDOFF_VALIDATION_UNCHECKED);
+           static LIVE_UPDATE_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
+           static WARM_APS_RELEASED: AtomicBool = AtomicBool::new(false);
+           static SHELL_NOTICE_PENDING: AtomicBool = AtomicBool::new(false);
+          '''
+          if patch.count(old_static) != 1:
+              raise SystemExit('live-update static hunk no longer matches reviewed patch')
+          patch = patch.replace(old_static, new_static, 1)
+
+          old_percpu = '''diff --git a/src/percpu.rs b/src/percpu.rs
+          index d396796..e0dcece 100644
+          --- a/src/percpu.rs
+          +++ b/src/percpu.rs
+          @@ -2,4 +2,10 @@ use core::arch::asm;
+           use core::sync::atomic::{AtomicBool, Ordering};
+           
+           const MSR_IA32_GS_BASE: u32 = 0xC000_0101;
+          +
+          +/// Host logical-CPU slot ceiling used by fixed per-CPU transition tables.
+          +///
+          +/// Keep this host-topology contract independent from VMX guest-slot policy.
+          +pub const CPU_SLOT_LIMIT: usize = 256;
+          +
+           static TOTAL_SLOTS: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+          '''
+          new_percpu = '''diff --git a/src/percpu.rs b/src/percpu.rs
+          index 7d10dec..e0dcece 100644
+          --- a/src/percpu.rs
+          +++ b/src/percpu.rs
+          @@ -5,8 +5,14 @@ use alloc::boxed::Box;
+           use alloc::vec::Vec;
+           use embassy_executor::raw::Executor as RawExecutor;
+           use x86_64::registers::model_specific::Msr;
+           
+           const MSR_IA32_GS_BASE: u32 = 0xC000_0101;
+          +
+          +/// Host logical-CPU slot ceiling used by fixed per-CPU transition tables.
+          +///
+          +/// Keep this host-topology contract independent from VMX guest-slot policy.
+          +pub const CPU_SLOT_LIMIT: usize = 256;
+          +
+           static TOTAL_SLOTS: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+           static CPU_SLOT_TABLE: core::sync::atomic::AtomicPtr<CpuSlot> =
+               core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
+          '''
+          if patch.count(old_percpu) != 1:
+              raise SystemExit('percpu hunk no longer matches reviewed patch')
+          patch = patch.replace(old_percpu, new_percpu, 1)
+          Path('/tmp/live-update-review-fixes.patch').write_text(patch)
+          PY
+          git apply --check /tmp/live-update-review-fixes.patch
+          git apply /tmp/live-update-review-fixes.patch
           git diff --check
           rustfmt --edition 2024 --check \
             src/hv/vmx.rs \
