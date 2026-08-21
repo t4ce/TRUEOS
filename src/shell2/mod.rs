@@ -1,7 +1,7 @@
 use alloc::collections::VecDeque;
 use alloc::string::String as AllocString;
 use alloc::vec::Vec;
-use core::cell::Cell;
+use core::cell::{Cell, RefCell};
 use core::fmt::Write as _;
 use core::sync::atomic::{AtomicU16, Ordering};
 use embassy_executor::Spawner;
@@ -80,10 +80,14 @@ const BANNER_TITLE_TEXT: &str = "TRUE OS";
 const BANNER_CLOCK_WIDTH: usize = 5;
 const BANNER_GROUP_GAP_WIDTH: usize = 1;
 const TERMINAL_SIZE_QUERY: &str = "\x1b[18t";
+const SHELL_MOUSE_TRACKING_ENABLE: &str = "\x1b[?1003h\x1b[?1006h";
 const TERMINAL_SIZE_QUERY_IDLE_TICKS: u16 = 100;
 const CRY_APP_LABEL: &str = "cry";
 pub(crate) const LOCAL_ESCAPE_KEY_BYTE: u8 = 0x1d;
 pub(crate) const LOCAL_UNMAPPED_KEY_BYTE: u8 = 0x1e;
+const LOCAL_MATRIX_CLICK_PREFIX_BYTE: u8 = 0xff;
+const LOCAL_MATRIX_CLICK_SUFFIX_BYTE: u8 = 0x00;
+const LOCAL_MATRIX_CLICK_MAX_BYTES: usize = 8;
 
 static REGISTERED_OUTPUTS: AtomicU16 = AtomicU16::new(0);
 
@@ -177,6 +181,7 @@ struct CsiInput {
     params: [u16; 4],
     index: usize,
     has_digit: bool,
+    mouse_sgr: bool,
 }
 
 impl CsiInput {
@@ -185,6 +190,7 @@ impl CsiInput {
             params: [0; 4],
             index: 0,
             has_digit: false,
+            mouse_sgr: false,
         }
     }
 
@@ -207,12 +213,44 @@ impl CsiInput {
         self.has_digit = false;
     }
 
+    fn begin_mouse_sgr(&mut self) {
+        if self.index == 0 && !self.has_digit {
+            self.mouse_sgr = true;
+        }
+    }
+
+    fn mouse_event(&self, pressed: bool) -> Option<ShellMouseEvent> {
+        if !self.mouse_sgr || self.index != 2 || !self.has_digit {
+            return None;
+        }
+        Some(ShellMouseEvent {
+            code: self.params[0],
+            col: usize::from(self.params[1]),
+            row: usize::from(self.params[2]),
+            pressed,
+        })
+    }
+
     fn terminal_size(&self) -> Option<(usize, usize)> {
         if self.params[0] == 8 && self.params[1] > 0 && self.params[2] > 0 {
             Some((usize::from(self.params[2]), usize::from(self.params[1])))
         } else {
             None
         }
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ShellMouseEvent {
+    code: u16,
+    col: usize,
+    row: usize,
+    pressed: bool,
+}
+
+impl ShellMouseEvent {
+    fn is_primary_press(self) -> bool {
+        self.pressed && self.code & 0b0110_0011 == 0
     }
 }
 
@@ -231,6 +269,7 @@ struct AlignedWriter<'a> {
     io: &'a dyn ShellIo2,
     line_width: Cell<usize>,
     transcript_view_rows: Cell<usize>,
+    hovered_matrix_slot: RefCell<Option<matrix::MatrixSlotId>>,
 }
 
 impl<'a> AlignedWriter<'a> {
@@ -239,6 +278,7 @@ impl<'a> AlignedWriter<'a> {
             io,
             line_width: Cell::new(matrix::DEFAULT_MATRIX_SLOT_LINE_WIDTH),
             transcript_view_rows: Cell::new(DEFAULT_TRANSCRIPT_VIEW_ROWS),
+            hovered_matrix_slot: RefCell::new(None),
         }
     }
 
@@ -351,6 +391,15 @@ impl<'a> AlignedWriter<'a> {
         self.io.raw_write_str(ecma48::RESET);
     }
 
+    fn set_hovered_matrix_slot(&self, slot: Option<matrix::MatrixSlotId>) -> bool {
+        let mut hovered = self.hovered_matrix_slot.borrow_mut();
+        if *hovered == slot {
+            return false;
+        }
+        *hovered = slot;
+        true
+    }
+
     fn banner_right_text(&self, output_mask: OutputMask, mode: ShellMode2) -> AllocString {
         let mut text = AllocString::new();
         if active_matrix_slot_is_vmx(output_mask) {
@@ -408,6 +457,7 @@ impl<'a> AlignedWriter<'a> {
 
     fn slot_status_text(&self, output_mask: OutputMask, _running_go2_phase: usize) -> AllocString {
         let slots = matrix::slot_views(output_mask);
+        let hovered = self.hovered_matrix_slot.borrow();
         let mut out = AllocString::new();
         for (idx, slot) in slots.iter().enumerate() {
             if idx != 0 {
@@ -417,31 +467,21 @@ impl<'a> AlignedWriter<'a> {
             let mut label = AllocString::from("§");
             label.push_str(slot.id.as_str());
 
-            if slot.selected {
-                let styled = alloc::format!(
-                    "{}",
-                    term_style::paint(label.as_str())
-                        .bold()
-                        .color(STATUS_SELECTED_RGB)
-                );
-                out.push_str(styled.as_str());
+            let is_hovered = hovered.as_ref() == Some(&slot.id);
+            let color = if slot.selected {
+                STATUS_SELECTED_RGB
             } else if slot.activity == matrix::MatrixSlotActivity::Running {
-                let styled = alloc::format!(
-                    "{}",
-                    term_style::paint(label.as_str())
-                        .bold()
-                        .color(SYSTEM_TEXT_RGB)
-                );
-                out.push_str(styled.as_str());
+                SYSTEM_TEXT_RGB
             } else {
-                let styled = alloc::format!(
-                    "{}",
-                    term_style::paint(label.as_str())
-                        .bold()
-                        .color(STATUS_NORMAL_RGB)
-                );
-                out.push_str(styled.as_str());
-            }
+                STATUS_NORMAL_RGB
+            };
+            let style = term_style::paint(label.as_str()).bold().color(color);
+            let styled = if is_hovered {
+                alloc::format!("{}", style.underline())
+            } else {
+                alloc::format!("{}", style)
+            };
+            out.push_str(styled.as_str());
         }
         out
     }
@@ -644,6 +684,27 @@ fn render_active_slot_content(
 fn configure_output_view(out: &AlignedWriter<'_>, output_mask: OutputMask) {
     out.set_line_width(line_width_for_output(output_mask));
     out.set_transcript_view_rows(transcript_view_rows_for_output(output_mask));
+    if (output_mask & (OUTPUT_LOCAL_MASK | OUTPUT_NET_TCP_MASK)) != 0 {
+        out.io.raw_write_str(SHELL_MOUSE_TRACKING_ENABLE);
+    }
+}
+
+fn matrix_slot_at_status_col(
+    output_mask: OutputMask,
+    one_based_col: usize,
+) -> Option<matrix::MatrixSlotId> {
+    if one_based_col == 0 {
+        return None;
+    }
+    let mut start = 1usize;
+    for slot in matrix::slot_views(output_mask) {
+        let end = start.saturating_add(1 + slot.id.chars().count());
+        if (start..end).contains(&one_based_col) {
+            return Some(slot.id);
+        }
+        start = end.saturating_add(1);
+    }
+    None
 }
 
 fn current_chrome_state(output_mask: OutputMask, mode: ShellMode2) -> ChromeState {
@@ -1816,6 +1877,7 @@ async fn run_shell2(
     let mut esc = EscState::None;
     let mut csi_input = CsiInput::new();
     let mut text_decode = utf8::Decoder::new();
+    let mut matrix_click_input: Option<Vec<u8>> = None;
     let mut live_history_cursor: Option<usize> = None;
     let mut input_bytes_since_yield = 0usize;
     let mut terminal_size_query_idle_ticks = TERMINAL_SIZE_QUERY_IDLE_TICKS;
@@ -1893,6 +1955,40 @@ async fn run_shell2(
         }
 
         if let Some(b) = io.read_byte() {
+            if let Some(click_input) = matrix_click_input.as_mut() {
+                if b == LOCAL_MATRIX_CLICK_SUFFIX_BYTE {
+                    let clicked = core::str::from_utf8(click_input.as_slice())
+                        .ok()
+                        .filter(|submitted| is_matrix_operator(submitted));
+                    if let Some(submitted) = clicked {
+                        esc = EscState::None;
+                        text_decode.reset();
+                        live_history_cursor = None;
+                        transcript = apply_matrix_operator_and_refresh(
+                            &out,
+                            io,
+                            output_mask,
+                            &mut mode,
+                            running_go2_phase,
+                            minute_text.as_str(),
+                            submitted,
+                        );
+                        render_prompt_line(&out, output_mask, &line);
+                        last_chrome_state = current_chrome_state(output_mask, mode);
+                        last_matrix_revision = matrix::visible_revision(output_mask);
+                    }
+                    matrix_click_input = None;
+                } else if click_input.len() < LOCAL_MATRIX_CLICK_MAX_BYTES {
+                    click_input.push(b);
+                } else {
+                    matrix_click_input = None;
+                }
+                continue;
+            }
+            if (output_mask & OUTPUT_LOCAL_MASK) != 0 && b == LOCAL_MATRIX_CLICK_PREFIX_BYTE {
+                matrix_click_input = Some(Vec::with_capacity(LOCAL_MATRIX_CLICK_MAX_BYTES));
+                continue;
+            }
             if let Some(vm_id) = active_matrix_vm_id(output_mask)
                 && crate::hv::blueprint_console_submit_tui_demo_input(vm_id, b)
             {
@@ -1977,6 +2073,9 @@ async fn run_shell2(
                             }
                             esc = EscState::None;
                         }
+                        b'<' => {
+                            csi_input.begin_mouse_sgr();
+                        }
                         b'0'..=b'9' => {
                             let digit = (b - b'0') as u16;
                             csi_input.push_digit(digit as u8);
@@ -2002,6 +2101,36 @@ async fn run_shell2(
                                 render_prompt_line(&out, output_mask, &line);
                                 last_chrome_state = current_chrome_state(output_mask, mode);
                                 last_matrix_revision = matrix::visible_revision(output_mask);
+                            }
+                            esc = EscState::None;
+                        }
+                        b'M' | b'm' => {
+                            if let Some(mouse) = csi_input.mouse_event(b == b'M') {
+                                let hovered = (mouse.row == STATUS_ROW)
+                                    .then(|| matrix_slot_at_status_col(output_mask, mouse.col))
+                                    .flatten();
+                                if out.set_hovered_matrix_slot(hovered.clone()) {
+                                    out.io.raw_write_str(ecma48::SAVE_CURSOR);
+                                    out.mode_status(output_mask, running_go2_phase);
+                                    out.io.raw_write_str(ecma48::RESTORE_CURSOR);
+                                }
+                                if mouse.is_primary_press()
+                                    && let Some(slot_id) = hovered
+                                {
+                                    let submitted = alloc::format!("§{}", slot_id.as_str());
+                                    transcript = apply_matrix_operator_and_refresh(
+                                        &out,
+                                        io,
+                                        output_mask,
+                                        &mut mode,
+                                        running_go2_phase,
+                                        minute_text.as_str(),
+                                        submitted.as_str(),
+                                    );
+                                    render_prompt_line(&out, output_mask, &line);
+                                    last_chrome_state = current_chrome_state(output_mask, mode);
+                                    last_matrix_revision = matrix::visible_revision(output_mask);
+                                }
                             }
                             esc = EscState::None;
                         }

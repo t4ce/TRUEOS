@@ -19,6 +19,31 @@ const TERMINAL_SIZE_QUERY: &[u8] = b"\x1b[18t";
 const INITIAL_REPAINT_WAIT_TICKS: u32 = 8;
 const RESIZE_QUERY_TICKS: u32 = 100;
 const TX_CHUNK_BYTES: usize = 8 * 1024;
+// A full terminal repaint often spans several stdout-sized writes.  Admit a
+// bounded burst so those writes reach the network service in one wake, while
+// retaining a strict limit for the other work this task performs each tick.
+const TX_BURST_MAX_CHUNKS: usize = 8;
+const TX_BURST_MAX_BYTES: usize = TX_CHUNK_BYTES * TX_BURST_MAX_CHUNKS;
+
+#[derive(Default)]
+struct TxBurstBudget {
+    chunks: usize,
+    bytes: usize,
+}
+
+impl TxBurstBudget {
+    fn next_limit(&self) -> Option<usize> {
+        if self.chunks >= TX_BURST_MAX_CHUNKS || self.bytes >= TX_BURST_MAX_BYTES {
+            return None;
+        }
+        Some(TX_CHUNK_BYTES.min(TX_BURST_MAX_BYTES - self.bytes))
+    }
+
+    fn record(&mut self, len: usize) {
+        self.chunks = self.chunks.saturating_add(1);
+        self.bytes = self.bytes.saturating_add(len);
+    }
+}
 
 /// One command accepted by the adapter queue.  `TcpSent` reports byte counts,
 /// not command IDs, so this FIFO retains the explicit control token until the
@@ -523,16 +548,20 @@ pub async fn net_shell_task() {
                 }
             }
 
-            // Flush buffered TX to the active TCP connection. Once the command is
-            // queued successfully, the adapter owns those bytes. Keep the
-            // snapshot, admission, and dequeue under the transport lock: a
+            // Flush a bounded TX burst to the active TCP connection. Once a
+            // command is queued successfully, the adapter owns those bytes. Keep
+            // every snapshot, admission, and dequeue under the transport lock: a
             // direct-owner claim clears this queue and must not allow a stale
-            // pre-claim chunk to reach the wire afterwards.
-            let tx_admission = admit_net_shell_tx_chunk(TX_CHUNK_BYTES, |handle, data| {
-                cmds.push(NetCommand::SendTcp { handle, data }).is_ok()
-            });
+            // pre-claim chunk to reach the wire afterwards. The explicit budget
+            // prevents one large repaint from starving RX, handoff, or resize work.
+            let mut tx_burst = TxBurstBudget::default();
+            while let Some(limit) = tx_burst.next_limit() {
+                let Some(admission) = admit_net_shell_tx_chunk(limit, |handle, data| {
+                    cmds.push(NetCommand::SendTcp { handle, data }).is_ok()
+                }) else {
+                    break;
+                };
 
-            if let Some(admission) = tx_admission {
                 if admission.admitted {
                     pending_tcp_writes.push_back(PendingTcpWrite {
                         handle: admission.handle,
@@ -551,6 +580,7 @@ pub async fn net_shell_task() {
                             admission.len,
                         );
                     }
+                    tx_burst.record(admission.len);
                 }
                 if tx_log_budget > 0 {
                     tx_log_budget -= 1;
@@ -563,6 +593,9 @@ pub async fn net_shell_task() {
                 if !admission.admitted {
                     // Bytes remain in NET_SHELL_STATE and will be retried.
                     crate::log!("net-shell: tx queue full (will retry)\n");
+                    // Retrying in this wake cannot make command-queue capacity
+                    // available and would only starve the rest of the loop.
+                    break;
                 }
             }
 
@@ -628,4 +661,35 @@ pub async fn net_shell_task() {
         }
     }
     .await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TX_BURST_MAX_BYTES, TX_CHUNK_BYTES, TxBurstBudget};
+
+    #[test]
+    fn tx_burst_allows_eight_full_chunks() {
+        let mut budget = TxBurstBudget::default();
+
+        for _ in 0..8 {
+            assert_eq!(budget.next_limit(), Some(TX_CHUNK_BYTES));
+            budget.record(TX_CHUNK_BYTES);
+        }
+
+        assert_eq!(budget.bytes, TX_BURST_MAX_BYTES);
+        assert_eq!(budget.next_limit(), None);
+    }
+
+    #[test]
+    fn tx_burst_counts_terminal_control_as_work() {
+        let mut budget = TxBurstBudget::default();
+        budget.record(64);
+
+        for _ in 0..7 {
+            assert_eq!(budget.next_limit(), Some(TX_CHUNK_BYTES));
+            budget.record(TX_CHUNK_BYTES);
+        }
+
+        assert_eq!(budget.next_limit(), None);
+    }
 }

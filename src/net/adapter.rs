@@ -2529,6 +2529,14 @@ impl NetService {
         let mut socket = tcp::Socket::new(rx, tx);
         socket.listen(port).map_err(|_| "listen failed")?;
         socket.set_keep_alive(Some(SmolDuration::from_secs(30)));
+        // This listener backs an interactive terminal. Avoid waiting for an
+        // outstanding segment or delayed ACK before returning keystrokes and
+        // small redraw fragments to its LAN peer. Keep bulk TCP defaults for
+        // every other owner.
+        if owner == "net-shell" {
+            socket.set_nagle_enabled(false);
+            socket.set_ack_delay(None);
+        }
         let initial_state = socket.state();
 
         let handle = self.alloc_handle();
