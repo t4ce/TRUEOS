@@ -11,23 +11,38 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: live-update-review-hardening-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
 jobs:
   patch-and-validate:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - name: Check out review branch
+      - name: Check out exact review inputs
         uses: actions/checkout@v5
         with:
           ref: ${{ github.head_ref || github.ref_name }}
-          fetch-depth: 0
+          fetch-depth: 1
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            .github/workflows/agent-live-update-review-hardening.yml
+            tools/agent-live-update-review-fixes.patch
+            src/hv/vmx.rs
+            src/live_update.rs
+            src/pci/pci.rs
+            src/percpu.rs
+            src/shell2/cmds/update.rs
 
       - name: Apply and validate reviewed patch
-        env:
-          BASE_SHA: 74c4b5107545b98e1b400c08db162919bfb7c019
         run: |
           set -euo pipefail
-          git merge-base --is-ancestor "${BASE_SHA}" HEAD
+          test "$(git hash-object src/hv/vmx.rs)" = "8e1ac115363ef69d30bd7beaa1c93f6342cda8ce"
+          test "$(git hash-object src/live_update.rs)" = "a18295e567d7d176c784c74a8a839621bac0afc3"
+          test "$(git hash-object src/pci/pci.rs)" = "9eddedac7a969961ff41e0e465553d32730fa9b6"
+          test "$(git hash-object src/percpu.rs)" = "7d10dec8406cf25c8098ae1585ca0b442e04d9b7"
+          test "$(git hash-object src/shell2/cmds/update.rs)" = "948c6e0804acfe908f88f108014decf05df1316c"
           python3 - <<'PY'
           from pathlib import Path
 
