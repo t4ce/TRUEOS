@@ -1408,8 +1408,8 @@ const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
     },
     BlueprintAutostart {
         enabled: false,
-        label: "file-system",
-        archive: "file-system.bp",
+        label: "websys",
+        archive: "websys.bp",
         online_selector: None,
         slot: "fs",
         args: &[],
