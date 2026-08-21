@@ -1149,7 +1149,9 @@ fn abort_rendezvous(staged: &mut StagedCandidate, interrupts_were_enabled: bool)
             // would create an immediate use-after-free, so fail-stop and require
             // the same physical reset the operator was already prepared to use.
             loop {
-                core::arch::asm!("cli", "hlt", options(nomem, nostack));
+                unsafe {
+                    core::arch::asm!("cli", "hlt", options(nomem, nostack));
+                }
             }
         }
         core::hint::spin_loop();
