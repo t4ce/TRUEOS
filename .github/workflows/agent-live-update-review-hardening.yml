@@ -31,8 +31,15 @@ jobs:
           git apply --check tools/agent-live-update-review-fixes.patch
           git apply tools/agent-live-update-review-fixes.patch
           git diff --check
+          rustfmt --edition 2024 --check \
+            src/hv/vmx.rs \
+            src/live_update.rs \
+            src/pci/pci.rs \
+            src/percpu.rs \
+            src/shell2/cmds/update.rs
           python3 - <<'PY'
           from pathlib import Path
+          import subprocess
 
           vmx = Path('src/hv/vmx.rs').read_text()
           live = Path('src/live_update.rs').read_text()
@@ -52,11 +59,16 @@ jobs:
           assert 'if cpu_count > CPU_SLOT_LIMIT' in live
           assert 'WARM_HANDOFF_VALIDATION: AtomicU8' in live
           assert 'HANDOFF_VALIDATION_CHECKING => core::hint::spin_loop()' in live
-          assert 'unsafe {\n                    core::arch::asm!("cli", "hlt", options(nomem, nostack));' in live
+
+          abort = live.split('fn abort_rendezvous', 1)[1].split('unsafe fn install_transition_mapping', 1)[0]
+          assert 'unsafe {' in abort
+          assert 'core::arch::asm!("cli", "hlt", options(nomem, nostack));' in abort
+
           assert 'reconnect after boot for: hey that worked' not in live
           assert 'new kernel accepted this fresh TCP connection' in live
+          markers = update + '\n' + live
           for step in range(1, 21):
-              assert f'step={step:02}' in live or f'step={step:02}a' in live, step
+              assert f'step={step:02}' in markers, step
 
           assert 'if offset == 0x04' in pci
           assert 'if vendor == u16::MAX' in pci
@@ -65,6 +77,16 @@ jobs:
 
           assert 'const LIVE_ISO_URL: &str = "https://trueos.eu/TrueOS.7z";' in update
           assert 'transport=https-rustls' in update
+
+          changed = set(subprocess.check_output(['git', 'diff', '--name-only'], text=True).splitlines())
+          expected = {
+              'src/hv/vmx.rs',
+              'src/live_update.rs',
+              'src/pci/pci.rs',
+              'src/percpu.rs',
+              'src/shell2/cmds/update.rs',
+          }
+          assert changed == expected, (changed, expected)
           PY
 
       - name: Commit source changes
