@@ -2300,7 +2300,11 @@ async fn run_shell2(
                             render_active_slot_content(&out, output_mask, &transcript);
                             last_chrome_state = current_chrome_state(output_mask, mode);
                         } else {
-                            if !submitted.is_empty() {
+                            // Apps-mode `start` already remains visible through the terminal's
+                            // input echo. Do not add its second copy below the app.db table.
+                            let listing_command =
+                                mode == ShellMode2::Apps && submitted.eq_ignore_ascii_case("start");
+                            if !submitted.is_empty() && !listing_command {
                                 record_user_line_for_active_slot(io, submitted);
                                 transcript = current_transcript_for_task(io);
                                 render_active_slot_content(&out, output_mask, &transcript);

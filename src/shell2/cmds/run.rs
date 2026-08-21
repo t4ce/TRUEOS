@@ -15,7 +15,7 @@ use super::super::{
 use super::tlb_helper::TlbTable;
 use crate::hv::BlueprintConsoleSurface;
 
-const TABLE_HEADERS: &[&str; 4] = &["id", "module", "source", "updated"];
+const TABLE_HEADERS: &[&str; 4] = &["id", "app", "sha", "updated"];
 const BLUEPRINT_READINESS_TIMEOUT: EmbassyDuration = EmbassyDuration::from_secs(30);
 const MIB: usize = 1024 * 1024;
 
@@ -172,7 +172,8 @@ struct BlueprintVmMemoryProfile {
 #[derive(Clone)]
 struct ArchiveEntry {
     archive: String,
-    source: String,
+    sha256: String,
+    updated: String,
 }
 
 async fn archive_entries() -> Result<Vec<ArchiveEntry>, &'static str> {
@@ -182,7 +183,8 @@ async fn archive_entries() -> Result<Vec<ArchiveEntry>, &'static str> {
                 .into_iter()
                 .map(|entry| ArchiveEntry {
                     archive: entry.archive,
-                    source: entry.source,
+                    sha256: entry.sha256,
+                    updated: entry.updated,
                 })
                 .collect()
         })
@@ -193,16 +195,31 @@ fn archive_display_path(entry: &ArchiveEntry) -> &str {
     entry.archive.as_str()
 }
 
+fn short_sha256(value: &str) -> String {
+    if value.len() != 64 {
+        return String::from(value);
+    }
+    alloc::format!("{}…{}", &value[..4], &value[value.len() - 4..])
+}
+
 fn print_archive_table(target: &MatrixTarget, width: usize, archives: &[ArchiveEntry]) {
-    let table = TlbTable::with_width(TABLE_HEADERS, width.saturating_sub(2));
+    let id_width = archives
+        .len()
+        .saturating_sub(1)
+        .to_string()
+        .len()
+        .max(TABLE_HEADERS[0].len());
+    let table = TlbTable::with_width(TABLE_HEADERS, width.saturating_sub(2))
+        .with_max_col_widths(&[id_width, 0, 9, 18]);
     table.emit_header(|text| print_matrix_target_system_line(target, text));
     for (idx, archive) in archives.iter().enumerate() {
-        let id = alloc::format!("{}", idx + 1);
+        let id = alloc::format!("{idx}");
+        let sha256 = short_sha256(archive.sha256.as_str());
         let row = [
             id.as_str(),
             archive_display_path(archive),
-            archive.source.as_str(),
-            "-",
+            sha256.as_str(),
+            archive.updated.as_str(),
         ];
         table.emit_row(&row, |text| print_matrix_target_system_line(target, text));
     }

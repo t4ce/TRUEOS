@@ -367,7 +367,21 @@ fn module_path_for_source(manifest_dir: &Path, path: &Path) -> Result<String, St
     Ok(module_path)
 }
 
-const MAGIC: &[u8; 8] = b"TAPPDB1\0";
+const MAGIC: &[u8; 8] = b"TAPPDB2\0";
+
+fn build_timestamp() -> u64 {
+    if let Some(value) = env::var_os("SOURCE_DATE_EPOCH") {
+        return value
+            .to_string_lossy()
+            .parse()
+            .expect("SOURCE_DATE_EPOCH must be an unsigned Unix timestamp");
+    }
+
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("system clock precedes the Unix epoch")
+        .as_secs()
+}
 
 fn manifest_names(text: &str) -> Result<Vec<String>, String> {
     let mut quoted = Vec::new();
@@ -400,9 +414,14 @@ fn manifest_names(text: &str) -> Result<Vec<String>, String> {
     Ok(names)
 }
 
-fn write_bundle(out: &Path, entries: &[(String, Vec<u8>)]) -> Result<(), String> {
+fn write_bundle(
+    out: &Path,
+    build_timestamp: u64,
+    entries: &[(String, Vec<u8>)],
+) -> Result<(), String> {
     let mut bundle = Vec::new();
     bundle.extend_from_slice(MAGIC);
+    bundle.extend_from_slice(&build_timestamp.to_le_bytes());
     bundle.extend_from_slice(
         &u32::try_from(entries.len())
             .map_err(|_| String::from("too many build-in apps"))?
@@ -425,6 +444,7 @@ fn write_bundle(out: &Path, entries: &[(String, Vec<u8>)]) -> Result<(), String>
 fn generate_app_buildins() {
     println!("cargo:rerun-if-env-changed=TRUEOS_BLUEPRINTS_DIR");
     println!("cargo:rerun-if-env-changed=TRUEOS_REQUIRE_BUILDINS");
+    println!("cargo:rerun-if-env-changed=SOURCE_DATE_EPOCH");
 
     let manifest_dir = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").unwrap());
     let blueprints_dir = env::var_os("TRUEOS_BLUEPRINTS_DIR")
@@ -442,7 +462,7 @@ fn generate_app_buildins() {
             "cargo:warning=Blueprint build-ins unavailable at {}; embedding an empty app.db seed",
             manifest.display()
         );
-        write_bundle(&out, &[]).unwrap();
+        write_bundle(&out, build_timestamp(), &[]).unwrap();
         return;
     }
 
@@ -463,7 +483,7 @@ fn generate_app_buildins() {
             Err(err) => panic!("required Blueprint build-in {}: {err}", path.display()),
         }
     }
-    write_bundle(&out, &entries).unwrap();
+    write_bundle(&out, build_timestamp(), &entries).unwrap();
     println!(
         "cargo:warning=embedding {} Blueprint build-in app(s) into app.db seed",
         entries.len()
