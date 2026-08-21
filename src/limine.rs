@@ -81,6 +81,9 @@ pub static EFI_SYSTEM_TABLE_REQUEST: EfiSystemTableRequest = EfiSystemTableReque
 pub static SMBIOS_REQUEST: SmbiosRequest = SmbiosRequest::new();
 
 pub fn hhdm_offset() -> Option<u64> {
+    if let Some(offset) = crate::live_update::warm_hhdm_offset() {
+        return Some(offset);
+    }
     let resp = HHDM_REQUEST.response()?;
     Some(resp.offset)
 }
@@ -95,6 +98,9 @@ pub fn framebuffer_response() -> Option<&'static FramebufferResponse> {
 }
 
 pub fn executable_address_bases() -> Option<(u64, u64)> {
+    if let Some(bases) = crate::live_update::warm_kernel_bases() {
+        return Some(bases);
+    }
     let resp = EXECUTABLE_ADDRESS_REQUEST.response()?;
     Some((resp.virtual_base, resp.physical_base))
 }
@@ -145,6 +151,9 @@ pub fn module_bytes_by_path_suffix(expected_suffix: &[u8]) -> Option<&'static [u
 }
 
 pub fn kernel_file_bytes() -> Option<&'static [u8]> {
+    if let Some(bytes) = crate::live_update::warm_kernel_file_bytes() {
+        return Some(bytes);
+    }
     let resp = EXECUTABLE_FILE_REQUEST.response()?;
     bytes_from_limine_file(resp.executable_file())
 }

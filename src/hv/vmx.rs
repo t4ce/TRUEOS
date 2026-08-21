@@ -443,6 +443,20 @@ pub fn vmxon(pa: u64) -> bool {
     }
 }
 
+/// Leave VMX root operation on the current logical processor.
+pub fn vmxoff() -> bool {
+    unsafe {
+        let mut fail: u8;
+        core::arch::asm!(
+            "vmxoff",
+            "setna {fail}",
+            fail = lateout(reg_byte) fail,
+            options(nostack, preserves_flags),
+        );
+        fail == 0
+    }
+}
+
 pub fn vmclear(pa: u64) -> bool {
     let pa_ptr = pa;
     unsafe {

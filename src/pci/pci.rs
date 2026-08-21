@@ -23,15 +23,13 @@ const MAX_PCI_CLAIMS: usize = 64;
 const PCI_COMMAND_IO_SPACE: u16 = 1 << 0;
 const PCI_COMMAND_MEM_SPACE: u16 = 1 << 1;
 const PCI_COMMAND_BUS_MASTER: u16 = 1 << 2;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const PCI_COMMAND_INTX_DISABLE: u16 = 1 << 10;
 const PCI_STATUS_CAP_LIST: u16 = 1 << 4;
 
 const PCI_CAP_PTR: u16 = 0x34;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const PCI_CAP_ID_MSI: u8 = 0x05;
 const PCI_CAP_ID_PCI_EXPRESS: u8 = 0x10;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
+const PCI_CAP_ID_MSIX: u8 = 0x11;
 const PCI_MSI_CONTROL: u16 = 0x02;
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const PCI_MSI_ADDRESS_LO: u16 = 0x04;
@@ -41,10 +39,11 @@ const PCI_MSI_ADDRESS_HI: u16 = 0x08;
 const PCI_MSI_DATA_32: u16 = 0x08;
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const PCI_MSI_DATA_64: u16 = 0x0C;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const PCI_MSI_ENABLE: u16 = 1 << 0;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const PCI_MSI_MULTIPLE_MESSAGE_ENABLE: u16 = 0b111 << 1;
+const PCI_MSIX_CONTROL: u16 = 0x02;
+const PCI_MSIX_FUNCTION_MASK: u16 = 1 << 14;
+const PCI_MSIX_ENABLE: u16 = 1 << 15;
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const PCI_MSI_64_BIT_CAPABLE: u16 = 1 << 7;
 const PCI_EXP_DEVCAP: u16 = 0x04;
@@ -427,6 +426,135 @@ fn write_u32_unlocked(bus: u8, slot: u8, function: u8, offset: u8, value: u32) {
 pub fn with_devices<R, F: FnOnce(&[PciDevice]) -> R>(f: F) -> R {
     let lock = DEVICES.lock();
     f(lock.as_slice())
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct FullforgetPciFunction {
+    bus: u8,
+    slot: u8,
+    function: u8,
+}
+
+/// Capture an immutable BDF list while the ordinary runtime is still alive.
+/// The final FULLFORGET path consumes this list without taking `DEVICES` or the
+/// legacy PCI configuration lock after APs have been parked.
+pub fn fullforget_snapshot() -> Vec<FullforgetPciFunction, MAX_PCI_DEVICES> {
+    let mut out = Vec::new();
+    with_devices(|devices| {
+        for device in devices {
+            let _ = out.push(FullforgetPciFunction {
+                bus: device.bus,
+                slot: device.slot,
+                function: device.function,
+            });
+        }
+    });
+    out
+}
+
+#[inline]
+fn fullforget_read_u8_unlocked(bus: u8, slot: u8, function: u8, offset: u8) -> u8 {
+    let aligned = read_u32_unlocked(bus, slot, function, offset & !0x03);
+    let shift = ((offset & 0x03) as u32) * 8;
+    ((aligned >> shift) & 0xFF) as u8
+}
+
+#[inline]
+fn fullforget_read_u16_unlocked(bus: u8, slot: u8, function: u8, offset: u8) -> u16 {
+    let aligned = read_u32_unlocked(bus, slot, function, offset & !0x03);
+    let shift = ((offset & 0x03) as u32) * 8;
+    ((aligned >> shift) & 0xFFFF) as u16
+}
+
+#[inline]
+fn fullforget_write_u16_unlocked(bus: u8, slot: u8, function: u8, offset: u8, value: u16) {
+    let aligned_off = offset & !0x03;
+    let shift = ((offset & 0x03) as u32) * 8;
+    let current = read_u32_unlocked(bus, slot, function, aligned_off);
+    let next = (current & !(0xFFFFu32 << shift)) | ((value as u32) << shift);
+    write_u32_unlocked(bus, slot, function, aligned_off, next);
+}
+
+fn fullforget_find_capability_unlocked(bus: u8, slot: u8, function: u8, cap_id: u8) -> Option<u8> {
+    let status = fullforget_read_u16_unlocked(bus, slot, function, 0x06);
+    if (status & PCI_STATUS_CAP_LIST) == 0 {
+        return None;
+    }
+    let mut pointer = fullforget_read_u8_unlocked(bus, slot, function, PCI_CAP_PTR as u8) & !0x03;
+    let mut guard = 0usize;
+    while pointer >= 0x40 && guard < 48 {
+        if fullforget_read_u8_unlocked(bus, slot, function, pointer) == cap_id {
+            return Some(pointer);
+        }
+        pointer = fullforget_read_u8_unlocked(bus, slot, function, pointer.wrapping_add(1)) & !0x03;
+        guard += 1;
+    }
+    None
+}
+
+/// Disable device-originated interrupts and bus mastering without taking any
+/// normal kernel lock. The caller must have interrupts disabled and every AP
+/// parked. BAR decoding is intentionally retained for the replacement driver.
+pub unsafe fn fullforget_quiesce_unlocked(functions: &[FullforgetPciFunction]) -> usize {
+    let mut failures = 0usize;
+    for device in functions {
+        if let Some(cap) = fullforget_find_capability_unlocked(
+            device.bus,
+            device.slot,
+            device.function,
+            PCI_CAP_ID_MSI,
+        ) {
+            let control_offset = cap.wrapping_add(PCI_MSI_CONTROL as u8);
+            let control = fullforget_read_u16_unlocked(
+                device.bus,
+                device.slot,
+                device.function,
+                control_offset,
+            );
+            fullforget_write_u16_unlocked(
+                device.bus,
+                device.slot,
+                device.function,
+                control_offset,
+                control & !(PCI_MSI_ENABLE | PCI_MSI_MULTIPLE_MESSAGE_ENABLE),
+            );
+        }
+        if let Some(cap) = fullforget_find_capability_unlocked(
+            device.bus,
+            device.slot,
+            device.function,
+            PCI_CAP_ID_MSIX,
+        ) {
+            let control_offset = cap.wrapping_add(PCI_MSIX_CONTROL as u8);
+            let control = fullforget_read_u16_unlocked(
+                device.bus,
+                device.slot,
+                device.function,
+                control_offset,
+            );
+            fullforget_write_u16_unlocked(
+                device.bus,
+                device.slot,
+                device.function,
+                control_offset,
+                (control | PCI_MSIX_FUNCTION_MASK) & !PCI_MSIX_ENABLE,
+            );
+        }
+
+        let command = fullforget_read_u16_unlocked(device.bus, device.slot, device.function, 0x04);
+        fullforget_write_u16_unlocked(
+            device.bus,
+            device.slot,
+            device.function,
+            0x04,
+            (command & !PCI_COMMAND_BUS_MASTER) | PCI_COMMAND_INTX_DISABLE,
+        );
+        let readback = fullforget_read_u16_unlocked(device.bus, device.slot, device.function, 0x04);
+        if (readback & PCI_COMMAND_BUS_MASTER) != 0 {
+            failures = failures.saturating_add(1);
+        }
+    }
+    failures
 }
 
 /// Exclusively claim one enumerated PCI function for a kernel driver.

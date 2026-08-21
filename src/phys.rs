@@ -109,9 +109,7 @@ pub fn init_pmm_from_limine() {
             continue;
         }
 
-        if state.add_region(start, end).is_err() {
-            crate::log!("pmm: region table full dropping 0x{:X}..0x{:X}\n", start, end);
-        }
+        add_usable_region_excluding_warm_handoff(&mut state, start, end);
     }
 
     state.finalize();
@@ -134,6 +132,41 @@ pub fn init_pmm_from_limine() {
                 total_bytes / (1024 * 1024)
             );
         }
+    }
+}
+
+fn add_usable_region_excluding_warm_handoff(state: &mut PmmState, start: u64, end: u64) {
+    let mut cursor = start;
+    while cursor < end {
+        let mut cut_start = end;
+        let mut cut_end = end;
+        crate::live_update::for_each_warm_reserved_phys_range(|reserved_start, reserved_len| {
+            let Some(reserved_end) = reserved_start.checked_add(reserved_len) else {
+                return;
+            };
+            if reserved_end <= cursor || reserved_start >= end {
+                return;
+            }
+            let effective_start = reserved_start.max(cursor);
+            let effective_end = reserved_end.min(end);
+            if effective_start < cut_start {
+                cut_start = effective_start;
+                cut_end = effective_end;
+            } else if effective_start == cut_start {
+                cut_end = cut_end.max(effective_end);
+            }
+        });
+
+        if cut_start == end {
+            if state.add_region(cursor, end).is_err() {
+                crate::log!("pmm: region table full dropping 0x{:X}..0x{:X}\n", cursor, end);
+            }
+            break;
+        }
+        if cursor < cut_start && state.add_region(cursor, cut_start).is_err() {
+            crate::log!("pmm: region table full dropping 0x{:X}..0x{:X}\n", cursor, cut_start);
+        }
+        cursor = cursor.max(cut_end);
     }
 }
 
@@ -165,11 +198,25 @@ pub fn reserve_heap_arena_at(phys_start: u64, size: usize) -> Option<HeapArena> 
     }
     let size_u64 = u64::try_from(size).ok()?;
     let end = phys_start.checked_add(size_u64)?;
-    let mut guard = PMM.lock();
-    let state = guard.as_mut()?;
-    let reserved = state.allocate(size_u64, 1, phys_start, Some(end))?;
-    if reserved != phys_start {
-        let _ = state.release(reserved, size_u64);
+    {
+        let mut guard = PMM.lock();
+        let state = guard.as_mut()?;
+        if let Some(reserved) = state.allocate(size_u64, 1, phys_start, Some(end)) {
+            if reserved == phys_start {
+                return Some(HeapArena {
+                    phys_start,
+                    virt_start: phys_to_virt(phys_start as usize),
+                    length: size,
+                });
+            }
+            let _ = state.release(reserved, size_u64);
+        }
+    }
+
+    // A warm-generation boot excluded pointer-bearing VM heaps from the new
+    // PMM. Claim an exact handoff range once instead of exposing it to normal
+    // host allocations between PMM initialization and VM restoration.
+    if !crate::live_update::claim_warm_vm_heap_range(phys_start, size_u64) {
         return None;
     }
     Some(HeapArena {

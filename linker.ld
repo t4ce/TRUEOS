@@ -60,7 +60,9 @@ SECTIONS
   } :text
 
   .limine_requests : AT(ADDR(.limine_requests) - KERNEL_OFFSET) {
+    __limine_requests_start = .;
     KEEP(*(.limine_requests))
+    __limine_requests_end = .;
   } :text
 
   /*
@@ -76,6 +78,32 @@ SECTIONS
   .got.plt : AT(ADDR(.got.plt) - KERNEL_OFFSET) {
     *(.got.plt)
     *(.igot.plt)
+  } :text
+
+  /*
+   * A candidate kernel publishes a tiny fixed ABI manifest. The old
+   * generation validates this before it replaces the kernel PML4 slot.
+   */
+  .live_update_handoff ALIGN(64) : AT(ADDR(.live_update_handoff) - KERNEL_OFFSET) {
+    __live_update_handoff_start = .;
+    KEEP(*(.live_update_handoff))
+    __live_update_handoff_end = .;
+  } :text
+
+  .live_update_slot ALIGN(8) : AT(ADDR(.live_update_slot) - KERNEL_OFFSET) {
+    QUAD(0x545255454F534C55); /* TRUEOSLU */
+    QUAD(0x4C49564555504454); /* LIVEUPDT */
+    QUAD(1);                  /* ABI version */
+    QUAD(trueos_live_update_ap_entry);
+    QUAD(__live_update_handoff_start);
+    QUAD(__live_update_handoff_end - __live_update_handoff_start);
+  } :text
+
+  /* Copied verbatim into a temporary PML4 slot during FULLFORGET. */
+  .live_update_trampoline ALIGN(16) : AT(ADDR(.live_update_trampoline) - KERNEL_OFFSET) {
+    __live_update_trampoline_start = .;
+    KEEP(*(.live_update_trampoline))
+    __live_update_trampoline_end = .;
   } :text
 
   .bss : AT(ADDR(.bss) - KERNEL_OFFSET) {

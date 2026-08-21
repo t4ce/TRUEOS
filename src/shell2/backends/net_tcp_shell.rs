@@ -324,6 +324,11 @@ pub async fn net_shell_task() {
                             handle.0,
                             Instant::now().as_millis()
                         );
+                        if let Some(notice) = crate::live_update::take_shell_notice()
+                            && !net_shell_write_bytes(notice)
+                        {
+                            crate::live_update::rearm_shell_notice();
+                        }
                     }
                     NetEvent::TcpData { handle, data } => {
                         // Only accept bytes from the active connection.

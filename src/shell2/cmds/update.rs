@@ -21,16 +21,24 @@ pub(crate) fn try_parse(
 ) -> ParseOutcome {
     let Some(arg) = args.next() else {
         print_update_disk_table(io);
-        print_shell_line(io, "update: choose a disk id and run `update <disk-id>`");
+        print_shell_line(
+            io,
+            "update: run `update <disk-id>` for a persistent install or `update live` for a RAM-only generation swap",
+        );
         return ParseOutcome::Handled;
     };
     if args.next().is_some() {
-        print_shell_line(io, "update: usage `update <disk-id>`");
+        print_shell_line(io, "update: usage `update <disk-id>|live`");
+        return ParseOutcome::Handled;
+    }
+
+    if arg == "live" {
+        submit_live_update(spawner, io);
         return ParseOutcome::Handled;
     }
 
     let Some(raw_id) = super::tlb_helper::parse_disc_id_raw(arg) else {
-        print_shell_line(io, "update: invalid disk id");
+        print_shell_line(io, "update: invalid disk id (or use `update live`)");
         print_update_disk_table(io);
         return ParseOutcome::Handled;
     };
@@ -62,6 +70,23 @@ pub(crate) fn submit_update(
         Err(_) => {
             set_matrix_target_active(&target, false);
             print_shell_line(io, "update: spawn failed");
+        }
+    }
+}
+
+pub(crate) fn submit_live_update(spawner: &Spawner, io: &'static dyn ShellBackend2) {
+    let target = matrix_target_for_backend(io);
+    print_matrix_target_line(
+        &target,
+        "update live: starting RAM-only generation replacement; no kernel disk install will run",
+    );
+
+    set_matrix_target_active(&target, true);
+    match live_update_command_task(target.clone(), *spawner) {
+        Ok(token) => spawner.spawn(token),
+        Err(_) => {
+            set_matrix_target_active(&target, false);
+            print_shell_line(io, "update live: spawn failed");
         }
     }
 }
@@ -242,6 +267,103 @@ async fn update_command_task(target: MatrixTarget, disk: crate::disc::block::Dev
                 Err(e) => log(alloc::format!("update: remount failed ({:?})", e).as_str()),
             },
             Err(e) => log(alloc::format!("update: failed ({:?})", e).as_str()),
+        }
+    }
+    .await;
+    set_matrix_target_active(&target, false);
+}
+
+#[embassy_executor::task]
+async fn live_update_command_task(target: MatrixTarget, spawner: Spawner) {
+    let task_target = target.clone();
+    async move {
+        const LIVE_ISO_URL: &str = "https://trueos.eu/TrueOS.7z";
+
+        Timer::after(EmbassyDuration::from_millis(1)).await;
+
+        let log = |line: &str| {
+            print_matrix_target_line(&task_target, line);
+        };
+        let interrupted = || matrix_target_interrupted(&task_target);
+
+        log("update live: waiting for net and TRUEOSFS checkpoint storage");
+        crate::r::readiness::wait_for(
+            crate::r::readiness::NET_V4_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
+        )
+        .await;
+        if interrupted() {
+            log("update live: interrupted before download");
+            return;
+        }
+
+        log(alloc::format!("update live: download {}", LIVE_ISO_URL).as_str());
+        let payload = match crate::surfer::html_shack::fetch_bytes_via_pool(
+            LIVE_ISO_URL,
+            120_000,
+            128 * 1024 * 1024,
+        )
+        .await
+        {
+            Ok(fetch) => fetch.bytes,
+            Err(error) => {
+                log(alloc::format!("update live: download failed ({})", error).as_str());
+                return;
+            }
+        };
+        if interrupted() {
+            log("update live: interrupted after download");
+            return;
+        }
+        if !crate::z7::looks_like_7z(payload.as_slice()) {
+            log("update live: refused (payload is not a 7z archive)");
+            return;
+        }
+        log(alloc::format!(
+            "update live: downloaded payload={} bytes (7z_magic=true)",
+            payload.len(),
+        )
+        .as_str());
+
+        let iso = match crate::z7::extract_file_to_vec(payload.as_slice(), "trueos.iso") {
+            Ok(iso) => iso,
+            Err(error) => {
+                log(alloc::format!("update live: extract failed ({:?})", error).as_str());
+                return;
+            }
+        };
+        drop(payload);
+        if !crate::iso9660::looks_like_iso9660(iso.as_slice()) {
+            log("update live: refused (extracted data is not an ISO9660 image)");
+            return;
+        }
+        if interrupted() {
+            log("update live: interrupted before candidate extraction");
+            return;
+        }
+
+        let kernel = match crate::iso9660::file_slice(iso.as_slice(), "/TRUEOS.elf") {
+            Ok(kernel) if kernel.get(0..4) == Some(b"\x7FELF") => kernel.to_vec(),
+            Ok(_) => {
+                log("update live: refused (TRUEOS.elf has no ELF magic)");
+                return;
+            }
+            Err(error) => {
+                log(alloc::format!("update live: ISO missing TRUEOS.elf ({:?})", error).as_str());
+                return;
+            }
+        };
+        log(alloc::format!(
+            "update live: candidate TRUEOS.elf={} bytes; disk install path skipped",
+            kernel.len(),
+        )
+        .as_str());
+        drop(iso);
+
+        match crate::live_update::stage_and_swap(kernel, spawner, task_target.clone()).await {
+            Ok(never) => match never {},
+            Err(error) => {
+                log(alloc::format!("update live: failed ({})", error).as_str());
+            }
         }
     }
     .await;

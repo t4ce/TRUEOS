@@ -40,6 +40,7 @@ mod intel;
 mod intel_hda_audio_demo;
 mod iso9660;
 mod limine;
+mod live_update;
 mod locale;
 mod log_os;
 #[cfg(feature = "trueos_lumen")]
@@ -138,6 +139,7 @@ pub extern "C" fn kmain() -> ! {
     // publishes the native routines through the runtime import resolver.
     core::hint::black_box(&ring::digest::SHA256);
     log_os::init_log_facade();
+    live_update::log_boot_mode();
     crate::log_info!(
         target: "global";
         "boot: stage=bsp-early log_config boot_level={:?} gfx_level={:?} gpgpu_level={:?} render_level={:?} helio_gfx_diag={} ui4_diag={}\n",
@@ -243,8 +245,13 @@ pub extern "C" fn kmain() -> ! {
         if sse42 { "yes" } else { "no" },
         if sse42 { "enabled" } else { "disabled" }
     );
-    boot_secondary_processors(smp_resp);
+    if live_update::warm_boot_active() {
+        live_update::release_warm_aps();
+    } else {
+        boot_secondary_processors(smp_resp);
+    }
     spawn_bsp_services(spawner);
+    live_update::spawn_post_boot(spawner);
     _loop(executor)
 }
 

@@ -313,6 +313,24 @@ pub fn enter_vmx_root_for_current_cpu_contract() -> Result<(), &'static str> {
     Ok(())
 }
 
+/// Tear down this CPU's generation-local VMX root state before FULLFORGET.
+///
+/// VM snapshots are portable envelopes on TRUEOSFS; VMXON and VMCS pages are
+/// deliberately not carried into the replacement kernel.
+pub fn leave_vmx_root_for_current_cpu_contract() -> Result<bool, &'static str> {
+    let slot = current_vmx_slot()?;
+    if slot <= 1 || !VMX_ROOT_ACTIVE_BY_CPU[slot].load(Ordering::Acquire) {
+        return Ok(false);
+    }
+    if !vmx::vmxoff() {
+        return Err("vmxoff");
+    }
+    VMX_EXTERNAL_INTERRUPT_EXITING_BY_CPU[slot].store(false, Ordering::Release);
+    VMXON_PA_BY_CPU[slot].store(0, Ordering::Release);
+    VMX_ROOT_ACTIVE_BY_CPU[slot].store(false, Ordering::Release);
+    Ok(true)
+}
+
 fn vm_owner_cpu_slot(vm_id: u8) -> Option<u32> {
     let tagged = vm_id.checked_add(1)?;
     CURRENT_VM_ID_BY_CPU

@@ -303,6 +303,23 @@ pub unsafe extern "C" fn ap_start(cpu: &LimineCpu) -> ! {
     enter_ap_runtime(spawner)
 }
 
+/// Enter a replacement generation after the FULLFORGET trampoline has already
+/// supplied a transition stack, LAPIC identity, and CPU slot.
+pub(crate) unsafe fn warm_ap_start(lapic_id: u32, cpu_index: u32) -> ! {
+    enable_sse();
+    crate::microcode::apply_selected_to_current_cpu("warm-ap");
+    percpu::init_ap(lapic_id, cpu_index);
+    // Interrupts remain disabled across the handoff. Load the candidate IDT
+    // before this AP creates fresh VMX/executor state and opens its AP loop.
+    exceptions::load_this_cpu();
+    if cpu_index > 1 {
+        crate::hv::enter_vmx_root_for_current_cpu_contract()
+            .expect("VMX core contract failed during warm AP startup");
+    }
+    let ex = percpu::init_executor();
+    enter_ap_runtime(ex.spawner())
+}
+
 pub(crate) fn intel_core_kind_hint() -> u8 {
     detect_current_core_kind()
 }
