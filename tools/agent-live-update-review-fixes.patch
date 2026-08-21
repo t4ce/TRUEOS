@@ -1,0 +1,448 @@
+diff --git a/src/hv/vmx.rs b/src/hv/vmx.rs
+index 516d360..2975440 100644
+--- a/src/hv/vmx.rs
++++ b/src/hv/vmx.rs
+@@ -7,7 +7,7 @@ pub fn vmxon(pa: u64) -> bool {
+             "setna {fail}",
+             pa = in(reg) &pa_ptr,
+             fail = lateout(reg_byte) fail,
+-            options(nostack, preserves_flags),
++            options(nostack),
+         );
+         fail == 0
+     }
+@@ -21,7 +21,7 @@ pub fn vmxoff() -> bool {
+             "vmxoff",
+             "setna {fail}",
+             fail = lateout(reg_byte) fail,
+-            options(nostack, preserves_flags),
++            options(nostack),
+         );
+         fail == 0
+     }
+diff --git a/src/live_update.rs b/src/live_update.rs
+index 825eafe..bf21fcf 100644
+--- a/src/live_update.rs
++++ b/src/live_update.rs
+@@ -16,7 +16,7 @@ use core::{
+     fmt,
+     mem::{offset_of, size_of},
+     ptr,
+-    sync::atomic::{AtomicBool, AtomicU64, Ordering},
++    sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering},
+ };
+ 
+ use embassy_executor::Spawner;
+@@ -53,13 +53,18 @@ const HANDOFF_MAGIC0: u64 = 0x5452_5545_5741_524D; // "TRUEWARM"
+ const HANDOFF_MAGIC1: u64 = 0x4655_4C4C_464F_5247; // "FULLFORG"
+ const HANDOFF_STATE_COMMITTED: u64 = 1;
+ 
++const HANDOFF_VALIDATION_UNCHECKED: u8 = 0;
++const HANDOFF_VALIDATION_CHECKING: u8 = 1;
++const HANDOFF_VALIDATION_INVALID: u8 = 2;
++const HANDOFF_VALIDATION_VALID: u8 = 3;
++
+ const TRANSITION_PARK: u64 = 1;
+ const TRANSITION_ABORT: u64 = 2;
+ const TRANSITION_SWITCH_STACKS: u64 = 3;
+ const TRANSITION_COMMIT: u64 = 4;
+ 
+ const VM_ID_LIMIT: usize = crate::allcaps::hv::VM_ID_LIMIT;
+-const CPU_SLOT_LIMIT: usize = crate::allcaps::hv::VM_CPU_SLOT_LIMIT;
++const CPU_SLOT_LIMIT: usize = crate::percpu::CPU_SLOT_LIMIT;
+ const RESTORE_WORDS: usize = (VM_ID_LIMIT + 63) / 64;
+ 
+ #[derive(Clone, Copy)]
+@@ -80,7 +85,8 @@ impl WarmReservedRange {
+     }
+ }
+ 
+-const SHELL_NOTICE: &[u8] = b"\r\nupdate live: hey that worked, new kernel here :)\r\n";
++const SHELL_NOTICE: &[u8] =
++    b"\r\nlive-update: step=20/20 new kernel accepted this fresh TCP connection; VM restore path was armed\r\n";
+ 
+ unsafe extern "C" {
+     static __limine_requests_start: u8;
+@@ -154,7 +160,9 @@ impl WarmHandoff {
+ #[unsafe(link_section = ".live_update_handoff")]
+ static mut LIVE_HANDOFF: WarmHandoff = WarmHandoff::EMPTY;
+ 
++static WARM_HANDOFF_VALIDATION: AtomicU8 = AtomicU8::new(HANDOFF_VALIDATION_UNCHECKED);
+ static LIVE_UPDATE_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
++// Candidate AP release is independent from old-generation update admission.
+ static WARM_APS_RELEASED: AtomicBool = AtomicBool::new(false);
+ static SHELL_NOTICE_PENDING: AtomicBool = AtomicBool::new(false);
+ static ACTIVE_CONTROL_HHDM: AtomicU64 = AtomicU64::new(0);
+@@ -376,6 +384,17 @@ pub(crate) fn interrupt_install(idt: &mut InterruptDescriptorTable) {
+     idt[RENDEZVOUS_VECTOR].set_handler_fn(live_update_rendezvous_isr);
+ }
+ 
++/// Emit a transition marker without allocating, taking a lock, or relying on
++/// Embassy/network progress. Steps 12-17 remain observable on COM1 and the
++/// QEMU-style debug port after the ordinary runtime has been frozen.
++#[inline]
++fn transition_marker(marker: &'static [u8]) {
++    crate::uart1_com1::write_bytes(marker);
++    for &byte in marker {
++        unsafe { crate::portio::outb(0xE9, byte) };
++    }
++}
++
+ #[allow(non_snake_case)]
+ extern "x86-interrupt" fn live_update_rendezvous_isr(_frame: InterruptStackFrame) {
+     crate::remote_work_wake::local_eoi();
+@@ -630,7 +649,7 @@ pub fn log_boot_mode() {
+     if let Some(handoff) = warm_handoff() {
+         crate::log_info!(
+             target: "global";
+-            "live-update: generation={} candidate_hash=0x{:016X} arena=0x{:016X}+0x{:X} expected_aps={} mode=fullforget-warm\n",
++            "live-update: step=18/20 candidate-kmain-entered generation={} candidate_hash=0x{:016X} arena=0x{:016X}+0x{:X} expected_aps={} mode=fullforget-warm\n",
+             handoff.generation,
+             handoff.candidate_hash,
+             handoff.arena_phys,
+@@ -645,7 +664,7 @@ pub fn release_warm_aps() {
+         WARM_APS_RELEASED.store(true, Ordering::Release);
+         crate::log_info!(
+             target: "global";
+-            "live-update: released {} parked APs into generation {}\n",
++            "live-update: step=19/20 parked-APs-released count={} generation={}\n",
+             handoff.expected_aps,
+             handoff.generation,
+         );
+@@ -657,7 +676,6 @@ pub fn spawn_post_boot(spawner: Spawner) {
+         return;
+     };
+ 
+-    SHELL_NOTICE_PENDING.store(true, Ordering::Release);
+     match restore_after_live_update_task(
+         spawner,
+         handoff.restore_mask,
+@@ -665,7 +683,15 @@ pub fn spawn_post_boot(spawner: Spawner) {
+         handoff.transition_slot,
+         handoff.generation,
+     ) {
+-        Ok(token) => spawner.spawn(token),
++        Ok(token) => {
++            spawner.spawn(token);
++            SHELL_NOTICE_PENDING.store(true, Ordering::Release);
++            crate::log_info!(
++                target: "global";
++                "live-update: step=20/20 post-boot-restore-armed generation={} fresh_tcp_notice=armed\n",
++                handoff.generation,
++            );
++        }
+         Err(error) => crate::log_warn!(
+             target: "global";
+             "live-update: restore task unavailable generation={} error={:?}\n",
+@@ -833,13 +859,13 @@ pub async fn stage_and_swap(
+ 
+     print_matrix_target_line(
+         &target,
+-        "update live: staging candidate in RAM; kernel disk image will not be changed",
++        "update live: step=06/20 validating and staging candidate in RAM; disk image remains unchanged",
+     );
+     let mut staged = stage_candidate(kernel.as_slice())?;
+     print_matrix_target_line(
+         &target,
+         format!(
+-            "update live: candidate staged arena=0x{:016X}+{} MiB APs={}",
++            "update live: step=07/20 candidate-staged arena=0x{:016X}+{} MiB APs={}",
+             staged.arena_phys,
+             staged.arena_len / (1024 * 1024),
+             staged.expected_aps,
+@@ -850,10 +876,23 @@ pub async fn stage_and_swap(
+ 
+     print_matrix_target_line(
+         &target,
+-        "update live: checkpointing active VMX apps to TRUEOSFS (candidate remains RAM-only)",
++        "update live: step=08/20 checkpointing active VMX apps to TRUEOSFS",
+     );
+     let checkpoint = checkpoint_active_vms(&spawner, &target).await?;
++    let checkpoint_count: u32 = checkpoint
++        .restore_mask
++        .iter()
++        .map(|word| word.count_ones())
++        .sum();
+     staged.set_vm_plan(checkpoint.restore_mask, checkpoint.resume_mask, checkpoint.vm_heap_ranges);
++    print_matrix_target_line(
++        &target,
++        format!(
++            "update live: step=09/20 VM checkpoints committed count={}",
++            checkpoint_count,
++        )
++        .as_str(),
++    );
+ 
+     if matrix_target_interrupted(&target) {
+         resume_checkpointed_vms(&spawner, &target, checkpoint.paused_by_update.as_slice()).await;
+@@ -866,7 +905,7 @@ pub async fn stage_and_swap(
+     print_matrix_target_line(
+         &target,
+         format!(
+-            "update live: captured {} PCI functions for lock-free DMA containment",
++            "update live: step=10/20 PCI snapshot captured functions={} containment=lock-free",
+             pci_snapshot.len(),
+         )
+         .as_str(),
+@@ -874,11 +913,7 @@ pub async fn stage_and_swap(
+ 
+     print_matrix_target_line(
+         &target,
+-        "update live: final rendezvous next; on success the TCP shell will disconnect",
+-    );
+-    print_matrix_target_line(
+-        &target,
+-        "update live: reconnect after boot for: hey that worked, new kernel here :)",
++        "update live: step=11/20 irreversible rendezvous next; TCP must disconnect; COM1 continues with steps 12-17",
+     );
+     // Flush the final user-facing line while every normal runtime service is
+     // still schedulable. After AP rendezvous succeeds the path takes no locks,
+@@ -1062,6 +1097,7 @@ async fn resume_checkpointed_vms(
+ 
+ fn rendezvous_aps(staged: &mut StagedCandidate) -> Result<(), LiveUpdateError> {
+     unsafe { install_transition_mapping(staged)? };
++    transition_marker(b"live-update: step=12/20 transition-map-installed\n");
+     let control = staged.control();
+     control.arrived.store(0, Ordering::Release);
+     control.stacked.store(0, Ordering::Release);
+@@ -1079,6 +1115,7 @@ fn rendezvous_aps(staged: &mut StagedCandidate) -> Result<(), LiveUpdateError> {
+             return Err(LiveUpdateError::ApRendezvous("IPI delivery unavailable"));
+         }
+     }
++    transition_marker(b"live-update: step=13/20 rendezvous-ipis-sent\n");
+ 
+     // Once an AP has entered the transition trampoline it may be holding an
+     // arbitrary old-generation lock. Do not yield to Embassy or execute any
+@@ -1100,6 +1137,7 @@ fn rendezvous_aps(staged: &mut StagedCandidate) -> Result<(), LiveUpdateError> {
+         }
+         core::hint::spin_loop();
+     }
++    transition_marker(b"live-update: step=14/20 all-APs-parked\n");
+ 
+     // Success intentionally leaves BSP interrupts disabled. The caller performs
+     // only handoff bookkeeping before entering the non-returning commit path.
+@@ -1107,6 +1145,7 @@ fn rendezvous_aps(staged: &mut StagedCandidate) -> Result<(), LiveUpdateError> {
+ }
+ 
+ fn abort_rendezvous(staged: &mut StagedCandidate, interrupts_were_enabled: bool) {
++    transition_marker(b"live-update: transition-abort-requested\n");
+     let control = staged.control();
+     control.command.store(TRANSITION_ABORT, Ordering::Release);
+     // Prevent a late IPI from acquiring the control pointer while the existing
+@@ -1124,6 +1163,7 @@ fn abort_rendezvous(staged: &mut StagedCandidate, interrupts_were_enabled: bool) {
+             // An AP still executes transition code. Unmapping/freeing the arena
+             // would create an immediate use-after-free, so fail-stop and require
+             // the same physical reset the operator was already prepared to use.
++            transition_marker(b"live-update: fail-stop=abort-drain-timeout\n");
+             loop {
+                 unsafe {
+                     core::arch::asm!("cli", "hlt", options(nomem, nostack));
+@@ -1302,14 +1342,17 @@ unsafe fn commit_fullforget(
+     // AP is parked, so no other CPU can race the CF8/CFC transaction; bypassing
+     // also avoids deadlock if an AP happened to be interrupted while owning the
+     // normal lock.
++    transition_marker(b"live-update: step=15a/20 pci-quiesce-begin\n");
+     let dma_failures = crate::pci::fullforget_quiesce_unlocked(pci_snapshot);
+     if dma_failures != 0 {
+         // Proceeding with a requester that still owns Bus Master Enable would
+         // let an old-generation DMA engine overwrite replacement-kernel RAM.
++        transition_marker(b"live-update: fail-stop=pci-bus-master-still-enabled\n");
+         loop {
+             core::arch::asm!("cli", "hlt", options(nomem, nostack));
+         }
+     }
++    transition_marker(b"live-update: step=15b/20 pci-quiesce-ok\n");
+     let drain_ticks = PCI_DMA_DRAIN_MS
+         .saturating_mul(embassy_time_driver::TICK_HZ.max(1))
+         .saturating_add(999)
+@@ -1318,16 +1361,20 @@ unsafe fn commit_fullforget(
+     while embassy_time_driver::now() < drain_deadline {
+         core::hint::spin_loop();
+     }
++    transition_marker(b"live-update: step=16/20 dma-drain-complete\n");
+ 
+     control
+         .command
+         .store(TRANSITION_SWITCH_STACKS, Ordering::SeqCst);
++    transition_marker(b"live-update: step=17a/20 AP-stack-switch-commanded\n");
+     while control.stacked.load(Ordering::Acquire) < staged.expected_aps {
+         core::arch::asm!("pause", options(nomem, nostack, preserves_flags));
+     }
++    transition_marker(b"live-update: step=17b/20 AP-transition-stacks-ready\n");
+ 
+     let commit: extern "C" fn(*const TransitionControl) -> ! =
+         core::mem::transmute(control.bsp_commit_hhdm as usize);
++    transition_marker(b"live-update: step=17c/20 BSP-commit-trampoline-enter\n");
+     commit(control)
+ }
+ 
+@@ -1910,7 +1957,42 @@ fn parse_elf(bytes: &[u8]) -> Result<ParsedElf, LiveUpdateError> {
+ 
+ fn warm_handoff() -> Option<&'static WarmHandoff> {
+     let handoff = unsafe { &*ptr::addr_of!(LIVE_HANDOFF) };
+-    handoff.valid().then_some(handoff)
++    loop {
++        match WARM_HANDOFF_VALIDATION.load(Ordering::Acquire) {
++            HANDOFF_VALIDATION_VALID => return Some(handoff),
++            HANDOFF_VALIDATION_INVALID => return None,
++            HANDOFF_VALIDATION_UNCHECKED => {
++                if WARM_HANDOFF_VALIDATION
++                    .compare_exchange(
++                        HANDOFF_VALIDATION_UNCHECKED,
++                        HANDOFF_VALIDATION_CHECKING,
++                        Ordering::AcqRel,
++                        Ordering::Acquire,
++                    )
++                    .is_ok()
++                {
++                    let valid = handoff.valid();
++                    WARM_HANDOFF_VALIDATION.store(
++                        if valid {
++                            HANDOFF_VALIDATION_VALID
++                        } else {
++                            HANDOFF_VALIDATION_INVALID
++                        },
++                        Ordering::Release,
++                    );
++                    return valid.then_some(handoff);
++                }
++            }
++            HANDOFF_VALIDATION_CHECKING => core::hint::spin_loop(),
++            _ => {
++                WARM_HANDOFF_VALIDATION.store(
++                    HANDOFF_VALIDATION_INVALID,
++                    Ordering::Release,
++                );
++                return None;
++            }
++        }
++    }
+ }
+ 
+ fn handoff_checksum(handoff: &WarmHandoff) -> u64 {
+diff --git a/src/pci/pci.rs b/src/pci/pci.rs
+index d889ce0..a9e47dc 100644
+--- a/src/pci/pci.rs
++++ b/src/pci/pci.rs
+@@ -31,6 +31,13 @@ fn fullforget_read_u16_unlocked(bus: u8, slot: u8, function: u8, offset: u8) ->
+ #[inline]
+ fn fullforget_write_u16_unlocked(bus: u8, slot: u8, function: u8, offset: u8, value: u16) {
+     let aligned_off = offset & !0x03;
++    if offset == 0x04 {
++        // Command occupies the low half and Status contains RW1C bits in the
++        // high half. Writing zero there preserves pending status instead of
++        // replaying the read value and accidentally acknowledging it.
++        write_u32_unlocked(bus, slot, function, aligned_off, u32::from(value));
++        return;
++    }
+     let shift = ((offset & 0x03) as u32) * 8;
+     let current = read_u32_unlocked(bus, slot, function, aligned_off);
+     let next = (current & !(0xFFFFu32 << shift)) | ((value as u32) << shift);
+@@ -57,6 +64,15 @@ fn fullforget_find_capability_unlocked(bus: u8, slot: u8, function: u8, cap_id:
+ pub unsafe fn fullforget_quiesce_unlocked(functions: &[FullforgetPciFunction]) -> usize {
+     let mut failures = 0usize;
+     for device in functions {
++        let vendor = fullforget_read_u16_unlocked(device.bus, device.slot, device.function, 0x00);
++        if vendor == u16::MAX {
++            continue;
++        }
++        let command = fullforget_read_u16_unlocked(device.bus, device.slot, device.function, 0x04);
++        if command == u16::MAX {
++            continue;
++        }
++
+         if let Some(cap) = fullforget_find_capability_unlocked(
+             device.bus,
+             device.slot,
+@@ -100,7 +116,6 @@ pub unsafe fn fullforget_quiesce_unlocked(functions: &[FullforgetPciFunction]) -
+             );
+         }
+ 
+-        let command = fullforget_read_u16_unlocked(device.bus, device.slot, device.function, 0x04);
+         fullforget_write_u16_unlocked(
+             device.bus,
+             device.slot,
+@@ -109,6 +124,9 @@ pub unsafe fn fullforget_quiesce_unlocked(functions: &[FullforgetPciFunction]) -
+             (command & !PCI_COMMAND_BUS_MASTER) | PCI_COMMAND_INTX_DISABLE,
+         );
+         let readback = fullforget_read_u16_unlocked(device.bus, device.slot, device.function, 0x04);
++        if readback == u16::MAX {
++            continue;
++        }
+         if (readback & PCI_COMMAND_BUS_MASTER) != 0 {
+             failures = failures.saturating_add(1);
+         }
+diff --git a/src/percpu.rs b/src/percpu.rs
+index d396796..e0dcece 100644
+--- a/src/percpu.rs
++++ b/src/percpu.rs
+@@ -2,4 +2,10 @@ use core::arch::asm;
+ use core::sync::atomic::{AtomicBool, Ordering};
+ 
+ const MSR_IA32_GS_BASE: u32 = 0xC000_0101;
++
++/// Host logical-CPU slot ceiling used by fixed per-CPU transition tables.
++///
++/// Keep this host-topology contract independent from VMX guest-slot policy.
++pub const CPU_SLOT_LIMIT: usize = 256;
++
+ static TOTAL_SLOTS: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+diff --git a/src/shell2/cmds/update.rs b/src/shell2/cmds/update.rs
+index e35080e..57d59ae 100644
+--- a/src/shell2/cmds/update.rs
++++ b/src/shell2/cmds/update.rs
+@@ -78,7 +78,7 @@ pub(crate) fn submit_live_update(spawner: &Spawner, io: &'static dyn ShellBacken
+     let target = matrix_target_for_backend(io);
+     print_matrix_target_line(
+         &target,
+-        "update live: starting RAM-only generation replacement; no kernel disk install will run",
++        "update live: step=01/20 command-accepted mode=RAM-only disk-install=disabled",
+     );
+ 
+     set_matrix_target_active(&target, true);
+@@ -286,7 +286,7 @@ async fn live_update_command_task(target: MatrixTarget, spawner: Spawner) {
+         };
+         let interrupted = || matrix_target_interrupted(&task_target);
+ 
+-        log("update live: waiting for net and TRUEOSFS checkpoint storage");
++        log("update live: step=02a/20 waiting for net and TRUEOSFS checkpoint storage");
+         crate::r::readiness::wait_for(
+             crate::r::readiness::NET_V4_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
+         )
+@@ -295,8 +295,9 @@ async fn live_update_command_task(target: MatrixTarget, spawner: Spawner) {
+             log("update live: interrupted before download");
+             return;
+         }
++        log("update live: step=02b/20 readiness-satisfied net=v4 trueosfs=mounted");
+ 
+-        log(alloc::format!("update live: download {}", LIVE_ISO_URL).as_str());
++        log(alloc::format!("update live: step=03/20 download-begin {}", LIVE_ISO_URL).as_str());
+         let payload = match crate::surfer::html_shack::fetch_bytes_via_pool(
+             LIVE_ISO_URL,
+             120_000,
+@@ -319,7 +320,7 @@ async fn live_update_command_task(target: MatrixTarget, spawner: Spawner) {
+             return;
+         }
+         log(alloc::format!(
+-            "update live: downloaded payload={} bytes (7z_magic=true)",
++            "update live: step=04a/20 download-complete bytes={} archive=7z transport=https-rustls",
+             payload.len(),
+         )
+         .as_str());
+@@ -336,6 +337,7 @@ async fn live_update_command_task(target: MatrixTarget, spawner: Spawner) {
+             log("update live: refused (extracted data is not an ISO9660 image)");
+             return;
+         }
++        log("update live: step=04b/20 ISO9660-verified");
+         if interrupted() {
+             log("update live: interrupted before candidate extraction");
+             return;
+@@ -353,7 +355,7 @@ async fn live_update_command_task(target: MatrixTarget, spawner: Spawner) {
+             }
+         };
+         log(alloc::format!(
+-            "update live: candidate TRUEOS.elf={} bytes; disk install path skipped",
++            "update live: step=05/20 candidate-ELF-extracted bytes={} disk-install=skipped",
+             kernel.len(),
+         )
+         .as_str());
