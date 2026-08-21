@@ -55,6 +55,11 @@ HORIZON_BP_HOST_PATH ?= ../TRUEOS-Blueprints/dist/horizon.bp
 HORIZON_BP_ISO_REL_PATH ?= EFI/BOOT/apps/horizon.bp
 WEAVE_HELLO_BP_HOST_PATH ?= ../TRUEOS-Blueprints/dist/weave_hello.bp
 WEAVE_HELLO_BP_ISO_REL_PATH ?= EFI/BOOT/apps/weave_hello.bp
+BLUEPRINTS_DIR ?= ../TRUEOS-Blueprints
+BUILDIN_APP_NAMES := commander ssh img texplo edit shell
+BUILDIN_MANIFEST := $(BLUEPRINTS_DIR)/buildins.json
+BUILDIN_BP_FILES := $(addprefix $(BLUEPRINTS_DIR)/dist/,$(addsuffix .bp,$(BUILDIN_APP_NAMES)))
+BUILDIN_COMMON_INPUTS := $(shell if [ -d "$(BLUEPRINTS_DIR)" ]; then find "$(BLUEPRINTS_DIR)/src" "$(BLUEPRINTS_DIR)/api" "$(BLUEPRINTS_DIR)/.cargo" -type f 2>/dev/null; fi) $(wildcard $(BLUEPRINTS_DIR)/Cargo.toml $(BLUEPRINTS_DIR)/rust-toolchain.toml $(BLUEPRINTS_DIR)/apps.json)
 ENABLE_BLUEPRINTS ?= 0
 ENABLE_WEAVE_HELLO ?= 0
 QEMU_RUNNER := tools/qemu/run.sh
@@ -126,7 +131,7 @@ CARGO_EFFECTIVE_FLAGS = $(strip $(CARGO_BUILD_FLAGS))
 
 IMG_SIZE ?= 25G
 
-.PHONY: images empty-libs kernel trueos-ttstt-host trueos-ttstt-ubuntu cpp aarch64-kernels aarch64-kernel-copy aarch64-kernel-verify aarch64-kernel-test lfm25-cpp lfm25-cpp-verify lfm25-packed-isa-verify lfm25-igpu-packed-verify intel-gpu-bake-migrated-cpp intel-gpu-bake-copy-cpp intel-gpu-bake-cpp-demo intel-gpu-bake-audio-visualizer-cpp intel-gpu-bake-particle-craft-cpp intel-gpu-bake-shadertoy-cpp intel-gpu-bake-font-instance-cpp intel-gpu-bake-lfm25-q8-packed-cpp intel-gpu-bake-spirit-cpp intel-gpu-bake-cpp-artifacts intel-gpu-refresh-cpp-artifacts intel-gpu-verify-cpp-artifacts intel-gpu-verify-copy-cpp intel-gpu-verify-copy-cpp-hardware-log intel-gpu-verify-linked-copy intel-gpu-verify-linked-copy-cpp intel-gpu-verify-packaged-copy intel-gpu-verify-packaged-copy-cpp helio-build-simple-cube helio-build-churn-forward helio-build-gbuffer helio-build-sprite-dig-atlas helio-refresh-artifacts helio-verify-artifacts artifacts limine testrig-physical-reset-log baremetal-reboot-log iso provenance-git-clean provenance verify-provenance release-git-clean release-count release dbg run
+.PHONY: images empty-libs buildins kernel trueos-ttstt-host trueos-ttstt-ubuntu cpp aarch64-kernels aarch64-kernel-copy aarch64-kernel-verify aarch64-kernel-test lfm25-cpp lfm25-cpp-verify lfm25-packed-isa-verify lfm25-igpu-packed-verify intel-gpu-bake-migrated-cpp intel-gpu-bake-copy-cpp intel-gpu-bake-cpp-demo intel-gpu-bake-audio-visualizer-cpp intel-gpu-bake-particle-craft-cpp intel-gpu-bake-shadertoy-cpp intel-gpu-bake-font-instance-cpp intel-gpu-bake-lfm25-q8-packed-cpp intel-gpu-bake-spirit-cpp intel-gpu-bake-cpp-artifacts intel-gpu-refresh-cpp-artifacts intel-gpu-verify-cpp-artifacts intel-gpu-verify-copy-cpp intel-gpu-verify-copy-cpp-hardware-log intel-gpu-verify-linked-copy intel-gpu-verify-linked-copy-cpp intel-gpu-verify-packaged-copy intel-gpu-verify-packaged-copy-cpp helio-build-simple-cube helio-build-churn-forward helio-build-gbuffer helio-build-sprite-dig-atlas helio-refresh-artifacts helio-verify-artifacts artifacts limine testrig-physical-reset-log baremetal-reboot-log iso provenance-git-clean provenance verify-provenance release-git-clean release-count release dbg run
 
 images: $(NVME_IMG)
 
@@ -140,6 +145,17 @@ empty-libs:
 	ar crs $(KERNEL_EMPTY_LIB_DIR)/libc.a
 	ar crs $(KERNEL_EMPTY_LIB_DIR)/libgcc_s.a
 
+define BUILDIN_APP_RULE
+$(BLUEPRINTS_DIR)/dist/$(1).bp: $(BUILDIN_MANIFEST) $(BUILDIN_COMMON_INPUTS) $(shell if [ -d "$(BLUEPRINTS_DIR)/apps/$(1)" ]; then find "$(BLUEPRINTS_DIR)/apps/$(1)" -type f 2>/dev/null; fi)
+	@test -f "$(BUILDIN_MANIFEST)" || { echo "error: Blueprint build-in manifest not found at $(BUILDIN_MANIFEST)"; exit 1; }
+	cd "$(BLUEPRINTS_DIR)" && cargo bp "$(1)"
+endef
+
+$(foreach app,$(BUILDIN_APP_NAMES),$(eval $(call BUILDIN_APP_RULE,$(app))))
+
+buildins: $(BUILDIN_BP_FILES)
+	@echo "buildins: ready $(BUILDIN_APP_NAMES)"
+
 # Host-only compatibility utility. It is deliberately absent from the normal
 # TRUEOS image, kernel, and release dependency graphs.
 trueos-ttstt-host:
@@ -148,8 +164,8 @@ trueos-ttstt-host:
 trueos-ttstt-ubuntu:
 	$(MAKE) --no-print-directory trueos-ttstt-host TRUEOS_TTSTT_HOST_TARGET=x86_64-unknown-linux-gnu
 
-kernel: empty-libs $(INTEL_GPU_PREBUILD_VERIFY)
-	cargo build $(CARGO_GFX_FLAGS) $(CARGO_EFFECTIVE_FLAGS) -Z build-std=core,compiler_builtins,alloc,panic_abort -Z json-target-spec --target .cargo/x86_64-unknown-trueos.json
+kernel: buildins empty-libs $(INTEL_GPU_PREBUILD_VERIFY)
+	TRUEOS_BLUEPRINTS_DIR="$(abspath $(BLUEPRINTS_DIR))" TRUEOS_REQUIRE_BUILDINS=1 cargo build $(CARGO_GFX_FLAGS) $(CARGO_EFFECTIVE_FLAGS) -Z build-std=core,compiler_builtins,alloc,panic_abort -Z json-target-spec --target .cargo/x86_64-unknown-trueos.json
 	$(MAKE) --no-print-directory INTEL_GPU_LINKED_ELF="$(KERNEL_BIN)" intel-gpu-verify-linked-copy
 
 helio-build-simple-cube:

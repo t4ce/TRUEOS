@@ -11,6 +11,7 @@ pub extern crate alloc;
 
 // Modules
 mod allcaps;
+mod app_db;
 mod allocators;
 pub mod allports;
 mod aud;
@@ -160,6 +161,15 @@ pub extern "C" fn kmain() -> ! {
 
     if !phys::try_install_heap_arena_candidates(allocators::install_heap_arena) {
         crate::log!("heap: failed to reserve/install any heap arena\n");
+    }
+
+    match app_db::init_bsp() {
+        Ok(count) => crate::log_info!(
+            target: "apps";
+            "app.db: initialized storage=ram builtins={} persistence=none\n",
+            count
+        ),
+        Err(err) => crate::log_error!(target: "apps"; "app.db: initialization failed err={}\n", err),
     }
 
     if crate::log_os::flags::BOOT_INFO_LOGS

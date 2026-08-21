@@ -5,7 +5,6 @@ use core::sync::atomic::{AtomicU32, Ordering};
 
 use trueos_executor::Spawner;
 use trueos_time::{Duration as EmbassyDuration, Timer};
-use sha2::{Digest, Sha256};
 use spin::Mutex;
 
 use super::super::{
@@ -171,287 +170,27 @@ struct BlueprintVmMemoryProfile {
 }
 
 #[derive(Clone)]
-enum ArchiveSource {
-    Trueosfs { path: String },
-    EmbeddedModule { cmdline: String },
-}
-
-#[derive(Clone)]
 struct ArchiveEntry {
     archive: String,
-    source: ArchiveSource,
-    updated: Option<String>,
-}
-
-fn embedded_archive_name(cmdline: &[u8]) -> Option<String> {
-    let suffix = cmdline.strip_prefix(b"trueos.app.")?;
-    if suffix.is_empty() {
-        return None;
-    }
-    let mut archive = String::from_utf8_lossy(suffix).into_owned();
-    archive.push_str(".bp");
-    Some(archive)
-}
-
-// Shell2 runs inside the BSP executor. Keep the complete app discovery and
-// loading path natively async: `kfs` is a compatibility API for AP blocking
-// lanes, and synchronously polling this executor recursively can stall USB.
-async fn trueosfs_archives() -> Result<Vec<ArchiveEntry>, &'static str> {
-    let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
-        return Ok(Vec::new());
-    };
-
-    let root_listing = crate::r::fs::trueosfs::list_dir_async(disk, "")
-        .await
-        .map_err(|_| "root listing failed")?;
-    let apps_listing = crate::r::fs::trueosfs::list_dir_async(disk, "apps")
-        .await
-        .map_err(|_| "app root listing failed")?;
-    let local_compile_listing =
-        crate::r::fs::trueosfs::list_dir_async(disk, "apps/common/localcompile")
-            .await
-            .ok()
-            .flatten();
-    let root_listing = root_listing.ok_or("root is not TRUEOSFS")?;
-
-    let mut out = Vec::new();
-    for name in root_listing
-        .lines()
-        .map(str::trim)
-        .filter(|name| is_runnable_root_artifact(name))
-    {
-        out.push(ArchiveEntry {
-            archive: String::from(name),
-            source: ArchiveSource::Trueosfs {
-                path: String::from(name),
-            },
-            updated: root_archive_updated(disk, name).await,
-        });
-    }
-
-    for app_dir in apps_listing.unwrap_or_default().lines().map(str::trim) {
-        if app_dir.is_empty() || app_dir == "common" || app_dir == ".keep" {
-            continue;
-        }
-        let dir = alloc::format!("apps/{}", app_dir);
-        let listing = crate::r::fs::trueosfs::list_dir_async(disk, dir.as_str())
-            .await
-            .map_err(|_| "app directory listing failed")?
-            .unwrap_or_default();
-        for name in listing
-            .lines()
-            .map(str::trim)
-            .filter(|name| is_runnable_root_artifact(name))
-        {
-            let path = alloc::format!("apps/{}/{}", app_dir, name);
-            if out.iter().any(|entry| entry.archive == name) {
-                continue;
-            }
-            out.push(ArchiveEntry {
-                archive: String::from(name),
-                source: ArchiveSource::Trueosfs { path },
-                updated: None,
-            });
-        }
-    }
-
-    // The native compiler publishes launchable results to the one explicit
-    // `/common/localcompile` handoff directory. Keep all other common files
-    // out of the app namespace.
-    for name in local_compile_listing
-        .unwrap_or_default()
-        .lines()
-        .map(str::trim)
-        .filter(|name| is_runnable_root_artifact(name))
-    {
-        if out.iter().any(|entry| entry.archive == name) {
-            continue;
-        }
-        out.push(ArchiveEntry {
-            archive: String::from(name),
-            source: ArchiveSource::Trueosfs {
-                path: alloc::format!("apps/common/localcompile/{}", name),
-            },
-            updated: None,
-        });
-    }
-    out.sort_by(|a, b| a.archive.cmp(&b.archive));
-    Ok(out)
-}
-
-fn root_archive_timestamp_path(name: &str) -> String {
-    alloc::format!("apps/common/.bp-meta/root/{}.updated", name)
-}
-
-async fn root_archive_updated(
-    disk: crate::disc::block::DeviceHandle,
-    name: &str,
-) -> Option<String> {
-    let stamp_path = root_archive_timestamp_path(name);
-    let bytes = crate::r::fs::trueosfs::file_out_async(disk, stamp_path.as_str())
-        .await
-        .ok()??;
-    let text = String::from_utf8_lossy(bytes.as_slice()).trim().to_string();
-    if text.is_empty() { None } else { Some(text) }
-}
-
-fn is_runnable_root_artifact(name: &str) -> bool {
-    matches_glob(name, "*.bp")
-}
-
-async fn trueosfs_module_by_archive_name(
-    disk: crate::disc::block::DeviceHandle,
-    archive_name: &str,
-) -> Result<Option<(Vec<u8>, &'static str)>, String> {
-    if let Some(module_bytes) = crate::r::fs::trueosfs::file_out_async(disk, archive_name)
-        .await
-        .map_err(|_| String::from("failed to read selected module from TRUEOSFS"))?
-    {
-        verify_trueosfs_module_hash(disk, archive_name, module_bytes.as_slice()).await?;
-        return Ok(Some((module_bytes, "TRUEOSFS root")));
-    }
-
-    let archive_leaf = archive_name.rsplit('/').next().unwrap_or(archive_name);
-    let app_dir = crate::hv::blueprint::app_fs_root_for_archive(archive_leaf, &[]);
-    let app_path = alloc::format!("{}/{}", app_dir, archive_leaf);
-    let module_bytes = crate::r::fs::trueosfs::file_out_async(disk, app_path.as_str())
-        .await
-        .map_err(|_| String::from("failed to read selected module from TRUEOSFS"))?;
-    if let Some(bytes) = module_bytes {
-        verify_trueosfs_module_hash(disk, app_path.as_str(), bytes.as_slice()).await?;
-        Ok(Some((bytes, "TRUEOSFS app")))
-    } else {
-        Ok(None)
-    }
-}
-
-fn sha256_hex(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let digest = Sha256::digest(bytes);
-    let mut out = String::with_capacity(64);
-    for byte in digest {
-        out.push(HEX[(byte >> 4) as usize] as char);
-        out.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    out
-}
-
-async fn verify_trueosfs_module_hash(
-    disk: crate::disc::block::DeviceHandle,
-    path: &str,
-    bytes: &[u8],
-) -> Result<Option<String>, String> {
-    let hash_path = alloc::format!("{}.sha256", path);
-    let expected_bytes =
-        match crate::r::fs::trueosfs::file_out_async(disk, hash_path.as_str()).await {
-            Ok(Some(bytes)) => bytes,
-            Ok(None) => return Ok(None),
-            Err(err) => {
-                return Err(alloc::format!(
-                    "SHA-256 metadata read failed path={} err={:?}",
-                    hash_path,
-                    err
-                ));
-            }
-        };
-    let expected = core::str::from_utf8(expected_bytes.as_slice())
-        .map(str::trim)
-        .map_err(|_| alloc::format!("invalid SHA-256 metadata path={}", hash_path))?;
-    if expected.len() != 64 || !expected.as_bytes().iter().all(u8::is_ascii_hexdigit) {
-        return Err(alloc::format!("invalid SHA-256 metadata path={}", hash_path));
-    }
-    let actual = sha256_hex(bytes);
-    if !actual.eq_ignore_ascii_case(expected) {
-        return Err(alloc::format!(
-            "SHA-256 mismatch path={} expected={} actual={}",
-            path,
-            expected,
-            actual
-        ));
-    }
-    Ok(Some(String::from(expected)))
-}
-
-fn matches_glob(name: &str, pattern: &str) -> bool {
-    if let Some(suffix) = pattern.strip_prefix('*') {
-        name.ends_with(suffix)
-    } else {
-        name == pattern
-    }
-}
-
-fn embedded_archives() -> Vec<ArchiveEntry> {
-    let Some(resp) = crate::limine::MODULE_REQUEST.response() else {
-        return Vec::new();
-    };
-
-    let mut out = Vec::new();
-    for module in resp.modules().iter() {
-        let cmdline = module.cmdline().as_bytes();
-        let Some(archive) = embedded_archive_name(cmdline) else {
-            continue;
-        };
-        out.push(ArchiveEntry {
-            archive,
-            source: ArchiveSource::EmbeddedModule {
-                cmdline: String::from_utf8_lossy(cmdline).into_owned(),
-            },
-            updated: None,
-        });
-    }
-    out.sort_by(|a, b| a.archive.cmp(&b.archive));
-    out
-}
-
-fn embedded_module_bytes_by_archive_name(
-    archive_name: &str,
-) -> Result<Option<Vec<u8>>, &'static str> {
-    let Some(resp) = crate::limine::MODULE_REQUEST.response() else {
-        return Ok(None);
-    };
-
-    for module in resp.modules().iter() {
-        let cmdline = module.cmdline().as_bytes();
-        let Some(archive) = embedded_archive_name(cmdline) else {
-            continue;
-        };
-        if archive.as_str() != archive_name {
-            continue;
-        }
-        let Some(module_bytes) = crate::limine::module_bytes_by_string(cmdline) else {
-            return Err("failed to read selected embedded module");
-        };
-        return Ok(Some(crate::allocators::with_host_alloc_domain(|| module_bytes.to_vec())));
-    }
-
-    Ok(None)
+    source: String,
 }
 
 async fn archive_entries() -> Result<Vec<ArchiveEntry>, &'static str> {
-    let mut out = trueosfs_archives().await?;
-    for entry in embedded_archives() {
-        if !out.iter().any(|existing| existing.archive == entry.archive) {
-            out.push(entry);
-        }
-    }
-    out.sort_by(|a, b| a.archive.cmp(&b.archive));
-    Ok(out)
-}
-
-fn source_label(source: &ArchiveSource) -> &'static str {
-    match source {
-        ArchiveSource::Trueosfs { path } if path.starts_with("apps/common/") => "TRUEOSFS common",
-        ArchiveSource::Trueosfs { path } if path.starts_with("apps/") => "TRUEOSFS app",
-        ArchiveSource::Trueosfs { .. } => "TRUEOSFS root",
-        ArchiveSource::EmbeddedModule { .. } => "boot embedded",
-    }
+    crate::app_db::list()
+        .map(|entries| {
+            entries
+                .into_iter()
+                .map(|entry| ArchiveEntry {
+                    archive: entry.archive,
+                    source: entry.source,
+                })
+                .collect()
+        })
+        .map_err(|_| "app.db query failed")
 }
 
 fn archive_display_path(entry: &ArchiveEntry) -> &str {
-    match &entry.source {
-        ArchiveSource::Trueosfs { path } if path.starts_with("apps/") => path.as_str(),
-        _ => entry.archive.as_str(),
-    }
+    entry.archive.as_str()
 }
 
 fn print_archive_table(target: &MatrixTarget, width: usize, archives: &[ArchiveEntry]) {
@@ -462,8 +201,8 @@ fn print_archive_table(target: &MatrixTarget, width: usize, archives: &[ArchiveE
         let row = [
             id.as_str(),
             archive_display_path(archive),
-            source_label(&archive.source),
-            archive.updated.as_deref().unwrap_or("-"),
+            archive.source.as_str(),
+            "-",
         ];
         table.emit_row(&row, |text| print_matrix_target_system_line(target, text));
     }
@@ -1297,24 +1036,7 @@ async fn submit_archive_name_to_target_prefer_trueosfs_with_instance_and_launch_
     instance: crate::hv::BlueprintInstanceRequest,
     launch_script: Option<String>,
 ) -> Result<&'static str, String> {
-    if let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() {
-        if let Some((module_bytes, source)) =
-            trueosfs_module_by_archive_name(disk, archive_name).await?
-        {
-            return submit_module_bytes_to_target_async(
-                target,
-                archive_name,
-                module_bytes,
-                app_args,
-                instance,
-                launch_script,
-                source,
-            )
-            .await;
-        }
-    }
-
-    if let Some(module_bytes) = embedded_module_bytes_by_archive_name(archive_name)? {
+    if let Some(module_bytes) = crate::app_db::get(archive_name)? {
         return submit_module_bytes_to_target_async(
             target,
             archive_name,
@@ -1322,7 +1044,7 @@ async fn submit_archive_name_to_target_prefer_trueosfs_with_instance_and_launch_
             app_args,
             instance,
             launch_script,
-            "boot embedded",
+            "app.db",
         )
         .await;
     }
@@ -1335,7 +1057,7 @@ pub(crate) async fn submit_archive_name_to_target_prefer_embedded_async(
     archive_name: &str,
     app_args: Vec<String>,
 ) -> Result<&'static str, String> {
-    if let Some(module_bytes) = embedded_module_bytes_by_archive_name(archive_name)? {
+    if let Some(module_bytes) = crate::app_db::get(archive_name)? {
         return submit_module_bytes_to_target_async(
             target,
             archive_name,
@@ -1343,26 +1065,9 @@ pub(crate) async fn submit_archive_name_to_target_prefer_embedded_async(
             app_args,
             crate::hv::BlueprintInstanceRequest::default(),
             None,
-            "boot embedded",
+            "app.db",
         )
         .await;
-    }
-
-    if let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() {
-        if let Some((module_bytes, source)) =
-            trueosfs_module_by_archive_name(disk, archive_name).await?
-        {
-            return submit_module_bytes_to_target_async(
-                target,
-                archive_name,
-                module_bytes,
-                app_args,
-                crate::hv::BlueprintInstanceRequest::default(),
-                None,
-                source,
-            )
-            .await;
-        }
     }
 
     Err(String::from("archive not found"))
@@ -1374,61 +1079,18 @@ async fn submit_archive_entry(
     app_args: Vec<String>,
     instance: crate::hv::BlueprintInstanceRequest,
 ) -> bool {
-    let (module_bytes, source) = match &entry.source {
-        ArchiveSource::Trueosfs { path } => {
-            let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
-                print_matrix_target_system_line(&target, "apps: no TRUEOSFS root mounted");
-                return false;
-            };
-            let module_bytes =
-                match crate::r::fs::trueosfs::file_out_async(disk, path.as_str()).await {
-                    Ok(Some(bytes)) => bytes,
-                    Ok(None) => {
-                        print_matrix_target_system_line(
-                            &target,
-                            "apps: selected TRUEOSFS module disappeared",
-                        );
-                        return false;
-                    }
-                    Err(err) => {
-                        print_matrix_target_system_line(
-                            &target,
-                            alloc::format!(
-                                "apps: failed to read selected module from TRUEOSFS: {:?}",
-                                err
-                            )
-                            .as_str(),
-                        );
-                        return false;
-                    }
-                };
-            match verify_trueosfs_module_hash(disk, path.as_str(), module_bytes.as_slice()).await {
-                Ok(Some(hash)) => print_matrix_target_system_line(
-                    &target,
-                    alloc::format!("apps: SHA-256 verified {} {}", entry.archive, hash).as_str(),
-                ),
-                Ok(None) => {}
-                Err(err) => {
-                    print_matrix_target_system_line(
-                        &target,
-                        alloc::format!("apps: start refused: {}", err).as_str(),
-                    );
-                    return false;
-                }
-            }
-            (module_bytes, source_label(&entry.source))
+    let module_bytes = match crate::app_db::get(entry.archive.as_str()) {
+        Ok(Some(bytes)) => bytes,
+        Ok(None) => {
+            print_matrix_target_system_line(&target, "apps: selected app.db entry disappeared");
+            return false;
         }
-        ArchiveSource::EmbeddedModule { cmdline } => {
-            let Some(module_bytes) = crate::limine::module_bytes_by_string(cmdline.as_bytes())
-            else {
-                print_matrix_target_system_line(
-                    &target,
-                    "apps: failed to read selected embedded module",
-                );
-                return false;
-            };
-            let bytes = crate::allocators::with_host_alloc_domain(|| module_bytes.to_vec());
-            (bytes, "boot embedded")
+        Err(err) => {
+            print_matrix_target_system_line(
+                &target,
+                alloc::format!("apps: failed to read app.db: {}", err).as_str(),
+            );
+            return false;
         }
     };
 
@@ -1439,7 +1101,7 @@ async fn submit_archive_entry(
         app_args,
         instance,
         None,
-        source,
+        "app.db",
     )
     .await
     {

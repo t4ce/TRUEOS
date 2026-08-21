@@ -102,6 +102,7 @@ serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
 mio = { version = "1.2.0", default-features = false, features = ["os-poll", "net"] }
 hyper = { version = "1.9.0", default-features = false, features = ["client", "http1", "server"] }
 rdrand = { version = "0.8", default-features = false }
+redb = { version = "4.2.0", default-features = false, features = ["experimental-api-5"] }
 
 [profile.dev]
 panic = "abort"
