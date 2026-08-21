@@ -112,7 +112,7 @@ async fn launch_solara_task(target: MatrixTarget, html: html_shack::Html) {
         }
     };
 
-    match super::cmds::run::submit_archive_name_to_target_prefer_trueosfs_with_launch_script_async(
+    match super::cmds::run::submit_archive_name_to_target_from_app_db_with_launch_script_async(
         target.clone(),
         SOLARA_ARCHIVE,
         launch_script.clone(),

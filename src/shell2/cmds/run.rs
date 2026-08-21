@@ -979,12 +979,12 @@ async fn submit_module_bytes_to_target_async(
     Ok(source)
 }
 
-pub(crate) async fn submit_archive_name_to_target_prefer_trueosfs_async(
+pub(crate) async fn submit_archive_name_to_target_from_app_db_async(
     target: MatrixTarget,
     archive_name: &str,
     app_args: Vec<String>,
 ) -> Result<&'static str, String> {
-    submit_archive_name_to_target_prefer_trueosfs_with_instance_async(
+    submit_archive_name_to_target_from_app_db_with_instance_async(
         target,
         archive_name,
         app_args,
@@ -993,12 +993,12 @@ pub(crate) async fn submit_archive_name_to_target_prefer_trueosfs_async(
     .await
 }
 
-pub(crate) async fn submit_archive_name_to_target_prefer_trueosfs_with_launch_script_async(
+pub(crate) async fn submit_archive_name_to_target_from_app_db_with_launch_script_async(
     target: MatrixTarget,
     archive_name: &str,
     launch_script: String,
 ) -> Result<&'static str, String> {
-    submit_archive_name_to_target_prefer_trueosfs_with_instance_and_launch_script_async(
+    submit_archive_name_to_target_from_app_db_with_instance_and_launch_script_async(
         target,
         archive_name,
         Vec::new(),
@@ -1013,13 +1013,13 @@ pub(crate) async fn submit_archive_name_to_target_prefer_trueosfs_with_launch_sc
 /// The default request claims the single shared default slot, so a caller that
 /// wants a second live copy of the same archive must name it. Naming is the
 /// only difference: the archive itself is unchanged.
-pub(crate) async fn submit_archive_name_to_target_prefer_trueosfs_with_instance_async(
+pub(crate) async fn submit_archive_name_to_target_from_app_db_with_instance_async(
     target: MatrixTarget,
     archive_name: &str,
     app_args: Vec<String>,
     instance: crate::hv::BlueprintInstanceRequest,
 ) -> Result<&'static str, String> {
-    submit_archive_name_to_target_prefer_trueosfs_with_instance_and_launch_script_async(
+    submit_archive_name_to_target_from_app_db_with_instance_and_launch_script_async(
         target,
         archive_name,
         app_args,
@@ -1029,7 +1029,7 @@ pub(crate) async fn submit_archive_name_to_target_prefer_trueosfs_with_instance_
     .await
 }
 
-async fn submit_archive_name_to_target_prefer_trueosfs_with_instance_and_launch_script_async(
+async fn submit_archive_name_to_target_from_app_db_with_instance_and_launch_script_async(
     target: MatrixTarget,
     archive_name: &str,
     app_args: Vec<String>,
@@ -1052,7 +1052,7 @@ async fn submit_archive_name_to_target_prefer_trueosfs_with_instance_and_launch_
     Err(String::from("archive not found"))
 }
 
-pub(crate) async fn submit_archive_name_to_target_prefer_embedded_async(
+pub(crate) async fn submit_archive_name_to_target_from_app_db_default_async(
     target: MatrixTarget,
     archive_name: &str,
     app_args: Vec<String>,

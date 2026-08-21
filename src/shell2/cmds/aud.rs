@@ -14,7 +14,7 @@ const AUD_ARCHIVE: &str = "Player.bp";
 #[task(pool_size = 2)]
 async fn launch_aud(spawner: Spawner, target: MatrixTarget) {
     let app_args = alloc::vec![String::from(crate::hv::BLUEPRINT_VMX_MINISHELL_ARG)];
-    match super::run::submit_archive_name_to_target_prefer_trueosfs_async(
+    match super::run::submit_archive_name_to_target_from_app_db_async(
         target.clone(),
         AUD_ARCHIVE,
         app_args.clone(),

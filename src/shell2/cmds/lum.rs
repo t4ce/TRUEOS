@@ -14,7 +14,7 @@ const LUMEN_ARCHIVE: &str = "lumen.bp";
 
 #[task(pool_size = 2)]
 async fn launch_lumen(spawner: Spawner, target: MatrixTarget) {
-    match super::run::submit_archive_name_to_target_prefer_trueosfs_async(
+    match super::run::submit_archive_name_to_target_from_app_db_async(
         target.clone(),
         LUMEN_ARCHIVE,
         Vec::new(),

@@ -21,7 +21,7 @@ const SSH_ARCHIVE: &str = "ssh.bp";
 
 #[task(pool_size = 2)]
 async fn launch_ssh(spawner: Spawner, target: MatrixTarget, app_args: Vec<String>) {
-    match super::run::submit_archive_name_to_target_prefer_trueosfs_async(
+    match super::run::submit_archive_name_to_target_from_app_db_async(
         target.clone(),
         SSH_ARCHIVE,
         app_args.clone(),

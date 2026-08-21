@@ -14,7 +14,7 @@ const QJS_ARCHIVE: &str = "qjs.bp";
 
 #[task(pool_size = 2)]
 async fn launch_qjs(spawner: Spawner, target: MatrixTarget, app_args: Vec<String>) {
-    match super::run::submit_archive_name_to_target_prefer_trueosfs_async(
+    match super::run::submit_archive_name_to_target_from_app_db_async(
         target.clone(),
         QJS_ARCHIVE,
         app_args,

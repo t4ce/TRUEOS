@@ -56,8 +56,8 @@ HORIZON_BP_ISO_REL_PATH ?= EFI/BOOT/apps/horizon.bp
 WEAVE_HELLO_BP_HOST_PATH ?= ../TRUEOS-Blueprints/dist/weave_hello.bp
 WEAVE_HELLO_BP_ISO_REL_PATH ?= EFI/BOOT/apps/weave_hello.bp
 BLUEPRINTS_DIR ?= ../TRUEOS-Blueprints
-BUILDIN_APP_NAMES := commander ssh img texplo edit shell
 BUILDIN_MANIFEST := $(BLUEPRINTS_DIR)/buildins.json
+BUILDIN_APP_NAMES := $(shell if [ -f "$(BUILDIN_MANIFEST)" ]; then python3 -c 'import json, sys; print(*json.load(open(sys.argv[1]))["buildins"])' "$(BUILDIN_MANIFEST)" 2>/dev/null; fi)
 BUILDIN_BP_FILES := $(addprefix $(BLUEPRINTS_DIR)/dist/,$(addsuffix .bp,$(BUILDIN_APP_NAMES)))
 BUILDIN_COMMON_INPUTS := $(shell if [ -d "$(BLUEPRINTS_DIR)" ]; then find "$(BLUEPRINTS_DIR)/src" "$(BLUEPRINTS_DIR)/api" "$(BLUEPRINTS_DIR)/.cargo" -type f 2>/dev/null; fi) $(wildcard $(BLUEPRINTS_DIR)/Cargo.toml $(BLUEPRINTS_DIR)/rust-toolchain.toml $(BLUEPRINTS_DIR)/apps.json)
 ENABLE_BLUEPRINTS ?= 0
@@ -154,6 +154,7 @@ endef
 $(foreach app,$(BUILDIN_APP_NAMES),$(eval $(call BUILDIN_APP_RULE,$(app))))
 
 buildins: $(BUILDIN_BP_FILES)
+	@test -n "$(BUILDIN_APP_NAMES)" || { echo "error: no Blueprint build-ins found in $(BUILDIN_MANIFEST)"; exit 1; }
 	@echo "buildins: ready $(BUILDIN_APP_NAMES)"
 
 # Host-only compatibility utility. It is deliberately absent from the normal

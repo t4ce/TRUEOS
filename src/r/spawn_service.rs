@@ -1489,7 +1489,7 @@ async fn bp_autostart_task(spawner: Spawner) {
             continue;
         }
 
-        match crate::shell2::cmds::run::submit_archive_name_to_target_prefer_embedded_async(
+        match crate::shell2::cmds::run::submit_archive_name_to_target_from_app_db_default_async(
             target,
             config.archive,
             config.args.iter().map(|arg| String::from(*arg)).collect(),
@@ -1527,7 +1527,7 @@ async fn weave_hello_autostart_task() {
     let target =
         crate::shell2::matrix_target_for_slot_name(crate::shell2::OUTPUT_SYSTEM_MASK, "wve");
     crate::log!("spawn-svc: weave-hello-autostart begin archive=weave_hello.bp slot=wve\n");
-    match crate::shell2::cmds::run::submit_archive_name_to_target_prefer_embedded_async(
+    match crate::shell2::cmds::run::submit_archive_name_to_target_from_app_db_default_async(
         target,
         "weave_hello.bp",
         Vec::new(),

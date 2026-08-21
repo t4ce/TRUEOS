@@ -13,7 +13,7 @@ const GRIDP_ARCHIVE: &str = "gridp.bp";
 
 #[task(pool_size = 8)]
 async fn launch_gridp(spawner: Spawner, target: MatrixTarget) {
-    match super::run::submit_archive_name_to_target_prefer_trueosfs_with_instance_async(
+    match super::run::submit_archive_name_to_target_from_app_db_with_instance_async(
         target.clone(),
         GRIDP_ARCHIVE,
         Vec::new(),
