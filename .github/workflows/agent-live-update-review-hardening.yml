@@ -9,7 +9,7 @@ on:
       - true
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: live-update-review-hardening-${{ github.head_ref || github.ref_name }}
@@ -169,16 +169,15 @@ jobs:
           assert changed == expected, (changed, expected)
           PY
 
-      - name: Commit source changes
-        env:
-          BRANCH: fix/live-update-review-hardening-20260821
-        run: |
-          set -euo pipefail
-          git config user.name "OpenAI review agent"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git rm .github/workflows/agent-live-update-review-hardening.yml
-          git rm tools/agent-live-update-review-fixes.patch
-          git add src/hv/vmx.rs src/live_update.rs src/pci/pci.rs src/percpu.rs src/shell2/cmds/update.rs
-          git diff --cached --check
-          git commit -m "Harden live-update transition review findings"
-          git push origin "HEAD:${BRANCH}"
+      - name: Upload validated source files
+        uses: actions/upload-artifact@v4
+        with:
+          name: trueos-live-update-reviewed-sources
+          if-no-files-found: error
+          retention-days: 1
+          path: |
+            src/hv/vmx.rs
+            src/live_update.rs
+            src/pci/pci.rs
+            src/percpu.rs
+            src/shell2/cmds/update.rs
