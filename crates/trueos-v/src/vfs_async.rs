@@ -16,11 +16,33 @@ pub const ERR_ALREADY_EXISTS: i32 = -9;
 
 const READ_CHUNK_BYTES: usize = 64 * 1024;
 const WRITE_CHUNK_BYTES: usize = 64 * 1024;
+const DIR_LIST_MAGIC: [u8; 4] = *b"TDL1";
+const DIR_LIST_HEADER_BYTES: usize = 12;
+const DIR_LIST_ENTRY_HEADER_BYTES: usize = 4;
+
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NodeKind {
+    File = 1,
+    Directory = 2,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Metadata {
-    pub kind: u32,
+    pub kind: NodeKind,
     pub len: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DirEntry {
+    pub name: String,
+    pub kind: NodeKind,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DirListing {
+    pub entries: Vec<DirEntry>,
+    pub truncated: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -44,11 +66,11 @@ pub enum RecordKey {
 
 impl Metadata {
     pub const fn is_file(self) -> bool {
-        self.kind == 1
+        matches!(self.kind, NodeKind::File)
     }
 
     pub const fn is_dir(self) -> bool {
-        self.kind == 2
+        matches!(self.kind, NodeKind::Directory)
     }
 }
 
@@ -149,8 +171,8 @@ pub async fn read_file_utf8(path: &[u8]) -> Result<String, i32> {
     String::from_utf8(read_file(path).await?).map_err(|_| ERR_BAD_UTF8)
 }
 
-/// List the immediate children of a directory as newline-delimited UTF-8.
-pub async fn list_dir_utf8(path: &[u8]) -> Result<String, i32> {
+/// List the immediate typed children of a directory.
+pub async fn list_dir(path: &[u8]) -> Result<DirListing, i32> {
     let mut operation = Operation::from_start(unsafe {
         vcabi::trueos_cabi_async_fs_list_dir_start(path.as_ptr(), path.len())
     })?;
@@ -182,7 +204,59 @@ pub async fn list_dir_utf8(path: &[u8]) -> Result<String, i32> {
         offset = offset.saturating_add(got as usize);
     }
     operation.discard();
-    String::from_utf8(bytes).map_err(|_| ERR_BAD_UTF8)
+    decode_dir_listing(bytes.as_slice())
+}
+
+fn decode_dir_listing(bytes: &[u8]) -> Result<DirListing, i32> {
+    if bytes.len() < DIR_LIST_HEADER_BYTES || bytes[..4] != DIR_LIST_MAGIC {
+        return Err(ERR_IO);
+    }
+    if bytes[6..8].iter().any(|byte| *byte != 0) {
+        return Err(ERR_IO);
+    }
+    let flags = bytes[4];
+    if flags & !1 != 0 || bytes[5] != 0 {
+        return Err(ERR_IO);
+    }
+    let count = u32::from_le_bytes(bytes[8..12].try_into().map_err(|_| ERR_IO)?) as usize;
+    let mut entries = Vec::new();
+    entries.try_reserve_exact(count).map_err(|_| ERR_IO)?;
+    let mut offset = DIR_LIST_HEADER_BYTES;
+    for _ in 0..count {
+        if bytes.len().saturating_sub(offset) < DIR_LIST_ENTRY_HEADER_BYTES {
+            return Err(ERR_IO);
+        }
+        let kind = match bytes[offset] {
+            1 => NodeKind::File,
+            2 => NodeKind::Directory,
+            _ => return Err(ERR_IO),
+        };
+        if bytes[offset + 1] != 0 {
+            return Err(ERR_IO);
+        }
+        let name_len = u16::from_le_bytes([bytes[offset + 2], bytes[offset + 3]]) as usize;
+        offset = offset.saturating_add(DIR_LIST_ENTRY_HEADER_BYTES);
+        if name_len == 0 || bytes.len().saturating_sub(offset) < name_len {
+            return Err(ERR_IO);
+        }
+        let name =
+            core::str::from_utf8(&bytes[offset..offset + name_len]).map_err(|_| ERR_BAD_UTF8)?;
+        if name.contains('/') || name == "." || name == ".." {
+            return Err(ERR_IO);
+        }
+        entries.push(DirEntry {
+            name: String::from(name),
+            kind,
+        });
+        offset = offset.saturating_add(name_len);
+    }
+    if offset != bytes.len() {
+        return Err(ERR_IO);
+    }
+    Ok(DirListing {
+        entries,
+        truncated: flags & 1 != 0,
+    })
 }
 
 /// Enumerate host-granted TRUEOSFS root mounts.
@@ -254,6 +328,27 @@ mod mount_tests {
         assert_eq!(parse_mounts("trueosfs:disc2\tSystem\tmaybe\t0"), Err(ERR_IO));
         assert_eq!(parse_mounts("disc2\tSystem\t1\t0"), Err(ERR_IO));
     }
+
+    #[test]
+    fn decodes_typed_directory_listing() {
+        let mut bytes = Vec::from(*b"TDL1\x01\x00\x00\x00\x02\x00\x00\x00");
+        bytes.extend_from_slice(&[2, 0, 4, 0]);
+        bytes.extend_from_slice(b"apps");
+        bytes.extend_from_slice(&[1, 0, 8, 0]);
+        bytes.extend_from_slice(b"boot.log");
+        let listing = decode_dir_listing(bytes.as_slice()).unwrap();
+        assert!(listing.truncated);
+        assert_eq!(listing.entries.len(), 2);
+        assert_eq!(listing.entries[0].name, "apps");
+        assert_eq!(listing.entries[0].kind, NodeKind::Directory);
+        assert_eq!(listing.entries[1].kind, NodeKind::File);
+    }
+
+    #[test]
+    fn rejects_malformed_directory_listing() {
+        assert_eq!(decode_dir_listing(b"apps"), Err(ERR_IO));
+        assert_eq!(decode_dir_listing(b"TDL1\0\0\0\0\x01\0\0\0\x02\0\x04\0bad"), Err(ERR_IO));
+    }
 }
 
 /// Replace a complete file without executing storage work on the Blueprint lane.
@@ -318,8 +413,13 @@ pub async fn metadata(path: &[u8]) -> Result<Metadata, i32> {
         return Err(if got < 0 { got as i32 } else { ERR_IO });
     }
     operation.discard();
+    let kind = match u32::from_le_bytes(result[..4].try_into().map_err(|_| ERR_IO)?) {
+        1 => NodeKind::File,
+        2 => NodeKind::Directory,
+        _ => return Err(ERR_IO),
+    };
     Ok(Metadata {
-        kind: u32::from_le_bytes(result[..4].try_into().map_err(|_| ERR_IO)?),
+        kind,
         len: u64::from_le_bytes(result[4..].try_into().map_err(|_| ERR_IO)?),
     })
 }

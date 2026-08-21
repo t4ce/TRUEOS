@@ -6,7 +6,15 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering
 use spin::Mutex;
 use trueos_time::{Duration as EmbassyDuration, Timer};
 
-pub use trueos_fs::{FileInfo, RecordKey};
+pub use trueos_fs::{DirEntry, FileInfo, NodeInfo, NodeKind, RecordKey};
+
+/// A bounded, sorted directory listing.  `truncated` is out-of-band so an
+/// on-disk filename can never be mistaken for a pagination sentinel.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DirListing {
+    pub entries: Vec<DirEntry>,
+    pub truncated: bool,
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct IndexRef {
@@ -942,6 +950,9 @@ fn apply_index_rename_tree(index: &mut TrueosFsIndex, src_dir: &str, dst_dir: &s
     }
 
     let mut moves: Vec<(Vec<u8>, Vec<u8>, IndexRef)> = Vec::new();
+    if let Some(index_ref) = index.get(src_dir.as_bytes()) {
+        moves.push((src_dir.as_bytes().to_vec(), dst_dir.as_bytes().to_vec(), *index_ref));
+    }
     for (key, index_ref) in index.range(src_prefix.as_bytes().to_vec()..) {
         if !key.starts_with(src_prefix.as_bytes()) {
             break;
@@ -1079,6 +1090,7 @@ pub async fn file_in_with_key_async(
     if disk.parent().is_some() {
         return Err(block::Error::InvalidParam);
     }
+    prepare_file_target_async(disk, name).await?;
     let Some(placement) = placement_for_io_async(disk).await? else {
         return Ok(false);
     };
@@ -1133,13 +1145,12 @@ pub async fn dir_create_all_async(
         }
         prefix.push_str(part);
 
-        let marker = alloc::format!("{prefix}/.keep");
-        if file_exists_async(disk, marker.as_str()).await?
-            || dir_has_children_async(disk, prefix.as_str()).await?
-        {
-            continue;
+        match node_info_async(disk, prefix.as_str()).await? {
+            Some(info) if info.kind == NodeKind::Directory => continue,
+            Some(_) => return Err(block::Error::InvalidParam),
+            None => {}
         }
-        if !file_in_async(disk, marker.as_str(), &[]).await? {
+        if !create_directory_async(disk, prefix.as_str()).await? {
             return Ok(false);
         }
     }
@@ -1183,6 +1194,7 @@ pub async fn file_write_begin_with_key_async(
         );
         return Err(block::Error::InvalidParam);
     }
+    prepare_file_target_async(disk, name).await?;
     crate::log!("trueosfs: file-write-begin stage=locate disk={}\n", disk.id().raw());
     let Some(placement) = placement_for_io_async(disk).await? else {
         crate::log!(
@@ -1359,9 +1371,17 @@ async fn lookup_via_index_async(
     };
     let io = KernelBlockIo::new(disk);
 
-    trueos_fs::get_file_record_at(&io, &params, entry_lba, name)
+    Ok(trueos_fs::get_node_record_by_lba(&io, &params, entry_lba)
         .await
-        .map_err(map_engine_err)
+        .map_err(map_engine_err)?
+        .and_then(|record| {
+            (record.kind == NodeKind::File).then_some(trueos_fs::FileRecordRef {
+                entry_lba: record.entry_lba,
+                data_lba: record.data_lba,
+                data_len: record.data_len,
+                record_key: record.record_key,
+            })
+        }))
 }
 
 /// Async TRUEOSFS: read a file.
@@ -1453,9 +1473,17 @@ pub async fn file_out_if_index_ready_async(
             };
 
             if let Some(entry_lba) = entry_lba {
-                let rec = trueos_fs::get_file_record_at(&io, &params, entry_lba, name)
+                let rec = trueos_fs::get_node_record_by_lba(&io, &params, entry_lba)
                     .await
-                    .map_err(map_engine_err)?;
+                    .map_err(map_engine_err)?
+                    .and_then(|record| {
+                        (record.kind == NodeKind::File).then_some(trueos_fs::FileRecordRef {
+                            entry_lba: record.entry_lba,
+                            data_lba: record.data_lba,
+                            data_len: record.data_len,
+                            record_key: record.record_key,
+                        })
+                    });
                 if let Some(r) = rec {
                     file_record_cache_insert(disk_id, name, r);
                     Some(r)
@@ -1481,6 +1509,97 @@ pub async fn file_out_if_index_ready_async(
 }
 
 /// Async TRUEOSFS: read file metadata.
+pub async fn node_info_async(
+    disk: block::DeviceHandle,
+    name: &str,
+) -> Result<Option<NodeInfo>, block::Error> {
+    if disk.parent().is_some() {
+        return Err(block::Error::InvalidParam);
+    }
+    if name.is_empty() || name == "/" {
+        return Ok(Some(NodeInfo {
+            kind: NodeKind::Directory,
+            data_len: 0,
+            record_key: RecordKey::Ffa,
+        }));
+    }
+    let Some(placement) = placement_for_io_async(disk).await? else {
+        return Ok(None);
+    };
+    let params = trueos_fs::FsParams {
+        super_lba: placement.super_lba,
+        data_lba: placement.data_lba,
+        data_end_lba_exclusive: placement.data_end_lba_exclusive,
+    };
+    trueos_fs::read_node_info(&KernelBlockIo::new(disk), &params, name)
+        .await
+        .map_err(map_engine_err)
+}
+
+pub async fn dir_exists_async(disk: block::DeviceHandle, path: &str) -> Result<bool, block::Error> {
+    Ok(node_info_async(disk, path)
+        .await?
+        .is_some_and(|info| info.kind == NodeKind::Directory))
+}
+
+pub async fn create_directory_async(
+    disk: block::DeviceHandle,
+    path: &str,
+) -> Result<bool, block::Error> {
+    if path.is_empty() || path == "/" {
+        return Ok(true);
+    }
+    if disk.parent().is_some() {
+        return Err(block::Error::InvalidParam);
+    }
+    let Some(placement) = placement_for_io_async(disk).await? else {
+        return Ok(false);
+    };
+    if let Some((parent, _)) = path.rsplit_once('/')
+        && !parent.is_empty()
+        && !dir_exists_async(disk, parent).await?
+    {
+        return Err(block::Error::InvalidParam);
+    }
+    match node_info_async(disk, path).await? {
+        Some(info) if info.kind == NodeKind::Directory => return Ok(true),
+        Some(_) => return Err(block::Error::InvalidParam),
+        None => {}
+    }
+    let params = trueos_fs::FsParams {
+        super_lba: placement.super_lba,
+        data_lba: placement.data_lba,
+        data_end_lba_exclusive: placement.data_end_lba_exclusive,
+    };
+    let ok = trueos_fs::create_directory(&KernelBlockIo::new(disk), &params, path)
+        .await
+        .map_err(map_engine_err)?;
+    if ok {
+        bump_root_cache_gen(disk.id());
+        invalidate_root_index(disk.id());
+    }
+    Ok(ok)
+}
+
+async fn prepare_file_target_async(
+    disk: block::DeviceHandle,
+    path: &str,
+) -> Result<(), block::Error> {
+    if let Some((parent, _)) = path.rsplit_once('/')
+        && !parent.is_empty()
+        && !dir_create_all_async(disk, parent).await?
+    {
+        return Err(block::Error::Io);
+    }
+    if node_info_async(disk, path)
+        .await?
+        .is_some_and(|info| info.kind == NodeKind::Directory)
+    {
+        return Err(block::Error::InvalidParam);
+    }
+    Ok(())
+}
+
 pub async fn file_info_async(
     disk: block::DeviceHandle,
     name: &str,
@@ -1491,6 +1610,13 @@ pub async fn file_info_async(
     let Some(placement) = placement_for_io_async(disk).await? else {
         return Ok(None);
     };
+
+    if node_info_async(disk, name)
+        .await?
+        .is_some_and(|info| info.kind != NodeKind::File)
+    {
+        return Ok(None);
+    }
 
     let disk_id = disk.id();
     let record = file_record_cache_lookup(disk_id, name);
@@ -1654,6 +1780,51 @@ pub async fn file_delete_async(
     Ok(ok)
 }
 
+/// Remove a file or directory, recursively for directories.
+pub async fn remove_recursive_async(
+    disk: block::DeviceHandle,
+    name: &str,
+) -> Result<bool, block::Error> {
+    if name.is_empty() || name == "/" || disk.parent().is_some() {
+        return Err(block::Error::InvalidParam);
+    }
+    let Some(placement) = placement_for_io_async(disk).await? else {
+        return Ok(false);
+    };
+    let Some(record) = trueos_fs::lookup_node_record(
+        &KernelBlockIo::new(disk),
+        &trueos_fs::FsParams {
+            super_lba: placement.super_lba,
+            data_lba: placement.data_lba,
+            data_end_lba_exclusive: placement.data_end_lba_exclusive,
+        },
+        name,
+    )
+    .await
+    .map_err(map_engine_err)?
+    else {
+        return Ok(false);
+    };
+    let params = trueos_fs::FsParams {
+        super_lba: placement.super_lba,
+        data_lba: placement.data_lba,
+        data_end_lba_exclusive: placement.data_end_lba_exclusive,
+    };
+    let io = KernelBlockIo::new(disk);
+    let ok = match record.kind {
+        NodeKind::File => trueos_fs::delete_node_at_record(&io, &params, name, &record).await,
+        NodeKind::Directory => trueos_fs::delete_tree(&io, &params, name).await,
+    }
+    .map_err(map_engine_err)?;
+    if ok {
+        bump_root_cache_gen(disk.id());
+        file_record_cache_invalidate_prefix(disk.id(), normalized_dir_prefix(name).as_str());
+        file_record_cache_invalidate_path(disk.id(), name);
+        invalidate_root_index(disk.id());
+    }
+    Ok(ok)
+}
+
 /// Async TRUEOSFS: best-effort rename (copy + delete).
 ///
 /// Returns:
@@ -1674,7 +1845,7 @@ pub async fn file_rename_async(
     }
 
     // Conservative: never overwrite an existing destination.
-    if file_exists_async(disk, dst).await? {
+    if node_info_async(disk, dst).await?.is_some() {
         return Ok(false);
     }
 
@@ -1722,6 +1893,9 @@ fn collect_index_tree_moves(
     let index = mount.index.as_ref()?;
 
     let mut moves = Vec::new();
+    if let Some(index_ref) = index.get(src_dir.as_bytes()) {
+        moves.push((String::from(src_dir), String::from(dst_dir), *index_ref));
+    }
     for (key, index_ref) in index.range(src_prefix.as_bytes().to_vec()..) {
         if !key.starts_with(src_prefix.as_bytes()) {
             break;
@@ -1735,10 +1909,6 @@ fn collect_index_tree_moves(
         }
         moves.push((String::from(src_path), alloc::format!("{dst_prefix}{suffix}"), *index_ref));
     }
-    if moves.is_empty() {
-        return Some(moves);
-    }
-
     for (_, dst, _) in moves.iter() {
         if index.contains_key(dst.as_bytes()) {
             let occupied_by_source = moves.iter().any(|(src, _, _)| src == dst);
@@ -1753,8 +1923,8 @@ fn collect_index_tree_moves(
 
 /// Async TRUEOSFS: move a whole directory tree by appending one metadata record.
 ///
-/// File payload blocks are not copied. The live index remaps every file under
-/// `src_dir` to the same relative path under `dst_dir`.
+/// File payload blocks are not copied. The live index remaps the directory
+/// record itself and every descendant under `src_dir`.
 pub async fn dir_rename_async(
     disk: block::DeviceHandle,
     src_dir: &str,
@@ -1769,6 +1939,12 @@ pub async fn dir_rename_async(
     if src.is_empty() || dst.is_empty() || src == dst {
         return Ok(false);
     }
+    if let Some((parent, _)) = dst.rsplit_once('/')
+        && !parent.is_empty()
+        && !dir_exists_async(disk, parent).await?
+    {
+        return Ok(false);
+    }
 
     let Some(placement) = placement_for_io_async(disk).await? else {
         return Ok(false);
@@ -1779,7 +1955,11 @@ pub async fn dir_rename_async(
     let Some(moves) = collect_index_tree_moves(disk_id, src.as_str(), dst.as_str()) else {
         return Ok(false);
     };
-    if moves.is_empty() {
+    if moves.is_empty()
+        || !moves
+            .iter()
+            .any(|(source, _, entry)| source == &src && entry.kind == trueos_fs::LogKind::Directory)
+    {
         return Ok(false);
     }
 
@@ -1805,43 +1985,13 @@ pub async fn dir_rename_async(
     Ok(true)
 }
 
-/// Async TRUEOSFS: check whether a file exists.
-pub async fn file_exists_async(
-    disk: block::DeviceHandle,
-    name: &str,
-) -> Result<bool, block::Error> {
-    if disk.parent().is_some() {
-        return Err(block::Error::InvalidParam);
-    }
-    let Some(placement) = placement_for_io_async(disk).await? else {
-        return Ok(false);
-    };
-
-    let disk_id = disk.id();
-
-    // Check cache first for fast path
-    if file_record_cache_lookup(disk_id, name).is_some() {
-        return Ok(true);
-    }
-
-    // Check index (metadata lookup only)
-    if lookup_via_index_async(disk, &placement, name)
-        .await?
-        .is_some()
-    {
-        return Ok(true);
-    }
-
-    Ok(false)
-}
-
 /// Async TRUEOSFS: list the immediate children of a directory.
 ///
 /// Returns `Ok(None)` if the disk does not contain TRUEOSFS.
 pub async fn list_dir_async(
     disk: block::DeviceHandle,
     dir: &str,
-) -> Result<Option<String>, block::Error> {
+) -> Result<Option<DirListing>, block::Error> {
     if disk.parent().is_some() {
         return Err(block::Error::InvalidParam);
     }
@@ -1864,7 +2014,10 @@ pub async fn list_dir_async(
         let out = trueos_fs::list_dir(&io, &params, dir)
             .await
             .map_err(map_engine_err)?;
-        return Ok(Some(out));
+        let truncated = out.len() > TRUEOSFS_LIST_SOFT_CAP;
+        let mut entries = out;
+        entries.truncate(TRUEOSFS_LIST_SOFT_CAP);
+        return Ok(Some(DirListing { entries, truncated }));
     };
 
     let Some(index) = &mount.index else {
@@ -1874,19 +2027,32 @@ pub async fn list_dir_async(
     let prefix = normalized_dir_prefix(dir);
     let prefix_bytes = prefix.as_bytes();
 
-    let mut children: alloc::collections::BTreeSet<String> = alloc::collections::BTreeSet::new();
+    if !prefix.is_empty()
+        && !index
+            .get(prefix.trim_end_matches('/').as_bytes())
+            .is_some_and(|entry| entry.kind == trueos_fs::LogKind::Directory)
+    {
+        return Err(block::Error::InvalidParam);
+    }
+
+    let mut children: BTreeMap<String, NodeKind> = BTreeMap::new();
 
     if prefix.is_empty() {
-        for key in index.keys() {
+        for (key, index_ref) in index.iter() {
             if let Ok(name) = core::str::from_utf8(key) {
-                let seg = name.split('/').next().unwrap_or("");
-                if !seg.is_empty() {
-                    children.insert(String::from(seg));
+                if name.is_empty() || name.contains('/') {
+                    continue;
                 }
+                let kind = match index_ref.kind {
+                    trueos_fs::LogKind::Put => NodeKind::File,
+                    trueos_fs::LogKind::Directory => NodeKind::Directory,
+                    _ => continue,
+                };
+                children.insert(String::from(name), kind);
             }
         }
     } else {
-        for (key, _) in index.range(prefix_bytes.to_vec()..) {
+        for (key, index_ref) in index.range(prefix_bytes.to_vec()..) {
             if !key.starts_with(prefix_bytes) {
                 break;
             }
@@ -1894,99 +2060,36 @@ pub async fn list_dir_async(
                 continue;
             }
             if let Ok(rest_str) = core::str::from_utf8(&key[prefix_bytes.len()..]) {
-                let seg = rest_str.split('/').next().unwrap_or("");
-                if !seg.is_empty() {
-                    children.insert(String::from(seg));
+                if rest_str.is_empty() || rest_str.contains('/') {
+                    continue;
                 }
+                let kind = match index_ref.kind {
+                    trueos_fs::LogKind::Put => NodeKind::File,
+                    trueos_fs::LogKind::Directory => NodeKind::Directory,
+                    _ => continue,
+                };
+                children.insert(String::from(rest_str), kind);
             }
         }
     }
 
-    const MAX_LISTING_BYTES: usize = 64 * 1024;
-    let mut selected = Vec::new();
+    let mut entries = Vec::new();
     let mut truncated = children.len() > TRUEOSFS_LIST_SOFT_CAP;
-    for entry in children {
-        if selected.len() >= TRUEOSFS_LIST_SOFT_CAP {
+    for (name, kind) in children {
+        if entries.len() >= TRUEOSFS_LIST_SOFT_CAP {
             truncated = true;
             break;
         }
-        selected.push(entry);
-    }
-    if truncated && selected.last().is_none_or(|entry| entry != "...") {
-        selected.pop();
-        selected.push(String::from("..."));
-    }
-
-    let mut out = String::new();
-    for entry in selected.iter() {
-        if !out.is_empty() {
-            out.push('\n');
-        }
-        if out.len().saturating_add(entry.len()) > MAX_LISTING_BYTES {
-            truncated = true;
-            break;
-        }
-        out.push_str(entry.as_str());
+        entries.push(DirEntry { name, kind });
     }
     if truncated {
         crate::log_warn!(target: "filesystem";
             "trueosfs: file listing soft cap reached operation=list_dir cap={}\n",
             TRUEOSFS_LIST_SOFT_CAP
         );
-        if !out.lines().any(|line| line == "...") {
-            if !out.is_empty() {
-                out.push('\n');
-            }
-            out.push_str("...");
-        }
     }
 
-    Ok(Some(out))
-}
-
-/// Async TRUEOSFS: report whether `dir` is represented by any indexed child path.
-///
-/// TRUEOSFS does not currently store directory records. Directories are therefore
-/// meaningful only as path prefixes, plus empty directories represented by their
-/// `.keep` marker at higher layers.
-pub async fn dir_has_children_async(
-    disk: block::DeviceHandle,
-    dir: &str,
-) -> Result<bool, block::Error> {
-    if disk.parent().is_some() {
-        return Err(block::Error::InvalidParam);
-    }
-    let Some(placement) = placement_for_io_async(disk).await? else {
-        return Ok(false);
-    };
-
-    let disk_id = disk.id();
-    ensure_index_async(disk, &placement).await?;
-
-    let roots = ROOTS.lock();
-    let Some(mount) = roots.iter().find(|m| m.disk_id == disk_id) else {
-        return Err(block::Error::NotReady);
-    };
-    let Some(index) = &mount.index else {
-        return Err(block::Error::Corrupted);
-    };
-
-    let prefix = normalized_dir_prefix(dir);
-    if prefix.is_empty() {
-        return Ok(!index.is_empty());
-    }
-
-    let prefix_bytes = prefix.as_bytes();
-    for (key, _) in index.range(prefix_bytes.to_vec()..) {
-        if !key.starts_with(prefix_bytes) {
-            break;
-        }
-        if key.len() > prefix_bytes.len() {
-            return Ok(true);
-        }
-    }
-
-    Ok(false)
+    Ok(Some(DirListing { entries, truncated }))
 }
 
 fn normalized_dir_prefix(dir: &str) -> String {
@@ -2058,7 +2161,7 @@ async fn ensure_index_async(
             let mut checkpoint_entries_since_yield = 0usize;
             for (key, kind, lba) in ckpt.entries {
                 match kind {
-                    trueos_fs::LogKind::Put => {
+                    trueos_fs::LogKind::Put | trueos_fs::LogKind::Directory => {
                         tree.insert(
                             key,
                             IndexRef {
@@ -2086,7 +2189,7 @@ async fn ensure_index_async(
 
         trueos_fs::replay_log_range(&io, &params, replay_from, end_rel, |kind, name, data, lba| {
             match kind {
-                trueos_fs::LogKind::Put => {
+                trueos_fs::LogKind::Put | trueos_fs::LogKind::Directory => {
                     tree.insert(
                         name,
                         IndexRef {
@@ -2106,6 +2209,14 @@ async fn ensure_index_async(
                         return;
                     };
                     apply_index_rename_tree(&mut tree, src, dst);
+                }
+                trueos_fs::LogKind::DeleteTree => {
+                    let Ok(path) = core::str::from_utf8(name.as_slice()) else {
+                        return;
+                    };
+                    let prefix = normalized_dir_prefix(path);
+                    tree.remove(path.as_bytes());
+                    tree.retain(|key, _| !key.starts_with(prefix.as_bytes()));
                 }
                 _ => {}
             }
@@ -2282,44 +2393,32 @@ pub async fn json_all_async(
             if path.is_empty() {
                 continue;
             }
-
             let segments: Vec<&str> = path.split('/').filter(|seg| !seg.is_empty()).collect();
             if segments.is_empty() {
                 continue;
             }
-
-            for depth in 0..segments.len() {
-                let rel_path = segments[..=depth].join("/");
-                let rel_path_bytes = rel_path.as_bytes().to_vec();
-                if !seen.insert(rel_path_bytes) {
-                    continue;
-                }
-
-                let record_lba = if depth + 1 == segments.len() {
-                    Some(index_ref.entry_lba)
-                } else {
-                    let marker = alloc::format!("{}/.keep", rel_path);
-                    index.get(marker.as_bytes()).map(|entry| entry.entry_lba)
-                };
-                by_depth.entry(depth).or_default().push(JsonEntry {
-                    depth,
-                    id: record_lba.unwrap_or(index_ref.entry_lba),
-                    path: rel_path,
-                    name: String::from(segments[depth]),
-                    kind: if depth + 1 == segments.len() {
-                        "file"
-                    } else {
-                        "dir"
-                    },
-                    record_lba,
-                    record_key: RecordKey::Ffa,
-                });
-
-                let count = by_depth.values().map(|items| items.len()).sum::<usize>();
-                if count > effective_limit {
-                    truncated = true;
-                    break 'scan;
-                }
+            if !seen.insert(key.clone()) {
+                continue;
+            }
+            let kind = match index_ref.kind {
+                trueos_fs::LogKind::Put => "file",
+                trueos_fs::LogKind::Directory => "dir",
+                _ => continue,
+            };
+            let depth = segments.len().saturating_sub(1);
+            by_depth.entry(depth).or_default().push(JsonEntry {
+                depth,
+                id: index_ref.entry_lba,
+                path: String::from(path),
+                name: String::from(*segments.last().unwrap_or(&"")),
+                kind,
+                record_lba: Some(index_ref.entry_lba),
+                record_key: RecordKey::Ffa,
+            });
+            let count = by_depth.values().map(|items| items.len()).sum::<usize>();
+            if count > effective_limit {
+                truncated = true;
+                break 'scan;
             }
         }
     }
@@ -2530,9 +2629,15 @@ pub fn root_index_paths(disk_id: block::DiscId, max_paths: usize) -> Option<Vec<
     Some(out)
 }
 
+#[derive(Clone, Debug)]
+pub(super) struct IndexNode {
+    pub path: String,
+    pub kind: NodeKind,
+}
+
 pub(super) async fn index_path_snapshot_async(
     disk: block::DeviceHandle,
-) -> Result<Option<Vec<String>>, block::Error> {
+) -> Result<Option<Vec<IndexNode>>, block::Error> {
     if disk.parent().is_some() {
         return Err(block::Error::InvalidParam);
     }
@@ -2552,11 +2657,19 @@ pub(super) async fn index_path_snapshot_async(
     };
 
     let mut out = Vec::with_capacity(index.len());
-    for key in index.keys() {
+    for (key, index_ref) in index.iter() {
         if let Ok(path) = core::str::from_utf8(key.as_slice())
             && !path.is_empty()
         {
-            out.push(String::from(path));
+            let kind = match index_ref.kind {
+                trueos_fs::LogKind::Put => NodeKind::File,
+                trueos_fs::LogKind::Directory => NodeKind::Directory,
+                _ => continue,
+            };
+            out.push(IndexNode {
+                path: String::from(path),
+                kind,
+            });
         }
     }
     Ok(Some(out))
@@ -2705,8 +2818,23 @@ impl Drop for AlignedBuf {
     }
 }
 
-fn looks_like_trueos_superblock(block0: &[u8]) -> bool {
-    block0.len() >= 8 && block0[0..8] == trueos_fs::MAGIC
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum SuperblockProbe {
+    Other,
+    Current,
+    UnsupportedTrueosFs,
+}
+
+fn probe_trueos_superblock(block0: &[u8]) -> SuperblockProbe {
+    if block0.len() < trueos_fs::MAGIC.len() || block0[..trueos_fs::MAGIC.len()] != trueos_fs::MAGIC
+    {
+        return SuperblockProbe::Other;
+    }
+    if trueos_fs::parse_superblock(block0).is_some() {
+        SuperblockProbe::Current
+    } else {
+        SuperblockProbe::UnsupportedTrueosFs
+    }
 }
 
 fn is_transient_io(e: block::Error) -> bool {
@@ -2779,15 +2907,16 @@ pub async fn locate_async(
 ) -> Result<Option<TrueosFsPlacement>, block::Error> {
     if handle.parent().is_some() {
         let bs0 = read_blocks_aligned_retry_async(handle, 0, 1, 3).await?;
-        if looks_like_trueos_superblock(&bs0) {
-            return Ok(Some(TrueosFsPlacement {
+        return match probe_trueos_superblock(&bs0) {
+            SuperblockProbe::Current => Ok(Some(TrueosFsPlacement {
                 bootable: false,
                 super_lba: 0,
                 data_lba: trueos_fs::data_lba_from_super(0),
                 data_end_lba_exclusive: Some(handle.info().block_count),
-            }));
-        }
-        return Ok(None);
+            })),
+            SuperblockProbe::UnsupportedTrueosFs => Err(block::Error::NotSupported),
+            SuperblockProbe::Other => Ok(None),
+        };
     }
 
     // Prefer GPT-partitioned layouts (bootable-capable).
@@ -2806,16 +2935,29 @@ pub async fn locate_async(
                         // Our superblock is at the start of the TRUEOS data partition.
                         if let Ok(p0) =
                             read_blocks_aligned_retry_async(handle, p.range.first_lba(), 1, 3).await
-                            && looks_like_trueos_superblock(&p0)
                         {
-                            let super_lba = p.range.first_lba();
-                            let end_lba_exclusive = p.range.last_lba().saturating_add(1);
-                            return Ok(Some(TrueosFsPlacement {
-                                bootable: has_esp,
-                                super_lba,
-                                data_lba: trueos_fs::data_lba_from_super(super_lba),
-                                data_end_lba_exclusive: Some(end_lba_exclusive),
-                            }));
+                            match probe_trueos_superblock(&p0) {
+                                SuperblockProbe::Current => {
+                                    let super_lba = p.range.first_lba();
+                                    let end_lba_exclusive = p.range.last_lba().saturating_add(1);
+                                    return Ok(Some(TrueosFsPlacement {
+                                        bootable: has_esp,
+                                        super_lba,
+                                        data_lba: trueos_fs::data_lba_from_super(super_lba),
+                                        data_end_lba_exclusive: Some(end_lba_exclusive),
+                                    }));
+                                }
+                                SuperblockProbe::UnsupportedTrueosFs => {
+                                    crate::log!(
+                                        "trueosfs: unsupported format disk={} super_lba={} expected_version={}\n",
+                                        handle.id().raw(),
+                                        p.range.first_lba(),
+                                        trueos_fs::FORMAT_VERSION,
+                                    );
+                                    return Err(block::Error::NotSupported);
+                                }
+                                SuperblockProbe::Other => {}
+                            }
                         }
                     }
                     break;
@@ -2852,16 +2994,23 @@ pub async fn locate_async(
             return Err(e);
         }
     };
-    if looks_like_trueos_superblock(&bs0) {
-        return Ok(Some(TrueosFsPlacement {
+    match probe_trueos_superblock(&bs0) {
+        SuperblockProbe::Current => Ok(Some(TrueosFsPlacement {
             bootable: false,
             super_lba: 0,
             data_lba: trueos_fs::data_lba_from_super(0),
             data_end_lba_exclusive: None,
-        }));
+        })),
+        SuperblockProbe::UnsupportedTrueosFs => {
+            crate::log!(
+                "trueosfs: unsupported format disk={} super_lba=0 expected_version={}\n",
+                handle.id().raw(),
+                trueos_fs::FORMAT_VERSION,
+            );
+            Err(block::Error::NotSupported)
+        }
+        SuperblockProbe::Other => Ok(None),
     }
-
-    Ok(None)
 }
 
 // NOTE: the synchronous `format_blank` wrapper was removed.
@@ -3029,7 +3178,7 @@ pub(crate) async fn format_blank_at_async(
 
     // Verify the superblock write actually stuck (important for flaky USBMS media).
     let verify0 = read_blocks_aligned_retry_async(handle, super_lba, 1, 10).await?;
-    if !looks_like_trueos_superblock(&verify0) {
+    if probe_trueos_superblock(&verify0) != SuperblockProbe::Current {
         return Err(block::Error::Corrupted);
     }
     let placement = validate_private_medium_async(handle, super_lba).await?;

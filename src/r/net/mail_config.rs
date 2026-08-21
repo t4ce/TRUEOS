@@ -56,7 +56,7 @@ fn primary_root() -> Result<crate::disc::block::DeviceHandle, &'static str> {
 }
 
 async fn ensure_mail_dir(disk: crate::disc::block::DeviceHandle) -> Result<(), &'static str> {
-    match crate::r::fs::trueosfs::file_in_async(disk, "mail/.keep", &[]).await {
+    match crate::r::fs::trueosfs::dir_create_all_async(disk, "mail").await {
         Ok(true) => Ok(()),
         Ok(false) => Err("mail dir create refused"),
         Err(_) => Err("mail dir create failed"),

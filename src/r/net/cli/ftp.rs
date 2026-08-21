@@ -779,7 +779,7 @@ async fn ftp_handle_command(vnet: &mut VNet, sess: &mut FtpServerSession, line: 
                                 match crate::r::fs::trueosfs::list_dir_async(disk, path.as_str())
                                     .await
                                 {
-                                    Ok(Some(list)) => ftp_listing_from_names(list.as_str()),
+                                    Ok(Some(list)) => ftp_listing_from_entries(&list),
                                     _ => Vec::new(),
                                 };
                             let _ = ftp_send_raw(vnet, data_handle, payload.as_slice());
@@ -1140,13 +1140,14 @@ fn ftp_normalize_path(cwd: &str, arg: &str) -> Option<String> {
     Some(out)
 }
 
-fn ftp_listing_from_names(list: &str) -> Vec<u8> {
+fn ftp_listing_from_entries(listing: &crate::r::fs::trueosfs::DirListing) -> Vec<u8> {
     let mut out = Vec::new();
-    for name in list.lines() {
-        if name.is_empty() {
-            continue;
-        }
-        let line = format!("-rw-r--r-- 1 trueos trueos 0 Jan 01 00:00 {}\r\n", name);
+    for entry in listing.entries.iter() {
+        let mode = match entry.kind {
+            crate::r::fs::trueosfs::NodeKind::File => "-rw-r--r--",
+            crate::r::fs::trueosfs::NodeKind::Directory => "drwxr-xr-x",
+        };
+        let line = format!("{} 1 trueos trueos 0 Jan 01 00:00 {}\r\n", mode, entry.name);
         out.extend_from_slice(line.as_bytes());
     }
     out

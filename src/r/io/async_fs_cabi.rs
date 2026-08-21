@@ -12,6 +12,8 @@ use trueos_time::{Duration as EmbassyDuration, Timer};
 const ASYNC_FS_MAX_OPERATIONS: usize = 64;
 const ASYNC_FS_MAX_RESULT_BYTES: u64 = 16 * 1024 * 1024;
 const ASYNC_FS_IDLE_MS: u64 = 1;
+const DIR_LIST_MAGIC: [u8; 4] = *b"TDL1";
+const DIR_LIST_HEADER_BYTES: usize = 12;
 /// Reserved async-FS identifier for a host-provided, one-shot VMX minishell
 /// input stream. `vFile:` is deliberately not a TrueOSFS pathname.
 const VMX_LAUNCH_SCRIPT_VFILE: &str = "vFile:launch";
@@ -59,6 +61,39 @@ struct Operation {
 static ASYNC_FS_SEQUENCE: AtomicU32 = AtomicU32::new(1);
 static ASYNC_FS_REQUESTS: Mutex<VecDeque<Request>> = Mutex::new(VecDeque::new());
 static ASYNC_FS_OPERATIONS: Mutex<BTreeMap<u32, Operation>> = Mutex::new(BTreeMap::new());
+
+fn encode_dir_listing(listing: &crate::r::fs::trueosfs::DirListing) -> Option<Vec<u8>> {
+    let count = u32::try_from(listing.entries.len()).ok()?;
+    let names_bytes = listing.entries.iter().try_fold(0usize, |total, entry| {
+        if entry.name.is_empty()
+            || entry.name.contains('/')
+            || entry.name == "."
+            || entry.name == ".."
+            || entry.name.len() > u16::MAX as usize
+        {
+            return None;
+        }
+        total.checked_add(4)?.checked_add(entry.name.len())
+    })?;
+    let total_len = DIR_LIST_HEADER_BYTES.checked_add(names_bytes)?;
+    let mut bytes = Vec::new();
+    bytes.try_reserve_exact(total_len).ok()?;
+    bytes.extend_from_slice(&DIR_LIST_MAGIC);
+    bytes.push(u8::from(listing.truncated));
+    bytes.extend_from_slice(&[0; 3]);
+    bytes.extend_from_slice(&count.to_le_bytes());
+    for entry in listing.entries.iter() {
+        let kind = match entry.kind {
+            crate::r::fs::trueosfs::NodeKind::File => 1,
+            crate::r::fs::trueosfs::NodeKind::Directory => 2,
+        };
+        bytes.push(kind);
+        bytes.push(0);
+        bytes.extend_from_slice(&(entry.name.len() as u16).to_le_bytes());
+        bytes.extend_from_slice(entry.name.as_bytes());
+    }
+    Some(bytes)
+}
 
 #[inline]
 pub(crate) const fn owner_for_vm(vm_id: u8) -> u32 {
@@ -379,25 +414,14 @@ fn selected_disk(path: &str) -> Result<(crate::disc::block::DeviceHandle, &str),
 }
 
 /// Resolve a TRUEOSFS path as a file (`Some(true)`), directory
-/// (`Some(false)`), or missing (`None`). Directories are implicit in the log,
-/// with `.keep` representing an otherwise empty directory.
+/// (`Some(false)`), or missing (`None`).
 async fn path_kind_async(
     disk: crate::disc::block::DeviceHandle,
     path: &str,
 ) -> Result<Option<bool>, crate::disc::block::Error> {
-    if crate::r::fs::trueosfs::file_info_async(disk, path)
+    Ok(crate::r::fs::trueosfs::node_info_async(disk, path)
         .await?
-        .is_some()
-    {
-        return Ok(Some(true));
-    }
-    let marker = alloc::format!("{}/.keep", path.trim_end_matches('/'));
-    if crate::r::fs::trueosfs::file_exists_async(disk, marker.as_str()).await?
-        || crate::r::fs::trueosfs::dir_has_children_async(disk, path).await?
-    {
-        return Ok(Some(false));
-    }
-    Ok(None)
+        .map(|info| matches!(info.kind, crate::r::fs::trueosfs::NodeKind::File)))
 }
 
 fn mounted_roots_text() -> String {
@@ -537,25 +561,15 @@ async fn process(request: &Request) -> OperationState {
             let stat = if path.is_empty() {
                 Ok((2u32, 0u64))
             } else {
-                match crate::r::fs::trueosfs::file_info_async(disk, path).await {
-                    Ok(Some(info)) => Ok((1u32, info.data_len)),
-                    Ok(None) => {
-                        let marker = alloc::format!("{}/.keep", path);
-                        match crate::r::fs::trueosfs::file_exists_async(disk, marker.as_str()).await
-                        {
-                            Ok(true) => Ok((2u32, 0u64)),
-                            Ok(false) => {
-                                match crate::r::fs::trueosfs::dir_has_children_async(disk, path)
-                                    .await
-                                {
-                                    Ok(true) => Ok((2u32, 0u64)),
-                                    Ok(false) => Err(FS_ERR_NOT_FOUND),
-                                    Err(error) => Err(map_block_error(error)),
-                                }
-                            }
-                            Err(error) => Err(map_block_error(error)),
-                        }
-                    }
+                match crate::r::fs::trueosfs::node_info_async(disk, path).await {
+                    Ok(Some(info)) => Ok((
+                        match info.kind {
+                            crate::r::fs::trueosfs::NodeKind::File => 1,
+                            crate::r::fs::trueosfs::NodeKind::Directory => 2,
+                        },
+                        info.data_len,
+                    )),
+                    Ok(None) => Err(FS_ERR_NOT_FOUND),
                     Err(error) => Err(map_block_error(error)),
                 }
             };
@@ -597,10 +611,13 @@ async fn process(request: &Request) -> OperationState {
                 selected_path
             );
             let state = match crate::r::fs::trueosfs::list_dir_async(disk, selected_path).await {
-                Ok(Some(listing)) if listing.len() as u64 > ASYNC_FS_MAX_RESULT_BYTES => {
-                    OperationState::Failed(FS_ERR_TOO_LARGE)
-                }
-                Ok(Some(listing)) => OperationState::Read(listing.into_bytes()),
+                Ok(Some(listing)) => match encode_dir_listing(&listing) {
+                    Some(bytes) if bytes.len() as u64 <= ASYNC_FS_MAX_RESULT_BYTES => {
+                        OperationState::Read(bytes)
+                    }
+                    Some(_) => OperationState::Failed(FS_ERR_TOO_LARGE),
+                    None => OperationState::Failed(FS_ERR_IO),
+                },
                 Ok(None) => OperationState::Failed(FS_ERR_NOT_FOUND),
                 Err(error) => OperationState::Failed(map_block_error(error)),
             };
@@ -623,7 +640,7 @@ async fn process(request: &Request) -> OperationState {
         }
         RequestKind::Remove { path } => {
             let _ = path;
-            match crate::r::fs::trueosfs::file_delete_async(disk, selected_path).await {
+            match crate::r::fs::trueosfs::remove_recursive_async(disk, selected_path).await {
                 Ok(true) => OperationState::Unit,
                 Ok(false) => OperationState::Failed(FS_ERR_NOT_FOUND),
                 Err(error) => OperationState::Failed(map_block_error(error)),

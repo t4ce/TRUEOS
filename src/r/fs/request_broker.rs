@@ -518,7 +518,15 @@ async fn process_request(request: Request) {
             completion,
         } => {
             let result = match super::trueosfs::list_dir_async(disk, path.as_str()).await {
-                Ok(Some(value)) => Ok(value),
+                Ok(Some(value)) if value.truncated => {
+                    Err(FsError::Device(block::Error::OutOfBounds))
+                }
+                Ok(Some(value)) => Ok(value
+                    .entries
+                    .into_iter()
+                    .map(|entry| entry.name)
+                    .collect::<Vec<_>>()
+                    .join("\n")),
                 Ok(None) => Err(FsError::NoRoot),
                 Err(error) => Err(error.into()),
             };
@@ -530,7 +538,7 @@ async fn process_request(request: Request) {
             path,
             completion,
         } => {
-            let result = match super::trueosfs::file_delete_async(disk, path.as_str()).await {
+            let result = match super::trueosfs::remove_recursive_async(disk, path.as_str()).await {
                 Ok(true) => Ok(()),
                 Ok(false) => Err(FsError::NotFound),
                 Err(error) => Err(error.into()),
@@ -543,8 +551,9 @@ async fn process_request(request: Request) {
             path,
             completion,
         } => {
-            let result = super::trueosfs::file_exists_async(disk, path.as_str())
+            let result = super::trueosfs::node_info_async(disk, path.as_str())
                 .await
+                .map(|info| info.is_some())
                 .map_err(FsError::from);
             finish(id, "exists", completion, result);
         }
@@ -559,44 +568,23 @@ async fn stat_async(disk: block::DeviceHandle, path: &str) -> FsResult<FsStat> {
         });
     }
 
-    if let Some(info) = super::trueosfs::file_info_async(disk, path).await? {
+    if let Some(info) = super::trueosfs::node_info_async(disk, path).await? {
         return Ok(FsStat {
-            kind: FsNodeKind::File,
+            kind: match info.kind {
+                super::trueosfs::NodeKind::File => FsNodeKind::File,
+                super::trueosfs::NodeKind::Directory => FsNodeKind::Directory,
+            },
             len: info.data_len,
-        });
-    }
-
-    let marker = alloc::format!("{}/.keep", path);
-    if super::trueosfs::file_exists_async(disk, marker.as_str()).await?
-        || super::trueosfs::dir_has_children_async(disk, path).await?
-    {
-        return Ok(FsStat {
-            kind: FsNodeKind::Directory,
-            len: 0,
         });
     }
     Err(FsError::NotFound)
 }
 
 async fn create_dir_all_async(disk: block::DeviceHandle, path: &str) -> FsResult<()> {
-    let mut prefix = String::new();
-    for part in path.split('/') {
-        if !prefix.is_empty() {
-            prefix.push('/');
-        }
-        prefix.push_str(part);
-
-        let marker = alloc::format!("{}/.keep", prefix);
-        if super::trueosfs::file_exists_async(disk, marker.as_str()).await?
-            || super::trueosfs::dir_has_children_async(disk, prefix.as_str()).await?
-        {
-            continue;
-        }
-        if !super::trueosfs::file_in_async(disk, marker.as_str(), &[]).await? {
-            return Err(FsError::NoSpace);
-        }
+    match super::trueosfs::dir_create_all_async(disk, path).await? {
+        true => Ok(()),
+        false => Err(FsError::NoSpace),
     }
-    Ok(())
 }
 
 fn finish<T>(id: u64, operation: &'static str, completion: Completion<T>, result: FsResult<T>) {

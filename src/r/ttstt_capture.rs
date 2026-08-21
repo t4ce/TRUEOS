@@ -876,12 +876,12 @@ async fn prepare_capture_slot(
     }
 
     let child_prefix = alloc::format!("tts-recent-s{}-", slot);
-    let mut listing_truncated = false;
-    for child in listing.lines() {
-        if child == "..." {
-            listing_truncated = true;
+    let listing_truncated = listing.truncated;
+    for entry in listing.entries.iter() {
+        if entry.kind != crate::r::fs::trueosfs::NodeKind::File {
             continue;
         }
+        let child = entry.name.as_str();
         if !child.starts_with(child_prefix.as_str()) {
             continue;
         }

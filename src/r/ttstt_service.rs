@@ -1225,14 +1225,19 @@ async fn find_kokoro_model_path(
             error,
         })?
         .ok_or_else(|| ModelLoadError::Missing(KOKORO_DIR.to_string()))?;
-    let mut found = listing
-        .lines()
-        .filter(|name| *name != "..." && name.ends_with(".onnx"));
-    let Some(name) = found.next() else {
+    let found: Vec<&str> = listing
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry.kind == crate::r::fs::trueosfs::NodeKind::File && entry.name.ends_with(".onnx")
+        })
+        .map(|entry| entry.name.as_str())
+        .collect();
+    let Some(name) = found.first().copied() else {
         return Err(ModelLoadError::Missing(alloc::format!("{KOKORO_DIR}/*.onnx")));
     };
-    if found.next().is_some() {
-        return Err(ModelLoadError::AmbiguousKokoroModel(listing));
+    if found.len() > 1 || listing.truncated {
+        return Err(ModelLoadError::AmbiguousKokoroModel(found.join("\n")));
     }
     Ok(alloc::format!("{KOKORO_DIR}/{name}"))
 }

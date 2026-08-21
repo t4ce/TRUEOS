@@ -772,7 +772,7 @@ function mkdirHref(root,dir,name){var base="/mkdir/"+root;var enc=encodePath(dir
 function setStatus(target,msg){if(target){target.textContent=msg;}}
 function uploadFile(root,dir,file,status){if(!file){return;}var started=Date.now();var xhr=new XMLHttpRequest();xhr.open("POST",upHref(root,dir,file.name));xhr.setRequestHeader("Content-Type","application/octet-stream");xhr.upload.onprogress=function(ev){if(!ev.lengthComputable){setStatus(status,"uploading "+file.name+" ...");return;}var elapsed=Math.max((Date.now()-started)/1000,0.001);var rate=ev.loaded/elapsed;setStatus(status,"uploading "+file.name+" "+ev.loaded+"/"+ev.total+" bytes @ "+Math.round(rate/1024)+" KiB/s");};xhr.onload=function(){if(xhr.status>=200&&xhr.status<300){setStatus(status,"uploaded "+file.name);window.setTimeout(function(){window.location.reload();},250);}else{setStatus(status,"upload failed: HTTP "+xhr.status);}};xhr.onerror=function(){setStatus(status,"upload failed");};xhr.send(file);}
 function deleteFile(root,path,label,status){if(!window.confirm("Delete "+label+"?")){return;}setStatus(status,"deleting "+label+" ...");fetch(rmHref(root,path),{method:"POST"}).then(function(resp){if(!resp.ok){throw new Error(String(resp.status));}setStatus(status,"deleted "+label);window.setTimeout(function(){window.location.reload();},250);}).catch(function(err){setStatus(status,"delete failed: "+err.message);});}
-function wireFile(root,li,path,label){if(label===".keep"){li.hidden=true;return;}var text=firstTextNode(li);if(text){text.textContent="";}var del=document.createElement("button");del.type="button";del.textContent="x";var a=document.createElement("a");a.href=dlHref(root,path);a.textContent=label;a.setAttribute("download","");var status=document.createElement("small");li.insertBefore(del,li.firstChild);li.insertBefore(document.createTextNode(" "),del.nextSibling);li.insertBefore(a,del.nextSibling.nextSibling);li.appendChild(document.createTextNode(" "));li.appendChild(status);del.addEventListener("click",function(){deleteFile(root,path,label,status);});}
+function wireFile(root,li,path,label){var text=firstTextNode(li);if(text){text.textContent="";}var del=document.createElement("button");del.type="button";del.textContent="x";var a=document.createElement("a");a.href=dlHref(root,path);a.textContent=label;a.setAttribute("download","");var status=document.createElement("small");li.insertBefore(del,li.firstChild);li.insertBefore(document.createTextNode(" "),del.nextSibling);li.insertBefore(a,del.nextSibling.nextSibling);li.appendChild(document.createTextNode(" "));li.appendChild(status);del.addEventListener("click",function(){deleteFile(root,path,label,status);});}
 function ensureFolderDetails(li){var d=folderDetails(li);if(d){return d;}var ul=null;for(var i=0;i<li.children.length;i++){if(li.children[i].tagName==="UL"){ul=li.children[i];break;}}if(!ul){return null;}var label=trimmedPathPart(cleanLabel(li));var text=firstTextNode(li);if(text){text.textContent="";}d=document.createElement("details");d.open=true;var summary=document.createElement("summary");summary.appendChild(document.createTextNode(label));d.appendChild(summary);li.insertBefore(d,ul);d.appendChild(ul);return d;}
 function wireFolder(root,li,path){if(li.getAttribute("data-trueosfs-folder")==="1"){return;}li.setAttribute("data-trueosfs-folder","1");var details=ensureFolderDetails(li);var summary=folderSummary(li)||li;var host=document.createElement("span");var uploadBtn=document.createElement("button");uploadBtn.type="button";uploadBtn.textContent="upload";var createBtn=document.createElement("button");createBtn.type="button";createBtn.textContent="+";var picker=document.createElement("input");picker.type="file";picker.hidden=true;var status=document.createElement("small");host.appendChild(document.createTextNode(" "));host.appendChild(uploadBtn);host.appendChild(document.createTextNode(" "));host.appendChild(createBtn);host.appendChild(document.createTextNode(" "));host.appendChild(status);summary.appendChild(host);li.appendChild(picker);uploadBtn.addEventListener("click",function(){picker.click();});picker.addEventListener("change",function(){if(picker.files&&picker.files[0]){uploadFile(root,path,picker.files[0],status);}picker.value="";});createBtn.addEventListener("click",function(){var name=window.prompt("Folder name");if(!name){return;}setStatus(status,"creating "+name+" ...");fetch(mkdirHref(root,path,name),{method:"POST"}).then(function(resp){if(!resp.ok){throw new Error(String(resp.status));}setStatus(status,"created "+name);window.setTimeout(function(){window.location.reload();},250);}).catch(function(err){setStatus(status,"create failed: "+err.message);});});}
 function wireTree(root,tree){var nodes=tree.querySelectorAll("li");for(var i=0;i<nodes.length;i++){var li=nodes[i];var label=cleanLabel(li);if(!label){continue;}var path=pathFor(li);if(isFolder(li)){wireFolder(root,li,path);}else if(path){wireFile(root,li,path,label);}}}
@@ -1072,8 +1072,7 @@ pub async fn http_trueosfs_task() {
                                     }
                                 };
                                 let folder = http_join_rel_path(dir.as_str(), name.as_str());
-                                let marker = http_join_rel_path(folder.as_str(), ".keep");
-                                match crate::r::fs::trueosfs::file_in_async(disk, marker.as_str(), &[]).await {
+                                match crate::r::fs::trueosfs::dir_create_all_async(disk, folder.as_str()).await {
                                     Ok(true) => http_plain_response("HTTP/1.1 200 OK\r\n", "mkdir ok\n"),
                                     Ok(false) => {
                                         http_plain_response("HTTP/1.1 507 Insufficient Storage\r\n", "mkdir failed\n")
@@ -1128,8 +1127,9 @@ pub async fn http_trueosfs_task() {
                                     }
                                 };
 
-                                let is_file = match crate::r::fs::trueosfs::file_exists_async(disk, src.as_str()).await {
-                                    Ok(v) => v,
+                                let kind = match crate::r::fs::trueosfs::node_info_async(disk, src.as_str()).await {
+                                    Ok(Some(info)) => info.kind,
+                                    Ok(None) => break 'resp http_plain_response("HTTP/1.1 404 Not Found\r\n", "source not found\n"),
                                     Err(_) => {
                                         break 'resp http_plain_response(
                                             "HTTP/1.1 500 Internal Server Error\r\n",
@@ -1137,7 +1137,7 @@ pub async fn http_trueosfs_task() {
                                         );
                                     }
                                 };
-                                let moved = if is_file {
+                                let moved = if kind == crate::r::fs::trueosfs::NodeKind::File {
                                     match crate::r::fs::trueosfs::file_rename_async(disk, src.as_str(), dst.as_str()).await {
                                         Ok(v) => v,
                                         Err(_) => {
@@ -1203,7 +1203,7 @@ pub async fn http_trueosfs_task() {
                                         );
                                     }
                                 };
-                                match crate::r::fs::trueosfs::file_delete_async(disk, path.as_str()).await {
+                                match crate::r::fs::trueosfs::remove_recursive_async(disk, path.as_str()).await {
                                     Ok(true) => http_plain_response("HTTP/1.1 200 OK\r\n", "delete ok\n"),
                                     Ok(false) => http_plain_response("HTTP/1.1 404 Not Found\r\n", "not found\n"),
                                     Err(_) => {

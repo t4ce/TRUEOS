@@ -6,21 +6,26 @@ extern crate alloc;
 #[cfg(test)]
 extern crate std;
 
-use alloc::{collections::BTreeSet, format, string::String, vec, vec::Vec};
+use alloc::{collections::BTreeMap, format, string::String, vec, vec::Vec};
 use trueos_crypto::{KeyHandle, KeyRef, ProviderId};
 
 pub const MAGIC: [u8; 8] = *b"TRUEOSFS";
 
-// Superblock layout (little-endian):
+// Superblock layout (little-endian, format version 2):
 // [0..8]   MAGIC
-// [8..16]  LOG_HEAD_REL_BLOCKS: u64 (relative to data_lba)
-// [16..24] CHECKPOINT_REL_BLOCKS: u64 (relative to data_lba; 0 = none)
-
-pub const SUPERBLOCK_MIN_BYTES: usize = 16;
-pub const SUPERBLOCK_WITH_CKPT_MIN_BYTES: usize = 24;
-
-pub const SUPERBLOCK_LOG_HEAD_REL_OFF: usize = 8;
-pub const SUPERBLOCK_CHECKPOINT_REL_OFF: usize = 16;
+// [8..10]  FORMAT_VERSION: u16
+// [10..16] reserved (zero)
+// [16..24] LOG_HEAD_REL_BLOCKS: u64 (relative to data_lba)
+// [24..32] CHECKPOINT_REL_BLOCKS: u64 (relative to data_lba; 0 = none)
+//
+// Version 2 is an intentional clean break from the unversioned marker-file
+// format.  The parser must not accept those older media as a current volume.
+pub const FORMAT_VERSION: u16 = 2;
+pub const SUPERBLOCK_MIN_BYTES: usize = 32;
+pub const SUPERBLOCK_VERSION_OFF: usize = 8;
+pub const SUPERBLOCK_RESERVED_OFF: usize = 10;
+pub const SUPERBLOCK_LOG_HEAD_REL_OFF: usize = 16;
+pub const SUPERBLOCK_CHECKPOINT_REL_OFF: usize = 24;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Superblock {
@@ -40,6 +45,18 @@ pub fn parse_superblock(block0: &[u8]) -> Option<Superblock> {
     if &block0[0..8] != &MAGIC {
         return None;
     }
+    let version = u16::from_le_bytes([
+        block0[SUPERBLOCK_VERSION_OFF],
+        block0[SUPERBLOCK_VERSION_OFF + 1],
+    ]);
+    if version != FORMAT_VERSION
+        || block0[SUPERBLOCK_RESERVED_OFF..SUPERBLOCK_LOG_HEAD_REL_OFF]
+            .iter()
+            .any(|byte| *byte != 0)
+    {
+        return None;
+    }
+
     let log_head_rel_blocks = u64::from_le_bytes([
         block0[SUPERBLOCK_LOG_HEAD_REL_OFF],
         block0[SUPERBLOCK_LOG_HEAD_REL_OFF + 1],
@@ -51,20 +68,16 @@ pub fn parse_superblock(block0: &[u8]) -> Option<Superblock> {
         block0[SUPERBLOCK_LOG_HEAD_REL_OFF + 7],
     ]);
 
-    let checkpoint_rel_blocks = if block0.len() >= SUPERBLOCK_WITH_CKPT_MIN_BYTES {
-        u64::from_le_bytes([
-            block0[SUPERBLOCK_CHECKPOINT_REL_OFF],
-            block0[SUPERBLOCK_CHECKPOINT_REL_OFF + 1],
-            block0[SUPERBLOCK_CHECKPOINT_REL_OFF + 2],
-            block0[SUPERBLOCK_CHECKPOINT_REL_OFF + 3],
-            block0[SUPERBLOCK_CHECKPOINT_REL_OFF + 4],
-            block0[SUPERBLOCK_CHECKPOINT_REL_OFF + 5],
-            block0[SUPERBLOCK_CHECKPOINT_REL_OFF + 6],
-            block0[SUPERBLOCK_CHECKPOINT_REL_OFF + 7],
-        ])
-    } else {
-        0
-    };
+    let checkpoint_rel_blocks = u64::from_le_bytes([
+        block0[SUPERBLOCK_CHECKPOINT_REL_OFF],
+        block0[SUPERBLOCK_CHECKPOINT_REL_OFF + 1],
+        block0[SUPERBLOCK_CHECKPOINT_REL_OFF + 2],
+        block0[SUPERBLOCK_CHECKPOINT_REL_OFF + 3],
+        block0[SUPERBLOCK_CHECKPOINT_REL_OFF + 4],
+        block0[SUPERBLOCK_CHECKPOINT_REL_OFF + 5],
+        block0[SUPERBLOCK_CHECKPOINT_REL_OFF + 6],
+        block0[SUPERBLOCK_CHECKPOINT_REL_OFF + 7],
+    ]);
 
     Some(Superblock {
         log_head_rel_blocks,
@@ -84,10 +97,10 @@ pub fn write_superblock(block0: &mut [u8], sb: Superblock) {
     block0[SUPERBLOCK_LOG_HEAD_REL_OFF..SUPERBLOCK_LOG_HEAD_REL_OFF + 8]
         .copy_from_slice(&sb.log_head_rel_blocks.to_le_bytes());
 
-    if block0.len() >= SUPERBLOCK_WITH_CKPT_MIN_BYTES {
-        block0[SUPERBLOCK_CHECKPOINT_REL_OFF..SUPERBLOCK_CHECKPOINT_REL_OFF + 8]
-            .copy_from_slice(&sb.checkpoint_rel_blocks.to_le_bytes());
-    }
+    block0[SUPERBLOCK_VERSION_OFF..SUPERBLOCK_VERSION_OFF + 2]
+        .copy_from_slice(&FORMAT_VERSION.to_le_bytes());
+    block0[SUPERBLOCK_CHECKPOINT_REL_OFF..SUPERBLOCK_CHECKPOINT_REL_OFF + 8]
+        .copy_from_slice(&sb.checkpoint_rel_blocks.to_le_bytes());
 }
 
 /// Relative LBA (from the superblock) where the payload/data region starts.
@@ -224,6 +237,50 @@ pub enum LogKind {
     Delete = 2,
     IndexCheckpoint = 3,
     RenameTree = 4,
+    Directory = 5,
+    DeleteTree = 6,
+}
+
+/// The live object type represented by a TRUEOSFS log record.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub enum NodeKind {
+    File,
+    Directory,
+}
+
+impl NodeKind {
+    const fn from_log_kind(kind: LogKind) -> Option<Self> {
+        match kind {
+            LogKind::Put => Some(Self::File),
+            LogKind::Directory => Some(Self::Directory),
+            _ => None,
+        }
+    }
+}
+
+/// Metadata for a live filesystem node.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NodeInfo {
+    pub kind: NodeKind,
+    pub data_len: u64,
+    pub record_key: RecordKey,
+}
+
+/// Stable reference to a live file or directory record in the append-only log.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NodeRecordRef {
+    pub entry_lba: u64,
+    pub data_lba: u64,
+    pub kind: NodeKind,
+    pub data_len: u64,
+    pub record_key: RecordKey,
+}
+
+/// One immediate child returned by [`list_dir`].
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+pub struct DirEntry {
+    pub name: String,
+    pub kind: NodeKind,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -328,8 +385,11 @@ pub fn decode_index_checkpoint_payload(payload: &[u8]) -> Option<IndexCheckpoint
         let kind = match kind_byte {
             1 => LogKind::Put,
             2 => LogKind::Delete,
-            // Backward compat: older payloads had reserved==0.
-            _ => LogKind::Put,
+            3 => LogKind::IndexCheckpoint,
+            4 => LogKind::RenameTree,
+            5 => LogKind::Directory,
+            6 => LogKind::DeleteTree,
+            _ => return None,
         };
 
         if payload.len().saturating_sub(off) < key_len {
@@ -394,6 +454,8 @@ impl LogHeader {
             2 => LogKind::Delete,
             3 => LogKind::IndexCheckpoint,
             4 => LogKind::RenameTree,
+            5 => LogKind::Directory,
+            6 => LogKind::DeleteTree,
             _ => return None,
         };
         let committed = block[9] == 1;
@@ -454,14 +516,6 @@ fn decode_record_key(block: &[u8]) -> Option<RecordKey> {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct FileRecord {
-    entry_lba: u64,
-    data_len: u64,
-    data_lba: u64,
-    record_key: RecordKey,
-}
-
 fn disk_data_end_lba_exclusive<D: BlockIo>(dev: &D, params: &FsParams) -> u64 {
     params
         .data_end_lba_exclusive
@@ -475,6 +529,18 @@ fn entry_blocks(block_size: usize, name_len: usize, data_len: usize) -> u64 {
     let name_blocks = (name_len + (block_size - 1)) / block_size;
     let data_blocks = (data_len + (block_size - 1)) / block_size;
     (1 + name_blocks + data_blocks) as u64
+}
+
+fn valid_record_shape(kind: LogKind, name_len: usize, data_len: usize) -> bool {
+    match kind {
+        LogKind::Put => name_len > 0 && name_len <= 4096,
+        LogKind::Directory | LogKind::DeleteTree => {
+            name_len > 0 && name_len <= 4096 && data_len == 0
+        }
+        LogKind::Delete => name_len > 0 && name_len <= 4096 && data_len == DELETE_REF_BYTES,
+        LogKind::IndexCheckpoint => name_len == 0 && data_len >= 8,
+        LogKind::RenameTree => name_len > 0 && name_len <= 4096 && data_len > 0 && data_len <= 4096,
+    }
 }
 
 async fn read_one_block<D: BlockIo>(dev: &D, lba: u64) -> Result<Vec<u8>, FsError<D::Error>> {
@@ -769,25 +835,8 @@ pub async fn replay_log_range<D: BlockIo>(
 
         let name_len = hdr.name_len as usize;
         let data_len = hdr.data_len as usize;
-        match hdr.kind {
-            LogKind::Put | LogKind::Delete => {
-                if name_len == 0 || name_len > 4096 {
-                    break;
-                }
-                if hdr.kind == LogKind::Delete && data_len != DELETE_REF_BYTES {
-                    break;
-                }
-            }
-            LogKind::IndexCheckpoint => {
-                if name_len != 0 || data_len < 8 {
-                    break;
-                }
-            }
-            LogKind::RenameTree => {
-                if name_len == 0 || name_len > 4096 || data_len == 0 || data_len > 4096 {
-                    break;
-                }
-            }
+        if !valid_record_shape(hdr.kind, name_len, data_len) {
+            break;
         }
 
         let name_blocks = (name_len + (bs - 1)) / bs;
@@ -892,14 +941,7 @@ pub async fn scan_raw_log<D: BlockIo>(
             }
         };
 
-        let valid_shape = match hdr.kind {
-            LogKind::Put => name_len > 0 && name_len <= 4096,
-            LogKind::Delete => name_len > 0 && name_len <= 4096 && data_len == DELETE_REF_BYTES,
-            LogKind::IndexCheckpoint => name_len == 0 && data_len >= 8,
-            LogKind::RenameTree => {
-                name_len > 0 && name_len <= 4096 && data_len > 0 && data_len <= 4096
-            }
-        };
+        let valid_shape = valid_record_shape(hdr.kind, name_len, data_len);
         if !valid_shape {
             return Ok(RawLogScan {
                 superblock: sb,
@@ -951,7 +993,7 @@ pub async fn scan_raw_log<D: BlockIo>(
                     checkpoint_entry_count = Some(ckpt.entries.len());
                 }
             }
-            LogKind::Put | LogKind::RenameTree => {}
+            LogKind::Put | LogKind::Directory | LogKind::RenameTree | LogKind::DeleteTree => {}
         }
 
         records.push(RawLogRecord {
@@ -1121,8 +1163,11 @@ pub async fn begin_write_file_stream<D: BlockIo>(
     name: &str,
     data_len: u64,
 ) -> Result<Option<PutWriteStream>, FsError<D::Error>> {
-    let record_key = find_latest_record(dev, params, name)
-        .await?
+    let existing = lookup_node_record(dev, params, name).await?;
+    if existing.is_some_and(|record| record.kind != NodeKind::File) {
+        return Ok(None);
+    }
+    let record_key = existing
         .map(|record| record.record_key)
         .unwrap_or(RecordKey::Ffa);
     begin_write_file_stream_with_key(dev, params, name, data_len, record_key).await
@@ -1136,7 +1181,7 @@ pub async fn begin_write_file_stream_with_key<D: BlockIo>(
     data_len: u64,
     record_key: RecordKey,
 ) -> Result<Option<PutWriteStream>, FsError<D::Error>> {
-    if name.is_empty() || name.as_bytes().len() > (u16::MAX as usize) {
+    if !is_normalized_nonempty_path(name) || name.as_bytes().len() > (u16::MAX as usize) {
         return Ok(None);
     }
     let bs = dev.block_size();
@@ -1145,6 +1190,19 @@ pub async fn begin_write_file_stream_with_key<D: BlockIo>(
     }
     if matches!(record_key, RecordKey::Key(_)) && bs < RECORD_KEY_HEADER_MIN_BYTES {
         return Err(FsError::InvalidParam);
+    }
+    if lookup_node_record(dev, params, name)
+        .await?
+        .is_some_and(|record| record.kind != NodeKind::File)
+    {
+        return Ok(None);
+    }
+    if let Some((parent, _)) = name.rsplit_once('/')
+        && lookup_node_record(dev, params, parent)
+            .await?
+            .is_none_or(|record| record.kind != NodeKind::Directory)
+    {
+        return Ok(None);
     }
     let data_len_usize = usize::try_from(data_len).map_err(|_| FsError::InvalidParam)?;
 
@@ -1334,6 +1392,61 @@ pub async fn finish_write_file_stream<D: BlockIo>(
     // Publish by advancing log head.
     advance_log_head(dev, params, stream.sb_before, stream.total_blocks).await?;
     Ok(())
+}
+
+async fn write_empty_node_entry<D: BlockIo>(
+    dev: &D,
+    entry_lba: u64,
+    name: &str,
+    kind: LogKind,
+) -> Result<u64, FsError<D::Error>> {
+    debug_assert!(matches!(kind, LogKind::Directory | LogKind::DeleteTree));
+    let bs = dev.block_size();
+    if bs == 0 {
+        return Err(FsError::InvalidParam);
+    }
+    let name_bytes = name.as_bytes();
+    let name_blocks = name_bytes.len().div_ceil(bs);
+    let blocks = entry_blocks(bs, name_bytes.len(), 0);
+
+    let mut hdr0 = vec![0u8; bs];
+    LogHeader {
+        kind,
+        committed: false,
+        name_len: name_bytes.len() as u16,
+        data_len: 0,
+        integrity_tag: ZERO_INTEGRITY_TAG,
+        record_key: RecordKey::Ffa,
+    }
+    .encode_into_block(&mut hdr0);
+    dev.write_blocks(entry_lba, &hdr0)
+        .await
+        .map_err(FsError::Device)?;
+
+    if name_blocks != 0 {
+        let mut name_block_bytes = vec![0u8; name_blocks * bs];
+        name_block_bytes[..name_bytes.len()].copy_from_slice(name_bytes);
+        dev.write_blocks(entry_lba.saturating_add(1), &name_block_bytes)
+            .await
+            .map_err(FsError::Device)?;
+    }
+    dev.flush().await.map_err(FsError::Device)?;
+
+    let mut hdr1 = vec![0u8; bs];
+    LogHeader {
+        kind,
+        committed: true,
+        name_len: name_bytes.len() as u16,
+        data_len: 0,
+        integrity_tag: ZERO_INTEGRITY_TAG,
+        record_key: RecordKey::Ffa,
+    }
+    .encode_into_block(&mut hdr1);
+    dev.write_blocks(entry_lba, &hdr1)
+        .await
+        .map_err(FsError::Device)?;
+    dev.flush().await.map_err(FsError::Device)?;
+    Ok(blocks)
 }
 
 async fn write_delete_entry<D: BlockIo>(
@@ -1603,30 +1716,8 @@ async fn find_latest_delete_ref<D: BlockIo>(
 
         let name_len = hdr.name_len as usize;
         let data_len = hdr.data_len as usize;
-        match hdr.kind {
-            LogKind::Put | LogKind::Delete => {
-                if name_len == 0 || name_len > 4096 {
-                    break;
-                }
-                if hdr.kind == LogKind::Delete && data_len != DELETE_REF_BYTES {
-                    break;
-                }
-            }
-            LogKind::IndexCheckpoint => {
-                // Index checkpoints intentionally have no name payload.
-                if name_len != 0 {
-                    break;
-                }
-                // Require at least the replay-from u64.
-                if data_len < 8 {
-                    break;
-                }
-            }
-            LogKind::RenameTree => {
-                if name_len == 0 || name_len > 4096 || data_len == 0 || data_len > 4096 {
-                    break;
-                }
-            }
+        if !valid_record_shape(hdr.kind, name_len, data_len) {
+            break;
         }
 
         let name_blocks = (name_len + (bs - 1)) / bs;
@@ -1641,7 +1732,7 @@ async fn find_latest_delete_ref<D: BlockIo>(
             read_exact_bytes(dev, name_lba, 0, &mut tmp_name).await?;
             if tmp_name == name_bytes {
                 match hdr.kind {
-                    LogKind::Put => {
+                    LogKind::Put | LogKind::Directory | LogKind::DeleteTree => {
                         latest_delete = None;
                     }
                     LogKind::Delete => {
@@ -1686,15 +1777,17 @@ async fn find_latest_record<D: BlockIo>(
     dev: &D,
     params: &FsParams,
     name: &str,
-) -> Result<Option<FileRecord>, FsError<D::Error>> {
+) -> Result<Option<NodeRecordRef>, FsError<D::Error>> {
     if name.is_empty() {
         return Ok(None);
     }
-    let name_bytes = name.as_bytes();
-    if name_bytes.len() > (u16::MAX as usize) {
-        return Ok(None);
-    }
+    Ok(build_live_nodes(dev, params).await?.remove(name))
+}
 
+async fn build_live_nodes<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+) -> Result<BTreeMap<String, NodeRecordRef>, FsError<D::Error>> {
     let bs = dev.block_size();
     if bs == 0 {
         return Err(FsError::InvalidParam);
@@ -1704,11 +1797,9 @@ async fn find_latest_record<D: BlockIo>(
         return Err(FsError::Corrupted);
     };
 
+    let mut live = BTreeMap::new();
     let mut lba = params.data_lba;
     let end_lba = params.data_lba.saturating_add(sb.log_head_rel_blocks);
-    let mut latest: Option<FileRecord> = None;
-    let mut tmp_name: Vec<u8> = Vec::new();
-
     while lba < end_lba {
         let hdr_block = read_one_block(dev, lba).await?;
         let Some(hdr) = LogHeader::decode_from_block(&hdr_block) else {
@@ -1717,63 +1808,79 @@ async fn find_latest_record<D: BlockIo>(
         if !hdr.committed {
             break;
         }
-
         let name_len = hdr.name_len as usize;
-        let data_len = hdr.data_len as usize;
+        let data_len = match usize::try_from(hdr.data_len) {
+            Ok(value) => value,
+            Err(_) => break,
+        };
+        if !valid_record_shape(hdr.kind, name_len, data_len) {
+            break;
+        }
+        let name_blocks = name_len.div_ceil(bs);
+        let blocks = entry_blocks(bs, name_len, data_len);
+        if lba.saturating_add(blocks) > end_lba {
+            break;
+        }
+
+        if hdr.kind == LogKind::IndexCheckpoint {
+            lba = lba.saturating_add(blocks);
+            continue;
+        }
+        let mut name_bytes = vec![0u8; name_len];
+        read_exact_bytes(dev, lba.saturating_add(1), 0, &mut name_bytes).await?;
+        let Ok(name) = String::from_utf8(name_bytes) else {
+            break;
+        };
         match hdr.kind {
-            LogKind::Put | LogKind::Delete => {
-                if name_len == 0 || name_len > 4096 {
-                    break;
-                }
+            LogKind::Put | LogKind::Directory => {
+                let kind = NodeKind::from_log_kind(hdr.kind).expect("node record kind");
+                live.insert(
+                    name,
+                    NodeRecordRef {
+                        entry_lba: lba,
+                        data_lba: lba.saturating_add(1).saturating_add(name_blocks as u64),
+                        kind,
+                        data_len: hdr.data_len,
+                        record_key: hdr.record_key,
+                    },
+                );
             }
-            LogKind::IndexCheckpoint => {
-                if name_len != 0 {
-                    break;
-                }
-                if data_len < 8 {
-                    break;
-                }
+            LogKind::Delete => {
+                live.remove(name.as_str());
+            }
+            LogKind::DeleteTree => {
+                let prefix = normalized_dir_prefix_str(name.as_str());
+                live.retain(|path, _| path != &name && !path.starts_with(prefix.as_str()));
             }
             LogKind::RenameTree => {
-                if name_len == 0 || name_len > 4096 || data_len == 0 || data_len > 4096 {
+                let mut dst_bytes = vec![0u8; data_len];
+                let data_lba = lba.saturating_add(1).saturating_add(name_blocks as u64);
+                read_exact_bytes(dev, data_lba, 0, &mut dst_bytes).await?;
+                let Ok(dst) = String::from_utf8(dst_bytes) else {
                     break;
+                };
+                let src_prefix = normalized_dir_prefix_str(name.as_str());
+                let dst_prefix = normalized_dir_prefix_str(dst.as_str());
+                let mut moves = Vec::new();
+                if let Some(record) = live.remove(name.as_str()) {
+                    moves.push((dst.clone(), record));
+                }
+                for (path, record) in live.range(src_prefix.clone()..) {
+                    if !path.starts_with(src_prefix.as_str()) {
+                        break;
+                    }
+                    moves.push((format!("{}{}", dst_prefix, &path[src_prefix.len()..]), *record));
+                }
+                live.retain(|path, _| !path.starts_with(src_prefix.as_str()));
+                for (path, record) in moves {
+                    live.insert(path, record);
                 }
             }
+            LogKind::IndexCheckpoint => unreachable!(),
         }
-
-        let name_blocks = (name_len + (bs - 1)) / bs;
-        let data_blocks = (data_len + (bs - 1)) / bs;
-        let blocks = 1u64
-            .saturating_add(name_blocks as u64)
-            .saturating_add(data_blocks as u64);
-        let name_lba = lba.saturating_add(1);
-
-        if hdr.kind != LogKind::IndexCheckpoint && name_len == name_bytes.len() {
-            tmp_name.resize(name_len, 0);
-            read_exact_bytes(dev, name_lba, 0, &mut tmp_name).await?;
-            if tmp_name == name_bytes {
-                match hdr.kind {
-                    LogKind::Put => {
-                        let data_lba = lba.saturating_add(1).saturating_add(name_blocks as u64);
-                        latest = Some(FileRecord {
-                            entry_lba: lba,
-                            data_len: hdr.data_len,
-                            data_lba,
-                            record_key: hdr.record_key,
-                        });
-                    }
-                    LogKind::Delete => {
-                        latest = None;
-                    }
-                    LogKind::IndexCheckpoint | LogKind::RenameTree => {}
-                }
-            }
-        }
-
         lba = lba.saturating_add(blocks);
     }
-
-    Ok(latest)
+    Ok(live)
 }
 
 pub async fn write_file<D: BlockIo>(
@@ -1809,6 +1916,36 @@ pub async fn write_file_with_key<D: BlockIo>(
     Ok(true)
 }
 
+/// Create an empty, first-class directory record.
+///
+/// The path must already be normalized, nonempty, and relative.  Creating an
+/// existing directory succeeds; creating a directory over a file fails.
+pub async fn create_directory<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    name: &str,
+) -> Result<bool, FsError<D::Error>> {
+    if !is_normalized_nonempty_path(name) {
+        return Ok(false);
+    }
+    if let Some((parent, _)) = name.rsplit_once('/')
+        && lookup_node_record(dev, params, parent)
+            .await?
+            .is_none_or(|record| record.kind != NodeKind::Directory)
+    {
+        return Ok(false);
+    }
+    if let Some(existing) = lookup_node_record(dev, params, name).await? {
+        return Ok(existing.kind == NodeKind::Directory);
+    }
+    let Some((sb, entry_lba, _)) = check_space_for_put(dev, params, name.len(), 0).await? else {
+        return Ok(false);
+    };
+    let blocks = write_empty_node_entry(dev, entry_lba, name, LogKind::Directory).await?;
+    advance_log_head(dev, params, sb, blocks).await?;
+    Ok(true)
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FileInfo {
     pub data_len: u64,
@@ -1823,14 +1960,53 @@ pub struct FileRecordRef {
     pub record_key: RecordKey,
 }
 
+impl From<FileRecordRef> for NodeRecordRef {
+    fn from(record: FileRecordRef) -> Self {
+        Self {
+            entry_lba: record.entry_lba,
+            data_lba: record.data_lba,
+            kind: NodeKind::File,
+            data_len: record.data_len,
+            record_key: record.record_key,
+        }
+    }
+}
+
+/// Read metadata for either a file or a directory.
+pub async fn read_node_info<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    name: &str,
+) -> Result<Option<NodeInfo>, FsError<D::Error>> {
+    Ok(lookup_node_record(dev, params, name)
+        .await?
+        .map(|record| NodeInfo {
+            kind: record.kind,
+            data_len: record.data_len,
+            record_key: record.record_key,
+        }))
+}
+
+/// Look up a live file or directory record by its logical path.
+pub async fn lookup_node_record<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    name: &str,
+) -> Result<Option<NodeRecordRef>, FsError<D::Error>> {
+    find_latest_record(dev, params, name).await
+}
+
 pub async fn read_file_info<D: BlockIo>(
     dev: &D,
     params: &FsParams,
     name: &str,
 ) -> Result<Option<FileInfo>, FsError<D::Error>> {
-    let Some(rec) = find_latest_record(dev, params, name).await? else {
+    let Some(rec) = lookup_node_record(dev, params, name).await? else {
         return Ok(None);
     };
+    if rec.kind != NodeKind::File {
+        return Ok(None);
+    }
     Ok(Some(FileInfo {
         data_len: rec.data_len,
         record_key: rec.record_key,
@@ -1842,9 +2018,12 @@ pub async fn lookup_file_record<D: BlockIo>(
     params: &FsParams,
     name: &str,
 ) -> Result<Option<FileRecordRef>, FsError<D::Error>> {
-    let Some(rec) = find_latest_record(dev, params, name).await? else {
+    let Some(rec) = lookup_node_record(dev, params, name).await? else {
         return Ok(None);
     };
+    if rec.kind != NodeKind::File {
+        return Ok(None);
+    }
     Ok(Some(FileRecordRef {
         entry_lba: rec.entry_lba,
         data_lba: rec.data_lba,
@@ -1866,9 +2045,12 @@ pub async fn read_file<D: BlockIo>(
     params: &FsParams,
     name: &str,
 ) -> Result<Option<Vec<u8>>, FsError<D::Error>> {
-    let Some(rec) = find_latest_record(dev, params, name).await? else {
+    let Some(rec) = lookup_node_record(dev, params, name).await? else {
         return Ok(None);
     };
+    if rec.kind != NodeKind::File {
+        return Ok(None);
+    }
 
     let rec = FileRecordRef {
         entry_lba: rec.entry_lba,
@@ -1890,6 +2072,11 @@ pub async fn read_file_at_record<D: BlockIo>(
         return Err(FsError::InvalidParam);
     }
 
+    let expected: NodeRecordRef = (*record).into();
+    if get_node_record_by_lba(dev, params, record.entry_lba).await? != Some(expected) {
+        return Ok(None);
+    }
+
     if record.data_len == 0 {
         return Ok(Some(Vec::new()));
     }
@@ -1909,13 +2096,44 @@ pub async fn read_file_at_record<D: BlockIo>(
     Ok(Some(out))
 }
 
-/// Validate an entry at `entry_lba` and return its file record if it matches `expected_name`.
-pub async fn get_file_record_at<D: BlockIo>(
+/// Validate an entry at `entry_lba` and return its node record if it matches `expected_name`.
+pub async fn get_node_record_at<D: BlockIo>(
     dev: &D,
     params: &FsParams,
     entry_lba: u64,
     expected_name: &str,
-) -> Result<Option<FileRecordRef>, FsError<D::Error>> {
+) -> Result<Option<NodeRecordRef>, FsError<D::Error>> {
+    let Some(record) = get_node_record_by_lba(dev, params, entry_lba).await? else {
+        return Ok(None);
+    };
+    let name_len = expected_name.len();
+    if name_len == 0 || name_len > 4096 {
+        return Ok(None);
+    }
+    let hdr_block = read_one_block(dev, entry_lba).await?;
+    let Some(hdr) = LogHeader::decode_from_block(&hdr_block) else {
+        return Ok(None);
+    };
+    if hdr.name_len as usize != name_len {
+        return Ok(None);
+    }
+    let mut name_bytes = vec![0u8; name_len];
+    read_exact_bytes(dev, entry_lba.saturating_add(1), 0, &mut name_bytes).await?;
+    if name_bytes != expected_name.as_bytes() {
+        return Ok(None);
+    }
+    Ok(Some(record))
+}
+
+/// Validate a committed file or directory record at `entry_lba` without
+/// comparing its physical stored name.  Mounted indexes use this after a
+/// RenameTree, whose logical key intentionally differs from the original
+/// record name.
+pub async fn get_node_record_by_lba<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    entry_lba: u64,
+) -> Result<Option<NodeRecordRef>, FsError<D::Error>> {
     let bs = dev.block_size();
     if bs == 0 {
         return Err(FsError::InvalidParam);
@@ -1933,36 +2151,53 @@ pub async fn get_file_record_at<D: BlockIo>(
     let Some(hdr) = LogHeader::decode_from_block(&hdr_block) else {
         return Ok(None);
     };
-    if !hdr.committed || hdr.kind != LogKind::Put {
+    if !hdr.committed {
         return Ok(None);
     }
+    let Some(kind) = NodeKind::from_log_kind(hdr.kind) else {
+        return Ok(None);
+    };
 
     let name_len = hdr.name_len as usize;
-    if name_len == 0 || name_len > 4096 {
+    let data_len = match usize::try_from(hdr.data_len) {
+        Ok(value) => value,
+        Err(_) => return Ok(None),
+    };
+    if !valid_record_shape(hdr.kind, name_len, data_len) {
         return Ok(None);
     }
-    if expected_name.as_bytes().len() != name_len {
-        return Ok(None);
-    }
-
-    // Verify name matches.
-    let name_lba = entry_lba.saturating_add(1);
-    let mut name_bytes = vec![0u8; name_len];
-    read_exact_bytes(dev, name_lba, 0, &mut name_bytes).await?;
-    if name_bytes != expected_name.as_bytes() {
-        return Ok(None);
-    }
-
     let name_blocks = (name_len + (bs - 1)) / bs;
     let data_lba = entry_lba
         .saturating_add(1)
         .saturating_add(name_blocks as u64);
 
-    Ok(Some(FileRecordRef {
+    Ok(Some(NodeRecordRef {
         entry_lba,
         data_lba,
+        kind,
         data_len: hdr.data_len,
         record_key: hdr.record_key,
+    }))
+}
+
+/// Validate a file entry at `entry_lba` and return its file record.
+pub async fn get_file_record_at<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    entry_lba: u64,
+    expected_name: &str,
+) -> Result<Option<FileRecordRef>, FsError<D::Error>> {
+    let Some(record) = get_node_record_at(dev, params, entry_lba, expected_name).await? else {
+        return Ok(None);
+    };
+    if record.kind != NodeKind::File {
+        return Ok(None);
+    }
+    Ok(Some(FileRecordRef {
+        entry_lba: record.entry_lba,
+        data_lba: record.data_lba,
+        data_len: record.data_len,
+        record_key: record.record_key,
     }))
 }
 
@@ -1973,9 +2208,12 @@ pub async fn read_file_range<D: BlockIo>(
     offset: u64,
     out: &mut [u8],
 ) -> Result<Option<usize>, FsError<D::Error>> {
-    let Some(rec) = find_latest_record(dev, params, name).await? else {
+    let Some(rec) = lookup_node_record(dev, params, name).await? else {
         return Ok(None);
     };
+    if rec.kind != NodeKind::File {
+        return Ok(None);
+    }
     let rec = FileRecordRef {
         entry_lba: rec.entry_lba,
         data_lba: rec.data_lba,
@@ -1992,6 +2230,10 @@ pub async fn read_file_range_at<D: BlockIo>(
     offset: u64,
     out: &mut [u8],
 ) -> Result<Option<usize>, FsError<D::Error>> {
+    let expected: NodeRecordRef = (*record).into();
+    if get_node_record_by_lba(dev, params, record.entry_lba).await? != Some(expected) {
+        return Ok(None);
+    }
     if out.is_empty() {
         return Ok(Some(0));
     }
@@ -2306,29 +2548,49 @@ async fn append_delete_for_entry<D: BlockIo>(
     Ok(true)
 }
 
-/// Delete `name` using its current indexed record.
+/// Delete a file or an empty directory using its current indexed record.
 ///
-/// This validates the supplied record with bounded I/O, then appends a delete
-/// tombstone without scanning the complete append-only log. Callers must supply
-/// the latest record from their mounted index/cache.
+/// This validates the supplied physical record, then appends a tombstone for
+/// the caller-provided logical path. RenameTree deliberately keeps the physical
+/// record LBA while changing that logical path.
+pub async fn delete_node_at_record<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    name: &str,
+    record: &NodeRecordRef,
+) -> Result<bool, FsError<D::Error>> {
+    if name.is_empty() || name.as_bytes().len() > (u16::MAX as usize) {
+        return Ok(false);
+    }
+
+    let Some(validated) = get_node_record_by_lba(dev, params, record.entry_lba).await? else {
+        return Ok(false);
+    };
+    if validated != *record {
+        return Ok(false);
+    }
+    if validated.kind == NodeKind::Directory {
+        let prefix = normalized_dir_prefix_str(name);
+        if build_live_nodes(dev, params)
+            .await?
+            .keys()
+            .any(|path| path.starts_with(prefix.as_str()))
+        {
+            return Ok(false);
+        }
+    }
+
+    append_delete_for_entry(dev, params, name, validated.entry_lba, validated.record_key).await
+}
+
+/// File-only wrapper around [`delete_node_at_record`].
 pub async fn delete_file_at_record<D: BlockIo>(
     dev: &D,
     params: &FsParams,
     name: &str,
     record: &FileRecordRef,
 ) -> Result<bool, FsError<D::Error>> {
-    if name.is_empty() || name.as_bytes().len() > (u16::MAX as usize) {
-        return Ok(false);
-    }
-
-    let Some(validated) = get_file_record_at(dev, params, record.entry_lba, name).await? else {
-        return Ok(false);
-    };
-    if validated != *record {
-        return Ok(false);
-    }
-
-    append_delete_for_entry(dev, params, name, validated.entry_lba, validated.record_key).await
+    delete_node_at_record(dev, params, name, &(*record).into()).await
 }
 
 /// Delete `name` by resolving it from the on-disk log.
@@ -2344,11 +2606,36 @@ pub async fn delete_file<D: BlockIo>(
         return Ok(false);
     }
 
-    let Some(base) = find_latest_record(dev, params, name).await? else {
+    let Some(base) = lookup_node_record(dev, params, name).await? else {
         return Ok(false);
     };
+    if base.kind != NodeKind::File {
+        return Ok(false);
+    }
 
     append_delete_for_entry(dev, params, name, base.entry_lba, base.record_key).await
+}
+
+/// Delete `name` and every descendant with one durable tree tombstone.
+pub async fn delete_tree<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    name: &str,
+) -> Result<bool, FsError<D::Error>> {
+    if !is_normalized_nonempty_path(name) {
+        return Ok(false);
+    }
+    let live = build_live_nodes(dev, params).await?;
+    let prefix = normalized_dir_prefix_str(name);
+    if !live.contains_key(name) && !live.keys().any(|path| path.starts_with(prefix.as_str())) {
+        return Ok(false);
+    }
+    let Some((sb, entry_lba, _)) = check_space_for_put(dev, params, name.len(), 0).await? else {
+        return Ok(false);
+    };
+    let blocks = write_empty_node_entry(dev, entry_lba, name, LogKind::DeleteTree).await?;
+    advance_log_head(dev, params, sb, blocks).await?;
+    Ok(true)
 }
 
 pub async fn rename_tree<D: BlockIo>(
@@ -2372,6 +2659,12 @@ pub async fn rename_tree<D: BlockIo>(
         return Ok(false);
     }
     if src.len() > (u16::MAX as usize) || dst.len() > 4096 {
+        return Ok(false);
+    }
+    let live = build_live_nodes(dev, params).await?;
+    if live.get(src.as_str()).map(|record| record.kind) != Some(NodeKind::Directory)
+        || live.contains_key(dst.as_str())
+    {
         return Ok(false);
     }
 
@@ -2402,7 +2695,9 @@ pub async fn file_exists<D: BlockIo>(
     params: &FsParams,
     name: &str,
 ) -> Result<bool, FsError<D::Error>> {
-    Ok(find_latest_record(dev, params, name).await?.is_some())
+    Ok(lookup_node_record(dev, params, name)
+        .await?
+        .is_some_and(|record| record.kind == NodeKind::File))
 }
 
 fn normalize_rel_no_parent(path: &str) -> Option<String> {
@@ -2425,6 +2720,10 @@ fn normalize_rel_no_parent(path: &str) -> Option<String> {
     Some(out)
 }
 
+fn is_normalized_nonempty_path(path: &str) -> bool {
+    !path.is_empty() && normalize_rel_no_parent(path).as_deref() == Some(path)
+}
+
 fn normalized_dir_prefix_str(path: &str) -> String {
     let mut out = normalize_rel_no_parent(path).unwrap_or_default();
     if !out.is_empty() && !out.ends_with('/') {
@@ -2433,151 +2732,49 @@ fn normalized_dir_prefix_str(path: &str) -> String {
     out
 }
 
-/// List immediate children of a directory, treating stored keys as `/`-separated paths.
-///
-/// Output is newline-separated entry names.
+/// List immediate children of a directory with their first-class node types.
 pub async fn list_dir<D: BlockIo>(
     dev: &D,
     params: &FsParams,
     dir: &str,
-) -> Result<String, FsError<D::Error>> {
+) -> Result<Vec<DirEntry>, FsError<D::Error>> {
     let Some(rel) = normalize_rel_no_parent(dir) else {
-        return Ok(String::new());
+        return Ok(Vec::new());
     };
+    if !rel.is_empty() && rel != dir.trim_matches('/') {
+        return Ok(Vec::new());
+    }
     let prefix = if rel.is_empty() {
         String::new()
     } else {
-        let mut p = rel;
+        let mut p = rel.clone();
         p.push('/');
         p
     };
 
-    let bs = dev.block_size();
-    if bs == 0 {
-        return Err(FsError::InvalidParam);
+    let live = build_live_nodes(dev, params).await?;
+    if !rel.is_empty()
+        && live.get(rel.as_str()).map(|record| record.kind) != Some(NodeKind::Directory)
+    {
+        return Ok(Vec::new());
     }
-    let sb_block = read_one_block(dev, params.super_lba).await?;
-    let Some(sb) = parse_superblock(&sb_block) else {
-        return Err(FsError::Corrupted);
-    };
-    let mut lba = params.data_lba;
-    let end_lba = params.data_lba.saturating_add(sb.log_head_rel_blocks);
-
-    let mut live: BTreeSet<String> = BTreeSet::new();
-
-    while lba < end_lba {
-        let hdr_block = read_one_block(dev, lba).await?;
-        let Some(hdr) = LogHeader::decode_from_block(&hdr_block) else {
-            break;
+    let mut children: BTreeMap<String, NodeKind> = BTreeMap::new();
+    for (path, record) in live.iter() {
+        let Some(rest) = path.strip_prefix(prefix.as_str()) else {
+            continue;
         };
-        if !hdr.committed {
-            break;
+        if rest.is_empty() {
+            continue;
         }
-
-        let name_len = hdr.name_len as usize;
-        let data_len = hdr.data_len as usize;
-        match hdr.kind {
-            LogKind::Put | LogKind::Delete => {
-                if name_len == 0 || name_len > 4096 {
-                    break;
-                }
-            }
-            LogKind::IndexCheckpoint => {
-                if name_len != 0 {
-                    break;
-                }
-                if data_len < 8 {
-                    break;
-                }
-            }
-            LogKind::RenameTree => {
-                if name_len == 0 || name_len > 4096 || data_len == 0 || data_len > 4096 {
-                    break;
-                }
-            }
+        if rest.contains('/') {
+            continue;
         }
-
-        let name_blocks = (name_len + (bs - 1)) / bs;
-        let data_blocks = (data_len + (bs - 1)) / bs;
-        let blocks = 1u64
-            .saturating_add(name_blocks as u64)
-            .saturating_add(data_blocks as u64);
-
-        if hdr.kind != LogKind::IndexCheckpoint {
-            let name_lba = lba.saturating_add(1);
-            let mut tmp_name = vec![0u8; name_len];
-            read_exact_bytes(dev, name_lba, 0, &mut tmp_name).await?;
-            if let Ok(name) = core::str::from_utf8(&tmp_name) {
-                match hdr.kind {
-                    LogKind::Put => {
-                        live.insert(String::from(name));
-                    }
-                    LogKind::Delete => {
-                        let _ = live.remove(name);
-                    }
-                    LogKind::RenameTree => {
-                        let data_lba = lba.saturating_add(1).saturating_add(name_blocks as u64);
-                        let mut dst_bytes = vec![0u8; data_len];
-                        read_exact_bytes(dev, data_lba, 0, dst_bytes.as_mut_slice()).await?;
-                        if let Ok(dst) = core::str::from_utf8(dst_bytes.as_slice()) {
-                            let src_prefix = normalized_dir_prefix_str(name);
-                            let dst_prefix = normalized_dir_prefix_str(dst);
-                            let moved: Vec<String> = live
-                                .iter()
-                                .filter_map(|path| {
-                                    path.strip_prefix(src_prefix.as_str())
-                                        .map(|suffix| format!("{}{}", dst_prefix, suffix))
-                                })
-                                .collect();
-                            live.retain(|path| !path.starts_with(src_prefix.as_str()));
-                            for path in moved {
-                                live.insert(path);
-                            }
-                        }
-                    }
-                    LogKind::IndexCheckpoint => {}
-                }
-            }
-        }
-
-        lba = lba.saturating_add(blocks);
+        children.insert(String::from(rest), record.kind);
     }
-
-    let mut children: BTreeSet<String> = BTreeSet::new();
-    for name in live.iter() {
-        if !prefix.is_empty() {
-            if !name.starts_with(prefix.as_str()) {
-                continue;
-            }
-            let rest = &name[prefix.len()..];
-            if rest.is_empty() {
-                continue;
-            }
-            let seg = rest.split('/').next().unwrap_or("");
-            if !seg.is_empty() {
-                children.insert(String::from(seg));
-            }
-        } else {
-            let seg = name.split('/').next().unwrap_or("");
-            if !seg.is_empty() {
-                children.insert(String::from(seg));
-            }
-        }
-    }
-
-    const MAX_LISTING_BYTES: usize = 64 * 1024;
-    let mut out = String::new();
-    for entry in children.iter() {
-        if !out.is_empty() {
-            out.push('\n');
-        }
-        out.push_str(entry);
-        if out.len() > MAX_LISTING_BYTES {
-            return Ok(String::new());
-        }
-    }
-
-    Ok(out)
+    Ok(children
+        .into_iter()
+        .map(|(name, kind)| DirEntry { name, kind })
+        .collect())
 }
 
 pub async fn append_file<D: BlockIo>(
@@ -2805,6 +3002,7 @@ mod tests {
             let params = params();
             let target = "screenshots/target.png";
 
+            assert_eq!(create_directory(&disk, &params, "screenshots").await, Ok(true));
             assert_eq!(write_file(&disk, &params, target, b"target").await, Ok(true));
             let record = lookup_file_record(&disk, &params, target)
                 .await
@@ -2818,7 +3016,11 @@ mod tests {
 
             disk.reset_reads();
             assert_eq!(delete_file_at_record(&disk, &params, target, &record).await, Ok(true));
-            assert_eq!(disk.read_count(), 3);
+            assert!(
+                disk.read_count() <= 3,
+                "indexed delete exceeded its bounded read budget: {}",
+                disk.read_count()
+            );
             assert_eq!(lookup_file_record(&disk, &params, target).await, Ok(None));
         });
     }
@@ -2841,6 +3043,175 @@ mod tests {
                 disk.read_count() <= 2 + (FILES * 2),
                 "path deletion read the log more than once: {} block reads",
                 disk.read_count()
+            );
+        });
+    }
+
+    #[test]
+    fn superblock_rejects_old_and_unknown_versions() {
+        let disk = MemoryBlockIo::new();
+        let mut block = disk.bytes.lock().unwrap()[..BLOCK_SIZE].to_vec();
+        assert!(parse_superblock(&block).is_some());
+
+        block[SUPERBLOCK_VERSION_OFF..SUPERBLOCK_VERSION_OFF + 2]
+            .copy_from_slice(&1u16.to_le_bytes());
+        assert_eq!(parse_superblock(&block), None);
+
+        block[SUPERBLOCK_VERSION_OFF..SUPERBLOCK_VERSION_OFF + 2]
+            .copy_from_slice(&99u16.to_le_bytes());
+        assert_eq!(parse_superblock(&block), None);
+    }
+
+    #[test]
+    fn empty_directory_survives_lookup_and_has_typed_listing() {
+        block_on(async {
+            let disk = MemoryBlockIo::new();
+            let params = params();
+            assert_eq!(create_directory(&disk, &params, "empty").await, Ok(true));
+
+            assert_eq!(
+                read_node_info(&disk, &params, "empty").await,
+                Ok(Some(NodeInfo {
+                    kind: NodeKind::Directory,
+                    data_len: 0,
+                    record_key: RecordKey::Ffa,
+                }))
+            );
+            assert_eq!(
+                list_dir(&disk, &params, "").await,
+                Ok(vec![DirEntry {
+                    name: String::from("empty"),
+                    kind: NodeKind::Directory,
+                }])
+            );
+            assert_eq!(list_dir(&disk, &params, "empty").await, Ok(Vec::new()));
+        });
+    }
+
+    #[test]
+    fn node_type_collision_and_exact_delete_are_enforced() {
+        block_on(async {
+            let disk = MemoryBlockIo::new();
+            let params = params();
+            assert_eq!(write_file(&disk, &params, "missing/child", b"no").await, Ok(false));
+            assert_eq!(create_directory(&disk, &params, "missing/child").await, Ok(false));
+            assert_eq!(create_directory(&disk, &params, "missing").await, Ok(true));
+            assert_eq!(create_directory(&disk, &params, "missing/child").await, Ok(true));
+            assert_eq!(create_directory(&disk, &params, "same").await, Ok(true));
+            assert_eq!(write_file(&disk, &params, "same", b"no").await, Ok(false));
+
+            let directory = lookup_node_record(&disk, &params, "same")
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(directory.kind, NodeKind::Directory);
+            assert_eq!(delete_node_at_record(&disk, &params, "same", &directory).await, Ok(true));
+            assert_eq!(write_file(&disk, &params, "same", b"yes").await, Ok(true));
+            assert_eq!(
+                read_node_info(&disk, &params, "same")
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .kind,
+                NodeKind::File
+            );
+        });
+    }
+
+    #[test]
+    fn checkpoint_round_trips_directory_entries() {
+        block_on(async {
+            let disk = MemoryBlockIo::new();
+            let params = params();
+            assert_eq!(create_directory(&disk, &params, "docs").await, Ok(true));
+            let directory = lookup_node_record(&disk, &params, "docs")
+                .await
+                .unwrap()
+                .unwrap();
+            let sb_block = disk.read_blocks(0, 1).await.unwrap();
+            let sb = parse_superblock(&sb_block).unwrap();
+            assert_eq!(
+                write_index_checkpoint(
+                    &disk,
+                    &params,
+                    sb.log_head_rel_blocks,
+                    vec![(b"docs".to_vec(), LogKind::Directory, directory.entry_lba)].into_iter(),
+                )
+                .await,
+                Ok(true)
+            );
+            let checkpoint = read_index_checkpoint(&disk, &params)
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                checkpoint.entries,
+                vec![(b"docs".to_vec(), LogKind::Directory, directory.entry_lba)]
+            );
+        });
+    }
+
+    #[test]
+    fn delete_tree_replays_and_removes_the_exact_directory_and_descendants() {
+        block_on(async {
+            let disk = MemoryBlockIo::new();
+            let params = params();
+            assert_eq!(create_directory(&disk, &params, "tree").await, Ok(true));
+            assert_eq!(write_file(&disk, &params, "tree/leaf", b"x").await, Ok(true));
+            assert_eq!(delete_tree(&disk, &params, "tree").await, Ok(true));
+
+            let sb_block = disk.read_blocks(0, 1).await.unwrap();
+            let sb = parse_superblock(&sb_block).unwrap();
+            let mut replayed = Vec::new();
+            replay_log_range(&disk, &params, 0, sb.log_head_rel_blocks, |kind, name, _, _| {
+                replayed.push((kind, name));
+            })
+            .await
+            .unwrap();
+            assert!(replayed.iter().any(|(kind, name)| {
+                *kind == LogKind::DeleteTree && name.as_slice() == b"tree"
+            }));
+            assert_eq!(lookup_node_record(&disk, &params, "tree").await, Ok(None));
+            assert_eq!(lookup_node_record(&disk, &params, "tree/leaf").await, Ok(None));
+            assert_eq!(list_dir(&disk, &params, "").await, Ok(Vec::new()));
+        });
+    }
+
+    #[test]
+    fn rename_tree_moves_directory_identity_and_keeps_files_readable() {
+        block_on(async {
+            let disk = MemoryBlockIo::new();
+            let params = params();
+            assert_eq!(create_directory(&disk, &params, "source").await, Ok(true));
+            assert_eq!(create_directory(&disk, &params, "source/empty").await, Ok(true));
+            assert_eq!(write_file(&disk, &params, "source/file", b"payload").await, Ok(true));
+
+            assert_eq!(rename_tree(&disk, &params, "source", "moved").await, Ok(true));
+            assert_eq!(read_node_info(&disk, &params, "source").await, Ok(None));
+            assert_eq!(
+                read_node_info(&disk, &params, "moved")
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .kind,
+                NodeKind::Directory
+            );
+            assert_eq!(
+                read_file(&disk, &params, "moved/file").await,
+                Ok(Some(b"payload".to_vec()))
+            );
+            assert_eq!(
+                list_dir(&disk, &params, "moved").await,
+                Ok(vec![
+                    DirEntry {
+                        name: String::from("empty"),
+                        kind: NodeKind::Directory,
+                    },
+                    DirEntry {
+                        name: String::from("file"),
+                        kind: NodeKind::File,
+                    },
+                ])
             );
         });
     }

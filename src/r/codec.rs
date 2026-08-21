@@ -368,7 +368,7 @@ async fn collect_source_entries(
             .await?
         ]);
     }
-    if !crate::r::fs::trueosfs::dir_has_children_async(disk, source_path).await? {
+    if !crate::r::fs::trueosfs::dir_exists_async(disk, source_path).await? {
         return Err(CodecError::NotFound);
     }
 
@@ -380,16 +380,13 @@ async fn collect_source_entries(
         let listing = crate::r::fs::trueosfs::list_dir_async(disk, directory.as_str())
             .await?
             .ok_or(CodecError::NoRoot)?;
-        for child in listing.lines() {
-            if child == "..." {
-                return Err(CodecError::LimitExceeded);
-            }
-            if child.is_empty() || child == ".keep" {
-                continue;
-            }
+        if listing.truncated {
+            return Err(CodecError::LimitExceeded);
+        }
+        for child in listing.entries {
             let mut full_path = directory.clone();
             full_path.push('/');
-            full_path.push_str(child);
+            full_path.push_str(child.name.as_str());
             let full_path = normalize_path(full_path.as_str(), false)?;
             if full_path == excluded_path {
                 continue;
@@ -399,25 +396,24 @@ async fn collect_source_entries(
                 .and_then(|path| path.strip_prefix('/'))
                 .ok_or(CodecError::BadPath)?;
             let relative = validate_archive_entry_name(relative)?;
-            if crate::r::fs::trueosfs::file_info_async(disk, full_path.as_str())
-                .await?
-                .is_some()
-            {
-                if entries.len() >= MAX_ARCHIVE_ENTRIES {
-                    return Err(CodecError::LimitExceeded);
+            match child.kind {
+                crate::r::fs::trueosfs::NodeKind::File => {
+                    if entries.len() >= MAX_ARCHIVE_ENTRIES {
+                        return Err(CodecError::LimitExceeded);
+                    }
+                    entries.push(
+                        read_source_file(disk, full_path.as_str(), relative, &mut total).await?,
+                    );
                 }
-                entries
-                    .push(read_source_file(disk, full_path.as_str(), relative, &mut total).await?);
-            } else if crate::r::fs::trueosfs::dir_has_children_async(disk, full_path.as_str())
-                .await?
-            {
-                discovered_directories = discovered_directories
-                    .checked_add(1)
-                    .ok_or(CodecError::LimitExceeded)?;
-                if discovered_directories > MAX_ARCHIVE_ENTRIES {
-                    return Err(CodecError::LimitExceeded);
+                crate::r::fs::trueosfs::NodeKind::Directory => {
+                    discovered_directories = discovered_directories
+                        .checked_add(1)
+                        .ok_or(CodecError::LimitExceeded)?;
+                    if discovered_directories > MAX_ARCHIVE_ENTRIES {
+                        return Err(CodecError::LimitExceeded);
+                    }
+                    directories.push_back(full_path);
                 }
-                directories.push_back(full_path);
             }
         }
     }

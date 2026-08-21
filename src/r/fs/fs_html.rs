@@ -1,4 +1,4 @@
-use alloc::collections::{BTreeMap, BTreeSet};
+use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::vec::Vec;
 
@@ -23,7 +23,7 @@ pub async fn html_tree_async(
         return Ok(Some(String::from("<ul></ul>")));
     }
 
-    let Some(paths) = super::trueosfs::index_path_snapshot_async(disk).await? else {
+    let Some(nodes) = super::trueosfs::index_path_snapshot_async(disk).await? else {
         return Ok(None);
     };
 
@@ -44,7 +44,7 @@ pub async fn html_tree_async(
     let effective_entries = core::cmp::min(max_entries, super::trueosfs::TRUEOSFS_LIST_SOFT_CAP);
     let cap_limit = core::cmp::min(effective_entries.saturating_add(2), CAP);
     let entry_limit = cap_limit.saturating_sub(1);
-    let mut truncated = paths.len() > effective_entries;
+    let mut truncated = nodes.len() > effective_entries;
 
     let mut tree: Tree<FsEntry, CAP> = Tree::new();
     let Some(root) = tree.add_root(FsEntry {
@@ -55,64 +55,42 @@ pub async fn html_tree_async(
     };
 
     let mut dir_nodes: BTreeMap<Vec<u8>, NodeId> = BTreeMap::new();
-    let mut root_files: BTreeSet<String> = BTreeSet::new();
     dir_nodes.insert(Vec::new(), root);
 
-    for path in paths.iter() {
-        let mut parts = path.split('/').filter(|seg| !seg.is_empty());
+    for node in nodes
+        .iter()
+        .filter(|node| node.path.split('/').count() == 1)
+    {
+        let mut parts = node.path.split('/').filter(|seg| !seg.is_empty());
         let Some(first) = parts.next() else {
             continue;
         };
-
-        if parts.next().is_none() {
-            root_files.insert(String::from(first));
-            continue;
-        }
-
-        let first_path = first.as_bytes().to_vec();
-        if dir_nodes.contains_key(&first_path) {
-            continue;
-        }
         if tree.len() >= entry_limit {
             truncated = true;
             break;
         }
+        let kind = match node.kind {
+            super::trueosfs::NodeKind::Directory => FsKind::Dir,
+            super::trueosfs::NodeKind::File => FsKind::File,
+        };
         let Some(node) = tree.add_child(
             root,
             FsEntry {
-                kind: FsKind::Dir,
+                kind: kind.clone(),
                 name: String::from(first),
             },
         ) else {
             truncated = true;
             break;
         };
-        dir_nodes.insert(first_path, node);
-    }
-
-    for file in root_files.iter() {
-        if tree.len() >= entry_limit {
-            truncated = true;
-            break;
-        }
-        if tree
-            .add_child(
-                root,
-                FsEntry {
-                    kind: FsKind::File,
-                    name: file.clone(),
-                },
-            )
-            .is_none()
-        {
-            truncated = true;
-            break;
+        if matches!(kind, FsKind::Dir) {
+            dir_nodes.insert(first.as_bytes().to_vec(), node);
         }
     }
 
-    let max_depth = paths
+    let max_depth = nodes
         .iter()
-        .map(|path| path.split('/').filter(|seg| !seg.is_empty()).count())
+        .map(|node| node.path.split('/').filter(|seg| !seg.is_empty()).count())
         .max()
         .unwrap_or(1);
 
@@ -120,9 +98,9 @@ pub async fn html_tree_async(
     // one large, alphabetically early subtree from consuming the complete cap
     // before sibling directories receive their immediate children.
     'levels: for depth in 2..=max_depth {
-        for path in paths.iter() {
-            let parts: Vec<&str> = path.split('/').filter(|seg| !seg.is_empty()).collect();
-            if parts.len() < depth {
+        for node in nodes.iter() {
+            let parts: Vec<&str> = node.path.split('/').filter(|seg| !seg.is_empty()).collect();
+            if parts.len() != depth {
                 continue;
             }
 
@@ -132,43 +110,33 @@ pub async fn html_tree_async(
             };
             let entry_name = parts[depth - 1];
 
-            if parts.len() == depth {
-                if tree.len() >= entry_limit
-                    || tree
-                        .add_child(
-                            parent_node,
-                            FsEntry {
-                                kind: FsKind::File,
-                                name: String::from(entry_name),
-                            },
-                        )
-                        .is_none()
-                {
-                    truncated = true;
-                    break 'levels;
-                }
-                continue;
-            }
-
             let dir_path = parts[..depth].join("/").into_bytes();
-            if dir_nodes.contains_key(&dir_path) {
+            if dir_nodes.contains_key(&dir_path)
+                && node.kind == super::trueosfs::NodeKind::Directory
+            {
                 continue;
             }
             if tree.len() >= entry_limit {
                 truncated = true;
                 break 'levels;
             }
-            let Some(node) = tree.add_child(
+            let node_kind = node.kind;
+            let Some(tree_node) = tree.add_child(
                 parent_node,
                 FsEntry {
-                    kind: FsKind::Dir,
+                    kind: match node_kind {
+                        super::trueosfs::NodeKind::Directory => FsKind::Dir,
+                        super::trueosfs::NodeKind::File => FsKind::File,
+                    },
                     name: String::from(entry_name),
                 },
             ) else {
                 truncated = true;
                 break 'levels;
             };
-            dir_nodes.insert(dir_path, node);
+            if node_kind == super::trueosfs::NodeKind::Directory {
+                dir_nodes.insert(dir_path, tree_node);
+            }
         }
     }
 
