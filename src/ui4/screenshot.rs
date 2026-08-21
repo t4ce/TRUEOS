@@ -12,8 +12,8 @@ use alloc::vec::Vec;
 use core::fmt;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use trueos_time::{Duration, Timer};
 use spin::Mutex;
+use trueos_time::{Duration, Timer};
 
 use super::{
     FramePoolError, WindowSnapshot, acquire_published_frame, published_rgba_view,

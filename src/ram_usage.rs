@@ -3,8 +3,8 @@
 use alloc::string::String;
 use core::fmt::Write;
 
-use trueos_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
+use trueos_time::{Duration as EmbassyDuration, Timer};
 
 pub const HISTORY_LEN: usize = 40;
 pub const SAMPLE_MS: u64 = 1_000;

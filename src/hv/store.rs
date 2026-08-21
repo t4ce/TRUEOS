@@ -1,10 +1,10 @@
 use alloc::{boxed::Box, collections::BTreeMap, format, string::String, sync::Arc, vec::Vec};
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use trueos_executor::task;
-use trueos_time::{Duration as EmbassyDuration, Timer};
 use heapless::Deque;
 use spin::Mutex;
+use trueos_executor::task;
+use trueos_time::{Duration as EmbassyDuration, Timer};
 
 use crate::disc::block;
 use crate::net::adapter::{

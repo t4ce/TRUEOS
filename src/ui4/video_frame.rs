@@ -11,8 +11,8 @@
 use alloc::{collections::VecDeque, vec::Vec};
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use trueos_time::{Duration, Instant, Timer};
 use spin::Mutex;
+use trueos_time::{Duration, Instant, Timer};
 
 use super::{
     DamageRect, FrameBuffering, FrameCadence, FrameContent, FrameHandle, FrameSpec, OutputId,

@@ -8,8 +8,8 @@
 
 use alloc::vec::Vec;
 
-use trueos_time::Instant;
 use spin::Mutex;
+use trueos_time::Instant;
 
 use super::SpiritSurfaceLayout;
 use crate::intel::gpgpu::{GpgpuRect, GpgpuSolidRect};

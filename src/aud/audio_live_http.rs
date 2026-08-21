@@ -2,10 +2,10 @@ extern crate alloc;
 
 use alloc::{collections::VecDeque, format, vec::Vec};
 
-use trueos_time::{Duration, Instant, Timer};
 use embedded_websocket::{
     WebSocketKey, WebSocketReceiveMessageType, WebSocketSendMessageType, WebSocketServer,
 };
+use trueos_time::{Duration, Instant, Timer};
 use v::vnet as api;
 
 use crate::r::net::{VNet, ports};

@@ -17,9 +17,9 @@ use alloc::vec;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
+use spin::Mutex;
 use trueos_executor::{SpawnError, Spawner};
 use trueos_time::{Duration as EmbassyDuration, Instant, Timer};
-use spin::Mutex;
 
 const MODEL_ROOT: &str = "models";
 const WHISPER_MODEL_PATH: &str = "models/whisper/ggml-base.bin";

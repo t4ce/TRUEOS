@@ -883,11 +883,8 @@ pub async fn stage_and_swap(
     staged.set_vm_plan(checkpoint.restore_mask, checkpoint.resume_mask, checkpoint.vm_heap_ranges);
     print_matrix_target_line(
         &target,
-        format!(
-            "update live: step=09/20 VM checkpoints committed count={}",
-            checkpoint_count,
-        )
-        .as_str(),
+        format!("update live: step=09/20 VM checkpoints committed count={}", checkpoint_count,)
+            .as_str(),
     );
 
     if matrix_target_interrupted(&target) {
@@ -1936,10 +1933,7 @@ fn warm_handoff() -> Option<&'static WarmHandoff> {
             }
             HANDOFF_VALIDATION_CHECKING => core::hint::spin_loop(),
             _ => {
-                WARM_HANDOFF_VALIDATION.store(
-                    HANDOFF_VALIDATION_INVALID,
-                    Ordering::Release,
-                );
+                WARM_HANDOFF_VALIDATION.store(HANDOFF_VALIDATION_INVALID, Ordering::Release);
                 return None;
             }
         }

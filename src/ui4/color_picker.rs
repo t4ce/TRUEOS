@@ -5,8 +5,8 @@
 //! ring back to UI4 for SURFLIVE-safe retirement.
 
 use core::sync::atomic::{AtomicBool, Ordering};
-use trueos_time::{Duration, Timer};
 use spin::Mutex;
+use trueos_time::{Duration, Timer};
 
 use super::{
     DamageRect, FrameBuffering, FrameCadence, FrameContent, FrameHandle, FrameSpec, OutputId,

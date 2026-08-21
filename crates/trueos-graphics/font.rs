@@ -10,7 +10,6 @@ use core::{
     sync::atomic::{AtomicBool, AtomicU8, Ordering},
 };
 
-use trueos_executor::SpawnError;
 use embassy_sync::watch::Watch;
 use skrifa::{
     FontRef, GlyphId, MetadataProvider,
@@ -19,6 +18,7 @@ use skrifa::{
     raw::TableProvider,
 };
 use spin::Mutex;
+use trueos_executor::SpawnError;
 
 use super::path_mesh::{
     FillError, FillOptions, Path as FillPath, PathBuilder as FillPathBuilder, Point, point,

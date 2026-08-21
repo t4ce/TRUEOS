@@ -4,10 +4,10 @@ use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-use trueos_executor::{SpawnError, Spawner};
-use trueos_time::{Duration as EmbassyDuration, Timer};
 use sha2::{Digest, Sha256};
 use spin::Mutex;
+use trueos_executor::{SpawnError, Spawner};
+use trueos_time::{Duration as EmbassyDuration, Timer};
 
 const MAX_CACHE_ENTRIES: usize = 64;
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]

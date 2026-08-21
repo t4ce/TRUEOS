@@ -8,8 +8,8 @@ use core::{
     ptr,
     sync::atomic::{AtomicBool, AtomicU32, Ordering},
 };
-use trueos_executor::Spawner;
 use embassy_sync::{mutex::Mutex as AsyncMutex, signal::Signal};
+use trueos_executor::Spawner;
 
 const DEFAULT_DMA_ALIGNMENT: u32 = 64;
 const DEFAULT_MAX_TRANSFER_BYTES: u64 = 256 * 1024;

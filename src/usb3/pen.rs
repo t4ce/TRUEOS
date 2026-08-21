@@ -4,10 +4,10 @@ use crab_usb::Device;
 use crab_usb::usb_if;
 
 use super::api::{EndpointBulkIn, EndpointBulkOut};
-use trueos_executor::Spawner;
-use trueos_time::{Duration as EmbassyDuration, Timer};
 use heapless::Vec;
 use spin::Mutex;
+use trueos_executor::Spawner;
+use trueos_time::{Duration as EmbassyDuration, Timer};
 
 use crate::disc::block;
 

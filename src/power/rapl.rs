@@ -2,9 +2,9 @@ use alloc::{string::String, vec::Vec};
 use core::fmt::Write;
 
 use embassy_sync::watch::{Receiver as WatchReceiver, Watch};
-use trueos_time::{Duration as EmbassyDuration, Timer};
 use raw_cpuid::CpuId;
 use spin::{Mutex, Once};
+use trueos_time::{Duration as EmbassyDuration, Timer};
 use x86_64::registers::model_specific::Msr;
 
 const MSR_RAPL_POWER_UNIT: u32 = 0x606;

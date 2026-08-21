@@ -11,8 +11,8 @@
 use alloc::{boxed::Box, string::String, sync::Arc, vec::Vec};
 use core::sync::atomic::{AtomicBool, Ordering};
 
-use trueos_time::Instant;
 use spin::Mutex;
+use trueos_time::Instant;
 
 use crate::graphics::font::{FontTesselMesh, FontTesselSummary};
 pub(crate) use crate::graphics::primitives::Rgba8 as GpuFontRgba;

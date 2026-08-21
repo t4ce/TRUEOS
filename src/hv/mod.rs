@@ -27,11 +27,11 @@ use core::arch::x86_64::{__cpuid, __cpuid_count};
 use core::fmt::Write;
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
-use trueos_executor::{Spawner, task};
 use embassy_sync::signal::Signal;
-use trueos_time::{Duration as EmbassyDuration, Timer, with_timeout};
 use heapless::String;
 use spin::Mutex;
+use trueos_executor::{Spawner, task};
+use trueos_time::{Duration as EmbassyDuration, Timer, with_timeout};
 use x86_64::instructions::tables::{sgdt, sidt};
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr3, Cr4, Cr4Flags};
 use x86_64::registers::model_specific::Msr;

@@ -8,8 +8,8 @@
 
 use alloc::vec::Vec;
 
-use trueos_time::{Duration, Instant, with_timeout};
 use spin::Mutex;
+use trueos_time::{Duration, Instant, with_timeout};
 
 const SLOT4_RECT_CAPACITY: usize = 3_072;
 const SOFTWARE_CURSOR_STROKE_PX: u32 = 5;

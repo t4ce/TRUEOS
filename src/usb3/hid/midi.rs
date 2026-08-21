@@ -4,10 +4,10 @@ use core::cmp::min;
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use crab_usb::Device;
-use trueos_executor::Spawner;
-use trueos_time::{Duration as EmbassyDuration, Timer};
 use heapless::{Deque, Vec};
 use spin::Mutex;
+use trueos_executor::Spawner;
+use trueos_time::{Duration as EmbassyDuration, Timer};
 
 use super::super::api::{InterfaceEndpointError, claim_interface};
 

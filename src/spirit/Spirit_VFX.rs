@@ -11,9 +11,9 @@ extern crate alloc;
 use alloc::{format, string::String};
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use trueos_time::Instant;
 use serde::{Deserialize, Serialize};
 use spin::Mutex;
+use trueos_time::Instant;
 
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub(crate) struct SpiritVfxSliderSpec {

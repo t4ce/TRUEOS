@@ -5,9 +5,9 @@ extern crate alloc;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU8, Ordering};
-use trueos_time::{Duration, Timer};
 use sha2::{Digest, Sha256};
 use spin::Mutex;
+use trueos_time::{Duration, Timer};
 
 pub const TOKENIZER_PATH: &str = "models/lfm2.5/LFM2.5-350M-Q8_0.tokenizer.bin";
 pub const TOKENIZER_BYTES: usize = 1_497_463;

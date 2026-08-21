@@ -147,8 +147,7 @@ pub async fn usb_controller_service_task() {
         // Only consume the sequence after normal probing has actually been
         // admitted. A failed quarantine must leave the rescan pending.
         observed_port_change_seq = next_port_change_seq;
-        trueos_time::Timer::after(trueos_time::Duration::from_millis(HOT_RESCAN_DEBOUNCE_MS))
-            .await;
+        trueos_time::Timer::after(trueos_time::Duration::from_millis(HOT_RESCAN_DEBOUNCE_MS)).await;
         crate::log!(
             "crabusb: probe_devices trigger=port-change seq={} quarantine=active\n",
             observed_port_change_seq
@@ -193,25 +192,23 @@ async fn probe_devices_with_log(
     host: &mut crabusb::USBHost,
     label: &'static str,
 ) -> Option<alloc::vec::Vec<crabusb::ProbedDevice>> {
-    let news = match trueos_time::with_timeout(
-        trueos_time::Duration::from_secs(2),
-        host.probe_devices(),
-    )
-    .await
-    {
-        Ok(Ok(news)) => news,
-        Ok(Err(err)) => {
-            crate::log!("crabusb: probe_devices label={} error={:?}\n", label, err);
-            return None;
-        }
-        Err(_) => {
-            crate::log!(
-                "crabusb: probe_devices label={} timeout waiting for xhci completion\n",
-                label
-            );
-            return None;
-        }
-    };
+    let news =
+        match trueos_time::with_timeout(trueos_time::Duration::from_secs(2), host.probe_devices())
+            .await
+        {
+            Ok(Ok(news)) => news,
+            Ok(Err(err)) => {
+                crate::log!("crabusb: probe_devices label={} error={:?}\n", label, err);
+                return None;
+            }
+            Err(_) => {
+                crate::log!(
+                    "crabusb: probe_devices label={} timeout waiting for xhci completion\n",
+                    label
+                );
+                return None;
+            }
+        };
     if label == "initial" || !news.is_empty() {
         crate::log!("crabusb: probe_devices label={} count={}\n", label, news.len());
     }

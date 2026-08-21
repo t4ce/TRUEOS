@@ -8,10 +8,10 @@
 use alloc::vec::Vec as AllocVec;
 use core::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
-use trueos_time::{Duration, Timer};
 use heapless::{Deque, String, Vec};
 use serde_json::Value;
 use spin::Mutex;
+use trueos_time::{Duration, Timer};
 
 pub const MOUSE_CONTROL_OPCODE_TELEPORT: u8 = 1;
 pub const MOUSE_CONTROL_OPCODE_STROKE: u8 = 2;

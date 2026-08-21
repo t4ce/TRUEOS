@@ -10,8 +10,8 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use chacha20poly1305::aead::{AeadInPlace, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Nonce};
-use trueos_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
+use trueos_time::{Duration as EmbassyDuration, Timer};
 use zeroize::Zeroizing;
 
 pub(crate) const PATH: &str = "user_input_record.v1.enc";

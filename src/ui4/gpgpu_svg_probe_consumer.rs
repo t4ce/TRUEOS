@@ -6,8 +6,8 @@
 
 use alloc::vec::Vec;
 
-use trueos_time::{Duration, Timer};
 use spin::Mutex;
+use trueos_time::{Duration, Timer};
 
 use super::{
     DamageRect, FrameCadence, FrameContent, FrameHandle, FramePoolError, FrameSpec, OutputId,

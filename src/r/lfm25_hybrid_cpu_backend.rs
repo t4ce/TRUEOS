@@ -11,9 +11,9 @@ use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU8, AtomicU64, Ordering};
-use trueos_time::{Duration, Instant, Timer};
 use sha2::{Digest, Sha256};
 use spin::Mutex;
+use trueos_time::{Duration, Instant, Timer};
 
 use trueos_lfm25_cpu as cpu;
 use trueos_lfm25_model::lfm25::{self, NativeTensorDescriptor, TensorFormat, TensorRole};

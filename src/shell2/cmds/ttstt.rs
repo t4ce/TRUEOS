@@ -6,9 +6,9 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 
+use spin::Mutex;
 use trueos_executor::Spawner;
 use trueos_time::{Duration as EmbassyDuration, Instant, Timer};
-use spin::Mutex;
 
 use super::super::{
     MatrixTarget, ShellBackend2, matrix_target_for_backend, print_matrix_target_line,

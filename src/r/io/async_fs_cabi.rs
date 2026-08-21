@@ -6,8 +6,8 @@ use alloc::collections::{BTreeMap, VecDeque};
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
-use trueos_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
+use trueos_time::{Duration as EmbassyDuration, Timer};
 
 const ASYNC_FS_MAX_OPERATIONS: usize = 64;
 const ASYNC_FS_MAX_RESULT_BYTES: u64 = 16 * 1024 * 1024;

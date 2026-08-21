@@ -4,9 +4,9 @@ use core::{
     sync::atomic::{AtomicBool, Ordering},
 };
 
+use spin::Mutex;
 use trueos_executor::{SpawnError, SpawnToken, Spawner};
 use trueos_time::{Duration as EmbassyDuration, Timer};
-use spin::Mutex;
 
 use crate::r::spawn_spec::{SpawnAttempt, TaskSpec};
 // NOTE: This file is intended to become the single source of truth for Embassy task startup.

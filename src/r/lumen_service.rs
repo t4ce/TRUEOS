@@ -9,8 +9,8 @@ extern crate alloc;
 
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use trueos_time::{Duration, Timer};
 use spin::Mutex;
+use trueos_time::{Duration, Timer};
 
 use crate::lumen::decode::{Lfm25DecodeInput, checkpoint_intel_igc, restore_intel_igc};
 

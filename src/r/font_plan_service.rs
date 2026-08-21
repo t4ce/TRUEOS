@@ -13,9 +13,9 @@ use core::{
     sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering},
 };
 
+use spin::Mutex;
 use trueos_executor::SpawnError;
 use trueos_time::{Duration as EmbassyDuration, Instant, Timer};
-use spin::Mutex;
 
 use crate::intel::gpu_font::{
     GpuFontGlyphRecipe, GpuFontGlyphRecipeKey, GpuFontPreparedCenteredGlyph, GpuFontRgba,

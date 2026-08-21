@@ -9,8 +9,8 @@
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 
-use trueos_time::{Duration, Timer};
 use spin::Mutex;
+use trueos_time::{Duration, Timer};
 
 const PROBE_START_DELAY_MS: u64 = 15_000;
 const VCS0_PROBE_RETRY_MS: u64 = 50;

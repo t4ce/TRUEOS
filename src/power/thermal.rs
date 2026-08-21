@@ -3,9 +3,9 @@ use core::fmt::Write;
 use core::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 
 use embassy_sync::watch::{Receiver as WatchReceiver, Watch};
-use trueos_time::{Duration as EmbassyDuration, Timer};
 use raw_cpuid::CpuId;
 use spin::Once;
+use trueos_time::{Duration as EmbassyDuration, Timer};
 use x86_64::registers::model_specific::Msr;
 
 const MSR_IA32_THERM_STATUS: u32 = 0x19C;

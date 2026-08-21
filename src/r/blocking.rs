@@ -4,8 +4,8 @@ use alloc::boxed::Box;
 use alloc::collections::VecDeque;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use trueos_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
+use trueos_time::{Duration as EmbassyDuration, Timer};
 
 pub type BlockingJobFn = Box<dyn FnOnce() + Send + 'static>;
 

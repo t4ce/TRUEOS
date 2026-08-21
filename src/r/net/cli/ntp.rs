@@ -1,8 +1,8 @@
 use alloc::{format, string::String};
 use core::sync::atomic::{AtomicU16, AtomicU64, Ordering};
 
-use trueos_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
+use trueos_time::{Duration as EmbassyDuration, Instant, Timer};
 use v::vnet;
 
 use crate::r::net::dns::{self, DnsConfig};

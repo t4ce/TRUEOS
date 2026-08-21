@@ -1,8 +1,8 @@
 use alloc::{format, string::String, vec::Vec};
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use trueos_time::{Duration, Instant, Timer};
 use spin::Mutex;
+use trueos_time::{Duration, Instant, Timer};
 
 use super::VNet;
 

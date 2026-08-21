@@ -4,9 +4,9 @@ use alloc::vec::Vec;
 use core::arch::x86_64::__cpuid;
 use core::ptr::null_mut;
 use core::sync::atomic::{AtomicBool, AtomicPtr, AtomicU8, AtomicU32, AtomicUsize, Ordering};
+use raw_cpuid::CpuId;
 use trueos_executor::Spawner;
 use trueos_time::{Duration as EmbassyDuration, Timer};
-use raw_cpuid::CpuId;
 use x86_64::registers::control::{Cr0, Cr0Flags, Cr4, Cr4Flags};
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]

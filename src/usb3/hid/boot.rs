@@ -7,9 +7,9 @@ use core::future::Future;
 use core::task::Poll;
 
 use crab_usb::{USBHost, usb_if};
+use spin::Mutex;
 use trueos_executor::Spawner;
 use trueos_time::{Duration as EmbassyDuration, Timer};
-use spin::Mutex;
 
 use super::super::api::{InterfaceEndpointError, claim_interface};
 

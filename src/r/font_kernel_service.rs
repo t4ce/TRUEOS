@@ -18,8 +18,8 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use embassy_sync::semaphore::{FairSemaphore, Semaphore, SemaphoreReleaser};
 use embassy_sync::signal::Signal;
-use trueos_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
+use trueos_time::{Duration as EmbassyDuration, Instant, Timer};
 
 use crate::intel::gpu_font::{
     GpuFontFace, GpuFontGlyphRecipe, GpuFontGlyphRecipeKey, GpuFontJobEntry,

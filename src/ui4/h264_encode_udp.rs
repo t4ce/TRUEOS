@@ -7,8 +7,8 @@
 use alloc::{collections::VecDeque, sync::Arc, vec::Vec};
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use trueos_time::{Duration, Instant, Timer};
 use spin::Mutex;
+use trueos_time::{Duration, Instant, Timer};
 
 use crate::r::net::{
     SharedNetPayload, VNet,

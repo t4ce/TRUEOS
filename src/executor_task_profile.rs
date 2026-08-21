@@ -3,10 +3,10 @@ use core::arch::x86_64::_rdtsc;
 use core::cell::UnsafeCell;
 use core::fmt::Write as _;
 
-use trueos_executor::Spawner;
 use embassy_sync::watch::Watch;
-use trueos_time::{Duration, Instant, Timer};
 use spin::Mutex;
+use trueos_executor::Spawner;
+use trueos_time::{Duration, Instant, Timer};
 
 const TASK_SLOTS: usize = crate::allcaps::executor::BSP_TASK_PROFILE_SLOTS;
 const HISTORY_SLOTS: usize = crate::allcaps::executor::BSP_TASK_PROFILE_HISTORY_SLOTS;

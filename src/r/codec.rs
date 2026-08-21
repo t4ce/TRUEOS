@@ -5,8 +5,8 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use trueos_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
+use trueos_time::{Duration as EmbassyDuration, Timer};
 
 const CODEC_IDLE_MS: u64 = 25;
 const REQUEST_CAP: usize = 32;

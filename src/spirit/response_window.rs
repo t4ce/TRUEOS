@@ -12,8 +12,8 @@ use alloc::{collections::VecDeque, string::String, vec::Vec};
 use core::sync::atomic::{AtomicU64, Ordering};
 
 use embassy_sync::signal::Signal;
-use trueos_time::{Duration, Instant, Timer, with_timeout};
 use spin::Mutex;
+use trueos_time::{Duration, Instant, Timer, with_timeout};
 
 use crate::r::{
     gridpaper_service::{KernelGridLease, KernelGridPresentation},

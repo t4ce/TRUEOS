@@ -11,9 +11,9 @@ pub extern crate alloc;
 
 // Modules
 mod allcaps;
-mod app_db;
 mod allocators;
 pub mod allports;
+mod app_db;
 mod aud;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 #[path = "hv/blueprint/blueprint_net_broker.rs"]
@@ -169,7 +169,9 @@ pub extern "C" fn kmain() -> ! {
             "app.db: initialized storage=ram builtins={} persistence=none\n",
             count
         ),
-        Err(err) => crate::log_error!(target: "apps"; "app.db: initialization failed err={}\n", err),
+        Err(err) => {
+            crate::log_error!(target: "apps"; "app.db: initialization failed err={}\n", err)
+        }
     }
 
     if crate::log_os::flags::BOOT_INFO_LOGS

@@ -8,8 +8,8 @@
 
 use alloc::{string::String, sync::Arc, vec::Vec};
 
-use trueos_time::{Duration, Instant, Timer};
 use spin::Mutex;
+use trueos_time::{Duration, Instant, Timer};
 
 use super::{
     DamageRect, FrameCadence, FrameContent, FrameHandle, FramePlanError, FramePoolError, FrameSpec,

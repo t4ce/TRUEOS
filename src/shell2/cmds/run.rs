@@ -3,9 +3,9 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 
+use spin::Mutex;
 use trueos_executor::Spawner;
 use trueos_time::{Duration as EmbassyDuration, Timer};
-use spin::Mutex;
 
 use super::super::{
     MatrixTarget, matrix_target_interrupted, print_matrix_target_system_line,

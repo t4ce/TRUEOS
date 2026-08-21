@@ -8,8 +8,8 @@
 
 use alloc::{collections::VecDeque, string::String, vec, vec::Vec};
 
-use trueos_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
+use trueos_time::{Duration as EmbassyDuration, Instant, Timer};
 
 use crate::intel::gpu_font::{
     GPU_FONT_COLOR_KEYFRAME_CAPACITY, GpuFontColorChannels, GpuFontColorIteration,

@@ -4,8 +4,8 @@ use alloc::collections::VecDeque;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use trueos_time::{Duration, Timer};
 use spin::Mutex;
+use trueos_time::{Duration, Timer};
 
 pub const FORMAT_JPEG: u32 = 1;
 pub const FORMAT_PNG: u32 = 2;

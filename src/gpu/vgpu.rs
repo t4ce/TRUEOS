@@ -9,8 +9,8 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
-use trueos_time::{Duration, Timer};
 use spin::Mutex;
+use trueos_time::{Duration, Timer};
 
 use super::physical::{
     PhysicalBufferSlice, PhysicalContextDescriptor, PhysicalContextFaultKind,

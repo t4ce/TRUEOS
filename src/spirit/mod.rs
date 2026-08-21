@@ -14,8 +14,8 @@ use core::ops::BitOr;
 use core::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 
 use embassy_sync::signal::Signal;
-use trueos_time::{Duration, Instant, Timer};
 use spin::Mutex;
+use trueos_time::{Duration, Instant, Timer};
 
 pub(crate) mod dobby_ui;
 pub(crate) mod gpu_logger;

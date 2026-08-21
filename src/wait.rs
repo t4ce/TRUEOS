@@ -7,10 +7,10 @@ use core::future::Future;
 use core::pin::Pin;
 use core::sync::atomic::{AtomicU32, Ordering};
 use core::task::{Context, Poll, Waker};
-use trueos_executor::task;
 use embassy_sync::blocking_mutex::raw::RawMutex;
 use embassy_time_driver::{TICK_HZ, now};
 use spin::Mutex;
+use trueos_executor::task;
 
 /// Embassy sync primitives are generic over a raw blocking mutex backend.
 /// This adapts the kernel's `spin::Mutex` so shared Embassy types like

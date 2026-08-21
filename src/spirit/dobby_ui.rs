@@ -10,9 +10,9 @@ extern crate alloc;
 use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
-use trueos_time::{Duration, Timer};
 use serde::Serialize;
 use spin::Mutex;
+use trueos_time::{Duration, Timer};
 
 use crate::r::keyboard_control_service::{
     KEYBOARD_CONTROL_FLAG_CLEAR_QUEUE, KEYBOARD_CONTROL_OPCODE_STROKE, KeyboardControlCommand,

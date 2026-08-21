@@ -3,8 +3,8 @@ use core::fmt::Write;
 use core::str::SplitWhitespace;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
-use trueos_executor::Spawner;
 use spin::Mutex;
+use trueos_executor::Spawner;
 
 use super::super::{
     MatrixTarget, ShellBackend2, matrix_target_for_backend, print_matrix_target_line,

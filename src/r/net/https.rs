@@ -13,8 +13,8 @@ use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use core::task::{Context, Poll};
 
 use atomic_waker::AtomicWaker;
-use trueos_time::{Duration as EmbassyDuration, Instant, Timer};
 use spin::Mutex;
+use trueos_time::{Duration as EmbassyDuration, Instant, Timer};
 use v::vnet;
 
 use crate::net::tls::{TlsClientConfig, TlsRoots};

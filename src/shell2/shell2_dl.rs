@@ -2,9 +2,9 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::fmt::Write;
 
+use sha2::{Digest, Sha256};
 use trueos_executor::{SendSpawner, SpawnError, Spawner};
 use trueos_time::Duration as EmbassyDuration;
-use sha2::{Digest, Sha256};
 
 use super::cmds::run;
 use super::cmds::tlb_helper::TlbTable;

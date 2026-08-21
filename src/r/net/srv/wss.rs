@@ -3,12 +3,12 @@ extern crate alloc;
 use alloc::{boxed::Box, format, string::String, vec, vec::Vec};
 use core::sync::atomic::{AtomicU32, Ordering};
 
-use trueos_time::{Duration, Timer};
 use embedded_websocket::{
     WebSocketClient, WebSocketOptions, WebSocketReceiveMessageType, WebSocketSendMessageType,
 };
 use rand_chacha::ChaCha20Rng;
 use rand_core::SeedableRng;
+use trueos_time::{Duration, Timer};
 
 use v::vnet;
 

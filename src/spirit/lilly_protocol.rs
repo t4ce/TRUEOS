@@ -12,9 +12,9 @@ extern crate alloc;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicBool, Ordering};
-use trueos_time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use spin::Mutex;
+use trueos_time::{Duration, Instant};
 
 use super::lilly::{self, LillyResidentAnimation, LillyResidentPart};
 

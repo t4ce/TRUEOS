@@ -10,11 +10,11 @@ use core::convert::Infallible;
 use core::pin::Pin;
 use core::sync::atomic::{AtomicU32, Ordering};
 use core::task::{Context, Poll};
-use trueos_time::{Duration as EmbassyDuration, Instant, Timer};
 use hyper::body::{Body, Bytes, Frame, SizeHint};
 use hyper::io;
 use hyper::rt::{Read, ReadBufCursor, Write};
 use spin::Mutex;
+use trueos_time::{Duration as EmbassyDuration, Instant, Timer};
 use v::vnet as api;
 
 use crate::net::tls::{TlsClientConfig, TlsRoots};

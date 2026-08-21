@@ -4,9 +4,9 @@ extern crate alloc;
 
 use alloc::{vec, vec::Vec};
 use crab_usb::{Device, DeviceInfo, USBHost, usb_if};
+use spin::Mutex;
 use trueos_executor::Spawner;
 use trueos_time::{Duration as EmbassyDuration, Timer};
-use spin::Mutex;
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const LED_VID_JGINYUE: u16 = 0x0416;

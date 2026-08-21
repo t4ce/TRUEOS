@@ -1,7 +1,7 @@
 use core::cmp::min;
 
-use trueos_time::{Duration as EmbassyDuration, Timer};
 use spin::Mutex;
+use trueos_time::{Duration as EmbassyDuration, Timer};
 
 const FACTORY_RAM_PROBE_PAGE_BYTES: usize = 4096;
 const FACTORY_RAM_PROBE_SAMPLE_BYTES: usize = 100;

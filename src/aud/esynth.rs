@@ -5,9 +5,9 @@ use crate::aud::{
     backing_pattern::{BackingPatternRenderSource, backing_config},
     live_piano::LivePianoRenderSource,
 };
-use trueos_time::{Duration, Timer};
 use spin::Mutex;
 use tinyaudio::prelude::*;
+use trueos_time::{Duration, Timer};
 
 const TONE_HZ: u32 = 440;
 const VOLUME: f32 = 9_000.0 / 32_767.0;

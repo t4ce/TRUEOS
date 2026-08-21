@@ -4,8 +4,6 @@ use core::{
     sync::atomic::{AtomicU32, AtomicU64, Ordering},
 };
 
-use trueos_executor::task;
-use trueos_time::{Duration as EmbassyDuration, Timer};
 use smoltcp::iface::{
     Config as IfaceConfig, Interface, PollResult, SocketHandle, SocketSet, UdpDispatchError,
 };
@@ -18,6 +16,8 @@ use smoltcp::wire::{
     IpAddress, IpCidr, IpEndpoint, IpProtocol, IpVersion, Ipv4Address, Ipv6Address, Ipv6Packet,
     Ipv6Repr, NdiscPrefixInfoFlags, NdiscRepr, RawHardwareAddress,
 };
+use trueos_executor::task;
+use trueos_time::{Duration as EmbassyDuration, Timer};
 
 // Internal netbench (kernel-side) ------------------------------------------------
 //

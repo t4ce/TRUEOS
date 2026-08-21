@@ -7,8 +7,8 @@
 //! coherent UI4 frame lifecycle.
 
 use alloc::{collections::VecDeque, string::String, vec::Vec};
-use trueos_time::Instant;
 use spin::Mutex;
+use trueos_time::Instant;
 
 use crate::intel::gpgpu::{
     ALPHA_BLEND_WORKLIST_FLAG_COPY, ALPHA_BLEND_WORKLIST_FLAG_SRC_OVER,

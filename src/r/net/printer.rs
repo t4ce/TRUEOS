@@ -10,8 +10,8 @@ use alloc::{
 };
 use core::fmt::Write as _;
 
-use trueos_time::{Duration, Instant, Timer};
 use spin::Mutex;
+use trueos_time::{Duration, Instant, Timer};
 
 use super::{
     VNet,

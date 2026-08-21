@@ -10,9 +10,9 @@
 use core::sync::atomic::{AtomicU32, Ordering};
 
 use embassy_sync::signal::Signal;
-use trueos_time::{Duration, with_timeout};
 use heapless::Vec;
 use spin::Mutex;
+use trueos_time::{Duration, with_timeout};
 
 use super::{
     OutputId, Ui4CursorSource, WindowId, WindowOwner, WindowPlacement, WindowSnapshot, WindowState,

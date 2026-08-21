@@ -9,9 +9,9 @@ use embassy_sync::{
     signal::Signal,
     watch::{Receiver as WatchReceiver, Watch},
 };
-use trueos_time::{Duration, Timer};
 use heapless::Deque;
 use spin::Mutex;
+use trueos_time::{Duration, Timer};
 
 use super::{DamageRect, DamageRegion, FrameBuffering, FrameHandle, OutputId};
 
