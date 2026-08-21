@@ -15,7 +15,7 @@ Known third-party/provenance areas include:
   boot medium, must remain unmodified and are governed by Intel's microcode
   license. See `licenses/intel-microcode.txt`.
 - Files with embedded license headers or bundled license notices, including
-  JavaScript modules under `crates/trueos-qjs/src/`.
+  JavaScript modules under `../TRUEOS-Blueprints/apps/qjs/crates/trueos-qjs/src/`.
 - Build or release artifacts under `bld/`, where present, may include their own
   third-party license notices such as OVMF/QEMU-related notices.
 
