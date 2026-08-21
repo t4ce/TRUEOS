@@ -50,7 +50,6 @@ static FONT_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);
 static FONT_RCS_PPGTT_RUNTIME: Mutex<FontRcsPpgttRuntime> = Mutex::new(FontRcsPpgttRuntime::new());
 static EXECUTION_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);
 static LFM25_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);
-static SHADERTOY_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);
 static UI4_COMPOSITOR_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);
 // Global control-window PTEs are immutable for the lifetime of each state.
 // `Once<bool>` makes both success and failure irreversible: a live GuC client
@@ -60,7 +59,6 @@ static DIRECT_RCS_GGTT_MAPPING: spin::Once<bool> = spin::Once::new();
 static FONT_RCS_GGTT_MAPPING: spin::Once<bool> = spin::Once::new();
 static EXECUTION_RCS_GGTT_MAPPING: spin::Once<bool> = spin::Once::new();
 static LFM25_RCS_GGTT_MAPPING: spin::Once<bool> = spin::Once::new();
-static SHADERTOY_RCS_GGTT_MAPPING: spin::Once<bool> = spin::Once::new();
 static UI4_COMPOSITOR_RCS_GGTT_MAPPING: spin::Once<bool> = spin::Once::new();
 
 static GPGPU_RECT_WORKLIST_DESC: Mutex<Option<GpgpuRectWorklistDescBuffer>> = Mutex::new(None);
@@ -90,11 +88,9 @@ static FONT_RCS_CONTEXT_QUARANTINED: AtomicBool = AtomicBool::new(false);
 // independent from system-service direct-RCS work.
 static EXECUTION_RCS_SUBMIT_LOCK: Mutex<()> = Mutex::new(());
 static LFM25_RCS_SUBMIT_LOCK: Mutex<()> = Mutex::new(());
-static SHADERTOY_RCS_SUBMIT_LOCK: Mutex<()> = Mutex::new(());
 static EXECUTION_RCS_DETACHED_TAG: AtomicU64 = AtomicU64::new(0);
 static EXECUTION_RCS_CONTEXT_QUARANTINED: AtomicBool = AtomicBool::new(false);
 static LFM25_RCS_CONTEXT_QUARANTINED: AtomicBool = AtomicBool::new(false);
-static SHADERTOY_RCS_CONTEXT_QUARANTINED: AtomicBool = AtomicBool::new(false);
 static UI4_COMPOSITOR_RCS_CONTEXT_QUARANTINED: AtomicBool = AtomicBool::new(false);
 static DIRECT_RCS_SCANOUT_PPGTT_LOGGED: AtomicBool = AtomicBool::new(false);
 static DIRECT_RCS_PPGTT_POLICY_REJECTIONS: AtomicU64 = AtomicU64::new(0);
@@ -106,8 +102,6 @@ static FONT_RCS_SUBMIT_RUNTIME: Mutex<DirectRcsSubmitRuntime> =
 static EXECUTION_RCS_SUBMIT_RUNTIME: Mutex<DirectRcsSubmitRuntime> =
     Mutex::new(DirectRcsSubmitRuntime::new());
 static LFM25_RCS_SUBMIT_RUNTIME: Mutex<DirectRcsSubmitRuntime> =
-    Mutex::new(DirectRcsSubmitRuntime::new());
-static SHADERTOY_RCS_SUBMIT_RUNTIME: Mutex<DirectRcsSubmitRuntime> =
     Mutex::new(DirectRcsSubmitRuntime::new());
 static UI4_COMPOSITOR_RUNTIME: Mutex<Ui4CompositorRuntime> =
     Mutex::new(Ui4CompositorRuntime::new());
@@ -137,4 +131,3 @@ static DIRECT_RCS_TIMEOUT_POLL_PROBE_LOGGED: AtomicBool = AtomicBool::new(false)
 static FONT_RCS_TIMEOUT_POLL_PROBE_LOGGED: AtomicBool = AtomicBool::new(false);
 static EXECUTION_RCS_TIMEOUT_POLL_PROBE_LOGGED: AtomicBool = AtomicBool::new(false);
 static LFM25_RCS_TIMEOUT_POLL_PROBE_LOGGED: AtomicBool = AtomicBool::new(false);
-static SHADERTOY_RCS_TIMEOUT_POLL_PROBE_LOGGED: AtomicBool = AtomicBool::new(false);

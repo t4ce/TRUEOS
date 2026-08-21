@@ -298,7 +298,6 @@ enum DirectRcsLane {
     Font,
     Execution,
     Lfm25,
-    ShaderToy,
 }
 
 impl DirectRcsLane {
@@ -308,7 +307,6 @@ impl DirectRcsLane {
             Self::Font => "font",
             Self::Execution => "execution",
             Self::Lfm25 => "lfm25",
-            Self::ShaderToy => "shadertoy",
         }
     }
 }
@@ -402,13 +400,6 @@ fn lfm25_rcs_submit_batch(dev: super::Dev, state: DirectRcsState) -> bool {
     )
 }
 
-fn shadertoy_rcs_submit_batch(dev: super::Dev, state: DirectRcsState) -> bool {
-    matches!(
-        direct_rcs_submit_batch_on_lane_state(dev, state, DirectRcsLane::ShaderToy),
-        DirectRcsSubmissionState::Submitted
-    )
-}
-
 fn direct_rcs_submit_batch_on_lane_state(
     dev: super::Dev,
     state: DirectRcsState,
@@ -434,15 +425,6 @@ fn direct_rcs_submit_batch_on_lane_state(
             &LFM25_RCS_CONTEXT_QUARANTINED,
             &LFM25_RCS_SUBMIT_RUNTIME,
             crate::gpu::vgpu::KernelClient::Lfm25,
-        ),
-        // Render1 is an otherwise independent retained render carrier.  Its
-        // GuC principal, timeline, and physical context let a Blueprint
-        // ShaderToy frame remain in flight without sharing mutable storage
-        // with the system-service or UI4-compositor lanes.
-        DirectRcsLane::ShaderToy => (
-            &SHADERTOY_RCS_CONTEXT_QUARANTINED,
-            &SHADERTOY_RCS_SUBMIT_RUNTIME,
-            crate::gpu::vgpu::KernelClient::Render1,
         ),
     };
     if quarantined.load(Ordering::Acquire) {
@@ -500,10 +482,6 @@ fn lfm25_rcs_context_is_quarantined() -> bool {
     !direct_rcs_state_reuse_permitted(&LFM25_RCS_CONTEXT_QUARANTINED)
 }
 
-fn shadertoy_rcs_context_is_quarantined() -> bool {
-    !direct_rcs_state_reuse_permitted(&SHADERTOY_RCS_CONTEXT_QUARANTINED)
-}
-
 fn ui4_compositor_rcs_context_is_quarantined() -> bool {
     !direct_rcs_state_reuse_permitted(&UI4_COMPOSITOR_RCS_CONTEXT_QUARANTINED)
 }
@@ -518,10 +496,6 @@ fn quarantine_font_rcs_context(reason: &'static str) {
 
 fn quarantine_lfm25_rcs_context(reason: &'static str) {
     quarantine_direct_rcs_lane(DirectRcsLane::Lfm25, reason);
-}
-
-fn quarantine_shadertoy_rcs_context(reason: &'static str) {
-    quarantine_direct_rcs_lane(DirectRcsLane::ShaderToy, reason);
 }
 
 fn quarantine_ui4_compositor_rcs_context(reason: &'static str) {
@@ -556,10 +530,6 @@ fn quarantine_direct_rcs_lane(lane: DirectRcsLane, reason: &'static str) {
         DirectRcsLane::Lfm25 => {
             (&LFM25_RCS_CONTEXT_QUARANTINED, crate::gpu::vgpu::KernelClient::Lfm25)
         }
-        DirectRcsLane::ShaderToy => (
-            &SHADERTOY_RCS_CONTEXT_QUARANTINED,
-            crate::gpu::vgpu::KernelClient::Render1,
-        ),
     };
     if quarantined
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -754,7 +724,6 @@ fn direct_rcs_submit_runtime(lane: DirectRcsLane) -> &'static Mutex<DirectRcsSub
         DirectRcsLane::Font => &FONT_RCS_SUBMIT_RUNTIME,
         DirectRcsLane::Execution => &EXECUTION_RCS_SUBMIT_RUNTIME,
         DirectRcsLane::Lfm25 => &LFM25_RCS_SUBMIT_RUNTIME,
-        DirectRcsLane::ShaderToy => &SHADERTOY_RCS_SUBMIT_RUNTIME,
     }
 }
 
@@ -811,10 +780,6 @@ fn complete_direct_rcs_submission() {
 
 fn complete_execution_rcs_submission() {
     complete_direct_rcs_submission_on_lane(DirectRcsLane::Execution);
-}
-
-fn complete_shadertoy_rcs_submission() {
-    complete_direct_rcs_submission_on_lane(DirectRcsLane::ShaderToy);
 }
 
 fn complete_direct_rcs_submission_on_lane(lane: DirectRcsLane) {
@@ -1001,7 +966,6 @@ fn direct_rcs_poll_result_slot_timeout_ms_on_lane_with_timestamp(
         DirectRcsLane::Font => &FONT_RCS_TIMEOUT_POLL_PROBE_LOGGED,
         DirectRcsLane::Execution => &EXECUTION_RCS_TIMEOUT_POLL_PROBE_LOGGED,
         DirectRcsLane::Lfm25 => &LFM25_RCS_TIMEOUT_POLL_PROBE_LOGGED,
-        DirectRcsLane::ShaderToy => &SHADERTOY_RCS_TIMEOUT_POLL_PROBE_LOGGED,
     };
     let log_probe = probe_logged
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)

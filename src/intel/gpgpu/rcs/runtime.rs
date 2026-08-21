@@ -61,15 +61,6 @@ const LFM25_RCS_GPU_VA: DirectRcsGpuVa = DirectRcsGpuVa {
     map_general_auxiliary: false,
 };
 
-const SHADERTOY_RCS_GPU_VA: DirectRcsGpuVa = DirectRcsGpuVa {
-    ring: SHADERTOY_RCS_GPU_VA_RING_BASE,
-    context: SHADERTOY_RCS_GPU_VA_CONTEXT_BASE,
-    batch: SHADERTOY_RCS_GPU_VA_BATCH_BASE,
-    result: SHADERTOY_RCS_GPU_VA_RESULT_BASE,
-    job_slots: 1,
-    map_general_auxiliary: false,
-};
-
 const UI4_COMPOSITOR_RCS_GPU_VA: DirectRcsGpuVa = DirectRcsGpuVa {
     ring: UI4_COMPOSITOR_RCS_GPU_VA_RING_BASE,
     context: UI4_COMPOSITOR_RCS_GPU_VA_CONTEXT_BASE,
@@ -244,22 +235,6 @@ fn lfm25_rcs_state_once(_dev: super::Dev) -> Option<DirectRcsState> {
     Some(state)
 }
 
-fn shadertoy_rcs_state_once(_dev: super::Dev) -> Option<DirectRcsState> {
-    if shadertoy_rcs_context_is_quarantined() {
-        return None;
-    }
-    let mut state_slot = SHADERTOY_RCS_STATE.lock();
-    if shadertoy_rcs_context_is_quarantined() {
-        return None;
-    }
-    if let Some(state) = *state_slot {
-        return Some(state);
-    }
-    let state = allocate_direct_rcs_state(SHADERTOY_RCS_GPU_VA)?;
-    *state_slot = Some(state);
-    Some(state)
-}
-
 fn ui4_compositor_rcs_state_once(_dev: super::Dev) -> Option<DirectRcsState> {
     if ui4_compositor_rcs_context_is_quarantined() {
         return None;
@@ -416,7 +391,6 @@ fn direct_rcs_ggtt_mapping(gpu_va: DirectRcsGpuVa) -> Option<&'static spin::Once
         FONT_RCS_GPU_VA => Some(&FONT_RCS_GGTT_MAPPING),
         EXECUTION_RCS_GPU_VA => Some(&EXECUTION_RCS_GGTT_MAPPING),
         LFM25_RCS_GPU_VA => Some(&LFM25_RCS_GGTT_MAPPING),
-        SHADERTOY_RCS_GPU_VA => Some(&SHADERTOY_RCS_GGTT_MAPPING),
         UI4_COMPOSITOR_RCS_GPU_VA => Some(&UI4_COMPOSITOR_RCS_GGTT_MAPPING),
         _ => None,
     }
@@ -428,7 +402,6 @@ fn direct_rcs_mapping_name(gpu_va: DirectRcsGpuVa) -> &'static str {
         FONT_RCS_GPU_VA => "font",
         EXECUTION_RCS_GPU_VA => "execution",
         LFM25_RCS_GPU_VA => "lfm25",
-        SHADERTOY_RCS_GPU_VA => "shadertoy",
         UI4_COMPOSITOR_RCS_GPU_VA => "ui4-compositor",
         _ => "invalid",
     }
@@ -442,7 +415,6 @@ fn direct_rcs_control_ggtt_ready(state: DirectRcsState) -> bool {
         FONT_RCS_GPU_VA_RING_BASE => &FONT_RCS_GGTT_MAPPING,
         EXECUTION_RCS_GPU_VA_RING_BASE => &EXECUTION_RCS_GGTT_MAPPING,
         LFM25_RCS_GPU_VA_RING_BASE => &LFM25_RCS_GGTT_MAPPING,
-        SHADERTOY_RCS_GPU_VA_RING_BASE => &SHADERTOY_RCS_GGTT_MAPPING,
         UI4_COMPOSITOR_RCS_GPU_VA_RING_BASE => &UI4_COMPOSITOR_RCS_GGTT_MAPPING,
         _ => return false,
     };
@@ -455,7 +427,6 @@ fn quarantine_direct_rcs_mapping_failure(gpu_va: DirectRcsGpuVa, reason: &'stati
         FONT_RCS_GPU_VA => quarantine_font_rcs_context(reason),
         EXECUTION_RCS_GPU_VA => quarantine_execution_rcs_context(reason),
         LFM25_RCS_GPU_VA => quarantine_lfm25_rcs_context(reason),
-        SHADERTOY_RCS_GPU_VA => quarantine_shadertoy_rcs_context(reason),
         UI4_COMPOSITOR_RCS_GPU_VA => quarantine_ui4_compositor_rcs_context(reason),
         _ => {}
     }
@@ -467,7 +438,6 @@ pub(crate) struct DirectRcsControlGgttPrewarmReport {
     pub(crate) font: bool,
     pub(crate) execution: bool,
     pub(crate) lfm25: bool,
-    pub(crate) shadertoy: bool,
     pub(crate) ui4_compositor: bool,
 }
 
@@ -477,7 +447,6 @@ impl DirectRcsControlGgttPrewarmReport {
             && self.font
             && self.execution
             && self.lfm25
-            && self.shadertoy
             && self.ui4_compositor
     }
 }
@@ -530,11 +499,6 @@ pub(crate) fn prewarm_direct_rcs_controls_ggtt(
             execution_rcs_state_once(dev),
         ),
         lfm25: prewarm_direct_rcs_control_ggtt(dev, LFM25_RCS_GPU_VA, lfm25_rcs_state_once(dev)),
-        shadertoy: prewarm_direct_rcs_control_ggtt(
-            dev,
-            SHADERTOY_RCS_GPU_VA,
-            shadertoy_rcs_state_once(dev),
-        ),
         ui4_compositor: prewarm_direct_rcs_control_ggtt(
             dev,
             UI4_COMPOSITOR_RCS_GPU_VA,

@@ -1347,13 +1347,6 @@ const FONT_RCS_GPU_VA_RING_BASE: u64 = 0x0840_0000;
 const FONT_RCS_GPU_VA_CONTEXT_BASE: u64 = 0x0841_0000;
 const FONT_RCS_GPU_VA_RESULT_BASE: u64 = 0x0844_0000;
 const FONT_RCS_GPU_VA_BATCH_BASE: u64 = 0x0850_0000;
-// ShaderToy visual frames may remain in flight while UI4 presents the prior
-// BlueprintScene frame.  They therefore own a separate control window rather
-// than borrowing the synchronous system-service batch/PPGTT.
-const SHADERTOY_RCS_GPU_VA_RING_BASE: u64 = 0x0860_0000;
-const SHADERTOY_RCS_GPU_VA_CONTEXT_BASE: u64 = 0x0861_0000;
-const SHADERTOY_RCS_GPU_VA_RESULT_BASE: u64 = 0x0880_0000;
-const SHADERTOY_RCS_GPU_VA_BATCH_BASE: u64 = 0x0890_0000;
 const _: () = assert!(
     EXECUTION_RCS_GPU_VA_RESULT_BASE + (EXECUTION_RCS_JOB_SLOTS * DIRECT_RCS_RESULT_BYTES) as u64
         <= EXECUTION_RCS_GPU_VA_BATCH_BASE
@@ -1367,14 +1360,6 @@ const _: () = assert!(
 );
 const _: () = assert!(
     FONT_RCS_GPU_VA_BATCH_BASE + DIRECT_RCS_BATCH_BYTES as u64
-        <= SHADERTOY_RCS_GPU_VA_RING_BASE
-);
-const _: () = assert!(
-    SHADERTOY_RCS_GPU_VA_RESULT_BASE + DIRECT_RCS_RESULT_BYTES as u64
-        <= SHADERTOY_RCS_GPU_VA_BATCH_BASE
-);
-const _: () = assert!(
-    SHADERTOY_RCS_GPU_VA_BATCH_BASE + DIRECT_RCS_BATCH_BYTES as u64
         <= DIRECT_RCS_GPU_VA_FONT_COVERAGE_BASE
 );
 // A compositor submission is intentionally allowed to remain in flight while
