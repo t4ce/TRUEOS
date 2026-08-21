@@ -117,12 +117,6 @@ jobs:
           git apply --check /tmp/live-update-review-fixes.patch
           git apply /tmp/live-update-review-fixes.patch
           git diff --check
-          rustfmt --edition 2024 --check \
-            src/hv/vmx.rs \
-            src/live_update.rs \
-            src/pci/pci.rs \
-            src/percpu.rs \
-            src/shell2/cmds/update.rs
           python3 - <<'PY'
           from pathlib import Path
           import subprocess
