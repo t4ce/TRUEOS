@@ -51,7 +51,6 @@ define_started_flags!(
     RAM_USAGE_HISTORY_STARTED,
     CODEC_SERVICE_STARTED,
     VMEDIA_SERVICE_STARTED,
-    QJS_ASYNC_FS_SERVICE_STARTED,
     TRUEOSFS_MOUNT_SERVICE_STARTED,
     TRUEOSFS_INDEX_SERVICE_STARTED,
     HV_VM_STORE_STARTED,
@@ -68,7 +67,6 @@ define_started_flags!(
     HELIO_GAME_STARTED,
     GRIDPAPER_SERVICE_STARTED,
     HID_UDP_SRV_STARTED,
-    AI_QJS_ONESHOT_STARTED,
     HTTP_TRUEOSFS_STARTED,
     WS_TIME_STARTED,
     LAN_DISCOVERY_STARTED,
@@ -473,25 +471,6 @@ fn spawn_factory_ram_probe(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::ram_probe::boot_factory_ram_probe_task())
 }
 
-fn spawn_qjs_async_fs_service(spawner: Spawner) -> SpawnAttempt {
-    if !trueos_qjs::async_fs::claim_service_start() {
-        crate::r::readiness::set(crate::r::readiness::QJS_ASYNC_FS_READY);
-        return SpawnAttempt::Spawned;
-    }
-
-    match trueos_qjs::async_fs::async_fs_service_task() {
-        Ok(token) => {
-            spawner.spawn(token);
-            crate::r::readiness::set(crate::r::readiness::QJS_ASYNC_FS_READY);
-            SpawnAttempt::Spawned
-        }
-        Err(e) => {
-            trueos_qjs::async_fs::clear_service_start_claim();
-            SpawnAttempt::Failed(e)
-        }
-    }
-}
-
 fn spawn_trueosfs_mount_service(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::r::fs::trueosfs::mount_service_task())
 }
@@ -757,11 +736,6 @@ fn spawn_hid_udp_srv(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_logtotcp(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::log_os::logtotcp::logtotcp_task())
-}
-
-fn spawn_ai_qjs_oneshot(spawner: Spawner) -> SpawnAttempt {
-    let _ = spawner;
-    SpawnAttempt::Skipped
 }
 
 fn spawn_http_trueosfs(spawner: Spawner) -> SpawnAttempt {
@@ -1739,13 +1713,10 @@ fn spawn_executor_realm_migration_smoke(spawner: Spawner) -> SpawnAttempt {
 
 const NET_ANY_CONFIGURED_AND_ROOT_READY: u32 =
     crate::r::readiness::NET_ANY_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED;
-const AI_QJS_ONESHOT_READY: u32 = crate::r::readiness::NET_ANY_CONFIGURED
-    | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
-    | crate::r::readiness::QJS_ASYNC_FS_READY;
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 75
+const TASK_COUNT: usize = 73
     + cfg!(feature = "trueos_h264_encode_stream") as usize
     + cfg!(feature = "trueos_lumen") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
@@ -1836,12 +1807,6 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     ),
     TaskSpec::enabled("factory-ram-probe", 0, &FACTORY_RAM_PROBE_STARTED, spawn_factory_ram_probe),
     TaskSpec::enabled(
-        "qjs-async-fs-service",
-        0,
-        &QJS_ASYNC_FS_SERVICE_STARTED,
-        spawn_qjs_async_fs_service,
-    ),
-    TaskSpec::enabled(
         "trueosfs-mount-service",
         0,
         &TRUEOSFS_MOUNT_SERVICE_STARTED,
@@ -1914,12 +1879,6 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         crate::r::readiness::NET_ANY_CONFIGURED,
         &LOGTOTCP_STARTED,
         spawn_logtotcp,
-    ),
-    TaskSpec::disabled(
-        "ai-task",
-        AI_QJS_ONESHOT_READY,
-        &AI_QJS_ONESHOT_STARTED,
-        spawn_ai_qjs_oneshot,
     ),
     TaskSpec::enabled_gated(
         "http-trueosfs",

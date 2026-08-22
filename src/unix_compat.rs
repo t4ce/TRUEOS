@@ -208,7 +208,7 @@ pub(crate) fn resolve_import(name: &str) -> Option<usize> {
         "cfmakeraw" => Some(crate::unix_abi_shim::cfmakeraw as *const () as usize),
         "chdir" => Some(crate::std_abi_shim::chdir as *const () as usize),
         "chroot" => Some(crate::std_abi_shim::chroot as *const () as usize),
-        "clock_gettime" => Some(trueos_qjs::trueos_shims::clock_gettime as *const () as usize),
+        "clock_gettime" => Some(crate::blueprint_shims::clock_gettime as *const () as usize),
         "close" => Some(crate::std_abi_shim::close as *const () as usize),
         "closedir" => Some(crate::std_abi_shim::closedir as *const () as usize),
         "connect" => Some(crate::std_abi_shim::connect as *const () as usize),

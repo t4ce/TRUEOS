@@ -1208,15 +1208,6 @@ unsafe extern "C" {
         data_len: usize,
     ) -> isize;
     pub fn trueos_cabi_shell2_frontend_detach_v1() -> i32;
-    pub fn trueos_cabi_qjs_workbench_eval_v1(
-        source_ptr: *const u8,
-        source_len: usize,
-        mode: u32,
-        out_ptr: *mut u8,
-        out_cap: usize,
-    ) -> isize;
-    pub fn trueos_cabi_qjs_workbench_poll_v1(out_ptr: *mut u8, out_cap: usize) -> isize;
-    pub fn trueos_cabi_qjs_workbench_close_v1() -> i32;
     pub fn trueos_cabi_blueprint_child_spawn_v1(
         initial_ptr: *const u8,
         initial_len: usize,

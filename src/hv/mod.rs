@@ -1151,7 +1151,11 @@ pub(crate) fn blueprint_child_spawn(parent_vm_id: u8, initial_message: &[u8]) ->
     }
     let template = blueprint_child_template(parent_vm_id, parent_generation)
         .ok_or(BLUEPRINT_CHILD_ERR_UNAVAILABLE)?;
-    let child_vm_id = first_free_vm_id().ok_or(BLUEPRINT_CHILD_ERR_UNAVAILABLE)?;
+    // Claim the VM's existing `starting` bit before publishing a relationship.
+    // `first_free_vm_id` is only an observation; a concurrent Shell2 launch
+    // could otherwise claim the same id between that observation and link
+    // installation.
+    let child_vm_id = reserve_blueprint_child_vm_id().ok_or(BLUEPRINT_CHILD_ERR_UNAVAILABLE)?;
     let child_generation = vm_run_generation(child_vm_id)
         .unwrap_or(0)
         .wrapping_add(1)
@@ -1185,9 +1189,26 @@ pub(crate) fn blueprint_child_spawn(parent_vm_id: u8, initial_message: &[u8]) ->
     );
     if result.is_err() {
         let _ = link_slot.lock().take();
+        if let Some(vm) = vm_slot(child_vm_id) {
+            vm.starting.store(false, Ordering::Release);
+        }
         return Err(BLUEPRINT_CHILD_ERR_UNAVAILABLE);
     }
     Ok(handle)
+}
+
+fn reserve_blueprint_child_vm_id() -> Option<u8> {
+    loop {
+        let vm_id = first_free_vm_id()?;
+        let vm = vm_slot(vm_id)?;
+        if vm
+            .starting
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            return Some(vm_id);
+        }
+    }
 }
 
 fn blueprint_child_find_link_for_actor(
@@ -1809,7 +1830,7 @@ pub fn status() -> HvStatus {
 
 pub fn start(vm_id: u8, spawner: &Spawner, stack_mb: Option<usize>) -> Result<(), StartError> {
     let _ = spawner;
-    start_with_mode(vm_id, VmBootMode::Hull, stack_mb, None)
+    start_with_mode(vm_id, VmBootMode::Hull, stack_mb, None, false)
 }
 
 pub fn start_blueprint_app_vm(
@@ -1837,6 +1858,7 @@ pub fn start_blueprint_app_vm(
             console_target,
             console_surface,
         }),
+        false,
     )
 }
 
@@ -1859,6 +1881,7 @@ fn start_blueprint_child_vm(
             console_target: None,
             console_surface: BlueprintConsoleSurface::Text,
         }),
+        true,
     )
 }
 
@@ -1867,6 +1890,7 @@ fn start_with_mode(
     boot_mode: VmBootMode,
     stack_mb: Option<usize>,
     pending_blueprint: Option<BlueprintPendingLaunchState>,
+    already_reserved: bool,
 ) -> Result<(), StartError> {
     let Some(vm) = vm_slot(vm_id) else {
         return Err(StartError::UnsupportedVmId);
@@ -1883,7 +1907,11 @@ fn start_with_mode(
         return Err(StartError::VgpuQuarantined);
     }
 
-    if vm
+    if already_reserved {
+        if !vm.starting.load(Ordering::Acquire) {
+            return Err(StartError::AlreadyRunning);
+        }
+    } else if vm
         .starting
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
         .is_err()
@@ -5475,7 +5503,6 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
                 vm_id, media_released
             ));
         }
-        let _ = crate::shell2::qjs_workbench::close(vm_id);
         let released = crate::ui4::release_owner_resources(crate::ui4::WindowOwner::Vm(vm_id));
         if released != crate::ui4::OwnerReleaseSummary::default() {
             hvlogf(format_args!(
@@ -5833,7 +5860,7 @@ async fn vmx_launch_once_with_ept(
                     host_heap.heap_end as u64
                 ));
             }
-            let memcpy_addr = trueos_qjs::trueos_shims::memcpy as *const () as usize as u64;
+            let memcpy_addr = crate::blueprint_shims::memcpy as *const () as usize as u64;
             if lr.guest_rip >= memcpy_addr && lr.guest_rip < memcpy_addr.saturating_add(128) {
                 let (vector, vector_name, _, _, err) =
                     guest_exception.unwrap_or((0xFF, "unknown", 0, 0, intr_err));

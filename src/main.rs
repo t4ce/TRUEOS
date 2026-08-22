@@ -14,6 +14,7 @@ mod allcaps;
 mod allocators;
 pub mod allports;
 mod app_db;
+mod blueprint_shims;
 mod aud;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 #[path = "hv/blueprint/blueprint_net_broker.rs"]

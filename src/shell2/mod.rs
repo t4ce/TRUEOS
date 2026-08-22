@@ -13,7 +13,6 @@ pub(crate) mod cmds;
 mod ecma48;
 mod interface;
 mod matrix;
-pub(crate) mod qjs_workbench;
 mod shell2_apps;
 mod shell2_cmd;
 mod shell2_cmd_registry;

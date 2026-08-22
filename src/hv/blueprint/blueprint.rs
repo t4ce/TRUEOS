@@ -1266,19 +1266,17 @@ fn resolve_known_import(name: &str) -> Option<usize> {
         | "_RNvCs2csqI13tepL_7___rustc35___rust_no_alloc_shim_is_unstable_v2" => {
             Some(portal_no_alloc_shim_is_unstable_v2 as *const () as usize)
         }
-        "memcpy" => Some(trueos_qjs::trueos_shims::memcpy as *const () as usize),
-        "memmove" => Some(trueos_qjs::trueos_shims::memmove as *const () as usize),
-        "memset" => Some(trueos_qjs::trueos_shims::memset as *const () as usize),
-        "memcmp" => Some(trueos_qjs::trueos_shims::memcmp as *const () as usize),
-        "strlen" => Some(trueos_qjs::trueos_shims::strlen as *const () as usize),
-        "__assert_fail" => Some(trueos_qjs::trueos_shims::__assert_fail as *const () as usize),
-        "__snprintf_chk" => Some(trueos_qjs::trueos_shims::__snprintf_chk as *const () as usize),
-        "__vsnprintf_chk" => Some(trueos_qjs::trueos_shims::__vsnprintf_chk as *const () as usize),
+        "memcpy" => Some(crate::blueprint_shims::memcpy as *const () as usize),
+        "memmove" => Some(crate::blueprint_shims::memmove as *const () as usize),
+        "memset" => Some(crate::blueprint_shims::memset as *const () as usize),
+        "memcmp" => Some(crate::blueprint_shims::memcmp as *const () as usize),
+        "strlen" => Some(crate::blueprint_shims::strlen as *const () as usize),
+        "__assert_fail" => Some(crate::blueprint_shims::__assert_fail as *const () as usize),
         "malloc_usable_size" => {
-            Some(trueos_qjs::trueos_shims::malloc_usable_size as *const () as usize)
+            Some(crate::blueprint_shims::malloc_usable_size as *const () as usize)
         }
-        "lrint" => Some(trueos_qjs::trueos_shims::lrint as *const () as usize),
-        "modf" => Some(trueos_qjs::trueos_shims::modf as *const () as usize),
+        "lrint" => Some(crate::blueprint_shims::lrint as *const () as usize),
+        "modf" => Some(crate::blueprint_shims::modf as *const () as usize),
         "sinf" => Some(trueos_math::sinf as *const () as usize),
         "cosf" => Some(trueos_math::cosf as *const () as usize),
         "acosf" => Some(trueos_math::acosf as *const () as usize),
@@ -1302,11 +1300,11 @@ fn resolve_known_import(name: &str) -> Option<usize> {
         "sin" => Some(trueos_math::sin as *const () as usize),
         "cos" => Some(trueos_math::cos as *const () as usize),
         "acos" => Some(trueos_math::acos as *const () as usize),
-        "acosh" => Some(trueos_qjs::trueos_shims::acosh as *const () as usize),
+        "acosh" => Some(crate::blueprint_shims::acosh as *const () as usize),
         "asin" => Some(trueos_math::asin as *const () as usize),
-        "asinh" => Some(trueos_qjs::trueos_shims::asinh as *const () as usize),
+        "asinh" => Some(crate::blueprint_shims::asinh as *const () as usize),
         "atan" => Some(trueos_math::atan as *const () as usize),
-        "atanh" => Some(trueos_qjs::trueos_shims::atanh as *const () as usize),
+        "atanh" => Some(crate::blueprint_shims::atanh as *const () as usize),
         "tan" => Some(trueos_math::tan as *const () as usize),
         "sinh" => Some(trueos_math::sinh as *const () as usize),
         "cosh" => Some(trueos_math::cosh as *const () as usize),
@@ -1393,7 +1391,7 @@ fn resolve_runtime_abi_import(name: &str) -> Option<usize> {
         "sys_panic" => Some(crate::std_abi_shim::sys_panic as *const () as usize),
         "sys_halt" => Some(crate::std_abi_shim::sys_halt as *const () as usize),
         "exit" | "_exit" => Some(crate::std_abi_shim::exit as *const () as usize),
-        "abort" => Some(trueos_qjs::trueos_shims::abort as *const () as usize),
+        "abort" => Some(crate::blueprint_shims::abort as *const () as usize),
         "trueos_cabi_dns_resolve_ipv4" => {
             Some(crate::std_abi_shim::trueos_cabi_dns_resolve_ipv4 as *const () as usize)
         }
