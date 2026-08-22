@@ -19,7 +19,6 @@ use super::super::{
 
 const IMG_APP: &str = "img";
 const IMG_ARCHIVE: &str = "img.bp";
-const LIVE_UPDATE_SOURCE: &str = "kernel:live-update";
 const LIVE_UPDATE_VISIBLE_MS: u64 = 3_000;
 const LIVE_UPDATE_LAUNCH_TIMEOUT_MS: u64 = 30_000;
 
@@ -66,11 +65,14 @@ pub(crate) fn launch_live_update_notice(spawner: Spawner, generation: u64) {
 #[task(pool_size = 1)]
 async fn live_update_notice_task(generation: u64) {
     let instance_name = alloc::format!("live-update-{generation}");
+    let mut rng = crate::tyche::soft_rng();
+    let variant = rng.usize_below(crate::virtio_gpu_logo::LIVE_UPDATE_NOTICE_VARIANT_COUNT);
+    let source = crate::virtio_gpu_logo::live_update_notice_source(variant);
     let target = matrix_target_for_slot_name(OUTPUT_SYSTEM_MASK, "lu-img");
     let submitted = super::run::submit_archive_name_to_target_from_app_db_with_instance_waiving_readiness_noninteractive_async(
             target,
             IMG_ARCHIVE,
-            alloc::vec![String::from(LIVE_UPDATE_SOURCE)],
+            alloc::vec![String::from(source)],
             crate::hv::BlueprintInstanceRequest::named(instance_name.clone()),
             crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
         )
@@ -113,11 +115,12 @@ async fn live_update_notice_task(generation: u64) {
     };
     crate::log_info!(
         target: "global";
-        "live-update: notice visible generation={} vm={} duration_ms={} source={}\n",
+        "live-update: notice visible generation={} vm={} variant={} duration_ms={} source={}\n",
         generation,
         vm_id,
+        variant,
         LIVE_UPDATE_VISIBLE_MS,
-        LIVE_UPDATE_SOURCE,
+        source,
     );
     Timer::after(EmbassyDuration::from_millis(LIVE_UPDATE_VISIBLE_MS)).await;
     match crate::hv::stop(vm_id) {
