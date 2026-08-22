@@ -36,6 +36,7 @@ const RX_TRACE_EARLY_POLLS: u64 = 8;
 const RX_TRACE_POLL_EVERY: u64 = 10_000;
 const RX_TRACE_EARLY_FRAMES: u64 = 8;
 const MAC_TRACE_POLL_EVERY: u64 = 10_000;
+const DATAPATH_INTEGRITY_POLL_EVERY: u64 = 256;
 const EXP_R8125_FORCE_CPLUS_OFF: bool = false;
 // If DMA memory is mapped cacheable and the platform/device is not fully
 // cache-coherent, we must write back TX descriptors/buffers before ringing the
@@ -48,6 +49,9 @@ const TX_WEDGE_QUARANTINE_RESETS: u64 = 3;
 
 // MMIO registers (RTL8125 family)
 const REG_IDR0: u16 = 0x00; // MAC 0..5
+// RTL8125 permanent station-address backup. Linux r8169 prefers this over
+// IDR0/MAC0 because the live station registers can be lost across a warm reset.
+const REG_MAC0_BKP: u16 = 0x19E0;
 const REG_MAR0: u16 = 0x08; // Multicast hash bits 0..31
 const REG_MAR4: u16 = 0x0C; // Multicast hash bits 32..63
 const REG_TNPDS: u16 = 0x20; // Tx desc start addr (low)
@@ -356,6 +360,7 @@ pub struct R8125Adapter {
     ring: Option<*mut NetRing>,
 
     _rx_desc_mem: DmaRegion,
+    rx_desc_phys: u64,
     rx_desc: *mut RxDesc,
     rx_bufs: Vec<DmaRegion>,
     rx_idx: usize,
@@ -398,6 +403,7 @@ pub struct R8125Adapter {
     dbg_tx_quarantined: bool,
     dbg_mac_checks: u64,
     dbg_mac_changes: u64,
+    dbg_datapath_recoveries: u64,
 
     dbg_tx_link_down_drops: u64,
 }
@@ -406,12 +412,36 @@ pub struct R8125Adapter {
 unsafe impl Send for R8125Adapter {}
 
 impl R8125Adapter {
-    unsafe fn read_hw_mac(mmio: &Mmio) -> [u8; 6] {
+    unsafe fn read_mac_at(mmio: &Mmio, reg: u16) -> [u8; 6] {
         let mut mac = [0u8; 6];
         for (i, octet) in mac.iter_mut().enumerate() {
-            *octet = mmio.read_u8(REG_IDR0 + i as u16);
+            *octet = mmio.read_u8(reg + i as u16);
         }
         mac
+    }
+
+    unsafe fn read_hw_mac(mmio: &Mmio) -> [u8; 6] {
+        Self::read_mac_at(mmio, REG_IDR0)
+    }
+
+    unsafe fn read_backup_mac(mmio: &Mmio) -> [u8; 6] {
+        Self::read_mac_at(mmio, REG_MAC0_BKP)
+    }
+
+    /// The generic MMIO helpers deliberately reject writes overlapping IDR0.
+    /// Keep the only exception narrow, validated, config-unlocked, and verified.
+    unsafe fn restore_station_mac(mmio: &Mmio, mac: [u8; 6]) -> bool {
+        if Self::mac_is_invalid(mac) {
+            return false;
+        }
+
+        mmio.write_u8(REG_CFG9346, CFG9346_UNLOCK);
+        for (i, octet) in mac.iter().copied().enumerate() {
+            write_volatile(mmio.base.as_ptr().add(REG_IDR0 as usize + i), octet);
+        }
+        compiler_fence(Ordering::SeqCst);
+        mmio.write_u8(REG_CFG9346, CFG9346_LOCK);
+        Self::read_hw_mac(mmio) == mac
     }
 
     #[inline]
@@ -741,6 +771,112 @@ impl R8125Adapter {
         }
     }
 
+    /// Repair the complete driver-owned datapath after the controller loses
+    /// live register state. TCP will retransmit frames discarded while the
+    /// rings are stopped; keeping stale descriptor ownership would not recover.
+    fn recover_datapath_if_needed(&mut self, reason: &str) {
+        let (hw_mac, rds_lo, rds_hi, tnp_lo, tnp_hi, mar0, mar4, rcr) = unsafe {
+            (
+                Self::read_hw_mac(&self.mmio),
+                self.mmio.read_u32(REG_RDSAR),
+                self.mmio.read_u32(REG_RDSAR_HI),
+                self.mmio.read_u32(REG_TNPDS),
+                self.mmio.read_u32(REG_TNPDS_HI),
+                self.mmio.read_u32(REG_MAR0),
+                self.mmio.read_u32(REG_MAR4),
+                self.mmio.read_u32(REG_RCR),
+            )
+        };
+        let expected_mar = self.snapshot.multicast_hash;
+        let mac_bad = hw_mac != self.mac || Self::mac_is_invalid(hw_mac);
+        let rx_base_bad =
+            rds_lo != self.rx_desc_phys as u32 || rds_hi != (self.rx_desc_phys >> 32) as u32;
+        let tx_base_bad =
+            tnp_lo != self.tx_desc_phys as u32 || tnp_hi != (self.tx_desc_phys >> 32) as u32;
+        let filter_bad = mar0 != expected_mar as u32
+            || mar4 != (expected_mar >> 32) as u32
+            || ((rcr ^ self.snapshot.rcr) & RCR_DRIVER_OWNED_MASK) != 0;
+        if !mac_bad && !rx_base_bad && !tx_base_bad && !filter_bad {
+            return;
+        }
+
+        self.dbg_datapath_recoveries = self.dbg_datapath_recoveries.saturating_add(1);
+        crate::log_warn!(
+            target: "net";
+            "net/r8125: DATAPATH INTEGRITY VIOLATION reason={} recovery={} mac_bad={} rx_base_bad={} tx_base_bad={} filter_bad={} rdsar=0x{:08x}{:08x} tnpds=0x{:08x}{:08x}\n",
+            reason,
+            self.dbg_datapath_recoveries,
+            mac_bad as u8,
+            rx_base_bad as u8,
+            tx_base_bad as u8,
+            filter_bad as u8,
+            rds_hi,
+            rds_lo,
+            tnp_hi,
+            tnp_lo
+        );
+        self.log_hw_state("datapath-recovery-pre");
+
+        unsafe {
+            self.mmio.write_u8(REG_CMD, 0);
+            self.mmio.write_u32(REG_INTR_MASK_8125, 0);
+
+            for i in 0..RX_DESC_COUNT {
+                let eor = if i + 1 == RX_DESC_COUNT { DESC_EOR } else { 0 };
+                Self::publish_rx_descriptor(self.rx_desc.add(i), self.rx_bufs[i].phys(), eor);
+            }
+            for i in 0..TX_DESC_COUNT {
+                let eor = if i + 1 == TX_DESC_COUNT { DESC_EOR } else { 0 };
+                write_volatile(
+                    self.tx_desc.add(i),
+                    TxDesc {
+                        opts1: eor,
+                        opts2: 0,
+                        addr: self.tx_bufs[i].phys(),
+                    },
+                );
+            }
+            fence(Ordering::Release);
+
+            if mac_bad && !Self::restore_station_mac(&self.mmio, self.mac) {
+                crate::log_error!(
+                    target: "net";
+                    "net/r8125: datapath recovery could not restore station MAC; leaving engines stopped\n"
+                );
+                return;
+            }
+
+            let mcu = self.mmio.read_u8(REG_MCU);
+            self.mmio.write_u8(REG_MCU, mcu & !MCU_NOW_IS_OOB);
+            self.mmio.write_u8(REG_CFG9346, CFG9346_UNLOCK);
+            self.mmio.write_u16(REG_CPLUS_CMD, self.snapshot.cplus);
+            self.mmio.write_u16(REG_RX_MAX_SIZE, RX_BUF_SIZE as u16);
+            self.mmio.write_u32(REG_RDSAR, self.rx_desc_phys as u32);
+            self.mmio
+                .write_u32(REG_RDSAR_HI, (self.rx_desc_phys >> 32) as u32);
+            self.mmio.write_u32(REG_TNPDS, self.tx_desc_phys as u32);
+            self.mmio
+                .write_u32(REG_TNPDS_HI, (self.tx_desc_phys >> 32) as u32);
+            self.mmio.write_u32(REG_THPDS, self.tx_desc_phys as u32);
+            self.mmio
+                .write_u32(REG_THPDS_HI, (self.tx_desc_phys >> 32) as u32);
+            self.mmio.write_u32(REG_MAR0, expected_mar as u32);
+            self.mmio.write_u32(REG_MAR4, (expected_mar >> 32) as u32);
+            self.mmio.write_u32(REG_RCR, self.snapshot.rcr);
+            self.mmio.write_u8(REG_CFG9346, CFG9346_LOCK);
+            self.mmio.write_u32(REG_INTR_STATUS_8125, 0xFFFF_FFFF);
+            self.mmio.write_u8(REG_CMD, CMD_RX_EN | CMD_TX_EN);
+        }
+
+        self.rx_idx = 0;
+        self.tx_head = Self::tx_start_index();
+        self.tx_tail = Self::tx_start_index();
+        self.dbg_tx_stall_checks = 0;
+        self.dbg_tx_quarantined = false;
+        self.ring_tx_doorbell("datapath-recovery");
+        self.log_hw_state("datapath-recovery-post");
+    }
+
     fn log_hw_state(&mut self, reason: &str) {
         self.dbg_state_dumps = self.dbg_state_dumps.saturating_add(1);
 
@@ -874,9 +1010,10 @@ impl R8125Adapter {
             Ok(size) if size != 0 => size,
             _ => {
                 if crate::log_os::flags::R8125_VERBOSE_LOGS {
-                    crate::log!("net/r8125: bar{} size unknown; using 0x1000\n", bar_index);
+                    crate::log!("net/r8125: bar{} size unknown; using 0x2000\n", bar_index);
                 }
-                0x1000
+                // RTL8125 MAC0_BKP lives at 0x19e0.
+                0x2000
             }
         };
         if crate::log_os::flags::R8125_VERBOSE_LOGS && bar_size != 0 {
@@ -902,6 +1039,7 @@ impl R8125Adapter {
         // driver write so 10ec:8125 can be resolved to its actual MAC family.
         let initial_tcr = unsafe { mmio.read_u32(REG_TCR) };
         let mac_before_reset = unsafe { Self::read_hw_mac(&mmio) };
+        let mac_backup = unsafe { Self::read_backup_mac(&mmio) };
         let (
             cmd_before_reset,
             isr_before_reset,
@@ -919,11 +1057,14 @@ impl R8125Adapter {
         };
         crate::log_trace!(
             target: "net";
-            "net/r8125: phase=pre-reset bdf={:02x}:{:02x}.{} mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} invalid={} cmd=0x{:02x} isr=0x{:08x} imr=0x{:08x} phy=0x{:02x} rcr=0x{:08x} tcr=0x{:08x}\n",
+            "net/r8125: phase=pre-reset bdf={:02x}:{:02x}.{} mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} invalid={} backup={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} backup_invalid={} cmd=0x{:02x} isr=0x{:08x} imr=0x{:08x} phy=0x{:02x} rcr=0x{:08x} tcr=0x{:08x}\n",
             dev.bus, dev.slot, dev.function,
             mac_before_reset[0], mac_before_reset[1], mac_before_reset[2],
             mac_before_reset[3], mac_before_reset[4], mac_before_reset[5],
             Self::mac_is_invalid(mac_before_reset) as u8,
+            mac_backup[0], mac_backup[1], mac_backup[2],
+            mac_backup[3], mac_backup[4], mac_backup[5],
+            Self::mac_is_invalid(mac_backup) as u8,
             cmd_before_reset, isr_before_reset, imr_before_reset, phy_before_reset,
             rcr_before_reset, initial_tcr
         );
@@ -978,7 +1119,7 @@ impl R8125Adapter {
             return Err(());
         }
 
-        let mac = unsafe { Self::read_hw_mac(&mmio) };
+        let mac_after_reset = unsafe { Self::read_hw_mac(&mmio) };
         crate::log_trace!(
             target: "net";
             "net/r8125: phase=post-reset spins={} cmd=0x{:02x} mac_before={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} mac_after={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} changed={} invalid={}\n",
@@ -986,19 +1127,55 @@ impl R8125Adapter {
             last_cmd,
             mac_before_reset[0], mac_before_reset[1], mac_before_reset[2],
             mac_before_reset[3], mac_before_reset[4], mac_before_reset[5],
-            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
-            (mac != mac_before_reset) as u8,
-            Self::mac_is_invalid(mac) as u8
+            mac_after_reset[0], mac_after_reset[1], mac_after_reset[2],
+            mac_after_reset[3], mac_after_reset[4], mac_after_reset[5],
+            (mac_after_reset != mac_before_reset) as u8,
+            Self::mac_is_invalid(mac_after_reset) as u8
         );
-        if mac != mac_before_reset || Self::mac_is_invalid(mac) {
+        if mac_after_reset != mac_before_reset || Self::mac_is_invalid(mac_after_reset) {
             crate::log_warn!(
                 target: "net";
                 "net/r8125: MAC changed across reset bdf={:02x}:{:02x}.{} before={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} after={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
                 dev.bus, dev.slot, dev.function,
                 mac_before_reset[0], mac_before_reset[1], mac_before_reset[2],
                 mac_before_reset[3], mac_before_reset[4], mac_before_reset[5],
+                mac_after_reset[0], mac_after_reset[1], mac_after_reset[2],
+                mac_after_reset[3], mac_after_reset[4], mac_after_reset[5]
+            );
+        }
+
+        // MAC0_BKP is the RTL8125's permanent backup and survives the live
+        // IDR0 register loss seen after a datapath wedge followed by warm reset.
+        // Match Linux r8169's preference order: backup, then live pre-reset,
+        // then live post-reset. Refuse to invent an address if all are invalid.
+        let mac = if !Self::mac_is_invalid(mac_backup) {
+            mac_backup
+        } else if !Self::mac_is_invalid(mac_before_reset) {
+            mac_before_reset
+        } else if !Self::mac_is_invalid(mac_after_reset) {
+            mac_after_reset
+        } else {
+            crate::log_error!(
+                target: "net";
+                "net/r8125: no valid station MAC in backup, pre-reset, or post-reset registers bdf={:02x}:{:02x}.{}\n",
+                dev.bus,
+                dev.slot,
+                dev.function
+            );
+            return Err(());
+        };
+        if mac_after_reset != mac {
+            let restored = unsafe { Self::restore_station_mac(&mmio, mac) };
+            crate::log_warn!(
+                target: "net";
+                "net/r8125: station MAC boot recovery source={} restored={} wanted={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
+                if mac == mac_backup { "backup" } else { "pre-reset" },
+                restored as u8,
                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]
             );
+            if !restored {
+                return Err(());
+            }
         }
 
         // Allocate descriptor rings
@@ -1329,6 +1506,7 @@ impl R8125Adapter {
             snapshot,
             ring: None,
             _rx_desc_mem: rx_desc_mem,
+            rx_desc_phys,
             rx_desc,
             rx_bufs,
             rx_idx: 0,
@@ -1369,6 +1547,7 @@ impl R8125Adapter {
             dbg_tx_quarantined: false,
             dbg_mac_checks: 0,
             dbg_mac_changes: 0,
+            dbg_datapath_recoveries: 0,
 
             dbg_tx_link_down_drops: 0,
         })
@@ -1565,6 +1744,14 @@ impl R8125Adapter {
 
     fn poll_rx_ring(&mut self) {
         self.dbg_poll_ticks = self.dbg_poll_ticks.saturating_add(1);
+
+        if self.dbg_poll_ticks <= RX_TRACE_EARLY_POLLS
+            || self
+                .dbg_poll_ticks
+                .is_multiple_of(DATAPATH_INTEGRITY_POLL_EVERY)
+        {
+            self.recover_datapath_if_needed("poll");
+        }
 
         let trace_poll = self.dbg_poll_ticks <= RX_TRACE_EARLY_POLLS
             || self.dbg_poll_ticks.is_multiple_of(RX_TRACE_POLL_EVERY);
