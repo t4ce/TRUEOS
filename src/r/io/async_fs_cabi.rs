@@ -678,7 +678,7 @@ fn parse_path(path_ptr: *const u8, path_len: usize, allow_empty: bool) -> Result
     if (path_ptr.is_null() && path_len != 0) || (!allow_empty && path_len == 0) {
         return Err(FS_ERR_BAD_PARAM);
     }
-    if path_len > QJS_ASYNC_FS_MAX_PATH {
+    if path_len > BLUEPRINT_ASYNC_FS_MAX_PATH {
         return Err(FS_ERR_TOO_LARGE);
     }
     let bytes = if path_len == 0 {

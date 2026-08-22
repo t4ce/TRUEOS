@@ -4,8 +4,8 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 use crate::r::io::cabi::{
-    FS_ERR_BAD_PARAM, FS_ERR_BAD_PATH, FS_ERR_BAD_UTF8, FS_ERR_IO, FS_ERR_NO_SPACE,
-    FS_ERR_NOT_FOUND, FS_ERR_TOO_LARGE, QJS_ASYNC_FS_MAX_PATH,
+    BLUEPRINT_ASYNC_FS_MAX_PATH, FS_ERR_BAD_PARAM, FS_ERR_BAD_PATH, FS_ERR_BAD_UTF8, FS_ERR_IO,
+    FS_ERR_NO_SPACE, FS_ERR_NOT_FOUND, FS_ERR_TOO_LARGE,
 };
 
 #[repr(C)]
@@ -85,7 +85,7 @@ fn parse_path(path_ptr: *const u8, path_len: usize) -> Result<String, i32> {
     if path_ptr.is_null() || path_len == 0 {
         return Err(FS_ERR_BAD_PARAM);
     }
-    if path_len > QJS_ASYNC_FS_MAX_PATH {
+    if path_len > BLUEPRINT_ASYNC_FS_MAX_PATH {
         return Err(FS_ERR_TOO_LARGE);
     }
     let bytes = unsafe { core::slice::from_raw_parts(path_ptr, path_len) };

@@ -15,7 +15,7 @@ pub const FS_ERR_TIMEOUT: i32 = -14;
 
 // Contract limit for C ABI FS path parameters used by kernel + QJS.
 #[allow(dead_code)]
-pub const QJS_ASYNC_FS_MAX_PATH: usize = 1024;
+pub const BLUEPRINT_ASYNC_FS_MAX_PATH: usize = 1024;
 
 #[allow(dead_code)]
 pub const NET_ERR_BAD_URL: i32 = -10;

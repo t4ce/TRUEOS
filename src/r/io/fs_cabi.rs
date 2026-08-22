@@ -422,7 +422,7 @@ fn vmcall_signed_i32(data: u64) -> i32 {
 }
 
 pub(crate) fn fs_read_file_len_host(path: &str) -> isize {
-    if path.len() > QJS_ASYNC_FS_MAX_PATH {
+    if path.len() > BLUEPRINT_ASYNC_FS_MAX_PATH {
         log_fs_cabi_path_fail(
             "read_len",
             path,
@@ -436,7 +436,7 @@ pub(crate) fn fs_read_file_len_host(path: &str) -> isize {
         log_fs_cabi_path_fail("read_len", path, None, "reason=resolve-failed", FS_ERR_BAD_PATH);
         return FS_ERR_BAD_PATH as isize;
     };
-    if path.len() > QJS_ASYNC_FS_MAX_PATH {
+    if path.len() > BLUEPRINT_ASYNC_FS_MAX_PATH {
         log_fs_cabi_path_fail(
             "read_len",
             path.as_str(),
@@ -478,7 +478,7 @@ fn should_log_model_read_chunk(path: &str, offset: usize, cap: usize, got: usize
 }
 
 pub(crate) fn fs_read_file_chunk_host(path: &str, offset: usize, out: &mut [u8]) -> isize {
-    if path.len() > QJS_ASYNC_FS_MAX_PATH {
+    if path.len() > BLUEPRINT_ASYNC_FS_MAX_PATH {
         log_fs_cabi_path_fail(
             "read_chunk",
             path,
@@ -492,7 +492,7 @@ pub(crate) fn fs_read_file_chunk_host(path: &str, offset: usize, out: &mut [u8])
         log_fs_cabi_path_fail("read_chunk", path, None, "reason=resolve-failed", FS_ERR_BAD_PATH);
         return FS_ERR_BAD_PATH as isize;
     };
-    if path.len() > QJS_ASYNC_FS_MAX_PATH {
+    if path.len() > BLUEPRINT_ASYNC_FS_MAX_PATH {
         log_fs_cabi_path_fail(
             "read_chunk",
             path.as_str(),
@@ -527,7 +527,7 @@ pub(crate) fn fs_read_file_chunk_host(path: &str, offset: usize, out: &mut [u8])
 }
 
 pub(crate) fn fs_write_begin_host(path: &str, total_len: u64) -> i64 {
-    if path.len() > QJS_ASYNC_FS_MAX_PATH {
+    if path.len() > BLUEPRINT_ASYNC_FS_MAX_PATH {
         log_fs_cabi_path_fail(
             "write_begin",
             path,
@@ -542,7 +542,7 @@ pub(crate) fn fs_write_begin_host(path: &str, total_len: u64) -> i64 {
         log_fs_cabi_path_fail("write_begin", raw, None, "reason=resolve-failed", FS_ERR_BAD_PATH);
         return FS_ERR_BAD_PATH as i64;
     };
-    if path.len() > QJS_ASYNC_FS_MAX_PATH {
+    if path.len() > BLUEPRINT_ASYNC_FS_MAX_PATH {
         log_fs_cabi_path_fail(
             "write_begin",
             raw,
@@ -617,7 +617,7 @@ pub(crate) fn fs_write_abort_host(handle: u32) -> i32 {
 }
 
 pub(crate) fn fs_create_dir_all_host(path: &str) -> i32 {
-    if path.len() > QJS_ASYNC_FS_MAX_PATH {
+    if path.len() > BLUEPRINT_ASYNC_FS_MAX_PATH {
         log_fs_cabi_path_fail(
             "create_dir_all",
             path,
@@ -638,7 +638,7 @@ pub(crate) fn fs_create_dir_all_host(path: &str) -> i32 {
         );
         return FS_ERR_BAD_PATH;
     };
-    if path.len() > QJS_ASYNC_FS_MAX_PATH {
+    if path.len() > BLUEPRINT_ASYNC_FS_MAX_PATH {
         log_fs_cabi_path_fail(
             "create_dir_all",
             raw,
@@ -684,7 +684,7 @@ fn wait_for_guest_create_dir_all(path: &str) -> i32 {
 }
 
 pub(crate) fn fs_exists_host(path: &str) -> i32 {
-    if path.len() > QJS_ASYNC_FS_MAX_PATH {
+    if path.len() > BLUEPRINT_ASYNC_FS_MAX_PATH {
         log_fs_cabi_path_fail("exists", path, None, "reason=raw-path-too-large", FS_ERR_TOO_LARGE);
         return FS_ERR_TOO_LARGE;
     }
@@ -693,7 +693,7 @@ pub(crate) fn fs_exists_host(path: &str) -> i32 {
         log_fs_cabi_path_fail("exists", raw, None, "reason=resolve-failed", FS_ERR_BAD_PATH);
         return FS_ERR_BAD_PATH;
     };
-    if path.len() > QJS_ASYNC_FS_MAX_PATH {
+    if path.len() > BLUEPRINT_ASYNC_FS_MAX_PATH {
         log_fs_cabi_path_fail(
             "exists",
             raw,
@@ -715,7 +715,7 @@ pub(crate) fn fs_exists_host(path: &str) -> i32 {
 }
 
 pub(crate) fn fs_stat_host(path: &str, out_kind: &mut u32, out_len: &mut u64) -> i32 {
-    if path.len() > QJS_ASYNC_FS_MAX_PATH {
+    if path.len() > BLUEPRINT_ASYNC_FS_MAX_PATH {
         log_fs_cabi_path_fail("stat", path, None, "reason=raw-path-too-large", FS_ERR_TOO_LARGE);
         return FS_ERR_TOO_LARGE;
     }
@@ -724,7 +724,7 @@ pub(crate) fn fs_stat_host(path: &str, out_kind: &mut u32, out_len: &mut u64) ->
         log_fs_cabi_path_fail("stat", raw, None, "reason=resolve-failed", FS_ERR_BAD_PATH);
         return FS_ERR_BAD_PATH;
     };
-    if path.len() > QJS_ASYNC_FS_MAX_PATH {
+    if path.len() > BLUEPRINT_ASYNC_FS_MAX_PATH {
         log_fs_cabi_path_fail(
             "stat",
             raw,
@@ -760,7 +760,7 @@ pub(crate) fn fs_stat_host(path: &str, out_kind: &mut u32, out_len: &mut u64) ->
 }
 
 pub(crate) fn fs_list_dir_host_text(path: &str) -> core::result::Result<String, i32> {
-    if path.len() > QJS_ASYNC_FS_MAX_PATH {
+    if path.len() > BLUEPRINT_ASYNC_FS_MAX_PATH {
         log_fs_cabi_path_fail(
             "list_dir",
             path,
@@ -775,7 +775,7 @@ pub(crate) fn fs_list_dir_host_text(path: &str) -> core::result::Result<String, 
         log_fs_cabi_path_fail("list_dir", raw, None, "reason=resolve-failed", FS_ERR_BAD_PATH);
         return Err(FS_ERR_BAD_PATH);
     };
-    if path.len() > QJS_ASYNC_FS_MAX_PATH {
+    if path.len() > BLUEPRINT_ASYNC_FS_MAX_PATH {
         log_fs_cabi_path_fail(
             "list_dir",
             raw,
@@ -803,7 +803,7 @@ pub(crate) fn fs_list_dir_host(path: &str, out_ptr: *mut u8, out_cap: usize) -> 
 }
 
 pub(crate) fn fs_remove_host(path: &str) -> i32 {
-    if path.len() > QJS_ASYNC_FS_MAX_PATH {
+    if path.len() > BLUEPRINT_ASYNC_FS_MAX_PATH {
         log_fs_cabi_path_fail("remove", path, None, "reason=raw-path-too-large", FS_ERR_TOO_LARGE);
         return FS_ERR_TOO_LARGE;
     }
@@ -812,7 +812,7 @@ pub(crate) fn fs_remove_host(path: &str) -> i32 {
         log_fs_cabi_path_fail("remove", raw, None, "reason=resolve-failed", FS_ERR_BAD_PATH);
         return FS_ERR_BAD_PATH;
     };
-    if path.len() > QJS_ASYNC_FS_MAX_PATH {
+    if path.len() > BLUEPRINT_ASYNC_FS_MAX_PATH {
         log_fs_cabi_path_fail(
             "remove",
             raw,
@@ -1046,7 +1046,7 @@ fn guest_resolved_fs_path(path: &str, allow_empty: bool) -> Result<String, i32> 
     let Some(path) = super::env::resolve_fs_path(path, allow_empty) else {
         return Err(FS_ERR_BAD_PATH);
     };
-    if path.len() > QJS_ASYNC_FS_MAX_PATH {
+    if path.len() > BLUEPRINT_ASYNC_FS_MAX_PATH {
         return Err(FS_ERR_TOO_LARGE);
     }
     Ok(path)
@@ -1064,7 +1064,7 @@ pub unsafe extern "C" fn trueos_cabi_fs_read_file(
     if path_ptr.is_null() && path_len != 0 {
         return FS_ERR_BAD_PARAM as isize;
     }
-    if path_len > QJS_ASYNC_FS_MAX_PATH {
+    if path_len > BLUEPRINT_ASYNC_FS_MAX_PATH {
         return FS_ERR_TOO_LARGE as isize;
     }
     let path_bytes = unsafe { core::slice::from_raw_parts(path_ptr, path_len) };
@@ -1105,7 +1105,7 @@ pub unsafe extern "C" fn trueos_cabi_fs_write_begin(
     if out_handle.is_null() || (path_ptr.is_null() && path_len != 0) {
         return FS_ERR_BAD_PARAM;
     }
-    if path_len > QJS_ASYNC_FS_MAX_PATH {
+    if path_len > BLUEPRINT_ASYNC_FS_MAX_PATH {
         return FS_ERR_TOO_LARGE;
     }
     let path_bytes = unsafe { core::slice::from_raw_parts(path_ptr, path_len) };
@@ -1137,7 +1137,7 @@ pub unsafe extern "C" fn trueos_cabi_fs_create_dir_all(
     if path_ptr.is_null() && path_len != 0 {
         return FS_ERR_BAD_PARAM;
     }
-    if path_len > QJS_ASYNC_FS_MAX_PATH {
+    if path_len > BLUEPRINT_ASYNC_FS_MAX_PATH {
         return FS_ERR_TOO_LARGE;
     }
     let path_bytes = unsafe { core::slice::from_raw_parts(path_ptr, path_len) };
@@ -1203,7 +1203,7 @@ pub unsafe extern "C" fn trueos_cabi_fs_exists(path_ptr: *const u8, path_len: us
     if path_ptr.is_null() && path_len != 0 {
         return FS_ERR_BAD_PARAM;
     }
-    if path_len > QJS_ASYNC_FS_MAX_PATH {
+    if path_len > BLUEPRINT_ASYNC_FS_MAX_PATH {
         return FS_ERR_TOO_LARGE;
     }
     let path_bytes = unsafe { core::slice::from_raw_parts(path_ptr, path_len) };
@@ -1230,7 +1230,7 @@ pub unsafe extern "C" fn trueos_cabi_fs_stat(
     if out_kind.is_null() || out_len.is_null() || (path_ptr.is_null() && path_len != 0) {
         return FS_ERR_BAD_PARAM;
     }
-    if path_len > QJS_ASYNC_FS_MAX_PATH {
+    if path_len > BLUEPRINT_ASYNC_FS_MAX_PATH {
         return FS_ERR_TOO_LARGE;
     }
     let path_bytes = unsafe { core::slice::from_raw_parts(path_ptr, path_len) };
@@ -1257,7 +1257,7 @@ pub unsafe extern "C" fn trueos_cabi_fs_list_dir(
     if path_ptr.is_null() && path_len != 0 {
         return FS_ERR_BAD_PARAM as isize;
     }
-    if path_len > QJS_ASYNC_FS_MAX_PATH {
+    if path_len > BLUEPRINT_ASYNC_FS_MAX_PATH {
         return FS_ERR_TOO_LARGE as isize;
     }
     let path_bytes = unsafe { core::slice::from_raw_parts(path_ptr, path_len) };
@@ -1279,7 +1279,7 @@ pub unsafe extern "C" fn trueos_cabi_fs_remove(path_ptr: *const u8, path_len: us
     if path_ptr.is_null() && path_len != 0 {
         return FS_ERR_BAD_PARAM;
     }
-    if path_len > QJS_ASYNC_FS_MAX_PATH {
+    if path_len > BLUEPRINT_ASYNC_FS_MAX_PATH {
         return FS_ERR_TOO_LARGE;
     }
     let path_bytes = unsafe { core::slice::from_raw_parts(path_ptr, path_len) };
