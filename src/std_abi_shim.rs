@@ -2980,29 +2980,6 @@ pub(crate) fn socket_poll_events(fd: c_int, events: i16) -> Option<i16> {
     if ready & (crate::mio_compat::READY_READ_CLOSED | crate::mio_compat::READY_WRITE_CLOSED) != 0 {
         revents |= POLLHUP;
     }
-    static PROBE_COUNT: AtomicUsize = AtomicUsize::new(0);
-    static READY_COUNT: AtomicUsize = AtomicUsize::new(0);
-    let probe_count = PROBE_COUNT.fetch_add(1, Ordering::Relaxed);
-    let ready_count = if revents != 0 {
-        Some(READY_COUNT.fetch_add(1, Ordering::Relaxed))
-    } else {
-        None
-    };
-    if probe_count < 8
-        || probe_count.is_power_of_two()
-        || ready_count.is_some_and(|count| count < 32)
-    {
-        crate::hv::hvlogf(format_args!(
-            "std-abi socket-poll fd={} backend={} events=0x{:04x} ready=0x{:02x} revents=0x{:04x} probe={} ready_probe={}",
-            fd,
-            backend,
-            events as u16,
-            ready,
-            revents as u16,
-            probe_count,
-            ready_count.map(|count| count as i64).unwrap_or(-1),
-        ));
-    }
     Some(revents)
 }
 
@@ -3605,20 +3582,6 @@ pub unsafe extern "C" fn send(
     } else {
         posix_rc_isize(raw)
     };
-    static SEND_COUNT: AtomicUsize = AtomicUsize::new(0);
-    let count = SEND_COUNT.fetch_add(1, Ordering::Relaxed);
-    if count < 32 || count.is_power_of_two() {
-        crate::hv::hvlogf(format_args!(
-            "std-abi socket-send fd={} backend={} requested={} raw={} result={} errno={} count={}",
-            socket_id,
-            backend,
-            len,
-            raw,
-            result,
-            TRUEOS_ERRNO.load(Ordering::Relaxed),
-            count
-        ));
-    }
     result
 }
 
@@ -3726,20 +3689,6 @@ pub unsafe extern "C" fn recv(
     } else {
         posix_rc_isize(raw)
     };
-    static RECV_COUNT: AtomicUsize = AtomicUsize::new(0);
-    let count = RECV_COUNT.fetch_add(1, Ordering::Relaxed);
-    if count < 32 || count.is_power_of_two() {
-        crate::hv::hvlogf(format_args!(
-            "std-abi socket-recv fd={} backend={} requested={} raw={} result={} errno={} count={}",
-            socket_id,
-            backend,
-            len,
-            raw,
-            result,
-            TRUEOS_ERRNO.load(Ordering::Relaxed),
-            count
-        ));
-    }
     result
 }
 

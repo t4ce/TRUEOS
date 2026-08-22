@@ -5342,14 +5342,15 @@ pub async fn net_poll_task(index: usize) {
     async move {
         const TRACE_EARLY_LOOPS: u64 = 16;
         const TRACE_EVERY_LOOPS: u64 = 10_000;
-        const STALL_WARN_MS: u64 = 10;
+        // Millisecond timers can legitimately wake a few ticks late under
+        // load. Reserve warnings for delays large enough to threaten network
+        // progress instead of reporting ordinary 10-13 ms scheduler jitter.
+        const STALL_WARN_MS: u64 = 100;
 
         let mut loop_count = 0u64;
-        let mut previous_loop_started_ms = trueos_time::Instant::now().as_millis();
         loop {
             loop_count = loop_count.saturating_add(1);
             let loop_started_ms = trueos_time::Instant::now().as_millis();
-            let loop_gap_ms = loop_started_ms.saturating_sub(previous_loop_started_ms);
 
             let poll_started_ms = trueos_time::Instant::now().as_millis();
             let busy = crate::net::poll_at(index);
@@ -5362,26 +5363,13 @@ pub async fn net_poll_task(index: usize) {
             if trace_loop {
                 crate::log_trace!(
                     target: "net";
-                    "net-poll-task: loop dev={} n={} loop_start_ms={} gap_ms={} poll_ms={} busy={} next_sleep_us={}\n",
+                    "net-poll-task: loop dev={} n={} loop_start_ms={} poll_ms={} busy={} next_sleep_us={}\n",
                     index,
                     loop_count,
                     loop_started_ms,
-                    loop_gap_ms,
                     poll_elapsed_ms,
                     busy as u8,
                     requested_sleep_us
-                );
-            }
-            if loop_gap_ms >= STALL_WARN_MS {
-                crate::log_warn!(
-                    target: "net";
-                    "net-poll-task: LOOP WAKE STALL dev={} n={} gap_ms={} loop_start_ms={} poll_ms={} busy={}\n",
-                    index,
-                    loop_count,
-                    loop_gap_ms,
-                    loop_started_ms,
-                    poll_elapsed_ms,
-                    busy as u8
                 );
             }
             if poll_elapsed_ms >= STALL_WARN_MS {
@@ -5425,8 +5413,6 @@ pub async fn net_poll_task(index: usize) {
                     await_finished_ms
                 );
             }
-
-            previous_loop_started_ms = loop_started_ms;
         }
     }
     .await;

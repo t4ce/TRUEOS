@@ -222,11 +222,8 @@ fn compat_addr_is_ipv4_loopback(addr: CompatAddr) -> bool {
     )
 }
 
-fn probe_tcp_socket(socket: &MioSocketState) -> bool {
-    socket.kind == MioSocketKind::TcpStream
-        && (crate::log_os::flags::NET_LOG_TCP_FLOW
-            || matches!(compat_addr_port(socket.local), Some(4 | 5))
-            || matches!(compat_addr_port(socket.peer), Some(80 | 443 | 4242 | 4965 | 7822)))
+fn tcp_flow_logging_enabled(socket: &MioSocketState) -> bool {
+    crate::log_os::flags::NET_LOG_TCP_FLOW && socket.kind == MioSocketKind::TcpStream
 }
 
 fn should_log_selector_probe(readiness: u8) -> bool {
@@ -1081,7 +1078,7 @@ impl MioCompat {
                             data_len,
                             queued_before
                         );
-                    } else if log_queue && probe_tcp_socket(socket) {
+                    } else if log_queue && tcp_flow_logging_enabled(socket) {
                         crate::log!(
                             "mio_compat: tcp data socket={} handle={} bytes={} queued_before={}\n",
                             socket.id,
@@ -1091,7 +1088,7 @@ impl MioCompat {
                         );
                     }
                     socket.rx_stream.extend(data.as_slice().iter().copied());
-                    if log_queue && probe_tcp_socket(socket) {
+                    if log_queue && tcp_flow_logging_enabled(socket) {
                         crate::log!(
                             "mio_compat: tcp data queued socket={} handle={} queued_after={}\n",
                             socket.id,
@@ -1188,10 +1185,7 @@ impl MioCompat {
                 if want_read && (!socket.rx_stream.is_empty() || socket.closed) {
                     ready |= READY_READABLE;
                 }
-                if want_write
-                    && socket.connected
-                    && socket.tx_in_flight < MIO_TCP_TX_WINDOW_BYTES
-                {
+                if want_write && socket.connected && socket.tx_in_flight < MIO_TCP_TX_WINDOW_BYTES {
                     ready |= READY_WRITABLE;
                 }
                 if socket.closed {
@@ -1247,7 +1241,7 @@ impl MioCompat {
                     continue;
                 }
 
-                if probe_tcp_socket(socket) && should_log_selector_probe(readiness) {
+                if tcp_flow_logging_enabled(socket) && should_log_selector_probe(readiness) {
                     crate::log!(
                         "mio_compat: tcp selector-ready selector={} socket={} token={} interests=0x{:02x} readiness=0x{:02x} rx={} closed={}\n",
                         selector_id,
@@ -1872,7 +1866,7 @@ pub(crate) unsafe fn mio_socket_take_error_host(socket_id: u32) -> i32 {
             return STATUS_NOT_FOUND;
         };
         let status = socket.error;
-        if probe_tcp_socket(socket) {
+        if tcp_flow_logging_enabled(socket) {
             crate::log!(
                 "mio_compat: take_error socket={} owner={} status={}\n",
                 socket.id,
@@ -1920,7 +1914,7 @@ pub(crate) unsafe fn mio_tcp_stream_read_host(
             return STATUS_INVALID_INPUT as isize;
         }
         if socket.rx_stream.is_empty() {
-            if probe_tcp_socket(socket) && should_log_tcp_read_would_block() {
+            if tcp_flow_logging_enabled(socket) && should_log_tcp_read_would_block() {
                 crate::log!(
                     "mio_compat: tcp read would-block socket={} cap={} closed={}\n",
                     socket.id,
@@ -1943,7 +1937,7 @@ pub(crate) unsafe fn mio_tcp_stream_read_host(
                     .write(socket.rx_stream.pop_front().unwrap());
             }
         }
-        if probe_tcp_socket(socket) {
+        if tcp_flow_logging_enabled(socket) {
             crate::log!(
                 "mio_compat: tcp read socket={} bytes={} remaining={}\n",
                 socket.id,
@@ -2119,7 +2113,7 @@ pub(crate) unsafe fn mio_tcp_stream_write_host(
             return STATUS_WOULD_BLOCK as isize;
         }
         let len = data_len.min(api::MAX_MSG).min(available);
-        if probe_tcp_socket(socket) {
+        if tcp_flow_logging_enabled(socket) {
             crate::log!(
                 "mio_compat: tcp write socket={} handle={} bytes={} requested={}\n",
                 socket.id,

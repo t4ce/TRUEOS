@@ -35,7 +35,6 @@ const TX_DOORBELL_DEBUG_FIRST: u64 = 16;
 const RX_TRACE_EARLY_POLLS: u64 = 8;
 const RX_TRACE_POLL_EVERY: u64 = 10_000;
 const RX_TRACE_EARLY_FRAMES: u64 = 8;
-const MAC_TRACE_POLL_EVERY: u64 = 10_000;
 const DATAPATH_INTEGRITY_POLL_EVERY: u64 = 256;
 const EXP_R8125_FORCE_CPLUS_OFF: bool = false;
 // If DMA memory is mapped cacheable and the platform/device is not fully
@@ -401,8 +400,6 @@ pub struct R8125Adapter {
     dbg_kick_readbacks: u64,
     dbg_doorbells: u64,
     dbg_tx_quarantined: bool,
-    dbg_mac_checks: u64,
-    dbg_mac_changes: u64,
     dbg_datapath_recoveries: u64,
 
     dbg_tx_link_down_drops: u64,
@@ -741,34 +738,6 @@ impl R8125Adapter {
             self.tx_tail,
             self.dbg_rx_ok
         );
-    }
-
-    fn trace_mac_integrity(&mut self, reason: &str, force_log: bool) {
-        self.dbg_mac_checks = self.dbg_mac_checks.saturating_add(1);
-        let hw_mac = unsafe { Self::read_hw_mac(&self.mmio) };
-        if hw_mac != self.mac || Self::mac_is_invalid(hw_mac) {
-            self.dbg_mac_changes = self.dbg_mac_changes.saturating_add(1);
-            crate::log_warn!(
-                target: "net";
-                "net/r8125: MAC INTEGRITY VIOLATION reason={} poll={} checks={} changes={} expected={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} hardware={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} invalid={}\n",
-                reason,
-                self.dbg_poll_ticks,
-                self.dbg_mac_checks,
-                self.dbg_mac_changes,
-                self.mac[0], self.mac[1], self.mac[2], self.mac[3], self.mac[4], self.mac[5],
-                hw_mac[0], hw_mac[1], hw_mac[2], hw_mac[3], hw_mac[4], hw_mac[5],
-                Self::mac_is_invalid(hw_mac) as u8
-            );
-        } else if force_log {
-            crate::log_trace!(
-                target: "net";
-                "net/r8125: mac-integrity reason={} poll={} checks={} mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
-                reason,
-                self.dbg_poll_ticks,
-                self.dbg_mac_checks,
-                hw_mac[0], hw_mac[1], hw_mac[2], hw_mac[3], hw_mac[4], hw_mac[5]
-            );
-        }
     }
 
     /// Repair the complete driver-owned datapath after the controller loses
@@ -1545,8 +1514,6 @@ impl R8125Adapter {
             dbg_kick_readbacks: 0,
             dbg_doorbells: 0,
             dbg_tx_quarantined: false,
-            dbg_mac_checks: 0,
-            dbg_mac_changes: 0,
             dbg_datapath_recoveries: 0,
 
             dbg_tx_link_down_drops: 0,
@@ -1755,13 +1722,13 @@ impl R8125Adapter {
 
         let trace_poll = self.dbg_poll_ticks <= RX_TRACE_EARLY_POLLS
             || self.dbg_poll_ticks.is_multiple_of(RX_TRACE_POLL_EVERY);
-        if self.dbg_poll_ticks <= RX_TRACE_EARLY_POLLS
-            || self.dbg_poll_ticks.is_multiple_of(MAC_TRACE_POLL_EVERY)
-        {
-            self.trace_mac_integrity("poll", trace_poll);
-        }
 
         let early_isr = unsafe { self.mmio.read_u32(REG_INTR_STATUS_8125) };
+        // RxDescUnavail was the first hardware signal in the observed RDSAR
+        // loss. Validate immediately instead of waiting for the periodic audit.
+        if (early_isr & ISR_RX_DESC_UNAVAILABLE) != 0 {
+            self.recover_datapath_if_needed("rx-desc-unavailable");
+        }
         if trace_poll {
             self.log_poll_snapshot("poll-entry", early_isr);
         }
