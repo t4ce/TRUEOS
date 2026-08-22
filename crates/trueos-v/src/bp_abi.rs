@@ -1018,6 +1018,12 @@ unsafe extern "C" {
         draw: *const crate::vgpu::IndexedDraw,
         out_point: *mut crate::vgpu::TimelinePoint,
     ) -> i32;
+    pub fn trueos_cabi_vgpu_ui4_indexed_batch_submit(
+        device: u64,
+        queue: u64,
+        batch: *const crate::vgpu::IndexedDrawBatch,
+        out_point: *mut crate::vgpu::TimelinePoint,
+    ) -> i32;
     pub fn trueos_cabi_vgpu_vvideo_create(
         device: u64,
         guest_va: u64,

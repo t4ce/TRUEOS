@@ -138,6 +138,7 @@ pub const OP_BP_CHILD_SEND_V1: u32 = 0x13D; // arg0 handle, payload message -> b
 pub const OP_BP_CHILD_RECEIVE_V1: u32 = 0x13E; // arg0 handle -> one queued message
 pub const OP_BP_CHILD_STATUS_V1: u32 = 0x13F; // arg0 handle -> lifecycle state/rc
 pub const OP_BP_CHILD_TERMINATE_V1: u32 = 0x140; // arg0 child handle -> rc
+pub const OP_BP_VGPU_UI4_INDEXED_BATCH_SUBMIT: u32 = 0x141; // arg0 device,arg1 queue,payload IndexedDrawBatch -> TimelinePoint
 pub const OP_BP_UI4_SCENE_KEYBOARD_STATE: u32 = 0xDB; // arg0 window -> rc + focused held-key state
 pub const OP_BP_UI4_SCENE_FRAME_OPEN_IMMUTABLE: u32 = 0xDC; // arg0 x/y,arg1 width/height -> window
 pub const OP_BP_UI4_SCENE_SPRITE_UPLOAD_BEGIN: u32 = 0xDD; // arg0 window,arg1 sprite,payload width/height -> rc
@@ -1345,6 +1346,26 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 });
             let result = draw.ok_or(-22).and_then(|draw| {
                 crate::r::io::vgpu_cabi::broker_ui4_indexed_submit(principal, arg0, arg1, draw)
+            });
+            match result {
+                Ok(point) => write_record_response(vm_id, seq, 0, &point),
+                Err(rc) => write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0),
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_VGPU_UI4_INDEXED_BATCH_SUBMIT => {
+            let principal = crate::gpu::vgpu::Principal::HullGuest(vm_id as u16);
+            let batch = request_payload(vm_id, req_len)
+                .filter(|payload| {
+                    payload.len() == core::mem::size_of::<v::vgpu::IndexedDrawBatch>()
+                })
+                .map(|payload| unsafe {
+                    core::ptr::read_unaligned(payload.as_ptr().cast::<v::vgpu::IndexedDrawBatch>())
+                });
+            let result = batch.ok_or(-22).and_then(|batch| {
+                crate::r::io::vgpu_cabi::broker_ui4_indexed_batch_submit(
+                    principal, arg0, arg1, batch,
+                )
             });
             match result {
                 Ok(point) => write_record_response(vm_id, seq, 0, &point),

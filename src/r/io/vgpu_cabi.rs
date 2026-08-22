@@ -285,6 +285,59 @@ pub(crate) fn broker_ui4_indexed_submit(
     })
 }
 
+pub(crate) fn broker_ui4_indexed_batch_submit(
+    principal: Principal,
+    device: u64,
+    queue: u64,
+    batch: v::vgpu::IndexedDrawBatch,
+) -> Result<v::vgpu::TimelinePoint, i32> {
+    let draw_count = usize::try_from(batch.draw_count).map_err(|_| -22)?;
+    if draw_count == 0
+        || draw_count > v::vgpu::MAX_INDEXED_BATCH_DRAWS
+        || batch.draws[draw_count..]
+            .iter()
+            .any(|draw| *draw != v::vgpu::IndexedBatchDraw::default())
+    {
+        return Err(-22);
+    }
+    let owner = ui4_owner(principal)?;
+    let draws = batch.draws[..draw_count]
+        .iter()
+        .map(|draw| vgpu::Ui4IndexedBatchDrawDescriptor {
+            index_count: draw.index_count,
+            first_index: draw.first_index,
+            base_vertex: draw.base_vertex,
+            rgba8_srgb: draw.rgba8_srgb,
+        })
+        .collect();
+    let completed = vgpu::submit_ui4_indexed_batch(
+        principal,
+        DeviceHandle::from_raw(device),
+        QueueHandle::from_raw(queue),
+        vgpu::Ui4IndexedBatchDescriptor {
+            surface: SurfaceHandle::from_raw(batch.surface),
+            pipeline: RenderPipelineHandle::from_raw(batch.pipeline),
+            vertex_buffer: BufferHandle::from_raw(batch.vertex_buffer),
+            index_buffer: BufferHandle::from_raw(batch.index_buffer),
+            vertex_offset: usize::try_from(batch.vertex_offset).map_err(|_| -22)?,
+            index_offset: usize::try_from(batch.index_offset).map_err(|_| -22)?,
+            clear_rgba8_srgb: batch.clear_rgba8_srgb,
+            draws,
+        },
+    )
+    .map_err(|error| error.errno())?;
+    crate::ui4::blueprint_text::complete_vgpu_resident_surface_submission(
+        owner,
+        completed.window_id,
+        completed.surface.handle.raw(),
+        completed.release,
+    )?;
+    Ok(v::vgpu::TimelinePoint {
+        value: completed.point.value,
+        physical_serial: completed.point.physical_serial,
+    })
+}
+
 pub(crate) fn broker_buffer_destroy(principal: Principal, device: u64, buffer: u64) -> i32 {
     vgpu::destroy_buffer(principal, DeviceHandle::from_raw(device), BufferHandle::from_raw(buffer))
         .map(|()| 0)
@@ -764,6 +817,42 @@ pub unsafe extern "C" fn trueos_cabi_vgpu_ui4_indexed_submit(
         guest_record(trueos_vm::vmcall::OP_BP_VGPU_UI4_INDEXED_SUBMIT, device, queue, payload)
     } else {
         broker_ui4_indexed_submit(direct_principal(), device, queue, draw)
+    };
+    match result {
+        Ok(point) => {
+            unsafe { out_point.write(point) };
+            0
+        }
+        Err(rc) => rc,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_vgpu_ui4_indexed_batch_submit(
+    device: u64,
+    queue: u64,
+    batch: *const v::vgpu::IndexedDrawBatch,
+    out_point: *mut v::vgpu::TimelinePoint,
+) -> i32 {
+    if batch.is_null() || out_point.is_null() {
+        return -14;
+    }
+    let batch = unsafe { batch.read() };
+    let payload = unsafe {
+        core::slice::from_raw_parts(
+            (&batch as *const v::vgpu::IndexedDrawBatch).cast::<u8>(),
+            core::mem::size_of::<v::vgpu::IndexedDrawBatch>(),
+        )
+    };
+    let result = if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        guest_record(
+            trueos_vm::vmcall::OP_BP_VGPU_UI4_INDEXED_BATCH_SUBMIT,
+            device,
+            queue,
+            payload,
+        )
+    } else {
+        broker_ui4_indexed_batch_submit(direct_principal(), device, queue, batch)
     };
     match result {
         Ok(point) => {

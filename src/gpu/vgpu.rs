@@ -41,9 +41,12 @@ pub(crate) const SAMPLER_ADDRESS_U_REPEAT: u32 = 1 << 0;
 pub(crate) const SAMPLER_ADDRESS_V_REPEAT: u32 = 1 << 1;
 
 pub(crate) const SHADER_PACKAGE_CLIP_POSITION3_RGBA_FNV1A64: u64 = 0x1438_5963_136A_A36F;
+pub(crate) const SHADER_PACKAGE_CLIP_POSITION3_IMMEDIATE_RGBA_FNV1A64: u64 =
+    0x4A7C_D238_6AA5_C232;
 pub(crate) const SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64: u64 = 0xD2A3_B942_FA09_24B6;
 pub(crate) const SHADER_PACKAGE_CLIP_POSITION3_UV_TEXEL_LOAD_FNV1A64: u64 = 0x0CFE_4DDB_C885_8871;
 const SHADER_PACKAGE_CLIP_POSITION3_RGBA_COLOR: u32 = u32::from_le_bytes([118, 221, 153, 255]);
+pub(crate) const MAX_INDEXED_BATCH_DRAWS: usize = 16;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Capabilities(u64);
@@ -1660,6 +1663,7 @@ pub(crate) fn create_shader_module(
     package_digest: u64,
 ) -> Result<ShaderModuleHandle, VgpuError> {
     if package_digest != SHADER_PACKAGE_CLIP_POSITION3_RGBA_FNV1A64
+        && package_digest != SHADER_PACKAGE_CLIP_POSITION3_IMMEDIATE_RGBA_FNV1A64
         && package_digest != SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64
         && package_digest != SHADER_PACKAGE_CLIP_POSITION3_UV_TEXEL_LOAD_FNV1A64
     {
@@ -1800,6 +1804,25 @@ pub(crate) struct Ui4IndexedDrawDescriptor {
     pub(crate) texture_height: u32,
     pub(crate) texture_pitch: u32,
     pub(crate) sampler_flags: u32,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Ui4IndexedBatchDrawDescriptor {
+    pub(crate) index_count: u32,
+    pub(crate) first_index: u32,
+    pub(crate) base_vertex: i32,
+    pub(crate) rgba8_srgb: u32,
+}
+
+pub(crate) struct Ui4IndexedBatchDescriptor {
+    pub(crate) surface: SurfaceHandle,
+    pub(crate) pipeline: RenderPipelineHandle,
+    pub(crate) vertex_buffer: BufferHandle,
+    pub(crate) index_buffer: BufferHandle,
+    pub(crate) vertex_offset: usize,
+    pub(crate) index_offset: usize,
+    pub(crate) clear_rgba8_srgb: u32,
+    pub(crate) draws: Vec<Ui4IndexedBatchDrawDescriptor>,
 }
 
 pub(crate) struct Ui4SurfaceIndexedCompletion {
@@ -2240,6 +2263,319 @@ pub(crate) fn submit_ui4_indexed_draw(
         window_id,
         surface: SurfaceInfo {
             handle: draw.surface,
+            bytes,
+            width,
+            height,
+            pitch,
+        },
+        release,
+        point,
+    })
+}
+
+/// Resolve repeated WGPU `draw_indexed` calls from one render pass into the
+/// resident renderer's already-batched scene path. Material meaning remains in
+/// the client; the broker sees only authenticated immediate RGBA bytes and
+/// bounded index ranges sharing one ordinary vertex/index binding.
+pub(crate) fn submit_ui4_indexed_batch(
+    principal: Principal,
+    device_handle: DeviceHandle,
+    queue_handle: QueueHandle,
+    batch: Ui4IndexedBatchDescriptor,
+) -> Result<Ui4SurfaceIndexedCompletion, VgpuError> {
+    if batch.draws.is_empty()
+        || batch.draws.len() > MAX_INDEXED_BATCH_DRAWS
+        || batch
+            .draws
+            .iter()
+            .any(|draw| draw.index_count == 0 || draw.base_vertex != 0)
+    {
+        return Err(VgpuError::Unsupported);
+    }
+    let (window_id, phys, producer_gpu, bytes, width, height, pitch, vertices, mut indexed) = {
+        let mut broker = BROKER.lock();
+        let device = lookup_device_mut(&mut broker, device_handle, principal)?;
+        ensure_live(device)?;
+        if !device.capabilities.contains(Capabilities::RENDER)
+            || !device.capabilities.contains(Capabilities::PRESENT)
+        {
+            return Err(VgpuError::PermissionDenied);
+        }
+        let pipeline = lookup_render_pipeline(device, batch.pipeline)?;
+        if pipeline.epoch != device.epoch
+            || pipeline.package_digest != SHADER_PACKAGE_CLIP_POSITION3_IMMEDIATE_RGBA_FNV1A64
+        {
+            return Err(VgpuError::InvalidHandle);
+        }
+        let vertex_stride = pipeline.vertex_stride as usize;
+        let position_offset = pipeline.position_offset as usize;
+        {
+            let queue = lookup_queue_mut(device, queue_handle)?;
+            if queue.class != QueueClass::Render || queue.in_flight != 0 {
+                return Err(VgpuError::Busy);
+            }
+            queue.in_flight = 1;
+        }
+        let surface_epoch = device.epoch;
+        let (window_id, phys, producer_gpu, bytes, width, height, pitch) = {
+            let surface = lookup_surface_mut(device, batch.surface)?;
+            if surface.epoch != surface_epoch || surface.in_flight != 1 {
+                lookup_queue_mut(device, queue_handle)?.in_flight = 0;
+                return Err(VgpuError::Busy);
+            }
+            surface.in_flight = 2;
+            (
+                surface.window_id,
+                surface.phys,
+                surface.producer_gpu,
+                surface.bytes,
+                surface.width,
+                surface.height,
+                surface.pitch,
+            )
+        };
+        let copied = (|| {
+            let index_record = lookup_buffer(device, batch.index_buffer)?;
+            if index_record.usage & BUFFER_USAGE_INDEX == 0 {
+                return Err(VgpuError::PermissionDenied);
+            }
+            let index_virt = match index_record.backing {
+                BufferBacking::Dma { virt, .. } => virt,
+                BufferBacking::GuestPages { .. } => return Err(VgpuError::Unsupported),
+            };
+            let mut indexed = Vec::with_capacity(batch.draws.len());
+            let mut vertex_count = 0usize;
+            for draw in &batch.draws {
+                let first_index_bytes = (draw.first_index as usize)
+                    .checked_mul(4)
+                    .ok_or(VgpuError::Unsupported)?;
+                let index_start = batch
+                    .index_offset
+                    .checked_add(first_index_bytes)
+                    .ok_or(VgpuError::Unsupported)?;
+                let index_bytes = (draw.index_count as usize)
+                    .checked_mul(4)
+                    .ok_or(VgpuError::Unsupported)?;
+                let index_end = index_start
+                    .checked_add(index_bytes)
+                    .ok_or(VgpuError::Unsupported)?;
+                if index_end > index_record.bytes {
+                    return Err(VgpuError::Unsupported);
+                }
+                crate::intel::dma_flush(unsafe { index_virt.add(index_start) }, index_bytes);
+                let raw_indices =
+                    unsafe { core::slice::from_raw_parts(index_virt.add(index_start), index_bytes) };
+                let mut indices = Vec::with_capacity(draw.index_count as usize);
+                for raw in raw_indices.chunks_exact(4) {
+                    let index = u32::from_le_bytes(raw.try_into().expect("four-byte index"));
+                    vertex_count = vertex_count.max(index as usize + 1);
+                    indices.push(index);
+                }
+                indexed.push((indices, draw.rgba8_srgb));
+            }
+            if vertex_count == 0 {
+                return Err(VgpuError::Unsupported);
+            }
+            let vertex_record = lookup_buffer(device, batch.vertex_buffer)?;
+            if vertex_record.usage & BUFFER_USAGE_VERTEX == 0 {
+                return Err(VgpuError::PermissionDenied);
+            }
+            let vertex_end = batch
+                .vertex_offset
+                .checked_add(
+                    vertex_count
+                        .checked_mul(vertex_stride)
+                        .ok_or(VgpuError::Unsupported)?,
+                )
+                .ok_or(VgpuError::Unsupported)?;
+            if vertex_end > vertex_record.bytes {
+                return Err(VgpuError::Unsupported);
+            }
+            let vertex_virt = match vertex_record.backing {
+                BufferBacking::Dma { virt, .. } => virt,
+                BufferBacking::GuestPages { .. } => return Err(VgpuError::Unsupported),
+            };
+            crate::intel::dma_flush(
+                unsafe { vertex_virt.add(batch.vertex_offset) },
+                vertex_end - batch.vertex_offset,
+            );
+            let mut vertices = Vec::with_capacity(vertex_count);
+            for vertex in 0..vertex_count {
+                let start = batch.vertex_offset + vertex * vertex_stride + position_offset;
+                let raw = unsafe { core::slice::from_raw_parts(vertex_virt.add(start), 12) };
+                vertices.push([
+                    f32::from_le_bytes(raw[0..4].try_into().unwrap()),
+                    f32::from_le_bytes(raw[4..8].try_into().unwrap()),
+                    f32::from_le_bytes(raw[8..12].try_into().unwrap()),
+                ]);
+            }
+            Ok((vertices, indexed))
+        })();
+        let (vertices, indexed) = match copied {
+            Ok(copied) => copied,
+            Err(error) => {
+                lookup_surface_mut(device, batch.surface)?.in_flight = 1;
+                lookup_queue_mut(device, queue_handle)?.in_flight = 0;
+                return Err(error);
+            }
+        };
+        (
+            window_id, phys, producer_gpu, bytes, width, height, pitch, vertices, indexed,
+        )
+    };
+
+    for (indices, _) in &mut indexed {
+        for triangle in indices.chunks_exact_mut(3) {
+            let a = vertices[triangle[0] as usize];
+            let b = vertices[triangle[1] as usize];
+            let c = vertices[triangle[2] as usize];
+            let area = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+            if area < 0.0 {
+                triangle.swap(1, 2);
+            }
+        }
+    }
+    let destination = match crate::intel::gpgpu::GpgpuRgba8Surface::new(
+        phys,
+        producer_gpu,
+        bytes,
+        width,
+        height,
+        pitch,
+    ) {
+        Some(destination) => destination,
+        None => {
+            rollback_indexed_submission_lease(principal, device_handle, queue_handle, batch.surface);
+            return Err(VgpuError::Unsupported);
+        }
+    };
+    let mut meshes = Vec::with_capacity(indexed.len());
+    for (indices, _) in &indexed {
+        match crate::intel::render::create_resident_triangle_mesh(&vertices, indices) {
+            Ok(mesh) => meshes.push(mesh),
+            Err(_) => {
+                for mesh in &meshes {
+                    let _ = crate::intel::render::release_resident_triangle_mesh(mesh);
+                }
+                rollback_indexed_submission_lease(
+                    principal,
+                    device_handle,
+                    queue_handle,
+                    batch.surface,
+                );
+                return Err(VgpuError::OutOfMemory);
+            }
+        }
+    }
+    let scene_draws: Vec<_> = meshes
+        .iter()
+        .zip(indexed.iter())
+        .map(|(mesh, (_, rgba))| crate::intel::render::ResidentSceneDraw {
+            mesh,
+            rgba: rgba.to_le_bytes(),
+            sampled_texture: None,
+            fragment_contract: crate::intel::render::ResidentSceneFragmentContract::ConstantRgba,
+            viewport_translation_px: [0.0, 0.0],
+        })
+        .collect();
+    let rendered = crate::intel::render::render_resident_triangle_scene_frame_premultiplied_with_opaque_depth_direct_to_surface(
+        &scene_draws,
+        Some(batch.clear_rgba8_srgb.to_le_bytes()),
+        destination,
+        false,
+    );
+    let mut released_resources = true;
+    if rendered.is_ok() || matches!(rendered, Err("render-busy")) {
+        for mesh in &meshes {
+            released_resources &= crate::intel::render::release_resident_triangle_mesh(mesh);
+        }
+    } else {
+        released_resources = false;
+    }
+    if matches!(rendered, Err("render-busy")) && released_resources {
+        rollback_indexed_submission_lease(principal, device_handle, queue_handle, batch.surface);
+        return Err(VgpuError::Busy);
+    }
+    let expected_draws = batch.draws.len();
+    let release = rendered
+        .ok()
+        .and_then(|result| {
+            (result.completed_draws == expected_draws
+                && result.requested_draws == expected_draws
+                && !result.present_copy_performed)
+                .then_some(result.release_fence)
+                .flatten()
+        })
+        .filter(|release| release.matches(phys, bytes));
+    let Some(release) = release.filter(|_| released_resources) else {
+        let mut broker = BROKER.lock();
+        if let Ok(device) = lookup_device_mut(&mut broker, device_handle, principal) {
+            device.lost = true;
+            if let Ok(queue) = lookup_queue_mut(device, queue_handle) {
+                queue.in_flight = 0;
+                queue.timeline.failures = queue.timeline.failures.saturating_add(1);
+            }
+            if let Ok(surface) = lookup_surface_mut(device, batch.surface) {
+                surface.in_flight = 3;
+            }
+        }
+        return Err(VgpuError::DeviceLost);
+    };
+
+    let physical = require_physical()?;
+    let mut broker = BROKER.lock();
+    let device = lookup_device_mut(&mut broker, device_handle, principal)?;
+    ensure_live(device)?;
+    let vm = match device.gpuvm {
+        GpuVmBinding::Owned(vm) => vm,
+        GpuVmBinding::Borrowed { .. } => return Err(VgpuError::Unsupported),
+    };
+    let (slot, generation) = decode_handle(batch.surface.raw())?;
+    let surface_slot = device
+        .surfaces
+        .get_mut(slot)
+        .ok_or(VgpuError::InvalidHandle)?;
+    if surface_slot.generation != generation
+        || surface_slot
+            .record
+            .as_ref()
+            .is_none_or(|record| record.in_flight != 2)
+    {
+        return Err(VgpuError::DeviceLost);
+    }
+    let guest_gpu = surface_slot.record.as_ref().expect("validated surface").gpu;
+    physical.unmap_gpuvm(vm, guest_gpu, bytes)?;
+    let record = surface_slot.record.take().expect("validated surface");
+    device.memory_used = device.memory_used.saturating_sub(record.bytes);
+    let queue = lookup_queue_mut(device, queue_handle)?;
+    queue.in_flight = 0;
+    queue.timeline.submitted = queue.timeline.submitted.wrapping_add(1).max(1);
+    queue.timeline.completed = queue.timeline.submitted;
+    queue.timeline.last_physical_serial = release.sequence();
+    let point = TimelinePoint {
+        queue: queue_handle,
+        value: queue.timeline.submitted,
+        physical_serial: release.sequence(),
+        physical_publish_sequence: release.sequence(),
+    };
+    crate::log_info!(target: "vgpu";
+        "vgpu: indexed UI4 batch retired principal={:?} shader_package=fnv1a64:{:016X} pipeline={} vertex_buffer={} index_buffer={} draws={} indices={} target={}x{} timeline={} render_release={} path=wgpu-immediates->resident-scene-batch->ui4\n",
+        principal,
+        SHADER_PACKAGE_CLIP_POSITION3_IMMEDIATE_RGBA_FNV1A64,
+        batch.pipeline.raw(),
+        batch.vertex_buffer.raw(),
+        batch.index_buffer.raw(),
+        expected_draws,
+        batch.draws.iter().map(|draw| draw.index_count as usize).sum::<usize>(),
+        width,
+        height,
+        point.value,
+        release.sequence(),
+    );
+    Ok(Ui4SurfaceIndexedCompletion {
+        window_id,
+        surface: SurfaceInfo {
+            handle: batch.surface,
             bytes,
             width,
             height,

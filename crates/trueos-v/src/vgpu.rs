@@ -36,6 +36,9 @@ pub const SURFACE_FORMAT_RGBA8_UNORM_SRGB: u32 = 1;
 /// The value is the stable FNV-1a digest of the exact WGSL accepted by the
 /// HelioV adapter, not an application/demo selector.
 pub const SHADER_PACKAGE_CLIP_POSITION3_RGBA_FNV1A64: u64 = 0x1438_5963_136A_A36F;
+/// Authenticated position-only package whose fragment color is supplied as
+/// one `vec4<f32>` block of WGPU immediate data for each indexed draw.
+pub const SHADER_PACKAGE_CLIP_POSITION3_IMMEDIATE_RGBA_FNV1A64: u64 = 0x4A7C_D238_6AA5_C232;
 /// Authenticated WGPU package for one Float32x3 position, one Float32x2 UV,
 /// and a fragment-stage sampled RGBA8 texture plus filtering sampler.
 pub const SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64: u64 = 0xD2A3_B942_FA09_24B6;
@@ -197,6 +200,36 @@ pub struct IndexedDraw {
     pub texture_pitch: u32,
     pub sampler_flags: u32,
     pub texture_reserved: u32,
+}
+
+pub const MAX_INDEXED_BATCH_DRAWS: usize = 16;
+
+/// One indexed range in a single-target, single-pipeline render-pass batch.
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+#[repr(C)]
+pub struct IndexedBatchDraw {
+    pub index_count: u32,
+    pub first_index: u32,
+    pub base_vertex: i32,
+    /// Linear fragment color encoded to the target's RGBA8 sRGB bytes.
+    pub rgba8_srgb: u32,
+}
+
+/// Bounded render-pass batch used by custom WGPU backends. All ranges share
+/// one surface, pipeline and vertex/index binding, matching ordinary repeated
+/// `draw_indexed` calls inside one WebGPU render pass.
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+#[repr(C)]
+pub struct IndexedDrawBatch {
+    pub surface: u64,
+    pub pipeline: u64,
+    pub vertex_buffer: u64,
+    pub index_buffer: u64,
+    pub vertex_offset: u64,
+    pub index_offset: u64,
+    pub clear_rgba8_srgb: u32,
+    pub draw_count: u32,
+    pub draws: [IndexedBatchDraw; MAX_INDEXED_BATCH_DRAWS],
 }
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
@@ -510,6 +543,40 @@ impl Device {
         Ok(point)
     }
 
+    pub fn submit_ui4_indexed_batch(
+        self,
+        queue: Queue,
+        surface: Ui4Surface,
+        pipeline: RenderPipeline,
+        vertex_buffer: Buffer,
+        index_buffer: Buffer,
+        mut batch: IndexedDrawBatch,
+    ) -> Result<TimelinePoint, i32> {
+        if queue.device != self
+            || surface.device != self
+            || batch.draw_count == 0
+            || batch.draw_count as usize > MAX_INDEXED_BATCH_DRAWS
+        {
+            return Err(ERR_BAD_HANDLE);
+        }
+        let mut surface = surface;
+        batch.surface = surface.surface.0;
+        batch.pipeline = pipeline.0;
+        batch.vertex_buffer = vertex_buffer.0;
+        batch.index_buffer = index_buffer.0;
+        let mut point = TimelinePoint::default();
+        rc_result(unsafe {
+            vcabi::trueos_cabi_vgpu_ui4_indexed_batch_submit(
+                self.0,
+                queue.handle,
+                &batch,
+                &mut point,
+            )
+        })?;
+        surface.live = false;
+        Ok(point)
+    }
+
     pub fn timeline(self, queue: Queue) -> Result<TimelineStatus, i32> {
         if queue.device != self {
             return Err(ERR_BAD_HANDLE);
@@ -720,6 +787,8 @@ mod tests {
         assert_eq!(core::mem::size_of::<BufferSlice>(), 24);
         assert_eq!(core::mem::size_of::<SurfaceInfo>(), 32);
         assert_eq!(core::mem::size_of::<IndexedDraw>(), 104);
+        assert_eq!(core::mem::size_of::<IndexedBatchDraw>(), 16);
+        assert_eq!(core::mem::size_of::<IndexedDrawBatch>(), 312);
         assert_eq!(core::mem::size_of::<TimelinePoint>(), 16);
         assert_eq!(core::mem::size_of::<TimelineStatus>(), 32);
     }
