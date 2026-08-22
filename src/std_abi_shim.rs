@@ -2809,6 +2809,7 @@ pub unsafe extern "C" fn read(fd: c_int, buf: *mut c_void, count: usize) -> isiz
         return -1;
     }
     if fd == 0 {
+        crate::r::io::fs_cabi::claim_attached_console_for_terminal_io();
         loop {
             let n = unsafe { sys_read(fd as u32, buf.cast::<u8>(), count) };
             if n != 0 {

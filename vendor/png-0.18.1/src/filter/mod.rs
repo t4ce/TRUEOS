@@ -45,7 +45,7 @@ fn unfilter_up_chunked(previous: &[u8], current: &mut [u8]) {
 fn unfilter_up(previous: &[u8], current: &mut [u8]) {
     if !UP_FASTPATH_LOGGED.swap(true, Ordering::AcqRel) {
         let len = current.len().min(previous.len());
-        log::info!(
+        log_os::info!(
             "png: up fastpath lane=sse2 current_len={} previous_len={} min_len={} tail={} prove=vendor-fastpath-first-hit",
             current.len(),
             previous.len(),

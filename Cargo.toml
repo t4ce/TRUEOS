@@ -116,6 +116,8 @@ debug = false
 opt-level = 2
 
 [patch.crates-io]
+acpi = { path = "vendor/acpi-6.1.1" }
+aml = { path = "vendor/aml-0.16.4" }
 png = { path = "vendor/png-0.18.1" }
 fdeflate = { path = "vendor/fdeflate-0.3.7" }
 simd-adler32 = { path = "vendor/simd-adler32-0.3.8" }

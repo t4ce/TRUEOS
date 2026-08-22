@@ -2341,6 +2341,26 @@ pub extern "C" fn trueos_cabi_shell_attached_readable_len() -> usize {
     0
 }
 
+/// Claim a reserved Blueprint terminal when a conventional Unix stdin user
+/// first crosses into terminal I/O.
+///
+/// Explicit lease users still claim before initialization and therefore make
+/// this an idempotent observation.  This fallback is for unmodified terminal
+/// programs (Crossterm, `poll(2)` loops, and direct `read(2)` users), which do
+/// not know about the TrueOS lease ABI but have already declared their intent
+/// by operating on the terminal stdin descriptor.
+pub(crate) fn claim_attached_console_for_terminal_io() {
+    if crate::hv::current_hull_guest_context_vm_id().is_none() {
+        return;
+    }
+
+    let mut epoch = 0;
+    // A failure means that the process has no terminal surface, is parked, or
+    // is already being torn down.  Preserve the Unix operation's own result;
+    // the lease API remains authoritative for callers that need diagnostics.
+    let _ = unsafe { trueos_cabi_blueprint_terminal_lease_current_v1(0, &mut epoch) };
+}
+
 /// Wait for attached terminal input or a typed terminal-surface change.
 ///
 /// Hull callers park in VMX root and are resumed by the producer itself; this

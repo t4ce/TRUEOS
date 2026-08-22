@@ -255,6 +255,9 @@ pub unsafe extern "C" fn poll(fds: *mut PollFd, nfds: usize, timeout: c_int) -> 
     // pipe. No socket or regular-file readiness can be lost in this shape, so
     // let the attached terminal producer wake the Hull vthread directly.
     let terminal_event_wait = terminal_event_wait_eligible(pollfds);
+    if terminal_event_wait {
+        crate::r::io::fs_cabi::claim_attached_console_for_terminal_io();
+    }
     let mut remaining_ms = (timeout >= 0).then_some(timeout as u64);
     loop {
         let ready = {
@@ -537,6 +540,12 @@ pub unsafe extern "C" fn tcsetattr(
     if termios_p.is_null() {
         TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
         return -1;
+    }
+    if fd == 0 {
+        // Raw-mode entry precedes alternate-screen rendering in Crossterm and
+        // most native TUIs.  Claim here so their very first frame, not merely
+        // their first key read, is routed through the direct Shell2 surface.
+        crate::r::io::fs_cabi::claim_attached_console_for_terminal_io();
     }
     let Some(input) = abi_read_bytes(termios_p.cast::<u8>(), TRUEOS_TERMIOS_BYTES) else {
         TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
