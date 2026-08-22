@@ -2114,7 +2114,11 @@ pub(crate) unsafe fn mio_tcp_stream_write_host(
             return STATUS_NOT_CONNECTED as isize;
         };
 
-        let len = data_len.min(api::MAX_MSG);
+        let available = MIO_TCP_TX_WINDOW_BYTES.saturating_sub(socket.tx_in_flight);
+        if available == 0 {
+            return STATUS_WOULD_BLOCK as isize;
+        }
+        let len = data_len.min(api::MAX_MSG).min(available);
         if probe_tcp_socket(socket) {
             crate::log!(
                 "mio_compat: tcp write socket={} handle={} bytes={} requested={}\n",
@@ -2125,12 +2129,22 @@ pub(crate) unsafe fn mio_tcp_stream_write_host(
             );
         }
         let data = unsafe { core::slice::from_raw_parts(data_ptr, len) };
+        // Account before submit because submit may synchronously pump a
+        // matching TcpSent completion.
+        if let Some(socket) = compat.socket_mut_for_owner(socket_id, owner_vm) {
+            socket.tx_in_flight = socket.tx_in_flight.saturating_add(len);
+        }
         match compat.submit(api::Command::SendTcp {
             handle,
             data: api::ByteBuf::from_slice_trunc(data),
         }) {
             Ok(()) => len as isize,
-            Err(status) => status as isize,
+            Err(status) => {
+                if let Some(socket) = compat.socket_mut_for_owner(socket_id, owner_vm) {
+                    socket.tx_in_flight = socket.tx_in_flight.saturating_sub(len);
+                }
+                status as isize
+            }
         }
     })
 }
@@ -2173,14 +2187,28 @@ pub(crate) unsafe fn mio_tcp_stream_write_resolved_host(
             return STATUS_NOT_CONNECTED as isize;
         };
 
-        let len = data_len.min(api::MAX_MSG);
+        let available = MIO_TCP_TX_WINDOW_BYTES.saturating_sub(socket.tx_in_flight);
+        if available == 0 {
+            return STATUS_WOULD_BLOCK as isize;
+        }
+        let len = data_len.min(api::MAX_MSG).min(available);
         let data = unsafe { core::slice::from_raw_parts(data_ptr, len) };
+        // Account before submit because submit may synchronously pump a
+        // matching TcpSent completion.
+        if let Some(socket) = compat.socket_mut(socket_id) {
+            socket.tx_in_flight = socket.tx_in_flight.saturating_add(len);
+        }
         match compat.submit(api::Command::SendTcp {
             handle,
             data: api::ByteBuf::from_slice_trunc(data),
         }) {
             Ok(()) => len as isize,
-            Err(status) => status as isize,
+            Err(status) => {
+                if let Some(socket) = compat.socket_mut(socket_id) {
+                    socket.tx_in_flight = socket.tx_in_flight.saturating_sub(len);
+                }
+                status as isize
+            }
         }
     })
 }
