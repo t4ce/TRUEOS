@@ -2,7 +2,7 @@
 name = "trueos-kokoro-dispatch"
 version = "0.1.0"
 edition = "2024"
-license-file = "../../LICENSE"
+license-file = "../../../LICENSE"
 description = "Typed attributes and native CPU dispatch for sealed TRUEOS Kokoro AOT programs"
 
 [lib]
@@ -12,16 +12,16 @@ path = "src/lib.rs"
 default = []
 
 [dependencies]
-trueos-kokoro-aot = { path = "../trueos-kokoro-aot", default-features = false }
-trueos-kokoro-exec = { path = "../trueos-kokoro-exec", default-features = false }
-trueos-kokoro-memory = { path = "../trueos-kokoro-memory", default-features = false }
-trueos-kokoro-scalar = { path = "../trueos-kokoro-scalar", default-features = false }
-trueos-kokoro-f32 = { path = "../trueos-kokoro-f32", default-features = false }
-trueos-kokoro-layout = { path = "../trueos-kokoro-layout", default-features = false }
-trueos-kokoro-gemm = { path = "../trueos-kokoro-gemm", default-features = false }
-trueos-kokoro-conv = { path = "../trueos-kokoro-conv", default-features = false }
-trueos-kokoro-lstm = { path = "../trueos-kokoro-lstm", default-features = false }
-trueos-kokoro-duration = { path = "../trueos-kokoro-duration", default-features = false }
-trueos-kokoro-resize = { path = "../trueos-kokoro-resize", default-features = false }
-trueos-kokoro-stft = { path = "../trueos-kokoro-stft", default-features = false }
-trueos-ttstt-cpu = { path = "../trueos-ttstt-cpu", default-features = false }
+trueos-kokoro-aot = { path = "../aot", default-features = false }
+trueos-kokoro-exec = { path = "../exec", default-features = false }
+trueos-kokoro-memory = { path = "../memory", default-features = false }
+trueos-kokoro-scalar = { path = "../scalar", default-features = false }
+trueos-kokoro-f32 = { path = "../f32", default-features = false }
+trueos-kokoro-layout = { path = "../layout", default-features = false }
+trueos-kokoro-gemm = { path = "../gemm", default-features = false }
+trueos-kokoro-conv = { path = "../conv", default-features = false }
+trueos-kokoro-lstm = { path = "../lstm", default-features = false }
+trueos-kokoro-duration = { path = "../duration", default-features = false }
+trueos-kokoro-resize = { path = "../resize", default-features = false }
+trueos-kokoro-stft = { path = "../stft", default-features = false }
+trueos-ttstt-cpu = { path = "../../trueos-ttstt-cpu", default-features = false }

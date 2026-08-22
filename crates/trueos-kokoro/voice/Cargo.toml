@@ -2,7 +2,7 @@
 name = "trueos-kokoro-voice"
 version = "0.1.0"
 edition = "2024"
-license-file = "../../LICENSE"
+license-file = "../../../LICENSE"
 description = "Zero-copy no-std parser for the sealed TRUEOS Kokoro voice archive"
 
 [lib]

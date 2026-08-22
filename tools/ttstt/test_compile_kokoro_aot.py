@@ -22,8 +22,8 @@ SPEC.loader.exec_module(TOOL)
 
 MODEL = ROOT / "tools/ttstt/models/kokoro/kokoro-rten.onnx"
 VOICES = ROOT / "tools/ttstt/models/kokoro/voices-v1.0.bin"
-RUST_MANIFEST = ROOT / "crates/trueos-kokoro-aot/Cargo.toml"
-RUST_INSPECTOR = ROOT / "crates/trueos-kokoro-aot/examples/inspect.rs"
+RUST_MANIFEST = ROOT / "crates/trueos-kokoro/aot/Cargo.toml"
+RUST_INSPECTOR = ROOT / "crates/trueos-kokoro/aot/examples/inspect.rs"
 RUST_TARGET_DIR = ROOT / "target/kokoro-aot-host-test"
 TEST_SCRATCH_ROOT = ROOT / "target/kokoro-aot-host-test-scratch"
 HAS_ONNX = importlib.util.find_spec("onnx") is not None

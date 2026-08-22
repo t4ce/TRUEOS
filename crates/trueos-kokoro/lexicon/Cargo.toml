@@ -14,4 +14,4 @@ default = []
 
 [dependencies]
 sha2 = { version = "0.10.9", default-features = false }
-trueos-kokoro-g2p = { path = "../trueos-kokoro-g2p" }
+trueos-kokoro-g2p = { path = "../g2p" }

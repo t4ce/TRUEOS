@@ -20,7 +20,7 @@ Regenerate with:
 
 ```sh
 /tmp/trueos-kokoro-lstm-ort127/bin/python \
-  crates/trueos-kokoro-stft/tools/generate_ort_fixtures.py
+  crates/trueos-kokoro/stft/tools/generate_ort_fixtures.py
 ```
 
 Use `--verify` under another runtime to cross-check without rewriting the

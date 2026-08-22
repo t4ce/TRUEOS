@@ -81,6 +81,19 @@ pub const DOBBY_UI4_ERROR_UNAVAILABLE: i32 = -5;
 pub const DOBBY_UI4_ERROR_NOT_FOUND: i32 = -6;
 pub const DOBBY_UI4_ERROR_TRANSPORT: i32 = -7;
 
+/// Opaque endpoint value used by a hidden child Blueprint to address the
+/// parent that spawned it.  Nonzero endpoint handles are returned only to the
+/// parent by `trueos_cabi_blueprint_child_spawn_v1`.
+pub const BLUEPRINT_CHILD_PARENT_HANDLE: u64 = 0;
+pub const BLUEPRINT_CHILD_STATUS_STARTING: i32 = 1;
+pub const BLUEPRINT_CHILD_STATUS_RUNNING: i32 = 2;
+pub const BLUEPRINT_CHILD_STATUS_STOPPING: i32 = 3;
+pub const BLUEPRINT_CHILD_STATUS_EXITED: i32 = 4;
+pub const BLUEPRINT_CHILD_ERR_INVALID: i32 = -1;
+pub const BLUEPRINT_CHILD_ERR_NOT_FOUND: i32 = -2;
+pub const BLUEPRINT_CHILD_ERR_QUEUE_FULL: i32 = -3;
+pub const BLUEPRINT_CHILD_ERR_UNAVAILABLE: i32 = -4;
+
 pub const DOBBY_UI4_KEY_ENTER: u32 = 1;
 pub const DOBBY_UI4_KEY_ESCAPE: u32 = 2;
 pub const DOBBY_UI4_KEY_BACKSPACE: u32 = 3;
@@ -1204,6 +1217,23 @@ unsafe extern "C" {
     ) -> isize;
     pub fn trueos_cabi_qjs_workbench_poll_v1(out_ptr: *mut u8, out_cap: usize) -> isize;
     pub fn trueos_cabi_qjs_workbench_close_v1() -> i32;
+    pub fn trueos_cabi_blueprint_child_spawn_v1(
+        initial_ptr: *const u8,
+        initial_len: usize,
+        out_handle: *mut u64,
+    ) -> i32;
+    pub fn trueos_cabi_blueprint_child_send_v1(
+        handle: u64,
+        data_ptr: *const u8,
+        data_len: usize,
+    ) -> isize;
+    pub fn trueos_cabi_blueprint_child_receive_v1(
+        handle: u64,
+        out_ptr: *mut u8,
+        out_cap: usize,
+    ) -> isize;
+    pub fn trueos_cabi_blueprint_child_status_v1(handle: u64) -> i32;
+    pub fn trueos_cabi_blueprint_child_terminate_v1(handle: u64) -> i32;
     pub fn trueos_cabi_blueprint_exit_reason(data_ptr: *const u8, data_len: usize) -> i32;
     pub fn trueos_cabi_blueprint_shutdown(data_ptr: *const u8, data_len: usize) -> i32;
     pub fn trueos_cabi_blueprint_return_to_cli() -> i32;

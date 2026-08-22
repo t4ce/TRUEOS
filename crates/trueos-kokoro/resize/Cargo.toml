@@ -2,7 +2,7 @@
 name = "trueos-kokoro-resize"
 version = "0.1.0"
 edition = "2024"
-license-file = "../../LICENSE"
+license-file = "../../../LICENSE"
 description = "Allocation-free pinned ONNX Resize kernels for TRUEOS Kokoro"
 
 [lib]

@@ -1138,10 +1138,7 @@ fn blueprint_child_actor_is_parent(link: &BlueprintChildLink, vm_id: u8, generat
 /// Start the same Blueprint archive in a headless child Hull.  The returned
 /// handle is opaque and generation-bound; `0` is reserved for the worker's
 /// own parent endpoint in the other child calls.
-pub(crate) fn blueprint_child_spawn(
-    parent_vm_id: u8,
-    initial_message: &[u8],
-) -> Result<u64, i32> {
+pub(crate) fn blueprint_child_spawn(parent_vm_id: u8, initial_message: &[u8]) -> Result<u64, i32> {
     if initial_message.len() > BLUEPRINT_CHILD_MESSAGE_LIMIT {
         return Err(BLUEPRINT_CHILD_ERR_INVALID);
     }
@@ -1274,13 +1271,38 @@ pub(crate) fn blueprint_child_receive(
     if out.len() < message.len() {
         return Ok(message.len());
     }
-    let message = queue.pop_front().expect("front message disappeared while link locked");
+    let message = queue
+        .pop_front()
+        .expect("front message disappeared while link locked");
     out[..message.len()].copy_from_slice(message.as_slice());
     Ok(message.len())
 }
 
 pub(crate) fn blueprint_child_status(actor_vm_id: u8, handle: u64) -> Result<u8, i32> {
     let generation = vm_run_generation(actor_vm_id).ok_or(BLUEPRINT_CHILD_ERR_INVALID)?;
+    if handle == 0 {
+        let link = BLUEPRINT_CHILD_LINKS
+            .get(actor_vm_id as usize)
+            .ok_or(BLUEPRINT_CHILD_ERR_NOT_FOUND)?
+            .lock();
+        let link = link.as_ref().ok_or(BLUEPRINT_CHILD_ERR_NOT_FOUND)?;
+        if link.child_generation != generation {
+            return Err(BLUEPRINT_CHILD_ERR_NOT_FOUND);
+        }
+        let Some(parent) = vm_slot(link.parent_vm_id) else {
+            return Ok(BLUEPRINT_CHILD_STATE_EXITED);
+        };
+        if vm_run_generation(link.parent_vm_id) != Some(link.parent_generation) {
+            return Ok(BLUEPRINT_CHILD_STATE_EXITED);
+        }
+        return Ok(if parent.running.load(Ordering::Acquire) {
+            BLUEPRINT_CHILD_STATE_RUNNING
+        } else if parent.starting.load(Ordering::Acquire) {
+            BLUEPRINT_CHILD_STATE_STARTING
+        } else {
+            BLUEPRINT_CHILD_STATE_EXITED
+        });
+    }
     let (child_vm_id, _) = blueprint_child_find_link_for_actor(actor_vm_id, generation, handle)
         .ok_or(BLUEPRINT_CHILD_ERR_NOT_FOUND)?;
     let link = BLUEPRINT_CHILD_LINKS
@@ -5329,11 +5351,7 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
         vm.preserve_exit.store(false, Ordering::Release);
         vm.clean_exit.store(false, Ordering::Release);
         clear_blueprint_process_context(vm_id);
-        blueprint_child_lifecycle_cleanup(
-            vm_id,
-            vm.run_generation.load(Ordering::Acquire),
-            false,
-        );
+        blueprint_child_lifecycle_cleanup(vm_id, vm.run_generation.load(Ordering::Acquire), false);
         lane_lease.release_now();
         vm.running.store(false, Ordering::Release);
         return;

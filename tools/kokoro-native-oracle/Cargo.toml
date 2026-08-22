@@ -6,14 +6,14 @@ publish = false
 
 [dependencies]
 sha2 = { version = "0.10.9", default-features = false }
-trueos-kokoro-audio = { path = "../../crates/trueos-kokoro-audio" }
-trueos-kokoro-aot = { path = "../../crates/trueos-kokoro-aot" }
-trueos-kokoro-dispatch = { path = "../../crates/trueos-kokoro-dispatch" }
-trueos-kokoro-exec = { path = "../../crates/trueos-kokoro-exec" }
-trueos-kokoro-g2p = { path = "../../crates/trueos-kokoro-g2p" }
-trueos-kokoro-lexicon = { path = "../../crates/trueos-kokoro-lexicon" }
-trueos-kokoro-memory = { path = "../../crates/trueos-kokoro-memory" }
-trueos-kokoro-voice = { path = "../../crates/trueos-kokoro-voice" }
+trueos-kokoro-audio = { path = "../../crates/trueos-kokoro/audio" }
+trueos-kokoro-aot = { path = "../../crates/trueos-kokoro/aot" }
+trueos-kokoro-dispatch = { path = "../../crates/trueos-kokoro/dispatch" }
+trueos-kokoro-exec = { path = "../../crates/trueos-kokoro/exec" }
+trueos-kokoro-g2p = { path = "../../crates/trueos-kokoro/g2p" }
+trueos-kokoro-lexicon = { path = "../../crates/trueos-kokoro/lexicon" }
+trueos-kokoro-memory = { path = "../../crates/trueos-kokoro/memory" }
+trueos-kokoro-voice = { path = "../../crates/trueos-kokoro/voice" }
 
 [profile.release]
 codegen-units = 1

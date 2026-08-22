@@ -421,8 +421,8 @@ def main() -> None:
     args = parser.parse_args()
 
     _, audit = audit_model(args.model)
-    scalar_dir = repo_root / "crates/trueos-kokoro-scalar/tests/fixtures"
-    f32_dir = repo_root / "crates/trueos-kokoro-f32/tests/fixtures"
+    scalar_dir = repo_root / "crates/trueos-kokoro/scalar/tests/fixtures"
+    f32_dir = repo_root / "crates/trueos-kokoro/f32/tests/fixtures"
     scalar_dir.mkdir(parents=True, exist_ok=True)
     f32_dir.mkdir(parents=True, exist_ok=True)
 

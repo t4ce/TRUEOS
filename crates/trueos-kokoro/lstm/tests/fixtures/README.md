@@ -14,7 +14,7 @@ Regenerate with the pinned environment:
 
 ```sh
 /tmp/trueos-kokoro-lstm-ort127/bin/python \
-  crates/trueos-kokoro-lstm/tools/generate_ort_fixtures.py
+  crates/trueos-kokoro/lstm/tools/generate_ort_fixtures.py
 ```
 
 The same fixtures can be cross-checked without rewriting provenance against a

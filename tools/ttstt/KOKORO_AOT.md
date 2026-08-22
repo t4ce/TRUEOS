@@ -393,7 +393,7 @@ its canonical artifact seal is
 Python validates each body fail-closed; the existing Rust reader parses the
 same artifact as opaque attribute slices, ready for a later typed decoder.
 
-The matching no-std reader lives in `crates/trueos-kokoro-aot`. The unittest
+The matching no-std reader lives in `crates/trueos-kokoro/aot`. The unittest
 invokes its inspector automatically when Cargo is available. To run that half
 manually, start Cargo outside the checkout so the kernel workspace's custom
 target/build-std configuration does not apply:
@@ -401,6 +401,6 @@ target/build-std configuration does not apply:
 ```sh
 trueos_root="$PWD"
 (cd /tmp && cargo run --manifest-path \
-  "$trueos_root/crates/trueos-kokoro-aot/Cargo.toml" \
+  "$trueos_root/crates/trueos-kokoro/aot/Cargo.toml" \
   --example inspect -- /tmp/kokoro-fixture.kkaot 16)
 ```

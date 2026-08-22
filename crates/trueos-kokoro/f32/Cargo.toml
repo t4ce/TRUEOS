@@ -2,7 +2,7 @@
 name = "trueos-kokoro-f32"
 version = "0.1.0"
 edition = "2024"
-license-file = "../../LICENSE"
+license-file = "../../../LICENSE"
 description = "Allocation-free no-std f32 kernels for sealed TRUEOS Kokoro inference"
 
 [lib]

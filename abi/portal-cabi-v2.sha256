@@ -154,4 +154,9 @@
 # root, and never overwrite an existing file or directory. The kernel selects
 # the existing file or directory-tree rename implementation; older v2
 # Blueprints import neither the CABI symbol nor its new vmcall.
-325a84dca9d7e1749caf75b2a9c4bd1575f57202d8ae045a14e3d208ab22af97
+# The generic child-Hull calls are strictly additive.  They start the caller's
+# same archive in hidden worker mode on the existing AP2+ VMX lane pool and
+# expose only bounded, generation-bound parent/child messages and lifecycle
+# status; no executor pointer, guest address, terminal, or UI authority
+# crosses the contract.
+c3794ac0b02501d53c32475796bc8454b99aaa4990103e08947f05db9460a848

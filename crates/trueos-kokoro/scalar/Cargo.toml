@@ -2,7 +2,7 @@
 name = "trueos-kokoro-scalar"
 version = "0.1.0"
 edition = "2024"
-license-file = "../../LICENSE"
+license-file = "../../../LICENSE"
 description = "Allocation-free scalar and control kernels for TRUEOS Kokoro"
 
 [lib]
@@ -12,4 +12,4 @@ path = "src/lib.rs"
 default = []
 
 [dependencies]
-trueos-kokoro-layout = { path = "../trueos-kokoro-layout" }
+trueos-kokoro-layout = { path = "../layout" }
