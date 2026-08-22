@@ -2163,6 +2163,12 @@ pub extern "C" fn trueos_cabi_konsole_begin_frame(
     }
 
     let terminal_handoff = (reserved_top_rows & KONSOLE_FRAME_FLAG_TERMINAL_HANDOFF) != 0;
+    if terminal_handoff {
+        // Beginning a handoff frame is the native Konsole equivalent of a
+        // Crossterm/raw-stdin boundary.  Claim before asking the host to begin
+        // the frame; prelease guests have their terminal output suppressed.
+        claim_attached_console_for_terminal_io();
+    }
     let Some((frame_cols, frame_rows)) = konsole_begin_frame_size(cols, rows, terminal_handoff)
     else {
         return -1;
