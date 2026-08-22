@@ -5,3 +5,4 @@ edition = "2024"
 publish = false
 
 [dependencies]
+spin = { version = "0.10", default-features = false, features = ["once"] }

@@ -561,6 +561,10 @@ pub fn log_once_with_target(
     )
 }
 
+pub fn init_global_dispatch() {
+    log_os_core::install_global_log_dispatch(&TRUEOS_LOG_ROUTER);
+}
+
 pub mod logtotcp {
     use alloc::vec::Vec;
     use core::{cmp::min, fmt};

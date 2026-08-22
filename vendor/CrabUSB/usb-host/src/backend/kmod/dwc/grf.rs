@@ -226,7 +226,7 @@ impl Grf {
     ///   - mask = 1 << 13
     ///   - value = (1 << 13) | (1 << 29) = 0x20002000
     pub fn exit_low_power(&self) {
-        log::debug!("GRF@{:x}: Exiting low power mode", self.base());
+        log_os::debug!("GRF@{:x}: Exiting low power mode", self.base());
 
         // 直接写入，正确设置写使能位
         // Bit[13] = 1 (PowerUp), Bit[29] = 1 (Write Enable)
@@ -236,7 +236,7 @@ impl Grf {
 
         // 读取并验证
         let read_val: u32 = self.usbdpphy_regs().LOW_PWRN.extract().into();
-        log::debug!(
+        log_os::debug!(
             "GRF@{:x}: LOW_PWRN after write: 0x{:08x} (expected bit13=1)",
             self.base(),
             read_val
@@ -249,7 +249,7 @@ impl Grf {
     ///
     /// 写入值：`value = (0 << 13) | (1 << 29) = 0x20000000`
     pub fn enter_low_power(&self) {
-        log::debug!("GRF@{:x}: Entering low power mode", self.base());
+        log_os::debug!("GRF@{:x}: Entering low power mode", self.base());
 
         // 直接写入，正确设置写使能位
         // Bit[13] = 0 (PowerDown), Bit[29] = 1 (Write Enable)
@@ -257,7 +257,7 @@ impl Grf {
 
         self.usbdpphy_regs().LOW_PWRN.set(VALUE);
 
-        log::debug!("GRF@{:x}: LOW_PWRN set to power down", self.base());
+        log_os::debug!("GRF@{:x}: LOW_PWRN set to power down", self.base());
     }
 
     /// 启用 USB3 RX LFPS
@@ -266,7 +266,7 @@ impl Grf {
     ///
     /// 写入值：`value = (1 << 14) | (1 << 30) = 0x40004000`
     pub fn enable_rx_lfps(&self) {
-        log::debug!("GRF@{:x}: Enabling RX LFPS", self.base());
+        log_os::debug!("GRF@{:x}: Enabling RX LFPS", self.base());
 
         // 直接写入，正确设置写使能位
         // Bit[14] = 1 (Enable), Bit[30] = 1 (Write Enable)
@@ -276,7 +276,7 @@ impl Grf {
 
         // 读取并验证
         let read_val: u32 = self.usbdpphy_regs().LOW_PWRN.extract().into();
-        log::debug!(
+        log_os::debug!(
             "GRF@{:x}: RX_LFPS after write: 0x{:08x} (expected bit14=1)",
             self.base(),
             read_val
@@ -289,7 +289,7 @@ impl Grf {
     ///
     /// 写入值：`value = (0 << 14) | (1 << 30) = 0x40000000`
     pub fn disable_rx_lfps(&self) {
-        log::debug!("GRF@{:x}: Disabling RX LFPS", self.base());
+        log_os::debug!("GRF@{:x}: Disabling RX LFPS", self.base());
 
         // 直接写入，正确设置写使能位
         // Bit[14] = 0 (Disable), Bit[30] = 1 (Write Enable)
@@ -297,7 +297,7 @@ impl Grf {
 
         self.usbdpphy_regs().LOW_PWRN.set(VALUE);
 
-        log::debug!("GRF@{:x}: RX_LFPS disabled", self.base());
+        log_os::debug!("GRF@{:x}: RX_LFPS disabled", self.base());
     }
 
     /// 检查是否在低功耗模式
@@ -334,7 +334,7 @@ impl Grf {
     ///   - bit 10: SUSPEND_ENABLE = 0
     ///   - bit 8: U3_PORT_DISABLE = 0
     pub fn enable_u3_port(&mut self, port: u8) {
-        log::debug!("GRF@{:x}: Enabling USB3 U3 port {}", self.base(), port);
+        log_os::debug!("GRF@{:x}: Enabling USB3 U3 port {}", self.base(), port);
 
         // ⚠️ Rockchip GRF 格式: Bit[31:16] 是写使能掩码
         // 我们要写入 0x8800 到 Bit[15:0]，所以完整值是 0xFFFF8800
@@ -364,7 +364,7 @@ impl Grf {
             addr.write_volatile(GRF_VALUE);
         }
 
-        log::debug!(
+        log_os::debug!(
             "GRF@{:x}: Wrote {} with GRF format: 0x{:08x} (data=0x8800)",
             base,
             reg_name,
@@ -385,16 +385,16 @@ impl Grf {
         let suspend_enable = (value >> 10) & 0x1;
         let u3_port_disable = (value >> 8) & 0x1;
 
-        log::info!("GRF@{:x}: {} after enable: 0x{:08x}", base, reg_name, value);
-        log::info!("  PIPE_ENABLE (bit15): {} (expected 1)", pipe_enable);
-        log::info!("  PHY_DISABLE (bit12): {} (expected 0)", phy_disable);
-        log::info!("  SUSPEND_ENABLE (bit10): {} (expected 0)", suspend_enable);
-        log::info!("  U3_PORT_DISABLE (bit8): {} (expected 0)", u3_port_disable);
+        log_os::info!("GRF@{:x}: {} after enable: 0x{:08x}", base, reg_name, value);
+        log_os::info!("  PIPE_ENABLE (bit15): {} (expected 1)", pipe_enable);
+        log_os::info!("  PHY_DISABLE (bit12): {} (expected 0)", phy_disable);
+        log_os::info!("  SUSPEND_ENABLE (bit10): {} (expected 0)", suspend_enable);
+        log_os::info!("  U3_PORT_DISABLE (bit8): {} (expected 0)", u3_port_disable);
 
         if pipe_enable == 1 && phy_disable == 0 && suspend_enable == 0 && u3_port_disable == 0 {
-            log::info!("✓ GRF@{:x}: USB3 U3 port {} enabled successfully", base, port);
+            log_os::info!("✓ GRF@{:x}: USB3 U3 port {} enabled successfully", base, port);
         } else {
-            log::warn!("⚠ GRF@{:x}: USB3 U3 port {} may not be configured correctly!", base, port);
+            log_os::warn!("⚠ GRF@{:x}: USB3 U3 port {} may not be configured correctly!", base, port);
         }
     }
 
@@ -408,7 +408,7 @@ impl Grf {
     /// - bit 10: SUSPEND_ENABLE = 0
     /// - bit 8: U3_PORT_DISABLE = 0
     pub fn disable_u3_port(&mut self, port: u8) {
-        log::debug!("GRF@{:x}: Disabling USB3 U3 port {}", self.base(), port);
+        log_os::debug!("GRF@{:x}: Disabling USB3 U3 port {}", self.base(), port);
 
         let regs = self.usb_regs_mut();
         if port == 0 {
@@ -455,7 +455,7 @@ impl Grf {
     /// Bit[15:0]  - 数据位
     /// ```
     pub fn enable_usb2phy_port(&mut self) {
-        log::debug!("GRF@{:x}: Enabling USB2 PHY port", self.base());
+        log_os::debug!("GRF@{:x}: Enabling USB2 PHY port", self.base());
 
         // Bit[1] = 1 (Enable), Bit[17] = 1 (Write Enable)
         // Bit[0] = 0 (No Suspend), Bit[16] = 1 (Write Enable)
@@ -465,7 +465,7 @@ impl Grf {
 
         // 读取并验证
         let read_val: u32 = self.usb2phy_regs().CON.extract().into();
-        log::debug!(
+        log_os::debug!(
             "GRF@{:x}: USB2PHY CON after write: 0x{:08x} (expected bit1=1)",
             self.base(),
             read_val

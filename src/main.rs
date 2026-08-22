@@ -136,6 +136,7 @@ pub extern "C" fn kmain() -> ! {
     unsafe {
         cpu::enable_sse();
     }
+    log_os::init_global_dispatch();
     // Blueprint modules may import Ring's prefixed native implementation
     // symbols directly. Keep the Rust crate linked; build.rs retains and
     // publishes the native routines through the runtime import resolver.

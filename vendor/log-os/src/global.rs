@@ -3,6 +3,41 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 use crate::flags::{LogArea, LogAreaSet, LogLevel, LogLevelPolicy, level_enabled, target_log_area};
 
+static GLOBAL_LOG_DISPATCH: spin::Once<&'static dyn GlobalLogDispatch> = spin::Once::new();
+
+/// Installs the process-wide native dispatcher used by the drop-in logging macros.
+///
+/// Installation is intentionally one-shot. Calls made before installation are
+/// discarded, matching the conventional facade's pre-initialization behavior.
+pub fn install_global_log_dispatch(dispatch: &'static dyn GlobalLogDispatch) {
+    GLOBAL_LOG_DISPATCH.call_once(|| dispatch);
+}
+
+#[doc(hidden)]
+pub fn global_log_enabled(target: &str, level: LogLevel) -> bool {
+    let Some(dispatch) = GLOBAL_LOG_DISPATCH.get() else {
+        return false;
+    };
+    dispatch.enabled(target_log_area(target), level)
+}
+
+#[doc(hidden)]
+pub fn global_log_with_target_level(
+    target: &str,
+    level: LogLevel,
+    args: fmt::Arguments<'_>,
+) {
+    let Some(dispatch) = GLOBAL_LOG_DISPATCH.get() else {
+        return;
+    };
+    dispatch.emit(
+        target_log_area(target),
+        level,
+        Some(purpose_for_level(level)),
+        format_args!("{}: {}\n", target, args),
+    );
+}
+
 /// Stable identity for a source-level `ONCE` logging site.
 ///
 /// IDs are supplied explicitly by the caller and must remain stable between

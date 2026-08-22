@@ -10,7 +10,7 @@ use libusb1_sys::{
     libusb_fill_control_setup, libusb_fill_control_transfer, libusb_fill_iso_transfer,
     libusb_submit_transfer, libusb_transfer,
 };
-use log::trace;
+use log_os::trace;
 use usb_if::{
     endpoint::{RequestId, TransferCompletion, TransferRequest},
     err::TransferError,

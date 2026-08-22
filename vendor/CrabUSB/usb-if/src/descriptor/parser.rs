@@ -6,7 +6,7 @@
 use core::{fmt::Debug, iter, num::NonZeroU8, ops::Deref};
 
 use alloc::{collections::btree_map::BTreeMap, string::String, vec::Vec};
-use log::warn;
+use log_os::warn;
 
 use crate::{descriptor::EndpointType, transfer::Direction};
 
