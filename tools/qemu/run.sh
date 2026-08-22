@@ -5,6 +5,7 @@ QEMU_BIN="${QEMU_BIN:-qemu-system-x86_64}"
 ISO_PATH="${ISO_PATH:-bld/trueos.iso}"
 QEMU_NVME_IMG="${QEMU_NVME_IMG:-tools/nvme.img}"
 QEMU_MEMORY="${QEMU_MEMORY:-12000M}"
+QEMU_SMP="${QEMU_SMP:-14}"
 QEMU_NIC_DEVICE="${QEMU_NIC_DEVICE:-virtio-net-pci,disable-modern=off}"
 QEMU_SERIAL="${QEMU_SERIAL:-tcp:127.0.0.1:5555,server,nowait}"
 
@@ -61,7 +62,7 @@ exec env -i \
     -D bld/qemu.log \
     -d int,guest_errors,cpu_reset,unimp \
     -m "${QEMU_MEMORY}" \
-    -smp cores=14 \
+    -smp "cores=${QEMU_SMP}" \
     -cpu host,host-phys-bits=true \
     -serial "${QEMU_SERIAL}" \
     -netdev "${QEMU_NETDEV_USER}" \

@@ -33,6 +33,7 @@ const PAGE_SIZE: u64 = Size4KiB::SIZE;
 // So we map MMIO into a separate, always-4KiB-mapped region with explicit flags.
 const MMIO_VIRT_BASE: u64 = 0xFFFF_FF00_0000_0000;
 const MMIO_VIRT_LIMIT: u64 = 0xFFFF_FF80_0000_0000;
+pub(crate) const MMIO_PML4_SLOT: usize = ((MMIO_VIRT_BASE >> 39) & 0x1ff) as usize;
 
 static MMIO_NEXT_VIRT: AtomicU64 = AtomicU64::new(MMIO_VIRT_BASE);
 

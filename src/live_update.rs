@@ -181,6 +181,7 @@ struct TransitionControl {
     root_hhdm: u64,
     kernel_slot: u64,
     new_slot_entry: u64,
+    stale_mmio_slot: u64,
     transition_slot: u64,
     transition_slot_entry: u64,
     stack_base_hhdm: u64,
@@ -537,6 +538,11 @@ unsafe extern "C" fn trueos_live_update_bsp_commit_trampoline(
         "and rsp, -16",
         "lgdt [r8 + {transition_gdtr}]",
         "mov rax, qword ptr [r8 + {root_hhdm}]",
+        // Generation-N MMIO mappings point through page-table frames that the
+        // candidate PMM is free to reuse. Retire that entire dedicated slot;
+        // generation N+1 will rebuild it through pci::mmio from an empty root.
+        "mov rcx, qword ptr [r8 + {stale_mmio_slot}]",
+        "mov qword ptr [rax + rcx * 8], 0",
         "mov rcx, qword ptr [r8 + {kernel_slot}]",
         "mov rdx, qword ptr [r8 + {new_slot_entry}]",
         "mov qword ptr [rax + rcx * 8], rdx",
@@ -563,6 +569,7 @@ unsafe extern "C" fn trueos_live_update_bsp_commit_trampoline(
         command = const offset_of!(TransitionControl, command),
         cr3 = const offset_of!(TransitionControl, cr3),
         root_hhdm = const offset_of!(TransitionControl, root_hhdm),
+        stale_mmio_slot = const offset_of!(TransitionControl, stale_mmio_slot),
         kernel_slot = const offset_of!(TransitionControl, kernel_slot),
         new_slot_entry = const offset_of!(TransitionControl, new_slot_entry),
         stack_base = const offset_of!(TransitionControl, stack_base_hhdm),
@@ -930,6 +937,18 @@ async fn checkpoint_active_vms(
     let mut resume_mask = [0u64; RESTORE_WORDS];
     let mut vm_heap_ranges = [WarmReservedRange::EMPTY; VM_ID_LIMIT];
     let mut paused_by_update = Vec::new();
+
+    let has_active_vm = (0..VM_ID_LIMIT).any(|vm_index| {
+        let state = crate::hv::vm_state(vm_index as u8);
+        state.supported && (state.running || state.starting || state.pause_latched)
+    });
+    if has_active_vm {
+        print_matrix_target_line(
+            target,
+            "update live: active VM state found; waiting for TRUEOSFS checkpoint storage",
+        );
+        crate::r::readiness::wait_for(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED).await;
+    }
 
     for vm_index in 0..VM_ID_LIMIT {
         let vm_id = vm_index as u8;
@@ -1317,10 +1336,11 @@ unsafe fn find_empty_transition_slot(
     root_hhdm: u64,
     kernel_slot: usize,
     hhdm_slot: usize,
+    mmio_slot: usize,
 ) -> Result<usize, LiveUpdateError> {
     let root = root_hhdm as *const u64;
     for slot in (256usize..512).rev() {
-        if slot == kernel_slot || slot == hhdm_slot {
+        if slot == kernel_slot || slot == hhdm_slot || slot == mmio_slot {
             continue;
         }
         if ptr::read_volatile(root.add(slot)) & 1 == 0 {
@@ -1431,7 +1451,14 @@ fn stage_candidate(kernel: &[u8]) -> Result<StagedCandidate, LiveUpdateError> {
     let root_hhdm = hhdm
         .checked_add(root_phys)
         .ok_or(LiveUpdateError::ArithmeticOverflow)?;
-    let transition_slot = unsafe { find_empty_transition_slot(root_hhdm, kernel_slot, hhdm_slot)? };
+    let mmio_slot = crate::pci::mmio::MMIO_PML4_SLOT;
+    if mmio_slot == kernel_slot || mmio_slot == hhdm_slot {
+        return Err(LiveUpdateError::Incompatible(
+            "dedicated MMIO PML4 slot collides with boot mappings",
+        ));
+    }
+    let transition_slot =
+        unsafe { find_empty_transition_slot(root_hhdm, kernel_slot, hhdm_slot, mmio_slot)? };
     let transition_base = canonical_pml4_slot_base(transition_slot);
 
     let trampoline_start = ptr::addr_of!(__live_update_trampoline_start) as usize;
@@ -1638,6 +1665,7 @@ fn stage_candidate(kernel: &[u8]) -> Result<StagedCandidate, LiveUpdateError> {
             root_hhdm,
             kernel_slot: kernel_slot as u64,
             new_slot_entry: kernel_pdpt_phys | 0x003,
+            stale_mmio_slot: mmio_slot as u64,
             transition_slot: transition_slot as u64,
             transition_slot_entry: transition_pdpt_phys | 0x003,
             stack_base_hhdm,

@@ -23,17 +23,25 @@ pub(crate) fn try_parse(
         print_update_disk_table(io);
         print_shell_line(
             io,
-            "update: run `update <disk-id>` for a persistent install or `update live` for a RAM-only generation swap",
+            "update: run `update <disk-id>` for a persistent install, `update live` for a release swap, or `update live embedded` for a no-download self-swap",
         );
         return ParseOutcome::Handled;
     };
-    if args.next().is_some() {
-        print_shell_line(io, "update: usage `update <disk-id>|live`");
+    if arg == "live" {
+        let source = match args.next() {
+            None => LiveCandidateSource::Release,
+            Some("embedded") if args.next().is_none() => LiveCandidateSource::Embedded,
+            _ => {
+                print_shell_line(io, "update: usage `update <disk-id>|live [embedded]`");
+                return ParseOutcome::Handled;
+            }
+        };
+        submit_live_update(spawner, io, source);
         return ParseOutcome::Handled;
     }
 
-    if arg == "live" {
-        submit_live_update(spawner, io);
+    if args.next().is_some() {
+        print_shell_line(io, "update: usage `update <disk-id>|live [embedded]`");
         return ParseOutcome::Handled;
     }
 
@@ -74,7 +82,17 @@ pub(crate) fn submit_update(
     }
 }
 
-pub(crate) fn submit_live_update(spawner: &Spawner, io: &'static dyn ShellBackend2) {
+#[derive(Clone, Copy)]
+enum LiveCandidateSource {
+    Release,
+    Embedded,
+}
+
+fn submit_live_update(
+    spawner: &Spawner,
+    io: &'static dyn ShellBackend2,
+    source: LiveCandidateSource,
+) {
     let target = matrix_target_for_backend(io);
     print_matrix_target_line(
         &target,
@@ -82,7 +100,7 @@ pub(crate) fn submit_live_update(spawner: &Spawner, io: &'static dyn ShellBacken
     );
 
     set_matrix_target_active(&target, true);
-    match live_update_command_task(target.clone(), *spawner) {
+    match live_update_command_task(target.clone(), *spawner, source) {
         Ok(token) => spawner.spawn(token),
         Err(_) => {
             set_matrix_target_active(&target, false);
@@ -274,7 +292,11 @@ async fn update_command_task(target: MatrixTarget, disk: crate::disc::block::Dev
 }
 
 #[trueos_executor::task]
-async fn live_update_command_task(target: MatrixTarget, spawner: Spawner) {
+async fn live_update_command_task(
+    target: MatrixTarget,
+    spawner: Spawner,
+    source: LiveCandidateSource,
+) {
     let task_target = target.clone();
     async move {
         const LIVE_ISO_URL: &str = "https://trueos.eu/TrueOS.7z";
@@ -286,16 +308,31 @@ async fn live_update_command_task(target: MatrixTarget, spawner: Spawner) {
         };
         let interrupted = || matrix_target_interrupted(&task_target);
 
-        log("update live: step=02a/20 waiting for net and TRUEOSFS checkpoint storage");
-        crate::r::readiness::wait_for(
-            crate::r::readiness::NET_V4_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
-        )
-        .await;
+        if matches!(source, LiveCandidateSource::Embedded) {
+            log("update live: steps=02-05 bypassed source=embedded-boot-ELF transport=none");
+            let Some(kernel) = crate::limine::kernel_file_bytes().map(|bytes| bytes.to_vec()) else {
+                log("update live: embedded boot ELF unavailable");
+                return;
+            };
+            log(alloc::format!(
+                "update live: step=05/20 candidate-ELF-embedded bytes={} disk-install=skipped",
+                kernel.len(),
+            )
+            .as_str());
+            match crate::live_update::stage_and_swap(kernel, spawner, task_target.clone()).await {
+                Ok(never) => match never {},
+                Err(error) => log(alloc::format!("update live: failed ({})", error).as_str()),
+            }
+            return;
+        }
+
+        log("update live: step=02a/20 waiting for IPv4 network");
+        crate::r::readiness::wait_for(crate::r::readiness::NET_V4_CONFIGURED).await;
         if interrupted() {
             log("update live: interrupted before download");
             return;
         }
-        log("update live: step=02b/20 readiness-satisfied net=v4 trueosfs=mounted");
+        log("update live: step=02b/20 readiness-satisfied net=v4; checkpoint storage is conditional");
 
         log(alloc::format!("update live: step=03/20 download-begin {}", LIVE_ISO_URL).as_str());
         let payload = match crate::surfer::html_shack::fetch_bytes_via_pool(
