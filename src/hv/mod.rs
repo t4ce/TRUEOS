@@ -151,6 +151,12 @@ static BLUEPRINT_VMX_LAUNCH_SCRIPTS: [Mutex<Option<AllocString>>; TRUEOS_VM_ID_L
     [const { Mutex::new(None) }; TRUEOS_VM_ID_LIMIT];
 static BLUEPRINT_PROCESS_CONTEXTS: [Mutex<Option<BlueprintProcessContext>>; TRUEOS_VM_ID_LIMIT] =
     [const { Mutex::new(None) }; TRUEOS_VM_ID_LIMIT];
+// Exit reasons are control-plane results as well as lifecycle diagnostics.
+// Keep the last result outside the process context so a waiter cannot lose it
+// when a short-lived Blueprint reports an action and tears down immediately.
+// Staging the next generation clears the mailbox before publishing its context.
+static BLUEPRINT_EXIT_REASON_MAILBOXES: [Mutex<Option<AllocString>>; TRUEOS_VM_ID_LIMIT] =
+    [const { Mutex::new(None) }; TRUEOS_VM_ID_LIMIT];
 static BLUEPRINT_CONSOLE_INPUT_READY: [Signal<crate::wait::EmbassySpinRawMutex, ()>;
     TRUEOS_VM_ID_LIMIT] = [const { Signal::new() }; TRUEOS_VM_ID_LIMIT];
 // Serialize every host-side terminal ownership transition for one VM across
@@ -2861,6 +2867,9 @@ pub fn stage_blueprint_launch(
     let Some(process_slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) else {
         return Err(StartError::UnsupportedVmId);
     };
+    let Some(exit_reason_mailbox) = BLUEPRINT_EXIT_REASON_MAILBOXES.get(vm_id as usize) else {
+        return Err(StartError::UnsupportedVmId);
+    };
     let Some(transition_slot) = BLUEPRINT_TERMINAL_TRANSITIONS.get(vm_id as usize) else {
         return Err(StartError::UnsupportedVmId);
     };
@@ -2952,6 +2961,7 @@ pub fn stage_blueprint_launch(
     };
     *launch_script_slot.lock() = state.launch_script.clone();
     *slot.lock() = Some(guest_state);
+    let _ = exit_reason_mailbox.lock().take();
     *process_slot.lock() = Some(process_context);
     if let Some(log_slot) = BLUEPRINT_CONSOLE_LOG_BUFFERS.get(vm_id as usize) {
         let _ = log_slot.lock().take();
@@ -3599,12 +3609,27 @@ pub(crate) fn blueprint_console_set_exit_reason(vm_id: u8, reason: &str) -> bool
         stored.push(ch);
     }
     context.exit_reason = Some(stored.clone());
+    drop(guard);
+    if let Some(mailbox) = BLUEPRINT_EXIT_REASON_MAILBOXES.get(vm_id as usize) {
+        *mailbox.lock() = Some(stored.clone());
+    }
     hvlogf(format_args!("hv: vm{} lifecycle: blueprint exit reason={}", vm_id, stored));
     crate::log_os::blueprint_important_line(format_args!(
         "terminal-lifecycle: vm={} phase=exit-request reason={}\n",
         vm_id, stored
     ));
     true
+}
+
+pub(crate) fn blueprint_console_exit_reason(vm_id: u8) -> Option<AllocString> {
+    let active = BLUEPRINT_PROCESS_CONTEXTS
+        .get(vm_id as usize)
+        .and_then(|slot| slot.lock().as_ref()?.exit_reason.clone());
+    active.or_else(|| {
+        BLUEPRINT_EXIT_REASON_MAILBOXES
+            .get(vm_id as usize)
+            .and_then(|slot| slot.lock().clone())
+    })
 }
 
 pub(crate) fn blueprint_terminal_lease_current(

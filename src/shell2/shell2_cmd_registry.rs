@@ -66,11 +66,6 @@ fn dispatch_aud(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -
     super::cmds::aud::try_parse(spawner, io, rest)
 }
 
-fn dispatch_install(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    let mut args = rest.split_whitespace();
-    super::cmds::install::try_parse(spawner, io, &mut args)
-}
-
 fn dispatch_img(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     super::cmds::img::try_parse(spawner, io, rest)
 }
@@ -130,9 +125,8 @@ fn dispatch_surf(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) 
     super::cmds::surf::try_parse(spawner, io, rest)
 }
 
-fn dispatch_update(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    let mut args = rest.split_whitespace();
-    super::cmds::update::try_parse(spawner, io, &mut args)
+fn dispatch_os(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::os::try_parse(spawner, io, rest)
 }
 
 fn dispatch_cpp(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -317,12 +311,14 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         tool_parameters_json: Some(TOOL_JSON_VGPU),
     },
     BuiltinShell2CmdEntry {
-        name: "install",
-        mode: "cmd",
+        name: "os",
+        mode: "tui",
         color: Some(STATUS_PINK_RGB),
         advertised: true,
-        handler: dispatch_install,
-        tool_description: None,
+        handler: dispatch_os,
+        tool_description: Some(
+            "Open the OS administration TUI for disk installation or a live kernel update.",
+        ),
         tool_parameters_json: None,
     },
     BuiltinShell2CmdEntry {
@@ -473,15 +469,6 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         tool_parameters_json: Some(TOOL_JSON_VID),
     },
     BuiltinShell2CmdEntry {
-        name: "update",
-        mode: "cmd",
-        color: Some(STATUS_PINK_RGB),
-        advertised: true,
-        handler: dispatch_update,
-        tool_description: None,
-        tool_parameters_json: None,
-    },
-    BuiltinShell2CmdEntry {
         name: "set",
         mode: "cmd",
         color: None,
@@ -552,7 +539,7 @@ mod tests {
     fn unrelated_command_length_may_land_inside_utf8() {
         let submitted = "cpp font stamp \"中国 § العربية 🦀\"";
 
-        assert_eq!(starts_with_command(submitted, "install"), None);
+        assert_eq!(starts_with_command(submitted, "os"), None);
         assert_eq!(
             starts_with_command(submitted, "cpp"),
             Some(" font stamp \"中国 § العربية 🦀\"")
@@ -577,7 +564,7 @@ mod tests {
     #[test]
     fn titlebar_groups_cry_and_display_only_backup_with_pink_commands() {
         let status = command_names_status_text();
-        let positions = ["cry", "backup", "install", "update", "shell"].map(|label| {
+        let positions = ["cry", "backup", "os", "shell"].map(|label| {
             let token = alloc::format!("\x1b[1;38;2;255;55;255m{label}\x1b[0m");
             status.find(token.as_str()).unwrap()
         });
@@ -648,9 +635,9 @@ pub(crate) fn try_dispatch(
 
 pub(crate) fn command_names_status_text() -> AllocString {
     const STATUS_ORDER: &[&str] = &[
-        "tde", "shot", "disc", "edit", "cry", "backup", "install", "update", "shell", "hyper",
-        "surf", "net", "ssh", "qjs", "grid", "helio", "tts", "stt", "cpp", "vgpu", "aud", "vid",
-        "acpi", "tlb", "ram", "smp", "etc",
+        "tde", "shot", "disc", "edit", "cry", "backup", "os", "shell", "hyper", "surf", "net",
+        "ssh", "qjs", "grid", "helio", "tts", "stt", "cpp", "vgpu", "aud", "vid", "acpi", "tlb",
+        "ram", "smp", "etc",
     ];
 
     let mut out = AllocString::new();
@@ -692,9 +679,9 @@ pub(crate) fn command_names_status_text_fitting(max_width: usize) -> AllocString
     }
 
     const STATUS_ORDER: &[&str] = &[
-        "tde", "shot", "disc", "edit", "cry", "backup", "install", "update", "shell", "hyper",
-        "surf", "net", "ssh", "qjs", "grid", "helio", "tts", "stt", "cpp", "vgpu", "aud", "vid",
-        "acpi", "tlb", "ram", "smp", "etc",
+        "tde", "shot", "disc", "edit", "cry", "backup", "os", "shell", "hyper", "surf", "net",
+        "ssh", "qjs", "grid", "helio", "tts", "stt", "cpp", "vgpu", "aud", "vid", "acpi", "tlb",
+        "ram", "smp", "etc",
     ];
 
     let content_width = max_width.saturating_sub(3);

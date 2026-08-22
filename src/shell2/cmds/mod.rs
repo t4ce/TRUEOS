@@ -18,6 +18,7 @@ pub(crate) mod install;
 #[cfg(feature = "trueos_lumen")]
 pub(crate) mod lum;
 pub(crate) mod net;
+pub(crate) mod os;
 pub(crate) mod qjs;
 pub(crate) mod ram;
 pub(crate) mod rapl;

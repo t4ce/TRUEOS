@@ -1,116 +1,50 @@
-use core::str::SplitWhitespace;
-
 use trueos_executor::Spawner;
 use trueos_time::{Duration as EmbassyDuration, Timer};
 
-use crate::shell2::shell2_cmd::ParseOutcome;
 use crate::shell2::{
-    MatrixTarget, ShellBackend2, matrix_target_for_backend, matrix_target_interrupted,
-    print_matrix_target_line, print_shell_line, set_matrix_target_active,
+    MatrixTarget, matrix_target_interrupted, print_matrix_target_line, set_matrix_target_active,
 };
 
-pub(crate) fn print_update_disk_table(io: &'static dyn ShellBackend2) {
-    let choices = super::tlb_helper::collect_top_level_disk_choices();
-    super::tlb_helper::print_disk_choice_table(io, "update", "disk selection", choices.as_slice());
-}
-
-pub(crate) fn try_parse(
+pub(crate) fn submit_online_install_to_target(
     spawner: &Spawner,
-    io: &'static dyn ShellBackend2,
-    args: &mut SplitWhitespace<'_>,
-) -> ParseOutcome {
-    let Some(arg) = args.next() else {
-        print_update_disk_table(io);
-        print_shell_line(
-            io,
-            "update: run `update <disk-id>` for a persistent install, `update live` for a release swap, or `update live embedded` for a no-download self-swap",
-        );
-        return ParseOutcome::Handled;
-    };
-    if arg == "live" {
-        let source = match args.next() {
-            None => LiveCandidateSource::Release,
-            Some("embedded") if args.next().is_none() => LiveCandidateSource::Embedded,
-            _ => {
-                print_shell_line(io, "update: usage `update <disk-id>|live [embedded]`");
-                return ParseOutcome::Handled;
-            }
-        };
-        submit_live_update(spawner, io, source);
-        return ParseOutcome::Handled;
-    }
-
-    if args.next().is_some() {
-        print_shell_line(io, "update: usage `update <disk-id>|live [embedded]`");
-        return ParseOutcome::Handled;
-    }
-
-    let Some(raw_id) = super::tlb_helper::parse_disc_id_raw(arg) else {
-        print_shell_line(io, "update: invalid disk id (or use `update live`)");
-        print_update_disk_table(io);
-        return ParseOutcome::Handled;
-    };
-    let Some(disk) = super::tlb_helper::select_top_level_disk(raw_id) else {
-        print_shell_line(io, "update: no such top-level disk");
-        print_update_disk_table(io);
-        return ParseOutcome::Handled;
-    };
-
-    submit_update(spawner, io, disk);
-    ParseOutcome::Handled
-}
-
-pub(crate) fn submit_update(
-    spawner: &Spawner,
-    io: &'static dyn ShellBackend2,
+    target: MatrixTarget,
     disk: crate::disc::block::DeviceHandle,
 ) {
-    let target = matrix_target_for_backend(io);
     let info = disk.info();
     print_matrix_target_line(
         &target,
-        alloc::format!("update: starting on disk id={} ({})", info.id.raw(), info.id).as_str(),
+        alloc::format!("install online: starting on disk id={} ({})", info.id.raw(), info.id)
+            .as_str(),
     );
 
     set_matrix_target_active(&target, true);
-    match update_command_task(target.clone(), disk) {
+    match online_install_command_task(target.clone(), disk) {
         Ok(token) => spawner.spawn(token),
         Err(_) => {
             set_matrix_target_active(&target, false);
-            print_shell_line(io, "update: spawn failed");
+            print_matrix_target_line(&target, "install online: spawn failed");
         }
     }
 }
 
-#[derive(Clone, Copy)]
-enum LiveCandidateSource {
-    Release,
-    Embedded,
-}
-
-fn submit_live_update(
-    spawner: &Spawner,
-    io: &'static dyn ShellBackend2,
-    source: LiveCandidateSource,
-) {
-    let target = matrix_target_for_backend(io);
+pub(crate) fn submit_live_update_to_target(spawner: &Spawner, target: MatrixTarget) {
     print_matrix_target_line(
         &target,
         "update live: step=01/20 command-accepted mode=RAM-only disk-install=disabled",
     );
 
     set_matrix_target_active(&target, true);
-    match live_update_command_task(target.clone(), *spawner, source) {
+    match live_update_command_task(target.clone(), *spawner) {
         Ok(token) => spawner.spawn(token),
         Err(_) => {
             set_matrix_target_active(&target, false);
-            print_shell_line(io, "update live: spawn failed");
+            print_matrix_target_line(&target, "update live: spawn failed");
         }
     }
 }
 
 #[trueos_executor::task(pool_size = 2)]
-async fn update_command_task(target: MatrixTarget, disk: crate::disc::block::DeviceHandle) {
+async fn online_install_command_task(target: MatrixTarget, disk: crate::disc::block::DeviceHandle) {
     let task_target = target.clone();
     async move {
         const ISO_URL: &str = "https://trueos.eu/TrueOS.7z";
@@ -123,18 +57,18 @@ async fn update_command_task(target: MatrixTarget, disk: crate::disc::block::Dev
         let interrupted = || matrix_target_interrupted(&task_target);
 
         let info = disk.info();
-        log("update: waiting for net");
+        log("install online: waiting for net");
         crate::r::readiness::wait_for(
             crate::r::readiness::NET_V4_CONFIGURED | crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
         )
         .await;
         if interrupted() {
-            log("update: interrupted before download");
+            log("install online: interrupted before download");
             return;
         }
 
         log(alloc::format!(
-            "update: target id={} ({}) blocks={} bs={} writable={} label={:?}",
+            "install online: target id={} ({}) blocks={} bs={} writable={} label={:?}",
             info.id.raw(),
             info.id,
             info.block_count,
@@ -144,13 +78,13 @@ async fn update_command_task(target: MatrixTarget, disk: crate::disc::block::Dev
         )
         .as_str());
         if interrupted() {
-            log("update: interrupted before disk probe");
+            log("install online: interrupted before disk probe");
             return;
         }
 
         let (status, err) = crate::r::disc::detect::detect_physical_disk_detail(disk).await;
         log(alloc::format!(
-            "update: target status={}{}",
+            "install online: target status={}{}",
             status.short(),
             match (&status, err) {
                 (crate::r::disc::detect::DiscStatus::Unknown, Some(e)) => {
@@ -160,14 +94,9 @@ async fn update_command_task(target: MatrixTarget, disk: crate::disc::block::Dev
             }
         )
         .as_str());
-        if !matches!(status, crate::r::disc::detect::DiscStatus::Trueos { .. }) {
-            log("update: install before update");
-            return;
-        }
-
-        log(alloc::format!("update: download {}", ISO_URL).as_str());
+        log(alloc::format!("install online: download {}", ISO_URL).as_str());
         if interrupted() {
-            log("update: interrupted before download");
+            log("install online: interrupted before download");
             return;
         }
 
@@ -180,50 +109,50 @@ async fn update_command_task(target: MatrixTarget, disk: crate::disc::block::Dev
         {
             Ok(fetch) => fetch.bytes,
             Err(e) => {
-                log(alloc::format!("update: download failed ({})", e).as_str());
+                log(alloc::format!("install online: download failed ({})", e).as_str());
                 return;
             }
         };
         if interrupted() {
-            log("update: interrupted after download");
+            log("install online: interrupted after download");
             return;
         }
 
         log(alloc::format!(
-            "update: downloaded payload={} bytes (7z_magic={})",
+            "install online: downloaded payload={} bytes (7z_magic={})",
             payload.len(),
             crate::z7::looks_like_7z(payload.as_slice())
         )
         .as_str());
 
         if !crate::z7::looks_like_7z(payload.as_slice()) {
-            log("update: refused (payload is not a 7z archive)");
+            log("install online: refused (payload is not a 7z archive)");
             return;
         }
 
         let iso = match crate::z7::extract_file_to_vec(payload.as_slice(), "trueos.iso") {
             Ok(v) => v,
             Err(e) => {
-                log(alloc::format!("update: extract failed ({:?})", e).as_str());
+                log(alloc::format!("install online: extract failed ({:?})", e).as_str());
                 return;
             }
         };
         drop(payload);
         let iso_view = iso.as_slice();
         if interrupted() {
-            log("update: interrupted before install");
+            log("install online: interrupted before install");
             return;
         }
 
         log(alloc::format!(
-            "update: extracted trueos.iso bytes={} (iso9660_magic={})",
+            "install online: extracted trueos.iso bytes={} (iso9660_magic={})",
             iso_view.len(),
             crate::iso9660::looks_like_iso9660(iso_view)
         )
         .as_str());
 
         if !crate::iso9660::looks_like_iso9660(iso_view) {
-            log("update: refused (extracted data is not an ISO9660 image)");
+            log("install online: refused (extracted data is not an ISO9660 image)");
             return;
         }
 
@@ -233,14 +162,15 @@ async fn update_command_task(target: MatrixTarget, disk: crate::disc::block::Dev
                 let efi_img = match crate::iso9660::file_slice(iso_view, "/efi.img") {
                     Ok(v) => v,
                     Err(e) => {
-                        log(alloc::format!("update: ISO missing efi.img ({:?})", e).as_str());
+                        log(alloc::format!("install online: ISO missing efi.img ({:?})", e)
+                            .as_str());
                         return;
                     }
                 };
                 match crate::efi_img::bootx64_from_efi_img(efi_img) {
                     Some(v) => v,
                     None => {
-                        log("update: efi.img missing EFI/BOOT/BOOTX64.EFI");
+                        log("install online: efi.img missing EFI/BOOT/BOOTX64.EFI");
                         return;
                     }
                 }
@@ -250,7 +180,7 @@ async fn update_command_task(target: MatrixTarget, disk: crate::disc::block::Dev
         let kernel = match crate::iso9660::file_slice(iso_view, "/TRUEOS.elf") {
             Ok(v) => v,
             Err(e) => {
-                log(alloc::format!("update: ISO missing TRUEOS.elf ({:?})", e).as_str());
+                log(alloc::format!("install online: ISO missing TRUEOS.elf ({:?})", e).as_str());
                 return;
             }
         };
@@ -258,7 +188,7 @@ async fn update_command_task(target: MatrixTarget, disk: crate::disc::block::Dev
         let bootx64_ok = bootx64.get(0..2) == Some(b"MZ");
         let kernel_ok = kernel.get(0..4) == Some(b"\x7FELF");
         log(alloc::format!(
-            "update: BOOTX64.EFI={} bytes (mz={}), TRUEOS.elf={} bytes (elf={})",
+            "install online: BOOTX64.EFI={} bytes (mz={}), TRUEOS.elf={} bytes (elf={})",
             bootx64.len(),
             bootx64_ok,
             kernel.len(),
@@ -266,11 +196,11 @@ async fn update_command_task(target: MatrixTarget, disk: crate::disc::block::Dev
         )
         .as_str());
         if !bootx64_ok || !kernel_ok {
-            log("update: refusing to install (payload format looks wrong)");
+            log("install online: refusing to install (payload format looks wrong)");
             return;
         }
 
-        log("update: installing onto selected TRUEOS disk");
+        log("install online: installing onto selected disk");
         match crate::disc::install::install_bootable_uefi_gpt_with_log(
             disk,
             bootx64,
@@ -280,11 +210,11 @@ async fn update_command_task(target: MatrixTarget, disk: crate::disc::block::Dev
         .await
         {
             Ok(()) => match crate::r::fs::trueosfs::remount_root_async(disk).await {
-                Ok(Some(_)) => log("update: ok"),
-                Ok(None) => log("update: failed to remount TRUEOSFS"),
-                Err(e) => log(alloc::format!("update: remount failed ({:?})", e).as_str()),
+                Ok(Some(_)) => log("install online: ok"),
+                Ok(None) => log("install online: failed to remount TRUEOSFS"),
+                Err(e) => log(alloc::format!("install online: remount failed ({:?})", e).as_str()),
             },
-            Err(e) => log(alloc::format!("update: failed ({:?})", e).as_str()),
+            Err(e) => log(alloc::format!("install online: failed ({:?})", e).as_str()),
         }
     }
     .await;
@@ -292,11 +222,7 @@ async fn update_command_task(target: MatrixTarget, disk: crate::disc::block::Dev
 }
 
 #[trueos_executor::task]
-async fn live_update_command_task(
-    target: MatrixTarget,
-    spawner: Spawner,
-    source: LiveCandidateSource,
-) {
+async fn live_update_command_task(target: MatrixTarget, spawner: Spawner) {
     let task_target = target.clone();
     async move {
         const LIVE_ISO_URL: &str = "https://trueos.eu/TrueOS.7z";
@@ -307,24 +233,6 @@ async fn live_update_command_task(
             print_matrix_target_line(&task_target, line);
         };
         let interrupted = || matrix_target_interrupted(&task_target);
-
-        if matches!(source, LiveCandidateSource::Embedded) {
-            log("update live: steps=02-05 bypassed source=embedded-boot-ELF transport=none");
-            let Some(kernel) = crate::limine::kernel_file_bytes().map(|bytes| bytes.to_vec()) else {
-                log("update live: embedded boot ELF unavailable");
-                return;
-            };
-            log(alloc::format!(
-                "update live: step=05/20 candidate-ELF-embedded bytes={} disk-install=skipped",
-                kernel.len(),
-            )
-            .as_str());
-            match crate::live_update::stage_and_swap(kernel, spawner, task_target.clone()).await {
-                Ok(never) => match never {},
-                Err(error) => log(alloc::format!("update live: failed ({})", error).as_str()),
-            }
-            return;
-        }
 
         log("update live: step=02a/20 waiting for IPv4 network");
         crate::r::readiness::wait_for(crate::r::readiness::NET_V4_CONFIGURED).await;

@@ -1,64 +1,27 @@
-use core::str::SplitWhitespace;
-
 use trueos_executor::Spawner;
 use trueos_time::{Duration as EmbassyDuration, Timer};
 
-use crate::shell2::shell2_cmd::ParseOutcome;
 use crate::shell2::{
-    MatrixTarget, ShellBackend2, matrix_target_for_backend, matrix_target_interrupted,
-    print_matrix_target_line, print_shell_line, set_matrix_target_active,
+    MatrixTarget, matrix_target_interrupted, print_matrix_target_line, set_matrix_target_active,
 };
 
-pub(crate) fn print_install_disk_table(io: &'static dyn ShellBackend2) {
-    let choices = super::tlb_helper::collect_top_level_disk_choices();
-    super::tlb_helper::print_disk_choice_table(io, "install", "disk selection", choices.as_slice());
-}
-
-pub(crate) fn try_parse(
+pub(crate) fn submit_install_to_target(
     spawner: &Spawner,
-    io: &'static dyn ShellBackend2,
-    args: &mut SplitWhitespace<'_>,
-) -> ParseOutcome {
-    let Some(arg) = args.next() else {
-        print_install_disk_table(io);
-        print_shell_line(io, "install: choose a disk id and run `install <disk-id>`");
-        return ParseOutcome::Handled;
-    };
-    if args.next().is_some() {
-        print_shell_line(io, "install: usage `install <disk-id>`");
-        return ParseOutcome::Handled;
-    }
-
-    let Some(raw_id) = super::tlb_helper::parse_disc_id_raw(arg) else {
-        print_shell_line(io, "install: invalid disk id");
-        print_install_disk_table(io);
-        return ParseOutcome::Handled;
-    };
-    let Some(disk) = super::tlb_helper::select_top_level_disk(raw_id) else {
-        print_shell_line(io, "install: no such top-level disk");
-        print_install_disk_table(io);
-        return ParseOutcome::Handled;
-    };
-
-    submit_install(spawner, io, disk);
-    ParseOutcome::Handled
-}
-
-pub(crate) fn submit_install(
-    spawner: &Spawner,
-    io: &'static dyn ShellBackend2,
+    target: MatrixTarget,
     disk: crate::disc::block::DeviceHandle,
 ) {
     let Some(bootx64) = crate::limine::install_bootx64_bytes() else {
-        print_shell_line(io, "install: missing boot payload module `trueos.install.bootx64`");
+        print_matrix_target_line(
+            &target,
+            "install: missing boot payload module `trueos.install.bootx64`",
+        );
         return;
     };
     let Some(kernel) = crate::limine::install_kernel_bytes() else {
-        print_shell_line(io, "install: missing install kernel payload");
+        print_matrix_target_line(&target, "install: missing install kernel payload");
         return;
     };
 
-    let target = matrix_target_for_backend(io);
     let info = disk.info();
     print_matrix_target_line(
         &target,
@@ -70,7 +33,7 @@ pub(crate) fn submit_install(
         Ok(token) => spawner.spawn(token),
         Err(_) => {
             set_matrix_target_active(&target, false);
-            print_shell_line(io, "install: spawn failed");
+            print_matrix_target_line(&target, "install: spawn failed");
         }
     }
 }
