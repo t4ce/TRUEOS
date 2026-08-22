@@ -55,9 +55,6 @@ version = "2.1"
 features = ["full"]
 default-features = false
 
-[dependencies.log]
-version = "0.4"
-
 [dependencies.mbarrier]
 version = "0.1"
 

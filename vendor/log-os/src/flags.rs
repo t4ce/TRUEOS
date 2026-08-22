@@ -251,7 +251,7 @@ pub fn target_log_area(target: &str) -> LogArea {
         "boot" | "cpu" | "tokio" | "rapl" => LogArea::Boot,
         "service" | "spawn-svc" | "http" => LogArea::Service,
         "net" | "dns" | "dhcp" | "tls" | "icmp" => LogArea::Net,
-        "usb" | "crabusb" | "crab-usb" => LogArea::Usb,
+        "usb" | "usb-if" | "usb_if" | "crabusb" | "crab-usb" => LogArea::Usb,
         "fs" | "storage" | "trueosfs" | "nvme" => LogArea::Storage,
         "gfx" | "intel" | "display" | "ui3" => LogArea::Gfx,
         "gpgpu" | "intel/gpgpu" | "opencl" | "intel/opencl" | "adls" => LogArea::Gpgpu,
@@ -277,6 +277,7 @@ pub fn module_path_log_area(path: &str) -> LogArea {
     }
     if path_prefix(path, "usb3")
         || path_prefix(path, "usb")
+        || path_prefix(path, "usb_if")
         || path_prefix(path, "crab_usb")
         || path_prefix(path, "crab-usb")
     {
@@ -392,6 +393,13 @@ mod tests {
     #[test]
     fn routes_ui4_to_global_area() {
         assert_eq!(target_log_area("ui4"), LogArea::Global);
+    }
+
+    #[test]
+    fn routes_crabusb_crates_to_usb_area() {
+        assert_eq!(target_log_area("usb_if"), LogArea::Usb);
+        assert_eq!(module_path_log_area("usb_if::descriptor::parser"), LogArea::Usb);
+        assert_eq!(module_path_log_area("crab_usb::backend::kmod"), LogArea::Usb);
     }
 
     #[test]

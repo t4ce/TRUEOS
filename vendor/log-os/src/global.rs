@@ -22,11 +22,7 @@ pub fn global_log_enabled(target: &str, level: LogLevel) -> bool {
 }
 
 #[doc(hidden)]
-pub fn global_log_with_target_level(
-    target: &str,
-    level: LogLevel,
-    args: fmt::Arguments<'_>,
-) {
+pub fn global_log_with_target_level(target: &str, level: LogLevel, args: fmt::Arguments<'_>) {
     let Some(dispatch) = GLOBAL_LOG_DISPATCH.get() else {
         return;
     };
