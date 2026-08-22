@@ -7,7 +7,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use core::{
     fmt,
-    sync::atomic::{AtomicU32, Ordering},
+    sync::atomic::{AtomicBool, AtomicU32, Ordering},
 };
 use log_os_core::LogLevel;
 
@@ -2349,8 +2349,13 @@ pub extern "C" fn trueos_cabi_shell_attached_readable_len() -> usize {
 /// programs (Crossterm, `poll(2)` loops, and direct `read(2)` users), which do
 /// not know about the TrueOS lease ABI but have already declared their intent
 /// by operating on the terminal stdin descriptor.
+static TERMINAL_IO_CLAIMED: AtomicBool = AtomicBool::new(false);
+
 pub(crate) fn claim_attached_console_for_terminal_io() {
     if crate::hv::current_hull_guest_context_vm_id().is_none() {
+        return;
+    }
+    if TERMINAL_IO_CLAIMED.load(Ordering::Acquire) {
         return;
     }
 
@@ -2358,7 +2363,9 @@ pub(crate) fn claim_attached_console_for_terminal_io() {
     // A failure means that the process has no terminal surface, is parked, or
     // is already being torn down.  Preserve the Unix operation's own result;
     // the lease API remains authoritative for callers that need diagnostics.
-    let _ = unsafe { trueos_cabi_blueprint_terminal_lease_current_v1(0, &mut epoch) };
+    if unsafe { trueos_cabi_blueprint_terminal_lease_current_v1(0, &mut epoch) } == 0 {
+        TERMINAL_IO_CLAIMED.store(true, Ordering::Release);
+    }
 }
 
 /// Wait for attached terminal input or a typed terminal-surface change.

@@ -116,6 +116,7 @@ debug = false
 opt-level = 2
 
 [patch.crates-io]
+cordyceps = { path = "vendor/cordyceps-0.3.5" }
 acpi = { path = "vendor/acpi-6.1.1" }
 aml = { path = "vendor/aml-0.16.4" }
 png = { path = "vendor/png-0.18.1" }

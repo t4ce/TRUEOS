@@ -248,12 +248,12 @@ pub const fn threshold_down_set(filter: LogLevelFilter) -> LogLevelSet {
 pub fn target_log_area(target: &str) -> LogArea {
     match target {
         "global" | "ui4" => LogArea::Global,
-        "boot" | "cpu" | "tokio" | "rapl" => LogArea::Boot,
+        "boot" | "cpu" | "tokio" | "rapl" | "acpi" | "aml" => LogArea::Boot,
         "service" | "spawn-svc" | "http" => LogArea::Service,
         "net" | "dns" | "dhcp" | "tls" | "icmp" => LogArea::Net,
         "usb" | "usb-if" | "usb_if" | "crabusb" | "crab-usb" => LogArea::Usb,
         "fs" | "storage" | "trueosfs" | "nvme" => LogArea::Storage,
-        "gfx" | "intel" | "display" | "ui3" => LogArea::Gfx,
+        "gfx" | "intel" | "display" | "ui3" | "png" => LogArea::Gfx,
         "gpgpu" | "intel/gpgpu" | "opencl" | "intel/opencl" | "adls" => LogArea::Gpgpu,
         "render" | "intel/render" | "scratch" => LogArea::Render,
         "media" | "intel-media" | "intel/media" | "intel/media2" | "intel/media-encode"
@@ -274,6 +274,12 @@ pub fn module_path_log_area(path: &str) -> LogArea {
 
     if path_prefix(path, "aud") {
         return LogArea::Hda;
+    }
+    if path_prefix(path, "acpi") || path_prefix(path, "aml") {
+        return LogArea::Boot;
+    }
+    if path_prefix(path, "png") {
+        return LogArea::Gfx;
     }
     if path_prefix(path, "usb3")
         || path_prefix(path, "usb")
@@ -407,6 +413,20 @@ mod tests {
         assert_eq!(target_log_area("intel-media"), LogArea::IntelMediaNgin);
         assert_eq!(target_log_area("intel/media"), LogArea::IntelMediaNgin);
         assert_eq!(target_log_area("intel/media-encode"), LogArea::IntelMediaNgin);
+    }
+
+    #[test]
+    fn routes_acpi_and_aml_to_boot_area() {
+        assert_eq!(target_log_area("acpi"), LogArea::Boot);
+        assert_eq!(target_log_area("aml"), LogArea::Boot);
+        assert_eq!(module_path_log_area("acpi::aml::namespace"), LogArea::Boot);
+        assert_eq!(module_path_log_area("aml::parser"), LogArea::Boot);
+    }
+
+    #[test]
+    fn routes_png_to_gfx_area() {
+        assert_eq!(target_log_area("png"), LogArea::Gfx);
+        assert_eq!(module_path_log_area("png::filter"), LogArea::Gfx);
     }
 }
 
