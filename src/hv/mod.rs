@@ -1320,20 +1320,23 @@ fn blueprint_child_lifecycle_cleanup(vm_id: u8, generation: u64, retain_for_resu
         {
             link.state = BLUEPRINT_CHILD_STATE_EXITED;
             link.parent_to_child.clear();
-            link.child_to_parent.clear();
+            // Keep child-to-parent messages available after guest exit.  The
+            // parent may drain a final result before it releases its own VM;
+            // the record is reclaimed on parent teardown or VM-id reuse.
         }
     }
     // A parent owns the lifetime of its hidden children.  Requesting stop is
     // nonblocking; each child still performs the ordinary VM teardown path.
     for (child_id, slot) in BLUEPRINT_CHILD_LINKS.iter().enumerate() {
-        let mut link = slot.lock();
-        let Some(link) = link.as_mut() else {
-            continue;
-        };
-        if blueprint_child_actor_is_parent(link, vm_id, generation)
-            && link.state < BLUEPRINT_CHILD_STATE_EXITED
-        {
-            link.state = BLUEPRINT_CHILD_STATE_STOPPING;
+        let owned = slot
+            .lock()
+            .as_ref()
+            .is_some_and(|link| blueprint_child_actor_is_parent(link, vm_id, generation));
+        if owned {
+            // No principal remains to observe this endpoint, so release the
+            // queues now rather than retaining guest-provided bytes until the
+            // numeric VM slot happens to be reused.
+            let _ = slot.lock().take();
             let _ = stop(child_id as u8);
         }
     }
@@ -5253,6 +5256,13 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
     vm.preserve_exit.store(false, Ordering::Release);
     vm.clean_exit.store(false, Ordering::Release);
     set_current_vm_id(vm_id);
+    if let Some(slot) = BLUEPRINT_CHILD_LINKS.get(vm_id as usize)
+        && let Some(link) = slot.lock().as_mut()
+        && link.child_generation == vm.run_generation.load(Ordering::Acquire)
+        && link.state == BLUEPRINT_CHILD_STATE_STARTING
+    {
+        link.state = BLUEPRINT_CHILD_STATE_RUNNING;
+    }
     let cpu = crate::cpu::CpuProfile::current();
     if let Some(cpu) = cpu {
         hvlogf(format_args!(

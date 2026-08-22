@@ -1752,6 +1752,131 @@ pub extern "C" fn trueos_cabi_qjs_workbench_close_v1() -> i32 {
     }
 }
 
+/// Spawn this Blueprint archive in a hidden child Hull.  The child receives
+/// `--trueos-child-worker` in argv and `initial_*` as its first parent message.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_blueprint_child_spawn_v1(
+    initial_ptr: *const u8,
+    initial_len: usize,
+    out_handle: *mut u64,
+) -> i32 {
+    if out_handle.is_null()
+        || initial_len > trueos_vm::vmcall::PAYLOAD_CAP
+        || (initial_len != 0 && initial_ptr.is_null())
+        || crate::hv::current_hull_guest_context_vm_id().is_none()
+    {
+        return -1;
+    }
+    let initial = if initial_len == 0 {
+        &[]
+    } else {
+        unsafe { core::slice::from_raw_parts(initial_ptr, initial_len) }
+    };
+    let (status, handle) = trueos_vm::vmcall::call_with_payload(
+        trueos_vm::vmcall::OP_BP_CHILD_SPAWN_V1,
+        0,
+        0,
+        initial,
+        &mut [],
+    );
+    if status != trueos_vm::vmcall::STATUS_OK || (handle as i64) <= 0 {
+        return -1;
+    }
+    unsafe { out_handle.write(handle) };
+    0
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_blueprint_child_send_v1(
+    handle: u64,
+    data_ptr: *const u8,
+    data_len: usize,
+) -> isize {
+    if data_len > trueos_vm::vmcall::PAYLOAD_CAP
+        || (data_len != 0 && data_ptr.is_null())
+        || crate::hv::current_hull_guest_context_vm_id().is_none()
+    {
+        return -1;
+    }
+    let data = if data_len == 0 {
+        &[]
+    } else {
+        unsafe { core::slice::from_raw_parts(data_ptr, data_len) }
+    };
+    let (status, result) = trueos_vm::vmcall::call_with_payload(
+        trueos_vm::vmcall::OP_BP_CHILD_SEND_V1,
+        handle,
+        0,
+        data,
+        &mut [],
+    );
+    if status == trueos_vm::vmcall::STATUS_OK {
+        vmcall_signed(result)
+    } else {
+        -1
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_blueprint_child_receive_v1(
+    handle: u64,
+    out_ptr: *mut u8,
+    out_cap: usize,
+) -> isize {
+    if crate::hv::current_hull_guest_context_vm_id().is_none() {
+        return -1;
+    }
+    let mut response = alloc::vec![0u8; trueos_vm::vmcall::PAYLOAD_CAP];
+    let (status, result) = trueos_vm::vmcall::call_with_payload(
+        trueos_vm::vmcall::OP_BP_CHILD_RECEIVE_V1,
+        handle,
+        0,
+        &[],
+        response.as_mut_slice(),
+    );
+    if status != trueos_vm::vmcall::STATUS_OK {
+        return -1;
+    }
+    let length = vmcall_signed(result);
+    if length <= 0 {
+        return length;
+    }
+    let length = length as usize;
+    if out_ptr.is_null() || out_cap < length || length > response.len() {
+        return length as isize;
+    }
+    unsafe { core::ptr::copy_nonoverlapping(response.as_ptr(), out_ptr, length) };
+    length as isize
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_blueprint_child_status_v1(handle: u64) -> i32 {
+    if crate::hv::current_hull_guest_context_vm_id().is_none() {
+        return -1;
+    }
+    let (status, result) =
+        trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_CHILD_STATUS_V1, handle, 0);
+    if status == trueos_vm::vmcall::STATUS_OK {
+        vmcall_signed_i32(result)
+    } else {
+        -1
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_blueprint_child_terminate_v1(handle: u64) -> i32 {
+    if crate::hv::current_hull_guest_context_vm_id().is_none() {
+        return -1;
+    }
+    let (status, result) =
+        trueos_vm::vmcall::call(trueos_vm::vmcall::OP_BP_CHILD_TERMINATE_V1, handle, 0);
+    if status == trueos_vm::vmcall::STATUS_OK {
+        vmcall_signed_i32(result)
+    } else {
+        -1
+    }
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_blueprint_exit_reason(
     data_ptr: *const u8,

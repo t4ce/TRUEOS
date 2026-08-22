@@ -134,6 +134,13 @@ pub const OP_BP_ASYNC_FS_LIST_DIR_START: u32 = 0xDA; // payload resolved path ->
 pub const OP_BP_ASYNC_FS_LIST_MOUNTS_START: u32 = 0x139; // no payload -> mounted TRUEOSFS roots
 pub const OP_BP_ASYNC_FS_RENAME_START: u32 = 0x13A; // payload src-len + resolved src/dst -> operation id/rc
 pub const OP_BP_SHELL_ATTACHED_WAIT_READABLE: u32 = 0x13B; // arg0 timeout ms -> event-driven terminal wake
+// Generic same-archive child-Hull service.  Child handle 0 names the worker's
+// parent endpoint; nonzero handles are opaque parent-owned values.
+pub const OP_BP_CHILD_SPAWN_V1: u32 = 0x13C; // payload initial message -> child handle
+pub const OP_BP_CHILD_SEND_V1: u32 = 0x13D; // arg0 handle, payload message -> bytes/rc
+pub const OP_BP_CHILD_RECEIVE_V1: u32 = 0x13E; // arg0 handle -> one queued message
+pub const OP_BP_CHILD_STATUS_V1: u32 = 0x13F; // arg0 handle -> lifecycle state/rc
+pub const OP_BP_CHILD_TERMINATE_V1: u32 = 0x140; // arg0 child handle -> rc
 pub const OP_BP_UI4_SCENE_KEYBOARD_STATE: u32 = 0xDB; // arg0 window -> rc + focused held-key state
 pub const OP_BP_UI4_SCENE_FRAME_OPEN_IMMUTABLE: u32 = 0xDC; // arg0 x/y,arg1 width/height -> window
 pub const OP_BP_UI4_SCENE_SPRITE_UPLOAD_BEGIN: u32 = 0xDD; // arg0 window,arg1 sprite,payload width/height -> rc
@@ -2530,6 +2537,58 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         OP_BP_QJS_WORKBENCH_CLOSE_V1 => {
             let closed = crate::shell2::qjs_workbench::close(vm_id);
             write_response(vm_id, seq, STATUS_OK, u64::from(closed), 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_CHILD_SPAWN_V1 => {
+            let Some(payload) = request_payload(vm_id, req_len) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let result = crate::hv::blueprint_child_spawn(vm_id, payload);
+            write_response(
+                vm_id,
+                seq,
+                STATUS_OK,
+                result.unwrap_or_else(|error| (error as i64) as u64),
+                0,
+            );
+            DispatchOutcome::Resume
+        }
+        OP_BP_CHILD_SEND_V1 => {
+            let Some(payload) = request_payload(vm_id, req_len) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let result = crate::hv::blueprint_child_send(vm_id, arg0, payload)
+                .map(|written| written as i64)
+                .unwrap_or_else(i64::from);
+            write_response(vm_id, seq, STATUS_OK, result as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_CHILD_RECEIVE_V1 => {
+            let Some(page) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let out = unsafe { &mut (*page).payload };
+            match crate::hv::blueprint_child_receive(vm_id, arg0, out) {
+                Ok(length) => write_response(vm_id, seq, STATUS_OK, length as u64, length as u32),
+                Err(error) => write_response(vm_id, seq, STATUS_OK, (error as i64) as u64, 0),
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_CHILD_STATUS_V1 => {
+            let result = crate::hv::blueprint_child_status(vm_id, arg0)
+                .map(i64::from)
+                .unwrap_or_else(i64::from);
+            write_response(vm_id, seq, STATUS_OK, result as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_CHILD_TERMINATE_V1 => {
+            let result = crate::hv::blueprint_child_terminate(vm_id, arg0)
+                .map(|()| 0i64)
+                .unwrap_or_else(i64::from);
+            write_response(vm_id, seq, STATUS_OK, result as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_GRIDPAPER_SNAPSHOT_SUBMIT => {
