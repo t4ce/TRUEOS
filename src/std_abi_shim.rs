@@ -2726,6 +2726,16 @@ pub unsafe extern "C" fn write(fd: c_int, buf: *const c_void, count: usize) -> i
         TRUEOS_ERRNO.store(TRUEOS_EBADF, Ordering::Relaxed);
         return -1;
     }
+
+    // POSIX write(2) is valid for sockets. Rust's vectored TCP writes enter
+    // through writev(2), whose scalar fallback below calls this function.
+    // Route network descriptors through the socket backend before consulting
+    // the regular/open-file table.
+    let is_network_socket = SOCKET_FDS.lock().get(fd).is_some();
+    if is_network_socket {
+        return unsafe { send(fd, buf, count, 0) };
+    }
+
     let Some(input) = abi_read_bytes(buf.cast::<u8>(), count) else {
         TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
         return -1;
@@ -3958,12 +3968,14 @@ pub unsafe extern "C" fn readv(fd: c_int, iov: *const Iovec, iovcnt: c_int) -> i
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn writev(fd: c_int, iov: *const Iovec, iovcnt: c_int) -> isize {
     if iov.is_null() || iovcnt < 0 {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
         return -1;
     }
     let Some(entries) = abi_read_bytes(
         iov.cast::<u8>(),
         (iovcnt as usize).saturating_mul(core::mem::size_of::<Iovec>()),
     ) else {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
         return -1;
     };
     let mut written = 0usize;

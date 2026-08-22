@@ -10,6 +10,11 @@ use crate::wait::WaitQueue;
 const STATUS_OK: i32 = 0;
 const STATUS_UNSUPPORTED: i32 = -1;
 const STATUS_WOULD_BLOCK: i32 = -2;
+// A successful vnet SendTcp submission means queued, not necessarily admitted
+// to the bounded TCP socket buffer. Keep a modest per-stream window so async
+// writers receive real backpressure instead of filling an unbounded adapter
+// backlog in one executor poll.
+const MIO_TCP_TX_WINDOW_BYTES: usize = 256 * 1024;
 const STATUS_NOT_CONNECTED: i32 = -3;
 const STATUS_INVALID_INPUT: i32 = -4;
 const STATUS_NOT_FOUND: i32 = -5;
@@ -298,6 +303,7 @@ struct MioSocketState {
     connected: bool,
     closed: bool,
     error: i32,
+    tx_in_flight: usize,
     rx_stream: VecDeque<u8>,
     rx_dgrams: VecDeque<(CompatAddr, Vec<u8>)>,
     accept_queue: VecDeque<u32>,
@@ -768,6 +774,7 @@ impl MioCompat {
             connected: true,
             closed: false,
             error: STATUS_OK,
+            tx_in_flight: 0,
             rx_stream: VecDeque::new(),
             rx_dgrams: VecDeque::new(),
             accept_queue: VecDeque::new(),
@@ -990,6 +997,7 @@ impl MioCompat {
                         connected: true,
                         closed: false,
                         error: STATUS_OK,
+                        tx_in_flight: 0,
                         rx_stream: inherited_rx,
                         rx_dgrams: VecDeque::new(),
                         accept_queue: VecDeque::new(),
@@ -1099,10 +1107,12 @@ impl MioCompat {
                     );
                 }
             }
-            api::Event::TcpSent { handle, .. } => {
+            api::Event::TcpSent { handle, len } => {
                 if let Some(socket) = self.socket_by_handle_mut(handle) {
                     if socket.kind == MioSocketKind::TcpStream {
                         socket.connected = true;
+                        socket.tx_in_flight = socket.tx_in_flight.saturating_sub(len as usize);
+                        MIO_SELECTOR_WAIT.notify_all();
                     }
                 }
             }
@@ -1178,7 +1188,10 @@ impl MioCompat {
                 if want_read && (!socket.rx_stream.is_empty() || socket.closed) {
                     ready |= READY_READABLE;
                 }
-                if want_write && socket.connected {
+                if want_write
+                    && socket.connected
+                    && socket.tx_in_flight < MIO_TCP_TX_WINDOW_BYTES
+                {
                     ready |= READY_WRITABLE;
                 }
                 if socket.closed {
@@ -1364,6 +1377,7 @@ pub(crate) unsafe fn mio_tcp_listener_bind_host(
             connected: false,
             closed: false,
             error: STATUS_OK,
+            tx_in_flight: 0,
             rx_stream: VecDeque::new(),
             rx_dgrams: VecDeque::new(),
             accept_queue: VecDeque::new(),
@@ -1483,6 +1497,7 @@ pub(crate) unsafe fn mio_tcp_stream_connect_host(
             connected: false,
             closed: false,
             error: STATUS_OK,
+            tx_in_flight: 0,
             rx_stream: VecDeque::new(),
             rx_dgrams: VecDeque::new(),
             accept_queue: VecDeque::new(),
@@ -1607,6 +1622,7 @@ pub(crate) unsafe fn mio_udp_socket_bind_host(
             connected: true,
             closed: false,
             error: STATUS_OK,
+            tx_in_flight: 0,
             rx_stream: VecDeque::new(),
             rx_dgrams: VecDeque::new(),
             accept_queue: VecDeque::new(),
