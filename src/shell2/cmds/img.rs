@@ -48,9 +48,13 @@ async fn launch_img(spawner: Spawner, target: MatrixTarget, app_args: Vec<String
     }
 }
 
-/// Show an unmistakable, kernel-embedded proof after a successful warm handoff.
-/// The named instance lets the timer close only this one-shot viewer even when
-/// another `img` Blueprint is already open.
+/// The unique non-autostart Blueprint launch after a successful warm handoff.
+///
+/// This proof is deliberately outside configured app autostart and its
+/// restored-archive deduplication. It waits until checkpoint uplift has yielded
+/// the restored VM slots, then starts one fresh named viewer. If an older proof
+/// was never cleanly stopped and is itself restored, both instances may coexist
+/// by design: each completed live boot remains independently visible.
 pub(crate) fn launch_live_update_notice(spawner: Spawner, generation: u64) {
     match live_update_notice_task(generation) {
         Ok(token) => spawner.spawn(token),
@@ -65,14 +69,15 @@ pub(crate) fn launch_live_update_notice(spawner: Spawner, generation: u64) {
 
 #[task(pool_size = 1)]
 async fn live_update_notice_task(generation: u64) {
+    while !crate::live_update::post_boot_uplift_complete(generation) {
+        Timer::after(EmbassyDuration::from_millis(25)).await;
+    }
+
     // The embedded source no longer needs TRUEOSFS, so without a small
     // post-handoff cadence this can outrun the freshly released AP executors
     // and UI4/display startup.  Keep the proof independent of storage while
     // allowing those candidate-generation runtimes to begin polling.
-    Timer::after(EmbassyDuration::from_millis(
-        LIVE_UPDATE_LAUNCH_SETTLE_MS,
-    ))
-    .await;
+    Timer::after(EmbassyDuration::from_millis(LIVE_UPDATE_LAUNCH_SETTLE_MS)).await;
 
     let instance_name = alloc::format!("live-update-{generation}");
     let mut rng = crate::tyche::soft_rng();

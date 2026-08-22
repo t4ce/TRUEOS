@@ -38,6 +38,7 @@ const VM_CHECKPOINT_TIMEOUT_MS: u64 = 20_000;
 const AP_RENDEZVOUS_TIMEOUT_MS: u64 = 5_000;
 const AP_STACK_SWITCH_TIMEOUT_MS: u64 = 5_000;
 const POST_BOOT_SERVICE_TIMEOUT_MS: u64 = 30_000;
+const POST_BOOT_VM_RESUME_SETTLE_MS: u64 = 150;
 const POST_BOOT_TLB_TIMEOUT_MS: u64 = 2_000;
 const MAX_TRAMPOLINE_BYTES: usize = 64 * 1024;
 const MAX_TRANSITION_GDT_BYTES: usize = 256;
@@ -88,7 +89,7 @@ impl WarmReservedRange {
 }
 
 const SHELL_NOTICE: &[u8] =
-    b"\r\nlive-update: step=20/20 new kernel accepted this fresh TCP connection; VM restore path was armed\r\n";
+    b"\r\nlive-update: step=20/20 new kernel accepted this fresh TCP connection; Blueprint autostart uplift was armed\r\n";
 
 unsafe extern "C" {
     static __limine_requests_start: u8;
@@ -166,6 +167,7 @@ static WARM_HANDOFF_VALIDATION: AtomicU8 = AtomicU8::new(HANDOFF_VALIDATION_UNCH
 static LIVE_UPDATE_IN_PROGRESS: AtomicBool = AtomicBool::new(false);
 static WARM_APS_RELEASED: AtomicBool = AtomicBool::new(false);
 static SHELL_NOTICE_PENDING: AtomicBool = AtomicBool::new(false);
+static POST_BOOT_UPLIFT_COMPLETE_GENERATION: AtomicU64 = AtomicU64::new(0);
 static ACTIVE_CONTROL_HHDM: AtomicU64 = AtomicU64::new(0);
 static RENDEZVOUS_ISR_ACTIVE: AtomicU64 = AtomicU64::new(0);
 static POST_BOOT_TLB_ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -730,32 +732,19 @@ pub fn spawn_post_boot(spawner: Spawner) {
     if virtio_logo && !intel_display {
         crate::virtio_gpu_logo::request_live_update_stamp(handoff.generation);
     } else {
+        // Deliberate exception to Blueprint autostart: every successful live
+        // boot gets a fresh proof instance. It waits for checkpoint uplift but
+        // is never deduplicated against restored img instances, so a proof
+        // which was not cleanly stopped can intentionally survive and stack.
         crate::shell2::cmds::img::launch_live_update_notice(spawner, handoff.generation);
     }
 
-    match restore_after_live_update_task(
-        spawner,
-        handoff.restore_mask,
-        handoff.resume_mask,
-        handoff.transition_slot,
+    SHELL_NOTICE_PENDING.store(true, Ordering::Release);
+    crate::log_info!(
+        target: "global";
+        "live-update: step=20/20 bp-autostart-uplift-delegated generation={} fresh_tcp_notice=armed\n",
         handoff.generation,
-    ) {
-        Ok(token) => {
-            spawner.spawn(token);
-            SHELL_NOTICE_PENDING.store(true, Ordering::Release);
-            crate::log_info!(
-                target: "global";
-                "live-update: step=20/20 post-boot-restore-armed generation={} fresh_tcp_notice=armed\n",
-                handoff.generation,
-            );
-        }
-        Err(error) => crate::log_warn!(
-            target: "global";
-            "live-update: restore task unavailable generation={} error={:?}\n",
-            handoff.generation,
-            error,
-        ),
-    }
+    );
 }
 
 pub fn take_shell_notice() -> Option<&'static [u8]> {
@@ -770,14 +759,14 @@ pub fn rearm_shell_notice() {
     }
 }
 
-#[trueos_executor::task]
-async fn restore_after_live_update_task(
-    spawner: Spawner,
-    restore_mask: [u64; RESTORE_WORDS],
-    resume_mask: [u64; RESTORE_WORDS],
-    transition_slot: u64,
-    generation: u64,
-) {
+pub(crate) async fn uplift_warm_vm_snapshots(spawner: Spawner) -> Vec<String> {
+    let Some(handoff) = warm_handoff().copied() else {
+        return Vec::new();
+    };
+    let restore_mask = handoff.restore_mask;
+    let resume_mask = handoff.resume_mask;
+    let transition_slot = handoff.transition_slot;
+    let generation = handoff.generation;
     let topology_deadline = Instant::now()
         .as_millis()
         .saturating_add(POST_BOOT_SERVICE_TIMEOUT_MS);
@@ -794,17 +783,27 @@ async fn restore_after_live_update_task(
             "live-update: generation={} has no VM checkpoints to restore\n",
             generation,
         );
-        return;
+        mark_post_boot_uplift_complete(generation);
+        return Vec::new();
     }
 
-    crate::r::readiness::wait_for(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED).await;
+    // This is the warm-boot autostart boundary: persistent VM snapshots are
+    // uplifted only after both their backing store and the new compositor are
+    // ready. Restored UI apps can then rebuild disposable UI4 projections
+    // immediately instead of racing candidate-kernel service startup.
+    crate::r::readiness::wait_for(
+        crate::r::readiness::TRUEOSFS_ROOT_MOUNTED | crate::r::readiness::UI4_COMPOSITOR_READY,
+    )
+    .await;
     let deadline = Instant::now()
         .as_millis()
         .saturating_add(POST_BOOT_SERVICE_TIMEOUT_MS);
     while !crate::hv::store::online() && Instant::now().as_millis() < deadline {
         Timer::after(EmbassyDuration::from_millis(25)).await;
     }
+    Timer::after(EmbassyDuration::from_millis(POST_BOOT_VM_RESUME_SETTLE_MS)).await;
 
+    let mut restored_archives = Vec::new();
     for vm_id in 0..VM_ID_LIMIT {
         if !mask_contains(&restore_mask, vm_id) {
             continue;
@@ -874,15 +873,23 @@ async fn restore_after_live_update_task(
             continue;
         }
 
+        let archive = crate::hv::app_vm_archive(vm_id);
+        if let Some(archive) = archive.as_ref()
+            && !restored_archives.contains(archive)
+        {
+            restored_archives.push(archive.clone());
+        }
         if mask_contains(&resume_mask, vm_id as usize) {
             match crate::hv::start(vm_id, &spawner, None) {
-                Ok(()) => crate::log_info!(
-                    target: "global";
-                    "live-update: vm{} restored and resume scheduled name={} generation={}\n",
-                    vm_id,
-                    name,
-                    generation,
-                ),
+                Ok(()) => {
+                    crate::log_info!(
+                        target: "global";
+                        "live-update: vm{} restored and resume scheduled name={} generation={}\n",
+                        vm_id,
+                        name,
+                        generation,
+                    );
+                }
                 Err(error) => crate::log_warn!(
                     target: "global";
                     "live-update: vm{} restored but resume failed name={} error={:?}\n",
@@ -902,6 +909,17 @@ async fn restore_after_live_update_task(
         }
         crate::hv::finish_restore(vm_id);
     }
+
+    mark_post_boot_uplift_complete(generation);
+    restored_archives
+}
+
+fn mark_post_boot_uplift_complete(generation: u64) {
+    POST_BOOT_UPLIFT_COMPLETE_GENERATION.store(generation, Ordering::Release);
+}
+
+pub(crate) fn post_boot_uplift_complete(generation: u64) -> bool {
+    POST_BOOT_UPLIFT_COMPLETE_GENERATION.load(Ordering::Acquire) == generation
 }
 
 pub async fn stage_and_swap(
@@ -1523,12 +1541,9 @@ async fn quiesce_pci_for_commit(
     Timer::after(EmbassyDuration::from_millis(PRE_RENDEZVOUS_DRAIN_MS)).await;
 
     let mut failures = 0usize;
-    for function in pci_snapshot
-        .iter()
-        .filter(|function| {
-            !function.is_network() && !function.is_display() && !function.is_bridge()
-        })
-    {
+    for function in pci_snapshot.iter().filter(|function| {
+        !function.is_network() && !function.is_display() && !function.is_bridge()
+    }) {
         let (bus, slot, function_number) = function.bdf();
         let (vendor, device, class, subclass) = function.identity();
         let next = format!(

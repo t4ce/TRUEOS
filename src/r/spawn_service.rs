@@ -1404,9 +1404,31 @@ const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
 
 #[trueos_executor::task]
 async fn bp_autostart_task(spawner: Spawner) {
+    let restored_archives = crate::live_update::uplift_warm_vm_snapshots(spawner).await;
+    if !restored_archives.is_empty() {
+        crate::log!(
+            "spawn-svc: bp-autostart checkpoint uplift complete restored_archives={}\n",
+            restored_archives.len()
+        );
+    }
+
     crate::r::readiness::wait_for(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED).await;
 
     for config in BP_AUTOSTARTS {
+        // Only cooperative replicatable Blueprints can occur in this restored
+        // set. Their checkpoint is the authoritative warm-boot start, whereas
+        // non-replicatable apps retain the ordinary configured-autostart path.
+        if restored_archives
+            .iter()
+            .any(|archive| archive.eq_ignore_ascii_case(config.archive))
+        {
+            crate::log!(
+                "spawn-svc: bp-autostart deduplicated label={} archive={} source=restored-checkpoint\n",
+                config.label,
+                config.archive,
+            );
+            continue;
+        }
         if !config.enabled {
             crate::log!(
                 "spawn-svc: bp-autostart disabled label={} archive={} slot={}\n",
@@ -1901,7 +1923,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &WEAVE_HELLO_AUTOSTART_STARTED,
         spawn_weave_hello_autostart,
     ),
-    TaskSpec::disabled(
+    TaskSpec::enabled(
         "bp-autostart",
         BP_AUTOSTART_READY,
         &BP_AUTOSTART_STARTED,

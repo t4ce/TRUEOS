@@ -18,6 +18,7 @@ const BLUEPRINT_PAYLOAD_RAW: u16 = 1;
 const BLUEPRINT_PAYLOAD_7Z: u16 = 2;
 pub(crate) const BLUEPRINT_CAP_REPLICATABLE: u16 = 1 << 8;
 pub(crate) const BLUEPRINT_CAP_ARGV_ENTRY_V1: u16 = 1 << 9;
+pub(crate) const BLUEPRINT_CAP_FILESYSTEM_INDEPENDENT: u16 = 1 << 10;
 const ELF64_HEADER_LEN: usize = 64;
 const ELF64_RELA_LEN: usize = 24;
 const SHT_PROGBITS: u32 = 1;
@@ -50,6 +51,10 @@ pub(crate) struct BlueprintModule<'a> {
 impl BlueprintModule<'_> {
     pub(crate) const fn is_replicatable(&self) -> bool {
         self.flags & BLUEPRINT_CAP_REPLICATABLE != 0
+    }
+
+    pub(crate) const fn is_filesystem_independent(&self) -> bool {
+        self.flags & BLUEPRINT_CAP_FILESYSTEM_INDEPENDENT != 0
     }
 }
 

@@ -442,30 +442,35 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
         app_fs_common.as_str()
     ));
 
-    match create_blueprint_dir_all_async(app_fs_root.as_str()) {
-        Ok(()) => {
-            log(alloc::format!("run: guest app fs root ready path={}", app_fs_root.as_str())
-                .as_str())
+    if module.is_filesystem_independent() {
+        log("run: guest app fs bootstrap skipped contract=filesystem-independent");
+    } else {
+        match create_blueprint_dir_all_async(app_fs_root.as_str()) {
+            Ok(()) => {
+                log(alloc::format!("run: guest app fs root ready path={}", app_fs_root.as_str())
+                    .as_str())
+            }
+            Err(err) => log(alloc::format!(
+                "run: guest app fs root create failed path={} err={:?}",
+                app_fs_root.as_str(),
+                err
+            )
+            .as_str()),
         }
-        Err(err) => log(alloc::format!(
-            "run: guest app fs root create failed path={} err={:?}",
-            app_fs_root.as_str(),
-            err
-        )
-        .as_str()),
-    }
 
-    match create_blueprint_dir_all_async(app_fs_common.as_str()) {
-        Ok(()) => {
-            log(alloc::format!("run: guest app fs common ready path={}", app_fs_common.as_str())
-                .as_str())
+        match create_blueprint_dir_all_async(app_fs_common.as_str()) {
+            Ok(()) => log(alloc::format!(
+                "run: guest app fs common ready path={}",
+                app_fs_common.as_str()
+            )
+            .as_str()),
+            Err(err) => log(alloc::format!(
+                "run: guest app fs common create failed path={} err={:?}",
+                app_fs_common.as_str(),
+                err
+            )
+            .as_str()),
         }
-        Err(err) => log(alloc::format!(
-            "run: guest app fs common create failed path={} err={:?}",
-            app_fs_common.as_str(),
-            err
-        )
-        .as_str()),
     }
     if crate::hv::current_hull_guest_context_vm_id().is_none() {
         log(alloc::format!(

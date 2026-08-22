@@ -4,6 +4,20 @@
 //! libc/POSIX-shaped imports emitted by Rust std, libc crates, and bundled C
 //! artifacts, then forwards them to the current shim implementations.
 
+///UNIX
+///kernel
+///├── process A
+///│    └── language runtime
+///└── process B
+///     └── language runtime
+
+///TRUEOS
+///kernel / VMX root
+///├── Hull A
+///│    └── QuickJS runtime
+///└── Hull B
+///     └── QuickJS runtime
+
 /// Directory streams are deliberately not part of the supported POSIX
 /// compatibility surface yet.
 ///

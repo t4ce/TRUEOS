@@ -2284,12 +2284,9 @@ pub(crate) fn submit_ui4_indexed_batch(
 ) -> Result<Ui4SurfaceIndexedCompletion, VgpuError> {
     if batch.draws.is_empty()
         || batch.draws.len() > MAX_INDEXED_BATCH_DRAWS
-        || batch
-            .draws
-            .iter()
-            .any(|draw| {
-                draw.index_count == 0 || !draw.index_count.is_multiple_of(3) || draw.base_vertex < 0
-            })
+        || batch.draws.iter().any(|draw| {
+            draw.index_count == 0 || !draw.index_count.is_multiple_of(3) || draw.base_vertex < 0
+        })
     {
         return Err(VgpuError::Unsupported);
     }
