@@ -36,7 +36,6 @@ pub mod env;
 pub mod ffi;
 #[doc(hidden)]
 pub mod legacy_fs_abi;
-pub mod qjs_abi;
 pub mod sync;
 pub mod varchive;
 pub mod vaudio;

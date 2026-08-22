@@ -1,6 +1,6 @@
 extern crate alloc;
 
-use alloc::{string::String, vec};
+use alloc::string::String;
 use core::fmt;
 
 use crate::vcabi;

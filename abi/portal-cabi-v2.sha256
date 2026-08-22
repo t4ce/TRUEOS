@@ -159,4 +159,8 @@
 # expose only bounded, generation-bound parent/child messages and lifecycle
 # status; no executor pointer, guest address, terminal, or UI authority
 # crosses the contract.
-c3794ac0b02501d53c32475796bc8454b99aaa4990103e08947f05db9460a848
+# The former QJS workbench bridge was removed after its Blueprint-local
+# replacement became the runtime owner.  It was interpreter-specific kernel
+# state, not a general Blueprint service; worker execution now uses the child
+# Hull contract above.
+b945a9bcb21378040b619cc6930777c033e23d3c4da555edc0ca09dea6fe2947

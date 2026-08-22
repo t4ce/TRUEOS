@@ -136,25 +136,11 @@ pub fn register_core_spawner(cpu_slot: u32, core_kind: u8, spawner: Spawner) {
     }
 }
 
-#[unsafe(no_mangle)]
-pub extern "Rust" fn trueos_kernel_worker_register_core_spawner(
-    cpu_slot: u32,
-    core_kind: u8,
-    spawner: Spawner,
-) {
-    register_core_spawner(cpu_slot, core_kind, spawner);
-}
-
 pub fn core_kind_for_slot(cpu_slot: u32) -> u8 {
     CORE_KIND_BY_SLOT
         .get(cpu_slot as usize)
         .map(|kind| kind.load(Ordering::Acquire))
         .unwrap_or(CORE_KIND_UNKNOWN)
-}
-
-#[unsafe(no_mangle)]
-pub extern "Rust" fn trueos_kernel_worker_core_kind_for_slot(cpu_slot: u32) -> u8 {
-    core_kind_for_slot(cpu_slot)
 }
 
 pub fn raw_spawner_for_slot(cpu_slot: u32) -> Option<SendSpawner> {
@@ -202,11 +188,6 @@ pub fn last_ap_service_worker() -> Option<(u32, u8, WorkerSpawner)> {
 
 pub fn background_slot_range() -> core::ops::Range<u32> {
     FIRST_BACKGROUND_SLOT..WORKER_SLOT_LIMIT as u32
-}
-
-#[unsafe(no_mangle)]
-pub extern "Rust" fn trueos_kernel_worker_spawner_for_slot(cpu_slot: u32) -> Option<SendSpawner> {
-    raw_spawner_for_slot(cpu_slot)
 }
 
 pub fn background_worker_slots() -> Vec<u32> {
@@ -269,11 +250,6 @@ pub fn app_visible_parallelism() -> usize {
 
 pub fn is_background_worker_slot(cpu_slot: u32) -> bool {
     cpu_slot >= FIRST_BACKGROUND_SLOT
-}
-
-#[unsafe(no_mangle)]
-pub extern "Rust" fn trueos_kernel_worker_background_worker_slots() -> Vec<u32> {
-    background_worker_slots()
 }
 
 pub fn has_background_worker_slot() -> bool {
@@ -385,11 +361,4 @@ where
     }
 
     None
-}
-
-#[unsafe(no_mangle)]
-pub extern "Rust" fn trueos_kernel_worker_pick_background_spawner_with_slot()
--> Option<(u32, u8, SendSpawner)> {
-    pick_background_spawner_with_filter(|_| true)
-        .map(|(slot, kind, spawner)| (slot, kind, spawner.raw()))
 }
