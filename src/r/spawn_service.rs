@@ -1299,7 +1299,7 @@ struct BlueprintAutostart {
 
 const BP_AUTOSTARTS: &[BlueprintAutostart] = &[
     BlueprintAutostart {
-        enabled: true,
+        enabled: false,
         label: "swarm",
         archive: "swarm.bp",
         online_selector: Some("swarm"),

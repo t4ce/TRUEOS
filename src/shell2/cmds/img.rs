@@ -83,7 +83,10 @@ async fn live_update_notice_task(generation: u64) {
     let mut rng = crate::tyche::soft_rng();
     let variant = rng.usize_below(crate::virtio_gpu_logo::LIVE_UPDATE_NOTICE_VARIANT_COUNT);
     let source = crate::virtio_gpu_logo::live_update_notice_source(variant);
-    let target = matrix_target_for_slot_name(OUTPUT_SYSTEM_MASK, "lu-img");
+    // Submit from the existing system/default slot. The archive launcher then
+    // owns the one real `img` slot reservation; naming a synthetic source slot
+    // here would leave an empty `lu-img` tab beside the proof viewer.
+    let target = matrix_target_for_slot_name(OUTPUT_SYSTEM_MASK, "");
     let submitted = super::run::submit_archive_name_to_target_from_app_db_with_instance_waiving_readiness_noninteractive_async(
             target,
             IMG_ARCHIVE,

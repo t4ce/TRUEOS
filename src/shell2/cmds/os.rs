@@ -15,7 +15,7 @@ use trueos_time::{Duration as EmbassyDuration, Instant, Timer};
 use super::super::shell2_cmd::ParseOutcome;
 use super::super::{
     MatrixTarget, ShellBackend2, matrix_target_for_backend, print_matrix_target_line,
-    print_shell_line,
+    print_shell_line, switch_matrix_target_slot,
 };
 
 const OS_ARCHIVE: &str = "os.bp";
@@ -156,7 +156,12 @@ async fn os_admin_task(
         Timer::after(EmbassyDuration::from_millis(100)).await;
     }
 
-    dispatch_admin_action(&spawner, &target, reason.as_str());
+    // The TUI runs in its app-owned `os` slot, while privileged install/update
+    // progress belongs to the root shell transcript. Select and target root
+    // only after the Blueprint has returned its terminal lease, so the handoff
+    // cannot interfere with the TUI's own execution.
+    let action_target = switch_matrix_target_slot(&target, "");
+    dispatch_admin_action(&spawner, &action_target, reason.as_str());
 }
 
 fn dispatch_admin_action(spawner: &Spawner, target: &MatrixTarget, reason: &str) {
