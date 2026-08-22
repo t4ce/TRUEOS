@@ -136,6 +136,11 @@ pub extern "C" fn kmain() -> ! {
     unsafe {
         cpu::enable_sse();
     }
+    if live_update::warm_boot_active() {
+        // First candidate-side proof: direct volatile CPU writes into the
+        // preserved Limine framebuffer, before every runtime subsystem.
+        let _ = virtio_gpu_logo::stamp_warm_candidate_entry_cross();
+    }
     log_os::init_global_dispatch();
     // Blueprint modules may import Ring's prefixed native implementation
     // symbols directly. Keep the Rust crate linked; build.rs retains and

@@ -1492,7 +1492,10 @@ async fn quiesce_pci_for_commit(
     target: &MatrixTarget,
     pci_snapshot: &[crate::pci::FullforgetPciFunction],
 ) {
-    let network_count = pci_snapshot.iter().filter(|function| function.is_network()).count();
+    let network_count = pci_snapshot
+        .iter()
+        .filter(|function| function.is_network())
+        .count();
     let non_network_count = pci_snapshot.len().saturating_sub(network_count);
     let begin = format!(
         "update live: step=15a/20 PCI-non-network-quiesce-next functions={} network-deferred={} runtime=BSP+network drain-window-ms={}",
@@ -1503,10 +1506,14 @@ async fn quiesce_pci_for_commit(
     Timer::after(EmbassyDuration::from_millis(PRE_RENDEZVOUS_DRAIN_MS)).await;
 
     let mut failures = 0usize;
-    for function in pci_snapshot.iter().filter(|function| !function.is_network()) {
-        failures = failures.saturating_add(
-            unsafe { crate::pci::fullforget_quiesce_one_unlocked(function) } as usize,
-        );
+    for function in pci_snapshot
+        .iter()
+        .filter(|function| !function.is_network())
+    {
+        failures =
+            failures.saturating_add(
+                unsafe { crate::pci::fullforget_quiesce_one_unlocked(function) } as usize,
+            );
     }
     if failures != 0 {
         let failure = format!(
@@ -1543,9 +1550,10 @@ async fn quiesce_pci_for_commit(
 
     failures = 0;
     for function in pci_snapshot.iter().filter(|function| function.is_network()) {
-        failures = failures.saturating_add(
-            unsafe { crate::pci::fullforget_quiesce_one_unlocked(function) } as usize,
-        );
+        failures =
+            failures.saturating_add(
+                unsafe { crate::pci::fullforget_quiesce_one_unlocked(function) } as usize,
+            );
     }
     if failures != 0 {
         transition_marker(b"live-update: fail-stop=PCI-network-bus-master-still-enabled\n");

@@ -524,14 +524,6 @@ fn fullforget_find_capability_unlocked(bus: u8, slot: u8, function: u8, cap_id: 
 /// Disable device-originated interrupts and bus mastering without taking any
 /// normal kernel lock. The caller must have interrupts disabled and every AP
 /// parked. BAR decoding is intentionally retained for the replacement driver.
-pub unsafe fn fullforget_quiesce_unlocked(functions: &[FullforgetPciFunction]) -> usize {
-    let mut failures = 0usize;
-    for device in functions {
-        failures = failures.saturating_add(fullforget_quiesce_one_unlocked(device) as usize);
-    }
-    failures
-}
-
 /// Quiesce one snapshotted requester. Returns true only when Bus Master Enable
 /// remains asserted after the verified command-register writeback.
 pub unsafe fn fullforget_quiesce_one_unlocked(device: &FullforgetPciFunction) -> bool {
@@ -550,20 +542,16 @@ pub unsafe fn fullforget_quiesce_one_unlocked(device: &FullforgetPciFunction) ->
         device.function,
         PCI_CAP_ID_MSI,
     ) {
-            let control_offset = cap.wrapping_add(PCI_MSI_CONTROL as u8);
-            let control = fullforget_read_u16_unlocked(
-                device.bus,
-                device.slot,
-                device.function,
-                control_offset,
-            );
-            fullforget_write_u16_unlocked(
-                device.bus,
-                device.slot,
-                device.function,
-                control_offset,
-                control & !(PCI_MSI_ENABLE | PCI_MSI_MULTIPLE_MESSAGE_ENABLE),
-            );
+        let control_offset = cap.wrapping_add(PCI_MSI_CONTROL as u8);
+        let control =
+            fullforget_read_u16_unlocked(device.bus, device.slot, device.function, control_offset);
+        fullforget_write_u16_unlocked(
+            device.bus,
+            device.slot,
+            device.function,
+            control_offset,
+            control & !(PCI_MSI_ENABLE | PCI_MSI_MULTIPLE_MESSAGE_ENABLE),
+        );
     }
     if let Some(cap) = fullforget_find_capability_unlocked(
         device.bus,
@@ -571,20 +559,16 @@ pub unsafe fn fullforget_quiesce_one_unlocked(device: &FullforgetPciFunction) ->
         device.function,
         PCI_CAP_ID_MSIX,
     ) {
-            let control_offset = cap.wrapping_add(PCI_MSIX_CONTROL as u8);
-            let control = fullforget_read_u16_unlocked(
-                device.bus,
-                device.slot,
-                device.function,
-                control_offset,
-            );
-            fullforget_write_u16_unlocked(
-                device.bus,
-                device.slot,
-                device.function,
-                control_offset,
-                (control | PCI_MSIX_FUNCTION_MASK) & !PCI_MSIX_ENABLE,
-            );
+        let control_offset = cap.wrapping_add(PCI_MSIX_CONTROL as u8);
+        let control =
+            fullforget_read_u16_unlocked(device.bus, device.slot, device.function, control_offset);
+        fullforget_write_u16_unlocked(
+            device.bus,
+            device.slot,
+            device.function,
+            control_offset,
+            (control | PCI_MSIX_FUNCTION_MASK) & !PCI_MSIX_ENABLE,
+        );
     }
 
     fullforget_write_u16_unlocked(

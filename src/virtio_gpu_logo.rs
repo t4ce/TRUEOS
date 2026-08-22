@@ -999,6 +999,61 @@ unsafe fn write_limine_pixel(address: *mut u8, bytes_per_pixel: usize, pixel: u3
     }
 }
 
+/// Earliest warm-generation visual proof. This is deliberately CPU-only and
+/// allocation-free: it runs before logging, PCI discovery, UI4, or any display
+/// driver in candidate `kmain`.
+pub(crate) fn stamp_warm_candidate_entry_cross() -> bool {
+    let Ok(framebuffer) = limine_framebuffer_info() else {
+        return false;
+    };
+
+    // FULLFORGET preserves the HHDM PML4 slot. Refuse to touch a bootloader
+    // pointer outside that slot because the old dedicated MMIO slot has just
+    // been retired by the commit trampoline.
+    let Some(hhdm) = crate::limine::hhdm_offset() else {
+        return false;
+    };
+    if ((framebuffer.address as u64 >> 39) & 0x1ff) != ((hhdm >> 39) & 0x1ff) {
+        return false;
+    }
+
+    let center_x = framebuffer.width / 2;
+    let center_y = framebuffer.height / 2;
+    let radius = 64u32.min(center_x).min(center_y);
+    if radius < 8 {
+        return false;
+    }
+    let thickness = 6u32;
+    let magenta = pack_limine_rgb(framebuffer, 255, 0, 170);
+    let white = pack_limine_rgb(framebuffer, 255, 255, 255);
+
+    for offset_y in 0..=radius.saturating_mul(2) {
+        let y = center_y - radius + offset_y;
+        for offset_x in 0..=radius.saturating_mul(2) {
+            let x = center_x - radius + offset_x;
+            let diagonal_a = offset_x.abs_diff(offset_y);
+            let diagonal_b = offset_x.abs_diff(radius.saturating_mul(2).saturating_sub(offset_y));
+            if diagonal_a > thickness && diagonal_b > thickness {
+                continue;
+            }
+            let pixel = if diagonal_a <= 1 || diagonal_b <= 1 {
+                white
+            } else {
+                magenta
+            };
+            let address = unsafe {
+                framebuffer
+                    .address
+                    .add(y as usize * framebuffer.pitch + x as usize * framebuffer.bytes_per_pixel)
+            };
+            unsafe { write_limine_pixel(address, framebuffer.bytes_per_pixel, pixel) };
+        }
+    }
+    fence(Ordering::Release);
+    unsafe { core::arch::asm!("sfence", options(nostack, preserves_flags)) };
+    true
+}
+
 fn draw_centered_limine_logo(
     framebuffer: LimineFramebufferInfo,
     logo: &crate::graphics::jpeg_codec::DecodedJpeg,
