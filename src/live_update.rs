@@ -36,12 +36,15 @@ const MAX_KERNEL_SPAN_BYTES: usize = 1024 * 1024 * 1024;
 const AP_TRANSITION_STACK_BYTES: usize = 2 * 1024 * 1024;
 const VM_CHECKPOINT_TIMEOUT_MS: u64 = 20_000;
 const AP_RENDEZVOUS_TIMEOUT_MS: u64 = 5_000;
+const AP_STACK_SWITCH_TIMEOUT_MS: u64 = 5_000;
 const POST_BOOT_SERVICE_TIMEOUT_MS: u64 = 30_000;
 const POST_BOOT_TLB_TIMEOUT_MS: u64 = 2_000;
 const MAX_TRAMPOLINE_BYTES: usize = 64 * 1024;
 const MAX_TRANSITION_GDT_BYTES: usize = 256;
 const PCI_DMA_DRAIN_MS: u64 = 10;
 const ABORT_DRAIN_TIMEOUT_MS: u64 = 2_000;
+const PRE_RENDEZVOUS_DRAIN_MS: u64 = 1_000;
+const AP_PREFLIGHT_LOG_DRAIN_MS: u64 = 100;
 
 const LIVE_MANIFEST_MAGIC0: u64 = 0x5452_5545_4F53_4C55; // "TRUEOSLU"
 const LIVE_MANIFEST_MAGIC1: u64 = 0x4C49_5645_5550_4454; // "LIVEUPDT"
@@ -63,6 +66,7 @@ const TRANSITION_COMMIT: u64 = 4;
 
 const VM_ID_LIMIT: usize = crate::allcaps::hv::VM_ID_LIMIT;
 const CPU_SLOT_LIMIT: usize = crate::percpu::CPU_SLOT_LIMIT;
+const CPU_MASK_WORDS: usize = CPU_SLOT_LIMIT.div_ceil(64);
 const RESTORE_WORDS: usize = (VM_ID_LIMIT + 63) / 64;
 
 #[derive(Clone, Copy)]
@@ -168,6 +172,12 @@ static POST_BOOT_TLB_ACTIVE: AtomicBool = AtomicBool::new(false);
 static POST_BOOT_TLB_ACKS: AtomicU64 = AtomicU64::new(0);
 static AP_TRANSITION_ENTERED: [AtomicBool; CPU_SLOT_LIMIT] =
     [const { AtomicBool::new(false) }; CPU_SLOT_LIMIT];
+static AP_ISR_ENTERED_MASK: [AtomicU64; CPU_MASK_WORDS] =
+    [const { AtomicU64::new(0) }; CPU_MASK_WORDS];
+static AP_VMX_CONTRACT_DONE_MASK: [AtomicU64; CPU_MASK_WORDS] =
+    [const { AtomicU64::new(0) }; CPU_MASK_WORDS];
+static AP_VMXOFF_EXECUTED_MASK: [AtomicU64; CPU_MASK_WORDS] =
+    [const { AtomicU64::new(0) }; CPU_MASK_WORDS];
 static WARM_VM_RANGE_CLAIMED: [AtomicBool; VM_ID_LIMIT] =
     [const { AtomicBool::new(false) }; VM_ID_LIMIT];
 
@@ -393,6 +403,11 @@ fn transition_marker(marker: &'static [u8]) {
     }
 }
 
+#[inline]
+fn mark_ap_mask(mask: &[AtomicU64; CPU_MASK_WORDS], slot: usize) {
+    mask[slot / 64].fetch_or(1u64 << (slot % 64), Ordering::AcqRel);
+}
+
 #[allow(non_snake_case)]
 extern "x86-interrupt" fn live_update_rendezvous_isr(_frame: InterruptStackFrame) {
     crate::remote_work_wake::local_eoi();
@@ -403,6 +418,22 @@ extern "x86-interrupt" fn live_update_rendezvous_isr(_frame: InterruptStackFrame
         return;
     }
 
+    enter_ap_transition_if_requested();
+}
+
+/// Join a published live-update transition only from an AP executor boundary.
+///
+/// The final rendezvous uses this path instead of entering permanently from an
+/// arbitrary interrupt frame. Consequently an AP cannot be frozen halfway
+/// through polling a task while it owns a runtime lock. The rendezvous ISR
+/// retains the same body for reversible preflight and post-boot TLB service.
+pub(crate) fn poll_ap_transition_safe_point() {
+    if ACTIVE_CONTROL_HHDM.load(Ordering::Acquire) != 0 {
+        enter_ap_transition_if_requested();
+    }
+}
+
+fn enter_ap_transition_if_requested() {
     let control_addr = ACTIVE_CONTROL_HHDM.load(Ordering::Acquire);
     if control_addr == 0 {
         return;
@@ -430,6 +461,7 @@ extern "x86-interrupt" fn live_update_rendezvous_isr(_frame: InterruptStackFrame
         RENDEZVOUS_ISR_ACTIVE.fetch_sub(1, Ordering::AcqRel);
         return;
     }
+    mark_ap_mask(&AP_ISR_ENTERED_MASK, slot);
 
     let left_vmx = match crate::hv::leave_vmx_root_for_current_cpu_contract() {
         Ok(left) => left,
@@ -440,6 +472,10 @@ extern "x86-interrupt" fn live_update_rendezvous_isr(_frame: InterruptStackFrame
             return;
         }
     };
+    mark_ap_mask(&AP_VMX_CONTRACT_DONE_MASK, slot);
+    if left_vmx {
+        mark_ap_mask(&AP_VMXOFF_EXECUTED_MASK, slot);
+    }
     // Publish arrival only after this CPU has completed every operation that
     // can still fail. Otherwise the BSP can transiently observe N/N, cross the
     // irreversible barrier, and later wait forever for an AP that retreated
@@ -933,18 +969,169 @@ pub async fn stage_and_swap(
         &target,
         "update live: step=11/20 irreversible rendezvous next; TCP must disconnect; COM1 continues with steps 12-17",
     );
-    // Flush the final user-facing line while every normal runtime service is
-    // still schedulable. After AP rendezvous succeeds the path takes no locks,
-    // performs no allocation, and never returns to the old kernel.
-    Timer::after(EmbassyDuration::from_millis(100)).await;
 
-    if let Err(error) = rendezvous_aps(&mut staged) {
+    // Installing this previously absent mapping is still reversible. Keep all
+    // CPUs and the BSP executor running until it has been written, reloaded,
+    // and read back. Only the following rendezvous disables interrupts and
+    // signals APs, so Shell2 and port-1 logging may truthfully report step 12.
+    transition_marker(b"live-update: step=11a/20 transition-map-install-begin APs-signaled=0\n");
+    if let Err(error) = unsafe { install_transition_mapping(&mut staged) } {
+        resume_checkpointed_vms(&spawner, &target, checkpoint.paused_by_update.as_slice()).await;
+        return Err(error);
+    }
+    let step12 = format!(
+        "update live: step=12/20 transition-map-installed verified=1 APs-signaled=0 runtime=BSP+network drain-window-ms={}",
+        PRE_RENDEZVOUS_DRAIN_MS,
+    );
+    print_matrix_target_line(&target, step12.as_str());
+    crate::log_info!(target: "global"; "{}\n", step12);
+    transition_marker(
+        b"live-update: step=12/20 transition-map-installed verified=1 APs-signaled=0\n",
+    );
+
+    // This is explicitly a bounded opportunity for the ordinary Shell2 and
+    // log-to-TCP tasks to run, not a peer ACK or physical-wire receipt. Once it
+    // expires, rendezvous_aps emits only polling-safe COM1/debug-port markers.
+    Timer::after(EmbassyDuration::from_millis(PRE_RENDEZVOUS_DRAIN_MS)).await;
+    transition_marker(b"live-update: step=12d/20 drain-window-expired APs-signaled=0\n");
+
+    // COM1 is not assumed to be physically collectible. Probe one AP at a
+    // time, returning it fully to the old runtime after each attempt, so port
+    // 1 can name the exact next AP before any potentially fatal operation.
+    if let Err(error) = preflight_ap_transitions(&target, &mut staged).await {
         resume_checkpointed_vms(&spawner, &target, checkpoint.paused_by_update.as_slice()).await;
         return Err(error);
     }
 
+    let final_rendezvous = format!(
+        "update live: step=12r/20 AP-preflight-all-complete count={} final-rendezvous-next strategy=cooperative-safe-point+sequential-arrival",
+        staged.expected_aps,
+    );
+    print_matrix_target_line(&target, final_rendezvous.as_str());
+    crate::log_info!(target: "global"; "{}\n", final_rendezvous);
+    Timer::after(EmbassyDuration::from_millis(PRE_RENDEZVOUS_DRAIN_MS)).await;
+
+    if let Err(error) = rendezvous_aps(&target, &mut staged).await {
+        resume_checkpointed_vms(&spawner, &target, checkpoint.paused_by_update.as_slice()).await;
+        return Err(error);
+    }
+
+    // Keep the BSP executor and network alive across the only remaining
+    // unbounded AP barrier. PCI bus mastering is contained immediately after
+    // every AP confirms it has adopted its generation-independent stack.
+    switch_ap_transition_stacks(&target, &staged).await;
+    quiesce_pci_for_commit(&target, pci_snapshot.as_slice()).await;
+
     staged.mark_committed();
-    unsafe { commit_fullforget(&staged, pci_snapshot.as_slice()) }
+    unsafe { commit_fullforget(&staged) }
+}
+
+async fn preflight_ap_transitions(
+    target: &MatrixTarget,
+    staged: &mut StagedCandidate,
+) -> Result<(), LiveUpdateError> {
+    for slot in 1..crate::percpu::total_slots() {
+        let next = format!(
+            "update live: step=12p/20 AP-preflight-next slot={} of={} operation=park+VMX-contract+abort-return",
+            slot, staged.expected_aps,
+        );
+        print_matrix_target_line(target, next.as_str());
+        crate::log_info!(target: "global"; "{}\n", next);
+        Timer::after(EmbassyDuration::from_millis(AP_PREFLIGHT_LOG_DRAIN_MS)).await;
+
+        if let Err(error) = probe_one_ap_transition(staged, slot) {
+            unsafe { clear_transition_mapping(staged) };
+            return Err(error);
+        }
+
+        let word = slot / 64;
+        let bit = 1u64 << (slot % 64);
+        let vmxoff_executed = AP_VMXOFF_EXECUTED_MASK[word].load(Ordering::Acquire) & bit != 0;
+        let complete = format!(
+            "update live: step=12q/20 AP-preflight-complete slot={} vmx-contract-done=1 vmxoff-executed={} abort-returned=1",
+            slot,
+            u8::from(vmxoff_executed),
+        );
+        print_matrix_target_line(target, complete.as_str());
+        crate::log_info!(target: "global"; "{}\n", complete);
+        Timer::after(EmbassyDuration::from_millis(AP_PREFLIGHT_LOG_DRAIN_MS)).await;
+    }
+    Ok(())
+}
+
+fn probe_one_ap_transition(
+    staged: &mut StagedCandidate,
+    slot: usize,
+) -> Result<(), LiveUpdateError> {
+    let control = staged.control();
+    control.arrived.store(0, Ordering::Release);
+    control.stacked.store(0, Ordering::Release);
+    control.failures.store(0, Ordering::Release);
+    for word in 0..CPU_MASK_WORDS {
+        AP_ISR_ENTERED_MASK[word].store(0, Ordering::Release);
+        AP_VMX_CONTRACT_DONE_MASK[word].store(0, Ordering::Release);
+        AP_VMXOFF_EXECUTED_MASK[word].store(0, Ordering::Release);
+    }
+
+    let interrupts_were_enabled = x86_64::instructions::interrupts::are_enabled();
+    x86_64::instructions::interrupts::disable();
+    ACTIVE_CONTROL_HHDM.store(staged.control_hhdm, Ordering::Release);
+    control.command.store(TRANSITION_PARK, Ordering::Release);
+
+    if !crate::remote_work_wake::send_fixed_x2apic_ipi(slot as u32, RENDEZVOUS_VECTOR) {
+        control.failures.fetch_add(1, Ordering::AcqRel);
+        finish_ap_preflight_abort(control, interrupts_were_enabled);
+        return Err(LiveUpdateError::ApRendezvous("preflight IPI delivery unavailable"));
+    }
+
+    let timeout_ticks = AP_RENDEZVOUS_TIMEOUT_MS
+        .saturating_mul(embassy_time_driver::TICK_HZ.max(1))
+        .saturating_add(999)
+        / 1000;
+    let deadline = embassy_time_driver::now().saturating_add(timeout_ticks);
+    while control.arrived.load(Ordering::Acquire) == 0 {
+        if control.failures.load(Ordering::Acquire) != 0 {
+            finish_ap_preflight_abort(control, interrupts_were_enabled);
+            return Err(LiveUpdateError::ApRendezvous("AP preflight transition failure"));
+        }
+        if embassy_time_driver::now() >= deadline {
+            finish_ap_preflight_abort(control, interrupts_were_enabled);
+            return Err(LiveUpdateError::ApRendezvous("AP preflight timeout"));
+        }
+        core::hint::spin_loop();
+    }
+
+    finish_ap_preflight_abort(control, interrupts_were_enabled);
+    if control.failures.load(Ordering::Acquire) != 0 {
+        return Err(LiveUpdateError::ApRendezvous("AP preflight abort return failure"));
+    }
+    Ok(())
+}
+
+fn finish_ap_preflight_abort(control: &TransitionControl, interrupts_were_enabled: bool) {
+    control.command.store(TRANSITION_ABORT, Ordering::Release);
+    ACTIVE_CONTROL_HHDM.store(0, Ordering::Release);
+    let timeout_ticks = ABORT_DRAIN_TIMEOUT_MS
+        .saturating_mul(embassy_time_driver::TICK_HZ.max(1))
+        .saturating_add(999)
+        / 1000;
+    let deadline = embassy_time_driver::now().saturating_add(timeout_ticks);
+    while control.arrived.load(Ordering::Acquire) != 0
+        || RENDEZVOUS_ISR_ACTIVE.load(Ordering::Acquire) != 0
+    {
+        if embassy_time_driver::now() >= deadline {
+            // The transition mapping and arena remain live, but returning to
+            // ordinary code could race an AP still executing from that arena.
+            loop {
+                unsafe { core::arch::asm!("cli", "hlt", options(nomem, nostack)) };
+            }
+        }
+        core::hint::spin_loop();
+    }
+    control.command.store(0, Ordering::Release);
+    if interrupts_were_enabled {
+        x86_64::instructions::interrupts::enable();
+    }
 }
 
 async fn checkpoint_active_vms(
@@ -1152,57 +1339,229 @@ async fn resume_checkpointed_vms(spawner: &Spawner, target: &MatrixTarget, vm_id
     }
 }
 
-fn rendezvous_aps(staged: &mut StagedCandidate) -> Result<(), LiveUpdateError> {
-    unsafe { install_transition_mapping(staged)? };
-    transition_marker(b"live-update: step=12/20 transition-map-installed\n");
+async fn rendezvous_aps(
+    target: &MatrixTarget,
+    staged: &mut StagedCandidate,
+) -> Result<(), LiveUpdateError> {
+    if !staged.transition_installed {
+        return Err(LiveUpdateError::Incompatible(
+            "transition mapping was not installed before rendezvous",
+        ));
+    }
     let control = staged.control();
     control.arrived.store(0, Ordering::Release);
     control.stacked.store(0, Ordering::Release);
     control.failures.store(0, Ordering::Release);
+    for word in 0..CPU_MASK_WORDS {
+        AP_ISR_ENTERED_MASK[word].store(0, Ordering::Release);
+        AP_VMX_CONTRACT_DONE_MASK[word].store(0, Ordering::Release);
+        AP_VMXOFF_EXECUTED_MASK[word].store(0, Ordering::Release);
+    }
+    transition_marker(b"live-update: step=12e/20 rendezvous-counters-cleared APs-signaled=0\n");
 
     let interrupts_were_enabled = x86_64::instructions::interrupts::are_enabled();
     x86_64::instructions::interrupts::disable();
+    transition_marker(b"live-update: step=12f/20 BSP-interrupts-disabled APs-signaled=0\n");
     ACTIVE_CONTROL_HHDM.store(staged.control_hhdm, Ordering::Release);
     control.command.store(TRANSITION_PARK, Ordering::Release);
+    transition_marker(b"live-update: step=12g/20 rendezvous-control-published APs-signaled=0\n");
 
     for slot in 1..crate::percpu::total_slots() {
-        if !crate::remote_work_wake::send_fixed_x2apic_ipi(slot as u32, RENDEZVOUS_VECTOR) {
+        // Wake the AP through its ordinary executor interrupt. It joins the
+        // transition only after the interrupted executor poll has returned to
+        // runtime::run_ap_forever's lock-free safe-point boundary.
+        if !crate::remote_work_wake::wake_cpu_for_remote_work(slot as u32) {
             control.failures.fetch_add(1, Ordering::AcqRel);
             abort_rendezvous(staged, interrupts_were_enabled);
-            return Err(LiveUpdateError::ApRendezvous("IPI delivery unavailable"));
+            return Err(LiveUpdateError::ApRendezvous("AP safe-point wake unavailable"));
         }
-    }
-    transition_marker(b"live-update: step=13/20 rendezvous-ipis-sent\n");
 
-    // Once an AP has entered the transition trampoline it may be holding an
-    // arbitrary old-generation lock. Do not yield to Embassy or execute any
-    // normal service code from this point forward. A bounded lock-free spin is
-    // the only safe pre-commit rendezvous.
-    let timeout_ticks = AP_RENDEZVOUS_TIMEOUT_MS
-        .saturating_mul(embassy_time_driver::TICK_HZ.max(1))
-        .saturating_add(999)
-        / 1000;
-    let deadline = embassy_time_driver::now().saturating_add(timeout_ticks);
-    while control.arrived.load(Ordering::Acquire) < staged.expected_aps {
-        if control.failures.load(Ordering::Acquire) != 0 {
-            abort_rendezvous(staged, interrupts_were_enabled);
-            return Err(LiveUpdateError::ApRendezvous("AP reported transition failure"));
+        // Complete one AP's entire fallible transition before waking the next.
+        // The individual preflight proved every target can make the VMX
+        // transition; the cooperative boundary additionally proves it has
+        // returned from task polling before it is permanently parked.
+        let timeout_ticks = AP_RENDEZVOUS_TIMEOUT_MS
+            .saturating_mul(embassy_time_driver::TICK_HZ.max(1))
+            .saturating_add(999)
+            / 1000;
+        let deadline = embassy_time_driver::now().saturating_add(timeout_ticks);
+        let expected_arrivals = slot as u64;
+        while control.arrived.load(Ordering::Acquire) < expected_arrivals {
+            if control.failures.load(Ordering::Acquire) != 0 {
+                abort_rendezvous(staged, interrupts_were_enabled);
+                return Err(LiveUpdateError::ApRendezvous("AP reported transition failure"));
+            }
+            if embassy_time_driver::now() >= deadline {
+                abort_rendezvous(staged, interrupts_were_enabled);
+                return Err(LiveUpdateError::ApRendezvous("timeout"));
+            }
+            core::hint::spin_loop();
         }
-        if embassy_time_driver::now() >= deadline {
-            abort_rendezvous(staged, interrupts_were_enabled);
-            return Err(LiveUpdateError::ApRendezvous("timeout"));
-        }
-        core::hint::spin_loop();
+
+        // This AP entered from the executor safe point, so it cannot be frozen
+        // while owning a task-level lock. Remaining APs still run normally.
+        // Yielding the BSP here is therefore safe and lets port 1 record every
+        // completed permanent park rather than only the pre-rendezvous cutoff.
+        let parked = format!(
+            "update live: step=12s/20 AP-final-parked slot={} arrived={}/{} safe-point=1 runtime=BSP+network",
+            slot, expected_arrivals, staged.expected_aps,
+        );
+        print_matrix_target_line(target, parked.as_str());
+        crate::log_info!(target: "global"; "{}\n", parked);
+        Timer::after(EmbassyDuration::from_millis(AP_PREFLIGHT_LOG_DRAIN_MS)).await;
     }
+    transition_marker(b"live-update: step=13/20 cooperative-rendezvous-complete\n");
+
     if control.failures.load(Ordering::Acquire) != 0 {
         abort_rendezvous(staged, interrupts_were_enabled);
         return Err(LiveUpdateError::ApRendezvous("AP reported transition failure"));
     }
     transition_marker(b"live-update: step=14/20 all-APs-parked\n");
 
+    let complete = format!(
+        "update live: step=14/20 all-APs-parked arrived={}/{} safe-point=1 runtime=BSP+network drain-window-ms={}",
+        control.arrived.load(Ordering::Acquire),
+        staged.expected_aps,
+        PRE_RENDEZVOUS_DRAIN_MS,
+    );
+    print_matrix_target_line(target, complete.as_str());
+    crate::log_info!(target: "global"; "{}\n", complete);
+    Timer::after(EmbassyDuration::from_millis(PRE_RENDEZVOUS_DRAIN_MS)).await;
+
     // Success intentionally leaves BSP interrupts disabled. The caller performs
     // only handoff bookkeeping before entering the non-returning commit path.
     Ok(())
+}
+
+async fn switch_ap_transition_stacks(target: &MatrixTarget, staged: &StagedCandidate) {
+    let control = staged.control();
+    let begin = format!(
+        "update live: step=17a/20 AP-stack-switch-next expected={} runtime=BSP+network drain-window-ms={}",
+        staged.expected_aps, PRE_RENDEZVOUS_DRAIN_MS,
+    );
+    print_matrix_target_line(target, begin.as_str());
+    crate::log_info!(target: "global"; "{}\n", begin);
+    Timer::after(EmbassyDuration::from_millis(PRE_RENDEZVOUS_DRAIN_MS)).await;
+
+    control
+        .command
+        .store(TRANSITION_SWITCH_STACKS, Ordering::SeqCst);
+    let deadline = Instant::now()
+        .as_millis()
+        .saturating_add(AP_STACK_SWITCH_TIMEOUT_MS);
+    let mut reported = 0u64;
+    loop {
+        let stacked = control.stacked.load(Ordering::Acquire);
+        if stacked != reported {
+            let progress = format!(
+                "update live: step=17s/20 AP-transition-stack-progress stacked={}/{} runtime=BSP+network",
+                stacked, staged.expected_aps,
+            );
+            print_matrix_target_line(target, progress.as_str());
+            crate::log_info!(target: "global"; "{}\n", progress);
+            reported = stacked;
+        }
+        if stacked >= staged.expected_aps {
+            break;
+        }
+        if Instant::now().as_millis() >= deadline {
+            let timeout = format!(
+                "update live: fail-stop=AP-transition-stack-timeout stacked={}/{} runtime=BSP+network",
+                stacked, staged.expected_aps,
+            );
+            print_matrix_target_line(target, timeout.as_str());
+            crate::log_info!(target: "global"; "{}\n", timeout);
+            Timer::after(EmbassyDuration::from_millis(PRE_RENDEZVOUS_DRAIN_MS)).await;
+            loop {
+                unsafe { core::arch::asm!("cli", "hlt", options(nomem, nostack)) };
+            }
+        }
+        Timer::after(EmbassyDuration::from_millis(1)).await;
+    }
+
+    let complete = format!(
+        "update live: step=17b/20 AP-transition-stacks-ready stacked={}/{} runtime=BSP+network drain-window-ms={}",
+        reported, staged.expected_aps, PRE_RENDEZVOUS_DRAIN_MS,
+    );
+    print_matrix_target_line(target, complete.as_str());
+    crate::log_info!(target: "global"; "{}\n", complete);
+    Timer::after(EmbassyDuration::from_millis(PRE_RENDEZVOUS_DRAIN_MS)).await;
+}
+
+async fn quiesce_pci_for_commit(
+    target: &MatrixTarget,
+    pci_snapshot: &[crate::pci::FullforgetPciFunction],
+) {
+    let network_count = pci_snapshot.iter().filter(|function| function.is_network()).count();
+    let non_network_count = pci_snapshot.len().saturating_sub(network_count);
+    let begin = format!(
+        "update live: step=15a/20 PCI-non-network-quiesce-next functions={} network-deferred={} runtime=BSP+network drain-window-ms={}",
+        non_network_count, network_count, PRE_RENDEZVOUS_DRAIN_MS,
+    );
+    print_matrix_target_line(target, begin.as_str());
+    crate::log_info!(target: "global"; "{}\n", begin);
+    Timer::after(EmbassyDuration::from_millis(PRE_RENDEZVOUS_DRAIN_MS)).await;
+
+    let mut failures = 0usize;
+    for function in pci_snapshot.iter().filter(|function| !function.is_network()) {
+        failures = failures.saturating_add(
+            unsafe { crate::pci::fullforget_quiesce_one_unlocked(function) } as usize,
+        );
+    }
+    if failures != 0 {
+        let failure = format!(
+            "update live: fail-stop=PCI-non-network-bus-master-still-enabled failures={} functions={} runtime=BSP+network",
+            failures, non_network_count,
+        );
+        print_matrix_target_line(target, failure.as_str());
+        crate::log_info!(target: "global"; "{}\n", failure);
+        Timer::after(EmbassyDuration::from_millis(PRE_RENDEZVOUS_DRAIN_MS)).await;
+        loop {
+            unsafe { core::arch::asm!("cli", "hlt", options(nomem, nostack)) };
+        }
+    }
+
+    let non_network_complete = format!(
+        "update live: step=15b/20 PCI-non-network-quiesce-ok functions={} network-deferred={} runtime=BSP+network drain-window-ms={}",
+        non_network_count, network_count, PRE_RENDEZVOUS_DRAIN_MS,
+    );
+    print_matrix_target_line(target, non_network_complete.as_str());
+    crate::log_info!(target: "global"; "{}\n", non_network_complete);
+    Timer::after(EmbassyDuration::from_millis(PRE_RENDEZVOUS_DRAIN_MS)).await;
+
+    for function in pci_snapshot.iter().filter(|function| function.is_network()) {
+        let (bus, slot, function_number) = function.bdf();
+        let (vendor, device, class, subclass) = function.identity();
+        let cutoff = format!(
+            "update live: step=15c/20 PCI-network-quiesce-next bdf={:02x}:{:02x}.{} id={:04x}:{:04x} class={:02x}:{:02x} TCP-cutoff-after-drain=1",
+            bus, slot, function_number, vendor, device, class, subclass,
+        );
+        print_matrix_target_line(target, cutoff.as_str());
+        crate::log_info!(target: "global"; "{}\n", cutoff);
+    }
+    Timer::after(EmbassyDuration::from_millis(PRE_RENDEZVOUS_DRAIN_MS)).await;
+
+    failures = 0;
+    for function in pci_snapshot.iter().filter(|function| function.is_network()) {
+        failures = failures.saturating_add(
+            unsafe { crate::pci::fullforget_quiesce_one_unlocked(function) } as usize,
+        );
+    }
+    if failures != 0 {
+        transition_marker(b"live-update: fail-stop=PCI-network-bus-master-still-enabled\n");
+        loop {
+            unsafe { core::arch::asm!("cli", "hlt", options(nomem, nostack)) };
+        }
+    }
+
+    let drain_ticks = PCI_DMA_DRAIN_MS
+        .saturating_mul(embassy_time_driver::TICK_HZ.max(1))
+        .saturating_add(999)
+        / 1000;
+    let drain_deadline = embassy_time_driver::now().saturating_add(drain_ticks);
+    while embassy_time_driver::now() < drain_deadline {
+        core::hint::spin_loop();
+    }
 }
 
 fn abort_rendezvous(staged: &mut StagedCandidate, interrupts_were_enabled: bool) {
@@ -1257,6 +1616,12 @@ unsafe fn install_transition_mapping(staged: &mut StagedCandidate) -> Result<(),
     ptr::write_volatile(root.add(slot), control.transition_slot_entry);
     core::arch::asm!("mfence", options(nostack, preserves_flags));
     reload_cr3();
+    if ptr::read_volatile(root.add(slot)) != control.transition_slot_entry {
+        ptr::write_volatile(root.add(slot), 0);
+        core::arch::asm!("mfence", options(nostack, preserves_flags));
+        reload_cr3();
+        return Err(LiveUpdateError::Incompatible("transition PML4 slot readback mismatch"));
+    }
     staged.transition_installed = true;
     Ok(())
 }
@@ -1381,46 +1746,9 @@ fn canonical_pml4_slot_base(slot: usize) -> u64 {
     }
 }
 
-unsafe fn commit_fullforget(
-    staged: &StagedCandidate,
-    pci_snapshot: &[crate::pci::FullforgetPciFunction],
-) -> ! {
+unsafe fn commit_fullforget(staged: &StagedCandidate) -> ! {
     let control = staged.control();
     x86_64::instructions::interrupts::disable();
-
-    // This path deliberately bypasses the normal PCI configuration lock. Every
-    // AP is parked, so no other CPU can race the CF8/CFC transaction; bypassing
-    // also avoids deadlock if an AP happened to be interrupted while owning the
-    // normal lock.
-    transition_marker(b"live-update: step=15a/20 pci-quiesce-begin\n");
-    let dma_failures = crate::pci::fullforget_quiesce_unlocked(pci_snapshot);
-    if dma_failures != 0 {
-        // Proceeding with a requester that still owns Bus Master Enable would
-        // let an old-generation DMA engine overwrite replacement-kernel RAM.
-        transition_marker(b"live-update: fail-stop=pci-bus-master-still-enabled\n");
-        loop {
-            core::arch::asm!("cli", "hlt", options(nomem, nostack));
-        }
-    }
-    transition_marker(b"live-update: step=15b/20 pci-quiesce-ok\n");
-    let drain_ticks = PCI_DMA_DRAIN_MS
-        .saturating_mul(embassy_time_driver::TICK_HZ.max(1))
-        .saturating_add(999)
-        / 1000;
-    let drain_deadline = embassy_time_driver::now().saturating_add(drain_ticks);
-    while embassy_time_driver::now() < drain_deadline {
-        core::hint::spin_loop();
-    }
-    transition_marker(b"live-update: step=16/20 dma-drain-complete\n");
-
-    control
-        .command
-        .store(TRANSITION_SWITCH_STACKS, Ordering::SeqCst);
-    transition_marker(b"live-update: step=17a/20 AP-stack-switch-commanded\n");
-    while control.stacked.load(Ordering::Acquire) < staged.expected_aps {
-        core::arch::asm!("pause", options(nomem, nostack, preserves_flags));
-    }
-    transition_marker(b"live-update: step=17b/20 AP-transition-stacks-ready\n");
 
     let commit: extern "C" fn(*const TransitionControl) -> ! =
         core::mem::transmute(control.bsp_commit_hhdm as usize);

@@ -49,8 +49,10 @@ fn wants_chill(sleep_ticks: u64) -> Option<u64> {
 
 pub fn run_ap_forever() -> ! {
     loop {
+        crate::live_update::poll_ap_transition_safe_point();
         crate::time::poll();
         poll_local_executor();
+        crate::live_update::poll_ap_transition_safe_point();
         let sleep_ticks = crate::time::ticks_until_next_wake().unwrap_or(u64::MAX);
         crate::power::thermal::poll_current_core_passive(sleep_ticks);
 

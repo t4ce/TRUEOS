@@ -433,6 +433,24 @@ pub struct FullforgetPciFunction {
     bus: u8,
     slot: u8,
     function: u8,
+    vendor: u16,
+    device: u16,
+    class: u8,
+    subclass: u8,
+}
+
+impl FullforgetPciFunction {
+    pub fn bdf(&self) -> (u8, u8, u8) {
+        (self.bus, self.slot, self.function)
+    }
+
+    pub fn identity(&self) -> (u16, u16, u8, u8) {
+        (self.vendor, self.device, self.class, self.subclass)
+    }
+
+    pub fn is_network(&self) -> bool {
+        self.class == class::NETWORK
+    }
 }
 
 /// Capture an immutable BDF list while the ordinary runtime is still alive.
@@ -446,6 +464,10 @@ pub fn fullforget_snapshot() -> Vec<FullforgetPciFunction, MAX_PCI_DEVICES> {
                 bus: device.bus,
                 slot: device.slot,
                 function: device.function,
+                vendor: device.vendor,
+                device: device.device,
+                class: device.class,
+                subclass: device.subclass,
             });
         }
     });
@@ -505,21 +527,29 @@ fn fullforget_find_capability_unlocked(bus: u8, slot: u8, function: u8, cap_id: 
 pub unsafe fn fullforget_quiesce_unlocked(functions: &[FullforgetPciFunction]) -> usize {
     let mut failures = 0usize;
     for device in functions {
-        let vendor = fullforget_read_u16_unlocked(device.bus, device.slot, device.function, 0x00);
-        if vendor == u16::MAX {
-            continue;
-        }
-        let command = fullforget_read_u16_unlocked(device.bus, device.slot, device.function, 0x04);
-        if command == u16::MAX {
-            continue;
-        }
+        failures = failures.saturating_add(fullforget_quiesce_one_unlocked(device) as usize);
+    }
+    failures
+}
 
-        if let Some(cap) = fullforget_find_capability_unlocked(
-            device.bus,
-            device.slot,
-            device.function,
-            PCI_CAP_ID_MSI,
-        ) {
+/// Quiesce one snapshotted requester. Returns true only when Bus Master Enable
+/// remains asserted after the verified command-register writeback.
+pub unsafe fn fullforget_quiesce_one_unlocked(device: &FullforgetPciFunction) -> bool {
+    let vendor = fullforget_read_u16_unlocked(device.bus, device.slot, device.function, 0x00);
+    if vendor == u16::MAX {
+        return false;
+    }
+    let command = fullforget_read_u16_unlocked(device.bus, device.slot, device.function, 0x04);
+    if command == u16::MAX {
+        return false;
+    }
+
+    if let Some(cap) = fullforget_find_capability_unlocked(
+        device.bus,
+        device.slot,
+        device.function,
+        PCI_CAP_ID_MSI,
+    ) {
             let control_offset = cap.wrapping_add(PCI_MSI_CONTROL as u8);
             let control = fullforget_read_u16_unlocked(
                 device.bus,
@@ -534,13 +564,13 @@ pub unsafe fn fullforget_quiesce_unlocked(functions: &[FullforgetPciFunction]) -
                 control_offset,
                 control & !(PCI_MSI_ENABLE | PCI_MSI_MULTIPLE_MESSAGE_ENABLE),
             );
-        }
-        if let Some(cap) = fullforget_find_capability_unlocked(
-            device.bus,
-            device.slot,
-            device.function,
-            PCI_CAP_ID_MSIX,
-        ) {
+    }
+    if let Some(cap) = fullforget_find_capability_unlocked(
+        device.bus,
+        device.slot,
+        device.function,
+        PCI_CAP_ID_MSIX,
+    ) {
             let control_offset = cap.wrapping_add(PCI_MSIX_CONTROL as u8);
             let control = fullforget_read_u16_unlocked(
                 device.bus,
@@ -555,24 +585,20 @@ pub unsafe fn fullforget_quiesce_unlocked(functions: &[FullforgetPciFunction]) -
                 control_offset,
                 (control | PCI_MSIX_FUNCTION_MASK) & !PCI_MSIX_ENABLE,
             );
-        }
-
-        fullforget_write_u16_unlocked(
-            device.bus,
-            device.slot,
-            device.function,
-            0x04,
-            (command & !PCI_COMMAND_BUS_MASTER) | PCI_COMMAND_INTX_DISABLE,
-        );
-        let readback = fullforget_read_u16_unlocked(device.bus, device.slot, device.function, 0x04);
-        if readback == u16::MAX {
-            continue;
-        }
-        if (readback & PCI_COMMAND_BUS_MASTER) != 0 {
-            failures = failures.saturating_add(1);
-        }
     }
-    failures
+
+    fullforget_write_u16_unlocked(
+        device.bus,
+        device.slot,
+        device.function,
+        0x04,
+        (command & !PCI_COMMAND_BUS_MASTER) | PCI_COMMAND_INTX_DISABLE,
+    );
+    let readback = fullforget_read_u16_unlocked(device.bus, device.slot, device.function, 0x04);
+    if readback == u16::MAX {
+        return false;
+    }
+    (readback & PCI_COMMAND_BUS_MASTER) != 0
 }
 
 /// Exclusively claim one enumerated PCI function for a kernel driver.
