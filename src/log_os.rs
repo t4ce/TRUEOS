@@ -12,11 +12,11 @@ pub(crate) mod flags {
 
     /// Full forensic USB profile. The exact switch settings are preserved in
     /// `log_os.usb_full_diag_profile.txt` beside this source file.
-    pub(crate) const USB_UAS_DIAG_PROFILE_ENABLED: bool = false;
+    pub(crate) const USB_UAS_DIAG_PROFILE_ENABLED: bool = true;
 
     /// Operational USB profile enabled with the full forensic profile for the
     /// current CrabUSB controller/HID handoff capture.
-    pub(crate) const USB_RUNTIME_DIAG_PROFILE_ENABLED: bool = false;
+    pub(crate) const USB_RUNTIME_DIAG_PROFILE_ENABLED: bool = true;
 
     /// Boot/network diagnostic profile for startup timing and first-net-process
     /// operability logs.

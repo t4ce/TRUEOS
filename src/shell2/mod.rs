@@ -889,16 +889,6 @@ pub(crate) fn submit_online_to_target(
     shell2_dl::submit_online_to_target(spawner, target, width, args)
 }
 
-pub(crate) fn submit_online_to_send_target(
-    spawner: &trueos_executor::SendSpawner,
-    target: MatrixTarget,
-    args: Vec<AllocString>,
-) -> Result<(), trueos_executor::SpawnError> {
-    let width = with_matrix_target_lease(&target, || line_width_for_output(target.output_mask))
-        .unwrap_or(matrix::DEFAULT_MATRIX_SLOT_LINE_WIDTH);
-    shell2_dl::submit_online_to_send_target(spawner, target, width, args)
-}
-
 pub(crate) fn submit_online_launch_script_to_target(
     spawner: &Spawner,
     target: MatrixTarget,

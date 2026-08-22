@@ -1391,7 +1391,7 @@ fn request_desktop_shell_launch(source: Ui4CursorSource, x: u32, y: u32) {
     if queued {
         DESKTOP_SHELL_LAUNCH_SIGNAL.signal(());
         crate::log_info!(target: "ui4";
-            "ui4/input: desktop shell launch requested cursor={}:{}:{} position={},{} action=online-shell\n",
+            "ui4/input: desktop shell launch requested cursor={}:{}:{} position={},{} source=app.db archive=shell.bp policy=local-builtin-best-effort\n",
             source.controller_id,
             source.slot_id,
             source.ep_target,
@@ -1411,7 +1411,6 @@ fn request_desktop_shell_launch(source: Ui4CursorSource, x: u32, y: u32) {
 
 #[trueos_executor::task(pool_size = 1)]
 async fn ui4_desktop_shell_launcher_task() {
-    let shell_spawner = trueos_executor::SendSpawner::for_current_executor().await;
     loop {
         let request = loop {
             let request = {
@@ -1445,17 +1444,16 @@ async fn ui4_desktop_shell_launcher_task() {
                 },
             });
         }
-        match crate::shell2::submit_online_to_send_target(
-            &shell_spawner,
+        match crate::shell2::cmds::run::submit_archive_name_to_target_from_app_db_with_instance_async(
             target,
-            alloc::vec![
-                alloc::string::String::from("new"),
-                alloc::string::String::from("shell"),
-                instance_name,
-            ],
-        ) {
-            Ok(()) => crate::log_info!(target: "ui4";
-                "ui4/input: desktop shell queued cursor={}:{}:{} action=online-shell\n",
+            "shell.bp",
+            alloc::vec::Vec::new(),
+            crate::hv::BlueprintInstanceRequest::named(instance_name),
+        )
+        .await
+        {
+            Ok(_) => crate::log_info!(target: "ui4";
+                "ui4/input: desktop shell launched cursor={}:{}:{} source=app.db archive=shell.bp policy=local-builtin-best-effort\n",
                 request.source.controller_id,
                 request.source.slot_id,
                 request.source.ep_target,
@@ -1465,7 +1463,7 @@ async fn ui4_desktop_shell_launcher_task() {
                     .lock()
                     .retain(|intent| intent.token != token);
                 crate::log_warn!(target: "ui4";
-                    "ui4/input: desktop shell launch rejected cursor={}:{}:{} action=online-shell error={:?}\n",
+                    "ui4/input: desktop shell launch failed cursor={}:{}:{} source=app.db archive=shell.bp policy=local-builtin-best-effort error={}\n",
                     request.source.controller_id,
                     request.source.slot_id,
                     request.source.ep_target,
