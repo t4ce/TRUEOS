@@ -56,6 +56,19 @@ const BLUEPRINT_LIFECYCLE_PHASE_PREPARE_PAUSE: u8 = 1;
 const BLUEPRINT_LIFECYCLE_PHASE_READY: u8 = 2;
 const BLUEPRINT_LIFECYCLE_PHASE_ARMING: u8 = 3;
 static BLUEPRINT_LIFECYCLE_OPERATION_SEQ: AtomicU64 = AtomicU64::new(1);
+/// A child Hull deliberately has no presentation or terminal authority.  The
+/// Blueprint chooses this argv marker as its internal worker entry mode.
+pub const BLUEPRINT_CHILD_WORKER_ARG: &str = "--trueos-child-worker";
+const BLUEPRINT_CHILD_QUEUE_LIMIT: usize = 16;
+const BLUEPRINT_CHILD_MESSAGE_LIMIT: usize = trueos_vm::vmcall::PAYLOAD_CAP;
+const BLUEPRINT_CHILD_STATE_STARTING: u8 = 1;
+const BLUEPRINT_CHILD_STATE_RUNNING: u8 = 2;
+const BLUEPRINT_CHILD_STATE_STOPPING: u8 = 3;
+const BLUEPRINT_CHILD_STATE_EXITED: u8 = 4;
+const BLUEPRINT_CHILD_ERR_INVALID: i32 = -1;
+const BLUEPRINT_CHILD_ERR_NOT_FOUND: i32 = -2;
+const BLUEPRINT_CHILD_ERR_QUEUE_FULL: i32 = -3;
+const BLUEPRINT_CHILD_ERR_UNAVAILABLE: i32 = -4;
 
 /// A raw snapshot still contains source-principal guest-heap pointers and page
 /// mappings. Keep cross-slot/cross-host restore unavailable until the v-layer
@@ -153,6 +166,16 @@ static BLUEPRINT_LIFECYCLE_ARCHIVES: [Mutex<Option<AllocString>>; TRUEOS_VM_ID_L
     [const { Mutex::new(None) }; TRUEOS_VM_ID_LIMIT];
 static BLUEPRINT_INSTANCE_IDENTITIES: [Mutex<Option<BlueprintInstanceIdentity>>;
     TRUEOS_VM_ID_LIMIT] = [const { Mutex::new(None) }; TRUEOS_VM_ID_LIMIT];
+// This host-owned template survives the guest's one-shot consumption of its
+// launch state.  A same-archive child must never recover its ELF bytes by
+// borrowing pointers from the parent Hull's private guest heap.
+static BLUEPRINT_CHILD_TEMPLATES: [Mutex<Option<BlueprintChildTemplate>>; TRUEOS_VM_ID_LIMIT] =
+    [const { Mutex::new(None) }; TRUEOS_VM_ID_LIMIT];
+// The child VM owns the relationship record.  This makes lifecycle cleanup
+// unambiguous when VM ids are reused: both sides are checked with generation.
+static BLUEPRINT_CHILD_LINKS: [Mutex<Option<BlueprintChildLink>>; TRUEOS_VM_ID_LIMIT] =
+    [const { Mutex::new(None) }; TRUEOS_VM_ID_LIMIT];
+static BLUEPRINT_CHILD_HANDLE_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 pub static mut VMXON_REGIONS: [VmxPage; TRUEOS_VM_CPU_SLOT_LIMIT] =
     [const { VmxPage([0u8; VMX_PAGE_SIZE]) }; TRUEOS_VM_CPU_SLOT_LIMIT];
@@ -503,6 +526,23 @@ pub struct BlueprintLaunchState {
     pub launch_script: Option<AllocString>,
     pub app_fs_root: AllocString,
     pub identity: BlueprintInstanceIdentity,
+}
+
+#[derive(Clone)]
+struct BlueprintChildTemplate {
+    generation: u64,
+    archive: AllocString,
+    module_bytes: AllocVec<u8>,
+}
+
+struct BlueprintChildLink {
+    handle: u64,
+    parent_vm_id: u8,
+    parent_generation: u64,
+    child_generation: u64,
+    state: u8,
+    parent_to_child: VecDeque<AllocVec<u8>>,
+    child_to_parent: VecDeque<AllocVec<u8>>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -1076,6 +1116,229 @@ pub fn first_free_vm_id() -> Option<u8> {
     None
 }
 
+fn blueprint_child_template(vm_id: u8, generation: u64) -> Option<BlueprintChildTemplate> {
+    BLUEPRINT_CHILD_TEMPLATES
+        .get(vm_id as usize)?
+        .lock()
+        .as_ref()
+        .filter(|template| template.generation == generation)
+        .cloned()
+}
+
+fn clear_blueprint_child_template(vm_id: u8) {
+    if let Some(slot) = BLUEPRINT_CHILD_TEMPLATES.get(vm_id as usize) {
+        let _ = slot.lock().take();
+    }
+}
+
+fn blueprint_child_actor_is_parent(link: &BlueprintChildLink, vm_id: u8, generation: u64) -> bool {
+    link.parent_vm_id == vm_id && link.parent_generation == generation
+}
+
+/// Start the same Blueprint archive in a headless child Hull.  The returned
+/// handle is opaque and generation-bound; `0` is reserved for the worker's
+/// own parent endpoint in the other child calls.
+pub(crate) fn blueprint_child_spawn(
+    parent_vm_id: u8,
+    initial_message: &[u8],
+) -> Result<u64, i32> {
+    if initial_message.len() > BLUEPRINT_CHILD_MESSAGE_LIMIT {
+        return Err(BLUEPRINT_CHILD_ERR_INVALID);
+    }
+    let Some(parent_generation) = vm_run_generation(parent_vm_id) else {
+        return Err(BLUEPRINT_CHILD_ERR_INVALID);
+    };
+    let parent = vm_slot(parent_vm_id).ok_or(BLUEPRINT_CHILD_ERR_INVALID)?;
+    if !parent.running.load(Ordering::Acquire) || parent.stop_req.load(Ordering::Acquire) {
+        return Err(BLUEPRINT_CHILD_ERR_UNAVAILABLE);
+    }
+    let template = blueprint_child_template(parent_vm_id, parent_generation)
+        .ok_or(BLUEPRINT_CHILD_ERR_UNAVAILABLE)?;
+    let child_vm_id = first_free_vm_id().ok_or(BLUEPRINT_CHILD_ERR_UNAVAILABLE)?;
+    let child_generation = vm_run_generation(child_vm_id)
+        .unwrap_or(0)
+        .wrapping_add(1)
+        .max(1);
+    let handle = BLUEPRINT_CHILD_HANDLE_SEQUENCE
+        .fetch_add(1, Ordering::AcqRel)
+        .max(1);
+    let mut parent_to_child = VecDeque::new();
+    if !initial_message.is_empty() {
+        parent_to_child.push_back(AllocVec::from(initial_message));
+    }
+    let link = BlueprintChildLink {
+        handle,
+        parent_vm_id,
+        parent_generation,
+        child_generation,
+        state: BLUEPRINT_CHILD_STATE_STARTING,
+        parent_to_child,
+        child_to_parent: VecDeque::new(),
+    };
+    let Some(link_slot) = BLUEPRINT_CHILD_LINKS.get(child_vm_id as usize) else {
+        return Err(BLUEPRINT_CHILD_ERR_UNAVAILABLE);
+    };
+    *link_slot.lock() = Some(link);
+
+    let result = start_blueprint_child_vm(
+        child_vm_id,
+        template.archive,
+        template.module_bytes,
+        BlueprintInstanceRequest::default(),
+    );
+    if result.is_err() {
+        let _ = link_slot.lock().take();
+        return Err(BLUEPRINT_CHILD_ERR_UNAVAILABLE);
+    }
+    Ok(handle)
+}
+
+fn blueprint_child_find_link_for_actor(
+    actor_vm_id: u8,
+    actor_generation: u64,
+    handle: u64,
+) -> Option<(u8, bool)> {
+    if handle == 0 {
+        let link = BLUEPRINT_CHILD_LINKS.get(actor_vm_id as usize)?.lock();
+        let link = link.as_ref()?;
+        return (link.child_generation == actor_generation).then_some((actor_vm_id, false));
+    }
+    for (child_id, slot) in BLUEPRINT_CHILD_LINKS.iter().enumerate() {
+        let link = slot.lock();
+        let Some(link) = link.as_ref() else {
+            continue;
+        };
+        if link.handle == handle
+            && blueprint_child_actor_is_parent(link, actor_vm_id, actor_generation)
+        {
+            return Some((child_id as u8, true));
+        }
+    }
+    None
+}
+
+pub(crate) fn blueprint_child_send(
+    actor_vm_id: u8,
+    handle: u64,
+    bytes: &[u8],
+) -> Result<usize, i32> {
+    if bytes.len() > BLUEPRINT_CHILD_MESSAGE_LIMIT {
+        return Err(BLUEPRINT_CHILD_ERR_INVALID);
+    }
+    let generation = vm_run_generation(actor_vm_id).ok_or(BLUEPRINT_CHILD_ERR_INVALID)?;
+    let (child_vm_id, parent_side) =
+        blueprint_child_find_link_for_actor(actor_vm_id, generation, handle)
+            .ok_or(BLUEPRINT_CHILD_ERR_NOT_FOUND)?;
+    let Some(slot) = BLUEPRINT_CHILD_LINKS.get(child_vm_id as usize) else {
+        return Err(BLUEPRINT_CHILD_ERR_NOT_FOUND);
+    };
+    let mut guard = slot.lock();
+    let link = guard.as_mut().ok_or(BLUEPRINT_CHILD_ERR_NOT_FOUND)?;
+    if link.state >= BLUEPRINT_CHILD_STATE_EXITED {
+        return Err(BLUEPRINT_CHILD_ERR_UNAVAILABLE);
+    }
+    let queue = if parent_side {
+        &mut link.parent_to_child
+    } else {
+        &mut link.child_to_parent
+    };
+    if queue.len() >= BLUEPRINT_CHILD_QUEUE_LIMIT {
+        return Err(BLUEPRINT_CHILD_ERR_QUEUE_FULL);
+    }
+    queue.push_back(AllocVec::from(bytes));
+    Ok(bytes.len())
+}
+
+pub(crate) fn blueprint_child_receive(
+    actor_vm_id: u8,
+    handle: u64,
+    out: &mut [u8],
+) -> Result<usize, i32> {
+    let generation = vm_run_generation(actor_vm_id).ok_or(BLUEPRINT_CHILD_ERR_INVALID)?;
+    let (child_vm_id, parent_side) =
+        blueprint_child_find_link_for_actor(actor_vm_id, generation, handle)
+            .ok_or(BLUEPRINT_CHILD_ERR_NOT_FOUND)?;
+    let Some(slot) = BLUEPRINT_CHILD_LINKS.get(child_vm_id as usize) else {
+        return Err(BLUEPRINT_CHILD_ERR_NOT_FOUND);
+    };
+    let mut guard = slot.lock();
+    let link = guard.as_mut().ok_or(BLUEPRINT_CHILD_ERR_NOT_FOUND)?;
+    let queue = if parent_side {
+        &mut link.child_to_parent
+    } else {
+        &mut link.parent_to_child
+    };
+    let Some(message) = queue.front() else {
+        return Ok(0);
+    };
+    if out.len() < message.len() {
+        return Ok(message.len());
+    }
+    let message = queue.pop_front().expect("front message disappeared while link locked");
+    out[..message.len()].copy_from_slice(message.as_slice());
+    Ok(message.len())
+}
+
+pub(crate) fn blueprint_child_status(actor_vm_id: u8, handle: u64) -> Result<u8, i32> {
+    let generation = vm_run_generation(actor_vm_id).ok_or(BLUEPRINT_CHILD_ERR_INVALID)?;
+    let (child_vm_id, _) = blueprint_child_find_link_for_actor(actor_vm_id, generation, handle)
+        .ok_or(BLUEPRINT_CHILD_ERR_NOT_FOUND)?;
+    let link = BLUEPRINT_CHILD_LINKS
+        .get(child_vm_id as usize)
+        .ok_or(BLUEPRINT_CHILD_ERR_NOT_FOUND)?
+        .lock();
+    Ok(link.as_ref().ok_or(BLUEPRINT_CHILD_ERR_NOT_FOUND)?.state)
+}
+
+pub(crate) fn blueprint_child_terminate(actor_vm_id: u8, handle: u64) -> Result<(), i32> {
+    let generation = vm_run_generation(actor_vm_id).ok_or(BLUEPRINT_CHILD_ERR_INVALID)?;
+    let (child_vm_id, parent_side) =
+        blueprint_child_find_link_for_actor(actor_vm_id, generation, handle)
+            .ok_or(BLUEPRINT_CHILD_ERR_NOT_FOUND)?;
+    if !parent_side {
+        return Err(BLUEPRINT_CHILD_ERR_INVALID);
+    }
+    let Some(slot) = BLUEPRINT_CHILD_LINKS.get(child_vm_id as usize) else {
+        return Err(BLUEPRINT_CHILD_ERR_NOT_FOUND);
+    };
+    let mut link = slot.lock();
+    let link = link.as_mut().ok_or(BLUEPRINT_CHILD_ERR_NOT_FOUND)?;
+    if link.state < BLUEPRINT_CHILD_STATE_EXITED {
+        link.state = BLUEPRINT_CHILD_STATE_STOPPING;
+        let _ = stop(child_vm_id);
+    }
+    Ok(())
+}
+
+fn blueprint_child_lifecycle_cleanup(vm_id: u8, generation: u64, retain_for_resume: bool) {
+    if !retain_for_resume {
+        clear_blueprint_child_template(vm_id);
+    }
+    if let Some(slot) = BLUEPRINT_CHILD_LINKS.get(vm_id as usize) {
+        if let Some(link) = slot.lock().as_mut()
+            && link.child_generation == generation
+        {
+            link.state = BLUEPRINT_CHILD_STATE_EXITED;
+            link.parent_to_child.clear();
+            link.child_to_parent.clear();
+        }
+    }
+    // A parent owns the lifetime of its hidden children.  Requesting stop is
+    // nonblocking; each child still performs the ordinary VM teardown path.
+    for (child_id, slot) in BLUEPRINT_CHILD_LINKS.iter().enumerate() {
+        let mut link = slot.lock();
+        let Some(link) = link.as_mut() else {
+            continue;
+        };
+        if blueprint_child_actor_is_parent(link, vm_id, generation)
+            && link.state < BLUEPRINT_CHILD_STATE_EXITED
+        {
+            link.state = BLUEPRINT_CHILD_STATE_STOPPING;
+            let _ = stop(child_id as u8);
+        }
+    }
+}
+
 fn boot_mode_for_vm(vm_id: u8) -> VmBootMode {
     VM_BOOT_MODES
         .get(vm_id as usize)
@@ -1520,7 +1783,8 @@ pub fn status() -> HvStatus {
 }
 
 pub fn start(vm_id: u8, spawner: &Spawner, stack_mb: Option<usize>) -> Result<(), StartError> {
-    start_with_mode(vm_id, spawner, VmBootMode::Hull, stack_mb, None)
+    let _ = spawner;
+    start_with_mode(vm_id, VmBootMode::Hull, stack_mb, None)
 }
 
 pub fn start_blueprint_app_vm(
@@ -1534,9 +1798,9 @@ pub fn start_blueprint_app_vm(
     console_target: Option<MatrixTarget>,
     console_surface: BlueprintConsoleSurface,
 ) -> Result<(), StartError> {
+    let _ = spawner;
     start_with_mode(
         vm_id,
-        spawner,
         VmBootMode::Hull,
         None,
         Some(BlueprintPendingLaunchState {
@@ -1551,9 +1815,30 @@ pub fn start_blueprint_app_vm(
     )
 }
 
+fn start_blueprint_child_vm(
+    vm_id: u8,
+    archive: AllocString,
+    module_bytes: AllocVec<u8>,
+    instance: BlueprintInstanceRequest,
+) -> Result<(), StartError> {
+    start_with_mode(
+        vm_id,
+        VmBootMode::Hull,
+        None,
+        Some(BlueprintPendingLaunchState {
+            archive,
+            module_bytes,
+            app_args: alloc::vec![AllocString::from(BLUEPRINT_CHILD_WORKER_ARG)],
+            launch_script: None,
+            instance,
+            console_target: None,
+            console_surface: BlueprintConsoleSurface::Text,
+        }),
+    )
+}
+
 fn start_with_mode(
     vm_id: u8,
-    spawner: &Spawner,
     boot_mode: VmBootMode,
     stack_mb: Option<usize>,
     pending_blueprint: Option<BlueprintPendingLaunchState>,
@@ -1673,7 +1958,6 @@ fn start_with_mode(
         }
     }
 
-    let _ = spawner;
     let profile = VmLaneProfile::vm_default();
     let mut target = match pick_vm_hull_lane() {
         Ok(target) => target,
@@ -2549,8 +2833,23 @@ pub fn stage_blueprint_launch(
         BlueprintConsoleRoute::Matrix
     };
     let console_target_present = console_target.is_some();
+    let generation = vm_run_generation(vm_id).ok_or(StartError::UnsupportedVmId)?;
+    let Some(template_slot) = BLUEPRINT_CHILD_TEMPLATES.get(vm_id as usize) else {
+        return Err(StartError::UnsupportedVmId);
+    };
+    // Retain only archive bytes, not guest pointers or presentation state.
+    // The child service later uses this immutable host copy to relaunch the
+    // same archive on another Hull/VMX lane.
+    crate::allocators::with_host_alloc_domain(|| {
+        *template_slot.lock() = Some(BlueprintChildTemplate {
+            generation,
+            archive: state.archive.clone(),
+            module_bytes: state.module_bytes.clone(),
+        });
+    });
     let Some(guest_state) = crate::allocators::with_hv_guest_alloc_domain(vm_id, || state.clone())
     else {
+        clear_blueprint_child_template(vm_id);
         return Err(StartError::GuestMemoryUnavailable);
     };
     // Staging validates the exact terminal backend above, but intentionally
@@ -5020,6 +5319,11 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
         vm.preserve_exit.store(false, Ordering::Release);
         vm.clean_exit.store(false, Ordering::Release);
         clear_blueprint_process_context(vm_id);
+        blueprint_child_lifecycle_cleanup(
+            vm_id,
+            vm.run_generation.load(Ordering::Acquire),
+            false,
+        );
         lane_lease.release_now();
         vm.running.store(false, Ordering::Release);
         return;
@@ -5198,6 +5502,11 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
         vm.pause_latched.load(Ordering::Acquire) as u8
     ));
     let retained_for_resume = vm.pause_latched.load(Ordering::Acquire);
+    blueprint_child_lifecycle_cleanup(
+        vm_id,
+        vm.run_generation.load(Ordering::Acquire),
+        retained_for_resume,
+    );
     let preserve_exit = vm.preserve_exit.load(Ordering::Acquire);
     clear_blueprint_pending_launch(vm_id);
     let terminal_cleanup = if retained_for_resume {
