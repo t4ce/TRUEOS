@@ -74,7 +74,7 @@ static LIVE_UPDATE_STAMP_REQUEST: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) fn request_live_update_stamp(generation: u64) {
     LIVE_UPDATE_STAMP_REQUEST.store(generation, Ordering::Release);
-    crate::log_info!(target: "gfx";
+    crate::log_info!(target: "global";
         "live-update: emulator stamp requested generation={} backend=virtio-logo-plane\n",
         generation,
     );
@@ -805,7 +805,12 @@ impl EmulatorUi {
 
     fn service_live_update_stamp(&mut self) {
         let now_ms = trueos_time::Instant::now().as_millis();
-        let requested = LIVE_UPDATE_STAMP_REQUEST.load(Ordering::Acquire);
+        // The replacement kernel may publish the request before this service
+        // is reconstructed. The validated warm handoff is the durable source
+        // of truth across that ordering boundary; cold boot yields zero.
+        let requested = LIVE_UPDATE_STAMP_REQUEST
+            .load(Ordering::Acquire)
+            .max(crate::live_update::warm_generation().unwrap_or(0));
         if requested != 0 && requested != self.stamped_generation {
             let notice = match crate::graphics::png_codec::decode_png_rgba(LIVE_UPDATE_NOTICE_PNG) {
                 Ok(notice) => notice,
@@ -829,7 +834,7 @@ impl EmulatorUi {
             );
             if self.present_scanout() {
                 self.stamp_deadline_ms = Some(now_ms.saturating_add(LIVE_UPDATE_NOTICE_VISIBLE_MS));
-                crate::log_info!(target: "gfx";
+                crate::log_info!(target: "global";
                     "live-update: emulator stamp visible generation={} duration_ms={} image={}x{} copy={}x{} src={},{} dst={},{} scale=none layer=above-logo\n",
                     requested,
                     LIVE_UPDATE_NOTICE_VISIBLE_MS,
@@ -856,7 +861,7 @@ impl EmulatorUi {
                     self.present_scanout()
                 })
                 .unwrap_or(false);
-            crate::log_info!(target: "gfx";
+            crate::log_info!(target: "global";
                 "live-update: emulator stamp closed generation={} logo_restored={}\n",
                 self.stamped_generation,
                 restored as u8,

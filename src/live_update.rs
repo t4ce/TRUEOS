@@ -682,7 +682,16 @@ pub fn spawn_post_boot(spawner: Spawner) {
         return;
     };
 
-    if crate::intel::is_emulator_environment() {
+    let virtio_logo = crate::virtio_gpu_logo::present();
+    let intel_display = crate::intel::has_claimed_device();
+    crate::log_info!(target: "global";
+        "live-update: visual proof route generation={} virtio_logo={} intel_display={} route={}\n",
+        handoff.generation,
+        virtio_logo as u8,
+        intel_display as u8,
+        if virtio_logo && !intel_display { "emulator-stamp" } else { "hardware-img" },
+    );
+    if virtio_logo && !intel_display {
         crate::virtio_gpu_logo::request_live_update_stamp(handoff.generation);
     } else {
         crate::shell2::cmds::img::launch_live_update_notice(spawner, handoff.generation);
