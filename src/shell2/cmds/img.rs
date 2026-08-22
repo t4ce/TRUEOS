@@ -67,13 +67,14 @@ pub(crate) fn launch_live_update_notice(spawner: Spawner, generation: u64) {
 async fn live_update_notice_task(generation: u64) {
     let instance_name = alloc::format!("live-update-{generation}");
     let target = matrix_target_for_slot_name(OUTPUT_SYSTEM_MASK, "lu-img");
-    let submitted = super::run::submit_archive_name_to_target_from_app_db_with_instance_async(
-        target,
-        IMG_ARCHIVE,
-        alloc::vec![String::from(LIVE_UPDATE_SOURCE)],
-        crate::hv::BlueprintInstanceRequest::named(instance_name.clone()),
-    )
-    .await;
+    let submitted = super::run::submit_archive_name_to_target_from_app_db_with_instance_waiving_readiness_noninteractive_async(
+            target,
+            IMG_ARCHIVE,
+            alloc::vec![String::from(LIVE_UPDATE_SOURCE)],
+            crate::hv::BlueprintInstanceRequest::named(instance_name.clone()),
+            crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
+        )
+        .await;
     if let Err(error) = submitted {
         crate::log_warn!(
             target: "global";

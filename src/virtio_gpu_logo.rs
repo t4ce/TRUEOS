@@ -1,6 +1,6 @@
 extern crate alloc;
 
-use core::sync::atomic::{AtomicU8, Ordering, fence};
+use core::sync::atomic::{AtomicU8, AtomicU64, Ordering, fence};
 
 use trueos_executor::{SpawnError, SpawnToken};
 use trueos_time::{Duration as EmbassyDuration, Timer};
@@ -8,9 +8,15 @@ use trueos_time::{Duration as EmbassyDuration, Timer};
 use crate::{pci, wait};
 
 const LOGO_JPEG: &[u8] = include_bytes!("../logo.jpg");
+const LIVE_UPDATE_NOTICE_PNG: &[u8] = include_bytes!("../tools/updlive/noway.png");
+const LIVE_UPDATE_NOTICE_VISIBLE_MS: u64 = 3_000;
 
 pub(crate) const fn embedded_logo_jpeg() -> &'static [u8] {
     LOGO_JPEG
+}
+
+pub(crate) const fn embedded_live_update_notice_png() -> &'static [u8] {
+    LIVE_UPDATE_NOTICE_PNG
 }
 
 const VIRTIO_PCI_VENDOR: u16 = 0x1AF4;
@@ -64,6 +70,15 @@ const CURSOR_ALPHA: u8 = 0x80;
 const CURSOR_UPDATE_MS: u64 = 16;
 
 static VIRTIO_GPU_PRESENT_CACHE: AtomicU8 = AtomicU8::new(0);
+static LIVE_UPDATE_STAMP_REQUEST: AtomicU64 = AtomicU64::new(0);
+
+pub(crate) fn request_live_update_stamp(generation: u64) {
+    LIVE_UPDATE_STAMP_REQUEST.store(generation, Ordering::Release);
+    crate::log_info!(target: "gfx";
+        "live-update: emulator stamp requested generation={} backend=virtio-logo-plane\n",
+        generation,
+    );
+}
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -706,9 +721,11 @@ struct EmulatorUi {
     scanout_id: u32,
     width: u32,
     height: u32,
-    _scanout_backing: DmaRegion,
+    scanout_backing: DmaRegion,
     _cursor_backing: DmaRegion,
     last_cursor: Option<(u32, u32, u32, u32)>,
+    stamped_generation: u64,
+    stamp_deadline_ms: Option<u64>,
 }
 
 unsafe impl Send for EmulatorUi {}
@@ -769,10 +786,83 @@ impl EmulatorUi {
             scanout_id,
             width,
             height,
-            _scanout_backing: scanout_backing,
+            scanout_backing,
             _cursor_backing: cursor_backing,
             last_cursor: None,
+            stamped_generation: 0,
+            stamp_deadline_ms: None,
         })
+    }
+
+    fn present_scanout(&mut self) -> bool {
+        self.scanout_backing.flush();
+        self.gpu
+            .transfer_to_host_2d(SCANOUT_RESOURCE_ID, self.width, self.height)
+            && self
+                .gpu
+                .resource_flush(SCANOUT_RESOURCE_ID, self.width, self.height)
+    }
+
+    fn service_live_update_stamp(&mut self) {
+        let now_ms = trueos_time::Instant::now().as_millis();
+        let requested = LIVE_UPDATE_STAMP_REQUEST.load(Ordering::Acquire);
+        if requested != 0 && requested != self.stamped_generation {
+            let notice = match crate::graphics::png_codec::decode_png_rgba(LIVE_UPDATE_NOTICE_PNG) {
+                Ok(notice) => notice,
+                Err(error) => {
+                    crate::log_warn!(target: "gfx";
+                        "live-update: emulator stamp decode failed generation={} code={}\n",
+                        requested,
+                        error.code(),
+                    );
+                    self.stamped_generation = requested;
+                    return;
+                }
+            };
+            let copy = blend_centered_rgba(
+                self.scanout_backing.virt(),
+                self.width,
+                self.height,
+                notice.width,
+                notice.height,
+                notice.rgba.as_slice(),
+            );
+            if self.present_scanout() {
+                self.stamp_deadline_ms = Some(now_ms.saturating_add(LIVE_UPDATE_NOTICE_VISIBLE_MS));
+                crate::log_info!(target: "gfx";
+                    "live-update: emulator stamp visible generation={} duration_ms={} image={}x{} copy={}x{} src={},{} dst={},{} scale=none layer=above-logo\n",
+                    requested,
+                    LIVE_UPDATE_NOTICE_VISIBLE_MS,
+                    notice.width,
+                    notice.height,
+                    copy.copy_w,
+                    copy.copy_h,
+                    copy.src_x,
+                    copy.src_y,
+                    copy.dst_x,
+                    copy.dst_y,
+                );
+            }
+            self.stamped_generation = requested;
+        }
+
+        if self
+            .stamp_deadline_ms
+            .is_some_and(|deadline| now_ms >= deadline)
+        {
+            let restored = crate::graphics::jpeg_codec::decode_jpeg_rgba(LOGO_JPEG)
+                .map(|logo| {
+                    draw_centered_logo(self.scanout_backing.virt(), self.width, self.height, &logo);
+                    self.present_scanout()
+                })
+                .unwrap_or(false);
+            crate::log_info!(target: "gfx";
+                "live-update: emulator stamp closed generation={} logo_restored={}\n",
+                self.stamped_generation,
+                restored as u8,
+            );
+            self.stamp_deadline_ms = None;
+        }
     }
 
     fn update_cursor(&mut self) {
@@ -1003,6 +1093,7 @@ async fn fallback_logo_service_task() {
     if present() {
         if let Some(mut ui) = EmulatorUi::init() {
             loop {
+                ui.service_live_update_stamp();
                 ui.update_cursor();
                 Timer::after(EmbassyDuration::from_millis(CURSOR_UPDATE_MS)).await;
             }
@@ -1116,6 +1207,38 @@ fn draw_centered_logo(
         }
     }
 
+    copy
+}
+
+fn blend_centered_rgba(
+    dst: *mut u8,
+    dst_w: u32,
+    dst_h: u32,
+    src_w: u32,
+    src_h: u32,
+    rgba: &[u8],
+) -> LogoCopy {
+    let copy = centered_logo_copy(dst_w, dst_h, src_w, src_h);
+    for y in 0..copy.copy_h {
+        let src_row = ((copy.src_y + y) as usize * src_w as usize + copy.src_x as usize) * 4;
+        let dst_row = ((copy.dst_y + y) as usize * dst_w as usize + copy.dst_x as usize) * 4;
+        for x in 0..copy.copy_w as usize {
+            let si = src_row + x * 4;
+            let di = dst_row + x * 4;
+            let alpha = u16::from(rgba[si + 3]);
+            let inverse = 255 - alpha;
+            unsafe {
+                let dst_b = u16::from(*dst.add(di));
+                let dst_g = u16::from(*dst.add(di + 1));
+                let dst_r = u16::from(*dst.add(di + 2));
+                *dst.add(di) = ((u16::from(rgba[si + 2]) * alpha + dst_b * inverse) / 255) as u8;
+                *dst.add(di + 1) =
+                    ((u16::from(rgba[si + 1]) * alpha + dst_g * inverse) / 255) as u8;
+                *dst.add(di + 2) = ((u16::from(rgba[si]) * alpha + dst_r * inverse) / 255) as u8;
+                *dst.add(di + 3) = 0xFF;
+            }
+        }
+    }
     copy
 }
 

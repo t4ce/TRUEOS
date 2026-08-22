@@ -431,17 +431,20 @@ extern "x86-interrupt" fn live_update_rendezvous_isr(_frame: InterruptStackFrame
         return;
     }
 
-    control.arrived.fetch_add(1, Ordering::AcqRel);
     let left_vmx = match crate::hv::leave_vmx_root_for_current_cpu_contract() {
         Ok(left) => left,
         Err(_) => {
             control.failures.fetch_add(1, Ordering::AcqRel);
             AP_TRANSITION_ENTERED[slot].store(false, Ordering::Release);
-            control.arrived.fetch_sub(1, Ordering::AcqRel);
             RENDEZVOUS_ISR_ACTIVE.fetch_sub(1, Ordering::AcqRel);
             return;
         }
     };
+    // Publish arrival only after this CPU has completed every operation that
+    // can still fail. Otherwise the BSP can transiently observe N/N, cross the
+    // irreversible barrier, and later wait forever for an AP that retreated
+    // after a failed VMXOFF. The window is especially plausible on large SMP.
+    control.arrived.fetch_add(1, Ordering::AcqRel);
     let lapic_id = crate::percpu::this_cpu().lapic_id();
     let park: extern "C" fn(*const TransitionControl, usize, u32) =
         unsafe { core::mem::transmute(control.ap_park_hhdm as usize) };
@@ -679,7 +682,11 @@ pub fn spawn_post_boot(spawner: Spawner) {
         return;
     };
 
-    crate::shell2::cmds::img::launch_live_update_notice(spawner, handoff.generation);
+    if crate::intel::is_emulator_environment() {
+        crate::virtio_gpu_logo::request_live_update_stamp(handoff.generation);
+    } else {
+        crate::shell2::cmds::img::launch_live_update_notice(spawner, handoff.generation);
+    }
 
     match restore_after_live_update_task(
         spawner,
@@ -1177,6 +1184,10 @@ fn rendezvous_aps(staged: &mut StagedCandidate) -> Result<(), LiveUpdateError> {
             return Err(LiveUpdateError::ApRendezvous("timeout"));
         }
         core::hint::spin_loop();
+    }
+    if control.failures.load(Ordering::Acquire) != 0 {
+        abort_rendezvous(staged, interrupts_were_enabled);
+        return Err(LiveUpdateError::ApRendezvous("AP reported transition failure"));
     }
     transition_marker(b"live-update: step=14/20 all-APs-parked\n");
 

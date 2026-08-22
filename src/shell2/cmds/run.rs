@@ -128,6 +128,7 @@ struct AppVmLaunchRequest {
     instance: crate::hv::BlueprintInstanceRequest,
     target: MatrixTarget,
     preflight_complete: bool,
+    console_surface_override: Option<BlueprintConsoleSurface>,
 }
 
 #[derive(Copy, Clone)]
@@ -253,6 +254,7 @@ fn enqueue_blueprint_request(
     launch_script: Option<String>,
     instance: crate::hv::BlueprintInstanceRequest,
     preflight_complete: bool,
+    console_surface_override: Option<BlueprintConsoleSurface>,
 ) {
     crate::log!(
         "app-vm-run-queue: enqueue archive={} source={} bytes={} args={} launch_script={} preflight={}\n",
@@ -271,6 +273,7 @@ fn enqueue_blueprint_request(
         instance,
         target,
         preflight_complete,
+        console_surface_override,
     });
 }
 
@@ -330,6 +333,7 @@ async fn execute_blueprint(spawner: &Spawner, request: &AppVmLaunchRequest, log:
             request.archive.as_str(),
             request.module_bytes.as_slice(),
             log,
+            0,
         )
         .await
         {
@@ -347,6 +351,10 @@ async fn execute_blueprint(spawner: &Spawner, request: &AppVmLaunchRequest, log:
     {
         plan.console_surface = BlueprintConsoleSurface::Text;
         log("apps: console surface Text (VMX-minishell override; terminal TUI disabled)");
+    }
+    if let Some(console_surface) = request.console_surface_override {
+        plan.console_surface = console_surface;
+        log("apps: console surface Text (one-shot noninteractive launch)");
     }
     if matrix_target_interrupted(&request.target) {
         log("apps: interrupted before vm start");
@@ -618,6 +626,7 @@ async fn preflight_blueprint_launch(
     archive: &str,
     module_bytes: &[u8],
     log: &dyn Fn(&str),
+    waived_readiness: u32,
 ) -> Result<BlueprintLaunchPlan, String> {
     let module = crate::hv::blueprint::parse_blueprint(module_bytes)?;
 
@@ -727,6 +736,7 @@ async fn preflight_blueprint_launch(
         return Err(String::from("only ELF REL blueprints are supported for app-vm launch"));
     }
 
+    required_readiness &= !waived_readiness;
     let missing_readiness = required_readiness & !crate::r::readiness::mask();
     log(alloc::format!(
         "apps: Blueprint CAPS {} missing={}",
@@ -955,6 +965,7 @@ pub(crate) fn enqueue_blueprint_bytes_with_instance_and_launch_script(
         launch_script,
         instance,
         false,
+        None,
     );
     Ok(())
 }
@@ -963,9 +974,10 @@ async fn preflight_archive_name_to_target_async(
     target: &MatrixTarget,
     archive_name: &str,
     module_bytes: &[u8],
+    waived_readiness: u32,
 ) -> Result<(), String> {
     let log = |line: &str| log_run_target_line(target, line);
-    preflight_blueprint_launch(archive_name, module_bytes, &log)
+    preflight_blueprint_launch(archive_name, module_bytes, &log, waived_readiness)
         .await
         .map(|_| ())
 }
@@ -978,9 +990,17 @@ async fn submit_module_bytes_to_target_async(
     instance: crate::hv::BlueprintInstanceRequest,
     launch_script: Option<String>,
     source: &'static str,
+    waived_readiness: u32,
+    console_surface_override: Option<BlueprintConsoleSurface>,
 ) -> Result<&'static str, String> {
-    preflight_archive_name_to_target_async(&target, archive_name, module_bytes.as_slice()).await?;
-    let required_readiness = crate::hv::blueprint::prebind_required_readiness(
+    preflight_archive_name_to_target_async(
+        &target,
+        archive_name,
+        module_bytes.as_slice(),
+        waived_readiness,
+    )
+    .await?;
+    let mut required_readiness = crate::hv::blueprint::prebind_required_readiness(
         module_bytes.as_slice(),
     )
     .map_err(|err| {
@@ -988,6 +1008,7 @@ async fn submit_module_bytes_to_target_async(
         log_run_target_line(&target, line.as_str());
         line
     })?;
+    required_readiness &= !waived_readiness;
     let missing_readiness = required_readiness & !crate::r::readiness::mask();
     if missing_readiness != 0 {
         let line = alloc::format!(
@@ -1015,6 +1036,7 @@ async fn submit_module_bytes_to_target_async(
             launch_script,
             instance,
             true,
+            console_surface_override,
         );
     });
     Ok(source)
@@ -1070,6 +1092,34 @@ pub(crate) async fn submit_archive_name_to_target_from_app_db_with_instance_asyn
     .await
 }
 
+/// Launch a built-in Blueprint whose selected mode provably does not exercise
+/// one of its optional imported services. The caller owns that narrower mode
+/// contract; ordinary app launches continue to require every imported service.
+pub(crate) async fn submit_archive_name_to_target_from_app_db_with_instance_waiving_readiness_noninteractive_async(
+    target: MatrixTarget,
+    archive_name: &str,
+    app_args: Vec<String>,
+    instance: crate::hv::BlueprintInstanceRequest,
+    waived_readiness: u32,
+) -> Result<&'static str, String> {
+    if let Some(module_bytes) = crate::app_db::get(archive_name)? {
+        return submit_module_bytes_to_target_async(
+            target,
+            archive_name,
+            module_bytes,
+            app_args,
+            instance,
+            None,
+            "app.db",
+            waived_readiness,
+            Some(BlueprintConsoleSurface::Text),
+        )
+        .await;
+    }
+
+    Err(String::from("archive not found"))
+}
+
 async fn submit_archive_name_to_target_from_app_db_with_instance_and_launch_script_async(
     target: MatrixTarget,
     archive_name: &str,
@@ -1086,6 +1136,8 @@ async fn submit_archive_name_to_target_from_app_db_with_instance_and_launch_scri
             instance,
             launch_script,
             "app.db",
+            0,
+            None,
         )
         .await;
     }
@@ -1107,6 +1159,8 @@ pub(crate) async fn submit_archive_name_to_target_from_app_db_default_async(
             crate::hv::BlueprintInstanceRequest::default(),
             None,
             "app.db",
+            0,
+            None,
         )
         .await;
     }
@@ -1143,6 +1197,8 @@ async fn submit_archive_entry(
         instance,
         None,
         "app.db",
+        0,
+        None,
     )
     .await
     {

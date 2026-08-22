@@ -105,7 +105,6 @@ pub(crate) struct BlueprintImageSourceInfo {
 
 const IMAGE_SOURCE_FORMAT_PNG: u32 = 3;
 const INTEL_GRAPHICS_LOGO_PNG: &[u8] = include_bytes!("../../Intel_Graphics_logo.png");
-const LIVE_UPDATE_NOTICE_PNG: &[u8] = include_bytes!("../../tools/updlive/noway.png");
 
 pub(crate) fn blueprint_image_source_info(name: &str) -> Result<BlueprintImageSourceInfo, i32> {
     match name {
@@ -137,7 +136,7 @@ pub(crate) fn blueprint_image_source_info(name: &str) -> Result<BlueprintImageSo
             format: IMAGE_SOURCE_FORMAT_PNG,
             width: 1_122,
             height: 1_402,
-            byte_len: LIVE_UPDATE_NOTICE_PNG.len() as u32,
+            byte_len: crate::virtio_gpu_logo::embedded_live_update_notice_png().len() as u32,
         }),
         _ => Err(ERROR_NOT_FOUND),
     }
@@ -186,7 +185,9 @@ pub(crate) fn copy_blueprint_image_source(
             Ok(copied)
         }
         "kernel:live-update" => {
-            let available = LIVE_UPDATE_NOTICE_PNG.get(offset..).ok_or(ERROR_INVALID)?;
+            let available = crate::virtio_gpu_logo::embedded_live_update_notice_png()
+                .get(offset..)
+                .ok_or(ERROR_INVALID)?;
             let copied = available.len().min(out.len());
             out[..copied].copy_from_slice(&available[..copied]);
             Ok(copied)
