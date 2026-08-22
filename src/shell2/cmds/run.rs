@@ -140,6 +140,7 @@ enum BlueprintMemoryClass {
     TokioRuntime,
     AudioPlayer,
     NetworkClient,
+    NetworkServer,
     ServerRuntime,
     HeavyGraphics,
     Unknown,
@@ -151,6 +152,7 @@ impl BlueprintMemoryClass {
             Self::TokioRuntime => "tokio-runtime",
             Self::AudioPlayer => "audio-player",
             Self::NetworkClient => "network-client",
+            Self::NetworkServer => "network-server",
             Self::ServerRuntime => "server-runtime",
             Self::HeavyGraphics => "heavy-graphics",
             Self::Unknown => "unknown",
@@ -372,6 +374,11 @@ fn import_name_has(imports: &[crate::hv::blueprint::ElfImport<'_>], needle: &str
     imports.iter().any(|import| import.name.contains(needle))
 }
 
+fn imports_libc_tcp_listener(imports: &[crate::hv::blueprint::ElfImport<'_>]) -> bool {
+    let has = |name| imports.iter().any(|import| import.name == name);
+    has("bind") && has("listen") && (has("accept") || has("accept4"))
+}
+
 fn import_name_is(imports: &[crate::hv::blueprint::ElfImport<'_>], name: &str) -> bool {
     imports.iter().any(|import| import.name == name)
 }
@@ -435,8 +442,15 @@ fn classify_blueprint_memory(
         return BlueprintMemoryClass::AudioPlayer;
     }
 
+    let network_server_signal = archive_has(archive, "server")
+        || import_name_has(imports, "trueos_mio_tcp_listener_")
+        || import_name_has(imports, "tcp_listener")
+        || imports_libc_tcp_listener(imports);
+    if network_server_signal {
+        return BlueprintMemoryClass::NetworkServer;
+    }
+
     let server_signal = archive_has(archive, "horizon")
-        || archive_has(archive, "server")
         || archive_has(archive, "game")
         || import_name_has(imports, "pthread_");
     if server_signal {
@@ -512,6 +526,14 @@ fn estimate_blueprint_memory_profile(
                 512,
                 8,
                 16,
+                64,
+            ),
+            BlueprintMemoryClass::NetworkServer => (
+                128,
+                round_pow2_mib(base_live_mib.saturating_mul(64).saturating_add(256)).max(512),
+                1024,
+                16,
+                32,
                 64,
             ),
             BlueprintMemoryClass::ServerRuntime => (

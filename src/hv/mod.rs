@@ -2544,6 +2544,11 @@ fn import_name_has(imports: &[crate::hv::blueprint::ElfImport<'_>], needle: &str
     imports.iter().any(|import| import.name.contains(needle))
 }
 
+fn imports_libc_tcp_listener(imports: &[crate::hv::blueprint::ElfImport<'_>]) -> bool {
+    let has = |name| imports.iter().any(|import| import.name == name);
+    has("bind") && has("listen") && (has("accept") || has("accept4"))
+}
+
 fn archive_has(archive: &str, needle: &str) -> bool {
     archive.contains(needle)
 }
@@ -2567,7 +2572,8 @@ fn classify_blueprint_memory(
 
     let network_server_signal = archive_has(archive, "server")
         || import_name_has(imports, "trueos_mio_tcp_listener_")
-        || import_name_has(imports, "tcp_listener");
+        || import_name_has(imports, "tcp_listener")
+        || imports_libc_tcp_listener(imports);
     if network_server_signal {
         return BlueprintMemoryClass::NetworkServer;
     }
@@ -5539,11 +5545,12 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
         ));
     }
 
+    let blueprint_net_closed = crate::hv::blueprint_net::release_vm(vm_id);
     let mio_closed = crate::mio_compat::close_sockets_for_vm(vm_id);
     let cabi_closed = crate::r::net::socket_cabi::close_sockets_for_vm(vm_id);
     hvlogf(format_args!(
-        "hv: vm{} lifecycle: net cleanup complete mio={} socket_cabi={}",
-        vm_id, mio_closed, cabi_closed
+        "hv: vm{} lifecycle: net cleanup complete blueprint_net={} mio={} socket_cabi={}",
+        vm_id, blueprint_net_closed, mio_closed, cabi_closed
     ));
     if let Some(reason) = BLUEPRINT_PROCESS_CONTEXTS
         .get(vm_id as usize)
