@@ -142,6 +142,18 @@ pub fn utc_offset_seconds(unix_seconds: u64) -> i32 {
     }
 }
 
+/// Short display name for the configured zone at this UTC instant.
+///
+/// The kernel clock remains UTC; this only describes the civil-time view.
+#[inline]
+pub fn timezone_abbreviation(unix_seconds: u64) -> &'static str {
+    match current_timezone_id() {
+        TIMEZONE_EUROPE_BERLIN if berlin_utc_offset_seconds(unix_seconds) == 2 * 3_600 => "CEST",
+        TIMEZONE_EUROPE_BERLIN => "CET",
+        _ => "UTC",
+    }
+}
+
 #[inline]
 pub fn local_unix_time_seconds(unix_seconds: u64) -> u64 {
     let offset = utc_offset_seconds(unix_seconds);

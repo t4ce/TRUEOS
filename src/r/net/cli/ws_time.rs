@@ -145,9 +145,30 @@ fn unix_timestamp_to_ymdhms(ts: u64) -> (u32, u8, u8, u8, u8, u8) {
 fn time_message_json() -> String {
     let (unix, source) = current_unix_seconds_and_source();
     let (year, month, day, hour, minute, second) = unix_timestamp_to_ymdhms(unix);
+    let local_unix = crate::locale::local_unix_time_seconds(unix);
+    let (local_year, local_month, local_day, local_hour, local_minute, local_second) =
+        unix_timestamp_to_ymdhms(local_unix);
+    let zone = crate::locale::timezone_abbreviation(unix);
+    let offset_seconds = crate::locale::utc_offset_seconds(unix);
     format!(
-        "{{\"kind\":\"time\",\"unix\":{},\"source\":\"{}\",\"utc\":\"{:04}-{:02}-{:02} {:02}:{:02}:{:02} UTC\"}}",
-        unix, source, year, month, day, hour, minute, second
+        "{{\"kind\":\"time\",\"unix\":{},\"source\":\"{}\",\"utc\":\"{:04}-{:02}-{:02} {:02}:{:02}:{:02} UTC\",\"local\":\"{:04}-{:02}-{:02} {:02}:{:02}:{:02} {}\",\"timezone\":\"{}\",\"utc_offset_seconds\":{}}}",
+        unix,
+        source,
+        year,
+        month,
+        day,
+        hour,
+        minute,
+        second,
+        local_year,
+        local_month,
+        local_day,
+        local_hour,
+        local_minute,
+        local_second,
+        zone,
+        crate::locale::current_timezone_name(),
+        offset_seconds,
     )
 }
 

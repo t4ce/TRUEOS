@@ -42,6 +42,7 @@ static NTP_LAST_SYNC_UNIX_SECS: AtomicU64 = AtomicU64::new(0);
 static NTP_LAST_SYNC_TICKS: AtomicU64 = AtomicU64::new(0);
 static NTP_LOCAL_PORT_SEQ: AtomicU16 = AtomicU16::new(0);
 static NTP_HOST_SEQ: AtomicU16 = AtomicU16::new(0);
+static NTP_FAILED_QUERIES: AtomicU64 = AtomicU64::new(0);
 const NTP_UNIX_EPOCH_OFFSET: u64 = 2_208_988_800;
 
 #[inline]
@@ -200,10 +201,11 @@ fn civil_from_days(days_since_unix_epoch: i64) -> (i32, u32, u32) {
 }
 
 pub fn kernel_date_day_month_year() -> String {
-    let unix_secs = current_unix_seconds()
+    let utc_secs = current_unix_seconds()
         .or_else(crate::time::unix_time_seconds)
         .unwrap_or(0);
-    let days = (unix_secs / SECONDS_PER_DAY) as i64;
+    let local_secs = crate::locale::local_unix_time_seconds(utc_secs);
+    let days = (local_secs / SECONDS_PER_DAY) as i64;
     let (year, month, day) = civil_from_days(days);
     let month_name = MONTH_NAMES[(month.saturating_sub(1) as usize).min(MONTH_NAMES.len() - 1)];
     format!("{} {} {}", day, month_name, year)
@@ -212,6 +214,13 @@ pub fn kernel_date_day_month_year() -> String {
 #[trueos_executor::task]
 pub async fn ntp_sync_task() {
     crate::r::readiness::wait_for(crate::r::readiness::NET_ANY_CONFIGURED).await;
+
+    crate::log_info!(target: "net";
+        "ntp: client online refresh_s={} boot_seed={} timezone={}\n",
+        NTP_REFRESH_SECS,
+        crate::time::unix_time_seconds().unwrap_or(0),
+        crate::locale::current_timezone_name(),
+    );
 
     loop {
         let profile = NetProfile::default();
@@ -226,6 +235,27 @@ pub async fn ntp_sync_task() {
             if let Some(unix) = unix_from_ntp_frame(&words) {
                 NTP_LAST_SYNC_UNIX_SECS.store(unix, Ordering::Release);
                 NTP_LAST_SYNC_TICKS.store(embassy_time_driver::now(), Ordering::Release);
+                let previous_failures = NTP_FAILED_QUERIES.swap(0, Ordering::AcqRel);
+                crate::log_info!(target: "net";
+                    "ntp: synchronized host={} unix={} recovered_failures={} timezone={} zone={}\n",
+                    host,
+                    unix,
+                    previous_failures,
+                    crate::locale::current_timezone_name(),
+                    crate::locale::timezone_abbreviation(unix),
+                );
+            }
+        } else {
+            let failures = NTP_FAILED_QUERIES
+                .fetch_add(1, Ordering::AcqRel)
+                .saturating_add(1);
+            if failures == 1 || failures % 10 == 0 {
+                crate::log_warn!(target: "net";
+                    "ntp: query failed host={} consecutive_failures={} retry_s={}\n",
+                    host,
+                    failures,
+                    NTP_REFRESH_SECS,
+                );
             }
         }
 
