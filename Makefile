@@ -22,7 +22,8 @@ ISO_BOOT_DIR := bld/iso-bootroot
 ISO_EFI_IMG := efi.img
 UPDATE_7Z_FLAGS ?= -mx=9 -m0=LZMA2 -ms=off
 RELEASE_BUNDLE_DIR := $(ISO_DIR)/trueos-release
-RELEASE_ARCHIVE := $(ISO_DIR)/TrueOS.7z
+ISO_ARCHIVE := $(ISO_DIR)/TrueOS.7z
+RELEASE_ARCHIVE := $(ISO_ARCHIVE)
 PUBLISH_RELEASE_SMB ?= 1
 BUNDLED_OVMF_NAME := ovmf-code-x86_64.fd
 OVMF_BUNDLE_PATH ?= $(firstword $(wildcard /usr/share/ovmf/OVMF.fd /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd /opt/homebrew/share/qemu/edk2-x86_64-code.fd /usr/local/share/qemu/edk2-x86_64-code.fd))
@@ -533,6 +534,14 @@ iso: artifacts images limine
 		-efi-boot-part --efi-boot-image --protective-msdos-label \
 		-o $(ISO_PATH) $(ISO_BOOT_DIR)
 	$(MAKE) --no-print-directory ARTIFACT_DIR="$(ARTIFACT_DIR)" ISO_BOOT_DIR="$(ISO_BOOT_DIR)" ISO_PATH="$(ISO_PATH)" intel-gpu-verify-packaged-copy
+	rm -f $(ISO_ARCHIVE)
+	cd $(ISO_DIR) && 7z a -t7z $(UPDATE_7Z_FLAGS) $(notdir $(ISO_ARCHIVE)) $(notdir $(ISO_PATH))
+	@if [ "$(PUBLISH_RELEASE_SMB)" = "1" ]; then \
+		env -u GIO_MODULE_DIR gio mount smb://t4ce@pdjb/home-share || true; \
+		env -u GIO_MODULE_DIR gio copy $(ISO_ARCHIVE) smb://t4ce@pdjb/home-share/TRUEOS_SITE/; \
+	else \
+		echo "iso: skipping SMB publish (PUBLISH_RELEASE_SMB=$(PUBLISH_RELEASE_SMB))"; \
+	fi
 	@case "$(START_BAREMETAL_LOG)" in \
 		1) \
 			mkdir -p "$(BAREMETAL_LOG_DIR)"; \
@@ -609,9 +618,9 @@ release: release-git-clean
 		echo "release: using committed counter (RELEASE_BUMP_CNT=$(RELEASE_BUMP_CNT))"; \
 	fi
 	@if [ "$(RELEASE_BUMP_CNT)" = "1" ]; then \
-		$(MAKE) --no-print-directory BUILD_MODE="$(BUILD_MODE)" CARGO_BUILD_FLAGS="$(CARGO_BUILD_FLAGS)" PROVENANCE_CLEAN_FLAG=--allow-dirty PROVENANCE_SOURCE_MANIFEST=git-index provenance; \
+		$(MAKE) --no-print-directory BUILD_MODE="$(BUILD_MODE)" CARGO_BUILD_FLAGS="$(CARGO_BUILD_FLAGS)" PUBLISH_RELEASE_SMB=0 START_BAREMETAL_LOG=0 PROVENANCE_CLEAN_FLAG=--allow-dirty PROVENANCE_SOURCE_MANIFEST=git-index provenance; \
 	else \
-		$(MAKE) --no-print-directory BUILD_MODE="$(BUILD_MODE)" CARGO_BUILD_FLAGS="$(CARGO_BUILD_FLAGS)" PROVENANCE_CLEAN_FLAG=--require-clean PROVENANCE_SOURCE_MANIFEST=git-commit provenance; \
+		$(MAKE) --no-print-directory BUILD_MODE="$(BUILD_MODE)" CARGO_BUILD_FLAGS="$(CARGO_BUILD_FLAGS)" PUBLISH_RELEASE_SMB=0 START_BAREMETAL_LOG=0 PROVENANCE_CLEAN_FLAG=--require-clean PROVENANCE_SOURCE_MANIFEST=git-commit provenance; \
 	fi
 	$(MAKE) --no-print-directory verify-provenance
 	@if [ -z "$(OVMF_BUNDLE_PATH)" ] || [ ! -f "$(OVMF_BUNDLE_PATH)" ]; then \

@@ -1,5 +1,3 @@
-extern crate alloc;
-
 use core::sync::atomic::{AtomicU8, AtomicU64, Ordering, fence};
 
 use trueos_executor::{SpawnError, SpawnToken};
@@ -22,9 +20,9 @@ const LIVE_UPDATE_NOTICE_SOURCES: [&str; LIVE_UPDATE_NOTICE_VARIANT_COUNT] = [
     "kernel:live-update-nway-right",
 ];
 
-static LIVE_UPDATE_NWAY_DECODED: spin::Once<
-    Option<crate::graphics::png_codec::DecodedPng>,
-> = spin::Once::new();
+static LIVE_UPDATE_NWAY_PANEL: spin::Mutex<
+    Option<(usize, crate::graphics::png_codec::DecodedPng)>,
+> = spin::Mutex::new(None);
 
 pub(crate) const fn embedded_logo_jpeg() -> &'static [u8] {
     LOGO_JPEG
@@ -42,23 +40,59 @@ pub(crate) const fn embedded_live_update_notice_png(variant: usize) -> Option<&'
     }
 }
 
-fn decoded_live_update_triptych() -> Option<&'static crate::graphics::png_codec::DecodedPng> {
-    LIVE_UPDATE_NWAY_DECODED
-        .call_once(|| crate::graphics::png_codec::decode_png_rgba(LIVE_UPDATE_NWAY_PNG).ok())
+fn decode_live_update_triptych_panel(
+    panel: usize,
+) -> Result<crate::graphics::png_codec::DecodedPng, crate::graphics::png_codec::PngDecodeError> {
+    let mut decoded = crate::graphics::png_codec::decode_png_rgba(LIVE_UPDATE_NWAY_PNG)?;
+    if panel >= 3 || decoded.width != 1_536 || decoded.height != 1_024 {
+        return Err(crate::graphics::png_codec::PngDecodeError::Invalid);
+    }
+
+    let panel_width = decoded.width / 3;
+    let source_row_bytes = decoded.width as usize * 4;
+    let panel_row_bytes = panel_width as usize * 4;
+    let panel_x_bytes = panel * panel_row_bytes;
+    for row in 0..decoded.height as usize {
+        let source = row * source_row_bytes + panel_x_bytes;
+        let destination = row * panel_row_bytes;
+        decoded
+            .rgba
+            .copy_within(source..source + panel_row_bytes, destination);
+    }
+    decoded
+        .rgba
+        .truncate(panel_row_bytes * decoded.height as usize);
+    decoded.rgba.shrink_to_fit();
+    decoded.width = panel_width;
+    Ok(decoded)
+}
+
+fn ensure_live_update_triptych_panel(
+    panel: usize,
+) -> spin::MutexGuard<'static, Option<(usize, crate::graphics::png_codec::DecodedPng)>> {
+    let mut cached = LIVE_UPDATE_NWAY_PANEL.lock();
+    if cached
         .as_ref()
-        .filter(|decoded| decoded.width == 1_536 && decoded.height == 1_024)
+        .map(|(cached_panel, _)| *cached_panel != panel)
+        .unwrap_or(true)
+    {
+        *cached = decode_live_update_triptych_panel(panel)
+            .ok()
+            .map(|decoded| (panel, decoded));
+    }
+    cached
 }
 
 pub(crate) fn live_update_triptych_panel_info(panel: usize) -> Option<(u32, u32, usize)> {
     if panel >= 3 {
         return None;
     }
-    let decoded = decoded_live_update_triptych()?;
-    let width = decoded.width / 3;
-    let byte_len = (width as usize)
+    let cached = ensure_live_update_triptych_panel(panel);
+    let (_, decoded) = cached.as_ref()?;
+    let byte_len = (decoded.width as usize)
         .checked_mul(decoded.height as usize)?
         .checked_mul(4)?;
-    Some((width, decoded.height, byte_len))
+    Some((decoded.width, decoded.height, byte_len))
 }
 
 pub(crate) fn copy_live_update_triptych_panel(
@@ -66,26 +100,18 @@ pub(crate) fn copy_live_update_triptych_panel(
     offset: usize,
     out: &mut [u8],
 ) -> Option<usize> {
-    let decoded = decoded_live_update_triptych()?;
-    let (panel_width, _, total) = live_update_triptych_panel_info(panel)?;
+    if panel >= 3 {
+        return None;
+    }
+    let cached = ensure_live_update_triptych_panel(panel);
+    let (_, decoded) = cached.as_ref()?;
+    let total = decoded.rgba.len();
     if offset > total {
         return None;
     }
-    let panel_row_bytes = panel_width as usize * 4;
-    let source_row_bytes = decoded.width as usize * 4;
-    let panel_x_bytes = panel * panel_row_bytes;
-    let mut copied = 0usize;
     let wanted = out.len().min(total - offset);
-    while copied < wanted {
-        let linear = offset + copied;
-        let row = linear / panel_row_bytes;
-        let within_row = linear % panel_row_bytes;
-        let run = (panel_row_bytes - within_row).min(wanted - copied);
-        let source = row * source_row_bytes + panel_x_bytes + within_row;
-        out[copied..copied + run].copy_from_slice(&decoded.rgba[source..source + run]);
-        copied += run;
-    }
-    Some(copied)
+    out[..wanted].copy_from_slice(&decoded.rgba[offset..offset + wanted]);
+    Some(wanted)
 }
 
 fn decode_live_update_notice_variant(
@@ -94,27 +120,7 @@ fn decode_live_update_notice_variant(
     if let Some(png) = embedded_live_update_notice_png(variant) {
         return crate::graphics::png_codec::decode_png_rgba(png);
     }
-    let panel = variant.saturating_sub(2);
-    let decoded = crate::graphics::png_codec::decode_png_rgba(LIVE_UPDATE_NWAY_PNG)?;
-    if panel >= 3 || decoded.width != 1_536 || decoded.height != 1_024 {
-        return Err(crate::graphics::png_codec::PngDecodeError::Invalid);
-    }
-    let panel_width = decoded.width / 3;
-    let mut rgba = alloc::vec::Vec::with_capacity(
-        panel_width as usize * decoded.height as usize * 4,
-    );
-    let source_row_bytes = decoded.width as usize * 4;
-    let panel_row_bytes = panel_width as usize * 4;
-    let panel_x_bytes = panel * panel_row_bytes;
-    for row in 0..decoded.height as usize {
-        let start = row * source_row_bytes + panel_x_bytes;
-        rgba.extend_from_slice(&decoded.rgba[start..start + panel_row_bytes]);
-    }
-    Ok(crate::graphics::png_codec::DecodedPng {
-        width: panel_width,
-        height: decoded.height,
-        rgba,
-    })
+    decode_live_update_triptych_panel(variant.saturating_sub(2))
 }
 
 const VIRTIO_PCI_VENDOR: u16 = 0x1AF4;
