@@ -75,7 +75,9 @@ static BRIDGE_ALLOCS: Mutex<Vec<BridgeAlloc, MAX_BRIDGE_ALLOCS>> = Mutex::new(Ve
 
 pub mod class {
     pub const NETWORK: u8 = 0x02;
+    pub const DISPLAY: u8 = 0x03;
     pub const MULTIMEDIA: u8 = 0x04;
+    pub const BRIDGE: u8 = 0x06;
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -450,6 +452,14 @@ impl FullforgetPciFunction {
 
     pub fn is_network(&self) -> bool {
         self.class == class::NETWORK
+    }
+
+    pub fn is_display(&self) -> bool {
+        self.class == class::DISPLAY
+    }
+
+    pub fn is_bridge(&self) -> bool {
+        self.class == class::BRIDGE
     }
 }
 

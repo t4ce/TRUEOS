@@ -1496,10 +1496,27 @@ async fn quiesce_pci_for_commit(
         .iter()
         .filter(|function| function.is_network())
         .count();
-    let non_network_count = pci_snapshot.len().saturating_sub(network_count);
+    let display_count = pci_snapshot
+        .iter()
+        .filter(|function| function.is_display())
+        .count();
+    let bridge_count = pci_snapshot
+        .iter()
+        .filter(|function| function.is_bridge())
+        .count();
+    // Preserve forwarding topology across the warm jump. Endpoint drivers
+    // re-enable their own command registers, but candidate PCI enumeration
+    // does not reconstruct bridge command state. Bridges are therefore not
+    // treated as DMA requesters here; every enumerated endpoint still has BME
+    // cleared and verified before the commit.
+    let early_count = pci_snapshot
+        .len()
+        .saturating_sub(network_count)
+        .saturating_sub(display_count)
+        .saturating_sub(bridge_count);
     let begin = format!(
-        "update live: step=15a/20 PCI-non-network-quiesce-next functions={} network-deferred={} runtime=BSP+network drain-window-ms={}",
-        non_network_count, network_count, PRE_RENDEZVOUS_DRAIN_MS,
+        "update live: step=15a/20 PCI-early-quiesce-next functions={} display-deferred={} network-deferred={} bridges-preserved={} runtime=BSP+display+network drain-window-ms={}",
+        early_count, display_count, network_count, bridge_count, PRE_RENDEZVOUS_DRAIN_MS,
     );
     print_matrix_target_line(target, begin.as_str());
     crate::log_info!(target: "global"; "{}\n", begin);
@@ -1508,17 +1525,36 @@ async fn quiesce_pci_for_commit(
     let mut failures = 0usize;
     for function in pci_snapshot
         .iter()
-        .filter(|function| !function.is_network())
+        .filter(|function| {
+            !function.is_network() && !function.is_display() && !function.is_bridge()
+        })
     {
-        failures =
-            failures.saturating_add(
-                unsafe { crate::pci::fullforget_quiesce_one_unlocked(function) } as usize,
-            );
+        let (bus, slot, function_number) = function.bdf();
+        let (vendor, device, class, subclass) = function.identity();
+        let next = format!(
+            "update live: step=15p/20 PCI-function-quiesce-next bdf={:02x}:{:02x}.{} id={:04x}:{:04x} class={:02x}:{:02x} runtime=BSP+display+network",
+            bus, slot, function_number, vendor, device, class, subclass,
+        );
+        print_matrix_target_line(target, next.as_str());
+        crate::log_info!(target: "global"; "{}\n", next);
+        Timer::after(EmbassyDuration::from_millis(10)).await;
+
+        let bus_master_still_enabled =
+            unsafe { crate::pci::fullforget_quiesce_one_unlocked(function) };
+        failures = failures.saturating_add(bus_master_still_enabled as usize);
+
+        let complete = format!(
+            "update live: step=15q/20 PCI-function-quiesce-complete bdf={:02x}:{:02x}.{} bus-master-still-enabled={} runtime=BSP+display+network",
+            bus, slot, function_number, bus_master_still_enabled as u8,
+        );
+        print_matrix_target_line(target, complete.as_str());
+        crate::log_info!(target: "global"; "{}\n", complete);
+        Timer::after(EmbassyDuration::from_millis(10)).await;
     }
     if failures != 0 {
         let failure = format!(
-            "update live: fail-stop=PCI-non-network-bus-master-still-enabled failures={} functions={} runtime=BSP+network",
-            failures, non_network_count,
+            "update live: fail-stop=PCI-early-bus-master-still-enabled failures={} functions={} runtime=BSP+display+network",
+            failures, early_count,
         );
         print_matrix_target_line(target, failure.as_str());
         crate::log_info!(target: "global"; "{}\n", failure);
@@ -1529,19 +1565,27 @@ async fn quiesce_pci_for_commit(
     }
 
     let non_network_complete = format!(
-        "update live: step=15b/20 PCI-non-network-quiesce-ok functions={} network-deferred={} runtime=BSP+network drain-window-ms={}",
-        non_network_count, network_count, PRE_RENDEZVOUS_DRAIN_MS,
+        "update live: step=15b/20 PCI-early-quiesce-ok functions={} display-deferred={} network-deferred={} bridges-preserved={} runtime=BSP+display+network drain-window-ms={}",
+        early_count, display_count, network_count, bridge_count, PRE_RENDEZVOUS_DRAIN_MS,
     );
     print_matrix_target_line(target, non_network_complete.as_str());
     crate::log_info!(target: "global"; "{}\n", non_network_complete);
     Timer::after(EmbassyDuration::from_millis(PRE_RENDEZVOUS_DRAIN_MS)).await;
 
-    for function in pci_snapshot.iter().filter(|function| function.is_network()) {
+    for function in pci_snapshot
+        .iter()
+        .filter(|function| function.is_display() || function.is_network())
+    {
         let (bus, slot, function_number) = function.bdf();
         let (vendor, device, class, subclass) = function.identity();
+        let role = if function.is_display() {
+            "display"
+        } else {
+            "network"
+        };
         let cutoff = format!(
-            "update live: step=15c/20 PCI-network-quiesce-next bdf={:02x}:{:02x}.{} id={:04x}:{:04x} class={:02x}:{:02x} TCP-cutoff-after-drain=1",
-            bus, slot, function_number, vendor, device, class, subclass,
+            "update live: step=15c/20 PCI-observable-quiesce-next role={} bdf={:02x}:{:02x}.{} id={:04x}:{:04x} class={:02x}:{:02x} display-or-TCP-cutoff-after-drain=1",
+            role, bus, slot, function_number, vendor, device, class, subclass,
         );
         print_matrix_target_line(target, cutoff.as_str());
         crate::log_info!(target: "global"; "{}\n", cutoff);
@@ -1549,14 +1593,17 @@ async fn quiesce_pci_for_commit(
     Timer::after(EmbassyDuration::from_millis(PRE_RENDEZVOUS_DRAIN_MS)).await;
 
     failures = 0;
-    for function in pci_snapshot.iter().filter(|function| function.is_network()) {
+    for function in pci_snapshot
+        .iter()
+        .filter(|function| function.is_display() || function.is_network())
+    {
         failures =
             failures.saturating_add(
                 unsafe { crate::pci::fullforget_quiesce_one_unlocked(function) } as usize,
             );
     }
     if failures != 0 {
-        transition_marker(b"live-update: fail-stop=PCI-network-bus-master-still-enabled\n");
+        transition_marker(b"live-update: fail-stop=PCI-final-bus-master-still-enabled\n");
         loop {
             unsafe { core::arch::asm!("cli", "hlt", options(nomem, nostack)) };
         }
