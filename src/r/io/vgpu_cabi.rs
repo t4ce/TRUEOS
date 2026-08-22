@@ -845,12 +845,7 @@ pub unsafe extern "C" fn trueos_cabi_vgpu_ui4_indexed_batch_submit(
         )
     };
     let result = if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        guest_record(
-            trueos_vm::vmcall::OP_BP_VGPU_UI4_INDEXED_BATCH_SUBMIT,
-            device,
-            queue,
-            payload,
-        )
+        guest_record(trueos_vm::vmcall::OP_BP_VGPU_UI4_INDEXED_BATCH_SUBMIT, device, queue, payload)
     } else {
         broker_ui4_indexed_batch_submit(direct_principal(), device, queue, batch)
     };

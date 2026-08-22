@@ -2353,7 +2353,11 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_resize(
         surface.retained_text_rendered = false;
         surface.retained_text_backbuffer_extent = None;
         surface.retained_text_backbuffer = None;
-        surface.font_canvas = None;
+        // FontCanvas owns a document-sized source allocation, not pixels in the
+        // replaced UI4 frame. Keep it warm just like uploaded sprites; the next
+        // frame merely selects a different crop/destination from the same
+        // source. Dropping it here made maximize synchronously restamp every
+        // glyph before the replacement frame could publish.
         surface.stamped_text_layers.clear();
         surface.stamped_text_cursor = 0;
         surface.stamped_text_pending = None;

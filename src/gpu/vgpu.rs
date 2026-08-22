@@ -41,8 +41,7 @@ pub(crate) const SAMPLER_ADDRESS_U_REPEAT: u32 = 1 << 0;
 pub(crate) const SAMPLER_ADDRESS_V_REPEAT: u32 = 1 << 1;
 
 pub(crate) const SHADER_PACKAGE_CLIP_POSITION3_RGBA_FNV1A64: u64 = 0x1438_5963_136A_A36F;
-pub(crate) const SHADER_PACKAGE_CLIP_POSITION3_IMMEDIATE_RGBA_FNV1A64: u64 =
-    0x4A7C_D238_6AA5_C232;
+pub(crate) const SHADER_PACKAGE_CLIP_POSITION3_IMMEDIATE_RGBA_FNV1A64: u64 = 0x4A7C_D238_6AA5_C232;
 pub(crate) const SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64: u64 = 0xD2A3_B942_FA09_24B6;
 pub(crate) const SHADER_PACKAGE_CLIP_POSITION3_UV_TEXEL_LOAD_FNV1A64: u64 = 0x0CFE_4DDB_C885_8871;
 const SHADER_PACKAGE_CLIP_POSITION3_RGBA_COLOR: u32 = u32::from_le_bytes([118, 221, 153, 255]);
@@ -2288,7 +2287,9 @@ pub(crate) fn submit_ui4_indexed_batch(
         || batch
             .draws
             .iter()
-            .any(|draw| draw.index_count == 0 || draw.base_vertex != 0)
+            .any(|draw| {
+                draw.index_count == 0 || !draw.index_count.is_multiple_of(3) || draw.base_vertex < 0
+            })
     {
         return Err(VgpuError::Unsupported);
     }
@@ -2363,15 +2364,22 @@ pub(crate) fn submit_ui4_indexed_batch(
                     return Err(VgpuError::Unsupported);
                 }
                 crate::intel::dma_flush(unsafe { index_virt.add(index_start) }, index_bytes);
-                let raw_indices =
-                    unsafe { core::slice::from_raw_parts(index_virt.add(index_start), index_bytes) };
+                let raw_indices = unsafe {
+                    core::slice::from_raw_parts(index_virt.add(index_start), index_bytes)
+                };
+                let base_vertex = draw.base_vertex as usize;
                 let mut indices = Vec::with_capacity(draw.index_count as usize);
                 for raw in raw_indices.chunks_exact(4) {
                     let index = u32::from_le_bytes(raw.try_into().expect("four-byte index"));
-                    vertex_count = vertex_count.max(index as usize + 1);
+                    vertex_count = vertex_count.max(
+                        base_vertex
+                            .checked_add(index as usize)
+                            .and_then(|index| index.checked_add(1))
+                            .ok_or(VgpuError::Unsupported)?,
+                    );
                     indices.push(index);
                 }
-                indexed.push((indices, draw.rgba8_srgb));
+                indexed.push((indices, draw.rgba8_srgb, base_vertex));
             }
             if vertex_count == 0 {
                 return Err(VgpuError::Unsupported);
@@ -2419,16 +2427,14 @@ pub(crate) fn submit_ui4_indexed_batch(
                 return Err(error);
             }
         };
-        (
-            window_id, phys, producer_gpu, bytes, width, height, pitch, vertices, indexed,
-        )
+        (window_id, phys, producer_gpu, bytes, width, height, pitch, vertices, indexed)
     };
 
-    for (indices, _) in &mut indexed {
+    for (indices, _, base_vertex) in &mut indexed {
         for triangle in indices.chunks_exact_mut(3) {
-            let a = vertices[triangle[0] as usize];
-            let b = vertices[triangle[1] as usize];
-            let c = vertices[triangle[2] as usize];
+            let a = vertices[*base_vertex + triangle[0] as usize];
+            let b = vertices[*base_vertex + triangle[1] as usize];
+            let c = vertices[*base_vertex + triangle[2] as usize];
             let area = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
             if area < 0.0 {
                 triangle.swap(1, 2);
@@ -2445,13 +2451,39 @@ pub(crate) fn submit_ui4_indexed_batch(
     ) {
         Some(destination) => destination,
         None => {
-            rollback_indexed_submission_lease(principal, device_handle, queue_handle, batch.surface);
+            rollback_indexed_submission_lease(
+                principal,
+                device_handle,
+                queue_handle,
+                batch.surface,
+            );
             return Err(VgpuError::Unsupported);
         }
     };
     let mut meshes = Vec::with_capacity(indexed.len());
-    for (indices, _) in &indexed {
-        match crate::intel::render::create_resident_triangle_mesh(&vertices, indices) {
+    for (indices, _, base_vertex) in &indexed {
+        let local_vertex_count = indices
+            .iter()
+            .copied()
+            .max()
+            .map(|index| index as usize + 1)
+            .expect("non-empty indexed batch section");
+        let section_vertices = base_vertex
+            .checked_add(local_vertex_count)
+            .and_then(|section_end| vertices.get(*base_vertex..section_end));
+        let Some(section_vertices) = section_vertices else {
+            for mesh in &meshes {
+                let _ = crate::intel::render::release_resident_triangle_mesh(mesh);
+            }
+            rollback_indexed_submission_lease(
+                principal,
+                device_handle,
+                queue_handle,
+                batch.surface,
+            );
+            return Err(VgpuError::Unsupported);
+        };
+        match crate::intel::render::create_resident_triangle_mesh(section_vertices, indices) {
             Ok(mesh) => meshes.push(mesh),
             Err(_) => {
                 for mesh in &meshes {
@@ -2470,7 +2502,7 @@ pub(crate) fn submit_ui4_indexed_batch(
     let scene_draws: Vec<_> = meshes
         .iter()
         .zip(indexed.iter())
-        .map(|(mesh, (_, rgba))| crate::intel::render::ResidentSceneDraw {
+        .map(|(mesh, (_, rgba, _))| crate::intel::render::ResidentSceneDraw {
             mesh,
             rgba: rgba.to_le_bytes(),
             sampled_texture: None,
