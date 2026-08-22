@@ -47,7 +47,8 @@ const TOOL_JSON_RAM: &str = r#"{"type":"object","properties":{"scope":{"type":"s
 const TOOL_JSON_SET: &str = r#"{"type":"object","properties":{"width":{"type":"integer","minimum":50,"maximum":500,"description":"Shell line width."}},"required":["width"],"additionalProperties":false}"#;
 const TOOL_JSON_SHOT: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
 const TOOL_JSON_SMP: &str = r#"{"type":"object","properties":{"slot":{"type":"integer","minimum":0,"description":"Optional SMP slot. Omit to list all slots."}},"required":[],"additionalProperties":false}"#;
-const TOOL_JSON_SSH: &str = r#"{"type":"object","properties":{"endpoint":{"type":"string","description":"SSH target in [user@]host[:port] form. Port 22 is used when omitted."}},"required":["endpoint"],"additionalProperties":false}"#;
+const TOOL_JSON_IMG: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"Optional image path to open as the first UI4 frame. Omit for img's resident interactive viewer."}},"required":[],"additionalProperties":false}"#;
+const TOOL_JSON_SSH: &str = r#"{"type":"object","properties":{"endpoint":{"type":"string","description":"Optional SSH target in [user@]host[:port] form. Omit for SSH's resident interactive prompt."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_SURF: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["https","http","file","html"],"description":"Surf input type."},"input":{"type":"string","description":"Host, URL, TRUEOSFS path, or inline HTML selected by subcommand."}},"required":["subcommand","input"],"additionalProperties":false}"#;
 const TOOL_JSON_TLB: &str = r#"{"type":"object","properties":{"target":{"type":"string","enum":["pci","pcibar","mem","cpu","turbo","ucode","pmu","rapl","acpi","aml","facp","madt","hpet","mcfg","ssdt","uefi","smbios","x2apic","usb","usb_probe","dump"],"description":"Table or view to print."},"action":{"type":"string","enum":["store"],"description":"Optional RAPL action when target=rapl."},"signature":{"type":"string","minLength":4,"maxLength":4,"description":"Optional ACPI signature when target=acpi, for example SSDT or FACP."},"index":{"type":"integer","minimum":1,"description":"Optional 1-based instance index when target=acpi and the signature repeats."},"subcommand":{"type":"string","enum":["ec","symbol","prefix"],"description":"Optional AML subcommand when target=aml."},"path":{"type":"string","description":"Optional AML path or prefix when target=aml and subcommand is symbol or prefix."}},"required":["target"],"additionalProperties":false}"#;
 const TOOL_JSON_TTS: &str = r#"{"type":"object","properties":{"text":{"type":"string","maxLength":8192,"description":"Text to synthesize asynchronously. The native backend performs G2P and splits it into ordered model chunks of at most 510 phonemes."},"voice":{"type":"string","description":"Kokoro voice name; defaults to af_heart."},"speed":{"type":"number","minimum":0.5,"maximum":2.0,"description":"Kokoro speech speed multiplier."}},"required":["text"],"additionalProperties":false}"#;
@@ -68,6 +69,10 @@ fn dispatch_aud(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -
 fn dispatch_install(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let mut args = rest.split_whitespace();
     super::cmds::install::try_parse(spawner, io, &mut args)
+}
+
+fn dispatch_img(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::img::try_parse(spawner, io, rest)
 }
 
 fn dispatch_hyper(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -252,6 +257,17 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         handler: dispatch_disc,
         tool_description: Some("List top-level disk devices, format a disk, or create a ramdisc."),
         tool_parameters_json: Some(TOOL_JSON_DISC),
+    },
+    BuiltinShell2CmdEntry {
+        name: "img",
+        mode: "tui",
+        color: Some(STATUS_BLUE_RGB),
+        advertised: true,
+        handler: dispatch_img,
+        tool_description: Some(
+            "Open the resident UI4 image viewer. A path opens its first frame; use its prompt to add up to 32 decoded media frames.",
+        ),
+        tool_parameters_json: Some(TOOL_JSON_IMG),
     },
     BuiltinShell2CmdEntry {
         name: "edit",

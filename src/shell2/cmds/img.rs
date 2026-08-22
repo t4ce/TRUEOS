@@ -1,9 +1,8 @@
-//! Real SSH lives in the `ssh.bp` terminal Blueprint.
+//! Resident UI4 image viewer Blueprint launcher.
 //!
-//! Shell2 only owns command parsing and launch placement.  The Blueprint owns
-//! SSH-2 transport, host-key verification, authentication, PTY channels, and
-//! the interactive byte stream.  Launching it through the ordinary terminal
-//! Blueprint path also reuses the existing VM/TUI handoff and resize logic.
+//! `img` without arguments opens its VMX-minishell.  Supplying a path makes
+//! that the first `show` command; the Blueprint remains alive afterwards so
+//! further media can be opened without another VM launch.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -16,14 +15,14 @@ use super::super::{
     print_shell_line, submit_online_to_target,
 };
 
-const SSH_APP: &str = "ssh";
-const SSH_ARCHIVE: &str = "ssh.bp";
+const IMG_APP: &str = "img";
+const IMG_ARCHIVE: &str = "img.bp";
 
 #[task(pool_size = 2)]
-async fn launch_ssh(spawner: Spawner, target: MatrixTarget, app_args: Vec<String>) {
+async fn launch_img(spawner: Spawner, target: MatrixTarget, app_args: Vec<String>) {
     match super::run::submit_archive_name_to_target_from_app_db_async(
         target.clone(),
-        SSH_ARCHIVE,
+        IMG_ARCHIVE,
         app_args.clone(),
     )
     .await
@@ -31,15 +30,15 @@ async fn launch_ssh(spawner: Spawner, target: MatrixTarget, app_args: Vec<String
         Ok(_) => {}
         Err(error) if error == "archive not found" => {
             let mut online_args = Vec::with_capacity(app_args.len().saturating_add(1));
-            online_args.push(String::from(SSH_APP));
+            online_args.push(String::from(IMG_APP));
             online_args.extend(app_args);
             if submit_online_to_target(&spawner, target.clone(), online_args).is_err() {
-                print_matrix_target_system_line(&target, "ssh: online launch task unavailable");
+                print_matrix_target_system_line(&target, "img: online launch task unavailable");
             }
         }
         Err(error) => print_matrix_target_system_line(
             &target,
-            alloc::format!("ssh: could not launch {SSH_ARCHIVE}: {error}").as_str(),
+            alloc::format!("img: could not launch {IMG_ARCHIVE}: {error}").as_str(),
         ),
     }
 }
@@ -49,11 +48,10 @@ pub(crate) fn try_parse(
     io: &'static dyn ShellBackend2,
     rest: &str,
 ) -> ParseOutcome {
-    let args: Vec<String> = rest.split_whitespace().map(String::from).collect();
-
-    match launch_ssh(*spawner, matrix_target_for_backend(io), args) {
+    let args = rest.split_whitespace().map(String::from).collect();
+    match launch_img(*spawner, matrix_target_for_backend(io), args) {
         Ok(token) => spawner.spawn(token),
-        Err(_) => print_shell_line(io, "ssh: launch task unavailable"),
+        Err(_) => print_shell_line(io, "img: launch task unavailable"),
     }
     ParseOutcome::Handled
 }
