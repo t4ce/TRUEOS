@@ -679,6 +679,8 @@ pub fn spawn_post_boot(spawner: Spawner) {
         return;
     };
 
+    crate::shell2::cmds::img::launch_live_update_notice(spawner, handoff.generation);
+
     match restore_after_live_update_task(
         spawner,
         handoff.restore_mask,
