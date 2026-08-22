@@ -123,6 +123,18 @@ npm install express
 git submodule update --init --recursive
 ```
 
+### Rust API documentation
+
+Generate the kernel API documentation with Rust's standard Cargo command:
+
+```bash
+cargo doc
+```
+
+The generated site is at
+`tgt/x86_64-unknown-trueos/doc/TRUEOS/index.html`. To build it and open the
+site in the system browser, run `cargo doc --open`.
+
 ## on MAC
 > [!TIP]
 > We were able to build, with a MAC Laptop aswell.
