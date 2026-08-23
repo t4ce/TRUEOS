@@ -329,15 +329,5 @@ ConWhite 	FF_FF_FF
   ![异步请求.drawio.png](vendor/CrabUSB/docs/异步请求.drawio.png)
 - `vendor/limine/logo.png`  
   ![logo.png](vendor/limine/logo.png)
-- `vendor/limine/screenshot.png`  
-  ![screenshot.png](vendor/limine/screenshot.png)
-- `vendor/limine/test/bg.jpg`  
-  ![bg.jpg](vendor/limine/test/bg.jpg)
-- `vendor/limine/logo.png`  
-  ![logo.png](vendor/limine/logo.png)
-- `vendor/limine/screenshot.png`  
-  ![screenshot.png](vendor/limine/screenshot.png)
-- `vendor/limine/test/bg.jpg`  
-  ![bg.jpg](vendor/limine/test/bg.jpg)
 
 </details>
