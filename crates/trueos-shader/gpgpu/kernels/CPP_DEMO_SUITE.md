@@ -31,7 +31,13 @@ volume. The shader uses the compile-time mirror in
 the artifact manifest. This first direct-RCS demo is an analytic 2D
 approximation of the WebGPU 3D simulation/raymarch pair, retaining the
 authored artistic palette, seed, air controls, moon, bands, outline, and
-grain without introducing a 3D allocation or a multi-pass ABI.
+grain without introducing a 3D allocation or a multi-pass ABI. Its density is
+feathered and composited as capped Beer-Lam-style translucency after the same
+linear-palette/exposure/gamma transfer as the WGSL artistic renderer. The moon
+belongs to the background before this composition, so wisps and painted
+strokes can pass in front of it. The generic suite vignette is disabled only
+for this mode: the WGSL sky already provides a mild side-falloff, and a second
+vignette produced black edge lobes.
 
 ```text
 cpp
@@ -68,8 +74,8 @@ under a potentially late GPU writer.
 The checked artifact is `artifacts/adls/cpp/cpp_demo_rgba8.bin`:
 
 ```text
-Zebin SHA-256: 56f66aecb9f97298f677d96fbcc1c3628f21855673f9f82ac37e53b761ef119a
-SPIR-V SHA-256: 4a9dbc523c15af2b8ef15dd8f2bc5c232d19337338305684e7081c8a32623420
+Zebin SHA-256: 6dd432e9666035c5d68b6c9fe71abaec72a4e09dfdf7f2c0e9e07043da4e7ab5
+SPIR-V SHA-256: 24471d2de1dfe60b544be51b14ba3d6625ea57b3eef523fe348603483aa3a76f
 target:          8086:4680 revision 0x0c
 entry:           cpp_demo_rgba8 at Zebin offset 64
 execution:       SIMD16, 128 GRFs, scratch 0, SLM 0

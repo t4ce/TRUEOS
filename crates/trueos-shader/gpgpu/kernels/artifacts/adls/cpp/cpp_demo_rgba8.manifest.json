@@ -5,10 +5,10 @@
       "class": 64,
       "endianness": "little",
       "machine": 205,
-      "sha256": "56f66aecb9f97298f677d96fbcc1c3628f21855673f9f82ac37e53b761ef119a",
-      "size_bytes": 218976,
+      "sha256": "6dd432e9666035c5d68b6c9fe71abaec72a4e09dfdf7f2c0e9e07043da4e7ab5",
+      "size_bytes": 222576,
       "type": "relocatable",
-      "ze_info_section_offset": 212248,
+      "ze_info_section_offset": 215848,
       "ze_info_section_size": 5918
     },
     "kernels": [
@@ -327,13 +327,13 @@
         ],
         "text": {
           "entry_offset": 64,
-          "entry_size": 57248,
+          "entry_size": 58368,
           "section_alignment": 0,
           "section_name": ".text.cpp_demo_rgba8",
           "section_offset": 64,
-          "section_size": 57408,
-          "sha256": "fff3ab6fdf735825ea76f154841e0cbf87ccc10364eb92943c3dc538d47d153c",
-          "symbol_size": 57248,
+          "section_size": 58496,
+          "sha256": "3880b8effe0b20eab3f4c71b4a5647498c9f0ca81df853e645cfcf5eca8a79c0",
+          "symbol_size": 58368,
           "symbol_value": 0
         },
         "user_attributes": {
@@ -349,10 +349,10 @@
       }
     ],
     "spirv": {
-      "embedded_section_offset": 57544,
-      "embedded_section_size": 154632,
-      "sha256": "4a9dbc523c15af2b8ef15dd8f2bc5c232d19337338305684e7081c8a32623420",
-      "size_bytes": 154632
+      "embedded_section_offset": 58632,
+      "embedded_section_size": 157140,
+      "sha256": "24471d2de1dfe60b544be51b14ba3d6625ea57b3eef523fe348603483aa3a76f",
+      "size_bytes": 157140
     }
   },
   "provenance": {
@@ -552,8 +552,8 @@
     "inputs": [
       {
         "path": "crates/trueos-shader/gpgpu/kernels/cpp_demo_rgba8.clcpp",
-        "sha256": "fd6754c6f2174a0ebdf754d16c15097701cbcdcbdc9e2edf217d5bd9fb71900e",
-        "size_bytes": 27771
+        "sha256": "bd31aa05b3ddb625a826d06b110c7155f7f14f63f049dde5712c8d2c2eefa121",
+        "size_bytes": 30226
       },
       {
         "path": "crates/trueos-shader/gpgpu/kernels/include/trueos_clcpp.hpp",
@@ -562,8 +562,8 @@
       },
       {
         "path": "crates/trueos-shader/gpgpu/kernels/presets/cloud_high_wisps_preset.hpp",
-        "sha256": "87ff072e0e3acb8973bd8defe9b8c1a02c702a16ceb98668e65ddb27d22db23c",
-        "size_bytes": 1109
+        "sha256": "b54c0953de63970f15597bd819274d182824c5357148c9871e0fe16f3159bcdc",
+        "size_bytes": 1193
       }
     ],
     "language": "C++ for OpenCL",

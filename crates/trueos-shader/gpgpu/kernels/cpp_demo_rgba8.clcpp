@@ -582,8 +582,8 @@ TRUEOS_CPP_DEMO_INLINE float3 render_cloud_high_wisps(
     // toward the top.  This is the artistic-sky vertical gradient and its
     // gentle side falloff, rather than the old radial blackout vignette.
     const float vertical = saturate(1.0f - normalized.y);
-    const float side_falloff = 0.86f + 0.14f
-        * (1.0f - normalized.x * 2.0f + 0.0f) * (1.0f - normalized.x * 2.0f + 0.0f);
+    const float screen_center = 1.0f - fabs(normalized.x * 2.0f - 1.0f);
+    const float side_falloff = 0.86f + 0.14f * screen_center * screen_center;
     float3 color = sky * mix(0.62f, 1.18f, vertical) * side_falloff;
 
     // Fixed moon placement follows the configured negative elevation and
@@ -626,9 +626,19 @@ TRUEOS_CPP_DEMO_INLINE float3 render_cloud_high_wisps(
     color = color * (1.0f - cloud_alpha) + wisp_color * cloud_alpha;
     color += cloud * density * moon_glow * 0.07f;
 
+    // Match the artistic WebGPU output transfer: its palette is linear until
+    // after volume compositing, then exposure/compression/gamma prepares the
+    // display RGBA8 surface.  This avoids compensating for the old opaque
+    // blend by incorrectly brightening the source palette.
+    const float3 exposed = fmax(color * 1.48f, (float3)(0.0f));
+    const float3 compressed = exposed / ((float3)(1.0f) + exposed * 0.68f);
+    color = native_exp2(native_log2(fmax(compressed, (float3)(0.0001f)))
+        * (1.0f / 2.2f));
     const float grain = (hash_cloud(uv * (float2)(600.0f, 410.0f) + time * 4.0f) - 0.5f)
-        * (art_grain * 0.1f);
-    color += (float3)(grain);
+        * (art_grain * 0.034f);
+    const float levels = mix(96.0f, 30.0f, art_grain);
+    color = floor(clamp(color + (float3)(grain), (float3)(0.0f), (float3)(1.0f)) * levels + 0.5f)
+        * (1.0f / levels);
     return color;
 }
 
@@ -753,7 +763,11 @@ __kernel void cpp_demo_rgba8(
     } else {
         color = render_selected(bounded_mode, uv, time_seconds, seed);
     }
-    if ((flags & 1u) != 0u) {
+    // The generic C++ suite's post-vignette is useful for its synthetic modes,
+    // but the cloud reference already owns its sky edge treatment.  Applying
+    // it here was a second, much harsher vignette and caused the black lobes
+    // seen around the cloud view.
+    if ((flags & 1u) != 0u && bounded_mode != mode_cloud_high_wisps) {
         const float vignette =
             saturate(1.16f - 0.34f * dot(normalized * 2.0f - 1.0f,
                                         normalized * 2.0f - 1.0f));
