@@ -173,8 +173,6 @@ ConWhite 	FF_FF_FF
 <details>
 <summary>Repository images and generated dependency graphs</summary>
 
-- `tools/HorizonServer.png`  
-  ![tools/HorizonServer.png](tools/HorizonServer.png)
 - `logo.jpg`  
   ![logo.jpg](logo.jpg)
 - `tools/docs/depgraph/by-root/acpi-v6.1.1.svg`  
