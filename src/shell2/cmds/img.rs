@@ -19,8 +19,6 @@ use super::super::{
 
 const IMG_APP: &str = "img";
 const IMG_ARCHIVE: &str = "img.bp";
-const LIVE_UPDATE_LAUNCH_SETTLE_MS: u64 = 500;
-const LIVE_UPDATE_VISIBLE_MS: u64 = 3_000;
 const LIVE_UPDATE_LAUNCH_TIMEOUT_MS: u64 = 30_000;
 
 #[task(pool_size = 2)]
@@ -73,12 +71,6 @@ async fn live_update_notice_task(generation: u64) {
         Timer::after(EmbassyDuration::from_millis(25)).await;
     }
 
-    // The embedded source no longer needs TRUEOSFS, so without a small
-    // post-handoff cadence this can outrun the freshly released AP executors
-    // and UI4/display startup.  Keep the proof independent of storage while
-    // allowing those candidate-generation runtimes to begin polling.
-    Timer::after(EmbassyDuration::from_millis(LIVE_UPDATE_LAUNCH_SETTLE_MS)).await;
-
     let instance_name = alloc::format!("live-update-{generation}");
     let mut rng = crate::tyche::soft_rng();
     let variant = rng.usize_below(crate::virtio_gpu_logo::LIVE_UPDATE_NOTICE_VARIANT_COUNT);
@@ -112,10 +104,18 @@ async fn live_update_notice_task(generation: u64) {
         let found = crate::hv::named_app_instance_vms(IMG_ARCHIVE)
             .into_iter()
             .find_map(|(vm_id, name)| (name == instance_name).then_some(vm_id));
-        if let Some(vm_id) = found
-            && crate::hv::vm_state(vm_id).lifecycle_ready
-        {
-            break Some(vm_id);
+        if let Some(vm_id) = found {
+            let state = crate::hv::vm_state(vm_id);
+            // `lifecycle_ready` means Ready-for-checkpoint, not launched or
+            // visible. Start the lifetime only after UI4 confirms this VM's
+            // first frame crossed the physical SURFLIVE boundary.
+            if state.running
+                && !state.starting
+                && !state.stop_requested
+                && crate::ui4::owner_has_first_presentation(crate::ui4::WindowOwner::Vm(vm_id))
+            {
+                break Some(vm_id);
+            }
         }
         if Instant::now().as_millis() >= deadline {
             break None;
@@ -133,35 +133,12 @@ async fn live_update_notice_task(generation: u64) {
     };
     crate::log_info!(
         target: "global";
-        "live-update: notice visible generation={} vm={} variant={} duration_ms={} source={}\n",
+        "live-update: notice visible generation={} vm={} variant={} lifetime=until-explicit-close source={}\n",
         generation,
         vm_id,
         variant,
-        LIVE_UPDATE_VISIBLE_MS,
         source,
     );
-    Timer::after(EmbassyDuration::from_millis(LIVE_UPDATE_VISIBLE_MS)).await;
-    match crate::hv::stop(vm_id) {
-        Ok(true) => crate::log_info!(
-            target: "global";
-            "live-update: notice closed generation={} vm={}\n",
-            generation,
-            vm_id,
-        ),
-        Ok(false) => crate::log_info!(
-            target: "global";
-            "live-update: notice already closed generation={} vm={}\n",
-            generation,
-            vm_id,
-        ),
-        Err(error) => crate::log_warn!(
-            target: "global";
-            "live-update: notice close failed generation={} vm={} error={:?}\n",
-            generation,
-            vm_id,
-            error,
-        ),
-    }
 }
 
 pub(crate) fn try_parse(

@@ -2276,6 +2276,19 @@ pub(crate) fn visible_windows_for_output(output: OutputId) -> Vec<WindowSnapshot
     WINDOW_BROKER.lock().snapshots(output)
 }
 
+/// Whether this owner has a live window whose first frame reached SURFLIVE.
+///
+/// Unlike `take_window_first_presentation`, this is an observation rather than
+/// a consuming event, so kernel lifecycle orchestration cannot steal the
+/// application's own first-presentation notification.
+pub(crate) fn owner_has_first_presentation(owner: WindowOwner) -> bool {
+    WINDOW_BROKER.lock().windows.iter().any(|window| {
+        window.owner == owner
+            && window.state != WindowState::Closed
+            && window.first_presentation_emitted
+    })
+}
+
 pub(super) fn interaction_windows_for_output(output: OutputId) -> Vec<WindowSnapshot> {
     WINDOW_BROKER
         .lock()

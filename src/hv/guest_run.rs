@@ -427,24 +427,44 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
         }
     }
 
-    crate::hv::hvlogf(format_args!("run: guest app fs path alloc begin vm={}", vm_id));
-    let Some((app_fs_root, app_fs_common)) =
-        crate::allocators::with_hv_guest_alloc_domain(vm_id, || {
-            (state.app_fs_root.clone(), crate::hv::blueprint::app_fs_common_root())
-        })
+    // `img kernel:*` consumes a kernel-owned virtual image source through the
+    // image-source ABI.  It neither names nor needs TRUEOSFS, so keep this
+    // launch mode usable during the early warm-boot window instead of paying
+    // the generic app-root/common directory rendezvous.  Ordinary `img` file
+    // paths retain the normal filesystem bootstrap below.
+    let virtual_image_launch = state.archive.eq_ignore_ascii_case("img.bp")
+        && state
+            .app_args
+            .first()
+            .is_some_and(|source| source.starts_with("kernel:"));
+    // The process ABI still carries a logical app-root string even for a
+    // filesystem-free invocation. Constructing that string performs no I/O.
+    let Some(app_fs_root) =
+        crate::allocators::with_hv_guest_alloc_domain(vm_id, || state.app_fs_root.clone())
     else {
-        log("run: guest app fs paths failed: guest heap domain unavailable");
+        log("run: guest app fs root path failed: guest heap domain unavailable");
         return false;
     };
-    crate::hv::hvlogf(format_args!(
-        "run: guest app fs path alloc ok root={} common={}",
-        app_fs_root.as_str(),
-        app_fs_common.as_str()
-    ));
-
-    if module.is_filesystem_independent() {
-        log("run: guest app fs bootstrap skipped contract=filesystem-independent");
+    if module.is_filesystem_independent() || virtual_image_launch {
+        log(if virtual_image_launch {
+            "run: guest app fs bootstrap skipped contract=kernel-virtual-image"
+        } else {
+            "run: guest app fs bootstrap skipped contract=filesystem-independent"
+        });
     } else {
+        crate::hv::hvlogf(format_args!("run: guest app fs path alloc begin vm={}", vm_id));
+        let Some(app_fs_common) = crate::allocators::with_hv_guest_alloc_domain(vm_id, || {
+            crate::hv::blueprint::app_fs_common_root()
+        }) else {
+            log("run: guest app fs paths failed: guest heap domain unavailable");
+            return false;
+        };
+        crate::hv::hvlogf(format_args!(
+            "run: guest app fs path alloc ok root={} common={}",
+            app_fs_root.as_str(),
+            app_fs_common.as_str()
+        ));
+
         match create_blueprint_dir_all_async(app_fs_root.as_str()) {
             Ok(()) => {
                 log(alloc::format!("run: guest app fs root ready path={}", app_fs_root.as_str())
@@ -471,14 +491,14 @@ pub extern "C" fn trueos_hv_guest_blueprint_run() -> bool {
             )
             .as_str()),
         }
-    }
-    if crate::hv::current_hull_guest_context_vm_id().is_none() {
-        log(alloc::format!(
-            "run: guest app fs root prepared path={} common={}",
-            app_fs_root.as_str(),
-            app_fs_common.as_str()
-        )
-        .as_str());
+        if crate::hv::current_hull_guest_context_vm_id().is_none() {
+            log(alloc::format!(
+                "run: guest app fs root prepared path={} common={}",
+                app_fs_root.as_str(),
+                app_fs_common.as_str()
+            )
+            .as_str());
+        }
     }
 
     crate::blueprint_net_broker::set_vmx_guest_net_backend(true);
