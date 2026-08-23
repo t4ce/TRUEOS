@@ -163,10 +163,10 @@ ConWhite 	FF_FF_FF
 *italic*
 `inline code`
 > This is a quote.
-> [!TIP]
-> [!WARNING]
-> [!CAUTION]
-> [!Note]
+ [!TIP] t
+ [!WARNING] w
+ [!CAUTION] c
+ [!Note] n
 
 ## Asset preview smoke test
 
