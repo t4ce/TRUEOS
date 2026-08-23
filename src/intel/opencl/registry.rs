@@ -533,6 +533,9 @@ const CPP_DEMO_ARGS: &[KernelCallArg<'_>] = &[
     u32_arg!(9, "demo_mode", 22),
     u32_arg!(10, "seed", 23),
     u32_arg!(11, "flags", 24),
+    KernelCallArg::value(12, "brush_points_lower", "uint16", 64, 64, 32),
+    KernelCallArg::value(13, "brush_points_upper", "uint16", 64, 64, 48),
+    u32_arg!(14, "brush_point_count", 64),
 ];
 const CPP_DEMO_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     name: gpgpu::CPP_DEMO_RGBA8_KERNEL_NAME,
@@ -547,6 +550,19 @@ const CPP_DEMO_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     descriptor_layouts: NO_DESCS,
     launch: KernelLaunchContract::nd_range_2d(None),
     consumers: &["shell2:cpp", "ui4::gpgpu_preview_consumer_service_task"],
+};
+const _: () = {
+    let baked = gpgpu::CPP_DEMO_RGBA8_ADLS_CPP_ABI_CONTRACT;
+    assert!(CPP_DEMO_ARGS.len() == baked.payload_args.len());
+    assert!(baked.payload_args[12].arg_index == 12);
+    assert!(baked.payload_args[12].offset_bytes == 128);
+    assert!(baked.payload_args[12].size_bytes == 64);
+    assert!(baked.payload_args[13].arg_index == 13);
+    assert!(baked.payload_args[13].offset_bytes == 192);
+    assert!(baked.payload_args[13].size_bytes == 64);
+    assert!(baked.payload_args[14].arg_index == 14);
+    assert!(baked.payload_args[14].offset_bytes == 256);
+    assert!(baked.payload_args[14].size_bytes == 4);
 };
 
 const CPP_AUDIO_VISUALIZER_ARGS: &[KernelCallArg<'_>] = &[
@@ -908,4 +924,31 @@ pub(crate) fn build_program_from_known_source(
 
     SOURCE_PROGRAM_CACHE.lock().insert(kernel.name, program);
     Some(BuiltProgram::from_artifact(program))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::intel::opencl::KernelValueWriter;
+
+    #[test]
+    fn cpp_demo_registry_accepts_the_complete_baked_brush_payload() {
+        let mut payload = [0u8; CPP_DEMO_CROSS_THREAD_BYTES as usize];
+        let mut writer = KernelValueWriter::new(&CPP_DEMO_CONTRACT, &mut payload).unwrap();
+        for index in 1..=7 {
+            writer.set_u32(index, index).unwrap();
+        }
+        writer.set_f32(8, 1.25).unwrap();
+        for index in 9..=11 {
+            writer.set_u32(index, index).unwrap();
+        }
+        writer.set_pod_bytes(12, &[0x12; 64]).unwrap();
+        writer.set_pod_bytes(13, &[0x34; 64]).unwrap();
+        writer.set_u32(14, 32).unwrap();
+        let payload = writer.finish().unwrap();
+
+        assert_eq!(&payload[128..192], &[0x12; 64]);
+        assert_eq!(&payload[192..256], &[0x34; 64]);
+        assert_eq!(&payload[256..260], &32u32.to_le_bytes());
+    }
 }

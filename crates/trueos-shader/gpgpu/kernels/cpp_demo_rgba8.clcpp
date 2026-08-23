@@ -494,7 +494,10 @@ TRUEOS_CPP_DEMO_INLINE float cloud_fbm(float2 point)
 
 // The WebGPU source generates its 96x48x96 density field with pattern 2.
 // This direct UI4 path keeps that high-wisp ridged field analytic, so it needs
-// neither a transient 3D allocation nor a simulation warm-up dispatch.
+// neither a transient 3D allocation nor a simulation warm-up dispatch.  The
+// returned value is deliberately a *soft density*, not a cutout alpha: the
+// WebGPU reference ray marcher accumulates translucent samples through the
+// volume and never turns each formation cell into an opaque painted lobe.
 TRUEOS_CPP_DEMO_INLINE float high_wisp_field(float2 point, float time)
 {
     using namespace trueos::gpgpu::cloud_high_wisps_preset;
@@ -507,8 +510,8 @@ TRUEOS_CPP_DEMO_INLINE float high_wisp_field(float2 point, float time)
     const float field_warp = cloud_fbm(
         point * (float2)(1.8f, 2.6f) + drift * 0.31f
         + (float2)(formation_seed * 0.017f, formation_seed * 0.031f)) * turbulence;
-    const float ribbon_warp = native_sin(point.x * 3.8f - point.y * 1.7f
-        + time * 0.58f) * (0.12f + rotation * 0.02f);
+    const float ribbon_warp = native_sin(point.x * (3.35f + art_curl * 0.42f)
+        - point.y * 1.7f + time * 0.58f) * (0.10f + rotation * 0.02f);
     const float2 streak_position = (float2)(
         point.x * 7.0f + field_warp * 2.3f + ribbon_warp,
         point.y * 11.0f - point.x * 1.7f + field_warp * 0.46f)
@@ -517,12 +520,16 @@ TRUEOS_CPP_DEMO_INLINE float high_wisp_field(float2 point, float time)
         streak_position + (float2)(formation_seed * 0.024f, formation_seed * 0.043f));
     const float ridges = 1.0f - fabs(streak_noise * 2.0f - 1.0f);
     const float threshold = 0.91f - 0.29f * formation_amount;
-    const float strands = smoothstep(threshold, threshold + 0.12f, ridges);
+    // Keep a feathered skirt around the ridges.  The original density texture
+    // is linearly sampled and then eroded in the ray marcher, so a binary
+    // smoothstep here was the source of the dark bouquet-shaped cutouts.
+    const float strands = smoothstep(threshold - 0.075f, threshold + 0.105f, ridges);
     const float band = smoothstep(-0.37f, -0.10f, point.y)
         * (1.0f - smoothstep(0.70f, 1.02f, point.y));
     const float torn = smoothstep(0.18f, 0.94f,
         cloud_noise(point * (float2)(15.0f, 4.0f) + drift * 0.8f));
-    return strands * band * mix(1.0f, torn, tearing * (0.22f / 1.41f));
+    const float torn_weight = clamp(tearing * (0.17f / 1.41f), 0.0f, 0.28f);
+    return strands * band * mix(1.0f, torn, torn_weight) * art_ribbon;
 }
 
 TRUEOS_CPP_DEMO_INLINE float cloud_brush_density(
@@ -562,23 +569,31 @@ TRUEOS_CPP_DEMO_INLINE float3 render_cloud_high_wisps(
 {
     using namespace trueos::gpgpu::cloud_high_wisps_preset;
 
-    // Authored artistic preset colors, normalized from its JSON CSS hex form.
-    const float3 sky = (float3)(0.0431f, 0.1451f, 0.2706f);       // #0b2545
-    const float3 cloud = (float3)(0.4471f, 0.7216f, 0.7882f);     // #72b8c9
-    const float3 shadow = (float3)(0.0902f, 0.2353f, 0.3451f);    // #173c58
-    const float3 moon = (float3)(1.0f, 0.9412f, 0.6549f);         // #fff0a7
+    // The browser converts CSS palette values to linear RGB before writing
+    // RenderParams.  Keeping the source in sRGB made our shadow too bright,
+    // then the opaque mix made it read as black charcoal.  These are the
+    // corresponding linear values for the authored JSON colors.
+    const float3 sky = (float3)(0.00335f, 0.01850f, 0.05951f);    // #0b2545
+    const float3 cloud = (float3)(0.17014f, 0.47932f, 0.58408f);  // #72b8c9
+    const float3 shadow = (float3)(0.00857f, 0.04519f, 0.09531f); // #173c58
+    const float3 moon = (float3)(1.0f, 0.86316f, 0.38133f);       // #fff0a7
 
-    const float vertical = saturate(uv.y * 0.5f + 0.5f);
-    float3 color = sky * mix(0.62f, 1.18f, vertical);
-    const float horizon = native_exp(-fabs(uv.y + 0.18f) * 3.4f);
-    color += (float3)(0.035f, 0.095f, 0.135f) * horizon;
+    // UI4's Y origin is top-left, while the WebGPU full-screen ray uses +Y
+    // toward the top.  This is the artistic-sky vertical gradient and its
+    // gentle side falloff, rather than the old radial blackout vignette.
+    const float vertical = saturate(1.0f - normalized.y);
+    const float side_falloff = 0.86f + 0.14f
+        * (1.0f - normalized.x * 2.0f + 0.0f) * (1.0f - normalized.x * 2.0f + 0.0f);
+    float3 color = sky * mix(0.62f, 1.18f, vertical) * side_falloff;
 
     // Fixed moon placement follows the configured negative elevation and
-    // azimuth while preserving artMoonSize=.155 and artMoonGlow=.92.
+    // azimuth.  It is composed into the sky first, exactly as the reference
+    // renderer does, so subsequent cloud transmittance can occlude it.
     const float2 moon_center = (float2)(0.56f, 0.40f);
     const float moon_distance = vector_length(uv - moon_center);
-    const float moon_disc = 1.0f - smoothstep(art_moon_size - 0.010f, art_moon_size + 0.005f, moon_distance);
-    const float moon_glow = native_exp(-moon_distance * 5.9f) * 0.145f * art_moon_glow;
+    const float moon_disc = 1.0f - smoothstep(art_moon_size * 0.94f, art_moon_size * 1.02f, moon_distance);
+    const float moon_glow = native_exp(-fmax(moon_distance - art_moon_size * 0.9f, 0.0f) * 5.2f)
+        * 0.12f * art_moon_glow;
     const float crater = cloud_noise((uv - moon_center) * 17.0f + formation_seed);
     color += moon * (moon_disc * (0.90f + crater * 0.12f) + moon_glow);
 
@@ -594,22 +609,26 @@ TRUEOS_CPP_DEMO_INLINE float3 render_cloud_high_wisps(
         brush_points_lower,
         brush_points_upper,
         brush_point_count);
-    const float wisps = saturate(base_wisps + painted);
+    const float density = saturate(base_wisps + painted * 0.82f);
     const float edge = high_wisp_field(uv + (float2)(0.018f, -0.011f), time) - base_wisps;
-    const float shade = saturate(0.26f + (uv.y + 0.55f) * 0.36f
+    const float shade = saturate(0.34f + vertical * 0.31f
         + cloud_noise(uv * 3.7f + time * 0.035f) * 0.18f);
     const float banded = floor(shade * static_cast<float>(art_bands - 1u) + 0.5f)
         / static_cast<float>(art_bands - 1u);
     float3 wisp_color = mix(shadow, cloud, banded);
-    const float outline = smoothstep(0.004f, 0.055f, fabs(edge)) * art_outline;
-    wisp_color = mix(wisp_color, shadow * 0.54f, outline);
-    color = mix(color, wisp_color, wisps * art_sculpt);
-    color += cloud * wisps * moon_glow * 0.56f;
+    // Approximate Beer-Lam accumulation from the reference ray marcher.  It
+    // is intentionally capped below full opacity for this thin formation;
+    // painted input remains visible but cannot collapse into a solid black
+    // foreground bouquet.
+    const float cloud_alpha = (1.0f - native_exp(-density * (0.92f + art_sculpt * 0.38f))) * 0.72f;
+    const float outline = smoothstep(0.013f, 0.082f, fabs(edge)) * art_outline;
+    wisp_color = mix(wisp_color, shadow * 0.72f, outline * 0.30f);
+    color = color * (1.0f - cloud_alpha) + wisp_color * cloud_alpha;
+    color += cloud * density * moon_glow * 0.07f;
 
     const float grain = (hash_cloud(uv * (float2)(600.0f, 410.0f) + time * 4.0f) - 0.5f)
         * (art_grain * 0.1f);
     color += (float3)(grain);
-    color *= 1.0f - smoothstep(0.22f, 1.46f, vector_length(uv * (float2)(0.82f, 0.96f)));
     return color;
 }
 
