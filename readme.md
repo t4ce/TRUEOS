@@ -326,6 +326,6 @@ ConWhite 	FF_FF_FF
 - `vendor/CrabUSB/docs/异步请求.drawio.png`  
   ![异步请求.drawio.png](vendor/CrabUSB/docs/异步请求.drawio.png)
 - `vendor/limine/logo.png`  
-  ![logo.png](vendor/limine/logo.png)
+  ![Limine logo](https://raw.githubusercontent.com/limine-bootloader/limine/e5d429e7dffb51fd1475ee5276a2c19c1ad6aff8/logo.png)
 
 </details>
