@@ -68,18 +68,24 @@ under a potentially late GPU writer.
 The checked artifact is `artifacts/adls/cpp/cpp_demo_rgba8.bin`:
 
 ```text
-Zebin SHA-256: d2f1b3a9ff59605010a7337e7a0f28eb1438117414d0a7dde8fe987aa7041449
-SPIR-V SHA-256: 0285abd959c48dd5057546c4bd198e7583ea36cc239b9ea63850912cb41b6e51
+Zebin SHA-256: 56f66aecb9f97298f677d96fbcc1c3628f21855673f9f82ac37e53b761ef119a
+SPIR-V SHA-256: 4a9dbc523c15af2b8ef15dd8f2bc5c232d19337338305684e7081c8a32623420
 target:          8086:4680 revision 0x0c
 entry:           cpp_demo_rgba8 at Zebin offset 64
 execution:       SIMD16, 128 GRFs, scratch 0, SLM 0
-payload:         128 cross-thread bytes + 96 local-ID bytes
+payload:         288 cross-thread bytes + 96 local-ID bytes
 binding:         arg0, read/write stateful, BTI 0
 ```
 
 The kernel parameters are the destination pointer and pitch/extent, a clipped
 rectangle, time in seconds, mode, seed, and flags. This keeps animation and
 mode selection out of the artifact-selection path.
+
+The cloud mode additionally accepts two packed `uint16` vectors containing a
+bounded 32-point brush ring and its active count. UI4 captures focused primary
+button drags, converts frame-local coordinates after resize/movement, fills gaps
+between input samples, and retains the ring for the lifetime of the cloud view.
+Secondary-button dragging remains owned by UI4 window movement.
 
 The bakery publishes this as `variant=cpp-native` under policy
 `cpp-native-aot-v1`. Unlike the copy-rectangle `cpp` variant, it intentionally

@@ -44,6 +44,20 @@ fn direct_rcs_write_cpp_demo_rgba8_payload_at(
             writer.set_u32(9, params.demo_mode)?;
             writer.set_u32(10, params.seed)?;
             writer.set_u32(11, params.flags)?;
+            let mut lower = [0u8; 64];
+            let mut upper = [0u8; 64];
+            for (index, point) in params.brush_points.into_iter().enumerate() {
+                let bytes = point.to_le_bytes();
+                let (chunk, offset) = if index < 16 {
+                    (&mut lower, index * 4)
+                } else {
+                    (&mut upper, (index - 16) * 4)
+                };
+                chunk[offset..offset + 4].copy_from_slice(&bytes);
+            }
+            writer.set_pod_bytes(12, &lower)?;
+            writer.set_pod_bytes(13, &upper)?;
+            writer.set_u32(14, params.brush_point_count)?;
             writer.finish()?;
             Ok::<(), super::opencl::KernelValueError>(())
         })();

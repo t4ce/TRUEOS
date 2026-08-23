@@ -525,7 +525,40 @@ TRUEOS_CPP_DEMO_INLINE float high_wisp_field(float2 point, float time)
     return strands * band * mix(1.0f, torn, tearing * (0.22f / 1.41f));
 }
 
-TRUEOS_CPP_DEMO_INLINE float3 render_cloud_high_wisps(float2 uv, float time)
+TRUEOS_CPP_DEMO_INLINE float cloud_brush_density(
+    float2 normalized,
+    float aspect,
+    uint16 brush_points_lower,
+    uint16 brush_points_upper,
+    uint brush_point_count)
+{
+    float density = 0.0f;
+    const uint count = min(brush_point_count, 32u);
+    for (uint index = 0u; index < 32u; ++index) {
+        if (index >= count) {
+            break;
+        }
+        const uint packed = index < 16u
+            ? brush_points_lower[index]
+            : brush_points_upper[index - 16u];
+        const float2 center = (float2)(
+            static_cast<float>(packed & 0xFFFFu),
+            static_cast<float>(packed >> 16)) * (1.0f / 65535.0f);
+        const float2 delta = (normalized - center) * (float2)(aspect, 1.0f);
+        const float radius = 0.125f;
+        density = fmax(density, 1.0f - smoothstep(radius * 0.56f, radius, vector_length(delta)));
+    }
+    return density;
+}
+
+TRUEOS_CPP_DEMO_INLINE float3 render_cloud_high_wisps(
+    float2 uv,
+    float2 normalized,
+    float aspect,
+    float time,
+    uint16 brush_points_lower,
+    uint16 brush_points_upper,
+    uint brush_point_count)
 {
     using namespace trueos::gpgpu::cloud_high_wisps_preset;
 
@@ -554,8 +587,15 @@ TRUEOS_CPP_DEMO_INLINE float3 render_cloud_high_wisps(float2 uv, float time)
         * smoothstep(-0.16f, 0.48f, uv.y);
     color += moon * stars * 0.24f;
 
-    const float wisps = high_wisp_field(uv, time);
-    const float edge = high_wisp_field(uv + (float2)(0.018f, -0.011f), time) - wisps;
+    const float base_wisps = high_wisp_field(uv, time);
+    const float painted = cloud_brush_density(
+        normalized,
+        aspect,
+        brush_points_lower,
+        brush_points_upper,
+        brush_point_count);
+    const float wisps = saturate(base_wisps + painted);
+    const float edge = high_wisp_field(uv + (float2)(0.018f, -0.011f), time) - base_wisps;
     const float shade = saturate(0.26f + (uv.y + 0.55f) * 0.36f
         + cloud_noise(uv * 3.7f + time * 0.035f) * 0.18f);
     const float banded = floor(shade * static_cast<float>(art_bands - 1u) + 0.5f)
@@ -583,7 +623,8 @@ TRUEOS_CPP_DEMO_INLINE float3 render_mode(float2 uv, float time, uint seed)
     } else if constexpr (Mode == mode_sdf) {
         return render_sdf(uv, time, seed);
     } else if constexpr (Mode == mode_cloud_high_wisps) {
-        return render_cloud_high_wisps(uv, time);
+        return render_cloud_high_wisps(
+            uv, uv * 0.5f + 0.5f, 1.0f, time, (uint16)(0u), (uint16)(0u), 0u);
     } else {
         static_assert(Mode == mode_voronoi, "unsupported C++ demo mode");
         return render_voronoi(uv, time, seed);
@@ -642,7 +683,10 @@ __kernel void cpp_demo_rgba8(
     float time_seconds,
     uint demo_mode,
     uint seed,
-    uint flags)
+    uint flags,
+    uint16 brush_points_lower,
+    uint16 brush_points_upper,
+    uint brush_point_count)
 {
     using namespace trueos::gpgpu::cpp_demo;
 
@@ -679,7 +723,14 @@ __kernel void cpp_demo_rgba8(
             time_seconds,
             seed);
     } else if (bounded_mode == mode_cloud_high_wisps) {
-        color = render_cloud_high_wisps(uv, time_seconds);
+        color = render_cloud_high_wisps(
+            uv,
+            normalized,
+            aspect,
+            time_seconds,
+            brush_points_lower,
+            brush_points_upper,
+            brush_point_count);
     } else {
         color = render_selected(bounded_mode, uv, time_seconds, seed);
     }

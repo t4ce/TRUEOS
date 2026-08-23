@@ -33,6 +33,7 @@ const PREVIEW_Z: i32 = 30;
 const IDLE_POLL_MS: u64 = 20;
 const COMMAND_POLL_MAX_MS: u64 = 10;
 const RESIZE_RETRY_MS: u64 = 250;
+const PRIMARY_BUTTON_MASK: u32 = 1 << 0;
 const STATIC30_FRAME_COUNT: usize = 30;
 const STATIC30_PLANE_COUNT: usize = 3;
 const STATIC30_COLUMNS: u32 = 6;
@@ -435,6 +436,61 @@ static PREVIEW_CONTROL: Mutex<PreviewControl> = Mutex::new(PreviewControl::new()
 static CPP_FONT_REQUEST: Mutex<Option<(u64, crate::r::font_kernel_service::FontStampRequest)>> =
     Mutex::new(None);
 
+struct CloudBrushState {
+    points: [u32; crate::intel::gpgpu::CPP_CLOUD_BRUSH_POINT_CAPACITY],
+    count: usize,
+    next: usize,
+    dragging: Option<Ui4CursorSource>,
+    last: Option<(i32, i32)>,
+}
+
+impl CloudBrushState {
+    const fn new() -> Self {
+        Self {
+            points: [0; crate::intel::gpgpu::CPP_CLOUD_BRUSH_POINT_CAPACITY],
+            count: 0,
+            next: 0,
+            dragging: None,
+            last: None,
+        }
+    }
+
+    fn push(&mut self, local_x: i32, local_y: i32, width: u32, height: u32) {
+        if width == 0 || height == 0 {
+            return;
+        }
+        let x = local_x.clamp(0, width.saturating_sub(1) as i32) as u32;
+        let y = local_y.clamp(0, height.saturating_sub(1) as i32) as u32;
+        let packed_x = x.saturating_mul(u16::MAX as u32) / width.saturating_sub(1).max(1);
+        let packed_y = y.saturating_mul(u16::MAX as u32) / height.saturating_sub(1).max(1);
+        self.points[self.next] = packed_x | (packed_y << 16);
+        self.next = (self.next + 1) % self.points.len();
+        self.count = self.count.saturating_add(1).min(self.points.len());
+    }
+
+    fn drag_to(&mut self, local_x: i32, local_y: i32, width: u32, height: u32) {
+        let Some((from_x, from_y)) = self.last else {
+            self.push(local_x, local_y, width, height);
+            self.last = Some((local_x, local_y));
+            return;
+        };
+        let dx = local_x.saturating_sub(from_x);
+        let dy = local_y.saturating_sub(from_y);
+        let distance = dx.unsigned_abs().max(dy.unsigned_abs());
+        let spacing = width.min(height).saturating_div(24).max(1);
+        let steps = distance
+            .div_ceil(spacing)
+            .max(1)
+            .min(self.points.len() as u32);
+        for step in 1..=steps {
+            let x = i64::from(from_x) + i64::from(dx) * i64::from(step) / i64::from(steps);
+            let y = i64::from(from_y) + i64::from(dy) * i64::from(step) / i64::from(steps);
+            self.push(x as i32, y as i32, width, height);
+        }
+        self.last = Some((local_x, local_y));
+    }
+}
+
 struct ActivePreview {
     request_serial: u64,
     config: GpgpuPreviewConfig,
@@ -453,6 +509,7 @@ struct ActivePreview {
     static_needs_publish: bool,
     extra_surfaces: Vec<StaticPreviewSurface>,
     particle_craft: Option<crate::intel::gpgpu::GpgpuOwnedParticleCraftState>,
+    cloud_brush: CloudBrushState,
     font_stamp: Option<crate::r::font_kernel_service::FontStampRequest>,
     font_rush: Option<CppFontRushPlaneState>,
     metrics: GpgpuPreviewMetrics,
@@ -1255,6 +1312,7 @@ fn initialize_compute_preview_set(
             static_needs_publish: true,
             extra_surfaces: Vec::new(),
             particle_craft: None,
+            cloud_brush: CloudBrushState::new(),
             font_stamp: None,
             font_rush: None,
             metrics: GpgpuPreviewMetrics::default(),
@@ -1364,6 +1422,7 @@ fn create_cpp_font_rush_preview(
         static_needs_publish: true,
         extra_surfaces: Vec::new(),
         particle_craft: None,
+        cloud_brush: CloudBrushState::new(),
         font_stamp: None,
         font_rush: Some(CppFontRushPlaneState {
             rank,
@@ -1957,6 +2016,7 @@ fn initialize_preview(desired: DesiredPreview) -> Result<ActivePreview, &'static
         static_needs_publish: true,
         extra_surfaces: Vec::new(),
         particle_craft: None,
+        cloud_brush: CloudBrushState::new(),
         font_stamp: None,
         font_rush: None,
         metrics: GpgpuPreviewMetrics::default(),
@@ -2041,6 +2101,7 @@ fn initialize_cpp_font_preview(desired: DesiredPreview) -> Result<ActivePreview,
         static_needs_publish: true,
         extra_surfaces: Vec::new(),
         particle_craft: None,
+        cloud_brush: CloudBrushState::new(),
         font_stamp: Some(request),
         font_rush: None,
         metrics: GpgpuPreviewMetrics::default(),
@@ -2151,6 +2212,7 @@ fn initialize_static30_preview(desired: DesiredPreview) -> Result<ActivePreview,
         static_needs_publish: true,
         extra_surfaces: surfaces.iter().copied().skip(1).collect(),
         particle_craft: None,
+        cloud_brush: CloudBrushState::new(),
         font_stamp: None,
         font_rush: None,
         metrics: GpgpuPreviewMetrics::default(),
@@ -5486,8 +5548,13 @@ fn dispatch_preview_kernel(
             let seed = (preview.request_serial as u32)
                 .rotate_left(13)
                 .wrapping_add(0xC0DE_C901);
-            let result =
-                crate::intel::gpgpu::cpp_demo_rgba8_surface_full(surface, seconds, mode, seed);
+            let result = crate::intel::gpgpu::cpp_demo_rgba8_surface_full(
+                surface,
+                seconds,
+                mode,
+                seed,
+                &preview.cloud_brush.points[..preview.cloud_brush.count],
+            );
             PreviewDispatchResult {
                 ok: result.ok,
                 submitted: result.submitted,
@@ -5751,6 +5818,34 @@ fn drain_preview_input(active: &mut [ActivePreview], retired_frames: &mut Vec<Fr
                     retired_frames,
                     "input-event",
                 );
+            }
+            Ui4InputEvent::Pointer(event) => {
+                let Some(preview) = active.iter_mut().find(|preview| {
+                    event.window == preview.window
+                        && preview.config.preset == GpgpuPreviewPreset::CppCloudHighWisps
+                }) else {
+                    continue;
+                };
+                if event.buttons_pressed & PRIMARY_BUTTON_MASK != 0 {
+                    preview.cloud_brush.dragging = Some(event.source);
+                    preview.cloud_brush.last = None;
+                }
+                if preview.cloud_brush.dragging == Some(event.source)
+                    && event.buttons_down & PRIMARY_BUTTON_MASK != 0
+                {
+                    preview.cloud_brush.drag_to(
+                        event.local_x,
+                        event.local_y,
+                        preview.width,
+                        preview.height,
+                    );
+                }
+                if preview.cloud_brush.dragging == Some(event.source)
+                    && event.buttons_released & PRIMARY_BUTTON_MASK != 0
+                {
+                    preview.cloud_brush.dragging = None;
+                    preview.cloud_brush.last = None;
+                }
             }
             Ui4InputEvent::Keyboard(event) => {
                 let Some(preview) = active.iter().find(|preview| {
@@ -6914,7 +7009,26 @@ mod tests {
             cycled_cpp_gallery_preset(GpgpuPreviewPreset::Static30, 1),
             GpgpuPreviewPreset::CppGallery,
         );
-        assert_eq!(CPP_GALLERY_PRESETS.len(), 9);
+        assert_eq!(CPP_GALLERY_PRESETS.len(), 10);
+    }
+
+    #[test]
+    fn cloud_brush_uses_frame_local_normalized_points_and_bounds_its_ring() {
+        let mut brush = CloudBrushState::new();
+        brush.push(0, 0, 101, 51);
+        brush.push(100, 50, 101, 51);
+        assert_eq!(brush.points[0], 0);
+        assert_eq!(brush.points[1], u32::MAX);
+
+        brush.last = Some((0, 25));
+        brush.drag_to(100, 25, 101, 51);
+        assert!(brush.count > 2);
+        assert!(brush.count <= crate::intel::gpgpu::CPP_CLOUD_BRUSH_POINT_CAPACITY);
+
+        for index in 0..64 {
+            brush.push(index, index, 101, 51);
+        }
+        assert_eq!(brush.count, crate::intel::gpgpu::CPP_CLOUD_BRUSH_POINT_CAPACITY);
     }
 
     #[test]

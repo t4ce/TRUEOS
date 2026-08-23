@@ -215,7 +215,7 @@ fn print_list(io: &'static dyn ShellBackend2) {
     );
     print_shell_line(
         io,
-        "cpp demo: mode=cloud-high-wisps id=6 standalone=1 gallery-first=1 preset=cloud-engine-config_2026-08-23_06-14-45 draw-as-auto=1 pattern=2 seed=19.37 ui=none",
+        "cpp demo: mode=cloud-high-wisps id=6 standalone=1 gallery-first=1 preset=cloud-engine-config_2026-08-23_06-14-45 draw-as-auto=1 pattern=2 seed=19.37 controls=focused-left-drag-paint brush_points=32 ui=none",
     );
     print_shell_line(
         io,

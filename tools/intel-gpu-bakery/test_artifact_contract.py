@@ -297,7 +297,7 @@ class ArtifactContractTests(unittest.TestCase):
         )
         kernel = analysis["kernels"][0]
         self.assertEqual(kernel["simd_width"], 16)
-        self.assertEqual(kernel["cross_thread_data_bytes"], 128)
+        self.assertEqual(kernel["cross_thread_data_bytes"], 288)
         self.assertEqual(kernel["per_thread_data_bytes"], 96)
         self.assertEqual(kernel["scratch_bytes"], 0)
         self.assertEqual(kernel["slm_bytes"], 0)

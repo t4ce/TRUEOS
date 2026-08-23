@@ -106,9 +106,13 @@ pub(crate) fn cpp_demo_rgba8_surface_full(
     time_seconds: f32,
     demo_mode: u32,
     seed: u32,
+    brush_points: &[u32],
 ) -> GpgpuRgba8KernelResult {
     let start_tick = direct_rcs_now_tick();
     let mut params = CppDemoRgba8Params::new(time_seconds, demo_mode, seed);
+    let brush_point_count = brush_points.len().min(CPP_CLOUD_BRUSH_POINT_CAPACITY);
+    params.brush_points[..brush_point_count].copy_from_slice(&brush_points[..brush_point_count]);
+    params.brush_point_count = brush_point_count as u32;
     params.rect_width = dst.width;
     params.rect_height = dst.height;
     let outcome = submit_cpp_demo_rgba8(dst, params);

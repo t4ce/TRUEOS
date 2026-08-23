@@ -380,12 +380,12 @@ const _: () = {
     assert!(contract.grf_count == 128);
     assert!(contract.scratch_bytes == 0);
     assert!(contract.slm_bytes == 0);
-    assert!(contract.cross_thread_data_bytes == 128);
+    assert!(contract.cross_thread_data_bytes == 288);
     assert!(contract.per_thread_data_bytes == 96);
     assert!(contract.bindings.len() == 1);
     assert!(contract.bindings[0].arg_index == 0);
     assert!(contract.bindings[0].bti == 0);
-    assert!(contract.payload_args.len() == 12);
+    assert!(contract.payload_args.len() == 15);
 };
 include!(
     "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/shadertoy_mandelbrot.contract.rs"

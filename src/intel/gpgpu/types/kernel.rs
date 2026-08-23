@@ -259,6 +259,7 @@ pub(crate) const CPP_DEMO_MODE_RETRO_SUN: u32 = 5;
 pub(crate) const CPP_DEMO_MODE_CLOUD_HIGH_WISPS: u32 = 6;
 pub(crate) const CPP_DEMO_MODE_COUNT: u32 = 7;
 pub(crate) const CPP_DEMO_FLAG_VIGNETTE: u32 = 1 << 0;
+pub(crate) const CPP_CLOUD_BRUSH_POINT_CAPACITY: usize = 32;
 
 #[derive(Copy, Clone, Debug)]
 pub(crate) struct CppDemoRgba8Params {
@@ -274,6 +275,8 @@ pub(crate) struct CppDemoRgba8Params {
     pub(crate) demo_mode: u32,
     pub(crate) seed: u32,
     pub(crate) flags: u32,
+    pub(crate) brush_points: [u32; CPP_CLOUD_BRUSH_POINT_CAPACITY],
+    pub(crate) brush_point_count: u32,
 }
 
 impl CppDemoRgba8Params {
@@ -291,6 +294,8 @@ impl CppDemoRgba8Params {
             demo_mode,
             seed,
             flags: CPP_DEMO_FLAG_VIGNETTE,
+            brush_points: [0; CPP_CLOUD_BRUSH_POINT_CAPACITY],
+            brush_point_count: 0,
         }
     }
 }
