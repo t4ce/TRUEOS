@@ -46,7 +46,6 @@ scripts, applications, data, and configuration are the intended path for
 extending and programming TRUEOS at runtime, including commercially.
 
 ## Why it is interesting
-
 - Tiny bootable ISO, currently around 5 MB
 - Rust-first bare-metal runtime
 - Video/JPEG/media playback experiments
@@ -54,6 +53,8 @@ extending and programming TRUEOS at runtime, including commercially.
 - Blueprint-based runtime extension model
 - Signed upstream GitHub Actions releases
 - QEMU, VFIO, bridge networking, and hardware bring-up workflows
+- Game Engine Integration progress with Helio Renderer 
+- Upcoming Data_Driven Webbrowser Solara
 
 ## Release builds and verification
 
