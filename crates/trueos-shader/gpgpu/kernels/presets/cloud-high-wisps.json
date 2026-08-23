@@ -1,0 +1,67 @@
+{
+  "format": "cloud-engine-config",
+  "version": 1,
+  "engineVersion": "2.1-config-io",
+  "exportedAt": "2026-08-23T06:14:45.766Z",
+  "configuration": {
+    "mode": "draw",
+    "formation": {
+      "pattern": 2,
+      "patternName": "High wisps",
+      "amount": 0.58,
+      "seed": 19.37
+    },
+    "look": {
+      "renderStyle": "artistic",
+      "artPreset": "custom",
+      "artCloudColor": "#72b8c9",
+      "artShadowColor": "#173c58",
+      "artSkyColor": "#0b2545",
+      "artMoonColor": "#fff0a7",
+      "artCurl": 1.09,
+      "artRibbon": 0.86,
+      "artSculpt": 0.84,
+      "artBands": 6,
+      "artOutline": 0.76,
+      "artMoonSize": 0.155,
+      "artMoonGlow": 0.92,
+      "artGrain": 0.13
+    },
+    "air": {
+      "windSpeed": 1.95,
+      "windDirection": 5,
+      "turbulence": 0.84,
+      "tearing": 1.41,
+      "rotation": -0.44,
+      "dissipation": 0.15
+    },
+    "brush": {
+      "brushSize": 0.125,
+      "brushStrength": 0.38,
+      "brushDepth": 0.64
+    },
+    "camera": {
+      "cameraPosition": [
+        -1.175630650424011,
+        1.5082186580046215,
+        -6.268015788180982
+      ],
+      "cameraYaw": 0,
+      "cameraPitch": 0.084796174523203,
+      "cameraFov": 61,
+      "cameraSpeed": 4.1,
+      "cameraSensitivity": 0.12
+    },
+    "sunAndRender": {
+      "sunColor": "#fff0d2",
+      "sunElevation": -1,
+      "sunAzimuth": 8,
+      "sunIntensity": 1.31,
+      "exposure": 1.48,
+      "quality": "still"
+    },
+    "playback": {
+      "paused": false
+    }
+  }
+}

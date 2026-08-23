@@ -2,7 +2,7 @@
 
 `cpp_demo_rgba8.clcpp` turns the proven C++ for OpenCL pipeline into a reusable
 TRUEOS application surface. It is one offline-compiled kernel, one stable
-output ABI, one resident upload, and six scalar-selected workloads:
+output ABI, one resident upload, and seven scalar-selected workloads:
 
 | Shell2 mode | Kernel mode | Foundation exercised |
 | --- | ---: | --- |
@@ -12,6 +12,7 @@ output ABI, one resident upload, and six scalar-selected workloads:
 | `sdf` | 3 | signed-distance geometry, composition, antialiasing |
 | `voronoi` | 4 | integer hashing, neighbour search, procedural cells |
 | `retro-sun` | 5 | layered synthwave scene, animated cutout bands, reflection, CRT post |
+| `cloud-high-wisps` | 6 | authored cloud preset, analytic high-wisp formation, artistic moon/sky treatment |
 
 Plain `cpp` opens `gallery`, which divides one UI4 surface into four panels.
 With that UI4 frame focused, Left and Right cycle through every C++ mode and
@@ -19,6 +20,18 @@ Escape closes the gallery. Retro Sun remains a standalone view rather than a
 gallery panel. The audio view uses its own single audiovisual artifact and the
 same resize lifecycle; see
 [`CPP_AUDIO_VISUALIZER.md`](CPP_AUDIO_VISUALIZER.md).
+
+`cloud-high-wisps` is the fixed Linux/TRUEOS migration of
+[`presets/cloud-high-wisps.json`](presets/cloud-high-wisps.json). Its source
+save says `mode: draw`, but the original format deliberately omits painted 3D
+density. The C++ mode consequently treats the saved pattern-2 **High wisps**
+formation as deterministic auto source material instead of rendering an empty
+volume. The shader uses the compile-time mirror in
+`presets/cloud_high_wisps_preset.hpp`; that header is a hashed source input in
+the artifact manifest. This first direct-RCS demo is an analytic 2D
+approximation of the WebGPU 3D simulation/raymarch pair, retaining the
+authored artistic palette, seed, air controls, moon, bands, outline, and
+grain without introducing a 3D allocation or a multi-pass ABI.
 
 ```text
 cpp
@@ -55,8 +68,8 @@ under a potentially late GPU writer.
 The checked artifact is `artifacts/adls/cpp/cpp_demo_rgba8.bin`:
 
 ```text
-Zebin SHA-256: 75e5a83b3e74e3b5da59756bc5a804cbb742314389bb60559474586050ce66ac
-SPIR-V SHA-256: be41fccaaca39e0c1584e5062b5434a17366441bc586b2134135d3664729b3d5
+Zebin SHA-256: d2f1b3a9ff59605010a7337e7a0f28eb1438117414d0a7dde8fe987aa7041449
+SPIR-V SHA-256: 0285abd959c48dd5057546c4bd198e7583ea36cc239b9ea63850912cb41b6e51
 target:          8086:4680 revision 0x0c
 entry:           cpp_demo_rgba8 at Zebin offset 64
 execution:       SIMD16, 128 GRFs, scratch 0, SLM 0

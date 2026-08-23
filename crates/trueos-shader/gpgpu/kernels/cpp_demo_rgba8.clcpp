@@ -12,6 +12,7 @@
 // SPIR-V/Zebin pair and submits it through the existing direct-RCS/GuC path.
 
 #include "include/trueos_clcpp.hpp"
+#include "presets/cloud_high_wisps_preset.hpp"
 
 namespace trueos::gpgpu::cpp_demo {
 
@@ -23,7 +24,13 @@ inline constexpr uint mode_julia = 2u;
 inline constexpr uint mode_sdf = 3u;
 inline constexpr uint mode_voronoi = 4u;
 inline constexpr uint mode_retro_sun = 5u;
-inline constexpr uint mode_count = 6u;
+// Fixed scene reconstructed from
+// cloud-engine-config_2026-08-23_06-14-45.json. The source config was saved
+// in draw mode, which intentionally has no serialized density volume; this
+// mode therefore uses its selected High wisps formation as deterministic auto
+// source material rather than presenting an empty saved scene.
+inline constexpr uint mode_cloud_high_wisps = 6u;
+inline constexpr uint mode_count = 7u;
 
 TRUEOS_CPP_DEMO_INLINE float saturate(float value)
 {
@@ -451,6 +458,121 @@ TRUEOS_CPP_DEMO_INLINE float3 render_voronoi(float2 uv, float time, uint seed)
     return color;
 }
 
+TRUEOS_CPP_DEMO_INLINE float hash_cloud(float2 point)
+{
+    const float value = native_sin(dot(point, (float2)(127.1f, 311.7f))) * 43758.5453f;
+    return value - floor(value);
+}
+
+TRUEOS_CPP_DEMO_INLINE float cloud_noise(float2 point)
+{
+    const float2 cell = floor(point);
+    const float2 fraction = point - cell;
+    const float2 blend = fraction * fraction * (3.0f - 2.0f * fraction);
+    const float lower = mix(
+        hash_cloud(cell),
+        hash_cloud(cell + (float2)(1.0f, 0.0f)),
+        blend.x);
+    const float upper = mix(
+        hash_cloud(cell + (float2)(0.0f, 1.0f)),
+        hash_cloud(cell + (float2)(1.0f, 1.0f)),
+        blend.x);
+    return mix(lower, upper, blend.y);
+}
+
+TRUEOS_CPP_DEMO_INLINE float cloud_fbm(float2 point)
+{
+    float value = 0.0f;
+    float amplitude = 0.54f;
+    for (uint octave = 0u; octave < 3u; ++octave) {
+        value += cloud_noise(point) * amplitude;
+        point = point * 2.03f + (float2)(11.7f, 7.1f);
+        amplitude *= 0.5f;
+    }
+    return value * (1.0f / 0.945f);
+}
+
+// The WebGPU source generates its 96x48x96 density field with pattern 2.
+// This direct UI4 path keeps that high-wisp ridged field analytic, so it needs
+// neither a transient 3D allocation nor a simulation warm-up dispatch.
+TRUEOS_CPP_DEMO_INLINE float high_wisp_field(float2 point, float time)
+{
+    using namespace trueos::gpgpu::cloud_high_wisps_preset;
+
+    // Authored preset: seed=19.37, windSpeed=1.95, windDirection=5,
+    // turbulence=.84, tearing=1.41, rotation=-.44, amount=.58.
+    const float wind_phase = time * 0.13f * wind_speed;
+    const float2 wind = (float2)(native_cos(wind_direction), native_sin(wind_direction));
+    const float2 drift = wind * wind_phase;
+    const float field_warp = cloud_fbm(
+        point * (float2)(1.8f, 2.6f) + drift * 0.31f
+        + (float2)(formation_seed * 0.017f, formation_seed * 0.031f)) * turbulence;
+    const float ribbon_warp = native_sin(point.x * 3.8f - point.y * 1.7f
+        + time * 0.58f) * (0.12f + rotation * 0.02f);
+    const float2 streak_position = (float2)(
+        point.x * 7.0f + field_warp * 2.3f + ribbon_warp,
+        point.y * 11.0f - point.x * 1.7f + field_warp * 0.46f)
+        + drift * (float2)(0.39f, -0.21f);
+    const float streak_noise = cloud_fbm(
+        streak_position + (float2)(formation_seed * 0.024f, formation_seed * 0.043f));
+    const float ridges = 1.0f - fabs(streak_noise * 2.0f - 1.0f);
+    const float threshold = 0.91f - 0.29f * formation_amount;
+    const float strands = smoothstep(threshold, threshold + 0.12f, ridges);
+    const float band = smoothstep(-0.37f, -0.10f, point.y)
+        * (1.0f - smoothstep(0.70f, 1.02f, point.y));
+    const float torn = smoothstep(0.18f, 0.94f,
+        cloud_noise(point * (float2)(15.0f, 4.0f) + drift * 0.8f));
+    return strands * band * mix(1.0f, torn, tearing * (0.22f / 1.41f));
+}
+
+TRUEOS_CPP_DEMO_INLINE float3 render_cloud_high_wisps(float2 uv, float time)
+{
+    using namespace trueos::gpgpu::cloud_high_wisps_preset;
+
+    // Authored artistic preset colors, normalized from its JSON CSS hex form.
+    const float3 sky = (float3)(0.0431f, 0.1451f, 0.2706f);       // #0b2545
+    const float3 cloud = (float3)(0.4471f, 0.7216f, 0.7882f);     // #72b8c9
+    const float3 shadow = (float3)(0.0902f, 0.2353f, 0.3451f);    // #173c58
+    const float3 moon = (float3)(1.0f, 0.9412f, 0.6549f);         // #fff0a7
+
+    const float vertical = saturate(uv.y * 0.5f + 0.5f);
+    float3 color = sky * mix(0.62f, 1.18f, vertical);
+    const float horizon = native_exp(-fabs(uv.y + 0.18f) * 3.4f);
+    color += (float3)(0.035f, 0.095f, 0.135f) * horizon;
+
+    // Fixed moon placement follows the configured negative elevation and
+    // azimuth while preserving artMoonSize=.155 and artMoonGlow=.92.
+    const float2 moon_center = (float2)(0.56f, 0.40f);
+    const float moon_distance = vector_length(uv - moon_center);
+    const float moon_disc = 1.0f - smoothstep(art_moon_size - 0.010f, art_moon_size + 0.005f, moon_distance);
+    const float moon_glow = native_exp(-moon_distance * 5.9f) * 0.145f * art_moon_glow;
+    const float crater = cloud_noise((uv - moon_center) * 17.0f + formation_seed);
+    color += moon * (moon_disc * (0.90f + crater * 0.12f) + moon_glow);
+
+    const float star_hash = hash_cloud(floor((uv + (float2)(2.0f)) * (float2)(76.0f, 44.0f)));
+    const float stars = smoothstep(0.994f, 0.9994f, star_hash)
+        * smoothstep(-0.16f, 0.48f, uv.y);
+    color += moon * stars * 0.24f;
+
+    const float wisps = high_wisp_field(uv, time);
+    const float edge = high_wisp_field(uv + (float2)(0.018f, -0.011f), time) - wisps;
+    const float shade = saturate(0.26f + (uv.y + 0.55f) * 0.36f
+        + cloud_noise(uv * 3.7f + time * 0.035f) * 0.18f);
+    const float banded = floor(shade * static_cast<float>(art_bands - 1u) + 0.5f)
+        / static_cast<float>(art_bands - 1u);
+    float3 wisp_color = mix(shadow, cloud, banded);
+    const float outline = smoothstep(0.004f, 0.055f, fabs(edge)) * art_outline;
+    wisp_color = mix(wisp_color, shadow * 0.54f, outline);
+    color = mix(color, wisp_color, wisps * art_sculpt);
+    color += cloud * wisps * moon_glow * 0.56f;
+
+    const float grain = (hash_cloud(uv * (float2)(600.0f, 410.0f) + time * 4.0f) - 0.5f)
+        * (art_grain * 0.1f);
+    color += (float3)(grain);
+    color *= 1.0f - smoothstep(0.22f, 1.46f, vector_length(uv * (float2)(0.82f, 0.96f)));
+    return color;
+}
+
 template <uint Mode>
 TRUEOS_CPP_DEMO_INLINE float3 render_mode(float2 uv, float time, uint seed)
 {
@@ -460,6 +582,8 @@ TRUEOS_CPP_DEMO_INLINE float3 render_mode(float2 uv, float time, uint seed)
         return render_julia(uv, time, seed);
     } else if constexpr (Mode == mode_sdf) {
         return render_sdf(uv, time, seed);
+    } else if constexpr (Mode == mode_cloud_high_wisps) {
+        return render_cloud_high_wisps(uv, time);
     } else {
         static_assert(Mode == mode_voronoi, "unsupported C++ demo mode");
         return render_voronoi(uv, time, seed);
@@ -477,6 +601,8 @@ TRUEOS_CPP_DEMO_INLINE float3 render_selected(uint mode, float2 uv, float time, 
             return render_mode<mode_sdf>(uv, time, seed);
         case mode_voronoi:
             return render_mode<mode_voronoi>(uv, time, seed);
+        case mode_cloud_high_wisps:
+            return render_mode<mode_cloud_high_wisps>(uv, time, seed);
         default:
             return (float3)(0.0f);
     }
@@ -552,6 +678,8 @@ __kernel void cpp_demo_rgba8(
                 static_cast<float>(rect_height)),
             time_seconds,
             seed);
+    } else if (bounded_mode == mode_cloud_high_wisps) {
+        color = render_cloud_high_wisps(uv, time_seconds);
     } else {
         color = render_selected(bounded_mode, uv, time_seconds, seed);
     }

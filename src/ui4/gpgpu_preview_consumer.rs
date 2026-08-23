@@ -69,8 +69,9 @@ const CPP_FONT_RUSH_TITLE_WORD_X_FRACTIONS: [f32; 6] =
     [0.281_72, 0.368_89, 0.439_55, 0.522_91, 0.628_20, 0.734_14];
 const CPP_FONT_RUSH_TITLE_WORD_PRESENTATION_SCALE: f32 = 1.8;
 const CPP_FONT_RUSH_SECTION_PRESENTATION_SCALE: f32 = 3.0;
-const CPP_GALLERY_PRESETS: [GpgpuPreviewPreset; 9] = [
+const CPP_GALLERY_PRESETS: [GpgpuPreviewPreset; 10] = [
     GpgpuPreviewPreset::CppGallery,
+    GpgpuPreviewPreset::CppCloudHighWisps,
     GpgpuPreviewPreset::CppAurora,
     GpgpuPreviewPreset::CppJulia,
     GpgpuPreviewPreset::CppSdf,
@@ -100,6 +101,7 @@ pub(crate) enum GpgpuPreviewPreset {
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Lab256,
     CppGallery,
+    CppCloudHighWisps,
     CppAurora,
     CppJulia,
     CppSdf,
@@ -122,6 +124,7 @@ impl GpgpuPreviewPreset {
             Self::Plasma => "plasma",
             Self::Lab256 => "lab256",
             Self::CppGallery => "cpp-gallery",
+            Self::CppCloudHighWisps => "cpp-cloud-high-wisps",
             Self::CppAurora => "cpp-aurora",
             Self::CppJulia => "cpp-julia",
             Self::CppSdf => "cpp-sdf",
@@ -138,6 +141,7 @@ impl GpgpuPreviewPreset {
         matches!(
             self,
             Self::CppGallery
+                | Self::CppCloudHighWisps
                 | Self::CppAurora
                 | Self::CppJulia
                 | Self::CppSdf
@@ -173,6 +177,7 @@ impl GpgpuPreviewPreset {
             Self::Plasma => "slot3-direct",
             Self::Lab256 => "slot1-alpha-256x256",
             Self::CppGallery
+            | Self::CppCloudHighWisps
             | Self::CppAurora
             | Self::CppJulia
             | Self::CppSdf
@@ -2352,6 +2357,7 @@ async fn render_preview_frame(preview: &mut ActivePreview) -> Result<(), &'stati
         | GpgpuPreviewPreset::Plasma
         | GpgpuPreviewPreset::Lab256
         | GpgpuPreviewPreset::CppGallery
+        | GpgpuPreviewPreset::CppCloudHighWisps
         | GpgpuPreviewPreset::CppAurora
         | GpgpuPreviewPreset::CppJulia
         | GpgpuPreviewPreset::CppSdf
@@ -5458,6 +5464,7 @@ fn dispatch_preview_kernel(
             }
         }
         GpgpuPreviewPreset::CppGallery
+        | GpgpuPreviewPreset::CppCloudHighWisps
         | GpgpuPreviewPreset::CppAurora
         | GpgpuPreviewPreset::CppJulia
         | GpgpuPreviewPreset::CppSdf
@@ -5466,6 +5473,9 @@ fn dispatch_preview_kernel(
             let seconds = preview.metrics.elapsed_ms as f32 / 1_000.0;
             let mode = match preview.config.preset {
                 GpgpuPreviewPreset::CppGallery => crate::intel::gpgpu::CPP_DEMO_MODE_GALLERY,
+                GpgpuPreviewPreset::CppCloudHighWisps => {
+                    crate::intel::gpgpu::CPP_DEMO_MODE_CLOUD_HIGH_WISPS
+                }
                 GpgpuPreviewPreset::CppAurora => crate::intel::gpgpu::CPP_DEMO_MODE_AURORA,
                 GpgpuPreviewPreset::CppJulia => crate::intel::gpgpu::CPP_DEMO_MODE_JULIA,
                 GpgpuPreviewPreset::CppSdf => crate::intel::gpgpu::CPP_DEMO_MODE_SDF,
@@ -5559,6 +5569,7 @@ const fn preview_release_label(preset: GpgpuPreviewPreset) -> &'static str {
         | GpgpuPreviewPreset::Chart
         | GpgpuPreviewPreset::Plasma
         | GpgpuPreviewPreset::CppGallery
+        | GpgpuPreviewPreset::CppCloudHighWisps
         | GpgpuPreviewPreset::CppAurora
         | GpgpuPreviewPreset::CppJulia
         | GpgpuPreviewPreset::CppSdf
@@ -5585,6 +5596,7 @@ const fn preview_producer_label(preset: GpgpuPreviewPreset) -> &'static str {
             "guc-compute-single"
         }
         GpgpuPreviewPreset::CppGallery
+        | GpgpuPreviewPreset::CppCloudHighWisps
         | GpgpuPreviewPreset::CppAurora
         | GpgpuPreviewPreset::CppJulia
         | GpgpuPreviewPreset::CppSdf
@@ -5605,6 +5617,7 @@ const fn preview_plane(preset: GpgpuPreviewPreset) -> WindowPlane {
         | GpgpuPreviewPreset::Chart
         | GpgpuPreviewPreset::Plasma
         | GpgpuPreviewPreset::CppGallery
+        | GpgpuPreviewPreset::CppCloudHighWisps
         | GpgpuPreviewPreset::CppAurora
         | GpgpuPreviewPreset::CppJulia
         | GpgpuPreviewPreset::CppSdf
@@ -5626,6 +5639,7 @@ const fn preview_consumer_label(preset: GpgpuPreviewPreset) -> &'static str {
         GpgpuPreviewPreset::Plasma => "ui4-direct-slot3",
         GpgpuPreviewPreset::Lab256 => "ui4-alpha-slot1-256x256",
         GpgpuPreviewPreset::CppGallery
+        | GpgpuPreviewPreset::CppCloudHighWisps
         | GpgpuPreviewPreset::CppAurora
         | GpgpuPreviewPreset::CppJulia
         | GpgpuPreviewPreset::CppSdf
@@ -6322,6 +6336,7 @@ const fn compute_preview_index(preset: GpgpuPreviewPreset) -> Option<usize> {
         | GpgpuPreviewPreset::Static30
         | GpgpuPreviewPreset::Lab256
         | GpgpuPreviewPreset::CppGallery
+        | GpgpuPreviewPreset::CppCloudHighWisps
         | GpgpuPreviewPreset::CppAurora
         | GpgpuPreviewPreset::CppJulia
         | GpgpuPreviewPreset::CppSdf
@@ -6869,6 +6884,7 @@ mod tests {
     fn cpp_modes_share_the_resizable_slot1_application_surface() {
         let modes = [
             GpgpuPreviewPreset::CppGallery,
+            GpgpuPreviewPreset::CppCloudHighWisps,
             GpgpuPreviewPreset::CppAurora,
             GpgpuPreviewPreset::CppJulia,
             GpgpuPreviewPreset::CppSdf,
@@ -6888,7 +6904,7 @@ mod tests {
     fn interactive_cpp_gallery_cycles_both_directions_and_wraps() {
         assert_eq!(
             cycled_cpp_gallery_preset(GpgpuPreviewPreset::CppGallery, 1),
-            GpgpuPreviewPreset::CppAurora,
+            GpgpuPreviewPreset::CppCloudHighWisps,
         );
         assert_eq!(
             cycled_cpp_gallery_preset(GpgpuPreviewPreset::CppGallery, -1),

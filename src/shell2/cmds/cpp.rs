@@ -189,6 +189,7 @@ fn start(io: &'static dyn ShellBackend2) {
 const fn cpp_mode_label(preset: crate::ui4::GpgpuPreviewPreset) -> &'static str {
     match preset {
         crate::ui4::GpgpuPreviewPreset::CppGallery => "gallery",
+        crate::ui4::GpgpuPreviewPreset::CppCloudHighWisps => "cloud-high-wisps",
         crate::ui4::GpgpuPreviewPreset::CppAurora => "aurora",
         crate::ui4::GpgpuPreviewPreset::CppJulia => "julia",
         crate::ui4::GpgpuPreviewPreset::CppSdf => "sdf",
@@ -211,6 +212,10 @@ fn print_list(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
         "cpp demo: mode=gallery id=0 explores=multi-mode-dispatch/one-stable-ABI panels=aurora+julia+sdf+voronoi",
+    );
+    print_shell_line(
+        io,
+        "cpp demo: mode=cloud-high-wisps id=6 standalone=1 gallery-first=1 preset=cloud-engine-config_2026-08-23_06-14-45 draw-as-auto=1 pattern=2 seed=19.37 ui=none",
     );
     print_shell_line(
         io,
