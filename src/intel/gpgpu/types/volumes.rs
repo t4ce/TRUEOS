@@ -1,13 +1,15 @@
 /// Bytes occupied by one RGBA16F voxel: four IEEE-754 binary16 channels.
+#[allow(dead_code)]
 pub(crate) const GPGPU_RGBA16_FLOAT_BYTES_PER_VOXEL: usize = 8;
 
 /// Linear, page-backed 3D RGBA16F storage admitted to the direct-RCS PPGTT.
 ///
 /// This is intentionally a memory-layout contract rather than an Intel sampler
-/// surface-state encoding.  Cloud compute can therefore start with the proven
+/// surface-state encoding. Cloud compute can therefore start with the proven
 /// stateful/stateless buffer path and software trilinear filtering, while a
 /// later sampler bring-up can bind the exact same allocation as a 3D sampled
 /// surface without changing simulation ownership or the JSON-derived ABI.
+#[allow(dead_code)]
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub(crate) struct GpgpuRgba16FloatVolume3d {
     pub(crate) phys: u64,
@@ -20,6 +22,7 @@ pub(crate) struct GpgpuRgba16FloatVolume3d {
     pub(crate) slice_pitch_bytes: u32,
 }
 
+#[allow(dead_code)]
 impl GpgpuRgba16FloatVolume3d {
     pub(crate) fn new(
         phys: u64,
@@ -122,7 +125,7 @@ impl GpgpuRgba16FloatVolume3d {
     /// Byte offset of one voxel inside this linear allocation.
     ///
     /// Useful for cold-path population, deterministic probes, and later
-    /// software-vs-hardware sampler comparisons.  Runtime kernels still index
+    /// software-vs-hardware sampler comparisons. Runtime kernels still index
     /// the mapped GPU address directly.
     pub(crate) fn voxel_byte_offset(self, x: u32, y: u32, z: u32) -> Option<usize> {
         if !self.is_valid() || x >= self.width || y >= self.height || z >= self.depth {
