@@ -39,6 +39,17 @@ strokes can pass in front of it. The generic suite vignette is disabled only
 for this mode: the WGSL sky already provides a mild side-falloff, and a second
 vignette produced black edge lobes.
 
+The next cloud stage no longer needs to invent a second sampling model.
+`include/cloud_volume_sampling.hpp` defines the normalized clamp-to-edge
+trilinear contract over linear RGBA16F storage, and
+`src/intel/gpgpu/types/volumes.rs` gives that storage an explicit width/height/
+depth/row-pitch/slice-pitch host contract. The companion
+`tools/intel-texture-probe/cloud_volume_probe.clcpp` bakes the software-buffer
+sample and the desired `image3d_t` hardware sample side by side. This lets the
+production cloud move to persistent A/B volumes first, then replace eight
+software voxel reads with an Intel sampler message without changing the scene
+ABI or renderer math.
+
 ```text
 cpp
 cpp list
