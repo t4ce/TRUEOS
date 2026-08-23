@@ -111,7 +111,6 @@ checks the ISO hash named in `TRUEOS.provenance.json`. A wrong commit, swapped
 submodule/gitlink, or replaced ISO breaks the chain. Release assets also include
 `.trueos-sig.json` Ed25519 signatures and `TRUEOS-release-public-key.json`.
 
-
 ### Tools
 ```
 sudo apt install git make 7zip nodejs libigc2-tools rustup npm autoconf intel-ocloc  automake mtools nasm xorriso
@@ -121,27 +120,6 @@ vs-code
 npm install express
 
 git submodule update --init --recursive
-```
-
-### Rust API documentation
-
-Generate the kernel API documentation with Rust's standard Cargo command:
-
-```bash
-cargo doc
-```
-
-The generated site is at
-`tgt/x86_64-unknown-trueos/doc/TRUEOS/index.html`. To build it and open the
-site in the system browser, run `cargo doc --open`.
-
-## on MAC
-> [!TIP]
-> We were able to build, with a MAC Laptop aswell.
-```
-xcode-select --install
-rustup toolchain install nightly-2026-07-10
-brew install llvm binutils autoconf automake libtool xorriso zstd p7zip
 ```
 
 ### Lic
@@ -154,278 +132,9 @@ brew install llvm binutils autoconf automake libtool xorriso zstd p7zip
 # Network Console Access
 `konsole -e sh -c 'stty raw -echo; exec nc 192.168.178.94 4245'`
 
-# Optional Section
-> [!IMPORTANT]
-> From here its mostly custom config that is emulator specific - OPTIONAL
-> This may be your best resort to puzzle a network driver or usb host controller
-> for your maybe unsupported hardware
-
-## update
-> [!WARNING]
-> Unless you choose only linear and easy upgrades
-> this i would recommend you dont move, it requires serious architecture knowledge
-> to maintain the clear dep. Graph - that you maybe havent even seen
-
-```
-cargo outdated -R
-cargo upgrade
-cargo update
-cargo clippy --fix --broken-code --bin "TRUEOS" -p TRUEOS
-```
-
-## nomachione with pxe 
-> [!Note]
-> Nomachine had some Port in use that i needed in some setting
-> once atleast, for PXE so i had to move this, in order to preserve remote control
-```
-sudoedit /usr/NX/etc/server.cfg
-UDPPort 50000-50999
-sudo systemctl restart nxserver
-```
-
-## firewall
-> [!Note]
-> this mostly depends on what ports you assign, because currently
-> i just casual use ports 0 to 10, so its kind of important
-> to know that ports can be assigned way more toughtful - but i never encountered problems
-
-
-## PASS IN USB DEVICE / NVMe data partition / VFIO permissions
-> [!Note]
-> passing in USB devices towards the emulator does cause
-> for a more realistic debug scenario, but keep in mind that emulator
-> has its entire universe of problems and behaviour, it remains a decent approach
-> for a lot can be simpler to bringup 
-sudo install -m 0644 99-trueos-usb.rules /etc/udev/rules.d/99-trueos-usb.rules
-sudo udevadm control --reload-rules
-
-### Castor mouse stays on the Linux host now; the rules file no longer auto-unbinds it.
-
-sudo usermod -aG kvm "$USER"
-newgrp kvm
-id
-
-sudo udevadm trigger --subsystem-match=block --subsystem-match=usb --subsystem-match=vfio
-sudo udevadm trigger --name-match=nvme2n1p1
-ls -l /dev/nvme2n1p1
-ls -l /dev/vfio || true
-
-### Optional: keep router/DHCP seeing the *same* MAC as the physical uplink
-### (otherwise br0 may present a different MAC than $UPLINK)
-sudo nmcli con mod "$BR" 802-3-ethernet.cloned-mac-address "$(cat /sys/class/net/$UPLINK/address)"
-sudo nmcli con down "$BR" 2>/dev/null || true
-sudo nmcli con up "$BR"
-
-sudo nmcli con delete "$TAP" 2>/dev/null || true
-if ! ip link show "$TAP" >/dev/null 2>&1; then
-  sudo ip tuntap add dev "$TAP" mode tap user "$USER" group "$USER"
-fi
-sudo nmcli dev set "$TAP" managed no 2>/dev/null || true
-sudo ip link set "$TAP" master "$BR"
-sudo ip link set "$TAP" up
-bridge link show
-ip -4 -br addr show "$BR" "$UPLINK" "$TAP" 2>/dev/null || true
-ip -4 route show default
-ip -4 -br addr show | egrep "^($BR|$UPLINK|$TAP)\\b" || true
-
-### VFIO USB CONTROLLER (no persist across reboot)
-sudo modprobe vfio-pci
-echo 0000:06:00.0 | sudo tee /sys/bus/pci/devices/0000:06:00.0/driver/unbind
-echo vfio-pci | sudo tee /sys/bus/pci/devices/0000:06:00.0/driver_override
-echo 0000:06:00.0 | sudo tee /sys/bus/pci/drivers/vfio-pci/bind
-sudo bash -lc '
-modprobe vfio vfio_pci vfio_iommu_type1
-
-for dev in 0000:06:00.0 0000:06:00.1; do
-  [ -e /sys/bus/pci/devices/$dev ] || continue
-  echo vfio-pci > /sys/bus/pci/devices/$dev/driver_override
-  echo $dev > /sys/bus/pci/drivers_probe
-done
-
-echo -n "IOMMU group: "
-readlink -f /sys/bus/pci/devices/0000:06:00.0/iommu_group || true
-ls -l /dev/vfio || true
-lspci -nnk -s 06:00.0
-'
-
-### Whole dock / hub root to guest (preferred over usb-host hub passthrough)
-QEMU's usb-host docs explicitly warn that passing a hub itself does not work reliably.
-The robust path is to hand the guest the owning host controller so the guest becomes
-the real USB root for that downstream tree.
-In this setup the rear dock sits under:
-
-   0000:06:00.0 ASMedia ASM3241 USB 3.2 Gen 2 Host Controller
-   /sys/bus/usb/devices/4-1   -> SuperSpeed hub side
-  /sys/bus/usb/devices/3-1   -> USB2 hub side
-
-## Verify the mapping on the host:
-readlink -f /sys/bus/usb/devices/4-1
-readlink -f /sys/bus/usb/devices/3-1
-lspci -nn -s 06:00.0
-lsusb -t
-
-## Then bind that controller to VFIO and boot with controller-root USB handoff:
-sudo modprobe vfio vfio-pci vfio_iommu_type1
-echo 0000:06:00.0 | sudo tee /sys/bus/pci/devices/0000:06:00.0/driver/unbind
-echo vfio-pci | sudo tee /sys/bus/pci/devices/0000:06:00.0/driver_override
-echo 0000:06:00.0 | sudo tee /sys/bus/pci/drivers_probe
-lspci -nnk -s 06:00.0
-ls -l /dev/vfio
-make run QEMU_USB_MODE=controller QEMU_USB_CONTROLLER_PCI=0000:06:00.0
-
-### This makes the VM own the physical USB root for the dock on that controller,
-### which is much less fail-prone than trying to pass the dock hub via -device usb-host.
-
 ### dummy (no persist across reboot)
 sudo ip link add NIC type dummy
 sudo ip link set dev NIC address 5c:60:ba:b5:58:0f
-### LAN bridge for QEMU (rerunnable)
-sudo nmcli con up br0-enp5s0
-sudo nmcli con up br0
-UPLINK=enp5s0
-WIRED_CON="Kabelgebundene Verbindung 1"
-BR=br0
-SLAVE_CON="$BR-$UPLINK"   # -> br0-enp5s0
-nmcli -t -f NAME con show | grep -Fxq "$BR" \
-  || sudo nmcli con add type bridge ifname "$BR" con-name "$BR" ipv4.method auto ipv6.method ignore
-sudo nmcli con mod "$BR" bridge.stp no bridge.forward-delay 0
-nmcli -t -f NAME con show | grep -Fxq "$SLAVE_CON" \
-  || sudo nmcli con add type bridge-slave ifname "$UPLINK" con-name "$SLAVE_CON" master "$BR"
-sudo nmcli con mod "$WIRED_CON" connection.autoconnect no 2>/dev/null || true
-sudo nmcli con down "$WIRED_CON" 2>/dev/null || true
-sudo nmcli con up "$SLAVE_CON"
-sudo nmcli con up br0
-
-### one-time qemu-bridge-helper setup for unprivileged `make run`
-BR=br0
-HELPER=/usr/lib/qemu/qemu-bridge-helper
-test -x "$HELPER" || HELPER=/usr/libexec/qemu-bridge-helper
-sudo install -d -m 0755 /etc/qemu
-printf 'allow %s\n' "$BR" | sudo tee /etc/qemu/bridge.conf
-sudo chown root:root /etc/qemu/bridge.conf "$HELPER"
-sudo chmod 0644 /etc/qemu/bridge.conf
-sudo chmod u+s "$HELPER"
-cat /etc/qemu/bridge.conf
-
-### optional cleanup if you previously used the fixed tap0 setup
-sudo nmcli con down tap0 2>/dev/null || true
-sudo nmcli con delete tap0 2>/dev/null || true
-sudo ip link del tap0 2>/dev/null || true
-nmcli -t -f NAME,TYPE,DEVICE con show | grep -E '^br0:' || true
-ip -br link show "$BR"
-
-### if `ip -br link show "$BR"` reports `DOWN` / `NO-CARRIER`, the uplink is not attached to the bridge yet
-nmcli -t -f NAME con show | grep -Fxq "$SLAVE_CON" \
-  || sudo nmcli con add type bridge-slave ifname "$UPLINK" con-name "$SLAVE_CON" master "$BR"
-sudo nmcli con up "$SLAVE_CON"
-sudo nmcli con up "$BR"
-bridge link show | grep -E "$BR|$UPLINK" || true
-
-
-
-
-
-SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="2109", ATTR{idProduct}=="2813", MODE="0666", TAG+="uaccess"
-SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_interface", ATTRS{idVendor}=="2109", ATTRS{idProduct}=="2813", RUN+="/bin/sh -c 'if [ -L /sys/bus/usb/devices/%k/driver ]; then echo %k > /sys/bus/usb/drivers/$(basename $(readlink -f /sys/bus/usb/devices/%k/driver))/unbind; fi'"
-SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="0951", ATTR{idProduct}=="16a4", MODE="0666", TAG+="uaccess"
-SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_interface", ATTRS{idVendor}=="0951", ATTRS{idProduct}=="16a4", RUN+="/bin/sh -c 'if [ -L /sys/bus/usb/devices/%k/driver ]; then echo %k > /sys/bus/usb/drivers/$(basename $(readlink -f /sys/bus/usb/devices/%k/driver))/unbind; fi'"
-SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="303a", ATTR{idProduct}=="1001", MODE="0666", TAG+="uaccess"
-SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_interface", ATTRS{idVendor}=="303a", ATTRS{idProduct}=="1001", RUN+="/bin/sh -c 'if [ -L /sys/bus/usb/devices/%k/driver ]; then echo %k > /sys/bus/usb/drivers/$(basename $(readlink -f /sys/bus/usb/devices/%k/driver))/unbind; fi'"
-SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="058f", ATTR{idProduct}=="6387", MODE="0666", TAG+="uaccess"
-SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_interface", ATTRS{idVendor}=="058f", ATTRS{idProduct}=="6387", RUN+="/bin/sh -c 'if [ -L /sys/bus/usb/devices/%k/driver ]; then echo %k > /sys/bus/usb/drivers/$(basename $(readlink -f /sys/bus/usb/devices/%k/driver))/unbind; fi'"
-SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="07cf", ATTR{idProduct}=="6803", MODE="0666", TAG+="uaccess"
-SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_interface", ATTRS{idVendor}=="07cf", ATTRS{idProduct}=="6803", RUN+="/bin/sh -c 'if [ -L /sys/bus/usb/devices/%k/driver ]; then echo %k > /sys/bus/usb/drivers/$(basename $(readlink -f /sys/bus/usb/devices/%k/driver))/unbind; fi'"
-SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="1462", ATTR{idProduct}=="7e03", MODE="0666", TAG+="uaccess"
-SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_interface", ATTRS{idVendor}=="1462", ATTRS{idProduct}=="7e03", RUN+="/bin/sh -c 'if [ -L /sys/bus/usb/devices/%k/driver ]; then echo %k > /sys/bus/usb/drivers/$(basename $(readlink -f /sys/bus/usb/devices/%k/driver))/unbind; fi'"
-
-sudo modprobe vfio
-sudo modprobe vfio-pci
-sudo modprobe vfio_iommu_type1
-
-ls /sys/bus/pci/drivers | grep vfio
-
-echo 0000:00:02.0 | sudo tee /sys/bus/pci/devices/0000:00:02.0/driver/unbind
-echo vfio-pci | sudo tee /sys/bus/pci/devices/0000:00:02.0/driver_override
-echo 0000:00:02.0 | sudo tee /sys/bus/pci/drivers_probe
-
-ls -l /dev/vfio
-lspci -nnk -s 00:02.0
-
-echo 0000:00:02.0 | sudo tee /sys/bus/pci/drivers/vfio-pci/bind
-ls -l /dev/vfio
-lspci -nnk -s 00:02.0
-tee: /sys/bus/pci/drivers/vfio-pci/bind: No such file or directory (os error 2)
-0000:00:02.0
-total 0
-crw-rw-rw- 1 root root 10, 196 Mar 16 21:47 vfio
-00:02.0 Display controller [0380]: Intel Corporation Raptor Lake-S GT1 [UHD Graphics 770] [8086:a780] (rev 04)
-        DeviceName: Onboard - Video
-        Subsystem: Micro-Star International Co., Ltd. [MSI] Device [1462:7e03]
-        Kernel modules: i915, xe
-sudo reboot
-sudo modprobe vfio-pci
-sudo modprobe vfio_iommu_type1
-echo vfio-pci | sudo tee /sys/bus/pci/devices/0000:00:02.0/driver_override
-echo 0000:00:02.0 | sudo tee /sys/bus/pci/drivers_probe
-ls -l /dev/vfio
-lspci -nnk -s 00:02.0
-echo 0000:00:02.0 | sudo tee /sys/bus/pci/devices/0000:00:02.0/driver/unbind
-echo vfio-pci | sudo tee /sys/bus/pci/devices/0000:00:02.0/driver_override
-echo 0000:00:02.0 | sudo tee /sys/bus/pci/drivers_probe
-
-Use this on your Ubuntu 25.10 + GRUB host:
-
-sudo tee /etc/modprobe.d/trueos-vfio-intel.conf >/dev/null <<'EOF'
-options vfio-pci ids=8086:a780
-softdep i915 pre: vfio-pci
-softdep xe pre: vfio-pci
-sudo tee -a /etc/initramfs-tools/modules >/dev/null <<'EOF'
-vfio
-vfio_pci
-vfio_iommu_type1
-GRUB_CMDLINE_LINUX_DEFAULT="quiet splash intel_iommu=on iommu=pt vfio-pci.ids=8086:a780"
-sudo update-initramfs -u
-sudo update-grub
-sudo reboot
-
-
-lspci -nnk -s 00:02.0
-ls -l /dev/vfio
-
-
-### whipe nvme
-Claim To Host nvme
-
-echo 0000:08:00.0 | sudo tee /sys/bus/pci/devices/0000:08:00.0/driver/unbind
-echo nvme | sudo tee /sys/bus/pci/devices/0000:08:00.0/driver_override
-echo 0000:08:00.0 | sudo tee /sys/bus/pci/drivers_probe
-lspci -nnk -s 08:00.0
-Expected:
-Kernel driver in use: nvme
-
-Wipe
-
-sudo wipefs -a /dev/nvme2n1
-sudo sgdisk --zap-all /dev/nvme2n1
-sudo blkdiscard -f /dev/nvme2n1
-sudo wipefs /dev/nvme2n1
-sudo sgdisk -p /dev/nvme2n1
-Expected:
-wipefs shows nothing useful
-sgdisk -p shows no valid GPT / empty disk
-
-Claim To QEMU / VFIO
-
-sudo modprobe vfio
-sudo modprobe vfio-pci
-sudo modprobe vfio_iommu_type1
-
-echo 0000:08:00.0 | sudo tee /sys/bus/pci/devices/0000:08:00.0/driver/unbind
-echo vfio-pci | sudo tee /sys/bus/pci/devices/0000:08:00.0/driver_override
-echo 0000:08:00.0 | sudo tee /sys/bus/pci/drivers_probe
-lspci -nnk -s 08:00.0
-ls -l /dev/vfio
-
 
 ### rust-analyzer kernel-source smoke check
 
@@ -450,7 +159,6 @@ ConPink 	FF_55_FF
 ConBlue 	08_18_30
 ConWhite 	FF_FF_FF
 
-
 **bold**
 *italic*
 `inline code`
@@ -463,156 +171,140 @@ ConWhite 	FF_FF_FF
 ## Asset preview smoke test
 
 <details>
-<summary>Repository images and generated dependency graphs (161)</summary>
+<summary>Repository images and generated dependency graphs</summary>
 
-- `HorizonServer.png`  
-  ![HorizonServer.png](HorizonServer.png)
+- `tools/HorizonServer.png`  
+  ![tools/HorizonServer.png](tools/HorizonServer.png)
 - `logo.jpg`  
   ![logo.jpg](logo.jpg)
-- `tools/depgraph/by-root/acpi-v6.1.1.svg`  
-  ![acpi v6.1.1.svg](tools/depgraph/by-root/acpi-v6.1.1.svg)
-- `tools/depgraph/by-root/aes-v0.8.4.svg`  
-  ![aes v0.8.4.svg](tools/depgraph/by-root/aes-v0.8.4.svg)
-- `tools/depgraph/by-root/alsa-v0.11.0.svg`  
-  ![alsa v0.11.0.svg](tools/depgraph/by-root/alsa-v0.11.0.svg)
-- `tools/depgraph/by-root/aml-v0.16.4.svg`  
-  ![aml v0.16.4.svg](tools/depgraph/by-root/aml-v0.16.4.svg)
-- `tools/depgraph/by-root/base64-v0.22.1.svg`  
-  ![base64 v0.22.1.svg](tools/depgraph/by-root/base64-v0.22.1.svg)
-- `tools/depgraph/by-root/bytes-v1.12.0.svg`  
-  ![bytes v1.12.0.svg](tools/depgraph/by-root/bytes-v1.12.0.svg)
-- `tools/depgraph/by-root/core3-v0.1.2.svg`  
-  ![core3 v0.1.2.svg](tools/depgraph/by-root/core3-v0.1.2.svg)
-- `tools/depgraph/by-root/crab-usb-v0.9.1.svg`  
-  ![crab usb v0.9.1.svg](tools/depgraph/by-root/crab-usb-v0.9.1.svg)
-- `tools/depgraph/by-root/crc32fast-v1.5.0.svg`  
-  ![crc32fast v1.5.0.svg](tools/depgraph/by-root/crc32fast-v1.5.0.svg)
-- `tools/depgraph/by-root/ctr-v0.9.2.svg`  
-  ![ctr v0.9.2.svg](tools/depgraph/by-root/ctr-v0.9.2.svg)
-- `tools/depgraph/by-root/dma-api-v0.7.3.svg`  
-  ![dma api v0.7.3.svg](tools/depgraph/by-root/dma-api-v0.7.3.svg)
-- `tools/depgraph/by-root/embassy-executor-v0.10.0.svg`  
-  ![embassy executor v0.10.0.svg](tools/depgraph/by-root/embassy-executor-v0.10.0.svg)
-- `tools/depgraph/by-root/embassy-sync-v0.8.0.svg`  
-  ![embassy sync v0.8.0.svg](tools/depgraph/by-root/embassy-sync-v0.8.0.svg)
-- `tools/depgraph/by-root/embassy-time-driver-v0.2.2.svg`  
-  ![embassy time driver v0.2.2.svg](tools/depgraph/by-root/embassy-time-driver-v0.2.2.svg)
-- `tools/depgraph/by-root/embassy-time-v0.5.1.svg`  
-  ![embassy time v0.5.1.svg](tools/depgraph/by-root/embassy-time-v0.5.1.svg)
-- `tools/depgraph/by-root/embedded-io-async-v0.7.0.svg`  
-  ![embedded io async v0.7.0.svg](tools/depgraph/by-root/embedded-io-async-v0.7.0.svg)
-- `tools/depgraph/by-root/embedded-websocket-v0.9.4.svg`  
-  ![embedded websocket v0.9.4.svg](tools/depgraph/by-root/embedded-websocket-v0.9.4.svg)
-- `tools/depgraph/by-root/euclid-v0.22.13.svg`  
-  ![euclid v0.22.13.svg](tools/depgraph/by-root/euclid-v0.22.13.svg)
-- `tools/depgraph/by-root/getrandom-v0.2.17.svg`  
-  ![getrandom v0.2.17.svg](tools/depgraph/by-root/getrandom-v0.2.17.svg)
-- `tools/depgraph/by-root/hashbrown-v0.17.1.svg`  
-  ![hashbrown v0.17.1.svg](tools/depgraph/by-root/hashbrown-v0.17.1.svg)
-- `tools/depgraph/by-root/heapless-v0.9.3.svg`  
-  ![heapless v0.9.3.svg](tools/depgraph/by-root/heapless-v0.9.3.svg)
-- `tools/depgraph/by-root/hmac-v0.12.1.svg`  
-  ![hmac v0.12.1.svg](tools/depgraph/by-root/hmac-v0.12.1.svg)
-- `tools/depgraph/by-root/hyper-v1.9.0.svg`  
-  ![hyper v1.9.0.svg](tools/depgraph/by-root/hyper-v1.9.0.svg)
-- `tools/depgraph/by-root/kurbo-v0.11.3.svg`  
-  ![kurbo v0.11.3.svg](tools/depgraph/by-root/kurbo-v0.11.3.svg)
-- `tools/depgraph/by-root/libm-v0.2.16.svg`  
-  ![libm v0.2.16.svg](tools/depgraph/by-root/libm-v0.2.16.svg)
-- `tools/depgraph/by-root/limine-v0.6.5.svg`  
-  ![limine v0.6.5.svg](tools/depgraph/by-root/limine-v0.6.5.svg)
-- `tools/depgraph/by-root/log-v0.4.33.svg`  
-  ![log v0.4.33.svg](tools/depgraph/by-root/log-v0.4.33.svg)
-- `tools/depgraph/by-root/lyon_geom-v1.0.19.svg`  
-  ![lyon geom v1.0.19.svg](tools/depgraph/by-root/lyon_geom-v1.0.19.svg)
-- `tools/depgraph/by-root/lyon_tessellation-v1.0.20.svg`  
-  ![lyon tessellation v1.0.20.svg](tools/depgraph/by-root/lyon_tessellation-v1.0.20.svg)
-- `tools/depgraph/by-root/lzma-rust2-v0.16.4.svg`  
-  ![lzma rust2 v0.16.4.svg](tools/depgraph/by-root/lzma-rust2-v0.16.4.svg)
-- `tools/depgraph/by-root/memchr-v2.8.2.svg`  
-  ![memchr v2.8.2.svg](tools/depgraph/by-root/memchr-v2.8.2.svg)
-- `tools/depgraph/by-root/miniz_oxide-v0.9.1.svg`  
-  ![miniz oxide v0.9.1.svg](tools/depgraph/by-root/miniz_oxide-v0.9.1.svg)
-- `tools/depgraph/by-root/mio-v1.2.0.svg`  
-  ![mio v1.2.0.svg](tools/depgraph/by-root/mio-v1.2.0.svg)
-- `tools/depgraph/by-root/parry2d-v0.26.1.svg`  
-  ![parry2d v0.26.1.svg](tools/depgraph/by-root/parry2d-v0.26.1.svg)
-- `tools/depgraph/by-root/png-v0.18.1.svg`  
-  ![png v0.18.1.svg](tools/depgraph/by-root/png-v0.18.1.svg)
-- `tools/depgraph/by-root/pure_vorbis-v0.0.1.svg`  
-  ![pure vorbis v0.0.1.svg](tools/depgraph/by-root/pure_vorbis-v0.0.1.svg)
-- `tools/depgraph/by-root/rand_chacha-v0.3.1.svg`  
-  ![rand chacha v0.3.1.svg](tools/depgraph/by-root/rand_chacha-v0.3.1.svg)
-- `tools/depgraph/by-root/rand_core-v0.6.4.svg`  
-  ![rand core v0.6.4.svg](tools/depgraph/by-root/rand_core-v0.6.4.svg)
-- `tools/depgraph/by-root/raw-cpuid-v11.6.0.svg`  
-  ![raw cpuid v11.6.0.svg](tools/depgraph/by-root/raw-cpuid-v11.6.0.svg)
-- `tools/depgraph/by-root/rdrand-v0.8.3.svg`  
-  ![rdrand v0.8.3.svg](tools/depgraph/by-root/rdrand-v0.8.3.svg)
-- `tools/depgraph/by-root/regex-automata-v0.4.14.svg`  
-  ![regex automata v0.4.14.svg](tools/depgraph/by-root/regex-automata-v0.4.14.svg)
-- `tools/depgraph/by-root/rsa-v0.9.10.svg`  
-  ![rsa v0.9.10.svg](tools/depgraph/by-root/rsa-v0.9.10.svg)
-- `tools/depgraph/by-root/rustls-rustcrypto-v0.0.2-alpha.svg`  
-  ![rustls rustcrypto v0.0.2 alpha.svg](tools/depgraph/by-root/rustls-rustcrypto-v0.0.2-alpha.svg)
-- `tools/depgraph/by-root/rustls-v0.23.41.svg`  
-  ![rustls v0.23.41.svg](tools/depgraph/by-root/rustls-v0.23.41.svg)
-- `tools/depgraph/by-root/serde-v1.0.228.svg`  
-  ![serde v1.0.228.svg](tools/depgraph/by-root/serde-v1.0.228.svg)
-- `tools/depgraph/by-root/serde_json-v1.0.150.svg`  
-  ![serde json v1.0.150.svg](tools/depgraph/by-root/serde_json-v1.0.150.svg)
-- `tools/depgraph/by-root/sha1-v0.10.6.svg`  
-  ![sha1 v0.10.6.svg](tools/depgraph/by-root/sha1-v0.10.6.svg)
-- `tools/depgraph/by-root/sha2-v0.10.9.svg`  
-  ![sha2 v0.10.9.svg](tools/depgraph/by-root/sha2-v0.10.9.svg)
-- `tools/depgraph/by-root/smoltcp-v0.13.1.svg`  
-  ![smoltcp v0.13.1.svg](tools/depgraph/by-root/smoltcp-v0.13.1.svg)
-- `tools/depgraph/by-root/socket2-v0.6.3.svg`  
-  ![socket2 v0.6.3.svg](tools/depgraph/by-root/socket2-v0.6.3.svg)
-- `tools/depgraph/by-root/spin-v0.10.0.svg`  
-  ![spin v0.10.0.svg](tools/depgraph/by-root/spin-v0.10.0.svg)
-- `tools/depgraph/by-root/symphonia-codec-aac-v0.5.5.svg`  
-  ![symphonia codec aac v0.5.5.svg](tools/depgraph/by-root/symphonia-codec-aac-v0.5.5.svg)
-- `tools/depgraph/by-root/symphonia-core-v0.5.5.svg`  
-  ![symphonia core v0.5.5.svg](tools/depgraph/by-root/symphonia-core-v0.5.5.svg)
-- `tools/depgraph/by-root/tiny-skia-path-v0.11.4.svg`  
-  ![tiny skia path v0.11.4.svg](tools/depgraph/by-root/tiny-skia-path-v0.11.4.svg)
-- `tools/depgraph/by-root/tinyaudio-v2.0.0.svg`  
-  ![tinyaudio v2.0.0.svg](tools/depgraph/by-root/tinyaudio-v2.0.0.svg)
-- `tools/depgraph/by-root/tower-v0.5.3.svg`  
-  ![tower v0.5.3.svg](tools/depgraph/by-root/tower-v0.5.3.svg)
-- `tools/depgraph/by-root/trueos-esp-v0.1.0.svg`  
-  ![trueos esp v0.1.0.svg](tools/depgraph/by-root/trueos-esp-v0.1.0.svg)
-- `tools/depgraph/by-root/trueos-fs-v0.0.1.svg`  
-  ![trueos fs v0.0.1.svg](tools/depgraph/by-root/trueos-fs-v0.0.1.svg)
-- `tools/depgraph/by-root/trueos-io-v0.1.0.svg`  
-  ![trueos io v0.1.0.svg](tools/depgraph/by-root/trueos-io-v0.1.0.svg)
-- `tools/depgraph/by-root/trueos-locale-v0.1.0.svg`  
-  ![trueos locale v0.1.0.svg](tools/depgraph/by-root/trueos-locale-v0.1.0.svg)
-- `tools/depgraph/by-root/trueos-math-v0.1.0.svg`  
-  ![trueos math v0.1.0.svg](tools/depgraph/by-root/trueos-math-v0.1.0.svg)
-- `tools/depgraph/by-root/trueos-qjs-v0.1.0.svg`  
-  ![trueos qjs v0.1.0.svg](tools/depgraph/by-root/trueos-qjs-v0.1.0.svg)
-- `tools/depgraph/by-root/trueos-vm-v0.1.0.svg`  
-  ![trueos vm v0.1.0.svg](tools/depgraph/by-root/trueos-vm-v0.1.0.svg)
-- `tools/depgraph/by-root/unicode-segmentation-v1.13.3.svg`  
-  ![unicode segmentation v1.13.3.svg](tools/depgraph/by-root/unicode-segmentation-v1.13.3.svg)
-- `tools/depgraph/by-root/usvg-v0.45.1.svg`  
-  ![usvg v0.45.1.svg](tools/depgraph/by-root/usvg-v0.45.1.svg)
-- `tools/depgraph/by-root/v-v0.1.0.svg`  
-  ![v v0.1.0.svg](tools/depgraph/by-root/v-v0.1.0.svg)
-- `tools/depgraph/by-root/webpki-roots-v1.0.8.svg`  
-  ![webpki roots v1.0.8.svg](tools/depgraph/by-root/webpki-roots-v1.0.8.svg)
-- `tools/depgraph/by-root/x86_64-v0.15.4.svg`  
-  ![x86 64 v0.15.4.svg](tools/depgraph/by-root/x86_64-v0.15.4.svg)
-- `tools/depgraph/by-root/zeroize-v1.9.0.svg`  
-  ![zeroize v1.9.0.svg](tools/depgraph/by-root/zeroize-v1.9.0.svg)
-- `tools/depgraph/by-root/zune-core-v0.5.1.svg`  
-  ![zune core v0.5.1.svg](tools/depgraph/by-root/zune-core-v0.5.1.svg)
-- `tools/depgraph/by-root/zune-jpeg-v0.5.15.svg`  
-  ![zune jpeg v0.5.15.svg](tools/depgraph/by-root/zune-jpeg-v0.5.15.svg)
-- `tools/depgraph/trueos-depth-tree.svg`  
-  ![trueos depth tree.svg](tools/depgraph/trueos-depth-tree.svg)
+- `tools/docs/depgraph/by-root/acpi-v6.1.1.svg`  
+  ![acpi v6.1.1.svg](tools/docs/depgraph/by-root/acpi-v6.1.1.svg)
+- `tools/docs/depgraph/by-root/alsa-v0.11.0.svg`  
+  ![alsa v0.11.0.svg](tools/docs/depgraph/by-root/alsa-v0.11.0.svg)
+- `tools/docs/depgraph/by-root/aml-v0.16.4.svg`  
+  ![aml v0.16.4.svg](tools/docs/depgraph/by-root/aml-v0.16.4.svg)
+- `tools/docs/depgraph/by-root/bytes-v1.12.0.svg`  
+  ![bytes v1.12.0.svg](tools/docs/depgraph/by-root/bytes-v1.12.0.svg)
+- `tools/docs/depgraph/by-root/core3-v0.1.2.svg`  
+  ![core3 v0.1.2.svg](tools/docs/depgraph/by-root/core3-v0.1.2.svg)
+- `tools/docs/depgraph/by-root/crab-usb-v0.9.1.svg`  
+  ![crab usb v0.9.1.svg](tools/docs/depgraph/by-root/crab-usb-v0.9.1.svg)
+- `tools/docs/depgraph/by-root/crc32fast-v1.5.0.svg`  
+  ![crc32fast v1.5.0.svg](tools/docs/depgraph/by-root/crc32fast-v1.5.0.svg)
+- `tools/docs/depgraph/by-root/dma-api-v0.7.3.svg`  
+  ![dma api v0.7.3.svg](tools/docs/depgraph/by-root/dma-api-v0.7.3.svg)
+- `tools/docs/depgraph/by-root/embassy-executor-v0.10.0.svg`  
+  ![embassy executor v0.10.0.svg](tools/docs/depgraph/by-root/embassy-executor-v0.10.0.svg)
+- `tools/docs/depgraph/by-root/embassy-sync-v0.8.0.svg`  
+  ![embassy sync v0.8.0.svg](tools/docs/depgraph/by-root/embassy-sync-v0.8.0.svg)
+- `tools/docs/depgraph/by-root/embassy-time-driver-v0.2.2.svg`  
+  ![embassy time driver v0.2.2.svg](tools/docs/depgraph/by-root/embassy-time-driver-v0.2.2.svg)
+- `tools/docs/depgraph/by-root/embassy-time-v0.5.1.svg`  
+  ![embassy time v0.5.1.svg](tools/docs/depgraph/by-root/embassy-time-v0.5.1.svg)
+- `tools/docs/depgraph/by-root/embedded-io-async-v0.7.0.svg`  
+  ![embedded io async v0.7.0.svg](tools/docs/depgraph/by-root/embedded-io-async-v0.7.0.svg)
+- `tools/docs/depgraph/by-root/embedded-websocket-v0.9.4.svg`  
+  ![embedded websocket v0.9.4.svg](tools/docs/depgraph/by-root/embedded-websocket-v0.9.4.svg)
+- `tools/docs/depgraph/by-root/euclid-v0.22.13.svg`  
+  ![euclid v0.22.13.svg](tools/docs/depgraph/by-root/euclid-v0.22.13.svg)
+- `tools/docs/depgraph/by-root/getrandom-v0.2.17.svg`  
+  ![getrandom v0.2.17.svg](tools/docs/depgraph/by-root/getrandom-v0.2.17.svg)
+- `tools/docs/depgraph/by-root/hashbrown-v0.17.1.svg`  
+  ![hashbrown v0.17.1.svg](tools/docs/depgraph/by-root/hashbrown-v0.17.1.svg)
+- `tools/docs/depgraph/by-root/heapless-v0.9.3.svg`  
+  ![heapless v0.9.3.svg](tools/docs/depgraph/by-root/heapless-v0.9.3.svg)
+- `tools/docs/depgraph/by-root/hyper-v1.9.0.svg`  
+  ![hyper v1.9.0.svg](tools/docs/depgraph/by-root/hyper-v1.9.0.svg)
+- `tools/docs/depgraph/by-root/kurbo-v0.11.3.svg`  
+  ![kurbo v0.11.3.svg](tools/docs/depgraph/by-root/kurbo-v0.11.3.svg)
+- `tools/docs/depgraph/by-root/libm-v0.2.16.svg`  
+  ![libm v0.2.16.svg](tools/docs/depgraph/by-root/libm-v0.2.16.svg)
+- `tools/docs/depgraph/by-root/limine-v0.6.5.svg`  
+  ![limine v0.6.5.svg](tools/docs/depgraph/by-root/limine-v0.6.5.svg)
+- `tools/docs/depgraph/by-root/lyon_geom-v1.0.19.svg`  
+  ![lyon geom v1.0.19.svg](tools/docs/depgraph/by-root/lyon_geom-v1.0.19.svg)
+- `tools/docs/depgraph/by-root/lyon_tessellation-v1.0.20.svg`  
+  ![lyon tessellation v1.0.20.svg](tools/docs/depgraph/by-root/lyon_tessellation-v1.0.20.svg)
+- `tools/docs/depgraph/by-root/lzma-rust2-v0.16.4.svg`  
+  ![lzma rust2 v0.16.4.svg](tools/docs/depgraph/by-root/lzma-rust2-v0.16.4.svg)
+- `tools/docs/depgraph/by-root/memchr-v2.8.2.svg`  
+  ![memchr v2.8.2.svg](tools/docs/depgraph/by-root/memchr-v2.8.2.svg)
+- `tools/docs/depgraph/by-root/miniz_oxide-v0.9.1.svg`  
+  ![miniz oxide v0.9.1.svg](tools/docs/depgraph/by-root/miniz_oxide-v0.9.1.svg)
+- `tools/docs/depgraph/by-root/mio-v1.2.0.svg`  
+  ![mio v1.2.0.svg](tools/docs/depgraph/by-root/mio-v1.2.0.svg)
+- `tools/docs/depgraph/by-root/parry2d-v0.26.1.svg`  
+  ![parry2d v0.26.1.svg](tools/docs/depgraph/by-root/parry2d-v0.26.1.svg)
+- `tools/docs/depgraph/by-root/png-v0.18.1.svg`  
+  ![png v0.18.1.svg](tools/docs/depgraph/by-root/png-v0.18.1.svg)
+- `tools/docs/depgraph/by-root/rand_chacha-v0.3.1.svg`  
+  ![rand chacha v0.3.1.svg](tools/docs/depgraph/by-root/rand_chacha-v0.3.1.svg)
+- `tools/docs/depgraph/by-root/rand_core-v0.6.4.svg`  
+  ![rand core v0.6.4.svg](tools/docs/depgraph/by-root/rand_core-v0.6.4.svg)
+- `tools/docs/depgraph/by-root/raw-cpuid-v11.6.0.svg`  
+  ![raw cpuid v11.6.0.svg](tools/docs/depgraph/by-root/raw-cpuid-v11.6.0.svg)
+- `tools/docs/depgraph/by-root/rdrand-v0.8.3.svg`  
+  ![rdrand v0.8.3.svg](tools/docs/depgraph/by-root/rdrand-v0.8.3.svg)
+- `tools/docs/depgraph/by-root/regex-automata-v0.4.14.svg`  
+  ![regex automata v0.4.14.svg](tools/docs/depgraph/by-root/regex-automata-v0.4.14.svg)
+- `tools/docs/depgraph/by-root/rustls-rustcrypto-v0.0.2-alpha.svg`  
+  ![rustls rustcrypto v0.0.2 alpha.svg](tools/docs/depgraph/by-root/rustls-rustcrypto-v0.0.2-alpha.svg)
+- `tools/docs/depgraph/by-root/rustls-v0.23.41.svg`  
+  ![rustls v0.23.41.svg](tools/docs/depgraph/by-root/rustls-v0.23.41.svg)
+- `tools/docs/depgraph/by-root/serde-v1.0.228.svg`  
+  ![serde v1.0.228.svg](tools/docs/depgraph/by-root/serde-v1.0.228.svg)
+- `tools/docs/depgraph/by-root/serde_json-v1.0.150.svg`  
+  ![serde json v1.0.150.svg](tools/docs/depgraph/by-root/serde_json-v1.0.150.svg)
+- `tools/docs/depgraph/by-root/sha2-v0.10.9.svg`  
+  ![sha2 v0.10.9.svg](tools/docs/depgraph/by-root/sha2-v0.10.9.svg)
+- `tools/docs/depgraph/by-root/smoltcp-v0.13.1.svg`  
+  ![smoltcp v0.13.1.svg](tools/docs/depgraph/by-root/smoltcp-v0.13.1.svg)
+- `tools/docs/depgraph/by-root/socket2-v0.6.3.svg`  
+  ![socket2 v0.6.3.svg](tools/docs/depgraph/by-root/socket2-v0.6.3.svg)
+- `tools/docs/depgraph/by-root/spin-v0.10.0.svg`  
+  ![spin v0.10.0.svg](tools/docs/depgraph/by-root/spin-v0.10.0.svg)
+- `tools/docs/depgraph/by-root/symphonia-codec-aac-v0.5.5.svg`  
+  ![symphonia codec aac v0.5.5.svg](tools/docs/depgraph/by-root/symphonia-codec-aac-v0.5.5.svg)
+- `tools/docs/depgraph/by-root/symphonia-core-v0.5.5.svg`  
+  ![symphonia core v0.5.5.svg](tools/docs/depgraph/by-root/symphonia-core-v0.5.5.svg)
+- `tools/docs/depgraph/by-root/tiny-skia-path-v0.11.4.svg`  
+  ![tiny skia path v0.11.4.svg](tools/docs/depgraph/by-root/tiny-skia-path-v0.11.4.svg)
+- `tools/docs/depgraph/by-root/tinyaudio-v2.0.0.svg`  
+  ![tinyaudio v2.0.0.svg](tools/docs/depgraph/by-root/tinyaudio-v2.0.0.svg)
+- `tools/docs/depgraph/by-root/tower-v0.5.3.svg`  
+  ![tower v0.5.3.svg](tools/docs/depgraph/by-root/tower-v0.5.3.svg)
+- `tools/docs/depgraph/by-root/trueos-esp-v0.1.0.svg`  
+  ![trueos esp v0.1.0.svg](tools/docs/depgraph/by-root/trueos-esp-v0.1.0.svg)
+- `tools/docs/depgraph/by-root/trueos-fs-v0.0.1.svg`  
+  ![trueos fs v0.0.1.svg](tools/docs/depgraph/by-root/trueos-fs-v0.0.1.svg)
+- `tools/docs/depgraph/by-root/trueos-io-v0.1.0.svg`  
+  ![trueos io v0.1.0.svg](tools/docs/depgraph/by-root/trueos-io-v0.1.0.svg)
+- `tools/docs/depgraph/by-root/trueos-locale-v0.1.0.svg`  
+  ![trueos locale v0.1.0.svg](tools/docs/depgraph/by-root/trueos-locale-v0.1.0.svg)
+- `tools/docs/depgraph/by-root/trueos-math-v0.1.0.svg`  
+  ![trueos math v0.1.0.svg](tools/docs/depgraph/by-root/trueos-math-v0.1.0.svg)
+- `tools/docs/depgraph/by-root/trueos-qjs-v0.1.0.svg`  
+  ![trueos qjs v0.1.0.svg](tools/docs/depgraph/by-root/trueos-qjs-v0.1.0.svg)
+- `tools/docs/depgraph/by-root/trueos-vm-v0.1.0.svg`  
+  ![trueos vm v0.1.0.svg](tools/docs/depgraph/by-root/trueos-vm-v0.1.0.svg)
+- `tools/docs/depgraph/by-root/unicode-segmentation-v1.13.3.svg`  
+  ![unicode segmentation v1.13.3.svg](tools/docs/depgraph/by-root/unicode-segmentation-v1.13.3.svg)
+- `tools/docs/depgraph/by-root/usvg-v0.45.1.svg`  
+  ![usvg v0.45.1.svg](tools/docs/depgraph/by-root/usvg-v0.45.1.svg)
+- `tools/docs/depgraph/by-root/v-v0.1.0.svg`  
+  ![v v0.1.0.svg](tools/docs/depgraph/by-root/v-v0.1.0.svg)
+- `tools/docs/depgraph/by-root/webpki-roots-v1.0.8.svg`  
+  ![webpki roots v1.0.8.svg](tools/docs/depgraph/by-root/webpki-roots-v1.0.8.svg)
+- `tools/docs/depgraph/by-root/x86_64-v0.15.4.svg`  
+  ![x86 64 v0.15.4.svg](tools/docs/depgraph/by-root/x86_64-v0.15.4.svg)
+- `tools/docs/depgraph/by-root/zeroize-v1.9.0.svg`  
+  ![zeroize v1.9.0.svg](tools/docs/depgraph/by-root/zeroize-v1.9.0.svg)
+- `tools/docs/depgraph/by-root/zune-core-v0.5.1.svg`  
+  ![zune core v0.5.1.svg](tools/docs/depgraph/by-root/zune-core-v0.5.1.svg)
+- `tools/docs/depgraph/by-root/zune-jpeg-v0.5.15.svg`  
+  ![zune jpeg v0.5.15.svg](tools/docs/depgraph/by-root/zune-jpeg-v0.5.15.svg)
+- `tools/docs/depgraph/trueos-depth-tree.svg`  
+  ![trueos depth tree.svg](tools/docs/depgraph/trueos-depth-tree.svg)
 - `tools/vid/Buro4K.jpeg`  
   ![Buro4K.jpeg](tools/vid/Buro4K.jpeg)
 - `tools/vid/IMG_20260426_020424.jpg`  
@@ -641,11 +333,11 @@ ConWhite 	FF_FF_FF
   ![screenshot.png](vendor/limine/screenshot.png)
 - `vendor/limine/test/bg.jpg`  
   ![bg.jpg](vendor/limine/test/bg.jpg)
-- `vendor/limine/trueos_dist/src/logo.png`  
-  ![logo.png](vendor/limine/trueos_dist/src/logo.png)
-- `vendor/limine/trueos_dist/src/screenshot.png`  
-  ![screenshot.png](vendor/limine/trueos_dist/src/screenshot.png)
-- `vendor/limine/trueos_dist/src/test/bg.jpg`  
-  ![bg.jpg](vendor/limine/trueos_dist/src/test/bg.jpg)
+- `vendor/limine/logo.png`  
+  ![logo.png](vendor/limine/logo.png)
+- `vendor/limine/screenshot.png`  
+  ![screenshot.png](vendor/limine/screenshot.png)
+- `vendor/limine/test/bg.jpg`  
+  ![bg.jpg](vendor/limine/test/bg.jpg)
 
 </details>
