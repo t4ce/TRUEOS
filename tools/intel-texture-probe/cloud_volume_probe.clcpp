@@ -1,0 +1,65 @@
+// Offline cloud-volume sampler oracle for the TRUEOS C++ for OpenCL path.
+//
+// This deliberately contains two entry points with the same coordinate/output
+// contract:
+//   1. cloud_volume_buffer_sample: current direct-RCS-compatible linear half4
+//      buffer plus software trilinear filtering;
+//   2. cloud_volume_image_sample: the desired Intel image3d_t + hardware linear
+//      sampler path.
+//
+// The file is not admitted to the kernel catalog yet.  Bake both entry points
+// for the exact physical target and compare their .ze_info and GEN assembly
+// before teaching the direct-RCS encoder about sampler state or 3D surfaces.
+
+#include "cloud_volume_sampling.hpp"
+
+using namespace trueos::gpgpu::cloud_volume;
+
+__constant sampler_t cloud_linear_clamp_sampler =
+    CLK_NORMALIZED_COORDS_TRUE |
+    CLK_ADDRESS_CLAMP_TO_EDGE |
+    CLK_FILTER_LINEAR;
+
+TRUEOS_REQD_SUB_GROUP_SIZE_16
+__kernel void cloud_volume_buffer_sample(
+    __global const half4 *volume,
+    __global const float4 *coordinates,
+    __global float4 *output,
+    uint width,
+    uint height,
+    uint depth,
+    uint coordinate_count)
+{
+    const uint index = get_global_id(0);
+    if (index >= coordinate_count || width == 0u || height == 0u || depth == 0u) {
+        return;
+    }
+
+    output[index] = sample_rgba16f_linear_clamp(
+        volume,
+        width,
+        height,
+        depth,
+        coordinates[index].xyz);
+}
+
+TRUEOS_REQD_SUB_GROUP_SIZE_16
+__kernel void cloud_volume_image_sample(
+    read_only image3d_t volume,
+    __global const float4 *coordinates,
+    __global float4 *output,
+    uint coordinate_count)
+{
+    const uint index = get_global_id(0);
+    if (index >= coordinate_count) {
+        return;
+    }
+
+    // Host-side probe format: CL_RGBA + CL_HALF_FLOAT.  The eventual bare-metal
+    // equivalent is an R16G16B16A16_FLOAT 3D SURFACE_STATE with sampler 0 set
+    // to normalized coordinates, clamp-to-edge, and trilinear filtering.
+    output[index] = read_imagef(
+        volume,
+        cloud_linear_clamp_sampler,
+        coordinates[index]);
+}
