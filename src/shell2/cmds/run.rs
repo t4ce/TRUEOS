@@ -354,7 +354,7 @@ async fn execute_blueprint(spawner: &Spawner, request: &AppVmLaunchRequest, log:
     }
     if let Some(console_surface) = request.console_surface_override {
         plan.console_surface = console_surface;
-        log("apps: console surface Text (one-shot noninteractive launch)");
+        log("apps: console surface Text (explicit launch contract; terminal handoff disabled)");
     }
     if matrix_target_interrupted(&request.target) {
         log("apps: interrupted before vm start");
@@ -1090,6 +1090,36 @@ pub(crate) async fn submit_archive_name_to_target_from_app_db_with_instance_asyn
         None,
     )
     .await
+}
+
+/// Launch a Blueprint as a self-contained UI4 application.
+///
+/// Unlike a launch entered from an existing Shell2 backend, a desktop launch
+/// has no invoking terminal to lease. The application may still create its own
+/// Shell2 frontend and receive input through its UI4 frame; only the optional
+/// parent-terminal handoff is disabled.
+pub(crate) async fn submit_archive_name_to_target_from_app_db_with_instance_detached_ui_async(
+    target: MatrixTarget,
+    archive_name: &str,
+    app_args: Vec<String>,
+    instance: crate::hv::BlueprintInstanceRequest,
+) -> Result<&'static str, String> {
+    if let Some(module_bytes) = crate::app_db::get(archive_name)? {
+        return submit_module_bytes_to_target_async(
+            target,
+            archive_name,
+            module_bytes,
+            app_args,
+            instance,
+            None,
+            "app.db",
+            0,
+            Some(BlueprintConsoleSurface::Text),
+        )
+        .await;
+    }
+
+    Err(String::from("archive not found"))
 }
 
 /// Launch a built-in Blueprint whose selected mode provably does not exercise

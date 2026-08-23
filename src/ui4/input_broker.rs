@@ -1444,7 +1444,7 @@ async fn ui4_desktop_shell_launcher_task() {
                 },
             });
         }
-        match crate::shell2::cmds::run::submit_archive_name_to_target_from_app_db_with_instance_async(
+        match crate::shell2::cmds::run::submit_archive_name_to_target_from_app_db_with_instance_detached_ui_async(
             target,
             "shell.bp",
             alloc::vec::Vec::new(),
