@@ -2080,17 +2080,50 @@ fn select_streamout_proof_experiment(probe_seq: u32) -> StreamoutProofExperiment
     }
 }
 
+/// Translates Helio's preserved primitive meaning into Intel's native VF
+/// topology field. The returned value is written unchanged to
+/// `3DSTATE_VF_TOPOLOGY` (and to legacy `3DPRIMITIVE` packets).
+///
+/// Intel exposes no line-loop assembly mode. We reject it here instead of
+/// silently expanding indices or changing the immutable mesh. A future
+/// renderer may represent it as two explicit native draws, but that must be a
+/// declared draw-plan operation rather than an importer-side conversion.
+fn intel_topology_from_helio(
+    topology: trueos_helio_artifact::render_ir::PrimitiveTopology,
+) -> Result<u32, &'static str> {
+    use trueos_helio_artifact::render_ir::PrimitiveTopology;
+
+    match topology {
+        PrimitiveTopology::PointList => Ok(INTEL_TOPOLOGY_POINTLIST),
+        PrimitiveTopology::LineList => Ok(INTEL_TOPOLOGY_LINELIST),
+        PrimitiveTopology::LineStrip => Ok(INTEL_TOPOLOGY_LINESTRIP),
+        PrimitiveTopology::TriangleList => Ok(INTEL_TOPOLOGY_TRILIST),
+        PrimitiveTopology::TriangleStrip => Ok(INTEL_TOPOLOGY_TRISTRIP),
+        PrimitiveTopology::TriangleFan => Ok(INTEL_TOPOLOGY_TRIFAN),
+        PrimitiveTopology::LineLoop => Err("intel-line-loop-requires-explicit-draw-plan"),
+    }
+}
+
 impl TriangleBatchMode {
     fn topology(self) -> u32 {
         match self {
             Self::Draw | Self::DrawScreenSpace | Self::VfDraw | Self::VfScreenSpaceDraw => {
-                TRIANGLE_TOPOLOGY_TRILIST
+                intel_topology_from_helio(
+                    trueos_helio_artifact::render_ir::PrimitiveTopology::TriangleList,
+                )
+                .expect("Intel supports triangle lists")
             }
-            Self::VfLineDraw => TRIANGLE_TOPOLOGY_LINELIST,
+            Self::VfLineDraw => intel_topology_from_helio(
+                trueos_helio_artifact::render_ir::PrimitiveTopology::LineList,
+            )
+            .expect("Intel supports line lists"),
             Self::DrawScreenSpaceRect | Self::VfRectDraw | Self::VfRectClipDraw => {
                 TRIANGLE_TOPOLOGY_RECTLIST
             }
-            Self::VfPointDraw => TRIANGLE_TOPOLOGY_POINTLIST,
+            Self::VfPointDraw => intel_topology_from_helio(
+                trueos_helio_artifact::render_ir::PrimitiveTopology::PointList,
+            )
+            .expect("Intel supports point lists"),
             Self::StreamoutProof | Self::VfStreamoutProof | Self::VsStreamoutProof => {
                 TRIANGLE_TOPOLOGY_POINTLIST
             }
@@ -3010,3 +3043,27 @@ static MEMORY_PROOF_LOGGED: AtomicBool = AtomicBool::new(false);
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 static PRIMARY_STRIPE_X_PHASE: AtomicU32 = AtomicU32::new(0);
 static PRIMARY_PROBE_SEQ: AtomicU32 = AtomicU32::new(0);
+
+#[cfg(test)]
+mod primitive_topology_tests {
+    use super::*;
+    use trueos_helio_artifact::render_ir::PrimitiveTopology;
+
+    #[test]
+    fn helio_topologies_map_to_documented_intel_vf_values() {
+        assert_eq!(intel_topology_from_helio(PrimitiveTopology::PointList), Ok(0x01));
+        assert_eq!(intel_topology_from_helio(PrimitiveTopology::LineList), Ok(0x02));
+        assert_eq!(intel_topology_from_helio(PrimitiveTopology::LineStrip), Ok(0x03));
+        assert_eq!(intel_topology_from_helio(PrimitiveTopology::TriangleList), Ok(0x04));
+        assert_eq!(intel_topology_from_helio(PrimitiveTopology::TriangleStrip), Ok(0x05));
+        assert_eq!(intel_topology_from_helio(PrimitiveTopology::TriangleFan), Ok(0x06));
+    }
+
+    #[test]
+    fn line_loop_is_not_silently_rewritten() {
+        assert_eq!(
+            intel_topology_from_helio(PrimitiveTopology::LineLoop),
+            Err("intel-line-loop-requires-explicit-draw-plan")
+        );
+    }
+}

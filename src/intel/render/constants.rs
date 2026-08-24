@@ -720,9 +720,17 @@ const RESULT_OA_RASTER_WM_BEGIN_ID: u32 = 0x0A0A_2101;
 const RESULT_OA_RASTER_WM_END_ID: u32 = 0x0A0A_2102;
 const SO_NUM_PRIMS_WRITTEN_0: usize = 0x5200;
 const SO_WRITE_OFFSET_0: usize = 0x5280;
-const TRIANGLE_TOPOLOGY_POINTLIST: u32 = 1;
-const TRIANGLE_TOPOLOGY_LINELIST: u32 = 2;
-const TRIANGLE_TOPOLOGY_TRILIST: u32 = 4;
+// Intel 3DSTATE_VF_TOPOLOGY / legacy 3DPRIMITIVE topology encodings. These
+// are hardware primitive-assembly modes, not a request to rewrite the mesh.
+const INTEL_TOPOLOGY_POINTLIST: u32 = 0x01;
+const INTEL_TOPOLOGY_LINELIST: u32 = 0x02;
+const INTEL_TOPOLOGY_LINESTRIP: u32 = 0x03;
+const INTEL_TOPOLOGY_TRILIST: u32 = 0x04;
+const INTEL_TOPOLOGY_TRISTRIP: u32 = 0x05;
+const INTEL_TOPOLOGY_TRIFAN: u32 = 0x06;
+// Existing probe name is kept local to avoid making the proof machinery look
+// like a generic mesh conversion path.
+const TRIANGLE_TOPOLOGY_POINTLIST: u32 = INTEL_TOPOLOGY_POINTLIST;
 const TRIANGLE_TOPOLOGY_RECTLIST: u32 = 15;
 const TRIANGLE_PS_MAX_THREADS: u32 = 63;
 const TRIANGLE_VS_URB_START: u32 = 4;

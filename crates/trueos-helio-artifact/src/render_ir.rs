@@ -35,7 +35,62 @@ pub enum TextureFormat {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PrimitiveTopology {
+    /// glTF `POINTS`.
+    PointList,
+    /// glTF `LINES`.
+    LineList,
+    /// glTF `LINE_LOOP`. This is retained in the IR even though Intel's VF
+    /// topology encoding has no line-loop mode of its own.
+    LineLoop,
+    /// glTF `LINE_STRIP`.
+    LineStrip,
     TriangleList,
+    /// glTF `TRIANGLE_STRIP`.
+    TriangleStrip,
+    /// glTF `TRIANGLE_FAN`.
+    TriangleFan,
+}
+
+impl PrimitiveTopology {
+    /// Stable v1 wire value. `TriangleList = 1` is deliberately preserved for
+    /// existing IR artifacts; the remaining values were allocated in unused
+    /// v1 enum space.
+    pub const fn wire_value(self) -> u32 {
+        match self {
+            Self::TriangleList => 1,
+            Self::PointList => 2,
+            Self::LineList => 3,
+            Self::LineLoop => 4,
+            Self::LineStrip => 5,
+            Self::TriangleStrip => 6,
+            Self::TriangleFan => 7,
+        }
+    }
+
+    pub const fn from_wire_value(value: u32) -> Option<Self> {
+        match value {
+            1 => Some(Self::TriangleList),
+            2 => Some(Self::PointList),
+            3 => Some(Self::LineList),
+            4 => Some(Self::LineLoop),
+            5 => Some(Self::LineStrip),
+            6 => Some(Self::TriangleStrip),
+            7 => Some(Self::TriangleFan),
+            _ => None,
+        }
+    }
+
+    /// Whether an indexed draw count has valid primitive assembly for this
+    /// topology. This validates only assembly, not individual index values.
+    pub const fn accepts_index_count(self, count: u32) -> bool {
+        match self {
+            Self::PointList => count >= 1,
+            Self::LineList => count >= 2 && count.is_multiple_of(2),
+            Self::LineLoop | Self::LineStrip => count >= 2,
+            Self::TriangleList => count >= 3 && count.is_multiple_of(3),
+            Self::TriangleStrip | Self::TriangleFan => count >= 3,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -331,7 +386,7 @@ impl<'a> Program<'a> {
                     .and_then(|count| first.checked_add(count))
             })
             .ok_or(Error::InvalidDraw)?;
-        if draw.index_count == 0 || draw.instance_count == 0 || draw_end > available_indices {
+        if draw.instance_count == 0 || draw_end > available_indices {
             return Err(Error::InvalidDraw);
         }
 
@@ -354,10 +409,11 @@ impl<'a> Program<'a> {
             1 => TextureFormat::Depth32Float,
             _ => return Err(Error::InvalidEnum),
         };
-        let topology = match read_u32(bytes, 100) {
-            1 => PrimitiveTopology::TriangleList,
-            _ => return Err(Error::InvalidEnum),
-        };
+        let topology =
+            PrimitiveTopology::from_wire_value(read_u32(bytes, 100)).ok_or(Error::InvalidEnum)?;
+        if !topology.accepts_index_count(draw.index_count) {
+            return Err(Error::InvalidDraw);
+        }
         let front_face = match read_u32(bytes, 104) {
             1 => FrontFace::Ccw,
             2 => FrontFace::Cw,
@@ -604,7 +660,50 @@ mod tests {
         assert_eq!(program.output_dynamic_slot, "output.surface");
         assert_eq!(program.attributes().len(), 3);
         assert_eq!(program.draw.index_count, 3);
+        assert_eq!(program.pipeline.topology, PrimitiveTopology::TriangleList);
         assert_eq!(program.pipeline.cull_mode, CullMode::Back);
+    }
+
+    #[test]
+    fn topology_wire_values_cover_all_native_gltf_modes() {
+        let cases = [
+            (1, PrimitiveTopology::TriangleList, 3),
+            (2, PrimitiveTopology::PointList, 1),
+            (3, PrimitiveTopology::LineList, 2),
+            (4, PrimitiveTopology::LineLoop, 2),
+            (5, PrimitiveTopology::LineStrip, 2),
+            (6, PrimitiveTopology::TriangleStrip, 3),
+            (7, PrimitiveTopology::TriangleFan, 3),
+        ];
+        for (wire, expected, index_count) in cases {
+            assert_eq!(expected.wire_value(), wire);
+            assert_eq!(PrimitiveTopology::from_wire_value(wire), Some(expected));
+
+            let mut bytes = fixture();
+            put_u32(&mut bytes, 100, wire);
+            put_u32(&mut bytes, 212, index_count);
+            assert_eq!(Program::parse(&bytes).unwrap().pipeline.topology, expected);
+        }
+        assert_eq!(PrimitiveTopology::from_wire_value(0), None);
+        assert_eq!(PrimitiveTopology::from_wire_value(8), None);
+    }
+
+    #[test]
+    fn rejects_draw_counts_that_cannot_assemble_the_selected_topology() {
+        for (topology, index_count) in [
+            (PrimitiveTopology::PointList, 0),
+            (PrimitiveTopology::LineList, 3),
+            (PrimitiveTopology::LineLoop, 1),
+            (PrimitiveTopology::LineStrip, 1),
+            (PrimitiveTopology::TriangleList, 4),
+            (PrimitiveTopology::TriangleStrip, 2),
+            (PrimitiveTopology::TriangleFan, 2),
+        ] {
+            let mut bytes = fixture();
+            put_u32(&mut bytes, 100, topology.wire_value());
+            put_u32(&mut bytes, 212, index_count);
+            assert_eq!(Program::parse(&bytes).unwrap_err(), Error::InvalidDraw);
+        }
     }
 
     #[test]
