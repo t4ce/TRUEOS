@@ -105,12 +105,23 @@ addresses or a JSON surrogate. A relocation writes a field as
 unshifted value fits a contiguous mask, then performs a masked RMW. This is
 required for bit-positioned width/height/pitch fields as well as addresses.
 The current bakery does not emit this section or a HELIOA. It now accepts and
-cross-checks three genuinely address-free source-instrumented slices: the V5
-indirect descriptors, V6 sampled/storage/UI4 image-surface templates, and V7
-sim/render-parameter plus descriptor-set-buffer `SURFACE_STATE` templates.
+cross-checks five genuinely address-free source-instrumented slices: the V5
+indirect descriptors, V6 sampled/storage/UI4 image-surface templates, V7
+sim/render-parameter plus descriptor-set-buffer `SURFACE_STATE` templates,
+V8 binding/sampler tables, and V9 descriptor payloads.
 V7 requires exactly the two compute and two graphics roles, binds their
 descriptor layouts/ranges and typed address relocations, and rejects any
 nonzero packed base address. The capture metadata records this as
-`partial-v7`; command packets, binding and sampler tables, descriptor payload
-contents, and program state still lack a complete typed relocation map, so the
-package gate remains fail-closed.
+`partial-v7`. V8 then requires exactly four binding-table records (compute A/B
+stage 5 and graphics A/B stage 4), each a 16-byte zero template with four
+typed `object_offset` relocations, plus four role-complete sampler records with
+the exact proven canonical 16-byte sampler state
+`00401250010000000082040010e00700`. Metadata records this as `partial-v8`. V9
+adds exactly four normalized descriptor-payload records (compute A/B 64 bytes,
+graphics A/B 32 bytes), with exact resource identities and typed relocations;
+metadata advances to `partial-v9`, while command and program state remain
+missing and HELIOA emission remains refused.
+V10A records the six exact V4 workload variants as diagnostic-only raw batch
+evidence, including raw VA, bytes, and SHA-256 fingerprints. These records are
+never address-free state, are not included in `proven_slices`, and cannot
+advance package admission.

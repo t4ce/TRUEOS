@@ -1,0 +1,279 @@
+diff --git a/src/intel/vulkan/anv_private.h b/src/intel/vulkan/anv_private.h
+index a01a0d2..e1a0d19 100644
+--- a/src/intel/vulkan/anv_private.h
++++ b/src/intel/vulkan/anv_private.h
+@@ -4912,6 +4912,16 @@ enum anv_cmd_buffer_exec_mode {
+ 
+ struct anv_measure_batch;
+ 
++struct anv_trueos_helioc_v10a_slice {
++   const struct anv_cmd_buffer                   *owner;
++   const struct anv_batch                        *batch;
++   const void                                    *batch_start;
++   const void                                    *start;
++   uint32_t                                       dispatch_count;
++   bool                                           active;
++   bool                                           invalid;
++};
++
+ struct anv_cmd_buffer {
+    struct vk_command_buffer                     vk;
+ 
+@@ -4927,6 +4937,10 @@ struct anv_cmd_buffer {
+     */
+    void *                                       batch_end;
+ 
++   /* Diagnostic-only HelioC workload slice.  This is deliberately raw batch
++    * evidence: it is neither a relocation model nor package input. */
++   struct anv_trueos_helioc_v10a_slice           trueos_helioc_v10a;
++
+    /* Fields required for the actual chain of anv_batch_bo's.
+     *
+     * These fields are initialized by anv_cmd_buffer_init_batch_bo_chain().
+diff --git a/src/intel/vulkan/genX_cmd_buffer.c b/src/intel/vulkan/genX_cmd_buffer.c
+index 9a3c10e..6a63c81 100644
+--- a/src/intel/vulkan/genX_cmd_buffer.c
++++ b/src/intel/vulkan/genX_cmd_buffer.c
+@@ -235,6 +235,173 @@ anv_trueos_helioc_command_catalog_entry(const struct anv_cmd_buffer *cmd_buffer)
+    return NULL;
+ }
+ 
++void genX(anv_trueos_helioc_v10a_begin_dispatch)(struct anv_cmd_buffer *cmd_buffer,
++                                                   uint32_t base_x, uint32_t base_y,
++                                                   uint32_t base_z, uint32_t groups_x,
++                                                   uint32_t groups_y, uint32_t groups_z);
++void genX(anv_trueos_helioc_v10a_begin_draw)(struct anv_cmd_buffer *cmd_buffer,
++                                              uint32_t vertex_count,
++                                              uint32_t instance_count,
++                                              uint32_t first_vertex,
++                                              uint32_t first_instance);
++void genX(anv_trueos_helioc_v10a_end_draw)(struct anv_cmd_buffer *cmd_buffer);
++
++/* V10A brackets only the named application workload between its first
++ * dispatch (or the step-zero draw) and the direct fullscreen draw.  It is
++ * intentionally raw diagnostic evidence; package construction must reject it.
++ */
++static void
++genX(anv_trueos_helioc_v10a_reset)(struct anv_cmd_buffer *cmd_buffer)
++{
++   cmd_buffer->trueos_helioc_v10a = (struct anv_trueos_helioc_v10a_slice) { 0 };
++}
++
++static bool
++genX(anv_trueos_helioc_v10a_valid_entry)(const struct anv_cmd_buffer *cmd_buffer,
++                                          const struct anv_trueos_helioc_command_catalog *entry)
++{
++   return entry != NULL && entry == anv_trueos_helioc_command_catalog_entry(cmd_buffer) &&
++          cmd_buffer->batch.start != NULL && cmd_buffer->batch.next != NULL &&
++          (const uint8_t *)cmd_buffer->batch.next >= (const uint8_t *)cmd_buffer->batch.start &&
++          (((uintptr_t)cmd_buffer->batch.start | (uintptr_t)cmd_buffer->batch.next) & 3) == 0;
++}
++
++static void
++genX(anv_trueos_helioc_v10a_begin)(struct anv_cmd_buffer *cmd_buffer,
++                                    const struct anv_trueos_helioc_command_catalog *entry)
++{
++   genX(anv_trueos_helioc_v10a_reset)(cmd_buffer);
++   cmd_buffer->trueos_helioc_v10a.owner = cmd_buffer;
++   cmd_buffer->trueos_helioc_v10a.batch = &cmd_buffer->batch;
++   cmd_buffer->trueos_helioc_v10a.batch_start = cmd_buffer->batch.start;
++   cmd_buffer->trueos_helioc_v10a.start = cmd_buffer->batch.next;
++   cmd_buffer->trueos_helioc_v10a.active = true;
++   if (!genX(anv_trueos_helioc_v10a_valid_entry)(cmd_buffer, entry))
++      cmd_buffer->trueos_helioc_v10a.invalid = true;
++}
++
++void
++genX(anv_trueos_helioc_v10a_begin_dispatch)(struct anv_cmd_buffer *cmd_buffer,
++                                             uint32_t base_x, uint32_t base_y,
++                                             uint32_t base_z, uint32_t groups_x,
++                                             uint32_t groups_y, uint32_t groups_z)
++{
++   const struct anv_trueos_helioc_command_catalog *entry =
++      anv_trueos_helioc_command_catalog_entry(cmd_buffer);
++   if (entry == NULL)
++      return;
++
++   if (!cmd_buffer->trueos_helioc_v10a.active) {
++      if (entry->step == 0)
++         return;
++      genX(anv_trueos_helioc_v10a_begin)(cmd_buffer, entry);
++   }
++
++   if (!genX(anv_trueos_helioc_v10a_valid_entry)(cmd_buffer, entry) ||
++       cmd_buffer->trueos_helioc_v10a.owner != cmd_buffer ||
++       cmd_buffer->trueos_helioc_v10a.batch != &cmd_buffer->batch ||
++       cmd_buffer->trueos_helioc_v10a.batch_start != cmd_buffer->batch.start ||
++       entry->step == 0 || base_x != 0 || base_y != 0 || base_z != 0 ||
++       groups_x != 24 || groups_y != 12 || groups_z != 24 ||
++       cmd_buffer->trueos_helioc_v10a.dispatch_count >= entry->step) {
++      cmd_buffer->trueos_helioc_v10a.invalid = true;
++      return;
++   }
++   cmd_buffer->trueos_helioc_v10a.dispatch_count++;
++}
++
++void
++genX(anv_trueos_helioc_v10a_begin_draw)(struct anv_cmd_buffer *cmd_buffer,
++                                         uint32_t vertex_count,
++                                         uint32_t instance_count,
++                                         uint32_t first_vertex,
++                                         uint32_t first_instance)
++{
++   const struct anv_trueos_helioc_command_catalog *entry =
++      anv_trueos_helioc_command_catalog_entry(cmd_buffer);
++   if (entry == NULL)
++      return;
++
++   if (entry->step == 0 && !cmd_buffer->trueos_helioc_v10a.active)
++      genX(anv_trueos_helioc_v10a_begin)(cmd_buffer, entry);
++
++   if (!cmd_buffer->trueos_helioc_v10a.active)
++      return;
++   if (!genX(anv_trueos_helioc_v10a_valid_entry)(cmd_buffer, entry) ||
++       cmd_buffer->trueos_helioc_v10a.owner != cmd_buffer ||
++       cmd_buffer->trueos_helioc_v10a.batch != &cmd_buffer->batch ||
++       cmd_buffer->trueos_helioc_v10a.batch_start != cmd_buffer->batch.start ||
++       vertex_count != 3 || instance_count != 1 || first_vertex != 0 ||
++       first_instance != 0 ||
++       cmd_buffer->trueos_helioc_v10a.dispatch_count != entry->step)
++      cmd_buffer->trueos_helioc_v10a.invalid = true;
++}
++
++static bool
++genX(anv_trueos_helioc_v10a_contains_bbe)(const void *start, const void *end)
++{
++   const uint8_t *bytes = start;
++   const uint8_t *limit = end;
++   for (; bytes < limit; bytes += sizeof(uint32_t)) {
++      uint32_t dword;
++      memcpy(&dword, bytes, sizeof(dword));
++      if (dword == 0x05000000)
++         return true;
++   }
++   return false;
++}
++
++void
++genX(anv_trueos_helioc_v10a_end_draw)(struct anv_cmd_buffer *cmd_buffer)
++{
++   const struct anv_trueos_helioc_command_catalog *entry =
++      anv_trueos_helioc_command_catalog_entry(cmd_buffer);
++   struct anv_trueos_helioc_v10a_slice *slice = &cmd_buffer->trueos_helioc_v10a;
++   if (!slice->active)
++      return;
++
++   const uint8_t *start = slice->start;
++   const uint8_t *end = cmd_buffer->batch.next;
++   const uint32_t bytes = end >= start ? (uint32_t)(end - start) : 0;
++   const char *dir = os_get_option("TRUEOS_HELIOC_ANV_DUMP_DIR");
++   if (entry == NULL || anv_batch_has_error(&cmd_buffer->batch) ||
++       !genX(anv_trueos_helioc_v10a_valid_entry)(cmd_buffer, entry) ||
++       slice->invalid || slice->owner != cmd_buffer || slice->batch != &cmd_buffer->batch ||
++       slice->batch_start != cmd_buffer->batch.start || slice->dispatch_count != entry->step ||
++       bytes == 0 || bytes > 256 * 1024 || (bytes & 3) ||
++       genX(anv_trueos_helioc_v10a_contains_bbe)(start, end) || dir == NULL) {
++      genX(anv_trueos_helioc_v10a_reset)(cmd_buffer);
++      return;
++   }
++
++   const struct anv_address start_addr = anv_batch_address(&cmd_buffer->batch, (void *)start);
++   const uint64_t raw_va = anv_address_physical(start_addr);
++   if (start_addr.bo == NULL || raw_va == 0) {
++      genX(anv_trueos_helioc_v10a_reset)(cmd_buffer);
++      return;
++   }
++   const unsigned sequence = atomic_fetch_add(&trueos_helioc_v2_sequence, 1);
++   char path[4096];
++   if (snprintf(path, sizeof(path), "%s/helioc-anv-v10a-slice-%08u.txt", dir, sequence) >=
++       (int)sizeof(path)) {
++      genX(anv_trueos_helioc_v10a_reset)(cmd_buffer);
++      return;
++   }
++   FILE *file = fopen(path, "wb");
++   if (file != NULL) {
++      fprintf(file,
++              "TRUEOS_HELIOC_WORKLOAD_SLICE_V10A\ncurrent=%s\nstep=%u\nfinal_role=%s\n"
++              "dispatch_roles=%s\ndraw_vertices=3\nraw_va=0x%llx\nbytes=%u\ndata_hex=",
++              entry->current, entry->step, entry->final_role, entry->dispatch_roles,
++              (unsigned long long)raw_va, bytes);
++      for (uint32_t i = 0; i < bytes; i++)
++         fprintf(file, "%02x", start[i]);
++      fputc('\n', file);
++      fclose(file);
++   }
++   genX(anv_trueos_helioc_v10a_reset)(cmd_buffer);
++}
++
+ /* State/table V2/V3 keeps one named anchor command.  This prevents a catalog
+  * run from silently coalescing incompatible repeated state while preserving
+  * the established exact-state parser contract. */
+diff --git a/src/intel/vulkan/genX_cmd_compute.c b/src/intel/vulkan/genX_cmd_compute.c
+index 9808cd7..9515fb3 100644
+--- a/src/intel/vulkan/genX_cmd_compute.c
++++ b/src/intel/vulkan/genX_cmd_compute.c
+@@ -39,6 +39,11 @@
+ 
+ #include "genX_mi_builder.h"
+ 
++void genX(anv_trueos_helioc_v10a_begin_dispatch)(struct anv_cmd_buffer *cmd_buffer,
++                                                   uint32_t base_x, uint32_t base_y,
++                                                   uint32_t base_z, uint32_t groups_x,
++                                                   uint32_t groups_y, uint32_t groups_z);
++
+ void
+ genX(cmd_buffer_ensure_cfe_state)(struct anv_cmd_buffer *cmd_buffer,
+                                   uint32_t total_scratch)
+@@ -701,6 +706,10 @@ void genX(CmdDispatchBase)(
+     uint32_t                                    groupCountZ)
+ {
+    ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
++
++   genX(anv_trueos_helioc_v10a_begin_dispatch)(cmd_buffer,
++                                                 baseGroupX, baseGroupY, baseGroupZ,
++                                                 groupCountX, groupCountY, groupCountZ);
+    struct anv_cmd_compute_state *comp_state = &cmd_buffer->state.compute;
+    const struct anv_pipeline_bind_map *bind_map = &comp_state->shader->bind_map;
+    const struct brw_cs_prog_data *prog_data = get_cs_prog_data(comp_state);
+diff --git a/src/intel/vulkan/genX_cmd_draw.c b/src/intel/vulkan/genX_cmd_draw.c
+index 0ef0709..92ceb5a 100644
+--- a/src/intel/vulkan/genX_cmd_draw.c
++++ b/src/intel/vulkan/genX_cmd_draw.c
+@@ -36,6 +36,13 @@
+ 
+ #include "genX_mi_builder.h"
+ 
++void genX(anv_trueos_helioc_v10a_begin_draw)(struct anv_cmd_buffer *cmd_buffer,
++                                              uint32_t vertex_count,
++                                              uint32_t instance_count,
++                                              uint32_t first_vertex,
++                                              uint32_t first_instance);
++void genX(anv_trueos_helioc_v10a_end_draw)(struct anv_cmd_buffer *cmd_buffer);
++
+ static VkShaderStageFlags
+ batch_emit_push_constants(struct anv_batch *batch,
+                           struct anv_device *device,
+@@ -1214,8 +1221,13 @@ void genX(CmdDraw)(
+    ANV_FROM_HANDLE(anv_cmd_buffer, cmd_buffer, commandBuffer);
+    const struct anv_cmd_graphics_state *gfx = &cmd_buffer->state.gfx;
+ 
+-   if (anv_batch_has_error(&cmd_buffer->batch))
++   genX(anv_trueos_helioc_v10a_begin_draw)(cmd_buffer, vertexCount, instanceCount,
++                                            firstVertex, firstInstance);
++
++   if (anv_batch_has_error(&cmd_buffer->batch)) {
++      genX(anv_trueos_helioc_v10a_end_draw)(cmd_buffer);
+       return;
++   }
+ 
+    const uint32_t count =
+       vertexCount * instanceCount * gfx->instance_multiplier;
+@@ -1266,6 +1278,8 @@ void genX(CmdDraw)(
+ 
+    cmd_buffer_post_draw_wa(cmd_buffer, vertexCount, SEQUENTIAL);
+ 
++   genX(anv_trueos_helioc_v10a_end_draw)(cmd_buffer);
++
+    trace_intel_end_draw(&cmd_buffer->trace, count,
+                         gfx->vs_source_hash,
+                         gfx->fs_source_hash);

@@ -44,6 +44,15 @@ ADDRESS_FREE_SURFACES_V6_PATCH = Path(__file__).with_name(
 ADDRESS_FREE_BUFFER_DESCRIPTOR_V7_PATCH = Path(__file__).with_name(
     "mesa-helioc-capture-address-free-v7-6fb2611.patch"
 )
+ADDRESS_FREE_BINDING_SAMPLER_V8_PATCH = Path(__file__).with_name(
+    "mesa-helioc-capture-address-free-v8-binding-tables-6fb2611.patch"
+)
+ADDRESS_FREE_DESCRIPTOR_PAYLOAD_V9_PATCH = Path(__file__).with_name(
+    "mesa-helioc-capture-address-free-v9-descriptor-payloads-6fb2611.patch"
+)
+WORKLOAD_SLICE_V10A_PATCH = Path(__file__).with_name(
+    "mesa-helioc-capture-workload-slice-v10a-6fb2611.patch"
+)
 REQUIRED_TOOLS = ("meson", "ninja", "bison", "flex", "pkg-config", "tar")
 REQUIRED_PKGCONFIG = ("expat", "libdrm", "libzstd", "vulkan")
 BOOTSTRAP_PACKAGES = (
@@ -161,7 +170,9 @@ def copy_and_patch(source: Path, work: Path) -> Path:
     for patch in (PATCH, FOLLOWUP_PATCH, IDENTITY_PATCH, SHADER_SERIALIZE_PATCH,
                   SYMBOLIC_V2_PATCH, SYMBOLIC_V2_DESCRIPTOR_PATCH, SYMBOLIC_V3_TABLE_PATCH,
                   COMMAND_CATALOG_V4_PATCH, ADDRESS_FREE_V5_PATCH,
-                  ADDRESS_FREE_SURFACES_V6_PATCH, ADDRESS_FREE_BUFFER_DESCRIPTOR_V7_PATCH):
+                  ADDRESS_FREE_SURFACES_V6_PATCH, ADDRESS_FREE_BUFFER_DESCRIPTOR_V7_PATCH,
+                  ADDRESS_FREE_BINDING_SAMPLER_V8_PATCH, ADDRESS_FREE_DESCRIPTOR_PAYLOAD_V9_PATCH,
+                  WORKLOAD_SLICE_V10A_PATCH):
         run(["git", "apply", "--check", str(patch)], cwd=destination)
         run(["git", "apply", str(patch)], cwd=destination)
     return destination
@@ -250,7 +261,7 @@ def main() -> None:
     if output_path.exists():
         raise SystemExit("fail-closed HelioC bakery left a HELIOA output behind")
     for message in (
-        "symbolic ownership/typed relocations for command, binding-table, sampler, descriptor payload, and program state",
+        "symbolic ownership/typed relocations for command and program state",
         "physical UHD 770 PCI r0c retirement/ISA proof (the explicit no-op shim proves compiler identity, not execution on target silicon)",
         "HelioC preflight stopped; no HELIOA emitted: missing capture datum(s):",
     ):
@@ -265,10 +276,14 @@ def main() -> None:
     if metadata.get("instrumented_identity") != "noop-drm-shim:8086:4680:r0c":
         raise SystemExit("capture metadata did not authenticate the explicit no-op shim identity")
     relocatable = metadata.get("relocatable_state", {})
-    if relocatable.get("status") != "partial-v7" or relocatable.get("proven_slices") != [
-        "indirect-descriptor-v5", "image-surface-v6", "buffer-descriptor-surface-v7"
+    if relocatable.get("status") != "partial-v9" or relocatable.get("proven_slices") != [
+        "indirect-descriptor-v5", "image-surface-v6", "buffer-descriptor-surface-v7",
+        "binding-table-sampler-v8", "descriptor-payload-v9"
     ]:
-        raise SystemExit("capture metadata did not authenticate the V5/V6/V7 address-free slices")
+        raise SystemExit("capture metadata did not authenticate the V5/V6/V7/V8/V9 address-free slices")
+    diagnostic = metadata.get("instrumented_anv", {}).get("diagnostic_workload_slices", {})
+    if len(diagnostic.get("slices", [])) != 6 or diagnostic.get("package_eligible") is not False:
+        raise SystemExit("capture metadata did not retain exactly six V10A diagnostic slices")
     print("instrumented capture completed; package emission remains intentionally refused")
 
 

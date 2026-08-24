@@ -1,0 +1,291 @@
+diff --git a/src/intel/vulkan/genX_cmd_buffer.c b/src/intel/vulkan/genX_cmd_buffer.c
+index 98ebb0a..566f3e5 100644
+--- a/src/intel/vulkan/genX_cmd_buffer.c
++++ b/src/intel/vulkan/genX_cmd_buffer.c
+@@ -35,6 +35,7 @@
+ #include "vk_util.h"
+ 
+ #include "util/format_srgb.h"
++#include "util/mesa-blake3.h"
+ 
+ #include "genxml/gen_macros.h"
+ #include "genxml/genX_pack.h"
+@@ -100,6 +101,268 @@ anv_trueos_helioc_descriptor_set_role(const struct anv_descriptor_set *set)
+    return NULL;
+ }
+ 
++/* V9 is deliberately emitted from command encoding rather than descriptor
++ * writes: this is the first ANV point at which the bound set, complete
++ * compiled bind map, and every descriptor used by that map can be checked
++ * together.  It never serializes the descriptor pool location. */
++static const struct anv_descriptor_set *
++anv_trueos_helioc_v9_bound_set(const struct anv_cmd_pipeline_state *pipe_state,
++                                const struct anv_pipeline_bind_map *map,
++                                const char *set_role)
++{
++   const struct anv_descriptor_set *set = NULL;
++   for (uint32_t pass = 0; pass < 2; pass++) {
++      const uint32_t count = pass == 0 ? map->surface_count : map->sampler_count;
++      const struct anv_pipeline_binding *bindings =
++         pass == 0 ? map->surface_to_descriptor : map->sampler_to_descriptor;
++      for (uint32_t i = 0; i < count; i++) {
++         const struct anv_pipeline_binding *binding = &bindings[i];
++         const struct anv_descriptor_set *candidate = NULL;
++         if (binding->set == ANV_DESCRIPTOR_SET_DESCRIPTORS) {
++            if (binding->index >= MAX_SETS)
++               return NULL;
++            candidate = pipe_state->descriptors[binding->index];
++         } else if (binding->set < MAX_SETS) {
++            candidate = pipe_state->descriptors[binding->set];
++         } else {
++            continue;
++         }
++         if (candidate == NULL ||
++             anv_trueos_helioc_descriptor_set_role(candidate) == NULL ||
++             strcmp(anv_trueos_helioc_descriptor_set_role(candidate), set_role) != 0 ||
++             (set != NULL && set != candidate))
++            return NULL;
++         set = candidate;
++      }
++   }
++   return set;
++}
++
++static uint32_t
++anv_trueos_helioc_v9_u32(const uint8_t *data)
++{
++   uint32_t value;
++   memcpy(&value, data, sizeof(value));
++   return value;
++}
++
++static uint64_t
++anv_trueos_helioc_v9_u64(const uint8_t *data)
++{
++   uint64_t value;
++   memcpy(&value, data, sizeof(value));
++   return value;
++}
++
++static const char *
++anv_trueos_helioc_v9_image_role(const struct anv_image_view *image_view)
++{
++   return image_view != NULL && image_view->image != NULL ?
++      anv_trueos_helioc_role(image_view->image->vk.base.object_name) : NULL;
++}
++
++static void
++anv_trueos_helioc_dump_v9_descriptor_payload(
++   const struct anv_cmd_buffer *cmd_buffer,
++   const struct anv_cmd_pipeline_state *pipe_state,
++   const struct anv_pipeline_bind_map *map, mesa_shader_stage stage,
++   const char *set_role)
++{
++   const bool compute = stage == MESA_SHADER_COMPUTE;
++   const bool graphics = stage == MESA_SHADER_FRAGMENT;
++   const struct anv_descriptor_set *set;
++   const struct anv_descriptor *params, *sampled, *sampler, *storage = NULL;
++   const struct anv_descriptor_set_binding_layout *layout;
++   const char *sampled_role, *storage_role = NULL, *params_role;
++   uint32_t payload_bytes, role_index, params_bytes;
++   VkDeviceSize params_offset;
++
++   if (set_role == NULL || (!compute && !graphics))
++      return;
++   if (strcmp(set_role, "compute_ping_a") == 0 && compute) {
++      sampled_role = "volume_a";
++      storage_role = "volume_b";
++      params_role = "sim_params";
++      params_offset = 0;
++      params_bytes = 112;
++      payload_bytes = 64;
++      role_index = 0;
++   } else if (strcmp(set_role, "compute_ping_b") == 0 && compute) {
++      sampled_role = "volume_b";
++      storage_role = "volume_a";
++      params_role = "sim_params";
++      params_offset = 0;
++      params_bytes = 112;
++      payload_bytes = 64;
++      role_index = 1;
++   } else if (strcmp(set_role, "graphics_a") == 0 && graphics) {
++      sampled_role = "volume_a";
++      params_role = "render_params";
++      params_offset = 128;
++      params_bytes = 272;
++      payload_bytes = 32;
++      role_index = 2;
++   } else if (strcmp(set_role, "graphics_b") == 0 && graphics) {
++      sampled_role = "volume_b";
++      params_role = "render_params";
++      params_offset = 128;
++      params_bytes = 272;
++      payload_bytes = 32;
++      role_index = 3;
++   } else {
++      return;
++   }
++
++   set = anv_trueos_helioc_v9_bound_set(pipe_state, map, set_role);
++   if (set == NULL || set->is_push || set->layout == NULL ||
++       set->layout->type != ANV_PIPELINE_DESCRIPTOR_SET_LAYOUT_TYPE_INDIRECT ||
++       set->desc_surface_mem.map == NULL ||
++       set->desc_surface_mem.alloc_size < payload_bytes ||
++       set->layout->descriptor_buffer_surface_size != payload_bytes ||
++       set->layout->binding_count != (compute ? 4 : 3) ||
++       set->descriptor_count != (compute ? 4 : 3))
++      return;
++
++   static const VkDescriptorType compute_types[] = {
++      VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
++      VK_DESCRIPTOR_TYPE_SAMPLER, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
++   };
++   static const VkDescriptorType graphics_types[] = {
++      VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
++      VK_DESCRIPTOR_TYPE_SAMPLER,
++   };
++   static const uint32_t offsets[] = { 0, 16, 24, 32 };
++   static const uint32_t strides[] = { 16, 8, 8, 32 };
++   const VkDescriptorType *types = compute ? compute_types : graphics_types;
++   for (uint32_t binding = 0; binding < (compute ? 4 : 3); binding++) {
++      layout = &set->layout->binding[binding];
++      if (layout->type != types[binding] || layout->array_size != 1 ||
++          layout->descriptor_index != binding ||
++          layout->descriptor_surface_offset != offsets[binding] ||
++          layout->descriptor_surface_stride != strides[binding])
++         return;
++   }
++
++   params = &set->descriptors[0];
++   sampled = &set->descriptors[1];
++   sampler = &set->descriptors[2];
++   if (compute)
++      storage = &set->descriptors[3];
++   if (params->type != VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER || params->buffer == NULL ||
++       params->buffer->vk.base.object_name == NULL ||
++       strcmp(params->buffer->vk.base.object_name, "trueos.helioc.params_arena") != 0 ||
++       params->offset != params_offset || params->range != params_bytes ||
++       params->bind_range != params_bytes ||
++       sampled->type != VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE ||
++       sampled->image_view == NULL || sampled->sampler != NULL ||
++       anv_trueos_helioc_v9_image_role(sampled->image_view) == NULL ||
++       strcmp(anv_trueos_helioc_v9_image_role(sampled->image_view), sampled_role) != 0 ||
++       sampler->type != VK_DESCRIPTOR_TYPE_SAMPLER || sampler->image_view != NULL ||
++       sampler->sampler == NULL ||
++       (compute && (storage->type != VK_DESCRIPTOR_TYPE_STORAGE_IMAGE ||
++                    storage->image_view == NULL || storage->sampler != NULL ||
++                    anv_trueos_helioc_v9_image_role(storage->image_view) == NULL ||
++                    strcmp(anv_trueos_helioc_v9_image_role(storage->image_view),
++                           storage_role) != 0)))
++      return;
++
++   const uint8_t *live = set->desc_surface_mem.map;
++   const uint64_t params_address = anv_address_physical(
++      anv_address_add(params->buffer->address, params->offset));
++   const struct anv_surface_state *sampled_state =
++      anv_image_view_texture_surface_state(sampled->image_view, 0, sampled->layout);
++   const uint32_t sampled_handle = anv_surface_state_to_handle(
++      cmd_buffer->device->physical, sampled_state->state);
++   if (anv_trueos_helioc_v9_u64(live + 0) != params_address ||
++       anv_trueos_helioc_v9_u32(live + 8) != params->bind_range ||
++       anv_trueos_helioc_v9_u32(live + 12) != 0 ||
++       anv_trueos_helioc_v9_u32(live + 16) != sampled_handle ||
++       anv_trueos_helioc_v9_u32(live + 20) != 0 ||
++       anv_trueos_helioc_v9_u32(live + 24) != 0 ||
++       anv_trueos_helioc_v9_u32(live + 28) != sampler->sampler->bindless_state.offset)
++      return;
++   if (compute) {
++      const struct anv_surface_state *storage_state =
++         anv_image_view_storage_surface_state(storage->image_view);
++      const uint32_t storage_handle = anv_surface_state_to_handle(
++         cmd_buffer->device->physical, storage_state->state);
++      const uint64_t storage_address = anv_address_physical(
++         storage->image_view->image->bindings[ANV_IMAGE_MEMORY_BINDING_MAIN].address);
++      if (anv_trueos_helioc_v9_u32(live + 32) != storage_handle ||
++          anv_trueos_helioc_v9_u64(live + 40) != storage_address)
++         return;
++   }
++
++   uint8_t normalized[64];
++   memcpy(normalized, live, payload_bytes);
++   memset(normalized + 0, 0, 8);
++   memset(normalized + 16, 0, 4);
++   memset(normalized + 28, 0, 4);
++   if (compute) {
++      memset(normalized + 32, 0, 4);
++      memset(normalized + 40, 0, 8);
++   }
++
++   blake3_hash hash;
++   char hash_hex[BLAKE3_HEX_LEN];
++   _mesa_blake3_compute(normalized, payload_bytes, hash);
++   _mesa_blake3_format(hash_hex, hash);
++   static atomic_flag v9_lock = ATOMIC_FLAG_INIT;
++   static bool v9_have_canonical[4];
++   static uint8_t v9_canonical_hash[4][BLAKE3_OUT_LEN];
++   bool emit = false;
++   bool mismatch = false;
++   while (atomic_flag_test_and_set_explicit(&v9_lock, memory_order_acquire)) {}
++   if (!v9_have_canonical[role_index]) {
++      memcpy(v9_canonical_hash[role_index], hash, sizeof(hash));
++      v9_have_canonical[role_index] = true;
++      emit = true;
++   } else {
++      /* A second observation must be byte-identical after only the typed
++       * relocations were removed, but it must not create a second template. */
++      mismatch = memcmp(v9_canonical_hash[role_index], hash, sizeof(hash)) != 0;
++   }
++   atomic_flag_clear_explicit(&v9_lock, memory_order_release);
++   if (!emit && !mismatch)
++      return;
++
++   const char *dir = os_get_option("TRUEOS_HELIOC_ANV_DUMP_DIR");
++   static atomic_uint v9_sequence = 0;
++   char path[4096];
++   const unsigned sequence = atomic_fetch_add(&v9_sequence, 1);
++   if (dir == NULL || snprintf(path, sizeof(path),
++                               "%s/helioc-anv-v9-payload-%08u.txt", dir,
++                               sequence) >= (int)sizeof(path))
++      return;
++   FILE *file = fopen(path, "wb");
++   if (file == NULL)
++      return;
++   if (mismatch) {
++      fprintf(file, "TRUEOS_HELIOC_DESCRIPTOR_PAYLOAD_V9\n"
++                    "set_role=%s\nmismatch=1\n", set_role);
++      fclose(file);
++      return;
++   }
++   fprintf(file, "TRUEOS_HELIOC_DESCRIPTOR_PAYLOAD_V9\n"
++                 "object=descriptor_payload_%s\nset_role=%s\nstage=%u\n"
++                 "bytes=%u\nbinding_count=%u\ndata_blake3=%s\ndata_hex=",
++           set_role, set_role, (uint32_t)stage, payload_bytes,
++           compute ? 4 : 3, hash_hex);
++   for (uint32_t i = 0; i < payload_bytes; i++)
++      fprintf(file, "%02x", normalized[i]);
++   fprintf(file, "\nreloc=0,8,fixed_gpu,%s,0,0xffffffffffffffff,0\n"
++                 "reloc=16,4,object_offset,surface_%s_sampled,0,0xffffffc0,0\n"
++                 "reloc=28,4,object_offset,sampler_state,0,0xffffffff,0\n",
++           params_role, sampled_role);
++   if (compute) {
++      fprintf(file,
++              "reloc=32,4,object_offset,surface_%s_storage,0,0xffffffc0,0\n"
++              "reloc=40,8,fixed_gpu,%s,0,0xffffffffffffffff,0\n",
++              storage_role, storage_role);
++   }
++   fclose(file);
++}
++
+ static bool anv_trueos_helioc_desc_is_image(const struct anv_descriptor *desc);
+ static bool anv_trueos_helioc_desc_is_buffer(const struct anv_descriptor *desc);
+ 
+@@ -3353,6 +3616,9 @@ emit_binding_table(struct anv_cmd_buffer *cmd_buffer,
+              strcmp(roles[s], v8_expected[s]) != 0)
+             valid = false;
+       }
++      if (valid)
++         anv_trueos_helioc_dump_v9_descriptor_payload(
++            cmd_buffer, pipe_state, map, shader->vk.stage, v8_table_role);
+       static atomic_uint v8_binding_emitted_mask = 0;
+       const uint32_t role_bit = 1u << v8_role_index;
+       const bool first_for_role = valid &&

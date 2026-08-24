@@ -596,6 +596,9 @@ pub(crate) mod helioc_native_package {
                     || kind == RELOC_KIND_BINDING
                     || kind == RELOC_KIND_INDIRECT)
                     && alignment < 4)
+                || bytes[offset + 26..offset + 28]
+                    .iter()
+                    .any(|byte| *byte != 0)
                 || bytes[offset + 60..offset + 64]
                     .iter()
                     .any(|byte| *byte != 0)
@@ -1252,6 +1255,10 @@ pub(crate) mod helioc_native_package {
             let mut bad_hash = valid.clone();
             bad_hash[128 + 28] ^= 1;
             assert_eq!(parse_relocatable_state(&bad_hash), Err(Error::InvalidRelocState));
+
+            let mut bad_reserved = valid.clone();
+            bad_reserved[128 + 26] = 1;
+            assert_eq!(parse_relocatable_state(&bad_reserved), Err(Error::InvalidRelocState));
 
             let mut bad_overlap = valid;
             put_u32(&mut bad_overlap, 128 + 64 + 8, 0);

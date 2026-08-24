@@ -137,6 +137,38 @@ HELIOC_ADDRESS_FREE_V7_FIELDS = (
     "state_alignment", "descriptor_payload_offset", "descriptor_bytes", "sampler_bytes",
     "descriptor_layout", "resource_offset", "resource_bytes", "data_hex", "reloc",
 )
+HELIOC_ADDRESS_FREE_V8_BINDING_ROLES = {
+    "compute_ping_a": ("descriptor_set_state", "volume_b", "sim_params", "volume_a"),
+    "compute_ping_b": ("descriptor_set_state", "volume_a", "sim_params", "volume_b"),
+    "graphics_a": ("output_target", "descriptor_set_state", "volume_a", "render_params"),
+    "graphics_b": ("output_target", "descriptor_set_state", "volume_b", "render_params"),
+}
+HELIOC_ADDRESS_FREE_V8_RELOC_SOURCES = {
+    "compute_ping_a": ("descriptor_set_surface_compute_ping_a", "surface_volume_b_storage", "buffer_surface_sim_params_compute_ping_a", "surface_volume_a_sampled"),
+    "compute_ping_b": ("descriptor_set_surface_compute_ping_b", "surface_volume_a_storage", "buffer_surface_sim_params_compute_ping_b", "surface_volume_b_sampled"),
+    "graphics_a": ("surface_ui4_target", "descriptor_set_surface_graphics_a", "surface_volume_a_sampled", "buffer_surface_render_params_graphics_a"),
+    "graphics_b": ("surface_ui4_target", "descriptor_set_surface_graphics_b", "surface_volume_b_sampled", "buffer_surface_render_params_graphics_b"),
+}
+HELIOC_ADDRESS_FREE_V9_PAYLOADS = {
+    "compute_ping_a": (5, 64, 4, "sim_params", "volume_a", "volume_b"),
+    "compute_ping_b": (5, 64, 4, "sim_params", "volume_b", "volume_a"),
+    "graphics_a": (4, 32, 3, "render_params", "volume_a", None),
+    "graphics_b": (4, 32, 3, "render_params", "volume_b", None),
+}
+HELIOC_V10A_VARIANTS = {
+    ("volume_a", "0", "volume_a", "none"): 3,
+    ("volume_a", "1", "volume_b", "a_to_b"): 3,
+    ("volume_a", "2", "volume_a", "a_to_b,b_to_a"): 3,
+    ("volume_b", "0", "volume_b", "none"): 3,
+    ("volume_b", "1", "volume_a", "b_to_a"): 3,
+    ("volume_b", "2", "volume_b", "b_to_a,a_to_b"): 3,
+}
+HELIOC_ADDRESS_FREE_V9_BLAKE3 = {
+    "compute_ping_a": "b2cf78c0c8f6325bc444d9927d6c2452bbeac89e9323e70b8172cf47a309b6f4",
+    "compute_ping_b": "b2cf78c0c8f6325bc444d9927d6c2452bbeac89e9323e70b8172cf47a309b6f4",
+    "graphics_a": "f70c078d3e79d102c118961a3a341c5099e71506bb8086c6e0dc05ac3e116e47",
+    "graphics_b": "f70c078d3e79d102c118961a3a341c5099e71506bb8086c6e0dc05ac3e116e47",
+}
 HELIOC_SYMBOLIC_V2_FIELDS = (
     "role", "kind", "stage", "binding", "raw_va", "allocation_bytes", "logical_bytes",
     "resource_offset", "state_heap_va", "state_heap_bytes", "state_offset", "state_bytes",
@@ -805,7 +837,9 @@ def validate_helioc_relocatable_state(section: bytes) -> dict[str, object]:
         if obj_id == 0 or obj_id in objects or semantic == 0 or window not in HELIOC_RELOC_WINDOWS \
                 or kind not in HELIOC_RELOC_KINDS or flags != 0 or size == 0 or alignment == 0 \
                 or alignment > 4096 or alignment & (alignment - 1) or data_rel % alignment \
-                or data_rel + size > data_bytes or dst % alignment or any(section[offset + 60:offset + 64]):
+                or data_rel + size > data_bytes or dst % alignment \
+                or first + count > reloc_count or any(section[offset + 26:offset + 28]) \
+                or any(section[offset + 60:offset + 64]):
             raise SystemExit("HelioC HELIOCRS v2 object is malformed")
         if (kind in {1, 4, 6} and alignment < 4) or (kind == 1 and window != 1) \
                 or (kind == 2 and window != 2) or (kind == 3 and window != 3) \
@@ -813,17 +847,40 @@ def validate_helioc_relocatable_state(section: bytes) -> dict[str, object]:
                 or (kind == 6 and window != 4) or (variant != 0xff and window != 1) \
                 or (window == 1 and variant > 5) or dst + size > (256 * 1024 if window == 1 else 64 * 1024):
             raise SystemExit("HelioC HELIOCRS v2 object/window contract is invalid")
+        for prior in objects.values():
+            if prior["window"] == window and prior["semantic"] == semantic:
+                raise SystemExit("HelioC HELIOCRS v2 object semantic is duplicated")
+            if data_rel < prior["data_rel"] + prior["size"] \
+                    and prior["data_rel"] < data_rel + size:
+                raise SystemExit("HelioC HELIOCRS v2 object data intervals overlap")
+            if prior["window"] == window \
+                    and dst < prior["dst"] + prior["size"] \
+                    and prior["dst"] < dst + size:
+                raise SystemExit("HelioC HELIOCRS v2 object window intervals overlap")
         data = section[data_offset + data_rel:data_offset + data_rel + size]
-        if hashlib.sha256(data).digest() != section[offset + 28:offset + 60]:
+        digest = section[offset + 28:offset + 60]
+        if not any(digest) or hashlib.sha256(data).digest() != digest:
             raise SystemExit("HelioC HELIOCRS v2 object hash is invalid")
         if kind == 1:
             if variant in variants:
                 raise SystemExit("HelioC HELIOCRS v2 batch variant is duplicated")
             variants.add(variant)
-        objects[obj_id] = {"offset": offset, "size": size, "first": first, "count": count}
+        objects[obj_id] = {
+            "offset": offset, "size": size, "first": first, "count": count,
+            "semantic": semantic, "window": window, "dst": dst, "data_rel": data_rel,
+        }
     if variants != set(range(6)):
         raise SystemExit("HelioC HELIOCRS v2 requires all six batch variants")
-    relocs: list[tuple[int, int, int]] = []
+    groups: list[tuple[int, int]] = []
+    for obj in objects.values():
+        group = (obj["first"], obj["first"] + obj["count"])
+        if any(group[0] < prior[1] and prior[0] < group[1] for prior in groups):
+            raise SystemExit("HelioC HELIOCRS v2 relocation groups overlap")
+        groups.append(group)
+    if sum(obj["count"] for obj in objects.values()) != reloc_count:
+        raise SystemExit("HelioC HELIOCRS v2 relocation groups are incomplete")
+    relocs: list[tuple[int, int, int, int]] = []
+    previous_key: tuple[int, int, int] | None = None
     for index in range(reloc_count):
         offset = reloc_offset + index * 32
         target, source, target_off, source_off = u16(offset), u16(offset + 2), u32(offset + 4), u32(offset + 8)
@@ -852,15 +909,241 @@ def validate_helioc_relocatable_state(section: bytes) -> dict[str, object]:
             if source not in {14, 15, 16} or source_off != 0 or addend not in {0, -1}:
                 raise SystemExit("HelioC HELIOCRS v2 runtime-u32 source is invalid")
         key = (target, target_off, mask)
-        if relocs and relocs[-1] > key:
+        if previous_key is not None and previous_key > key:
             raise SystemExit("HelioC HELIOCRS v2 relocations are not strictly canonical")
-        if relocs and relocs[-1][0] == target and relocs[-1][1] == target_off \
-                and relocs[-1][2] & mask:
-            raise SystemExit("HelioC HELIOCRS v2 relocation masks overlap")
-        relocs.append(key)
-    if sum(obj["count"] for obj in objects.values()) != reloc_count:
-        raise SystemExit("HelioC HELIOCRS v2 relocation groups are incomplete")
+        for prior_target, prior_offset, prior_width, prior_mask in relocs:
+            if prior_target != target:
+                continue
+            byte_overlap = target_off < prior_offset + prior_width \
+                and prior_offset < target_off + width
+            if byte_overlap and (target_off != prior_offset or width != prior_width
+                                 or prior_mask & mask):
+                raise SystemExit("HelioC HELIOCRS v2 relocation fields overlap")
+        relocs.append((target, target_off, width, mask))
+        previous_key = key
     return {"object_count": object_count, "reloc_count": reloc_count, "bytes": len(section)}
+
+
+def encode_helioc_relocatable_state(objects: list[dict[str, object]]) -> bytes:
+    """Encode one canonical address-free HELIOCRS v2 object graph.
+
+    Object names exist only while baking and are converted to deterministic
+    numeric IDs.  Every relocation is attached to its target object so an
+    object cannot borrow another object's relocation range.  The template
+    bits selected by each relocation must already be zero: this encoder never
+    accepts a captured pointer and silently overwrites it.
+
+    Required object fields are ``name``, ``window``, ``kind``, ``variant``,
+    ``dst``, ``alignment``, ``data``, and ``relocations``.  Required
+    relocation fields are ``target_offset``, ``source``, ``source_offset``,
+    ``width``, ``value_kind``, ``right_shift``, ``mask``, and ``addend``.
+    Object-relative relocation sources use another object's string name;
+    fixed/runtime sources use the sealed numeric symbol ID.
+    """
+    object_fields = {
+        "name", "window", "kind", "variant", "dst", "alignment", "data",
+        "relocations",
+    }
+    relocation_fields = {
+        "target_offset", "source", "source_offset", "width", "value_kind",
+        "right_shift", "mask", "addend",
+    }
+
+    def integer(value: object, label: str) -> int:
+        if type(value) is not int:
+            raise SystemExit(f"HelioC HELIOCRS encoder requires integer {label}")
+        return value
+
+    if type(objects) is not list or not 0 < len(objects) <= HELIOC_RELOC_MAX_OBJECTS:
+        raise SystemExit("HelioC HELIOCRS encoder requires 1..64 objects")
+
+    normalized: list[dict[str, object]] = []
+    names: set[str] = set()
+    for raw in objects:
+        if type(raw) is not dict or set(raw) != object_fields:
+            raise SystemExit("HelioC HELIOCRS encoder object has an invalid schema")
+        name = raw["name"]
+        if type(name) is not str or re.fullmatch(r"[a-z][a-z0-9_]{0,95}", name) is None \
+                or name in names:
+            raise SystemExit("HelioC HELIOCRS encoder object name is invalid or duplicated")
+        names.add(name)
+        window = integer(raw["window"], f"{name}.window")
+        kind = integer(raw["kind"], f"{name}.kind")
+        variant = integer(raw["variant"], f"{name}.variant")
+        dst = integer(raw["dst"], f"{name}.dst")
+        alignment = integer(raw["alignment"], f"{name}.alignment")
+        data = raw["data"]
+        relocs = raw["relocations"]
+        if type(data) is not bytes or not data or type(relocs) is not list:
+            raise SystemExit(f"HelioC HELIOCRS encoder object {name} has invalid data/relocations")
+        if window not in HELIOC_RELOC_WINDOWS or kind not in HELIOC_RELOC_KINDS \
+                or alignment <= 0 or alignment > 4096 or alignment & (alignment - 1) \
+                or dst < 0 or dst % alignment:
+            raise SystemExit(f"HelioC HELIOCRS encoder object {name} has invalid placement")
+        expected_window = {1: 1, 2: 2, 3: 3, 4: 2, 5: 3, 6: 4}[kind]
+        if window != expected_window or (kind in {1, 4, 6} and alignment < 4):
+            raise SystemExit(f"HelioC HELIOCRS encoder object {name} has invalid kind/window")
+        if (kind == 1 and variant not in range(6)) or (kind != 1 and variant != 0xff):
+            raise SystemExit(f"HelioC HELIOCRS encoder object {name} has invalid batch variant")
+        window_bytes = 256 * 1024 if window == 1 else 64 * 1024
+        if len(data) > window_bytes or dst + len(data) > window_bytes:
+            raise SystemExit(f"HelioC HELIOCRS encoder object {name} exceeds its window")
+        normalized.append({
+            "name": name, "window": window, "kind": kind, "variant": variant,
+            "dst": dst, "alignment": alignment, "data": data, "relocations": relocs,
+        })
+
+    normalized.sort(key=lambda item: (
+        int(item["window"]), int(item["dst"]), int(item["kind"]),
+        int(item["variant"]), str(item["name"]),
+    ))
+    if {int(item["variant"]) for item in normalized if int(item["kind"]) == 1} != set(range(6)):
+        raise SystemExit("HelioC HELIOCRS encoder requires exactly all six batch variants")
+    if sum(int(item["kind"]) == 1 for item in normalized) != 6:
+        raise SystemExit("HelioC HELIOCRS encoder rejects extra batch objects")
+
+    for index, item in enumerate(normalized):
+        left_begin = int(item["dst"])
+        left_end = left_begin + len(item["data"])
+        for prior in normalized[:index]:
+            if int(prior["window"]) != int(item["window"]):
+                continue
+            right_begin = int(prior["dst"])
+            right_end = right_begin + len(prior["data"])
+            if left_begin < right_end and right_begin < left_end:
+                raise SystemExit("HelioC HELIOCRS encoder object windows overlap")
+
+    object_ids = {str(item["name"]): index + 1 for index, item in enumerate(normalized)}
+    encoded_relocs: list[dict[str, int]] = []
+    object_groups: dict[str, tuple[int, int]] = {}
+    for item in normalized:
+        name = str(item["name"])
+        target_id = object_ids[name]
+        data = item["data"]
+        assert isinstance(data, bytes)
+        group: list[dict[str, int]] = []
+        for raw in item["relocations"]:
+            if type(raw) is not dict or set(raw) != relocation_fields:
+                raise SystemExit(f"HelioC HELIOCRS encoder relocation for {name} has invalid schema")
+            target_offset = integer(raw["target_offset"], f"{name}.target_offset")
+            source_offset = integer(raw["source_offset"], f"{name}.source_offset")
+            width = integer(raw["width"], f"{name}.width")
+            value_kind = integer(raw["value_kind"], f"{name}.value_kind")
+            right_shift = integer(raw["right_shift"], f"{name}.right_shift")
+            mask = integer(raw["mask"], f"{name}.mask")
+            addend = integer(raw["addend"], f"{name}.addend")
+            source_raw = raw["source"]
+            if width not in {4, 8} or value_kind not in HELIOC_RELOC_VALUE_KINDS \
+                    or target_offset < 0 or target_offset % 4 \
+                    or target_offset + width > len(data) or source_offset < 0 \
+                    or not 0 <= right_shift < 64 or mask <= 0 \
+                    or mask >> (width * 8) or not -(1 << 31) <= addend < (1 << 31):
+                raise SystemExit(f"HelioC HELIOCRS encoder relocation for {name} is malformed")
+            lsb = (mask & -mask).bit_length() - 1
+            field_mask = mask >> lsb
+            if field_mask & (field_mask + 1):
+                raise SystemExit(f"HelioC HELIOCRS encoder relocation for {name} has split mask")
+            template = int.from_bytes(data[target_offset:target_offset + width], "little")
+            if template & mask:
+                raise SystemExit(
+                    f"HelioC HELIOCRS encoder relocation for {name} retained captured bits"
+                )
+            if value_kind in {1, 2}:
+                if type(source_raw) is not str or source_raw not in object_ids:
+                    raise SystemExit(f"HelioC HELIOCRS encoder relocation for {name} has bad object source")
+                source_id = object_ids[source_raw]
+                source_item = normalized[source_id - 1]
+                if source_offset >= len(source_item["data"]):
+                    raise SystemExit(f"HelioC HELIOCRS encoder relocation for {name} exceeds source")
+            else:
+                source_id = integer(source_raw, f"{name}.source")
+                if source_offset != 0 \
+                        or value_kind == 3 and source_id not in range(1, 13) \
+                        or value_kind == 4 and (source_id != 13 or addend != 0) \
+                        or value_kind == 5 and (source_id not in {14, 15, 16} or addend not in {0, -1}):
+                    raise SystemExit(f"HelioC HELIOCRS encoder relocation for {name} has bad symbol")
+            group.append({
+                "target": target_id, "source": source_id,
+                "target_offset": target_offset, "source_offset": source_offset,
+                "width": width, "value_kind": value_kind, "right_shift": right_shift,
+                "mask": mask, "addend": addend,
+            })
+        group.sort(key=lambda reloc: (reloc["target_offset"], reloc["mask"]))
+        for index, reloc in enumerate(group):
+            begin = reloc["target_offset"]
+            end = begin + reloc["width"]
+            for prior in group[:index]:
+                prior_begin = prior["target_offset"]
+                prior_end = prior_begin + prior["width"]
+                if begin >= prior_end or prior_begin >= end:
+                    continue
+                if begin != prior_begin or reloc["width"] != prior["width"] \
+                        or reloc["mask"] & prior["mask"]:
+                    raise SystemExit(
+                        f"HelioC HELIOCRS encoder relocations for {name} overlap"
+                    )
+        first = len(encoded_relocs)
+        encoded_relocs.extend(group)
+        object_groups[name] = (first, len(group))
+    if len(encoded_relocs) > HELIOC_RELOC_MAX_ENTRIES:
+        raise SystemExit("HelioC HELIOCRS encoder exceeds the relocation limit")
+
+    data_blob = bytearray()
+    data_offsets: dict[str, int] = {}
+    for item in normalized:
+        alignment = int(item["alignment"])
+        aligned = (len(data_blob) + alignment - 1) & -alignment
+        data_blob.extend(b"\0" * (aligned - len(data_blob)))
+        data_offsets[str(item["name"])] = aligned
+        data = item["data"]
+        assert isinstance(data, bytes)
+        data_blob.extend(data)
+
+    object_count = len(normalized)
+    reloc_count = len(encoded_relocs)
+    object_offset = HELIOC_RELOC_HEADER_BYTES
+    reloc_offset = object_offset + object_count * HELIOC_RELOC_OBJECT_BYTES
+    reloc_end = reloc_offset + reloc_count * HELIOC_RELOC_ENTRY_BYTES
+    data_offset = (reloc_end + 63) & ~63
+    total = data_offset + len(data_blob)
+    if total > HELIOC_RELOC_MAX_BYTES:
+        raise SystemExit("HelioC HELIOCRS encoder exceeds the section byte limit")
+    section = bytearray(total)
+    section[:8] = HELIOC_RELOC_STATE_MAGIC
+    struct.pack_into(
+        "<HHIHH4BHHHHIIIII4BII", section, 8,
+        HELIOC_RELOC_STATE_VERSION, HELIOC_RELOC_HEADER_BYTES, total,
+        HELIOC_GFX_VERX10, HELIOC_DEVICE_ID, HELIOC_REVISION, 1, 64, 0,
+        HELIOC_RELOC_OBJECT_BYTES, HELIOC_RELOC_ENTRY_BYTES,
+        object_count, reloc_count, object_offset, reloc_offset, data_offset,
+        len(data_blob), HELIOC_RELOC_FLAGS, 6, 2, 0, 0,
+        object_count * HELIOC_RELOC_OBJECT_BYTES,
+        reloc_count * HELIOC_RELOC_ENTRY_BYTES,
+    )
+    for index, item in enumerate(normalized):
+        name = str(item["name"])
+        offset = object_offset + index * HELIOC_RELOC_OBJECT_BYTES
+        first, count = object_groups[name]
+        data = item["data"]
+        assert isinstance(data, bytes)
+        struct.pack_into(
+            "<HBBHBBIIIHHH", section, offset,
+            object_ids[name], int(item["window"]), int(item["kind"]), index + 1,
+            int(item["variant"]), 0, int(item["dst"]), data_offsets[name], len(data),
+            int(item["alignment"]), first, count,
+        )
+        section[offset + 28:offset + 60] = hashlib.sha256(data).digest()
+    for index, reloc in enumerate(encoded_relocs):
+        struct.pack_into(
+            "<HHIIBBBBQq", section, reloc_offset + index * HELIOC_RELOC_ENTRY_BYTES,
+            reloc["target"], reloc["source"], reloc["target_offset"],
+            reloc["source_offset"], reloc["width"], reloc["value_kind"],
+            reloc["right_shift"], 0, reloc["mask"], reloc["addend"],
+        )
+    section[data_offset:] = data_blob
+    encoded = bytes(section)
+    validate_helioc_relocatable_state(encoded)
+    return encoded
 
 
 def encode_helioc_relocation_field(resolved: int, addend: int, right_shift: int,
@@ -1243,11 +1526,13 @@ def helioc_public_api_boundary(
     if instrumented is not None:
         if instrumented.get("address_free_indirect_templates") is not None \
                 and instrumented.get("address_free_surface_templates") is not None \
-                and instrumented.get("address_free_buffer_descriptor_templates") is not None:
+                and instrumented.get("address_free_buffer_descriptor_templates") is not None \
+                and instrumented.get("address_free_binding_sampler_tables") is not None \
+                and instrumented.get("address_free_descriptor_payloads") is not None:
             missing_state = (
-                "symbolic ownership/typed relocations for command, binding-table, sampler, descriptor payload, "
-                "and program state (V5 indirect descriptors, V6 image surfaces, and V7 buffer/descriptor-set "
-                "surfaces are address-free)"
+                "symbolic ownership/typed relocations for command and program state "
+                "(V5 indirect descriptors, V6 image surfaces, V7 buffer/descriptor-set surfaces, and "
+                "V8 binding/sampler tables, and V9 descriptor payloads are address-free)"
             )
         else:
             missing_state = (
@@ -1707,6 +1992,212 @@ def collect_helioc_address_free_v7_templates(exec_dir: Path) -> dict[str, object
     }
 
 
+def collect_helioc_address_free_v8_tables(exec_dir: Path) -> dict[str, object] | None:
+    """Validate exactly four address-free binding tables and samplers."""
+    binding_paths = sorted(exec_dir.glob("helioc-anv-v8-binding-[0-9]*.txt"))
+    sampler_paths = sorted(exec_dir.glob("helioc-anv-v8-sampler-[0-9]*.txt"))
+    if not binding_paths and not sampler_paths:
+        return None
+    if len(binding_paths) != 4 or len(sampler_paths) != 4:
+        raise SystemExit("HelioC V8 requires exactly four binding and four sampler records")
+    bindings: dict[str, dict[str, object]] = {}
+    stages = {"compute_ping_a": 5, "compute_ping_b": 5, "graphics_a": 4, "graphics_b": 4}
+    for path in binding_paths:
+        fields: dict[str, str] = {}
+        relocs: list[str] = []
+        try:
+            lines = path.read_text(encoding="ascii").splitlines()
+        except UnicodeDecodeError as error:
+            raise SystemExit(f"HelioC V8 binding record is not ASCII: {path.name}") from error
+        if not lines or lines[0] != "TRUEOS_HELIOC_BINDING_TABLE_V8":
+            raise SystemExit(f"HelioC V8 binding record has invalid magic: {path.name}")
+        for line in lines[1:]:
+            if line.startswith("reloc="):
+                relocs.append(line.removeprefix("reloc="))
+                continue
+            key, separator, value = line.partition("=")
+            if not separator:
+                raise SystemExit(f"HelioC V8 binding record is malformed: {path.name}")
+            elif key in fields:
+                raise SystemExit(f"HelioC V8 binding record duplicates {key}: {path.name}")
+            else:
+                fields[key] = value
+        role = fields.get("table_role", "")
+        expected = HELIOC_ADDRESS_FREE_V8_BINDING_ROLES.get(role)
+        if expected is None or role in bindings:
+            raise SystemExit(f"HelioC V8 has an unexpected or duplicate table role: {path.name}")
+        if (fields.get("stage") != str(stages[role]) or fields.get("bytes") != "16"
+                or fields.get("live_entry_count") != "4" or fields.get("entry_count") != "4"
+                or tuple(fields.get("entry_roles", "").split(",")) != expected
+                or fields.get("data_hex") != "00" * 16):
+            raise SystemExit(f"HelioC V8 binding contract mismatch: {path.name}")
+        expected_relocs = [f"{offset * 4},4,object_offset,{name},0,0xffffffff,0"
+                           for offset, name in enumerate(HELIOC_ADDRESS_FREE_V8_RELOC_SOURCES[role])]
+        if relocs != expected_relocs:
+            raise SystemExit(f"HelioC V8 binding relocations mismatch: {path.name}")
+        bindings[role] = {"role": role, "stage": stages[role], "bytes": 16,
+                          "entry_roles": list(expected), "data_hex": fields["data_hex"],
+                          "relocations": relocs}
+    sampler_hex: str | None = None
+    samplers: list[dict[str, object]] = []
+    sampler_roles: set[str] = set()
+    for path in sampler_paths:
+        fields: dict[str, str] = {}
+        try:
+            lines = path.read_text(encoding="ascii").splitlines()
+        except UnicodeDecodeError as error:
+            raise SystemExit(f"HelioC V8 sampler record is not ASCII: {path.name}") from error
+        if not lines or lines[0] != "TRUEOS_HELIOC_SAMPLER_STATE_V8":
+            raise SystemExit(f"HelioC V8 sampler record has invalid magic: {path.name}")
+        for line in lines[1:]:
+            key, separator, value = line.partition("=")
+            if not separator or key in fields:
+                raise SystemExit(f"HelioC V8 sampler record is malformed: {path.name}")
+            fields[key] = value
+        if set(fields) != {"table_role", "stage", "bytes", "canonical_group", "data_hex"}:
+            raise SystemExit(f"HelioC V8 sampler record has unexpected fields: {path.name}")
+        role = fields.get("table_role", "")
+        data_hex = fields.get("data_hex", "")
+        if (role not in HELIOC_ADDRESS_FREE_V8_BINDING_ROLES
+                or role in sampler_roles
+                or fields.get("stage") != str(stages[role]) or fields.get("bytes") != "16"
+                or fields.get("canonical_group") != "helioc-cloud-sampler"
+                or data_hex != "00401250010000000082040010e00700"):
+            raise SystemExit(f"HelioC V8 sampler contract mismatch: {path.name}")
+        sampler_roles.add(role)
+        if sampler_hex is None:
+            sampler_hex = data_hex
+        elif sampler_hex != data_hex:
+            raise SystemExit(f"HelioC V8 sampler instances disagree: {path.name}")
+        samplers.append({"table_role": role, "stage": stages[role], "bytes": 16,
+                         "data_hex": data_hex})
+    if sampler_roles != set(HELIOC_ADDRESS_FREE_V8_BINDING_ROLES):
+        raise SystemExit("HelioC V8 sampler roles are incomplete")
+    return {"schema": 8, "status": "address_free_binding_sampler_tables",
+            "bindings": [bindings[role] for role in sorted(bindings)],
+            "samplers": sorted(samplers, key=lambda item: str(item["table_role"]))}
+
+
+def collect_helioc_address_free_v9_payloads(exec_dir: Path) -> dict[str, object] | None:
+    """Validate the four normalized descriptor-payload objects emitted by V9."""
+    paths = sorted(exec_dir.glob("helioc-anv-v9-payload-[0-9]*.txt"))
+    if not paths:
+        return None
+    if len(paths) != 4:
+        raise SystemExit("HelioC V9 requires exactly four descriptor payload records")
+    records: dict[str, dict[str, object]] = {}
+    for path in paths:
+        try:
+            lines = path.read_text(encoding="ascii").splitlines()
+        except UnicodeDecodeError as error:
+            raise SystemExit(f"HelioC V9 payload is not ASCII: {path.name}") from error
+        if not lines or lines[0] != "TRUEOS_HELIOC_DESCRIPTOR_PAYLOAD_V9":
+            raise SystemExit(f"HelioC V9 payload has invalid magic: {path.name}")
+        fields: dict[str, str] = {}
+        relocs: list[str] = []
+        for line in lines[1:]:
+            if line.startswith("reloc="):
+                relocs.append(line.removeprefix("reloc="))
+                continue
+            key, separator, value = line.partition("=")
+            if not separator or key in fields:
+                raise SystemExit(f"HelioC V9 payload is malformed: {path.name}")
+            fields[key] = value
+        required = {"object", "set_role", "stage", "bytes", "binding_count", "data_blake3", "data_hex"}
+        if set(fields) != required:
+            raise SystemExit(f"HelioC V9 payload has unexpected fields: {path.name}")
+        role = fields["set_role"]
+        spec = HELIOC_ADDRESS_FREE_V9_PAYLOADS.get(role)
+        if spec is None or role in records or fields["object"] != f"descriptor_payload_{role}":
+            raise SystemExit(f"HelioC V9 payload has unknown or duplicate role: {path.name}")
+        stage, payload_bytes, binding_count, params, sampled, storage = spec
+        expected_data = bytearray(payload_bytes)
+        if storage is None:
+            struct.pack_into("<I", expected_data, 8, 272)
+        else:
+            struct.pack_into("<I", expected_data, 8, 112)
+            expected_data[32:64] = bytes.fromhex(
+                "0000000060000000000000000000000000000000000300003000000084000000"
+            )
+        if (fields["stage"] != str(stage) or fields["bytes"] != str(payload_bytes)
+                or fields["binding_count"] != str(binding_count)
+                or fields["data_blake3"] != HELIOC_ADDRESS_FREE_V9_BLAKE3[role]
+                or not re.fullmatch(rf"[0-9a-f]{{{payload_bytes * 2}}}", fields["data_hex"])
+                or bytes.fromhex(fields["data_hex"]) != bytes(expected_data)):
+            raise SystemExit(f"HelioC V9 payload contract mismatch: {path.name}")
+        expected = [
+            f"0,8,fixed_gpu,{params},0,0xffffffffffffffff,0",
+            f"16,4,object_offset,surface_{sampled}_sampled,0,0xffffffc0,0",
+            "28,4,object_offset,sampler_state,0,0xffffffff,0",
+        ]
+        if storage is not None:
+            expected += [
+                f"32,4,object_offset,surface_{storage}_storage,0,0xffffffc0,0",
+                f"40,8,fixed_gpu,{storage},0,0xffffffffffffffff,0",
+            ]
+        if relocs != expected:
+            raise SystemExit(f"HelioC V9 payload relocations mismatch: {path.name}")
+        records[role] = {"object": fields["object"], "set_role": role, "stage": stage,
+                         "bytes": payload_bytes, "binding_count": binding_count,
+                         "data_blake3": fields["data_blake3"], "data_hex": fields["data_hex"],
+                         "relocations": relocs}
+    if set(records) != set(HELIOC_ADDRESS_FREE_V9_PAYLOADS):
+        raise SystemExit("HelioC V9 descriptor payload roles are incomplete")
+    for pair in (("compute_ping_a", "compute_ping_b"), ("graphics_a", "graphics_b")):
+        left, right = (records[role] for role in pair)
+        if left["data_hex"] != right["data_hex"] or left["data_blake3"] != right["data_blake3"]:
+            raise SystemExit(f"HelioC V9 {pair[0]}/{pair[1]} payloads disagree")
+    return {"schema": 9, "status": "address_free_descriptor_payloads",
+            "payloads": [records[role] for role in sorted(records)]}
+
+
+def collect_helioc_workload_slices_v10a(exec_dir: Path) -> dict[str, object] | None:
+    """Collect raw V10A workload evidence; never treat it as package state."""
+    paths = sorted(exec_dir.glob("helioc-anv-v10a-slice-[0-9]*.txt"))
+    if not paths:
+        return None
+    if len(paths) != 6:
+        raise SystemExit("HelioC V10A requires exactly six workload slice records")
+    records: dict[tuple[str, str, str, str], dict[str, object]] = {}
+    for path in paths:
+        lines = path.read_text(encoding="ascii").splitlines()
+        if not lines or lines[0] != "TRUEOS_HELIOC_WORKLOAD_SLICE_V10A":
+            raise SystemExit(f"HelioC V10A slice has invalid magic: {path.name}")
+        fields: dict[str, str] = {}
+        for line in lines[1:]:
+            key, separator, value = line.partition("=")
+            if not separator or key in fields:
+                raise SystemExit(f"HelioC V10A slice is malformed: {path.name}")
+            fields[key] = value
+        allowed = {"current", "step", "final_role", "dispatch_roles", "draw_vertices", "raw_va", "bytes", "data_hex"}
+        if set(fields) != allowed:
+            raise SystemExit(f"HelioC V10A slice has unexpected fields: {path.name}")
+        key = (fields["current"], fields["step"], fields["final_role"], fields["dispatch_roles"])
+        expected_draw = HELIOC_V10A_VARIANTS.get(key)
+        if expected_draw is None or key in records or fields["draw_vertices"] != str(expected_draw):
+            raise SystemExit(f"HelioC V10A slice is not an exact V4 variant: {path.name}")
+        if (not re.fullmatch(r"0x[0-9a-f]+", fields["raw_va"])
+                or int(fields["raw_va"], 16) == 0
+                or not re.fullmatch(r"[1-9][0-9]{0,5}", fields["bytes"])
+                or not re.fullmatch(r"[0-9a-f]+", fields["data_hex"])
+                or int(fields["bytes"]) == 0 or int(fields["bytes"]) > 256 * 1024
+                or int(fields["bytes"]) % 4 != 0
+                or len(fields["data_hex"]) != int(fields["bytes"]) * 2):
+            raise SystemExit(f"HelioC V10A slice has invalid raw diagnostic payload: {path.name}")
+        data = bytes.fromhex(fields["data_hex"])
+        if any(int.from_bytes(data[offset:offset + 4], "little") == 0x05000000
+                for offset in range(0, len(data), 4)):
+            raise SystemExit(f"HelioC V10A slice contains a batch-buffer-end dword: {path.name}")
+        records[key] = {"current": key[0], "step": int(key[1]), "final_role": key[2],
+                        "dispatch_roles": key[3], "draw_vertices": 3,
+                        "raw_va": fields["raw_va"], "bytes": int(fields["bytes"]),
+                        "data_hex": fields["data_hex"],
+                        "sha256": hashlib.sha256(data).hexdigest()}
+    return {"schema": "v10a", "status": "diagnostic_only_raw_workload_slices",
+            "package_eligible": False, "slices": [records[key] for key in sorted(records)],
+            "boundary": "raw_va and data_hex are diagnostic evidence only; not HELIOCRS state"}
+
+
 def collect_helioc_command_catalog(exec_dir: Path) -> dict[str, object] | None:
     """Validate the six named raw command variants without normalizing bytes."""
     paths = sorted(exec_dir.glob("helioc-anv-v4-command-[0-9]*.txt"))
@@ -2028,6 +2519,9 @@ def collect_instrumented_anv_capture(exec_dir: Path) -> dict[str, object] | None
         "address_free_indirect_templates": collect_helioc_address_free_indirect_templates(exec_dir),
         "address_free_surface_templates": collect_helioc_address_free_surface_templates(exec_dir),
         "address_free_buffer_descriptor_templates": collect_helioc_address_free_v7_templates(exec_dir),
+        "address_free_binding_sampler_tables": collect_helioc_address_free_v8_tables(exec_dir),
+        "address_free_descriptor_payloads": collect_helioc_address_free_v9_payloads(exec_dir),
+        "diagnostic_workload_slices": collect_helioc_workload_slices_v10a(exec_dir),
         # V2/V3 captures are intentionally one explicit named catalog anchor,
         # rather than an order-dependent first record.  The raw command
         # catalog remains diagnostic only and no address-bearing bytes are
@@ -2154,7 +2648,12 @@ def bake_helioc(args: argparse.Namespace) -> None:
             raise SystemExit(f"pinned Naga emitted no {name} SPIR-V for HelioC")
     exec_dir = work / f"helioc-pipeline-exec-{os.getpid()}"
     native_dir = work / "helioc-native"
-    exec_dir.mkdir(exist_ok=True)
+    if exec_dir.exists() or native_dir.exists():
+        raise SystemExit(
+            f"HelioC capture session directories already exist: {exec_dir} or {native_dir}"
+        )
+    exec_dir.mkdir()
+    native_dir.mkdir()
     dumper_source = work / "helioc_pipeline_dump.c"
     dumper = work / "helioc_pipeline_dump"
     make_helioc_compile_only_dumper(dumper_source)
@@ -2268,21 +2767,24 @@ def bake_helioc(args: argparse.Namespace) -> None:
         )
         if instrumented.get("address_free_indirect_templates") is not None \
                 and instrumented.get("address_free_surface_templates") is not None \
-                and instrumented.get("address_free_buffer_descriptor_templates") is not None:
+                and instrumented.get("address_free_buffer_descriptor_templates") is not None \
+                and instrumented.get("address_free_binding_sampler_tables") is not None \
+                and instrumented.get("address_free_descriptor_payloads") is not None:
             capture_metadata["relocatable_state"] = {
                 "section": HELIOC_RELOC_STATE_SECTION,
-                "status": "partial-v7",
+                "status": "partial-v9",
                 "proven_slices": [
                     "indirect-descriptor-v5", "image-surface-v6", "buffer-descriptor-surface-v7",
+                    "binding-table-sampler-v8", "descriptor-payload-v9",
                 ],
                 "reason": (
-                    "command, binding-table, sampler, descriptor payload, and program objects still "
+                    "command and program objects still "
                     "lack a complete typed relocation map"
                 ),
             }
             capture_metadata["remaining_capture_boundary"] = (
-                "V5 indirect descriptors, V6 image surfaces, and V7 buffer/descriptor-set surfaces are "
-                "address-free; command, table, sampler, descriptor payload, and program state remain incomplete, and "
+                "V5 indirect descriptors, V6 image surfaces, V7 buffer/descriptor-set surfaces, and V8 "
+                "binding/sampler tables and descriptor payloads are address-free; command and program state remain incomplete, and "
                 "shim execution is not physical target proof"
             )
     (work / "helioc-capture-metadata.json").write_bytes(

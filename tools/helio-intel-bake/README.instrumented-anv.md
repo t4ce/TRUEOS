@@ -25,7 +25,21 @@ The patch makes three otherwise-private values observable only when
   set/resource role, descriptor-relative layout and range, and verifies then
   clears the packed gfx120 base address with a typed relocation. Tables,
   descriptor payload contents, sampler/program state, SBA, IDD, and command
-  packet relocations are still required before HELIOCRS v2 may be assembled.
+  packet relocations remain required at this V7 capture rung;
+- address-free V8 binding-table and sampler records: exactly four named
+  compute/graphics 16-byte binding tables with zeroed data and typed
+  `object_offset` relocations, plus four identical role-labelled sampler
+  records using the proven canonical sampler bytes. Any role, stage, count,
+  relocation, or sampler mismatch fails closed.
+- address-free V9 descriptor-payload records: exactly four role-labelled
+  payloads (64 bytes for compute A/B, 32 bytes for graphics A/B), with exact
+  binding counts, normalized data, and typed parameter/sampled/sampler/storage
+  relocations. Unknown roles, duplicate records, raw-address fields, or any
+  contract mismatch fail closed.
+- V10A diagnostic workload slices: exactly the six V4 command variants,
+  retaining raw batch VA and bytes with SHA-256 fingerprints. These are
+  intentionally raw diagnostic evidence only and never become HELIOCRS state
+  or alter the `partial-v9` admission boundary.
 
 Each binary record is an individual file (not an append stream) and uses a little-endian seven-u32 header:
 `magic=0x48434d56` (`VMCH`), version, kind, stage-or-descriptor-type,
