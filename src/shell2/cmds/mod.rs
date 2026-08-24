@@ -31,6 +31,8 @@ pub(crate) mod surf;
 pub(crate) mod tde;
 pub(crate) mod tlb;
 pub(crate) mod tlb_helper;
+pub(crate) mod tlb_platform;
+#[path = "tlb_smbios_wrapper.rs"]
 pub(crate) mod tlb_smbios;
 pub(crate) mod ttstt;
 pub(crate) mod update;
