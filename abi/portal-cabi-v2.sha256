@@ -129,6 +129,12 @@
 # generic WGPU boundary. A fixed-capacity pointer-free record carries at most
 # sixteen index ranges and immediate RGBA values sharing one authenticated
 # pipeline and buffer binding; the imported UI4 lease is still consumed once.
+# The HelioC cloud work-graph create, destroy, and frame-submit calls are
+# strictly additive. They bind only four caller-owned vVideoMem handles to one
+# immutable kernel profile with at most two simulation steps; no shader bytes,
+# GPU address, packet, dispatch shape, or ping-pong selector crosses the ABI.
+# Frame submission remains fail-closed until the exact sealed two-stage native
+# package and UI4 release-fence implementation are present.
 # Thirteen legacy declarations which never had kernel exports are intentionally
 # removed from both SDK copies: four old gfx texture calls, four raw input
 # queue/injection calls, and five shell1/shell-history/registry/line calls.
@@ -167,4 +173,4 @@
 # replacement became the runtime owner.  It was interpreter-specific kernel
 # state, not a general Blueprint service; worker execution now uses the child
 # Hull contract above.
-e001daf28913dc62c42679c0429729c8cde96730088951d04aa43dde9abfdc4f
+2444247335c8ad6ab4be77f6368b7983635deb878ac7fc4b3ad33a798bd8164f

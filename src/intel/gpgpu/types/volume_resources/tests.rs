@@ -118,7 +118,7 @@
             );
         }
 
-        fn cloud_fixture() -> Vec<u8> {
+        pub(super) fn cloud_fixture() -> Vec<u8> {
             const VOLUMES: usize = 2;
             const VIEWS: usize = 4;
             const SAMPLERS: usize = 1;

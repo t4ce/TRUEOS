@@ -723,11 +723,7 @@ unsafe extern "C" {
         total_len: u64,
         out_handle: *mut u32,
     ) -> i32;
-    pub fn trueos_cabi_fs_write_chunk(
-        handle: u32,
-        data_ptr: *const u8,
-        data_len: usize,
-    ) -> i32;
+    pub fn trueos_cabi_fs_write_chunk(handle: u32, data_ptr: *const u8, data_len: usize) -> i32;
     pub fn trueos_cabi_fs_write_finish(handle: u32) -> i32;
     pub fn trueos_cabi_fs_write_abort(handle: u32) -> i32;
 
@@ -1023,6 +1019,18 @@ unsafe extern "C" {
         queue: u64,
         batch: *const crate::vgpu::IndexedDrawBatch,
         out_point: *mut crate::vgpu::TimelinePoint,
+    ) -> i32;
+    pub fn trueos_cabi_vgpu_cloud_work_graph_create(
+        device: u64,
+        descriptor: *const crate::vgpu::CloudWorkGraphDescriptor,
+        out_graph: *mut u64,
+    ) -> i32;
+    pub fn trueos_cabi_vgpu_cloud_work_graph_destroy(device: u64, graph: u64) -> i32;
+    pub fn trueos_cabi_vgpu_cloud_frame_submit(
+        device: u64,
+        queue: u64,
+        submit: *const crate::vgpu::CloudFrameSubmit,
+        out_telemetry: *mut crate::vgpu::CloudFrameTelemetry,
     ) -> i32;
     pub fn trueos_cabi_vgpu_vvideo_create(
         device: u64,

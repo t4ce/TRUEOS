@@ -18,6 +18,7 @@ include!("types/worklists.rs");
 include!("types/surfaces.rs");
 include!("types/volumes.rs");
 include!("types/volume_resources.rs");
+include!("types/helioc_native.rs");
 include!("artifacts/metadata.rs");
 include!("artifacts/uploads.rs");
 include!("operations/primitives.rs");

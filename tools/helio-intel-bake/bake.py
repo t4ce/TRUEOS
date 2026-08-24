@@ -23,6 +23,7 @@ import zlib
 
 TRUEOS = Path(__file__).resolve().parents[2]
 HELIO = TRUEOS.parent / "Helio"
+HELIO_EXAMPLES = TRUEOS.parent / "Helio-Examples"
 NAGA_MANIFEST = HELIO / "vendor/wgpu/naga-cli/Cargo.toml"
 UPSTREAM_DUMPER = (
     TRUEOS / "crates/trueos-shader/xe_lp_shader_bake/simple_triangle_dump.c"
@@ -56,6 +57,24 @@ RETAINED_TRANSFORM_MAGIC = b"HRTXFM\0\0"
 RETAINED_TRANSFORM_HEADER_BYTES = 80
 RETAINED_TRANSFORM_BYTES = 128
 RETAINED_TRANSFORM_FLAGS = 0xF
+
+# HelioC is deliberately fed by the authored WebGPU sources, not the older
+# C++/OpenCL compatibility experiments beside them. These identities are also
+# sealed by src/intel/gpgpu/types/helioc_native.rs and src/gpu/vgpu.rs.
+HELIOC_SOURCE_ROOT = HELIO_EXAMPLES / "cloud-engine-webgpu-linux-aligned/shaders"
+HELIOC_SIMULATE_SOURCE = HELIOC_SOURCE_ROOT / "simulate.wgsl"
+HELIOC_RENDER_SOURCE = HELIOC_SOURCE_ROOT / "render.wgsl"
+HELIOC_SIMULATE_SHA256 = "f583d3c63e5f387a5926281df29b7688eb09eaa5f06119d74fffa70d592013f6"
+HELIOC_RENDER_SHA256 = "5d536a468fcb698c3dca79faac0e5a4924fdc8ce2c9ce3a9b5d24c40a84cc9ff"
+HELIOC_PACKAGE_SECTION = "compiler/helioc-native-volume-raymarch-v1.bin"
+HELIOC_COMPUTE_SOURCE_SECTION = "authored/cloud-engine/simulate.wgsl"
+HELIOC_GRAPHICS_SOURCE_SECTION = "authored/cloud-engine/render.wgsl"
+HELIOC_VOLUME_SECTION = "resources/volume3d-rgba16f-v1.bin"
+HELIOC_VOLUME_METADATA_SECTION = "compiler/cloud-volume-bindings-v1.json"
+HELIOC_COMPUTE_ISA_SECTION = "intel-xe-lp/helioc-volume-update.bin"
+HELIOC_VERTEX_ISA_SECTION = "intel-xe-lp/helioc-volume-raymarch.vs.bin"
+HELIOC_FRAGMENT_ISA_SECTION = "intel-xe-lp/helioc-volume-raymarch.fs.bin"
+HELIOC_DESCRIPTOR_BYTES = 320
 
 
 def _affine3x4_mul(
@@ -627,6 +646,283 @@ def emit_helioa(sections: dict[str, tuple[int, bytes]]) -> bytes:
     return bytes(out)
 
 
+def helioc_authored_sources() -> tuple[bytes, bytes]:
+    """Read the only two sources that a sealed HelioC package may name."""
+    for path in (HELIOC_SIMULATE_SOURCE, HELIOC_RENDER_SOURCE):
+        if not path.is_file():
+            raise SystemExit(f"required authored HelioC source is absent: {path}")
+    compute = HELIOC_SIMULATE_SOURCE.read_bytes()
+    graphics = HELIOC_RENDER_SOURCE.read_bytes()
+    if sha256(compute) != HELIOC_SIMULATE_SHA256:
+        raise SystemExit("simulate.wgsl does not match the sealed HelioC source digest")
+    if sha256(graphics) != HELIOC_RENDER_SHA256:
+        raise SystemExit("render.wgsl does not match the sealed HelioC source digest")
+    for marker in (
+        b"@compute @workgroup_size(4, 4, 4)",
+        b"fn main(@builtin(global_invocation_id)",
+        b"texture_3d<f32>",
+        b"texture_storage_3d<rgba16float, write>",
+    ):
+        if marker not in compute:
+            raise SystemExit(f"sealed simulate.wgsl lacks required HelioC marker: {marker!r}")
+    for marker in (
+        b"@vertex\nfn vs_main",
+        b"@fragment\nfn fs_main",
+        b"texture_3d<f32>",
+    ):
+        if marker not in graphics:
+            raise SystemExit(f"sealed render.wgsl lacks required HelioC marker: {marker!r}")
+    return compute, graphics
+
+
+def _helioc_u16(data: bytes, offset: int) -> int:
+    return struct.unpack_from("<H", data, offset)[0]
+
+
+def _helioc_u32(data: bytes, offset: int) -> int:
+    return struct.unpack_from("<I", data, offset)[0]
+
+
+def validate_helioc_resource_capture(resources: bytes, metadata: bytes) -> None:
+    """Check that a future real capture supplied the sealed logical contract.
+
+    This is intentionally a structural check only.  The capture, not this
+    host script, must select native surface/sampler encodings and compiler
+    table indices.  The TRUEOS parser repeats the full semantic validation.
+    """
+    if not metadata:
+        raise SystemExit("HelioC capture has no compiler/resource metadata")
+    if len(resources) < 96 or resources[:8] != b"HELV3D\0\0":
+        raise SystemExit("HelioC capture has no HELV3D volume resource contract")
+    if (
+        _helioc_u16(resources, 8) != 1
+        or _helioc_u16(resources, 10) != 96
+        or _helioc_u32(resources, 12) != len(resources)
+        or tuple(_helioc_u16(resources, offset) for offset in (16, 18, 20, 22, 24))
+        != (2, 4, 1, 6, 4)
+        or resources[48:80] != hashlib.sha256(metadata).digest()
+        or any(resources[80:96])
+    ):
+        raise SystemExit("HelioC capture resource metadata is not the sealed cloud-volume contract")
+
+
+def encode_helioc_descriptor(
+    compute: bytes,
+    graphics: bytes,
+    resources: bytes,
+    compute_isa: bytes,
+    vertex_isa: bytes,
+    fragment_isa: bytes,
+    *,
+    compute_simd: int,
+) -> bytes:
+    """Encode the fixed HELIOC v1 descriptor from genuine captured bytes.
+
+    Callers must supply the three ISA records and resource metadata captured
+    from the actual Naga/Mesa/ANV pipeline.  This function has no fallback
+    binary path: synthetic, empty, or unaligned ISA cannot become a package.
+    """
+    if sha256(compute) != HELIOC_SIMULATE_SHA256 or sha256(graphics) != HELIOC_RENDER_SHA256:
+        raise SystemExit("HelioC descriptor refuses non-authored WGSL bytes")
+    if compute_simd not in (16, 32):
+        raise SystemExit("HelioC compute SIMD must be 16 or 32")
+    for name, isa in (
+        ("compute", compute_isa),
+        ("vertex", vertex_isa),
+        ("fragment", fragment_isa),
+    ):
+        if not isa or len(isa) % 4 or not any(isa):
+            raise SystemExit(f"HelioC {name} ISA must be captured, non-zero, and dword aligned")
+
+    descriptor = bytearray(HELIOC_DESCRIPTOR_BYTES)
+    descriptor[:8] = b"HELIOC\0\0"
+    struct.pack_into("<HHII", descriptor, 8, 1, HELIOC_DESCRIPTOR_BYTES,
+                     HELIOC_DESCRIPTOR_BYTES, 0x0F)
+    struct.pack_into("<HH", descriptor, 20, 125, 0x4680)
+    descriptor[24:28] = bytes((0x0C, 0x0C, 1, 0))
+    threads = 64 // compute_simd
+    per_thread = 96 if compute_simd == 16 else 192
+    struct.pack_into("<HH", descriptor, 28, compute_simd, threads)
+    struct.pack_into("<3H", descriptor, 32, 4, 4, 4)
+    struct.pack_into("<3H", descriptor, 38, 24, 12, 24)
+    struct.pack_into("<5H", descriptor, 44, 96, per_thread, 480, 16, 5)
+    struct.pack_into("<I", descriptor, 56, 0x3F)
+    for index, binding in enumerate((
+        (1, 0, 1, 1), (1, 0, 2, 2), (1, 0, 3, 3),
+        (2, 0, 1, 1), (2, 0, 2, 2),
+    )):
+        descriptor[60 + index * 4:64 + index * 4] = bytes(binding)
+    for offset, data in (
+        (96, compute), (100, graphics), (104, resources),
+        (108, compute_isa), (112, vertex_isa), (116, fragment_isa),
+    ):
+        struct.pack_into("<I", descriptor, offset, len(data))
+    for offset, data in (
+        (128, compute), (160, graphics), (192, resources),
+        (224, compute_isa), (256, vertex_isa), (288, fragment_isa),
+    ):
+        descriptor[offset:offset + 32] = hashlib.sha256(data).digest()
+    return bytes(descriptor)
+
+
+def validate_helioc_descriptor(
+    descriptor: bytes,
+    compute: bytes,
+    graphics: bytes,
+    resources: bytes,
+    compute_isa: bytes,
+    vertex_isa: bytes,
+    fragment_isa: bytes,
+    *,
+    compute_simd: int,
+) -> None:
+    """Assert every HELIOC v1 field before its HELIOA is emitted."""
+    expected_threads = 64 // compute_simd
+    expected_per_thread = 96 if compute_simd == 16 else 192
+    if (
+        len(descriptor) != HELIOC_DESCRIPTOR_BYTES
+        or descriptor[:8] != b"HELIOC\0\0"
+        or (_helioc_u16(descriptor, 8), _helioc_u16(descriptor, 10), _helioc_u32(descriptor, 12), _helioc_u32(descriptor, 16))
+        != (1, HELIOC_DESCRIPTOR_BYTES, HELIOC_DESCRIPTOR_BYTES, 0x0F)
+        or (_helioc_u16(descriptor, 20), _helioc_u16(descriptor, 22), descriptor[24:28])
+        != (125, 0x4680, bytes((0x0C, 0x0C, 1, 0)))
+        or (_helioc_u16(descriptor, 28), _helioc_u16(descriptor, 30))
+        != (compute_simd, expected_threads)
+        or tuple(_helioc_u16(descriptor, offset) for offset in (32, 34, 36, 38, 40, 42))
+        != (4, 4, 4, 24, 12, 24)
+        or tuple(_helioc_u16(descriptor, offset) for offset in (44, 46, 48, 50, 52))
+        != (96, expected_per_thread, 480, 16, 5)
+        or _helioc_u32(descriptor, 56) != 0x3F
+        or any(descriptor[54:56])
+        or any(descriptor[80:96])
+        or any(descriptor[120:128])
+    ):
+        raise SystemExit("HelioC descriptor self-check rejected fixed target/shape/payload state")
+    expected_bindings = bytes((
+        1, 0, 1, 1, 1, 0, 2, 2, 1, 0, 3, 3,
+        2, 0, 1, 1, 2, 0, 2, 2,
+    ))
+    if descriptor[60:80] != expected_bindings:
+        raise SystemExit("HelioC descriptor self-check rejected logical binding state")
+    for size_offset, hash_offset, data in (
+        (96, 128, compute), (100, 160, graphics), (104, 192, resources),
+        (108, 224, compute_isa), (112, 256, vertex_isa), (116, 288, fragment_isa),
+    ):
+        if _helioc_u32(descriptor, size_offset) != len(data) \
+                or descriptor[hash_offset:hash_offset + 32] != hashlib.sha256(data).digest():
+            raise SystemExit("HelioC descriptor self-check rejected a sealed section reference")
+    if descriptor[128:160].hex() != HELIOC_SIMULATE_SHA256 \
+            or descriptor[160:192].hex() != HELIOC_RENDER_SHA256:
+        raise SystemExit("HelioC descriptor self-check rejected authored source provenance")
+
+
+def assemble_helioc_package(
+    compute: bytes,
+    graphics: bytes,
+    resources: bytes,
+    resource_metadata: bytes,
+    compute_isa: bytes,
+    vertex_isa: bytes,
+    fragment_isa: bytes,
+    *,
+    compute_simd: int,
+) -> bytes:
+    """Build a HELIOA only after a real capture has supplied every datum."""
+    validate_helioc_resource_capture(resources, resource_metadata)
+    descriptor = encode_helioc_descriptor(
+        compute, graphics, resources, compute_isa, vertex_isa, fragment_isa,
+        compute_simd=compute_simd,
+    )
+    validate_helioc_descriptor(
+        descriptor, compute, graphics, resources, compute_isa, vertex_isa,
+        fragment_isa, compute_simd=compute_simd,
+    )
+    manifest = {
+        "schema": 1,
+        "producer": "helio-intel-bake/helioc",
+        "frontend": "helio-vendored-naga",
+        "backend": "mesa-anv-vulkan-pipeline-executable-cache",
+        "target": "intel-gfx125-adl-s-uhd-770-rev-0c",
+        "workload": "cloud-volume-update-plus-fullscreen-raymarch",
+        "compute": {
+            "entry": "main", "local_size": [4, 4, 4], "groups": [24, 12, 24],
+            "simd_width": compute_simd, "hardware_threads": 64 // compute_simd,
+        },
+        "graphics": {"vertex_entry": "vs_main", "fragment_entry": "fs_main", "simd_width": 16},
+    }
+    sections = {
+        "manifest.json": (1, (json.dumps(manifest, sort_keys=True) + "\n").encode()),
+        HELIOC_PACKAGE_SECTION: (5, descriptor),
+        HELIOC_COMPUTE_SOURCE_SECTION: (3, compute),
+        HELIOC_GRAPHICS_SOURCE_SECTION: (3, graphics),
+        HELIOC_VOLUME_METADATA_SECTION: (5, resource_metadata),
+        HELIOC_VOLUME_SECTION: (6, resources),
+        HELIOC_COMPUTE_ISA_SECTION: (4, compute_isa),
+        HELIOC_VERTEX_ISA_SECTION: (4, vertex_isa),
+        HELIOC_FRAGMENT_ISA_SECTION: (4, fragment_isa),
+    }
+    artifact = emit_helioa(sections)
+    parsed = parse_helioa(artifact)
+    for name, expected_kind, data in (
+        (HELIOC_PACKAGE_SECTION, 5, descriptor),
+        (HELIOC_COMPUTE_SOURCE_SECTION, 3, compute),
+        (HELIOC_GRAPHICS_SOURCE_SECTION, 3, graphics),
+        (HELIOC_VOLUME_METADATA_SECTION, 5, resource_metadata),
+        (HELIOC_VOLUME_SECTION, 6, resources),
+        (HELIOC_COMPUTE_ISA_SECTION, 4, compute_isa),
+        (HELIOC_VERTEX_ISA_SECTION, 4, vertex_isa),
+        (HELIOC_FRAGMENT_ISA_SECTION, 4, fragment_isa),
+    ):
+        if parsed.get(name) != (expected_kind, data):
+            raise SystemExit(f"HelioC assembler failed to preserve {name}")
+    return artifact
+
+
+def helioc_capture_gaps() -> list[str]:
+    """Return only the capture facts absent from the pinned current dumper."""
+    source = UPSTREAM_DUMPER.read_text()
+    missing: list[str] = []
+    if "vkCreateComputePipelines" not in source or "VkComputePipelineCreateInfo" not in source:
+        missing.append("VkPipeline compute executable/cache capture for simulate.wgsl entry main")
+    if (
+        "VK_IMAGE_VIEW_TYPE_3D" not in source
+        or "VK_DESCRIPTOR_TYPE_STORAGE_IMAGE" not in source
+        or "VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER" not in source
+    ):
+        missing.append(
+            "Mesa/ANV descriptor-layout capture for sampled texture_3d, sampler, and "
+            "write-only storage texture_3d"
+        )
+    return missing
+
+
+def bake_helioc(args: argparse.Namespace) -> None:
+    """Run the pinned frontend, then fail closed if capture cannot prove native state."""
+    compute, graphics = helioc_authored_sources()
+    output = (args.out or Path("helioc-native.adl-s.gfx125.helio")).resolve()
+    work = (args.work_dir or output.with_suffix(output.suffix + ".work")).resolve()
+    work.mkdir(parents=True, exist_ok=True)
+    compute_spv = work / "helioc-volume-update.main.spv"
+    vertex_spv = work / "helioc-volume-raymarch.vs.spv"
+    fragment_spv = work / "helioc-volume-raymarch.fs.spv"
+    naga_compile(HELIOC_SIMULATE_SOURCE, "main", compute_spv)
+    naga_compile(HELIOC_RENDER_SOURCE, "vs_main", vertex_spv)
+    naga_compile(HELIOC_RENDER_SOURCE, "fs_main", fragment_spv)
+    for name, spv in (("compute", compute_spv), ("vertex", vertex_spv), ("fragment", fragment_spv)):
+        if not spv.is_file() or not spv.read_bytes():
+            raise SystemExit(f"pinned Naga emitted no {name} SPIR-V for HelioC")
+    missing = helioc_capture_gaps()
+    if missing:
+        raise SystemExit(
+            "HelioC preflight stopped; no HELIOA emitted: missing capture datum(s): "
+            + "; ".join(missing)
+        )
+    raise SystemExit(
+        "HelioC capture implementation is unexpectedly not gated by the known gaps; "
+        "refuse to emit without a reviewed compute/3D extraction path"
+    )
+
+
 def captured_wgsl(sections: dict[str, tuple[int, bytes]]) -> tuple[str, bytes]:
     candidates = [
         (name, data) for name, (_, data) in sections.items()
@@ -1107,10 +1403,17 @@ def bake_churn_only(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("artifact", type=Path)
+    parser.add_argument("artifact", type=Path, nargs="?")
     parser.add_argument("--out", type=Path)
     parser.add_argument("--work-dir", type=Path)
     parser.add_argument("--device-id", help="Force the Intel Vulkan compiler device, e.g. 0xA780")
+    parser.add_argument(
+        "--helioc", action="store_true",
+        help=(
+            "compile only the sealed authored cloud WGSL through pinned Naga and "
+            "fail closed until this tool has real ANV compute/3D capture support"
+        ),
+    )
     args = parser.parse_args()
 
     for path in (NAGA_MANIFEST, UPSTREAM_DUMPER, UPSTREAM_EXTRACTOR):
@@ -1119,6 +1422,14 @@ def main() -> None:
     for tool in ("cargo", "cc", "python3"):
         if shutil.which(tool) is None:
             raise SystemExit(f"required tool not found: {tool}")
+
+    if args.helioc:
+        if args.artifact is not None:
+            parser.error("artifact is not accepted with --helioc")
+        bake_helioc(args)
+        return
+    if args.artifact is None:
+        parser.error("artifact is required unless --helioc is supplied")
 
     artifact_path = args.artifact.resolve()
     sections = parse_helioa(artifact_path.read_bytes())

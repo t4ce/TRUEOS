@@ -15,4 +15,14 @@ pub(crate) mod helio_volume_resources {
     include!("volume_resources/program.rs");
     include!("volume_resources/validation.rs");
     include!("volume_resources/tests.rs");
+
+    #[cfg(test)]
+    pub(crate) fn helioc_test_cloud_resource() -> (alloc::vec::Vec<u8>, &'static [u8]) {
+        const METADATA: &[u8] = br#"{\"source\":\"igc\",\"profile\":\"cloud-volume\"}
+"#;
+        let mut resource = tests::cloud_fixture();
+        let digest = Sha256::digest(METADATA);
+        resource[48..80].copy_from_slice(&digest);
+        (resource, METADATA)
+    }
 }

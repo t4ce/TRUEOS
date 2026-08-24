@@ -148,6 +148,156 @@ fn direct_rcs_push_gpgpu_walker_2d(
         && direct_rcs_push(batch, cursor, GPGPU_WALKER_BOTTOM_MASK)
 }
 
+/// A deliberately bounded Xe-LP 3D walker shape.
+///
+/// The compiler contract selects the SIMD width and therefore both the number
+/// of hardware threads and the local-ID payload footprint. This is not a
+/// general OpenCL launch description: widening either dimension needs a new
+/// hardware/ABI proof before it can enter the direct-RCS path.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct DirectRcsXeLp3dWalkerShape {
+    group_dimensions: [u32; 3],
+    local_dimensions: [u32; 3],
+    simd_select: u32,
+    hardware_threads: u32,
+    right_execution_mask: u32,
+    bottom_execution_mask: u32,
+    indirect_bytes: usize,
+}
+
+impl DirectRcsXeLp3dWalkerShape {
+    fn from_authenticated_contract(
+        contract: &GpgpuKernelAbiContract,
+        group_dimensions: [u32; 3],
+        local_dimensions: [u32; 3],
+        indirect_bytes: usize,
+        right_execution_mask: u32,
+        bottom_execution_mask: u32,
+    ) -> Option<Self> {
+        // The artifact uploader authenticates the contract against the
+        // compiler output. Revalidate here so this low-level encoder remains
+        // fail-closed when it is used independently of an upload path.
+        if contract.validate().is_err()
+            || group_dimensions != XELP_3D_WALKER_GROUP_DIMENSIONS
+            || local_dimensions != XELP_3D_WALKER_LOCAL_DIMENSIONS
+        {
+            return None;
+        }
+
+        let local_invocations = local_dimensions[0]
+            .checked_mul(local_dimensions[1])?
+            .checked_mul(local_dimensions[2])?;
+        if local_invocations != XELP_3D_WALKER_LOCAL_INVOCATIONS {
+            return None;
+        }
+
+        let (simd_select, simd_width, expected_per_thread_bytes, expected_right_mask) =
+            match contract.simd_width {
+                16 => (
+                    GPGPU_WALKER_SIMD16_SELECT,
+                    16,
+                    96usize,
+                    GPGPU_WALKER_SIMD16_MASK,
+                ),
+                32 => (
+                    GPGPU_WALKER_SIMD32_SELECT,
+                    32,
+                    192usize,
+                    GPGPU_WALKER_SIMD32_MASK,
+                ),
+                _ => return None,
+            };
+        if contract.per_thread_data_bytes as usize != expected_per_thread_bytes
+            || local_invocations % simd_width != 0
+            || right_execution_mask != expected_right_mask
+            || bottom_execution_mask != GPGPU_WALKER_BOTTOM_MASK
+        {
+            return None;
+        }
+        let hardware_threads = local_invocations / simd_width;
+        // This literal 64-work-item shape has a proven thread count for each
+        // admitted SIMD width. Keep the expectation explicit rather than
+        // treating the packet's thread-count field as a generic scheduler.
+        if hardware_threads
+            != match simd_width {
+                16 => 4,
+                32 => 2,
+                _ => return None,
+            }
+        {
+            return None;
+        }
+
+        let expected_indirect_bytes = (contract.cross_thread_data_bytes as usize)
+            .checked_add(expected_per_thread_bytes.checked_mul(hardware_threads as usize)?)?;
+        if indirect_bytes != expected_indirect_bytes {
+            return None;
+        }
+
+        Some(Self {
+            group_dimensions,
+            local_dimensions,
+            simd_select,
+            hardware_threads,
+            right_execution_mask,
+            bottom_execution_mask,
+            indirect_bytes,
+        })
+    }
+}
+
+/// Emit the one admitted Xe-LP 3D GPGPU_WALKER packet.
+///
+/// `shape` can only be constructed from a validated compiler ABI contract.
+/// Preserve the legacy 2D encoder for all existing users, including Font,
+/// whose full-SIMD16 lane behavior is intentionally unchanged.
+fn direct_rcs_push_xelp_3d_gpgpu_walker(
+    batch: &mut [u32],
+    cursor: &mut usize,
+    payload_offset: usize,
+    shape: DirectRcsXeLp3dWalkerShape,
+) -> bool {
+    if !payload_offset.is_multiple_of(GPGPU_WALKER_INDIRECT_ALIGNMENT_BYTES)
+        || payload_offset
+            .checked_add(shape.indirect_bytes)
+            .is_none_or(|end| end > DIRECT_RCS_BATCH_BYTES)
+        || *cursor > batch.len()
+        || batch.len() - *cursor < GPGPU_WALKER_DWORDS
+    {
+        return false;
+    }
+    debug_assert_eq!(shape.local_dimensions, XELP_3D_WALKER_LOCAL_DIMENSIONS);
+    let simd_width = if shape.simd_select == GPGPU_WALKER_SIMD16_SELECT {
+        16
+    } else {
+        32
+    };
+    debug_assert_eq!(
+        shape.hardware_threads * simd_width,
+        XELP_3D_WALKER_LOCAL_INVOCATIONS
+    );
+
+    direct_rcs_push(batch, cursor, GPGPU_WALKER_CMD)
+        && direct_rcs_push(batch, cursor, 0)
+        && direct_rcs_push(batch, cursor, shape.indirect_bytes as u32)
+        && direct_rcs_push(batch, cursor, payload_offset as u32)
+        && direct_rcs_push(
+            batch,
+            cursor,
+            (shape.simd_select << 30) | (shape.hardware_threads - 1),
+        )
+        && direct_rcs_push(batch, cursor, 0)
+        && direct_rcs_push(batch, cursor, 0)
+        && direct_rcs_push(batch, cursor, shape.group_dimensions[0])
+        && direct_rcs_push(batch, cursor, 0)
+        && direct_rcs_push(batch, cursor, 0)
+        && direct_rcs_push(batch, cursor, shape.group_dimensions[1])
+        && direct_rcs_push(batch, cursor, 0)
+        && direct_rcs_push(batch, cursor, shape.group_dimensions[2])
+        && direct_rcs_push(batch, cursor, shape.right_execution_mask)
+        && direct_rcs_push(batch, cursor, shape.bottom_execution_mask)
+}
+
 fn direct_rcs_push_rect_worklist_walker(
     batch: &mut [u32],
     cursor: &mut usize,
@@ -1200,6 +1350,175 @@ fn direct_rcs_elapsed_us_since(start_tick: u64) -> u64 {
 #[cfg(test)]
 mod direct_rcs_fail_closed_tests {
     use super::*;
+
+    const SIMD32_LOCAL_ID_PAYLOAD: &[GpgpuArtifactPerThreadPayloadArg] =
+        &[GpgpuArtifactPerThreadPayloadArg {
+            kind: GpgpuArtifactPerThreadArgKind::LocalId,
+            offset_bytes: 0,
+            size_bytes: 192,
+        }];
+    const SIMD32_TEST_CONTRACT: GpgpuKernelAbiContract = GpgpuKernelAbiContract {
+        simd_width: 32,
+        per_thread_data_bytes: 192,
+        per_thread_payload_args: SIMD32_LOCAL_ID_PAYLOAD,
+        ..COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT
+    };
+
+    fn xelp_3d_shape(
+        contract: &GpgpuKernelAbiContract,
+        right_execution_mask: u32,
+        bottom_execution_mask: u32,
+        indirect_bytes: usize,
+    ) -> Option<DirectRcsXeLp3dWalkerShape> {
+        DirectRcsXeLp3dWalkerShape::from_authenticated_contract(
+            contract,
+            XELP_3D_WALKER_GROUP_DIMENSIONS,
+            XELP_3D_WALKER_LOCAL_DIMENSIONS,
+            indirect_bytes,
+            right_execution_mask,
+            bottom_execution_mask,
+        )
+    }
+
+    #[test]
+    fn xelp_3d_walker_encodes_compiler_selected_simd16_shape() {
+        let indirect_bytes = COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT.cross_thread_data_bytes as usize
+            + 4 * COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT.per_thread_data_bytes as usize;
+        let shape = xelp_3d_shape(
+            &COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT,
+            GPGPU_WALKER_SIMD16_MASK,
+            GPGPU_WALKER_BOTTOM_MASK,
+            indirect_bytes,
+        )
+        .expect("SIMD16 contract must select the four-thread Xe-LP shape");
+        assert_eq!(shape.local_dimensions, [4, 4, 4]);
+        assert_eq!(shape.hardware_threads, 4);
+        assert_eq!(shape.indirect_bytes, 480);
+
+        let mut batch = [0u32; GPGPU_WALKER_DWORDS];
+        let mut cursor = 0usize;
+        assert!(direct_rcs_push_xelp_3d_gpgpu_walker(
+            &mut batch,
+            &mut cursor,
+            0x4000,
+            shape,
+        ));
+        assert_eq!(cursor, GPGPU_WALKER_DWORDS);
+        assert_eq!(batch[0], GPGPU_WALKER_CMD);
+        assert_eq!(batch[2], 480);
+        assert_eq!(batch[3], 0x4000);
+        assert_eq!(batch[4], (GPGPU_WALKER_SIMD16_SELECT << 30) | 3);
+        assert_eq!([batch[7], batch[10], batch[12]], [24, 12, 24]);
+        assert_eq!(batch[13], GPGPU_WALKER_SIMD16_MASK);
+        assert_eq!(batch[14], GPGPU_WALKER_BOTTOM_MASK);
+    }
+
+    #[test]
+    fn xelp_3d_walker_encodes_compiler_selected_simd32_shape() {
+        assert_eq!(SIMD32_TEST_CONTRACT.validate(), Ok(()));
+        let indirect_bytes = SIMD32_TEST_CONTRACT.cross_thread_data_bytes as usize
+            + 2 * SIMD32_TEST_CONTRACT.per_thread_data_bytes as usize;
+        let shape = xelp_3d_shape(
+            &SIMD32_TEST_CONTRACT,
+            GPGPU_WALKER_SIMD32_MASK,
+            GPGPU_WALKER_BOTTOM_MASK,
+            indirect_bytes,
+        )
+        .expect("SIMD32 contract must select the two-thread Xe-LP shape");
+        assert_eq!(shape.hardware_threads, 2);
+        assert_eq!(shape.indirect_bytes, 480);
+
+        let mut batch = [0u32; GPGPU_WALKER_DWORDS];
+        let mut cursor = 0usize;
+        assert!(direct_rcs_push_xelp_3d_gpgpu_walker(
+            &mut batch,
+            &mut cursor,
+            0x4000,
+            shape,
+        ));
+        assert_eq!(cursor, GPGPU_WALKER_DWORDS);
+        assert_eq!(batch[2], 480);
+        assert_eq!(batch[4], (GPGPU_WALKER_SIMD32_SELECT << 30) | 1);
+        assert_eq!([batch[7], batch[10], batch[12]], [24, 12, 24]);
+        assert_eq!(batch[13], GPGPU_WALKER_SIMD32_MASK);
+        assert_eq!(batch[14], GPGPU_WALKER_BOTTOM_MASK);
+    }
+
+    #[test]
+    fn xelp_3d_walker_rejects_unproven_shape_masks_and_payloads() {
+        let simd16 = COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT;
+        let indirect_bytes = simd16.cross_thread_data_bytes as usize
+            + 4 * simd16.per_thread_data_bytes as usize;
+        assert!(DirectRcsXeLp3dWalkerShape::from_authenticated_contract(
+            &simd16,
+            [23, 12, 24],
+            XELP_3D_WALKER_LOCAL_DIMENSIONS,
+            indirect_bytes,
+            GPGPU_WALKER_SIMD16_MASK,
+            GPGPU_WALKER_BOTTOM_MASK,
+        )
+        .is_none());
+        assert!(DirectRcsXeLp3dWalkerShape::from_authenticated_contract(
+            &simd16,
+            XELP_3D_WALKER_GROUP_DIMENSIONS,
+            [8, 4, 2],
+            indirect_bytes,
+            GPGPU_WALKER_SIMD16_MASK,
+            GPGPU_WALKER_BOTTOM_MASK,
+        )
+        .is_none());
+        assert!(xelp_3d_shape(
+            &simd16,
+            GPGPU_WALKER_SIMD32_MASK,
+            GPGPU_WALKER_BOTTOM_MASK,
+            indirect_bytes,
+        )
+        .is_none());
+        assert!(xelp_3d_shape(
+            &simd16,
+            GPGPU_WALKER_SIMD16_MASK,
+            0,
+            indirect_bytes,
+        )
+        .is_none());
+        assert!(xelp_3d_shape(
+            &simd16,
+            GPGPU_WALKER_SIMD16_MASK,
+            GPGPU_WALKER_BOTTOM_MASK,
+            indirect_bytes - 1,
+        )
+        .is_none());
+
+        let shape = xelp_3d_shape(
+            &simd16,
+            GPGPU_WALKER_SIMD16_MASK,
+            GPGPU_WALKER_BOTTOM_MASK,
+            indirect_bytes,
+        )
+        .unwrap();
+        let mut batch = [0xA5A5_A5A5; GPGPU_WALKER_DWORDS];
+        let before = batch;
+        let mut cursor = 0usize;
+        assert!(!direct_rcs_push_xelp_3d_gpgpu_walker(
+            &mut batch,
+            &mut cursor,
+            0x4020,
+            shape,
+        ));
+        assert_eq!(cursor, 0);
+        assert_eq!(batch, before);
+
+        let mut short_batch = [0xA5A5_A5A5; GPGPU_WALKER_DWORDS - 1];
+        let short_before = short_batch;
+        assert!(!direct_rcs_push_xelp_3d_gpgpu_walker(
+            &mut short_batch,
+            &mut cursor,
+            0x4000,
+            shape,
+        ));
+        assert_eq!(cursor, 0);
+        assert_eq!(short_batch, short_before);
+    }
 
     #[test]
     fn only_busy_rolls_back_an_isolated_lane_submission() {

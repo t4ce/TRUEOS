@@ -500,6 +500,68 @@ pub(crate) fn broker_wait(principal: Principal, device: u64, queue: u64, value: 
     .unwrap_or_else(|error| error.errno())
 }
 
+pub(crate) fn broker_cloud_work_graph_create(
+    principal: Principal,
+    device: u64,
+    descriptor: v::vgpu::CloudWorkGraphDescriptor,
+) -> Result<u64, i32> {
+    let d = vgpu::CloudWorkGraphDescriptor {
+        volume_a: BufferHandle::from_raw(descriptor.volume_a),
+        volume_b: BufferHandle::from_raw(descriptor.volume_b),
+        sim_params: BufferHandle::from_raw(descriptor.sim_params),
+        render_params: BufferHandle::from_raw(descriptor.render_params),
+        profile: descriptor.profile,
+    };
+    vgpu::create_cloud_work_graph(principal, DeviceHandle::from_raw(device), d)
+        .map(|h| h.raw())
+        .map_err(|e| e.errno())
+}
+
+pub(crate) fn broker_cloud_work_graph_destroy(
+    principal: Principal,
+    device: u64,
+    graph: u64,
+) -> i32 {
+    vgpu::destroy_cloud_work_graph(
+        principal,
+        DeviceHandle::from_raw(device),
+        vgpu::CloudWorkGraphHandle::from_raw(graph),
+    )
+    .map(|_| 0)
+    .unwrap_or_else(|e| e.errno())
+}
+
+pub(crate) fn broker_cloud_frame_submit(
+    principal: Principal,
+    device: u64,
+    queue: u64,
+    graph: u64,
+    surface: u64,
+    steps: u32,
+) -> Result<v::vgpu::CloudFrameTelemetry, i32> {
+    vgpu::submit_cloud_frame(
+        principal,
+        DeviceHandle::from_raw(device),
+        QueueHandle::from_raw(queue),
+        vgpu::CloudWorkGraphHandle::from_raw(graph),
+        SurfaceHandle::from_raw(surface),
+        steps,
+    )
+    .map(|t| v::vgpu::CloudFrameTelemetry {
+        point: v::vgpu::TimelinePoint {
+            value: t.point.value,
+            physical_serial: t.point.physical_serial,
+        },
+        gpu_active_ns: t.gpu_active_ns,
+        budget_window_ns: t.budget_window_ns,
+        simulation_steps: t.simulation_steps,
+        simd_width: t.simd_width,
+        flags: t.flags,
+        reserved: 0,
+    })
+    .map_err(|e| e.errno())
+}
+
 fn guest_rc(op: u32, arg0: u64, arg1: u64, request: &[u8]) -> i32 {
     let (status, data) = trueos_vm::vmcall::call_with_payload(op, arg0, arg1, request, &mut []);
     if status == trueos_vm::vmcall::STATUS_OK {
@@ -710,6 +772,94 @@ pub unsafe extern "C" fn trueos_cabi_vgpu_ui4_surface_clear_submit(
     match result {
         Ok(point) => {
             unsafe { out_point.write(point) };
+            0
+        }
+        Err(rc) => rc,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_vgpu_cloud_work_graph_create(
+    device: u64,
+    descriptor: *const v::vgpu::CloudWorkGraphDescriptor,
+    out_graph: *mut u64,
+) -> i32 {
+    if descriptor.is_null() || out_graph.is_null() {
+        return -14;
+    }
+    let d = unsafe { descriptor.read() };
+    if d.profile != v::vgpu::CLOUD_PROFILE_HELIO_ENGINE_V1 || d.flags != 0 || d.reserved != [0; 2] {
+        return -95;
+    }
+    let result = if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let payload = unsafe {
+            core::slice::from_raw_parts(
+                core::ptr::from_ref(&d).cast::<u8>(),
+                core::mem::size_of_val(&d),
+            )
+        };
+        guest_handle(trueos_vm::vmcall::OP_BP_VGPU_CLOUD_WORK_GRAPH_CREATE, device, 0, payload)
+    } else {
+        broker_cloud_work_graph_create(direct_principal(), device, d)
+    };
+    match result {
+        Ok(h) => {
+            unsafe { out_graph.write(h) };
+            0
+        }
+        Err(rc) => rc,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_vgpu_cloud_work_graph_destroy(device: u64, graph: u64) -> i32 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        guest_rc(trueos_vm::vmcall::OP_BP_VGPU_CLOUD_WORK_GRAPH_DESTROY, device, graph, &[])
+    } else {
+        broker_cloud_work_graph_destroy(direct_principal(), device, graph)
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_vgpu_cloud_frame_submit(
+    device: u64,
+    queue: u64,
+    submit: *const v::vgpu::CloudFrameSubmit,
+    out: *mut v::vgpu::CloudFrameTelemetry,
+) -> i32 {
+    if submit.is_null() || out.is_null() {
+        return -14;
+    }
+    let s = unsafe { submit.read() };
+    if s.flags != 0
+        || s.reserved != [0; 2]
+        || s.simulation_steps > v::vgpu::CLOUD_FRAME_MAX_SIMULATION_STEPS
+        || s.graph == 0
+        || s.surface == 0
+    {
+        return -95;
+    }
+    let payload = unsafe {
+        core::slice::from_raw_parts(
+            core::ptr::from_ref(&s).cast::<u8>(),
+            core::mem::size_of_val(&s),
+        )
+    };
+    let result = if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        guest_record(trueos_vm::vmcall::OP_BP_VGPU_CLOUD_FRAME_SUBMIT, device, queue, payload)
+    } else {
+        broker_cloud_frame_submit(
+            direct_principal(),
+            device,
+            queue,
+            s.graph,
+            s.surface,
+            s.simulation_steps,
+        )
+    };
+    match result {
+        Ok(t) => {
+            unsafe { out.write(t) };
             0
         }
         Err(rc) => rc,

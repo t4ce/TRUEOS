@@ -1357,6 +1357,19 @@ const FONT_RCS_GPU_VA_RING_BASE: u64 = 0x0840_0000;
 const FONT_RCS_GPU_VA_CONTEXT_BASE: u64 = 0x0841_0000;
 const FONT_RCS_GPU_VA_RESULT_BASE: u64 = 0x0844_0000;
 const FONT_RCS_GPU_VA_BATCH_BASE: u64 = 0x0850_0000;
+// HelioC owns a normal-priority mixed compute/3D context. Its control window
+// is globally unique for GuC registration, while all volume and parameter
+// leaves below are visible only through the HelioC PPGTT root.
+const HELIOC_RCS_GPU_VA_RING_BASE: u64 = 0x0860_0000;
+const HELIOC_RCS_GPU_VA_CONTEXT_BASE: u64 = 0x0861_0000;
+const HELIOC_RCS_GPU_VA_RESULT_BASE: u64 = 0x0864_0000;
+const HELIOC_RCS_GPU_VA_BATCH_BASE: u64 = 0x0870_0000;
+const HELIOC_RCS_GPU_VA_VOLUME_A_BASE: u64 = 0x0880_0000;
+const HELIOC_RCS_GPU_VA_VOLUME_B_BASE: u64 = 0x08C0_0000;
+const HELIOC_RCS_GPU_VA_SIM_PARAMS_BASE: u64 = 0x0900_0000;
+const HELIOC_RCS_GPU_VA_RENDER_PARAMS_BASE: u64 = 0x0901_0000;
+const HELIOC_RCS_GPU_VA_RESOURCE_LIMIT: u64 = 0x0980_0000;
+const HELIOC_VOLUME_RGBA16F_BYTES: usize = 96 * 48 * 96 * 8;
 const _: () = assert!(
     EXECUTION_RCS_GPU_VA_RESULT_BASE + (EXECUTION_RCS_JOB_SLOTS * DIRECT_RCS_RESULT_BYTES) as u64
         <= EXECUTION_RCS_GPU_VA_BATCH_BASE
@@ -1369,8 +1382,40 @@ const _: () = assert!(
     LFM25_RCS_GPU_VA_BATCH_BASE + DIRECT_RCS_BATCH_BYTES as u64 <= FONT_RCS_GPU_VA_RING_BASE
 );
 const _: () = assert!(
-    FONT_RCS_GPU_VA_BATCH_BASE + DIRECT_RCS_BATCH_BYTES as u64
-        <= DIRECT_RCS_GPU_VA_FONT_COVERAGE_BASE
+    FONT_RCS_GPU_VA_BATCH_BASE + DIRECT_RCS_BATCH_BYTES as u64 <= HELIOC_RCS_GPU_VA_RING_BASE
+);
+const _: () = assert!(
+    HELIOC_RCS_GPU_VA_RING_BASE + DIRECT_RCS_RING_BYTES as u64
+        <= HELIOC_RCS_GPU_VA_CONTEXT_BASE
+);
+const _: () = assert!(
+    HELIOC_RCS_GPU_VA_CONTEXT_BASE + DIRECT_RCS_CONTEXT_BYTES as u64
+        <= HELIOC_RCS_GPU_VA_RESULT_BASE
+);
+const _: () = assert!(
+    HELIOC_RCS_GPU_VA_RESULT_BASE + DIRECT_RCS_RESULT_BYTES as u64
+        <= HELIOC_RCS_GPU_VA_BATCH_BASE
+);
+const _: () = assert!(
+    HELIOC_RCS_GPU_VA_BATCH_BASE + DIRECT_RCS_BATCH_BYTES as u64
+        <= HELIOC_RCS_GPU_VA_VOLUME_A_BASE
+);
+const _: () = assert!(
+    HELIOC_RCS_GPU_VA_VOLUME_A_BASE + HELIOC_VOLUME_RGBA16F_BYTES as u64
+        <= HELIOC_RCS_GPU_VA_VOLUME_B_BASE
+);
+const _: () = assert!(
+    HELIOC_RCS_GPU_VA_VOLUME_B_BASE + HELIOC_VOLUME_RGBA16F_BYTES as u64
+        <= HELIOC_RCS_GPU_VA_SIM_PARAMS_BASE
+);
+const _: () = assert!(
+    HELIOC_RCS_GPU_VA_SIM_PARAMS_BASE + 4096 <= HELIOC_RCS_GPU_VA_RENDER_PARAMS_BASE
+);
+const _: () = assert!(
+    HELIOC_RCS_GPU_VA_RENDER_PARAMS_BASE + 4096 <= HELIOC_RCS_GPU_VA_RESOURCE_LIMIT
+);
+const _: () = assert!(
+    HELIOC_RCS_GPU_VA_RESOURCE_LIMIT <= DIRECT_RCS_GPU_VA_FONT_COVERAGE_BASE
 );
 // A compositor submission is intentionally allowed to remain in flight while
 // the ordinary GPGPU client services video, fonts, and application compute.

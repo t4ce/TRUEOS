@@ -45,3 +45,28 @@ by TRUEOS. The EU assembly makes the resource ABI concrete: VS reads the
 camera matrix at byte 128 through BTI 1 and PS writes RT0 through BTI 0. The
 remaining runtime step is matching Mesa's vertex-fetch, URB, SBE and pixel
 payload state before programming `3DSTATE_VS` and `3DSTATE_PS`.
+
+## HelioC volume/raymarch preflight
+
+`--helioc` is a separate, sealed lane for the exact authored cloud sources in
+`Helio-Examples/cloud-engine-webgpu-linux-aligned/shaders/`. It admits neither
+the adjacent C++/OpenCL experiments nor copied/reformatted WGSL. It runs the
+pinned Helio Naga frontend for `simulate.wgsl:main`, `render.wgsl:vs_main`, and
+`render.wgsl:fs_main`, and fixes the eventual HELIOC descriptor to gfx125,
+ADL-S UHD 770 revision 0C, a `4x4x4` local group, `24x12x24` groups, and a
+metadata-selected compute SIMD16 or SIMD32.
+
+```sh
+python3 tools/helio-intel-bake/bake.py --helioc \
+  --work-dir /tmp/helioc-bake-work \
+  --out /tmp/helioc-native.adl-s.gfx125.helio
+```
+
+The currently pinned compile dumper has no `VkComputePipeline` executable/cache
+capture and no sampled/storage `VK_IMAGE_VIEW_TYPE_3D` descriptor capture.
+Consequently this command intentionally stops after authenticating and
+compiling the three real WGSL entries, names the missing capture data, and
+emits no HELIOA file. The included deterministic assembler is only reachable
+once a reviewed Mesa/ANV capture provides all of: compute ISA, fullscreen VS
+ISA, fullscreen FS ISA, and the hash-bound `HELV3D` resource/compiler metadata.
+It has no placeholder ISA, C++ source, or CPU fallback path.

@@ -47,6 +47,31 @@ pub(crate) const SHADER_PACKAGE_CLIP_POSITION3_UV_TEXEL_LOAD_FNV1A64: u64 = 0x0C
 const SHADER_PACKAGE_CLIP_POSITION3_RGBA_COLOR: u32 = u32::from_le_bytes([118, 221, 153, 255]);
 pub(crate) const MAX_INDEXED_BATCH_DRAWS: usize = 16;
 
+/// The only native cloud graph currently understood by the broker.  This is
+/// a profile selector, not a shader ID supplied by the tenant: the kernel maps
+/// it to the two baked, full-digest-authenticated Helio stages.
+pub(crate) const CLOUD_PROFILE_HELIO_ENGINE_V1: u32 = 1;
+pub(crate) const CLOUD_FRAME_MAX_SIMULATION_STEPS: u32 = 2;
+const CLOUD_WORK_GRAPH_LIMIT: usize = 4;
+const CLOUD_VOLUME_BYTES: usize = 3_538_944;
+const CLOUD_SIM_PARAMS_BYTES: usize = 112;
+const CLOUD_RENDER_PARAMS_BYTES: usize = 272;
+const CLOUD_VOLUME_REQUIRED_USAGE: u32 =
+    BUFFER_USAGE_STORAGE | BUFFER_USAGE_COPY_SRC | BUFFER_USAGE_COPY_DST;
+const CLOUD_PARAMS_REQUIRED_USAGE: u32 = BUFFER_USAGE_STORAGE | BUFFER_USAGE_COPY_DST;
+
+/// SHA-256 of the authored WGSL accepted by HelioC.  The eventual native
+/// payload must carry these identities in its sealed compiler metadata; a
+/// truncated application digest is never sufficient for execution admission.
+pub(crate) const CLOUD_SIMULATION_WGSL_SHA256: [u8; 32] = [
+    0xf5, 0x83, 0xd3, 0xc6, 0x3e, 0x5f, 0x38, 0x7a, 0x59, 0x26, 0x28, 0x1d, 0xf2, 0x9b, 0x76, 0x88,
+    0xeb, 0x09, 0xea, 0xa5, 0xf0, 0x61, 0x19, 0xd7, 0x4f, 0xff, 0xa7, 0x0d, 0x59, 0x20, 0x13, 0xf6,
+];
+pub(crate) const CLOUD_RENDER_WGSL_SHA256: [u8; 32] = [
+    0x5d, 0x53, 0x6a, 0x46, 0x8f, 0xcb, 0x69, 0x8c, 0x3d, 0xca, 0x79, 0xfa, 0xac, 0x0e, 0x5a, 0x49,
+    0x24, 0xfd, 0xc8, 0xce, 0x2c, 0x9c, 0xe3, 0xa9, 0xb5, 0xd2, 0x4c, 0x40, 0xa8, 0x4c, 0xc9, 0xff,
+];
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Capabilities(u64);
 
@@ -103,6 +128,10 @@ pub(crate) enum KernelClient {
     /// Independent compute lane for continuously executing GPU programs. Its
     /// context may remain in flight without blocking system-service compute.
     GpgpuExecution,
+    /// Authored Helio Cloud Engine frame graph. This mixed compute/render lane
+    /// owns one persistent RCS0 context and remains a normal-priority producer;
+    /// it must never borrow Font Engine's high-priority context or storage.
+    HelioCloud,
     /// Fixed-model compute lane with its own persistent PPGTT and GuC context.
     Lfm25,
     /// Persistent UI4 composition queue.  This is deliberately a separate
@@ -147,6 +176,7 @@ impl KernelClient {
             Self::GpgpuSystem => "kernel-gpgpu-system",
             Self::GpgpuFont => "kernel-gpgpu-font",
             Self::GpgpuExecution => "kernel-gpgpu-execution",
+            Self::HelioCloud => "kernel-helio-cloud",
             Self::Lfm25 => "kernel-lfm25",
             Self::Ui4Compositor => "kernel-ui4-compositor",
             Self::Ui4Blitter => "kernel-ui4-blitter",
@@ -161,6 +191,7 @@ impl KernelClient {
             Self::GpgpuSystem => Principal::KernelGpgpuSystem,
             Self::GpgpuFont => Principal::KernelGpgpuFont,
             Self::GpgpuExecution => Principal::KernelGpgpuExecution,
+            Self::HelioCloud => Principal::KernelHelioCloud,
             Self::Lfm25 => Principal::KernelLfm25,
             Self::Ui4Compositor => Principal::KernelUi4Compositor,
             Self::Ui4Blitter => Principal::KernelUi4Blitter,
@@ -169,7 +200,7 @@ impl KernelClient {
 
     const fn queue_class(self) -> QueueClass {
         match self {
-            Self::Render | Self::Render1 | Self::Render2 => QueueClass::Render,
+            Self::Render | Self::Render1 | Self::Render2 | Self::HelioCloud => QueueClass::Render,
             Self::GpgpuSystem | Self::GpgpuFont | Self::GpgpuExecution | Self::Lfm25 => {
                 QueueClass::Compute
             }
@@ -207,6 +238,7 @@ impl KernelClient {
             | Self::Render1
             | Self::Render2
             | Self::GpgpuExecution
+            | Self::HelioCloud
             | Self::Ui4Blitter => PhysicalContextPriority::KernelNormal,
         }
     }
@@ -224,6 +256,7 @@ impl KernelClient {
             | Self::GpgpuSystem
             | Self::GpgpuFont
             | Self::GpgpuExecution
+            | Self::HelioCloud
             | Self::Lfm25
             | Self::Ui4Compositor => {
                 matches!(engine.class, EngineClass::RenderCompute) && engine.instance == 0
@@ -262,6 +295,10 @@ const _: () = {
         KernelClient::GpgpuExecution.physical_priority(),
         PhysicalContextPriority::KernelNormal
     ));
+    assert!(matches!(
+        KernelClient::HelioCloud.physical_priority(),
+        PhysicalContextPriority::KernelNormal
+    ));
     assert!(matches!(KernelClient::Lfm25.physical_priority(), PhysicalContextPriority::KernelHigh));
     assert!(matches!(
         KernelClient::Ui4Blitter.physical_priority(),
@@ -285,6 +322,10 @@ mod kernel_client_priority_tests {
         }
         assert_eq!(
             KernelClient::GpgpuExecution.physical_priority(),
+            PhysicalContextPriority::KernelNormal,
+        );
+        assert_eq!(
+            KernelClient::HelioCloud.physical_priority(),
             PhysicalContextPriority::KernelNormal,
         );
     }
@@ -314,6 +355,7 @@ pub(crate) enum Principal {
     KernelGpgpuSystem,
     KernelGpgpuFont,
     KernelGpgpuExecution,
+    KernelHelioCloud,
     KernelLfm25,
     KernelUi4Compositor,
     KernelUi4Blitter,
@@ -331,6 +373,7 @@ impl Principal {
             Self::KernelGpgpuSystem => "kernel-gpgpu-system",
             Self::KernelGpgpuFont => "kernel-gpgpu-font",
             Self::KernelGpgpuExecution => "kernel-gpgpu-execution",
+            Self::KernelHelioCloud => "kernel-helio-cloud",
             Self::KernelLfm25 => "kernel-lfm25",
             Self::KernelUi4Compositor => "kernel-ui4-compositor",
             Self::KernelUi4Blitter => "kernel-ui4-blitter",
@@ -456,6 +499,20 @@ impl RenderPipelineHandle {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(transparent)]
+pub(crate) struct CloudWorkGraphHandle(u64);
+
+impl CloudWorkGraphHandle {
+    pub(crate) const fn from_raw(raw: u64) -> Self {
+        Self(raw)
+    }
+
+    pub(crate) const fn raw(self) -> u64 {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[repr(transparent)]
 pub(crate) struct QueueHandle(u64);
 
 impl QueueHandle {
@@ -474,6 +531,16 @@ pub(crate) struct TimelinePoint {
     pub(crate) value: u64,
     pub(crate) physical_serial: u64,
     pub(crate) physical_publish_sequence: u64,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CloudFrameTelemetry {
+    pub(crate) point: TimelinePoint,
+    pub(crate) gpu_active_ns: u64,
+    pub(crate) budget_window_ns: u64,
+    pub(crate) simulation_steps: u32,
+    pub(crate) simd_width: u32,
+    pub(crate) flags: u32,
 }
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
@@ -706,6 +773,37 @@ struct RenderPipelineSlot {
     record: Option<RenderPipelineRecord>,
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct CloudWorkGraphDescriptor {
+    pub(crate) volume_a: BufferHandle,
+    pub(crate) volume_b: BufferHandle,
+    pub(crate) sim_params: BufferHandle,
+    pub(crate) render_params: BufferHandle,
+    pub(crate) profile: u32,
+}
+
+struct CloudWorkGraphRecord {
+    resources: CloudWorkGraphDescriptor,
+    epoch: u64,
+    /// The volume sampled by a zero-step render. Each completed simulation
+    /// step flips this selector; the tenant never supplies a GPU address or a
+    /// ping-pong target.
+    current_volume: u8,
+    in_flight: u32,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum CloudResourceRole {
+    Volume,
+    SimulationParams,
+    RenderParams,
+}
+
+struct CloudWorkGraphSlot {
+    generation: u32,
+    record: Option<CloudWorkGraphRecord>,
+}
+
 struct QueueRecord {
     class: QueueClass,
     timeline: TimelineStatus,
@@ -750,6 +848,7 @@ struct VirtualDevice {
     surfaces: Vec<SurfaceSlot>,
     shader_modules: Vec<ShaderModuleSlot>,
     render_pipelines: Vec<RenderPipelineSlot>,
+    cloud_work_graphs: Vec<CloudWorkGraphSlot>,
     queues: Vec<QueueSlot>,
     contexts: Vec<ContextBinding>,
 }
@@ -945,6 +1044,7 @@ pub(crate) fn open(
         surfaces: Vec::new(),
         shader_modules: Vec::new(),
         render_pipelines: Vec::new(),
+        cloud_work_graphs: Vec::new(),
         queues: Vec::new(),
         contexts: Vec::new(),
     };
@@ -1541,6 +1641,14 @@ pub(crate) fn destroy_buffer(
     let mut broker = BROKER.lock();
     let device = lookup_device_mut(&mut broker, device_handle, principal)?;
     ensure_live(device)?;
+    if device
+        .cloud_work_graphs
+        .iter()
+        .filter_map(|slot| slot.record.as_ref())
+        .any(|graph| cloud_graph_references_buffer(graph, buffer_handle))
+    {
+        return Err(VgpuError::Busy);
+    }
     let (slot, generation) = decode_handle(buffer_handle.raw())?;
     let buffer_slot = device
         .buffers
@@ -1565,6 +1673,271 @@ pub(crate) fn destroy_buffer(
     device.memory_used = device.memory_used.saturating_sub(record.bytes);
     release_buffer_backing(&mut record);
     Ok(())
+}
+
+/// Seal the four tenant allocations used by the authored Helio Cloud Engine
+/// into one bounded, opaque work graph. The tenant supplies resources, never
+/// shader code, GPU addresses, state selectors, or an arbitrary dispatch.
+pub(crate) fn create_cloud_work_graph(
+    principal: Principal,
+    device_handle: DeviceHandle,
+    descriptor: CloudWorkGraphDescriptor,
+) -> Result<CloudWorkGraphHandle, VgpuError> {
+    if descriptor.profile != CLOUD_PROFILE_HELIO_ENGINE_V1 {
+        return Err(VgpuError::Unsupported);
+    }
+    let handles = [
+        descriptor.volume_a.raw(),
+        descriptor.volume_b.raw(),
+        descriptor.sim_params.raw(),
+        descriptor.render_params.raw(),
+    ];
+    if handles.contains(&0)
+        || handles
+            .iter()
+            .enumerate()
+            .any(|(index, handle)| handles[..index].contains(handle))
+    {
+        return Err(VgpuError::InvalidHandle);
+    }
+
+    let mut broker = BROKER.lock();
+    let device = lookup_device_mut(&mut broker, device_handle, principal)?;
+    ensure_live(device)?;
+    let required_capabilities = Capabilities::COMPUTE
+        .union(Capabilities::RENDER)
+        .union(Capabilities::PRESENT);
+    if !device.capabilities.contains(required_capabilities) {
+        return Err(VgpuError::PermissionDenied);
+    }
+    if device
+        .cloud_work_graphs
+        .iter()
+        .filter(|slot| slot.record.is_some())
+        .count()
+        >= CLOUD_WORK_GRAPH_LIMIT
+    {
+        return Err(VgpuError::QuotaExceeded);
+    }
+
+    validate_cloud_buffer(device, descriptor.volume_a, CloudResourceRole::Volume)?;
+    validate_cloud_buffer(device, descriptor.volume_b, CloudResourceRole::Volume)?;
+    validate_cloud_buffer(device, descriptor.sim_params, CloudResourceRole::SimulationParams)?;
+    validate_cloud_buffer(device, descriptor.render_params, CloudResourceRole::RenderParams)?;
+
+    Ok(insert_cloud_work_graph(
+        device,
+        CloudWorkGraphRecord {
+            resources: descriptor,
+            epoch: device.epoch,
+            current_volume: 0,
+            in_flight: 0,
+        },
+    ))
+}
+
+pub(crate) fn destroy_cloud_work_graph(
+    principal: Principal,
+    device_handle: DeviceHandle,
+    graph_handle: CloudWorkGraphHandle,
+) -> Result<(), VgpuError> {
+    let mut broker = BROKER.lock();
+    let device = lookup_device_mut(&mut broker, device_handle, principal)?;
+    ensure_live(device)?;
+    let graph = lookup_cloud_work_graph(device, graph_handle)?;
+    if graph.epoch != device.epoch {
+        return Err(VgpuError::DeviceLost);
+    }
+    if graph.in_flight != 0 {
+        return Err(VgpuError::Busy);
+    }
+    let (slot, generation) = decode_handle(graph_handle.raw())?;
+    let graph_slot = device
+        .cloud_work_graphs
+        .get_mut(slot)
+        .ok_or(VgpuError::InvalidHandle)?;
+    if graph_slot.generation != generation || graph_slot.record.is_none() {
+        return Err(VgpuError::InvalidHandle);
+    }
+    graph_slot.record.take();
+    Ok(())
+}
+
+/// Validate the complete frame boundary while the native backend remains
+/// deliberately cold. Returning `Unsupported` after validation is important:
+/// no surface is consumed and no timeline point is fabricated before the
+/// authenticated compute+fragment package and release fence are installed.
+pub(crate) fn submit_cloud_frame(
+    principal: Principal,
+    device_handle: DeviceHandle,
+    queue_handle: QueueHandle,
+    graph_handle: CloudWorkGraphHandle,
+    surface_handle: SurfaceHandle,
+    simulation_steps: u32,
+) -> Result<CloudFrameTelemetry, VgpuError> {
+    if simulation_steps > CLOUD_FRAME_MAX_SIMULATION_STEPS {
+        return Err(VgpuError::Unsupported);
+    }
+    let broker = BROKER.lock();
+    let device = lookup_device(&broker, device_handle, principal)?;
+    ensure_live(device)?;
+    let required_capabilities = Capabilities::COMPUTE
+        .union(Capabilities::RENDER)
+        .union(Capabilities::PRESENT);
+    if !device.capabilities.contains(required_capabilities) {
+        return Err(VgpuError::PermissionDenied);
+    }
+    let queue = lookup_queue(device, queue_handle)?;
+    if queue.class != QueueClass::Render {
+        return Err(VgpuError::PermissionDenied);
+    }
+    if queue.in_flight != 0 {
+        return Err(VgpuError::Busy);
+    }
+    let surface = lookup_surface(device, surface_handle)?;
+    if surface.epoch != device.epoch || surface.in_flight != 1 {
+        return Err(VgpuError::Busy);
+    }
+    let graph = lookup_cloud_work_graph(device, graph_handle)?;
+    if graph.epoch != device.epoch
+        || graph.resources.profile != CLOUD_PROFILE_HELIO_ENGINE_V1
+        || graph.current_volume > 1
+    {
+        return Err(VgpuError::DeviceLost);
+    }
+    if graph.in_flight != 0 {
+        return Err(VgpuError::Busy);
+    }
+    validate_cloud_buffer(device, graph.resources.volume_a, CloudResourceRole::Volume)?;
+    validate_cloud_buffer(device, graph.resources.volume_b, CloudResourceRole::Volume)?;
+    validate_cloud_buffer(device, graph.resources.sim_params, CloudResourceRole::SimulationParams)?;
+    validate_cloud_buffer(device, graph.resources.render_params, CloudResourceRole::RenderParams)?;
+
+    Err(VgpuError::Unsupported)
+}
+
+fn validate_cloud_buffer(
+    device: &VirtualDevice,
+    handle: BufferHandle,
+    role: CloudResourceRole,
+) -> Result<(), VgpuError> {
+    let record = lookup_buffer(device, handle)?;
+    if record.epoch != device.epoch || record.in_flight != 0 {
+        return Err(VgpuError::Busy);
+    }
+    if !matches!(&record.backing, BufferBacking::GuestPages { .. }) {
+        return Err(VgpuError::PermissionDenied);
+    }
+    validate_cloud_resource_shape(role, record.bytes, record.usage)
+}
+
+fn validate_cloud_resource_shape(
+    role: CloudResourceRole,
+    mapped_bytes: usize,
+    usage: u32,
+) -> Result<(), VgpuError> {
+    let (logical_bytes, required_usage) = match role {
+        CloudResourceRole::Volume => (CLOUD_VOLUME_BYTES, CLOUD_VOLUME_REQUIRED_USAGE),
+        CloudResourceRole::SimulationParams => {
+            (CLOUD_SIM_PARAMS_BYTES, CLOUD_PARAMS_REQUIRED_USAGE)
+        }
+        CloudResourceRole::RenderParams => (CLOUD_RENDER_PARAMS_BYTES, CLOUD_PARAMS_REQUIRED_USAGE),
+    };
+    let expected_mapped = align_up(logical_bytes, PAGE_BYTES).ok_or(VgpuError::OutOfMemory)?;
+    if mapped_bytes != expected_mapped {
+        return Err(VgpuError::Unsupported);
+    }
+    if usage & required_usage != required_usage {
+        return Err(VgpuError::PermissionDenied);
+    }
+    Ok(())
+}
+
+fn cloud_graph_references_buffer(graph: &CloudWorkGraphRecord, buffer: BufferHandle) -> bool {
+    graph.resources.volume_a == buffer
+        || graph.resources.volume_b == buffer
+        || graph.resources.sim_params == buffer
+        || graph.resources.render_params == buffer
+}
+
+#[cfg(test)]
+mod cloud_resource_contract_tests {
+    use super::{
+        BUFFER_USAGE_COPY_DST, BUFFER_USAGE_COPY_SRC, BUFFER_USAGE_STORAGE,
+        CLOUD_PARAMS_REQUIRED_USAGE, CLOUD_RENDER_PARAMS_BYTES, CLOUD_SIM_PARAMS_BYTES,
+        CLOUD_VOLUME_BYTES, CLOUD_VOLUME_REQUIRED_USAGE, CloudResourceRole, PAGE_BYTES, VgpuError,
+        align_up, validate_cloud_resource_shape,
+    };
+
+    #[test]
+    fn exact_authored_resource_shapes_are_admitted() {
+        assert_eq!(CLOUD_VOLUME_BYTES, 96 * 48 * 96 * 8);
+        assert_eq!(CLOUD_VOLUME_BYTES % PAGE_BYTES, 0);
+        assert_eq!(CLOUD_SIM_PARAMS_BYTES, 112);
+        assert_eq!(CLOUD_RENDER_PARAMS_BYTES, 272);
+        assert_eq!(align_up(CLOUD_SIM_PARAMS_BYTES, PAGE_BYTES), Some(PAGE_BYTES));
+        assert_eq!(align_up(CLOUD_RENDER_PARAMS_BYTES, PAGE_BYTES), Some(PAGE_BYTES));
+        assert_eq!(
+            validate_cloud_resource_shape(
+                CloudResourceRole::Volume,
+                CLOUD_VOLUME_BYTES,
+                CLOUD_VOLUME_REQUIRED_USAGE,
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            validate_cloud_resource_shape(
+                CloudResourceRole::SimulationParams,
+                PAGE_BYTES,
+                CLOUD_PARAMS_REQUIRED_USAGE,
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            validate_cloud_resource_shape(
+                CloudResourceRole::RenderParams,
+                PAGE_BYTES,
+                CLOUD_PARAMS_REQUIRED_USAGE,
+            ),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn shape_and_usage_mismatches_fail_closed() {
+        assert_eq!(
+            validate_cloud_resource_shape(
+                CloudResourceRole::Volume,
+                CLOUD_VOLUME_BYTES - PAGE_BYTES,
+                CLOUD_VOLUME_REQUIRED_USAGE,
+            ),
+            Err(VgpuError::Unsupported)
+        );
+        assert_eq!(
+            validate_cloud_resource_shape(
+                CloudResourceRole::Volume,
+                CLOUD_VOLUME_BYTES,
+                BUFFER_USAGE_STORAGE | BUFFER_USAGE_COPY_DST,
+            ),
+            Err(VgpuError::PermissionDenied)
+        );
+        assert_eq!(
+            validate_cloud_resource_shape(
+                CloudResourceRole::SimulationParams,
+                PAGE_BYTES * 2,
+                CLOUD_PARAMS_REQUIRED_USAGE,
+            ),
+            Err(VgpuError::Unsupported)
+        );
+        assert_eq!(
+            validate_cloud_resource_shape(
+                CloudResourceRole::RenderParams,
+                PAGE_BYTES,
+                BUFFER_USAGE_COPY_SRC,
+            ),
+            Err(VgpuError::PermissionDenied)
+        );
+    }
 }
 
 pub(crate) fn import_ui4_surface(
@@ -3303,6 +3676,7 @@ const fn kernel_client_for_principal(principal: Principal) -> Option<KernelClien
         Principal::KernelGpgpuSystem => Some(KernelClient::GpgpuSystem),
         Principal::KernelGpgpuFont => Some(KernelClient::GpgpuFont),
         Principal::KernelGpgpuExecution => Some(KernelClient::GpgpuExecution),
+        Principal::KernelHelioCloud => Some(KernelClient::HelioCloud),
         Principal::KernelLfm25 => Some(KernelClient::Lfm25),
         Principal::KernelUi4Compositor => Some(KernelClient::Ui4Compositor),
         Principal::KernelUi4Blitter => Some(KernelClient::Ui4Blitter),
@@ -3980,6 +4354,7 @@ fn allowed_capabilities(
         | Principal::KernelGpgpuSystem
         | Principal::KernelGpgpuFont
         | Principal::KernelGpgpuExecution
+        | Principal::KernelHelioCloud
         | Principal::KernelLfm25
         | Principal::KernelUi4Compositor
         | Principal::KernelUi4Blitter => caps
@@ -3998,6 +4373,7 @@ const fn quota_for(principal: Principal) -> Quota {
         | Principal::KernelGpgpuSystem
         | Principal::KernelGpgpuFont
         | Principal::KernelGpgpuExecution
+        | Principal::KernelHelioCloud
         | Principal::KernelLfm25
         | Principal::KernelUi4Compositor
         | Principal::KernelUi4Blitter => Quota::KERNEL,
@@ -4057,6 +4433,7 @@ fn ensure_kernel_device(
         surfaces: Vec::new(),
         shader_modules: Vec::new(),
         render_pipelines: Vec::new(),
+        cloud_work_graphs: Vec::new(),
         queues: Vec::new(),
         contexts: Vec::new(),
     };
@@ -4184,6 +4561,10 @@ fn destroy_device_resources(
     if device.surfaces.iter().any(|slot| slot.record.is_some()) {
         return Err(VgpuError::Busy);
     }
+    // Work graphs own no physical allocation of their own. Once every lease
+    // is idle they must be dropped before their referenced buffers are
+    // unmapped, preserving the same dependency order as explicit teardown.
+    device.cloud_work_graphs.clear();
     device.render_pipelines.clear();
     device.shader_modules.clear();
     for slot in &mut device.buffers {
@@ -4215,6 +4596,11 @@ fn device_has_operation_leases(device: &VirtualDevice) -> bool {
             .any(|record| record.in_flight != 0)
         || device
             .queues
+            .iter()
+            .filter_map(|slot| slot.record.as_ref())
+            .any(|record| record.in_flight != 0)
+        || device
+            .cloud_work_graphs
             .iter()
             .filter_map(|slot| slot.record.as_ref())
             .any(|record| record.in_flight != 0)
@@ -4330,6 +4716,27 @@ fn insert_render_pipeline(
     RenderPipelineHandle(encode_handle(device.render_pipelines.len() - 1, 1))
 }
 
+fn insert_cloud_work_graph(
+    device: &mut VirtualDevice,
+    record: CloudWorkGraphRecord,
+) -> CloudWorkGraphHandle {
+    if let Some((slot, entry)) = device
+        .cloud_work_graphs
+        .iter_mut()
+        .enumerate()
+        .find(|(_, entry)| entry.record.is_none())
+    {
+        entry.generation = entry.generation.wrapping_add(1).max(1);
+        entry.record = Some(record);
+        return CloudWorkGraphHandle(encode_handle(slot, entry.generation));
+    }
+    device.cloud_work_graphs.push(CloudWorkGraphSlot {
+        generation: 1,
+        record: Some(record),
+    });
+    CloudWorkGraphHandle(encode_handle(device.cloud_work_graphs.len() - 1, 1))
+}
+
 fn insert_queue(device: &mut VirtualDevice, record: QueueRecord) -> QueueHandle {
     if let Some((slot, entry)) = device
         .queues
@@ -4420,6 +4827,18 @@ fn lookup_buffer(device: &VirtualDevice, handle: BufferHandle) -> Result<&Buffer
     entry.record.as_ref().ok_or(VgpuError::InvalidHandle)
 }
 
+fn lookup_surface(
+    device: &VirtualDevice,
+    handle: SurfaceHandle,
+) -> Result<&SurfaceRecord, VgpuError> {
+    let (slot, generation) = decode_handle(handle.raw())?;
+    let entry = device.surfaces.get(slot).ok_or(VgpuError::InvalidHandle)?;
+    if entry.generation != generation {
+        return Err(VgpuError::InvalidHandle);
+    }
+    entry.record.as_ref().ok_or(VgpuError::InvalidHandle)
+}
+
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn lookup_buffer_mut(
     device: &mut VirtualDevice,
@@ -4473,6 +4892,21 @@ fn lookup_render_pipeline(
     let (slot, generation) = decode_handle(handle.raw())?;
     let entry = device
         .render_pipelines
+        .get(slot)
+        .ok_or(VgpuError::InvalidHandle)?;
+    if entry.generation != generation {
+        return Err(VgpuError::InvalidHandle);
+    }
+    entry.record.as_ref().ok_or(VgpuError::InvalidHandle)
+}
+
+fn lookup_cloud_work_graph(
+    device: &VirtualDevice,
+    handle: CloudWorkGraphHandle,
+) -> Result<&CloudWorkGraphRecord, VgpuError> {
+    let (slot, generation) = decode_handle(handle.raw())?;
+    let entry = device
+        .cloud_work_graphs
         .get(slot)
         .ok_or(VgpuError::InvalidHandle)?;
     if entry.generation != generation {
