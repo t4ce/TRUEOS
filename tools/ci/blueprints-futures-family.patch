@@ -1,33 +1,35 @@
 diff --git a/src/main.rs b/src/main.rs
-index 4946915..52b8f7e 100644
+index 4946915..e51d8b6 100644
 --- a/src/main.rs
 +++ b/src/main.rs
-@@ -1076,6 +1076,31 @@ fn run_staged_lock_overlay_update(
+@@ -1076,6 +1076,33 @@ fn run_staged_lock_overlay_update(
          return Ok(());
      }
  
-+    // The futures facade and futures-util publish in lockstep. Downgrading only
-+    // the patched futures-util package can be impossible when a freshly
-+    // resolved facade requires its own newer patch release (for example,
-+    // futures 0.3.34 requires futures-util ^0.3.34). Align the facade first so
-+    // Cargo can then select TRUEOS's vendored futures-util implementation.
++    // The futures facade, executor, and utilities publish in lockstep.
++    // Downgrading only the patched futures-util package can be impossible when
++    // a freshly resolved facade or executor requires its own newer patch
++    // release. Align those dependants first so Cargo can then select TRUEOS's
++    // vendored futures-util implementation.
 +    if mismatch.name == "futures-util" {
 +        let lock_path = generated_lock_path(staged_manifest)?;
-+        if let Some(futures) = lock_packages(&lock_path)?.into_iter().find(|package| {
-+            package.name == "futures"
-+                && package.version != mismatch.overlay_version
-+                && cargo_semver_same_line(&package.version, &mismatch.overlay_version)
-+        }) {
-+            let facade_mismatch = LockMismatch {
-+                name: futures.name,
-+                locked_version: futures.version,
-+                overlay_version: mismatch.overlay_version.clone(),
-+            };
-+            run_staged_lock_overlay_update(
-+                staged_manifest,
-+                staged_source_overlay,
-+                &facade_mismatch,
-+            )?;
++        for dependant_name in ["futures", "futures-executor"] {
++            if let Some(dependant) = lock_packages(&lock_path)?.into_iter().find(|package| {
++                package.name == dependant_name
++                    && package.version != mismatch.overlay_version
++                    && cargo_semver_same_line(&package.version, &mismatch.overlay_version)
++            }) {
++                let dependant_mismatch = LockMismatch {
++                    name: dependant.name,
++                    locked_version: dependant.version,
++                    overlay_version: mismatch.overlay_version.clone(),
++                };
++                run_staged_lock_overlay_update(
++                    staged_manifest,
++                    staged_source_overlay,
++                    &dependant_mismatch,
++                )?;
++            }
 +        }
 +    }
 +
