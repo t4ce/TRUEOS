@@ -834,16 +834,47 @@ struct CloudBufferMetadata {
     pages: Arc<[u64]>,
 }
 
-#[expect(
-    dead_code,
-    reason = "activated by the authenticated HelioC encoder rung"
-)]
-enum CloudNativeSubmitResult {
-    /// A future authenticated encoder may return its real fence and telemetry.
-    Submitted(CloudFrameTelemetry),
-    /// Native ownership became uncertain; callers must quarantine the lease.
-    Ambiguous,
+/// One fully retired Cloud submission prepared for UI4's existing direct
+/// presentation handoff. The release proof remains tied to the exact imported
+/// surface; callers must not manufacture a UI4 publication from telemetry.
+pub(crate) struct CloudFrameCompletion {
+    pub(crate) window_id: u32,
+    pub(crate) surface: SurfaceInfo,
+    pub(crate) release: crate::intel::gpgpu::GpgpuRgba8ReleaseFence,
+    pub(crate) telemetry: CloudFrameTelemetry,
 }
+
+/// A Cloud VMCALL may remain pending across executor turns while its one
+/// native batch retires. The caller must retry the exact request to observe it
+/// again; a different request cannot borrow the single HelioC lane.
+pub(crate) enum CloudFrameSubmissionProgress {
+    Pending,
+    Complete(CloudFrameCompletion),
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct CloudSubmissionRequest {
+    principal: Principal,
+    device: DeviceHandle,
+    queue: QueueHandle,
+    graph: CloudWorkGraphHandle,
+    surface: SurfaceHandle,
+    simulation_steps: u32,
+}
+
+struct CloudPendingSubmission {
+    request: CloudSubmissionRequest,
+    lease: CloudSubmissionLease,
+    ticket: crate::intel::gpgpu::HelioCloudNativeTicket,
+    simd_width: u32,
+}
+
+// This is intentionally the only switch that will receive an embedded HELIOA
+// payload after a reviewed native capture exists. `None` leaves the broker
+// fail-closed before any reservation, mapping, or hardware submission.
+const HELIOC_SEALED_ARTIFACT: Option<&[u8]> = None;
+
+static CLOUD_PENDING_SUBMISSION: Mutex<Option<CloudPendingSubmission>> = Mutex::new(None);
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum CloudResourceRole {
@@ -1831,17 +1862,17 @@ pub(crate) fn destroy_cloud_work_graph(
     Ok(())
 }
 
-/// Submit one mediated Cloud frame. The broker owns the complete reservation
-/// phase; the native seam is deliberately cold until an authenticated encoder
-/// and release-fence path exists.
-pub(crate) fn submit_cloud_frame(
+/// Reserve the broker-owned side of one Cloud frame. The returned lease is
+/// either rolled back before native admission or retained in the single global
+/// pending state until its exact hardware retirement is proven.
+fn reserve_cloud_submission(
     principal: Principal,
     device_handle: DeviceHandle,
     queue_handle: QueueHandle,
     graph_handle: CloudWorkGraphHandle,
     surface_handle: SurfaceHandle,
     simulation_steps: u32,
-) -> Result<CloudFrameTelemetry, VgpuError> {
+) -> Result<CloudSubmissionLease, VgpuError> {
     if simulation_steps > CLOUD_FRAME_MAX_SIMULATION_STEPS {
         return Err(VgpuError::Unsupported);
     }
@@ -1933,37 +1964,143 @@ pub(crate) fn submit_cloud_frame(
         }
     };
 
-    match submit_cloud_frame_native(&lease) {
-        Ok(CloudNativeSubmitResult::Submitted(telemetry)) => {
-            // A real backend will retire these leases with its release fence.
-            // This cold seam cannot produce this branch today.
-            if !retire_cloud_submission_lease(principal, device_handle, &lease, &telemetry) {
-                return Err(VgpuError::DeviceLost);
-            }
-            Ok(telemetry)
+    Ok(lease)
+}
+
+fn helioc_sealed_native_package()
+-> Option<crate::intel::gpgpu::helioc_native_package::NativePackage<'static>> {
+    let bytes = HELIOC_SEALED_ARTIFACT?;
+    let artifact = trueos_helio_artifact::Artifact::parse(bytes).ok()?;
+    crate::intel::gpgpu::helioc_native_package::NativePackage::parse_artifact(artifact).ok()
+}
+
+fn cloud_retired_telemetry(
+    request: CloudSubmissionRequest,
+    lease: &CloudSubmissionLease,
+    release: crate::intel::gpgpu::GpgpuRgba8ReleaseFence,
+    simd_width: u32,
+) -> Option<CloudFrameTelemetry> {
+    if !release.matches(lease.surface_metadata.phys, lease.surface_metadata.bytes) {
+        return None;
+    }
+    let broker = BROKER.lock();
+    let device = lookup_device(&broker, request.device, request.principal).ok()?;
+    if device.epoch != lease.device_epoch {
+        return None;
+    }
+    let queue = lookup_queue(device, request.queue).ok()?;
+    let surface = lookup_surface(device, request.surface).ok()?;
+    let graph = lookup_cloud_work_graph(device, request.graph).ok()?;
+    if queue.in_flight != 1
+        || surface.in_flight != 2
+        || graph.in_flight != 1
+        || graph.current_volume != lease.current_volume
+        || graph.resources != lease.graph_resources
+    {
+        return None;
+    }
+    let value = queue.timeline.submitted.checked_add(1)?;
+    Some(CloudFrameTelemetry {
+        point: TimelinePoint {
+            queue: request.queue,
+            value,
+            physical_serial: release.sequence(),
+            physical_publish_sequence: release.sequence(),
+        },
+        // The marker/head proof establishes completion but contains no GPU
+        // timestamp pair. Leave timing unclaimed rather than manufacturing a
+        // budget result from executor wall time.
+        gpu_active_ns: 0,
+        budget_window_ns: 0,
+        simulation_steps: lease.simulation_steps,
+        simd_width,
+        flags: v::vgpu::CLOUD_TELEMETRY_FLAG_SEALED_PAYLOAD
+            | v::vgpu::CLOUD_TELEMETRY_FLAG_ONE_GUC_SUBMIT,
+    })
+}
+
+fn advance_pending_cloud_submission(
+    pending_slot: &mut Option<CloudPendingSubmission>,
+) -> Result<CloudFrameSubmissionProgress, VgpuError> {
+    let Some(pending) = pending_slot.as_mut() else {
+        return Err(VgpuError::InvalidHandle);
+    };
+    match crate::intel::gpgpu::observe_helioc_native_retirement(&mut pending.ticket) {
+        crate::intel::gpgpu::HelioCloudNativeRetirement::Pending => {
+            Ok(CloudFrameSubmissionProgress::Pending)
         }
-        Ok(CloudNativeSubmitResult::Ambiguous) => {
-            quarantine_cloud_submission_lease(principal, device_handle, &lease);
+        crate::intel::gpgpu::HelioCloudNativeRetirement::Invalid => {
+            let pending = pending_slot.take().expect("validated Cloud pending state");
+            quarantine_cloud_submission_lease(
+                pending.request.principal,
+                pending.request.device,
+                &pending.lease,
+            );
             Err(VgpuError::DeviceLost)
         }
-        Err(error) => {
-            // Unsupported is a definite pre-submit failure: no telemetry,
-            // timeline point, or ping-pong transition may be fabricated.
-            if rollback_cloud_submission_lease(principal, device_handle, &lease) {
-                Err(error)
-            } else {
-                // A reservation mismatch means ownership became ambiguous;
-                // never leave a live device with partially held leases.
-                quarantine_cloud_submission_lease(principal, device_handle, &lease);
-                Err(VgpuError::DeviceLost)
-            }
+        crate::intel::gpgpu::HelioCloudNativeRetirement::Complete(release) => {
+            let pending = pending_slot.take().expect("validated Cloud pending state");
+            let Some(telemetry) = cloud_retired_telemetry(
+                pending.request,
+                &pending.lease,
+                release,
+                pending.simd_width,
+            ) else {
+                quarantine_cloud_submission_lease(
+                    pending.request.principal,
+                    pending.request.device,
+                    &pending.lease,
+                );
+                return Err(VgpuError::DeviceLost);
+            };
+            let Some(surface) = retire_cloud_submission_lease(
+                pending.request.principal,
+                pending.request.device,
+                &pending.lease,
+                &telemetry,
+            ) else {
+                quarantine_cloud_submission_lease(
+                    pending.request.principal,
+                    pending.request.device,
+                    &pending.lease,
+                );
+                return Err(VgpuError::DeviceLost);
+            };
+            Ok(CloudFrameSubmissionProgress::Complete(CloudFrameCompletion {
+                window_id: pending.lease.surface_metadata.window_id,
+                surface,
+                release,
+                telemetry,
+            }))
         }
     }
 }
 
-fn submit_cloud_frame_native(
-    lease: &CloudSubmissionLease,
-) -> Result<CloudNativeSubmitResult, VgpuError> {
+fn cloud_frame_submission(
+    request: CloudSubmissionRequest,
+    observe_pending: bool,
+) -> Result<CloudFrameSubmissionProgress, VgpuError> {
+    if request.simulation_steps > CLOUD_FRAME_MAX_SIMULATION_STEPS {
+        return Err(VgpuError::Unsupported);
+    }
+    let mut pending_slot = CLOUD_PENDING_SUBMISSION.lock();
+    if let Some(pending) = pending_slot.as_ref() {
+        if pending.request != request || !observe_pending {
+            return Err(VgpuError::Busy);
+        }
+        return advance_pending_cloud_submission(&mut pending_slot);
+    }
+
+    let package = helioc_sealed_native_package().ok_or(VgpuError::Unsupported)?;
+    let simd_width = u32::from(package.compute_simd_width());
+    let lease = reserve_cloud_submission(
+        request.principal,
+        request.device,
+        request.queue,
+        request.graph,
+        request.surface,
+        request.simulation_steps,
+    )?;
     let surface = crate::intel::gpgpu::HelioCloudSurfaceDesc {
         producer_gpu: lease.surface_metadata.producer_gpu,
         phys: lease.surface_metadata.phys,
@@ -1972,18 +2109,116 @@ fn submit_cloud_frame_native(
         height: lease.surface_metadata.height,
         pitch_bytes: lease.surface_metadata.pitch,
     };
-    let resources = lease.buffer_metadata.each_ref().map(|metadata| metadata.pages.as_ref());
-    if crate::intel::gpgpu::helioc_surface_overlaps_backing(surface, resources) {
-        return Err(VgpuError::Unsupported);
-    }
-    let _plan = crate::intel::gpgpu::plan_helioc_frame(
+    let resources = lease
+        .buffer_metadata
+        .each_ref()
+        .map(|metadata| metadata.pages.as_ref());
+    let plan = (!crate::intel::gpgpu::helioc_surface_overlaps_backing(surface, resources))
+        .then(|| {
+            crate::intel::gpgpu::plan_helioc_frame(
+                lease.backing_admission,
+                surface,
+                lease.simulation_steps,
+                lease.current_volume,
+            )
+        })
+        .flatten();
+    let Some(plan) = plan else {
+        if rollback_cloud_submission_lease(request.principal, request.device, &lease) {
+            return Err(VgpuError::Unsupported);
+        }
+        quarantine_cloud_submission_lease(request.principal, request.device, &lease);
+        return Err(VgpuError::DeviceLost);
+    };
+    let pages = lease
+        .buffer_metadata
+        .each_ref()
+        .map(|metadata| metadata.pages.as_ref());
+    match crate::intel::gpgpu::submit_helioc_native_frame(
+        package,
         lease.backing_admission,
-        surface,
-        lease.simulation_steps,
-        lease.current_volume,
+        plan,
+        pages[0],
+        pages[1],
+        pages[2],
+        pages[3],
+    ) {
+        crate::intel::gpgpu::HelioCloudNativeSubmit::Submitted(ticket) => {
+            *pending_slot = Some(CloudPendingSubmission {
+                request,
+                lease,
+                ticket,
+                simd_width,
+            });
+            Ok(CloudFrameSubmissionProgress::Pending)
+        }
+        crate::intel::gpgpu::HelioCloudNativeSubmit::Busy => {
+            if rollback_cloud_submission_lease(request.principal, request.device, &lease) {
+                Err(VgpuError::Busy)
+            } else {
+                quarantine_cloud_submission_lease(request.principal, request.device, &lease);
+                Err(VgpuError::DeviceLost)
+            }
+        }
+        crate::intel::gpgpu::HelioCloudNativeSubmit::Rejected => {
+            if rollback_cloud_submission_lease(request.principal, request.device, &lease) {
+                Err(VgpuError::Unsupported)
+            } else {
+                quarantine_cloud_submission_lease(request.principal, request.device, &lease);
+                Err(VgpuError::DeviceLost)
+            }
+        }
+        crate::intel::gpgpu::HelioCloudNativeSubmit::Ambiguous => {
+            quarantine_cloud_submission_lease(request.principal, request.device, &lease);
+            Err(VgpuError::DeviceLost)
+        }
+    }
+}
+
+/// Start a Cloud frame only when the global native lane is idle. Direct C ABI
+/// callers intentionally receive `Busy` rather than driving a live ticket.
+pub(crate) fn submit_cloud_frame(
+    principal: Principal,
+    device_handle: DeviceHandle,
+    queue_handle: QueueHandle,
+    graph_handle: CloudWorkGraphHandle,
+    surface_handle: SurfaceHandle,
+    simulation_steps: u32,
+) -> Result<CloudFrameSubmissionProgress, VgpuError> {
+    cloud_frame_submission(
+        CloudSubmissionRequest {
+            principal,
+            device: device_handle,
+            queue: queue_handle,
+            graph: graph_handle,
+            surface: surface_handle,
+            simulation_steps,
+        },
+        false,
     )
-    .ok_or(VgpuError::Unsupported)?;
-    Err(VgpuError::Unsupported)
+}
+
+/// Advance exactly the pending VMCALL request once, or start it when the lane
+/// is idle. Callers must schedule a later executor turn after `Pending`.
+pub(crate) fn retry_cloud_frame_submission(
+    principal: Principal,
+    device_handle: DeviceHandle,
+    queue_handle: QueueHandle,
+    graph_handle: CloudWorkGraphHandle,
+    surface_handle: SurfaceHandle,
+    simulation_steps: u32,
+) -> Result<CloudFrameSubmissionProgress, VgpuError> {
+    cloud_frame_submission(
+        CloudSubmissionRequest {
+            principal,
+            device: device_handle,
+            queue: queue_handle,
+            graph: graph_handle,
+            surface: surface_handle,
+            simulation_steps,
+        },
+        true,
+    )
 }
 
 fn rollback_cloud_submission_lease(
@@ -2039,22 +2274,23 @@ fn retire_cloud_submission_lease(
     device_handle: DeviceHandle,
     lease: &CloudSubmissionLease,
     telemetry: &CloudFrameTelemetry,
-) -> bool {
+) -> Option<SurfaceInfo> {
+    let physical = require_physical().ok()?;
     let mut broker = BROKER.lock();
     let Ok(device) = lookup_device_mut(&mut broker, device_handle, principal) else {
-        return false;
+        return None;
     };
     if device.epoch != lease.device_epoch {
-        return false;
+        return None;
     }
     let Ok(queue) = lookup_queue(device, lease.queue) else {
-        return false;
+        return None;
     };
     let Ok(surface) = lookup_surface(device, lease.surface) else {
-        return false;
+        return None;
     };
     let Ok(graph) = lookup_cloud_work_graph(device, lease.graph) else {
-        return false;
+        return None;
     };
     if telemetry.point.queue != lease.queue
         || telemetry.point.value == 0
@@ -2075,7 +2311,7 @@ fn retire_cloud_submission_lease(
         || surface.height != lease.surface_metadata.height
         || surface.pitch != lease.surface_metadata.pitch
     {
-        return false;
+        return None;
     }
     if lease
         .buffers
@@ -2086,7 +2322,20 @@ fn retire_cloud_submission_lease(
                 .map_or(true, |record| !cloud_buffer_matches_snapshot(record, metadata, 1))
         })
     {
-        return false;
+        return None;
+    }
+    let vm = match device.gpuvm {
+        GpuVmBinding::Owned(vm) => vm,
+        GpuVmBinding::Borrowed { .. } => return None,
+    };
+    // GPU retirement is already proven by the native release. Drop only the
+    // tenant's broker alias before passing the physical allocation to UI4;
+    // its display lease then remains the sole presentation owner.
+    if physical
+        .unmap_gpuvm(vm, lease.surface_metadata.gpu, lease.surface_metadata.bytes)
+        .is_err()
+    {
+        return None;
     }
     lookup_queue_mut(device, lease.queue)
         .expect("validated Cloud queue")
@@ -2095,9 +2344,13 @@ fn retire_cloud_submission_lease(
     queue.timeline.submitted = telemetry.point.value;
     queue.timeline.completed = telemetry.point.value;
     queue.timeline.last_physical_serial = telemetry.point.physical_serial;
-    lookup_surface_mut(device, lease.surface)
-        .expect("validated Cloud surface")
-        .in_flight = 3;
+    let (surface_slot, generation) = decode_handle(lease.surface.raw()).ok()?;
+    let surface = device.surfaces.get_mut(surface_slot)?;
+    if surface.generation != generation {
+        return None;
+    }
+    let record = surface.record.take()?;
+    device.memory_used = device.memory_used.saturating_sub(record.bytes);
     lookup_cloud_work_graph_mut(device, lease.graph)
         .expect("validated Cloud graph")
         .in_flight = 0;
@@ -2109,7 +2362,13 @@ fn retire_cloud_submission_lease(
             .expect("validated Cloud buffer")
             .in_flight = 0;
     }
-    true
+    Some(SurfaceInfo {
+        handle: lease.surface,
+        bytes: record.bytes,
+        width: record.width,
+        height: record.height,
+        pitch: record.pitch,
+    })
 }
 
 fn quarantine_cloud_submission_lease(

@@ -14,9 +14,14 @@ The patch makes three otherwise-private values observable only when
 - resolved binding-table entries, emitted sampler state, and command-buffer bytes.
 - address-free V5 indirect-descriptor templates: the six shader-loaded
   payloads with surface/sampler/image fields zeroed and typed source,
-  width/shift/contiguous-mask relocation descriptions.  These are only the
-  indirect slice; surface, SBA, IDD, and command packet relocation capture is
-  still required before HELIOCRS v2 may be assembled.
+  addend/contiguous-mask relocation descriptions;
+- address-free V6 image-surface templates: sampled/storage states for both
+  cloud volumes and the runtime-addressed, runtime-sized UI4 render target.
+  The capture verifies the packed gfx120 base-address field against ANV's
+  source address before clearing it. These are still only two slices of the
+  graph; buffer/descriptor-set surfaces, tables, sampler/program state, SBA,
+  IDD, and command packet relocations are required before HELIOCRS v2 may be
+  assembled.
 
 Each binary record is an individual file (not an append stream) and uses a little-endian seven-u32 header:
 `magic=0x48434d56` (`VMCH`), version, kind, stage-or-descriptor-type,

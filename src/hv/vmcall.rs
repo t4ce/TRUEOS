@@ -1354,7 +1354,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                         && s.simulation_steps <= v::vgpu::CLOUD_FRAME_MAX_SIMULATION_STEPS
                 });
             let result = submit.ok_or(-22).and_then(|s| {
-                crate::r::io::vgpu_cabi::broker_cloud_frame_submit(
+                crate::r::io::vgpu_cabi::broker_cloud_frame_submit_retry(
                     principal,
                     arg0,
                     arg1,
@@ -1364,7 +1364,12 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 )
             });
             match result {
-                Ok(t) => write_record_response(vm_id, seq, 0, &t),
+                Ok(crate::r::io::vgpu_cabi::BrokerCloudFrameSubmissionProgress::Pending) => {
+                    return DispatchOutcome::RetryAfterMs(1);
+                }
+                Ok(crate::r::io::vgpu_cabi::BrokerCloudFrameSubmissionProgress::Complete(t)) => {
+                    write_record_response(vm_id, seq, 0, &t)
+                }
                 Err(rc) => write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0),
             }
             DispatchOutcome::Resume

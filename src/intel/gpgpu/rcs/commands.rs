@@ -553,7 +553,6 @@ fn lfm25_rcs_submit_batch(dev: super::Dev, state: DirectRcsState) -> bool {
     )
 }
 
-#[expect(dead_code, reason = "reserved for the sealed HelioC frame encoder")]
 fn helioc_rcs_submit_batch_state(
     _guard: &HelioCloudSubmitGuard,
     dev: super::Dev,
@@ -977,7 +976,6 @@ fn direct_rcs_retirement_proof_on_lane(
 /// Sample HelioC retirement once. The compositor/service task may call this on
 /// successive executor turns; this function never loops or burns a CPU while
 /// the EU threads or GuC context save are still in flight.
-#[expect(dead_code, reason = "consumed by the sealed HelioC service task")]
 fn helioc_rcs_observe_retirement(
     _guard: &HelioCloudSubmitGuard,
     state: DirectRcsState,

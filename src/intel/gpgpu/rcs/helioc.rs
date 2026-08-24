@@ -59,7 +59,6 @@ struct HelioCloudSubmitGuard {
     _guard: spin::MutexGuard<'static, ()>,
 }
 
-#[expect(dead_code, reason = "consumed by the sealed HelioC native encoder")]
 fn try_lock_helioc_submit_lane() -> Option<HelioCloudSubmitGuard> {
     Some(HelioCloudSubmitGuard {
         _guard: HELIOC_RCS_SUBMIT_LOCK.try_lock()?,
@@ -143,7 +142,6 @@ fn helioc_terminal_epilogue_valid(batch: &[u32]) -> bool {
 /// must be initialized from the owning base state before this offset is
 /// applied. Requiring the fixed terminal release/marker sequence makes a
 /// marker observation useful without borrowing a fence address from ANV.
-#[expect(dead_code, reason = "consumed by the sealed HelioC native encoder")]
 fn select_helioc_materialized_batch(
     state: DirectRcsState,
     batch: helioc_native_package::HelioCloudMaterializedBatch,
@@ -371,7 +369,6 @@ fn helioc_plan_vas_valid(plan: &HelioCloudFramePlan) -> bool {
 /// only prepares mappings; it does not encode, submit, poll, or emit telemetry.
 /// Its caller must also retain the broker lease whose page snapshots produced
 /// `admission` until the submission retires.
-#[expect(dead_code, reason = "consumed by the sealed HelioC native encoder")]
 fn map_helioc_frame_resources(
     _submit_guard: &HelioCloudSubmitGuard,
     state: DirectRcsState,
@@ -475,6 +472,254 @@ fn map_helioc_frame_resources(
         plan.surface.bytes,
         false,
     )
+}
+
+/// A submitted HelioC frame owns the lane guard until its marker and saved LRC
+/// head prove retirement. Dropping an unfinished ticket quarantines the lane:
+/// it is never safe to let a later frame rewrite this frame's PPGTT leaves or
+/// state arena merely because its service owner disappeared.
+#[must_use = "observe the ticket until it retires, or it will quarantine the HelioC lane"]
+pub(crate) struct HelioCloudNativeTicket {
+    guard: Option<HelioCloudSubmitGuard>,
+    state: DirectRcsState,
+    surface: HelioCloudSurfaceDesc,
+}
+
+impl Drop for HelioCloudNativeTicket {
+    fn drop(&mut self) {
+        if self.guard.is_some() {
+            quarantine_helioc_rcs_context("helioc-native-ticket-dropped-before-retirement");
+        }
+    }
+}
+
+/// Submission state is explicit so the service task can return to its
+/// executor between attempts. `Ambiguous` has already quarantined the lane;
+/// it never carries a ticket whose backing could be reused.
+pub(crate) enum HelioCloudNativeSubmit {
+    Busy,
+    Rejected,
+    Ambiguous,
+    Submitted(HelioCloudNativeTicket),
+}
+
+/// One non-blocking retirement observation. `Complete` is the only outcome
+/// that mints a display release for the exact UI4 allocation.
+pub(crate) enum HelioCloudNativeRetirement {
+    Pending,
+    Complete(GpgpuRgba8ReleaseFence),
+    Invalid,
+}
+
+static HELIOC_RGBA8_RELEASE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+fn helioc_materialization_variant(plan: &HelioCloudFramePlan) -> Option<u8> {
+    if !helioc_plan_vas_valid(plan) {
+        return None;
+    }
+    let current_volume: u8 = match plan.dispatches[0].source_volume_gpu {
+        HELIOC_RCS_GPU_VA_VOLUME_A_BASE => 0,
+        HELIOC_RCS_GPU_VA_VOLUME_B_BASE => 1,
+        _ => return None,
+    };
+    current_volume
+        .checked_mul(3)?
+        .checked_add(plan.dispatch_count)
+        .filter(|variant| *variant < 6)
+}
+
+fn helioc_state_window(
+    state: DirectRcsState,
+    gpu: u64,
+    bytes: usize,
+) -> Option<&'static mut [u8]> {
+    let offset = usize::try_from(gpu.checked_sub(HELIOC_RCS_GPU_VA_SHADER_BASE)?).ok()?;
+    let end = offset.checked_add(bytes)?;
+    if state.gpu_va != HELIOC_RCS_GPU_VA
+        || state.helioc_state_virt.is_null()
+        || state.helioc_state_bytes != HELIOC_RCS_STATE_ARENA_BYTES
+        || end > state.helioc_state_bytes
+    {
+        return None;
+    }
+    Some(unsafe { core::slice::from_raw_parts_mut(state.helioc_state_virt.add(offset), bytes) })
+}
+
+fn materialize_helioc_native_frame(
+    state: DirectRcsState,
+    package: helioc_native_package::NativePackage<'_>,
+    plan: &HelioCloudFramePlan,
+) -> Option<helioc_native_package::HelioCloudMaterializedBatch> {
+    let compute = package.compute_isa()?;
+    let vertex = package.vertex_isa()?;
+    let fragment = package.fragment_isa()?;
+    let reloc = package.reloc_state()?;
+    let layout = plan_helioc_shader_layout(compute.len(), vertex.len(), fragment.len())?;
+    let variant = helioc_materialization_variant(plan)?;
+    if state.gpu_va != HELIOC_RCS_GPU_VA
+        || state.batch_virt.is_null()
+        || state.helioc_state_virt.is_null()
+        || state.helioc_state_bytes != HELIOC_RCS_STATE_ARENA_BYTES
+    {
+        return None;
+    }
+    unsafe { core::ptr::write_bytes(state.helioc_state_virt, 0, state.helioc_state_bytes) };
+    let shader = helioc_state_window(
+        state,
+        HELIOC_RCS_GPU_VA_SHADER_BASE,
+        HELIOC_RCS_SHADER_BYTES,
+    )?;
+    let compute_offset = usize::try_from(layout.compute_offset).ok()?;
+    let vertex_offset = usize::try_from(layout.vertex_offset).ok()?;
+    let fragment_offset = usize::try_from(layout.fragment_offset).ok()?;
+    let used_bytes = usize::try_from(layout.used_bytes).ok()?;
+    if used_bytes > shader.len()
+        || compute_offset.checked_add(compute.len())? > vertex_offset
+        || vertex_offset.checked_add(vertex.len())? > fragment_offset
+        || fragment_offset.checked_add(fragment.len())? > used_bytes
+    {
+        return None;
+    }
+    shader[compute_offset..compute_offset + compute.len()].copy_from_slice(compute);
+    shader[vertex_offset..vertex_offset + vertex.len()].copy_from_slice(vertex);
+    shader[fragment_offset..fragment_offset + fragment.len()].copy_from_slice(fragment);
+
+    let surface = helioc_state_window(
+        state,
+        HELIOC_RCS_GPU_VA_SURFACE_STATE_BASE,
+        HELIOC_RCS_SURFACE_STATE_BYTES,
+    )?;
+    let dynamic = helioc_state_window(
+        state,
+        HELIOC_RCS_GPU_VA_DYNAMIC_STATE_BASE,
+        HELIOC_RCS_DYNAMIC_STATE_BYTES,
+    )?;
+    let indirect = helioc_state_window(
+        state,
+        HELIOC_RCS_GPU_VA_INDIRECT_DESCRIPTOR_BASE,
+        HELIOC_RCS_INDIRECT_DESCRIPTOR_BYTES,
+    )?;
+    let batch = unsafe { core::slice::from_raw_parts_mut(state.batch_virt, DIRECT_RCS_BATCH_BYTES) };
+    let mut windows = helioc_native_package::HelioCloudMaterializationWindows {
+        batch,
+        surface,
+        dynamic,
+        indirect,
+        batch_gpu: HELIOC_RCS_GPU_VA_BATCH_BASE,
+        surface_gpu: HELIOC_RCS_GPU_VA_SURFACE_STATE_BASE,
+        dynamic_gpu: HELIOC_RCS_GPU_VA_DYNAMIC_STATE_BASE,
+        indirect_gpu: HELIOC_RCS_GPU_VA_INDIRECT_DESCRIPTOR_BASE,
+    };
+    let symbols = helioc_native_package::HelioCloudMaterializationSymbols {
+        cs: HELIOC_RCS_GPU_VA_SHADER_BASE.checked_add(u64::from(layout.compute_offset))?,
+        vs: HELIOC_RCS_GPU_VA_SHADER_BASE.checked_add(u64::from(layout.vertex_offset))?,
+        fs: HELIOC_RCS_GPU_VA_SHADER_BASE.checked_add(u64::from(layout.fragment_offset))?,
+        surface: HELIOC_RCS_GPU_VA_SURFACE_STATE_BASE,
+        dynamic: HELIOC_RCS_GPU_VA_DYNAMIC_STATE_BASE,
+        indirect: HELIOC_RCS_GPU_VA_INDIRECT_DESCRIPTOR_BASE,
+        batch: HELIOC_RCS_GPU_VA_BATCH_BASE,
+        result: HELIOC_RCS_GPU_VA_RESULT_BASE,
+        volume_a: HELIOC_RCS_GPU_VA_VOLUME_A_BASE,
+        volume_b: HELIOC_RCS_GPU_VA_VOLUME_B_BASE,
+        sim_params: HELIOC_SIM_PARAMS_GPU,
+        render_params: HELIOC_RENDER_PARAMS_GPU,
+        ui4_producer_gpu: plan.surface.producer_gpu,
+        width: plan.surface.width,
+        height: plan.surface.height,
+        pitch: plan.surface.pitch_bytes,
+    };
+    let materialized = helioc_native_package::materialize_relocatable_state(
+        reloc,
+        &mut windows,
+        symbols,
+        variant,
+    )
+    .ok()?;
+    super::dma_flush(state.helioc_state_virt, state.helioc_state_bytes);
+    Some(materialized)
+}
+
+/// Submit one package-authenticated Cloud frame. The package must already
+/// have been parsed from a validated HELIOA container; this boundary accepts
+/// neither raw ISA nor package-provided addresses. It performs no retirement
+/// polling, leaving that to `observe_helioc_native_retirement` on later
+/// executor turns.
+pub(crate) fn submit_helioc_native_frame(
+    package: helioc_native_package::NativePackage<'_>,
+    admission: HelioCloudBackingAdmission,
+    plan: HelioCloudFramePlan,
+    volume_a_pages: &[u64],
+    volume_b_pages: &[u64],
+    sim_params_pages: &[u64],
+    render_params_pages: &[u64],
+) -> HelioCloudNativeSubmit {
+    let Some(guard) = try_lock_helioc_submit_lane() else {
+        return HelioCloudNativeSubmit::Busy;
+    };
+    let Some(dev) = crate::intel::claimed_device() else {
+        return HelioCloudNativeSubmit::Rejected;
+    };
+    let Some(state) = helioc_rcs_state_once(dev) else {
+        return HelioCloudNativeSubmit::Rejected;
+    };
+    let Some(batch) = materialize_helioc_native_frame(state, package, &plan) else {
+        return HelioCloudNativeSubmit::Rejected;
+    };
+    if !map_helioc_frame_resources(
+        &guard,
+        state,
+        admission,
+        &plan,
+        volume_a_pages,
+        volume_b_pages,
+        sim_params_pages,
+        render_params_pages,
+    ) {
+        return HelioCloudNativeSubmit::Rejected;
+    }
+    match helioc_rcs_submit_batch_state(&guard, dev, state, batch) {
+        DirectRcsSubmissionState::Rejected => HelioCloudNativeSubmit::Rejected,
+        DirectRcsSubmissionState::Ambiguous => HelioCloudNativeSubmit::Ambiguous,
+        DirectRcsSubmissionState::Submitted => {
+            HelioCloudNativeSubmit::Submitted(HelioCloudNativeTicket {
+                guard: Some(guard),
+                state,
+                surface: plan.surface,
+            })
+        }
+    }
+}
+
+/// Observe an outstanding Cloud frame exactly once. A release token is minted
+/// only after the package's terminal post-sync marker and the saved LRC head
+/// agree; this never launches a second generic release submission.
+pub(crate) fn observe_helioc_native_retirement(
+    ticket: &mut HelioCloudNativeTicket,
+) -> HelioCloudNativeRetirement {
+    let Some(guard) = ticket.guard.as_ref() else {
+        return HelioCloudNativeRetirement::Invalid;
+    };
+    match helioc_rcs_observe_retirement(guard, ticket.state) {
+        HelioCloudRcsRetirement::Pending => HelioCloudNativeRetirement::Pending,
+        HelioCloudRcsRetirement::Invalid => {
+            quarantine_helioc_rcs_context("helioc-native-retirement-proof-invalid");
+            ticket.guard.take();
+            HelioCloudNativeRetirement::Invalid
+        }
+        HelioCloudRcsRetirement::Complete => {
+            let sequence = HELIOC_RGBA8_RELEASE_SEQUENCE
+                .fetch_add(1, Ordering::Relaxed)
+                .wrapping_add(1)
+                .max(1);
+            let release = GpgpuRgba8ReleaseFence {
+                phys: ticket.surface.phys,
+                byte_len: ticket.surface.bytes,
+                sequence,
+            };
+            ticket.guard.take();
+            HelioCloudNativeRetirement::Complete(release)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -686,5 +931,20 @@ mod tests {
         assert!(plan_helioc_shader_layout(0, 368, 13_504).is_none());
         assert!(plan_helioc_shader_layout(64_545, 368, 13_504).is_none());
         assert!(plan_helioc_shader_layout(HELIOC_RCS_SHADER_BYTES, 4, 4).is_none());
+    }
+
+    #[test]
+    fn materialization_variant_binds_current_volume_and_step_count() {
+        for current_volume in 0..=1 {
+            for steps in 0..=2 {
+                assert_eq!(
+                    helioc_materialization_variant(&plan(steps, current_volume)),
+                    Some(current_volume * 3 + steps)
+                );
+            }
+        }
+        let mut forged = plan(1, 0);
+        forged.dispatches[0].source_volume_gpu = HELIOC_SIM_PARAMS_GPU;
+        assert_eq!(helioc_materialization_variant(&forged), None);
     }
 }

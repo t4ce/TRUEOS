@@ -1,0 +1,139 @@
+diff --git a/src/intel/vulkan/genX_cmd_buffer.c b/src/intel/vulkan/genX_cmd_buffer.c
+--- a/src/intel/vulkan/genX_cmd_buffer.c
++++ b/src/intel/vulkan/genX_cmd_buffer.c
+@@
+ static VkResult
+ emit_binding_table(struct anv_cmd_buffer *cmd_buffer,
+                    struct anv_cmd_pipeline_state *pipe_state,
+                    const struct anv_shader *shader,
+                    struct anv_state *bt_state)
+ {
++   /* V8 is intentionally an address-free capture only.  The binding-table
++    * dwords are offsets into Mesa's transient surface heap; they are never
++    * emitted.  Each live dword is admitted only after V3's role resolver has
++    * matched it to the exact named object for this stage/set. */
++   static atomic_uint trueos_helioc_v8_sequence = 0;
++   const struct anv_pipeline_bind_map *v8_map = &shader->bind_map;
++   const char *v8_role = anv_trueos_helioc_table_set_role(pipe_state, v8_map);
++   const bool v8_compute = shader->vk.stage == MESA_SHADER_COMPUTE;
++   const bool v8_graphics = shader->vk.stage == MESA_SHADER_FRAGMENT;
++   const uint32_t v8_expected_count = v8_compute ? 4 : v8_graphics ? 3 : 0;
++   const char *v8_expected[4] = { NULL, NULL, NULL, NULL };
++   if (v8_role != NULL && v8_expected_count != 0) {
++      if (strcmp(v8_role, "compute_ping_a") == 0) {
++         v8_expected[0] = "descriptor_set_state";
++         v8_expected[1] = "volume_b";
++         v8_expected[2] = "sim_params";
++         v8_expected[3] = "volume_a";
++      } else if (strcmp(v8_role, "compute_ping_b") == 0) {
++         v8_expected[0] = "descriptor_set_state";
++         v8_expected[1] = "volume_a";
++         v8_expected[2] = "sim_params";
++         v8_expected[3] = "volume_b";
++      } else if (strcmp(v8_role, "graphics_a") == 0) {
++         v8_expected[0] = "output_target";
++         v8_expected[1] = "descriptor_set_state";
++         v8_expected[2] = "volume_a";
++         v8_expected[3] = "render_params";
++      } else if (strcmp(v8_role, "graphics_b") == 0) {
++         v8_expected[0] = "output_target";
++         v8_expected[1] = "descriptor_set_state";
++         v8_expected[2] = "volume_b";
++         v8_expected[3] = "render_params";
++      }
++   }
++
+    uint32_t state_offset;
+@@
+    for (uint32_t s = 0; s < map->surface_count; s++) {
+@@
+    }
+
++   if (v8_role != NULL && v8_expected_count != 0 &&
++       map->surface_count == v8_expected_count && bt_state->map != NULL) {
++      const char *roles[4] = { NULL, NULL, NULL, NULL };
++      bool valid = true;
++      for (uint32_t s = 0; s < v8_expected_count; s++) {
++         roles[s] = anv_trueos_helioc_binding_table_entry_role(
++            cmd_buffer, pipe_state, &map->surface_to_descriptor[s], shader->vk.stage);
++         if (roles[s] == NULL || v8_expected[s] == NULL ||
++             strcmp(roles[s], v8_expected[s]) != 0)
++            valid = false;
++      }
++      if (valid) {
++         const unsigned sequence = atomic_fetch_add(&trueos_helioc_v8_sequence, 1);
++         const char *dir = os_get_option("TRUEOS_HELIOC_ANV_DUMP_DIR");
++         char path[4096];
++         if (dir != NULL && snprintf(path, sizeof(path),
++                                     "%s/helioc-anv-v8-binding-%08u.txt",
++                                     dir, sequence) < (int)sizeof(path)) {
++            FILE *file = fopen(path, "wb");
++            if (file != NULL) {
++               fprintf(file, "TRUEOS_HELIOC_BINDING_TABLE_V8\n"
++                             "table_role=%s\nstage=%u\nbytes=16\n"
++                             "entry_count=4\nentry_roles=", v8_role,
++                       (uint32_t)shader->vk.stage);
++               for (uint32_t s = 0; s < 4; s++)
++                  fprintf(file, "%s%s", s ? "," : "", v8_expected[s]);
++               fputs("\ndata_hex=00000000000000000000000000000000\n", file);
++               for (uint32_t s = 0; s < 4; s++)
++                  fprintf(file, "reloc=%u,4,object_offset,%s,0,0xffffffff,0\n",
++                          s * 4, v8_expected[s]);
++               fclose(file);
++            }
++         }
++      }
++   }
+
+    const char *table_role = anv_trueos_helioc_table_set_role(pipe_state, map);
+@@
+ static VkResult
+ emit_samplers(struct anv_cmd_buffer *cmd_buffer,
+@@
+    for (uint32_t s = 0; s < map->sampler_count; s++) {
+@@
+    }
+
++   /* The Cloud profile has one 16-byte normalized sampler state.  Require
++    * exactly one live sampler for each named set and emit the bytes without
++    * the dynamic-state address.  A later normalizer may deduplicate the four
++    * identical records; no VA or allocation offset is present here. */
++   const char *v8_sampler_role = anv_trueos_helioc_table_set_role(pipe_state, map);
++   if (v8_sampler_role != NULL && map->sampler_count == 1 && state->map != NULL &&
++       (strcmp(v8_sampler_role, "compute_ping_a") == 0 ||
++        strcmp(v8_sampler_role, "compute_ping_b") == 0 ||
++        strcmp(v8_sampler_role, "graphics_a") == 0 ||
++        strcmp(v8_sampler_role, "graphics_b") == 0)) {
++      const struct anv_pipeline_binding *binding = &map->sampler_to_descriptor[0];
++      if (binding->set < MAX_SETS && pipe_state->descriptors[binding->set] != NULL &&
++          binding->index < pipe_state->descriptors[binding->set]->descriptor_count) {
++         const struct anv_descriptor *desc =
++            &pipe_state->descriptors[binding->set]->descriptors[binding->index];
++         if ((desc->type == VK_DESCRIPTOR_TYPE_SAMPLER ||
++              desc->type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER) &&
++             desc->sampler != NULL) {
++            static atomic_uint trueos_helioc_v8_sampler_sequence = 0;
++            const unsigned sequence = atomic_fetch_add(&trueos_helioc_v8_sampler_sequence, 1);
++            const char *dir = os_get_option("TRUEOS_HELIOC_ANV_DUMP_DIR");
++            char path[4096];
++            if (dir != NULL && snprintf(path, sizeof(path),
++                                        "%s/helioc-anv-v8-sampler-%08u.txt",
++                                        dir, sequence) < (int)sizeof(path)) {
++               FILE *file = fopen(path, "wb");
++               if (file != NULL) {
++                  fprintf(file, "TRUEOS_HELIOC_SAMPLER_STATE_V8\n"
++                                "table_role=%s\nstage=%u\nbytes=16\n"
++                                "canonical_group=helioc-cloud-sampler\n"
++                                "data_hex=", v8_sampler_role,
++                          (uint32_t)shader->vk.stage);
++                  for (uint32_t i = 0; i < 16; i++)
++                     fprintf(file, "%02x", state->map[i]);
++                  fputc('\n', file);
++                  fclose(file);
++               }
++            }
++         }
++      }
++   }
+
+    const char *table_role = anv_trueos_helioc_table_set_role(pipe_state, map);

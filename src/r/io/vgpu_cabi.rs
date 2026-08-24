@@ -539,7 +539,8 @@ pub(crate) fn broker_cloud_frame_submit(
     surface: u64,
     steps: u32,
 ) -> Result<v::vgpu::CloudFrameTelemetry, i32> {
-    vgpu::submit_cloud_frame(
+    let owner = ui4_owner(principal)?;
+    let progress = vgpu::submit_cloud_frame(
         principal,
         DeviceHandle::from_raw(device),
         QueueHandle::from_raw(queue),
@@ -547,19 +548,75 @@ pub(crate) fn broker_cloud_frame_submit(
         SurfaceHandle::from_raw(surface),
         steps,
     )
-    .map(|t| v::vgpu::CloudFrameTelemetry {
+    .map_err(|e| e.errno())?;
+    let vgpu::CloudFrameSubmissionProgress::Complete(completed) = progress else {
+        return Err(-16);
+    };
+    complete_cloud_frame_submission(owner, completed)
+}
+
+pub(crate) enum BrokerCloudFrameSubmissionProgress {
+    Pending,
+    Complete(v::vgpu::CloudFrameTelemetry),
+}
+
+/// Advance one matching VMCALL-owned Cloud ticket. The caller decides when to
+/// retry; this function never spins while the HelioC context is in flight.
+pub(crate) fn broker_cloud_frame_submit_retry(
+    principal: Principal,
+    device: u64,
+    queue: u64,
+    graph: u64,
+    surface: u64,
+    steps: u32,
+) -> Result<BrokerCloudFrameSubmissionProgress, i32> {
+    let owner = ui4_owner(principal)?;
+    match vgpu::retry_cloud_frame_submission(
+        principal,
+        DeviceHandle::from_raw(device),
+        QueueHandle::from_raw(queue),
+        vgpu::CloudWorkGraphHandle::from_raw(graph),
+        SurfaceHandle::from_raw(surface),
+        steps,
+    )
+    .map_err(|e| e.errno())?
+    {
+        vgpu::CloudFrameSubmissionProgress::Pending => {
+            Ok(BrokerCloudFrameSubmissionProgress::Pending)
+        }
+        vgpu::CloudFrameSubmissionProgress::Complete(completed) => {
+            complete_cloud_frame_submission(owner, completed)
+                .map(BrokerCloudFrameSubmissionProgress::Complete)
+        }
+    }
+}
+
+fn complete_cloud_frame_submission(
+    owner: crate::ui4::WindowOwner,
+    completed: vgpu::CloudFrameCompletion,
+) -> Result<v::vgpu::CloudFrameTelemetry, i32> {
+    // `submit_cloud_frame` reaches this boundary only after an authenticated
+    // native completion has retired the producer release and removed the
+    // tenant GPUVM alias. UI4 now owns the exact physical allocation until
+    // its display SURFLIVE release; the guest sees only the virtual timeline.
+    crate::ui4::blueprint_text::complete_vgpu_surface_submission(
+        owner,
+        completed.window_id,
+        completed.surface.handle.raw(),
+        completed.release,
+    )?;
+    Ok(v::vgpu::CloudFrameTelemetry {
         point: v::vgpu::TimelinePoint {
-            value: t.point.value,
-            physical_serial: t.point.physical_serial,
+            value: completed.telemetry.point.value,
+            physical_serial: completed.telemetry.point.physical_serial,
         },
-        gpu_active_ns: t.gpu_active_ns,
-        budget_window_ns: t.budget_window_ns,
-        simulation_steps: t.simulation_steps,
-        simd_width: t.simd_width,
-        flags: t.flags,
+        gpu_active_ns: completed.telemetry.gpu_active_ns,
+        budget_window_ns: completed.telemetry.budget_window_ns,
+        simulation_steps: completed.telemetry.simulation_steps,
+        simd_width: completed.telemetry.simd_width,
+        flags: completed.telemetry.flags,
         reserved: 0,
     })
-    .map_err(|e| e.errno())
 }
 
 fn guest_rc(op: u32, arg0: u64, arg1: u64, request: &[u8]) -> i32 {

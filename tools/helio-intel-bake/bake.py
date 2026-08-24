@@ -132,6 +132,11 @@ HELIOC_ADDRESS_FREE_INDIRECT_FIELDS = (
 HELIOC_ADDRESS_FREE_SURFACE_FIELDS = (
     "role", "kind", "bytes", "state_offset", "data_hex", "reloc",
 )
+HELIOC_ADDRESS_FREE_V7_FIELDS = (
+    "object", "kind", "resource_role", "set_role", "binding", "state_bytes",
+    "state_alignment", "descriptor_payload_offset", "descriptor_bytes", "sampler_bytes",
+    "descriptor_layout", "resource_offset", "resource_bytes", "data_hex", "reloc",
+)
 HELIOC_SYMBOLIC_V2_FIELDS = (
     "role", "kind", "stage", "binding", "raw_va", "allocation_bytes", "logical_bytes",
     "resource_offset", "state_heap_va", "state_heap_bytes", "state_offset", "state_bytes",
@@ -1225,7 +1230,7 @@ def helioc_linear_probe(log: str) -> dict[str, int | bool | str]:
 
 def helioc_public_api_boundary(
     device: dict[str, object], volume_requirements: list[dict[str, int]], log: str,
-    *, instrumented: bool = False,
+    *, instrumented: dict[str, object] | None = None,
 ) -> list[str]:
     """List data the public capture APIs provably do not expose.
 
@@ -1235,10 +1240,21 @@ def helioc_public_api_boundary(
     payload. Vulkan device properties also carry a PCI device ID, not the PCI
     revision needed by HELIOC's sealed ADL-S revision field.
     """
-    if instrumented:
+    if instrumented is not None:
+        if instrumented.get("address_free_indirect_templates") is not None \
+                and instrumented.get("address_free_surface_templates") is not None:
+            missing_state = (
+                "symbolic ownership/typed relocations for command, binding-table, sampler, "
+                "descriptor-set/buffer-surface, and program state (V5 indirect descriptors and "
+                "V6 image surfaces are address-free)"
+            )
+        else:
+            missing_state = (
+                "symbolic address/ownership map for the command, binding-table, sampler, "
+                "indirect-descriptor, and render-target state (captured raw addresses are diagnostic only)"
+            )
         return [
-            "symbolic address/ownership map for the command, binding-table, sampler, "
-            "indirect-descriptor, and render-target state (captured raw addresses are diagnostic only)",
+            missing_state,
             "physical UHD 770 PCI r0c retirement/ISA proof (the explicit no-op shim proves "
             "compiler identity, not execution on target silicon)",
         ]
@@ -1468,6 +1484,225 @@ def collect_helioc_address_free_indirect_templates(exec_dir: Path) -> list[dict[
          str(t["binding"]), str(len(bytes.fromhex(str(t["data_hex"])))) ) for t in templates} != expected:
         raise SystemExit("HelioC V5 indirect templates are duplicate or incomplete")
     return templates
+
+
+def collect_helioc_address_free_surface_templates(exec_dir: Path) -> dict[str, object] | None:
+    """Validate gfx120 ISL image-state templates and their typed fields.
+
+    V6 is intentionally narrower than a complete HELIOCRS object: it proves
+    only the two sampled/storage volume encodings and the dynamic UI4 render
+    target encoding. Capture allocation offsets are checked for alignment but
+    never retained as package data.
+    """
+    paths = sorted(exec_dir.glob("helioc-anv-v6-surface-[0-9]*.txt"))
+    if not paths:
+        return None
+    expected_counts: Counter[tuple[str, str]] = Counter({
+        ("volume_a", "sampled"): 1,
+        ("volume_a", "storage"): 1,
+        ("volume_b", "sampled"): 1,
+        ("volume_b", "storage"): 1,
+        # One target is packed for each of the six named command variants.
+        ("ui4", "target"): 6,
+    })
+    if len(paths) != sum(expected_counts.values()):
+        raise SystemExit(
+            f"HelioC V6 must contain exactly {sum(expected_counts.values())} surface templates"
+        )
+
+    observed: Counter[tuple[str, str]] = Counter()
+    canonical: dict[tuple[str, str], tuple[str, tuple[str, ...]]] = {}
+    for path in paths:
+        try:
+            lines = path.read_text(encoding="ascii").splitlines()
+        except UnicodeDecodeError as error:
+            raise SystemExit(f"HelioC V6 surface template is not ASCII: {path.name}") from error
+        if not lines or lines[0] != "TRUEOS_HELIOC_SURFACE_TEMPLATE_V6":
+            raise SystemExit(f"HelioC V6 surface template has invalid magic: {path.name}")
+        fields: dict[str, str] = {}
+        relocs: list[str] = []
+        for line in lines[1:]:
+            key, separator, value = line.partition("=")
+            if not separator:
+                raise SystemExit(f"HelioC V6 surface template is malformed: {path.name}")
+            if key == "reloc":
+                relocs.append(value)
+            elif key in fields:
+                raise SystemExit(f"HelioC V6 surface template duplicates a field: {path.name}")
+            else:
+                fields[key] = value
+        key = (fields.get("role", ""), fields.get("kind", ""))
+        if tuple(fields) != HELIOC_ADDRESS_FREE_SURFACE_FIELDS[:-1] \
+                or key not in expected_counts \
+                or fields["bytes"] != "64" \
+                or re.fullmatch(r"[0-9]+", fields["state_offset"]) is None \
+                or int(fields["state_offset"]) % 64 \
+                or re.fullmatch(r"(?:[0-9a-f]{2}){64}", fields["data_hex"]) is None:
+            raise SystemExit(f"HelioC V6 surface template has invalid fields: {path.name}")
+        expected_relocs = (
+            [
+                "32,8,runtime_gpu,ui4,0,0xffffffffffffffff,0",
+                "8,4,runtime_u32,width,0,0x00003fff,-1",
+                "8,4,runtime_u32,height,0,0x3fff0000,-1",
+                "12,4,runtime_u32,pitch,0,0x0003ffff,-1",
+            ]
+            if key == ("ui4", "target")
+            else [f"32,8,fixed_gpu,{key[0]},0,0xffffffffffffffff,0"]
+        )
+        if relocs != expected_relocs:
+            raise SystemExit(f"HelioC V6 surface template has unexpected typed relocations: {path.name}")
+        data = bytes.fromhex(fields["data_hex"])
+        if any(data[32:40]):
+            raise SystemExit(f"HelioC V6 surface template retained an image address: {path.name}")
+        if key == ("ui4", "target") and (
+            _helioc_u32(data, 8) & (0x0000_3FFF | 0x3FFF_0000)
+            or _helioc_u32(data, 12) & 0x0003_FFFF
+        ):
+            raise SystemExit(f"HelioC V6 UI4 template retained dynamic extent state: {path.name}")
+        value = (fields["data_hex"], tuple(relocs))
+        if key in canonical and canonical[key] != value:
+            raise SystemExit(f"HelioC V6 repeated surface template disagrees: {key}")
+        canonical[key] = value
+        observed[key] += 1
+
+    if observed != expected_counts or set(canonical) != set(expected_counts):
+        raise SystemExit("HelioC V6 surface templates are duplicate or incomplete")
+    return {
+        "schema": 6,
+        "status": "address_free_image_surface_templates",
+        "templates": [
+            {
+                "role": role,
+                "kind": kind,
+                "bytes": 64,
+                "capture_instances": observed[(role, kind)],
+                "data_hex": canonical[(role, kind)][0],
+                "relocations": list(canonical[(role, kind)][1]),
+            }
+            for role, kind in sorted(canonical)
+        ],
+        "boundary": (
+            "volume sampled/storage and runtime-sized UI4 target states are normalized; "
+            "buffer/descriptor-set state, tables, program state, and command packets still require "
+            "source-level typed relocation capture"
+        ),
+    }
+
+
+def collect_helioc_address_free_v7_templates(exec_dir: Path) -> dict[str, object] | None:
+    """Validate the eight named gfx120 buffer/descriptor-set templates.
+
+    V7 records no ANV virtual address or pool allocation offset.  It is still
+    only a narrow source-level slice: the typed descriptor-payload object names
+    are not package objects until later command/table ownership capture binds
+    them into HELIOCRS v2.
+    """
+    paths = sorted(exec_dir.glob("helioc-anv-v7-surface-[0-9]*.txt"))
+    if not paths:
+        return None
+    compute_layout = "0:0:16:0:0,1:16:8:0:0,2:24:8:0:0,3:32:32:0:0"
+    graphics_layout = "0:0:16:0:0,1:16:8:0:0,2:24:8:0:0"
+    expected: dict[str, dict[str, str]] = {}
+    for set_role in ("compute_ping_a", "compute_ping_b"):
+        expected[f"buffer_surface_sim_params_{set_role}"] = {
+            "kind": "buffer_surface", "resource_role": "sim_params", "set_role": set_role,
+            "binding": "0", "descriptor_bytes": "64", "sampler_bytes": "0",
+            "descriptor_layout": compute_layout, "resource_offset": "0", "resource_bytes": "112",
+            "reloc": "32,8,fixed_gpu,sim_params,0,0xffffffffffffffff,0",
+        }
+        expected[f"descriptor_set_surface_{set_role}"] = {
+            "kind": "descriptor_set_surface", "resource_role": f"descriptor_payload_{set_role}",
+            "set_role": set_role, "binding": "4294967295", "descriptor_bytes": "64",
+            "sampler_bytes": "0", "descriptor_layout": compute_layout,
+            "resource_offset": "0", "resource_bytes": "64",
+            "reloc": f"32,8,object_gpu,descriptor_payload_{set_role},0,0xffffffffffffffff,0",
+        }
+    for set_role in ("graphics_a", "graphics_b"):
+        expected[f"buffer_surface_render_params_{set_role}"] = {
+            "kind": "buffer_surface", "resource_role": "render_params", "set_role": set_role,
+            "binding": "0", "descriptor_bytes": "32", "sampler_bytes": "0",
+            "descriptor_layout": graphics_layout, "resource_offset": "128", "resource_bytes": "272",
+            "reloc": "32,8,fixed_gpu,render_params,0,0xffffffffffffffff,0",
+        }
+        expected[f"descriptor_set_surface_{set_role}"] = {
+            "kind": "descriptor_set_surface", "resource_role": f"descriptor_payload_{set_role}",
+            "set_role": set_role, "binding": "4294967295", "descriptor_bytes": "32",
+            "sampler_bytes": "0", "descriptor_layout": graphics_layout,
+            "resource_offset": "0", "resource_bytes": "32",
+            "reloc": f"32,8,object_gpu,descriptor_payload_{set_role},0,0xffffffffffffffff,0",
+        }
+    if len(paths) != len(expected):
+        raise SystemExit(f"HelioC V7 must contain exactly {len(expected)} surface templates")
+
+    records: dict[str, dict[str, object]] = {}
+    repeated: dict[tuple[str, str], tuple[str, str, str, str, str, str]] = {}
+    for path in paths:
+        try:
+            lines = path.read_text(encoding="ascii").splitlines()
+        except UnicodeDecodeError as error:
+            raise SystemExit(f"HelioC V7 surface template is not ASCII: {path.name}") from error
+        if not lines or lines[0] != "TRUEOS_HELIOC_SURFACE_TEMPLATE_V7":
+            raise SystemExit(f"HelioC V7 surface template has invalid magic: {path.name}")
+        fields: dict[str, str] = {}
+        relocs: list[str] = []
+        for line in lines[1:]:
+            key, separator, value = line.partition("=")
+            if not separator:
+                raise SystemExit(f"HelioC V7 surface template is malformed: {path.name}")
+            if key == "reloc":
+                relocs.append(value)
+            elif key in fields:
+                raise SystemExit(f"HelioC V7 surface template duplicates a field: {path.name}")
+            else:
+                fields[key] = value
+        object_name = fields.get("object", "")
+        wanted = expected.get(object_name)
+        if tuple(fields) != HELIOC_ADDRESS_FREE_V7_FIELDS[:-1] or wanted is None \
+                or fields["state_bytes"] != "64" or fields["state_alignment"] != "64" \
+                or fields["descriptor_payload_offset"] != "0" \
+                or not re.fullmatch(r"(?:[0-9a-f]{2}){64}", fields["data_hex"]):
+            raise SystemExit(f"HelioC V7 surface template has invalid fields: {path.name}")
+        if any(fields[key] != value for key, value in wanted.items() if key != "reloc") \
+                or relocs != [wanted["reloc"]]:
+            raise SystemExit(f"HelioC V7 surface template has an unexpected contract: {path.name}")
+        data = bytes.fromhex(fields["data_hex"])
+        if any(data[32:40]):
+            raise SystemExit(f"HelioC V7 surface template retained a packed address: {path.name}")
+        if object_name in records:
+            raise SystemExit(f"HelioC V7 surface template is duplicated: {path.name}")
+        repeated_key = (
+            fields["kind"],
+            "compute" if fields["set_role"].startswith("compute_") else fields["resource_role"],
+        )
+        equivalence = (
+            fields["descriptor_bytes"], fields["sampler_bytes"], fields["descriptor_layout"],
+            fields["resource_offset"], fields["resource_bytes"], fields["data_hex"],
+        )
+        if repeated_key in repeated and repeated[repeated_key] != equivalence:
+            raise SystemExit(f"HelioC V7 repeated template disagrees: {object_name}")
+        repeated[repeated_key] = equivalence
+        records[object_name] = {
+            "object": object_name, "kind": fields["kind"],
+            "resource_role": fields["resource_role"], "set_role": fields["set_role"],
+            "binding": int(fields["binding"]), "state_bytes": 64,
+            "state_alignment": 64, "descriptor_bytes": int(fields["descriptor_bytes"]),
+            "sampler_bytes": int(fields["sampler_bytes"]),
+            "descriptor_layout": fields["descriptor_layout"],
+            "resource_offset": int(fields["resource_offset"]),
+            "resource_bytes": int(fields["resource_bytes"]), "data_hex": fields["data_hex"],
+            "relocations": relocs,
+        }
+    if set(records) != set(expected):
+        raise SystemExit("HelioC V7 surface templates are duplicate or incomplete")
+    return {
+        "schema": 7,
+        "status": "address_free_buffer_descriptor_surface_templates",
+        "templates": [records[object_name] for object_name in sorted(records)],
+        "boundary": (
+            "buffer and descriptor-set surface states are normalized; descriptor payload contents, tables, "
+            "sampler/program state, SBA, and command packets still require source-level typed relocation capture"
+        ),
+    }
 
 
 def collect_helioc_command_catalog(exec_dir: Path) -> dict[str, object] | None:
@@ -1789,6 +2024,7 @@ def collect_instrumented_anv_capture(exec_dir: Path) -> dict[str, object] | None
         "symbolic_v2": (symbolic_v2 := collect_helioc_symbolic_v2(exec_dir)),
         "command_catalog": (command_catalog := collect_helioc_command_catalog(exec_dir)),
         "address_free_indirect_templates": collect_helioc_address_free_indirect_templates(exec_dir),
+        "address_free_surface_templates": collect_helioc_address_free_surface_templates(exec_dir),
         # V2/V3 captures are intentionally one explicit named catalog anchor,
         # rather than an order-dependent first record.  The raw command
         # catalog remains diagnostic only and no address-bearing bytes are
@@ -2027,6 +2263,22 @@ def bake_helioc(args: argparse.Namespace) -> None:
             "raw state still embeds capture-process addresses and lacks an address-free broker-owned "
             "HELIOCRS v2 object/typed-relocation map; shim execution is not physical target proof"
         )
+        if instrumented.get("address_free_indirect_templates") is not None \
+                and instrumented.get("address_free_surface_templates") is not None:
+            capture_metadata["relocatable_state"] = {
+                "section": HELIOC_RELOC_STATE_SECTION,
+                "status": "partial-v6",
+                "proven_slices": ["indirect-descriptor-v5", "image-surface-v6"],
+                "reason": (
+                    "command, binding-table, sampler, descriptor-set/buffer-surface, and program "
+                    "objects still lack a complete typed relocation map"
+                ),
+            }
+            capture_metadata["remaining_capture_boundary"] = (
+                "V5 indirect descriptors and V6 image surfaces are address-free; command, table, "
+                "sampler, descriptor-set/buffer-surface, and program state remain incomplete, and "
+                "shim execution is not physical target proof"
+            )
     (work / "helioc-capture-metadata.json").write_bytes(
         (json.dumps(capture_metadata, indent=2, sort_keys=True) + "\n").encode()
     )
@@ -2036,7 +2288,7 @@ def bake_helioc(args: argparse.Namespace) -> None:
     raise SystemExit(
         "HelioC preflight stopped; no HELIOA emitted: missing capture datum(s): "
         + "; ".join(helioc_public_api_boundary(
-            device, volume_requirements, log_text, instrumented=instrumented is not None,
+            device, volume_requirements, log_text, instrumented=instrumented,
         ))
     )
 

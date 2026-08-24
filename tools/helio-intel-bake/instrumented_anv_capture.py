@@ -38,6 +38,9 @@ COMMAND_CATALOG_V4_PATCH = Path(__file__).with_name(
 ADDRESS_FREE_V5_PATCH = Path(__file__).with_name(
     "mesa-helioc-capture-address-free-v5-6fb2611.patch"
 )
+ADDRESS_FREE_SURFACES_V6_PATCH = Path(__file__).with_name(
+    "mesa-helioc-capture-address-free-surfaces-v6-6fb2611.patch"
+)
 REQUIRED_TOOLS = ("meson", "ninja", "bison", "flex", "pkg-config", "tar")
 REQUIRED_PKGCONFIG = ("expat", "libdrm", "libzstd", "vulkan")
 BOOTSTRAP_PACKAGES = (
@@ -154,7 +157,8 @@ def copy_and_patch(source: Path, work: Path) -> Path:
     run(["git", "-c", "user.name=trueos", "-c", "user.email=trueos@localhost", "commit", "-qm", "mesa-base"], cwd=destination)
     for patch in (PATCH, FOLLOWUP_PATCH, IDENTITY_PATCH, SHADER_SERIALIZE_PATCH,
                   SYMBOLIC_V2_PATCH, SYMBOLIC_V2_DESCRIPTOR_PATCH, SYMBOLIC_V3_TABLE_PATCH,
-                  COMMAND_CATALOG_V4_PATCH, ADDRESS_FREE_V5_PATCH):
+                  COMMAND_CATALOG_V4_PATCH, ADDRESS_FREE_V5_PATCH,
+                  ADDRESS_FREE_SURFACES_V6_PATCH):
         run(["git", "apply", "--check", str(patch)], cwd=destination)
         run(["git", "apply", str(patch)], cwd=destination)
     return destination
@@ -243,7 +247,7 @@ def main() -> None:
     if output_path.exists():
         raise SystemExit("fail-closed HelioC bakery left a HELIOA output behind")
     for message in (
-        "symbolic address/ownership map for the command, binding-table, sampler, indirect-descriptor, and render-target state",
+        "symbolic ownership/typed relocations for command, binding-table, sampler, descriptor-set/buffer-surface, and program state",
         "physical UHD 770 PCI r0c retirement/ISA proof (the explicit no-op shim proves compiler identity, not execution on target silicon)",
         "HelioC preflight stopped; no HELIOA emitted: missing capture datum(s):",
     ):
@@ -257,6 +261,11 @@ def main() -> None:
     metadata = json.loads(metadata_files[0].read_text())
     if metadata.get("instrumented_identity") != "noop-drm-shim:8086:4680:r0c":
         raise SystemExit("capture metadata did not authenticate the explicit no-op shim identity")
+    relocatable = metadata.get("relocatable_state", {})
+    if relocatable.get("status") != "partial-v6" or relocatable.get("proven_slices") != [
+        "indirect-descriptor-v5", "image-surface-v6"
+    ]:
+        raise SystemExit("capture metadata did not authenticate the V5/V6 address-free slices")
     print("instrumented capture completed; package emission remains intentionally refused")
 
 
