@@ -149,9 +149,28 @@ pub struct Endpoint {
 unsafe impl Send for Endpoint {}
 unsafe impl Sync for Endpoint {}
 
+// Ordinary endpoint rings need enough room for general USB transfer bursts.
+// UAS streams each carry one tagged command at a time, so their rings do not
+// need the same depth. Keep the two allocation policies independent.
 const ENDPOINT_RING_PAGES: usize = 16;
+pub(crate) const STREAM_RING_PAGES: usize = 1;
 const STREAM_CONTEXT_TYPE_TRANSFER_RING: u64 = 1;
 const NORMAL_TRB_MAX_TRANSFER_BYTES: usize = 64 * 1024;
+
+/// Convert a power-of-two Primary Stream Context Array size to xHCI's
+/// MaxPStreams encoding. Context zero is reserved, so 16 contexts expose
+/// stream IDs 1 through 15 and encode as 3.
+pub(crate) const fn primary_streams_encoding(context_count: usize) -> u8 {
+    assert!(context_count >= 2);
+    assert!(context_count <= 32);
+    assert!(context_count.is_power_of_two());
+
+    (context_count.trailing_zeros() - 1) as u8
+}
+
+const fn primary_stream_context_count_is_valid(context_count: usize) -> bool {
+    context_count >= 2 && context_count <= 32 && context_count.is_power_of_two()
+}
 
 fn normal_trb_count_for_len(len: usize) -> usize {
     len.div_ceil(NORMAL_TRB_MAX_TRANSFER_BYTES).max(1)
@@ -227,7 +246,9 @@ impl Endpoint {
     }
 
     pub fn configure_primary_streams(&mut self, count: usize) -> crate::err::Result<BusAddr> {
-        let count = count.clamp(2, 32);
+        if !primary_stream_context_count_is_valid(count) {
+            return Err(USBError::InvalidParameter);
+        }
         let allocated_contexts =
             (self.kernel.page_size() / core::mem::size_of::<StreamContext>()).max(count);
         let mut contexts = self
@@ -242,7 +263,7 @@ impl Endpoint {
         stream_rings.push(None);
         for stream_id in 1..count {
             let ring = SendRing::new_with_pages(
-                ENDPOINT_RING_PAGES,
+                STREAM_RING_PAGES,
                 DmaDirection::Bidirectional,
                 &self.kernel,
             )?;
@@ -741,6 +762,16 @@ impl Endpoint {
             }
             TransferRequest::Isochronous { packets, .. } => packets.len().max(1),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::primary_streams_encoding;
+
+    #[test]
+    fn sixteen_primary_stream_contexts_encode_as_three() {
+        assert_eq!(primary_streams_encoding(16), 3);
     }
 }
 

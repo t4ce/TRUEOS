@@ -21,7 +21,10 @@ use super::{
     SlotId, Xhci,
     cmd::CommandRing,
     context::ContextData,
-    endpoint::{Endpoint as XhciEndpoint, EndpointDescriptorExt},
+    endpoint::{
+        Endpoint as XhciEndpoint, EndpointDescriptorExt, STREAM_RING_PAGES,
+        primary_streams_encoding,
+    },
     parse_default_max_packet_size_from_port_speed,
     reg::SlotBell,
     transfer::TransferResultHandler,
@@ -53,6 +56,12 @@ pub struct Device {
     ep_interfaces: BTreeMap<u8, u8>,
     cmd: CommandRing,
 }
+
+// TRUEOS's UAS transport assigns tags 3 through 15. xHCI reserves context
+// zero, therefore a 16-entry power-of-two Primary Stream Context Array is the
+// smallest configuration that exposes every assigned stream ID.
+const UAS_PRIMARY_STREAM_CONTEXTS: usize = 16;
+const UAS_MAX_PRIMARY_STREAMS: u8 = primary_streams_encoding(UAS_PRIMARY_STREAM_CONTEXTS);
 
 impl Device {
     pub(crate) async fn new(host: &mut Xhci) -> Result<Self> {
@@ -463,15 +472,18 @@ impl Device {
                 desc.interval,
             );
             let ring_addr = if use_streams {
-                let stream_ctx_addr = ep_raw.configure_primary_streams(32)?;
+                let stream_ctx_addr = ep_raw.configure_primary_streams(UAS_PRIMARY_STREAM_CONTEXTS)?;
                 for ring in ep_raw.stream_rings() {
                     self.transfer_result_handler
                         .register_queue(self.id.as_u8(), dci, ring);
                 }
                 info!(
-                    "xhci: uas streams ep addr={:#x} dci={} streams=32 ctx={:#x}",
+                    "xhci: uas streams ep addr={:#x} dci={} contexts={} maxpstreams={} stream_ring_pages={} ctx={:#x}",
                     desc.address,
                     dci,
+                    UAS_PRIMARY_STREAM_CONTEXTS,
+                    UAS_MAX_PRIMARY_STREAMS,
+                    STREAM_RING_PAGES,
                     stream_ctx_addr.raw()
                 );
                 stream_ctx_addr
@@ -505,7 +517,7 @@ impl Device {
                 ep_mut.set_max_packet_size(desc.max_packet_size);
                 ep_mut.set_error_count(3);
                 if use_streams {
-                    ep_mut.set_max_primary_streams(4);
+                    ep_mut.set_max_primary_streams(UAS_MAX_PRIMARY_STREAMS);
                     ep_mut.set_linear_stream_array();
                 } else {
                     ep_mut.set_dequeue_cycle_state();
