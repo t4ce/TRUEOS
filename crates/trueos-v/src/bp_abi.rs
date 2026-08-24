@@ -1020,6 +1020,12 @@ unsafe extern "C" {
         batch: *const crate::vgpu::IndexedDrawBatch,
         out_point: *mut crate::vgpu::TimelinePoint,
     ) -> i32;
+    pub fn trueos_cabi_vgpu_ui4_indexed_batch_submit_v2(
+        device: u64,
+        queue: u64,
+        batch: *const crate::vgpu::IndexedDrawBatchV2,
+        out_point: *mut crate::vgpu::TimelinePoint,
+    ) -> i32;
     pub fn trueos_cabi_vgpu_cloud_work_graph_create(
         device: u64,
         descriptor: *const crate::vgpu::CloudWorkGraphDescriptor,

@@ -308,8 +308,83 @@ pub(crate) fn broker_ui4_indexed_batch_submit(
             first_index: draw.first_index,
             base_vertex: draw.base_vertex,
             rgba8_srgb: draw.rgba8_srgb,
+            topology: crate::intel::render::ResidentScenePrimitiveTopology::TriangleList,
         })
         .collect();
+    let completed = vgpu::submit_ui4_indexed_batch(
+        principal,
+        DeviceHandle::from_raw(device),
+        QueueHandle::from_raw(queue),
+        vgpu::Ui4IndexedBatchDescriptor {
+            surface: SurfaceHandle::from_raw(batch.surface),
+            pipeline: RenderPipelineHandle::from_raw(batch.pipeline),
+            vertex_buffer: BufferHandle::from_raw(batch.vertex_buffer),
+            index_buffer: BufferHandle::from_raw(batch.index_buffer),
+            vertex_offset: usize::try_from(batch.vertex_offset).map_err(|_| -22)?,
+            index_offset: usize::try_from(batch.index_offset).map_err(|_| -22)?,
+            clear_rgba8_srgb: batch.clear_rgba8_srgb,
+            draws,
+        },
+    )
+    .map_err(|error| error.errno())?;
+    crate::ui4::blueprint_text::complete_vgpu_resident_surface_submission(
+        owner,
+        completed.window_id,
+        completed.surface.handle.raw(),
+        completed.release,
+    )?;
+    Ok(v::vgpu::TimelinePoint {
+        value: completed.point.value,
+        physical_serial: completed.point.physical_serial,
+    })
+}
+
+fn broker_primitive_topology(
+    topology: u32,
+) -> Result<crate::intel::render::ResidentScenePrimitiveTopology, i32> {
+    match topology {
+        v::vgpu::PRIMITIVE_TOPOLOGY_POINT_LIST => {
+            Ok(crate::intel::render::ResidentScenePrimitiveTopology::PointList)
+        }
+        v::vgpu::PRIMITIVE_TOPOLOGY_LINE_LIST => {
+            Ok(crate::intel::render::ResidentScenePrimitiveTopology::LineList)
+        }
+        v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_LIST => {
+            Ok(crate::intel::render::ResidentScenePrimitiveTopology::TriangleList)
+        }
+        _ => Err(-95),
+    }
+}
+
+pub(crate) fn broker_ui4_indexed_batch_submit_v2(
+    principal: Principal,
+    device: u64,
+    queue: u64,
+    batch: v::vgpu::IndexedDrawBatchV2,
+) -> Result<v::vgpu::TimelinePoint, i32> {
+    let draw_count = usize::try_from(batch.draw_count).map_err(|_| -22)?;
+    if draw_count == 0
+        || draw_count > v::vgpu::MAX_INDEXED_BATCH_DRAWS
+        || batch.draws[..draw_count].iter().any(|draw| draw.reserved != 0)
+        || batch.draws[draw_count..]
+            .iter()
+            .any(|draw| *draw != v::vgpu::IndexedBatchDrawV2::default())
+    {
+        return Err(-22);
+    }
+    let owner = ui4_owner(principal)?;
+    let draws = batch.draws[..draw_count]
+        .iter()
+        .map(|draw| {
+            Ok(vgpu::Ui4IndexedBatchDrawDescriptor {
+                index_count: draw.index_count,
+                first_index: draw.first_index,
+                base_vertex: draw.base_vertex,
+                rgba8_srgb: draw.rgba8_srgb,
+                topology: broker_primitive_topology(draw.topology)?,
+            })
+        })
+        .collect::<Result<_, i32>>()?;
     let completed = vgpu::submit_ui4_indexed_batch(
         principal,
         DeviceHandle::from_raw(device),
@@ -1055,6 +1130,42 @@ pub unsafe extern "C" fn trueos_cabi_vgpu_ui4_indexed_batch_submit(
         guest_record(trueos_vm::vmcall::OP_BP_VGPU_UI4_INDEXED_BATCH_SUBMIT, device, queue, payload)
     } else {
         broker_ui4_indexed_batch_submit(direct_principal(), device, queue, batch)
+    };
+    match result {
+        Ok(point) => {
+            unsafe { out_point.write(point) };
+            0
+        }
+        Err(rc) => rc,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_vgpu_ui4_indexed_batch_submit_v2(
+    device: u64,
+    queue: u64,
+    batch: *const v::vgpu::IndexedDrawBatchV2,
+    out_point: *mut v::vgpu::TimelinePoint,
+) -> i32 {
+    if batch.is_null() || out_point.is_null() {
+        return -14;
+    }
+    let batch = unsafe { batch.read() };
+    let payload = unsafe {
+        core::slice::from_raw_parts(
+            (&batch as *const v::vgpu::IndexedDrawBatchV2).cast::<u8>(),
+            core::mem::size_of::<v::vgpu::IndexedDrawBatchV2>(),
+        )
+    };
+    let result = if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        guest_record(
+            trueos_vm::vmcall::OP_BP_VGPU_UI4_INDEXED_BATCH_SUBMIT_V2,
+            device,
+            queue,
+            payload,
+        )
+    } else {
+        broker_ui4_indexed_batch_submit_v2(direct_principal(), device, queue, batch)
     };
     match result {
         Ok(point) => {

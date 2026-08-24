@@ -712,6 +712,8 @@ impl TriangleBlendProbeMode {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum TriangleBatchMode {
     Draw,
+    PointDraw,
+    LineDraw,
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     DrawScreenSpace,
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
@@ -2113,6 +2115,14 @@ impl TriangleBatchMode {
                 )
                 .expect("Intel supports triangle lists")
             }
+            Self::PointDraw => intel_topology_from_helio(
+                trueos_helio_artifact::render_ir::PrimitiveTopology::PointList,
+            )
+            .expect("Intel supports point lists"),
+            Self::LineDraw => intel_topology_from_helio(
+                trueos_helio_artifact::render_ir::PrimitiveTopology::LineList,
+            )
+            .expect("Intel supports line lists"),
             Self::VfLineDraw => intel_topology_from_helio(
                 trueos_helio_artifact::render_ir::PrimitiveTopology::LineList,
             )
@@ -2133,6 +2143,8 @@ impl TriangleBatchMode {
     fn label(self) -> &'static str {
         match self {
             Self::Draw => "draw",
+            Self::PointDraw => "point-draw",
+            Self::LineDraw => "line-draw",
             Self::DrawScreenSpace => "draw-screen-space",
             Self::DrawScreenSpaceRect => "draw-screen-space-rect",
             Self::VfDraw => "vf-draw",

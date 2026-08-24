@@ -288,6 +288,14 @@ pub(crate) struct ResidentSceneDraw<'a> {
     /// Per-draw translation applied by the fixed-function viewport transform.
     /// Resident vertex and index storage is not rewritten or re-uploaded.
     pub(crate) viewport_translation_px: [f32; 2],
+    pub(crate) topology: ResidentScenePrimitiveTopology,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ResidentScenePrimitiveTopology {
+    PointList,
+    LineList,
+    TriangleList,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -1292,6 +1300,7 @@ fn stage_resident_scene_secondary(
     sampled_texture: Option<&ResidentSampledTexture>,
     fragment_contract: ResidentSceneFragmentContract,
     viewport_translation_px: [f32; 2],
+    topology: ResidentScenePrimitiveTopology,
     secondary_index: usize,
 ) -> Result<usize, &'static str> {
     draw.state_gpu_addr = state_gpu;
@@ -1367,7 +1376,11 @@ fn stage_resident_scene_secondary(
         resident_secondary_marker(RCS_EXEC_RESULT_DRAW_PRE3D, secondary_index)?,
         resident_secondary_marker(RCS_EXEC_RESULT_DRAW_POST3D, secondary_index)?,
         resident_secondary_marker(RCS_EXEC_RESULT_DONE, secondary_index)?,
-        TriangleBatchMode::Draw,
+        match topology {
+            ResidentScenePrimitiveTopology::PointList => TriangleBatchMode::PointDraw,
+            ResidentScenePrimitiveTopology::LineList => TriangleBatchMode::LineDraw,
+            ResidentScenePrimitiveTopology::TriangleList => TriangleBatchMode::Draw,
+        },
         StreamoutProofExperiment::HeaderAndPositionSlots01,
         TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
         viewport_translation_px,
@@ -1658,6 +1671,7 @@ fn submit_resident_scene_geometry_batched(
         None,
         ResidentSceneFragmentContract::ConstantRgba,
         [0.0, 0.0],
+        ResidentScenePrimitiveTopology::TriangleList,
         0,
     )?;
 
@@ -1703,6 +1717,7 @@ fn submit_resident_scene_geometry_batched(
             scene_draw.sampled_texture,
             scene_draw.fragment_contract,
             scene_draw.viewport_translation_px,
+            scene_draw.topology,
             secondary_count,
         )?;
         secondary_count += 1;
@@ -1832,6 +1847,7 @@ fn submit_resident_churn_forward_geometry_batched(
         None,
         ResidentSceneFragmentContract::ConstantRgba,
         [0.0, 0.0],
+        ResidentScenePrimitiveTopology::TriangleList,
         clear_secondary_index,
     )?;
 
@@ -1887,6 +1903,7 @@ fn submit_resident_churn_forward_geometry_batched(
                     None,
                     ResidentSceneFragmentContract::ConstantRgba,
                     [0.0, 0.0],
+                    ResidentScenePrimitiveTopology::TriangleList,
                     secondary_index,
                 )?;
             }

@@ -780,9 +780,28 @@ pub(crate) fn create_resident_triangle_mesh(
     draw_vertices: &[[f32; 3]],
     draw_indices: &[u32],
 ) -> Result<ResidentTriangleMesh, &'static str> {
-    if draw_vertices.len() < 3
-        || draw_indices.is_empty()
-        || !draw_indices.len().is_multiple_of(3)
+    create_resident_indexed_mesh(
+        draw_vertices,
+        draw_indices,
+        ResidentScenePrimitiveTopology::TriangleList,
+    )
+}
+
+pub(crate) fn create_resident_indexed_mesh(
+    draw_vertices: &[[f32; 3]],
+    draw_indices: &[u32],
+    topology: ResidentScenePrimitiveTopology,
+) -> Result<ResidentTriangleMesh, &'static str> {
+    let topology_valid = match topology {
+        ResidentScenePrimitiveTopology::PointList => !draw_indices.is_empty(),
+        ResidentScenePrimitiveTopology::LineList => {
+            draw_indices.len() >= 2 && draw_indices.len().is_multiple_of(2)
+        }
+        ResidentScenePrimitiveTopology::TriangleList => {
+            draw_indices.len() >= 3 && draw_indices.len().is_multiple_of(3)
+        }
+    };
+    if !topology_valid
         || draw_vertices
             .iter()
             .flatten()
@@ -791,7 +810,7 @@ pub(crate) fn create_resident_triangle_mesh(
             .iter()
             .any(|index| *index as usize >= draw_vertices.len())
     {
-        return Err("resident-triangle-shape");
+        return Err("resident-indexed-shape");
     }
     create_resident_triangle_mesh_typed(draw_vertices, draw_indices, TriangleVertexFormat::Float3)
 }
@@ -2645,9 +2664,8 @@ fn prepare_triangle_draw_resources_for_resident_font_mesh_with_state_clear(
     mesh: &ResidentFontMesh,
     clear_state: bool,
 ) -> Option<TriangleDrawPrep> {
-    if mesh.vertex_count < 3
-        || mesh.index_count < 3
-        || !mesh.index_count.is_multiple_of(3)
+    if mesh.vertex_count == 0
+        || mesh.index_count == 0
         || mesh.vertex_bytes == 0
         || mesh.index_bytes == 0
     {

@@ -2860,6 +2860,7 @@ pub(crate) struct Ui4IndexedBatchDrawDescriptor {
     pub(crate) first_index: u32,
     pub(crate) base_vertex: i32,
     pub(crate) rgba8_srgb: u32,
+    pub(crate) topology: crate::intel::render::ResidentScenePrimitiveTopology,
 }
 
 pub(crate) struct Ui4IndexedBatchDescriptor {
@@ -3211,6 +3212,7 @@ pub(crate) fn submit_ui4_indexed_draw(
             _ => unreachable!("shader package was validated before resident draw creation"),
         },
         viewport_translation_px: [0.0, 0.0],
+        topology: crate::intel::render::ResidentScenePrimitiveTopology::TriangleList,
     };
     let rendered = crate::intel::render::render_resident_triangle_scene_frame_premultiplied_with_opaque_depth_direct_to_surface(
         core::slice::from_ref(&scene_draw),
@@ -3334,7 +3336,17 @@ pub(crate) fn submit_ui4_indexed_batch(
     if batch.draws.is_empty()
         || batch.draws.len() > MAX_INDEXED_BATCH_DRAWS
         || batch.draws.iter().any(|draw| {
-            draw.index_count == 0 || !draw.index_count.is_multiple_of(3) || draw.base_vertex < 0
+            draw.index_count == 0
+                || draw.base_vertex < 0
+                || match draw.topology {
+                    crate::intel::render::ResidentScenePrimitiveTopology::PointList => false,
+                    crate::intel::render::ResidentScenePrimitiveTopology::LineList => {
+                        !draw.index_count.is_multiple_of(2)
+                    }
+                    crate::intel::render::ResidentScenePrimitiveTopology::TriangleList => {
+                        !draw.index_count.is_multiple_of(3)
+                    }
+                }
         })
     {
         return Err(VgpuError::Unsupported);
@@ -3425,7 +3437,7 @@ pub(crate) fn submit_ui4_indexed_batch(
                     );
                     indices.push(index);
                 }
-                indexed.push((indices, draw.rgba8_srgb, base_vertex));
+                indexed.push((indices, draw.rgba8_srgb, base_vertex, draw.topology));
             }
             if vertex_count == 0 {
                 return Err(VgpuError::Unsupported);
@@ -3476,7 +3488,10 @@ pub(crate) fn submit_ui4_indexed_batch(
         (window_id, phys, producer_gpu, bytes, width, height, pitch, vertices, indexed)
     };
 
-    for (indices, _, base_vertex) in &mut indexed {
+    for (indices, _, base_vertex, topology) in &mut indexed {
+        if *topology != crate::intel::render::ResidentScenePrimitiveTopology::TriangleList {
+            continue;
+        }
         for triangle in indices.chunks_exact_mut(3) {
             let a = vertices[*base_vertex + triangle[0] as usize];
             let b = vertices[*base_vertex + triangle[1] as usize];
@@ -3507,7 +3522,7 @@ pub(crate) fn submit_ui4_indexed_batch(
         }
     };
     let mut meshes = Vec::with_capacity(indexed.len());
-    for (indices, _, base_vertex) in &indexed {
+    for (indices, _, base_vertex, topology) in &indexed {
         let local_vertex_count = indices
             .iter()
             .copied()
@@ -3529,7 +3544,11 @@ pub(crate) fn submit_ui4_indexed_batch(
             );
             return Err(VgpuError::Unsupported);
         };
-        match crate::intel::render::create_resident_triangle_mesh(section_vertices, indices) {
+        match crate::intel::render::create_resident_indexed_mesh(
+            section_vertices,
+            indices,
+            *topology,
+        ) {
             Ok(mesh) => meshes.push(mesh),
             Err(_) => {
                 for mesh in &meshes {
@@ -3548,12 +3567,13 @@ pub(crate) fn submit_ui4_indexed_batch(
     let scene_draws: Vec<_> = meshes
         .iter()
         .zip(indexed.iter())
-        .map(|(mesh, (_, rgba, _))| crate::intel::render::ResidentSceneDraw {
+        .map(|(mesh, (_, rgba, _, topology))| crate::intel::render::ResidentSceneDraw {
             mesh,
             rgba: rgba.to_le_bytes(),
             sampled_texture: None,
             fragment_contract: crate::intel::render::ResidentSceneFragmentContract::ConstantRgba,
             viewport_translation_px: [0.0, 0.0],
+            topology: *topology,
         })
         .collect();
     let rendered = crate::intel::render::render_resident_triangle_scene_frame_premultiplied_with_opaque_depth_direct_to_surface(

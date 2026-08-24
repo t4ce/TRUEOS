@@ -2690,6 +2690,7 @@ pub(crate) fn render_prepared_text_stamp_to_ui4(
                 fragment_contract:
                     crate::intel::render::ResidentSceneFragmentContract::ConstantRgba,
                 viewport_translation_px: [0.0, 0.0],
+                topology: crate::intel::render::ResidentScenePrimitiveTopology::TriangleList,
             };
             let frame = match crate::intel::render::render_resident_triangle_scene_frame_premultiplied_msaa4_with_coverage_to_surface(
                 core::slice::from_ref(&draw),
@@ -2980,6 +2981,7 @@ pub(crate) fn render_ui4_font_document_view(
         sampled_texture: None,
         fragment_contract: crate::intel::render::ResidentSceneFragmentContract::ConstantRgba,
         viewport_translation_px: [-(pan_x as f32), -(pan_y as f32)],
+        topology: crate::intel::render::ResidentScenePrimitiveTopology::TriangleList,
     };
     let frame = crate::intel::render::render_resident_triangle_scene_frame_premultiplied_msaa4_with_coverage_to_surface(
         core::slice::from_ref(&draw),

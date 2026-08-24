@@ -129,6 +129,10 @@
 # generic WGPU boundary. A fixed-capacity pointer-free record carries at most
 # sixteen index ranges and immediate RGBA values sharing one authenticated
 # pipeline and buffer binding; the imported UI4 lease is still consumed once.
+# The versioned indexed-batch-v2 submission is strictly additive. It preserves
+# the original triangle-list batch symbol and adds an explicit bounded topology
+# word per draw so point, line-list, and triangle-list primitives reach the
+# driver's native topology selection without importer-side rewriting.
 # The HelioC cloud work-graph create, destroy, and frame-submit calls are
 # strictly additive. They bind only four caller-owned vVideoMem handles to one
 # immutable kernel profile with at most two simulation steps; no shader bytes,
@@ -173,4 +177,4 @@
 # replacement became the runtime owner.  It was interpreter-specific kernel
 # state, not a general Blueprint service; worker execution now uses the child
 # Hull contract above.
-2444247335c8ad6ab4be77f6368b7983635deb878ac7fc4b3ad33a798bd8164f
+5d4e588132d17874de3f40607cca24a4d43c57b5995aa0e79fcd5c83946834a2

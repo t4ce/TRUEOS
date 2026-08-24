@@ -1177,6 +1177,7 @@ async fn render_frame(
             sampled_texture: None,
             fragment_contract: crate::intel::render::ResidentSceneFragmentContract::ConstantRgba,
             viewport_translation_px: [0.0, 0.0],
+            topology: crate::intel::render::ResidentScenePrimitiveTopology::TriangleList,
         })
         .collect::<Vec<_>>();
     let result = match crate::intel::render::

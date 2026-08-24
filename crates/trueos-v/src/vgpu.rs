@@ -208,6 +208,12 @@ pub struct IndexedDraw {
 }
 
 pub const MAX_INDEXED_BATCH_DRAWS: usize = 16;
+pub const PRIMITIVE_TOPOLOGY_POINT_LIST: u32 = 1;
+pub const PRIMITIVE_TOPOLOGY_LINE_LIST: u32 = 2;
+pub const PRIMITIVE_TOPOLOGY_LINE_STRIP: u32 = 3;
+pub const PRIMITIVE_TOPOLOGY_TRIANGLE_LIST: u32 = 4;
+pub const PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP: u32 = 5;
+pub const PRIMITIVE_TOPOLOGY_TRIANGLE_FAN: u32 = 6;
 
 /// One indexed range in a single-target, single-pipeline render-pass batch.
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
@@ -235,6 +241,33 @@ pub struct IndexedDrawBatch {
     pub clear_rgba8_srgb: u32,
     pub draw_count: u32,
     pub draws: [IndexedBatchDraw; MAX_INDEXED_BATCH_DRAWS],
+}
+
+/// Versioned mixed-topology draw. The original indexed-batch ABI remains
+/// triangle-list-only and unchanged.
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+#[repr(C)]
+pub struct IndexedBatchDrawV2 {
+    pub index_count: u32,
+    pub first_index: u32,
+    pub base_vertex: i32,
+    pub rgba8_srgb: u32,
+    pub topology: u32,
+    pub reserved: u32,
+}
+
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+#[repr(C)]
+pub struct IndexedDrawBatchV2 {
+    pub surface: u64,
+    pub pipeline: u64,
+    pub vertex_buffer: u64,
+    pub index_buffer: u64,
+    pub vertex_offset: u64,
+    pub index_offset: u64,
+    pub clear_rgba8_srgb: u32,
+    pub draw_count: u32,
+    pub draws: [IndexedBatchDrawV2; MAX_INDEXED_BATCH_DRAWS],
 }
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
@@ -698,6 +731,40 @@ impl Device {
         Ok(point)
     }
 
+    pub fn submit_ui4_indexed_batch_v2(
+        self,
+        queue: Queue,
+        surface: Ui4Surface,
+        pipeline: RenderPipeline,
+        vertex_buffer: Buffer,
+        index_buffer: Buffer,
+        mut batch: IndexedDrawBatchV2,
+    ) -> Result<TimelinePoint, i32> {
+        if queue.device != self
+            || surface.device != self
+            || batch.draw_count == 0
+            || batch.draw_count as usize > MAX_INDEXED_BATCH_DRAWS
+        {
+            return Err(ERR_BAD_HANDLE);
+        }
+        let mut surface = surface;
+        batch.surface = surface.surface.0;
+        batch.pipeline = pipeline.0;
+        batch.vertex_buffer = vertex_buffer.0;
+        batch.index_buffer = index_buffer.0;
+        let mut point = TimelinePoint::default();
+        rc_result(unsafe {
+            vcabi::trueos_cabi_vgpu_ui4_indexed_batch_submit_v2(
+                self.0,
+                queue.handle,
+                &batch,
+                &mut point,
+            )
+        })?;
+        surface.live = false;
+        Ok(point)
+    }
+
     pub fn timeline(self, queue: Queue) -> Result<TimelineStatus, i32> {
         if queue.device != self {
             return Err(ERR_BAD_HANDLE);
@@ -910,6 +977,8 @@ mod tests {
         assert_eq!(core::mem::size_of::<IndexedDraw>(), 104);
         assert_eq!(core::mem::size_of::<IndexedBatchDraw>(), 16);
         assert_eq!(core::mem::size_of::<IndexedDrawBatch>(), 312);
+        assert_eq!(core::mem::size_of::<IndexedBatchDrawV2>(), 24);
+        assert_eq!(core::mem::size_of::<IndexedDrawBatchV2>(), 440);
         assert_eq!(core::mem::size_of::<TimelinePoint>(), 16);
         assert_eq!(core::mem::size_of::<TimelineStatus>(), 32);
         assert_eq!(core::mem::size_of::<CloudWorkGraphDescriptor>(), 56);
