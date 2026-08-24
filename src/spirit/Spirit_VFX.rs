@@ -1023,7 +1023,7 @@ static MOVE_PORTAL_STARTED_MS: AtomicU64 = AtomicU64::new(0);
 const GLOBAL_AURA_HALF_CYCLE_MS: u64 = 1_000;
 const IDLE_VFX_TRANSITION_MS: u64 = 1_000;
 const REASONING_VFX_TRANSITION_MS: u64 = 2_000;
-const REASONING_VFX_FRAME_SECONDS: f32 = 1.0 / 60.0;
+const REASONING_VFX_FRAME_SECONDS: f32 = 1.0 / 30.0;
 const REASONING_VFX_SPEED_CENTER: f32 = 2.0;
 const REASONING_VFX_SPEED_AMPLITUDE: f32 = 2.0;
 const REASONING_VFX_SPEED_CYCLES: f32 = 4.0;
@@ -1136,7 +1136,7 @@ impl ReasoningVfxState {
         // Integrate the requested speed rather than multiplying a changing
         // speed by the absolute shader clock. Trapezoidal integration keeps
         // each four-cycle transition continuous and matches the renderer's
-        // authored 60 Hz frame-time clock without introducing catch-up jumps.
+        // authored 30 Hz frame-time clock without introducing catch-up jumps.
         if self.transition.active || level > 0.0 {
             self.phase += 0.5 * (self.previous_speed + speed) * REASONING_VFX_FRAME_SECONDS;
             if self.phase >= REASONING_VFX_PHASE_PERIOD {
@@ -1168,7 +1168,7 @@ pub(crate) fn publish_control_panel(mut panel: SpiritVfxControlPanel) -> u64 {
 }
 
 /// Select one stable C++ Spirit combination with the authored demo defaults.
-/// This is intentionally a control-panel publication, so the live 60 Hz task
+/// This is intentionally a control-panel publication, so the live 30 Hz task
 /// observes it without changing ownership, walker shape, or cursor lifecycle.
 pub(crate) fn select_cpp_repass(
     background_id: u8,

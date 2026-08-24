@@ -152,7 +152,7 @@ pub(super) struct Gen12LumenMocsInitReport {
 }
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
+#[expect(dead_code, reason = "raw ratio fields retained for GT diagnostics")]
 pub(crate) struct Gen12GtStateSnapshot {
     pub(crate) available: bool,
     pub(crate) actual_ratio: u32,
@@ -163,6 +163,7 @@ pub(crate) struct Gen12GtStateSnapshot {
     pub(crate) rpe_mhz: u32,
     pub(crate) rpn_mhz: u32,
     pub(crate) throttle_reasons: u32,
+    pub(crate) throttle_reasons_raw: u32,
     pub(crate) rpstat1_raw: u32,
     pub(crate) rpnswreq_raw: u32,
 }
@@ -450,7 +451,6 @@ pub(super) fn actual_ratio(dev: super::Dev) -> u32 {
     (super::mmio_read(dev, GEN12_RPSTAT1) >> GEN12_CAGF_SHIFT) & GEN12_CAGF_MASK
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(super) fn read(dev: super::Dev) -> Gen12GtStateSnapshot {
     if !gt_state_registers_available(dev) {
         return Gen12GtStateSnapshot::default();
@@ -459,6 +459,7 @@ pub(super) fn read(dev: super::Dev) -> Gen12GtStateSnapshot {
     let rpnswreq_raw = super::mmio_read(dev, GEN12_RPNSWREQ);
     let state_cap = super::mmio_read(dev, GEN12_RP_STATE_CAP);
     let frequency_info = super::mmio_read(dev, GEN10_FREQ_INFO_REC);
+    let throttle_reasons_raw = super::mmio_read(dev, GEN12_GT0_PERF_LIMIT_REASONS);
     let actual_ratio = (rpstat1_raw >> GEN12_CAGF_SHIFT) & GEN12_CAGF_MASK;
     let requested_ratio = (rpnswreq_raw >> GEN9_SW_REQ_UNSLICE_RATIO_SHIFT) & GEN12_CAGF_MASK;
     Gen12GtStateSnapshot {
@@ -470,8 +471,8 @@ pub(super) fn read(dev: super::Dev) -> Gen12GtStateSnapshot {
         rp0_mhz: (state_cap & 0xFF).saturating_mul(50),
         rpe_mhz: ((frequency_info >> 8) & 0xFF).saturating_mul(50),
         rpn_mhz: ((state_cap >> 16) & 0xFF).saturating_mul(50),
-        throttle_reasons: super::mmio_read(dev, GEN12_GT0_PERF_LIMIT_REASONS)
-            & GEN12_GT0_PERF_LIMIT_REASONS_MASK,
+        throttle_reasons: throttle_reasons_raw & GEN12_GT0_PERF_LIMIT_REASONS_MASK,
+        throttle_reasons_raw,
         rpstat1_raw,
         rpnswreq_raw,
     }

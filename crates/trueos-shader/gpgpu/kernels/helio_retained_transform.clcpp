@@ -29,8 +29,6 @@ enum : uint {
     HELIO_HIERARCHY_NODE_WORDS = 4,
     HELIO_HIERARCHY_ROOT = 0xFFFFFFFFu,
     HELIO_DISABLED_DRAW_GROUP = 0xFFFFFFFFu,
-    // Low-half retained state.  The compact slot must remain in bits 31:16.
-    HELIO_RETAINED_HIDDEN = 1u << 15,
     HELIO_MODE_PREPARE = 0u,
     HELIO_MODE_TRANSFORM = 1u,
     HELIO_MODE_PREPARE_EXPANDED = 2u,
@@ -140,19 +138,14 @@ __kernel void helio_retained_transform(
             // for every global compact slot, already biased by slot * 24.
             uint capacity = draw_templates[src + 4u];
             uint first_slot = draw_templates[src + 3u];
-            // The transform lanes append only visible meshes and author the
-            // exact indexed count below. Zero here makes an all-hidden group
-            // skip vertex and fragment work altogether.
-            indirect_args[dst + 0u] = 0u;
+            indirect_args[dst + 0u] = capacity * HELIO_INDICES_PER_MESH;
             indirect_args[dst + 1u] = capacity != 0u ? 1u : 0u;
             indirect_args[dst + 2u] = first_slot * HELIO_INDICES_PER_MESH;
             indirect_args[dst + 3u] = 0u;
             indirect_args[dst + 4u] = 0u;
         } else {
             indirect_args[dst + 0u] = draw_templates[src + 0u];
-            // A visible transform lane atomically appends its compacted row.
-            // Clear the count first: capacity is storage, never draw work.
-            indirect_args[dst + 1u] = 0u;
+            indirect_args[dst + 1u] = draw_templates[src + 4u];
             indirect_args[dst + 2u] = draw_templates[src + 1u];
             indirect_args[dst + 3u] = draw_templates[src + 2u];
             indirect_args[dst + 4u] = draw_templates[src + 3u];
@@ -304,9 +297,6 @@ __kernel void helio_retained_transform(
         uint draw_src = draw * HELIO_DRAW_TEMPLATE_WORDS;
         uint capacity = draw_templates[draw_src + 4u];
         uint packed_slot_flags = transforms[src + 15u];
-        if ((packed_slot_flags & HELIO_RETAINED_HIDDEN) != 0u) {
-            return;
-        }
         uint slot = packed_slot_flags >> 16;
         if (slot >= capacity) {
             return;
@@ -430,22 +420,11 @@ __kernel void helio_retained_transform(
         uint packed_mesh_material = draw_templates[draw_src + 5u];
         instances[dst + 48u] = packed_mesh_material & 0xFFFFu;
         instances[dst + 49u] = packed_mesh_material >> 16;
-        instances[dst + 50u] = packed_slot_flags & (0xFFFFu & ~HELIO_RETAINED_HIDDEN);
+        instances[dst + 50u] = packed_slot_flags & 0xFFFFu;
         instances[dst + 51u] = 0xFFFFFFFFu;
 
         uint first_instance = draw_templates[draw_src + 3u];
-        uint compacted_slot;
-        if (mode == HELIO_MODE_EMIT_HIERARCHY_EXPANDED) {
-            uint index_offset = atomic_add(
-                (volatile __global uint *)&indirect_args[draw * HELIO_INDIRECT_WORDS],
-                HELIO_INDICES_PER_MESH);
-            compacted_slot = first_instance + index_offset / HELIO_INDICES_PER_MESH;
-        } else {
-            uint visible_slot = atomic_inc(
-                (volatile __global uint *)&indirect_args[
-                    draw * HELIO_INDIRECT_WORDS + 1u]);
-            compacted_slot = first_instance + visible_slot;
-        }
+        uint compacted_slot = first_instance + slot;
         compacted_indices[compacted_slot] = row;
 
         if (mode != HELIO_MODE_EMIT_HIERARCHY_EXPANDED) {
@@ -550,9 +529,6 @@ __kernel void helio_retained_transform(
     uint draw_src = draw * HELIO_DRAW_TEMPLATE_WORDS;
     uint capacity = draw_templates[draw_src + 4u];
     uint packed_slot_flags = transforms[src + 15u];
-    if ((packed_slot_flags & HELIO_RETAINED_HIDDEN) != 0u) {
-        return;
-    }
     uint slot = packed_slot_flags >> 16;
     if (slot >= capacity) {
         return;
@@ -636,22 +612,11 @@ __kernel void helio_retained_transform(
         uint packed_mesh_material = draw_templates[draw_src + 5u];
         instances[dst + 48u] = packed_mesh_material & 0xFFFFu;
         instances[dst + 49u] = packed_mesh_material >> 16;
-        instances[dst + 50u] = packed_slot_flags & (0xFFFFu & ~HELIO_RETAINED_HIDDEN);
+        instances[dst + 50u] = packed_slot_flags & 0xFFFFu;
         instances[dst + 51u] = 0xFFFFFFFFu;
 
         uint first_instance = draw_templates[draw_src + 3u];
-        uint compacted_slot;
-        if (expand_positions) {
-            uint index_offset = atomic_add(
-                (volatile __global uint *)&indirect_args[draw * HELIO_INDIRECT_WORDS],
-                HELIO_INDICES_PER_MESH);
-            compacted_slot = first_instance + index_offset / HELIO_INDICES_PER_MESH;
-        } else {
-            uint visible_slot = atomic_inc(
-                (volatile __global uint *)&indirect_args[
-                    draw * HELIO_INDIRECT_WORDS + 1u]);
-            compacted_slot = first_instance + visible_slot;
-        }
+        uint compacted_slot = first_instance + slot;
         compacted_indices[compacted_slot] = row;
 
         if (!expand_positions) {

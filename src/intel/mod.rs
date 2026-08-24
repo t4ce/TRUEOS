@@ -400,7 +400,6 @@ pub(crate) fn gen12_actual_gt_ratio(dev: Dev) -> u32 {
     self::gt_state::actual_ratio(dev)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn gen12_gt_state_snapshot() -> Option<self::gt_state::Gen12GtStateSnapshot> {
     claimed_device()
         .filter(|dev| device_uses_gen12_integrated_pat(dev.device_id))

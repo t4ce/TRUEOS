@@ -272,11 +272,6 @@ pub struct IndexedDrawBatchV2 {
 
 pub const MAX_RETAINED_TRANSFORM_SEEDS: usize = 4;
 pub const MAX_RETAINED_STATIC_DRAWS: usize = 3;
-/// Idempotent retained-scene visibility state.  Clear means visible, so a
-/// zeroed/restored seed remains visible.  This occupies the low flag half;
-/// the high 16 bits of [`RetainedTransformSeed::flags`] remain its compact
-/// slot.
-pub const RETAINED_TRANSFORM_FLAG_HIDDEN: u32 = 1 << 15;
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 #[repr(transparent)]
@@ -305,8 +300,6 @@ pub struct RetainedTransformSeed {
     pub local_radius: f32,
     pub previous_translation: [f32; 3],
     pub draw_group: u32,
-    /// High 16 bits are the producer-assigned compact slot.  Low bits carry
-    /// instance flags and [`RETAINED_TRANSFORM_FLAG_HIDDEN`].
     pub flags: u32,
 }
 

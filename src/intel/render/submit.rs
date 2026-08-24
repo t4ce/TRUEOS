@@ -1,6 +1,62 @@
 static RESIDENT_SCENE_LAST_GPU_POLL_US: AtomicU64 = AtomicU64::new(0);
 static RESIDENT_SCENE_LAST_GPU_POLL_ITERS: AtomicU64 = AtomicU64::new(0);
 
+#[derive(Copy, Clone, Debug, Default)]
+struct ResidentSceneGtProbe {
+    available: bool,
+    samples: u32,
+    zero_actual_samples: u32,
+    start_actual_mhz: u32,
+    min_nonzero_actual_mhz: u32,
+    max_actual_mhz: u32,
+    end_actual_mhz: u32,
+    start_requested_mhz: u32,
+    end_requested_mhz: u32,
+    rp0_mhz: u32,
+    rpe_mhz: u32,
+    rpn_mhz: u32,
+    throttle_reasons_or: u32,
+    throttle_reasons_raw_or: u32,
+    end_rpstat1_raw: u32,
+    end_rpnswreq_raw: u32,
+}
+
+impl ResidentSceneGtProbe {
+    fn sample(&mut self) {
+        let Some(snapshot) = crate::intel::gen12_gt_state_snapshot() else {
+            return;
+        };
+        if !snapshot.available {
+            return;
+        }
+        if !self.available {
+            self.available = true;
+            self.start_actual_mhz = snapshot.actual_mhz;
+            self.start_requested_mhz = snapshot.requested_mhz;
+            self.rp0_mhz = snapshot.rp0_mhz;
+            self.rpe_mhz = snapshot.rpe_mhz;
+            self.rpn_mhz = snapshot.rpn_mhz;
+        }
+        self.samples = self.samples.saturating_add(1);
+        if snapshot.actual_mhz == 0 {
+            self.zero_actual_samples = self.zero_actual_samples.saturating_add(1);
+        } else {
+            self.min_nonzero_actual_mhz = if self.min_nonzero_actual_mhz == 0 {
+                snapshot.actual_mhz
+            } else {
+                self.min_nonzero_actual_mhz.min(snapshot.actual_mhz)
+            };
+        }
+        self.max_actual_mhz = self.max_actual_mhz.max(snapshot.actual_mhz);
+        self.end_actual_mhz = snapshot.actual_mhz;
+        self.end_requested_mhz = snapshot.requested_mhz;
+        self.throttle_reasons_or |= snapshot.throttle_reasons;
+        self.throttle_reasons_raw_or |= snapshot.throttle_reasons_raw;
+        self.end_rpstat1_raw = snapshot.rpstat1_raw;
+        self.end_rpnswreq_raw = snapshot.rpnswreq_raw;
+    }
+}
+
 #[derive(Copy, Clone, Debug)]
 struct RenderSubmitRuntime {
     context_initialized: bool,
@@ -235,6 +291,10 @@ fn submit_warm_render_batch(
     } else {
         4096
     };
+    let mut gt_probe = ResidentSceneGtProbe::default();
+    if resident_scene_submit {
+        gt_probe.sample();
+    }
     let poll_started_ns = crate::chronos::monotonic_nanos();
     // Another normal-priority GuC client may already own RCS for roughly a
     // frame.  This is a completion ceiling, not permission to reset the shared
@@ -243,6 +303,12 @@ fn submit_warm_render_batch(
     const RESIDENT_SCENE_POLL_TIMEOUT_NS: u64 = 2_000_000_000;
     while iter < poll_limit {
         if resident_scene_submit {
+            // Sampling at powers of two provides useful coverage of both the
+            // early ramp and a long-running frame without turning MMIO reads
+            // into part of every completion-poll iteration.
+            if iter != 0 && iter.is_power_of_two() {
+                gt_probe.sample();
+            }
             // The production scene has one authoritative completion value: a
             // QWord release cookie. Reading fourteen unrelated diagnostic
             // slots on every spin multiplied CPU/memory traffic without
@@ -381,6 +447,30 @@ fn submit_warm_render_batch(
     if resident_scene_submit {
         RESIDENT_SCENE_LAST_GPU_POLL_US.store(poll_elapsed_us, Ordering::Release);
         RESIDENT_SCENE_LAST_GPU_POLL_ITERS.store(iter as u64, Ordering::Release);
+        gt_probe.sample();
+        if runtime.submissions == 1 || runtime.submissions.is_power_of_two() {
+            crate::log_info!(
+                target: "render";
+                "resident-scene-gt-probe: submission={} available={} samples={} actual_mhz=start:{},min_nonzero:{},max:{},end:{} zero_actual_samples={} requested_mhz=start:{},end:{} fused_mhz=rp0:{},rpe:{},rpn:{} throttle_reasons=known_or:0x{:08X},raw_or:0x{:08X} rpstat1_end=0x{:08X} rpnswreq_end=0x{:08X} policy=observe-only sample_schedule=submit+poll-powers-of-two+release\n",
+                runtime.submissions,
+                gt_probe.available as u8,
+                gt_probe.samples,
+                gt_probe.start_actual_mhz,
+                gt_probe.min_nonzero_actual_mhz,
+                gt_probe.max_actual_mhz,
+                gt_probe.end_actual_mhz,
+                gt_probe.zero_actual_samples,
+                gt_probe.start_requested_mhz,
+                gt_probe.end_requested_mhz,
+                gt_probe.rp0_mhz,
+                gt_probe.rpe_mhz,
+                gt_probe.rpn_mhz,
+                gt_probe.throttle_reasons_or,
+                gt_probe.throttle_reasons_raw_or,
+                gt_probe.end_rpstat1_raw,
+                gt_probe.end_rpnswreq_raw,
+            );
+        }
     }
 
     // A PIPE_CONTROL cookie proves the scene's producer release, but it is
