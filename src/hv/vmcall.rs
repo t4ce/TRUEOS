@@ -140,11 +140,17 @@ pub const OP_BP_CHILD_STATUS_V1: u32 = 0x13F; // arg0 handle -> lifecycle state/
 pub const OP_BP_CHILD_TERMINATE_V1: u32 = 0x140; // arg0 child handle -> rc
 pub const OP_BP_VGPU_UI4_INDEXED_BATCH_SUBMIT: u32 = 0x141; // arg0 device,arg1 queue,payload IndexedDrawBatch -> TimelinePoint
 pub const OP_BP_VGPU_UI4_INDEXED_BATCH_SUBMIT_V2: u32 = 0x14C; // arg0 device,arg1 queue,payload IndexedDrawBatchV2 -> TimelinePoint
+pub const OP_BP_VGPU_RETAINED_MESH_CREATE: u32 = 0x14D; // arg0 device,payload RetainedMeshDescriptor -> handle
+pub const OP_BP_VGPU_RETAINED_MESH_DESTROY: u32 = 0x14E; // arg0 device,arg1 mesh -> rc
+pub const OP_BP_VGPU_RETAINED_FRAME_SUBMIT: u32 = 0x14F; // arg0 device,arg1 queue,payload RetainedFrameSubmit -> TimelinePoint
 pub const OP_BP_VGPU_CLOUD_WORK_GRAPH_CREATE: u32 = 0x149;
 pub const OP_BP_VGPU_CLOUD_WORK_GRAPH_DESTROY: u32 = 0x14A;
 pub const OP_BP_VGPU_CLOUD_FRAME_SUBMIT: u32 = 0x14B;
 const _: () = {
     assert!(OP_BP_VGPU_UI4_INDEXED_BATCH_SUBMIT_V2 == 0x14C);
+    assert!(OP_BP_VGPU_RETAINED_MESH_CREATE == 0x14D);
+    assert!(OP_BP_VGPU_RETAINED_MESH_DESTROY == 0x14E);
+    assert!(OP_BP_VGPU_RETAINED_FRAME_SUBMIT == 0x14F);
     assert!(OP_BP_VGPU_CLOUD_WORK_GRAPH_CREATE == 0x149);
     assert!(OP_BP_VGPU_CLOUD_WORK_GRAPH_DESTROY == 0x14A);
     assert!(OP_BP_VGPU_CLOUD_FRAME_SUBMIT == 0x14B);
@@ -152,6 +158,8 @@ const _: () = {
     assert!(core::mem::size_of::<v::vgpu::CloudFrameSubmit>() <= PAYLOAD_CAP);
     assert!(core::mem::size_of::<v::vgpu::CloudFrameTelemetry>() <= PAYLOAD_CAP);
     assert!(core::mem::size_of::<v::vgpu::IndexedDrawBatchV2>() <= PAYLOAD_CAP);
+    assert!(core::mem::size_of::<v::vgpu::RetainedMeshDescriptor>() <= PAYLOAD_CAP);
+    assert!(core::mem::size_of::<v::vgpu::RetainedFrameSubmit>() <= PAYLOAD_CAP);
 };
 pub const OP_BP_UI4_SCENE_KEYBOARD_STATE: u32 = 0xDB; // arg0 window -> rc + focused held-key state
 pub const OP_BP_UI4_SCENE_FRAME_OPEN_IMMUTABLE: u32 = 0xDC; // arg0 x/y,arg1 width/height -> window
@@ -1465,6 +1473,54 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             let result = batch.ok_or(-22).and_then(|batch| {
                 crate::r::io::vgpu_cabi::broker_ui4_indexed_batch_submit_v2(
                     principal, arg0, arg1, batch,
+                )
+            });
+            match result {
+                Ok(point) => write_record_response(vm_id, seq, 0, &point),
+                Err(rc) => write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0),
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_VGPU_RETAINED_MESH_CREATE => {
+            let principal = crate::gpu::vgpu::Principal::HullGuest(vm_id as u16);
+            let descriptor = request_payload(vm_id, req_len)
+                .filter(|payload| {
+                    payload.len() == core::mem::size_of::<v::vgpu::RetainedMeshDescriptor>()
+                })
+                .map(|payload| unsafe {
+                    core::ptr::read_unaligned(
+                        payload.as_ptr().cast::<v::vgpu::RetainedMeshDescriptor>(),
+                    )
+                });
+            let result = descriptor.ok_or(-22).and_then(|descriptor| {
+                crate::r::io::vgpu_cabi::broker_retained_mesh_create(
+                    principal, arg0, descriptor,
+                )
+            });
+            match result {
+                Ok(mesh) => write_response(vm_id, seq, STATUS_OK, mesh, 0),
+                Err(rc) => write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0),
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_VGPU_RETAINED_MESH_DESTROY => {
+            let principal = crate::gpu::vgpu::Principal::HullGuest(vm_id as u16);
+            let rc = crate::r::io::vgpu_cabi::broker_retained_mesh_destroy(principal, arg0, arg1);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_VGPU_RETAINED_FRAME_SUBMIT => {
+            let principal = crate::gpu::vgpu::Principal::HullGuest(vm_id as u16);
+            let submit = request_payload(vm_id, req_len)
+                .filter(|payload| {
+                    payload.len() == core::mem::size_of::<v::vgpu::RetainedFrameSubmit>()
+                })
+                .map(|payload| unsafe {
+                    core::ptr::read_unaligned(payload.as_ptr().cast::<v::vgpu::RetainedFrameSubmit>())
+                });
+            let result = submit.ok_or(-22).and_then(|submit| {
+                crate::r::io::vgpu_cabi::broker_retained_frame_submit(
+                    principal, arg0, arg1, submit,
                 )
             });
             match result {

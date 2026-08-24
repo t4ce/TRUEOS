@@ -1289,6 +1289,32 @@ pub(crate) fn render_resident_churn_forward_frame_direct_to_surface(
     )
 }
 
+/// Submit one retained GPU-transform scene together with ordinary resident
+/// primitives. The retained object owns the compute/native-matrix secondary;
+/// `static_draws` are encoded afterwards and cannot inherit its transform
+/// bindings.
+pub(crate) fn render_resident_retained_with_static_draws_direct_to_surface(
+    resident: &ResidentChurnForward,
+    static_draws: &[ResidentSceneDraw<'_>],
+    clear_rgba: Option<[u8; 4]>,
+    destination: crate::intel::gpgpu::GpgpuRgba8Surface,
+    diagnostic_logs: bool,
+) -> Result<ResidentSceneFrameResult, &'static str> {
+    submit_resident_scene_capture_inner(
+        static_draws,
+        Some(resident),
+        &[],
+        clear_rgba,
+        diagnostic_logs,
+        false,
+        true,
+        ResidentSceneRasterQuality::SingleSample,
+        destination.width as usize,
+        destination.height as usize,
+        ResidentSceneFrameOutput::DirectGpuSurface(destination),
+    )
+}
+
 fn stage_resident_scene_secondary(
     warm: RenderWarmState,
     state_warm: RenderWarmState,
@@ -1776,6 +1802,7 @@ fn submit_resident_churn_forward_geometry_batched(
     dev: crate::intel::Dev,
     warm: RenderWarmState,
     resident: &ResidentChurnForward,
+    static_draws: &[ResidentSceneDraw<'_>],
     clear: [u8; 4],
     depth_config: TriangleDepthConfig,
     render_target_gpu: u64,
@@ -1791,7 +1818,10 @@ fn submit_resident_churn_forward_geometry_batched(
     let transform_dispatch = resident.transform_dispatch();
     let transform_handoff = transform_dispatch.map(|dispatch| dispatch.output.into());
     let transform_secondary_count = usize::from(transform_dispatch.is_some());
-    let secondary_count = CHURN_FORWARD_DRAW_COUNT + 1 + transform_secondary_count;
+    let secondary_count = CHURN_FORWARD_DRAW_COUNT
+        .checked_add(static_draws.len())
+        .and_then(|count| count.checked_add(1 + transform_secondary_count))
+        .ok_or("scene-frame-batch-capacity")?;
     let used_batch_bytes = RESIDENT_SCENE_PRIMARY_BATCH_BYTES
         .checked_add(
             secondary_count
@@ -1909,6 +1939,37 @@ fn submit_resident_churn_forward_geometry_batched(
             }
         }
     }
+    for (static_index, scene) in static_draws.iter().enumerate() {
+        let secondary_index = CHURN_FORWARD_DRAW_COUNT
+            + static_index
+            + 1
+            + transform_secondary_count;
+        let (state_warm, state_gpu) = resident_scene_state_warm(state, warm, secondary_index)?;
+        let draw = prepare_triangle_draw_resources_for_scene_resident_mesh(
+            state_warm,
+            render_target_gpu,
+            render_target_pitch,
+            target_width,
+            target_height,
+            scene.mesh,
+        )
+        .ok_or("retained-static-draw-resources")?
+        .with_rt_surface_format(render_target_surface_format);
+        stage_resident_scene_secondary(
+            warm,
+            state_warm,
+            state_gpu,
+            draw,
+            TriangleBlendProbeMode::StraightAlpha,
+            Some(draw_depth),
+            scene.rgba,
+            scene.sampled_texture,
+            scene.fragment_contract,
+            scene.viewport_translation_px,
+            scene.topology,
+            secondary_index,
+        )?;
+    }
 
     let primary_bytes = encode_resident_scene_primary_batch(warm, secondary_count)?;
     crate::intel::dma_flush(warm.batch_virt, primary_bytes);
@@ -2006,10 +2067,8 @@ fn submit_resident_scene_capture_inner(
     target_height: usize,
     frame_output: ResidentSceneFrameOutput,
 ) -> Result<ResidentSceneFrameResult, &'static str> {
-    if native_churn.is_some() && !draws.is_empty() {
-        return Err("resident-scene-source-conflict");
-    }
-    let geometry_draw_count = native_churn.map_or(draws.len(), |_| CHURN_FORWARD_DRAW_COUNT);
+    let geometry_draw_count = native_churn
+        .map_or(draws.len(), |_| CHURN_FORWARD_DRAW_COUNT + draws.len());
     if target_width == 0
         || target_height == 0
         || target_width > RESIDENT_SCENE_TARGET_WIDTH
@@ -2203,6 +2262,7 @@ fn submit_resident_scene_capture_inner(
                 dev,
                 warm,
                 resident,
+                draws,
                 clear,
                 depth_config.ok_or("churn-native-depth")?,
                 render_target_gpu,

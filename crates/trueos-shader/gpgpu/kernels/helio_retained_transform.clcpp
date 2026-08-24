@@ -511,16 +511,17 @@ __kernel void helio_retained_transform(
     float pty = as_float(transforms[src + 12u]);
     float ptz = as_float(transforms[src + 13u]);
 
-    // The initial retained path excludes mirrored and singular transforms.
-    // Besides keeping winding fixed, this makes the inverse-scale normal
-    // matrix finite without a slow generic inverse.
+    // The flat retained path excludes mirrored transforms, but admits an exact
+    // zero scale so an instance can collapse completely. A collapsed axis has
+    // no meaningful normal; write a zero inverse scale for that invisible
+    // limit instead of manufacturing an infinity.
     float quaternion_length_squared = qx * qx + qy * qy + qz * qz + qw * qw;
     if (!(isfinite(tx) && isfinite(ty) && isfinite(tz)
         && isfinite(ptx) && isfinite(pty) && isfinite(ptz)
         && isfinite(sx) && isfinite(sy) && isfinite(sz)
         && isfinite(qx) && isfinite(qy) && isfinite(qz) && isfinite(qw)
         && isfinite(local_radius) && isfinite(quaternion_length_squared))
-        || sx <= 0.0f || sy <= 0.0f || sz <= 0.0f
+        || sx < 0.0f || sy < 0.0f || sz < 0.0f
         || local_radius < 0.0f || quaternion_length_squared <= 1.0e-12f) {
         return;
     }
@@ -556,6 +557,9 @@ __kernel void helio_retained_transform(
     float r20 = 2.0f * (xz - yw);
     float r21 = 2.0f * (yz + xw);
     float r22 = 1.0f - 2.0f * (xx + yy);
+    float inverse_sx = sx > 0.0f ? 1.0f / sx : 0.0f;
+    float inverse_sy = sy > 0.0f ? 1.0f / sy : 0.0f;
+    float inverse_sz = sz > 0.0f ? 1.0f / sz : 0.0f;
     uint dst = row * HELIO_INSTANCE_WORDS;
 
     // Column-major model matrix, byte-for-byte compatible with WGSL mat4.
@@ -577,17 +581,17 @@ __kernel void helio_retained_transform(
         helio_store_float(instances, dst + 15u, 1.0f);
 
         // Three padded vec4 columns expected by Helio's forward vertex shader.
-        helio_store_float(instances, dst + 16u, r00 / sx);
-        helio_store_float(instances, dst + 17u, r10 / sx);
-        helio_store_float(instances, dst + 18u, r20 / sx);
+        helio_store_float(instances, dst + 16u, r00 * inverse_sx);
+        helio_store_float(instances, dst + 17u, r10 * inverse_sx);
+        helio_store_float(instances, dst + 18u, r20 * inverse_sx);
         helio_store_float(instances, dst + 19u, 0.0f);
-        helio_store_float(instances, dst + 20u, r01 / sy);
-        helio_store_float(instances, dst + 21u, r11 / sy);
-        helio_store_float(instances, dst + 22u, r21 / sy);
+        helio_store_float(instances, dst + 20u, r01 * inverse_sy);
+        helio_store_float(instances, dst + 21u, r11 * inverse_sy);
+        helio_store_float(instances, dst + 22u, r21 * inverse_sy);
         helio_store_float(instances, dst + 23u, 0.0f);
-        helio_store_float(instances, dst + 24u, r02 / sz);
-        helio_store_float(instances, dst + 25u, r12 / sz);
-        helio_store_float(instances, dst + 26u, r22 / sz);
+        helio_store_float(instances, dst + 24u, r02 * inverse_sz);
+        helio_store_float(instances, dst + 25u, r12 * inverse_sz);
+        helio_store_float(instances, dst + 26u, r22 * inverse_sz);
         helio_store_float(instances, dst + 27u, 0.0f);
 
         float max_scale = fmax(sx, fmax(sy, sz));

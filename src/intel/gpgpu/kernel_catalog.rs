@@ -824,14 +824,14 @@ pub(crate) const HELIO_RETAINED_TRANSFORM_ADLS_BIN_SHA256: [u8; 32] =
 const _: () = {
     let contract = HELIO_RETAINED_TRANSFORM_ADLS_CPP_ABI_CONTRACT;
     assert!(matches!(contract.validate(), Ok(())));
-    assert!(HELIO_RETAINED_TRANSFORM_ADLS_BIN.len() == 208_096);
-    assert!(HELIO_RETAINED_TRANSFORM_ADLS_SPV.len() == 150_604);
+    assert!(HELIO_RETAINED_TRANSFORM_ADLS_BIN.len() == 206_768);
+    assert!(HELIO_RETAINED_TRANSFORM_ADLS_SPV.len() == 151_324);
     assert!(contract.target.pci_device_ids.len() == 1);
     assert!(contract.target.pci_device_ids[0] == 0x4680);
     assert!(contract.target.revision_min == 0x0C);
     assert!(contract.target.revision_max == 0x0C);
     assert!(contract.entry_offset == 64);
-    assert!(contract.entry_size == 43_096);
+    assert!(contract.entry_size == 41_056);
     assert!(contract.simd_width == 16);
     assert!(contract.grf_count == 128);
     assert!(contract.scratch_bytes == 0);

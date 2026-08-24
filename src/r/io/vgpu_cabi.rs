@@ -413,6 +413,56 @@ pub(crate) fn broker_ui4_indexed_batch_submit_v2(
     })
 }
 
+pub(crate) fn broker_retained_mesh_create(
+    principal: Principal,
+    device: u64,
+    descriptor: v::vgpu::RetainedMeshDescriptor,
+) -> Result<u64, i32> {
+    vgpu::create_retained_mesh(principal, DeviceHandle::from_raw(device), descriptor)
+        .map(vgpu::RetainedMeshHandle::raw)
+        .map_err(|error| error.errno())
+}
+
+pub(crate) fn broker_retained_mesh_destroy(
+    principal: Principal,
+    device: u64,
+    mesh: u64,
+) -> i32 {
+    vgpu::destroy_retained_mesh(
+        principal,
+        DeviceHandle::from_raw(device),
+        vgpu::RetainedMeshHandle::from_raw(mesh),
+    )
+    .map(|()| 0)
+    .unwrap_or_else(|error| error.errno())
+}
+
+pub(crate) fn broker_retained_frame_submit(
+    principal: Principal,
+    device: u64,
+    queue: u64,
+    submit: v::vgpu::RetainedFrameSubmit,
+) -> Result<v::vgpu::TimelinePoint, i32> {
+    let owner = ui4_owner(principal)?;
+    let completed = vgpu::submit_ui4_retained_frame(
+        principal,
+        DeviceHandle::from_raw(device),
+        QueueHandle::from_raw(queue),
+        submit,
+    )
+    .map_err(|error| error.errno())?;
+    crate::ui4::blueprint_text::complete_vgpu_resident_surface_submission(
+        owner,
+        completed.window_id,
+        completed.surface.handle.raw(),
+        completed.release,
+    )?;
+    Ok(v::vgpu::TimelinePoint {
+        value: completed.point.value,
+        physical_serial: completed.point.physical_serial,
+    })
+}
+
 pub(crate) fn broker_buffer_destroy(principal: Principal, device: u64, buffer: u64) -> i32 {
     vgpu::destroy_buffer(principal, DeviceHandle::from_raw(device), BufferHandle::from_raw(buffer))
         .map(|()| 0)
@@ -1166,6 +1216,91 @@ pub unsafe extern "C" fn trueos_cabi_vgpu_ui4_indexed_batch_submit_v2(
         )
     } else {
         broker_ui4_indexed_batch_submit_v2(direct_principal(), device, queue, batch)
+    };
+    match result {
+        Ok(point) => {
+            unsafe { out_point.write(point) };
+            0
+        }
+        Err(rc) => rc,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_vgpu_retained_mesh_create(
+    device: u64,
+    descriptor: *const v::vgpu::RetainedMeshDescriptor,
+    out_mesh: *mut u64,
+) -> i32 {
+    if descriptor.is_null() || out_mesh.is_null() {
+        return -14;
+    }
+    let descriptor = unsafe { descriptor.read() };
+    let payload = unsafe {
+        core::slice::from_raw_parts(
+            (&descriptor as *const v::vgpu::RetainedMeshDescriptor).cast::<u8>(),
+            core::mem::size_of::<v::vgpu::RetainedMeshDescriptor>(),
+        )
+    };
+    let result = if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        guest_handle(
+            trueos_vm::vmcall::OP_BP_VGPU_RETAINED_MESH_CREATE,
+            device,
+            0,
+            payload,
+        )
+    } else {
+        broker_retained_mesh_create(direct_principal(), device, descriptor)
+    };
+    match result {
+        Ok(mesh) => {
+            unsafe { out_mesh.write(mesh) };
+            0
+        }
+        Err(rc) => rc,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_vgpu_retained_mesh_destroy(device: u64, mesh: u64) -> i32 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        guest_rc(
+            trueos_vm::vmcall::OP_BP_VGPU_RETAINED_MESH_DESTROY,
+            device,
+            mesh,
+            &[],
+        )
+    } else {
+        broker_retained_mesh_destroy(direct_principal(), device, mesh)
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_vgpu_retained_frame_submit(
+    device: u64,
+    queue: u64,
+    submit: *const v::vgpu::RetainedFrameSubmit,
+    out_point: *mut v::vgpu::TimelinePoint,
+) -> i32 {
+    if submit.is_null() || out_point.is_null() {
+        return -14;
+    }
+    let submit = unsafe { submit.read() };
+    let payload = unsafe {
+        core::slice::from_raw_parts(
+            (&submit as *const v::vgpu::RetainedFrameSubmit).cast::<u8>(),
+            core::mem::size_of::<v::vgpu::RetainedFrameSubmit>(),
+        )
+    };
+    let result = if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        guest_record(
+            trueos_vm::vmcall::OP_BP_VGPU_RETAINED_FRAME_SUBMIT,
+            device,
+            queue,
+            payload,
+        )
+    } else {
+        broker_retained_frame_submit(direct_principal(), device, queue, submit)
     };
     match result {
         Ok(point) => {

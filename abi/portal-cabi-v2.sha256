@@ -133,6 +133,10 @@
 # the original triangle-list batch symbol and adds an explicit bounded topology
 # word per draw so point, line-list, and triangle-list primitives reach the
 # driver's native topology selection without importer-side rewriting.
+# The retained-mesh create, frame-submit, and destroy calls are strictly
+# additive. They bind opaque caller buffers once, accept only compact bounded
+# TRS/quaternion seeds plus ordinary static draw ranges per frame, and keep all
+# GPU addresses, matrices, compaction records, and indirect draws kernel-owned.
 # The HelioC cloud work-graph create, destroy, and frame-submit calls are
 # strictly additive. They bind only four caller-owned vVideoMem handles to one
 # immutable kernel profile with at most two simulation steps; no shader bytes,
@@ -177,4 +181,4 @@
 # replacement became the runtime owner.  It was interpreter-specific kernel
 # state, not a general Blueprint service; worker execution now uses the child
 # Hull contract above.
-5d4e588132d17874de3f40607cca24a4d43c57b5995aa0e79fcd5c83946834a2
+bbc05c9845864f08f45508fa4cc6af32c09f83bce30da85b87cbdd289892cc38

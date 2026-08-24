@@ -270,6 +270,56 @@ pub struct IndexedDrawBatchV2 {
     pub draws: [IndexedBatchDrawV2; MAX_INDEXED_BATCH_DRAWS],
 }
 
+pub const MAX_RETAINED_TRANSFORM_SEEDS: usize = 4;
+pub const MAX_RETAINED_STATIC_DRAWS: usize = 3;
+
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+#[repr(transparent)]
+pub struct RetainedMesh(u64);
+
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+#[repr(C)]
+pub struct RetainedMeshDescriptor {
+    pub vertex_buffer: u64,
+    pub index_buffer: u64,
+    pub vertex_offset: u64,
+    pub index_offset: u64,
+    pub vertex_count: u32,
+    pub index_count: u32,
+    pub reserved: [u32; 2],
+}
+
+/// Exact compact input consumed by the authenticated retained-transform
+/// artifact. Matrices, compaction, and indirect records remain GPU-authored.
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+#[repr(C)]
+pub struct RetainedTransformSeed {
+    pub translation: [f32; 3],
+    pub scale: [f32; 3],
+    pub rotation: [f32; 4],
+    pub local_radius: f32,
+    pub previous_translation: [f32; 3],
+    pub draw_group: u32,
+    pub flags: u32,
+}
+
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+#[repr(C)]
+pub struct RetainedFrameSubmit {
+    pub surface: u64,
+    pub mesh: u64,
+    pub static_vertex_buffer: u64,
+    pub static_index_buffer: u64,
+    pub static_vertex_offset: u64,
+    pub static_index_offset: u64,
+    pub clear_rgba8_srgb: u32,
+    pub seed_count: u32,
+    pub static_draw_count: u32,
+    pub reserved: u32,
+    pub seeds: [RetainedTransformSeed; MAX_RETAINED_TRANSFORM_SEEDS],
+    pub static_draws: [IndexedBatchDrawV2; MAX_RETAINED_STATIC_DRAWS],
+}
+
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 #[repr(C)]
 pub struct TimelinePoint {
@@ -765,6 +815,55 @@ impl Device {
         Ok(point)
     }
 
+    pub fn create_retained_mesh(
+        self,
+        vertex_buffer: Buffer,
+        index_buffer: Buffer,
+        mut descriptor: RetainedMeshDescriptor,
+    ) -> Result<RetainedMesh, i32> {
+        descriptor.vertex_buffer = vertex_buffer.0;
+        descriptor.index_buffer = index_buffer.0;
+        let mut mesh = 0;
+        rc_result(unsafe {
+            vcabi::trueos_cabi_vgpu_retained_mesh_create(self.0, &descriptor, &mut mesh)
+        })?;
+        Ok(RetainedMesh(mesh))
+    }
+
+    pub fn destroy_retained_mesh(self, mesh: RetainedMesh) -> Result<(), i32> {
+        rc_result(unsafe { vcabi::trueos_cabi_vgpu_retained_mesh_destroy(self.0, mesh.0) })
+    }
+
+    pub fn submit_retained_frame(
+        self,
+        queue: Queue,
+        surface: Ui4Surface,
+        mesh: RetainedMesh,
+        static_vertex_buffer: Buffer,
+        static_index_buffer: Buffer,
+        mut submit: RetainedFrameSubmit,
+    ) -> Result<TimelinePoint, i32> {
+        if queue.device != self || surface.device != self {
+            return Err(ERR_BAD_HANDLE);
+        }
+        let mut surface = surface;
+        submit.surface = surface.surface.0;
+        submit.mesh = mesh.0;
+        submit.static_vertex_buffer = static_vertex_buffer.0;
+        submit.static_index_buffer = static_index_buffer.0;
+        let mut point = TimelinePoint::default();
+        rc_result(unsafe {
+            vcabi::trueos_cabi_vgpu_retained_frame_submit(
+                self.0,
+                queue.handle,
+                &submit,
+                &mut point,
+            )
+        })?;
+        surface.live = false;
+        Ok(point)
+    }
+
     pub fn timeline(self, queue: Queue) -> Result<TimelineStatus, i32> {
         if queue.device != self {
             return Err(ERR_BAD_HANDLE);
@@ -979,6 +1078,10 @@ mod tests {
         assert_eq!(core::mem::size_of::<IndexedDrawBatch>(), 312);
         assert_eq!(core::mem::size_of::<IndexedBatchDrawV2>(), 24);
         assert_eq!(core::mem::size_of::<IndexedDrawBatchV2>(), 440);
+        assert_eq!(core::mem::size_of::<RetainedMeshDescriptor>(), 48);
+        assert_eq!(core::mem::size_of::<RetainedTransformSeed>(), 64);
+        assert_eq!(core::mem::size_of::<RetainedFrameSubmit>(), 392);
+        assert_eq!(core::mem::align_of::<RetainedFrameSubmit>(), 8);
         assert_eq!(core::mem::size_of::<TimelinePoint>(), 16);
         assert_eq!(core::mem::size_of::<TimelineStatus>(), 32);
         assert_eq!(core::mem::size_of::<CloudWorkGraphDescriptor>(), 56);

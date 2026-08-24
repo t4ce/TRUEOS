@@ -1102,10 +1102,28 @@ pub(crate) fn release_resident_triangle_mesh(mesh: &ResidentTriangleMesh) -> boo
 
 const CHURN_FORWARD_MESH_COUNT: usize = trueos_helio_runtime::churn::SHAPE_COUNT;
 const CHURN_FORWARD_DRAW_COUNT: usize = trueos_helio_runtime::churn::DRAW_GROUP_COUNT;
+pub(crate) const RETAINED_NATIVE_DRAW_COUNT: usize = CHURN_FORWARD_DRAW_COUNT;
+/// The native-matrix shader is not cube-specific. Picasso uses this same
+/// authenticated Helio graphics package with its own immutable PosNormal mesh.
+const PICASSO_RETAINED_FORWARD_ARTIFACT: &[u8] =
+    include_bytes!("../../../assets/helio/churn-forward.trueos.intel.helio");
 const CHURN_FORWARD_VERTICES_PER_MESH: usize = 24;
 const CHURN_FORWARD_INDICES_PER_MESH: usize = 36;
 static CHURN_FORWARD_PIPELINE: spin::Mutex<Option<crate::intel::shader::TrianglePipeline>> =
     spin::Mutex::new(None);
+
+fn bootstrap_churn_meshes() -> [trueos_helio_runtime::churn::MeshDescriptor;
+    CHURN_FORWARD_MESH_COUNT] {
+    core::array::from_fn(|mesh_id| trueos_helio_runtime::churn::MeshDescriptor {
+        mesh_id: mesh_id as u32,
+        half_extents: [1.0; 3],
+        first_vertex: (mesh_id * CHURN_FORWARD_VERTICES_PER_MESH) as u32,
+        vertex_count: CHURN_FORWARD_VERTICES_PER_MESH as u32,
+        first_index: (mesh_id * CHURN_FORWARD_INDICES_PER_MESH) as u32,
+        index_count: CHURN_FORWARD_INDICES_PER_MESH as u32,
+        base_vertex: (mesh_id * CHURN_FORWARD_VERTICES_PER_MESH) as i32,
+    })
+}
 
 fn churn_forward_stage_words(bytes: &[u8]) -> Result<&'static [u32], &'static str> {
     if bytes.is_empty() || !bytes.len().is_multiple_of(core::mem::size_of::<u32>()) {
@@ -2095,6 +2113,131 @@ pub(crate) fn update_resident_churn_forward_frame(
     // Preserve the CPU-expanded ABI as an explicit fallback. A successful
     // legacy update disables the compute secondary for the following frame.
     resident.disable_retained_transform_dispatch();
+    Ok(())
+}
+
+/// Create the geometry half of Picasso's retained-transform path.
+///
+/// The GPU transform artifact and native VS are shared with Helio, but this
+/// function deliberately replaces only Churn's bootstrap cube allocation.
+/// `vertices` is immutable Float3 position + Float3 normal (24 bytes each),
+/// `indices` is one ordinary triangle-list mesh, and all instance motion stays
+/// in the GPU-owned seed/instance/indirect buffers of the returned resident.
+pub(crate) fn create_resident_picasso_retained_posnormal_mesh(
+    vertices: &[u8],
+    indices: &[u32],
+    max_instances: usize,
+) -> Result<ResidentChurnForward, &'static str> {
+    const POS_NORMAL_STRIDE: usize = trueos_helio_artifact::churn_forward::VERTEX_STRIDE as usize;
+    if vertices.is_empty()
+        || !vertices.len().is_multiple_of(POS_NORMAL_STRIDE)
+        || indices.len() < 3
+        || !indices.len().is_multiple_of(3)
+        || indices
+            .iter()
+            .any(|index| *index as usize >= vertices.len() / POS_NORMAL_STRIDE)
+    {
+        return Err("picasso-retained-geometry-shape");
+    }
+
+    // This performs the standard authenticated shader/compute admission and
+    // allocates the persistent GPU seed, instance, compaction, and indirect
+    // ranges. Only its synthetic cube geometry is replaced below.
+    let mut resident = create_resident_churn_forward(
+        PICASSO_RETAINED_FORWARD_ARTIFACT,
+        max_instances,
+        &bootstrap_churn_meshes(),
+    )?;
+    let index_bytes = indices
+        .len()
+        .checked_mul(core::mem::size_of::<u32>())
+        .ok_or("picasso-retained-geometry-size")?;
+    let index_offset = crate::intel::align_up(vertices.len(), 64)
+        .ok_or("picasso-retained-geometry-size")?;
+    let geometry_bytes = index_offset
+        .checked_add(index_bytes)
+        .ok_or("picasso-retained-geometry-size")?;
+    let geometry = match allocate_resident_render_buffer(geometry_bytes) {
+        Ok(geometry) => geometry,
+        Err(error) => return Err(error),
+    };
+    let mut index_blob = Vec::with_capacity(index_bytes);
+    for index in indices {
+        index_blob.extend_from_slice(&index.to_le_bytes());
+    }
+    if !geometry.write(0, vertices) || !geometry.write(index_offset, &index_blob) {
+        let _ = release_resident_render_buffer(&geometry);
+        return Err("picasso-retained-geometry-upload");
+    }
+    geometry.flush();
+
+    let vertex_count = u32::try_from(vertices.len() / POS_NORMAL_STRIDE)
+        .map_err(|_| "picasso-retained-geometry-size")?;
+    let index_count = u32::try_from(indices.len()).map_err(|_| "picasso-retained-geometry-size")?;
+    let vertex_bytes = u32::try_from(vertices.len()).map_err(|_| "picasso-retained-geometry-size")?;
+    let index_byte_len = u32::try_from(index_bytes).map_err(|_| "picasso-retained-geometry-size")?;
+    let old_geometry = core::mem::replace(&mut resident.geometry, geometry);
+    resident.vertex_gpu_addr = resident.geometry.gpu_base();
+    resident.vertex_count = vertex_count;
+    resident.vertex_bytes = vertex_bytes;
+    resident.index_gpu_addr = resident.geometry.gpu_base() + index_offset as u64;
+    resident.index_count = index_count;
+    resident.index_bytes = index_byte_len;
+    if !release_resident_render_buffer(&old_geometry) {
+        return Err("picasso-retained-bootstrap-release");
+    }
+    Ok(resident)
+}
+
+/// Publish four (or fewer) compact TRS rows for Picasso. The artifact writes
+/// the 208-byte matrices, compaction indices, and indexed-indirect command;
+/// the CPU never writes transformed vertex positions.
+pub(crate) fn update_resident_picasso_retained_transform_seeds(
+    resident: &ResidentChurnForward,
+    seeds: &[trueos_helio_runtime::churn::GpuRetainedTransformSeed],
+) -> Result<(), &'static str> {
+    let transform = resident.transform.as_ref().ok_or(
+        resident
+            .retained_transform_unavailable_reason()
+            .unwrap_or("picasso-retained-transform-unavailable"),
+    )?;
+    if seeds.is_empty() || seeds.len() > resident.max_instances || seeds.iter().any(|seed| seed.draw_group != 0) {
+        return Err("picasso-retained-transform-seeds");
+    }
+    let row_count = u32::try_from(seeds.len()).map_err(|_| "picasso-retained-transform-seeds")?;
+    let capacity = row_count;
+    let template = trueos_helio_runtime::churn::GpuRetainedDrawTemplate {
+        index_count: resident.index_count,
+        first_index: 0,
+        base_vertex: 0,
+        first_instance: 0,
+        capacity,
+        packed_mesh_material: 0,
+    };
+    let mut templates = [trueos_helio_runtime::churn::GpuRetainedDrawTemplate::default();
+        CHURN_FORWARD_DRAW_COUNT];
+    templates[0] = template;
+    let mut seed_bytes = Vec::with_capacity(seeds.len() * trueos_helio_runtime::churn::GpuRetainedTransformSeed::BYTE_LEN);
+    for seed in seeds {
+        seed_bytes.extend_from_slice(&seed.to_le_bytes());
+    }
+    let mut template_bytes = Vec::with_capacity(CHURN_FORWARD_DRAW_COUNT * trueos_helio_runtime::churn::GpuRetainedDrawTemplate::BYTE_LEN);
+    for template in templates {
+        template_bytes.extend_from_slice(&template.to_le_bytes());
+    }
+    transform.row_count.store(0, Ordering::Release);
+    let dispatch = resident
+        .transform_dispatch_for_rows(row_count)
+        .ok_or("picasso-retained-transform-dispatch")?;
+    dispatch
+        .validate_templates(&templates)
+        .map_err(|_| "picasso-retained-transform-contract")?;
+    if !transform.seeds.write_and_flush(0, &seed_bytes)
+        || !transform.draw_templates.write_and_flush(0, &template_bytes)
+    {
+        return Err("picasso-retained-transform-upload");
+    }
+    transform.row_count.store(row_count, Ordering::Release);
     Ok(())
 }
 
