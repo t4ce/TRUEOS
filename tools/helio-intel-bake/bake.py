@@ -1242,11 +1242,12 @@ def helioc_public_api_boundary(
     """
     if instrumented is not None:
         if instrumented.get("address_free_indirect_templates") is not None \
-                and instrumented.get("address_free_surface_templates") is not None:
+                and instrumented.get("address_free_surface_templates") is not None \
+                and instrumented.get("address_free_buffer_descriptor_templates") is not None:
             missing_state = (
-                "symbolic ownership/typed relocations for command, binding-table, sampler, "
-                "descriptor-set/buffer-surface, and program state (V5 indirect descriptors and "
-                "V6 image surfaces are address-free)"
+                "symbolic ownership/typed relocations for command, binding-table, sampler, descriptor payload, "
+                "and program state (V5 indirect descriptors, V6 image surfaces, and V7 buffer/descriptor-set "
+                "surfaces are address-free)"
             )
         else:
             missing_state = (
@@ -2026,6 +2027,7 @@ def collect_instrumented_anv_capture(exec_dir: Path) -> dict[str, object] | None
         "command_catalog": (command_catalog := collect_helioc_command_catalog(exec_dir)),
         "address_free_indirect_templates": collect_helioc_address_free_indirect_templates(exec_dir),
         "address_free_surface_templates": collect_helioc_address_free_surface_templates(exec_dir),
+        "address_free_buffer_descriptor_templates": collect_helioc_address_free_v7_templates(exec_dir),
         # V2/V3 captures are intentionally one explicit named catalog anchor,
         # rather than an order-dependent first record.  The raw command
         # catalog remains diagnostic only and no address-bearing bytes are
@@ -2265,19 +2267,22 @@ def bake_helioc(args: argparse.Namespace) -> None:
             "HELIOCRS v2 object/typed-relocation map; shim execution is not physical target proof"
         )
         if instrumented.get("address_free_indirect_templates") is not None \
-                and instrumented.get("address_free_surface_templates") is not None:
+                and instrumented.get("address_free_surface_templates") is not None \
+                and instrumented.get("address_free_buffer_descriptor_templates") is not None:
             capture_metadata["relocatable_state"] = {
                 "section": HELIOC_RELOC_STATE_SECTION,
-                "status": "partial-v6",
-                "proven_slices": ["indirect-descriptor-v5", "image-surface-v6"],
+                "status": "partial-v7",
+                "proven_slices": [
+                    "indirect-descriptor-v5", "image-surface-v6", "buffer-descriptor-surface-v7",
+                ],
                 "reason": (
-                    "command, binding-table, sampler, descriptor-set/buffer-surface, and program "
-                    "objects still lack a complete typed relocation map"
+                    "command, binding-table, sampler, descriptor payload, and program objects still "
+                    "lack a complete typed relocation map"
                 ),
             }
             capture_metadata["remaining_capture_boundary"] = (
-                "V5 indirect descriptors and V6 image surfaces are address-free; command, table, "
-                "sampler, descriptor-set/buffer-surface, and program state remain incomplete, and "
+                "V5 indirect descriptors, V6 image surfaces, and V7 buffer/descriptor-set surfaces are "
+                "address-free; command, table, sampler, descriptor payload, and program state remain incomplete, and "
                 "shim execution is not physical target proof"
             )
     (work / "helioc-capture-metadata.json").write_bytes(

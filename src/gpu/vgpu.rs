@@ -2487,8 +2487,9 @@ mod cloud_resource_contract_tests {
     use super::{
         BUFFER_USAGE_COPY_DST, BUFFER_USAGE_COPY_SRC, BUFFER_USAGE_STORAGE,
         CLOUD_PARAMS_REQUIRED_USAGE, CLOUD_RENDER_PARAMS_BYTES, CLOUD_SIM_PARAMS_BYTES,
-        CLOUD_VOLUME_BYTES, CLOUD_VOLUME_REQUIRED_USAGE, CloudResourceRole, PAGE_BYTES, VgpuError,
-        align_up, cloud_next_volume, validate_cloud_resource_shape,
+        CLOUD_VOLUME_BYTES, CLOUD_VOLUME_REQUIRED_USAGE, CloudResourceRole, CloudSubmissionRequest,
+        DeviceHandle, PAGE_BYTES, Principal, QueueHandle, SurfaceHandle, VgpuError, align_up,
+        cloud_next_volume, cloud_pending_request_matches, validate_cloud_resource_shape,
     };
 
     #[test]
@@ -2569,6 +2570,49 @@ mod cloud_resource_contract_tests {
         assert_eq!(cloud_next_volume(1, 2), 1);
         assert_eq!(cloud_next_volume(0, 2), 0);
         assert_eq!(cloud_next_volume(1, 3), 0);
+    }
+
+    #[test]
+    fn pending_cloud_ticket_accepts_only_the_exact_retry_identity() {
+        let request = CloudSubmissionRequest {
+            principal: Principal::HullGuest(7),
+            device: DeviceHandle::from_raw(11),
+            queue: QueueHandle::from_raw(12),
+            graph: super::CloudWorkGraphHandle::from_raw(13),
+            surface: SurfaceHandle::from_raw(14),
+            simulation_steps: 2,
+        };
+        assert!(cloud_pending_request_matches(request, request));
+
+        let cases = [
+            CloudSubmissionRequest {
+                principal: Principal::HullGuest(8),
+                ..request
+            },
+            CloudSubmissionRequest {
+                device: DeviceHandle::from_raw(21),
+                ..request
+            },
+            CloudSubmissionRequest {
+                queue: QueueHandle::from_raw(22),
+                ..request
+            },
+            CloudSubmissionRequest {
+                graph: super::CloudWorkGraphHandle::from_raw(23),
+                ..request
+            },
+            CloudSubmissionRequest {
+                surface: SurfaceHandle::from_raw(24),
+                ..request
+            },
+            CloudSubmissionRequest {
+                simulation_steps: 3,
+                ..request
+            },
+        ];
+        for retry in cases {
+            assert!(!cloud_pending_request_matches(request, retry));
+        }
     }
 }
 

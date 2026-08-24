@@ -105,8 +105,12 @@ addresses or a JSON surrogate. A relocation writes a field as
 unshifted value fits a contiguous mask, then performs a masked RMW. This is
 required for bit-positioned width/height/pitch fields as well as addresses.
 The current bakery does not emit this section or a HELIOA. It now accepts and
-cross-checks two genuinely address-free source-instrumented slices: the V5
-indirect descriptors and V6 sampled/storage/UI4 image-surface templates. The
-capture metadata records this as `partial-v6`; command packets, binding and
-sampler tables, descriptor-set/buffer surfaces, and program state still lack a
-complete typed relocation map, so the package gate remains fail-closed.
+cross-checks three genuinely address-free source-instrumented slices: the V5
+indirect descriptors, V6 sampled/storage/UI4 image-surface templates, and V7
+sim/render-parameter plus descriptor-set-buffer `SURFACE_STATE` templates.
+V7 requires exactly the two compute and two graphics roles, binds their
+descriptor layouts/ranges and typed address relocations, and rejects any
+nonzero packed base address. The capture metadata records this as
+`partial-v7`; command packets, binding and sampler tables, descriptor payload
+contents, and program state still lack a complete typed relocation map, so the
+package gate remains fail-closed.
