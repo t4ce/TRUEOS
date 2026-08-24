@@ -772,7 +772,7 @@ mod runtime_admission_tests {
     fn admission_rejects_invalid_contract_and_contract_identity_mismatches() {
         let artifact = COPY_RECT_RGBA8_ADLS_ARTIFACT;
         const INVALID_CONTRACT: GpgpuKernelAbiContract = GpgpuKernelAbiContract {
-            simd_width: 32,
+            simd_width: 8,
             ..COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT
         };
         let invalid_contract = GpgpuKernelArtifact {

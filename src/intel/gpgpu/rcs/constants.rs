@@ -388,6 +388,7 @@ const GPGPU_VFE_DW3_UOS: u32 = 0x00A7_0100;
 const GPGPU_VFE_DW5_UOS: u32 = 0x0782_0000;
 const GPGPU_WALKER_GROUP_THREADS: u32 = 1;
 const GPGPU_WALKER_SIMD16_SELECT: u32 = 1;
+const GPGPU_WALKER_SIMD32_SELECT: u32 = 2;
 const FILL_RECT_PIXELS_PER_GROUP_X: u32 = 16;
 const COPY_RECT_2D_COMPLETION_TIMEOUT_MS: u64 = 250;
 const FILL_RECT_2D_COMPLETION_TIMEOUT_MS: u64 = 250;
@@ -396,7 +397,16 @@ const DIRECT_RCS_2D_COMPLETION_TIMEOUT_MS: u64 = 250;
 const FONT_OUTLINE_COVERAGE_R8_COMPLETION_TIMEOUT_MS: u64 = 500;
 const GPGPU_WALKER_GROUP_Z_DIM: u32 = 1;
 const GPGPU_WALKER_SIMD16_MASK: u32 = 0x0000_FFFF;
+const GPGPU_WALKER_SIMD32_MASK: u32 = 0xFFFF_FFFF;
 const GPGPU_WALKER_BOTTOM_MASK: u32 = 0xFFFF_FFFF;
+const GPGPU_WALKER_DWORDS: usize = 15;
+
+// The first Xe-LP 3D compute rung is deliberately narrow. It accepts only
+// the compiler-authenticated 64-work-item shape used by the initial ADL-S
+// experiment; future shapes need their own ABI and hardware validation.
+const XELP_3D_WALKER_GROUP_DIMENSIONS: [u32; 3] = [24, 12, 24];
+const XELP_3D_WALKER_LOCAL_DIMENSIONS: [u32; 3] = [4, 4, 4];
+const XELP_3D_WALKER_LOCAL_INVOCATIONS: u32 = 64;
 
 const COPY_RECT_BATCH_IDD_OFFSET_BYTES: usize = 0x1000;
 const COPY_RECT_BATCH_BINDING_TABLE_OFFSET_BYTES: usize = 0x1040;

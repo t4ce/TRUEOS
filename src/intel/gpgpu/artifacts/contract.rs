@@ -235,10 +235,9 @@ impl GpgpuKernelAbiContract {
         {
             return Err(GpgpuKernelAbiContractError::InvalidTextRange);
         }
-        // Every checked-in direct-RCS kernel currently relies on the SIMD16
-        // local-ID payload programmed by the encoder.  SIMD8/32 require an
-        // explicit encoder capability addition before admission.
-        if self.simd_width != 16 {
+        // Direct RCS supports compiler-declared local-ID payloads for SIMD16
+        // and the bounded Xe-LP SIMD32 walker. SIMD8 remains unprogrammed.
+        if self.simd_width != 16 && self.simd_width != 32 {
             return Err(GpgpuKernelAbiContractError::UnsupportedSimdWidth);
         }
         if self.grf_count == 0 || self.grf_count > 256 || self.grf_count % 32 != 0 {
@@ -258,9 +257,15 @@ impl GpgpuKernelAbiContract {
         {
             return Err(GpgpuKernelAbiContractError::InvalidCrossThreadData);
         }
-        // SIMD16 local IDs occupy three 32-byte GRFs in current payload
-        // assembly.  Any other value needs matching encoder work.
-        if self.per_thread_data_bytes != 96 {
+        // Local IDs are three u16 vectors. The compiler's per-thread payload
+        // is therefore 96 bytes at SIMD16 and 192 bytes at SIMD32. Do not
+        // infer either layout for any other SIMD width.
+        let expected_per_thread_data_bytes = match self.simd_width {
+            16 => 96,
+            32 => 192,
+            _ => return Err(GpgpuKernelAbiContractError::UnsupportedSimdWidth),
+        };
+        if self.per_thread_data_bytes != expected_per_thread_data_bytes {
             return Err(GpgpuKernelAbiContractError::UnsupportedPerThreadData);
         }
 
@@ -362,7 +367,7 @@ impl GpgpuKernelAbiContract {
         };
         if !matches!(per_thread.kind, GpgpuArtifactPerThreadArgKind::LocalId)
             || per_thread.offset_bytes != 0
-            || per_thread.size_bytes != 96
+            || per_thread.size_bytes != self.per_thread_data_bytes
             || per_thread_end > self.per_thread_data_bytes
         {
             return Err(GpgpuKernelAbiContractError::UnsupportedPerThreadPayload);
@@ -895,10 +900,36 @@ mod tests {
     #[test]
     fn contract_rejects_unprogrammed_simd_width() {
         let invalid = GpgpuKernelAbiContract {
-            simd_width: 32,
+            simd_width: 8,
             ..CONTRACT
         };
         assert_eq!(invalid.validate(), Err(GpgpuKernelAbiContractError::UnsupportedSimdWidth));
+    }
+
+    #[test]
+    fn contract_accepts_simd32_only_with_its_declared_local_id_payload() {
+        const SIMD32_PER_THREAD_PAYLOAD_ARGS: &[GpgpuArtifactPerThreadPayloadArg] =
+            &[GpgpuArtifactPerThreadPayloadArg {
+                kind: GpgpuArtifactPerThreadArgKind::LocalId,
+                offset_bytes: 0,
+                size_bytes: 192,
+            }];
+        let simd32 = GpgpuKernelAbiContract {
+            simd_width: 32,
+            per_thread_data_bytes: 192,
+            per_thread_payload_args: SIMD32_PER_THREAD_PAYLOAD_ARGS,
+            ..CONTRACT
+        };
+        assert_eq!(simd32.validate(), Ok(()));
+
+        let mismatched = GpgpuKernelAbiContract {
+            per_thread_data_bytes: 96,
+            ..simd32
+        };
+        assert_eq!(
+            mismatched.validate(),
+            Err(GpgpuKernelAbiContractError::UnsupportedPerThreadData)
+        );
     }
 
     #[test]
