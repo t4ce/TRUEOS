@@ -25,6 +25,19 @@ PATCH = Path(__file__).with_name("mesa-helioc-capture-6fb2611.patch")
 FOLLOWUP_PATCH = Path(__file__).with_name("mesa-helioc-capture-followup-6fb2611.patch")
 IDENTITY_PATCH = Path(__file__).with_name("mesa-helioc-capture-identity-followup-6fb2611.patch")
 SHADER_SERIALIZE_PATCH = Path(__file__).with_name("mesa-helioc-capture-shader-serialize-6fb2611.patch")
+SYMBOLIC_V2_PATCH = Path(__file__).with_name("mesa-helioc-capture-symbolic-v2-6fb2611.patch")
+SYMBOLIC_V2_DESCRIPTOR_PATCH = Path(__file__).with_name(
+    "mesa-helioc-capture-symbolic-v2-descriptors-6fb2611.patch"
+)
+SYMBOLIC_V3_TABLE_PATCH = Path(__file__).with_name(
+    "mesa-helioc-capture-symbolic-v3-tables-6fb2611.patch"
+)
+COMMAND_CATALOG_V4_PATCH = Path(__file__).with_name(
+    "mesa-helioc-capture-command-catalog-v4-6fb2611.patch"
+)
+ADDRESS_FREE_V5_PATCH = Path(__file__).with_name(
+    "mesa-helioc-capture-address-free-v5-6fb2611.patch"
+)
 REQUIRED_TOOLS = ("meson", "ninja", "bison", "flex", "pkg-config", "tar")
 REQUIRED_PKGCONFIG = ("expat", "libdrm", "libzstd", "vulkan")
 BOOTSTRAP_PACKAGES = (
@@ -139,7 +152,9 @@ def copy_and_patch(source: Path, work: Path) -> Path:
     run(["git", "init", "-q"], cwd=destination)
     run(["git", "add", "-A"], cwd=destination)
     run(["git", "-c", "user.name=trueos", "-c", "user.email=trueos@localhost", "commit", "-qm", "mesa-base"], cwd=destination)
-    for patch in (PATCH, FOLLOWUP_PATCH, IDENTITY_PATCH, SHADER_SERIALIZE_PATCH):
+    for patch in (PATCH, FOLLOWUP_PATCH, IDENTITY_PATCH, SHADER_SERIALIZE_PATCH,
+                  SYMBOLIC_V2_PATCH, SYMBOLIC_V2_DESCRIPTOR_PATCH, SYMBOLIC_V3_TABLE_PATCH,
+                  COMMAND_CATALOG_V4_PATCH, ADDRESS_FREE_V5_PATCH):
         run(["git", "apply", "--check", str(patch)], cwd=destination)
         run(["git", "apply", str(patch)], cwd=destination)
     return destination

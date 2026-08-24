@@ -499,6 +499,13 @@ enum DirectRcsSubmissionState {
     Ambiguous,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum HelioCloudRcsRetirement {
+    Pending,
+    Complete,
+    Invalid,
+}
+
 impl DirectRcsSubmissionState {
     const fn may_have_submitted(self) -> bool {
         !matches!(self, Self::Rejected)
@@ -548,10 +555,39 @@ fn lfm25_rcs_submit_batch(dev: super::Dev, state: DirectRcsState) -> bool {
 
 #[expect(dead_code, reason = "reserved for the sealed HelioC frame encoder")]
 fn helioc_rcs_submit_batch_state(
+    _guard: &HelioCloudSubmitGuard,
     dev: super::Dev,
     state: DirectRcsState,
+    batch: helioc_native_package::HelioCloudMaterializedBatch,
 ) -> DirectRcsSubmissionState {
-    direct_rcs_submit_batch_on_lane_state(dev, state, DirectRcsLane::HelioCloud)
+    if helioc_rcs_context_is_quarantined()
+        || HELIOC_RCS_SUBMIT_RUNTIME
+            .try_lock()
+            .is_none_or(|runtime| runtime.pending.is_some())
+    {
+        return DirectRcsSubmissionState::Rejected;
+    }
+    let Some(selected) = select_helioc_materialized_batch(state, batch) else {
+        return DirectRcsSubmissionState::Rejected;
+    };
+    let marker_bytes = 2 * core::mem::size_of::<u32>();
+    unsafe {
+        core::ptr::write_bytes(
+            selected
+                .result_virt
+                .add(HELIOC_RCS_COMPLETION_SLOT * core::mem::size_of::<u32>()),
+            0,
+            marker_bytes,
+        );
+        super::dma_flush(
+            selected
+                .result_virt
+                .add(HELIOC_RCS_COMPLETION_SLOT * core::mem::size_of::<u32>()),
+            marker_bytes,
+        );
+        super::dma_flush(selected.batch_virt, batch.length as usize);
+    }
+    direct_rcs_submit_batch_on_lane_state(dev, selected, DirectRcsLane::HelioCloud)
 }
 
 fn direct_rcs_submit_batch_on_lane_state(
@@ -936,6 +972,40 @@ fn direct_rcs_retirement_proof_on_lane(
         saved_head_bytes,
         published_tail_bytes,
     }
+}
+
+/// Sample HelioC retirement once. The compositor/service task may call this on
+/// successive executor turns; this function never loops or burns a CPU while
+/// the EU threads or GuC context save are still in flight.
+#[expect(dead_code, reason = "consumed by the sealed HelioC service task")]
+fn helioc_rcs_observe_retirement(
+    _guard: &HelioCloudSubmitGuard,
+    state: DirectRcsState,
+) -> HelioCloudRcsRetirement {
+    if state.gpu_va.ring != HELIOC_RCS_GPU_VA_RING_BASE || helioc_rcs_context_is_quarantined() {
+        return HelioCloudRcsRetirement::Invalid;
+    }
+    let Some(runtime) = HELIOC_RCS_SUBMIT_RUNTIME.try_lock() else {
+        return HelioCloudRcsRetirement::Pending;
+    };
+    if runtime.pending.is_none() {
+        return HelioCloudRcsRetirement::Invalid;
+    }
+    let published_tail_bytes = runtime.ring_tail_bytes;
+    drop(runtime);
+
+    let marker = direct_rcs_read_result_slot(state, HELIOC_RCS_COMPLETION_SLOT);
+    let saved_head_bytes =
+        direct_rcs_read_lrc_ring_head(state) & (DIRECT_RCS_RING_BYTES as u32 - 1);
+    if !direct_rcs_retirement_is_proven(
+        marker == HELIOC_RCS_COMPLETION_MARKER,
+        saved_head_bytes,
+        published_tail_bytes,
+    ) {
+        return HelioCloudRcsRetirement::Pending;
+    }
+    complete_direct_rcs_submission_on_lane(DirectRcsLane::HelioCloud);
+    HelioCloudRcsRetirement::Complete
 }
 
 fn execution_rcs_retirement_proof(

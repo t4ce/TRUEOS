@@ -1,0 +1,154 @@
+diff --git a/src/intel/vulkan/genX_cmd_buffer.c b/src/intel/vulkan/genX_cmd_buffer.c
+index cccc5f9..bea914b 100644
+--- a/src/intel/vulkan/genX_cmd_buffer.c
++++ b/src/intel/vulkan/genX_cmd_buffer.c
+@@ -98,6 +98,106 @@ anv_trueos_helioc_descriptor_set_role(const struct anv_descriptor_set *set)
+    return NULL;
+ }
+ 
++static bool anv_trueos_helioc_desc_is_image(const struct anv_descriptor *desc);
++static bool anv_trueos_helioc_desc_is_buffer(const struct anv_descriptor *desc);
++
++/* A table is accepted only when every ordinary binding in the compiled map
++ * resolves through one named set.  This derives provenance from the live
++ * command state, never from flush order. */
++static const char *
++anv_trueos_helioc_table_set_role(const struct anv_cmd_pipeline_state *pipe_state,
++                                 const struct anv_pipeline_bind_map *map)
++{
++   const char *role = NULL;
++   for (uint32_t i = 0; i < map->surface_count + map->sampler_count; i++) {
++      const struct anv_pipeline_binding *binding =
++         i < map->surface_count ? &map->surface_to_descriptor[i] :
++         &map->sampler_to_descriptor[i - map->surface_count];
++      if (binding->set >= MAX_SETS)
++         continue;
++      const struct anv_descriptor_set *set = pipe_state->descriptors[binding->set];
++      if (set == NULL)
++         return NULL;
++      const char *candidate = anv_trueos_helioc_descriptor_set_role(set);
++      if (candidate == NULL || (role != NULL && strcmp(role, candidate) != 0))
++         return NULL;
++      role = candidate;
++   }
++   return role;
++}
++
++static const char *
++anv_trueos_helioc_binding_table_entry_role(
++   const struct anv_cmd_buffer *cmd_buffer,
++   const struct anv_cmd_pipeline_state *pipe_state,
++   const struct anv_pipeline_binding *binding, mesa_shader_stage stage)
++{
++   if (binding->set == ANV_DESCRIPTOR_SET_DESCRIPTORS) {
++      if (binding->index >= MAX_SETS || pipe_state->descriptors[binding->index] == NULL)
++         return NULL;
++      return anv_trueos_helioc_descriptor_set_role(pipe_state->descriptors[binding->index]) ?
++         "descriptor_set_state" : NULL;
++   }
++   if (binding->set == ANV_DESCRIPTOR_SET_COLOR_ATTACHMENTS) {
++      if (stage != MESA_SHADER_FRAGMENT)
++         return NULL;
++      uint32_t index = binding->index < MAX_RTS ?
++         cmd_buffer->state.gfx.color_output_mapping[binding->index] : binding->index;
++      if (index >= cmd_buffer->state.gfx.color_att_count)
++         return NULL;
++      const struct anv_attachment *att = &cmd_buffer->state.gfx.color_att[index];
++      return att->iview ? anv_trueos_helioc_role(att->iview->image->vk.base.object_name) : NULL;
++   }
++   if (binding->set >= MAX_SETS || pipe_state->descriptors[binding->set] == NULL)
++      return NULL;
++   const struct anv_descriptor_set *set = pipe_state->descriptors[binding->set];
++   if (binding->index >= set->descriptor_count)
++      return NULL;
++   const struct anv_descriptor *desc = &set->descriptors[binding->index];
++   if (anv_trueos_helioc_desc_is_image(desc) && desc->image_view != NULL)
++      return anv_trueos_helioc_role(desc->image_view->image->vk.base.object_name);
++   if (anv_trueos_helioc_desc_is_buffer(desc) && desc->buffer != NULL)
++      return anv_trueos_helioc_buffer_role(desc->buffer, stage, binding->binding);
++   return NULL;
++}
++
++static void
++anv_trueos_helioc_dump_v3_table(const char *table_kind, const char *set_role,
++                                mesa_shader_stage stage, uint64_t raw_va,
++                                const void *data, uint32_t bytes,
++                                const char *const *entry_roles, uint32_t entry_count)
++{
++   const char *dir = os_get_option("TRUEOS_HELIOC_ANV_DUMP_DIR");
++   if (dir == NULL || table_kind == NULL || set_role == NULL || raw_va == 0 ||
++       data == NULL || entry_roles == NULL || entry_count == 0 || bytes == 0)
++      return;
++   for (uint32_t i = 0; i < entry_count; i++)
++      if (entry_roles[i] == NULL)
++         return;
++   const unsigned sequence = atomic_fetch_add(&trueos_helioc_v2_sequence, 1);
++   char path[4096];
++   if (snprintf(path, sizeof(path), "%s/helioc-anv-v3-table-%08u.txt", dir, sequence) >=
++       (int)sizeof(path))
++      return;
++   FILE *file = fopen(path, "wb");
++   if (file == NULL)
++      return;
++   fprintf(file,
++           "TRUEOS_HELIOC_TABLE_V3\n"
++           "table_kind=%s\nset_role=%s\nstage=%u\nraw_va=0x%llx\n"
++           "bytes=%u\nentry_count=%u\nentry_roles=",
++           table_kind, set_role, (uint32_t)stage, (unsigned long long)raw_va,
++           bytes, entry_count);
++   for (uint32_t i = 0; i < entry_count; i++)
++      fprintf(file, "%s%s", i ? "," : "", entry_roles[i]);
++   fputs("\ndata_hex=", file);
++   const uint8_t *raw = data;
++   for (uint32_t i = 0; i < bytes; i++)
++      fprintf(file, "%02x", raw[i]);
++   fputc('\n', file);
++   fclose(file);
++}
++
+ static bool
+ anv_trueos_helioc_desc_is_image(const struct anv_descriptor *desc)
+ {
+@@ -3094,6 +3194,16 @@ emit_binding_table(struct anv_cmd_buffer *cmd_buffer,
+       }
+    }
+ 
++   const char *table_role = anv_trueos_helioc_table_set_role(pipe_state, map);
++   const char *entry_roles[map->surface_count];
++   for (uint32_t s = 0; s < map->surface_count; s++)
++      entry_roles[s] = anv_trueos_helioc_binding_table_entry_role(
++         cmd_buffer, pipe_state, &map->surface_to_descriptor[s], shader->vk.stage);
++   anv_trueos_helioc_dump_v3_table(
++      "binding", table_role, shader->vk.stage,
++      cmd_buffer->device->physical->va.binding_table_pool.addr + bt_state->offset,
++      bt_state->map, map->surface_count * sizeof(*bt_map), entry_roles,
++      map->surface_count);
+    anv_trueos_helioc_dump_cmd_state(3, shader->vk.stage, bt_state->map,
+                                     map->surface_count * sizeof(*bt_map));
+ 
+@@ -3148,6 +3258,25 @@ emit_samplers(struct anv_cmd_buffer *cmd_buffer,
+          state->offset + s * 16, 16, 0, 0, sampler->state[binding->plane]);
+    }
+ 
++   const char *table_role = anv_trueos_helioc_table_set_role(pipe_state, map);
++   const char *entry_roles[map->sampler_count];
++   for (uint32_t s = 0; s < map->sampler_count; s++) {
++      const struct anv_pipeline_binding *binding = &map->sampler_to_descriptor[s];
++      if (binding->set >= MAX_SETS || pipe_state->descriptors[binding->set] == NULL ||
++          binding->index >= pipe_state->descriptors[binding->set]->descriptor_count)
++         entry_roles[s] = NULL;
++      else {
++         const struct anv_descriptor *desc =
++            &pipe_state->descriptors[binding->set]->descriptors[binding->index];
++         entry_roles[s] = (desc->type == VK_DESCRIPTOR_TYPE_SAMPLER ||
++                           desc->type == VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER) &&
++                          desc->sampler != NULL ? "sampler_state" : NULL;
++      }
++   }
++   anv_trueos_helioc_dump_v3_table(
++      "sampler", table_role, shader->vk.stage,
++      cmd_buffer->device->physical->va.dynamic_state_pool.addr + state->offset,
++      state->map, map->sampler_count * 16, entry_roles, map->sampler_count);
+    anv_trueos_helioc_dump_cmd_state(4, shader->vk.stage, state->map,
+                                     map->sampler_count * 16);
+ 

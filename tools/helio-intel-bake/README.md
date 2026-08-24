@@ -96,12 +96,14 @@ bindings, and counts are checked exactly; a truncated, duplicated, mislabeled,
 or partial trace is rejected. These records remain capture evidence only and
 never become runtime state or a fallback package.
 
-The next admission format is the versioned
-`compiler/helioc-relocatable-state-v1.json` section. It must authenticate the
-gfx120/ADL-S r0c identity, name the persistent control/resource windows and the
-physical-only UI4 surface, and provide SHA-256 values for every named payload.
-Each relocation is explicit (`target`, `offset`, `width`, `kind`, `source`, and
-signed `addend`); offsets are bounded and same-target ranges may not overlap.
-ANV process addresses are not accepted as relocations. The current bakery does
-not emit this section or a HELIOA: capture metadata still lacks a complete
-symbolic state/relocation map, so the package gate remains fail-closed.
+The next admission format is the binary, versioned
+`compiler/helioc-relocatable-state-v2.bin` (`HELIOCRS` v2) section paired with
+the 384-byte HELIOC v3 descriptor. It must authenticate gfx120/ADL-S r0c and
+contain fixed-window objects plus typed, bounded relocations—never ANV process
+addresses or a JSON surrogate. A relocation writes a field as
+`((resolved + addend) >> right_shift) << trailing_zeros(mask)`, verifies the
+unshifted value fits a contiguous mask, then performs a masked RMW. This is
+required for bit-positioned width/height/pitch fields as well as addresses.
+The current bakery does not emit this section or a HELIOA: capture metadata
+still lacks a complete symbolic state/relocation map, so the package gate
+remains fail-closed.

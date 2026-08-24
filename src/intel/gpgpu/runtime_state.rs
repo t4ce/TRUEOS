@@ -48,6 +48,10 @@ static FONT_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);
 // the lifetime of its GuC context.  This state is deliberately separate from
 // the system-service, execution, and UI4 page-table lifetimes.
 static FONT_RCS_PPGTT_RUNTIME: Mutex<FontRcsPpgttRuntime> = Mutex::new(FontRcsPpgttRuntime::new());
+// HelioC owns a separate persistent PPGTT topology. Its dynamic guest-page
+// leaves are updated incrementally after this once-only initialization.
+static HELIOC_RCS_PPGTT_RUNTIME: Mutex<HelioCloudRcsPpgttRuntime> =
+    Mutex::new(HelioCloudRcsPpgttRuntime::new());
 static EXECUTION_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);
 static LFM25_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);
 static HELIOC_RCS_STATE: Mutex<Option<DirectRcsState>> = Mutex::new(None);

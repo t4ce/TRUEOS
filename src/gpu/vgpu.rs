@@ -789,6 +789,7 @@ struct CloudWorkGraphRecord {
     /// created. Frame submission only clones four `Arc` handles; it never
     /// recopies the 1,730-page ping-pong map on the CPU hot path.
     buffer_metadata: [CloudBufferMetadata; 4],
+    backing_admission: crate::intel::gpgpu::HelioCloudBackingAdmission,
     epoch: u64,
     /// The volume sampled by a zero-step render. Each completed simulation
     /// step flips this selector; the tenant never supplies a GPU address or a
@@ -804,6 +805,7 @@ struct CloudSubmissionLease {
     surface: SurfaceHandle,
     buffers: [BufferHandle; 4],
     buffer_metadata: [CloudBufferMetadata; 4],
+    backing_admission: crate::intel::gpgpu::HelioCloudBackingAdmission,
     surface_metadata: CloudSurfaceMetadata,
     graph_resources: CloudWorkGraphDescriptor,
     current_volume: u8,
@@ -1781,12 +1783,20 @@ pub(crate) fn create_cloud_work_graph(
         snapshot_cloud_buffer(device, descriptor.sim_params)?,
         snapshot_cloud_buffer(device, descriptor.render_params)?,
     ];
+    let backing_admission = crate::intel::gpgpu::admit_helioc_backing(
+        cloud_buffer_pages(device, descriptor.volume_a)?,
+        cloud_buffer_pages(device, descriptor.volume_b)?,
+        cloud_buffer_pages(device, descriptor.sim_params)?,
+        cloud_buffer_pages(device, descriptor.render_params)?,
+    )
+    .ok_or(VgpuError::Unsupported)?;
 
     Ok(insert_cloud_work_graph(
         device,
         CloudWorkGraphRecord {
             resources: descriptor,
             buffer_metadata,
+            backing_admission,
             epoch: device.epoch,
             current_volume: 0,
             in_flight: 0,
@@ -1874,6 +1884,7 @@ pub(crate) fn submit_cloud_frame(
         ];
         let graph_resources = graph.resources;
         let buffer_metadata = graph.buffer_metadata.clone();
+        let backing_admission = graph.backing_admission;
         let current_volume = graph.current_volume;
         let surface_metadata = CloudSurfaceMetadata {
             window_id: surface.window_id,
@@ -1914,6 +1925,7 @@ pub(crate) fn submit_cloud_frame(
             surface: surface_handle,
             buffers,
             buffer_metadata,
+            backing_admission,
             surface_metadata,
             graph_resources,
             current_volume,
@@ -1952,9 +1964,25 @@ pub(crate) fn submit_cloud_frame(
 fn submit_cloud_frame_native(
     lease: &CloudSubmissionLease,
 ) -> Result<CloudNativeSubmitResult, VgpuError> {
-    // The future encoder consumes this immutable snapshot rather than
-    // re-reading broker state after the lock is dropped.
-    let _snapshot = lease;
+    let surface = crate::intel::gpgpu::HelioCloudSurfaceDesc {
+        producer_gpu: lease.surface_metadata.producer_gpu,
+        phys: lease.surface_metadata.phys,
+        bytes: lease.surface_metadata.bytes,
+        width: lease.surface_metadata.width,
+        height: lease.surface_metadata.height,
+        pitch_bytes: lease.surface_metadata.pitch,
+    };
+    let resources = lease.buffer_metadata.each_ref().map(|metadata| metadata.pages.as_ref());
+    if crate::intel::gpgpu::helioc_surface_overlaps_backing(surface, resources) {
+        return Err(VgpuError::Unsupported);
+    }
+    let _plan = crate::intel::gpgpu::plan_helioc_frame(
+        lease.backing_admission,
+        surface,
+        lease.simulation_steps,
+        lease.current_volume,
+    )
+    .ok_or(VgpuError::Unsupported)?;
     Err(VgpuError::Unsupported)
 }
 
@@ -2114,6 +2142,14 @@ fn snapshot_cloud_buffer(
         mapping_digest: record.mapping_digest,
         pages: Arc::from(pages.as_slice()),
     })
+}
+
+fn cloud_buffer_pages(device: &VirtualDevice, handle: BufferHandle) -> Result<&[u64], VgpuError> {
+    let record = lookup_buffer(device, handle)?;
+    match &record.backing {
+        BufferBacking::GuestPages { pages, .. } => Ok(pages.as_slice()),
+        BufferBacking::Dma { .. } => Err(VgpuError::PermissionDenied),
+    }
 }
 
 const fn cloud_next_volume(current_volume: u8, simulation_steps: u32) -> u8 {

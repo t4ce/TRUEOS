@@ -67,7 +67,7 @@ HELIOC_SIMULATE_SOURCE = HELIOC_SOURCE_ROOT / "simulate.wgsl"
 HELIOC_RENDER_SOURCE = HELIOC_SOURCE_ROOT / "render.wgsl"
 HELIOC_SIMULATE_SHA256 = "f583d3c63e5f387a5926281df29b7688eb09eaa5f06119d74fffa70d592013f6"
 HELIOC_RENDER_SHA256 = "5d536a468fcb698c3dca79faac0e5a4924fdc8ce2c9ce3a9b5d24c40a84cc9ff"
-HELIOC_PACKAGE_SECTION = "compiler/helioc-native-volume-raymarch-v1.bin"
+HELIOC_PACKAGE_SECTION = "compiler/helioc-native-volume-raymarch-v3.bin"
 HELIOC_COMPUTE_SOURCE_SECTION = "authored/cloud-engine/simulate.wgsl"
 HELIOC_GRAPHICS_SOURCE_SECTION = "authored/cloud-engine/render.wgsl"
 HELIOC_VOLUME_SECTION = "resources/volume3d-rgba16f-v1.bin"
@@ -75,31 +75,68 @@ HELIOC_VOLUME_METADATA_SECTION = "compiler/cloud-volume-bindings-v1.json"
 HELIOC_COMPUTE_ISA_SECTION = "intel-xe-lp/helioc-volume-update.bin"
 HELIOC_VERTEX_ISA_SECTION = "intel-xe-lp/helioc-volume-raymarch.vs.bin"
 HELIOC_FRAGMENT_ISA_SECTION = "intel-xe-lp/helioc-volume-raymarch.fs.bin"
-HELIOC_DESCRIPTOR_BYTES = 320
+HELIOC_DESCRIPTOR_BYTES = 384
 HELIOC_GFX_VERX10 = 120
 HELIOC_DEVICE_ID = 0x4680
 HELIOC_REVISION = 0x0C
-HELIOC_RELOC_STATE_SECTION = "compiler/helioc-relocatable-state-v1.json"
-HELIOC_RELOC_STATE_MAGIC = "HELIOCRS"
-HELIOC_RELOC_STATE_VERSION = 1
-HELIOC_RELOC_RESOURCE_NAMES = (
-    "ring", "context", "result", "batch", "volume_a", "volume_b",
-    "sim_params", "render_params", "surface_ui4",
+HELIOC_RELOC_STATE_SECTION = "compiler/helioc-relocatable-state-v2.bin"
+HELIOC_RELOC_STATE_MAGIC = b"HELIOCRS"
+HELIOC_RELOC_STATE_VERSION = 2
+HELIOC_RELOC_HEADER_BYTES = 128
+HELIOC_RELOC_OBJECT_BYTES = 64
+HELIOC_RELOC_ENTRY_BYTES = 32
+HELIOC_RELOC_MAX_OBJECTS = 64
+HELIOC_RELOC_MAX_ENTRIES = 512
+HELIOC_RELOC_MAX_BYTES = 0x70_000
+HELIOC_RELOC_FLAGS = 0x0F
+HELIOC_RELOC_WINDOWS = {1, 2, 3, 4}  # batch, surface, dynamic, indirect
+HELIOC_RELOC_KINDS = {1, 2, 3, 4, 5, 6}  # batch, surface, sampler, binding, program, indirect
+HELIOC_RELOC_VALUE_KINDS = {1, 2, 3, 4, 5}  # object offset/GPU, fixed GPU, runtime GPU/u32
+# The Direct-RCS retirement profile is not inherited from the Vulkan capture.
+# It replaces only the authenticated final BBE after all captured state has
+# been normalized.  The address words remain zero in the template and are
+# supplied through one typed 64-bit RESULT relocation at materialization.
+HELIOC_RESULT_GPU_BASE = 0x0864_0000
+HELIOC_RCS_COMPLETION_MARKER = 0xC0DE_C002
+HELIOC_MI_BATCH_BUFFER_END = 0x0500_0000
+HELIOC_TERMINAL_DWORDS = (
+    0x7A00_0204, 0x4010_10A0, 0, 0, 0, 0,
+    0x7A00_0004, 0x0010_4080, 0, 0,
+    HELIOC_RCS_COMPLETION_MARKER, 0, HELIOC_MI_BATCH_BUFFER_END,
 )
-HELIOC_RELOC_FIXED_WINDOWS = {
-    "ring": (0x0860_0000, 0x0860_0000 + 0x10000),
-    "context": (0x0861_0000, 0x0861_0000 + 0x30000),
-    "result": (0x0864_0000, 0x0864_0000 + 0x10000),
-    "batch": (0x0870_0000, 0x0870_0000 + 0x10000),
-    "volume_a": (0x0880_0000, 0x0880_0000 + 3_538_944),
-    "volume_b": (0x08C0_0000, 0x08C0_0000 + 3_538_944),
-    "sim_params": (0x0900_0000, 0x0900_0000 + 4096),
-    "render_params": (0x0901_0000, 0x0901_0000 + 4096),
+HELIOC_SYMBOL_RESULT = 8
+HELIOC_SYMBOLIC_V2_REQUIRED_ROLES = {
+    "volume_a", "volume_b", "sim_params", "render_params", "output_target",
+    "shader_heap", "internal_surface_state_heap", "binding_table_heap",
+    "dynamic_state_heap", "indirect_descriptor_heap", "command_bo",
 }
-HELIOC_RELOC_PATCH_KINDS = {
-    "gpu_va", "phys_addr", "byte_size", "surface_state", "sampler_state",
-    "binding_table", "program_data",
+HELIOC_SYMBOLIC_V2_KINDS = {
+    "image", "buffer", "surface_state", "render_target_state", "descriptor_set_state", "state", "heap", "command",
 }
+HELIOC_SYMBOLIC_V2_DESCRIPTOR_SET_ROLES = {
+    "compute_ping_a", "compute_ping_b", "graphics_a", "graphics_b",
+}
+HELIOC_SYMBOLIC_V2_INDIRECT_DESCRIPTOR_FIELDS = (
+    "set_role", "resource_role", "kind", "binding", "raw_va", "bytes", "data_hex",
+)
+HELIOC_SYMBOLIC_V3_TABLE_FIELDS = (
+    "table_kind", "set_role", "stage", "raw_va", "bytes", "entry_count", "entry_roles", "data_hex",
+)
+HELIOC_COMMAND_CATALOG_FIELDS = (
+    "current", "step", "final_role", "dispatch_roles", "volume_layout", "inter_dispatch_visibility",
+    "draw_vertices", "raw_va", "bytes", "data_hex",
+)
+HELIOC_ADDRESS_FREE_INDIRECT_FIELDS = (
+    "set_role", "resource_role", "kind", "binding", "bytes", "data_hex", "reloc",
+)
+HELIOC_ADDRESS_FREE_SURFACE_FIELDS = (
+    "role", "kind", "bytes", "state_offset", "data_hex", "reloc",
+)
+HELIOC_SYMBOLIC_V2_FIELDS = (
+    "role", "kind", "stage", "binding", "raw_va", "allocation_bytes", "logical_bytes",
+    "resource_offset", "state_heap_va", "state_heap_bytes", "state_offset", "state_bytes",
+    "row_pitch", "array_pitch", "state_hex",
+)
 
 
 def _affine3x4_mul(
@@ -731,113 +768,188 @@ def validate_helioc_resource_capture(resources: bytes, metadata: bytes) -> None:
         raise SystemExit("HelioC capture resource metadata is not the sealed cloud-volume contract")
 
 
-def _reloc_hex_hash(value: object, label: str) -> str:
-    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
-        raise SystemExit(f"HelioC relocatable state has invalid {label} SHA-256")
-    return value
+def validate_helioc_relocatable_state(section: bytes) -> dict[str, object]:
+    """Mirror the sealed Rust HELIOCRS v2 parser; JSON is never accepted."""
+    if not isinstance(section, bytes) or len(section) < HELIOC_RELOC_HEADER_BYTES \
+            or len(section) > HELIOC_RELOC_MAX_BYTES or section[:8] != HELIOC_RELOC_STATE_MAGIC:
+        raise SystemExit("HelioC relocatable state is not HELIOCRS v2 binary")
+    u16 = lambda offset: _helioc_u16(section, offset)
+    u32 = lambda offset: _helioc_u32(section, offset)
+    if (u16(8), u16(10), u16(16), u16(18), section[20:24], u16(24), u16(26), u32(48), section[52:56]) != (
+        2, 128, 120, 0x4680, bytes((0x0c, 1, 64, 0)), 64, 32, 0x0f, bytes((6, 2, 0, 0))
+    ) or any(section[64:128]):
+        raise SystemExit("HelioC HELIOCRS v2 header is not the sealed ADL-S contract")
+    total, object_count, reloc_count = u32(12), u16(28), u16(30)
+    object_offset, reloc_offset, data_offset, data_bytes = u32(32), u32(36), u32(40), u32(44)
+    if total != len(section) or not 0 < object_count <= HELIOC_RELOC_MAX_OBJECTS \
+            or reloc_count > HELIOC_RELOC_MAX_ENTRIES or object_offset != 128 \
+            or reloc_offset != object_offset + object_count * 64 \
+            or data_offset != (reloc_offset + reloc_count * 32 + 63) & ~63 \
+            or u32(56) != object_count * HELIOC_RELOC_OBJECT_BYTES \
+            or u32(60) != reloc_count * HELIOC_RELOC_ENTRY_BYTES \
+            or data_offset + data_bytes != total or any(section[reloc_offset + reloc_count * 32:data_offset]):
+        raise SystemExit("HelioC HELIOCRS v2 table bounds are invalid")
+    objects: dict[int, dict[str, int]] = {}
+    variants: set[int] = set()
+    for index in range(object_count):
+        offset = object_offset + index * 64
+        obj_id, semantic = u16(offset), u16(offset + 4)
+        window, kind, variant, flags = section[offset + 2], section[offset + 3], section[offset + 6], section[offset + 7]
+        dst, data_rel, size, alignment = u32(offset + 8), u32(offset + 12), u32(offset + 16), u16(offset + 20)
+        first, count = u16(offset + 22), u16(offset + 24)
+        if obj_id == 0 or obj_id in objects or semantic == 0 or window not in HELIOC_RELOC_WINDOWS \
+                or kind not in HELIOC_RELOC_KINDS or flags != 0 or size == 0 or alignment == 0 \
+                or alignment > 4096 or alignment & (alignment - 1) or data_rel % alignment \
+                or data_rel + size > data_bytes or dst % alignment or any(section[offset + 60:offset + 64]):
+            raise SystemExit("HelioC HELIOCRS v2 object is malformed")
+        if (kind in {1, 4, 6} and alignment < 4) or (kind == 1 and window != 1) \
+                or (kind == 2 and window != 2) or (kind == 3 and window != 3) \
+                or (kind == 4 and window != 2) or (kind == 5 and window != 3) \
+                or (kind == 6 and window != 4) or (variant != 0xff and window != 1) \
+                or (window == 1 and variant > 5) or dst + size > (256 * 1024 if window == 1 else 64 * 1024):
+            raise SystemExit("HelioC HELIOCRS v2 object/window contract is invalid")
+        data = section[data_offset + data_rel:data_offset + data_rel + size]
+        if hashlib.sha256(data).digest() != section[offset + 28:offset + 60]:
+            raise SystemExit("HelioC HELIOCRS v2 object hash is invalid")
+        if kind == 1:
+            if variant in variants:
+                raise SystemExit("HelioC HELIOCRS v2 batch variant is duplicated")
+            variants.add(variant)
+        objects[obj_id] = {"offset": offset, "size": size, "first": first, "count": count}
+    if variants != set(range(6)):
+        raise SystemExit("HelioC HELIOCRS v2 requires all six batch variants")
+    relocs: list[tuple[int, int, int]] = []
+    for index in range(reloc_count):
+        offset = reloc_offset + index * 32
+        target, source, target_off, source_off = u16(offset), u16(offset + 2), u32(offset + 4), u32(offset + 8)
+        width, value_kind, shift, flags = section[offset + 12:offset + 16]
+        mask, addend = struct.unpack_from("<Qq", section, offset + 16)
+        target_obj = objects.get(target)
+        mask_shift = (mask & -mask).bit_length() - 1 if mask else 0
+        normalized_mask = mask >> mask_shift
+        if target_obj is None or width not in {4, 8} or value_kind not in HELIOC_RELOC_VALUE_KINDS \
+                or shift >= 64 or flags != 0 or mask == 0 or (width == 4 and mask >> 32) \
+                or normalized_mask & (normalized_mask + 1) \
+                or target_off % 4 or target_off + width > target_obj["size"] \
+                or not (target_obj["first"] <= index < target_obj["first"] + target_obj["count"]) \
+                or not -(1 << 31) <= addend < (1 << 31):
+            raise SystemExit("HelioC HELIOCRS v2 relocation is malformed")
+        if value_kind in {1, 2}:
+            if source not in objects or source_off >= objects[source]["size"]:
+                raise SystemExit("HelioC HELIOCRS v2 object relocation source is invalid")
+        elif value_kind == 3:
+            if source not in set(range(1, 13)) or source_off != 0:
+                raise SystemExit("HelioC HELIOCRS v2 fixed-GPU source is invalid")
+        elif value_kind == 4:
+            if source != 13 or source_off != 0 or addend != 0:
+                raise SystemExit("HelioC HELIOCRS v2 runtime-GPU source is invalid")
+        elif value_kind == 5:
+            if source not in {14, 15, 16} or source_off != 0 or addend not in {0, -1}:
+                raise SystemExit("HelioC HELIOCRS v2 runtime-u32 source is invalid")
+        key = (target, target_off, mask)
+        if relocs and relocs[-1] > key:
+            raise SystemExit("HelioC HELIOCRS v2 relocations are not strictly canonical")
+        if relocs and relocs[-1][0] == target and relocs[-1][1] == target_off \
+                and relocs[-1][2] & mask:
+            raise SystemExit("HelioC HELIOCRS v2 relocation masks overlap")
+        relocs.append(key)
+    if sum(obj["count"] for obj in objects.values()) != reloc_count:
+        raise SystemExit("HelioC HELIOCRS v2 relocation groups are incomplete")
+    return {"object_count": object_count, "reloc_count": reloc_count, "bytes": len(section)}
 
 
-def validate_helioc_relocatable_state(section: bytes | dict[str, object]) -> dict[str, object]:
-    """Validate the complete, symbolic HelioC state contract.
+def encode_helioc_relocation_field(resolved: int, addend: int, right_shift: int,
+                                   mask: int, width: int) -> int:
+    """Encode one HELIOCRS field exactly as the Rust materializer does.
 
-    This section is deliberately independent of ANV capture addresses. Every
-    patch names a resource, width, kind, addend, and bounded target offset;
-    callers cannot smuggle a process VA or an overlapping patch range into a
-    future package.
+    Address/size values are shifted down first, then shifted into the lowest
+    set mask bit.  This is deliberately not a raw truncated value: width and
+    height fields often start above bit zero.  The caller performs the masked
+    read-modify-write using this returned positioned value.
     """
-    if isinstance(section, bytes):
-        try:
-            state = json.loads(section.decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise SystemExit("HelioC relocatable state is not valid UTF-8 JSON") from error
-    else:
-        state = section
-    if not isinstance(state, dict):
-        raise SystemExit("HelioC relocatable state root must be an object")
-    if state.get("magic") != HELIOC_RELOC_STATE_MAGIC or state.get("version") != HELIOC_RELOC_STATE_VERSION:
-        raise SystemExit("HelioC relocatable state has an unsupported magic/version")
-    if set(state) != {"magic", "version", "complete", "identity", "resources", "patches"}:
-        raise SystemExit("HelioC relocatable state has unknown or missing top-level fields")
-    if state.get("complete") is not True:
-        raise SystemExit("HelioC relocatable state is incomplete")
-    identity = state.get("identity")
-    if identity != {
-        "gfx_verx10": HELIOC_GFX_VERX10,
-        "device_id": HELIOC_DEVICE_ID,
-        "revision": HELIOC_REVISION,
-    }:
-        raise SystemExit("HelioC relocatable state target identity is not sealed gfx120/r0c")
-    resources = state.get("resources")
-    if not isinstance(resources, list) or len(resources) != len(HELIOC_RELOC_RESOURCE_NAMES):
-        raise SystemExit("HelioC relocatable state needs exactly the sealed named resources")
-    by_name: dict[str, dict[str, object]] = {}
-    for resource in resources:
-        if not isinstance(resource, dict):
-            raise SystemExit("HelioC relocatable resource is not an object")
-        if set(resource) != {"name", "kind", "gpu_va", "bytes", "alignment", "sha256"}:
-            raise SystemExit("HelioC relocatable resource has unknown or missing fields")
-        name = resource.get("name")
-        if not isinstance(name, str) or name in by_name or name not in HELIOC_RELOC_RESOURCE_NAMES:
-            raise SystemExit(f"HelioC relocatable resource name is invalid: {name!r}")
-        bytes_len = resource.get("bytes")
-        alignment = resource.get("alignment")
-        if not isinstance(resource.get("kind"), str) or not resource["kind"]:
-            raise SystemExit(f"HelioC relocatable resource {name!r} has no kind")
-        if not isinstance(bytes_len, int) or bytes_len <= 0 or not isinstance(alignment, int) \
-                or alignment <= 0 or alignment & (alignment - 1):
-            raise SystemExit(f"HelioC relocatable resource {name} has invalid size/alignment")
-        _reloc_hex_hash(resource.get("sha256"), f"resource {name}")
-        gpu_va = resource.get("gpu_va")
-        if name == "surface_ui4":
-            if gpu_va is not None:
-                raise SystemExit("HelioC UI4 surface must remain physical-only in relocatable state")
-        else:
-            window = HELIOC_RELOC_FIXED_WINDOWS[name]
-            if gpu_va != window[0] or bytes_len > window[1] - window[0] \
-                    or gpu_va % 4096 != 0 or bytes_len % 4096 != 0:
-                raise SystemExit(f"HelioC relocatable resource {name} escapes its fixed VA window")
-        by_name[name] = resource
-    if set(by_name) != set(HELIOC_RELOC_RESOURCE_NAMES):
-        raise SystemExit("HelioC relocatable state has missing named resources")
-
-    patches = state.get("patches")
-    if not isinstance(patches, list) or not patches:
-        raise SystemExit("HelioC relocatable state has no explicit relocation patches")
-    occupied: dict[str, list[tuple[int, int]]] = {name: [] for name in by_name}
-    for patch in patches:
-        if not isinstance(patch, dict):
-            raise SystemExit("HelioC relocation patch is not an object")
-        if set(patch) != {"target", "source", "offset", "width", "kind", "addend"}:
-            raise SystemExit("HelioC relocation patch has unknown or missing fields")
-        target = patch.get("target")
-        source = patch.get("source")
-        offset = patch.get("offset")
-        width = patch.get("width")
-        kind = patch.get("kind")
-        addend = patch.get("addend")
-        if target not in by_name or (source is not None and source not in by_name):
-            raise SystemExit("HelioC relocation patch references an unknown resource")
-        if not isinstance(offset, int) or not isinstance(width, int) or width not in (4, 8) \
-                or offset < 0 or offset + width > int(by_name[target]["bytes"]):
-            raise SystemExit("HelioC relocation patch is out of bounds or has invalid width")
-        if kind not in HELIOC_RELOC_PATCH_KINDS or not isinstance(addend, int):
-            raise SystemExit("HelioC relocation patch has an invalid kind/addend")
-        if not -(1 << (width * 8 - 1)) <= addend < (1 << (width * 8 - 1)):
-            raise SystemExit("HelioC relocation patch addend does not fit its signed width")
-        if kind in {"gpu_va", "phys_addr", "byte_size", "surface_state", "sampler_state"} \
-                and source is None:
-            raise SystemExit(f"HelioC relocation kind {kind} requires a named source")
-        start, end = offset, offset + width
-        if any(start < old_end and old_start < end for old_start, old_end in occupied[target]):
-            raise SystemExit(f"HelioC relocation patches overlap in target {target}")
-        occupied[target].append((start, end))
-    return state
+    if width not in {4, 8} or right_shift >= 64 or mask <= 0 or mask >> (width * 8):
+        raise SystemExit("HelioC relocation field has invalid width/shift/mask")
+    lsb = (mask & -mask).bit_length() - 1
+    field_mask = mask >> lsb
+    if field_mask & (field_mask + 1):
+        raise SystemExit("HelioC relocation field mask is not contiguous")
+    value = resolved + addend
+    if value < 0:
+        raise SystemExit("HelioC relocation field underflows before shift")
+    value >>= right_shift
+    if value > field_mask:
+        raise SystemExit("HelioC relocation field does not fit its mask")
+    return value << lsb
 
 
-def normalize_helioc_relocatable_state(state: dict[str, object]) -> bytes:
-    """Canonicalize a validated relocatable state section without emitting it."""
-    validate_helioc_relocatable_state(state)
-    return (json.dumps(state, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+def normalize_helioc_relocatable_state(section: bytes) -> bytes:
+    """Accept only already-canonical address-free HELIOCRS v2 bytes."""
+    validate_helioc_relocatable_state(section)
+    return section
+
+
+def append_helioc_terminal_template(batch: bytes) -> tuple[bytes, dict[str, int]]:
+    """Replace a captured BBE with the exact Direct-RCS completion template.
+
+    ANV's terminal BBE cannot name an authenticated TRUEOS completion target.
+    This bounded rewrite preserves every preceding captured byte and replaces
+    *only* that final BBE with the fixed flush/post-sync/BBE profile.  The
+    address is deliberately zero in the immutable template; its returned
+    HELIOCRS relocation describes the sole materialized field.
+    """
+    if not isinstance(batch, bytes) or len(batch) < 4 or len(batch) % 4:
+        raise SystemExit("HelioC captured batch is not a non-empty dword stream")
+    if len(batch) + (len(HELIOC_TERMINAL_DWORDS) - 1) * 4 > 256 * 1024:
+        raise SystemExit("HelioC terminal epilogue exceeds the sealed batch window")
+    if _helioc_u32(batch, len(batch) - 4) != HELIOC_MI_BATCH_BUFFER_END:
+        raise SystemExit("HelioC terminal rewrite requires exactly one captured final BBE")
+    out = batch[:-4] + struct.pack("<13I", *HELIOC_TERMINAL_DWORDS)
+    # The address begins after the first six dwords plus the post-sync header
+    # and flags.  It may be 4 mod 8 (for example A2 at offset 2588); Rust's
+    # HELIOCRS parser therefore requires dword, not natural-qword, alignment.
+    result_offset = len(batch) + 28
+    relocation = {
+        "target_offset": result_offset,
+        "source_symbol": HELIOC_SYMBOL_RESULT,
+        "source_offset": 0,
+        "width": 8,
+        "value_kind": 3,  # fixed GPU
+        "right_shift": 0,
+        "mask": 0xFFFF_FFFF_FFFF_FFFF,
+        "addend": 0,
+    }
+    validate_helioc_terminal_template(out, relocation)
+    return out, relocation
+
+
+def validate_helioc_terminal_template(batch: bytes, relocation: dict[str, int]) -> None:
+    """Validate the unmaterialized terminal profile and its single relocation."""
+    if len(batch) < len(HELIOC_TERMINAL_DWORDS) * 4 or len(batch) % 4:
+        raise SystemExit("HelioC terminal template has invalid length")
+    terminal = list(struct.unpack_from("<13I", batch, len(batch) - 13 * 4))
+    expected = list(HELIOC_TERMINAL_DWORDS)
+    if terminal != expected:
+        raise SystemExit("HelioC terminal template is not the sealed flush/marker/BBE profile")
+    expected_offset = len(batch) - 13 * 4 + 8 * 4
+    expected_relocation = {
+        "target_offset": expected_offset,
+        "source_symbol": HELIOC_SYMBOL_RESULT,
+        "source_offset": 0,
+        "width": 8,
+        "value_kind": 3,
+        "right_shift": 0,
+        "mask": 0xFFFF_FFFF_FFFF_FFFF,
+        "addend": 0,
+    }
+    if relocation != expected_relocation or expected_offset % 4:
+        raise SystemExit("HelioC terminal template lacks the exact RESULT qword relocation")
+    # This is a template check, not a captured-fence check: no ANV VA is
+    # carried forward.  Confirm the materialized field resolves exactly.
+    if encode_helioc_relocation_field(
+        HELIOC_RESULT_GPU_BASE, relocation["addend"], relocation["right_shift"],
+        relocation["mask"], relocation["width"],
+    ) != HELIOC_RESULT_GPU_BASE:
+        raise SystemExit("HelioC terminal RESULT relocation does not materialize the fixed GPU VA")
 
 
 def encode_helioc_descriptor(
@@ -847,10 +959,11 @@ def encode_helioc_descriptor(
     compute_isa: bytes,
     vertex_isa: bytes,
     fragment_isa: bytes,
+    reloc_state: bytes,
     *,
     compute_simd: int,
 ) -> bytes:
-    """Encode the fixed HELIOC v1 descriptor from genuine captured bytes.
+    """Encode the fixed HELIOC v3 descriptor from genuine captured bytes.
 
     Callers must supply the three ISA records and resource metadata captured
     from the actual Naga/Mesa/ANV pipeline.  This function has no fallback
@@ -867,10 +980,11 @@ def encode_helioc_descriptor(
     ):
         if not isa or len(isa) % 4 or not any(isa):
             raise SystemExit(f"HelioC {name} ISA must be captured, non-zero, and dword aligned")
+    validate_helioc_relocatable_state(reloc_state)
 
     descriptor = bytearray(HELIOC_DESCRIPTOR_BYTES)
     descriptor[:8] = b"HELIOC\0\0"
-    struct.pack_into("<HHII", descriptor, 8, 1, HELIOC_DESCRIPTOR_BYTES,
+    struct.pack_into("<HHII", descriptor, 8, 3, HELIOC_DESCRIPTOR_BYTES,
                      HELIOC_DESCRIPTOR_BYTES, 0x0F)
     struct.pack_into("<HH", descriptor, 20, HELIOC_GFX_VERX10, HELIOC_DEVICE_ID)
     descriptor[24:28] = bytes((HELIOC_REVISION, HELIOC_REVISION, 1, 0))
@@ -879,13 +993,14 @@ def encode_helioc_descriptor(
     struct.pack_into("<HH", descriptor, 28, compute_simd, threads)
     struct.pack_into("<3H", descriptor, 32, 4, 4, 4)
     struct.pack_into("<3H", descriptor, 38, 24, 12, 24)
-    struct.pack_into("<5H", descriptor, 44, 96, per_thread, 480, 16, 5)
-    struct.pack_into("<I", descriptor, 56, 0x3F)
+    struct.pack_into("<3H", descriptor, 44, 96, per_thread, 480)
+    struct.pack_into("<3H", descriptor, 50, 8, 16, 7)
     for index, binding in enumerate((
-        (1, 0, 1, 1), (1, 0, 2, 2), (1, 0, 3, 3),
-        (2, 0, 1, 1), (2, 0, 2, 2),
+        (1, 0, 0, 4), (1, 0, 1, 1), (1, 0, 2, 2), (1, 0, 3, 3),
+        (2, 0, 0, 4), (2, 0, 1, 1), (2, 0, 2, 2),
     )):
         descriptor[60 + index * 4:64 + index * 4] = bytes(binding)
+    struct.pack_into("<4H", descriptor, 88, 112, 272, 3, 0x003F)
     for offset, data in (
         (96, compute), (100, graphics), (104, resources),
         (108, compute_isa), (112, vertex_isa), (116, fragment_isa),
@@ -896,6 +1011,8 @@ def encode_helioc_descriptor(
         (224, compute_isa), (256, vertex_isa), (288, fragment_isa),
     ):
         descriptor[offset:offset + 32] = hashlib.sha256(data).digest()
+    struct.pack_into("<I", descriptor, 320, len(reloc_state))
+    descriptor[324:356] = hashlib.sha256(reloc_state).digest()
     return bytes(descriptor)
 
 
@@ -907,17 +1024,18 @@ def validate_helioc_descriptor(
     compute_isa: bytes,
     vertex_isa: bytes,
     fragment_isa: bytes,
+    reloc_state: bytes,
     *,
     compute_simd: int,
 ) -> None:
-    """Assert every HELIOC v1 field before its HELIOA is emitted."""
+    """Assert every HELIOC v3 field before its HELIOA is emitted."""
     expected_threads = 64 // compute_simd
     expected_per_thread = 96 if compute_simd == 16 else 192
     if (
         len(descriptor) != HELIOC_DESCRIPTOR_BYTES
         or descriptor[:8] != b"HELIOC\0\0"
         or (_helioc_u16(descriptor, 8), _helioc_u16(descriptor, 10), _helioc_u32(descriptor, 12), _helioc_u32(descriptor, 16))
-        != (1, HELIOC_DESCRIPTOR_BYTES, HELIOC_DESCRIPTOR_BYTES, 0x0F)
+        != (3, HELIOC_DESCRIPTOR_BYTES, HELIOC_DESCRIPTOR_BYTES, 0x0F)
         or (_helioc_u16(descriptor, 20), _helioc_u16(descriptor, 22), descriptor[24:28])
         != (
             HELIOC_GFX_VERX10,
@@ -928,19 +1046,21 @@ def validate_helioc_descriptor(
         != (compute_simd, expected_threads)
         or tuple(_helioc_u16(descriptor, offset) for offset in (32, 34, 36, 38, 40, 42))
         != (4, 4, 4, 24, 12, 24)
-        or tuple(_helioc_u16(descriptor, offset) for offset in (44, 46, 48, 50, 52))
-        != (96, expected_per_thread, 480, 16, 5)
-        or _helioc_u32(descriptor, 56) != 0x3F
-        or any(descriptor[54:56])
-        or any(descriptor[80:96])
-        or any(descriptor[120:128])
+        or tuple(_helioc_u16(descriptor, offset) for offset in (44, 46, 48))
+        != (96, expected_per_thread, 480)
+        or tuple(_helioc_u16(descriptor, offset) for offset in (50, 52, 54))
+        != (8, 16, 7)
+        or tuple(_helioc_u16(descriptor, offset) for offset in (88, 90, 92, 94))
+        != (112, 272, 3, 0x003F)
+        or any(descriptor[56:60])
+        or any(descriptor[120:128]) or any(descriptor[356:384])
     ):
         raise SystemExit("HelioC descriptor self-check rejected fixed target/shape/payload state")
     expected_bindings = bytes((
-        1, 0, 1, 1, 1, 0, 2, 2, 1, 0, 3, 3,
-        2, 0, 1, 1, 2, 0, 2, 2,
+        1, 0, 0, 4, 1, 0, 1, 1, 1, 0, 2, 2, 1, 0, 3, 3,
+        2, 0, 0, 4, 2, 0, 1, 1, 2, 0, 2, 2,
     ))
-    if descriptor[60:80] != expected_bindings:
+    if descriptor[60:88] != expected_bindings:
         raise SystemExit("HelioC descriptor self-check rejected logical binding state")
     for size_offset, hash_offset, data in (
         (96, 128, compute), (100, 160, graphics), (104, 192, resources),
@@ -952,6 +1072,10 @@ def validate_helioc_descriptor(
     if descriptor[128:160].hex() != HELIOC_SIMULATE_SHA256 \
             or descriptor[160:192].hex() != HELIOC_RENDER_SHA256:
         raise SystemExit("HelioC descriptor self-check rejected authored source provenance")
+    if _helioc_u32(descriptor, 320) != len(reloc_state) \
+            or descriptor[324:356] != hashlib.sha256(reloc_state).digest():
+        raise SystemExit("HelioC descriptor self-check rejected HELIOCRS v2 reference")
+    validate_helioc_relocatable_state(reloc_state)
 
 
 def assemble_helioc_package(
@@ -962,6 +1086,7 @@ def assemble_helioc_package(
     compute_isa: bytes,
     vertex_isa: bytes,
     fragment_isa: bytes,
+    reloc_state: bytes,
     *,
     compute_simd: int,
 ) -> bytes:
@@ -969,14 +1094,15 @@ def assemble_helioc_package(
     validate_helioc_resource_capture(resources, resource_metadata)
     descriptor = encode_helioc_descriptor(
         compute, graphics, resources, compute_isa, vertex_isa, fragment_isa,
-        compute_simd=compute_simd,
+        reloc_state, compute_simd=compute_simd,
     )
     validate_helioc_descriptor(
         descriptor, compute, graphics, resources, compute_isa, vertex_isa,
-        fragment_isa, compute_simd=compute_simd,
+        fragment_isa, reloc_state, compute_simd=compute_simd,
     )
     manifest = {
-        "schema": 1,
+        "schema": 3,
+        "descriptor_version": 3,
         "producer": "helio-intel-bake/helioc",
         "frontend": "helio-vendored-naga",
         "backend": "mesa-anv-vulkan-pipeline-executable-cache",
@@ -986,7 +1112,22 @@ def assemble_helioc_package(
             "entry": "main", "local_size": [4, 4, 4], "groups": [24, 12, 24],
             "simd_width": compute_simd, "hardware_threads": 64 // compute_simd,
         },
-        "graphics": {"vertex_entry": "vs_main", "fragment_entry": "fs_main", "simd_width": 16},
+        "graphics": {
+            "vertex_entry": "vs_main", "vertex_simd_width": 8,
+            "fragment_entry": "fs_main", "fragment_simd_width": 16,
+            "profile_flags": [
+                "vertex_index", "no_vertex_buffer", "no_depth",
+                "single_sample", "premultiplied_ui4", "fullscreen_triangle",
+            ],
+        },
+        "schedule": {
+            "sim_params_bytes": 112, "render_params_bytes": 272,
+            "draw_vertex_count": 3,
+        },
+        "bindings": {
+            "compute": ["uniform-read", "sampled", "sampler", "storage"],
+            "graphics": ["uniform-read", "sampled", "sampler"],
+        },
     }
     sections = {
         "manifest.json": (1, (json.dumps(manifest, sort_keys=True) + "\n").encode()),
@@ -998,6 +1139,7 @@ def assemble_helioc_package(
         HELIOC_COMPUTE_ISA_SECTION: (4, compute_isa),
         HELIOC_VERTEX_ISA_SECTION: (4, vertex_isa),
         HELIOC_FRAGMENT_ISA_SECTION: (4, fragment_isa),
+        HELIOC_RELOC_STATE_SECTION: (5, reloc_state),
     }
     artifact = emit_helioa(sections)
     parsed = parse_helioa(artifact)
@@ -1010,6 +1152,7 @@ def assemble_helioc_package(
         (HELIOC_COMPUTE_ISA_SECTION, 4, compute_isa),
         (HELIOC_VERTEX_ISA_SECTION, 4, vertex_isa),
         (HELIOC_FRAGMENT_ISA_SECTION, 4, fragment_isa),
+        (HELIOC_RELOC_STATE_SECTION, 5, reloc_state),
     ):
         if parsed.get(name) != (expected_kind, data):
             raise SystemExit(f"HelioC assembler failed to preserve {name}")
@@ -1117,6 +1260,466 @@ def helioc_public_api_boundary(
     return missing
 
 
+def _parse_helioc_symbolic_v2_record(path: Path) -> dict[str, object]:
+    """Parse one source-instrumented V2 record without accepting aliases."""
+    try:
+        lines = path.read_text(encoding="ascii").splitlines()
+    except UnicodeDecodeError as error:
+        raise SystemExit(f"HelioC V2 record is not ASCII: {path.name}") from error
+    if not lines or lines[0] != "TRUEOS_HELIOC_RESOURCE_V2":
+        raise SystemExit(f"HelioC V2 record has an invalid magic: {path.name}")
+    fields: dict[str, str] = {}
+    for line in lines[1:]:
+        key, separator, value = line.partition("=")
+        if not separator or key in fields:
+            raise SystemExit(f"HelioC V2 record has malformed or duplicate field: {path.name}")
+        fields[key] = value
+    if tuple(fields) != HELIOC_SYMBOLIC_V2_FIELDS:
+        raise SystemExit(f"HelioC V2 record has unknown or missing fields: {path.name}")
+    if fields["kind"] not in HELIOC_SYMBOLIC_V2_KINDS:
+        raise SystemExit(f"HelioC V2 record has an unsealed role/kind: {path.name}")
+    if fields["kind"] == "descriptor_set_state":
+        if fields["role"] not in HELIOC_SYMBOLIC_V2_DESCRIPTOR_SET_ROLES:
+            raise SystemExit(f"HelioC V2 descriptor-set state has an unsealed role: {path.name}")
+    elif fields["role"] not in HELIOC_SYMBOLIC_V2_REQUIRED_ROLES | {"sampler_state"}:
+        raise SystemExit(f"HelioC V2 record has an unsealed role/kind: {path.name}")
+    if not re.fullmatch(r"0x[0-9a-f]+", fields["raw_va"]) \
+            or not re.fullmatch(r"0x(?:0|[0-9a-f]+)", fields["state_heap_va"]):
+        raise SystemExit(f"HelioC V2 record has a non-canonical VA: {path.name}")
+    values: dict[str, object] = {
+        "file": path.name, "role": fields["role"], "kind": fields["kind"],
+        "raw_va": int(fields["raw_va"], 16), "state_heap_va": int(fields["state_heap_va"], 16),
+    }
+    for key in ("stage", "binding", "allocation_bytes", "logical_bytes", "resource_offset",
+                "state_heap_bytes", "state_offset", "state_bytes", "row_pitch", "array_pitch"):
+        if not re.fullmatch(r"(?:0|[1-9][0-9]*)", fields[key]):
+            raise SystemExit(f"HelioC V2 record has a non-canonical integer: {path.name}")
+        values[key] = int(fields[key])
+    state_hex = fields["state_hex"]
+    state_bytes = int(values["state_bytes"])
+    if state_hex == "-":
+        if state_bytes and fields["kind"] in {
+            "surface_state", "render_target_state", "descriptor_set_state", "state",
+        }:
+            raise SystemExit(f"HelioC V2 state record omits its resolved bytes: {path.name}")
+        values["raw_state_byte_fingerprint_sha256"] = None
+    else:
+        if state_bytes == 0 or len(state_hex) != state_bytes * 2 \
+                or re.fullmatch(r"[0-9a-f]+", state_hex) is None:
+            raise SystemExit(f"HelioC V2 state bytes are malformed: {path.name}")
+        # Surface and sampler encodings may contain capture-process VAs.  This
+        # is a diagnostic fingerprint only, never an immutable template hash.
+        values["raw_state_byte_fingerprint_sha256"] = sha256(bytes.fromhex(state_hex))
+    if int(values["raw_va"]) == 0 or int(values["allocation_bytes"]) == 0 \
+            or int(values["logical_bytes"]) == 0 \
+            or int(values["logical_bytes"]) > int(values["allocation_bytes"]):
+        raise SystemExit(f"HelioC V2 resource range is invalid: {path.name}")
+    return values
+
+
+def _parse_helioc_symbolic_v2_indirect_descriptor(path: Path) -> dict[str, object]:
+    """Parse exactly one raw ANV shader-loaded descriptor diagnostic."""
+    try:
+        lines = path.read_text(encoding="ascii").splitlines()
+    except UnicodeDecodeError as error:
+        raise SystemExit(f"HelioC V2 indirect descriptor is not ASCII: {path.name}") from error
+    if not lines or lines[0] != "TRUEOS_HELIOC_INDIRECT_DESCRIPTOR_V2":
+        raise SystemExit(f"HelioC V2 indirect descriptor has an invalid magic: {path.name}")
+    fields: dict[str, str] = {}
+    for line in lines[1:]:
+        key, separator, value = line.partition("=")
+        if not separator or key in fields:
+            raise SystemExit(f"HelioC V2 indirect descriptor is malformed: {path.name}")
+        fields[key] = value
+    if tuple(fields) != HELIOC_SYMBOLIC_V2_INDIRECT_DESCRIPTOR_FIELDS:
+        raise SystemExit(f"HelioC V2 indirect descriptor has unknown or missing fields: {path.name}")
+    if fields["set_role"] not in HELIOC_SYMBOLIC_V2_DESCRIPTOR_SET_ROLES \
+            or fields["resource_role"] not in {"volume_a", "volume_b"} \
+            or fields["kind"] not in {"sampled", "storage"} \
+            or not re.fullmatch(r"[1-9][0-9]*", fields["binding"]) \
+            or not re.fullmatch(r"0x[0-9a-f]+", fields["raw_va"]) \
+            or not re.fullmatch(r"[1-9][0-9]*", fields["bytes"]):
+        raise SystemExit(f"HelioC V2 indirect descriptor has a non-canonical field: {path.name}")
+    byte_count = int(fields["bytes"])
+    if (fields["kind"], byte_count) not in {("sampled", 8), ("storage", 32)} \
+            or len(fields["data_hex"]) != byte_count * 2 \
+            or re.fullmatch(r"[0-9a-f]+", fields["data_hex"]) is None:
+        raise SystemExit(f"HelioC V2 indirect descriptor has the wrong payload shape: {path.name}")
+    raw_va = int(fields["raw_va"], 16)
+    if raw_va == 0:
+        raise SystemExit(f"HelioC V2 indirect descriptor has a null descriptor VA: {path.name}")
+    return {
+        "file": path.name,
+        "set_role": fields["set_role"],
+        "resource_role": fields["resource_role"],
+        "kind": fields["kind"],
+        "binding": int(fields["binding"]),
+        "raw_va": raw_va,
+        "bytes": byte_count,
+        "raw_data_hex": fields["data_hex"],
+        # Address-bearing bytes are a diagnostic fingerprint, never a sealed blob hash.
+        "raw_byte_fingerprint_sha256": sha256(bytes.fromhex(fields["data_hex"])),
+    }
+
+
+def _parse_helioc_symbolic_v3_table(path: Path) -> dict[str, object]:
+    """Parse one raw binding/sampler table record without treating it as ABI."""
+    try:
+        lines = path.read_text(encoding="ascii").splitlines()
+    except UnicodeDecodeError as error:
+        raise SystemExit(f"HelioC V3 table is not ASCII: {path.name}") from error
+    if not lines or lines[0] != "TRUEOS_HELIOC_TABLE_V3":
+        raise SystemExit(f"HelioC V3 table has an invalid magic: {path.name}")
+    fields: dict[str, str] = {}
+    for line in lines[1:]:
+        key, separator, value = line.partition("=")
+        if not separator or key in fields:
+            raise SystemExit(f"HelioC V3 table is malformed: {path.name}")
+        fields[key] = value
+    if tuple(fields) != HELIOC_SYMBOLIC_V3_TABLE_FIELDS:
+        raise SystemExit(f"HelioC V3 table has unknown or missing fields: {path.name}")
+    if fields["table_kind"] not in {"binding", "sampler"} \
+            or fields["set_role"] not in HELIOC_SYMBOLIC_V2_DESCRIPTOR_SET_ROLES \
+            or not re.fullmatch(r"[1-9][0-9]*", fields["stage"]) \
+            or not re.fullmatch(r"0x[0-9a-f]+", fields["raw_va"]) \
+            or not re.fullmatch(r"[1-9][0-9]*", fields["bytes"]) \
+            or not re.fullmatch(r"[1-9][0-9]*", fields["entry_count"]):
+        raise SystemExit(f"HelioC V3 table has a non-canonical field: {path.name}")
+    entry_count = int(fields["entry_count"])
+    entry_roles = tuple(fields["entry_roles"].split(","))
+    if len(entry_roles) != entry_count or any(not re.fullmatch(
+            r"(?:descriptor_set_state|volume_a|volume_b|sim_params|render_params|output_target|sampler_state)",
+            role) for role in entry_roles):
+        raise SystemExit(f"HelioC V3 table has malformed entry roles: {path.name}")
+    byte_count = int(fields["bytes"])
+    expected_bytes = entry_count * (4 if fields["table_kind"] == "binding" else 16)
+    if byte_count != expected_bytes or len(fields["data_hex"]) != byte_count * 2 \
+            or re.fullmatch(r"[0-9a-f]+", fields["data_hex"]) is None \
+            or int(fields["raw_va"], 16) == 0:
+        raise SystemExit(f"HelioC V3 table has an invalid raw payload: {path.name}")
+    return {
+        "file": path.name,
+        "table_kind": fields["table_kind"],
+        "set_role": fields["set_role"],
+        "stage": int(fields["stage"]),
+        "raw_va": int(fields["raw_va"], 16),
+        "bytes": byte_count,
+        "entry_count": entry_count,
+        "entry_roles": entry_roles,
+        "raw_data_hex": fields["data_hex"],
+        "raw_byte_fingerprint_sha256": sha256(bytes.fromhex(fields["data_hex"])),
+    }
+
+
+def collect_helioc_address_free_indirect_templates(exec_dir: Path) -> list[dict[str, object]] | None:
+    """Read the V5 descriptor templates without retaining process addresses."""
+    paths = sorted(exec_dir.glob("helioc-anv-v5-indirect-[0-9]*.txt"))
+    if not paths:
+        return None
+    if len(paths) != 6:
+        raise SystemExit("HelioC V5 must contain exactly six indirect templates")
+    expected = {
+        ("compute_ping_a", "volume_a", "sampled", "1", "8"),
+        ("compute_ping_a", "volume_b", "storage", "3", "32"),
+        ("compute_ping_b", "volume_b", "sampled", "1", "8"),
+        ("compute_ping_b", "volume_a", "storage", "3", "32"),
+        ("graphics_a", "volume_a", "sampled", "1", "8"),
+        ("graphics_b", "volume_b", "sampled", "1", "8"),
+    }
+    templates: list[dict[str, object]] = []
+    for path in paths:
+        lines = path.read_text(encoding="ascii").splitlines()
+        if not lines or lines[0] != "TRUEOS_HELIOC_INDIRECT_TEMPLATE_V5":
+            raise SystemExit(f"HelioC V5 indirect template has invalid magic: {path.name}")
+        fields: dict[str, str] = {}
+        relocs: list[str] = []
+        for line in lines[1:]:
+            key, separator, value = line.partition("=")
+            if not separator:
+                raise SystemExit(f"HelioC V5 indirect template is malformed: {path.name}")
+            if key == "reloc":
+                relocs.append(value)
+            elif key in fields:
+                raise SystemExit(f"HelioC V5 indirect template duplicates a field: {path.name}")
+            else:
+                fields[key] = value
+        if tuple(fields) != HELIOC_ADDRESS_FREE_INDIRECT_FIELDS[:-1] \
+                or (fields["set_role"], fields["resource_role"], fields["kind"],
+                    fields["binding"], fields["bytes"]) not in expected \
+                or not re.fullmatch(r"(?:[0-9a-f]{2})+", fields["data_hex"]) \
+                or len(fields["data_hex"]) != int(fields["bytes"]) * 2:
+            raise SystemExit(f"HelioC V5 indirect template has invalid fields: {path.name}")
+        resource = fields["resource_role"]
+        expected_relocs = (
+            [f"0,4,object_offset,surface_{resource}_sampled,0,0xffffffc0,0",
+             "4,4,object_offset,sampler_state,0,0xffffffff,0"]
+            if fields["kind"] == "sampled" else
+            [f"0,4,object_offset,surface_{resource}_storage,0,0xffffffc0,0",
+             f"8,8,fixed_gpu,{resource},0,0xffffffffffffffff,0"]
+        )
+        if relocs != expected_relocs:
+            raise SystemExit(f"HelioC V5 indirect template has unexpected typed relocations: {path.name}")
+        templates.append({
+            "set_role": fields["set_role"], "resource_role": resource,
+            "kind": fields["kind"], "binding": int(fields["binding"]),
+            "data_hex": fields["data_hex"], "relocations": relocs,
+        })
+    if {(str(t["set_role"]), str(t["resource_role"]), str(t["kind"]),
+         str(t["binding"]), str(len(bytes.fromhex(str(t["data_hex"])))) ) for t in templates} != expected:
+        raise SystemExit("HelioC V5 indirect templates are duplicate or incomplete")
+    return templates
+
+
+def collect_helioc_command_catalog(exec_dir: Path) -> dict[str, object] | None:
+    """Validate the six named raw command variants without normalizing bytes."""
+    paths = sorted(exec_dir.glob("helioc-anv-v4-command-[0-9]*.txt"))
+    if not paths:
+        return None
+    if len(paths) != 6:
+        raise SystemExit("HelioC command catalog must contain exactly six variants")
+    records: list[dict[str, object]] = []
+    for path in paths:
+        try:
+            lines = path.read_text(encoding="ascii").splitlines()
+        except UnicodeDecodeError as error:
+            raise SystemExit(f"HelioC command catalog record is not ASCII: {path.name}") from error
+        if not lines or lines[0] != "TRUEOS_HELIOC_COMMAND_V4":
+            raise SystemExit(f"HelioC command catalog has an invalid magic: {path.name}")
+        fields: dict[str, str] = {}
+        for line in lines[1:]:
+            key, separator, value = line.partition("=")
+            if not separator or key in fields:
+                raise SystemExit(f"HelioC command catalog record is malformed: {path.name}")
+            fields[key] = value
+        if tuple(fields) != HELIOC_COMMAND_CATALOG_FIELDS \
+                or fields["current"] not in {"volume_a", "volume_b"} \
+                or fields["final_role"] not in {"volume_a", "volume_b"} \
+                or not re.fullmatch(r"[0-2]", fields["step"]) \
+                or fields["dispatch_roles"] not in {"none", "a_to_b", "b_to_a", "a_to_b,b_to_a", "b_to_a,a_to_b"} \
+                or fields["volume_layout"] != "general_to_general" \
+                or fields["inter_dispatch_visibility"] not in {"none", "compute_write_to_compute_read"} \
+                or fields["draw_vertices"] != "3" \
+                or not re.fullmatch(r"0x[0-9a-f]+", fields["raw_va"]) \
+                or not re.fullmatch(r"[1-9][0-9]*", fields["bytes"]):
+            raise SystemExit(f"HelioC command catalog record has an invalid field: {path.name}")
+        byte_count = int(fields["bytes"])
+        if byte_count > 256 * 1024 or byte_count % 4 or len(fields["data_hex"]) != byte_count * 2 \
+                or re.fullmatch(r"[0-9a-f]+", fields["data_hex"]) is None \
+                or int(fields["raw_va"], 16) == 0:
+            raise SystemExit(f"HelioC command catalog record has an invalid raw batch: {path.name}")
+        raw = bytes.fromhex(fields["data_hex"])
+        if struct.unpack_from("<I", raw, len(raw) - 4)[0] != 0x0500_0000:
+            raise SystemExit(f"HelioC command catalog record does not end in MI_BATCH_BUFFER_END: {path.name}")
+        records.append({
+            "file": path.name, "current": fields["current"], "step": int(fields["step"]),
+            "final_role": fields["final_role"], "dispatch_roles": fields["dispatch_roles"],
+            "volume_layout": fields["volume_layout"],
+            "inter_dispatch_visibility": fields["inter_dispatch_visibility"],
+            "draw_vertices": 3, "raw_va": int(fields["raw_va"], 16), "bytes": byte_count,
+            "raw_data_hex": fields["data_hex"], "raw_byte_fingerprint_sha256": sha256(raw),
+        })
+    expected = {
+        ("volume_a", 0, "volume_a", "none", "none"),
+        ("volume_a", 1, "volume_b", "a_to_b", "none"),
+        ("volume_a", 2, "volume_a", "a_to_b,b_to_a", "compute_write_to_compute_read"),
+        ("volume_b", 0, "volume_b", "none", "none"),
+        ("volume_b", 1, "volume_a", "b_to_a", "none"),
+        ("volume_b", 2, "volume_b", "b_to_a,a_to_b", "compute_write_to_compute_read"),
+    }
+    observed = {(str(record["current"]), int(record["step"]), str(record["final_role"]),
+                 str(record["dispatch_roles"]), str(record["inter_dispatch_visibility"])) for record in records}
+    if observed != expected or len(observed) != len(records):
+        raise SystemExit("HelioC command catalog has an unexpected or duplicate variant")
+    return {
+        "schema": 4,
+        "status": "diagnostic_raw_commands_require_symbolic_relocations",
+        "variants": records,
+        "boundary": (
+            "raw command bytes remain address-bearing diagnostics; MI_BATCH_BUFFER_END and semantic labels do not "
+            "prove relocatability, ownership, or physical execution"
+        ),
+    }
+
+
+def collect_helioc_symbolic_v2(exec_dir: Path) -> dict[str, object] | None:
+    """Validate V2 symbolic evidence, retaining raw VAs as diagnostic-only.
+
+    This deliberately does not create relocations: runtime contents and output
+    backing are broker resources, while only the captured state templates may
+    be hashed.  Any missing role or ambiguous identity rejects the whole V2
+    slice rather than allowing the prior raw-state path to look relocatable.
+    """
+    paths = sorted(exec_dir.glob("helioc-anv-v2-[0-9]*.txt"))
+    if not paths:
+        return None
+    records = [_parse_helioc_symbolic_v2_record(path) for path in paths]
+    descriptor_paths = sorted(exec_dir.glob("helioc-anv-v2-descriptor-[0-9]*.txt"))
+    if len(descriptor_paths) != 6:
+        raise SystemExit("HelioC V2 capture does not contain exactly six indirect descriptors")
+    indirect_descriptors = [
+        _parse_helioc_symbolic_v2_indirect_descriptor(path) for path in descriptor_paths
+    ]
+    expected_indirect_descriptors: Counter[tuple[str, str, str, int, int]] = Counter({
+        ("compute_ping_a", "volume_a", "sampled", 1, 8): 1,
+        ("compute_ping_a", "volume_b", "storage", 3, 32): 1,
+        ("compute_ping_b", "volume_b", "sampled", 1, 8): 1,
+        ("compute_ping_b", "volume_a", "storage", 3, 32): 1,
+        ("graphics_a", "volume_a", "sampled", 1, 8): 1,
+        ("graphics_b", "volume_b", "sampled", 1, 8): 1,
+    })
+    if Counter(
+        (str(record["set_role"]), str(record["resource_role"]), str(record["kind"]),
+         int(record["binding"]), int(record["bytes"]))
+        for record in indirect_descriptors
+    ) != expected_indirect_descriptors:
+        raise SystemExit("HelioC V2 capture has an unexpected indirect-descriptor multiplicity")
+    table_paths = sorted(exec_dir.glob("helioc-anv-v3-table-[0-9]*.txt"))
+    if len(table_paths) != 8:
+        raise SystemExit("HelioC V3 capture does not contain exactly eight binding/sampler tables")
+    tables = [_parse_helioc_symbolic_v3_table(path) for path in table_paths]
+    expected_tables: Counter[tuple[str, str, int, int, tuple[str, ...]]] = Counter({
+        ("binding", "compute_ping_a", 5, 16,
+         ("descriptor_set_state", "volume_b", "sim_params", "volume_a")): 1,
+        ("sampler", "compute_ping_a", 5, 16, ("sampler_state",)): 1,
+        ("binding", "compute_ping_b", 5, 16,
+         ("descriptor_set_state", "volume_a", "sim_params", "volume_b")): 1,
+        ("sampler", "compute_ping_b", 5, 16, ("sampler_state",)): 1,
+        ("binding", "graphics_a", 4, 16,
+         ("output_target", "descriptor_set_state", "volume_a", "render_params")): 1,
+        ("sampler", "graphics_a", 4, 16, ("sampler_state",)): 1,
+        ("binding", "graphics_b", 4, 16,
+         ("output_target", "descriptor_set_state", "volume_b", "render_params")): 1,
+        ("sampler", "graphics_b", 4, 16, ("sampler_state",)): 1,
+    })
+    if Counter(
+        (str(record["table_kind"]), str(record["set_role"]), int(record["stage"]),
+         int(record["bytes"]), tuple(record["entry_roles"]))
+        for record in tables
+    ) != expected_tables:
+        raise SystemExit("HelioC V3 capture has an unexpected table semantic mapping")
+    resource_records = [record for record in records if record["kind"] in {"image", "buffer", "heap", "command"}]
+    roles = {str(record["role"]) for record in resource_records}
+    if roles != HELIOC_SYMBOLIC_V2_REQUIRED_ROLES:
+        raise SystemExit("HelioC V2 capture has missing or unexpected semantic resources")
+    resources: dict[str, dict[str, object]] = {}
+    for role in sorted(HELIOC_SYMBOLIC_V2_REQUIRED_ROLES):
+        matches = [record for record in resource_records if record["role"] == role]
+        identities = {
+            (record["kind"], record["raw_va"], record["allocation_bytes"], record["logical_bytes"],
+             record["resource_offset"], record["row_pitch"], record["array_pitch"])
+            for record in matches
+        }
+        if len(identities) != 1:
+            raise SystemExit(f"HelioC V2 capture has ambiguous {role} identity")
+        resources[role] = {key: matches[0][key] for key in (
+            "kind", "raw_va", "allocation_bytes", "logical_bytes", "resource_offset",
+            "row_pitch", "array_pitch",
+        )}
+    for role in ("volume_a", "volume_b"):
+        resource = resources[role]
+        if resource["kind"] != "image" or (resource["logical_bytes"], resource["row_pitch"], resource["array_pitch"]) \
+                != (3_538_944, 768, 36_864):
+            raise SystemExit(f"HelioC V2 {role} is not the sealed tight LINEAR volume")
+    for role, stage, logical_bytes in (("sim_params", 5, 112), ("render_params", 4, 272)):
+        resource = resources[role]
+        if resource["kind"] != "buffer" or resource["logical_bytes"] != logical_bytes \
+                or not any(record["role"] == role and record["stage"] == stage and record["binding"] == 0
+                           for record in records):
+            raise SystemExit(f"HelioC V2 {role} has the wrong semantic binding/range")
+    resource_bindings = Counter(
+        (str(record["role"]), str(record["kind"]), int(record["stage"]), int(record["binding"]))
+        for record in resource_records
+    )
+    expected_resource_bindings: Counter[tuple[str, str, int, int]] = Counter({
+        ("volume_a", "image", 5, 1): 1,
+        ("volume_a", "image", 5, 3): 1,
+        ("volume_a", "image", 4, 1): 1,
+        ("volume_b", "image", 5, 1): 1,
+        ("volume_b", "image", 5, 3): 1,
+        ("sim_params", "buffer", 5, 0): 2,
+        ("render_params", "buffer", 4, 0): 1,
+        # Color-attachment bindings use ANV_DESCRIPTOR_SET_COLOR_ATTACHMENTS;
+        # its map's binding field is the UINT32_MAX sentinel, not descriptor 0.
+        ("output_target", "image", 4, 0xFFFF_FFFF): 1,
+        ("shader_heap", "heap", 0xFFFF_FFFF, 0): 1,
+        ("internal_surface_state_heap", "heap", 0xFFFF_FFFF, 0): 1,
+        ("binding_table_heap", "heap", 0xFFFF_FFFF, 0): 1,
+        ("dynamic_state_heap", "heap", 0xFFFF_FFFF, 0): 1,
+        ("indirect_descriptor_heap", "heap", 0xFFFF_FFFF, 0): 1,
+        ("command_bo", "command", 0xFFFF_FFFF, 0): 1,
+    })
+    if resource_bindings != expected_resource_bindings:
+        raise SystemExit("HelioC V2 capture has an unexpected semantic binding multiplicity")
+    if resources["output_target"]["kind"] != "image":
+        raise SystemExit("HelioC V2 output target is not an image")
+    state_records = [record for record in records if record["kind"] in {
+        "surface_state", "render_target_state", "descriptor_set_state", "state",
+    }]
+    if not any(record["kind"] == "render_target_state" and record["role"] == "output_target" for record in state_records):
+        raise SystemExit("HelioC V2 capture has no resolved output-target state")
+    for role in ("volume_a", "volume_b", "sim_params", "render_params"):
+        if not any(record["kind"] == "surface_state" and record["role"] == role for record in state_records):
+            raise SystemExit(f"HelioC V2 capture has no resolved {role} surface state")
+    if not any(record["role"] == "sampler_state" and record["kind"] == "state" for record in records):
+        raise SystemExit("HelioC V2 capture has no resolved sampler state")
+    descriptor_set_states = [record for record in records if record["kind"] == "descriptor_set_state"]
+    expected_descriptor_set_states: Counter[tuple[str, int, int, int]] = Counter({
+        # ANV_DESCRIPTOR_SET_DESCRIPTORS encodes the set-buffer surface in
+        # bind-map surface[0]; its binding is the UINT32_MAX special-set
+        # sentinel rather than logical Vulkan binding 0.
+        ("compute_ping_a", 5, 0xFFFF_FFFF, 0): 1,
+        ("compute_ping_b", 5, 0xFFFF_FFFF, 128): 1,
+        ("graphics_a", 4, 0xFFFF_FFFF, 256): 1,
+    })
+    if Counter(
+        (str(record["role"]), int(record["stage"]), int(record["binding"]), int(record["state_offset"]))
+        for record in descriptor_set_states
+    ) != expected_descriptor_set_states:
+        raise SystemExit("HelioC V2 capture has no exact descriptor-set-buffer SURFACE_STATE trace")
+    for record in descriptor_set_states:
+        if int(record["logical_bytes"]) != 64 or int(record["state_bytes"]) != 64 \
+                or record["raw_state_byte_fingerprint_sha256"] is None \
+                or int(record["state_heap_va"]) == 0 \
+                or int(record["raw_va"]) != int(record["state_heap_va"]) + int(record["state_offset"]) \
+                or int(record["allocation_bytes"]) != int(record["state_heap_bytes"]) \
+                or int(record["resource_offset"]) != 0 \
+                or int(record["row_pitch"]) != 0 or int(record["array_pitch"]) != 0:
+            raise SystemExit("HelioC V2 descriptor-set-buffer SURFACE_STATE is incomplete")
+    return {
+        "schema": 2,
+        "status": "diagnostic_raw_va_requires_broker_ownership_and_patch_sites",
+        "resources": resources,
+        "raw_address_bearing_state_records": [
+            {key: record[key] for key in ("role", "kind", "stage", "binding", "raw_va", "state_heap_va",
+                                           "state_offset", "state_bytes", "raw_state_byte_fingerprint_sha256")}
+            for record in state_records
+        ],
+        "raw_indirect_descriptor_records": indirect_descriptors,
+        "raw_table_records": tables,
+        "raw_state_boundary": (
+            "state bytes and their fingerprints are capture-process diagnostics only; they must be decoded and "
+            "all address fields symbolically rewritten before any immutable template can exist"
+        ),
+        "indirect_descriptor_boundary": (
+            "six shader-loaded 8-byte sampled/32-byte storage payloads and their descriptor-set-buffer "
+            "SURFACE_STATE are captured only as raw diagnostics; decode and rewrite all embedded handles/VAs "
+            "before any immutable template can exist"
+        ),
+        "table_boundary": (
+            "binding/sampler table bytes and entry roles are raw diagnostics only; state offsets and embedded "
+            "addresses still require decoding, symbolic patch sites, and broker ownership before packaging"
+        ),
+        "command_dependency_boundary": (
+            "command BO and state heaps are identified, but ANV relocation tracking is a BO-dependency bitset "
+            "without symbolic patch sites or broker ownership proof"
+        ),
+        "runtime_resource_boundary": (
+            "volume/parameter/UI4 contents are dynamic semantic broker resources and are intentionally unhashed; "
+            "UI4 capture VA is not a permitted runtime address"
+        ),
+    }
+
+
 def collect_instrumented_anv_capture(exec_dir: Path) -> dict[str, object] | None:
     """Parse the exact, opt-in capture records; reject any stage ambiguity."""
     trace_files = sorted(exec_dir.glob("helioc-anv-*.bin"))
@@ -1180,7 +1783,22 @@ def collect_instrumented_anv_capture(exec_dir: Path) -> dict[str, object] | None
                             "instrumented ANV devinfo is not shim-injected ADL GT1 "
                             "(0x4680, PCI r0c, KMD revision 0, ver=12, verx10=120)"
                         )
-    return {"records": records, "stages": reps}
+    return {
+        "records": records,
+        "stages": reps,
+        "symbolic_v2": (symbolic_v2 := collect_helioc_symbolic_v2(exec_dir)),
+        "command_catalog": (command_catalog := collect_helioc_command_catalog(exec_dir)),
+        "address_free_indirect_templates": collect_helioc_address_free_indirect_templates(exec_dir),
+        # V2/V3 captures are intentionally one explicit named catalog anchor,
+        # rather than an order-dependent first record.  The raw command
+        # catalog remains diagnostic only and no address-bearing bytes are
+        # normalized here.
+        "symbolic_v2_catalog_anchor": (
+            "current=volume_a step=2 final_role=volume_a "
+            "dispatch_roles=a_to_b,b_to_a"
+            if symbolic_v2 is not None and command_catalog is not None else None
+        ),
+    }
 
 
 def validate_instrumented_shader_serializations(
@@ -1324,14 +1942,14 @@ def bake_helioc(args: argparse.Namespace) -> None:
         "sampler=repeat/clamp-to-edge/repeat linear/linear/nearest normalized=1"
     )
     descriptor_marker = (
-        "helioc_pipeline_dump: descriptor_sets compute_ping_pong=2 graphics=1 "
+        "helioc_pipeline_dump: descriptor_sets compute_ping_pong=2 graphics=2 "
         "bindings=compute[0:uniform,1:sampled3d,2:sampler,3:storage3d] "
         "graphics[0:uniform,1:sampled3d,2:sampler]"
     )
     if (
         resource_marker not in log_text
         or descriptor_marker not in log_text
-        or "helioc_pipeline_dump: submitted=1" not in log_text
+        or "helioc_pipeline_dump: command_catalog=6 recorded_only=1" not in log_text
     ):
         raise SystemExit("HelioC Vulkan capture did not create the required 3D resource/pipeline state")
     volume_requirements = helioc_linear_volume_requirements(log_text)
@@ -1369,7 +1987,8 @@ def bake_helioc(args: argparse.Namespace) -> None:
             "isa_sha256": sha256(cs), "isa_bytes": len(cs),
         },
         "graphics": {
-            "vertex_entry": "vs_main", "fragment_entry": "fs_main", "simd_width": 16,
+            "vertex_entry": "vs_main", "fragment_entry": "fs_main",
+            "vertex_simd_width": 8, "fragment_simd_width": 16,
             "vertex_isa_sha256": sha256(vs), "fragment_isa_sha256": sha256(fs),
         },
         "executables": list(executables.values()),
@@ -1377,7 +1996,10 @@ def bake_helioc(args: argparse.Namespace) -> None:
         "relocatable_state": {
             "section": HELIOC_RELOC_STATE_SECTION,
             "status": "missing",
-            "reason": "capture has raw process-address state but no complete symbolic broker relocation map",
+            "reason": (
+                "capture has no complete address-free HELIOCRS v2 object/typed-relocation map; "
+                "raw process addresses are diagnostic only"
+            ),
         },
         "source_level_capture_route": {
             "bind_map": (
@@ -1402,8 +2024,8 @@ def bake_helioc(args: argparse.Namespace) -> None:
             "diagnostic command/state records"
         )
         capture_metadata["remaining_capture_boundary"] = (
-            "raw state still embeds capture-process addresses and lacks a symbolic broker-owned "
-            "relocation/dependency map; shim execution is not physical target proof"
+            "raw state still embeds capture-process addresses and lacks an address-free broker-owned "
+            "HELIOCRS v2 object/typed-relocation map; shim execution is not physical target proof"
         )
     (work / "helioc-capture-metadata.json").write_bytes(
         (json.dumps(capture_metadata, indent=2, sort_keys=True) + "\n").encode()
@@ -1532,6 +2154,36 @@ def make_helioc_compile_only_dumper(destination: Path) -> None:
     """Specialize the proven dumper for HelioC's real compute + 3D workload."""
     make_compile_only_dumper(destination)
     source = destination.read_text()
+    source = replace_once(source, '''    const VkInstanceCreateInfo instance_info = {
+        .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
+        .pApplicationInfo = &app_info,
+    };''', '''    const char *instance_extensions[] = { VK_EXT_DEBUG_UTILS_EXTENSION_NAME };
+    const VkInstanceCreateInfo instance_info = {
+        .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
+        .pApplicationInfo = &app_info,
+        .enabledExtensionCount = 1,
+        .ppEnabledExtensionNames = instance_extensions,
+    };''')
+    source = replace_once(source, '''    VkDevice device;
+    CHECK_VK(vkCreateDevice(physical_device, &device_info, NULL, &device));''', '''    VkDevice device;
+    CHECK_VK(vkCreateDevice(physical_device, &device_info, NULL, &device));
+    PFN_vkSetDebugUtilsObjectNameEXT helioc_set_debug_name =
+        (PFN_vkSetDebugUtilsObjectNameEXT)vkGetDeviceProcAddr(
+            device, "vkSetDebugUtilsObjectNameEXT"
+        );
+    if (helioc_set_debug_name == NULL) {
+        fprintf(stderr, "helioc_pipeline_dump: VK_EXT_debug_utils naming unavailable\\n");
+        return 1;
+    }''')
+    source = replace_once(source, '''    VkImage image;
+    CHECK_VK(vkCreateImage(device, &image_info, NULL, &image));''', '''    VkImage image;
+    CHECK_VK(vkCreateImage(device, &image_info, NULL, &image));
+    const VkDebugUtilsObjectNameInfoEXT target_name = {
+        .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
+        .objectType = VK_OBJECT_TYPE_IMAGE, .objectHandle = (uint64_t)image,
+        .pObjectName = "trueos.helioc.output_target",
+    };
+    CHECK_VK(helioc_set_debug_name(device, &target_name));''')
     source = replace_once(source, '''    if (argc != 3) {
         fprintf(stderr, "usage: %s simple_triangle.vert.spv simple_triangle.frag.spv\\n", argv[0]);
         return 1;
@@ -1776,23 +2428,23 @@ def make_helioc_compile_only_dumper(destination: Path) -> None:
     memset(uniform_map, 0, 512);
     vkUnmapMemory(device, uniform_memory);
     const VkDescriptorPoolSize pool_sizes[4] = {
-        { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 3 }, { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 3 },
-        { VK_DESCRIPTOR_TYPE_SAMPLER, 3 }, { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2 },
+        { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 4 }, { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 4 },
+        { VK_DESCRIPTOR_TYPE_SAMPLER, 4 }, { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2 },
     };
     const VkDescriptorPoolCreateInfo descriptor_pool_info = {
-        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO, .maxSets = 3,
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO, .maxSets = 4,
         .poolSizeCount = 4, .pPoolSizes = pool_sizes,
     };
     VkDescriptorPool descriptor_pool;
     CHECK_VK(vkCreateDescriptorPool(device, &descriptor_pool_info, NULL, &descriptor_pool));
-    const VkDescriptorSetLayout descriptor_layouts[3] = {
-        compute_set_layout, compute_set_layout, graphics_set_layout,
+    const VkDescriptorSetLayout descriptor_layouts[4] = {
+        compute_set_layout, compute_set_layout, graphics_set_layout, graphics_set_layout,
     };
     const VkDescriptorSetAllocateInfo descriptor_allocate_info = {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO, .descriptorPool = descriptor_pool,
-        .descriptorSetCount = 3, .pSetLayouts = descriptor_layouts,
+        .descriptorSetCount = 4, .pSetLayouts = descriptor_layouts,
     };
-    VkDescriptorSet descriptor_sets[3];
+    VkDescriptorSet descriptor_sets[4];
     CHECK_VK(vkAllocateDescriptorSets(device, &descriptor_allocate_info, descriptor_sets));
     const VkDescriptorBufferInfo compute_buffers[2] = {
         { .buffer = uniform_buffer, .offset = 0, .range = 112 },
@@ -1801,19 +2453,21 @@ def make_helioc_compile_only_dumper(destination: Path) -> None:
     const VkDescriptorBufferInfo graphics_buffer = {
         .buffer = uniform_buffer, .offset = 128, .range = 272,
     };
-    VkDescriptorImageInfo sampled_volumes[3] = {
+    VkDescriptorImageInfo sampled_volumes[4] = {
         { .imageView = volume_views[0], .imageLayout = VK_IMAGE_LAYOUT_GENERAL },
         { .imageView = volume_views[1], .imageLayout = VK_IMAGE_LAYOUT_GENERAL },
         { .imageView = volume_views[0], .imageLayout = VK_IMAGE_LAYOUT_GENERAL },
+        { .imageView = volume_views[1], .imageLayout = VK_IMAGE_LAYOUT_GENERAL },
     };
     VkDescriptorImageInfo storage_volumes[2] = {
         { .imageView = volume_views[1], .imageLayout = VK_IMAGE_LAYOUT_GENERAL },
         { .imageView = volume_views[0], .imageLayout = VK_IMAGE_LAYOUT_GENERAL },
     };
-    const VkDescriptorImageInfo sampler_infos[3] = {
+    const VkDescriptorImageInfo sampler_infos[4] = {
         { .sampler = volume_sampler }, { .sampler = volume_sampler }, { .sampler = volume_sampler },
+        { .sampler = volume_sampler },
     };
-    VkWriteDescriptorSet writes[11];
+    VkWriteDescriptorSet writes[14];
     uint32_t write_count = 0;
     for (uint32_t i = 0; i < 2; ++i) {
         writes[write_count++] = (VkWriteDescriptorSet) { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
@@ -1838,9 +2492,86 @@ def make_helioc_compile_only_dumper(destination: Path) -> None:
     writes[write_count++] = (VkWriteDescriptorSet) { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
         .dstSet = descriptor_sets[2], .dstBinding = 2, .descriptorCount = 1,
         .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER, .pImageInfo = &sampler_infos[2] };
+    writes[write_count++] = (VkWriteDescriptorSet) { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        .dstSet = descriptor_sets[3], .dstBinding = 0, .descriptorCount = 1,
+        .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .pBufferInfo = &graphics_buffer };
+    writes[write_count++] = (VkWriteDescriptorSet) { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        .dstSet = descriptor_sets[3], .dstBinding = 1, .descriptorCount = 1,
+        .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, .pImageInfo = &sampled_volumes[3] };
+    writes[write_count++] = (VkWriteDescriptorSet) { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        .dstSet = descriptor_sets[3], .dstBinding = 2, .descriptorCount = 1,
+        .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER, .pImageInfo = &sampler_infos[3] };
     vkUpdateDescriptorSets(device, write_count, writes, 0, NULL);
-    printf("helioc_pipeline_dump: descriptor_sets compute_ping_pong=2 graphics=1 bindings=compute[0:uniform,1:sampled3d,2:sampler,3:storage3d] graphics[0:uniform,1:sampled3d,2:sampler]\\n");
+    printf("helioc_pipeline_dump: descriptor_sets compute_ping_pong=2 graphics=2 bindings=compute[0:uniform,1:sampled3d,2:sampler,3:storage3d] graphics[0:uniform,1:sampled3d,2:sampler]\\n");
     printf("helioc_pipeline_dump: resources volumes=2 format=R16G16B16A16_SFLOAT extent=96x48x96 sampled=1 storage=1 sampler=repeat/clamp-to-edge/repeat linear/linear/nearest normalized=1\\n");''')
+    source = replace_once(source, '''    for (uint32_t i = 0; i < 2; ++i) {
+        CHECK_VK(vkCreateImage(device, &volume_info, NULL, &volumes[i]));''', '''    for (uint32_t i = 0; i < 2; ++i) {
+        CHECK_VK(vkCreateImage(device, &volume_info, NULL, &volumes[i]));
+        const VkDebugUtilsObjectNameInfoEXT volume_name = {
+            .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
+            .objectType = VK_OBJECT_TYPE_IMAGE, .objectHandle = (uint64_t)volumes[i],
+            .pObjectName = i == 0 ? "trueos.helioc.volume_a" : "trueos.helioc.volume_b",
+        };
+        CHECK_VK(helioc_set_debug_name(device, &volume_name));''')
+    source = replace_once(source, '''    VkBuffer uniform_buffer;
+    CHECK_VK(vkCreateBuffer(device, &uniform_buffer_info, NULL, &uniform_buffer));''', '''    VkBuffer uniform_buffer;
+    CHECK_VK(vkCreateBuffer(device, &uniform_buffer_info, NULL, &uniform_buffer));
+    const VkDebugUtilsObjectNameInfoEXT params_name = {
+        .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
+        .objectType = VK_OBJECT_TYPE_BUFFER, .objectHandle = (uint64_t)uniform_buffer,
+        .pObjectName = "trueos.helioc.params_arena",
+    };
+    CHECK_VK(helioc_set_debug_name(device, &params_name));''')
+    source = replace_once(source, '''    VkDescriptorSet descriptor_sets[4];
+    CHECK_VK(vkAllocateDescriptorSets(device, &descriptor_allocate_info, descriptor_sets));''', '''    VkDescriptorSet descriptor_sets[4];
+    CHECK_VK(vkAllocateDescriptorSets(device, &descriptor_allocate_info, descriptor_sets));
+    const char *descriptor_set_names[4] = {
+        "trueos.helioc.compute_ping_a", "trueos.helioc.compute_ping_b",
+        "trueos.helioc.graphics_a", "trueos.helioc.graphics_b",
+    };
+    for (uint32_t i = 0; i < 4; ++i) {
+        const VkDebugUtilsObjectNameInfoEXT descriptor_set_name = {
+            .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
+            .objectType = VK_OBJECT_TYPE_DESCRIPTOR_SET, .objectHandle = (uint64_t)descriptor_sets[i],
+            .pObjectName = descriptor_set_names[i],
+        };
+        CHECK_VK(helioc_set_debug_name(device, &descriptor_set_name));
+    }''')
+    source = replace_once(source, '''    const VkCommandBufferAllocateInfo command_alloc = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+        .commandPool = command_pool,
+        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        .commandBufferCount = 1,
+    };
+    VkCommandBuffer command_buffer;
+    CHECK_VK(vkAllocateCommandBuffers(device, &command_alloc, &command_buffer));''', '''    const VkCommandBufferAllocateInfo command_alloc = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
+        .commandPool = command_pool,
+        .level = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
+        .commandBufferCount = 1,
+    };
+    VkCommandBuffer command_buffer;
+    CHECK_VK(vkAllocateCommandBuffers(device, &command_alloc, &command_buffer));
+    VkCommandBufferAllocateInfo command_catalog_alloc = command_alloc;
+    command_catalog_alloc.commandBufferCount = 6;
+    VkCommandBuffer command_buffers[6];
+    CHECK_VK(vkAllocateCommandBuffers(device, &command_catalog_alloc, command_buffers));
+    const char *command_names[6] = {
+        "trueos.helioc.command.current_a.step0.final_a.dispatch_none",
+        "trueos.helioc.command.current_a.step1.final_b.dispatch_a_to_b",
+        "trueos.helioc.command.current_a.step2.final_a.dispatch_a_to_b_b_to_a",
+        "trueos.helioc.command.current_b.step0.final_b.dispatch_none",
+        "trueos.helioc.command.current_b.step1.final_a.dispatch_b_to_a",
+        "trueos.helioc.command.current_b.step2.final_b.dispatch_b_to_a_a_to_b",
+    };
+    for (uint32_t i = 0; i < 6; ++i) {
+        const VkDebugUtilsObjectNameInfoEXT command_name = {
+            .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
+            .objectType = VK_OBJECT_TYPE_COMMAND_BUFFER, .objectHandle = (uint64_t)command_buffers[i],
+            .pObjectName = command_names[i],
+        };
+        CHECK_VK(helioc_set_debug_name(device, &command_name));
+    }''')
     source = replace_once(source, '''    VkPipelineCache pipeline_cache;
     CHECK_VK(vkCreatePipelineCache(device, &pipeline_cache_info, NULL, &pipeline_cache));
 
@@ -1862,19 +2593,21 @@ def make_helioc_compile_only_dumper(destination: Path) -> None:
     const VkGraphicsPipelineCreateInfo pipeline_info = {''')
     source = replace_once(source, '''    dump_pipeline_cache_blob(device, pipeline_cache);
     dump_pipeline_executables(device, pipeline);
-    printf("helio_pipeline_dump: compiled_only=1\\n");''', '''    printf("helioc_pipeline_dump: recording dispatch=24x12x24 fullscreen_draw=3\\n");
+    printf("helio_pipeline_dump: compiled_only=1\\n");''', '''    printf("helioc_pipeline_dump: recording command_catalog=6 dispatch=24x12x24 fullscreen_draw=3\\n");
     const VkCommandBufferBeginInfo helioc_begin = {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
         /* Disable ANV's submit-time command-buffer chaining optimization so
          * this capture has one immutable first-level batch ending in BBE. */
         .flags = VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT,
     };
-    CHECK_VK(vkBeginCommandBuffer(command_buffer, &helioc_begin));
     VkImageMemoryBarrier volume_barriers[2] = { 0 };
     for (uint32_t i = 0; i < 2; ++i) {
         volume_barriers[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        volume_barriers[i].srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
         volume_barriers[i].dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
-        volume_barriers[i].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        /* The catalog models persistent ping-pong storage: it never
+         * discards either volume with an UNDEFINED-to-GENERAL transition. */
+        volume_barriers[i].oldLayout = VK_IMAGE_LAYOUT_GENERAL;
         volume_barriers[i].newLayout = VK_IMAGE_LAYOUT_GENERAL;
         volume_barriers[i].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
         volume_barriers[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
@@ -1895,51 +2628,66 @@ def make_helioc_compile_only_dumper(destination: Path) -> None:
         .subresourceRange = { .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
             .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1 },
     };
-    VkImageMemoryBarrier initial_barriers[3] = {
-        volume_barriers[0], volume_barriers[1], target_barrier,
-    };
-    vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
-                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                         0, 0, NULL, 0, NULL, 3, initial_barriers);
-    vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, compute_pipeline);
-    for (uint32_t i = 0; i < 2; ++i) {
-        vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                compute_pipeline_layout, 0, 1, &descriptor_sets[i], 0, NULL);
-        vkCmdDispatch(command_buffer, 24, 12, 24);
-    }
-    VkImageMemoryBarrier render_volume_barrier = volume_barriers[0];
-    render_volume_barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
-    render_volume_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    render_volume_barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
-    render_volume_barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
-    vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
-                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, NULL, 0, NULL,
-                         1, &render_volume_barrier);
     const VkClearValue helioc_clear = { .color = { .float32 = { 0.f, 0.f, 0.f, 1.f } } };
     const VkRenderPassBeginInfo helioc_render_begin = {
         .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO, .renderPass = render_pass,
         .framebuffer = framebuffer, .renderArea = { .offset = { 0, 0 }, .extent = { 64, 64 } },
         .clearValueCount = 1, .pClearValues = &helioc_clear,
     };
-    vkCmdBeginRenderPass(command_buffer, &helioc_render_begin, VK_SUBPASS_CONTENTS_INLINE);
-    vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
-    vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            pipeline_layout, 0, 1, &descriptor_sets[2], 0, NULL);
-    vkCmdDraw(command_buffer, 3, 1, 0, 0);
-    vkCmdEndRenderPass(command_buffer);
-    CHECK_VK(vkEndCommandBuffer(command_buffer));
-    const VkSubmitInfo helioc_submit = {
-        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO, .commandBufferCount = 1,
-        .pCommandBuffers = &command_buffer,
-    };
-    CHECK_VK(vkQueueSubmit(queue, 1, &helioc_submit, VK_NULL_HANDLE));
-    CHECK_VK(vkQueueWaitIdle(queue));
-    CHECK_VK(vkDeviceWaitIdle(device));
+    for (uint32_t current = 0; current < 2; ++current) {
+        for (uint32_t step = 0; step < 3; ++step) {
+            const uint32_t command_index = current * 3 + step;
+            VkCommandBuffer command_buffer = command_buffers[command_index];
+            CHECK_VK(vkBeginCommandBuffer(command_buffer, &helioc_begin));
+            vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                                 VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                 0, 0, NULL, 0, NULL, 2, volume_barriers);
+            vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                 VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                                 0, 0, NULL, 0, NULL, 1, &target_barrier);
+            if (step != 0) {
+                vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, compute_pipeline);
+                for (uint32_t dispatch = 0; dispatch < step; ++dispatch) {
+                    const uint32_t compute_set = (current + dispatch) & 1;
+                    vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                            compute_pipeline_layout, 0, 1,
+                                            &descriptor_sets[compute_set], 0, NULL);
+                    vkCmdDispatch(command_buffer, 24, 12, 24);
+                    if (dispatch + 1 < step) {
+                        const uint32_t written_volume = (compute_set + 1) & 1;
+                        VkImageMemoryBarrier ping_pong_barrier = volume_barriers[written_volume];
+                        ping_pong_barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+                        ping_pong_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+                        vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                             VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                             0, 0, NULL, 0, NULL, 1, &ping_pong_barrier);
+                    }
+                }
+            }
+            const uint32_t final_volume = (current + step) & 1;
+            VkImageMemoryBarrier render_volume_barrier = volume_barriers[final_volume];
+            render_volume_barrier.srcAccessMask = step ? VK_ACCESS_SHADER_WRITE_BIT : 0;
+            render_volume_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            render_volume_barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+            render_volume_barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+            vkCmdPipelineBarrier(command_buffer,
+                                 step ? VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT : VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                 VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, NULL, 0, NULL,
+                                 1, &render_volume_barrier);
+            vkCmdBeginRenderPass(command_buffer, &helioc_render_begin, VK_SUBPASS_CONTENTS_INLINE);
+            vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+            vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                    pipeline_layout, 0, 1, &descriptor_sets[2 + final_volume], 0, NULL);
+            vkCmdDraw(command_buffer, 3, 1, 0, 0);
+            vkCmdEndRenderPass(command_buffer);
+            CHECK_VK(vkEndCommandBuffer(command_buffer));
+        }
+    }
     dump_pipeline_cache_blob(device, pipeline_cache);
     dump_pipeline_executables(device, pipeline);
     printf("helioc_pipeline_dump: public_api=VK_KHR_pipeline_executable_properties pipeline_cache=opaque\\n");
-    printf("helioc_pipeline_dump: submitted=1\\n");''')
+    printf("helioc_pipeline_dump: command_catalog=6 recorded_only=1\\n");''')
     destination.write_text(source)
 
 

@@ -12,6 +12,13 @@ struct DirectRcsState {
     clear_test_virt: *mut u8,
     ppgtt_phys: u64,
     ppgtt_virt: *mut u8,
+    /// Present only on the HelioC lane. This one persistent allocation backs
+    /// the contiguous shader, surface-state, dynamic-state, and indirect-
+    /// descriptor windows. Other lanes retain zero/null here and therefore
+    /// neither allocate nor map HelioC state.
+    helioc_state_phys: u64,
+    helioc_state_virt: *mut u8,
+    helioc_state_bytes: usize,
     gpu_va: DirectRcsGpuVa,
 }
 
@@ -107,6 +114,25 @@ struct FontRcsPpgttRuntime {
     initialization_attempted: bool,
     initialized: bool,
     retired_ranges: u64,
+}
+
+#[derive(Copy, Clone, Debug)]
+struct HelioCloudRcsPpgttRuntime {
+    root_phys: u64,
+    generation: u64,
+    initialization_attempted: bool,
+    initialized: bool,
+}
+
+impl HelioCloudRcsPpgttRuntime {
+    const fn new() -> Self {
+        Self {
+            root_phys: 0,
+            generation: 0,
+            initialization_attempted: false,
+            initialized: false,
+        }
+    }
 }
 
 impl FontRcsPpgttRuntime {
@@ -291,6 +317,14 @@ fn allocate_direct_rcs_state(gpu_va: DirectRcsGpuVa) -> Option<DirectRcsState> {
     let (clear_test_phys, clear_test_virt) =
         crate::dma::alloc(CLEAR_RECT_TEST_BYTES, super::WARM_ALIGN)?;
     let (ppgtt_phys, ppgtt_virt) = crate::dma::alloc(DIRECT_RCS_PPGTT_BYTES, super::WARM_ALIGN)?;
+    let (helioc_state_phys, helioc_state_virt, helioc_state_bytes) =
+        if gpu_va == HELIOC_RCS_GPU_VA {
+            let (phys, virt) =
+                crate::dma::alloc(HELIOC_RCS_STATE_ARENA_BYTES, super::WARM_ALIGN)?;
+            (phys, virt, HELIOC_RCS_STATE_ARENA_BYTES)
+        } else {
+            (0, core::ptr::null_mut(), 0)
+        };
 
     unsafe {
         core::ptr::write_bytes(ring_virt, 0, DIRECT_RCS_RING_BYTES);
@@ -299,6 +333,9 @@ fn allocate_direct_rcs_state(gpu_va: DirectRcsGpuVa) -> Option<DirectRcsState> {
         core::ptr::write_bytes(result_virt, 0, result_alloc_bytes);
         core::ptr::write_bytes(clear_test_virt, 0, CLEAR_RECT_TEST_BYTES);
         core::ptr::write_bytes(ppgtt_virt, 0, DIRECT_RCS_PPGTT_BYTES);
+        if helioc_state_bytes != 0 {
+            core::ptr::write_bytes(helioc_state_virt, 0, helioc_state_bytes);
+        }
     }
 
     let state = DirectRcsState {
@@ -314,6 +351,9 @@ fn allocate_direct_rcs_state(gpu_va: DirectRcsGpuVa) -> Option<DirectRcsState> {
         clear_test_virt,
         ppgtt_phys,
         ppgtt_virt,
+        helioc_state_phys,
+        helioc_state_virt,
+        helioc_state_bytes,
         gpu_va,
     };
     Some(state)
@@ -532,11 +572,11 @@ pub(crate) fn prewarm_direct_rcs_controls_ggtt(
             execution_rcs_state_once(dev),
         ),
         lfm25: prewarm_direct_rcs_control_ggtt(dev, LFM25_RCS_GPU_VA, lfm25_rcs_state_once(dev)),
-        helioc: prewarm_direct_rcs_control_ggtt(
-            dev,
-            HELIOC_RCS_GPU_VA,
-            helioc_rcs_state_once(dev),
-        ),
+        helioc: {
+            let state = helioc_rcs_state_once(dev);
+            prewarm_direct_rcs_control_ggtt(dev, HELIOC_RCS_GPU_VA, state)
+                && state.is_some_and(helioc_rcs_init_ppgtt_once)
+        },
         ui4_compositor: prewarm_direct_rcs_control_ggtt(
             dev,
             UI4_COMPOSITOR_RCS_GPU_VA,
@@ -552,6 +592,9 @@ fn direct_rcs_init_ppgtt(state: DirectRcsState) -> bool {
     // them can accidentally restore the old whole-PPGTT reset behavior.
     if state.gpu_va == FONT_RCS_GPU_VA {
         return font_rcs_init_ppgtt_once(state);
+    }
+    if state.gpu_va == HELIOC_RCS_GPU_VA {
+        return helioc_rcs_init_ppgtt_once(state);
     }
     direct_rcs_rebuild_ppgtt(state)
 }
@@ -593,6 +636,46 @@ fn font_rcs_init_ppgtt_once(state: DirectRcsState) -> bool {
         );
     } else {
         quarantine_font_rcs_context("font-ppgtt-initialization-failed");
+    }
+    initialized
+}
+
+/// Install HelioC's private page-table topology and immutable state arena
+/// exactly once. Frame mappings update only leaf PTEs after this succeeds.
+fn helioc_rcs_init_ppgtt_once(state: DirectRcsState) -> bool {
+    if state.gpu_va != HELIOC_RCS_GPU_VA || helioc_rcs_context_is_quarantined() {
+        return false;
+    }
+
+    let mut runtime = HELIOC_RCS_PPGTT_RUNTIME.lock();
+    if runtime.initialized {
+        let same_generation = runtime.root_phys == state.ppgtt_phys;
+        drop(runtime);
+        if !same_generation {
+            quarantine_helioc_rcs_context("helioc-ppgtt-root-generation-mismatch");
+        }
+        return same_generation;
+    }
+    if runtime.initialization_attempted {
+        return false;
+    }
+
+    runtime.initialization_attempted = true;
+    runtime.root_phys = state.ppgtt_phys;
+    runtime.generation = runtime.generation.saturating_add(1);
+    let generation = runtime.generation;
+    let initialized = direct_rcs_rebuild_ppgtt(state);
+    runtime.initialized = initialized;
+    drop(runtime);
+
+    if initialized {
+        crate::log_info!(target: "gpgpu";
+            "intel/gpgpu: helioc-ppgtt initialized=1 generation={} root=0x{:X} topology=exact-once dynamic-leaves=incremental whole-table-reset-per-submit=0 isolation=helioc-context-only\n",
+            generation,
+            state.ppgtt_phys,
+        );
+    } else {
+        quarantine_helioc_rcs_context("helioc-ppgtt-initialization-failed");
     }
     initialized
 }
@@ -644,7 +727,22 @@ fn direct_rcs_rebuild_ppgtt(state: DirectRcsState) -> bool {
         state.result_phys,
         result_alloc_bytes,
         pte_present_rw,
-    );
+    ) && if state.gpu_va == HELIOC_RCS_GPU_VA {
+        state.helioc_state_phys != 0
+            && !state.helioc_state_virt.is_null()
+            && state.helioc_state_bytes == HELIOC_RCS_STATE_ARENA_BYTES
+            && direct_rcs_map_ppgtt_region(
+                state,
+                HELIOC_RCS_GPU_VA_SHADER_BASE,
+                state.helioc_state_phys,
+                state.helioc_state_bytes,
+                pte_present_rw,
+            )
+    } else {
+        state.helioc_state_phys == 0
+            && state.helioc_state_virt.is_null()
+            && state.helioc_state_bytes == 0
+    };
 
     super::dma_flush(state.ppgtt_virt, DIRECT_RCS_PPGTT_BYTES);
     ok
@@ -832,6 +930,65 @@ fn exact_ppgtt_phys_pages_are_valid(pages: &[u64]) -> bool {
         && pages
             .iter()
             .all(|phys| *phys != 0 && phys.is_multiple_of(4096))
+}
+
+fn direct_rcs_ppgtt_cache_policy_compatible(
+    state: DirectRcsState,
+    gpu: u64,
+    page_count: usize,
+    entry_flags: u64,
+) -> bool {
+    if validate_exact_ppgtt_page_map(gpu, page_count).is_none() {
+        return false;
+    }
+    let cache_policy_mask = GEN8_PAGE_PWT | GEN8_PAGE_PCD;
+    (0..page_count).all(|page| {
+        let Some(pte_off) = exact_ppgtt_pte_offset(gpu, page) else {
+            return false;
+        };
+        let pte_ptr = unsafe { state.ppgtt_virt.add(pte_off) as *const u64 };
+        let previous = unsafe { core::ptr::read_volatile(pte_ptr) };
+        previous & super::GEN8_PAGE_PRESENT == 0
+            || previous & cache_policy_mask == entry_flags & cache_policy_mask
+    })
+}
+
+/// Validate one exact-page map, including any already-installed cache policy,
+/// without changing a leaf. HelioC uses this to approve its complete mapping
+/// bundle before publishing the first frame PTE.
+#[expect(dead_code, reason = "consumed by the sealed HelioC frame encoder")]
+fn direct_rcs_preflight_ppgtt_kernel_pages(
+    state: DirectRcsState,
+    gpu: u64,
+    pages: &[u64],
+) -> bool {
+    exact_ppgtt_phys_pages_are_valid(pages)
+        && direct_rcs_ppgtt_cache_policy_compatible(
+            state,
+            gpu,
+            pages.len(),
+            direct_rcs_ppgtt_pte_flags(),
+        )
+}
+
+/// Validate a contiguous ordinary-WB destination without changing a leaf.
+#[expect(dead_code, reason = "consumed by the sealed HelioC frame encoder")]
+fn direct_rcs_preflight_ppgtt_kernel_region(
+    state: DirectRcsState,
+    gpu: u64,
+    phys: u64,
+    len: usize,
+) -> bool {
+    len != 0
+        && gpu.is_multiple_of(4096)
+        && phys != 0
+        && phys.is_multiple_of(4096)
+        && direct_rcs_ppgtt_cache_policy_compatible(
+            state,
+            gpu,
+            len.div_ceil(4096),
+            direct_rcs_ppgtt_pte_flags(),
+        )
 }
 
 /// Map a contiguous GPU-VA range from an exact, noncontiguous list of 4 KiB
