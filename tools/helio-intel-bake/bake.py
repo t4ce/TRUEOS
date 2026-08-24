@@ -1672,7 +1672,8 @@ def collect_helioc_address_free_v7_templates(exec_dir: Path) -> dict[str, object
             raise SystemExit(f"HelioC V7 surface template is duplicated: {path.name}")
         repeated_key = (
             fields["kind"],
-            "compute" if fields["set_role"].startswith("compute_") else fields["resource_role"],
+            ("compute" if fields["set_role"].startswith("compute_") else "graphics")
+            if fields["kind"] == "descriptor_set_surface" else fields["resource_role"],
         )
         equivalence = (
             fields["descriptor_bytes"], fields["sampler_bytes"], fields["descriptor_layout"],

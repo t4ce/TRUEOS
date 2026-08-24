@@ -2085,7 +2085,7 @@ fn cloud_frame_submission(
     }
     let mut pending_slot = CLOUD_PENDING_SUBMISSION.lock();
     if let Some(pending) = pending_slot.as_ref() {
-        if pending.request != request || !observe_pending {
+        if !cloud_pending_request_matches(pending.request, request) || !observe_pending {
             return Err(VgpuError::Busy);
         }
         return advance_pending_cloud_submission(&mut pending_slot);
@@ -2173,6 +2173,15 @@ fn cloud_frame_submission(
             Err(VgpuError::DeviceLost)
         }
     }
+}
+
+/// A pending ticket belongs to one VMCALL identity. This deliberately covers
+/// the principal and every submitted handle, rather than merely the queue.
+fn cloud_pending_request_matches(
+    pending: CloudSubmissionRequest,
+    retry: CloudSubmissionRequest,
+) -> bool {
+    pending == retry
 }
 
 /// Start a Cloud frame only when the global native lane is idle. Direct C ABI
