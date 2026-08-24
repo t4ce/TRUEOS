@@ -234,6 +234,7 @@ pub const OP_BP_UI4_CONTEXT_MENU_EVENT_TAKE: u32 = 0x120; // arg0 window -> rc +
 pub const OP_BP_IMAGE_SOURCE_INFO: u32 = 0x121; // payload source name -> ImageSourceInfo
 pub const OP_BP_IMAGE_SOURCE_READ: u32 = 0x122; // arg0 offset,arg1 cap,payload source name -> bytes
 pub const OP_BP_UI4_SCENE_FRAME_SET_HIT_TESTABLE: u32 = 0x123; // arg0 window,arg1 enabled -> rc
+pub const OP_BP_LUMEN_TOOL_RESULT_SUBMIT: u32 = 0x151; // arg0 turn,payload tail then tool-role result -> rc
 pub const OP_BP_UI4_SCENE_FRAME_SET_ESCAPE_KEY_ACTION: u32 = 0x150; // arg0 window,arg1 Ui4FrameEscapeKeyAction -> rc
 pub const OP_BP_VMEDIA_IMAGE_DECODE_BEGIN: u32 = 0x142; // arg0 format,arg1 encoded bytes -> operation id/rc
 pub const OP_BP_VMEDIA_IMAGE_DECODE_WRITE: u32 = 0x143; // arg0 operation,arg1 offset,payload encoded chunk -> rc
@@ -817,6 +818,31 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                         arg0,
                         &tail[..tail_len],
                         prompt,
+                    ))
+                })
+                .unwrap_or(-3);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_LUMEN_TOOL_RESULT_SUBMIT => {
+            let rc = request_payload(vm_id, req_len)
+                .and_then(|payload| {
+                    let tail_len = u32::from_le_bytes(payload.get(..4)?.try_into().ok()?) as usize;
+                    if tail_len == 0 || tail_len > 2 {
+                        return None;
+                    }
+                    let tail_end = 4usize.checked_add(tail_len.checked_mul(4)?)?;
+                    let tail_bytes = payload.get(4..tail_end)?;
+                    let mut tail = [0u32; 2];
+                    for (index, chunk) in tail_bytes.chunks_exact(4).enumerate() {
+                        tail[index] = u32::from_le_bytes(chunk.try_into().ok()?);
+                    }
+                    let result = payload.get(tail_end..)?;
+                    Some(crate::r::lumen_service::tool_result_submit(
+                        vm_id,
+                        arg0,
+                        &tail[..tail_len],
+                        result,
                     ))
                 })
                 .unwrap_or(-3);

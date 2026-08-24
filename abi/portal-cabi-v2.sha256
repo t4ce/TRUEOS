@@ -184,4 +184,7 @@
 # The UI4 frame Escape-action setter is strictly additive.  It keeps the
 # default close-and-stop policy while allowing an individual frame to reserve
 # Escape for its own keyboard interaction.
-115df3ec3362680ada8397f255d7022c0dd78983b14537b03cbda4ac88a5e284
+# The Lumen tool-result submission call is strictly additive. It accepts only
+# a bounded result and the preceding assistant tail, which the kernel appends
+# as the pinned generic `tool` role before allowing one continuation.
+1579e96cfd55295e071660a4afaad98f3c0e098fd9b21116534bf7597d15b131

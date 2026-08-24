@@ -413,6 +413,13 @@ unsafe extern "C" {
         prompt_ptr: *const u8,
         prompt_len: usize,
     ) -> i32;
+    pub fn trueos_cabi_lumen_tool_result_submit(
+        turn: u64,
+        tail_ptr: *const u32,
+        tail_len: usize,
+        result_ptr: *const u8,
+        result_len: usize,
+    ) -> i32;
     pub fn trueos_cabi_lumen_status(out: *mut TrueosLumenStatus) -> i32;
     pub fn trueos_cabi_lumen_reply_read(out_ptr: *mut u8, out_cap: usize) -> isize;
     pub fn trueos_cabi_lumen_checkpoint_request() -> i32;

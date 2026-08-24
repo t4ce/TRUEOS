@@ -45,7 +45,7 @@ pub mod gfx {
 pub mod lumen {
     /// Current single-model intensive-test profile. Disable this one switch
     /// when boot-resident inference assets are no longer the desired policy.
-    pub const BOOT_RESIDENT_WARM_ENABLED: bool = false;
+    pub const BOOT_RESIDENT_WARM_ENABLED: bool = true;
 
     /// Let the compositor enter its steady service loop before model I/O and
     /// in-place Q8 packing begin on a background performance core.

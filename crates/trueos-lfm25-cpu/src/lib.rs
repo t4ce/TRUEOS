@@ -221,6 +221,12 @@ pub struct Lfm25Tokenizer {
     im_end: u32,
 }
 
+// The pinned GGUF template writes generic role names as ordinary text between
+// `<|im_start|>` and `<|im_end|>` markers. Keep the tool envelope literals
+// centralized so the token path and its contract test cannot drift apart.
+const TOOL_RESULT_ROLE: &str = "tool\n";
+const TOOL_RESULT_ASSISTANT: &str = "assistant\n";
+
 impl Lfm25Tokenizer {
     pub fn from_artifact(artifact: &[u8]) -> Result<Self, Error> {
         if artifact.len() < TOKENIZER_HEADER_BYTES || artifact[..8] != TOKENIZER_MAGIC {
@@ -437,6 +443,27 @@ impl Lfm25Tokenizer {
         tokens.extend(self.encode("\n")?);
         tokens.push(self.im_start);
         tokens.extend(self.encode("assistant\n")?);
+        Ok(tokens)
+    }
+
+    /// Exact pinned Liquid envelope for a tool result after an assistant reply.
+    ///
+    /// The caller must first consume the assistant reply terminator from its
+    /// reply tail, then append these tokens. This deliberately has no BOS and
+    /// never pretends that a tool result is another user message.
+    pub fn encode_tool_result_after_assistant(&self, result: &str) -> Result<Vec<u32>, Error> {
+        let mut tokens = Vec::new();
+        tokens
+            .try_reserve_exact(result.len().saturating_add(11))
+            .map_err(|_| Error::Allocation)?;
+        tokens.extend(self.encode("\n")?);
+        tokens.push(self.im_start);
+        tokens.extend(self.encode(TOOL_RESULT_ROLE)?);
+        tokens.extend(self.encode(result)?);
+        tokens.push(self.im_end);
+        tokens.extend(self.encode("\n")?);
+        tokens.push(self.im_start);
+        tokens.extend(self.encode(TOOL_RESULT_ASSISTANT)?);
         Ok(tokens)
     }
 
@@ -1460,6 +1487,12 @@ pub fn silu_mul_q30(gate_q30: i64, up_q30: i64) -> Result<i64, Error> {
 mod tests {
     use super::*;
     use alloc::vec;
+
+    #[test]
+    fn tool_result_role_envelope_matches_the_pinned_generic_chat_template() {
+        assert_eq!(TOOL_RESULT_ROLE, "tool\n");
+        assert_eq!(TOOL_RESULT_ASSISTANT, "assistant\n");
+    }
 
     fn synthetic_f32_sidecar() -> Vec<u8> {
         let mut artifact = vec![0u8; F32_SIDECAR_BYTES];
