@@ -27,6 +27,10 @@ const HFS_REGISTERS: [(&str, u16); 6] = [
     ("HFS6", PCI_CFG_HFS_6),
 ];
 
+const MEI_H_CSR: usize = 0x04;
+const MEI_ME_CSR_HA: usize = 0x0C;
+const MEI_STATUS_MAP_BYTES: usize = 0x10;
+
 pub(crate) fn append_dump(out: &mut String) {
     writeln!(out, "=== Platform Mining Hints ===").unwrap();
     writeln!(
@@ -221,6 +225,8 @@ fn append_csme_pci_snapshot(out: &mut String) {
     )
     .unwrap();
 
+    append_mei_mmio_status(out, dev, command);
+
     writeln!(out, "same_slot_functions:").unwrap();
     crate::pci::with_devices(|devices| {
         for sibling in devices
@@ -259,7 +265,7 @@ fn append_csme_pci_snapshot(out: &mut String) {
     }
     writeln!(
         out,
-        "csme_next_probe=status-only MEI BAR CSR snapshot; host/firmware data windows remain untouched"
+        "csme_next_probe=HBM/client enumeration only after an explicit MEI transport claim; not part of this observational TLB path"
     )
     .unwrap();
 }
@@ -280,6 +286,85 @@ fn append_bar0(out: &mut String, dev: PciDevice) {
         decoded
             .map(|base| alloc::format!("0x{:016X}", base))
             .unwrap_or_else(|| String::from("-"))
+    )
+    .unwrap();
+}
+
+fn append_mei_mmio_status(out: &mut String, dev: PciDevice, command: u16) {
+    writeln!(out, "mei_mmio_status:").unwrap();
+    writeln!(
+        out,
+        "  policy=status-only reads at +0x04/+0x0C; +0x00 host-write and +0x08 firmware-read data windows intentionally untouched"
+    )
+    .unwrap();
+
+    let (bar_lo, _) = crate::pci::read_bar_raw(dev.bus, dev.slot, dev.function, 0);
+    if bar_lo & 1 != 0 {
+        writeln!(out, "  state=skipped reason=BAR0-is-io").unwrap();
+        return;
+    }
+    if command & PCI_COMMAND_MEMORY_SPACE == 0 {
+        writeln!(out, "  state=skipped reason=PCI-memory-space-disabled").unwrap();
+        return;
+    }
+    let Some(bar0) = dev.bar_address(0) else {
+        writeln!(out, "  state=skipped reason=BAR0-unavailable").unwrap();
+        return;
+    };
+    if bar0 == 0 {
+        writeln!(out, "  state=skipped reason=BAR0-zero").unwrap();
+        return;
+    }
+
+    let mapped = match crate::pci::mmio::map_mmio_region_exact(bar0, MEI_STATUS_MAP_BYTES) {
+        Ok(mapped) => mapped,
+        Err(error) => {
+            writeln!(out, "  state=map-failed detail={:?}", error).unwrap();
+            return;
+        }
+    };
+
+    let h_csr = unsafe {
+        core::ptr::read_volatile(mapped.as_ptr().add(MEI_H_CSR) as *const u32)
+    };
+    let me_csr = unsafe {
+        core::ptr::read_volatile(mapped.as_ptr().add(MEI_ME_CSR_HA) as *const u32)
+    };
+
+    writeln!(out, "  H_CSR[0x04]=0x{:08X}", h_csr).unwrap();
+    append_mei_csr_decode(out, "host", h_csr, false);
+    writeln!(out, "  ME_CSR_HA[0x0C]=0x{:08X}", me_csr).unwrap();
+    append_mei_csr_decode(out, "firmware", me_csr, true);
+}
+
+fn append_mei_csr_decode(out: &mut String, side: &str, raw: u32, firmware: bool) {
+    let depth = (raw >> 24) & 0xFF;
+    let write_ptr = (raw >> 16) & 0xFF;
+    let read_ptr = (raw >> 8) & 0xFF;
+    let reset = raw & 0x10 != 0;
+    let ready = raw & 0x08 != 0;
+    let interrupt_generate = raw & 0x04 != 0;
+    let interrupt_status = raw & 0x02 != 0;
+    let interrupt_enable = raw & 0x01 != 0;
+    writeln!(
+        out,
+        "    {} depth={} write_ptr={} read_ptr={} reset={} ready={} int_gen={} int_status={} int_enable={}{}",
+        side,
+        depth,
+        write_ptr,
+        read_ptr,
+        yes_no(reset),
+        yes_no(ready),
+        yes_no(interrupt_generate),
+        yes_no(interrupt_status),
+        yes_no(interrupt_enable),
+        if firmware && raw & 0x40 != 0 {
+            " pg-isolation-capable=yes"
+        } else if firmware {
+            " pg-isolation-capable=no"
+        } else {
+            ""
+        }
     )
     .unwrap();
 }
