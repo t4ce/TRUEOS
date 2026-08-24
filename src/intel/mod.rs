@@ -406,6 +406,22 @@ pub(crate) fn gen12_gt_state_snapshot() -> Option<self::gt_state::Gen12GtStateSn
         .map(self::gt_state::read)
 }
 
+pub(crate) fn global_gt_power_mode_marker() -> self::gt_state::Gen12GlobalGtPowerMarker {
+    self::gt_state::global_gt_power_marker()
+}
+
+pub(crate) fn toggle_global_gt_power_mode(
+) -> Result<self::gt_state::Gen12GlobalGtPowerMarker, &'static str> {
+    let dev = claimed_device().ok_or("intel-display-device-unclaimed")?;
+    if !device_uses_gen12_integrated_pat(dev.device_id) {
+        return Err("unsupported-intel-gt-generation");
+    }
+    if !physical_gt_ready(dev) {
+        return Err("physical-gt-not-ready");
+    }
+    self::gt_state::toggle_global_gt_power_mode(dev)
+}
+
 pub(crate) fn begin_lumen_gt_boost() -> Option<self::gt_state::Gen12LumenGtBoost> {
     let dev = claimed_device()?;
     if !device_uses_gen12_integrated_pat(dev.device_id)

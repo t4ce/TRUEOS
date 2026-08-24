@@ -1371,8 +1371,49 @@ static INPUT_BROKER: Mutex<InputBroker> = Mutex::new(InputBroker::new());
 static OWNER_QUEUES: Mutex<Vec<OwnerQueue, MAX_OWNER_QUEUES>> = Mutex::new(Vec::new());
 static SLOT4_VISUAL_CHANGE: Signal<crate::wait::EmbassySpinRawMutex, ()> = Signal::new();
 
+fn capture_gt_power_mode_hotkey(
+    event: &crate::r::keyboard::TrueosKeyboardOutputEvent,
+) -> super::GlobalKeyboardDisposition {
+    if event.kind != crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY
+        || event.key_code != crate::r::keyboard::KEYBOARD_KEY_F12
+    {
+        return super::GlobalKeyboardDisposition::PassThrough;
+    }
+
+    if event.flags & crate::r::keyboard::KEYBOARD_OUTPUT_FLAG_PRESS != 0 {
+        match crate::intel::toggle_global_gt_power_mode() {
+            Ok(marker) => crate::log_info!(target: "ui4";
+                "ui4/input: F12 global GT power mode accepted marker={} active={} requested_mhz={} actual_mhz={} rp0_mhz={} spirit_delivery=async-engine-marker key_delivery=consumed\n",
+                marker.generation,
+                marker.active as u8,
+                marker.requested_mhz,
+                marker.actual_mhz,
+                marker.rp0_mhz,
+            ),
+            Err(reason) => crate::log_warn!(target: "ui4";
+                "ui4/input: F12 global GT power mode rejected reason={} spirit_delivery=none key_delivery=consumed\n",
+                reason,
+            ),
+        }
+    }
+    // Consume both edges so applications never observe half of the global
+    // function-key gesture.
+    super::GlobalKeyboardDisposition::Consume
+}
+
 #[trueos_executor::task]
 pub(crate) async fn ui4_input_service_task(ap1_spawner: crate::workers::WorkerSpawner) {
+    let power_mode_hook =
+        super::register_global_keyboard_hook(u8::MAX, capture_gt_power_mode_hotkey);
+    match power_mode_hook {
+        Ok(_) => crate::log_info!(target: "ui4";
+            "ui4/input: global hotkey online key=F12 action=toggle-gt-power-mode delivery=engine-confirmed-marker->spirit-async key_delivery=consumed\n"
+        ),
+        Err(error) => crate::log_warn!(target: "ui4";
+            "ui4/input: global hotkey unavailable key=F12 error={:?}\n",
+            error,
+        ),
+    }
     let launcher_spawner = crate::workers::pick_background_spawner().unwrap_or(ap1_spawner);
     match ui4_desktop_shell_launcher_task() {
         Ok(token) => {

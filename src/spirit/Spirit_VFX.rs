@@ -1021,6 +1021,7 @@ static MOVE_PORTAL_ACTIVE: AtomicBool = AtomicBool::new(false);
 static MOVE_PORTAL_STARTED_MS: AtomicU64 = AtomicU64::new(0);
 
 const GLOBAL_AURA_HALF_CYCLE_MS: u64 = 1_000;
+const POWER_MODE_VFX_TRANSITION_MS: u64 = 650;
 const IDLE_VFX_TRANSITION_MS: u64 = 1_000;
 const REASONING_VFX_TRANSITION_MS: u64 = 2_000;
 const REASONING_VFX_FRAME_SECONDS: f32 = 1.0 / 30.0;
@@ -1151,6 +1152,37 @@ impl ReasoningVfxState {
 static IDLE_VFX_TRANSITION: Mutex<SpiritVfxTransition> = Mutex::new(SpiritVfxTransition::INACTIVE);
 static REASONING_VFX_STATE: Mutex<ReasoningVfxState> = Mutex::new(ReasoningVfxState::INACTIVE);
 static WINDOW_BACKGROUND_VFX: Mutex<Option<SpiritVfxBackgroundEffect>> = Mutex::new(None);
+static POWER_MODE_VFX_TRANSITION: Mutex<SpiritVfxTransition> =
+    Mutex::new(SpiritVfxTransition::INACTIVE);
+static POWER_MODE_MARKER_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+fn receive_power_mode_engine_marker() {
+    let marker = crate::intel::global_gt_power_mode_marker();
+    if marker.generation == 0
+        || POWER_MODE_MARKER_GENERATION.swap(marker.generation, Ordering::AcqRel)
+            == marker.generation
+    {
+        return;
+    }
+    let changed = POWER_MODE_VFX_TRANSITION.lock().set_active(
+        marker.active,
+        Instant::now().as_millis(),
+        POWER_MODE_VFX_TRANSITION_MS,
+    );
+    if changed {
+        CONTROL_PANEL_REVISION.fetch_add(1, Ordering::AcqRel);
+    }
+    crate::log_info!(target: "spirit";
+        "trueos-spirit: GT power marker received marker={} active={} requested_mhz={} actual_mhz={} rp0_mhz={} changed={} source=intel-engine-confirmed async=1 hierarchy=power-mode>reasoning>movement>window>idle>panel vfx={}\n",
+        marker.generation,
+        marker.active as u8,
+        marker.requested_mhz,
+        marker.actual_mhz,
+        marker.rp0_mhz,
+        changed as u8,
+        SpiritVfxBackgroundEffect::SpeedLines.ui_name(),
+    );
+}
 
 pub(crate) fn control_panel_snapshot() -> (u64, SpiritVfxControlPanel) {
     let panel = CONTROL_PANEL
@@ -1288,6 +1320,9 @@ pub(crate) fn set_edge_fade_pixels(pixels: f32) -> Result<u64, SpiritVfxControlE
 }
 
 pub(super) fn gpu_snapshot() -> SpiritVfxGpuSnapshot {
+    // Spirit consumes only the GT-owned, readback-confirmed marker. The UI4
+    // hotkey never writes her VFX state directly.
+    receive_power_mode_engine_marker();
     let (revision, panel) = control_panel_snapshot();
     let now = Instant::now();
     let now_ms = now.as_millis();
@@ -1302,7 +1337,12 @@ pub(super) fn gpu_snapshot() -> SpiritVfxGpuSnapshot {
     let idle_visible = idle_transition.active || idle_level > 0.0;
     let window_background = *WINDOW_BACKGROUND_VFX.lock();
     let move_portal_active = MOVE_PORTAL_ACTIVE.load(Ordering::Acquire);
-    let (background, background_phase_override) = if reasoning_visible {
+    let power_mode_transition = *POWER_MODE_VFX_TRANSITION.lock();
+    let power_mode_level = power_mode_transition.level_at(now_ms);
+    let power_mode_visible = power_mode_transition.active || power_mode_level > 0.0;
+    let (background, background_phase_override) = if power_mode_visible {
+        (power_mode_background(power_mode_level), None)
+    } else if reasoning_visible {
         (reasoning_background(reasoning_level, reasoning_speed), Some(reasoning_phase))
     } else if move_portal_active {
         let elapsed_ms = now
@@ -1370,6 +1410,10 @@ fn reasoning_background(level: f32, speed: f32) -> SpiritVfxAlphaBackground {
     background.intensity = REASONING_VFX_INTENSITY_SPAWN
         + (REASONING_VFX_INTENSITY_TARGET - REASONING_VFX_INTENSITY_SPAWN) * level;
     background
+}
+
+fn power_mode_background(level: f32) -> SpiritVfxAlphaBackground {
+    transitioned_background(SpiritVfxBackgroundEffect::SpeedLines, level, [1.0, 3.25, 3.4])
 }
 
 fn idle_clock_background(level: f32) -> SpiritVfxAlphaBackground {

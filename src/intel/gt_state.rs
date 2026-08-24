@@ -5,6 +5,7 @@
 // retain their firmware-supplied lower-half entries unchanged.
 
 use core::sync::atomic::{AtomicBool, Ordering};
+use spin::Mutex;
 
 const GEN12_GLOBAL_MOCS_BASE: usize = 0x4000;
 const GEN12_GLOBAL_MOCS_ENTRIES: usize = 64;
@@ -30,6 +31,41 @@ const GEN12_RP0_CAP_MASK: u32 = 0xFF;
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const GEN12_GT0_PERF_LIMIT_REASONS_MASK: u32 = 0x0DE3;
 static GEN12_LUMEN_GT_BOOST_ACTIVE: AtomicBool = AtomicBool::new(false);
+static GEN12_LUMEN_GT_PREVIOUS_REQUEST: core::sync::atomic::AtomicU32 =
+    core::sync::atomic::AtomicU32::new(0);
+
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct Gen12GlobalGtPowerMarker {
+    pub(crate) generation: u64,
+    pub(crate) active: bool,
+    pub(crate) requested_mhz: u32,
+    pub(crate) actual_mhz: u32,
+    pub(crate) rp0_mhz: u32,
+}
+
+#[derive(Copy, Clone, Debug, Default)]
+struct Gen12GlobalGtPowerState {
+    active: bool,
+    generation: u64,
+    saved_request: u32,
+    boost_ratio: u32,
+    marker: Gen12GlobalGtPowerMarker,
+}
+
+static GEN12_GLOBAL_GT_POWER_STATE: Mutex<Gen12GlobalGtPowerState> =
+    Mutex::new(Gen12GlobalGtPowerState {
+        active: false,
+        generation: 0,
+        saved_request: 0,
+        boost_ratio: 0,
+        marker: Gen12GlobalGtPowerMarker {
+            generation: 0,
+            active: false,
+            requested_mhz: 0,
+            actual_mhz: 0,
+            rp0_mhz: 0,
+        },
+    });
 
 const fn expected_mocs_control_table() -> [u32; GEN12_GLOBAL_MOCS_ENTRIES] {
     let mut table = [GEN12_MOCS_DEFAULT_CONTROL; GEN12_GLOBAL_MOCS_ENTRIES];
@@ -190,7 +226,12 @@ impl Drop for Gen12LumenGtBoost {
         let observed = super::mmio_read(self.dev, GEN12_RPNSWREQ);
         let observed_ratio =
             (observed & GEN9_SW_REQ_UNSLICE_RATIO_MASK) >> GEN9_SW_REQ_UNSLICE_RATIO_SHIFT;
-        let restored = observed_ratio == self.boost_ratio;
+        // Serialize the restore against an F12 transition. A global enable
+        // that arrives here either observes the restored predecessor or wins
+        // first and prevents this lower-priority scope from restoring it.
+        let global_power_state = GEN12_GLOBAL_GT_POWER_STATE.lock();
+        let global_power_active = global_power_state.active;
+        let restored = !global_power_active && observed_ratio == self.boost_ratio;
         let final_request = if restored {
             (observed & !GEN9_SW_REQ_UNSLICE_RATIO_MASK)
                 | (self.previous_request & GEN9_SW_REQ_UNSLICE_RATIO_MASK)
@@ -206,7 +247,7 @@ impl Drop for Gen12LumenGtBoost {
             >> GEN9_SW_REQ_UNSLICE_RATIO_SHIFT;
         crate::log_info!(
             target: "gpgpu";
-            "intel/lumen-gt-boost: stage=end restored={} previous_ratio={} previous_mhz={} boost_ratio={} boost_mhz={} observed_ratio={} final_ratio={} final_mhz={} ownership=turn-scoped conflict_policy=preserve-newer-request\n",
+            "intel/lumen-gt-boost: stage=end restored={} previous_ratio={} previous_mhz={} boost_ratio={} boost_mhz={} observed_ratio={} final_ratio={} final_mhz={} global_power_active={} ownership=turn-scoped conflict_policy=preserve-newer-request+defer-to-global-power\n",
             restored as u8,
             self.previous_ratio,
             ratio_to_mhz(self.previous_ratio),
@@ -215,8 +256,11 @@ impl Drop for Gen12LumenGtBoost {
             observed_ratio,
             final_ratio,
             ratio_to_mhz(final_ratio),
+            global_power_active as u8,
         );
+        drop(global_power_state);
         self.active = false;
+        GEN12_LUMEN_GT_PREVIOUS_REQUEST.store(0, Ordering::Release);
         GEN12_LUMEN_GT_BOOST_ACTIVE.store(false, Ordering::Release);
     }
 }
@@ -388,7 +432,101 @@ const _: () = {
     assert!(ratio_to_mhz(rp_cap_50mhz_to_request_ratio(31)) == 1_550);
 };
 
+pub(super) fn global_gt_power_marker() -> Gen12GlobalGtPowerMarker {
+    GEN12_GLOBAL_GT_POWER_STATE.lock().marker
+}
+
+pub(super) fn toggle_global_gt_power_mode(
+    dev: super::Dev,
+) -> Result<Gen12GlobalGtPowerMarker, &'static str> {
+    if !gt_state_registers_available(dev) {
+        return Err("gt-frequency-registers-unavailable");
+    }
+
+    let state_cap = super::mmio_read(dev, GEN12_RP_STATE_CAP);
+    let rp0_ratio = rp_cap_50mhz_to_request_ratio(state_cap & GEN12_RP0_CAP_MASK);
+    if rp0_ratio == 0 || rp0_ratio > GEN12_CAGF_MASK {
+        return Err("invalid-fused-rp0");
+    }
+
+    let mut state = GEN12_GLOBAL_GT_POWER_STATE.lock();
+    let observed_before = super::mmio_read(dev, GEN12_RPNSWREQ);
+    let observed_before_ratio =
+        (observed_before & GEN9_SW_REQ_UNSLICE_RATIO_MASK) >> GEN9_SW_REQ_UNSLICE_RATIO_SHIFT;
+    let next_active = !state.active;
+    let lumen_active = GEN12_LUMEN_GT_BOOST_ACTIVE.load(Ordering::Acquire);
+    let restore_owned_request =
+        !next_active && !lumen_active && observed_before_ratio == state.boost_ratio;
+
+    if next_active {
+        // If Lumen already owns the temporary RP0 request, remember the
+        // request below it. The global mode then survives Lumen's scope and
+        // can still restore the true predecessor when F12 turns it off.
+        state.saved_request = if lumen_active {
+            GEN12_LUMEN_GT_PREVIOUS_REQUEST.load(Ordering::Acquire)
+        } else {
+            observed_before
+        };
+        state.boost_ratio = rp0_ratio;
+        let boost_request = (observed_before & !GEN9_SW_REQ_UNSLICE_RATIO_MASK)
+            | (rp0_ratio << GEN9_SW_REQ_UNSLICE_RATIO_SHIFT);
+        super::mmio_write(dev, GEN12_RPNSWREQ, boost_request);
+    } else if restore_owned_request {
+        // Restore only the ratio field owned by this mode. Preserve all other
+        // resident firmware/request bits exactly as observed at toggle-off.
+        let restore_request = (observed_before & !GEN9_SW_REQ_UNSLICE_RATIO_MASK)
+            | (state.saved_request & GEN9_SW_REQ_UNSLICE_RATIO_MASK);
+        super::mmio_write(dev, GEN12_RPNSWREQ, restore_request);
+    }
+    core::sync::atomic::compiler_fence(Ordering::SeqCst);
+
+    let observed_after = super::mmio_read(dev, GEN12_RPNSWREQ);
+    let observed_after_ratio =
+        (observed_after & GEN9_SW_REQ_UNSLICE_RATIO_MASK) >> GEN9_SW_REQ_UNSLICE_RATIO_SHIFT;
+    let expected_after_ratio = if next_active {
+        rp0_ratio
+    } else if restore_owned_request {
+        (state.saved_request & GEN9_SW_REQ_UNSLICE_RATIO_MASK) >> GEN9_SW_REQ_UNSLICE_RATIO_SHIFT
+    } else {
+        observed_before_ratio
+    };
+    if observed_after_ratio != expected_after_ratio {
+        return Err(if next_active {
+            "rp0-request-readback-mismatch"
+        } else {
+            "restore-request-readback-mismatch"
+        });
+    }
+
+    state.active = next_active;
+    state.generation = state.generation.wrapping_add(1).max(1);
+    state.marker = Gen12GlobalGtPowerMarker {
+        generation: state.generation,
+        active: state.active,
+        requested_mhz: ratio_to_mhz(observed_after_ratio),
+        actual_mhz: ratio_to_mhz(actual_ratio(dev)),
+        rp0_mhz: ratio_to_mhz(rp0_ratio),
+    };
+    let marker = state.marker;
+    crate::log_info!(
+        target: "render";
+        "intel/gt-power-mode: marker={} active={} accepted=1 requested_mhz={} actual_mhz={} rp0_mhz={} previous_mhz={} lumen_active={} ownership=global-ui4-f12 pcoded-safety=retained spirit_signal=published-after-request-readback\n",
+        marker.generation,
+        marker.active as u8,
+        marker.requested_mhz,
+        marker.actual_mhz,
+        marker.rp0_mhz,
+        ratio_to_mhz(observed_before_ratio),
+        lumen_active as u8,
+    );
+    Ok(marker)
+}
+
 pub(super) fn begin_lumen_gt_boost(dev: super::Dev) -> Option<Gen12LumenGtBoost> {
+    let global_power_state = GEN12_GLOBAL_GT_POWER_STATE.lock();
+    if global_power_state.active {
+        return None;
+    }
     if !gt_state_registers_available(dev)
         || GEN12_LUMEN_GT_BOOST_ACTIVE
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
@@ -398,11 +536,13 @@ pub(super) fn begin_lumen_gt_boost(dev: super::Dev) -> Option<Gen12LumenGtBoost>
     }
 
     let previous_request = super::mmio_read(dev, GEN12_RPNSWREQ);
+    GEN12_LUMEN_GT_PREVIOUS_REQUEST.store(previous_request, Ordering::Release);
     let previous_ratio =
         (previous_request & GEN9_SW_REQ_UNSLICE_RATIO_MASK) >> GEN9_SW_REQ_UNSLICE_RATIO_SHIFT;
     let state_cap = super::mmio_read(dev, GEN12_RP_STATE_CAP);
     let rp0_ratio = rp_cap_50mhz_to_request_ratio(state_cap & GEN12_RP0_CAP_MASK);
     if rp0_ratio == 0 || rp0_ratio > GEN12_CAGF_MASK {
+        GEN12_LUMEN_GT_PREVIOUS_REQUEST.store(0, Ordering::Release);
         GEN12_LUMEN_GT_BOOST_ACTIVE.store(false, Ordering::Release);
         return None;
     }
@@ -415,6 +555,7 @@ pub(super) fn begin_lumen_gt_boost(dev: super::Dev) -> Option<Gen12LumenGtBoost>
     let observed_ratio =
         (observed_request & GEN9_SW_REQ_UNSLICE_RATIO_MASK) >> GEN9_SW_REQ_UNSLICE_RATIO_SHIFT;
     if observed_ratio != boost_ratio {
+        GEN12_LUMEN_GT_PREVIOUS_REQUEST.store(0, Ordering::Release);
         GEN12_LUMEN_GT_BOOST_ACTIVE.store(false, Ordering::Release);
         crate::log_warn!(
             target: "gpgpu";
@@ -425,6 +566,7 @@ pub(super) fn begin_lumen_gt_boost(dev: super::Dev) -> Option<Gen12LumenGtBoost>
         );
         return None;
     }
+    drop(global_power_state);
     crate::log_info!(
         target: "gpgpu";
         "intel/lumen-gt-boost: stage=begin accepted=1 previous_ratio={} previous_mhz={} requested_ratio={} requested_mhz={} actual_ratio={} actual_mhz={} rp0_policy=turn-scoped restore=on-drop\n",
