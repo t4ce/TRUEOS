@@ -34,6 +34,7 @@ pub(crate) mod tlb;
 #[path = "tlb.rs"]
 pub(crate) mod tlb_core;
 pub(crate) mod tlb_helper;
+pub(crate) mod tlb_mei_probe;
 pub(crate) mod tlb_nct_probe;
 pub(crate) mod tlb_platform;
 #[path = "tlb_smbios_wrapper.rs"]

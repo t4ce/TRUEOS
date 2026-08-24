@@ -31,9 +31,20 @@ pub(crate) fn try_parse(
             }
             ParseOutcome::Handled
         }
+        Some("mei") => {
+            let _ = args.next();
+            match (args.next(), args.next()) {
+                (Some("probe"), None) => {
+                    multiline(io, &super::tlb_mei_probe::build_probe_text());
+                }
+                _ => line(io, "tlb: usage `tlb mei probe`"),
+            }
+            ParseOutcome::Handled
+        }
         None => {
             let outcome = super::tlb_core::try_parse(spawner, io, args);
             line(io, "nct       Verify NCT5585D Super-I/O identity (`tlb nct probe`)");
+            line(io, "mei       Verify reversible MEI status-window access (`tlb mei probe`)");
             outcome
         }
         _ => super::tlb_core::try_parse(spawner, io, args),
