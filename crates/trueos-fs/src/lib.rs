@@ -305,6 +305,33 @@ pub struct IndexCheckpoint {
     pub entries: Vec<(Vec<u8>, LogKind, u64)>,
 }
 
+/// Result of reading the checkpoint selected by the superblock.
+///
+/// Recovery normally treats an invalid checkpoint like no checkpoint and falls
+/// back to replay.  Keeping those states distinct lets mount diagnostics say
+/// why a supposedly fast checkpoint path was not used.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum IndexCheckpointRead {
+    Absent,
+    Invalid,
+    Valid(IndexCheckpoint),
+}
+
+/// Work observed while replaying one log range.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ReplayLogStats {
+    /// Physical log blocks successfully traversed from the requested start.
+    pub physical_blocks: u64,
+    /// Non-checkpoint committed records delivered to the caller.
+    pub logical_records: u64,
+    /// Committed checkpoint records crossed while advancing through the range.
+    pub checkpoint_records: u64,
+    /// Whether traversal reached the requested end position.
+    pub reached_end: bool,
+    /// Relative log position where traversal stopped.
+    pub stop_rel_blocks: u64,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RawLogRecord {
     pub entry_lba: u64,
@@ -666,10 +693,10 @@ async fn write_superblock_to_disk<D: BlockIo>(
 ///
 /// Returns `Ok(None)` if no checkpoint is recorded or if the referenced record
 /// is invalid (best-effort robustness for torn superblock updates).
-pub async fn read_index_checkpoint<D: BlockIo>(
+pub async fn read_index_checkpoint_with_status<D: BlockIo>(
     dev: &D,
     params: &FsParams,
-) -> Result<Option<IndexCheckpoint>, FsError<D::Error>> {
+) -> Result<IndexCheckpointRead, FsError<D::Error>> {
     let bs = dev.block_size();
     if bs == 0 {
         return Err(FsError::InvalidParam);
@@ -679,22 +706,22 @@ pub async fn read_index_checkpoint<D: BlockIo>(
         return Err(FsError::Corrupted);
     };
     if sb.checkpoint_rel_blocks == 0 {
-        return Ok(None);
+        return Ok(IndexCheckpointRead::Absent);
     }
 
     let entry_lba = params.data_lba.saturating_add(sb.checkpoint_rel_blocks);
     let hdr_block = read_one_block(dev, entry_lba).await?;
     let Some(hdr) = LogHeader::decode_from_block(&hdr_block) else {
-        return Ok(None);
+        return Ok(IndexCheckpointRead::Invalid);
     };
     if !hdr.committed || hdr.kind != LogKind::IndexCheckpoint {
-        return Ok(None);
+        return Ok(IndexCheckpointRead::Invalid);
     }
     if hdr.name_len != 0 {
-        return Ok(None);
+        return Ok(IndexCheckpointRead::Invalid);
     }
     if hdr.data_len < 8 {
-        return Ok(None);
+        return Ok(IndexCheckpointRead::Invalid);
     }
 
     let payload_len = hdr.data_len as usize;
@@ -702,7 +729,21 @@ pub async fn read_index_checkpoint<D: BlockIo>(
     let mut payload = vec![0u8; payload_len];
     read_exact_bytes(dev, payload_lba, 0, &mut payload).await?;
 
-    Ok(decode_index_checkpoint_payload(&payload))
+    Ok(match decode_index_checkpoint_payload(&payload) {
+        Some(checkpoint) => IndexCheckpointRead::Valid(checkpoint),
+        None => IndexCheckpointRead::Invalid,
+    })
+}
+
+/// Read the latest checkpoint, treating an invalid pointed-to record as absent.
+pub async fn read_index_checkpoint<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+) -> Result<Option<IndexCheckpoint>, FsError<D::Error>> {
+    Ok(match read_index_checkpoint_with_status(dev, params).await? {
+        IndexCheckpointRead::Valid(checkpoint) => Some(checkpoint),
+        IndexCheckpointRead::Absent | IndexCheckpointRead::Invalid => None,
+    })
 }
 
 /// Write a new index checkpoint record and update the superblock's
@@ -809,13 +850,13 @@ pub async fn write_index_checkpoint<D: BlockIo>(
 /// for each committed index-affecting record.
 ///
 /// Checkpoint records are skipped.
-pub async fn replay_log_range<D: BlockIo>(
+pub async fn replay_log_range_with_stats<D: BlockIo>(
     dev: &D,
     params: &FsParams,
     start_rel_blocks: u64,
     end_rel_blocks: u64,
     mut apply: impl FnMut(LogKind, Vec<u8>, Vec<u8>, u64),
-) -> Result<(), FsError<D::Error>> {
+) -> Result<ReplayLogStats, FsError<D::Error>> {
     let bs = dev.block_size();
     if bs == 0 {
         return Err(FsError::InvalidParam);
@@ -823,6 +864,8 @@ pub async fn replay_log_range<D: BlockIo>(
 
     let mut lba = params.data_lba.saturating_add(start_rel_blocks);
     let end_lba = params.data_lba.saturating_add(end_rel_blocks);
+    let mut logical_records = 0u64;
+    let mut checkpoint_records = 0u64;
 
     while lba < end_lba {
         let hdr_block = read_one_block(dev, lba).await?;
@@ -846,6 +889,7 @@ pub async fn replay_log_range<D: BlockIo>(
             .saturating_add(data_blocks as u64);
 
         if hdr.kind == LogKind::IndexCheckpoint {
+            checkpoint_records = checkpoint_records.saturating_add(1);
             lba = lba.saturating_add(blocks);
             continue;
         }
@@ -860,11 +904,32 @@ pub async fn replay_log_range<D: BlockIo>(
             read_exact_bytes(dev, data_lba, 0, data.as_mut_slice()).await?;
         }
         apply(hdr.kind, name_bytes, data, lba);
+        logical_records = logical_records.saturating_add(1);
 
         lba = lba.saturating_add(blocks);
     }
 
-    Ok(())
+    Ok(ReplayLogStats {
+        physical_blocks: lba
+            .saturating_sub(params.data_lba.saturating_add(start_rel_blocks)),
+        logical_records,
+        checkpoint_records,
+        reached_end: lba == end_lba,
+        stop_rel_blocks: lba.saturating_sub(params.data_lba),
+    })
+}
+
+/// Replay a log range while preserving the original unit-result API.
+pub async fn replay_log_range<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    start_rel_blocks: u64,
+    end_rel_blocks: u64,
+    apply: impl FnMut(LogKind, Vec<u8>, Vec<u8>, u64),
+) -> Result<(), FsError<D::Error>> {
+    replay_log_range_with_stats(dev, params, start_rel_blocks, end_rel_blocks, apply)
+        .await
+        .map(|_| ())
 }
 
 /// Naively scan the append-only log as physical records.

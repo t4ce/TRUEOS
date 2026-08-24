@@ -130,6 +130,13 @@ pub fn request_mount_root(disk: block::DeviceHandle) {
         let _ = q.push(disk);
     }
 
+    crate::log_info!(target: "trueosfs";
+        "trueosfs: diag phase=mount-request disk={} blocks={} block_size={} user_visible={}\n",
+        disk.id().raw(),
+        disk.info().block_count,
+        disk.info().block_size,
+        disk.info().user_visible,
+    );
     MOUNT_REQUESTED.store(true, Ordering::Release);
 }
 
@@ -150,7 +157,10 @@ async fn warm_index_async(disk: block::DeviceHandle) {
         _ => return,
     };
     if let Err(e) = ensure_index_async(disk, &placement).await {
-        crate::log!("trueosfs: warm_index error {:?}\n", e);
+        crate::log_info!(target: "trueosfs";
+            "trueosfs: diag phase=index-warm-error disk={} err={:?}\n",
+            disk.id().raw(), e
+        );
     }
 }
 
@@ -170,15 +180,24 @@ pub async fn mount_service_task() {
                 }
 
                 for disk in local.iter().copied() {
+                    crate::log_info!(target: "trueosfs";
+                        "trueosfs: diag phase=mount-dequeue disk={} batch={}\n",
+                        disk.id().raw(), local.len()
+                    );
                     // Best-effort: only log when we actually mount or error.
                     match mount_root_async(disk).await {
                         Ok(Some(disk_id)) => {
-                            crate::log!("trueosfs: mounted root disk_id={}\n", disk_id.raw());
+                            crate::log_info!(target: "trueosfs";
+                                "trueosfs: diag phase=mount-complete disk={}\n", disk_id.raw()
+                            );
                             request_warm_index(disk_id);
                         }
                         Ok(None) => {}
                         Err(e) => {
-                            crate::log!("trueosfs: mount error {:?}\n", e);
+                            crate::log_info!(target: "trueosfs";
+                                "trueosfs: diag phase=mount-error disk={} err={:?}\n",
+                                disk.id().raw(), e
+                            );
                         }
                     }
                     trueosfs_boot_work_yield().await;
@@ -205,6 +224,10 @@ pub async fn index_service_task() {
                 }
 
                 for disk in local.iter().copied() {
+                    crate::log_info!(target: "trueosfs";
+                        "trueosfs: diag phase=index-dequeue disk={} batch={}\n",
+                        disk.id().raw(), local.len()
+                    );
                     warm_index_async(disk).await;
                     Timer::after(EmbassyDuration::from_millis(1)).await;
                 }
@@ -650,9 +673,35 @@ pub async fn mount_root_async(
         return Err(block::Error::InvalidParam);
     }
 
-    let Some(placement) = locate_async(disk).await? else {
+    let locate_started_ms = trueosfs_trace_now_ms();
+    crate::log_info!(target: "trueosfs";
+        "trueosfs: diag phase=locate-start disk={}\n", disk.id().raw()
+    );
+    let located = locate_async(disk).await;
+    let locate_elapsed_ms = trueosfs_trace_now_ms().saturating_sub(locate_started_ms);
+    let located = match located {
+        Ok(located) => located,
+        Err(e) => {
+            crate::log_info!(target: "trueosfs";
+                "trueosfs: diag phase=locate-error disk={} elapsed_ms={} err={:?}\n",
+                disk.id().raw(), locate_elapsed_ms, e
+            );
+            return Err(e);
+        }
+    };
+    let Some(placement) = located else {
+        crate::log_info!(target: "trueosfs";
+            "trueosfs: diag phase=locate-miss disk={} elapsed_ms={}\n",
+            disk.id().raw(), locate_elapsed_ms
+        );
         return Ok(None);
     };
+
+    crate::log_info!(target: "trueosfs";
+        "trueosfs: diag phase=locate-found disk={} elapsed_ms={} super_lba={} data_lba={} data_end={:?} bootable={}\n",
+        disk.id().raw(), locate_elapsed_ms, placement.super_lba, placement.data_lba,
+        placement.data_end_lba_exclusive, placement.bootable
+    );
 
     let disk_id = disk.id();
 
@@ -739,6 +788,10 @@ fn register_root_mount(
     file_record_cache_invalidate_disk(disk_id);
 
     crate::r::readiness::set(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED);
+    crate::log_info!(target: "trueosfs";
+        "trueosfs: diag phase=root-mounted-published disk={} seq={} cache_gen={} super_lba={} data_lba={}\n",
+        disk_id.raw(), seq, cache_gen, placement.super_lba, placement.data_lba
+    );
 }
 
 fn unregister_root_mount(disk_id: block::DiscId) {
@@ -1034,27 +1087,36 @@ async fn maybe_checkpoint_built_index_async(
 ) {
     let tail_blocks = end_rel_blocks.saturating_sub(replay_from_rel_blocks);
     if had_checkpoint && tail_blocks < TRUEOSFS_CHECKPOINT_MIN_TAIL_BLOCKS {
+        crate::log_info!(target: "trueosfs";
+            "trueosfs: diag phase=post-publish-checkpoint disk={} action=skip reason=tail-below-threshold tail_blocks={} threshold_blocks={} entries={}\n",
+            disk.id().raw(), tail_blocks, TRUEOSFS_CHECKPOINT_MIN_TAIL_BLOCKS, entry_count
+        );
         return;
     }
 
+    crate::log_info!(target: "trueosfs";
+        "trueosfs: diag phase=post-publish-checkpoint disk={} action=write replay_from={} tail_blocks={} had_checkpoint={} entries={}\n",
+        disk.id().raw(), end_rel_blocks, tail_blocks, had_checkpoint, entry_count
+    );
+
     match write_index_checkpoint_async(disk, placement, end_rel_blocks).await {
         Ok(true) => {
-            crate::log!(
-                "trueosfs: index checkpoint written disk_id={} replay_from={} entries={}\n",
+            crate::log_info!(target: "trueosfs";
+                "trueosfs: diag phase=post-publish-checkpoint disk={} action=written replay_from={} entries={}\n",
                 disk.id().raw(),
                 end_rel_blocks,
                 entry_count
             );
         }
         Ok(false) => {
-            crate::log!(
-                "trueosfs: index checkpoint skipped disk_id={} reason=no-space-or-no-index\n",
+            crate::log_info!(target: "trueosfs";
+                "trueosfs: diag phase=post-publish-checkpoint disk={} action=skip reason=no-space-or-no-index\n",
                 disk.id().raw()
             );
         }
         Err(e) => {
-            crate::log!(
-                "trueosfs: index checkpoint error disk_id={} err={:?}\n",
+            crate::log_info!(target: "trueosfs";
+                "trueosfs: diag phase=post-publish-checkpoint disk={} action=error err={:?}\n",
                 disk.id().raw(),
                 e
             );
@@ -2115,6 +2177,7 @@ async fn ensure_index_async(
 ) -> Result<(), block::Error> {
     let disk_id = disk.id();
     let start_cache_gen;
+    let build_started_ms = trueosfs_trace_now_ms();
 
     // Claim a single builder slot; all others wait until index becomes available.
     loop {
@@ -2129,6 +2192,10 @@ async fn ensure_index_async(
             Some(m) => {
                 m.building_index = true;
                 start_cache_gen = m.cache_gen;
+                crate::log_info!(target: "trueosfs";
+                    "trueosfs: diag phase=index-build-claim disk={} cache_gen={}\n",
+                    disk_id.raw(), start_cache_gen
+                );
                 break;
             }
         }
@@ -2146,48 +2213,100 @@ async fn ensure_index_async(
         let mut tree = Box::new(BTreeMap::new());
 
         // Replay log.
+        let superblock_started_ms = trueosfs_trace_now_ms();
         let sb_blk = read_blocks_aligned_async(disk, params.super_lba, 1).await?;
         let sb = trueos_fs::parse_superblock(&sb_blk).ok_or(block::Error::Corrupted)?;
+        crate::log_info!(target: "trueosfs";
+            "trueosfs: diag phase=index-superblock disk={} elapsed_ms={} log_head_rel_blocks={} checkpoint_rel_blocks={} data_lba={}\n",
+            disk_id.raw(), trueosfs_trace_now_ms().saturating_sub(superblock_started_ms),
+            sb.log_head_rel_blocks, sb.checkpoint_rel_blocks, params.data_lba
+        );
 
         let mut replay_from = 0u64;
         let mut had_checkpoint = false;
 
-        if let Ok(Some(ckpt)) = trueos_fs::read_index_checkpoint(&io, &params)
+        let checkpoint_started_ms = trueosfs_trace_now_ms();
+        let checkpoint_status = match trueos_fs::read_index_checkpoint_with_status(&io, &params)
             .await
             .map_err(map_engine_err)
         {
-            had_checkpoint = true;
-            replay_from = ckpt.replay_from_rel_blocks;
-            let mut checkpoint_entries_since_yield = 0usize;
-            for (key, kind, lba) in ckpt.entries {
-                match kind {
-                    trueos_fs::LogKind::Put | trueos_fs::LogKind::Directory => {
-                        tree.insert(
-                            key,
-                            IndexRef {
-                                kind,
-                                entry_lba: lba,
-                            },
-                        );
+            Ok(status) => status,
+            Err(e) => {
+                crate::log_info!(target: "trueosfs";
+                    "trueosfs: diag phase=index-checkpoint disk={} validity=read-error pointer={} elapsed_ms={} err={:?}\n",
+                    disk_id.raw(), sb.checkpoint_rel_blocks,
+                    trueosfs_trace_now_ms().saturating_sub(checkpoint_started_ms), e
+                );
+                return Err(e);
+            }
+        };
+        match checkpoint_status {
+            trueos_fs::IndexCheckpointRead::Absent => {
+                crate::log_info!(target: "trueosfs";
+                    "trueosfs: diag phase=index-checkpoint disk={} validity=absent pointer={} elapsed_ms={}\n",
+                    disk_id.raw(), sb.checkpoint_rel_blocks,
+                    trueosfs_trace_now_ms().saturating_sub(checkpoint_started_ms)
+                );
+            }
+            trueos_fs::IndexCheckpointRead::Invalid => {
+                crate::log_info!(target: "trueosfs";
+                    "trueosfs: diag phase=index-checkpoint disk={} validity=invalid pointer={} elapsed_ms={}\n",
+                    disk_id.raw(), sb.checkpoint_rel_blocks,
+                    trueosfs_trace_now_ms().saturating_sub(checkpoint_started_ms)
+                );
+            }
+            trueos_fs::IndexCheckpointRead::Valid(ckpt) => {
+                had_checkpoint = true;
+                replay_from = ckpt.replay_from_rel_blocks;
+                let checkpoint_entry_count = ckpt.entries.len();
+                let mut checkpoint_entries_since_yield = 0usize;
+                for (key, kind, lba) in ckpt.entries {
+                    match kind {
+                        trueos_fs::LogKind::Put | trueos_fs::LogKind::Directory => {
+                            tree.insert(key, IndexRef { kind, entry_lba: lba });
+                        }
+                        trueos_fs::LogKind::Delete => {
+                            tree.remove(&key);
+                        }
+                        _ => {}
                     }
-                    trueos_fs::LogKind::Delete => {
-                        tree.remove(&key);
+                    checkpoint_entries_since_yield += 1;
+                    if checkpoint_entries_since_yield
+                        >= crate::allcaps::storage::TRUEOSFS_INDEX_CHECKPOINT_ENTRIES_PER_YIELD
+                    {
+                        checkpoint_entries_since_yield = 0;
+                        trueosfs_boot_work_yield().await;
                     }
-                    _ => {}
                 }
-                checkpoint_entries_since_yield += 1;
-                if checkpoint_entries_since_yield
-                    >= crate::allcaps::storage::TRUEOSFS_INDEX_CHECKPOINT_ENTRIES_PER_YIELD
-                {
-                    checkpoint_entries_since_yield = 0;
-                    trueosfs_boot_work_yield().await;
-                }
+                crate::log_info!(target: "trueosfs";
+                    "trueosfs: diag phase=index-checkpoint disk={} validity=valid pointer={} entries={} replay_from={} elapsed_ms={}\n",
+                    disk_id.raw(), sb.checkpoint_rel_blocks, checkpoint_entry_count, replay_from,
+                    trueosfs_trace_now_ms().saturating_sub(checkpoint_started_ms)
+                );
             }
         }
 
         let end_rel = sb.log_head_rel_blocks;
+        let tail_blocks = end_rel.saturating_sub(replay_from);
+        crate::log_info!(target: "trueosfs";
+            "trueosfs: diag phase=index-replay-start disk={} replay_from={} end_rel={} tail_blocks={}\n",
+            disk_id.raw(), replay_from, end_rel, tail_blocks
+        );
+        let replay_started_ms = trueosfs_trace_now_ms();
+        let mut replay_records = 0u64;
+        let mut last_progress_ms = replay_started_ms;
 
-        trueos_fs::replay_log_range(&io, &params, replay_from, end_rel, |kind, name, data, lba| {
+        let replay_stats = trueos_fs::replay_log_range_with_stats(&io, &params, replay_from, end_rel, |kind, name, data, lba| {
+            replay_records = replay_records.saturating_add(1);
+            let now_ms = trueosfs_trace_now_ms();
+            if now_ms.saturating_sub(last_progress_ms) >= 1_000 {
+                crate::log_info!(target: "trueosfs";
+                    "trueosfs: diag phase=index-replay-progress disk={} records={} rel_blocks={} tail_blocks={} elapsed_ms={}\n",
+                    disk_id.raw(), replay_records, lba.saturating_sub(params.data_lba), tail_blocks,
+                    now_ms.saturating_sub(replay_started_ms)
+                );
+                last_progress_ms = now_ms;
+            }
             match kind {
                 trueos_fs::LogKind::Put | trueos_fs::LogKind::Directory => {
                     tree.insert(
@@ -2224,6 +2343,14 @@ async fn ensure_index_async(
         .await
         .map_err(map_engine_err)?;
 
+        crate::log_info!(target: "trueosfs";
+            "trueosfs: diag phase=index-replay-done disk={} elapsed_ms={} logical_records={} checkpoint_records={} physical_blocks={} reached_end={} stop_rel={} tail_blocks={}\n",
+            disk_id.raw(), trueosfs_trace_now_ms().saturating_sub(replay_started_ms),
+            replay_stats.logical_records, replay_stats.checkpoint_records,
+            replay_stats.physical_blocks, replay_stats.reached_end,
+            replay_stats.stop_rel_blocks, tail_blocks
+        );
+
         Ok(BuiltIndex {
             tree,
             replay_from_rel_blocks: replay_from,
@@ -2250,10 +2377,19 @@ async fn ensure_index_async(
                 if m.cache_gen == start_cache_gen {
                     m.index = Some(tree);
                     crate::r::readiness::set(crate::r::readiness::TRUEOSFS_INDEX_READY);
+                    crate::log_info!(target: "trueosfs";
+                        "trueosfs: diag phase=index-published disk={} cache_gen={} entries={} elapsed_ms={}\n",
+                        disk_id.raw(), start_cache_gen, entry_count,
+                        trueosfs_trace_now_ms().saturating_sub(build_started_ms)
+                    );
                     checkpoint_after_publish =
                         Some((replay_from_rel_blocks, end_rel_blocks, had_checkpoint, entry_count));
                 } else {
                     needs_rebuild = true;
+                    crate::log_info!(target: "trueosfs";
+                        "trueosfs: diag phase=index-raced disk={} start_cache_gen={} current_cache_gen={} action=rebuild\n",
+                        disk_id.raw(), start_cache_gen, m.cache_gen
+                    );
                 }
                 m.building_index = false;
             }
@@ -2264,6 +2400,11 @@ async fn ensure_index_async(
             if let Some(m) = roots.iter_mut().find(|m| m.disk_id == disk_id) {
                 m.building_index = false;
             }
+            crate::log_info!(target: "trueosfs";
+                "trueosfs: diag phase=index-build-error disk={} cache_gen={} elapsed_ms={} err={:?}\n",
+                disk_id.raw(), start_cache_gen,
+                trueosfs_trace_now_ms().saturating_sub(build_started_ms), e
+            );
             Err(e)
         }
     };
@@ -2726,6 +2867,9 @@ pub fn request_warm_index(disk_id: block::DiscId) {
         }
     }
 
+    crate::log_info!(target: "trueosfs";
+        "trueosfs: diag phase=index-request disk={}\n", disk_id.raw()
+    );
     INDEX_REQUESTED.store(true, Ordering::Release);
 }
 
