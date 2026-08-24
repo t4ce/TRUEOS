@@ -29,8 +29,12 @@ pub(crate) mod smp;
 pub(crate) mod ssh;
 pub(crate) mod surf;
 pub(crate) mod tde;
+#[path = "tlb_router.rs"]
 pub(crate) mod tlb;
+#[path = "tlb.rs"]
+pub(crate) mod tlb_core;
 pub(crate) mod tlb_helper;
+pub(crate) mod tlb_nct_probe;
 pub(crate) mod tlb_platform;
 #[path = "tlb_smbios_wrapper.rs"]
 pub(crate) mod tlb_smbios;
