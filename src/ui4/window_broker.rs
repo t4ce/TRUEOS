@@ -195,6 +195,20 @@ pub(crate) struct WindowInteraction {
     pub(crate) resize_on_maximize: bool,
 }
 
+/// What UI4 does with Escape for one selected frame.
+///
+/// Closing is deliberately the default: frames behave like ordinary app
+/// windows unless that particular frame explicitly reserves Escape for its
+/// own interaction.  This is a frame property rather than an owner property
+/// so a dialog and its parent can choose independently.
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+#[repr(u32)]
+pub(crate) enum Ui4FrameEscapeKeyAction {
+    #[default]
+    Close = 0,
+    DeliverToApplication = 1,
+}
+
 impl WindowInteraction {
     /// UI4 may translate the frame, while its producer remains independent of
     /// pointer/keyboard delivery and keeps a fixed pixel extent.
@@ -433,6 +447,7 @@ struct WindowRecord {
     plane: WindowPlane,
     placement: WindowPlacement,
     interaction: WindowInteraction,
+    escape_key_action: Ui4FrameEscapeKeyAction,
     state: WindowState,
     revision: u64,
     publish_serial: u64,
@@ -1347,6 +1362,7 @@ impl WindowRecord {
             plane: request.plane,
             placement: request.placement,
             interaction: request.interaction,
+            escape_key_action: Ui4FrameEscapeKeyAction::Close,
             state: WindowState::Pending,
             revision: 1,
             publish_serial: 0,
@@ -1788,6 +1804,31 @@ pub(crate) fn set_window_hit_testable(
     drop(broker);
     super::cursor_frame_inout::frame_visual_changed(owner, id);
     Ok(())
+}
+
+/// Set the Escape behaviour for one frame.  This has no owner-wide effect.
+pub(crate) fn set_window_escape_key_action(
+    owner: WindowOwner,
+    id: WindowId,
+    action: Ui4FrameEscapeKeyAction,
+) -> Result<(), WindowBrokerError> {
+    let mut broker = WINDOW_BROKER.lock();
+    let window = broker.checked_window_mut(owner, id)?;
+    if window.escape_key_action == action {
+        return Ok(());
+    }
+    window.escape_key_action = action;
+    window.revision = next_serial(window.revision);
+    Ok(())
+}
+
+/// Resolve the selected frame's Escape policy without exposing broker storage.
+pub(crate) fn window_escape_key_action(
+    owner: WindowOwner,
+    id: WindowId,
+) -> Result<Ui4FrameEscapeKeyAction, WindowBrokerError> {
+    let mut broker = WINDOW_BROKER.lock();
+    Ok(broker.checked_window_mut(owner, id)?.escape_key_action)
 }
 
 /// Change several windows' visibility as one broker transaction. The complete

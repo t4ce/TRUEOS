@@ -5131,29 +5131,6 @@ fn is_gridpaper_printer_menu_key(event: crate::r::keyboard::TrueosKeyboardOutput
         && event.key_code == crate::r::keyboard::KEYBOARD_KEY_F10
 }
 
-fn is_gridpaper_close_key(event: crate::r::keyboard::TrueosKeyboardOutputEvent) -> bool {
-    event.kind == crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY
-        && event.key_code == crate::r::keyboard::KEYBOARD_KEY_ESCAPE
-}
-
-fn close_gridpaper_blueprint(runtime: &GridPaperRuntime) {
-    let Some(GridPaperProducer::Blueprint(owner)) = runtime.presented_producer() else {
-        return;
-    };
-    let instance_id = runtime.surface.instance_id;
-    let close_result = close_owner(owner, instance_id);
-    let stop_result = crate::hv::stop(owner);
-    crate::log_info!(
-        target: "gridpaper";
-        "gridpaper: focused Escape close owner={} local_instance={} pool_slot={} close_result={} vm_stop={:?} action=release-scene+stop-blueprint\n",
-        owner,
-        instance_id,
-        runtime.surface.pool_slot,
-        close_result,
-        stop_result,
-    );
-}
-
 fn remove_printer_menu_context(context: u64) -> Option<PrinterMenuContext> {
     let mut contexts = PRINTER_MENU_CONTEXTS.lock();
     let index = contexts
@@ -5460,9 +5437,6 @@ fn dispatch_gridpaper_input(runtime: &mut GridPaperRuntime, event: crate::ui4::U
         return;
     }
     match event {
-        crate::ui4::Ui4InputEvent::Keyboard(event) if is_gridpaper_close_key(event.event) => {
-            close_gridpaper_blueprint(runtime);
-        }
         crate::ui4::Ui4InputEvent::Button(event)
             if event.phase == crate::ui4::Ui4ButtonPhase::Down
                 && event.changed_buttons & PRIMARY_BUTTON_MASK != 0 =>

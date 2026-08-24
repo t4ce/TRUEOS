@@ -33,6 +33,9 @@ const COLLISION_BURST_DISTANCE: f32 = 12.0;
 
 pub const INSTANCE_FLAG_CASTS_SHADOW: u32 = 1 << 0;
 pub const INSTANCE_FLAG_RECEIVES_SHADOW: u32 = 1 << 1;
+/// A retained-transform state bit, deliberately outside the instance flags
+/// consumed by the shading ABI.  Clear/default means visible.
+pub const RETAINED_TRANSFORM_FLAG_HIDDEN: u32 = 1 << 15;
 pub const MAX_RETAINED_TRANSFORM_ROWS: usize = 4_096;
 
 const _: () = {
@@ -87,7 +90,7 @@ pub struct GpuRetainedTransformSeed {
     /// Index into the frame's fixed draw-template array.
     pub draw_group: u32,
     /// High 16 bits are the deterministic slot within `draw_group`; low 16
-    /// bits are the instance flags copied into [`GpuInstanceData`].
+    /// bits are instance flags plus the retained visibility state.
     pub flags: u32,
 }
 
@@ -96,6 +99,9 @@ impl GpuRetainedTransformSeed {
     pub const DISABLED_DRAW_GROUP: u32 = u32::MAX;
     pub const COMPACT_SLOT_SHIFT: u32 = 16;
     pub const INSTANCE_FLAGS_MASK: u32 = u16::MAX as u32;
+    pub const HIDDEN_FLAG: u32 = RETAINED_TRANSFORM_FLAG_HIDDEN;
+    pub const SHADING_INSTANCE_FLAGS_MASK: u32 =
+        Self::INSTANCE_FLAGS_MASK & !Self::HIDDEN_FLAG;
     pub const MAX_COMPACT_SLOT: u32 = u16::MAX as u32;
 
     pub const fn pack_slot_and_flags(compact_slot: u32, instance_flags: u32) -> Option<u32> {
@@ -111,7 +117,11 @@ impl GpuRetainedTransformSeed {
     }
 
     pub const fn instance_flags(self) -> u32 {
-        self.flags & Self::INSTANCE_FLAGS_MASK
+        self.flags & Self::SHADING_INSTANCE_FLAGS_MASK
+    }
+
+    pub const fn hidden(self) -> bool {
+        self.flags & Self::HIDDEN_FLAG != 0
     }
 
     pub fn to_le_bytes(self) -> [u8; Self::BYTE_LEN] {
@@ -2086,6 +2096,13 @@ mod tests {
         assert_eq!(&bytes[60..64], &0x5566_7788u32.to_le_bytes());
         assert_eq!(seed.compact_slot(), 0x5566);
         assert_eq!(seed.instance_flags(), 0x7788);
+        let hidden = GpuRetainedTransformSeed {
+            flags: 0x5566_0000 | RETAINED_TRANSFORM_FLAG_HIDDEN | INSTANCE_FLAG_CASTS_SHADOW,
+            ..seed
+        };
+        assert_eq!(hidden.compact_slot(), 0x5566);
+        assert!(hidden.hidden());
+        assert_eq!(hidden.instance_flags(), INSTANCE_FLAG_CASTS_SHADOW);
         assert_eq!(
             GpuRetainedTransformSeed::pack_slot_and_flags(0x5566, 0x7788),
             Some(0x5566_7788)

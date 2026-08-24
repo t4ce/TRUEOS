@@ -1818,7 +1818,8 @@ fn submit_resident_churn_forward_geometry_batched(
     let transform_dispatch = resident.transform_dispatch();
     let transform_handoff = transform_dispatch.map(|dispatch| dispatch.output.into());
     let transform_secondary_count = usize::from(transform_dispatch.is_some());
-    let secondary_count = CHURN_FORWARD_DRAW_COUNT
+    let resident_draw_count = resident.draw_group_count();
+    let secondary_count = resident_draw_count
         .checked_add(static_draws.len())
         .and_then(|count| count.checked_add(1 + transform_secondary_count))
         .ok_or("scene-frame-batch-capacity")?;
@@ -1884,7 +1885,7 @@ fn submit_resident_churn_forward_geometry_batched(
     let mut draw_depth = depth_config;
     draw_depth.write_enabled = true;
     draw_depth.compare_function = COMPARE_FUNCTION_LESS;
-    for group in 0..CHURN_FORWARD_DRAW_COUNT {
+    for group in 0..resident_draw_count {
         let secondary_index = group + 1 + transform_secondary_count;
         let (state_warm, state_gpu) = resident_scene_state_warm(state, warm, secondary_index)?;
         match transform_handoff {
@@ -1940,7 +1941,7 @@ fn submit_resident_churn_forward_geometry_batched(
         }
     }
     for (static_index, scene) in static_draws.iter().enumerate() {
-        let secondary_index = CHURN_FORWARD_DRAW_COUNT
+        let secondary_index = resident_draw_count
             + static_index
             + 1
             + transform_secondary_count;
@@ -1978,7 +1979,8 @@ fn submit_resident_churn_forward_geometry_batched(
             let graph = transform_dispatch.and_then(|dispatch| dispatch.hierarchy);
             crate::log_info!(
                 target: "render";
-                "resident-scene: native Churn online path=helioa-churn-forward-v1->retained-transform-simd16(prep+matrix-rows+compaction)->gpu-208b-instance+u32-compacted+20b-indexed-indirect->artifact-native-vs+ps->12-indexed-indirect-secondaries->one-guc-scene-schedule geometry=3x(pos-normal-cube/24v/36i) gpu_transform=1 graphics_handoff=native-matrices transform_secondaries=1 retained_graph={} graph_nodes={} dirty_local={} dirty_world={} dirty_rows={} max_depth={} cpu_matrix_expansion=0 cpu_vertex_projection=0 cpu_readback=0 instance_index=starting_instance+instance_id render_submits=1 target={}x{}\n",
+                "resident-scene: native retained online path=helioa-churn-forward-v1->retained-transform-simd16(prep+matrix-rows+compaction)->gpu-208b-instance+u32-compacted+20b-indexed-indirect->artifact-native-vs+ps->indexed-indirect-secondaries->one-guc-scene-schedule graphics_groups={} gpu_transform=1 graphics_handoff=native-matrices transform_secondaries=1 retained_graph={} graph_nodes={} dirty_local={} dirty_world={} dirty_rows={} max_depth={} cpu_matrix_expansion=0 cpu_vertex_projection=0 cpu_readback=0 instance_index=starting_instance+instance_id render_submits=1 target={}x{}\n",
+                resident_draw_count,
                 graph.is_some() as u8,
                 graph.map_or(0, |graph| graph.node_count),
                 graph.map_or(0, |graph| graph.dirty_local_count),
@@ -2067,8 +2069,9 @@ fn submit_resident_scene_capture_inner(
     target_height: usize,
     frame_output: ResidentSceneFrameOutput,
 ) -> Result<ResidentSceneFrameResult, &'static str> {
-    let geometry_draw_count = native_churn
-        .map_or(draws.len(), |_| CHURN_FORWARD_DRAW_COUNT + draws.len());
+    let geometry_draw_count = native_churn.map_or(draws.len(), |resident| {
+        resident.draw_group_count() + draws.len()
+    });
     if target_width == 0
         || target_height == 0
         || target_width > RESIDENT_SCENE_TARGET_WIDTH
@@ -2220,7 +2223,7 @@ fn submit_resident_scene_capture_inner(
         {
             let opaque = native_churn.map_or_else(
                 || draws.iter().filter(|draw| draw.rgba[3] == u8::MAX).count(),
-                |_| CHURN_FORWARD_DRAW_COUNT,
+                ResidentChurnForward::draw_group_count,
             );
             let blended = native_churn.map_or_else(
                 || {

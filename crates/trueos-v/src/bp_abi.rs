@@ -109,6 +109,11 @@ pub const DOBBY_UI4_KEY_END: u32 = 12;
 pub const DOBBY_UI4_KEY_PAGE_UP: u32 = 13;
 pub const DOBBY_UI4_KEY_PAGE_DOWN: u32 = 14;
 
+/// Default UI4 behaviour: close the selected frame (and stop its Blueprint
+/// VM).  `DELIVER_TO_APPLICATION` reserves Escape for this frame only.
+pub const UI4_FRAME_ESCAPE_KEY_ACTION_CLOSE: u32 = 0;
+pub const UI4_FRAME_ESCAPE_KEY_ACTION_DELIVER_TO_APPLICATION: u32 = 1;
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub struct TrueosLumenStatus {
@@ -615,6 +620,7 @@ unsafe extern "C" {
     pub fn trueos_cabi_ui4_solara_frame_close_requested(window_id: u32, flags: u32) -> i32;
     pub fn trueos_cabi_ui4_scene_frame_set_position(window_id: u32, x: i32, y: i32) -> i32;
     pub fn trueos_cabi_ui4_scene_frame_set_hit_testable(window_id: u32, enabled: u32) -> i32;
+    pub fn trueos_cabi_ui4_scene_frame_set_escape_key_action(window_id: u32, action: u32) -> i32;
     pub fn trueos_cabi_ui4_scene_set_custom_cursor(window_id: u32, enabled: u32) -> i32;
     pub fn trueos_cabi_ui4_scene_set_cursor_icon(
         window_id: u32,

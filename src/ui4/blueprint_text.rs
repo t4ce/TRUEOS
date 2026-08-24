@@ -2198,6 +2198,41 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_set_hit_testable(
     0
 }
 
+/// Choose whether Escape closes this frame (the default) or is delivered to
+/// this Blueprint.  The setting applies to this frame only.
+pub extern "C" fn trueos_cabi_ui4_scene_frame_set_escape_key_action(
+    window_id: u32,
+    action: u32,
+) -> i32 {
+    let action = match action {
+        0 => super::Ui4FrameEscapeKeyAction::Close,
+        1 => super::Ui4FrameEscapeKeyAction::DeliverToApplication,
+        _ => return ERROR_INVALID,
+    };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_status(
+            trueos_vm::vmcall::OP_BP_UI4_SCENE_FRAME_SET_ESCAPE_KEY_ACTION,
+            window_id as u64,
+            action as u32 as u64,
+            &[],
+        );
+    }
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT;
+    };
+    let window = {
+        let mut surfaces = SURFACES.lock();
+        let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+            return ERROR_NOT_FOUND;
+        };
+        surface.window
+    };
+    if super::set_window_escape_key_action(owner, window, action).is_err() {
+        return ERROR_UI4;
+    }
+    0
+}
+
 /// Compatibility shorthand for a frame-wide `AppOwned` cursor override.
 /// Overrides are retained per frame but activate only for the one globally
 /// selected frame while the cursor is inside that frame.

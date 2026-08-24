@@ -814,10 +814,26 @@ struct CloudWorkGraphRecord {
 
 struct RetainedMeshRecord {
     resident: Arc<crate::intel::render::ResidentChurnForward>,
+    static_geometry: Option<RetainedStaticGeometry>,
     vertex_buffer: BufferHandle,
     index_buffer: BufferHandle,
     epoch: u64,
     in_flight: u32,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct RetainedStaticDrawKey {
+    first_index: u32,
+    base_vertex: i32,
+}
+
+struct RetainedStaticGeometry {
+    vertex_buffer: BufferHandle,
+    index_buffer: BufferHandle,
+    vertex_offset: u64,
+    index_offset: u64,
+    draws: Vec<RetainedStaticDrawKey>,
+    meshes: Arc<Vec<crate::intel::render::ResidentTriangleMesh>>,
 }
 
 struct RetainedMeshSlot {
@@ -1971,6 +1987,7 @@ pub(crate) fn create_retained_mesh(
         device,
         RetainedMeshRecord {
             resident: Arc::new(resident),
+            static_geometry: None,
             vertex_buffer,
             index_buffer,
             epoch,
@@ -2001,16 +2018,55 @@ pub(crate) fn destroy_retained_mesh(
     let record = entry.record.take().ok_or(VgpuError::InvalidHandle)?;
     let RetainedMeshRecord {
         resident,
+        static_geometry,
         vertex_buffer,
         index_buffer,
         epoch,
         in_flight,
     } = record;
+    if let Some(static_geometry) = static_geometry {
+        let RetainedStaticGeometry {
+            vertex_buffer: static_vertex_buffer,
+            index_buffer: static_index_buffer,
+            vertex_offset,
+            index_offset,
+            draws,
+            meshes,
+        } = static_geometry;
+        let meshes = match Arc::try_unwrap(meshes) {
+            Ok(meshes) => meshes,
+            Err(meshes) => {
+                entry.record = Some(RetainedMeshRecord {
+                    resident,
+                    static_geometry: Some(RetainedStaticGeometry {
+                        vertex_buffer: static_vertex_buffer,
+                        index_buffer: static_index_buffer,
+                        vertex_offset,
+                        index_offset,
+                        draws,
+                        meshes,
+                    }),
+                    vertex_buffer,
+                    index_buffer,
+                    epoch,
+                    in_flight,
+                });
+                return Err(VgpuError::Busy);
+            }
+        };
+        if !meshes
+            .iter()
+            .all(crate::intel::render::release_resident_triangle_mesh)
+        {
+            return Err(VgpuError::DeviceLost);
+        }
+    }
     let resident = match Arc::try_unwrap(resident) {
         Ok(resident) => resident,
         Err(resident) => {
             entry.record = Some(RetainedMeshRecord {
                 resident,
+                static_geometry: None,
                 vertex_buffer,
                 index_buffer,
                 epoch,
@@ -2024,6 +2080,7 @@ pub(crate) fn destroy_retained_mesh(
     } else {
         entry.record = Some(RetainedMeshRecord {
             resident: Arc::new(resident),
+            static_geometry: None,
             vertex_buffer,
             index_buffer,
             epoch,
@@ -3884,7 +3941,22 @@ pub(crate) fn submit_ui4_retained_frame(
     let surface_handle = SurfaceHandle::from_raw(submit.surface);
     let static_vertex_buffer = BufferHandle::from_raw(submit.static_vertex_buffer);
     let static_index_buffer = BufferHandle::from_raw(submit.static_index_buffer);
-    let (_window_id, phys, producer_gpu, bytes, width, height, pitch, resident, static_parts) = {
+    let static_draw_keys = submit.static_draws[..static_draw_count]
+        .iter()
+        .map(|draw| RetainedStaticDrawKey {
+            first_index: draw.first_index,
+            base_vertex: draw.base_vertex,
+        })
+        .collect::<Vec<_>>();
+    if submit.static_draws[..static_draw_count].iter().any(|draw| {
+        draw.reserved != 0
+            || draw.topology != v::vgpu::PRIMITIVE_TOPOLOGY_LINE_LIST
+            || draw.index_count != 2
+            || draw.base_vertex < 0
+    }) {
+        return Err(VgpuError::Unsupported);
+    }
+    let (_window_id, phys, producer_gpu, bytes, width, height, pitch, resident, line_meshes) = {
         let mut broker = BROKER.lock();
         let device = lookup_device_mut(&mut broker, device_handle, principal)?;
         ensure_live(device)?;
@@ -3942,6 +4014,27 @@ pub(crate) fn submit_ui4_retained_frame(
             record.in_flight = 1;
             Arc::clone(&record.resident)
         };
+        let cached = match lookup_retained_mesh(device, mesh_handle)?.static_geometry.as_ref() {
+            Some(geometry)
+                if geometry.vertex_buffer == static_vertex_buffer
+                    && geometry.index_buffer == static_index_buffer
+                    && geometry.vertex_offset == submit.static_vertex_offset
+                    && geometry.index_offset == submit.static_index_offset
+                    && geometry.draws == static_draw_keys =>
+            {
+                Some(Arc::clone(&geometry.meshes))
+            }
+            Some(_) => {
+                lookup_retained_mesh_mut(device, mesh_handle)?.in_flight = 0;
+                lookup_surface_mut(device, surface_handle)?.in_flight = 1;
+                lookup_queue_mut(device, queue_handle)?.in_flight = 0;
+                return Err(VgpuError::Unsupported);
+            }
+            None => None,
+        };
+        let line_meshes = if let Some(meshes) = cached {
+            meshes
+        } else {
         let copied = (|| {
             let index_record = lookup_buffer(device, static_index_buffer)?;
             let vertex_record = lookup_buffer(device, static_vertex_buffer)?;
@@ -3964,13 +4057,6 @@ pub(crate) fn submit_ui4_retained_frame(
                 .map_err(|_| VgpuError::Unsupported)?;
             let mut parts = Vec::with_capacity(static_draw_count);
             for draw in &submit.static_draws[..static_draw_count] {
-                if draw.reserved != 0
-                    || draw.topology != v::vgpu::PRIMITIVE_TOPOLOGY_LINE_LIST
-                    || draw.index_count != 2
-                    || draw.base_vertex < 0
-                {
-                    return Err(VgpuError::Unsupported);
-                }
                 let index_start = index_offset
                     .checked_add(draw.first_index as usize * 4)
                     .ok_or(VgpuError::Unsupported)?;
@@ -4007,7 +4093,7 @@ pub(crate) fn submit_ui4_retained_frame(
                         f32::from_le_bytes(raw[8..12].try_into().unwrap()),
                     ]);
                 }
-                parts.push((vertices, indices, draw.rgba8_srgb));
+                parts.push((vertices, indices));
             }
             Ok(parts)
         })();
@@ -4020,6 +4106,37 @@ pub(crate) fn submit_ui4_retained_frame(
                 return Err(error);
             }
         };
+        let mut meshes = Vec::with_capacity(static_parts.len());
+        for (vertices, indices) in &static_parts {
+            match crate::intel::render::create_resident_indexed_mesh(
+                vertices,
+                indices,
+                crate::intel::render::ResidentScenePrimitiveTopology::LineList,
+            ) {
+                Ok(mesh) => meshes.push(mesh),
+                Err(_) => {
+                    for mesh in &meshes {
+                        let _ = crate::intel::render::release_resident_triangle_mesh(mesh);
+                    }
+                    lookup_retained_mesh_mut(device, mesh_handle)?.in_flight = 0;
+                    lookup_surface_mut(device, surface_handle)?.in_flight = 1;
+                    lookup_queue_mut(device, queue_handle)?.in_flight = 0;
+                    return Err(VgpuError::OutOfMemory);
+                }
+            }
+        }
+        let meshes = Arc::new(meshes);
+        lookup_retained_mesh_mut(device, mesh_handle)?.static_geometry =
+            Some(RetainedStaticGeometry {
+                vertex_buffer: static_vertex_buffer,
+                index_buffer: static_index_buffer,
+                vertex_offset: submit.static_vertex_offset,
+                index_offset: submit.static_index_offset,
+                draws: static_draw_keys,
+                meshes: Arc::clone(&meshes),
+            });
+        meshes
+        };
         (
             surface_meta.0,
             surface_meta.1,
@@ -4029,24 +4146,15 @@ pub(crate) fn submit_ui4_retained_frame(
             surface_meta.5,
             surface_meta.6,
             resident,
-            static_parts,
+            line_meshes,
         )
     };
 
-    let seeds = submit.seeds[..seed_count]
-        .iter()
-        .map(|seed| trueos_helio_runtime::churn::GpuRetainedTransformSeed {
-            translation: seed.translation,
-            scale: seed.scale,
-            rotation: seed.rotation,
-            local_radius: seed.local_radius,
-            previous_translation: seed.previous_translation,
-            draw_group: seed.draw_group,
-            flags: seed.flags,
-        })
-        .collect::<Vec<_>>();
-    if crate::intel::render::update_resident_picasso_retained_transform_seeds(&resident, &seeds)
-        .is_err()
+    if crate::intel::render::update_resident_picasso_retained_transform_seeds(
+        &resident,
+        &submit.seeds[..seed_count],
+    )
+    .is_err()
     {
         rollback_retained_submission_lease(
             principal,
@@ -4077,35 +4185,12 @@ pub(crate) fn submit_ui4_retained_frame(
             return Err(VgpuError::Unsupported);
         }
     };
-    let mut line_meshes = Vec::with_capacity(static_parts.len());
-    for (vertices, indices, _) in &static_parts {
-        match crate::intel::render::create_resident_indexed_mesh(
-            vertices,
-            indices,
-            crate::intel::render::ResidentScenePrimitiveTopology::LineList,
-        ) {
-            Ok(mesh) => line_meshes.push(mesh),
-            Err(_) => {
-                for mesh in &line_meshes {
-                    let _ = crate::intel::render::release_resident_triangle_mesh(mesh);
-                }
-                rollback_retained_submission_lease(
-                    principal,
-                    device_handle,
-                    queue_handle,
-                    surface_handle,
-                    mesh_handle,
-                );
-                return Err(VgpuError::OutOfMemory);
-            }
-        }
-    }
     let line_draws = line_meshes
         .iter()
-        .zip(&static_parts)
-        .map(|(mesh, (_, _, rgba))| crate::intel::render::ResidentSceneDraw {
+        .zip(&submit.static_draws[..static_draw_count])
+        .map(|(mesh, draw)| crate::intel::render::ResidentSceneDraw {
             mesh,
-            rgba: rgba.to_le_bytes(),
+            rgba: draw.rgba8_srgb.to_le_bytes(),
             sampled_texture: None,
             fragment_contract: crate::intel::render::ResidentSceneFragmentContract::ConstantRgba,
             viewport_translation_px: [0.0, 0.0],
@@ -4119,14 +4204,7 @@ pub(crate) fn submit_ui4_retained_frame(
         destination,
         false,
     );
-    let released = if rendered.is_ok() || matches!(rendered, Err("render-busy")) {
-        line_meshes
-            .iter()
-            .all(crate::intel::render::release_resident_triangle_mesh)
-    } else {
-        false
-    };
-    if matches!(rendered, Err("render-busy")) && released {
+    if matches!(rendered, Err("render-busy")) {
         rollback_retained_submission_lease(
             principal,
             device_handle,
@@ -4136,7 +4214,7 @@ pub(crate) fn submit_ui4_retained_frame(
         );
         return Err(VgpuError::Busy);
     }
-    let expected_draws = crate::intel::render::RETAINED_NATIVE_DRAW_COUNT + static_draw_count;
+    let expected_draws = resident.draw_group_count() + static_draw_count;
     let release = rendered
         .ok()
         .and_then(|result| {
@@ -4147,7 +4225,7 @@ pub(crate) fn submit_ui4_retained_frame(
                 .flatten()
         })
         .filter(|release| release.matches(phys, bytes));
-    let Some(release) = release.filter(|_| released) else {
+    let Some(release) = release else {
         let mut broker = BROKER.lock();
         if let Ok(device) = lookup_device_mut(&mut broker, device_handle, principal) {
             device.lost = true;
@@ -5847,6 +5925,16 @@ fn destroy_device_resources(
     device.cloud_work_graphs.clear();
     for slot in &mut device.retained_meshes {
         if let Some(record) = slot.record.take() {
+            if let Some(static_geometry) = record.static_geometry {
+                let meshes = Arc::try_unwrap(static_geometry.meshes)
+                    .map_err(|_| VgpuError::Busy)?;
+                if !meshes
+                    .iter()
+                    .all(crate::intel::render::release_resident_triangle_mesh)
+                {
+                    return Err(VgpuError::DeviceLost);
+                }
+            }
             let resident = Arc::try_unwrap(record.resident).map_err(|_| VgpuError::Busy)?;
             if !crate::intel::render::release_resident_churn_forward(&resident) {
                 return Err(VgpuError::DeviceLost);

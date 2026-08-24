@@ -1084,6 +1084,33 @@ impl InputBroker {
         let Some(window) = window_snapshot_for_target(target) else {
             return;
         };
+        if event.kind == crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY
+            && event.key_code == crate::r::keyboard::KEYBOARD_KEY_ESCAPE
+            && matches!(
+                super::window_escape_key_action(target.owner, target.window),
+                Ok(super::Ui4FrameEscapeKeyAction::Close)
+            )
+        {
+            // Escape is scoped to this keyboard/cursor's selected frame.  A
+            // Blueprint frame ends its VM; a kernel-owned frame simply closes
+            // that one UI4 window.  Either way it is consumed here, before
+            // the owner queue, unless the frame explicitly reserved Escape.
+            match target.owner {
+                super::WindowOwner::Vm(vm_id) => {
+                    let stop = crate::hv::stop(vm_id);
+                    crate::log_info!(target: "ui4";
+                        "ui4/input: Escape default-close selected_frame owner=vm{} window={} combo={} action=stop-vmx result={:?}\n",
+                        vm_id, target.window.raw(), combo_id, stop);
+                }
+                owner => {
+                    let close = super::close_window(owner, target.window);
+                    crate::log_info!(target: "ui4";
+                        "ui4/input: Escape default-close selected_frame owner={:?} window={} combo={} action=close-frame result={:?}\n",
+                        owner, target.window.raw(), combo_id, close);
+                }
+            }
+            return;
+        }
         if !window.interaction.receives_input {
             return;
         }

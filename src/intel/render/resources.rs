@@ -1102,7 +1102,6 @@ pub(crate) fn release_resident_triangle_mesh(mesh: &ResidentTriangleMesh) -> boo
 
 const CHURN_FORWARD_MESH_COUNT: usize = trueos_helio_runtime::churn::SHAPE_COUNT;
 const CHURN_FORWARD_DRAW_COUNT: usize = trueos_helio_runtime::churn::DRAW_GROUP_COUNT;
-pub(crate) const RETAINED_NATIVE_DRAW_COUNT: usize = CHURN_FORWARD_DRAW_COUNT;
 /// The native-matrix shader is not cube-specific. Picasso uses this same
 /// authenticated Helio graphics package with its own immutable PosNormal mesh.
 const PICASSO_RETAINED_FORWARD_ARTIFACT: &[u8] =
@@ -1994,6 +1993,7 @@ fn create_resident_churn_forward_with_admission(
         transform.is_some() as u8,
     );
     Ok(ResidentChurnForward {
+        draw_group_count: CHURN_FORWARD_DRAW_COUNT,
         vertex_gpu_addr: geometry.gpu_base(),
         vertex_count: (CHURN_FORWARD_MESH_COUNT * CHURN_FORWARD_VERTICES_PER_MESH) as u32,
         vertex_bytes: vertex_byte_len,
@@ -2148,6 +2148,22 @@ pub(crate) fn create_resident_picasso_retained_posnormal_mesh(
         max_instances,
         &bootstrap_churn_meshes(),
     )?;
+    // Picasso's prepared geometry is already centered and normalized into
+    // clip/NDC space. The shared native vertex shader still reads a camera
+    // matrix, so publish an explicit identity camera instead of inheriting
+    // the zeroed Churn allocation (which produces clip_position.w == 0).
+    const CAMERA_BYTES: usize = 368;
+    let mut camera_bytes = [0u8; CAMERA_BYTES];
+    for matrix_offset in [0usize, 64, 128, 192, 304] {
+        for diagonal in [0usize, 5, 10, 15] {
+            let offset = matrix_offset + diagonal * core::mem::size_of::<f32>();
+            camera_bytes[offset..offset + 4].copy_from_slice(&1.0f32.to_le_bytes());
+        }
+    }
+    if !resident.camera.write_and_flush(0, &camera_bytes) {
+        let _ = release_resident_churn_forward(&resident);
+        return Err("picasso-retained-camera-upload");
+    }
     let index_bytes = indices
         .len()
         .checked_mul(core::mem::size_of::<u32>())
@@ -2177,6 +2193,7 @@ pub(crate) fn create_resident_picasso_retained_posnormal_mesh(
     let vertex_bytes = u32::try_from(vertices.len()).map_err(|_| "picasso-retained-geometry-size")?;
     let index_byte_len = u32::try_from(index_bytes).map_err(|_| "picasso-retained-geometry-size")?;
     let old_geometry = core::mem::replace(&mut resident.geometry, geometry);
+    resident.draw_group_count = 1;
     resident.vertex_gpu_addr = resident.geometry.gpu_base();
     resident.vertex_count = vertex_count;
     resident.vertex_bytes = vertex_bytes;
@@ -2194,8 +2211,38 @@ pub(crate) fn create_resident_picasso_retained_posnormal_mesh(
 /// the CPU never writes transformed vertex positions.
 pub(crate) fn update_resident_picasso_retained_transform_seeds(
     resident: &ResidentChurnForward,
-    seeds: &[trueos_helio_runtime::churn::GpuRetainedTransformSeed],
+    seeds: &[v::vgpu::RetainedTransformSeed],
 ) -> Result<(), &'static str> {
+    const SEED_BYTES: usize = 64;
+    const TEMPLATE_BYTES: usize = 24;
+
+    fn encode_seed(seed: v::vgpu::RetainedTransformSeed) -> [u8; SEED_BYTES] {
+        let mut bytes = [0; SEED_BYTES];
+        let mut write_f32s = |offset: usize, values: &[f32]| {
+            for (index, value) in values.iter().enumerate() {
+                let start = offset + index * 4;
+                bytes[start..start + 4].copy_from_slice(&value.to_le_bytes());
+            }
+        };
+        write_f32s(0, &seed.translation);
+        write_f32s(12, &seed.scale);
+        write_f32s(24, &seed.rotation);
+        write_f32s(40, &[seed.local_radius]);
+        write_f32s(44, &seed.previous_translation);
+        bytes[56..60].copy_from_slice(&seed.draw_group.to_le_bytes());
+        bytes[60..64].copy_from_slice(&seed.flags.to_le_bytes());
+        bytes
+    }
+
+    fn encode_template(index_count: u32, capacity: u32) -> [u8; TEMPLATE_BYTES] {
+        let mut bytes = [0; TEMPLATE_BYTES];
+        bytes[0..4].copy_from_slice(&index_count.to_le_bytes());
+        // first_index, base_vertex, first_instance and packed mesh/material
+        // are zero for Picasso's single retained geometry.
+        bytes[16..20].copy_from_slice(&capacity.to_le_bytes());
+        bytes
+    }
+
     let transform = resident.transform.as_ref().ok_or(
         resident
             .retained_transform_unavailable_reason()
@@ -2206,31 +2253,25 @@ pub(crate) fn update_resident_picasso_retained_transform_seeds(
     }
     let row_count = u32::try_from(seeds.len()).map_err(|_| "picasso-retained-transform-seeds")?;
     let capacity = row_count;
-    let template = trueos_helio_runtime::churn::GpuRetainedDrawTemplate {
-        index_count: resident.index_count,
-        first_index: 0,
-        base_vertex: 0,
-        first_instance: 0,
-        capacity,
-        packed_mesh_material: 0,
-    };
-    let mut templates = [trueos_helio_runtime::churn::GpuRetainedDrawTemplate::default();
-        CHURN_FORWARD_DRAW_COUNT];
-    templates[0] = template;
-    let mut seed_bytes = Vec::with_capacity(seeds.len() * trueos_helio_runtime::churn::GpuRetainedTransformSeed::BYTE_LEN);
+    let mut seed_bytes = Vec::with_capacity(seeds.len() * SEED_BYTES);
     for seed in seeds {
-        seed_bytes.extend_from_slice(&seed.to_le_bytes());
+        seed_bytes.extend_from_slice(&encode_seed(*seed));
     }
-    let mut template_bytes = Vec::with_capacity(CHURN_FORWARD_DRAW_COUNT * trueos_helio_runtime::churn::GpuRetainedDrawTemplate::BYTE_LEN);
-    for template in templates {
-        template_bytes.extend_from_slice(&template.to_le_bytes());
-    }
+    let mut template_bytes = Vec::with_capacity(CHURN_FORWARD_DRAW_COUNT * TEMPLATE_BYTES);
+    template_bytes.resize(CHURN_FORWARD_DRAW_COUNT * TEMPLATE_BYTES, 0);
+    template_bytes[..TEMPLATE_BYTES]
+        .copy_from_slice(&encode_template(resident.index_count, capacity));
     transform.row_count.store(0, Ordering::Release);
     let dispatch = resident
         .transform_dispatch_for_rows(row_count)
         .ok_or("picasso-retained-transform-dispatch")?;
+    // Helio's full-scene validator additionally requires its historical
+    // 36-index cube in every draw group. Picasso deliberately supplies one
+    // arbitrary triangle-list mesh and leaves the other groups empty, so only
+    // validate the geometry-independent dispatch ranges here. The template
+    // above is constructed from this resident mesh and the exact row count.
     dispatch
-        .validate_templates(&templates)
+        .validate()
         .map_err(|_| "picasso-retained-transform-contract")?;
     if !transform.seeds.write_and_flush(0, &seed_bytes)
         || !transform.draw_templates.write_and_flush(0, &template_bytes)
@@ -2392,7 +2433,7 @@ fn prepare_resident_churn_forward_draw(
         return None;
     }
     Some(TriangleDrawPrep {
-        vertex_count: resident.index_count,
+        vertex_count: resident.vertex_count,
         vertex_stride: trueos_helio_artifact::churn_forward::VERTEX_STRIDE,
         vertex_buffer_bytes: resident.vertex_bytes,
         vertex_format: TriangleVertexFormat::PosNormal,
