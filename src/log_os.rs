@@ -22,15 +22,6 @@ pub(crate) mod flags {
     /// operability logs.
     pub(crate) const BOOT_DIAG_PROFILE_ENABLED: bool = false;
 
-    /// Focused TRUEOSFS root-drive diagnostic profile.
-    ///
-    /// Enables the concise `trueosfs: diag` INFO timeline and existing USB
-    /// INFO health samples needed to separate mount/USB latency from index
-    /// checkpoint and tail-replay work.  It deliberately leaves per-transfer
-    /// UAS and storage trace traffic disabled: that traffic changes the small
-    /// I/O timing this profile is intended to measure.
-    pub(crate) const TRUEOSFS_USB_ROOT_DIAG_PROFILE_ENABLED: bool = true;
-
     /// Focused Lumen inference performance profile.
     ///
     /// Global/Info carries the cold model pack/seal, sampled RCS phases, sparse
@@ -85,16 +76,12 @@ pub(crate) mod flags {
     };
     pub(crate) const USB_LOG_LEVEL: LogLevelPolicy = if USB_UAS_DIAG_PROFILE_ENABLED {
         LogLevelPolicy::up(LogLevelFilter::Trace)
-    } else if USB_RUNTIME_DIAG_PROFILE_ENABLED || TRUEOSFS_USB_ROOT_DIAG_PROFILE_ENABLED {
+    } else if USB_RUNTIME_DIAG_PROFILE_ENABLED {
         LogLevelPolicy::up(LogLevelFilter::Info)
     } else {
         LogLevelPolicy::up(LogLevelFilter::Warn)
     };
-    pub(crate) const STORAGE_LOG_LEVEL: LogLevelPolicy = if TRUEOSFS_USB_ROOT_DIAG_PROFILE_ENABLED {
-        LogLevelPolicy::up(LogLevelFilter::Info)
-    } else {
-        LogLevelPolicy::up(LogLevelFilter::Warn)
-    };
+    pub(crate) const STORAGE_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LogLevelFilter::Warn);
     /// The display/cursor side is per-flip chatty, so it normally stays at
     /// Warn; the explicit Helio profile temporarily admits its Debug ladder.
     pub(crate) const GFX_LOG_LEVEL: LogLevelPolicy = if HELIO_GFX_DIAG_PROFILE_ENABLED {
@@ -149,8 +136,6 @@ pub(crate) mod flags {
     pub(crate) const INTEL_DISPLAY_NGIN_LOGS: bool = true;
     pub(crate) const HID_DEBUG_REPORT_LOGS: bool = false;
     pub(crate) const USB_MASS_UAS_TRACE_LOGS: bool = USB_UAS_DIAG_PROFILE_ENABLED;
-    // Kept off for the TRUEOSFS root diagnostic: its large-transfer trace
-    // misses the small-read replay pathology and would perturb measurements.
     pub(crate) const STORAGE_TRACE_LOGS: bool = false;
     pub(crate) const NVME_VERBOSE: bool = false;
     pub(crate) static BGRT_LOG_ONCE: Once<()> = Once::new();

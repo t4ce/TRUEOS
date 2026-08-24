@@ -282,6 +282,18 @@ enum PlaneSurfaceFlipQueueResult {
     Rejected,
 }
 
+/// Runtime UI4 primary flips may change source geometry only inside the
+/// compositor's atomic plane transaction.  Format/alpha state remains part of
+/// the immutable boot contract on every path.
+const fn primary_plane_source_contract_accepted(
+    stack_ready: bool,
+    immutable_contract_changed: bool,
+    geometry_changed: bool,
+    ui4_primary_batch_only: bool,
+) -> bool {
+    stack_ready && !immutable_contract_changed && (!geometry_changed || ui4_primary_batch_only)
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum Ui4PlaneSurfaceFlipPoll {
     Pending,
@@ -2206,22 +2218,35 @@ fn program_primary_plane_source_for_pipeline(
     let pos_want = plane_pos_reg_value(source.dst_x, source.dst_y);
     let size_want = plane_size_reg_value(dst_w, dst_h);
     let offset_want = plane_pos_reg_value(source.src_x, source.src_y);
-    let contract_changed = ctl_before != ctl_enabled
-        || stride_before != stride_reg
-        || crate::intel::mmio_read(dev, pos_off) != pos_want
-        || crate::intel::mmio_read(dev, size_off) != size_want
-        || crate::intel::mmio_read(dev, offset_off) != offset_want
-        || color_ctl != color_ctl_enabled;
+    let immutable_contract_changed = ctl_before != ctl_enabled || color_ctl != color_ctl_enabled;
+    let geometry = PlaneSurfaceGeometry {
+        stride_reg,
+        pos_reg: pos_want,
+        size_reg: size_want,
+        offset_reg: offset_want,
+    };
+    let geometry_changed = stride_before != geometry.stride_reg
+        || crate::intel::mmio_read(dev, pos_off) != geometry.pos_reg
+        || crate::intel::mmio_read(dev, size_off) != geometry.size_reg
+        || crate::intel::mmio_read(dev, offset_off) != geometry.offset_reg;
     let surf_before = crate::intel::mmio_read(dev, pipe.primary_plane().surf());
     let surf_live_before = crate::intel::mmio_read(dev, pipe.primary_plane().surf_live());
     let ui4_primary_batch_only = reason == "ui4-compositor-primary-async";
-    if !ui4_rgba8_plane_stack_ready(pipe) || contract_changed {
+    let stack_ready = ui4_rgba8_plane_stack_ready(pipe);
+    if !primary_plane_source_contract_accepted(
+        stack_ready,
+        immutable_contract_changed,
+        geometry_changed,
+        ui4_primary_batch_only,
+    ) {
         crate::log_error!(target: "intel/display";
-            "intel/display: primary-plane-source rejected reason={} pipeline={} cause=immutable-rgba8-contract-mismatch ready={} contract_changed={} fmt={:?} src={}x{} dst={}x{} size={}x{} pitch=0x{:X}\n",
+            "intel/display: primary-plane-source rejected reason={} pipeline={} cause=rgba8-contract-mismatch ready={} immutable_changed={} geometry_changed={} geometry_batch_allowed={} fmt={:?} src={}x{} dst={}x{} size={}x{} pitch=0x{:X}\n",
             reason,
             pipeline.name(),
-            ui4_rgba8_plane_stack_ready(pipe) as u8,
-            contract_changed as u8,
+            stack_ready as u8,
+            immutable_contract_changed as u8,
+            geometry_changed as u8,
+            ui4_primary_batch_only as u8,
             source.format,
             source.src_x,
             source.src_y,
@@ -2244,16 +2269,16 @@ fn program_primary_plane_source_for_pipeline(
         return false;
     }
     if surf_before == surf_live_before {
-        // Empty-plane parking deliberately sets hardware opacity to zero so
-        // the retiring direct surface cannot flash before the transparent
-        // replacement latches. Restore full plane opacity in the same batch
-        // as the next native-RGBA primary SURF.
+        // Slot0's parking surface is transparent in memory. Keep its native
+        // premultiplied plane opacity and, when returning from a tightly
+        // pitched direct producer, restore geometry in the same transaction
+        // as SURF so no incompatible intermediate layout can scan out.
         let constant_alpha =
             (source.format == PrimaryPlaneSourceFormat::Rgba8888Premultiplied).then_some(u8::MAX);
         match queue_ui4_plane_surface_flip(
             pipe.primary_plane().base(),
             surface_reg,
-            None,
+            geometry_changed.then_some(geometry),
             constant_alpha,
             None,
             reason,
@@ -2262,11 +2287,12 @@ fn program_primary_plane_source_for_pipeline(
                 let program_seq = PRIMARY_SOURCE_PROGRAM_SEQ.fetch_add(1, Ordering::AcqRel) + 1;
                 if mapped_now || program_seq <= 8 || program_seq.is_multiple_of(60) {
                     intel_display_verbose_log!(
-                        "intel/display: primary-plane-source seq={} reason={} pipe={} ok=1 live_ok=deferred mapped={} contract_rearm=0 fmt={:?} src={}x{} dst={}x{} size={}x{} pitch=0x{:X} surf=0x{:08X} before=0x{:08X} live=0x{:08X} path=ui4-batched-surf\n",
+                        "intel/display: primary-plane-source seq={} reason={} pipe={} ok=1 live_ok=deferred mapped={} immutable_rearm=0 geometry_update={} fmt={:?} src={}x{} dst={}x{} size={}x{} pitch=0x{:X} surf=0x{:08X} before=0x{:08X} live=0x{:08X} path=ui4-batched-geometry+surf\n",
                         program_seq,
                         reason,
                         pipe.name,
                         mapped_now as u8,
+                        geometry_changed as u8,
                         source.format,
                         source.src_x,
                         source.src_y,
@@ -7497,7 +7523,7 @@ mod direct_plane_scaler_tests {
         PLANE_CTL_FORMAT_MASK_SKL, PLANE_CTL_FORMAT_XRGB_8888, PLANE_CTL_ORDER_RGBX,
         PrimaryPlaneSourceFormat, UI4_PRIMARY_COMPOSITION_FLAGS, direct_plane_scaler_factor,
         overlay_composition_constant_alpha, plane_color_ctl_alpha,
-        primary_plane_ctl_enabled_for_format,
+        primary_plane_ctl_enabled_for_format, primary_plane_source_contract_accepted,
     };
 
     #[test]
@@ -7518,6 +7544,20 @@ mod direct_plane_scaler_tests {
 
         let color_ctl = plane_color_ctl_alpha(0, OverlayAlphaMode::PremultipliedRgba);
         assert_eq!(color_ctl & PLANE_COLOR_ALPHA_MASK, PLANE_COLOR_ALPHA_SW_PREMULT);
+    }
+
+    #[test]
+    fn primary_geometry_change_requires_atomic_compositor_batch() {
+        assert!(primary_plane_source_contract_accepted(true, false, true, true));
+        assert!(!primary_plane_source_contract_accepted(true, false, true, false));
+        assert!(primary_plane_source_contract_accepted(true, false, false, false));
+    }
+
+    #[test]
+    fn primary_immutable_contract_change_always_fails_closed() {
+        assert!(!primary_plane_source_contract_accepted(true, true, false, true));
+        assert!(!primary_plane_source_contract_accepted(true, true, true, true));
+        assert!(!primary_plane_source_contract_accepted(false, false, false, true));
     }
 
     #[test]
