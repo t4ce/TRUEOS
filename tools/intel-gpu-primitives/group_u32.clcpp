@@ -1,0 +1,215 @@
+// Deterministic grouping primitives built on the scan substrate: 16-bin
+// histograms, run-length encoding, and device-wide segmented exclusive scan.
+
+#include "include/trueos_parallel_u32.hpp"
+
+using namespace trueos::gpgpu::parallel_u32;
+
+TRUEOS_PARALLEL_REQD_SUB_GROUP_SIZE_16
+__kernel void parallel_u32_histogram_tiles_16(
+    __global const uint *values,
+    __global uint *tile_histograms,
+    uint count,
+    uint shift)
+{
+    const uint bin = get_sub_group_local_id();
+    const uint tile = get_group_id(0);
+    uint total = 0u;
+    for (uint item = 0u; item < tile_items; ++item) {
+        const uint index = tile_base(tile) + item;
+        if (index < count) {
+            total += valid_word(digit4(values[index], shift) == bin);
+        }
+    }
+    tile_histograms[tile * radix_bins + bin] = total;
+}
+
+TRUEOS_PARALLEL_REQD_SUB_GROUP_SIZE_16
+__kernel void parallel_u32_rle_mark_heads(
+    __global const uint *keys,
+    __global uint *head_flags,
+    uint count)
+{
+    const uint lane = get_sub_group_local_id();
+    const uint index = get_group_id(0) * subgroup_width + lane;
+    if (index < count) {
+        head_flags[index] = index == 0u || keys[index] != keys[index - 1u]
+            ? 1u
+            : 0u;
+    }
+}
+
+// run_ids_exclusive is the exclusive scan of head_flags. For a head at index i,
+// run_ids_exclusive[i] is exactly the output run index.
+TRUEOS_PARALLEL_REQD_SUB_GROUP_SIZE_16
+__kernel void parallel_u32_rle_emit_runs(
+    __global const uint *keys,
+    __global const uint *head_flags,
+    __global const uint *run_ids_exclusive,
+    __global uint *run_keys,
+    __global uint *run_starts,
+    uint count)
+{
+    const uint lane = get_sub_group_local_id();
+    const uint index = get_group_id(0) * subgroup_width + lane;
+    if (index < count && head_flags[index] != 0u) {
+        const uint run = run_ids_exclusive[index];
+        run_keys[run] = keys[index];
+        run_starts[run] = index;
+    }
+}
+
+TRUEOS_PARALLEL_REQD_SUB_GROUP_SIZE_16
+__kernel void parallel_u32_rle_emit_lengths(
+    __global const uint *run_starts,
+    __global uint *run_lengths,
+    uint run_count,
+    uint count)
+{
+    const uint lane = get_sub_group_local_id();
+    const uint run = get_group_id(0) * subgroup_width + lane;
+    if (run < run_count) {
+        const uint end = run + 1u < run_count ? run_starts[run + 1u] : count;
+        run_lengths[run] = end - run_starts[run];
+    }
+}
+
+// tile_meta is four dwords per tile:
+//   [0] has_head
+//   [1] tail_sum with an incoming carry of zero
+//   [2] first head offset, or valid_count when no head exists
+//   [3] valid_count
+TRUEOS_PARALLEL_REQD_SUB_GROUP_SIZE_16
+__kernel void parallel_u32_segmented_scan_tiles_exclusive(
+    __global const uint *values,
+    __global const uint *head_flags,
+    __global uint *output,
+    __global uint *tile_meta,
+    uint count)
+{
+    const uint lane = get_sub_group_local_id();
+    const uint tile = get_group_id(0);
+    uint carry = 0u;
+    uint first_head = no_head;
+    uint has_head = 0u;
+
+    for (uint row = 0u; row < tile_rows; ++row) {
+        const uint index = row_index(tile, row, lane);
+        const bool valid = index < count;
+        const uint value = valid ? values[index] : 0u;
+        const uint head = valid_word(valid && head_flags[index] != 0u);
+        const uint valid_lane = valid_word(valid);
+
+        uint prefix = carry;
+        for (uint source_lane = 0u; source_lane < subgroup_width; ++source_lane) {
+            const uint source_valid = sub_group_shuffle(valid_lane, source_lane);
+            const uint source_head = sub_group_shuffle(head, source_lane);
+            const uint source_value = sub_group_shuffle(value, source_lane);
+            if (source_lane < lane && source_valid != 0u) {
+                if (source_head != 0u) {
+                    prefix = 0u;
+                }
+                prefix += source_value;
+            }
+        }
+        if (valid) {
+            output[index] = head != 0u ? 0u : prefix;
+        }
+
+        uint row_tail = carry;
+        for (uint source_lane = 0u; source_lane < subgroup_width; ++source_lane) {
+            const uint source_valid = sub_group_shuffle(valid_lane, source_lane);
+            const uint source_head = sub_group_shuffle(head, source_lane);
+            const uint source_value = sub_group_shuffle(value, source_lane);
+            if (source_valid != 0u) {
+                if (source_head != 0u) {
+                    row_tail = 0u;
+                }
+                row_tail += source_value;
+            }
+        }
+        carry = row_tail;
+
+        const uint candidate = head != 0u ? row * subgroup_width + lane : no_head;
+        first_head = min(first_head, sub_group_reduce_min(candidate));
+        has_head |= sub_group_reduce_max(head);
+    }
+
+    if (lane == 0u) {
+        const uint start = tile_base(tile);
+        const uint valid_count = start >= count ? 0u : min(tile_items, count - start);
+        tile_meta[tile * 4u + 0u] = has_head;
+        tile_meta[tile * 4u + 1u] = carry;
+        tile_meta[tile * 4u + 2u] = first_head == no_head ? valid_count : first_head;
+        tile_meta[tile * 4u + 3u] = valid_count;
+    }
+}
+
+// Launch one SIMD16 group. Lane zero scans the compact tile metadata. This is
+// deliberately simple: later work may replace it with an associative meta-scan
+// without changing the tile or carry-application ABI.
+TRUEOS_PARALLEL_REQD_SUB_GROUP_SIZE_16
+__kernel void parallel_u32_segmented_scan_tile_carries(
+    __global const uint *tile_meta,
+    __global uint *tile_carries,
+    uint tile_count)
+{
+    const uint lane = get_sub_group_local_id();
+    if (get_group_id(0) != 0u || lane != 0u) {
+        return;
+    }
+
+    uint carry = 0u;
+    for (uint tile = 0u; tile < tile_count; ++tile) {
+        tile_carries[tile] = carry;
+        const uint has_head = tile_meta[tile * 4u + 0u];
+        const uint tail_sum = tile_meta[tile * 4u + 1u];
+        carry = has_head != 0u ? tail_sum : carry + tail_sum;
+    }
+}
+
+TRUEOS_PARALLEL_REQD_SUB_GROUP_SIZE_16
+__kernel void parallel_u32_segmented_add_tile_carries(
+    __global uint *output,
+    __global const uint *tile_meta,
+    __global const uint *tile_carries,
+    uint count)
+{
+    const uint lane = get_sub_group_local_id();
+    const uint tile = get_group_id(0);
+    const uint first_head = tile_meta[tile * 4u + 2u];
+    const uint carry = tile_carries[tile];
+
+    for (uint row = 0u; row < tile_rows; ++row) {
+        const uint offset = row * subgroup_width + lane;
+        const uint index = tile_base(tile) + offset;
+        if (index < count && offset < first_head) {
+            output[index] += carry;
+        }
+    }
+}
+
+// head_prefix_exclusive is the exclusive scan of binary head_flags. Non-empty
+// input must have head_flags[0] == 1. A segment-ending item writes its modular
+// sum.
+TRUEOS_PARALLEL_REQD_SUB_GROUP_SIZE_16
+__kernel void parallel_u32_segmented_emit_totals(
+    __global const uint *values,
+    __global const uint *head_flags,
+    __global const uint *head_prefix_exclusive,
+    __global const uint *scan_exclusive,
+    __global uint *segment_totals,
+    uint count)
+{
+    const uint lane = get_sub_group_local_id();
+    const uint index = get_group_id(0) * subgroup_width + lane;
+    if (index >= count) {
+        return;
+    }
+    const bool is_tail = index + 1u == count || head_flags[index + 1u] != 0u;
+    if (is_tail) {
+        const uint head = valid_word(head_flags[index] != 0u);
+        const uint segment = head_prefix_exclusive[index] + head - 1u;
+        segment_totals[segment] = scan_exclusive[index] + values[index];
+    }
+}

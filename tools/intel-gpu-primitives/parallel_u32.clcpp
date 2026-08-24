@@ -1,0 +1,115 @@
+// Deterministic, zero-SLM SIMD16 building blocks for device-wide u32 scan,
+// stable selection, and modular reduction. The host recursively scans tile
+// sums and inserts an explicit dependency before applying tile offsets.
+
+#include "include/trueos_parallel_u32.hpp"
+
+using namespace trueos::gpgpu::parallel_u32;
+
+TRUEOS_PARALLEL_REQD_SUB_GROUP_SIZE_16
+__kernel void parallel_u32_normalize_flags(
+    __global const uint *flags,
+    __global uint *normalized,
+    uint count)
+{
+    const uint lane = get_sub_group_local_id();
+    const uint index = get_group_id(0) * subgroup_width + lane;
+    if (index < count) {
+        normalized[index] = valid_word(flags[index] != 0u);
+    }
+}
+
+TRUEOS_PARALLEL_REQD_SUB_GROUP_SIZE_16
+__kernel void parallel_u32_scan_tiles_exclusive(
+    __global const uint *input,
+    __global uint *output,
+    __global uint *tile_sums,
+    uint count)
+{
+    const uint lane = get_sub_group_local_id();
+    const uint tile = get_group_id(0);
+    uint carry = 0u;
+
+    for (uint row = 0u; row < tile_rows; ++row) {
+        const uint index = row_index(tile, row, lane);
+        const uint value = index < count ? input[index] : 0u;
+        const uint row_prefix = sub_group_scan_exclusive_add(value);
+        if (index < count) {
+            output[index] = carry + row_prefix;
+        }
+        carry += sub_group_reduce_add(value);
+    }
+
+    if (lane == 0u) {
+        tile_sums[tile] = carry;
+    }
+}
+
+TRUEOS_PARALLEL_REQD_SUB_GROUP_SIZE_16
+__kernel void parallel_u32_add_tile_offsets(
+    __global uint *output,
+    __global const uint *tile_offsets,
+    uint count)
+{
+    const uint lane = get_sub_group_local_id();
+    const uint tile = get_group_id(0);
+    const uint offset = tile_offsets[tile];
+
+    for (uint row = 0u; row < tile_rows; ++row) {
+        const uint index = row_index(tile, row, lane);
+        if (index < count) {
+            output[index] += offset;
+        }
+    }
+}
+
+TRUEOS_PARALLEL_REQD_SUB_GROUP_SIZE_16
+__kernel void parallel_u32_reduce_sum_tiles(
+    __global const uint *input,
+    __global uint *tile_sums,
+    uint count)
+{
+    const uint lane = get_sub_group_local_id();
+    const uint tile = get_group_id(0);
+    uint sum = 0u;
+
+    for (uint row = 0u; row < tile_rows; ++row) {
+        const uint index = row_index(tile, row, lane);
+        const uint value = index < count ? input[index] : 0u;
+        sum += sub_group_reduce_add(value);
+    }
+
+    if (lane == 0u) {
+        tile_sums[tile] = sum;
+    }
+}
+
+TRUEOS_PARALLEL_REQD_SUB_GROUP_SIZE_16
+__kernel void parallel_u32_select_indices(
+    __global const uint *flags,
+    __global const uint *positions,
+    __global uint *selected_indices,
+    uint count)
+{
+    const uint lane = get_sub_group_local_id();
+    const uint index = get_group_id(0) * subgroup_width + lane;
+    if (index < count && flags[index] != 0u) {
+        selected_indices[positions[index]] = index;
+    }
+}
+
+TRUEOS_PARALLEL_REQD_SUB_GROUP_SIZE_16
+__kernel void parallel_u32_write_selected_count(
+    __global const uint *flags,
+    __global const uint *positions,
+    __global uint *selected_count,
+    uint count)
+{
+    const uint lane = get_sub_group_local_id();
+    if (get_group_id(0) != 0u || lane != 0u) {
+        return;
+    }
+    selected_count[0] = count == 0u
+        ? 0u
+        : positions[count - 1u] + valid_word(flags[count - 1u] != 0u);
+}

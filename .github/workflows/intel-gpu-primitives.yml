@@ -1,0 +1,118 @@
+name: Intel GPU parallel primitives
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/intel-gpu-primitives.yml"
+      - "tools/intel-gpu-primitives/**"
+      - "tools/intel-gpu-bakery/**"
+      - "tools/shadertoy-cpp-offline/bootstrap_toolchain.sh"
+  push:
+    branches: ["true"]
+    paths:
+      - ".github/workflows/intel-gpu-primitives.yml"
+      - "tools/intel-gpu-primitives/**"
+      - "tools/intel-gpu-bakery/**"
+      - "tools/shadertoy-cpp-offline/bootstrap_toolchain.sh"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cloud-source-proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Sparse checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          sparse-checkout: |
+            .github/workflows/intel-gpu-primitives.yml
+            tools/intel-gpu-primitives
+          sparse-checkout-cone-mode: false
+
+      - name: Install Clang
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends clang
+
+      - name: Compile and verify
+        run: make -C tools/intel-gpu-primitives cloud-verify
+
+      - name: Upload compiler proof
+        uses: actions/upload-artifact@v4
+        with:
+          name: intel-gpu-primitives-cloud-source-proof
+          path: bld/intel-gpu-primitives-cloud
+          if-no-files-found: error
+          retention-days: 14
+
+  cloud-adls-candidate-bake:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Sparse checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          sparse-checkout: |
+            .github/workflows/intel-gpu-primitives.yml
+            tools/intel-gpu-primitives
+            tools/intel-gpu-bakery
+            tools/shadertoy-cpp-offline/bootstrap_toolchain.sh
+          sparse-checkout-cone-mode: false
+
+      - name: Bake with the locked Ubuntu 26.04 compiler stack
+        shell: bash
+        run: |
+          set -euo pipefail
+          workspace="$(pwd)"
+          docker run --rm \
+            -e DEBIAN_FRONTEND=noninteractive \
+            -v "${workspace}:/workspace" \
+            -w /workspace \
+            ubuntu:26.04 \
+            bash -euxo pipefail -c '
+              apt-get update
+              apt-get install --yes --no-install-recommends \
+                ca-certificates curl make python3 xz-utils
+
+              tools/shadertoy-cpp-offline/bootstrap_toolchain.sh
+
+              root=/workspace/bld/shadertoy-cpp-toolchain/root
+              package_root=/workspace/bld/shadertoy-cpp-toolchain/packages
+              mapfile -t tool_debs < <(
+                find "${root}/.packages" "${package_root}" \
+                  -maxdepth 1 -type f -name "*.deb" -print | sort
+              )
+              test "${#tool_debs[@]}" -gt 0
+              apt-get install --yes --no-install-recommends "${tool_debs[@]}"
+
+              clang="${root}/usr/lib/llvm-21/bin/clang"
+              llvm_spirv="${root}/usr/bin/llvm-spirv-21"
+              ocloc="$(find "${root}/usr/bin" -maxdepth 1 -type f \
+                -name "ocloc*" -perm -111 -print | sort | head -n1)"
+              libraries="${root}/usr/lib/x86_64-linux-gnu:${root}/usr/lib/x86_64-linux-gnu/intel-opencl"
+              test -n "${ocloc}"
+
+              CLANG="${clang}" \
+              LLVM_SPIRV="${llvm_spirv}" \
+              OCLOC="${ocloc}" \
+              OCLOC_LD_LIBRARY_PATH="${libraries}" \
+                make -C tools/intel-gpu-primitives bake-adls-candidates
+
+              find bld/intel-gpu-primitives-adls -maxdepth 1 -type f -print0 \
+                | sort -z \
+                | xargs -0 sha256sum \
+                > bld/intel-gpu-primitives-adls/SHA256SUMS
+            '
+
+      - name: Upload locked ADL-S candidates
+        uses: actions/upload-artifact@v4
+        with:
+          name: intel-gpu-primitives-adls-candidates
+          path: bld/intel-gpu-primitives-adls
+          if-no-files-found: error
+          retention-days: 14
