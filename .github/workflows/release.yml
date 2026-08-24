@@ -38,6 +38,7 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
       RUST_BACKTRACE: 1
+      TRUEOS_BLUEPRINTS_REV: 7ec5f1f32c7ae931d3a7ccadcc58f0f8d1d09c21
 
     steps:
       - name: Prepare checkout dependencies
@@ -132,9 +133,17 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git clone --depth 1 --branch main \
-            https://github.com/t4ce/TRUEOS-Blueprints.git \
-            bld/TRUEOS-Blueprints
+          blueprints_dir="bld/TRUEOS-Blueprints"
+          git init "${blueprints_dir}"
+          git -C "${blueprints_dir}" remote add origin \
+            https://github.com/t4ce/TRUEOS-Blueprints.git
+          git -C "${blueprints_dir}" fetch --depth 1 origin \
+            "${TRUEOS_BLUEPRINTS_REV}"
+          git -C "${blueprints_dir}" checkout --detach FETCH_HEAD
+          test "$(git -C "${blueprints_dir}" rev-parse HEAD)" = \
+            "${TRUEOS_BLUEPRINTS_REV}"
+          git -C "${blueprints_dir}" apply \
+            "${GITHUB_WORKSPACE}/tools/ci/blueprints-futures-family.patch"
           # The Blueprint workspace's local TRUEOS dependencies expect both
           # repositories to be siblings. Keep the CI checkout itself under the
           # ignored bld/ tree while preserving that layout.
