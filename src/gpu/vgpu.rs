@@ -832,7 +832,10 @@ struct CloudBufferMetadata {
     pages: Arc<[u64]>,
 }
 
-#[expect(dead_code, reason = "activated by the authenticated HelioC encoder rung")]
+#[expect(
+    dead_code,
+    reason = "activated by the authenticated HelioC encoder rung"
+)]
 enum CloudNativeSubmitResult {
     /// A future authenticated encoder may return its real fence and telemetry.
     Submitted(CloudFrameTelemetry),
@@ -1890,9 +1893,8 @@ pub(crate) fn submit_cloud_frame(
             .iter()
             .zip(buffer_metadata.iter())
             .any(|(buffer, metadata)| {
-                lookup_buffer(device, *buffer).map_or(true, |record| {
-                    !cloud_buffer_matches_snapshot(record, metadata, 0)
-                })
+                lookup_buffer(device, *buffer)
+                    .map_or(true, |record| !cloud_buffer_matches_snapshot(record, metadata, 0))
             })
         {
             return Err(VgpuError::DeviceLost);
@@ -1968,9 +1970,15 @@ fn rollback_cloud_submission_lease(
     if device.epoch != lease.device_epoch {
         return false;
     }
-    let Ok(queue) = lookup_queue(device, lease.queue) else { return false };
-    let Ok(surface) = lookup_surface(device, lease.surface) else { return false };
-    let Ok(graph) = lookup_cloud_work_graph(device, lease.graph) else { return false };
+    let Ok(queue) = lookup_queue(device, lease.queue) else {
+        return false;
+    };
+    let Ok(surface) = lookup_surface(device, lease.surface) else {
+        return false;
+    };
+    let Ok(graph) = lookup_cloud_work_graph(device, lease.graph) else {
+        return false;
+    };
     if queue.in_flight != 1 || surface.in_flight != 2 || graph.in_flight != 1 {
         return false;
     }
@@ -1981,7 +1989,9 @@ fn rollback_cloud_submission_lease(
     {
         return false;
     }
-    lookup_queue_mut(device, lease.queue).expect("validated Cloud queue").in_flight = 0;
+    lookup_queue_mut(device, lease.queue)
+        .expect("validated Cloud queue")
+        .in_flight = 0;
     lookup_surface_mut(device, lease.surface)
         .expect("validated Cloud surface")
         .in_flight = 1;
@@ -2009,9 +2019,15 @@ fn retire_cloud_submission_lease(
     if device.epoch != lease.device_epoch {
         return false;
     }
-    let Ok(queue) = lookup_queue(device, lease.queue) else { return false };
-    let Ok(surface) = lookup_surface(device, lease.surface) else { return false };
-    let Ok(graph) = lookup_cloud_work_graph(device, lease.graph) else { return false };
+    let Ok(queue) = lookup_queue(device, lease.queue) else {
+        return false;
+    };
+    let Ok(surface) = lookup_surface(device, lease.surface) else {
+        return false;
+    };
+    let Ok(graph) = lookup_cloud_work_graph(device, lease.graph) else {
+        return false;
+    };
     if telemetry.point.queue != lease.queue
         || telemetry.point.value == 0
         || telemetry.point.value <= queue.timeline.submitted
@@ -2044,7 +2060,9 @@ fn retire_cloud_submission_lease(
     {
         return false;
     }
-    lookup_queue_mut(device, lease.queue).expect("validated Cloud queue").in_flight = 0;
+    lookup_queue_mut(device, lease.queue)
+        .expect("validated Cloud queue")
+        .in_flight = 0;
     let queue = lookup_queue_mut(device, lease.queue).expect("validated Cloud queue");
     queue.timeline.submitted = telemetry.point.value;
     queue.timeline.completed = telemetry.point.value;

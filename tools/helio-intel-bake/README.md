@@ -83,3 +83,25 @@ preflight reports these facts, the exact device ID, and the absence of a public
 PCI revision before refusing packaging. The assembler therefore remains
 reachable only after a reviewed capture supplies a relocatable surface/sampler/
 bind-map contract compatible with the broker allocation.
+
+When the matched instrumented ANV patches are enabled, `bake.py` also requires
+the complete observed gfx120 trace: two compute binding-table records and two
+compute sampler-map records (the ping-pong descriptor flushes), one fragment
+binding-table record, one fragment sampler-map record, and one completed command
+record. The vertex stage is intentionally absent because its bind map has zero
+surfaces and samplers. Gfx120 uses indirect descriptor forms, so the older
+ANV_DESCRIPTOR_SURFACE/SAMPLER hooks may produce no kind-1/2 records; those
+records are not treated as required evidence. Record kinds, Mesa shader stages,
+bindings, and counts are checked exactly; a truncated, duplicated, mislabeled,
+or partial trace is rejected. These records remain capture evidence only and
+never become runtime state or a fallback package.
+
+The next admission format is the versioned
+`compiler/helioc-relocatable-state-v1.json` section. It must authenticate the
+gfx120/ADL-S r0c identity, name the persistent control/resource windows and the
+physical-only UI4 surface, and provide SHA-256 values for every named payload.
+Each relocation is explicit (`target`, `offset`, `width`, `kind`, `source`, and
+signed `addend`); offsets are bounded and same-target ranges may not overlap.
+ANV process addresses are not accepted as relocations. The current bakery does
+not emit this section or a HELIOA: capture metadata still lacks a complete
+symbolic state/relocation map, so the package gate remains fail-closed.

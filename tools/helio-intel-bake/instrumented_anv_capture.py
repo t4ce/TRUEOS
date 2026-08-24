@@ -23,17 +23,19 @@ DEFAULT_MESA = TRUEOS.parent / "bak/reference/mesa"
 MESA_REVISION = "6fb261147bbb4cc488ea9f16fb3b6fe02105332e"
 PATCH = Path(__file__).with_name("mesa-helioc-capture-6fb2611.patch")
 FOLLOWUP_PATCH = Path(__file__).with_name("mesa-helioc-capture-followup-6fb2611.patch")
-REQUIRED_TOOLS = ("meson", "ninja", "bison", "flex", "pkg-config")
-REQUIRED_PKGCONFIG = ("libdrm", "libzstd", "vulkan")
+IDENTITY_PATCH = Path(__file__).with_name("mesa-helioc-capture-identity-followup-6fb2611.patch")
+SHADER_SERIALIZE_PATCH = Path(__file__).with_name("mesa-helioc-capture-shader-serialize-6fb2611.patch")
+REQUIRED_TOOLS = ("meson", "ninja", "bison", "flex", "pkg-config", "tar")
+REQUIRED_PKGCONFIG = ("expat", "libdrm", "libzstd", "vulkan")
 BOOTSTRAP_PACKAGES = (
     "meson", "ninja-build", "bison", "flex", "libfl-dev",
     "libdrm-dev", "libdrm2", "libdrm-intel1", "libdrm-radeon1",
     "libdrm-nouveau2", "libdrm-amdgpu1", "libpciaccess-dev",
-    "libpciaccess0", "libzstd-dev", "libzstd1", "libvulkan-dev",
+    "libpciaccess0", "libexpat1-dev", "libexpat1", "libzstd-dev", "libzstd1", "libvulkan-dev",
     "libvulkan1", "glslang-tools", "spirv-tools", "spirv-tools-dev",
     "spirv-tools-headers", "libclc-21", "libclc-21-dev",
     "libllvmspirvlib-21-dev", "libllvmspirvlib21.1", "llvm-spirv-21",
-    "libclang-cpp21", "libclang-cpp21-dev",
+    "libclang-cpp21", "libclang-cpp21-dev", "libclang-21-dev",
     "python3-mako", "python3-markupsafe",
 )
 
@@ -103,6 +105,16 @@ def temporary_tool_prefix(work: Path, env: dict[str, str]) -> None:
     if library_path:
         env["LIBRARY_PATH"] = library_path + os.pathsep + env.get("LIBRARY_PATH", "")
         env["LD_LIBRARY_PATH"] = library_path + os.pathsep + env.get("LD_LIBRARY_PATH", "")
+    include_dirs = [
+        prefix / "usr/lib/llvm-21/include",
+        prefix / "usr/include",
+    ]
+    include_path = os.pathsep.join(str(path) for path in include_dirs if path.is_dir())
+    if include_path:
+        env["CPATH"] = include_path + os.pathsep + env.get("CPATH", "")
+    bison_data = prefix / "usr/share/bison"
+    if bison_data.is_dir():
+        env["BISON_PKGDATADIR"] = str(bison_data)
     print(f"temporary build-tool prefix: {prefix}")
 
 
@@ -116,17 +128,18 @@ def copy_and_patch(source: Path, work: Path) -> Path:
     destination = work / "mesa-src"
     if destination.exists():
         raise SystemExit(f"temporary Mesa source already exists: {destination}; choose a new --work-dir")
-    # The pinned reference is a sparse source checkout and intentionally keeps
-    # a couple of documentation/CI symlinks whose targets are absent. Preserve
-    # links verbatim; the Intel build never consumes those optional targets.
-    shutil.copytree(
-        source, destination, symlinks=True,
-        ignore=shutil.ignore_patterns(".git"),
-    )
+    # The pinned reference uses sparse checkout. Archive the exact Git tree so
+    # required directories such as src/drm-shim are present without changing
+    # the reference checkout's sparse specification.
+    source_archive = work / "mesa-source.tar"
+    run(["git", "archive", "--format=tar", "--output", str(source_archive), MESA_REVISION], cwd=source)
+    destination.mkdir()
+    run(["tar", "-xf", str(source_archive), "-C", str(destination)])
+    source_archive.unlink()
     run(["git", "init", "-q"], cwd=destination)
     run(["git", "add", "-A"], cwd=destination)
     run(["git", "-c", "user.name=trueos", "-c", "user.email=trueos@localhost", "commit", "-qm", "mesa-base"], cwd=destination)
-    for patch in (PATCH, FOLLOWUP_PATCH):
+    for patch in (PATCH, FOLLOWUP_PATCH, IDENTITY_PATCH, SHADER_SERIALIZE_PATCH):
         run(["git", "apply", "--check", str(patch)], cwd=destination)
         run(["git", "apply", str(patch)], cwd=destination)
     return destination
@@ -138,11 +151,13 @@ def locate_icd(build: Path, work: Path) -> Path:
         raise SystemExit(f"instrumented ANV build produced {len(matches)} Intel ICD manifests, expected one")
     manifest = json.loads(matches[0].read_text())
     library = Path(manifest["ICD"]["library_path"])
-    if not library.is_absolute():
-        candidates = list(build.rglob(library.name))
-        if len(candidates) != 1:
-            raise SystemExit(f"cannot resolve matched Intel ICD library {library.name}")
-        library = candidates[0].resolve()
+    # Meson writes its configured install path into the build-tree manifest.
+    # Never accept that path (or an accidentally installed system ICD): bind
+    # the capture manifest to the unique library produced by this exact build.
+    candidates = list(build.rglob(library.name))
+    if len(candidates) != 1:
+        raise SystemExit(f"cannot resolve unique matched Intel ICD library {library.name}")
+    library = candidates[0].resolve()
     manifest["ICD"]["library_path"] = str(library)
     selected = work / "instrumented-intel-icd.json"
     selected.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
@@ -154,7 +169,7 @@ def main() -> None:
     parser.add_argument("--mesa-src", type=Path, default=DEFAULT_MESA)
     parser.add_argument("--work-dir", type=Path, required=True)
     parser.add_argument("--bootstrap-tools", action="store_true",
-                        help="extract meson/ninja/bison/flex beneath work-dir using apt download")
+                        help="extract the pinned Mesa build dependencies beneath work-dir using apt download")
     args = parser.parse_args()
     work = args.work_dir.resolve()
     work.mkdir(parents=True, exist_ok=True)
@@ -171,9 +186,19 @@ def main() -> None:
         "-Dglx=disabled", "-Degl=disabled", "-Dgbm=disabled", "-Dllvm=enabled",
         "-Dxmlconfig=disabled", "-Dshader-cache=disabled", "-Dvalgrind=disabled",
         "-Dlibunwind=disabled", "-Dzstd=enabled", "-Dzlib=disabled",
-        "-Dtools=drm-shim", "-Dbuildtype=release",
+        # `drm-shim` builds the common shim support; `intel` enters the Intel
+        # tools subdirectory where libintel_noop_drm_shim.so is defined.
+        "-Dtools=intel,drm-shim", "-Dbuildtype=release",
     ], env=env)
-    run(["ninja", "-C", str(build)], env=env)
+    # Building the entire `intel` tools family pulls unrelated diagnostic
+    # binaries into this capture (and their optional zlib link surface).  The
+    # exact ICD and no-op shim targets contain every dependency we need.
+    run([
+        "ninja", "-C", str(build),
+        "src/intel/vulkan/libvulkan_intel.so",
+        "src/intel/vulkan/intel_icd.x86_64.json",
+        "src/intel/tools/libintel_noop_drm_shim.so",
+    ], env=env)
     icd = locate_icd(build, work)
     shim_matches = sorted(build.rglob("libintel_noop_drm_shim.so"))
     if len(shim_matches) != 1:
@@ -184,7 +209,10 @@ def main() -> None:
         "VK_DRIVER_FILES": str(icd),
         "LD_PRELOAD": str(shim_matches[0]),
         "INTEL_STUB_GPU_DEVICE_ID": "4680",
-        "TRUEOS_HELIOC_STUB_REVISION": "0x0c",
+        # PCI revision is part of the HelioC target identity.  KMD revision
+        # is separate Mesa state and stays explicitly zero for this shim.
+        "TRUEOS_HELIOC_STUB_PCI_REVISION": "0x0c",
+        "TRUEOS_HELIOC_STUB_KMD_REVISION": "0",
         "TRUEOS_HELIOC_ANV_DUMP_DIR": str(capture),
         "TRUEOS_HELIOC_CAPTURE_IDENTITY": "noop-drm-shim:8086:4680:r0c",
     })
@@ -194,8 +222,18 @@ def main() -> None:
     result = subprocess.run(command, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     (capture / "instrumented-helioc.log").write_text(result.stdout)
     print(result.stdout, end="")
+    output_path = capture / "must-not-exist.helio"
     if result.returncode == 0:
         raise SystemExit("fail-closed HelioC bakery unexpectedly emitted success")
+    if output_path.exists():
+        raise SystemExit("fail-closed HelioC bakery left a HELIOA output behind")
+    for message in (
+        "symbolic address/ownership map for the command, binding-table, sampler, indirect-descriptor, and render-target state",
+        "physical UHD 770 PCI r0c retirement/ISA proof (the explicit no-op shim proves compiler identity, not execution on target silicon)",
+        "HelioC preflight stopped; no HELIOA emitted: missing capture datum(s):",
+    ):
+        if message not in result.stdout:
+            raise SystemExit(f"instrumented HelioC capture omitted expected fail-closed message: {message}")
     if not any(capture.rglob("helioc-anv-*.bin")):
         raise SystemExit("instrumented ANV ran but produced no state trace")
     metadata_files = list(capture.glob("helioc-capture-metadata.json"))

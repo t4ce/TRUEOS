@@ -13,6 +13,9 @@ pub(crate) struct HelioCloudSurfaceDesc {
 pub(crate) struct HelioCloudDispatchPlan {
     pub(crate) source_volume_gpu: u64,
     pub(crate) destination_volume_gpu: u64,
+    pub(crate) sim_params_gpu: u64,
+    pub(crate) render_params_gpu: u64,
+    pub(crate) dispatch_groups: [u32; 3],
 }
 
 /// Immutable lowering result for one bounded Cloud frame. The native encoder
@@ -26,6 +29,10 @@ pub(crate) struct HelioCloudFramePlan {
     pub(crate) surface: HelioCloudSurfaceDesc,
 }
 
+const HELIOC_SIM_PARAMS_GPU: u64 = 0x0900_0000;
+const HELIOC_RENDER_PARAMS_GPU: u64 = 0x0901_0000;
+const HELIOC_DISPATCH_GROUPS: [u32; 3] = [24, 12, 24];
+
 const HELIOC_PAGE_BYTES: usize = 4096;
 const HELIOC_VOLUME_PAGE_COUNT: usize = HELIOC_VOLUME_RGBA16F_BYTES / HELIOC_PAGE_BYTES;
 const HELIOC_PARAM_PAGE_COUNT: usize = 1;
@@ -35,6 +42,22 @@ fn helioc_exact_pages_valid(pages: &[u64], expected_count: usize) -> bool {
         && pages
             .iter()
             .all(|phys| *phys != 0 && phys.is_multiple_of(HELIOC_PAGE_BYTES as u64))
+}
+
+fn helioc_pages_are_disjoint(resources: [&[u64]; 4]) -> bool {
+    for (index, pages) in resources.iter().enumerate() {
+        for page in pages.iter().copied() {
+            if resources[..index].iter().any(|prior| prior.contains(&page)) {
+                return false;
+            }
+        }
+        for (offset, page) in pages.iter().copied().enumerate() {
+            if pages[offset + 1..].contains(&page) {
+                return false;
+            }
+        }
+    }
+    true
 }
 
 fn helioc_surface_valid(surface: HelioCloudSurfaceDesc) -> bool {
@@ -88,6 +111,12 @@ pub(crate) fn plan_helioc_frame(
         || !helioc_exact_pages_valid(volume_b_pages, HELIOC_VOLUME_PAGE_COUNT)
         || !helioc_exact_pages_valid(sim_params_pages, HELIOC_PARAM_PAGE_COUNT)
         || !helioc_exact_pages_valid(render_params_pages, HELIOC_PARAM_PAGE_COUNT)
+        || !helioc_pages_are_disjoint([
+            volume_a_pages,
+            volume_b_pages,
+            sim_params_pages,
+            render_params_pages,
+        ])
         || !helioc_surface_valid(surface)
     {
         return None;
@@ -98,10 +127,16 @@ pub(crate) fn plan_helioc_frame(
     let second = HelioCloudDispatchPlan {
         source_volume_gpu: first_destination,
         destination_volume_gpu: first_source,
+        sim_params_gpu: HELIOC_SIM_PARAMS_GPU,
+        render_params_gpu: HELIOC_RENDER_PARAMS_GPU,
+        dispatch_groups: HELIOC_DISPATCH_GROUPS,
     };
     let first = HelioCloudDispatchPlan {
         source_volume_gpu: first_source,
         destination_volume_gpu: first_destination,
+        sim_params_gpu: HELIOC_SIM_PARAMS_GPU,
+        render_params_gpu: HELIOC_RENDER_PARAMS_GPU,
+        dispatch_groups: HELIOC_DISPATCH_GROUPS,
     };
     let dispatches = if simulation_steps == 2 {
         [first, second]
@@ -169,6 +204,9 @@ mod tests {
             HelioCloudDispatchPlan {
                 source_volume_gpu: HELIOC_RCS_GPU_VA_VOLUME_A_BASE,
                 destination_volume_gpu: HELIOC_RCS_GPU_VA_VOLUME_B_BASE,
+                sim_params_gpu: HELIOC_SIM_PARAMS_GPU,
+                render_params_gpu: HELIOC_RENDER_PARAMS_GPU,
+                dispatch_groups: HELIOC_DISPATCH_GROUPS,
             }
         );
         assert_eq!(plan.final_volume_gpu, HELIOC_RCS_GPU_VA_VOLUME_B_BASE);
@@ -198,5 +236,35 @@ mod tests {
         bad_surface = surface();
         bad_surface.phys += 1;
         assert!(plan_helioc_frame(&a, &b, &[PAGE], &[PAGE * 2], bad_surface, 0, 0).is_none());
+    }
+
+    #[test]
+    fn rejects_physical_page_aliases_across_cloud_resources() {
+        let a = pages(HELIOC_VOLUME_PAGE_COUNT, VOLUME_PAGE);
+        let mut b = pages(HELIOC_VOLUME_PAGE_COUNT, VOLUME_PAGE * 2);
+        b[0] = a[0];
+        assert!(plan_helioc_frame(&a, &b, &[PAGE], &[PAGE * 2], surface(), 0, 0).is_none());
+        assert!(
+            plan_helioc_frame(
+                &a,
+                &pages(HELIOC_VOLUME_PAGE_COUNT, VOLUME_PAGE * 2),
+                &[a[1]],
+                &[PAGE * 2],
+                surface(),
+                0,
+                0
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn every_dispatch_uses_fixed_parameters_and_groups() {
+        let frame = plan(2, 0);
+        for dispatch in frame.dispatches {
+            assert_eq!(dispatch.sim_params_gpu, HELIOC_SIM_PARAMS_GPU);
+            assert_eq!(dispatch.render_params_gpu, HELIOC_RENDER_PARAMS_GPU);
+            assert_eq!(dispatch.dispatch_groups, HELIOC_DISPATCH_GROUPS);
+        }
     }
 }

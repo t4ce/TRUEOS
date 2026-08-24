@@ -1,0 +1,32 @@
+diff --git a/src/intel/vulkan/anv_shader.c b/src/intel/vulkan/anv_shader.c
+index f5b2578..d9f4ab1 100644
+--- a/src/intel/vulkan/anv_shader.c
++++ b/src/intel/vulkan/anv_shader.c
+@@ -495,6 +495,27 @@ anv_shader_get_executable_internal_representations(
+    }
+    free(trueos_devinfo);
+ 
++   struct blob trueos_shader_blob;
++   blob_init(&trueos_shader_blob);
++   const bool trueos_shader_serialized =
++      anv_shader_serialize(vk_device, vk_shader, &trueos_shader_blob);
++   if (!trueos_shader_serialized || trueos_shader_blob.out_of_memory ||
++       trueos_shader_blob.size == 0) {
++      /* The public representation is intentionally omitted on failure.  The
++       * caller sees VK_INCOMPLETE and must not treat a partial trace as ABI. */
++      incomplete_text = true;
++   } else {
++      vk_outarray_append_typed(VkPipelineExecutableInternalRepresentationKHR, &out, ir) {
++         VK_COPY_STR(ir->name, "TRUEOS HelioC shader serialize");
++         VK_COPY_STR(ir->description,
++                     "Capture-only ANV canonical shader serialization; commit-pinned diagnostic evidence");
++         if (!write_ir_binary(ir, trueos_shader_blob.data,
++                              trueos_shader_blob.size))
++            incomplete_text = true;
++      }
++   }
++   blob_finish(&trueos_shader_blob);
++
+    vk_outarray_append_typed(VkPipelineExecutableInternalRepresentationKHR, &out, ir) {
+       VK_COPY_STR(ir->name, "TRUEOS HelioC prog data");
+       VK_COPY_STR(ir->description,

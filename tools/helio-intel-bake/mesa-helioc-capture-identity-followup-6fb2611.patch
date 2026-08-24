@@ -1,0 +1,64 @@
+diff --git a/src/intel/tools/intel_noop_drm_shim.c b/src/intel/tools/intel_noop_drm_shim.c
+index 195bdad..f4e7b5b 100644
+--- a/src/intel/tools/intel_noop_drm_shim.c
++++ b/src/intel/tools/intel_noop_drm_shim.c
+@@ -221,6 +221,10 @@ i915_ioctl_get_param(int fd, unsigned long request, void *arg)
+    case I915_PARAM_CHIPSET_ID:
+       *gp->value = i915.device_id;
+       return 0;
+    case I915_PARAM_REVISION:
+-      *gp->value = 0;
++      /* KMD revision is distinct from the PCI revision exposed in sysfs. */
++      const char *kmd_revision = os_get_option("TRUEOS_HELIOC_STUB_KMD_REVISION");
++      *gp->value = kmd_revision ? strtol(kmd_revision, NULL, 0) : 0;
++      if (*gp->value < 0 || *gp->value > UINT16_MAX)
++         return -EINVAL;
+       return 0;
+@@ -602,10 +607,10 @@ drm_shim_driver_init(void)
+    /* This is capture-only identity injection.  A no-op DRM shim can exercise
+     * compiler/state emission but cannot prove physical-device retirement. */
+-   const char *revision = os_get_option("TRUEOS_HELIOC_STUB_REVISION");
+-   if (revision == NULL)
+-      revision = "0x0";
++   const char *pci_revision = os_get_option("TRUEOS_HELIOC_STUB_PCI_REVISION");
++   if (pci_revision == NULL)
++      pci_revision = "0x0";
+    char revision_content[16];
+-   snprintf(revision_content, sizeof(revision_content), "%s\n", revision);
++   snprintf(revision_content, sizeof(revision_content), "%s\n", pci_revision);
+    drm_shim_override_file(revision_content,
+                           "/sys/dev/char/%d:%d/device/revision",
+                           DRM_MAJOR, render_node_minor);
+diff --git a/src/intel/vulkan/anv_shader.c b/src/intel/vulkan/anv_shader.c
+index f322fea..f5b2578 100644
+--- a/src/intel/vulkan/anv_shader.c
++++ b/src/intel/vulkan/anv_shader.c
+@@ -318,9 +318,10 @@ get_shader_trueos_helioc_devinfo_text(const struct anv_device *device)
+    char *stream_data = NULL;
+    size_t stream_size = 0;
+    FILE *stream = open_memstream(&stream_data, &stream_size);
+-   fprintf(stream, "TRUEOS_HELIOC_DEVINFO_V1 pci_device_id=0x%04x ver=%u verx10=%u\n",
++   fprintf(stream, "TRUEOS_HELIOC_DEVINFO_V1 pci_device_id=0x%04x pci_revision_id=0x%02x revision=%u kmd_type=%u ver=%u verx10=%u\n",
+-           device->physical->info.pci_device_id, device->physical->info.ver,
+-           device->physical->info.verx10);
++           device->physical->info.pci_device_id, device->physical->info.pci_revision_id,
++           device->physical->info.revision, device->physical->info.kmd_type,
++           device->physical->info.ver, device->physical->info.verx10);
+    fclose(stream);
+    return stream_data;
+ }
+diff --git a/src/intel/vulkan/genX_cmd_buffer.c b/src/intel/vulkan/genX_cmd_buffer.c
+index 738d1d8..ac96e15 100644
+--- a/src/intel/vulkan/genX_cmd_buffer.c
++++ b/src/intel/vulkan/genX_cmd_buffer.c
+@@ -4108,7 +4108,9 @@ end_command_buffer(struct anv_cmd_buffer *cmd_buffer)
+ 
+    anv_cmd_buffer_end_batch_buffer(cmd_buffer);
+ 
+-   if (!list_is_singular(&cmd_buffer->batch_bos)) {
++   struct anv_batch_bo *batch_bo = list_first_entry(
++      &cmd_buffer->batch_bos, struct anv_batch_bo, link);
++   if (!list_is_singular(&cmd_buffer->batch_bos) || batch_bo->chained) {
+       fprintf(stderr, "TRUEOS_HELIOC_CAPTURE: command trace incomplete: chained or multiple owned batch BOs\n");
+    } else {
+       const uint32_t bytes = (uint8_t *)cmd_buffer->batch.next -

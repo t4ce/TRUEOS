@@ -9,6 +9,7 @@ TRUEOS's xe_lp_shader_bake proof.  No shader source is synthesized here.
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import hashlib
 import json
 import os
@@ -78,6 +79,27 @@ HELIOC_DESCRIPTOR_BYTES = 320
 HELIOC_GFX_VERX10 = 120
 HELIOC_DEVICE_ID = 0x4680
 HELIOC_REVISION = 0x0C
+HELIOC_RELOC_STATE_SECTION = "compiler/helioc-relocatable-state-v1.json"
+HELIOC_RELOC_STATE_MAGIC = "HELIOCRS"
+HELIOC_RELOC_STATE_VERSION = 1
+HELIOC_RELOC_RESOURCE_NAMES = (
+    "ring", "context", "result", "batch", "volume_a", "volume_b",
+    "sim_params", "render_params", "surface_ui4",
+)
+HELIOC_RELOC_FIXED_WINDOWS = {
+    "ring": (0x0860_0000, 0x0860_0000 + 0x10000),
+    "context": (0x0861_0000, 0x0861_0000 + 0x30000),
+    "result": (0x0864_0000, 0x0864_0000 + 0x10000),
+    "batch": (0x0870_0000, 0x0870_0000 + 0x10000),
+    "volume_a": (0x0880_0000, 0x0880_0000 + 3_538_944),
+    "volume_b": (0x08C0_0000, 0x08C0_0000 + 3_538_944),
+    "sim_params": (0x0900_0000, 0x0900_0000 + 4096),
+    "render_params": (0x0901_0000, 0x0901_0000 + 4096),
+}
+HELIOC_RELOC_PATCH_KINDS = {
+    "gpu_va", "phys_addr", "byte_size", "surface_state", "sampler_state",
+    "binding_table", "program_data",
+}
 
 
 def _affine3x4_mul(
@@ -709,6 +731,115 @@ def validate_helioc_resource_capture(resources: bytes, metadata: bytes) -> None:
         raise SystemExit("HelioC capture resource metadata is not the sealed cloud-volume contract")
 
 
+def _reloc_hex_hash(value: object, label: str) -> str:
+    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
+        raise SystemExit(f"HelioC relocatable state has invalid {label} SHA-256")
+    return value
+
+
+def validate_helioc_relocatable_state(section: bytes | dict[str, object]) -> dict[str, object]:
+    """Validate the complete, symbolic HelioC state contract.
+
+    This section is deliberately independent of ANV capture addresses. Every
+    patch names a resource, width, kind, addend, and bounded target offset;
+    callers cannot smuggle a process VA or an overlapping patch range into a
+    future package.
+    """
+    if isinstance(section, bytes):
+        try:
+            state = json.loads(section.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise SystemExit("HelioC relocatable state is not valid UTF-8 JSON") from error
+    else:
+        state = section
+    if not isinstance(state, dict):
+        raise SystemExit("HelioC relocatable state root must be an object")
+    if state.get("magic") != HELIOC_RELOC_STATE_MAGIC or state.get("version") != HELIOC_RELOC_STATE_VERSION:
+        raise SystemExit("HelioC relocatable state has an unsupported magic/version")
+    if set(state) != {"magic", "version", "complete", "identity", "resources", "patches"}:
+        raise SystemExit("HelioC relocatable state has unknown or missing top-level fields")
+    if state.get("complete") is not True:
+        raise SystemExit("HelioC relocatable state is incomplete")
+    identity = state.get("identity")
+    if identity != {
+        "gfx_verx10": HELIOC_GFX_VERX10,
+        "device_id": HELIOC_DEVICE_ID,
+        "revision": HELIOC_REVISION,
+    }:
+        raise SystemExit("HelioC relocatable state target identity is not sealed gfx120/r0c")
+    resources = state.get("resources")
+    if not isinstance(resources, list) or len(resources) != len(HELIOC_RELOC_RESOURCE_NAMES):
+        raise SystemExit("HelioC relocatable state needs exactly the sealed named resources")
+    by_name: dict[str, dict[str, object]] = {}
+    for resource in resources:
+        if not isinstance(resource, dict):
+            raise SystemExit("HelioC relocatable resource is not an object")
+        if set(resource) != {"name", "kind", "gpu_va", "bytes", "alignment", "sha256"}:
+            raise SystemExit("HelioC relocatable resource has unknown or missing fields")
+        name = resource.get("name")
+        if not isinstance(name, str) or name in by_name or name not in HELIOC_RELOC_RESOURCE_NAMES:
+            raise SystemExit(f"HelioC relocatable resource name is invalid: {name!r}")
+        bytes_len = resource.get("bytes")
+        alignment = resource.get("alignment")
+        if not isinstance(resource.get("kind"), str) or not resource["kind"]:
+            raise SystemExit(f"HelioC relocatable resource {name!r} has no kind")
+        if not isinstance(bytes_len, int) or bytes_len <= 0 or not isinstance(alignment, int) \
+                or alignment <= 0 or alignment & (alignment - 1):
+            raise SystemExit(f"HelioC relocatable resource {name} has invalid size/alignment")
+        _reloc_hex_hash(resource.get("sha256"), f"resource {name}")
+        gpu_va = resource.get("gpu_va")
+        if name == "surface_ui4":
+            if gpu_va is not None:
+                raise SystemExit("HelioC UI4 surface must remain physical-only in relocatable state")
+        else:
+            window = HELIOC_RELOC_FIXED_WINDOWS[name]
+            if gpu_va != window[0] or bytes_len > window[1] - window[0] \
+                    or gpu_va % 4096 != 0 or bytes_len % 4096 != 0:
+                raise SystemExit(f"HelioC relocatable resource {name} escapes its fixed VA window")
+        by_name[name] = resource
+    if set(by_name) != set(HELIOC_RELOC_RESOURCE_NAMES):
+        raise SystemExit("HelioC relocatable state has missing named resources")
+
+    patches = state.get("patches")
+    if not isinstance(patches, list) or not patches:
+        raise SystemExit("HelioC relocatable state has no explicit relocation patches")
+    occupied: dict[str, list[tuple[int, int]]] = {name: [] for name in by_name}
+    for patch in patches:
+        if not isinstance(patch, dict):
+            raise SystemExit("HelioC relocation patch is not an object")
+        if set(patch) != {"target", "source", "offset", "width", "kind", "addend"}:
+            raise SystemExit("HelioC relocation patch has unknown or missing fields")
+        target = patch.get("target")
+        source = patch.get("source")
+        offset = patch.get("offset")
+        width = patch.get("width")
+        kind = patch.get("kind")
+        addend = patch.get("addend")
+        if target not in by_name or (source is not None and source not in by_name):
+            raise SystemExit("HelioC relocation patch references an unknown resource")
+        if not isinstance(offset, int) or not isinstance(width, int) or width not in (4, 8) \
+                or offset < 0 or offset + width > int(by_name[target]["bytes"]):
+            raise SystemExit("HelioC relocation patch is out of bounds or has invalid width")
+        if kind not in HELIOC_RELOC_PATCH_KINDS or not isinstance(addend, int):
+            raise SystemExit("HelioC relocation patch has an invalid kind/addend")
+        if not -(1 << (width * 8 - 1)) <= addend < (1 << (width * 8 - 1)):
+            raise SystemExit("HelioC relocation patch addend does not fit its signed width")
+        if kind in {"gpu_va", "phys_addr", "byte_size", "surface_state", "sampler_state"} \
+                and source is None:
+            raise SystemExit(f"HelioC relocation kind {kind} requires a named source")
+        start, end = offset, offset + width
+        if any(start < old_end and old_start < end for old_start, old_end in occupied[target]):
+            raise SystemExit(f"HelioC relocation patches overlap in target {target}")
+        occupied[target].append((start, end))
+    return state
+
+
+def normalize_helioc_relocatable_state(state: dict[str, object]) -> bytes:
+    """Canonicalize a validated relocatable state section without emitting it."""
+    validate_helioc_relocatable_state(state)
+    return (json.dumps(state, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+
+
 def encode_helioc_descriptor(
     compute: bytes,
     graphics: bytes,
@@ -951,6 +1082,7 @@ def helioc_linear_probe(log: str) -> dict[str, int | bool | str]:
 
 def helioc_public_api_boundary(
     device: dict[str, object], volume_requirements: list[dict[str, int]], log: str,
+    *, instrumented: bool = False,
 ) -> list[str]:
     """List data the public capture APIs provably do not expose.
 
@@ -960,6 +1092,14 @@ def helioc_public_api_boundary(
     payload. Vulkan device properties also carry a PCI device ID, not the PCI
     revision needed by HELIOC's sealed ADL-S revision field.
     """
+    if instrumented:
+        return [
+            "symbolic address/ownership map for the command, binding-table, sampler, "
+            "indirect-descriptor, and render-target state (captured raw addresses are diagnostic only)",
+            "physical UHD 770 PCI r0c retirement/ISA proof (the explicit no-op shim proves "
+            "compiler identity, not execution on target silicon)",
+        ]
+
     missing = [
         "ANV descriptor-to-BTI/sampler-table mapping and compute program-data payload "
         "(not returned by VK_KHR_pipeline_executable_properties; pipeline cache is opaque)",
@@ -993,25 +1133,151 @@ def collect_instrumented_anv_capture(exec_dir: Path) -> dict[str, object] | None
         records.append({"file": path.name, "kind": kind, "stage_or_type": stage_or_type,
                         "binding": binding, "element": element, "bytes": payload,
                         "sha256": sha256(data[28:])})
-    reps: dict[str, dict[str, dict[str, object]]] = {}
-    for stage in ("compute", "vertex", "fragment"):
+    _validate_instrumented_anv_records(records)
+    reps: dict[str, dict[str, list[dict[str, object]]]] = {}
+    expected_variants = {"compute": 1, "vertex": 1, "fragment": 2}
+    for stage, expected_count in expected_variants.items():
         reps[stage] = {}
         for label, suffix in (("bind_map", "TRUEOS_HelioC_bind_map.txt"),
-                              ("prog_data", "TRUEOS_HelioC_prog_data.bin"),
+                              ("shader_serialize", "TRUEOS_HelioC_shader_serialize.bin"),
+                              # This raw struct remains diagnostic only.  The
+                              # serializer above is ANV's canonical complete record.
+                              ("diagnostic_raw_prog_data", "TRUEOS_HelioC_prog_data.bin"),
                               ("devinfo", "TRUEOS_HelioC_devinfo.txt")):
             matches = sorted(exec_dir.glob(f"*_{stage}_*_{suffix}"))
-            if len(matches) != 1:
-                raise SystemExit(f"instrumented ANV capture needs exactly one {stage} {label}, got {len(matches)}")
-            data = matches[0].read_bytes()
-            if not data:
-                raise SystemExit(f"instrumented ANV {stage} {label} is empty")
-            reps[stage][label] = {"file": matches[0].name, "bytes": len(data), "sha256": sha256(data)}
+            if len(matches) != expected_count:
+                raise SystemExit(
+                    f"instrumented ANV capture needs exactly {expected_count} {stage} {label} "
+                    f"representation(s), got {len(matches)}"
+                )
+            entries: list[dict[str, object]] = []
+            for path in matches:
+                data = path.read_bytes()
+                if not data:
+                    raise SystemExit(f"instrumented ANV {stage} {label} is empty: {path.name}")
+                entries.append({"file": path.name, "bytes": len(data), "sha256": sha256(data)})
+            if len({entry["file"] for entry in entries}) != expected_count:
+                raise SystemExit(f"instrumented ANV {stage} {label} filenames are ambiguous")
+            reps[stage][label] = entries
             if label == "devinfo":
-                text = data.decode("ascii", errors="strict").strip()
-                match = re.fullmatch(r"TRUEOS_HELIOC_DEVINFO_V1 pci_device_id=0x([0-9a-fA-F]{4}) ver=(\d+) verx10=(\d+)", text)
-                if not match or (int(match.group(1), 16), int(match.group(2)), int(match.group(3))) != (0x4680, 12, 120):
-                    raise SystemExit("instrumented ANV devinfo is not ADL GT1 (0x4680, ver=12, verx10=120)")
+                for path in matches:
+                    raw = path.read_bytes()
+                    if not raw.endswith(b"\0") or b"\0" in raw[:-1]:
+                        raise SystemExit(
+                            f"instrumented ANV {stage} devinfo has an invalid text terminator"
+                        )
+                    text = raw[:-1].decode("ascii", errors="strict").strip()
+                    match = re.fullmatch(
+                        r"TRUEOS_HELIOC_DEVINFO_V1 pci_device_id=0x([0-9a-fA-F]{4}) "
+                        r"pci_revision_id=0x([0-9a-fA-F]{2}) revision=(\d+) kmd_type=(\d+) "
+                        r"ver=(\d+) verx10=(\d+)", text,
+                    )
+                    if not match or (
+                        int(match.group(1), 16), int(match.group(2), 16), int(match.group(3)),
+                        int(match.group(5)), int(match.group(6)),
+                    ) != (0x4680, 0x0C, 0, 12, 120):
+                        raise SystemExit(
+                            "instrumented ANV devinfo is not shim-injected ADL GT1 "
+                            "(0x4680, PCI r0c, KMD revision 0, ver=12, verx10=120)"
+                        )
     return {"records": records, "stages": reps}
+
+
+def validate_instrumented_shader_serializations(
+    exec_dir: Path, compute_isa: bytes, vertex_isa: bytes, fragment_simd16_isa: bytes,
+) -> None:
+    """Cross-check cache recovery against ANV's canonical shader serializer."""
+
+    def serialized_code(path: Path, expected_stage: int) -> tuple[bytes, bytes]:
+        data = path.read_bytes()
+        if len(data) < 8:
+            raise SystemExit(f"instrumented ANV shader serialization is truncated: {path.name}")
+        stage, program_bytes = struct.unpack_from("<II", data)
+        if stage != expected_stage or program_bytes == 0 or 8 + program_bytes > len(data):
+            raise SystemExit(f"instrumented ANV shader serialization has invalid stage/size: {path.name}")
+        return data[8:8 + program_bytes], data
+
+    compute_files = sorted(exec_dir.glob("*_compute_*_TRUEOS_HelioC_shader_serialize.bin"))
+    vertex_files = sorted(exec_dir.glob("*_vertex_*_TRUEOS_HelioC_shader_serialize.bin"))
+    fragment_files = sorted(exec_dir.glob("*_fragment_*_TRUEOS_HelioC_shader_serialize.bin"))
+    if (len(compute_files), len(vertex_files), len(fragment_files)) != (1, 1, 2):
+        raise SystemExit("instrumented ANV canonical shader serialization set is incomplete")
+
+    compute_code, _ = serialized_code(compute_files[0], 5)
+    vertex_code, _ = serialized_code(vertex_files[0], 0)
+    fragment_code_a, fragment_serial_a = serialized_code(fragment_files[0], 4)
+    fragment_code_b, fragment_serial_b = serialized_code(fragment_files[1], 4)
+    if compute_code != compute_isa or vertex_code != vertex_isa:
+        raise SystemExit("instrumented ANV canonical CS/VS bytes disagree with cache/assembly recovery")
+    # Both fragment executable indices are views into the same ANV shader
+    # object; its serializer must therefore be byte-identical for SIMD8/16.
+    if fragment_serial_a != fragment_serial_b:
+        raise SystemExit("instrumented ANV fragment executable serializations disagree")
+
+    fragment_assemblies = sorted(exec_dir.glob("*_fragment_*_GEN_Assembly.txt"))
+    if len(fragment_assemblies) != 2:
+        raise SystemExit("instrumented ANV capture needs exact SIMD8/16 fragment assemblies")
+    first_bytes = assembly_code_size(fragment_assemblies[0])
+    simd16_offset = (first_bytes + 63) & ~63
+    if (
+        simd16_offset + len(fragment_simd16_isa) != len(fragment_code_a)
+        or fragment_code_a[simd16_offset:] != fragment_simd16_isa
+    ):
+        raise SystemExit("instrumented ANV canonical FS bytes disagree with SIMD16 recovery")
+
+
+def _validate_instrumented_anv_records(records: list[dict[str, object]]) -> None:
+    """Require the complete one-pipeline ANV descriptor/state trace.
+
+    Gfx120's indirect descriptor path does not visit the ANV_DESCRIPTOR_SURFACE
+    or ANV_DESCRIPTOR_SAMPLER hooks, so kinds 1/2 are not required here.  The
+    observed complete trace has two compute binding-table/sampler-map flushes,
+    one fragment flush of each, and one final command batch (kind 5). A partial
+    trace is evidence of an incomplete capture, never a valid subset from which
+    runtime state may be inferred.
+    """
+    key_counts = Counter(
+        (
+            int(record["kind"]),
+            int(record["stage_or_type"]),
+            int(record["binding"]),
+            int(record["element"]),
+        )
+        for record in records
+        if int(record["kind"]) != 5
+    )
+    expected: Counter[tuple[int, int, int, int]] = Counter({
+        # Mesa shader stages: fragment=4, compute=5.  The compute pipeline
+        # flushes twice (one per ping-pong descriptor set); the graphics
+        # pipeline has no vertex binding-table/sampler state in this capture.
+        (3, 5, 0, 0): 2,
+        (3, 4, 0, 0): 1,
+        (4, 4, 0, 0): 1,
+        (4, 5, 0, 0): 2,
+    })
+    for key, count in key_counts.items():
+        if key not in expected:
+            raise SystemExit(f"instrumented ANV capture contains unexpected record key {key}")
+        if count != expected[key]:
+            raise SystemExit(
+                f"instrumented ANV capture record {key} count={count}, expected {expected[key]}"
+            )
+    if any(int(record["kind"]) not in (1, 2, 3, 4, 5) for record in records):
+        raise SystemExit("instrumented ANV capture contains an unknown record kind")
+    missing = expected - key_counts
+    if missing:
+        raise SystemExit(f"instrumented ANV capture is missing required records: {dict(missing)}")
+
+    command_records = [record for record in records if int(record["kind"]) == 5]
+    if len(command_records) != 1:
+        raise SystemExit(
+            f"instrumented ANV capture needs exactly one completed command record, got {len(command_records)}"
+        )
+    command = command_records[0]
+    # MESA_SHADER_NONE is intentionally not interpreted as a shader stage;
+    # reject a command record that was mislabeled as vertex/fragment/compute.
+    if int(command["stage_or_type"]) in (0, 4, 5) or command["binding"] != 0 or command["element"] != 0:
+        raise SystemExit("instrumented ANV command record has an invalid non-shader stage/binding header")
 
 
 def bake_helioc(args: argparse.Namespace) -> None:
@@ -1083,6 +1349,8 @@ def bake_helioc(args: argparse.Namespace) -> None:
         raise SystemExit(f"HelioC requires compiler-selected compute SIMD16/32, got SIMD{compute_simd}")
     cs, vs, fs = extract_helioc_native(exec_dir, native_dir)
     instrumented = collect_instrumented_anv_capture(exec_dir)
+    if instrumented is not None:
+        validate_instrumented_shader_serializations(exec_dir, cs, vs, fs)
     capture_metadata = {
         "schema": 1,
         "producer": "helio-intel-bake/helioc-capture",
@@ -1106,6 +1374,11 @@ def bake_helioc(args: argparse.Namespace) -> None:
         },
         "executables": list(executables.values()),
         "public_api_boundary": "pipeline-cache bytes are opaque; executable APIs expose no ANV bind map or program data",
+        "relocatable_state": {
+            "section": HELIOC_RELOC_STATE_SECTION,
+            "status": "missing",
+            "reason": "capture has raw process-address state but no complete symbolic broker relocation map",
+        },
         "source_level_capture_route": {
             "bind_map": (
                 "instrument the matched ANV anv_shader_get_executable_internal_representations "
@@ -1124,6 +1397,14 @@ def bake_helioc(args: argparse.Namespace) -> None:
             raise SystemExit("instrumented ANV capture must identify the no-op shim; it is not physical-device proof")
         capture_metadata["instrumented_anv"] = instrumented
         capture_metadata["instrumented_identity"] = identity
+        capture_metadata["public_api_boundary"] = (
+            "resolved by exact source instrumentation for canonical shader serialization and "
+            "diagnostic command/state records"
+        )
+        capture_metadata["remaining_capture_boundary"] = (
+            "raw state still embeds capture-process addresses and lacks a symbolic broker-owned "
+            "relocation/dependency map; shim execution is not physical target proof"
+        )
     (work / "helioc-capture-metadata.json").write_bytes(
         (json.dumps(capture_metadata, indent=2, sort_keys=True) + "\n").encode()
     )
@@ -1132,7 +1413,9 @@ def bake_helioc(args: argparse.Namespace) -> None:
     print(f"HelioC captured genuine fullscreen FS SIMD16: {len(fs)} bytes sha256={sha256(fs)}")
     raise SystemExit(
         "HelioC preflight stopped; no HELIOA emitted: missing capture datum(s): "
-        + "; ".join(helioc_public_api_boundary(device, volume_requirements, log_text))
+        + "; ".join(helioc_public_api_boundary(
+            device, volume_requirements, log_text, instrumented=instrumented is not None,
+        ))
     )
 
 
@@ -1582,6 +1865,9 @@ def make_helioc_compile_only_dumper(destination: Path) -> None:
     printf("helio_pipeline_dump: compiled_only=1\\n");''', '''    printf("helioc_pipeline_dump: recording dispatch=24x12x24 fullscreen_draw=3\\n");
     const VkCommandBufferBeginInfo helioc_begin = {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+        /* Disable ANV's submit-time command-buffer chaining optimization so
+         * this capture has one immutable first-level batch ending in BBE. */
+        .flags = VK_COMMAND_BUFFER_USAGE_SIMULTANEOUS_USE_BIT,
     };
     CHECK_VK(vkBeginCommandBuffer(command_buffer, &helioc_begin));
     VkImageMemoryBarrier volume_barriers[2] = { 0 };

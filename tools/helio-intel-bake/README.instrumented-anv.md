@@ -8,6 +8,8 @@ The patch makes three otherwise-private values observable only when
 `TRUEOS_HELIOC_ANV_DUMP_DIR` is set:
 
 - compiler `bind_map` and raw `brw_prog_data` via executable internal representations;
+- ANV's complete, commit-pinned shader serialization (code, pointer-zeroed
+  program data, relocations, and full bind map);
 - raw descriptor image `SURFACE_STATE` and `SAMPLER_STATE` writes;
 - resolved binding-table entries, emitted sampler state, and command-buffer bytes.
 
@@ -28,8 +30,9 @@ The helper requires Mesa `6fb261147bbb4cc488ea9f16fb3b6fe02105332e`, makes a
 temporary source copy, applies the patch with `git apply --check`, configures a
 minimal Intel Vulkan build, points `VK_DRIVER_FILES` at that build's ICD JSON,
 and runs the normal `bake.py --helioc` dumper. It invokes the shim with
-`INTEL_STUB_GPU_DEVICE_ID=4680` and `TRUEOS_HELIOC_STUB_REVISION=0x0c`; resulting
-metadata says `identity_source=noop-drm-shim`, not physical hardware.
+`INTEL_STUB_GPU_DEVICE_ID=4680`, `TRUEOS_HELIOC_STUB_PCI_REVISION=0x0c`, and
+`TRUEOS_HELIOC_STUB_KMD_REVISION=0`. PCI and KMD revisions are intentionally
+separate Mesa inputs; resulting metadata is shim evidence, not physical hardware.
 
 The source-level target is ADL GT1: Mesa must report `ver=12` and `verx10=120`.
 `gfx125` is DG2/Xe-HP, not ADL-S UHD 770. The bakery rejects source-level trace
