@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "artifact_family": "trueos.parallel-u32-incubator",
+  "status": "cloud-candidate",
+  "target": {
+    "label": "adls",
+    "pci_device_id": "0x4680",
+    "revision": "0x0c",
+    "simd_width": 16
+  },
+  "execution": {
+    "required_local_size": [
+      16,
+      1,
+      1
+    ],
+    "tile_items": 256,
+    "compiler_scratch_bytes": 0,
+    "slm_bytes": 0,
+    "caller_owned_temporary_storage": true,
+    "integer_overflow": "modulo-2^32"
+  },
+  "artifacts": [
+    {
+      "source": "collective_probe_simd16.clcpp",
+      "entries": [
+        "collective_probe_simd16"
+      ],
+      "semantic_id": "trueos.parallel.collective-probe.simd16.v1"
+    },
+    {
+      "source": "parallel_u32.clcpp",
+      "entries": [
+        "parallel_u32_normalize_flags",
+        "parallel_u32_scan_tiles_exclusive",
+        "parallel_u32_add_tile_offsets",
+        "parallel_u32_reduce_sum_tiles",
+        "parallel_u32_select_indices",
+        "parallel_u32_write_selected_count"
+      ],
+      "semantic_id": "trueos.parallel.scan-select-reduce.u32.v1"
+    },
+    {
+      "source": "radix_u32.clcpp",
+      "entries": [
+        "radix_u32_histogram_tiles_4bit",
+        "radix_u32_scan_tile_histograms_4bit",
+        "radix_u32_histogram_totals_4bit",
+        "radix_u32_bin_bases_4bit",
+        "radix_u32_scatter_4bit"
+      ],
+      "semantic_id": "trueos.parallel.radix-sort.u32.lsd4.v1"
+    },
+    {
+      "source": "group_u32.clcpp",
+      "entries": [
+        "parallel_u32_histogram_tiles_16",
+        "parallel_u32_rle_mark_heads",
+        "parallel_u32_rle_emit_runs",
+        "parallel_u32_rle_emit_lengths",
+        "parallel_u32_segmented_scan_tiles_exclusive",
+        "parallel_u32_segmented_scan_tile_carries",
+        "parallel_u32_segmented_add_tile_carries",
+        "parallel_u32_segmented_emit_totals"
+      ],
+      "semantic_id": "trueos.parallel.grouping.u32.v1"
+    }
+  ],
+  "semantics": {
+    "exclusive_scan": "output[i] is the modulo-2^32 sum of input[0..i)",
+    "selection": "arbitrary nonzero predicates are normalized to 1, then survivors are emitted in increasing input-index order",
+    "reduction": "modulo-2^32 unsigned sum",
+    "radix_sort": "stable eight-pass LSD sort with four key bits per pass",
+    "histogram": "sixteen bins selected by (value >> shift) & 15",
+    "run_length_encoding": "ordered run keys, starts, and lengths",
+    "segmented_scan": "exclusive modulo-2^32 sum; head flags are exactly 0 or 1 and nonempty input requires head_flags[0] == 1",
+    "segmented_reduction": "one modulo-2^32 sum per ordered segment"
+  },
+  "aliasing": {
+    "v1": "all input, output, metadata, and temporary ranges are disjoint unless an entry explicitly mutates its output in place"
+  },
+  "publication": {
+    "cloud_source_lane": "two-root reproducible SPIR64 LLVM bitcode plus semantic tests",
+    "cloud_candidate_lane": "locked Ubuntu 26.04 Clang/llvm-spirv/ocloc/IGC bake emits candidate SPIR-V, Zebin, manifests, and generated Rust contracts",
+    "production_lane": "not admitted until candidate ISA/ABI review, runtime wiring, and a physical ADL-S transcript"
+  }
+}

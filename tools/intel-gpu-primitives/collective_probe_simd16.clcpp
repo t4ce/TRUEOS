@@ -1,0 +1,38 @@
+// Physical/compiler proof for the exact SIMD16 collective surface used by the
+// parallel-u32 artifacts. One local group must contain exactly 16 work-items.
+
+#include "include/trueos_parallel_u32.hpp"
+
+using namespace trueos::gpgpu::parallel_u32;
+
+// Report layout, all 16-dword vectors in lane order:
+//   0: input
+//   1: exclusive add scan
+//   2: inclusive add scan
+//   3: add reduction
+//   4: min reduction
+//   5: max reduction
+//   6: broadcast lane zero
+//   7: reverse-lane shuffle
+// The final vector packs subgroup size in the upper 16 bits and lane ID in the
+// lower 16 bits. This makes an accidental non-SIMD16 launch immediately visible.
+TRUEOS_PARALLEL_REQD_SUB_GROUP_SIZE_16
+__kernel void collective_probe_simd16(
+    __global const uint *input,
+    __global uint *report)
+{
+    const uint lane = get_sub_group_local_id();
+    const uint value = input[lane];
+
+    report[0u * subgroup_width + lane] = value;
+    report[1u * subgroup_width + lane] = sub_group_scan_exclusive_add(value);
+    report[2u * subgroup_width + lane] = sub_group_scan_inclusive_add(value);
+    report[3u * subgroup_width + lane] = sub_group_reduce_add(value);
+    report[4u * subgroup_width + lane] = sub_group_reduce_min(value);
+    report[5u * subgroup_width + lane] = sub_group_reduce_max(value);
+    report[6u * subgroup_width + lane] = sub_group_broadcast(value, 0u);
+    report[7u * subgroup_width + lane] =
+        sub_group_shuffle(value, subgroup_width - 1u - lane);
+    report[8u * subgroup_width + lane] =
+        (get_sub_group_size() << 16) | lane;
+}

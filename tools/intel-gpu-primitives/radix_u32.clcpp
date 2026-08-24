@@ -1,0 +1,132 @@
+// Stable four-bit LSD radix-pass building blocks. A complete u32 sort invokes
+// the histogram/prefix/scatter sequence for shifts 0,4,...,28 and swaps the
+// caller-owned key/value buffers after each pass.
+
+#include "include/trueos_parallel_u32.hpp"
+
+using namespace trueos::gpgpu::parallel_u32;
+
+TRUEOS_PARALLEL_REQD_SUB_GROUP_SIZE_16
+__kernel void radix_u32_histogram_tiles_4bit(
+    __global const uint *keys,
+    __global uint *tile_histograms,
+    uint count,
+    uint shift)
+{
+    const uint bin = get_sub_group_local_id();
+    const uint tile = get_group_id(0);
+    uint total = 0u;
+
+    for (uint item = 0u; item < tile_items; ++item) {
+        const uint index = tile_base(tile) + item;
+        if (index < count) {
+            total += valid_word(digit4(keys[index], shift) == bin);
+        }
+    }
+    tile_histograms[tile * radix_bins + bin] = total;
+}
+
+// Launch exactly 16 groups. Group g scans the tile counts for radix bin g.
+TRUEOS_PARALLEL_REQD_SUB_GROUP_SIZE_16
+__kernel void radix_u32_scan_tile_histograms_4bit(
+    __global const uint *tile_histograms,
+    __global uint *tile_prefixes,
+    uint tile_count)
+{
+    const uint lane = get_sub_group_local_id();
+    const uint bin = get_group_id(0);
+    if (bin >= radix_bins) {
+        return;
+    }
+
+    uint carry = 0u;
+    for (uint base = 0u; base < tile_count; base += subgroup_width) {
+        const uint tile = base + lane;
+        const uint value = tile < tile_count
+            ? tile_histograms[tile * radix_bins + bin]
+            : 0u;
+        const uint prefix = sub_group_scan_exclusive_add(value);
+        if (tile < tile_count) {
+            tile_prefixes[tile * radix_bins + bin] = carry + prefix;
+        }
+        carry += sub_group_reduce_add(value);
+    }
+}
+
+// Launch one SIMD16 group. Each lane owns one bin.
+TRUEOS_PARALLEL_REQD_SUB_GROUP_SIZE_16
+__kernel void radix_u32_histogram_totals_4bit(
+    __global const uint *tile_histograms,
+    __global uint *bin_totals,
+    uint tile_count)
+{
+    const uint bin = get_sub_group_local_id();
+    uint total = 0u;
+    for (uint tile = 0u; tile < tile_count; ++tile) {
+        total += tile_histograms[tile * radix_bins + bin];
+    }
+    bin_totals[bin] = total;
+}
+
+// Launch one SIMD16 group. The result is the stable global base of each bin.
+TRUEOS_PARALLEL_REQD_SUB_GROUP_SIZE_16
+__kernel void radix_u32_bin_bases_4bit(
+    __global const uint *bin_totals,
+    __global uint *bin_bases)
+{
+    const uint bin = get_sub_group_local_id();
+    bin_bases[bin] = sub_group_scan_exclusive_add(bin_totals[bin]);
+}
+
+TRUEOS_PARALLEL_REQD_SUB_GROUP_SIZE_16
+__kernel void radix_u32_scatter_4bit(
+    __global const uint *keys_in,
+    __global const uint *values_in,
+    __global uint *keys_out,
+    __global uint *values_out,
+    __global const uint *tile_prefixes,
+    __global const uint *bin_bases,
+    uint count,
+    uint shift,
+    uint copy_values)
+{
+    const uint lane = get_sub_group_local_id();
+    const uint tile = get_group_id(0);
+    uint owned_bin_count = 0u; // lane N owns bin N for rows already processed.
+
+    for (uint row = 0u; row < tile_rows; ++row) {
+        const uint index = row_index(tile, row, lane);
+        const bool valid = index < count;
+        const uint key = valid ? keys_in[index] : 0u;
+        const uint digit = valid ? digit4(key, shift) : 0u;
+        const uint valid_lane = valid_word(valid);
+
+        const uint prior_rows = sub_group_shuffle(owned_bin_count, digit);
+        uint prior_lanes = 0u;
+        for (uint source_lane = 0u; source_lane < subgroup_width; ++source_lane) {
+            const uint source_valid = sub_group_shuffle(valid_lane, source_lane);
+            const uint source_digit = sub_group_shuffle(digit, source_lane);
+            prior_lanes += source_valid
+                * valid_word(source_lane < lane && source_digit == digit);
+        }
+
+        if (valid) {
+            const uint destination = bin_bases[digit]
+                + tile_prefixes[tile * radix_bins + digit]
+                + prior_rows
+                + prior_lanes;
+            keys_out[destination] = key;
+            if (copy_values != 0u) {
+                values_out[destination] = values_in[index];
+            }
+        }
+
+        uint row_bin_count = 0u;
+        for (uint source_lane = 0u; source_lane < subgroup_width; ++source_lane) {
+            const uint source_valid = sub_group_shuffle(valid_lane, source_lane);
+            const uint source_digit = sub_group_shuffle(digit, source_lane);
+            row_bin_count += source_valid * valid_word(source_digit == lane);
+        }
+        owned_bin_count += row_bin_count;
+    }
+}
