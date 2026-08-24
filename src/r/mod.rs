@@ -33,6 +33,7 @@ pub mod path;
 pub mod platform;
 pub mod print2d;
 pub mod readiness;
+pub mod restart;
 pub mod spawn_service;
 pub mod spawn_spec;
 pub mod static_map;

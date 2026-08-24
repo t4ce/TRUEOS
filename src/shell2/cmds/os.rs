@@ -48,6 +48,34 @@ fn disk_argument(choice: &super::tlb_helper::DiskChoice) -> String {
     )
 }
 
+fn non_replicatable_vm_arguments() -> Vec<String> {
+    let clean = |value: String| {
+        value
+            .chars()
+            .map(|ch| {
+                if matches!(ch, '|' | '\n' | '\r') {
+                    ' '
+                } else {
+                    ch
+                }
+            })
+            .collect::<String>()
+    };
+    let mut arguments = Vec::new();
+    for vm_index in 0..crate::allcaps::hv::VM_ID_LIMIT {
+        let Ok(vm_id) = u8::try_from(vm_index) else {
+            continue;
+        };
+        let state = crate::hv::vm_state(vm_id);
+        if state.supported && (state.running || state.starting) && !state.replicatable {
+            let label = crate::hv::app_vm_display_label(vm_id)
+                .unwrap_or_else(|| alloc::format!("vm{}", vm_id));
+            arguments.push(alloc::format!("nonrep={}|{}", vm_id, clean(label)));
+        }
+    }
+    arguments
+}
+
 pub(crate) fn try_parse(
     spawner: &Spawner,
     io: &'static dyn ShellBackend2,
@@ -67,7 +95,8 @@ pub(crate) fn try_parse(
     }
 
     let disks = super::tlb_helper::collect_top_level_disk_choices();
-    let app_args: Vec<String> = disks.iter().map(disk_argument).collect();
+    let mut app_args: Vec<String> = disks.iter().map(disk_argument).collect();
+    app_args.extend(non_replicatable_vm_arguments());
     let generation = OS_INSTANCE_SEQUENCE.fetch_add(1, Ordering::AcqRel) + 1;
     let instance_name = alloc::format!("os-admin-{generation}");
     let target = matrix_target_for_backend(io);

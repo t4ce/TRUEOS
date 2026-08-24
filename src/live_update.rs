@@ -38,7 +38,6 @@ const VM_CHECKPOINT_TIMEOUT_MS: u64 = 20_000;
 const AP_RENDEZVOUS_TIMEOUT_MS: u64 = 5_000;
 const AP_STACK_SWITCH_TIMEOUT_MS: u64 = 5_000;
 const POST_BOOT_SERVICE_TIMEOUT_MS: u64 = 30_000;
-const POST_BOOT_VM_RESUME_SETTLE_MS: u64 = 150;
 const POST_BOOT_TLB_TIMEOUT_MS: u64 = 2_000;
 const MAX_TRAMPOLINE_BYTES: usize = 64 * 1024;
 const MAX_TRANSITION_GDT_BYTES: usize = 256;
@@ -240,6 +239,16 @@ impl fmt::Display for LiveUpdateError {
             Self::ApRendezvous(reason) => write!(f, "AP rendezvous failed ({reason})"),
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum NonReplicatableVmPolicy {
+    #[expect(
+        dead_code,
+        reason = "safe default for any future live-update entry point without UI confirmation"
+    )]
+    Reject,
+    DiscardAtCommit,
 }
 
 #[derive(Clone, Copy)]
@@ -759,9 +768,21 @@ pub fn rearm_shell_notice() {
     }
 }
 
-pub(crate) async fn uplift_warm_vm_snapshots(spawner: Spawner) -> Vec<String> {
+pub(crate) struct WarmVmRestartEntry {
+    pub(crate) vm_id: u8,
+    pub(crate) checkpoint_name: String,
+    pub(crate) resume: bool,
+}
+
+pub(crate) struct WarmVmRestartPlan {
+    pub(crate) generation: u64,
+    pub(crate) entries: Vec<WarmVmRestartEntry>,
+}
+
+/// Decode the warm handoff into the only VM entries the restart policy may load.
+pub(crate) async fn warm_vm_restart_plan() -> Option<WarmVmRestartPlan> {
     let Some(handoff) = warm_handoff().copied() else {
-        return Vec::new();
+        return None;
     };
     let restore_mask = handoff.restore_mask;
     let resume_mask = handoff.resume_mask;
@@ -775,146 +796,43 @@ pub(crate) async fn uplift_warm_vm_snapshots(spawner: Spawner) -> Vec<String> {
     {
         Timer::after(EmbassyDuration::from_millis(25)).await;
     }
-    cleanup_transition_mapping_after_boot(transition_slot as usize).await;
-
-    if restore_mask.iter().all(|word| *word == 0) {
-        crate::log_info!(
-            target: "global";
-            "live-update: generation={} has no VM checkpoints to restore\n",
+    let Ok(transition_slot) = usize::try_from(transition_slot) else {
+        crate::log_error!(target: "global";
+            "live-update: transition slot does not fit this kernel generation={} slot={}\n",
             generation,
+            transition_slot,
         );
         mark_post_boot_uplift_complete(generation);
-        return Vec::new();
-    }
+        return None;
+    };
+    cleanup_transition_mapping_after_boot(transition_slot).await;
 
-    // This is the warm-boot autostart boundary: persistent VM snapshots are
-    // uplifted only after both their backing store and the new compositor are
-    // ready. Restored UI apps can then rebuild disposable UI4 projections
-    // immediately instead of racing candidate-kernel service startup.
-    crate::r::readiness::wait_for(
-        crate::r::readiness::TRUEOSFS_ROOT_MOUNTED | crate::r::readiness::UI4_COMPOSITOR_READY,
-    )
-    .await;
-    let deadline = Instant::now()
-        .as_millis()
-        .saturating_add(POST_BOOT_SERVICE_TIMEOUT_MS);
-    while !crate::hv::store::online() && Instant::now().as_millis() < deadline {
-        Timer::after(EmbassyDuration::from_millis(25)).await;
-    }
-    Timer::after(EmbassyDuration::from_millis(POST_BOOT_VM_RESUME_SETTLE_MS)).await;
-
-    let mut restored_archives = Vec::new();
-    for vm_id in 0..VM_ID_LIMIT {
-        if !mask_contains(&restore_mask, vm_id) {
-            continue;
-        }
-        let vm_id = vm_id as u8;
-        let name = checkpoint_name(vm_id);
-
-        let _ = crate::hv::eject(vm_id);
-        match crate::hv::try_begin_restore(vm_id) {
-            Ok(true) => {}
-            Ok(false) => {
-                crate::log_warn!(
-                    target: "global";
-                    "live-update: vm{} restore already pending name={}\n",
-                    vm_id,
-                    name,
+    let mut entries = Vec::new();
+    for vm_index in 0..VM_ID_LIMIT {
+        if mask_contains(&restore_mask, vm_index) {
+            let Ok(vm_id) = u8::try_from(vm_index) else {
+                crate::log_error!(target: "global";
+                    "live-update: VM id does not fit restart ABI generation={} vm_index={}\n",
+                    generation,
+                    vm_index,
                 );
                 continue;
-            }
-            Err(error) => {
-                crate::log_warn!(
-                    target: "global";
-                    "live-update: vm{} restore admission failed name={} error={:?}\n",
-                    vm_id,
-                    name,
-                    error,
-                );
-                continue;
-            }
-        }
-
-        let image = match crate::hv::store::load_persistent_async(name.as_str()).await {
-            Ok(image) => image,
-            Err(error) => {
-                crate::log_warn!(
-                    target: "global";
-                    "live-update: vm{} checkpoint load failed name={} error={:?}\n",
-                    vm_id,
-                    name,
-                    error,
-                );
-                crate::hv::finish_restore(vm_id);
-                continue;
-            }
-        };
-        if let Err(error) = crate::hv::store::save_bytes_async(vm_id, image.snapshot.clone()).await
-        {
-            crate::log_warn!(
-                target: "global";
-                "live-update: vm{} warm-store seed failed name={} error={:?}\n",
+            };
+            entries.push(WarmVmRestartEntry {
                 vm_id,
-                name,
-                error,
-            );
-            crate::hv::finish_restore(vm_id);
-            continue;
+                checkpoint_name: checkpoint_name(vm_id),
+                resume: mask_contains(&resume_mask, vm_index),
+            });
         }
-        if let Err(error) = crate::hv::restore_persistent_image(vm_id, &image, None) {
-            crate::log_warn!(
-                target: "global";
-                "live-update: vm{} envelope import failed name={} error={:?}\n",
-                vm_id,
-                name,
-                error,
-            );
-            crate::hv::finish_restore(vm_id);
-            continue;
-        }
-
-        let archive = crate::hv::app_vm_archive(vm_id);
-        if let Some(archive) = archive.as_ref()
-            && !restored_archives.contains(archive)
-        {
-            restored_archives.push(archive.clone());
-        }
-        if mask_contains(&resume_mask, vm_id as usize) {
-            match crate::hv::start(vm_id, &spawner, None) {
-                Ok(()) => {
-                    crate::log_info!(
-                        target: "global";
-                        "live-update: vm{} restored and resume scheduled name={} generation={}\n",
-                        vm_id,
-                        name,
-                        generation,
-                    );
-                }
-                Err(error) => crate::log_warn!(
-                    target: "global";
-                    "live-update: vm{} restored but resume failed name={} error={:?}\n",
-                    vm_id,
-                    name,
-                    error,
-                ),
-            }
-        } else {
-            crate::log_info!(
-                target: "global";
-                "live-update: vm{} restored in retained-pause state name={} generation={}\n",
-                vm_id,
-                name,
-                generation,
-            );
-        }
-        crate::hv::finish_restore(vm_id);
     }
 
-    mark_post_boot_uplift_complete(generation);
-    restored_archives
+    Some(WarmVmRestartPlan {
+        generation,
+        entries,
+    })
 }
 
-fn mark_post_boot_uplift_complete(generation: u64) {
+pub(crate) fn mark_post_boot_uplift_complete(generation: u64) {
     POST_BOOT_UPLIFT_COMPLETE_GENERATION.store(generation, Ordering::Release);
 }
 
@@ -922,10 +840,11 @@ pub(crate) fn post_boot_uplift_complete(generation: u64) -> bool {
     POST_BOOT_UPLIFT_COMPLETE_GENERATION.load(Ordering::Acquire) == generation
 }
 
-pub async fn stage_and_swap(
+pub(crate) async fn stage_and_swap(
     kernel: Vec<u8>,
     spawner: Spawner,
     target: MatrixTarget,
+    non_replicatable_vms: NonReplicatableVmPolicy,
 ) -> Result<Infallible, LiveUpdateError> {
     let _run_guard = LiveUpdateRunGuard::acquire()?;
     if matrix_target_interrupted(&target) {
@@ -953,7 +872,7 @@ pub async fn stage_and_swap(
         &target,
         "update live: step=08/20 checkpointing active VMX apps to TRUEOSFS",
     );
-    let checkpoint = checkpoint_active_vms(&spawner, &target).await?;
+    let checkpoint = checkpoint_active_vms(&spawner, &target, non_replicatable_vms).await?;
     let checkpoint_count: u32 = checkpoint
         .restore_mask
         .iter()
@@ -1155,20 +1074,23 @@ fn finish_ap_preflight_abort(control: &TransitionControl, interrupts_were_enable
 async fn checkpoint_active_vms(
     spawner: &Spawner,
     target: &MatrixTarget,
+    non_replicatable_vms: NonReplicatableVmPolicy,
 ) -> Result<CheckpointPlan, LiveUpdateError> {
     let mut restore_mask = [0u64; RESTORE_WORDS];
     let mut resume_mask = [0u64; RESTORE_WORDS];
     let mut vm_heap_ranges = [WarmReservedRange::EMPTY; VM_ID_LIMIT];
     let mut paused_by_update = Vec::new();
 
-    let has_active_vm = (0..VM_ID_LIMIT).any(|vm_index| {
+    let has_checkpoint_vm = (0..VM_ID_LIMIT).any(|vm_index| {
         let state = crate::hv::vm_state(vm_index as u8);
-        state.supported && (state.running || state.starting || state.pause_latched)
+        state.supported
+            && state.replicatable
+            && (state.running || state.starting || state.pause_latched)
     });
-    if has_active_vm {
+    if has_checkpoint_vm {
         print_matrix_target_line(
             target,
-            "update live: active VM state found; waiting for TRUEOSFS checkpoint storage",
+            "update live: replicatable VM state found; waiting for TRUEOSFS checkpoint storage",
         );
         crate::r::readiness::wait_for(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED).await;
     }
@@ -1180,17 +1102,36 @@ async fn checkpoint_active_vms(
             continue;
         }
 
+        if !state.replicatable {
+            match non_replicatable_vms {
+                NonReplicatableVmPolicy::Reject => {
+                    return checkpoint_abort(
+                        spawner,
+                        target,
+                        &paused_by_update,
+                        LiveUpdateError::VmNotReplicatable(vm_id),
+                    )
+                    .await;
+                }
+                NonReplicatableVmPolicy::DiscardAtCommit => {
+                    // It remains alive while the update is reversible. The
+                    // rendezvous parks its CPU and VMXOFF discards it with the
+                    // old kernel; it never enters either handoff mask.
+                    print_matrix_target_line(
+                        target,
+                        format!(
+                            "update live: vm{} non-replicatable action=discard-at-commit confirmed=1 restore=none",
+                            vm_id,
+                        )
+                        .as_str(),
+                    );
+                    continue;
+                }
+            }
+        }
+
         if state.running || state.starting {
             mask_insert(&mut resume_mask, vm_index);
-            if !state.replicatable {
-                return checkpoint_abort(
-                    spawner,
-                    target,
-                    &paused_by_update,
-                    LiveUpdateError::VmNotReplicatable(vm_id),
-                )
-                .await;
-            }
             match crate::hv::request_replicatable_snapshot(vm_id) {
                 Ok(true) => {
                     if !paused_by_update.contains(&vm_id) {

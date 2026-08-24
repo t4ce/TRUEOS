@@ -306,7 +306,14 @@ async fn live_update_command_task(target: MatrixTarget, spawner: Spawner) {
         .as_str());
         drop(iso);
 
-        match crate::live_update::stage_and_swap(kernel, spawner, task_target.clone()).await {
+        match crate::live_update::stage_and_swap(
+            kernel,
+            spawner,
+            task_target.clone(),
+            crate::live_update::NonReplicatableVmPolicy::DiscardAtCommit,
+        )
+        .await
+        {
             Ok(never) => match never {},
             Err(error) => {
                 log(alloc::format!("update live: failed ({})", error).as_str());
