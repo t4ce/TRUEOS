@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bake the WGSL captured in a HELIOA file to Mesa/ANV gfx125 ISA.
+"""Bake WGSL captured in a HELIOA file to target-specific Mesa/ANV ISA.
 
 This is intentionally a narrow bridge.  Naga is taken from Helio's vendored
 wgpu tree and the Intel compilation/extraction path is the one already used by
@@ -75,6 +75,9 @@ HELIOC_COMPUTE_ISA_SECTION = "intel-xe-lp/helioc-volume-update.bin"
 HELIOC_VERTEX_ISA_SECTION = "intel-xe-lp/helioc-volume-raymarch.vs.bin"
 HELIOC_FRAGMENT_ISA_SECTION = "intel-xe-lp/helioc-volume-raymarch.fs.bin"
 HELIOC_DESCRIPTOR_BYTES = 320
+HELIOC_GFX_VERX10 = 120
+HELIOC_DEVICE_ID = 0x4680
+HELIOC_REVISION = 0x0C
 
 
 def _affine3x4_mul(
@@ -738,8 +741,8 @@ def encode_helioc_descriptor(
     descriptor[:8] = b"HELIOC\0\0"
     struct.pack_into("<HHII", descriptor, 8, 1, HELIOC_DESCRIPTOR_BYTES,
                      HELIOC_DESCRIPTOR_BYTES, 0x0F)
-    struct.pack_into("<HH", descriptor, 20, 125, 0x4680)
-    descriptor[24:28] = bytes((0x0C, 0x0C, 1, 0))
+    struct.pack_into("<HH", descriptor, 20, HELIOC_GFX_VERX10, HELIOC_DEVICE_ID)
+    descriptor[24:28] = bytes((HELIOC_REVISION, HELIOC_REVISION, 1, 0))
     threads = 64 // compute_simd
     per_thread = 96 if compute_simd == 16 else 192
     struct.pack_into("<HH", descriptor, 28, compute_simd, threads)
@@ -785,7 +788,11 @@ def validate_helioc_descriptor(
         or (_helioc_u16(descriptor, 8), _helioc_u16(descriptor, 10), _helioc_u32(descriptor, 12), _helioc_u32(descriptor, 16))
         != (1, HELIOC_DESCRIPTOR_BYTES, HELIOC_DESCRIPTOR_BYTES, 0x0F)
         or (_helioc_u16(descriptor, 20), _helioc_u16(descriptor, 22), descriptor[24:28])
-        != (125, 0x4680, bytes((0x0C, 0x0C, 1, 0)))
+        != (
+            HELIOC_GFX_VERX10,
+            HELIOC_DEVICE_ID,
+            bytes((HELIOC_REVISION, HELIOC_REVISION, 1, 0)),
+        )
         or (_helioc_u16(descriptor, 28), _helioc_u16(descriptor, 30))
         != (compute_simd, expected_threads)
         or tuple(_helioc_u16(descriptor, offset) for offset in (32, 34, 36, 38, 40, 42))
@@ -842,7 +849,7 @@ def assemble_helioc_package(
         "producer": "helio-intel-bake/helioc",
         "frontend": "helio-vendored-naga",
         "backend": "mesa-anv-vulkan-pipeline-executable-cache",
-        "target": "intel-gfx125-adl-s-uhd-770-rev-0c",
+        "target": "intel-gfx120-adl-s-uhd-770-rev-0c",
         "workload": "cloud-volume-update-plus-fullscreen-raymarch",
         "compute": {
             "entry": "main", "local_size": [4, 4, 4], "groups": [24, 12, 24],
@@ -878,28 +885,139 @@ def assemble_helioc_package(
     return artifact
 
 
-def helioc_capture_gaps() -> list[str]:
-    """Return only the capture facts absent from the pinned current dumper."""
-    source = UPSTREAM_DUMPER.read_text()
-    missing: list[str] = []
-    if "vkCreateComputePipelines" not in source or "VkComputePipelineCreateInfo" not in source:
-        missing.append("VkPipeline compute executable/cache capture for simulate.wgsl entry main")
-    if (
-        "VK_IMAGE_VIEW_TYPE_3D" not in source
-        or "VK_DESCRIPTOR_TYPE_STORAGE_IMAGE" not in source
-        or "VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER" not in source
-    ):
+def helioc_linear_volume_requirements(log: str) -> list[dict[str, int]]:
+    """Read the valid layout of the actual LINEAR images bound by HelioC."""
+    pattern = re.compile(
+        r"helioc_pipeline_dump: volume\[(\d+)\] linear_memory size=(\d+) "
+        r"alignment=(\d+) type_bits=0x([0-9A-Fa-f]+) layout offset=(\d+) size=(\d+) "
+        r"row_pitch=(\d+) array_pitch=(\d+) depth_pitch=(\d+)"
+    )
+    requirements = [
+        {
+            "index": int(match.group(1)), "allocation_bytes": int(match.group(2)),
+            "alignment": int(match.group(3)), "memory_type_bits": int(match.group(4), 16),
+            "offset": int(match.group(5)), "subresource_bytes": int(match.group(6)),
+            "row_pitch_bytes": int(match.group(7)), "array_pitch_bytes": int(match.group(8)),
+            "depth_pitch_bytes": int(match.group(9)),
+        }
+        for match in pattern.finditer(log)
+    ]
+    if len(requirements) != 2 or [item["index"] for item in requirements] != [0, 1]:
+        raise SystemExit("HelioC Vulkan capture did not report two bound LINEAR 3D volume layouts")
+    if requirements[0] != {**requirements[1], "index": 0}:
+        raise SystemExit("HelioC ping-pong LINEAR volume layouts differ")
+    required = {
+        "allocation_bytes": 3_538_944, "offset": 0, "subresource_bytes": 3_538_944,
+        "row_pitch_bytes": 768, "depth_pitch_bytes": 36_864,
+    }
+    if any(requirements[0][field] != value for field, value in required.items()):
+        raise SystemExit("HelioC bound LINEAR volume layout is not the sealed tight 96x48x96 RGBA16F layout")
+    return requirements
+
+
+def helioc_linear_probe(log: str) -> dict[str, int | bool | str]:
+    """Read only the valid LINEAR-image layout probe, if the driver supports it."""
+    features = re.search(
+        r"helioc_pipeline_dump: linear_probe features=0x([0-9A-Fa-f]+) required=0x([0-9A-Fa-f]+)",
+        log,
+    )
+    if not features:
+        raise SystemExit("HelioC Vulkan capture did not report linear-image format features")
+    unsupported = "helioc_pipeline_dump: linear_probe unsupported=sampled_storage_3d" in log
+    layout = re.search(
+        r"helioc_pipeline_dump: linear_probe memory size=(\d+) alignment=(\d+) "
+        r"type_bits=0x([0-9A-Fa-f]+) layout offset=(\d+) size=(\d+) "
+        r"row_pitch=(\d+) array_pitch=(\d+) depth_pitch=(\d+)",
+        log,
+    )
+    if unsupported:
+        if layout:
+            raise SystemExit("HelioC linear probe reported both unsupported and a layout")
+        return {
+            "supported": False, "linear_features": int(features.group(1), 16),
+            "required_features": int(features.group(2), 16),
+        }
+    if not layout or "helioc_pipeline_dump: linear_probe create_result=0" not in log:
+        raise SystemExit("HelioC linear probe did not create a valid sampled+storage 3D image")
+    return {
+        "supported": True, "linear_features": int(features.group(1), 16),
+        "required_features": int(features.group(2), 16),
+        "allocation_bytes": int(layout.group(1)), "alignment": int(layout.group(2)),
+        "memory_type_bits": int(layout.group(3), 16), "offset": int(layout.group(4)),
+        "subresource_bytes": int(layout.group(5)), "row_pitch_bytes": int(layout.group(6)),
+        "array_pitch_bytes": int(layout.group(7)), "depth_pitch_bytes": int(layout.group(8)),
+    }
+
+
+def helioc_public_api_boundary(
+    device: dict[str, object], volume_requirements: list[dict[str, int]], log: str,
+) -> list[str]:
+    """List data the public capture APIs provably do not expose.
+
+    Pipeline executable properties provide ISA statistics and textual internal
+    representations. Pipeline-cache bytes are explicitly opaque; neither API
+    returns ANV's descriptor-to-BTI/sampler mapping or compute program-data
+    payload. Vulkan device properties also carry a PCI device ID, not the PCI
+    revision needed by HELIOC's sealed ADL-S revision field.
+    """
+    missing = [
+        "ANV descriptor-to-BTI/sampler-table mapping and compute program-data payload "
+        "(not returned by VK_KHR_pipeline_executable_properties; pipeline cache is opaque)",
+        "PCI revision 0x0C for the sealed ADL-S target (not returned by VkPhysicalDeviceProperties)",
+    ]
+    if "Batch logging not supported" in log:
         missing.append(
-            "Mesa/ANV descriptor-layout capture for sampled texture_3d, sampler, and "
-            "write-only storage texture_3d"
+            "ANV batch/SURFACE_STATE/SAMPLER_STATE dump (INTEL_DEBUG=bat reported batch logging unavailable)"
+        )
+    if device["device_id"] != 0x4680:
+        missing.insert(
+            0,
+            f"sealed ADL-S UHD 770 device 0x4680 (capture selected 0x{device['device_id']:04X})",
         )
     return missing
 
 
+def collect_instrumented_anv_capture(exec_dir: Path) -> dict[str, object] | None:
+    """Parse the exact, opt-in capture records; reject any stage ambiguity."""
+    trace_files = sorted(exec_dir.glob("helioc-anv-*.bin"))
+    if not trace_files:
+        return None
+    records: list[dict[str, object]] = []
+    for path in trace_files:
+        data = path.read_bytes()
+        if len(data) < 28:
+            raise SystemExit(f"instrumented ANV record is truncated: {path.name}")
+        magic, version, kind, stage_or_type, binding, element, payload = struct.unpack_from("<7I", data)
+        if magic != 0x48434D56 or version != 1 or payload != len(data) - 28:
+            raise SystemExit(f"instrumented ANV record has invalid header/length: {path.name}")
+        records.append({"file": path.name, "kind": kind, "stage_or_type": stage_or_type,
+                        "binding": binding, "element": element, "bytes": payload,
+                        "sha256": sha256(data[28:])})
+    reps: dict[str, dict[str, dict[str, object]]] = {}
+    for stage in ("compute", "vertex", "fragment"):
+        reps[stage] = {}
+        for label, suffix in (("bind_map", "TRUEOS_HelioC_bind_map.txt"),
+                              ("prog_data", "TRUEOS_HelioC_prog_data.bin"),
+                              ("devinfo", "TRUEOS_HelioC_devinfo.txt")):
+            matches = sorted(exec_dir.glob(f"*_{stage}_*_{suffix}"))
+            if len(matches) != 1:
+                raise SystemExit(f"instrumented ANV capture needs exactly one {stage} {label}, got {len(matches)}")
+            data = matches[0].read_bytes()
+            if not data:
+                raise SystemExit(f"instrumented ANV {stage} {label} is empty")
+            reps[stage][label] = {"file": matches[0].name, "bytes": len(data), "sha256": sha256(data)}
+            if label == "devinfo":
+                text = data.decode("ascii", errors="strict").strip()
+                match = re.fullmatch(r"TRUEOS_HELIOC_DEVINFO_V1 pci_device_id=0x([0-9a-fA-F]{4}) ver=(\d+) verx10=(\d+)", text)
+                if not match or (int(match.group(1), 16), int(match.group(2)), int(match.group(3))) != (0x4680, 12, 120):
+                    raise SystemExit("instrumented ANV devinfo is not ADL GT1 (0x4680, ver=12, verx10=120)")
+    return {"records": records, "stages": reps}
+
+
 def bake_helioc(args: argparse.Namespace) -> None:
-    """Run the pinned frontend, then fail closed if capture cannot prove native state."""
+    """Capture genuine native stages, then fail closed on unavailable ABI data."""
     compute, graphics = helioc_authored_sources()
-    output = (args.out or Path("helioc-native.adl-s.gfx125.helio")).resolve()
+    output = (args.out or Path("helioc-native.adl-s.gfx120.helio")).resolve()
     work = (args.work_dir or output.with_suffix(output.suffix + ".work")).resolve()
     work.mkdir(parents=True, exist_ok=True)
     compute_spv = work / "helioc-volume-update.main.spv"
@@ -911,15 +1029,110 @@ def bake_helioc(args: argparse.Namespace) -> None:
     for name, spv in (("compute", compute_spv), ("vertex", vertex_spv), ("fragment", fragment_spv)):
         if not spv.is_file() or not spv.read_bytes():
             raise SystemExit(f"pinned Naga emitted no {name} SPIR-V for HelioC")
-    missing = helioc_capture_gaps()
-    if missing:
+    exec_dir = work / f"helioc-pipeline-exec-{os.getpid()}"
+    native_dir = work / "helioc-native"
+    exec_dir.mkdir(exist_ok=True)
+    dumper_source = work / "helioc_pipeline_dump.c"
+    dumper = work / "helioc_pipeline_dump"
+    make_helioc_compile_only_dumper(dumper_source)
+    run(["cc", str(dumper_source), "-o", str(dumper), *vulkan_compile_flags()])
+    env = os.environ.copy()
+    env["TRUEOS_EXECUTABLE_DUMP_DIR"] = str(exec_dir)
+    # Raw state records and executable representations must share one exact
+    # capture directory so the parser cannot accidentally validate only half
+    # of an instrumented run.
+    env["TRUEOS_HELIOC_ANV_DUMP_DIR"] = str(exec_dir)
+    # ANV's batch trace is diagnostic evidence only; native bytes still come
+    # from the cache/assembly cross-check above. Preserve any caller flags.
+    debug = env.get("INTEL_DEBUG", "")
+    if "bat" not in {flag.strip() for flag in debug.split(",") if flag.strip()}:
+        env["INTEL_DEBUG"] = f"{debug},bat".strip(",")
+    if args.device_id:
+        env["TRUEOS_VK_DEVICE_ID"] = args.device_id
+    compile_log = work / "helioc-compile.log"
+    run([str(dumper), str(compute_spv), str(vertex_spv), str(fragment_spv)], env=env, log=compile_log)
+    log_text = compile_log.read_text()
+    resource_marker = (
+        "helioc_pipeline_dump: resources volumes=2 format=R16G16B16A16_SFLOAT "
+        "extent=96x48x96 sampled=1 storage=1 "
+        "sampler=repeat/clamp-to-edge/repeat linear/linear/nearest normalized=1"
+    )
+    descriptor_marker = (
+        "helioc_pipeline_dump: descriptor_sets compute_ping_pong=2 graphics=1 "
+        "bindings=compute[0:uniform,1:sampled3d,2:sampler,3:storage3d] "
+        "graphics[0:uniform,1:sampled3d,2:sampler]"
+    )
+    if (
+        resource_marker not in log_text
+        or descriptor_marker not in log_text
+        or "helioc_pipeline_dump: submitted=1" not in log_text
+    ):
+        raise SystemExit("HelioC Vulkan capture did not create the required 3D resource/pipeline state")
+    volume_requirements = helioc_linear_volume_requirements(log_text)
+    linear_probe = helioc_linear_probe(log_text)
+    device, executables = parse_compile_log(log_text)
+    compute_executables = [
+        item for item in executables.values() if item["stage"] == "compute"
+    ]
+    if len(compute_executables) != 1:
         raise SystemExit(
-            "HelioC preflight stopped; no HELIOA emitted: missing capture datum(s): "
-            + "; ".join(missing)
+            f"Mesa exposed {len(compute_executables)} compute executables; expected one"
         )
+    compute_simd = int(compute_executables[0]["simd_width"])
+    if compute_simd not in (16, 32):
+        raise SystemExit(f"HelioC requires compiler-selected compute SIMD16/32, got SIMD{compute_simd}")
+    cs, vs, fs = extract_helioc_native(exec_dir, native_dir)
+    instrumented = collect_instrumented_anv_capture(exec_dir)
+    capture_metadata = {
+        "schema": 1,
+        "producer": "helio-intel-bake/helioc-capture",
+        "api": "VK_KHR_pipeline_executable_properties",
+        "compile_device": device,
+        "resource_state": resource_marker.removeprefix("helioc_pipeline_dump: "),
+        "bound_linear_volume_requirements": volume_requirements,
+        "linear_volume_probe": linear_probe,
+        "batch_capture": (
+            "unavailable: ANV reported batch logging unsupported"
+            if "Batch logging not supported" in log_text else "requested"
+        ),
+        "compute": {
+            "entry": "main", "local_size": [4, 4, 4], "groups": [24, 12, 24],
+            "simd_width": compute_simd, "hardware_threads": 64 // compute_simd,
+            "isa_sha256": sha256(cs), "isa_bytes": len(cs),
+        },
+        "graphics": {
+            "vertex_entry": "vs_main", "fragment_entry": "fs_main", "simd_width": 16,
+            "vertex_isa_sha256": sha256(vs), "fragment_isa_sha256": sha256(fs),
+        },
+        "executables": list(executables.values()),
+        "public_api_boundary": "pipeline-cache bytes are opaque; executable APIs expose no ANV bind map or program data",
+        "source_level_capture_route": {
+            "bind_map": (
+                "instrument the matched ANV anv_shader_get_executable_internal_representations "
+                "path to export anv_shader.bind_map and prog_data"
+            ),
+            "state": (
+                "instrument matched genX_cmd_buffer emit_binding_table/emit_samplers and "
+                "anv_image_fill_surface_state after relocations"
+            ),
+            "constraint": "rebuild and run that exact ANV source as the Vulkan ICD; do not parse opaque cache bytes",
+        },
+    }
+    if instrumented is not None:
+        identity = env.get("TRUEOS_HELIOC_CAPTURE_IDENTITY")
+        if identity != "noop-drm-shim:8086:4680:r0c":
+            raise SystemExit("instrumented ANV capture must identify the no-op shim; it is not physical-device proof")
+        capture_metadata["instrumented_anv"] = instrumented
+        capture_metadata["instrumented_identity"] = identity
+    (work / "helioc-capture-metadata.json").write_bytes(
+        (json.dumps(capture_metadata, indent=2, sort_keys=True) + "\n").encode()
+    )
+    print(f"HelioC captured genuine compute ISA: {len(cs)} bytes sha256={sha256(cs)}")
+    print(f"HelioC captured genuine fullscreen VS: {len(vs)} bytes sha256={sha256(vs)}")
+    print(f"HelioC captured genuine fullscreen FS SIMD16: {len(fs)} bytes sha256={sha256(fs)}")
     raise SystemExit(
-        "HelioC capture implementation is unexpectedly not gated by the known gaps; "
-        "refuse to emit without a reviewed compute/3D extraction path"
+        "HelioC preflight stopped; no HELIOA emitted: missing capture datum(s): "
+        + "; ".join(helioc_public_api_boundary(device, volume_requirements, log_text))
     )
 
 
@@ -1032,6 +1245,418 @@ def make_compile_only_dumper(destination: Path) -> None:
     destination.write_text(source)
 
 
+def make_helioc_compile_only_dumper(destination: Path) -> None:
+    """Specialize the proven dumper for HelioC's real compute + 3D workload."""
+    make_compile_only_dumper(destination)
+    source = destination.read_text()
+    source = replace_once(source, '''    if (argc != 3) {
+        fprintf(stderr, "usage: %s simple_triangle.vert.spv simple_triangle.frag.spv\\n", argv[0]);
+        return 1;
+    }''', '''    if (argc != 4) {
+        fprintf(stderr, "usage: %s simulate.comp.spv render.vert.spv render.frag.spv\\n", argv[0]);
+        return 1;
+    }''')
+    source = replace_once(source, '''        case VK_SHADER_STAGE_FRAGMENT_BIT:
+            return "fragment";
+        default:''', '''        case VK_SHADER_STAGE_FRAGMENT_BIT:
+            return "fragment";
+        case VK_SHADER_STAGE_COMPUTE_BIT:
+            return "compute";
+        default:''')
+    source = replace_once(source, '''            if (queues[q].queueFlags & VK_QUEUE_GRAPHICS_BIT) {''', '''            if ((queues[q].queueFlags & (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT))
+                == (VK_QUEUE_GRAPHICS_BIT | VK_QUEUE_COMPUTE_BIT)) {''')
+    source = replace_once(source, '''    FileData vs_spirv = read_spirv(argv[1]);
+    FileData fs_spirv = read_spirv(argv[2]);
+    const VkShaderModuleCreateInfo vs_info = {''', '''    FileData cs_spirv = read_spirv(argv[1]);
+    FileData vs_spirv = read_spirv(argv[2]);
+    FileData fs_spirv = read_spirv(argv[3]);
+    const VkShaderModuleCreateInfo cs_info = {
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .codeSize = cs_spirv.word_count * sizeof(uint32_t),
+        .pCode = cs_spirv.words,
+    };
+    const VkShaderModuleCreateInfo vs_info = {''')
+    source = replace_once(source, '''    VkShaderModule vs_module;
+    VkShaderModule fs_module;
+    CHECK_VK(vkCreateShaderModule(device, &vs_info, NULL, &vs_module));''', '''    VkShaderModule cs_module;
+    VkShaderModule vs_module;
+    VkShaderModule fs_module;
+    CHECK_VK(vkCreateShaderModule(device, &cs_info, NULL, &cs_module));
+    CHECK_VK(vkCreateShaderModule(device, &vs_info, NULL, &vs_module));''')
+    source = replace_once(source, '''    const VkVertexInputBindingDescription binding = {
+        .binding = 0,
+        .stride = 36,
+        .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
+    };
+    const VkVertexInputAttributeDescription attributes[3] = {
+        { .location = 0, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = 0 },
+        { .location = 1, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = 12 },
+        { .location = 2, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = 24 },
+    };
+    const VkPipelineVertexInputStateCreateInfo vertex_input = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+        .vertexBindingDescriptionCount = 1,
+        .pVertexBindingDescriptions = &binding,
+        .vertexAttributeDescriptionCount = 3,
+        .pVertexAttributeDescriptions = attributes,
+    };''', '''    const VkPipelineVertexInputStateCreateInfo vertex_input = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+    };''')
+    source = replace_once(source, '''    const VkDescriptorSetLayoutBinding camera_binding = {
+        .binding = 0,
+        .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
+        .descriptorCount = 1,
+        .stageFlags = VK_SHADER_STAGE_VERTEX_BIT,
+    };
+    const VkDescriptorSetLayoutCreateInfo set_layout_info = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .bindingCount = 1,
+        .pBindings = &camera_binding,
+    };
+    VkDescriptorSetLayout set_layout;
+    CHECK_VK(vkCreateDescriptorSetLayout(device, &set_layout_info, NULL, &set_layout));
+    const VkPipelineLayoutCreateInfo pipeline_layout_info = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .setLayoutCount = 1,
+        .pSetLayouts = &set_layout,
+        .pushConstantRangeCount = 0,
+        .pPushConstantRanges = NULL,
+    };''', '''    const VkDescriptorSetLayoutBinding compute_bindings[4] = {
+        { .binding = 0, .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+          .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT },
+        { .binding = 1, .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+          .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT },
+        { .binding = 2, .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER,
+          .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT },
+        { .binding = 3, .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+          .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_COMPUTE_BIT },
+    };
+    const VkDescriptorSetLayoutCreateInfo compute_set_layout_info = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .bindingCount = 4, .pBindings = compute_bindings,
+    };
+    VkDescriptorSetLayout compute_set_layout;
+    CHECK_VK(vkCreateDescriptorSetLayout(device, &compute_set_layout_info, NULL, &compute_set_layout));
+    const VkDescriptorSetLayoutBinding graphics_bindings[3] = {
+        { .binding = 0, .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+          .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT },
+        { .binding = 1, .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+          .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT },
+        { .binding = 2, .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER,
+          .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT },
+    };
+    const VkDescriptorSetLayoutCreateInfo graphics_set_layout_info = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .bindingCount = 3, .pBindings = graphics_bindings,
+    };
+    VkDescriptorSetLayout graphics_set_layout;
+    CHECK_VK(vkCreateDescriptorSetLayout(device, &graphics_set_layout_info, NULL, &graphics_set_layout));
+    const VkPipelineLayoutCreateInfo compute_pipeline_layout_info = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .setLayoutCount = 1, .pSetLayouts = &compute_set_layout,
+    };
+    VkPipelineLayout compute_pipeline_layout;
+    CHECK_VK(vkCreatePipelineLayout(device, &compute_pipeline_layout_info, NULL, &compute_pipeline_layout));
+    const VkPipelineLayoutCreateInfo pipeline_layout_info = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .setLayoutCount = 1, .pSetLayouts = &graphics_set_layout,
+    };
+
+    const VkImageCreateInfo volume_info = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
+        .imageType = VK_IMAGE_TYPE_3D,
+        .format = VK_FORMAT_R16G16B16A16_SFLOAT,
+        .extent = { 96, 48, 96 }, .mipLevels = 1, .arrayLayers = 1,
+        .samples = VK_SAMPLE_COUNT_1_BIT, .tiling = VK_IMAGE_TILING_LINEAR,
+        .usage = VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT,
+        .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+        .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+    };
+    VkFormatProperties linear_volume_format_properties;
+    vkGetPhysicalDeviceFormatProperties(
+        physical_device, VK_FORMAT_R16G16B16A16_SFLOAT, &linear_volume_format_properties
+    );
+    const VkFormatFeatureFlags required_linear_volume_features =
+        VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT;
+    printf("helioc_pipeline_dump: bound_linear features=0x%08X required=0x%08X\\n",
+           linear_volume_format_properties.linearTilingFeatures, required_linear_volume_features);
+    if ((linear_volume_format_properties.linearTilingFeatures & required_linear_volume_features)
+        != required_linear_volume_features) {
+        fprintf(stderr, "helioc_pipeline_dump: bound_linear unsupported=sampled_storage_3d\\n");
+        return 1;
+    }
+    VkImage volumes[2];
+    VkDeviceMemory volume_memories[2];
+    VkImageView volume_views[2];
+    for (uint32_t i = 0; i < 2; ++i) {
+        CHECK_VK(vkCreateImage(device, &volume_info, NULL, &volumes[i]));
+        VkMemoryRequirements volume_reqs;
+        vkGetImageMemoryRequirements(device, volumes[i], &volume_reqs);
+        const VkMemoryAllocateInfo volume_alloc = {
+            .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO,
+            .allocationSize = volume_reqs.size,
+            .memoryTypeIndex = find_memory_type(physical_device, volume_reqs.memoryTypeBits,
+                                                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
+        };
+        CHECK_VK(vkAllocateMemory(device, &volume_alloc, NULL, &volume_memories[i]));
+        CHECK_VK(vkBindImageMemory(device, volumes[i], volume_memories[i], 0));
+        const VkImageSubresource volume_subresource = {
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .mipLevel = 0, .arrayLayer = 0,
+        };
+        VkSubresourceLayout volume_layout;
+        vkGetImageSubresourceLayout(device, volumes[i], &volume_subresource, &volume_layout);
+        printf("helioc_pipeline_dump: volume[%u] linear_memory size=%llu alignment=%llu type_bits=0x%08X layout offset=%llu size=%llu row_pitch=%llu array_pitch=%llu depth_pitch=%llu\\n",
+               i, (unsigned long long)volume_reqs.size, (unsigned long long)volume_reqs.alignment,
+               volume_reqs.memoryTypeBits, (unsigned long long)volume_layout.offset,
+               (unsigned long long)volume_layout.size, (unsigned long long)volume_layout.rowPitch,
+               (unsigned long long)volume_layout.arrayPitch, (unsigned long long)volume_layout.depthPitch);
+        const VkImageViewCreateInfo volume_view_info = {
+            .sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO, .image = volumes[i],
+            .viewType = VK_IMAGE_VIEW_TYPE_3D, .format = VK_FORMAT_R16G16B16A16_SFLOAT,
+            .subresourceRange = { .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1 },
+        };
+        CHECK_VK(vkCreateImageView(device, &volume_view_info, NULL, &volume_views[i]));
+    }
+    VkFormatProperties volume_format_properties;
+    vkGetPhysicalDeviceFormatProperties(
+        physical_device, VK_FORMAT_R16G16B16A16_SFLOAT, &volume_format_properties
+    );
+    const VkFormatFeatureFlags linear_required_features =
+        VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT | VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT;
+    printf("helioc_pipeline_dump: linear_probe features=0x%08X required=0x%08X\\n",
+           volume_format_properties.linearTilingFeatures, linear_required_features);
+    if ((volume_format_properties.linearTilingFeatures & linear_required_features)
+        == linear_required_features) {
+        VkImageCreateInfo linear_probe_info = volume_info;
+        linear_probe_info.tiling = VK_IMAGE_TILING_LINEAR;
+        VkImage linear_probe;
+        const VkResult linear_probe_result = vkCreateImage(device, &linear_probe_info, NULL, &linear_probe);
+        printf("helioc_pipeline_dump: linear_probe create_result=%d\\n", linear_probe_result);
+        if (linear_probe_result == VK_SUCCESS) {
+            VkMemoryRequirements linear_reqs;
+            vkGetImageMemoryRequirements(device, linear_probe, &linear_reqs);
+            const VkMemoryAllocateInfo linear_alloc = {
+                .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .allocationSize = linear_reqs.size,
+                .memoryTypeIndex = find_memory_type(physical_device, linear_reqs.memoryTypeBits,
+                                                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT),
+            };
+            VkDeviceMemory linear_memory;
+            CHECK_VK(vkAllocateMemory(device, &linear_alloc, NULL, &linear_memory));
+            CHECK_VK(vkBindImageMemory(device, linear_probe, linear_memory, 0));
+            const VkImageSubresource linear_subresource = {
+                .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .mipLevel = 0, .arrayLayer = 0,
+            };
+            VkSubresourceLayout linear_layout;
+            vkGetImageSubresourceLayout(device, linear_probe, &linear_subresource, &linear_layout);
+            printf("helioc_pipeline_dump: linear_probe memory size=%llu alignment=%llu type_bits=0x%08X layout offset=%llu size=%llu row_pitch=%llu array_pitch=%llu depth_pitch=%llu\\n",
+                   (unsigned long long)linear_reqs.size, (unsigned long long)linear_reqs.alignment,
+                   linear_reqs.memoryTypeBits, (unsigned long long)linear_layout.offset,
+                   (unsigned long long)linear_layout.size, (unsigned long long)linear_layout.rowPitch,
+                   (unsigned long long)linear_layout.arrayPitch, (unsigned long long)linear_layout.depthPitch);
+            vkFreeMemory(device, linear_memory, NULL);
+            vkDestroyImage(device, linear_probe, NULL);
+        }
+    } else {
+        printf("helioc_pipeline_dump: linear_probe unsupported=sampled_storage_3d\\n");
+    }
+    const VkSamplerCreateInfo volume_sampler_info = {
+        .sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO,
+        .magFilter = VK_FILTER_LINEAR, .minFilter = VK_FILTER_LINEAR,
+        .mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST,
+        .addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+        .addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE,
+        .addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT,
+        .maxAnisotropy = 1.0f, .unnormalizedCoordinates = VK_FALSE,
+    };
+    VkSampler volume_sampler;
+    CHECK_VK(vkCreateSampler(device, &volume_sampler_info, NULL, &volume_sampler));
+    const VkBufferCreateInfo uniform_buffer_info = {
+        .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = 512,
+        .usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT, .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+    };
+    VkBuffer uniform_buffer;
+    CHECK_VK(vkCreateBuffer(device, &uniform_buffer_info, NULL, &uniform_buffer));
+    VkMemoryRequirements uniform_reqs;
+    vkGetBufferMemoryRequirements(device, uniform_buffer, &uniform_reqs);
+    const VkMemoryAllocateInfo uniform_alloc = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO, .allocationSize = uniform_reqs.size,
+        .memoryTypeIndex = find_memory_type(physical_device, uniform_reqs.memoryTypeBits,
+                                            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                            VK_MEMORY_PROPERTY_HOST_COHERENT_BIT),
+    };
+    VkDeviceMemory uniform_memory;
+    CHECK_VK(vkAllocateMemory(device, &uniform_alloc, NULL, &uniform_memory));
+    CHECK_VK(vkBindBufferMemory(device, uniform_buffer, uniform_memory, 0));
+    void *uniform_map = NULL;
+    CHECK_VK(vkMapMemory(device, uniform_memory, 0, 512, 0, &uniform_map));
+    memset(uniform_map, 0, 512);
+    vkUnmapMemory(device, uniform_memory);
+    const VkDescriptorPoolSize pool_sizes[4] = {
+        { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 3 }, { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 3 },
+        { VK_DESCRIPTOR_TYPE_SAMPLER, 3 }, { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 2 },
+    };
+    const VkDescriptorPoolCreateInfo descriptor_pool_info = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO, .maxSets = 3,
+        .poolSizeCount = 4, .pPoolSizes = pool_sizes,
+    };
+    VkDescriptorPool descriptor_pool;
+    CHECK_VK(vkCreateDescriptorPool(device, &descriptor_pool_info, NULL, &descriptor_pool));
+    const VkDescriptorSetLayout descriptor_layouts[3] = {
+        compute_set_layout, compute_set_layout, graphics_set_layout,
+    };
+    const VkDescriptorSetAllocateInfo descriptor_allocate_info = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO, .descriptorPool = descriptor_pool,
+        .descriptorSetCount = 3, .pSetLayouts = descriptor_layouts,
+    };
+    VkDescriptorSet descriptor_sets[3];
+    CHECK_VK(vkAllocateDescriptorSets(device, &descriptor_allocate_info, descriptor_sets));
+    const VkDescriptorBufferInfo compute_buffers[2] = {
+        { .buffer = uniform_buffer, .offset = 0, .range = 112 },
+        { .buffer = uniform_buffer, .offset = 0, .range = 112 },
+    };
+    const VkDescriptorBufferInfo graphics_buffer = {
+        .buffer = uniform_buffer, .offset = 128, .range = 272,
+    };
+    VkDescriptorImageInfo sampled_volumes[3] = {
+        { .imageView = volume_views[0], .imageLayout = VK_IMAGE_LAYOUT_GENERAL },
+        { .imageView = volume_views[1], .imageLayout = VK_IMAGE_LAYOUT_GENERAL },
+        { .imageView = volume_views[0], .imageLayout = VK_IMAGE_LAYOUT_GENERAL },
+    };
+    VkDescriptorImageInfo storage_volumes[2] = {
+        { .imageView = volume_views[1], .imageLayout = VK_IMAGE_LAYOUT_GENERAL },
+        { .imageView = volume_views[0], .imageLayout = VK_IMAGE_LAYOUT_GENERAL },
+    };
+    const VkDescriptorImageInfo sampler_infos[3] = {
+        { .sampler = volume_sampler }, { .sampler = volume_sampler }, { .sampler = volume_sampler },
+    };
+    VkWriteDescriptorSet writes[11];
+    uint32_t write_count = 0;
+    for (uint32_t i = 0; i < 2; ++i) {
+        writes[write_count++] = (VkWriteDescriptorSet) { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = descriptor_sets[i], .dstBinding = 0, .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .pBufferInfo = &compute_buffers[i] };
+        writes[write_count++] = (VkWriteDescriptorSet) { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = descriptor_sets[i], .dstBinding = 1, .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, .pImageInfo = &sampled_volumes[i] };
+        writes[write_count++] = (VkWriteDescriptorSet) { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = descriptor_sets[i], .dstBinding = 2, .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER, .pImageInfo = &sampler_infos[i] };
+        writes[write_count++] = (VkWriteDescriptorSet) { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+            .dstSet = descriptor_sets[i], .dstBinding = 3, .descriptorCount = 1,
+            .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, .pImageInfo = &storage_volumes[i] };
+    }
+    writes[write_count++] = (VkWriteDescriptorSet) { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        .dstSet = descriptor_sets[2], .dstBinding = 0, .descriptorCount = 1,
+        .descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, .pBufferInfo = &graphics_buffer };
+    writes[write_count++] = (VkWriteDescriptorSet) { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        .dstSet = descriptor_sets[2], .dstBinding = 1, .descriptorCount = 1,
+        .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, .pImageInfo = &sampled_volumes[2] };
+    writes[write_count++] = (VkWriteDescriptorSet) { .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        .dstSet = descriptor_sets[2], .dstBinding = 2, .descriptorCount = 1,
+        .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER, .pImageInfo = &sampler_infos[2] };
+    vkUpdateDescriptorSets(device, write_count, writes, 0, NULL);
+    printf("helioc_pipeline_dump: descriptor_sets compute_ping_pong=2 graphics=1 bindings=compute[0:uniform,1:sampled3d,2:sampler,3:storage3d] graphics[0:uniform,1:sampled3d,2:sampler]\\n");
+    printf("helioc_pipeline_dump: resources volumes=2 format=R16G16B16A16_SFLOAT extent=96x48x96 sampled=1 storage=1 sampler=repeat/clamp-to-edge/repeat linear/linear/nearest normalized=1\\n");''')
+    source = replace_once(source, '''    VkPipelineCache pipeline_cache;
+    CHECK_VK(vkCreatePipelineCache(device, &pipeline_cache_info, NULL, &pipeline_cache));
+
+    const VkGraphicsPipelineCreateInfo pipeline_info = {''', '''    VkPipelineCache pipeline_cache;
+    CHECK_VK(vkCreatePipelineCache(device, &pipeline_cache_info, NULL, &pipeline_cache));
+
+    const VkComputePipelineCreateInfo compute_pipeline_info = {
+        .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
+        .flags = VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR |
+                 VK_PIPELINE_CREATE_CAPTURE_INTERNAL_REPRESENTATIONS_BIT_KHR,
+        .stage = { .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .stage = VK_SHADER_STAGE_COMPUTE_BIT, .module = cs_module, .pName = "main" },
+        .layout = compute_pipeline_layout,
+    };
+    VkPipeline compute_pipeline;
+    CHECK_VK(vkCreateComputePipelines(device, pipeline_cache, 1, &compute_pipeline_info, NULL, &compute_pipeline));
+    dump_pipeline_executables(device, compute_pipeline);
+
+    const VkGraphicsPipelineCreateInfo pipeline_info = {''')
+    source = replace_once(source, '''    dump_pipeline_cache_blob(device, pipeline_cache);
+    dump_pipeline_executables(device, pipeline);
+    printf("helio_pipeline_dump: compiled_only=1\\n");''', '''    printf("helioc_pipeline_dump: recording dispatch=24x12x24 fullscreen_draw=3\\n");
+    const VkCommandBufferBeginInfo helioc_begin = {
+        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+    };
+    CHECK_VK(vkBeginCommandBuffer(command_buffer, &helioc_begin));
+    VkImageMemoryBarrier volume_barriers[2] = { 0 };
+    for (uint32_t i = 0; i < 2; ++i) {
+        volume_barriers[i].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+        volume_barriers[i].dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT;
+        volume_barriers[i].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        volume_barriers[i].newLayout = VK_IMAGE_LAYOUT_GENERAL;
+        volume_barriers[i].srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        volume_barriers[i].dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        volume_barriers[i].image = volumes[i];
+        volume_barriers[i].subresourceRange = (VkImageSubresourceRange) {
+            .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .baseMipLevel = 0, .levelCount = 1,
+            .baseArrayLayer = 0, .layerCount = 1,
+        };
+    }
+    const VkImageMemoryBarrier target_barrier = {
+        .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+        .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
+        .oldLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+        .newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+        .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+        .image = image,
+        .subresourceRange = { .aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+            .baseMipLevel = 0, .levelCount = 1, .baseArrayLayer = 0, .layerCount = 1 },
+    };
+    VkImageMemoryBarrier initial_barriers[3] = {
+        volume_barriers[0], volume_barriers[1], target_barrier,
+    };
+    vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                         VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT |
+                         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+                         0, 0, NULL, 0, NULL, 3, initial_barriers);
+    vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE, compute_pipeline);
+    for (uint32_t i = 0; i < 2; ++i) {
+        vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                compute_pipeline_layout, 0, 1, &descriptor_sets[i], 0, NULL);
+        vkCmdDispatch(command_buffer, 24, 12, 24);
+    }
+    VkImageMemoryBarrier render_volume_barrier = volume_barriers[0];
+    render_volume_barrier.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+    render_volume_barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    render_volume_barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL;
+    render_volume_barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+    vkCmdPipelineBarrier(command_buffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, NULL, 0, NULL,
+                         1, &render_volume_barrier);
+    const VkClearValue helioc_clear = { .color = { .float32 = { 0.f, 0.f, 0.f, 1.f } } };
+    const VkRenderPassBeginInfo helioc_render_begin = {
+        .sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO, .renderPass = render_pass,
+        .framebuffer = framebuffer, .renderArea = { .offset = { 0, 0 }, .extent = { 64, 64 } },
+        .clearValueCount = 1, .pClearValues = &helioc_clear,
+    };
+    vkCmdBeginRenderPass(command_buffer, &helioc_render_begin, VK_SUBPASS_CONTENTS_INLINE);
+    vkCmdBindPipeline(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
+    vkCmdBindDescriptorSets(command_buffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            pipeline_layout, 0, 1, &descriptor_sets[2], 0, NULL);
+    vkCmdDraw(command_buffer, 3, 1, 0, 0);
+    vkCmdEndRenderPass(command_buffer);
+    CHECK_VK(vkEndCommandBuffer(command_buffer));
+    const VkSubmitInfo helioc_submit = {
+        .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO, .commandBufferCount = 1,
+        .pCommandBuffers = &command_buffer,
+    };
+    CHECK_VK(vkQueueSubmit(queue, 1, &helioc_submit, VK_NULL_HANDLE));
+    CHECK_VK(vkQueueWaitIdle(queue));
+    CHECK_VK(vkDeviceWaitIdle(device));
+    dump_pipeline_cache_blob(device, pipeline_cache);
+    dump_pipeline_executables(device, pipeline);
+    printf("helioc_pipeline_dump: public_api=VK_KHR_pipeline_executable_properties pipeline_cache=opaque\\n");
+    printf("helioc_pipeline_dump: submitted=1\\n");''')
+    destination.write_text(source)
+
+
 def make_churn_compile_only_dumper(destination: Path) -> None:
     """Specialize the proven ANV compile dumper for Helio's Churn ABI."""
     make_compile_only_dumper(destination)
@@ -1135,22 +1760,39 @@ def parse_compile_log(log: str) -> tuple[dict[str, object], dict[int, dict[str, 
         "name": selected.group(3),
     }
     executables: dict[int, dict[str, object]] = {}
-    for match in re.finditer(
-        r'executable\[(\d+)\] stage=(\w+) name="([^"]+)" desc="([^"]+)" subgroup=(\d+)', log
-    ):
-        index = int(match.group(1))
-        executables[index] = {
-            "stage": match.group(2), "name": match.group(3),
-            "description": match.group(4), "simd_width": int(match.group(5)),
-            "statistics": {},
-        }
-    for match in re.finditer(
-        r'stat\[(\d+)\]\[\d+\] name="([^"]+)" value=([^\n]+)', log
-    ):
-        index = int(match.group(1))
-        if index in executables:
-            value = match.group(3).strip()
-            executables[index]["statistics"][match.group(2)] = int(value) if value.isdigit() else value
+    executable_keys: dict[int, int] = {}
+    pipeline_serial = -1
+    for line in log.splitlines():
+        executable_match = re.search(
+            r'executable\[(\d+)\] stage=(\w+) name="([^"]+)" desc="([^"]+)" subgroup=(\d+)', line
+        )
+        if executable_match:
+            index = int(executable_match.group(1))
+            # Each call to vkGetPipelineExecutablePropertiesKHR numbers from
+            # zero. HelioC deliberately captures a compute and a graphics
+            # pipeline in one log, so preserve both rather than overwriting
+            # compute executable[0] with graphics executable[0].
+            if index == 0:
+                pipeline_serial += 1
+                executable_keys = {}
+            key = pipeline_serial * 1000 + index
+            executable_keys[index] = key
+            executables[key] = {
+                "stage": executable_match.group(2), "name": executable_match.group(3),
+                "description": executable_match.group(4),
+                "simd_width": int(executable_match.group(5)), "statistics": {},
+            }
+            continue
+        statistic_match = re.search(
+            r'stat\[(\d+)\]\[\d+\] name="([^"]+)" value=([^\n]+)', line
+        )
+        if statistic_match:
+            key = executable_keys.get(int(statistic_match.group(1)))
+            if key is not None:
+                value = statistic_match.group(3).strip()
+                executables[key]["statistics"][statistic_match.group(2)] = (
+                    int(value) if value.isdigit() else value
+                )
     if not any(item["stage"] == "vertex" for item in executables.values()):
         raise SystemExit("Mesa exposed no native vertex executable")
     if not any(item["stage"] == "fragment" for item in executables.values()):
@@ -1265,6 +1907,31 @@ def extract_native(exec_dir: Path, native_dir: Path) -> tuple[bytes, bytes, byte
     if ps16 is not None:
         (native_dir / "simple_cube_ps_simd16.bin").write_bytes(ps16)
     return vs, slices[0], ps16
+
+
+def extract_helioc_native(exec_dir: Path, native_dir: Path) -> tuple[bytes, bytes, bytes]:
+    """Recover genuine compute, fullscreen VS, and SIMD16 FS EU code.
+
+    ANV's cache is opaque except for the stage/assembly-size cross-check used
+    by the established graphics path. This function applies that same bounded
+    recovery rule and rejects missing native records instead of inventing one.
+    """
+    assemblies = sorted(exec_dir.glob("*_GEN_Assembly.txt"))
+    compute = [path for path in assemblies if "_compute_" in path.name]
+    if len(compute) != 1:
+        raise SystemExit(f"expected exactly one compute assembly, got {len(compute)}")
+    compute_size = assembly_code_size(compute[0])
+    compute_instructions = assembly_instruction_count(compute[0])
+    cache = (exec_dir / "pipeline_cache.bin").read_bytes()
+    cs = find_cache_stage(cache, 5, compute_size, compute_instructions)
+    vs, _, ps16 = extract_native(exec_dir, native_dir)
+    if ps16 is None:
+        raise SystemExit("Mesa exposed no SIMD16 fullscreen fragment executable")
+    native_dir.mkdir(exist_ok=True)
+    (native_dir / "helioc_compute.bin").write_bytes(cs)
+    (native_dir / "helioc_vertex.bin").write_bytes(vs)
+    (native_dir / "helioc_fragment_simd16.bin").write_bytes(ps16)
+    return cs, vs, ps16
 
 
 def bake_churn_only(
@@ -1410,8 +2077,8 @@ def main() -> None:
     parser.add_argument(
         "--helioc", action="store_true",
         help=(
-            "compile only the sealed authored cloud WGSL through pinned Naga and "
-            "fail closed until this tool has real ANV compute/3D capture support"
+            "capture sealed authored cloud WGSL through pinned Naga/ANV and "
+            "fail closed unless native state and backing layout are proven"
         ),
     )
     args = parser.parse_args()

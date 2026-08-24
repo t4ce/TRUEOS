@@ -4,15 +4,23 @@ pub(crate) const GPGPU_RGBA16_FLOAT_BYTES_PER_VOXEL: usize = 8;
 
 /// Linear, page-backed 3D RGBA16F storage admitted to the direct-RCS PPGTT.
 ///
-/// This is intentionally a memory-layout contract rather than an Intel sampler
-/// surface-state encoding. Cloud compute can therefore start with the proven
-/// stateful/stateless buffer path and software trilinear filtering, while a
-/// later sampler bring-up can bind the exact same allocation as a 3D sampled
-/// surface without changing simulation ownership or the JSON-derived ABI.
+/// This is the memory-layout half of the contract; the sealed HelioC package
+/// must additionally supply the hardware-proven Intel 3D surface and sampler
+/// state. A buffer interpretation or software-filtering fallback is forbidden.
 #[allow(dead_code)]
-#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum GpgpuVolumePhysicalBacking {
+    /// One physically contiguous DMA allocation.
+    Contiguous { phys: u64 },
+    /// A broker-validated list of 4 KiB pages already installed into the
+    /// volume's contiguous GPU-VA window in the owning PPGTT.
+    ExactPpgttPages,
+}
+
+#[allow(dead_code)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct GpgpuRgba16FloatVolume3d {
-    pub(crate) phys: u64,
+    pub(crate) backing: GpgpuVolumePhysicalBacking,
     pub(crate) gpu: u64,
     pub(crate) bytes: usize,
     pub(crate) width: u32,
@@ -35,7 +43,35 @@ impl GpgpuRgba16FloatVolume3d {
         slice_pitch_bytes: u32,
     ) -> Option<Self> {
         let volume = Self {
-            phys,
+            backing: GpgpuVolumePhysicalBacking::Contiguous { phys },
+            gpu,
+            bytes,
+            width,
+            height,
+            depth,
+            row_pitch_bytes,
+            slice_pitch_bytes,
+        };
+        volume.is_valid().then_some(volume)
+    }
+
+    /// Describe a volume backed by an exact page list already mapped into the
+    /// caller's private PPGTT. The page list remains external so this compact
+    /// state descriptor stays allocation-free and copyable.
+    pub(crate) fn from_exact_ppgtt_pages(
+        gpu: u64,
+        bytes: usize,
+        width: u32,
+        height: u32,
+        depth: u32,
+        row_pitch_bytes: u32,
+        slice_pitch_bytes: u32,
+    ) -> Option<Self> {
+        if bytes == 0 || !bytes.is_multiple_of(4096) {
+            return None;
+        }
+        let volume = Self {
+            backing: GpgpuVolumePhysicalBacking::ExactPpgttPages,
             gpu,
             bytes,
             width,
@@ -85,9 +121,16 @@ impl GpgpuRgba16FloatVolume3d {
     }
 
     pub(crate) fn is_valid(self) -> bool {
-        if self.phys == 0
+        let backing_is_valid = match self.backing {
+            GpgpuVolumePhysicalBacking::Contiguous { phys } => {
+                phys != 0 && phys.is_multiple_of(4096)
+            }
+            GpgpuVolumePhysicalBacking::ExactPpgttPages => {
+                self.bytes != 0 && self.bytes.is_multiple_of(4096)
+            }
+        };
+        if !backing_is_valid
             || self.gpu == 0
-            || !self.phys.is_multiple_of(4096)
             || !self.gpu.is_multiple_of(4096)
             || self.width == 0
             || self.height == 0
@@ -140,7 +183,10 @@ impl GpgpuRgba16FloatVolume3d {
 
 #[cfg(test)]
 mod rgba16_float_volume_tests {
-    use super::{GPGPU_RGBA16_FLOAT_BYTES_PER_VOXEL, GpgpuRgba16FloatVolume3d};
+    use super::{
+        GPGPU_RGBA16_FLOAT_BYTES_PER_VOXEL, GpgpuRgba16FloatVolume3d,
+        GpgpuVolumePhysicalBacking,
+    };
 
     const PHYS: u64 = 0x0000_0000_1234_5000;
     const GPU: u64 = 0x0000_0000_4000_0000;
@@ -166,6 +212,19 @@ mod rgba16_float_volume_tests {
             Some(bytes - GPGPU_RGBA16_FLOAT_BYTES_PER_VOXEL)
         );
         assert_eq!(bytes * 2, 7_077_888, "ping-pong pair remains 6.75 MiB");
+
+        let paged = GpgpuRgba16FloatVolume3d::from_exact_ppgtt_pages(
+            GPU,
+            bytes,
+            width,
+            height,
+            depth,
+            768,
+            36_864,
+        )
+        .expect("exact-page PPGTT volume");
+        assert_eq!(paged.backing, GpgpuVolumePhysicalBacking::ExactPpgttPages);
+        assert_eq!(paged.required_bytes(), Some(bytes));
     }
 
     #[test]
@@ -191,5 +250,11 @@ mod rgba16_float_volume_tests {
         assert!(GpgpuRgba16FloatVolume3d::new(PHYS, GPU, 4096, 8, 4, 3, 32, 128).is_none());
         assert!(GpgpuRgba16FloatVolume3d::new(PHYS, GPU, 4096, 8, 4, 3, 64, 128).is_none());
         assert!(GpgpuRgba16FloatVolume3d::tight(PHYS, GPU, 511, 4, 4, 4).is_none());
+        assert!(
+            GpgpuRgba16FloatVolume3d::from_exact_ppgtt_pages(
+                GPU, 4095, 4, 4, 4, 32, 128,
+            )
+            .is_none()
+        );
     }
 }

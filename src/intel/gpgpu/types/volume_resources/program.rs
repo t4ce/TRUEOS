@@ -222,12 +222,42 @@
                 descriptor.slice_pitch_bytes,
             )
             .ok_or(Error::InvalidRuntimeAllocation)?;
+            self.resolve_volume_allocation(descriptor, allocation)
+        }
+
+        pub(crate) fn resolve_exact_ppgtt_volume(
+            self,
+            resource_id: u32,
+            gpu: u64,
+            bytes: usize,
+        ) -> Result<ResolvedRgba16FloatVolume3d, Error> {
+            let descriptor = self
+                .volume_by_id(resource_id)
+                .ok_or(Error::MissingResource)?;
+            let allocation = GpgpuRgba16FloatVolume3d::from_exact_ppgtt_pages(
+                gpu,
+                bytes,
+                descriptor.width,
+                descriptor.height,
+                descriptor.depth,
+                descriptor.row_pitch_bytes,
+                descriptor.slice_pitch_bytes,
+            )
+            .ok_or(Error::InvalidRuntimeAllocation)?;
+            self.resolve_volume_allocation(descriptor, allocation)
+        }
+
+        fn resolve_volume_allocation(
+            self,
+            descriptor: VolumeRecord,
+            allocation: GpgpuRgba16FloatVolume3d,
+        ) -> Result<ResolvedRgba16FloatVolume3d, Error> {
             let mut sampled_view = None;
             let mut storage_view = None;
             let mut index = 0;
             while index < self.view_count {
                 let view = self.view(index).ok_or(Error::OutOfBounds)?;
-                if view.resource_id == resource_id {
+                if view.resource_id == descriptor.resource_id {
                     if matches!(view.access, ViewAccess::Sampled) {
                         sampled_view = Some(view);
                     } else {

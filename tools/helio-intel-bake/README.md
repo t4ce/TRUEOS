@@ -6,7 +6,7 @@ capture to native Intel graphics shader bytes:
 ```text
 HELIOA captured WGSL
   -> Helio's vendored wgpu/Naga (per-entry SPIR-V)
-  -> Mesa ANV on an Intel gfx125 GPU
+  -> Mesa ANV on the selected Intel GPU
   -> VK_KHR_pipeline_executable_properties + ANV pipeline cache
   -> native VS/PS ISA sections in a new HELIOA file
 ```
@@ -40,7 +40,7 @@ The 128-byte little-endian payload is an 80-byte header followed by the one
 48-byte affine; the exact header offsets are documented in
 `tools/helio-build/README.md`.
 
-This reaches genuine native gfx125 ISA, but it is not yet directly launchable
+This reaches genuine target-specific Intel ISA, but it is not yet directly launchable
 by TRUEOS. The EU assembly makes the resource ABI concrete: VS reads the
 camera matrix at byte 128 through BTI 1 and PS writes RT0 through BTI 0. The
 remaining runtime step is matching Mesa's vertex-fetch, URB, SBE and pixel
@@ -52,21 +52,34 @@ payload state before programming `3DSTATE_VS` and `3DSTATE_PS`.
 `Helio-Examples/cloud-engine-webgpu-linux-aligned/shaders/`. It admits neither
 the adjacent C++/OpenCL experiments nor copied/reformatted WGSL. It runs the
 pinned Helio Naga frontend for `simulate.wgsl:main`, `render.wgsl:vs_main`, and
-`render.wgsl:fs_main`, and fixes the eventual HELIOC descriptor to gfx125,
+`render.wgsl:fs_main`, and fixes the eventual HELIOC descriptor to gfx120,
 ADL-S UHD 770 revision 0C, a `4x4x4` local group, `24x12x24` groups, and a
 metadata-selected compute SIMD16 or SIMD32.
 
 ```sh
 python3 tools/helio-intel-bake/bake.py --helioc \
   --work-dir /tmp/helioc-bake-work \
-  --out /tmp/helioc-native.adl-s.gfx125.helio
+  --out /tmp/helioc-native.adl-s.gfx120.helio
 ```
 
-The currently pinned compile dumper has no `VkComputePipeline` executable/cache
-capture and no sampled/storage `VK_IMAGE_VIEW_TYPE_3D` descriptor capture.
-Consequently this command intentionally stops after authenticating and
-compiling the three real WGSL entries, names the missing capture data, and
-emits no HELIOA file. The included deterministic assembler is only reachable
-once a reviewed Mesa/ANV capture provides all of: compute ISA, fullscreen VS
-ISA, fullscreen FS ISA, and the hash-bound `HELV3D` resource/compiler metadata.
-It has no placeholder ISA, C++ source, or CPU fallback path.
+The HelioC dumper now creates the real compute pipeline and fullscreen graphics
+pipeline, two `96x48x96` RGBA16F 3D images, a repeat/clamp/repeat linear sampler,
+both compute ping-pong descriptor sets, and the graphics descriptor set. It
+records two `24x12x24` compute dispatches plus the fullscreen draw, then captures
+native compute/VS/FS ISA through the pipeline executable/cache cross-check. It
+writes valid `VkMemoryRequirements` for the actual optimal-tiled images and, if
+the driver supports sampled+storage linear 3D images, separately creates a
+linear probe and queries its valid `VkSubresourceLayout`. It never queries a
+subresource layout for an optimal-tiled image.
+
+This still emits no HELIOA file. On the current gfx120 RPL-S capture, the actual
+optimal images require 6,316,444 bytes with 65,536-byte alignment, rather than
+the guest contract's 3,538,944-byte backing. The valid linear probe does match
+the guest layout (3,538,944 bytes, 768-byte row, 36,864-byte depth/array pitch),
+but it is not treated as proof of the optimal image's tiling or state encoding.
+The public executable API additionally does not expose ANV's descriptor-to-BTI/
+sampler map or compute program data, and the pipeline cache is opaque. The
+preflight reports these facts, the exact device ID, and the absence of a public
+PCI revision before refusing packaging. The assembler therefore remains
+reachable only after a reviewed capture supplies a relocatable surface/sampler/
+bind-map contract compatible with the broker allocation.

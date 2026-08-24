@@ -448,6 +448,7 @@ enum DirectRcsLane {
     Font,
     Execution,
     Lfm25,
+    HelioCloud,
 }
 
 impl DirectRcsLane {
@@ -457,6 +458,7 @@ impl DirectRcsLane {
             Self::Font => "font",
             Self::Execution => "execution",
             Self::Lfm25 => "lfm25",
+            Self::HelioCloud => "helioc",
         }
     }
 }
@@ -544,6 +546,14 @@ fn lfm25_rcs_submit_batch(dev: super::Dev, state: DirectRcsState) -> bool {
     )
 }
 
+#[expect(dead_code, reason = "reserved for the sealed HelioC frame encoder")]
+fn helioc_rcs_submit_batch_state(
+    dev: super::Dev,
+    state: DirectRcsState,
+) -> DirectRcsSubmissionState {
+    direct_rcs_submit_batch_on_lane_state(dev, state, DirectRcsLane::HelioCloud)
+}
+
 fn direct_rcs_submit_batch_on_lane_state(
     dev: super::Dev,
     state: DirectRcsState,
@@ -569,6 +579,11 @@ fn direct_rcs_submit_batch_on_lane_state(
             &LFM25_RCS_CONTEXT_QUARANTINED,
             &LFM25_RCS_SUBMIT_RUNTIME,
             crate::gpu::vgpu::KernelClient::Lfm25,
+        ),
+        DirectRcsLane::HelioCloud => (
+            &HELIOC_RCS_CONTEXT_QUARANTINED,
+            &HELIOC_RCS_SUBMIT_RUNTIME,
+            crate::gpu::vgpu::KernelClient::HelioCloud,
         ),
     };
     if quarantined.load(Ordering::Acquire) {
@@ -626,6 +641,10 @@ fn lfm25_rcs_context_is_quarantined() -> bool {
     !direct_rcs_state_reuse_permitted(&LFM25_RCS_CONTEXT_QUARANTINED)
 }
 
+fn helioc_rcs_context_is_quarantined() -> bool {
+    !direct_rcs_state_reuse_permitted(&HELIOC_RCS_CONTEXT_QUARANTINED)
+}
+
 fn ui4_compositor_rcs_context_is_quarantined() -> bool {
     !direct_rcs_state_reuse_permitted(&UI4_COMPOSITOR_RCS_CONTEXT_QUARANTINED)
 }
@@ -640,6 +659,10 @@ fn quarantine_font_rcs_context(reason: &'static str) {
 
 fn quarantine_lfm25_rcs_context(reason: &'static str) {
     quarantine_direct_rcs_lane(DirectRcsLane::Lfm25, reason);
+}
+
+fn quarantine_helioc_rcs_context(reason: &'static str) {
+    quarantine_direct_rcs_lane(DirectRcsLane::HelioCloud, reason);
 }
 
 fn quarantine_ui4_compositor_rcs_context(reason: &'static str) {
@@ -673,6 +696,9 @@ fn quarantine_direct_rcs_lane(lane: DirectRcsLane, reason: &'static str) {
         }
         DirectRcsLane::Lfm25 => {
             (&LFM25_RCS_CONTEXT_QUARANTINED, crate::gpu::vgpu::KernelClient::Lfm25)
+        }
+        DirectRcsLane::HelioCloud => {
+            (&HELIOC_RCS_CONTEXT_QUARANTINED, crate::gpu::vgpu::KernelClient::HelioCloud)
         }
     };
     if quarantined
@@ -868,6 +894,7 @@ fn direct_rcs_submit_runtime(lane: DirectRcsLane) -> &'static Mutex<DirectRcsSub
         DirectRcsLane::Font => &FONT_RCS_SUBMIT_RUNTIME,
         DirectRcsLane::Execution => &EXECUTION_RCS_SUBMIT_RUNTIME,
         DirectRcsLane::Lfm25 => &LFM25_RCS_SUBMIT_RUNTIME,
+        DirectRcsLane::HelioCloud => &HELIOC_RCS_SUBMIT_RUNTIME,
     }
 }
 
@@ -1065,6 +1092,22 @@ fn lfm25_rcs_poll_result_slot_timeout_ms(
     )
 }
 
+#[expect(dead_code, reason = "reserved for the sealed HelioC frame encoder")]
+fn helioc_rcs_poll_result_slot_timeout_ms(
+    state: DirectRcsState,
+    slot: usize,
+    expected: u32,
+    timeout_ms: u64,
+) -> u32 {
+    direct_rcs_poll_result_slot_timeout_ms_on_lane(
+        state,
+        slot,
+        expected,
+        timeout_ms,
+        DirectRcsLane::HelioCloud,
+    )
+}
+
 fn lfm25_rcs_poll_result_slot_timeout_ms_with_timestamp(
     dev: super::Dev,
     state: DirectRcsState,
@@ -1110,6 +1153,7 @@ fn direct_rcs_poll_result_slot_timeout_ms_on_lane_with_timestamp(
         DirectRcsLane::Font => &FONT_RCS_TIMEOUT_POLL_PROBE_LOGGED,
         DirectRcsLane::Execution => &EXECUTION_RCS_TIMEOUT_POLL_PROBE_LOGGED,
         DirectRcsLane::Lfm25 => &LFM25_RCS_TIMEOUT_POLL_PROBE_LOGGED,
+        DirectRcsLane::HelioCloud => &HELIOC_RCS_TIMEOUT_POLL_PROBE_LOGGED,
     };
     let log_probe = probe_logged
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)

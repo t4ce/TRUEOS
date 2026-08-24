@@ -8,6 +8,8 @@
 #[allow(dead_code)]
 pub(crate) mod helio_volume_resources {
     use super::{GPGPU_RGBA16_FLOAT_BYTES_PER_VOXEL, GpgpuRgba16FloatVolume3d};
+    #[cfg(test)]
+    use super::GpgpuVolumePhysicalBacking;
     use sha2::{Digest, Sha256};
     use trueos_helio_artifact::{Artifact, SectionKind};
 

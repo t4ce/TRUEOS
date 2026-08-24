@@ -69,6 +69,15 @@
             assert_eq!(resolved.storage_view.access, ViewAccess::StorageWriteOnly);
             assert_eq!(resolved.descriptor.cache_policy, CachePolicy::WriteBack);
             assert_eq!(resolved.descriptor.mapping_lifetime, MappingLifetime::Artifact);
+
+            let paged = program
+                .resolve_exact_ppgtt_volume(1, GPU, 3_538_944)
+                .expect("resolve scatter-gather cloud volume through one PPGTT window");
+            assert_eq!(
+                paged.allocation.backing,
+                GpgpuVolumePhysicalBacking::ExactPpgttPages
+            );
+            assert_eq!(paged.allocation.gpu, GPU);
         }
 
         #[test]

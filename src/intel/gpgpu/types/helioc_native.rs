@@ -23,7 +23,9 @@ pub(crate) mod helioc_native_package {
     const MAGIC: [u8; 8] = *b"HELIOC\0\0";
     const VERSION: u16 = 1;
     const BYTE_LEN: usize = 320;
-    const GFX_VERSION: u16 = 125;
+    // ADL-S GT1 / UHD 770 is Mesa gfx12 (verx10=120).  gfx125 names the
+    // Xe-HP/DG2 packet family and must never authenticate Xe-LP ISA/state.
+    const GFX_VERSION: u16 = 120;
     const ADLS_UHD_770_DEVICE_ID: u16 = 0x4680;
     const ADLS_UHD_770_REVISION: u8 = 0x0C;
     const LOCAL_DIMENSIONS: [u16; 3] = [4, 4, 4];
@@ -334,6 +336,13 @@ pub(crate) mod helioc_native_package {
             consistently_rehashed[128..160]
                 .copy_from_slice(&Sha256::digest(b"alternate simulate.wgsl"));
             assert_eq!(NativePackage::parse(&consistently_rehashed), Err(Error::InvalidSource));
+        }
+
+        #[test]
+        fn rejects_xehp_gfx125_label_for_the_xelp_uhd770_target() {
+            let mut descriptor = descriptor_fixture(16, RESOURCES);
+            put_u16(&mut descriptor, 20, 125);
+            assert_eq!(NativePackage::parse(&descriptor), Err(Error::UnsupportedTarget));
         }
 
         #[test]

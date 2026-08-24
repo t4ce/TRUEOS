@@ -1417,6 +1417,38 @@ const _: () = assert!(
 const _: () = assert!(
     HELIOC_RCS_GPU_VA_RESOURCE_LIMIT <= DIRECT_RCS_GPU_VA_FONT_COVERAGE_BASE
 );
+
+#[cfg(test)]
+mod helioc_layout_tests {
+    use super::*;
+
+    fn assert_page_window(start: u64, end: u64) {
+        assert_eq!(start % 4096, 0);
+        assert_eq!(end % 4096, 0);
+        assert!(start < end);
+        assert!(end <= DIRECT_RCS_PPGTT_LIMIT_BYTES);
+    }
+
+    #[test]
+    fn helioc_control_and_resource_windows_are_ordered_and_bounded() {
+        let windows = [
+            (HELIOC_RCS_GPU_VA_RING_BASE, HELIOC_RCS_GPU_VA_CONTEXT_BASE),
+            (HELIOC_RCS_GPU_VA_CONTEXT_BASE, HELIOC_RCS_GPU_VA_RESULT_BASE),
+            (HELIOC_RCS_GPU_VA_RESULT_BASE, HELIOC_RCS_GPU_VA_BATCH_BASE),
+            (HELIOC_RCS_GPU_VA_BATCH_BASE, HELIOC_RCS_GPU_VA_VOLUME_A_BASE),
+            (HELIOC_RCS_GPU_VA_VOLUME_A_BASE, HELIOC_RCS_GPU_VA_VOLUME_B_BASE),
+            (HELIOC_RCS_GPU_VA_VOLUME_B_BASE, HELIOC_RCS_GPU_VA_SIM_PARAMS_BASE),
+            (HELIOC_RCS_GPU_VA_SIM_PARAMS_BASE, HELIOC_RCS_GPU_VA_RENDER_PARAMS_BASE),
+            (HELIOC_RCS_GPU_VA_RENDER_PARAMS_BASE, HELIOC_RCS_GPU_VA_RESOURCE_LIMIT),
+        ];
+        for (start, end) in windows {
+            assert_page_window(start, end);
+        }
+        assert!(HELIOC_RCS_GPU_VA_RESOURCE_LIMIT <= DIRECT_RCS_GPU_VA_FONT_COVERAGE_BASE);
+        assert!(HELIOC_RCS_GPU_VA_RESOURCE_LIMIT <= FONT_RCS_GPU_VA_RUSH_RGBA8_BASE);
+    }
+}
+
 // A compositor submission is intentionally allowed to remain in flight while
 // the ordinary GPGPU client services video, fonts, and application compute.
 // These GGTT addresses back a distinct HWLRCA/ring/batch/result set; the

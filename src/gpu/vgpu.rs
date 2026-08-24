@@ -8,6 +8,7 @@
 
 extern crate alloc;
 
+use alloc::sync::Arc;
 use alloc::vec::Vec;
 use spin::Mutex;
 use trueos_time::{Duration, Timer};
@@ -784,12 +785,59 @@ pub(crate) struct CloudWorkGraphDescriptor {
 
 struct CloudWorkGraphRecord {
     resources: CloudWorkGraphDescriptor,
+    /// Immutable physical backing authenticated once when the graph is
+    /// created. Frame submission only clones four `Arc` handles; it never
+    /// recopies the 1,730-page ping-pong map on the CPU hot path.
+    buffer_metadata: [CloudBufferMetadata; 4],
     epoch: u64,
     /// The volume sampled by a zero-step render. Each completed simulation
     /// step flips this selector; the tenant never supplies a GPU address or a
     /// ping-pong target.
     current_volume: u8,
     in_flight: u32,
+}
+
+struct CloudSubmissionLease {
+    device_epoch: u64,
+    queue: QueueHandle,
+    graph: CloudWorkGraphHandle,
+    surface: SurfaceHandle,
+    buffers: [BufferHandle; 4],
+    buffer_metadata: [CloudBufferMetadata; 4],
+    surface_metadata: CloudSurfaceMetadata,
+    graph_resources: CloudWorkGraphDescriptor,
+    current_volume: u8,
+    simulation_steps: u32,
+}
+
+#[derive(Copy, Clone)]
+struct CloudSurfaceMetadata {
+    window_id: u32,
+    gpu: u64,
+    phys: u64,
+    producer_gpu: u64,
+    bytes: usize,
+    width: u32,
+    height: u32,
+    pitch: u32,
+}
+
+#[derive(Clone)]
+struct CloudBufferMetadata {
+    gpu: u64,
+    bytes: usize,
+    usage: u32,
+    epoch: u64,
+    mapping_digest: u64,
+    pages: Arc<[u64]>,
+}
+
+#[expect(dead_code, reason = "activated by the authenticated HelioC encoder rung")]
+enum CloudNativeSubmitResult {
+    /// A future authenticated encoder may return its real fence and telemetry.
+    Submitted(CloudFrameTelemetry),
+    /// Native ownership became uncertain; callers must quarantine the lease.
+    Ambiguous,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -1724,11 +1772,18 @@ pub(crate) fn create_cloud_work_graph(
     validate_cloud_buffer(device, descriptor.volume_b, CloudResourceRole::Volume)?;
     validate_cloud_buffer(device, descriptor.sim_params, CloudResourceRole::SimulationParams)?;
     validate_cloud_buffer(device, descriptor.render_params, CloudResourceRole::RenderParams)?;
+    let buffer_metadata = [
+        snapshot_cloud_buffer(device, descriptor.volume_a)?,
+        snapshot_cloud_buffer(device, descriptor.volume_b)?,
+        snapshot_cloud_buffer(device, descriptor.sim_params)?,
+        snapshot_cloud_buffer(device, descriptor.render_params)?,
+    ];
 
     Ok(insert_cloud_work_graph(
         device,
         CloudWorkGraphRecord {
             resources: descriptor,
+            buffer_metadata,
             epoch: device.epoch,
             current_volume: 0,
             in_flight: 0,
@@ -1763,10 +1818,9 @@ pub(crate) fn destroy_cloud_work_graph(
     Ok(())
 }
 
-/// Validate the complete frame boundary while the native backend remains
-/// deliberately cold. Returning `Unsupported` after validation is important:
-/// no surface is consumed and no timeline point is fabricated before the
-/// authenticated compute+fragment package and release fence are installed.
+/// Submit one mediated Cloud frame. The broker owns the complete reservation
+/// phase; the native seam is deliberately cold until an authenticated encoder
+/// and release-fence path exists.
 pub(crate) fn submit_cloud_frame(
     principal: Principal,
     device_handle: DeviceHandle,
@@ -1778,42 +1832,288 @@ pub(crate) fn submit_cloud_frame(
     if simulation_steps > CLOUD_FRAME_MAX_SIMULATION_STEPS {
         return Err(VgpuError::Unsupported);
     }
-    let broker = BROKER.lock();
-    let device = lookup_device(&broker, device_handle, principal)?;
-    ensure_live(device)?;
-    let required_capabilities = Capabilities::COMPUTE
-        .union(Capabilities::RENDER)
-        .union(Capabilities::PRESENT);
-    if !device.capabilities.contains(required_capabilities) {
-        return Err(VgpuError::PermissionDenied);
-    }
-    let queue = lookup_queue(device, queue_handle)?;
-    if queue.class != QueueClass::Render {
-        return Err(VgpuError::PermissionDenied);
-    }
-    if queue.in_flight != 0 {
-        return Err(VgpuError::Busy);
-    }
-    let surface = lookup_surface(device, surface_handle)?;
-    if surface.epoch != device.epoch || surface.in_flight != 1 {
-        return Err(VgpuError::Busy);
-    }
-    let graph = lookup_cloud_work_graph(device, graph_handle)?;
-    if graph.epoch != device.epoch
-        || graph.resources.profile != CLOUD_PROFILE_HELIO_ENGINE_V1
-        || graph.current_volume > 1
-    {
-        return Err(VgpuError::DeviceLost);
-    }
-    if graph.in_flight != 0 {
-        return Err(VgpuError::Busy);
-    }
-    validate_cloud_buffer(device, graph.resources.volume_a, CloudResourceRole::Volume)?;
-    validate_cloud_buffer(device, graph.resources.volume_b, CloudResourceRole::Volume)?;
-    validate_cloud_buffer(device, graph.resources.sim_params, CloudResourceRole::SimulationParams)?;
-    validate_cloud_buffer(device, graph.resources.render_params, CloudResourceRole::RenderParams)?;
+    let lease = {
+        let mut broker = BROKER.lock();
+        let device = lookup_device_mut(&mut broker, device_handle, principal)?;
+        ensure_live(device)?;
+        let required_capabilities = Capabilities::COMPUTE
+            .union(Capabilities::RENDER)
+            .union(Capabilities::PRESENT);
+        if !device.capabilities.contains(required_capabilities) {
+            return Err(VgpuError::PermissionDenied);
+        }
+        let queue = lookup_queue(device, queue_handle)?;
+        if queue.class != QueueClass::Render {
+            return Err(VgpuError::PermissionDenied);
+        }
+        if queue.in_flight != 0 {
+            return Err(VgpuError::Busy);
+        }
+        let surface = lookup_surface(device, surface_handle)?;
+        if surface.epoch != device.epoch || surface.in_flight != 1 {
+            return Err(VgpuError::Busy);
+        }
+        let graph = lookup_cloud_work_graph(device, graph_handle)?;
+        if graph.epoch != device.epoch
+            || graph.resources.profile != CLOUD_PROFILE_HELIO_ENGINE_V1
+            || graph.current_volume > 1
+        {
+            return Err(VgpuError::DeviceLost);
+        }
+        if graph.in_flight != 0 {
+            return Err(VgpuError::Busy);
+        }
+        let buffers = [
+            graph.resources.volume_a,
+            graph.resources.volume_b,
+            graph.resources.sim_params,
+            graph.resources.render_params,
+        ];
+        let graph_resources = graph.resources;
+        let buffer_metadata = graph.buffer_metadata.clone();
+        let current_volume = graph.current_volume;
+        let surface_metadata = CloudSurfaceMetadata {
+            window_id: surface.window_id,
+            gpu: surface.gpu,
+            phys: surface.phys,
+            producer_gpu: surface.producer_gpu,
+            bytes: surface.bytes,
+            width: surface.width,
+            height: surface.height,
+            pitch: surface.pitch,
+        };
+        validate_cloud_buffer(device, buffers[0], CloudResourceRole::Volume)?;
+        validate_cloud_buffer(device, buffers[1], CloudResourceRole::Volume)?;
+        validate_cloud_buffer(device, buffers[2], CloudResourceRole::SimulationParams)?;
+        validate_cloud_buffer(device, buffers[3], CloudResourceRole::RenderParams)?;
+        if buffers
+            .iter()
+            .zip(buffer_metadata.iter())
+            .any(|(buffer, metadata)| {
+                lookup_buffer(device, *buffer).map_or(true, |record| {
+                    !cloud_buffer_matches_snapshot(record, metadata, 0)
+                })
+            })
+        {
+            return Err(VgpuError::DeviceLost);
+        }
 
+        // All checks above are preflight. Only now publish the operation lease.
+        lookup_queue_mut(device, queue_handle)?.in_flight = 1;
+        lookup_surface_mut(device, surface_handle)?.in_flight = 2;
+        lookup_cloud_work_graph_mut(device, graph_handle)?.in_flight = 1;
+        for buffer in buffers {
+            lookup_buffer_mut(device, buffer)?.in_flight = 1;
+        }
+        CloudSubmissionLease {
+            device_epoch: device.epoch,
+            queue: queue_handle,
+            graph: graph_handle,
+            surface: surface_handle,
+            buffers,
+            buffer_metadata,
+            surface_metadata,
+            graph_resources,
+            current_volume,
+            simulation_steps,
+        }
+    };
+
+    match submit_cloud_frame_native(&lease) {
+        Ok(CloudNativeSubmitResult::Submitted(telemetry)) => {
+            // A real backend will retire these leases with its release fence.
+            // This cold seam cannot produce this branch today.
+            if !retire_cloud_submission_lease(principal, device_handle, &lease, &telemetry) {
+                return Err(VgpuError::DeviceLost);
+            }
+            Ok(telemetry)
+        }
+        Ok(CloudNativeSubmitResult::Ambiguous) => {
+            quarantine_cloud_submission_lease(principal, device_handle, &lease);
+            Err(VgpuError::DeviceLost)
+        }
+        Err(error) => {
+            // Unsupported is a definite pre-submit failure: no telemetry,
+            // timeline point, or ping-pong transition may be fabricated.
+            if rollback_cloud_submission_lease(principal, device_handle, &lease) {
+                Err(error)
+            } else {
+                // A reservation mismatch means ownership became ambiguous;
+                // never leave a live device with partially held leases.
+                quarantine_cloud_submission_lease(principal, device_handle, &lease);
+                Err(VgpuError::DeviceLost)
+            }
+        }
+    }
+}
+
+fn submit_cloud_frame_native(
+    lease: &CloudSubmissionLease,
+) -> Result<CloudNativeSubmitResult, VgpuError> {
+    // The future encoder consumes this immutable snapshot rather than
+    // re-reading broker state after the lock is dropped.
+    let _snapshot = lease;
     Err(VgpuError::Unsupported)
+}
+
+fn rollback_cloud_submission_lease(
+    principal: Principal,
+    device_handle: DeviceHandle,
+    lease: &CloudSubmissionLease,
+) -> bool {
+    let mut broker = BROKER.lock();
+    let Ok(device) = lookup_device_mut(&mut broker, device_handle, principal) else {
+        return false;
+    };
+    if device.epoch != lease.device_epoch {
+        return false;
+    }
+    let Ok(queue) = lookup_queue(device, lease.queue) else { return false };
+    let Ok(surface) = lookup_surface(device, lease.surface) else { return false };
+    let Ok(graph) = lookup_cloud_work_graph(device, lease.graph) else { return false };
+    if queue.in_flight != 1 || surface.in_flight != 2 || graph.in_flight != 1 {
+        return false;
+    }
+    if lease
+        .buffers
+        .iter()
+        .any(|buffer| lookup_buffer(device, *buffer).map_or(true, |record| record.in_flight != 1))
+    {
+        return false;
+    }
+    lookup_queue_mut(device, lease.queue).expect("validated Cloud queue").in_flight = 0;
+    lookup_surface_mut(device, lease.surface)
+        .expect("validated Cloud surface")
+        .in_flight = 1;
+    lookup_cloud_work_graph_mut(device, lease.graph)
+        .expect("validated Cloud graph")
+        .in_flight = 0;
+    for buffer in lease.buffers {
+        lookup_buffer_mut(device, buffer)
+            .expect("validated Cloud buffer")
+            .in_flight = 0;
+    }
+    true
+}
+
+fn retire_cloud_submission_lease(
+    principal: Principal,
+    device_handle: DeviceHandle,
+    lease: &CloudSubmissionLease,
+    telemetry: &CloudFrameTelemetry,
+) -> bool {
+    let mut broker = BROKER.lock();
+    let Ok(device) = lookup_device_mut(&mut broker, device_handle, principal) else {
+        return false;
+    };
+    if device.epoch != lease.device_epoch {
+        return false;
+    }
+    let Ok(queue) = lookup_queue(device, lease.queue) else { return false };
+    let Ok(surface) = lookup_surface(device, lease.surface) else { return false };
+    let Ok(graph) = lookup_cloud_work_graph(device, lease.graph) else { return false };
+    if telemetry.point.queue != lease.queue
+        || telemetry.point.value == 0
+        || telemetry.point.value <= queue.timeline.submitted
+        || queue.in_flight != 1
+        || surface.in_flight != 2
+        || graph.in_flight != 1
+        || graph.epoch != lease.device_epoch
+        || graph.resources != lease.graph_resources
+        || graph.current_volume != lease.current_volume
+        || surface.epoch != lease.device_epoch
+        || surface.window_id != lease.surface_metadata.window_id
+        || surface.gpu != lease.surface_metadata.gpu
+        || surface.phys != lease.surface_metadata.phys
+        || surface.producer_gpu != lease.surface_metadata.producer_gpu
+        || surface.bytes != lease.surface_metadata.bytes
+        || surface.width != lease.surface_metadata.width
+        || surface.height != lease.surface_metadata.height
+        || surface.pitch != lease.surface_metadata.pitch
+    {
+        return false;
+    }
+    if lease
+        .buffers
+        .iter()
+        .zip(lease.buffer_metadata.iter())
+        .any(|(buffer, metadata)| {
+            lookup_buffer(device, *buffer)
+                .map_or(true, |record| !cloud_buffer_matches_snapshot(record, metadata, 1))
+        })
+    {
+        return false;
+    }
+    lookup_queue_mut(device, lease.queue).expect("validated Cloud queue").in_flight = 0;
+    let queue = lookup_queue_mut(device, lease.queue).expect("validated Cloud queue");
+    queue.timeline.submitted = telemetry.point.value;
+    queue.timeline.completed = telemetry.point.value;
+    queue.timeline.last_physical_serial = telemetry.point.physical_serial;
+    lookup_surface_mut(device, lease.surface)
+        .expect("validated Cloud surface")
+        .in_flight = 3;
+    lookup_cloud_work_graph_mut(device, lease.graph)
+        .expect("validated Cloud graph")
+        .in_flight = 0;
+    lookup_cloud_work_graph_mut(device, lease.graph)
+        .expect("validated Cloud graph")
+        .current_volume = cloud_next_volume(lease.current_volume, lease.simulation_steps);
+    for buffer in lease.buffers {
+        lookup_buffer_mut(device, buffer)
+            .expect("validated Cloud buffer")
+            .in_flight = 0;
+    }
+    true
+}
+
+fn quarantine_cloud_submission_lease(
+    principal: Principal,
+    device_handle: DeviceHandle,
+    lease: &CloudSubmissionLease,
+) {
+    let mut broker = BROKER.lock();
+    if let Ok(device) = lookup_device_mut(&mut broker, device_handle, principal) {
+        if device.epoch == lease.device_epoch {
+            device.lost = true;
+        }
+    }
+}
+
+fn snapshot_cloud_buffer(
+    device: &VirtualDevice,
+    handle: BufferHandle,
+) -> Result<CloudBufferMetadata, VgpuError> {
+    let record = lookup_buffer(device, handle)?;
+    let pages = match &record.backing {
+        BufferBacking::GuestPages { pages, .. } => pages.clone(),
+        BufferBacking::Dma { .. } => return Err(VgpuError::PermissionDenied),
+    };
+    Ok(CloudBufferMetadata {
+        gpu: record.gpu,
+        bytes: record.bytes,
+        usage: record.usage,
+        epoch: record.epoch,
+        mapping_digest: record.mapping_digest,
+        pages: Arc::from(pages.as_slice()),
+    })
+}
+
+const fn cloud_next_volume(current_volume: u8, simulation_steps: u32) -> u8 {
+    current_volume ^ (simulation_steps as u8 & 1)
+}
+
+fn cloud_buffer_matches_snapshot(
+    record: &BufferRecord,
+    snapshot: &CloudBufferMetadata,
+    expected_in_flight: u32,
+) -> bool {
+    record.in_flight == expected_in_flight
+        && record.gpu == snapshot.gpu
+        && record.bytes == snapshot.bytes
+        && record.usage == snapshot.usage
+        && record.epoch == snapshot.epoch
+        && record.mapping_digest == snapshot.mapping_digest
+        && matches!(&record.backing, BufferBacking::GuestPages { pages, .. } if pages.as_slice() == snapshot.pages.as_ref())
 }
 
 fn validate_cloud_buffer(
@@ -1866,7 +2166,7 @@ mod cloud_resource_contract_tests {
         BUFFER_USAGE_COPY_DST, BUFFER_USAGE_COPY_SRC, BUFFER_USAGE_STORAGE,
         CLOUD_PARAMS_REQUIRED_USAGE, CLOUD_RENDER_PARAMS_BYTES, CLOUD_SIM_PARAMS_BYTES,
         CLOUD_VOLUME_BYTES, CLOUD_VOLUME_REQUIRED_USAGE, CloudResourceRole, PAGE_BYTES, VgpuError,
-        align_up, validate_cloud_resource_shape,
+        align_up, cloud_next_volume, validate_cloud_resource_shape,
     };
 
     #[test]
@@ -1937,6 +2237,16 @@ mod cloud_resource_contract_tests {
             ),
             Err(VgpuError::PermissionDenied)
         );
+    }
+
+    #[test]
+    fn simulation_parity_controls_only_ping_pong_selector() {
+        assert_eq!(cloud_next_volume(0, 0), 0);
+        assert_eq!(cloud_next_volume(0, 1), 1);
+        assert_eq!(cloud_next_volume(1, 1), 0);
+        assert_eq!(cloud_next_volume(1, 2), 1);
+        assert_eq!(cloud_next_volume(0, 2), 0);
+        assert_eq!(cloud_next_volume(1, 3), 0);
     }
 }
 
@@ -4839,7 +5149,6 @@ fn lookup_surface(
     entry.record.as_ref().ok_or(VgpuError::InvalidHandle)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn lookup_buffer_mut(
     device: &mut VirtualDevice,
     handle: BufferHandle,
@@ -4913,6 +5222,21 @@ fn lookup_cloud_work_graph(
         return Err(VgpuError::InvalidHandle);
     }
     entry.record.as_ref().ok_or(VgpuError::InvalidHandle)
+}
+
+fn lookup_cloud_work_graph_mut(
+    device: &mut VirtualDevice,
+    handle: CloudWorkGraphHandle,
+) -> Result<&mut CloudWorkGraphRecord, VgpuError> {
+    let (slot, generation) = decode_handle(handle.raw())?;
+    let entry = device
+        .cloud_work_graphs
+        .get_mut(slot)
+        .ok_or(VgpuError::InvalidHandle)?;
+    if entry.generation != generation {
+        return Err(VgpuError::InvalidHandle);
+    }
+    entry.record.as_mut().ok_or(VgpuError::InvalidHandle)
 }
 
 fn lookup_queue(device: &VirtualDevice, handle: QueueHandle) -> Result<&QueueRecord, VgpuError> {

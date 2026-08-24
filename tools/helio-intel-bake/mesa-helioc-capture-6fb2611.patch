@@ -1,0 +1,228 @@
+diff --git a/src/intel/tools/intel_noop_drm_shim.c b/src/intel/tools/intel_noop_drm_shim.c
+index 701be85..195bdad 100644
+--- a/src/intel/tools/intel_noop_drm_shim.c
++++ b/src/intel/tools/intel_noop_drm_shim.c
+@@ -599,7 +599,14 @@ drm_shim_driver_init(void)
+    drm_shim_override_file(uevent_content,
+                           "/sys/dev/char/%d:%d/device/uevent",
+                           DRM_MAJOR, render_node_minor);
+-   drm_shim_override_file("0x0\n",
++   /* This is capture-only identity injection.  A no-op DRM shim can exercise
++    * compiler/state emission but cannot prove physical-device retirement. */
++   const char *revision = os_get_option("TRUEOS_HELIOC_STUB_REVISION");
++   if (revision == NULL)
++      revision = "0x0";
++   char revision_content[16];
++   snprintf(revision_content, sizeof(revision_content), "%s\n", revision);
++   drm_shim_override_file(revision_content,
+                           "/sys/dev/char/%d:%d/device/revision",
+                           DRM_MAJOR, render_node_minor);
+    char device_content[10];
+diff --git a/src/intel/vulkan/anv_descriptor_set.c b/src/intel/vulkan/anv_descriptor_set.c
+index 289789f..a39eb29 100644
+--- a/src/intel/vulkan/anv_descriptor_set.c
++++ b/src/intel/vulkan/anv_descriptor_set.c
+@@ -30,8 +30,31 @@
+ #include "util/mesa-blake3.h"
+ #include "vk_util.h"
+ 
++#include <stdio.h>
++
+ #include "anv_private.h"
+ 
++/* Raw records contain virtual addresses and are capture evidence only. */
++static void
++anv_trueos_helioc_dump_descriptor_state(uint32_t kind, VkDescriptorType type,
++                                        uint32_t binding, uint32_t element,
++                                        const void *data, uint32_t bytes)
++{
++   const char *dir = os_get_option("TRUEOS_HELIOC_ANV_DUMP_DIR");
++   if (dir == NULL || data == NULL || bytes == 0)
++      return;
++   char path[4096];
++   if (snprintf(path, sizeof(path), "%s/helioc-anv-state.bin", dir) >= (int)sizeof(path))
++      return;
++   FILE *file = fopen(path, "ab");
++   if (file == NULL)
++      return;
++   const uint32_t header[] = { 0x48434d56, 1, kind, type, binding, element, bytes };
++   (void)fwrite(header, sizeof(header), 1, file);
++   (void)fwrite(data, bytes, 1, file);
++   fclose(file);
++}
++
+ /*
+  * Descriptor set layouts.
+  */
+@@ -2102,6 +2125,9 @@ anv_descriptor_set_write_image_view(struct anv_device *device,
+       } else {
+          memset(sampler_map, 0, bind_layout->descriptor_sampler_stride);
+       }
++      if (sampler)
++         anv_trueos_helioc_dump_descriptor_state(2, type, binding, element,
++            sampler_map, sampler->n_planes * ANV_SAMPLER_STATE_SIZE);
+    }
+ 
+    if (data & ANV_DESCRIPTOR_SURFACE) {
+@@ -2119,6 +2145,9 @@ anv_descriptor_set_write_image_view(struct anv_device *device,
+             memcpy(plane_map, &device->host_null_surface_state, ANV_SURFACE_STATE_SIZE);
+          }
+       }
++      if (image_view)
++         anv_trueos_helioc_dump_descriptor_state(1, type, binding, element,
++            desc_surface_map, max_plane_count * ANV_SURFACE_STATE_SIZE);
+    }
+ 
+    if (data & ANV_DESCRIPTOR_SURFACE_SAMPLER) {
+diff --git a/src/intel/vulkan/anv_shader.c b/src/intel/vulkan/anv_shader.c
+index c0c7680..281696f 100644
+--- a/src/intel/vulkan/anv_shader.c
++++ b/src/intel/vulkan/anv_shader.c
+@@ -271,6 +271,49 @@ write_ir_text(VkPipelineExecutableInternalRepresentationKHR* ir,
+    return true;
+ }
+ 
++static bool
++write_ir_binary(VkPipelineExecutableInternalRepresentationKHR *ir,
++                const void *data, size_t data_len)
++{
++   ir->isText = VK_FALSE;
++   if (ir->pData == NULL) {
++      ir->dataSize = data_len;
++      return true;
++   }
++   if (ir->dataSize < data_len)
++      return false;
++   memcpy(ir->pData, data, data_len);
++   ir->dataSize = data_len;
++   return true;
++}
++
++/* Capture-only representation.  It exposes the compiler-side descriptor map
++ * without making opaque ANV cache bytes part of the artifact ABI. */
++static char *
++get_shader_trueos_helioc_bind_map_text(const struct anv_shader *shader)
++{
++   char *stream_data = NULL;
++   size_t stream_size = 0;
++   FILE *stream = open_memstream(&stream_data, &stream_size);
++   const struct anv_pipeline_bind_map *map = &shader->bind_map;
++   fprintf(stream, "TRUEOS_HELIOC_BIND_MAP_V1\n");
++   fprintf(stream, "stage=%u layout_type=%u binding_mask=0x%04x surfaces=%u samplers=%u embedded_samplers=%u\n",
++           shader->vk.stage, map->layout_type, map->binding_mask,
++           map->surface_count, map->sampler_count, map->embedded_sampler_count);
++   for (uint32_t i = 0; i < map->surface_count; i++) {
++      const struct anv_pipeline_binding *b = &map->surface_to_descriptor[i];
++      fprintf(stream, "surface[%u]=set:%u binding:%u index:%u offset:%u plane:%u\n",
++              i, b->set, b->binding, b->index, b->set_offset, b->plane);
++   }
++   for (uint32_t i = 0; i < map->sampler_count; i++) {
++      const struct anv_pipeline_binding *b = &map->sampler_to_descriptor[i];
++      fprintf(stream, "sampler[%u]=set:%u binding:%u index:%u offset:%u plane:%u\n",
++              i, b->set, b->binding, b->index, b->set_offset, b->plane);
++   }
++   fclose(stream);
++   return stream_data;
++}
++
+ static char *
+ get_shader_bind_map_text(const struct anv_device *device,
+                          const struct anv_shader *shader)
+@@ -399,6 +442,27 @@ anv_shader_get_executable_internal_representations(
+       container_of(vk_shader, struct anv_shader, vk);
+    assert(executable_index < shader->num_stats);
+ 
++   char *trueos_bind_map = get_shader_trueos_helioc_bind_map_text(shader);
++   if (trueos_bind_map != NULL) {
++      vk_outarray_append_typed(VkPipelineExecutableInternalRepresentationKHR, &out, ir) {
++         VK_COPY_STR(ir->name, "TRUEOS HelioC bind map");
++         VK_COPY_STR(ir->description,
++                     "Capture-only exact ANV descriptor-to-surface/sampler map");
++         if (!write_ir_text(ir, trueos_bind_map))
++            incomplete_text = true;
++      }
++   }
++   free(trueos_bind_map);
++
++   vk_outarray_append_typed(VkPipelineExecutableInternalRepresentationKHR, &out, ir) {
++      VK_COPY_STR(ir->name, "TRUEOS HelioC prog data");
++      VK_COPY_STR(ir->description,
++                  "Capture-only raw brw program data; Mesa-commit specific");
++      if (!write_ir_binary(ir, shader->prog_data,
++                           brw_prog_data_size(shader->vk.stage)))
++         incomplete_text = true;
++   }
++
+    if (shader->nir_str) {
+       vk_outarray_append_typed(VkPipelineExecutableInternalRepresentationKHR, &out, ir) {
+          VK_COPY_STR(ir->name, "Final NIR");
+diff --git a/src/intel/vulkan/genX_cmd_buffer.c b/src/intel/vulkan/genX_cmd_buffer.c
+index fe3af68..99ee5ce 100644
+--- a/src/intel/vulkan/genX_cmd_buffer.c
++++ b/src/intel/vulkan/genX_cmd_buffer.c
+@@ -23,6 +23,7 @@
+ 
+ #include <assert.h>
+ #include <stdbool.h>
++#include <stdio.h>
+ 
+ #include "anv_private.h"
+ #include "anv_measure.h"
+@@ -41,6 +42,27 @@
+ #include "genX_mi_builder.h"
+ #include "genX_cmd_draw_generated_flush.h"
+ 
++/* State bytes are emitted after descriptor lookup and BT address addition.
++ * They remain non-relocatable until a higher layer proves ownership. */
++static void
++anv_trueos_helioc_dump_cmd_state(uint32_t kind, mesa_shader_stage stage,
++                                 const void *data, uint32_t bytes)
++{
++   const char *dir = os_get_option("TRUEOS_HELIOC_ANV_DUMP_DIR");
++   if (dir == NULL || data == NULL || bytes == 0)
++      return;
++   char path[4096];
++   if (snprintf(path, sizeof(path), "%s/helioc-anv-state.bin", dir) >= (int)sizeof(path))
++      return;
++   FILE *file = fopen(path, "ab");
++   if (file == NULL)
++      return;
++   const uint32_t header[] = { 0x48434d56, 1, kind, stage, 0, 0, bytes };
++   (void)fwrite(header, sizeof(header), 1, file);
++   (void)fwrite(data, bytes, 1, file);
++   fclose(file);
++}
++
+ static void emit_pipe_control(struct anv_batch *batch,
+                               const struct intel_device_info *devinfo,
+                               uint32_t current_pipeline,
+@@ -2826,6 +2848,9 @@ emit_binding_table(struct anv_cmd_buffer *cmd_buffer,
+       }
+    }
+ 
++   anv_trueos_helioc_dump_cmd_state(3, shader->vk.stage, bt_state->map,
++                                    map->surface_count * sizeof(*bt_map));
++
+    return VK_SUCCESS;
+ }
+ 
+@@ -2869,6 +2894,9 @@ emit_samplers(struct anv_cmd_buffer *cmd_buffer,
+              sizeof(sampler->state[0]));
+    }
+ 
++   anv_trueos_helioc_dump_cmd_state(4, shader->vk.stage, state->map,
++                                    map->sampler_count * 16);
++
+    return VK_SUCCESS;
+ }
+ 
+@@ -2944,6 +2972,9 @@ genX(cmd_buffer_flush_descriptor_sets)(struct anv_cmd_buffer *cmd_buffer,
+       }
+    }
+ 
++   anv_trueos_helioc_dump_cmd_state(5, MESA_SHADER_NONE, cmd_buffer->batch.start,
++                                    cmd_buffer->batch.next - cmd_buffer->batch.start);
++
+    return flushed;
+ }
+ 

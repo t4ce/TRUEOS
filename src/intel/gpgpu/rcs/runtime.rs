@@ -771,6 +771,143 @@ fn direct_rcs_map_ppgtt_region(
     direct_rcs_update_ppgtt_region(state, gpu, phys, len, entry_flags).accepted()
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct ExactPpgttPageMap {
+    bytes: usize,
+    first_pte_offset: usize,
+}
+
+/// Validate an exact-page mapping without touching the page table.
+///
+/// Unlike `direct_rcs_update_ppgtt_region`, this contract deliberately takes
+/// no physical base: every 4 KiB physical page is supplied by the caller and
+/// may be unrelated to its neighbours.
+fn validate_exact_ppgtt_page_map(gpu: u64, page_count: usize) -> Option<ExactPpgttPageMap> {
+    if page_count == 0 || !gpu.is_multiple_of(4096) {
+        return None;
+    }
+    let bytes = page_count.checked_mul(4096)?;
+    let end = gpu.checked_add(u64::try_from(bytes).ok()?)?;
+    if end > DIRECT_RCS_PPGTT_LIMIT_BYTES {
+        return None;
+    }
+    let first_va_page = gpu >> 12;
+    let last_va_page = (end - 1) >> 12;
+    let first_pd_index = (first_va_page >> 9) as usize;
+    let last_pd_index = (last_va_page >> 9) as usize;
+    if first_pd_index >= DIRECT_RCS_PPGTT_PT_COUNT
+        || last_pd_index >= DIRECT_RCS_PPGTT_PT_COUNT
+    {
+        return None;
+    }
+    let first_pte_offset = 12288usize
+        .checked_add(first_pd_index.checked_mul(4096)?)?
+        .checked_add((first_va_page as usize & 0x1FF).checked_mul(core::mem::size_of::<u64>())?)?;
+    let last_pte_offset = 12288usize
+        .checked_add(last_pd_index.checked_mul(4096)?)?
+        .checked_add((last_va_page as usize & 0x1FF).checked_mul(core::mem::size_of::<u64>())?)?;
+    let last_byte = last_pte_offset.checked_add(core::mem::size_of::<u64>())?;
+    if last_byte > DIRECT_RCS_PPGTT_BYTES || last_pte_offset < first_pte_offset {
+        return None;
+    }
+    Some(ExactPpgttPageMap {
+        bytes,
+        first_pte_offset,
+    })
+}
+
+fn exact_ppgtt_pte_offset(gpu: u64, page: usize) -> Option<usize> {
+    let va_page = (gpu >> 12).checked_add(u64::try_from(page).ok()?)?;
+    let pd_index = (va_page >> 9) as usize;
+    if pd_index >= DIRECT_RCS_PPGTT_PT_COUNT {
+        return None;
+    }
+    12288usize
+        .checked_add(pd_index.checked_mul(4096)?)?
+        .checked_add(((va_page & 0x1FF) as usize).checked_mul(core::mem::size_of::<u64>())?)
+}
+
+fn exact_ppgtt_phys_pages_are_valid(pages: &[u64]) -> bool {
+    !pages.is_empty()
+        && pages
+            .iter()
+            .all(|phys| *phys != 0 && phys.is_multiple_of(4096))
+}
+
+/// Map a contiguous GPU-VA range from an exact, noncontiguous list of 4 KiB
+/// physical pages. All validation and policy checks complete before the first
+/// PTE write; the PTE range is published exactly once after the full map.
+/// This is intentionally separate from the contiguous physical mapper above.
+fn direct_rcs_map_ppgtt_pages_and_publish(
+    state: DirectRcsState,
+    gpu: u64,
+    pages: &[u64],
+    entry_flags: u64,
+) -> bool {
+    let Some(layout) = validate_exact_ppgtt_page_map(gpu, pages.len()) else {
+        return false;
+    };
+    debug_assert!(layout.first_pte_offset < DIRECT_RCS_PPGTT_BYTES);
+    if !exact_ppgtt_phys_pages_are_valid(pages) {
+        return false;
+    }
+
+    let cache_policy_mask = GEN8_PAGE_PWT | GEN8_PAGE_PCD;
+    let mut changed = false;
+    for (page, phys) in pages.iter().copied().enumerate() {
+        let Some(pte_off) = exact_ppgtt_pte_offset(gpu, page) else {
+            return false;
+        };
+        let pte_ptr = unsafe { state.ppgtt_virt.add(pte_off) as *mut u64 };
+        let previous = unsafe { core::ptr::read_volatile(pte_ptr) };
+        if previous & super::GEN8_PAGE_PRESENT != 0
+            && previous & cache_policy_mask != entry_flags & cache_policy_mask
+        {
+            let occurrence = DIRECT_RCS_PPGTT_POLICY_REJECTIONS
+                .fetch_add(1, Ordering::Relaxed)
+                .saturating_add(1);
+            if occurrence == 1 || occurrence.is_power_of_two() {
+                crate::log_error!(target: "gpgpu";
+                    "intel/gpgpu: PPGTT cache-policy exact-page map rejected occurrence={} gpu=0x{:X} page={} previous_pat={} requested_pat={} action=reject-before-submit same_va_pat_transition=forbidden\n",
+                    occurrence,
+                    gpu,
+                    page,
+                    (previous & cache_policy_mask) >> 3,
+                    (entry_flags & cache_policy_mask) >> 3,
+                );
+            }
+            return false;
+        }
+        let expected = (phys & !0xFFF) | entry_flags;
+        changed |= previous != expected;
+    }
+    if !changed {
+        return true;
+    }
+
+    for (page, phys) in pages.iter().copied().enumerate() {
+        let Some(pte_off) = exact_ppgtt_pte_offset(gpu, page) else {
+            return false;
+        };
+        let pte_ptr = unsafe { state.ppgtt_virt.add(pte_off) as *mut u64 };
+        unsafe {
+            core::ptr::write_volatile(pte_ptr, (phys & !0xFFF) | entry_flags);
+        }
+    }
+    direct_rcs_flush_ppgtt_pte_range(state, gpu, layout.bytes)
+}
+
+/// Map guest/kernel-owned data pages with the ordinary WB PPGTT policy.
+/// Callers cannot select arbitrary PTE flags or cache attributes.
+#[expect(dead_code, reason = "consumed by the sealed HelioC frame encoder")]
+fn direct_rcs_map_ppgtt_kernel_pages_and_publish(
+    state: DirectRcsState,
+    gpu: u64,
+    pages: &[u64],
+) -> bool {
+    direct_rcs_map_ppgtt_pages_and_publish(state, gpu, pages, direct_rcs_ppgtt_pte_flags())
+}
+
 fn direct_rcs_update_ppgtt_region(
     state: DirectRcsState,
     gpu: u64,
@@ -991,4 +1128,35 @@ fn direct_rcs_forcewake(dev: super::Dev) -> bool {
     // boot boundary. Runtime clients may observe and reject a lost contract,
     // but must never repair shared registers beneath another live context.
     super::physical_gt_ready(dev)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        exact_ppgtt_phys_pages_are_valid, exact_ppgtt_pte_offset, validate_exact_ppgtt_page_map,
+        DIRECT_RCS_PPGTT_LIMIT_BYTES,
+    };
+
+    #[test]
+    fn exact_page_map_validation_rejects_invalid_ranges_before_mapping() {
+        assert_eq!(validate_exact_ppgtt_page_map(0x1000, 0), None);
+        assert_eq!(validate_exact_ppgtt_page_map(0x1001, 1), None);
+        assert_eq!(
+            validate_exact_ppgtt_page_map(DIRECT_RCS_PPGTT_LIMIT_BYTES - 0x1000, 2),
+            None
+        );
+        assert!(validate_exact_ppgtt_page_map(0x1000, 2).is_some());
+        assert!(!exact_ppgtt_phys_pages_are_valid(&[]));
+        assert!(!exact_ppgtt_phys_pages_are_valid(&[0]));
+        assert!(!exact_ppgtt_phys_pages_are_valid(&[0x1001]));
+        assert!(exact_ppgtt_phys_pages_are_valid(&[0x1000, 0x9000]));
+    }
+
+    #[test]
+    fn exact_page_map_index_math_tracks_pt_boundaries() {
+        assert_eq!(exact_ppgtt_pte_offset(0x1000, 0), Some(0x3008));
+        assert_eq!(exact_ppgtt_pte_offset(0x1F_F000, 0), Some(0x3FF8));
+        assert_eq!(exact_ppgtt_pte_offset(0x20_0000, 0), Some(0x4000));
+        assert_eq!(exact_ppgtt_pte_offset(DIRECT_RCS_PPGTT_LIMIT_BYTES, 0), None);
+    }
 }
