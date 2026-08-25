@@ -410,8 +410,8 @@ pub(crate) fn global_gt_power_mode_marker() -> self::gt_state::Gen12GlobalGtPowe
     self::gt_state::global_gt_power_marker()
 }
 
-pub(crate) fn toggle_global_gt_power_mode(
-) -> Result<self::gt_state::Gen12GlobalGtPowerMarker, &'static str> {
+pub(crate) fn toggle_global_gt_power_mode()
+-> Result<self::gt_state::Gen12GlobalGtPowerMarker, &'static str> {
     let dev = claimed_device().ok_or("intel-display-device-unclaimed")?;
     if !device_uses_gen12_integrated_pat(dev.device_id) {
         return Err("unsupported-intel-gt-generation");

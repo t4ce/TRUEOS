@@ -398,12 +398,9 @@ fn font_sprite_quad_worklist_request_descs(
     Some(total_descs)
 }
 
-/// Prepare every Font-owned immutable object needed by the cached sprite path.
+/// Prepare every Font-owned immutable object needed by the sprite worklist.
 ///
-/// Font Rush calls this while its blank cache-charge interval is active. The
-/// terminal wave therefore cannot be the first allocation/upload/map of the
-/// descriptor page or sprite kernel. No batch is submitted and no destination
-/// is touched here.
+/// No batch is submitted and no destination is touched here.
 pub(crate) fn prepare_font_sprite_quad_worklist_rgba8() -> bool {
     let Some(desc_buffer) = font_sprite_quad_worklist_desc_buffer_once() else {
         return false;

@@ -66,7 +66,10 @@ pub(crate) fn build_probe_text() -> String {
 
     let _probe_guard = NCT_PROBE_LOCK.lock();
     let snapshots = interrupts::without_interrupts(|| {
-        [probe_superio(SUPERIO_PORTS[0]), probe_superio(SUPERIO_PORTS[1])]
+        [
+            probe_superio(SUPERIO_PORTS[0]),
+            probe_superio(SUPERIO_PORTS[1]),
+        ]
     });
 
     let mut verified = 0usize;
@@ -122,11 +125,7 @@ fn append_smbios_hint(out: &mut String, hint: Option<NctManagementHint>) {
     .unwrap();
 }
 
-fn append_snapshot(
-    out: &mut String,
-    snapshot: SuperIoSnapshot,
-    smbios: Option<NctManagementHint>,
-) {
+fn append_snapshot(out: &mut String, snapshot: SuperIoSnapshot, smbios: Option<NctManagementHint>) {
     if !snapshot.response_present() {
         writeln!(
             out,
@@ -204,19 +203,14 @@ fn probe_superio(config_port: u16) -> SuperIoSnapshot {
     unsafe { superio_enter(config_port) };
 
     let chip_id = u16::from(unsafe { superio_read(config_port, SIO_REG_DEVID) }) << 8
-        | u16::from(unsafe {
-            superio_read(config_port, SIO_REG_DEVID.wrapping_add(1))
-        });
+        | u16::from(unsafe { superio_read(config_port, SIO_REG_DEVID.wrapping_add(1)) });
     let previous_ldn = unsafe { superio_read(config_port, SIO_REG_LDSEL) };
 
     unsafe { superio_write(config_port, SIO_REG_LDSEL, NCT_HWM_LOGICAL_DEVICE) };
     let enable = unsafe { superio_read(config_port, SIO_REG_ENABLE) };
     let raw_base = u16::from(unsafe { superio_read(config_port, SIO_REG_ADDR) }) << 8
-        | u16::from(unsafe {
-            superio_read(config_port, SIO_REG_ADDR.wrapping_add(1))
-        });
-    let mapping_lock =
-        unsafe { superio_read(config_port, NCT6791_REG_HM_IO_SPACE_LOCK_ENABLE) };
+        | u16::from(unsafe { superio_read(config_port, SIO_REG_ADDR.wrapping_add(1)) });
+    let mapping_lock = unsafe { superio_read(config_port, NCT6791_REG_HM_IO_SPACE_LOCK_ENABLE) };
 
     unsafe {
         superio_write(config_port, SIO_REG_LDSEL, previous_ldn);

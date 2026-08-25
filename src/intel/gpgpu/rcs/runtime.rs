@@ -550,8 +550,8 @@ fn prewarm_direct_rcs_control_ggtt(
 /// Install every persistent RCS control window while physical GT bring-up owns
 /// the global GGTT boundary. Consumer launch may populate only its private
 /// PPGTT; it can neither install nor repair a global ring/HWLRCA mapping. The
-/// Font topology is also installed here because its persistent VM cache must
-/// exist before any Font consumer starts adding dynamic leaves.
+/// Font topology is also installed here because its persistent execution
+/// address space must exist before any Font consumer starts adding resources.
 pub(crate) fn prewarm_direct_rcs_controls_ggtt(
     dev: super::Dev,
 ) -> DirectRcsControlGgttPrewarmReport {
@@ -1164,12 +1164,11 @@ pub(crate) fn retire_font_rcs_ppgtt_range(gpu: u64, phys: u64, len: usize) -> bo
         && end <= DIRECT_RCS_GPU_VA_FONT_COVERAGE_PRIMARY_LIMIT;
     let in_secondary = gpu >= DIRECT_RCS_GPU_VA_FONT_COVERAGE_SECONDARY_BASE
         && end <= DIRECT_RCS_GPU_VA_FONT_COVERAGE_LIMIT;
-    let is_rush_atlas = is_exact_font_rush_rgba8_atlas_range(gpu, len);
     if len == 0
         || !gpu.is_multiple_of(4096)
         || !phys.is_multiple_of(4096)
         || !len.is_multiple_of(4096)
-        || (!in_primary && !in_secondary && !is_rush_atlas)
+        || (!in_primary && !in_secondary)
     {
         return false;
     }

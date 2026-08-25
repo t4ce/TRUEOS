@@ -175,8 +175,8 @@ impl FontSlant {
 ///
 /// `rect` is the producer's scene-space bounds/clip and `origin` is the text
 /// position in the same coordinate system. Only this Unicode/style row is
-/// copied on publication. Size-independent outline ops and derived R8 atlas
-/// bytes stay in the shared kernel-owned font caches.
+/// copied on publication. The consumer builds any outline ops per request and
+/// the retained scene owns its derived R8 coverage resource.
 #[derive(Clone, Debug, PartialEq)]
 pub struct FontLookupRun {
     pub rect: Rect,
