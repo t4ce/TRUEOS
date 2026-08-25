@@ -1,12 +1,9 @@
-//! Kernel-owned cache for reusable GPU font geometry.
+//! GPU font request construction and explicitly leased render resources.
 //!
-//! The graphics font registry owns resident bytes and size-independent Skrifa
-//! outlines. This service owns the reusable default mesh, one-shot arbitrary
-//! text jobs, and explicitly tagged persistent jobs. A persistent-job lease
-//! transfers its prepared geometry from CPU-build authority to a dedicated
-//! render-PPGTT allocation; later draws borrow that allocation without another
-//! geometry upload. Native size, row grouping, and eventual color remain draw
-//! properties.
+//! The graphics font registry owns only raw registered font bytes; outlines and
+//! glyph recipes are built per request. This module also manages one-shot text
+//! jobs and explicitly tagged persistent render jobs. A persistent-job lease is
+//! an owned scene resource, not a glyph-keyed font cache.
 
 use alloc::{boxed::Box, string::String, sync::Arc, vec::Vec};
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -1178,8 +1175,8 @@ impl GpuFontPreparedCenteredGlyph {
         self.recipe.ops_bytes()
     }
 
-    /// Request-local bytes retained by the sealed plan. Recipe storage is
-    /// charged once to the shared cache rather than once per glyph placement.
+    /// Request-local bytes retained by the sealed plan. Placements in the same
+    /// plan may share its request-owned recipe allocation.
     pub(crate) fn allocated_ops_bytes(&self) -> usize {
         core::mem::size_of::<Self>()
     }
@@ -1518,33 +1515,6 @@ impl Drop for PersistentGpuFontJob {
     }
 }
 
-#[derive(Clone, Debug)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-pub(crate) struct GpuFontWarmResult {
-    pub(crate) cache_hit: bool,
-    pub(crate) generation: u64,
-    pub(crate) font_name: &'static str,
-    pub(crate) font_file: &'static str,
-    pub(crate) text: String,
-    pub(crate) base_px: f32,
-    pub(crate) vertices: usize,
-    pub(crate) indices: usize,
-    pub(crate) geometry_bytes: usize,
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-pub(crate) struct GpuFontCacheStatus {
-    pub(crate) ready: bool,
-    pub(crate) generation: u64,
-    pub(crate) warm_requests: u64,
-    pub(crate) cache_hits: u64,
-    pub(crate) cache_misses: u64,
-    pub(crate) build_failures: u64,
-    pub(crate) invalidations: u64,
-    pub(crate) geometry_bytes: usize,
-}
-
 #[derive(Clone, Copy, Debug, Default)]
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) struct GpuFontResidentStatus {
@@ -1574,19 +1544,6 @@ pub(crate) struct GpuFontResidentAuditEntry {
     pub(crate) submits: u64,
     pub(crate) in_flight: bool,
     pub(crate) quarantined: bool,
-}
-
-/// Borrowed, uncolored fill geometry suitable for an indexed GPU draw.
-///
-/// The coordinates use the cached base size only as a tessellation-quality
-/// reference. Consumers should transform them at draw time rather than create
-/// a cache entry for every requested font size.
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-pub(crate) struct GpuFontGeometry<'a> {
-    pub(crate) summary: &'a FontTesselSummary,
-    pub(crate) vertices: &'a [[f32; 2]],
-    pub(crate) indices: &'a [u32],
-    pub(crate) bounds: (f32, f32, f32, f32),
 }
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
@@ -1719,12 +1676,6 @@ pub(crate) struct GpuFontUi4DocumentFrame {
 }
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-struct CachedGpuFont {
-    generation: u64,
-    mesh: FontTesselMesh,
-}
-
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 struct ResidentGpuFontJobRecord {
     id: u64,
     generation: u64,
@@ -1743,13 +1694,6 @@ struct ResidentGpuFontJobRecord {
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 struct KernelGpuFontService {
-    default_font: Option<Arc<CachedGpuFont>>,
-    generation: u64,
-    warm_requests: u64,
-    cache_hits: u64,
-    cache_misses: u64,
-    build_failures: u64,
-    invalidations: u64,
     resident_generation: u64,
     next_resident_id: u64,
     resident_jobs: Vec<ResidentGpuFontJobRecord>,
@@ -1764,13 +1708,6 @@ impl KernelGpuFontService {
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     const fn new() -> Self {
         Self {
-            default_font: None,
-            generation: 0,
-            warm_requests: 0,
-            cache_hits: 0,
-            cache_misses: 0,
-            build_failures: 0,
-            invalidations: 0,
             resident_generation: 0,
             next_resident_id: 1,
             resident_jobs: Vec::new(),
@@ -2267,113 +2204,6 @@ fn exact_font_readback_color(
         }
     }
     (written, mismatches)
-}
-
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-fn acquire_default_font() -> Result<(Arc<CachedGpuFont>, bool), &'static str> {
-    // Keep the lock during the first build. It is a one-time boot operation,
-    // and doing so guarantees that concurrent first users cannot tessellate the
-    // same font twice. The returned Arc lets all later users drop the lock.
-    let mut service = GPU_FONT_SERVICE.lock();
-    service.warm_requests = service.warm_requests.saturating_add(1);
-    if let Some(cached) = service.default_font.as_ref().map(Arc::clone) {
-        service.cache_hits = service.cache_hits.saturating_add(1);
-        return Ok((cached, true));
-    }
-
-    service.cache_misses = service.cache_misses.saturating_add(1);
-    let mesh = crate::graphics::font::tessellate_default_text_mesh();
-    if mesh.summary.status != "ok"
-        || mesh.summary.tessellate_failures != 0
-        || mesh.vertices.is_empty()
-        || mesh.indices.is_empty()
-        || !mesh.indices.len().is_multiple_of(3)
-    {
-        service.build_failures = service.build_failures.saturating_add(1);
-        crate::log_error!(
-            target: "render";
-            "intel/gpu-font: warm failed reason={} font={} file={} text=\"{}\"\n",
-            mesh.summary.reason,
-            mesh.summary.font_name,
-            mesh.summary.font_file,
-            mesh.summary.text,
-        );
-        return Err(mesh.summary.reason);
-    }
-
-    service.generation = service.generation.saturating_add(1).max(1);
-    let cached = Arc::new(CachedGpuFont {
-        generation: service.generation,
-        mesh,
-    });
-    crate::log_info!(
-        target: "render";
-        "intel/gpu-font: warm ok=1 cache_hit=0 generation={} font={} file={} text=\"{}\" base_px={} vertices={} indices={} geometry_bytes={} coverage=uncolored-vector-fill size_policy=draw-time\n",
-        cached.generation,
-        cached.mesh.summary.font_name,
-        cached.mesh.summary.font_file,
-        cached.mesh.summary.text,
-        cached.mesh.summary.px_size as u32,
-        cached.mesh.summary.vertices,
-        cached.mesh.summary.indices,
-        cached.mesh.summary.geometry_bytes,
-    );
-    service.default_font = Some(Arc::clone(&cached));
-    Ok((cached, false))
-}
-
-/// Warm the embedded font and its default GPU-ready mesh exactly once.
-///
-/// This is safe to call both during boot and lazily from a first consumer.
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-pub(crate) fn warm_default_font_once() -> Result<GpuFontWarmResult, &'static str> {
-    let (cached, cache_hit) = acquire_default_font()?;
-    let summary = cached.mesh.summary.clone();
-    Ok(GpuFontWarmResult {
-        cache_hit,
-        generation: cached.generation,
-        font_name: summary.font_name,
-        font_file: summary.font_file,
-        text: summary.text,
-        base_px: summary.px_size,
-        vertices: summary.vertices,
-        indices: summary.indices,
-        geometry_bytes: summary.geometry_bytes,
-    })
-}
-
-/// Use the cached base mesh without copying its vertex or index buffers.
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-pub(crate) fn with_default_font_geometry<R>(
-    use_geometry: impl FnOnce(GpuFontGeometry<'_>) -> R,
-) -> Result<R, &'static str> {
-    let (cached, _) = acquire_default_font()?;
-    let summary = &cached.mesh.summary;
-    let bounds = (summary.min_x, summary.min_y, summary.max_x, summary.max_y);
-    Ok(use_geometry(GpuFontGeometry {
-        summary,
-        vertices: cached.mesh.vertices.as_slice(),
-        indices: cached.mesh.indices.as_slice(),
-        bounds,
-    }))
-}
-
-/// Convenient current consumer: draw the cached geometry at a native size.
-///
-/// The scale changes the render target and viewport, not the cached geometry.
-/// Color remains a render-state concern and is deliberately absent here.
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-pub(crate) fn render_default_font(
-    native_scale: u32,
-) -> Result<crate::intel::render::RenderJokerResult, &'static str> {
-    with_default_font_geometry(|geometry| {
-        crate::intel::render::submit_font_mesh_once_scaled(
-            geometry.vertices,
-            geometry.indices,
-            geometry.bounds,
-            native_scale,
-        )
-    })?
 }
 
 /// Tessellate one caller-provided string from the warmed outline registry,
@@ -3103,7 +2933,7 @@ fn render_legacy_font_stamp_readback_centered(
         let summary = built.summaries.pop().ok_or("font-job-summary")?;
         crate::log_info!(
             target: "render";
-            "intel/gpu-font: job-stamp stamped={} completed={} font_id={} font={} text_chars={} rows={} size_percent={} render_target={}x{} padding_pixels={} path=kernel-font-stamp-default/skrifa-gpgpu-r8 bounds_source=font-layout-only triangles_submitted=0 scanout={}x{} visible_source={}x{} stamp={}x{} dst={},{} placement=centered fit=contain scale_path=native-target-1to1 rgba=[{},{},{},{}] submits=coverage+composite mask_cache=invocation outline_cache=warmed color_path=cpu-readback-1to1\n",
+            "intel/gpu-font: job-stamp stamped={} completed={} font_id={} font={} text_chars={} rows={} size_percent={} render_target={}x{} padding_pixels={} path=kernel-font-stamp-default/skrifa-gpgpu-r8 bounds_source=font-layout-only triangles_submitted=0 scanout={}x{} visible_source={}x{} stamp={}x{} dst={},{} placement=centered fit=contain scale_path=native-target-1to1 rgba=[{},{},{},{}] submits=coverage+composite mask_storage=request-local outline_storage=request-local color_path=cpu-readback-1to1\n",
             stamped as u8,
             render.completed as u8,
             font.id(),
@@ -3215,7 +3045,7 @@ fn render_legacy_font_stamp_readback_centered(
     let summary = summaries.pop().ok_or("font-job-summary")?;
     crate::log_info!(
         target: "render";
-        "intel/gpu-font: job-stamp stamped={} completed={} font_id={} font={} text_chars={} rows={} size_percent={} render_target={}x{} padding_pixels={} tessellation_tolerance={:.4} requested_tolerance={:.4} curve_error_target_px={:.2} quality_capacity_limited={} vertices={} indices={} scanout={}x{} visible_source={}x{} stamp={}x{} dst={},{} placement=centered fit=contain scale_path=native-target-1to1 rgba=[{},{},{},{}] submits=1 mesh_cache=none outline_cache=warmed geometry_persistence=0 readback_buffers=1 readback_allocation=reused color_path=cpu-readback-1to1\n",
+        "intel/gpu-font: job-stamp stamped={} completed={} font_id={} font={} text_chars={} rows={} size_percent={} render_target={}x{} padding_pixels={} tessellation_tolerance={:.4} requested_tolerance={:.4} curve_error_target_px={:.2} quality_capacity_limited={} vertices={} indices={} scanout={}x{} visible_source={}x{} stamp={}x{} dst={},{} placement=centered fit=contain scale_path=native-target-1to1 rgba=[{},{},{},{}] submits=1 mesh_storage=request-local outline_storage=request-local geometry_persistence=0 readback_buffers=1 readback_allocation=reused color_path=cpu-readback-1to1\n",
         stamped as u8,
         render.completed as u8,
         font.id(),
@@ -3397,7 +3227,7 @@ pub(crate) fn render_font_job_once(job: GpuFontJob<'_>) -> Result<GpuFontJobRend
     )?;
     crate::log_info!(
         target: "render";
-        "intel/gpu-font: job-render ok=1 font_id={} font={} entries={} text_chars={} rows={} native_scale={} vertices={} indices={} submits=1 mesh_cache=none\n",
+        "intel/gpu-font: job-render ok=1 font_id={} font={} entries={} text_chars={} rows={} native_scale={} vertices={} indices={} submits=1 mesh_storage=request-local\n",
         font.id(),
         font.registry_name(),
         built.entries,
@@ -5254,88 +5084,6 @@ fn normalize_text_request(
 
 const fn is_line_separator(ch: char) -> bool {
     matches!(ch, '\n' | '\r' | '\u{000B}' | '\u{000C}' | '\u{0085}' | '\u{2028}' | '\u{2029}')
-}
-
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-pub(crate) fn cached_default_font_summary() -> Option<FontTesselSummary> {
-    GPU_FONT_SERVICE
-        .lock()
-        .default_font
-        .as_ref()
-        .map(|cached| cached.mesh.summary.clone())
-}
-
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-pub(crate) fn cache_status() -> GpuFontCacheStatus {
-    let service = GPU_FONT_SERVICE.lock();
-    GpuFontCacheStatus {
-        ready: service.default_font.is_some(),
-        generation: service.generation,
-        warm_requests: service.warm_requests,
-        cache_hits: service.cache_hits,
-        cache_misses: service.cache_misses,
-        build_failures: service.build_failures,
-        invalidations: service.invalidations,
-        geometry_bytes: service
-            .default_font
-            .as_ref()
-            .map(|cached| cached.mesh.summary.geometry_bytes)
-            .unwrap_or(0),
-    }
-}
-
-/// Invalidate only geometry derived from `font_name`.
-///
-/// A future external-font loader should call this after replacing a registered
-/// font. Existing draws remain safe because active users retain an Arc.
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-pub(crate) fn invalidate_font(font_name: &str, reason: &str) -> bool {
-    let mut service = GPU_FONT_SERVICE.lock();
-    let matches = service
-        .default_font
-        .as_ref()
-        .is_some_and(|cached| cached.mesh.summary.font_name == font_name);
-    if !matches {
-        return false;
-    }
-    service.default_font = None;
-    service.invalidations = service.invalidations.saturating_add(1);
-    crate::log_info!(
-        target: "render";
-        "intel/gpu-font: invalidate font={} reason={} invalidations={}\n",
-        font_name,
-        reason,
-        service.invalidations,
-    );
-    true
-}
-
-/// Drop every geometry entry after the underlying font registry changes.
-///
-/// Use this for font replacement because the new font may not have the same
-/// name as the entry currently cached here.
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-pub(crate) fn invalidate_all(reason: &str) -> bool {
-    let mut service = GPU_FONT_SERVICE.lock();
-    let Some(cached) = service.default_font.take() else {
-        return false;
-    };
-    service.invalidations = service.invalidations.saturating_add(1);
-    crate::log_info!(
-        target: "render";
-        "intel/gpu-font: invalidate-all previous_font={} reason={} invalidations={}\n",
-        cached.mesh.summary.font_name,
-        reason,
-        service.invalidations,
-    );
-    true
-}
-
-/// Rebuild after changed font data or a future tessellation-policy change.
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-pub(crate) fn rebuild_default_font(reason: &str) -> Result<GpuFontWarmResult, &'static str> {
-    let _ = invalidate_all(reason);
-    warm_default_font_once()
 }
 
 #[cfg(test)]

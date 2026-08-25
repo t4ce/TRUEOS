@@ -365,7 +365,9 @@ pub(crate) fn broker_ui4_indexed_batch_submit_v2(
     let draw_count = usize::try_from(batch.draw_count).map_err(|_| -22)?;
     if draw_count == 0
         || draw_count > v::vgpu::MAX_INDEXED_BATCH_DRAWS
-        || batch.draws[..draw_count].iter().any(|draw| draw.reserved != 0)
+        || batch.draws[..draw_count]
+            .iter()
+            .any(|draw| draw.reserved != 0)
         || batch.draws[draw_count..]
             .iter()
             .any(|draw| *draw != v::vgpu::IndexedBatchDrawV2::default())
@@ -423,11 +425,7 @@ pub(crate) fn broker_retained_mesh_create(
         .map_err(|error| error.errno())
 }
 
-pub(crate) fn broker_retained_mesh_destroy(
-    principal: Principal,
-    device: u64,
-    mesh: u64,
-) -> i32 {
+pub(crate) fn broker_retained_mesh_destroy(principal: Principal, device: u64, mesh: u64) -> i32 {
     vgpu::destroy_retained_mesh(
         principal,
         DeviceHandle::from_raw(device),
@@ -1243,12 +1241,7 @@ pub unsafe extern "C" fn trueos_cabi_vgpu_retained_mesh_create(
         )
     };
     let result = if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        guest_handle(
-            trueos_vm::vmcall::OP_BP_VGPU_RETAINED_MESH_CREATE,
-            device,
-            0,
-            payload,
-        )
+        guest_handle(trueos_vm::vmcall::OP_BP_VGPU_RETAINED_MESH_CREATE, device, 0, payload)
     } else {
         broker_retained_mesh_create(direct_principal(), device, descriptor)
     };
@@ -1264,12 +1257,7 @@ pub unsafe extern "C" fn trueos_cabi_vgpu_retained_mesh_create(
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_vgpu_retained_mesh_destroy(device: u64, mesh: u64) -> i32 {
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        guest_rc(
-            trueos_vm::vmcall::OP_BP_VGPU_RETAINED_MESH_DESTROY,
-            device,
-            mesh,
-            &[],
-        )
+        guest_rc(trueos_vm::vmcall::OP_BP_VGPU_RETAINED_MESH_DESTROY, device, mesh, &[])
     } else {
         broker_retained_mesh_destroy(direct_principal(), device, mesh)
     }
@@ -1293,12 +1281,7 @@ pub unsafe extern "C" fn trueos_cabi_vgpu_retained_frame_submit(
         )
     };
     let result = if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        guest_record(
-            trueos_vm::vmcall::OP_BP_VGPU_RETAINED_FRAME_SUBMIT,
-            device,
-            queue,
-            payload,
-        )
+        guest_record(trueos_vm::vmcall::OP_BP_VGPU_RETAINED_FRAME_SUBMIT, device, queue, payload)
     } else {
         broker_retained_frame_submit(direct_principal(), device, queue, submit)
     };

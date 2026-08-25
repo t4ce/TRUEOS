@@ -17,9 +17,7 @@ use spin::Mutex;
 use trueos_executor::SpawnError;
 use trueos_time::{Duration as EmbassyDuration, Instant, Timer};
 
-use crate::intel::gpu_font::{
-    GpuFontGlyphRecipe, GpuFontGlyphRecipeKey, GpuFontPreparedCenteredGlyph, GpuFontRgba,
-};
+use crate::intel::gpu_font::{GpuFontPreparedCenteredGlyph, GpuFontRgba};
 use crate::r::font_kernel_service::FontStampFit;
 
 pub(crate) const FONT_PLAN_WORKER_COUNT: usize = 32;
@@ -31,12 +29,6 @@ const FONT_PLAN_MAX_RESERVED_OP_BYTES_PER_BATCH: usize = 4 * 1024 * 1024;
 const FONT_PLAN_RANDOM_CANDIDATES: u8 = 32;
 const FONT_PLAN_GLYPH_ID_LOG_LIMIT: usize = 16;
 const FONT_PLAN_ALL_WORKERS_MASK: u32 = u32::MAX;
-const FONT_RECIPE_CACHE_SHARDS: usize = 16;
-const FONT_RECIPE_CACHE_SOFT_ENTRIES: usize = 4_096;
-const FONT_RECIPE_CACHE_BYTES: usize = 16 * 1024 * 1024;
-const FONT_RECIPE_SHARD_ENTRY_CAP: usize =
-    FONT_RECIPE_CACHE_SOFT_ENTRIES / FONT_RECIPE_CACHE_SHARDS;
-const FONT_RECIPE_SHARD_BYTE_CAP: usize = FONT_RECIPE_CACHE_BYTES / FONT_RECIPE_CACHE_SHARDS;
 
 static FONT_PLAN_BATCHES: Mutex<VecDeque<Arc<FontPlanBatch>>> = Mutex::new(VecDeque::new());
 static FONT_PLAN_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
@@ -51,46 +43,6 @@ static FONT_PLAN_COMPLETED: AtomicU64 = AtomicU64::new(0);
 static FONT_PLAN_FAILED: AtomicU64 = AtomicU64::new(0);
 static FONT_PLAN_CANDIDATE_ATTEMPTS: AtomicU64 = AtomicU64::new(0);
 static FONT_PLAN_COOPERATIVE_YIELDS: AtomicU64 = AtomicU64::new(0);
-static FONT_RECIPE_SHARDS: [Mutex<Vec<FontRecipeCacheEntry>>; FONT_RECIPE_CACHE_SHARDS] =
-    [const { Mutex::new(Vec::new()) }; FONT_RECIPE_CACHE_SHARDS];
-static FONT_RECIPE_NEXT_BUILD: AtomicU64 = AtomicU64::new(1);
-static FONT_RECIPE_TOUCH: AtomicU64 = AtomicU64::new(1);
-static FONT_RECIPE_HITS: AtomicU64 = AtomicU64::new(0);
-static FONT_RECIPE_MISSES: AtomicU64 = AtomicU64::new(0);
-static FONT_RECIPE_COALESCED: AtomicU64 = AtomicU64::new(0);
-static FONT_RECIPE_BUILDS: AtomicU64 = AtomicU64::new(0);
-static FONT_RECIPE_FAILURES: AtomicU64 = AtomicU64::new(0);
-static FONT_RECIPE_EVICTIONS: AtomicU64 = AtomicU64::new(0);
-static FONT_RECIPE_RESIDENT_ENTRIES: AtomicUsize = AtomicUsize::new(0);
-static FONT_RECIPE_RESIDENT_BYTES: AtomicUsize = AtomicUsize::new(0);
-
-struct FontRecipeCacheEntry {
-    key: GpuFontGlyphRecipeKey,
-    state: FontRecipeCacheState,
-}
-
-enum FontRecipeCacheState {
-    Building {
-        build_id: u64,
-    },
-    Ready {
-        recipe: Arc<GpuFontGlyphRecipe>,
-        bytes: usize,
-        last_touch: u64,
-    },
-    Failed {
-        reason: &'static str,
-        last_touch: u64,
-    },
-}
-
-enum FontRecipeProbe {
-    Hit(Arc<GpuFontGlyphRecipe>),
-    Build(u64),
-    Wait,
-    Failed(&'static str),
-    Saturated,
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FontPlanError {
@@ -223,8 +175,8 @@ impl FontPlanCellRequest {
         }
     }
 
-    /// Describe one exact character while retaining the same shared recipe
-    /// cache and worker-pool path as rolled demo glyphs.
+    /// Describe one exact character while retaining the same worker-pool path
+    /// as rolled demo glyphs. Its recipe is built for this request only.
     pub(crate) const fn fixed(
         position: [f32; 2],
         font_pixels: f32,
@@ -397,14 +349,6 @@ pub(crate) struct FontPlanServiceStatus {
     pub(crate) failed_batches: u64,
     pub(crate) candidate_attempts: u64,
     pub(crate) cooperative_yields: u64,
-    pub(crate) recipe_hits: u64,
-    pub(crate) recipe_misses: u64,
-    pub(crate) recipe_coalesced: u64,
-    pub(crate) recipe_builds: u64,
-    pub(crate) recipe_failures: u64,
-    pub(crate) recipe_evictions: u64,
-    pub(crate) recipe_resident_entries: usize,
-    pub(crate) recipe_resident_bytes: usize,
 }
 
 pub(crate) fn status() -> FontPlanServiceStatus {
@@ -424,218 +368,6 @@ pub(crate) fn status() -> FontPlanServiceStatus {
         failed_batches: FONT_PLAN_FAILED.load(Ordering::Acquire),
         candidate_attempts: FONT_PLAN_CANDIDATE_ATTEMPTS.load(Ordering::Acquire),
         cooperative_yields: FONT_PLAN_COOPERATIVE_YIELDS.load(Ordering::Acquire),
-        recipe_hits: FONT_RECIPE_HITS.load(Ordering::Acquire),
-        recipe_misses: FONT_RECIPE_MISSES.load(Ordering::Acquire),
-        recipe_coalesced: FONT_RECIPE_COALESCED.load(Ordering::Acquire),
-        recipe_builds: FONT_RECIPE_BUILDS.load(Ordering::Acquire),
-        recipe_failures: FONT_RECIPE_FAILURES.load(Ordering::Acquire),
-        recipe_evictions: FONT_RECIPE_EVICTIONS.load(Ordering::Acquire),
-        recipe_resident_entries: FONT_RECIPE_RESIDENT_ENTRIES.load(Ordering::Acquire),
-        recipe_resident_bytes: FONT_RECIPE_RESIDENT_BYTES.load(Ordering::Acquire),
-    }
-}
-
-fn next_recipe_counter(counter: &AtomicU64) -> u64 {
-    loop {
-        let value = counter.fetch_add(1, Ordering::AcqRel);
-        if value != 0 {
-            return value;
-        }
-    }
-}
-
-fn recipe_shard(key: GpuFontGlyphRecipeKey) -> usize {
-    key.fingerprint() as usize & (FONT_RECIPE_CACHE_SHARDS - 1)
-}
-
-fn probe_font_recipe(key: GpuFontGlyphRecipeKey) -> FontRecipeProbe {
-    let shard_index = recipe_shard(key);
-    let touch = next_recipe_counter(&FONT_RECIPE_TOUCH);
-    let mut shard = FONT_RECIPE_SHARDS[shard_index].lock();
-    if let Some(entry) = shard.iter_mut().find(|entry| entry.key == key) {
-        return match &mut entry.state {
-            FontRecipeCacheState::Ready {
-                recipe, last_touch, ..
-            } => {
-                *last_touch = touch;
-                FONT_RECIPE_HITS.fetch_add(1, Ordering::AcqRel);
-                FontRecipeProbe::Hit(Arc::clone(recipe))
-            }
-            FontRecipeCacheState::Building { .. } => {
-                FONT_RECIPE_COALESCED.fetch_add(1, Ordering::AcqRel);
-                FontRecipeProbe::Wait
-            }
-            FontRecipeCacheState::Failed { reason, last_touch } => {
-                *last_touch = touch;
-                FontRecipeProbe::Failed(*reason)
-            }
-        };
-    }
-
-    while shard.len() >= FONT_RECIPE_SHARD_ENTRY_CAP {
-        let Some(victim) = shard
-            .iter()
-            .enumerate()
-            .filter_map(|(index, entry)| match entry.state {
-                FontRecipeCacheState::Building { .. } => None,
-                FontRecipeCacheState::Ready { last_touch, .. }
-                | FontRecipeCacheState::Failed { last_touch, .. } => Some((index, last_touch)),
-            })
-            .min_by_key(|(_, last_touch)| *last_touch)
-            .map(|(index, _)| index)
-        else {
-            return FontRecipeProbe::Saturated;
-        };
-        if let FontRecipeCacheState::Ready { bytes, .. } = shard.swap_remove(victim).state {
-            FONT_RECIPE_RESIDENT_ENTRIES.fetch_sub(1, Ordering::AcqRel);
-            FONT_RECIPE_RESIDENT_BYTES.fetch_sub(bytes, Ordering::AcqRel);
-        }
-        FONT_RECIPE_EVICTIONS.fetch_add(1, Ordering::AcqRel);
-    }
-
-    let build_id = next_recipe_counter(&FONT_RECIPE_NEXT_BUILD);
-    shard.push(FontRecipeCacheEntry {
-        key,
-        state: FontRecipeCacheState::Building { build_id },
-    });
-    FONT_RECIPE_MISSES.fetch_add(1, Ordering::AcqRel);
-    FontRecipeProbe::Build(build_id)
-}
-
-fn publish_font_recipe(
-    key: GpuFontGlyphRecipeKey,
-    build_id: u64,
-    result: Result<Arc<GpuFontGlyphRecipe>, &'static str>,
-) -> Result<Arc<GpuFontGlyphRecipe>, &'static str> {
-    let shard_index = recipe_shard(key);
-    let touch = next_recipe_counter(&FONT_RECIPE_TOUCH);
-    let mut shard = FONT_RECIPE_SHARDS[shard_index].lock();
-    let Some(build_index) = shard.iter().position(|entry| {
-        entry.key == key
-            && matches!(
-                entry.state,
-                FontRecipeCacheState::Building { build_id: active } if active == build_id
-            )
-    }) else {
-        return Err("font-recipe-build-stale");
-    };
-    shard.swap_remove(build_index);
-
-    let published = match result {
-        Ok(recipe) => {
-            let bytes = recipe.ops_bytes();
-            if bytes > FONT_RECIPE_SHARD_BYTE_CAP {
-                FONT_RECIPE_FAILURES.fetch_add(1, Ordering::AcqRel);
-                shard.push(FontRecipeCacheEntry {
-                    key,
-                    state: FontRecipeCacheState::Failed {
-                        reason: "font-recipe-entry-byte-cap",
-                        last_touch: touch,
-                    },
-                });
-                Err("font-recipe-entry-byte-cap")
-            } else {
-                let mut resident_bytes = shard
-                    .iter()
-                    .filter_map(|entry| match entry.state {
-                        FontRecipeCacheState::Ready { bytes, .. } => Some(bytes),
-                        _ => None,
-                    })
-                    .sum::<usize>();
-                while resident_bytes.saturating_add(bytes) > FONT_RECIPE_SHARD_BYTE_CAP {
-                    let Some(victim) = shard
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(index, entry)| match entry.state {
-                            FontRecipeCacheState::Ready {
-                                bytes, last_touch, ..
-                            } => Some((index, last_touch, bytes)),
-                            _ => None,
-                        })
-                        .min_by_key(|(_, last_touch, _)| *last_touch)
-                    else {
-                        break;
-                    };
-                    let removed = shard.swap_remove(victim.0);
-                    if let FontRecipeCacheState::Ready { bytes, .. } = removed.state {
-                        resident_bytes = resident_bytes.saturating_sub(bytes);
-                        FONT_RECIPE_RESIDENT_ENTRIES.fetch_sub(1, Ordering::AcqRel);
-                        FONT_RECIPE_RESIDENT_BYTES.fetch_sub(bytes, Ordering::AcqRel);
-                        FONT_RECIPE_EVICTIONS.fetch_add(1, Ordering::AcqRel);
-                    }
-                }
-                if resident_bytes.saturating_add(bytes) > FONT_RECIPE_SHARD_BYTE_CAP {
-                    FONT_RECIPE_FAILURES.fetch_add(1, Ordering::AcqRel);
-                    Err("font-recipe-shard-byte-cap")
-                } else {
-                    shard.push(FontRecipeCacheEntry {
-                        key,
-                        state: FontRecipeCacheState::Ready {
-                            recipe: Arc::clone(&recipe),
-                            bytes,
-                            last_touch: touch,
-                        },
-                    });
-                    FONT_RECIPE_BUILDS.fetch_add(1, Ordering::AcqRel);
-                    FONT_RECIPE_RESIDENT_ENTRIES.fetch_add(1, Ordering::AcqRel);
-                    FONT_RECIPE_RESIDENT_BYTES.fetch_add(bytes, Ordering::AcqRel);
-                    Ok(recipe)
-                }
-            }
-        }
-        Err(reason) => {
-            FONT_RECIPE_FAILURES.fetch_add(1, Ordering::AcqRel);
-            shard.push(FontRecipeCacheEntry {
-                key,
-                state: FontRecipeCacheState::Failed {
-                    reason,
-                    last_touch: touch,
-                },
-            });
-            Err(reason)
-        }
-    };
-    drop(shard);
-    wake_plan_workers(FONT_PLAN_WORKER_COUNT);
-    published
-}
-
-/// Resolve one exact recipe through the same shared, sharded single-flight
-/// cache used by producer batches.
-///
-/// FontKernel calls this only from its leased blocking service lane while
-/// preparing retained SceneDB resources. The key already names a glyph in the
-/// append-only boot-warmed outline registry; no TTF bytes or outline commands
-/// are supplied by the scene producer.
-#[derive(Clone)]
-pub(crate) struct WarmedFontRecipeLease {
-    recipe: Arc<GpuFontGlyphRecipe>,
-}
-
-impl WarmedFontRecipeLease {
-    pub(crate) fn key(&self) -> GpuFontGlyphRecipeKey {
-        self.recipe.key()
-    }
-
-    #[cfg(test)]
-    fn shares_allocation(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.recipe, &other.recipe)
-    }
-}
-
-pub(crate) fn resolve_warmed_font_recipe(
-    key: GpuFontGlyphRecipeKey,
-) -> Result<WarmedFontRecipeLease, FontPlanError> {
-    match probe_font_recipe(key) {
-        FontRecipeProbe::Hit(recipe) => Ok(WarmedFontRecipeLease { recipe }),
-        FontRecipeProbe::Build(build_id) => {
-            let built = crate::intel::gpu_font::build_gpu_font_glyph_recipe(key);
-            publish_font_recipe(key, build_id, built)
-                .map(|recipe| WarmedFontRecipeLease { recipe })
-                .map_err(FontPlanError::BuildFailed)
-        }
-        FontRecipeProbe::Wait | FontRecipeProbe::Saturated => Err(FontPlanError::PoolFull),
-        FontRecipeProbe::Failed(reason) => Err(FontPlanError::BuildFailed(reason)),
     }
 }
 
@@ -819,7 +551,7 @@ impl FontPlanBatchBorrow {
         wake_plan_workers(parallelism);
         crate::log_info!(
             target: "render";
-            "font-plan-service: batch queued id={} producer={} cells={} parallelism={} active_batches={} active_cells={} cap_batches={} cap_cells={} recipe_cache=shared-sharded-single-flight cache_entries={} cache_bytes={}\n",
+            "font-plan-service: batch queued id={} producer={} cells={} parallelism={} active_batches={} active_cells={} cap_batches={} cap_cells={} recipe_policy=per-request-no-kernel-cache\n",
             batch_id,
             batch.producer,
             cell_count,
@@ -828,8 +560,6 @@ impl FontPlanBatchBorrow {
             FONT_PLAN_ACTIVE_CELLS.load(Ordering::Acquire),
             FONT_PLAN_MAX_ACTIVE_BATCHES,
             FONT_PLAN_MAX_ACTIVE_CELLS,
-            FONT_RECIPE_RESIDENT_ENTRIES.load(Ordering::Acquire),
-            FONT_RECIPE_RESIDENT_BYTES.load(Ordering::Acquire),
         );
         Ok(PendingPreparedGlyphPlan { batch })
     }
@@ -1112,7 +842,6 @@ fn retire_plan_worker(batch: &Arc<FontPlanBatch>) {
 
 enum FontPlanAttemptResult {
     Prepared(GpuFontPreparedCenteredGlyph),
-    WaitForRecipe,
     Rejected,
 }
 
@@ -1139,37 +868,23 @@ fn run_plan_attempt(claim: FontPlanClaim, worker_id: usize) {
         );
         match key {
             Err(_) => FontPlanAttemptResult::Rejected,
-            Ok(key) => {
-                let recipe = match probe_font_recipe(key) {
-                    FontRecipeProbe::Hit(recipe) => Ok(recipe),
-                    FontRecipeProbe::Build(build_id) => {
-                        let built = crate::intel::gpu_font::build_gpu_font_glyph_recipe(key);
-                        publish_font_recipe(key, build_id, built)
-                    }
-                    FontRecipeProbe::Wait | FontRecipeProbe::Saturated => Err("font-recipe-wait"),
-                    FontRecipeProbe::Failed(reason) => Err(reason),
-                };
-                match recipe {
-                    Err("font-recipe-wait") => FontPlanAttemptResult::WaitForRecipe,
+            Ok(key) => match crate::intel::gpu_font::build_gpu_font_glyph_recipe(key) {
+                Err(_) => FontPlanAttemptResult::Rejected,
+                Ok(recipe) => match crate::intel::gpu_font::place_gpu_font_centered_glyph_recipe(
+                    claim.scalar,
+                    recipe,
+                    claim.request.position,
+                    claim.font_pixels,
+                    claim.request.slant,
+                    batch.viewport_width,
+                    batch.viewport_height,
+                    batch.raster_width,
+                    batch.raster_height,
+                ) {
+                    Ok(prepared) => FontPlanAttemptResult::Prepared(prepared),
                     Err(_) => FontPlanAttemptResult::Rejected,
-                    Ok(recipe) => {
-                        match crate::intel::gpu_font::place_gpu_font_centered_glyph_recipe(
-                            claim.scalar,
-                            recipe,
-                            claim.request.position,
-                            claim.font_pixels,
-                            claim.request.slant,
-                            batch.viewport_width,
-                            batch.viewport_height,
-                            batch.raster_width,
-                            batch.raster_height,
-                        ) {
-                            Ok(prepared) => FontPlanAttemptResult::Prepared(prepared),
-                            Err(_) => FontPlanAttemptResult::Rejected,
-                        }
-                    }
-                }
-            }
+                },
+            },
         }
     };
 
@@ -1239,15 +954,6 @@ fn run_plan_attempt(claim: FontPlanClaim, worker_id: usize) {
                 retire_plan_worker(&claim.batch);
                 FONT_PLAN_WAIT.notify_one();
             }
-        }
-        FontPlanAttemptResult::WaitForRecipe => {
-            let mut state = batch.state.lock();
-            if let Some(cell) = state.cells.get_mut(claim.cell_index) {
-                cell.retry_candidate = Some((claim.scalar, claim.font_pixels));
-                cell.status = PlanCellStatus::Pending;
-            }
-            drop(state);
-            retire_plan_worker(&claim.batch);
         }
         FontPlanAttemptResult::Prepared(_) | FontPlanAttemptResult::Rejected => {
             batch.rejected_candidates.fetch_add(1, Ordering::AcqRel);
@@ -1395,7 +1101,7 @@ fn finish_batch_success(batch: &Arc<FontPlanBatch>) {
         .complete(Ok(PreparedGlyphPlanOutput { plan, stats }));
     crate::log_info!(
         target: "render";
-        "font-plan-service: batch ready id={} producer={} glyphs={} parallelism={} participants={} participant_mask=0x{:08X} queue_wait_ms={} build_ms={} attempts={} rejected={} worker_slices={} yields={} ops_bytes={} reserved_ops_bytes={} estimated_work={} glyph_hash=0x{:016X} request_rebuild=0 prepared_replay=0 recipe_cache=shared-sharded-single-flight cache_hits={} cache_misses={} cache_coalesced={} cache_builds={} cache_failures={} cache_evictions={} cache_entries={} cache_bytes={}\n",
+        "font-plan-service: batch ready id={} producer={} glyphs={} parallelism={} participants={} participant_mask=0x{:08X} queue_wait_ms={} build_ms={} attempts={} rejected={} worker_slices={} yields={} ops_bytes={} reserved_ops_bytes={} estimated_work={} glyph_hash=0x{:016X} request_rebuild=1 prepared_replay=0 recipe_policy=per-request-no-kernel-cache\n",
         batch.id,
         batch.producer,
         glyphs,
@@ -1412,14 +1118,6 @@ fn finish_batch_success(batch: &Arc<FontPlanBatch>) {
         reserved_ops_bytes,
         estimated_work,
         fingerprint,
-        FONT_RECIPE_HITS.load(Ordering::Acquire),
-        FONT_RECIPE_MISSES.load(Ordering::Acquire),
-        FONT_RECIPE_COALESCED.load(Ordering::Acquire),
-        FONT_RECIPE_BUILDS.load(Ordering::Acquire),
-        FONT_RECIPE_FAILURES.load(Ordering::Acquire),
-        FONT_RECIPE_EVICTIONS.load(Ordering::Acquire),
-        FONT_RECIPE_RESIDENT_ENTRIES.load(Ordering::Acquire),
-        FONT_RECIPE_RESIDENT_BYTES.load(Ordering::Acquire),
     );
 }
 
@@ -1591,7 +1289,7 @@ pub(crate) fn start_font_plan_workers() -> Result<bool, SpawnError> {
 
 #[cfg(test)]
 mod tests {
-    use super::{FontPlanCellRequest, GlyphSelectionState, resolve_warmed_font_recipe};
+    use super::{FontPlanCellRequest, GlyphSelectionState};
 
     #[test]
     fn exact_scalar_is_attempted_once_without_random_fallback() {
@@ -1609,19 +1307,5 @@ mod tests {
             FontPlanCellRequest::fixed([1.0, 2.0], 16.0, 0.0, 10, 'T').with_worker_affinity(31);
         assert_eq!(exact.worker_affinity(), Some(31));
         assert_eq!(exact.fixed_scalar(), Some('T'));
-    }
-
-    #[test]
-    fn repeated_scene_lookup_pins_the_same_shared_recipe() {
-        let font = crate::intel::gpu_font::GpuFontFace::Default;
-        crate::intel::gpu_font::ensure_font_face_available(font).unwrap();
-        let key = crate::intel::gpu_font::gpu_font_centered_glyph_recipe_key(
-            'S', font, 24.0, 0.0, 320, 200, 640, 400,
-        )
-        .unwrap();
-        let first = resolve_warmed_font_recipe(key).unwrap();
-        let second = resolve_warmed_font_recipe(key).unwrap();
-        assert!(first.shares_allocation(&second));
-        assert_eq!(first.key(), key);
     }
 }

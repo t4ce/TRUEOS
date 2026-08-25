@@ -232,11 +232,9 @@ fn collect_management_component(hints: &mut PlatformFirmwareHints, structure: St
         .byte(0x04)
         .and_then(|index| structure.string_bytes(index))
         .map(firmware_text);
-    let (Some(management_handle), Some(component_handle), Some(threshold_handle)) = (
-        structure.u16(0x05),
-        structure.u16(0x07),
-        structure.u16(0x09),
-    ) else {
+    let (Some(management_handle), Some(component_handle), Some(threshold_handle)) =
+        (structure.u16(0x05), structure.u16(0x07), structure.u16(0x09))
+    else {
         return;
     };
 
@@ -586,12 +584,7 @@ fn append_csme_pci_snapshot(
         let b = cfg_u32(dev, offset + 4);
         let c = cfg_u32(dev, offset + 8);
         let d = cfg_u32(dev, offset + 12);
-        writeln!(
-            out,
-            "  {:02X}: {:08X} {:08X} {:08X} {:08X}",
-            offset, a, b, c, d
-        )
-        .unwrap();
+        writeln!(out, "  {:02X}: {:08X} {:08X} {:08X} {:08X}", offset, a, b, c, d).unwrap();
     }
     writeln!(
         out,

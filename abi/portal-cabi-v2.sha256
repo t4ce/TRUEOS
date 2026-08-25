@@ -187,4 +187,6 @@
 # The Lumen tool-result submission call is strictly additive. It accepts only
 # a bounded result and the preceding assistant tail, which the kernel appends
 # as the pinned generic `tool` role before allowing one continuation.
-1579e96cfd55295e071660a4afaad98f3c0e098fd9b21116534bf7597d15b131
+# Additive review: `trueos_cabi_ui4_scene_font_sprite_{request,status}_v1`
+# are new versioned symbols; no established portal signature changed.
+a5840eb88390f31c38e4baeb2f748e398a598f3e0aa3977f7a9de03ad131e597

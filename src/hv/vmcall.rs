@@ -235,6 +235,8 @@ pub const OP_BP_IMAGE_SOURCE_READ: u32 = 0x122; // arg0 offset,arg1 cap,payload 
 pub const OP_BP_UI4_SCENE_FRAME_SET_HIT_TESTABLE: u32 = 0x123; // arg0 window,arg1 enabled -> rc
 pub const OP_BP_LUMEN_TOOL_RESULT_SUBMIT: u32 = 0x151; // arg0 turn,payload tail then tool-role result -> rc
 pub const OP_BP_UI4_SCENE_FRAME_SET_ESCAPE_KEY_ACTION: u32 = 0x150; // arg0 window,arg1 Ui4FrameEscapeKeyAction -> rc
+pub const OP_BP_UI4_SCENE_FONT_SPRITE_REQUEST_V1: u32 = 0x15E; // arg0 window,arg1 scalar,payload font/px/color -> ticket
+pub const OP_BP_UI4_SCENE_FONT_SPRITE_STATUS_V1: u32 = 0x15F; // arg0 window,arg1 ticket -> FontSpriteStatusV1
 pub const OP_BP_VMEDIA_IMAGE_DECODE_BEGIN: u32 = 0x142; // arg0 format,arg1 encoded bytes -> operation id/rc
 pub const OP_BP_VMEDIA_IMAGE_DECODE_WRITE: u32 = 0x143; // arg0 operation,arg1 offset,payload encoded chunk -> rc
 pub const OP_BP_VMEDIA_IMAGE_DECODE_COMMIT: u32 = 0x144; // arg0 operation -> rc
@@ -2315,6 +2317,47 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 arg1 as u32,
             );
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_SCENE_FONT_SPRITE_REQUEST_V1 => {
+            let Some(payload) = request_payload(vm_id, req_len) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            if payload.len() != 12 {
+                write_response(vm_id, seq, STATUS_OK, (-1i64) as u64, 0);
+                return DispatchOutcome::Resume;
+            }
+            let font_id = u32::from_le_bytes(payload[..4].try_into().unwrap());
+            let font_pixels = f32::from_bits(u32::from_le_bytes(payload[4..8].try_into().unwrap()));
+            let color_rgba = u32::from_le_bytes(payload[8..12].try_into().unwrap());
+            let mut ticket = 0;
+            let rc = crate::ui4::blueprint_text::request_font_sprite(
+                crate::ui4::WindowOwner::Vm(vm_id),
+                arg0 as u32,
+                font_id,
+                arg1 as u32,
+                font_pixels,
+                color_rgba,
+                &mut ticket,
+            );
+            let data = if rc == 0 { ticket } else { (rc as i64) as u64 };
+            write_response(vm_id, seq, STATUS_OK, data, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_SCENE_FONT_SPRITE_STATUS_V1 => {
+            let mut status = crate::ui4::blueprint_text::TrueosUi4FontSpriteStatusV1::default();
+            let rc = crate::ui4::blueprint_text::font_sprite_status(
+                crate::ui4::WindowOwner::Vm(vm_id),
+                arg0 as u32,
+                arg1,
+                &mut status,
+            );
+            if rc == 0 {
+                write_record_response(vm_id, seq, 0, &status);
+            } else {
+                write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            }
             DispatchOutcome::Resume
         }
         OP_BP_UI4_SCENE_SPRITE_FRAME_BEGIN => {

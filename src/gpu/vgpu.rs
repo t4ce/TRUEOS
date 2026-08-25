@@ -1935,8 +1935,10 @@ pub(crate) fn create_retained_mesh(
     let index_bytes = (descriptor.index_count as usize)
         .checked_mul(4)
         .ok_or(VgpuError::Unsupported)?;
-    let vertex_offset = usize::try_from(descriptor.vertex_offset).map_err(|_| VgpuError::Unsupported)?;
-    let index_offset = usize::try_from(descriptor.index_offset).map_err(|_| VgpuError::Unsupported)?;
+    let vertex_offset =
+        usize::try_from(descriptor.vertex_offset).map_err(|_| VgpuError::Unsupported)?;
+    let index_offset =
+        usize::try_from(descriptor.index_offset).map_err(|_| VgpuError::Unsupported)?;
     let mut broker = BROKER.lock();
     let device = lookup_device_mut(&mut broker, device_handle, principal)?;
     ensure_live(device)?;
@@ -1948,7 +1950,9 @@ pub(crate) fn create_retained_mesh(
     let vertices = {
         let record = lookup_buffer(device, vertex_buffer)?;
         if record.usage & BUFFER_USAGE_VERTEX == 0
-            || vertex_offset.checked_add(vertex_bytes).is_none_or(|end| end > record.bytes)
+            || vertex_offset
+                .checked_add(vertex_bytes)
+                .is_none_or(|end| end > record.bytes)
         {
             return Err(VgpuError::Unsupported);
         }
@@ -1962,7 +1966,9 @@ pub(crate) fn create_retained_mesh(
     let indices = {
         let record = lookup_buffer(device, index_buffer)?;
         if record.usage & BUFFER_USAGE_INDEX == 0
-            || index_offset.checked_add(index_bytes).is_none_or(|end| end > record.bytes)
+            || index_offset
+                .checked_add(index_bytes)
+                .is_none_or(|end| end > record.bytes)
         {
             return Err(VgpuError::Unsupported);
         }
@@ -2012,7 +2018,11 @@ pub(crate) fn destroy_retained_mesh(
     if entry.generation != generation {
         return Err(VgpuError::InvalidHandle);
     }
-    if entry.record.as_ref().is_none_or(|record| record.in_flight != 0) {
+    if entry
+        .record
+        .as_ref()
+        .is_none_or(|record| record.in_flight != 0)
+    {
         return Err(VgpuError::Busy);
     }
     let record = entry.record.take().ok_or(VgpuError::InvalidHandle)?;
@@ -4014,7 +4024,10 @@ pub(crate) fn submit_ui4_retained_frame(
             record.in_flight = 1;
             Arc::clone(&record.resident)
         };
-        let cached = match lookup_retained_mesh(device, mesh_handle)?.static_geometry.as_ref() {
+        let cached = match lookup_retained_mesh(device, mesh_handle)?
+            .static_geometry
+            .as_ref()
+        {
             Some(geometry)
                 if geometry.vertex_buffer == static_vertex_buffer
                     && geometry.index_buffer == static_index_buffer
@@ -4035,107 +4048,109 @@ pub(crate) fn submit_ui4_retained_frame(
         let line_meshes = if let Some(meshes) = cached {
             meshes
         } else {
-        let copied = (|| {
-            let index_record = lookup_buffer(device, static_index_buffer)?;
-            let vertex_record = lookup_buffer(device, static_vertex_buffer)?;
-            if index_record.usage & BUFFER_USAGE_INDEX == 0
-                || vertex_record.usage & BUFFER_USAGE_VERTEX == 0
-            {
-                return Err(VgpuError::PermissionDenied);
-            }
-            let index_virt = match index_record.backing {
-                BufferBacking::Dma { virt, .. } => virt,
-                BufferBacking::GuestPages { .. } => return Err(VgpuError::Unsupported),
-            };
-            let vertex_virt = match vertex_record.backing {
-                BufferBacking::Dma { virt, .. } => virt,
-                BufferBacking::GuestPages { .. } => return Err(VgpuError::Unsupported),
-            };
-            let vertex_offset = usize::try_from(submit.static_vertex_offset)
-                .map_err(|_| VgpuError::Unsupported)?;
-            let index_offset = usize::try_from(submit.static_index_offset)
-                .map_err(|_| VgpuError::Unsupported)?;
-            let mut parts = Vec::with_capacity(static_draw_count);
-            for draw in &submit.static_draws[..static_draw_count] {
-                let index_start = index_offset
-                    .checked_add(draw.first_index as usize * 4)
-                    .ok_or(VgpuError::Unsupported)?;
-                let index_end = index_start.checked_add(8).ok_or(VgpuError::Unsupported)?;
-                if index_end > index_record.bytes {
-                    return Err(VgpuError::Unsupported);
-                }
-                crate::intel::dma_flush(unsafe { index_virt.add(index_start) }, 8);
-                let raw = unsafe { core::slice::from_raw_parts(index_virt.add(index_start), 8) };
-                let indices = [
-                    u32::from_le_bytes(raw[0..4].try_into().unwrap()),
-                    u32::from_le_bytes(raw[4..8].try_into().unwrap()),
-                ];
-                let base = draw.base_vertex as usize;
-                let count = indices.iter().copied().max().unwrap() as usize + 1;
-                let vertex_start = vertex_offset
-                    .checked_add(base.checked_mul(12).ok_or(VgpuError::Unsupported)?)
-                    .ok_or(VgpuError::Unsupported)?;
-                let vertex_bytes = count.checked_mul(12).ok_or(VgpuError::Unsupported)?;
-                if vertex_start
-                    .checked_add(vertex_bytes)
-                    .is_none_or(|end| end > vertex_record.bytes)
+            let copied = (|| {
+                let index_record = lookup_buffer(device, static_index_buffer)?;
+                let vertex_record = lookup_buffer(device, static_vertex_buffer)?;
+                if index_record.usage & BUFFER_USAGE_INDEX == 0
+                    || vertex_record.usage & BUFFER_USAGE_VERTEX == 0
                 {
-                    return Err(VgpuError::Unsupported);
+                    return Err(VgpuError::PermissionDenied);
                 }
-                crate::intel::dma_flush(unsafe { vertex_virt.add(vertex_start) }, vertex_bytes);
-                let mut vertices = Vec::with_capacity(count);
-                for vertex in 0..count {
-                    let start = vertex_start + vertex * 12;
-                    let raw = unsafe { core::slice::from_raw_parts(vertex_virt.add(start), 12) };
-                    vertices.push([
-                        f32::from_le_bytes(raw[0..4].try_into().unwrap()),
-                        f32::from_le_bytes(raw[4..8].try_into().unwrap()),
-                        f32::from_le_bytes(raw[8..12].try_into().unwrap()),
-                    ]);
-                }
-                parts.push((vertices, indices));
-            }
-            Ok(parts)
-        })();
-        let static_parts = match copied {
-            Ok(parts) => parts,
-            Err(error) => {
-                lookup_retained_mesh_mut(device, mesh_handle)?.in_flight = 0;
-                lookup_surface_mut(device, surface_handle)?.in_flight = 1;
-                lookup_queue_mut(device, queue_handle)?.in_flight = 0;
-                return Err(error);
-            }
-        };
-        let mut meshes = Vec::with_capacity(static_parts.len());
-        for (vertices, indices) in &static_parts {
-            match crate::intel::render::create_resident_indexed_mesh(
-                vertices,
-                indices,
-                crate::intel::render::ResidentScenePrimitiveTopology::LineList,
-            ) {
-                Ok(mesh) => meshes.push(mesh),
-                Err(_) => {
-                    for mesh in &meshes {
-                        let _ = crate::intel::render::release_resident_triangle_mesh(mesh);
+                let index_virt = match index_record.backing {
+                    BufferBacking::Dma { virt, .. } => virt,
+                    BufferBacking::GuestPages { .. } => return Err(VgpuError::Unsupported),
+                };
+                let vertex_virt = match vertex_record.backing {
+                    BufferBacking::Dma { virt, .. } => virt,
+                    BufferBacking::GuestPages { .. } => return Err(VgpuError::Unsupported),
+                };
+                let vertex_offset = usize::try_from(submit.static_vertex_offset)
+                    .map_err(|_| VgpuError::Unsupported)?;
+                let index_offset = usize::try_from(submit.static_index_offset)
+                    .map_err(|_| VgpuError::Unsupported)?;
+                let mut parts = Vec::with_capacity(static_draw_count);
+                for draw in &submit.static_draws[..static_draw_count] {
+                    let index_start = index_offset
+                        .checked_add(draw.first_index as usize * 4)
+                        .ok_or(VgpuError::Unsupported)?;
+                    let index_end = index_start.checked_add(8).ok_or(VgpuError::Unsupported)?;
+                    if index_end > index_record.bytes {
+                        return Err(VgpuError::Unsupported);
                     }
+                    crate::intel::dma_flush(unsafe { index_virt.add(index_start) }, 8);
+                    let raw =
+                        unsafe { core::slice::from_raw_parts(index_virt.add(index_start), 8) };
+                    let indices = [
+                        u32::from_le_bytes(raw[0..4].try_into().unwrap()),
+                        u32::from_le_bytes(raw[4..8].try_into().unwrap()),
+                    ];
+                    let base = draw.base_vertex as usize;
+                    let count = indices.iter().copied().max().unwrap() as usize + 1;
+                    let vertex_start = vertex_offset
+                        .checked_add(base.checked_mul(12).ok_or(VgpuError::Unsupported)?)
+                        .ok_or(VgpuError::Unsupported)?;
+                    let vertex_bytes = count.checked_mul(12).ok_or(VgpuError::Unsupported)?;
+                    if vertex_start
+                        .checked_add(vertex_bytes)
+                        .is_none_or(|end| end > vertex_record.bytes)
+                    {
+                        return Err(VgpuError::Unsupported);
+                    }
+                    crate::intel::dma_flush(unsafe { vertex_virt.add(vertex_start) }, vertex_bytes);
+                    let mut vertices = Vec::with_capacity(count);
+                    for vertex in 0..count {
+                        let start = vertex_start + vertex * 12;
+                        let raw =
+                            unsafe { core::slice::from_raw_parts(vertex_virt.add(start), 12) };
+                        vertices.push([
+                            f32::from_le_bytes(raw[0..4].try_into().unwrap()),
+                            f32::from_le_bytes(raw[4..8].try_into().unwrap()),
+                            f32::from_le_bytes(raw[8..12].try_into().unwrap()),
+                        ]);
+                    }
+                    parts.push((vertices, indices));
+                }
+                Ok(parts)
+            })();
+            let static_parts = match copied {
+                Ok(parts) => parts,
+                Err(error) => {
                     lookup_retained_mesh_mut(device, mesh_handle)?.in_flight = 0;
                     lookup_surface_mut(device, surface_handle)?.in_flight = 1;
                     lookup_queue_mut(device, queue_handle)?.in_flight = 0;
-                    return Err(VgpuError::OutOfMemory);
+                    return Err(error);
+                }
+            };
+            let mut meshes = Vec::with_capacity(static_parts.len());
+            for (vertices, indices) in &static_parts {
+                match crate::intel::render::create_resident_indexed_mesh(
+                    vertices,
+                    indices,
+                    crate::intel::render::ResidentScenePrimitiveTopology::LineList,
+                ) {
+                    Ok(mesh) => meshes.push(mesh),
+                    Err(_) => {
+                        for mesh in &meshes {
+                            let _ = crate::intel::render::release_resident_triangle_mesh(mesh);
+                        }
+                        lookup_retained_mesh_mut(device, mesh_handle)?.in_flight = 0;
+                        lookup_surface_mut(device, surface_handle)?.in_flight = 1;
+                        lookup_queue_mut(device, queue_handle)?.in_flight = 0;
+                        return Err(VgpuError::OutOfMemory);
+                    }
                 }
             }
-        }
-        let meshes = Arc::new(meshes);
-        lookup_retained_mesh_mut(device, mesh_handle)?.static_geometry =
-            Some(RetainedStaticGeometry {
-                vertex_buffer: static_vertex_buffer,
-                index_buffer: static_index_buffer,
-                vertex_offset: submit.static_vertex_offset,
-                index_offset: submit.static_index_offset,
-                draws: static_draw_keys,
-                meshes: Arc::clone(&meshes),
-            });
-        meshes
+            let meshes = Arc::new(meshes);
+            lookup_retained_mesh_mut(device, mesh_handle)?.static_geometry =
+                Some(RetainedStaticGeometry {
+                    vertex_buffer: static_vertex_buffer,
+                    index_buffer: static_index_buffer,
+                    vertex_offset: submit.static_vertex_offset,
+                    index_offset: submit.static_index_offset,
+                    draws: static_draw_keys,
+                    meshes: Arc::clone(&meshes),
+                });
+            meshes
         };
         (
             surface_meta.0,
@@ -4197,13 +4212,14 @@ pub(crate) fn submit_ui4_retained_frame(
             topology: crate::intel::render::ResidentScenePrimitiveTopology::LineList,
         })
         .collect::<Vec<_>>();
-    let rendered = crate::intel::render::render_resident_retained_with_static_draws_direct_to_surface(
-        &resident,
-        &line_draws,
-        Some(submit.clear_rgba8_srgb.to_le_bytes()),
-        destination,
-        false,
-    );
+    let rendered =
+        crate::intel::render::render_resident_retained_with_static_draws_direct_to_surface(
+            &resident,
+            &line_draws,
+            Some(submit.clear_rgba8_srgb.to_le_bytes()),
+            destination,
+            false,
+        );
     if matches!(rendered, Err("render-busy")) {
         rollback_retained_submission_lease(
             principal,
@@ -4327,14 +4343,8 @@ fn retire_retained_submission_lease(
         return Err(VgpuError::DeviceLost);
     }
     let record = surface_slot.record.as_ref().expect("validated surface");
-    let (window_id, guest_gpu, bytes, width, height, pitch) = (
-        record.window_id,
-        record.gpu,
-        record.bytes,
-        record.width,
-        record.height,
-        record.pitch,
-    );
+    let (window_id, guest_gpu, bytes, width, height, pitch) =
+        (record.window_id, record.gpu, record.bytes, record.width, record.height, record.pitch);
     physical.unmap_gpuvm(vm, guest_gpu, bytes)?;
     let record = surface_slot.record.take().expect("validated surface");
     device.memory_used = device.memory_used.saturating_sub(record.bytes);
@@ -5926,8 +5936,8 @@ fn destroy_device_resources(
     for slot in &mut device.retained_meshes {
         if let Some(record) = slot.record.take() {
             if let Some(static_geometry) = record.static_geometry {
-                let meshes = Arc::try_unwrap(static_geometry.meshes)
-                    .map_err(|_| VgpuError::Busy)?;
+                let meshes =
+                    Arc::try_unwrap(static_geometry.meshes).map_err(|_| VgpuError::Busy)?;
                 if !meshes
                     .iter()
                     .all(crate::intel::render::release_resident_triangle_mesh)

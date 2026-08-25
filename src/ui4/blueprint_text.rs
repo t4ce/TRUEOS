@@ -7,6 +7,7 @@
 //! coherent UI4 frame lifecycle.
 
 use alloc::{collections::VecDeque, string::String, vec::Vec};
+use core::sync::atomic::{AtomicU32, Ordering};
 use spin::Mutex;
 use trueos_time::Instant;
 
@@ -78,6 +79,24 @@ const UI4_SCENE_SOLID_SOURCE_BYTES: usize = 4096;
 const MAX_SPRITE_QUADS: usize = 8_192;
 const UI4_SPRITE_BATCH_TIMEOUT_NS: u64 = 1_000_000_000;
 const SPRITE_QUAD_FLAG_SRC_OVER: u32 = 1 << 0;
+const MAX_BLUEPRINT_FONT_SPRITES: usize = 4_096;
+const FONT_SPRITE_STATUS_PENDING: u32 = 1;
+const FONT_SPRITE_STATUS_READY: u32 = 2;
+const FONT_SPRITE_STATUS_FAILED: u32 = 3;
+
+/// Blueprint-visible completion record for an asynchronously materialized
+/// glyph sprite. `ticket` is the caller's stable request handle; UI4 never
+/// derives a glyph key or performs cache lookup on its behalf.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosUi4FontSpriteStatusV1 {
+    pub state: u32,
+    pub sprite_id: u32,
+    pub width: u32,
+    pub height: u32,
+    pub origin_x: i32,
+    pub origin_y: i32,
+}
 const SPRITE_QUAD_VALID_FLAGS: u32 = SPRITE_QUAD_FLAG_SRC_OVER;
 const _: () = {
     assert!(UI4_SCENE_SOURCE_GPU.is_multiple_of(4096));
@@ -577,7 +596,11 @@ struct BlueprintSceneSurface {
     launch_selection: Option<(Ui4CursorSource, u32, u32)>,
     skybox: Option<OwnedRgb565Surface>,
     skybox_upload: Option<Rgb565Upload>,
-    sprites: Vec<(u32, OwnedRgba8Surface)>,
+    sprites: Vec<(u32, BlueprintSpriteSource)>,
+    /// Request state only.  The Blueprint owns all glyph-key coalescing,
+    /// fallback choice, and eviction policy; UI4 merely retains a scoped GPU
+    /// source for every ticket it was explicitly asked to produce.
+    font_sprite_requests: Vec<BlueprintFontSpriteRequest>,
     sprite_upload: Option<Rgba8Upload>,
     solid_source: Option<OwnedRgba8Surface>,
     sprite_clear_rgba: Option<u32>,
@@ -794,6 +817,51 @@ struct OwnedRgba8Surface {
     bytes: usize,
 }
 
+enum BlueprintSpriteSource {
+    Uploaded(OwnedRgba8Surface),
+    Font(FontStampedBuffer),
+}
+
+impl BlueprintSpriteSource {
+    const fn surface(&self) -> GpgpuRgba8Surface {
+        match self {
+            Self::Uploaded(source) => source.surface,
+            Self::Font(source) => source.surface(),
+        }
+    }
+
+    const fn bytes(&self) -> usize {
+        match self {
+            Self::Uploaded(source) => source.bytes,
+            Self::Font(source) => source.surface().bytes,
+        }
+    }
+
+    const fn is_premultiplied(&self) -> bool {
+        sprite_source_is_premultiplied(matches!(self, Self::Font(_)))
+    }
+}
+
+const fn sprite_source_is_premultiplied(font_owned: bool) -> bool {
+    font_owned
+}
+
+struct BlueprintFontSpriteRequest {
+    ticket: u64,
+    sprite_id: u32,
+    state: BlueprintFontSpriteState,
+}
+
+enum BlueprintFontSpriteState {
+    Pending(PendingFontStamp),
+    Ready {
+        width: u32,
+        height: u32,
+        origin_px: [i32; 2],
+    },
+    Failed,
+}
+
 unsafe impl Send for OwnedRgba8Surface {}
 unsafe impl Sync for OwnedRgba8Surface {}
 
@@ -810,6 +878,7 @@ struct SpriteSceneUpload {
 }
 
 static SURFACES: Mutex<Vec<BlueprintSceneSurface>> = Mutex::new(Vec::new());
+static NEXT_BLUEPRINT_FONT_SPRITE_ID: AtomicU32 = AtomicU32::new(0x8000_0000);
 static RETIRED_FRAMES: Mutex<Vec<FrameHandle>> = Mutex::new(Vec::new());
 // An accepted GPU submission whose marker never retired may still reference
 // both its destination ring and retained source. Those allocations are never
@@ -1120,6 +1189,7 @@ fn open_blueprint_frame(
                 skybox: None,
                 skybox_upload: None,
                 sprites: Vec::new(),
+                font_sprite_requests: Vec::new(),
                 sprite_upload: None,
                 solid_source: None,
                 sprite_clear_rgba: None,
@@ -1165,6 +1235,7 @@ fn open_blueprint_frame(
         skybox: None,
         skybox_upload: None,
         sprites: Vec::new(),
+        font_sprite_requests: Vec::new(),
         sprite_upload: None,
         solid_source: None,
         sprite_clear_rgba: None,
@@ -2587,6 +2658,73 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_sprite_upload_rgba8(
         return write;
     }
     finish_sprite_rgba8_upload(owner, window_id, sprite_id)
+}
+
+/// Submit one glyph producer request.  This versioned additive CABI carries
+/// no cache key table: it returns only an opaque ticket owned by the calling
+/// Blueprint window.  The guest must coalesce keys and choose fallback.
+pub unsafe extern "C" fn trueos_cabi_ui4_scene_font_sprite_request_v1(
+    window_id: u32,
+    font_id: u32,
+    scalar: u32,
+    font_pixels: f32,
+    color_rgba: u32,
+    out_ticket: *mut u64,
+) -> i32 {
+    if out_ticket.is_null() {
+        return ERROR_INVALID;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_font_sprite_request(
+            window_id,
+            font_id,
+            scalar,
+            font_pixels,
+            color_rgba,
+            out_ticket,
+        );
+    }
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT;
+    };
+    let mut ticket = 0;
+    let rc = request_font_sprite(
+        owner,
+        window_id,
+        font_id,
+        scalar,
+        font_pixels,
+        color_rgba,
+        &mut ticket,
+    );
+    if rc == 0 {
+        unsafe { out_ticket.write(ticket) };
+    }
+    rc
+}
+
+/// Poll a glyph producer without waiting. A pending or failed glyph never
+/// owns a frame lease; callers remain free to publish an empty/fallback slot.
+pub unsafe extern "C" fn trueos_cabi_ui4_scene_font_sprite_status_v1(
+    window_id: u32,
+    ticket: u64,
+    out: *mut TrueosUi4FontSpriteStatusV1,
+) -> i32 {
+    if out.is_null() {
+        return ERROR_INVALID;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_font_sprite_status(window_id, ticket, out);
+    }
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT;
+    };
+    let mut status = TrueosUi4FontSpriteStatusV1::default();
+    let rc = font_sprite_status(owner, window_id, ticket, &mut status);
+    if rc == 0 {
+        unsafe { out.write(status) };
+    }
+    rc
 }
 
 /// Submit one ordered sprite/solid scene into the active sprite-frame lease.
@@ -4798,10 +4936,240 @@ fn guest_status(op: u32, arg0: u64, arg1: u64, payload: &[u8]) -> i32 {
     }
 }
 
+unsafe fn guest_font_sprite_request(
+    window_id: u32,
+    font_id: u32,
+    scalar: u32,
+    font_pixels: f32,
+    color_rgba: u32,
+    out_ticket: *mut u64,
+) -> i32 {
+    let mut payload = [0u8; 12];
+    payload[..4].copy_from_slice(&font_id.to_le_bytes());
+    payload[4..8].copy_from_slice(&font_pixels.to_bits().to_le_bytes());
+    payload[8..].copy_from_slice(&color_rgba.to_le_bytes());
+    let (status, data) = trueos_vm::vmcall::call_with_payload(
+        trueos_vm::vmcall::OP_BP_UI4_SCENE_FONT_SPRITE_REQUEST_V1,
+        window_id as u64,
+        scalar as u64,
+        &payload,
+        &mut [],
+    );
+    if status != trueos_vm::vmcall::STATUS_OK {
+        return ERROR_UI4;
+    }
+    let result = data as i64;
+    if result < 0 {
+        return result as i32;
+    }
+    unsafe { out_ticket.write(data) };
+    0
+}
+
+unsafe fn guest_font_sprite_status(
+    window_id: u32,
+    ticket: u64,
+    out: *mut TrueosUi4FontSpriteStatusV1,
+) -> i32 {
+    let mut response = [0u8; core::mem::size_of::<TrueosUi4FontSpriteStatusV1>()];
+    let (status, data) = trueos_vm::vmcall::call_with_payload(
+        trueos_vm::vmcall::OP_BP_UI4_SCENE_FONT_SPRITE_STATUS_V1,
+        window_id as u64,
+        ticket,
+        &[],
+        &mut response,
+    );
+    if status != trueos_vm::vmcall::STATUS_OK {
+        return ERROR_UI4;
+    }
+    let rc = data as i64 as i32;
+    if rc == 0 {
+        unsafe {
+            core::ptr::copy_nonoverlapping(response.as_ptr(), out.cast::<u8>(), response.len());
+        }
+    }
+    rc
+}
+
 fn expected_rgba8_len(width: u32, height: u32) -> Option<usize> {
     (width as usize)
         .checked_mul(height as usize)?
         .checked_mul(core::mem::size_of::<u32>())
+}
+
+fn next_blueprint_font_sprite_id() -> u32 {
+    loop {
+        let id = NEXT_BLUEPRINT_FONT_SPRITE_ID.fetch_add(1, Ordering::Relaxed);
+        if id != 0 && id != TEXT_BACKBUFFER_SPRITE_ID {
+            return id;
+        }
+    }
+}
+
+pub(crate) fn request_font_sprite(
+    owner: WindowOwner,
+    window_id: u32,
+    font_id: u32,
+    scalar: u32,
+    font_pixels: f32,
+    color_rgba: u32,
+    out_ticket: &mut u64,
+) -> i32 {
+    let Some(font) = GpuFontFace::from_id(font_id) else {
+        return ERROR_INVALID;
+    };
+    let Some(scalar) = char::from_u32(scalar) else {
+        return ERROR_INVALID;
+    };
+    if scalar.is_control()
+        || scalar.is_whitespace()
+        || !font_pixels.is_finite()
+        || !(4.0..=256.0).contains(&font_pixels)
+    {
+        return ERROR_INVALID;
+    }
+    {
+        let surfaces = SURFACES.lock();
+        let Some(surface) = surfaces
+            .iter()
+            .find(|surface| surface.owner == owner && surface.window.raw() == window_id)
+        else {
+            return ERROR_NOT_FOUND;
+        };
+        if surface.font_sprite_requests.len() >= MAX_BLUEPRINT_FONT_SPRITES {
+            return ERROR_BUSY;
+        }
+    }
+    // The kernel receives no reusable glyph identity here.  A caller that
+    // asks twice gets two producer tickets; Shell2 is the sole key owner.
+    // One conservative pixel avoids needing a floating-point `ceil` runtime
+    // in the kernel while preserving the exact fractional em size below.
+    let extent = (font_pixels * 4.0 + 1.0).max(32.0) as u32;
+    let [r, g, b, a] = color_rgba.to_le_bytes();
+    let request = FontStampRequest {
+        layers: alloc::vec![FontStampLayer {
+            scene: RetainSceneRequest {
+                runs: alloc::vec![RetainedFontRun {
+                    text: scalar.into(),
+                    // X=0 and a baseline at one em make the tight output
+                    // origin a genuine cell-relative bearing. Shell2 can add
+                    // it directly to its fixed slot origin without inventing
+                    // a hidden canvas offset.
+                    position: [0.0, font_pixels],
+                    font_pixels,
+                    slant: 0.0,
+                }],
+                font,
+                viewport_width: extent,
+                viewport_height: extent,
+                raster_width: extent,
+                raster_height: extent,
+                positioning: RetainedFontPositioning::SceneOrigin,
+            },
+            foreground: GpuFontRgba::new(r, g, b, a),
+        }],
+        fit: FontStampFit::Tight,
+    };
+    let pending = match submit_stamp(request) {
+        Ok(pending) => pending,
+        Err(FontKernelError::QueueFull) => return ERROR_BUSY,
+        Err(_) => return ERROR_UI4,
+    };
+    let ticket = pending.ticket().raw();
+    let sprite_id = next_blueprint_font_sprite_id();
+    let mut surfaces = SURFACES.lock();
+    let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+        // Dropping `pending` deliberately abandons only this caller-owned
+        // request handle; it cannot retain a UI4 frame because none was begun.
+        return ERROR_NOT_FOUND;
+    };
+    surface
+        .font_sprite_requests
+        .push(BlueprintFontSpriteRequest {
+            ticket,
+            sprite_id,
+            state: BlueprintFontSpriteState::Pending(pending),
+        });
+    *out_ticket = ticket;
+    0
+}
+
+pub(crate) fn font_sprite_status(
+    owner: WindowOwner,
+    window_id: u32,
+    ticket: u64,
+    out: &mut TrueosUi4FontSpriteStatusV1,
+) -> i32 {
+    let mut surfaces = SURFACES.lock();
+    let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+        return ERROR_NOT_FOUND;
+    };
+    let Some(index) = surface
+        .font_sprite_requests
+        .iter()
+        .position(|request| request.ticket == ticket)
+    else {
+        return ERROR_NOT_FOUND;
+    };
+    let request = &mut surface.font_sprite_requests[index];
+    if let BlueprintFontSpriteState::Pending(pending) = &mut request.state
+        && let Some(completion) = pending.try_take()
+    {
+        match completion {
+            Ok(source) => {
+                let descriptor = source.surface();
+                let origin_px = source.origin_px();
+                let sprite_id = request.sprite_id;
+                if let Some(slot) = surface
+                    .sprites
+                    .iter()
+                    .position(|(current_id, _)| *current_id == sprite_id)
+                {
+                    // IDs are private and monotonically allocated, so this is
+                    // defensive only; never overwrite a caller-uploaded ID.
+                    if !matches!(surface.sprites[slot].1, BlueprintSpriteSource::Font(_)) {
+                        request.state = BlueprintFontSpriteState::Failed;
+                    } else {
+                        surface.sprites[slot].1 = BlueprintSpriteSource::Font(source);
+                        request.state = BlueprintFontSpriteState::Ready {
+                            width: descriptor.width,
+                            height: descriptor.height,
+                            origin_px,
+                        };
+                    }
+                } else {
+                    surface
+                        .sprites
+                        .push((sprite_id, BlueprintSpriteSource::Font(source)));
+                    request.state = BlueprintFontSpriteState::Ready {
+                        width: descriptor.width,
+                        height: descriptor.height,
+                        origin_px,
+                    };
+                }
+            }
+            Err(_) => request.state = BlueprintFontSpriteState::Failed,
+        }
+    }
+    match request.state {
+        BlueprintFontSpriteState::Pending(_) => out.state = FONT_SPRITE_STATUS_PENDING,
+        BlueprintFontSpriteState::Ready {
+            width,
+            height,
+            origin_px,
+        } => {
+            *out = TrueosUi4FontSpriteStatusV1 {
+                state: FONT_SPRITE_STATUS_READY,
+                sprite_id: request.sprite_id,
+                width,
+                height,
+                origin_x: origin_px[0],
+                origin_y: origin_px[1],
+            };
+        }
+        BlueprintFontSpriteState::Failed => out.state = FONT_SPRITE_STATUS_FAILED,
+    }
+    0
 }
 
 pub(crate) fn begin_sprite_rgba8_upload(
@@ -4814,7 +5182,14 @@ pub(crate) fn begin_sprite_rgba8_upload(
     let Some(packed_len) = expected_rgba8_len(width, height) else {
         return ERROR_INVALID;
     };
-    if sprite_id == 0 || sprite_id == TEXT_BACKBUFFER_SPRITE_ID || packed_len == 0 {
+    // The high-bit namespace is reserved for opaque FontKernel products. A
+    // Blueprint can only receive those IDs from a successful font-ticket poll;
+    // normal RGBA uploads cannot replace or shadow them.
+    if sprite_id == 0
+        || sprite_id == TEXT_BACKBUFFER_SPRITE_ID
+        || sprite_id & 0x8000_0000 != 0
+        || packed_len == 0
+    {
         return ERROR_INVALID;
     }
     let Some(row_bytes) = (width as usize).checked_mul(core::mem::size_of::<u32>()) else {
@@ -4850,7 +5225,7 @@ pub(crate) fn begin_sprite_rgba8_upload(
             let retained_bytes = surface
                 .sprites
                 .iter()
-                .fold(0usize, |total, (_, owned)| total.saturating_add(owned.bytes));
+                .fold(0usize, |total, (_, owned)| total.saturating_add(owned.bytes()));
             crate::log_error!(target: "ui4/blueprint-frame";
                 "sprite allocation failed owner={:?} window={} sprite={} extent={}x{} requested_bytes={} retained_sprites={} retained_bytes={} stage=ppgtt-va arena_bytes={}\n",
                 owner,
@@ -4868,7 +5243,7 @@ pub(crate) fn begin_sprite_rgba8_upload(
         let retained_bytes = surface
             .sprites
             .iter()
-            .fold(0usize, |total, (_, owned)| total.saturating_add(owned.bytes));
+            .fold(0usize, |total, (_, owned)| total.saturating_add(owned.bytes()));
         (gpu, retained_bytes, surface.sprites.len())
     };
     let Some((phys, virt)) = crate::dma::alloc_ppgtt(bytes, crate::intel::WARM_ALIGN) else {
@@ -4930,7 +5305,10 @@ fn allocate_sprite_gpu_va(
         .sprites
         .iter()
         .filter(|(sprite_id, _)| *sprite_id != replacing_sprite_id)
-        .map(|(_, owned)| (owned.surface.gpu, owned.surface.gpu.saturating_add(owned.bytes as u64)))
+        .map(|(_, owned)| {
+            let source = owned.surface();
+            (source.gpu, source.gpu.saturating_add(owned.bytes() as u64))
+        })
         .collect::<Vec<_>>();
     spans.sort_unstable_by_key(|span| span.0);
     let mut candidate = base;
@@ -5025,13 +5403,18 @@ pub(crate) fn finish_sprite_rgba8_upload(
             .iter()
             .position(|(current_id, _)| *current_id == sprite_id)
         {
-            Some(core::mem::replace(&mut surface.sprites[slot].1, upload.owned))
+            Some(core::mem::replace(
+                &mut surface.sprites[slot].1,
+                BlueprintSpriteSource::Uploaded(upload.owned),
+            ))
         } else {
-            surface.sprites.push((sprite_id, upload.owned));
+            surface
+                .sprites
+                .push((sprite_id, BlueprintSpriteSource::Uploaded(upload.owned)));
             None
         }
     };
-    if let Some(old) = old {
+    if let Some(BlueprintSpriteSource::Uploaded(old)) = old {
         destroy_rgba8_surface(old);
     }
     crate::log_trace!(target: "ui4/blueprint-frame";
@@ -5489,14 +5872,14 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
         });
     }
     for quad in upload.quads {
-        let source = if quad.sprite_id == 0 {
-            solid.surface
+        let (source, premultiplied_source) = if quad.sprite_id == 0 {
+            (solid.surface, false)
         } else if quad.sprite_id == TEXT_BACKBUFFER_SPRITE_ID {
             let Some(source) = retained_font_canvas_surface(surface) else {
                 cancel_blueprint_sprite_frame_without_live_gpu(surface);
                 return ERROR_NOT_FOUND;
             };
-            source
+            (source, true)
         } else {
             let Some((_, source)) = surface
                 .sprites
@@ -5506,14 +5889,17 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
                 cancel_blueprint_sprite_frame_without_live_gpu(surface);
                 return ERROR_NOT_FOUND;
             };
-            source.surface
+            (source.surface(), source.is_premultiplied())
         };
         // Physical XeLP has proven the general sprite-quad source-over path,
         // while the older compact alpha-rectangle source-over kernel can
         // accept a submission without retiring its marker. Keep opaque 1:1
         // copies eligible for the compact path, but route every blended sprite
         // through the newer ordered quad worklist.
-        let conversion = if quad.sprite_id == 0 || quad.flags & SPRITE_QUAD_FLAG_SRC_OVER != 0 {
+        let conversion = if quad.sprite_id == 0
+            || premultiplied_source
+            || quad.flags & SPRITE_QUAD_FLAG_SRC_OVER != 0
+        {
             AlphaRectConversion::Unsupported
         } else {
             alpha_rect_descriptor(quad, source, destination)
@@ -5528,10 +5914,7 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
             AlphaRectConversion::Unsupported => prepared.push(PreparedOp::Quad {
                 sprite_id: quad.sprite_id,
                 source,
-                descriptor: gpgpu_sprite_quad_descriptor(
-                    quad,
-                    quad.sprite_id == TEXT_BACKBUFFER_SPRITE_ID,
-                ),
+                descriptor: gpgpu_sprite_quad_descriptor(quad, premultiplied_source),
             }),
         }
     }
@@ -6212,7 +6595,9 @@ fn release_surface(mut surface: BlueprintSceneSurface, release: BlueprintSurface
         destroy_rgba8_surface(upload.owned);
     }
     for (_, sprite) in surface.sprites.drain(..) {
-        destroy_rgba8_surface(sprite);
+        if let BlueprintSpriteSource::Uploaded(sprite) = sprite {
+            destroy_rgba8_surface(sprite);
+        }
     }
     if let Some(solid) = surface.solid_source.take() {
         destroy_rgba8_surface(solid);
@@ -6452,5 +6837,11 @@ mod tests {
             descriptor.flags,
             SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER | SPRITE_QUAD_WORKLIST_FLAG_PREMUL_SRC,
         );
+    }
+
+    #[test]
+    fn font_kernel_sprite_sources_are_premultiplied() {
+        assert!(sprite_source_is_premultiplied(true));
+        assert!(!sprite_source_is_premultiplied(false));
     }
 }

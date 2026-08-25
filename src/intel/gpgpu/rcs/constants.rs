@@ -1276,53 +1276,6 @@ const _: () = assert!(
 const _: () =
     assert!(DIRECT_RCS_GPU_VA_FONT_COVERAGE_SECONDARY_BASE < DIRECT_RCS_GPU_VA_FONT_COVERAGE_LIMIT);
 const _: () = assert!(DIRECT_RCS_GPU_VA_FONT_COVERAGE_LIMIT <= DIRECT_RCS_PPGTT_LIMIT_BYTES);
-// Font Rush keeps four run-owned RGBA8 atlases at stable addresses in the
-// Font context's private PPGTT. These numeric addresses may overlap resources
-// in another RCS context without aliasing: only the Font page-table root can
-// resolve these leaves. The complete atlas window ends exactly where dynamic
-// UI producer surfaces begin in that same address space.
-pub(crate) const GPGPU_FONT_RUSH_RGBA8_ATLAS_COUNT: usize = 4;
-pub(crate) const GPGPU_FONT_RUSH_RGBA8_ATLAS_WIDTH: u32 = 2048;
-pub(crate) const GPGPU_FONT_RUSH_RGBA8_ATLAS_HEIGHT: u32 = 1024;
-pub(crate) const GPGPU_FONT_RUSH_RGBA8_ATLAS_PITCH_BYTES: u32 =
-    GPGPU_FONT_RUSH_RGBA8_ATLAS_WIDTH * core::mem::size_of::<u32>() as u32;
-pub(crate) const GPGPU_FONT_RUSH_RGBA8_ATLAS_BYTES: usize = 8 * 1024 * 1024;
-const FONT_RCS_GPU_VA_RUSH_RGBA8_BASE: u64 = 0x1000_0000;
-const FONT_RCS_GPU_VA_RUSH_RGBA8_LIMIT: u64 = 0x1200_0000;
-
-const fn font_rush_rgba8_atlas_gpu(class: u8) -> Option<u64> {
-    if (class as usize) >= GPGPU_FONT_RUSH_RGBA8_ATLAS_COUNT {
-        return None;
-    }
-    Some(
-        FONT_RCS_GPU_VA_RUSH_RGBA8_BASE + (class as u64) * GPGPU_FONT_RUSH_RGBA8_ATLAS_BYTES as u64,
-    )
-}
-
-const fn is_exact_font_rush_rgba8_atlas_range(gpu: u64, len: usize) -> bool {
-    if len != GPGPU_FONT_RUSH_RGBA8_ATLAS_BYTES
-        || gpu < FONT_RCS_GPU_VA_RUSH_RGBA8_BASE
-        || gpu >= FONT_RCS_GPU_VA_RUSH_RGBA8_LIMIT
-    {
-        return false;
-    }
-    (gpu - FONT_RCS_GPU_VA_RUSH_RGBA8_BASE).is_multiple_of(GPGPU_FONT_RUSH_RGBA8_ATLAS_BYTES as u64)
-}
-
-const _: () = assert!(
-    GPGPU_FONT_RUSH_RGBA8_ATLAS_PITCH_BYTES as usize * GPGPU_FONT_RUSH_RGBA8_ATLAS_HEIGHT as usize
-        == GPGPU_FONT_RUSH_RGBA8_ATLAS_BYTES
-);
-const _: () = assert!(FONT_RCS_GPU_VA_RUSH_RGBA8_BASE.is_multiple_of(4096));
-const _: () = assert!(FONT_RCS_GPU_VA_RUSH_RGBA8_LIMIT.is_multiple_of(4096));
-const _: () = assert!(
-    FONT_RCS_GPU_VA_RUSH_RGBA8_BASE
-        + (GPGPU_FONT_RUSH_RGBA8_ATLAS_COUNT * GPGPU_FONT_RUSH_RGBA8_ATLAS_BYTES) as u64
-        == FONT_RCS_GPU_VA_RUSH_RGBA8_LIMIT
-);
-const _: () =
-    assert!(FONT_RCS_GPU_VA_RUSH_RGBA8_LIMIT == crate::r::ui_surface::UI_SURFACE_GPU_BASE);
-const _: () = assert!(FONT_RCS_GPU_VA_RUSH_RGBA8_LIMIT <= DIRECT_RCS_PPGTT_LIMIT_BYTES);
 // ParticleCraft instances retain their own state/control allocation. This
 // direct-RCS-only VA window is disjoint from both persistent font masks and
 // UI4 frame surfaces, so two live Blueprint windows never remap one another.

@@ -87,12 +87,8 @@ pub(crate) fn build_probe_text() -> String {
     }
     let command_after_restore = read_command(dev);
     let command_restored = command_after_restore == original_command;
-    let claim_released = crate::pci::release_device_claim(
-        dev.bus,
-        dev.slot,
-        dev.function,
-        CLAIM_OWNER,
-    );
+    let claim_released =
+        crate::pci::release_device_claim(dev.bus, dev.slot, dev.function, CLAIM_OWNER);
 
     match probe_result {
         Ok(snapshot) => append_snapshot(&mut out, snapshot),
@@ -156,9 +152,7 @@ fn run_claimed_probe(
             command_readback
         ));
     }
-    if (command_readback & PCI_COMMAND_BUS_MASTER)
-        != (original_command & PCI_COMMAND_BUS_MASTER)
-    {
+    if (command_readback & PCI_COMMAND_BUS_MASTER) != (original_command & PCI_COMMAND_BUS_MASTER) {
         return Err(alloc::format!(
             "BUS_MASTER changed unexpectedly, original=0x{:04X} readback=0x{:04X}",
             original_command,
@@ -187,10 +181,7 @@ fn append_snapshot(out: &mut String, snapshot: MeiReachabilitySnapshot) {
     writeln!(
         out,
         "bar0=0x{:016X} original_command=0x{:04X} probe_command=0x{:04X} command_readback=0x{:04X}",
-        snapshot.bar0,
-        snapshot.original_command,
-        snapshot.probe_command,
-        snapshot.command_readback
+        snapshot.bar0, snapshot.original_command, snapshot.probe_command, snapshot.command_readback
     )
     .unwrap();
     writeln!(
@@ -205,30 +196,10 @@ fn append_snapshot(out: &mut String, snapshot: MeiReachabilitySnapshot) {
     )
     .unwrap();
 
-    writeln!(
-        out,
-        "first H_CSR[0x04]=0x{:08X}",
-        snapshot.first_host_csr
-    )
-    .unwrap();
-    super::tlb_platform::append_mei_csr_decode(
-        out,
-        "host",
-        snapshot.first_host_csr,
-        false,
-    );
-    writeln!(
-        out,
-        "first ME_CSR_HA[0x0C]=0x{:08X}",
-        snapshot.first_firmware_csr
-    )
-    .unwrap();
-    super::tlb_platform::append_mei_csr_decode(
-        out,
-        "firmware",
-        snapshot.first_firmware_csr,
-        true,
-    );
+    writeln!(out, "first H_CSR[0x04]=0x{:08X}", snapshot.first_host_csr).unwrap();
+    super::tlb_platform::append_mei_csr_decode(out, "host", snapshot.first_host_csr, false);
+    writeln!(out, "first ME_CSR_HA[0x0C]=0x{:08X}", snapshot.first_firmware_csr).unwrap();
+    super::tlb_platform::append_mei_csr_decode(out, "firmware", snapshot.first_firmware_csr, true);
     writeln!(
         out,
         "second H_CSR=0x{:08X} ME_CSR_HA=0x{:08X} stable={}",
@@ -259,11 +230,9 @@ fn map_status_window(bar0: u64) -> Result<usize, String> {
         }
     }
 
-    let mapped = crate::pci::mmio::map_mmio_region_exact(
-        bar0,
-        super::tlb_platform::MEI_STATUS_MAP_BYTES,
-    )
-    .map_err(|error| alloc::format!("MMIO map failed: {:?}", error))?;
+    let mapped =
+        crate::pci::mmio::map_mmio_region_exact(bar0, super::tlb_platform::MEI_STATUS_MAP_BYTES)
+            .map_err(|error| alloc::format!("MMIO map failed: {:?}", error))?;
     let address = mapped.as_ptr() as usize;
     *cache = Some((bar0, address));
     Ok(address)
@@ -271,14 +240,10 @@ fn map_status_window(bar0: u64) -> Result<usize, String> {
 
 fn read_status_pair(mapped: usize) -> (u32, u32) {
     let host = unsafe {
-        core::ptr::read_volatile(
-            (mapped + super::tlb_platform::MEI_H_CSR) as *const u32,
-        )
+        core::ptr::read_volatile((mapped + super::tlb_platform::MEI_H_CSR) as *const u32)
     };
     let firmware = unsafe {
-        core::ptr::read_volatile(
-            (mapped + super::tlb_platform::MEI_ME_CSR_HA) as *const u32,
-        )
+        core::ptr::read_volatile((mapped + super::tlb_platform::MEI_ME_CSR_HA) as *const u32)
     };
     (host, firmware)
 }
@@ -290,13 +255,7 @@ fn read_command(dev: PciDevice) -> u16 {
 fn write_command(dev: PciDevice, command: u16) {
     // Status occupies the upper half of this dword and contains RW1C bits.
     // Supplying zero there changes only Command and cannot acknowledge status.
-    crate::pci::config_write_u32(
-        dev.bus,
-        dev.slot,
-        dev.function,
-        0x04,
-        u32::from(command),
-    );
+    crate::pci::config_write_u32(dev.bus, dev.slot, dev.function, 0x04, u32::from(command));
 }
 
 fn csr_plausible(raw: u32) -> bool {

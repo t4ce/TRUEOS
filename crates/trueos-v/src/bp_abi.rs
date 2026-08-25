@@ -404,6 +404,19 @@ pub struct TrueosUi4SpriteQuad {
     pub flags: u32,
 }
 
+/// Opaque asynchronous glyph-resource state. The ticket and all glyph cache
+/// keys remain Blueprint-owned; `sprite_id` is valid only while `state=READY`.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosUi4FontSpriteStatusV1 {
+    pub state: u32,
+    pub sprite_id: u32,
+    pub width: u32,
+    pub height: u32,
+    pub origin_x: i32,
+    pub origin_y: i32,
+}
+
 unsafe extern "C" {
     pub fn trueos_cabi_lumen_template_open(system_ptr: *const u8, system_len: usize) -> i32;
     pub fn trueos_cabi_lumen_prompt_submit(
@@ -664,6 +677,19 @@ unsafe extern "C" {
         height: u32,
         data_ptr: *const u8,
         data_len: usize,
+    ) -> i32;
+    pub fn trueos_cabi_ui4_scene_font_sprite_request_v1(
+        window_id: u32,
+        font_id: u32,
+        scalar: u32,
+        font_pixels: f32,
+        color_rgba: u32,
+        out_ticket: *mut u64,
+    ) -> i32;
+    pub fn trueos_cabi_ui4_scene_font_sprite_status_v1(
+        window_id: u32,
+        ticket: u64,
+        out: *mut TrueosUi4FontSpriteStatusV1,
     ) -> i32;
     pub fn trueos_cabi_ui4_scene_sprite_frame_begin(window_id: u32, clear_rgba: u32) -> i32;
     pub fn trueos_cabi_ui4_scene_visual_frame_begin(window_id: u32) -> i32;
