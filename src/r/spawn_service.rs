@@ -101,7 +101,6 @@ define_started_flags!(
     USER_INPUT_RECORD_WRITER_STARTED,
     TRUEOSFS_RW_PROBE_STARTED,
     BP_AUTOSTART_STARTED,
-    WEAVE_HELLO_AUTOSTART_STARTED,
     APP_VM_RUN_QUEUE_STARTED,
     FACTORY_RAM_PROBE_STARTED,
     NET_TCP_SHELL_STARTED,
@@ -1289,10 +1288,6 @@ fn spawn_bp_autostart(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |spawner| crate::r::restart::autostart_task(spawner))
 }
 
-fn spawn_weave_hello_autostart(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| crate::r::restart::weave_hello_autostart_task())
-}
-
 fn spawn_net_tcp_shell(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |spawner| {
         crate::shell2::task(spawner, &crate::shell2::NET_TCP_SHELL_BACKEND)
@@ -1486,7 +1481,7 @@ const NET_ANY_CONFIGURED_AND_ROOT_READY: u32 =
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 73
+const TASK_COUNT: usize = 72
     + cfg!(feature = "trueos_h264_encode_stream") as usize
     + cfg!(feature = "trueos_lumen") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
@@ -1665,12 +1660,6 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     ),
     unix_fd_probe_task_spec(),
     TaskSpec::enabled("app-vm-run-queue", 0, &APP_VM_RUN_QUEUE_STARTED, spawn_app_vm_run_queue),
-    TaskSpec::disabled(
-        "weave-hello-autostart",
-        crate::r::readiness::BACKGROUND_AP_WORKER_READY | crate::r::readiness::VTHREAD_HW_TAG_READY,
-        &WEAVE_HELLO_AUTOSTART_STARTED,
-        spawn_weave_hello_autostart,
-    ),
     TaskSpec::enabled(
         "bp-autostart",
         BP_AUTOSTART_READY,

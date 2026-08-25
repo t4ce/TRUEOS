@@ -1,0 +1,14 @@
+{
+  "blueprints": [
+    { "action": "skip", "archive": "swarm.bp", "online_selector": "swarm", "slot": "swm", "settle_ms": 250 },
+    { "action": "launch", "archive": "img.bp", "online_selector": "img", "slot": "img", "settle_ms": 250, "launch_script": "show kernel:logo center nohit\nshow kernel:intel-graphics bottom-left\nshow kernel:bgrt bottom-right" },
+    { "action": "skip", "archive": "horizon.bp", "slot": "hor", "settle_ms": 250 },
+    { "action": "skip", "archive": "mandelbrot.bp", "slot": "man", "settle_ms": 750 },
+    { "action": "skip", "archive": "flags.bp", "slot": "flg", "settle_ms": 750 },
+    { "action": "skip", "archive": "weather.bp", "slot": "wth", "settle_ms": 750 },
+    { "action": "skip", "archive": "chart.bp", "slot": "chr", "settle_ms": 750 },
+    { "action": "skip", "archive": "hello_world.bp", "slot": "h_w", "settle_ms": 750 },
+    { "action": "skip", "archive": "websys.bp", "slot": "fs", "settle_ms": 750 },
+    { "action": "skip", "archive": "bat.bp", "slot": "bat", "settle_ms": 750, "args": ["--help"] }
+  ]
+}

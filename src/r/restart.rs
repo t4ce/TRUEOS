@@ -6,14 +6,15 @@
 
 use alloc::{string::String, vec::Vec};
 
+use serde::Deserialize;
 use trueos_executor::Spawner;
 use trueos_time::{Duration, Timer};
 
-const QUICK_START_SETTLE: Duration = Duration::from_millis(250);
-const NORMAL_START_SETTLE: Duration = Duration::from_millis(750);
 const VM_STORE_READY_TIMEOUT_MS: u64 = 30_000;
 const VM_STORE_POLL_INTERVAL: Duration = Duration::from_millis(25);
 const VM_RESUME_SETTLE: Duration = Duration::from_millis(150);
+const COLD_START_BLUEPRINTS_JSON: &[u8] =
+    include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/startup.json"));
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RestartPolicy {
@@ -31,96 +32,43 @@ impl RestartPolicy {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
 enum ColdStartAction {
     Skip,
     Launch,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ColdStartBlueprint {
     action: ColdStartAction,
-    archive: &'static str,
-    online_selector: Option<&'static str>,
-    slot: &'static str,
-    args: &'static [&'static str],
-    launch_script: Option<&'static str>,
-    settle: Duration,
+    archive: String,
+    online_selector: Option<String>,
+    slot: String,
+    #[serde(default)]
+    args: Vec<String>,
+    launch_script: Option<String>,
+    settle_ms: u64,
 }
 
 impl ColdStartBlueprint {
-    const fn with_action(
-        action: ColdStartAction,
-        archive: &'static str,
-        slot: &'static str,
-        settle: Duration,
-    ) -> Self {
-        Self {
-            action,
-            archive,
-            online_selector: None,
-            slot,
-            args: &[],
-            launch_script: None,
-            settle,
-        }
+    fn label(&self) -> &str {
+        self.archive.strip_suffix(".bp").unwrap_or(&self.archive)
     }
 
-    const fn skip(archive: &'static str, slot: &'static str, settle: Duration) -> Self {
-        Self::with_action(ColdStartAction::Skip, archive, slot, settle)
-    }
-
-    #[expect(
-        dead_code,
-        reason = "launch is the deliberate configuration edit; the checked-in profile may skip all entries"
-    )]
-    const fn launch(archive: &'static str, slot: &'static str, settle: Duration) -> Self {
-        Self::with_action(ColdStartAction::Launch, archive, slot, settle)
-    }
-
-    const fn online_as(mut self, selector: &'static str) -> Self {
-        self.online_selector = Some(selector);
-        self
-    }
-
-    const fn with_args(mut self, args: &'static [&'static str]) -> Self {
-        self.args = args;
-        self
-    }
-
-    const fn with_launch_script(mut self, script: &'static str) -> Self {
-        self.launch_script = Some(script);
-        self
-    }
-
-    fn label(self) -> &'static str {
-        self.archive.strip_suffix(".bp").unwrap_or(self.archive)
-    }
-
-    fn online_selector(self) -> &'static str {
-        self.online_selector.unwrap_or_else(|| self.label())
+    fn online_selector(&self) -> &str {
+        self.online_selector
+            .as_deref()
+            .unwrap_or_else(|| self.label())
     }
 }
 
-// This is the only cold-start edit surface. Change `skip` to `launch` for the
-// Blueprints wanted after a power loss, reset, or ACPI reboot.
-const COLD_START_BLUEPRINTS: &[ColdStartBlueprint] = &[
-    ColdStartBlueprint::skip("swarm.bp", "swm", QUICK_START_SETTLE).online_as("swarm"),
-    ColdStartBlueprint::skip("img.bp", "img", QUICK_START_SETTLE)
-        .online_as("img")
-        .with_launch_script(
-            "show kernel:logo center nohit\nshow kernel:intel-graphics bottom-left\nshow kernel:bgrt bottom-right",
-        ),
-    ColdStartBlueprint::skip("horizon.bp", "hor", QUICK_START_SETTLE),
-    ColdStartBlueprint::skip("mandelbrot.bp", "man", NORMAL_START_SETTLE),
-    ColdStartBlueprint::skip("flags.bp", "flg", NORMAL_START_SETTLE),
-    ColdStartBlueprint::skip("weather.bp", "wth", NORMAL_START_SETTLE),
-    ColdStartBlueprint::skip("chart.bp", "chr", NORMAL_START_SETTLE),
-    ColdStartBlueprint::skip("hello_world.bp", "h_w", NORMAL_START_SETTLE),
-    ColdStartBlueprint::skip("websys.bp", "fs", NORMAL_START_SETTLE),
-    ColdStartBlueprint::skip("bat.bp", "bat", NORMAL_START_SETTLE)
-        .with_args(&["--help"]),
-];
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ColdStartConfiguration {
+    blueprints: Vec<ColdStartBlueprint>,
+}
 
 #[trueos_executor::task]
 pub(crate) async fn autostart_task(spawner: Spawner) {
@@ -136,7 +84,15 @@ pub(crate) async fn autostart_task(spawner: Spawner) {
 async fn cold_start_blueprints(spawner: Spawner) {
     crate::r::readiness::wait_for(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED).await;
 
-    for blueprint in COLD_START_BLUEPRINTS.iter().copied() {
+    let config: ColdStartConfiguration = match serde_json::from_slice(COLD_START_BLUEPRINTS_JSON) {
+        Ok(config) => config,
+        Err(error) => {
+            crate::log!("restart: cold-start configuration invalid error={error}\n");
+            return;
+        }
+    };
+
+    for blueprint in &config.blueprints {
         if blueprint.action == ColdStartAction::Skip {
             crate::log!(
                 "restart: cold-start skipped archive={} slot={}\n",
@@ -146,18 +102,18 @@ async fn cold_start_blueprints(spawner: Spawner) {
             continue;
         }
 
-        Timer::after(blueprint.settle).await;
+        Timer::after(Duration::from_millis(blueprint.settle_ms)).await;
 
         let target = crate::shell2::matrix_target_for_slot_name(
             crate::shell2::OUTPUT_SYSTEM_MASK,
-            blueprint.slot,
+            &blueprint.slot,
         );
-        let local_args = blueprint.args.iter().copied().map(String::from).collect();
-        let local = match blueprint.launch_script {
+        let local_args = blueprint.args.clone();
+        let local = match blueprint.launch_script.as_deref() {
             Some(script) => {
                 crate::shell2::cmds::run::submit_archive_name_to_target_from_app_db_with_launch_script_async(
                     target.clone(),
-                    blueprint.archive,
+                    &blueprint.archive,
                     String::from(script),
                 )
                 .await
@@ -165,7 +121,7 @@ async fn cold_start_blueprints(spawner: Spawner) {
             None => {
                 crate::shell2::cmds::run::submit_archive_name_to_target_from_app_db_default_async(
                     target.clone(),
-                    blueprint.archive,
+                    &blueprint.archive,
                     local_args,
                 )
                 .await
@@ -193,14 +149,14 @@ async fn cold_start_blueprints(spawner: Spawner) {
         // app.db contains both built-ins and downloads. Only when it has no
         // usable local entry do we ask the online catalog to fetch and run it.
         let selector = blueprint.online_selector();
-        let submitted = match blueprint.launch_script {
+        let submitted = match blueprint.launch_script.as_deref() {
             Some(script) => crate::shell2::submit_online_launch_script_to_target(
                 &spawner, target, selector, script,
             ),
             None => {
                 let mut args = Vec::with_capacity(blueprint.args.len().saturating_add(1));
                 args.push(String::from(selector));
-                args.extend(blueprint.args.iter().copied().map(String::from));
+                args.extend(blueprint.args.iter().cloned());
                 crate::shell2::submit_online_to_target(&spawner, target, args)
             }
         };

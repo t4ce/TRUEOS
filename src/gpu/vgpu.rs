@@ -1939,67 +1939,98 @@ pub(crate) fn create_retained_mesh(
         usize::try_from(descriptor.vertex_offset).map_err(|_| VgpuError::Unsupported)?;
     let index_offset =
         usize::try_from(descriptor.index_offset).map_err(|_| VgpuError::Unsupported)?;
-    let mut broker = BROKER.lock();
-    let device = lookup_device_mut(&mut broker, device_handle, principal)?;
-    ensure_live(device)?;
-    if !device.capabilities.contains(Capabilities::RENDER)
-        || !device.capabilities.contains(Capabilities::COMPUTE)
-    {
-        return Err(VgpuError::PermissionDenied);
-    }
-    let vertices = {
-        let record = lookup_buffer(device, vertex_buffer)?;
-        if record.usage & BUFFER_USAGE_VERTEX == 0
-            || vertex_offset
-                .checked_add(vertex_bytes)
-                .is_none_or(|end| end > record.bytes)
+    // Phase 1: authenticate and copy tenant input while holding BROKER.  The
+    // renderer's resident allocation changes its PPGTT and therefore takes
+    // RENDER_SUBMIT_RUNTIME; it must never run below this lock (the submit
+    // path takes the same locks in the opposite order through the executor).
+    let (vertices, indices, epoch) = {
+        let mut broker = BROKER.lock();
+        let device = lookup_device_mut(&mut broker, device_handle, principal)?;
+        ensure_live(device)?;
+        if !device.capabilities.contains(Capabilities::RENDER)
+            || !device.capabilities.contains(Capabilities::COMPUTE)
         {
-            return Err(VgpuError::Unsupported);
+            return Err(VgpuError::PermissionDenied);
         }
-        let virt = match record.backing {
-            BufferBacking::Dma { virt, .. } => virt,
-            BufferBacking::GuestPages { .. } => return Err(VgpuError::Unsupported),
+        let vertices = {
+            let record = lookup_buffer(device, vertex_buffer)?;
+            if record.usage & BUFFER_USAGE_VERTEX == 0
+                || vertex_offset
+                    .checked_add(vertex_bytes)
+                    .is_none_or(|end| end > record.bytes)
+            {
+                return Err(VgpuError::Unsupported);
+            }
+            let virt = match record.backing {
+                BufferBacking::Dma { virt, .. } => virt,
+                BufferBacking::GuestPages { .. } => return Err(VgpuError::Unsupported),
+            };
+            crate::intel::dma_flush(unsafe { virt.add(vertex_offset) }, vertex_bytes);
+            unsafe { core::slice::from_raw_parts(virt.add(vertex_offset), vertex_bytes) }.to_vec()
         };
-        crate::intel::dma_flush(unsafe { virt.add(vertex_offset) }, vertex_bytes);
-        unsafe { core::slice::from_raw_parts(virt.add(vertex_offset), vertex_bytes) }.to_vec()
-    };
-    let indices = {
-        let record = lookup_buffer(device, index_buffer)?;
-        if record.usage & BUFFER_USAGE_INDEX == 0
-            || index_offset
-                .checked_add(index_bytes)
-                .is_none_or(|end| end > record.bytes)
-        {
-            return Err(VgpuError::Unsupported);
-        }
-        let virt = match record.backing {
-            BufferBacking::Dma { virt, .. } => virt,
-            BufferBacking::GuestPages { .. } => return Err(VgpuError::Unsupported),
+        let indices = {
+            let record = lookup_buffer(device, index_buffer)?;
+            if record.usage & BUFFER_USAGE_INDEX == 0
+                || index_offset
+                    .checked_add(index_bytes)
+                    .is_none_or(|end| end > record.bytes)
+            {
+                return Err(VgpuError::Unsupported);
+            }
+            let virt = match record.backing {
+                BufferBacking::Dma { virt, .. } => virt,
+                BufferBacking::GuestPages { .. } => return Err(VgpuError::Unsupported),
+            };
+            crate::intel::dma_flush(unsafe { virt.add(index_offset) }, index_bytes);
+            unsafe { core::slice::from_raw_parts(virt.add(index_offset), index_bytes) }
+                .chunks_exact(4)
+                .map(|bytes| u32::from_le_bytes(bytes.try_into().expect("u32 index")))
+                .collect::<Vec<_>>()
         };
-        crate::intel::dma_flush(unsafe { virt.add(index_offset) }, index_bytes);
-        unsafe { core::slice::from_raw_parts(virt.add(index_offset), index_bytes) }
-            .chunks_exact(4)
-            .map(|bytes| u32::from_le_bytes(bytes.try_into().expect("u32 index")))
-            .collect::<Vec<_>>()
+        (vertices, indices, device.epoch)
     };
+
+    // Phase 2: allocate/map renderer-owned storage without BROKER held.
     let resident = crate::intel::render::create_resident_picasso_retained_posnormal_mesh(
         &vertices,
         &indices,
         v::vgpu::MAX_RETAINED_TRANSFORM_SEEDS,
     )
     .map_err(|_| VgpuError::Unsupported)?;
-    let epoch = device.epoch;
-    Ok(insert_retained_mesh(
-        device,
-        RetainedMeshRecord {
-            resident: Arc::new(resident),
-            static_geometry: None,
-            vertex_buffer,
-            index_buffer,
-            epoch,
-            in_flight: 0,
-        },
-    ))
+
+    // Phase 3: publish only into the same live device generation and only if
+    // both authenticated tenant handles still exist.  If close/destroy won
+    // the race, release this unpublished renderer allocation rather than
+    // attaching it to a replacement device or handle generation.
+    let mut resident = Some(resident);
+    let mut broker = BROKER.lock();
+    let publish = (|| {
+        let device = lookup_device_mut(&mut broker, device_handle, principal)?;
+        ensure_live(device)?;
+        if device.epoch != epoch
+            || lookup_buffer(device, vertex_buffer).is_err()
+            || lookup_buffer(device, index_buffer).is_err()
+        {
+            return Err(VgpuError::DeviceLost);
+        }
+        Ok(insert_retained_mesh(
+            device,
+            RetainedMeshRecord {
+                resident: Arc::new(resident.take().expect("unpublished resident allocation")),
+                static_geometry: None,
+                vertex_buffer,
+                index_buffer,
+                epoch,
+                in_flight: 0,
+            },
+        ))
+    })();
+    if publish.is_err() {
+        drop(broker);
+        let resident = resident.expect("failed publication retains resident allocation");
+        let _ = crate::intel::render::release_resident_churn_forward(&resident);
+    }
+    publish
 }
 
 pub(crate) fn destroy_retained_mesh(
@@ -2026,76 +2057,54 @@ pub(crate) fn destroy_retained_mesh(
         return Err(VgpuError::Busy);
     }
     let record = entry.record.take().ok_or(VgpuError::InvalidHandle)?;
+    // Consume neither Arc until both allocations are exclusively owned.  A
+    // partial successful unwrap followed by a Busy return would otherwise
+    // lose the static allocation when restoring this record.
+    if Arc::strong_count(&record.resident) != 1
+        || record
+            .static_geometry
+            .as_ref()
+            .is_some_and(|geometry| Arc::strong_count(&geometry.meshes) != 1)
+    {
+        entry.record = Some(record);
+        return Err(VgpuError::Busy);
+    }
     let RetainedMeshRecord {
         resident,
         static_geometry,
-        vertex_buffer,
-        index_buffer,
-        epoch,
-        in_flight,
+        ..
     } = record;
-    if let Some(static_geometry) = static_geometry {
-        let RetainedStaticGeometry {
-            vertex_buffer: static_vertex_buffer,
-            index_buffer: static_index_buffer,
-            vertex_offset,
-            index_offset,
-            draws,
-            meshes,
-        } = static_geometry;
-        let meshes = match Arc::try_unwrap(meshes) {
+    let static_meshes = if let Some(static_geometry) = static_geometry {
+        let meshes = match Arc::try_unwrap(static_geometry.meshes) {
             Ok(meshes) => meshes,
-            Err(meshes) => {
-                entry.record = Some(RetainedMeshRecord {
-                    resident,
-                    static_geometry: Some(RetainedStaticGeometry {
-                        vertex_buffer: static_vertex_buffer,
-                        index_buffer: static_index_buffer,
-                        vertex_offset,
-                        index_offset,
-                        draws,
-                        meshes,
-                    }),
-                    vertex_buffer,
-                    index_buffer,
-                    epoch,
-                    in_flight,
-                });
-                return Err(VgpuError::Busy);
-            }
+            Err(_) => unreachable!("preflighted static mesh ownership"),
         };
-        if !meshes
-            .iter()
-            .all(crate::intel::render::release_resident_triangle_mesh)
-        {
-            return Err(VgpuError::DeviceLost);
-        }
-    }
+        Some(meshes)
+    } else {
+        None
+    };
     let resident = match Arc::try_unwrap(resident) {
         Ok(resident) => resident,
-        Err(resident) => {
-            entry.record = Some(RetainedMeshRecord {
-                resident,
-                static_geometry: None,
-                vertex_buffer,
-                index_buffer,
-                epoch,
-                in_flight,
-            });
-            return Err(VgpuError::Busy);
-        }
+        Err(_) => unreachable!("preflighted resident ownership"),
     };
-    if crate::intel::render::release_resident_churn_forward(&resident) {
+    // The record is now detached from this exact device slot and no external
+    // Arc can retain either allocation.  Releasing it mutates the renderer
+    // PPGTT, so do that after dropping BROKER; otherwise teardown recreates
+    // the same BROKER -> RENDER_SUBMIT_RUNTIME inversion as creation.
+    drop(broker);
+    let mut static_released = true;
+    if let Some(meshes) = static_meshes.as_ref() {
+        for mesh in meshes {
+            static_released &= crate::intel::render::release_resident_triangle_mesh(mesh);
+        }
+    }
+    let resident_released = crate::intel::render::release_resident_churn_forward(&resident);
+    if static_released && resident_released {
         Ok(())
     } else {
-        entry.record = Some(RetainedMeshRecord {
-            resident: Arc::new(resident),
-            static_geometry: None,
-            vertex_buffer,
-            index_buffer,
-            epoch,
-            in_flight,
-        });
+        // Do not reattach a failed/quarantined renderer allocation to a
+        // possibly closed or replacement device generation.  The renderer
+        // owns the failed mapping until reset; its vGPU handle is gone.
         Err(VgpuError::DeviceLost)
     }
 }
