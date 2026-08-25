@@ -910,8 +910,7 @@ pub async fn replay_log_range_with_stats<D: BlockIo>(
     }
 
     Ok(ReplayLogStats {
-        physical_blocks: lba
-            .saturating_sub(params.data_lba.saturating_add(start_rel_blocks)),
+        physical_blocks: lba.saturating_sub(params.data_lba.saturating_add(start_rel_blocks)),
         logical_records,
         checkpoint_records,
         reached_end: lba == end_lba,
