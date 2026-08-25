@@ -80,6 +80,11 @@ pub(crate) fn build_probe_text() -> String {
     let original_command = read_command(dev);
     let mut command_modified = false;
     let probe_result = run_claimed_probe(dev, original_command, &mut command_modified);
+    let verified_snapshot = probe_result
+        .as_ref()
+        .ok()
+        .copied()
+        .filter(|snapshot| snapshot.plausible() && snapshot.stable());
 
     let command_before_restore = read_command(dev);
     if command_modified {
@@ -109,10 +114,30 @@ pub(crate) fn build_probe_text() -> String {
         yes_no(claim_released)
     )
     .unwrap();
-    if !command_restored || !claim_released {
+    let cleanup_complete = command_restored && claim_released;
+    if !cleanup_complete {
         writeln!(out, "cleanup_state=ATTENTION").unwrap();
     } else {
         writeln!(out, "cleanup_state=complete").unwrap();
+    }
+
+    if let Some(snapshot) = verified_snapshot {
+        if cleanup_complete {
+            let emitted =
+                super::tlb_mei_asset::emit_verified_asset_receipt(dev, snapshot.bar0);
+            writeln!(
+                out,
+                "important_log={} topic=mei-asset-tracking+manageability-posture",
+                if emitted {
+                    "emitted"
+                } else {
+                    "already-emitted-this-boot"
+                }
+            )
+            .unwrap();
+        } else {
+            writeln!(out, "important_log=skipped reason=cleanup-incomplete").unwrap();
+        }
     }
 
     out
@@ -205,12 +230,7 @@ fn append_snapshot(out: &mut String, snapshot: MeiReachabilitySnapshot) {
     )
     .unwrap();
 
-    writeln!(
-        out,
-        "first H_CSR[0x04]=0x{:08X}",
-        snapshot.first_host_csr
-    )
-    .unwrap();
+    writeln!(out, "first H_CSR[0x04]=0x{:08X}", snapshot.first_host_csr).unwrap();
     super::tlb_platform::append_mei_csr_decode(
         out,
         "host",
