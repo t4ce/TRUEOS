@@ -28,6 +28,18 @@ const RUNTIME_SERVICE_NAMES: [&str; 14] = [
     "QueryVariableInfo",
 ];
 
+const EFI_HII_DATABASE_PROTOCOL_GUID: EfiGuid = EfiGuid {
+    data1: 0xEF9F_C172,
+    data2: 0xA1B2,
+    data3: 0x4693,
+    data4: [0xB3, 0x27, 0x6D, 0x32, 0xFC, 0x41, 0x60, 0x42],
+};
+const EFI_HII_CONFIG_ROUTING_PROTOCOL_GUID: EfiGuid = EfiGuid {
+    data1: 0x587E_72D7,
+    data2: 0xCC50,
+    data3: 0x4F79,
+    data4: [0x82, 0x09, 0xCA, 0x29, 0x1F, 0xC1, 0xA1, 0x0F],
+};
 const TRUEOS_BIOS_CATALOG_GUID: EfiGuid = EfiGuid {
     data1: 0x184D_A5DE,
     data2: 0xFA77,
@@ -82,6 +94,11 @@ struct RuntimeServicesSnapshot {
     computed_crc32: u32,
     crc_valid: bool,
     pointers: [Option<usize>; RUNTIME_SERVICE_NAMES.len()],
+}
+
+struct StandardHiiExports {
+    database: Option<u64>,
+    config_routing: Option<u64>,
 }
 
 struct CatalogSnapshot {
@@ -291,18 +308,52 @@ fn append_setup_foundation(out: &mut String) {
         if boot_services_present {
             "preboot-HII-may-be-reachable"
         } else {
-            "not-captured-before-handoff"
+            "runtime-export-or-preboot-capture-required"
         }
     )
     .unwrap();
     writeln!(
         out,
-        "hii_truth=HII Database/Config Routing/Form Browser are Boot Services protocols; their GUIDs are not configuration-table entries and cannot be recovered by scanning the post-boot table list"
+        "hii_truth=HII Database/Config Routing/Form Browser interfaces are Boot Services protocols; firmware may additionally export static HII package/config buffers into the EFI System Configuration Table for OS-present use"
     )
     .unwrap();
+
+    match standard_hii_exports() {
+        Ok(exports) => {
+            writeln!(
+                out,
+                "standard_hii_runtime_export database={} database_ptr={} config_routing={} config_ptr={}",
+                present_absent(exports.database.is_some()),
+                format_optional_address(exports.database),
+                present_absent(exports.config_routing.is_some()),
+                format_optional_address(exports.config_routing)
+            )
+            .unwrap();
+            if exports.database.is_some() {
+                writeln!(
+                    out,
+                    "standard_hii_editor_path=exported package-list buffer is available for a future bounded parser; this command does not dereference or parse it yet"
+                )
+                .unwrap();
+            } else {
+                writeln!(
+                    out,
+                    "standard_hii_editor_path=not-published-by-this-firmware; use a preboot collector before ExitBootServices"
+                )
+                .unwrap();
+            }
+        }
+        Err(error) => writeln!(
+            out,
+            "standard_hii_runtime_export=unavailable detail=\"{}\"",
+            error
+        )
+        .unwrap(),
+    }
+
     writeln!(
         out,
-        "local_editor_path=preboot collector exports HII package lists + strings + forms + config metadata into a reserved handoff catalog; kernel parses and renders the same questions without screen scraping"
+        "local_editor_path=prefer a standard exported HII buffer when present; otherwise export HII package lists + strings + forms + config metadata into a reserved TRUEOS handoff catalog before ExitBootServices"
     )
     .unwrap();
     writeln!(
@@ -321,13 +372,25 @@ fn append_setup_foundation(out: &mut String) {
 fn append_handoff(out: &mut String) {
     writeln!(
         out,
-        "preboot_catalog_guid={}",
+        "standard_hii_database_guid={}",
+        EFI_HII_DATABASE_PROTOCOL_GUID.fmt_canonical()
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "standard_hii_config_routing_guid={}",
+        EFI_HII_CONFIG_ROUTING_PROTOCOL_GUID.fmt_canonical()
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "fallback_preboot_catalog_guid={}",
         TRUEOS_BIOS_CATALOG_GUID.fmt_canonical()
     )
     .unwrap();
     writeln!(
         out,
-        "preboot_catalog_contract magic=TRBIOS1 version={} flags=hii-packages/forms/strings/config/protocols payload=reserved-physical-memory crc32=required",
+        "fallback_preboot_catalog_contract magic=TRBIOS1 version={} flags=hii-packages/forms/strings/config/protocols payload=reserved-physical-memory crc32=required",
         BIOS_CATALOG_VERSION
     )
     .unwrap();
@@ -336,17 +399,22 @@ fn append_handoff(out: &mut String) {
         CatalogProbe::Absent => {
             writeln!(
                 out,
-                "preboot_catalog=absent collector=not-installed next=\"FirmwareScout.efi or a bootloader hook must run before ExitBootServices\""
+                "fallback_preboot_catalog=absent collector=not-installed next=\"FirmwareScout.efi or a bootloader hook must run before ExitBootServices when the standard runtime HII export is absent\""
             )
             .unwrap();
         }
         CatalogProbe::Invalid(error) => {
-            writeln!(out, "preboot_catalog=invalid detail=\"{}\"", error).unwrap();
+            writeln!(
+                out,
+                "fallback_preboot_catalog=invalid detail=\"{}\"",
+                error
+            )
+            .unwrap();
         }
         CatalogProbe::Valid(snapshot) => {
             writeln!(
                 out,
-                "preboot_catalog=valid table_phys=0x{:016X} payload_phys=0x{:016X} payload_bytes={} crc_valid={} stored=0x{:08X} computed=0x{:08X}",
+                "fallback_preboot_catalog=valid table_phys=0x{:016X} payload_phys=0x{:016X} payload_bytes={} crc_valid={} stored=0x{:08X} computed=0x{:08X}",
                 snapshot.table_phys,
                 snapshot.payload_phys,
                 snapshot.payload_bytes,
@@ -436,7 +504,7 @@ fn append_hints(out: &mut String) {
     append_live_controller_hints(out);
     writeln!(
         out,
-        "next_schema_step=export HII before handoff, then map labels such as RAID/RST/VMD/USB to exact formsets, question IDs, storage backends, valid options, defaults, and reset requirements"
+        "next_schema_step=parse a standard or TRUEOS-captured HII package buffer, then map labels such as RAID/RST/VMD/USB to exact formsets, question IDs, storage backends, valid options, defaults, and reset requirements"
     )
     .unwrap();
 }
@@ -518,6 +586,29 @@ fn runtime_services_snapshot() -> Result<RuntimeServicesSnapshot, String> {
         computed_crc32,
         crc_valid: computed_crc32 == header.crc32,
         pointers,
+    })
+}
+
+fn standard_hii_exports() -> Result<StandardHiiExports, String> {
+    let tables = crate::efi::configuration_tables()
+        .map_err(|error| alloc::format!("config tables: {error:?}"))?;
+    let mut database = None;
+    let mut config_routing = None;
+
+    for entry in tables {
+        if guid_eq(&entry.vendor_guid, &EFI_HII_DATABASE_PROTOCOL_GUID) {
+            database = (entry.vendor_table != 0).then_some(entry.vendor_table as u64);
+        } else if guid_eq(
+            &entry.vendor_guid,
+            &EFI_HII_CONFIG_ROUTING_PROTOCOL_GUID,
+        ) {
+            config_routing = (entry.vendor_table != 0).then_some(entry.vendor_table as u64);
+        }
+    }
+
+    Ok(StandardHiiExports {
+        database,
+        config_routing,
     })
 }
 
@@ -763,6 +854,12 @@ fn guid_eq(left: &EfiGuid, right: &EfiGuid) -> bool {
         && left.data2 == right.data2
         && left.data3 == right.data3
         && left.data4 == right.data4
+}
+
+fn format_optional_address(value: Option<u64>) -> String {
+    value
+        .map(|address| alloc::format!("0x{address:016X}"))
+        .unwrap_or_else(|| String::from("-"))
 }
 
 fn text_or_dash(value: Option<&str>) -> &str {
