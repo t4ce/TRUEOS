@@ -11,6 +11,7 @@ use super::super::{ShellBackend2, print_shell_line};
 
 const EFI_RUNTIME_SERVICES_SIGNATURE: u64 = 0x5652_4553_544E_5552;
 const MAX_RUNTIME_HEADER_BYTES: usize = 4096;
+const MAX_CATALOG_PAYLOAD_BYTES: u32 = 16 * 1024 * 1024;
 const RUNTIME_SERVICE_NAMES: [&str; 14] = [
     "GetTime",
     "SetTime",
@@ -390,8 +391,9 @@ fn append_handoff(out: &mut String) {
     .unwrap();
     writeln!(
         out,
-        "fallback_preboot_catalog_contract magic=TRBIOS1 version={} flags=hii-packages/forms/strings/config/protocols payload=reserved-physical-memory crc32=required",
-        BIOS_CATALOG_VERSION
+        "fallback_preboot_catalog_contract magic=TRBIOS1 version={} flags=hii-packages/forms/strings/config/protocols payload=reserved-physical-memory crc32=required max_payload_bytes={}",
+        BIOS_CATALOG_VERSION,
+        MAX_CATALOG_PAYLOAD_BYTES
     )
     .unwrap();
 
@@ -665,6 +667,13 @@ fn probe_catalog() -> CatalogProbe {
     if header.payload_bytes == 0 {
         return CatalogProbe::Invalid(String::from("catalog payload is empty"));
     }
+    if header.payload_bytes > MAX_CATALOG_PAYLOAD_BYTES {
+        return CatalogProbe::Invalid(alloc::format!(
+            "catalog payload_bytes={} exceeds limit {}",
+            header.payload_bytes,
+            MAX_CATALOG_PAYLOAD_BYTES
+        ));
+    }
     let Some(payload_phys) = crate::limine::try_as_phys_addr(header.payload_phys) else {
         return CatalogProbe::Invalid(alloc::format!(
             "catalog payload address is not mappable: 0x{:X}",
@@ -779,7 +788,12 @@ fn collect_firmware_identity_and_hints() -> Result<(FirmwareIdentity, Vec<SetupH
 
 fn append_live_controller_hints(out: &mut String) {
     if crate::pci::with_devices(|devices| devices.is_empty()) {
-        crate::pci::enumerate_impl();
+        writeln!(
+            out,
+            "live_policy_controllers=unavailable reason=pci-registry-empty"
+        )
+        .unwrap();
+        return;
     }
 
     writeln!(out, "live_policy_controllers:").unwrap();
