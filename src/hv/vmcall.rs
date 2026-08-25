@@ -93,7 +93,6 @@ pub const OP_BP_UI4_SCENE_COMPUTE_FRAME_PUBLISH: u32 = 0x12D;
 pub const OP_BP_UI4_SOLARA_FONT_SIZES: u32 = 0xB2; // arg0 cap -> count + FontSize payload
 pub const OP_BP_UI4_SOLARA_FRAME_OPEN: u32 = 0xB3; // arg0 x/y,arg1 width/height -> window
 pub const OP_BP_UI4_SOLARA_FRAME_BEGIN: u32 = 0xB4; // arg0 window,arg1 clear RGBA -> rc
-pub const OP_BP_UI4_SOLARA_TEXT_ROWS: u32 = 0xB5; // arg0 window,arg1 font/scale,payload rows -> rc
 pub const OP_BP_UI4_SOLARA_FRAME_PUBLISH: u32 = 0xB6; // arg0 window,arg1 x/y,payload w/h -> rc
 pub const OP_BP_UI4_SOLARA_FRAME_CLOSE: u32 = 0xB7; // arg0 window,arg1 close flags -> rc
 pub const OP_BP_UI4_SOLARA_TEXT_SCENE: u32 = 0xB8; // arg0 window,arg1 font,payload viewport/rows -> rc
@@ -1495,7 +1494,9 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                     payload.len() == core::mem::size_of::<v::vgpu::IndexedDrawBatchV2>()
                 })
                 .map(|payload| unsafe {
-                    core::ptr::read_unaligned(payload.as_ptr().cast::<v::vgpu::IndexedDrawBatchV2>())
+                    core::ptr::read_unaligned(
+                        payload.as_ptr().cast::<v::vgpu::IndexedDrawBatchV2>(),
+                    )
                 });
             let result = batch.ok_or(-22).and_then(|batch| {
                 crate::r::io::vgpu_cabi::broker_ui4_indexed_batch_submit_v2(
@@ -1520,9 +1521,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                     )
                 });
             let result = descriptor.ok_or(-22).and_then(|descriptor| {
-                crate::r::io::vgpu_cabi::broker_retained_mesh_create(
-                    principal, arg0, descriptor,
-                )
+                crate::r::io::vgpu_cabi::broker_retained_mesh_create(principal, arg0, descriptor)
             });
             match result {
                 Ok(mesh) => write_response(vm_id, seq, STATUS_OK, mesh, 0),
@@ -1543,12 +1542,12 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                     payload.len() == core::mem::size_of::<v::vgpu::RetainedFrameSubmit>()
                 })
                 .map(|payload| unsafe {
-                    core::ptr::read_unaligned(payload.as_ptr().cast::<v::vgpu::RetainedFrameSubmit>())
+                    core::ptr::read_unaligned(
+                        payload.as_ptr().cast::<v::vgpu::RetainedFrameSubmit>(),
+                    )
                 });
             let result = submit.ok_or(-22).and_then(|submit| {
-                crate::r::io::vgpu_cabi::broker_retained_frame_submit(
-                    principal, arg0, arg1, submit,
-                )
+                crate::r::io::vgpu_cabi::broker_retained_frame_submit(principal, arg0, arg1, submit)
             });
             match result {
                 Ok(point) => write_record_response(vm_id, seq, 0, &point),
@@ -1722,82 +1721,6 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 arg0 as u32,
                 arg1 as u32,
             );
-            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
-            DispatchOutcome::Resume
-        }
-        OP_BP_UI4_SOLARA_TEXT_ROWS => {
-            let Some(payload) = request_payload(vm_id, req_len) else {
-                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
-                return DispatchOutcome::Resume;
-            };
-            let Some(header) = payload.get(..16) else {
-                write_response(vm_id, seq, STATUS_OK, (-1i64) as u64, 0);
-                return DispatchOutcome::Resume;
-            };
-            let dst_x = i32::from_le_bytes([header[0], header[1], header[2], header[3]]);
-            let dst_y = i32::from_le_bytes([header[4], header[5], header[6], header[7]]);
-            let rgba = u32::from_le_bytes([header[8], header[9], header[10], header[11]]);
-            let row_count =
-                u32::from_le_bytes([header[12], header[13], header[14], header[15]]) as usize;
-            if row_count == 0 || row_count > 64 {
-                write_response(vm_id, seq, STATUS_OK, (-1i64) as u64, 0);
-                return DispatchOutcome::Resume;
-            }
-            let mut offset = 16usize;
-            let mut rows = alloc::vec::Vec::with_capacity(row_count);
-            for _ in 0..row_count {
-                let Some(row_header) = payload.get(offset..offset.saturating_add(12)) else {
-                    write_response(vm_id, seq, STATUS_OK, (-1i64) as u64, 0);
-                    return DispatchOutcome::Resume;
-                };
-                let x = f32::from_bits(u32::from_le_bytes([
-                    row_header[0],
-                    row_header[1],
-                    row_header[2],
-                    row_header[3],
-                ]));
-                let y = f32::from_bits(u32::from_le_bytes([
-                    row_header[4],
-                    row_header[5],
-                    row_header[6],
-                    row_header[7],
-                ]));
-                let text_len = u32::from_le_bytes([
-                    row_header[8],
-                    row_header[9],
-                    row_header[10],
-                    row_header[11],
-                ]) as usize;
-                offset = offset.saturating_add(12);
-                let Some(text) = payload.get(offset..offset.saturating_add(text_len)) else {
-                    write_response(vm_id, seq, STATUS_OK, (-1i64) as u64, 0);
-                    return DispatchOutcome::Resume;
-                };
-                rows.push(crate::ui4::blueprint_text::TrueosUi4SolaraTextRow {
-                    text_ptr: text.as_ptr(),
-                    text_len,
-                    x,
-                    y,
-                });
-                offset = offset.saturating_add(text_len);
-            }
-            if offset != payload.len() {
-                write_response(vm_id, seq, STATUS_OK, (-1i64) as u64, 0);
-                return DispatchOutcome::Resume;
-            }
-            let (font_id, native_scale) = unpack_u32_pair(arg1);
-            let rc = unsafe {
-                crate::ui4::blueprint_text::trueos_cabi_ui4_solara_text_rows(
-                    arg0 as u32,
-                    font_id,
-                    native_scale,
-                    dst_x,
-                    dst_y,
-                    rgba,
-                    rows.as_ptr(),
-                    rows.len(),
-                )
-            };
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }

@@ -60,7 +60,6 @@ pub const OP_BP_UI4_SCENE_COMPUTE_FRAME_PUBLISH: u32 = 0x12D;
 pub const OP_BP_UI4_SOLARA_FONT_SIZES: u32 = 0xB2;
 pub const OP_BP_UI4_SOLARA_FRAME_OPEN: u32 = 0xB3;
 pub const OP_BP_UI4_SOLARA_FRAME_BEGIN: u32 = 0xB4;
-pub const OP_BP_UI4_SOLARA_TEXT_ROWS: u32 = 0xB5;
 pub const OP_BP_UI4_SOLARA_FRAME_PUBLISH: u32 = 0xB6;
 /// `arg0=window`, `arg1=close flags` (zero preserves legacy/default teardown).
 pub const OP_BP_UI4_SOLARA_FRAME_CLOSE: u32 = 0xB7;

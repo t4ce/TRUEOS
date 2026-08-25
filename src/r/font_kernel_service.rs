@@ -851,13 +851,6 @@ pub(crate) struct FontFrameStamp {
     coverage_build_ms: u64,
     coverage_audit_ms: u64,
     coverage_submits: usize,
-    gpu_outline_cache_hits: usize,
-    gpu_outline_cache_misses: usize,
-    gpu_tile_cache_hits: usize,
-    gpu_tile_cache_misses: usize,
-    gpu_cache_evictions: usize,
-    gpu_resident_outlines: usize,
-    gpu_resident_tiles: usize,
     instance_release_ms: u64,
     total_service_ms: u64,
     release: crate::intel::gpgpu::GpgpuRgba8ReleaseFence,
@@ -911,34 +904,6 @@ impl FontFrameStamp {
 
     pub(crate) const fn coverage_submits(&self) -> usize {
         self.coverage_submits
-    }
-
-    pub(crate) const fn gpu_outline_cache_hits(&self) -> usize {
-        self.gpu_outline_cache_hits
-    }
-
-    pub(crate) const fn gpu_outline_cache_misses(&self) -> usize {
-        self.gpu_outline_cache_misses
-    }
-
-    pub(crate) const fn gpu_tile_cache_hits(&self) -> usize {
-        self.gpu_tile_cache_hits
-    }
-
-    pub(crate) const fn gpu_tile_cache_misses(&self) -> usize {
-        self.gpu_tile_cache_misses
-    }
-
-    pub(crate) const fn gpu_cache_evictions(&self) -> usize {
-        self.gpu_cache_evictions
-    }
-
-    pub(crate) const fn gpu_resident_outlines(&self) -> usize {
-        self.gpu_resident_outlines
-    }
-
-    pub(crate) const fn gpu_resident_tiles(&self) -> usize {
-        self.gpu_resident_tiles
     }
 
     pub(crate) const fn instance_release_ms(&self) -> u64 {
@@ -2628,10 +2593,6 @@ fn process_font_rush_cache_charge(
 
 enum FontFrameCoverage {
     Retained(Vec<(GpuFontRetainedScene, GpuFontRgba)>),
-    Cached {
-        glyphs: Vec<CachedPreparedGlyph>,
-        foreground: GpuFontRgba,
-    },
 }
 
 fn font_rush_cache_mix(mut value: u64) -> u64 {
@@ -2803,13 +2764,6 @@ fn process_font_rush_frame_clear(
         coverage_build_ms: 0,
         coverage_audit_ms: 0,
         coverage_submits: 0,
-        gpu_outline_cache_hits: 0,
-        gpu_outline_cache_misses: 0,
-        gpu_tile_cache_hits: 0,
-        gpu_tile_cache_misses: 0,
-        gpu_cache_evictions: 0,
-        gpu_resident_outlines: 0,
-        gpu_resident_tiles: 0,
         instance_release_ms: completed_ms.saturating_sub(clear_started_ms),
         total_service_ms: completed_ms.saturating_sub(service_started_ms),
         release,
@@ -2928,13 +2882,6 @@ fn process_font_rush_rgba8_sprite_frame(
         coverage_build_ms: 0,
         coverage_audit_ms: 0,
         coverage_submits: 0,
-        gpu_outline_cache_hits: 0,
-        gpu_outline_cache_misses: 0,
-        gpu_tile_cache_hits: 0,
-        gpu_tile_cache_misses: 0,
-        gpu_cache_evictions: 0,
-        gpu_resident_outlines: 0,
-        gpu_resident_tiles: 0,
         instance_release_ms: completed_ms.saturating_sub(sprite_started_ms),
         total_service_ms: completed_ms.saturating_sub(service_started_ms),
         release,
@@ -3046,13 +2993,6 @@ fn process_font_rush_rgba8_cache_blast(
         coverage_build_ms: 0,
         coverage_audit_ms: 0,
         coverage_submits: 0,
-        gpu_outline_cache_hits: 0,
-        gpu_outline_cache_misses: 0,
-        gpu_tile_cache_hits: 0,
-        gpu_tile_cache_misses: 0,
-        gpu_cache_evictions: 0,
-        gpu_resident_outlines: 0,
-        gpu_resident_tiles: 0,
         instance_release_ms: completed_ms.saturating_sub(service_started_ms),
         total_service_ms: completed_ms.saturating_sub(service_started_ms),
         release,
@@ -3107,67 +3047,22 @@ fn process_frame_stamp(
     ensure_font_rcs_lane_available()?;
     set_active_stage(ticket, "frame-prepare-coverage");
     let prepare_started_ms = Instant::now().as_millis();
-    let (coverage, glyphs, coverage_input, cache_stats) = match input {
+    let (coverage, glyphs, coverage_input) = match input {
         FrameStampInput::Prepared(plan) => {
             let glyphs = plan.glyph_count();
             let foreground = plan.foreground();
             let prepared = plan.into_prepared();
-            let classification = classify_gpu_font_prepared_placements(prepared.as_slice());
-            if classification.requires_union_coverage() {
-                let scene = retain_gpu_font_prepared_centered_scene(prepared)
-                    .map_err(FontKernelError::Unavailable)?;
-                (
-                    FontFrameCoverage::Retained(alloc::vec![(scene, foreground)]),
-                    glyphs,
-                    "prepared-plan-overlap-union",
-                    FontGpuFrameCacheStats::default(),
-                )
-            } else {
-                match prepare_cached_font_gpu_glyphs(
-                    prepared.as_slice(),
-                    classification.unique_indices(),
-                ) {
-                    Ok((cached, cache_stats)) => (
-                        FontFrameCoverage::Cached {
-                            glyphs: cached,
-                            foreground,
-                        },
-                        glyphs,
-                        "prepared-plan-resident-cache",
-                        cache_stats,
-                    ),
-                    Err(failure) => {
-                        if matches!(failure.error, FontKernelError::SubmittedIncomplete(_)) {
-                            return Err(failure.error);
-                        }
-                        let error = failure.error;
-                        crate::log_info!(
-                            target: "render";
-                            "font-kernel-service: resident-cache fallback ticket={} glyphs={} reason={:?} action=prepared-union-before-clear\n",
-                            ticket.raw(),
-                            glyphs,
-                            error,
-                        );
-                        let scene = retain_gpu_font_prepared_centered_scene(prepared)
-                            .map_err(FontKernelError::Unavailable)?;
-                        (
-                            FontFrameCoverage::Retained(alloc::vec![(scene, foreground)]),
-                            glyphs,
-                            "prepared-plan-cache-fallback",
-                            failure.stats,
-                        )
-                    }
-                }
-            }
+            let scene = retain_gpu_font_prepared_centered_scene(prepared)
+                .map_err(FontKernelError::Unavailable)?;
+            (
+                FontFrameCoverage::Retained(alloc::vec![(scene, foreground)]),
+                glyphs,
+                "prepared-plan-union-coverage",
+            )
         }
         FrameStampInput::Request(request) => {
             let (scenes, glyphs) = prepare_stamp_scenes(ticket, &request)?;
-            (
-                FontFrameCoverage::Retained(scenes),
-                glyphs,
-                "request-outline",
-                FontGpuFrameCacheStats::default(),
-            )
+            (FontFrameCoverage::Retained(scenes), glyphs, "request-outline")
         }
         FrameStampInput::FontRushClear { .. }
         | FrameStampInput::FontRushRgba8Sprites { .. }
@@ -3182,31 +3077,19 @@ fn process_frame_stamp(
         FontFrameCoverage::Retained(scenes) => (
             scenes
                 .iter()
-                .fold(cache_stats.coverage_build_ms, |total, (scene, _)| {
-                    total.saturating_add(scene.coverage_build_ms())
-                }),
+                .fold(0u64, |total, (scene, _)| total.saturating_add(scene.coverage_build_ms())),
             scenes
                 .iter()
-                .fold(cache_stats.coverage_audit_ms, |total, (scene, _)| {
-                    total.saturating_add(scene.coverage_audit_ms())
-                }),
+                .fold(0u64, |total, (scene, _)| total.saturating_add(scene.coverage_audit_ms())),
             scenes
                 .iter()
-                .fold(cache_stats.coverage_submits, |total, (scene, _)| {
-                    total.saturating_add(scene.coverage_submits())
-                }),
+                .fold(0usize, |total, (scene, _)| total.saturating_add(scene.coverage_submits())),
             scenes.len(),
-        ),
-        FontFrameCoverage::Cached { glyphs, .. } => (
-            cache_stats.coverage_build_ms,
-            cache_stats.coverage_audit_ms,
-            cache_stats.coverage_submits,
-            glyphs.len(),
         ),
     };
     crate::log_info!(
         target: "render";
-        "font-kernel-service: frame coverage ticket={} input={} glyphs={} scenes={} prepare_coverage_ms={} coverage_build_ms={} coverage_audit_ms={} coverage_submits={} outline_cache_hits={} outline_cache_misses={} tile_cache_hits={} tile_cache_misses={} cache_evictions={} resident_outlines={} resident_tiles={} cache=shared-font-vm-bounded\n",
+        "font-kernel-service: frame coverage ticket={} input={} glyphs={} scenes={} prepare_coverage_ms={} coverage_build_ms={} coverage_audit_ms={} coverage_submits={} cache=none\n",
         ticket.raw(),
         coverage_input,
         glyphs,
@@ -3215,13 +3098,6 @@ fn process_frame_stamp(
         coverage_build_ms,
         coverage_audit_ms,
         coverage_submits,
-        cache_stats.outline_hits,
-        cache_stats.outline_misses,
-        cache_stats.tile_hits,
-        cache_stats.tile_misses,
-        cache_stats.evictions,
-        cache_stats.resident_outlines,
-        cache_stats.resident_tiles,
     );
 
     // Coverage admission is still reversible: until every mask exists, the
@@ -3275,21 +3151,6 @@ fn process_frame_stamp(
                 }
             }
         }
-        FontFrameCoverage::Cached {
-            glyphs: cached,
-            foreground,
-        } => {
-            set_active_stage(ticket, "frame-instance-cached");
-            let rendered = stamp_cached_font_gpu_glyphs(
-                cached.as_slice(),
-                foreground,
-                destination,
-                clear_rgba.is_some(),
-            )?;
-            submits = rendered.0;
-            active_walkers = rendered.1;
-            release = Some(rendered.2);
-        }
     }
     let release = release.ok_or(if clear_rgba.is_some() || submits != 0 {
         FontKernelError::SubmittedIncomplete("font-frame-stamp-release-missing")
@@ -3309,13 +3170,6 @@ fn process_frame_stamp(
         coverage_build_ms,
         coverage_audit_ms,
         coverage_submits,
-        gpu_outline_cache_hits: cache_stats.outline_hits,
-        gpu_outline_cache_misses: cache_stats.outline_misses,
-        gpu_tile_cache_hits: cache_stats.tile_hits,
-        gpu_tile_cache_misses: cache_stats.tile_misses,
-        gpu_cache_evictions: cache_stats.evictions,
-        gpu_resident_outlines: cache_stats.resident_outlines,
-        gpu_resident_tiles: cache_stats.resident_tiles,
         instance_release_ms: completed_ms.saturating_sub(instance_started_ms),
         total_service_ms: completed_ms.saturating_sub(service_started_ms),
         release,

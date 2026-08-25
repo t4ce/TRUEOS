@@ -26,11 +26,7 @@ use crate::intel::gpgpu::{
     release_rgba8_surface_for_scanout, shadertoy_rgba8_surface_full, skybox_sample_rgb565_to_rgba8,
     sprite_quad_worklist_max_descs,
 };
-use crate::intel::gpu_font::{
-    GpuFontFace, GpuFontJob, GpuFontJobEntry, GpuFontRgba, GpuFontTextRequest,
-    MAX_DYNAMIC_TEXT_CHARS, ensure_font_face_available, recycle_font_job_readback,
-    render_font_job_readback_once,
-};
+use crate::intel::gpu_font::{GpuFontFace, GpuFontRgba, MAX_DYNAMIC_TEXT_CHARS};
 use crate::r::font_kernel_service::{
     FontKernelError, FontKernelRetainedScene, FontStampFit, FontStampLayer, FontStampRequest,
     FontStampedBuffer, PendingFontFrameStamp, PendingFontStamp, PendingRetainScene,
@@ -70,8 +66,6 @@ const IMAGE_SOURCE_READ_CHUNK_BYTES: usize = 16 * 1024;
 const IMAGE_SOURCE_FORMAT_JPEG: u32 = 1;
 const IMAGE_SOURCE_FORMAT_RGBA8: u32 = 2;
 const RETAINED_TEXT_MASK_BATCH_CAPACITY: usize = 64;
-const TEXT_ROWS_WIRE_HEADER_BYTES: usize = 16;
-const TEXT_ROW_WIRE_HEADER_BYTES: usize = 12;
 const TEXT_SCENE_WIRE_HEADER_BYTES: usize = 16;
 const TEXT_SCENE_ROW_WIRE_HEADER_BYTES: usize = 16;
 const FONT_CANVAS_WIRE_HEADER_BYTES: usize = 12;
@@ -279,6 +273,7 @@ pub struct TrueosUi4SolaraFontSize {
     pub target_pixels: u32,
 }
 
+/// Legacy positioned-row ABI descriptor retained for portal compatibility.
 #[repr(C)]
 #[derive(Copy, Clone, Debug)]
 pub struct TrueosUi4SolaraTextRow {
@@ -3072,108 +3067,22 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_shadertoy_render(
     }
 }
 
-/// Render one positioned text-row job through the kernel font service and
-/// blend its coverage into the currently acquired UI4 frame.
+/// Retired legacy CPU/readback text path retained as an inert C ABI symbol.
+///
+/// Existing portal symbols are immutable. New consumers must use
+/// `trueos_cabi_ui4_solara_text_scene`, which stays entirely on the retained
+/// GPU coverage path.
 pub unsafe extern "C" fn trueos_cabi_ui4_solara_text_rows(
-    window_id: u32,
-    font_id: u32,
-    native_scale: u32,
-    dst_x: i32,
-    dst_y: i32,
-    rgba: u32,
-    rows: *const TrueosUi4SolaraTextRow,
-    row_count: usize,
+    _window_id: u32,
+    _font_id: u32,
+    _native_scale: u32,
+    _dst_x: i32,
+    _dst_y: i32,
+    _rgba: u32,
+    _rows: *const TrueosUi4SolaraTextRow,
+    _row_count: usize,
 ) -> i32 {
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        return unsafe {
-            guest_text_rows(window_id, font_id, native_scale, dst_x, dst_y, rgba, rows, row_count)
-        };
-    }
-    let Some(owner) = blueprint_owner() else {
-        return ERROR_CONTEXT;
-    };
-    let Some(font) = GpuFontFace::from_id(font_id) else {
-        return ERROR_FONT;
-    };
-    if let Err(reason) = ensure_font_face_available(font) {
-        crate::log_warn!(target: "ui4/solara-text"; "font unavailable owner={:?} window={} font={} reason={}\n", owner, window_id, font.registry_name(), reason);
-        return ERROR_FONT;
-    }
-    if crate::intel::render::font_native_scale_target_pixels(native_scale).is_none()
-        || rows.is_null()
-        || row_count == 0
-        || row_count > MAX_TEXT_ROWS
-    {
-        return ERROR_INVALID;
-    }
-
-    // Copy all guest text before entering the font renderer. The job entries
-    // below then borrow only kernel-owned, validated UTF-8 strings.
-    let input = unsafe { core::slice::from_raw_parts(rows, row_count) };
-    let mut strings = Vec::<String>::with_capacity(row_count);
-    let mut positions = Vec::<[f32; 2]>::with_capacity(row_count);
-    for row in input {
-        if row.text_ptr.is_null()
-            || row.text_len == 0
-            || row.text_len > MAX_TEXT_ROW_BYTES
-            || !row.x.is_finite()
-            || !row.y.is_finite()
-        {
-            return ERROR_INVALID;
-        }
-        let bytes = unsafe { core::slice::from_raw_parts(row.text_ptr, row.text_len) };
-        let Ok(text) = core::str::from_utf8(bytes) else {
-            return ERROR_INVALID;
-        };
-        if text.chars().count() > MAX_DYNAMIC_TEXT_CHARS {
-            return ERROR_INVALID;
-        }
-        strings.push(String::from(text));
-        positions.push([row.x, row.y]);
-    }
-    let entries: Vec<_> = strings
-        .iter()
-        .zip(positions.iter())
-        .map(|(text, position)| GpuFontJobEntry {
-            text: GpuFontTextRequest::SingleLine(text.as_str()),
-            position: *position,
-            font_pixels: crate::graphics::font::FONT_TESSEL_BASE_PX,
-            slant: 0.0,
-        })
-        .collect();
-    let readback = match render_font_job_readback_once(GpuFontJob {
-        entries: entries.as_slice(),
-        font,
-        native_scale,
-    }) {
-        Ok(readback) => readback,
-        Err(reason) => {
-            crate::log_warn!(target: "ui4/solara-text"; "text render rejected owner={:?} window={} reason={}\n", owner, window_id, reason);
-            return ERROR_FONT;
-        }
-    };
-
-    let result = {
-        let mut surfaces = SURFACES.lock();
-        let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
-            recycle_font_job_readback(readback);
-            return ERROR_NOT_FOUND;
-        };
-        let Some(lease) = surface.write_lease else {
-            recycle_font_job_readback(readback);
-            return ERROR_STATE;
-        };
-        match writable_rgba_view(lease) {
-            Ok(view) => {
-                blend_font_coverage(view, &readback, dst_x, dst_y, rgba);
-                crate::intel::dma_flush(view.virt, view.byte_len);
-                0
-            }
-            Err(_) => ERROR_UI4,
-        }
-    };
-    recycle_font_job_readback(readback);
-    result
+    ERROR_INVALID
 }
 
 /// Render Solara paint records in the frame's fixed pixel coordinate space.
@@ -4764,58 +4673,6 @@ unsafe fn guest_input_routes(
     result as isize
 }
 
-unsafe fn guest_text_rows(
-    window_id: u32,
-    font_id: u32,
-    native_scale: u32,
-    dst_x: i32,
-    dst_y: i32,
-    rgba: u32,
-    rows: *const TrueosUi4SolaraTextRow,
-    row_count: usize,
-) -> i32 {
-    if rows.is_null() || row_count == 0 || row_count > MAX_TEXT_ROWS {
-        return ERROR_INVALID;
-    }
-    // SAFETY: the Blueprint ABI promises row_count readable row descriptors.
-    let input = unsafe { core::slice::from_raw_parts(rows, row_count) };
-    let mut payload = Vec::with_capacity(
-        TEXT_ROWS_WIRE_HEADER_BYTES
-            .saturating_add(row_count.saturating_mul(TEXT_ROW_WIRE_HEADER_BYTES + 32)),
-    );
-    payload.extend_from_slice(&dst_x.to_le_bytes());
-    payload.extend_from_slice(&dst_y.to_le_bytes());
-    payload.extend_from_slice(&rgba.to_le_bytes());
-    payload.extend_from_slice(&(row_count as u32).to_le_bytes());
-    for row in input {
-        if row.text_ptr.is_null() || row.text_len == 0 || row.text_len > MAX_TEXT_ROW_BYTES {
-            return ERROR_INVALID;
-        }
-        let Some(required) = payload
-            .len()
-            .checked_add(TEXT_ROW_WIRE_HEADER_BYTES)
-            .and_then(|bytes| bytes.checked_add(row.text_len))
-        else {
-            return ERROR_INVALID;
-        };
-        if required > trueos_vm::vmcall::PAYLOAD_CAP {
-            return ERROR_INVALID;
-        }
-        // SAFETY: each ABI row promises text_len readable bytes.
-        let text = unsafe { core::slice::from_raw_parts(row.text_ptr, row.text_len) };
-        payload.extend_from_slice(&row.x.to_bits().to_le_bytes());
-        payload.extend_from_slice(&row.y.to_bits().to_le_bytes());
-        payload.extend_from_slice(&(row.text_len as u32).to_le_bytes());
-        payload.extend_from_slice(text);
-    }
-    guest_status(
-        trueos_vm::vmcall::OP_BP_UI4_SOLARA_TEXT_ROWS,
-        window_id as u64,
-        pack_u32_pair(font_id, native_scale),
-        payload.as_slice(),
-    )
-}
-
 unsafe fn guest_text_scene(
     window_id: u32,
     font_id: u32,
@@ -6377,60 +6234,6 @@ fn reap_retired_frames() {
     RETIRED_FRAMES
         .lock()
         .retain(|frame| matches!(destroy_frame(*frame), Err(FramePoolError::Busy)));
-}
-
-fn blend_font_coverage(
-    destination: super::FrameRgbaView,
-    source: &crate::intel::render::FontRenderTargetReadback,
-    dst_x: i32,
-    dst_y: i32,
-    rgba: u32,
-) {
-    let [red, green, blue, color_alpha] = rgba.to_le_bytes();
-    let destination_len = (destination.pitch as usize)
-        .saturating_mul(destination.height as usize)
-        .min(destination.byte_len);
-    // SAFETY: the caller holds the unique UI4 write lease for this view.
-    let destination_pixels =
-        unsafe { core::slice::from_raw_parts_mut(destination.virt, destination_len) };
-    let source_pitch = source.width as usize * 4;
-
-    for source_y in 0..source.height as usize {
-        let target_y = dst_y.saturating_add(source_y as i32);
-        if target_y < 0 || target_y >= destination.height as i32 {
-            continue;
-        }
-        for source_x in 0..source.width as usize {
-            let target_x = dst_x.saturating_add(source_x as i32);
-            if target_x < 0 || target_x >= destination.width as i32 {
-                continue;
-            }
-            let source_offset = source_y * source_pitch + source_x * 4;
-            let coverage = source.pixels[source_offset + 3];
-            if coverage == 0 {
-                continue;
-            }
-            let source_alpha = mul_div_255(coverage, color_alpha);
-            let inverse_alpha = u8::MAX - source_alpha;
-            let target_offset =
-                target_y as usize * destination.pitch as usize + target_x as usize * 4;
-            if target_offset + 4 > destination_pixels.len() {
-                continue;
-            }
-            let target = &mut destination_pixels[target_offset..target_offset + 4];
-            target[0] = mul_div_255(red, source_alpha)
-                .saturating_add(mul_div_255(target[0], inverse_alpha));
-            target[1] = mul_div_255(green, source_alpha)
-                .saturating_add(mul_div_255(target[1], inverse_alpha));
-            target[2] = mul_div_255(blue, source_alpha)
-                .saturating_add(mul_div_255(target[2], inverse_alpha));
-            target[3] = source_alpha.saturating_add(mul_div_255(target[3], inverse_alpha));
-        }
-    }
-}
-
-const fn mul_div_255(left: u8, right: u8) -> u8 {
-    ((left as u16 * right as u16 + 127) / 255) as u8
 }
 
 #[cfg(test)]
