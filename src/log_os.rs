@@ -110,7 +110,8 @@ pub(crate) mod flags {
         LogLevelPolicy::up(LogLevelFilter::Warn);
     pub(crate) const INTEL_MEDIA_NGIN_LOG_LEVEL: LogLevelPolicy =
         LogLevelPolicy::up(LogLevelFilter::Info);
-    pub(crate) const BLUEPRINT_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LogLevelFilter::Trace);
+    pub(crate) const BLUEPRINT_LOG_LEVEL: LogLevelPolicy =
+        LogLevelPolicy::up(LogLevelFilter::Trace);
 
     pub(crate) const NET_LOG_RX_TAP: bool = true;
     pub(crate) const NET_LOG_TX_TAP: bool = true;
@@ -373,6 +374,29 @@ macro_rules! log_once {
     }};
 }
 
+/// Sample a recurring event at one call site without turning it into a
+/// one-shot. The emitted record includes the cumulative occurrence and how
+/// many matching records were suppressed immediately before it.
+#[macro_export]
+macro_rules! log_rate_limited {
+    (target: $target:expr; level: $level:expr; first: $first:expr; every: $every:expr; $($tt:tt)*) => {{
+        static STATE: $crate::log_os::LogRateLimitState = $crate::log_os::LogRateLimitState::new();
+        let observation = STATE.observe($first, $every);
+        if observation.should_emit() {
+            $crate::log_os::log_with_target_level(
+                $target,
+                $level,
+                format_args!(
+                    "rate_limit occurrence={} suppressed_since_last={} {}",
+                    observation.occurrence(),
+                    observation.suppressed_since_last(),
+                    format_args!($($tt)*),
+                ),
+            );
+        }
+    }};
+}
+
 #[macro_export]
 macro_rules! log_error {
     (target: $target:expr; $($tt:tt)*) => {{
@@ -407,7 +431,7 @@ pub fn log(args: fmt::Arguments<'_>) {
     log_os_core::log(&TRUEOS_LOG_ROUTER, args);
 }
 
-pub use log_os_core::{LogLevel, LogSiteId};
+pub use log_os_core::{LogLevel, LogRateLimitState, LogSiteId};
 
 pub(crate) fn purpose_for_level(level: LogLevel) -> &'static str {
     log_os_core::purpose_for_level(level)

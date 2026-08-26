@@ -68,6 +68,11 @@ struct TablePage {
 pub(crate) struct SparsePpgtt {
     pml4: TablePage,
     pages: Vec<TablePage>,
+    /// Detached empty hierarchy pages owned by this GPUVM. Keep them reserved
+    /// until the VM is dropped so stale page-walk state can never observe a
+    /// page that has already been returned to an unrelated DMA owner, while
+    /// still allowing later mappings at fresh virtual addresses to reuse it.
+    recycled_pages: Vec<TablePage>,
 }
 
 unsafe impl Send for SparsePpgtt {}
@@ -85,6 +90,7 @@ impl SparsePpgtt {
         Some(Self {
             pml4,
             pages: alloc::vec![pml4],
+            recycled_pages: Vec::new(),
         })
     }
 
@@ -118,7 +124,13 @@ impl SparsePpgtt {
     fn map_range_with_pat(&mut self, range: PpgttRange, pat_index: u8) -> Option<()> {
         map_range(self, range, pat_index)?;
         self.flush();
-        verify_range(self, range, pat_index)?;
+        if verify_range(self, range, pat_index).is_none() {
+            // Verification is part of the transaction. Never leave an
+            // unowned alias installed when the caller observes map failure.
+            let _ = unmap_range(self, range.gpu, range.bytes);
+            self.flush();
+            return None;
+        }
         Some(())
     }
 
@@ -166,11 +178,27 @@ fn map_range(ppgtt: &mut SparsePpgtt, range: PpgttRange, pat_index: u8) -> Optio
         return None;
     }
     let page_count = range.bytes.checked_add(PAGE_BYTES - 1)? / PAGE_BYTES;
+    let rounded_bytes = page_count.checked_mul(PAGE_BYTES)?;
+    range.gpu.checked_add(rounded_bytes as u64)?;
+    let mut mapped_pages = 0usize;
     for page in 0..page_count {
         let byte_off = page.checked_mul(PAGE_BYTES)?;
         let gpu = range.gpu.checked_add(byte_off as u64)?;
         let phys = range.phys.checked_add(byte_off as u64)?;
-        map_page(ppgtt, gpu, phys, pat_index)?;
+        if map_page(ppgtt, gpu, phys, pat_index).is_none() {
+            // `map_page` can have attached empty intermediate tables before a
+            // deeper allocation fails. Roll back every leaf installed by this
+            // call and recycle the empty hierarchy, leaving retry transactional.
+            if mapped_pages == 0 {
+                let _ = prune_empty_tables(ppgtt);
+            } else {
+                let rollback_bytes = mapped_pages.checked_mul(PAGE_BYTES)?;
+                let _ = unmap_range(ppgtt, range.gpu, rollback_bytes);
+            }
+            ppgtt.flush();
+            return None;
+        }
+        mapped_pages += 1;
     }
     Some(())
 }
@@ -257,6 +285,7 @@ fn unmap_range(ppgtt: &mut SparsePpgtt, gpu: u64, bytes: usize) -> Option<()> {
         let byte_off = page.checked_mul(PAGE_BYTES)?;
         unmap_page(ppgtt, gpu.checked_add(byte_off as u64)?)?;
     }
+    prune_empty_tables(ppgtt)?;
     Some(())
 }
 
@@ -293,12 +322,58 @@ fn ensure_child_table(
         return find_table_page(ppgtt, entry & ENTRY_ADDR_MASK);
     }
 
-    let child = alloc_table_page()?;
+    let child = match ppgtt.recycled_pages.pop() {
+        Some(child) => {
+            unsafe {
+                core::ptr::write_bytes(child.virt, 0, PAGE_BYTES / core::mem::size_of::<u64>());
+            }
+            child
+        }
+        None => {
+            let child = alloc_table_page()?;
+            ppgtt.pages.push(child);
+            child
+        }
+    };
     unsafe {
         core::ptr::write_volatile(parent.virt.add(index), child.phys | PDE_PRESENT_RW_UC);
     }
-    ppgtt.pages.push(child);
     Some(child)
+}
+
+/// Detach empty PT, PD, and PDP pages bottom-up. Detached pages remain owned
+/// by this GPUVM and are reused by `ensure_child_table`, bounding table memory
+/// by peak simultaneously-live mappings instead of lifetime VA churn.
+fn prune_empty_tables(ppgtt: &mut SparsePpgtt) -> Option<()> {
+    prune_empty_children(ppgtt, ppgtt.pml4, 3)
+}
+
+fn prune_empty_children(
+    ppgtt: &mut SparsePpgtt,
+    parent: TablePage,
+    levels_below: u8,
+) -> Option<()> {
+    for index in 0..512 {
+        let entry = unsafe { core::ptr::read_volatile(parent.virt.add(index)) };
+        if entry & PAGE_PRESENT == 0 {
+            continue;
+        }
+        let child = find_table_page(ppgtt, entry & ENTRY_ADDR_MASK)?;
+        if levels_below > 1 {
+            prune_empty_children(ppgtt, child, levels_below - 1)?;
+        }
+        if table_page_is_empty(child) {
+            unsafe {
+                core::ptr::write_volatile(parent.virt.add(index), 0);
+            }
+            ppgtt.recycled_pages.push(child);
+        }
+    }
+    Some(())
+}
+
+fn table_page_is_empty(page: TablePage) -> bool {
+    (0..512).all(|index| unsafe { core::ptr::read_volatile(page.virt.add(index)) == 0 })
 }
 
 fn find_table_page(ppgtt: &SparsePpgtt, phys: u64) -> Option<TablePage> {
@@ -306,7 +381,11 @@ fn find_table_page(ppgtt: &SparsePpgtt, phys: u64) -> Option<TablePage> {
 }
 
 fn alloc_table_page() -> Option<TablePage> {
-    let (phys, virt) = crate::dma::alloc(PAGE_BYTES, PAGE_BYTES)?;
+    let (phys, virt) = crate::dma::alloc_ppgtt(PAGE_BYTES, PAGE_BYTES)?;
+    if phys >= GEN12_PPGTT_PHYS_ADDR_LIMIT {
+        crate::dma::dealloc(virt, PAGE_BYTES);
+        return None;
+    }
     unsafe {
         core::ptr::write_bytes(virt, 0, PAGE_BYTES);
     }

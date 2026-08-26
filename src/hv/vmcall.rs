@@ -3556,7 +3556,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 return DispatchOutcome::Resume;
             };
             let message = message.trim_end_matches(&['\r', '\n'][..]);
-            if target == "texplo-startup-probe" {
+            if target == "termdir-startup-probe" {
                 // This sparse, enumerated startup channel exists specifically
                 // to distinguish pre-lease app initialization from terminal
                 // transport and first-frame readiness. Reject control bytes so
@@ -3568,7 +3568,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                     return DispatchOutcome::Resume;
                 }
                 crate::log_os::blueprint_important_line(format_args!(
-                    "texplo-startup-probe: vm={} {}\n",
+                    "termdir-startup-probe: vm={} {}\n",
                     vm_id, message
                 ));
             } else {

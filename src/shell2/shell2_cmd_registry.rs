@@ -53,7 +53,7 @@ const TOOL_JSON_SURF: &str = r#"{"type":"object","properties":{"subcommand":{"ty
 const TOOL_JSON_TLB: &str = r#"{"type":"object","properties":{"target":{"type":"string","enum":["pci","pcibar","mem","cpu","turbo","ucode","pmu","rapl","acpi","aml","facp","madt","hpet","mcfg","ssdt","uefi","smbios","x2apic","usb","usb_probe","dump"],"description":"Table or view to print."},"action":{"type":"string","enum":["store"],"description":"Optional RAPL action when target=rapl."},"signature":{"type":"string","minLength":4,"maxLength":4,"description":"Optional ACPI signature when target=acpi, for example SSDT or FACP."},"index":{"type":"integer","minimum":1,"description":"Optional 1-based instance index when target=acpi and the signature repeats."},"subcommand":{"type":"string","enum":["ec","symbol","prefix"],"description":"Optional AML subcommand when target=aml."},"path":{"type":"string","description":"Optional AML path or prefix when target=aml and subcommand is symbol or prefix."}},"required":["target"],"additionalProperties":false}"#;
 const TOOL_JSON_TTS: &str = r#"{"type":"object","properties":{"text":{"type":"string","maxLength":8192,"description":"Text to synthesize asynchronously. The native backend performs G2P and splits it into ordered model chunks of at most 510 phonemes."},"voice":{"type":"string","description":"Kokoro voice name; defaults to af_heart."},"speed":{"type":"number","minimum":0.5,"maximum":2.0,"description":"Kokoro speech speed multiplier."}},"required":["text"],"additionalProperties":false}"#;
 const TOOL_JSON_STT: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS path to a mono/stereo signed-16-bit PCM WAV file."},"language":{"type":"string","description":"Whisper language code or auto."},"translate":{"type":"boolean","description":"Translate recognized speech to English."}},"required":["path"],"additionalProperties":false}"#;
-const TOOL_JSON_TDE: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
+const TOOL_JSON_TD: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
 const TOOL_JSON_VID: &str = r#"{"type":"object","properties":{"source":{"type":"string","enum":["fs","on","online"],"description":"Read an Annex-B asset from TRUEOSFS, or download the fixed online AVC1 MP4 asset."},"path":{"type":"string","description":"Optional TRUEOSFS Annex-B path when source=fs; defaults to x31_head_movie.annexb.h264."},"loop":{"type":"boolean","description":"Repeat playback while retaining the same UI4 Frame and window lifetime."}},"required":["source"],"additionalProperties":false}"#;
 const TOOL_JSON_XHCI: &str = r#"{"type":"object","properties":{"command":{"type":"string","enum":["status","journal","stage","read","read64","write","write64","rmw"],"description":"xHCI laboratory operation."},"stage":{"type":"integer","minimum":1,"maximum":5,"description":"Cumulative diagnostic stage."},"port":{"type":"integer","minimum":1,"maximum":255,"description":"Physical root port for mutating stages."},"offset":{"type":"string","description":"BAR-relative register offset, decimal or 0x-prefixed."},"value":{"type":"string","description":"Raw register value, decimal or 0x-prefixed."},"clear_mask":{"type":"string","description":"Raw RMW clear mask."},"set_mask":{"type":"string","description":"Raw RMW set mask."},"arm":{"type":"boolean","description":"Explicitly arm a mutating operation."},"live":{"type":"boolean","description":"Acknowledge disruption of a physically connected target."},"fused":{"type":"boolean","description":"Explicitly permit targeting the fused LED port."},"depth":{"type":"integer","minimum":1,"maximum":3,"description":"Stage-five transition-tree depth."}},"required":["command"],"additionalProperties":false}"#;
 
@@ -108,8 +108,8 @@ fn dispatch_shot(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> Par
     ParseOutcome::Handled
 }
 
-fn dispatch_tde(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    super::cmds::tde::try_parse(spawner, io, rest)
+fn dispatch_td(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::td::try_parse(spawner, io, rest)
 }
 
 fn dispatch_smp(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -364,24 +364,15 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         tool_parameters_json: Some(TOOL_JSON_SHOT),
     },
     BuiltinShell2CmdEntry {
-        name: "tde",
+        name: "td",
         mode: "cmd",
         color: Some(STATUS_GREEN_RGB),
         advertised: true,
-        handler: dispatch_tde,
+        handler: dispatch_td,
         tool_description: Some(
-            "Launch the Terminal Directory Explorer at the TRUEOSFS root with depth 2.",
+            "Launch termdir at the TRUEOSFS root with depth 2.",
         ),
-        tool_parameters_json: Some(TOOL_JSON_TDE),
-    },
-    BuiltinShell2CmdEntry {
-        name: "texplo",
-        mode: "cmd",
-        color: Some(STATUS_GREEN_RGB),
-        advertised: false,
-        handler: dispatch_tde,
-        tool_description: None,
-        tool_parameters_json: None,
+        tool_parameters_json: Some(TOOL_JSON_TD),
     },
     #[cfg(feature = "trueos_lumen")]
     BuiltinShell2CmdEntry {
@@ -576,14 +567,14 @@ mod tests {
     #[test]
     fn green_file_surface_includes_app_db_edit() {
         let status = command_names_status_text();
-        let positions = ["tde", "shot", "disc", "edit"].map(|label| status.find(label).unwrap());
+        let positions = ["td", "shot", "disc", "edit"].map(|label| status.find(label).unwrap());
         assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
 
         let registry = command_registry_json();
         for retired in ["7z", "mv", "move", "rm", "remove", "delete", "del", "sha"] {
             assert!(!registry.contains(alloc::format!("\"name\":\"{retired}\"").as_str()));
         }
-        assert!(registry.contains("\"name\":\"tde\""));
+        assert!(registry.contains("\"name\":\"td\""));
         assert!(registry.contains("\"name\":\"edit\""));
     }
 
@@ -635,7 +626,7 @@ pub(crate) fn try_dispatch(
 
 pub(crate) fn command_names_status_text() -> AllocString {
     const STATUS_ORDER: &[&str] = &[
-        "tde", "shot", "disc", "edit", "cry", "backup", "os", "shell", "hyper", "surf", "net",
+        "td", "shot", "disc", "edit", "cry", "backup", "os", "shell", "hyper", "surf", "net",
         "ssh", "qjs", "grid", "helio", "tts", "stt", "cpp", "vgpu", "aud", "vid", "acpi", "tlb",
         "ram", "smp", "etc",
     ];
@@ -679,7 +670,7 @@ pub(crate) fn command_names_status_text_fitting(max_width: usize) -> AllocString
     }
 
     const STATUS_ORDER: &[&str] = &[
-        "tde", "shot", "disc", "edit", "cry", "backup", "os", "shell", "hyper", "surf", "net",
+        "td", "shot", "disc", "edit", "cry", "backup", "os", "shell", "hyper", "surf", "net",
         "ssh", "qjs", "grid", "helio", "tts", "stt", "cpp", "vgpu", "aud", "vid", "acpi", "tlb",
         "ram", "smp", "etc",
     ];

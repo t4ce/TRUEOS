@@ -106,15 +106,50 @@ pub(crate) fn broker_ui4_surface_acquire(
     window_id: u32,
 ) -> Result<v::vgpu::SurfaceInfo, i32> {
     let owner = ui4_owner(principal)?;
-    let descriptor = crate::ui4::blueprint_text::begin_vgpu_surface_import(owner, window_id)?;
-    let imported =
-        match vgpu::import_ui4_surface(principal, DeviceHandle::from_raw(device), descriptor) {
-            Ok(imported) => imported,
-            Err(error) => {
-                crate::ui4::blueprint_text::abort_vgpu_surface_import(owner, window_id);
-                return Err(error.errno());
-            }
-        };
+    let descriptor = match crate::ui4::blueprint_text::begin_vgpu_surface_import(owner, window_id) {
+        Ok(descriptor) => descriptor,
+        Err(error) => {
+            crate::log_rate_limited!(
+                target: "vgpu";
+                level: crate::log_os::LogLevel::Warn;
+                first: 3;
+                every: 1_000;
+                "vgpu ui4 surface import rejected stage=descriptor owner={:?} window={} errno={} action=retry\n",
+                owner,
+                window_id,
+                error,
+            );
+            return Err(error);
+        }
+    };
+    let imported = match vgpu::import_ui4_surface(
+        principal,
+        DeviceHandle::from_raw(device),
+        descriptor,
+    ) {
+        Ok(imported) => imported,
+        Err(error) => {
+            crate::log_rate_limited!(
+                target: "vgpu";
+                level: crate::log_os::LogLevel::Error;
+                first: 3;
+                every: 1_000;
+                "vgpu ui4 surface import rejected stage=map error={} errno={} owner={:?} window={} device=0x{:X} phys=0x{:X} bytes=0x{:X} size={}x{} pitch={} action=abort-import-and-retry\n",
+                error.name(),
+                error.errno(),
+                owner,
+                window_id,
+                device,
+                descriptor.phys,
+                descriptor.bytes,
+                descriptor.width,
+                descriptor.height,
+                descriptor.pitch,
+            );
+            crate::ui4::blueprint_text::abort_vgpu_surface_import(owner, window_id);
+            return Err(error.errno());
+        }
+    };
     if let Err(error) = crate::ui4::blueprint_text::commit_vgpu_surface_import(
         owner,
         window_id,

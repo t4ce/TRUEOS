@@ -29,7 +29,7 @@ pub(crate) mod shell;
 pub(crate) mod smp;
 pub(crate) mod ssh;
 pub(crate) mod surf;
-pub(crate) mod tde;
+pub(crate) mod td;
 #[path = "tlb_router.rs"]
 pub(crate) mod tlb;
 #[path = "tlb.rs"]

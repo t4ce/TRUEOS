@@ -21,7 +21,7 @@ const CLOSE_TRANSITION_PERIOD_MS: u64 = 16;
 const PENDING_POLL_PERIOD_MS: u64 = 1;
 const STATIC_SINGLE_CPU_PAINTER_BASELINE_ENABLED: bool = true;
 const MAX_COMPOSITION_WINDOWS: usize = super::window_broker::MAX_WINDOWS;
-const PRESENT_FAILURE_LOG_INTERVAL: u32 = 600;
+const PRESENT_FAILURE_LOG_INTERVAL: u64 = 1_000;
 const PROFILE_INITIAL_REPORT_TURNS: u64 = 16;
 const PROFILE_REPORT_INTERVAL_TURNS: u64 = 1_024;
 static RESIDENT_SCENE_TRIPLE_DIRECT_SCANOUT_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -263,6 +263,15 @@ enum DriveResult {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum AdvanceResult {
+    /// An asynchronous composition transaction is still in flight. This is
+    /// not recovery from a preceding presentation failure.
+    Pending,
+    /// The broker revision was either presented or proved to need no update.
+    Settled,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct CompositionWindowStamp {
     id: WindowId,
     frame: FrameHandle,
@@ -298,12 +307,12 @@ pub(crate) async fn ui4_compositor_service_task() {
     loop {
         let result = advance_async_composition(&mut runtime);
         match result {
-            Ok(()) => {
+            Ok(progress) => {
                 if !readiness_published {
                     crate::r::readiness::set(crate::r::readiness::UI4_COMPOSITOR_READY);
                     readiness_published = true;
                 }
-                if consecutive_failures != 0 {
+                if progress == AdvanceResult::Settled && consecutive_failures != 0 {
                     crate::log_info!(
                         target: "ui4";
                         "ui4 compositor recovered failures={} action=continue\n",
@@ -314,16 +323,15 @@ pub(crate) async fn ui4_compositor_service_task() {
             }
             Err(error) => {
                 consecutive_failures = consecutive_failures.saturating_add(1);
-                if consecutive_failures <= 3
-                    || consecutive_failures.is_multiple_of(PRESENT_FAILURE_LOG_INTERVAL)
-                {
-                    crate::log_error!(
-                        target: "ui4";
-                        "ui4 compositor present failed error={:?} consecutive={} action=retry\n",
-                        error,
-                        consecutive_failures
-                    );
-                }
+                crate::log_rate_limited!(
+                    target: "ui4";
+                    level: crate::log_os::LogLevel::Error;
+                    first: 3;
+                    every: PRESENT_FAILURE_LOG_INTERVAL;
+                    "ui4 compositor present failed error={:?} consecutive={} action=retry\n",
+                    error,
+                    consecutive_failures
+                );
             }
         }
 
@@ -379,7 +387,7 @@ fn initialize() -> Runtime {
     }
 }
 
-fn advance_async_composition(runtime: &mut Runtime) -> Result<(), Ui4CompositorError> {
+fn advance_async_composition(runtime: &mut Runtime) -> Result<AdvanceResult, Ui4CompositorError> {
     let started_ns = crate::chronos::monotonic_nanos();
     runtime
         .profile
@@ -394,24 +402,26 @@ fn advance_async_composition(runtime: &mut Runtime) -> Result<(), Ui4CompositorE
     result
 }
 
-fn advance_async_composition_inner(runtime: &mut Runtime) -> Result<(), Ui4CompositorError> {
+fn advance_async_composition_inner(
+    runtime: &mut Runtime,
+) -> Result<AdvanceResult, Ui4CompositorError> {
     if runtime.pending.is_none() {
         runtime.pending = prepare_async_frame(runtime)?;
     }
     let Some(mut pending) = runtime.pending.take() else {
-        return Ok(());
+        return Ok(AdvanceResult::Settled);
     };
     match drive_async_frame(runtime, &mut pending) {
         Ok(DriveResult::Pending) => {
             runtime.pending = Some(pending);
-            Ok(())
+            Ok(AdvanceResult::Pending)
         }
         Ok(DriveResult::Complete) => {
             // A streaming producer may already have published while this
             // frame waited for GPU completion and SURFLIVE. Re-snapshot on
             // the next executor turn before returning to broker-signal sleep.
             runtime.immediate_rescan = true;
-            Ok(())
+            Ok(AdvanceResult::Settled)
         }
         Err(error) => {
             crate::intel::cancel_ui4_plane_surface_flip_batch();
