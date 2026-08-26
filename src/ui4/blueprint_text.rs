@@ -1412,11 +1412,27 @@ pub(crate) fn commit_vgpu_surface_import(
 
 pub(crate) fn abort_vgpu_surface_import(owner: WindowOwner, window_id: u32) {
     let mut surfaces = SURFACES.lock();
-    if let Some(surface) = surface_mut(&mut surfaces, owner, window_id)
+    let retained_write_lease = if let Some(surface) = surface_mut(&mut surfaces, owner, window_id)
         && surface.vgpu_surface == Some(0)
     {
         surface.vgpu_surface = None;
         surface.gpu_submission_unretired = false;
+        surface.write_lease.is_some()
+    } else {
+        false
+    };
+    drop(surfaces);
+
+    if retained_write_lease {
+        crate::log_rate_limited!(
+            target: "ui4";
+            level: crate::log_os::LogLevel::Important;
+            first: 3;
+            every: 1_000;
+            "vgpu surface import aborted with frame write lease retained owner={:?} window={} contract=surface-acquire-retry risk=producer-exit-strands-write-lease action=audit-caller-lifecycle\n",
+            owner,
+            window_id,
+        );
     }
 }
 
