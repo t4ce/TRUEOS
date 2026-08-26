@@ -35,10 +35,7 @@ pub(crate) fn try_parse(
 ) -> ParseOutcome {
     let trimmed = rest.trim();
     if matches!(trimmed, "help" | "-h" | "--help") {
-        print_shell_line(
-            io,
-            "td: launch termdir at the TRUEOSFS root with depth 2",
-        );
+        print_shell_line(io, "td: launch termdir at the TRUEOSFS root with depth 2");
         return ParseOutcome::Handled;
     }
     if !trimmed.is_empty() {

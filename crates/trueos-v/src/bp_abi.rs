@@ -987,6 +987,10 @@ unsafe extern "C" {
     pub fn trueos_cabi_audio_queued_frames(handle: u32) -> isize;
     pub fn trueos_cabi_audio_buffer_frames(handle: u32) -> isize;
     pub fn trueos_cabi_audio_state(handle: u32) -> i32;
+    pub fn trueos_cabi_audio_endpoint_caps_v1(
+        out: *mut crate::vaudio::AudioEndpointCapabilitiesV1,
+        out_size: usize,
+    ) -> i32;
     pub fn trueos_cabi_audio_monitor_start_cursor(preroll_samples: usize) -> u64;
     pub fn trueos_cabi_audio_monitor_read_i16_since(
         cursor: u64,

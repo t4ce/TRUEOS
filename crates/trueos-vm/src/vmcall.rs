@@ -306,6 +306,8 @@ pub const OP_BP_AUDIO_NATIVE_RENDER_V1: u32 = 0x152;
 pub const OP_BP_AUDIO_NATIVE_RENDER_V2: u32 = 0x153;
 /// Fixed-width `NativeBlockHeaderV3 || NativeRenderCommandV3[]` payload.
 pub const OP_BP_AUDIO_NATIVE_RENDER_V3: u32 = 0x154;
+/// Read-only host HDA endpoint capability snapshot (response payload V1).
+pub const OP_BP_AUDIO_ENDPOINT_CAPS_V1: u32 = 0x156;
 pub const OP_BP_SOCKET_TCP_OPEN: u32 = 0x35;
 pub const OP_BP_SOCKET_TCP_CLOSE: u32 = 0x36;
 pub const OP_BP_SOCKET_TCP_SET_NONBLOCKING: u32 = 0x37;

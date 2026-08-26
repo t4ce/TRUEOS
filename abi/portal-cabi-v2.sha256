@@ -198,4 +198,4 @@
 # The native-audio render v2 call is strictly additive. Its endpoint and
 # 104-byte command payload are distinct from native-render-v1; V1's frozen
 # 80-byte command, symbol, and mediation path are unchanged.
-88181e71bb25d2a5c2319b137991895942e3d5c4f5f701b08d113f93cdd5ac33
+5e4d9aecb16939ebe65e22e6ba2de1f95feaad160929838897846267528cb405

@@ -628,6 +628,49 @@ pub extern "C" fn trueos_cabi_audio_state(handle: u32) -> i32 {
     }
 }
 
+/// Copy a read-only snapshot of the host HDA playback endpoint.
+///
+/// This is intentionally independent of opening a stream: callers can see
+/// that audio is unavailable before trying to open it. In Blueprint guests
+/// the snapshot comes from the host through a dedicated vmcall, never from
+/// guest-local audio state. An unavailable endpoint is a successful all-zero
+/// snapshot with `ready == 0`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_audio_endpoint_caps_v1(
+    out: *mut crate::hda::HdaEndpointCapabilitiesV1,
+    out_size: usize,
+) -> i32 {
+    if out.is_null() {
+        return -EFAULT;
+    }
+    if out_size != core::mem::size_of::<crate::hda::HdaEndpointCapabilitiesV1>() {
+        return -EINVAL;
+    }
+    let caps = if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let mut wire = [0u8; core::mem::size_of::<crate::hda::HdaEndpointCapabilitiesV1>()];
+        let (status, rc) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_AUDIO_ENDPOINT_CAPS_V1,
+            0,
+            0,
+            &[],
+            &mut wire,
+        );
+        if status != trueos_vm::vmcall::STATUS_OK || rc != 0 {
+            return -EIO;
+        }
+        unsafe {
+            core::ptr::read_unaligned(
+                wire.as_ptr()
+                    .cast::<crate::hda::HdaEndpointCapabilitiesV1>(),
+            )
+        }
+    } else {
+        crate::hda::endpoint_capabilities_v1()
+    };
+    unsafe { core::ptr::write_unaligned(out, caps) };
+    0
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_audio_monitor_start_cursor(preroll_samples: usize) -> u64 {
     crate::aud::esynth::live_pcm_stream_start_cursor(preroll_samples).unwrap_or(u64::MAX)
@@ -782,7 +825,8 @@ fn render_native_host_v3(
     commands: &[crate::aud::native_engine::NativeRenderCommandV3],
 ) -> isize {
     let pcm = match crate::aud::native_engine::render_block_v3(header, commands) {
-        Ok(pcm) => pcm, Err(error) => return -(native_error_code(error) as isize),
+        Ok(pcm) => pcm,
+        Err(error) => return -(native_error_code(error) as isize),
     };
     match crate::aud::pcm_lane::submit_i16_stereo_48k("blueprint-audio-native-v3", pcm) {
         Ok(frames) => frames as isize,
@@ -796,14 +840,35 @@ fn guest_native_render_v3(
     header: &crate::aud::native_engine::NativeBlockHeaderV3,
     commands: &[crate::aud::native_engine::NativeRenderCommandV3],
 ) -> isize {
-    let header_bytes = unsafe { core::slice::from_raw_parts(core::ptr::from_ref(header).cast::<u8>(), core::mem::size_of_val(header)) };
-    let command_bytes = unsafe { core::slice::from_raw_parts(commands.as_ptr().cast::<u8>(), core::mem::size_of_val(commands)) };
+    let header_bytes = unsafe {
+        core::slice::from_raw_parts(
+            core::ptr::from_ref(header).cast::<u8>(),
+            core::mem::size_of_val(header),
+        )
+    };
+    let command_bytes = unsafe {
+        core::slice::from_raw_parts(
+            commands.as_ptr().cast::<u8>(),
+            core::mem::size_of_val(commands),
+        )
+    };
     let payload_len = header_bytes.len().saturating_add(command_bytes.len());
-    if payload_len > trueos_vm::vmcall::PAYLOAD_CAP { return -(EINVAL as isize); }
+    if payload_len > trueos_vm::vmcall::PAYLOAD_CAP {
+        return -(EINVAL as isize);
+    }
     let mut payload = Vec::with_capacity(payload_len);
-    payload.extend_from_slice(header_bytes); payload.extend_from_slice(command_bytes);
-    let (status, rc) = trueos_vm::vmcall::call_with_payload(trueos_vm::vmcall::OP_BP_AUDIO_NATIVE_RENDER_V3, commands.len() as u64, 0, &payload, &mut []);
-    if status != trueos_vm::vmcall::STATUS_OK { return -(EIO as isize); }
+    payload.extend_from_slice(header_bytes);
+    payload.extend_from_slice(command_bytes);
+    let (status, rc) = trueos_vm::vmcall::call_with_payload(
+        trueos_vm::vmcall::OP_BP_AUDIO_NATIVE_RENDER_V3,
+        commands.len() as u64,
+        0,
+        &payload,
+        &mut [],
+    );
+    if status != trueos_vm::vmcall::STATUS_OK {
+        return -(EIO as isize);
+    }
     (rc as i64) as isize
 }
 
@@ -890,14 +955,32 @@ pub unsafe extern "C" fn trueos_cabi_audio_native_render_v3(
     commands: *const crate::aud::native_engine::NativeRenderCommandV3,
     count: usize,
 ) -> isize {
-    if !valid_handle(handle) { return -(EBADF as isize); }
-    if !AUDIO_CABI_STATE.lock().open { return -(ENODEV as isize); }
-    if header.is_null() || (commands.is_null() && count != 0) { return -(EFAULT as isize); }
-    if count > crate::aud::native_engine::MAX_COMMANDS { return -(EINVAL as isize); }
+    if !valid_handle(handle) {
+        return -(EBADF as isize);
+    }
+    if !AUDIO_CABI_STATE.lock().open {
+        return -(ENODEV as isize);
+    }
+    if header.is_null() || (commands.is_null() && count != 0) {
+        return -(EFAULT as isize);
+    }
+    if count > crate::aud::native_engine::MAX_COMMANDS {
+        return -(EINVAL as isize);
+    }
     let header = unsafe { &*header };
-    let commands = if count == 0 { &[] } else { unsafe { core::slice::from_raw_parts(commands, count) } };
-    let frames = if crate::hv::current_hull_guest_context_vm_id().is_some() { guest_native_render_v3(header, commands) } else { render_native_host_v3(header, commands) };
-    if frames >= 0 { AUDIO_CABI_STATE.lock().running = true; }
+    let commands = if count == 0 {
+        &[]
+    } else {
+        unsafe { core::slice::from_raw_parts(commands, count) }
+    };
+    let frames = if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        guest_native_render_v3(header, commands)
+    } else {
+        render_native_host_v3(header, commands)
+    };
+    if frames >= 0 {
+        AUDIO_CABI_STATE.lock().running = true;
+    }
     frames
 }
 

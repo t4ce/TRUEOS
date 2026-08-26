@@ -269,6 +269,12 @@ pub struct Widget {
     pub connections: Vec<u16>,
     pub amp_in_caps: u32,
     pub amp_out_caps: u32,
+    /// Raw `PARAM_PCM_RATES` value advertised by an Audio Output converter.
+    /// Zero means either this is not a converter or the read failed.
+    pub advertised_pcm_rates: u32,
+    /// Raw `PARAM_STREAM_FMTS` value advertised by an Audio Output converter.
+    /// Zero means either this is not a converter or the read failed.
+    pub advertised_stream_formats: u32,
 }
 
 /// A discovered audio path: PinComplex → ... → DAC
@@ -354,6 +360,165 @@ pub const PCM_DMA_BUFFER_BYTES: usize = 1024 * 1024;
 pub const PCM_DMA_BUFFER_SAMPLES: usize = PCM_DMA_BUFFER_BYTES / PCM_SAMPLE_BYTES;
 pub const PCM_DMA_BUFFER_FRAMES: usize = PCM_DMA_BUFFER_BYTES / PCM_FRAME_BYTES;
 const PCM_STREAM_START_AHEAD_FRAMES: usize = PCM_SAMPLE_RATE_HZ as usize / 200;
+
+/// HDA `PARAM_PCM_RATES` bit for 48 kHz PCM.
+pub const HDA_PCM_RATE_48KHZ: u32 = 1 << 6;
+/// HDA `PARAM_PCM_RATES` bit for signed 16-bit PCM samples.
+pub const HDA_PCM_BITS_16: u32 = 1 << 17;
+
+/// Decode whether an advertised HDA PCM-rates mask contains `rate_hz`.
+/// Unknown rates deliberately report false instead of guessing a nearby rate.
+pub const fn pcm_rates_mask_supports_rate(mask: u32, rate_hz: u32) -> bool {
+    let bit = match rate_hz {
+        8_000 => 0,
+        11_025 => 1,
+        16_000 => 2,
+        22_050 => 3,
+        32_000 => 4,
+        44_100 => 5,
+        48_000 => 6,
+        88_200 => 7,
+        96_000 => 8,
+        176_400 => 9,
+        192_000 => 10,
+        _ => return false,
+    };
+    mask & (1 << bit) != 0
+}
+
+/// Decode whether an advertised HDA PCM-rates mask contains `sample_bits`.
+pub const fn pcm_rates_mask_supports_bits(mask: u32, sample_bits: u8) -> bool {
+    let bit = match sample_bits {
+        8 => 16,
+        16 => 17,
+        20 => 18,
+        24 => 19,
+        32 => 20,
+        _ => return false,
+    };
+    mask & (1 << bit) != 0
+}
+
+/// The currently fixed stream is compatible with the advertised converter
+/// format. This is a capability check only; it never changes the stream.
+pub const fn pcm_rates_mask_supports_48k_s16(mask: u32) -> bool {
+    pcm_rates_mask_supports_rate(mask, PCM_SAMPLE_RATE_HZ)
+        && pcm_rates_mask_supports_bits(mask, PCM_SAMPLE_BITS as u8)
+}
+
+/// Stable read-only playback endpoint snapshot for the C ABI.
+///
+/// `ready == 0` means no initialized active endpoint; every other field is
+/// then zero except the self-description. `selected_output_path_index` is
+/// meaningful only when ready. The selected DAC mirrors the driver's existing
+/// first-codec/path-0 playback policy; codec discovery is not re-run here.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct HdaEndpointCapabilitiesV1 {
+    pub version: u16,
+    pub size: u16,
+    pub sample_rate_hz: u32,
+    pub dma_buffer_frames: u32,
+    pub queued_pcm_lane_frames: u32,
+    pub selected_dac_pcm_rates: u32,
+    pub selected_dac_stream_formats: u32,
+    pub controller_output_streams: u8,
+    pub active_channels: u8,
+    pub active_sample_bits: u8,
+    pub active_frame_bytes: u8,
+    pub ready: u8,
+    pub controller_addr64: u8,
+    pub output_path_count: u8,
+    pub selected_output_path_index: u8,
+    pub reserved1: u64,
+    pub reserved2: u64,
+}
+
+const _: [(); 48] = [(); core::mem::size_of::<HdaEndpointCapabilitiesV1>()];
+const _: [(); 8] = [(); core::mem::align_of::<HdaEndpointCapabilitiesV1>()];
+
+impl HdaEndpointCapabilitiesV1 {
+    pub const VERSION: u16 = 1;
+    pub const SIZE: u16 = core::mem::size_of::<Self>() as u16;
+
+    pub const fn unavailable() -> Self {
+        Self {
+            version: Self::VERSION,
+            size: Self::SIZE,
+            sample_rate_hz: 0,
+            dma_buffer_frames: 0,
+            queued_pcm_lane_frames: 0,
+            selected_dac_pcm_rates: 0,
+            selected_dac_stream_formats: 0,
+            controller_output_streams: 0,
+            active_channels: 0,
+            active_sample_bits: 0,
+            active_frame_bytes: 0,
+            ready: 0,
+            controller_addr64: 0,
+            output_path_count: 0,
+            selected_output_path_index: 0,
+            reserved1: 0,
+            reserved2: 0,
+        }
+    }
+}
+
+impl Default for HdaEndpointCapabilitiesV1 {
+    fn default() -> Self {
+        Self::unavailable()
+    }
+}
+
+/// Return a point-in-time endpoint capability snapshot without touching HDA
+/// registers or codec state. A zero snapshot is a valid unavailable result.
+pub fn endpoint_capabilities_v1() -> HdaEndpointCapabilitiesV1 {
+    let hda = HDA.lock();
+    let Some(controller) = hda.as_ref() else {
+        return HdaEndpointCapabilitiesV1::unavailable();
+    };
+    if !HDA_INITIALIZED.load(Ordering::Acquire) || controller.audio_buf_size == 0 {
+        return HdaEndpointCapabilitiesV1::unavailable();
+    }
+
+    const SELECTED_PATH: usize = 0;
+    let Some(path) = controller.output_paths.get(SELECTED_PATH) else {
+        return HdaEndpointCapabilitiesV1::unavailable();
+    };
+    let (selected_dac_pcm_rates, selected_dac_stream_formats) = controller
+        .widgets
+        .iter()
+        .find(|widget| widget.nid == path.dac_nid && widget.widget_type == WidgetType::AudioOutput)
+        .map(|widget| (widget.advertised_pcm_rates, widget.advertised_stream_formats))
+        .unwrap_or((0, 0));
+    let dma_buffer_frames =
+        (controller.audio_buf_size as usize / PCM_FRAME_BYTES).min(u32::MAX as usize) as u32;
+    let output_path_count = controller.output_paths.len().min(u8::MAX as usize) as u8;
+    let controller_output_streams = controller.num_oss;
+    let controller_addr64 = u8::from(controller.addr64);
+    drop(hda);
+
+    HdaEndpointCapabilitiesV1 {
+        version: HdaEndpointCapabilitiesV1::VERSION,
+        size: HdaEndpointCapabilitiesV1::SIZE,
+        sample_rate_hz: PCM_SAMPLE_RATE_HZ,
+        dma_buffer_frames,
+        queued_pcm_lane_frames: crate::aud::pcm_lane::pending_frames().min(u32::MAX as usize)
+            as u32,
+        selected_dac_pcm_rates,
+        selected_dac_stream_formats,
+        controller_output_streams,
+        active_channels: PCM_CHANNELS as u8,
+        active_sample_bits: PCM_SAMPLE_BITS as u8,
+        active_frame_bytes: PCM_FRAME_BYTES as u8,
+        ready: 1,
+        controller_addr64,
+        output_path_count,
+        selected_output_path_index: SELECTED_PATH as u8,
+        reserved1: 0,
+        reserved2: 0,
+    }
+}
 
 /// Metadata a synth backend needs before writing into the HDA stream.
 #[derive(Debug, Clone, Copy)]
@@ -1353,7 +1518,22 @@ impl HdaController {
                         connections: Vec::new(),
                         amp_in_caps: 0,
                         amp_out_caps: 0,
+                        advertised_pcm_rates: 0,
+                        advertised_stream_formats: 0,
                     };
+
+                    // Converter capabilities are useful to consumers even
+                    // while this driver deliberately keeps its established
+                    // 48 kHz / S16 playback format. A broken codec response
+                    // must not turn discovery into an initialization failure.
+                    if wtype == WidgetType::AudioOutput {
+                        widget.advertised_pcm_rates = self
+                            .get_param(caddr, nid, verb::PARAM_PCM_RATES)
+                            .unwrap_or(0);
+                        widget.advertised_stream_formats = self
+                            .get_param(caddr, nid, verb::PARAM_STREAM_FMTS)
+                            .unwrap_or(0);
+                    }
 
                     // Get connection list
                     let conn_len_raw = self.get_param(caddr, nid, verb::PARAM_CONN_LIST_LEN)?;
@@ -4062,4 +4242,33 @@ fn parse_duration(bytes: &[u8]) -> u8 {
 /// Play a built-in demo melody (Ode to Joy excerpt)
 pub fn play_demo() -> Result<(), &'static str> {
     play_melody("E4q E4q F4q G4q G4q F4q E4q D4q C4q C4q D4q E4q E4q D4h", 120)
+}
+
+#[cfg(test)]
+mod endpoint_capability_tests {
+    use super::*;
+
+    #[test]
+    fn pcm_rates_mask_decodes_known_rates_and_bits() {
+        let mask = HDA_PCM_RATE_48KHZ | HDA_PCM_BITS_16 | (1 << 8);
+        assert!(pcm_rates_mask_supports_rate(mask, 48_000));
+        assert!(pcm_rates_mask_supports_rate(mask, 96_000));
+        assert!(!pcm_rates_mask_supports_rate(mask, 44_100));
+        assert!(pcm_rates_mask_supports_bits(mask, 16));
+        assert!(!pcm_rates_mask_supports_bits(mask, 24));
+        assert!(!pcm_rates_mask_supports_rate(mask, 12_000));
+    }
+
+    #[test]
+    fn pcm_rates_mask_recognizes_the_fixed_playback_format() {
+        assert!(pcm_rates_mask_supports_48k_s16(HDA_PCM_RATE_48KHZ | HDA_PCM_BITS_16));
+        assert!(!pcm_rates_mask_supports_48k_s16(HDA_PCM_RATE_48KHZ));
+        assert!(!pcm_rates_mask_supports_48k_s16(HDA_PCM_BITS_16));
+    }
+
+    #[test]
+    fn endpoint_capability_abi_layout_is_stable() {
+        assert_eq!(core::mem::size_of::<HdaEndpointCapabilitiesV1>(), 48);
+        assert_eq!(core::mem::align_of::<HdaEndpointCapabilitiesV1>(), 8);
+    }
 }

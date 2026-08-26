@@ -1461,6 +1461,12 @@ fn resolve_runtime_abi_import(name: &str) -> Option<usize> {
         "trueos_time_monotonic_nanos" => {
             Some(crate::std_abi_shim::trueos_time_monotonic_nanos as *const () as usize)
         }
+        // `embassy-time-driver` declares this as an extern-Rust symbol. The
+        // kernel owns its single global Embassy clock, and Blueprint users
+        // must join that clock instead of providing a second driver.
+        "_embassy_time_now" => {
+            Some(crate::r::time::blueprint_embassy_time_now as *const () as usize)
+        }
         "trueos_time_unix_nanos" => {
             Some(crate::std_abi_shim::trueos_time_unix_nanos as *const () as usize)
         }
@@ -1555,6 +1561,15 @@ fn resolve_runtime_abi_import(name: &str) -> Option<usize> {
 #[cfg(not(any(target_os = "trueos", target_os = "zkvm")))]
 fn resolve_runtime_abi_import(_name: &str) -> Option<usize> {
     None
+}
+
+#[cfg(all(test, any(target_os = "trueos", target_os = "zkvm")))]
+mod runtime_import_tests {
+    #[test]
+    fn embassy_time_now_is_bound_to_the_kernel_clock() {
+        let target = super::resolve_runtime_abi_import("_embassy_time_now");
+        assert_eq!(target, Some(crate::r::time::blueprint_embassy_time_now as *const () as usize));
+    }
 }
 
 unsafe extern "C" fn portal_rust_alloc(size: usize, align: usize) -> *mut u8 {

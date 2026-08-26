@@ -266,3 +266,14 @@ impl Driver for TimeDriver {
 }
 
 embassy_time_driver::time_driver_impl!(static DRIVER: TimeDriver = TimeDriver);
+
+/// Host-side target for an Embassy time import made by a Blueprint.
+///
+/// `embassy-time-driver` intentionally exposes its clock through the private
+/// `_embassy_time_now` symbol. A Blueprint carries that symbol as an ELF
+/// import, so the REL loader must bind it to this already-live kernel driver
+/// rather than leaving the call relocation at zero.
+#[inline]
+pub(crate) fn blueprint_embassy_time_now() -> u64 {
+    _embassy_time_now()
+}
