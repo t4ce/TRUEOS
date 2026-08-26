@@ -246,13 +246,18 @@ const RING_MI_MODE_STOP_RING: u32 = 1 << 8;
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const GRDOM_RENDER: u32 = 1 << 1;
 const MI_BATCH_BUFFER_START_GEN8: u32 = (0x31 << 23) | 1;
+const MI_BATCH_PPGTT: u32 = 1 << 8;
 // MI_BATCH_BUFFER_END returns to the caller only for a second-level batch.
 // Resident scenes use one small secondary per object beneath one frame-level primary
 // batch, so the render context is submitted exactly once per scene update.
 const MI_BATCH_2ND_LEVEL: u32 = 1 << 22;
 const _: () = {
     assert!(MI_BATCH_BUFFER_START_GEN8 == 0x1880_0001);
+    assert!(MI_BATCH_BUFFER_START_GEN8 | MI_BATCH_PPGTT == 0x1880_0101);
     assert!(MI_BATCH_BUFFER_START_GEN8 | MI_BATCH_2ND_LEVEL == 0x18C0_0001);
+    assert!(
+        MI_BATCH_BUFFER_START_GEN8 | MI_BATCH_PPGTT | MI_BATCH_2ND_LEVEL == 0x18C0_0101
+    );
 };
 // Gen8+ four-DWORD PPGTT load. Helio's draw stream uses this to feed the
 // hardware auto-draw registers directly from its resident 20-byte

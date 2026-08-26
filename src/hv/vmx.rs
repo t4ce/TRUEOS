@@ -549,6 +549,12 @@ pub fn log_vmexit_interrupt_info(label: &str) {
 
     let vector = info.vector();
     let kind = info.interruption_type() as u64;
+    // External interrupts are the normal host timer/device traffic that returns
+    // control to the VMM. Logging every one here produces two trace records per
+    // interrupt and can drown the actual VM-exit diagnostics.
+    if kind == 0 {
+        return;
+    }
     let err_valid = info.error_code_valid();
     let err = if err_valid {
         vmread(VMCS_VMEXIT_INTERRUPTION_ERROR_CODE).unwrap_or(0)

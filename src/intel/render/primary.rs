@@ -513,8 +513,8 @@ fn resident_scene_batch_state_for_carrier(
     let storage =
         prepare_picasso_render1_scene_storage(lease, physical).ok_or("picasso-scene-storage")?;
     crate::log_info!(target: "render";
-        "picasso-carrier scene-state carrier=Render1 gpu=0x{:X} phys=0x{:X} bytes=0x{:X} warm_batch=0x{:X}\n",
-        GPU_VA_RESIDENT_SCENE_STATE_BASE, storage.state_phys,
+        "picasso-carrier scene-state carrier={} gpu=0x{:X} phys=0x{:X} bytes=0x{:X} warm_batch=0x{:X}\n",
+        lease.carrier().label(), GPU_VA_RESIDENT_SCENE_STATE_BASE, storage.state_phys,
         RESIDENT_SCENE_STATE_BYTES, warm.batch_len,
     );
     Ok(ResidentSceneBatchState {
@@ -1627,6 +1627,7 @@ fn encode_resident_scene_primary_batch(
     secondary_count: usize,
     result_ggtt_gpu: u64,
     result_ppgtt_gpu: u64,
+    secondary_ppgtt: bool,
 ) -> Result<usize, &'static str> {
     let batch = unsafe {
         core::slice::from_raw_parts_mut(
@@ -1654,7 +1655,11 @@ fn encode_resident_scene_primary_batch(
             )
             .ok_or("scene-frame-batch-slot")?;
         let gpu = GPU_VA_BATCH_BASE + offset as u64;
-        push(MI_BATCH_BUFFER_START_GEN8 | MI_BATCH_2ND_LEVEL)?;
+        push(
+            MI_BATCH_BUFFER_START_GEN8
+                | MI_BATCH_2ND_LEVEL
+                | if secondary_ppgtt { MI_BATCH_PPGTT } else { 0 },
+        )?;
         push(gpu as u32)?;
         push((gpu >> 32) as u32)?;
         push(MI_STORE_DATA_IMM_GGTT_DW1)?;
@@ -1734,7 +1739,7 @@ fn submit_resident_scene_geometry_batched(
         None
     };
     let prepare_started_ns = crate::chronos::monotonic_nanos();
-    let result_ggtt_gpu = carrier.map_or(GPU_VA_RESULT_BASE, |_| picasso_render1_result_ggtt());
+    let result_ggtt_gpu = carrier.map_or(GPU_VA_RESULT_BASE, picasso_render1_result_ggtt);
     const CLEAR_TRIANGLE: [[f32; 3]; 3] = [[-1.0, -1.0, 1.0], [3.0, -1.0, 1.0], [-1.0, 3.0, 1.0]];
     if draws.len() > RESIDENT_SCENE_MAX_DRAWS {
         return Err("scene-frame-draw-limit");
@@ -1850,6 +1855,7 @@ fn submit_resident_scene_geometry_batched(
         secondary_count,
         result_ggtt_gpu,
         GPU_VA_RESULT_BASE,
+        carrier.is_some(),
     )?;
     crate::intel::dma_flush(warm.batch_virt, primary_bytes);
     if !RESIDENT_SCENE_BATCH_PATH_LOGGED.swap(true, Ordering::AcqRel) {
@@ -1928,7 +1934,7 @@ fn submit_resident_churn_forward_geometry_batched(
         None
     };
     let prepare_started_ns = crate::chronos::monotonic_nanos();
-    let result_ggtt_gpu = carrier.map_or(GPU_VA_RESULT_BASE, |_| picasso_render1_result_ggtt());
+    let result_ggtt_gpu = carrier.map_or(GPU_VA_RESULT_BASE, picasso_render1_result_ggtt);
     const CLEAR_TRIANGLE: [[f32; 3]; 3] = [[-1.0, -1.0, 1.0], [3.0, -1.0, 1.0], [-1.0, 3.0, 1.0]];
     let transform_dispatch = resident.transform_dispatch();
     let transform_handoff = transform_dispatch.map(|dispatch| dispatch.output.into());
@@ -2093,6 +2099,7 @@ fn submit_resident_churn_forward_geometry_batched(
         secondary_count,
         result_ggtt_gpu,
         GPU_VA_RESULT_BASE,
+        carrier.is_some(),
     )?;
     crate::intel::dma_flush(warm.batch_virt, primary_bytes);
     if transform_handoff.is_some_and(RetainedGraphicsHandoff::uses_native_matrices) {
@@ -7453,7 +7460,7 @@ pub(crate) fn init_fixed_render_ggtt_for_boot(dev: crate::intel::Dev) -> bool {
             && warm.result_len != 0
             && warm.streamout_len != 0
             && render_ppgtt_pml4_phys() != 0;
-        let picasso_render1_ready = prewarm_picasso_render1_control_ggtt_for_boot(dev);
+        let picasso_carriers_ready = prewarm_picasso_carrier_control_ggtt_for_boot(dev);
         if !complete || !map_smoke_buffers(dev, warm) {
             WARM_BUFFERS_MAPPED.store(false, Ordering::Release);
             return false;
@@ -7462,9 +7469,10 @@ pub(crate) fn init_fixed_render_ggtt_for_boot(dev: crate::intel::Dev) -> bool {
         MEMORY_PROOF_LOGGED.store(true, Ordering::Release);
         WARM_BUFFERS_MAPPED.store(true, Ordering::Release);
         crate::log_info!(target: "render";
-            "intel/render boot-gate render0={} render1_picasso={} render1_runtime_ggtt_remap=forbidden\n",
+            "intel/render boot-gate render0={} render1_picasso={} render2_picasso={} picasso_runtime_ggtt_remap=forbidden max_vmx_domains=2\n",
             1,
-            picasso_render1_ready as u8,
+            picasso_carriers_ready as u8,
+            picasso_carriers_ready as u8,
         );
         true
     })

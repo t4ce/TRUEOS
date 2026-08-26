@@ -325,8 +325,8 @@ pub(crate) fn resident_helio_transform_artifact_for_carrier(
             return Err("picasso-transform-artifact-map");
         }
         crate::log_info!(target: "render";
-            "helio-transform: authenticated instruction image mapped carrier=Render1 gpu=0x{:X} phys=0x{:X} bytes=0x{:X} context=vmx-owned\n",
-            mapping.gpu, mapping.phys, mapping.mapped_bytes,
+            "helio-transform: authenticated instruction image mapped carrier={} gpu=0x{:X} phys=0x{:X} bytes=0x{:X} context=vmx-owned\n",
+            carrier.carrier().label(), mapping.gpu, mapping.phys, mapping.mapped_bytes,
         );
         return Ok(mapping);
     }

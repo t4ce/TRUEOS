@@ -2218,13 +2218,9 @@ async fn run_shell2(
                                 transcript = current_transcript_for_task(io);
                                 render_active_slot_content(&out, output_mask, &transcript);
                             } else {
-                                let mut input = alloc::vec::Vec::from(submitted.as_bytes());
-                                input.push(b'\n');
-                                const SKIP_VM_SUBMIT_ON_ENTER: bool = true;
-                                if !SKIP_VM_SUBMIT_ON_ENTER {
-                                    let _ =
-                                        crate::hv::blueprint_console_submit_stdin(vm_id, &input);
-                                }
+                                let _ = crate::hv::blueprint_console_submit_text_app_line(
+                                    vm_id, submitted,
+                                );
                                 transcript = current_transcript_for_task(io);
                                 render_active_slot_content(&out, output_mask, &transcript);
                             }
@@ -2239,13 +2235,9 @@ async fn run_shell2(
                                 transcript = current_transcript_for_task(io);
                                 render_active_slot_content(&out, output_mask, &transcript);
                             } else {
-                                let mut input = alloc::vec::Vec::from(submitted.as_bytes());
-                                input.push(b'\n');
-                                const SKIP_VM_SUBMIT_ON_ENTER: bool = true;
-                                if !SKIP_VM_SUBMIT_ON_ENTER {
-                                    let _ =
-                                        crate::hv::blueprint_console_submit_stdin(vm_id, &input);
-                                }
+                                let _ = crate::hv::blueprint_console_submit_text_app_line(
+                                    vm_id, submitted,
+                                );
                                 transcript = current_transcript_for_task(io);
                                 render_active_slot_content(&out, output_mask, &transcript);
                             }

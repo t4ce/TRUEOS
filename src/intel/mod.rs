@@ -262,9 +262,10 @@ pub fn init_once() {
         guc_ready && physical_gt.accepted() && self::render::init_fixed_render_ggtt_for_boot(dev);
     crate::log_info!(
         target: "render";
-        "intel/gt-global-init: fixed_render_ggtt={} picasso_render1_ggtt={} ownership=boot-only guc_ready={} client_remap=forbidden\n",
+        "intel/gt-global-init: fixed_render_ggtt={} picasso_render1_ggtt={} picasso_render2_ggtt={} ownership=boot-only guc_ready={} client_remap=forbidden\n",
         fixed_render_ggtt_ready as u8,
-        self::render::picasso_render1_control_ggtt_ready() as u8,
+        self::render::picasso_carrier_control_ggtt_ready() as u8,
+        self::render::picasso_carrier_control_ggtt_ready() as u8,
         guc_ready as u8,
     );
     self::display::log_bsp_display_metrics_probe(dev);

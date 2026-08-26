@@ -365,13 +365,13 @@ fn init_warm_state_for_boot(dev: crate::intel::Dev) -> RenderWarmState {
     warm
 }
 
-/// Allocate an independent, boot-lifetime Render1 control/data set.
+/// Allocate one independent, boot-lifetime Picasso control/data set.
 ///
 /// Unlike `init_warm_state_for_boot`, this deliberately does not publish into
 /// Render0's globals and does not create a Render0 PPGTT.  Its physical pages
-/// are installed in the immutable Render1 GGTT window during GT bring-up, then
-/// mapped into exactly one owned VMX GPUVM at a time by the Picasso carrier.
-pub(crate) fn allocate_picasso_render1_warm_state_for_boot(
+/// are installed in one immutable carrier GGTT window during GT bring-up, then
+/// mapped into exactly one owned VMX GPUVM at a time by that Picasso carrier.
+pub(crate) fn allocate_picasso_warm_state_for_boot(
     dev: crate::intel::Dev,
 ) -> Option<RenderWarmState> {
     let (ring_phys, ring_virt) = crate::dma::alloc(WARM_RING_BYTES, crate::intel::WARM_ALIGN)?;

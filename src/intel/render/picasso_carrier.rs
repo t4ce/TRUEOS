@@ -1,10 +1,10 @@
-// Phase-1 Picasso carrier ownership.
+// Picasso carrier ownership.
 //
 // Render0 is a boot-lifetime kernel/Helio lane.  It is deliberately not a
 // fallback for a VMX Picasso device.  This file owns the identity boundary for
-// the first independently scheduled Picasso renderer (Render1); the mutable
-// rendering storage that follows is keyed by this lease rather than by the
-// Render0 singleton.
+// independently scheduled Picasso renderers (Render1 and Render2); the mutable
+// rendering storage that follows is keyed by an indexed lease rather than by
+// the Render0 singleton.
 
 use crate::gpu::physical::PhysicalGpuDevice;
 use crate::gpu::physical::PhysicalGpuVmHandle;
@@ -50,12 +50,17 @@ const _: () = {
     assert!(PICASSO_UI4_ALIAS_VA_LIMIT <= GPU_VA_RESIDENT_UI4_FRAME_LIMIT);
 };
 
-// These are GGTT control addresses, not the Render1 PPGTT addresses used by
-// command packets.  They occupy the intentional gap between Render0's fixed
-// batch window and direct-RCS's first persistent lane.
+// These are GGTT control addresses, not the private PPGTT addresses used by
+// command packets. Render1 occupies the intentional gap before direct-RCS.
+// Render2 begins at the end of HelioC's PPGTT resource ABI; only its three
+// control allocations are GGTT mapped there, and the window ends before the
+// persistent font coverage arena.
 const PICASSO_RENDER1_GGTT_RING_BASE: u64 = 0x01A0_0000;
 const PICASSO_RENDER1_GGTT_CONTEXT_BASE: u64 = 0x01A1_0000;
 const PICASSO_RENDER1_GGTT_RESULT_BASE: u64 = 0x01A4_0000;
+const PICASSO_RENDER2_GGTT_RING_BASE: u64 = 0x0980_0000;
+const PICASSO_RENDER2_GGTT_CONTEXT_BASE: u64 = 0x0981_0000;
+const PICASSO_RENDER2_GGTT_RESULT_BASE: u64 = 0x0984_0000;
 const _: () =
     assert!(GPU_VA_BATCH_BASE + WARM_BATCH_BYTES as u64 <= PICASSO_RENDER1_GGTT_RING_BASE);
 const _: () = assert!(
@@ -69,6 +74,72 @@ const _: () = assert!(
     PICASSO_RENDER1_GGTT_RESULT_BASE + WARM_RESULT_BYTES as u64
         <= crate::intel::gpgpu::DIRECT_RCS_GPU_VA_RING_BASE
 );
+const _: () = assert!(PICASSO_RENDER2_GGTT_RING_BASE.is_multiple_of(4096));
+const _: () = assert!(PICASSO_RENDER2_GGTT_CONTEXT_BASE.is_multiple_of(4096));
+const _: () = assert!(PICASSO_RENDER2_GGTT_RESULT_BASE.is_multiple_of(4096));
+const _: () = assert!(
+    PICASSO_RENDER2_GGTT_RING_BASE + WARM_RING_BYTES as u64
+        <= PICASSO_RENDER2_GGTT_CONTEXT_BASE
+);
+const _: () = assert!(
+    PICASSO_RENDER2_GGTT_CONTEXT_BASE + WARM_CONTEXT_BYTES as u64
+        <= PICASSO_RENDER2_GGTT_RESULT_BASE
+);
+const _: () = assert!(
+    PICASSO_RENDER2_GGTT_RESULT_BASE + WARM_RESULT_BYTES as u64 <= 0x0A00_0000
+);
+const _: () = assert!(
+    PICASSO_RENDER1_GGTT_RESULT_BASE + WARM_RESULT_BYTES as u64
+        <= PICASSO_RENDER2_GGTT_RING_BASE
+);
+
+const PICASSO_CARRIER_COUNT: usize = 2;
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) enum PicassoCarrierId {
+    Render1,
+    Render2,
+}
+
+#[derive(Copy, Clone)]
+struct PicassoControlGgtt {
+    ring: u64,
+    context: u64,
+    result: u64,
+}
+
+impl PicassoCarrierId {
+    const ALL: [Self; PICASSO_CARRIER_COUNT] = [Self::Render1, Self::Render2];
+
+    const fn index(self) -> usize {
+        match self {
+            Self::Render1 => 0,
+            Self::Render2 => 1,
+        }
+    }
+
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Render1 => "Render1",
+            Self::Render2 => "Render2",
+        }
+    }
+
+    const fn control(self) -> PicassoControlGgtt {
+        match self {
+            Self::Render1 => PicassoControlGgtt {
+                ring: PICASSO_RENDER1_GGTT_RING_BASE,
+                context: PICASSO_RENDER1_GGTT_CONTEXT_BASE,
+                result: PICASSO_RENDER1_GGTT_RESULT_BASE,
+            },
+            Self::Render2 => PicassoControlGgtt {
+                ring: PICASSO_RENDER2_GGTT_RING_BASE,
+                context: PICASSO_RENDER2_GGTT_CONTEXT_BASE,
+                result: PICASSO_RENDER2_GGTT_RESULT_BASE,
+            },
+        }
+    }
+}
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct PicassoCarrierMapping {
@@ -106,7 +177,7 @@ struct PicassoCarrierMappingGuard {
 
 impl Drop for PicassoCarrierMappingGuard {
     fn drop(&mut self) {
-        if let Some(state) = PICASSO_RENDER1_SLOT
+        if let Some(state) = picasso_carrier_slot(self.lease.carrier())
             .lock()
             .state
             .as_mut()
@@ -144,6 +215,7 @@ struct PicassoCarrierSlot {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct PicassoCarrierLease {
+    carrier: PicassoCarrierId,
     device_raw: u64,
     epoch: u64,
     gpuvm: PhysicalGpuVmHandle,
@@ -170,6 +242,10 @@ impl PicassoCarrierClaim {
 }
 
 impl PicassoCarrierLease {
+    pub(crate) const fn carrier(self) -> PicassoCarrierId {
+        self.carrier
+    }
+
     pub(crate) const fn device_raw(self) -> u64 {
         self.device_raw
     }
@@ -191,75 +267,131 @@ impl PicassoCarrierLease {
     }
 }
 
-/// Render1 has a deliberate Phase-1 capacity of one VMX Picasso domain.
-///
 /// This lock protects only the software ownership token.  Mapping, allocation,
 /// LRC initialization and GuC calls happen after the broker lease has been
 /// staged and therefore never under `gpu::vgpu::BROKER`.
-static PICASSO_RENDER1_SLOT: Mutex<PicassoCarrierSlot> = Mutex::new(PicassoCarrierSlot {
-    boot_ready: false,
-    warm: None,
-    state: None,
-});
-static PICASSO_RENDER1_GGTT_PREWARM: spin::Once<bool> = spin::Once::new();
+const fn empty_picasso_carrier_slot() -> PicassoCarrierSlot {
+    PicassoCarrierSlot {
+        boot_ready: false,
+        warm: None,
+        state: None,
+    }
+}
 
-/// Prewarm Render1's process-global control window exactly once while GT
-/// bring-up owns GGTT mutation.  The per-VM Picasso path later maps this same
-/// backing into its owned PPGTT; it never maps or repairs GGTT at runtime.
-pub(crate) fn prewarm_picasso_render1_control_ggtt_for_boot(dev: crate::intel::Dev) -> bool {
-    *PICASSO_RENDER1_GGTT_PREWARM.call_once(|| {
+static PICASSO_CARRIER_SLOTS: [Mutex<PicassoCarrierSlot>; PICASSO_CARRIER_COUNT] = [
+    Mutex::new(empty_picasso_carrier_slot()),
+    Mutex::new(empty_picasso_carrier_slot()),
+];
+static PICASSO_CARRIER_GGTT_PREWARM: spin::Once<bool> = spin::Once::new();
+static PICASSO_CARRIER_CLAIM_LOCK: Mutex<()> = Mutex::new(());
+
+fn picasso_carrier_slot(carrier: PicassoCarrierId) -> &'static Mutex<PicassoCarrierSlot> {
+    &PICASSO_CARRIER_SLOTS[carrier.index()]
+}
+
+fn warm_backing_is_distinct(a: RenderWarmState, b: RenderWarmState) -> bool {
+    let a_ranges = [
+        (a.ring_phys, a.ring_len),
+        (a.context_phys, a.context_len),
+        (a.batch_phys, a.batch_len),
+        (a.draw_state_phys, a.draw_state_len),
+        (a.vertex_phys, a.vertex_len),
+        (a.result_phys, a.result_len),
+        (a.streamout_phys, a.streamout_len),
+    ];
+    let b_ranges = [
+        (b.ring_phys, b.ring_len),
+        (b.context_phys, b.context_len),
+        (b.batch_phys, b.batch_len),
+        (b.draw_state_phys, b.draw_state_len),
+        (b.vertex_phys, b.vertex_len),
+        (b.result_phys, b.result_len),
+        (b.streamout_phys, b.streamout_len),
+    ];
+    a_ranges.iter().all(|(a_phys, a_bytes)| {
+        let a_end = a_phys.saturating_add(*a_bytes as u64);
+        b_ranges.iter().all(|(b_phys, b_bytes)| {
+            let b_end = b_phys.saturating_add(*b_bytes as u64);
+            a_end <= *b_phys || b_end <= *a_phys
+        })
+    })
+}
+
+/// Prewarm both process-global carrier control windows exactly once while GT
+/// bring-up owns GGTT mutation. The per-VM path later maps only its carrier's
+/// data backing into its owned PPGTT; it never maps or repairs GGTT at runtime.
+pub(crate) fn prewarm_picasso_carrier_control_ggtt_for_boot(dev: crate::intel::Dev) -> bool {
+    *PICASSO_CARRIER_GGTT_PREWARM.call_once(|| {
         if !crate::intel::physical_gt_ready(dev) {
             return false;
         }
-        let Some(warm) = allocate_picasso_render1_warm_state_for_boot(dev) else {
+        let Some(render1_warm) = allocate_picasso_warm_state_for_boot(dev) else {
             crate::log_error!(target: "render";
                 "picasso-carrier prewarm accepted=0 carrier=Render1 reason=control-backing-allocation-failed runtime-ggtt-repair=forbidden\n"
             );
             return false;
         };
-        let mapped = crate::intel::map_ggtt(
-            dev,
-            warm.ring_phys,
-            warm.ring_len,
-            PICASSO_RENDER1_GGTT_RING_BASE,
-        ) && crate::intel::map_ggtt(
-            dev,
-            warm.context_phys,
-            warm.context_len,
-            PICASSO_RENDER1_GGTT_CONTEXT_BASE,
-        ) && crate::intel::map_ggtt(
-            dev,
-            warm.result_phys,
-            warm.result_len,
-            PICASSO_RENDER1_GGTT_RESULT_BASE,
-        );
-        if !mapped {
+        let Some(render2_warm) = allocate_picasso_warm_state_for_boot(dev) else {
             crate::log_error!(target: "render";
-                "picasso-carrier prewarm accepted=0 carrier=Render1 reason=ggtt-control-map-failed runtime-ggtt-repair=forbidden\n"
+                "picasso-carrier prewarm accepted=0 carrier=Render2 reason=control-backing-allocation-failed runtime-ggtt-repair=forbidden\n"
+            );
+            return false;
+        };
+        if !warm_backing_is_distinct(render1_warm, render2_warm) {
+            crate::log_error!(target: "render";
+                "picasso-carrier prewarm accepted=0 carriers=Render1,Render2 reason=physical-backing-alias runtime-ggtt-repair=forbidden\n"
             );
             return false;
         }
+        let warms = [render1_warm, render2_warm];
+        for carrier in PicassoCarrierId::ALL {
+            let warm = warms[carrier.index()];
+            let control = carrier.control();
+            let mapped = crate::intel::map_ggtt(dev, warm.ring_phys, warm.ring_len, control.ring)
+                && crate::intel::map_ggtt(
+                    dev,
+                    warm.context_phys,
+                    warm.context_len,
+                    control.context,
+                )
+                && crate::intel::map_ggtt(
+                    dev,
+                    warm.result_phys,
+                    warm.result_len,
+                    control.result,
+                );
+            if !mapped {
+                crate::log_error!(target: "render";
+                    "picasso-carrier prewarm accepted=0 carrier={} reason=ggtt-control-map-failed runtime-ggtt-repair=forbidden\n",
+                    carrier.label(),
+                );
+                return false;
+            }
+        }
         crate::intel::ggtt_invalidate(dev);
-        let mut slot = PICASSO_RENDER1_SLOT.lock();
-        slot.warm = Some(warm);
-        slot.boot_ready = true;
-        crate::log_info!(target: "render";
-            "picasso-carrier prewarm accepted=1 carrier=Render1 ggtt_ring=0x{:X} ggtt_hwlrca=0x{:X} ggtt_result=0x{:X} ownership=boot-lifetime runtime_ggtt_remap=forbidden\n",
-            PICASSO_RENDER1_GGTT_RING_BASE,
-            PICASSO_RENDER1_GGTT_CONTEXT_BASE,
-            PICASSO_RENDER1_GGTT_RESULT_BASE,
-        );
+        for carrier in PicassoCarrierId::ALL {
+            let control = carrier.control();
+            let mut slot = picasso_carrier_slot(carrier).lock();
+            slot.warm = Some(warms[carrier.index()]);
+            slot.boot_ready = true;
+            crate::log_info!(target: "render";
+                "picasso-carrier prewarm accepted=1 carrier={} ggtt_ring=0x{:X} ggtt_hwlrca=0x{:X} ggtt_result=0x{:X} ownership=boot-lifetime runtime_ggtt_remap=forbidden\n",
+                carrier.label(), control.ring, control.context, control.result,
+            );
+        }
         true
     })
 }
 
-pub(crate) fn picasso_render1_control_ggtt_ready() -> bool {
-    PICASSO_RENDER1_GGTT_PREWARM.get().copied() == Some(true)
-        && PICASSO_RENDER1_SLOT.lock().boot_ready
+pub(crate) fn picasso_carrier_control_ggtt_ready() -> bool {
+    PICASSO_CARRIER_GGTT_PREWARM.get().copied() == Some(true)
+        && PicassoCarrierId::ALL
+            .iter()
+            .all(|carrier| picasso_carrier_slot(*carrier).lock().boot_ready)
 }
 
 pub(crate) fn picasso_render1_warm_state(lease: PicassoCarrierLease) -> Option<RenderWarmState> {
-    let slot = PICASSO_RENDER1_SLOT.lock();
+    let slot = picasso_carrier_slot(lease.carrier()).lock();
     slot.state
         .as_ref()
         .filter(|state| state.lease == lease)
@@ -296,35 +428,41 @@ pub(crate) fn bind_picasso_render1_warm_ppgtt(
         }
         installed += 1;
     }
+    crate::log_info!(target: "render";
+        "picasso-carrier ppgtt-bind carrier={} device=0x{:X} epoch={} gpuvm={} root=0x{:X} mappings={}\n",
+        lease.carrier().label(), lease.device_raw(), lease.epoch(), lease.gpuvm().raw(),
+        lease.root_phys(), installed,
+    );
     true
 }
 
-const fn picasso_render1_hwlrca_ggtt() -> u64 {
-    PICASSO_RENDER1_GGTT_CONTEXT_BASE
+const fn picasso_carrier_hwlrca_ggtt(lease: PicassoCarrierLease) -> u64 {
+    lease.carrier().control().context
 }
 
 /// Result writes in retained batches use MI_STORE_DATA_IMM with the GGTT bit
-/// set.  They therefore must target Render1's boot-mapped result page, not
+/// set. They therefore must target this carrier's boot-mapped result page, not
 /// the numerically identical Render0 control window.
-pub(crate) const fn picasso_render1_result_ggtt() -> u64 {
-    PICASSO_RENDER1_GGTT_RESULT_BASE
+pub(crate) const fn picasso_render1_result_ggtt(lease: PicassoCarrierLease) -> u64 {
+    lease.carrier().control().result
 }
 
-/// Initialize Render1's HWLRCA against the immutable VMX PPGTT root and
+/// Initialize the carrier's HWLRCA against the immutable VMX PPGTT root and
 /// construct the only descriptor that may be registered for this carrier.
 /// The HWLRCA is a distinct boot-mapped GGTT address while the ring/batch
 /// addresses encoded in its image remain private PPGTT translations.
 pub(crate) fn prepare_picasso_render1_context(
     lease: PicassoCarrierLease,
 ) -> Option<crate::gpu::physical::PhysicalContextDescriptor> {
-    let mut slot = PICASSO_RENDER1_SLOT.lock();
+    let control = lease.carrier().control();
+    let mut slot = picasso_carrier_slot(lease.carrier()).lock();
     let warm = slot.warm?;
     let state = slot.state.as_mut().filter(|state| state.lease == lease)?;
     if !state.lrc_initialized {
         let ring_ctl = ring_ctl_value(warm.ring_len)?;
         if !init_gen12_lrc_context_image(
             warm,
-            PICASSO_RENDER1_GGTT_RING_BASE as u32,
+            control.ring as u32,
             state.published_tail as u32,
             ring_ctl,
             lease.root_phys(),
@@ -333,13 +471,26 @@ pub(crate) fn prepare_picasso_render1_context(
         }
         state.lrc_initialized = true;
     }
-    let (hwlrca_lo, hwlrca_hi) = build_guc_context_descriptor(picasso_render1_hwlrca_ggtt());
+    let (hwlrca_lo, hwlrca_hi) =
+        build_guc_context_descriptor(picasso_carrier_hwlrca_ggtt(lease));
     Some(crate::gpu::physical::PhysicalContextDescriptor {
         engine: crate::gpu::physical::PhysicalEngineId::RCS0,
         hwlrca_lo,
         hwlrca_hi,
         gpuvm_root_phys: lease.root_phys(),
     })
+}
+
+pub(crate) fn picasso_carrier_descriptor_matches(
+    lease: PicassoCarrierLease,
+    descriptor: crate::gpu::physical::PhysicalContextDescriptor,
+) -> bool {
+    let (hwlrca_lo, hwlrca_hi) =
+        build_guc_context_descriptor(picasso_carrier_hwlrca_ggtt(lease));
+    descriptor.engine == crate::gpu::physical::PhysicalEngineId::RCS0
+        && descriptor.gpuvm_root_phys == lease.root_phys()
+        && descriptor.hwlrca_lo == hwlrca_lo
+        && descriptor.hwlrca_hi == hwlrca_hi
 }
 
 /// Acquire the carrier-local CPU encoder gate.  This is intentionally a
@@ -350,7 +501,7 @@ pub(crate) fn try_begin_picasso_render1_frame(lease: PicassoCarrierLease) -> boo
     // This is the same lock used by map/reserve/unmap.  A separate CAS left
     // a gap in which a mapper could observe `frame_active == false` after
     // admission had begun but before the bit was published.
-    let mut slot = PICASSO_RENDER1_SLOT.lock();
+    let mut slot = picasso_carrier_slot(lease.carrier()).lock();
     let Some(state) = slot.state.as_mut().filter(|state| state.lease == lease) else {
         return false;
     };
@@ -364,7 +515,7 @@ pub(crate) fn try_begin_picasso_render1_frame(lease: PicassoCarrierLease) -> boo
 }
 
 fn begin_picasso_render1_mapping(lease: PicassoCarrierLease) -> Option<PicassoCarrierMappingGuard> {
-    let mut slot = PICASSO_RENDER1_SLOT.lock();
+    let mut slot = picasso_carrier_slot(lease.carrier()).lock();
     let state = slot.state.as_mut().filter(|state| state.lease == lease)?;
     if state.quarantined || state.frame_active || state.mapping_in_flight {
         return None;
@@ -374,7 +525,7 @@ fn begin_picasso_render1_mapping(lease: PicassoCarrierLease) -> Option<PicassoCa
 }
 
 pub(crate) fn finish_picasso_render1_frame(lease: PicassoCarrierLease) {
-    if let Some(state) = PICASSO_RENDER1_SLOT
+    if let Some(state) = picasso_carrier_slot(lease.carrier())
         .lock()
         .state
         .as_mut()
@@ -398,8 +549,8 @@ fn allocate_picasso_scene_range(
     let Some((phys, virt)) = crate::dma::alloc_ppgtt(bytes, crate::intel::WARM_ALIGN) else {
         let pmm = crate::phys::pmm_stats();
         crate::log_error!(target: "render";
-            "picasso-carrier reject carrier=Render1 device=0x{:X} epoch={} stage=scene-ppgtt-alloc bytes=0x{:X} pmm_free_bytes={} pmm_largest_free_region={} pmm_free_regions={}\n",
-            lease.device_raw(), lease.epoch(), bytes,
+            "picasso-carrier reject carrier={} device=0x{:X} epoch={} stage=scene-ppgtt-alloc bytes=0x{:X} pmm_free_bytes={} pmm_largest_free_region={} pmm_free_regions={}\n",
+            lease.carrier().label(), lease.device_raw(), lease.epoch(), bytes,
             pmm.map_or(0, |stats| stats.free_bytes),
             pmm.map_or(0, |stats| stats.largest_free_region),
             pmm.map_or(0, |stats| stats.free_regions),
@@ -410,8 +561,8 @@ fn allocate_picasso_scene_range(
     crate::intel::dma_flush(virt, bytes);
     if !map_picasso_render1_resource_range(lease, physical, gpu, phys, bytes) {
         crate::log_error!(target: "render";
-            "picasso-carrier reject carrier=Render1 device=0x{:X} epoch={} stage=scene-ppgtt-map bytes=0x{:X}\n",
-            lease.device_raw(), lease.epoch(), bytes,
+            "picasso-carrier reject carrier={} device=0x{:X} epoch={} stage=scene-ppgtt-map bytes=0x{:X}\n",
+            lease.carrier().label(), lease.device_raw(), lease.epoch(), bytes,
         );
         crate::dma::dealloc(virt, bytes);
         return None;
@@ -432,7 +583,7 @@ pub(crate) fn prepare_picasso_render1_scene_storage(
     physical: &'static dyn PhysicalGpuDevice,
 ) -> Option<PicassoCarrierSceneStorage> {
     let existing = {
-        let slot = PICASSO_RENDER1_SLOT.lock();
+        let slot = picasso_carrier_slot(lease.carrier()).lock();
         slot.state.as_ref().and_then(|state| {
             (state.lease == lease && !state.quarantined)
                 .then(|| state.scene_state.zip(state.scene_depth))
@@ -452,7 +603,7 @@ pub(crate) fn prepare_picasso_render1_scene_storage(
     // the partial leaf has been rolled back).
     let _mapping = begin_picasso_render1_mapping(lease)?;
     let existing = {
-        let slot = PICASSO_RENDER1_SLOT.lock();
+        let slot = picasso_carrier_slot(lease.carrier()).lock();
         slot.state.as_ref().and_then(|state| {
             (state.lease == lease && !state.quarantined)
                 .then(|| state.scene_state.zip(state.scene_depth))
@@ -486,7 +637,7 @@ pub(crate) fn prepare_picasso_render1_scene_storage(
                     return None;
                 }
             };
-            let mut slot = PICASSO_RENDER1_SLOT.lock();
+            let mut slot = picasso_carrier_slot(lease.carrier()).lock();
             let owner = slot.state.as_mut().filter(|owner| owner.lease == lease)?;
             if owner.quarantined || owner.scene_state.is_some() || owner.scene_depth.is_some() {
                 drop(slot);
@@ -524,20 +675,20 @@ pub(crate) fn prepare_picasso_render1_scene_storage(
 
 fn quarantine_picasso_render1(lease: PicassoCarrierLease, reason: &'static str) {
     {
-        let mut slot = PICASSO_RENDER1_SLOT.lock();
+        let mut slot = picasso_carrier_slot(lease.carrier()).lock();
         let Some(state) = slot.state.as_mut().filter(|state| state.lease == lease) else {
             return;
         };
         state.quarantined = true;
     }
     crate::log_error!(target: "render";
-        "picasso-carrier quarantine carrier=Render1 device=0x{:X} epoch={} reason={} action=retain-context-and-mappings\n",
-        lease.device_raw(), lease.epoch(), reason,
+        "picasso-carrier quarantine carrier={} device=0x{:X} epoch={} reason={} action=retain-context-and-mappings\n",
+        lease.carrier().label(), lease.device_raw(), lease.epoch(), reason,
     );
     crate::gpu::vgpu::quarantine_picasso_carrier(lease);
 }
 
-/// Publish one already-flushed primary batch through Render1's own HWLRCA and
+/// Publish one already-flushed primary batch through the carrier's own HWLRCA and
 /// physical mediated GuC context.  Success requires both the release cookie
 /// and the exact context-saved HEAD equality; anything ambiguous quarantines
 /// the carrier rather than allowing a tail rollback or reuse.
@@ -550,7 +701,7 @@ pub(crate) fn submit_picasso_render1_batch(
     let _physical = crate::gpu::physical::physical_device().ok_or("picasso-physical-gpu")?;
     let warm = picasso_render1_warm_state(lease).ok_or("picasso-render1-warm")?;
     let (old_tail, initialized, quarantined) = {
-        let slot = PICASSO_RENDER1_SLOT.lock();
+        let slot = picasso_carrier_slot(lease.carrier()).lock();
         let state = slot
             .state
             .as_ref()
@@ -580,9 +731,14 @@ pub(crate) fn submit_picasso_render1_batch(
             core::hint::spin_loop();
         }
     }
-    let tail = append_ring_batch_start(warm, old_tail, batch_gpu).ok_or("picasso-render1-ring")?;
+    // The numeric batch VA intentionally matches Render0's established ABI,
+    // but its translation is owned by this VMX GPUVM. Selecting PPGTT here
+    // is the isolation boundary: a GGTT fetch would execute Render0's mutable
+    // batch at the same address.
+    let tail = append_ring_batch_start(warm, old_tail, batch_gpu, true)
+        .ok_or("picasso-render1-ring")?;
     {
-        let mut slot = PICASSO_RENDER1_SLOT.lock();
+        let mut slot = picasso_carrier_slot(lease.carrier()).lock();
         let state = slot
             .state
             .as_mut()
@@ -609,8 +765,8 @@ pub(crate) fn submit_picasso_render1_batch(
         }
     };
     crate::log_info!(target: "render";
-        "picasso-carrier submit carrier=Render1 device=0x{:X} epoch={} context={} serial={} old_tail={} published_tail={} batch=0x{:X}\n",
-        lease.device_raw(), lease.epoch(), submission.context.raw(), submission.serial, old_tail, tail, batch_gpu,
+        "picasso-carrier submit carrier={} device=0x{:X} epoch={} context={} serial={} old_tail={} published_tail={} batch=0x{:X} fetch=ppgtt\n",
+        lease.carrier().label(), lease.device_raw(), lease.epoch(), submission.context.raw(), submission.serial, old_tail, tail, batch_gpu,
     );
     let started = crate::chronos::monotonic_nanos();
     let mut spins = 0u64;
@@ -622,8 +778,8 @@ pub(crate) fn submit_picasso_render1_batch(
             && head == tail as u32
         {
             crate::log_info!(target: "render";
-                "picasso-carrier retire carrier=Render1 device=0x{:X} epoch={} context={} saved_head={} published_tail={} release=1 wait_us={} wait_iters={}\n",
-                lease.device_raw(), lease.epoch(), submission.context.raw(), head, tail,
+                "picasso-carrier retire carrier={} device=0x{:X} epoch={} context={} saved_head={} published_tail={} release=1 wait_us={} wait_iters={}\n",
+                lease.carrier().label(), lease.device_raw(), lease.epoch(), submission.context.raw(), head, tail,
                 crate::chronos::monotonic_nanos().saturating_sub(started) / 1_000, spins,
             );
             return Ok(());
@@ -640,7 +796,7 @@ pub(crate) fn submit_picasso_render1_batch(
     }
 }
 
-/// Claim the one Render1 carrier for a live VMX device.
+/// Claim one Picasso carrier for a live VMX device.
 ///
 /// `root_phys` is obtained by the broker from this device's already-owned
 /// physical GPUVM.  Keeping it in the immutable lease means a replacement
@@ -654,52 +810,73 @@ pub(crate) fn claim_picasso_render1(
     if device_raw == 0 || epoch == 0 || root_phys == 0 {
         return Err("picasso-carrier-identity");
     }
-    let mut slot = PICASSO_RENDER1_SLOT.lock();
-    if !slot.boot_ready || slot.warm.is_none() {
-        return Err("picasso-render1-not-prewarmed");
-    }
-    match slot.state.as_ref() {
-        Some(existing) if existing.lease.matches(device_raw, epoch) => Ok(PicassoCarrierClaim {
-            lease: existing.lease,
-            newly_claimed: false,
-        }),
-        Some(_) => Err("picasso-render1-capacity"),
-        None => {
-            let lease = PicassoCarrierLease {
-                device_raw,
-                epoch,
-                gpuvm,
-                root_phys,
-            };
-            slot.state = Some(PicassoCarrierState {
-                lease,
-                mappings: AllocVec::new(),
-                next_renderer_va: PICASSO_RENDERER_VA_BASE,
-                next_ui4_alias_va: PICASSO_UI4_ALIAS_VA_BASE,
-                lrc_initialized: false,
-                published_tail: 0,
-                frame_active: false,
-                mapping_in_flight: false,
-                quarantined: false,
-                scene_state: None,
-                scene_depth: None,
+    let _claims = PICASSO_CARRIER_CLAIM_LOCK.lock();
+    for carrier in PicassoCarrierId::ALL {
+        let slot = picasso_carrier_slot(carrier).lock();
+        if let Some(existing) = slot
+            .state
+            .as_ref()
+            .filter(|state| state.lease.matches(device_raw, epoch))
+        {
+            if existing.lease.gpuvm() != gpuvm || existing.lease.root_phys() != root_phys {
+                return Err("picasso-carrier-identity");
+            }
+            return Ok(PicassoCarrierClaim {
+                lease: existing.lease,
+                newly_claimed: false,
             });
-            Ok(PicassoCarrierClaim {
-                lease,
-                newly_claimed: true,
-            })
         }
     }
+    for carrier in PicassoCarrierId::ALL {
+        let mut slot = picasso_carrier_slot(carrier).lock();
+        if !slot.boot_ready || slot.warm.is_none() {
+            return Err("picasso-carrier-not-prewarmed");
+        }
+        if slot.state.is_some() {
+            continue;
+        }
+        let lease = PicassoCarrierLease {
+            carrier,
+            device_raw,
+            epoch,
+            gpuvm,
+            root_phys,
+        };
+        slot.state = Some(PicassoCarrierState {
+            lease,
+            mappings: AllocVec::new(),
+            next_renderer_va: PICASSO_RENDERER_VA_BASE,
+            next_ui4_alias_va: PICASSO_UI4_ALIAS_VA_BASE,
+            lrc_initialized: false,
+            published_tail: 0,
+            frame_active: false,
+            mapping_in_flight: false,
+            quarantined: false,
+            scene_state: None,
+            scene_depth: None,
+        });
+        crate::log_info!(target: "render";
+            "picasso-carrier claim carrier={} device=0x{:X} epoch={} gpuvm={} root=0x{:X} max_vmx_domains={}\n",
+            carrier.label(), device_raw, epoch, gpuvm.raw(), root_phys, PICASSO_CARRIER_COUNT,
+        );
+        return Ok(PicassoCarrierClaim {
+            lease,
+            newly_claimed: true,
+        });
+    }
+    Err("picasso-carrier-capacity")
 }
 
 /// Look up an already-claimed carrier without creating an ownership edge.
 pub(crate) fn picasso_render1_for(device_raw: u64, epoch: u64) -> Option<PicassoCarrierLease> {
-    PICASSO_RENDER1_SLOT
-        .lock()
-        .state
-        .as_ref()
-        .map(|state| state.lease)
-        .filter(|lease| lease.matches(device_raw, epoch))
+    PicassoCarrierId::ALL.iter().find_map(|carrier| {
+        picasso_carrier_slot(*carrier)
+            .lock()
+            .state
+            .as_ref()
+            .map(|state| state.lease)
+            .filter(|lease| lease.matches(device_raw, epoch))
+    })
 }
 
 fn aligned_carrier_bytes(bytes: usize) -> Option<usize> {
@@ -715,7 +892,7 @@ pub(crate) fn reserve_picasso_render1_resource_va(
     bytes: usize,
 ) -> Option<u64> {
     let bytes = aligned_carrier_bytes(bytes)? as u64;
-    let mut slot = PICASSO_RENDER1_SLOT.lock();
+    let mut slot = picasso_carrier_slot(lease.carrier()).lock();
     let state = slot.state.as_mut().filter(|state| state.lease == lease)?;
     if state.frame_active || state.mapping_in_flight || state.quarantined {
         return None;
@@ -736,7 +913,7 @@ pub(crate) fn reserve_picasso_render1_ui4_alias_va(
     bytes: usize,
 ) -> Option<u64> {
     let bytes = aligned_carrier_bytes(bytes)? as u64;
-    let mut slot = PICASSO_RENDER1_SLOT.lock();
+    let mut slot = picasso_carrier_slot(lease.carrier()).lock();
     let state = slot.state.as_mut().filter(|state| state.lease == lease)?;
     if state.frame_active || state.mapping_in_flight || state.quarantined {
         return None;
@@ -767,7 +944,10 @@ fn map_picasso_render1_range_inner(
     if !gpu.is_multiple_of(4096) || !phys.is_multiple_of(4096) || end > (1u64 << 32) {
         return false;
     }
-    let mut slot = PICASSO_RENDER1_SLOT.lock();
+    if physical.gpuvm_root_phys(lease.gpuvm()).ok() != Some(lease.root_phys()) {
+        return false;
+    }
+    let mut slot = picasso_carrier_slot(lease.carrier()).lock();
     let Some(state) = slot.state.as_mut().filter(|state| state.lease == lease) else {
         return false;
     };
@@ -796,8 +976,8 @@ fn map_picasso_render1_range_inner(
     };
     if mapped.is_err() {
         crate::log_error!(target: "render";
-            "picasso-carrier reject carrier=Render1 device=0x{:X} epoch={} stage=ppgtt-map mapping={} bytes=0x{:X}\n",
-            lease.device_raw(), lease.epoch(), if scanout { "ui4-pat3-uc" } else { "resource" }, bytes,
+            "picasso-carrier reject carrier={} device=0x{:X} epoch={} stage=ppgtt-map mapping={} bytes=0x{:X}\n",
+            lease.carrier().label(), lease.device_raw(), lease.epoch(), if scanout { "ui4-pat3-uc" } else { "resource" }, bytes,
         );
         return false;
     }
@@ -835,7 +1015,7 @@ pub(crate) fn prepare_picasso_render1_ui4_target(
     bytes: usize,
 ) -> Option<u64> {
     let bytes = aligned_carrier_bytes(bytes)?;
-    if let Some(gpu) = PICASSO_RENDER1_SLOT
+    if let Some(gpu) = picasso_carrier_slot(lease.carrier())
         .lock()
         .state
         .as_ref()
@@ -869,7 +1049,10 @@ fn unmap_picasso_render1_range_inner(
     let Some(bytes) = aligned_carrier_bytes(bytes) else {
         return false;
     };
-    let mut slot = PICASSO_RENDER1_SLOT.lock();
+    if physical.gpuvm_root_phys(lease.gpuvm()).ok() != Some(lease.root_phys()) {
+        return false;
+    }
+    let mut slot = picasso_carrier_slot(lease.carrier()).lock();
     let Some(state) = slot.state.as_mut().filter(|state| state.lease == lease) else {
         return false;
     };
@@ -906,11 +1089,11 @@ pub(crate) fn unmap_picasso_render1_range(
     unmap_picasso_render1_range_inner(lease, physical, gpu, bytes, false)
 }
 
-/// Return Render1 to the Phase-1 pool only after the owner has destroyed its
+/// Return this carrier to the pool only after the owner has destroyed its
 /// GuC context and unmapped every carrier-local resource.  A mismatched epoch
 /// is intentionally a no-op: it denotes a stale close racing a newer device.
 pub(crate) fn release_picasso_render1(lease: PicassoCarrierLease) -> bool {
-    let mut slot = PICASSO_RENDER1_SLOT.lock();
+    let mut slot = picasso_carrier_slot(lease.carrier()).lock();
     if slot.state.as_ref().is_some_and(|current| {
         current.lease == lease
             && !current.frame_active
@@ -933,7 +1116,7 @@ pub(crate) fn teardown_picasso_render1(
     lease: PicassoCarrierLease,
     physical: &'static dyn PhysicalGpuDevice,
 ) -> bool {
-    if PICASSO_RENDER1_SLOT
+    if picasso_carrier_slot(lease.carrier())
         .lock()
         .state
         .as_ref()
@@ -948,7 +1131,7 @@ pub(crate) fn teardown_picasso_render1(
     }
     loop {
         let mapping = {
-            let slot = PICASSO_RENDER1_SLOT.lock();
+            let slot = picasso_carrier_slot(lease.carrier()).lock();
             slot.state
                 .as_ref()
                 .filter(|state| state.lease == lease)
@@ -964,7 +1147,7 @@ pub(crate) fn teardown_picasso_render1(
             quarantine_picasso_render1(lease, "teardown-unmap");
             return false;
         }
-        let mut slot = PICASSO_RENDER1_SLOT.lock();
+        let mut slot = picasso_carrier_slot(lease.carrier()).lock();
         let Some(state) = slot.state.as_mut().filter(|state| state.lease == lease) else {
             return false;
         };
@@ -977,7 +1160,7 @@ pub(crate) fn teardown_picasso_render1(
         state.mappings.swap_remove(index);
     }
     let (scene_state, scene_depth) = {
-        let mut slot = PICASSO_RENDER1_SLOT.lock();
+        let mut slot = picasso_carrier_slot(lease.carrier()).lock();
         let Some(state) = slot.state.as_mut().filter(|state| state.lease == lease) else {
             return false;
         };
@@ -986,7 +1169,7 @@ pub(crate) fn teardown_picasso_render1(
     for allocation in [scene_state, scene_depth].into_iter().flatten() {
         crate::dma::dealloc(allocation.virt, allocation.bytes);
     }
-    let mut slot = PICASSO_RENDER1_SLOT.lock();
+    let mut slot = picasso_carrier_slot(lease.carrier()).lock();
     let Some(state) = slot.state.as_ref() else {
         return false;
     };
@@ -1004,7 +1187,7 @@ pub(crate) fn teardown_unsubmitted_picasso_render1(
     lease: PicassoCarrierLease,
     physical: &'static dyn PhysicalGpuDevice,
 ) -> bool {
-    let safe = PICASSO_RENDER1_SLOT
+    let safe = picasso_carrier_slot(lease.carrier())
         .lock()
         .state
         .as_ref()
@@ -1026,6 +1209,7 @@ mod picasso_carrier_tests {
     #[test]
     fn lease_match_requires_the_same_device_generation() {
         let lease = PicassoCarrierLease {
+            carrier: PicassoCarrierId::Render1,
             device_raw: 0x1000_0001,
             epoch: 7,
             gpuvm: PhysicalGpuVmHandle::from_raw(3),
@@ -1039,6 +1223,7 @@ mod picasso_carrier_tests {
     #[test]
     fn render1_lease_uses_the_owned_gpuvm_root() {
         let lease = PicassoCarrierLease {
+            carrier: PicassoCarrierId::Render1,
             device_raw: 1,
             epoch: 1,
             gpuvm: PhysicalGpuVmHandle::from_raw(9),
@@ -1046,6 +1231,32 @@ mod picasso_carrier_tests {
         };
         assert_eq!(lease.gpuvm().raw(), 9);
         assert_eq!(lease.root_phys(), 0xBEEF_0000);
+    }
+
+    #[test]
+    fn carrier_identity_and_control_windows_are_distinct() {
+        let render1 = PicassoCarrierLease {
+            carrier: PicassoCarrierId::Render1,
+            device_raw: 1,
+            epoch: 1,
+            gpuvm: PhysicalGpuVmHandle::from_raw(9),
+            root_phys: 0xBEEF_0000,
+        };
+        let render2 = PicassoCarrierLease {
+            carrier: PicassoCarrierId::Render2,
+            ..render1
+        };
+        assert_ne!(render1, render2);
+        assert_eq!(render1.carrier().label(), "Render1");
+        assert_eq!(render2.carrier().label(), "Render2");
+        let render1_control = render1.carrier().control();
+        let render2_control = render2.carrier().control();
+        assert_ne!(render1_control.ring, render2_control.ring);
+        assert_ne!(render1_control.context, render2_control.context);
+        assert_ne!(render1_control.result, render2_control.result);
+        assert!(
+            render1_control.result + WARM_RESULT_BYTES as u64 <= render2_control.ring
+        );
     }
 
     #[test]

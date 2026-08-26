@@ -2070,7 +2070,7 @@ pub(crate) fn create_retained_mesh(
         Err(reason) => {
             clear_picasso_setup_lease(principal, device_handle, epoch);
             return Err(match reason {
-                "picasso-render1-capacity" => VgpuError::Busy,
+                "picasso-carrier-capacity" => VgpuError::Busy,
                 _ => VgpuError::DeviceLost,
             });
         }
@@ -4472,8 +4472,8 @@ pub(crate) fn submit_ui4_retained_frame(
         );
     if let Err(reason) = rendered.as_ref() {
         crate::log_error!(target: "render";
-            "picasso-carrier reject carrier=Render1 device=0x{:X} epoch={} stage=retained-frame-render reason={}\n",
-            carrier.device_raw(), carrier.epoch(), reason,
+            "picasso-carrier reject carrier={} device=0x{:X} epoch={} stage=retained-frame-render reason={}\n",
+            carrier.carrier().label(), carrier.device_raw(), carrier.epoch(), reason,
         );
     }
     if matches!(rendered, Err("render-busy")) {
@@ -5182,9 +5182,7 @@ pub(crate) fn submit_picasso_carrier_context(
     lease: crate::intel::render::PicassoCarrierLease,
     descriptor: PhysicalContextDescriptor,
 ) -> Result<crate::gpu::physical::PhysicalSubmission, VgpuError> {
-    if descriptor.engine != crate::gpu::physical::PhysicalEngineId::RCS0
-        || descriptor.gpuvm_root_phys != lease.root_phys()
-    {
+    if !crate::intel::render::picasso_carrier_descriptor_matches(lease, descriptor) {
         return Err(VgpuError::PermissionDenied);
     }
     let physical = require_physical()?;

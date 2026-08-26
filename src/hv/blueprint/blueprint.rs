@@ -19,6 +19,7 @@ const BLUEPRINT_PAYLOAD_7Z: u16 = 2;
 pub(crate) const BLUEPRINT_CAP_REPLICATABLE: u16 = 1 << 8;
 pub(crate) const BLUEPRINT_CAP_ARGV_ENTRY_V1: u16 = 1 << 9;
 pub(crate) const BLUEPRINT_CAP_FILESYSTEM_INDEPENDENT: u16 = 1 << 10;
+pub(crate) const BLUEPRINT_CAP_TRUEOSFS_SCOPE: u16 = 1 << 11;
 const ELF64_HEADER_LEN: usize = 64;
 const ELF64_RELA_LEN: usize = 24;
 const SHT_PROGBITS: u32 = 1;
@@ -55,6 +56,10 @@ impl BlueprintModule<'_> {
 
     pub(crate) const fn is_filesystem_independent(&self) -> bool {
         self.flags & BLUEPRINT_CAP_FILESYSTEM_INDEPENDENT != 0
+    }
+
+    pub(crate) const fn has_trueosfs_scope(&self) -> bool {
+        self.flags & BLUEPRINT_CAP_TRUEOSFS_SCOPE != 0
     }
 }
 
@@ -1657,6 +1662,7 @@ pub(crate) fn build_process_env(
     app_fs_root: Option<&str>,
     identity: Option<&crate::hv::BlueprintInstanceIdentity>,
     launch_script: Option<&str>,
+    trueosfs_scope: bool,
 ) -> BTreeMap<String, String> {
     let mut vars = BTreeMap::new();
     let app_home = app_fs_root
@@ -1754,10 +1760,10 @@ pub(crate) fn build_process_env(
         vars.insert(String::from("PRISM_MAX_EXPORT_QUBITS"), String::from("26"));
     }
     vars.insert(String::from("TRUEOS_APP_ARCHIVE"), String::from(archive));
-    // Launch scripts are supplied by the host-side launcher, not by the
-    // Blueprint. Treat this exact directive as an explicit filesystem
-    // capability grant while leaving the normal app/common confinement intact.
-    if launch_script.is_some_and(|script| {
+    // Filesystem scope is an explicit capability, either sealed into the
+    // Blueprint header by package metadata or supplied by a host launch vFile.
+    // Ordinary apps retain their app/common confinement.
+    if trueosfs_scope || launch_script.is_some_and(|script| {
         script
             .lines()
             .map(str::trim)

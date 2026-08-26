@@ -193,7 +193,7 @@ fn submit_warm_render_batch(
         );
     }
     let Some(ring_tail_bytes) =
-        append_ring_batch_start(warm, old_ring_tail_bytes, GPU_VA_BATCH_BASE)
+        append_ring_batch_start(warm, old_ring_tail_bytes, GPU_VA_BATCH_BASE, false)
     else {
         return false;
     };
@@ -2225,6 +2225,7 @@ fn append_ring_batch_start(
     warm: RenderWarmState,
     ring_tail_bytes: usize,
     batch_gpu_addr: u64,
+    batch_ppgtt: bool,
 ) -> Option<usize> {
     if warm.ring_virt.is_null()
         || warm.ring_len < RENDER_RING_ENTRY_BYTES
@@ -2238,7 +2239,10 @@ fn append_ring_batch_start(
     let start = ring_tail_bytes / core::mem::size_of::<u32>();
     unsafe {
         let dwords = warm.ring_virt.cast::<u32>();
-        core::ptr::write_volatile(dwords.add(start), MI_BATCH_BUFFER_START_GEN8);
+        core::ptr::write_volatile(
+            dwords.add(start),
+            MI_BATCH_BUFFER_START_GEN8 | if batch_ppgtt { MI_BATCH_PPGTT } else { 0 },
+        );
         core::ptr::write_volatile(dwords.add(start + 1), batch_gpu_addr as u32);
         core::ptr::write_volatile(dwords.add(start + 2), (batch_gpu_addr >> 32) as u32);
         core::ptr::write_volatile(dwords.add(start + 3), MI_NOOP);

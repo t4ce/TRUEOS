@@ -57,7 +57,7 @@ pub(crate) mod flags {
             // Preserve the original USB hunt's full Global side, including Debug.
             LogLevelPolicy::up(LogLevelFilter::Trace)
         } else {
-            LogLevelPolicy::up(LogLevelFilter::Info)
+            LogLevelPolicy::up(LogLevelFilter::Warn)
         };
     pub(crate) const BOOT_LOG_LEVEL: LogLevelPolicy = if BOOT_DIAG_PROFILE_ENABLED {
         LogLevelPolicy::up(LogLevelFilter::Trace)
@@ -102,8 +102,8 @@ pub(crate) mod flags {
         LogLevelPolicy::up(LogLevelFilter::Info)
     };
     pub(crate) const HDA_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LogLevelFilter::Warn);
-    pub(crate) const HV_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LogLevelFilter::Info);
-    pub(crate) const APPS_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LogLevelFilter::Info);
+    pub(crate) const HV_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LogLevelFilter::Trace);
+    pub(crate) const APPS_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LogLevelFilter::Trace);
     pub(crate) const EXECUTOR_REALM_LOG_LEVEL: LogLevelPolicy =
         LogLevelPolicy::up(LogLevelFilter::Info);
     pub(crate) const EXECUTOR_CACHE_LOG_LEVEL: LogLevelPolicy =

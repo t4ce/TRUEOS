@@ -2880,10 +2880,21 @@ pub fn stage_blueprint_launch(
         return Err(StartError::UnsupportedVmId);
     };
     let app_fs_root = state.app_fs_root.clone();
-    let app_command_passthrough = state
+    let mut app_command_passthrough = state
         .app_args
         .iter()
         .any(|arg| arg == BLUEPRINT_VMX_MINISHELL_ARG);
+    let mut trueosfs_scope = false;
+    if let Ok(module) = crate::hv::blueprint::parse_blueprint(state.module_bytes.as_slice()) {
+        trueosfs_scope = module.has_trueosfs_scope();
+        if let Ok(unpacked) = crate::hv::blueprint::unpack_blueprint(&module)
+            && let Ok(imports) = crate::hv::blueprint::elf_imports(unpacked.as_slice())
+        {
+            app_command_passthrough |= imports
+                .iter()
+                .any(|import| import.name == "trueos_cabi_shell_attached_read_byte");
+        }
+    }
     let direct_terminal_handoff =
         blueprint_uses_net_shell_direct_path(console_surface, console_target.as_ref());
     let local_terminal_handoff = !direct_terminal_handoff
@@ -2944,6 +2955,7 @@ pub fn stage_blueprint_launch(
             Some(app_fs_root.as_str()),
             Some(&state.identity),
             state.launch_script.as_deref(),
+            trueosfs_scope,
         ),
         console_target,
         console_surface,
@@ -4877,6 +4889,32 @@ pub(crate) fn blueprint_console_submit_stdin(vm_id: u8, data: &[u8]) -> usize {
     drop(guard);
     notify_blueprint_console_input(vm_id);
     data.len()
+}
+
+pub(crate) fn blueprint_console_submit_text_app_line(vm_id: u8, line: &str) -> bool {
+    let Some(slot) = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize) else {
+        return false;
+    };
+    let mut guard = slot.lock();
+    let Some(context) = guard.as_mut() else {
+        return false;
+    };
+    if !context.console_attached
+        || context.console_surface != BlueprintConsoleSurface::Text
+        || !context.app_command_passthrough
+    {
+        return false;
+    }
+    const MAX_CONSOLE_INPUT: usize = 64 * 1024;
+    for byte in line.bytes().chain(core::iter::once(b'\n')) {
+        if context.console_input.len() >= MAX_CONSOLE_INPUT {
+            let _ = context.console_input.pop_front();
+        }
+        context.console_input.push_back(byte);
+    }
+    drop(guard);
+    notify_blueprint_console_input(vm_id);
+    true
 }
 
 pub(crate) fn blueprint_console_read_byte(vm_id: u8) -> Option<u8> {
