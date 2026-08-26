@@ -764,7 +764,7 @@ pub(crate) fn submit_picasso_render1_batch(
             return Err("picasso-render1-submit");
         }
     };
-    crate::log_info!(target: "render";
+    crate::log_trace!(target: "render";
         "picasso-carrier submit carrier={} device=0x{:X} epoch={} context={} serial={} old_tail={} published_tail={} batch=0x{:X} fetch=ppgtt\n",
         lease.carrier().label(), lease.device_raw(), lease.epoch(), submission.context.raw(), submission.serial, old_tail, tail, batch_gpu,
     );
@@ -777,7 +777,7 @@ pub(crate) fn submit_picasso_render1_batch(
             && hi == RCS_EXEC_RESULT_SCENE_RCS_RELEASE_DONE_HI
             && head == tail as u32
         {
-            crate::log_info!(target: "render";
+            crate::log_trace!(target: "render";
                 "picasso-carrier retire carrier={} device=0x{:X} epoch={} context={} saved_head={} published_tail={} release=1 wait_us={} wait_iters={}\n",
                 lease.carrier().label(), lease.device_raw(), lease.epoch(), submission.context.raw(), head, tail,
                 crate::chronos::monotonic_nanos().saturating_sub(started) / 1_000, spins,

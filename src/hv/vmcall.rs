@@ -114,6 +114,7 @@ pub const OP_BP_UI4_SCENE_FRAME_OPEN_STREAMING: u32 = 0xC7; // arg0 x/y,arg1 wid
 pub const OP_BP_SHELL_ATTACHED_READ: u32 = 0xCB; // arg0 cap -> attached-shell input payload
 pub const OP_BP_INPUT_KEYBOARD_OUTPUT_POP: u32 = 0xCC; // response payload is one keyboard event
 pub const OP_BP_INPUT_KEYBOARD_OUTPUT_SINCE: u32 = 0xCD; // arg0 read seq,arg1 cap -> payload events
+pub const OP_BP_INPUT_MIDI_READ_V1: u32 = 0x200; // arg0 read seq,arg1 cap -> MIDI edge payload
 pub const OP_BP_ASYNC_FS_READ_START: u32 = 0xCE; // payload resolved path -> operation id/rc
 pub const OP_BP_ASYNC_FS_REMOVE_START: u32 = 0xCF; // payload resolved path -> operation id/rc
 pub const OP_BP_ASYNC_FS_STATUS: u32 = 0xD0; // arg0 operation id -> pending/ready/rc
@@ -3072,6 +3073,18 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             };
             let (wrote, response_len) =
                 crate::r::io::cabi::host_input_keyboard_output_since(arg0, arg1 as u32, unsafe {
+                    &mut (*p).payload
+                });
+            write_response(vm_id, seq, STATUS_OK, wrote as u64, response_len as u32);
+            DispatchOutcome::Resume
+        }
+        OP_BP_INPUT_MIDI_READ_V1 => {
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let (wrote, response_len) =
+                crate::r::io::cabi::host_input_midi_read_v1(arg0, arg1 as u32, unsafe {
                     &mut (*p).payload
                 });
             write_response(vm_id, seq, STATUS_OK, wrote as u64, response_len as u32);

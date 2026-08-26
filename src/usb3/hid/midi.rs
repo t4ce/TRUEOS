@@ -14,6 +14,7 @@ use super::super::api::{InterfaceEndpointError, claim_interface};
 const USB_CLASS_AUDIO: u8 = 0x01;
 const USB_SUBCLASS_MIDISTREAMING: u8 = 0x03;
 const PIANO_QUEUE_PKTS: usize = 512;
+const MIDI_INPUT_EVENTS: usize = 256;
 const MIDI_IDLE_SLEEP_MS: u64 = 25;
 const MIDI_READ_TIMEOUT_MS: u64 = 1000;
 const MAX_ACTIVE_MIDI_STREAMS: usize = 8;
@@ -73,6 +74,49 @@ struct PianoHeldState {
     velocities: [u8; PIANO_HELD_MAX_NOTES],
 }
 
+/// Bounded edge stream for consumers that own their own synthesis, such as a
+/// Blueprint. It is deliberately independent of the legacy audible-piano path.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct MidiInputEventV1 {
+    pub seq: u64,
+    pub controller_id: u32,
+    pub slot_id: u32,
+    pub channel: u8,
+    pub note: u8,
+    pub velocity: u8,
+    pub gate: u8,
+}
+
+#[derive(Copy, Clone)]
+struct MidiInputRing {
+    events: [MidiInputEventV1; MIDI_INPUT_EVENTS],
+    write_seq: u64,
+}
+
+impl MidiInputRing {
+    const fn new() -> Self {
+        Self {
+            events: [MidiInputEventV1 {
+                seq: 0,
+                controller_id: 0,
+                slot_id: 0,
+                channel: 0,
+                note: 0,
+                velocity: 0,
+                gate: 0,
+            }; MIDI_INPUT_EVENTS],
+            write_seq: 0,
+        }
+    }
+
+    fn push(&mut self, mut event: MidiInputEventV1) {
+        self.write_seq = self.write_seq.wrapping_add(1);
+        event.seq = self.write_seq;
+        self.events[((self.write_seq - 1) as usize) % MIDI_INPUT_EVENTS] = event;
+    }
+}
+
 impl PianoHeldState {
     const fn empty() -> Self {
         Self {
@@ -105,6 +149,58 @@ static PIANO_HELD: Mutex<PianoHeldState> = Mutex::new(PianoHeldState::empty());
 static PIANO_AUDIO_ERRS: AtomicU32 = AtomicU32::new(0);
 static PIANO_DRAIN_STARTED: AtomicBool = AtomicBool::new(false);
 static PIANO_QUEUE: Mutex<Deque<[u8; 4], PIANO_QUEUE_PKTS>> = Mutex::new(Deque::new());
+static MIDI_INPUT_RING: Mutex<MidiInputRing> = Mutex::new(MidiInputRing::new());
+
+/// Copy note edges newer than `read_seq`. The ring never consumes events, so
+/// each Blueprint keeps its own cursor and cannot starve another consumer.
+pub fn read_input_events_since(read_seq: u64, out: &mut [MidiInputEventV1]) -> (u64, u32, usize) {
+    let ring = MIDI_INPUT_RING.lock();
+    if ring.write_seq == 0 || out.is_empty() {
+        return (read_seq, 0, 0);
+    }
+    let cap = MIDI_INPUT_EVENTS as u64;
+    let oldest = if ring.write_seq > cap {
+        ring.write_seq - cap + 1
+    } else {
+        1
+    };
+    let mut start = read_seq.wrapping_add(1);
+    let mut dropped = 0u32;
+    if start < oldest {
+        dropped = core::cmp::min(u32::MAX as u64, oldest - start) as u32;
+        start = oldest;
+    }
+    if start > ring.write_seq {
+        return (read_seq, dropped, 0);
+    }
+    let mut wrote = 0usize;
+    let mut seq = start;
+    while seq <= ring.write_seq && wrote < out.len() {
+        out[wrote] = ring.events[((seq - 1) as usize) % MIDI_INPUT_EVENTS];
+        wrote += 1;
+        seq = seq.wrapping_add(1);
+    }
+    (if wrote == 0 { read_seq } else { seq - 1 }, dropped, wrote)
+}
+
+fn push_input_event(
+    controller_id: u32,
+    slot_id: u32,
+    pkt: &[u8; 4],
+    note: u8,
+    velocity: u8,
+    gate: bool,
+) {
+    MIDI_INPUT_RING.lock().push(MidiInputEventV1 {
+        seq: 0,
+        controller_id,
+        slot_id,
+        channel: pkt[1] & 0x0f,
+        note,
+        velocity,
+        gate: gate as u8,
+    });
+}
 
 fn select_adapter(dev_vid: u16, dev_pid: u16) -> MidiAdapterKind {
     if dev_vid == 0x07CF && dev_pid == 0x6803 {
@@ -406,7 +502,7 @@ async fn with_timeout_or_none<F: core::future::Future>(
     .await
 }
 
-fn handle_midi_packets(adapter: MidiAdapterKind, sample: &[u8]) {
+fn handle_midi_packets(adapter: MidiAdapterKind, controller_id: u32, slot_id: u32, sample: &[u8]) {
     for chunk in sample.chunks_exact(4) {
         let pkt = [chunk[0], chunk[1], chunk[2], chunk[3]];
         if adapter == MidiAdapterKind::CasioCtk3500 {
@@ -419,10 +515,16 @@ fn handle_midi_packets(adapter: MidiAdapterKind, sample: &[u8]) {
             if let Some((note, velocity)) = midi_note_on_from_packet(&pkt) {
                 piano_record_note_on(note, velocity);
                 piano_record_held_note_on(note, velocity);
+                push_input_event(controller_id, slot_id, &pkt, note, velocity, true);
             } else if let Some(note) = midi_note_off_from_packet(&pkt) {
                 piano_record_held_note_off(note);
+                push_input_event(controller_id, slot_id, &pkt, note, 0, false);
             }
             piano_push_packet(pkt);
+        } else if let Some((note, velocity)) = midi_note_on_from_packet(&pkt) {
+            push_input_event(controller_id, slot_id, &pkt, note, velocity, true);
+        } else if let Some(note) = midi_note_off_from_packet(&pkt) {
+            push_input_event(controller_id, slot_id, &pkt, note, 0, false);
         }
     }
 }
@@ -570,7 +672,7 @@ pub async fn midi_stream_task(mut device: Device, controller_id: u32, target: Mi
                 }
                 let sample = &rx[..read.min(rx.len())];
                 if sample.len() >= 4 {
-                    handle_midi_packets(adapter, sample);
+                    handle_midi_packets(adapter, controller_id, slot_id, sample);
                 } else {
                     crate::log!(
                         "crabusb: midi {:04X}:{:04X} short packet len={} bytes={:02X?}\n",

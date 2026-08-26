@@ -9,7 +9,7 @@ pub use crate::vcabi::{
     KeyboardControlCommand, KeyboardControlDeviceInfo, MouseMotionCommand, MouseMotionCursorInfo,
     TrueosHidCursorEvent, TrueosHidHutKeyboardState, TrueosHidHutMouseState,
     TrueosHidHutTabletState, TrueosHidKeyboardSample, TrueosHidMouseSample, TrueosHidTabletSample,
-    TrueosInputCombo, TrueosMouseState, TrueosTabletEvent,
+    TrueosInputCombo, TrueosMidiInputEventV1, TrueosMouseState, TrueosTabletEvent,
 };
 
 pub const MOUSE_MOTION_OPCODE_TELEPORT: u8 = 1;
@@ -615,6 +615,24 @@ pub fn qjs_mouse_pop() -> Option<TrueosMouseState> {
     let mut out = TrueosMouseState::default();
     let rc = unsafe { vcabi::trueos_cabi_qjs_mouse_pop(&mut out) };
     if rc == 0 { Some(out) } else { None }
+}
+
+/// Read USB-MIDI note edges without consuming the kernel's ring.
+pub fn midi_read_v1(read_seq: u64, out_cap: u32) -> (Vec<TrueosMidiInputEventV1>, u64, u32) {
+    let mut events = vec![TrueosMidiInputEventV1::default(); out_cap as usize];
+    let mut next_seq = read_seq;
+    let mut dropped = 0u32;
+    let got = unsafe {
+        vcabi::trueos_cabi_input_midi_read_v1(
+            read_seq,
+            events.as_mut_ptr(),
+            out_cap,
+            &mut next_seq,
+            &mut dropped,
+        )
+    };
+    events.truncate(got as usize);
+    (events, next_seq, dropped)
 }
 
 #[inline]

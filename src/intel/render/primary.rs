@@ -512,7 +512,7 @@ fn resident_scene_batch_state_for_carrier(
     let physical = crate::gpu::physical::physical_device().ok_or("picasso-physical-gpu")?;
     let storage =
         prepare_picasso_render1_scene_storage(lease, physical).ok_or("picasso-scene-storage")?;
-    crate::log_info!(target: "render";
+    crate::log_trace!(target: "render";
         "picasso-carrier scene-state carrier={} gpu=0x{:X} phys=0x{:X} bytes=0x{:X} warm_batch=0x{:X}\n",
         lease.carrier().label(), GPU_VA_RESIDENT_SCENE_STATE_BASE, storage.state_phys,
         RESIDENT_SCENE_STATE_BYTES, warm.batch_len,

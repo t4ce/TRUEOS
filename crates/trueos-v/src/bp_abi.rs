@@ -1283,6 +1283,13 @@ unsafe extern "C" {
         out_next_seq: *mut u64,
         out_dropped: *mut u32,
     ) -> u32;
+    pub fn trueos_cabi_input_midi_read_v1(
+        read_seq: u64,
+        out: *mut TrueosMidiInputEventV1,
+        out_cap: u32,
+        out_next_seq: *mut u64,
+        out_dropped: *mut u32,
+    ) -> u32;
     pub fn trueos_cabi_mouse_poll(out: *mut TrueosMouseState) -> i32;
     pub fn trueos_cabi_qjs_mouse_pop(out: *mut TrueosMouseState) -> i32;
 
@@ -1543,6 +1550,19 @@ pub struct TrueosKeyboardOutputEvent {
     pub codepoint: u32,
     pub utf8: [u8; 4],
     pub flags: u32,
+}
+
+/// Versioned USB-MIDI note edge exported to Blueprint-owned synthesis.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosMidiInputEventV1 {
+    pub seq: u64,
+    pub controller_id: u32,
+    pub slot_id: u32,
+    pub channel: u8,
+    pub note: u8,
+    pub velocity: u8,
+    pub gate: u8,
 }
 
 #[repr(C)]

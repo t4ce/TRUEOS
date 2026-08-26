@@ -192,4 +192,7 @@
 # The native-audio render and sample-registry v1 calls are strictly additive.
 # They carry fixed-width, versioned command records and PCM sample data into
 # the existing mediated audio lane; older v2 artifacts import none of them.
-91bb9cb96d6efa72e348372d8280c5e0cddaeca53278db299b10b40e040b3f6e
+# The USB-MIDI input-read v1 call is strictly additive. It copies bounded
+# note-on/off edges from the kernel-owned USB MIDI ring through the normal Hull
+# payload boundary; it neither consumes the ring nor changes legacy piano audio.
+9bd8099f531d7bf2ae83440aad1e9587cdaa87dfa3564c618b21a2abbe49764e

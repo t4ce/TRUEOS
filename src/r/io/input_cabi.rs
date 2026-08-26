@@ -154,6 +154,26 @@ pub fn host_input_keyboard_output_since(
     (wrote, HEADER_LEN + bytes_len)
 }
 
+pub fn host_input_midi_read_v1(read_seq: u64, out_cap: u32, payload: &mut [u8]) -> (usize, usize) {
+    const HEADER_LEN: usize = 12;
+    let event_size = core::mem::size_of::<crate::usb3::hid::midi::MidiInputEventV1>();
+    if payload.len() < HEADER_LEN || event_size == 0 {
+        return (0, 0);
+    }
+    let cap = core::cmp::min(out_cap as usize, (payload.len() - HEADER_LEN) / event_size);
+    let mut events = alloc::vec![crate::usb3::hid::midi::MidiInputEventV1::default(); cap];
+    let (next_seq, dropped, wrote) =
+        crate::usb3::hid::midi::read_input_events_since(read_seq, &mut events);
+    payload[..8].copy_from_slice(&next_seq.to_le_bytes());
+    payload[8..12].copy_from_slice(&dropped.to_le_bytes());
+    let bytes_len = wrote.saturating_mul(event_size);
+    if bytes_len != 0 {
+        let bytes = unsafe { core::slice::from_raw_parts(events.as_ptr().cast::<u8>(), bytes_len) };
+        payload[HEADER_LEN..HEADER_LEN + bytes_len].copy_from_slice(bytes);
+    }
+    (wrote, HEADER_LEN + bytes_len)
+}
+
 fn guest_input_cursor_buttons(cursor_id: u32, out_buttons_down: *mut u32) -> i32 {
     if out_buttons_down.is_null() || cursor_id == 0 {
         return -1;
@@ -304,6 +324,46 @@ fn guest_input_read_keyboard_output_since(
             out as *mut u8,
             bytes_len,
         );
+    }
+    got as u32
+}
+
+fn guest_input_midi_read_v1(
+    read_seq: u64,
+    out: *mut crate::usb3::hid::midi::MidiInputEventV1,
+    out_cap: u32,
+    out_next_seq: *mut u64,
+    out_dropped: *mut u32,
+) -> u32 {
+    if out_next_seq.is_null() || out_dropped.is_null() {
+        return 0;
+    }
+    let mut payload = [0u8; trueos_vm::vmcall::PAYLOAD_CAP];
+    let (status, wrote) = trueos_vm::vmcall::call_with_payload(
+        trueos_vm::vmcall::OP_BP_INPUT_MIDI_READ_V1,
+        read_seq,
+        out_cap as u64,
+        &[],
+        &mut payload,
+    );
+    if status != trueos_vm::vmcall::STATUS_OK || payload.len() < 12 {
+        return 0;
+    }
+    unsafe {
+        *out_next_seq = u64::from_le_bytes(payload[..8].try_into().unwrap());
+        *out_dropped = u32::from_le_bytes(payload[8..12].try_into().unwrap());
+    }
+    let event_size = core::mem::size_of::<crate::usb3::hid::midi::MidiInputEventV1>();
+    let got = core::cmp::min(wrote as usize, out_cap as usize);
+    let bytes_len = got.saturating_mul(event_size);
+    if got != 0 && !out.is_null() && payload.len() >= 12 + bytes_len {
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                payload[12..12 + bytes_len].as_ptr(),
+                out.cast::<u8>(),
+                bytes_len,
+            );
+        }
     }
     got as u32
 }
@@ -544,6 +604,39 @@ pub unsafe extern "C" fn trueos_cabi_input_read_keyboard_output_since(
         );
     }
     unsafe { input_read_keyboard_output_since(read_seq, out, out_cap, out_next_seq, out_dropped) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_input_midi_read_v1(
+    read_seq: u64,
+    out: *mut crate::usb3::hid::midi::MidiInputEventV1,
+    out_cap: u32,
+    out_next_seq: *mut u64,
+    out_dropped: *mut u32,
+) -> u32 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_input_midi_read_v1(read_seq, out, out_cap, out_next_seq, out_dropped);
+    }
+    if out_next_seq.is_null() || out_dropped.is_null() {
+        return 0;
+    }
+    let mut payload = [0u8; 12 + 32 * 64];
+    let (wrote, _) = host_input_midi_read_v1(read_seq, out_cap, &mut payload);
+    unsafe {
+        *out_next_seq = u64::from_le_bytes(payload[..8].try_into().unwrap());
+        *out_dropped = u32::from_le_bytes(payload[8..12].try_into().unwrap());
+    }
+    let event_size = core::mem::size_of::<crate::usb3::hid::midi::MidiInputEventV1>();
+    if wrote != 0 && !out.is_null() {
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                payload[12..12 + wrote * event_size].as_ptr(),
+                out.cast::<u8>(),
+                wrote * event_size,
+            );
+        }
+    }
+    wrote as u32
 }
 
 #[unsafe(no_mangle)]
