@@ -991,6 +991,12 @@ unsafe extern "C" {
         commands: *const crate::vaudio::NativeRenderCommandV1,
         count: usize,
     ) -> isize;
+    pub fn trueos_cabi_audio_native_render_v2(
+        handle: u32,
+        header: *const crate::vaudio::NativeBlockHeaderV2,
+        commands: *const crate::vaudio::NativeRenderCommandV2,
+        count: usize,
+    ) -> isize;
     pub fn trueos_cabi_audio_native_sample_register_v1(
         handle: u32,
         sample_id: u64,

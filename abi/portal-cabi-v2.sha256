@@ -195,4 +195,7 @@
 # The USB-MIDI input-read v1 call is strictly additive. It copies bounded
 # note-on/off edges from the kernel-owned USB MIDI ring through the normal Hull
 # payload boundary; it neither consumes the ring nor changes legacy piano audio.
-9bd8099f531d7bf2ae83440aad1e9587cdaa87dfa3564c618b21a2abbe49764e
+# The native-audio render v2 call is strictly additive. Its endpoint and
+# 104-byte command payload are distinct from native-render-v1; V1's frozen
+# 80-byte command, symbol, and mediation path are unchanged.
+db98c54a8ea04f8fc664d6fe9fc23ad6e7b4214202672c3349709ad82ff88860

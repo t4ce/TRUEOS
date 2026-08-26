@@ -116,7 +116,7 @@ impl TinyaudioDemoMixer {
         data.fill(0.0);
         if self.blueprint_active() {
             self.overlay.mix_into(data);
-            clamp_output(data);
+            apply_output_limiter(data);
             return;
         }
 

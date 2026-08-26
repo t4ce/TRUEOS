@@ -8,6 +8,8 @@ use super::tables::{MIDI_FREQ, SINE_TABLE};
 pub const BLOCK_MAGIC_V1: u32 = 0x314E_5254;
 pub const BLOCK_VERSION_V1: u16 = 1;
 pub const COMMAND_SIZE_V1: u16 = 80;
+pub const BLOCK_VERSION_V2: u16 = 2;
+pub const COMMAND_SIZE_V2: u16 = 104;
 pub const SAMPLE_RATE_HZ: u32 = 48_000;
 pub const KIND_OSCILLATOR: u16 = 1;
 pub const KIND_SAMPLE: u16 = 2;
@@ -34,6 +36,9 @@ pub struct NativeBlockHeaderV1 {
     pub flags: u32,
     pub reserved: u32,
 }
+
+/// V2 deliberately retains the frozen 40-byte block header layout.
+pub type NativeBlockHeaderV2 = NativeBlockHeaderV1;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -66,8 +71,27 @@ pub struct NativeRenderCommandV1 {
     pub reserved2: u32,
 }
 
+/// Additive native command surface for envelope-aware renderers.
+///
+/// The v1 command is an exact 80-byte prefix so a host can translate or inspect
+/// common fields without maintaining two subtly different definitions.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct NativeRenderCommandV2 {
+    pub base: NativeRenderCommandV1,
+    pub attack_frames: u32,
+    pub decay_frames: u32,
+    pub release_frames: u32,
+    pub filter_attack_frames: u32,
+    pub filter_decay_frames: u32,
+    pub sustain_q15: u16,
+    /// Signed filter-envelope depth in octaves, Q8 (for example 4.0 = 1024).
+    pub filter_env_octaves_q8: i16,
+}
+
 const _: [(); 40] = [(); core::mem::size_of::<NativeBlockHeaderV1>()];
 const _: [(); 80] = [(); core::mem::size_of::<NativeRenderCommandV1>()];
+const _: [(); 104] = [(); core::mem::size_of::<NativeRenderCommandV2>()];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
@@ -88,6 +112,45 @@ struct Engine {
     delay_l: Vec<i32>,
     delay_r: Vec<i32>,
     delay_cursor: usize,
+    voice_filters: Vec<VoiceFilterState>,
+}
+
+#[derive(Clone, Copy)]
+struct VoiceFilterState {
+    revision: u64,
+    voice_id: u32,
+    source_id: u64,
+    kind: u16,
+    waveform: u8,
+    pole_1: i64,
+    pole_2: i64,
+    last_end_frame: u64,
+    seen_block: u64,
+}
+
+#[derive(Clone, Copy)]
+struct EnvelopeParams {
+    attack_frames: u32,
+    decay_frames: u32,
+    sustain_q15: u16,
+    release_frames: u32,
+    filter_attack_frames: u32,
+    filter_decay_frames: u32,
+    filter_env_octaves_q8: i16,
+    release_after_gate: bool,
+}
+
+impl EnvelopeParams {
+    const V1: Self = Self {
+        attack_frames: 240,
+        decay_frames: 0,
+        sustain_q15: 32_767,
+        release_frames: 960,
+        filter_attack_frames: 0,
+        filter_decay_frames: 0,
+        filter_env_octaves_q8: 0,
+        release_after_gate: false,
+    };
 }
 
 impl Engine {
@@ -97,6 +160,7 @@ impl Engine {
             delay_l: Vec::new(),
             delay_r: Vec::new(),
             delay_cursor: 0,
+            voice_filters: Vec::new(),
         }
     }
 
@@ -152,43 +216,75 @@ impl Engine {
         true
     }
 
-    fn render(
+    fn render_v1(
         &mut self,
         header: &NativeBlockHeaderV1,
         commands: &[NativeRenderCommandV1],
     ) -> Result<Vec<i16>, Error> {
-        validate(header, commands)?;
+        validate_v1(header, commands)?;
+        let envelopes = vec![EnvelopeParams::V1; commands.len()];
+        self.render_inner(header, commands, &envelopes)
+    }
+
+    fn render_v2(
+        &mut self,
+        header: &NativeBlockHeaderV2,
+        commands: &[NativeRenderCommandV2],
+    ) -> Result<Vec<i16>, Error> {
+        validate_v2(header, commands)?;
+        let bases = commands
+            .iter()
+            .map(|command| command.base)
+            .collect::<Vec<_>>();
+        let envelopes = commands
+            .iter()
+            .map(|command| EnvelopeParams {
+                attack_frames: command.attack_frames,
+                decay_frames: command.decay_frames,
+                sustain_q15: command.sustain_q15,
+                release_frames: command.release_frames,
+                filter_attack_frames: command.filter_attack_frames,
+                filter_decay_frames: command.filter_decay_frames,
+                filter_env_octaves_q8: command.filter_env_octaves_q8,
+                release_after_gate: true,
+            })
+            .collect::<Vec<_>>();
+        self.render_inner(header, &bases, &envelopes)
+    }
+
+    fn render_inner(
+        &mut self,
+        header: &NativeBlockHeaderV1,
+        commands: &[NativeRenderCommandV1],
+        envelopes: &[EnvelopeParams],
+    ) -> Result<Vec<i16>, Error> {
         let frames = header.block_frames as usize;
         let mut mix = vec![0i64; frames * 2];
         let mut delay_send = vec![0i64; frames * 2];
-        for command in commands {
-            let sample = if command.kind == KIND_SAMPLE {
+        for (command, envelope_params) in commands.iter().zip(envelopes) {
+            let sample_index = if command.kind == KIND_SAMPLE {
                 Some(
                     self.samples
                         .iter()
-                        .find(|s| s.id == command.source_id)
+                        .position(|sample| sample.id == command.source_id)
                         .ok_or(Error::MissingSample)?,
                 )
             } else {
                 None
             };
+            let filter_index = self.filter_state_index(header, command);
             let pan = i64::from(command.pan_q15);
             let gain = i64::from(command.gain_q15.min(32_767));
             let left_gain = if pan > 0 { Q15 - pan } else { Q15 };
             let right_gain = if pan < 0 { Q15 + pan } else { Q15 };
-            let mut lowpass = 0i64;
-            let cutoff = u64::from(command.lpf_hz).min(24_000);
-            let alpha = if cutoff == 0 || cutoff >= 23_900 {
-                Q15
-            } else {
-                (cutoff * Q15 as u64 / (cutoff + SAMPLE_RATE_HZ as u64)) as i64
-            };
             for frame in command.start_frame as usize..command.end_frame as usize {
                 let age =
                     u64::from(command.age_frames) + (frame - command.start_frame as usize) as u64;
-                let raw =
-                    sample.map_or_else(|| oscillator(command, age), |s| sample_at(s, command, age));
-                let env = envelope(age, u64::from(command.duration_frames));
+                let raw = sample_index.map_or_else(
+                    || oscillator(command, age),
+                    |index| sample_at(&self.samples[index], command, age),
+                );
+                let env = envelope_at(age, u64::from(command.duration_frames), *envelope_params);
                 let mut value = i64::from(raw) * gain / Q15 * env / Q15;
                 value = shape(value, command.shape_q15);
                 if command.phaser_q15 != 0 {
@@ -199,10 +295,17 @@ impl Engine {
                             + modulation * i64::from(command.phaser_q15) / (2 * Q15))
                         / Q15;
                 }
-                lowpass += (value - lowpass) * alpha / Q15;
+                let filter_env = filter_envelope_at(age, *envelope_params);
+                let cutoff = modulated_cutoff(
+                    command.lpf_hz,
+                    envelope_params.filter_env_octaves_q8,
+                    filter_env,
+                );
+                let filtered =
+                    lowpass(&mut self.voice_filters[filter_index], value, cutoff, command.lpq_q8);
                 let index = frame * 2;
-                let left = lowpass * left_gain / Q15;
-                let right = lowpass * right_gain / Q15;
+                let left = filtered * left_gain / Q15;
+                let right = filtered * right_gain / Q15;
                 mix[index] += left;
                 mix[index + 1] += right;
                 let send = i64::from(
@@ -214,12 +317,51 @@ impl Engine {
                 delay_send[index] += left * send / Q15;
                 delay_send[index + 1] += right * send / Q15;
             }
+            self.voice_filters[filter_index].last_end_frame = header
+                .absolute_frame
+                .saturating_add(u64::from(command.end_frame));
         }
+        self.voice_filters
+            .retain(|state| state.seen_block == header.absolute_frame);
         self.apply_delay(&mut mix, &delay_send, frames);
-        Ok(mix
-            .into_iter()
-            .map(|v| v.clamp(i16::MIN as i64, i16::MAX as i64) as i16)
-            .collect())
+        Ok(mix.into_iter().map(soft_limit_i16).collect())
+    }
+
+    fn filter_state_index(
+        &mut self,
+        header: &NativeBlockHeaderV1,
+        command: &NativeRenderCommandV1,
+    ) -> usize {
+        let start = header
+            .absolute_frame
+            .saturating_add(u64::from(command.start_frame));
+        if let Some(index) = self.voice_filters.iter().position(|state| {
+            state.revision == header.revision
+                && state.voice_id == command.voice_id
+                && state.source_id == command.source_id
+                && state.kind == command.kind
+                && state.waveform == command.waveform
+        }) {
+            let state = &mut self.voice_filters[index];
+            if command.age_frames == 0 || state.last_end_frame != start {
+                state.pole_1 = 0;
+                state.pole_2 = 0;
+            }
+            state.seen_block = header.absolute_frame;
+            return index;
+        }
+        self.voice_filters.push(VoiceFilterState {
+            revision: header.revision,
+            voice_id: command.voice_id,
+            source_id: command.source_id,
+            kind: command.kind,
+            waveform: command.waveform,
+            pole_1: 0,
+            pole_2: 0,
+            last_end_frame: start,
+            seen_block: header.absolute_frame,
+        });
+        self.voice_filters.len() - 1
     }
 
     fn apply_delay(&mut self, mix: &mut [i64], send: &[i64], frames: usize) {
@@ -261,10 +403,20 @@ pub fn render_block_v1(
     header: &NativeBlockHeaderV1,
     commands: &[NativeRenderCommandV1],
 ) -> Result<Vec<i16>, Error> {
-    ENGINE.lock().render(header, commands)
+    ENGINE.lock().render_v1(header, commands)
 }
 
-fn validate(header: &NativeBlockHeaderV1, commands: &[NativeRenderCommandV1]) -> Result<(), Error> {
+pub fn render_block_v2(
+    header: &NativeBlockHeaderV2,
+    commands: &[NativeRenderCommandV2],
+) -> Result<Vec<i16>, Error> {
+    ENGINE.lock().render_v2(header, commands)
+}
+
+fn validate_v1(
+    header: &NativeBlockHeaderV1,
+    commands: &[NativeRenderCommandV1],
+) -> Result<(), Error> {
     if header.magic != BLOCK_MAGIC_V1
         || header.version != BLOCK_VERSION_V1
         || header.command_size != COMMAND_SIZE_V1
@@ -288,6 +440,42 @@ fn validate(header: &NativeBlockHeaderV1, commands: &[NativeRenderCommandV1]) ->
             || c.reserved0 != 0
             || c.reserved1 != 0
             || c.reserved2 != 0
+    }) {
+        return Err(Error::Invalid);
+    }
+    Ok(())
+}
+
+fn validate_v2(
+    header: &NativeBlockHeaderV2,
+    commands: &[NativeRenderCommandV2],
+) -> Result<(), Error> {
+    if header.magic != BLOCK_MAGIC_V1
+        || header.version != BLOCK_VERSION_V2
+        || header.command_size != COMMAND_SIZE_V2
+        || header.sample_rate_hz != SAMPLE_RATE_HZ
+        || header.block_frames == 0
+        || header.block_frames as usize > MAX_BLOCK_FRAMES
+        || header.reserved != 0
+        || commands.len() > MAX_COMMANDS
+    {
+        return Err(Error::Invalid);
+    }
+    if commands.iter().any(|command| {
+        let c = &command.base;
+        c.start_frame >= c.end_frame
+            || c.end_frame > header.block_frames
+            || c.duration_frames == 0
+            || !matches!(c.kind, KIND_OSCILLATOR | KIND_SAMPLE)
+            || c.waveform > 4
+            || c.sample_begin_q16 > c.sample_end_q16
+            || c.sample_end_q16 > 65_536
+            || (c.kind == KIND_SAMPLE && c.playback_rate_q16 <= 0)
+            || c.reserved0 != 0
+            || c.reserved1 != 0
+            || c.reserved2 != 0
+            || command.sustain_q15 > 32_767
+            || !(-8 * 256..=8 * 256).contains(&i32::from(command.filter_env_octaves_q8))
     }) {
         return Err(Error::Invalid);
     }
@@ -344,10 +532,116 @@ fn sample_at(sample: &Sample, command: &NativeRenderCommandV1, age: u64) -> i16 
     }
 }
 
-fn envelope(age: u64, duration: u64) -> i64 {
-    (age * Q15 as u64 / 240)
-        .min(duration.saturating_sub(age) * Q15 as u64 / 960)
-        .min(Q15 as u64) as i64
+fn envelope_at(age: u64, gate_duration: u64, params: EnvelopeParams) -> i64 {
+    if !params.release_after_gate {
+        return (age * Q15 as u64 / u64::from(params.attack_frames.max(1)))
+            .min(
+                gate_duration.saturating_sub(age) * Q15 as u64
+                    / u64::from(params.release_frames.max(1)),
+            )
+            .min(Q15 as u64) as i64;
+    }
+
+    let attack = u64::from(params.attack_frames);
+    let decay = u64::from(params.decay_frames);
+    let sustain = i64::from(params.sustain_q15.min(32_767));
+    if age < attack {
+        return if attack == 0 {
+            Q15
+        } else {
+            (age * Q15 as u64 / attack) as i64
+        };
+    }
+    if age < attack.saturating_add(decay) {
+        let elapsed = age - attack;
+        return Q15 - (Q15 - sustain) * elapsed as i64 / decay.max(1) as i64;
+    }
+    if age < gate_duration {
+        return sustain;
+    }
+    let release = u64::from(params.release_frames);
+    if release == 0 || age >= gate_duration.saturating_add(release) {
+        return 0;
+    }
+    sustain * (release - (age - gate_duration)) as i64 / release as i64
+}
+
+fn filter_envelope_at(age: u64, params: EnvelopeParams) -> i64 {
+    if params.filter_env_octaves_q8 == 0 {
+        return 0;
+    }
+    let attack = u64::from(params.filter_attack_frames);
+    let decay = u64::from(params.filter_decay_frames);
+    if attack != 0 && age < attack {
+        return (age * Q15 as u64 / attack) as i64;
+    }
+    let decay_age = age.saturating_sub(attack);
+    if decay == 0 {
+        Q15
+    } else if decay_age >= decay {
+        0
+    } else {
+        ((decay - decay_age) * Q15 as u64 / decay) as i64
+    }
+}
+
+fn modulated_cutoff(base_hz: u16, depth_octaves_q8: i16, envelope_q15: i64) -> u16 {
+    let base = u32::from(base_hz).min(24_000);
+    if base == 0 || depth_octaves_q8 == 0 || envelope_q15 == 0 {
+        return base as u16;
+    }
+    let octaves_q8 = i64::from(depth_octaves_q8) * envelope_q15 / Q15;
+    let magnitude = octaves_q8.unsigned_abs().min(8 * 256);
+    let whole = (magnitude / 256) as u32;
+    let fraction = (magnitude % 256) as u32;
+    let shifted = if octaves_q8 >= 0 {
+        base.checked_shl(whole)
+            .unwrap_or(u32::MAX)
+            .saturating_mul(256 + fraction)
+            / 256
+    } else {
+        (base >> whole).saturating_mul(256) / (256 + fraction)
+    };
+    shifted.clamp(1, 24_000) as u16
+}
+
+fn lowpass(state: &mut VoiceFilterState, input: i64, cutoff_hz: u16, resonance_q8: u16) -> i64 {
+    let cutoff = u64::from(cutoff_hz).min(24_000);
+    if cutoff == 0 || cutoff >= 23_900 {
+        state.pole_1 = input;
+        state.pole_2 = input;
+        return input;
+    }
+    // Bilinear one-pole coefficient (2*pi*fc)/(fs + 2*pi*fc), Q15.
+    let angular = cutoff.saturating_mul(6_283);
+    let alpha =
+        (angular.saturating_mul(Q15 as u64) / (SAMPLE_RATE_HZ as u64 * 1_000 + angular)) as i64;
+    // Strudel lpq values above 16 are clamped to keep this two-pole feedback
+    // topology stable under arbitrary Blueprint input.
+    let resonance = i64::from(resonance_q8.min(16 * 256)) * 24_576 / (16 * 256);
+    let driven = input - state.pole_2 * resonance / Q15;
+    state.pole_1 += (driven - state.pole_1) * alpha / Q15;
+    state.pole_2 += (state.pole_1 - state.pole_2) * alpha / Q15;
+    const STATE_LIMIT: i64 = i16::MAX as i64 * 8;
+    state.pole_1 = state.pole_1.clamp(-STATE_LIMIT, STATE_LIMIT);
+    state.pole_2 = state.pole_2.clamp(-STATE_LIMIT, STATE_LIMIT);
+    state.pole_2
+}
+
+fn soft_limit_i16(sample: i64) -> i16 {
+    const KNEE: i64 = 26_000;
+    let magnitude = sample.abs();
+    let limited = if magnitude <= KNEE {
+        magnitude
+    } else {
+        let over = magnitude - KNEE;
+        KNEE + over * 6_000 / (6_000 + over)
+    };
+    if sample < 0 {
+        -limited.min(32_767) as i16
+    } else {
+        limited.min(32_767) as i16
+    }
 }
 fn shape(sample: i64, amount: u16) -> i64 {
     if amount == 0 {
@@ -371,6 +665,13 @@ mod tests {
             ..Default::default()
         }
     }
+    fn header_v2(frames: u32) -> NativeBlockHeaderV2 {
+        NativeBlockHeaderV2 {
+            version: BLOCK_VERSION_V2,
+            command_size: COMMAND_SIZE_V2,
+            ..header(frames)
+        }
+    }
     fn osc(frames: u32) -> NativeRenderCommandV1 {
         NativeRenderCommandV1 {
             end_frame: frames,
@@ -389,10 +690,11 @@ mod tests {
     fn abi_sizes_are_frozen() {
         assert_eq!(core::mem::size_of::<NativeBlockHeaderV1>(), 40);
         assert_eq!(core::mem::size_of::<NativeRenderCommandV1>(), 80);
+        assert_eq!(core::mem::size_of::<NativeRenderCommandV2>(), 104);
     }
     #[test]
     fn oscillator_is_stereo_and_audible() {
-        let pcm = Engine::new().render(&header(480), &[osc(480)]).unwrap();
+        let pcm = Engine::new().render_v1(&header(480), &[osc(480)]).unwrap();
         assert_eq!(pcm.len(), 960);
         assert!(pcm.iter().any(|v| *v != 0));
     }
@@ -400,6 +702,53 @@ mod tests {
     fn invalid_span_is_rejected() {
         let mut c = osc(480);
         c.end_frame = 481;
-        assert_eq!(validate(&header(480), &[c]), Err(Error::Invalid));
+        assert_eq!(validate_v1(&header(480), &[c]), Err(Error::Invalid));
+    }
+
+    #[test]
+    fn v2_release_tail_is_rendered_after_gate() {
+        let command = NativeRenderCommandV2 {
+            base: NativeRenderCommandV1 {
+                end_frame: 480,
+                duration_frames: 240,
+                ..osc(480)
+            },
+            attack_frames: 0,
+            decay_frames: 0,
+            sustain_q15: 32_767,
+            release_frames: 240,
+            ..Default::default()
+        };
+        let pcm = Engine::new()
+            .render_v2(&header_v2(480), &[command])
+            .unwrap();
+        assert!(pcm[240 * 2..].iter().any(|sample| *sample != 0));
+        assert!(pcm[478 * 2].unsigned_abs() < pcm[300 * 2].unsigned_abs().max(2_000));
+    }
+
+    #[test]
+    fn resonance_field_changes_the_lowpass_response() {
+        let template = VoiceFilterState {
+            revision: 1,
+            voice_id: 1,
+            source_id: 1,
+            kind: KIND_OSCILLATOR,
+            waveform: 2,
+            pole_1: 0,
+            pole_2: 0,
+            last_end_frame: 0,
+            seen_block: 0,
+        };
+        let mut dry = template;
+        let mut resonant = template;
+        let mut dry_out = 0;
+        let mut resonant_out = 0;
+        for index in 0..128 {
+            let input = if index < 8 { 20_000 } else { 0 };
+            dry_out = lowpass(&mut dry, input, 1_200, 0);
+            resonant_out = lowpass(&mut resonant, input, 1_200, 8 * 256);
+        }
+        assert_ne!(dry_out, resonant_out);
+        assert_ne!(resonant.pole_2, 0);
     }
 }

@@ -15,6 +15,9 @@ const INVALID_CURSOR: u64 = u64::MAX;
 pub const NATIVE_AUDIO_MAGIC_V1: u32 = 0x314E_5254;
 pub const NATIVE_AUDIO_VERSION_V1: u16 = 1;
 pub const NATIVE_COMMAND_SIZE_V1: u16 = 80;
+/// Additive command envelope extension. V1 payloads remain accepted unchanged.
+pub const NATIVE_AUDIO_VERSION_V2: u16 = 2;
+pub const NATIVE_COMMAND_SIZE_V2: u16 = 104;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -59,6 +62,52 @@ impl NativeBlockHeaderV1 {
     }
 }
 
+/// V2 keeps the fixed 40-byte block header layout. The distinct type prevents
+/// accidentally submitting 104-byte commands through the V1 entry point.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct NativeBlockHeaderV2 {
+    pub magic: u32,
+    pub version: u16,
+    pub command_size: u16,
+    pub block_frames: u32,
+    pub sample_rate_hz: u32,
+    pub absolute_frame: u64,
+    pub revision: u64,
+    pub flags: u32,
+    pub reserved: u32,
+}
+
+impl NativeBlockHeaderV2 {
+    pub const fn new(block_frames: u32, absolute_frame: u64, revision: u64) -> Self {
+        Self {
+            magic: NATIVE_AUDIO_MAGIC_V1,
+            version: NATIVE_AUDIO_VERSION_V2,
+            command_size: NATIVE_COMMAND_SIZE_V2,
+            block_frames,
+            sample_rate_hz: DEFAULT_RATE_HZ,
+            absolute_frame,
+            revision,
+            flags: 0,
+            reserved: 0,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), NativeValidationError> {
+        if self.magic != NATIVE_AUDIO_MAGIC_V1
+            || self.version != NATIVE_AUDIO_VERSION_V2
+            || self.command_size != NATIVE_COMMAND_SIZE_V2
+            || self.block_frames == 0
+            || self.sample_rate_hz == 0
+            || self.flags != 0
+            || self.reserved != 0
+        {
+            return Err(NativeValidationError::BadHeader);
+        }
+        Ok(())
+    }
+}
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub struct NativeRenderCommandV1 {
@@ -88,6 +137,84 @@ pub struct NativeRenderCommandV1 {
     pub reserved0: u32,
     pub reserved1: u32,
     pub reserved2: u32,
+}
+
+/// V2 command: the first 80 bytes are byte-for-byte V1, followed by integer
+/// frame counts and Q15 envelope values. No floating point crosses the ABI.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct NativeRenderCommandV2 {
+    pub start_frame: u32,
+    pub end_frame: u32,
+    pub age_frames: u32,
+    pub duration_frames: u32,
+    pub source_id: u64,
+    pub voice_id: u32,
+    pub kind: u16,
+    pub waveform: u8,
+    pub midi_note: u8,
+    pub gain_q15: u16,
+    pub pan_q15: i16,
+    pub playback_rate_q16: i32,
+    pub sample_begin_q16: u32,
+    pub sample_end_q16: u32,
+    pub lpf_hz: u16,
+    pub lpq_q8: u16,
+    pub room_q15: u16,
+    pub delay_q15: u16,
+    pub phaser_q15: u16,
+    pub shape_q15: u16,
+    pub fm_depth_q8: u16,
+    pub fm_rate_q8: u16,
+    pub flags: u32,
+    pub reserved0: u32,
+    pub reserved1: u32,
+    pub reserved2: u32,
+    pub attack_frames: u32,
+    pub decay_frames: u32,
+    pub release_frames: u32,
+    pub filter_attack_frames: u32,
+    pub filter_decay_frames: u32,
+    pub sustain_q15: u16,
+    /// Signed octave depth in Q8, matching Strudel's `lpenv` units.
+    pub filter_env_octaves_q8: i16,
+}
+
+impl NativeRenderCommandV2 {
+    pub const KIND_OSCILLATOR: u16 = NativeRenderCommandV1::KIND_OSCILLATOR;
+    pub const KIND_SAMPLE: u16 = NativeRenderCommandV1::KIND_SAMPLE;
+
+    pub fn validate(&self, block_frames: u32) -> Result<(), NativeValidationError> {
+        NativeRenderCommandV1 {
+            start_frame: self.start_frame,
+            end_frame: self.end_frame,
+            age_frames: self.age_frames,
+            duration_frames: self.duration_frames,
+            source_id: self.source_id,
+            voice_id: self.voice_id,
+            kind: self.kind,
+            waveform: self.waveform,
+            midi_note: self.midi_note,
+            gain_q15: self.gain_q15,
+            pan_q15: self.pan_q15,
+            playback_rate_q16: self.playback_rate_q16,
+            sample_begin_q16: self.sample_begin_q16,
+            sample_end_q16: self.sample_end_q16,
+            lpf_hz: self.lpf_hz,
+            lpq_q8: self.lpq_q8,
+            room_q15: self.room_q15,
+            delay_q15: self.delay_q15,
+            phaser_q15: self.phaser_q15,
+            shape_q15: self.shape_q15,
+            fm_depth_q8: self.fm_depth_q8,
+            fm_rate_q8: self.fm_rate_q8,
+            flags: self.flags,
+            reserved0: self.reserved0,
+            reserved1: self.reserved1,
+            reserved2: self.reserved2,
+        }
+        .validate(block_frames)
+    }
 }
 
 impl NativeRenderCommandV1 {
@@ -125,6 +252,10 @@ const _: [(); 40] = [(); size_of::<NativeBlockHeaderV1>()];
 const _: [(); 8] = [(); align_of::<NativeBlockHeaderV1>()];
 const _: [(); 80] = [(); size_of::<NativeRenderCommandV1>()];
 const _: [(); 8] = [(); align_of::<NativeRenderCommandV1>()];
+const _: [(); 40] = [(); size_of::<NativeBlockHeaderV2>()];
+const _: [(); 8] = [(); align_of::<NativeBlockHeaderV2>()];
+const _: [(); 104] = [(); size_of::<NativeRenderCommandV2>()];
+const _: [(); 8] = [(); align_of::<NativeRenderCommandV2>()];
 
 #[repr(u32)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -297,6 +428,34 @@ impl NativeEngine {
         }
         let result = unsafe {
             vcabi::trueos_cabi_audio_native_render_v1(
+                self.stream.handle,
+                header,
+                commands.as_ptr(),
+                commands.len(),
+            )
+        };
+        if result < 0 {
+            Err(NativeValidationErrorOrCode::Code(result as i32))
+        } else {
+            Ok(result as usize)
+        }
+    }
+
+    pub fn render_v2(
+        self,
+        header: &NativeBlockHeaderV2,
+        commands: &[NativeRenderCommandV2],
+    ) -> Result<usize, NativeValidationErrorOrCode> {
+        header
+            .validate()
+            .map_err(NativeValidationErrorOrCode::Validation)?;
+        for command in commands {
+            command
+                .validate(header.block_frames)
+                .map_err(NativeValidationErrorOrCode::Validation)?;
+        }
+        let result = unsafe {
+            vcabi::trueos_cabi_audio_native_render_v2(
                 self.stream.handle,
                 header,
                 commands.as_ptr(),
