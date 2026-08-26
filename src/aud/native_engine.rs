@@ -10,6 +10,8 @@ pub const BLOCK_VERSION_V1: u16 = 1;
 pub const COMMAND_SIZE_V1: u16 = 80;
 pub const BLOCK_VERSION_V2: u16 = 2;
 pub const COMMAND_SIZE_V2: u16 = 104;
+pub const BLOCK_VERSION_V3: u16 = 3;
+pub const COMMAND_SIZE_V3: u16 = 112;
 pub const SAMPLE_RATE_HZ: u32 = 48_000;
 pub const KIND_OSCILLATOR: u16 = 1;
 pub const KIND_SAMPLE: u16 = 2;
@@ -21,6 +23,8 @@ const MAX_SAMPLE_VALUES: usize = 48_000 * 2 * 300;
 const MAX_TOTAL_SAMPLE_VALUES: usize = 48_000 * 2 * 600;
 const DELAY_FRAMES: usize = 48_000;
 const DELAY_TAP: usize = 12_000;
+const ROOM_FRAMES: usize = 4_096;
+const ROOM_TAPS: [usize; 4] = [1_421, 1_553, 1_733, 1_997];
 const Q15: i64 = 32_767;
 
 #[repr(C)]
@@ -39,6 +43,8 @@ pub struct NativeBlockHeaderV1 {
 
 /// V2 deliberately retains the frozen 40-byte block header layout.
 pub type NativeBlockHeaderV2 = NativeBlockHeaderV1;
+/// V3 deliberately retains the frozen 40-byte block header layout.
+pub type NativeBlockHeaderV3 = NativeBlockHeaderV1;
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -89,9 +95,22 @@ pub struct NativeRenderCommandV2 {
     pub filter_env_octaves_q8: i16,
 }
 
+/// V3 adds selectable Strudel filter topology while retaining V2 as an exact
+/// prefix. Values match Strudel's public `ftype` control: 0=12db, 1=ladder,
+/// 2=24db. Reserved bytes must remain zero.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct NativeRenderCommandV3 {
+    pub base: NativeRenderCommandV2,
+    pub filter_type: u8,
+    pub reserved3: [u8; 3],
+    pub reserved4: u32,
+}
+
 const _: [(); 40] = [(); core::mem::size_of::<NativeBlockHeaderV1>()];
 const _: [(); 80] = [(); core::mem::size_of::<NativeRenderCommandV1>()];
 const _: [(); 104] = [(); core::mem::size_of::<NativeRenderCommandV2>()];
+const _: [(); 112] = [(); core::mem::size_of::<NativeRenderCommandV3>()];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Error {
@@ -112,6 +131,9 @@ struct Engine {
     delay_l: Vec<i32>,
     delay_r: Vec<i32>,
     delay_cursor: usize,
+    room_l: Vec<i32>,
+    room_r: Vec<i32>,
+    room_cursor: usize,
     voice_filters: Vec<VoiceFilterState>,
 }
 
@@ -124,6 +146,8 @@ struct VoiceFilterState {
     waveform: u8,
     pole_1: i64,
     pole_2: i64,
+    pole_3: i64,
+    pole_4: i64,
     last_end_frame: u64,
     seen_block: u64,
 }
@@ -160,6 +184,9 @@ impl Engine {
             delay_l: Vec::new(),
             delay_r: Vec::new(),
             delay_cursor: 0,
+            room_l: Vec::new(),
+            room_r: Vec::new(),
+            room_cursor: 0,
             voice_filters: Vec::new(),
         }
     }
@@ -223,7 +250,8 @@ impl Engine {
     ) -> Result<Vec<i16>, Error> {
         validate_v1(header, commands)?;
         let envelopes = vec![EnvelopeParams::V1; commands.len()];
-        self.render_inner(header, commands, &envelopes, false)
+        let filter_types = vec![0; commands.len()];
+        self.render_inner(header, commands, &envelopes, &filter_types, false)
     }
 
     fn render_v2(
@@ -249,7 +277,38 @@ impl Engine {
                 release_after_gate: true,
             })
             .collect::<Vec<_>>();
-        self.render_inner(header, &bases, &envelopes, true)
+        let filter_types = vec![0; commands.len()];
+        self.render_inner(header, &bases, &envelopes, &filter_types, true)
+    }
+
+    fn render_v3(
+        &mut self,
+        header: &NativeBlockHeaderV2,
+        commands: &[NativeRenderCommandV3],
+    ) -> Result<Vec<i16>, Error> {
+        validate_v3(header, commands)?;
+        let bases = commands
+            .iter()
+            .map(|command| command.base.base)
+            .collect::<Vec<_>>();
+        let envelopes = commands
+            .iter()
+            .map(|command| EnvelopeParams {
+                attack_frames: command.base.attack_frames,
+                decay_frames: command.base.decay_frames,
+                sustain_q15: command.base.sustain_q15,
+                release_frames: command.base.release_frames,
+                filter_attack_frames: command.base.filter_attack_frames,
+                filter_decay_frames: command.base.filter_decay_frames,
+                filter_env_octaves_q8: command.base.filter_env_octaves_q8,
+                release_after_gate: true,
+            })
+            .collect::<Vec<_>>();
+        let filter_types = commands
+            .iter()
+            .map(|command| command.filter_type)
+            .collect::<Vec<_>>();
+        self.render_inner(header, &bases, &envelopes, &filter_types, true)
     }
 
     fn render_inner(
@@ -257,12 +316,16 @@ impl Engine {
         header: &NativeBlockHeaderV1,
         commands: &[NativeRenderCommandV1],
         envelopes: &[EnvelopeParams],
+        filter_types: &[u8],
         use_soft_limiter: bool,
     ) -> Result<Vec<i16>, Error> {
         let frames = header.block_frames as usize;
         let mut mix = vec![0i64; frames * 2];
         let mut delay_send = vec![0i64; frames * 2];
-        for (command, envelope_params) in commands.iter().zip(envelopes) {
+        let mut room_send = vec![0i64; frames * 2];
+        for ((command, envelope_params), filter_type) in
+            commands.iter().zip(envelopes).zip(filter_types)
+        {
             let sample_index = if command.kind == KIND_SAMPLE {
                 Some(
                     self.samples
@@ -302,21 +365,24 @@ impl Engine {
                     envelope_params.filter_env_octaves_q8,
                     filter_env,
                 );
-                let filtered =
-                    lowpass(&mut self.voice_filters[filter_index], value, cutoff, command.lpq_q8);
+                let filtered = lowpass(
+                    &mut self.voice_filters[filter_index],
+                    value,
+                    cutoff,
+                    command.lpq_q8,
+                    *filter_type,
+                );
                 let index = frame * 2;
                 let left = filtered * left_gain / Q15;
                 let right = filtered * right_gain / Q15;
                 mix[index] += left;
                 mix[index + 1] += right;
-                let send = i64::from(
-                    command
-                        .delay_q15
-                        .saturating_add(command.room_q15)
-                        .min(32_767),
-                );
-                delay_send[index] += left * send / Q15;
-                delay_send[index + 1] += right * send / Q15;
+                let delay = i64::from(command.delay_q15.min(32_767));
+                delay_send[index] += left * delay / Q15;
+                delay_send[index + 1] += right * delay / Q15;
+                let room = i64::from(command.room_q15.min(32_767));
+                room_send[index] += left * room / Q15;
+                room_send[index + 1] += right * room / Q15;
             }
             self.voice_filters[filter_index].last_end_frame = header
                 .absolute_frame
@@ -325,6 +391,7 @@ impl Engine {
         self.voice_filters
             .retain(|state| state.seen_block == header.absolute_frame);
         self.apply_delay(&mut mix, &delay_send, frames);
+        self.apply_room(&mut mix, &room_send, frames);
         Ok(mix
             .into_iter()
             .map(|sample| {
@@ -356,6 +423,8 @@ impl Engine {
             if command.age_frames == 0 || state.last_end_frame != start {
                 state.pole_1 = 0;
                 state.pole_2 = 0;
+                state.pole_3 = 0;
+                state.pole_4 = 0;
             }
             state.seen_block = header.absolute_frame;
             return index;
@@ -368,6 +437,8 @@ impl Engine {
             waveform: command.waveform,
             pole_1: 0,
             pole_2: 0,
+            pole_3: 0,
+            pole_4: 0,
             last_end_frame: start,
             seen_block: header.absolute_frame,
         });
@@ -392,6 +463,35 @@ impl Engine {
             self.delay_r[self.delay_cursor] =
                 (send[index + 1] + wet_r * 3 / 8).clamp(i32::MIN as i64, i32::MAX as i64) as i32;
             self.delay_cursor = (self.delay_cursor + 1) % DELAY_FRAMES;
+        }
+    }
+
+    fn apply_room(&mut self, mix: &mut [i64], send: &[i64], frames: usize) {
+        if self.room_l.len() != ROOM_FRAMES {
+            self.room_l = vec![0; ROOM_FRAMES];
+            self.room_r = vec![0; ROOM_FRAMES];
+            self.room_cursor = 0;
+        }
+        for frame in 0..frames {
+            let mut wet_l = 0i64;
+            let mut wet_r = 0i64;
+            for tap in ROOM_TAPS {
+                let read = (self.room_cursor + ROOM_FRAMES - tap) % ROOM_FRAMES;
+                wet_l += i64::from(self.room_l[read]);
+                wet_r += i64::from(self.room_r[read]);
+            }
+            wet_l /= ROOM_TAPS.len() as i64;
+            wet_r /= ROOM_TAPS.len() as i64;
+            let index = frame * 2;
+            // Cross-coupled feedback avoids two identical mono combs while
+            // remaining bounded under an arbitrary full-scale room send.
+            mix[index] += wet_l / 3;
+            mix[index + 1] += wet_r / 3;
+            let next_l = send[index] + wet_l * 11 / 16 + wet_r / 16;
+            let next_r = send[index + 1] + wet_r * 11 / 16 + wet_l / 16;
+            self.room_l[self.room_cursor] = next_l.clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+            self.room_r[self.room_cursor] = next_r.clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+            self.room_cursor = (self.room_cursor + 1) % ROOM_FRAMES;
         }
     }
 }
@@ -421,6 +521,13 @@ pub fn render_block_v2(
     commands: &[NativeRenderCommandV2],
 ) -> Result<Vec<i16>, Error> {
     ENGINE.lock().render_v2(header, commands)
+}
+
+pub fn render_block_v3(
+    header: &NativeBlockHeaderV2,
+    commands: &[NativeRenderCommandV3],
+) -> Result<Vec<i16>, Error> {
+    ENGINE.lock().render_v3(header, commands)
 }
 
 fn validate_v1(
@@ -488,6 +595,46 @@ fn validate_v2(
             || c.reserved2 != 0
             || command.sustain_q15 > 32_767
             || !(-8 * 256..=8 * 256).contains(&i32::from(command.filter_env_octaves_q8))
+    }) {
+        return Err(Error::Invalid);
+    }
+    Ok(())
+}
+
+fn validate_v3(
+    header: &NativeBlockHeaderV2,
+    commands: &[NativeRenderCommandV3],
+) -> Result<(), Error> {
+    if header.magic != BLOCK_MAGIC_V1
+        || header.version != BLOCK_VERSION_V3
+        || header.command_size != COMMAND_SIZE_V3
+        || header.sample_rate_hz != SAMPLE_RATE_HZ
+        || header.block_frames == 0
+        || header.block_frames as usize > MAX_BLOCK_FRAMES
+        || header.flags != 0
+        || header.reserved != 0
+        || commands.len() > MAX_COMMANDS
+    {
+        return Err(Error::Invalid);
+    }
+    if commands.iter().any(|command| {
+        let c = &command.base.base;
+        c.start_frame >= c.end_frame
+            || c.end_frame > header.block_frames
+            || c.duration_frames == 0
+            || !matches!(c.kind, KIND_OSCILLATOR | KIND_SAMPLE)
+            || c.waveform > 4
+            || c.sample_begin_q16 > c.sample_end_q16
+            || c.sample_end_q16 > 65_536
+            || (c.kind == KIND_SAMPLE && c.playback_rate_q16 <= 0)
+            || c.reserved0 != 0
+            || c.reserved1 != 0
+            || c.reserved2 != 0
+            || command.base.sustain_q15 > 32_767
+            || !(-8 * 256..=8 * 256).contains(&i32::from(command.base.filter_env_octaves_q8))
+            || command.filter_type > 2
+            || command.reserved3 != [0; 3]
+            || command.reserved4 != 0
     }) {
         return Err(Error::Invalid);
     }
@@ -626,16 +773,26 @@ fn modulated_cutoff(base_hz: u16, depth_octaves_q8: i16, envelope_q15: i64) -> u
     shifted.clamp(1, 24_000) as u16
 }
 
-fn lowpass(state: &mut VoiceFilterState, input: i64, cutoff_hz: u16, resonance_q8: u16) -> i64 {
+fn lowpass(
+    state: &mut VoiceFilterState,
+    input: i64,
+    cutoff_hz: u16,
+    resonance_q8: u16,
+    filter_type: u8,
+) -> i64 {
     let cutoff = u64::from(cutoff_hz).min(24_000);
     if cutoff == 0 {
         state.pole_1 = 0;
         state.pole_2 = 0;
+        state.pole_3 = 0;
+        state.pole_4 = 0;
         return 0;
     }
     if cutoff >= 23_900 {
         state.pole_1 = input;
         state.pole_2 = input;
+        state.pole_3 = input;
+        state.pole_4 = input;
         return input;
     }
     // Bilinear one-pole coefficient (2*pi*fc)/(fs + 2*pi*fc), Q15.
@@ -645,13 +802,36 @@ fn lowpass(state: &mut VoiceFilterState, input: i64, cutoff_hz: u16, resonance_q
     // Strudel lpq values above 16 are clamped to keep this two-pole feedback
     // topology stable under arbitrary Blueprint input.
     let resonance = i64::from(resonance_q8.min(16 * 256)) * 24_576 / (16 * 256);
-    let driven = input - state.pole_2 * resonance / Q15;
+    let feedback = if filter_type == 0 {
+        state.pole_2
+    } else {
+        state.pole_4
+    };
+    let mut driven = input - feedback * resonance / Q15;
+    if filter_type == 1 {
+        // Bounded nonlinear drive gives the ladder mode its characteristic
+        // stronger saturation without floating point in the audio path.
+        driven = driven.saturating_mul(Q15 * 2) / (driven.abs() + Q15);
+    }
     state.pole_1 += (driven - state.pole_1) * alpha / Q15;
     state.pole_2 += (state.pole_1 - state.pole_2) * alpha / Q15;
+    if filter_type != 0 {
+        state.pole_3 += (state.pole_2 - state.pole_3) * alpha / Q15;
+        state.pole_4 += (state.pole_3 - state.pole_4) * alpha / Q15;
+    } else {
+        state.pole_3 = state.pole_2;
+        state.pole_4 = state.pole_2;
+    }
     const STATE_LIMIT: i64 = i16::MAX as i64 * 8;
     state.pole_1 = state.pole_1.clamp(-STATE_LIMIT, STATE_LIMIT);
     state.pole_2 = state.pole_2.clamp(-STATE_LIMIT, STATE_LIMIT);
-    state.pole_2
+    state.pole_3 = state.pole_3.clamp(-STATE_LIMIT, STATE_LIMIT);
+    state.pole_4 = state.pole_4.clamp(-STATE_LIMIT, STATE_LIMIT);
+    if filter_type == 0 {
+        state.pole_2
+    } else {
+        state.pole_4
+    }
 }
 
 fn soft_limit_i16(sample: i64) -> i16 {
@@ -717,6 +897,7 @@ mod tests {
         assert_eq!(core::mem::size_of::<NativeBlockHeaderV1>(), 40);
         assert_eq!(core::mem::size_of::<NativeRenderCommandV1>(), 80);
         assert_eq!(core::mem::size_of::<NativeRenderCommandV2>(), 104);
+        assert_eq!(core::mem::size_of::<NativeRenderCommandV3>(), 112);
     }
     #[test]
     fn oscillator_is_stereo_and_audible() {
@@ -762,6 +943,8 @@ mod tests {
             waveform: 2,
             pole_1: 0,
             pole_2: 0,
+            pole_3: 0,
+            pole_4: 0,
             last_end_frame: 0,
             seen_block: 0,
         };
@@ -771,10 +954,61 @@ mod tests {
         let mut resonant_out = 0;
         for index in 0..128 {
             let input = if index < 8 { 20_000 } else { 0 };
-            dry_out = lowpass(&mut dry, input, 1_200, 0);
-            resonant_out = lowpass(&mut resonant, input, 1_200, 8 * 256);
+            dry_out = lowpass(&mut dry, input, 1_200, 0, 0);
+            resonant_out = lowpass(&mut resonant, input, 1_200, 8 * 256, 0);
         }
         assert_ne!(dry_out, resonant_out);
         assert_ne!(resonant.pole_2, 0);
+    }
+
+    #[test]
+    fn v3_filter_types_have_distinct_responses() {
+        let mut command = NativeRenderCommandV3 {
+            base: NativeRenderCommandV2 {
+                base: NativeRenderCommandV1 {
+                    end_frame: 480,
+                    duration_frames: 480,
+                    waveform: 2,
+                    lpf_hz: 1_200,
+                    lpq_q8: 5 * 256,
+                    ..osc(480)
+                },
+                sustain_q15: 32_767,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let header = NativeBlockHeaderV2 {
+            version: BLOCK_VERSION_V3,
+            command_size: COMMAND_SIZE_V3,
+            ..header(480)
+        };
+        let twelve = Engine::new().render_v3(&header, &[command]).unwrap();
+        command.filter_type = 2;
+        let twenty_four = Engine::new().render_v3(&header, &[command]).unwrap();
+        command.filter_type = 1;
+        let ladder = Engine::new().render_v3(&header, &[command]).unwrap();
+        assert_ne!(twelve, twenty_four);
+        assert_ne!(ladder, twenty_four);
+    }
+
+    #[test]
+    fn room_has_an_early_diffuse_tail_distinct_from_delay() {
+        let mut room = NativeRenderCommandV2 {
+            base: NativeRenderCommandV1 {
+                end_frame: 4_096,
+                duration_frames: 256,
+                room_q15: 24_000,
+                ..osc(4_096)
+            },
+            sustain_q15: 32_767,
+            ..Default::default()
+        };
+        let room_pcm = Engine::new().render_v2(&header_v2(4_096), &[room]).unwrap();
+        room.base.room_q15 = 0;
+        room.base.delay_q15 = 24_000;
+        let delay_pcm = Engine::new().render_v2(&header_v2(4_096), &[room]).unwrap();
+        assert!(room_pcm[1_400 * 2..].iter().any(|sample| *sample != 0));
+        assert!(delay_pcm[1_400 * 2..].iter().all(|sample| *sample == 0));
     }
 }

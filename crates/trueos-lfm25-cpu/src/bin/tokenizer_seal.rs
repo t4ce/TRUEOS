@@ -235,6 +235,21 @@ fn validate_runtime_artifact(artifact: &[u8]) -> Result<(), String> {
     if followup != expected_followup {
         return Err(format!("pinned followup tokenization mismatch: {followup:?}"));
     }
+    let tool_call = tokenizer
+        .encode_no_argument_tool_call("time")
+        .map_err(|error| format!("runtime tool-call tokenize failed: {error:?}"))?;
+    let decoded_tool_call = tokenizer
+        .decode(&tool_call, false)
+        .map_err(|error| format!("runtime tool-call detokenize failed: {error:?}"))?;
+    if tool_call.first() != Some(&10)
+        || tool_call.last() != Some(&11)
+        || decoded_tool_call != b"<|tool_call_start|>[time()]<|tool_call_end|>"
+    {
+        return Err(format!(
+            "pinned native tool-call mismatch tokens={tool_call:?} text={:?}",
+            String::from_utf8_lossy(&decoded_tool_call),
+        ));
+    }
     let decoded = tokenizer
         .decode(cases[0].1, true)
         .map_err(|error| format!("runtime detokenize failed: {error:?}"))?;

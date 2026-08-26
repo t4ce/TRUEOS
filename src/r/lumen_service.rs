@@ -16,6 +16,7 @@ use crate::lumen::decode::{Lfm25DecodeInput, checkpoint_intel_igc, restore_intel
 
 const MAX_SYSTEM_BYTES: usize = 8 * 1024;
 const MAX_PROMPT_BYTES: usize = 4 * 1024;
+const MAX_TOOL_NAME_BYTES: usize = 32;
 const MAX_TOOL_RESULT_BYTES: usize = 256;
 const MAX_SPIRIT_RESPONSE_BYTES: usize = 4 * 1024;
 const MAX_REPLY_TOKENS: usize = 48;
@@ -45,6 +46,7 @@ enum LumenRequest {
         tail: [u32; 2],
         tail_len: usize,
         prompt: String,
+        no_argument_tool: Option<String>,
     },
     ToolResult {
         turn: u64,
@@ -181,6 +183,37 @@ pub(crate) fn template_open(owner: u8, system: &[u8]) -> i32 {
 }
 
 pub(crate) fn prompt_submit(owner: u8, turn: u64, tail: &[u32], prompt: &[u8]) -> i32 {
+    prompt_submit_inner(owner, turn, tail, prompt, None)
+}
+
+pub(crate) fn prompt_submit_with_no_argument_tool(
+    owner: u8,
+    turn: u64,
+    tail: &[u32],
+    prompt: &[u8],
+    tool_name: &[u8],
+) -> i32 {
+    let Ok(tool_name) = core::str::from_utf8(tool_name) else {
+        return ERROR_BAD_INPUT;
+    };
+    if tool_name.is_empty()
+        || tool_name.len() > MAX_TOOL_NAME_BYTES
+        || !tool_name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+    {
+        return ERROR_BAD_INPUT;
+    }
+    prompt_submit_inner(owner, turn, tail, prompt, Some(tool_name))
+}
+
+fn prompt_submit_inner(
+    owner: u8,
+    turn: u64,
+    tail: &[u32],
+    prompt: &[u8],
+    no_argument_tool: Option<&str>,
+) -> i32 {
     let Some(slot) = slot(owner) else {
         return ERROR_BAD_OWNER;
     };
@@ -210,6 +243,7 @@ pub(crate) fn prompt_submit(owner: u8, turn: u64, tail: &[u32], prompt: &[u8]) -
         tail: stored_tail,
         tail_len: tail.len(),
         prompt: prompt.to_string(),
+        no_argument_tool: no_argument_tool.map(ToString::to_string),
     });
     0
 }
@@ -578,7 +612,17 @@ async fn lumen_blueprint_worker(owner: u8) {
                 tail,
                 tail_len,
                 prompt,
-            }) => match run_prompt(&tokenizer, &module, turn, &tail[..tail_len], &prompt).await {
+                no_argument_tool,
+            }) => match run_prompt(
+                &tokenizer,
+                &module,
+                turn,
+                &tail[..tail_len],
+                &prompt,
+                no_argument_tool.as_deref(),
+            )
+            .await
+            {
                 Ok(reply) => {
                     let mut state = slot(owner).unwrap().lock();
                     state.reply = reply.text;
@@ -667,6 +711,7 @@ async fn run_prompt(
     turn: u64,
     tail: &[u32],
     prompt: &str,
+    no_argument_tool: Option<&str>,
 ) -> Result<PromptReply, ()> {
     let prompt_tokens = if turn == 0 {
         if module.try_state().is_some_and(|state| state.position == 0) {
@@ -682,7 +727,7 @@ async fn run_prompt(
             .map_err(|_| ())?;
         append_tail(tail, suffix)?
     };
-    run_generation(tokenizer, module, turn, prompt_tokens).await
+    run_generation(tokenizer, module, turn, prompt_tokens, no_argument_tool).await
 }
 
 async fn run_tool_result(
@@ -695,7 +740,7 @@ async fn run_tool_result(
     let suffix = tokenizer
         .encode_tool_result_after_assistant(result)
         .map_err(|_| ())?;
-    run_generation(tokenizer, module, turn, append_tail(tail, suffix)?).await
+    run_generation(tokenizer, module, turn, append_tail(tail, suffix)?, None).await
 }
 
 fn append_tail(tail: &[u32], suffix: Vec<u32>) -> Result<Vec<u32>, ()> {
@@ -720,6 +765,7 @@ async fn run_generation(
     module: &LfmModule,
     turn: u64,
     mut prompt_tokens: Vec<u32>,
+    no_argument_tool: Option<&str>,
 ) -> Result<PromptReply, ()> {
     let reasoning = crate::r::ai_activity::begin_reasoning(
         crate::r::ai_activity::AiActivitySource::Lumen,
@@ -748,6 +794,12 @@ async fn run_generation(
     }
     prompt_tokens.clear();
 
+    let constrained_call = no_argument_tool
+        .map(|name| tokenizer.encode_no_argument_tool_call(name))
+        .transpose()
+        .map_err(|_| ())?;
+    let mut constrained_call_index = 0usize;
+    let mut constraining_call = false;
     let mut generated = Vec::new();
     let mut stopped = false;
     for index in 0..MAX_REPLY_TOKENS {
@@ -756,17 +808,35 @@ async fn run_generation(
             stopped = true;
             break;
         }
+        if index == 0
+            && constrained_call
+                .as_ref()
+                .and_then(|call| call.first())
+                .is_some_and(|start| *start == token)
+        {
+            constraining_call = true;
+            constrained_call_index = 1;
+        }
         generated.push(token);
         if index + 1 == MAX_REPLY_TOKENS {
             break;
         }
-        next_token = Some(
-            module
-                .decode_token(Lfm25DecodeInput::new(token))
-                .await
-                .map_err(|_| ())?
-                .token,
-        );
+        let predicted = module
+            .decode_token(Lfm25DecodeInput::new(token))
+            .await
+            .map_err(|_| ())?
+            .token;
+        next_token = Some(if constraining_call {
+            let call = constrained_call.as_ref().ok_or(())?;
+            if let Some(forced) = call.get(constrained_call_index) {
+                constrained_call_index += 1;
+                *forced
+            } else {
+                tokenizer.im_end_id()
+            }
+        } else {
+            predicted
+        });
     }
     let text = tokenizer.decode(&generated, false).map_err(|_| ())?;
     let mut result_tail = [0u32; 2];
@@ -873,6 +943,67 @@ pub unsafe extern "C" fn trueos_cabi_lumen_prompt_submit(
     }
     current_direct_owner()
         .map(|owner| prompt_submit(owner, turn, tail, prompt))
+        .unwrap_or(ERROR_BAD_OWNER)
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_lumen_prompt_submit_with_no_argument_tool_v1(
+    turn: u64,
+    tail_ptr: *const u32,
+    tail_len: usize,
+    prompt_ptr: *const u8,
+    prompt_len: usize,
+    tool_name_ptr: *const u8,
+    tool_name_len: usize,
+) -> i32 {
+    if prompt_ptr.is_null()
+        || prompt_len == 0
+        || prompt_len > MAX_PROMPT_BYTES
+        || tool_name_ptr.is_null()
+        || tool_name_len == 0
+        || tool_name_len > MAX_TOOL_NAME_BYTES
+        || tail_len > 2
+        || (tail_len != 0 && tail_ptr.is_null())
+    {
+        return ERROR_BAD_INPUT;
+    }
+    let tail = if tail_len == 0 {
+        &[]
+    } else {
+        unsafe { core::slice::from_raw_parts(tail_ptr, tail_len) }
+    };
+    let prompt = unsafe { core::slice::from_raw_parts(prompt_ptr, prompt_len) };
+    let tool_name = unsafe { core::slice::from_raw_parts(tool_name_ptr, tool_name_len) };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let mut payload = Vec::new();
+        if payload
+            .try_reserve_exact(8 + tail_len * 4 + tool_name_len + prompt_len)
+            .is_err()
+        {
+            return ERROR_UNAVAILABLE;
+        }
+        payload.extend_from_slice(&(tail_len as u32).to_le_bytes());
+        payload.extend_from_slice(&(tool_name_len as u32).to_le_bytes());
+        for token in tail {
+            payload.extend_from_slice(&token.to_le_bytes());
+        }
+        payload.extend_from_slice(tool_name);
+        payload.extend_from_slice(prompt);
+        let (status, data) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_LUMEN_PROMPT_SUBMIT_WITH_NO_ARGUMENT_TOOL_V1,
+            turn,
+            0,
+            &payload,
+            &mut [],
+        );
+        return if status == trueos_vm::vmcall::STATUS_OK {
+            data as i64 as i32
+        } else {
+            ERROR_TRANSPORT
+        };
+    }
+    current_direct_owner()
+        .map(|owner| prompt_submit_with_no_argument_tool(owner, turn, tail, prompt, tool_name))
         .unwrap_or(ERROR_BAD_OWNER)
 }
 

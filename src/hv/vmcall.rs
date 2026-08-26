@@ -208,6 +208,7 @@ pub const OP_BP_LUMEN_RESTORE_BEGIN: u32 = 0x106;
 pub const OP_BP_LUMEN_RESTORE_WRITE: u32 = 0x107;
 pub const OP_BP_LUMEN_RESTORE_COMMIT: u32 = 0x108;
 pub const OP_BP_LUMEN_CLOSE: u32 = 0x109;
+pub const OP_BP_LUMEN_PROMPT_SUBMIT_WITH_NO_ARGUMENT_TOOL_V1: u32 = 0x155;
 pub const OP_BP_SPIRIT_EMOTION_PLAY: u32 = 0x10A;
 pub const OP_BP_SPIRIT_RESPONSE_PRESENT: u32 = 0x10B;
 pub const OP_BP_SPIRIT_MOVE: u32 = 0x10C;
@@ -302,6 +303,7 @@ pub const OP_BP_AUDIO_SET_VOLUME_PERCENT: u32 = 0x9D; // arg0 percent -> applied
 pub const OP_BP_AUDIO_VOLUME_PERCENT: u32 = 0x9E; // response is host overlay volume percent
 pub const OP_BP_AUDIO_NATIVE_RENDER_V1: u32 = 0x152; // payload native header+commands, arg0 count -> frames/rc
 pub const OP_BP_AUDIO_NATIVE_RENDER_V2: u32 = 0x153; // payload v2 header+commands, arg0 count -> frames/rc
+pub const OP_BP_AUDIO_NATIVE_RENDER_V3: u32 = 0x154; // payload v3 header+commands, arg0 count -> frames/rc
 pub const OP_BP_SOCKET_TCP_OPEN: u32 = 0x35; // arg0 domain/type, arg1 protocol -> socket/rc
 pub const OP_BP_SOCKET_TCP_CLOSE: u32 = 0x36; // arg0 socket -> rc
 pub const OP_BP_SOCKET_TCP_SET_NONBLOCKING: u32 = 0x37; // arg0 socket, arg1 bool -> rc
@@ -822,6 +824,36 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                         arg0,
                         &tail[..tail_len],
                         prompt,
+                    ))
+                })
+                .unwrap_or(-3);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_LUMEN_PROMPT_SUBMIT_WITH_NO_ARGUMENT_TOOL_V1 => {
+            let rc = request_payload(vm_id, req_len)
+                .and_then(|payload| {
+                    let tail_len = u32::from_le_bytes(payload.get(..4)?.try_into().ok()?) as usize;
+                    let tool_name_len =
+                        u32::from_le_bytes(payload.get(4..8)?.try_into().ok()?) as usize;
+                    if tail_len > 2 || tool_name_len == 0 {
+                        return None;
+                    }
+                    let tail_end = 8usize.checked_add(tail_len.checked_mul(4)?)?;
+                    let tool_name_end = tail_end.checked_add(tool_name_len)?;
+                    let tail_bytes = payload.get(8..tail_end)?;
+                    let tool_name = payload.get(tail_end..tool_name_end)?;
+                    let prompt = payload.get(tool_name_end..)?;
+                    let mut tail = [0u32; 2];
+                    for (index, chunk) in tail_bytes.chunks_exact(4).enumerate() {
+                        tail[index] = u32::from_le_bytes(chunk.try_into().ok()?);
+                    }
+                    Some(crate::r::lumen_service::prompt_submit_with_no_argument_tool(
+                        vm_id,
+                        arg0,
+                        &tail[..tail_len],
+                        prompt,
+                        tool_name,
                     ))
                 })
                 .unwrap_or(-3);
@@ -3907,6 +3939,42 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                     vm_id, rc, crate::aud::pcm_lane::pending_frames()
                 );
             }
+            write_response(vm_id, seq, STATUS_OK, rc as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_AUDIO_NATIVE_RENDER_V3 => {
+            use crate::aud::native_engine::{MAX_COMMANDS, NativeBlockHeaderV3, NativeRenderCommandV3};
+            let count = arg0 as usize;
+            let header_size = core::mem::size_of::<NativeBlockHeaderV3>();
+            let command_size = core::mem::size_of::<NativeRenderCommandV3>();
+            let expected = count.checked_mul(command_size).and_then(|bytes| header_size.checked_add(bytes));
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            if count > MAX_COMMANDS || expected != Some(n) {
+                write_response(vm_id, seq, STATUS_OK, (-22i64) as u64, 0);
+                return DispatchOutcome::Resume;
+            }
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let data = unsafe { &(&(*p).payload)[..n] };
+            let header = unsafe { core::ptr::read_unaligned(data.as_ptr().cast::<NativeBlockHeaderV3>()) };
+            let mut commands = Vec::with_capacity(count);
+            for index in 0..count {
+                let offset = header_size + index * command_size;
+                commands.push(unsafe { core::ptr::read_unaligned(data.as_ptr().add(offset).cast::<NativeRenderCommandV3>()) });
+            }
+            let rc = match crate::aud::native_engine::render_block_v3(&header, &commands) {
+                Ok(pcm) => match crate::aud::pcm_lane::submit_i16_stereo_48k("blueprint-audio-native-vmcall-v3", pcm) {
+                    Ok(frames) => frames as i64,
+                    Err(crate::aud::pcm_lane::PcmLaneError::QueueFull) => -16,
+                    Err(crate::aud::pcm_lane::PcmLaneError::BadShape) => -22,
+                    Err(crate::aud::pcm_lane::PcmLaneError::EmptyBuffer) => -5,
+                },
+                Err(crate::aud::native_engine::Error::Invalid) => -22,
+                Err(crate::aud::native_engine::Error::MissingSample) => -19,
+                Err(crate::aud::native_engine::Error::NoSpace) => -28,
+            };
             write_response(vm_id, seq, STATUS_OK, rc as u64, 0);
             DispatchOutcome::Resume
         }

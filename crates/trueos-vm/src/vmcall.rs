@@ -199,6 +199,7 @@ pub const OP_BP_LUMEN_RESTORE_BEGIN: u32 = 0x106;
 pub const OP_BP_LUMEN_RESTORE_WRITE: u32 = 0x107;
 pub const OP_BP_LUMEN_RESTORE_COMMIT: u32 = 0x108;
 pub const OP_BP_LUMEN_CLOSE: u32 = 0x109;
+pub const OP_BP_LUMEN_PROMPT_SUBMIT_WITH_NO_ARGUMENT_TOOL_V1: u32 = 0x155;
 pub const OP_BP_SPIRIT_EMOTION_PLAY: u32 = 0x10A;
 pub const OP_BP_SPIRIT_RESPONSE_PRESENT: u32 = 0x10B;
 pub const OP_BP_SPIRIT_MOVE: u32 = 0x10C;
@@ -303,6 +304,8 @@ pub const OP_BP_AUDIO_NATIVE_RENDER_V1: u32 = 0x152;
 /// Fixed-width `NativeBlockHeaderV2 || NativeRenderCommandV2[]` payload.
 /// `arg0` is the command count; the host returns rendered frames or errno.
 pub const OP_BP_AUDIO_NATIVE_RENDER_V2: u32 = 0x153;
+/// Fixed-width `NativeBlockHeaderV3 || NativeRenderCommandV3[]` payload.
+pub const OP_BP_AUDIO_NATIVE_RENDER_V3: u32 = 0x154;
 pub const OP_BP_SOCKET_TCP_OPEN: u32 = 0x35;
 pub const OP_BP_SOCKET_TCP_CLOSE: u32 = 0x36;
 pub const OP_BP_SOCKET_TCP_SET_NONBLOCKING: u32 = 0x37;

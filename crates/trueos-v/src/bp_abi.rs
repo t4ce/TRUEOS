@@ -426,6 +426,15 @@ unsafe extern "C" {
         prompt_ptr: *const u8,
         prompt_len: usize,
     ) -> i32;
+    pub fn trueos_cabi_lumen_prompt_submit_with_no_argument_tool_v1(
+        turn: u64,
+        tail_ptr: *const u32,
+        tail_len: usize,
+        prompt_ptr: *const u8,
+        prompt_len: usize,
+        tool_name_ptr: *const u8,
+        tool_name_len: usize,
+    ) -> i32;
     pub fn trueos_cabi_lumen_tool_result_submit(
         turn: u64,
         tail_ptr: *const u32,
@@ -995,6 +1004,12 @@ unsafe extern "C" {
         handle: u32,
         header: *const crate::vaudio::NativeBlockHeaderV2,
         commands: *const crate::vaudio::NativeRenderCommandV2,
+        count: usize,
+    ) -> isize;
+    pub fn trueos_cabi_audio_native_render_v3(
+        handle: u32,
+        header: *const crate::vaudio::NativeBlockHeaderV3,
+        commands: *const crate::vaudio::NativeRenderCommandV3,
         count: usize,
     ) -> isize;
     pub fn trueos_cabi_audio_native_sample_register_v1(

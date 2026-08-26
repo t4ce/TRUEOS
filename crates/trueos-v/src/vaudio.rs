@@ -18,6 +18,8 @@ pub const NATIVE_COMMAND_SIZE_V1: u16 = 80;
 /// Additive command envelope extension. V1 payloads remain accepted unchanged.
 pub const NATIVE_AUDIO_VERSION_V2: u16 = 2;
 pub const NATIVE_COMMAND_SIZE_V2: u16 = 104;
+pub const NATIVE_AUDIO_VERSION_V3: u16 = 3;
+pub const NATIVE_COMMAND_SIZE_V3: u16 = 112;
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -104,6 +106,26 @@ impl NativeBlockHeaderV2 {
         {
             return Err(NativeValidationError::BadHeader);
         }
+        Ok(())
+    }
+}
+
+/// V3 retains the frozen 40-byte block-header layout.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct NativeBlockHeaderV3 {
+    pub magic: u32, pub version: u16, pub command_size: u16, pub block_frames: u32,
+    pub sample_rate_hz: u32, pub absolute_frame: u64, pub revision: u64,
+    pub flags: u32, pub reserved: u32,
+}
+impl NativeBlockHeaderV3 {
+    pub const fn new(block_frames: u32, absolute_frame: u64, revision: u64) -> Self {
+        Self { magic: NATIVE_AUDIO_MAGIC_V1, version: NATIVE_AUDIO_VERSION_V3, command_size: NATIVE_COMMAND_SIZE_V3,
+            block_frames, sample_rate_hz: DEFAULT_RATE_HZ, absolute_frame, revision, flags: 0, reserved: 0 }
+    }
+    pub fn validate(&self) -> Result<(), NativeValidationError> {
+        if self.magic != NATIVE_AUDIO_MAGIC_V1 || self.version != NATIVE_AUDIO_VERSION_V3 || self.command_size != NATIVE_COMMAND_SIZE_V3
+            || self.block_frames == 0 || self.sample_rate_hz == 0 || self.flags != 0 || self.reserved != 0 { return Err(NativeValidationError::BadHeader); }
         Ok(())
     }
 }
@@ -217,6 +239,29 @@ impl NativeRenderCommandV2 {
     }
 }
 
+/// V3 preserves the complete 104-byte V2 prefix and adds filter selection.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct NativeRenderCommandV3 {
+    pub base: NativeRenderCommandV2,
+    /// 0 = 12db, 1 = ladder, 2 = 24db.
+    pub filter_type: u8,
+    pub reserved3: [u8; 3],
+    pub reserved4: u32,
+}
+impl NativeRenderCommandV3 {
+    pub const FILTER_12DB: u8 = 0;
+    pub const FILTER_LADDER: u8 = 1;
+    pub const FILTER_24DB: u8 = 2;
+    pub const KIND_OSCILLATOR: u16 = NativeRenderCommandV2::KIND_OSCILLATOR;
+    pub const KIND_SAMPLE: u16 = NativeRenderCommandV2::KIND_SAMPLE;
+    pub fn validate(&self, block_frames: u32) -> Result<(), NativeValidationError> {
+        self.base.validate(block_frames)?;
+        if self.filter_type > Self::FILTER_24DB || self.reserved3 != [0; 3] || self.reserved4 != 0 { return Err(NativeValidationError::ReservedNonZero); }
+        Ok(())
+    }
+}
+
 impl NativeRenderCommandV1 {
     pub const KIND_OSCILLATOR: u16 = 1;
     pub const KIND_SAMPLE: u16 = 2;
@@ -256,6 +301,10 @@ const _: [(); 40] = [(); size_of::<NativeBlockHeaderV2>()];
 const _: [(); 8] = [(); align_of::<NativeBlockHeaderV2>()];
 const _: [(); 104] = [(); size_of::<NativeRenderCommandV2>()];
 const _: [(); 8] = [(); align_of::<NativeRenderCommandV2>()];
+const _: [(); 40] = [(); size_of::<NativeBlockHeaderV3>()];
+const _: [(); 8] = [(); align_of::<NativeBlockHeaderV3>()];
+const _: [(); 112] = [(); size_of::<NativeRenderCommandV3>()];
+const _: [(); 8] = [(); align_of::<NativeRenderCommandV3>()];
 
 #[repr(u32)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -467,6 +516,13 @@ impl NativeEngine {
         } else {
             Ok(result as usize)
         }
+    }
+
+    pub fn render_v3(self, header: &NativeBlockHeaderV3, commands: &[NativeRenderCommandV3]) -> Result<usize, NativeValidationErrorOrCode> {
+        header.validate().map_err(NativeValidationErrorOrCode::Validation)?;
+        for command in commands { command.validate(header.block_frames).map_err(NativeValidationErrorOrCode::Validation)?; }
+        let result = unsafe { vcabi::trueos_cabi_audio_native_render_v3(self.stream.handle, header, commands.as_ptr(), commands.len()) };
+        if result < 0 { Err(NativeValidationErrorOrCode::Code(result as i32)) } else { Ok(result as usize) }
     }
 
     pub fn register_sample(

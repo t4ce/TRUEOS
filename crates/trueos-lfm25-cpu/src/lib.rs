@@ -226,6 +226,8 @@ pub struct Lfm25Tokenizer {
 // centralized so the token path and its contract test cannot drift apart.
 const TOOL_RESULT_ROLE: &str = "tool\n";
 const TOOL_RESULT_ASSISTANT: &str = "assistant\n";
+const TOOL_CALL_START: &[u8] = b"<|tool_call_start|>";
+const TOOL_CALL_END: &[u8] = b"<|tool_call_end|>";
 
 impl Lfm25Tokenizer {
     pub fn from_artifact(artifact: &[u8]) -> Result<Self, Error> {
@@ -464,6 +466,40 @@ impl Lfm25Tokenizer {
         tokens.extend(self.encode("\n")?);
         tokens.push(self.im_start);
         tokens.extend(self.encode(TOOL_RESULT_ASSISTANT)?);
+        Ok(tokens)
+    }
+
+    /// Exact native LFM2.5 call envelope for one no-argument tool.
+    ///
+    /// The special boundary markers are vocabulary tokens, not textual prompt
+    /// fragments. This sequence can therefore be used as a decode constraint
+    /// after the model itself selects the tool-call start token.
+    pub fn encode_no_argument_tool_call(&self, name: &str) -> Result<Vec<u32>, Error> {
+        if name.is_empty()
+            || name.len() > 32
+            || !name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+        {
+            return Err(Error::Vocabulary);
+        }
+        let start = *self
+            .token_to_id
+            .get(TOOL_CALL_START)
+            .ok_or(Error::Vocabulary)?;
+        let end = *self
+            .token_to_id
+            .get(TOOL_CALL_END)
+            .ok_or(Error::Vocabulary)?;
+        let mut tokens = Vec::new();
+        let payload = alloc::format!("[{name}()]");
+        let payload = self.encode(payload.as_str())?;
+        tokens
+            .try_reserve_exact(payload.len().saturating_add(2))
+            .map_err(|_| Error::Allocation)?;
+        tokens.push(start);
+        tokens.extend(payload);
+        tokens.push(end);
         Ok(tokens)
     }
 
