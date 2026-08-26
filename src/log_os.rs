@@ -42,7 +42,7 @@ pub(crate) mod flags {
     /// motion - only appear once Global admits Trace. Enable this while
     /// working on the plane lease contract or the slot0 stack painter; it is
     /// noisy by design and belongs off in ordinary boots.
-    pub(crate) const UI4_DIAG_PROFILE_ENABLED: bool = true;
+    pub(crate) const UI4_DIAG_PROFILE_ENABLED: bool = false;
 
     /// Focused Helio/Intel graphics bring-up profile.
     ///
@@ -72,7 +72,7 @@ pub(crate) mod flags {
     pub(crate) const NET_LOG_LEVEL: LogLevelPolicy = if BOOT_DIAG_PROFILE_ENABLED {
         LogLevelPolicy::up(LogLevelFilter::Trace)
     } else {
-        LogLevelPolicy::up(LogLevelFilter::Info)
+        LogLevelPolicy::up(LogLevelFilter::Warn)
     };
     pub(crate) const USB_LOG_LEVEL: LogLevelPolicy = if USB_UAS_DIAG_PROFILE_ENABLED {
         LogLevelPolicy::up(LogLevelFilter::Trace)
@@ -81,7 +81,7 @@ pub(crate) mod flags {
     } else {
         LogLevelPolicy::up(LogLevelFilter::Warn)
     };
-    pub(crate) const STORAGE_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LogLevelFilter::Warn);
+    pub(crate) const STORAGE_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LogLevelFilter::Info);
     /// The display/cursor side is per-flip chatty, so it normally stays at
     /// Warn; the explicit Helio profile temporarily admits its Debug ladder.
     pub(crate) const GFX_LOG_LEVEL: LogLevelPolicy = if HELIO_GFX_DIAG_PROFILE_ENABLED {
@@ -110,7 +110,7 @@ pub(crate) mod flags {
         LogLevelPolicy::up(LogLevelFilter::Warn);
     pub(crate) const INTEL_MEDIA_NGIN_LOG_LEVEL: LogLevelPolicy =
         LogLevelPolicy::up(LogLevelFilter::Info);
-    pub(crate) const BLUEPRINT_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LogLevelFilter::Info);
+    pub(crate) const BLUEPRINT_LOG_LEVEL: LogLevelPolicy = LogLevelPolicy::up(LogLevelFilter::Trace);
 
     pub(crate) const NET_LOG_RX_TAP: bool = true;
     pub(crate) const NET_LOG_TX_TAP: bool = true;

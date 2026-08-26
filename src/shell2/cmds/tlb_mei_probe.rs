@@ -119,8 +119,7 @@ pub(crate) fn build_probe_text() -> String {
 
     if let Some(snapshot) = verified_snapshot {
         if cleanup_complete {
-            let emitted =
-                super::tlb_mei_asset::emit_verified_asset_receipt(dev, snapshot.bar0);
+            let emitted = super::tlb_mei_asset::emit_verified_asset_receipt(dev, snapshot.bar0);
             writeln!(
                 out,
                 "important_log={} topic=mei-asset-tracking+manageability-posture",
@@ -222,24 +221,9 @@ fn append_snapshot(out: &mut String, snapshot: MeiReachabilitySnapshot) {
     .unwrap();
 
     writeln!(out, "first H_CSR[0x04]=0x{:08X}", snapshot.first_host_csr).unwrap();
-    super::tlb_platform::append_mei_csr_decode(
-        out,
-        "host",
-        snapshot.first_host_csr,
-        false,
-    );
-    writeln!(
-        out,
-        "first ME_CSR_HA[0x0C]=0x{:08X}",
-        snapshot.first_firmware_csr
-    )
-    .unwrap();
-    super::tlb_platform::append_mei_csr_decode(
-        out,
-        "firmware",
-        snapshot.first_firmware_csr,
-        true,
-    );
+    super::tlb_platform::append_mei_csr_decode(out, "host", snapshot.first_host_csr, false);
+    writeln!(out, "first ME_CSR_HA[0x0C]=0x{:08X}", snapshot.first_firmware_csr).unwrap();
+    super::tlb_platform::append_mei_csr_decode(out, "firmware", snapshot.first_firmware_csr, true);
     super::tlb_platform::append_mei_csr_decode(out, "host", snapshot.first_host_csr, false);
     writeln!(out, "first ME_CSR_HA[0x0C]=0x{:08X}", snapshot.first_firmware_csr).unwrap();
     super::tlb_platform::append_mei_csr_decode(out, "firmware", snapshot.first_firmware_csr, true);

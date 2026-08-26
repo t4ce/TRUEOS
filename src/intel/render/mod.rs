@@ -88,6 +88,7 @@ macro_rules! intel_render_batch_log {
 }
 
 include!("constants.rs");
+include!("picasso_carrier.rs");
 include!("state.rs");
 include!("warmup.rs");
 include!("primary.rs");

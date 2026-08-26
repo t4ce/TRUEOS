@@ -1246,7 +1246,7 @@ const DIRECT_RCS_BATCH_START_DWORDS: usize = 4;
 // GuC registrations require stable HWLRCAs. Keep the GPGPU context window
 // distinct from render-graphics' 0x0080_0000 window instead of remapping another
 // allocation underneath the same registered context.
-const DIRECT_RCS_GPU_VA_RING_BASE: u64 = 0x01B0_0000;
+pub(crate) const DIRECT_RCS_GPU_VA_RING_BASE: u64 = 0x01B0_0000;
 const DIRECT_RCS_GPU_VA_CONTEXT_BASE: u64 = 0x01B1_0000;
 const DIRECT_RCS_GPU_VA_RESULT_BASE: u64 = 0x01B4_0000;
 const DIRECT_RCS_GPU_VA_CLEAR_TEST_BASE: u64 = 0x0089_0000;

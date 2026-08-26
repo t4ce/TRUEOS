@@ -812,7 +812,12 @@ pub(crate) fn create_resident_indexed_mesh(
     {
         return Err("resident-indexed-shape");
     }
-    create_resident_triangle_mesh_typed(draw_vertices, draw_indices, TriangleVertexFormat::Float3)
+    create_resident_triangle_mesh_typed(
+        draw_vertices,
+        draw_indices,
+        TriangleVertexFormat::Float3,
+        None,
+    )
 }
 
 /// Upload the authenticated WGPU position+UV vertex contract without
@@ -834,20 +839,62 @@ pub(crate) fn create_resident_textured_triangle_mesh(
     {
         return Err("resident-textured-triangle-shape");
     }
-    create_resident_triangle_mesh_typed(draw_vertices, draw_indices, TriangleVertexFormat::PosUv)
+    create_resident_triangle_mesh_typed(
+        draw_vertices,
+        draw_indices,
+        TriangleVertexFormat::PosUv,
+        None,
+    )
+}
+
+pub(crate) fn create_picasso_resident_indexed_mesh(
+    carrier: PicassoCarrierLease,
+    draw_vertices: &[[f32; 3]],
+    draw_indices: &[u32],
+    topology: ResidentScenePrimitiveTopology,
+) -> Result<ResidentTriangleMesh, &'static str> {
+    let topology_valid = match topology {
+        ResidentScenePrimitiveTopology::PointList => !draw_indices.is_empty(),
+        ResidentScenePrimitiveTopology::LineList => {
+            draw_indices.len() >= 2 && draw_indices.len().is_multiple_of(2)
+        }
+        ResidentScenePrimitiveTopology::TriangleList => {
+            draw_indices.len() >= 3 && draw_indices.len().is_multiple_of(3)
+        }
+    };
+    if !topology_valid
+        || draw_vertices
+            .iter()
+            .flatten()
+            .any(|component| !component.is_finite())
+        || draw_indices
+            .iter()
+            .any(|index| *index as usize >= draw_vertices.len())
+    {
+        return Err("picasso-resident-indexed-shape");
+    }
+    create_resident_triangle_mesh_typed(
+        draw_vertices,
+        draw_indices,
+        TriangleVertexFormat::Float3,
+        Some(carrier),
+    )
 }
 
 fn create_resident_triangle_mesh_typed<T: Copy>(
     draw_vertices: &[T],
     draw_indices: &[u32],
     vertex_format: TriangleVertexFormat,
+    carrier: Option<PicassoCarrierLease>,
 ) -> Result<ResidentTriangleMesh, &'static str> {
     if crate::intel::claimed_device().is_none() {
         return Err("no-device");
     }
-    let warm = warm_state().ok_or("render-boot-not-ready")?;
-    if render_ppgtt_pml4_phys() == 0 || warm.vertex_len == 0 {
-        return Err("render-ppgtt");
+    if carrier.is_none() {
+        let warm = warm_state().ok_or("render-boot-not-ready")?;
+        if render_ppgtt_pml4_phys() == 0 || warm.vertex_len == 0 {
+            return Err("render-ppgtt");
+        }
     }
 
     let vertex_bytes = draw_vertices
@@ -873,7 +920,11 @@ fn create_resident_triangle_mesh_typed<T: Copy>(
         .ok_or("resident-triangle-bytes")?;
     let storage_bytes =
         crate::intel::align_up(used_bytes, 4096).ok_or("resident-triangle-align")?;
-    let gpu_base = reserve_persistent_render_gpu_va(storage_bytes).ok_or("resident-triangle-va")?;
+    let gpu_base = match carrier {
+        Some(carrier) => reserve_picasso_render1_resource_va(carrier, storage_bytes)
+            .ok_or("picasso-resident-triangle-va")?,
+        None => reserve_persistent_render_gpu_va(storage_bytes).ok_or("resident-triangle-va")?,
+    };
     let vertex_count = u32::try_from(draw_vertices.len()).map_err(|_| "resident-triangle-count")?;
     let vertex_bytes_u32 = u32::try_from(vertex_bytes).map_err(|_| "resident-triangle-count")?;
     let index_count = u32::try_from(draw_indices.len()).map_err(|_| "resident-triangle-count")?;
@@ -909,8 +960,23 @@ fn create_resident_triangle_mesh_typed<T: Copy>(
         }
     }
     crate::intel::dma_flush(storage_virt, storage_bytes);
-    if !map_render_ppgtt_range(gpu_base, storage_phys, storage_bytes) {
+    let mapped = match carrier {
+        Some(carrier) => crate::gpu::physical::physical_device().is_some_and(|physical| {
+            map_picasso_render1_resource_range(
+                carrier,
+                physical,
+                gpu_base,
+                storage_phys,
+                storage_bytes,
+            )
+        }),
+        None => map_render_ppgtt_range(gpu_base, storage_phys, storage_bytes),
+    };
+    if !mapped {
         crate::dma::dealloc(storage_virt, storage_bytes);
+        if carrier.is_none() {
+            recycle_persistent_render_gpu_va(gpu_base, storage_bytes);
+        }
         return Err("resident-triangle-map");
     }
 
@@ -930,6 +996,7 @@ fn create_resident_triangle_mesh_typed<T: Copy>(
         index_bytes: index_bytes_u32,
         indirect_args_gpu_addr,
         indirect_args_offset,
+        carrier,
     };
     intel_render_focus_log!(
         "resident-triangle upload authority=gpu-resident phys=0x{:X} gpu=0x{:X} bytes=0x{:X} vertices={} indices={} indirect_gpu=0x{:X} indirect_stride={} cpu_uploads=1 retained=1\n",
@@ -1092,6 +1159,16 @@ pub(crate) fn update_resident_triangle_draw_indexed_indirect(
 }
 
 pub(crate) fn release_resident_triangle_mesh(mesh: &ResidentTriangleMesh) -> bool {
+    if let Some(carrier) = mesh.carrier {
+        let Some(physical) = crate::gpu::physical::physical_device() else {
+            return false;
+        };
+        if !unmap_picasso_render1_range(carrier, physical, mesh.gpu_base, mesh.storage_bytes) {
+            return false;
+        }
+        crate::dma::dealloc(mesh.storage_virt, mesh.storage_bytes);
+        return true;
+    }
     if !unmap_render_ppgtt_range(mesh.gpu_base, mesh.storage_bytes) {
         return false;
     }
@@ -1111,8 +1188,8 @@ const CHURN_FORWARD_INDICES_PER_MESH: usize = 36;
 static CHURN_FORWARD_PIPELINE: spin::Mutex<Option<crate::intel::shader::TrianglePipeline>> =
     spin::Mutex::new(None);
 
-fn bootstrap_churn_meshes() -> [trueos_helio_runtime::churn::MeshDescriptor;
-    CHURN_FORWARD_MESH_COUNT] {
+fn bootstrap_churn_meshes()
+-> [trueos_helio_runtime::churn::MeshDescriptor; CHURN_FORWARD_MESH_COUNT] {
     core::array::from_fn(|mesh_id| trueos_helio_runtime::churn::MeshDescriptor {
         mesh_id: mesh_id as u32,
         half_extents: [1.0; 3],
@@ -1614,6 +1691,7 @@ fn churn_hierarchy_node_capacity(max_instances: usize) -> Option<usize> {
 
 fn allocate_resident_churn_hierarchy(
     max_instances: usize,
+    carrier: Option<PicassoCarrierLease>,
 ) -> Result<ResidentChurnHierarchy, &'static str> {
     let node_capacity =
         churn_hierarchy_node_capacity(max_instances).ok_or("churn-hierarchy-node-capacity")?;
@@ -1644,7 +1722,7 @@ fn allocate_resident_churn_hierarchy(
     ];
     let mut allocated = Vec::with_capacity(layouts.len());
     for (bytes, error) in layouts {
-        match allocate_resident_render_buffer(bytes) {
+        match allocate_resident_render_buffer_for_carrier(carrier, bytes) {
             Ok(buffer) => allocated.push(buffer),
             Err(_) => {
                 for buffer in allocated.iter().rev() {
@@ -1694,6 +1772,7 @@ fn allocate_resident_churn_hierarchy(
 fn create_resident_churn_transform(
     max_instances: usize,
     hardware_admission: ChurnHardwareAdmission,
+    carrier: Option<PicassoCarrierLease>,
 ) -> Result<ResidentChurnTransform, &'static str> {
     if max_instances == 0 || max_instances > crate::intel::gpgpu::GPGPU_HELIO_MAX_ROWS as usize {
         return Err("churn-transform-row-capacity");
@@ -1702,23 +1781,24 @@ fn create_resident_churn_transform(
     if !device_admits_churn_retained_transform(hardware_admission, dev.device_id, dev.revision_id) {
         return Err("churn-transform-hardware-unvalidated");
     }
-    let artifact = resident_helio_transform_artifact()?;
+    let artifact = resident_helio_transform_artifact_for_carrier(carrier)?;
     let seed_bytes = max_instances
         .checked_mul(trueos_helio_runtime::churn::GpuRetainedTransformSeed::BYTE_LEN)
         .ok_or("churn-transform-buffer-capacity")?;
     let draw_template_bytes = CHURN_FORWARD_DRAW_COUNT
         .checked_mul(trueos_helio_runtime::churn::GpuRetainedDrawTemplate::BYTE_LEN)
         .ok_or("churn-transform-buffer-capacity")?;
-    let seeds = allocate_resident_render_buffer(seed_bytes)
+    let seeds = allocate_resident_render_buffer_for_carrier(carrier, seed_bytes)
         .map_err(|_| "churn-transform-seed-allocation")?;
-    let draw_templates = match allocate_resident_render_buffer(draw_template_bytes) {
-        Ok(buffer) => buffer,
-        Err(_) => {
-            let _ = release_resident_render_buffer(&seeds);
-            return Err("churn-transform-template-allocation");
-        }
-    };
-    let hierarchy = match allocate_resident_churn_hierarchy(max_instances) {
+    let draw_templates =
+        match allocate_resident_render_buffer_for_carrier(carrier, draw_template_bytes) {
+            Ok(buffer) => buffer,
+            Err(_) => {
+                let _ = release_resident_render_buffer(&seeds);
+                return Err("churn-transform-template-allocation");
+            }
+        };
+    let hierarchy = match allocate_resident_churn_hierarchy(max_instances, carrier) {
         Ok(hierarchy) => hierarchy,
         Err(error) => {
             let _ = release_resident_render_buffer(&draw_templates);
@@ -1746,6 +1826,7 @@ pub(crate) fn create_resident_churn_forward(
         max_instances,
         meshes,
         ChurnHardwareAdmission::ValidatedProduction,
+        None,
     )
 }
 
@@ -1759,6 +1840,7 @@ pub(crate) fn create_resident_churn_forward_adls_retained_probe(
         max_instances,
         meshes,
         ChurnHardwareAdmission::Adls4680Rev0cPhysicalProbe,
+        None,
     )
 }
 
@@ -1767,6 +1849,7 @@ fn create_resident_churn_forward_with_admission(
     max_instances: usize,
     meshes: &[trueos_helio_runtime::churn::MeshDescriptor; CHURN_FORWARD_MESH_COUNT],
     hardware_admission: ChurnHardwareAdmission,
+    carrier: Option<PicassoCarrierLease>,
 ) -> Result<ResidentChurnForward, &'static str> {
     if max_instances == 0 {
         return Err("churn-native-instance-capacity");
@@ -1856,23 +1939,26 @@ fn create_resident_churn_forward_with_admission(
     let expanded_index_byte_len =
         u32::try_from(expanded_index_blob.len()).map_err(|_| "churn-expanded-index-capacity")?;
 
-    let geometry = allocate_resident_render_buffer(geometry_bytes)?;
-    let expanded_positions = match allocate_resident_render_buffer(expanded_vertex_bytes) {
-        Ok(buffer) => buffer,
-        Err(error) => {
-            let _ = release_resident_render_buffer(&geometry);
-            return Err(error);
-        }
-    };
-    let expanded_indices = match allocate_resident_render_buffer(expanded_index_blob.len()) {
-        Ok(buffer) => buffer,
-        Err(error) => {
-            let _ = release_resident_render_buffer(&expanded_positions);
-            let _ = release_resident_render_buffer(&geometry);
-            return Err(error);
-        }
-    };
-    let camera = match allocate_resident_render_buffer(
+    let geometry = allocate_resident_render_buffer_for_carrier(carrier, geometry_bytes)?;
+    let expanded_positions =
+        match allocate_resident_render_buffer_for_carrier(carrier, expanded_vertex_bytes) {
+            Ok(buffer) => buffer,
+            Err(error) => {
+                let _ = release_resident_render_buffer(&geometry);
+                return Err(error);
+            }
+        };
+    let expanded_indices =
+        match allocate_resident_render_buffer_for_carrier(carrier, expanded_index_blob.len()) {
+            Ok(buffer) => buffer,
+            Err(error) => {
+                let _ = release_resident_render_buffer(&expanded_positions);
+                let _ = release_resident_render_buffer(&geometry);
+                return Err(error);
+            }
+        };
+    let camera = match allocate_resident_render_buffer_for_carrier(
+        carrier,
         trueos_helio_runtime::churn::GpuCameraUniforms::BYTE_LEN,
     ) {
         Ok(buffer) => buffer,
@@ -1883,7 +1969,7 @@ fn create_resident_churn_forward_with_admission(
             return Err(error);
         }
     };
-    let instances = match allocate_resident_render_buffer(instance_bytes) {
+    let instances = match allocate_resident_render_buffer_for_carrier(carrier, instance_bytes) {
         Ok(buffer) => buffer,
         Err(error) => {
             let _ = release_resident_render_buffer(&camera);
@@ -1893,18 +1979,19 @@ fn create_resident_churn_forward_with_admission(
             return Err(error);
         }
     };
-    let compacted_indices = match allocate_resident_render_buffer(compacted_bytes) {
-        Ok(buffer) => buffer,
-        Err(error) => {
-            let _ = release_resident_render_buffer(&instances);
-            let _ = release_resident_render_buffer(&camera);
-            let _ = release_resident_render_buffer(&expanded_indices);
-            let _ = release_resident_render_buffer(&expanded_positions);
-            let _ = release_resident_render_buffer(&geometry);
-            return Err(error);
-        }
-    };
-    let indirect_args = match allocate_resident_render_buffer(indirect_bytes) {
+    let compacted_indices =
+        match allocate_resident_render_buffer_for_carrier(carrier, compacted_bytes) {
+            Ok(buffer) => buffer,
+            Err(error) => {
+                let _ = release_resident_render_buffer(&instances);
+                let _ = release_resident_render_buffer(&camera);
+                let _ = release_resident_render_buffer(&expanded_indices);
+                let _ = release_resident_render_buffer(&expanded_positions);
+                let _ = release_resident_render_buffer(&geometry);
+                return Err(error);
+            }
+        };
+    let indirect_args = match allocate_resident_render_buffer_for_carrier(carrier, indirect_bytes) {
         Ok(buffer) => buffer,
         Err(error) => {
             let _ = release_resident_render_buffer(&compacted_indices);
@@ -1960,6 +2047,7 @@ fn create_resident_churn_forward_with_admission(
     let (transform, transform_unavailable_reason) = match create_resident_churn_transform(
         max_instances,
         hardware_admission,
+        carrier,
     ) {
         Ok(transform) => (Some(transform), None),
         Err(reason) => {
@@ -2124,6 +2212,7 @@ pub(crate) fn update_resident_churn_forward_frame(
 /// `indices` is one ordinary triangle-list mesh, and all instance motion stays
 /// in the GPU-owned seed/instance/indirect buffers of the returned resident.
 pub(crate) fn create_resident_picasso_retained_posnormal_mesh(
+    carrier: PicassoCarrierLease,
     vertices: &[u8],
     indices: &[u32],
     max_instances: usize,
@@ -2143,10 +2232,12 @@ pub(crate) fn create_resident_picasso_retained_posnormal_mesh(
     // This performs the standard authenticated shader/compute admission and
     // allocates the persistent GPU seed, instance, compaction, and indirect
     // ranges. Only its synthetic cube geometry is replaced below.
-    let mut resident = create_resident_churn_forward(
+    let mut resident = create_resident_churn_forward_with_admission(
         PICASSO_RETAINED_FORWARD_ARTIFACT,
         max_instances,
         &bootstrap_churn_meshes(),
+        ChurnHardwareAdmission::ValidatedProduction,
+        Some(carrier),
     )?;
     // Picasso's prepared geometry is already centered and normalized into
     // clip/NDC space. The shared native vertex shader still reads a camera
@@ -2168,12 +2259,13 @@ pub(crate) fn create_resident_picasso_retained_posnormal_mesh(
         .len()
         .checked_mul(core::mem::size_of::<u32>())
         .ok_or("picasso-retained-geometry-size")?;
-    let index_offset = crate::intel::align_up(vertices.len(), 64)
-        .ok_or("picasso-retained-geometry-size")?;
+    let index_offset =
+        crate::intel::align_up(vertices.len(), 64).ok_or("picasso-retained-geometry-size")?;
     let geometry_bytes = index_offset
         .checked_add(index_bytes)
         .ok_or("picasso-retained-geometry-size")?;
-    let geometry = match allocate_resident_render_buffer(geometry_bytes) {
+    let geometry = match allocate_resident_render_buffer_for_carrier(Some(carrier), geometry_bytes)
+    {
         Ok(geometry) => geometry,
         Err(error) => return Err(error),
     };
@@ -2190,8 +2282,10 @@ pub(crate) fn create_resident_picasso_retained_posnormal_mesh(
     let vertex_count = u32::try_from(vertices.len() / POS_NORMAL_STRIDE)
         .map_err(|_| "picasso-retained-geometry-size")?;
     let index_count = u32::try_from(indices.len()).map_err(|_| "picasso-retained-geometry-size")?;
-    let vertex_bytes = u32::try_from(vertices.len()).map_err(|_| "picasso-retained-geometry-size")?;
-    let index_byte_len = u32::try_from(index_bytes).map_err(|_| "picasso-retained-geometry-size")?;
+    let vertex_bytes =
+        u32::try_from(vertices.len()).map_err(|_| "picasso-retained-geometry-size")?;
+    let index_byte_len =
+        u32::try_from(index_bytes).map_err(|_| "picasso-retained-geometry-size")?;
     let old_geometry = core::mem::replace(&mut resident.geometry, geometry);
     resident.draw_group_count = 1;
     resident.vertex_gpu_addr = resident.geometry.gpu_base();
@@ -2248,7 +2342,10 @@ pub(crate) fn update_resident_picasso_retained_transform_seeds(
             .retained_transform_unavailable_reason()
             .unwrap_or("picasso-retained-transform-unavailable"),
     )?;
-    if seeds.is_empty() || seeds.len() > resident.max_instances || seeds.iter().any(|seed| seed.draw_group != 0) {
+    if seeds.is_empty()
+        || seeds.len() > resident.max_instances
+        || seeds.iter().any(|seed| seed.draw_group != 0)
+    {
         return Err("picasso-retained-transform-seeds");
     }
     let row_count = u32::try_from(seeds.len()).map_err(|_| "picasso-retained-transform-seeds")?;
@@ -2694,6 +2791,53 @@ pub(crate) fn allocate_resident_render_buffer(
         storage_virt,
         storage_bytes,
         gpu_base,
+        carrier: None,
+    })
+}
+
+fn allocate_resident_render_buffer_for_carrier(
+    carrier: Option<PicassoCarrierLease>,
+    bytes: usize,
+) -> Result<ResidentRenderBuffer, &'static str> {
+    match carrier {
+        Some(carrier) => allocate_picasso_render1_resident_buffer(carrier, bytes),
+        None => allocate_resident_render_buffer(bytes),
+    }
+}
+
+/// Allocate one immutable Picasso resource in the Render1 carrier's private
+/// PPGTT.  This is intentionally not a mode on the Render0 allocator: the
+/// owner lease is stored with the allocation and governs both mapping and
+/// release.
+pub(crate) fn allocate_picasso_render1_resident_buffer(
+    carrier: PicassoCarrierLease,
+    bytes: usize,
+) -> Result<ResidentRenderBuffer, &'static str> {
+    let storage_bytes = crate::intel::align_up(bytes, 4096).ok_or("picasso-resource-align")?;
+    if storage_bytes == 0 {
+        return Err("picasso-resource-empty");
+    }
+    let physical = crate::gpu::physical::physical_device().ok_or("picasso-physical-gpu")?;
+    let gpu_base =
+        reserve_picasso_render1_resource_va(carrier, storage_bytes).ok_or("picasso-resource-va")?;
+    let Some((storage_phys, storage_virt)) = crate::dma::alloc(storage_bytes, 4096) else {
+        return Err("picasso-resource-alloc");
+    };
+    unsafe {
+        core::ptr::write_bytes(storage_virt, 0, storage_bytes);
+    }
+    crate::intel::dma_flush(storage_virt, storage_bytes);
+    if !map_picasso_render1_resource_range(carrier, physical, gpu_base, storage_phys, storage_bytes)
+    {
+        crate::dma::dealloc(storage_virt, storage_bytes);
+        return Err("picasso-resource-map");
+    }
+    Ok(ResidentRenderBuffer {
+        storage_phys,
+        storage_virt,
+        storage_bytes,
+        gpu_base,
+        carrier: Some(carrier),
     })
 }
 
@@ -2735,6 +2879,16 @@ pub(crate) fn release_resident_sampled_texture(texture: &ResidentSampledTexture)
 /// this after publishing its runtime catalog, but failed cold-path loads use
 /// it to avoid leaving a partial allocation behind.
 pub(crate) fn release_resident_render_buffer(buffer: &ResidentRenderBuffer) -> bool {
+    if let Some(carrier) = buffer.carrier() {
+        let Some(physical) = crate::gpu::physical::physical_device() else {
+            return false;
+        };
+        if !unmap_picasso_render1_range(carrier, physical, buffer.gpu_base, buffer.storage_bytes) {
+            return false;
+        }
+        crate::dma::dealloc(buffer.storage_virt, buffer.storage_bytes);
+        return true;
+    }
     if !unmap_render_ppgtt_range(buffer.gpu_base, buffer.storage_bytes) {
         return false;
     }

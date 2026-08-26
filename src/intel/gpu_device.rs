@@ -121,6 +121,27 @@ impl PhysicalGpuDevice for IntelPhysicalGpuDevice {
             .ok_or(PhysicalGpuError::MapFailed)
     }
 
+    fn map_gpuvm_scanout(
+        &self,
+        vm: PhysicalGpuVmHandle,
+        gpu: u64,
+        phys: u64,
+        bytes: usize,
+    ) -> Result<(), PhysicalGpuError> {
+        let mut slots = GPUVMS.lock();
+        let (slot, generation) = decode_vm_handle(vm)?;
+        let record = slots.get_mut(slot).ok_or(PhysicalGpuError::InvalidGpuVm)?;
+        if record.generation != generation {
+            return Err(PhysicalGpuError::InvalidGpuVm);
+        }
+        record
+            .ppgtt
+            .as_mut()
+            .ok_or(PhysicalGpuError::InvalidGpuVm)?
+            .map_scanout_range(crate::intel::ppgtt::PpgttRange { gpu, phys, bytes })
+            .ok_or(PhysicalGpuError::MapFailed)
+    }
+
     fn unmap_gpuvm(
         &self,
         vm: PhysicalGpuVmHandle,

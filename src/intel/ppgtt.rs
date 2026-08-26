@@ -5,7 +5,13 @@ use alloc::vec::Vec;
 const PAGE_BYTES: usize = 4096;
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const ENTRIES: usize = 512;
-const ENTRY_ADDR_MASK: u64 = !0xFFF;
+// Gen12 PPGTT entries encode the system physical page number in bits 51:12.
+// Keep the software table honest when a PPGTT-only allocation legitimately
+// lands above the legacy 32-bit DMA window.
+const GEN12_PPGTT_PHYS_ADDR_BITS: u32 = 52;
+const GEN12_PPGTT_PHYS_ADDR_LIMIT: u64 = 1u64 << GEN12_PPGTT_PHYS_ADDR_BITS;
+const ENTRY_ADDR_MASK: u64 = (GEN12_PPGTT_PHYS_ADDR_LIMIT - 1) & !0xFFF;
+const _: () = assert!(ENTRY_ADDR_MASK == 0x000F_FFFF_FFFF_F000);
 const PAGE_PRESENT: u64 = 1 << 0;
 const PAGE_RW: u64 = 1 << 1;
 const PAGE_PWT: u64 = 1 << 3;
@@ -155,6 +161,7 @@ fn map_range(ppgtt: &mut SparsePpgtt, range: PpgttRange, pat_index: u8) -> Optio
     if !range.gpu.is_multiple_of(PAGE_BYTES as u64)
         || !range.phys.is_multiple_of(PAGE_BYTES as u64)
         || pat_index > 7
+        || !gen12_ppgtt_phys_range_encodable(range.phys, range.bytes)
     {
         return None;
     }
@@ -166,6 +173,30 @@ fn map_range(ppgtt: &mut SparsePpgtt, range: PpgttRange, pat_index: u8) -> Optio
         map_page(ppgtt, gpu, phys, pat_index)?;
     }
     Some(())
+}
+
+/// A Gen12 PPGTT leaf cannot represent a physical address at or above 2^52.
+/// This guard deliberately rounds the mapped length to pages, matching the
+/// mapping loop below, so a partial final page cannot silently cross the
+/// encodable boundary.
+const fn gen12_ppgtt_phys_range_encodable(phys: u64, bytes: usize) -> bool {
+    if bytes == 0 {
+        return true;
+    }
+    let page_bytes = PAGE_BYTES as u64;
+    let rounded_input = match (bytes as u64).checked_add(page_bytes - 1) {
+        Some(value) => value,
+        None => return false,
+    };
+    let pages = rounded_input / page_bytes;
+    let rounded = match pages.checked_mul(page_bytes) {
+        Some(value) => value,
+        None => return false,
+    };
+    match phys.checked_add(rounded) {
+        Some(end) => phys < GEN12_PPGTT_PHYS_ADDR_LIMIT && end <= GEN12_PPGTT_PHYS_ADDR_LIMIT,
+        None => false,
+    }
 }
 
 fn map_page(ppgtt: &mut SparsePpgtt, gpu: u64, phys: u64, pat_index: u8) -> Option<()> {
@@ -283,4 +314,22 @@ fn alloc_table_page() -> Option<TablePage> {
         phys,
         virt: virt as *mut u64,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gen12_ppgtt_physical_range_stays_within_encoded_address_bits() {
+        assert!(gen12_ppgtt_phys_range_encodable(
+            GEN12_PPGTT_PHYS_ADDR_LIMIT - PAGE_BYTES as u64,
+            PAGE_BYTES,
+        ));
+        assert!(!gen12_ppgtt_phys_range_encodable(GEN12_PPGTT_PHYS_ADDR_LIMIT, PAGE_BYTES,));
+        assert!(!gen12_ppgtt_phys_range_encodable(
+            GEN12_PPGTT_PHYS_ADDR_LIMIT - (PAGE_BYTES as u64 / 2),
+            1,
+        ));
+    }
 }

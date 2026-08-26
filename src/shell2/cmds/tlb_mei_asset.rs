@@ -66,11 +66,7 @@ pub(crate) fn emit_verified_asset_receipt(dev: PciDevice, bar0: u64) -> bool {
                 text_or_dash(asset.csme_sku.as_deref())
             );
 
-            emit_manageability_posture(
-                &network,
-                asset.amt_info_table,
-                asset.csme_sku.as_deref(),
-            );
+            emit_manageability_posture(&network, asset.amt_info_table, asset.csme_sku.as_deref());
         }
         Err(error) => {
             crate::log_important!(
@@ -161,9 +157,7 @@ fn collect_asset_evidence() -> Result<AssetEvidence, String> {
                     .unwrap_or(false);
             }
             221 if csme_version.is_none() => {
-                if let Some((found_version, found_sku)) =
-                    parse_type221_csme_version(structure)
-                {
+                if let Some((found_version, found_sku)) = parse_type221_csme_version(structure) {
                     csme_version = Some(found_version);
                     csme_sku = found_sku;
                 }

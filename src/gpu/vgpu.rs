@@ -813,6 +813,7 @@ struct CloudWorkGraphRecord {
 }
 
 struct RetainedMeshRecord {
+    carrier: crate::intel::render::PicassoCarrierLease,
     resident: Arc<crate::intel::render::ResidentChurnForward>,
     static_geometry: Option<RetainedStaticGeometry>,
     vertex_buffer: BufferHandle,
@@ -977,6 +978,17 @@ struct VirtualDevice {
     render_pipelines: Vec<RenderPipelineSlot>,
     cloud_work_graphs: Vec<CloudWorkGraphSlot>,
     retained_meshes: Vec<RetainedMeshSlot>,
+    /// Phase-1 Picasso carrier.  A VMX device may bind Render1 once for its
+    /// epoch; no retained route may silently select Render0.
+    picasso_carrier: Option<crate::intel::render::PicassoCarrierLease>,
+    /// Creation holds this broker-visible lease while it drops `BROKER` to
+    /// map carrier state.  Close/release must not detach the device during
+    /// that staged operation.
+    picasso_setup_in_flight: bool,
+    /// An ambiguous Render1 register/submit/retire is sticky until reboot.
+    /// We retain the carrier backing and refuse destructive teardown rather
+    /// than releasing pages whose execution ownership is unknown.
+    picasso_carrier_quarantined: bool,
     queues: Vec<QueueSlot>,
     contexts: Vec<ContextBinding>,
 }
@@ -1174,6 +1186,9 @@ pub(crate) fn open(
         render_pipelines: Vec::new(),
         cloud_work_graphs: Vec::new(),
         retained_meshes: Vec::new(),
+        picasso_carrier: None,
+        picasso_setup_in_flight: false,
+        picasso_carrier_quarantined: false,
         queues: Vec::new(),
         contexts: Vec::new(),
     };
@@ -1198,28 +1213,15 @@ pub(crate) fn close(principal: Principal, handle: DeviceHandle) -> Result<(), Vg
         principal,
         &mut fault_service,
     );
-    let result = match contexts {
+    let detached = match contexts {
         Ok(_) => match decode_handle(handle.raw()) {
             Err(error) => Err(error),
-            Ok((slot, generation)) => match broker.devices.get_mut(slot) {
-                None => Err(VgpuError::InvalidHandle),
-                Some(device_slot) if device_slot.generation != generation => {
-                    Err(VgpuError::InvalidHandle)
-                }
-                Some(device_slot) => match device_slot.record.take() {
-                    None => Err(VgpuError::InvalidHandle),
-                    Some(mut device) => match destroy_device_resources(physical, &mut device) {
-                        Ok(()) => Ok(()),
-                        Err(error) => {
-                            if error != VgpuError::Busy {
-                                device.lost = true;
-                            }
-                            device_slot.record = Some(device);
-                            Err(error)
-                        }
-                    },
-                },
-            },
+            Ok((slot, generation)) => broker
+                .devices
+                .get_mut(slot)
+                .filter(|entry| entry.generation == generation)
+                .and_then(|entry| entry.record.take())
+                .ok_or(VgpuError::InvalidHandle),
         },
         Err(error) => {
             if let Ok(device) = lookup_device_mut(&mut broker, handle, principal) {
@@ -1230,7 +1232,26 @@ pub(crate) fn close(principal: Principal, handle: DeviceHandle) -> Result<(), Vg
     };
     drop(broker);
     finish_physical_gpu_fault_service(fault_service);
-    result
+    let mut device = detached?;
+    // Renderer release changes carrier PPGTT mappings and must never run
+    // beneath BROKER.  The slot stays empty while this detached generation is
+    // being torn down, so no replacement device can inherit its resources.
+    let result = destroy_device_resources(physical, &mut device);
+    if let Err(error) = result {
+        let mut broker = BROKER.lock();
+        if let Ok((slot, generation)) = decode_handle(handle.raw())
+            && let Some(entry) = broker.devices.get_mut(slot)
+            && entry.generation == generation
+            && entry.record.is_none()
+        {
+            if error != VgpuError::Busy {
+                device.lost = true;
+            }
+            entry.record = Some(device);
+        }
+        return Err(error);
+    }
+    Ok(())
 }
 
 /// Tear down every vGPU device owned by a Hull VM at its VMX lifetime
@@ -1266,6 +1287,7 @@ pub(crate) fn release_hull_guest(vm_id: u8) -> (usize, usize, u64) {
         })
         .collect();
     let mut fault_service = PhysicalFaultServiceResult::default();
+    let mut detached = Vec::new();
     for handle in handles {
         if lookup_device(&broker, handle, principal).is_ok_and(device_has_operation_leases) {
             // The VM CPU is gone, but a physical operation still has an exact
@@ -1304,23 +1326,36 @@ pub(crate) fn release_hull_guest(vm_id: u8) -> (usize, usize, u64) {
             quarantined = quarantined.saturating_add(1);
             continue;
         }
-        let Some(mut device) = device_slot.record.take() else {
+        let Some(device) = device_slot.record.take() else {
             quarantined = quarantined.saturating_add(1);
             continue;
         };
+        detached.push((slot, generation, current_epoch, device));
+    }
+    let epoch = broker.epoch;
+    drop(broker);
+    finish_physical_gpu_fault_service(fault_service);
+    for (slot, generation, current_epoch, mut device) in detached {
+        // Exactly as in `close`, all Render1 mapping/resource teardown runs
+        // detached from BROKER.  The empty generation slot prevents a new VMX
+        // tenant from inheriting any still-quarantined carrier allocation.
         match destroy_device_resources(physical, &mut device) {
             Ok(()) => released = released.saturating_add(1),
             Err(_) => {
                 device.epoch = current_epoch;
                 device.lost = true;
-                device_slot.record = Some(device);
+                let mut broker = BROKER.lock();
+                if let Some(device_slot) = broker
+                    .devices
+                    .get_mut(slot)
+                    .filter(|entry| entry.generation == generation && entry.record.is_none())
+                {
+                    device_slot.record = Some(device);
+                }
                 quarantined = quarantined.saturating_add(1);
             }
         }
     }
-    let epoch = broker.epoch;
-    drop(broker);
-    finish_physical_gpu_fault_service(fault_service);
     (released, quarantined, epoch)
 }
 
@@ -1943,7 +1978,7 @@ pub(crate) fn create_retained_mesh(
     // renderer's resident allocation changes its PPGTT and therefore takes
     // RENDER_SUBMIT_RUNTIME; it must never run below this lock (the submit
     // path takes the same locks in the opposite order through the executor).
-    let (vertices, indices, epoch) = {
+    let (vertices, indices, epoch, gpuvm) = {
         let mut broker = BROKER.lock();
         let device = lookup_device_mut(&mut broker, device_handle, principal)?;
         ensure_live(device)?;
@@ -1951,6 +1986,15 @@ pub(crate) fn create_retained_mesh(
             || !device.capabilities.contains(Capabilities::COMPUTE)
         {
             return Err(VgpuError::PermissionDenied);
+        }
+        if device.picasso_setup_in_flight {
+            return Err(VgpuError::Busy);
+        }
+        if device.picasso_carrier_quarantined {
+            return Err(VgpuError::DeviceLost);
+        }
+        if device_has_operation_leases(device) {
+            return Err(VgpuError::Busy);
         }
         let vertices = {
             let record = lookup_buffer(device, vertex_buffer)?;
@@ -1987,16 +2031,73 @@ pub(crate) fn create_retained_mesh(
                 .map(|bytes| u32::from_le_bytes(bytes.try_into().expect("u32 index")))
                 .collect::<Vec<_>>()
         };
-        (vertices, indices, device.epoch)
+        let gpuvm = match device.gpuvm {
+            GpuVmBinding::Owned(vm) => vm,
+            GpuVmBinding::Borrowed { .. } => return Err(VgpuError::Unsupported),
+        };
+        // Set this only after every fallible broker-side validation/copy has
+        // completed.  From here until publish/rollback, close sees a real
+        // operation lease and cannot detach the generation.
+        device.picasso_setup_in_flight = true;
+        (vertices, indices, device.epoch, gpuvm)
     };
 
-    // Phase 2: allocate/map renderer-owned storage without BROKER held.
-    let resident = crate::intel::render::create_resident_picasso_retained_posnormal_mesh(
+    // Phase 2: bind Render1 and allocate/map renderer-owned storage without
+    // BROKER held.  The only legal root is this VMX device's existing owned
+    // GPUVM; `claim_picasso_render1` rejects a second domain rather than
+    // falling back to Render0.
+    let physical = match require_physical() {
+        Ok(physical) => physical,
+        Err(error) => {
+            clear_picasso_setup_lease(principal, device_handle, epoch);
+            return Err(error);
+        }
+    };
+    let root_phys = match physical.gpuvm_root_phys(gpuvm) {
+        Ok(root_phys) => root_phys,
+        Err(error) => {
+            clear_picasso_setup_lease(principal, device_handle, epoch);
+            return Err(error.into());
+        }
+    };
+    let claim = match crate::intel::render::claim_picasso_render1(
+        device_handle.raw(),
+        epoch,
+        gpuvm,
+        root_phys,
+    ) {
+        Ok(claim) => claim,
+        Err(reason) => {
+            clear_picasso_setup_lease(principal, device_handle, epoch);
+            return Err(match reason {
+                "picasso-render1-capacity" => VgpuError::Busy,
+                _ => VgpuError::DeviceLost,
+            });
+        }
+    };
+    let carrier = claim.lease();
+    if claim.newly_claimed()
+        && !crate::intel::render::bind_picasso_render1_warm_ppgtt(carrier, physical)
+    {
+        rollback_new_picasso_carrier(principal, device_handle, epoch, carrier, physical);
+        return Err(VgpuError::DeviceLost);
+    }
+    let resident = match crate::intel::render::create_resident_picasso_retained_posnormal_mesh(
+        carrier,
         &vertices,
         &indices,
         v::vgpu::MAX_RETAINED_TRANSFORM_SEEDS,
-    )
-    .map_err(|_| VgpuError::Unsupported)?;
+    ) {
+        Ok(resident) => resident,
+        Err(_) => {
+            if claim.newly_claimed() {
+                rollback_new_picasso_carrier(principal, device_handle, epoch, carrier, physical);
+            } else {
+                clear_picasso_setup_lease(principal, device_handle, epoch);
+            }
+            return Err(VgpuError::Unsupported);
+        }
+    };
 
     // Phase 3: publish only into the same live device generation and only if
     // both authenticated tenant handles still exist.  If close/destroy won
@@ -2008,14 +2109,25 @@ pub(crate) fn create_retained_mesh(
         let device = lookup_device_mut(&mut broker, device_handle, principal)?;
         ensure_live(device)?;
         if device.epoch != epoch
+            || !device.picasso_setup_in_flight
+            || device.picasso_carrier_quarantined
             || lookup_buffer(device, vertex_buffer).is_err()
             || lookup_buffer(device, index_buffer).is_err()
         {
             return Err(VgpuError::DeviceLost);
         }
+        if device
+            .picasso_carrier
+            .is_some_and(|existing| existing != carrier)
+        {
+            return Err(VgpuError::DeviceLost);
+        }
+        device.picasso_carrier = Some(carrier);
+        device.picasso_setup_in_flight = false;
         Ok(insert_retained_mesh(
             device,
             RetainedMeshRecord {
+                carrier,
                 resident: Arc::new(resident.take().expect("unpublished resident allocation")),
                 static_geometry: None,
                 vertex_buffer,
@@ -2028,9 +2140,64 @@ pub(crate) fn create_retained_mesh(
     if publish.is_err() {
         drop(broker);
         let resident = resident.expect("failed publication retains resident allocation");
-        let _ = crate::intel::render::release_resident_churn_forward(&resident);
+        let released = crate::intel::render::release_resident_churn_forward(&resident);
+        if !released {
+            mark_picasso_carrier_quarantined(principal, device_handle, epoch, carrier);
+        } else if claim.newly_claimed() {
+            rollback_new_picasso_carrier(principal, device_handle, epoch, carrier, physical);
+        } else {
+            clear_picasso_setup_lease(principal, device_handle, epoch);
+        }
     }
     publish
+}
+
+fn clear_picasso_setup_lease(principal: Principal, handle: DeviceHandle, epoch: u64) {
+    let mut broker = BROKER.lock();
+    if let Ok(device) = lookup_device_mut(&mut broker, handle, principal)
+        && device.epoch == epoch
+    {
+        device.picasso_setup_in_flight = false;
+    }
+}
+
+/// First-claim rollback never touches an existing device carrier.  If its
+/// unsubmitted mapping drain itself is ambiguous, retain the exact lease on
+/// the device and make the failure sticky before any close path can release
+/// one of its pages.
+fn rollback_new_picasso_carrier(
+    principal: Principal,
+    handle: DeviceHandle,
+    epoch: u64,
+    carrier: crate::intel::render::PicassoCarrierLease,
+    physical: &'static dyn PhysicalGpuDevice,
+) {
+    if crate::intel::render::teardown_unsubmitted_picasso_render1(carrier, physical) {
+        clear_picasso_setup_lease(principal, handle, epoch);
+        return;
+    }
+    mark_picasso_carrier_quarantined(principal, handle, epoch, carrier);
+}
+
+fn mark_picasso_carrier_quarantined(
+    principal: Principal,
+    handle: DeviceHandle,
+    epoch: u64,
+    carrier: crate::intel::render::PicassoCarrierLease,
+) {
+    let mut broker = BROKER.lock();
+    if let Ok(device) = lookup_device_mut(&mut broker, handle, principal)
+        && device.epoch == epoch
+    {
+        // A first claim has not published yet; attach it solely so close
+        // sees the exact quarantined owner and refuses resource release.
+        if device.picasso_carrier.is_none() {
+            device.picasso_carrier = Some(carrier);
+        }
+        device.picasso_setup_in_flight = false;
+        device.picasso_carrier_quarantined = true;
+        device.lost = true;
+    }
 }
 
 pub(crate) fn destroy_retained_mesh(
@@ -2041,6 +2208,9 @@ pub(crate) fn destroy_retained_mesh(
     let mut broker = BROKER.lock();
     let device = lookup_device_mut(&mut broker, device_handle, principal)?;
     ensure_live(device)?;
+    if device_has_operation_leases(device) {
+        return Err(VgpuError::Busy);
+    }
     let (slot, generation) = decode_handle(mesh_handle.raw())?;
     let entry = device
         .retained_meshes
@@ -3170,6 +3340,9 @@ pub(crate) fn submit_ui4_indexed_draw(
         let mut broker = BROKER.lock();
         let device = lookup_device_mut(&mut broker, device_handle, principal)?;
         ensure_live(device)?;
+        if device.picasso_setup_in_flight {
+            return Err(VgpuError::Busy);
+        }
         if !device.capabilities.contains(Capabilities::RENDER)
             || !device.capabilities.contains(Capabilities::PRESENT)
         {
@@ -3602,6 +3775,9 @@ pub(crate) fn submit_ui4_indexed_batch(
         let mut broker = BROKER.lock();
         let device = lookup_device_mut(&mut broker, device_handle, principal)?;
         ensure_live(device)?;
+        if device.picasso_setup_in_flight {
+            return Err(VgpuError::Busy);
+        }
         if !device.capabilities.contains(Capabilities::RENDER)
             || !device.capabilities.contains(Capabilities::PRESENT)
         {
@@ -3975,10 +4151,25 @@ pub(crate) fn submit_ui4_retained_frame(
     }) {
         return Err(VgpuError::Unsupported);
     }
-    let (_window_id, phys, producer_gpu, bytes, width, height, pitch, resident, line_meshes) = {
+    let (
+        _window_id,
+        phys,
+        producer_gpu,
+        bytes,
+        width,
+        height,
+        pitch,
+        resident,
+        carrier,
+        cached_line_meshes,
+        pending_static_parts,
+    ) = {
         let mut broker = BROKER.lock();
         let device = lookup_device_mut(&mut broker, device_handle, principal)?;
         ensure_live(device)?;
+        if device.picasso_setup_in_flight {
+            return Err(VgpuError::Busy);
+        }
         if !device.capabilities.contains(Capabilities::RENDER)
             || !device.capabilities.contains(Capabilities::COMPUTE)
             || !device.capabilities.contains(Capabilities::PRESENT)
@@ -4016,7 +4207,7 @@ pub(crate) fn submit_ui4_retained_frame(
                 surface.pitch,
             )
         };
-        let resident = {
+        let (resident, carrier) = {
             let record = match lookup_retained_mesh_mut(device, mesh_handle) {
                 Ok(record) => record,
                 Err(error) => {
@@ -4031,7 +4222,7 @@ pub(crate) fn submit_ui4_retained_frame(
                 return Err(VgpuError::Busy);
             }
             record.in_flight = 1;
-            Arc::clone(&record.resident)
+            (Arc::clone(&record.resident), record.carrier)
         };
         let cached = match lookup_retained_mesh(device, mesh_handle)?
             .static_geometry
@@ -4054,8 +4245,8 @@ pub(crate) fn submit_ui4_retained_frame(
             }
             None => None,
         };
-        let line_meshes = if let Some(meshes) = cached {
-            meshes
+        let (cached_line_meshes, pending_static_parts) = if let Some(meshes) = cached {
+            (Some(meshes), None)
         } else {
             let copied = (|| {
                 let index_record = lookup_buffer(device, static_index_buffer)?;
@@ -4130,38 +4321,9 @@ pub(crate) fn submit_ui4_retained_frame(
                     return Err(error);
                 }
             };
-            let mut meshes = Vec::with_capacity(static_parts.len());
-            for (vertices, indices) in &static_parts {
-                match crate::intel::render::create_resident_indexed_mesh(
-                    vertices,
-                    indices,
-                    crate::intel::render::ResidentScenePrimitiveTopology::LineList,
-                ) {
-                    Ok(mesh) => meshes.push(mesh),
-                    Err(_) => {
-                        for mesh in &meshes {
-                            let _ = crate::intel::render::release_resident_triangle_mesh(mesh);
-                        }
-                        lookup_retained_mesh_mut(device, mesh_handle)?.in_flight = 0;
-                        lookup_surface_mut(device, surface_handle)?.in_flight = 1;
-                        lookup_queue_mut(device, queue_handle)?.in_flight = 0;
-                        return Err(VgpuError::OutOfMemory);
-                    }
-                }
-            }
-            let meshes = Arc::new(meshes);
-            lookup_retained_mesh_mut(device, mesh_handle)?.static_geometry =
-                Some(RetainedStaticGeometry {
-                    vertex_buffer: static_vertex_buffer,
-                    index_buffer: static_index_buffer,
-                    vertex_offset: submit.static_vertex_offset,
-                    index_offset: submit.static_index_offset,
-                    draws: static_draw_keys,
-                    meshes: Arc::clone(&meshes),
-                });
-            meshes
+            (None, Some(static_parts))
         };
-        (
+        let staged = (
             surface_meta.0,
             surface_meta.1,
             surface_meta.2,
@@ -4170,8 +4332,87 @@ pub(crate) fn submit_ui4_retained_frame(
             surface_meta.5,
             surface_meta.6,
             resident,
-            line_meshes,
-        )
+            carrier,
+            cached_line_meshes,
+            pending_static_parts,
+        );
+        // This is the full carrier-preparation lease: static mesh mapping,
+        // target/depth preinstall, encoding and exact retirement all run
+        // outside BROKER, while close and another frame remain fenced.
+        device.picasso_setup_in_flight = true;
+        staged
+    };
+
+    // Static geometry changes carrier-owned PPGTT mappings.  It must be
+    // allocated after the broker lease has been staged, then atomically
+    // attached only if this device generation and mesh handle still match.
+    let line_meshes = if let Some(meshes) = cached_line_meshes {
+        meshes
+    } else {
+        let static_parts = pending_static_parts.expect("uncached static geometry has copied parts");
+        let mut meshes = Vec::with_capacity(static_parts.len());
+        for (vertices, indices) in &static_parts {
+            match crate::intel::render::create_picasso_resident_indexed_mesh(
+                carrier,
+                vertices,
+                indices,
+                crate::intel::render::ResidentScenePrimitiveTopology::LineList,
+            ) {
+                Ok(mesh) => meshes.push(mesh),
+                Err(_) => {
+                    for mesh in &meshes {
+                        let _ = crate::intel::render::release_resident_triangle_mesh(mesh);
+                    }
+                    rollback_retained_submission_lease(
+                        principal,
+                        device_handle,
+                        queue_handle,
+                        surface_handle,
+                        mesh_handle,
+                    );
+                    return Err(VgpuError::OutOfMemory);
+                }
+            }
+        }
+        let meshes = Arc::new(meshes);
+        let published = {
+            let mut broker = BROKER.lock();
+            let device = lookup_device_mut(&mut broker, device_handle, principal)?;
+            ensure_live(device)?;
+            let device_epoch = device.epoch;
+            let record = lookup_retained_mesh_mut(device, mesh_handle)?;
+            if record.epoch != device_epoch
+                || record.in_flight != 1
+                || record.carrier != carrier
+                || record.static_geometry.is_some()
+            {
+                false
+            } else {
+                record.static_geometry = Some(RetainedStaticGeometry {
+                    vertex_buffer: static_vertex_buffer,
+                    index_buffer: static_index_buffer,
+                    vertex_offset: submit.static_vertex_offset,
+                    index_offset: submit.static_index_offset,
+                    draws: static_draw_keys,
+                    meshes: Arc::clone(&meshes),
+                });
+                true
+            }
+        };
+        if !published {
+            for mesh in meshes.iter() {
+                let _ = crate::intel::render::release_resident_triangle_mesh(mesh);
+            }
+            rollback_retained_submission_lease(
+                principal,
+                device_handle,
+                queue_handle,
+                surface_handle,
+                mesh_handle,
+            );
+            return Err(VgpuError::DeviceLost);
+        }
+        meshes
     };
 
     if crate::intel::render::update_resident_picasso_retained_transform_seeds(
@@ -4229,6 +4470,12 @@ pub(crate) fn submit_ui4_retained_frame(
             destination,
             false,
         );
+    if let Err(reason) = rendered.as_ref() {
+        crate::log_error!(target: "render";
+            "picasso-carrier reject carrier=Render1 device=0x{:X} epoch={} stage=retained-frame-render reason={}\n",
+            carrier.device_raw(), carrier.epoch(), reason,
+        );
+    }
     if matches!(rendered, Err("render-busy")) {
         rollback_retained_submission_lease(
             principal,
@@ -4253,6 +4500,8 @@ pub(crate) fn submit_ui4_retained_frame(
     let Some(release) = release else {
         let mut broker = BROKER.lock();
         if let Ok(device) = lookup_device_mut(&mut broker, device_handle, principal) {
+            device.picasso_setup_in_flight = false;
+            device.picasso_carrier_quarantined = true;
             device.lost = true;
             if let Ok(mesh) = lookup_retained_mesh_mut(device, mesh_handle) {
                 mesh.in_flight = 0;
@@ -4305,6 +4554,7 @@ fn rollback_retained_submission_lease(
 ) {
     let mut broker = BROKER.lock();
     if let Ok(device) = lookup_device_mut(&mut broker, device_handle, principal) {
+        device.picasso_setup_in_flight = false;
         if let Ok(mesh) = lookup_retained_mesh_mut(device, mesh_handle) {
             mesh.in_flight = 0;
         }
@@ -4327,7 +4577,19 @@ fn retire_retained_submission_lease(
     mesh_handle: RetainedMeshHandle,
     release: crate::intel::render::ResidentSceneReleaseFence,
 ) -> Result<Ui4SurfaceIndexedCompletion, VgpuError> {
-    let physical = require_physical()?;
+    let physical = match require_physical() {
+        Ok(physical) => physical,
+        Err(error) => {
+            rollback_retained_submission_lease(
+                principal,
+                device_handle,
+                queue_handle,
+                surface_handle,
+                mesh_handle,
+            );
+            return Err(error);
+        }
+    };
     let mut broker = BROKER.lock();
     let device = lookup_device_mut(&mut broker, device_handle, principal)?;
     ensure_live(device)?;
@@ -4354,7 +4616,12 @@ fn retire_retained_submission_lease(
     let record = surface_slot.record.as_ref().expect("validated surface");
     let (window_id, guest_gpu, bytes, width, height, pitch) =
         (record.window_id, record.gpu, record.bytes, record.width, record.height, record.pitch);
-    physical.unmap_gpuvm(vm, guest_gpu, bytes)?;
+    if physical.unmap_gpuvm(vm, guest_gpu, bytes).is_err() {
+        device.picasso_setup_in_flight = false;
+        device.picasso_carrier_quarantined = true;
+        device.lost = true;
+        return Err(VgpuError::DeviceLost);
+    }
     let record = surface_slot.record.take().expect("validated surface");
     device.memory_used = device.memory_used.saturating_sub(record.bytes);
     lookup_retained_mesh_mut(device, mesh_handle)?.in_flight = 0;
@@ -4369,6 +4636,7 @@ fn retire_retained_submission_lease(
         physical_serial: release.sequence(),
         physical_publish_sequence: release.sequence(),
     };
+    device.picasso_setup_in_flight = false;
     Ok(Ui4SurfaceIndexedCompletion {
         window_id,
         surface: SurfaceInfo {
@@ -4903,6 +5171,225 @@ pub(crate) fn submit_kernel_context(
     drop(broker);
     finish_physical_gpu_fault_service(fault_service);
     submitted
+}
+
+/// Register and submit the immutable Render1 carrier for one VMX Picasso
+/// device.  Render state never owns an untracked GuC token: this broker edge
+/// revalidates the device generation, owned GPUVM root and lease before the
+/// physical scheduler sees the descriptor, and retains the exact token for
+/// device-close teardown/fault attribution.
+pub(crate) fn submit_picasso_carrier_context(
+    lease: crate::intel::render::PicassoCarrierLease,
+    descriptor: PhysicalContextDescriptor,
+) -> Result<crate::gpu::physical::PhysicalSubmission, VgpuError> {
+    if descriptor.engine != crate::gpu::physical::PhysicalEngineId::RCS0
+        || descriptor.gpuvm_root_phys != lease.root_phys()
+    {
+        return Err(VgpuError::PermissionDenied);
+    }
+    let physical = require_physical()?;
+    let handle = DeviceHandle::from_raw(lease.device_raw());
+    let (owner_slot, owner_generation) = decode_handle(handle.raw())?;
+    let mut broker = BROKER.lock();
+    let mut fault_service = PhysicalFaultServiceResult::default();
+    let identity_collision = broker.devices.iter().enumerate().any(|(slot, entry)| {
+        if slot == owner_slot {
+            return false;
+        }
+        let Some(other) = entry.record.as_ref() else {
+            return false;
+        };
+        other.contexts.iter().any(|binding| {
+            binding.descriptor == descriptor
+                || binding.descriptor.gpuvm_root_phys == descriptor.gpuvm_root_phys
+                || (binding.descriptor.hwlrca_lo == descriptor.hwlrca_lo
+                    && binding.descriptor.hwlrca_hi == descriptor.hwlrca_hi)
+        }) || other.kernel_context_capability.is_some_and(|bound| {
+            bound == descriptor
+                || bound.gpuvm_root_phys == descriptor.gpuvm_root_phys
+                || (bound.hwlrca_lo == descriptor.hwlrca_lo
+                    && bound.hwlrca_hi == descriptor.hwlrca_hi)
+        })
+    });
+    if identity_collision {
+        return Err(VgpuError::PermissionDenied);
+    }
+    let (queue, existing) = {
+        let device = broker
+            .devices
+            .get_mut(owner_slot)
+            .filter(|entry| entry.generation == owner_generation)
+            .and_then(|entry| entry.record.as_mut())
+            .ok_or(VgpuError::InvalidHandle)?;
+        ensure_live(device)?;
+        if device.epoch != lease.epoch()
+            || device.picasso_carrier != Some(lease)
+            || device.picasso_carrier_quarantined
+            || !device.capabilities.contains(Capabilities::RENDER)
+        {
+            return Err(VgpuError::DeviceLost);
+        }
+        let GpuVmBinding::Owned(vm) = device.gpuvm else {
+            return Err(VgpuError::PermissionDenied);
+        };
+        if vm != lease.gpuvm() || physical.gpuvm_root_phys(vm).ok() != Some(lease.root_phys()) {
+            device.lost = true;
+            return Err(VgpuError::DeviceLost);
+        }
+        let queue =
+            find_queue_by_class(device, QueueClass::Render).ok_or(VgpuError::InvalidHandle)?;
+        let existing = device
+            .contexts
+            .iter()
+            .find(|binding| binding.descriptor == descriptor)
+            .map(|binding| binding.context);
+        if device
+            .contexts
+            .iter()
+            .any(|binding| binding.descriptor != descriptor)
+        {
+            // A Phase-1 VMX Picasso device has exactly one carrier context.
+            // A second descriptor would make close/fault containment unable
+            // to prove which mutable Render1 backing it owns.
+            return Err(VgpuError::DeviceLost);
+        }
+        if existing.is_none() && device.contexts.len() >= device.quota.contexts {
+            return Err(VgpuError::QuotaExceeded);
+        }
+        (queue, existing)
+    };
+    let context = match existing {
+        Some(context) => context,
+        None => {
+            let context = match physical.register_context(
+                descriptor,
+                crate::gpu::physical::PhysicalContextPriority::KernelNormal,
+            ) {
+                Ok(context) => context,
+                Err(error) => {
+                    // REGISTER is an ambiguous GuC boundary.  The lease is
+                    // already immutable, so keep the VMX generation lost
+                    // rather than permitting a second descriptor attempt.
+                    if let Some(device) = broker
+                        .devices
+                        .get_mut(owner_slot)
+                        .filter(|entry| entry.generation == owner_generation)
+                        .and_then(|entry| entry.record.as_mut())
+                    {
+                        device.picasso_carrier_quarantined = true;
+                        device.lost = true;
+                    }
+                    service_physical_gpu_faults_locked(&mut broker, physical, &mut fault_service);
+                    drop(broker);
+                    finish_physical_gpu_fault_service(fault_service);
+                    return Err(error.into());
+                }
+            };
+            let device = broker
+                .devices
+                .get_mut(owner_slot)
+                .filter(|entry| entry.generation == owner_generation)
+                .and_then(|entry| entry.record.as_mut())
+                .ok_or(VgpuError::DeviceLost)?;
+            if device.epoch != lease.epoch() || device.picasso_carrier != Some(lease) {
+                device.lost = true;
+                return Err(VgpuError::DeviceLost);
+            }
+            device.contexts.push(ContextBinding {
+                queue,
+                descriptor,
+                context,
+            });
+            // The durable ownership map must exist before servicing a CAT
+            // that arrived with REGISTER; otherwise this exact carrier would
+            // degrade into an unattributed device-loss event.
+            service_physical_gpu_faults_locked(&mut broker, physical, &mut fault_service);
+            if broker.physical_lost
+                || broker
+                    .devices
+                    .get(owner_slot)
+                    .and_then(|entry| entry.record.as_ref())
+                    .is_none_or(|device| device.lost)
+            {
+                if let Some(device) = broker
+                    .devices
+                    .get_mut(owner_slot)
+                    .filter(|entry| entry.generation == owner_generation)
+                    .and_then(|entry| entry.record.as_mut())
+                {
+                    device.picasso_carrier_quarantined = true;
+                    device.lost = true;
+                }
+                drop(broker);
+                finish_physical_gpu_fault_service(fault_service);
+                return Err(VgpuError::DeviceLost);
+            }
+            context
+        }
+    };
+    let submitted = match physical.submit_context(context) {
+        Ok(submission) => Ok(submission),
+        Err(error) => {
+            if let Ok((slot, generation)) = decode_handle(handle.raw())
+                && let Some(device) = broker
+                    .devices
+                    .get_mut(slot)
+                    .filter(|entry| entry.generation == generation)
+                    .and_then(|entry| entry.record.as_mut())
+            {
+                device.picasso_carrier_quarantined = true;
+                device.lost = true;
+            }
+            Err(error.into())
+        }
+    };
+    service_physical_gpu_faults_locked(&mut broker, physical, &mut fault_service);
+    let lost = broker.physical_lost
+        || broker
+            .devices
+            .get(decode_handle(handle.raw())?.0)
+            .and_then(|entry| entry.record.as_ref())
+            .is_none_or(|device| device.lost);
+    if lost {
+        if let Some(device) = broker
+            .devices
+            .get_mut(owner_slot)
+            .filter(|entry| entry.generation == owner_generation)
+            .and_then(|entry| entry.record.as_mut())
+        {
+            device.picasso_carrier_quarantined = true;
+            device.lost = true;
+        }
+    }
+    drop(broker);
+    finish_physical_gpu_fault_service(fault_service);
+    if lost {
+        Err(VgpuError::DeviceLost)
+    } else {
+        submitted
+    }
+}
+
+/// Quarantine the exact VMX generation after an ambiguous carrier publish.
+/// Context destruction remains device-close work while the broker binding is
+/// still visible, preserving fault ownership and GPUVM teardown order.
+pub(crate) fn quarantine_picasso_carrier(lease: crate::intel::render::PicassoCarrierLease) {
+    let handle = DeviceHandle::from_raw(lease.device_raw());
+    let Ok((slot, generation)) = decode_handle(handle.raw()) else {
+        return;
+    };
+    let mut broker = BROKER.lock();
+    if let Some(device) = broker
+        .devices
+        .get_mut(slot)
+        .filter(|entry| entry.generation == generation)
+        .and_then(|entry| entry.record.as_mut())
+        && device.epoch == lease.epoch()
+        && device.picasso_carrier == Some(lease)
+    {
+        device.picasso_carrier_quarantined = true;
+        device.lost = true;
+    }
 }
 
 /// Retire one exact serialized kernel submission after its hardware
@@ -5811,6 +6298,9 @@ fn ensure_kernel_device(
         render_pipelines: Vec::new(),
         cloud_work_graphs: Vec::new(),
         retained_meshes: Vec::new(),
+        picasso_carrier: None,
+        picasso_setup_in_flight: false,
+        picasso_carrier_quarantined: false,
         queues: Vec::new(),
         contexts: Vec::new(),
     };
@@ -5923,6 +6413,12 @@ fn destroy_device_resources(
     physical: &'static dyn PhysicalGpuDevice,
     device: &mut VirtualDevice,
 ) -> Result<(), VgpuError> {
+    // An ambiguous carrier execution is boot-lifetime quarantine.  Check it
+    // before taking any resident allocation or carrier token: RCS0 may still
+    // own those pages, so teardown must not guess at release.
+    if device.picasso_carrier_quarantined {
+        return Err(VgpuError::DeviceLost);
+    }
     if device_has_operation_leases(device) {
         return Err(VgpuError::Busy);
     }
@@ -5947,20 +6443,37 @@ fn destroy_device_resources(
             if let Some(static_geometry) = record.static_geometry {
                 let meshes =
                     Arc::try_unwrap(static_geometry.meshes).map_err(|_| VgpuError::Busy)?;
-                if !meshes
-                    .iter()
-                    .all(crate::intel::render::release_resident_triangle_mesh)
-                {
-                    return Err(VgpuError::DeviceLost);
+                for mesh in &meshes {
+                    if !crate::intel::render::release_resident_triangle_mesh(mesh) {
+                        // The carrier unmap may be ambiguous.  Preserve the
+                        // exact lease for reattachment and never proceed to
+                        // another resident release or GPUVM destruction.
+                        device.picasso_carrier_quarantined = true;
+                        device.lost = true;
+                        return Err(VgpuError::DeviceLost);
+                    }
                 }
             }
             let resident = Arc::try_unwrap(record.resident).map_err(|_| VgpuError::Busy)?;
             if !crate::intel::render::release_resident_churn_forward(&resident) {
+                device.picasso_carrier_quarantined = true;
+                device.lost = true;
                 return Err(VgpuError::DeviceLost);
             }
         }
     }
     device.retained_meshes.clear();
+    if let Some(carrier) = device.picasso_carrier {
+        if !crate::intel::render::teardown_picasso_render1(carrier, physical) {
+            // Do not `take()` before success: teardown may have failed while
+            // detached, where the carrier's broker quarantine callback has
+            // no record to update.  The local device is what gets reattached.
+            device.picasso_carrier_quarantined = true;
+            device.lost = true;
+            return Err(VgpuError::DeviceLost);
+        }
+        device.picasso_carrier = None;
+    }
     device.render_pipelines.clear();
     device.shader_modules.clear();
     for slot in &mut device.buffers {
@@ -5980,11 +6493,12 @@ fn destroy_device_resources(
 }
 
 fn device_has_operation_leases(device: &VirtualDevice) -> bool {
-    device
-        .buffers
-        .iter()
-        .filter_map(|slot| slot.record.as_ref())
-        .any(|record| record.in_flight != 0)
+    device.picasso_setup_in_flight
+        || device
+            .buffers
+            .iter()
+            .filter_map(|slot| slot.record.as_ref())
+            .any(|record| record.in_flight != 0)
         || device
             .surfaces
             .iter()

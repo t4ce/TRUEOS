@@ -1,7 +1,8 @@
 {
   "blueprints": [
     { "action": "skip", "archive": "swarm.bp", "online_selector": "swarm", "slot": "swm", "settle_ms": 250 },
-    { "action": "launch", "archive": "img.bp", "online_selector": "img", "slot": "img", "settle_ms": 250, "launch_script": "show kernel:logo center nohit\nshow kernel:intel-graphics bottom-left\nshow kernel:bgrt bottom-right" },
+    { "action": "skip", "archive": "img.bp", "online_selector": "img", "slot": "img", "settle_ms": 250, "launch_script": "show kernel:logo center nohit\nshow kernel:intel-graphics bottom-left\nshow kernel:bgrt bottom-right" },
+    { "action": "skip", "archive": "trueos-picasso-example.bp", "online_selector": "trueos-picasso-example", "slot": "pca", "settle_ms": 1000 },
     { "action": "skip", "archive": "horizon.bp", "slot": "hor", "settle_ms": 250 },
     { "action": "skip", "archive": "mandelbrot.bp", "slot": "man", "settle_ms": 750 },
     { "action": "skip", "archive": "flags.bp", "slot": "flg", "settle_ms": 750 },

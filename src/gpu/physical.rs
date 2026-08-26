@@ -226,6 +226,16 @@ pub(crate) trait PhysicalGpuDevice: Sync {
         phys: u64,
         bytes: usize,
     ) -> Result<(), PhysicalGpuError>;
+    /// Map a producer surface that will be read directly by scanout.  This is
+    /// deliberately separate from `map_gpuvm`: on Gen12 the leaf PTE must use
+    /// PAT3/UC, while ordinary carrier resources remain PAT0/WB.
+    fn map_gpuvm_scanout(
+        &self,
+        vm: PhysicalGpuVmHandle,
+        gpu: u64,
+        phys: u64,
+        bytes: usize,
+    ) -> Result<(), PhysicalGpuError>;
     fn unmap_gpuvm(
         &self,
         vm: PhysicalGpuVmHandle,

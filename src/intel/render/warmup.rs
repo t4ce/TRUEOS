@@ -365,6 +365,75 @@ fn init_warm_state_for_boot(dev: crate::intel::Dev) -> RenderWarmState {
     warm
 }
 
+/// Allocate an independent, boot-lifetime Render1 control/data set.
+///
+/// Unlike `init_warm_state_for_boot`, this deliberately does not publish into
+/// Render0's globals and does not create a Render0 PPGTT.  Its physical pages
+/// are installed in the immutable Render1 GGTT window during GT bring-up, then
+/// mapped into exactly one owned VMX GPUVM at a time by the Picasso carrier.
+pub(crate) fn allocate_picasso_render1_warm_state_for_boot(
+    dev: crate::intel::Dev,
+) -> Option<RenderWarmState> {
+    let (ring_phys, ring_virt) = crate::dma::alloc(WARM_RING_BYTES, crate::intel::WARM_ALIGN)?;
+    let (context_phys, context_virt) =
+        crate::dma::alloc(WARM_CONTEXT_BYTES, crate::intel::WARM_ALIGN)?;
+    let (batch_phys, batch_virt) = crate::dma::alloc(WARM_BATCH_BYTES, crate::intel::WARM_ALIGN)?;
+    let (draw_state_phys, draw_state_virt) =
+        crate::dma::alloc(WARM_DRAW_STATE_BYTES, crate::intel::WARM_ALIGN)?;
+    let (vertex_phys, vertex_virt) =
+        crate::dma::alloc(WARM_VERTEX_BYTES, crate::intel::WARM_ALIGN)?;
+    let (result_phys, result_virt) =
+        crate::dma::alloc(WARM_RESULT_BYTES, crate::intel::WARM_ALIGN)?;
+    let (streamout_phys, streamout_virt) =
+        crate::dma::alloc(WARM_STREAMOUT_BYTES, crate::intel::WARM_ALIGN)?;
+    for (virt, bytes) in [
+        (ring_virt, WARM_RING_BYTES),
+        (context_virt, WARM_CONTEXT_BYTES),
+        (batch_virt, WARM_BATCH_BYTES),
+        (draw_state_virt, WARM_DRAW_STATE_BYTES),
+        (vertex_virt, WARM_VERTEX_BYTES),
+        (result_virt, WARM_RESULT_BYTES),
+        (streamout_virt, WARM_STREAMOUT_BYTES),
+    ] {
+        unsafe {
+            core::ptr::write_bytes(virt, 0, bytes);
+        }
+        crate::intel::dma_flush(virt, bytes);
+    }
+    Some(RenderWarmState {
+        device_id: dev.device_id,
+        revision_id: dev.revision_id,
+        mmio_base: dev.mmio as usize,
+        mmio_len: dev.mmio_len,
+        ring_phys,
+        ring_virt,
+        ring_len: WARM_RING_BYTES,
+        context_phys,
+        context_virt,
+        context_len: WARM_CONTEXT_BYTES,
+        batch_phys,
+        batch_virt,
+        batch_len: WARM_BATCH_BYTES,
+        draw_state_phys,
+        draw_state_virt,
+        draw_state_len: WARM_DRAW_STATE_BYTES,
+        vertex_phys,
+        vertex_virt,
+        vertex_len: WARM_VERTEX_BYTES,
+        result_phys,
+        result_virt,
+        result_len: WARM_RESULT_BYTES,
+        streamout_phys,
+        streamout_virt,
+        streamout_len: WARM_STREAMOUT_BYTES,
+        // Picasso owns no shared GPGPU tile arena. Its retained transform
+        // resources are carrier-local PPGTT mappings created at bind time.
+        gpgpu_arena_phys: 0,
+        gpgpu_arena_virt: core::ptr::null_mut(),
+        gpgpu_arena_len: 0,
+    })
+}
+
 fn render_ppgtt_pml4_phys() -> u64 {
     RENDER_PPGTT_PML4_PHYS.load(Ordering::Acquire)
 }

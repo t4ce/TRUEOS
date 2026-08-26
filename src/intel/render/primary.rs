@@ -335,6 +335,7 @@ fn finish_resident_secondary_breadcrumbs(
     batch: &mut [u32],
     encoded_payload_bytes: usize,
     secondary_index: usize,
+    result_ggtt_gpu: u64,
 ) -> Result<usize, &'static str> {
     if !encoded_payload_bytes.is_multiple_of(core::mem::size_of::<u32>()) {
         return Err("scene-frame-secondary-size");
@@ -348,9 +349,9 @@ fn finish_resident_secondary_breadcrumbs(
     }
 
     let result_entry_gpu =
-        GPU_VA_RESULT_BASE + (RESULT_SLOT_BATCH_ENTRY_DWORD * core::mem::size_of::<u32>()) as u64;
+        result_ggtt_gpu + (RESULT_SLOT_BATCH_ENTRY_DWORD * core::mem::size_of::<u32>()) as u64;
     let result_post_opening_gpu =
-        GPU_VA_RESULT_BASE + (RESULT_SLOT_POST_OPENING_DWORD * core::mem::size_of::<u32>()) as u64;
+        result_ggtt_gpu + (RESULT_SLOT_POST_OPENING_DWORD * core::mem::size_of::<u32>()) as u64;
     let payload = &mut batch[RESIDENT_SECONDARY_ENTRY_PREFIX_DWORDS..payload_end];
     let marker = RESIDENT_SECONDARY_POST_OPENING_MARKER_DWORD;
     if payload.len() < marker + RESIDENT_SECONDARY_ENTRY_PREFIX_DWORDS
@@ -499,6 +500,27 @@ fn resident_scene_batch_state(
         warm.batch_len,
     );
     Ok(state)
+}
+
+fn resident_scene_batch_state_for_carrier(
+    warm: RenderWarmState,
+    carrier: Option<PicassoCarrierLease>,
+) -> Result<ResidentSceneBatchState, &'static str> {
+    let Some(lease) = carrier else {
+        return resident_scene_batch_state(warm);
+    };
+    let physical = crate::gpu::physical::physical_device().ok_or("picasso-physical-gpu")?;
+    let storage =
+        prepare_picasso_render1_scene_storage(lease, physical).ok_or("picasso-scene-storage")?;
+    crate::log_info!(target: "render";
+        "picasso-carrier scene-state carrier=Render1 gpu=0x{:X} phys=0x{:X} bytes=0x{:X} warm_batch=0x{:X}\n",
+        GPU_VA_RESIDENT_SCENE_STATE_BASE, storage.state_phys,
+        RESIDENT_SCENE_STATE_BYTES, warm.batch_len,
+    );
+    Ok(ResidentSceneBatchState {
+        phys: storage.state_phys,
+        virt: storage.state_virt,
+    })
 }
 
 fn resident_scene_state_warm(
@@ -1135,6 +1157,51 @@ fn prepare_resident_scene_depth(
     })
 }
 
+fn prepare_picasso_resident_scene_depth(
+    lease: PicassoCarrierLease,
+    device_id: u16,
+    target_width: usize,
+    target_height: usize,
+) -> Result<TriangleDepthConfig, &'static str> {
+    if !device_is_gfx12(device_id) {
+        return Err("picasso-scene-depth-device");
+    }
+    let row_bytes = target_width
+        .checked_mul(core::mem::size_of::<f32>())
+        .ok_or("picasso-scene-depth-shape")?;
+    let pitch_bytes = crate::intel::align_up(row_bytes, RESIDENT_SCENE_DEPTH_TILE_WIDTH_BYTES)
+        .ok_or("picasso-scene-depth-shape")?;
+    let aligned_height =
+        crate::intel::align_up(target_height, RESIDENT_SCENE_DEPTH_TILE_HEIGHT_ROWS)
+            .ok_or("picasso-scene-depth-shape")?;
+    let clear_bytes = pitch_bytes
+        .checked_mul(aligned_height)
+        .ok_or("picasso-scene-depth-shape")?;
+    if target_width == 0
+        || target_height == 0
+        || clear_bytes > RESIDENT_SCENE_DEPTH_BYTES
+        || !clear_bytes.is_multiple_of(core::mem::size_of::<u32>())
+    {
+        return Err("picasso-scene-depth-shape");
+    }
+    let physical = crate::gpu::physical::physical_device().ok_or("picasso-physical-gpu")?;
+    let storage =
+        prepare_picasso_render1_scene_storage(lease, physical).ok_or("picasso-scene-storage")?;
+    if storage.depth_virt.is_null() || storage.depth_bytes < clear_bytes {
+        return Err("picasso-scene-depth-allocation");
+    }
+    Ok(TriangleDepthConfig {
+        gpu_addr: GPU_VA_RESIDENT_SCENE_DEPTH_BASE,
+        pitch_bytes: u32::try_from(pitch_bytes).map_err(|_| "picasso-scene-depth-shape")?,
+        width: u32::try_from(target_width).map_err(|_| "picasso-scene-depth-shape")?,
+        height: u32::try_from(target_height).map_err(|_| "picasso-scene-depth-shape")?,
+        qpitch_rows_div4: u32::try_from(aligned_height / 4)
+            .map_err(|_| "picasso-scene-depth-shape")?,
+        write_enabled: false,
+        compare_function: COMPARE_FUNCTION_LEQUAL,
+    })
+}
+
 pub(crate) const fn resident_scene_target_dimensions() -> (usize, usize) {
     (RESIDENT_SCENE_TARGET_WIDTH, RESIDENT_SCENE_TARGET_HEIGHT)
 }
@@ -1300,7 +1367,10 @@ pub(crate) fn render_resident_retained_with_static_draws_direct_to_surface(
     destination: crate::intel::gpgpu::GpgpuRgba8Surface,
     diagnostic_logs: bool,
 ) -> Result<ResidentSceneFrameResult, &'static str> {
-    submit_resident_scene_capture_inner(
+    let carrier = resident
+        .carrier()
+        .ok_or("picasso-retained-carrier-missing")?;
+    submit_resident_scene_capture_inner_for_carrier(
         static_draws,
         Some(resident),
         &[],
@@ -1312,6 +1382,7 @@ pub(crate) fn render_resident_retained_with_static_draws_direct_to_surface(
         destination.width as usize,
         destination.height as usize,
         ResidentSceneFrameOutput::DirectGpuSurface(destination),
+        Some(carrier),
     )
 }
 
@@ -1328,6 +1399,7 @@ fn stage_resident_scene_secondary(
     viewport_translation_px: [f32; 2],
     topology: ResidentScenePrimitiveTopology,
     secondary_index: usize,
+    result_ggtt_gpu: u64,
 ) -> Result<usize, &'static str> {
     draw.state_gpu_addr = state_gpu;
     let pipeline = match (fragment_contract, sampled_texture.is_some()) {
@@ -1398,7 +1470,7 @@ fn stage_resident_scene_secondary(
         pipeline,
         shader_layout,
         probe_state,
-        GPU_VA_RESULT_BASE,
+        result_ggtt_gpu,
         resident_secondary_marker(RCS_EXEC_RESULT_DRAW_PRE3D, secondary_index)?,
         resident_secondary_marker(RCS_EXEC_RESULT_DRAW_POST3D, secondary_index)?,
         resident_secondary_marker(RCS_EXEC_RESULT_DONE, secondary_index)?,
@@ -1416,8 +1488,12 @@ fn stage_resident_scene_secondary(
         // full render/depth/L3 release fence after the final secondary.
         PostDrawSyncVariant::LightCsNoPostSync,
     )?;
-    let bytes =
-        finish_resident_secondary_breadcrumbs(batch, encoded_payload_bytes, secondary_index)?;
+    let bytes = finish_resident_secondary_breadcrumbs(
+        batch,
+        encoded_payload_bytes,
+        secondary_index,
+        result_ggtt_gpu,
+    )?;
     crate::intel::dma_flush(unsafe { warm.batch_virt.add(batch_offset) }, bytes);
     Ok(bytes)
 }
@@ -1430,6 +1506,7 @@ fn stage_resident_churn_forward_secondary(
     depth_config: TriangleDepthConfig,
     resident: &ResidentChurnForward,
     secondary_index: usize,
+    result_ggtt_gpu: u64,
 ) -> Result<usize, &'static str> {
     draw.state_gpu_addr = state_gpu;
     let shader_layout =
@@ -1473,7 +1550,7 @@ fn stage_resident_churn_forward_secondary(
         &resident.pipeline,
         shader_layout,
         probe_state,
-        GPU_VA_RESULT_BASE,
+        result_ggtt_gpu,
         resident_secondary_marker(RCS_EXEC_RESULT_DRAW_PRE3D, secondary_index)?,
         resident_secondary_marker(RCS_EXEC_RESULT_DRAW_POST3D, secondary_index)?,
         resident_secondary_marker(RCS_EXEC_RESULT_DONE, secondary_index)?,
@@ -1484,8 +1561,12 @@ fn stage_resident_churn_forward_secondary(
         BackendProbeMode::MesaLike,
         PostDrawSyncVariant::LightCsNoPostSync,
     )?;
-    let bytes =
-        finish_resident_secondary_breadcrumbs(batch, encoded_payload_bytes, secondary_index)?;
+    let bytes = finish_resident_secondary_breadcrumbs(
+        batch,
+        encoded_payload_bytes,
+        secondary_index,
+        result_ggtt_gpu,
+    )?;
     crate::intel::dma_flush(unsafe { warm.batch_virt.add(batch_offset) }, bytes);
     log_resident_churn_flushed_binding_packets(
         batch,
@@ -1501,6 +1582,7 @@ fn stage_resident_churn_transform_secondary(
     resident: &ResidentChurnForward,
     secondary_index: usize,
     dispatch: crate::intel::gpgpu::GpgpuHelioRetainedTransformDispatch,
+    result_ggtt_gpu: u64,
 ) -> Result<usize, &'static str> {
     let batch_offset = RESIDENT_SCENE_PRIMARY_BATCH_BYTES
         .checked_add(
@@ -1534,7 +1616,7 @@ fn stage_resident_churn_transform_secondary(
         &mut state,
         artifact,
         dispatch,
-        GPU_VA_RESULT_BASE,
+        result_ggtt_gpu,
     )
     .map_err(|_| "churn-transform-encode")?;
     Ok(encoded.command_dwords * core::mem::size_of::<u32>())
@@ -1543,6 +1625,8 @@ fn stage_resident_churn_transform_secondary(
 fn encode_resident_scene_primary_batch(
     warm: RenderWarmState,
     secondary_count: usize,
+    result_ggtt_gpu: u64,
+    result_ppgtt_gpu: u64,
 ) -> Result<usize, &'static str> {
     let batch = unsafe {
         core::slice::from_raw_parts_mut(
@@ -1559,8 +1643,8 @@ fn encode_resident_scene_primary_batch(
         cursor += 1;
         Ok(())
     };
-    let secondary_return_gpu = GPU_VA_RESULT_BASE
-        + (RESULT_SLOT_SECONDARY_RETURN_DWORD * core::mem::size_of::<u32>()) as u64;
+    let secondary_return_gpu =
+        result_ggtt_gpu + (RESULT_SLOT_SECONDARY_RETURN_DWORD * core::mem::size_of::<u32>()) as u64;
     for secondary_index in 0..secondary_count {
         let offset = RESIDENT_SCENE_PRIMARY_BATCH_BYTES
             .checked_add(
@@ -1587,8 +1671,13 @@ fn encode_resident_scene_primary_batch(
                 .ok_or("scene-frame-secondary-count")?,
         )?;
     }
+    // Secondary breadcrumbs use MI_STORE_DATA_IMM with its GGTT bit set, but
+    // this PIPE_CONTROL post-sync write deliberately has DEST_GGTT clear.
+    // Render0 happens to use the same numeric VA in both domains; Render1
+    // does not, so keep the two addresses explicit rather than faulting the
+    // completion write through an unmapped tenant PPGTT leaf.
     let completion_gpu =
-        GPU_VA_RESULT_BASE + (RESULT_SLOT_SCENE_FRAME_DWORD * core::mem::size_of::<u32>()) as u64;
+        result_ppgtt_gpu + (RESULT_SLOT_SCENE_FRAME_DWORD * core::mem::size_of::<u32>()) as u64;
     // Release the color target written by the Gen12 3D pixel backend. Keep
     // this end-of-pipe writeback separate from all top-of-pipe invalidations:
     // mixing them into one packet can invalidate first and only then wait for
@@ -1637,10 +1726,15 @@ fn submit_resident_scene_geometry_batched(
     render_target_pitch: usize,
     target_width: usize,
     target_height: usize,
+    carrier: Option<PicassoCarrierLease>,
 ) -> Result<ResidentSceneGeometryResult, &'static str> {
-    let render_lease =
-        reserve_warm_render_storage("resident-scene").ok_or("render-storage-busy")?;
+    let render_lease = if carrier.is_none() {
+        Some(reserve_warm_render_storage("resident-scene").ok_or("render-storage-busy")?)
+    } else {
+        None
+    };
     let prepare_started_ns = crate::chronos::monotonic_nanos();
+    let result_ggtt_gpu = carrier.map_or(GPU_VA_RESULT_BASE, |_| picasso_render1_result_ggtt());
     const CLEAR_TRIANGLE: [[f32; 3]; 3] = [[-1.0, -1.0, 1.0], [3.0, -1.0, 1.0], [-1.0, 3.0, 1.0]];
     if draws.len() > RESIDENT_SCENE_MAX_DRAWS {
         return Err("scene-frame-draw-limit");
@@ -1667,7 +1761,7 @@ fn submit_resident_scene_geometry_batched(
     }
     seed_result_debug_slots(warm);
     crate::intel::dma_flush(warm.result_virt, warm.result_len);
-    let state = resident_scene_batch_state(warm)?;
+    let state = resident_scene_batch_state_for_carrier(warm, carrier)?;
 
     let mut clear_depth = depth_config;
     if let Some(depth) = clear_depth.as_mut() {
@@ -1699,6 +1793,7 @@ fn submit_resident_scene_geometry_batched(
         [0.0, 0.0],
         ResidentScenePrimitiveTopology::TriangleList,
         0,
+        result_ggtt_gpu,
     )?;
 
     let mut secondary_count = 1usize;
@@ -1745,11 +1840,17 @@ fn submit_resident_scene_geometry_batched(
             scene_draw.viewport_translation_px,
             scene_draw.topology,
             secondary_count,
+            result_ggtt_gpu,
         )?;
         secondary_count += 1;
     }
 
-    let primary_bytes = encode_resident_scene_primary_batch(warm, secondary_count)?;
+    let primary_bytes = encode_resident_scene_primary_batch(
+        warm,
+        secondary_count,
+        result_ggtt_gpu,
+        GPU_VA_RESULT_BASE,
+    )?;
     crate::intel::dma_flush(warm.batch_virt, primary_bytes);
     if !RESIDENT_SCENE_BATCH_PATH_LOGGED.swap(true, Ordering::AcqRel) {
         let textured = draws.iter().any(|draw| draw.sampled_texture.is_some());
@@ -1778,15 +1879,24 @@ fn submit_resident_scene_geometry_batched(
     } else {
         "resident-scene"
     };
-    let completed = submit_warm_render_batch(
-        &render_lease,
-        dev,
-        warm,
-        RCS_EXEC_RESULT_SCENE_RCS_RELEASE_DONE_LO,
-        RESULT_SLOT_SCENE_FRAME_DWORD,
-        submit_name,
-    );
-    if !completed {
+    let completed = match carrier {
+        Some(lease) => submit_picasso_render1_batch(
+            lease,
+            GPU_VA_BATCH_BASE,
+            RCS_EXEC_RESULT_SCENE_RCS_RELEASE_DONE_LO,
+            RESULT_SLOT_SCENE_FRAME_DWORD,
+        )
+        .is_ok(),
+        None => submit_warm_render_batch(
+            render_lease.as_ref().expect("render0 storage lease"),
+            dev,
+            warm,
+            RCS_EXEC_RESULT_SCENE_RCS_RELEASE_DONE_LO,
+            RESULT_SLOT_SCENE_FRAME_DWORD,
+            submit_name,
+        ),
+    };
+    if !completed && carrier.is_none() {
         record_render_engine_after_nonretired_submit(dev, submit_name);
     }
     let (gpu_poll_us, gpu_poll_iters) = resident_scene_last_gpu_poll_profile();
@@ -1810,10 +1920,15 @@ fn submit_resident_churn_forward_geometry_batched(
     render_target_pitch: usize,
     target_width: usize,
     target_height: usize,
+    carrier: Option<PicassoCarrierLease>,
 ) -> Result<ResidentSceneGeometryResult, &'static str> {
-    let render_lease =
-        reserve_warm_render_storage("helio-churn-forward").ok_or("render-storage-busy")?;
+    let render_lease = if carrier.is_none() {
+        Some(reserve_warm_render_storage("helio-churn-forward").ok_or("render-storage-busy")?)
+    } else {
+        None
+    };
     let prepare_started_ns = crate::chronos::monotonic_nanos();
+    let result_ggtt_gpu = carrier.map_or(GPU_VA_RESULT_BASE, |_| picasso_render1_result_ggtt());
     const CLEAR_TRIANGLE: [[f32; 3]; 3] = [[-1.0, -1.0, 1.0], [3.0, -1.0, 1.0], [-1.0, 3.0, 1.0]];
     let transform_dispatch = resident.transform_dispatch();
     let transform_handoff = transform_dispatch.map(|dispatch| dispatch.output.into());
@@ -1844,10 +1959,10 @@ fn submit_resident_churn_forward_geometry_batched(
     }
     seed_result_debug_slots(warm);
     crate::intel::dma_flush(warm.result_virt, warm.result_len);
-    let state = resident_scene_batch_state(warm)?;
+    let state = resident_scene_batch_state_for_carrier(warm, carrier)?;
 
     if let Some(dispatch) = transform_dispatch {
-        stage_resident_churn_transform_secondary(warm, resident, 0, dispatch)?;
+        stage_resident_churn_transform_secondary(warm, resident, 0, dispatch, result_ggtt_gpu)?;
     }
 
     let clear_secondary_index = transform_secondary_count;
@@ -1880,6 +1995,7 @@ fn submit_resident_churn_forward_geometry_batched(
         [0.0, 0.0],
         ResidentScenePrimitiveTopology::TriangleList,
         clear_secondary_index,
+        result_ggtt_gpu,
     )?;
 
     let mut draw_depth = depth_config;
@@ -1909,6 +2025,7 @@ fn submit_resident_churn_forward_geometry_batched(
                     draw_depth,
                     resident,
                     secondary_index,
+                    result_ggtt_gpu,
                 )?;
             }
             Some(RetainedGraphicsHandoff::ExpandedPositions) => {
@@ -1936,15 +2053,13 @@ fn submit_resident_churn_forward_geometry_batched(
                     [0.0, 0.0],
                     ResidentScenePrimitiveTopology::TriangleList,
                     secondary_index,
+                    result_ggtt_gpu,
                 )?;
             }
         }
     }
     for (static_index, scene) in static_draws.iter().enumerate() {
-        let secondary_index = resident_draw_count
-            + static_index
-            + 1
-            + transform_secondary_count;
+        let secondary_index = resident_draw_count + static_index + 1 + transform_secondary_count;
         let (state_warm, state_gpu) = resident_scene_state_warm(state, warm, secondary_index)?;
         let draw = prepare_triangle_draw_resources_for_scene_resident_mesh(
             state_warm,
@@ -1969,10 +2084,16 @@ fn submit_resident_churn_forward_geometry_batched(
             scene.viewport_translation_px,
             scene.topology,
             secondary_index,
+            result_ggtt_gpu,
         )?;
     }
 
-    let primary_bytes = encode_resident_scene_primary_batch(warm, secondary_count)?;
+    let primary_bytes = encode_resident_scene_primary_batch(
+        warm,
+        secondary_count,
+        result_ggtt_gpu,
+        GPU_VA_RESULT_BASE,
+    )?;
     crate::intel::dma_flush(warm.batch_virt, primary_bytes);
     if transform_handoff.is_some_and(RetainedGraphicsHandoff::uses_native_matrices) {
         if !RESIDENT_CHURN_FORWARD_GPU_NATIVE_PATH_LOGGED.swap(true, Ordering::AcqRel) {
@@ -2009,15 +2130,24 @@ fn submit_resident_churn_forward_geometry_batched(
         );
     }
     let prepare_us = crate::chronos::monotonic_nanos().saturating_sub(prepare_started_ns) / 1_000;
-    let completed = submit_warm_render_batch(
-        &render_lease,
-        dev,
-        warm,
-        RCS_EXEC_RESULT_SCENE_RCS_RELEASE_DONE_LO,
-        RESULT_SLOT_SCENE_FRAME_DWORD,
-        "helio-churn-forward",
-    );
-    if !completed {
+    let completed = match carrier {
+        Some(lease) => submit_picasso_render1_batch(
+            lease,
+            GPU_VA_BATCH_BASE,
+            RCS_EXEC_RESULT_SCENE_RCS_RELEASE_DONE_LO,
+            RESULT_SLOT_SCENE_FRAME_DWORD,
+        )
+        .is_ok(),
+        None => submit_warm_render_batch(
+            render_lease.as_ref().expect("render0 storage lease"),
+            dev,
+            warm,
+            RCS_EXEC_RESULT_SCENE_RCS_RELEASE_DONE_LO,
+            RESULT_SLOT_SCENE_FRAME_DWORD,
+            "helio-churn-forward",
+        ),
+    };
+    if !completed && carrier.is_none() {
         record_render_engine_after_nonretired_submit(dev, "helio-churn-forward");
     }
     let (gpu_poll_us, gpu_poll_iters) = resident_scene_last_gpu_poll_profile();
@@ -2069,9 +2199,38 @@ fn submit_resident_scene_capture_inner(
     target_height: usize,
     frame_output: ResidentSceneFrameOutput,
 ) -> Result<ResidentSceneFrameResult, &'static str> {
-    let geometry_draw_count = native_churn.map_or(draws.len(), |resident| {
-        resident.draw_group_count() + draws.len()
-    });
+    submit_resident_scene_capture_inner_for_carrier(
+        draws,
+        native_churn,
+        coverage_draws,
+        clear_rgba,
+        diagnostic_logs,
+        straight_alpha_output,
+        opaque_depth_enabled,
+        raster_quality,
+        target_width,
+        target_height,
+        frame_output,
+        None,
+    )
+}
+
+fn submit_resident_scene_capture_inner_for_carrier(
+    draws: &[ResidentSceneDraw<'_>],
+    native_churn: Option<&ResidentChurnForward>,
+    coverage_draws: &[ResidentSceneCoverageDraw],
+    clear_rgba: Option<[u8; 4]>,
+    diagnostic_logs: bool,
+    straight_alpha_output: bool,
+    opaque_depth_enabled: bool,
+    raster_quality: ResidentSceneRasterQuality,
+    target_width: usize,
+    target_height: usize,
+    frame_output: ResidentSceneFrameOutput,
+    carrier: Option<PicassoCarrierLease>,
+) -> Result<ResidentSceneFrameResult, &'static str> {
+    let geometry_draw_count =
+        native_churn.map_or(draws.len(), |resident| resident.draw_group_count() + draws.len());
     if target_width == 0
         || target_height == 0
         || target_width > RESIDENT_SCENE_TARGET_WIDTH
@@ -2123,12 +2282,33 @@ fn submit_resident_scene_capture_inner(
     let target_bytes = target_pitch
         .checked_mul(target_height)
         .ok_or("resident-scene-capture-shape")?;
+    // Mapping mutation and submission are mutually exclusive for Render1.
+    // Install every stable per-carrier leaf before admitting the frame, so
+    // packet encoding/submission only reads already-owned translations.
+    if let Some(lease) = carrier {
+        let physical = crate::gpu::physical::physical_device().ok_or("picasso-physical-gpu")?;
+        prepare_picasso_render1_scene_storage(lease, physical).ok_or("picasso-scene-storage")?;
+        if let ResidentSceneFrameOutput::DirectGpuSurface(destination)
+        | ResidentSceneFrameOutput::DirectGpuSurfaceDeferredRelease(destination) = frame_output
+        {
+            prepare_picasso_render1_ui4_target(
+                lease,
+                physical,
+                destination.phys,
+                destination.bytes,
+            )
+            .ok_or("picasso-direct-ui4-target")?;
+        }
+    }
     let frame_started_ns = crate::chronos::monotonic_nanos();
 
-    if PRIMARY_PROBE_IN_FLIGHT
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
+    let acquired = match carrier {
+        Some(lease) => try_begin_picasso_render1_frame(lease),
+        None => PRIMARY_PROBE_IN_FLIGHT
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok(),
+    };
+    if !acquired {
         // Render0 is an ordered GuC lane, not a reason to pin and spin an
         // Embassy carrier. Producers classify this as ordinary backpressure
         // and retry on their next cadence without restarting the task.
@@ -2144,14 +2324,23 @@ fn submit_resident_scene_capture_inner(
         let Some(dev) = crate::intel::claimed_device() else {
             return Err("no-device");
         };
-        let warm = warm_state().ok_or("render-boot-not-ready")?;
+        let warm = match carrier {
+            Some(lease) => picasso_render1_warm_state(lease).ok_or("picasso-render1-not-ready")?,
+            None => warm_state().ok_or("render-boot-not-ready")?,
+        };
         if !forcewake_render_acquire(warm) {
             return Err("forcewake");
         }
-        if !ensure_smoke_buffers_mapped(dev, warm) {
+        if carrier.is_none() && !ensure_smoke_buffers_mapped(dev, warm) {
             return Err("render-map");
         }
-        let raster_quality = if raster_quality == ResidentSceneRasterQuality::Multisample4x
+        let raster_quality = if carrier.is_some()
+            && raster_quality == ResidentSceneRasterQuality::Multisample4x
+        {
+            // Phase 1 owns a separate depth/state/target cache; its MSAA
+            // color/depth cache is not admitted until it too is carrier-local.
+            ResidentSceneRasterQuality::SingleSample
+        } else if raster_quality == ResidentSceneRasterQuality::Multisample4x
             && !device_is_gfx125(warm.device_id)
         {
             if !RESIDENT_SCENE_MSAA_FALLBACK_LOGGED.swap(true, Ordering::AcqRel) {
@@ -2165,7 +2354,9 @@ fn submit_resident_scene_capture_inner(
         } else {
             raster_quality
         };
-        let msaa_color = if raster_quality == ResidentSceneRasterQuality::Multisample4x {
+        let msaa_color = if carrier.is_none()
+            && raster_quality == ResidentSceneRasterQuality::Multisample4x
+        {
             Some(prepare_resident_scene_msaa_color(warm.device_id, target_width, target_height)?)
         } else {
             None
@@ -2190,7 +2381,16 @@ fn submit_resident_scene_capture_inner(
             (target.surface.gpu, target.surface.pitch_bytes as usize)
         } else if let Some(destination) = direct_output {
             (
-                prepare_resident_scene_direct_ui4_target(destination)?,
+                match carrier {
+                    Some(lease) => prepare_picasso_render1_ui4_target(
+                        lease,
+                        crate::gpu::physical::physical_device().ok_or("picasso-physical-gpu")?,
+                        destination.phys,
+                        destination.bytes,
+                    )
+                    .ok_or("picasso-direct-ui4-target")?,
+                    None => prepare_resident_scene_direct_ui4_target(destination)?,
+                },
                 destination.pitch_bytes as usize,
             )
         } else {
@@ -2212,7 +2412,17 @@ fn submit_resident_scene_capture_inner(
             Some(if raster_quality == ResidentSceneRasterQuality::Multisample4x {
                 prepare_resident_scene_msaa_depth(warm.device_id, target_width, target_height)?
             } else {
-                prepare_resident_scene_depth(warm.device_id, target_width, target_height)?
+                match carrier {
+                    Some(lease) => prepare_picasso_resident_scene_depth(
+                        lease,
+                        warm.device_id,
+                        target_width,
+                        target_height,
+                    )?,
+                    None => {
+                        prepare_resident_scene_depth(warm.device_id, target_width, target_height)?
+                    }
+                }
             })
         } else {
             None
@@ -2273,6 +2483,7 @@ fn submit_resident_scene_capture_inner(
                 render_target_pitch,
                 target_width,
                 target_height,
+                carrier,
             )?
         } else {
             submit_resident_scene_geometry_batched(
@@ -2287,6 +2498,7 @@ fn submit_resident_scene_capture_inner(
                 render_target_pitch,
                 target_width,
                 target_height,
+                carrier,
             )?
         };
         let geometry_complete = geometry.completed;
@@ -2511,7 +2723,10 @@ fn submit_resident_scene_capture_inner(
             release_fence,
         })
     })();
-    PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release);
+    match carrier {
+        Some(lease) => finish_picasso_render1_frame(lease),
+        None => PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release),
+    }
     result
 }
 
@@ -7238,6 +7453,7 @@ pub(crate) fn init_fixed_render_ggtt_for_boot(dev: crate::intel::Dev) -> bool {
             && warm.result_len != 0
             && warm.streamout_len != 0
             && render_ppgtt_pml4_phys() != 0;
+        let picasso_render1_ready = prewarm_picasso_render1_control_ggtt_for_boot(dev);
         if !complete || !map_smoke_buffers(dev, warm) {
             WARM_BUFFERS_MAPPED.store(false, Ordering::Release);
             return false;
@@ -7245,6 +7461,11 @@ pub(crate) fn init_fixed_render_ggtt_for_boot(dev: crate::intel::Dev) -> bool {
         log_boot_render_memory_proof(warm);
         MEMORY_PROOF_LOGGED.store(true, Ordering::Release);
         WARM_BUFFERS_MAPPED.store(true, Ordering::Release);
+        crate::log_info!(target: "render";
+            "intel/render boot-gate render0={} render1_picasso={} render1_runtime_ggtt_remap=forbidden\n",
+            1,
+            picasso_render1_ready as u8,
+        );
         true
     })
 }

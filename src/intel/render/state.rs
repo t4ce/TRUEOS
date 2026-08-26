@@ -205,6 +205,7 @@ pub(crate) struct ResidentTriangleMesh {
     /// One tightly packed, GPU-visible WGPU/Helio indexed-indirect record.
     pub(crate) indirect_args_gpu_addr: u64,
     pub(crate) indirect_args_offset: usize,
+    carrier: Option<PicassoCarrierLease>,
 }
 
 unsafe impl Send for ResidentTriangleMesh {}
@@ -223,6 +224,10 @@ pub(crate) struct ResidentRenderBuffer {
     storage_virt: *mut u8,
     storage_bytes: usize,
     gpu_base: u64,
+    /// `None` denotes the legacy kernel/Helio Render0 PPGTT.  Picasso uses
+    /// its immutable Render1 lease, so release can never unmap this storage
+    /// from another renderer's address space.
+    carrier: Option<PicassoCarrierLease>,
 }
 
 unsafe impl Send for ResidentRenderBuffer {}
@@ -239,6 +244,10 @@ impl ResidentRenderBuffer {
 
     pub(crate) const fn gpu_base(&self) -> u64 {
         self.gpu_base
+    }
+
+    pub(crate) const fn carrier(&self) -> Option<PicassoCarrierLease> {
+        self.carrier
     }
 
     pub(crate) fn write(&self, offset: usize, bytes: &[u8]) -> bool {
@@ -299,8 +308,28 @@ static RESIDENT_HELIO_TRANSFORM_ARTIFACT: Mutex<
     Option<crate::intel::gpgpu::GpgpuHelioRetainedTransformArtifactMapping>,
 > = Mutex::new(None);
 
-fn resident_helio_transform_artifact()
--> Result<crate::intel::gpgpu::GpgpuHelioRetainedTransformArtifactMapping, &'static str> {
+pub(crate) fn resident_helio_transform_artifact_for_carrier(
+    carrier: Option<PicassoCarrierLease>,
+) -> Result<crate::intel::gpgpu::GpgpuHelioRetainedTransformArtifactMapping, &'static str> {
+    if let Some(carrier) = carrier {
+        let mapping = crate::intel::gpgpu::prepare_helio_retained_transform_artifact()
+            .ok_or("helio-transform-artifact")?;
+        let physical = crate::gpu::physical::physical_device().ok_or("picasso-physical-gpu")?;
+        if !map_picasso_render1_resource_range(
+            carrier,
+            physical,
+            mapping.gpu,
+            mapping.phys,
+            mapping.mapped_bytes,
+        ) {
+            return Err("picasso-transform-artifact-map");
+        }
+        crate::log_info!(target: "render";
+            "helio-transform: authenticated instruction image mapped carrier=Render1 gpu=0x{:X} phys=0x{:X} bytes=0x{:X} context=vmx-owned\n",
+            mapping.gpu, mapping.phys, mapping.mapped_bytes,
+        );
+        return Ok(mapping);
+    }
     let mut resident = RESIDENT_HELIO_TRANSFORM_ARTIFACT.lock();
     if let Some(mapping) = *resident {
         return Ok(mapping);
@@ -434,6 +463,13 @@ unsafe impl Send for ResidentChurnForward {}
 unsafe impl Sync for ResidentChurnForward {}
 
 impl ResidentChurnForward {
+    /// Picasso residents carry an immutable Render1 lease on every backing
+    /// allocation.  Render0 residents return `None` and continue through the
+    /// boot-lifetime kernel path.
+    pub(crate) const fn carrier(&self) -> Option<PicassoCarrierLease> {
+        self.geometry.carrier()
+    }
+
     pub(crate) const fn draw_group_count(&self) -> usize {
         self.draw_group_count
     }

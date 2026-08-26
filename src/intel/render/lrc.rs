@@ -1,4 +1,4 @@
-fn init_gen12_lrc_context_image(
+pub(crate) fn init_gen12_lrc_context_image(
     warm: RenderWarmState,
     ring_start: u32,
     ring_tail: u32,
@@ -215,7 +215,7 @@ fn init_gen12_lrc_context_image(
 /// GuC owns the rest of the HWLRCA after first registration. In particular,
 /// HEAD is written by the GPU during context save, so rebuilding or flushing
 /// the complete image for a later request would race GuC's save path.
-fn write_gen12_lrc_ring_tail(warm: RenderWarmState, ring_tail: u32) -> bool {
+pub(crate) fn write_gen12_lrc_ring_tail(warm: RenderWarmState, ring_tail: u32) -> bool {
     const LRC_CONTEXT_CONTROL_VALUE_DW: usize = 3;
     const LRC_RING_TAIL_VALUE_DW: usize = 7;
 
@@ -242,7 +242,7 @@ fn write_gen12_lrc_ring_tail(warm: RenderWarmState, ring_tail: u32) -> bool {
 }
 
 /// Read the HEAD last saved by GuC into the Render0 HWLRCA.
-fn read_gen12_lrc_ring_head(warm: RenderWarmState) -> u32 {
+pub(crate) fn read_gen12_lrc_ring_head(warm: RenderWarmState) -> u32 {
     const LRC_RING_HEAD_VALUE_DW: usize = 5;
 
     let index = LRC_STATE_OFFSET_DWORDS + LRC_RING_HEAD_VALUE_DW;
