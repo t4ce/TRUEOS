@@ -468,12 +468,6 @@ fn apply_output_limiter(data: &mut [f32]) {
     }
 }
 
-fn clamp_output(data: &mut [f32]) {
-    for sample in data {
-        *sample = sample.clamp(-1.0, 1.0);
-    }
-}
-
 impl ToneSource {
     fn new(freq_hz: u32, sample_rate: usize, gain: f32, enabled: bool) -> Self {
         Self {

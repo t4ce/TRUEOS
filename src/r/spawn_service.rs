@@ -1885,7 +1885,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &TINYAUDIO_SERVICE_STARTED,
         spawn_tinyaudio_service,
     ),
-    TaskSpec::disabled(
+    TaskSpec::enabled(
         "tinyaudio-live-http",
         crate::r::readiness::NET_ANY_CONFIGURED | crate::r::readiness::INTEL_HDA_READY,
         &TINYAUDIO_LIVE_HTTP_STARTED,

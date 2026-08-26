@@ -223,7 +223,7 @@ impl Engine {
     ) -> Result<Vec<i16>, Error> {
         validate_v1(header, commands)?;
         let envelopes = vec![EnvelopeParams::V1; commands.len()];
-        self.render_inner(header, commands, &envelopes)
+        self.render_inner(header, commands, &envelopes, false)
     }
 
     fn render_v2(
@@ -249,7 +249,7 @@ impl Engine {
                 release_after_gate: true,
             })
             .collect::<Vec<_>>();
-        self.render_inner(header, &bases, &envelopes)
+        self.render_inner(header, &bases, &envelopes, true)
     }
 
     fn render_inner(
@@ -257,6 +257,7 @@ impl Engine {
         header: &NativeBlockHeaderV1,
         commands: &[NativeRenderCommandV1],
         envelopes: &[EnvelopeParams],
+        use_soft_limiter: bool,
     ) -> Result<Vec<i16>, Error> {
         let frames = header.block_frames as usize;
         let mut mix = vec![0i64; frames * 2];
@@ -324,7 +325,16 @@ impl Engine {
         self.voice_filters
             .retain(|state| state.seen_block == header.absolute_frame);
         self.apply_delay(&mut mix, &delay_send, frames);
-        Ok(mix.into_iter().map(soft_limit_i16).collect())
+        Ok(mix
+            .into_iter()
+            .map(|sample| {
+                if use_soft_limiter {
+                    soft_limit_i16(sample)
+                } else {
+                    sample.clamp(i16::MIN as i64, i16::MAX as i64) as i16
+                }
+            })
+            .collect())
     }
 
     fn filter_state_index(
@@ -423,6 +433,7 @@ fn validate_v1(
         || header.sample_rate_hz != SAMPLE_RATE_HZ
         || header.block_frames == 0
         || header.block_frames as usize > MAX_BLOCK_FRAMES
+        || header.flags != 0
         || header.reserved != 0
         || commands.len() > MAX_COMMANDS
     {
@@ -456,6 +467,7 @@ fn validate_v2(
         || header.sample_rate_hz != SAMPLE_RATE_HZ
         || header.block_frames == 0
         || header.block_frames as usize > MAX_BLOCK_FRAMES
+        || header.flags != 0
         || header.reserved != 0
         || commands.len() > MAX_COMMANDS
     {
@@ -542,28 +554,29 @@ fn envelope_at(age: u64, gate_duration: u64, params: EnvelopeParams) -> i64 {
             .min(Q15 as u64) as i64;
     }
 
-    let attack = u64::from(params.attack_frames);
-    let decay = u64::from(params.decay_frames);
-    let sustain = i64::from(params.sustain_q15.min(32_767));
-    if age < attack {
-        return if attack == 0 {
-            Q15
-        } else {
-            (age * Q15 as u64 / attack) as i64
-        };
-    }
-    if age < attack.saturating_add(decay) {
-        let elapsed = age - attack;
-        return Q15 - (Q15 - sustain) * elapsed as i64 / decay.max(1) as i64;
-    }
     if age < gate_duration {
-        return sustain;
+        return held_envelope_at(age, params);
     }
     let release = u64::from(params.release_frames);
     if release == 0 || age >= gate_duration.saturating_add(release) {
         return 0;
     }
-    sustain * (release - (age - gate_duration)) as i64 / release as i64
+    let release_start = held_envelope_at(gate_duration, params);
+    release_start * (release - (age - gate_duration)) as i64 / release as i64
+}
+
+fn held_envelope_at(age: u64, params: EnvelopeParams) -> i64 {
+    let attack = u64::from(params.attack_frames);
+    let decay = u64::from(params.decay_frames);
+    let sustain = i64::from(params.sustain_q15.min(32_767));
+    if attack != 0 && age < attack {
+        return (age * Q15 as u64 / attack) as i64;
+    }
+    if decay != 0 && age < attack.saturating_add(decay) {
+        let elapsed = age.saturating_sub(attack);
+        return Q15 - (Q15 - sustain) * elapsed as i64 / decay as i64;
+    }
+    sustain
 }
 
 fn filter_envelope_at(age: u64, params: EnvelopeParams) -> i64 {
@@ -586,7 +599,11 @@ fn filter_envelope_at(age: u64, params: EnvelopeParams) -> i64 {
 }
 
 fn modulated_cutoff(base_hz: u16, depth_octaves_q8: i16, envelope_q15: i64) -> u16 {
-    let base = u32::from(base_hz).min(24_000);
+    const POW2_Q16: [u32; 17] = [
+        65_536, 68_436, 71_469, 74_636, 77_936, 81_384, 84_982, 88_744, 92_682, 96_815, 101_151,
+        105_699, 110_474, 115_485, 120_747, 126_273, 131_072,
+    ];
+    let base = u64::from(base_hz).min(24_000);
     if base == 0 || depth_octaves_q8 == 0 || envelope_q15 == 0 {
         return base as u16;
     }
@@ -594,20 +611,29 @@ fn modulated_cutoff(base_hz: u16, depth_octaves_q8: i16, envelope_q15: i64) -> u
     let magnitude = octaves_q8.unsigned_abs().min(8 * 256);
     let whole = (magnitude / 256) as u32;
     let fraction = (magnitude % 256) as u32;
+    let table_index = (fraction / 16) as usize;
+    let table_fraction = u64::from(fraction % 16);
+    let low = u64::from(POW2_Q16[table_index]);
+    let high = u64::from(POW2_Q16[table_index + 1]);
+    let factor_q16 = low + (high - low) * table_fraction / 16;
     let shifted = if octaves_q8 >= 0 {
-        base.checked_shl(whole)
-            .unwrap_or(u32::MAX)
-            .saturating_mul(256 + fraction)
-            / 256
+        base.saturating_mul(factor_q16)
+            .saturating_mul(1u64 << whole)
+            / 65_536
     } else {
-        (base >> whole).saturating_mul(256) / (256 + fraction)
+        base.saturating_mul(65_536) / factor_q16 / (1u64 << whole)
     };
     shifted.clamp(1, 24_000) as u16
 }
 
 fn lowpass(state: &mut VoiceFilterState, input: i64, cutoff_hz: u16, resonance_q8: u16) -> i64 {
     let cutoff = u64::from(cutoff_hz).min(24_000);
-    if cutoff == 0 || cutoff >= 23_900 {
+    if cutoff == 0 {
+        state.pole_1 = 0;
+        state.pole_2 = 0;
+        return 0;
+    }
+    if cutoff >= 23_900 {
         state.pole_1 = input;
         state.pole_2 = input;
         return input;

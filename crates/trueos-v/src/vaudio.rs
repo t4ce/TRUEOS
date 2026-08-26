@@ -600,6 +600,14 @@ mod native_tests {
         assert_eq!(size_of::<NativeRenderCommandV1>(), 80);
         assert_eq!(align_of::<NativeRenderCommandV1>(), 8);
         assert_eq!(NativeBlockHeaderV1::new(64, 123, 4).sample_rate_hz, 48_000);
+        assert_eq!(size_of::<NativeBlockHeaderV2>(), 40);
+        assert_eq!(align_of::<NativeBlockHeaderV2>(), 8);
+        assert_eq!(size_of::<NativeRenderCommandV2>(), 104);
+        assert_eq!(align_of::<NativeRenderCommandV2>(), 8);
+        let v2 = NativeBlockHeaderV2::new(64, 123, 4);
+        assert!(v2.validate().is_ok());
+        assert_eq!(v2.version, NATIVE_AUDIO_VERSION_V2);
+        assert_eq!(v2.command_size, NATIVE_COMMAND_SIZE_V2);
     }
 
     #[test]
