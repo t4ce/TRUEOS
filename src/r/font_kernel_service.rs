@@ -711,7 +711,9 @@ impl QueuedFontRequest {
     const fn consumer(&self) -> FontKernelConsumer {
         let path = match self {
             Self::Retain { .. } => FontKernelConsumerPath::RetainScene,
-            Self::Stamp { .. } | Self::FrameStamp { .. } => FontKernelConsumerPath::Stamp,
+            Self::Stamp { .. } | Self::FrameStamp { .. } => {
+                FontKernelConsumerPath::Stamp
+            }
         };
         FontKernelConsumer::new(path, self.ticket().raw())
     }
@@ -1523,6 +1525,7 @@ fn validate_frame_clear_outcome(
         }
     }
 }
+
 
 enum FontFrameCoverage {
     Retained(Vec<(GpuFontRetainedScene, GpuFontRgba)>),

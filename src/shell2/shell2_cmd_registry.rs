@@ -369,7 +369,9 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         color: Some(STATUS_GREEN_RGB),
         advertised: true,
         handler: dispatch_td,
-        tool_description: Some("Launch termdir at the TRUEOSFS root with depth 2."),
+        tool_description: Some(
+            "Launch termdir at the TRUEOSFS root with depth 2.",
+        ),
         tool_parameters_json: Some(TOOL_JSON_TD),
     },
     #[cfg(feature = "trueos_lumen")]

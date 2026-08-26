@@ -178,7 +178,10 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
 }
 
 fn print_usage(io: &'static dyn ShellBackend2) {
-    print_shell_line(io, "bios: usage `bios [all|status|services|setup|handoff|hints]`");
+    print_shell_line(
+        io,
+        "bios: usage `bios [all|status|services|setup|handoff|hints]`",
+    );
 }
 
 fn emit_multiline(io: &'static dyn ShellBackend2, text: &str) {
@@ -203,9 +206,7 @@ fn append_status(out: &mut String) {
     writeln!(
         out,
         "firmware_vendor=\"{}\" firmware_revision=0x{:08X} uefi_revision=0x{:08X}",
-        crate::efi::firmware_vendor_string()
-            .as_deref()
-            .unwrap_or("-"),
+        crate::efi::firmware_vendor_string().as_deref().unwrap_or("-"),
         st.firmware_revision,
         st.hdr.revision
     )
@@ -343,9 +344,12 @@ fn append_setup_foundation(out: &mut String) {
                 .unwrap();
             }
         }
-        Err(error) => {
-            writeln!(out, "standard_hii_runtime_export=unavailable detail=\"{}\"", error).unwrap()
-        }
+        Err(error) => writeln!(
+            out,
+            "standard_hii_runtime_export=unavailable detail=\"{}\"",
+            error
+        )
+        .unwrap(),
     }
 
     writeln!(
@@ -367,16 +371,24 @@ fn append_setup_foundation(out: &mut String) {
 }
 
 fn append_handoff(out: &mut String) {
-    writeln!(out, "standard_hii_database_guid={}", EFI_HII_DATABASE_PROTOCOL_GUID.fmt_canonical())
-        .unwrap();
+    writeln!(
+        out,
+        "standard_hii_database_guid={}",
+        EFI_HII_DATABASE_PROTOCOL_GUID.fmt_canonical()
+    )
+    .unwrap();
     writeln!(
         out,
         "standard_hii_config_routing_guid={}",
         EFI_HII_CONFIG_ROUTING_PROTOCOL_GUID.fmt_canonical()
     )
     .unwrap();
-    writeln!(out, "fallback_preboot_catalog_guid={}", TRUEOS_BIOS_CATALOG_GUID.fmt_canonical())
-        .unwrap();
+    writeln!(
+        out,
+        "fallback_preboot_catalog_guid={}",
+        TRUEOS_BIOS_CATALOG_GUID.fmt_canonical()
+    )
+    .unwrap();
     writeln!(
         out,
         "fallback_preboot_catalog_contract magic=TRBIOS1 version={} flags=hii-packages/forms/strings/config/protocols payload=reserved-physical-memory crc32=required max_payload_bytes={}",
@@ -394,7 +406,12 @@ fn append_handoff(out: &mut String) {
             .unwrap();
         }
         CatalogProbe::Invalid(error) => {
-            writeln!(out, "fallback_preboot_catalog=invalid detail=\"{}\"", error).unwrap();
+            writeln!(
+                out,
+                "fallback_preboot_catalog=invalid detail=\"{}\"",
+                error
+            )
+            .unwrap();
         }
         CatalogProbe::Valid(snapshot) => {
             writeln!(
@@ -422,7 +439,9 @@ fn append_handoff(out: &mut String) {
             writeln!(
                 out,
                 "  package_lists={} formsets={} questions={}",
-                snapshot.package_list_count, snapshot.formset_count, snapshot.question_count
+                snapshot.package_list_count,
+                snapshot.formset_count,
+                snapshot.question_count
             )
             .unwrap();
         }
@@ -475,7 +494,12 @@ fn append_hints(out: &mut String) {
             }
         }
         Err(error) => {
-            writeln!(out, "smbios_setup_evidence=unavailable detail=\"{}\"", error).unwrap();
+            writeln!(
+                out,
+                "smbios_setup_evidence=unavailable detail=\"{}\"",
+                error
+            )
+            .unwrap();
         }
     }
 
@@ -499,23 +523,32 @@ fn runtime_services_snapshot() -> Result<RuntimeServicesSnapshot, String> {
         physical_address,
         core::mem::size_of::<EfiTableHeader>(),
     ) {
-        return Err(String::from("runtime-services header is outside one memory-map range"));
+        return Err(String::from(
+            "runtime-services header is outside one memory-map range",
+        ));
     }
 
     let header_mapping = crate::pci::mmio::map_limine_struct::<EfiTableHeader>(physical_address)
         .map_err(|error| alloc::format!("runtime header map failed: {error:?}"))?;
     let header = unsafe { *header_mapping.as_ref() };
     if header.signature != EFI_RUNTIME_SERVICES_SIGNATURE {
-        return Err(alloc::format!("runtime signature mismatch: 0x{:016X}", header.signature));
+        return Err(alloc::format!(
+            "runtime signature mismatch: 0x{:016X}",
+            header.signature
+        ));
     }
     let header_size = header.header_size as usize;
     if header_size < core::mem::size_of::<EfiTableHeader>()
         || header_size > MAX_RUNTIME_HEADER_BYTES
     {
-        return Err(alloc::format!("runtime header size is invalid: 0x{header_size:X}"));
+        return Err(alloc::format!(
+            "runtime header size is invalid: 0x{header_size:X}"
+        ));
     }
     if !crate::limine::memmap_contains_phys_range(physical_address, header_size) {
-        return Err(String::from("complete runtime-services table crosses memory-map range"));
+        return Err(String::from(
+            "complete runtime-services table crosses memory-map range",
+        ));
     }
 
     let mapped = crate::pci::mmio::map_mmio_region_exact(physical_address, header_size)
@@ -541,8 +574,9 @@ fn runtime_services_snapshot() -> Result<RuntimeServicesSnapshot, String> {
         if end > header_size {
             continue;
         }
-        let value =
-            unsafe { core::ptr::read_unaligned(mapped.as_ptr().add(offset) as *const usize) };
+        let value = unsafe {
+            core::ptr::read_unaligned(mapped.as_ptr().add(offset) as *const usize)
+        };
         *slot = Some(value);
     }
 
@@ -566,7 +600,10 @@ fn standard_hii_exports() -> Result<StandardHiiExports, String> {
     for entry in tables {
         if guid_eq(&entry.vendor_guid, &EFI_HII_DATABASE_PROTOCOL_GUID) {
             database = (entry.vendor_table != 0).then_some(entry.vendor_table as u64);
-        } else if guid_eq(&entry.vendor_guid, &EFI_HII_CONFIG_ROUTING_PROTOCOL_GUID) {
+        } else if guid_eq(
+            &entry.vendor_guid,
+            &EFI_HII_CONFIG_ROUTING_PROTOCOL_GUID,
+        ) {
             config_routing = (entry.vendor_table != 0).then_some(entry.vendor_table as u64);
         }
     }
@@ -606,7 +643,9 @@ fn probe_catalog() -> CatalogProbe {
     let mapped = match crate::pci::mmio::map_limine_struct::<BiosCatalogHeader>(table_phys) {
         Ok(mapped) => mapped,
         Err(error) => {
-            return CatalogProbe::Invalid(alloc::format!("catalog header map failed: {error:?}"));
+            return CatalogProbe::Invalid(alloc::format!(
+                "catalog header map failed: {error:?}"
+            ));
         }
     };
     let header = unsafe { *mapped.as_ref() };
@@ -643,12 +682,16 @@ fn probe_catalog() -> CatalogProbe {
     };
     let payload_bytes = header.payload_bytes as usize;
     if !crate::limine::memmap_contains_phys_range(payload_phys, payload_bytes) {
-        return CatalogProbe::Invalid(String::from("catalog payload crosses memory-map range"));
+        return CatalogProbe::Invalid(String::from(
+            "catalog payload crosses memory-map range",
+        ));
     }
     let payload = match crate::pci::mmio::map_mmio_region_exact(payload_phys, payload_bytes) {
         Ok(payload) => payload,
         Err(error) => {
-            return CatalogProbe::Invalid(alloc::format!("catalog payload map failed: {error:?}"));
+            return CatalogProbe::Invalid(alloc::format!(
+                "catalog payload map failed: {error:?}"
+            ));
         }
     };
     let bytes = unsafe { core::slice::from_raw_parts(payload.as_ptr(), payload_bytes) };
@@ -745,17 +788,20 @@ fn collect_firmware_identity_and_hints() -> Result<(FirmwareIdentity, Vec<SetupH
 
 fn append_live_controller_hints(out: &mut String) {
     if crate::pci::with_devices(|devices| devices.is_empty()) {
-        writeln!(out, "live_policy_controllers=unavailable reason=pci-registry-empty").unwrap();
+        writeln!(
+            out,
+            "live_policy_controllers=unavailable reason=pci-registry-empty"
+        )
+        .unwrap();
         return;
     }
 
     writeln!(out, "live_policy_controllers:").unwrap();
     let mut count = 0usize;
     crate::pci::with_devices(|devices| {
-        for dev in devices
-            .iter()
-            .filter(|dev| dev.class == 0x01 || (dev.class == 0x0C && dev.subclass == 0x03))
-        {
+        for dev in devices.iter().filter(|dev| {
+            dev.class == 0x01 || (dev.class == 0x0C && dev.subclass == 0x03)
+        }) {
             let role = if dev.class == 0x01 {
                 match dev.subclass {
                     0x06 => "storage-sata",
@@ -793,7 +839,10 @@ fn append_live_controller_hints(out: &mut String) {
     }
 }
 
-fn structure_text(structure: &crate::efi::smbios::Structure<'_>, offset: usize) -> Option<String> {
+fn structure_text(
+    structure: &crate::efi::smbios::Structure<'_>,
+    offset: usize,
+) -> Option<String> {
     structure
         .string_bytes(structure.byte(offset)?)
         .map(firmware_text)
