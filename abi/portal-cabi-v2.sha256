@@ -189,4 +189,7 @@
 # as the pinned generic `tool` role before allowing one continuation.
 # Additive review: `trueos_cabi_ui4_scene_font_sprite_{request,status}_v1`
 # are new versioned symbols; no established portal signature changed.
-a5840eb88390f31c38e4baeb2f748e398a598f3e0aa3977f7a9de03ad131e597
+# The native-audio render and sample-registry v1 calls are strictly additive.
+# They carry fixed-width, versioned command records and PCM sample data into
+# the existing mediated audio lane; older v2 artifacts import none of them.
+91bb9cb96d6efa72e348372d8280c5e0cddaeca53278db299b10b40e040b3f6e

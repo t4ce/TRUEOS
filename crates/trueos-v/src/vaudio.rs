@@ -1,4 +1,5 @@
 use crate::vcabi;
+use core::mem::{align_of, size_of};
 
 pub const DEFAULT_RATE_HZ: u32 = 48_000;
 pub const DEFAULT_CHANNELS: u32 = 2;
@@ -10,6 +11,120 @@ pub const ERR_FAULT: i32 = -14;
 pub const ERR_INVALID: i32 = -22;
 pub const ERR_NO_DEVICE: i32 = -19;
 const INVALID_CURSOR: u64 = u64::MAX;
+
+pub const NATIVE_AUDIO_MAGIC_V1: u32 = 0x314E_5254;
+pub const NATIVE_AUDIO_VERSION_V1: u16 = 1;
+pub const NATIVE_COMMAND_SIZE_V1: u16 = 80;
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct NativeBlockHeaderV1 {
+    pub magic: u32,
+    pub version: u16,
+    pub command_size: u16,
+    pub block_frames: u32,
+    pub sample_rate_hz: u32,
+    pub absolute_frame: u64,
+    pub revision: u64,
+    pub flags: u32,
+    pub reserved: u32,
+}
+
+impl NativeBlockHeaderV1 {
+    pub const fn new(block_frames: u32, absolute_frame: u64, revision: u64) -> Self {
+        Self {
+            magic: NATIVE_AUDIO_MAGIC_V1,
+            version: NATIVE_AUDIO_VERSION_V1,
+            command_size: NATIVE_COMMAND_SIZE_V1,
+            block_frames,
+            sample_rate_hz: DEFAULT_RATE_HZ,
+            absolute_frame,
+            revision,
+            flags: 0,
+            reserved: 0,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), NativeValidationError> {
+        if self.magic != NATIVE_AUDIO_MAGIC_V1
+            || self.version != NATIVE_AUDIO_VERSION_V1
+            || self.command_size != NATIVE_COMMAND_SIZE_V1
+        {
+            return Err(NativeValidationError::BadHeader);
+        }
+        if self.block_frames == 0 || self.sample_rate_hz == 0 || self.reserved != 0 {
+            return Err(NativeValidationError::BadHeader);
+        }
+        Ok(())
+    }
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct NativeRenderCommandV1 {
+    pub start_frame: u32,
+    pub end_frame: u32,
+    pub age_frames: u32,
+    pub duration_frames: u32,
+    pub source_id: u64,
+    pub voice_id: u32,
+    pub kind: u16,
+    pub waveform: u8,
+    pub midi_note: u8,
+    pub gain_q15: u16,
+    pub pan_q15: i16,
+    pub playback_rate_q16: i32,
+    pub sample_begin_q16: u32,
+    pub sample_end_q16: u32,
+    pub lpf_hz: u16,
+    pub lpq_q8: u16,
+    pub room_q15: u16,
+    pub delay_q15: u16,
+    pub phaser_q15: u16,
+    pub shape_q15: u16,
+    pub fm_depth_q8: u16,
+    pub fm_rate_q8: u16,
+    pub flags: u32,
+    pub reserved0: u32,
+    pub reserved1: u32,
+    pub reserved2: u32,
+}
+
+impl NativeRenderCommandV1 {
+    pub const KIND_OSCILLATOR: u16 = 1;
+    pub const KIND_SAMPLE: u16 = 2;
+
+    pub fn validate(&self, block_frames: u32) -> Result<(), NativeValidationError> {
+        if self.start_frame >= self.end_frame || self.end_frame > block_frames {
+            return Err(NativeValidationError::BadSpan);
+        }
+        if self.duration_frames == 0 || self.age_frames >= self.duration_frames {
+            return Err(NativeValidationError::BadDuration);
+        }
+        if self.kind != Self::KIND_OSCILLATOR && self.kind != Self::KIND_SAMPLE {
+            return Err(NativeValidationError::BadKind);
+        }
+        if self.reserved0 != 0 || self.reserved1 != 0 || self.reserved2 != 0 {
+            return Err(NativeValidationError::ReservedNonZero);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum NativeValidationError {
+    BadHeader,
+    BadSpan,
+    BadDuration,
+    BadKind,
+    ReservedNonZero,
+    InvalidSample,
+}
+
+const _: [(); 40] = [(); size_of::<NativeBlockHeaderV1>()];
+const _: [(); 8] = [(); align_of::<NativeBlockHeaderV1>()];
+const _: [(); 80] = [(); size_of::<NativeRenderCommandV1>()];
+const _: [(); 8] = [(); align_of::<NativeRenderCommandV1>()];
 
 #[repr(u32)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -145,6 +260,102 @@ impl Stream {
     }
 }
 
+/// Native scheduled-command audio engine backed by a regular playback stream.
+/// The PCM methods on `Stream` remain available as a compatibility fallback.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct NativeEngine {
+    stream: Stream,
+}
+
+impl NativeEngine {
+    pub fn open_playback(params: PlaybackParams) -> Result<Self, i32> {
+        let stream = Stream::open_playback(params)?;
+        stream.start()?;
+        Ok(Self { stream })
+    }
+
+    pub const fn from_stream(stream: Stream) -> Self {
+        Self { stream }
+    }
+
+    pub const fn stream(self) -> Stream {
+        self.stream
+    }
+
+    pub fn render(
+        self,
+        header: &NativeBlockHeaderV1,
+        commands: &[NativeRenderCommandV1],
+    ) -> Result<usize, NativeValidationErrorOrCode> {
+        header
+            .validate()
+            .map_err(NativeValidationErrorOrCode::Validation)?;
+        for command in commands {
+            command
+                .validate(header.block_frames)
+                .map_err(NativeValidationErrorOrCode::Validation)?;
+        }
+        let result = unsafe {
+            vcabi::trueos_cabi_audio_native_render_v1(
+                self.stream.handle,
+                header,
+                commands.as_ptr(),
+                commands.len(),
+            )
+        };
+        if result < 0 {
+            Err(NativeValidationErrorOrCode::Code(result as i32))
+        } else {
+            Ok(result as usize)
+        }
+    }
+
+    pub fn register_sample(
+        self,
+        sample_id: u64,
+        channels: u32,
+        rate_hz: u32,
+        samples: &[i16],
+    ) -> Result<(), NativeValidationErrorOrCode> {
+        if sample_id == 0
+            || channels == 0
+            || rate_hz == 0
+            || samples.is_empty()
+            || samples.len() % channels as usize != 0
+        {
+            return Err(NativeValidationErrorOrCode::Validation(
+                NativeValidationError::InvalidSample,
+            ));
+        }
+        rc_unit(unsafe {
+            vcabi::trueos_cabi_audio_native_sample_register_v1(
+                self.stream.handle,
+                sample_id,
+                channels,
+                rate_hz,
+                samples.as_ptr(),
+                samples.len(),
+            )
+        })
+        .map_err(NativeValidationErrorOrCode::Code)
+    }
+
+    pub fn remove_sample(self, sample_id: u64) -> Result<(), i32> {
+        if sample_id == 0 {
+            return Err(ERR_INVALID);
+        }
+        rc_unit(unsafe {
+            vcabi::trueos_cabi_audio_native_sample_remove_v1(self.stream.handle, sample_id)
+        })
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum NativeValidationErrorOrCode {
+    Validation(NativeValidationError),
+    Code(i32),
+}
+
 pub fn play_i16_stereo_48k(samples: &[i16]) -> Result<usize, i32> {
     let frames =
         unsafe { vcabi::trueos_cabi_audio_write_i16_stereo_48k(samples.as_ptr(), samples.len()) };
@@ -216,5 +427,52 @@ fn bool_result(value: i32) -> Result<bool, i32> {
         1 => Ok(true),
         err if err < 0 => Err(err),
         other => Err(other),
+    }
+}
+
+#[cfg(test)]
+mod native_tests {
+    use super::*;
+
+    #[test]
+    fn v1_abi_layout_and_defaults_are_stable() {
+        assert_eq!(size_of::<NativeBlockHeaderV1>(), 40);
+        assert_eq!(align_of::<NativeBlockHeaderV1>(), 8);
+        assert_eq!(size_of::<NativeRenderCommandV1>(), 80);
+        assert_eq!(align_of::<NativeRenderCommandV1>(), 8);
+        assert_eq!(NativeBlockHeaderV1::new(64, 123, 4).sample_rate_hz, 48_000);
+    }
+
+    #[test]
+    fn native_command_validation_rejects_out_of_block_spans() {
+        let command = NativeRenderCommandV1 {
+            start_frame: 4,
+            end_frame: 65,
+            age_frames: 0,
+            duration_frames: 10,
+            source_id: 1,
+            voice_id: 1,
+            kind: NativeRenderCommandV1::KIND_OSCILLATOR,
+            waveform: 0,
+            midi_note: 60,
+            gain_q15: 1,
+            pan_q15: 0,
+            playback_rate_q16: 65_536,
+            sample_begin_q16: 0,
+            sample_end_q16: 0,
+            lpf_hz: 0,
+            lpq_q8: 0,
+            room_q15: 0,
+            delay_q15: 0,
+            phaser_q15: 0,
+            shape_q15: 0,
+            fm_depth_q8: 0,
+            fm_rate_q8: 0,
+            flags: 0,
+            reserved0: 0,
+            reserved1: 0,
+            reserved2: 0,
+        };
+        assert_eq!(command.validate(64), Err(NativeValidationError::BadSpan));
     }
 }

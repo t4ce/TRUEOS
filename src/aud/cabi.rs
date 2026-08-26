@@ -15,6 +15,7 @@ const EBUSY: i32 = 16;
 const EFAULT: i32 = 14;
 const EINVAL: i32 = 22;
 const ENODEV: i32 = 19;
+const ENOSPC: i32 = 28;
 
 const STATE_CLOSED: i32 = 0;
 const STATE_PREPARED: i32 = 1;
@@ -662,4 +663,103 @@ pub unsafe extern "C" fn trueos_cabi_audio_monitor_read_i16_since(
         out_next_cursor.write(next);
     }
     count as isize
+}
+
+fn native_error_code(error: crate::aud::native_engine::Error) -> i32 {
+    match error {
+        crate::aud::native_engine::Error::Invalid => EINVAL,
+        crate::aud::native_engine::Error::MissingSample => ENODEV,
+        crate::aud::native_engine::Error::NoSpace => ENOSPC,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_audio_native_render_v1(
+    handle: u32,
+    header: *const crate::aud::native_engine::NativeBlockHeaderV1,
+    commands: *const crate::aud::native_engine::NativeRenderCommandV1,
+    count: usize,
+) -> isize {
+    if !valid_handle(handle) {
+        return -(EBADF as isize);
+    }
+    if !AUDIO_CABI_STATE.lock().open {
+        return -(ENODEV as isize);
+    }
+    if header.is_null() || (commands.is_null() && count != 0) {
+        return -(EFAULT as isize);
+    }
+    if count > crate::aud::native_engine::MAX_COMMANDS {
+        return -(EINVAL as isize);
+    }
+
+    let header = unsafe { &*header };
+    let commands = if count == 0 {
+        &[]
+    } else {
+        unsafe { core::slice::from_raw_parts(commands, count) }
+    };
+    let pcm = match crate::aud::native_engine::render_block_v1(header, commands) {
+        Ok(pcm) => pcm,
+        Err(error) => return -(native_error_code(error) as isize),
+    };
+    match crate::aud::pcm_lane::submit_i16_stereo_48k("blueprint-audio-native-v1", pcm) {
+        Ok(frames) => {
+            AUDIO_CABI_STATE.lock().running = true;
+            frames as isize
+        }
+        Err(crate::aud::pcm_lane::PcmLaneError::QueueFull) => -(EBUSY as isize),
+        Err(crate::aud::pcm_lane::PcmLaneError::BadShape) => -(EINVAL as isize),
+        Err(crate::aud::pcm_lane::PcmLaneError::EmptyBuffer) => -(EIO as isize),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_audio_native_sample_register_v1(
+    handle: u32,
+    sample_id: u64,
+    channels: u32,
+    rate_hz: u32,
+    samples: *const i16,
+    sample_count: usize,
+) -> i32 {
+    if !valid_handle(handle) {
+        return -EBADF;
+    }
+    if !AUDIO_CABI_STATE.lock().open {
+        return -ENODEV;
+    }
+    if samples.is_null() && sample_count != 0 {
+        return -EFAULT;
+    }
+    let Ok(channels) = u16::try_from(channels) else {
+        return -EINVAL;
+    };
+    let samples = if sample_count == 0 {
+        &[]
+    } else {
+        unsafe { core::slice::from_raw_parts(samples, sample_count) }
+    };
+    match crate::aud::native_engine::register_sample_v1(sample_id, channels, rate_hz, samples) {
+        Ok(()) => 0,
+        Err(error) => -native_error_code(error),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_audio_native_sample_remove_v1(handle: u32, sample_id: u64) -> i32 {
+    if !valid_handle(handle) {
+        return -EBADF;
+    }
+    if !AUDIO_CABI_STATE.lock().open {
+        return -ENODEV;
+    }
+    if sample_id == 0 {
+        return -EINVAL;
+    }
+    if crate::aud::native_engine::remove_sample_v1(sample_id) {
+        0
+    } else {
+        -ENODEV
+    }
 }

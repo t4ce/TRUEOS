@@ -985,6 +985,21 @@ unsafe extern "C" {
         out_cap: usize,
         out_next_cursor: *mut u64,
     ) -> isize;
+    pub fn trueos_cabi_audio_native_render_v1(
+        handle: u32,
+        header: *const crate::vaudio::NativeBlockHeaderV1,
+        commands: *const crate::vaudio::NativeRenderCommandV1,
+        count: usize,
+    ) -> isize;
+    pub fn trueos_cabi_audio_native_sample_register_v1(
+        handle: u32,
+        sample_id: u64,
+        channels: u32,
+        rate_hz: u32,
+        samples: *const i16,
+        sample_count: usize,
+    ) -> i32;
+    pub fn trueos_cabi_audio_native_sample_remove_v1(handle: u32, sample_id: u64) -> i32;
 
     pub fn trueos_cabi_vgpu_open(requested_caps: u64, out_device: *mut u64) -> i32;
     pub fn trueos_cabi_vgpu_close(device: u64) -> i32;
