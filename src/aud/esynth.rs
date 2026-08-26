@@ -17,7 +17,8 @@ const CHANNEL_SAMPLE_COUNT: usize = 480;
 const SERVICE_HEARTBEAT_MS: u64 = 30_000;
 const SINE_TABLE_BITS: u32 = 8;
 const SINE_TABLE_SHIFT: u32 = 32 - SINE_TABLE_BITS;
-const PATTERN_SOURCE_ENABLED: bool = true;
+// Blueprint strudel_core owns musical content; keep this service as the PCM/HDA pump.
+const PATTERN_SOURCE_ENABLED: bool = false;
 const PIANO_SOURCE_ENABLED: bool = false;
 const TONE_SOURCE_ENABLED: bool = false;
 const PCM_DUMP_ENABLED: bool = false;

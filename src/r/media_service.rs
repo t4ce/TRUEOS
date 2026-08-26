@@ -29,7 +29,10 @@ pub const ERR_UNSUPPORTED: i32 = -8;
 const OPERATION_CAP: usize = 32;
 const REQUEST_CAP: usize = 16;
 const MAX_ENCODED_BYTES: usize = 16 * 1024 * 1024;
-const MAX_RGBA_BYTES: usize = 64 * 1024 * 1024;
+// A full-resolution Nikon Z7 JPEG (6040x4032) expands to about 93 MiB in
+// the RGBA format returned by this service. Leave enough room for that
+// ordinary camera source while retaining a bounded per-image allocation.
+const MAX_RGBA_BYTES: usize = 128 * 1024 * 1024;
 const MAX_DIMENSION: u32 = 8_192;
 const IDLE_MS: u64 = 10;
 const XELP_JPEG_TIMEOUT_MS: u64 = 1_000;
@@ -310,11 +313,10 @@ fn validated_image(
     if width == 0 || height == 0 || width > MAX_DIMENSION || height > MAX_DIMENSION {
         return Err(ERR_TOO_LARGE);
     }
-    let byte_len = (width as usize)
-        .checked_mul(height as usize)
-        .and_then(|pixels| pixels.checked_mul(4))
-        .filter(|expected| *expected == rgba.len() && *expected <= MAX_RGBA_BYTES)
-        .ok_or(ERR_TOO_LARGE)?;
+    let byte_len = rgba_byte_len_within_limit(width, height).ok_or(ERR_TOO_LARGE)?;
+    if byte_len != rgba.len() {
+        return Err(ERR_TOO_LARGE);
+    }
     let stride_bytes = width.checked_mul(4).ok_or(ERR_TOO_LARGE)?;
     Ok(DecodedImage {
         info: ImageInfo {
@@ -329,6 +331,13 @@ fn validated_image(
         },
         rgba,
     })
+}
+
+fn rgba_byte_len_within_limit(width: u32, height: u32) -> Option<usize> {
+    (width as usize)
+        .checked_mul(height as usize)
+        .and_then(|pixels| pixels.checked_mul(4))
+        .filter(|bytes| *bytes <= MAX_RGBA_BYTES)
 }
 
 async fn decode(request: &DecodeRequest) -> Result<DecodedImage, i32> {
@@ -415,6 +424,16 @@ pub async fn worker_task(worker_id: usize, worker_slot: u32, core_kind: u8) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn accepts_full_resolution_nikon_z7_rgba_output() {
+        assert_eq!(rgba_byte_len_within_limit(6_040, 4_032), Some(97_413_120));
+    }
+
+    #[test]
+    fn rejects_rgba_output_above_the_camera_image_limit() {
+        assert_eq!(rgba_byte_len_within_limit(8_192, 8_192), None);
+    }
 
     #[test]
     fn owner_scoped_upload_is_strictly_sequential() {
