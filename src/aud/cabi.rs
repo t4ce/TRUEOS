@@ -673,6 +673,58 @@ fn native_error_code(error: crate::aud::native_engine::Error) -> i32 {
     }
 }
 
+fn render_native_host_v1(
+    header: &crate::aud::native_engine::NativeBlockHeaderV1,
+    commands: &[crate::aud::native_engine::NativeRenderCommandV1],
+) -> isize {
+    let pcm = match crate::aud::native_engine::render_block_v1(header, commands) {
+        Ok(pcm) => pcm,
+        Err(error) => return -(native_error_code(error) as isize),
+    };
+    match crate::aud::pcm_lane::submit_i16_stereo_48k("blueprint-audio-native-v1", pcm) {
+        Ok(frames) => frames as isize,
+        Err(crate::aud::pcm_lane::PcmLaneError::QueueFull) => -(EBUSY as isize),
+        Err(crate::aud::pcm_lane::PcmLaneError::BadShape) => -(EINVAL as isize),
+        Err(crate::aud::pcm_lane::PcmLaneError::EmptyBuffer) => -(EIO as isize),
+    }
+}
+
+fn guest_native_render_v1(
+    header: &crate::aud::native_engine::NativeBlockHeaderV1,
+    commands: &[crate::aud::native_engine::NativeRenderCommandV1],
+) -> isize {
+    let header_bytes = unsafe {
+        core::slice::from_raw_parts(
+            core::ptr::from_ref(header).cast::<u8>(),
+            core::mem::size_of_val(header),
+        )
+    };
+    let command_bytes = unsafe {
+        core::slice::from_raw_parts(
+            commands.as_ptr().cast::<u8>(),
+            core::mem::size_of_val(commands),
+        )
+    };
+    let payload_len = header_bytes.len().saturating_add(command_bytes.len());
+    if payload_len > trueos_vm::vmcall::PAYLOAD_CAP {
+        return -(EINVAL as isize);
+    }
+    let mut payload = Vec::with_capacity(payload_len);
+    payload.extend_from_slice(header_bytes);
+    payload.extend_from_slice(command_bytes);
+    let (status, rc) = trueos_vm::vmcall::call_with_payload(
+        trueos_vm::vmcall::OP_BP_AUDIO_NATIVE_RENDER_V1,
+        commands.len() as u64,
+        0,
+        &payload,
+        &mut [],
+    );
+    if status != trueos_vm::vmcall::STATUS_OK {
+        return -(EIO as isize);
+    }
+    (rc as i64) as isize
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_audio_native_render_v1(
     handle: u32,
@@ -699,19 +751,15 @@ pub unsafe extern "C" fn trueos_cabi_audio_native_render_v1(
     } else {
         unsafe { core::slice::from_raw_parts(commands, count) }
     };
-    let pcm = match crate::aud::native_engine::render_block_v1(header, commands) {
-        Ok(pcm) => pcm,
-        Err(error) => return -(native_error_code(error) as isize),
+    let frames = if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        guest_native_render_v1(header, commands)
+    } else {
+        render_native_host_v1(header, commands)
     };
-    match crate::aud::pcm_lane::submit_i16_stereo_48k("blueprint-audio-native-v1", pcm) {
-        Ok(frames) => {
-            AUDIO_CABI_STATE.lock().running = true;
-            frames as isize
-        }
-        Err(crate::aud::pcm_lane::PcmLaneError::QueueFull) => -(EBUSY as isize),
-        Err(crate::aud::pcm_lane::PcmLaneError::BadShape) => -(EINVAL as isize),
-        Err(crate::aud::pcm_lane::PcmLaneError::EmptyBuffer) => -(EIO as isize),
+    if frames >= 0 {
+        AUDIO_CABI_STATE.lock().running = true;
     }
+    frames
 }
 
 #[unsafe(no_mangle)]

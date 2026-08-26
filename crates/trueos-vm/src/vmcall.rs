@@ -296,6 +296,9 @@ pub const OP_BP_AUDIO_STOP: u32 = 0x9B;
 pub const OP_BP_AUDIO_PENDING_FRAMES: u32 = 0x9C;
 pub const OP_BP_AUDIO_SET_VOLUME_PERCENT: u32 = 0x9D;
 pub const OP_BP_AUDIO_VOLUME_PERCENT: u32 = 0x9E;
+/// Fixed-width `NativeBlockHeaderV1 || NativeRenderCommandV1[]` payload.
+/// `arg0` is the command count; the host returns rendered frames or a negative errno.
+pub const OP_BP_AUDIO_NATIVE_RENDER_V1: u32 = 0x152;
 pub const OP_BP_SOCKET_TCP_OPEN: u32 = 0x35;
 pub const OP_BP_SOCKET_TCP_CLOSE: u32 = 0x36;
 pub const OP_BP_SOCKET_TCP_SET_NONBLOCKING: u32 = 0x37;

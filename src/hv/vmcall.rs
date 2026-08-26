@@ -299,6 +299,7 @@ pub const OP_BP_AUDIO_STOP: u32 = 0x9B; // stop host overlay lane
 pub const OP_BP_AUDIO_PENDING_FRAMES: u32 = 0x9C; // response is host overlay pending frames
 pub const OP_BP_AUDIO_SET_VOLUME_PERCENT: u32 = 0x9D; // arg0 percent -> applied percent
 pub const OP_BP_AUDIO_VOLUME_PERCENT: u32 = 0x9E; // response is host overlay volume percent
+pub const OP_BP_AUDIO_NATIVE_RENDER_V1: u32 = 0x152; // payload native header+commands, arg0 count -> frames/rc
 pub const OP_BP_SOCKET_TCP_OPEN: u32 = 0x35; // arg0 domain/type, arg1 protocol -> socket/rc
 pub const OP_BP_SOCKET_TCP_CLOSE: u32 = 0x36; // arg0 socket -> rc
 pub const OP_BP_SOCKET_TCP_SET_NONBLOCKING: u32 = 0x37; // arg0 socket, arg1 bool -> rc
@@ -3754,6 +3755,76 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 );
                 crate::audio_probe!(
                     "blueprint-audio-vmcall: vm={} write-rc={} pending_after={}\n",
+                    vm_id,
+                    rc,
+                    crate::aud::pcm_lane::pending_frames()
+                );
+            }
+            write_response(vm_id, seq, STATUS_OK, rc as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_AUDIO_NATIVE_RENDER_V1 => {
+            use crate::aud::native_engine::{
+                MAX_COMMANDS, NativeBlockHeaderV1, NativeRenderCommandV1,
+            };
+
+            let count = arg0 as usize;
+            let header_size = core::mem::size_of::<NativeBlockHeaderV1>();
+            let command_size = core::mem::size_of::<NativeRenderCommandV1>();
+            let expected = count
+                .checked_mul(command_size)
+                .and_then(|bytes| header_size.checked_add(bytes));
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            if count > MAX_COMMANDS || expected != Some(n) {
+                write_response(vm_id, seq, STATUS_OK, (-22i64) as u64, 0);
+                return DispatchOutcome::Resume;
+            }
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let data = unsafe { &(&(*p).payload)[..n] };
+            let header =
+                unsafe { core::ptr::read_unaligned(data.as_ptr().cast::<NativeBlockHeaderV1>()) };
+            let mut commands = Vec::with_capacity(count);
+            for index in 0..count {
+                let offset = header_size + index * command_size;
+                commands.push(unsafe {
+                    core::ptr::read_unaligned(
+                        data.as_ptr().add(offset).cast::<NativeRenderCommandV1>(),
+                    )
+                });
+            }
+            let log_sample = sampled_log(&BLUEPRINT_AUDIO_WRITE_LOG_SEQ);
+            if log_sample {
+                crate::log_info!(
+                    target: "audio";
+                    "blueprint-audio-native-vmcall: vm={} frames={} commands={} revision={} absolute_frame={}\n",
+                    vm_id,
+                    header.block_frames,
+                    count,
+                    header.revision,
+                    header.absolute_frame
+                );
+            }
+            let rc = match crate::aud::native_engine::render_block_v1(&header, &commands) {
+                Ok(pcm) => match crate::aud::pcm_lane::submit_i16_stereo_48k(
+                    "blueprint-audio-native-vmcall-v1",
+                    pcm,
+                ) {
+                    Ok(frames) => frames as i64,
+                    Err(crate::aud::pcm_lane::PcmLaneError::QueueFull) => -16,
+                    Err(crate::aud::pcm_lane::PcmLaneError::BadShape) => -22,
+                    Err(crate::aud::pcm_lane::PcmLaneError::EmptyBuffer) => -5,
+                },
+                Err(crate::aud::native_engine::Error::Invalid) => -22,
+                Err(crate::aud::native_engine::Error::MissingSample) => -19,
+                Err(crate::aud::native_engine::Error::NoSpace) => -28,
+            };
+            if log_sample {
+                crate::log_info!(
+                    target: "audio";
+                    "blueprint-audio-native-vmcall: vm={} rc={} pending_frames={}\n",
                     vm_id,
                     rc,
                     crate::aud::pcm_lane::pending_frames()
