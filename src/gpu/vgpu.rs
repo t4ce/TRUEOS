@@ -1986,7 +1986,12 @@ pub(crate) fn create_retained_mesh(
     device_handle: DeviceHandle,
     descriptor: v::vgpu::RetainedMeshDescriptor,
 ) -> Result<RetainedMeshHandle, VgpuError> {
-    if descriptor.reserved != [0; 2]
+    if descriptor.reserved != 0
+        || !matches!(
+            descriptor.vertex_layout,
+            v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL
+                | v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV
+        )
         || descriptor.vertex_count == 0
         || descriptor.index_count < 3
         || !descriptor.index_count.is_multiple_of(3)
@@ -1995,8 +2000,14 @@ pub(crate) fn create_retained_mesh(
     }
     let vertex_buffer = BufferHandle::from_raw(descriptor.vertex_buffer);
     let index_buffer = BufferHandle::from_raw(descriptor.index_buffer);
+    let vertex_stride = if descriptor.vertex_layout == v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV
+    {
+        32
+    } else {
+        24
+    };
     let vertex_bytes = (descriptor.vertex_count as usize)
-        .checked_mul(24)
+        .checked_mul(vertex_stride)
         .ok_or(VgpuError::Unsupported)?;
     let index_bytes = (descriptor.index_count as usize)
         .checked_mul(4)
@@ -2113,11 +2124,12 @@ pub(crate) fn create_retained_mesh(
         rollback_new_picasso_carrier(principal, device_handle, epoch, carrier, physical);
         return Err(VgpuError::DeviceLost);
     }
-    let resident = match crate::intel::render::create_resident_picasso_retained_posnormal_mesh(
+    let resident = match crate::intel::render::create_resident_picasso_retained_mesh(
         carrier,
         &vertices,
         &indices,
         v::vgpu::MAX_RETAINED_TRANSFORM_SEEDS,
+        descriptor.vertex_layout == v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV,
     ) {
         Ok(resident) => resident,
         Err(_) => {
@@ -2340,11 +2352,13 @@ pub(crate) fn create_retained_texture(
         let mut broker = BROKER.lock();
         let device = lookup_device_mut(&mut broker, device_handle, principal)?;
         ensure_live(device)?;
-        if !device.capabilities.contains(Capabilities::RENDER)
-            || device.picasso_setup_in_flight
-            || device.picasso_carrier_quarantined
-            || device_has_operation_leases(device)
-        {
+        if !device.capabilities.contains(Capabilities::RENDER) {
+            return Err(VgpuError::PermissionDenied);
+        }
+        if device.picasso_carrier_quarantined {
+            return Err(VgpuError::DeviceLost);
+        }
+        if device.picasso_setup_in_flight || device_has_operation_leases(device) {
             return Err(VgpuError::Busy);
         }
         if device
@@ -2370,7 +2384,17 @@ pub(crate) fn create_retained_texture(
         bytes,
     ) {
         Ok(resident) => resident,
-        Err(_) => {
+        Err(reason) => {
+            crate::log_important!(target: "render";
+                "vmedia-retained: proof=render1-publication-failed accepted=0 device=0x{:X} carrier={} width={} height={} stride={} bytes={} reason={}\n",
+                device_handle.raw(),
+                carrier.carrier().label(),
+                width,
+                height,
+                pitch,
+                bytes.len(),
+                reason,
+            );
             clear_picasso_setup_lease(principal, device_handle, epoch);
             return Err(VgpuError::OutOfMemory);
         }
@@ -2422,9 +2446,9 @@ pub(crate) fn destroy_retained_texture(
     let mut broker = BROKER.lock();
     let device = lookup_device_mut(&mut broker, device_handle, principal)?;
     ensure_live(device)?;
-    if device_has_operation_leases(device) {
-        return Err(VgpuError::Busy);
-    }
+    // Unrelated queue/surface work does not own this mapping. Exact draw use
+    // is fenced below by the record lease and resident Arc count, which also
+    // lets cancellation reclaim a newly published but never submitted image.
     let (slot, generation) = decode_handle(texture_handle.raw())?;
     let entry = device
         .retained_textures
@@ -4355,6 +4379,7 @@ pub(crate) fn submit_ui4_retained_frame(
         height,
         pitch,
         resident,
+        retained_texture,
         carrier,
         cached_line_meshes,
         pending_static_parts,
@@ -4418,6 +4443,40 @@ pub(crate) fn submit_ui4_retained_frame(
             }
             record.in_flight = 1;
             (Arc::clone(&record.resident), record.carrier)
+        };
+        let retained_texture = if resident.sampled_material() {
+            if submit.base_color_texture == 0 {
+                lookup_retained_mesh_mut(device, mesh_handle)?.in_flight = 0;
+                lookup_surface_mut(device, surface_handle)?.in_flight = 1;
+                lookup_queue_mut(device, queue_handle)?.in_flight = 0;
+                return Err(VgpuError::Unsupported);
+            }
+            let texture_handle = RetainedTextureHandle::from_raw(submit.base_color_texture);
+            let texture = match lookup_retained_texture(device, texture_handle) {
+                Ok(texture) if texture.epoch == surface_epoch && texture.carrier == carrier => {
+                    Arc::clone(&texture.resident)
+                }
+                Ok(_) => {
+                    lookup_retained_mesh_mut(device, mesh_handle)?.in_flight = 0;
+                    lookup_surface_mut(device, surface_handle)?.in_flight = 1;
+                    lookup_queue_mut(device, queue_handle)?.in_flight = 0;
+                    return Err(VgpuError::DeviceLost);
+                }
+                Err(error) => {
+                    lookup_retained_mesh_mut(device, mesh_handle)?.in_flight = 0;
+                    lookup_surface_mut(device, surface_handle)?.in_flight = 1;
+                    lookup_queue_mut(device, queue_handle)?.in_flight = 0;
+                    return Err(error);
+                }
+            };
+            Some(texture)
+        } else if submit.base_color_texture != 0 {
+            lookup_retained_mesh_mut(device, mesh_handle)?.in_flight = 0;
+            lookup_surface_mut(device, surface_handle)?.in_flight = 1;
+            lookup_queue_mut(device, queue_handle)?.in_flight = 0;
+            return Err(VgpuError::Unsupported);
+        } else {
+            None
         };
         let cached = match lookup_retained_mesh(device, mesh_handle)?
             .static_geometry
@@ -4527,6 +4586,7 @@ pub(crate) fn submit_ui4_retained_frame(
             surface_meta.5,
             surface_meta.6,
             resident,
+            retained_texture,
             carrier,
             cached_line_meshes,
             pending_static_parts,
@@ -4660,6 +4720,7 @@ pub(crate) fn submit_ui4_retained_frame(
     let rendered =
         crate::intel::render::render_resident_retained_with_static_draws_direct_to_surface(
             &resident,
+            retained_texture.as_deref(),
             &line_draws,
             Some(submit.clear_rgba8_srgb.to_le_bytes()),
             destination,

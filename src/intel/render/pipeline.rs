@@ -20,11 +20,14 @@ struct PixelShaderDispatchContract {
 /// inputs, so identity routing is source 0 in the low half and source 1 in
 /// the high half. Compatibility probes retain their historical all-zero
 /// payload.
-const fn sbe_swiz_first_payload_dw(artifact_native_fixed_function: bool) -> u32 {
-    if artifact_native_fixed_function {
-        0x0001_0000
+const fn sbe_swiz_payload(artifact_native_fixed_function: bool, native_sampled: bool) -> [u32; 2] {
+    if artifact_native_fixed_function && native_sampled {
+        // Attribute 0/1 in DW1 and attribute 2 in DW2.
+        [0x0001_0000, 0x0000_0002]
+    } else if artifact_native_fixed_function {
+        [0x0001_0000, 0]
     } else {
-        0
+        [0, 0]
     }
 }
 
@@ -44,12 +47,13 @@ const fn wm_barycentric_mode(num_varying_inputs: u8, force_barycentric_planes: b
 
 #[cfg(test)]
 mod churn_sbe_swiz_tests {
-    use super::{sbe_swiz_first_payload_dw, wm_barycentric_mode};
+    use super::{sbe_swiz_payload, wm_barycentric_mode};
 
     #[test]
     fn native_churn_routes_normal_and_material_identity() {
-        assert_eq!(sbe_swiz_first_payload_dw(true), 0x0001_0000);
-        assert_eq!(sbe_swiz_first_payload_dw(false), 0);
+        assert_eq!(sbe_swiz_payload(true, false), [0x0001_0000, 0]);
+        assert_eq!(sbe_swiz_payload(true, true), [0x0001_0000, 2]);
+        assert_eq!(sbe_swiz_payload(false, false), [0, 0]);
     }
 
     #[test]
@@ -411,6 +415,7 @@ fn write_triangle_probe_state_with_flush(
     {
         return Err("probe-viewport-translation");
     }
+    let native_sampled = draw.native.is_some() && draw.sampled_texture.is_some();
     let binding_table_entries = if draw.native.is_some() {
         4usize
     } else if draw.sampled_texture.is_some() {
@@ -418,13 +423,30 @@ fn write_triangle_probe_state_with_flush(
     } else {
         1usize
     };
-    let surface_state_count = binding_table_entries;
+    let ps_binding_table_entries = if native_sampled { 3usize } else { 0usize };
+    let surface_state_count = if native_sampled {
+        5usize
+    } else {
+        binding_table_entries
+    };
     let mut cursor = shader_layout.state_region_offset_bytes as usize;
     let binding_table_offset = cursor;
-    cursor = crate::intel::align_up(
+    let ps_binding_table_offset = if native_sampled {
         binding_table_offset
+            .checked_add(binding_table_entries * core::mem::size_of::<u32>())
+            .ok_or("probe-state-overflow")?
+    } else {
+        binding_table_offset
+    };
+    cursor = crate::intel::align_up(
+        ps_binding_table_offset
             .checked_add(
-                binding_table_entries
+                ps_binding_table_entries
+                    .max(if native_sampled {
+                        0
+                    } else {
+                        binding_table_entries
+                    })
                     .checked_mul(core::mem::size_of::<u32>())
                     .ok_or("probe-state-overflow")?,
             )
@@ -495,6 +517,20 @@ fn write_triangle_probe_state_with_flush(
             .ok_or("probe-state-overflow")?;
         dwords[binding_table_offset / 4 + entry] =
             u32::try_from(entry_offset).map_err(|_| "probe-state-overflow")?;
+    }
+    if native_sampled {
+        // VS consumes BTI0..3 as RT placeholder + camera/instances/compacted.
+        // The separately compiled PS consumes RT at BTI0 and the sampled
+        // image at BTI2; stage-specific binding-table pointers make those
+        // layouts coexist without aliasing the VS instance surface.
+        for (entry, surface_index) in [0usize, 0, 4].into_iter().enumerate() {
+            let entry_offset = surface_state_offset
+                .checked_add(surface_index * 64)
+                .and_then(|offset| offset.checked_sub(binding_table_entry_base_offset))
+                .ok_or("probe-state-overflow")?;
+            dwords[ps_binding_table_offset / 4 + entry] =
+                u32::try_from(entry_offset).map_err(|_| "probe-state-overflow")?;
+        }
     }
 
     let surface = &mut dwords[surface_state_offset / 4..surface_state_offset / 4 + 16];
@@ -589,6 +625,10 @@ fn write_triangle_probe_state_with_flush(
                 raw1[0], raw1[1], raw1[2], raw1[3], raw1[7], raw1[8], raw1[9], raw1[11],
                 raw2[0], raw2[1], raw2[2], raw2[3], raw2[7], raw2[8], raw2[9], raw2[11],
             );
+        }
+        if let Some(texture) = draw.sampled_texture {
+            let start = surface_state_offset / 4 + 4 * 16;
+            write_triangle_sampled_rgba8_surface_state(&mut dwords[start..start + 16], texture)?;
         }
     } else if let Some(texture) = draw.sampled_texture {
         let start = surface_state_offset / 4 + 2 * 16;
@@ -696,6 +736,7 @@ fn write_triangle_probe_state_with_flush(
 
     Ok(TriangleProbeStateLayout {
         binding_table_offset_bytes: binding_table_offset as u32,
+        ps_binding_table_offset_bytes: ps_binding_table_offset as u32,
         surface_state_offset_bytes: surface_state_offset as u32,
         sampler_state_offset_bytes: sampler_state_offset as u32,
         blend_state_offset_bytes: blend_state_offset as u32,
@@ -1010,9 +1051,27 @@ fn validate_triangle_native_draw_contract(
             enabled: false,
             step_rate: 0,
         },
+        TriangleVfInstancingState {
+            element_index: 3,
+            enabled: false,
+            step_rate: 0,
+        },
     ];
-    if draw.vertex_format != TriangleVertexFormat::PosNormal
-        || draw.vertex_stride != trueos_helio_artifact::churn_forward::VERTEX_STRIDE
+    let pos_normal = draw.vertex_format == TriangleVertexFormat::PosNormal
+        && draw.vertex_stride == trueos_helio_artifact::churn_forward::VERTEX_STRIDE
+        && draw.sampled_texture.is_none()
+        && native.vertex_element_count == 3
+        && native.vf_sgvs_dw1 == 0xE002_4002
+        && native.vf_sgvs_2_dw1 == 0xB002_0002
+        && native.vf_component_packing == [0x0000_0A77, 0, 0, 0];
+    let pos_normal_uv = draw.vertex_format == TriangleVertexFormat::PosNormalUv
+        && draw.vertex_stride == 32
+        && draw.sampled_texture.is_some()
+        && native.vertex_element_count == 4
+        && native.vf_sgvs_dw1 == 0xE003_4002
+        && native.vf_sgvs_2_dw1 == 0xB003_0002
+        && native.vf_component_packing == [0x0000_A377, 0, 0, 0];
+    if !(pos_normal || pos_normal_uv)
         || draw.index_buffer.is_none()
         || draw.indirect_args_gpu_addr.is_none()
         || camera.gpu_addr == 0
@@ -1024,10 +1083,7 @@ fn validate_triangle_native_draw_contract(
         || compacted.byte_len == 0
         || compacted.byte_len % core::mem::size_of::<u32>() as u32 != 0
         || instance_count != compacted_count
-        || native.vf_sgvs_dw1 != 0xE002_4002
-        || native.vf_sgvs_2_dw1 != 0xB002_0002
         || native.vf_sgvs_2_dw2 != 3
-        || native.vf_component_packing != [0x0000_0A77, 0, 0, 0]
         || native.vf_instancing != expected_instancing
     {
         return Err("probe-native-vf-contract");
@@ -1039,8 +1095,8 @@ fn validate_triangle_native_draw_contract(
 mod retained_native_matrix_draw_contract_tests {
     use super::{
         ChurnHardwareAdmission, TriangleDrawPrep, TriangleIndexBufferPrep,
-        TriangleNativeDrawContract, TriangleStorageBufferBinding, TriangleVertexFormat,
-        TriangleVfInstancingState, validate_triangle_native_draw_contract,
+        TriangleNativeDrawContract, TriangleSampledTextureBinding, TriangleStorageBufferBinding,
+        TriangleVertexFormat, TriangleVfInstancingState, validate_triangle_native_draw_contract,
     };
 
     const CAMERA_GPU: u64 = 0x2000_0000;
@@ -1069,6 +1125,7 @@ mod retained_native_matrix_draw_contract_tests {
             vf_sgvs_dw1: 0xE002_4002,
             vf_sgvs_2_dw1: 0xB002_0002,
             vf_sgvs_2_dw2: 3,
+            vertex_element_count: 3,
             vf_component_packing: [0x0000_0A77, 0, 0, 0],
             vf_instancing: core::array::from_fn(|element_index| TriangleVfInstancingState {
                 element_index: element_index as u8,
@@ -1130,6 +1187,34 @@ mod retained_native_matrix_draw_contract_tests {
         native.vs_storage_bindings[2].byte_len -= core::mem::size_of::<u32>() as u32;
         assert_eq!(
             validate_triangle_native_draw_contract(native_draw(native), native),
+            Err("probe-native-vf-contract")
+        );
+    }
+
+    #[test]
+    fn textured_matrix_handoff_requires_uv_vertices_and_a_sampled_surface() {
+        let mut native = native_contract();
+        native.vf_sgvs_dw1 = 0xE003_4002;
+        native.vf_sgvs_2_dw1 = 0xB003_0002;
+        native.vertex_element_count = 4;
+        native.vf_component_packing = [0x0000_A377, 0, 0, 0];
+
+        let mut draw = native_draw(native);
+        draw.vertex_stride = 32;
+        draw.vertex_buffer_bytes = draw.vertex_count * 32;
+        draw.vertex_format = TriangleVertexFormat::PosNormalUv;
+        draw.sampled_texture = Some(TriangleSampledTextureBinding {
+            gpu_addr: 0x2800_0000,
+            width: 1024,
+            height: 1024,
+            pitch: 4096,
+            sampler_flags: 0,
+        });
+        assert_eq!(validate_triangle_native_draw_contract(draw, native), Ok(()));
+
+        draw.sampled_texture = None;
+        assert_eq!(
+            validate_triangle_native_draw_contract(draw, native),
             Err("probe-native-vf-contract")
         );
     }
@@ -1512,6 +1597,10 @@ fn encode_triangle_probe_batch(
         .binding_table_offset_bytes
         .checked_sub(surface_state_base_offset_bytes)
         .ok_or("probe-binding-table-base")?;
+    let ps_binding_table_pointer_offset = probe_state
+        .ps_binding_table_offset_bytes
+        .checked_sub(surface_state_base_offset_bytes)
+        .ok_or("probe-binding-table-base")?;
     let surface_state_pointer_offset = probe_state
         .surface_state_offset_bytes
         .checked_sub(surface_state_base_offset_bytes)
@@ -1598,7 +1687,7 @@ fn encode_triangle_probe_batch(
     // id (source attribute 1).  Xe-LP's enabled SBE swizzle packet must spell
     // that identity routing out; an all-zero payload aliases both inputs to
     // attribute 0.
-    let sbe_swiz_first_dw = sbe_swiz_first_payload_dw(artifact_native_fixed_function);
+    let sbe_swiz = sbe_swiz_payload(artifact_native_fixed_function, draw.sampled_texture.is_some());
     let sbe_dw1 = (sbe_vertex_read_offset << 5)
         | (u32::from(sbe_attr_swizzle_enable) << 21)
         | ((sbe_num_sf_attrs as u32) << 22)
@@ -2247,7 +2336,7 @@ fn encode_triangle_probe_batch(
     push(batch_dwords, &mut cursor, 0)?;
     log_batch_offset(cursor, "3DSTATE_BINDING_TABLE_POINTERS_PS");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_BINDING_TABLE_POINTERS_PS)?;
-    push(batch_dwords, &mut cursor, binding_table_pointer_offset)?;
+    push(batch_dwords, &mut cursor, ps_binding_table_pointer_offset)?;
 
     if device_is_gfx12(warm.device_id) {
         // ADL has 32 KiB of constant URB space.  Mesa partitions it between
@@ -2314,8 +2403,8 @@ fn encode_triangle_probe_batch(
     );
 
     log_batch_offset(cursor, "3DSTATE_VERTEX_ELEMENTS");
-    let vf_vertex_element_count = if artifact_native_fixed_function {
-        3
+    let vf_vertex_element_count = if let Some(native) = draw.native {
+        native.vertex_element_count
     } else if mesa_simple_rect_stack && vf_synthesized_vue {
         2
     } else {
@@ -2525,6 +2614,52 @@ fn encode_triangle_probe_batch(
                 // ANV appends one non-memory synthetic element. SGVS writes
                 // StartingInstance into Y and InstanceID into W; all fetched
                 // components are zero so VB31 needs no backing allocation.
+                push_vertex_element_state(
+                    batch_dwords,
+                    &mut cursor,
+                    31,
+                    0,
+                    SURFACE_FORMAT_R32G32_UINT,
+                    VFCOMP_STORE_0,
+                    VFCOMP_STORE_0,
+                    VFCOMP_STORE_0,
+                    VFCOMP_STORE_0,
+                )?;
+            }
+            TriangleVertexFormat::PosNormalUv => {
+                push_vertex_element_state(
+                    batch_dwords,
+                    &mut cursor,
+                    0,
+                    0,
+                    SURFACE_FORMAT_R32G32B32_FLOAT,
+                    VFCOMP_STORE_SRC,
+                    VFCOMP_STORE_SRC,
+                    VFCOMP_STORE_SRC,
+                    VFCOMP_STORE_1_FP,
+                )?;
+                push_vertex_element_state(
+                    batch_dwords,
+                    &mut cursor,
+                    0,
+                    12,
+                    SURFACE_FORMAT_R32G32B32_FLOAT,
+                    VFCOMP_STORE_SRC,
+                    VFCOMP_STORE_SRC,
+                    VFCOMP_STORE_SRC,
+                    VFCOMP_STORE_1_FP,
+                )?;
+                push_vertex_element_state(
+                    batch_dwords,
+                    &mut cursor,
+                    0,
+                    24,
+                    SURFACE_FORMAT_R32G32_FLOAT,
+                    VFCOMP_STORE_SRC,
+                    VFCOMP_STORE_SRC,
+                    VFCOMP_STORE_0,
+                    VFCOMP_STORE_1_FP,
+                )?;
                 push_vertex_element_state(
                     batch_dwords,
                     &mut cursor,
@@ -3050,8 +3185,9 @@ fn encode_triangle_probe_batch(
 
         log_batch_offset(cursor, "3DSTATE_SBE_SWIZ pre-clip");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_SBE_SWIZ)?;
-        push(batch_dwords, &mut cursor, sbe_swiz_first_dw)?;
-        for _ in 1..10 {
+        push(batch_dwords, &mut cursor, sbe_swiz[0])?;
+        push(batch_dwords, &mut cursor, sbe_swiz[1])?;
+        for _ in 2..10 {
             push(batch_dwords, &mut cursor, 0)?;
         }
         intel_render_focus_log!(
@@ -3093,8 +3229,9 @@ fn encode_triangle_probe_batch(
 
         log_batch_offset(cursor, "3DSTATE_SBE_SWIZ pre-sf");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_SBE_SWIZ)?;
-        push(batch_dwords, &mut cursor, sbe_swiz_first_dw)?;
-        for _ in 1..10 {
+        push(batch_dwords, &mut cursor, sbe_swiz[0])?;
+        push(batch_dwords, &mut cursor, sbe_swiz[1])?;
+        for _ in 2..10 {
             push(batch_dwords, &mut cursor, 0)?;
         }
         intel_render_focus_log!(
@@ -3142,8 +3279,9 @@ fn encode_triangle_probe_batch(
         // Gen12/Xe-LP keeps attribute swizzle state in a separate packet.
         log_batch_offset(cursor, "3DSTATE_SBE_SWIZ");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_SBE_SWIZ)?;
-        push(batch_dwords, &mut cursor, sbe_swiz_first_dw)?;
-        for _ in 1..10 {
+        push(batch_dwords, &mut cursor, sbe_swiz[0])?;
+        push(batch_dwords, &mut cursor, sbe_swiz[1])?;
+        for _ in 2..10 {
             push(batch_dwords, &mut cursor, 0)?;
         }
     }
@@ -3351,8 +3489,9 @@ fn encode_triangle_probe_batch(
 
         log_batch_offset(cursor, "3DSTATE_SBE_SWIZ late-reemit");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_SBE_SWIZ)?;
-        push(batch_dwords, &mut cursor, sbe_swiz_first_dw)?;
-        for _ in 1..10 {
+        push(batch_dwords, &mut cursor, sbe_swiz[0])?;
+        push(batch_dwords, &mut cursor, sbe_swiz[1])?;
+        for _ in 2..10 {
             push(batch_dwords, &mut cursor, 0)?;
         }
 
@@ -3493,7 +3632,7 @@ fn encode_triangle_probe_batch(
         push(batch_dwords, &mut cursor, CMD_3DSTATE_BINDING_TABLE_POINTERS_VS)?;
         push(batch_dwords, &mut cursor, 0)?;
         push(batch_dwords, &mut cursor, CMD_3DSTATE_BINDING_TABLE_POINTERS_PS)?;
-        push(batch_dwords, &mut cursor, binding_table_pointer_offset)?;
+        push(batch_dwords, &mut cursor, ps_binding_table_pointer_offset)?;
     }
 
     if surface_base_relative_binding_table && artifact_native_fixed_function {
@@ -3508,7 +3647,7 @@ fn encode_triangle_probe_batch(
         push(batch_dwords, &mut cursor, binding_table_pointer_offset)?;
         log_batch_offset(cursor, "3DSTATE_BINDING_TABLE_POINTERS_PS native-pre-draw");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_BINDING_TABLE_POINTERS_PS)?;
-        push(batch_dwords, &mut cursor, binding_table_pointer_offset)?;
+        push(batch_dwords, &mut cursor, ps_binding_table_pointer_offset)?;
     }
 
     if let Some(args_gpu_addr) = draw.indirect_args_gpu_addr {

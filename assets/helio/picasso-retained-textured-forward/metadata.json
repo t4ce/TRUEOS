@@ -1,0 +1,93 @@
+{
+  "attributes": [
+    "float32x3@0",
+    "float32x3@12",
+    "float32x2@24"
+  ],
+  "bindings": [
+    "storage-camera@vs-bti1",
+    "storage-instances@vs-bti2",
+    "storage-compacted-indices@vs-bti3",
+    "sampled-rgba8-2d@ps-bti2",
+    "sampler@ps-sampler0"
+  ],
+  "contract": "retained-transform-filtered-base-color",
+  "device": {
+    "device_id": 42880,
+    "name": "Intel(R) Graphics (RPL-S)",
+    "vendor_id": 32902
+  },
+  "executables": [
+    {
+      "description": "SIMD8 vertex shader",
+      "name": "vertex",
+      "simd_width": 8,
+      "stage": "vertex",
+      "statistics": {
+        "Cycle Count": 510,
+        "Fill Count": 0,
+        "GRF registers": 0,
+        "Instruction Count": 74,
+        "Loop Count": 0,
+        "Max dispatch width": 8,
+        "Max live registers": 24,
+        "Non SSA regs after NIR": 7,
+        "SEND Count": 11,
+        "Scratch Memory Size": 0,
+        "Source hash": 525423241,
+        "Spill Count": 0,
+        "Workgroup Memory Size": 0
+      }
+    },
+    {
+      "description": "SIMD8 fragment shader",
+      "name": "SIMD8 fragment",
+      "simd_width": 8,
+      "stage": "fragment",
+      "statistics": {
+        "Cycle Count": 812,
+        "Fill Count": 0,
+        "GRF registers": 0,
+        "Instruction Count": 33,
+        "Loop Count": 0,
+        "Max dispatch width": 16,
+        "Max live registers": 10,
+        "Non SSA regs after NIR": 5,
+        "SEND Count": 2,
+        "Scratch Memory Size": 0,
+        "Source hash": 4140753004,
+        "Spill Count": 0,
+        "Workgroup Memory Size": 0
+      }
+    },
+    {
+      "description": "SIMD16 fragment shader",
+      "name": "SIMD16 fragment",
+      "simd_width": 16,
+      "stage": "fragment",
+      "statistics": {
+        "Cycle Count": 870,
+        "Fill Count": 0,
+        "GRF registers": 0,
+        "Instruction Count": 37,
+        "Loop Count": 0,
+        "Max dispatch width": 16,
+        "Max live registers": 19,
+        "Non SSA regs after NIR": 5,
+        "SEND Count": 2,
+        "Scratch Memory Size": 0,
+        "Source hash": 4140753004,
+        "Spill Count": 0,
+        "Workgroup Memory Size": 0
+      }
+    }
+  ],
+  "frontend": "wgsl-via-checked-in-naga-wrapper",
+  "native_bytes": {
+    "ps16": 488,
+    "ps8": 408,
+    "vs": 896
+  },
+  "schema": 1,
+  "vertex_stride": 32
+}

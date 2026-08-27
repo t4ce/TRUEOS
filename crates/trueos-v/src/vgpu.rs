@@ -272,6 +272,8 @@ pub struct IndexedDrawBatchV2 {
 
 pub const MAX_RETAINED_TRANSFORM_SEEDS: usize = 4;
 pub const MAX_RETAINED_STATIC_DRAWS: usize = 3;
+pub const RETAINED_VERTEX_LAYOUT_POS_NORMAL: u32 = 0;
+pub const RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV: u32 = 1;
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 #[repr(transparent)]
@@ -286,7 +288,8 @@ pub struct RetainedMeshDescriptor {
     pub index_offset: u64,
     pub vertex_count: u32,
     pub index_count: u32,
-    pub reserved: [u32; 2],
+    pub vertex_layout: u32,
+    pub reserved: u32,
 }
 
 /// Exact compact input consumed by the authenticated retained-transform
@@ -308,6 +311,9 @@ pub struct RetainedTransformSeed {
 pub struct RetainedFrameSubmit {
     pub surface: u64,
     pub mesh: u64,
+    /// Owner-scoped generation-checked vmedia TextureId. Required exactly
+    /// when the retained mesh declares POS_NORMAL_UV.
+    pub base_color_texture: u64,
     pub static_vertex_buffer: u64,
     pub static_index_buffer: u64,
     pub static_vertex_offset: u64,
@@ -1075,7 +1081,7 @@ mod tests {
         assert_eq!(core::mem::size_of::<IndexedDrawBatchV2>(), 440);
         assert_eq!(core::mem::size_of::<RetainedMeshDescriptor>(), 48);
         assert_eq!(core::mem::size_of::<RetainedTransformSeed>(), 64);
-        assert_eq!(core::mem::size_of::<RetainedFrameSubmit>(), 392);
+        assert_eq!(core::mem::size_of::<RetainedFrameSubmit>(), 400);
         assert_eq!(core::mem::align_of::<RetainedFrameSubmit>(), 8);
         assert_eq!(core::mem::size_of::<TimelinePoint>(), 16);
         assert_eq!(core::mem::size_of::<TimelineStatus>(), 32);

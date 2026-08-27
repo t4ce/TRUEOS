@@ -1,0 +1,11 @@
+signed-magnitude exhaustive pairs: 65025
+random dot4 lane checks: 90112
+bit-identical random rows: 128
+quantizer values checked: 131072
+model Q8 native bytes: 376569856
+model Q8 blocks / VPDPBUSD count: 11075584
+contract validation: PASS
+bundle static consistency: PASS
+transformer fixture + dry-run/apply + drift guard: PASS
+AVX-VNNI code-generation probe: PASS
+AVX-VNNI runtime arithmetic probe: SKIP (unsupported host)

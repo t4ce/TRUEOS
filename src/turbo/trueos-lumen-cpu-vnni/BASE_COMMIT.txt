@@ -1,0 +1,7 @@
+Repository: https://github.com/t4ce/TRUEOS
+Primary tested source anchor: 02e0e7a8add0fd793d8fd8d5084c0c7e7dc9a3b8
+Lumen-equivalent recognized anchors:
+  b613742bc74946ae04941f039f613affc5221c38
+  a926b7135be4b8b6381f4e0cd6b5d1288d8db3b8
+Branch at preparation time: true
+Prepared: 2026-08-27

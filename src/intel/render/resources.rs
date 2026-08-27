@@ -1187,6 +1187,15 @@ const CHURN_FORWARD_VERTICES_PER_MESH: usize = 24;
 const CHURN_FORWARD_INDICES_PER_MESH: usize = 36;
 static CHURN_FORWARD_PIPELINE: spin::Mutex<Option<crate::intel::shader::TrianglePipeline>> =
     spin::Mutex::new(None);
+static PICASSO_RETAINED_TEXTURED_PIPELINE: spin::Mutex<
+    Option<crate::intel::shader::TrianglePipeline>,
+> = spin::Mutex::new(None);
+const PICASSO_RETAINED_TEXTURED_VS: &[u8] = include_bytes!(
+    "../../../assets/helio/picasso-retained-textured-forward/retained_textured_forward.vs.simd8.bin"
+);
+const PICASSO_RETAINED_TEXTURED_PS: &[u8] = include_bytes!(
+    "../../../assets/helio/picasso-retained-textured-forward/retained_textured_forward.ps.simd8.bin"
+);
 
 fn bootstrap_churn_meshes()
 -> [trueos_helio_runtime::churn::MeshDescriptor; CHURN_FORWARD_MESH_COUNT] {
@@ -1313,6 +1322,68 @@ fn churn_forward_pipeline(
                 flat_inputs: fragment.flat_inputs,
             },
             code: ps_code,
+        },
+    };
+    *cached = Some(pipeline);
+    Ok(pipeline)
+}
+
+fn picasso_retained_textured_pipeline()
+-> Result<crate::intel::shader::TrianglePipeline, &'static str> {
+    use crate::intel::shader::{
+        DispatchMode, ShaderKernelMetadata, TrianglePipeline, TrianglePixelShader,
+        TrianglePixelShaderMetadata, TriangleVertexShader, TriangleVertexShaderMetadata,
+    };
+
+    let mut cached = PICASSO_RETAINED_TEXTURED_PIPELINE.lock();
+    if let Some(pipeline) = *cached {
+        return Ok(pipeline);
+    }
+    if PICASSO_RETAINED_TEXTURED_VS.len() != 896 || PICASSO_RETAINED_TEXTURED_PS.len() != 408 {
+        return Err("picasso-retained-textured-stage-shape");
+    }
+    let pipeline = TrianglePipeline {
+        vs: TriangleVertexShader {
+            code: churn_forward_stage_words(PICASSO_RETAINED_TEXTURED_VS)?,
+            meta: TriangleVertexShaderMetadata {
+                kernel: ShaderKernelMetadata {
+                    code_offset_bytes: 0,
+                    code_size_bytes: 896,
+                    code_alignment_bytes: 64,
+                    ksp_offset_bytes: 0,
+                    dispatch_mode: DispatchMode::Simd8,
+                    grf_start_register: 2,
+                    grf_used: 128,
+                    push_constant_bytes: 0,
+                    binding_table_entry_count: 4,
+                    sampler_count: 0,
+                },
+                max_threads: 64,
+                urb_entry_output_length: 2,
+            },
+        },
+        ps: TrianglePixelShader {
+            code: churn_forward_stage_words(PICASSO_RETAINED_TEXTURED_PS)?,
+            meta: TrianglePixelShaderMetadata {
+                kernel: ShaderKernelMetadata {
+                    code_offset_bytes: 896,
+                    code_size_bytes: 408,
+                    code_alignment_bytes: 64,
+                    ksp_offset_bytes: 0,
+                    dispatch_mode: DispatchMode::Simd8,
+                    grf_start_register: 4,
+                    grf_used: 128,
+                    push_constant_bytes: 0,
+                    binding_table_entry_count: 3,
+                    sampler_count: 1,
+                },
+                num_varying_inputs: 3,
+                uses_vmask: true,
+                computed_stencil: false,
+                persample_dispatch: false,
+                computed_depth_mode: 0,
+                flat_inputs: 2,
+            },
         },
     };
     *cached = Some(pipeline);
@@ -2037,11 +2108,22 @@ fn create_resident_churn_forward_with_admission(
         vf_sgvs_dw1: sgvs.vf_sgvs_dw1,
         vf_sgvs_2_dw1: sgvs.vf_sgvs_2_dw1,
         vf_sgvs_2_dw2: sgvs.vf_sgvs_2_dw2,
+        vertex_element_count: 3,
         vf_component_packing: [fetch.vf_component_packing_dw0, 0, 0, 0],
-        vf_instancing: core::array::from_fn(|index| TriangleVfInstancingState {
-            element_index: instancing[index].element_index as u8,
-            enabled: instancing[index].enabled,
-            step_rate: instancing[index].step_rate,
+        vf_instancing: core::array::from_fn(|index| {
+            if let Some(state) = instancing.get(index) {
+                TriangleVfInstancingState {
+                    element_index: state.element_index as u8,
+                    enabled: state.enabled,
+                    step_rate: state.step_rate,
+                }
+            } else {
+                TriangleVfInstancingState {
+                    element_index: index as u8,
+                    enabled: false,
+                    step_rate: 0,
+                }
+            }
         }),
     };
     let (transform, transform_unavailable_reason) = match create_resident_churn_transform(
@@ -2083,6 +2165,8 @@ fn create_resident_churn_forward_with_admission(
     Ok(ResidentChurnForward {
         draw_group_count: CHURN_FORWARD_DRAW_COUNT,
         vertex_gpu_addr: geometry.gpu_base(),
+        vertex_stride: trueos_helio_artifact::churn_forward::VERTEX_STRIDE,
+        vertex_format: TriangleVertexFormat::PosNormal,
         vertex_count: (CHURN_FORWARD_MESH_COUNT * CHURN_FORWARD_VERTICES_PER_MESH) as u32,
         vertex_bytes: vertex_byte_len,
         index_gpu_addr: geometry.gpu_base() + index_offset as u64,
@@ -2096,6 +2180,7 @@ fn create_resident_churn_forward_with_admission(
             AtomicU32::new(u32::from_le_bytes([255, 255, 255, 255]))
         }),
         pipeline,
+        sampled_material: false,
         native_vf,
         front_end_contract: TriangleFrontEndContract {
             label: "helio-churn-forward-v1",
@@ -2208,23 +2293,30 @@ pub(crate) fn update_resident_churn_forward_frame(
 ///
 /// The GPU transform artifact and native VS are shared with Helio, but this
 /// function deliberately replaces only Churn's bootstrap cube allocation.
-/// `vertices` is immutable Float3 position + Float3 normal (24 bytes each),
-/// `indices` is one ordinary triangle-list mesh, and all instance motion stays
-/// in the GPU-owned seed/instance/indirect buffers of the returned resident.
-pub(crate) fn create_resident_picasso_retained_posnormal_mesh(
+/// `vertices` is either immutable Float3 position + Float3 normal (24 bytes)
+/// or that pair plus Float2 base-color UV (32 bytes). `indices` is one ordinary
+/// triangle-list mesh, and all instance motion stays in GPU-owned
+/// seed/instance/indirect buffers. The sampled variant switches to the baked
+/// retained-material VS/PS and requires an opaque texture binding per frame.
+pub(crate) fn create_resident_picasso_retained_mesh(
     carrier: PicassoCarrierLease,
     vertices: &[u8],
     indices: &[u32],
     max_instances: usize,
+    sampled_material: bool,
 ) -> Result<ResidentChurnForward, &'static str> {
-    const POS_NORMAL_STRIDE: usize = trueos_helio_artifact::churn_forward::VERTEX_STRIDE as usize;
+    let vertex_stride = if sampled_material {
+        32usize
+    } else {
+        trueos_helio_artifact::churn_forward::VERTEX_STRIDE as usize
+    };
     if vertices.is_empty()
-        || !vertices.len().is_multiple_of(POS_NORMAL_STRIDE)
+        || !vertices.len().is_multiple_of(vertex_stride)
         || indices.len() < 3
         || !indices.len().is_multiple_of(3)
         || indices
             .iter()
-            .any(|index| *index as usize >= vertices.len() / POS_NORMAL_STRIDE)
+            .any(|index| *index as usize >= vertices.len() / vertex_stride)
     {
         return Err("picasso-retained-geometry-shape");
     }
@@ -2239,6 +2331,25 @@ pub(crate) fn create_resident_picasso_retained_posnormal_mesh(
         ChurnHardwareAdmission::ValidatedProduction,
         Some(carrier),
     )?;
+    if sampled_material {
+        resident.pipeline = picasso_retained_textured_pipeline()?;
+        resident.sampled_material = true;
+        resident.native_vf.vf_sgvs_dw1 = 0xE003_4002;
+        resident.native_vf.vf_sgvs_2_dw1 = 0xB003_0002;
+        resident.native_vf.vertex_element_count = 4;
+        resident.native_vf.vf_component_packing = [0x0000_A377, 0, 0, 0];
+        resident.front_end_contract = TriangleFrontEndContract {
+            label: "picasso-retained-textured-forward-v1",
+            vs_urb_output_length_override: Some(2),
+            sbe_read_offset: 1,
+            sbe_read_length: 2,
+            force_sbe_read_offset: true,
+            force_sbe_read_length: true,
+            force_vs_with_vf_synthesized_vue: false,
+        };
+        resident.vertex_stride = 32;
+        resident.vertex_format = TriangleVertexFormat::PosNormalUv;
+    }
     // Picasso's prepared geometry is already centered and normalized into
     // clip/NDC space. The shared native vertex shader still reads a camera
     // matrix, so publish an explicit identity camera instead of inheriting
@@ -2279,7 +2390,7 @@ pub(crate) fn create_resident_picasso_retained_posnormal_mesh(
     }
     geometry.flush();
 
-    let vertex_count = u32::try_from(vertices.len() / POS_NORMAL_STRIDE)
+    let vertex_count = u32::try_from(vertices.len() / vertex_stride)
         .map_err(|_| "picasso-retained-geometry-size")?;
     let index_count = u32::try_from(indices.len()).map_err(|_| "picasso-retained-geometry-size")?;
     let vertex_bytes =
@@ -2520,20 +2631,21 @@ pub(crate) fn update_resident_churn_forward_transform_frame(
 fn prepare_resident_churn_forward_draw(
     _warm: RenderWarmState,
     resident: &ResidentChurnForward,
+    sampled_texture: Option<&ResidentSampledTexture>,
     group: usize,
     dst_gpu_addr: u64,
     pitch: usize,
     width: usize,
     height: usize,
 ) -> Option<TriangleDrawPrep> {
-    if group >= CHURN_FORWARD_DRAW_COUNT {
+    if group >= CHURN_FORWARD_DRAW_COUNT || resident.sampled_material != sampled_texture.is_some() {
         return None;
     }
     Some(TriangleDrawPrep {
         vertex_count: resident.vertex_count,
-        vertex_stride: trueos_helio_artifact::churn_forward::VERTEX_STRIDE,
+        vertex_stride: resident.vertex_stride,
         vertex_buffer_bytes: resident.vertex_bytes,
-        vertex_format: TriangleVertexFormat::PosNormal,
+        vertex_format: resident.vertex_format,
         vertex_gpu_addr: resident.vertex_gpu_addr,
         index_buffer: Some(TriangleIndexBufferPrep {
             index_count: resident.index_count,
@@ -2545,7 +2657,13 @@ fn prepare_resident_churn_forward_draw(
                 + (group * trueos_helio_runtime::DrawIndexedIndirectArgs::BYTE_LEN) as u64,
         ),
         native: Some(resident.native_vf),
-        sampled_texture: None,
+        sampled_texture: sampled_texture.map(|texture| TriangleSampledTextureBinding {
+            gpu_addr: texture.storage.gpu_base(),
+            width: texture.width,
+            height: texture.height,
+            pitch: texture.pitch,
+            sampler_flags: texture.sampler_flags,
+        }),
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
         rt_surface_format: SURFACE_FORMAT_R8G8B8A8_UNORM,
@@ -2820,7 +2938,10 @@ pub(crate) fn allocate_picasso_render1_resident_buffer(
     let physical = crate::gpu::physical::physical_device().ok_or("picasso-physical-gpu")?;
     let gpu_base =
         reserve_picasso_render1_resource_va(carrier, storage_bytes).ok_or("picasso-resource-va")?;
-    let Some((storage_phys, storage_virt)) = crate::dma::alloc(storage_bytes, 4096) else {
+    // This allocation is consumed exclusively through the carrier's PPGTT.
+    // Do not constrain a large decoded texture to the fragmented below-4-GiB
+    // generic DMA pool; Gen12 PPGTT entries accept ordinary system RAM.
+    let Some((storage_phys, storage_virt)) = crate::dma::alloc_ppgtt(storage_bytes, 4096) else {
         return Err("picasso-resource-alloc");
     };
     unsafe {

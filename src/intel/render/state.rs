@@ -93,6 +93,9 @@ enum TriangleVertexFormat {
     /// Helio Churn's immutable `@location(0) position` plus
     /// `@location(1) normal` input, both Float32x3.
     PosNormal,
+    /// Picasso retained material geometry: Float32x3 position, Float32x3
+    /// normal, then Float32x2 base-color UV.
+    PosNormalUv,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -131,8 +134,9 @@ struct TriangleNativeDrawContract {
     vf_sgvs_dw1: u32,
     vf_sgvs_2_dw1: u32,
     vf_sgvs_2_dw2: u32,
+    vertex_element_count: usize,
     vf_component_packing: [u32; 4],
-    vf_instancing: [TriangleVfInstancingState; 3],
+    vf_instancing: [TriangleVfInstancingState; 4],
 }
 
 #[derive(Copy, Clone)]
@@ -442,9 +446,12 @@ pub(crate) struct ResidentChurnForward {
     transform: Option<ResidentChurnTransform>,
     transform_unavailable_reason: Option<&'static str>,
     pipeline: crate::intel::shader::TrianglePipeline,
+    sampled_material: bool,
     native_vf: TriangleNativeDrawContract,
     front_end_contract: TriangleFrontEndContract,
     vertex_gpu_addr: u64,
+    vertex_stride: u32,
+    vertex_format: TriangleVertexFormat,
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     vertex_count: u32,
     vertex_bytes: u32,
@@ -476,6 +483,10 @@ impl ResidentChurnForward {
 
     pub(crate) const fn max_instances(&self) -> usize {
         self.max_instances
+    }
+
+    pub(crate) const fn sampled_material(&self) -> bool {
+        self.sampled_material
     }
 
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
@@ -664,6 +675,7 @@ struct TriangleShaderLayout {
 #[derive(Copy, Clone)]
 struct TriangleProbeStateLayout {
     binding_table_offset_bytes: u32,
+    ps_binding_table_offset_bytes: u32,
     surface_state_offset_bytes: u32,
     sampler_state_offset_bytes: u32,
     blend_state_offset_bytes: u32,

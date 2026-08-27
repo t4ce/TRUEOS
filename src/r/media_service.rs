@@ -36,6 +36,7 @@ const MAX_ENCODED_BYTES: usize = 16 * 1024 * 1024;
 const MAX_RGBA_BYTES: usize = 128 * 1024 * 1024;
 const MAX_DIMENSION: u32 = 8_192;
 const IDLE_MS: u64 = 10;
+const RETAINED_PUBLISH_RETRY_MS: u64 = 1;
 const XELP_JPEG_TIMEOUT_MS: u64 = 1_000;
 
 static NEXT_ID: AtomicU32 = AtomicU32::new(1);
@@ -321,20 +322,31 @@ fn vgpu_principal(owner: u32) -> crate::gpu::vgpu::Principal {
     }
 }
 
-fn insert_retained_texture(
+async fn insert_retained_texture(
     owner: u32,
     device: u64,
-    image: DecodedImage,
+    operation_id: u32,
+    image: &DecodedImage,
 ) -> Result<RetainedTextureInfo, i32> {
-    let texture = crate::gpu::vgpu::create_retained_texture(
-        vgpu_principal(owner),
-        crate::gpu::vgpu::DeviceHandle::from_raw(device),
-        image.info.width,
-        image.info.height,
-        image.info.stride_bytes,
-        image.rgba.as_slice(),
-    )
-    .map_err(|error| error.errno())?;
+    let texture = loop {
+        if !operation_is_running(owner, operation_id) {
+            return Err(ERR_NOT_FOUND);
+        }
+        match crate::gpu::vgpu::create_retained_texture(
+            vgpu_principal(owner),
+            crate::gpu::vgpu::DeviceHandle::from_raw(device),
+            image.info.width,
+            image.info.height,
+            image.info.stride_bytes,
+            image.rgba.as_slice(),
+        ) {
+            Ok(texture) => break texture,
+            Err(crate::gpu::vgpu::VgpuError::Busy | crate::gpu::vgpu::VgpuError::NotComplete) => {
+                Timer::after(Duration::from_millis(RETAINED_PUBLISH_RETRY_MS)).await
+            }
+            Err(error) => return Err(error.errno()),
+        }
+    };
     let info = RetainedTextureInfo {
         texture_id: texture.raw(),
         width: image.info.width,
@@ -406,7 +418,21 @@ fn mark_running(owner: u32, id: u32) -> bool {
     true
 }
 
-fn complete(owner: u32, id: u32, result: Result<DecodeResult, i32>) {
+fn operation_is_running(owner: u32, id: u32) -> bool {
+    OPERATIONS.lock().iter().any(|operation| {
+        operation.owner == owner
+            && operation.id == id
+            && matches!(operation.state, OperationState::Running)
+    })
+}
+
+/// Publish a worker result, returning it unchanged if its operation was
+/// cancelled while decode or resident mapping was in flight.
+fn complete(
+    owner: u32,
+    id: u32,
+    result: Result<DecodeResult, i32>,
+) -> Option<Result<DecodeResult, i32>> {
     let mut operations = OPERATIONS.lock();
     if let Some(operation) = operations
         .iter_mut()
@@ -414,6 +440,15 @@ fn complete(owner: u32, id: u32, result: Result<DecodeResult, i32>) {
         && matches!(operation.state, OperationState::Running)
     {
         operation.state = OperationState::Complete(result);
+        None
+    } else {
+        Some(result)
+    }
+}
+
+fn release_unclaimed_retained(owner: u32, device: u64, result: Result<DecodeResult, i32>) {
+    if let Ok(DecodeResult::Retained(info)) = result {
+        let _ = release_retained(owner, device, info.texture_id);
     }
 }
 
@@ -526,16 +561,59 @@ pub async fn worker_task(worker_id: usize, worker_slot: u32, core_kind: u8) {
         let request = REQUESTS.lock().pop_front();
         if let Some(request) = request {
             if mark_running(request.owner, request.id) {
-                let result = decode(&request)
-                    .await
-                    .and_then(|image| match request.output {
+                let result = match decode(&request).await {
+                    Ok(image) => match request.output {
                         DecodeOutput::Readback => Ok(DecodeResult::Readback(image)),
                         DecodeOutput::Retained { device } => {
-                            insert_retained_texture(request.owner, device, image)
+                            crate::log_important!(target: "service";
+                                "vmedia-retained: proof=decode-complete accepted=1 owner=0x{:08X} operation={} device=0x{:X} encoded_boundary=blueprint-to-kernel source_format={} backend={} pixel_format=rgba8 width={} height={} stride={} decoded_bytes={} decoded_owner=kernel blueprint_rgba_readback=0\n",
+                                request.owner,
+                                request.id,
+                                device,
+                                image.info.source_format,
+                                image.info.backend,
+                                image.info.width,
+                                image.info.height,
+                                image.info.stride_bytes,
+                                image.info.byte_len,
+                            );
+                            insert_retained_texture(request.owner, device, request.id, &image)
+                                .await
                                 .map(DecodeResult::Retained)
                         }
-                    });
-                complete(request.owner, request.id, result);
+                    },
+                    Err(error) => Err(error),
+                };
+                let retained_info = match &result {
+                    Ok(DecodeResult::Retained(info)) => Some(*info),
+                    _ => None,
+                };
+                match complete(request.owner, request.id, result) {
+                    Some(unclaimed) => {
+                        if let DecodeOutput::Retained { device } = request.output {
+                            release_unclaimed_retained(request.owner, device, unclaimed);
+                        }
+                    }
+                    None => {
+                        if let (DecodeOutput::Retained { device }, Some(info)) =
+                            (request.output, retained_info)
+                        {
+                            crate::log_important!(target: "service";
+                                "vmedia-retained: proof=render1-publication-complete accepted=1 owner=0x{:08X} operation={} device=0x{:X} texture_id=0x{:X} residency=picasso-render1 mapped=1 retained=1 width={} height={} stride={} bytes={} source_format={} backend={} cpu_texture_mutation=0 blueprint_rgba_readback=0\n",
+                                request.owner,
+                                request.id,
+                                device,
+                                info.texture_id,
+                                info.width,
+                                info.height,
+                                info.stride_bytes,
+                                info.byte_len,
+                                info.source_format,
+                                info.backend,
+                            );
+                        }
+                    }
+                }
             }
         } else {
             Timer::after(Duration::from_millis(IDLE_MS)).await;

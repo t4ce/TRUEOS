@@ -1,0 +1,7 @@
+clang version 17.0.0 (https://github.com/swiftlang/llvm-project.git 10999b6d034fe318f3d56c83bddb6572593a8bb0)
+command: clang -O3 -mavx2 -mavxvnni -mfma -S -masm=intel validation/vnni_codegen_probe.c
+required instruction excerpt:
+    vpsignb	ymm3, ymm3, ymmword ptr [rsi]
+    {vex}	vpdpbusd	ymm4, ymm2, ymm3
+    vcvtdq2ps	ymm2, ymm4
+    vfmadd231ps	ymm0, ymm2, ymm1        # ymm0 = (ymm2 * ymm1) + ymm0

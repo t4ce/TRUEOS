@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>AVX‑VNNI Dataflow Factory</title>
+<style>
+  :root{
+    --bg:#101315; --panel:#1a1f22; --panel2:#232a2e; --edge:#3b454b;
+    --text:#e8ecef; --muted:#9da8ae; --hot:#f0b14a; --ok:#79c267;
+    --warn:#df705a; --cyan:#65b8c9; --steel:#85939b; --ink:#0b0d0e;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:radial-gradient(circle at 50% -10%,#263036 0,#14191c 40%,#0d1012 100%);color:var(--text);font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;min-height:100%}
+  body{padding:22px}
+  .app{max-width:1500px;margin:0 auto}
+  .top{display:flex;gap:18px;align-items:stretch;flex-wrap:wrap}
+  .brand{flex:1;min-width:330px;background:linear-gradient(180deg,#20272b,#171c1f);border:1px solid #394248;border-radius:12px;padding:18px 20px;box-shadow:0 12px 34px #0007,inset 0 1px #ffffff0b}
+  .brand h1{margin:0 0 7px;font-size:clamp(24px,3vw,40px);letter-spacing:-.04em}
+  .brand p{margin:0;color:var(--muted);line-height:1.5;max-width:920px}
+  .layers{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;min-width:min(100%,520px);background:#15191c;border:1px solid #353d42;border-radius:12px;padding:8px}
+  .layerBtn{appearance:none;border:1px solid #414a50;background:#232a2e;color:#bac4ca;border-radius:8px;padding:12px 14px;cursor:pointer;font-weight:800;letter-spacing:.03em;position:relative;overflow:hidden}
+  .layerBtn b{display:block;color:#fff;font-size:14px;margin-bottom:2px}.layerBtn small{font-size:11px;color:#909ca2}
+  .layerBtn.active{border-color:#c58935;background:linear-gradient(180deg,#4a3822,#2b241b);box-shadow:inset 0 0 0 1px #f0b14a55,0 0 20px #e69a2530}
+  .layerBtn.active:after{content:"ACTIVE";position:absolute;right:6px;top:5px;font-size:8px;color:#111;background:var(--hot);padding:2px 4px;border-radius:3px}
+  .toolbar{margin-top:14px;display:flex;gap:8px;flex-wrap:wrap;align-items:center;background:#171c1f;border:1px solid #363f44;border-radius:10px;padding:9px}
+  .toolbar .label{font-size:10px;text-transform:uppercase;letter-spacing:.14em;color:#829096;margin:0 5px 0 3px;font-weight:800}
+  button.ctrl,select.ctrl{border:1px solid #465159;background:#252d31;color:#edf2f4;border-radius:7px;padding:8px 10px;font:inherit;font-size:12px;font-weight:700}
+  button.ctrl{cursor:pointer}.ctrl.on{background:#31452c;border-color:#5f8c56}
+  .grow{flex:1}
+  .pulseDot{width:9px;height:9px;border-radius:50%;background:var(--ok);box-shadow:0 0 12px var(--ok);display:inline-block;margin-right:6px}
+
+  .stage{margin-top:14px;border:1px solid #364046;border-radius:12px;background:linear-gradient(180deg,#151a1d,#0f1315);min-height:700px;overflow:hidden;position:relative;box-shadow:0 16px 44px #0008}
+  .stage:before{content:"";position:absolute;inset:0;background-image:linear-gradient(#ffffff08 1px,transparent 1px),linear-gradient(90deg,#ffffff08 1px,transparent 1px);background-size:28px 28px;mask-image:linear-gradient(to bottom,#0008,transparent 80%);pointer-events:none}
+  .layer{display:none;position:relative;z-index:1;padding:18px}.layer.active{display:block}
+  .sectionTitle{display:flex;align-items:end;justify-content:space-between;gap:16px;margin-bottom:12px;flex-wrap:wrap}
+  .sectionTitle h2{margin:0;font-size:20px}.sectionTitle p{margin:4px 0 0;color:var(--muted);font-size:12px;max-width:860px}
+  .badge{display:inline-flex;gap:7px;align-items:center;border:1px solid #46535a;background:#21282c;border-radius:999px;padding:6px 9px;font-size:11px;color:#c9d1d5}
+  .badge strong{color:#fff}
+
+  .opGrid{display:grid;grid-template-columns:repeat(4,minmax(190px,1fr));gap:9px;margin-bottom:14px}
+  .opCard{border:1px solid #3a444a;background:#1d2326;border-radius:9px;padding:10px;cursor:pointer;transition:.16s;min-height:92px}
+  .opCard:hover{transform:translateY(-1px);border-color:#617078}.opCard.active{border-color:#d69a44;box-shadow:inset 0 0 0 1px #f0b14a44;background:#2a251d}
+  .opCard .name{font-weight:900;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
+  .opCard .sig{color:#9fb0b8;font-size:11px;margin-top:6px}.opCard .mode{margin-top:8px;display:flex;gap:6px;flex-wrap:wrap}
+  .mini{font-size:9px;text-transform:uppercase;letter-spacing:.08em;border:1px solid #455159;padding:2px 5px;border-radius:4px;color:#aab6bc}.mini.sat{border-color:#835649;color:#e4937d}.mini.wrap{border-color:#486b78;color:#7cc7d7}
+
+  .factory{display:grid;grid-template-columns:minmax(240px,1fr) 54px minmax(260px,1.25fr) 54px minmax(230px,1fr) 54px minmax(210px,.9fr);gap:8px;align-items:stretch}
+  .machine{border:1px solid #455159;border-radius:10px;background:linear-gradient(180deg,#252c30,#1a2023);padding:12px;position:relative;min-height:365px;box-shadow:inset 0 1px #ffffff0b}
+  .machine .mh{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}.machine .mh b{font-size:12px;letter-spacing:.08em}.machine .mh span{font-size:10px;color:#89969d}
+  .machine .gear{width:22px;height:22px;border-radius:50%;border:5px dotted #68757c;animation:spin 3.2s linear infinite;opacity:.65}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .belt{position:relative;min-height:100%;border-left:2px dashed #5b666b55;border-right:2px dashed #5b666b55;background:linear-gradient(90deg,#121619,#22282b 50%,#121619)}
+  .belt:after{content:"› › ›";position:absolute;top:48%;left:50%;transform:translate(-50%,-50%) rotate(90deg);white-space:nowrap;color:#7e8a90;font-weight:900;letter-spacing:5px;animation:flow 1s linear infinite}
+  @keyframes flow{0%{margin-left:-4px}50%{margin-left:4px}100%{margin-left:-4px}}
+  .rail{height:8px;background:repeating-linear-gradient(90deg,#394247 0 9px,#1a1f22 9px 14px);border:1px solid #4b565c;border-radius:3px;margin:9px 0}
+
+  .laneGrid{display:grid;gap:5px}.laneRow{display:grid;grid-template-columns:30px 1fr;gap:6px;align-items:center}.laneId{font:700 9px ui-monospace,monospace;color:#87949a;text-align:right}.cells{display:grid;gap:3px}.cell{height:30px;border:1px solid #49555c;border-radius:5px;background:#111517;display:flex;align-items:center;justify-content:center;font:700 11px ui-monospace,monospace;position:relative;overflow:hidden}.cell.hot{animation:cellPulse .7s ease}.cell.a{box-shadow:inset 0 -3px #65b8c955}.cell.b{box-shadow:inset 0 -3px #df705a55}.cell.acc{box-shadow:inset 0 -3px #f0b14a55}.cell.out{box-shadow:inset 0 -3px #79c26766;background:#172116}
+  @keyframes cellPulse{50%{background:#52442b;transform:scale(1.04)}}
+  .typeLegend{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}.typeTag{font-size:9px;padding:3px 5px;border-radius:4px;background:#121619;border:1px solid #3b474d;color:#aeb9be}
+
+  .seq{display:flex;flex-direction:column;gap:7px}.seqStep{display:grid;grid-template-columns:30px 1fr;gap:8px;align-items:start}.seqIcon{width:30px;height:30px;border:1px solid #59656c;background:#121719;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:900;color:#f1c36f;position:relative}.seqIcon:after{content:"";position:absolute;top:30px;width:1px;height:17px;background:#657178}.seqStep:last-child .seqIcon:after{display:none}.seqBody{border:1px solid #3b464b;background:#151a1d;border-radius:7px;padding:7px 8px;min-height:52px}.seqBody strong{display:block;font-size:11px}.seqBody small{color:#8e9ba1;line-height:1.35;display:block;margin-top:3px}.eq{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:#d7dde0;font-size:10px;margin-top:5px;word-break:break-word}.seqStep.active .seqIcon{background:#4b3820;border-color:#d99b42;box-shadow:0 0 18px #d99b4255}.seqStep.active .seqBody{border-color:#8b6a39}
+
+  .accList{display:grid;gap:5px}.accLine{display:grid;grid-template-columns:32px 1fr 76px;gap:6px;align-items:center;padding:5px;border:1px solid #394449;border-radius:6px;background:#14191b;font:10px ui-monospace,monospace}.accLine .formula{color:#a7b2b7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.accLine .result{text-align:right;font-weight:900;color:#d6e6d1}
+  .satMeter{height:8px;border-radius:5px;border:1px solid #3e494e;background:linear-gradient(90deg,#6b2c28,#1d2224 18% 82%,#6b2c28);position:relative;margin-top:10px}.satNeedle{position:absolute;top:-3px;width:2px;height:12px;background:#f0b14a;left:50%;transition:.35s}
+
+  .machineTitle{font-size:10px;color:#87949a;text-transform:uppercase;letter-spacing:.1em;margin:8px 0 5px}
+  .explain{margin-top:12px;border:1px solid #354046;background:#151a1c;border-radius:8px;padding:10px;color:#a6b0b5;font-size:11px;line-height:1.5}
+  .explain strong{color:#e6ebed}
+  .hardware{color:#f0b14a;font-family:ui-monospace,monospace}
+
+  /* layer 2 */
+  .matFactory{display:grid;grid-template-columns:minmax(330px,1.35fr) 64px minmax(300px,1fr) 64px minmax(300px,1fr);gap:10px;align-items:stretch}
+  .matrixWrap{display:grid;grid-template-columns:32px 1fr;gap:8px}.rowLabels{display:grid;gap:4px;padding-top:0}.rowLabels div{height:31px;display:flex;align-items:center;justify-content:flex-end;font:10px ui-monospace,monospace;color:#7f8d93}
+  .matrix{display:grid;gap:4px}.mrow{display:grid;gap:4px}.mcell{height:31px;border:1px solid #465158;background:#121618;border-radius:4px;display:flex;align-items:center;justify-content:center;font:700 10px ui-monospace,monospace}.mcell.kactive{background:#3b3121;border-color:#8f6c36;animation:cellPulse .7s ease}.mcell.dim{opacity:.24}
+  .vector{display:grid;gap:4px}.vcell{height:31px;border:1px solid #5f5141;background:#1f1a14;border-radius:4px;display:flex;align-items:center;justify-content:center;font:700 10px ui-monospace,monospace;color:#f1c77d}.vcell.kactive{background:#594522;border-color:#d5963b}
+  .packRows{display:grid;gap:6px}.packRow{display:grid;grid-template-columns:28px 1fr;gap:6px;align-items:center}.packValues{display:grid;gap:3px}.packVal{height:26px;border:1px solid #465159;border-radius:4px;background:#111517;display:flex;align-items:center;justify-content:center;font:700 10px ui-monospace,monospace}.packVal.vec{color:#f0b14a;border-color:#6e5939}
+  .callout{border:1px solid #684f2f;background:#2a2118;border-radius:7px;padding:8px;font-size:10px;color:#cfb789;line-height:1.45;margin-top:8px}
+
+  .layer3{min-height:650px;display:none!important;align-items:center;justify-content:center;text-align:center}.layer3.active{display:flex!important}.idleCore{width:min(620px,90%);border:1px dashed #4a555b;border-radius:14px;padding:48px;background:#151a1caa}.idleCore .big{font-size:64px;opacity:.2}.idleCore h2{margin:8px 0}.idleCore p{color:#87949a}
+
+  .footer{margin-top:14px;color:#7e8b91;font-size:10px;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
+  .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  @media(max-width:1150px){.factory,.matFactory{grid-template-columns:1fr}.belt{height:40px;min-height:40px}.belt:after{transform:translate(-50%,-50%)}.opGrid{grid-template-columns:repeat(2,1fr)}}
+  @media(max-width:620px){body{padding:10px}.opGrid{grid-template-columns:1fr}.layers{grid-template-columns:1fr}.laneRow{grid-template-columns:24px 1fr}.stage{min-height:500px}.layer{padding:10px}}
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="top">
+    <div class="brand">
+      <h1>AVX‑VNNI Dataflow Factory</h1>
+      <p>A hardware-shaped visualizer for the exact VNNI families in <span class="mono">vnni.rs</span>. The animation intentionally unfolds the fused instruction into conceptual <b>multiply → grouped sum → accumulate</b> stages so the data movement is visible.</p>
+    </div>
+    <div class="layers">
+      <button class="layerBtn active" data-layer="1"><b>Layer 1</b><small>instruction tile</small></button>
+      <button class="layerBtn" data-layer="2"><b>Layer 2</b><small>matrix × vector tile</small></button>
+      <button class="layerBtn" data-layer="3"><b>Layer 3</b><small>intentionally empty</small></button>
+    </div>
+  </div>
+
+  <div class="toolbar">
+    <span class="label">factory control</span>
+    <button id="autoBtn" class="ctrl on"><span class="pulseDot"></span>AUTO</button>
+    <button id="stepBtn" class="ctrl">STEP</button>
+    <button id="resetBtn" class="ctrl">RESET</button>
+    <span class="label">speed</span>
+    <select id="speed" class="ctrl"><option value="1300">slow</option><option selected value="800">normal</option><option value="420">fast</option></select>
+    <div class="grow"></div>
+    <span class="badge">selected&nbsp; <strong id="selectedLabel">VPDPBUSD · 256</strong></span>
+  </div>
+
+  <main class="stage">
+    <section id="layer1" class="layer active">
+      <div class="sectionTitle">
+        <div><h2>Layer 1 — one VNNI instruction, unfolded</h2><p>Every card below is one of the 8 typed entry points in the Rust wrapper: two operand families × wrapping/saturating accumulation × 128/256-bit width.</p></div>
+        <span class="badge"><strong id="l1Sig">u8 × i8 → i32</strong>&nbsp; · &nbsp;<span id="l1Mode">wrapping accumulation</span></span>
+      </div>
+      <div id="opGrid" class="opGrid"></div>
+
+      <div class="factory">
+        <div class="machine">
+          <div class="mh"><b>01 · FEED LANES</b><div class="gear"></div></div>
+          <div class="machineTitle">A operand</div><div id="aGrid" class="laneGrid"></div>
+          <div class="machineTitle">B operand</div><div id="bGrid" class="laneGrid"></div>
+          <div class="machineTitle">destination accumulator</div><div id="accGrid" class="laneGrid"></div>
+          <div class="typeLegend"><span id="aType" class="typeTag">u8</span><span id="bType" class="typeTag">i8</span><span class="typeTag">dest: i32</span><span id="widthTag" class="typeTag">256 bit</span></div>
+        </div>
+        <div class="belt"></div>
+        <div class="machine">
+          <div class="mh"><b>02 · FUSED CORE, SHOWN IN SEQUENCE</b><div class="gear"></div></div>
+          <div id="seq" class="seq"></div>
+          <div class="explain"><strong>Visualization contract:</strong> the symbols are sequential <em>for teaching only</em>. On hardware this is one <span id="instName" class="hardware">VPDPBUSD</span> instruction, not three software operations.</div>
+        </div>
+        <div class="belt"></div>
+        <div class="machine">
+          <div class="mh"><b>03 · ACCUMULATE</b><div class="gear"></div></div>
+          <div id="accLines" class="accList"></div>
+          <div class="machineTitle">i32 range / accumulation mode</div>
+          <div class="satMeter"><div id="satNeedle" class="satNeedle"></div></div>
+          <div id="modeExplain" class="explain"></div>
+        </div>
+        <div class="belt"></div>
+        <div class="machine">
+          <div class="mh"><b>04 · RESULT LANES</b><div class="gear"></div></div>
+          <div id="outGrid" class="laneGrid"></div>
+          <div class="explain">Each destination <strong>i32 lane stays independent</strong>. Byte form consumes 4 products per destination lane; word form consumes 2.</div>
+        </div>
+      </div>
+    </section>
+
+    <section id="layer2" class="layer">
+      <div class="sectionTitle">
+        <div><h2>Layer 2 — Matrix × Vector, packed to the instruction</h2><p>No generic GEMV algorithm is invented here. One destination i32 lane is one matrix row. The vector chunk is repeated in B so a single VNNI instruction advances multiple rows by 4 columns (byte family) or 2 columns (word family).</p></div>
+        <span class="badge"><strong id="tileShape">8 rows × 4 K</strong>&nbsp; / instruction</span>
+      </div>
+
+      <div class="matFactory">
+        <div class="machine">
+          <div class="mh"><b>01 · MATRIX + VECTOR WINDOW</b><div class="gear"></div></div>
+          <div style="display:grid;grid-template-columns:1fr 64px;gap:12px">
+            <div><div class="machineTitle">matrix A — each row maps to one i32 lane</div><div class="matrixWrap"><div id="rowLabels" class="rowLabels"></div><div id="matrix" class="matrix"></div></div></div>
+            <div><div class="machineTitle">vector x</div><div id="vector" class="vector"></div></div>
+          </div>
+          <div class="callout">The highlighted K-window is the part consumed by the current instruction. Auto mode advances the K-window, then accumulates into the same row lanes.</div>
+        </div>
+        <div class="belt"></div>
+        <div class="machine">
+          <div class="mh"><b>02 · REGISTER PACK</b><div class="gear"></div></div>
+          <div class="machineTitle">A register: row-major chunks</div><div id="packA" class="packRows"></div>
+          <div class="machineTitle">B register: vector chunk repeated per row</div><div id="packB" class="packRows"></div>
+          <div class="callout"><span id="packExplain">For VPDPBUSD, each dword lane consumes 4 A bytes × 4 B bytes.</span></div>
+        </div>
+        <div class="belt"></div>
+        <div class="machine">
+          <div class="mh"><b>03 · ROW ACCUMULATORS</b><div class="gear"></div></div>
+          <div id="matAcc" class="accList"></div>
+          <div class="explain"><span class="hardware" id="matInst">VPDPBUSD ymm</span> updates all visible row accumulators in parallel. Next instruction = next K chunk, same lanes.</div>
+        </div>
+      </div>
+    </section>
+
+    <section id="layer3" class="layer layer3">
+      <div class="idleCore"><div class="big">⏸</div><h2>Layer 3 — no operation</h2><p>Reserved on purpose. No speculative abstraction, no extra algorithm.</p></div>
+    </section>
+  </main>
+
+  <div class="footer"><span>Conceptual animation only; arithmetic is computed in JavaScript to mirror the instruction semantics.</span><span class="mono">source model: vnni.rs · AVX2 + AVXVNNI</span></div>
+</div>
+<script>
+(() => {
+  const OPS = [
+    {id:'dpbusd_128', name:'VPDPBUSD', width:128, fam:'byte', sat:false, sig:'u8 × i8 → i32'},
+    {id:'dpbusd_256', name:'VPDPBUSD', width:256, fam:'byte', sat:false, sig:'u8 × i8 → i32'},
+    {id:'dpbusds_128',name:'VPDPBUSDS',width:128,fam:'byte',sat:true, sig:'u8 × i8 → i32'},
+    {id:'dpbusds_256',name:'VPDPBUSDS',width:256,fam:'byte',sat:true, sig:'u8 × i8 → i32'},
+    {id:'dpwssd_128', name:'VPDPWSSD', width:128, fam:'word', sat:false, sig:'i16 × i16 → i32'},
+    {id:'dpwssd_256', name:'VPDPWSSD', width:256, fam:'word', sat:false, sig:'i16 × i16 → i32'},
+    {id:'dpwssds_128',name:'VPDPWSSDS',width:128,fam:'word',sat:true, sig:'i16 × i16 → i32'},
+    {id:'dpwssds_256',name:'VPDPWSSDS',width:256,fam:'word',sat:true, sig:'i16 × i16 → i32'}
+  ];
+  let opIndex=1, phase=0, auto=true, timer=null, layer=1, matK=0;
+  const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+  const clamp32=n=>Math.max(-2147483648,Math.min(2147483647,n));
+  const wrap32=n=>Number(BigInt.asIntN(32,BigInt(Math.trunc(n))));
+
+  function config(){
+    const o=OPS[opIndex];
+    o.lanes=o.width/32; o.group=o.fam==='byte'?4:2; o.inputs=o.lanes*o.group;
+    return o;
+  }
+  function values(o){
+    const a=[],b=[],acc=[];
+    for(let i=0;i<o.inputs;i++){
+      if(o.fam==='byte'){ a.push((i*37+19)%251); b.push(((i*29+11)%31)-15); }
+      else { a.push(((i*433+1701)%6001)-3000); b.push(((i*719+911)%4001)-2000); }
+    }
+    for(let l=0;l<o.lanes;l++) acc.push((l%2?1:-1)*(9000+l*1337));
+    return {a,b,acc};
+  }
+  function laneMath(o,v,l){
+    const start=l*o.group, prods=[];
+    for(let j=0;j<o.group;j++) prods.push(v.a[start+j]*v.b[start+j]);
+    const dot=prods.reduce((x,y)=>x+y,0), raw=v.acc[l]+dot;
+    return {prods,dot,raw,result:o.sat?clamp32(raw):wrap32(raw)};
+  }
+
+  function renderCards(){
+    $('#opGrid').innerHTML=OPS.map((o,i)=>`<div class="opCard ${i===opIndex?'active':''}" data-op="${i}"><div class="name">${o.id}</div><div class="sig">${o.sig}</div><div class="mode"><span class="mini">${o.width} bit</span><span class="mini ${o.sat?'sat':'wrap'}">${o.sat?'saturating':'wrapping'}</span></div></div>`).join('');
+    $$('.opCard').forEach(c=>c.onclick=()=>{opIndex=+c.dataset.op;phase=0;matK=0;renderAll()});
+  }
+  function cells(vals,cls,cols){return `<div class="cells" style="grid-template-columns:repeat(${cols},1fr)">${vals.map((x,i)=>`<div class="cell ${cls} ${phase===0?'hot':''}" title="element ${i}">${x}</div>`).join('')}</div>`}
+  function laneInputGrid(vals,o,cls){
+    let h=''; for(let l=0;l<o.lanes;l++){const part=vals.slice(l*o.group,(l+1)*o.group);h+=`<div class="laneRow"><div class="laneId">d${l}</div>${cells(part,cls,o.group)}</div>`} return h;
+  }
+  function laneScalarGrid(vals,cls){return vals.map((x,l)=>`<div class="laneRow"><div class="laneId">d${l}</div><div class="cells" style="grid-template-columns:1fr"><div class="cell ${cls} ${phase===3?'hot':''}">${x}</div></div></div>`).join('')}
+
+  function renderLayer1(){
+    const o=config(),v=values(o), maths=[...Array(o.lanes)].map((_,l)=>laneMath(o,v,l));
+    $('#selectedLabel').textContent=`${o.name} · ${o.width}`; $('#l1Sig').textContent=o.sig; $('#l1Mode').textContent=o.sat?'saturating accumulation':'wrapping accumulation';
+    $('#aType').textContent=o.fam==='byte'?'u8':'i16'; $('#bType').textContent=o.fam==='byte'?'i8':'i16'; $('#widthTag').textContent=o.width+' bit'; $('#instName').textContent=o.name;
+    $('#aGrid').innerHTML=laneInputGrid(v.a,o,'a'); $('#bGrid').innerHTML=laneInputGrid(v.b,o,'b'); $('#accGrid').innerHTML=laneScalarGrid(v.acc,'acc'); $('#outGrid').innerHTML=laneScalarGrid(maths.map(m=>m.result),'out');
+    const g=o.group;
+    const example=maths[0];
+    $('#seq').innerHTML=`
+      <div class="seqStep ${phase===0?'active':''}"><div class="seqIcon">→</div><div class="seqBody"><strong>Lane grouping</strong><small>Partition source elements by destination dword lane.</small><div class="eq">d0 ⇐ A[0..${g-1}] + B[0..${g-1}]</div></div></div>
+      <div class="seqStep ${phase===1?'active':''}"><div class="seqIcon">×</div><div class="seqBody"><strong>Parallel multiply</strong><small>${g} products feed each destination lane.</small><div class="eq">${example.prods.map((p,i)=>`${v.a[i]}×${v.b[i]}=${p}`).join(' · ')}</div></div></div>
+      <div class="seqStep ${phase===2?'active':''}"><div class="seqIcon">Σ</div><div class="seqBody"><strong>Grouped dot-product sum</strong><small>The ${g} products collapse to one i32 contribution per destination lane.</small><div class="eq">Σ(products) = ${example.dot}</div></div></div>
+      <div class="seqStep ${phase===3?'active':''}"><div class="seqIcon">+</div><div class="seqBody"><strong>Accumulate into destination</strong><small>${o.sat?'Clamp to signed i32 range after addition.':'Keep low 32 bits (signed wrapping semantics).'}</small><div class="eq">acc[d0] ${v.acc[0]>=0?'+':'−'} ${Math.abs(example.dot)} → ${example.result}</div></div></div>`;
+    $('#accLines').innerHTML=maths.map((m,l)=>`<div class="accLine"><span>d${l}</span><span class="formula">${v.acc[l]} + ${m.dot}</span><span class="result">${m.result}</span></div>`).join('');
+    $('#modeExplain').innerHTML=o.sat?`<strong>Saturating family:</strong> ${o.name} clamps the final accumulated value into <span class="mono">[-2³¹, 2³¹−1]</span>.`:`<strong>Wrapping family:</strong> ${o.name} accumulates modulo 2³², interpreted as signed <span class="mono">i32</span>.`;
+    $('#satNeedle').style.left=(42+phase*4)+'%';
+  }
+
+  function matrixData(o){
+    const rows=o.lanes, K=o.group*3, M=[],x=[];
+    for(let r=0;r<rows;r++){const row=[];for(let k=0;k<K;k++){row.push(o.fam==='byte'?((r*23+k*17+7)%43):(((r*401+k*227+99)%1601)-800));}M.push(row)}
+    for(let k=0;k<K;k++) x.push(o.fam==='byte'?(((k*13+5)%17)-8):(((k*313+55)%1201)-600));
+    return {rows,K,M,x};
+  }
+  function renderLayer2(){
+    const o=config(),d=matrixData(o), chunk=Math.floor(matK/o.group)%3, start=chunk*o.group;
+    $('#tileShape').textContent=`${o.lanes} rows × ${o.group} K`; $('#packExplain').textContent=`For ${o.name}, each dword lane consumes ${o.group} A ${o.fam==='byte'?'bytes':'words'} × ${o.group} B ${o.fam==='byte'?'bytes':'words'}.`; $('#matInst').textContent=`${o.name} ${o.width===256?'ymm':'xmm'}`;
+    $('#rowLabels').innerHTML=[...Array(d.rows)].map((_,r)=>`<div>row ${r}</div>`).join('');
+    $('#matrix').style.gridTemplateRows=`repeat(${d.rows},31px)`;
+    $('#matrix').innerHTML=d.M.map((row,r)=>`<div class="mrow" style="grid-template-columns:repeat(${d.K},1fr)">${row.map((v,k)=>`<div class="mcell ${k>=start&&k<start+o.group?'kactive':'dim'}">${v}</div>`).join('')}</div>`).join('');
+    $('#vector').innerHTML=d.x.map((v,k)=>`<div class="vcell ${k>=start&&k<start+o.group?'kactive':'dim'}">${v}</div>`).join('');
+    $('#packA').innerHTML=d.M.map((row,r)=>`<div class="packRow"><div class="laneId">d${r}</div><div class="packValues" style="grid-template-columns:repeat(${o.group},1fr)">${row.slice(start,start+o.group).map(v=>`<div class="packVal">${v}</div>`).join('')}</div></div>`).join('');
+    $('#packB').innerHTML=d.M.map((row,r)=>`<div class="packRow"><div class="laneId">d${r}</div><div class="packValues" style="grid-template-columns:repeat(${o.group},1fr)">${d.x.slice(start,start+o.group).map(v=>`<div class="packVal vec">${v}</div>`).join('')}</div></div>`).join('');
+    const accs=[]; for(let r=0;r<d.rows;r++){let s=0;for(let k=0;k<start+o.group;k++)s+=d.M[r][k]*d.x[k];accs.push(o.sat?clamp32(s):wrap32(s));}
+    $('#matAcc').innerHTML=accs.map((v,r)=>`<div class="accLine"><span>d${r}</span><span class="formula">row ${r} · x[0..${start+o.group-1}]</span><span class="result">${v}</span></div>`).join('');
+  }
+
+  function renderAll(){renderCards();renderLayer1();renderLayer2()}
+  function setLayer(n){layer=n;$$('.layerBtn').forEach(b=>b.classList.toggle('active',+b.dataset.layer===n));$$('.layer').forEach(el=>el.classList.toggle('active',el.id===`layer${n}`));}
+  function tick(){
+    if(layer===1){phase=(phase+1)%4;if(phase===0)opIndex=(opIndex+1)%OPS.length;}
+    else if(layer===2){const o=config();matK=(matK+o.group)%(o.group*3);}
+    renderAll();
+  }
+  function restart(){clearInterval(timer);if(auto)timer=setInterval(tick,+$('#speed').value)}
+  $$('.layerBtn').forEach(b=>b.onclick=()=>setLayer(+b.dataset.layer));
+  $('#autoBtn').onclick=()=>{auto=!auto;$('#autoBtn').classList.toggle('on',auto);$('#autoBtn').innerHTML=auto?'<span class="pulseDot"></span>AUTO':'AUTO OFF';restart()};
+  $('#stepBtn').onclick=()=>tick(); $('#resetBtn').onclick=()=>{phase=0;matK=0;opIndex=1;renderAll()}; $('#speed').onchange=restart;
+  renderAll();restart();
+})();
+</script>
+</body>
+</html>

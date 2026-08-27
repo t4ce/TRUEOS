@@ -1,8 +1,8 @@
 //! Owner-scoped asynchronous media services.
 //!
-//! V1 intentionally exposes one decoded raster result: tightly packed RGBA8.
-//! Backend selection is kernel-owned, so clients do not encode Intel/zune
-//! policy and a future retained GPU image handle can extend this contract.
+//! The readback path exposes tightly packed RGBA8 for CPU consumers. The
+//! retained path instead resolves decode, mapping, and residency in the kernel
+//! and exposes only an owner-scoped texture ID to the Blueprint.
 
 extern crate alloc;
 
@@ -12,8 +12,8 @@ use core::future::poll_fn;
 use core::task::Poll;
 
 use crate::bp_abi::{TrueosVmediaImageInfo, TrueosVmediaRetainedTextureInfo};
-use crate::vgpu::Device;
 use crate::vcabi;
+use crate::vgpu::Device;
 
 pub const ERR_NOT_FOUND: i32 = -1;
 pub const ERR_FAILED: i32 = -2;
@@ -124,10 +124,7 @@ impl Drop for RetainedTexture {
     fn drop(&mut self) {
         if self.live {
             let _ = unsafe {
-                vcabi::trueos_cabi_vmedia_texture_release(
-                    self.device.raw(),
-                    self.info.id.raw(),
-                )
+                vcabi::trueos_cabi_vmedia_texture_release(self.device.raw(), self.info.id.raw())
             };
             self.live = false;
         }
@@ -236,10 +233,7 @@ impl Operation {
         self.wait().await?;
         let mut raw = TrueosVmediaRetainedTextureInfo::default();
         let status = unsafe {
-            vcabi::trueos_cabi_vmedia_texture_decode_info(
-                self.id,
-                core::ptr::addr_of_mut!(raw),
-            )
+            vcabi::trueos_cabi_vmedia_texture_decode_info(self.id, core::ptr::addr_of_mut!(raw))
         };
         if status != 0 {
             return Err(status);
@@ -368,4 +362,30 @@ pub async fn decode_retained_asset(
 ) -> Result<RetainedTexture, i32> {
     let format = ImageFormat::from_asset_name(name).ok_or(ERR_UNSUPPORTED)?;
     decode_retained(device, format, bytes).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retained_asset_format_gate_is_bounded_and_case_insensitive() {
+        assert_eq!(ImageFormat::from_asset_name("albedo.jpg"), Some(ImageFormat::Jpeg));
+        assert_eq!(ImageFormat::from_asset_name("normal.JPEG"), Some(ImageFormat::Jpeg));
+        assert_eq!(ImageFormat::from_asset_name("roughness.PNG"), Some(ImageFormat::Png));
+        assert_eq!(ImageFormat::from_asset_name("mask.bmp"), Some(ImageFormat::Bmp));
+        assert_eq!(ImageFormat::from_asset_name("vector.svg"), None);
+        assert_eq!(ImageFormat::from_asset_name("surface.webp"), None);
+        assert_eq!(ImageFormat::from_asset_name("no-extension"), None);
+    }
+
+    #[test]
+    fn retained_metadata_uses_the_same_tight_rgba8_contract_as_readback() {
+        assert_eq!(
+            validate_info_contract(2, 3, 8, 24, 2, 1, 1),
+            Ok((ImageFormat::Png, DecodeBackend::Png))
+        );
+        assert_eq!(validate_info_contract(2, 3, 12, 36, 2, 1, 1), Err(ERR_FAILED));
+        assert_eq!(validate_info_contract(2, 3, 8, 24, 2, 2, 1), Err(ERR_FAILED));
+    }
 }

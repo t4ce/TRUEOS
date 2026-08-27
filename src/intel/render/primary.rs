@@ -316,6 +316,7 @@ unsafe impl Send for ResidentSceneBatchState {}
 static RESIDENT_SCENE_BATCH_STATE: Mutex<Option<ResidentSceneBatchState>> = Mutex::new(None);
 static RESIDENT_SCENE_BATCH_PATH_LOGGED: AtomicBool = AtomicBool::new(false);
 static RESIDENT_CHURN_FORWARD_GPU_NATIVE_PATH_LOGGED: AtomicBool = AtomicBool::new(false);
+static PICASSO_RETAINED_TEXTURED_PATH_LOGGED: AtomicBool = AtomicBool::new(false);
 static RESIDENT_CHURN_FORWARD_GPU_EXPANDED_PATH_LOGGED: AtomicBool = AtomicBool::new(false);
 static RESIDENT_CHURN_FORWARD_CPU_PATH_LOGGED: AtomicBool = AtomicBool::new(false);
 static RESIDENT_CHURN_NATIVE_FLUSHED_PACKET_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -1344,6 +1345,7 @@ pub(crate) fn render_resident_churn_forward_frame_direct_to_surface(
     submit_resident_scene_capture_inner(
         &[],
         Some(resident),
+        None,
         &[],
         clear_rgba,
         diagnostic_logs,
@@ -1362,6 +1364,7 @@ pub(crate) fn render_resident_churn_forward_frame_direct_to_surface(
 /// bindings.
 pub(crate) fn render_resident_retained_with_static_draws_direct_to_surface(
     resident: &ResidentChurnForward,
+    sampled_texture: Option<&ResidentSampledTexture>,
     static_draws: &[ResidentSceneDraw<'_>],
     clear_rgba: Option<[u8; 4]>,
     destination: crate::intel::gpgpu::GpgpuRgba8Surface,
@@ -1373,6 +1376,7 @@ pub(crate) fn render_resident_retained_with_static_draws_direct_to_surface(
     submit_resident_scene_capture_inner_for_carrier(
         static_draws,
         Some(resident),
+        sampled_texture,
         &[],
         clear_rgba,
         diagnostic_logs,
@@ -1918,6 +1922,7 @@ fn submit_resident_churn_forward_geometry_batched(
     dev: crate::intel::Dev,
     warm: RenderWarmState,
     resident: &ResidentChurnForward,
+    sampled_texture: Option<&ResidentSampledTexture>,
     static_draws: &[ResidentSceneDraw<'_>],
     clear: [u8; 4],
     depth_config: TriangleDepthConfig,
@@ -2015,6 +2020,7 @@ fn submit_resident_churn_forward_geometry_batched(
                 let draw = prepare_resident_churn_forward_draw(
                     state_warm,
                     resident,
+                    sampled_texture,
                     group,
                     render_target_gpu,
                     render_target_pitch,
@@ -2035,6 +2041,9 @@ fn submit_resident_churn_forward_geometry_batched(
                 )?;
             }
             Some(RetainedGraphicsHandoff::ExpandedPositions) => {
+                if sampled_texture.is_some() {
+                    return Err("picasso-retained-texture-native-handoff-required");
+                }
                 let draw = prepare_resident_churn_expanded_draw(
                     state_warm,
                     resident,
@@ -2154,6 +2163,17 @@ fn submit_resident_churn_forward_geometry_batched(
             "helio-churn-forward",
         ),
     };
+    if completed
+        && let Some(texture) = sampled_texture
+        && !PICASSO_RETAINED_TEXTURED_PATH_LOGGED.swap(true, Ordering::AcqRel)
+    {
+        crate::log_important!(target: "render";
+            "picasso-material: proof=retained-texture-sampled-and-retired accepted=1 contract=pos-normal-uv+texture-id graphics_handoff=native-matrices vertex_shader=gpu-instance-transform pixel_shader=filtered-base-color texture={}x{} stride={} cpu_texture_sampling=0 cpu_vertex_projection=0 render_submits=1\n",
+            texture.width,
+            texture.height,
+            texture.pitch,
+        );
+    }
     if !completed && carrier.is_none() {
         record_render_engine_after_nonretired_submit(dev, "helio-churn-forward");
     }
@@ -2181,6 +2201,7 @@ fn submit_resident_triangle_scene_capture(
     submit_resident_scene_capture_inner(
         draws,
         None,
+        None,
         coverage_draws,
         clear_rgba,
         diagnostic_logs,
@@ -2196,6 +2217,7 @@ fn submit_resident_triangle_scene_capture(
 fn submit_resident_scene_capture_inner(
     draws: &[ResidentSceneDraw<'_>],
     native_churn: Option<&ResidentChurnForward>,
+    native_sampled_texture: Option<&ResidentSampledTexture>,
     coverage_draws: &[ResidentSceneCoverageDraw],
     clear_rgba: Option<[u8; 4]>,
     diagnostic_logs: bool,
@@ -2209,6 +2231,7 @@ fn submit_resident_scene_capture_inner(
     submit_resident_scene_capture_inner_for_carrier(
         draws,
         native_churn,
+        native_sampled_texture,
         coverage_draws,
         clear_rgba,
         diagnostic_logs,
@@ -2225,6 +2248,7 @@ fn submit_resident_scene_capture_inner(
 fn submit_resident_scene_capture_inner_for_carrier(
     draws: &[ResidentSceneDraw<'_>],
     native_churn: Option<&ResidentChurnForward>,
+    native_sampled_texture: Option<&ResidentSampledTexture>,
     coverage_draws: &[ResidentSceneCoverageDraw],
     clear_rgba: Option<[u8; 4]>,
     diagnostic_logs: bool,
@@ -2482,6 +2506,7 @@ fn submit_resident_scene_capture_inner_for_carrier(
                 dev,
                 warm,
                 resident,
+                native_sampled_texture,
                 draws,
                 clear,
                 depth_config.ok_or("churn-native-depth")?,
