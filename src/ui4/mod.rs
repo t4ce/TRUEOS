@@ -594,13 +594,14 @@ impl FramePlan {
 /// member still takes the direct-scanout path when eligible; two or more
 /// members are composed together by UI4 instead of consuming one hardware
 /// plane each. Dirty FontScene frames retain double buffering, while streaming
-/// RenderScene frames retain triple buffering, so composition always reads a
-/// stable published front.
+/// BlueprintScene and RenderScene frames retain triple buffering, so
+/// composition always reads a stable published front.
 pub(crate) const fn frame_plan_shares_compositor_plane(plan: FramePlan) -> bool {
     matches!(plan.buffering, FrameBuffering::Single)
         || matches!(
             (plan.content, plan.cadence, plan.buffering),
             (FrameContent::FontScene2d, FrameCadence::Dirty, FrameBuffering::Double)
+                | (FrameContent::BlueprintScene, FrameCadence::Streaming, FrameBuffering::Triple)
                 | (FrameContent::RenderScene3d, FrameCadence::Streaming, FrameBuffering::Triple)
         )
 }
@@ -701,6 +702,16 @@ const _: () = {
         Err(_) => panic!("streaming/triple RenderScene plan must be valid"),
     };
     assert!(frame_plan_shares_compositor_plane(shared_resident_scene));
+    let shared_blueprint_scene = match FramePlan::from_spec(FrameSpec {
+        content: FrameContent::BlueprintScene,
+        cadence: FrameCadence::Streaming,
+        buffering: FrameBuffering::Triple,
+        ..admitted_video
+    }) {
+        Ok(plan) => plan,
+        Err(_) => panic!("streaming/triple BlueprintScene plan must be valid"),
+    };
+    assert!(frame_plan_shares_compositor_plane(shared_blueprint_scene));
     let isolated_image = match FramePlan::from_spec(FrameSpec {
         content: FrameContent::Image,
         cadence: FrameCadence::Dirty,

@@ -26,10 +26,12 @@ const MAX_SESSIONS: usize = 64;
 /// eligible for direct scanout. Plane 0 is the stack, where every frame which
 /// holds no lease presents together through one ordered painter submission.
 ///
-/// A frame claims the lowest free lease plane when it is created, and a
-/// stacked frame may claim one by going hot. No admission ever fails: a frame
-/// which wins no lease is still presented, composed, and movable. This is the
-/// whole plane policy - it does not consult content, cadence or buffering.
+/// Create/close rebalancing gives the highest three frames in broker-z order
+/// the lease planes, preserving that base order in the display engine; every
+/// lower frame shares Slot0. Focus/hot interaction may then promote a stacked
+/// frame and demote a lease holder. No admission ever fails: a frame which wins
+/// no lease is still presented, composed, and movable. This policy does not
+/// consult content, cadence or buffering.
 pub(super) const STACK_PLANE_SLOT: usize = super::PRIMARY_PLANE_SLOT;
 const FIRST_LEASE_PLANE_SLOT: usize = STACK_PLANE_SLOT + 1;
 pub(super) const LEASE_PLANE_COUNT: usize =
@@ -647,10 +649,11 @@ impl WindowBroker {
         window.revision = next_serial(window.revision);
     }
 
-    /// Give the visible application windows their deterministic base layout:
-    /// one window starts on opaque Slot0, then the next three occupy slots
-    /// 1-3.  Once there are more than four, the bottom windows share Slot0 in
-    /// broker-z order and the newest three retain the hardware planes.
+    /// Give the visible application windows their deterministic base layout.
+    /// Up to three windows occupy Slots1-3. Once that capacity is exceeded,
+    /// the bottom windows share Slot0 in broker-z order and the highest three
+    /// retain the hardware planes. Since hardware planes blend in ascending
+    /// slot order, this keeps physical and broker z-order consistent.
     fn rebalance_application_planes(&mut self, output: OutputId, now_ms: u64) {
         let mut ordered: Vec<(WindowId, i32, usize)> = self
             .windows
@@ -670,12 +673,13 @@ impl WindowBroker {
             })
             .collect();
         ordered.sort_unstable_by_key(|(id, z, _)| (*z, *id));
+        let stack_count = ordered.len().saturating_sub(LEASE_PLANE_COUNT);
         self.leases = [None; LEASE_PLANE_COUNT];
         for (rank, (id, _, slot)) in ordered.into_iter().enumerate() {
-            let plane = if rank < LEASE_PLANE_COUNT {
-                Self::lease_plane(rank)
-            } else {
+            let plane = if rank < stack_count {
                 WindowPlane::Primary
+            } else {
+                Self::lease_plane(rank - stack_count)
             };
             let window = &mut self.windows[slot];
             if window.plane != plane {
@@ -2908,14 +2912,14 @@ mod tests {
     }
 
     #[test]
-    fn windows_fill_the_lease_planes_then_join_the_stack_without_failing() {
+    fn lowest_windows_join_the_stack_while_highest_three_keep_z_order() {
         let owner = WindowOwner::GRIDPAPER_SERVICE;
         let mut broker = WindowBroker::new();
         let mut windows = Vec::new();
 
         for frame in 1..=(LEASE_PLANE_COUNT as u64 + 2) {
             let session = broker.begin_additional_session(owner).unwrap();
-            let request = test_window(owner, session, frame, 0, frame as i32, true);
+            let request = test_window(owner, session, frame, 0, 40, true);
             windows.push(
                 broker
                     .create(request, FrameBuffering::Triple, 0)
@@ -2927,8 +2931,9 @@ mod tests {
             .iter()
             .map(|window| plane_slot_of(&broker, *window))
             .collect::<Vec<_>>();
-        // The first three win planes 1-3; every later frame joins the stack.
-        assert_eq!(assigned, Vec::from([1, 2, 3, STACK_PLANE_SLOT, STACK_PLANE_SLOT]));
+        // Slot0 is physically below Slots1-3, so the lowest frames share it
+        // and the highest three retain monotonically ordered hardware planes.
+        assert_eq!(assigned, Vec::from([STACK_PLANE_SLOT, STACK_PLANE_SLOT, 1, 2, 3]));
     }
 
     #[test]
@@ -2949,10 +2954,12 @@ mod tests {
         // Every lease is still inside its grace period, so the stacked frame
         // stays on the stack rather than displacing a live winner.
         let session = broker.begin_additional_session(owner).unwrap();
-        let stacked = broker
+        let newest = broker
             .create(test_window(owner, session, 9, 0, 9, true), FrameBuffering::Triple, 1_000)
             .unwrap();
+        let stacked = held[0];
         assert_eq!(plane_slot_of(&broker, stacked), STACK_PLANE_SLOT);
+        assert_eq!(plane_slot_of(&broker, newest), FIRST_LEASE_PLANE_SLOT + 2);
         assert!(
             broker
                 .claim_lease(stacked, 1_000 + LEASE_IDLE_GRACE_MS - 1)
@@ -2965,7 +2972,7 @@ mod tests {
             .claim_lease(stacked, 1_000 + LEASE_IDLE_GRACE_MS)
             .expect("an expired lease is revocable");
         assert_eq!(plane.slot(), FIRST_LEASE_PLANE_SLOT);
-        assert_eq!(plane_slot_of(&broker, held[0]), STACK_PLANE_SLOT);
+        assert_eq!(plane_slot_of(&broker, held[1]), STACK_PLANE_SLOT);
     }
 
     #[test]

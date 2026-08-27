@@ -1008,14 +1008,14 @@ struct VirtualDevice {
     cloud_work_graphs: Vec<CloudWorkGraphSlot>,
     retained_meshes: Vec<RetainedMeshSlot>,
     retained_textures: Vec<RetainedTextureSlot>,
-    /// Phase-1 Picasso carrier.  A VMX device may bind Render1 once for its
-    /// epoch; no retained route may silently select Render0.
+    /// Phase-1 Picasso carrier. A VMX device may bind one RendererN lane for
+    /// its epoch; no retained route may silently select Render0.
     picasso_carrier: Option<crate::intel::render::PicassoCarrierLease>,
     /// Creation holds this broker-visible lease while it drops `BROKER` to
     /// map carrier state.  Close/release must not detach the device during
     /// that staged operation.
     picasso_setup_in_flight: bool,
-    /// An ambiguous Render1 register/submit/retire is sticky until reboot.
+    /// An ambiguous carrier register/submit/retire is sticky until reboot.
     /// We retain the carrier backing and refuse destructive teardown rather
     /// than releasing pages whose execution ownership is unknown.
     picasso_carrier_quarantined: bool,
@@ -1367,7 +1367,7 @@ pub(crate) fn release_hull_guest(vm_id: u8) -> (usize, usize, u64) {
     drop(broker);
     finish_physical_gpu_fault_service(fault_service);
     for (slot, generation, current_epoch, mut device) in detached {
-        // Exactly as in `close`, all Render1 mapping/resource teardown runs
+        // Exactly as in `close`, all carrier mapping/resource teardown runs
         // detached from BROKER.  The empty generation slot prevents a new VMX
         // tenant from inheriting any still-quarantined carrier allocation.
         match destroy_device_resources(physical, &mut device) {
@@ -1487,7 +1487,11 @@ pub(crate) fn create_buffer(
     if next > CLIENT_GPU_VA_LIMIT {
         return Err(VgpuError::QuotaExceeded);
     }
-    let Some((phys, virt)) = crate::dma::alloc(alloc_bytes, PAGE_BYTES) else {
+    // This storage is consumed through the device's PPGTT, so it does not
+    // require the generic below-4-GiB DMA aperture. Keeping retained mesh
+    // buffers in that constrained pool makes otherwise independent VMX
+    // render domains contend with display/media allocations.
+    let Some((phys, virt)) = crate::dma::alloc_ppgtt(alloc_bytes, PAGE_BYTES) else {
         return Err(VgpuError::OutOfMemory);
     };
     unsafe {
@@ -2084,10 +2088,10 @@ pub(crate) fn create_retained_mesh(
         (vertices, indices, device.epoch, gpuvm)
     };
 
-    // Phase 2: bind Render1 and allocate/map renderer-owned storage without
-    // BROKER held.  The only legal root is this VMX device's existing owned
-    // GPUVM; `claim_picasso_render1` rejects a second domain rather than
-    // falling back to Render0.
+    // Phase 2: bind one RendererN carrier and allocate/map renderer-owned
+    // storage without BROKER held. The only legal root is this VMX device's
+    // existing owned GPUVM; pool exhaustion is rejected rather than falling
+    // back to Render0.
     let physical = match require_physical() {
         Ok(physical) => physical,
         Err(error) => {
@@ -2323,7 +2327,7 @@ pub(crate) fn destroy_retained_mesh(
 }
 
 /// Publish one decoded RGBA8 image directly into the device's existing
-/// Picasso Render1 carrier. The caller supplies kernel-owned decode bytes;
+/// Picasso carrier. The caller supplies kernel-owned decode bytes;
 /// the returned handle is generation-checked and never exposes either mapping.
 pub(crate) fn create_retained_texture(
     principal: Principal,
@@ -2386,7 +2390,7 @@ pub(crate) fn create_retained_texture(
         Ok(resident) => resident,
         Err(reason) => {
             crate::log_important!(target: "render";
-                "vmedia-retained: proof=render1-publication-failed accepted=0 device=0x{:X} carrier={} width={} height={} stride={} bytes={} reason={}\n",
+                "vmedia-retained: proof=carrier-publication-failed accepted=0 device=0x{:X} carrier={} width={} height={} stride={} bytes={} reason={}\n",
                 device_handle.raw(),
                 carrier.carrier().label(),
                 width,
@@ -2476,7 +2480,7 @@ pub(crate) fn destroy_retained_texture(
 }
 
 /// Engine-side resolver for an opaque texture ID. The `Arc` pins the exact
-/// Render1 mapping while an authenticated draw is staged; principal, device,
+/// carrier mapping while an authenticated draw is staged; principal, device,
 /// generation, epoch, and carrier identity are all revalidated first.
 pub(crate) fn resolve_retained_texture(
     principal: Principal,
@@ -5429,7 +5433,7 @@ pub(crate) fn submit_kernel_context(
     submitted
 }
 
-/// Register and submit the immutable Render1 carrier for one VMX Picasso
+/// Register and submit the immutable RendererN carrier for one VMX Picasso
 /// device.  Render state never owns an untracked GuC token: this broker edge
 /// revalidates the device generation, owned GPUVM root and lease before the
 /// physical scheduler sees the descriptor, and retains the exact token for
@@ -5504,7 +5508,7 @@ pub(crate) fn submit_picasso_carrier_context(
         {
             // A Phase-1 VMX Picasso device has exactly one carrier context.
             // A second descriptor would make close/fault containment unable
-            // to prove which mutable Render1 backing it owns.
+            // to prove which mutable carrier backing it owns.
             return Err(VgpuError::DeviceLost);
         }
         if existing.is_none() && device.contexts.len() >= device.quota.contexts {

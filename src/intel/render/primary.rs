@@ -2367,7 +2367,7 @@ fn submit_resident_scene_capture_inner_for_carrier(
             return Err("no-device");
         };
         let warm = match carrier {
-            Some(lease) => picasso_render1_warm_state(lease).ok_or("picasso-render1-not-ready")?,
+            Some(lease) => picasso_render1_warm_state(lease).ok_or("picasso-carrier-not-ready")?,
             None => warm_state().ok_or("render-boot-not-ready")?,
         };
         if !forcewake_render_acquire(warm) {
@@ -7504,11 +7504,20 @@ pub(crate) fn init_fixed_render_ggtt_for_boot(dev: crate::intel::Dev) -> bool {
         log_boot_render_memory_proof(warm);
         MEMORY_PROOF_LOGGED.store(true, Ordering::Release);
         WARM_BUFFERS_MAPPED.store(true, Ordering::Release);
+        let picasso_carriers_ready_count =
+            usize::from(picasso_carriers_ready) * picasso_carrier_capacity();
+        if !picasso_carriers_ready {
+            crate::log_error!(target: "render";
+                "picasso-carrier boot-gate accepted=0 ready=0 required={} render0_continues=1 vmx_claims=fail-closed\n",
+                picasso_carrier_capacity(),
+            );
+        }
         crate::log_info!(target: "render";
-            "intel/render boot-gate render0={} render1_picasso={} render2_picasso={} picasso_runtime_ggtt_remap=forbidden max_vmx_domains=2\n",
+            "intel/render boot-gate render0={} picasso_carriers_ready={}/{} picasso_runtime_ggtt_remap=forbidden max_vmx_domains={}\n",
             1,
-            picasso_carriers_ready as u8,
-            picasso_carriers_ready as u8,
+            picasso_carriers_ready_count,
+            picasso_carrier_capacity(),
+            picasso_carrier_capacity(),
         );
         true
     })

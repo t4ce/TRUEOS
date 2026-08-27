@@ -846,12 +846,9 @@ fn queue_async_plane(
         });
     // Slot0 carries the UI4 stack: every frame which does not hold one of the
     // three hardware lease planes presents here, so its membership is arbitrary
-    // in content, cadence and buffering. The painter emits one ordered run per
-    // tile clipped to `tile & damage`, so its cost follows the tiles themselves
-    // and stays bounded as the stack grows. Plan uniformity is irrelevant to
-    // that contract; stack membership alone selects the painter. Overlap is
-    // resolved by ordered overdraw in broker z order rather than by a
-    // per-pixel walk over every layer in the enclosing damage box.
+    // in content, cadence and buffering. The layer kernel walks the broker-z
+    // descriptors for each damaged pixel and performs premultiplied source-over.
+    // Plan uniformity is irrelevant; stack membership alone selects the painter.
     let stack_plane = target_plane_slot(plan.target) == super::PRIMARY_PLANE_SLOT;
     let sparse_static_painter = all_static_single || stack_plane;
     // Overlap inside the stack is the contract, not an anomaly. Keep the probe
@@ -879,7 +876,7 @@ fn queue_async_plane(
             selected.len(),
         );
     }
-    // Slot0 remains a transparent CPU-painted virtual stack except for Font
+    // Slot0 remains a transparent GPU-composed virtual stack except for Font
     // Rush. Its admission owns UI4 exclusively and its lone full-screen font
     // frame must publish directly, because its scanout proof gates the next
     // staged consumer.
@@ -1093,12 +1090,12 @@ fn queue_async_plane(
                 && !STACK_PAINTER_LOGGED.swap(true, Ordering::AcqRel)
             {
                 crate::log_info!(target: "ui4";
-                    "ui4/stack-painter: slot0 backend=guc-rcs-ui4-layer-kernel windows={} order=broker-z pixel_op=topmost-rect-overwrite layer_kernel=1 cost=one-walker-per-damage-pixel log=once\n",
+                    "ui4/stack-painter: slot0 backend=guc-rcs-ui4-layer-kernel windows={} order=broker-z pixel_op=premultiplied-src-over layer_kernel=1 cost=one-walker-per-damage-pixel log=once\n",
                     tiles.len(),
                 );
             }
             crate::log_trace!(target: "ui4";
-                "ui4/slot0-compose backend=guc-rcs-opaque-rect-overwrite windows={} order=broker-z frame_blend=none alpha=preserved pipe_bottom=visible-where-empty\n",
+                "ui4/slot0-compose backend=guc-rcs-premultiplied-src-over windows={} order=broker-z frame_blend=source-over alpha=preserved pipe_bottom=visible-where-empty\n",
                 tiles.len(),
             );
             let primary = crate::intel::queue_ui4_primary_composition(
