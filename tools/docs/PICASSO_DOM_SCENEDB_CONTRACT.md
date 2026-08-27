@@ -1,41 +1,41 @@
-# Picasso DOM-SceneDB Shadow Contract
+# Solara–Picasso First-Stage Display Contract
 
 Status: first-stage architecture contract
 
-Audience: Solara, SceneDB/Helio, Picasso Bakery, UI4, and SURFLIVE implementers
+Audience: Solara, Picasso, UI4, SURFLIVE, and scanout implementers
 
-This document freezes the durable seam between a live Solara document and the
-TRUEOS display path. It deliberately freezes ownership, identity, publication,
-ordering, trust, and frame-lifetime rules before it freezes a packed byte ABI or
-a particular Xe-LP kernel schedule.
+This document freezes the durable first-stage path from a live Solara document
+to TRUEOS scanout. Solara is the Rust web browser with its QuickJS runtime; it
+presents through Picasso, the data-driven renderer, which is backed by the
+custom TRUEOS driver architecture. The contract deliberately freezes ownership,
+identity, publication, ordering, trust, and frame-lifetime rules before it
+freezes a packed byte ABI or a particular Xe-LP kernel schedule.
 
-The short form is:
+The product-level chain is intentionally short:
 
 ~~~text
-QJS and the live DOM
+Solara (Rust browser + QuickJS)
         |
-        | CPU cascade, layout, and paint compilation
+        | browser-owned DOM, cascade, layout, and paint data
         v
-one atomic, draw-only SceneDB shadow
+Picasso (data-driven rendering)
         |
-        | validated, pointer-free Picasso snapshot
+        | exact released UI4 frame
         v
-HelioV derives GPU-private transforms, clips, bins, passes, and work
-        |
-        v
-Picasso Bakery walkers
-        |
-        | exact GPGPU release
-        v
-UI4 frame publication
+UI4
         |
         v
 SURFLIVE
+        |
+        v
+scanout
 ~~~
 
-The DOM owns the scene semantically. SceneDB is its committed visual shadow.
-SceneDB is not a second DOM, a widget hierarchy, a CSS object model, or a
-renderer command stream.
+SceneDB and Helio/HelioV are retained implementation vocabulary inside the
+Solara-to-Picasso handoff; they are not additional product-level stages in this
+first-stage chain. The DOM owns the scene semantically. Its SceneDB shadow is
+the committed visual input to Picasso, not a second DOM, a widget hierarchy, a
+CSS object model, or a renderer command stream.
 
 ## 1. Normative language
 
@@ -48,13 +48,13 @@ contract.
 
 | Part | Owns | Must not own |
 | --- | --- | --- |
-| QJS and live DOM | nodes, attributes, JS objects, event listeners, document state, CSS inputs, browser semantics | frame buffers, GPU addresses, residency slots |
-| CPU scene compiler | cascade, layout, fragmentation, CSS paint-order compilation, DOM-to-fragment mapping, the only authored SceneDB transaction | presentation leases, GPU scheduling |
-| SceneDB shadow | the last atomically committed visual facts and hit-test facts | DOM semantics, layout constraints, backend worklists |
-| Helio and HelioV | read-only derivation of world transforms, visibility, clips, damage, tile bins, effect passes, and indirect work | mutation of authored scene rows |
+| Solara (Rust and QuickJS) | nodes, attributes, JS objects, event listeners, document state, CSS inputs, browser semantics | frame buffers, GPU addresses, residency slots |
+| Solara scene compiler | cascade, layout, fragmentation, CSS paint-order compilation, DOM-to-fragment mapping, the only authored SceneDB transaction | presentation leases, GPU scheduling |
+| Picasso scene input (currently the SceneDB shadow) | the last atomically committed visual facts and hit-test facts | DOM semantics, layout constraints, backend worklists |
+| Picasso renderer backend (currently Helio/HelioV and Bakery) | read-only derivation of world transforms, visibility, clips, damage, tile bins, effect passes, indirect work | mutation of authored scene rows |
 | Picasso | validated resource resolution and deterministic rendering into a leased UI4 target | DOM traversal, CSS decisions, public GPU pointers |
 | UI4 | viewport and input brokerage, write/read leases, publication cadence, replacement ownership | document semantics |
-| SURFLIVE/display | the final scanout lifetime | scene mutation or rendering policy |
+| SURFLIVE and scanout | the final display/scanout lifetime | scene mutation or rendering policy |
 
 There is one semantic writer for a document: its CPU scene compiler. JavaScript
 may cause arbitrary mutations, and async Rust producers may finish work in any
@@ -912,10 +912,10 @@ The exact packed record layout is deliberately not frozen by this document. It
 must be generated or asserted in every participating crate, include explicit
 size and offset checks, and receive a new version for incompatible changes.
 
-## 11. HelioV and renderer-derived state
+## 11. Picasso renderer-derived state
 
 Given one PicassoSnapshot plus the RenderTicket's exact FrameSceneSet and
-host-resolved child-binding pins, HelioV may derive:
+host-resolved child-binding pins, the Picasso renderer backend may derive:
 
 - world and inverse transforms;
 - accumulated clip descriptions and simple clip intersections;
@@ -1033,6 +1033,9 @@ validate and publish a coherent scene
     -> prove final-job drain, marker, and saved-head completion
     -> mint an exact GPGPU release for that physical allocation
     -> reject stale ticket or publish frame plus FrameSceneSet to UI4
+    -> UI4 hands the published frame to display
+    -> SURFLIVE confirms the live surface
+    -> scanout
 ~~~
 
 Picasso never manufactures its own UI4 frame handle and never publishes before
@@ -1306,5 +1309,5 @@ Deliberately deferred:
 - how many frames or scenes may be in flight.
 
 Those deferred choices can change as measurements and specification coverage
-arrive. They do not require moving the permanent DOM-to-SceneDB-to-Picasso
-seam.
+arrive. They do not require moving the permanent Solara-to-Picasso seam or the
+Solara-to-Picasso-to-UI4-to-SURFLIVE-to-scanout chain.

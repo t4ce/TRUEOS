@@ -3627,6 +3627,8 @@ def find_cache_stage(
     stage: int,
     size: int,
     instruction_count: int | None = None,
+    *,
+    trim_bounded_to_size: bool = False,
 ) -> bytes:
     candidates: list[tuple[int, int, bytes]] = []
     for offset in range(0, len(cache) - 8):
@@ -3653,12 +3655,28 @@ def find_cache_stage(
         minimum = instruction_count * 8
         maximum = instruction_count * 16
         bounded = [
-            data
+            (found_size, data)
             for _, found_size, data in candidates
             if minimum <= found_size <= maximum
         ]
         if bounded:
-            return bounded[0]
+            # The ANV cache contains several stage-tagged reflection records in
+            # the same broad instruction-count envelope.  Select the record
+            # whose size is nearest to the assembly-derived code span instead
+            # of whichever reflection record happens to occur first.
+            found_size, data = min(
+                bounded,
+                key=lambda item: (
+                    abs(item[0] - size),
+                    -sum(byte != 0 for byte in item[1]),
+                ),
+            )
+            if trim_bounded_to_size and found_size >= size:
+                # Mesa may include one trailing cache sentinel after the EOT.
+                # The vertex assembly span is exact, so never upload that
+                # non-instruction trailer as part of the shader image.
+                return data[:size]
+            return data
     raise SystemExit(f"native stage absent from ANV cache: stage={stage} size={size}")
 
 
@@ -3682,7 +3700,13 @@ def extract_native(exec_dir: Path, native_dir: Path) -> tuple[bytes, bytes, byte
         cursor += size
     fragment_span = cursor
     cache = (exec_dir / "pipeline_cache.bin").read_bytes()
-    vs = find_cache_stage(cache, 0, vs_size, vs_instruction_count)
+    vs = find_cache_stage(
+        cache,
+        0,
+        vs_size,
+        vs_instruction_count,
+        trim_bounded_to_size=True,
+    )
     combined = find_cache_stage(cache, 4, fragment_span, fragment_instruction_count)
     if len(fragments) == 1 and len(combined) != fragment_sizes[0]:
         # Preserve the complete cache record when the offset-free assembly

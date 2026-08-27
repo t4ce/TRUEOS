@@ -1339,16 +1339,19 @@ fn picasso_retained_textured_pipeline()
     if let Some(pipeline) = *cached {
         return Ok(pipeline);
     }
-    if PICASSO_RETAINED_TEXTURED_VS.len() != 512 || PICASSO_RETAINED_TEXTURED_PS.len() != 160 {
+    if PICASSO_RETAINED_TEXTURED_VS.len() != 648 || PICASSO_RETAINED_TEXTURED_PS.len() != 160 {
         return Err("picasso-retained-textured-stage-shape");
     }
     let pipeline = TrianglePipeline {
+        // This is the authored retained-material ABI: position and UV are
+        // fetched independently, transforms remain GPU-resident, and UV is
+        // exported as the sole perspective-interpolated PS attribute.
         vs: TriangleVertexShader {
             code: churn_forward_stage_words(PICASSO_RETAINED_TEXTURED_VS)?,
             meta: TriangleVertexShaderMetadata {
                 kernel: ShaderKernelMetadata {
                     code_offset_bytes: 0,
-                    code_size_bytes: 512,
+                    code_size_bytes: 648,
                     code_alignment_bytes: 64,
                     ksp_offset_bytes: 0,
                     dispatch_mode: DispatchMode::Simd8,
@@ -1366,7 +1369,7 @@ fn picasso_retained_textured_pipeline()
             code: churn_forward_stage_words(PICASSO_RETAINED_TEXTURED_PS)?,
             meta: TrianglePixelShaderMetadata {
                 kernel: ShaderKernelMetadata {
-                    code_offset_bytes: 512,
+                    code_offset_bytes: 704,
                     code_size_bytes: 160,
                     code_alignment_bytes: 64,
                     ksp_offset_bytes: 0,
@@ -2339,7 +2342,7 @@ pub(crate) fn create_resident_picasso_retained_mesh(
         resident.native_vf.vertex_element_count = 3;
         resident.native_vf.vf_component_packing = [0x0000_0A37, 0, 0, 0];
         resident.front_end_contract = TriangleFrontEndContract {
-            label: "picasso-retained-textured-forward-v1",
+            label: "picasso-retained-authored-uv-texture-v1",
             vs_urb_output_length_override: Some(2),
             sbe_read_offset: 1,
             sbe_read_length: 1,

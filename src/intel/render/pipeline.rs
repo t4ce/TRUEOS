@@ -4,6 +4,7 @@ const CPS_STATE_DWORDS: usize = CPS_STATE_DWORDS_PER_VIEWPORT * CPS_STATE_VIEWPO
 static CHURN_NATIVE_SURFACE_STATE_LOGGED: AtomicBool = AtomicBool::new(false);
 static CHURN_NATIVE_BINDING_COMMAND_LOGGED: AtomicBool = AtomicBool::new(false);
 static PICASSO_NATIVE_TEXTURE_STATE_LOGGED: AtomicBool = AtomicBool::new(false);
+static PICASSO_NATIVE_PS_COMMAND_LOGGED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct PixelShaderDispatchContract {
@@ -90,7 +91,9 @@ fn pixel_shader_dispatch_contract(
                 dispatch_16: 1,
                 dispatch_32: 0,
                 vector_mask_enable: true,
-                grf_start_dw: (u32::from(simd16_grf_start) << 16) | u32::from(grf_start),
+                // Constant/Setup Data 0 belongs to KSP0 (DW7[22:16]);
+                // Constant/Setup Data 2 belongs to KSP2 (DW7[6:0]).
+                grf_start_dw: (u32::from(grf_start) << 16) | u32::from(simd16_grf_start),
                 // KSP1 has no active width in an 8+16 pair. Mesa writes the
                 // program base there; its GRF-start field remains zero.
                 ksp: [ps_ksp_base, ps_ksp_base, simd16_ksp],
@@ -131,9 +134,11 @@ fn pixel_shader_dispatch_contract(
     } else {
         0
     };
-    let grf_start_dw = (u32::from(ksp0 != 0) * u32::from(grf_start))
+    // Gen12 3DSTATE_PS DW7 orders Constant/Setup Data start registers as
+    // KSP0 in bits 22:16, KSP1 in 14:8, and KSP2 in 6:0.
+    let grf_start_dw = ((u32::from(ksp0 != 0) * u32::from(grf_start)) << 16)
         | ((u32::from(ksp1 != 0) * u32::from(grf_start)) << 8)
-        | ((u32::from(ksp2 != 0) * u32::from(grf_start)) << 16);
+        | (u32::from(ksp2 != 0) * u32::from(grf_start));
 
     PixelShaderDispatchContract {
         dispatch_8,
@@ -166,7 +171,7 @@ mod pixel_shader_dispatch_contract_tests {
                 dispatch_16: 1,
                 dispatch_32: 0,
                 vector_mask_enable: true,
-                grf_start_dw: 0x0000_0002,
+                grf_start_dw: 0x0002_0000,
                 ksp: [0xC0, 0, 0],
             }
         );
@@ -184,6 +189,7 @@ mod pixel_shader_dispatch_contract_tests {
         );
         assert_eq!((contract.dispatch_8, contract.dispatch_16, contract.dispatch_32), (0, 1, 0));
         assert_eq!(contract.ksp, [0xC0, 0, 0]);
+        assert_eq!(contract.grf_start_dw, 0x0002_0000);
     }
 
     #[test]
@@ -195,14 +201,14 @@ mod pixel_shader_dispatch_contract_tests {
                 false,
                 0xC0,
                 2,
-                Some((0x100, 2)),
+                Some((0x100, 4)),
             ),
             PixelShaderDispatchContract {
                 dispatch_8: 1,
                 dispatch_16: 1,
                 dispatch_32: 0,
                 vector_mask_enable: true,
-                grf_start_dw: 0x0002_0002,
+                grf_start_dw: 0x0002_0004,
                 ksp: [0xC0, 0xC0, 0x100],
             }
         );
@@ -1233,7 +1239,7 @@ mod retained_native_matrix_draw_contract_tests {
     }
 
     #[test]
-    fn textured_matrix_handoff_requires_uv_vertices_and_a_sampled_surface() {
+    fn textured_matrix_handoff_accepts_explicit_uv_vertices_and_a_sampled_surface() {
         let mut native = native_contract();
         native.vf_sgvs_dw1 = 0xE002_4002;
         native.vf_sgvs_2_dw1 = 0xB002_0002;
@@ -2182,19 +2188,7 @@ fn encode_triangle_probe_batch(
         | (ps_dispatch_32 << 2)
         | (u32::from(ps_push_constant_enable) * PS_PUSH_CONSTANT_ENABLE)
         | (ps_max_threads_per_psd << PS_MAX_THREADS_SHIFT);
-    let ps_dw7 = if artifact_native_fixed_function
-        && matches!(
-            pipeline.ps.meta.kernel.dispatch_mode,
-            crate::intel::shader::DispatchMode::Simd8
-        ) {
-        // Churn's authenticated SIMD8 binary is KSP0.  The captured ANV
-        // packet pairs KSP0 with Constant/Setup Data 0 (DW7[22:16]); the
-        // generic diagnostic mapper predates this artifact-native contract
-        // and keeps its historical variable-dispatch slot layout.
-        u32::from(ps_grf_start) << 16
-    } else {
-        ps_dispatch_contract.grf_start_dw
-    };
+    let ps_dw7 = ps_dispatch_contract.grf_start_dw;
     let [ps_ksp0, ps_ksp1, ps_ksp2] = ps_dispatch_contract.ksp;
     let ps_scratch_space_buffer = 0u32;
     let ps_extra_attribute_enable =
@@ -2221,6 +2215,27 @@ fn encode_triangle_probe_batch(
     } else {
         ps_extra_dw1
     };
+
+    if artifact_native_fixed_function
+        && draw.sampled_texture.is_some()
+        && !PICASSO_NATIVE_PS_COMMAND_LOGGED.swap(true, Ordering::AcqRel)
+    {
+        crate::log_important!(target: "render";
+            "picasso-material: proof=retained-texture-ps-command-encoded encoded=1 ksp=[0x{:X},0x{:X},0x{:X}] ps_dw3=0x{:08X} ps_dw6=0x{:08X} ps_dw7=0x{:08X} grf_start=[ksp0:{},ksp1:{},ksp2:{}] dispatch=[simd8:{},simd16:{},simd32:{}] does_not_prove=ps-thread-launch-or-texture-sample\n",
+            ps_ksp0,
+            ps_ksp1,
+            ps_ksp2,
+            ps_dw3,
+            ps_dw6,
+            ps_dw7,
+            (ps_dw7 >> 16) & 0x7F,
+            (ps_dw7 >> 8) & 0x7F,
+            ps_dw7 & 0x7F,
+            ps_dispatch_8,
+            ps_dispatch_16,
+            ps_dispatch_32,
+        );
+    }
 
     batch_dwords.fill(0);
 

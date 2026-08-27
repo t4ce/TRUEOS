@@ -92,6 +92,20 @@ class TrueosDocTests(unittest.TestCase):
         results = run("search", "cargo bp app publish")["data"]["results"]
         self.assertEqual(results[0]["name"], "blueprints")
 
+    def test_webcamframe_topic_documents_host_storage_and_startability_preflight(self) -> None:
+        data = run("topic", "webcam-frame")["data"]
+        self.assertEqual(data["name"], "webcamframe")
+        self.assertEqual(data["package"], "webcam-frame")
+        self.assertIn("bld/baremetal-logs/film", data["storage"]["explicit_rig_output"])
+        self.assertIn("webcam-frame-current.jpg", data["storage"]["current_film"])
+        self.assertIn("--record", data["recording_control"])
+        self.assertFalse(data["availability"]["shell2_startable"])
+        self.assertEqual(data["availability"]["registered_selectors"], [])
+
+    def test_search_discovers_webcamframe(self) -> None:
+        results = run("search", "webcam camera film")["data"]["results"]
+        self.assertEqual(results[0]["name"], "webcamframe")
+
     def test_reference_topic_indexes_checked_in_html_facts(self) -> None:
         data = run("topic", "html")["data"]
         self.assertEqual(data["name"], "references")

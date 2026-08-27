@@ -26,8 +26,7 @@ simple_triangle_dump: stat[0][9] name="Max live registers" value=19
 simple_triangle_dump: stat[0][10] name="Workgroup Memory Size" value=0
 simple_triangle_dump: stat[0][11] name="Non SSA regs after NIR" value=6
 simple_triangle_dump: stat[0][12] name="Source hash" value=763768011
-simple_triangle_dump: rep[0][0] name="Final NIR" isText=1 size=5301
-simple_triangle_dump: rep[0][1] name="GEN Assembly" isText=1 size=6679
+simple_triangle_dump: rep[0][0] name="GEN Assembly" isText=1 size=6679
 simple_triangle_dump: executable[1] stage=fragment name="SIMD8 fragment" desc="SIMD8 fragment shader" subgroup=8
 simple_triangle_dump: stat[1][0] name="Instruction Count" value=7
 simple_triangle_dump: stat[1][1] name="SEND Count" value=2
@@ -42,8 +41,7 @@ simple_triangle_dump: stat[1][9] name="Max live registers" value=7
 simple_triangle_dump: stat[1][10] name="Workgroup Memory Size" value=0
 simple_triangle_dump: stat[1][11] name="Non SSA regs after NIR" value=5
 simple_triangle_dump: stat[1][12] name="Source hash" value=3874285174
-simple_triangle_dump: rep[1][0] name="Final NIR" isText=1 size=2187
-simple_triangle_dump: rep[1][1] name="GEN Assembly" isText=1 size=911
+simple_triangle_dump: rep[1][0] name="GEN Assembly" isText=1 size=911
 simple_triangle_dump: executable[2] stage=fragment name="SIMD16 fragment" desc="SIMD16 fragment shader" subgroup=16
 simple_triangle_dump: stat[2][0] name="Instruction Count" value=11
 simple_triangle_dump: stat[2][1] name="SEND Count" value=2
@@ -58,6 +56,5 @@ simple_triangle_dump: stat[2][9] name="Max live registers" value=13
 simple_triangle_dump: stat[2][10] name="Workgroup Memory Size" value=0
 simple_triangle_dump: stat[2][11] name="Non SSA regs after NIR" value=5
 simple_triangle_dump: stat[2][12] name="Source hash" value=3874285174
-simple_triangle_dump: rep[2][0] name="Final NIR" isText=1 size=2187
-simple_triangle_dump: rep[2][1] name="GEN Assembly" isText=1 size=1474
+simple_triangle_dump: rep[2][0] name="GEN Assembly" isText=1 size=1474
 helio_pipeline_dump: compiled_only=1

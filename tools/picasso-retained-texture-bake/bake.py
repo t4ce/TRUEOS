@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import importlib.util
+from contextlib import nullcontext
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -38,13 +40,52 @@ def replace_once(source: str, old: str, new: str) -> str:
     return source.replace(old, new)
 
 
+def validate_vertex_isa(baker, work: Path, assembly: Path, binary: bytes) -> None:
+    """Require the recovered VS payload to be decodable gfx12.5 EU ISA."""
+    expected_bytes = baker.assembly_code_size(assembly)
+    expected_instructions = baker.assembly_instruction_count(assembly)
+    if len(binary) != expected_bytes:
+        raise SystemExit(
+            f"retained vertex ISA size mismatch: {len(binary)} != {expected_bytes}"
+        )
+    iga = shutil.which("iga64")
+    if iga is None:
+        raise SystemExit("iga64 is required to validate retained vertex ISA")
+    candidate = work / "retained_textured_forward.vs.recovered.bin"
+    candidate.write_bytes(binary)
+    decoded = subprocess.run(
+        [iga, "-d", "-p=12p5", "-Xprint-pc", str(candidate)],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    rows = re.findall(r"^/\* \[[0-9A-Fa-f]+\]", decoded.stdout, re.MULTILINE)
+    if (
+        decoded.returncode != 0
+        or len(rows) != expected_instructions
+        or not re.search(r"send\.urb.*\{EOT[,}]", decoded.stdout)
+    ):
+        sys.stderr.write(decoded.stdout)
+        raise SystemExit(
+            "retained vertex cache payload is reflection/trailer data, not complete EU ISA"
+        )
+
+
 def main() -> None:
     baker = load_baker()
-    with tempfile.TemporaryDirectory(
-        prefix="picasso-retained-texture-bake-",
-        dir=TRUEOS / "bld",
-    ) as raw:
+    retained_work = os.environ.get("TRUEOS_PICASSO_BAKE_WORK_DIR")
+    work_context = (
+        nullcontext(retained_work)
+        if retained_work
+        else tempfile.TemporaryDirectory(
+            prefix="picasso-retained-texture-bake-",
+            dir=TRUEOS / "bld",
+        )
+    )
+    with work_context as raw:
         work = Path(raw)
+        work.mkdir(parents=True, exist_ok=True)
         vs_spv = work / "retained_textured_forward.vs.spv"
         fs_spv = work / "retained_textured_forward.fs.spv"
         if baker.HELIO.is_dir() and baker.NAGA_MANIFEST.is_file():
@@ -151,6 +192,10 @@ def main() -> None:
         baker.run([str(dumper), str(vs_spv), str(fs_spv)], env=env, log=log)
         device, executables = baker.parse_compile_log(log.read_text())
         vs, ps8, ps16 = baker.extract_native(exec_dir, work / "native")
+        vertex_assemblies = sorted(exec_dir.glob("*_vertex_*_GEN_Assembly.txt"))
+        if len(vertex_assemblies) != 1:
+            raise SystemExit("retained pipeline exposed no unique vertex assembly")
+        validate_vertex_isa(baker, work, vertex_assemblies[0], vs)
         if ps16 is None or ps16 != PROVEN_ADLS_TEXTURE_PS.read_bytes():
             raise SystemExit("retained fragment no longer matches proven ADL-S SIMD16 sampler")
 

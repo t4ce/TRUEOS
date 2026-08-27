@@ -82,7 +82,7 @@
   "native_bytes": {
     "ps16": 160,
     "ps8": 96,
-    "vs": 512
+    "vs": 648
   },
   "runtime_dispatch": {
     "fragment": "simd16",
