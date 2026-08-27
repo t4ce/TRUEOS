@@ -439,9 +439,9 @@ impl<'a> AlignedWriter<'a> {
         match mode {
             ShellMode2::Apps => shell2_apps::command_names_text(),
             ShellMode2::Cmd if (self.io.output_mask() & OUTPUT_LOCAL_MASK) != 0 => {
-                shell2_cmd_registry::command_names_status_text_fitting(available_width)
+                shell2_cmd_registry::titlebar_right_command_names_text_fitting(available_width)
             }
-            ShellMode2::Cmd => command_names_status_text(),
+            ShellMode2::Cmd => titlebar_right_command_names_text(),
         }
     }
 
@@ -784,7 +784,7 @@ fn banner_right_visible_width(output_mask: OutputMask) -> usize {
         return ecma48::visible_width("VMX tui env smp leave[ESC] stop pause snapshot preserve");
     }
 
-    let cmd_width = ecma48::visible_width(command_names_status_text().as_str());
+    let cmd_width = ecma48::visible_width(titlebar_right_command_names_text().as_str());
     let apps_width = ecma48::visible_width(shell2_apps::command_names_text().as_str());
     cmd_width.max(apps_width)
 }
@@ -1148,8 +1148,8 @@ pub(crate) fn command_registry_json() -> AllocString {
     cmds::command_registry_json()
 }
 
-fn command_names_status_text() -> AllocString {
-    shell2_cmd_registry::command_names_status_text()
+fn titlebar_right_command_names_text() -> AllocString {
+    shell2_cmd_registry::titlebar_right_command_names_text()
 }
 
 fn output_mask_for_io(io: &dyn ShellIo2) -> OutputMask {

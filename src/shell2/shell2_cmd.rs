@@ -32,15 +32,5 @@ pub(crate) fn try_parse(
     }
 
     let submitted = line.trim();
-    if let Some(command) = submitted.split_whitespace().next() {
-        if command.eq_ignore_ascii_case("bios") {
-            let rest = submitted
-                .get(command.len()..)
-                .unwrap_or("")
-                .trim_start();
-            return super::cmds::bios::try_parse(io, rest);
-        }
-    }
-
     super::shell2_cmd_registry::try_dispatch(spawner, io, submitted)
 }

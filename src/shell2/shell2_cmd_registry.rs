@@ -32,6 +32,7 @@ const STATUS_RAINBOW_COLORS: [u8; 8] = [199, 208, 227, 121, 51, 39, 99, 201];
 
 const TOOL_JSON_ACPI: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["reboot","S1","S2","S3","S4","S5"],"description":"ACPI action to run."}},"required":["action"],"additionalProperties":false}"#;
 const TOOL_JSON_AUD: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
+const TOOL_JSON_BIOS: &str = r#"{"type":"object","properties":{"view":{"type":"string","enum":["all","status","services","setup","handoff","hints"],"description":"BIOS/UEFI control-plane view to print."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_CPP: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["list","status","stop","font","spirit","svg"],"description":"Inspect or stop the interactive C++/IGC gallery, stamp/present/rush font RGBA, select Spirit's C++ repass, or control the SVG experiment. Omit action to launch the gallery."},"font_action":{"type":"string","enum":["stamp","present","rush","status","release"],"description":"Create an owned async RGBA stamp, present it through UI4, or control the staged Unicode glyph rush."},"rush_action":{"type":"string","enum":["start","stop"],"description":"Start or stop the font rush when action=font and font_action=rush; start is the default."},"text":{"type":"string","maxLength":4096,"description":"UTF-8 text for action=font; newlines create rows."},"font":{"type":"integer","minimum":1,"maximum":3,"description":"Optional GPU font face for action=font."},"size":{"type":"number","minimum":4,"maximum":2048,"description":"Font pixel size for action=font."},"color":{"type":"string","description":"Font RGBA color encoded as RRGGBBAA."},"canvas":{"type":"string","description":"Optional WIDTHxHEIGHT RGBA8 canvas at or below the UHD/4K soft cap."},"background_id":{"type":"integer","enum":[0,2,3,4,5,6,7,8,9,10,11],"description":"Spirit background ID when action is spirit; 11 is the UTC MagicTimeCircle."},"shader_id":{"type":"integer","minimum":0,"maximum":15,"description":"Spirit sprite shader ID when action is spirit."},"svg_action":{"type":"string","enum":["start","status","stop"],"description":"SVG-experiment lifecycle action when action=svg."},"svg_demo":{"type":"string","enum":["basic","curves","holes"],"description":"Byte-embedded SVG outline experiment selected when action=svg."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_DISC: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["list","format","ramdisc"],"description":"disc action to run."},"disk_id":{"type":"string","description":"Disk id string for action=format."},"size":{"type":"string","description":"Optional ramdisc size like 512MB or 1GiB for action=ramdisc."}},"required":["action"],"additionalProperties":false}"#;
 const TOOL_JSON_GRID: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
@@ -64,6 +65,10 @@ fn dispatch_acpi(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> Par
 
 fn dispatch_aud(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     super::cmds::aud::try_parse(spawner, io, rest)
+}
+
+fn dispatch_bios(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::bios::try_parse(io, rest)
 }
 
 fn dispatch_img(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -202,7 +207,9 @@ fn dispatch_xhci(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) 
     super::cmds::xhci::try_parse(spawner, io, rest)
 }
 
-const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
+/// The authoritative Shell2 command registry. Its declaration order is also
+/// the order of command names in the right-aligned Shell2 titlebar section.
+const SHELL2_COMMAND_REGISTRY: &[BuiltinShell2CmdEntry] = &[
     BuiltinShell2CmdEntry {
         name: "acpi",
         mode: "cmd",
@@ -222,6 +229,15 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
             "Launch the Player Blueprint in VMX-minishell mode without its terminal TUI.",
         ),
         tool_parameters_json: Some(TOOL_JSON_AUD),
+    },
+    BuiltinShell2CmdEntry {
+        name: "bios",
+        mode: "cmd",
+        color: Some(STATUS_GRAY_RGB),
+        advertised: true,
+        handler: dispatch_bios,
+        tool_description: Some("Inspect BIOS/UEFI control-plane state and handoff information."),
+        tool_parameters_json: Some(TOOL_JSON_BIOS),
     },
     BuiltinShell2CmdEntry {
         name: "cpp",
@@ -369,9 +385,7 @@ const BUILTIN_CMD_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         color: Some(STATUS_GREEN_RGB),
         advertised: true,
         handler: dispatch_td,
-        tool_description: Some(
-            "Launch termdir at the TRUEOSFS root with depth 2.",
-        ),
+        tool_description: Some("Launch termdir at the TRUEOSFS root with depth 2."),
         tool_parameters_json: Some(TOOL_JSON_TD),
     },
     #[cfg(feature = "trueos_lumen")]
@@ -522,8 +536,8 @@ fn starts_with_command<'a>(submitted: &'a str, name: &str) -> Option<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::{
-        TOOL_JSON_CPP, TOOL_JSON_HELIO, command_names_status_text, command_registry_json,
-        starts_with_command,
+        TOOL_JSON_CPP, TOOL_JSON_HELIO, command_registry_json, starts_with_command,
+        titlebar_right_command_names_text,
     };
 
     #[test]
@@ -545,7 +559,7 @@ mod tests {
 
     #[test]
     fn titlebar_accents_media_commands_and_acpi() {
-        let status = command_names_status_text();
+        let status = titlebar_right_command_names_text();
 
         let rainbow_start = "\x1b[1;4;38;5;199m";
         assert_eq!(status.matches(rainbow_start).count(), 4);
@@ -554,7 +568,7 @@ mod tests {
 
     #[test]
     fn titlebar_groups_cry_and_display_only_backup_with_pink_commands() {
-        let status = command_names_status_text();
+        let status = titlebar_right_command_names_text();
         let positions = ["cry", "backup", "os", "shell"].map(|label| {
             let token = alloc::format!("\x1b[1;38;2;255;55;255m{label}\x1b[0m");
             status.find(token.as_str()).unwrap()
@@ -565,10 +579,22 @@ mod tests {
     }
 
     #[test]
-    fn green_file_surface_includes_app_db_edit() {
-        let status = command_names_status_text();
-        let positions = ["td", "shot", "disc", "edit"].map(|label| status.find(label).unwrap());
-        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+    fn titlebar_includes_previously_omitted_commands() {
+        let status = titlebar_right_command_names_text();
+        for label in ["img", "gridp", "xhci", "set", "bios"] {
+            assert!(status.contains(label), "titlebar is missing {label}");
+        }
+        #[cfg(feature = "trueos_lumen")]
+        assert!(status.contains("lum"));
+        assert!(command_registry_json().contains("\"name\":\"bios\""));
+    }
+
+    #[test]
+    fn titlebar_includes_green_file_surface_commands() {
+        let status = titlebar_right_command_names_text();
+        for label in ["td", "shot", "disc", "edit"] {
+            assert!(status.contains(label), "titlebar is missing {label}");
+        }
 
         let registry = command_registry_json();
         for retired in ["7z", "mv", "move", "rm", "remove", "delete", "del", "sha"] {
@@ -591,7 +617,7 @@ mod tests {
         assert!(registry.contains("Spirit's 256x256 direct GPU logger"));
         assert!(registry.contains("\"monitor_action\""));
         assert!(registry.contains("\"maximum\":300"));
-        assert!(command_names_status_text().contains("helio"));
+        assert!(titlebar_right_command_names_text().contains("helio"));
     }
 
     #[test]
@@ -615,7 +641,7 @@ pub(crate) fn try_dispatch(
     io: &'static dyn ShellBackend2,
     submitted: &str,
 ) -> ParseOutcome {
-    for entry in BUILTIN_CMD_REGISTRY {
+    for entry in SHELL2_COMMAND_REGISTRY {
         if let Some(rest) = starts_with_command(submitted, entry.name) {
             return (entry.handler)(spawner, io, rest);
         }
@@ -624,38 +650,18 @@ pub(crate) fn try_dispatch(
     ParseOutcome::NotCommand
 }
 
-pub(crate) fn command_names_status_text() -> AllocString {
-    const STATUS_ORDER: &[&str] = &[
-        "td", "shot", "disc", "edit", "cry", "backup", "os", "shell", "hyper", "surf", "net",
-        "ssh", "qjs", "grid", "helio", "tts", "stt", "cpp", "vgpu", "aud", "vid", "acpi", "tlb",
-        "ram", "smp", "etc",
-    ];
-
+/// Render the command portion of Shell2's right-aligned titlebar section.
+///
+/// Every advertised entry in [`SHELL2_COMMAND_REGISTRY`] is included, so a
+/// newly registered command cannot be omitted from this titlebar listing.
+pub(crate) fn titlebar_right_command_names_text() -> AllocString {
     let mut out = AllocString::new();
-
-    let mut first = true;
-    for name in STATUS_ORDER {
-        if *name == "backup" {
-            if !first {
-                out.push(' ');
-            }
-            first = false;
-            push_colored_status_token(&mut out, name, STATUS_PINK_RGB);
-            continue;
-        }
-        let Some(entry) = BUILTIN_CMD_REGISTRY
-            .iter()
-            .find(|entry| entry.advertised && entry.name == *name)
-        else {
-            continue;
-        };
-
-        if !first {
+    visit_titlebar_right_entries(|entry| {
+        if !out.is_empty() {
             out.push(' ');
         }
-        first = false;
-        push_status_command_name(&mut out, entry);
-    }
+        push_titlebar_right_entry(&mut out, entry);
+    });
 
     out
 }
@@ -663,43 +669,33 @@ pub(crate) fn command_names_status_text() -> AllocString {
 /// Return complete, colorized command tokens that fit one titlebar segment.
 /// The local UI4 frontend has fewer columns than the desktop terminal, so a
 /// full legend must be shortened without splitting ANSI escape sequences.
-pub(crate) fn command_names_status_text_fitting(max_width: usize) -> AllocString {
-    let full = command_names_status_text();
+pub(crate) fn titlebar_right_command_names_text_fitting(max_width: usize) -> AllocString {
+    let full = titlebar_right_command_names_text();
     if super::ecma48::visible_width(full.as_str()) <= max_width {
         return full;
     }
 
-    const STATUS_ORDER: &[&str] = &[
-        "td", "shot", "disc", "edit", "cry", "backup", "os", "shell", "hyper", "surf", "net",
-        "ssh", "qjs", "grid", "helio", "tts", "stt", "cpp", "vgpu", "aud", "vid", "acpi", "tlb",
-        "ram", "smp", "etc",
-    ];
-
     let content_width = max_width.saturating_sub(3);
     let mut out = AllocString::new();
-    for name in STATUS_ORDER {
-        let mut token = AllocString::new();
-        if *name == "backup" {
-            push_colored_status_token(&mut token, name, STATUS_PINK_RGB);
-        } else if let Some(entry) = BUILTIN_CMD_REGISTRY
-            .iter()
-            .find(|entry| entry.advertised && entry.name == *name)
-        {
-            push_status_command_name(&mut token, entry);
-        } else {
-            continue;
+    let mut truncated = false;
+    visit_titlebar_right_entries(|entry| {
+        if truncated {
+            return;
         }
+        let mut token = AllocString::new();
+        push_titlebar_right_entry(&mut token, entry);
 
         let separator = if out.is_empty() { "" } else { " " };
         let candidate_width = super::ecma48::visible_width(out.as_str())
             .saturating_add(separator.len())
             .saturating_add(super::ecma48::visible_width(token.as_str()));
         if candidate_width > content_width {
-            break;
+            truncated = true;
+            return;
         }
         out.push_str(separator);
         out.push_str(token.as_str());
-    }
+    });
     if out.is_empty() {
         return AllocString::from("...");
     }
@@ -707,7 +703,24 @@ pub(crate) fn command_names_status_text_fitting(max_width: usize) -> AllocString
     out
 }
 
-fn push_status_command_name(out: &mut AllocString, entry: &BuiltinShell2CmdEntry) {
+fn visit_titlebar_right_entries(mut visit: impl FnMut(Option<&BuiltinShell2CmdEntry>)) {
+    for entry in SHELL2_COMMAND_REGISTRY
+        .iter()
+        .filter(|entry| entry.advertised)
+    {
+        visit(Some(entry));
+        if entry.name == "cry" {
+            // `backup` is a titlebar-only visual label, not a shell command.
+            visit(None);
+        }
+    }
+}
+
+fn push_titlebar_right_entry(out: &mut AllocString, entry: Option<&BuiltinShell2CmdEntry>) {
+    let Some(entry) = entry else {
+        push_colored_status_token(out, "backup", STATUS_PINK_RGB);
+        return;
+    };
     let label = status_command_label(entry);
 
     if matches!(entry.name, "cpp" | "vgpu" | "aud" | "vid") {
@@ -753,7 +766,7 @@ pub(crate) fn command_registry_json() -> AllocString {
     let mut out = AllocString::from("{\"version\":1,\"commands\":[");
     let mut first = true;
 
-    for entry in BUILTIN_CMD_REGISTRY {
+    for entry in SHELL2_COMMAND_REGISTRY {
         if !entry.advertised {
             continue;
         }
