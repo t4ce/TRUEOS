@@ -1,0 +1,280 @@
+#!/usr/bin/env python3
+"""Small, deterministic TRUEOS knowledge API for coding agents."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import re
+import sys
+from pathlib import Path
+from typing import Any
+
+
+API = "trueos-doc/v1"
+APP_COMMANDS = [
+    {"name": "start", "usage": "start [selector]", "effect": "List app.db or launch one installed Blueprint. Launch arguments are intentionally unsupported."},
+    {"name": "online", "usage": "online [selector]", "effect": "List or fetch, verify, and immediately launch a Blueprint from https://trueos.eu/apps."},
+    {"name": "dl", "usage": "dl [selector]", "effect": "List or install an online Blueprint into app.db without launching it."},
+    {"name": "peer", "usage": "peer [peer-id [remote-vmid [local-vmid]]]", "effect": "List peers/offers or request a peer snapshot transfer; cross-principal restore may be safety-gated."},
+    {"name": "pause", "aliases": ["unpause"], "usage": "pause [vmid]", "effect": "List replicatable VMs, or toggle one between running and its lifecycle pause latch."},
+    {"name": "snapshot", "aliases": ["snap"], "usage": "snapshot <vmid>", "effect": "Request a warm Blueprint-Ready checkpoint; use store afterward for reboot persistence."},
+    {"name": "store", "usage": "store <vmid> <name>", "effect": "Persist a completed warm snapshot under a name."},
+    {"name": "preserve", "aliases": ["save"], "usage": "preserve [vmid]", "effect": "Checkpoint then stop one VM, or every active VM when vmid is omitted."},
+    {"name": "load", "usage": "load [vmid | name [vmid] | URL [vmid]]", "effect": "Resume a warm snapshot, load a named persistent image, or request remote restore."},
+    {"name": "eject", "aliases": ["drop"], "usage": "eject <vmid>", "effect": "Discard retained warm state; named persistent images remain."},
+    {"name": "delete", "aliases": ["del"], "usage": "delete <name>", "effect": "Delete a named persistent image."},
+    {"name": "stop", "usage": "stop [vmid]", "effect": "Stop one VM, or every active VM when vmid is omitted, without checkpointing."},
+    {"name": "kick", "usage": "kick <vmid>", "effect": "Send the VM owner's kick signal."},
+    {"name": "status", "usage": "status", "effect": "Print VM slots, shared memory, VMX capability, and stored-snapshot counts."},
+]
+
+TOPICS: dict[str, dict[str, Any]] = {
+    "shell2": {
+        "summary": "Shell2 is a two-mode command surface over per-transport Matrix slots.",
+        "default_mode": "cmd",
+        "modes": {
+            "cmd": "Dispatches the kernel command registry.",
+            "apps": "Dispatches Blueprint lifecycle and catalog commands.",
+        },
+        "tab": "TAB toggles cmd <-> apps while editing, but is ignored whenever the active Matrix slot owns a VM.",
+        "routing_order_on_enter": ["§§ operator", "§ Matrix operator", "VM leave/control/app input", "interactive command session", "current cmd/apps mode"],
+        "sources": ["src/shell2/mod.rs::ShellMode2", "src/shell2/mod.rs::handle_submit", "src/shell2/mod.rs::run_shell2_on_backend"],
+    },
+    "headjack": {
+        "summary": "The § headjack operator navigates and retires Matrix context slots independently of cmd/apps mode.",
+        "operators": [
+            {"input": "§", "effect": "Select the default Matrix slot."},
+            {"input": "§<slot>", "effect": "Select <slot>, creating an empty slot if absent. Slot ids are truncated to the Matrix id capacity."},
+            {"input": "§<slot>§", "effect": "Free <slot>, retire its attachments, request stop for its VM(s), and return affected views to default."},
+            {"input": "§§", "effect": "Clear the active slot transcript. This is not a slot free."},
+            {"input": "§§<selector>", "effect": "Online-fetch and launch a Blueprint selector from any mode."},
+        ],
+        "invariants": ["Every § Matrix navigation forces Shell2 back to cmd mode.", "The paired §§ prefix is parsed before the single-§ operator.", "vmx_leave and local ESC from an active VM return to § (default)."],
+        "sources": ["src/shell2/mod.rs::handle_matrix_operator", "src/shell2/mod.rs::parse_double_section_operator", "src/shell2/matrix.rs::switch_active_slot", "src/shell2/matrix.rs::free_slot"],
+    },
+    "tui": {
+        "summary": "Blueprint terminal UIs lease Shell2 input/output; after release, the same VM remains addressable through its Matrix slot.",
+        "sequence": ["Connect to Shell2", "TAB only if apps mode is needed", "launch/select the Blueprint", "the Blueprint may acquire the terminal lease", "after it parks/releases, enter vmx_tui to request re-entry", "enter vmx_leave or § to return to the default slot"],
+        "vm_controls": ["vmx_tui [demo]", "vmx_env", "vmx_smp", "vmx_help", "vmx_leave", "vmx_stop", "vmx_pause", "vmx_snapshot", "vmx_preserve"],
+        "notes": ["While a VM is active, TAB is delivered/ignored as VM context requires; it does not switch Shell2 mode.", "Blueprint commands without vmx_ are passed to text-app input when that Blueprint enables command passthrough."],
+        "sources": ["src/shell2/mod.rs::is_vmx_control_command", "src/shell2/mod.rs::is_vmx_tui_command", "src/hv/mod.rs::blueprint_control_shell_vmx_command", "crates/trueos-v/src/vshell.rs"],
+    },
+    "runscripts": {
+        "summary": "A launch script is a one-shot, per-VM UTF-8 control stream, separate from argv.",
+        "guest_interface": "Read vFile:launch through TRUEOS async-fs. Legacy /.trueos/launch is accepted by the host.",
+        "delivery": "The host stores the script on the pending Blueprint launch and consumes it on the guest's first virtual-file read.",
+        "host_entry_points": ["startup.json blueprint.launch_script", "Shell2 internal launch helpers used by td/surf and online launch", "run::enqueue_blueprint_bytes_with_instance_and_launch_script"],
+        "directives_are_app_specific": True,
+        "shared_directive": {"line": "fs-scope trueosfs", "effect": "Grants TRUEOSFS scope and sets TRUEOS_FS_SCOPE=trueosfs for that launch."},
+        "examples": [
+            {"consumer": "termdir", "script": "fs-scope trueosfs\nbrowse /\ndepth 2"},
+            {"consumer": "img startup", "script": "show kernel:logo center nohit\nshow kernel:intel-graphics bottom-left\nshow kernel:bgrt bottom-right"},
+        ],
+        "sources": ["src/hv/mod.rs::PendingBlueprintLaunch", "src/r/io/async_fs_cabi.rs::start_read", "src/hv/blueprint/blueprint.rs::build_process_env", "src/shell2/cmds/td.rs::TD_LAUNCH_SCRIPT", "startup.json"],
+    },
+    "rig": {
+        "summary": "Current checked-in LAN defaults for the physical TRUEOS test rig.",
+        "physical": {"host": "192.168.178.94", "shell2_tcp_port": 4245, "log_tcp_port": 1, "expected_tcp_ports": [2, 80, 1337, 4245, 32344]},
+        "connect": "stty raw -echo; exec nc 192.168.178.94 4245",
+        "terminal_launcher": "konsole -e sh -c 'stty raw -echo; exec nc 192.168.178.94 4245'",
+        "qemu": {"guest_shell2_tcp_port": 4245, "default_host_forward": "127.0.0.1:14245", "connect": "stty raw -echo; exec nc 127.0.0.1 14245"},
+        "asset_host": {"host": "192.168.178.111", "http_port": 8080, "base_url": "http://192.168.178.111:8080"},
+        "override_env": ["TRUEOS_BAREMETAL_LOG_HOST", "TRUEOS_BAREMETAL_LOG_PORT", "QEMU_HOST_TCP_PORT_NET_SHELL"],
+        "sources": ["readme.md#Network Console Access", "src/allports.rs::services::NET_SHELL_TCP_PORT", "tools/check-lan-ports.py", "tools/baremetal-log-drain.sh", "tools/qemu/run.sh"],
+    },
+    "apps": {
+        "summary": "Apps mode manages Blueprint discovery, launch, replication lifecycle, and persistence.",
+        "commands": APP_COMMANDS,
+        "sources": ["src/shell2/shell2_apps.rs::APP_COMMANDS", "src/shell2/shell2_apps.rs::submit", "src/shell2/shell2_dl.rs"],
+    },
+}
+
+ALIASES = {
+    "§": "headjack", "operator": "headjack", "matrix": "headjack", "headjack-operator": "headjack",
+    "tab": "shell2", "modes": "shell2", "mode": "shell2", "shell": "shell2",
+    "runscript": "runscripts", "run-script": "runscripts", "launch-script": "runscripts", "vfile:launch": "runscripts",
+    "testrig": "rig", "test-rig": "rig", "network": "rig", "lan": "rig", "port": "rig",
+    "terminal": "tui", "terminal-ui": "tui", "vmx": "tui", "blueprints": "apps",
+}
+
+
+class DocError(Exception):
+    pass
+
+
+def repo_root() -> Path:
+    candidates: list[Path] = []
+    if value := os.environ.get("TRUEOS_REPO"):
+        candidates.append(Path(value))
+    candidates.extend([Path(__file__).resolve().parent.parent, Path.cwd(), *Path.cwd().parents])
+    for candidate in candidates:
+        if (candidate / "src/shell2/shell2_cmd_registry.rs").is_file():
+            return candidate.resolve()
+    raise DocError("TRUEOS repo not found; set TRUEOS_REPO")
+
+
+def rust_string(body: str, field: str) -> str | None:
+    match = re.search(rf"\b{field}:\s*\"([^\"]*)\"", body)
+    return match.group(1) if match else None
+
+
+def command_registry(root: Path) -> list[dict[str, Any]]:
+    source = (root / "src/shell2/shell2_cmd_registry.rs").read_text(encoding="utf-8")
+    constants = {
+        name: json.loads(raw)
+        for name, raw in re.findall(r'const\s+(TOOL_JSON_[A-Z0-9_]+):\s*&str\s*=\s*r#"(.*?)"#;', source, re.S)
+    }
+    start = source.index("const SHELL2_COMMAND_REGISTRY")
+    end = source.index("fn starts_with_command", start)
+    entries: list[dict[str, Any]] = []
+    for body in re.findall(r"BuiltinShell2CmdEntry\s*\{(.*?)\n\s*\},", source[start:end], re.S):
+        if not re.search(r"\badvertised:\s*true", body):
+            continue
+        name = rust_string(body, "name")
+        mode = rust_string(body, "mode")
+        if not name or not mode:
+            raise DocError("could not parse the Shell2 command registry")
+        entry: dict[str, Any] = {"name": name, "mode": mode}
+        description = re.search(r'tool_description:\s*Some\(\s*"(.*?)"\s*,?\s*\)', body, re.S)
+        schema_name = re.search(r"tool_parameters_json:\s*Some\((TOOL_JSON_[A-Z0-9_]+)\)", body)
+        if description:
+            entry["description"] = re.sub(r"\s+", " ", description.group(1)).strip()
+        if schema_name:
+            entry["parameters"] = constants[schema_name.group(1)]
+        entry["source"] = "src/shell2/shell2_cmd_registry.rs::SHELL2_COMMAND_REGISTRY"
+        entries.append(entry)
+    if not entries:
+        raise DocError("Shell2 command registry is empty")
+    return entries
+
+
+def resolve_topic(name: str) -> tuple[str, dict[str, Any]]:
+    key = name.casefold()
+    key = ALIASES.get(key, key)
+    if key not in TOPICS:
+        raise DocError(f"unknown topic: {name}")
+    return key, TOPICS[key]
+
+
+def compact_context(root: Path) -> dict[str, Any]:
+    commands = command_registry(root)
+    return {
+        "purpose": "Minimum context needed to operate and reason about TRUEOS Shell2.",
+        "shell2": {
+            "default_mode": "cmd",
+            "tab": TOPICS["shell2"]["tab"],
+            "cmd_commands": [entry["name"] for entry in commands],
+            "apps_commands": [entry["name"] for entry in APP_COMMANDS],
+        },
+        "headjack": TOPICS["headjack"]["operators"],
+        "runscripts": {
+            "guest_interface": TOPICS["runscripts"]["guest_interface"],
+            "shared_directive": TOPICS["runscripts"]["shared_directive"],
+            "warning": "Directive grammar belongs to the consuming Blueprint; query topic runscripts before inventing lines.",
+        },
+        "rig": TOPICS["rig"]["physical"] | {"connect": TOPICS["rig"]["connect"], "qemu_connect": TOPICS["rig"]["qemu"]["connect"]},
+        "next_queries": ["trueos-doc topic headjack", "trueos-doc topic tui", "trueos-doc command <name>", "trueos-doc search <terms>"],
+    }
+
+
+def search(query: str, root: Path, limit: int) -> list[dict[str, Any]]:
+    terms = [term.casefold() for term in re.findall(r"[\w§:-]+", query)]
+    if not terms:
+        raise DocError("search query is empty")
+    documents: list[tuple[str, str, Any]] = [("topic", key, value) for key, value in TOPICS.items()]
+    documents.extend(("command", item["name"], item) for item in command_registry(root))
+    documents.extend(("app-command", item["name"], item) for item in APP_COMMANDS)
+    scored = []
+    for kind, name, value in documents:
+        haystack = json.dumps(value, ensure_ascii=False, sort_keys=True).casefold()
+        score = sum(4 if term == name.casefold() else haystack.count(term) for term in terms)
+        if score:
+            summary = value.get("summary") or value.get("description") or value.get("effect") or ""
+            scored.append((score, {"kind": kind, "name": name, "summary": summary}))
+    scored.sort(key=lambda item: (-item[0], item[1]["kind"], item[1]["name"]))
+    return [item for _, item in scored[:limit]]
+
+
+def parser() -> argparse.ArgumentParser:
+    result = argparse.ArgumentParser(prog="trueos-doc", description="Machine-readable TRUEOS documentation API")
+    result.add_argument("--pretty", action="store_true", help="indent JSON output")
+    sub = result.add_subparsers(dest="action")
+    sub.add_parser("context", help="return the minimum high-value context")
+    topic = sub.add_parser("topic", help="return one curated architectural topic")
+    topic.add_argument("name")
+    find = sub.add_parser("search", help="search topics and Shell2 commands")
+    find.add_argument("query", nargs="+")
+    find.add_argument("--limit", type=int, default=8)
+    commands = sub.add_parser("commands", help="list command surfaces")
+    commands.add_argument("--mode", choices=["cmd", "apps", "all"], default="all")
+    command = sub.add_parser("command", help="return one command and its JSON Schema")
+    command.add_argument("name")
+    sub.add_parser("topics", help="list topic names and aliases")
+    sub.add_parser("schema", help="describe this CLI's stable command surface")
+    return result
+
+
+def execute(args: argparse.Namespace, root: Path) -> Any:
+    action = args.action or "context"
+    if action == "context":
+        return compact_context(root)
+    if action == "topic":
+        name, value = resolve_topic(args.name)
+        return {"name": name, **value}
+    if action == "search":
+        if not 1 <= args.limit <= 100:
+            raise DocError("--limit must be in 1..100")
+        return {"query": " ".join(args.query), "results": search(" ".join(args.query), root, args.limit)}
+    if action == "commands":
+        result: dict[str, Any] = {}
+        if args.mode in ("cmd", "all"):
+            result["cmd"] = command_registry(root)
+        if args.mode in ("apps", "all"):
+            result["apps"] = APP_COMMANDS
+        return result
+    if action == "command":
+        needle = args.name.casefold()
+        matches = [item for item in command_registry(root) if item["name"].casefold() == needle]
+        matches.extend(item for item in APP_COMMANDS if item["name"].casefold() == needle or needle in item.get("aliases", []))
+        if not matches:
+            raise DocError(f"unknown command: {args.name}")
+        return matches[0]
+    if action == "topics":
+        return {"topics": sorted(TOPICS), "aliases": ALIASES}
+    if action == "schema":
+        return {
+            "commands": {
+                "context": "minimum high-value context (also the default)",
+                "topic <name>": "exact curated topic",
+                "search <terms> [--limit N]": "ranked discovery",
+                "commands [--mode cmd|apps|all]": "command catalogs; cmd entries include live Rust JSON Schemas",
+                "command <name>": "exact command contract",
+                "topics": "topic and alias discovery",
+            },
+            "output": {"content_type": "application/json", "envelope": {"api": API, "ok": "boolean", "data_or_error": "object|string"}},
+            "stability": "API v1 fields are additive; errors exit 2; no command mutates TRUEOS or the rig.",
+        }
+    raise DocError(f"unknown action: {action}")
+
+
+def emit(payload: dict[str, Any], pretty: bool, stream: Any = sys.stdout) -> None:
+    json.dump(payload, stream, ensure_ascii=False, sort_keys=True, indent=2 if pretty else None, separators=None if pretty else (",", ":"))
+    stream.write("\n")
+
+
+def main() -> int:
+    args = parser().parse_args()
+    try:
+        root = repo_root()
+        data = execute(args, root)
+        emit({"api": API, "ok": True, "data": data}, args.pretty)
+        return 0
+    except (DocError, OSError, ValueError, KeyError) as error:
+        emit({"api": API, "ok": False, "error": str(error)}, args.pretty, sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

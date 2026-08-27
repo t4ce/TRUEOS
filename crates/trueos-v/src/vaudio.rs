@@ -317,35 +317,28 @@ impl NativeRenderCommandV2 {
     pub const KIND_SAMPLE: u16 = NativeRenderCommandV1::KIND_SAMPLE;
 
     pub fn validate(&self, block_frames: u32) -> Result<(), NativeValidationError> {
-        NativeRenderCommandV1 {
-            start_frame: self.start_frame,
-            end_frame: self.end_frame,
-            age_frames: self.age_frames,
-            duration_frames: self.duration_frames,
-            source_id: self.source_id,
-            voice_id: self.voice_id,
-            kind: self.kind,
-            waveform: self.waveform,
-            midi_note: self.midi_note,
-            gain_q15: self.gain_q15,
-            pan_q15: self.pan_q15,
-            playback_rate_q16: self.playback_rate_q16,
-            sample_begin_q16: self.sample_begin_q16,
-            sample_end_q16: self.sample_end_q16,
-            lpf_hz: self.lpf_hz,
-            lpq_q8: self.lpq_q8,
-            room_q15: self.room_q15,
-            delay_q15: self.delay_q15,
-            phaser_q15: self.phaser_q15,
-            shape_q15: self.shape_q15,
-            fm_depth_q8: self.fm_depth_q8,
-            fm_rate_q8: self.fm_rate_q8,
-            flags: self.flags,
-            reserved0: self.reserved0,
-            reserved1: self.reserved1,
-            reserved2: self.reserved2,
+        if self.start_frame >= self.end_frame || self.end_frame > block_frames {
+            return Err(NativeValidationError::BadSpan);
         }
-        .validate(block_frames)
+        // Unlike V1, V2/V3 have an explicit release stage. Commands may
+        // resume in a later block after their gate has ended, until the
+        // release tail itself is exhausted.
+        let envelope_frames = self
+            .duration_frames
+            .saturating_add(self.release_frames);
+        if self.duration_frames == 0 || self.age_frames >= envelope_frames {
+            return Err(NativeValidationError::BadDuration);
+        }
+        if self.kind != Self::KIND_OSCILLATOR && self.kind != Self::KIND_SAMPLE {
+            return Err(NativeValidationError::BadKind);
+        }
+        if self.reserved0 != 0 || self.reserved1 != 0 || self.reserved2 != 0 {
+            return Err(NativeValidationError::ReservedNonZero);
+        }
+        if self.sustain_q15 > 32_767 || !(-2048..=2048).contains(&self.filter_env_octaves_q8) {
+            return Err(NativeValidationError::InvalidEnvelope);
+        }
+        Ok(())
     }
 }
 
@@ -403,6 +396,7 @@ pub enum NativeValidationError {
     BadKind,
     ReservedNonZero,
     InvalidSample,
+    InvalidEnvelope,
 }
 
 const _: [(); 40] = [(); size_of::<NativeBlockHeaderV1>()];
