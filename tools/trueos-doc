@@ -41,7 +41,7 @@ COMMAND_DETAILS: dict[str, dict[str, Any]] = {
                 "On Confirm, press Down then Enter to select Proceed (or Discard apps and proceed when non-replicatable apps are listed).",
             ],
             "effect": "Fetch https://trueos.eu/TrueOS.7z and replace only the running kernel from RAM; no disk installation is performed.",
-            "expected_transition": "The current Shell2 connection closes during generation replacement. Wait for 192.168.178.94:4245 to return before read-only confirmation; do not issue a second update while it is transitioning.",
+            "expected_transition": "A single idle Shell2 TCP connection may resume when its scalar TCP/session capsule is strictly quiet (no queued, unacknowledged, received, or out-of-order bytes). Otherwise the connection closes and the new kernel falls back to a fresh listener; wait for 192.168.178.94:4245 before confirmation and do not issue a second update while transitioning.",
             "warning": "Any non-replicatable app still running at commit is discarded; the confirmation screen names affected VMs.",
         },
         "sources": ["src/shell2/cmds/os.rs", "src/shell2/cmds/update.rs", "../TRUEOS-Blueprints/buildins/os/src/main.rs"],

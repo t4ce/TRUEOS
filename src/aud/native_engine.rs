@@ -786,7 +786,9 @@ fn lowpass(
         state.pole_2 = 0;
         state.pole_3 = 0;
         state.pole_4 = 0;
-        return 0;
+        // The native ABI uses zero for an omitted LPF control. Treat that as
+        // a disabled filter, not a zero-Hz filter which mutes the voice.
+        return input;
     }
     if cutoff >= 23_900 {
         state.pole_1 = input;
@@ -959,6 +961,25 @@ mod tests {
         }
         assert_ne!(dry_out, resonant_out);
         assert_ne!(resonant.pole_2, 0);
+    }
+
+    #[test]
+    fn zero_cutoff_bypasses_instead_of_muting() {
+        let mut state = VoiceFilterState {
+            revision: 1,
+            voice_id: 1,
+            source_id: 1,
+            kind: KIND_OSCILLATOR,
+            waveform: 2,
+            pole_1: 1,
+            pole_2: 2,
+            pole_3: 3,
+            pole_4: 4,
+            last_end_frame: 0,
+            seen_block: 0,
+        };
+        assert_eq!(lowpass(&mut state, 12_345, 0, 0, 0), 12_345);
+        assert_eq!((state.pole_1, state.pole_2, state.pole_3, state.pole_4), (0, 0, 0, 0));
     }
 
     #[test]

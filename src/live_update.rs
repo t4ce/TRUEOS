@@ -48,7 +48,7 @@ const AP_PREFLIGHT_LOG_DRAIN_MS: u64 = 100;
 
 const LIVE_MANIFEST_MAGIC0: u64 = 0x5452_5545_4F53_4C55; // "TRUEOSLU"
 const LIVE_MANIFEST_MAGIC1: u64 = 0x4C49_5645_5550_4454; // "LIVEUPDT"
-const LIVE_ABI_VERSION: u64 = 1;
+const LIVE_ABI_VERSION: u64 = 2;
 
 const HANDOFF_MAGIC0: u64 = 0x5452_5545_5741_524D; // "TRUEWARM"
 const HANDOFF_MAGIC1: u64 = 0x4655_4C4C_464F_5247; // "FULLFORG"
@@ -116,6 +116,7 @@ struct WarmHandoff {
     hhdm_base: u64,
     expected_aps: u64,
     transition_slot: u64,
+    shell_tcp: crate::net::adapter::TcpQuietHandoff,
     vm_heap_ranges: [WarmReservedRange; VM_ID_LIMIT],
     restore_mask: [u64; RESTORE_WORDS],
     resume_mask: [u64; RESTORE_WORDS],
@@ -140,6 +141,7 @@ impl WarmHandoff {
         hhdm_base: 0,
         expected_aps: 0,
         transition_slot: 0,
+        shell_tcp: crate::net::adapter::TcpQuietHandoff::EMPTY,
         vm_heap_ranges: [WarmReservedRange::EMPTY; VM_ID_LIMIT],
         restore_mask: [0; RESTORE_WORDS],
         resume_mask: [0; RESTORE_WORDS],
@@ -354,6 +356,12 @@ impl StagedCandidate {
         handoff.resume_mask = resume_mask;
         handoff.vm_heap_ranges = vm_heap_ranges;
         handoff.checksum = handoff_checksum(handoff);
+    }
+
+    fn set_shell_tcp_handoff(&mut self, handoff: crate::net::adapter::TcpQuietHandoff) {
+        let warm = self.handoff_mut();
+        warm.shell_tcp = handoff;
+        warm.checksum = handoff_checksum(warm);
     }
 
     fn mark_committed(&mut self) {
@@ -698,6 +706,13 @@ pub fn warm_kernel_file_bytes() -> Option<&'static [u8]> {
     Some(unsafe { core::slice::from_raw_parts(virt as *const u8, len) })
 }
 
+/// The candidate consumes this only during early Shell2 startup. An all-zero
+/// capsule deliberately means "open the ordinary fresh listener".
+pub(crate) fn warm_shell_tcp_handoff() -> Option<crate::net::adapter::TcpQuietHandoff> {
+    let handoff = warm_handoff()?;
+    (handoff.shell_tcp != crate::net::adapter::TcpQuietHandoff::EMPTY).then_some(handoff.shell_tcp)
+}
+
 pub fn log_boot_mode() {
     if let Some(handoff) = warm_handoff() {
         crate::log_info!(
@@ -958,6 +973,20 @@ pub(crate) async fn stage_and_swap(
     // every AP confirms it has adopted its generation-independent stack.
     switch_ap_transition_stacks(&target, &staged).await;
     quiesce_pci_for_commit(&target, pci_snapshot.as_slice()).await;
+
+    // NIC DMA is now disabled and APs are parked, so no old-kernel poll can
+    // ACK data after this scalar snapshot. Anything still sitting in a NIC
+    // ring is intentionally discarded; eligibility requires it could not have
+    // reached either TCP or Shell2 queues.
+    if let Some(handle) =
+        crate::shell2::backends::net_tcp::net_shell_quiet_handle_for_warm_handoff()
+        && let Some(tcp) = crate::net::adapter::capture_tcp_quiet_handoff("net-shell", handle)
+    {
+        staged.set_shell_tcp_handoff(tcp);
+        transition_marker(b"live-update: shell2-quiet-tcp-handoff=armed scalar-only\n");
+    } else {
+        transition_marker(b"live-update: shell2-quiet-tcp-handoff=ineligible fresh-listener\n");
+    }
 
     staged.mark_committed();
     unsafe { commit_fullforget(&staged) }
@@ -2058,6 +2087,7 @@ fn stage_candidate(kernel: &[u8]) -> Result<StagedCandidate, LiveUpdateError> {
             hhdm_base: hhdm,
             expected_aps: cpu_count.saturating_sub(1) as u64,
             transition_slot: transition_slot as u64,
+            shell_tcp: crate::net::adapter::TcpQuietHandoff::EMPTY,
             vm_heap_ranges: [WarmReservedRange::EMPTY; VM_ID_LIMIT],
             restore_mask: [0; RESTORE_WORDS],
             resume_mask: [0; RESTORE_WORDS],
@@ -2359,6 +2389,42 @@ fn handoff_checksum(handoff: &WarmHandoff) -> u64 {
         hash = fnv1a64_value(hash, value);
     }
     for value in handoff.resume_mask {
+        hash = fnv1a64_value(hash, value);
+    }
+    for value in [
+        u64::from_le_bytes([
+            handoff.shell_tcp.local_addr[0],
+            handoff.shell_tcp.local_addr[1],
+            handoff.shell_tcp.local_addr[2],
+            handoff.shell_tcp.local_addr[3],
+            0,
+            0,
+            0,
+            0,
+        ]),
+        u64::from(handoff.shell_tcp.local_port),
+        u64::from_le_bytes([
+            handoff.shell_tcp.remote_addr[0],
+            handoff.shell_tcp.remote_addr[1],
+            handoff.shell_tcp.remote_addr[2],
+            handoff.shell_tcp.remote_addr[3],
+            0,
+            0,
+            0,
+            0,
+        ]),
+        u64::from(handoff.shell_tcp.remote_port),
+        handoff.shell_tcp.local_seq_no as u32 as u64,
+        handoff.shell_tcp.remote_seq_no as u32 as u64,
+        handoff.shell_tcp.remote_last_ack as u32 as u64,
+        u64::from(handoff.shell_tcp.remote_last_win),
+        u64::from(handoff.shell_tcp.remote_win_shift),
+        u64::from(handoff.shell_tcp.remote_win_len),
+        u64::from(handoff.shell_tcp.remote_win_scale),
+        u64::from(handoff.shell_tcp.remote_has_sack),
+        u64::from(handoff.shell_tcp.remote_mss),
+        u64::from(handoff.shell_tcp.last_remote_tsval),
+    ] {
         hash = fnv1a64_value(hash, value);
     }
     hash

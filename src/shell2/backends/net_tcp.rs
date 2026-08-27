@@ -304,6 +304,20 @@ pub(crate) fn net_shell_readable_len() -> usize {
     }
 }
 
+/// Return the active socket only when Shell2 itself has no retained bytes or
+/// terminal-app ownership to transfer. The adapter performs the complementary
+/// TCP-buffer/ACK check after NIC DMA has been frozen.
+pub(crate) fn net_shell_quiet_handle_for_warm_handoff() -> Option<NetHandle> {
+    let st = NET_SHELL_STATE.lock();
+    (NET_SHELL_DIRECT_OWNER.load(Ordering::Acquire) == 0
+        && st.frontend_owner.is_none()
+        && st.rx.is_empty()
+        && st.tx.is_empty()
+        && st.direct_control_tx.is_empty()
+        && st.frontend_replay.is_empty())
+    .then_some(st.established_handle?)
+}
+
 pub(crate) fn net_shell_ownership_snapshot() -> NetShellOwnershipSnapshot {
     let st = NET_SHELL_STATE.lock();
     NetShellOwnershipSnapshot {
