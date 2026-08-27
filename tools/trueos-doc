@@ -214,6 +214,32 @@ TOPICS: dict[str, dict[str, Any]] = {
         ],
         "sources": ["../TRUEOS-Blueprints/.cargo/config.toml", "../TRUEOS-Blueprints/src/cli.rs", "../TRUEOS-Blueprints/src/main.rs", "../TRUEOS-Blueprints/src/publish.rs", "Makefile::BUILDIN_APP_RULE"],
     },
+    "webcamframe": {
+        "summary": "CamFrame (`webcam-frame`) is a host-side Ubuntu 26 webcam viewer and rolling hardware-rig monitor. It is not currently a TRUEOS Blueprint or a Shell2-startable app.",
+        "source_repository": "../CamFrame",
+        "package": "webcam-frame",
+        "host_requirements": [
+            "Ubuntu 26; the utility rejects every other host OS/version before enumerating cameras.",
+            "A V4L2 video-capture device with YUYV, RGB3, or MJPG support.",
+            "Wayland for its windowed viewer mode; --capture and --list-cameras do not open the viewer window.",
+        ],
+        "documented_rig_monitor_invocation": "cd ../CamFrame && cargo run --release -- --interval-ms 250 --output ../TRUEOS/bld/baremetal-logs --record",
+        "storage": {
+            "explicit_rig_output": "With the documented --output ../TRUEOS/bld/baremetal-logs, rolling-monitor data is stored below ../TRUEOS/bld/baremetal-logs/film/.",
+            "originals": "<output>/film/originals/webcam-frame-original-<unix-ms>.jpg; full-resolution JPEG originals are retained for 10 minutes.",
+            "current_film": "<output>/film/stages/webcam-frame-current.jpg; the continuously updated 1920x1080 composition of the latest 10 seconds.",
+            "stage_history": "<output>/film/Rig_Cam_<HH>HH_<MM>MM_<SS>SS.jpg; rolling-film stage snapshots, with the newest 10 retained.",
+            "one_shot_capture": "webcam-frame --capture writes an absolute PNG path to stdout under the localized XDG Pictures directory, for example ~/Bilder/webcam_1/<unix-seconds>-<milliseconds>.png.",
+            "default_window_output": "Without --output, starting the rolling monitor in the viewer writes below the XDG Pictures directory in webcam_<camera-number>/film/.",
+        },
+        "recording_control": "Use --record (or --autostart-record) to begin rolling monitoring only after the first camera frame arrives. Without it, Space in the viewer starts/stops recording.",
+        "startability_preflight": [
+            "Check the dynamic availability field from this topic before proposing a TRUEOS launch; it reads the sibling TRUEOS-Blueprints apps catalog at query time.",
+            "Only an app explicitly registered in that catalog and successfully built/published through the Blueprint workflow can be considered for the separate Shell2 apps-mode start/online flow.",
+            "At the current checkout, do not invoke start, online, or cargo bp for CamFrame: it is absent from apps.json and its host-oriented V4L2/Wayland dependencies are not a TRUEOS Blueprint contract.",
+        ],
+        "sources": ["../CamFrame/README.md", "../CamFrame/Cargo.toml", "../CamFrame/src/main.rs", "../TRUEOS-Blueprints/apps.json"],
+    },
     "trueosfs-http": {
         "summary": "The physical rig exposes mounted TRUEOSFS roots through an HTTP filesystem service on the default HTTP port 80.",
         "physical_base_url": "http://192.168.178.94",
@@ -300,6 +326,7 @@ ALIASES = {
     "log": "logs", "logging": "logs", "logfile": "logs", "logfiles": "logs", "logtier": "logs", "logtiers": "logs", "levels": "logs",
     "make": "make-iso", "iso": "make-iso", "make iso": "make-iso", "baremetal-redeploy": "make-iso", "redeploy": "make-iso", "physical-deploy": "make-iso",
     "blueprint": "blueprints", "bp": "blueprints", "cargo bp": "blueprints", "!cargo": "blueprints", "!cargo bp": "blueprints", "app publish": "blueprints", "blueprint publish": "blueprints",
+    "webcam": "webcamframe", "webcam-frame": "webcamframe", "camframe": "webcamframe", "camera": "webcamframe", "rig camera": "webcamframe",
     "trueosfs": "trueosfs-http", "filesystem": "trueosfs-http", "filesystem-api": "trueosfs-http", "http-filesystem": "trueosfs-http", "http-fs": "trueosfs-http", "port-80": "trueosfs-http",
     "reference": "references", "docs": "references", "html": "references", "architecture": "references", "atlas": "references",
     "terminal": "tui", "terminal-ui": "tui", "vmx": "tui", "blueprints": "apps",
@@ -365,6 +392,39 @@ def resolve_topic(name: str) -> tuple[str, dict[str, Any]]:
     return key, TOPICS[key]
 
 
+def webcamframe_availability(root: Path) -> dict[str, Any]:
+    """Report whether the host utility has become a registered Blueprint."""
+    blueprints_root = root.parent / "TRUEOS-Blueprints"
+    camframe_root = root.parent / "CamFrame"
+    catalog_path = blueprints_root / "apps.json"
+    registered_names: set[str] = set()
+    catalog_error: str | None = None
+    try:
+        catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+        for entry in catalog.get("apps", []):
+            if isinstance(entry, str):
+                registered_names.add(entry)
+            elif isinstance(entry, dict) and isinstance(entry.get("name"), str):
+                registered_names.add(entry["name"])
+    except (OSError, json.JSONDecodeError) as error:
+        catalog_error = str(error)
+
+    selectors = ["webcamframe", "webcam-frame"]
+    registered = sorted(name for name in selectors if name in registered_names)
+    return {
+        "camframe_source_present": camframe_root.joinpath("Cargo.toml").is_file(),
+        "apps_catalog": str(catalog_path.relative_to(root.parent)),
+        "registered_selectors": registered,
+        "shell2_startable": bool(registered),
+        "status": (
+            "registered Blueprint selector present; verify its built/published artifact before launch"
+            if registered
+            else "not registered in the local Blueprint catalog; host utility only, not Shell2-startable"
+        ),
+        **({"catalog_error": catalog_error} if catalog_error else {}),
+    }
+
+
 def compact_context(root: Path) -> dict[str, Any]:
     commands = command_registry(root)
     return {
@@ -396,6 +456,11 @@ def compact_context(root: Path) -> dict[str, Any]:
             "repository": TOPICS["blueprints"]["repository"],
             "invocation": TOPICS["blueprints"]["build_and_publish"]["documented_notation"],
             "purpose": TOPICS["blueprints"]["purpose"],
+        },
+        "webcamframe": {
+            "summary": TOPICS["webcamframe"]["summary"],
+            "availability": webcamframe_availability(root),
+            "query": "trueos-doc topic webcamframe",
         },
         "trueosfs_http": {
             "base_url": TOPICS["trueosfs-http"]["physical_base_url"],
@@ -454,6 +519,8 @@ def execute(args: argparse.Namespace, root: Path) -> Any:
         return compact_context(root)
     if action == "topic":
         name, value = resolve_topic(args.name)
+        if name == "webcamframe":
+            return {"name": name, **value, "availability": webcamframe_availability(root)}
         return {"name": name, **value}
     if action == "search":
         if not 1 <= args.limit <= 100:

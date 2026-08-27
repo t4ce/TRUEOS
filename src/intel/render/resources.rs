@@ -1190,9 +1190,6 @@ static CHURN_FORWARD_PIPELINE: spin::Mutex<Option<crate::intel::shader::Triangle
 static PICASSO_RETAINED_TEXTURED_PIPELINE: spin::Mutex<
     Option<crate::intel::shader::TrianglePipeline>,
 > = spin::Mutex::new(None);
-const PICASSO_RETAINED_TEXTURED_VS: &[u8] = include_bytes!(
-    "../../../assets/helio/picasso-retained-textured-forward/retained_textured_forward.vs.simd8.bin"
-);
 const PICASSO_RETAINED_TEXTURED_PS: &[u8] = include_bytes!(
     "../../../assets/helio/picasso-retained-textured-forward/retained_textured_forward.ps.simd16.bin"
 );
@@ -1328,45 +1325,46 @@ fn churn_forward_pipeline(
     Ok(pipeline)
 }
 
-fn picasso_retained_textured_pipeline()
--> Result<crate::intel::shader::TrianglePipeline, &'static str> {
+fn picasso_retained_textured_pipeline(
+    retained_vs: crate::intel::shader::TriangleVertexShader,
+) -> Result<crate::intel::shader::TrianglePipeline, &'static str> {
     use crate::intel::shader::{
         DispatchMode, ShaderKernelMetadata, TrianglePipeline, TrianglePixelShader,
-        TrianglePixelShaderMetadata, TriangleVertexShader, TriangleVertexShaderMetadata,
+        TrianglePixelShaderMetadata,
     };
 
     let mut cached = PICASSO_RETAINED_TEXTURED_PIPELINE.lock();
     if let Some(pipeline) = *cached {
         return Ok(pipeline);
     }
-    if PICASSO_RETAINED_TEXTURED_VS.len() != 512 || PICASSO_RETAINED_TEXTURED_PS.len() != 160 {
+    if retained_vs.meta.kernel.dispatch_mode != DispatchMode::Simd8
+        || retained_vs.meta.kernel.code_offset_bytes != 0
+        || retained_vs.meta.kernel.binding_table_entry_count != 4
+        || retained_vs.meta.kernel.sampler_count != 0
+        || retained_vs.meta.urb_entry_output_length != 1
+        || retained_vs.code.len().checked_mul(core::mem::size_of::<u32>())
+            != usize::try_from(retained_vs.meta.kernel.code_size_bytes).ok()
+        || PICASSO_RETAINED_TEXTURED_PS.len() != 160
+    {
         return Err("picasso-retained-textured-stage-shape");
     }
+    let ps_offset = crate::intel::align_up(
+        retained_vs.meta.kernel.code_size_bytes as usize,
+        64,
+    )
+    .and_then(|offset| u32::try_from(offset).ok())
+    .ok_or("picasso-retained-textured-stage-layout")?;
     let pipeline = TrianglePipeline {
-        vs: TriangleVertexShader {
-            code: churn_forward_stage_words(PICASSO_RETAINED_TEXTURED_VS)?,
-            meta: TriangleVertexShaderMetadata {
-                kernel: ShaderKernelMetadata {
-                    code_offset_bytes: 0,
-                    code_size_bytes: 512,
-                    code_alignment_bytes: 64,
-                    ksp_offset_bytes: 0,
-                    dispatch_mode: DispatchMode::Simd8,
-                    grf_start_register: 2,
-                    grf_used: 128,
-                    push_constant_bytes: 0,
-                    binding_table_entry_count: 4,
-                    sampler_count: 0,
-                },
-                max_threads: 64,
-                urb_entry_output_length: 2,
-            },
-        },
+        // Keep the physically admitted ADL-S retained-transform VS.  Its
+        // first interpolated attribute is world-normal; using normal.xy as
+        // deliberately distorted UVs proves the real SBE -> PS -> sampler
+        // boundary without executing the hosted RPL-S replacement VS.
+        vs: retained_vs,
         ps: TrianglePixelShader {
             code: churn_forward_stage_words(PICASSO_RETAINED_TEXTURED_PS)?,
             meta: TrianglePixelShaderMetadata {
                 kernel: ShaderKernelMetadata {
-                    code_offset_bytes: 512,
+                    code_offset_bytes: ps_offset,
                     code_size_bytes: 160,
                     code_alignment_bytes: 64,
                     ksp_offset_bytes: 0,
@@ -2332,15 +2330,11 @@ pub(crate) fn create_resident_picasso_retained_mesh(
         Some(carrier),
     )?;
     if sampled_material {
-        resident.pipeline = picasso_retained_textured_pipeline()?;
+        resident.pipeline = picasso_retained_textured_pipeline(resident.pipeline.vs)?;
         resident.sampled_material = true;
-        resident.native_vf.vf_sgvs_dw1 = 0xE002_4002;
-        resident.native_vf.vf_sgvs_2_dw1 = 0xB002_0002;
-        resident.native_vf.vertex_element_count = 3;
-        resident.native_vf.vf_component_packing = [0x0000_0A37, 0, 0, 0];
         resident.front_end_contract = TriangleFrontEndContract {
-            label: "picasso-retained-textured-forward-v1",
-            vs_urb_output_length_override: Some(2),
+            label: "picasso-retained-normal-projected-texture-proof-v1",
+            vs_urb_output_length_override: Some(1),
             sbe_read_offset: 1,
             sbe_read_length: 1,
             force_sbe_read_offset: true,
@@ -2348,7 +2342,7 @@ pub(crate) fn create_resident_picasso_retained_mesh(
             force_vs_with_vf_synthesized_vue: false,
         };
         resident.vertex_stride = 32;
-        resident.vertex_format = TriangleVertexFormat::PosNormalUv;
+        resident.vertex_format = TriangleVertexFormat::PosNormal;
     }
     // Picasso's prepared geometry is already centered and normalized into
     // clip/NDC space. The shared native vertex shader still reads a camera

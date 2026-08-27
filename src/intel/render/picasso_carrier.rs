@@ -284,6 +284,11 @@ static PICASSO_CARRIER_SLOTS: [Mutex<PicassoCarrierSlot>; PICASSO_CARRIER_COUNT]
 ];
 static PICASSO_CARRIER_GGTT_PREWARM: spin::Once<bool> = spin::Once::new();
 static PICASSO_CARRIER_CLAIM_LOCK: Mutex<()> = Mutex::new(());
+// Render1/2 are independent GuC contexts on one physical RCS0. Serialize their
+// CPU submission/retirement boundary, and stop both after an ambiguous timeout.
+static PICASSO_CARRIER_SUBMIT_LOCK: Mutex<()> = Mutex::new(());
+static PICASSO_CARRIER_ENGINE_QUARANTINED: AtomicBool = AtomicBool::new(false);
+static PICASSO_CARRIER_SUBMIT_PROOF_LOGGED: AtomicBool = AtomicBool::new(false);
 
 fn picasso_carrier_slot(carrier: PicassoCarrierId) -> &'static Mutex<PicassoCarrierSlot> {
     &PICASSO_CARRIER_SLOTS[carrier.index()]
@@ -688,6 +693,147 @@ fn quarantine_picasso_render1(lease: PicassoCarrierLease, reason: &'static str) 
     crate::gpu::vgpu::quarantine_picasso_carrier(lease);
 }
 
+fn picasso_carrier_lrc_ring_image(warm: RenderWarmState) -> Option<[u32; 5]> {
+    const LRC_CONTEXT_CONTROL_VALUE_DW: usize = 3;
+    const LRC_RING_HEAD_VALUE_DW: usize = 5;
+    const LRC_RING_TAIL_VALUE_DW: usize = 7;
+    const LRC_RING_START_VALUE_DW: usize = 9;
+    const LRC_RING_CTL_VALUE_DW: usize = 11;
+
+    let total_dwords = warm.context_len / core::mem::size_of::<u32>();
+    if warm.context_virt.is_null()
+        || total_dwords <= LRC_STATE_OFFSET_DWORDS + LRC_RING_CTL_VALUE_DW
+    {
+        return None;
+    }
+    let state = unsafe { warm.context_virt.cast::<u32>().add(LRC_STATE_OFFSET_DWORDS) };
+    Some(unsafe {
+        [
+            core::ptr::read_volatile(state.add(LRC_CONTEXT_CONTROL_VALUE_DW)),
+            core::ptr::read_volatile(state.add(LRC_RING_HEAD_VALUE_DW)),
+            core::ptr::read_volatile(state.add(LRC_RING_TAIL_VALUE_DW)),
+            core::ptr::read_volatile(state.add(LRC_RING_START_VALUE_DW)),
+            core::ptr::read_volatile(state.add(LRC_RING_CTL_VALUE_DW)),
+        ]
+    })
+}
+
+fn picasso_carrier_ring_entry(warm: RenderWarmState, offset: usize) -> Option<[u32; 4]> {
+    if warm.ring_virt.is_null()
+        || offset > warm.ring_len.saturating_sub(RENDER_RING_ENTRY_BYTES)
+        || !offset.is_multiple_of(RENDER_RING_ENTRY_BYTES)
+    {
+        return None;
+    }
+    let entry = unsafe { warm.ring_virt.add(offset).cast::<u32>() };
+    Some(unsafe {
+        [
+            core::ptr::read_volatile(entry),
+            core::ptr::read_volatile(entry.add(1)),
+            core::ptr::read_volatile(entry.add(2)),
+            core::ptr::read_volatile(entry.add(3)),
+        ]
+    })
+}
+
+#[derive(Copy, Clone)]
+struct PicassoCarrierSubmitProofSnapshot {
+    lrc: [u32; 5],
+    ring: [u32; 4],
+    ring_pte: u64,
+    hwlrca_pte: u64,
+    result_pte: u64,
+}
+
+fn picasso_carrier_submit_proof_snapshot(
+    lease: PicassoCarrierLease,
+    warm: RenderWarmState,
+    old_tail: usize,
+) -> Option<PicassoCarrierSubmitProofSnapshot> {
+    let control = lease.carrier().control();
+    let dev = crate::intel::claimed_device()?;
+    Some(PicassoCarrierSubmitProofSnapshot {
+        lrc: picasso_carrier_lrc_ring_image(warm)?,
+        ring: picasso_carrier_ring_entry(warm, old_tail)?,
+        ring_pte: crate::intel::read_ggtt_pte(dev, control.ring).unwrap_or(0),
+        hwlrca_pte: crate::intel::read_ggtt_pte(dev, control.context).unwrap_or(0),
+        result_pte: crate::intel::read_ggtt_pte(dev, control.result).unwrap_or(0),
+    })
+}
+
+fn picasso_carrier_guc_status(
+    context_raw: u64,
+) -> Option<crate::intel::guc_submission::GucContextStatus> {
+    crate::intel::guc_submission::context_status()
+        .into_iter()
+        .find(|status| status.token.raw() == context_raw)
+}
+
+fn log_picasso_carrier_timeout_frontier(
+    lease: PicassoCarrierLease,
+    context_raw: u64,
+    serial: u64,
+    publish_sequence: u64,
+) {
+    let Some(dev) = crate::intel::claimed_device() else {
+        return;
+    };
+    let status = picasso_carrier_guc_status(context_raw);
+    crate::log_important!(target: "render";
+        "picasso-carrier-scheduler-frontier carrier={} phase=timeout context=0x{:X} serial={} h2g_publish_sequence={} guc_context_id={} registered={} policy_enqueued={} enabled={} pending_enable={} pending_disable={} faulted={} submissions={} engine=[head:0x{:08X},tail:0x{:08X},acthd:0x{:08X}{:08X},bbaddr:0x{:08X}{:08X},ipeir:0x{:08X},ipehr:0x{:08X},mi_mode:0x{:08X},execlist:0x{:08X}:0x{:08X},fault_gen8:0x{:08X},fault_gen12:0x{:08X}] ownership=diagnostic-only\n",
+        lease.carrier().label(),
+        context_raw,
+        serial,
+        publish_sequence,
+        status.map_or(0, |value| value.context_id),
+        status.is_some() as u8,
+        status.is_some_and(|value| value.policy_enqueued) as u8,
+        status.is_some_and(|value| value.enabled) as u8,
+        status.is_some_and(|value| value.pending_enable) as u8,
+        status.is_some_and(|value| value.pending_disable) as u8,
+        status.is_some_and(|value| value.faulted) as u8,
+        status.map_or(0, |value| value.submissions),
+        crate::intel::mmio_read(dev, RCS_RING_HEAD),
+        crate::intel::mmio_read(dev, RCS_RING_TAIL),
+        crate::intel::mmio_read(dev, RCS_RING_ACTHD_UDW),
+        crate::intel::mmio_read(dev, RCS_RING_ACTHD),
+        crate::intel::mmio_read(dev, RCS_RING_BBADDR_UDW),
+        crate::intel::mmio_read(dev, RCS_RING_BBADDR),
+        crate::intel::mmio_read(dev, RCS_RING_IPEIR),
+        crate::intel::mmio_read(dev, RCS_RING_IPEHR),
+        crate::intel::mmio_read(dev, RCS_RING_MI_MODE),
+        crate::intel::mmio_read(dev, RCS_RING_EXECLIST_STATUS_HI),
+        crate::intel::mmio_read(dev, RCS_RING_EXECLIST_STATUS_LO),
+        crate::intel::mmio_read(dev, GEN8_RING_FAULT_REG),
+        crate::intel::mmio_read(dev, GEN12_RING_FAULT_REG),
+    );
+    crate::log_important!(target: "render";
+        "picasso-carrier-pipeline-frontier carrier={} phase=timeout instdone=[rcs:0x{:08X},geom:0x{:08X},sc:0x{:08X},sc_extra:0x{:08X},sc_extra2:0x{:08X},sampler:0x{:08X},row:0x{:08X}] tdl=[status0:0x{:08X},status1:0x{:08X},dispatch:0x{:08X},pf_count:0x{:08X},pf_status0:0x{:08X},pf_status1:0x{:08X}] cs=[eir:0x{:08X},esr:0x{:08X},instpm:0x{:08X},bbstate:0x{:08X}] fault_tlb=[gen8:0x{:08X}:0x{:08X},gen12:0x{:08X}:0x{:08X}] ownership=diagnostic-only\n",
+        lease.carrier().label(),
+        crate::intel::mmio_read(dev, RCS_RING_INSTDONE),
+        crate::intel::mmio_read(dev, INSTDONE_GEOM),
+        crate::intel::mmio_read(dev, SC_INSTDONE),
+        crate::intel::mmio_read(dev, SC_INSTDONE_EXTRA),
+        crate::intel::mmio_read(dev, SC_INSTDONE_EXTRA2),
+        crate::intel::mmio_read(dev, SAMPLER_INSTDONE),
+        crate::intel::mmio_read(dev, ROW_INSTDONE),
+        crate::intel::mmio_read(dev, TDL_THR_STATUS0),
+        crate::intel::mmio_read(dev, TDL_THR_STATUS1),
+        crate::intel::mmio_read(dev, TDL_THR_DISP_COUNT),
+        crate::intel::mmio_read(dev, TDL_THR_PF_COUNT),
+        crate::intel::mmio_read(dev, TDL_THR_PF_STATUS0),
+        crate::intel::mmio_read(dev, TDL_THR_PF_STATUS1),
+        crate::intel::mmio_read(dev, RCS_RING_EIR),
+        crate::intel::mmio_read(dev, RCS_RING_ESR),
+        crate::intel::mmio_read(dev, RCS_RING_INSTPM),
+        crate::intel::mmio_read(dev, RCS_RING_BBSTATE),
+        crate::intel::mmio_read(dev, GEN8_FAULT_TLB_DATA0),
+        crate::intel::mmio_read(dev, GEN8_FAULT_TLB_DATA1),
+        crate::intel::mmio_read(dev, GEN12_FAULT_TLB_DATA0),
+        crate::intel::mmio_read(dev, GEN12_FAULT_TLB_DATA1),
+    );
+}
+
 /// Publish one already-flushed primary batch through the carrier's own HWLRCA and
 /// physical mediated GuC context.  Success requires both the release cookie
 /// and the exact context-saved HEAD equality; anything ambiguous quarantines
@@ -698,6 +844,11 @@ pub(crate) fn submit_picasso_render1_batch(
     expected_result: u32,
     expected_result_slot_dword: usize,
 ) -> Result<(), &'static str> {
+    let _carrier_submit = PICASSO_CARRIER_SUBMIT_LOCK.lock();
+    if PICASSO_CARRIER_ENGINE_QUARANTINED.load(Ordering::Acquire) {
+        quarantine_picasso_render1(lease, "shared-rcs-carrier-quarantined");
+        return Err("picasso-render1-engine-quarantined");
+    }
     let _physical = crate::gpu::physical::physical_device().ok_or("picasso-physical-gpu")?;
     let warm = picasso_render1_warm_state(lease).ok_or("picasso-render1-warm")?;
     let (old_tail, initialized, quarantined) = {
@@ -757,6 +908,19 @@ pub(crate) fn submit_picasso_render1_batch(
         quarantine_picasso_render1(lease, "lrc-tail-publish");
         return Err("picasso-render1-lrc-tail");
     }
+    // Snapshot the first submission only while the CPU still owns the freshly
+    // initialized image. After GuC accepts the context, the HWLRCA may be
+    // written by hardware and must not be broadly read for diagnostics. A
+    // failed diagnostic snapshot never blocks the functional submission.
+    let submit_proof = if !PICASSO_CARRIER_SUBMIT_PROOF_LOGGED.load(Ordering::Acquire) {
+        let snapshot = picasso_carrier_submit_proof_snapshot(lease, warm, old_tail);
+        if snapshot.is_some() {
+            PICASSO_CARRIER_SUBMIT_PROOF_LOGGED.store(true, Ordering::Release);
+        }
+        snapshot
+    } else {
+        None
+    };
     let submission = match crate::gpu::vgpu::submit_picasso_carrier_context(lease, descriptor) {
         Ok(submission) => submission,
         Err(_) => {
@@ -764,10 +928,28 @@ pub(crate) fn submit_picasso_render1_batch(
             return Err("picasso-render1-submit");
         }
     };
-    crate::log_trace!(target: "render";
-        "picasso-carrier submit carrier={} device=0x{:X} epoch={} context={} serial={} old_tail={} published_tail={} batch=0x{:X} fetch=ppgtt\n",
-        lease.carrier().label(), lease.device_raw(), lease.epoch(), submission.context.raw(), submission.serial, old_tail, tail, batch_gpu,
-    );
+    if let Some(proof) = submit_proof {
+        let guc = picasso_carrier_guc_status(submission.context.raw());
+        let ring_ggtt_ok =
+            proof.ring_pte == crate::intel::gen12_integrated_ggtt_pte(warm.ring_phys);
+        let hwlrca_ggtt_ok =
+            proof.hwlrca_pte == crate::intel::gen12_integrated_ggtt_pte(warm.context_phys);
+        let result_ggtt_ok =
+            proof.result_pte == crate::intel::gen12_integrated_ggtt_pte(warm.result_phys);
+        crate::log_important!(target: "render";
+            "picasso-carrier-submit-proof carrier={} accepted=1 device=0x{:X} epoch={} context=0x{:X} guc_context_id={} serial={} h2g_publish_sequence={} old_tail={} published_tail={} lrc=[ctx_ctl:0x{:08X},head:0x{:08X},tail:0x{:08X},ring_start:0x{:08X},ring_ctl:0x{:08X}] ring_entry=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] batch=0x{:X} fetch=ppgtt ggtt_control=[ring:{}:0x{:016X},hwlrca:{}:0x{:016X},result:{}:0x{:016X}] guc=[policy_enqueued:{},enabled:{},pending_enable:{},submissions:{}] does_not_prove=hardware-dispatch\n",
+            lease.carrier().label(), lease.device_raw(), lease.epoch(), submission.context.raw(),
+            guc.map_or(0, |value| value.context_id), submission.serial,
+            submission.scheduler_publish_sequence, old_tail, tail, proof.lrc[0], proof.lrc[1],
+            proof.lrc[2], proof.lrc[3], proof.lrc[4], proof.ring[0], proof.ring[1], proof.ring[2],
+            proof.ring[3], batch_gpu, ring_ggtt_ok as u8, proof.ring_pte,
+            hwlrca_ggtt_ok as u8, proof.hwlrca_pte, result_ggtt_ok as u8, proof.result_pte,
+            guc.is_some_and(|value| value.policy_enqueued) as u8,
+            guc.is_some_and(|value| value.enabled) as u8,
+            guc.is_some_and(|value| value.pending_enable) as u8,
+            guc.map_or(0, |value| value.submissions),
+        );
+    }
     let started = crate::chronos::monotonic_nanos();
     let mut spins = 0u64;
     loop {
@@ -788,6 +970,12 @@ pub(crate) fn submit_picasso_render1_batch(
             || (spins.is_multiple_of(256)
                 && crate::chronos::monotonic_nanos().saturating_sub(started) >= 2_000_000_000)
         {
+            log_picasso_carrier_timeout_frontier(
+                lease,
+                submission.context.raw(),
+                submission.serial,
+                submission.scheduler_publish_sequence,
+            );
             let debug_bytes = RESULT_DEBUG_DWORD_COUNT
                 .saturating_mul(core::mem::size_of::<u32>())
                 .min(warm.result_len);
@@ -813,6 +1001,7 @@ pub(crate) fn submit_picasso_render1_batch(
                 scene_lo,
                 scene_hi,
             );
+            PICASSO_CARRIER_ENGINE_QUARANTINED.store(true, Ordering::Release);
             quarantine_picasso_render1(lease, "release-or-saved-head-timeout");
             return Err("picasso-render1-retire");
         }
