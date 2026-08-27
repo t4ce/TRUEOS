@@ -153,6 +153,67 @@ TOPICS: dict[str, dict[str, Any]] = {
         ],
         "sources": ["src/log_os.rs", "../TRUEOS-Blueprints/crates/log-os/src/flags.rs", "tools/baremetal-log-drain.sh", "tools/emulator-log-capture.sh", "Makefile"],
     },
+    "make-iso": {
+        "summary": "`make iso` is the normal full automated end-to-end bare-metal redeploy: it builds and packages TRUEOS, then deploys to and verifies the configured physical test rig by default.",
+        "invocation": "make iso",
+        "build_outputs": {
+            "iso": "bld/trueos.iso",
+            "update_archive": "bld/TrueOS.7z",
+            "runtime_elf": "bld/artifacts/<build-mode>-<build-id>/TRUEOS.elf",
+        },
+        "workflow": [
+            "Build the runtime artifacts, disk image prerequisites, and Limine bootloader.",
+            "Stage the EFI bootloader, TRUEOS runtime ELF, firmware, and generated Limine configuration; construct bld/trueos.iso and verify the packaged GPU copy.",
+            "Create bld/TrueOS.7z; publish it to the configured SMB release share when PUBLISH_RELEASE_SMB=1 (the default).",
+            "When START_BAREMETAL_LOG=1 (the default), asynchronously run testrig-physical-reset-log: it stops an earlier collector, physically resets the rig through the ESP32 reset-button circuit, verifies PXE reads against the newly built bootloader/runtime SHA-256 values by default, then starts and waits for the fresh bare-metal log drain.",
+        ],
+        "external_effects": [
+            "The default workflow can publish to SMB and actuate the physical test-rig reset button; it is not a build-only command.",
+            "The reset/log verification is dispatched asynchronously. Its own result is written to bld/baremetal-logs/testrig-physical-reset-log.log.",
+        ],
+        "verification": {
+            "pxe_read_identity": "BAREMETAL_TFTP_VERIFY=1 by default; the reset helper watches the configured PXE boot file and runtime ELF and records the new runtime and ISO SHA-256 identities.",
+            "receipt": "bld/testrig-physical-reset-receipt.json",
+            "latest_log": "bld/baremetal-logs/LatestOfThree.logs",
+            "orchestration_log": "bld/baremetal-logs/testrig-physical-reset-log.log",
+        },
+        "controls": {
+            "START_BAREMETAL_LOG=0": "Skip the physical deploy/reset/log-verification dispatch.",
+            "BAREMETAL_TFTP_VERIFY=0": "Keep the physical reset path but explicitly skip PXE read verification.",
+            "PUBLISH_RELEASE_SMB=0": "Skip SMB publication of bld/TrueOS.7z.",
+        },
+        "log_note": "For capture semantics and the current bare-metal log pointer, query topic logs. The rotating LatestOfThree.logs link is evidence only after the new deployment's collector has completed.",
+        "sources": ["Makefile::iso", "Makefile::testrig-physical-reset-log", "tools/testrig-physical-reset-button.py", "tools/baremetal-log-drain.sh"],
+    },
+    "blueprints": {
+        "summary": "The sibling TRUEOS-Blueprints repository builds TRUEOS Blueprint (.bp) applications and locally publishes selected non-build-in apps for the project's test rigs and internal development workflow.",
+        "repository": "../TRUEOS-Blueprints",
+        "purpose": "Blueprint publication is an internal/local deployment concern, not a public release or general-purpose package registry workflow.",
+        "build_and_publish": {
+            "documented_notation": "!cargo bp <appname>",
+            "terminal_invocation": "cd ../TRUEOS-Blueprints && cargo bp <appname>",
+            "command_contract": "The repository's Cargo alias bp runs the trueos-blueprint packer. From the trueos-blueprint repository root, <appname> selects a workspace example or package app.",
+            "profile": "Release is the default profile; --release is accepted explicitly.",
+        },
+        "named_app_flow": [
+            "Build the requested Blueprint into a .bp artifact.",
+            "Reject an unknown app name instead of publishing an arbitrary artifact.",
+            "For a non-build-in app, replace only prior published versions of that app and copy the new hash-suffixed .bp artifact to the configured internal apps location.",
+        ],
+        "publication": {
+            "default_mount": "smb://t4ce@pdjb/home-share",
+            "default_apps_uri": "smb://t4ce@pdjb/home-share/TRUEOS_SITE/apps",
+            "artifact_name": "<appname>.bp§§<sha256>",
+            "test_rig_use": "Once published through the internal apps path, the artifact is available to the configured TRUEOS test-rig/app delivery workflow; launching it is a separate action.",
+        },
+        "boundaries": [
+            "cargo bp <appname> mutates the configured SMB apps location: it removes older versions of that named app before copying the new version.",
+            "Build-in apps are intentionally not published through this path; TRUEOS image construction builds them with TRUEOS_BLUEPRINT_SKIP_APPS_PUBLISH=1.",
+            "Running cargo bp with no app names is broader: it builds publishable apps in bulk and clears the configured remote catalog before publishing the resulting set. Prefer a named app for ordinary iteration.",
+            "Set TRUEOS_BLUEPRINT_SKIP_APPS_PUBLISH=1 to build without publication. TRUEOS_BLUEPRINT_APPS_PUBLISH_MOUNT_URI and TRUEOS_BLUEPRINT_APPS_PUBLISH_URI override the internal publish destinations.",
+        ],
+        "sources": ["../TRUEOS-Blueprints/.cargo/config.toml", "../TRUEOS-Blueprints/src/cli.rs", "../TRUEOS-Blueprints/src/main.rs", "../TRUEOS-Blueprints/src/publish.rs", "Makefile::BUILDIN_APP_RULE"],
+    },
     "trueosfs-http": {
         "summary": "The physical rig exposes mounted TRUEOSFS roots through an HTTP filesystem service on the default HTTP port 80.",
         "physical_base_url": "http://192.168.178.94",
@@ -237,6 +298,8 @@ ALIASES = {
     "runscript": "runscripts", "run-script": "runscripts", "launch-script": "runscripts", "vfile:launch": "runscripts",
     "testrig": "rig", "test-rig": "rig", "network": "rig", "lan": "rig", "port": "rig",
     "log": "logs", "logging": "logs", "logfile": "logs", "logfiles": "logs", "logtier": "logs", "logtiers": "logs", "levels": "logs",
+    "make": "make-iso", "iso": "make-iso", "make iso": "make-iso", "baremetal-redeploy": "make-iso", "redeploy": "make-iso", "physical-deploy": "make-iso",
+    "blueprint": "blueprints", "bp": "blueprints", "cargo bp": "blueprints", "!cargo": "blueprints", "!cargo bp": "blueprints", "app publish": "blueprints", "blueprint publish": "blueprints",
     "trueosfs": "trueosfs-http", "filesystem": "trueosfs-http", "filesystem-api": "trueosfs-http", "http-filesystem": "trueosfs-http", "http-fs": "trueosfs-http", "port-80": "trueosfs-http",
     "reference": "references", "docs": "references", "html": "references", "architecture": "references", "atlas": "references",
     "terminal": "tui", "terminal-ui": "tui", "vmx": "tui", "blueprints": "apps",
@@ -324,6 +387,16 @@ def compact_context(root: Path) -> dict[str, Any]:
             "baremetal_latest": TOPICS["logs"]["captures"]["baremetal"]["latest"],
             "emulator_latest": TOPICS["logs"]["captures"]["emulator"]["latest"],
         },
+        "make_iso": {
+            "invocation": TOPICS["make-iso"]["invocation"],
+            "summary": TOPICS["make-iso"]["summary"],
+            "verification_log": TOPICS["make-iso"]["verification"]["orchestration_log"],
+        },
+        "blueprints": {
+            "repository": TOPICS["blueprints"]["repository"],
+            "invocation": TOPICS["blueprints"]["build_and_publish"]["documented_notation"],
+            "purpose": TOPICS["blueprints"]["purpose"],
+        },
         "trueosfs_http": {
             "base_url": TOPICS["trueosfs-http"]["physical_base_url"],
             "discovery": "GET /",
@@ -334,7 +407,7 @@ def compact_context(root: Path) -> dict[str, Any]:
             "query": "trueos-doc topic references",
             "documents": [item["path"] for item in TOPICS["references"]["documents"]],
         },
-        "next_queries": ["trueos-doc topic headjack", "trueos-doc topic tui", "trueos-doc topic logs", "trueos-doc topic trueosfs-http", "trueos-doc topic references", "trueos-doc command <name>", "trueos-doc search <terms>"],
+        "next_queries": ["trueos-doc topic make-iso", "trueos-doc topic blueprints", "trueos-doc topic headjack", "trueos-doc topic tui", "trueos-doc topic logs", "trueos-doc topic trueosfs-http", "trueos-doc topic references", "trueos-doc command <name>", "trueos-doc search <terms>"],
     }
 
 

@@ -93,8 +93,8 @@ enum TriangleVertexFormat {
     /// Helio Churn's immutable `@location(0) position` plus
     /// `@location(1) normal` input, both Float32x3.
     PosNormal,
-    /// Picasso retained material geometry: Float32x3 position, Float32x3
-    /// normal, then Float32x2 base-color UV.
+    /// Picasso retained material storage: Float32x3 position, a retained but
+    /// currently unfetched Float32x3 normal, then Float32x2 base-color UV.
     PosNormalUv,
 }
 

@@ -1,9 +1,4 @@
 {
-  "attributes": [
-    "float32x3@0",
-    "float32x3@12",
-    "float32x2@24"
-  ],
   "bindings": [
     "storage-camera@vs-bti1",
     "storage-instances@vs-bti2",
@@ -34,7 +29,7 @@
         "Non SSA regs after NIR": 6,
         "SEND Count": 8,
         "Scratch Memory Size": 0,
-        "Source hash": 2166988648,
+        "Source hash": 763768011,
         "Spill Count": 0,
         "Workgroup Memory Size": 0
       }
@@ -55,7 +50,7 @@
         "Non SSA regs after NIR": 5,
         "SEND Count": 2,
         "Scratch Memory Size": 0,
-        "Source hash": 1710552169,
+        "Source hash": 3874285174,
         "Spill Count": 0,
         "Workgroup Memory Size": 0
       }
@@ -76,7 +71,7 @@
         "Non SSA regs after NIR": 5,
         "SEND Count": 2,
         "Scratch Memory Size": 0,
-        "Source hash": 1710552169,
+        "Source hash": 3874285174,
         "Spill Count": 0,
         "Workgroup Memory Size": 0
       }
@@ -94,5 +89,14 @@
     "vertex": "simd8"
   },
   "schema": 1,
+  "shader_attributes": [
+    "float32x3@0",
+    "float32x2@24"
+  ],
+  "storage_attributes": [
+    "float32x3@0",
+    "float32x3@12",
+    "float32x2@24"
+  ],
   "vertex_stride": 32
 }

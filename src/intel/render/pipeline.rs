@@ -432,9 +432,13 @@ fn write_triangle_probe_state_with_flush(
     let mut cursor = shader_layout.state_region_offset_bytes as usize;
     let binding_table_offset = cursor;
     let ps_binding_table_offset = if native_sampled {
-        binding_table_offset
-            .checked_add(binding_table_entries * core::mem::size_of::<u32>())
-            .ok_or("probe-state-overflow")?
+        crate::intel::align_up(
+            binding_table_offset
+                .checked_add(binding_table_entries * core::mem::size_of::<u32>())
+                .ok_or("probe-state-overflow")?,
+            32,
+        )
+        .ok_or("probe-state-align")?
     } else {
         binding_table_offset
     };
@@ -1067,10 +1071,10 @@ fn validate_triangle_native_draw_contract(
     let pos_normal_uv = draw.vertex_format == TriangleVertexFormat::PosNormalUv
         && draw.vertex_stride == 32
         && draw.sampled_texture.is_some()
-        && native.vertex_element_count == 4
-        && native.vf_sgvs_dw1 == 0xE003_4002
-        && native.vf_sgvs_2_dw1 == 0xB003_0002
-        && native.vf_component_packing == [0x0000_A377, 0, 0, 0];
+        && native.vertex_element_count == 3
+        && native.vf_sgvs_dw1 == 0xE002_4002
+        && native.vf_sgvs_2_dw1 == 0xB002_0002
+        && native.vf_component_packing == [0x0000_0A37, 0, 0, 0];
     if !(pos_normal || pos_normal_uv)
         || draw.index_buffer.is_none()
         || draw.indirect_args_gpu_addr.is_none()
@@ -1194,10 +1198,10 @@ mod retained_native_matrix_draw_contract_tests {
     #[test]
     fn textured_matrix_handoff_requires_uv_vertices_and_a_sampled_surface() {
         let mut native = native_contract();
-        native.vf_sgvs_dw1 = 0xE003_4002;
-        native.vf_sgvs_2_dw1 = 0xB003_0002;
-        native.vertex_element_count = 4;
-        native.vf_component_packing = [0x0000_A377, 0, 0, 0];
+        native.vf_sgvs_dw1 = 0xE002_4002;
+        native.vf_sgvs_2_dw1 = 0xB002_0002;
+        native.vertex_element_count = 3;
+        native.vf_component_packing = [0x0000_0A37, 0, 0, 0];
 
         let mut draw = native_draw(native);
         draw.vertex_stride = 32;
@@ -1601,6 +1605,13 @@ fn encode_triangle_probe_batch(
         .ps_binding_table_offset_bytes
         .checked_sub(surface_state_base_offset_bytes)
         .ok_or("probe-binding-table-base")?;
+    // Gen12 3DSTATE_BINDING_TABLE_POINTERS_* carries the pointer in bits
+    // 20:5. A table at VS+16 silently aliases the VS table when encoded,
+    // causing the PS sampler to interpret the instance storage surface at
+    // BTI2 as a texture. Reject any future layout regression before submit.
+    if binding_table_pointer_offset & 0x1F != 0 || ps_binding_table_pointer_offset & 0x1F != 0 {
+        return Err("probe-binding-table-align");
+    }
     let surface_state_pointer_offset = probe_state
         .surface_state_offset_bytes
         .checked_sub(surface_state_base_offset_bytes)
@@ -2631,22 +2642,15 @@ fn encode_triangle_probe_batch(
                 )?;
             }
             TriangleVertexFormat::PosNormalUv => {
+                // Keep the normal in the immutable 32-byte storage record,
+                // but do not fetch it on this first sampled-material rung.
+                // Position + UV + SGVS is the compact three-element shape
+                // already exercised by the retained native front end.
                 push_vertex_element_state(
                     batch_dwords,
                     &mut cursor,
                     0,
                     0,
-                    SURFACE_FORMAT_R32G32B32_FLOAT,
-                    VFCOMP_STORE_SRC,
-                    VFCOMP_STORE_SRC,
-                    VFCOMP_STORE_SRC,
-                    VFCOMP_STORE_1_FP,
-                )?;
-                push_vertex_element_state(
-                    batch_dwords,
-                    &mut cursor,
-                    0,
-                    12,
                     SURFACE_FORMAT_R32G32B32_FLOAT,
                     VFCOMP_STORE_SRC,
                     VFCOMP_STORE_SRC,

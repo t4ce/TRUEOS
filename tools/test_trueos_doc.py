@@ -30,6 +30,8 @@ class TrueosDocTests(unittest.TestCase):
         self.assertEqual(data["rig"]["shell2_tcp_port"], 4245)
         self.assertIn("§<slot>§", [item["input"] for item in data["headjack"]])
         self.assertEqual(data["logs"]["baremetal_latest"], "bld/baremetal-logs/LatestOfThree.logs")
+        self.assertEqual(data["make_iso"]["invocation"], "make iso")
+        self.assertEqual(data["blueprints"]["invocation"], "!cargo bp <appname>")
         self.assertEqual(data["trueosfs_http"]["base_url"], "http://192.168.178.94")
 
     def test_live_registry_exposes_schema(self) -> None:
@@ -63,6 +65,32 @@ class TrueosDocTests(unittest.TestCase):
         self.assertEqual(data["levels"]["order"][0], "Error")
         self.assertIn("Never expect it in a logfile", data["filter_invariant"])
         self.assertEqual(data["captures"]["emulator"]["latest"], "bld/emulator-logs/latest.log")
+
+    def test_make_iso_topic_documents_full_baremetal_redeploy(self) -> None:
+        data = run("topic", "make iso")["data"]
+        self.assertEqual(data["name"], "make-iso")
+        self.assertEqual(data["invocation"], "make iso")
+        self.assertIn("end-to-end bare-metal redeploy", data["summary"])
+        self.assertIn("physically resets the rig", data["workflow"][-1])
+        self.assertEqual(data["verification"]["latest_log"], "bld/baremetal-logs/LatestOfThree.logs")
+        self.assertEqual(data["controls"]["START_BAREMETAL_LOG=0"], "Skip the physical deploy/reset/log-verification dispatch.")
+
+    def test_search_discovers_make_iso_for_baremetal_redeploy_vocabulary(self) -> None:
+        results = run("search", "baremetal redeploy iso")["data"]["results"]
+        self.assertEqual(results[0]["name"], "make-iso")
+
+    def test_blueprints_topic_documents_internal_named_app_publication(self) -> None:
+        data = run("topic", "!cargo bp")["data"]
+        self.assertEqual(data["name"], "blueprints")
+        self.assertEqual(data["repository"], "../TRUEOS-Blueprints")
+        self.assertEqual(data["build_and_publish"]["terminal_invocation"], "cd ../TRUEOS-Blueprints && cargo bp <appname>")
+        self.assertIn("internal/local deployment", data["purpose"])
+        self.assertIn("removes older versions", data["boundaries"][0])
+        self.assertIn("TRUEOS_BLUEPRINT_SKIP_APPS_PUBLISH=1", data["boundaries"][-1])
+
+    def test_search_discovers_blueprints_for_cargo_bp_vocabulary(self) -> None:
+        results = run("search", "cargo bp app publish")["data"]["results"]
+        self.assertEqual(results[0]["name"], "blueprints")
 
     def test_reference_topic_indexes_checked_in_html_facts(self) -> None:
         data = run("topic", "html")["data"]

@@ -2334,10 +2334,10 @@ pub(crate) fn create_resident_picasso_retained_mesh(
     if sampled_material {
         resident.pipeline = picasso_retained_textured_pipeline()?;
         resident.sampled_material = true;
-        resident.native_vf.vf_sgvs_dw1 = 0xE003_4002;
-        resident.native_vf.vf_sgvs_2_dw1 = 0xB003_0002;
-        resident.native_vf.vertex_element_count = 4;
-        resident.native_vf.vf_component_packing = [0x0000_A377, 0, 0, 0];
+        resident.native_vf.vf_sgvs_dw1 = 0xE002_4002;
+        resident.native_vf.vf_sgvs_2_dw1 = 0xB002_0002;
+        resident.native_vf.vertex_element_count = 3;
+        resident.native_vf.vf_component_packing = [0x0000_0A37, 0, 0, 0];
         resident.front_end_contract = TriangleFrontEndContract {
             label: "picasso-retained-textured-forward-v1",
             vs_urb_output_length_override: Some(2),

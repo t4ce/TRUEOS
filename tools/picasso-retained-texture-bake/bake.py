@@ -96,16 +96,15 @@ def main() -> None:
         .stride = 32,
         .inputRate = VK_VERTEX_INPUT_RATE_VERTEX,
     };
-    const VkVertexInputAttributeDescription attributes[3] = {
+    const VkVertexInputAttributeDescription attributes[2] = {
         { .location = 0, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = 0 },
-        { .location = 1, .binding = 0, .format = VK_FORMAT_R32G32B32_SFLOAT, .offset = 12 },
-        { .location = 2, .binding = 0, .format = VK_FORMAT_R32G32_SFLOAT, .offset = 24 },
+        { .location = 1, .binding = 0, .format = VK_FORMAT_R32G32_SFLOAT, .offset = 24 },
     };
     const VkPipelineVertexInputStateCreateInfo vertex_input = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
         .vertexBindingDescriptionCount = 1,
         .pVertexBindingDescriptions = &binding,
-        .vertexAttributeDescriptionCount = 3,
+        .vertexAttributeDescriptionCount = 2,
         .pVertexAttributeDescriptions = attributes,
     };""")
         source = replace_once(source, """    const VkDescriptorSetLayoutBinding storage_bindings[3] = {
@@ -173,7 +172,8 @@ def main() -> None:
             "vertex_stride": 32,
             "runtime_dispatch": {"vertex": "simd8", "fragment": "simd16"},
             "fragment_proof": "byte-identical-heliov-adls-simd16-sampler",
-            "attributes": ["float32x3@0", "float32x3@12", "float32x2@24"],
+            "storage_attributes": ["float32x3@0", "float32x3@12", "float32x2@24"],
+            "shader_attributes": ["float32x3@0", "float32x2@24"],
             "bindings": [
                 "storage-camera@vs-bti1",
                 "storage-instances@vs-bti2",
