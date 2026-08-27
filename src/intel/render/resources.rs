@@ -1194,7 +1194,7 @@ const PICASSO_RETAINED_TEXTURED_VS: &[u8] = include_bytes!(
     "../../../assets/helio/picasso-retained-textured-forward/retained_textured_forward.vs.simd8.bin"
 );
 const PICASSO_RETAINED_TEXTURED_PS: &[u8] = include_bytes!(
-    "../../../assets/helio/picasso-retained-textured-forward/retained_textured_forward.ps.simd8.bin"
+    "../../../assets/helio/picasso-retained-textured-forward/retained_textured_forward.ps.simd16.bin"
 );
 
 fn bootstrap_churn_meshes()
@@ -1339,7 +1339,7 @@ fn picasso_retained_textured_pipeline()
     if let Some(pipeline) = *cached {
         return Ok(pipeline);
     }
-    if PICASSO_RETAINED_TEXTURED_VS.len() != 896 || PICASSO_RETAINED_TEXTURED_PS.len() != 408 {
+    if PICASSO_RETAINED_TEXTURED_VS.len() != 512 || PICASSO_RETAINED_TEXTURED_PS.len() != 160 {
         return Err("picasso-retained-textured-stage-shape");
     }
     let pipeline = TrianglePipeline {
@@ -1348,7 +1348,7 @@ fn picasso_retained_textured_pipeline()
             meta: TriangleVertexShaderMetadata {
                 kernel: ShaderKernelMetadata {
                     code_offset_bytes: 0,
-                    code_size_bytes: 896,
+                    code_size_bytes: 512,
                     code_alignment_bytes: 64,
                     ksp_offset_bytes: 0,
                     dispatch_mode: DispatchMode::Simd8,
@@ -1366,23 +1366,23 @@ fn picasso_retained_textured_pipeline()
             code: churn_forward_stage_words(PICASSO_RETAINED_TEXTURED_PS)?,
             meta: TrianglePixelShaderMetadata {
                 kernel: ShaderKernelMetadata {
-                    code_offset_bytes: 896,
-                    code_size_bytes: 408,
+                    code_offset_bytes: 512,
+                    code_size_bytes: 160,
                     code_alignment_bytes: 64,
                     ksp_offset_bytes: 0,
-                    dispatch_mode: DispatchMode::Simd8,
-                    grf_start_register: 4,
+                    dispatch_mode: DispatchMode::Simd16,
+                    grf_start_register: 2,
                     grf_used: 128,
                     push_constant_bytes: 0,
                     binding_table_entry_count: 3,
                     sampler_count: 1,
                 },
-                num_varying_inputs: 3,
+                num_varying_inputs: 1,
                 uses_vmask: true,
                 computed_stencil: false,
                 persample_dispatch: false,
                 computed_depth_mode: 0,
-                flat_inputs: 2,
+                flat_inputs: 0,
             },
         },
     };
@@ -2342,7 +2342,7 @@ pub(crate) fn create_resident_picasso_retained_mesh(
             label: "picasso-retained-textured-forward-v1",
             vs_urb_output_length_override: Some(2),
             sbe_read_offset: 1,
-            sbe_read_length: 2,
+            sbe_read_length: 1,
             force_sbe_read_offset: true,
             force_sbe_read_length: true,
             force_vs_with_vf_synthesized_vue: false,

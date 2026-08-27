@@ -24,17 +24,17 @@
       "simd_width": 8,
       "stage": "vertex",
       "statistics": {
-        "Cycle Count": 510,
+        "Cycle Count": 441,
         "Fill Count": 0,
         "GRF registers": 0,
-        "Instruction Count": 74,
+        "Instruction Count": 51,
         "Loop Count": 0,
         "Max dispatch width": 8,
-        "Max live registers": 24,
-        "Non SSA regs after NIR": 7,
-        "SEND Count": 11,
+        "Max live registers": 19,
+        "Non SSA regs after NIR": 6,
+        "SEND Count": 8,
         "Scratch Memory Size": 0,
-        "Source hash": 525423241,
+        "Source hash": 2166988648,
         "Spill Count": 0,
         "Workgroup Memory Size": 0
       }
@@ -45,17 +45,17 @@
       "simd_width": 8,
       "stage": "fragment",
       "statistics": {
-        "Cycle Count": 812,
+        "Cycle Count": 786,
         "Fill Count": 0,
         "GRF registers": 0,
-        "Instruction Count": 33,
+        "Instruction Count": 7,
         "Loop Count": 0,
         "Max dispatch width": 16,
-        "Max live registers": 10,
+        "Max live registers": 7,
         "Non SSA regs after NIR": 5,
         "SEND Count": 2,
         "Scratch Memory Size": 0,
-        "Source hash": 4140753004,
+        "Source hash": 1710552169,
         "Spill Count": 0,
         "Workgroup Memory Size": 0
       }
@@ -66,27 +66,32 @@
       "simd_width": 16,
       "stage": "fragment",
       "statistics": {
-        "Cycle Count": 870,
+        "Cycle Count": 812,
         "Fill Count": 0,
         "GRF registers": 0,
-        "Instruction Count": 37,
+        "Instruction Count": 11,
         "Loop Count": 0,
         "Max dispatch width": 16,
-        "Max live registers": 19,
+        "Max live registers": 13,
         "Non SSA regs after NIR": 5,
         "SEND Count": 2,
         "Scratch Memory Size": 0,
-        "Source hash": 4140753004,
+        "Source hash": 1710552169,
         "Spill Count": 0,
         "Workgroup Memory Size": 0
       }
     }
   ],
+  "fragment_proof": "byte-identical-heliov-adls-simd16-sampler",
   "frontend": "wgsl-via-checked-in-naga-wrapper",
   "native_bytes": {
-    "ps16": 488,
-    "ps8": 408,
-    "vs": 896
+    "ps16": 160,
+    "ps8": 96,
+    "vs": 512
+  },
+  "runtime_dispatch": {
+    "fragment": "simd16",
+    "vertex": "simd8"
   },
   "schema": 1,
   "vertex_stride": 32

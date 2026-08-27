@@ -17,6 +17,9 @@ TRUEOS = Path(__file__).resolve().parents[2]
 BAKER_PATH = TRUEOS / "tools/helio-intel-bake/bake.py"
 WGSL = Path(__file__).resolve().parent / "shaders/retained_textured_forward.wgsl"
 OUT = TRUEOS / "assets/helio/picasso-retained-textured-forward"
+PROVEN_ADLS_TEXTURE_PS = (
+    TRUEOS / "assets/helio/heliov-textured-mesh/voxel_textured.ps.simd16.bin"
+)
 
 
 def load_baker():
@@ -149,6 +152,8 @@ def main() -> None:
         baker.run([str(dumper), str(vs_spv), str(fs_spv)], env=env, log=log)
         device, executables = baker.parse_compile_log(log.read_text())
         vs, ps8, ps16 = baker.extract_native(exec_dir, work / "native")
+        if ps16 is None or ps16 != PROVEN_ADLS_TEXTURE_PS.read_bytes():
+            raise SystemExit("retained fragment no longer matches proven ADL-S SIMD16 sampler")
 
         OUT.mkdir(parents=True, exist_ok=True)
         (OUT / "retained_textured_forward.vs.simd8.bin").write_bytes(vs)
@@ -166,6 +171,8 @@ def main() -> None:
             "device": device,
             "executables": list(executables.values()),
             "vertex_stride": 32,
+            "runtime_dispatch": {"vertex": "simd8", "fragment": "simd16"},
+            "fragment_proof": "byte-identical-heliov-adls-simd16-sampler",
             "attributes": ["float32x3@0", "float32x3@12", "float32x2@24"],
             "bindings": [
                 "storage-camera@vs-bti1",

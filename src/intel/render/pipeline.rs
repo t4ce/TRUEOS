@@ -22,8 +22,8 @@ struct PixelShaderDispatchContract {
 /// payload.
 const fn sbe_swiz_payload(artifact_native_fixed_function: bool, native_sampled: bool) -> [u32; 2] {
     if artifact_native_fixed_function && native_sampled {
-        // Attribute 0/1 in DW1 and attribute 2 in DW2.
-        [0x0001_0000, 0x0000_0002]
+        // The first retained texture rung exports only UV at attribute 0.
+        [0, 0]
     } else if artifact_native_fixed_function {
         [0x0001_0000, 0]
     } else {
@@ -52,7 +52,7 @@ mod churn_sbe_swiz_tests {
     #[test]
     fn native_churn_routes_normal_and_material_identity() {
         assert_eq!(sbe_swiz_payload(true, false), [0x0001_0000, 0]);
-        assert_eq!(sbe_swiz_payload(true, true), [0x0001_0000, 2]);
+        assert_eq!(sbe_swiz_payload(true, true), [0, 0]);
         assert_eq!(sbe_swiz_payload(false, false), [0, 0]);
     }
 
@@ -2134,7 +2134,11 @@ fn encode_triangle_probe_batch(
         | (ps_dispatch_32 << 2)
         | (u32::from(ps_push_constant_enable) * PS_PUSH_CONSTANT_ENABLE)
         | (ps_max_threads_per_psd << PS_MAX_THREADS_SHIFT);
-    let ps_dw7 = if artifact_native_fixed_function {
+    let ps_dw7 = if artifact_native_fixed_function
+        && matches!(
+            pipeline.ps.meta.kernel.dispatch_mode,
+            crate::intel::shader::DispatchMode::Simd8
+        ) {
         // Churn's authenticated SIMD8 binary is KSP0.  The captured ANV
         // packet pairs KSP0 with Constant/Setup Data 0 (DW7[22:16]); the
         // generic diagnostic mapper predates this artifact-native contract

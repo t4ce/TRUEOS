@@ -316,6 +316,7 @@ unsafe impl Send for ResidentSceneBatchState {}
 static RESIDENT_SCENE_BATCH_STATE: Mutex<Option<ResidentSceneBatchState>> = Mutex::new(None);
 static RESIDENT_SCENE_BATCH_PATH_LOGGED: AtomicBool = AtomicBool::new(false);
 static RESIDENT_CHURN_FORWARD_GPU_NATIVE_PATH_LOGGED: AtomicBool = AtomicBool::new(false);
+static PICASSO_RETAINED_TEXTURED_SUBMIT_LOGGED: AtomicBool = AtomicBool::new(false);
 static PICASSO_RETAINED_TEXTURED_PATH_LOGGED: AtomicBool = AtomicBool::new(false);
 static RESIDENT_CHURN_FORWARD_GPU_EXPANDED_PATH_LOGGED: AtomicBool = AtomicBool::new(false);
 static RESIDENT_CHURN_FORWARD_CPU_PATH_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -2146,6 +2147,16 @@ fn submit_resident_churn_forward_geometry_batched(
         );
     }
     let prepare_us = crate::chronos::monotonic_nanos().saturating_sub(prepare_started_ns) / 1_000;
+    if let Some(texture) = sampled_texture
+        && !PICASSO_RETAINED_TEXTURED_SUBMIT_LOGGED.swap(true, Ordering::AcqRel)
+    {
+        crate::log_important!(target: "render";
+            "picasso-material: proof=retained-texture-submit-armed accepted=1 contract=pos-normal-uv+texture-id graphics_handoff=native-matrices vertex_shader=gpu-instance-transform pixel_shader=proven-heliov-filtered-base-color-simd16 ps_bti=2 sampler=0 texture={}x{} stride={} cpu_texture_sampling=0 cpu_vertex_projection=0 render_submits=1\n",
+            texture.width,
+            texture.height,
+            texture.pitch,
+        );
+    }
     let completed = match carrier {
         Some(lease) => submit_picasso_render1_batch(
             lease,
@@ -2168,7 +2179,7 @@ fn submit_resident_churn_forward_geometry_batched(
         && !PICASSO_RETAINED_TEXTURED_PATH_LOGGED.swap(true, Ordering::AcqRel)
     {
         crate::log_important!(target: "render";
-            "picasso-material: proof=retained-texture-sampled-and-retired accepted=1 contract=pos-normal-uv+texture-id graphics_handoff=native-matrices vertex_shader=gpu-instance-transform pixel_shader=filtered-base-color texture={}x{} stride={} cpu_texture_sampling=0 cpu_vertex_projection=0 render_submits=1\n",
+            "picasso-material: proof=retained-texture-sampled-and-retired accepted=1 contract=pos-normal-uv+texture-id graphics_handoff=native-matrices vertex_shader=gpu-instance-transform pixel_shader=filtered-base-color-simd16 texture={}x{} stride={} cpu_texture_sampling=0 cpu_vertex_projection=0 render_submits=1\n",
             texture.width,
             texture.height,
             texture.pitch,
