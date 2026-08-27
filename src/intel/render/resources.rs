@@ -2848,6 +2848,42 @@ pub(crate) fn create_resident_sampled_rgba8_texture(
     sampler_flags: u32,
     bytes: &[u8],
 ) -> Result<ResidentSampledTexture, &'static str> {
+    create_resident_sampled_rgba8_texture_for_carrier(
+        None,
+        width,
+        height,
+        pitch,
+        sampler_flags,
+        bytes,
+    )
+}
+
+pub(crate) fn create_picasso_resident_sampled_rgba8_texture(
+    carrier: PicassoCarrierLease,
+    width: u32,
+    height: u32,
+    pitch: u32,
+    sampler_flags: u32,
+    bytes: &[u8],
+) -> Result<ResidentSampledTexture, &'static str> {
+    create_resident_sampled_rgba8_texture_for_carrier(
+        Some(carrier),
+        width,
+        height,
+        pitch,
+        sampler_flags,
+        bytes,
+    )
+}
+
+fn create_resident_sampled_rgba8_texture_for_carrier(
+    carrier: Option<PicassoCarrierLease>,
+    width: u32,
+    height: u32,
+    pitch: u32,
+    sampler_flags: u32,
+    bytes: &[u8],
+) -> Result<ResidentSampledTexture, &'static str> {
     if width == 0
         || height == 0
         || pitch < width.saturating_mul(4)
@@ -2857,7 +2893,7 @@ pub(crate) fn create_resident_sampled_rgba8_texture(
     {
         return Err("resident-texture-shape");
     }
-    let storage = allocate_resident_render_buffer(bytes.len())?;
+    let storage = allocate_resident_render_buffer_for_carrier(carrier, bytes.len())?;
     if !storage.write_and_flush(0, bytes) {
         let _ = release_resident_render_buffer(&storage);
         return Err("resident-texture-write");

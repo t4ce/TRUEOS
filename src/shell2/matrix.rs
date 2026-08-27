@@ -90,6 +90,7 @@ struct MatrixSlot {
     vm_input_attached: bool,
     vm_launch_reserved: bool,
     app_label: Option<AllocString>,
+    app_sha256: Option<[u8; 32]>,
     attachments: HVec<MatrixSlotAttachmentRecord, MATRIX_SLOT_ATTACHMENT_CAP>,
 }
 
@@ -188,6 +189,7 @@ fn ensure_slot_index(slots: &mut Vec<MatrixSlot>, id: &MatrixSlotId) -> usize {
         vm_input_attached: false,
         vm_launch_reserved: false,
         app_label: None,
+        app_sha256: None,
         attachments: HVec::new(),
     });
     slots.len() - 1
@@ -584,6 +586,7 @@ pub(crate) fn free_slot(requested: &str) -> (MatrixSlotId, Vec<u8>) {
             || slot.vm_input_attached
             || slot.vm_launch_reserved
             || slot.app_label.is_some()
+            || slot.app_sha256.is_some()
         {
             slot.lines.clear();
             slot.activity = MatrixSlotActivity::Idle;
@@ -593,6 +596,7 @@ pub(crate) fn free_slot(requested: &str) -> (MatrixSlotId, Vec<u8>) {
             slot.vm_input_attached = false;
             slot.vm_launch_reserved = false;
             slot.app_label = None;
+            slot.app_sha256 = None;
         }
         // The default page cannot be removed from Matrix, so rotate its
         // generation in place. Old resource leases still expire exactly as
@@ -657,6 +661,13 @@ pub(crate) fn active_slot_app_label(output_mask: super::OutputMask) -> Option<Al
     let slot_id = active_slot_id_ref(&guard, output_mask).clone();
     let idx = ensure_slot_index(&mut guard.slots, &slot_id);
     guard.slots[idx].app_label.clone()
+}
+
+pub(crate) fn active_slot_app_sha256(output_mask: super::OutputMask) -> Option<[u8; 32]> {
+    let mut guard = state().lock();
+    let slot_id = active_slot_id_ref(&guard, output_mask).clone();
+    let idx = ensure_slot_index(&mut guard.slots, &slot_id);
+    guard.slots[idx].app_sha256
 }
 
 pub(crate) fn active_line_width(output_mask: super::OutputMask) -> usize {
@@ -964,16 +975,18 @@ pub(crate) fn set_slot_app_label(slot_id: &MatrixSlotId, label: &str) {
     } else {
         Some(AllocString::from(label.trim()))
     };
-    if guard.slots[idx].app_label != next {
+    if guard.slots[idx].app_label != next || guard.slots[idx].app_sha256.is_some() {
         guard.slots[idx].app_label = next;
+        guard.slots[idx].app_sha256 = None;
         bump_slot_revision(&mut guard, idx);
     }
 }
 
-pub(crate) fn set_live_slot_app_label(
+pub(crate) fn set_live_slot_app_identity(
     slot_id: &MatrixSlotId,
     lifetime_generation: u64,
     label: &str,
+    sha256: [u8; 32],
 ) -> bool {
     let mut guard = state().lock();
     let Some(idx) = guard.slots.iter().position(|slot| slot.id == *slot_id) else {
@@ -987,8 +1000,9 @@ pub(crate) fn set_live_slot_app_label(
     } else {
         Some(AllocString::from(label.trim()))
     };
-    if guard.slots[idx].app_label != next {
+    if guard.slots[idx].app_label != next || guard.slots[idx].app_sha256 != Some(sha256) {
         guard.slots[idx].app_label = next;
+        guard.slots[idx].app_sha256 = Some(sha256);
         bump_slot_revision(&mut guard, idx);
     }
     true
@@ -1029,6 +1043,7 @@ pub(crate) fn unbind_live_slot_vm(
         guard.slots[idx].vm_input_attached = false;
         guard.slots[idx].vm_launch_reserved = false;
         guard.slots[idx].app_label = None;
+        guard.slots[idx].app_sha256 = None;
         bump_slot_revision(&mut guard, idx);
         super::MatrixVmUnbindResult::Unbound
     } else if guard.slots[idx].vm_id.is_none() {

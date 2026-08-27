@@ -1,4 +1,4 @@
-use crate::r::media_service::{self, ImageInfo};
+use crate::r::media_service::{self, ImageInfo, RetainedTextureInfo};
 
 #[inline]
 fn direct_owner() -> u32 {
@@ -24,6 +24,27 @@ pub extern "C" fn trueos_cabi_vmedia_image_decode_begin(format: u32, total_len: 
         return guest_result(status, value);
     }
     media_service::begin(direct_owner(), format, total_len)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_vmedia_texture_decode_begin(
+    device: u64,
+    format: u32,
+    total_len: usize,
+) -> i32 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let Ok(total_len) = u32::try_from(total_len) else {
+            return media_service::ERR_INVALID;
+        };
+        let packed = (u64::from(format) << 32) | u64::from(total_len);
+        let (status, value) = trueos_vm::vmcall::call(
+            trueos_vm::vmcall::OP_BP_VMEDIA_TEXTURE_DECODE_BEGIN,
+            device,
+            packed,
+        );
+        return guest_result(status, value);
+    }
+    media_service::begin_retained(direct_owner(), device, format, total_len)
 }
 
 #[unsafe(no_mangle)]
@@ -132,6 +153,53 @@ pub unsafe extern "C" fn trueos_cabi_vmedia_image_decode_info(id: u32, out: *mut
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_vmedia_texture_decode_info(
+    id: u32,
+    out: *mut RetainedTextureInfo,
+) -> i32 {
+    if out.is_null() {
+        return media_service::ERR_INVALID;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let mut bytes = [0u8; core::mem::size_of::<RetainedTextureInfo>()];
+        let (status, value) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_VMEDIA_TEXTURE_DECODE_INFO,
+            id as u64,
+            0,
+            &[],
+            &mut bytes,
+        );
+        let rc = guest_result(status, value);
+        if rc != 0 {
+            return rc;
+        }
+        unsafe {
+            out.write(RetainedTextureInfo {
+                texture_id: u64::from_le_bytes(bytes[0..8].try_into().unwrap_or_default()),
+                width: u32::from_le_bytes(bytes[8..12].try_into().unwrap_or_default()),
+                height: u32::from_le_bytes(bytes[12..16].try_into().unwrap_or_default()),
+                stride_bytes: u32::from_le_bytes(bytes[16..20].try_into().unwrap_or_default()),
+                byte_len: u32::from_le_bytes(bytes[20..24].try_into().unwrap_or_default()),
+                source_format: u32::from_le_bytes(bytes[24..28].try_into().unwrap_or_default()),
+                pixel_format: u32::from_le_bytes(bytes[28..32].try_into().unwrap_or_default()),
+                backend: u32::from_le_bytes(bytes[32..36].try_into().unwrap_or_default()),
+                revision: u32::from_le_bytes(bytes[36..40].try_into().unwrap_or_default()),
+                residency: u32::from_le_bytes(bytes[40..44].try_into().unwrap_or_default()),
+                reserved: u32::from_le_bytes(bytes[44..48].try_into().unwrap_or_default()),
+            });
+        }
+        return 0;
+    }
+    match media_service::retained_info(direct_owner(), id) {
+        Ok(info) => {
+            unsafe { out.write(info) };
+            0
+        }
+        Err(error) => error,
+    }
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_vmedia_image_decode_read(
     id: u32,
     offset: usize,
@@ -189,4 +257,17 @@ pub extern "C" fn trueos_cabi_vmedia_image_decode_discard(id: u32) -> i32 {
         return guest_result(status, value);
     }
     media_service::discard(direct_owner(), id)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn trueos_cabi_vmedia_texture_release(device: u64, texture_id: u64) -> i32 {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let (status, value) = trueos_vm::vmcall::call(
+            trueos_vm::vmcall::OP_BP_VMEDIA_TEXTURE_RELEASE,
+            device,
+            texture_id,
+        );
+        return guest_result(status, value);
+    }
+    media_service::release_retained(direct_owner(), device, texture_id)
 }

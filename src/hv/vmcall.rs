@@ -246,6 +246,9 @@ pub const OP_BP_VMEDIA_IMAGE_DECODE_STATUS: u32 = 0x145; // arg0 operation -> pe
 pub const OP_BP_VMEDIA_IMAGE_DECODE_INFO: u32 = 0x146; // arg0 operation -> ImageInfo payload/rc
 pub const OP_BP_VMEDIA_IMAGE_DECODE_READ: u32 = 0x147; // arg0 operation,arg1 hi32 offset/lo32 cap -> RGBA bytes
 pub const OP_BP_VMEDIA_IMAGE_DECODE_DISCARD: u32 = 0x148; // arg0 operation -> rc
+pub const OP_BP_VMEDIA_TEXTURE_DECODE_BEGIN: u32 = 0x157; // arg0 device,arg1 format:u32|encoded_len:u32 -> retained operation id/rc
+pub const OP_BP_VMEDIA_TEXTURE_DECODE_INFO: u32 = 0x158; // arg0 operation -> opaque retained texture contract/rc
+pub const OP_BP_VMEDIA_TEXTURE_RELEASE: u32 = 0x159; // arg0 device,arg1 opaque texture id -> rc
 pub const OP_BP_TERMINAL_LEASE_CURRENT_V1: u32 = 0x134; // arg0 ready epoch or 0 -> active epoch/error
 pub const OP_BP_TERMINAL_LEASE_RELEASE_V1: u32 = 0x135; // arg0 expected active epoch -> parking ticket/error
 pub const OP_BP_TERMINAL_LEASE_POLL_REENTRY_V1: u32 = 0x136; // arg0 parking ticket -> pending/active epoch/error
@@ -2651,6 +2654,14 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
+        OP_BP_VMEDIA_TEXTURE_DECODE_BEGIN => {
+            let owner = crate::r::io::async_fs_cabi::owner_for_vm(vm_id);
+            let format = (arg1 >> 32) as u32;
+            let total_len = arg1 as u32 as usize;
+            let rc = crate::r::media_service::begin_retained(owner, arg0, format, total_len);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
         OP_BP_VMEDIA_IMAGE_DECODE_WRITE => {
             let Some(payload) = request_payload(vm_id, req_len) else {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
@@ -2676,6 +2687,14 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         OP_BP_VMEDIA_IMAGE_DECODE_INFO => {
             let owner = crate::r::io::async_fs_cabi::owner_for_vm(vm_id);
             match crate::r::media_service::info(owner, arg0 as u32) {
+                Ok(info) => write_record_response(vm_id, seq, 0, &info),
+                Err(error) => write_response(vm_id, seq, STATUS_OK, (error as i64) as u64, 0),
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_VMEDIA_TEXTURE_DECODE_INFO => {
+            let owner = crate::r::io::async_fs_cabi::owner_for_vm(vm_id);
+            match crate::r::media_service::retained_info(owner, arg0 as u32) {
                 Ok(info) => write_record_response(vm_id, seq, 0, &info),
                 Err(error) => write_response(vm_id, seq, STATUS_OK, (error as i64) as u64, 0),
             }
@@ -2709,6 +2728,12 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         OP_BP_VMEDIA_IMAGE_DECODE_DISCARD => {
             let owner = crate::r::io::async_fs_cabi::owner_for_vm(vm_id);
             let rc = crate::r::media_service::discard(owner, arg0 as u32);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_VMEDIA_TEXTURE_RELEASE => {
+            let owner = crate::r::io::async_fs_cabi::owner_for_vm(vm_id);
+            let rc = crate::r::media_service::release_retained(owner, arg0, arg1);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }

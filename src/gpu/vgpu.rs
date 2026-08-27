@@ -528,6 +528,20 @@ impl RetainedMeshHandle {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(transparent)]
+pub(crate) struct RetainedTextureHandle(u64);
+
+impl RetainedTextureHandle {
+    pub(crate) const fn from_raw(raw: u64) -> Self {
+        Self(raw)
+    }
+
+    pub(crate) const fn raw(self) -> u64 {
+        self.0
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[repr(transparent)]
 pub(crate) struct QueueHandle(u64);
 
 impl QueueHandle {
@@ -842,6 +856,21 @@ struct RetainedMeshSlot {
     record: Option<RetainedMeshRecord>,
 }
 
+struct RetainedTextureRecord {
+    carrier: crate::intel::render::PicassoCarrierLease,
+    resident: Arc<crate::intel::render::ResidentSampledTexture>,
+    width: u32,
+    height: u32,
+    pitch: u32,
+    epoch: u64,
+    in_flight: u32,
+}
+
+struct RetainedTextureSlot {
+    generation: u32,
+    record: Option<RetainedTextureRecord>,
+}
+
 struct CloudSubmissionLease {
     device_epoch: u64,
     queue: QueueHandle,
@@ -978,6 +1007,7 @@ struct VirtualDevice {
     render_pipelines: Vec<RenderPipelineSlot>,
     cloud_work_graphs: Vec<CloudWorkGraphSlot>,
     retained_meshes: Vec<RetainedMeshSlot>,
+    retained_textures: Vec<RetainedTextureSlot>,
     /// Phase-1 Picasso carrier.  A VMX device may bind Render1 once for its
     /// epoch; no retained route may silently select Render0.
     picasso_carrier: Option<crate::intel::render::PicassoCarrierLease>,
@@ -1186,6 +1216,7 @@ pub(crate) fn open(
         render_pipelines: Vec::new(),
         cloud_work_graphs: Vec::new(),
         retained_meshes: Vec::new(),
+        retained_textures: Vec::new(),
         picasso_carrier: None,
         picasso_setup_in_flight: false,
         picasso_carrier_quarantined: false,
@@ -2277,6 +2308,170 @@ pub(crate) fn destroy_retained_mesh(
         // owns the failed mapping until reset; its vGPU handle is gone.
         Err(VgpuError::DeviceLost)
     }
+}
+
+/// Publish one decoded RGBA8 image directly into the device's existing
+/// Picasso Render1 carrier. The caller supplies kernel-owned decode bytes;
+/// the returned handle is generation-checked and never exposes either mapping.
+pub(crate) fn create_retained_texture(
+    principal: Principal,
+    device_handle: DeviceHandle,
+    width: u32,
+    height: u32,
+    pitch: u32,
+    bytes: &[u8],
+) -> Result<RetainedTextureHandle, VgpuError> {
+    const RETAINED_TEXTURE_LIMIT: usize = 128;
+    let expected_bytes = usize::try_from(
+        u64::from(pitch)
+            .checked_mul(u64::from(height))
+            .ok_or(VgpuError::Unsupported)?,
+    )
+    .map_err(|_| VgpuError::Unsupported)?;
+    if width == 0
+        || height == 0
+        || pitch != width.checked_mul(4).ok_or(VgpuError::Unsupported)?
+        || expected_bytes != bytes.len()
+    {
+        return Err(VgpuError::Unsupported);
+    }
+
+    let (carrier, epoch) = {
+        let mut broker = BROKER.lock();
+        let device = lookup_device_mut(&mut broker, device_handle, principal)?;
+        ensure_live(device)?;
+        if !device.capabilities.contains(Capabilities::RENDER)
+            || device.picasso_setup_in_flight
+            || device.picasso_carrier_quarantined
+            || device_has_operation_leases(device)
+        {
+            return Err(VgpuError::Busy);
+        }
+        if device
+            .retained_textures
+            .iter()
+            .filter(|slot| slot.record.is_some())
+            .count()
+            >= RETAINED_TEXTURE_LIMIT
+        {
+            return Err(VgpuError::QuotaExceeded);
+        }
+        let carrier = device.picasso_carrier.ok_or(VgpuError::InvalidHandle)?;
+        device.picasso_setup_in_flight = true;
+        (carrier, device.epoch)
+    };
+
+    let resident = match crate::intel::render::create_picasso_resident_sampled_rgba8_texture(
+        carrier,
+        width,
+        height,
+        pitch,
+        SAMPLER_ADDRESS_U_REPEAT | SAMPLER_ADDRESS_V_REPEAT,
+        bytes,
+    ) {
+        Ok(resident) => resident,
+        Err(_) => {
+            clear_picasso_setup_lease(principal, device_handle, epoch);
+            return Err(VgpuError::OutOfMemory);
+        }
+    };
+
+    let mut resident = Some(resident);
+    let mut broker = BROKER.lock();
+    let publish = (|| {
+        let device = lookup_device_mut(&mut broker, device_handle, principal)?;
+        ensure_live(device)?;
+        if device.epoch != epoch
+            || !device.picasso_setup_in_flight
+            || device.picasso_carrier != Some(carrier)
+            || device.picasso_carrier_quarantined
+        {
+            return Err(VgpuError::DeviceLost);
+        }
+        device.picasso_setup_in_flight = false;
+        Ok(insert_retained_texture(
+            device,
+            RetainedTextureRecord {
+                carrier,
+                resident: Arc::new(resident.take().expect("unpublished retained texture")),
+                width,
+                height,
+                pitch,
+                epoch,
+                in_flight: 0,
+            },
+        ))
+    })();
+    if publish.is_err() {
+        drop(broker);
+        let resident = resident.expect("failed texture publication retains allocation");
+        if !crate::intel::render::release_resident_sampled_texture(&resident) {
+            mark_picasso_carrier_quarantined(principal, device_handle, epoch, carrier);
+        } else {
+            clear_picasso_setup_lease(principal, device_handle, epoch);
+        }
+    }
+    publish
+}
+
+pub(crate) fn destroy_retained_texture(
+    principal: Principal,
+    device_handle: DeviceHandle,
+    texture_handle: RetainedTextureHandle,
+) -> Result<(), VgpuError> {
+    let mut broker = BROKER.lock();
+    let device = lookup_device_mut(&mut broker, device_handle, principal)?;
+    ensure_live(device)?;
+    if device_has_operation_leases(device) {
+        return Err(VgpuError::Busy);
+    }
+    let (slot, generation) = decode_handle(texture_handle.raw())?;
+    let entry = device
+        .retained_textures
+        .get_mut(slot)
+        .ok_or(VgpuError::InvalidHandle)?;
+    if entry.generation != generation
+        || entry
+            .record
+            .as_ref()
+            .is_none_or(|record| record.in_flight != 0 || Arc::strong_count(&record.resident) != 1)
+    {
+        return Err(VgpuError::Busy);
+    }
+    let record = entry.record.take().ok_or(VgpuError::InvalidHandle)?;
+    let resident = Arc::try_unwrap(record.resident).map_err(|_| VgpuError::Busy)?;
+    let carrier = record.carrier;
+    let epoch = record.epoch;
+    drop(broker);
+    if crate::intel::render::release_resident_sampled_texture(&resident) {
+        Ok(())
+    } else {
+        mark_picasso_carrier_quarantined(principal, device_handle, epoch, carrier);
+        Err(VgpuError::DeviceLost)
+    }
+}
+
+/// Engine-side resolver for an opaque texture ID. The `Arc` pins the exact
+/// Render1 mapping while an authenticated draw is staged; principal, device,
+/// generation, epoch, and carrier identity are all revalidated first.
+pub(crate) fn resolve_retained_texture(
+    principal: Principal,
+    device_handle: DeviceHandle,
+    texture_handle: RetainedTextureHandle,
+) -> Result<Arc<crate::intel::render::ResidentSampledTexture>, VgpuError> {
+    let broker = BROKER.lock();
+    let device = lookup_device(&broker, device_handle, principal)?;
+    ensure_live(device)?;
+    let record = lookup_retained_texture(device, texture_handle)?;
+    if record.epoch != device.epoch
+        || device.picasso_carrier != Some(record.carrier)
+        || record.width == 0
+        || record.height == 0
+        || record.pitch != record.width.saturating_mul(4)
+    {
+        return Err(VgpuError::DeviceLost);
+    }
+    Ok(Arc::clone(&record.resident))
 }
 
 /// Reserve the broker-owned side of one Cloud frame. The returned lease is
@@ -6296,6 +6491,7 @@ fn ensure_kernel_device(
         render_pipelines: Vec::new(),
         cloud_work_graphs: Vec::new(),
         retained_meshes: Vec::new(),
+        retained_textures: Vec::new(),
         picasso_carrier: None,
         picasso_setup_in_flight: false,
         picasso_carrier_quarantined: false,
@@ -6436,6 +6632,17 @@ fn destroy_device_resources(
     // is idle they must be dropped before their referenced buffers are
     // unmapped, preserving the same dependency order as explicit teardown.
     device.cloud_work_graphs.clear();
+    for slot in &mut device.retained_textures {
+        if let Some(record) = slot.record.take() {
+            let resident = Arc::try_unwrap(record.resident).map_err(|_| VgpuError::Busy)?;
+            if !crate::intel::render::release_resident_sampled_texture(&resident) {
+                device.picasso_carrier_quarantined = true;
+                device.lost = true;
+                return Err(VgpuError::DeviceLost);
+            }
+        }
+    }
+    device.retained_textures.clear();
     for slot in &mut device.retained_meshes {
         if let Some(record) = slot.record.take() {
             if let Some(static_geometry) = record.static_geometry {
@@ -6514,6 +6721,11 @@ fn device_has_operation_leases(device: &VirtualDevice) -> bool {
             .any(|record| record.in_flight != 0)
         || device
             .retained_meshes
+            .iter()
+            .filter_map(|slot| slot.record.as_ref())
+            .any(|record| record.in_flight != 0)
+        || device
+            .retained_textures
             .iter()
             .filter_map(|slot| slot.record.as_ref())
             .any(|record| record.in_flight != 0)
@@ -6669,6 +6881,27 @@ fn insert_retained_mesh(
         record: Some(record),
     });
     RetainedMeshHandle(encode_handle(device.retained_meshes.len() - 1, 1))
+}
+
+fn insert_retained_texture(
+    device: &mut VirtualDevice,
+    record: RetainedTextureRecord,
+) -> RetainedTextureHandle {
+    if let Some((slot, entry)) = device
+        .retained_textures
+        .iter_mut()
+        .enumerate()
+        .find(|(_, entry)| entry.record.is_none())
+    {
+        entry.generation = entry.generation.wrapping_add(1).max(1);
+        entry.record = Some(record);
+        return RetainedTextureHandle(encode_handle(slot, entry.generation));
+    }
+    device.retained_textures.push(RetainedTextureSlot {
+        generation: 1,
+        record: Some(record),
+    });
+    RetainedTextureHandle(encode_handle(device.retained_textures.len() - 1, 1))
 }
 
 fn insert_queue(device: &mut VirtualDevice, record: QueueRecord) -> QueueHandle {
@@ -6891,6 +7124,21 @@ fn lookup_retained_mesh_mut(
         return Err(VgpuError::InvalidHandle);
     }
     entry.record.as_mut().ok_or(VgpuError::InvalidHandle)
+}
+
+fn lookup_retained_texture(
+    device: &VirtualDevice,
+    handle: RetainedTextureHandle,
+) -> Result<&RetainedTextureRecord, VgpuError> {
+    let (slot, generation) = decode_handle(handle.raw())?;
+    let entry = device
+        .retained_textures
+        .get(slot)
+        .ok_or(VgpuError::InvalidHandle)?;
+    if entry.generation != generation {
+        return Err(VgpuError::InvalidHandle);
+    }
+    entry.record.as_ref().ok_or(VgpuError::InvalidHandle)
 }
 
 fn lookup_queue(device: &VirtualDevice, handle: QueueHandle) -> Result<&QueueRecord, VgpuError> {

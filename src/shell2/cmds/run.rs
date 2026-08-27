@@ -3,6 +3,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 
+use sha2::{Digest, Sha256};
 use spin::Mutex;
 use trueos_executor::Spawner;
 use trueos_time::{Duration as EmbassyDuration, Timer};
@@ -10,7 +11,7 @@ use trueos_time::{Duration as EmbassyDuration, Timer};
 use super::super::{
     MatrixTarget, matrix_target_interrupted, print_matrix_target_system_line,
     release_matrix_target_vm_reservation, reserve_matrix_target_for_vm_slot_selected,
-    set_matrix_target_active, set_matrix_target_app_label,
+    set_matrix_target_active, set_matrix_target_app_identity,
 };
 use super::tlb_helper::TlbTable;
 use crate::hv::BlueprintConsoleSurface;
@@ -953,7 +954,8 @@ pub(crate) fn enqueue_blueprint_bytes_with_instance_and_launch_script(
     let instance = name_occupied_default_instance(&target, archive.as_str(), instance);
     let target = reserve_target_for_archive(&target, archive.as_str());
     let app_label = app_label_for_instance(archive.as_str(), &instance);
-    set_matrix_target_app_label(&target, app_label.as_str());
+    let app_sha256 = Sha256::digest(module_bytes.as_slice()).into();
+    set_matrix_target_app_identity(&target, app_label.as_str(), app_sha256);
     let line = alloc::format!("apps: queued {}", app_label);
     log_run_target_line(&target, line.as_str());
     enqueue_blueprint_request(
@@ -1024,7 +1026,8 @@ async fn submit_module_bytes_to_target_async(
     crate::allocators::with_host_alloc_domain(|| {
         let target = reserve_target_for_archive(&target, archive_name);
         let app_label = app_label_for_instance(archive_name, &instance);
-        set_matrix_target_app_label(&target, app_label.as_str());
+        let app_sha256 = Sha256::digest(module_bytes.as_slice()).into();
+        set_matrix_target_app_identity(&target, app_label.as_str(), app_sha256);
         let line = alloc::format!("apps: queued {}", app_label);
         log_run_target_line(&target, line.as_str());
         enqueue_blueprint_request(

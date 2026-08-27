@@ -45,6 +45,7 @@ const TITLE_COUNT_RGB: (u8, u8, u8) = (255, 255, 255);
 const SYSTEM_TEXT_RGB: (u8, u8, u8) = (60, 183, 161);
 const VMX_STATUS_RGB: (u8, u8, u8) = (120, 210, 255);
 const VMX_TUI_RGB: (u8, u8, u8) = (255, 90, 90);
+const APP_HASH_RGB: (u8, u8, u8) = (60, 220, 120);
 pub(crate) type OutputMask = u16;
 pub(crate) const OUTPUT_NET_TCP_MASK: OutputMask = 1 << 0;
 pub(crate) const LOCAL_SHELL_SESSION_CAP: usize = 9;
@@ -80,8 +81,13 @@ const BANNER_CLOCK_WIDTH: usize = 5;
 const BANNER_GROUP_GAP_WIDTH: usize = 1;
 const TERMINAL_SIZE_QUERY: &str = "\x1b[18t";
 const SHELL_MOUSE_TRACKING_ENABLE: &str = "\x1b[?1003h\x1b[?1006h";
+// NetShell remains a normal selectable terminal. Explicitly clear modes left
+// by a prior Shell2 session or live update.
+const SHELL_MOUSE_TRACKING_DISABLE: &str =
+    "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1015l";
 const TERMINAL_SIZE_QUERY_IDLE_TICKS: u16 = 100;
 const CRY_APP_LABEL: &str = "cry";
+const APP_NAME_TITLE_MAX_CHARS: usize = 8;
 pub(crate) const LOCAL_ESCAPE_KEY_BYTE: u8 = 0x1d;
 pub(crate) const LOCAL_UNMAPPED_KEY_BYTE: u8 = 0x1e;
 const LOCAL_MATRIX_CLICK_PREFIX_BYTE: u8 = 0xff;
@@ -260,6 +266,7 @@ struct ChromeState {
     active_slot: matrix::MatrixSlotId,
     active_slot_activity: matrix::MatrixSlotActivity,
     app_label: Option<AllocString>,
+    app_sha256: Option<[u8; 32]>,
     is_vmx: bool,
     mode: ShellMode2,
 }
@@ -370,6 +377,7 @@ impl<'a> AlignedWriter<'a> {
         if active_matrix_slot_is_vmx(output_mask)
             && let Some(label) = matrix::active_slot_app_label(output_mask)
         {
+            let label = titlebar_app_name(label.as_str());
             let styled_label = alloc::format!(
                 " {}",
                 term_style::paint(label.as_str())
@@ -377,6 +385,12 @@ impl<'a> AlignedWriter<'a> {
                     .color(VMX_STATUS_RGB)
             );
             self.io.raw_write_str(styled_label.as_str());
+            if let Some(sha256) = matrix::active_slot_app_sha256(output_mask) {
+                let hash = titlebar_sha256(&sha256);
+                let styled_hash =
+                    alloc::format!(" {}", term_style::paint(hash.as_str()).color(APP_HASH_RGB));
+                self.io.raw_write_str(styled_hash.as_str());
+            }
         }
     }
 
@@ -683,8 +697,10 @@ fn render_active_slot_content(
 fn configure_output_view(out: &AlignedWriter<'_>, output_mask: OutputMask) {
     out.set_line_width(line_width_for_output(output_mask));
     out.set_transcript_view_rows(transcript_view_rows_for_output(output_mask));
-    if (output_mask & (OUTPUT_LOCAL_MASK | OUTPUT_NET_TCP_MASK)) != 0 {
+    if (output_mask & OUTPUT_LOCAL_MASK) != 0 {
         out.io.raw_write_str(SHELL_MOUSE_TRACKING_ENABLE);
+    } else if (output_mask & OUTPUT_NET_TCP_MASK) != 0 {
+        out.io.raw_write_str(SHELL_MOUSE_TRACKING_DISABLE);
     }
 }
 
@@ -713,6 +729,7 @@ fn current_chrome_state(output_mask: OutputMask, mode: ShellMode2) -> ChromeStat
         active_slot: matrix::active_slot_id(output_mask),
         active_slot_activity: matrix::active_slot_activity(output_mask),
         app_label: matrix::active_slot_app_label(output_mask),
+        app_sha256: matrix::active_slot_app_sha256(output_mask),
         is_vmx: active_matrix_slot_is_vmx(output_mask),
         mode,
     }
@@ -772,11 +789,33 @@ fn banner_left_visible_width(output_mask: OutputMask) -> usize {
     if active_matrix_slot_is_vmx(output_mask)
         && let Some(label) = matrix::active_slot_app_label(output_mask)
     {
+        let label = titlebar_app_name(label.as_str());
         width = width
             .saturating_add(1)
             .saturating_add(ecma48::visible_width(label.as_str()));
+        if let Some(sha256) = matrix::active_slot_app_sha256(output_mask) {
+            width = width
+                .saturating_add(1)
+                .saturating_add(ecma48::visible_width(titlebar_sha256(&sha256).as_str()));
+        }
     }
     width
+}
+
+fn titlebar_app_name(label: &str) -> AllocString {
+    label.chars().take(APP_NAME_TITLE_MAX_CHARS).collect()
+}
+
+fn titlebar_sha256(sha256: &[u8; 32]) -> AllocString {
+    let mut out = AllocString::with_capacity(33);
+    for byte in sha256[..8].iter() {
+        let _ = write!(out, "{byte:02x}");
+    }
+    out.push('…');
+    for byte in sha256[24..].iter() {
+        let _ = write!(out, "{byte:02x}");
+    }
+    out
 }
 
 fn banner_right_visible_width(output_mask: OutputMask) -> usize {
@@ -1112,9 +1151,13 @@ pub(crate) fn unbind_matrix_target_vm(target: &MatrixTarget, vm_id: u8) -> Matri
     matrix::unbind_live_slot_vm(&target.slot_id, target.slot_lifetime_generation, vm_id)
 }
 
-pub(crate) fn set_matrix_target_app_label(target: &MatrixTarget, label: &str) {
-    let _ =
-        matrix::set_live_slot_app_label(&target.slot_id, target.slot_lifetime_generation, label);
+pub(crate) fn set_matrix_target_app_identity(target: &MatrixTarget, label: &str, sha256: [u8; 32]) {
+    let _ = matrix::set_live_slot_app_identity(
+        &target.slot_id,
+        target.slot_lifetime_generation,
+        label,
+        sha256,
+    );
 }
 
 pub(crate) fn release_matrix_target_vm_reservation(target: &MatrixTarget) {
@@ -1273,6 +1316,23 @@ pub(crate) fn konsole_viewport_size_for_target(target: &MatrixTarget) -> (usize,
         with_matrix_target_geometry(target, |_| viewport()).unwrap_or((1, 1))
     } else {
         viewport()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{titlebar_app_name, titlebar_sha256};
+
+    #[test]
+    fn titlebar_app_name_discards_characters_after_eight() {
+        assert_eq!(titlebar_app_name("strudel_core"), "strudel_");
+        assert_eq!(titlebar_app_name("lumen"), "lumen");
+    }
+
+    #[test]
+    fn titlebar_sha256_keeps_sixteen_hex_digits_from_each_end() {
+        let digest = core::array::from_fn(|index| index as u8);
+        assert_eq!(titlebar_sha256(&digest), "0001020304050607…18191a1b1c1d1e1f");
     }
 }
 

@@ -11,6 +11,7 @@ pub const FORMAT_JPEG: u32 = 1;
 pub const FORMAT_PNG: u32 = 2;
 pub const FORMAT_BMP: u32 = 3;
 pub const PIXEL_FORMAT_RGBA8: u32 = 1;
+pub const TEXTURE_RESIDENCY_PICASSO_RENDER1: u32 = 2;
 
 pub const BACKEND_PNG: u32 = 1;
 pub const BACKEND_ZUNE_JPEG: u32 = 2;
@@ -54,9 +55,41 @@ pub struct ImageInfo {
     pub revision: u32,
 }
 
+/// Opaque, owner-scoped texture contract returned only after decode and
+/// resident DMA publication have completed. No CPU pointer, physical address,
+/// or engine virtual address crosses this boundary.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[repr(C)]
+pub struct RetainedTextureInfo {
+    pub texture_id: u64,
+    pub width: u32,
+    pub height: u32,
+    pub stride_bytes: u32,
+    pub byte_len: u32,
+    pub source_format: u32,
+    pub pixel_format: u32,
+    pub backend: u32,
+    pub revision: u32,
+    pub residency: u32,
+    pub reserved: u32,
+}
+
+const _: () = assert!(core::mem::size_of::<RetainedTextureInfo>() == 48);
+
 struct DecodedImage {
     info: ImageInfo,
     rgba: Vec<u8>,
+}
+
+#[derive(Clone, Copy)]
+enum DecodeOutput {
+    Readback,
+    Retained { device: u64 },
+}
+
+enum DecodeResult {
+    Readback(DecodedImage),
+    Retained(RetainedTextureInfo),
 }
 
 enum OperationState {
@@ -64,10 +97,11 @@ enum OperationState {
         format: u32,
         total_len: usize,
         encoded: Vec<u8>,
+        output: DecodeOutput,
     },
     Queued,
     Running,
-    Complete(Result<DecodedImage, i32>),
+    Complete(Result<DecodeResult, i32>),
 }
 
 struct Operation {
@@ -81,6 +115,7 @@ struct DecodeRequest {
     id: u32,
     format: u32,
     encoded: Vec<u8>,
+    output: DecodeOutput,
 }
 
 fn next_id(operations: &[Operation]) -> Result<u32, i32> {
@@ -98,6 +133,17 @@ fn valid_format(format: u32) -> bool {
 }
 
 pub fn begin(owner: u32, format: u32, total_len: usize) -> i32 {
+    begin_for_output(owner, format, total_len, DecodeOutput::Readback)
+}
+
+pub fn begin_retained(owner: u32, device: u64, format: u32, total_len: usize) -> i32 {
+    if device == 0 {
+        return ERR_INVALID;
+    }
+    begin_for_output(owner, format, total_len, DecodeOutput::Retained { device })
+}
+
+fn begin_for_output(owner: u32, format: u32, total_len: usize, output: DecodeOutput) -> i32 {
     if !valid_format(format) || total_len == 0 {
         return ERR_INVALID;
     }
@@ -123,6 +169,7 @@ pub fn begin(owner: u32, format: u32, total_len: usize) -> i32 {
             format,
             total_len,
             encoded,
+            output,
         },
     });
     id as i32
@@ -173,6 +220,7 @@ pub fn commit(owner: u32, id: u32) -> i32 {
         format,
         total_len,
         encoded,
+        output,
     } = state
     else {
         operation.state = state;
@@ -183,6 +231,7 @@ pub fn commit(owner: u32, id: u32) -> i32 {
             format,
             total_len,
             encoded,
+            output,
         };
         return ERR_INVALID;
     }
@@ -191,6 +240,7 @@ pub fn commit(owner: u32, id: u32) -> i32 {
         id,
         format,
         encoded,
+        output,
     });
     0
 }
@@ -219,7 +269,22 @@ pub fn info(owner: u32, id: u32) -> Result<ImageInfo, i32> {
         .find(|operation| operation.owner == owner && operation.id == id)
         .ok_or(ERR_NOT_FOUND)?;
     match &operation.state {
-        OperationState::Complete(Ok(image)) => Ok(image.info),
+        OperationState::Complete(Ok(DecodeResult::Readback(image))) => Ok(image.info),
+        OperationState::Complete(Ok(DecodeResult::Retained(_))) => Err(ERR_INVALID),
+        OperationState::Complete(Err(error)) => Err(*error),
+        _ => Err(ERR_BUSY),
+    }
+}
+
+pub fn retained_info(owner: u32, id: u32) -> Result<RetainedTextureInfo, i32> {
+    let operations = OPERATIONS.lock();
+    let operation = operations
+        .iter()
+        .find(|operation| operation.owner == owner && operation.id == id)
+        .ok_or(ERR_NOT_FOUND)?;
+    match &operation.state {
+        OperationState::Complete(Ok(DecodeResult::Retained(info))) => Ok(*info),
+        OperationState::Complete(Ok(DecodeResult::Readback(_))) => Err(ERR_INVALID),
         OperationState::Complete(Err(error)) => Err(*error),
         _ => Err(ERR_BUSY),
     }
@@ -235,7 +300,8 @@ pub fn read(owner: u32, id: u32, offset: usize, out: &mut [u8]) -> Result<usize,
         .find(|operation| operation.owner == owner && operation.id == id)
         .ok_or(ERR_NOT_FOUND)?;
     let image = match &operation.state {
-        OperationState::Complete(Ok(image)) => image,
+        OperationState::Complete(Ok(DecodeResult::Readback(image))) => image,
+        OperationState::Complete(Ok(DecodeResult::Retained(_))) => return Err(ERR_INVALID),
         OperationState::Complete(Err(error)) => return Err(*error),
         _ => return Err(ERR_BUSY),
     };
@@ -245,6 +311,54 @@ pub fn read(owner: u32, id: u32, offset: usize, out: &mut [u8]) -> Result<usize,
     let copied = out.len().min(image.rgba.len() - offset);
     out[..copied].copy_from_slice(&image.rgba[offset..offset + copied]);
     Ok(copied)
+}
+
+fn vgpu_principal(owner: u32) -> crate::gpu::vgpu::Principal {
+    if owner & 0x8000_0000 != 0 {
+        crate::gpu::vgpu::Principal::HullGuest((owner & 0xffff) as u16)
+    } else {
+        crate::gpu::vgpu::Principal::HostRuntime
+    }
+}
+
+fn insert_retained_texture(
+    owner: u32,
+    device: u64,
+    image: DecodedImage,
+) -> Result<RetainedTextureInfo, i32> {
+    let texture = crate::gpu::vgpu::create_retained_texture(
+        vgpu_principal(owner),
+        crate::gpu::vgpu::DeviceHandle::from_raw(device),
+        image.info.width,
+        image.info.height,
+        image.info.stride_bytes,
+        image.rgba.as_slice(),
+    )
+    .map_err(|error| error.errno())?;
+    let info = RetainedTextureInfo {
+        texture_id: texture.raw(),
+        width: image.info.width,
+        height: image.info.height,
+        stride_bytes: image.info.stride_bytes,
+        byte_len: u32::try_from(image.rgba.len()).map_err(|_| ERR_TOO_LARGE)?,
+        source_format: image.info.source_format,
+        pixel_format: image.info.pixel_format,
+        backend: image.info.backend,
+        revision: image.info.revision,
+        residency: TEXTURE_RESIDENCY_PICASSO_RENDER1,
+        reserved: 0,
+    };
+    Ok(info)
+}
+
+pub fn release_retained(owner: u32, device: u64, texture_id: u64) -> i32 {
+    crate::gpu::vgpu::destroy_retained_texture(
+        vgpu_principal(owner),
+        crate::gpu::vgpu::DeviceHandle::from_raw(device),
+        crate::gpu::vgpu::RetainedTextureHandle::from_raw(texture_id),
+    )
+    .map(|()| 0)
+    .unwrap_or_else(|error| error.errno())
 }
 
 pub fn discard(owner: u32, id: u32) -> i32 {
@@ -292,7 +406,7 @@ fn mark_running(owner: u32, id: u32) -> bool {
     true
 }
 
-fn complete(owner: u32, id: u32, result: Result<DecodedImage, i32>) {
+fn complete(owner: u32, id: u32, result: Result<DecodeResult, i32>) {
     let mut operations = OPERATIONS.lock();
     if let Some(operation) = operations
         .iter_mut()
@@ -412,7 +526,15 @@ pub async fn worker_task(worker_id: usize, worker_slot: u32, core_kind: u8) {
         let request = REQUESTS.lock().pop_front();
         if let Some(request) = request {
             if mark_running(request.owner, request.id) {
-                let result = decode(&request).await;
+                let result = decode(&request)
+                    .await
+                    .and_then(|image| match request.output {
+                        DecodeOutput::Readback => Ok(DecodeResult::Readback(image)),
+                        DecodeOutput::Retained { device } => {
+                            insert_retained_texture(request.owner, device, image)
+                                .map(DecodeResult::Retained)
+                        }
+                    });
                 complete(request.owner, request.id, result);
             }
         } else {
