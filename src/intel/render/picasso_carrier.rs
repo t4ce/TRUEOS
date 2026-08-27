@@ -788,6 +788,31 @@ pub(crate) fn submit_picasso_render1_batch(
             || (spins.is_multiple_of(256)
                 && crate::chronos::monotonic_nanos().saturating_sub(started) >= 2_000_000_000)
         {
+            let debug_bytes = RESULT_DEBUG_DWORD_COUNT
+                .saturating_mul(core::mem::size_of::<u32>())
+                .min(warm.result_len);
+            crate::intel::dma_flush(warm.result_virt, debug_bytes);
+            let (scene_lo, scene_hi) =
+                read_result_qword_coherent(warm, RESULT_SLOT_SCENE_FRAME_DWORD);
+            crate::log_important!(target: "render";
+                "picasso-carrier-timeout-proof carrier={} accepted=0 saved_head={} published_tail={} stage_markers=[entry:0x{:08X},opening:0x{:08X},vf:0x{:08X},vs:0x{:08X},clip:0x{:08X},raster:0x{:08X},ps_state:0x{:08X},pre3d:0x{:08X},post3d:0x{:08X},final:0x{:08X}] secondary_return=0x{:08X} scene_release=0x{:08X}/0x{:08X} interpretation=highest-secondary-index-and-last-command-frontier\n",
+                lease.carrier().label(),
+                head,
+                tail,
+                read_result_dword(warm, RESULT_SLOT_BATCH_ENTRY_DWORD),
+                read_result_dword(warm, RESULT_SLOT_POST_OPENING_DWORD),
+                read_result_dword(warm, RESULT_SLOT_POST_VF_DWORD),
+                read_result_dword(warm, RESULT_SLOT_POST_VS_DWORD),
+                read_result_dword(warm, RESULT_SLOT_POST_CLIP_DWORD),
+                read_result_dword(warm, RESULT_SLOT_POST_RASTER_DWORD),
+                read_result_dword(warm, RESULT_SLOT_POST_PS_STATE_DWORD),
+                read_result_dword(warm, RESULT_SLOT_PRE3D_DWORD),
+                read_result_dword(warm, RESULT_SLOT_POST3D_DWORD),
+                read_result_dword(warm, RESULT_SLOT_FINAL_DWORD),
+                read_result_dword(warm, RESULT_SLOT_SECONDARY_RETURN_DWORD),
+                scene_lo,
+                scene_hi,
+            );
             quarantine_picasso_render1(lease, "release-or-saved-head-timeout");
             return Err("picasso-render1-retire");
         }

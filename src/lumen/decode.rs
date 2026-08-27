@@ -2,8 +2,8 @@
 //!
 //! The adapter owns exactly one [`DecodeSession`] and one backend. A decode
 //! call therefore represents one token on one ordered lane. Production uses
-//! scalar CPU state stages and the admitted Intel C++/IGC projection program;
-//! no runtime graph is interpreted.
+//! scalar CPU state stages and the admitted native-row AVX-VNNI projection
+//! kernel; no runtime graph is interpreted.
 
 extern crate alloc;
 
@@ -49,8 +49,8 @@ pub(crate) struct Lfm25DecodeState {
 /// Asynchronous Lumen module for one sealed LFM2.5 session.
 ///
 /// `Backend` must complete each request only from its registered worker
-/// callback. The generic boundary keeps the scheduler independent of the Intel
-/// execution transport.
+/// callback. The generic boundary keeps the scheduler independent of the
+/// projection transport.
 pub(crate) struct Lfm25Decode<Backend> {
     session: RefCell<DecodeSession>,
     backend: RefCell<Backend>,
@@ -142,20 +142,20 @@ impl<Backend> Lfm25Decode<Backend> {
     }
 }
 
-/// Bind the sealed scalar CPU stages and the admitted Intel C++/IGC projection
-/// program to the same fixed 99-operation Lumen module.
+/// Bind the sealed scalar CPU stages and native-row AVX-VNNI projection
+/// kernel to the same fixed 99-operation Lumen module.
 #[cfg(target_os = "trueos")]
-pub(crate) async fn open_intel_igc() -> Result<
-    Lfm25Decode<crate::r::lfm25_hybrid_cpu_backend::IntelIgcAotDecodeBackend>,
+pub(crate) async fn open_cpu_vnni() -> Result<
+    Lfm25Decode<crate::r::lfm25_hybrid_cpu_backend::CpuVnniAotDecodeBackend>,
     crate::r::lfm25_hybrid_cpu_backend::HybridCpuBackendError,
 > {
-    let backend = crate::r::lfm25_hybrid_cpu_backend::open_intel_igc_backend().await?;
+    let backend = crate::r::lfm25_hybrid_cpu_backend::open_cpu_vnni_backend().await?;
     Ok(Lfm25Decode::new(backend))
 }
 
 #[cfg(target_os = "trueos")]
-pub(crate) fn checkpoint_intel_igc(
-    module: Lfm25Decode<crate::r::lfm25_hybrid_cpu_backend::IntelIgcAotDecodeBackend>,
+pub(crate) fn checkpoint_cpu_vnni(
+    module: Lfm25Decode<crate::r::lfm25_hybrid_cpu_backend::CpuVnniAotDecodeBackend>,
 ) -> Result<Vec<u8>, crate::r::lfm25_hybrid_cpu_backend::HybridCpuBackendError> {
     let (session, backend) = module.into_parts();
     if session.is_poisoned() {
@@ -165,13 +165,13 @@ pub(crate) fn checkpoint_intel_igc(
 }
 
 #[cfg(target_os = "trueos")]
-pub(crate) async fn restore_intel_igc(
+pub(crate) async fn restore_cpu_vnni(
     image: &[u8],
 ) -> Result<
-    Lfm25Decode<crate::r::lfm25_hybrid_cpu_backend::IntelIgcAotDecodeBackend>,
+    Lfm25Decode<crate::r::lfm25_hybrid_cpu_backend::CpuVnniAotDecodeBackend>,
     crate::r::lfm25_hybrid_cpu_backend::HybridCpuBackendError,
 > {
-    let mut backend = crate::r::lfm25_hybrid_cpu_backend::open_intel_igc_backend().await?;
+    let mut backend = crate::r::lfm25_hybrid_cpu_backend::open_cpu_vnni_backend().await?;
     let checkpoint = backend.restore_state(image)?;
     let session = DecodeSession::from_checkpoint(checkpoint.position, checkpoint.callback_sequence)
         .ok_or(crate::r::lfm25_hybrid_cpu_backend::HybridCpuBackendError::SessionImage)?;
@@ -184,7 +184,7 @@ pub(crate) async fn open_hybrid_cpu() -> Result<
     Lfm25Decode<crate::r::lfm25_hybrid_cpu_backend::HybridCpuAotDecodeBackend>,
     crate::r::lfm25_hybrid_cpu_backend::HybridCpuBackendError,
 > {
-    open_intel_igc().await
+    open_cpu_vnni().await
 }
 
 #[cfg(test)]

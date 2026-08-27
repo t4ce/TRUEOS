@@ -1,11 +1,19 @@
 #![no_std]
 
-//! Scalar, deterministic LFM2.5 CPU kernels for TRUEOS's hybrid decoder.
+//! Deterministic LFM2.5 CPU kernels for TRUEOS's fixed decoder.
 //!
-//! This crate deliberately owns numerical primitives only. Model I/O, token
-//! scheduling, Intel GPU submission, and cache ownership remain in TRUEOS.
+//! This crate owns numerical primitives, including the native-row AVX-VNNI Q8
+//! projection. Model I/O, token scheduling, worker ownership, and cache
+//! ownership remain in TRUEOS.
 
 extern crate alloc;
+
+mod cpu_vnni;
+
+pub use cpu_vnni::{
+    Q8_VNNI_ROWS_PER_TILE, Q8VnniActivation, Q8VnniCapabilities, Q8VnniProjector,
+    validate_q8_vnni_matrix,
+};
 
 use alloc::collections::BTreeMap;
 use alloc::vec;
@@ -28,6 +36,17 @@ pub const PACKED_Q8X16_TENSOR_COUNT: usize = 93;
 pub const PACKED_Q8X16_BLOCK_TILES: u64 = 692_224;
 pub const PACKED_Q8X16_QUANTIZED_VALUES: u64 = 354_418_688;
 pub const PACKED_Q8X16_SUBNORMAL_SCALES: u64 = 25_994;
+pub const LFM25_Q8_PROJECTION_TENSOR_COUNT: usize = 93;
+pub const LFM25_Q8_PROJECTION_QUANTIZED_VALUES: u64 = 354_418_688;
+pub const LFM25_Q8_PROJECTION_BLOCKS: u64 =
+    LFM25_Q8_PROJECTION_QUANTIZED_VALUES / Q8_BLOCK_VALUES as u64;
+pub const LFM25_Q8_WEIGHT_BYTES_PER_TOKEN: u64 = LFM25_Q8_PROJECTION_BLOCKS * Q8_BLOCK_BYTES as u64;
+
+const _: () = assert!(LFM25_Q8_PROJECTION_QUANTIZED_VALUES % Q8_BLOCK_VALUES as u64 == 0);
+const _: () = assert!(LFM25_Q8_PROJECTION_BLOCKS == 11_075_584);
+const _: () = assert!(LFM25_Q8_WEIGHT_BYTES_PER_TOKEN == 376_569_856);
+const _: () = assert!(PACKED_Q8X16_TENSOR_COUNT == LFM25_Q8_PROJECTION_TENSOR_COUNT);
+const _: () = assert!(PACKED_Q8X16_QUANTIZED_VALUES == LFM25_Q8_PROJECTION_QUANTIZED_VALUES);
 pub const PACKED_Q8X16_IMAGE_SHA256: [u8; 32] = [
     0x90, 0x87, 0x6f, 0x02, 0xe0, 0xcc, 0x22, 0x4f, 0xe2, 0x3e, 0x01, 0xc8, 0x73, 0x9d, 0xcb, 0xb9,
     0x4d, 0x7b, 0xcc, 0x8f, 0xbf, 0xa3, 0xd3, 0x62, 0x04, 0xc6, 0x26, 0x7a, 0x44, 0x0f, 0x5f, 0xd8,
@@ -51,6 +70,7 @@ pub enum Error {
     Artifact,
     Vocabulary,
     Allocation,
+    UnsupportedCpu,
     NonFinite,
 }
 

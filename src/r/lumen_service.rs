@@ -2,8 +2,8 @@
 //!
 //! The Blueprint owns chat/tool policy and stores the portable mutable session
 //! image in its private memory. The kernel owns immutable model assets and the
-//! CPU+IGC+GuC execution lane. No GPU handle, model pointer or host allocation
-//! crosses this boundary.
+//! CPU+AVX-VNNI execution lane. No model pointer or host allocation crosses
+//! this boundary.
 
 extern crate alloc;
 
@@ -12,7 +12,7 @@ use alloc::vec::Vec;
 use spin::Mutex;
 use trueos_time::{Duration, Timer};
 
-use crate::lumen::decode::{Lfm25DecodeInput, checkpoint_intel_igc, restore_intel_igc};
+use crate::lumen::decode::{Lfm25DecodeInput, checkpoint_cpu_vnni, restore_cpu_vnni};
 
 const MAX_SYSTEM_BYTES: usize = 8 * 1024;
 const MAX_PROMPT_BYTES: usize = 4 * 1024;
@@ -37,7 +37,7 @@ const ERROR_INFERENCE: i32 = -6;
 const ERROR_TRANSPORT: i32 = -7;
 
 type LfmModule =
-    crate::lumen::decode::Lfm25Decode<crate::r::lfm25_hybrid_cpu_backend::IntelIgcAotDecodeBackend>;
+    crate::lumen::decode::Lfm25Decode<crate::r::lfm25_hybrid_cpu_backend::CpuVnniAotDecodeBackend>;
 
 enum LumenRequest {
     TemplateOpen(String),
@@ -534,7 +534,7 @@ async fn lumen_blueprint_worker(owner: u8) {
 
     let module = match initial {
         LumenRequest::TemplateOpen(system) => {
-            let module = match crate::lumen::decode::open_intel_igc().await {
+            let module = match crate::lumen::decode::open_cpu_vnni().await {
                 Ok(module) => module,
                 Err(error) => {
                     crate::log_warn!(
@@ -573,7 +573,7 @@ async fn lumen_blueprint_worker(owner: u8) {
             }
             module
         }
-        LumenRequest::Restore(image) => match restore_intel_igc(&image).await {
+        LumenRequest::Restore(image) => match restore_cpu_vnni(&image).await {
             Ok(module) => module,
             Err(error) => {
                 crate::log_warn!(
@@ -659,7 +659,7 @@ async fn lumen_blueprint_worker(owner: u8) {
             }
             Some(LumenRequest::Checkpoint) => {
                 let position = module.try_state().map_or(0, |state| state.position);
-                match checkpoint_intel_igc(module) {
+                match checkpoint_cpu_vnni(module) {
                     Ok(image) => {
                         let bytes = image.len();
                         let mut state = slot(owner).unwrap().lock();
@@ -669,7 +669,7 @@ async fn lumen_blueprint_worker(owner: u8) {
                         state.phase = v::bp_abi::LUMEN_PHASE_CHECKPOINT_READY;
                         crate::log_info!(
                             target: "r";
-                            "lumen-bp: capability checkpointed owner={} position={} bytes={} action=release-gpu-session\n",
+                            "lumen-bp: capability checkpointed owner={} position={} bytes={} action=release-cpu-session\n",
                             owner,
                             position,
                             bytes,

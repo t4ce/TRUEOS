@@ -1,9 +1,9 @@
-//! Fixed LFM2.5 CPU + Intel IGC decode backend.
+//! Fixed LFM2.5 CPU + AVX-VNNI decode backend.
 //!
 //! The fixed control plane remains the 99-operation Lumen AOT schedule. CPU
-//! kernels execute state, normalization, attention-reduction, and nonlinear
-//! stages. Every Q8 projection is submitted to the admitted C++/IGC kernel on
-//! the dedicated Intel GuC/RCS lane.
+//! kernels execute state, normalization, attention-reduction, nonlinear stages,
+//! and every native-row Q8_0 projection. No graph interpreter, Q8x16 repack, or
+//! generic GEMM abstraction is introduced.
 
 extern crate alloc;
 
@@ -13,7 +13,7 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use sha2::{Digest, Sha256};
 use spin::Mutex;
-use trueos_time::{Duration, Instant, Timer};
+use trueos_time::{Duration, Timer};
 
 use trueos_lfm25_cpu as cpu;
 use trueos_lfm25_model::lfm25::{self, NativeTensorDescriptor, TensorFormat, TensorRole};
@@ -33,6 +33,7 @@ const KV_HEADS: usize = lfm25::MODEL_KV_HEADS as usize;
 const HEAD_DIM: usize = lfm25::MODEL_HEAD_DIMENSION as usize;
 const KV_ELEMENTS: usize = KV_HEADS * HEAD_DIM;
 const ATTENTION_REDUCTION_TILE: usize = 256;
+const CPU_VNNI_MAX_BATCH_PROJECTIONS: usize = 3;
 const MODEL_READ_CHUNK: usize = 256 * 1024;
 const MODEL_ALIGNMENT: usize = 64;
 const CPU_CONNECTION_GENERATION: u32 = 0x4350_5531; // "CPU1"
@@ -84,8 +85,6 @@ pub enum HybridCpuBackendError {
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     F32(lfm25_f32::Error),
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-    Gpu(crate::intel::gpgpu::Lfm25Q8ProjectError),
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Kernel(cpu::Error),
     Tensor,
     TensorDomain,
@@ -109,12 +108,6 @@ impl From<lfm25_model::Error> for HybridCpuBackendError {
 impl From<lfm25_f32::Error> for HybridCpuBackendError {
     fn from(error: lfm25_f32::Error) -> Self {
         Self::F32(error)
-    }
-}
-
-impl From<crate::intel::gpgpu::Lfm25Q8ProjectError> for HybridCpuBackendError {
-    fn from(error: crate::intel::gpgpu::Lfm25Q8ProjectError) -> Self {
-        Self::Gpu(error)
     }
 }
 
@@ -293,8 +286,8 @@ pub(crate) fn lfm25_hybrid_cpu_perf_snapshot() -> Lfm25HybridCpuPerfStats {
 }
 
 struct CpuQ8Tensor {
-    /// Preserve the normalized F32 result for CPU stages. Each admitted iGPU
-    /// projection quantizes this exact vector into the fixed Q8_0 input ABI.
+    /// Preserve the normalized F32 result for CPU stages. Each admitted CPU
+    /// VNNI projection quantizes this exact vector into the fixed Q8_0 input ABI.
     values: Vec<f32>,
 }
 
@@ -309,32 +302,32 @@ struct KvCache {
     values: Vec<u16>,
 }
 
-struct IntelIgcResidentModel {
+struct CpuVnniResidentModel {
     model_storage: Vec<u8>,
     model_offset: usize,
-    gpu_model: crate::intel::gpgpu::Lfm25Q8ModelMapping,
 }
 
-struct IntelIgcResidentAssets {
-    model: Arc<IntelIgcResidentModel>,
+struct CpuVnniResidentAssets {
+    model: Arc<CpuVnniResidentModel>,
     f32: Arc<cpu::F32Sidecar>,
 }
 
 static RESIDENT_MODEL_STATE: AtomicU8 = AtomicU8::new(RESIDENT_COLD);
 static RESIDENT_F32_STATE: AtomicU8 = AtomicU8::new(RESIDENT_COLD);
-static RESIDENT_MODEL: Mutex<Option<Arc<IntelIgcResidentModel>>> = Mutex::new(None);
+static RESIDENT_MODEL: Mutex<Option<Arc<CpuVnniResidentModel>>> = Mutex::new(None);
 static RESIDENT_F32: Mutex<Option<Arc<cpu::F32Sidecar>>> = Mutex::new(None);
-static RESIDENT_ASSETS: Mutex<Option<Arc<IntelIgcResidentAssets>>> = Mutex::new(None);
+static RESIDENT_ASSETS: Mutex<Option<Arc<CpuVnniResidentAssets>>> = Mutex::new(None);
 
 pub struct HybridCpuAotDecodeBackend {
-    assets: Arc<IntelIgcResidentAssets>,
+    assets: Arc<CpuVnniResidentAssets>,
+    projector: cpu::Q8VnniProjector,
     slots: Vec<Option<CpuTensor>>,
     shortconv: Vec<Vec<[f32; 2]>>,
     kv: Vec<KvCache>,
     callback_sequence: u64,
 }
 
-pub type IntelIgcAotDecodeBackend = HybridCpuAotDecodeBackend;
+pub type CpuVnniAotDecodeBackend = HybridCpuAotDecodeBackend;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Lfm25BackendCheckpoint {
@@ -342,12 +335,7 @@ pub(crate) struct Lfm25BackendCheckpoint {
     pub(crate) callback_sequence: u64,
 }
 
-async fn load_resident_model() -> Result<IntelIgcResidentModel, HybridCpuBackendError> {
-    if !crate::intel::gpgpu::lfm25_q8_packed_project_supported() {
-        return Err(HybridCpuBackendError::Gpu(
-            crate::intel::gpgpu::Lfm25Q8ProjectError::UnsupportedTarget,
-        ));
-    }
+async fn load_resident_model() -> Result<CpuVnniResidentModel, HybridCpuBackendError> {
     let image = lfm25_model::open().await?;
     let bytes = usize::try_from(image.len()).map_err(|_| HybridCpuBackendError::Allocation)?;
     let allocation_bytes = bytes
@@ -384,34 +372,60 @@ async fn load_resident_model() -> Result<IntelIgcResidentModel, HybridCpuBackend
             expected: lfm25_model::NATIVE_IMAGE_SHA256,
         });
     }
-    let pack_started_ms = Instant::now().as_millis();
-    let packed = cpu::pack_q8x16_model_in_place(model)?;
-    let packed_observed: [u8; 32] = Sha256::digest(&*model).into();
-    if packed_observed != cpu::PACKED_Q8X16_IMAGE_SHA256 {
-        return Err(HybridCpuBackendError::ModelHash {
-            observed: packed_observed,
-            expected: cpu::PACKED_Q8X16_IMAGE_SHA256,
-        });
+
+    // Admit the signed-magnitude transform once. The hot loop can then use
+    // VPSIGNB without checking every sealed weight byte on every token.
+    let mut q8_tensors = 0usize;
+    let mut q8_values = 0u64;
+    let mut q8_bytes = 0u64;
+    for descriptor in lfm25::generated::TENSORS
+        .iter()
+        .copied()
+        .filter(|descriptor| TensorFormat::from_raw(descriptor.format) == Some(TensorFormat::Q8_0))
+    {
+        let start = descriptor.native_offset as usize;
+        let end = start
+            .checked_add(descriptor.native_bytes as usize)
+            .ok_or(HybridCpuBackendError::Tensor)?;
+        let tensor = model.get(start..end).ok_or(HybridCpuBackendError::Tensor)?;
+        cpu::validate_q8_vnni_matrix(
+            tensor,
+            descriptor.ggml_ne1 as usize,
+            descriptor.ggml_ne0 as usize,
+        )?;
+        q8_tensors = q8_tensors
+            .checked_add(1)
+            .ok_or(HybridCpuBackendError::Tensor)?;
+        q8_values = q8_values
+            .checked_add(u64::from(descriptor.ggml_ne0) * u64::from(descriptor.ggml_ne1))
+            .ok_or(HybridCpuBackendError::Tensor)?;
+        q8_bytes = q8_bytes
+            .checked_add(u64::from(descriptor.native_bytes))
+            .ok_or(HybridCpuBackendError::Tensor)?;
     }
+    if q8_tensors != cpu::LFM25_Q8_PROJECTION_TENSOR_COUNT
+        || q8_values != cpu::LFM25_Q8_PROJECTION_QUANTIZED_VALUES
+        || q8_bytes != cpu::LFM25_Q8_WEIGHT_BYTES_PER_TOKEN
+    {
+        return Err(HybridCpuBackendError::Tensor);
+    }
+
     crate::log_info!(
         target: "r";
-        "lfm25: packed model ready weight_layout=pair1088-x16-dp4a bytes={} tensors={} block_tiles={} quantized_values={} subnormal_scales={} pack_seal_ms={} sha256=90876f02e0cc224fe23e01c8739dcbb94d7bcc8fbfa3d36204c6267a440f5fd8\n",
+        "lfm25: native model ready weight_layout=q8_0-row34 backend=cpu-vnni image_bytes={} q8_bytes={} tensors={} blocks={} quantized_values={} model_mutation=none\n",
         model.len(),
-        packed.tensor_count,
-        packed.block_tiles,
-        packed.quantized_values,
-        packed.subnormal_scales,
-        Instant::now().as_millis().saturating_sub(pack_started_ms),
+        q8_bytes,
+        q8_tensors,
+        cpu::LFM25_Q8_PROJECTION_BLOCKS,
+        q8_values,
     );
-    let gpu_model = crate::intel::gpgpu::bind_lfm25_q8_packed_model(model)?;
-    Ok(IntelIgcResidentModel {
+    Ok(CpuVnniResidentModel {
         model_storage,
         model_offset,
-        gpu_model,
     })
 }
 
-async fn resident_model() -> Result<Arc<IntelIgcResidentModel>, HybridCpuBackendError> {
+async fn resident_model() -> Result<Arc<CpuVnniResidentModel>, HybridCpuBackendError> {
     loop {
         if RESIDENT_MODEL_STATE.load(Ordering::Acquire) == RESIDENT_READY {
             if let Some(model) = RESIDENT_MODEL.lock().clone() {
@@ -467,13 +481,13 @@ async fn resident_f32() -> Result<Arc<cpu::F32Sidecar>, HybridCpuBackendError> {
     }
 }
 
-fn publish_resident_assets_if_complete() -> Option<Arc<IntelIgcResidentAssets>> {
+fn publish_resident_assets_if_complete() -> Option<Arc<CpuVnniResidentAssets>> {
     if let Some(assets) = RESIDENT_ASSETS.lock().clone() {
         return Some(assets);
     }
     let model = RESIDENT_MODEL.lock().clone()?;
     let f32 = RESIDENT_F32.lock().clone()?;
-    let candidate = Arc::new(IntelIgcResidentAssets { model, f32 });
+    let candidate = Arc::new(CpuVnniResidentAssets { model, f32 });
     let mut assets = RESIDENT_ASSETS.lock();
     if let Some(existing) = assets.as_ref() {
         return Some(existing.clone());
@@ -482,7 +496,7 @@ fn publish_resident_assets_if_complete() -> Option<Arc<IntelIgcResidentAssets>> 
     Some(candidate)
 }
 
-async fn resident_assets() -> Result<Arc<IntelIgcResidentAssets>, HybridCpuBackendError> {
+async fn resident_assets() -> Result<Arc<CpuVnniResidentAssets>, HybridCpuBackendError> {
     if let Some(assets) = RESIDENT_ASSETS.lock().clone() {
         return Ok(assets);
     }
@@ -493,28 +507,26 @@ async fn resident_assets() -> Result<Arc<IntelIgcResidentAssets>, HybridCpuBacke
     publish_resident_assets_if_complete().ok_or(HybridCpuBackendError::State)
 }
 
-pub(crate) async fn warm_intel_igc_model() -> Result<(), HybridCpuBackendError> {
+pub(crate) async fn warm_cpu_vnni_model() -> Result<(), HybridCpuBackendError> {
     let _ = resident_model().await?;
     Ok(())
 }
 
-pub(crate) async fn warm_intel_igc_f32() -> Result<(), HybridCpuBackendError> {
+pub(crate) async fn warm_cpu_vnni_f32() -> Result<(), HybridCpuBackendError> {
     let _ = resident_f32().await?;
     Ok(())
 }
 
-pub(crate) fn intel_igc_resident_assets_ready() -> bool {
+pub(crate) fn cpu_vnni_resident_assets_ready() -> bool {
     RESIDENT_ASSETS.lock().is_some()
 }
 
-pub async fn open_intel_igc_backend() -> Result<IntelIgcAotDecodeBackend, HybridCpuBackendError> {
-    if !crate::intel::gpgpu::lfm25_q8_packed_project_supported() {
-        return Err(HybridCpuBackendError::Gpu(
-            crate::intel::gpgpu::Lfm25Q8ProjectError::UnsupportedTarget,
-        ));
-    }
-    // Immutable model/F32 assets remain boot-resident. Every conversation gets
-    // fresh short-convolution, K/V, tensor-slot and callback state.
+pub async fn open_cpu_vnni_backend() -> Result<CpuVnniAotDecodeBackend, HybridCpuBackendError> {
+    let projector = cpu::Q8VnniProjector::detect()?;
+    // Immutable native model/F32 assets remain boot-resident. Every
+    // conversation gets fresh short-convolution, K/V, tensor-slot and callback
+    // state. The projector is admitted on this worker; immutable model
+    // admission remains shared through the resident asset.
     let assets = resident_assets().await?;
     let mut shortconv = Vec::new();
     shortconv
@@ -532,6 +544,7 @@ pub async fn open_intel_igc_backend() -> Result<IntelIgcAotDecodeBackend, Hybrid
 
     Ok(HybridCpuAotDecodeBackend {
         assets,
+        projector,
         slots: Vec::new(),
         shortconv,
         kv,
@@ -541,15 +554,15 @@ pub async fn open_intel_igc_backend() -> Result<IntelIgcAotDecodeBackend, Hybrid
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub async fn open_hybrid_backend() -> Result<HybridCpuAotDecodeBackend, HybridCpuBackendError> {
-    open_intel_igc_backend().await
+    open_cpu_vnni_backend().await
 }
 
 impl HybridCpuAotDecodeBackend {
     /// Serialize only mutable logical inference state.
     ///
-    /// Immutable model/F32 assets, transient tensor slots, GPU mappings and
-    /// GuC/RCS ownership deliberately remain kernel capabilities and are
-    /// reacquired when this image is restored.
+    /// Immutable model/F32 assets and transient tensor slots deliberately
+    /// remain kernel capabilities and are reacquired when this image is
+    /// restored.
     pub(crate) fn checkpoint_state(
         &self,
         position: u32,
@@ -605,7 +618,7 @@ impl HybridCpuAotDecodeBackend {
         image.extend_from_slice(&(HIDDEN as u32).to_le_bytes());
         image.extend_from_slice(&(self.kv.len() as u32).to_le_bytes());
         image.extend_from_slice(&(KV_ELEMENTS as u32).to_le_bytes());
-        image.extend_from_slice(&cpu::PACKED_Q8X16_IMAGE_SHA256);
+        image.extend_from_slice(&lfm25_model::NATIVE_IMAGE_SHA256);
         for state in &self.shortconv {
             for channel in state {
                 image.extend_from_slice(&channel[0].to_bits().to_le_bytes());
@@ -643,7 +656,7 @@ impl HybridCpuAotDecodeBackend {
         let hidden = image_u32(image, 28)? as usize;
         let kv_count = image_u32(image, 32)? as usize;
         let kv_elements = image_u32(image, 36)? as usize;
-        let packed_model_sha256 = image
+        let native_model_sha256 = image
             .get(40..72)
             .ok_or(HybridCpuBackendError::SessionImage)?;
         if version != SESSION_IMAGE_VERSION
@@ -652,7 +665,7 @@ impl HybridCpuAotDecodeBackend {
             || hidden != HIDDEN
             || kv_count != trueos_lfm25_model::lfm25_decode::KV_CACHE_COUNT
             || kv_elements != KV_ELEMENTS
-            || packed_model_sha256 != cpu::PACKED_Q8X16_IMAGE_SHA256
+            || native_model_sha256 != lfm25_model::NATIVE_IMAGE_SHA256
         {
             return Err(HybridCpuBackendError::SessionImage);
         }
@@ -775,17 +788,11 @@ impl HybridCpuAotDecodeBackend {
         input: &[f32],
     ) -> Result<Vec<Vec<f32>>, HybridCpuBackendError> {
         let prepare_started = embassy_time_driver::now();
-        if descriptors.is_empty()
-            || descriptors.len() > crate::intel::gpgpu::LFM25_Q8_MAX_BATCH_PROJECTIONS
-        {
+        if descriptors.is_empty() || descriptors.len() > CPU_VNNI_MAX_BATCH_PROJECTIONS {
             return Err(HybridCpuBackendError::Tensor);
         }
         let row_bytes = cpu::q8_row_bytes(input.len())?;
-        let mut specs = Vec::new();
         let mut outputs = Vec::new();
-        specs
-            .try_reserve_exact(descriptors.len())
-            .map_err(|_| HybridCpuBackendError::Allocation)?;
         outputs
             .try_reserve_exact(descriptors.len())
             .map_err(|_| HybridCpuBackendError::Allocation)?;
@@ -800,40 +807,27 @@ impl HybridCpuAotDecodeBackend {
             {
                 return Err(HybridCpuBackendError::Tensor);
             }
-            specs.push(crate::intel::gpgpu::Lfm25Q8ProjectSpec {
-                weight_offset: descriptor.native_offset,
-                columns: descriptor.ggml_ne0,
-                rows: descriptor.ggml_ne1,
-            });
             outputs.push(vec![0.0f32; rows]);
         }
-        let mut prepare_ticks = elapsed_ticks_since(prepare_started);
+        let prepare_ticks = elapsed_ticks_since(prepare_started);
 
         let quantize_started = embassy_time_driver::now();
-        let quantized = cpu::quantize_q8(input)?;
+        let activation = cpu::Q8VnniActivation::quantize(input)?;
         let quantize_ticks = elapsed_ticks_since(quantize_started);
-        let finish_prepare_started = embassy_time_driver::now();
-        let activation = unsafe {
-            core::slice::from_raw_parts(
-                quantized.as_ptr() as *const u8,
-                quantized.len() * cpu::Q8_BLOCK_BYTES,
-            )
-        };
-        let mut output_slices: Vec<&mut [f32]> =
-            outputs.iter_mut().map(Vec::as_mut_slice).collect();
-        prepare_ticks = prepare_ticks.saturating_add(elapsed_ticks_since(finish_prepare_started));
+
         let batch_started = embassy_time_driver::now();
-        let batch_result = crate::intel::gpgpu::lfm25_q8_project_batch(
-            self.assets.model.gpu_model,
-            &specs,
-            activation,
-            &mut output_slices,
-        );
-        let batch_ticks = elapsed_ticks_since(batch_started);
-        if batch_result.is_ok() {
-            LFM25_HYBRID_CPU_PERF.record_projection(prepare_ticks, quantize_ticks, batch_ticks);
+        let projector = self.projector;
+        for (descriptor, output) in descriptors.iter().zip(&mut outputs) {
+            projector.project(
+                self.tensor(*descriptor)?,
+                descriptor.ggml_ne1 as usize,
+                descriptor.ggml_ne0 as usize,
+                &activation,
+                output.as_mut_slice(),
+            )?;
         }
-        batch_result?;
+        let batch_ticks = elapsed_ticks_since(batch_started);
+        LFM25_HYBRID_CPU_PERF.record_projection(prepare_ticks, quantize_ticks, batch_ticks);
         Ok(outputs)
     }
 
@@ -940,14 +934,17 @@ impl HybridCpuAotDecodeBackend {
             return Err(HybridCpuBackendError::Tensor);
         }
         let matrix = self.tensor(descriptor)?;
+        let row_start = (row.token as usize)
+            .checked_mul(row_bytes)
+            .ok_or(HybridCpuBackendError::Tensor)?;
+        let row_end = row_start
+            .checked_add(row_bytes)
+            .ok_or(HybridCpuBackendError::Tensor)?;
+        let native_row = matrix
+            .get(row_start..row_end)
+            .ok_or(HybridCpuBackendError::Tensor)?;
         let mut values = vec![0.0f32; HIDDEN];
-        cpu::dequantize_q8x16_row(
-            matrix,
-            descriptor.ggml_ne1 as usize,
-            descriptor.ggml_ne0 as usize,
-            row.token as usize,
-            &mut values,
-        )?;
+        cpu::dequantize_q8_row(native_row, &mut values)?;
         self.allocate_q30(values)
     }
 

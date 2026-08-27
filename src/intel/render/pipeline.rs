@@ -3,6 +3,7 @@ const CPS_STATE_VIEWPORTS: usize = 16;
 const CPS_STATE_DWORDS: usize = CPS_STATE_DWORDS_PER_VIEWPORT * CPS_STATE_VIEWPORTS;
 static CHURN_NATIVE_SURFACE_STATE_LOGGED: AtomicBool = AtomicBool::new(false);
 static CHURN_NATIVE_BINDING_COMMAND_LOGGED: AtomicBool = AtomicBool::new(false);
+static PICASSO_NATIVE_TEXTURE_STATE_LOGGED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct PixelShaderDispatchContract {
@@ -647,6 +648,42 @@ fn write_triangle_probe_state_with_flush(
                 | crate::gpu::vgpu::SAMPLER_ADDRESS_V_REPEAT)
     {
         return Err("probe-sampler-mode");
+    }
+    let sampler_words = [sampler[0], sampler[1], sampler[2], sampler[3]];
+    if native_sampled && !PICASSO_NATIVE_TEXTURE_STATE_LOGGED.swap(true, Ordering::AcqRel) {
+        let ps_binding_table = &dwords
+            [ps_binding_table_offset / 4..ps_binding_table_offset / 4 + ps_binding_table_entries];
+        let texture_surface =
+            &dwords[surface_state_offset / 4 + 4 * 16..surface_state_offset / 4 + 5 * 16];
+        let ps_pointer = ps_binding_table_offset
+            .checked_sub(shader_layout.state_region_offset_bytes as usize)
+            .ok_or("probe-binding-table-base")?;
+        let texture = draw
+            .sampled_texture
+            .ok_or("probe-sampled-texture-surface")?;
+        crate::log_important!(target: "render";
+            "picasso-material: proof=retained-texture-state-encoded accepted=1 state_base=0x{:X} ps_bt_ptr=0x{:X} ps_bt=[0x{:X},0x{:X},0x{:X}] texture_surface=[dw0:0x{:08X},dw1:0x{:08X},dw2:0x{:08X},dw3:0x{:08X},dw7:0x{:08X},dw8:0x{:08X},dw9:0x{:08X}] sampler=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] texture_gpu=0x{:X} texture={}x{} stride={}\n",
+            shader_layout.state_region_gpu_addr,
+            ps_pointer,
+            ps_binding_table[0],
+            ps_binding_table[1],
+            ps_binding_table[2],
+            texture_surface[0],
+            texture_surface[1],
+            texture_surface[2],
+            texture_surface[3],
+            texture_surface[7],
+            texture_surface[8],
+            texture_surface[9],
+            sampler_words[0],
+            sampler_words[1],
+            sampler_words[2],
+            sampler_words[3],
+            texture.gpu_addr,
+            texture.width,
+            texture.height,
+            texture.pitch,
+        );
     }
 
     let blend = &mut dwords[blend_state_offset / 4..blend_state_offset / 4 + 16];
