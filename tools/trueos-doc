@@ -30,6 +30,32 @@ APP_COMMANDS = [
     {"name": "status", "usage": "status", "effect": "Print VM slots, shared memory, VMX capability, and stored-snapshot counts."},
 ]
 
+COMMAND_DETAILS: dict[str, dict[str, Any]] = {
+    "os": {
+        "invocation": "os",
+        "tui_controls": "Up/Down or j/k select; Enter/Right/l choose; Left/h back; Esc/q quit.",
+        "live_update": {
+            "selection": [
+                "Run os in cmd mode; the administration TUI starts on Install TRUEOS to disk.",
+                "Press Down then Enter to select Live update running TRUEOS.",
+                "On Confirm, press Down then Enter to select Proceed (or Discard apps and proceed when non-replicatable apps are listed).",
+            ],
+            "effect": "Fetch https://trueos.eu/TrueOS.7z and replace only the running kernel from RAM; no disk installation is performed.",
+            "expected_transition": "The current Shell2 connection closes during generation replacement. Wait for 192.168.178.94:4245 to return before read-only confirmation; do not issue a second update while it is transitioning.",
+            "warning": "Any non-replicatable app still running at commit is discarded; the confirmation screen names affected VMs.",
+        },
+        "sources": ["src/shell2/cmds/os.rs", "src/shell2/cmds/update.rs", "../TRUEOS-Blueprints/buildins/os/src/main.rs"],
+    },
+    "shot": {
+        "invocation": "shot",
+        "acknowledgement": "`shot: armed; next WD frame will be saved under trueosfs:/screenshots` confirms request admission, not PNG persistence.",
+        "result": "A successful worker capture creates screenshots/wd-postblend-xyuv709-<unix>-<monotonic>-wd<sequence>-capture<sequence>.png on a writable TRUEOSFS root.",
+        "pull": "Query topic trueosfs-http, enumerate GET /, select the newly created screenshot rather than the lexically first/only old file, then GET /dl/<root-id>/screenshots/<filename>.",
+        "failure_diagnosis": "Query topic logs and inspect target ui4/screenshot. Capture/save success is Info and may be filtered; failures are Warn. An armed request can still fail before a file is created, so do not silently substitute an old file.",
+        "sources": ["src/shell2/shell2_cmd_registry.rs::parse_shot", "src/ui4/screenshot.rs", "src/intel/media/wd_xyuv8888.rs"],
+    },
+}
+
 TOPICS: dict[str, dict[str, Any]] = {
     "shell2": {
         "summary": "Shell2 is a two-mode command surface over per-transport Matrix slots.",
@@ -84,6 +110,120 @@ TOPICS: dict[str, dict[str, Any]] = {
         "override_env": ["TRUEOS_BAREMETAL_LOG_HOST", "TRUEOS_BAREMETAL_LOG_PORT", "QEMU_HOST_TCP_PORT_NET_SHELL"],
         "sources": ["readme.md#Network Console Access", "src/allports.rs::services::NET_SHELL_TCP_PORT", "tools/check-lan-ports.py", "tools/baremetal-log-drain.sh", "tools/qemu/run.sh"],
     },
+    "logs": {
+        "summary": "TRUEOS logs are accepted by semantic area and ordered level before either runtime sink; host files only contain accepted records that reach their capture transport.",
+        "levels": {
+            "order": ["Error", "Important", "Warn", "Once", "Info", "Debug", "Trace"],
+            "up": "Up(X) accepts X and every level to its left in the order (more severe); Up(Warn) accepts Error, Important, and Warn.",
+            "down": "Down(X) accepts X and every level to its right in the order (more verbose); Down(Info) accepts Info, Debug, and Trace.",
+            "only": "Only(set) accepts exactly the selected levels.",
+        },
+        "areas": ["Global", "Boot", "Service", "Net", "Usb", "Storage", "Gfx", "Gpgpu", "Render", "Hda", "Hv", "Apps", "ExecutorRealm", "ExecutorCache", "IntelMediaNgin", "Blueprint"],
+        "default_policies": {
+            "Global": "Up(Warn)", "Boot": "Up(Warn)", "Service": "Up(Warn)", "Net": "Up(Warn)",
+            "Usb": "Up(Warn)", "Storage": "Up(Info)", "Gfx": "Up(Warn)", "Gpgpu": "Up(Warn)",
+            "Render": "Up(Info)", "Hda": "Up(Warn)", "Hv": "Up(Trace)", "Apps": "Up(Trace)",
+            "ExecutorRealm": "Up(Info)", "ExecutorCache": "Up(Warn)", "IntelMediaNgin": "Up(Info)", "Blueprint": "Up(Trace)",
+        },
+        "profile_note": "Diagnostic compile-time switches in src/log_os.rs can raise selected area policies above these defaults; inspect the active profile before relying on this table.",
+        "filter_invariant": "If an area's policy rejects a record's level, the record is discarded before the TCP ring and emulator UART. Never expect it in a logfile, and do not treat its absence as evidence that the code path did not execute.",
+        "captures": {
+            "baremetal": {
+                "transport": "TRUEOS in-memory TCP ring -> TCP port 1 -> tools/baremetal-log-drain.sh",
+                "directory": "bld/baremetal-logs",
+                "rotating_files": "trueos-baremetal.{0,1,2}.log",
+                "latest": "bld/baremetal-logs/LatestOfThree.logs",
+                "orchestration_log": "bld/baremetal-logs/testrig-physical-reset-log.log",
+                "overrides": ["TRUEOS_BAREMETAL_LOG_DIR", "TRUEOS_BAREMETAL_LOG_HOST", "TRUEOS_BAREMETAL_LOG_PORT", "TRUEOS_BAREMETAL_LOG_SLOTS"],
+            },
+            "emulator": {
+                "transport": "TRUEOS emulator UART -> QEMU serial TCP 127.0.0.1:5555 -> tools/emulator-log-capture.sh",
+                "directory": "bld/emulator-logs",
+                "rotating_files": "trueos-emulator.{0,1,2}.log",
+                "latest": "bld/emulator-logs/latest.log",
+                "overrides": ["TRUEOS_EMULATOR_LOG_DIR", "TRUEOS_EMULATOR_LOG_HOST", "TRUEOS_EMULATOR_LOG_PORT", "TRUEOS_EMULATOR_LOG_SLOTS"],
+            },
+        },
+        "missing_log_check": [
+            "Resolve the log target/module path to its semantic area.",
+            "Identify the emitted level and the active compile-time diagnostic profile.",
+            "Apply the area's Up, Down, or Only policy. Stop expecting a file record if rejected.",
+            "For an accepted record, inspect the correct current capture link and confirm its drain/capture process and transport are alive.",
+            "Finally check dispatcher-install timing plus log_once and rate-limit suppression.",
+        ],
+        "sources": ["src/log_os.rs", "../TRUEOS-Blueprints/crates/log-os/src/flags.rs", "tools/baremetal-log-drain.sh", "tools/emulator-log-capture.sh", "Makefile"],
+    },
+    "trueosfs-http": {
+        "summary": "The physical rig exposes mounted TRUEOSFS roots through an HTTP filesystem service on the default HTTP port 80.",
+        "physical_base_url": "http://192.168.178.94",
+        "discovery": {
+            "method": "GET",
+            "path": "/",
+            "effect": "Return the HTML filesystem tree. Each mounted root has a decimal raw DiscId in data-root; use that value as <root-id> in root-specific routes.",
+            "example": "curl --fail http://192.168.178.94/",
+        },
+        "routes": [
+            {"method": "GET", "path": "/dl/<root-id>/<url-encoded-path>", "effect": "Download one file from the selected mounted root.", "mutation": False},
+            {"method": "GET", "path": "/dl?path=<url-encoded-path>", "effect": "Compatibility download from the current primary root.", "mutation": False},
+            {"method": "POST", "path": "/up/<root-id>[/<directory>]?name=<filename>", "effect": "Write the request body as one file.", "mutation": True},
+            {"method": "POST", "path": "/mkdir/<root-id>[/<directory>]?name=<folder>", "effect": "Create a directory hierarchy.", "mutation": True},
+            {"method": "POST", "path": "/mv/<root-id>/<source>?to=<destination>", "effect": "Move or rename a file or directory.", "mutation": True},
+            {"method": "POST", "path": "/rm/<root-id>/<path>", "effect": "Recursively remove a file or directory.", "mutation": True},
+        ],
+        "download_example": "curl --fail 'http://192.168.178.94/dl/1/screenshots/example.png' --output example.png",
+        "path_rules": ["Root IDs are discovered at runtime; do not assume disc001 is always raw id 1.", "Encode each path component for URLs.", "Relative paths are normalized and bounded by the service."],
+        "screenshot_pull": [
+            "Run shot in Shell2 cmd mode and treat its armed line only as admission.",
+            "GET / and inspect the selected root's screenshots directory for a newly created wd-postblend PNG.",
+            "Verify the filename timestamp/sequence is newer than any previous artifact before downloading it.",
+            "Download it through /dl/<root-id>/screenshots/<filename>.",
+            "If no new file appears, inspect ui4/screenshot warnings; do not silently substitute an old file.",
+        ],
+        "authorization": "GET discovery/download routes are read-only. POST routes mutate TRUEOSFS and require explicit task authorization; documentation examples do not grant it.",
+        "sources": ["src/allports.rs::services::HTTP_TRUEOSFS_TCP_PORT", "src/r/fs/http_trueosfs.rs"],
+    },
+    "references": {
+        "summary": "Repository-local interactive HTML fact references for TRUEOS architecture, execution, compositor design, dependency topology, and the UHD 770 hardware target.",
+        "authority": "Treat the architecture contracts and hardware target facts stated by these checked-in documents as project knowledge. For executable Shell2 syntax, still use the live command registry exposed by trueos-doc command <name>.",
+        "documents": [
+            {
+                "name": "compositor-ui",
+                "title": "Mosaic — Four-monitor compositor wall",
+                "path": "tools/docs/CompositorUI.html",
+                "fact_scope": "Four-display compositor and surface model: GPU, UI, static, command, and video surfaces; visibility, focus, overview, layout, and cross-display movement while preserving content state and relative scale.",
+                "related_topics": ["tui"],
+            },
+            {
+                "name": "execution",
+                "title": "Sync Node Flow Simulator v6",
+                "path": "tools/docs/execution.html",
+                "fact_scope": "Interactive execution and synchronization model covering AP/CPU slots, plain threads, Tokio tasks, Rayon jobs, locks, semaphores, barriers, spawn/join, yield/park, atomics, condition variables, shared state, and event ordering.",
+                "related_topics": [],
+            },
+            {
+                "name": "intel-uhd770",
+                "title": "Intel UHD Graphics 770 CPU Reference",
+                "path": "tools/docs/intel-uhd770-cpu-reference.html",
+                "fact_scope": "TRUEOS shader/GPGPU hardware target: integrated Xe/Xe-LP-class UHD 770, 32 EUs, OpenCL 3.0, device ID 0xA780, compatible CPU SKU tables, avoid-list traps, driver/shader targeting, and Intel primary-source trail.",
+                "related_topics": [],
+            },
+            {
+                "name": "dependency-graph",
+                "title": "TRUEOS Dependency Graph",
+                "path": "tools/docs/depgraph/index.html",
+                "fact_scope": "Interactive TRUEOS crate/dependency depth graph with package nodes and directed dependency edges.",
+                "related_topics": [],
+            },
+            {
+                "name": "hypervisor-state-machine",
+                "title": "TRUEOS · Hypervisor State Atlas",
+                "path": "tools/docs/docs/HYPERVISOR_STATE_MACHINE.html",
+                "fact_scope": "Host, VM-principal, and Blueprint lifecycle contract: admission, running, cooperative PreparePause/Ready, retained pause, snapshot v3, same-principal restore, teardown, host-owned capabilities, and persistent TRUEOSFS state outside VM snapshots.",
+                "related_topics": ["apps", "tui"],
+            },
+        ],
+        "sources": ["tools/docs/CompositorUI.html", "tools/docs/execution.html", "tools/docs/intel-uhd770-cpu-reference.html", "tools/docs/depgraph/index.html", "tools/docs/docs/HYPERVISOR_STATE_MACHINE.html"],
+    },
     "apps": {
         "summary": "Apps mode manages Blueprint discovery, launch, replication lifecycle, and persistence.",
         "commands": APP_COMMANDS,
@@ -96,6 +236,9 @@ ALIASES = {
     "tab": "shell2", "modes": "shell2", "mode": "shell2", "shell": "shell2",
     "runscript": "runscripts", "run-script": "runscripts", "launch-script": "runscripts", "vfile:launch": "runscripts",
     "testrig": "rig", "test-rig": "rig", "network": "rig", "lan": "rig", "port": "rig",
+    "log": "logs", "logging": "logs", "logfile": "logs", "logfiles": "logs", "logtier": "logs", "logtiers": "logs", "levels": "logs",
+    "trueosfs": "trueosfs-http", "filesystem": "trueosfs-http", "filesystem-api": "trueosfs-http", "http-filesystem": "trueosfs-http", "http-fs": "trueosfs-http", "port-80": "trueosfs-http",
+    "reference": "references", "docs": "references", "html": "references", "architecture": "references", "atlas": "references",
     "terminal": "tui", "terminal-ui": "tui", "vmx": "tui", "blueprints": "apps",
 }
 
@@ -144,6 +287,7 @@ def command_registry(root: Path) -> list[dict[str, Any]]:
         if schema_name:
             entry["parameters"] = constants[schema_name.group(1)]
         entry["source"] = "src/shell2/shell2_cmd_registry.rs::SHELL2_COMMAND_REGISTRY"
+        entry.update(COMMAND_DETAILS.get(name, {}))
         entries.append(entry)
     if not entries:
         raise DocError("Shell2 command registry is empty")
@@ -175,7 +319,22 @@ def compact_context(root: Path) -> dict[str, Any]:
             "warning": "Directive grammar belongs to the consuming Blueprint; query topic runscripts before inventing lines.",
         },
         "rig": TOPICS["rig"]["physical"] | {"connect": TOPICS["rig"]["connect"], "qemu_connect": TOPICS["rig"]["qemu"]["connect"]},
-        "next_queries": ["trueos-doc topic headjack", "trueos-doc topic tui", "trueos-doc command <name>", "trueos-doc search <terms>"],
+        "logs": {
+            "filter_invariant": TOPICS["logs"]["filter_invariant"],
+            "baremetal_latest": TOPICS["logs"]["captures"]["baremetal"]["latest"],
+            "emulator_latest": TOPICS["logs"]["captures"]["emulator"]["latest"],
+        },
+        "trueosfs_http": {
+            "base_url": TOPICS["trueosfs-http"]["physical_base_url"],
+            "discovery": "GET /",
+            "download": "GET /dl/<root-id>/<url-encoded-path>",
+            "warning": "Discover root-id at runtime and never substitute an older artifact when an expected new file is absent.",
+        },
+        "references": {
+            "query": "trueos-doc topic references",
+            "documents": [item["path"] for item in TOPICS["references"]["documents"]],
+        },
+        "next_queries": ["trueos-doc topic headjack", "trueos-doc topic tui", "trueos-doc topic logs", "trueos-doc topic trueosfs-http", "trueos-doc topic references", "trueos-doc command <name>", "trueos-doc search <terms>"],
     }
 
 

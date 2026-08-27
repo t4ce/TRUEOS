@@ -29,12 +29,25 @@ class TrueosDocTests(unittest.TestCase):
         self.assertEqual(data["shell2"]["default_mode"], "cmd")
         self.assertEqual(data["rig"]["shell2_tcp_port"], 4245)
         self.assertIn("§<slot>§", [item["input"] for item in data["headjack"]])
+        self.assertEqual(data["logs"]["baremetal_latest"], "bld/baremetal-logs/LatestOfThree.logs")
+        self.assertEqual(data["trueosfs_http"]["base_url"], "http://192.168.178.94")
 
     def test_live_registry_exposes_schema(self) -> None:
         data = run("command", "xhci")["data"]
         self.assertEqual(data["mode"], "cmd")
         self.assertEqual(data["parameters"]["type"], "object")
         self.assertIn("command", data["parameters"]["properties"])
+
+    def test_os_command_carries_live_update_tui_contract(self) -> None:
+        data = run("command", "os")["data"]
+        self.assertEqual(data["invocation"], "os")
+        self.assertIn("Down then Enter", data["live_update"]["selection"][1])
+        self.assertIn("no disk installation", data["live_update"]["effect"])
+
+    def test_shot_command_distinguishes_admission_from_persistence(self) -> None:
+        data = run("command", "shot")["data"]
+        self.assertIn("not PNG persistence", data["acknowledgement"])
+        self.assertIn("do not silently substitute an old file", data["failure_diagnosis"])
 
     def test_it_runs_outside_the_repo_through_its_path(self) -> None:
         data = run("topic", "§", cwd=Path("/tmp"))["data"]
@@ -43,6 +56,38 @@ class TrueosDocTests(unittest.TestCase):
     def test_search_routes_agent_vocabulary(self) -> None:
         results = run("search", "testrig shell port")["data"]["results"]
         self.assertEqual(results[0]["name"], "rig")
+
+    def test_logs_topic_explains_filtering_tiers_and_capture_files(self) -> None:
+        data = run("topic", "logfiles")["data"]
+        self.assertEqual(data["name"], "logs")
+        self.assertEqual(data["levels"]["order"][0], "Error")
+        self.assertIn("Never expect it in a logfile", data["filter_invariant"])
+        self.assertEqual(data["captures"]["emulator"]["latest"], "bld/emulator-logs/latest.log")
+
+    def test_reference_topic_indexes_checked_in_html_facts(self) -> None:
+        data = run("topic", "html")["data"]
+        self.assertEqual(data["name"], "references")
+        paths = {item["path"] for item in data["documents"]}
+        self.assertEqual(
+            paths,
+            {
+                "tools/docs/CompositorUI.html",
+                "tools/docs/execution.html",
+                "tools/docs/intel-uhd770-cpu-reference.html",
+                "tools/docs/depgraph/index.html",
+                "tools/docs/docs/HYPERVISOR_STATE_MACHINE.html",
+            },
+        )
+        for path in paths:
+            self.assertTrue((ROOT / path).is_file(), path)
+
+    def test_trueosfs_http_topic_exposes_root_aware_download_api(self) -> None:
+        data = run("topic", "filesystem-api")["data"]
+        self.assertEqual(data["name"], "trueosfs-http")
+        self.assertEqual(data["discovery"]["path"], "/")
+        download = next(route for route in data["routes"] if route["path"].startswith("/dl/<root-id>"))
+        self.assertFalse(download["mutation"])
+        self.assertIn("do not silently substitute an old file", data["screenshot_pull"][-1])
 
 
 if __name__ == "__main__":

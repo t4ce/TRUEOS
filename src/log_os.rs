@@ -1,3 +1,31 @@
+//! TRUEOS logging policy and sink routing.
+//!
+//! A log record has two independent dimensions: an area and a level. Levels
+//! are ordered from least verbose/most severe to most verbose as
+//! `Error -> Important -> Warn -> Once -> Info -> Debug -> Trace`. Policies
+//! use that order as follows:
+//!
+//! - `Up(level)` accepts `level` and every level to its left (more severe).
+//!   For example, `Up(Warn)` accepts Error, Important, and Warn.
+//! - `Down(level)` accepts `level` and every level to its right (more verbose).
+//! - `Only(levels)` accepts exactly the selected set.
+//!
+//! Area policy is an acceptance gate, not a display preference. A record that
+//! [`flags::area_log_enabled`] rejects is never delivered to the TCP ring or
+//! emulator UART, so it cannot appear in any host-side logfile. Absence is
+//! therefore expected when the record's area/level is filtered and is not
+//! evidence that the instrumented code path did not run. Also account for
+//! records emitted before dispatcher installation and explicit once/rate-limit
+//! suppression before diagnosing a missing accepted record.
+//!
+//! Bare-metal TCP logs are drained from port 1 into rotating
+//! `bld/baremetal-logs/trueos-baremetal.{0,1,2}.log` files; the current file is
+//! linked as `bld/baremetal-logs/LatestOfThree.logs`. Emulator UART output is
+//! captured from the QEMU serial endpoint into rotating
+//! `bld/emulator-logs/trueos-emulator.{0,1,2}.log` files, with
+//! `bld/emulator-logs/latest.log` pointing at the current one. These are host
+//! capture files; this module itself keeps no disk logfile.
+
 use core::fmt;
 use core::sync::atomic::{AtomicBool, Ordering};
 
@@ -142,6 +170,9 @@ pub(crate) mod flags {
     pub(crate) static BGRT_LOG_ONCE: Once<()> = Once::new();
     pub(crate) static USB_LOG_ALL: AtomicBool = AtomicBool::new(USB_UAS_DIAG_PROFILE_ENABLED);
 
+    /// Returns the compile-time acceptance policy for one semantic log area.
+    ///
+    /// Keep all area/profile choices here: both sinks consult this same policy.
     pub(crate) const fn area_log_policy(area: LogArea) -> LogLevelPolicy {
         match area {
             LogArea::Global => GLOBAL_LOG_LEVEL,
@@ -163,6 +194,9 @@ pub(crate) mod flags {
         }
     }
 
+    /// True only when `level` survives `area`'s policy and may reach a sink.
+    ///
+    /// False means the record will not exist in either host capture stream.
     pub(crate) fn area_log_enabled(area: LogArea, level: LogLevel) -> bool {
         log_os_core::level_enabled(area_log_policy(area), level)
     }
