@@ -39,5 +39,5 @@ existing wgpu build cache:
 ```
 
 The Intel packaging stage consumes this frontend independently and publishes
-`assets/helio/churn-forward.trueos.intel.helio`; it must not replace
+`picasso/churn-forward.trueos.intel.helio`; it must not replace
 `simple-cube.trueos.intel.helio`.

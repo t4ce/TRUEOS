@@ -7,10 +7,10 @@
 use alloc::{collections::VecDeque, vec::Vec};
 use trueos_time::{Duration, Instant, Timer};
 
-const GAME_ARTIFACT: &[u8] = include_bytes!("../../assets/helio/simple-cube.trueos.intel.helio");
+const GAME_ARTIFACT: &[u8] = include_bytes!("../../picasso/simple-cube.trueos.intel.helio");
 const CHURN_FORWARD_ARTIFACT: &[u8] =
-    include_bytes!("../../assets/helio/churn-forward.trueos.intel.helio");
-const SPRITE_DIG_ATLAS: &[u8] = include_bytes!("../../assets/helio/sprite-dig-atlas.trueos.rgba");
+    include_bytes!("../../picasso/churn-forward.trueos.intel.helio");
+const SPRITE_DIG_ATLAS: &[u8] = include_bytes!("../../picasso/sprite-dig-atlas.trueos.rgba");
 const PLANE_SLOT: usize = crate::ui4::RGB_OVERLAY_PLANE_SLOT_2;
 const MARGIN: u32 = 48;
 const TRANSPARENT_CLEAR_RGBA: [u8; 4] = [0, 0, 0, 0];

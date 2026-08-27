@@ -1182,7 +1182,7 @@ const CHURN_FORWARD_DRAW_COUNT: usize = trueos_helio_runtime::churn::DRAW_GROUP_
 /// The native-matrix shader is not cube-specific. Picasso uses this same
 /// authenticated Helio graphics package with its own immutable PosNormal mesh.
 const PICASSO_RETAINED_FORWARD_ARTIFACT: &[u8] =
-    include_bytes!("../../../assets/helio/churn-forward.trueos.intel.helio");
+    include_bytes!("../../../picasso/churn-forward.trueos.intel.helio");
 const CHURN_FORWARD_VERTICES_PER_MESH: usize = 24;
 const CHURN_FORWARD_INDICES_PER_MESH: usize = 36;
 static CHURN_FORWARD_PIPELINE: spin::Mutex<Option<crate::intel::shader::TrianglePipeline>> =
@@ -1191,10 +1191,10 @@ static PICASSO_RETAINED_TEXTURED_PIPELINE: spin::Mutex<
     Option<crate::intel::shader::TrianglePipeline>,
 > = spin::Mutex::new(None);
 const PICASSO_RETAINED_TEXTURED_VS: &[u8] = include_bytes!(
-    "../../../assets/helio/picasso-retained-textured-forward/retained_textured_forward.vs.simd8.bin"
+    "../../../picasso/picasso-retained-textured-forward/retained_textured_forward.vs.simd8.bin"
 );
 const PICASSO_RETAINED_TEXTURED_PS: &[u8] = include_bytes!(
-    "../../../assets/helio/picasso-retained-textured-forward/retained_textured_forward.ps.simd16.bin"
+    "../../../picasso/picasso-retained-textured-forward/retained_textured_forward.ps.simd16.bin"
 );
 
 fn bootstrap_churn_meshes()

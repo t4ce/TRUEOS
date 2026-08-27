@@ -17,7 +17,7 @@ import tempfile
 TRUEOS = Path(__file__).resolve().parents[2]
 HELIO = TRUEOS.parent / "Helio"
 DEFAULT_WGSL = HELIO / "crates/passes/3d/helio-pass-gbuffer/shaders/gbuffer.wgsl"
-DEFAULT_OUT = TRUEOS / "assets/helio/helio-gbuffer"
+DEFAULT_OUT = TRUEOS / "picasso/helio-gbuffer"
 BAKER_PATH = TRUEOS / "tools/helio-intel-bake/bake.py"
 DUMPER_SOURCE = Path(__file__).with_name("gbuffer_pipeline_dump.c")
 

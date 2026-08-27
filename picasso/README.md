@@ -1,4 +1,4 @@
-# Build-produced Helio programs
+# Build-produced Picasso renderer assets
 
 `simple-cube.trueos.intel.helio` is generated and validated by
 `tools/helio-build/build-simple-cube.sh`. It is kept at this stable path so the

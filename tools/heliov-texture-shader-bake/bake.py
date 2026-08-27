@@ -17,7 +17,7 @@ TRUEOS = Path(__file__).resolve().parents[2]
 HELIO = TRUEOS.parent / "Helio"
 BLUEPRINTS = TRUEOS.parent / "TRUEOS-Blueprints"
 DEFAULT_WGSL = BLUEPRINTS / "apps/HelioV/src/voxel_textured.wgsl"
-DEFAULT_OUT = TRUEOS / "assets/helio/heliov-textured-mesh"
+DEFAULT_OUT = TRUEOS / "picasso/heliov-textured-mesh"
 BAKER_PATH = TRUEOS / "tools/helio-intel-bake/bake.py"
 
 

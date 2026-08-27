@@ -255,7 +255,7 @@ fn opens_authenticated_churn_forward_program() {
 
 #[test]
 fn published_churn_forward_artifact_authenticates() {
-    let bytes = include_bytes!("../../../assets/helio/churn-forward.trueos.intel.helio");
+    let bytes = include_bytes!("../../../picasso/churn-forward.trueos.intel.helio");
     let program = Artifact::parse(bytes)
         .unwrap()
         .churn_forward_program()

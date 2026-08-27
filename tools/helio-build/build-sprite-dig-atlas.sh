@@ -4,7 +4,7 @@ set -eu
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 TRUEOS_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
 HELIO_REPO=${HELIO_REPO:-"$TRUEOS_ROOT/../Helio"}
-PUBLISHED="$TRUEOS_ROOT/assets/helio/sprite-dig-atlas.trueos.rgba"
+PUBLISHED="$TRUEOS_ROOT/picasso/sprite-dig-atlas.trueos.rgba"
 VALIDATOR="$SCRIPT_DIR/validate_sprite_dig_atlas.py"
 MANIFEST="$TRUEOS_ROOT/tools/helio-sprite-atlas-bake/Cargo.toml"
 

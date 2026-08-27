@@ -4,7 +4,7 @@ set -eu
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 TRUEOS_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
 HELIO_REPO=${HELIO_REPO:-"$TRUEOS_ROOT/../Helio"}
-ASSET_DIR="$TRUEOS_ROOT/assets/helio"
+ASSET_DIR="$TRUEOS_ROOT/picasso"
 PUBLISHED="$ASSET_DIR/simple-cube.trueos.intel.helio"
 VALIDATOR="$SCRIPT_DIR/validate_artifact.py"
 

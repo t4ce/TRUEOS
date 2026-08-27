@@ -23,7 +23,7 @@ python3 tools/helio-gbuffer-shader-bake/bake.py
 python3 tools/helio-gbuffer-shader-bake/bake.py --validate-only
 ```
 
-The default output is `assets/helio/helio-gbuffer`. It contains the exact
+The default output is `picasso/helio-gbuffer`. It contains the exact
 WGSL, per-entry SPIR-V, extracted Intel SIMD8 VS/FS programs, compiler log,
 Mesa assembly, and hash-bound ABI metadata. Use `--device-id 0x....` when a
 machine exposes more than one Intel Vulkan compiler device.

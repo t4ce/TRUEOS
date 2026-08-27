@@ -10,7 +10,7 @@ Intel baker, validates every container CRC, replay/IR link, and native shader
 hash, then atomically publishes:
 
 ```text
-assets/helio/simple-cube.trueos.intel.helio
+picasso/simple-cube.trueos.intel.helio
 ```
 
 Run from anywhere:
@@ -24,7 +24,7 @@ can supply the real capture with `HELIO_REPO=/path/to/Helio`. Set
 `INTEL_DEVICE_ID=0x....` only when the Intel Vulkan compiler device must be
 selected explicitly.
 
-The final rename occurs in `assets/helio`, so a failed capture, compile, or
+The final rename occurs in `picasso`, so a failed capture, compile, or
 validation leaves the previously published runtime artifact intact. To check
 the checked-in artifact without rebuilding it:
 
@@ -40,7 +40,7 @@ native stages together with their binding-table, vertex-fetch, SGVS, SBE, and
 fixed-function ABI before atomically publishing:
 
 ```text
-assets/helio/churn-forward.trueos.intel.helio
+picasso/churn-forward.trueos.intel.helio
 ```
 
 Build or only validate it with:
@@ -58,7 +58,7 @@ published directory contains hash-bound WGSL, SPIR-V, Intel ISA, assembly, and
 pipeline ABI metadata:
 
 ```text
-assets/helio/helio-gbuffer/
+picasso/helio-gbuffer/
 ```
 
 Build or validate it with:

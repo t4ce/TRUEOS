@@ -2,7 +2,7 @@ use trueos_helio_runtime::{
     Camera, DrawCommandSource, DrawIndexedIndirectArgs, decode_artifact_with_replay,
 };
 
-const SIMPLE_GRAPH: &[u8] = include_bytes!("../../../assets/helio/simple-cube.trueos.intel.helio");
+const SIMPLE_GRAPH: &[u8] = include_bytes!("../../../picasso/simple-cube.trueos.intel.helio");
 
 #[test]
 fn build_artifact_reaches_the_runtime_draw_contract() {

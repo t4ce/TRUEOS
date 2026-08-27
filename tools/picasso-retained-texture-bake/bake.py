@@ -18,9 +18,9 @@ import tempfile
 TRUEOS = Path(__file__).resolve().parents[2]
 BAKER_PATH = TRUEOS / "tools/helio-intel-bake/bake.py"
 WGSL = Path(__file__).resolve().parent / "shaders/retained_textured_forward.wgsl"
-OUT = TRUEOS / "assets/helio/picasso-retained-textured-forward"
+OUT = TRUEOS / "picasso/picasso-retained-textured-forward"
 PROVEN_ADLS_TEXTURE_PS = (
-    TRUEOS / "assets/helio/heliov-textured-mesh/voxel_textured.ps.simd16.bin"
+    TRUEOS / "picasso/heliov-textured-mesh/voxel_textured.ps.simd16.bin"
 )
 
 

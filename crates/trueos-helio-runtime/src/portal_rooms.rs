@@ -757,7 +757,7 @@ mod tests {
 
     use super::{Engine, Spec};
 
-    const ARTIFACT: &[u8] = include_bytes!("../../../assets/helio/simple-cube.trueos.intel.helio");
+    const ARTIFACT: &[u8] = include_bytes!("../../../picasso/simple-cube.trueos.intel.helio");
 
     #[test]
     fn artifact_preserves_six_portals_and_furnished_rooms() {

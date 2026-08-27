@@ -4,7 +4,7 @@ set -eu
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 TRUEOS_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
 BAKER="$TRUEOS_ROOT/tools/helio-gbuffer-shader-bake/bake.py"
-PUBLISHED="$TRUEOS_ROOT/assets/helio/helio-gbuffer"
+PUBLISHED="$TRUEOS_ROOT/picasso/helio-gbuffer"
 
 if [ "${1:-}" = "--validate-only" ]; then
     if [ "$#" -ne 1 ]; then

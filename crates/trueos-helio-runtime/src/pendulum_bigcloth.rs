@@ -805,7 +805,7 @@ fn read_array<const N: usize>(bytes: &[u8], offset: usize) -> Result<[u8; N], Er
 mod tests {
     use super::*;
 
-    const ARTIFACT: &[u8] = include_bytes!("../../../assets/helio/simple-cube.trueos.intel.helio");
+    const ARTIFACT: &[u8] = include_bytes!("../../../picasso/simple-cube.trueos.intel.helio");
 
     #[test]
     fn embedded_artifact_drives_the_full_fixed_cloth_topology() {

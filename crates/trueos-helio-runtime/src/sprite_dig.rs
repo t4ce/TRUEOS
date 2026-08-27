@@ -1887,8 +1887,8 @@ fn crc32(bytes: &[u8]) -> u32 {
 mod tests {
     use super::{Atlas, Engine, InputFrame, Spec};
 
-    const ARTIFACT: &[u8] = include_bytes!("../../../assets/helio/simple-cube.trueos.intel.helio");
-    const ATLAS: &[u8] = include_bytes!("../../../assets/helio/sprite-dig-atlas.trueos.rgba");
+    const ARTIFACT: &[u8] = include_bytes!("../../../picasso/simple-cube.trueos.intel.helio");
+    const ATLAS: &[u8] = include_bytes!("../../../picasso/sprite-dig-atlas.trueos.rgba");
 
     fn screen_for_world(engine: &Engine, width: u32, height: u32, world: [f32; 2]) -> [f32; 2] {
         [
