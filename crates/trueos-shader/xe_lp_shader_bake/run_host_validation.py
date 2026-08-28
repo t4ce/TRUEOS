@@ -10,8 +10,10 @@ import sys
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[2]
-TOOLS_DIR = ROOT / "tools" / "xe_lp_shader_bake"
+# This script lives at `crates/trueos-shader/xe_lp_shader_bake`; the
+# repository root is therefore three parents above this file.
+ROOT = Path(__file__).resolve().parents[3]
+TOOLS_DIR = Path(__file__).resolve().parent
 DEFAULT_GENERATED = ROOT / ".codex_tmp" / "generated_simple.rs"
 DEFAULT_VERT = TOOLS_DIR / "simple_triangle.vert"
 DEFAULT_FRAG = TOOLS_DIR / "simple_triangle.frag"
@@ -29,7 +31,23 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--vert", type=Path, default=DEFAULT_VERT)
     parser.add_argument("--frag", type=Path, default=DEFAULT_FRAG)
+    parser.add_argument(
+        "--geom",
+        type=Path,
+        help=(
+            "Optional geometry shader. When supplied, capture a "
+            "TRIANGLE_LIST_WITH_ADJACENCY pass-through pipeline."
+        ),
+    )
     parser.add_argument("--generated", type=Path, default=DEFAULT_GENERATED)
+    parser.add_argument(
+        "--skip-artifact-verification",
+        action="store_true",
+        help=(
+            "Capture executable artifacts without validating the existing "
+            "VS/PS-only generated Rust package. Required for a first GS capture."
+        ),
+    )
     parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR)
     parser.add_argument("--keep-going", action="store_true", help="Keep partial outputs on failure.")
     parser.add_argument(
@@ -110,18 +128,26 @@ def detect_glsl_compiler() -> list[str]:
 
 def pkg_config_libs() -> list[str]:
     pkg_config = shutil.which("pkg-config")
-    if pkg_config is None:
-        return ["-lvulkan"]
-    result = subprocess.run(
-        [pkg_config, "--cflags", "--libs", "vulkan"],
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    )
-    if result.returncode != 0:
-        return ["-lvulkan"]
-    return result.stdout.split() or ["-lvulkan"]
+    if pkg_config is not None:
+        result = subprocess.run(
+            [pkg_config, "--cflags", "--libs", "vulkan"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        if result.returncode == 0 and result.stdout.split():
+            return result.stdout.split()
+
+    # The repository vendors the headers so a host with the Vulkan loader and
+    # Mesa ICDs, but without the distribution's development package, can still
+    # run this capture.  libvulkan.so.1 is deliberate: systems which only ship
+    # the runtime loader do not provide the unversioned libvulkan.so linker
+    # symlink used by -lvulkan.
+    vendored_headers = ROOT / "vendor" / "vulkan-headers" / "include"
+    if vendored_headers.joinpath("vulkan", "vulkan.h").is_file():
+        return [f"-I{vendored_headers}", "-l:libvulkan.so.1"]
+    return ["-lvulkan"]
 
 
 def compile_spirv(compiler: list[str], src: Path, stage_suffix: str, dst: Path) -> None:
@@ -130,6 +156,8 @@ def compile_spirv(compiler: list[str], src: Path, stage_suffix: str, dst: Path) 
     else:
         cmd = compiler + ["-o", str(dst), str(src)]
     run(cmd)
+    if not dst.is_file() or dst.stat().st_size == 0:
+        raise SystemExit(f"SPIR-V compiler produced no output: {dst}")
 
 
 def maybe_package_fresh_artifact(args: argparse.Namespace) -> None:
@@ -173,6 +201,7 @@ def main() -> None:
 
     vs_spv = args.out_dir / "simple_triangle.vert.spv"
     fs_spv = args.out_dir / "simple_triangle.frag.spv"
+    gs_spv = args.out_dir / "passthrough_triangle_adjacency.geom.spv"
     dumper_bin = args.out_dir / "simple_triangle_dump"
     dump_log = args.out_dir / "simple_triangle_dump.log"
     exec_dump_dir = args.out_dir / "pipeline_exec"
@@ -180,39 +209,58 @@ def main() -> None:
     try:
         compile_spirv(compiler, args.vert, "vert", vs_spv)
         compile_spirv(compiler, args.frag, "frag", fs_spv)
-
-        compile_cmd = [cc, str(DEFAULT_DUMPER_SRC), "-o", str(dumper_bin), *pkg_config_libs()]
-        run(compile_cmd)
+        if args.geom is not None:
+            compile_spirv(compiler, args.geom, "geom", gs_spv)
 
         env = os.environ.copy()
+        # Keep the compiler's scratch files beside the requested output.  This
+        # avoids relying on a quota-limited /tmp while preserving all evidence
+        # in one caller-selected capture directory.
+        env.setdefault("TMPDIR", str(args.out_dir))
+        compile_cmd = [cc, str(DEFAULT_DUMPER_SRC), "-o", str(dumper_bin), *pkg_config_libs()]
+        run(compile_cmd, env=env)
+
         exec_dump_dir.mkdir(parents=True, exist_ok=True)
         env["TRUEOS_EXECUTABLE_DUMP_DIR"] = str(exec_dump_dir)
-        run([str(dumper_bin), str(vs_spv), str(fs_spv)], env=env, log_path=dump_log)
+        dumper_args = [str(dumper_bin), str(vs_spv), str(fs_spv)]
+        if args.geom is not None:
+            dumper_args.append(str(gs_spv))
+        run(dumper_args, env=env, log_path=dump_log)
 
-        verify_cmd = [
-            sys.executable,
-            str(TOOLS_DIR / "verify_artifact.py"),
-            str(args.generated),
-            "--dump-log",
-            str(dump_log),
-        ]
-        if args.require_verified_artifact:
-            verify_cmd.append("--require-verified")
-        run(verify_cmd)
+        if not args.skip_artifact_verification:
+            verify_cmd = [
+                sys.executable,
+                str(TOOLS_DIR / "verify_artifact.py"),
+                str(args.generated),
+                "--dump-log",
+                str(dump_log),
+            ]
+            if args.require_verified_artifact:
+                verify_cmd.append("--require-verified")
+            run(verify_cmd)
 
         cache_blob = exec_dump_dir / "pipeline_cache.bin"
         if cache_blob.exists():
             extract_dir = args.out_dir / "cache_extract"
-            run(
-                [
-                    sys.executable,
-                    str(TOOLS_DIR / "extract_from_pipeline_cache.py"),
-                    str(cache_blob),
-                    str(exec_dump_dir),
-                    "--out-dir",
-                    str(extract_dir),
-                ]
-            )
+            try:
+                run(
+                    [
+                        sys.executable,
+                        str(TOOLS_DIR / "extract_from_pipeline_cache.py"),
+                        str(cache_blob),
+                        str(exec_dump_dir),
+                        "--out-dir",
+                        str(extract_dir),
+                    ]
+                )
+            except SystemExit as exc:
+                # ANV's public cache serialization is intentionally opaque.
+                # Retain it as corroborating evidence but never turn an
+                # unrecognised cache layout into guessed Intel ISA.
+                print(
+                    "pipeline-cache extraction unavailable; preserved opaque "
+                    f"cache and executable evidence (status={exc.code})"
+                )
     except BaseException:
         if not args.keep_going and args.out_dir.exists():
             pass
@@ -222,6 +270,8 @@ def main() -> None:
     print(f"artifacts:")
     print(f"  spv: {vs_spv}")
     print(f"  spv: {fs_spv}")
+    if args.geom is not None:
+        print(f"  spv: {gs_spv}")
     print(f"  dumper: {dumper_bin}")
     print(f"  log: {dump_log}")
     print(f"  exec: {exec_dump_dir}")

@@ -124,6 +124,7 @@ const _: () = {
 pub const OP_BP_UI4_SCENE_KEYBOARD_STATE: u32 = 0xDB;
 pub const OP_BP_UI4_SCENE_FRAME_SET_HIT_TESTABLE: u32 = 0x123;
 pub const OP_BP_UI4_SCENE_FRAME_SET_ESCAPE_KEY_ACTION: u32 = 0x150;
+pub const OP_BP_UI4_SCENE_FRAME_SET_OPACITY: u32 = 0x15D;
 /// Request one caller-owned asynchronous RGBA glyph resource. The kernel
 /// keeps only opaque ticket/resource state; Blueprint owns glyph cache keys.
 pub const OP_BP_UI4_SCENE_FONT_SPRITE_REQUEST_V1: u32 = 0x15E;

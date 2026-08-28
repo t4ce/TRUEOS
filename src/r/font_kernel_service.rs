@@ -439,6 +439,92 @@ pub(crate) struct FontFrameStamp {
     release: crate::intel::gpgpu::GpgpuRgba8ReleaseFence,
 }
 
+#[expect(
+    dead_code,
+    reason = "semi-persistent producer API awaits its first UI4 row consumer"
+)]
+struct FontGpuProducerResources {
+    lease: crate::r::font_producer_service::FontProducerLease,
+    rows: Vec<crate::intel::gpgpu::GpgpuOwnedRgba8Surface>,
+}
+
+impl Drop for FontGpuProducerResources {
+    fn drop(&mut self) {
+        let _ = crate::r::font_producer_service::release_producer(self.lease);
+    }
+}
+
+/// Registered semi-persistent Font producer with a fixed tier and retained
+/// row-output ring.  Registration allocates every output once; ordinary row
+/// submission only selects an ACKed slot and dispatches into its stable GPU
+/// virtual range through the existing serialized Font RCS lane.
+#[expect(
+    dead_code,
+    reason = "semi-persistent producer API awaits its first UI4 row consumer"
+)]
+pub(crate) struct FontGpuProducer {
+    resources: Arc<FontGpuProducerResources>,
+}
+
+impl Clone for FontGpuProducer {
+    fn clone(&self) -> Self {
+        Self {
+            resources: Arc::clone(&self.resources),
+        }
+    }
+}
+
+struct QueuedFontProducerRow {
+    token: crate::r::font_producer_service::FontRowToken,
+    resources: Arc<FontGpuProducerResources>,
+}
+
+#[expect(
+    dead_code,
+    reason = "semi-persistent producer API awaits its first UI4 row consumer"
+)]
+pub(crate) struct PendingFontProducerRow {
+    token: crate::r::font_producer_service::FontRowToken,
+    surface: crate::intel::gpgpu::GpgpuRgba8Surface,
+    resources: Arc<FontGpuProducerResources>,
+    completion: PendingFontFrameStamp,
+}
+
+#[expect(
+    dead_code,
+    reason = "semi-persistent producer API awaits its first UI4 row consumer"
+)]
+pub(crate) struct FontProducedRow {
+    token: crate::r::font_producer_service::FontRowToken,
+    surface: crate::intel::gpgpu::GpgpuRgba8Surface,
+    resources: Option<Arc<FontGpuProducerResources>>,
+    stamp: FontFrameStamp,
+    surflive: bool,
+    acknowledged: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[expect(
+    dead_code,
+    reason = "semi-persistent producer API awaits its first UI4 row consumer"
+)]
+pub(crate) enum FontGpuProducerError {
+    Control(crate::r::font_producer_service::FontProducerError),
+    Kernel(FontKernelError),
+}
+
+impl From<crate::r::font_producer_service::FontProducerError> for FontGpuProducerError {
+    fn from(error: crate::r::font_producer_service::FontProducerError) -> Self {
+        Self::Control(error)
+    }
+}
+
+impl From<FontKernelError> for FontGpuProducerError {
+    fn from(error: FontKernelError) -> Self {
+        Self::Kernel(error)
+    }
+}
+
 impl FontFrameStamp {
     pub(crate) const fn ticket(&self) -> FontKernelTicket {
         self.ticket
@@ -501,6 +587,299 @@ impl FontFrameStamp {
 
     pub(crate) const fn release(&self) -> crate::intel::gpgpu::GpgpuRgba8ReleaseFence {
         self.release
+    }
+}
+
+#[expect(
+    dead_code,
+    reason = "semi-persistent producer API awaits its first UI4 row consumer"
+)]
+fn producer_font_pixels_milli(font_pixels: f32) -> Option<u32> {
+    if !font_pixels.is_finite() || font_pixels <= 0.0 {
+        return None;
+    }
+    let scaled = libm::roundf(font_pixels * 1_000.0);
+    if scaled < 1.0 || scaled > u32::MAX as f32 {
+        return None;
+    }
+    Some(scaled as u32)
+}
+
+#[expect(
+    dead_code,
+    reason = "semi-persistent producer API awaits its first UI4 row consumer"
+)]
+fn validate_font_producer_row_request(
+    registration: crate::r::font_producer_service::FontProducerRegistration,
+    request: &FontStampRequest,
+) -> Result<usize, FontKernelError> {
+    validate_stamp_request(request)?;
+    if request.fit != FontStampFit::Canvas
+        || registration.format
+            != crate::r::font_producer_service::FontProducerFormat::Rgba8Premultiplied
+    {
+        return Err(FontKernelError::InvalidRequest("font-producer-row-format"));
+    }
+    let expected_face = GpuFontFace::from_id(u32::from(registration.face))
+        .ok_or(FontKernelError::InvalidRequest("font-producer-face"))?;
+    let mut chars = 0usize;
+    for layer in &request.layers {
+        let scene = &layer.scene;
+        if scene.font != expected_face
+            || scene.viewport_width != registration.row_width_px
+            || scene.viewport_height != registration.row_height_px
+            || scene.raster_width != registration.row_width_px
+            || scene.raster_height != registration.row_height_px
+            || scene.positioning != RetainedFontPositioning::SceneOrigin
+        {
+            return Err(FontKernelError::InvalidRequest("font-producer-row-contract"));
+        }
+        for run in &scene.runs {
+            if producer_font_pixels_milli(run.font_pixels) != Some(registration.font_pixels_milli)
+                || run
+                    .text
+                    .chars()
+                    .any(|character| matches!(character, '\r' | '\n'))
+            {
+                return Err(FontKernelError::InvalidRequest("font-producer-static-tier"));
+            }
+            chars = chars.saturating_add(run.text.chars().count());
+        }
+    }
+    if chars == 0 || chars > registration.max_chars {
+        return Err(FontKernelError::InvalidRequest("font-producer-row-length"));
+    }
+    Ok(chars)
+}
+
+#[expect(
+    dead_code,
+    reason = "semi-persistent producer API awaits its first UI4 row consumer"
+)]
+pub(crate) fn register_gpu_font_producer(
+    registration: crate::r::font_producer_service::FontProducerRegistration,
+) -> Result<FontGpuProducer, FontGpuProducerError> {
+    if registration.format
+        != crate::r::font_producer_service::FontProducerFormat::Rgba8Premultiplied
+        || u64::from(registration.row_width_px) * u64::from(registration.row_height_px)
+            > FONT_STAMP_MAX_PIXELS
+    {
+        return Err(FontKernelError::InvalidRequest("font-producer-gpu-geometry").into());
+    }
+    let face = GpuFontFace::from_id(u32::from(registration.face))
+        .ok_or(FontKernelError::InvalidRequest("font-producer-face"))?;
+    ensure_font_face_available(face).map_err(FontKernelError::Unavailable)?;
+    let lease = crate::r::font_producer_service::register_producer(registration)?;
+    let mut rows = Vec::with_capacity(registration.row_ring_depth);
+    for _ in 0..registration.row_ring_depth {
+        let Some(row) = crate::intel::gpgpu::allocate_font_instance_rgba8_surface(
+            registration.row_width_px,
+            registration.row_height_px,
+        ) else {
+            drop(rows);
+            let _ = crate::r::font_producer_service::release_producer(lease);
+            return Err(FontKernelError::Unavailable("font-producer-row-allocation").into());
+        };
+        rows.push(row);
+    }
+    crate::log_info!(target: "render";
+        "font-kernel-service: producer registered id={} generation={} face={} tier={} font_pixels_milli={} extent={}x{} rows={} max_chars={} storage=persistent-font-rgba8 submit_lane=serialized-font-rcs\n",
+        lease.producer_id(),
+        lease.generation(),
+        face.registry_name(),
+        registration.tier,
+        registration.font_pixels_milli,
+        registration.row_width_px,
+        registration.row_height_px,
+        registration.row_ring_depth,
+        registration.max_chars,
+    );
+    Ok(FontGpuProducer {
+        resources: Arc::new(FontGpuProducerResources { lease, rows }),
+    })
+}
+
+#[expect(
+    dead_code,
+    reason = "semi-persistent producer API awaits its first UI4 row consumer"
+)]
+impl FontGpuProducer {
+    pub(crate) fn lease(&self) -> crate::r::font_producer_service::FontProducerLease {
+        self.resources.lease
+    }
+
+    pub(crate) fn status(
+        &self,
+    ) -> Result<
+        crate::r::font_producer_service::FontProducerStatus,
+        crate::r::font_producer_service::FontProducerError,
+    > {
+        crate::r::font_producer_service::producer_status(self.resources.lease)
+    }
+
+    pub(crate) fn request_release(
+        &self,
+    ) -> Result<bool, crate::r::font_producer_service::FontProducerError> {
+        crate::r::font_producer_service::release_producer(self.resources.lease)
+    }
+
+    pub(crate) fn submit_row(
+        &self,
+        request: FontStampRequest,
+        clear_rgba: u32,
+    ) -> Result<PendingFontProducerRow, FontGpuProducerError> {
+        let registration = self.resources.lease.registration();
+        let char_count = validate_font_producer_row_request(registration, &request)?;
+        let token = crate::r::font_producer_service::reserve_producer_row(
+            self.resources.lease,
+            char_count,
+        )?;
+        let row_index = usize::from(token.row_index());
+        let Some(surface) = self
+            .resources
+            .rows
+            .get(row_index)
+            .map(crate::intel::gpgpu::GpgpuOwnedRgba8Surface::surface)
+        else {
+            let _ = crate::r::font_producer_service::cancel_reserved_producer_row(token);
+            return Err(FontKernelError::InvalidRequest("font-producer-row-index").into());
+        };
+        let queued_row = QueuedFontProducerRow {
+            token,
+            resources: Arc::clone(&self.resources),
+        };
+        let completion = match queue_frame_stamp(
+            FrameStampInput::Request(request),
+            surface,
+            Some(clear_rgba),
+            Some(queued_row),
+        ) {
+            Ok(completion) => completion,
+            Err(rejection) => {
+                let _ = crate::r::font_producer_service::cancel_reserved_producer_row(token);
+                return Err(rejection.error.into());
+            }
+        };
+        Ok(PendingFontProducerRow {
+            token,
+            surface,
+            resources: Arc::clone(&self.resources),
+            completion,
+        })
+    }
+}
+
+#[expect(
+    dead_code,
+    reason = "semi-persistent producer API awaits its first UI4 row consumer"
+)]
+impl PendingFontProducerRow {
+    fn produced(
+        token: crate::r::font_producer_service::FontRowToken,
+        surface: crate::intel::gpgpu::GpgpuRgba8Surface,
+        resources: &Arc<FontGpuProducerResources>,
+        stamp: FontFrameStamp,
+    ) -> Result<FontProducedRow, FontKernelError> {
+        if crate::r::font_producer_service::producer_row_state(token)
+            != Ok(crate::r::font_producer_service::FontRowState::Produced)
+        {
+            return Err(FontKernelError::SubmittedIncomplete("font-producer-completion-state"));
+        }
+        Ok(FontProducedRow {
+            token,
+            surface,
+            resources: Some(Arc::clone(resources)),
+            stamp,
+            surflive: false,
+            acknowledged: false,
+        })
+    }
+
+    pub(crate) const fn token(&self) -> crate::r::font_producer_service::FontRowToken {
+        self.token
+    }
+
+    pub(crate) const fn ticket(&self) -> FontKernelTicket {
+        self.completion.ticket()
+    }
+
+    pub(crate) fn try_take(&mut self) -> Option<Result<FontProducedRow, FontKernelError>> {
+        let result = self.completion.try_take()?;
+        Some(
+            result
+                .and_then(|stamp| Self::produced(self.token, self.surface, &self.resources, stamp)),
+        )
+    }
+
+    pub(crate) async fn wait(self) -> Result<FontProducedRow, FontKernelError> {
+        let Self {
+            token,
+            surface,
+            resources,
+            completion,
+        } = self;
+        let stamp = completion.wait().await?;
+        Self::produced(token, surface, &resources, stamp)
+    }
+}
+
+#[expect(
+    dead_code,
+    reason = "semi-persistent producer API awaits its first UI4 row consumer"
+)]
+impl FontProducedRow {
+    pub(crate) const fn token(&self) -> crate::r::font_producer_service::FontRowToken {
+        self.token
+    }
+
+    pub(crate) const fn surface(&self) -> crate::intel::gpgpu::GpgpuRgba8Surface {
+        self.surface
+    }
+
+    pub(crate) const fn stamp(&self) -> &FontFrameStamp {
+        &self.stamp
+    }
+
+    /// Record that this exact row became display-live. This does not restore
+    /// its credit: scanout may now be actively reading it.
+    pub(crate) fn mark_surflive(
+        &mut self,
+    ) -> Result<(), crate::r::font_producer_service::FontProducerError> {
+        let expected = crate::r::font_producer_service::FontRowCompletion {
+            release_fence: self.stamp.release().sequence(),
+            metadata: self.stamp.ticket().raw(),
+        };
+        crate::r::font_producer_service::mark_producer_row_surflive(self.token, expected)?;
+        self.surflive = true;
+        Ok(())
+    }
+
+    /// Restore the row credit only after a later compositor transaction made
+    /// a replacement SURFLIVE and released this row's exact display lease.
+    pub(crate) fn acknowledge_display_release(
+        mut self,
+    ) -> Result<(), crate::r::font_producer_service::FontProducerError> {
+        if !self.surflive {
+            return Err(crate::r::font_producer_service::FontProducerError::RowNotSurfLive);
+        }
+        crate::r::font_producer_service::acknowledge_producer_row(self.token)?;
+        self.acknowledged = true;
+        Ok(())
+    }
+}
+
+impl Drop for FontProducedRow {
+    fn drop(&mut self) {
+        if self.acknowledged {
+            return;
+        }
+        let _ = crate::r::font_producer_service::abandon_producer_row(self.token);
+        if let Some(resources) = self.resources.take() {
+            // The exact display acknowledgement was lost. Preserve every
+            // backing in this generation instead of freeing a row which may
+            // still be display-owned.
+            core::mem::forget(resources);
+        }
     }
 }
 
@@ -693,6 +1072,7 @@ enum QueuedFontRequest {
         input: FrameStampInput,
         destination: crate::intel::gpgpu::GpgpuRgba8Surface,
         clear_rgba: Option<u32>,
+        producer_row: Option<QueuedFontProducerRow>,
         enqueued_ms: u64,
         reply:
             Arc<Signal<crate::wait::EmbassySpinRawMutex, Result<FontFrameStamp, FontKernelError>>>,
@@ -824,7 +1204,7 @@ pub(crate) fn submit_frame_stamp(
     destination: crate::intel::gpgpu::GpgpuRgba8Surface,
 ) -> Result<PendingFontFrameStamp, FontKernelError> {
     validate_stamp_request(&request)?;
-    queue_frame_stamp(FrameStampInput::Request(request), destination, None)
+    queue_frame_stamp(FrameStampInput::Request(request), destination, None, None)
         .map_err(|rejection| rejection.error)
 }
 
@@ -839,7 +1219,7 @@ pub(crate) fn submit_prepared_frame_stamp_with_clear(
     destination: crate::intel::gpgpu::GpgpuRgba8Surface,
     clear_rgba: u32,
 ) -> Result<PendingFontFrameStamp, PreparedFrameStampRejection> {
-    queue_frame_stamp(FrameStampInput::Prepared(plan), destination, Some(clear_rgba)).map_err(
+    queue_frame_stamp(FrameStampInput::Prepared(plan), destination, Some(clear_rgba), None).map_err(
         |rejection| {
             let FrameStampInput::Prepared(plan) = rejection.input else {
                 unreachable!("prepared frame admission returned a request input")
@@ -861,15 +1241,17 @@ pub(crate) fn submit_prepared_frame_stamp(
     plan: PreparedGlyphPlan,
     destination: crate::intel::gpgpu::GpgpuRgba8Surface,
 ) -> Result<PendingFontFrameStamp, PreparedFrameStampRejection> {
-    queue_frame_stamp(FrameStampInput::Prepared(plan), destination, None).map_err(|rejection| {
-        let FrameStampInput::Prepared(plan) = rejection.input else {
-            unreachable!("prepared frame admission returned a request input")
-        };
-        PreparedFrameStampRejection {
-            error: rejection.error,
-            plan,
-        }
-    })
+    queue_frame_stamp(FrameStampInput::Prepared(plan), destination, None, None).map_err(
+        |rejection| {
+            let FrameStampInput::Prepared(plan) = rejection.input else {
+                unreachable!("prepared frame admission returned a request input")
+            };
+            PreparedFrameStampRejection {
+                error: rejection.error,
+                plan,
+            }
+        },
+    )
 }
 
 /// Queue one Font-owned full-frame clear and return the exact scanout fence.
@@ -888,6 +1270,7 @@ pub(crate) fn submit_font_rush_frame_clear(
             raster_height: destination.height,
         },
         destination,
+        None,
         None,
     )
     .map_err(|rejection| rejection.error)
@@ -917,6 +1300,7 @@ pub(crate) fn submit_font_rush_showcase_sprite_frame(
         },
         destination,
         Some(clear_rgba),
+        None,
     )
     .map_err(|rejection| rejection.error)
 }
@@ -1019,6 +1403,7 @@ fn queue_frame_stamp(
     input: FrameStampInput,
     destination: crate::intel::gpgpu::GpgpuRgba8Surface,
     clear_rgba: Option<u32>,
+    producer_row: Option<QueuedFontProducerRow>,
 ) -> Result<PendingFontFrameStamp, FrameStampQueueRejection> {
     let extent = input.raster_extent();
     let input_is_valid = match &input {
@@ -1064,6 +1449,7 @@ fn queue_frame_stamp(
             input,
             destination,
             clear_rgba,
+            producer_row,
             enqueued_ms: Instant::now().as_millis(),
             reply: Arc::clone(&reply),
         });
@@ -2022,11 +2408,44 @@ fn process_queued_request(request: QueuedFontRequest) {
             input,
             destination,
             clear_rgba,
+            producer_row,
             enqueued_ms,
             reply,
         } => {
             set_active_stage(ticket, "dispatch");
             let result = process_frame_stamp(ticket, input, destination, clear_rgba, enqueued_ms);
+            if let Some(producer_row) = producer_row {
+                match &result {
+                    Ok(stamp) if stamp.release().matches(destination.phys, destination.bytes) => {
+                        let completion = crate::r::font_producer_service::FontRowCompletion {
+                            release_fence: stamp.release().sequence(),
+                            metadata: stamp.ticket().raw(),
+                        };
+                        if crate::r::font_producer_service::mark_producer_row_gpu_complete(
+                            producer_row.token,
+                            completion,
+                        )
+                        .is_err()
+                        {
+                            let _ = crate::r::font_producer_service::abandon_producer_row(
+                                producer_row.token,
+                            );
+                            core::mem::forget(producer_row.resources);
+                        }
+                    }
+                    Ok(_) | Err(FontKernelError::SubmittedIncomplete(_)) => {
+                        let _ = crate::r::font_producer_service::quarantine_producer_row(
+                            producer_row.token,
+                        );
+                        core::mem::forget(producer_row.resources);
+                    }
+                    Err(_) => {
+                        let _ = crate::r::font_producer_service::cancel_reserved_producer_row(
+                            producer_row.token,
+                        );
+                    }
+                }
+            }
             // A destination stamp is not replayed: an earlier ordered layer
             // may already have retired into the leased frame, so retrying the
             // whole source-over sequence would composite it twice.
@@ -2077,7 +2496,7 @@ pub(crate) async fn font_kernel_service_task() {
     ONLINE.store(true, Ordering::Release);
     crate::log_info!(
         target: "render";
-        "font-kernel-service: online paths=retain-scene+async-stamp+async-frame-stamp+prepared-frame-stamp+font-rush-clear-only+font-rush-showcase-rgba8-sprite controller=bsp worker=leased-blocking-service-lane font_lane=fair-fifo-font-only gpu_context=kernel-gpgpu-font queue_capacity={} retained_storage=gpu-vm-r8 prepared_storage=bounded-transient-move-once glyph_cache=none stamp_output=owned-or-ui4-leased-gpu-vm-rgba8 completion=signal\n",
+        "font-kernel-service: online paths=retain-scene+async-stamp+async-frame-stamp+prepared-frame-stamp+registered-persistent-row+font-rush-clear-only+font-rush-showcase-rgba8-sprite controller=bsp worker=leased-blocking-service-lane font_lane=fair-fifo-font-only gpu_context=kernel-gpgpu-font queue_capacity={} producer_slots=32 producer_rows=persistent-generation-tagged-ack-credit retained_storage=gpu-vm-r8 prepared_storage=bounded-transient-move-once glyph_cache=none stamp_output=owned-or-ui4-leased-gpu-vm-rgba8 completion=signal\n",
         FONT_KERNEL_QUEUE_CAPACITY,
     );
     loop {

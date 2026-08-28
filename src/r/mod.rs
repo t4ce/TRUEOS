@@ -7,6 +7,7 @@ pub mod cursor;
 pub mod disc;
 pub mod font_kernel_service;
 pub mod font_plan_service;
+pub mod font_producer_service;
 pub mod fs;
 pub mod gamepad_control_service;
 pub mod gridpaper_service;

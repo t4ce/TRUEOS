@@ -237,6 +237,7 @@ pub const OP_BP_IMAGE_SOURCE_READ: u32 = 0x122; // arg0 offset,arg1 cap,payload 
 pub const OP_BP_UI4_SCENE_FRAME_SET_HIT_TESTABLE: u32 = 0x123; // arg0 window,arg1 enabled -> rc
 pub const OP_BP_LUMEN_TOOL_RESULT_SUBMIT: u32 = 0x151; // arg0 turn,payload tail then tool-role result -> rc
 pub const OP_BP_UI4_SCENE_FRAME_SET_ESCAPE_KEY_ACTION: u32 = 0x150; // arg0 window,arg1 Ui4FrameEscapeKeyAction -> rc
+pub const OP_BP_UI4_SCENE_FRAME_SET_OPACITY: u32 = 0x15D; // arg0 window,arg1 opacity:u8 -> rc
 pub const OP_BP_UI4_SCENE_FONT_SPRITE_REQUEST_V1: u32 = 0x15E; // arg0 window,arg1 scalar,payload font/px/color -> ticket
 pub const OP_BP_UI4_SCENE_FONT_SPRITE_STATUS_V1: u32 = 0x15F; // arg0 window,arg1 ticket -> FontSpriteStatusV1
 pub const OP_BP_VMEDIA_IMAGE_DECODE_BEGIN: u32 = 0x142; // arg0 format,arg1 encoded bytes -> operation id/rc
@@ -2246,6 +2247,14 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 arg0 as u32,
                 x,
                 y,
+            );
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_SCENE_FRAME_SET_OPACITY => {
+            let rc = crate::ui4::blueprint_text::trueos_cabi_ui4_scene_frame_set_opacity(
+                arg0 as u32,
+                arg1 as u32,
             );
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume

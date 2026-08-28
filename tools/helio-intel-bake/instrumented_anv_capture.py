@@ -203,10 +203,17 @@ def main() -> None:
     parser.add_argument("--work-dir", type=Path, required=True)
     parser.add_argument("--bootstrap-tools", action="store_true",
                         help="extract the pinned Mesa build dependencies beneath work-dir using apt download")
+    parser.add_argument("--adjacency-host", action="store_true",
+                        help="capture the pass-through adjacency GS on a physical Intel device; never uses the shim")
+    parser.add_argument("--device-id", default="0xA780",
+                        help="physical Intel PCI device ID required by --adjacency-host")
     args = parser.parse_args()
     work = args.work_dir.resolve()
     work.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
+    scratch = work / "tmp"
+    scratch.mkdir(exist_ok=True)
+    env.setdefault("TMPDIR", str(scratch))
     if args.bootstrap_tools:
         temporary_tool_prefix(work, env)
     require_host_prerequisites(env)
@@ -238,6 +245,36 @@ def main() -> None:
         raise SystemExit("instrumented ANV build did not produce the no-op DRM shim")
     capture = work / "capture"
     capture.mkdir(exist_ok=True)
+    if args.adjacency_host:
+        capture = work / "adjacency-host-capture"
+        capture.mkdir(exist_ok=True)
+        env.update({
+            "VK_DRIVER_FILES": str(icd),
+            "TRUEOS_VK_DEVICE_ID": args.device_id,
+        })
+        command = [
+            sys.executable, str(TRUEOS / "crates/trueos-shader/xe_lp_shader_bake/run_host_validation.py"),
+            "--geom", str(TRUEOS / "crates/trueos-shader/xe_lp_shader_bake/passthrough_triangle_adjacency.geom"),
+            "--skip-artifact-verification", "--out-dir", str(capture),
+        ]
+        result = subprocess.run(command, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        (capture / "instrumented-adjacency.log").write_text(result.stdout)
+        print(result.stdout, end="")
+        if result.returncode:
+            raise SystemExit(f"instrumented physical adjacency capture failed: {result.returncode}")
+        exec_dir = capture / "pipeline_exec"
+        required = (
+            "*geometry*GEN_Assembly.txt",
+            "*geometry*prog_data*.bin",
+            "*geometry*shader_serialize*.bin",
+            "*geometry*devinfo*.txt",
+        )
+        for pattern in required:
+            if not list(exec_dir.glob(pattern)):
+                raise SystemExit(f"instrumented adjacency capture missing GS evidence: {pattern}")
+        print("instrumented physical adjacency capture completed; renderer integration remains gated on decoded GS state")
+        return
+
     env.update({
         "VK_DRIVER_FILES": str(icd),
         "LD_PRELOAD": str(shim_matches[0]),

@@ -91,6 +91,8 @@ static const char *stage_name(VkShaderStageFlags stage) {
     switch (stage) {
         case VK_SHADER_STAGE_VERTEX_BIT:
             return "vertex";
+        case VK_SHADER_STAGE_GEOMETRY_BIT:
+            return "geometry";
         case VK_SHADER_STAGE_FRAGMENT_BIT:
             return "fragment";
         default:
@@ -380,7 +382,12 @@ static void dump_pipeline_executables(VkDevice device, VkPipeline pipeline) {
     free(props);
 }
 
-static void dump_host_state_reference(uint32_t max_threads_per_psd, int push_color_enabled) {
+static void dump_host_state_reference(
+    uint32_t max_threads_per_psd,
+    int push_color_enabled,
+    int geometry_enabled,
+    const VkPhysicalDeviceProperties *selected_props
+) {
     const char *out_dir = getenv("TRUEOS_EXECUTABLE_DUMP_DIR");
     FILE *file = NULL;
     char path[1024];
@@ -403,7 +410,11 @@ static void dump_host_state_reference(uint32_t max_threads_per_psd, int push_col
     } while (0)
 
     HOST_STATE_LINE(
-        "host-state summary: path=mesa genX_simple_shader trivial-triangle target=gfx125\n"
+        "host-state summary: path=mesa genX_simple_shader trivial-triangle "
+        "target_vendor=0x%04X target_device=0x%04X target_name=\"%s\"\n",
+        selected_props->vendorID,
+        selected_props->deviceID,
+        selected_props->deviceName
     );
     HOST_STATE_LINE(
         "host-state cc_viewport min_depth=0.0 max_depth=1.0\n"
@@ -429,7 +440,8 @@ static void dump_host_state_reference(uint32_t max_threads_per_psd, int push_col
         "host-state ps_blend has_writeable_rt=1\n"
     );
     HOST_STATE_LINE(
-        "host-state target format=VK_FORMAT_R8G8B8A8_UNORM extent=64x64 samples=1 topology=triangle_list front_face=ccw polygon=fill cull=none\n"
+        "host-state target format=VK_FORMAT_R8G8B8A8_UNORM extent=64x64 samples=1 topology=%s front_face=ccw polygon=fill cull=none\n",
+        geometry_enabled ? "triangle_list_with_adjacency" : "triangle_list"
     );
 
 #undef HOST_STATE_LINE
@@ -439,11 +451,16 @@ static void dump_host_state_reference(uint32_t max_threads_per_psd, int push_col
 }
 
 int main(int argc, char **argv) {
-    if (argc != 3) {
-        fprintf(stderr, "usage: %s simple_triangle.vert.spv simple_triangle.frag.spv\n", argv[0]);
+    if (argc != 3 && argc != 4) {
+        fprintf(
+            stderr,
+            "usage: %s simple_triangle.vert.spv simple_triangle.frag.spv [passthrough.geom.spv]\n",
+            argv[0]
+        );
         return 1;
     }
 
+    const int geometry_enabled = argc == 4;
     const int push_color_enabled = getenv("TRUEOS_PUSH_COLOR") != NULL;
     const float push_color[4] = {
         224.0f / 255.0f,
@@ -540,6 +557,17 @@ int main(int argc, char **argv) {
         selected_props.deviceName
     );
 
+    VkPhysicalDeviceFeatures enabled_features = { 0 };
+    if (geometry_enabled) {
+        VkPhysicalDeviceFeatures supported_features;
+        vkGetPhysicalDeviceFeatures(physical_device, &supported_features);
+        if (supported_features.geometryShader != VK_TRUE) {
+            fprintf(stderr, "selected Intel device does not support geometry shaders\n");
+            return 1;
+        }
+        enabled_features.geometryShader = VK_TRUE;
+    }
+
     const float queue_priority = 1.0f;
     const VkDeviceQueueCreateInfo queue_info = {
         .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
@@ -559,13 +587,19 @@ int main(int argc, char **argv) {
         },
         .queueCreateInfoCount = 1,
         .pQueueCreateInfos = &queue_info,
+        .pEnabledFeatures = geometry_enabled ? &enabled_features : NULL,
         .enabledExtensionCount = 1,
         .ppEnabledExtensionNames = device_extensions,
     };
 
     VkDevice device;
     CHECK_VK(vkCreateDevice(physical_device, &device_info, NULL, &device));
-    dump_host_state_reference(63, push_color_enabled);
+    dump_host_state_reference(
+        63,
+        push_color_enabled,
+        geometry_enabled,
+        &selected_props
+    );
 
     VkQueue queue;
     vkGetDeviceQueue(device, graphics_family, 0, &queue);
@@ -677,6 +711,7 @@ int main(int argc, char **argv) {
 
     FileData vs_spirv = read_spirv(argv[1]);
     FileData fs_spirv = read_spirv(argv[2]);
+    FileData gs_spirv = { 0 };
     const VkShaderModuleCreateInfo vs_info = {
         .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
         .codeSize = vs_spirv.word_count * sizeof(uint32_t),
@@ -687,12 +722,24 @@ int main(int argc, char **argv) {
         .codeSize = fs_spirv.word_count * sizeof(uint32_t),
         .pCode = fs_spirv.words,
     };
+    if (geometry_enabled) {
+        gs_spirv = read_spirv(argv[3]);
+    }
+    const VkShaderModuleCreateInfo gs_info = {
+        .sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO,
+        .codeSize = gs_spirv.word_count * sizeof(uint32_t),
+        .pCode = gs_spirv.words,
+    };
     VkShaderModule vs_module;
     VkShaderModule fs_module;
+    VkShaderModule gs_module = VK_NULL_HANDLE;
     CHECK_VK(vkCreateShaderModule(device, &vs_info, NULL, &vs_module));
     CHECK_VK(vkCreateShaderModule(device, &fs_info, NULL, &fs_module));
+    if (geometry_enabled) {
+        CHECK_VK(vkCreateShaderModule(device, &gs_info, NULL, &gs_module));
+    }
 
-    const VkPipelineShaderStageCreateInfo stages[2] = {
+    const VkPipelineShaderStageCreateInfo stages[3] = {
         {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
             .stage = VK_SHADER_STAGE_VERTEX_BIT,
@@ -703,6 +750,12 @@ int main(int argc, char **argv) {
             .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
             .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
             .module = fs_module,
+            .pName = "main",
+        },
+        {
+            .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+            .stage = VK_SHADER_STAGE_GEOMETRY_BIT,
+            .module = gs_module,
             .pName = "main",
         },
     };
@@ -727,7 +780,9 @@ int main(int argc, char **argv) {
     };
     const VkPipelineInputAssemblyStateCreateInfo input_assembly = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-        .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+        .topology = geometry_enabled
+            ? VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST_WITH_ADJACENCY
+            : VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
     };
     const VkViewport viewport = {
         .x = 0.0f,
@@ -792,7 +847,7 @@ int main(int argc, char **argv) {
         .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,
         .flags = VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR |
                  VK_PIPELINE_CREATE_CAPTURE_INTERNAL_REPRESENTATIONS_BIT_KHR,
-        .stageCount = 2,
+        .stageCount = geometry_enabled ? 3u : 2u,
         .pStages = stages,
         .pVertexInputState = &vertex_input,
         .pInputAssemblyState = &input_assembly,
@@ -809,14 +864,29 @@ int main(int argc, char **argv) {
     dump_pipeline_cache_blob(device, pipeline_cache);
     dump_pipeline_executables(device, pipeline);
 
-    const float vertices[9] = {
+    const float ordinary_vertices[9] = {
         0.0f, 0.72f, 0.0f,
         -0.72f, -0.58f, 0.0f,
         0.72f, -0.58f, 0.0f,
     };
+    // In adjacency mode, even vertices are the ordinary triangle and odd
+    // vertices are intentionally ignored neighbours.  This is the exact
+    // `real0, adj0, real1, adj1, real2, adj2` contract used by PotatoStamps.
+    const float adjacency_vertices[18] = {
+        0.0f, 0.72f, 0.0f,
+        0.0f, 0.0f, 0.0f,
+        -0.72f, -0.58f, 0.0f,
+        0.0f, 0.0f, 0.0f,
+        0.72f, -0.58f, 0.0f,
+        0.0f, 0.0f, 0.0f,
+    };
+    const float *vertices = geometry_enabled ? adjacency_vertices : ordinary_vertices;
+    const size_t vertex_bytes = geometry_enabled
+        ? sizeof(adjacency_vertices)
+        : sizeof(ordinary_vertices);
     const VkBufferCreateInfo buffer_info = {
         .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
-        .size = sizeof(vertices),
+        .size = vertex_bytes,
         .usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
         .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
     };
@@ -837,8 +907,8 @@ int main(int argc, char **argv) {
     CHECK_VK(vkAllocateMemory(device, &vertex_alloc, NULL, &vertex_memory));
     CHECK_VK(vkBindBufferMemory(device, vertex_buffer, vertex_memory, 0));
     void *mapped = NULL;
-    CHECK_VK(vkMapMemory(device, vertex_memory, 0, sizeof(vertices), 0, &mapped));
-    memcpy(mapped, vertices, sizeof(vertices));
+    CHECK_VK(vkMapMemory(device, vertex_memory, 0, vertex_bytes, 0, &mapped));
+    memcpy(mapped, vertices, vertex_bytes);
     vkUnmapMemory(device, vertex_memory);
 
     const VkDeviceSize readback_size = 64u * 64u * 4u;
@@ -920,7 +990,7 @@ int main(int argc, char **argv) {
     }
     VkDeviceSize vertex_offset = 0;
     vkCmdBindVertexBuffers(command_buffer, 0, 1, &vertex_buffer, &vertex_offset);
-    vkCmdDraw(command_buffer, 3, 1, 0, 0);
+    vkCmdDraw(command_buffer, geometry_enabled ? 6u : 3u, 1, 0, 0);
     vkCmdEndRenderPass(command_buffer);
 
     const VkImageMemoryBarrier transfer_barrier = {
@@ -1019,6 +1089,8 @@ int main(int argc, char **argv) {
     vkDestroyPipelineCache(device, pipeline_cache, NULL);
     vkDestroyPipelineLayout(device, pipeline_layout, NULL);
     vkDestroyShaderModule(device, vs_module, NULL);
+    if (gs_module != VK_NULL_HANDLE)
+        vkDestroyShaderModule(device, gs_module, NULL);
     vkDestroyShaderModule(device, fs_module, NULL);
     vkDestroyFramebuffer(device, framebuffer, NULL);
     vkDestroyRenderPass(device, render_pass, NULL);
@@ -1030,6 +1102,7 @@ int main(int argc, char **argv) {
     vkDestroyDevice(device, NULL);
     vkDestroyInstance(instance, NULL);
     free(vs_spirv.words);
+    free(gs_spirv.words);
     free(fs_spirv.words);
     return 0;
 }
