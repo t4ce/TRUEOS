@@ -7,7 +7,7 @@
 //! queues callbacks for the trusted `WindowOwner`. Consumers never drain a
 //! global HID queue.
 
-use core::sync::atomic::{AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use embassy_sync::signal::Signal;
 use heapless::Vec;
@@ -45,6 +45,7 @@ pub(super) const DESKTOP_CONTEXT_MENU_VERTICAL_INSET_PX: u32 = 12;
 static OWNER_QUEUE_DROPS: AtomicU32 = AtomicU32::new(0);
 static KEYBOARD_TEXT_FORWARDS: AtomicU32 = AtomicU32::new(0);
 static DESKTOP_SHELL_LAUNCH_SEQUENCE: AtomicU32 = AtomicU32::new(0);
+static FAT_SOFTWARE_CURSORS: AtomicBool = AtomicBool::new(false);
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct DesktopShellLaunchRequest {
@@ -1401,8 +1402,42 @@ fn capture_gt_power_mode_hotkey(
     super::GlobalKeyboardDisposition::Consume
 }
 
+fn capture_software_cursor_size_hotkey(
+    event: &crate::r::keyboard::TrueosKeyboardOutputEvent,
+) -> super::GlobalKeyboardDisposition {
+    if event.kind != crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY
+        || event.key_code != crate::r::keyboard::KEYBOARD_KEY_F11
+    {
+        return super::GlobalKeyboardDisposition::PassThrough;
+    }
+
+    if event.flags & crate::r::keyboard::KEYBOARD_OUTPUT_FLAG_PRESS != 0 {
+        let fat = !FAT_SOFTWARE_CURSORS.fetch_xor(true, Ordering::AcqRel);
+        SLOT4_VISUAL_CHANGE.signal(());
+        crate::log_info!(target: "ui4";
+            "ui4/input: F11 global software cursor size toggled mode={} scale={}x key_delivery=consumed\n",
+            if fat { "fat" } else { "small" },
+            if fat { 3 } else { 1 },
+        );
+    }
+    // Consume both edges so applications never observe half of the global
+    // function-key gesture.
+    super::GlobalKeyboardDisposition::Consume
+}
+
 #[trueos_executor::task]
 pub(crate) async fn ui4_input_service_task(ap1_spawner: crate::workers::WorkerSpawner) {
+    let cursor_size_hook =
+        super::register_global_keyboard_hook(u8::MAX, capture_software_cursor_size_hotkey);
+    match cursor_size_hook {
+        Ok(_) => crate::log_info!(target: "ui4";
+            "ui4/input: global hotkey online key=F11 action=toggle-software-cursor-size small=1x fat=3x key_delivery=consumed\n"
+        ),
+        Err(error) => crate::log_warn!(target: "ui4";
+            "ui4/input: global hotkey unavailable key=F11 error={:?}\n",
+            error,
+        ),
+    }
     let power_mode_hook =
         super::register_global_keyboard_hook(u8::MAX, capture_gt_power_mode_hotkey);
     match power_mode_hook {
@@ -1664,6 +1699,14 @@ pub(super) fn release_owner(owner: WindowOwner) -> (usize, usize) {
 
 pub(crate) fn software_cursor_visuals() -> Vec<Ui4SoftwareCursorVisual, MAX_CURSOR_ROUTES> {
     INPUT_BROKER.lock().software_cursor_visuals()
+}
+
+pub(super) fn software_cursor_scale() -> u32 {
+    if FAT_SOFTWARE_CURSORS.load(Ordering::Acquire) {
+        3
+    } else {
+        1
+    }
 }
 
 /// Select one ready UI4 frame for an existing cursor identity without

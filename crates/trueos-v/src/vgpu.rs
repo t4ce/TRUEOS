@@ -223,6 +223,22 @@ pub const PRIMITIVE_TOPOLOGY_QUAD_LIST: u32 = 7;
 /// Intel `3DPRIM_QUADSTRIP` / `3DSTATE_VF_TOPOLOGY` value 0x08. Each pair of
 /// vertices after the first pair completes one connected four-vertex quad.
 pub const PRIMITIVE_TOPOLOGY_QUAD_STRIP: u32 = 8;
+/// Intel `3DPRIM_LINELIST_ADJ` / `3DSTATE_VF_TOPOLOGY` value 0x09. Four
+/// vertices describe one line plus its two adjacent-only neighbours.
+pub const PRIMITIVE_TOPOLOGY_LINE_LIST_ADJ: u32 = 0x09;
+/// Intel `3DPRIM_LINESTRIP_ADJ` / `3DSTATE_VF_TOPOLOGY` value 0x0A. The
+/// first and last input vertices are adjacent-only strip endpoints.
+pub const PRIMITIVE_TOPOLOGY_LINE_STRIP_ADJ: u32 = 0x0a;
+/// Intel `3DPRIM_TRILIST_ADJ` / `3DSTATE_VF_TOPOLOGY` value 0x0B. Every six
+/// vertices describe one triangle and its three edge neighbours.
+pub const PRIMITIVE_TOPOLOGY_TRIANGLE_LIST_ADJ: u32 = 0x0b;
+/// Intel `3DPRIM_TRISTRIP_ADJ` / `3DSTATE_VF_TOPOLOGY` value 0x0C. Even
+/// input vertices form the strip; odd vertices are adjacency-only data.
+pub const PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP_ADJ: u32 = 0x0c;
+/// Intel `3DPRIM_RECTLIST` / `3DSTATE_VF_TOPOLOGY` value 0x0F. Every three
+/// vertices specify one screen-aligned rectangle; hardware derives its fourth
+/// corner.
+pub const PRIMITIVE_TOPOLOGY_RECT_LIST: u32 = 0x0f;
 /// Intel `3DPRIM_LINELOOP` value 0x10. Retained submission materializes its
 /// final-to-first edge and emits it as a hardware line strip.
 pub const PRIMITIVE_TOPOLOGY_LINE_LOOP: u32 = 0x10;

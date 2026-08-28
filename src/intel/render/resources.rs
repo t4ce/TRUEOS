@@ -511,7 +511,7 @@ fn prepare_triangle_draw_resources_for_geometry(
         indirect_args_gpu_addr: None,
         native: None,
         sampled_texture: None,
-        emissive_texture: None,
+        metallic_roughness_texture: None,
         emissive_factor: [0.0; 3],
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
@@ -630,7 +630,7 @@ fn prepare_triangle_draw_resources_for_vertex_slice_with_state_clear(
         indirect_args_gpu_addr: None,
         native: None,
         sampled_texture: None,
-        emissive_texture: None,
+        metallic_roughness_texture: None,
         emissive_factor: [0.0; 3],
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
@@ -716,7 +716,7 @@ fn prepare_triangle_draw_resources_for_indexed_vertex_slice(
         indirect_args_gpu_addr: None,
         native: None,
         sampled_texture: None,
-        emissive_texture: None,
+        metallic_roughness_texture: None,
         emissive_factor: [0.0; 3],
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
@@ -2298,7 +2298,8 @@ pub(crate) fn update_resident_churn_forward_frame(
 /// or that pair plus Float2 base-color UV (32 bytes). `indices` is one ordinary
 /// triangle-list mesh, and all instance motion stays in GPU-owned
 /// seed/instance/indirect buffers. The sampled variant switches to the baked
-/// retained-material VS/PS and requires an opaque texture binding per frame.
+/// retained-material VS/PS and requires base-color plus metallic-roughness
+/// bindings per frame.
 pub(crate) fn create_resident_picasso_retained_mesh(
     carrier: PicassoCarrierLease,
     vertices: &[u8],
@@ -2443,7 +2444,11 @@ pub(crate) fn update_resident_picasso_retained_transform_seeds(
             &camera.jitter_frame,
             &camera.previous_view_projection,
         ];
-        if fields.iter().flat_map(|values| values.iter()).any(|value| !value.is_finite()) {
+        if fields
+            .iter()
+            .flat_map(|values| values.iter())
+            .any(|value| !value.is_finite())
+        {
             return Err("picasso-retained-camera-finite");
         }
         let mut bytes = [0u8; CAMERA_BYTES];
@@ -2700,14 +2705,10 @@ fn prepare_resident_churn_forward_draw(
     width: usize,
     height: usize,
 ) -> Option<TriangleDrawPrep> {
-    if group >= CHURN_FORWARD_DRAW_COUNT
-        || resident.sampled_material != sampled_material.is_some()
-        // This rung's PS always samples both surfaces and applies no scalar
-        // material uniform, so it is only valid for the identity-factor
-        // base-plus-emissive contract admitted by the broker.
-        || sampled_material.is_some_and(|material| {
-            material.emissive.is_none() || material.emissive_factor != [1.0; 3]
-        })
+    if group >= CHURN_FORWARD_DRAW_COUNT || resident.sampled_material != sampled_material.is_some()
+    // This probe samples exactly base color and metallic-roughness. Its
+    // output preserves base color through the latter's alpha and has no
+    // scalar uniform.
     {
         return None;
     }
@@ -2734,16 +2735,16 @@ fn prepare_resident_churn_forward_draw(
             pitch: material.base_color.pitch,
             sampler_flags: material.base_color.sampler_flags,
         }),
-        emissive_texture: sampled_material.and_then(|material| {
-            material.emissive.map(|texture| TriangleSampledTextureBinding {
-                gpu_addr: texture.storage.gpu_base(),
-                width: texture.width,
-                height: texture.height,
-                pitch: texture.pitch,
-                sampler_flags: texture.sampler_flags,
-            })
+        metallic_roughness_texture: sampled_material.map(|material| {
+            TriangleSampledTextureBinding {
+                gpu_addr: material.metallic_roughness.storage.gpu_base(),
+                width: material.metallic_roughness.width,
+                height: material.metallic_roughness.height,
+                pitch: material.metallic_roughness.pitch,
+                sampler_flags: material.metallic_roughness.sampler_flags,
+            }
         }),
-        emissive_factor: sampled_material.map_or([0.0; 3], |material| material.emissive_factor),
+        emissive_factor: [0.0; 3],
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
         rt_surface_format: SURFACE_FORMAT_R8G8B8A8_UNORM,
@@ -2791,7 +2792,7 @@ fn prepare_resident_churn_expanded_draw(
         ),
         native: None,
         sampled_texture: None,
-        emissive_texture: None,
+        metallic_roughness_texture: None,
         emissive_factor: [0.0; 3],
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
@@ -3268,7 +3269,7 @@ fn prepare_triangle_draw_resources_for_resident_font_mesh_with_state_clear(
         indirect_args_gpu_addr: None,
         native: None,
         sampled_texture: None,
-        emissive_texture: None,
+        metallic_roughness_texture: None,
         emissive_factor: [0.0; 3],
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
@@ -3319,7 +3320,7 @@ fn prepare_triangle_draw_resources_for_vf_vue_vertex_slice(
         indirect_args_gpu_addr: None,
         native: None,
         sampled_texture: None,
-        emissive_texture: None,
+        metallic_roughness_texture: None,
         emissive_factor: [0.0; 3],
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
@@ -3745,7 +3746,7 @@ fn prepare_vf_streamout_proof_resources(
         indirect_args_gpu_addr: None,
         native: None,
         sampled_texture: None,
-        emissive_texture: None,
+        metallic_roughness_texture: None,
         emissive_factor: [0.0; 3],
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,

@@ -384,14 +384,26 @@ fn broker_primitive_topology(
         v::vgpu::PRIMITIVE_TOPOLOGY_LINE_LIST => {
             Ok(crate::intel::render::ResidentScenePrimitiveTopology::LineList)
         }
+        v::vgpu::PRIMITIVE_TOPOLOGY_LINE_LIST_ADJ => {
+            Ok(crate::intel::render::ResidentScenePrimitiveTopology::LineListAdj)
+        }
         v::vgpu::PRIMITIVE_TOPOLOGY_LINE_STRIP => {
             Ok(crate::intel::render::ResidentScenePrimitiveTopology::LineStrip)
+        }
+        v::vgpu::PRIMITIVE_TOPOLOGY_LINE_STRIP_ADJ => {
+            Ok(crate::intel::render::ResidentScenePrimitiveTopology::LineStripAdj)
         }
         v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_LIST => {
             Ok(crate::intel::render::ResidentScenePrimitiveTopology::TriangleList)
         }
+        v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_LIST_ADJ => {
+            Ok(crate::intel::render::ResidentScenePrimitiveTopology::TriangleListAdj)
+        }
         v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP => {
             Ok(crate::intel::render::ResidentScenePrimitiveTopology::TriangleStrip)
+        }
+        v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP_ADJ => {
+            Ok(crate::intel::render::ResidentScenePrimitiveTopology::TriangleStripAdj)
         }
         v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_FAN => {
             Ok(crate::intel::render::ResidentScenePrimitiveTopology::TriangleFan)
@@ -401,6 +413,9 @@ fn broker_primitive_topology(
         }
         v::vgpu::PRIMITIVE_TOPOLOGY_QUAD_STRIP => {
             Ok(crate::intel::render::ResidentScenePrimitiveTopology::QuadStrip)
+        }
+        v::vgpu::PRIMITIVE_TOPOLOGY_RECT_LIST => {
+            Ok(crate::intel::render::ResidentScenePrimitiveTopology::RectList)
         }
         _ => Err(-95),
     }
@@ -416,12 +431,17 @@ mod primitive_topology_tests {
         let cases = [
             (v::vgpu::PRIMITIVE_TOPOLOGY_POINT_LIST, Topology::PointList),
             (v::vgpu::PRIMITIVE_TOPOLOGY_LINE_LIST, Topology::LineList),
+            (v::vgpu::PRIMITIVE_TOPOLOGY_LINE_LIST_ADJ, Topology::LineListAdj),
             (v::vgpu::PRIMITIVE_TOPOLOGY_LINE_STRIP, Topology::LineStrip),
+            (v::vgpu::PRIMITIVE_TOPOLOGY_LINE_STRIP_ADJ, Topology::LineStripAdj),
             (v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, Topology::TriangleList),
+            (v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_LIST_ADJ, Topology::TriangleListAdj),
             (v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP, Topology::TriangleStrip),
+            (v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP_ADJ, Topology::TriangleStripAdj),
             (v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_FAN, Topology::TriangleFan),
             (v::vgpu::PRIMITIVE_TOPOLOGY_QUAD_LIST, Topology::QuadList),
             (v::vgpu::PRIMITIVE_TOPOLOGY_QUAD_STRIP, Topology::QuadStrip),
+            (v::vgpu::PRIMITIVE_TOPOLOGY_RECT_LIST, Topology::RectList),
         ];
 
         for (wire, expected) in cases {

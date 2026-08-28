@@ -243,7 +243,7 @@ def main() -> None:
             shutil.copy2(assembly, out / assembly.name)
         metadata = {
             "schema": 1,
-            "contract": "retained-transform-filtered-base-color-plus-emissive",
+            "contract": "retained-transform-filtered-base-color-plus-metallic-roughness-alpha-probe",
             "frontend": frontend,
             "device": device,
             "target": "intel-adl-s-uhd-770-0x4680",
@@ -260,7 +260,7 @@ def main() -> None:
                 "storage-compacted-indices@vs-bti3",
                 "sampled-base-color-rgba8-2d@ps-bti2",
                 "sampler@ps-sampler0",
-                "sampled-emissive-rgba8-2d@ps-bti3",
+                "sampled-metallic-roughness-rgba8-2d@ps-bti3",
             ],
             "native_bytes": {"vs": len(vs), "ps8": len(ps8), "ps16": len(ps16 or b"")},
         }

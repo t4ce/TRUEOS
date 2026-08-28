@@ -2113,7 +2113,12 @@ fn primitive_topology_label(topology: u32) -> &'static str {
         0x04 => "trilist",
         0x05 => "tristrip",
         0x06 => "trifan",
+        0x07 => "quadlist",
+        0x08 => "quadstrip",
         0x09 => "linelist_adj",
+        0x0a => "linestrip_adj",
+        0x0b => "trilist_adj",
+        0x0c => "tristrip_adj",
         0x0F => "rectlist",
         _ => "unknown",
     }

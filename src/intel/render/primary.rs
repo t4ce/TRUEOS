@@ -295,18 +295,33 @@ pub(crate) struct ResidentSceneDraw<'a> {
 pub(crate) enum ResidentScenePrimitiveTopology {
     PointList,
     LineList,
+    /// Intel's native `3DPRIM_LINELIST_ADJ`; four VF vertices form one line
+    /// object with its two adjacent-only neighbours.
+    LineListAdj,
     /// A source `LINE_LOOP`; its retained index plan includes the explicit
     /// final-to-first edge and is emitted as a hardware line strip.
     LineLoop,
     LineStrip,
+    /// Intel's native `3DPRIM_LINESTRIP_ADJ`; its endpoint vertices are
+    /// adjacent-only data and the interior forms the visible line strip.
+    LineStripAdj,
     TriangleList,
+    /// Intel's native `3DPRIM_TRILIST_ADJ`; six VF vertices form one triangle
+    /// and its three edge neighbours.
+    TriangleListAdj,
     TriangleStrip,
+    /// Intel's native `3DPRIM_TRISTRIP_ADJ`; even VF vertices form the strip
+    /// and odd vertices carry adjacency-only data.
+    TriangleStripAdj,
     TriangleFan,
     /// Intel's native `3DPRIM_QUADLIST`; four VF vertices form one polygon.
     QuadList,
     /// Intel's native `3DPRIM_QUADSTRIP`; its VF input is converted to the
     /// downstream polygon representation by the hardware front end.
     QuadStrip,
+    /// Intel's native screen-space `3DPRIM_RECTLIST`; each three vertices
+    /// define a rectangle and the fourth corner is implied by hardware.
+    RectList,
 }
 
 impl ResidentScenePrimitiveTopology {
@@ -314,11 +329,16 @@ impl ResidentScenePrimitiveTopology {
         match self {
             Self::PointList => count >= 1,
             Self::LineList => count >= 2 && count.is_multiple_of(2),
+            Self::LineListAdj => count >= 4 && count.is_multiple_of(4),
             Self::LineLoop | Self::LineStrip => count >= 2,
+            Self::LineStripAdj => count >= 4,
             Self::TriangleList => count >= 3 && count.is_multiple_of(3),
+            Self::TriangleListAdj => count >= 6 && count.is_multiple_of(6),
             Self::TriangleStrip | Self::TriangleFan => count >= 3,
+            Self::TriangleStripAdj => count >= 6 && count.is_multiple_of(2),
             Self::QuadList => count >= 4 && count.is_multiple_of(4),
             Self::QuadStrip => count >= 4 && count.is_multiple_of(2),
+            Self::RectList => count >= 3 && count.is_multiple_of(3),
         }
     }
 }
@@ -1530,13 +1550,20 @@ fn stage_resident_scene_secondary(
         match topology {
             ResidentScenePrimitiveTopology::PointList => TriangleBatchMode::PointDraw,
             ResidentScenePrimitiveTopology::LineList => TriangleBatchMode::LineDraw,
+            ResidentScenePrimitiveTopology::LineListAdj => TriangleBatchMode::LineAdjDraw,
             ResidentScenePrimitiveTopology::LineLoop
             | ResidentScenePrimitiveTopology::LineStrip => TriangleBatchMode::LineStripDraw,
+            ResidentScenePrimitiveTopology::LineStripAdj => TriangleBatchMode::LineStripAdjDraw,
             ResidentScenePrimitiveTopology::TriangleList => TriangleBatchMode::Draw,
+            ResidentScenePrimitiveTopology::TriangleListAdj => TriangleBatchMode::TriangleAdjDraw,
             ResidentScenePrimitiveTopology::TriangleStrip => TriangleBatchMode::TriangleStripDraw,
+            ResidentScenePrimitiveTopology::TriangleStripAdj => {
+                TriangleBatchMode::TriangleStripAdjDraw
+            }
             ResidentScenePrimitiveTopology::TriangleFan => TriangleBatchMode::TriangleFanDraw,
             ResidentScenePrimitiveTopology::QuadList => TriangleBatchMode::QuadListDraw,
             ResidentScenePrimitiveTopology::QuadStrip => TriangleBatchMode::QuadStripDraw,
+            ResidentScenePrimitiveTopology::RectList => TriangleBatchMode::RectListDraw,
         },
         StreamoutProofExperiment::HeaderAndPositionSlots01,
         TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
@@ -1616,13 +1643,20 @@ fn stage_resident_churn_forward_secondary(
         match resident.topology() {
             ResidentScenePrimitiveTopology::PointList => TriangleBatchMode::PointDraw,
             ResidentScenePrimitiveTopology::LineList => TriangleBatchMode::LineDraw,
+            ResidentScenePrimitiveTopology::LineListAdj => TriangleBatchMode::LineAdjDraw,
             ResidentScenePrimitiveTopology::LineLoop
             | ResidentScenePrimitiveTopology::LineStrip => TriangleBatchMode::LineStripDraw,
+            ResidentScenePrimitiveTopology::LineStripAdj => TriangleBatchMode::LineStripAdjDraw,
             ResidentScenePrimitiveTopology::TriangleList => TriangleBatchMode::Draw,
+            ResidentScenePrimitiveTopology::TriangleListAdj => TriangleBatchMode::TriangleAdjDraw,
             ResidentScenePrimitiveTopology::TriangleStrip => TriangleBatchMode::TriangleStripDraw,
+            ResidentScenePrimitiveTopology::TriangleStripAdj => {
+                TriangleBatchMode::TriangleStripAdjDraw
+            }
             ResidentScenePrimitiveTopology::TriangleFan => TriangleBatchMode::TriangleFanDraw,
             ResidentScenePrimitiveTopology::QuadList => TriangleBatchMode::QuadListDraw,
             ResidentScenePrimitiveTopology::QuadStrip => TriangleBatchMode::QuadStripDraw,
+            ResidentScenePrimitiveTopology::RectList => TriangleBatchMode::RectListDraw,
         },
         StreamoutProofExperiment::HeaderAndPositionSlots01,
         resident.front_end_contract,
@@ -2215,14 +2249,10 @@ fn submit_resident_churn_forward_geometry_batched(
         && !PICASSO_RETAINED_TEXTURED_SUBMIT_LOGGED.swap(true, Ordering::AcqRel)
     {
         crate::log_important!(target: "render";
-            "picasso-material: proof=retained-material-submit-armed accepted=1 contract=pos-normal-uv+material-bundle graphics_handoff=native-matrices vertex_shader=adls-gfx120-retained-uv-transform-candidate vertex_fetch=pos3+uv2+sgvs3 component_packing=0xA37 pixel_shader=adls-gfx120-base-color-plus-emissive-candidate interpolation=perspective-authored-uv ps_binding_table_alignment=32 ps_bti=[2,3] sampler=0 base={}x{} stride={} emissive_bound={} emissive_factor=[{:.3},{:.3},{:.3}] cpu_texture_sampling=0 cpu_vertex_projection=0 render_submits=1\n",
+            "picasso-material: proof=retained-material-submit-armed accepted=1 contract=pos-normal-uv+base-color-plus-metallic-roughness-alpha-probe graphics_handoff=native-matrices vertex_shader=adls-gfx120-retained-uv-transform-candidate vertex_fetch=pos3+uv2+sgvs3 component_packing=0xA37 pixel_shader=adls-gfx120-base-color-plus-metallic-roughness-alpha-probe-candidate interpolation=perspective-authored-uv ps_binding_table_alignment=32 ps_bti=[2,3] sampler=0 base={}x{} stride={} metallic_roughness_bound=1 cpu_texture_sampling=0 cpu_vertex_projection=0 render_submits=1\n",
             material.base_color.width,
             material.base_color.height,
             material.base_color.pitch,
-            material.emissive.is_some() as u8,
-            material.emissive_factor[0],
-            material.emissive_factor[1],
-            material.emissive_factor[2],
         );
     }
     let completed = match carrier {
@@ -2247,11 +2277,10 @@ fn submit_resident_churn_forward_geometry_batched(
         && !PICASSO_RETAINED_TEXTURED_PATH_LOGGED.swap(true, Ordering::AcqRel)
     {
         crate::log_important!(target: "render";
-            "picasso-material: proof=retained-material-sampled-and-retired accepted=1 contract=pos-normal-uv+material-bundle graphics_handoff=native-matrices vertex_shader=adls-gfx120-retained-uv-transform-candidate pixel_shader=base-color-plus-emissive-simd16-candidate interpolation=perspective-authored-uv base={}x{} stride={} emissive_bound={} cpu_texture_sampling=0 cpu_vertex_projection=0 render_submits=1\n",
+            "picasso-material: proof=retained-material-sampled-and-retired accepted=1 contract=pos-normal-uv+base-color-plus-metallic-roughness-alpha-probe graphics_handoff=native-matrices vertex_shader=adls-gfx120-retained-uv-transform-candidate pixel_shader=base-color-plus-metallic-roughness-alpha-probe-simd16-candidate interpolation=perspective-authored-uv base={}x{} stride={} metallic_roughness_bound=1 cpu_texture_sampling=0 cpu_vertex_projection=0 render_submits=1\n",
             material.base_color.width,
             material.base_color.height,
             material.base_color.pitch,
-            material.emissive.is_some() as u8,
         );
     }
     if !completed && carrier.is_none() {

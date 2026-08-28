@@ -528,7 +528,7 @@ fn write_triangle_probe_state_with_flush(
         return Err("probe-viewport-translation");
     }
     let native_sampled = draw.native.is_some() && draw.sampled_texture.is_some();
-    let native_emissive = native_sampled && draw.emissive_texture.is_some();
+    let native_metallic_roughness = native_sampled && draw.metallic_roughness_texture.is_some();
     let binding_table_entries = if draw.native.is_some() {
         4usize
     } else if draw.sampled_texture.is_some() {
@@ -536,14 +536,14 @@ fn write_triangle_probe_state_with_flush(
     } else {
         1usize
     };
-    let ps_binding_table_entries = if native_emissive {
+    let ps_binding_table_entries = if native_metallic_roughness {
         4usize
     } else if native_sampled {
         3usize
     } else {
         0usize
     };
-    let surface_state_count = if native_emissive {
+    let surface_state_count = if native_metallic_roughness {
         6usize
     } else if native_sampled {
         5usize
@@ -648,7 +648,7 @@ fn write_triangle_probe_state_with_flush(
         // The separately compiled PS consumes RT at BTI0 and the sampled
         // image at BTI2; stage-specific binding-table pointers make those
         // layouts coexist without aliasing the VS instance surface.
-        let ps_surface_indices: &[usize] = if native_emissive {
+        let ps_surface_indices: &[usize] = if native_metallic_roughness {
             &[0, 0, 4, 5]
         } else {
             &[0, 0, 4]
@@ -760,7 +760,7 @@ fn write_triangle_probe_state_with_flush(
             let start = surface_state_offset / 4 + 4 * 16;
             write_triangle_sampled_rgba8_surface_state(&mut dwords[start..start + 16], texture)?;
         }
-        if let Some(texture) = draw.emissive_texture {
+        if let Some(texture) = draw.metallic_roughness_texture {
             let start = surface_state_offset / 4 + 5 * 16;
             write_triangle_sampled_rgba8_surface_state(&mut dwords[start..start + 16], texture)?;
         }
@@ -778,12 +778,12 @@ fn write_triangle_probe_state_with_flush(
     {
         return Err("probe-sampler-mode");
     }
-    if let Some(texture) = draw.emissive_texture
+    if let Some(texture) = draw.metallic_roughness_texture
         && texture.sampler_flags
             != (crate::gpu::vgpu::SAMPLER_ADDRESS_U_REPEAT
                 | crate::gpu::vgpu::SAMPLER_ADDRESS_V_REPEAT)
     {
-        return Err("probe-emissive-sampler-mode");
+        return Err("probe-metallic-roughness-sampler-mode");
     }
     let sampler_words = [sampler[0], sampler[1], sampler[2], sampler[3]];
     if native_sampled && !PICASSO_NATIVE_TEXTURE_STATE_LOGGED.swap(true, Ordering::AcqRel) {
@@ -791,9 +791,8 @@ fn write_triangle_probe_state_with_flush(
             [ps_binding_table_offset / 4..ps_binding_table_offset / 4 + ps_binding_table_entries];
         let texture_surface =
             &dwords[surface_state_offset / 4 + 4 * 16..surface_state_offset / 4 + 5 * 16];
-        let emissive_surface = native_emissive.then(|| {
-            &dwords[surface_state_offset / 4 + 5 * 16..surface_state_offset / 4 + 6 * 16]
-        });
+        let metallic_roughness_surface = native_metallic_roughness
+            .then(|| &dwords[surface_state_offset / 4 + 5 * 16..surface_state_offset / 4 + 6 * 16]);
         let ps_pointer = ps_binding_table_offset
             .checked_sub(shader_layout.state_region_offset_bytes as usize)
             .ok_or("probe-binding-table-base")?;
@@ -801,7 +800,7 @@ fn write_triangle_probe_state_with_flush(
             .sampled_texture
             .ok_or("probe-sampled-texture-surface")?;
         crate::log_important!(target: "render";
-            "picasso-material: proof=retained-material-state-encoded accepted=1 state_base=0x{:X} ps_bt_ptr=0x{:X} ps_bt_count={} ps_bt=[0x{:X},0x{:X},0x{:X},0x{:X}] base_surface=[dw0:0x{:08X},dw1:0x{:08X},dw2:0x{:08X},dw3:0x{:08X},dw7:0x{:08X},dw8:0x{:08X},dw9:0x{:08X}] emissive_surface_present={} sampler=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] base_gpu=0x{:X} base={}x{} stride={}\n",
+            "picasso-material: proof=retained-material-state-encoded accepted=1 state_base=0x{:X} ps_bt_ptr=0x{:X} ps_bt_count={} ps_bt=[0x{:X},0x{:X},0x{:X},0x{:X}] base_surface=[dw0:0x{:08X},dw1:0x{:08X},dw2:0x{:08X},dw3:0x{:08X},dw7:0x{:08X},dw8:0x{:08X},dw9:0x{:08X}] metallic_roughness_surface_present={} sampler=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] base_gpu=0x{:X} base={}x{} stride={}\n",
             shader_layout.state_region_gpu_addr,
             ps_pointer,
             ps_binding_table_entries,
@@ -816,7 +815,7 @@ fn write_triangle_probe_state_with_flush(
             texture_surface[7],
             texture_surface[8],
             texture_surface[9],
-            emissive_surface.is_some() as u8,
+            metallic_roughness_surface.is_some() as u8,
             sampler_words[0],
             sampler_words[1],
             sampler_words[2],
@@ -1262,7 +1261,7 @@ fn validate_triangle_native_draw_contract(
         && native.vf_sgvs_2_dw1 == 0xB002_0002
         && native.vf_component_packing == [0x0000_0A77, 0, 0, 0];
     if !(pos_normal || pos_normal_uv || pos_normal_sampled)
-        || (draw.emissive_texture.is_some() && draw.sampled_texture.is_none())
+        || (draw.metallic_roughness_texture.is_some() && draw.sampled_texture.is_none())
         || draw.emissive_factor.iter().any(|value| !value.is_finite())
         || draw.index_buffer.is_none()
         || draw.indirect_args_gpu_addr.is_none()
@@ -1361,7 +1360,7 @@ mod retained_native_matrix_draw_contract_tests {
             indirect_args_gpu_addr: Some(INDIRECT_GPU),
             native: Some(native),
             sampled_texture: None,
-            emissive_texture: None,
+            metallic_roughness_texture: None,
             emissive_factor: [0.0; 3],
             state_gpu_addr: 0x2600_0000,
             rt_gpu_addr: 0x2700_0000,
@@ -1952,12 +1951,14 @@ fn encode_triangle_probe_batch(
     // SF viewport translation happens after fixed-function clipping. Bypass
     // canonical clip rejection for a translated resident scene and rely on
     // the target scissor for final bounds; otherwise offscreen primitives can
-    // never become visible when the consumer pans toward them.
-    let translated_viewport_clip_bypass = mesa_host_fixed_function
-        && viewport_translation_px
-            .iter()
-            .any(|component| *component != 0.0);
-    let clip_dw1 = if translated_viewport_clip_bypass {
+    // never become visible when the consumer pans toward them. RECTLIST has
+    // the same bypass because the PRM only admits it as screen-space input.
+    let viewport_or_rectlist_clip_bypass = mesa_host_fixed_function
+        && (batch_mode.rect_list_raster()
+            || viewport_translation_px
+                .iter()
+                .any(|component| *component != 0.0));
+    let clip_dw1 = if viewport_or_rectlist_clip_bypass {
         0
     } else if mesa_host_fixed_function {
         0x0004_0400
@@ -1971,7 +1972,7 @@ fn encode_triangle_probe_batch(
                 0
             }
     };
-    let clip_dw2 = if translated_viewport_clip_bypass {
+    let clip_dw2 = if viewport_or_rectlist_clip_bypass {
         CLIP_PERSPECTIVE_DIVIDE_DISABLE
     } else if mesa_host_fixed_function {
         mesa_clip_dw2(batch_mode.point_raster())
@@ -2014,7 +2015,7 @@ fn encode_triangle_probe_batch(
     } else {
         0
     };
-    let clip_dw3 = if translated_viewport_clip_bypass {
+    let clip_dw3 = if viewport_or_rectlist_clip_bypass {
         0
     } else if mesa_host_fixed_function {
         0x0003_FFE0
@@ -2072,7 +2073,8 @@ fn encode_triangle_probe_batch(
     let raster_dw1 = if artifact_native_fixed_function {
         native_raster_dw1(
             draw.native.is_some_and(|native| native.double_sided),
-            draw.native.is_some_and(|native| native.front_face_clockwise),
+            draw.native
+                .is_some_and(|native| native.front_face_clockwise),
         )
     } else if mesa_host_fixed_function {
         if resident_msaa4 {

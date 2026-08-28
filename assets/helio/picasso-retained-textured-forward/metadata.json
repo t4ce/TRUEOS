@@ -5,9 +5,9 @@
     "storage-compacted-indices@vs-bti3",
     "sampled-base-color-rgba8-2d@ps-bti2",
     "sampler@ps-sampler0",
-    "sampled-emissive-rgba8-2d@ps-bti3"
+    "sampled-metallic-roughness-rgba8-2d@ps-bti3"
   ],
-  "contract": "retained-transform-filtered-base-color-plus-emissive",
+  "contract": "retained-transform-filtered-base-color-plus-metallic-roughness-alpha-probe",
   "device": {
     "device_id": 18048,
     "name": "Intel(R) UHD Graphics 770 (ADL-S GT1)",
@@ -49,11 +49,11 @@
         "Instructions": 11,
         "Loops": 0,
         "Max dispatch width": 16,
-        "Max live registers": 12,
-        "Non SSA regs after NIR": 6,
+        "Max live registers": 13,
+        "Non SSA regs after NIR": 5,
         "SENDs": 3,
         "Scratch Memory Size": 0,
-        "Source hash": 4189486275,
+        "Source hash": 3593735095,
         "Spills": 0,
         "Workgroup Memory Size": 0
       }
@@ -71,11 +71,11 @@
         "Instructions": 15,
         "Loops": 0,
         "Max dispatch width": 16,
-        "Max live registers": 23,
-        "Non SSA regs after NIR": 7,
+        "Max live registers": 25,
+        "Non SSA regs after NIR": 5,
         "SENDs": 3,
         "Scratch Memory Size": 0,
-        "Source hash": 4189486275,
+        "Source hash": 3593735095,
         "Spills": 0,
         "Workgroup Memory Size": 0
       }

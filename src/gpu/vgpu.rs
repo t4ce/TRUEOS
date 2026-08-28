@@ -878,7 +878,6 @@ struct RetainedTextureSlot {
 struct RetainedMaterialSubmission {
     textures: [Option<Arc<crate::intel::render::ResidentSampledTexture>>;
         v::vgpu::RETAINED_MATERIAL_TEXTURE_COUNT],
-    emissive_factor: [f32; 3],
 }
 
 impl RetainedMaterialSubmission {
@@ -886,8 +885,8 @@ impl RetainedMaterialSubmission {
         self.textures[v::vgpu::RETAINED_MATERIAL_BASE_COLOR].as_deref()
     }
 
-    fn emissive(&self) -> Option<&crate::intel::render::ResidentSampledTexture> {
-        self.textures[v::vgpu::RETAINED_MATERIAL_EMISSIVE].as_deref()
+    fn metallic_roughness(&self) -> Option<&crate::intel::render::ResidentSampledTexture> {
+        self.textures[v::vgpu::RETAINED_MATERIAL_METALLIC_ROUGHNESS].as_deref()
     }
 }
 
@@ -2018,10 +2017,22 @@ fn retained_mesh_topology(
         }
         v::vgpu::PRIMITIVE_TOPOLOGY_POINT_LIST => Some(ResidentScenePrimitiveTopology::PointList),
         v::vgpu::PRIMITIVE_TOPOLOGY_LINE_LIST => Some(ResidentScenePrimitiveTopology::LineList),
+        v::vgpu::PRIMITIVE_TOPOLOGY_LINE_LIST_ADJ => {
+            Some(ResidentScenePrimitiveTopology::LineListAdj)
+        }
         v::vgpu::PRIMITIVE_TOPOLOGY_LINE_LOOP => Some(ResidentScenePrimitiveTopology::LineLoop),
         v::vgpu::PRIMITIVE_TOPOLOGY_LINE_STRIP => Some(ResidentScenePrimitiveTopology::LineStrip),
+        v::vgpu::PRIMITIVE_TOPOLOGY_LINE_STRIP_ADJ => {
+            Some(ResidentScenePrimitiveTopology::LineStripAdj)
+        }
         v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP => {
             Some(ResidentScenePrimitiveTopology::TriangleStrip)
+        }
+        v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_LIST_ADJ => {
+            Some(ResidentScenePrimitiveTopology::TriangleListAdj)
+        }
+        v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP_ADJ => {
+            Some(ResidentScenePrimitiveTopology::TriangleStripAdj)
         }
         v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_FAN => {
             Some(ResidentScenePrimitiveTopology::TriangleFan)
@@ -2039,22 +2050,42 @@ mod retained_mesh_topology_tests {
     use crate::v::vgpu;
 
     #[test]
-    fn accepts_every_gltf_primitive_mode_and_legacy_triangle_default() {
+    fn accepts_every_retained_native_primitive_mode_and_legacy_triangle_default() {
         let cases = [
             (0, ResidentScenePrimitiveTopology::TriangleList, 3),
             (vgpu::PRIMITIVE_TOPOLOGY_POINT_LIST, ResidentScenePrimitiveTopology::PointList, 1),
             (vgpu::PRIMITIVE_TOPOLOGY_LINE_LIST, ResidentScenePrimitiveTopology::LineList, 2),
+            (
+                vgpu::PRIMITIVE_TOPOLOGY_LINE_LIST_ADJ,
+                ResidentScenePrimitiveTopology::LineListAdj,
+                4,
+            ),
             (vgpu::PRIMITIVE_TOPOLOGY_LINE_LOOP, ResidentScenePrimitiveTopology::LineLoop, 2),
             (vgpu::PRIMITIVE_TOPOLOGY_LINE_STRIP, ResidentScenePrimitiveTopology::LineStrip, 2),
+            (
+                vgpu::PRIMITIVE_TOPOLOGY_LINE_STRIP_ADJ,
+                ResidentScenePrimitiveTopology::LineStripAdj,
+                4,
+            ),
             (
                 vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
                 ResidentScenePrimitiveTopology::TriangleList,
                 3,
             ),
             (
+                vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_LIST_ADJ,
+                ResidentScenePrimitiveTopology::TriangleListAdj,
+                6,
+            ),
+            (
                 vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP,
                 ResidentScenePrimitiveTopology::TriangleStrip,
                 3,
+            ),
+            (
+                vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP_ADJ,
+                ResidentScenePrimitiveTopology::TriangleStripAdj,
+                6,
             ),
             (vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_FAN, ResidentScenePrimitiveTopology::TriangleFan, 3),
             (vgpu::PRIMITIVE_TOPOLOGY_QUAD_LIST, ResidentScenePrimitiveTopology::QuadList, 4),
@@ -4722,10 +4753,12 @@ pub(crate) fn submit_ui4_retained_frame(
         }
         if resident.sampled_material() {
             if material_textures[v::vgpu::RETAINED_MATERIAL_BASE_COLOR].is_none()
-                || material_textures[v::vgpu::RETAINED_MATERIAL_EMISSIVE].is_none()
-                // The first bundled PS rung has no material-uniform surface
-                // yet; it is exact for the DamagedHelmet's identity factor.
-                || submit.material.emissive_factor != [1.0; 3]
+                || material_textures[v::vgpu::RETAINED_MATERIAL_METALLIC_ROUGHNESS].is_none()
+                || material_textures[v::vgpu::RETAINED_MATERIAL_EMISSIVE].is_some()
+                || material_textures[v::vgpu::RETAINED_MATERIAL_OCCLUSION].is_some()
+                || material_textures[v::vgpu::RETAINED_MATERIAL_NORMAL].is_some()
+                // This alpha-preserving metallic-roughness probe has no factor uniform.
+                || submit.material.emissive_factor != [0.0; 3]
             {
                 return Err(reject_retained_submission(
                     device,
@@ -4748,7 +4781,6 @@ pub(crate) fn submit_ui4_retained_frame(
         }
         let retained_material = RetainedMaterialSubmission {
             textures: material_textures,
-            emissive_factor: submit.material.emissive_factor,
         };
         let cached = match lookup_retained_mesh(device, mesh_handle)?
             .static_geometry
@@ -5032,13 +5064,13 @@ pub(crate) fn submit_ui4_retained_frame(
             topology: crate::intel::render::ResidentScenePrimitiveTopology::LineList,
         })
         .collect::<Vec<_>>();
-    let render_material = retained_material.base_color().map(|base_color| {
-        crate::intel::render::ResidentRetainedMaterial {
+    let render_material = retained_material
+        .base_color()
+        .zip(retained_material.metallic_roughness())
+        .map(|(base_color, metallic_roughness)| crate::intel::render::ResidentRetainedMaterial {
             base_color,
-            emissive: retained_material.emissive(),
-            emissive_factor: retained_material.emissive_factor,
-        }
-    });
+            metallic_roughness,
+        });
     let rendered =
         crate::intel::render::render_resident_retained_with_static_draws_direct_to_surface(
             &resident,

@@ -158,9 +158,9 @@ struct TriangleDrawPrep {
     /// Present only after a complete artifact/native ABI validation.
     native: Option<TriangleNativeDrawContract>,
     sampled_texture: Option<TriangleSampledTextureBinding>,
-    /// Optional second sampled image for the base-color-plus-emissive rung.
+    /// Second sampled image for the base-color-plus-metallic-roughness probe.
     /// It is meaningful only with `sampled_texture`, which is base color.
-    emissive_texture: Option<TriangleSampledTextureBinding>,
+    metallic_roughness_texture: Option<TriangleSampledTextureBinding>,
     emissive_factor: [f32; 3],
     state_gpu_addr: u64,
     rt_gpu_addr: u64,
@@ -314,14 +314,13 @@ pub(crate) struct ResidentSampledTexture {
 unsafe impl Send for ResidentSampledTexture {}
 unsafe impl Sync for ResidentSampledTexture {}
 
-/// The first retained material shader rung: authored UV samples base color and
-/// optionally adds emissive. Other glTF maps stay resident in the submission
-/// bundle until their PBR/tangent-space consumers are introduced.
+/// The retained material observation rung: authored UV samples base color and
+/// metallic-roughness. The second JPEG's opaque alpha preserves base-color
+/// output; PBR channel interpretation waits for the lighting path.
 #[derive(Clone, Copy)]
 pub(crate) struct ResidentRetainedMaterial<'a> {
     pub(crate) base_color: &'a ResidentSampledTexture,
-    pub(crate) emissive: Option<&'a ResidentSampledTexture>,
-    pub(crate) emissive_factor: [f32; 3],
+    pub(crate) metallic_roughness: &'a ResidentSampledTexture,
 }
 
 // The authenticated instruction allocation is process-lifetime resident in
@@ -795,11 +794,16 @@ enum TriangleBatchMode {
     Draw,
     PointDraw,
     LineDraw,
+    LineAdjDraw,
     LineStripDraw,
+    LineStripAdjDraw,
     TriangleStripDraw,
+    TriangleAdjDraw,
+    TriangleStripAdjDraw,
     TriangleFanDraw,
     QuadListDraw,
     QuadStripDraw,
+    RectListDraw,
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     DrawScreenSpace,
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
@@ -2209,14 +2213,20 @@ impl TriangleBatchMode {
                 trueos_helio_artifact::render_ir::PrimitiveTopology::LineList,
             )
             .expect("Intel supports line lists"),
+            // The adjacency types are Intel-native VF topology encodings;
+            // Helio's glTF-oriented IR has no representation for them.
+            Self::LineAdjDraw => INTEL_TOPOLOGY_LINELIST_ADJ,
             Self::LineStripDraw => intel_topology_from_helio(
                 trueos_helio_artifact::render_ir::PrimitiveTopology::LineStrip,
             )
             .expect("Intel supports line strips"),
+            Self::LineStripAdjDraw => INTEL_TOPOLOGY_LINESTRIP_ADJ,
             Self::TriangleStripDraw => intel_topology_from_helio(
                 trueos_helio_artifact::render_ir::PrimitiveTopology::TriangleStrip,
             )
             .expect("Intel supports triangle strips"),
+            Self::TriangleAdjDraw => INTEL_TOPOLOGY_TRILIST_ADJ,
+            Self::TriangleStripAdjDraw => INTEL_TOPOLOGY_TRISTRIP_ADJ,
             Self::TriangleFanDraw => intel_topology_from_helio(
                 trueos_helio_artifact::render_ir::PrimitiveTopology::TriangleFan,
             )
@@ -2229,6 +2239,10 @@ impl TriangleBatchMode {
             // IR primitive. Keep this explicit retained vGPU path native
             // instead of lowering the mesh to triangles.
             Self::QuadStripDraw => INTEL_TOPOLOGY_QUADSTRIP,
+            // RECTLIST is a native screen-space rectangle primitive. Each
+            // three vertices carry lower-right, lower-left, upper-left; SF
+            // derives the final corner without a triangle-list lowering.
+            Self::RectListDraw => INTEL_TOPOLOGY_RECTLIST,
             Self::VfLineDraw => intel_topology_from_helio(
                 trueos_helio_artifact::render_ir::PrimitiveTopology::LineList,
             )
@@ -2251,11 +2265,16 @@ impl TriangleBatchMode {
             Self::Draw => "draw",
             Self::PointDraw => "point-draw",
             Self::LineDraw => "line-draw",
+            Self::LineAdjDraw => "line-list-adj-draw",
             Self::LineStripDraw => "line-strip-draw",
+            Self::LineStripAdjDraw => "line-strip-adj-draw",
             Self::TriangleStripDraw => "triangle-strip-draw",
+            Self::TriangleAdjDraw => "triangle-list-adj-draw",
+            Self::TriangleStripAdjDraw => "triangle-strip-adj-draw",
             Self::TriangleFanDraw => "triangle-fan-draw",
             Self::QuadListDraw => "quad-list-draw",
             Self::QuadStripDraw => "quad-strip-draw",
+            Self::RectListDraw => "rect-list-draw",
             Self::DrawScreenSpace => "draw-screen-space",
             Self::DrawScreenSpaceRect => "draw-screen-space-rect",
             Self::VfDraw => "vf-draw",
@@ -2287,7 +2306,14 @@ impl TriangleBatchMode {
     }
 
     fn line_raster(self) -> bool {
-        matches!(self, Self::LineDraw | Self::LineStripDraw | Self::VfLineDraw)
+        matches!(
+            self,
+            Self::LineDraw
+                | Self::LineAdjDraw
+                | Self::LineStripDraw
+                | Self::LineStripAdjDraw
+                | Self::VfLineDraw
+        )
     }
 
     fn screen_space_raster(self) -> bool {
@@ -2295,9 +2321,17 @@ impl TriangleBatchMode {
             self,
             Self::DrawScreenSpace
                 | Self::DrawScreenSpaceRect
+                | Self::RectListDraw
                 | Self::VfScreenSpaceDraw
                 | Self::VfRectDraw
         )
+    }
+
+    /// Intel's native rectangle primitive is not a general clip-space 3D
+    /// topology. The batch encoder must bypass the normal CLIP contract when
+    /// this screen-space path is selected.
+    fn rect_list_raster(self) -> bool {
+        matches!(self, Self::RectListDraw)
     }
 
     fn streamout_enabled(self) -> bool {
@@ -3186,6 +3220,11 @@ mod primitive_topology_tests {
         assert_eq!(intel_topology_from_helio(PrimitiveTopology::TriangleFan), Ok(0x06));
         assert_eq!(TriangleBatchMode::QuadListDraw.topology(), 0x07);
         assert_eq!(TriangleBatchMode::QuadStripDraw.topology(), 0x08);
+        assert_eq!(TriangleBatchMode::LineAdjDraw.topology(), 0x09);
+        assert_eq!(TriangleBatchMode::LineStripAdjDraw.topology(), 0x0a);
+        assert_eq!(TriangleBatchMode::TriangleAdjDraw.topology(), 0x0b);
+        assert_eq!(TriangleBatchMode::TriangleStripAdjDraw.topology(), 0x0c);
+        assert_eq!(TriangleBatchMode::RectListDraw.topology(), 0x0f);
     }
 
     #[test]
@@ -3195,10 +3234,17 @@ mod primitive_topology_tests {
         assert!(Topology::PointList.accepts_index_count(1));
         assert!(Topology::LineList.accepts_index_count(2));
         assert!(!Topology::LineList.accepts_index_count(3));
+        assert!(Topology::LineListAdj.accepts_index_count(4));
+        assert!(!Topology::LineListAdj.accepts_index_count(6));
         assert!(Topology::LineStrip.accepts_index_count(3));
+        assert!(Topology::LineStripAdj.accepts_index_count(4));
         assert!(Topology::TriangleList.accepts_index_count(6));
         assert!(!Topology::TriangleList.accepts_index_count(4));
+        assert!(Topology::TriangleListAdj.accepts_index_count(6));
+        assert!(!Topology::TriangleListAdj.accepts_index_count(9));
         assert!(Topology::TriangleStrip.accepts_index_count(4));
+        assert!(Topology::TriangleStripAdj.accepts_index_count(6));
+        assert!(!Topology::TriangleStripAdj.accepts_index_count(7));
         assert!(Topology::TriangleFan.accepts_index_count(4));
         assert!(Topology::QuadList.accepts_index_count(4));
         assert!(Topology::QuadList.accepts_index_count(8));
@@ -3206,6 +3252,9 @@ mod primitive_topology_tests {
         assert!(Topology::QuadStrip.accepts_index_count(4));
         assert!(Topology::QuadStrip.accepts_index_count(6));
         assert!(!Topology::QuadStrip.accepts_index_count(5));
+        assert!(Topology::RectList.accepts_index_count(3));
+        assert!(Topology::RectList.accepts_index_count(6));
+        assert!(!Topology::RectList.accepts_index_count(4));
     }
 
     #[test]
