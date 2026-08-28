@@ -2009,10 +2009,11 @@ pub(crate) fn toggle_window_maximized(
     if changed {
         window.placement = placement;
         window.placement_transition = None;
-        window.replacement_presentation = (!maximized
-            && window.interaction.resize_on_maximize
-            && producer_resize_required(window.interaction, previous, placement))
-        .then_some(previous);
+        // Resize notification is advisory.  A producer may defer or ignore
+        // it, so restoring must immediately expose the saved placement rather
+        // than pinning the old maximized presentation until a replacement
+        // frame happens to be published.
+        window.replacement_presentation = None;
         window.damage = Some(DamageRegion::FULL);
         window.revision = next_serial(window.revision);
     }
