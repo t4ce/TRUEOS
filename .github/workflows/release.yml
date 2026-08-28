@@ -153,6 +153,11 @@ jobs:
           # repositories to be siblings. Keep the CI checkout itself under the
           # ignored bld/ tree while preserving that layout.
           ln -s .. bld/TRUEOS
+          # TRUEOS itself also has a path dependency on log-os.  Cargo resolves
+          # it from the TRUEOS checkout, so provide the sibling path it expects
+          # in addition to the bld/ layout used by Blueprint builds.
+          ln -s "${GITHUB_WORKSPACE}/bld/TRUEOS-Blueprints" \
+            "${GITHUB_WORKSPACE}/../TRUEOS-Blueprints"
 
       - name: Locate firmware and OVMF
         id: paths

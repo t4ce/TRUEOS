@@ -396,6 +396,9 @@ fn broker_primitive_topology(
         v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_FAN => {
             Ok(crate::intel::render::ResidentScenePrimitiveTopology::TriangleFan)
         }
+        v::vgpu::PRIMITIVE_TOPOLOGY_QUAD_LIST => {
+            Ok(crate::intel::render::ResidentScenePrimitiveTopology::QuadList)
+        }
         v::vgpu::PRIMITIVE_TOPOLOGY_QUAD_STRIP => {
             Ok(crate::intel::render::ResidentScenePrimitiveTopology::QuadStrip)
         }
@@ -417,6 +420,7 @@ mod primitive_topology_tests {
             (v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, Topology::TriangleList),
             (v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP, Topology::TriangleStrip),
             (v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_FAN, Topology::TriangleFan),
+            (v::vgpu::PRIMITIVE_TOPOLOGY_QUAD_LIST, Topology::QuadList),
             (v::vgpu::PRIMITIVE_TOPOLOGY_QUAD_STRIP, Topology::QuadStrip),
         ];
 
@@ -436,7 +440,7 @@ pub(crate) fn broker_ui4_indexed_batch_submit_v2(
 ) -> Result<v::vgpu::TimelinePoint, i32> {
     let draw_count = usize::try_from(batch.draw_count).map_err(|_| -22)?;
     if draw_count == 0
-        || draw_count > v::vgpu::MAX_INDEXED_BATCH_DRAWS
+        || draw_count > v::vgpu::MAX_INDEXED_BATCH_V2_DRAWS
         || batch.draws[..draw_count]
             .iter()
             .any(|draw| draw.reserved != 0)

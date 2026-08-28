@@ -208,18 +208,24 @@ pub struct IndexedDraw {
 }
 
 pub const MAX_INDEXED_BATCH_DRAWS: usize = 16;
+/// The mixed-topology V2 batch maps directly to the resident renderer's
+/// 100-draw scene capacity. V1 remains at 16 for ABI compatibility.
+pub const MAX_INDEXED_BATCH_V2_DRAWS: usize = 100;
 pub const PRIMITIVE_TOPOLOGY_POINT_LIST: u32 = 1;
 pub const PRIMITIVE_TOPOLOGY_LINE_LIST: u32 = 2;
 pub const PRIMITIVE_TOPOLOGY_LINE_STRIP: u32 = 3;
 pub const PRIMITIVE_TOPOLOGY_TRIANGLE_LIST: u32 = 4;
 pub const PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP: u32 = 5;
 pub const PRIMITIVE_TOPOLOGY_TRIANGLE_FAN: u32 = 6;
-/// glTF `LINE_LOOP`. Intel has no corresponding primitive mode, so retained
-/// submission materializes its closing index and encodes it as a line strip.
-pub const PRIMITIVE_TOPOLOGY_LINE_LOOP: u32 = 7;
+/// Intel `3DPRIM_QUADLIST` / `3DSTATE_VF_TOPOLOGY` value 0x07. Every four
+/// consecutive vertices form one independent quad.
+pub const PRIMITIVE_TOPOLOGY_QUAD_LIST: u32 = 7;
 /// Intel `3DPRIM_QUADSTRIP` / `3DSTATE_VF_TOPOLOGY` value 0x08. Each pair of
 /// vertices after the first pair completes one connected four-vertex quad.
 pub const PRIMITIVE_TOPOLOGY_QUAD_STRIP: u32 = 8;
+/// Intel `3DPRIM_LINELOOP` value 0x10. Retained submission materializes its
+/// final-to-first edge and emits it as a hardware line strip.
+pub const PRIMITIVE_TOPOLOGY_LINE_LOOP: u32 = 0x10;
 
 /// One indexed range in a single-target, single-pipeline render-pass batch.
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
@@ -262,7 +268,7 @@ pub struct IndexedBatchDrawV2 {
     pub reserved: u32,
 }
 
-#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(C)]
 pub struct IndexedDrawBatchV2 {
     pub surface: u64,
@@ -273,11 +279,36 @@ pub struct IndexedDrawBatchV2 {
     pub index_offset: u64,
     pub clear_rgba8_srgb: u32,
     pub draw_count: u32,
-    pub draws: [IndexedBatchDrawV2; MAX_INDEXED_BATCH_DRAWS],
+    pub draws: [IndexedBatchDrawV2; MAX_INDEXED_BATCH_V2_DRAWS],
+}
+
+impl Default for IndexedDrawBatchV2 {
+    fn default() -> Self {
+        Self {
+            surface: 0,
+            pipeline: 0,
+            vertex_buffer: 0,
+            index_buffer: 0,
+            vertex_offset: 0,
+            index_offset: 0,
+            clear_rgba8_srgb: 0,
+            draw_count: 0,
+            draws: [IndexedBatchDrawV2::default(); MAX_INDEXED_BATCH_V2_DRAWS],
+        }
+    }
 }
 
 pub const MAX_RETAINED_TRANSFORM_SEEDS: usize = 4;
 pub const MAX_RETAINED_STATIC_DRAWS: usize = 3;
+/// Fixed role order in the retained material descriptor. A zero texture ID is
+/// an absent optional glTF map; every nonzero ID is validated as part of the
+/// same owner-scoped submission.
+pub const RETAINED_MATERIAL_TEXTURE_COUNT: usize = 5;
+pub const RETAINED_MATERIAL_BASE_COLOR: usize = 0;
+pub const RETAINED_MATERIAL_METALLIC_ROUGHNESS: usize = 1;
+pub const RETAINED_MATERIAL_EMISSIVE: usize = 2;
+pub const RETAINED_MATERIAL_OCCLUSION: usize = 3;
+pub const RETAINED_MATERIAL_NORMAL: usize = 4;
 pub const RETAINED_VERTEX_LAYOUT_POS_NORMAL: u32 = 0;
 pub const RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV: u32 = 1;
 /// Retained mesh topology field flag: honor glTF material `doubleSided` by
@@ -336,14 +367,29 @@ pub struct RetainedCamera {
     pub previous_view_projection: [f32; 16],
 }
 
+/// One atomically validated retained material submission.
+///
+/// Images remain individual owner-scoped vmedia resources so their lifetime
+/// can be reclaimed independently by the application. This descriptor is the
+/// render-time bundle: it keeps their roles and scalar emissive factor in one
+/// ABI value, and never negotiates map residency one texture at a time.
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+#[repr(C)]
+pub struct RetainedMaterial {
+    pub textures: [u64; RETAINED_MATERIAL_TEXTURE_COUNT],
+    pub emissive_factor: [f32; 3],
+    pub reserved: u32,
+}
+
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
 #[repr(C)]
 pub struct RetainedFrameSubmit {
     pub surface: u64,
     pub mesh: u64,
-    /// Owner-scoped generation-checked vmedia TextureId. Required exactly
-    /// when the retained mesh declares POS_NORMAL_UV.
-    pub base_color_texture: u64,
+    /// Owner-scoped generation-checked vmedia material bundle. A POS_NORMAL_UV
+    /// retained mesh requires the base-color slot; remaining glTF slots are
+    /// optional but, when present, are validated together.
+    pub material: RetainedMaterial,
     pub static_vertex_buffer: u64,
     pub static_index_buffer: u64,
     pub static_vertex_offset: u64,
@@ -834,7 +880,7 @@ impl Device {
         if queue.device != self
             || surface.device != self
             || batch.draw_count == 0
-            || batch.draw_count as usize > MAX_INDEXED_BATCH_DRAWS
+            || batch.draw_count as usize > MAX_INDEXED_BATCH_V2_DRAWS
         {
             return Err(ERR_BAD_HANDLE);
         }
@@ -1113,16 +1159,18 @@ mod tests {
         assert_eq!(core::mem::size_of::<IndexedBatchDraw>(), 16);
         assert_eq!(core::mem::size_of::<IndexedDrawBatch>(), 312);
         assert_eq!(core::mem::size_of::<IndexedBatchDrawV2>(), 24);
-        assert_eq!(core::mem::size_of::<IndexedDrawBatchV2>(), 440);
+        assert_eq!(core::mem::size_of::<IndexedDrawBatchV2>(), 2456);
         assert_eq!(core::mem::size_of::<RetainedMeshDescriptor>(), 48);
         assert_eq!(core::mem::offset_of!(RetainedMeshDescriptor, topology), 44);
         assert_eq!(core::mem::size_of::<RetainedTransformSeed>(), 64);
         assert_eq!(core::mem::size_of::<RetainedCamera>(), 368);
-        assert_eq!(core::mem::size_of::<RetainedFrameSubmit>(), 768);
+        assert_eq!(core::mem::size_of::<RetainedMaterial>(), 56);
+        assert_eq!(core::mem::size_of::<RetainedFrameSubmit>(), 816);
         assert_eq!(core::mem::align_of::<RetainedFrameSubmit>(), 8);
-        assert_eq!(core::mem::offset_of!(RetainedFrameSubmit, static_vertex_revision), 68);
-        assert_eq!(core::mem::offset_of!(RetainedFrameSubmit, camera), 72);
-        assert_eq!(core::mem::offset_of!(RetainedFrameSubmit, seeds), 440);
+        assert_eq!(core::mem::offset_of!(RetainedFrameSubmit, material), 16);
+        assert_eq!(core::mem::offset_of!(RetainedFrameSubmit, static_vertex_revision), 116);
+        assert_eq!(core::mem::offset_of!(RetainedFrameSubmit, camera), 120);
+        assert_eq!(core::mem::offset_of!(RetainedFrameSubmit, seeds), 488);
         assert_eq!(core::mem::size_of::<TimelinePoint>(), 16);
         assert_eq!(core::mem::size_of::<TimelineStatus>(), 32);
         assert_eq!(core::mem::size_of::<CloudWorkGraphDescriptor>(), 56);

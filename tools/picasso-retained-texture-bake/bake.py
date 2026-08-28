@@ -19,9 +19,6 @@ TRUEOS = Path(__file__).resolve().parents[2]
 BAKER_PATH = TRUEOS / "tools/helio-intel-bake/bake.py"
 WGSL = Path(__file__).resolve().parent / "shaders/retained_textured_forward.wgsl"
 OUT = TRUEOS / "assets/helio/picasso-retained-textured-forward"
-PROVEN_ADLS_TEXTURE_PS = (
-    TRUEOS / "assets/helio/heliov-textured-mesh/voxel_textured.ps.simd16.bin"
-)
 ADLS_DEVICE_ID = 0x4680
 ADLS_NOOP_SHIM_IDENTITY = "noop-drm-shim:8086:4680:r0c"
 
@@ -175,7 +172,7 @@ def main() -> None:
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
         .bindingCount = 3,
         .pBindings = storage_bindings,
-    };""", """    const VkDescriptorSetLayoutBinding retained_bindings[5] = {
+    };""", """    const VkDescriptorSetLayoutBinding retained_bindings[6] = {
         { .binding = 0, .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
           .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_VERTEX_BIT },
         { .binding = 1, .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -186,10 +183,12 @@ def main() -> None:
           .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT },
         { .binding = 4, .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER,
           .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT },
+        { .binding = 5, .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+          .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT },
     };
     const VkDescriptorSetLayoutCreateInfo set_layout_info = {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-        .bindingCount = 5,
+        .bindingCount = 6,
         .pBindings = retained_bindings,
     };""")
         source_path.write_text(source)
@@ -230,8 +229,8 @@ def main() -> None:
                 "Picasso retained texture vertex recovery disagrees with Mesa's code size: "
                 f"recovered={len(vs)} reported={vertex_sizes[0]}"
             )
-        if ps16 is None or ps16 != PROVEN_ADLS_TEXTURE_PS.read_bytes():
-            raise SystemExit("retained fragment no longer matches proven ADL-S SIMD16 sampler")
+        if ps16 is None or len(ps16) == 0 or len(ps16) % 8:
+            raise SystemExit("Picasso retained material bake lacks an aligned SIMD16 fragment")
 
         out.mkdir(parents=True, exist_ok=True)
         (out / "retained_textured_forward.vs.simd8.bin").write_bytes(vs)
@@ -244,7 +243,7 @@ def main() -> None:
             shutil.copy2(assembly, out / assembly.name)
         metadata = {
             "schema": 1,
-            "contract": "retained-transform-filtered-base-color",
+            "contract": "retained-transform-filtered-base-color-plus-emissive",
             "frontend": frontend,
             "device": device,
             "target": "intel-adl-s-uhd-770-0x4680",
@@ -252,15 +251,16 @@ def main() -> None:
             "executables": list(executables.values()),
             "vertex_stride": 32,
             "runtime_dispatch": {"vertex": "simd8", "fragment": "simd16"},
-            "fragment_proof": "byte-identical-heliov-adls-simd16-sampler",
+            "fragment_proof": "adls-noop-drm-shim-compiler-candidate",
             "storage_attributes": ["float32x3@0", "float32x3@12", "float32x2@24"],
             "shader_attributes": ["float32x3@0", "float32x2@24"],
             "bindings": [
                 "storage-camera@vs-bti1",
                 "storage-instances@vs-bti2",
                 "storage-compacted-indices@vs-bti3",
-                "sampled-rgba8-2d@ps-bti2",
+                "sampled-base-color-rgba8-2d@ps-bti2",
                 "sampler@ps-sampler0",
+                "sampled-emissive-rgba8-2d@ps-bti3",
             ],
             "native_bytes": {"vs": len(vs), "ps8": len(ps8), "ps16": len(ps16 or b"")},
         }

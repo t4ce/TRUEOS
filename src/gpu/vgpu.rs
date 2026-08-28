@@ -46,7 +46,7 @@ pub(crate) const SHADER_PACKAGE_CLIP_POSITION3_IMMEDIATE_RGBA_FNV1A64: u64 = 0x4
 pub(crate) const SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64: u64 = 0xD2A3_B942_FA09_24B6;
 pub(crate) const SHADER_PACKAGE_CLIP_POSITION3_UV_TEXEL_LOAD_FNV1A64: u64 = 0x0CFE_4DDB_C885_8871;
 const SHADER_PACKAGE_CLIP_POSITION3_RGBA_COLOR: u32 = u32::from_le_bytes([118, 221, 153, 255]);
-pub(crate) const MAX_INDEXED_BATCH_DRAWS: usize = 16;
+pub(crate) const MAX_INDEXED_BATCH_DRAWS: usize = v::vgpu::MAX_INDEXED_BATCH_V2_DRAWS;
 
 /// The only native cloud graph currently understood by the broker.  This is
 /// a profile selector, not a shader ID supplied by the tenant: the kernel maps
@@ -870,6 +870,25 @@ struct RetainedTextureRecord {
 struct RetainedTextureSlot {
     generation: u32,
     record: Option<RetainedTextureRecord>,
+}
+
+/// Staged, carrier-pinned members of one `RetainedMaterial` ABI value. The
+/// broker resolves every supplied opaque ID before it lets rendering begin, so
+/// a frame cannot mix textures from another epoch or Picasso carrier.
+struct RetainedMaterialSubmission {
+    textures: [Option<Arc<crate::intel::render::ResidentSampledTexture>>;
+        v::vgpu::RETAINED_MATERIAL_TEXTURE_COUNT],
+    emissive_factor: [f32; 3],
+}
+
+impl RetainedMaterialSubmission {
+    fn base_color(&self) -> Option<&crate::intel::render::ResidentSampledTexture> {
+        self.textures[v::vgpu::RETAINED_MATERIAL_BASE_COLOR].as_deref()
+    }
+
+    fn emissive(&self) -> Option<&crate::intel::render::ResidentSampledTexture> {
+        self.textures[v::vgpu::RETAINED_MATERIAL_EMISSIVE].as_deref()
+    }
 }
 
 struct CloudSubmissionLease {
@@ -2007,6 +2026,7 @@ fn retained_mesh_topology(
         v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_FAN => {
             Some(ResidentScenePrimitiveTopology::TriangleFan)
         }
+        v::vgpu::PRIMITIVE_TOPOLOGY_QUAD_LIST => Some(ResidentScenePrimitiveTopology::QuadList),
         v::vgpu::PRIMITIVE_TOPOLOGY_QUAD_STRIP => Some(ResidentScenePrimitiveTopology::QuadStrip),
         _ => None,
     }
@@ -2037,6 +2057,7 @@ mod retained_mesh_topology_tests {
                 3,
             ),
             (vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_FAN, ResidentScenePrimitiveTopology::TriangleFan, 3),
+            (vgpu::PRIMITIVE_TOPOLOGY_QUAD_LIST, ResidentScenePrimitiveTopology::QuadList, 4),
             (vgpu::PRIMITIVE_TOPOLOGY_QUAD_STRIP, ResidentScenePrimitiveTopology::QuadStrip, 4),
         ];
         for (wire, expected, valid_count) in cases {
@@ -4587,7 +4608,7 @@ pub(crate) fn submit_ui4_retained_frame(
         height,
         pitch,
         resident,
-        retained_texture,
+        retained_material,
         carrier,
         cached_line_meshes,
         pending_static_parts,
@@ -4653,39 +4674,81 @@ pub(crate) fn submit_ui4_retained_frame(
             record.in_flight = 1;
             (Arc::clone(&record.resident), record.carrier)
         };
-        let retained_texture = if resident.sampled_material() {
-            if submit.base_color_texture == 0 {
-                lookup_retained_mesh_mut(device, mesh_handle)?.in_flight = 0;
-                lookup_surface_mut(device, surface_handle)?.in_flight = 1;
-                lookup_queue_mut(device, queue_handle)?.in_flight = 0;
-                return Err(VgpuError::Unsupported);
+        if submit.material.reserved != 0
+            || submit
+                .material
+                .emissive_factor
+                .iter()
+                .any(|value| !value.is_finite())
+        {
+            return Err(reject_retained_submission(
+                device,
+                mesh_handle,
+                surface_handle,
+                queue_handle,
+                VgpuError::Unsupported,
+            ));
+        }
+        let mut material_textures = core::array::from_fn(|_| None);
+        for (role, texture_id) in submit.material.textures.iter().copied().enumerate() {
+            if texture_id == 0 {
+                continue;
             }
-            let texture_handle = RetainedTextureHandle::from_raw(submit.base_color_texture);
+            let texture_handle = RetainedTextureHandle::from_raw(texture_id);
             let texture = match lookup_retained_texture(device, texture_handle) {
                 Ok(texture) if texture.epoch == surface_epoch && texture.carrier == carrier => {
                     Arc::clone(&texture.resident)
                 }
                 Ok(_) => {
-                    lookup_retained_mesh_mut(device, mesh_handle)?.in_flight = 0;
-                    lookup_surface_mut(device, surface_handle)?.in_flight = 1;
-                    lookup_queue_mut(device, queue_handle)?.in_flight = 0;
-                    return Err(VgpuError::DeviceLost);
+                    return Err(reject_retained_submission(
+                        device,
+                        mesh_handle,
+                        surface_handle,
+                        queue_handle,
+                        VgpuError::DeviceLost,
+                    ));
                 }
                 Err(error) => {
-                    lookup_retained_mesh_mut(device, mesh_handle)?.in_flight = 0;
-                    lookup_surface_mut(device, surface_handle)?.in_flight = 1;
-                    lookup_queue_mut(device, queue_handle)?.in_flight = 0;
-                    return Err(error);
+                    return Err(reject_retained_submission(
+                        device,
+                        mesh_handle,
+                        surface_handle,
+                        queue_handle,
+                        error,
+                    ));
                 }
             };
-            Some(texture)
-        } else if submit.base_color_texture != 0 {
-            lookup_retained_mesh_mut(device, mesh_handle)?.in_flight = 0;
-            lookup_surface_mut(device, surface_handle)?.in_flight = 1;
-            lookup_queue_mut(device, queue_handle)?.in_flight = 0;
-            return Err(VgpuError::Unsupported);
-        } else {
-            None
+            material_textures[role] = Some(texture);
+        }
+        if resident.sampled_material() {
+            if material_textures[v::vgpu::RETAINED_MATERIAL_BASE_COLOR].is_none()
+                || material_textures[v::vgpu::RETAINED_MATERIAL_EMISSIVE].is_none()
+                // The first bundled PS rung has no material-uniform surface
+                // yet; it is exact for the DamagedHelmet's identity factor.
+                || submit.material.emissive_factor != [1.0; 3]
+            {
+                return Err(reject_retained_submission(
+                    device,
+                    mesh_handle,
+                    surface_handle,
+                    queue_handle,
+                    VgpuError::Unsupported,
+                ));
+            }
+        } else if material_textures.iter().any(Option::is_some)
+            || submit.material.emissive_factor != [0.0; 3]
+        {
+            return Err(reject_retained_submission(
+                device,
+                mesh_handle,
+                surface_handle,
+                queue_handle,
+                VgpuError::Unsupported,
+            ));
+        }
+        let retained_material = RetainedMaterialSubmission {
+            textures: material_textures,
+            emissive_factor: submit.material.emissive_factor,
         };
         let cached = match lookup_retained_mesh(device, mesh_handle)?
             .static_geometry
@@ -4765,7 +4828,7 @@ pub(crate) fn submit_ui4_retained_frame(
             surface_meta.5,
             surface_meta.6,
             resident,
-            retained_texture,
+            retained_material,
             carrier,
             cached_line_meshes,
             pending_static_parts,
@@ -4969,10 +5032,17 @@ pub(crate) fn submit_ui4_retained_frame(
             topology: crate::intel::render::ResidentScenePrimitiveTopology::LineList,
         })
         .collect::<Vec<_>>();
+    let render_material = retained_material.base_color().map(|base_color| {
+        crate::intel::render::ResidentRetainedMaterial {
+            base_color,
+            emissive: retained_material.emissive(),
+            emissive_factor: retained_material.emissive_factor,
+        }
+    });
     let rendered =
         crate::intel::render::render_resident_retained_with_static_draws_direct_to_surface(
             &resident,
-            retained_texture.as_deref(),
+            render_material,
             &line_draws,
             Some(submit.clear_rgba8_srgb.to_le_bytes()),
             destination,
@@ -5051,6 +5121,28 @@ fn rollback_indexed_submission_lease(
             queue.in_flight = 0;
         }
     }
+}
+
+/// Undo the three in-broker reservations made before a retained frame's
+/// material descriptor is fully validated. This is deliberately local to the
+/// locked validation phase; later failures use the full carrier lease rollback.
+fn reject_retained_submission(
+    device: &mut VirtualDevice,
+    mesh_handle: RetainedMeshHandle,
+    surface_handle: SurfaceHandle,
+    queue_handle: QueueHandle,
+    error: VgpuError,
+) -> VgpuError {
+    if let Ok(mesh) = lookup_retained_mesh_mut(device, mesh_handle) {
+        mesh.in_flight = 0;
+    }
+    if let Ok(surface) = lookup_surface_mut(device, surface_handle) {
+        surface.in_flight = 1;
+    }
+    if let Ok(queue) = lookup_queue_mut(device, queue_handle) {
+        queue.in_flight = 0;
+    }
+    error
 }
 
 fn rollback_retained_submission_lease(

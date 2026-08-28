@@ -2,7 +2,9 @@
 //
 // Geometry and UVs are immutable vertex data. Camera, instance matrices and
 // compacted instance IDs are GPU-resident outputs shared with Helio Churn.
-// The fragment stage consumes one engine-resolved retained RGBA8 texture.
+// The first material rung samples engine-resolved base color and emissive
+// RGBA8 textures with the same authored UV. Metallic/roughness, occlusion and
+// tangent-space normal maps remain in the retained bundle for later PBR work.
 
 struct Camera {
     view:           mat4x4<f32>,
@@ -33,6 +35,7 @@ struct GpuInstanceData {
 @group(0) @binding(2) var<storage, read> compacted_indices: array<u32>;
 @group(0) @binding(3) var base_color_texture: texture_2d<f32>;
 @group(0) @binding(4) var base_color_sampler: sampler;
+@group(0) @binding(5) var emissive_texture: texture_2d<f32>;
 
 struct VertexInput {
     @location(0) position: vec3<f32>,
@@ -58,5 +61,7 @@ fn vs_main(input: VertexInput, @builtin(instance_index) slot: u32) -> VertexOutp
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    return textureSample(base_color_texture, base_color_sampler, input.uv);
+    let base_color = textureSample(base_color_texture, base_color_sampler, input.uv);
+    let emissive = textureSample(emissive_texture, base_color_sampler, input.uv);
+    return vec4<f32>(base_color.rgb + emissive.rgb, base_color.a);
 }

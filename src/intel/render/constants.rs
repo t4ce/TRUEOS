@@ -733,6 +733,7 @@ const INTEL_TOPOLOGY_LINESTRIP: u32 = 0x03;
 const INTEL_TOPOLOGY_TRILIST: u32 = 0x04;
 const INTEL_TOPOLOGY_TRISTRIP: u32 = 0x05;
 const INTEL_TOPOLOGY_TRIFAN: u32 = 0x06;
+const INTEL_TOPOLOGY_QUADLIST: u32 = 0x07;
 const INTEL_TOPOLOGY_QUADSTRIP: u32 = 0x08;
 // Existing probe name is kept local to avoid making the proof machinery look
 // like a generic mesh conversion path.

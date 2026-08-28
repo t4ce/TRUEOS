@@ -302,6 +302,8 @@ pub(crate) enum ResidentScenePrimitiveTopology {
     TriangleList,
     TriangleStrip,
     TriangleFan,
+    /// Intel's native `3DPRIM_QUADLIST`; four VF vertices form one polygon.
+    QuadList,
     /// Intel's native `3DPRIM_QUADSTRIP`; its VF input is converted to the
     /// downstream polygon representation by the hardware front end.
     QuadStrip,
@@ -315,6 +317,7 @@ impl ResidentScenePrimitiveTopology {
             Self::LineLoop | Self::LineStrip => count >= 2,
             Self::TriangleList => count >= 3 && count.is_multiple_of(3),
             Self::TriangleStrip | Self::TriangleFan => count >= 3,
+            Self::QuadList => count >= 4 && count.is_multiple_of(4),
             Self::QuadStrip => count >= 4 && count.is_multiple_of(2),
         }
     }
@@ -1410,7 +1413,7 @@ pub(crate) fn render_resident_churn_forward_frame_direct_to_surface(
 /// bindings.
 pub(crate) fn render_resident_retained_with_static_draws_direct_to_surface(
     resident: &ResidentChurnForward,
-    sampled_texture: Option<&ResidentSampledTexture>,
+    sampled_material: Option<ResidentRetainedMaterial<'_>>,
     static_draws: &[ResidentSceneDraw<'_>],
     clear_rgba: Option<[u8; 4]>,
     destination: crate::intel::gpgpu::GpgpuRgba8Surface,
@@ -1422,7 +1425,7 @@ pub(crate) fn render_resident_retained_with_static_draws_direct_to_surface(
     submit_resident_scene_capture_inner_for_carrier(
         static_draws,
         Some(resident),
-        sampled_texture,
+        sampled_material,
         &[],
         clear_rgba,
         diagnostic_logs,
@@ -1532,6 +1535,7 @@ fn stage_resident_scene_secondary(
             ResidentScenePrimitiveTopology::TriangleList => TriangleBatchMode::Draw,
             ResidentScenePrimitiveTopology::TriangleStrip => TriangleBatchMode::TriangleStripDraw,
             ResidentScenePrimitiveTopology::TriangleFan => TriangleBatchMode::TriangleFanDraw,
+            ResidentScenePrimitiveTopology::QuadList => TriangleBatchMode::QuadListDraw,
             ResidentScenePrimitiveTopology::QuadStrip => TriangleBatchMode::QuadStripDraw,
         },
         StreamoutProofExperiment::HeaderAndPositionSlots01,
@@ -1617,6 +1621,7 @@ fn stage_resident_churn_forward_secondary(
             ResidentScenePrimitiveTopology::TriangleList => TriangleBatchMode::Draw,
             ResidentScenePrimitiveTopology::TriangleStrip => TriangleBatchMode::TriangleStripDraw,
             ResidentScenePrimitiveTopology::TriangleFan => TriangleBatchMode::TriangleFanDraw,
+            ResidentScenePrimitiveTopology::QuadList => TriangleBatchMode::QuadListDraw,
             ResidentScenePrimitiveTopology::QuadStrip => TriangleBatchMode::QuadStripDraw,
         },
         StreamoutProofExperiment::HeaderAndPositionSlots01,
@@ -1982,7 +1987,7 @@ fn submit_resident_churn_forward_geometry_batched(
     dev: crate::intel::Dev,
     warm: RenderWarmState,
     resident: &ResidentChurnForward,
-    sampled_texture: Option<&ResidentSampledTexture>,
+    sampled_material: Option<ResidentRetainedMaterial<'_>>,
     static_draws: &[ResidentSceneDraw<'_>],
     clear: [u8; 4],
     depth_config: TriangleDepthConfig,
@@ -2080,7 +2085,7 @@ fn submit_resident_churn_forward_geometry_batched(
                 let draw = prepare_resident_churn_forward_draw(
                     state_warm,
                     resident,
-                    sampled_texture,
+                    sampled_material,
                     group,
                     render_target_gpu,
                     render_target_pitch,
@@ -2101,7 +2106,7 @@ fn submit_resident_churn_forward_geometry_batched(
                 )?;
             }
             Some(RetainedGraphicsHandoff::ExpandedPositions) => {
-                if sampled_texture.is_some() {
+                if sampled_material.is_some() {
                     return Err("picasso-retained-texture-native-handoff-required");
                 }
                 let draw = prepare_resident_churn_expanded_draw(
@@ -2206,14 +2211,18 @@ fn submit_resident_churn_forward_geometry_batched(
         );
     }
     let prepare_us = crate::chronos::monotonic_nanos().saturating_sub(prepare_started_ns) / 1_000;
-    if let Some(texture) = sampled_texture
+    if let Some(material) = sampled_material
         && !PICASSO_RETAINED_TEXTURED_SUBMIT_LOGGED.swap(true, Ordering::AcqRel)
     {
         crate::log_important!(target: "render";
-            "picasso-material: proof=retained-texture-submit-armed accepted=1 contract=pos-normal-uv+texture-id graphics_handoff=native-matrices vertex_shader=adls-gfx120-retained-uv-transform-candidate vertex_fetch=pos3+uv2+sgvs3 component_packing=0xA37 pixel_shader=proven-heliov-filtered-base-color-simd16 interpolation=perspective-authored-uv ps_binding_table_alignment=32 ps_bti=2 sampler=0 texture={}x{} stride={} cpu_texture_sampling=0 cpu_vertex_projection=0 render_submits=1\n",
-            texture.width,
-            texture.height,
-            texture.pitch,
+            "picasso-material: proof=retained-material-submit-armed accepted=1 contract=pos-normal-uv+material-bundle graphics_handoff=native-matrices vertex_shader=adls-gfx120-retained-uv-transform-candidate vertex_fetch=pos3+uv2+sgvs3 component_packing=0xA37 pixel_shader=adls-gfx120-base-color-plus-emissive-candidate interpolation=perspective-authored-uv ps_binding_table_alignment=32 ps_bti=[2,3] sampler=0 base={}x{} stride={} emissive_bound={} emissive_factor=[{:.3},{:.3},{:.3}] cpu_texture_sampling=0 cpu_vertex_projection=0 render_submits=1\n",
+            material.base_color.width,
+            material.base_color.height,
+            material.base_color.pitch,
+            material.emissive.is_some() as u8,
+            material.emissive_factor[0],
+            material.emissive_factor[1],
+            material.emissive_factor[2],
         );
     }
     let completed = match carrier {
@@ -2234,14 +2243,15 @@ fn submit_resident_churn_forward_geometry_batched(
         ),
     };
     if completed
-        && let Some(texture) = sampled_texture
+        && let Some(material) = sampled_material
         && !PICASSO_RETAINED_TEXTURED_PATH_LOGGED.swap(true, Ordering::AcqRel)
     {
         crate::log_important!(target: "render";
-            "picasso-material: proof=retained-texture-sampled-and-retired accepted=1 contract=pos-normal-uv+texture-id graphics_handoff=native-matrices vertex_shader=adls-gfx120-retained-uv-transform-candidate pixel_shader=filtered-base-color-simd16 interpolation=perspective-authored-uv texture={}x{} stride={} cpu_texture_sampling=0 cpu_vertex_projection=0 render_submits=1\n",
-            texture.width,
-            texture.height,
-            texture.pitch,
+            "picasso-material: proof=retained-material-sampled-and-retired accepted=1 contract=pos-normal-uv+material-bundle graphics_handoff=native-matrices vertex_shader=adls-gfx120-retained-uv-transform-candidate pixel_shader=base-color-plus-emissive-simd16-candidate interpolation=perspective-authored-uv base={}x{} stride={} emissive_bound={} cpu_texture_sampling=0 cpu_vertex_projection=0 render_submits=1\n",
+            material.base_color.width,
+            material.base_color.height,
+            material.base_color.pitch,
+            material.emissive.is_some() as u8,
         );
     }
     if !completed && carrier.is_none() {
@@ -2287,7 +2297,7 @@ fn submit_resident_triangle_scene_capture(
 fn submit_resident_scene_capture_inner(
     draws: &[ResidentSceneDraw<'_>],
     native_churn: Option<&ResidentChurnForward>,
-    native_sampled_texture: Option<&ResidentSampledTexture>,
+    native_sampled_material: Option<ResidentRetainedMaterial<'_>>,
     coverage_draws: &[ResidentSceneCoverageDraw],
     clear_rgba: Option<[u8; 4]>,
     diagnostic_logs: bool,
@@ -2301,7 +2311,7 @@ fn submit_resident_scene_capture_inner(
     submit_resident_scene_capture_inner_for_carrier(
         draws,
         native_churn,
-        native_sampled_texture,
+        native_sampled_material,
         coverage_draws,
         clear_rgba,
         diagnostic_logs,
@@ -2318,7 +2328,7 @@ fn submit_resident_scene_capture_inner(
 fn submit_resident_scene_capture_inner_for_carrier(
     draws: &[ResidentSceneDraw<'_>],
     native_churn: Option<&ResidentChurnForward>,
-    native_sampled_texture: Option<&ResidentSampledTexture>,
+    native_sampled_material: Option<ResidentRetainedMaterial<'_>>,
     coverage_draws: &[ResidentSceneCoverageDraw],
     clear_rgba: Option<[u8; 4]>,
     diagnostic_logs: bool,
@@ -2576,7 +2586,7 @@ fn submit_resident_scene_capture_inner_for_carrier(
                 dev,
                 warm,
                 resident,
-                native_sampled_texture,
+                native_sampled_material,
                 draws,
                 clear,
                 depth_config.ok_or("churn-native-depth")?,

@@ -97,6 +97,18 @@ const fn mesa_wm_depth_stencil_dw1(point_raster: bool) -> u32 {
     }
 }
 
+/// The late index-buffer re-arm was captured for the Mesa point-list path.
+/// Native retained draws have their own final binding-table re-arm and must
+/// retain the normal front-end index-buffer packet; otherwise an indexed
+/// 3DPRIMITIVE has random-access enabled with no buffer bound.
+const fn uses_host_point_tail_index_buffer(
+    mesa_host_fixed_function: bool,
+    artifact_native_fixed_function: bool,
+    point_raster: bool,
+) -> bool {
+    mesa_host_fixed_function && !artifact_native_fixed_function && point_raster
+}
+
 #[cfg(test)]
 mod churn_sbe_swiz_tests {
     use super::{sbe_swiz_payload, wm_barycentric_mode};
@@ -122,7 +134,7 @@ mod point_raster_state_tests {
         MESA_CLIP_DW2, MESA_POINT_CLIP_DW2, MESA_POINT_SAMPLE_MASK_DW,
         MESA_POINT_WM_DEPTH_STENCIL_DW1, MESA_SF_DW3, RESIDENT_POINT_WIDTH_U8_3,
         SF_POINT_WIDTH_MASK, mesa_clip_dw2, mesa_sample_mask_dw, mesa_sf_dw3,
-        mesa_wm_depth_stencil_dw1,
+        mesa_wm_depth_stencil_dw1, uses_host_point_tail_index_buffer,
     };
 
     #[test]
@@ -148,6 +160,14 @@ mod point_raster_state_tests {
         assert_eq!(mesa_sample_mask_dw(false), 1);
         assert_eq!(mesa_wm_depth_stencil_dw1(true), MESA_POINT_WM_DEPTH_STENCIL_DW1);
         assert_eq!(mesa_wm_depth_stencil_dw1(false), 0);
+    }
+
+    #[test]
+    fn host_tail_index_buffer_is_point_only_and_never_replaces_native_binding() {
+        assert!(uses_host_point_tail_index_buffer(true, false, true));
+        assert!(!uses_host_point_tail_index_buffer(true, false, false));
+        assert!(!uses_host_point_tail_index_buffer(true, true, true));
+        assert!(!uses_host_point_tail_index_buffer(false, false, true));
     }
 }
 
@@ -508,6 +528,7 @@ fn write_triangle_probe_state_with_flush(
         return Err("probe-viewport-translation");
     }
     let native_sampled = draw.native.is_some() && draw.sampled_texture.is_some();
+    let native_emissive = native_sampled && draw.emissive_texture.is_some();
     let binding_table_entries = if draw.native.is_some() {
         4usize
     } else if draw.sampled_texture.is_some() {
@@ -515,8 +536,16 @@ fn write_triangle_probe_state_with_flush(
     } else {
         1usize
     };
-    let ps_binding_table_entries = if native_sampled { 3usize } else { 0usize };
-    let surface_state_count = if native_sampled {
+    let ps_binding_table_entries = if native_emissive {
+        4usize
+    } else if native_sampled {
+        3usize
+    } else {
+        0usize
+    };
+    let surface_state_count = if native_emissive {
+        6usize
+    } else if native_sampled {
         5usize
     } else {
         binding_table_entries
@@ -619,7 +648,12 @@ fn write_triangle_probe_state_with_flush(
         // The separately compiled PS consumes RT at BTI0 and the sampled
         // image at BTI2; stage-specific binding-table pointers make those
         // layouts coexist without aliasing the VS instance surface.
-        for (entry, surface_index) in [0usize, 0, 4].into_iter().enumerate() {
+        let ps_surface_indices: &[usize] = if native_emissive {
+            &[0, 0, 4, 5]
+        } else {
+            &[0, 0, 4]
+        };
+        for (entry, surface_index) in ps_surface_indices.iter().copied().enumerate() {
             let entry_offset = surface_state_offset
                 .checked_add(surface_index * 64)
                 .and_then(|offset| offset.checked_sub(binding_table_entry_base_offset))
@@ -726,6 +760,10 @@ fn write_triangle_probe_state_with_flush(
             let start = surface_state_offset / 4 + 4 * 16;
             write_triangle_sampled_rgba8_surface_state(&mut dwords[start..start + 16], texture)?;
         }
+        if let Some(texture) = draw.emissive_texture {
+            let start = surface_state_offset / 4 + 5 * 16;
+            write_triangle_sampled_rgba8_surface_state(&mut dwords[start..start + 16], texture)?;
+        }
     } else if let Some(texture) = draw.sampled_texture {
         let start = surface_state_offset / 4 + 2 * 16;
         write_triangle_sampled_rgba8_surface_state(&mut dwords[start..start + 16], texture)?;
@@ -740,12 +778,22 @@ fn write_triangle_probe_state_with_flush(
     {
         return Err("probe-sampler-mode");
     }
+    if let Some(texture) = draw.emissive_texture
+        && texture.sampler_flags
+            != (crate::gpu::vgpu::SAMPLER_ADDRESS_U_REPEAT
+                | crate::gpu::vgpu::SAMPLER_ADDRESS_V_REPEAT)
+    {
+        return Err("probe-emissive-sampler-mode");
+    }
     let sampler_words = [sampler[0], sampler[1], sampler[2], sampler[3]];
     if native_sampled && !PICASSO_NATIVE_TEXTURE_STATE_LOGGED.swap(true, Ordering::AcqRel) {
         let ps_binding_table = &dwords
             [ps_binding_table_offset / 4..ps_binding_table_offset / 4 + ps_binding_table_entries];
         let texture_surface =
             &dwords[surface_state_offset / 4 + 4 * 16..surface_state_offset / 4 + 5 * 16];
+        let emissive_surface = native_emissive.then(|| {
+            &dwords[surface_state_offset / 4 + 5 * 16..surface_state_offset / 4 + 6 * 16]
+        });
         let ps_pointer = ps_binding_table_offset
             .checked_sub(shader_layout.state_region_offset_bytes as usize)
             .ok_or("probe-binding-table-base")?;
@@ -753,12 +801,14 @@ fn write_triangle_probe_state_with_flush(
             .sampled_texture
             .ok_or("probe-sampled-texture-surface")?;
         crate::log_important!(target: "render";
-            "picasso-material: proof=retained-texture-state-encoded accepted=1 state_base=0x{:X} ps_bt_ptr=0x{:X} ps_bt=[0x{:X},0x{:X},0x{:X}] texture_surface=[dw0:0x{:08X},dw1:0x{:08X},dw2:0x{:08X},dw3:0x{:08X},dw7:0x{:08X},dw8:0x{:08X},dw9:0x{:08X}] sampler=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] texture_gpu=0x{:X} texture={}x{} stride={}\n",
+            "picasso-material: proof=retained-material-state-encoded accepted=1 state_base=0x{:X} ps_bt_ptr=0x{:X} ps_bt_count={} ps_bt=[0x{:X},0x{:X},0x{:X},0x{:X}] base_surface=[dw0:0x{:08X},dw1:0x{:08X},dw2:0x{:08X},dw3:0x{:08X},dw7:0x{:08X},dw8:0x{:08X},dw9:0x{:08X}] emissive_surface_present={} sampler=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] base_gpu=0x{:X} base={}x{} stride={}\n",
             shader_layout.state_region_gpu_addr,
             ps_pointer,
+            ps_binding_table_entries,
             ps_binding_table[0],
             ps_binding_table[1],
             ps_binding_table[2],
+            ps_binding_table.get(3).copied().unwrap_or(0),
             texture_surface[0],
             texture_surface[1],
             texture_surface[2],
@@ -766,6 +816,7 @@ fn write_triangle_probe_state_with_flush(
             texture_surface[7],
             texture_surface[8],
             texture_surface[9],
+            emissive_surface.is_some() as u8,
             sampler_words[0],
             sampler_words[1],
             sampler_words[2],
@@ -1211,6 +1262,8 @@ fn validate_triangle_native_draw_contract(
         && native.vf_sgvs_2_dw1 == 0xB002_0002
         && native.vf_component_packing == [0x0000_0A77, 0, 0, 0];
     if !(pos_normal || pos_normal_uv || pos_normal_sampled)
+        || (draw.emissive_texture.is_some() && draw.sampled_texture.is_none())
+        || draw.emissive_factor.iter().any(|value| !value.is_finite())
         || draw.index_buffer.is_none()
         || draw.indirect_args_gpu_addr.is_none()
         || camera.gpu_addr == 0
@@ -1308,6 +1361,8 @@ mod retained_native_matrix_draw_contract_tests {
             indirect_args_gpu_addr: Some(INDIRECT_GPU),
             native: Some(native),
             sampled_texture: None,
+            emissive_texture: None,
+            emissive_factor: [0.0; 3],
             state_gpu_addr: 0x2600_0000,
             rt_gpu_addr: 0x2700_0000,
             rt_surface_format: 0,
@@ -2924,8 +2979,13 @@ fn encode_triangle_probe_batch(
     // draw.  It is architecturally ignored for this non-indexed triangle list,
     // but is part of the exact SVL state accompanying component packing.
     push(batch_dwords, &mut cursor, if mesa_host_fixed_function { 0xFFFF } else { 0 })?;
+    let host_point_tail_index_buffer = uses_host_point_tail_index_buffer(
+        mesa_host_fixed_function,
+        artifact_native_fixed_function,
+        batch_mode.point_raster(),
+    );
     if let Some(index_buffer) = draw.index_buffer
-        && !mesa_host_fixed_function
+        && !host_point_tail_index_buffer
     {
         log_batch_offset(cursor, "3DSTATE_INDEX_BUFFER");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_INDEX_BUFFER)?;
@@ -3818,7 +3878,9 @@ fn encode_triangle_probe_batch(
             push(batch_dwords, &mut cursor, 0)?;
         }
 
-        if let Some(index_buffer) = draw.index_buffer {
+        if let Some(index_buffer) = draw.index_buffer
+            && host_point_tail_index_buffer
+        {
             // The indexed host point-list capture does not merely bind its
             // index buffer during front-end setup: it re-arms the exact
             // non-L3-bypass state after VF/primitive replication and directly

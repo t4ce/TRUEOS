@@ -158,6 +158,10 @@ struct TriangleDrawPrep {
     /// Present only after a complete artifact/native ABI validation.
     native: Option<TriangleNativeDrawContract>,
     sampled_texture: Option<TriangleSampledTextureBinding>,
+    /// Optional second sampled image for the base-color-plus-emissive rung.
+    /// It is meaningful only with `sampled_texture`, which is base color.
+    emissive_texture: Option<TriangleSampledTextureBinding>,
+    emissive_factor: [f32; 3],
     state_gpu_addr: u64,
     rt_gpu_addr: u64,
     rt_surface_format: u32,
@@ -309,6 +313,16 @@ pub(crate) struct ResidentSampledTexture {
 
 unsafe impl Send for ResidentSampledTexture {}
 unsafe impl Sync for ResidentSampledTexture {}
+
+/// The first retained material shader rung: authored UV samples base color and
+/// optionally adds emissive. Other glTF maps stay resident in the submission
+/// bundle until their PBR/tangent-space consumers are introduced.
+#[derive(Clone, Copy)]
+pub(crate) struct ResidentRetainedMaterial<'a> {
+    pub(crate) base_color: &'a ResidentSampledTexture,
+    pub(crate) emissive: Option<&'a ResidentSampledTexture>,
+    pub(crate) emissive_factor: [f32; 3],
+}
 
 // The authenticated instruction allocation is process-lifetime resident in
 // the GPGPU artifact catalog. Render adds one stable alias to its own PPGTT and
@@ -784,6 +798,7 @@ enum TriangleBatchMode {
     LineStripDraw,
     TriangleStripDraw,
     TriangleFanDraw,
+    QuadListDraw,
     QuadStripDraw,
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     DrawScreenSpace,
@@ -2206,6 +2221,10 @@ impl TriangleBatchMode {
                 trueos_helio_artifact::render_ir::PrimitiveTopology::TriangleFan,
             )
             .expect("Intel supports triangle fans"),
+            // QUADLIST is a Gen12 hardware topology, but not a glTF / Helio
+            // IR primitive. Keep this explicit retained vGPU path native
+            // instead of lowering the mesh to triangles.
+            Self::QuadListDraw => INTEL_TOPOLOGY_QUADLIST,
             // QUADSTRIP is a Gen12 hardware topology, but not a glTF / Helio
             // IR primitive. Keep this explicit retained vGPU path native
             // instead of lowering the mesh to triangles.
@@ -2235,6 +2254,7 @@ impl TriangleBatchMode {
             Self::LineStripDraw => "line-strip-draw",
             Self::TriangleStripDraw => "triangle-strip-draw",
             Self::TriangleFanDraw => "triangle-fan-draw",
+            Self::QuadListDraw => "quad-list-draw",
             Self::QuadStripDraw => "quad-strip-draw",
             Self::DrawScreenSpace => "draw-screen-space",
             Self::DrawScreenSpaceRect => "draw-screen-space-rect",
@@ -3164,6 +3184,7 @@ mod primitive_topology_tests {
         assert_eq!(intel_topology_from_helio(PrimitiveTopology::TriangleList), Ok(0x04));
         assert_eq!(intel_topology_from_helio(PrimitiveTopology::TriangleStrip), Ok(0x05));
         assert_eq!(intel_topology_from_helio(PrimitiveTopology::TriangleFan), Ok(0x06));
+        assert_eq!(TriangleBatchMode::QuadListDraw.topology(), 0x07);
         assert_eq!(TriangleBatchMode::QuadStripDraw.topology(), 0x08);
     }
 
@@ -3179,6 +3200,9 @@ mod primitive_topology_tests {
         assert!(!Topology::TriangleList.accepts_index_count(4));
         assert!(Topology::TriangleStrip.accepts_index_count(4));
         assert!(Topology::TriangleFan.accepts_index_count(4));
+        assert!(Topology::QuadList.accepts_index_count(4));
+        assert!(Topology::QuadList.accepts_index_count(8));
+        assert!(!Topology::QuadList.accepts_index_count(6));
         assert!(Topology::QuadStrip.accepts_index_count(4));
         assert!(Topology::QuadStrip.accepts_index_count(6));
         assert!(!Topology::QuadStrip.accepts_index_count(5));

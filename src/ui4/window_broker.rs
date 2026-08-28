@@ -1929,9 +1929,8 @@ pub(crate) fn move_window(
 /// Return the broker geometry represented by a maximize preview or commit.
 ///
 /// Fixed-size producers preserve their exact pixel extent and are centered on
-/// the output. Resize-capable producers receive full-output geometry; until
-/// their replacement frame arrives, the compositor centers the previous
-/// allocation at 1:1 inside that geometry.
+/// the output. Resize-capable producers receive full-output geometry and a
+/// final resize event for that extent.
 pub(super) fn maximized_window_placement(
     interaction: WindowInteraction,
     previous: WindowPlacement,
@@ -1964,23 +1963,20 @@ const fn producer_resize_required(
         && (previous.width != placement.width || previous.height != placement.height)
 }
 
-/// Toggle one broker window between its saved geometry and its generic
-/// maximize geometry. Gesture recognition stays in the input broker; this
-/// function owns the atomic placement/restore transition and emits resize
-/// callbacks only for producers which explicitly support frame replacement.
-pub(crate) fn toggle_window_maximized(
-    owner: WindowOwner,
-    id: WindowId,
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct WindowMaximizeToggle {
+    transition: WindowPlacementTransition,
+    changed: bool,
+    notify_resize: bool,
+}
+
+fn toggle_window_maximized_record(
+    window: &mut WindowRecord,
     output_width: u32,
     output_height: u32,
     restore_placement: Option<WindowPlacement>,
     restore_center: Option<(u32, u32)>,
-) -> Result<WindowPlacementTransition, WindowBrokerError> {
-    if output_width == 0 || output_height == 0 {
-        return Err(WindowBrokerError::EmptyExtent);
-    }
-    let mut broker = WINDOW_BROKER.lock();
-    let window = broker.checked_window_mut(owner, id)?;
+) -> Result<WindowMaximizeToggle, WindowBrokerError> {
     if !window.interaction.maximizable {
         return Err(WindowBrokerError::InteractionDenied);
     }
@@ -2009,38 +2005,69 @@ pub(crate) fn toggle_window_maximized(
     if changed {
         window.placement = placement;
         window.placement_transition = None;
-        // Resize notification is advisory.  A producer may defer or ignore
-        // it, so restoring must immediately expose the saved placement rather
-        // than pinning the old maximized presentation until a replacement
-        // frame happens to be published.
+        // Resize notification is advisory. A producer may defer or ignore it,
+        // so restore must immediately expose the saved placement rather than
+        // pinning the old maximized presentation for a replacement publish.
         window.replacement_presentation = None;
         window.damage = Some(DamageRegion::FULL);
         window.revision = next_serial(window.revision);
     }
-    let notify_resize = window.interaction.resize_on_maximize
-        && producer_resize_required(window.interaction, previous, placement);
-    if changed {
+    Ok(WindowMaximizeToggle {
+        transition: WindowPlacementTransition {
+            previous,
+            placement,
+            maximized,
+        },
+        changed,
+        notify_resize: window.interaction.resize_on_maximize
+            && producer_resize_required(window.interaction, previous, placement),
+    })
+}
+
+/// Toggle one broker window between its saved geometry and its generic
+/// maximize geometry. Gesture recognition stays in the input broker; this
+/// function owns the atomic placement/restore transition and emits resize
+/// callbacks only for producers which explicitly support frame replacement.
+pub(crate) fn toggle_window_maximized(
+    owner: WindowOwner,
+    id: WindowId,
+    output_width: u32,
+    output_height: u32,
+    restore_placement: Option<WindowPlacement>,
+    restore_center: Option<(u32, u32)>,
+) -> Result<WindowPlacementTransition, WindowBrokerError> {
+    if output_width == 0 || output_height == 0 {
+        return Err(WindowBrokerError::EmptyExtent);
+    }
+    let mut broker = WINDOW_BROKER.lock();
+    let toggle = {
+        let window = broker.checked_window_mut(owner, id)?;
+        toggle_window_maximized_record(
+            window,
+            output_width,
+            output_height,
+            restore_placement,
+            restore_center,
+        )?
+    };
+    if toggle.changed {
         broker.mark_composition_changed();
     }
     drop(broker);
-    if notify_resize {
+    if toggle.notify_resize {
         super::input_broker::enqueue_window_resize(
             owner,
             id,
-            previous.width,
-            previous.height,
-            placement.width,
-            placement.height,
+            toggle.transition.previous.width,
+            toggle.transition.previous.height,
+            toggle.transition.placement.width,
+            toggle.transition.placement.height,
         );
     }
-    if changed {
+    if toggle.changed {
         super::cursor_frame_inout::selection_strip_stack_changed();
     }
-    Ok(WindowPlacementTransition {
-        previous,
-        placement,
-        maximized,
-    })
+    Ok(toggle.transition)
 }
 
 fn center_restored_window_on_cursor(
@@ -2830,6 +2857,39 @@ mod tests {
         // the target, so it cannot emit a second resize for the same action.
         assert!(!producer_resize_required(WindowInteraction::APPLICATION, target, target,));
         assert!(!producer_resize_required(WindowInteraction::MOVABLE_FRAME, previous, target,));
+    }
+
+    #[test]
+    fn restoring_an_application_window_does_not_wait_for_a_replacement_publish() {
+        let owner = WindowOwner::GPGPU_PREVIEW;
+        let mut broker = WindowBroker::new();
+        let session = broker.begin_additional_session(owner).unwrap();
+        let id = broker
+            .create(test_window(owner, session, 1, 0, 0, true), FrameBuffering::Double, 0)
+            .unwrap();
+        let (slot, _) = unpack_handle(id.raw()).unwrap();
+        let saved = broker.windows[slot].placement;
+        broker.windows[slot].interaction = WindowInteraction::APPLICATION;
+
+        let maximized =
+            toggle_window_maximized_record(&mut broker.windows[slot], 2_560, 1_440, None, None)
+                .unwrap();
+        assert!(maximized.transition.maximized);
+        assert_eq!(broker.windows[slot].placement.width, 2_560);
+
+        let restored =
+            toggle_window_maximized_record(&mut broker.windows[slot], 2_560, 1_440, None, None)
+                .unwrap();
+        assert!(!restored.transition.maximized);
+        assert!(restored.notify_resize);
+        assert_eq!(broker.windows[slot].placement, saved);
+        assert_eq!(
+            broker.windows[slot]
+                .snapshot(slot)
+                .unwrap()
+                .presentation_placement,
+            saved
+        );
     }
 
     #[test]

@@ -511,6 +511,8 @@ fn prepare_triangle_draw_resources_for_geometry(
         indirect_args_gpu_addr: None,
         native: None,
         sampled_texture: None,
+        emissive_texture: None,
+        emissive_factor: [0.0; 3],
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
         rt_surface_format: SURFACE_FORMAT_R8G8B8A8_UNORM,
@@ -628,6 +630,8 @@ fn prepare_triangle_draw_resources_for_vertex_slice_with_state_clear(
         indirect_args_gpu_addr: None,
         native: None,
         sampled_texture: None,
+        emissive_texture: None,
+        emissive_factor: [0.0; 3],
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
         rt_surface_format: SURFACE_FORMAT_R8G8B8A8_UNORM,
@@ -712,6 +716,8 @@ fn prepare_triangle_draw_resources_for_indexed_vertex_slice(
         indirect_args_gpu_addr: None,
         native: None,
         sampled_texture: None,
+        emissive_texture: None,
+        emissive_factor: [0.0; 3],
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
         rt_surface_format: SURFACE_FORMAT_R8G8B8A8_UNORM,
@@ -1323,7 +1329,7 @@ fn picasso_retained_textured_pipeline()
     if let Some(pipeline) = *cached {
         return Ok(pipeline);
     }
-    if PICASSO_RETAINED_TEXTURED_VS.len() != 624 || PICASSO_RETAINED_TEXTURED_PS.len() != 160 {
+    if PICASSO_RETAINED_TEXTURED_VS.len() != 624 || PICASSO_RETAINED_TEXTURED_PS.len() != 208 {
         return Err("picasso-retained-textured-stage-shape");
     }
     let ps_offset = crate::intel::align_up(PICASSO_RETAINED_TEXTURED_VS.len(), 64)
@@ -1359,14 +1365,14 @@ fn picasso_retained_textured_pipeline()
             meta: TrianglePixelShaderMetadata {
                 kernel: ShaderKernelMetadata {
                     code_offset_bytes: ps_offset,
-                    code_size_bytes: 160,
+                    code_size_bytes: 208,
                     code_alignment_bytes: 64,
                     ksp_offset_bytes: 0,
                     dispatch_mode: DispatchMode::Simd16,
                     grf_start_register: 2,
                     grf_used: 128,
                     push_constant_bytes: 0,
-                    binding_table_entry_count: 3,
+                    binding_table_entry_count: 4,
                     sampler_count: 1,
                 },
                 num_varying_inputs: 1,
@@ -2687,14 +2693,22 @@ pub(crate) fn update_resident_churn_forward_transform_frame(
 fn prepare_resident_churn_forward_draw(
     _warm: RenderWarmState,
     resident: &ResidentChurnForward,
-    sampled_texture: Option<&ResidentSampledTexture>,
+    sampled_material: Option<ResidentRetainedMaterial<'_>>,
     group: usize,
     dst_gpu_addr: u64,
     pitch: usize,
     width: usize,
     height: usize,
 ) -> Option<TriangleDrawPrep> {
-    if group >= CHURN_FORWARD_DRAW_COUNT || resident.sampled_material != sampled_texture.is_some() {
+    if group >= CHURN_FORWARD_DRAW_COUNT
+        || resident.sampled_material != sampled_material.is_some()
+        // This rung's PS always samples both surfaces and applies no scalar
+        // material uniform, so it is only valid for the identity-factor
+        // base-plus-emissive contract admitted by the broker.
+        || sampled_material.is_some_and(|material| {
+            material.emissive.is_none() || material.emissive_factor != [1.0; 3]
+        })
+    {
         return None;
     }
     Some(TriangleDrawPrep {
@@ -2713,13 +2727,23 @@ fn prepare_resident_churn_forward_draw(
                 + (group * trueos_helio_runtime::DrawIndexedIndirectArgs::BYTE_LEN) as u64,
         ),
         native: Some(resident.native_vf),
-        sampled_texture: sampled_texture.map(|texture| TriangleSampledTextureBinding {
-            gpu_addr: texture.storage.gpu_base(),
-            width: texture.width,
-            height: texture.height,
-            pitch: texture.pitch,
-            sampler_flags: texture.sampler_flags,
+        sampled_texture: sampled_material.map(|material| TriangleSampledTextureBinding {
+            gpu_addr: material.base_color.storage.gpu_base(),
+            width: material.base_color.width,
+            height: material.base_color.height,
+            pitch: material.base_color.pitch,
+            sampler_flags: material.base_color.sampler_flags,
         }),
+        emissive_texture: sampled_material.and_then(|material| {
+            material.emissive.map(|texture| TriangleSampledTextureBinding {
+                gpu_addr: texture.storage.gpu_base(),
+                width: texture.width,
+                height: texture.height,
+                pitch: texture.pitch,
+                sampler_flags: texture.sampler_flags,
+            })
+        }),
+        emissive_factor: sampled_material.map_or([0.0; 3], |material| material.emissive_factor),
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
         rt_surface_format: SURFACE_FORMAT_R8G8B8A8_UNORM,
@@ -2767,6 +2791,8 @@ fn prepare_resident_churn_expanded_draw(
         ),
         native: None,
         sampled_texture: None,
+        emissive_texture: None,
+        emissive_factor: [0.0; 3],
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
         rt_surface_format: SURFACE_FORMAT_R8G8B8A8_UNORM,
@@ -3242,6 +3268,8 @@ fn prepare_triangle_draw_resources_for_resident_font_mesh_with_state_clear(
         indirect_args_gpu_addr: None,
         native: None,
         sampled_texture: None,
+        emissive_texture: None,
+        emissive_factor: [0.0; 3],
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
         rt_surface_format: SURFACE_FORMAT_R8G8B8A8_UNORM,
@@ -3291,6 +3319,8 @@ fn prepare_triangle_draw_resources_for_vf_vue_vertex_slice(
         indirect_args_gpu_addr: None,
         native: None,
         sampled_texture: None,
+        emissive_texture: None,
+        emissive_factor: [0.0; 3],
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
         rt_surface_format: SURFACE_FORMAT_R8G8B8A8_UNORM,
@@ -3715,6 +3745,8 @@ fn prepare_vf_streamout_proof_resources(
         indirect_args_gpu_addr: None,
         native: None,
         sampled_texture: None,
+        emissive_texture: None,
+        emissive_factor: [0.0; 3],
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
         rt_surface_format: SURFACE_FORMAT_R8G8B8A8_UNORM,
