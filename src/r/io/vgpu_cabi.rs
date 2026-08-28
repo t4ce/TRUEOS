@@ -396,6 +396,9 @@ fn broker_primitive_topology(
         v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_FAN => {
             Ok(crate::intel::render::ResidentScenePrimitiveTopology::TriangleFan)
         }
+        v::vgpu::PRIMITIVE_TOPOLOGY_QUAD_STRIP => {
+            Ok(crate::intel::render::ResidentScenePrimitiveTopology::QuadStrip)
+        }
         _ => Err(-95),
     }
 }
@@ -414,6 +417,7 @@ mod primitive_topology_tests {
             (v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, Topology::TriangleList),
             (v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP, Topology::TriangleStrip),
             (v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_FAN, Topology::TriangleFan),
+            (v::vgpu::PRIMITIVE_TOPOLOGY_QUAD_STRIP, Topology::QuadStrip),
         ];
 
         for (wire, expected) in cases {

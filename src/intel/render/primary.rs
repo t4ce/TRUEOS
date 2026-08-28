@@ -302,6 +302,9 @@ pub(crate) enum ResidentScenePrimitiveTopology {
     TriangleList,
     TriangleStrip,
     TriangleFan,
+    /// Intel's native `3DPRIM_QUADSTRIP`; its VF input is converted to the
+    /// downstream polygon representation by the hardware front end.
+    QuadStrip,
 }
 
 impl ResidentScenePrimitiveTopology {
@@ -312,6 +315,7 @@ impl ResidentScenePrimitiveTopology {
             Self::LineLoop | Self::LineStrip => count >= 2,
             Self::TriangleList => count >= 3 && count.is_multiple_of(3),
             Self::TriangleStrip | Self::TriangleFan => count >= 3,
+            Self::QuadStrip => count >= 4 && count.is_multiple_of(2),
         }
     }
 }
@@ -1528,6 +1532,7 @@ fn stage_resident_scene_secondary(
             ResidentScenePrimitiveTopology::TriangleList => TriangleBatchMode::Draw,
             ResidentScenePrimitiveTopology::TriangleStrip => TriangleBatchMode::TriangleStripDraw,
             ResidentScenePrimitiveTopology::TriangleFan => TriangleBatchMode::TriangleFanDraw,
+            ResidentScenePrimitiveTopology::QuadStrip => TriangleBatchMode::QuadStripDraw,
         },
         StreamoutProofExperiment::HeaderAndPositionSlots01,
         TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
@@ -1612,6 +1617,7 @@ fn stage_resident_churn_forward_secondary(
             ResidentScenePrimitiveTopology::TriangleList => TriangleBatchMode::Draw,
             ResidentScenePrimitiveTopology::TriangleStrip => TriangleBatchMode::TriangleStripDraw,
             ResidentScenePrimitiveTopology::TriangleFan => TriangleBatchMode::TriangleFanDraw,
+            ResidentScenePrimitiveTopology::QuadStrip => TriangleBatchMode::QuadStripDraw,
         },
         StreamoutProofExperiment::HeaderAndPositionSlots01,
         resident.front_end_contract,

@@ -217,6 +217,9 @@ pub const PRIMITIVE_TOPOLOGY_TRIANGLE_FAN: u32 = 6;
 /// glTF `LINE_LOOP`. Intel has no corresponding primitive mode, so retained
 /// submission materializes its closing index and encodes it as a line strip.
 pub const PRIMITIVE_TOPOLOGY_LINE_LOOP: u32 = 7;
+/// Intel `3DPRIM_QUADSTRIP` / `3DSTATE_VF_TOPOLOGY` value 0x08. Each pair of
+/// vertices after the first pair completes one connected four-vertex quad.
+pub const PRIMITIVE_TOPOLOGY_QUAD_STRIP: u32 = 8;
 
 /// One indexed range in a single-target, single-pipeline render-pass batch.
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]

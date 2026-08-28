@@ -47,6 +47,56 @@ const fn wm_barycentric_mode(num_varying_inputs: u8, force_barycentric_planes: b
     }
 }
 
+// SF.DW3 PointWidth is a U8.3 value. The host-validated state image below
+// carries an incidental one-pixel point width (0x008); point-list draws need
+// a visible default while retaining every other captured Mesa field.
+const SF_POINT_WIDTH_MASK: u32 = 0x7ff;
+const MESA_SF_DW3: u32 = 0x0200_4808;
+const RESIDENT_POINT_WIDTH_U8_3: u32 = 6 << 3;
+const MESA_CLIP_DW2: u32 = 0xD400_0001;
+// The UHD 770 point-list oracle emits the normal D3D clip contract but leaves
+// ViewportXYClipTest disabled. Point lists retain that captured state; triangle
+// and line draws retain the viewport-clip state from their own capture.
+const MESA_POINT_CLIP_DW2: u32 = 0xC400_0001;
+// The host's point-list packet opens every sample bit even for a single-sample
+// target, and preserves the otherwise inert double-sided-stencil bit.  Keep
+// this pair as part of the point raster contract rather than inheriting a
+// previous draw's sample/depth-stencil state.
+const MESA_POINT_SAMPLE_MASK_DW: u32 = 0x0000_FFFF;
+const MESA_POINT_WM_DEPTH_STENCIL_DW1: u32 = 1 << 4;
+
+const fn mesa_sf_dw3(point_raster: bool) -> u32 {
+    if point_raster {
+        (MESA_SF_DW3 & !SF_POINT_WIDTH_MASK) | RESIDENT_POINT_WIDTH_U8_3
+    } else {
+        MESA_SF_DW3
+    }
+}
+
+const fn mesa_clip_dw2(point_raster: bool) -> u32 {
+    if point_raster {
+        MESA_POINT_CLIP_DW2
+    } else {
+        MESA_CLIP_DW2
+    }
+}
+
+const fn mesa_sample_mask_dw(point_raster: bool) -> u32 {
+    if point_raster {
+        MESA_POINT_SAMPLE_MASK_DW
+    } else {
+        1
+    }
+}
+
+const fn mesa_wm_depth_stencil_dw1(point_raster: bool) -> u32 {
+    if point_raster {
+        MESA_POINT_WM_DEPTH_STENCIL_DW1
+    } else {
+        0
+    }
+}
+
 #[cfg(test)]
 mod churn_sbe_swiz_tests {
     use super::{sbe_swiz_payload, wm_barycentric_mode};
@@ -63,6 +113,41 @@ mod churn_sbe_swiz_tests {
         assert_eq!(wm_barycentric_mode(1, false), 1 << 11);
         assert_eq!(wm_barycentric_mode(0, false), 0);
         assert_eq!(wm_barycentric_mode(0, true), 1 << 11);
+    }
+}
+
+#[cfg(test)]
+mod point_raster_state_tests {
+    use super::{
+        MESA_CLIP_DW2, MESA_POINT_CLIP_DW2, MESA_POINT_SAMPLE_MASK_DW,
+        MESA_POINT_WM_DEPTH_STENCIL_DW1, MESA_SF_DW3, RESIDENT_POINT_WIDTH_U8_3,
+        SF_POINT_WIDTH_MASK, mesa_clip_dw2, mesa_sample_mask_dw, mesa_sf_dw3,
+        mesa_wm_depth_stencil_dw1,
+    };
+
+    #[test]
+    fn mesa_point_list_overrides_only_the_width_with_six_pixels() {
+        let point_state = mesa_sf_dw3(true);
+        assert_eq!(point_state & SF_POINT_WIDTH_MASK, RESIDENT_POINT_WIDTH_U8_3);
+        assert_eq!(point_state & !SF_POINT_WIDTH_MASK, MESA_SF_DW3 & !SF_POINT_WIDTH_MASK);
+        assert_ne!(point_state & (1 << 11), 0, "point width must come from SF state");
+        assert_eq!(mesa_sf_dw3(false), MESA_SF_DW3);
+    }
+
+    #[test]
+    fn mesa_point_list_uses_the_host_viewport_clip_contract() {
+        assert_eq!(mesa_clip_dw2(false), MESA_CLIP_DW2);
+        assert_eq!(mesa_clip_dw2(true), MESA_POINT_CLIP_DW2);
+        assert_eq!(mesa_clip_dw2(true) & (1 << 28), 0);
+        assert_ne!(mesa_clip_dw2(false) & (1 << 28), 0);
+    }
+
+    #[test]
+    fn mesa_point_list_uses_the_host_sample_and_depth_stencil_contract() {
+        assert_eq!(mesa_sample_mask_dw(true), MESA_POINT_SAMPLE_MASK_DW);
+        assert_eq!(mesa_sample_mask_dw(false), 1);
+        assert_eq!(mesa_wm_depth_stencil_dw1(true), MESA_POINT_WM_DEPTH_STENCIL_DW1);
+        assert_eq!(mesa_wm_depth_stencil_dw1(false), 0);
     }
 }
 
@@ -1351,6 +1436,7 @@ fn encode_triangle_probe_batch(
     if resident_msaa4 && !device_is_gfx125(warm.device_id) {
         return Err("probe-msaa4-device");
     }
+    let mesa_host_fixed_function = matches!(backend_probe_mode, BackendProbeMode::MesaLike);
     let multisample_dw1 = if resident_msaa4 {
         2 << 1
     } else {
@@ -1358,6 +1444,8 @@ fn encode_triangle_probe_batch(
     };
     let sample_mask_dw = if resident_msaa4 {
         0xF
+    } else if mesa_host_fixed_function {
+        mesa_sample_mask_dw(batch_mode.point_raster())
     } else {
         backend_probe_mode.sample_mask_dw()
     };
@@ -1660,7 +1748,6 @@ fn encode_triangle_probe_batch(
         }
     }
 
-    let mesa_host_fixed_function = matches!(backend_probe_mode, BackendProbeMode::MesaLike);
     let artifact_native_fixed_function = draw.native.is_some();
     // Mesa disables BINDING_TABLE_POOL_ALLOC on gfx11 through gfx12.0 because
     // this state can leak/corrupt across contexts.  Keep every pre-gfx12.5
@@ -1832,7 +1919,7 @@ fn encode_triangle_probe_batch(
     let clip_dw2 = if translated_viewport_clip_bypass {
         CLIP_PERSPECTIVE_DIVIDE_DISABLE
     } else if mesa_host_fixed_function {
-        0xD400_0001
+        mesa_clip_dw2(batch_mode.point_raster())
     } else if mesa_simple_rect_stack || mesa_clip_bypass {
         CLIP_PERSPECTIVE_DIVIDE_DISABLE
     } else {
@@ -1861,7 +1948,7 @@ fn encode_triangle_probe_batch(
     let point_width_raw = if batch_mode.point_raster() {
         backend_probe_mode
             .point_width_raw_override()
-            .unwrap_or(0x200)
+            .unwrap_or(RESIDENT_POINT_WIDTH_U8_3)
     } else {
         0
     };
@@ -1906,11 +1993,9 @@ fn encode_triangle_probe_batch(
         1 << 29
     };
     // SF.DW3[10:0] is PointWidth, and DW3[11] selects state-sourced width.
-    // Use a deliberately large U8.3-ish value for point-list raster smoke
-    // tests so a single center point should cover visible samples if SF/raster
-    // is alive.
+    // Use a visible six-pixel default for native point lists.
     let sf_dw3 = if mesa_host_fixed_function {
-        0x0200_4808
+        mesa_sf_dw3(batch_mode.point_raster())
     } else if batch_mode.point_raster() {
         let point_width_source_state = if backend_probe_mode.point_width_from_vertex() {
             0
@@ -2012,9 +2097,18 @@ fn encode_triangle_probe_batch(
             0
         }
         | wm_barycentric_mode;
-    let wm_depth_stencil_dw1 = depth_config.map_or(0, |depth| {
-        u32::from(depth.write_enabled) | (1 << 1) | (u32::from(depth.compare_function) << 5)
-    });
+    let wm_depth_stencil_dw1 = depth_config.map_or_else(
+        || {
+            if mesa_host_fixed_function {
+                mesa_wm_depth_stencil_dw1(batch_mode.point_raster())
+            } else {
+                0
+            }
+        },
+        |depth| {
+            u32::from(depth.write_enabled) | (1 << 1) | (u32::from(depth.compare_function) << 5)
+        },
+    );
     let wm_depth_stencil_dw2 = 0;
     let wm_depth_stencil_dw3 = 0;
     let wm_chroma_key_dw1 = 0;
@@ -2830,7 +2924,9 @@ fn encode_triangle_probe_batch(
     // draw.  It is architecturally ignored for this non-indexed triangle list,
     // but is part of the exact SVL state accompanying component packing.
     push(batch_dwords, &mut cursor, if mesa_host_fixed_function { 0xFFFF } else { 0 })?;
-    if let Some(index_buffer) = draw.index_buffer {
+    if let Some(index_buffer) = draw.index_buffer
+        && !mesa_host_fixed_function
+    {
         log_batch_offset(cursor, "3DSTATE_INDEX_BUFFER");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_INDEX_BUFFER)?;
         let index_buffer_dw1 = (RENDER_MOCS & 0x7F)
@@ -3720,6 +3816,27 @@ fn encode_triangle_probe_batch(
         push(batch_dwords, &mut cursor, 0x0001_0000)?;
         for _ in 0..4 {
             push(batch_dwords, &mut cursor, 0)?;
+        }
+
+        if let Some(index_buffer) = draw.index_buffer {
+            // The indexed host point-list capture does not merely bind its
+            // index buffer during front-end setup: it re-arms the exact
+            // non-L3-bypass state after VF/primitive replication and directly
+            // before WM/draw.  That later binding is the effective one.
+            log_batch_offset(cursor, "3DSTATE_INDEX_BUFFER verified-host-tail");
+            push(batch_dwords, &mut cursor, CMD_3DSTATE_INDEX_BUFFER)?;
+            let index_buffer_dw1 = (RENDER_MOCS & 0x7F) | (INDEX_BUFFER_FORMAT_DWORD << 8);
+            push(batch_dwords, &mut cursor, index_buffer_dw1)?;
+            push_addr(batch_dwords, &mut cursor, index_buffer.gpu_addr)?;
+            push(batch_dwords, &mut cursor, index_buffer.byte_len)?;
+            intel_render_focus_log!(
+                "{} index-buffer-state accepted=1 placement=verified-host-tail format=u32 count={} bytes={} gpu=0x{:X} mocs={} l3_bypass_disable=0 primitive_access=random retained=1 does_not_prove=index_fetch\n",
+                submit_name,
+                index_buffer.index_count,
+                index_buffer.byte_len,
+                index_buffer.gpu_addr,
+                RENDER_MOCS,
+            );
         }
 
         log_batch_offset(cursor, "3DSTATE_WM verified-host-tail");

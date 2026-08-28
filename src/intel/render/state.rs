@@ -784,6 +784,7 @@ enum TriangleBatchMode {
     LineStripDraw,
     TriangleStripDraw,
     TriangleFanDraw,
+    QuadStripDraw,
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     DrawScreenSpace,
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
@@ -2205,6 +2206,10 @@ impl TriangleBatchMode {
                 trueos_helio_artifact::render_ir::PrimitiveTopology::TriangleFan,
             )
             .expect("Intel supports triangle fans"),
+            // QUADSTRIP is a Gen12 hardware topology, but not a glTF / Helio
+            // IR primitive. Keep this explicit retained vGPU path native
+            // instead of lowering the mesh to triangles.
+            Self::QuadStripDraw => INTEL_TOPOLOGY_QUADSTRIP,
             Self::VfLineDraw => intel_topology_from_helio(
                 trueos_helio_artifact::render_ir::PrimitiveTopology::LineList,
             )
@@ -2230,6 +2235,7 @@ impl TriangleBatchMode {
             Self::LineStripDraw => "line-strip-draw",
             Self::TriangleStripDraw => "triangle-strip-draw",
             Self::TriangleFanDraw => "triangle-fan-draw",
+            Self::QuadStripDraw => "quad-strip-draw",
             Self::DrawScreenSpace => "draw-screen-space",
             Self::DrawScreenSpaceRect => "draw-screen-space-rect",
             Self::VfDraw => "vf-draw",
@@ -3158,6 +3164,7 @@ mod primitive_topology_tests {
         assert_eq!(intel_topology_from_helio(PrimitiveTopology::TriangleList), Ok(0x04));
         assert_eq!(intel_topology_from_helio(PrimitiveTopology::TriangleStrip), Ok(0x05));
         assert_eq!(intel_topology_from_helio(PrimitiveTopology::TriangleFan), Ok(0x06));
+        assert_eq!(TriangleBatchMode::QuadStripDraw.topology(), 0x08);
     }
 
     #[test]
@@ -3172,6 +3179,9 @@ mod primitive_topology_tests {
         assert!(!Topology::TriangleList.accepts_index_count(4));
         assert!(Topology::TriangleStrip.accepts_index_count(4));
         assert!(Topology::TriangleFan.accepts_index_count(4));
+        assert!(Topology::QuadStrip.accepts_index_count(4));
+        assert!(Topology::QuadStrip.accepts_index_count(6));
+        assert!(!Topology::QuadStrip.accepts_index_count(5));
     }
 
     #[test]

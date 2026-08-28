@@ -2007,6 +2007,7 @@ fn retained_mesh_topology(
         v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_FAN => {
             Some(ResidentScenePrimitiveTopology::TriangleFan)
         }
+        v::vgpu::PRIMITIVE_TOPOLOGY_QUAD_STRIP => Some(ResidentScenePrimitiveTopology::QuadStrip),
         _ => None,
     }
 }
@@ -2036,6 +2037,7 @@ mod retained_mesh_topology_tests {
                 3,
             ),
             (vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_FAN, ResidentScenePrimitiveTopology::TriangleFan, 3),
+            (vgpu::PRIMITIVE_TOPOLOGY_QUAD_STRIP, ResidentScenePrimitiveTopology::QuadStrip, 4),
         ];
         for (wire, expected, valid_count) in cases {
             assert_eq!(retained_mesh_topology(wire), Some(expected));
