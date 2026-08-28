@@ -1550,11 +1550,20 @@ pub(crate) fn begin_blueprint_frame(
     };
     let view = match writable_rgba_view(lease) {
         Ok(view) => view,
-        Err(_) => {
+        Err(error) => {
             let _ = cancel_frame_buffer(lease);
             if lease.frame != surface.frame {
                 let _ = destroy_frame(lease.frame);
             }
+            crate::log_warn!(target: "ui4/blueprint-frame";
+                "frame begin writable view failed owner={:?} window={} frame={} buffer={} surface_frame={} error={:?}\n",
+                owner,
+                window_id,
+                lease.frame.raw(),
+                lease.buffer_index,
+                surface.frame.raw(),
+                error,
+            );
             return ERROR_UI4;
         }
     };

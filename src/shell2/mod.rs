@@ -945,6 +945,23 @@ pub(crate) fn submit_online_launch_script_to_target(
     )
 }
 
+pub(crate) fn submit_online_args_with_launch_script_to_target(
+    spawner: &Spawner,
+    target: MatrixTarget,
+    args: Vec<AllocString>,
+    launch_script: &str,
+) -> Result<(), trueos_executor::SpawnError> {
+    let width = with_matrix_target_lease(&target, || line_width_for_output(target.output_mask))
+        .unwrap_or(matrix::DEFAULT_MATRIX_SLOT_LINE_WIDTH);
+    shell2_dl::submit_online_args_with_launch_script_to_target(
+        spawner,
+        target,
+        width,
+        args,
+        AllocString::from(launch_script),
+    )
+}
+
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn matrix_target_for_slot_name_selected(
     output_mask: OutputMask,
