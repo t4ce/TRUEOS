@@ -33,6 +33,9 @@ static CORE_KIND_BY_SLOT: [AtomicU8; WORKER_SLOT_LIMIT] =
 // global registry lock or a second copy of the same topology state.
 static REGISTERED_SLOTS: [AtomicU64; REGISTERED_SLOT_WORDS] =
     [const { AtomicU64::new(0) }; REGISTERED_SLOT_WORDS];
+// Exclusive end of the registered slot span. This keeps placement scans bounded
+// by discovered topology rather than the full 256-slot policy ceiling.
+static REGISTERED_SLOT_END: AtomicU32 = AtomicU32::new(0);
 static SPAWN_RR: AtomicU32 = AtomicU32::new(0);
 static WORKER_SUMMARY_LOGGED: AtomicBool = AtomicBool::new(false);
 
@@ -97,6 +100,7 @@ fn mark_slot_registered(cpu_slot: u32) {
         return;
     };
     REGISTERED_SLOTS[word].fetch_or(mask, Ordering::Release);
+    REGISTERED_SLOT_END.fetch_max(cpu_slot.saturating_add(1), Ordering::Release);
 }
 
 #[inline]
@@ -105,6 +109,18 @@ fn is_slot_registered(cpu_slot: u32) -> bool {
         return false;
     };
     REGISTERED_SLOTS[word].load(Ordering::Acquire) & mask != 0
+}
+
+#[inline]
+fn registered_slot_end() -> u32 {
+    REGISTERED_SLOT_END
+        .load(Ordering::Acquire)
+        .min(WORKER_SLOT_LIMIT as u32)
+}
+
+#[inline]
+fn registered_background_slot_range() -> core::ops::Range<u32> {
+    FIRST_BACKGROUND_SLOT..registered_slot_end().max(FIRST_BACKGROUND_SLOT)
 }
 
 fn maybe_log_worker_summary(registered: usize) {
@@ -227,7 +243,7 @@ pub fn background_slot_range() -> core::ops::Range<u32> {
 }
 
 pub fn background_worker_slots() -> Vec<u32> {
-    background_slot_range()
+    registered_background_slot_range()
         .filter(|slot| is_slot_registered(*slot) && is_general_background_worker_slot(*slot))
         .collect()
 }
@@ -235,7 +251,7 @@ pub fn background_worker_slots() -> Vec<u32> {
 /// Report whether a strict AP2+ performance-core worker is registered without
 /// advancing the round-robin selector used by actual task placement.
 pub fn has_perf_background_worker_slot() -> bool {
-    background_slot_range().any(|slot| {
+    registered_background_slot_range().any(|slot| {
         is_slot_registered(slot)
             && is_general_background_worker_slot(slot)
             && core_kind_for_slot(slot) == CORE_KIND_PERF
@@ -273,7 +289,7 @@ pub fn app_visible_parallelism() -> usize {
         return background.saturating_sub(reserved).max(1);
     }
 
-    (first_app_slot..WORKER_SLOT_LIMIT as u32)
+    (first_app_slot..registered_slot_end().max(first_app_slot))
         .filter(|slot| is_slot_registered(*slot) && !is_last_ap_service_slot(*slot))
         .count()
         .max(1)
@@ -284,7 +300,7 @@ pub fn is_background_worker_slot(cpu_slot: u32) -> bool {
 }
 
 pub fn has_background_worker_slot() -> bool {
-    background_slot_range()
+    registered_background_slot_range()
         .any(|slot| is_slot_registered(slot) && is_general_background_worker_slot(slot))
 }
 
@@ -337,7 +353,7 @@ fn pick_background_spawner_with_filter<F>(accept_slot: F) -> Option<(u32, u8, Wo
 where
     F: Fn(u32) -> bool,
 {
-    let perf_count = background_slot_range()
+    let perf_count = registered_background_slot_range()
         .filter(|slot| {
             is_slot_registered(*slot)
                 && is_general_background_worker_slot(*slot)
@@ -349,7 +365,7 @@ where
     if perf_count != 0 {
         let idx = SPAWN_RR.fetch_add(1, Ordering::Relaxed) as usize % perf_count;
         let mut seen = 0;
-        for slot in background_slot_range() {
+        for slot in registered_background_slot_range() {
             if !is_slot_registered(slot)
                 || !is_general_background_worker_slot(slot)
                 || !accept_slot(slot)
@@ -369,7 +385,7 @@ where
         return None;
     }
 
-    let eligible_count = background_slot_range()
+    let eligible_count = registered_background_slot_range()
         .filter(|slot| {
             is_slot_registered(*slot)
                 && is_general_background_worker_slot(*slot)
@@ -382,7 +398,7 @@ where
 
     let idx = SPAWN_RR.fetch_add(1, Ordering::Relaxed) as usize % eligible_count;
     let mut seen = 0;
-    for slot in background_slot_range() {
+    for slot in registered_background_slot_range() {
         if !is_slot_registered(slot)
             || !is_general_background_worker_slot(slot)
             || !accept_slot(slot)
