@@ -2204,7 +2204,7 @@ fn submit_resident_churn_forward_geometry_batched(
         && !PICASSO_RETAINED_TEXTURED_SUBMIT_LOGGED.swap(true, Ordering::AcqRel)
     {
         crate::log_important!(target: "render";
-            "picasso-material: proof=retained-texture-submit-armed accepted=1 contract=pos-normal+normal.xy-probe-uv+texture-id graphics_handoff=native-matrices vertex_shader=proven-adls-gpu-instance-transform vertex_fetch=pos3+normal3+sgvs3 component_packing=0xA77 pixel_shader=proven-heliov-filtered-base-color-simd16 interpolation=perspective-normal.xy ps_binding_table_alignment=32 ps_bti=2 sampler=0 texture={}x{} stride={} cpu_texture_sampling=0 cpu_vertex_projection=0 render_submits=1\n",
+            "picasso-material: proof=retained-texture-submit-armed accepted=1 contract=pos-normal-uv+texture-id graphics_handoff=native-matrices vertex_shader=adls-gfx120-retained-uv-transform-candidate vertex_fetch=pos3+uv2+sgvs3 component_packing=0xA37 pixel_shader=proven-heliov-filtered-base-color-simd16 interpolation=perspective-authored-uv ps_binding_table_alignment=32 ps_bti=2 sampler=0 texture={}x{} stride={} cpu_texture_sampling=0 cpu_vertex_projection=0 render_submits=1\n",
             texture.width,
             texture.height,
             texture.pitch,
@@ -2232,7 +2232,7 @@ fn submit_resident_churn_forward_geometry_batched(
         && !PICASSO_RETAINED_TEXTURED_PATH_LOGGED.swap(true, Ordering::AcqRel)
     {
         crate::log_important!(target: "render";
-            "picasso-material: proof=retained-texture-sampled-and-retired accepted=1 contract=pos-normal+normal.xy-probe-uv+texture-id graphics_handoff=native-matrices vertex_shader=proven-adls-gpu-instance-transform pixel_shader=filtered-base-color-simd16 interpolation=perspective-normal.xy texture={}x{} stride={} cpu_texture_sampling=0 cpu_vertex_projection=0 render_submits=1\n",
+            "picasso-material: proof=retained-texture-sampled-and-retired accepted=1 contract=pos-normal-uv+texture-id graphics_handoff=native-matrices vertex_shader=adls-gfx120-retained-uv-transform-candidate pixel_shader=filtered-base-color-simd16 interpolation=perspective-authored-uv texture={}x{} stride={} cpu_texture_sampling=0 cpu_vertex_projection=0 render_submits=1\n",
             texture.width,
             texture.height,
             texture.pitch,

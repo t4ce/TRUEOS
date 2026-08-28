@@ -1,6 +1,9 @@
-simple_triangle_dump: physical[0] vendor=0x10DE device=0x2489 type=discrete api=0x00404149 driver=0x94D50000 name="NVIDIA GeForce RTX 3060 Ti"
-simple_triangle_dump: physical[1] vendor=0x8086 device=0xA780 type=integrated api=0x0040414F driver=0x06800003 name="Intel(R) Graphics (RPL-S)"
-simple_triangle_dump: selected vendor=0x8086 device=0xA780 queue_family=0 name="Intel(R) Graphics (RPL-S)"
+Unknown drm_i915_query_item id=5
+Unknown DRM_IOCTL_I915_GET_PARAM 1
+DRM_SHIM: unhandled core DRM ioctl 0x2D (0xc00c642d)
+Unknown drm_i915_query_item id=7
+simple_triangle_dump: physical[0] vendor=0x8086 device=0x4680 type=integrated api=0x0040415A driver=0x06800063 name="Intel(R) UHD Graphics 770 (ADL-S GT1)"
+simple_triangle_dump: selected vendor=0x8086 device=0x4680 queue_family=0 name="Intel(R) UHD Graphics 770 (ADL-S GT1)"
 host-state summary: path=mesa genX_simple_shader trivial-triangle target=gfx125
 host-state cc_viewport min_depth=0.0 max_depth=1.0
 host-state clip perspective_divide_disable=1
@@ -10,54 +13,69 @@ host-state ps vector_mask=0 binding_table_entry_count=0 push_constants=0 dispatc
 host-state ps_extra valid=1 attribute_enable=0 per_sample=0 computed_depth=0 computes_stencil=0
 host-state ps_blend has_writeable_rt=1
 host-state target format=VK_FORMAT_R8G8B8A8_UNORM extent=64x64 samples=1 topology=triangle_list front_face=ccw polygon=fill cull=none
-simple_triangle_dump: pipeline_cache_size=8860
+simple_triangle_dump: pipeline_cache_size=8612
 simple_triangle_dump: executable_count=3
 simple_triangle_dump: executable[0] stage=vertex name="vertex" desc="SIMD8 vertex shader" subgroup=8
-simple_triangle_dump: stat[0][0] name="Instruction Count" value=51
-simple_triangle_dump: stat[0][1] name="SEND Count" value=8
-simple_triangle_dump: stat[0][2] name="Loop Count" value=0
-simple_triangle_dump: stat[0][3] name="Cycle Count" value=441
-simple_triangle_dump: stat[0][4] name="Spill Count" value=0
-simple_triangle_dump: stat[0][5] name="Fill Count" value=0
-simple_triangle_dump: stat[0][6] name="Scratch Memory Size" value=0
-simple_triangle_dump: stat[0][7] name="GRF registers" value=0
-simple_triangle_dump: stat[0][8] name="Max dispatch width" value=8
-simple_triangle_dump: stat[0][9] name="Max live registers" value=19
-simple_triangle_dump: stat[0][10] name="Workgroup Memory Size" value=0
-simple_triangle_dump: stat[0][11] name="Non SSA regs after NIR" value=6
-simple_triangle_dump: stat[0][12] name="Source hash" value=763768011
-simple_triangle_dump: rep[0][0] name="Final NIR" isText=1 size=5301
-simple_triangle_dump: rep[0][1] name="GEN Assembly" isText=1 size=6679
+simple_triangle_dump: stat[0][0] name="Instructions" value=51
+simple_triangle_dump: stat[0][1] name="Code size" value=624
+simple_triangle_dump: stat[0][2] name="SENDs" value=8
+simple_triangle_dump: stat[0][3] name="Loops" value=0
+simple_triangle_dump: stat[0][4] name="Cycles" value=440
+simple_triangle_dump: stat[0][5] name="Spills" value=0
+simple_triangle_dump: stat[0][6] name="Fills" value=0
+simple_triangle_dump: stat[0][7] name="Scratch Memory Size" value=0
+simple_triangle_dump: stat[0][8] name="GRF registers" value=0
+simple_triangle_dump: stat[0][9] name="Max dispatch width" value=8
+simple_triangle_dump: stat[0][10] name="Max live registers" value=19
+simple_triangle_dump: stat[0][11] name="Workgroup Memory Size" value=0
+simple_triangle_dump: stat[0][12] name="Non SSA regs after NIR" value=9
+simple_triangle_dump: stat[0][13] name="Source hash" value=763768011
+simple_triangle_dump: rep[0][0] name="TRUEOS HelioC bind map" isText=1 size=332
+simple_triangle_dump: rep[0][1] name="TRUEOS HelioC devinfo" isText=1 size=108
+simple_triangle_dump: rep[0][2] name="TRUEOS HelioC shader serialize" isText=0 size=1383
+simple_triangle_dump: rep[0][3] name="TRUEOS HelioC prog data" isText=0 size=408
+simple_triangle_dump: rep[0][4] name="Final NIR" isText=1 size=5996
+simple_triangle_dump: rep[0][5] name="GEN Assembly" isText=1 size=6317
 simple_triangle_dump: executable[1] stage=fragment name="SIMD8 fragment" desc="SIMD8 fragment shader" subgroup=8
-simple_triangle_dump: stat[1][0] name="Instruction Count" value=7
-simple_triangle_dump: stat[1][1] name="SEND Count" value=2
-simple_triangle_dump: stat[1][2] name="Loop Count" value=0
-simple_triangle_dump: stat[1][3] name="Cycle Count" value=786
-simple_triangle_dump: stat[1][4] name="Spill Count" value=0
-simple_triangle_dump: stat[1][5] name="Fill Count" value=0
-simple_triangle_dump: stat[1][6] name="Scratch Memory Size" value=0
-simple_triangle_dump: stat[1][7] name="GRF registers" value=0
-simple_triangle_dump: stat[1][8] name="Max dispatch width" value=16
-simple_triangle_dump: stat[1][9] name="Max live registers" value=7
-simple_triangle_dump: stat[1][10] name="Workgroup Memory Size" value=0
-simple_triangle_dump: stat[1][11] name="Non SSA regs after NIR" value=5
-simple_triangle_dump: stat[1][12] name="Source hash" value=3874285174
-simple_triangle_dump: rep[1][0] name="Final NIR" isText=1 size=2187
-simple_triangle_dump: rep[1][1] name="GEN Assembly" isText=1 size=911
+simple_triangle_dump: stat[1][0] name="Instructions" value=7
+simple_triangle_dump: stat[1][1] name="Code size" value=96
+simple_triangle_dump: stat[1][2] name="SENDs" value=2
+simple_triangle_dump: stat[1][3] name="Loops" value=0
+simple_triangle_dump: stat[1][4] name="Cycles" value=786
+simple_triangle_dump: stat[1][5] name="Spills" value=0
+simple_triangle_dump: stat[1][6] name="Fills" value=0
+simple_triangle_dump: stat[1][7] name="Scratch Memory Size" value=0
+simple_triangle_dump: stat[1][8] name="GRF registers" value=0
+simple_triangle_dump: stat[1][9] name="Max dispatch width" value=16
+simple_triangle_dump: stat[1][10] name="Max live registers" value=7
+simple_triangle_dump: stat[1][11] name="Workgroup Memory Size" value=0
+simple_triangle_dump: stat[1][12] name="Non SSA regs after NIR" value=5
+simple_triangle_dump: stat[1][13] name="Source hash" value=3874285174
+simple_triangle_dump: rep[1][0] name="TRUEOS HelioC bind map" isText=1 size=342
+simple_triangle_dump: rep[1][1] name="TRUEOS HelioC devinfo" isText=1 size=108
+simple_triangle_dump: rep[1][2] name="TRUEOS HelioC shader serialize" isText=0 size=1223
+simple_triangle_dump: rep[1][3] name="TRUEOS HelioC prog data" isText=0 size=512
+simple_triangle_dump: rep[1][4] name="Final NIR" isText=1 size=2223
+simple_triangle_dump: rep[1][5] name="GEN Assembly" isText=1 size=911
 simple_triangle_dump: executable[2] stage=fragment name="SIMD16 fragment" desc="SIMD16 fragment shader" subgroup=16
-simple_triangle_dump: stat[2][0] name="Instruction Count" value=11
-simple_triangle_dump: stat[2][1] name="SEND Count" value=2
-simple_triangle_dump: stat[2][2] name="Loop Count" value=0
-simple_triangle_dump: stat[2][3] name="Cycle Count" value=812
-simple_triangle_dump: stat[2][4] name="Spill Count" value=0
-simple_triangle_dump: stat[2][5] name="Fill Count" value=0
-simple_triangle_dump: stat[2][6] name="Scratch Memory Size" value=0
-simple_triangle_dump: stat[2][7] name="GRF registers" value=0
-simple_triangle_dump: stat[2][8] name="Max dispatch width" value=16
-simple_triangle_dump: stat[2][9] name="Max live registers" value=13
-simple_triangle_dump: stat[2][10] name="Workgroup Memory Size" value=0
-simple_triangle_dump: stat[2][11] name="Non SSA regs after NIR" value=5
-simple_triangle_dump: stat[2][12] name="Source hash" value=3874285174
-simple_triangle_dump: rep[2][0] name="Final NIR" isText=1 size=2187
-simple_triangle_dump: rep[2][1] name="GEN Assembly" isText=1 size=1474
+simple_triangle_dump: stat[2][0] name="Instructions" value=11
+simple_triangle_dump: stat[2][1] name="Code size" value=160
+simple_triangle_dump: stat[2][2] name="SENDs" value=2
+simple_triangle_dump: stat[2][3] name="Loops" value=0
+simple_triangle_dump: stat[2][4] name="Cycles" value=812
+simple_triangle_dump: stat[2][5] name="Spills" value=0
+simple_triangle_dump: stat[2][6] name="Fills" value=0
+simple_triangle_dump: stat[2][7] name="Scratch Memory Size" value=0
+simple_triangle_dump: stat[2][8] name="GRF registers" value=0
+simple_triangle_dump: stat[2][9] name="Max dispatch width" value=16
+simple_triangle_dump: stat[2][10] name="Max live registers" value=13
+simple_triangle_dump: stat[2][11] name="Workgroup Memory Size" value=0
+simple_triangle_dump: stat[2][12] name="Non SSA regs after NIR" value=5
+simple_triangle_dump: stat[2][13] name="Source hash" value=3874285174
+simple_triangle_dump: rep[2][0] name="TRUEOS HelioC bind map" isText=1 size=342
+simple_triangle_dump: rep[2][1] name="TRUEOS HelioC devinfo" isText=1 size=108
+simple_triangle_dump: rep[2][2] name="TRUEOS HelioC shader serialize" isText=0 size=1223
+simple_triangle_dump: rep[2][3] name="TRUEOS HelioC prog data" isText=0 size=512
+simple_triangle_dump: rep[2][4] name="Final NIR" isText=1 size=2223
+simple_triangle_dump: rep[2][5] name="GEN Assembly" isText=1 size=1474
 helio_pipeline_dump: compiled_only=1

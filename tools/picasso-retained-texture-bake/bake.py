@@ -3,11 +3,13 @@
 
 from __future__ import annotations
 
+import argparse
 import importlib.util
 import json
 import os
 from pathlib import Path
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -20,6 +22,8 @@ OUT = TRUEOS / "assets/helio/picasso-retained-textured-forward"
 PROVEN_ADLS_TEXTURE_PS = (
     TRUEOS / "assets/helio/heliov-textured-mesh/voxel_textured.ps.simd16.bin"
 )
+ADLS_DEVICE_ID = 0x4680
+ADLS_NOOP_SHIM_IDENTITY = "noop-drm-shim:8086:4680:r0c"
 
 
 def load_baker():
@@ -38,7 +42,59 @@ def replace_once(source: str, old: str, new: str) -> str:
     return source.replace(old, new)
 
 
+def canonical_vertex_program(exec_dir: Path, fallback: bytes) -> bytes:
+    """Prefer ANV's complete shader serialization when an instrumented ICD emits it.
+
+    The normal graphics bake only exposes the opaque pipeline cache, for which
+    `extract_native` retains its established assembly-bounded recovery.  The
+    pinned ADL-S no-op shim also exposes ANV's canonical program serialization;
+    use that exact `program_size` record when available so a cache subrecord
+    cannot silently truncate a larger vertex stage.
+    """
+    serialized = sorted(
+        exec_dir.glob("*_vertex_*_TRUEOS_HelioC_shader_serialize.bin")
+    )
+    if not serialized:
+        return fallback
+    if len(serialized) != 1:
+        raise SystemExit("Picasso retained texture bake has ambiguous vertex serializations")
+    data = serialized[0].read_bytes()
+    if len(data) < 8:
+        raise SystemExit("Picasso retained texture vertex serialization is truncated")
+    stage, program_bytes = struct.unpack_from("<II", data)
+    if stage != 0 or program_bytes == 0 or 8 + program_bytes > len(data):
+        raise SystemExit("Picasso retained texture vertex serialization has invalid stage/size")
+    program = data[8:8 + program_bytes]
+    if len(program) % 8 != 0:
+        raise SystemExit("Picasso retained texture vertex program is not EU instruction aligned")
+    return program
+
+
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=OUT,
+        help="output directory (default: the checked-in Picasso retained-texture asset)",
+    )
+    parser.add_argument(
+        "--adls-noop-shim-candidate",
+        action="store_true",
+        help=(
+            "allow the pinned no-op DRM shim to emit a source-level ADL-S candidate; "
+            "the result is never physical-hardware admission evidence"
+        ),
+    )
+    args = parser.parse_args()
+    out = args.out.resolve()
+    if args.adls_noop_shim_candidate:
+        if os.environ.get("TRUEOS_PICASSO_ADLS_CANDIDATE_IDENTITY") != ADLS_NOOP_SHIM_IDENTITY:
+            raise SystemExit("Picasso ADL-S shim candidate requires its authenticated no-op identity")
+        provenance = "adls-noop-drm-shim-compiler-candidate"
+    else:
+        provenance = "physical-adl-s-vulkan-pipeline-executable"
+
     baker = load_baker()
     with tempfile.TemporaryDirectory(
         prefix="picasso-retained-texture-bake-",
@@ -148,26 +204,51 @@ def main() -> None:
         log = work / "compile.log"
         env = os.environ.copy()
         env["TRUEOS_EXECUTABLE_DUMP_DIR"] = str(exec_dir)
+        # The target shader is valid only for the physical Picasso GPU.  A
+        # workstation RPL compile may help inspect code generation, but is not
+        # a substitute for an ADL-S graphics pipeline executable.
+        env["TRUEOS_VK_DEVICE_ID"] = f"0x{ADLS_DEVICE_ID:04X}"
         baker.run([str(dumper), str(vs_spv), str(fs_spv)], env=env, log=log)
         device, executables = baker.parse_compile_log(log.read_text())
-        vs, ps8, ps16 = baker.extract_native(exec_dir, work / "native")
+        if device.get("vendor_id") != 0x8086 or device.get("device_id") != ADLS_DEVICE_ID:
+            raise SystemExit(
+                "Picasso retained texture bake requires Intel ADL-S device 0x4680; "
+                f"compiler selected vendor=0x{device.get('vendor_id', 0):04X} "
+                f"device=0x{device.get('device_id', 0):04X}"
+            )
+        cache_vs, ps8, ps16 = baker.extract_native(exec_dir, work / "native")
+        vs = canonical_vertex_program(exec_dir, cache_vs)
+        vertex_sizes = [
+            executable["statistics"].get("Code size")
+            for executable in executables.values()
+            if executable["stage"] == "vertex" and executable["simd_width"] == 8
+        ]
+        if len(vertex_sizes) != 1 or not isinstance(vertex_sizes[0], int):
+            raise SystemExit("Picasso retained texture bake lacks one SIMD8 vertex code-size record")
+        if len(vs) != vertex_sizes[0]:
+            raise SystemExit(
+                "Picasso retained texture vertex recovery disagrees with Mesa's code size: "
+                f"recovered={len(vs)} reported={vertex_sizes[0]}"
+            )
         if ps16 is None or ps16 != PROVEN_ADLS_TEXTURE_PS.read_bytes():
             raise SystemExit("retained fragment no longer matches proven ADL-S SIMD16 sampler")
 
-        OUT.mkdir(parents=True, exist_ok=True)
-        (OUT / "retained_textured_forward.vs.simd8.bin").write_bytes(vs)
-        (OUT / "retained_textured_forward.ps.simd8.bin").write_bytes(ps8)
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "retained_textured_forward.vs.simd8.bin").write_bytes(vs)
+        (out / "retained_textured_forward.ps.simd8.bin").write_bytes(ps8)
         if ps16 is not None:
-            (OUT / "retained_textured_forward.ps.simd16.bin").write_bytes(ps16)
-        shutil.copy2(WGSL, OUT / WGSL.name)
-        shutil.copy2(log, OUT / "compile.log")
+            (out / "retained_textured_forward.ps.simd16.bin").write_bytes(ps16)
+        shutil.copy2(WGSL, out / WGSL.name)
+        shutil.copy2(log, out / "compile.log")
         for assembly in exec_dir.glob("*_GEN_Assembly.txt"):
-            shutil.copy2(assembly, OUT / assembly.name)
+            shutil.copy2(assembly, out / assembly.name)
         metadata = {
             "schema": 1,
             "contract": "retained-transform-filtered-base-color",
             "frontend": frontend,
             "device": device,
+            "target": "intel-adl-s-uhd-770-0x4680",
+            "provenance": provenance,
             "executables": list(executables.values()),
             "vertex_stride": 32,
             "runtime_dispatch": {"vertex": "simd8", "fragment": "simd16"},
@@ -183,7 +264,7 @@ def main() -> None:
             ],
             "native_bytes": {"vs": len(vs), "ps8": len(ps8), "ps16": len(ps16 or b"")},
         }
-        (OUT / "metadata.json").write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n")
+        (out / "metadata.json").write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n")
         print(json.dumps(metadata, indent=2, sort_keys=True))
 
 
