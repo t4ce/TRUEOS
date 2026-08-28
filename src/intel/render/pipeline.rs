@@ -1867,10 +1867,20 @@ fn encode_triangle_probe_batch(
     // default 32-handle block mode (zero).
     let sf_viewport_transform_enable =
         !(batch_mode.screen_space_raster() || backend_probe_mode.disable_sf_viewport_transform());
-    let sf_dw1 = if mesa_host_fixed_function {
-        0x0008_0402
+    // `Line Width` is a U11.7 field at DW1[29:12]. Keep ordinary
+    // primitives at the hardware thinnest-line default, while the retained
+    // RGB world-axis guides receive a clear, three-pixel stroke.
+    const LINE_WIDTH_SHIFT: u32 = 12;
+    const THREE_PIXEL_LINE_WIDTH_U11_7: u32 = 3 << 7;
+    let sf_line_width = if matches!(batch_mode, TriangleBatchMode::LineDraw) {
+        THREE_PIXEL_LINE_WIDTH_U11_7 << LINE_WIDTH_SHIFT
     } else {
-        (u32::from(sf_viewport_transform_enable) << 1) | (1 << 10)
+        0
+    };
+    let sf_dw1 = if mesa_host_fixed_function {
+        0x0008_0402 | sf_line_width
+    } else {
+        (u32::from(sf_viewport_transform_enable) << 1) | (1 << 10) | sf_line_width
     };
     let sf_dw2 = if backend_probe_mode.sf_deref_block_zero() || TRIANGLE_VS_URB_ENTRIES >= 192 {
         0
