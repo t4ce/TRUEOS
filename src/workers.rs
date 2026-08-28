@@ -1,8 +1,7 @@
 extern crate alloc;
 
-use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
 
 use spin::Mutex;
 use trueos_executor::{SendSpawner, SpawnToken, Spawner};
@@ -16,18 +15,27 @@ pub const AP1_UI_SERVICE_SLOT: u32 = 1;
 const FIRST_BACKGROUND_SLOT: u32 = 2;
 const APP_PARALLELISM_NO_UI: bool = false;
 const WORKER_SLOT_LIMIT: usize = crate::allcaps::hv::VM_CPU_SLOT_LIMIT;
+const REGISTERED_SLOT_WORD_BITS: usize = u64::BITS as usize;
+const REGISTERED_SLOT_WORDS: usize =
+    (WORKER_SLOT_LIMIT + REGISTERED_SLOT_WORD_BITS - 1) / REGISTERED_SLOT_WORD_BITS;
 // The live scanout -> H.264 -> UDP path still contains synchronous ownership
 // boundaries which make sharing a cooperative executor unsafe.  Until that
 // path is folded into AP1 as a fully asynchronous media-engine service, reserve
 // the topology's final AP as its private buddy carrier.
 const LAST_AP_SERVICE_RESERVED: bool = cfg!(feature = "trueos_h264_encode_stream");
 
-static CORE_SPAWNERS: Mutex<BTreeMap<u32, SendSpawner>> = Mutex::new(BTreeMap::new());
-static CORE_KINDS: Mutex<BTreeMap<u32, u8>> = Mutex::new(BTreeMap::new());
 static CORE_SPAWNER_BY_SLOT: [Mutex<Option<SendSpawner>>; WORKER_SLOT_LIMIT] =
     [const { Mutex::new(None) }; WORKER_SLOT_LIMIT];
 static CORE_KIND_BY_SLOT: [AtomicU8; WORKER_SLOT_LIMIT] =
     [const { AtomicU8::new(CORE_KIND_UNKNOWN) }; WORKER_SLOT_LIMIT];
+// Worker registration is monotonic. Publish a bit only after the per-slot
+// spawner and kind are initialized, so readers can discover workers without a
+// global registry lock or a second copy of the same topology state.
+static REGISTERED_SLOTS: [AtomicU64; REGISTERED_SLOT_WORDS] =
+    [const { AtomicU64::new(0) }; REGISTERED_SLOT_WORDS];
+// Exclusive end of the registered slot span. This keeps placement scans bounded
+// by discovered topology rather than the full 256-slot policy ceiling.
+static REGISTERED_SLOT_END: AtomicU32 = AtomicU32::new(0);
 static SPAWN_RR: AtomicU32 = AtomicU32::new(0);
 static WORKER_SUMMARY_LOGGED: AtomicBool = AtomicBool::new(false);
 
@@ -75,6 +83,46 @@ fn worker_spawner(cpu_slot: u32, spawner: SendSpawner) -> WorkerSpawner {
     WorkerSpawner { cpu_slot, spawner }
 }
 
+#[inline]
+fn registered_slot_word_and_mask(cpu_slot: u32) -> Option<(usize, u64)> {
+    let slot = cpu_slot as usize;
+    if slot >= WORKER_SLOT_LIMIT {
+        return None;
+    }
+    let word = slot / REGISTERED_SLOT_WORD_BITS;
+    let mask = 1u64 << (slot % REGISTERED_SLOT_WORD_BITS);
+    Some((word, mask))
+}
+
+#[inline]
+fn mark_slot_registered(cpu_slot: u32) {
+    let Some((word, mask)) = registered_slot_word_and_mask(cpu_slot) else {
+        return;
+    };
+    REGISTERED_SLOTS[word].fetch_or(mask, Ordering::Release);
+    REGISTERED_SLOT_END.fetch_max(cpu_slot.saturating_add(1), Ordering::Release);
+}
+
+#[inline]
+fn is_slot_registered(cpu_slot: u32) -> bool {
+    let Some((word, mask)) = registered_slot_word_and_mask(cpu_slot) else {
+        return false;
+    };
+    REGISTERED_SLOTS[word].load(Ordering::Acquire) & mask != 0
+}
+
+#[inline]
+fn registered_slot_end() -> u32 {
+    REGISTERED_SLOT_END
+        .load(Ordering::Acquire)
+        .min(WORKER_SLOT_LIMIT as u32)
+}
+
+#[inline]
+fn registered_background_slot_range() -> core::ops::Range<u32> {
+    FIRST_BACKGROUND_SLOT..registered_slot_end().max(FIRST_BACKGROUND_SLOT)
+}
+
 fn maybe_log_worker_summary(registered: usize) {
     let topology_slots = topology_core_slot_count();
     if topology_slots == 0 || registered < topology_slots {
@@ -114,16 +162,20 @@ fn maybe_log_worker_summary(registered: usize) {
 
 pub fn register_core_spawner(cpu_slot: u32, core_kind: u8, spawner: Spawner) {
     let send_spawner = spawner.make_send();
-    if let Some(slot) = CORE_SPAWNER_BY_SLOT.get(cpu_slot as usize) {
-        *slot.lock() = Some(send_spawner);
-        CORE_KIND_BY_SLOT[cpu_slot as usize].store(core_kind, Ordering::Release);
-    }
-    let registered = {
-        let mut spawners = CORE_SPAWNERS.lock();
-        spawners.insert(cpu_slot, send_spawner);
-        spawners.len()
+    let Some(slot) = CORE_SPAWNER_BY_SLOT.get(cpu_slot as usize) else {
+        crate::log!(
+            "workers: ignoring registration outside slot limit slot={} limit={}\n",
+            cpu_slot,
+            WORKER_SLOT_LIMIT,
+        );
+        return;
     };
-    CORE_KINDS.lock().insert(cpu_slot, core_kind);
+
+    *slot.lock() = Some(send_spawner);
+    CORE_KIND_BY_SLOT[cpu_slot as usize].store(core_kind, Ordering::Release);
+    mark_slot_registered(cpu_slot);
+
+    let registered = registered_core_spawner_count();
     maybe_log_worker_summary(registered);
     if is_general_background_worker_slot(cpu_slot) {
         crate::r::blocking::start_service_lane_for_slot(cpu_slot);
@@ -191,29 +243,26 @@ pub fn background_slot_range() -> core::ops::Range<u32> {
 }
 
 pub fn background_worker_slots() -> Vec<u32> {
-    let map = CORE_SPAWNERS.lock();
-    let mut out: Vec<u32> = map
-        .keys()
-        .copied()
-        .filter(|slot| is_general_background_worker_slot(*slot))
-        .collect();
-    out.sort_unstable();
-    out
+    registered_background_slot_range()
+        .filter(|slot| is_slot_registered(*slot) && is_general_background_worker_slot(*slot))
+        .collect()
 }
 
 /// Report whether a strict AP2+ performance-core worker is registered without
 /// advancing the round-robin selector used by actual task placement.
 pub fn has_perf_background_worker_slot() -> bool {
-    let map = CORE_SPAWNERS.lock();
-    let kinds = CORE_KINDS.lock();
-    map.keys().any(|slot| {
-        is_general_background_worker_slot(*slot)
-            && kinds.get(slot).copied().unwrap_or(CORE_KIND_UNKNOWN) == CORE_KIND_PERF
+    registered_background_slot_range().any(|slot| {
+        is_slot_registered(slot)
+            && is_general_background_worker_slot(slot)
+            && core_kind_for_slot(slot) == CORE_KIND_PERF
     })
 }
 
 pub fn registered_core_spawner_count() -> usize {
-    CORE_SPAWNERS.lock().len()
+    REGISTERED_SLOTS
+        .iter()
+        .map(|word| word.load(Ordering::Acquire).count_ones() as usize)
+        .sum()
 }
 
 pub fn topology_core_slot_count() -> usize {
@@ -240,10 +289,8 @@ pub fn app_visible_parallelism() -> usize {
         return background.saturating_sub(reserved).max(1);
     }
 
-    CORE_SPAWNERS
-        .lock()
-        .keys()
-        .filter(|slot| **slot >= first_app_slot && !is_last_ap_service_slot(**slot))
+    (first_app_slot..registered_slot_end().max(first_app_slot))
+        .filter(|slot| is_slot_registered(*slot) && !is_last_ap_service_slot(*slot))
         .count()
         .max(1)
 }
@@ -253,10 +300,8 @@ pub fn is_background_worker_slot(cpu_slot: u32) -> bool {
 }
 
 pub fn has_background_worker_slot() -> bool {
-    CORE_SPAWNERS
-        .lock()
-        .keys()
-        .any(|slot| is_general_background_worker_slot(*slot))
+    registered_background_slot_range()
+        .any(|slot| is_slot_registered(slot) && is_general_background_worker_slot(slot))
 }
 
 pub fn pick_background_spawner() -> Option<WorkerSpawner> {
@@ -308,40 +353,44 @@ fn pick_background_spawner_with_filter<F>(accept_slot: F) -> Option<(u32, u8, Wo
 where
     F: Fn(u32) -> bool,
 {
-    let map = CORE_SPAWNERS.lock();
-    if map.is_empty() {
-        return None;
-    }
-
-    let kinds = CORE_KINDS.lock();
-    let perf_count = map
-        .iter()
-        .filter(|(slot, _)| is_general_background_worker_slot(**slot) && accept_slot(**slot))
-        .filter(|(slot, _)| kinds.get(slot).copied().unwrap_or(CORE_KIND_UNKNOWN) == CORE_KIND_PERF)
+    let perf_count = registered_background_slot_range()
+        .filter(|slot| {
+            is_slot_registered(*slot)
+                && is_general_background_worker_slot(*slot)
+                && accept_slot(*slot)
+        })
+        .filter(|slot| core_kind_for_slot(*slot) == CORE_KIND_PERF)
         .count();
 
     if perf_count != 0 {
         let idx = SPAWN_RR.fetch_add(1, Ordering::Relaxed) as usize % perf_count;
         let mut seen = 0;
-        for (slot, spawner) in map.iter() {
-            if !is_general_background_worker_slot(*slot) || !accept_slot(*slot) {
+        for slot in registered_background_slot_range() {
+            if !is_slot_registered(slot)
+                || !is_general_background_worker_slot(slot)
+                || !accept_slot(slot)
+            {
                 continue;
             }
-            let kind = kinds.get(slot).copied().unwrap_or(CORE_KIND_UNKNOWN);
+            let kind = core_kind_for_slot(slot);
             if kind != CORE_KIND_PERF {
                 continue;
             }
             if seen == idx {
-                return Some((*slot, kind, worker_spawner(*slot, *spawner)));
+                let spawner = raw_spawner_for_slot(slot)?;
+                return Some((slot, kind, worker_spawner(slot, spawner)));
             }
             seen += 1;
         }
         return None;
     }
 
-    let eligible_count = map
-        .keys()
-        .filter(|slot| is_general_background_worker_slot(**slot) && accept_slot(**slot))
+    let eligible_count = registered_background_slot_range()
+        .filter(|slot| {
+            is_slot_registered(*slot)
+                && is_general_background_worker_slot(*slot)
+                && accept_slot(*slot)
+        })
         .count();
     if eligible_count == 0 {
         return None;
@@ -349,13 +398,17 @@ where
 
     let idx = SPAWN_RR.fetch_add(1, Ordering::Relaxed) as usize % eligible_count;
     let mut seen = 0;
-    for (slot, spawner) in map.iter() {
-        if !is_general_background_worker_slot(*slot) || !accept_slot(*slot) {
+    for slot in registered_background_slot_range() {
+        if !is_slot_registered(slot)
+            || !is_general_background_worker_slot(slot)
+            || !accept_slot(slot)
+        {
             continue;
         }
         if seen == idx {
-            let kind = kinds.get(slot).copied().unwrap_or(CORE_KIND_UNKNOWN);
-            return Some((*slot, kind, worker_spawner(*slot, *spawner)));
+            let kind = core_kind_for_slot(slot);
+            let spawner = raw_spawner_for_slot(slot)?;
+            return Some((slot, kind, worker_spawner(slot, spawner)));
         }
         seen += 1;
     }
