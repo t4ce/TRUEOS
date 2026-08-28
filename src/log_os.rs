@@ -122,7 +122,9 @@ pub(crate) mod flags {
     } else if LUMEN_PERF_DIAG_PROFILE_ENABLED {
         LogLevelPolicy::up(LogLevelFilter::Info)
     } else {
-        LogLevelPolicy::up(LogLevelFilter::Warn)
+        // Keep ordinary GPGPU Info chatter filtered while admitting explicit
+        // one-shot lifecycle/proof records such as the boot silicon probe.
+        LogLevelPolicy::up(LogLevelFilter::Once)
     };
     pub(crate) const RENDER_LOG_LEVEL: LogLevelPolicy = if HELIO_GFX_DIAG_PROFILE_ENABLED {
         LogLevelPolicy::up(LogLevelFilter::Debug)

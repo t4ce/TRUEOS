@@ -76,6 +76,7 @@ define_started_flags!(
     FTP_SERVER_STARTED,
     GPU_COMPLETION_REAPER_STARTED,
     GPU_FAULT_CONTAINMENT_STARTED,
+    INTEL_SUBSET_SUM_BOOT_PROBE_STARTED,
     TRUEOS_SPIRIT_STARTED,
     SPIRIT_RESPONSE_WINDOW_STARTED,
     MOUSE_MOTION_SERVICE_STARTED,
@@ -771,6 +772,10 @@ fn spawn_gpu_completion_reaper(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_gpu_fault_containment(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::gpu::vgpu::gpu_fault_containment_task())
+}
+
+fn spawn_intel_subset_sum_boot_probe(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| crate::intel::gpgpu::subset_sum_boot_probe_task())
 }
 
 fn spawn_trueos_spirit_workers(spawner: Spawner) -> SpawnAttempt {
@@ -1481,7 +1486,7 @@ const NET_ANY_CONFIGURED_AND_ROOT_READY: u32 =
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 72
+const TASK_COUNT: usize = 73
     + cfg!(feature = "trueos_h264_encode_stream") as usize
     + cfg!(feature = "trueos_lumen") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
@@ -1721,6 +1726,16 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         gpu_fault_containment_gate,
         &GPU_FAULT_CONTAINMENT_STARTED,
         spawn_gpu_fault_containment,
+    ),
+    // The arithmetic probe owns a bounded normal-priority execution context
+    // only. It never admits a scanout, display-plane, WD0, or BCS operation.
+    TaskSpec::configured_gated(
+        crate::allcaps::probes::INTEL_SUBSET_SUM_BOOT_PROBE,
+        "intel-subset-sum-collapse5-boot-probe",
+        0,
+        gpu_fault_containment_gate,
+        &INTEL_SUBSET_SUM_BOOT_PROBE_STARTED,
+        spawn_intel_subset_sum_boot_probe,
     ),
     // TrueOS-Spirit reserves all four cursor-pipe fences, but its sane initial
     // deployment starts one Embassy worker only after a complete scanout

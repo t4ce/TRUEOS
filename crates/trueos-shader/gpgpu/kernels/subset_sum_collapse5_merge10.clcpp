@@ -1,0 +1,51 @@
+// TRUEOS low-footprint subset-sum Collapse5 tree probe.
+//
+// This is deliberately an integer kernel, not an RGBA display blend.  The
+// arena is one small, linear u32 buffer.  Its offsets and state counts are
+// explicit arguments; the boot profile happens to use the layout documented
+// by `SubsetSumArenaLayout` in the kernel.
+//
+// `stage` is 0 or 1 for a leaf and 2 for the Cartesian tree merge. The boot
+// profile selects five weights per leaf, 32 leaf states, and 1024 merged
+// states. The host dispatches the three stages in one ordered RCS batch,
+// making the leaf-to-merge dependencies explicit without allocating a
+// scanout surface or touching the display/writeback engines.
+
+__attribute__((intel_reqd_sub_group_size(16)))
+__kernel void subset_sum_collapse5_merge10(
+    __global uint *arena,
+    uint stage,
+    uint leaf_width,
+    uint leaf_state_count,
+    uint merge_state_count,
+    uint weights_offset,
+    uint left_leaf_offset,
+    uint right_leaf_offset,
+    uint output_offset)
+{
+    const uint candidate = get_global_id(0);
+
+    if (stage < 2) {
+        if (candidate >= leaf_state_count) {
+            return;
+        }
+        uint sum = 0;
+        const uint weight_base = weights_offset + stage * leaf_width;
+        for (uint bit = 0; bit < leaf_width; ++bit) {
+            if ((candidate & (1u << bit)) != 0) {
+                sum += arena[weight_base + bit];
+            }
+        }
+        arena[(stage == 0 ? left_leaf_offset : right_leaf_offset) + candidate] = sum;
+        return;
+    }
+
+    if (candidate < merge_state_count) {
+        // This quotient/remainder projection is the tree traversal. For the
+        // boot profile it is exactly lower-five/upper-five bit selection.
+        const uint left = candidate % leaf_state_count;
+        const uint right = candidate / leaf_state_count;
+        arena[output_offset + candidate] =
+            arena[left_leaf_offset + left] + arena[right_leaf_offset + right];
+    }
+}

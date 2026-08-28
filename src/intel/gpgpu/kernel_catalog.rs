@@ -1,4 +1,10 @@
 pub(crate) const COPY_RECT_RGBA8_KERNEL_NAME: &str = "copy_rect_rgba8";
+pub(crate) const SUBSET_SUM_COLLAPSE5_MERGE10_KERNEL_NAME: &str = "subset_sum_collapse5_merge10";
+pub(crate) const SUBSET_SUM_COLLAPSE5_MERGE10_OPENCL_SOURCE: &str = include_str!(
+    "../../../crates/trueos-shader/gpgpu/kernels/subset_sum_collapse5_merge10.clcpp"
+);
+pub(crate) const SUBSET_SUM_COLLAPSE5_MERGE10_SOURCE_PATH: &str =
+    "crates/trueos-shader/gpgpu/kernels/subset_sum_collapse5_merge10.clcpp";
 pub(crate) const COPY_RECT_RGBA8_OPENCL_SOURCE: &str =
     include_str!("kernels/copy_rect_rgba8.clcpp");
 pub(crate) const COPY_RECT_RGBA8_SOURCE_PATH: &str =
@@ -118,6 +124,9 @@ pub(crate) const SPIRIT_VFX_SPRITE_RGBA8_SOURCE_PATH: &str =
 
 pub(crate) fn kernel_opencl_source(name: &str) -> Option<&'static str> {
     match name {
+        SUBSET_SUM_COLLAPSE5_MERGE10_KERNEL_NAME => {
+            Some(SUBSET_SUM_COLLAPSE5_MERGE10_OPENCL_SOURCE)
+        }
         COPY_RECT_RGBA8_KERNEL_NAME => Some(COPY_RECT_RGBA8_OPENCL_SOURCE),
         FILL_RECT_RGBA8_KERNEL_NAME => Some(FILL_RECT_RGBA8_OPENCL_SOURCE),
         FILL_RECT_WORKLIST_RGBA8_KERNEL_NAME => Some(FILL_RECT_WORKLIST_RGBA8_OPENCL_SOURCE),
@@ -159,6 +168,9 @@ pub(crate) fn kernel_opencl_source(name: &str) -> Option<&'static str> {
 
 pub(crate) fn kernel_source_path(name: &str) -> Option<&'static str> {
     match name {
+        SUBSET_SUM_COLLAPSE5_MERGE10_KERNEL_NAME => {
+            Some(SUBSET_SUM_COLLAPSE5_MERGE10_SOURCE_PATH)
+        }
         COPY_RECT_RGBA8_KERNEL_NAME => Some(COPY_RECT_RGBA8_SOURCE_PATH),
         FILL_RECT_RGBA8_KERNEL_NAME => Some("src/intel/gpgpu/kernels/fill_rect_rgba8.clcpp"),
         FILL_RECT_WORKLIST_RGBA8_KERNEL_NAME => {
@@ -215,6 +227,7 @@ pub(crate) fn kernel_source_path(name: &str) -> Option<&'static str> {
 }
 
 include!("kernels/artifacts/adls/cpp/copy_rect_rgba8.contract.rs");
+include!("kernels/artifacts/adls/cpp/subset_sum_collapse5_merge10.contract.rs");
 include!("kernels/artifacts/adls/cpp/alpha_blend_worklist_rgba8.contract.rs");
 include!("kernels/artifacts/adls/cpp/chart_sine_rgba8.contract.rs");
 include!("kernels/artifacts/adls/cpp/fill_rect_rgba8.contract.rs");
@@ -234,8 +247,22 @@ pub(crate) const COPY_RECT_RGBA8_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/cpp/copy_rect_rgba8.bin");
 pub(crate) const COPY_RECT_RGBA8_ADLS_SPV: &[u8] =
     include_bytes!("kernels/artifacts/adls/cpp/copy_rect_rgba8.spv");
+pub(crate) const SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_BIN: &[u8] = include_bytes!(
+    "kernels/artifacts/adls/cpp/subset_sum_collapse5_merge10.bin"
+);
+pub(crate) const SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_SPV: &[u8] = include_bytes!(
+    "kernels/artifacts/adls/cpp/subset_sum_collapse5_merge10.spv"
+);
 pub(crate) const COPY_RECT_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
     COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
+pub(crate) const SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_BIN_SHA256: [u8; 32] =
+    SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
+const _: () = assert!(matches!(
+    SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_CPP_ABI_CONTRACT.validate(),
+    Ok(())
+));
+const _: () = assert!(SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_BIN.len() == 13_320);
+const _: () = assert!(SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_SPV.len() == 6_488);
 const _: () = assert!(matches!(COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT.validate(), Ok(())));
 const _: () = assert!(COPY_RECT_RGBA8_ADLS_BIN.len() == 11_328);
 const _: () = assert!(COPY_RECT_RGBA8_ADLS_SPV.len() == 4_788);
