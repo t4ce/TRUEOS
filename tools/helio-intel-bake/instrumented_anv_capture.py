@@ -102,7 +102,7 @@ def temporary_tool_prefix(work: Path, env: dict[str, str]) -> None:
     debs = work / "bootstrap-debs"
     prefix = work / "bootstrap-root"
     debs.mkdir(parents=True, exist_ok=True)
-    run(["apt", "download", *BOOTSTRAP_PACKAGES], cwd=debs)
+    run(["apt", "download", *BOOTSTRAP_PACKAGES], cwd=debs, env=env)
     for deb in sorted(debs.glob("*.deb")):
         run(["dpkg-deb", "-x", str(deb), str(prefix)])
     tool_dirs = [prefix / "usr/bin", prefix / "bin"]
