@@ -21,6 +21,15 @@ fn upload_triangle_shader_pipeline_at(
 ) -> Result<TriangleShaderLayout, &'static str> {
     let vs = stage_range("vs", pipeline.vs.meta.kernel, pipeline.vs.code)?;
     let ps = stage_range("ps", pipeline.ps.meta.kernel, pipeline.ps.code)?;
+    let line_gs_shader = crate::intel::shader::line_adjacency_geometry_shader();
+    let line_gs =
+        stage_range("line-adjacency-gs", line_gs_shader.meta.kernel, line_gs_shader.code)?;
+    let triangle_gs_shader = crate::intel::shader::triangle_adjacency_geometry_shader();
+    let triangle_gs = stage_range(
+        "triangle-adjacency-gs",
+        triangle_gs_shader.meta.kernel,
+        triangle_gs_shader.code,
+    )?;
     let host_simd16_pipeline = crate::intel::shader::triangle_pipeline_simd16();
     let upload_host_ps_pair =
         pipeline.ps.code.as_ptr() == crate::intel::shader::triangle_pipeline().ps.code.as_ptr();
@@ -40,6 +49,9 @@ fn upload_triangle_shader_pipeline_at(
     if pipeline.ps.meta.kernel.grf_used == 0 {
         return Err("ps-shader-grf-used-zero");
     }
+    if line_gs_shader.meta.kernel.grf_used == 0 || triangle_gs_shader.meta.kernel.grf_used == 0 {
+        return Err("gs-shader-grf-used-zero");
+    }
     if pipeline.vs.meta.max_threads == 0 {
         return Err("vs-max-threads-zero");
     }
@@ -52,10 +64,42 @@ fn upload_triangle_shader_pipeline_at(
     ) {
         return Err("shader-code-overlap");
     }
+    for gs in [line_gs, triangle_gs] {
+        if ranges_overlap(
+            vs.code_offset_bytes,
+            vs.code_size_bytes,
+            gs.code_offset_bytes,
+            gs.code_size_bytes,
+        ) || ranges_overlap(
+            ps.code_offset_bytes,
+            ps.code_size_bytes,
+            gs.code_offset_bytes,
+            gs.code_size_bytes,
+        ) {
+            return Err("shader-gs-code-overlap");
+        }
+    }
+    if ranges_overlap(
+        line_gs.code_offset_bytes,
+        line_gs.code_size_bytes,
+        triangle_gs.code_offset_bytes,
+        triangle_gs.code_size_bytes,
+    ) {
+        return Err("shader-gs-pair-code-overlap");
+    }
 
     let mut used_end = core::cmp::max(
         stage_end(vs.code_offset_bytes, vs.code_size_bytes).ok_or("shader-code-overflow")?,
         stage_end(ps.code_offset_bytes, ps.code_size_bytes).ok_or("shader-code-overflow")?,
+    );
+    used_end = core::cmp::max(
+        used_end,
+        core::cmp::max(
+            stage_end(line_gs.code_offset_bytes, line_gs.code_size_bytes)
+                .ok_or("line-gs-code-overflow")?,
+            stage_end(triangle_gs.code_offset_bytes, triangle_gs.code_size_bytes)
+                .ok_or("triangle-gs-code-overflow")?,
+        ),
     );
     if let Some(host_simd16) = host_simd16 {
         if ranges_overlap(
@@ -83,6 +127,12 @@ fn upload_triangle_shader_pipeline_at(
 
     upload_stage_code(warm.draw_state_virt, vs.code_offset_bytes, pipeline.vs.code)?;
     upload_stage_code(warm.draw_state_virt, ps.code_offset_bytes, pipeline.ps.code)?;
+    upload_stage_code(warm.draw_state_virt, line_gs.code_offset_bytes, line_gs_shader.code)?;
+    upload_stage_code(
+        warm.draw_state_virt,
+        triangle_gs.code_offset_bytes,
+        triangle_gs_shader.code,
+    )?;
     if let Some(rgba) = draw_rgba {
         specialize_uploaded_triangle_ps_color(
             warm.draw_state_virt,
@@ -123,6 +173,8 @@ fn upload_triangle_shader_pipeline_at(
 
     let vs_gpu = bo_gpu_base + vs.code_offset_bytes as u64;
     let ps_gpu = bo_gpu_base + ps.code_offset_bytes as u64;
+    let line_gs_gpu = bo_gpu_base + line_gs.code_offset_bytes as u64;
+    let triangle_gs_gpu = bo_gpu_base + triangle_gs.code_offset_bytes as u64;
 
     Ok(TriangleShaderLayout {
         vs: TriangleShaderStageLayout {
@@ -131,6 +183,20 @@ fn upload_triangle_shader_pipeline_at(
             ksp_offset_bytes: pipeline.vs.meta.kernel.ksp_offset_bytes,
             ksp_gpu_addr: vs_gpu + pipeline.vs.meta.kernel.ksp_offset_bytes as u64,
             code_size_bytes: vs.code_size_bytes as u32,
+        },
+        line_adjacency_gs: TriangleShaderStageLayout {
+            code_offset_bytes: line_gs.code_offset_bytes as u32,
+            code_gpu_addr: line_gs_gpu,
+            ksp_offset_bytes: line_gs_shader.meta.kernel.ksp_offset_bytes,
+            ksp_gpu_addr: line_gs_gpu + line_gs_shader.meta.kernel.ksp_offset_bytes as u64,
+            code_size_bytes: line_gs.code_size_bytes as u32,
+        },
+        triangle_adjacency_gs: TriangleShaderStageLayout {
+            code_offset_bytes: triangle_gs.code_offset_bytes as u32,
+            code_gpu_addr: triangle_gs_gpu,
+            ksp_offset_bytes: triangle_gs_shader.meta.kernel.ksp_offset_bytes,
+            ksp_gpu_addr: triangle_gs_gpu + triangle_gs_shader.meta.kernel.ksp_offset_bytes as u64,
+            code_size_bytes: triangle_gs.code_size_bytes as u32,
         },
         ps: TriangleShaderStageLayout {
             code_offset_bytes: ps.code_offset_bytes as u32,

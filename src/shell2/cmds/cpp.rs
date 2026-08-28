@@ -39,6 +39,7 @@ fn usage(io: &'static dyn ShellBackend2) {
         "cpp font present \"text\" [size=36] [font=auto|1|2|3] [color=RRGGBBAA] [x=24] [y=24] [line=1.25] [slant=-1..1] [canvas=640x160] [-- \"overlay\" ...]",
     );
     print_shell_line(io, "cpp font rush [start|stop]");
+    print_shell_line(io, "cpp font rush2 [start|stop]");
     print_shell_line(io, "cpp font [status|release <ticket|all>]");
     print_shell_line(io, "cpp spirit [status|list|clean]");
     print_shell_line(io, "cpp spirit show <background_id> <shader_id>");
@@ -1169,6 +1170,36 @@ fn stop_font_service_rush(io: &'static dyn ShellBackend2) {
     }
 }
 
+fn queue_font_service_rush2(io: &'static dyn ShellBackend2) {
+    match crate::ui4::request_cpp_font_rush2_start() {
+        Ok(serial) => print_shell_line(
+            io,
+            alloc::format!(
+                "cpp font rush2: queued=1 request={} producers=32 ladder=1,2,4,8,16,24,32 frames=32 windows=32 plane_slots=0..3 slot4=reserved buffering=double font_size=static-per-lease color=soft-rng-rgba ui4=ordinary-frame-stack ack=exact-buffer-reacquire stop=\"cpp font rush2 stop\"",
+                serial,
+            )
+            .as_str(),
+        ),
+        Err(reason) => print_shell_line(
+            io,
+            alloc::format!("cpp font rush2: queued=0 reason={reason}").as_str(),
+        ),
+    }
+}
+
+fn stop_font_service_rush2(io: &'static dyn ShellBackend2) {
+    match crate::ui4::request_cpp_font_rush2_stop() {
+        Ok(serial) => print_shell_line(
+            io,
+            alloc::format!("cpp font rush2 stop: queued=1 request={serial}").as_str(),
+        ),
+        Err(reason) => print_shell_line(
+            io,
+            alloc::format!("cpp font rush2 stop: queued=0 reason={reason}").as_str(),
+        ),
+    }
+}
+
 #[trueos_executor::task(pool_size = 32)]
 async fn cpp_font_stamp_task(
     output_target: MatrixTarget,
@@ -1249,12 +1280,29 @@ enum FontRushAction {
     Stop,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FontRush2Action {
+    Start,
+    Stop,
+}
+
 fn parse_font_rush_action(input: &str) -> Option<FontRushAction> {
     let input = input.trim();
     if input.is_empty() || input.eq_ignore_ascii_case("start") {
         Some(FontRushAction::Start)
     } else if input.eq_ignore_ascii_case("stop") {
         Some(FontRushAction::Stop)
+    } else {
+        None
+    }
+}
+
+fn parse_font_rush2_action(input: &str) -> Option<FontRush2Action> {
+    let input = input.trim();
+    if input.is_empty() || input.eq_ignore_ascii_case("start") {
+        Some(FontRush2Action::Start)
+    } else if input.eq_ignore_ascii_case("stop") {
+        Some(FontRush2Action::Stop)
     } else {
         None
     }
@@ -1274,6 +1322,12 @@ fn font_service(spawner: &Spawner, io: &'static dyn ShellBackend2, input: &str) 
         match parse_font_rush_action(rest) {
             Some(FontRushAction::Start) => queue_font_service_rush(io),
             Some(FontRushAction::Stop) => stop_font_service_rush(io),
+            None => usage(io),
+        }
+    } else if command.eq_ignore_ascii_case("rush2") {
+        match parse_font_rush2_action(rest) {
+            Some(FontRush2Action::Start) => queue_font_service_rush2(io),
+            Some(FontRush2Action::Stop) => stop_font_service_rush2(io),
             None => usage(io),
         }
     } else if command.eq_ignore_ascii_case("status") {
@@ -1343,8 +1397,9 @@ pub(crate) fn try_parse(
 #[cfg(test)]
 mod tests {
     use super::{
-        FontRushAction, FontStampFit, font_rush_status_detail, parse_font_rush_action,
-        parse_font_stamp, parse_svg_demo, particle_naive_candidate_tests,
+        FontRush2Action, FontRushAction, FontStampFit, font_rush_status_detail,
+        parse_font_rush_action, parse_font_rush2_action, parse_font_stamp, parse_svg_demo,
+        particle_naive_candidate_tests,
     };
 
     #[test]
@@ -1370,6 +1425,16 @@ mod tests {
         assert_eq!(parse_font_rush_action("STOP"), Some(FontRushAction::Stop));
         assert_eq!(parse_font_rush_action("go"), None);
         assert_eq!(parse_font_rush_action("stop now"), None);
+    }
+
+    #[test]
+    fn font_rush2_accepts_only_start_and_targeted_stop() {
+        assert_eq!(parse_font_rush2_action(""), Some(FontRush2Action::Start));
+        assert_eq!(parse_font_rush2_action("START"), Some(FontRush2Action::Start));
+        assert_eq!(parse_font_rush2_action("stop"), Some(FontRush2Action::Stop));
+        assert_eq!(parse_font_rush2_action("STOP"), Some(FontRush2Action::Stop));
+        assert_eq!(parse_font_rush2_action("go"), None);
+        assert_eq!(parse_font_rush2_action("stop now"), None);
     }
 
     #[test]

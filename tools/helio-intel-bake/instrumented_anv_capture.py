@@ -53,6 +53,9 @@ ADDRESS_FREE_DESCRIPTOR_PAYLOAD_V9_PATCH = Path(__file__).with_name(
 WORKLOAD_SLICE_V10A_PATCH = Path(__file__).with_name(
     "mesa-helioc-capture-workload-slice-v10a-6fb2611.patch"
 )
+GS_STATE_PATCH = Path(__file__).with_name(
+    "mesa-helioc-capture-gs-state-6fb2611.patch"
+)
 REQUIRED_TOOLS = ("meson", "ninja", "bison", "flex", "pkg-config", "tar")
 REQUIRED_PKGCONFIG = ("expat", "libdrm", "libzstd", "vulkan")
 BOOTSTRAP_PACKAGES = (
@@ -172,7 +175,7 @@ def copy_and_patch(source: Path, work: Path) -> Path:
                   COMMAND_CATALOG_V4_PATCH, ADDRESS_FREE_V5_PATCH,
                   ADDRESS_FREE_SURFACES_V6_PATCH, ADDRESS_FREE_BUFFER_DESCRIPTOR_V7_PATCH,
                   ADDRESS_FREE_BINDING_SAMPLER_V8_PATCH, ADDRESS_FREE_DESCRIPTOR_PAYLOAD_V9_PATCH,
-                  WORKLOAD_SLICE_V10A_PATCH):
+                  WORKLOAD_SLICE_V10A_PATCH, GS_STATE_PATCH):
         run(["git", "apply", "--check", str(patch)], cwd=destination)
         run(["git", "apply", str(patch)], cwd=destination)
     return destination
@@ -207,6 +210,10 @@ def main() -> None:
                         help="capture the pass-through adjacency GS on a physical Intel device; never uses the shim")
     parser.add_argument("--device-id", default="0xA780",
                         help="physical Intel PCI device ID required by --adjacency-host")
+    parser.add_argument(
+        "--adjacency-kind", choices=("triangle", "line", "both"), default="triangle",
+        help="geometry adjacency contract captured by --adjacency-host",
+    )
     args = parser.parse_args()
     work = args.work_dir.resolve()
     work.mkdir(parents=True, exist_ok=True)
@@ -246,33 +253,53 @@ def main() -> None:
     capture = work / "capture"
     capture.mkdir(exist_ok=True)
     if args.adjacency_host:
-        capture = work / "adjacency-host-capture"
-        capture.mkdir(exist_ok=True)
         env.update({
             "VK_DRIVER_FILES": str(icd),
             "TRUEOS_VK_DEVICE_ID": args.device_id,
         })
-        command = [
-            sys.executable, str(TRUEOS / "crates/trueos-shader/xe_lp_shader_bake/run_host_validation.py"),
-            "--geom", str(TRUEOS / "crates/trueos-shader/xe_lp_shader_bake/passthrough_triangle_adjacency.geom"),
-            "--skip-artifact-verification", "--out-dir", str(capture),
-        ]
-        result = subprocess.run(command, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-        (capture / "instrumented-adjacency.log").write_text(result.stdout)
-        print(result.stdout, end="")
-        if result.returncode:
-            raise SystemExit(f"instrumented physical adjacency capture failed: {result.returncode}")
-        exec_dir = capture / "pipeline_exec"
-        required = (
-            "*geometry*GEN_Assembly.txt",
-            "*geometry*prog_data*.bin",
-            "*geometry*shader_serialize*.bin",
-            "*geometry*devinfo*.txt",
-        )
-        for pattern in required:
-            if not list(exec_dir.glob(pattern)):
-                raise SystemExit(f"instrumented adjacency capture missing GS evidence: {pattern}")
-        print("instrumented physical adjacency capture completed; renderer integration remains gated on decoded GS state")
+        kinds = ("triangle", "line") if args.adjacency_kind == "both" else (args.adjacency_kind,)
+        for kind in kinds:
+            capture_name = (
+                "adjacency-host-capture"
+                if kind == "triangle" and args.adjacency_kind == "triangle"
+                else f"{kind}-adjacency-host-capture"
+            )
+            capture = work / capture_name
+            capture.mkdir(exist_ok=True)
+            shader = TRUEOS / "crates/trueos-shader/xe_lp_shader_bake" / f"passthrough_{kind}_adjacency.geom"
+            capture_env = env.copy()
+            if kind == "line":
+                capture_env["TRUEOS_GEOMETRY_INPUT"] = "line-adjacency"
+            command = [
+                sys.executable,
+                str(TRUEOS / "crates/trueos-shader/xe_lp_shader_bake/run_host_validation.py"),
+                "--geom", str(shader), "--skip-artifact-verification", "--out-dir", str(capture),
+            ]
+            result = subprocess.run(
+                command, env=capture_env, text=True,
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            )
+            (capture / "instrumented-adjacency.log").write_text(result.stdout)
+            print(result.stdout, end="")
+            if result.returncode:
+                raise SystemExit(
+                    f"instrumented physical {kind} adjacency capture failed: {result.returncode}"
+                )
+            exec_dir = capture / "pipeline_exec"
+            required = (
+                "*geometry*GEN_Assembly.txt",
+                "*geometry*prog_data*.bin",
+                "*geometry*shader_serialize*.bin",
+                "*geometry*devinfo*.txt",
+                "geometry_TRUEOS_GS_state_v1.txt",
+                "geometry_TRUEOS_URB_state_v1.txt",
+            )
+            for pattern in required:
+                if not list(exec_dir.glob(pattern)):
+                    raise SystemExit(
+                        f"instrumented {kind} adjacency capture missing GS evidence: {pattern}"
+                    )
+        print("instrumented physical adjacency capture completed with decoded GS/URB state")
         return
 
     env.update({

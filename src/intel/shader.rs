@@ -51,13 +51,48 @@ pub(crate) struct TrianglePixelShader {
 }
 
 #[derive(Copy, Clone, Debug)]
+pub(crate) struct AdjacencyGeometryShaderMetadata {
+    pub(crate) kernel: ShaderKernelMetadata,
+    pub(crate) max_threads: u16,
+    pub(crate) expected_vertex_count: u8,
+    pub(crate) output_topology: u8,
+    pub(crate) output_vertex_size: u8,
+    pub(crate) control_data_header_size: u8,
+    pub(crate) static_output_vertex_count: u8,
+    pub(crate) urb_entry_size: u8,
+    pub(crate) urb_start: u8,
+    pub(crate) urb_entries: u16,
+    pub(crate) sf_deref_block_size: u8,
+}
+
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct AdjacencyGeometryShader {
+    pub(crate) meta: AdjacencyGeometryShaderMetadata,
+    pub(crate) code: &'static [u32],
+}
+
+#[derive(Copy, Clone, Debug)]
 pub(crate) struct TrianglePipeline {
     pub(crate) vs: TriangleVertexShader,
     pub(crate) ps: TrianglePixelShader,
 }
 
+#[path = "../../crates/trueos-shader/generated_adjacency_gs.rs"]
+mod generated_adjacency_gs;
 #[path = "../../crates/trueos-shader/generated_triangle.rs"]
 mod generated_triangle;
+
+pub(crate) fn line_adjacency_geometry_shader() -> &'static AdjacencyGeometryShader {
+    generated_adjacency_gs::line_adjacency_geometry_shader()
+}
+
+pub(crate) fn triangle_adjacency_geometry_shader() -> &'static AdjacencyGeometryShader {
+    generated_adjacency_gs::triangle_adjacency_geometry_shader()
+}
+
+pub(crate) fn adjacency_geometry_shader_capture_note() -> &'static str {
+    generated_adjacency_gs::ADJACENCY_GS_CAPTURE_NOTE
+}
 
 pub(crate) const TRIANGLE_VERTEX_SOURCE_PATH: &str =
     "crates/trueos-shader/generated_triangle.rs:TRIANGLE_VS_CODE";

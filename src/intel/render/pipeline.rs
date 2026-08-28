@@ -1490,6 +1490,10 @@ fn encode_triangle_probe_batch(
     if resident_msaa4 && !device_is_gfx125(warm.device_id) {
         return Err("probe-msaa4-device");
     }
+    let adjacency_gs = batch_mode.adjacency_geometry_shader();
+    if adjacency_gs.is_some() && (warm.device_id != 0xA780 || warm.revision_id != 0x04) {
+        return Err("adjacency-gs-device-mismatch");
+    }
     let mesa_host_fixed_function = matches!(backend_probe_mode, BackendProbeMode::MesaLike);
     let multisample_dw1 = if resident_msaa4 {
         2 << 1
@@ -2043,7 +2047,9 @@ fn encode_triangle_probe_batch(
     } else {
         (u32::from(sf_viewport_transform_enable) << 1) | (1 << 10) | sf_line_width
     };
-    let sf_dw2 = if backend_probe_mode.sf_deref_block_zero() || TRIANGLE_VS_URB_ENTRIES >= 192 {
+    let sf_dw2 = if let Some(gs) = adjacency_gs {
+        (gs.meta.sf_deref_block_size as u32) << 29
+    } else if backend_probe_mode.sf_deref_block_zero() || TRIANGLE_VS_URB_ENTRIES >= 192 {
         0
     } else {
         1 << 29
@@ -3116,8 +3122,17 @@ fn encode_triangle_probe_batch(
     push(batch_dwords, &mut cursor, 0)?;
     log_batch_offset(cursor, "3DSTATE_URB_ALLOC_GS");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_URB_ALLOC_GS)?;
-    push(batch_dwords, &mut cursor, disabled_urb_dw1)?;
-    push(batch_dwords, &mut cursor, 0)?;
+    if let Some(gs) = adjacency_gs {
+        let gs_urb_dw1 = (u32::from(gs.meta.urb_entry_size).saturating_sub(1))
+            | (u32::from(gs.meta.urb_start) << 10)
+            | (u32::from(gs.meta.urb_start) << 21);
+        let gs_urb_entries = u32::from(gs.meta.urb_entries);
+        push(batch_dwords, &mut cursor, gs_urb_dw1)?;
+        push(batch_dwords, &mut cursor, gs_urb_entries | (gs_urb_entries << 16))?;
+    } else {
+        push(batch_dwords, &mut cursor, disabled_urb_dw1)?;
+        push(batch_dwords, &mut cursor, 0)?;
+    }
     intel_render_verbose_log!(
         "probe-urb-config order=vs-hs-ds-gs vs_start={} vs_entries={} vs_entry_64b={} disabled_stage_start={} sf_deref={} source=mesa-adl-gt1\n",
         TRIANGLE_VS_URB_START,
@@ -3323,8 +3338,55 @@ fn encode_triangle_probe_batch(
     }
     log_batch_offset(cursor, "3DSTATE_GS");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_GS)?;
-    for _ in 0..9 {
+    if let Some(gs) = adjacency_gs {
+        let gs_layout = if matches!(
+            batch_mode,
+            TriangleBatchMode::LineAdjDraw | TriangleBatchMode::LineStripAdjDraw
+        ) {
+            shader_layout.line_adjacency_gs
+        } else {
+            shader_layout.triangle_adjacency_gs
+        };
+        let gs_ksp_offset = gs_layout.code_offset_bytes + gs_layout.ksp_offset_bytes;
+        let gs_dw3 = u32::from(gs.meta.expected_vertex_count)
+            | (u32::from(gs.meta.kernel.binding_table_entry_count) << 18)
+            | (sampler_count_encoding(gs.meta.kernel.sampler_count) << 27);
+        let gs_grf = u32::from(gs.meta.kernel.grf_start_register);
+        let gs_dw6 = (gs_grf & 0xF)
+            | (1 << 10)
+            | (u32::from(gs.meta.output_topology) << 17)
+            | (u32::from(gs.meta.output_vertex_size) << 23)
+            | (((gs_grf >> 4) & 0x3) << 29);
+        let gs_dw7 =
+            1 | (1 << 10) | (3 << 11) | (u32::from(gs.meta.control_data_header_size) << 20);
+        let gs_dw8 = (u32::from(gs.meta.max_threads) - 1)
+            | (u32::from(gs.meta.static_output_vertex_count) << 16)
+            | (1 << 30);
+        push(batch_dwords, &mut cursor, gs_ksp_offset & !0x3F)?;
         push(batch_dwords, &mut cursor, 0)?;
+        push(batch_dwords, &mut cursor, gs_dw3)?;
+        push(batch_dwords, &mut cursor, 0)?;
+        push(batch_dwords, &mut cursor, 0)?;
+        push(batch_dwords, &mut cursor, gs_dw6)?;
+        push(batch_dwords, &mut cursor, gs_dw7)?;
+        push(batch_dwords, &mut cursor, gs_dw8)?;
+        push(batch_dwords, &mut cursor, 0)?;
+        intel_render_focus_log!(
+            "probe-gs adjacency=1 topology=0x{:X} ksp=0x{:X} expected_vertices={} output_topology={} static_vertices={} urb_start={} urb_entry_size={} urb_entries={} capture={}\n",
+            batch_mode.topology(),
+            gs_ksp_offset & !0x3F,
+            gs.meta.expected_vertex_count,
+            gs.meta.output_topology,
+            gs.meta.static_output_vertex_count,
+            gs.meta.urb_start,
+            gs.meta.urb_entry_size,
+            gs.meta.urb_entries,
+            crate::intel::shader::adjacency_geometry_shader_capture_note(),
+        );
+    } else {
+        for _ in 0..9 {
+            push(batch_dwords, &mut cursor, 0)?;
+        }
     }
 
     if matches!(backend_probe_mode, BackendProbeMode::PsCpsDisabled) {

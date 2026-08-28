@@ -690,6 +690,8 @@ struct TriangleShaderStageLayout {
 #[derive(Copy, Clone)]
 struct TriangleShaderLayout {
     vs: TriangleShaderStageLayout,
+    line_adjacency_gs: TriangleShaderStageLayout,
+    triangle_adjacency_gs: TriangleShaderStageLayout,
     ps: TriangleShaderStageLayout,
     state_region_gpu_addr: u64,
     state_region_offset_bytes: u32,
@@ -2197,6 +2199,20 @@ fn intel_topology_from_helio(
 }
 
 impl TriangleBatchMode {
+    fn adjacency_geometry_shader(
+        self,
+    ) -> Option<&'static crate::intel::shader::AdjacencyGeometryShader> {
+        match self {
+            Self::LineAdjDraw | Self::LineStripAdjDraw => {
+                Some(crate::intel::shader::line_adjacency_geometry_shader())
+            }
+            Self::TriangleAdjDraw | Self::TriangleStripAdjDraw => {
+                Some(crate::intel::shader::triangle_adjacency_geometry_shader())
+            }
+            _ => None,
+        }
+    }
+
     fn topology(self) -> u32 {
         match self {
             Self::Draw | Self::DrawScreenSpace | Self::VfDraw | Self::VfScreenSpaceDraw => {

@@ -201,7 +201,10 @@ def main() -> None:
 
     vs_spv = args.out_dir / "simple_triangle.vert.spv"
     fs_spv = args.out_dir / "simple_triangle.frag.spv"
-    gs_spv = args.out_dir / "passthrough_triangle_adjacency.geom.spv"
+    gs_spv = args.out_dir / (
+        f"{args.geom.stem}.spv" if args.geom is not None
+        else "passthrough_triangle_adjacency.geom.spv"
+    )
     dumper_bin = args.out_dir / "simple_triangle_dump"
     dump_log = args.out_dir / "simple_triangle_dump.log"
     exec_dump_dir = args.out_dir / "pipeline_exec"

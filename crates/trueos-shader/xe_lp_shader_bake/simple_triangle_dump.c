@@ -439,9 +439,13 @@ static void dump_host_state_reference(
     HOST_STATE_LINE(
         "host-state ps_blend has_writeable_rt=1\n"
     );
+    const char *geometry_input = getenv("TRUEOS_GEOMETRY_INPUT");
+    const int line_adjacency = geometry_enabled && geometry_input != NULL &&
+        strcmp(geometry_input, "line-adjacency") == 0;
     HOST_STATE_LINE(
         "host-state target format=VK_FORMAT_R8G8B8A8_UNORM extent=64x64 samples=1 topology=%s front_face=ccw polygon=fill cull=none\n",
-        geometry_enabled ? "triangle_list_with_adjacency" : "triangle_list"
+        line_adjacency ? "line_list_with_adjacency" :
+        (geometry_enabled ? "triangle_list_with_adjacency" : "triangle_list")
     );
 
 #undef HOST_STATE_LINE
@@ -461,6 +465,9 @@ int main(int argc, char **argv) {
     }
 
     const int geometry_enabled = argc == 4;
+    const char *geometry_input = getenv("TRUEOS_GEOMETRY_INPUT");
+    const int line_adjacency = geometry_enabled && geometry_input != NULL &&
+        strcmp(geometry_input, "line-adjacency") == 0;
     const int push_color_enabled = getenv("TRUEOS_PUSH_COLOR") != NULL;
     const float push_color[4] = {
         224.0f / 255.0f,
@@ -780,7 +787,9 @@ int main(int argc, char **argv) {
     };
     const VkPipelineInputAssemblyStateCreateInfo input_assembly = {
         .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-        .topology = geometry_enabled
+        .topology = line_adjacency
+            ? VK_PRIMITIVE_TOPOLOGY_LINE_LIST_WITH_ADJACENCY
+            : geometry_enabled
             ? VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST_WITH_ADJACENCY
             : VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
     };
@@ -880,8 +889,20 @@ int main(int argc, char **argv) {
         0.72f, -0.58f, 0.0f,
         0.0f, 0.0f, 0.0f,
     };
-    const float *vertices = geometry_enabled ? adjacency_vertices : ordinary_vertices;
-    const size_t vertex_bytes = geometry_enabled
+    // Line adjacency is `adj0, real0, real1, adj1`; place the real line
+    // through the validation pixel while keeping both neighbours distinct.
+    const float line_adjacency_vertices[12] = {
+        -0.95f, -0.20f, 0.0f,
+        -0.80f,  0.015625f, 0.0f,
+         0.80f,  0.015625f, 0.0f,
+         0.95f,  0.20f, 0.0f,
+    };
+    const float *vertices = line_adjacency
+        ? line_adjacency_vertices
+        : (geometry_enabled ? adjacency_vertices : ordinary_vertices);
+    const size_t vertex_bytes = line_adjacency
+        ? sizeof(line_adjacency_vertices)
+        : geometry_enabled
         ? sizeof(adjacency_vertices)
         : sizeof(ordinary_vertices);
     const VkBufferCreateInfo buffer_info = {
@@ -990,7 +1011,7 @@ int main(int argc, char **argv) {
     }
     VkDeviceSize vertex_offset = 0;
     vkCmdBindVertexBuffers(command_buffer, 0, 1, &vertex_buffer, &vertex_offset);
-    vkCmdDraw(command_buffer, geometry_enabled ? 6u : 3u, 1, 0, 0);
+    vkCmdDraw(command_buffer, line_adjacency ? 4u : (geometry_enabled ? 6u : 3u), 1, 0, 0);
     vkCmdEndRenderPass(command_buffer);
 
     const VkImageMemoryBarrier transfer_barrier = {

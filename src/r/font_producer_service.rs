@@ -429,6 +429,36 @@ impl FontProducerRegistry {
         Ok(())
     }
 
+    /// Return a row after its entire backing container has been retired.
+    /// This is the teardown counterpart of a display ACK: an exact completion
+    /// is still required, but a row which completed without publication may
+    /// retire directly from `Produced` once UI4 proves the Frame is destroyed.
+    pub fn acknowledge_retired(
+        &mut self,
+        token: FontRowToken,
+        expected: FontRowCompletion,
+    ) -> Result<(), FontProducerError> {
+        let id = token.producer_id as usize;
+        let row = self.row_mut(token)?;
+        if !matches!(row.state, FontRowState::Produced | FontRowState::SurfLive) {
+            return Err(FontProducerError::InvalidToken);
+        }
+        if row.completion != Some(expected) {
+            return Err(FontProducerError::CompletionMismatch);
+        }
+        row.state = FontRowState::Idle;
+        row.char_count = 0;
+        row.input.clear();
+        row.completion = None;
+        if self.slots[id]
+            .as_ref()
+            .is_some_and(|slot| slot.state == FontProducerState::Retiring)
+        {
+            self.finish_retirement(id);
+        }
+        Ok(())
+    }
+
     pub fn row_state(&self, token: FontRowToken) -> Result<FontRowState, FontProducerError> {
         Ok(self.row(token)?.state)
     }
@@ -555,6 +585,13 @@ pub fn mark_producer_row_surflive(
 
 pub fn acknowledge_producer_row(token: FontRowToken) -> Result<(), FontProducerError> {
     with_registry(|registry| registry.acknowledge(token))
+}
+
+pub fn acknowledge_retired_producer_row(
+    token: FontRowToken,
+    expected: FontRowCompletion,
+) -> Result<(), FontProducerError> {
+    with_registry(|registry| registry.acknowledge_retired(token, expected))
 }
 
 fn validate_registration(registration: FontProducerRegistration) -> Result<(), FontProducerError> {
@@ -710,6 +747,34 @@ mod tests {
         complete(&mut r, t);
         r.acknowledge(t).unwrap();
         assert_eq!(r.status(lease), Err(FontProducerError::InvalidLease));
+    }
+
+    #[test]
+    fn destroyed_ui4_ring_retires_produced_or_surflive_rows_exactly() {
+        let mut r = FontProducerRegistry::new();
+        let lease = r.register(registration(2)).unwrap();
+        let produced = r.submit_row(lease, b"x", 1).unwrap();
+        let surflive = r.submit_row(lease, b"y", 1).unwrap();
+        let completion = FontRowCompletion {
+            release_fence: 7,
+            metadata: 9,
+        };
+        r.gpu_produced(produced, completion).unwrap();
+        r.gpu_produced(surflive, completion).unwrap();
+        r.publish_surflive(surflive, completion).unwrap();
+        assert_eq!(
+            r.acknowledge_retired(
+                produced,
+                FontRowCompletion {
+                    release_fence: 8,
+                    metadata: 9,
+                },
+            ),
+            Err(FontProducerError::CompletionMismatch)
+        );
+        r.acknowledge_retired(produced, completion).unwrap();
+        r.acknowledge_retired(surflive, completion).unwrap();
+        assert_eq!(r.status(lease).unwrap().credits, 2);
     }
 
     #[test]

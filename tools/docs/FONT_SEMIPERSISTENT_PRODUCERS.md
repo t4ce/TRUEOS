@@ -35,6 +35,11 @@ The first kernel/GPU slice is now present:
   bounded fixed-geometry RGBA8 row ring once at registration. Its row API
   rejects a different face, tier, extent, multiline payload, or character
   overflow and reuses the retained GPU virtual ranges.
+- `register_ui4_gpu_font_producer` uses an ordinary UI4 `FontScene2d`
+  Dirty/Double Frame as that retained ring instead. `submit_ui4_row` reserves
+  the producer token for the acquired UI4 buffer's exact index and writes the
+  glyph directly into that allocation; there is no staging surface, CPU pixel
+  write/readback, or frame copy.
 - registered rows enter the existing Font FIFO and exclusive RCS lane. The
   worker credits `PRODUCED` only after the returned release fence matches the
   exact row allocation; a reversible failure restores the reservation, while
@@ -47,10 +52,18 @@ The first kernel/GPU slice is now present:
   acknowledgement abandons and pins the generation instead of manufacturing
   a reusable row.
 
-The API is deliberately not yet connected to a UI4 window consumer, and the
-Font RCS runtime remains one job slot. Therefore this landing establishes the
-registration, persistent-buffer, exact-completion, and ACK contracts without
-claiming either live compositor adoption or parallel GPU submission.
+`cpp font rush2` is the first UI4 consumer. It allocates 32 row Frames and
+windows upfront, distributes them across application plane groups 0..3, keeps
+slot 4 reserved, and activates producers in a 1/2/4/8/16/24/32 ladder. Each
+lease keeps one of four static font sizes while SoftRng changes its one-glyph
+payload, color, and alpha. A published row retains its capability by exact
+double-buffer index; reacquiring that index supplies the CPU ACK. On shutdown,
+the capability is retained until the whole UI4 Frame is destroyed, then an
+exact completion-checked retirement ACK releases the producer generation.
+
+The Font RCS runtime still remains one job slot. Rush2 therefore demonstrates
+32 independently backpressured producer queues and persistent UI4 rings, but
+does not claim 32 parallel GPU submissions or a one-producer-per-EU mapping.
 Abandoned ACK capabilities and ambiguous GPU retirement currently pin their
 complete producer generation until reboot; a future device-reset recovery path
 must reclaim those quarantined generations only after it proves the old
