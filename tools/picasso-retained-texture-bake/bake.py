@@ -172,7 +172,7 @@ def main() -> None:
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
         .bindingCount = 3,
         .pBindings = storage_bindings,
-    };""", """    const VkDescriptorSetLayoutBinding retained_bindings[6] = {
+    };""", """    const VkDescriptorSetLayoutBinding retained_bindings[5] = {
         { .binding = 0, .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
           .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_VERTEX_BIT },
         { .binding = 1, .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
@@ -183,12 +183,10 @@ def main() -> None:
           .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT },
         { .binding = 4, .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER,
           .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT },
-        { .binding = 5, .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
-          .descriptorCount = 1, .stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT },
     };
     const VkDescriptorSetLayoutCreateInfo set_layout_info = {
         .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-        .bindingCount = 6,
+        .bindingCount = 5,
         .pBindings = retained_bindings,
     };""")
         source_path.write_text(source)
@@ -243,7 +241,7 @@ def main() -> None:
             shutil.copy2(assembly, out / assembly.name)
         metadata = {
             "schema": 1,
-            "contract": "retained-transform-filtered-base-color-plus-metallic-roughness-alpha-probe",
+            "contract": "retained-transform-filtered-base-color-only",
             "frontend": frontend,
             "device": device,
             "target": "intel-adl-s-uhd-770-0x4680",
@@ -260,7 +258,6 @@ def main() -> None:
                 "storage-compacted-indices@vs-bti3",
                 "sampled-base-color-rgba8-2d@ps-bti2",
                 "sampler@ps-sampler0",
-                "sampled-metallic-roughness-rgba8-2d@ps-bti3",
             ],
             "native_bytes": {"vs": len(vs), "ps8": len(ps8), "ps16": len(ps16 or b"")},
         }

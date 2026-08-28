@@ -1329,7 +1329,7 @@ fn picasso_retained_textured_pipeline()
     if let Some(pipeline) = *cached {
         return Ok(pipeline);
     }
-    if PICASSO_RETAINED_TEXTURED_VS.len() != 624 || PICASSO_RETAINED_TEXTURED_PS.len() != 208 {
+    if PICASSO_RETAINED_TEXTURED_VS.len() != 624 || PICASSO_RETAINED_TEXTURED_PS.len() != 160 {
         return Err("picasso-retained-textured-stage-shape");
     }
     let ps_offset = crate::intel::align_up(PICASSO_RETAINED_TEXTURED_VS.len(), 64)
@@ -1365,14 +1365,14 @@ fn picasso_retained_textured_pipeline()
             meta: TrianglePixelShaderMetadata {
                 kernel: ShaderKernelMetadata {
                     code_offset_bytes: ps_offset,
-                    code_size_bytes: 208,
+                    code_size_bytes: 160,
                     code_alignment_bytes: 64,
                     ksp_offset_bytes: 0,
                     dispatch_mode: DispatchMode::Simd16,
                     grf_start_register: 2,
                     grf_used: 128,
                     push_constant_bytes: 0,
-                    binding_table_entry_count: 4,
+                    binding_table_entry_count: 3,
                     sampler_count: 1,
                 },
                 num_varying_inputs: 1,
@@ -2298,8 +2298,7 @@ pub(crate) fn update_resident_churn_forward_frame(
 /// or that pair plus Float2 base-color UV (32 bytes). `indices` is one ordinary
 /// triangle-list mesh, and all instance motion stays in GPU-owned
 /// seed/instance/indirect buffers. The sampled variant switches to the baked
-/// retained-material VS/PS and requires base-color plus metallic-roughness
-/// bindings per frame.
+/// retained-material VS/PS and requires a base-color binding per frame.
 pub(crate) fn create_resident_picasso_retained_mesh(
     carrier: PicassoCarrierLease,
     vertices: &[u8],
@@ -2706,9 +2705,7 @@ fn prepare_resident_churn_forward_draw(
     height: usize,
 ) -> Option<TriangleDrawPrep> {
     if group >= CHURN_FORWARD_DRAW_COUNT || resident.sampled_material != sampled_material.is_some()
-    // This probe samples exactly base color and metallic-roughness. Its
-    // output preserves base color through the latter's alpha and has no
-    // scalar uniform.
+    // This stable rung samples base color only and has no scalar uniform.
     {
         return None;
     }
@@ -2735,14 +2732,16 @@ fn prepare_resident_churn_forward_draw(
             pitch: material.base_color.pitch,
             sampler_flags: material.base_color.sampler_flags,
         }),
-        metallic_roughness_texture: sampled_material.map(|material| {
-            TriangleSampledTextureBinding {
-                gpu_addr: material.metallic_roughness.storage.gpu_base(),
-                width: material.metallic_roughness.width,
-                height: material.metallic_roughness.height,
-                pitch: material.metallic_roughness.pitch,
-                sampler_flags: material.metallic_roughness.sampler_flags,
-            }
+        metallic_roughness_texture: sampled_material.and_then(|material| {
+            material
+                .metallic_roughness
+                .map(|texture| TriangleSampledTextureBinding {
+                    gpu_addr: texture.storage.gpu_base(),
+                    width: texture.width,
+                    height: texture.height,
+                    pitch: texture.pitch,
+                    sampler_flags: texture.sampler_flags,
+                })
         }),
         emissive_factor: [0.0; 3],
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,

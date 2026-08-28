@@ -884,10 +884,6 @@ impl RetainedMaterialSubmission {
     fn base_color(&self) -> Option<&crate::intel::render::ResidentSampledTexture> {
         self.textures[v::vgpu::RETAINED_MATERIAL_BASE_COLOR].as_deref()
     }
-
-    fn metallic_roughness(&self) -> Option<&crate::intel::render::ResidentSampledTexture> {
-        self.textures[v::vgpu::RETAINED_MATERIAL_METALLIC_ROUGHNESS].as_deref()
-    }
 }
 
 struct CloudSubmissionLease {
@@ -4753,11 +4749,11 @@ pub(crate) fn submit_ui4_retained_frame(
         }
         if resident.sampled_material() {
             if material_textures[v::vgpu::RETAINED_MATERIAL_BASE_COLOR].is_none()
-                || material_textures[v::vgpu::RETAINED_MATERIAL_METALLIC_ROUGHNESS].is_none()
+                || material_textures[v::vgpu::RETAINED_MATERIAL_METALLIC_ROUGHNESS].is_some()
                 || material_textures[v::vgpu::RETAINED_MATERIAL_EMISSIVE].is_some()
                 || material_textures[v::vgpu::RETAINED_MATERIAL_OCCLUSION].is_some()
                 || material_textures[v::vgpu::RETAINED_MATERIAL_NORMAL].is_some()
-                // This alpha-preserving metallic-roughness probe has no factor uniform.
+                // The base-color-only rung has no factor uniform.
                 || submit.material.emissive_factor != [0.0; 3]
             {
                 return Err(reject_retained_submission(
@@ -5064,13 +5060,12 @@ pub(crate) fn submit_ui4_retained_frame(
             topology: crate::intel::render::ResidentScenePrimitiveTopology::LineList,
         })
         .collect::<Vec<_>>();
-    let render_material = retained_material
-        .base_color()
-        .zip(retained_material.metallic_roughness())
-        .map(|(base_color, metallic_roughness)| crate::intel::render::ResidentRetainedMaterial {
+    let render_material = retained_material.base_color().map(|base_color| {
+        crate::intel::render::ResidentRetainedMaterial {
             base_color,
-            metallic_roughness,
-        });
+            metallic_roughness: None,
+        }
+    });
     let rendered =
         crate::intel::render::render_resident_retained_with_static_draws_direct_to_surface(
             &resident,

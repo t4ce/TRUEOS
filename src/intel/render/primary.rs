@@ -2249,7 +2249,7 @@ fn submit_resident_churn_forward_geometry_batched(
         && !PICASSO_RETAINED_TEXTURED_SUBMIT_LOGGED.swap(true, Ordering::AcqRel)
     {
         crate::log_important!(target: "render";
-            "picasso-material: proof=retained-material-submit-armed accepted=1 contract=pos-normal-uv+base-color-plus-metallic-roughness-alpha-probe graphics_handoff=native-matrices vertex_shader=adls-gfx120-retained-uv-transform-candidate vertex_fetch=pos3+uv2+sgvs3 component_packing=0xA37 pixel_shader=adls-gfx120-base-color-plus-metallic-roughness-alpha-probe-candidate interpolation=perspective-authored-uv ps_binding_table_alignment=32 ps_bti=[2,3] sampler=0 base={}x{} stride={} metallic_roughness_bound=1 cpu_texture_sampling=0 cpu_vertex_projection=0 render_submits=1\n",
+            "picasso-material: proof=retained-material-submit-armed accepted=1 contract=pos-normal-uv+base-color-only graphics_handoff=native-matrices vertex_shader=adls-gfx120-retained-uv-transform-candidate vertex_fetch=pos3+uv2+sgvs3 component_packing=0xA37 pixel_shader=adls-gfx120-base-color-only-candidate interpolation=perspective-authored-uv ps_binding_table_alignment=32 ps_bti=[2] sampler=0 base={}x{} stride={} cpu_texture_sampling=0 cpu_vertex_projection=0 render_submits=1\n",
             material.base_color.width,
             material.base_color.height,
             material.base_color.pitch,
@@ -2277,7 +2277,7 @@ fn submit_resident_churn_forward_geometry_batched(
         && !PICASSO_RETAINED_TEXTURED_PATH_LOGGED.swap(true, Ordering::AcqRel)
     {
         crate::log_important!(target: "render";
-            "picasso-material: proof=retained-material-sampled-and-retired accepted=1 contract=pos-normal-uv+base-color-plus-metallic-roughness-alpha-probe graphics_handoff=native-matrices vertex_shader=adls-gfx120-retained-uv-transform-candidate pixel_shader=base-color-plus-metallic-roughness-alpha-probe-simd16-candidate interpolation=perspective-authored-uv base={}x{} stride={} metallic_roughness_bound=1 cpu_texture_sampling=0 cpu_vertex_projection=0 render_submits=1\n",
+            "picasso-material: proof=retained-material-sampled-and-retired accepted=1 contract=pos-normal-uv+base-color-only graphics_handoff=native-matrices vertex_shader=adls-gfx120-retained-uv-transform-candidate pixel_shader=base-color-only-simd16-candidate interpolation=perspective-authored-uv base={}x{} stride={} cpu_texture_sampling=0 cpu_vertex_projection=0 render_submits=1\n",
             material.base_color.width,
             material.base_color.height,
             material.base_color.pitch,

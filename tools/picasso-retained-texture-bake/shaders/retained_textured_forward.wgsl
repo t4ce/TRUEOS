@@ -2,11 +2,9 @@
 //
 // Geometry and UVs are immutable vertex data. Camera, instance matrices and
 // compacted instance IDs are GPU-resident outputs shared with Helio Churn.
-// The first two-map observation rung samples engine-resolved base color and
-// metallic-roughness RGBA8 textures with the same authored UV. The second
-// sample contributes only its opaque alpha, so the visual result stays base
-// color while still making the second texture access observable. PBR channel
-// interpretation waits for the lighting path.
+// The stable first material rung samples the engine-resolved base-color RGBA8
+// texture with authored UV. The other glTF maps remain resident but have no
+// active shader consumer yet.
 
 struct Camera {
     view:           mat4x4<f32>,
@@ -37,7 +35,6 @@ struct GpuInstanceData {
 @group(0) @binding(2) var<storage, read> compacted_indices: array<u32>;
 @group(0) @binding(3) var base_color_texture: texture_2d<f32>;
 @group(0) @binding(4) var base_color_sampler: sampler;
-@group(0) @binding(5) var metallic_roughness_texture: texture_2d<f32>;
 
 struct VertexInput {
     @location(0) position: vec3<f32>,
@@ -64,6 +61,5 @@ fn vs_main(input: VertexInput, @builtin(instance_index) slot: u32) -> VertexOutp
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
     let base_color = textureSample(base_color_texture, base_color_sampler, input.uv);
-    let metallic_roughness = textureSample(metallic_roughness_texture, base_color_sampler, input.uv);
-    return vec4<f32>(base_color.rgb * metallic_roughness.a, base_color.a);
+    return base_color;
 }

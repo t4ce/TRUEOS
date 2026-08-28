@@ -158,8 +158,8 @@ struct TriangleDrawPrep {
     /// Present only after a complete artifact/native ABI validation.
     native: Option<TriangleNativeDrawContract>,
     sampled_texture: Option<TriangleSampledTextureBinding>,
-    /// Second sampled image for the base-color-plus-metallic-roughness probe.
-    /// It is meaningful only with `sampled_texture`, which is base color.
+    /// Reserved second sampled image for a later material rung. It is
+    /// meaningful only with `sampled_texture`, which is base color.
     metallic_roughness_texture: Option<TriangleSampledTextureBinding>,
     emissive_factor: [f32; 3],
     state_gpu_addr: u64,
@@ -314,13 +314,13 @@ pub(crate) struct ResidentSampledTexture {
 unsafe impl Send for ResidentSampledTexture {}
 unsafe impl Sync for ResidentSampledTexture {}
 
-/// The retained material observation rung: authored UV samples base color and
-/// metallic-roughness. The second JPEG's opaque alpha preserves base-color
-/// output; PBR channel interpretation waits for the lighting path.
+/// The stable retained material rung samples authored-UV base color only.
+/// Other glTF maps stay resident in the bundle until their shader consumers
+/// are separately admitted.
 #[derive(Clone, Copy)]
 pub(crate) struct ResidentRetainedMaterial<'a> {
     pub(crate) base_color: &'a ResidentSampledTexture,
-    pub(crate) metallic_roughness: &'a ResidentSampledTexture,
+    pub(crate) metallic_roughness: Option<&'a ResidentSampledTexture>,
 }
 
 // The authenticated instruction allocation is process-lifetime resident in

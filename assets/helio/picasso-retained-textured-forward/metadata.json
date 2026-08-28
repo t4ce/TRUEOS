@@ -4,10 +4,9 @@
     "storage-instances@vs-bti2",
     "storage-compacted-indices@vs-bti3",
     "sampled-base-color-rgba8-2d@ps-bti2",
-    "sampler@ps-sampler0",
-    "sampled-metallic-roughness-rgba8-2d@ps-bti3"
+    "sampler@ps-sampler0"
   ],
-  "contract": "retained-transform-filtered-base-color-plus-metallic-roughness-alpha-probe",
+  "contract": "retained-transform-filtered-base-color-only",
   "device": {
     "device_id": 18048,
     "name": "Intel(R) UHD Graphics 770 (ADL-S GT1)",
@@ -42,18 +41,18 @@
       "simd_width": 8,
       "stage": "fragment",
       "statistics": {
-        "Code size": 144,
-        "Cycles": 818,
+        "Code size": 96,
+        "Cycles": 786,
         "Fills": 0,
         "GRF registers": 0,
-        "Instructions": 11,
+        "Instructions": 7,
         "Loops": 0,
         "Max dispatch width": 16,
-        "Max live registers": 13,
+        "Max live registers": 7,
         "Non SSA regs after NIR": 5,
-        "SENDs": 3,
+        "SENDs": 2,
         "Scratch Memory Size": 0,
-        "Source hash": 3593735095,
+        "Source hash": 3874285174,
         "Spills": 0,
         "Workgroup Memory Size": 0
       }
@@ -64,18 +63,18 @@
       "simd_width": 16,
       "stage": "fragment",
       "statistics": {
-        "Code size": 208,
-        "Cycles": 870,
+        "Code size": 160,
+        "Cycles": 812,
         "Fills": 0,
         "GRF registers": 0,
-        "Instructions": 15,
+        "Instructions": 11,
         "Loops": 0,
         "Max dispatch width": 16,
-        "Max live registers": 25,
+        "Max live registers": 13,
         "Non SSA regs after NIR": 5,
-        "SENDs": 3,
+        "SENDs": 2,
         "Scratch Memory Size": 0,
-        "Source hash": 3593735095,
+        "Source hash": 3874285174,
         "Spills": 0,
         "Workgroup Memory Size": 0
       }
@@ -84,8 +83,8 @@
   "fragment_proof": "adls-noop-drm-shim-compiler-candidate",
   "frontend": "wgsl-via-checked-in-naga-wrapper",
   "native_bytes": {
-    "ps16": 208,
-    "ps8": 144,
+    "ps16": 160,
+    "ps8": 96,
     "vs": 624
   },
   "provenance": "adls-noop-drm-shim-compiler-candidate",
