@@ -64,7 +64,11 @@ impl Parse for ItemFn {
 
 impl ToTokens for ItemFn {
     fn to_tokens(&self, tokens: &mut TokenStream) {
-        tokens.append_all(self.attrs.iter().filter(|a| matches!(a.style, AttrStyle::Outer)));
+        tokens.append_all(
+            self.attrs
+                .iter()
+                .filter(|a| matches!(a.style, AttrStyle::Outer)),
+        );
         self.vis.to_tokens(tokens);
         self.sig.to_tokens(tokens);
         self.brace_token.surround(tokens, |tokens| {
@@ -72,4 +76,3 @@ impl ToTokens for ItemFn {
         });
     }
 }
-

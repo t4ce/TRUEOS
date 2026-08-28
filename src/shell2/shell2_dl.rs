@@ -341,7 +341,7 @@ async fn online_run_task(
 
     // Host launch is deliberately argument-free.  App configuration belongs
     // to the VMX shell after the Blueprint is running.  `new` remains an
-    // internal compatibility transport for named launchers such as GridP.
+    // Internal compatibility transport for named launchers.
     let instance = if args.first().is_some_and(|arg| arg == "new") {
         args.remove(0);
         if args.len() < 2 {

@@ -1986,20 +1986,79 @@ pub(crate) fn destroy_cloud_work_graph(
     Ok(())
 }
 
+fn retained_mesh_topology(
+    topology: u32,
+) -> Option<crate::intel::render::ResidentScenePrimitiveTopology> {
+    use crate::intel::render::ResidentScenePrimitiveTopology;
+
+    match topology {
+        // Zero was the reserved field in the original descriptor ABI, whose
+        // only legal retained topology was a triangle list.
+        0 | v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_LIST => {
+            Some(ResidentScenePrimitiveTopology::TriangleList)
+        }
+        v::vgpu::PRIMITIVE_TOPOLOGY_POINT_LIST => Some(ResidentScenePrimitiveTopology::PointList),
+        v::vgpu::PRIMITIVE_TOPOLOGY_LINE_LIST => Some(ResidentScenePrimitiveTopology::LineList),
+        v::vgpu::PRIMITIVE_TOPOLOGY_LINE_LOOP => Some(ResidentScenePrimitiveTopology::LineLoop),
+        v::vgpu::PRIMITIVE_TOPOLOGY_LINE_STRIP => Some(ResidentScenePrimitiveTopology::LineStrip),
+        v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP => {
+            Some(ResidentScenePrimitiveTopology::TriangleStrip)
+        }
+        v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_FAN => {
+            Some(ResidentScenePrimitiveTopology::TriangleFan)
+        }
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod retained_mesh_topology_tests {
+    use super::retained_mesh_topology;
+    use crate::intel::render::ResidentScenePrimitiveTopology;
+    use crate::v::vgpu;
+
+    #[test]
+    fn accepts_every_gltf_primitive_mode_and_legacy_triangle_default() {
+        let cases = [
+            (0, ResidentScenePrimitiveTopology::TriangleList, 3),
+            (vgpu::PRIMITIVE_TOPOLOGY_POINT_LIST, ResidentScenePrimitiveTopology::PointList, 1),
+            (vgpu::PRIMITIVE_TOPOLOGY_LINE_LIST, ResidentScenePrimitiveTopology::LineList, 2),
+            (vgpu::PRIMITIVE_TOPOLOGY_LINE_LOOP, ResidentScenePrimitiveTopology::LineLoop, 2),
+            (vgpu::PRIMITIVE_TOPOLOGY_LINE_STRIP, ResidentScenePrimitiveTopology::LineStrip, 2),
+            (
+                vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+                ResidentScenePrimitiveTopology::TriangleList,
+                3,
+            ),
+            (
+                vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP,
+                ResidentScenePrimitiveTopology::TriangleStrip,
+                3,
+            ),
+            (vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_FAN, ResidentScenePrimitiveTopology::TriangleFan, 3),
+        ];
+        for (wire, expected, valid_count) in cases {
+            assert_eq!(retained_mesh_topology(wire), Some(expected));
+            assert!(expected.accepts_index_count(valid_count));
+        }
+        assert_eq!(retained_mesh_topology(u32::MAX), None);
+    }
+}
+
 pub(crate) fn create_retained_mesh(
     principal: Principal,
     device_handle: DeviceHandle,
     descriptor: v::vgpu::RetainedMeshDescriptor,
 ) -> Result<RetainedMeshHandle, VgpuError> {
-    if descriptor.reserved != 0
-        || !matches!(
-            descriptor.vertex_layout,
-            v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL
-                | v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV
-        )
-        || descriptor.vertex_count == 0
-        || descriptor.index_count < 3
-        || !descriptor.index_count.is_multiple_of(3)
+    let double_sided = descriptor.topology & v::vgpu::RETAINED_MESH_FLAG_DOUBLE_SIDED != 0;
+    let topology =
+        retained_mesh_topology(descriptor.topology & !v::vgpu::RETAINED_MESH_FLAG_DOUBLE_SIDED)
+            .ok_or(VgpuError::Unsupported)?;
+    if !matches!(
+        descriptor.vertex_layout,
+        v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL | v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV
+    ) || descriptor.vertex_count == 0
+        || !topology.accepts_index_count(descriptor.index_count as usize)
     {
         return Err(VgpuError::Unsupported);
     }
@@ -2025,7 +2084,7 @@ pub(crate) fn create_retained_mesh(
     // renderer's resident allocation changes its PPGTT and therefore takes
     // RENDER_SUBMIT_RUNTIME; it must never run below this lock (the submit
     // path takes the same locks in the opposite order through the executor).
-    let (vertices, indices, epoch, gpuvm) = {
+    let (vertices, mut indices, epoch, gpuvm) = {
         let mut broker = BROKER.lock();
         let device = lookup_device_mut(&mut broker, device_handle, principal)?;
         ensure_live(device)?;
@@ -2089,6 +2148,13 @@ pub(crate) fn create_retained_mesh(
         (vertices, indices, device.epoch, gpuvm)
     };
 
+    // Gen12 has no line-loop assembly.  Preserve glTF's source topology in
+    // the retained resident, but materialize the final-to-first segment in
+    // its immutable renderer-owned draw plan before the first presentation.
+    if topology == crate::intel::render::ResidentScenePrimitiveTopology::LineLoop {
+        indices.push(*indices.first().ok_or(VgpuError::Unsupported)?);
+    }
+
     // Phase 2: bind one RendererN carrier and allocate/map renderer-owned
     // storage without BROKER held. The only legal root is this VMX device's
     // existing owned GPUVM; pool exhaustion is rejected rather than falling
@@ -2135,6 +2201,8 @@ pub(crate) fn create_retained_mesh(
         &indices,
         v::vgpu::MAX_RETAINED_TRANSFORM_SEEDS,
         descriptor.vertex_layout == v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV,
+        double_sided,
+        topology,
     ) {
         Ok(resident) => resident,
         Err(_) => {
@@ -4853,6 +4921,7 @@ pub(crate) fn submit_ui4_retained_frame(
 
     if crate::intel::render::update_resident_picasso_retained_transform_seeds(
         &resident,
+        &submit.camera,
         &submit.seeds[..seed_count],
     )
     .is_err()

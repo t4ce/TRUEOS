@@ -214,6 +214,9 @@ pub const PRIMITIVE_TOPOLOGY_LINE_STRIP: u32 = 3;
 pub const PRIMITIVE_TOPOLOGY_TRIANGLE_LIST: u32 = 4;
 pub const PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP: u32 = 5;
 pub const PRIMITIVE_TOPOLOGY_TRIANGLE_FAN: u32 = 6;
+/// glTF `LINE_LOOP`. Intel has no corresponding primitive mode, so retained
+/// submission materializes its closing index and encodes it as a line strip.
+pub const PRIMITIVE_TOPOLOGY_LINE_LOOP: u32 = 7;
 
 /// One indexed range in a single-target, single-pipeline render-pass batch.
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
@@ -274,6 +277,10 @@ pub const MAX_RETAINED_TRANSFORM_SEEDS: usize = 4;
 pub const MAX_RETAINED_STATIC_DRAWS: usize = 3;
 pub const RETAINED_VERTEX_LAYOUT_POS_NORMAL: u32 = 0;
 pub const RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV: u32 = 1;
+/// Retained mesh topology field flag: honor glTF material `doubleSided` by
+/// disabling fixed-function face culling for this mesh. The topology remains
+/// in the low bits, keeping this cross-process descriptor ABI at 48 bytes.
+pub const RETAINED_MESH_FLAG_DOUBLE_SIDED: u32 = 1 << 31;
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 #[repr(transparent)]
@@ -289,7 +296,9 @@ pub struct RetainedMeshDescriptor {
     pub vertex_count: u32,
     pub index_count: u32,
     pub vertex_layout: u32,
-    pub reserved: u32,
+    /// One of the `PRIMITIVE_TOPOLOGY_*` constants. A zero value is accepted
+    /// as the pre-topology ABI's triangle-list default.
+    pub topology: u32,
 }
 
 /// Exact compact input consumed by the authenticated retained-transform
@@ -304,6 +313,24 @@ pub struct RetainedTransformSeed {
     pub previous_translation: [f32; 3],
     pub draw_group: u32,
     pub flags: u32,
+}
+
+/// Camera block consumed verbatim by the retained native vertex shader.
+/// Matrices are column-major `mat4x4<f32>` values, matching WGSL and the
+/// Helio shader artifact.  Keeping it in the frame request lets retained
+/// model transforms remain object/world-space TRS instead of folding a
+/// camera projection into each object.
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+#[repr(C)]
+pub struct RetainedCamera {
+    pub view: [f32; 16],
+    pub projection: [f32; 16],
+    pub view_projection: [f32; 16],
+    pub inverse_view_projection: [f32; 16],
+    pub position_near: [f32; 4],
+    pub forward_far: [f32; 4],
+    pub jitter_frame: [f32; 4],
+    pub previous_view_projection: [f32; 16],
 }
 
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
@@ -325,6 +352,8 @@ pub struct RetainedFrameSubmit {
     /// after rewriting any static vertex payload so a retained mesh refreshes
     /// its resident copy in place. Indices and draw identity remain immutable.
     pub static_vertex_revision: u32,
+    /// Live camera data for the native retained vertex shader.
+    pub camera: RetainedCamera,
     pub seeds: [RetainedTransformSeed; MAX_RETAINED_TRANSFORM_SEEDS],
     pub static_draws: [IndexedBatchDrawV2; MAX_RETAINED_STATIC_DRAWS],
 }
@@ -1083,10 +1112,14 @@ mod tests {
         assert_eq!(core::mem::size_of::<IndexedBatchDrawV2>(), 24);
         assert_eq!(core::mem::size_of::<IndexedDrawBatchV2>(), 440);
         assert_eq!(core::mem::size_of::<RetainedMeshDescriptor>(), 48);
+        assert_eq!(core::mem::offset_of!(RetainedMeshDescriptor, topology), 44);
         assert_eq!(core::mem::size_of::<RetainedTransformSeed>(), 64);
-        assert_eq!(core::mem::size_of::<RetainedFrameSubmit>(), 400);
+        assert_eq!(core::mem::size_of::<RetainedCamera>(), 368);
+        assert_eq!(core::mem::size_of::<RetainedFrameSubmit>(), 768);
         assert_eq!(core::mem::align_of::<RetainedFrameSubmit>(), 8);
         assert_eq!(core::mem::offset_of!(RetainedFrameSubmit, static_vertex_revision), 68);
+        assert_eq!(core::mem::offset_of!(RetainedFrameSubmit, camera), 72);
+        assert_eq!(core::mem::offset_of!(RetainedFrameSubmit, seeds), 440);
         assert_eq!(core::mem::size_of::<TimelinePoint>(), 16);
         assert_eq!(core::mem::size_of::<TimelineStatus>(), 32);
         assert_eq!(core::mem::size_of::<CloudWorkGraphDescriptor>(), 56);

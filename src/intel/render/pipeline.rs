@@ -1150,7 +1150,8 @@ mod retained_native_matrix_draw_contract_tests {
     use super::{
         ChurnHardwareAdmission, TriangleDrawPrep, TriangleIndexBufferPrep,
         TriangleNativeDrawContract, TriangleSampledTextureBinding, TriangleStorageBufferBinding,
-        TriangleVertexFormat, TriangleVfInstancingState, validate_triangle_native_draw_contract,
+        TriangleVertexFormat, TriangleVfInstancingState, native_raster_dw1,
+        validate_triangle_native_draw_contract,
     };
 
     const CAMERA_GPU: u64 = 0x2000_0000;
@@ -1159,9 +1160,27 @@ mod retained_native_matrix_draw_contract_tests {
     const INDIRECT_GPU: u64 = 0x2300_0028;
     const ROWS: u32 = 337;
 
+    #[test]
+    fn gltf_double_sided_changes_only_native_cull_mode() {
+        let back_culled = native_raster_dw1(false, false);
+        let double_sided = native_raster_dw1(true, false);
+        assert_eq!((back_culled >> 16) & 0b11, 3);
+        assert_eq!((double_sided >> 16) & 0b11, 1);
+        assert_eq!(back_culled & !(0b11 << 16), double_sided & !(0b11 << 16));
+    }
+
+    #[test]
+    fn picasso_clockwise_front_keeps_back_face_culling() {
+        let raster = native_raster_dw1(false, true);
+        assert_eq!((raster >> 16) & 0b11, 3);
+        assert_eq!((raster >> 21) & 0b1, 0);
+    }
+
     fn native_contract() -> TriangleNativeDrawContract {
         TriangleNativeDrawContract {
             hardware_admission: ChurnHardwareAdmission::ValidatedProduction,
+            double_sided: false,
+            front_face_clockwise: false,
             vs_storage_bindings: [
                 TriangleStorageBufferBinding {
                     gpu_addr: CAMERA_GPU,
@@ -1911,9 +1930,10 @@ fn encode_triangle_probe_batch(
     // none, and otherwise leave raster defaults boring until we have visual
     // proof that a more opinionated packet is required.
     let raster_dw1 = if artifact_native_fixed_function {
-        // Exact validated gfx12 Xe-LP state for CCW front faces, BACK culling,
-        // solid fill, one raster sample, near/far clip and scissor enabled.
-        0x04A3_1003
+        native_raster_dw1(
+            draw.native.is_some_and(|native| native.double_sided),
+            draw.native.is_some_and(|native| native.front_face_clockwise),
+        )
     } else if mesa_host_fixed_function {
         if resident_msaa4 {
             0x04A1_1C03
@@ -4406,6 +4426,25 @@ fn encode_triangle_probe_batch(
     );
 
     Ok(cursor * core::mem::size_of::<u32>())
+}
+
+/// Validated gfx12 Xe-LP raster state. glTF's sole culling switch is material
+/// `doubleSided`, which maps to cull-none while preserving the selected front
+/// winding and all unrelated native state bits.
+const fn native_raster_dw1(double_sided: bool, front_face_clockwise: bool) -> u32 {
+    const CULL_BACK_CCW: u32 = 0x04A3_1003;
+    let raster = if front_face_clockwise {
+        // 3DSTATE_RASTER.DW1[21] = 0 means clockwise front faces.
+        CULL_BACK_CCW & !(1 << 21)
+    } else {
+        CULL_BACK_CCW
+    };
+    if double_sided {
+        // 3DSTATE_RASTER.DW1[17:16] = 1 means cull none.
+        (raster & !(0b11 << 16)) | (1 << 16)
+    } else {
+        raster
+    }
 }
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]

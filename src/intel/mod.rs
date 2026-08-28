@@ -261,8 +261,8 @@ pub fn init_once() {
     let fixed_render_ggtt_ready =
         guc_ready && physical_gt.accepted() && self::render::init_fixed_render_ggtt_for_boot(dev);
     let picasso_carrier_softcap = self::render::picasso_carrier_capacity();
-    let picasso_carriers_ggtt = usize::from(self::render::picasso_carrier_control_ggtt_ready())
-        * picasso_carrier_softcap;
+    let picasso_carriers_ggtt =
+        usize::from(self::render::picasso_carrier_control_ggtt_ready()) * picasso_carrier_softcap;
     crate::log_info!(
         target: "render";
         "intel/gt-global-init: fixed_render_ggtt={} picasso_carriers_ggtt={}/{} ownership=boot-only guc_ready={} client_remap=forbidden\n",

@@ -472,7 +472,8 @@ impl Device {
                 desc.interval,
             );
             let ring_addr = if use_streams {
-                let stream_ctx_addr = ep_raw.configure_primary_streams(UAS_PRIMARY_STREAM_CONTEXTS)?;
+                let stream_ctx_addr =
+                    ep_raw.configure_primary_streams(UAS_PRIMARY_STREAM_CONTEXTS)?;
                 for ring in ep_raw.stream_rings() {
                     self.transfer_result_handler
                         .register_queue(self.id.as_u8(), dci, ring);

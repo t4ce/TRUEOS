@@ -184,13 +184,6 @@ pub(crate) fn readable_len_for_output_mask_generation(
     (state.active_generation() == Some(generation)).then_some(state.rx.len())
 }
 
-pub(crate) fn terminal_size_for_output_mask(
-    output_mask: crate::shell2::OutputMask,
-) -> Option<(usize, usize)> {
-    let state = backend_for_output_mask(output_mask)?.state.lock();
-    matches!(state.lease, LeaseState::Active { .. }).then_some((state.cols, state.rows))
-}
-
 /// Run a Matrix scope operation while the current local lease is pinned.
 ///
 /// The closure may take the Matrix lock, but it must not re-enter this local

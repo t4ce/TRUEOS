@@ -850,8 +850,7 @@ fn tessellate_text_mesh_grouped(
             }
             vertices.reserve(mesh.vertices.len());
             vertices.extend(
-                mesh
-                    .vertices
+                mesh.vertices
                     .iter()
                     .map(|vertex| [vertex[0] + pen_x, vertex[1] + baseline_y]),
             );

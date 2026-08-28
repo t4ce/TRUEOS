@@ -18,7 +18,6 @@ impl CommandSessionKind {
 pub(crate) enum ParseOutcome {
     Handled,
     NotCommand,
-    SetLineWidth(usize),
     StartSession(CommandSessionKind),
 }
 

@@ -295,6 +295,9 @@ pub(crate) struct ResidentSceneDraw<'a> {
 pub(crate) enum ResidentScenePrimitiveTopology {
     PointList,
     LineList,
+    /// A source `LINE_LOOP`; its retained index plan includes the explicit
+    /// final-to-first edge and is emitted as a hardware line strip.
+    LineLoop,
     LineStrip,
     TriangleList,
     TriangleStrip,
@@ -306,7 +309,7 @@ impl ResidentScenePrimitiveTopology {
         match self {
             Self::PointList => count >= 1,
             Self::LineList => count >= 2 && count.is_multiple_of(2),
-            Self::LineStrip => count >= 2,
+            Self::LineLoop | Self::LineStrip => count >= 2,
             Self::TriangleList => count >= 3 && count.is_multiple_of(3),
             Self::TriangleStrip | Self::TriangleFan => count >= 3,
         }
@@ -1520,7 +1523,8 @@ fn stage_resident_scene_secondary(
         match topology {
             ResidentScenePrimitiveTopology::PointList => TriangleBatchMode::PointDraw,
             ResidentScenePrimitiveTopology::LineList => TriangleBatchMode::LineDraw,
-            ResidentScenePrimitiveTopology::LineStrip => TriangleBatchMode::LineStripDraw,
+            ResidentScenePrimitiveTopology::LineLoop
+            | ResidentScenePrimitiveTopology::LineStrip => TriangleBatchMode::LineStripDraw,
             ResidentScenePrimitiveTopology::TriangleList => TriangleBatchMode::Draw,
             ResidentScenePrimitiveTopology::TriangleStrip => TriangleBatchMode::TriangleStripDraw,
             ResidentScenePrimitiveTopology::TriangleFan => TriangleBatchMode::TriangleFanDraw,
@@ -1600,7 +1604,15 @@ fn stage_resident_churn_forward_secondary(
         resident_secondary_marker(RCS_EXEC_RESULT_DRAW_PRE3D, secondary_index)?,
         resident_secondary_marker(RCS_EXEC_RESULT_DRAW_POST3D, secondary_index)?,
         resident_secondary_marker(RCS_EXEC_RESULT_DONE, secondary_index)?,
-        TriangleBatchMode::Draw,
+        match resident.topology() {
+            ResidentScenePrimitiveTopology::PointList => TriangleBatchMode::PointDraw,
+            ResidentScenePrimitiveTopology::LineList => TriangleBatchMode::LineDraw,
+            ResidentScenePrimitiveTopology::LineLoop
+            | ResidentScenePrimitiveTopology::LineStrip => TriangleBatchMode::LineStripDraw,
+            ResidentScenePrimitiveTopology::TriangleList => TriangleBatchMode::Draw,
+            ResidentScenePrimitiveTopology::TriangleStrip => TriangleBatchMode::TriangleStripDraw,
+            ResidentScenePrimitiveTopology::TriangleFan => TriangleBatchMode::TriangleFanDraw,
+        },
         StreamoutProofExperiment::HeaderAndPositionSlots01,
         resident.front_end_contract,
         [0.0, 0.0],
@@ -2108,7 +2120,7 @@ fn submit_resident_churn_forward_geometry_batched(
                     None,
                     ResidentSceneFragmentContract::ConstantRgba,
                     [0.0, 0.0],
-                    ResidentScenePrimitiveTopology::TriangleList,
+                    resident.topology(),
                     secondary_index,
                     result_ggtt_gpu,
                 )?;

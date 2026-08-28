@@ -323,9 +323,7 @@ impl NativeRenderCommandV2 {
         // Unlike V1, V2/V3 have an explicit release stage. Commands may
         // resume in a later block after their gate has ended, until the
         // release tail itself is exhausted.
-        let envelope_frames = self
-            .duration_frames
-            .saturating_add(self.release_frames);
+        let envelope_frames = self.duration_frames.saturating_add(self.release_frames);
         if self.duration_frames == 0 || self.age_frames >= envelope_frames {
             return Err(NativeValidationError::BadDuration);
         }

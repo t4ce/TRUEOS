@@ -130,6 +130,12 @@ struct TriangleVfInstancingState {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct TriangleNativeDrawContract {
     hardware_admission: ChurnHardwareAdmission,
+    /// glTF `doubleSided`: leave both windings enabled in 3DSTATE_RASTER.
+    double_sided: bool,
+    /// The retained Picasso viewport maps glTF's CCW exterior triangles to CW
+    /// screen-space winding. Declaring CW as front preserves normal back-face
+    /// culling instead of exposing a helmet's interior.
+    front_face_clockwise: bool,
     vs_storage_bindings: [TriangleStorageBufferBinding; 3],
     vf_sgvs_dw1: u32,
     vf_sgvs_2_dw1: u32,
@@ -458,6 +464,7 @@ pub(crate) struct ResidentChurnForward {
     index_gpu_addr: u64,
     index_count: u32,
     index_bytes: u32,
+    topology: ResidentScenePrimitiveTopology,
     expanded_vertex_count: u32,
     expanded_vertex_bytes: u32,
     expanded_index_count: u32,
@@ -487,6 +494,10 @@ impl ResidentChurnForward {
 
     pub(crate) const fn sampled_material(&self) -> bool {
         self.sampled_material
+    }
+
+    pub(crate) const fn topology(&self) -> ResidentScenePrimitiveTopology {
+        self.topology
     }
 
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]

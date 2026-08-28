@@ -1326,18 +1326,18 @@ fn picasso_retained_textured_pipeline(
         || retained_vs.meta.kernel.binding_table_entry_count != 4
         || retained_vs.meta.kernel.sampler_count != 0
         || retained_vs.meta.urb_entry_output_length != 1
-        || retained_vs.code.len().checked_mul(core::mem::size_of::<u32>())
+        || retained_vs
+            .code
+            .len()
+            .checked_mul(core::mem::size_of::<u32>())
             != usize::try_from(retained_vs.meta.kernel.code_size_bytes).ok()
         || PICASSO_RETAINED_TEXTURED_PS.len() != 160
     {
         return Err("picasso-retained-textured-stage-shape");
     }
-    let ps_offset = crate::intel::align_up(
-        retained_vs.meta.kernel.code_size_bytes as usize,
-        64,
-    )
-    .and_then(|offset| u32::try_from(offset).ok())
-    .ok_or("picasso-retained-textured-stage-layout")?;
+    let ps_offset = crate::intel::align_up(retained_vs.meta.kernel.code_size_bytes as usize, 64)
+        .and_then(|offset| u32::try_from(offset).ok())
+        .ok_or("picasso-retained-textured-stage-layout")?;
     let pipeline = TrianglePipeline {
         // Keep the physically admitted ADL-S retained-transform VS.  Its
         // first interpolated attribute is world-normal; using normal.xy as
@@ -2073,6 +2073,8 @@ fn create_resident_churn_forward_with_admission(
     expanded_indices.flush();
     let native_vf = TriangleNativeDrawContract {
         hardware_admission,
+        double_sided: false,
+        front_face_clockwise: false,
         vs_storage_bindings: [
             TriangleStorageBufferBinding {
                 gpu_addr: camera.gpu_base(),
@@ -2154,6 +2156,7 @@ fn create_resident_churn_forward_with_admission(
         index_gpu_addr: geometry.gpu_base() + index_offset as u64,
         index_count: (CHURN_FORWARD_MESH_COUNT * CHURN_FORWARD_INDICES_PER_MESH) as u32,
         index_bytes: index_byte_len,
+        topology: ResidentScenePrimitiveTopology::TriangleList,
         expanded_vertex_count: expanded_vertex_count_u32,
         expanded_vertex_bytes: expanded_vertex_byte_len,
         expanded_index_count: expanded_index_count_u32,
@@ -2286,6 +2289,8 @@ pub(crate) fn create_resident_picasso_retained_mesh(
     indices: &[u32],
     max_instances: usize,
     sampled_material: bool,
+    double_sided: bool,
+    topology: ResidentScenePrimitiveTopology,
 ) -> Result<ResidentChurnForward, &'static str> {
     let vertex_stride = if sampled_material {
         32usize
@@ -2294,8 +2299,7 @@ pub(crate) fn create_resident_picasso_retained_mesh(
     };
     if vertices.is_empty()
         || !vertices.len().is_multiple_of(vertex_stride)
-        || indices.len() < 3
-        || !indices.len().is_multiple_of(3)
+        || !topology.accepts_index_count(indices.len())
         || indices
             .iter()
             .any(|index| *index as usize >= vertices.len() / vertex_stride)
@@ -2313,6 +2317,11 @@ pub(crate) fn create_resident_picasso_retained_mesh(
         ChurnHardwareAdmission::ValidatedProduction,
         Some(carrier),
     )?;
+    resident.native_vf.double_sided = double_sided;
+    // glTF's CCW exterior winding reaches this retained surface as clockwise
+    // screen-space winding. Keep culling back faces, but name that winding
+    // front so the helmet shell—not its interior—survives rasterization.
+    resident.native_vf.front_face_clockwise = true;
     if sampled_material {
         resident.pipeline = picasso_retained_textured_pipeline(resident.pipeline.vs)?;
         resident.sampled_material = true;
@@ -2328,10 +2337,9 @@ pub(crate) fn create_resident_picasso_retained_mesh(
         resident.vertex_stride = 32;
         resident.vertex_format = TriangleVertexFormat::PosNormal;
     }
-    // Picasso's prepared geometry is already centered and normalized into
-    // clip/NDC space. The shared native vertex shader still reads a camera
-    // matrix, so publish an explicit identity camera instead of inheriting
-    // the zeroed Churn allocation (which produces clip_position.w == 0).
+    // Install a valid fallback for bootstrap. Every retained frame replaces
+    // this with its live world-to-clip camera before the transform/draw pass;
+    // the zeroed Churn allocation would produce clip_position.w == 0.
     const CAMERA_BYTES: usize = 368;
     let mut camera_bytes = [0u8; CAMERA_BYTES];
     for matrix_offset in [0usize, 64, 128, 192, 304] {
@@ -2376,6 +2384,8 @@ pub(crate) fn create_resident_picasso_retained_mesh(
     let index_byte_len =
         u32::try_from(index_bytes).map_err(|_| "picasso-retained-geometry-size")?;
     let old_geometry = core::mem::replace(&mut resident.geometry, geometry);
+    // Picasso compacts all retained instances into one indexed-indirect draw.
+    // The seed flag's upper bits carry the group-local slot.
     resident.draw_group_count = 1;
     resident.vertex_gpu_addr = resident.geometry.gpu_base();
     resident.vertex_count = vertex_count;
@@ -2383,6 +2393,7 @@ pub(crate) fn create_resident_picasso_retained_mesh(
     resident.index_gpu_addr = resident.geometry.gpu_base() + index_offset as u64;
     resident.index_count = index_count;
     resident.index_bytes = index_byte_len;
+    resident.topology = topology;
     if !release_resident_render_buffer(&old_geometry) {
         return Err("picasso-retained-bootstrap-release");
     }
@@ -2394,10 +2405,37 @@ pub(crate) fn create_resident_picasso_retained_mesh(
 /// the CPU never writes transformed vertex positions.
 pub(crate) fn update_resident_picasso_retained_transform_seeds(
     resident: &ResidentChurnForward,
+    camera: &v::vgpu::RetainedCamera,
     seeds: &[v::vgpu::RetainedTransformSeed],
 ) -> Result<(), &'static str> {
+    const CAMERA_BYTES: usize = 368;
     const SEED_BYTES: usize = 64;
     const TEMPLATE_BYTES: usize = 24;
+
+    fn encode_camera(camera: &v::vgpu::RetainedCamera) -> Result<[u8; CAMERA_BYTES], &'static str> {
+        let fields: [&[f32]; 8] = [
+            &camera.view,
+            &camera.projection,
+            &camera.view_projection,
+            &camera.inverse_view_projection,
+            &camera.position_near,
+            &camera.forward_far,
+            &camera.jitter_frame,
+            &camera.previous_view_projection,
+        ];
+        if fields.iter().flat_map(|values| values.iter()).any(|value| !value.is_finite()) {
+            return Err("picasso-retained-camera-finite");
+        }
+        let mut bytes = [0u8; CAMERA_BYTES];
+        let mut offset = 0usize;
+        for values in fields {
+            for value in values {
+                bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+                offset += 4;
+            }
+        }
+        Ok(bytes)
+    }
 
     fn encode_seed(seed: v::vgpu::RetainedTransformSeed) -> [u8; SEED_BYTES] {
         let mut bytes = [0; SEED_BYTES];
@@ -2417,12 +2455,14 @@ pub(crate) fn update_resident_picasso_retained_transform_seeds(
         bytes
     }
 
-    fn encode_template(index_count: u32, capacity: u32) -> [u8; TEMPLATE_BYTES] {
+    fn encode_template(index_count: u32, capacity: u32, material_id: u32) -> [u8; TEMPLATE_BYTES] {
         let mut bytes = [0; TEMPLATE_BYTES];
         bytes[0..4].copy_from_slice(&index_count.to_le_bytes());
-        // first_index, base_vertex, first_instance and packed mesh/material
-        // are zero for Picasso's single retained geometry.
+        // Picasso owns one mesh (ID 0) with one independently compacted
+        // instance per material group.  The retained forward fragment shader
+        // receives this material identity as a flat input.
         bytes[16..20].copy_from_slice(&capacity.to_le_bytes());
+        bytes[20..24].copy_from_slice(&(material_id << 16).to_le_bytes());
         bytes
     }
 
@@ -2431,22 +2471,45 @@ pub(crate) fn update_resident_picasso_retained_transform_seeds(
             .retained_transform_unavailable_reason()
             .unwrap_or("picasso-retained-transform-unavailable"),
     )?;
+    let camera_bytes = encode_camera(camera)?;
     if seeds.is_empty()
         || seeds.len() > resident.max_instances
-        || seeds.iter().any(|seed| seed.draw_group != 0)
+        || seeds
+            .iter()
+            .any(|seed| seed.draw_group as usize >= resident.draw_group_count)
     {
         return Err("picasso-retained-transform-seeds");
     }
     let row_count = u32::try_from(seeds.len()).map_err(|_| "picasso-retained-transform-seeds")?;
-    let capacity = row_count;
+    let mut group_capacities = [0u32; v::vgpu::MAX_RETAINED_TRANSFORM_SEEDS];
+    for seed in seeds {
+        let group = seed.draw_group as usize;
+        let slot = seed.flags >> 16;
+        if slot != group_capacities[group] {
+            return Err("picasso-retained-transform-slots");
+        }
+        group_capacities[group] = group_capacities[group]
+            .checked_add(1)
+            .ok_or("picasso-retained-transform-capacity")?;
+    }
     let mut seed_bytes = Vec::with_capacity(seeds.len() * SEED_BYTES);
     for seed in seeds {
         seed_bytes.extend_from_slice(&encode_seed(*seed));
     }
     let mut template_bytes = Vec::with_capacity(CHURN_FORWARD_DRAW_COUNT * TEMPLATE_BYTES);
     template_bytes.resize(CHURN_FORWARD_DRAW_COUNT * TEMPLATE_BYTES, 0);
-    template_bytes[..TEMPLATE_BYTES]
-        .copy_from_slice(&encode_template(resident.index_count, capacity));
+    for (group, capacity) in group_capacities.into_iter().enumerate() {
+        let start = group * TEMPLATE_BYTES;
+        let end = start + TEMPLATE_BYTES;
+        template_bytes[start..end].copy_from_slice(&encode_template(
+            resident.index_count,
+            capacity,
+            // Keep helmet zero on material zero (the existing appearance),
+            // then preserve the retained palette's red, green, and blue
+            // material identities for helmets one through three.
+            group as u32,
+        ));
+    }
     transform.row_count.store(0, Ordering::Release);
     let dispatch = resident
         .transform_dispatch_for_rows(row_count)
@@ -2459,7 +2522,8 @@ pub(crate) fn update_resident_picasso_retained_transform_seeds(
     dispatch
         .validate()
         .map_err(|_| "picasso-retained-transform-contract")?;
-    if !transform.seeds.write_and_flush(0, &seed_bytes)
+    if !resident.camera.write_and_flush(0, &camera_bytes)
+        || !transform.seeds.write_and_flush(0, &seed_bytes)
         || !transform.draw_templates.write_and_flush(0, &template_bytes)
     {
         return Err("picasso-retained-transform-upload");
