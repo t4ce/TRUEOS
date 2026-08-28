@@ -345,7 +345,7 @@ pub(crate) fn destroy_frame(handle: FrameHandle) -> Result<(), FramePoolError> {
         // no-writer/no-reader proof is consumed. Display/GGTT ownership is
         // represented by `readers`; the alias itself exists only in Render0's
         // PPGTT and is safe to recycle after this point.
-        if frame.plan.content == FrameContent::RenderScene3d
+        if frame_may_have_resident_scene_direct_imports(frame.plan.content)
             && !release_resident_scene_direct_imports(frame)
         {
             return Err(FramePoolError::Busy);
@@ -358,6 +358,16 @@ pub(crate) fn destroy_frame(handle: FrameHandle) -> Result<(), FramePoolError> {
     destroy_surfaces(surfaces);
     Ok(())
 }
+
+const fn frame_may_have_resident_scene_direct_imports(content: FrameContent) -> bool {
+    matches!(content, FrameContent::RenderScene3d | FrameContent::BlueprintScene)
+}
+
+const _: () = {
+    assert!(frame_may_have_resident_scene_direct_imports(FrameContent::RenderScene3d,));
+    assert!(frame_may_have_resident_scene_direct_imports(FrameContent::BlueprintScene,));
+    assert!(!frame_may_have_resident_scene_direct_imports(FrameContent::Image,));
+};
 
 fn frame_has_live_buffer_owners(frame: &FrameRecord) -> bool {
     buffer_owners_live(&frame.acquired, &frame.readers)
@@ -384,7 +394,8 @@ fn release_resident_scene_direct_imports(frame: &FrameRecord) -> bool {
 #[cfg(test)]
 mod resident_scene_frame_destroy_tests {
     use super::{
-        AcquiredBuffer, FRAME_BUFFER_CAPACITY, FramePool, FrameRecord, buffer_owners_live,
+        AcquiredBuffer, FRAME_BUFFER_CAPACITY, FrameContent, FramePool, FrameRecord,
+        buffer_owners_live, frame_may_have_resident_scene_direct_imports,
     };
 
     #[test]
@@ -412,6 +423,13 @@ mod resident_scene_frame_destroy_tests {
         assert!(buffer_owners_live(&acquired, &readers));
         readers[2] = 0;
         assert!(!buffer_owners_live(&acquired, &readers));
+    }
+
+    #[test]
+    fn render_alias_release_covers_direct_blueprint_scenes() {
+        assert!(frame_may_have_resident_scene_direct_imports(FrameContent::RenderScene3d,));
+        assert!(frame_may_have_resident_scene_direct_imports(FrameContent::BlueprintScene,));
+        assert!(!frame_may_have_resident_scene_direct_imports(FrameContent::Image,));
     }
 }
 

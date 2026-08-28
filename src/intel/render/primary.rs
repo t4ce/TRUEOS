@@ -295,7 +295,22 @@ pub(crate) struct ResidentSceneDraw<'a> {
 pub(crate) enum ResidentScenePrimitiveTopology {
     PointList,
     LineList,
+    LineStrip,
     TriangleList,
+    TriangleStrip,
+    TriangleFan,
+}
+
+impl ResidentScenePrimitiveTopology {
+    pub(crate) const fn accepts_index_count(self, count: usize) -> bool {
+        match self {
+            Self::PointList => count >= 1,
+            Self::LineList => count >= 2 && count.is_multiple_of(2),
+            Self::LineStrip => count >= 2,
+            Self::TriangleList => count >= 3 && count.is_multiple_of(3),
+            Self::TriangleStrip | Self::TriangleFan => count >= 3,
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -1310,6 +1325,29 @@ pub(crate) fn render_resident_triangle_scene_frame_premultiplied_with_coverage_a
     Ok(result)
 }
 
+/// Render an ordered immediate indexed scene directly into one UI4 surface.
+/// The public immediate pipeline has no depth-state descriptor, so draw order
+/// is authoritative and this path must not allocate or silently enable depth.
+pub(crate) fn render_resident_indexed_scene_frame_premultiplied_direct_to_surface(
+    draws: &[ResidentSceneDraw<'_>],
+    clear_rgba: Option<[u8; 4]>,
+    destination: crate::intel::gpgpu::GpgpuRgba8Surface,
+    diagnostic_logs: bool,
+) -> Result<ResidentSceneFrameResult, &'static str> {
+    submit_resident_triangle_scene_capture(
+        draws,
+        &[],
+        clear_rgba,
+        diagnostic_logs,
+        false,
+        false,
+        ResidentSceneRasterQuality::SingleSample,
+        destination.width as usize,
+        destination.height as usize,
+        ResidentSceneFrameOutput::DirectGpuSurface(destination),
+    )
+}
+
 /// Render a depth-tested retained scene directly into the one permanent UI4
 /// linear surface used by the compositor-rewire checkpoint. There is no
 /// scratch target, resolve, or post-render compute copy on this path.
@@ -1482,7 +1520,10 @@ fn stage_resident_scene_secondary(
         match topology {
             ResidentScenePrimitiveTopology::PointList => TriangleBatchMode::PointDraw,
             ResidentScenePrimitiveTopology::LineList => TriangleBatchMode::LineDraw,
+            ResidentScenePrimitiveTopology::LineStrip => TriangleBatchMode::LineStripDraw,
             ResidentScenePrimitiveTopology::TriangleList => TriangleBatchMode::Draw,
+            ResidentScenePrimitiveTopology::TriangleStrip => TriangleBatchMode::TriangleStripDraw,
+            ResidentScenePrimitiveTopology::TriangleFan => TriangleBatchMode::TriangleFanDraw,
         },
         StreamoutProofExperiment::HeaderAndPositionSlots01,
         TRIANGLE_DEFAULT_FRONT_END_CONTRACT,

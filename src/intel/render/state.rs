@@ -770,6 +770,9 @@ enum TriangleBatchMode {
     Draw,
     PointDraw,
     LineDraw,
+    LineStripDraw,
+    TriangleStripDraw,
+    TriangleFanDraw,
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     DrawScreenSpace,
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
@@ -2179,6 +2182,18 @@ impl TriangleBatchMode {
                 trueos_helio_artifact::render_ir::PrimitiveTopology::LineList,
             )
             .expect("Intel supports line lists"),
+            Self::LineStripDraw => intel_topology_from_helio(
+                trueos_helio_artifact::render_ir::PrimitiveTopology::LineStrip,
+            )
+            .expect("Intel supports line strips"),
+            Self::TriangleStripDraw => intel_topology_from_helio(
+                trueos_helio_artifact::render_ir::PrimitiveTopology::TriangleStrip,
+            )
+            .expect("Intel supports triangle strips"),
+            Self::TriangleFanDraw => intel_topology_from_helio(
+                trueos_helio_artifact::render_ir::PrimitiveTopology::TriangleFan,
+            )
+            .expect("Intel supports triangle fans"),
             Self::VfLineDraw => intel_topology_from_helio(
                 trueos_helio_artifact::render_ir::PrimitiveTopology::LineList,
             )
@@ -2201,6 +2216,9 @@ impl TriangleBatchMode {
             Self::Draw => "draw",
             Self::PointDraw => "point-draw",
             Self::LineDraw => "line-draw",
+            Self::LineStripDraw => "line-strip-draw",
+            Self::TriangleStripDraw => "triangle-strip-draw",
+            Self::TriangleFanDraw => "triangle-fan-draw",
             Self::DrawScreenSpace => "draw-screen-space",
             Self::DrawScreenSpaceRect => "draw-screen-space-rect",
             Self::VfDraw => "vf-draw",
@@ -2228,7 +2246,11 @@ impl TriangleBatchMode {
     }
 
     fn point_raster(self) -> bool {
-        matches!(self, Self::VfPointDraw)
+        matches!(self, Self::PointDraw | Self::VfPointDraw)
+    }
+
+    fn line_raster(self) -> bool {
+        matches!(self, Self::LineDraw | Self::LineStripDraw | Self::VfLineDraw)
     }
 
     fn screen_space_raster(self) -> bool {
@@ -3125,6 +3147,20 @@ mod primitive_topology_tests {
         assert_eq!(intel_topology_from_helio(PrimitiveTopology::TriangleList), Ok(0x04));
         assert_eq!(intel_topology_from_helio(PrimitiveTopology::TriangleStrip), Ok(0x05));
         assert_eq!(intel_topology_from_helio(PrimitiveTopology::TriangleFan), Ok(0x06));
+    }
+
+    #[test]
+    fn resident_topologies_enforce_native_assembly_counts() {
+        use ResidentScenePrimitiveTopology as Topology;
+
+        assert!(Topology::PointList.accepts_index_count(1));
+        assert!(Topology::LineList.accepts_index_count(2));
+        assert!(!Topology::LineList.accepts_index_count(3));
+        assert!(Topology::LineStrip.accepts_index_count(3));
+        assert!(Topology::TriangleList.accepts_index_count(6));
+        assert!(!Topology::TriangleList.accepts_index_count(4));
+        assert!(Topology::TriangleStrip.accepts_index_count(4));
+        assert!(Topology::TriangleFan.accepts_index_count(4));
     }
 
     #[test]

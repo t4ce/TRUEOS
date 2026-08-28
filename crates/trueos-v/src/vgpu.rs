@@ -321,7 +321,10 @@ pub struct RetainedFrameSubmit {
     pub clear_rgba8_srgb: u32,
     pub seed_count: u32,
     pub static_draw_count: u32,
-    pub reserved: u32,
+    /// Caller-owned content token for `static_vertex_buffer`. Advance it
+    /// after rewriting any static vertex payload so a retained mesh refreshes
+    /// its resident copy in place. Indices and draw identity remain immutable.
+    pub static_vertex_revision: u32,
     pub seeds: [RetainedTransformSeed; MAX_RETAINED_TRANSFORM_SEEDS],
     pub static_draws: [IndexedBatchDrawV2; MAX_RETAINED_STATIC_DRAWS],
 }
@@ -1083,6 +1086,7 @@ mod tests {
         assert_eq!(core::mem::size_of::<RetainedTransformSeed>(), 64);
         assert_eq!(core::mem::size_of::<RetainedFrameSubmit>(), 400);
         assert_eq!(core::mem::align_of::<RetainedFrameSubmit>(), 8);
+        assert_eq!(core::mem::offset_of!(RetainedFrameSubmit, static_vertex_revision), 68);
         assert_eq!(core::mem::size_of::<TimelinePoint>(), 16);
         assert_eq!(core::mem::size_of::<TimelineStatus>(), 32);
         assert_eq!(core::mem::size_of::<CloudWorkGraphDescriptor>(), 56);

@@ -1867,12 +1867,11 @@ fn encode_triangle_probe_batch(
     // default 32-handle block mode (zero).
     let sf_viewport_transform_enable =
         !(batch_mode.screen_space_raster() || backend_probe_mode.disable_sf_viewport_transform());
-    // `Line Width` is a U11.7 field at DW1[29:12]. Keep ordinary
-    // primitives at the hardware thinnest-line default, while the retained
-    // RGB world-axis guides receive a clear, three-pixel stroke.
+    // `Line Width` is a U11.7 field at DW1[29:12]. Give every native line
+    // assembly mode the same clear three-pixel stroke.
     const LINE_WIDTH_SHIFT: u32 = 12;
     const THREE_PIXEL_LINE_WIDTH_U11_7: u32 = 3 << 7;
-    let sf_line_width = if matches!(batch_mode, TriangleBatchMode::LineDraw) {
+    let sf_line_width = if batch_mode.line_raster() {
         THREE_PIXEL_LINE_WIDTH_U11_7 << LINE_WIDTH_SHIFT
     } else {
         0

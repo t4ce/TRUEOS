@@ -384,10 +384,43 @@ fn broker_primitive_topology(
         v::vgpu::PRIMITIVE_TOPOLOGY_LINE_LIST => {
             Ok(crate::intel::render::ResidentScenePrimitiveTopology::LineList)
         }
+        v::vgpu::PRIMITIVE_TOPOLOGY_LINE_STRIP => {
+            Ok(crate::intel::render::ResidentScenePrimitiveTopology::LineStrip)
+        }
         v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_LIST => {
             Ok(crate::intel::render::ResidentScenePrimitiveTopology::TriangleList)
         }
+        v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP => {
+            Ok(crate::intel::render::ResidentScenePrimitiveTopology::TriangleStrip)
+        }
+        v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_FAN => {
+            Ok(crate::intel::render::ResidentScenePrimitiveTopology::TriangleFan)
+        }
         _ => Err(-95),
+    }
+}
+
+#[cfg(test)]
+mod primitive_topology_tests {
+    use super::*;
+    use crate::intel::render::ResidentScenePrimitiveTopology as Topology;
+
+    #[test]
+    fn v2_wire_values_reach_every_native_resident_topology() {
+        let cases = [
+            (v::vgpu::PRIMITIVE_TOPOLOGY_POINT_LIST, Topology::PointList),
+            (v::vgpu::PRIMITIVE_TOPOLOGY_LINE_LIST, Topology::LineList),
+            (v::vgpu::PRIMITIVE_TOPOLOGY_LINE_STRIP, Topology::LineStrip),
+            (v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, Topology::TriangleList),
+            (v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP, Topology::TriangleStrip),
+            (v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_FAN, Topology::TriangleFan),
+        ];
+
+        for (wire, expected) in cases {
+            assert_eq!(broker_primitive_topology(wire), Ok(expected));
+        }
+        assert_eq!(broker_primitive_topology(0), Err(-95));
+        assert_eq!(broker_primitive_topology(u32::MAX), Err(-95));
     }
 }
 

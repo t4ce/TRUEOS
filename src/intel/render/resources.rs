@@ -792,15 +792,7 @@ pub(crate) fn create_resident_indexed_mesh(
     draw_indices: &[u32],
     topology: ResidentScenePrimitiveTopology,
 ) -> Result<ResidentTriangleMesh, &'static str> {
-    let topology_valid = match topology {
-        ResidentScenePrimitiveTopology::PointList => !draw_indices.is_empty(),
-        ResidentScenePrimitiveTopology::LineList => {
-            draw_indices.len() >= 2 && draw_indices.len().is_multiple_of(2)
-        }
-        ResidentScenePrimitiveTopology::TriangleList => {
-            draw_indices.len() >= 3 && draw_indices.len().is_multiple_of(3)
-        }
-    };
+    let topology_valid = topology.accepts_index_count(draw_indices.len());
     if !topology_valid
         || draw_vertices
             .iter()
@@ -853,15 +845,7 @@ pub(crate) fn create_picasso_resident_indexed_mesh(
     draw_indices: &[u32],
     topology: ResidentScenePrimitiveTopology,
 ) -> Result<ResidentTriangleMesh, &'static str> {
-    let topology_valid = match topology {
-        ResidentScenePrimitiveTopology::PointList => !draw_indices.is_empty(),
-        ResidentScenePrimitiveTopology::LineList => {
-            draw_indices.len() >= 2 && draw_indices.len().is_multiple_of(2)
-        }
-        ResidentScenePrimitiveTopology::TriangleList => {
-            draw_indices.len() >= 3 && draw_indices.len().is_multiple_of(3)
-        }
-    };
+    let topology_valid = topology.accepts_index_count(draw_indices.len());
     if !topology_valid
         || draw_vertices
             .iter()
