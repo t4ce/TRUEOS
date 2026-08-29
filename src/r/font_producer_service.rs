@@ -429,6 +429,36 @@ impl FontProducerRegistry {
         Ok(())
     }
 
+    /// Return a GPU-complete row which was published into a UI4 Frame but was
+    /// superseded before any compositor transaction presented that publish
+    /// serial. The caller must hold the exact reacquired frame buffer; the
+    /// completion tuple prevents a stale token from reopening newer work.
+    pub fn acknowledge_unpresented(
+        &mut self,
+        token: FontRowToken,
+        expected: FontRowCompletion,
+    ) -> Result<(), FontProducerError> {
+        let id = token.producer_id as usize;
+        let row = self.row_mut(token)?;
+        if row.state != FontRowState::Produced {
+            return Err(FontProducerError::RowNotProduced);
+        }
+        if row.completion != Some(expected) {
+            return Err(FontProducerError::CompletionMismatch);
+        }
+        row.state = FontRowState::Idle;
+        row.char_count = 0;
+        row.input.clear();
+        row.completion = None;
+        if self.slots[id]
+            .as_ref()
+            .is_some_and(|slot| slot.state == FontProducerState::Retiring)
+        {
+            self.finish_retirement(id);
+        }
+        Ok(())
+    }
+
     /// Return a row after its entire backing container has been retired.
     /// This is the teardown counterpart of a display ACK: an exact completion
     /// is still required, but a row which completed without publication may
@@ -587,6 +617,13 @@ pub fn acknowledge_producer_row(token: FontRowToken) -> Result<(), FontProducerE
     with_registry(|registry| registry.acknowledge(token))
 }
 
+pub fn acknowledge_unpresented_producer_row(
+    token: FontRowToken,
+    expected: FontRowCompletion,
+) -> Result<(), FontProducerError> {
+    with_registry(|registry| registry.acknowledge_unpresented(token, expected))
+}
+
 pub fn acknowledge_retired_producer_row(
     token: FontRowToken,
     expected: FontRowCompletion,
@@ -736,6 +773,22 @@ mod tests {
             ..t
         };
         assert_eq!(r.row_state(stale), Err(FontProducerError::InvalidToken));
+    }
+
+    #[test]
+    fn exact_unpresented_reacquire_restores_credit_without_surflive() {
+        let mut r = FontProducerRegistry::new();
+        let lease = r.register(registration(1)).unwrap();
+        let token = r.submit_row(lease, b"x", 1).unwrap();
+        let completion = FontRowCompletion {
+            release_fence: 7,
+            metadata: 9,
+        };
+        r.gpu_produced(token, completion).unwrap();
+        assert_eq!(r.row_state(token), Ok(FontRowState::Produced));
+        r.acknowledge_unpresented(token, completion).unwrap();
+        let replacement = r.submit_row(lease, b"y", 1).unwrap();
+        assert_ne!(replacement.sequence(), token.sequence());
     }
     #[test]
     fn release_in_flight_waits_for_ack_and_rejects_new_rows() {

@@ -218,7 +218,21 @@ fn direct_rcs_encode_font_outline_coverage_runs_r8_2d_batch(
         COPY_RECT_PRE_MARKER_SLOT,
         COPY_RECT_PRE_MARKER,
     );
+    // Runs with disjoint destination rectangles have no R8 read/modify/write
+    // dependency. Keep those walkers in one dependency-free wave so RCS can
+    // expose their combined threadgroups to the GPGPU execution machinery.
+    // If a later glyph overlaps any unretired glyph, close that wave before
+    // changing the stateful binding and starting the conflicting walker.
+    let mut wave_start = 0usize;
     for (index, run) in runs.iter().enumerate() {
+        if index > wave_start
+            && runs[wave_start..index]
+                .iter()
+                .any(|pending| gpgpu_rects_overlap(pending.params, run.params))
+        {
+            ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_FLUSH_BITS);
+            wave_start = index;
+        }
         let Some(dispatch) = fill_rect_2d_dispatch(run.params.rect_width, run.params.rect_height)
         else {
             return false;
@@ -243,12 +257,6 @@ fn direct_rcs_encode_font_outline_coverage_runs_r8_2d_batch(
         );
         ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
         ok &= direct_rcs_push(batch, &mut cursor, 0);
-        if index + 1 < runs.len() {
-            // Every walker performs max(existing, coverage) against the same
-            // R8 mask. Retire those read/modify/write operations before the
-            // next stateful ops binding begins.
-            ok &= direct_rcs_push_pipe_control(batch, &mut cursor, PIPE_CONTROL_FLUSH_BITS);
-        }
     }
     ok &= direct_rcs_push_gpgpu_dispatch_epilogue(
         batch,
@@ -266,6 +274,20 @@ fn direct_rcs_encode_font_outline_coverage_runs_r8_2d_batch(
     super::dma_flush(state.batch_virt, DIRECT_RCS_BATCH_BYTES);
     super::dma_flush(state.result_virt, DIRECT_RCS_RESULT_BYTES);
     true
+}
+
+fn gpgpu_rects_overlap(
+    left: FontOutlineCoverageR8Params,
+    right: FontOutlineCoverageR8Params,
+) -> bool {
+    let left_right = u64::from(left.rect_x) + u64::from(left.rect_width);
+    let left_bottom = u64::from(left.rect_y) + u64::from(left.rect_height);
+    let right_right = u64::from(right.rect_x) + u64::from(right.rect_width);
+    let right_bottom = u64::from(right.rect_y) + u64::from(right.rect_height);
+    u64::from(left.rect_x) < right_right
+        && u64::from(right.rect_x) < left_right
+        && u64::from(left.rect_y) < right_bottom
+        && u64::from(right.rect_y) < left_bottom
 }
 
 fn direct_rcs_encode_glyph_mask_2d_batch(

@@ -126,14 +126,15 @@ pub(crate) use window_broker::{
     advance_window_placement_transitions, application_windows_for_output_with_revision,
     begin_additional_window_session, begin_window_session, close_window,
     commit_window_frame_replacement, create_window, finish_window_session,
-    finish_window_session_with_request, move_window, owner_has_first_presentation,
-    publish_window_frame, publish_window_frames, replace_window_frame, retire_frame_when_released,
-    set_window_escape_key_action, set_window_hit_testable, set_window_placement,
-    set_windows_visible, take_window_first_presentation, toggle_window_maximized,
+    finish_window_session_with_request, live_application_window_count, move_window,
+    owner_has_first_presentation, publish_window_frame, publish_window_frames,
+    replace_window_frame, retire_frame_when_released, set_window_escape_key_action,
+    set_window_hit_testable, set_window_placement, set_windows_visible,
+    take_window_first_presentation, toggle_window_maximized,
     ui4_window_broker_snapshot_service_task, visible_windows_for_output,
     wait_for_window_composition_change, wait_for_window_first_presentation,
-    window_composition_revision, window_escape_key_action, window_placement,
-    window_transitions_active,
+    window_composition_revision, window_escape_key_action, window_frame_was_presented,
+    window_placement, window_transitions_active,
 };
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]

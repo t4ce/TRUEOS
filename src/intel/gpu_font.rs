@@ -1381,6 +1381,35 @@ fn coalesced_coverage_stamp_rects(
     Ok(rects)
 }
 
+/// Count the dependency waves used by the Font RCS encoder. Rectangles in one
+/// wave are pairwise disjoint and can expose their walkers together; an
+/// overlap closes the current wave before the conflicting glyph is issued.
+fn coverage_dependency_wave_count(
+    prepared: &[PreparedGpuFontCoverageEntry],
+    union: (i32, i32, i32, i32),
+) -> Result<usize, &'static str> {
+    if prepared.is_empty() {
+        return Ok(0);
+    }
+    let mut waves = 1usize;
+    let mut wave_start = 0usize;
+    for index in 1..prepared.len() {
+        let candidate = local_coverage_rect(prepared[index].rect, union)?;
+        let mut overlaps = false;
+        for pending in &prepared[wave_start..index] {
+            if coverage_rects_overlap(local_coverage_rect(pending.rect, union)?, candidate) {
+                overlaps = true;
+                break;
+            }
+        }
+        if overlaps {
+            waves = waves.saturating_add(1);
+            wave_start = index;
+        }
+    }
+    Ok(waves)
+}
+
 const ANALYTICAL_COVERAGE_CURVE_SUBDIVISIONS: u32 = 8;
 
 pub(crate) struct GpuFontJob<'a> {
@@ -3695,6 +3724,79 @@ pub(crate) fn place_gpu_font_centered_glyph_recipe(
     })
 }
 
+/// Bind a shared recipe to one origin-positioned request-local glyph.
+///
+/// This is the producer-row counterpart to
+/// [`place_gpu_font_centered_glyph_recipe`].  The immutable recipe remains
+/// colorless and position-independent; only this small placement carries the
+/// current pen position.  Origin scenes use a baseline one ppem below the
+/// local recipe origin, matching [`GpuFontJobPositioning::Origin`].
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn place_gpu_font_origin_glyph_recipe(
+    scalar: char,
+    recipe: Arc<GpuFontGlyphRecipe>,
+    position: [f32; 2],
+    font_pixels: f32,
+    slant: f32,
+    viewport_width: u32,
+    viewport_height: u32,
+    raster_width: u32,
+    raster_height: u32,
+) -> Result<GpuFontPreparedCenteredGlyph, &'static str> {
+    let font = recipe.key.font;
+    let expected = gpu_font_centered_glyph_recipe_key(
+        scalar,
+        font,
+        font_pixels,
+        slant,
+        viewport_width,
+        viewport_height,
+        raster_width,
+        raster_height,
+    )?;
+    if expected != recipe.key || !position[0].is_finite() || !position[1].is_finite() {
+        return Err("font-recipe-placement-contract");
+    }
+    let quality =
+        gpu_font_raster_quality(viewport_width, viewport_height, raster_width, raster_height)
+            .ok_or("font-raster-empty")?;
+    let position_px = [
+        position[0] * quality.pixels_per_unit_x,
+        position[1] * quality.pixels_per_unit_y,
+    ];
+    let origin = [
+        libm::roundf(position_px[0]),
+        libm::roundf(position_px[1] + recipe.ppem),
+    ];
+    if origin
+        .iter()
+        .any(|value| !value.is_finite() || *value < i32::MIN as f32 || *value >= 2_147_483_648.0)
+    {
+        return Err("font-coverage-origin");
+    }
+    let destination_xy = [
+        (origin[0] as i32)
+            .checked_add(recipe.mask_offset_px[0])
+            .ok_or("font-coverage-origin-range")?,
+        (origin[1] as i32)
+            .checked_add(recipe.mask_offset_px[1])
+            .ok_or("font-coverage-origin-range")?,
+    ];
+    Ok(GpuFontPreparedCenteredGlyph {
+        scalar,
+        font,
+        position_bits: position.map(f32::to_bits),
+        font_pixels_bits: font_pixels.to_bits(),
+        slant_bits: slant.to_bits(),
+        viewport_width,
+        viewport_height,
+        raster_width,
+        raster_height,
+        destination_xy,
+        recipe,
+    })
+}
+
 /// Uncached compatibility boundary used by non-pool callers and tests.
 #[allow(clippy::too_many_arguments)]
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
@@ -4195,6 +4297,33 @@ pub(crate) fn retain_gpu_font_prepared_centered_scene(
     Ok(retain_gpu_font_coverage(coverage))
 }
 
+/// Retain origin-positioned coverage from glyph-local prepared recipes.
+/// The recipe and placement are already exact, so this differs from the
+/// centered variant only in the diagnostic/contract positioning label.
+pub(crate) fn retain_gpu_font_prepared_origin_scene(
+    entries: Vec<GpuFontPreparedCenteredGlyph>,
+) -> Result<GpuFontRetainedScene, &'static str> {
+    let first = entries.first().ok_or("font-coverage-empty")?;
+    if entries
+        .iter()
+        .any(|entry| !entry.shares_scene_contract(first))
+    {
+        return Err("font-coverage-prepared-contract");
+    }
+    let font = first.font;
+    let prepared = entries
+        .into_iter()
+        .map(GpuFontPreparedCenteredGlyph::into_positioned_entry)
+        .collect::<Vec<_>>();
+    let coverage = create_gpu_font_coverage_mask_from_prepared(
+        prepared,
+        font,
+        GpuFontJobPositioning::Origin,
+        Instant::now().as_millis(),
+    )?;
+    Ok(retain_gpu_font_coverage(coverage))
+}
+
 fn retain_gpu_font_scene_at_raster_with_positioning(
     entries: &[GpuFontJobEntry<'_>],
     font: GpuFontFace,
@@ -4316,6 +4445,11 @@ fn create_gpu_font_coverage_mask_from_prepared(
         .ok_or("font-coverage-mask-alloc")?;
     let full_rect = crate::intel::gpgpu::GpgpuRect::new(0, 0, width, height);
     let stamp_rects = coalesced_coverage_stamp_rects(&prepared, union, full_rect)?;
+    let walker_dependency_waves = prepared
+        .chunks(crate::intel::gpgpu::FONT_OUTLINE_COVERAGE_BATCH_MAX_RUNS)
+        .try_fold(0usize, |total, chunk| {
+            coverage_dependency_wave_count(chunk, union).map(|waves| total.saturating_add(waves))
+        })?;
     for entry in &mut prepared {
         translate_coverage_ops(entry.ops.as_mut_slice(), -(union.0 as f32), -(union.1 as f32));
     }
@@ -4406,7 +4540,7 @@ fn create_gpu_font_coverage_mask_from_prepared(
 
     crate::log_info!(
         target: "render";
-        "intel/gpu-font: analytical-coverage font={} entries={} positioning={} mask={}x{} mask_gpu=0x{:X} origin={},{} occupied={},{},{}x{} expected_local={},{},{},{} nonzero={} ppem_range={:.2}..={:.2} bias_max_px={:.3} coverage_build_ms={} coverage_audit_ms={} outline=skrifa-warm-ops fill=gpgpu-nonzero-winding edge=signed-distance-r8 subdivisions={} va=unique-resident audit=flattened-edge-span audit_cpu_readback=1 fallback=resident-triangles\n",
+        "intel/gpu-font: analytical-coverage font={} entries={} positioning={} mask={}x{} mask_gpu=0x{:X} origin={},{} occupied={},{},{}x{} expected_local={},{},{},{} nonzero={} ppem_range={:.2}..={:.2} bias_max_px={:.3} coverage_build_ms={} coverage_audit_ms={} walker_dependency_waves={} walker_fanout={} outline=skrifa-warm-ops fill=gpgpu-nonzero-winding edge=signed-distance-r8 subdivisions={} va=unique-resident audit=flattened-edge-span audit_cpu_readback=1 fallback=resident-triangles\n",
         font.registry_name(),
         prepared.len(),
         match positioning {
@@ -4432,6 +4566,8 @@ fn create_gpu_font_coverage_mask_from_prepared(
         optical_bias_max_px,
         coverage_build_ms,
         coverage_audit_ms,
+        walker_dependency_waves,
+        prepared.len(),
         ANALYTICAL_COVERAGE_CURVE_SUBDIVISIONS,
     );
     Ok(GpuFontCoverageMask {
@@ -5387,6 +5523,24 @@ mod tests {
                 assert!(!coverage_rects_overlap(left, right));
             }
         }
+    }
+
+    #[test]
+    fn coverage_dependency_waves_keep_disjoint_glyph_walkers_together() {
+        let disjoint = [
+            prepared_rect((0, 0, 10, 10)),
+            prepared_rect((10, 0, 20, 10)),
+            prepared_rect((30, 0, 40, 10)),
+        ];
+        assert_eq!(coverage_dependency_wave_count(&disjoint, (0, 0, 40, 10)), Ok(1));
+
+        let overlap = [
+            prepared_rect((0, 0, 10, 10)),
+            prepared_rect((20, 0, 30, 10)),
+            prepared_rect((8, 0, 18, 10)),
+            prepared_rect((32, 0, 42, 10)),
+        ];
+        assert_eq!(coverage_dependency_wave_count(&overlap, (0, 0, 42, 10)), Ok(2));
     }
 
     #[test]

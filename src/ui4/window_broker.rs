@@ -455,6 +455,11 @@ struct WindowRecord {
     state: WindowState,
     revision: u64,
     publish_serial: u64,
+    /// Recent exact publish serials observed only after the compositor's
+    /// batched SURFLIVE boundary. This stays separate from damage ACK because
+    /// a producer may publish again while an older transaction is pending.
+    presented_serials: [u64; 8],
+    presented_serial_cursor: u8,
     first_presentation_emitted: bool,
     first_presentation_taken: bool,
     damage: Option<DamageRegion>,
@@ -851,11 +856,12 @@ impl WindowBroker {
 
     /// Choose the presentation plane for one window.
     ///
-    /// Slot 4 keeps its exclusive interaction contract. Every other window
-    /// takes a lease plane when one is free or revocable, and otherwise joins
-    /// the stack on slot 0. This path has no capacity failure by design: a
-    /// frame which wins no lease is still presented, composed and movable.
-    /// Content, cadence and buffering are deliberately not consulted.
+    /// Slot 4 keeps its trusted-small-control contract. Only named kernel UI
+    /// owners may enter it, and each may own one live interaction window. A
+    /// Blueprint can therefore never promote a full application frame onto
+    /// the software-cursor plane. Every other window joins the ordinary slot-0
+    /// application stack. Content, cadence and buffering are deliberately not
+    /// consulted for that stack.
     fn assign_plane(
         &mut self,
         requested: WindowPlane,
@@ -865,13 +871,17 @@ impl WindowBroker {
     ) -> Result<WindowPlane, WindowBrokerError> {
         let (id_slot, _) = unpack_handle(id.0)?;
         if requested == WindowPlane::Interaction {
-            if owner != WindowOwner::COLOR_PICKER_SERVICE {
+            if !matches!(
+                owner,
+                WindowOwner::COLOR_PICKER_SERVICE | WindowOwner::START_BUTTON_SERVICE
+            ) {
                 return Err(WindowBrokerError::InvalidPlane);
             }
             if self.windows.iter().enumerate().any(|(slot, window)| {
                 slot != id_slot
                     && window.state != WindowState::Closed
                     && window.plane == WindowPlane::Interaction
+                    && window.owner == owner
             }) {
                 return Err(WindowBrokerError::Capacity);
             }
@@ -1372,6 +1382,8 @@ impl WindowRecord {
             state: WindowState::Pending,
             revision: 1,
             publish_serial: 0,
+            presented_serials: [0; 8],
+            presented_serial_cursor: 0,
             first_presentation_emitted: false,
             first_presentation_taken: false,
             damage: None,
@@ -1441,6 +1453,22 @@ pub(crate) fn latest_window_broker_snapshot() -> WindowBrokerSnapshot {
 /// generation-safe Closed registry slots are excluded.
 pub(super) fn live_resource_counts() -> (usize, usize) {
     WINDOW_BROKER.lock().live_resource_counts()
+}
+
+/// Count every non-closed window which can consume application compositor
+/// slots 0..3 on one output. Pending and hidden windows still count; slot-4
+/// interaction-service windows deliberately do not.
+pub(crate) fn live_application_window_count(output: OutputId) -> usize {
+    WINDOW_BROKER
+        .lock()
+        .windows
+        .iter()
+        .filter(|window| {
+            window.state != WindowState::Closed
+                && window.output == output
+                && window.plane.is_application()
+        })
+        .count()
 }
 
 /// Optionally subscribe to future diagnostic publications.
@@ -2383,6 +2411,26 @@ pub(super) fn window_snapshot(owner: WindowOwner, id: WindowId) -> Option<Window
     window.snapshot(slot)
 }
 
+/// Whether this exact publication crossed the real display SURFLIVE boundary.
+/// Eight entries comfortably cover the live history of a double-buffered
+/// producer while keeping the broker record fixed-size.
+pub(crate) fn window_frame_was_presented(
+    owner: WindowOwner,
+    id: WindowId,
+    publish_serial: u64,
+) -> bool {
+    let Ok((slot, generation)) = unpack_handle(id.0) else {
+        return false;
+    };
+    let broker = WINDOW_BROKER.lock();
+    broker.windows.get(slot).is_some_and(|window| {
+        window.generation == generation
+            && window.owner == owner
+            && publish_serial != 0
+            && window.presented_serials.contains(&publish_serial)
+    })
+}
+
 /// Clear only the damage represented by a successfully composed snapshot.
 /// If the producer published again meanwhile, the serial differs and its new
 /// damage remains pending.
@@ -2417,17 +2465,24 @@ fn acknowledge_window_frame_inner(
             };
             if window.generation != generation
                 || !matches!(window.state, WindowState::Ready | WindowState::Closing)
-                || window.first_presentation_emitted
             {
                 None
             } else {
+                let index =
+                    usize::from(window.presented_serial_cursor) % window.presented_serials.len();
+                window.presented_serials[index] = publish_serial;
+                window.presented_serial_cursor = window.presented_serial_cursor.wrapping_add(1);
                 // This operation is called only after the compositor's plane
                 // batch reports SURFLIVE. Mark the window even when a faster
                 // producer has already advanced `publish_serial`: the older
                 // frame was still physically presented and its newer damage
                 // must simply remain pending.
-                window.first_presentation_emitted = true;
-                window.snapshot(slot)
+                if window.first_presentation_emitted {
+                    None
+                } else {
+                    window.first_presentation_emitted = true;
+                    window.snapshot(slot)
+                }
             }
         };
         let acknowledged = if let Some(revision) = required_revision {
@@ -3088,7 +3143,7 @@ mod tests {
     }
 
     #[test]
-    fn color_picker_interaction_plane_is_fixed_and_never_falls_back() {
+    fn trusted_small_controls_share_interaction_plane_without_blueprint_admission() {
         let mut broker = WindowBroker::new();
         for frame in 1..=LEASE_PLANE_COUNT as u64 {
             let owner = WindowOwner::GPGPU_PREVIEW;
@@ -3120,12 +3175,31 @@ mod tests {
             .expect("replacement remains on the fixed interaction plane");
         assert_eq!(broker.windows[slot].plane, WindowPlane::Interaction);
 
+        let start_owner = WindowOwner::START_BUTTON_SERVICE;
+        let start_session = broker.begin_additional_session(start_owner).unwrap();
+        let mut start = test_window(start_owner, start_session, 12, 0, i32::MAX, true);
+        start.plane = WindowPlane::Interaction;
+        let start = broker
+            .create(start, FrameBuffering::Double, 0)
+            .expect("trusted start button shares slot 4 with the color picker");
+        let (start_slot, _) = unpack_handle(start.raw()).unwrap();
+        assert_eq!(broker.windows[start_slot].plane, WindowPlane::Interaction);
+
         let second_session = broker.begin_additional_session(owner).unwrap();
-        let mut second = test_window(owner, second_session, 12, 0, 101, true);
+        let mut second = test_window(owner, second_session, 13, 0, 101, true);
         second.plane = WindowPlane::Interaction;
         assert_eq!(
             broker.create(second, FrameBuffering::Double, 0),
             Err(WindowBrokerError::Capacity)
+        );
+
+        let blueprint_owner = WindowOwner::Vm(1);
+        let blueprint_session = broker.begin_additional_session(blueprint_owner).unwrap();
+        let mut blueprint = test_window(blueprint_owner, blueprint_session, 14, 0, 102, true);
+        blueprint.plane = WindowPlane::Interaction;
+        assert_eq!(
+            broker.create(blueprint, FrameBuffering::Double, 0),
+            Err(WindowBrokerError::InvalidPlane)
         );
     }
 
