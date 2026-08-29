@@ -19,6 +19,7 @@ mod h264_encode_udp;
 mod input_broker;
 mod screenshot;
 mod slot4_service;
+mod start_button;
 mod video_frame;
 mod window_broker;
 pub(crate) mod winit_input;
@@ -110,6 +111,7 @@ pub(crate) use screenshot::{
     capture_compact_window_observation, request_wd_postblend_capture, ui4_screenshot_service_task,
 };
 pub(crate) use slot4_service::ui4_slot4_service_task;
+pub(crate) use start_button::{request_start_button_reveal, ui4_start_button_service_task};
 pub(crate) use video_frame::{
     DecodedNv12Source, DecodedVideoConversionProbeReport, DecodedVideoConversionReport,
     VIDEO_RGBA_BUFFER_COUNT, begin_decoded_nv12_conversion_batch, begin_shell_decoded_video_player,

@@ -10,7 +10,7 @@ use spin::Mutex;
 use crate::std_abi_shim::{
     BytePipe, OPEN_FILES, OpenFile, TRUEOS_EAGAIN, TRUEOS_EBADF, TRUEOS_EINVAL, TRUEOS_ENOTTY,
     TRUEOS_ERRNO, abi_read_bytes, abi_write_bytes, copy_to_abi_out, next_file_fd,
-    open_file_read_ready, open_file_write_ready,
+    open_file_poll_events,
 };
 
 const TRUEOS_AF_UNIX: c_int = 1;
@@ -65,6 +65,9 @@ pub struct PollFd {
     pub events: i16,
     pub revents: i16,
 }
+
+const _: () = assert!(core::mem::size_of::<PollFd>() == 8);
+const _: () = assert!(core::mem::align_of::<PollFd>() == 4);
 
 fn terminal_event_wait_eligible(pollfds: &[PollFd]) -> bool {
     let table = OPEN_FILES.lock();
@@ -238,14 +241,20 @@ pub unsafe extern "C" fn socketpair(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn poll(fds: *mut PollFd, nfds: usize, timeout: c_int) -> c_int {
+    if nfds > crate::allcaps::io::DESCRIPTOR_SOFT_CAP {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    }
     if nfds != 0 && fds.is_null() {
         TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
         return -1;
     }
 
-    let Some(pollfds) =
-        abi_write_bytes(fds.cast::<u8>(), nfds.saturating_mul(core::mem::size_of::<PollFd>()))
-    else {
+    let Some(pollfd_bytes) = nfds.checked_mul(core::mem::size_of::<PollFd>()) else {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    };
+    let Some(pollfds) = abi_write_bytes(fds.cast::<u8>(), pollfd_bytes) else {
         TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
         return -1;
     };
@@ -270,16 +279,9 @@ pub unsafe extern "C" fn poll(fds: *mut PollFd, nfds: usize, timeout: c_int) -> 
                 let mut revents = 0;
                 let file_revents = {
                     let table = OPEN_FILES.lock();
-                    table.get(pollfd.fd).map(|file| {
-                        let mut revents = 0;
-                        if pollfd.events & TRUEOS_POLLIN != 0 && open_file_read_ready(file) {
-                            revents |= TRUEOS_POLLIN;
-                        }
-                        if pollfd.events & TRUEOS_POLLOUT != 0 && open_file_write_ready(file) {
-                            revents |= TRUEOS_POLLOUT;
-                        }
-                        revents
-                    })
+                    table
+                        .get(pollfd.fd)
+                        .map(|file| open_file_poll_events(file, pollfd.events))
                 };
                 if let Some(file_revents) = file_revents {
                     revents = file_revents;

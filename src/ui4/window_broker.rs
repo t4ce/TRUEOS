@@ -63,6 +63,7 @@ impl WindowOwner {
     pub(crate) const GPGPU_PREVIEW: Self = Self::KernelApp(5);
     pub(crate) const COLOR_PICKER_SERVICE: Self = Self::KernelApp(6);
     pub(crate) const SVG_OUTLINE_PROBE: Self = Self::KernelApp(7);
+    pub(crate) const START_BUTTON_SERVICE: Self = Self::KernelApp(8);
 
     /// Stable, allocation-free producer name for diagnostics. The enum still
     /// carries the application or VM instance where the name is shared.
@@ -74,6 +75,7 @@ impl WindowOwner {
             Self::GPGPU_PREVIEW => "gpgpu-preview",
             Self::COLOR_PICKER_SERVICE => "color-picker-service",
             Self::SVG_OUTLINE_PROBE => "svg-outline-probe",
+            Self::START_BUTTON_SERVICE => "start-button-service",
             Self::KernelApp(_) => "kernel-app",
             Self::Vm(_) => "blueprint-vm",
         }

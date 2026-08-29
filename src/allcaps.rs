@@ -94,6 +94,13 @@ pub mod hv {
     pub const EPT_DYNAMIC_PT_CAP: usize = 1024;
 }
 
+pub mod io {
+    /// Shared policy ceiling for each per-process Unix descriptor registry and
+    /// readiness set. This is deliberately not an ABI encoding limit:
+    /// descriptor numbers and `poll(2)`'s `nfds` remain full-width values.
+    pub const DESCRIPTOR_SOFT_CAP: usize = 4096;
+}
+
 pub mod net {
     pub const VNET_CMD_QUEUE_DEPTH: usize = 256;
     pub const VNET_EVENT_QUEUE_DEPTH_DEFAULT: usize = 16_384;
@@ -102,7 +109,10 @@ pub mod net {
     pub const PACKET_POOL_MAX: usize = 1024;
     pub const RX_BUF_SIZE: usize = 2048;
 
-    pub const MAX_SOCKETS: usize = 512;
+    /// Network admission follows the same policy ceiling as process-visible
+    /// descriptors. Memory and protocol queues may apply tighter runtime
+    /// backpressure before this ceiling is reached.
+    pub const SOCKET_SOFT_CAP: usize = super::io::DESCRIPTOR_SOFT_CAP;
     pub const MAX_DRAIN_PER_LOOP: usize = 128;
     pub const TCP_RX_BUF_BYTES: usize = 1024 * 1024;
     pub const TCP_TX_BUF_BYTES: usize = 1024 * 1024;

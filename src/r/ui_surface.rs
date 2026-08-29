@@ -3,10 +3,12 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use crate::graphics::primitives::{Error, Result, UiRect, UiSurface, UiSurfaceFormat};
 use spin::Mutex;
 
-// Keep a generous table of trusted physical-buffer handles. This is separate
-// from the logical window/frame limits: a streaming frame consumes three
-// handles, and physical memory plus producer GPU VA remain bounded below.
-const MAX_UI_SURFACES: usize = 64;
+// Keep enough trusted physical-buffer handles for the 64 logical-frame pool
+// to host dirty/double producers without the permanent UI4 surfaces making a
+// 32-producer row set impossible. Physical memory, the per-surface byte cap,
+// and the bounded producer GPU-VA arena remain the authoritative admission
+// limits below; this table is only opaque handle bookkeeping.
+const MAX_UI_SURFACES: usize = 128;
 pub(crate) const UI_SURFACE_GPU_BASE: u64 = 0x1200_0000;
 // Producer surfaces are mapped into the direct-RCS PPGTT on demand. Keep this
 // arena below render's persistent-font range at 0x2000_0000 and well inside

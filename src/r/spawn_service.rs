@@ -84,6 +84,7 @@ define_started_flags!(
     GAMEPAD_CONTROL_SERVICE_STARTED,
     UI4_INPUT_SERVICE_STARTED,
     UI4_SLOT4_SERVICE_STARTED,
+    UI4_START_BUTTON_SERVICE_STARTED,
     UI4_SCREENSHOT_SERVICE_STARTED,
     UI4_H264_ENCODE_STREAM_STARTED,
     UI4_COMPOSITOR_STARTED,
@@ -866,13 +867,16 @@ fn spawn_ui4_slot4_service_task(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::ui4::ui4_slot4_service_task())
 }
 
+fn spawn_ui4_start_button_service_task(spawner: Spawner) -> SpawnAttempt {
+    spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::ui4::ui4_start_button_service_task())
+}
+
 fn spawn_ui4_screenshot_service_task(spawner: Spawner) -> SpawnAttempt {
     spawn_on_worker(spawner, |_worker_spawner| crate::ui4::ui4_screenshot_service_task())
 }
 
 #[cfg(feature = "trueos_h264_encode_stream")]
 fn spawn_ui4_h264_encode_stream_task(spawner: Spawner) -> SpawnAttempt {
-    let _ = spawner;
     let Some((lastap_slot, lastap_kind, lastap_spawner)) = crate::workers::last_ap_service_worker()
     else {
         return SpawnAttempt::Skipped;
@@ -886,18 +890,17 @@ fn spawn_ui4_h264_encode_stream_task(spawner: Spawner) -> SpawnAttempt {
         Ok(token) => token,
         Err(error) => return SpawnAttempt::Failed(error),
     };
-    let egress_token = match crate::ui4::ui4_h264_encode_udp_egress_task(lastap_slot) {
+    let egress_token = match crate::ui4::ui4_h264_encode_udp_egress_task() {
         Ok(token) => token,
         Err(error) => return SpawnAttempt::Failed(error),
     };
     lastap_spawner.spawn(prepare_token);
     lastap_spawner.spawn(encode_token);
-    lastap_spawner.spawn(egress_token);
+    spawner.spawn(egress_token);
     crate::log_info!(target: "service";
-        "ui4 h264 stream pipeline assigned carrier=lastap slot={} core_kind={} cooperative_tasks=3 prepare_slot={} encode_slot={} egress_slot={} exclusive_from=vm-hull+blocking-lanes+background-round-robin preparation_buffering=double encoded_au_queue=bounded future_home=ap1-ui\n",
+        "ui4 h264 stream pipeline assigned carrier=lastap slot={} core_kind={} private_tasks=2 prepare_slot={} encode_slot={} udp_egress_executor=spawn-service-local handoff=one-way-bounded-au-queue exclusive_from=vm-hull+blocking-lanes+background-round-robin preparation_buffering=serialized future_home=ap1-ui\n",
         lastap_slot,
         lastap_kind,
-        lastap_slot,
         lastap_slot,
         lastap_slot,
     );
@@ -1486,7 +1489,7 @@ const NET_ANY_CONFIGURED_AND_ROOT_READY: u32 =
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 73
+const TASK_COUNT: usize = 74
     + cfg!(feature = "trueos_h264_encode_stream") as usize
     + cfg!(feature = "trueos_lumen") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
@@ -1792,6 +1795,13 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         ui4_compositor_gate,
         &UI4_SLOT4_SERVICE_STARTED,
         spawn_ui4_slot4_service_task,
+    ),
+    TaskSpec::enabled_gated(
+        "ui4-start-button",
+        0,
+        ui4_compositor_gate,
+        &UI4_START_BUTTON_SERVICE_STARTED,
+        spawn_ui4_start_button_service_task,
     ),
     TaskSpec::enabled(
         "ui4-screenshot-service",

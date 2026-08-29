@@ -20,6 +20,7 @@ const STATUS_INVALID_INPUT: i32 = -4;
 const STATUS_NOT_FOUND: i32 = -5;
 const STATUS_IO: i32 = -6;
 const STATUS_NO_DEVICE: i32 = -8;
+const STATUS_RESOURCE_EXHAUSTED: i32 = -9;
 
 pub(crate) const READY_READABLE: u8 = 0b0000_0001;
 pub(crate) const READY_WRITABLE: u8 = 0b0000_0010;
@@ -38,6 +39,7 @@ static MIO_SELECTOR_WAIT: WaitQueue = WaitQueue::new();
 #[derive(Clone, Copy, Default)]
 pub struct TrueosMioSocketAddr {
     pub family: u8,
+    pub reserved: u8,
     pub port: u16,
     pub addr: [u8; 16],
 }
@@ -47,7 +49,11 @@ pub struct TrueosMioSocketAddr {
 pub struct TrueosMioReadyEvent {
     pub token: usize,
     pub readiness: u8,
+    pub reserved: [u8; 7],
 }
+
+const _: () = assert!(core::mem::size_of::<TrueosMioSocketAddr>() == 20);
+const _: () = assert!(core::mem::size_of::<TrueosMioReadyEvent>() == 16);
 
 #[derive(Clone, Copy)]
 enum CompatAddr {
@@ -75,6 +81,7 @@ impl CompatAddr {
             Self::V4 { addr, port } => {
                 let mut raw = TrueosMioSocketAddr {
                     family: 4,
+                    reserved: 0,
                     port,
                     addr: [0; 16],
                 };
@@ -83,6 +90,7 @@ impl CompatAddr {
             }
             Self::V6 { addr, port } => TrueosMioSocketAddr {
                 family: 6,
+                reserved: 0,
                 port,
                 addr,
             },
@@ -634,6 +642,33 @@ impl MioCompat {
             .find(|socket| socket.id == socket_id)
     }
 
+    fn socket_capacity_available(&self, owner_vm: Option<u8>) -> bool {
+        self.sockets
+            .iter()
+            .filter(|socket| socket.owner_vm == owner_vm)
+            .count()
+            < crate::allcaps::io::DESCRIPTOR_SOFT_CAP
+    }
+
+    fn discard_socket(&mut self, socket_id: u32) {
+        self.drop_pending_open(socket_id);
+        self.registrations.retain(|reg| reg.socket_id != socket_id);
+        let Some(index) = self
+            .sockets
+            .iter()
+            .position(|socket| socket.id == socket_id)
+        else {
+            return;
+        };
+        let mut socket = self.sockets.remove(index);
+        if let Some(handle) = socket.handle.take() {
+            let _ = self.submit(api::Command::Close { handle });
+        }
+        for handle in socket.listen_handles.drain(..) {
+            let _ = self.submit(api::Command::Close { handle });
+        }
+    }
+
     fn socket_for_owner(&self, socket_id: u32, owner_vm: Option<u8>) -> Option<&MioSocketState> {
         self.socket(socket_id)
             .filter(|socket| owner_matches(socket.owner_vm, owner_vm))
@@ -758,6 +793,9 @@ impl MioCompat {
                 listener.local.map(CompatAddr::unspecified_same_family),
             )
         };
+        if !self.socket_capacity_available(owner_vm) {
+            return;
+        }
 
         self.sockets.push(MioSocketState {
             id: child_id,
@@ -981,6 +1019,14 @@ impl MioCompat {
                         )
                     };
                     let peer = event_peer.or(fallback_peer);
+
+                    if !self.socket_capacity_available(owner_vm) {
+                        let _ = self.submit(api::Command::Close { handle });
+                        if port.is_some() {
+                            self.ensure_tcp_listener_depth(listener_id);
+                        }
+                        return;
+                    }
 
                     self.sockets.push(MioSocketState {
                         id: child_id,
@@ -1221,77 +1267,84 @@ impl MioCompat {
         self.pump();
 
         let mut written = 0usize;
-        for listeners_first in [true, false] {
-            for reg in self.registrations.iter().filter(|reg| {
-                owner_matches(reg.owner_vm, owner_vm) && reg.selector_id == selector_id
-            }) {
-                if written >= out_cap {
-                    break;
-                }
+        let mut inspected = 0usize;
+        for (index, reg) in self.registrations.iter().enumerate() {
+            if written >= out_cap {
+                break;
+            }
+            inspected = index.saturating_add(1);
+            if !owner_matches(reg.owner_vm, owner_vm) || reg.selector_id != selector_id {
+                continue;
+            }
 
-                let Some(socket) = self.socket(reg.socket_id) else {
-                    continue;
-                };
-                if (socket.kind == MioSocketKind::TcpListener) != listeners_first {
-                    continue;
-                }
+            let Some(socket) = self.socket(reg.socket_id) else {
+                continue;
+            };
 
-                let readiness = self.ready_mask(socket, reg.interests);
-                if readiness == 0 {
-                    continue;
-                }
+            let readiness = self.ready_mask(socket, reg.interests);
+            if readiness == 0 {
+                continue;
+            }
 
-                if tcp_flow_logging_enabled(socket) && should_log_selector_probe(readiness) {
+            if tcp_flow_logging_enabled(socket) && should_log_selector_probe(readiness) {
+                crate::log!(
+                    "mio_compat: tcp selector-ready selector={} socket={} token={} interests=0x{:02x} readiness=0x{:02x} rx={} closed={}\n",
+                    selector_id,
+                    socket.id,
+                    reg.token,
+                    reg.interests,
+                    readiness,
+                    socket.rx_stream.len(),
+                    socket.closed as u8
+                );
+            }
+            if crate::log_os::flags::NET_LOG_TCP_FLOW
+                && socket.kind == MioSocketKind::Udp
+                && (readiness & READY_WRITABLE) != 0
+            {
+                static UDP_WRITABLE_FLOW_LAST_LOG_NS: AtomicU64 = AtomicU64::new(0);
+                if once_per_second(&UDP_WRITABLE_FLOW_LAST_LOG_NS) {
                     crate::log!(
-                        "mio_compat: tcp selector-ready selector={} socket={} token={} interests=0x{:02x} readiness=0x{:02x} rx={} closed={}\n",
+                        "mio_compat: udp selector-ready selector={} socket={} token={} readiness=0x{:02x}\n",
                         selector_id,
                         socket.id,
                         reg.token,
-                        reg.interests,
-                        readiness,
-                        socket.rx_stream.len(),
-                        socket.closed as u8
+                        readiness
                     );
                 }
-                if crate::log_os::flags::NET_LOG_TCP_FLOW
-                    && socket.kind == MioSocketKind::Udp
-                    && (readiness & READY_WRITABLE) != 0
-                {
-                    static UDP_WRITABLE_FLOW_LAST_LOG_NS: AtomicU64 = AtomicU64::new(0);
-                    if once_per_second(&UDP_WRITABLE_FLOW_LAST_LOG_NS) {
-                        crate::log!(
-                            "mio_compat: udp selector-ready selector={} socket={} token={} readiness=0x{:02x}\n",
-                            selector_id,
-                            socket.id,
-                            reg.token,
-                            readiness
-                        );
-                    }
-                }
-                if crate::log_os::flags::NET_LOG_TCP_FLOW
-                    && socket.kind == MioSocketKind::TcpStream
-                    && (readiness & READY_WRITABLE) != 0
-                {
-                    static TCP_WRITABLE_FLOW_LAST_LOG_NS: AtomicU64 = AtomicU64::new(0);
-                    if once_per_second(&TCP_WRITABLE_FLOW_LAST_LOG_NS) {
-                        crate::log!(
-                            "mio_compat: tcp selector-ready selector={} socket={} token={} readiness=0x{:02x}\n",
-                            selector_id,
-                            socket.id,
-                            reg.token,
-                            readiness
-                        );
-                    }
-                }
-
-                unsafe {
-                    out_events.add(written).write(TrueosMioReadyEvent {
-                        token: reg.token,
-                        readiness,
-                    });
-                }
-                written += 1;
             }
+            if crate::log_os::flags::NET_LOG_TCP_FLOW
+                && socket.kind == MioSocketKind::TcpStream
+                && (readiness & READY_WRITABLE) != 0
+            {
+                static TCP_WRITABLE_FLOW_LAST_LOG_NS: AtomicU64 = AtomicU64::new(0);
+                if once_per_second(&TCP_WRITABLE_FLOW_LAST_LOG_NS) {
+                    crate::log!(
+                        "mio_compat: tcp selector-ready selector={} socket={} token={} readiness=0x{:02x}\n",
+                        selector_id,
+                        socket.id,
+                        reg.token,
+                        readiness
+                    );
+                }
+            }
+
+            unsafe {
+                out_events.add(written).write(TrueosMioReadyEvent {
+                    token: reg.token,
+                    readiness,
+                    reserved: [0; 7],
+                });
+            }
+            written += 1;
+        }
+
+        // Level-triggered writable sockets can stay ready indefinitely. Move
+        // the inspected prefix behind the remaining registrations so a small
+        // output buffer cannot starve later readable events forever.
+        if written != 0 && !self.registrations.is_empty() {
+            let advance = inspected.min(self.registrations.len());
+            self.registrations.rotate_left(advance);
         }
 
         written
@@ -1324,6 +1377,9 @@ pub(crate) unsafe fn mio_tcp_listener_bind_host(
 
     let owner_vm = current_owner_vm();
     with_compat(|compat| {
+        if !compat.socket_capacity_available(owner_vm) {
+            return STATUS_RESOURCE_EXHAUSTED;
+        }
         let local = match local {
             CompatAddr::V4 { addr, port } => CompatAddr::V4 {
                 addr,
@@ -1436,6 +1492,7 @@ pub(crate) unsafe fn mio_tcp_listener_bind_host(
                     port
                 ),
             }
+            compat.discard_socket(socket_id);
         }
 
         status
@@ -1478,6 +1535,9 @@ pub(crate) unsafe fn mio_tcp_stream_connect_host(
 
     let owner_vm = current_owner_vm();
     with_compat(|compat| {
+        if !compat.socket_capacity_available(owner_vm) {
+            return STATUS_RESOURCE_EXHAUSTED;
+        }
         let socket_id = compat.alloc_socket_id();
         compat.sockets.push(MioSocketState {
             id: socket_id,
@@ -1526,9 +1586,12 @@ pub(crate) unsafe fn mio_tcp_stream_connect_host(
                 compat.drive_tcp_connect_until_status(socket_id, owner_vm, CONNECT_COMPAT_WAIT_NS)
                 && connect_status != STATUS_OK
             {
+                compat.discard_socket(socket_id);
                 return connect_status;
             }
             unsafe { *out_socket_id = socket_id };
+        } else {
+            compat.discard_socket(socket_id);
         }
 
         status
@@ -1584,6 +1647,9 @@ pub(crate) unsafe fn mio_udp_socket_bind_host(
 
     let owner_vm = current_owner_vm();
     with_compat(|compat| {
+        if !compat.socket_capacity_available(owner_vm) {
+            return STATUS_RESOURCE_EXHAUSTED;
+        }
         let local = match local {
             CompatAddr::V4 { addr, port } => CompatAddr::V4 {
                 addr,
@@ -1641,6 +1707,8 @@ pub(crate) unsafe fn mio_udp_socket_bind_host(
 
         if status == STATUS_OK {
             unsafe { *out_socket_id = socket_id };
+        } else {
+            compat.discard_socket(socket_id);
         }
 
         status
@@ -2587,6 +2655,15 @@ pub(crate) unsafe fn mio_selector_register_socket_host(
                 return STATUS_OK;
             }
 
+            let registration_count = compat
+                .registrations
+                .iter()
+                .filter(|reg| reg.owner_vm == socket_owner && reg.selector_id == selector_id)
+                .count();
+            if registration_count >= crate::allcaps::io::DESCRIPTOR_SOFT_CAP {
+                return STATUS_RESOURCE_EXHAUSTED;
+            }
+
             compat.registrations.push(SelectorRegistration {
                 selector_id,
                 socket_id,
@@ -2627,6 +2704,15 @@ pub(crate) unsafe fn mio_selector_register_socket_host(
             reg.token = token;
             reg.interests = interests;
             return STATUS_OK;
+        }
+
+        let registration_count = compat
+            .registrations
+            .iter()
+            .filter(|reg| reg.owner_vm == registration_owner && reg.selector_id == selector_id)
+            .count();
+        if registration_count >= crate::allcaps::io::DESCRIPTOR_SOFT_CAP {
+            return STATUS_RESOURCE_EXHAUSTED;
         }
 
         compat.registrations.push(SelectorRegistration {

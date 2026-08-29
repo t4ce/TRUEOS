@@ -4,6 +4,57 @@ version = "0.0.2"
 edition = "2024"
 license-file = "LICENSE"
 
+# One lockfile and one dependency resolution for all repository-owned crates.
+# Vendored upstream projects and standalone tools intentionally remain outside this
+# workspace: several of them define their own workspaces or are independently
+# runnable applications.
+[workspace]
+resolver = "3"
+members = [
+    "crates/trueos-crypto",
+    "crates/trueos-executor",
+    "crates/trueos-executor/embassy-time",
+    "crates/trueos-executor/trueos-executor-macros",
+    "crates/trueos-fs",
+    "crates/trueos-gboi",
+    "crates/trueos-helio-artifact",
+    "crates/trueos-helio-runtime",
+    "crates/trueos-io",
+    "crates/trueos-kokoro/aot",
+    "crates/trueos-kokoro/audio",
+    "crates/trueos-kokoro/conv",
+    "crates/trueos-kokoro/dispatch",
+    "crates/trueos-kokoro/duration",
+    "crates/trueos-kokoro/exec",
+    "crates/trueos-kokoro/f32",
+    "crates/trueos-kokoro/g2p",
+    "crates/trueos-kokoro/gemm",
+    "crates/trueos-kokoro/layout",
+    "crates/trueos-kokoro/lexicon",
+    "crates/trueos-kokoro/lstm",
+    "crates/trueos-kokoro/memory",
+    "crates/trueos-kokoro/resize",
+    "crates/trueos-kokoro/scalar",
+    "crates/trueos-kokoro/stft",
+    "crates/trueos-kokoro/voice",
+    "crates/trueos-lfm25-cpu",
+    "crates/trueos-lfm25-model",
+    "crates/trueos-locale",
+    "crates/trueos-math",
+    "crates/trueos-ttstt-cpu",
+    "crates/trueos-v",
+    "crates/trueos-vm",
+]
+# These are patched or directly used upstream projects.  Keeping them out of the
+# TRUEOS workspace preserves their own workspace metadata and lockfile policy.
+exclude = [
+    "vendor/*",
+    # Cargo matches workspace exclusions against package directories, so this
+    # nested package needs its own entry.
+    "vendor/CrabUSB/usb-host",
+    "vendor/tinyaudio",
+]
+
 [[bin]]
 name = "TRUEOS"
 path = "src/main.rs"

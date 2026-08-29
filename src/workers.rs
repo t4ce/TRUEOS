@@ -16,10 +16,11 @@ pub const AP1_UI_SERVICE_SLOT: u32 = 1;
 const FIRST_BACKGROUND_SLOT: u32 = 2;
 const APP_PARALLELISM_NO_UI: bool = false;
 const WORKER_SLOT_LIMIT: usize = crate::allcaps::hv::VM_CPU_SLOT_LIMIT;
-// The live scanout -> H.264 -> UDP path still contains synchronous ownership
-// boundaries which make sharing a cooperative executor unsafe.  Until that
-// path is folded into AP1 as a fully asynchronous media-engine service, reserve
-// the topology's final AP as its private buddy carrier.
+// Live scanout capture and H.264 encode still share a synchronous, single-frame
+// ownership boundary which makes sharing a cooperative executor unsafe. Keep
+// that media-side exception on the topology's final AP. Complete encoded access
+// units cross a bounded, one-way handoff into ordinary asynchronous UDP egress;
+// network ownership is not part of the private-carrier contract.
 const LAST_AP_SERVICE_RESERVED: bool = cfg!(feature = "trueos_h264_encode_stream");
 
 static CORE_SPAWNERS: Mutex<BTreeMap<u32, SendSpawner>> = Mutex::new(BTreeMap::new());
@@ -129,7 +130,7 @@ pub fn register_core_spawner(cpu_slot: u32, core_kind: u8, spawner: Spawner) {
         crate::r::blocking::start_service_lane_for_slot(cpu_slot);
     } else if is_last_ap_service_slot(cpu_slot) {
         crate::log_info!(target: "service";
-            "lastap: reserved slot={} core_kind={} owner=ui4-h264-udp excluded_from=vm-hull+blocking-lanes+background-round-robin lifecycle=temporary-until-ap1-media-integration\n",
+            "lastap: reserved slot={} core_kind={} owner=ui4-scanout-h264 excluded_from=vm-hull+blocking-lanes+background-round-robin network_egress=one-way-ordinary-executor lifecycle=temporary-until-ap1-media-integration\n",
             cpu_slot,
             core_kind,
         );

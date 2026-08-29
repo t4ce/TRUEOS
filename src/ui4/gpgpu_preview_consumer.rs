@@ -44,6 +44,16 @@ const CPP_FONT_RUSH_MAX_PLANES: usize = 4;
 const CPP_FONT_RUSH2_PRODUCER_COUNT: usize = 32;
 const CPP_FONT_RUSH2_ROW_HEIGHT: u32 = 48;
 const CPP_FONT_RUSH2_LADDER: [usize; 7] = [1, 2, 4, 8, 16, 24, 32];
+
+const fn cpp_font_rush2_tier(producer: usize) -> u16 {
+    (producer % 4 + 1) as u16
+}
+
+const _: () = {
+    assert!(cpp_font_rush2_tier(0) == 1);
+    assert!(cpp_font_rush2_tier(3) == 4);
+    assert!(cpp_font_rush2_tier(31) == 4);
+};
 const CPP_FONT_RUSH_CADENCE_MS: u64 = 250;
 const CPP_FONT_RUSH_STAGE_MS: u64 = 3_000;
 const CPP_FONT_RUSH_TITLE_LETTER_MS: u64 = 150;
@@ -1435,7 +1445,23 @@ fn initialize_cpp_font_rush2_set(
             base_color: None,
         }) {
             Ok(frame) => frame,
-            Err(_) => {
+            Err(error) => {
+                let usage = super::ui4_live_resource_usage();
+                let pmm = crate::phys::pmm_stats();
+                crate::log_warn!(target: "ui4";
+                    "ui4 cpp-font-rush2 frame creation rejected request={} producer={} extent={}x{} buffering=double error={:?} active_frames={} active_sessions={} live_windows={} pmm_free_bytes={} pmm_largest_free_bytes={} pmm_free_regions={}\n",
+                    desired.serial,
+                    producer,
+                    width,
+                    CPP_FONT_RUSH2_ROW_HEIGHT,
+                    error,
+                    usage.active_frames,
+                    usage.active_sessions,
+                    usage.live_windows,
+                    pmm.map_or(0, |stats| stats.free_bytes),
+                    pmm.map_or(0, |stats| stats.largest_free_region),
+                    pmm.map_or(0, |stats| stats.free_regions),
+                );
                 abandon_compute_preview_initialization(session, &previews);
                 return Err("font-rush2-frame-create-failed");
             }
@@ -1448,7 +1474,7 @@ fn initialize_cpp_font_rush2_set(
         let font_pixels = 22.0 + (producer % 4) as f32 * 4.0;
         let registration = crate::r::font_producer_service::FontProducerRegistration {
             face: crate::intel::gpu_font::GpuFontFace::Default.id() as u16,
-            tier: (producer % 4) as u16,
+            tier: cpp_font_rush2_tier(producer),
             font_pixels_milli: (font_pixels * 1_000.0) as u32,
             row_width_px: width,
             row_height_px: CPP_FONT_RUSH2_ROW_HEIGHT,
@@ -1456,15 +1482,28 @@ fn initialize_cpp_font_rush2_set(
             max_chars: 1,
             row_ring_depth: 2,
         };
-        let producer_lease =
-            match crate::r::font_kernel_service::register_ui4_gpu_font_producer(registration) {
-                Ok(producer) => producer,
-                Err(_) => {
-                    let _ = destroy_frame(frame);
-                    abandon_compute_preview_initialization(session, &previews);
-                    return Err("font-rush2-producer-register-failed");
-                }
-            };
+        let producer_lease = match crate::r::font_kernel_service::register_ui4_gpu_font_producer(
+            registration,
+        ) {
+            Ok(producer) => producer,
+            Err(error) => {
+                crate::log_warn!(target: "ui4";
+                    "ui4 cpp-font-rush2 producer registration rejected request={} producer={} face={} tier={} font_pixels_milli={} extent={}x{} rows={} error={:?}\n",
+                    desired.serial,
+                    producer,
+                    registration.face,
+                    registration.tier,
+                    registration.font_pixels_milli,
+                    registration.row_width_px,
+                    registration.row_height_px,
+                    registration.row_ring_depth,
+                    error,
+                );
+                let _ = destroy_frame(frame);
+                abandon_compute_preview_initialization(session, &previews);
+                return Err("font-rush2-producer-register-failed");
+            }
+        };
         let window = match create_window(WindowCreate {
             owner: PREVIEW_OWNER,
             session,

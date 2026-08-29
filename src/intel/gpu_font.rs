@@ -2248,7 +2248,6 @@ pub(crate) fn render_text_once_with_font(
     })
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn render_analytical_font_stamp_readback(
     request: GpuFontTextRequest<'_>,
     font: GpuFontFace,
@@ -2349,6 +2348,75 @@ fn render_analytical_font_stamp_readback(
             pixels: captured.rgba.expect("analytical stamp readback checked"),
         },
     ))
+}
+
+/// Produce one centered, transparent text sprite at an exact caller-owned
+/// raster extent. This is the cold, one-shot FontKernel path for kernel UI
+/// chrome: callers retain the returned pixels and never rerun font work while
+/// animating placement, tint, or whole-frame opacity.
+pub(crate) fn render_centered_text_sprite_readback(
+    text: &str,
+    font: GpuFontFace,
+    target_width: u32,
+    target_height: u32,
+    padding_pixels: u32,
+) -> Result<crate::intel::render::FontRenderTargetReadback, &'static str> {
+    if text.is_empty() || target_width == 0 || target_height == 0 {
+        return Err("font-sprite-empty");
+    }
+    ensure_font_face_available(font)?;
+    if !font_face_supports_text(font, text) {
+        return Err("font-sprite-glyph-unsupported");
+    }
+    let request = GpuFontTextRequest::SingleLine(text);
+    let entry = GpuFontJobEntry {
+        text: request,
+        position: [0.0, 0.0],
+        font_pixels: crate::graphics::font::FONT_TESSEL_BASE_PX,
+        slant: 0.0,
+    };
+    let built = build_font_job_mesh(core::slice::from_ref(&entry), font)?;
+    if let Some((_, readback)) = render_analytical_font_stamp_readback(
+        request,
+        font,
+        built.bounds,
+        target_width,
+        target_height,
+        padding_pixels,
+    ) {
+        return Ok(readback);
+    }
+
+    let upload_bytes = crate::intel::render::transient_font_mesh_upload_bytes(
+        built.vertices.len(),
+        built.indices.len(),
+    )
+    .ok_or("font-mesh-staging-overflow")?;
+    if upload_bytes > crate::intel::render::transient_font_mesh_upload_capacity_bytes() {
+        return Err("font-mesh-upload-capacity");
+    }
+    let (render, readback) =
+        crate::intel::render::submit_font_mesh_readback_once_at_extent_reusing(
+            built.vertices.as_slice(),
+            built.indices.as_slice(),
+            built.bounds,
+            target_width,
+            target_height,
+            padding_pixels,
+            alloc::vec::Vec::new(),
+        )?;
+    if !render.completed {
+        return Err("font-sprite-render-incomplete");
+    }
+    crate::log_info!(target: "render";
+        "intel/gpu-font: centered-sprite-ready font={} text_chars={} target={}x{} padding={} path=resident-triangle-readback owner=kernel-ui4-static-sprite\n",
+        font.registry_name(),
+        text.chars().count(),
+        target_width,
+        target_height,
+        padding_pixels,
+    );
+    Ok(readback)
 }
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
