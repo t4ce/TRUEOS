@@ -39,7 +39,7 @@ jobs:
       CARGO_TERM_COLOR: always
       RUST_BACKTRACE: 1
       # Includes crates/log-os and the staged futures-family lock update.
-      TRUEOS_BLUEPRINTS_REV: 20d27f75bd46d8b9fc8d138d3552a9237bf5c31e
+      TRUEOS_BLUEPRINTS_REV: 973d1fbf1fde47e535b2b3d90f4ada6491eb1e6b
 
     steps:
       - name: Prepare checkout dependencies
@@ -147,7 +147,7 @@ jobs:
           # checkout alone contains no Cargo manifests for them.
           git -C "${blueprints_dir}" submodule update --init --depth 1 -- \
             buildins/edit \
-            buildins/texplo
+            buildins/termdir
           # The Blueprint workspace's local TRUEOS dependencies expect both
           # repositories to be siblings. Keep the CI checkout itself under the
           # ignored bld/ tree while preserving that layout.
