@@ -1179,11 +1179,48 @@ fn queue_async_plane(
 
 /// The immutable Blueprint frame is composed by UI4 when it starts in Slot0.
 /// Its one-shot font stamp supplies a producer release, but it has not been
-/// imported by a display plane.  Sampling it through the compositor's stable
-/// PAT0 source mapping is therefore correct; marking it as a display/PAT3
-/// source would ask the persistent compositor PPGTT to change an existing
-/// source VA's cache policy and it must reject that transaction.
+/// imported by a display plane. Sampling it through the compositor's stable
+/// PAT0 source mapping is therefore correct.
+///
+/// Dirty/double FontScene buffers are different: their CPU-cleared opening
+/// generation later becomes a GPU-authored direct-scanout generation. Import
+/// the opening generation with PAT3 as well so the ordinary close transition
+/// never asks the persistent compositor PPGTT to change that source VA from
+/// PAT0 to PAT3.
+const fn source_requires_lifetime_scanout_cache(
+    content: FrameContent,
+    cadence: super::FrameCadence,
+    buffering: super::FrameBuffering,
+) -> bool {
+    matches!(
+        (content, cadence, buffering),
+        (FrameContent::FontScene2d, super::FrameCadence::Dirty, super::FrameBuffering::Double,)
+    )
+}
+
+const _: () = {
+    assert!(source_requires_lifetime_scanout_cache(
+        FrameContent::FontScene2d,
+        super::FrameCadence::Dirty,
+        super::FrameBuffering::Double,
+    ));
+    assert!(!source_requires_lifetime_scanout_cache(
+        FrameContent::BlueprintScene,
+        super::FrameCadence::Immutable,
+        super::FrameBuffering::Single,
+    ));
+};
+
 fn composition_source_uses_scanout_cache(window: &WindowSnapshot, view: FrameRgbaView) -> bool {
+    if frame_snapshot(window.frame).is_ok_and(|snapshot| {
+        source_requires_lifetime_scanout_cache(
+            snapshot.plan.content,
+            snapshot.plan.cadence,
+            snapshot.plan.buffering,
+        )
+    }) {
+        return true;
+    }
     if view.gpu_release.is_none() {
         return false;
     }

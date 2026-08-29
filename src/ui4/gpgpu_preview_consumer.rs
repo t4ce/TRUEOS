@@ -1496,7 +1496,7 @@ fn initialize_cpp_font_rush2_set(
         .saturating_mul(2)
         .saturating_mul(CPP_FONT_RUSH2_PLANE_COUNT as u64);
     crate::log_info!(target: "ui4";
-        "ui4 cpp-font-rush2 layout request={} producers={} plane_canvases={} producer_grid={}x{} scanout={}x{} canvas_extent={}x{} canvas_bytes={} frame_ring_bytes={} mapping=producer-modulo-four/second-wave-nonoverlap-band glyph_alignment=independent-cells glyph_fanout={} font_pixels=48,56,64,72 alpha=176..255 gpgpu=nonoverlap-walker-waves publication=one-per-changed-plane\n",
+        "ui4 cpp-font-rush2 layout request={} producers={} plane_canvases={} producer_grid={}x{} scanout={}x{} canvas_extent={}x{} canvas_bytes={} frame_ring_bytes={} mapping=producer-modulo-four/second-wave-nonoverlap-band glyph_alignment=independent-cells glyph_fanout={} font_pixels=64,72,80,88 alpha=176..255 gpgpu=nonoverlap-walker-waves publication=one-per-changed-plane\n",
         desired.serial,
         CPP_FONT_RUSH2_PRODUCER_COUNT,
         CPP_FONT_RUSH2_PLANE_COUNT,
@@ -1625,7 +1625,7 @@ fn initialize_cpp_font_rush2_set(
     }
 
     for producer_index in 0..CPP_FONT_RUSH2_PRODUCER_COUNT {
-        let font_pixels = 48.0 + (producer_index % CPP_FONT_RUSH2_PLANE_COUNT) as f32 * 8.0;
+        let font_pixels = 64.0 + (producer_index % CPP_FONT_RUSH2_PLANE_COUNT) as f32 * 8.0;
         let registration = crate::r::font_producer_service::FontProducerRegistration {
             face: crate::intel::gpu_font::GpuFontFace::Default.id() as u16,
             tier: cpp_font_rush2_tier(producer_index),
@@ -3160,11 +3160,18 @@ fn cpp_font_rush2_request(
 
     let roll = state.rng.next_u64();
     let cell_width = width as f32 / CPP_FONT_RUSH2_GLYPHS_PER_ROW as f32;
+    let plane_index = u32::from(state.producer_index) % CPP_FONT_RUSH2_COLUMNS;
     let producer_row = u32::from(state.producer_index) / CPP_FONT_RUSH2_COLUMNS;
     let band_top = height.saturating_mul(producer_row) / CPP_FONT_RUSH2_ROWS;
     let band_bottom = height.saturating_mul(producer_row + 1) / CPP_FONT_RUSH2_ROWS;
     let band_height = band_bottom.saturating_sub(band_top);
-    let baseline_y = (band_top as f32 + band_height as f32 * 0.5 - state.font_pixels * 0.65)
+    // Preserve the shared full-screen plane canvases and blend contract, but
+    // keep their samples from landing exactly atop one another. The stagger
+    // is small relative to both the glyph cells and each producer band.
+    let stagger_x = plane_index as f32 * state.font_pixels * 0.45;
+    let stagger_y = plane_index as f32 * state.font_pixels * 0.35;
+    let baseline_y = (band_top as f32 + band_height as f32 * 0.5 - state.font_pixels * 0.65
+        + stagger_y)
         .max(band_top as f32);
     let mut runs = Vec::with_capacity(CPP_FONT_RUSH2_GLYPHS_PER_ROW);
     for cell in 0..CPP_FONT_RUSH2_GLYPHS_PER_ROW {
@@ -3177,7 +3184,10 @@ fn cpp_font_rush2_request(
             // Each glyph starts in its own cell. Exact visual bounds are
             // checked later by the RCS encoder; only genuinely disjoint
             // rectangles are admitted to the same dependency-free wave.
-            position: [cell as f32 * cell_width + cell_width * 0.1, baseline_y],
+            position: [
+                cell as f32 * cell_width + cell_width * 0.1 + stagger_x,
+                baseline_y,
+            ],
             font_pixels: state.font_pixels,
             slant: 0.0,
         });
