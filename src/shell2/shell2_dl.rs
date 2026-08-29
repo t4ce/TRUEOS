@@ -341,7 +341,7 @@ async fn online_run_task(
 
     // Host launch is deliberately argument-free.  App configuration belongs
     // to the VMX shell after the Blueprint is running.  `new` remains an
-    // internal compatibility transport for named launchers such as GridP.
+    // Internal compatibility transport for named launchers.
     let instance = if args.first().is_some_and(|arg| arg == "new") {
         args.remove(0);
         if args.len() < 2 {
@@ -479,8 +479,24 @@ pub(crate) fn submit_online_launch_script_to_target(
     selector: String,
     launch_script: String,
 ) -> Result<(), SpawnError> {
+    submit_online_args_with_launch_script_to_target(
+        spawner,
+        target,
+        width,
+        alloc::vec![selector],
+        launch_script,
+    )
+}
+
+pub(crate) fn submit_online_args_with_launch_script_to_target(
+    spawner: &Spawner,
+    target: MatrixTarget,
+    width: usize,
+    args: Vec<String>,
+    launch_script: String,
+) -> Result<(), SpawnError> {
     set_matrix_target_active(&target, true);
-    match online_run_task(target.clone(), width, alloc::vec![selector], Some(launch_script)) {
+    match online_run_task(target.clone(), width, args, Some(launch_script)) {
         Ok(token) => {
             spawner.spawn(token);
             Ok(())

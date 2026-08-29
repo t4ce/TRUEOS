@@ -47,6 +47,68 @@ const fn wm_barycentric_mode(num_varying_inputs: u8, force_barycentric_planes: b
     }
 }
 
+// SF.DW3 PointWidth is a U8.3 value. The host-validated state image below
+// carries an incidental one-pixel point width (0x008); point-list draws need
+// a visible default while retaining every other captured Mesa field.
+const SF_POINT_WIDTH_MASK: u32 = 0x7ff;
+const MESA_SF_DW3: u32 = 0x0200_4808;
+const RESIDENT_POINT_WIDTH_U8_3: u32 = 6 << 3;
+const MESA_CLIP_DW2: u32 = 0xD400_0001;
+// The UHD 770 point-list oracle emits the normal D3D clip contract but leaves
+// ViewportXYClipTest disabled. Point lists retain that captured state; triangle
+// and line draws retain the viewport-clip state from their own capture.
+const MESA_POINT_CLIP_DW2: u32 = 0xC400_0001;
+// The host's point-list packet opens every sample bit even for a single-sample
+// target, and preserves the otherwise inert double-sided-stencil bit.  Keep
+// this pair as part of the point raster contract rather than inheriting a
+// previous draw's sample/depth-stencil state.
+const MESA_POINT_SAMPLE_MASK_DW: u32 = 0x0000_FFFF;
+const MESA_POINT_WM_DEPTH_STENCIL_DW1: u32 = 1 << 4;
+
+const fn mesa_sf_dw3(point_raster: bool) -> u32 {
+    if point_raster {
+        (MESA_SF_DW3 & !SF_POINT_WIDTH_MASK) | RESIDENT_POINT_WIDTH_U8_3
+    } else {
+        MESA_SF_DW3
+    }
+}
+
+const fn mesa_clip_dw2(point_raster: bool) -> u32 {
+    if point_raster {
+        MESA_POINT_CLIP_DW2
+    } else {
+        MESA_CLIP_DW2
+    }
+}
+
+const fn mesa_sample_mask_dw(point_raster: bool) -> u32 {
+    if point_raster {
+        MESA_POINT_SAMPLE_MASK_DW
+    } else {
+        1
+    }
+}
+
+const fn mesa_wm_depth_stencil_dw1(point_raster: bool) -> u32 {
+    if point_raster {
+        MESA_POINT_WM_DEPTH_STENCIL_DW1
+    } else {
+        0
+    }
+}
+
+/// The late index-buffer re-arm was captured for the Mesa point-list path.
+/// Native retained draws have their own final binding-table re-arm and must
+/// retain the normal front-end index-buffer packet; otherwise an indexed
+/// 3DPRIMITIVE has random-access enabled with no buffer bound.
+const fn uses_host_point_tail_index_buffer(
+    mesa_host_fixed_function: bool,
+    artifact_native_fixed_function: bool,
+    point_raster: bool,
+) -> bool {
+    mesa_host_fixed_function && !artifact_native_fixed_function && point_raster
+}
+
 #[cfg(test)]
 mod churn_sbe_swiz_tests {
     use super::{sbe_swiz_payload, wm_barycentric_mode};
@@ -63,6 +125,49 @@ mod churn_sbe_swiz_tests {
         assert_eq!(wm_barycentric_mode(1, false), 1 << 11);
         assert_eq!(wm_barycentric_mode(0, false), 0);
         assert_eq!(wm_barycentric_mode(0, true), 1 << 11);
+    }
+}
+
+#[cfg(test)]
+mod point_raster_state_tests {
+    use super::{
+        MESA_CLIP_DW2, MESA_POINT_CLIP_DW2, MESA_POINT_SAMPLE_MASK_DW,
+        MESA_POINT_WM_DEPTH_STENCIL_DW1, MESA_SF_DW3, RESIDENT_POINT_WIDTH_U8_3,
+        SF_POINT_WIDTH_MASK, mesa_clip_dw2, mesa_sample_mask_dw, mesa_sf_dw3,
+        mesa_wm_depth_stencil_dw1, uses_host_point_tail_index_buffer,
+    };
+
+    #[test]
+    fn mesa_point_list_overrides_only_the_width_with_six_pixels() {
+        let point_state = mesa_sf_dw3(true);
+        assert_eq!(point_state & SF_POINT_WIDTH_MASK, RESIDENT_POINT_WIDTH_U8_3);
+        assert_eq!(point_state & !SF_POINT_WIDTH_MASK, MESA_SF_DW3 & !SF_POINT_WIDTH_MASK);
+        assert_ne!(point_state & (1 << 11), 0, "point width must come from SF state");
+        assert_eq!(mesa_sf_dw3(false), MESA_SF_DW3);
+    }
+
+    #[test]
+    fn mesa_point_list_uses_the_host_viewport_clip_contract() {
+        assert_eq!(mesa_clip_dw2(false), MESA_CLIP_DW2);
+        assert_eq!(mesa_clip_dw2(true), MESA_POINT_CLIP_DW2);
+        assert_eq!(mesa_clip_dw2(true) & (1 << 28), 0);
+        assert_ne!(mesa_clip_dw2(false) & (1 << 28), 0);
+    }
+
+    #[test]
+    fn mesa_point_list_uses_the_host_sample_and_depth_stencil_contract() {
+        assert_eq!(mesa_sample_mask_dw(true), MESA_POINT_SAMPLE_MASK_DW);
+        assert_eq!(mesa_sample_mask_dw(false), 1);
+        assert_eq!(mesa_wm_depth_stencil_dw1(true), MESA_POINT_WM_DEPTH_STENCIL_DW1);
+        assert_eq!(mesa_wm_depth_stencil_dw1(false), 0);
+    }
+
+    #[test]
+    fn host_tail_index_buffer_is_point_only_and_never_replaces_native_binding() {
+        assert!(uses_host_point_tail_index_buffer(true, false, true));
+        assert!(!uses_host_point_tail_index_buffer(true, false, false));
+        assert!(!uses_host_point_tail_index_buffer(true, true, true));
+        assert!(!uses_host_point_tail_index_buffer(false, false, true));
     }
 }
 
@@ -423,6 +528,7 @@ fn write_triangle_probe_state_with_flush(
         return Err("probe-viewport-translation");
     }
     let native_sampled = draw.native.is_some() && draw.sampled_texture.is_some();
+    let native_metallic_roughness = native_sampled && draw.metallic_roughness_texture.is_some();
     let binding_table_entries = if draw.native.is_some() {
         4usize
     } else if draw.sampled_texture.is_some() {
@@ -430,8 +536,16 @@ fn write_triangle_probe_state_with_flush(
     } else {
         1usize
     };
-    let ps_binding_table_entries = if native_sampled { 3usize } else { 0usize };
-    let surface_state_count = if native_sampled {
+    let ps_binding_table_entries = if native_metallic_roughness {
+        4usize
+    } else if native_sampled {
+        3usize
+    } else {
+        0usize
+    };
+    let surface_state_count = if native_metallic_roughness {
+        6usize
+    } else if native_sampled {
         5usize
     } else {
         binding_table_entries
@@ -534,7 +648,12 @@ fn write_triangle_probe_state_with_flush(
         // The separately compiled PS consumes RT at BTI0 and the sampled
         // image at BTI2; stage-specific binding-table pointers make those
         // layouts coexist without aliasing the VS instance surface.
-        for (entry, surface_index) in [0usize, 0, 4].into_iter().enumerate() {
+        let ps_surface_indices: &[usize] = if native_metallic_roughness {
+            &[0, 0, 4, 5]
+        } else {
+            &[0, 0, 4]
+        };
+        for (entry, surface_index) in ps_surface_indices.iter().copied().enumerate() {
             let entry_offset = surface_state_offset
                 .checked_add(surface_index * 64)
                 .and_then(|offset| offset.checked_sub(binding_table_entry_base_offset))
@@ -641,6 +760,10 @@ fn write_triangle_probe_state_with_flush(
             let start = surface_state_offset / 4 + 4 * 16;
             write_triangle_sampled_rgba8_surface_state(&mut dwords[start..start + 16], texture)?;
         }
+        if let Some(texture) = draw.metallic_roughness_texture {
+            let start = surface_state_offset / 4 + 5 * 16;
+            write_triangle_sampled_rgba8_surface_state(&mut dwords[start..start + 16], texture)?;
+        }
     } else if let Some(texture) = draw.sampled_texture {
         let start = surface_state_offset / 4 + 2 * 16;
         write_triangle_sampled_rgba8_surface_state(&mut dwords[start..start + 16], texture)?;
@@ -655,12 +778,21 @@ fn write_triangle_probe_state_with_flush(
     {
         return Err("probe-sampler-mode");
     }
+    if let Some(texture) = draw.metallic_roughness_texture
+        && texture.sampler_flags
+            != (crate::gpu::vgpu::SAMPLER_ADDRESS_U_REPEAT
+                | crate::gpu::vgpu::SAMPLER_ADDRESS_V_REPEAT)
+    {
+        return Err("probe-metallic-roughness-sampler-mode");
+    }
     let sampler_words = [sampler[0], sampler[1], sampler[2], sampler[3]];
     if native_sampled && !PICASSO_NATIVE_TEXTURE_STATE_LOGGED.swap(true, Ordering::AcqRel) {
         let ps_binding_table = &dwords
             [ps_binding_table_offset / 4..ps_binding_table_offset / 4 + ps_binding_table_entries];
         let texture_surface =
             &dwords[surface_state_offset / 4 + 4 * 16..surface_state_offset / 4 + 5 * 16];
+        let metallic_roughness_surface = native_metallic_roughness
+            .then(|| &dwords[surface_state_offset / 4 + 5 * 16..surface_state_offset / 4 + 6 * 16]);
         let ps_pointer = ps_binding_table_offset
             .checked_sub(shader_layout.state_region_offset_bytes as usize)
             .ok_or("probe-binding-table-base")?;
@@ -668,12 +800,14 @@ fn write_triangle_probe_state_with_flush(
             .sampled_texture
             .ok_or("probe-sampled-texture-surface")?;
         crate::log_important!(target: "render";
-            "picasso-material: proof=retained-texture-state-encoded accepted=1 state_base=0x{:X} ps_bt_ptr=0x{:X} ps_bt=[0x{:X},0x{:X},0x{:X}] texture_surface=[dw0:0x{:08X},dw1:0x{:08X},dw2:0x{:08X},dw3:0x{:08X},dw7:0x{:08X},dw8:0x{:08X},dw9:0x{:08X}] sampler=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] texture_gpu=0x{:X} texture={}x{} stride={}\n",
+            "picasso-material: proof=retained-material-state-encoded accepted=1 state_base=0x{:X} ps_bt_ptr=0x{:X} ps_bt_count={} ps_bt=[0x{:X},0x{:X},0x{:X},0x{:X}] base_surface=[dw0:0x{:08X},dw1:0x{:08X},dw2:0x{:08X},dw3:0x{:08X},dw7:0x{:08X},dw8:0x{:08X},dw9:0x{:08X}] metallic_roughness_surface_present={} sampler=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] base_gpu=0x{:X} base={}x{} stride={}\n",
             shader_layout.state_region_gpu_addr,
             ps_pointer,
+            ps_binding_table_entries,
             ps_binding_table[0],
             ps_binding_table[1],
             ps_binding_table[2],
+            ps_binding_table.get(3).copied().unwrap_or(0),
             texture_surface[0],
             texture_surface[1],
             texture_surface[2],
@@ -681,6 +815,7 @@ fn write_triangle_probe_state_with_flush(
             texture_surface[7],
             texture_surface[8],
             texture_surface[9],
+            metallic_roughness_surface.is_some() as u8,
             sampler_words[0],
             sampler_words[1],
             sampler_words[2],
@@ -1118,7 +1253,16 @@ fn validate_triangle_native_draw_contract(
         && native.vf_sgvs_dw1 == 0xE002_4002
         && native.vf_sgvs_2_dw1 == 0xB002_0002
         && native.vf_component_packing == [0x0000_0A37, 0, 0, 0];
-    if !(pos_normal || pos_normal_uv)
+    let pos_normal_sampled = draw.vertex_format == TriangleVertexFormat::PosNormal
+        && draw.vertex_stride == 32
+        && draw.sampled_texture.is_some()
+        && native.vertex_element_count == 3
+        && native.vf_sgvs_dw1 == 0xE002_4002
+        && native.vf_sgvs_2_dw1 == 0xB002_0002
+        && native.vf_component_packing == [0x0000_0A77, 0, 0, 0];
+    if !(pos_normal || pos_normal_uv || pos_normal_sampled)
+        || (draw.metallic_roughness_texture.is_some() && draw.sampled_texture.is_none())
+        || draw.emissive_factor.iter().any(|value| !value.is_finite())
         || draw.index_buffer.is_none()
         || draw.indirect_args_gpu_addr.is_none()
         || camera.gpu_addr == 0
@@ -1143,7 +1287,8 @@ mod retained_native_matrix_draw_contract_tests {
     use super::{
         ChurnHardwareAdmission, TriangleDrawPrep, TriangleIndexBufferPrep,
         TriangleNativeDrawContract, TriangleSampledTextureBinding, TriangleStorageBufferBinding,
-        TriangleVertexFormat, TriangleVfInstancingState, validate_triangle_native_draw_contract,
+        TriangleVertexFormat, TriangleVfInstancingState, native_raster_dw1,
+        validate_triangle_native_draw_contract,
     };
 
     const CAMERA_GPU: u64 = 0x2000_0000;
@@ -1152,9 +1297,27 @@ mod retained_native_matrix_draw_contract_tests {
     const INDIRECT_GPU: u64 = 0x2300_0028;
     const ROWS: u32 = 337;
 
+    #[test]
+    fn gltf_double_sided_changes_only_native_cull_mode() {
+        let back_culled = native_raster_dw1(false, false);
+        let double_sided = native_raster_dw1(true, false);
+        assert_eq!((back_culled >> 16) & 0b11, 3);
+        assert_eq!((double_sided >> 16) & 0b11, 1);
+        assert_eq!(back_culled & !(0b11 << 16), double_sided & !(0b11 << 16));
+    }
+
+    #[test]
+    fn picasso_clockwise_front_keeps_back_face_culling() {
+        let raster = native_raster_dw1(false, true);
+        assert_eq!((raster >> 16) & 0b11, 3);
+        assert_eq!((raster >> 21) & 0b1, 0);
+    }
+
     fn native_contract() -> TriangleNativeDrawContract {
         TriangleNativeDrawContract {
             hardware_admission: ChurnHardwareAdmission::ValidatedProduction,
+            double_sided: false,
+            front_face_clockwise: false,
             vs_storage_bindings: [
                 TriangleStorageBufferBinding {
                     gpu_addr: CAMERA_GPU,
@@ -1197,6 +1360,8 @@ mod retained_native_matrix_draw_contract_tests {
             indirect_args_gpu_addr: Some(INDIRECT_GPU),
             native: Some(native),
             sampled_texture: None,
+            metallic_roughness_texture: None,
+            emissive_factor: [0.0; 3],
             state_gpu_addr: 0x2600_0000,
             rt_gpu_addr: 0x2700_0000,
             rt_surface_format: 0,
@@ -1234,6 +1399,28 @@ mod retained_native_matrix_draw_contract_tests {
         native.vs_storage_bindings[2].byte_len -= core::mem::size_of::<u32>() as u32;
         assert_eq!(
             validate_triangle_native_draw_contract(native_draw(native), native),
+            Err("probe-native-vf-contract")
+        );
+    }
+
+    #[test]
+    fn textured_matrix_handoff_accepts_the_adls_normal_projected_proof_rung() {
+        let native = native_contract();
+        let mut draw = native_draw(native);
+        draw.vertex_stride = 32;
+        draw.vertex_buffer_bytes = draw.vertex_count * 32;
+        draw.sampled_texture = Some(TriangleSampledTextureBinding {
+            gpu_addr: 0x2800_0000,
+            width: 1024,
+            height: 1024,
+            pitch: 4096,
+            sampler_flags: 0,
+        });
+        assert_eq!(validate_triangle_native_draw_contract(draw, native), Ok(()));
+
+        draw.sampled_texture = None;
+        assert_eq!(
+            validate_triangle_native_draw_contract(draw, native),
             Err("probe-native-vf-contract")
         );
     }
@@ -1303,6 +1490,11 @@ fn encode_triangle_probe_batch(
     if resident_msaa4 && !device_is_gfx125(warm.device_id) {
         return Err("probe-msaa4-device");
     }
+    let adjacency_gs = batch_mode.adjacency_geometry_shader();
+    if adjacency_gs.is_some() && (warm.device_id != 0xA780 || warm.revision_id != 0x04) {
+        return Err("adjacency-gs-device-mismatch");
+    }
+    let mesa_host_fixed_function = matches!(backend_probe_mode, BackendProbeMode::MesaLike);
     let multisample_dw1 = if resident_msaa4 {
         2 << 1
     } else {
@@ -1310,6 +1502,8 @@ fn encode_triangle_probe_batch(
     };
     let sample_mask_dw = if resident_msaa4 {
         0xF
+    } else if mesa_host_fixed_function {
+        mesa_sample_mask_dw(batch_mode.point_raster())
     } else {
         backend_probe_mode.sample_mask_dw()
     };
@@ -1612,7 +1806,6 @@ fn encode_triangle_probe_batch(
         }
     }
 
-    let mesa_host_fixed_function = matches!(backend_probe_mode, BackendProbeMode::MesaLike);
     let artifact_native_fixed_function = draw.native.is_some();
     // Mesa disables BINDING_TABLE_POOL_ALLOC on gfx11 through gfx12.0 because
     // this state can leak/corrupt across contexts.  Keep every pre-gfx12.5
@@ -1762,12 +1955,14 @@ fn encode_triangle_probe_batch(
     // SF viewport translation happens after fixed-function clipping. Bypass
     // canonical clip rejection for a translated resident scene and rely on
     // the target scissor for final bounds; otherwise offscreen primitives can
-    // never become visible when the consumer pans toward them.
-    let translated_viewport_clip_bypass = mesa_host_fixed_function
-        && viewport_translation_px
-            .iter()
-            .any(|component| *component != 0.0);
-    let clip_dw1 = if translated_viewport_clip_bypass {
+    // never become visible when the consumer pans toward them. RECTLIST has
+    // the same bypass because the PRM only admits it as screen-space input.
+    let viewport_or_rectlist_clip_bypass = mesa_host_fixed_function
+        && (batch_mode.rect_list_raster()
+            || viewport_translation_px
+                .iter()
+                .any(|component| *component != 0.0));
+    let clip_dw1 = if viewport_or_rectlist_clip_bypass {
         0
     } else if mesa_host_fixed_function {
         0x0004_0400
@@ -1781,10 +1976,10 @@ fn encode_triangle_probe_batch(
                 0
             }
     };
-    let clip_dw2 = if translated_viewport_clip_bypass {
+    let clip_dw2 = if viewport_or_rectlist_clip_bypass {
         CLIP_PERSPECTIVE_DIVIDE_DISABLE
     } else if mesa_host_fixed_function {
-        0xD400_0001
+        mesa_clip_dw2(batch_mode.point_raster())
     } else if mesa_simple_rect_stack || mesa_clip_bypass {
         CLIP_PERSPECTIVE_DIVIDE_DISABLE
     } else {
@@ -1813,7 +2008,7 @@ fn encode_triangle_probe_batch(
     let point_width_raw = if batch_mode.point_raster() {
         backend_probe_mode
             .point_width_raw_override()
-            .unwrap_or(0x200)
+            .unwrap_or(RESIDENT_POINT_WIDTH_U8_3)
     } else {
         0
     };
@@ -1824,7 +2019,7 @@ fn encode_triangle_probe_batch(
     } else {
         0
     };
-    let clip_dw3 = if translated_viewport_clip_bypass {
+    let clip_dw3 = if viewport_or_rectlist_clip_bypass {
         0
     } else if mesa_host_fixed_function {
         0x0003_FFE0
@@ -1838,22 +2033,31 @@ fn encode_triangle_probe_batch(
     // default 32-handle block mode (zero).
     let sf_viewport_transform_enable =
         !(batch_mode.screen_space_raster() || backend_probe_mode.disable_sf_viewport_transform());
-    let sf_dw1 = if mesa_host_fixed_function {
-        0x0008_0402
+    // `Line Width` is a U11.7 field at DW1[29:12]. Give every native line
+    // assembly mode the same clear three-pixel stroke.
+    const LINE_WIDTH_SHIFT: u32 = 12;
+    const THREE_PIXEL_LINE_WIDTH_U11_7: u32 = 3 << 7;
+    let sf_line_width = if batch_mode.line_raster() {
+        THREE_PIXEL_LINE_WIDTH_U11_7 << LINE_WIDTH_SHIFT
     } else {
-        (u32::from(sf_viewport_transform_enable) << 1) | (1 << 10)
+        0
     };
-    let sf_dw2 = if backend_probe_mode.sf_deref_block_zero() || TRIANGLE_VS_URB_ENTRIES >= 192 {
+    let sf_dw1 = if mesa_host_fixed_function {
+        0x0008_0402 | sf_line_width
+    } else {
+        (u32::from(sf_viewport_transform_enable) << 1) | (1 << 10) | sf_line_width
+    };
+    let sf_dw2 = if let Some(gs) = adjacency_gs {
+        (gs.meta.sf_deref_block_size as u32) << 29
+    } else if backend_probe_mode.sf_deref_block_zero() || TRIANGLE_VS_URB_ENTRIES >= 192 {
         0
     } else {
         1 << 29
     };
     // SF.DW3[10:0] is PointWidth, and DW3[11] selects state-sourced width.
-    // Use a deliberately large U8.3-ish value for point-list raster smoke
-    // tests so a single center point should cover visible samples if SF/raster
-    // is alive.
+    // Use a visible six-pixel default for native point lists.
     let sf_dw3 = if mesa_host_fixed_function {
-        0x0200_4808
+        mesa_sf_dw3(batch_mode.point_raster())
     } else if batch_mode.point_raster() {
         let point_width_source_state = if backend_probe_mode.point_width_from_vertex() {
             0
@@ -1873,9 +2077,11 @@ fn encode_triangle_probe_batch(
     // none, and otherwise leave raster defaults boring until we have visual
     // proof that a more opinionated packet is required.
     let raster_dw1 = if artifact_native_fixed_function {
-        // Exact validated gfx12 Xe-LP state for CCW front faces, BACK culling,
-        // solid fill, one raster sample, near/far clip and scissor enabled.
-        0x04A3_1003
+        native_raster_dw1(
+            draw.native.is_some_and(|native| native.double_sided),
+            draw.native
+                .is_some_and(|native| native.front_face_clockwise),
+        )
     } else if mesa_host_fixed_function {
         if resident_msaa4 {
             0x04A1_1C03
@@ -1954,9 +2160,18 @@ fn encode_triangle_probe_batch(
             0
         }
         | wm_barycentric_mode;
-    let wm_depth_stencil_dw1 = depth_config.map_or(0, |depth| {
-        u32::from(depth.write_enabled) | (1 << 1) | (u32::from(depth.compare_function) << 5)
-    });
+    let wm_depth_stencil_dw1 = depth_config.map_or_else(
+        || {
+            if mesa_host_fixed_function {
+                mesa_wm_depth_stencil_dw1(batch_mode.point_raster())
+            } else {
+                0
+            }
+        },
+        |depth| {
+            u32::from(depth.write_enabled) | (1 << 1) | (u32::from(depth.compare_function) << 5)
+        },
+    );
     let wm_depth_stencil_dw2 = 0;
     let wm_depth_stencil_dw3 = 0;
     let wm_chroma_key_dw1 = 0;
@@ -2772,7 +2987,14 @@ fn encode_triangle_probe_batch(
     // draw.  It is architecturally ignored for this non-indexed triangle list,
     // but is part of the exact SVL state accompanying component packing.
     push(batch_dwords, &mut cursor, if mesa_host_fixed_function { 0xFFFF } else { 0 })?;
-    if let Some(index_buffer) = draw.index_buffer {
+    let host_point_tail_index_buffer = uses_host_point_tail_index_buffer(
+        mesa_host_fixed_function,
+        artifact_native_fixed_function,
+        batch_mode.point_raster(),
+    );
+    if let Some(index_buffer) = draw.index_buffer
+        && !host_point_tail_index_buffer
+    {
         log_batch_offset(cursor, "3DSTATE_INDEX_BUFFER");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_INDEX_BUFFER)?;
         let index_buffer_dw1 = (RENDER_MOCS & 0x7F)
@@ -2900,8 +3122,17 @@ fn encode_triangle_probe_batch(
     push(batch_dwords, &mut cursor, 0)?;
     log_batch_offset(cursor, "3DSTATE_URB_ALLOC_GS");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_URB_ALLOC_GS)?;
-    push(batch_dwords, &mut cursor, disabled_urb_dw1)?;
-    push(batch_dwords, &mut cursor, 0)?;
+    if let Some(gs) = adjacency_gs {
+        let gs_urb_dw1 = (u32::from(gs.meta.urb_entry_size).saturating_sub(1))
+            | (u32::from(gs.meta.urb_start) << 10)
+            | (u32::from(gs.meta.urb_start) << 21);
+        let gs_urb_entries = u32::from(gs.meta.urb_entries);
+        push(batch_dwords, &mut cursor, gs_urb_dw1)?;
+        push(batch_dwords, &mut cursor, gs_urb_entries | (gs_urb_entries << 16))?;
+    } else {
+        push(batch_dwords, &mut cursor, disabled_urb_dw1)?;
+        push(batch_dwords, &mut cursor, 0)?;
+    }
     intel_render_verbose_log!(
         "probe-urb-config order=vs-hs-ds-gs vs_start={} vs_entries={} vs_entry_64b={} disabled_stage_start={} sf_deref={} source=mesa-adl-gt1\n",
         TRIANGLE_VS_URB_START,
@@ -3107,8 +3338,55 @@ fn encode_triangle_probe_batch(
     }
     log_batch_offset(cursor, "3DSTATE_GS");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_GS)?;
-    for _ in 0..9 {
+    if let Some(gs) = adjacency_gs {
+        let gs_layout = if matches!(
+            batch_mode,
+            TriangleBatchMode::LineAdjDraw | TriangleBatchMode::LineStripAdjDraw
+        ) {
+            shader_layout.line_adjacency_gs
+        } else {
+            shader_layout.triangle_adjacency_gs
+        };
+        let gs_ksp_offset = gs_layout.code_offset_bytes + gs_layout.ksp_offset_bytes;
+        let gs_dw3 = u32::from(gs.meta.expected_vertex_count)
+            | (u32::from(gs.meta.kernel.binding_table_entry_count) << 18)
+            | (sampler_count_encoding(gs.meta.kernel.sampler_count) << 27);
+        let gs_grf = u32::from(gs.meta.kernel.grf_start_register);
+        let gs_dw6 = (gs_grf & 0xF)
+            | (1 << 10)
+            | (u32::from(gs.meta.output_topology) << 17)
+            | (u32::from(gs.meta.output_vertex_size) << 23)
+            | (((gs_grf >> 4) & 0x3) << 29);
+        let gs_dw7 =
+            1 | (1 << 10) | (3 << 11) | (u32::from(gs.meta.control_data_header_size) << 20);
+        let gs_dw8 = (u32::from(gs.meta.max_threads) - 1)
+            | (u32::from(gs.meta.static_output_vertex_count) << 16)
+            | (1 << 30);
+        push(batch_dwords, &mut cursor, gs_ksp_offset & !0x3F)?;
         push(batch_dwords, &mut cursor, 0)?;
+        push(batch_dwords, &mut cursor, gs_dw3)?;
+        push(batch_dwords, &mut cursor, 0)?;
+        push(batch_dwords, &mut cursor, 0)?;
+        push(batch_dwords, &mut cursor, gs_dw6)?;
+        push(batch_dwords, &mut cursor, gs_dw7)?;
+        push(batch_dwords, &mut cursor, gs_dw8)?;
+        push(batch_dwords, &mut cursor, 0)?;
+        intel_render_focus_log!(
+            "probe-gs adjacency=1 topology=0x{:X} ksp=0x{:X} expected_vertices={} output_topology={} static_vertices={} urb_start={} urb_entry_size={} urb_entries={} capture={}\n",
+            batch_mode.topology(),
+            gs_ksp_offset & !0x3F,
+            gs.meta.expected_vertex_count,
+            gs.meta.output_topology,
+            gs.meta.static_output_vertex_count,
+            gs.meta.urb_start,
+            gs.meta.urb_entry_size,
+            gs.meta.urb_entries,
+            crate::intel::shader::adjacency_geometry_shader_capture_note(),
+        );
+    } else {
+        for _ in 0..9 {
+            push(batch_dwords, &mut cursor, 0)?;
+        }
     }
 
     if matches!(backend_probe_mode, BackendProbeMode::PsCpsDisabled) {
@@ -3662,6 +3940,29 @@ fn encode_triangle_probe_batch(
         push(batch_dwords, &mut cursor, 0x0001_0000)?;
         for _ in 0..4 {
             push(batch_dwords, &mut cursor, 0)?;
+        }
+
+        if let Some(index_buffer) = draw.index_buffer
+            && host_point_tail_index_buffer
+        {
+            // The indexed host point-list capture does not merely bind its
+            // index buffer during front-end setup: it re-arms the exact
+            // non-L3-bypass state after VF/primitive replication and directly
+            // before WM/draw.  That later binding is the effective one.
+            log_batch_offset(cursor, "3DSTATE_INDEX_BUFFER verified-host-tail");
+            push(batch_dwords, &mut cursor, CMD_3DSTATE_INDEX_BUFFER)?;
+            let index_buffer_dw1 = (RENDER_MOCS & 0x7F) | (INDEX_BUFFER_FORMAT_DWORD << 8);
+            push(batch_dwords, &mut cursor, index_buffer_dw1)?;
+            push_addr(batch_dwords, &mut cursor, index_buffer.gpu_addr)?;
+            push(batch_dwords, &mut cursor, index_buffer.byte_len)?;
+            intel_render_focus_log!(
+                "{} index-buffer-state accepted=1 placement=verified-host-tail format=u32 count={} bytes={} gpu=0x{:X} mocs={} l3_bypass_disable=0 primitive_access=random retained=1 does_not_prove=index_fetch\n",
+                submit_name,
+                index_buffer.index_count,
+                index_buffer.byte_len,
+                index_buffer.gpu_addr,
+                RENDER_MOCS,
+            );
         }
 
         log_batch_offset(cursor, "3DSTATE_WM verified-host-tail");
@@ -4368,6 +4669,25 @@ fn encode_triangle_probe_batch(
     );
 
     Ok(cursor * core::mem::size_of::<u32>())
+}
+
+/// Validated gfx12 Xe-LP raster state. glTF's sole culling switch is material
+/// `doubleSided`, which maps to cull-none while preserving the selected front
+/// winding and all unrelated native state bits.
+const fn native_raster_dw1(double_sided: bool, front_face_clockwise: bool) -> u32 {
+    const CULL_BACK_CCW: u32 = 0x04A3_1003;
+    let raster = if front_face_clockwise {
+        // 3DSTATE_RASTER.DW1[21] = 0 means clockwise front faces.
+        CULL_BACK_CCW & !(1 << 21)
+    } else {
+        CULL_BACK_CCW
+    };
+    if double_sided {
+        // 3DSTATE_RASTER.DW1[17:16] = 1 means cull none.
+        (raster & !(0b11 << 16)) | (1 << 16)
+    } else {
+        raster
+    }
 }
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]

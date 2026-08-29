@@ -2,7 +2,9 @@
 //
 // Geometry and UVs are immutable vertex data. Camera, instance matrices and
 // compacted instance IDs are GPU-resident outputs shared with Helio Churn.
-// The fragment stage consumes one engine-resolved retained RGBA8 texture.
+// The stable first material rung samples the engine-resolved base-color RGBA8
+// texture with authored UV. The other glTF maps remain resident but have no
+// active shader consumer yet.
 
 struct Camera {
     view:           mat4x4<f32>,
@@ -58,5 +60,6 @@ fn vs_main(input: VertexInput, @builtin(instance_index) slot: u32) -> VertexOutp
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    return textureSample(base_color_texture, base_color_sampler, input.uv);
+    let base_color = textureSample(base_color_texture, base_color_sampler, input.uv);
+    return base_color;
 }

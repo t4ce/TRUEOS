@@ -374,18 +374,39 @@ fn init_warm_state_for_boot(dev: crate::intel::Dev) -> RenderWarmState {
 pub(crate) fn allocate_picasso_warm_state_for_boot(
     dev: crate::intel::Dev,
 ) -> Option<RenderWarmState> {
-    let (ring_phys, ring_virt) = crate::dma::alloc(WARM_RING_BYTES, crate::intel::WARM_ALIGN)?;
-    let (context_phys, context_virt) =
-        crate::dma::alloc(WARM_CONTEXT_BYTES, crate::intel::WARM_ALIGN)?;
-    let (batch_phys, batch_virt) = crate::dma::alloc(WARM_BATCH_BYTES, crate::intel::WARM_ALIGN)?;
-    let (draw_state_phys, draw_state_virt) =
-        crate::dma::alloc(WARM_DRAW_STATE_BYTES, crate::intel::WARM_ALIGN)?;
-    let (vertex_phys, vertex_virt) =
-        crate::dma::alloc(WARM_VERTEX_BYTES, crate::intel::WARM_ALIGN)?;
-    let (result_phys, result_virt) =
-        crate::dma::alloc(WARM_RESULT_BYTES, crate::intel::WARM_ALIGN)?;
-    let (streamout_phys, streamout_virt) =
-        crate::dma::alloc(WARM_STREAMOUT_BYTES, crate::intel::WARM_ALIGN)?;
+    let sizes = [
+        WARM_RING_BYTES,
+        WARM_CONTEXT_BYTES,
+        WARM_BATCH_BYTES,
+        WARM_DRAW_STATE_BYTES,
+        WARM_VERTEX_BYTES,
+        WARM_RESULT_BYTES,
+        WARM_STREAMOUT_BYTES,
+    ];
+    let mut allocations: [Option<(u64, *mut u8, usize)>; 7] = [None; 7];
+    for (index, bytes) in sizes.into_iter().enumerate() {
+        let Some((phys, virt)) = crate::dma::alloc(bytes, crate::intel::WARM_ALIGN) else {
+            for (_, allocated_virt, allocated_bytes) in
+                allocations[..index].iter().flatten().copied()
+            {
+                crate::dma::dealloc(allocated_virt, allocated_bytes);
+            }
+            return None;
+        };
+        allocations[index] = Some((phys, virt, bytes));
+    }
+    let [
+        Some((ring_phys, ring_virt, _)),
+        Some((context_phys, context_virt, _)),
+        Some((batch_phys, batch_virt, _)),
+        Some((draw_state_phys, draw_state_virt, _)),
+        Some((vertex_phys, vertex_virt, _)),
+        Some((result_phys, result_virt, _)),
+        Some((streamout_phys, streamout_virt, _)),
+    ] = allocations
+    else {
+        return None;
+    };
     for (virt, bytes) in [
         (ring_virt, WARM_RING_BYTES),
         (context_virt, WARM_CONTEXT_BYTES),
@@ -432,6 +453,20 @@ pub(crate) fn allocate_picasso_warm_state_for_boot(
         gpgpu_arena_virt: core::ptr::null_mut(),
         gpgpu_arena_len: 0,
     })
+}
+
+fn deallocate_unmapped_picasso_warm_state(warm: RenderWarmState) {
+    for (virt, bytes) in [
+        (warm.ring_virt, warm.ring_len),
+        (warm.context_virt, warm.context_len),
+        (warm.batch_virt, warm.batch_len),
+        (warm.draw_state_virt, warm.draw_state_len),
+        (warm.vertex_virt, warm.vertex_len),
+        (warm.result_virt, warm.result_len),
+        (warm.streamout_virt, warm.streamout_len),
+    ] {
+        crate::dma::dealloc(virt, bytes);
+    }
 }
 
 fn render_ppgtt_pml4_phys() -> u64 {

@@ -1065,9 +1065,9 @@ enum OverlayAlphaMode {
 const UI4_RGBA8_OVERLAY_CONTRACT: OverlayAlphaMode = OverlayAlphaMode::PremultipliedRgba;
 /// Slot0 is an application plane, not an opaque framebuffer. Its composition
 /// starts transparent and remains native premultiplied RGBA through scanout.
-/// Setting either UI4 compositor XRGB flag would inject an opaque base or drop
-/// the destination alpha (and swizzle its channels).
-const UI4_PRIMARY_COMPOSITION_FLAGS: u32 = crate::intel::gpgpu::UI4_COMPOSE_FLAG_OPAQUE_RECTS;
+/// Setting an XRGB flag would inject an opaque base or drop destination alpha;
+/// selecting opaque rectangles would skip source-over inside the Slot0 stack.
+const UI4_PRIMARY_COMPOSITION_FLAGS: u32 = 0;
 
 /// Give the firmware-compatible XRGB boot phase deterministic pixels. UI4
 /// discards this boot content when Slot0 becomes its transparent RGBA slice.
@@ -3304,7 +3304,7 @@ pub(crate) fn activate_ui4_application_rgba_planes() -> bool {
     let ready =
         plane_ready && prepare_ui4_primary_swap_surfaces(dev, pipe, primary.width, primary.height);
     crate::log_info!(target: "ui4";
-        "ui4/application-plane-stack slot0=rgba8-transparent/preallocated-double/gpu-opaque-rect-overwrite pipe_bottom=visible-where-slot0-alpha-zero slots=1-3=rgba8-direct-or-composed slot4=interaction-only ready={} pipe={}\n",
+        "ui4/application-plane-stack slot0=rgba8-transparent/preallocated-double/gpu-premultiplied-src-over pipe_bottom=visible-where-slot0-alpha-zero slots=1-3=rgba8-direct-or-composed slot4=interaction-only ready={} pipe={}\n",
         ready as u8,
         pipe.name,
     );
@@ -4926,6 +4926,7 @@ static UI4_DIRECT_SCANOUT_LOG_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static UI4_DIRECT_PLANE_ALPHA_LOGGED: AtomicBool = AtomicBool::new(false);
 static UI4_DIRECT_PLANE_SCALER_LOGGED: AtomicBool = AtomicBool::new(false);
 static UI4_EMPTY_OVERLAY_CPU_PARK_LOGGED: AtomicBool = AtomicBool::new(false);
+static UI4_PRIMARY_STACK_PROOF_LOGGED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Copy, Clone)]
 struct Ui4DirectScanoutProof {
@@ -5946,6 +5947,22 @@ pub(crate) fn commit_ui4_composition_flip(composition: Ui4AsyncComposition) {
     let elapsed_us =
         crate::chronos::monotonic_nanos().saturating_sub(composition.queued_ns) / 1_000;
     let effective_bounds = composition.effective.bounding_rect().unwrap_or_default();
+    if matches!(composition.target, Ui4AsyncCompositionTarget::Primary { .. })
+        && matches!(composition.work, Some(Ui4AsyncCompositionWork::GucRcs(_)))
+        && composition.tile_count != 0
+        && !UI4_PRIMARY_STACK_PROOF_LOGGED.swap(true, Ordering::AcqRel)
+    {
+        crate::log_important!(target: "ui4";
+            "ui4/slot0-composition-proof accepted=1 backend=guc-rcs pixel_op=premultiplied-src-over tiles={} effective_rects={} effective_bounds={}x{}@{},{} guc_retired=1 primary_surflive=1 boundary=slot0-guc-retired-and-primary-surflive elapsed_us={} log=once\n",
+            composition.tile_count,
+            composition.effective.len(),
+            effective_bounds.width,
+            effective_bounds.height,
+            effective_bounds.x,
+            effective_bounds.y,
+            elapsed_us,
+        );
+    }
     if let Ui4AsyncCompositionTarget::DirectOverlay { surface } = composition.target {
         if let Some(proof) = UI4_DIRECT_SCANOUT_PROOFS.lock().get_mut(surface.plane_slot) {
             *proof = Ui4DirectScanoutProof {
@@ -6037,8 +6054,9 @@ fn compose_premultiplied_rgba_tiles_into_primary_gpgpu(
     asynchronous: bool,
     _sparse_static_painter: bool,
 ) -> GpgpuCompositionResult {
-    // Slot0 has exactly one legal compositor: the asynchronous layer kernel
-    // in opaque-rectangle mode. Do not revive the old sprite source-over path.
+    // Slot0 has exactly one legal compositor: the asynchronous layer kernel.
+    // It builds a transparent premultiplied-RGBA stack in broker-z order; the
+    // display plane then source-over blends that result with Pipe A.
     if !asynchronous || surface.byte_len as u64 > COMPOSE_RCS_GPU_ALIAS_BYTES {
         return GpgpuCompositionResult::Unavailable;
     }
@@ -6078,9 +6096,8 @@ fn compose_premultiplied_rgba_tiles_into_primary_gpgpu(
         return GpgpuCompositionResult::Unavailable;
     }
 
-    // The async Slot0 kernel owns one output pixel at a time.  In its opaque
-    // rectangle mode it walks the z descriptors from top to bottom, copies
-    // the first covering frame pixel, and never source-over blends frames.
+    // The async Slot0 kernel owns one output pixel at a time and source-over
+    // blends the z-ordered descriptors into a transparent RGBA destination.
     if asynchronous {
         let Some(bounds) = damage
             .bounding_rect()
@@ -7531,7 +7548,8 @@ mod direct_plane_scaler_tests {
         assert_eq!(
             UI4_PRIMARY_COMPOSITION_FLAGS
                 & (crate::intel::gpgpu::UI4_COMPOSE_FLAG_BASE_XRGB
-                    | crate::intel::gpgpu::UI4_COMPOSE_FLAG_DEST_XRGB),
+                    | crate::intel::gpgpu::UI4_COMPOSE_FLAG_DEST_XRGB
+                    | crate::intel::gpgpu::UI4_COMPOSE_FLAG_OPAQUE_RECTS),
             0
         );
 

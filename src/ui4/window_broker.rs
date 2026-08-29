@@ -26,10 +26,12 @@ const MAX_SESSIONS: usize = 64;
 /// eligible for direct scanout. Plane 0 is the stack, where every frame which
 /// holds no lease presents together through one ordered painter submission.
 ///
-/// A frame claims the lowest free lease plane when it is created, and a
-/// stacked frame may claim one by going hot. No admission ever fails: a frame
-/// which wins no lease is still presented, composed, and movable. This is the
-/// whole plane policy - it does not consult content, cadence or buffering.
+/// Create/close rebalancing gives the highest three frames in broker-z order
+/// the lease planes, preserving that base order in the display engine; every
+/// lower frame shares Slot0. Focus/hot interaction may then promote a stacked
+/// frame and demote a lease holder. No admission ever fails: a frame which wins
+/// no lease is still presented, composed, and movable. This policy does not
+/// consult content, cadence or buffering.
 pub(super) const STACK_PLANE_SLOT: usize = super::PRIMARY_PLANE_SLOT;
 const FIRST_LEASE_PLANE_SLOT: usize = STACK_PLANE_SLOT + 1;
 pub(super) const LEASE_PLANE_COUNT: usize =
@@ -61,6 +63,7 @@ impl WindowOwner {
     pub(crate) const GPGPU_PREVIEW: Self = Self::KernelApp(5);
     pub(crate) const COLOR_PICKER_SERVICE: Self = Self::KernelApp(6);
     pub(crate) const SVG_OUTLINE_PROBE: Self = Self::KernelApp(7);
+    pub(crate) const START_BUTTON_SERVICE: Self = Self::KernelApp(8);
 
     /// Stable, allocation-free producer name for diagnostics. The enum still
     /// carries the application or VM instance where the name is shared.
@@ -72,6 +75,7 @@ impl WindowOwner {
             Self::GPGPU_PREVIEW => "gpgpu-preview",
             Self::COLOR_PICKER_SERVICE => "color-picker-service",
             Self::SVG_OUTLINE_PROBE => "svg-outline-probe",
+            Self::START_BUTTON_SERVICE => "start-button-service",
             Self::KernelApp(_) => "kernel-app",
             Self::Vm(_) => "blueprint-vm",
         }
@@ -451,6 +455,11 @@ struct WindowRecord {
     state: WindowState,
     revision: u64,
     publish_serial: u64,
+    /// Recent exact publish serials observed only after the compositor's
+    /// batched SURFLIVE boundary. This stays separate from damage ACK because
+    /// a producer may publish again while an older transaction is pending.
+    presented_serials: [u64; 8],
+    presented_serial_cursor: u8,
     first_presentation_emitted: bool,
     first_presentation_taken: bool,
     damage: Option<DamageRegion>,
@@ -647,10 +656,11 @@ impl WindowBroker {
         window.revision = next_serial(window.revision);
     }
 
-    /// Give the visible application windows their deterministic base layout:
-    /// one window starts on opaque Slot0, then the next three occupy slots
-    /// 1-3.  Once there are more than four, the bottom windows share Slot0 in
-    /// broker-z order and the newest three retain the hardware planes.
+    /// Give the visible application windows their deterministic base layout.
+    /// Up to three windows occupy Slots1-3. Once that capacity is exceeded,
+    /// the bottom windows share Slot0 in broker-z order and the highest three
+    /// retain the hardware planes. Since hardware planes blend in ascending
+    /// slot order, this keeps physical and broker z-order consistent.
     fn rebalance_application_planes(&mut self, output: OutputId, now_ms: u64) {
         let mut ordered: Vec<(WindowId, i32, usize)> = self
             .windows
@@ -670,12 +680,13 @@ impl WindowBroker {
             })
             .collect();
         ordered.sort_unstable_by_key(|(id, z, _)| (*z, *id));
+        let stack_count = ordered.len().saturating_sub(LEASE_PLANE_COUNT);
         self.leases = [None; LEASE_PLANE_COUNT];
         for (rank, (id, _, slot)) in ordered.into_iter().enumerate() {
-            let plane = if rank < LEASE_PLANE_COUNT {
-                Self::lease_plane(rank)
-            } else {
+            let plane = if rank < stack_count {
                 WindowPlane::Primary
+            } else {
+                Self::lease_plane(rank - stack_count)
             };
             let window = &mut self.windows[slot];
             if window.plane != plane {
@@ -845,11 +856,12 @@ impl WindowBroker {
 
     /// Choose the presentation plane for one window.
     ///
-    /// Slot 4 keeps its exclusive interaction contract. Every other window
-    /// takes a lease plane when one is free or revocable, and otherwise joins
-    /// the stack on slot 0. This path has no capacity failure by design: a
-    /// frame which wins no lease is still presented, composed and movable.
-    /// Content, cadence and buffering are deliberately not consulted.
+    /// Slot 4 keeps its trusted-small-control contract. Only named kernel UI
+    /// owners may enter it, and each may own one live interaction window. A
+    /// Blueprint can therefore never promote a full application frame onto
+    /// the software-cursor plane. Every other window joins the ordinary slot-0
+    /// application stack. Content, cadence and buffering are deliberately not
+    /// consulted for that stack.
     fn assign_plane(
         &mut self,
         requested: WindowPlane,
@@ -859,13 +871,17 @@ impl WindowBroker {
     ) -> Result<WindowPlane, WindowBrokerError> {
         let (id_slot, _) = unpack_handle(id.0)?;
         if requested == WindowPlane::Interaction {
-            if owner != WindowOwner::COLOR_PICKER_SERVICE {
+            if !matches!(
+                owner,
+                WindowOwner::COLOR_PICKER_SERVICE | WindowOwner::START_BUTTON_SERVICE
+            ) {
                 return Err(WindowBrokerError::InvalidPlane);
             }
             if self.windows.iter().enumerate().any(|(slot, window)| {
                 slot != id_slot
                     && window.state != WindowState::Closed
                     && window.plane == WindowPlane::Interaction
+                    && window.owner == owner
             }) {
                 return Err(WindowBrokerError::Capacity);
             }
@@ -1366,6 +1382,8 @@ impl WindowRecord {
             state: WindowState::Pending,
             revision: 1,
             publish_serial: 0,
+            presented_serials: [0; 8],
+            presented_serial_cursor: 0,
             first_presentation_emitted: false,
             first_presentation_taken: false,
             damage: None,
@@ -1435,6 +1453,22 @@ pub(crate) fn latest_window_broker_snapshot() -> WindowBrokerSnapshot {
 /// generation-safe Closed registry slots are excluded.
 pub(super) fn live_resource_counts() -> (usize, usize) {
     WINDOW_BROKER.lock().live_resource_counts()
+}
+
+/// Count every non-closed window which can consume application compositor
+/// slots 0..3 on one output. Pending and hidden windows still count; slot-4
+/// interaction-service windows deliberately do not.
+pub(crate) fn live_application_window_count(output: OutputId) -> usize {
+    WINDOW_BROKER
+        .lock()
+        .windows
+        .iter()
+        .filter(|window| {
+            window.state != WindowState::Closed
+                && window.output == output
+                && window.plane.is_application()
+        })
+        .count()
 }
 
 /// Optionally subscribe to future diagnostic publications.
@@ -1925,9 +1959,8 @@ pub(crate) fn move_window(
 /// Return the broker geometry represented by a maximize preview or commit.
 ///
 /// Fixed-size producers preserve their exact pixel extent and are centered on
-/// the output. Resize-capable producers receive full-output geometry; until
-/// their replacement frame arrives, the compositor centers the previous
-/// allocation at 1:1 inside that geometry.
+/// the output. Resize-capable producers receive full-output geometry and a
+/// final resize event for that extent.
 pub(super) fn maximized_window_placement(
     interaction: WindowInteraction,
     previous: WindowPlacement,
@@ -1960,23 +1993,20 @@ const fn producer_resize_required(
         && (previous.width != placement.width || previous.height != placement.height)
 }
 
-/// Toggle one broker window between its saved geometry and its generic
-/// maximize geometry. Gesture recognition stays in the input broker; this
-/// function owns the atomic placement/restore transition and emits resize
-/// callbacks only for producers which explicitly support frame replacement.
-pub(crate) fn toggle_window_maximized(
-    owner: WindowOwner,
-    id: WindowId,
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct WindowMaximizeToggle {
+    transition: WindowPlacementTransition,
+    changed: bool,
+    notify_resize: bool,
+}
+
+fn toggle_window_maximized_record(
+    window: &mut WindowRecord,
     output_width: u32,
     output_height: u32,
     restore_placement: Option<WindowPlacement>,
     restore_center: Option<(u32, u32)>,
-) -> Result<WindowPlacementTransition, WindowBrokerError> {
-    if output_width == 0 || output_height == 0 {
-        return Err(WindowBrokerError::EmptyExtent);
-    }
-    let mut broker = WINDOW_BROKER.lock();
-    let window = broker.checked_window_mut(owner, id)?;
+) -> Result<WindowMaximizeToggle, WindowBrokerError> {
     if !window.interaction.maximizable {
         return Err(WindowBrokerError::InteractionDenied);
     }
@@ -2005,37 +2035,69 @@ pub(crate) fn toggle_window_maximized(
     if changed {
         window.placement = placement;
         window.placement_transition = None;
-        window.replacement_presentation = (!maximized
-            && window.interaction.resize_on_maximize
-            && producer_resize_required(window.interaction, previous, placement))
-        .then_some(previous);
+        // Resize notification is advisory. A producer may defer or ignore it,
+        // so restore must immediately expose the saved placement rather than
+        // pinning the old maximized presentation for a replacement publish.
+        window.replacement_presentation = None;
         window.damage = Some(DamageRegion::FULL);
         window.revision = next_serial(window.revision);
     }
-    let notify_resize = window.interaction.resize_on_maximize
-        && producer_resize_required(window.interaction, previous, placement);
-    if changed {
+    Ok(WindowMaximizeToggle {
+        transition: WindowPlacementTransition {
+            previous,
+            placement,
+            maximized,
+        },
+        changed,
+        notify_resize: window.interaction.resize_on_maximize
+            && producer_resize_required(window.interaction, previous, placement),
+    })
+}
+
+/// Toggle one broker window between its saved geometry and its generic
+/// maximize geometry. Gesture recognition stays in the input broker; this
+/// function owns the atomic placement/restore transition and emits resize
+/// callbacks only for producers which explicitly support frame replacement.
+pub(crate) fn toggle_window_maximized(
+    owner: WindowOwner,
+    id: WindowId,
+    output_width: u32,
+    output_height: u32,
+    restore_placement: Option<WindowPlacement>,
+    restore_center: Option<(u32, u32)>,
+) -> Result<WindowPlacementTransition, WindowBrokerError> {
+    if output_width == 0 || output_height == 0 {
+        return Err(WindowBrokerError::EmptyExtent);
+    }
+    let mut broker = WINDOW_BROKER.lock();
+    let toggle = {
+        let window = broker.checked_window_mut(owner, id)?;
+        toggle_window_maximized_record(
+            window,
+            output_width,
+            output_height,
+            restore_placement,
+            restore_center,
+        )?
+    };
+    if toggle.changed {
         broker.mark_composition_changed();
     }
     drop(broker);
-    if notify_resize {
+    if toggle.notify_resize {
         super::input_broker::enqueue_window_resize(
             owner,
             id,
-            previous.width,
-            previous.height,
-            placement.width,
-            placement.height,
+            toggle.transition.previous.width,
+            toggle.transition.previous.height,
+            toggle.transition.placement.width,
+            toggle.transition.placement.height,
         );
     }
-    if changed {
+    if toggle.changed {
         super::cursor_frame_inout::selection_strip_stack_changed();
     }
-    Ok(WindowPlacementTransition {
-        previous,
-        placement,
-        maximized,
-    })
+    Ok(toggle.transition)
 }
 
 fn center_restored_window_on_cursor(
@@ -2349,6 +2411,26 @@ pub(super) fn window_snapshot(owner: WindowOwner, id: WindowId) -> Option<Window
     window.snapshot(slot)
 }
 
+/// Whether this exact publication crossed the real display SURFLIVE boundary.
+/// Eight entries comfortably cover the live history of a double-buffered
+/// producer while keeping the broker record fixed-size.
+pub(crate) fn window_frame_was_presented(
+    owner: WindowOwner,
+    id: WindowId,
+    publish_serial: u64,
+) -> bool {
+    let Ok((slot, generation)) = unpack_handle(id.0) else {
+        return false;
+    };
+    let broker = WINDOW_BROKER.lock();
+    broker.windows.get(slot).is_some_and(|window| {
+        window.generation == generation
+            && window.owner == owner
+            && publish_serial != 0
+            && window.presented_serials.contains(&publish_serial)
+    })
+}
+
 /// Clear only the damage represented by a successfully composed snapshot.
 /// If the producer published again meanwhile, the serial differs and its new
 /// damage remains pending.
@@ -2383,17 +2465,24 @@ fn acknowledge_window_frame_inner(
             };
             if window.generation != generation
                 || !matches!(window.state, WindowState::Ready | WindowState::Closing)
-                || window.first_presentation_emitted
             {
                 None
             } else {
+                let index =
+                    usize::from(window.presented_serial_cursor) % window.presented_serials.len();
+                window.presented_serials[index] = publish_serial;
+                window.presented_serial_cursor = window.presented_serial_cursor.wrapping_add(1);
                 // This operation is called only after the compositor's plane
                 // batch reports SURFLIVE. Mark the window even when a faster
                 // producer has already advanced `publish_serial`: the older
                 // frame was still physically presented and its newer damage
                 // must simply remain pending.
-                window.first_presentation_emitted = true;
-                window.snapshot(slot)
+                if window.first_presentation_emitted {
+                    None
+                } else {
+                    window.first_presentation_emitted = true;
+                    window.snapshot(slot)
+                }
             }
         };
         let acknowledged = if let Some(revision) = required_revision {
@@ -2828,6 +2917,39 @@ mod tests {
     }
 
     #[test]
+    fn restoring_an_application_window_does_not_wait_for_a_replacement_publish() {
+        let owner = WindowOwner::GPGPU_PREVIEW;
+        let mut broker = WindowBroker::new();
+        let session = broker.begin_additional_session(owner).unwrap();
+        let id = broker
+            .create(test_window(owner, session, 1, 0, 0, true), FrameBuffering::Double, 0)
+            .unwrap();
+        let (slot, _) = unpack_handle(id.raw()).unwrap();
+        let saved = broker.windows[slot].placement;
+        broker.windows[slot].interaction = WindowInteraction::APPLICATION;
+
+        let maximized =
+            toggle_window_maximized_record(&mut broker.windows[slot], 2_560, 1_440, None, None)
+                .unwrap();
+        assert!(maximized.transition.maximized);
+        assert_eq!(broker.windows[slot].placement.width, 2_560);
+
+        let restored =
+            toggle_window_maximized_record(&mut broker.windows[slot], 2_560, 1_440, None, None)
+                .unwrap();
+        assert!(!restored.transition.maximized);
+        assert!(restored.notify_resize);
+        assert_eq!(broker.windows[slot].placement, saved);
+        assert_eq!(
+            broker.windows[slot]
+                .snapshot(slot)
+                .unwrap()
+                .presentation_placement,
+            saved
+        );
+    }
+
+    #[test]
     fn live_resource_counts_include_pending_windows_and_active_empty_sessions() {
         let owner = WindowOwner::GPGPU_PREVIEW;
         let mut broker = WindowBroker::new();
@@ -2908,14 +3030,14 @@ mod tests {
     }
 
     #[test]
-    fn windows_fill_the_lease_planes_then_join_the_stack_without_failing() {
+    fn lowest_windows_join_the_stack_while_highest_three_keep_z_order() {
         let owner = WindowOwner::GRIDPAPER_SERVICE;
         let mut broker = WindowBroker::new();
         let mut windows = Vec::new();
 
         for frame in 1..=(LEASE_PLANE_COUNT as u64 + 2) {
             let session = broker.begin_additional_session(owner).unwrap();
-            let request = test_window(owner, session, frame, 0, frame as i32, true);
+            let request = test_window(owner, session, frame, 0, 40, true);
             windows.push(
                 broker
                     .create(request, FrameBuffering::Triple, 0)
@@ -2927,8 +3049,9 @@ mod tests {
             .iter()
             .map(|window| plane_slot_of(&broker, *window))
             .collect::<Vec<_>>();
-        // The first three win planes 1-3; every later frame joins the stack.
-        assert_eq!(assigned, Vec::from([1, 2, 3, STACK_PLANE_SLOT, STACK_PLANE_SLOT]));
+        // Slot0 is physically below Slots1-3, so the lowest frames share it
+        // and the highest three retain monotonically ordered hardware planes.
+        assert_eq!(assigned, Vec::from([STACK_PLANE_SLOT, STACK_PLANE_SLOT, 1, 2, 3]));
     }
 
     #[test]
@@ -2949,10 +3072,12 @@ mod tests {
         // Every lease is still inside its grace period, so the stacked frame
         // stays on the stack rather than displacing a live winner.
         let session = broker.begin_additional_session(owner).unwrap();
-        let stacked = broker
+        let newest = broker
             .create(test_window(owner, session, 9, 0, 9, true), FrameBuffering::Triple, 1_000)
             .unwrap();
+        let stacked = held[0];
         assert_eq!(plane_slot_of(&broker, stacked), STACK_PLANE_SLOT);
+        assert_eq!(plane_slot_of(&broker, newest), FIRST_LEASE_PLANE_SLOT + 2);
         assert!(
             broker
                 .claim_lease(stacked, 1_000 + LEASE_IDLE_GRACE_MS - 1)
@@ -2965,7 +3090,7 @@ mod tests {
             .claim_lease(stacked, 1_000 + LEASE_IDLE_GRACE_MS)
             .expect("an expired lease is revocable");
         assert_eq!(plane.slot(), FIRST_LEASE_PLANE_SLOT);
-        assert_eq!(plane_slot_of(&broker, held[0]), STACK_PLANE_SLOT);
+        assert_eq!(plane_slot_of(&broker, held[1]), STACK_PLANE_SLOT);
     }
 
     #[test]
@@ -3018,7 +3143,7 @@ mod tests {
     }
 
     #[test]
-    fn color_picker_interaction_plane_is_fixed_and_never_falls_back() {
+    fn trusted_small_controls_share_interaction_plane_without_blueprint_admission() {
         let mut broker = WindowBroker::new();
         for frame in 1..=LEASE_PLANE_COUNT as u64 {
             let owner = WindowOwner::GPGPU_PREVIEW;
@@ -3050,12 +3175,31 @@ mod tests {
             .expect("replacement remains on the fixed interaction plane");
         assert_eq!(broker.windows[slot].plane, WindowPlane::Interaction);
 
+        let start_owner = WindowOwner::START_BUTTON_SERVICE;
+        let start_session = broker.begin_additional_session(start_owner).unwrap();
+        let mut start = test_window(start_owner, start_session, 12, 0, i32::MAX, true);
+        start.plane = WindowPlane::Interaction;
+        let start = broker
+            .create(start, FrameBuffering::Double, 0)
+            .expect("trusted start button shares slot 4 with the color picker");
+        let (start_slot, _) = unpack_handle(start.raw()).unwrap();
+        assert_eq!(broker.windows[start_slot].plane, WindowPlane::Interaction);
+
         let second_session = broker.begin_additional_session(owner).unwrap();
-        let mut second = test_window(owner, second_session, 12, 0, 101, true);
+        let mut second = test_window(owner, second_session, 13, 0, 101, true);
         second.plane = WindowPlane::Interaction;
         assert_eq!(
             broker.create(second, FrameBuffering::Double, 0),
             Err(WindowBrokerError::Capacity)
+        );
+
+        let blueprint_owner = WindowOwner::Vm(1);
+        let blueprint_session = broker.begin_additional_session(blueprint_owner).unwrap();
+        let mut blueprint = test_window(blueprint_owner, blueprint_session, 14, 0, 102, true);
+        blueprint.plane = WindowPlane::Interaction;
+        assert_eq!(
+            broker.create(blueprint, FrameBuffering::Double, 0),
+            Err(WindowBrokerError::InvalidPlane)
         );
     }
 

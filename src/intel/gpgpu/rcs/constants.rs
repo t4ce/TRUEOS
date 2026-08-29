@@ -30,6 +30,7 @@ const HELIO_RETAINED_TRANSFORM_ADLS_GPU: u64 = 0x0DB0_0000;
 const SHADERTOY_MANDELBROT_ADLS_GPU: u64 = 0x0DC0_0000;
 const SHADERTOY_CUBE_FIELD_ADLS_GPU: u64 = 0x0DD0_0000;
 const SHADERTOY_NGUYEN_ADLS_GPU: u64 = 0x0DE0_0000;
+const SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_GPU: u64 = 0x0DF0_0000;
 const _: () = {
     assert!(
         SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_GPU + SPIRIT_VFX_BACKGROUND_RGBA8_ADLS_BIN.len() as u64
@@ -85,7 +86,12 @@ const _: () = {
     );
     assert!(
         SHADERTOY_NGUYEN_ADLS_GPU + ((SHADERTOY_NGUYEN_ADLS_BIN.len() as u64 + 4095) & !4095)
-            <= LFM25_Q8_MODEL_MAPPING_GPU_BASE
+            <= SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_GPU
+    );
+    assert!(
+        SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_GPU
+            + ((SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_BIN.len() as u64 + 4095) & !4095)
+            <= DIRECT_RCS_GPU_VA_FONT_COVERAGE_SECONDARY_BASE
     );
 };
 pub(crate) const COPY_RECT_RGBA8_TEXT_OFFSET_BYTES: u64 =
@@ -134,6 +140,8 @@ const LFM25_Q8_PROJECT_PACKED_TEXT_OFFSET_BYTES: u64 =
     LFM25_Q8_PROJECT_PACKED_ADLS_CPP_ABI_CONTRACT.entry_offset;
 const KOKORO_QGEMM_U8_I8_TEXT_OFFSET_BYTES: u64 =
     KOKORO_QGEMM_U8_I8_ADLS_CPP_ABI_CONTRACT.entry_offset;
+const SUBSET_SUM_COLLAPSE5_MERGE10_TEXT_OFFSET_BYTES: u64 =
+    SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_CPP_ABI_CONTRACT.entry_offset;
 const KOKORO_CONV1D_U8_U8_TEXT_OFFSET_BYTES: u64 =
     KOKORO_CONV1D_U8_U8_ADLS_CPP_ABI_CONTRACT.entry_offset;
 const LAB256_STEP_TEXT_OFFSET_BYTES: u64 = LAB256_STEP_ADLS_CPP_ABI_CONTRACT.entry_offset;
@@ -948,6 +956,68 @@ const _: () = {
     );
 };
 
+// The boot subset-sum probe owns two pages in the ordinary direct-RCS PPGTT.
+// Its state and three payloads live in the shared batch allocation only while
+// DIRECT_RCS_SUBMIT_LOCK is held; no scanout/GGTT/display address is involved.
+const SUBSET_SUM_PROBE_ARENA_GPU: u64 = 0x090C_0000;
+const SUBSET_SUM_PROBE_ARENA_ALLOC_BYTES: usize = SUBSET_SUM_PROBE_ARENA_PAGES * 4096;
+const SUBSET_SUM_PROBE_IDD_OFFSET_BYTES: usize = 0x7800;
+const SUBSET_SUM_PROBE_BINDING_TABLE_OFFSET_BYTES: usize = 0x7840;
+const SUBSET_SUM_PROBE_SURFACE_OFFSET_BYTES: usize = 0x7880;
+const SUBSET_SUM_PROBE_PAYLOAD_BASE_OFFSET_BYTES: usize = 0x7C00;
+const SUBSET_SUM_PROBE_PAYLOAD_STRIDE_BYTES: usize = 0x100;
+const SUBSET_SUM_PROBE_IDD_BYTES: usize = 8 * core::mem::size_of::<u32>();
+const SUBSET_SUM_PROBE_CROSS_THREAD_BYTES: usize =
+    SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_CPP_ABI_CONTRACT.cross_thread_data_bytes as usize;
+const SUBSET_SUM_PROBE_PER_THREAD_BYTES: usize =
+    SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_CPP_ABI_CONTRACT.per_thread_data_bytes as usize;
+const SUBSET_SUM_PROBE_INDIRECT_BYTES: usize =
+    SUBSET_SUM_PROBE_CROSS_THREAD_BYTES + SUBSET_SUM_PROBE_PER_THREAD_BYTES;
+const SUBSET_SUM_PROBE_POST_MARKER_SLOT: usize = 62;
+const SUBSET_SUM_PROBE_PRE_MARKER_SLOT: usize = 64;
+const SUBSET_SUM_PROBE_POST_MARKER: u32 = 0xC0DE_5A02;
+const SUBSET_SUM_PROBE_PRE_MARKER: u32 = 0xC0DE_5A01;
+const SUBSET_SUM_PROBE_COMPLETION_TIMEOUT_MS: u64 = 1_000;
+
+const _: () = {
+    let contract = SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_CPP_ABI_CONTRACT;
+    assert!(contract.simd_width == 16);
+    assert!(contract.bindings.len() == 1);
+    assert!(SUBSET_SUM_PROBE_CROSS_THREAD_BYTES == 96);
+    assert!(SUBSET_SUM_PROBE_PER_THREAD_BYTES == 96);
+    assert!(SUBSET_SUM_PROBE_ARENA_GPU.is_multiple_of(4096));
+    assert!(SUBSET_SUM_PROBE_ARENA_ALLOC_BYTES == 2 * 4096);
+    assert!(
+        SUBSET_SUM_PROBE_ARENA_GPU + SUBSET_SUM_PROBE_ARENA_ALLOC_BYTES as u64
+            <= DIRECT_RCS_GPU_VA_FONT_COVERAGE_BASE
+    );
+    assert!(
+        SUBSET_SUM_PROBE_IDD_OFFSET_BYTES + SUBSET_SUM_PROBE_IDD_BYTES
+            <= SUBSET_SUM_PROBE_BINDING_TABLE_OFFSET_BYTES
+    );
+    assert!(
+        SUBSET_SUM_PROBE_SURFACE_OFFSET_BYTES
+            + COPY_RECT_SURFACE_STATE_DWORDS * core::mem::size_of::<u32>()
+            <= SUBSET_SUM_PROBE_PAYLOAD_BASE_OFFSET_BYTES
+    );
+    assert!(SUBSET_SUM_PROBE_PAYLOAD_STRIDE_BYTES >= SUBSET_SUM_PROBE_INDIRECT_BYTES);
+    assert!(
+        SUBSET_SUM_PROBE_PAYLOAD_BASE_OFFSET_BYTES
+            + 3 * SUBSET_SUM_PROBE_PAYLOAD_STRIDE_BYTES
+            <= DIRECT_RCS_BATCH_BYTES
+    );
+    assert!(
+        SUBSET_SUM_PROBE_PAYLOAD_BASE_OFFSET_BYTES
+            .is_multiple_of(GPGPU_WALKER_INDIRECT_ALIGNMENT_BYTES)
+    );
+    assert!(SUBSET_SUM_PROBE_POST_MARKER_SLOT.is_multiple_of(2));
+    assert!(SUBSET_SUM_PROBE_POST_MARKER_SLOT + 1 != SUBSET_SUM_PROBE_PRE_MARKER_SLOT);
+    assert!(
+        (SUBSET_SUM_PROBE_PRE_MARKER_SLOT + 1) * core::mem::size_of::<u32>()
+            <= DIRECT_RCS_RESULT_BYTES
+    );
+};
+
 // A UI4 compute producer may be queued behind the compositor on RCS0. In
 // particular, the first use of each primary swap buffer seeds and composes a
 // full scanout-sized surface, which is deliberately allowed to take much
@@ -1482,6 +1552,11 @@ const UI4_COMPOSITOR_RCS_GPU_VA_BATCH_BASE: u64 = 0x01E0_0000;
 // window. The ring and HWLRCA stay shared so both tails target one persistent
 // GuC context instead of repeatedly draining a one-job software lane.
 pub(crate) const UI4_COMPOSITOR_RCS_JOB_SLOTS: usize = 2;
+/// First GGTT address not owned by the fixed UI4 compositor control/batch
+/// lane. Keep consumers tied to the actual slot count and batch allocation
+/// instead of copying the current numeric end of the window.
+pub(crate) const UI4_COMPOSITOR_RCS_GGTT_LIMIT: u64 = UI4_COMPOSITOR_RCS_GPU_VA_BATCH_BASE
+    + (UI4_COMPOSITOR_RCS_JOB_SLOTS * DIRECT_RCS_BATCH_BYTES) as u64;
 // The decoder's `gpu_addr` belongs to the media-engine address space. Never
 // borrow that number as an RCS PPGTT VA. Each queued video conversion owns one
 // compositor-private PAT0 alias until its GuC completion marker retires, so a

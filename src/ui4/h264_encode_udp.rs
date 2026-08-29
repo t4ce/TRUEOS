@@ -559,7 +559,7 @@ where
 }
 
 #[trueos_executor::task(pool_size = 1)]
-pub(crate) async fn ui4_h264_encode_udp_egress_task(assigned_slot: u32) {
+pub(crate) async fn ui4_h264_encode_udp_egress_task() {
     let worker = crate::cpu::CpuProfile::current();
     let worker_slot = worker.map(|profile| profile.slot()).unwrap_or(u32::MAX);
     let worker_kind = worker
@@ -567,22 +567,11 @@ pub(crate) async fn ui4_h264_encode_udp_egress_task(assigned_slot: u32) {
         .unwrap_or("unknown");
     EGRESS_WORKER_SLOT.store(worker_slot, Ordering::Release);
     crate::log_info!(target: "intel/media-encode";
-        "intel/media-encode: udp-egress service online carrier=lastap assigned_slot={} worker_slot={} worker_kind={} queue_cap={} ownership=fragment+checked-send-receipts ordering=session-sequence backpressure=bounded-wait-no-drop\n",
-        assigned_slot,
+        "intel/media-encode: udp-egress service online carrier=ordinary-cooperative worker_slot={} worker_kind={} queue_cap={} ingress=one-way-bounded-au-handoff ownership=fragment+checked-send-receipts ordering=session-sequence backpressure=bounded-wait-no-drop\n",
         worker_slot,
         worker_kind,
         ENCODED_ACCESS_UNIT_QUEUE_CAP,
     );
-    if worker_slot != assigned_slot {
-        crate::log_error!(target: "intel/media-encode";
-            "intel/media-encode: udp-egress service rejected assigned_slot={} actual_slot={} reason=executor-residency-mismatch action=park\n",
-            assigned_slot,
-            worker_slot,
-        );
-        loop {
-            Timer::after(Duration::from_secs(3_600)).await;
-        }
-    }
 
     let mut transport = MediaUdpTransport::open().await;
     loop {

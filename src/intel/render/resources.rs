@@ -21,6 +21,15 @@ fn upload_triangle_shader_pipeline_at(
 ) -> Result<TriangleShaderLayout, &'static str> {
     let vs = stage_range("vs", pipeline.vs.meta.kernel, pipeline.vs.code)?;
     let ps = stage_range("ps", pipeline.ps.meta.kernel, pipeline.ps.code)?;
+    let line_gs_shader = crate::intel::shader::line_adjacency_geometry_shader();
+    let line_gs =
+        stage_range("line-adjacency-gs", line_gs_shader.meta.kernel, line_gs_shader.code)?;
+    let triangle_gs_shader = crate::intel::shader::triangle_adjacency_geometry_shader();
+    let triangle_gs = stage_range(
+        "triangle-adjacency-gs",
+        triangle_gs_shader.meta.kernel,
+        triangle_gs_shader.code,
+    )?;
     let host_simd16_pipeline = crate::intel::shader::triangle_pipeline_simd16();
     let upload_host_ps_pair =
         pipeline.ps.code.as_ptr() == crate::intel::shader::triangle_pipeline().ps.code.as_ptr();
@@ -40,6 +49,9 @@ fn upload_triangle_shader_pipeline_at(
     if pipeline.ps.meta.kernel.grf_used == 0 {
         return Err("ps-shader-grf-used-zero");
     }
+    if line_gs_shader.meta.kernel.grf_used == 0 || triangle_gs_shader.meta.kernel.grf_used == 0 {
+        return Err("gs-shader-grf-used-zero");
+    }
     if pipeline.vs.meta.max_threads == 0 {
         return Err("vs-max-threads-zero");
     }
@@ -52,10 +64,42 @@ fn upload_triangle_shader_pipeline_at(
     ) {
         return Err("shader-code-overlap");
     }
+    for gs in [line_gs, triangle_gs] {
+        if ranges_overlap(
+            vs.code_offset_bytes,
+            vs.code_size_bytes,
+            gs.code_offset_bytes,
+            gs.code_size_bytes,
+        ) || ranges_overlap(
+            ps.code_offset_bytes,
+            ps.code_size_bytes,
+            gs.code_offset_bytes,
+            gs.code_size_bytes,
+        ) {
+            return Err("shader-gs-code-overlap");
+        }
+    }
+    if ranges_overlap(
+        line_gs.code_offset_bytes,
+        line_gs.code_size_bytes,
+        triangle_gs.code_offset_bytes,
+        triangle_gs.code_size_bytes,
+    ) {
+        return Err("shader-gs-pair-code-overlap");
+    }
 
     let mut used_end = core::cmp::max(
         stage_end(vs.code_offset_bytes, vs.code_size_bytes).ok_or("shader-code-overflow")?,
         stage_end(ps.code_offset_bytes, ps.code_size_bytes).ok_or("shader-code-overflow")?,
+    );
+    used_end = core::cmp::max(
+        used_end,
+        core::cmp::max(
+            stage_end(line_gs.code_offset_bytes, line_gs.code_size_bytes)
+                .ok_or("line-gs-code-overflow")?,
+            stage_end(triangle_gs.code_offset_bytes, triangle_gs.code_size_bytes)
+                .ok_or("triangle-gs-code-overflow")?,
+        ),
     );
     if let Some(host_simd16) = host_simd16 {
         if ranges_overlap(
@@ -83,6 +127,12 @@ fn upload_triangle_shader_pipeline_at(
 
     upload_stage_code(warm.draw_state_virt, vs.code_offset_bytes, pipeline.vs.code)?;
     upload_stage_code(warm.draw_state_virt, ps.code_offset_bytes, pipeline.ps.code)?;
+    upload_stage_code(warm.draw_state_virt, line_gs.code_offset_bytes, line_gs_shader.code)?;
+    upload_stage_code(
+        warm.draw_state_virt,
+        triangle_gs.code_offset_bytes,
+        triangle_gs_shader.code,
+    )?;
     if let Some(rgba) = draw_rgba {
         specialize_uploaded_triangle_ps_color(
             warm.draw_state_virt,
@@ -123,6 +173,8 @@ fn upload_triangle_shader_pipeline_at(
 
     let vs_gpu = bo_gpu_base + vs.code_offset_bytes as u64;
     let ps_gpu = bo_gpu_base + ps.code_offset_bytes as u64;
+    let line_gs_gpu = bo_gpu_base + line_gs.code_offset_bytes as u64;
+    let triangle_gs_gpu = bo_gpu_base + triangle_gs.code_offset_bytes as u64;
 
     Ok(TriangleShaderLayout {
         vs: TriangleShaderStageLayout {
@@ -131,6 +183,20 @@ fn upload_triangle_shader_pipeline_at(
             ksp_offset_bytes: pipeline.vs.meta.kernel.ksp_offset_bytes,
             ksp_gpu_addr: vs_gpu + pipeline.vs.meta.kernel.ksp_offset_bytes as u64,
             code_size_bytes: vs.code_size_bytes as u32,
+        },
+        line_adjacency_gs: TriangleShaderStageLayout {
+            code_offset_bytes: line_gs.code_offset_bytes as u32,
+            code_gpu_addr: line_gs_gpu,
+            ksp_offset_bytes: line_gs_shader.meta.kernel.ksp_offset_bytes,
+            ksp_gpu_addr: line_gs_gpu + line_gs_shader.meta.kernel.ksp_offset_bytes as u64,
+            code_size_bytes: line_gs.code_size_bytes as u32,
+        },
+        triangle_adjacency_gs: TriangleShaderStageLayout {
+            code_offset_bytes: triangle_gs.code_offset_bytes as u32,
+            code_gpu_addr: triangle_gs_gpu,
+            ksp_offset_bytes: triangle_gs_shader.meta.kernel.ksp_offset_bytes,
+            ksp_gpu_addr: triangle_gs_gpu + triangle_gs_shader.meta.kernel.ksp_offset_bytes as u64,
+            code_size_bytes: triangle_gs.code_size_bytes as u32,
         },
         ps: TriangleShaderStageLayout {
             code_offset_bytes: ps.code_offset_bytes as u32,
@@ -511,6 +577,8 @@ fn prepare_triangle_draw_resources_for_geometry(
         indirect_args_gpu_addr: None,
         native: None,
         sampled_texture: None,
+        metallic_roughness_texture: None,
+        emissive_factor: [0.0; 3],
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
         rt_surface_format: SURFACE_FORMAT_R8G8B8A8_UNORM,
@@ -628,6 +696,8 @@ fn prepare_triangle_draw_resources_for_vertex_slice_with_state_clear(
         indirect_args_gpu_addr: None,
         native: None,
         sampled_texture: None,
+        metallic_roughness_texture: None,
+        emissive_factor: [0.0; 3],
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
         rt_surface_format: SURFACE_FORMAT_R8G8B8A8_UNORM,
@@ -712,6 +782,8 @@ fn prepare_triangle_draw_resources_for_indexed_vertex_slice(
         indirect_args_gpu_addr: None,
         native: None,
         sampled_texture: None,
+        metallic_roughness_texture: None,
+        emissive_factor: [0.0; 3],
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
         rt_surface_format: SURFACE_FORMAT_R8G8B8A8_UNORM,
@@ -792,15 +864,7 @@ pub(crate) fn create_resident_indexed_mesh(
     draw_indices: &[u32],
     topology: ResidentScenePrimitiveTopology,
 ) -> Result<ResidentTriangleMesh, &'static str> {
-    let topology_valid = match topology {
-        ResidentScenePrimitiveTopology::PointList => !draw_indices.is_empty(),
-        ResidentScenePrimitiveTopology::LineList => {
-            draw_indices.len() >= 2 && draw_indices.len().is_multiple_of(2)
-        }
-        ResidentScenePrimitiveTopology::TriangleList => {
-            draw_indices.len() >= 3 && draw_indices.len().is_multiple_of(3)
-        }
-    };
+    let topology_valid = topology.accepts_index_count(draw_indices.len());
     if !topology_valid
         || draw_vertices
             .iter()
@@ -853,15 +917,7 @@ pub(crate) fn create_picasso_resident_indexed_mesh(
     draw_indices: &[u32],
     topology: ResidentScenePrimitiveTopology,
 ) -> Result<ResidentTriangleMesh, &'static str> {
-    let topology_valid = match topology {
-        ResidentScenePrimitiveTopology::PointList => !draw_indices.is_empty(),
-        ResidentScenePrimitiveTopology::LineList => {
-            draw_indices.len() >= 2 && draw_indices.len().is_multiple_of(2)
-        }
-        ResidentScenePrimitiveTopology::TriangleList => {
-            draw_indices.len() >= 3 && draw_indices.len().is_multiple_of(3)
-        }
-    };
+    let topology_valid = topology.accepts_index_count(draw_indices.len());
     if !topology_valid
         || draw_vertices
             .iter()
@@ -1342,6 +1398,9 @@ fn picasso_retained_textured_pipeline()
     if PICASSO_RETAINED_TEXTURED_VS.len() != 648 || PICASSO_RETAINED_TEXTURED_PS.len() != 160 {
         return Err("picasso-retained-textured-stage-shape");
     }
+    let ps_offset = crate::intel::align_up(PICASSO_RETAINED_TEXTURED_VS.len(), 64)
+        .and_then(|offset| u32::try_from(offset).ok())
+        .ok_or("picasso-retained-textured-stage-layout")?;
     let pipeline = TrianglePipeline {
         // This is the authored retained-material ABI: position and UV are
         // fetched independently, transforms remain GPU-resident, and UV is
@@ -1369,7 +1428,7 @@ fn picasso_retained_textured_pipeline()
             code: churn_forward_stage_words(PICASSO_RETAINED_TEXTURED_PS)?,
             meta: TrianglePixelShaderMetadata {
                 kernel: ShaderKernelMetadata {
-                    code_offset_bytes: 704,
+                    code_offset_bytes: ps_offset,
                     code_size_bytes: 160,
                     code_alignment_bytes: 64,
                     ksp_offset_bytes: 0,
@@ -2094,6 +2153,8 @@ fn create_resident_churn_forward_with_admission(
     expanded_indices.flush();
     let native_vf = TriangleNativeDrawContract {
         hardware_admission,
+        double_sided: false,
+        front_face_clockwise: false,
         vs_storage_bindings: [
             TriangleStorageBufferBinding {
                 gpu_addr: camera.gpu_base(),
@@ -2175,6 +2236,7 @@ fn create_resident_churn_forward_with_admission(
         index_gpu_addr: geometry.gpu_base() + index_offset as u64,
         index_count: (CHURN_FORWARD_MESH_COUNT * CHURN_FORWARD_INDICES_PER_MESH) as u32,
         index_bytes: index_byte_len,
+        topology: ResidentScenePrimitiveTopology::TriangleList,
         expanded_vertex_count: expanded_vertex_count_u32,
         expanded_vertex_bytes: expanded_vertex_byte_len,
         expanded_index_count: expanded_index_count_u32,
@@ -2300,13 +2362,15 @@ pub(crate) fn update_resident_churn_forward_frame(
 /// or that pair plus Float2 base-color UV (32 bytes). `indices` is one ordinary
 /// triangle-list mesh, and all instance motion stays in GPU-owned
 /// seed/instance/indirect buffers. The sampled variant switches to the baked
-/// retained-material VS/PS and requires an opaque texture binding per frame.
+/// retained-material VS/PS and requires a base-color binding per frame.
 pub(crate) fn create_resident_picasso_retained_mesh(
     carrier: PicassoCarrierLease,
     vertices: &[u8],
     indices: &[u32],
     max_instances: usize,
     sampled_material: bool,
+    double_sided: bool,
+    topology: ResidentScenePrimitiveTopology,
 ) -> Result<ResidentChurnForward, &'static str> {
     let vertex_stride = if sampled_material {
         32usize
@@ -2315,8 +2379,7 @@ pub(crate) fn create_resident_picasso_retained_mesh(
     };
     if vertices.is_empty()
         || !vertices.len().is_multiple_of(vertex_stride)
-        || indices.len() < 3
-        || !indices.len().is_multiple_of(3)
+        || !topology.accepts_index_count(indices.len())
         || indices
             .iter()
             .any(|index| *index as usize >= vertices.len() / vertex_stride)
@@ -2334,6 +2397,11 @@ pub(crate) fn create_resident_picasso_retained_mesh(
         ChurnHardwareAdmission::ValidatedProduction,
         Some(carrier),
     )?;
+    resident.native_vf.double_sided = double_sided;
+    // glTF's CCW exterior winding reaches this retained surface as clockwise
+    // screen-space winding. Keep culling back faces, but name that winding
+    // front so the helmet shell—not its interior—survives rasterization.
+    resident.native_vf.front_face_clockwise = true;
     if sampled_material {
         resident.pipeline = picasso_retained_textured_pipeline()?;
         resident.sampled_material = true;
@@ -2353,10 +2421,9 @@ pub(crate) fn create_resident_picasso_retained_mesh(
         resident.vertex_stride = 32;
         resident.vertex_format = TriangleVertexFormat::PosNormalUv;
     }
-    // Picasso's prepared geometry is already centered and normalized into
-    // clip/NDC space. The shared native vertex shader still reads a camera
-    // matrix, so publish an explicit identity camera instead of inheriting
-    // the zeroed Churn allocation (which produces clip_position.w == 0).
+    // Install a valid fallback for bootstrap. Every retained frame replaces
+    // this with its live world-to-clip camera before the transform/draw pass;
+    // the zeroed Churn allocation would produce clip_position.w == 0.
     const CAMERA_BYTES: usize = 368;
     let mut camera_bytes = [0u8; CAMERA_BYTES];
     for matrix_offset in [0usize, 64, 128, 192, 304] {
@@ -2401,6 +2468,8 @@ pub(crate) fn create_resident_picasso_retained_mesh(
     let index_byte_len =
         u32::try_from(index_bytes).map_err(|_| "picasso-retained-geometry-size")?;
     let old_geometry = core::mem::replace(&mut resident.geometry, geometry);
+    // Picasso compacts all retained instances into one indexed-indirect draw.
+    // The seed flag's upper bits carry the group-local slot.
     resident.draw_group_count = 1;
     resident.vertex_gpu_addr = resident.geometry.gpu_base();
     resident.vertex_count = vertex_count;
@@ -2408,6 +2477,7 @@ pub(crate) fn create_resident_picasso_retained_mesh(
     resident.index_gpu_addr = resident.geometry.gpu_base() + index_offset as u64;
     resident.index_count = index_count;
     resident.index_bytes = index_byte_len;
+    resident.topology = topology;
     if !release_resident_render_buffer(&old_geometry) {
         return Err("picasso-retained-bootstrap-release");
     }
@@ -2419,10 +2489,41 @@ pub(crate) fn create_resident_picasso_retained_mesh(
 /// the CPU never writes transformed vertex positions.
 pub(crate) fn update_resident_picasso_retained_transform_seeds(
     resident: &ResidentChurnForward,
+    camera: &v::vgpu::RetainedCamera,
     seeds: &[v::vgpu::RetainedTransformSeed],
 ) -> Result<(), &'static str> {
+    const CAMERA_BYTES: usize = 368;
     const SEED_BYTES: usize = 64;
     const TEMPLATE_BYTES: usize = 24;
+
+    fn encode_camera(camera: &v::vgpu::RetainedCamera) -> Result<[u8; CAMERA_BYTES], &'static str> {
+        let fields: [&[f32]; 8] = [
+            &camera.view,
+            &camera.projection,
+            &camera.view_projection,
+            &camera.inverse_view_projection,
+            &camera.position_near,
+            &camera.forward_far,
+            &camera.jitter_frame,
+            &camera.previous_view_projection,
+        ];
+        if fields
+            .iter()
+            .flat_map(|values| values.iter())
+            .any(|value| !value.is_finite())
+        {
+            return Err("picasso-retained-camera-finite");
+        }
+        let mut bytes = [0u8; CAMERA_BYTES];
+        let mut offset = 0usize;
+        for values in fields {
+            for value in values {
+                bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+                offset += 4;
+            }
+        }
+        Ok(bytes)
+    }
 
     fn encode_seed(seed: v::vgpu::RetainedTransformSeed) -> [u8; SEED_BYTES] {
         let mut bytes = [0; SEED_BYTES];
@@ -2442,12 +2543,14 @@ pub(crate) fn update_resident_picasso_retained_transform_seeds(
         bytes
     }
 
-    fn encode_template(index_count: u32, capacity: u32) -> [u8; TEMPLATE_BYTES] {
+    fn encode_template(index_count: u32, capacity: u32, material_id: u32) -> [u8; TEMPLATE_BYTES] {
         let mut bytes = [0; TEMPLATE_BYTES];
         bytes[0..4].copy_from_slice(&index_count.to_le_bytes());
-        // first_index, base_vertex, first_instance and packed mesh/material
-        // are zero for Picasso's single retained geometry.
+        // Picasso owns one mesh (ID 0) with one independently compacted
+        // instance per material group.  The retained forward fragment shader
+        // receives this material identity as a flat input.
         bytes[16..20].copy_from_slice(&capacity.to_le_bytes());
+        bytes[20..24].copy_from_slice(&(material_id << 16).to_le_bytes());
         bytes
     }
 
@@ -2456,22 +2559,45 @@ pub(crate) fn update_resident_picasso_retained_transform_seeds(
             .retained_transform_unavailable_reason()
             .unwrap_or("picasso-retained-transform-unavailable"),
     )?;
+    let camera_bytes = encode_camera(camera)?;
     if seeds.is_empty()
         || seeds.len() > resident.max_instances
-        || seeds.iter().any(|seed| seed.draw_group != 0)
+        || seeds
+            .iter()
+            .any(|seed| seed.draw_group as usize >= resident.draw_group_count)
     {
         return Err("picasso-retained-transform-seeds");
     }
     let row_count = u32::try_from(seeds.len()).map_err(|_| "picasso-retained-transform-seeds")?;
-    let capacity = row_count;
+    let mut group_capacities = [0u32; v::vgpu::MAX_RETAINED_TRANSFORM_SEEDS];
+    for seed in seeds {
+        let group = seed.draw_group as usize;
+        let slot = seed.flags >> 16;
+        if slot != group_capacities[group] {
+            return Err("picasso-retained-transform-slots");
+        }
+        group_capacities[group] = group_capacities[group]
+            .checked_add(1)
+            .ok_or("picasso-retained-transform-capacity")?;
+    }
     let mut seed_bytes = Vec::with_capacity(seeds.len() * SEED_BYTES);
     for seed in seeds {
         seed_bytes.extend_from_slice(&encode_seed(*seed));
     }
     let mut template_bytes = Vec::with_capacity(CHURN_FORWARD_DRAW_COUNT * TEMPLATE_BYTES);
     template_bytes.resize(CHURN_FORWARD_DRAW_COUNT * TEMPLATE_BYTES, 0);
-    template_bytes[..TEMPLATE_BYTES]
-        .copy_from_slice(&encode_template(resident.index_count, capacity));
+    for (group, capacity) in group_capacities.into_iter().enumerate() {
+        let start = group * TEMPLATE_BYTES;
+        let end = start + TEMPLATE_BYTES;
+        template_bytes[start..end].copy_from_slice(&encode_template(
+            resident.index_count,
+            capacity,
+            // Keep helmet zero on material zero (the existing appearance),
+            // then preserve the retained palette's red, green, and blue
+            // material identities for helmets one through three.
+            group as u32,
+        ));
+    }
     transform.row_count.store(0, Ordering::Release);
     let dispatch = resident
         .transform_dispatch_for_rows(row_count)
@@ -2484,7 +2610,8 @@ pub(crate) fn update_resident_picasso_retained_transform_seeds(
     dispatch
         .validate()
         .map_err(|_| "picasso-retained-transform-contract")?;
-    if !transform.seeds.write_and_flush(0, &seed_bytes)
+    if !resident.camera.write_and_flush(0, &camera_bytes)
+        || !transform.seeds.write_and_flush(0, &seed_bytes)
         || !transform.draw_templates.write_and_flush(0, &template_bytes)
     {
         return Err("picasso-retained-transform-upload");
@@ -2634,14 +2761,16 @@ pub(crate) fn update_resident_churn_forward_transform_frame(
 fn prepare_resident_churn_forward_draw(
     _warm: RenderWarmState,
     resident: &ResidentChurnForward,
-    sampled_texture: Option<&ResidentSampledTexture>,
+    sampled_material: Option<ResidentRetainedMaterial<'_>>,
     group: usize,
     dst_gpu_addr: u64,
     pitch: usize,
     width: usize,
     height: usize,
 ) -> Option<TriangleDrawPrep> {
-    if group >= CHURN_FORWARD_DRAW_COUNT || resident.sampled_material != sampled_texture.is_some() {
+    if group >= CHURN_FORWARD_DRAW_COUNT || resident.sampled_material != sampled_material.is_some()
+    // This stable rung samples base color only and has no scalar uniform.
+    {
         return None;
     }
     Some(TriangleDrawPrep {
@@ -2660,13 +2789,25 @@ fn prepare_resident_churn_forward_draw(
                 + (group * trueos_helio_runtime::DrawIndexedIndirectArgs::BYTE_LEN) as u64,
         ),
         native: Some(resident.native_vf),
-        sampled_texture: sampled_texture.map(|texture| TriangleSampledTextureBinding {
-            gpu_addr: texture.storage.gpu_base(),
-            width: texture.width,
-            height: texture.height,
-            pitch: texture.pitch,
-            sampler_flags: texture.sampler_flags,
+        sampled_texture: sampled_material.map(|material| TriangleSampledTextureBinding {
+            gpu_addr: material.base_color.storage.gpu_base(),
+            width: material.base_color.width,
+            height: material.base_color.height,
+            pitch: material.base_color.pitch,
+            sampler_flags: material.base_color.sampler_flags,
         }),
+        metallic_roughness_texture: sampled_material.and_then(|material| {
+            material
+                .metallic_roughness
+                .map(|texture| TriangleSampledTextureBinding {
+                    gpu_addr: texture.storage.gpu_base(),
+                    width: texture.width,
+                    height: texture.height,
+                    pitch: texture.pitch,
+                    sampler_flags: texture.sampler_flags,
+                })
+        }),
+        emissive_factor: [0.0; 3],
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
         rt_surface_format: SURFACE_FORMAT_R8G8B8A8_UNORM,
@@ -2714,6 +2855,8 @@ fn prepare_resident_churn_expanded_draw(
         ),
         native: None,
         sampled_texture: None,
+        metallic_roughness_texture: None,
+        emissive_factor: [0.0; 3],
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
         rt_surface_format: SURFACE_FORMAT_R8G8B8A8_UNORM,
@@ -3189,6 +3332,8 @@ fn prepare_triangle_draw_resources_for_resident_font_mesh_with_state_clear(
         indirect_args_gpu_addr: None,
         native: None,
         sampled_texture: None,
+        metallic_roughness_texture: None,
+        emissive_factor: [0.0; 3],
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
         rt_surface_format: SURFACE_FORMAT_R8G8B8A8_UNORM,
@@ -3238,6 +3383,8 @@ fn prepare_triangle_draw_resources_for_vf_vue_vertex_slice(
         indirect_args_gpu_addr: None,
         native: None,
         sampled_texture: None,
+        metallic_roughness_texture: None,
+        emissive_factor: [0.0; 3],
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
         rt_surface_format: SURFACE_FORMAT_R8G8B8A8_UNORM,
@@ -3662,6 +3809,8 @@ fn prepare_vf_streamout_proof_resources(
         indirect_args_gpu_addr: None,
         native: None,
         sampled_texture: None,
+        metallic_roughness_texture: None,
+        emissive_factor: [0.0; 3],
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
         rt_surface_format: SURFACE_FORMAT_R8G8B8A8_UNORM,

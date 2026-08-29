@@ -384,10 +384,71 @@ fn broker_primitive_topology(
         v::vgpu::PRIMITIVE_TOPOLOGY_LINE_LIST => {
             Ok(crate::intel::render::ResidentScenePrimitiveTopology::LineList)
         }
+        v::vgpu::PRIMITIVE_TOPOLOGY_LINE_LIST_ADJ => {
+            Ok(crate::intel::render::ResidentScenePrimitiveTopology::LineListAdj)
+        }
+        v::vgpu::PRIMITIVE_TOPOLOGY_LINE_STRIP => {
+            Ok(crate::intel::render::ResidentScenePrimitiveTopology::LineStrip)
+        }
+        v::vgpu::PRIMITIVE_TOPOLOGY_LINE_STRIP_ADJ => {
+            Ok(crate::intel::render::ResidentScenePrimitiveTopology::LineStripAdj)
+        }
         v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_LIST => {
             Ok(crate::intel::render::ResidentScenePrimitiveTopology::TriangleList)
         }
+        v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_LIST_ADJ => {
+            Ok(crate::intel::render::ResidentScenePrimitiveTopology::TriangleListAdj)
+        }
+        v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP => {
+            Ok(crate::intel::render::ResidentScenePrimitiveTopology::TriangleStrip)
+        }
+        v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP_ADJ => {
+            Ok(crate::intel::render::ResidentScenePrimitiveTopology::TriangleStripAdj)
+        }
+        v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_FAN => {
+            Ok(crate::intel::render::ResidentScenePrimitiveTopology::TriangleFan)
+        }
+        v::vgpu::PRIMITIVE_TOPOLOGY_QUAD_LIST => {
+            Ok(crate::intel::render::ResidentScenePrimitiveTopology::QuadList)
+        }
+        v::vgpu::PRIMITIVE_TOPOLOGY_QUAD_STRIP => {
+            Ok(crate::intel::render::ResidentScenePrimitiveTopology::QuadStrip)
+        }
+        v::vgpu::PRIMITIVE_TOPOLOGY_RECT_LIST => {
+            Ok(crate::intel::render::ResidentScenePrimitiveTopology::RectList)
+        }
         _ => Err(-95),
+    }
+}
+
+#[cfg(test)]
+mod primitive_topology_tests {
+    use super::*;
+    use crate::intel::render::ResidentScenePrimitiveTopology as Topology;
+
+    #[test]
+    fn v2_wire_values_reach_every_native_resident_topology() {
+        let cases = [
+            (v::vgpu::PRIMITIVE_TOPOLOGY_POINT_LIST, Topology::PointList),
+            (v::vgpu::PRIMITIVE_TOPOLOGY_LINE_LIST, Topology::LineList),
+            (v::vgpu::PRIMITIVE_TOPOLOGY_LINE_LIST_ADJ, Topology::LineListAdj),
+            (v::vgpu::PRIMITIVE_TOPOLOGY_LINE_STRIP, Topology::LineStrip),
+            (v::vgpu::PRIMITIVE_TOPOLOGY_LINE_STRIP_ADJ, Topology::LineStripAdj),
+            (v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, Topology::TriangleList),
+            (v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_LIST_ADJ, Topology::TriangleListAdj),
+            (v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP, Topology::TriangleStrip),
+            (v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP_ADJ, Topology::TriangleStripAdj),
+            (v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_FAN, Topology::TriangleFan),
+            (v::vgpu::PRIMITIVE_TOPOLOGY_QUAD_LIST, Topology::QuadList),
+            (v::vgpu::PRIMITIVE_TOPOLOGY_QUAD_STRIP, Topology::QuadStrip),
+            (v::vgpu::PRIMITIVE_TOPOLOGY_RECT_LIST, Topology::RectList),
+        ];
+
+        for (wire, expected) in cases {
+            assert_eq!(broker_primitive_topology(wire), Ok(expected));
+        }
+        assert_eq!(broker_primitive_topology(0), Err(-95));
+        assert_eq!(broker_primitive_topology(u32::MAX), Err(-95));
     }
 }
 
@@ -399,7 +460,7 @@ pub(crate) fn broker_ui4_indexed_batch_submit_v2(
 ) -> Result<v::vgpu::TimelinePoint, i32> {
     let draw_count = usize::try_from(batch.draw_count).map_err(|_| -22)?;
     if draw_count == 0
-        || draw_count > v::vgpu::MAX_INDEXED_BATCH_DRAWS
+        || draw_count > v::vgpu::MAX_INDEXED_BATCH_V2_DRAWS
         || batch.draws[..draw_count]
             .iter()
             .any(|draw| draw.reserved != 0)

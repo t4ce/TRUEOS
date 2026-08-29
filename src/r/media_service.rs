@@ -599,7 +599,7 @@ pub async fn worker_task(worker_id: usize, worker_slot: u32, core_kind: u8) {
                             (request.output, retained_info)
                         {
                             crate::log_important!(target: "service";
-                                "vmedia-retained: proof=render1-publication-complete accepted=1 owner=0x{:08X} operation={} device=0x{:X} texture_id=0x{:X} residency=picasso-render1 mapped=1 retained=1 width={} height={} stride={} bytes={} source_format={} backend={} cpu_texture_mutation=0 blueprint_rgba_readback=0\n",
+                                "vmedia-retained: proof=carrier-publication-complete accepted=1 owner=0x{:08X} operation={} device=0x{:X} texture_id=0x{:X} residency=picasso-carrier mapped=1 retained=1 width={} height={} stride={} bytes={} source_format={} backend={} cpu_texture_mutation=0 blueprint_rgba_readback=0\n",
                                 request.owner,
                                 request.id,
                                 device,

@@ -45,6 +45,7 @@ struct ColdStartBlueprint {
     action: ColdStartAction,
     archive: String,
     online_selector: Option<String>,
+    instance: Option<String>,
     slot: String,
     #[serde(default)]
     args: Vec<String>,
@@ -61,6 +62,14 @@ impl ColdStartBlueprint {
         self.online_selector
             .as_deref()
             .unwrap_or_else(|| self.label())
+    }
+
+    fn instance_request(&self) -> crate::hv::BlueprintInstanceRequest {
+        self.instance
+            .as_ref()
+            .map_or_else(crate::hv::BlueprintInstanceRequest::default, |name| {
+                crate::hv::BlueprintInstanceRequest::named(name.clone())
+            })
     }
 }
 
@@ -111,18 +120,21 @@ async fn cold_start_blueprints(spawner: Spawner) {
         let local_args = blueprint.args.clone();
         let local = match blueprint.launch_script.as_deref() {
             Some(script) => {
-                crate::shell2::cmds::run::submit_archive_name_to_target_from_app_db_with_launch_script_async(
+                crate::shell2::cmds::run::submit_archive_name_to_target_from_app_db_with_instance_and_launch_script_async(
                     target.clone(),
                     &blueprint.archive,
-                    String::from(script),
+                    local_args,
+                    blueprint.instance_request(),
+                    Some(String::from(script)),
                 )
                 .await
             }
             None => {
-                crate::shell2::cmds::run::submit_archive_name_to_target_from_app_db_default_async(
+                crate::shell2::cmds::run::submit_archive_name_to_target_from_app_db_with_instance_async(
                     target.clone(),
                     &blueprint.archive,
                     local_args,
+                    blueprint.instance_request(),
                 )
                 .await
             }
@@ -149,16 +161,17 @@ async fn cold_start_blueprints(spawner: Spawner) {
         // app.db contains both built-ins and downloads. Only when it has no
         // usable local entry do we ask the online catalog to fetch and run it.
         let selector = blueprint.online_selector();
+        let mut args = if let Some(name) = blueprint.instance.as_ref() {
+            alloc::vec![String::from("new"), String::from(selector), name.clone()]
+        } else {
+            alloc::vec![String::from(selector)]
+        };
+        args.extend(blueprint.args.iter().cloned());
         let submitted = match blueprint.launch_script.as_deref() {
-            Some(script) => crate::shell2::submit_online_launch_script_to_target(
-                &spawner, target, selector, script,
+            Some(script) => crate::shell2::submit_online_args_with_launch_script_to_target(
+                &spawner, target, args, script,
             ),
-            None => {
-                let mut args = Vec::with_capacity(blueprint.args.len().saturating_add(1));
-                args.push(String::from(selector));
-                args.extend(blueprint.args.iter().cloned());
-                crate::shell2::submit_online_to_target(&spawner, target, args)
-            }
+            None => crate::shell2::submit_online_to_target(&spawner, target, args),
         };
         match submitted {
             Ok(()) => crate::log!(
@@ -306,10 +319,11 @@ pub(crate) async fn weave_hello_autostart_task() {
     Timer::after(Duration::from_millis(250)).await;
     let target =
         crate::shell2::matrix_target_for_slot_name(crate::shell2::OUTPUT_SYSTEM_MASK, "wve");
-    match crate::shell2::cmds::run::submit_archive_name_to_target_from_app_db_default_async(
+    match crate::shell2::cmds::run::submit_archive_name_to_target_from_app_db_with_instance_async(
         target,
         "weave_hello.bp",
         Vec::new(),
+        crate::hv::BlueprintInstanceRequest::default(),
     )
     .await
     {

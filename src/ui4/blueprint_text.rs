@@ -1550,11 +1550,20 @@ pub(crate) fn begin_blueprint_frame(
     };
     let view = match writable_rgba_view(lease) {
         Ok(view) => view,
-        Err(_) => {
+        Err(error) => {
             let _ = cancel_frame_buffer(lease);
             if lease.frame != surface.frame {
                 let _ = destroy_frame(lease.frame);
             }
+            crate::log_warn!(target: "ui4/blueprint-frame";
+                "frame begin writable view failed owner={:?} window={} frame={} buffer={} surface_frame={} error={:?}\n",
+                owner,
+                window_id,
+                lease.frame.raw(),
+                lease.buffer_index,
+                surface.frame.raw(),
+                error,
+            );
             return ERROR_UI4;
         }
     };
@@ -2239,6 +2248,37 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_set_position(window_id: u32, x: i3
     let placement = WindowPlacement {
         x,
         y,
+        ..surface.placement
+    };
+    if set_window_placement(owner, surface.window, placement).is_err() {
+        return ERROR_UI4;
+    }
+    surface.placement = placement;
+    0
+}
+
+/// Set the opacity applied when UI4 composites this Blueprint frame.
+pub extern "C" fn trueos_cabi_ui4_scene_frame_set_opacity(window_id: u32, opacity: u32) -> i32 {
+    if opacity > u8::MAX as u32 {
+        return ERROR_INVALID;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_status(
+            trueos_vm::vmcall::OP_BP_UI4_SCENE_FRAME_SET_OPACITY,
+            window_id as u64,
+            opacity as u64,
+            &[],
+        );
+    }
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT;
+    };
+    let mut surfaces = SURFACES.lock();
+    let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+        return ERROR_NOT_FOUND;
+    };
+    let placement = WindowPlacement {
+        opacity: opacity as u8,
         ..surface.placement
     };
     if set_window_placement(owner, surface.window, placement).is_err() {

@@ -88,3 +88,11 @@ complete indirect block before setting explicit fields.
 
 Do not add `-O0` casually. With the pinned stack it removes stateful BTIs and
 buffer-address records and therefore changes the runtime ABI.
+
+## Subset-sum boot probe
+
+`subset_sum_collapse5_merge10.clcpp` supplies the bounded once-per-boot
+Collapse5 tree probe. `make intel-gpu-bake-subset-sum-cpp` refreshes its
+artifact quartet, and the production aggregate includes that target. Runtime
+admission remains hash-, target-, and ABI-bound before the three ordered RCS
+walkers may touch their two-page non-display arena.

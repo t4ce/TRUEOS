@@ -33,10 +33,9 @@ const STATUS_RAINBOW_COLORS: [u8; 8] = [199, 208, 227, 121, 51, 39, 99, 201];
 const TOOL_JSON_ACPI: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["reboot","S1","S2","S3","S4","S5"],"description":"ACPI action to run."}},"required":["action"],"additionalProperties":false}"#;
 const TOOL_JSON_AUD: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
 const TOOL_JSON_BIOS: &str = r#"{"type":"object","properties":{"view":{"type":"string","enum":["all","status","services","setup","handoff","hints"],"description":"BIOS/UEFI control-plane view to print."}},"required":[],"additionalProperties":false}"#;
-const TOOL_JSON_CPP: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["list","status","stop","font","spirit","svg"],"description":"Inspect or stop the interactive C++/IGC gallery, stamp/present/rush font RGBA, select Spirit's C++ repass, or control the SVG experiment. Omit action to launch the gallery."},"font_action":{"type":"string","enum":["stamp","present","rush","status","release"],"description":"Create an owned async RGBA stamp, present it through UI4, or control the staged Unicode glyph rush."},"rush_action":{"type":"string","enum":["start","stop"],"description":"Start or stop the font rush when action=font and font_action=rush; start is the default."},"text":{"type":"string","maxLength":4096,"description":"UTF-8 text for action=font; newlines create rows."},"font":{"type":"integer","minimum":1,"maximum":3,"description":"Optional GPU font face for action=font."},"size":{"type":"number","minimum":4,"maximum":2048,"description":"Font pixel size for action=font."},"color":{"type":"string","description":"Font RGBA color encoded as RRGGBBAA."},"canvas":{"type":"string","description":"Optional WIDTHxHEIGHT RGBA8 canvas at or below the UHD/4K soft cap."},"background_id":{"type":"integer","enum":[0,2,3,4,5,6,7,8,9,10,11],"description":"Spirit background ID when action is spirit; 11 is the UTC MagicTimeCircle."},"shader_id":{"type":"integer","minimum":0,"maximum":15,"description":"Spirit sprite shader ID when action is spirit."},"svg_action":{"type":"string","enum":["start","status","stop"],"description":"SVG-experiment lifecycle action when action=svg."},"svg_demo":{"type":"string","enum":["basic","curves","holes"],"description":"Byte-embedded SVG outline experiment selected when action=svg."}},"required":[],"additionalProperties":false}"#;
+const TOOL_JSON_CPP: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["list","status","stop","font","spirit","svg"],"description":"Inspect or stop the interactive C++/IGC gallery, stamp/present/rush/rush2 font RGBA, select Spirit's C++ repass, or control the SVG experiment. Omit action to launch the gallery."},"font_action":{"type":"string","enum":["stamp","present","rush","rush2","status","release"],"description":"Create an owned async RGBA stamp, present it through UI4, or control the staged Unicode glyph rush or UI4-native 8-worker rush2 within the 32-slot producer pool."},"rush_action":{"type":"string","enum":["start","stop"],"description":"Start or stop the font rush when action=font and font_action=rush; start is the default."},"rush2_action":{"type":"string","enum":["start","stop"],"description":"Start or stop the UI4-native semi-persistent 8-worker font rush2 within the 32-slot producer pool when action=font and font_action=rush2; start is the default."},"text":{"type":"string","maxLength":4096,"description":"UTF-8 text for action=font; newlines create rows."},"font":{"type":"integer","minimum":1,"maximum":3,"description":"Optional GPU font face for action=font."},"size":{"type":"number","minimum":4,"maximum":2048,"description":"Font pixel size for action=font."},"color":{"type":"string","description":"Font RGBA color encoded as RRGGBBAA."},"canvas":{"type":"string","description":"Optional WIDTHxHEIGHT RGBA8 canvas at or below the UHD/4K soft cap."},"background_id":{"type":"integer","enum":[0,2,3,4,5,6,7,8,9,10,11],"description":"Spirit background ID when action is spirit; 11 is the UTC MagicTimeCircle."},"shader_id":{"type":"integer","minimum":0,"maximum":15,"description":"Spirit sprite shader ID when action is spirit."},"svg_action":{"type":"string","enum":["start","status","stop"],"description":"SVG-experiment lifecycle action when action=svg."},"svg_demo":{"type":"string","enum":["basic","curves","holes"],"description":"Byte-embedded SVG outline experiment selected when action=svg."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_DISC: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["list","format","ramdisc"],"description":"disc action to run."},"disk_id":{"type":"string","description":"Disk id string for action=format."},"size":{"type":"string","description":"Optional ramdisc size like 512MB or 1GiB for action=ramdisc."}},"required":["action"],"additionalProperties":false}"#;
 const TOOL_JSON_GRID: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
-const TOOL_JSON_GRIDP: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
 const TOOL_JSON_HELIO: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["start","list","status","stop","monitor","perf","logger"],"description":"Launch, list, inspect, or stop embedded Helio instances, or control Helio's temporary Spirit GPU logger (monitor, perf, and logger are aliases)."},"id":{"type":"integer","minimum":1,"maximum":4,"description":"Example id for action=start; 1 is simple-cube, 2 is churn-benchmark, 3 is shape-battle-royale, and 4 is pendulum-bigcloth."},"instance_id":{"type":"integer","minimum":1,"description":"Generated Helio instance id for action=stop."},"all":{"type":"boolean","description":"For action=stop, stop every live Helio instance instead of one instance_id."},"monitor_action":{"type":"string","enum":["start","status","off"],"description":"Start, inspect, or stop the Spirit 256x256 direct GPU logger."},"seconds":{"type":"integer","minimum":1,"maximum":300,"description":"Temporary logger lifetime in seconds; defaults to 30 and auto-restores Spirit afterward."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_VGPU: &str = r#"{"type":"object","properties":{"command":{"type":"string","enum":["status","test"],"description":"Inspect the vGPU broker or run a runtime test."},"test":{"type":"string","enum":["broker","abi","guc","compute","blit","all"],"description":"Runtime test selected when command=test."}},"required":["command"],"additionalProperties":false}"#;
 const TOOL_JSON_HYPER: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["status","probe"],"description":"Hyper transport view to print."},"url":{"type":"string","description":"Optional URL to download into TRUEOSFS."},"path":{"type":"string","description":"Optional TRUEOSFS destination path."}},"required":[],"additionalProperties":false}"#;
@@ -45,7 +44,6 @@ const TOOL_JSON_LUM: &str = r#"{"type":"object","properties":{},"additionalPrope
 const TOOL_JSON_NET: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["icmp","irc","nic","hostname"],"description":"net subcommand to run."},"target":{"type":"string","description":"Target host for net icmp."},"selector":{"type":"string","description":"Optional NIC selector like index, vid:pid, or bb:dd.f."},"host":{"type":"string","description":"Host for net irc."},"channel":{"type":"string","description":"Optional channel like #trueos for net irc."},"name":{"type":"string","description":"Optional hostname for net hostname."}},"required":["subcommand"],"additionalProperties":false}"#;
 const TOOL_JSON_QJS: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
 const TOOL_JSON_RAM: &str = r#"{"type":"object","properties":{"scope":{"type":"string","description":"Optional pmm, host, or numeric VM id. Omit to list all configured RAM scopes."}},"required":[],"additionalProperties":false}"#;
-const TOOL_JSON_SET: &str = r#"{"type":"object","properties":{"width":{"type":"integer","minimum":50,"maximum":500,"description":"Shell line width."}},"required":["width"],"additionalProperties":false}"#;
 const TOOL_JSON_SHOT: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
 const TOOL_JSON_SMP: &str = r#"{"type":"object","properties":{"slot":{"type":"integer","minimum":0,"description":"Optional SMP slot. Omit to list all slots."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_IMG: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"Optional image path to open as the first UI4 frame. Omit for img's resident interactive viewer."}},"required":[],"additionalProperties":false}"#;
@@ -83,11 +81,6 @@ fn dispatch_hyper(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str)
 #[cfg(feature = "trueos_lumen")]
 fn dispatch_lum(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     super::cmds::lum::try_parse(spawner, io, rest)
-}
-
-fn dispatch_set(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    let mut args = rest.split_whitespace();
-    super::cmds::set::try_parse(io, &mut args)
 }
 
 fn dispatch_shot(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -157,10 +150,6 @@ fn dispatch_shell(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str)
 
 fn dispatch_grid(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     super::cmds::grid::try_parse(spawner, io, rest)
-}
-
-fn dispatch_gridp(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    super::cmds::gridp::try_parse(spawner, io, rest)
 }
 
 fn dispatch_helio(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -296,15 +285,6 @@ const SHELL2_COMMAND_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         handler: dispatch_grid,
         tool_description: Some("Launch the online Gridpaper app."),
         tool_parameters_json: Some(TOOL_JSON_GRID),
-    },
-    BuiltinShell2CmdEntry {
-        name: "gridp",
-        mode: "cmd",
-        color: Some(STATUS_ORANGE_RGB),
-        advertised: true,
-        handler: dispatch_gridp,
-        tool_description: Some("Open one minimal movable GridP UI4 frame."),
-        tool_parameters_json: Some(TOOL_JSON_GRIDP),
     },
     BuiltinShell2CmdEntry {
         name: "helio",
@@ -474,15 +454,6 @@ const SHELL2_COMMAND_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         tool_parameters_json: Some(TOOL_JSON_VID),
     },
     BuiltinShell2CmdEntry {
-        name: "set",
-        mode: "cmd",
-        color: None,
-        advertised: true,
-        handler: dispatch_set,
-        tool_description: Some("Set the shell line width."),
-        tool_parameters_json: Some(TOOL_JSON_SET),
-    },
-    BuiltinShell2CmdEntry {
         name: "ram",
         mode: "cmd",
         color: Some(STATUS_GRAY_RGB),
@@ -579,14 +550,19 @@ mod tests {
     }
 
     #[test]
-    fn titlebar_includes_previously_omitted_commands() {
+    fn titlebar_and_registry_omit_retired_commands() {
         let status = titlebar_right_command_names_text();
-        for label in ["img", "gridp", "xhci", "set", "bios"] {
-            assert!(status.contains(label), "titlebar is missing {label}");
+        let registry = command_registry_json();
+        for label in ["gridp", "set"] {
+            assert!(!status.contains(label), "titlebar contains retired {label}");
+            assert!(
+                !registry.contains(alloc::format!("\"name\":\"{label}\"").as_str()),
+                "registry contains retired {label}"
+            );
         }
         #[cfg(feature = "trueos_lumen")]
         assert!(status.contains("lum"));
-        assert!(command_registry_json().contains("\"name\":\"bios\""));
+        assert!(registry.contains("\"name\":\"bios\""));
     }
 
     #[test]
@@ -626,11 +602,15 @@ mod tests {
         assert!(!TOOL_JSON_CPP.contains("\"duration_ms\":"));
         assert!(!TOOL_JSON_CPP.contains("\"action\":{\"type\":\"string\",\"enum\":[\"start\""));
         assert!(TOOL_JSON_CPP.contains(
-            "\"font_action\":{\"type\":\"string\",\"enum\":[\"stamp\",\"present\",\"rush\",\"status\",\"release\"]"
+            "\"font_action\":{\"type\":\"string\",\"enum\":[\"stamp\",\"present\",\"rush\",\"rush2\",\"status\",\"release\"]"
         ));
         assert!(
             TOOL_JSON_CPP
                 .contains("\"rush_action\":{\"type\":\"string\",\"enum\":[\"start\",\"stop\"]")
+        );
+        assert!(
+            TOOL_JSON_CPP
+                .contains("\"rush2_action\":{\"type\":\"string\",\"enum\":[\"start\",\"stop\"]")
         );
         assert!(command_registry_json().contains("staged Unicode glyph rush"));
     }

@@ -75,6 +75,7 @@ def parse_assembly(path: Path) -> ExecutableSlice:
 def stage_enum(stage: str) -> int:
     mapping = {
         "vertex": 0,
+        "geometry": 3,
         "fragment": 4,
     }
     try:
@@ -122,6 +123,7 @@ def main() -> None:
     executables = [parse_assembly(path) for path in assembly_files]
 
     vertex_execs = [exe for exe in executables if exe.stage == "vertex"]
+    geometry_execs = [exe for exe in executables if exe.stage == "geometry"]
     fragment_execs = [exe for exe in executables if exe.stage == "fragment"]
     if len(vertex_execs) != 1:
         raise SystemExit(f"expected exactly one vertex executable, found {len(vertex_execs)}")
@@ -132,6 +134,18 @@ def main() -> None:
     vs_off, vs_blob = find_stage_blob(blob, stage_enum("vertex"), vertex.size)
     write_bytes(args.out_dir / "triangle_vs.bin", vs_blob)
     print(f"vertex blob: off=0x{vs_off:X} size={len(vs_blob)} -> triangle_vs.bin")
+
+    if geometry_execs:
+        if len(geometry_execs) != 1:
+            raise SystemExit(
+                f"expected exactly one geometry executable, found {len(geometry_execs)}"
+            )
+        geometry = geometry_execs[0]
+        gs_off, gs_blob = find_stage_blob(blob, stage_enum("geometry"), geometry.size)
+        write_bytes(args.out_dir / "triangle_gs.bin", gs_blob)
+        print(
+            f"geometry blob: off=0x{gs_off:X} size={len(gs_blob)} -> triangle_gs.bin"
+        )
 
     frag_base = min(exe.start for exe in fragment_execs)
     frag_end = max(exe.start + exe.size for exe in fragment_execs)

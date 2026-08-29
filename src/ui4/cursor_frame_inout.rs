@@ -486,6 +486,7 @@ pub(crate) fn selection_strips(
         if window.output != output
             || window.state != WindowState::Ready
             || !placement.visible
+            || placement.opacity == 0
             || placement.y <= 0
         {
             continue;

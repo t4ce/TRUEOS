@@ -598,16 +598,12 @@ impl Xhci {
             if slice_elapsed_ms >= USB_LEGACY_OWNERSHIP_SLICE_BUDGET_MS {
                 warn!(
                     "xhci: legacy BIOS ownership slice over budget budget_ms={} elapsed_ms={} polls={}",
-                    USB_LEGACY_OWNERSHIP_SLICE_BUDGET_MS,
-                    slice_elapsed_ms,
-                    polls,
+                    USB_LEGACY_OWNERSHIP_SLICE_BUDGET_MS, slice_elapsed_ms, polls,
                 );
             }
 
             self.kernel
-                .sleep(Duration::from_millis(
-                    USB_LEGACY_OWNERSHIP_POLL_INTERVAL_MS,
-                ))
+                .sleep(Duration::from_millis(USB_LEGACY_OWNERSHIP_POLL_INTERVAL_MS))
                 .await;
         }
 

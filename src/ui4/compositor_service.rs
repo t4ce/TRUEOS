@@ -846,12 +846,9 @@ fn queue_async_plane(
         });
     // Slot0 carries the UI4 stack: every frame which does not hold one of the
     // three hardware lease planes presents here, so its membership is arbitrary
-    // in content, cadence and buffering. The painter emits one ordered run per
-    // tile clipped to `tile & damage`, so its cost follows the tiles themselves
-    // and stays bounded as the stack grows. Plan uniformity is irrelevant to
-    // that contract; stack membership alone selects the painter. Overlap is
-    // resolved by ordered overdraw in broker z order rather than by a
-    // per-pixel walk over every layer in the enclosing damage box.
+    // in content, cadence and buffering. The layer kernel walks the broker-z
+    // descriptors for each damaged pixel and performs premultiplied source-over.
+    // Plan uniformity is irrelevant; stack membership alone selects the painter.
     let stack_plane = target_plane_slot(plan.target) == super::PRIMARY_PLANE_SLOT;
     let sparse_static_painter = all_static_single || stack_plane;
     // Overlap inside the stack is the contract, not an anomaly. Keep the probe
@@ -879,7 +876,7 @@ fn queue_async_plane(
             selected.len(),
         );
     }
-    // Slot0 remains a transparent CPU-painted virtual stack except for Font
+    // Slot0 remains a transparent GPU-composed virtual stack except for Font
     // Rush. Its admission owns UI4 exclusively and its lone full-screen font
     // frame must publish directly, because its scanout proof gates the next
     // staged consumer.
@@ -1093,12 +1090,12 @@ fn queue_async_plane(
                 && !STACK_PAINTER_LOGGED.swap(true, Ordering::AcqRel)
             {
                 crate::log_info!(target: "ui4";
-                    "ui4/stack-painter: slot0 backend=guc-rcs-ui4-layer-kernel windows={} order=broker-z pixel_op=topmost-rect-overwrite layer_kernel=1 cost=one-walker-per-damage-pixel log=once\n",
+                    "ui4/stack-painter: slot0 backend=guc-rcs-ui4-layer-kernel windows={} order=broker-z pixel_op=premultiplied-src-over layer_kernel=1 cost=one-walker-per-damage-pixel log=once\n",
                     tiles.len(),
                 );
             }
             crate::log_trace!(target: "ui4";
-                "ui4/slot0-compose backend=guc-rcs-opaque-rect-overwrite windows={} order=broker-z frame_blend=none alpha=preserved pipe_bottom=visible-where-empty\n",
+                "ui4/slot0-compose backend=guc-rcs-premultiplied-src-over windows={} order=broker-z frame_blend=source-over alpha=preserved pipe_bottom=visible-where-empty\n",
                 tiles.len(),
             );
             let primary = crate::intel::queue_ui4_primary_composition(
@@ -1182,11 +1179,48 @@ fn queue_async_plane(
 
 /// The immutable Blueprint frame is composed by UI4 when it starts in Slot0.
 /// Its one-shot font stamp supplies a producer release, but it has not been
-/// imported by a display plane.  Sampling it through the compositor's stable
-/// PAT0 source mapping is therefore correct; marking it as a display/PAT3
-/// source would ask the persistent compositor PPGTT to change an existing
-/// source VA's cache policy and it must reject that transaction.
+/// imported by a display plane. Sampling it through the compositor's stable
+/// PAT0 source mapping is therefore correct.
+///
+/// Dirty/double FontScene buffers are different: their CPU-cleared opening
+/// generation later becomes a GPU-authored direct-scanout generation. Import
+/// the opening generation with PAT3 as well so the ordinary close transition
+/// never asks the persistent compositor PPGTT to change that source VA from
+/// PAT0 to PAT3.
+const fn source_requires_lifetime_scanout_cache(
+    content: FrameContent,
+    cadence: super::FrameCadence,
+    buffering: super::FrameBuffering,
+) -> bool {
+    matches!(
+        (content, cadence, buffering),
+        (FrameContent::FontScene2d, super::FrameCadence::Dirty, super::FrameBuffering::Double,)
+    )
+}
+
+const _: () = {
+    assert!(source_requires_lifetime_scanout_cache(
+        FrameContent::FontScene2d,
+        super::FrameCadence::Dirty,
+        super::FrameBuffering::Double,
+    ));
+    assert!(!source_requires_lifetime_scanout_cache(
+        FrameContent::BlueprintScene,
+        super::FrameCadence::Immutable,
+        super::FrameBuffering::Single,
+    ));
+};
+
 fn composition_source_uses_scanout_cache(window: &WindowSnapshot, view: FrameRgbaView) -> bool {
+    if frame_snapshot(window.frame).is_ok_and(|snapshot| {
+        source_requires_lifetime_scanout_cache(
+            snapshot.plan.content,
+            snapshot.plan.cadence,
+            snapshot.plan.buffering,
+        )
+    }) {
+        return true;
+    }
     if view.gpu_release.is_none() {
         return false;
     }

@@ -67,3 +67,24 @@ The source-level target is ADL GT1: Mesa must report `ver=12` and `verx10=120`.
 metadata that reports a different target. Even a successful shim run does not
 prove actual 0x4680/r0c ownership, relocation normalization, allocation layout,
 or hardware execution; `bake.py` remains fail-closed and does not write HELIOA.
+
+## Physical adjacency GS capture
+
+The same pinned build can capture both pass-through adjacency contracts on the
+selected physical RPL-S device. This does not use the DRM shim:
+
+```sh
+python3 tools/helio-intel-bake/instrumented_anv_capture.py \
+  --work-dir /tmp/trueos-adjacency-anv \
+  --bootstrap-tools \
+  --adjacency-host \
+  --adjacency-kind both \
+  --device-id 0xA780
+```
+
+The triangle capture emits vertices `0,2,4` from a six-vertex adjacency
+primitive. The line capture emits vertices `1,2` from a four-vertex adjacency
+primitive. Each output includes native GS assembly, canonical shader
+serialization, raw `brw_gs_prog_data`, and normalized `TRUEOS_GS_STATE_V1` and
+`TRUEOS_URB_STATE_V1` text records. The latter two records are the authoritative
+source for retained `3DSTATE_GS`, SF dereference, and URB allocation fields.

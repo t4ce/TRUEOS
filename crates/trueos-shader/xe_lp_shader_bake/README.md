@@ -46,6 +46,42 @@ python3 tools/xe_lp_shader_bake/summarize_dump.py /tmp/intel-shaders \
   --emit-rust triangle_vs.bin triangle_ps.bin
 ```
 
+For the adjacency GS capture, supply the checked-in pass-through geometry
+shader. It consumes `real0, adjacent0, real1, adjacent1, real2, adjacent2`,
+emits only the even (real) vertices, and leaves the output image identical to
+the ordinary triangle test:
+
+```bash
+python3 crates/trueos-shader/xe_lp_shader_bake/run_host_validation.py \
+  --geom crates/trueos-shader/xe_lp_shader_bake/passthrough_triangle_adjacency.geom \
+  --skip-artifact-verification
+```
+
+This is an offline host capture only. It must produce the geometry executable
+assembly/statistics and a verified rendered image before any GS state may be
+added to the bare-metal renderer. The public ANV pipeline cache is opaque; do
+not treat a byte sequence found in it as `triangle_gs.bin`. Packaging a GS
+requires a target-matched instrumented-ANV capture of the native code *and*
+the GS program metadata (URB, dispatch, control-data and command-state
+contract).
+
+Line adjacency needs its own GS input/output contract. Capture it with the
+same lane and select the matching Vulkan input assembly for the host dumper:
+
+```bash
+TRUEOS_GEOMETRY_INPUT=line-adjacency \
+python3 crates/trueos-shader/xe_lp_shader_bake/run_host_validation.py \
+  --geom crates/trueos-shader/xe_lp_shader_bake/passthrough_line_adjacency.geom \
+  --skip-artifact-verification \
+  --out-dir /tmp/trueos-line-adj-gs
+```
+
+The pinned instrumented-ANV route additionally writes
+`geometry_TRUEOS_GS_state_v1.txt` and `geometry_TRUEOS_URB_state_v1.txt`.
+Those files make the target-selected thread count, VUE-handle contract, and
+VS/GS URB partition explicit; runtime packet state must be derived from them,
+not guessed from the executable bytes.
+
 The dumper can also validate the static resident-scene push-color pixel shader. Compile
 [`push_color.frag`](push_color.frag) to SPIR-V, then run the dumper with
 `TRUEOS_PUSH_COLOR=1`. It supplies `(224,48,220,192)` as four push-constant

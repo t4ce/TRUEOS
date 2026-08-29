@@ -19,6 +19,7 @@ mod h264_encode_udp;
 mod input_broker;
 mod screenshot;
 mod slot4_service;
+mod start_button;
 mod video_frame;
 mod window_broker;
 pub(crate) mod winit_input;
@@ -88,7 +89,8 @@ pub(crate) use gpgpu_preview_consumer::{
     GPGPU_PREVIEW_DEFAULT_CADENCE_MS, GPGPU_PREVIEW_DEFAULT_PUBLISH_EVERY, GpgpuPreviewMetrics,
     GpgpuPreviewPreset, gpgpu_preview_consumer_service_task, gpgpu_preview_status,
     request_cpp_font_preview_start, request_cpp_font_rush_start, request_cpp_font_rush_stop,
-    request_cpp_gallery_start, request_gpgpu_preview_stop,
+    request_cpp_font_rush2_start, request_cpp_font_rush2_stop, request_cpp_gallery_start,
+    request_gpgpu_preview_stop,
 };
 pub(crate) use gpgpu_svg_probe_consumer::{
     GpgpuSvgProbeConfig, gpgpu_svg_probe_consumer_service_task, gpgpu_svg_probe_status,
@@ -109,6 +111,7 @@ pub(crate) use screenshot::{
     capture_compact_window_observation, request_wd_postblend_capture, ui4_screenshot_service_task,
 };
 pub(crate) use slot4_service::ui4_slot4_service_task;
+pub(crate) use start_button::{request_start_button_reveal, ui4_start_button_service_task};
 pub(crate) use video_frame::{
     DecodedNv12Source, DecodedVideoConversionProbeReport, DecodedVideoConversionReport,
     VIDEO_RGBA_BUFFER_COUNT, begin_decoded_nv12_conversion_batch, begin_shell_decoded_video_player,
@@ -123,14 +126,15 @@ pub(crate) use window_broker::{
     advance_window_placement_transitions, application_windows_for_output_with_revision,
     begin_additional_window_session, begin_window_session, close_window,
     commit_window_frame_replacement, create_window, finish_window_session,
-    finish_window_session_with_request, move_window, owner_has_first_presentation,
-    publish_window_frame, publish_window_frames, replace_window_frame, retire_frame_when_released,
-    set_window_escape_key_action, set_window_hit_testable, set_window_placement,
-    set_windows_visible, take_window_first_presentation, toggle_window_maximized,
+    finish_window_session_with_request, live_application_window_count, move_window,
+    owner_has_first_presentation, publish_window_frame, publish_window_frames,
+    replace_window_frame, retire_frame_when_released, set_window_escape_key_action,
+    set_window_hit_testable, set_window_placement, set_windows_visible,
+    take_window_first_presentation, toggle_window_maximized,
     ui4_window_broker_snapshot_service_task, visible_windows_for_output,
     wait_for_window_composition_change, wait_for_window_first_presentation,
-    window_composition_revision, window_escape_key_action, window_placement,
-    window_transitions_active,
+    window_composition_revision, window_escape_key_action, window_frame_was_presented,
+    window_placement, window_transitions_active,
 };
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
@@ -594,13 +598,14 @@ impl FramePlan {
 /// member still takes the direct-scanout path when eligible; two or more
 /// members are composed together by UI4 instead of consuming one hardware
 /// plane each. Dirty FontScene frames retain double buffering, while streaming
-/// RenderScene frames retain triple buffering, so composition always reads a
-/// stable published front.
+/// BlueprintScene and RenderScene frames retain triple buffering, so
+/// composition always reads a stable published front.
 pub(crate) const fn frame_plan_shares_compositor_plane(plan: FramePlan) -> bool {
     matches!(plan.buffering, FrameBuffering::Single)
         || matches!(
             (plan.content, plan.cadence, plan.buffering),
             (FrameContent::FontScene2d, FrameCadence::Dirty, FrameBuffering::Double)
+                | (FrameContent::BlueprintScene, FrameCadence::Streaming, FrameBuffering::Triple)
                 | (FrameContent::RenderScene3d, FrameCadence::Streaming, FrameBuffering::Triple)
         )
 }
@@ -701,6 +706,16 @@ const _: () = {
         Err(_) => panic!("streaming/triple RenderScene plan must be valid"),
     };
     assert!(frame_plan_shares_compositor_plane(shared_resident_scene));
+    let shared_blueprint_scene = match FramePlan::from_spec(FrameSpec {
+        content: FrameContent::BlueprintScene,
+        cadence: FrameCadence::Streaming,
+        buffering: FrameBuffering::Triple,
+        ..admitted_video
+    }) {
+        Ok(plan) => plan,
+        Err(_) => panic!("streaming/triple BlueprintScene plan must be valid"),
+    };
+    assert!(frame_plan_shares_compositor_plane(shared_blueprint_scene));
     let isolated_image = match FramePlan::from_spec(FrameSpec {
         content: FrameContent::Image,
         cadence: FrameCadence::Dirty,

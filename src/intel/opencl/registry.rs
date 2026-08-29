@@ -61,6 +61,7 @@ pub(crate) enum KnownKernelRole {
     Lfm25Q8,
     KokoroQgemm,
     KokoroConv1d,
+    SubsetSum,
     Font,
 }
 
@@ -89,6 +90,8 @@ const KOKORO_QGEMM_U8_I8_CROSS_THREAD_BYTES: u32 =
     gpgpu::KOKORO_QGEMM_U8_I8_ADLS_CPP_ABI_CONTRACT.cross_thread_data_bytes;
 const KOKORO_CONV1D_U8_U8_CROSS_THREAD_BYTES: u32 =
     gpgpu::KOKORO_CONV1D_U8_U8_ADLS_CPP_ABI_CONTRACT.cross_thread_data_bytes;
+const SUBSET_SUM_COLLAPSE5_MERGE10_CROSS_THREAD_BYTES: u32 =
+    gpgpu::SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_CPP_ABI_CONTRACT.cross_thread_data_bytes;
 const FONT_OUTLINE_COVERAGE_R8_CROSS_THREAD_BYTES: u32 = 128;
 const GENERIC_PER_THREAD_BYTES: u32 = 96;
 
@@ -680,6 +683,32 @@ const KOKORO_CONV1D_U8_U8_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     consumers: &["ttstt Kokoro dominant stride-one ConvInteger family"],
 };
 
+const SUBSET_SUM_COLLAPSE5_MERGE10_ARGS: &[KernelCallArg<'_>] = &[
+    rw_buf!(0, "arena", "__global uint*", 0, 12),
+    u32_arg!(1, "stage", 14),
+    u32_arg!(2, "leaf_width", 15),
+    u32_arg!(3, "leaf_state_count", 16),
+    u32_arg!(4, "merge_state_count", 17),
+    u32_arg!(5, "weights_offset", 18),
+    u32_arg!(6, "left_leaf_offset", 19),
+    u32_arg!(7, "right_leaf_offset", 20),
+    u32_arg!(8, "output_offset", 21),
+];
+const SUBSET_SUM_COLLAPSE5_MERGE10_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
+    name: gpgpu::SUBSET_SUM_COLLAPSE5_MERGE10_KERNEL_NAME,
+    source_path: gpgpu::SUBSET_SUM_COLLAPSE5_MERGE10_SOURCE_PATH,
+    producer: IGC,
+    target: ADLS,
+    entry_text_offset_bytes: gpgpu::SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_CPP_ABI_CONTRACT.entry_offset,
+    cross_thread_bytes: SUBSET_SUM_COLLAPSE5_MERGE10_CROSS_THREAD_BYTES,
+    per_thread_bytes: GENERIC_PER_THREAD_BYTES,
+    binding_count: 1,
+    args: SUBSET_SUM_COLLAPSE5_MERGE10_ARGS,
+    descriptor_layouts: NO_DESCS,
+    launch: KernelLaunchContract::nd_range_1d(),
+    consumers: &["once-per-boot exact subset-sum silicon probe"],
+};
+
 const FONT_OUTLINE_COVERAGE_R8_ARGS: &[KernelCallArg<'_>] = &[
     ro_buf!(0, "outline_ops", "__global const uint*", 0, 12),
     rw_buf!(1, "mask_u8", "__global uchar*", 1, 14),
@@ -848,6 +877,14 @@ pub(crate) const KNOWN_AOT_KERNELS: &[KnownAotKernel] = &[
         upload: gpgpu::upload_kokoro_conv1d_u8_u8_kernel,
         status: gpgpu::kokoro_conv1d_u8_u8_upload_status,
         role: KnownKernelRole::KokoroConv1d,
+    },
+    KnownAotKernel {
+        name: gpgpu::SUBSET_SUM_COLLAPSE5_MERGE10_KERNEL_NAME,
+        artifact: &gpgpu::SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_ARTIFACT,
+        contract: &SUBSET_SUM_COLLAPSE5_MERGE10_CONTRACT,
+        upload: gpgpu::upload_subset_sum_collapse5_merge10_kernel,
+        status: gpgpu::subset_sum_collapse5_merge10_upload_status,
+        role: KnownKernelRole::SubsetSum,
     },
     KnownAotKernel {
         name: gpgpu::FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME,

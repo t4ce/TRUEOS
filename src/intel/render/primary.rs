@@ -295,7 +295,52 @@ pub(crate) struct ResidentSceneDraw<'a> {
 pub(crate) enum ResidentScenePrimitiveTopology {
     PointList,
     LineList,
+    /// Intel's native `3DPRIM_LINELIST_ADJ`; four VF vertices form one line
+    /// object with its two adjacent-only neighbours.
+    LineListAdj,
+    /// A source `LINE_LOOP`; its retained index plan includes the explicit
+    /// final-to-first edge and is emitted as a hardware line strip.
+    LineLoop,
+    LineStrip,
+    /// Intel's native `3DPRIM_LINESTRIP_ADJ`; its endpoint vertices are
+    /// adjacent-only data and the interior forms the visible line strip.
+    LineStripAdj,
     TriangleList,
+    /// Intel's native `3DPRIM_TRILIST_ADJ`; six VF vertices form one triangle
+    /// and its three edge neighbours.
+    TriangleListAdj,
+    TriangleStrip,
+    /// Intel's native `3DPRIM_TRISTRIP_ADJ`; even VF vertices form the strip
+    /// and odd vertices carry adjacency-only data.
+    TriangleStripAdj,
+    TriangleFan,
+    /// Intel's native `3DPRIM_QUADLIST`; four VF vertices form one polygon.
+    QuadList,
+    /// Intel's native `3DPRIM_QUADSTRIP`; its VF input is converted to the
+    /// downstream polygon representation by the hardware front end.
+    QuadStrip,
+    /// Intel's native screen-space `3DPRIM_RECTLIST`; each three vertices
+    /// define a rectangle and the fourth corner is implied by hardware.
+    RectList,
+}
+
+impl ResidentScenePrimitiveTopology {
+    pub(crate) const fn accepts_index_count(self, count: usize) -> bool {
+        match self {
+            Self::PointList => count >= 1,
+            Self::LineList => count >= 2 && count.is_multiple_of(2),
+            Self::LineListAdj => count >= 4 && count.is_multiple_of(4),
+            Self::LineLoop | Self::LineStrip => count >= 2,
+            Self::LineStripAdj => count >= 4,
+            Self::TriangleList => count >= 3 && count.is_multiple_of(3),
+            Self::TriangleListAdj => count >= 6 && count.is_multiple_of(6),
+            Self::TriangleStrip | Self::TriangleFan => count >= 3,
+            Self::TriangleStripAdj => count >= 6 && count.is_multiple_of(2),
+            Self::QuadList => count >= 4 && count.is_multiple_of(4),
+            Self::QuadStrip => count >= 4 && count.is_multiple_of(2),
+            Self::RectList => count >= 3 && count.is_multiple_of(3),
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -1310,6 +1355,29 @@ pub(crate) fn render_resident_triangle_scene_frame_premultiplied_with_coverage_a
     Ok(result)
 }
 
+/// Render an ordered immediate indexed scene directly into one UI4 surface.
+/// The public immediate pipeline has no depth-state descriptor, so draw order
+/// is authoritative and this path must not allocate or silently enable depth.
+pub(crate) fn render_resident_indexed_scene_frame_premultiplied_direct_to_surface(
+    draws: &[ResidentSceneDraw<'_>],
+    clear_rgba: Option<[u8; 4]>,
+    destination: crate::intel::gpgpu::GpgpuRgba8Surface,
+    diagnostic_logs: bool,
+) -> Result<ResidentSceneFrameResult, &'static str> {
+    submit_resident_triangle_scene_capture(
+        draws,
+        &[],
+        clear_rgba,
+        diagnostic_logs,
+        false,
+        false,
+        ResidentSceneRasterQuality::SingleSample,
+        destination.width as usize,
+        destination.height as usize,
+        ResidentSceneFrameOutput::DirectGpuSurface(destination),
+    )
+}
+
 /// Render a depth-tested retained scene directly into the one permanent UI4
 /// linear surface used by the compositor-rewire checkpoint. There is no
 /// scratch target, resolve, or post-render compute copy on this path.
@@ -1365,7 +1433,7 @@ pub(crate) fn render_resident_churn_forward_frame_direct_to_surface(
 /// bindings.
 pub(crate) fn render_resident_retained_with_static_draws_direct_to_surface(
     resident: &ResidentChurnForward,
-    sampled_texture: Option<&ResidentSampledTexture>,
+    sampled_material: Option<ResidentRetainedMaterial<'_>>,
     static_draws: &[ResidentSceneDraw<'_>],
     clear_rgba: Option<[u8; 4]>,
     destination: crate::intel::gpgpu::GpgpuRgba8Surface,
@@ -1377,7 +1445,7 @@ pub(crate) fn render_resident_retained_with_static_draws_direct_to_surface(
     submit_resident_scene_capture_inner_for_carrier(
         static_draws,
         Some(resident),
-        sampled_texture,
+        sampled_material,
         &[],
         clear_rgba,
         diagnostic_logs,
@@ -1482,7 +1550,20 @@ fn stage_resident_scene_secondary(
         match topology {
             ResidentScenePrimitiveTopology::PointList => TriangleBatchMode::PointDraw,
             ResidentScenePrimitiveTopology::LineList => TriangleBatchMode::LineDraw,
+            ResidentScenePrimitiveTopology::LineListAdj => TriangleBatchMode::LineAdjDraw,
+            ResidentScenePrimitiveTopology::LineLoop
+            | ResidentScenePrimitiveTopology::LineStrip => TriangleBatchMode::LineStripDraw,
+            ResidentScenePrimitiveTopology::LineStripAdj => TriangleBatchMode::LineStripAdjDraw,
             ResidentScenePrimitiveTopology::TriangleList => TriangleBatchMode::Draw,
+            ResidentScenePrimitiveTopology::TriangleListAdj => TriangleBatchMode::TriangleAdjDraw,
+            ResidentScenePrimitiveTopology::TriangleStrip => TriangleBatchMode::TriangleStripDraw,
+            ResidentScenePrimitiveTopology::TriangleStripAdj => {
+                TriangleBatchMode::TriangleStripAdjDraw
+            }
+            ResidentScenePrimitiveTopology::TriangleFan => TriangleBatchMode::TriangleFanDraw,
+            ResidentScenePrimitiveTopology::QuadList => TriangleBatchMode::QuadListDraw,
+            ResidentScenePrimitiveTopology::QuadStrip => TriangleBatchMode::QuadStripDraw,
+            ResidentScenePrimitiveTopology::RectList => TriangleBatchMode::RectListDraw,
         },
         StreamoutProofExperiment::HeaderAndPositionSlots01,
         TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
@@ -1559,7 +1640,24 @@ fn stage_resident_churn_forward_secondary(
         resident_secondary_marker(RCS_EXEC_RESULT_DRAW_PRE3D, secondary_index)?,
         resident_secondary_marker(RCS_EXEC_RESULT_DRAW_POST3D, secondary_index)?,
         resident_secondary_marker(RCS_EXEC_RESULT_DONE, secondary_index)?,
-        TriangleBatchMode::Draw,
+        match resident.topology() {
+            ResidentScenePrimitiveTopology::PointList => TriangleBatchMode::PointDraw,
+            ResidentScenePrimitiveTopology::LineList => TriangleBatchMode::LineDraw,
+            ResidentScenePrimitiveTopology::LineListAdj => TriangleBatchMode::LineAdjDraw,
+            ResidentScenePrimitiveTopology::LineLoop
+            | ResidentScenePrimitiveTopology::LineStrip => TriangleBatchMode::LineStripDraw,
+            ResidentScenePrimitiveTopology::LineStripAdj => TriangleBatchMode::LineStripAdjDraw,
+            ResidentScenePrimitiveTopology::TriangleList => TriangleBatchMode::Draw,
+            ResidentScenePrimitiveTopology::TriangleListAdj => TriangleBatchMode::TriangleAdjDraw,
+            ResidentScenePrimitiveTopology::TriangleStrip => TriangleBatchMode::TriangleStripDraw,
+            ResidentScenePrimitiveTopology::TriangleStripAdj => {
+                TriangleBatchMode::TriangleStripAdjDraw
+            }
+            ResidentScenePrimitiveTopology::TriangleFan => TriangleBatchMode::TriangleFanDraw,
+            ResidentScenePrimitiveTopology::QuadList => TriangleBatchMode::QuadListDraw,
+            ResidentScenePrimitiveTopology::QuadStrip => TriangleBatchMode::QuadStripDraw,
+            ResidentScenePrimitiveTopology::RectList => TriangleBatchMode::RectListDraw,
+        },
         StreamoutProofExperiment::HeaderAndPositionSlots01,
         resident.front_end_contract,
         [0.0, 0.0],
@@ -1923,7 +2021,7 @@ fn submit_resident_churn_forward_geometry_batched(
     dev: crate::intel::Dev,
     warm: RenderWarmState,
     resident: &ResidentChurnForward,
-    sampled_texture: Option<&ResidentSampledTexture>,
+    sampled_material: Option<ResidentRetainedMaterial<'_>>,
     static_draws: &[ResidentSceneDraw<'_>],
     clear: [u8; 4],
     depth_config: TriangleDepthConfig,
@@ -2021,7 +2119,7 @@ fn submit_resident_churn_forward_geometry_batched(
                 let draw = prepare_resident_churn_forward_draw(
                     state_warm,
                     resident,
-                    sampled_texture,
+                    sampled_material,
                     group,
                     render_target_gpu,
                     render_target_pitch,
@@ -2042,7 +2140,7 @@ fn submit_resident_churn_forward_geometry_batched(
                 )?;
             }
             Some(RetainedGraphicsHandoff::ExpandedPositions) => {
-                if sampled_texture.is_some() {
+                if sampled_material.is_some() {
                     return Err("picasso-retained-texture-native-handoff-required");
                 }
                 let draw = prepare_resident_churn_expanded_draw(
@@ -2067,7 +2165,7 @@ fn submit_resident_churn_forward_geometry_batched(
                     None,
                     ResidentSceneFragmentContract::ConstantRgba,
                     [0.0, 0.0],
-                    ResidentScenePrimitiveTopology::TriangleList,
+                    resident.topology(),
                     secondary_index,
                     result_ggtt_gpu,
                 )?;
@@ -2147,14 +2245,14 @@ fn submit_resident_churn_forward_geometry_batched(
         );
     }
     let prepare_us = crate::chronos::monotonic_nanos().saturating_sub(prepare_started_ns) / 1_000;
-    if let Some(texture) = sampled_texture
+    if let Some(material) = sampled_material
         && !PICASSO_RETAINED_TEXTURED_SUBMIT_LOGGED.swap(true, Ordering::AcqRel)
     {
         crate::log_important!(target: "render";
             "picasso-material: proof=retained-texture-submit-armed accepted=1 contract=pos-normal-uv+texture-id graphics_handoff=native-matrices vertex_shader=gpu-instance-transform+authored-uv vertex_fetch=pos3+uv2+sgvs3 component_packing=0xA37 pixel_shader=filtered-base-color-simd16 interpolation=perspective-authored-uv lighting=none ps_binding_table_alignment=32 ps_bti=2 sampler=0 texture={}x{} stride={} cpu_texture_sampling=0 cpu_vertex_projection=0 render_submits=1\n",
-            texture.width,
-            texture.height,
-            texture.pitch,
+            material.base_color.width,
+            material.base_color.height,
+            material.base_color.pitch,
         );
     }
     let completed = match carrier {
@@ -2175,14 +2273,14 @@ fn submit_resident_churn_forward_geometry_batched(
         ),
     };
     if completed
-        && let Some(texture) = sampled_texture
+        && let Some(material) = sampled_material
         && !PICASSO_RETAINED_TEXTURED_PATH_LOGGED.swap(true, Ordering::AcqRel)
     {
         crate::log_important!(target: "render";
             "picasso-material: proof=retained-texture-sampled-and-retired accepted=1 coordinates=authored-uv contract=pos-normal-uv+texture-id graphics_handoff=native-matrices vertex_shader=gpu-instance-transform+authored-uv pixel_shader=filtered-base-color-simd16 interpolation=perspective-authored-uv lighting=none texture={}x{} stride={} cpu_texture_sampling=0 cpu_vertex_projection=0 render_submits=1\n",
-            texture.width,
-            texture.height,
-            texture.pitch,
+            material.base_color.width,
+            material.base_color.height,
+            material.base_color.pitch,
         );
     }
     if !completed && carrier.is_none() {
@@ -2228,7 +2326,7 @@ fn submit_resident_triangle_scene_capture(
 fn submit_resident_scene_capture_inner(
     draws: &[ResidentSceneDraw<'_>],
     native_churn: Option<&ResidentChurnForward>,
-    native_sampled_texture: Option<&ResidentSampledTexture>,
+    native_sampled_material: Option<ResidentRetainedMaterial<'_>>,
     coverage_draws: &[ResidentSceneCoverageDraw],
     clear_rgba: Option<[u8; 4]>,
     diagnostic_logs: bool,
@@ -2242,7 +2340,7 @@ fn submit_resident_scene_capture_inner(
     submit_resident_scene_capture_inner_for_carrier(
         draws,
         native_churn,
-        native_sampled_texture,
+        native_sampled_material,
         coverage_draws,
         clear_rgba,
         diagnostic_logs,
@@ -2259,7 +2357,7 @@ fn submit_resident_scene_capture_inner(
 fn submit_resident_scene_capture_inner_for_carrier(
     draws: &[ResidentSceneDraw<'_>],
     native_churn: Option<&ResidentChurnForward>,
-    native_sampled_texture: Option<&ResidentSampledTexture>,
+    native_sampled_material: Option<ResidentRetainedMaterial<'_>>,
     coverage_draws: &[ResidentSceneCoverageDraw],
     clear_rgba: Option<[u8; 4]>,
     diagnostic_logs: bool,
@@ -2367,7 +2465,7 @@ fn submit_resident_scene_capture_inner_for_carrier(
             return Err("no-device");
         };
         let warm = match carrier {
-            Some(lease) => picasso_render1_warm_state(lease).ok_or("picasso-render1-not-ready")?,
+            Some(lease) => picasso_render1_warm_state(lease).ok_or("picasso-carrier-not-ready")?,
             None => warm_state().ok_or("render-boot-not-ready")?,
         };
         if !forcewake_render_acquire(warm) {
@@ -2517,7 +2615,7 @@ fn submit_resident_scene_capture_inner_for_carrier(
                 dev,
                 warm,
                 resident,
-                native_sampled_texture,
+                native_sampled_material,
                 draws,
                 clear,
                 depth_config.ok_or("churn-native-depth")?,
@@ -7504,11 +7602,20 @@ pub(crate) fn init_fixed_render_ggtt_for_boot(dev: crate::intel::Dev) -> bool {
         log_boot_render_memory_proof(warm);
         MEMORY_PROOF_LOGGED.store(true, Ordering::Release);
         WARM_BUFFERS_MAPPED.store(true, Ordering::Release);
+        let picasso_carriers_ready_count =
+            usize::from(picasso_carriers_ready) * picasso_carrier_capacity();
+        if !picasso_carriers_ready {
+            crate::log_error!(target: "render";
+                "picasso-carrier boot-gate accepted=0 ready=0 required={} render0_continues=1 vmx_claims=fail-closed\n",
+                picasso_carrier_capacity(),
+            );
+        }
         crate::log_info!(target: "render";
-            "intel/render boot-gate render0={} render1_picasso={} render2_picasso={} picasso_runtime_ggtt_remap=forbidden max_vmx_domains=2\n",
+            "intel/render boot-gate render0={} picasso_carriers_ready={}/{} picasso_runtime_ggtt_remap=forbidden max_vmx_domains={}\n",
             1,
-            picasso_carriers_ready as u8,
-            picasso_carriers_ready as u8,
+            picasso_carriers_ready_count,
+            picasso_carrier_capacity(),
+            picasso_carrier_capacity(),
         );
         true
     })

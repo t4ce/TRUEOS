@@ -238,4 +238,3 @@ For example: `#[trueos_executor::main(entry = ..., executor = \"some_crate::Exec
 
     result
 }
-

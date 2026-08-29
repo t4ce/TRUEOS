@@ -1,7 +1,7 @@
 extern crate alloc;
 
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 
 use spin::Mutex;
 use trueos_executor::{SendSpawner, SpawnToken, Spawner};
@@ -18,10 +18,11 @@ const WORKER_SLOT_LIMIT: usize = crate::allcaps::hv::VM_CPU_SLOT_LIMIT;
 const REGISTERED_SLOT_WORD_BITS: usize = u64::BITS as usize;
 const REGISTERED_SLOT_WORDS: usize =
     (WORKER_SLOT_LIMIT + REGISTERED_SLOT_WORD_BITS - 1) / REGISTERED_SLOT_WORD_BITS;
-// The live scanout -> H.264 -> UDP path still contains synchronous ownership
-// boundaries which make sharing a cooperative executor unsafe.  Until that
-// path is folded into AP1 as a fully asynchronous media-engine service, reserve
-// the topology's final AP as its private buddy carrier.
+// Live scanout capture and H.264 encode still share a synchronous, single-frame
+// ownership boundary which makes sharing a cooperative executor unsafe. Keep
+// that media-side exception on the topology's final AP. Complete encoded access
+// units cross a bounded, one-way handoff into ordinary asynchronous UDP egress;
+// network ownership is not part of the private-carrier contract.
 const LAST_AP_SERVICE_RESERVED: bool = cfg!(feature = "trueos_h264_encode_stream");
 
 static CORE_SPAWNER_BY_SLOT: [Mutex<Option<SendSpawner>>; WORKER_SLOT_LIMIT] =
@@ -181,7 +182,7 @@ pub fn register_core_spawner(cpu_slot: u32, core_kind: u8, spawner: Spawner) {
         crate::r::blocking::start_service_lane_for_slot(cpu_slot);
     } else if is_last_ap_service_slot(cpu_slot) {
         crate::log_info!(target: "service";
-            "lastap: reserved slot={} core_kind={} owner=ui4-h264-udp excluded_from=vm-hull+blocking-lanes+background-round-robin lifecycle=temporary-until-ap1-media-integration\n",
+            "lastap: reserved slot={} core_kind={} owner=ui4-scanout-h264 excluded_from=vm-hull+blocking-lanes+background-round-robin network_egress=one-way-ordinary-executor lifecycle=temporary-until-ap1-media-integration\n",
             cpu_slot,
             core_kind,
         );

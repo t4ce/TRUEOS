@@ -16,11 +16,11 @@ pub use trueos_executor_macros::task;
 #[cfg_attr(feature = "platform-spin", path = "platform/spin.rs")]
 mod platform;
 
-#[cfg(not(feature = "_platform"))]
-pub use trueos_executor_macros::main_unspecified as main;
 #[cfg(feature = "_platform")]
 #[allow(unused_imports)] // don't warn if the module is empty.
 pub use platform::*;
+#[cfg(not(feature = "_platform"))]
+pub use trueos_executor_macros::main_unspecified as main;
 
 pub mod raw;
 pub use raw::{MigrateCurrentTask, MigrationResult, MigrationTarget, migrate_current_task_to};

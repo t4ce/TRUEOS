@@ -11,7 +11,6 @@ pub(crate) mod format;
 #[cfg(test)]
 pub(crate) mod fslog;
 pub(crate) mod grid;
-pub(crate) mod gridp;
 pub(crate) mod helio;
 pub(crate) mod hyper;
 pub(crate) mod img;
@@ -24,7 +23,6 @@ pub(crate) mod qjs;
 pub(crate) mod ram;
 pub(crate) mod rapl;
 pub(crate) mod run;
-pub(crate) mod set;
 pub(crate) mod shell;
 pub(crate) mod smp;
 pub(crate) mod ssh;

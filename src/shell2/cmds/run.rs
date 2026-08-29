@@ -1153,7 +1153,7 @@ pub(crate) async fn submit_archive_name_to_target_from_app_db_with_instance_waiv
     Err(String::from("archive not found"))
 }
 
-async fn submit_archive_name_to_target_from_app_db_with_instance_and_launch_script_async(
+pub(crate) async fn submit_archive_name_to_target_from_app_db_with_instance_and_launch_script_async(
     target: MatrixTarget,
     archive_name: &str,
     app_args: Vec<String>,
@@ -1168,29 +1168,6 @@ async fn submit_archive_name_to_target_from_app_db_with_instance_and_launch_scri
             app_args,
             instance,
             launch_script,
-            "app.db",
-            0,
-            None,
-        )
-        .await;
-    }
-
-    Err(String::from("archive not found"))
-}
-
-pub(crate) async fn submit_archive_name_to_target_from_app_db_default_async(
-    target: MatrixTarget,
-    archive_name: &str,
-    app_args: Vec<String>,
-) -> Result<&'static str, String> {
-    if let Some(module_bytes) = crate::app_db::get(archive_name)? {
-        return submit_module_bytes_to_target_async(
-            target,
-            archive_name,
-            module_bytes,
-            app_args,
-            crate::hv::BlueprintInstanceRequest::default(),
-            None,
             "app.db",
             0,
             None,

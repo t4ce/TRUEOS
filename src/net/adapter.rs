@@ -182,7 +182,7 @@ struct InternalNetbenchCombinedLog {
 // Boot can involve several concurrent TCP/TLS connections (DoH/DoT, fetches,
 // net-shell, etc.). 8 was too tight and caused transient "no sockets available"
 // failures under load.
-const MAX_SOCKETS: usize = crate::allcaps::net::MAX_SOCKETS;
+const SOCKET_SOFT_CAP: usize = crate::allcaps::net::SOCKET_SOFT_CAP;
 const MAX_DRAIN_PER_LOOP: usize = crate::allcaps::net::MAX_DRAIN_PER_LOOP;
 const TCP_RX_BUF_BYTES: usize = crate::allcaps::net::TCP_RX_BUF_BYTES;
 const TCP_TX_BUF_BYTES: usize = crate::allcaps::net::TCP_TX_BUF_BYTES;
@@ -2553,7 +2553,7 @@ impl NetService {
         ipv6_prefix_len: u8,
         mtu: u16,
     ) -> Result<NetHandle, &'static str> {
-        if self.records.len() + self.tun_records.len() >= MAX_SOCKETS {
+        if self.records.len() + self.tun_records.len() >= SOCKET_SOFT_CAP {
             return Err("no sockets available");
         }
         if mtu == 0 || mtu as usize > v::vnet::MAX_MSG {
@@ -2583,7 +2583,7 @@ impl NetService {
         tx_buffer_bytes: usize,
     ) -> Result<NetHandle, &'static str> {
         self.require_link_up()?;
-        if self.records.len() >= MAX_SOCKETS {
+        if self.records.len() >= SOCKET_SOFT_CAP {
             return Err("no sockets available");
         }
         if tx_buffer_bytes == 0 || tx_buffer_bytes > UDP_TX_BUF_BYTES_MAX {
@@ -2620,7 +2620,7 @@ impl NetService {
 
     fn open_tcp(&mut self, owner: &'static str, port: u16) -> Result<NetHandle, &'static str> {
         self.require_link_up()?;
-        if self.records.len() >= MAX_SOCKETS {
+        if self.records.len() >= SOCKET_SOFT_CAP {
             return Err("no sockets available");
         }
 
@@ -2664,7 +2664,7 @@ impl NetService {
         handoff: TcpQuietHandoff,
     ) -> Result<NetHandle, &'static str> {
         self.require_link_up()?;
-        if self.records.len() >= MAX_SOCKETS
+        if self.records.len() >= SOCKET_SOFT_CAP
             || self.local_ipv4.map(|ip| ip.octets()) != Some(handoff.local_addr)
         {
             return Err("quiet tcp restore unavailable");
@@ -2727,7 +2727,7 @@ impl NetService {
         owner: &'static str,
         remote: NetEndpoint,
     ) -> Result<(NetHandle, NetHandle, &'static str), &'static str> {
-        if self.records.len().saturating_add(2) > MAX_SOCKETS {
+        if self.records.len().saturating_add(2) > SOCKET_SOFT_CAP {
             return Err("no sockets available");
         }
 
@@ -2814,7 +2814,7 @@ impl NetService {
         remote: NetEndpoint,
     ) -> Result<NetHandle, &'static str> {
         self.require_link_up()?;
-        if self.records.len() >= MAX_SOCKETS {
+        if self.records.len() >= SOCKET_SOFT_CAP {
             return Err("no sockets available");
         }
 
@@ -2902,7 +2902,7 @@ impl NetService {
         remote: NetEndpointV6,
     ) -> Result<NetHandle, &'static str> {
         self.require_link_up()?;
-        if self.records.len() >= MAX_SOCKETS {
+        if self.records.len() >= SOCKET_SOFT_CAP {
             return Err("no sockets available");
         }
 

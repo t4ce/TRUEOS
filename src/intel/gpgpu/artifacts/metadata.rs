@@ -96,6 +96,14 @@ pub(crate) const COPY_RECT_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
         &COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT,
     );
 
+pub(crate) const SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_ARTIFACT: GpgpuKernelArtifact =
+    GpgpuKernelArtifact::contracted(
+        SUBSET_SUM_COLLAPSE5_MERGE10_KERNEL_NAME,
+        SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_BIN,
+        SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_SPV,
+        &SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_CPP_ABI_CONTRACT,
+    );
+
 pub(crate) const FILL_RECT_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
     GpgpuKernelArtifact::contracted(
         FILL_RECT_RGBA8_KERNEL_NAME,

@@ -2,6 +2,10 @@ pub(crate) fn copy_rect_rgba8_upload_status() -> Option<UploadedKernelArtifact> 
     *COPY_RECT_RGBA8_UPLOAD.lock()
 }
 
+pub(crate) fn subset_sum_collapse5_merge10_upload_status() -> Option<UploadedKernelArtifact> {
+    *SUBSET_SUM_COLLAPSE5_MERGE10_UPLOAD.lock()
+}
+
 pub(crate) fn fill_rect_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
     *FILL_RECT_RGBA8_UPLOAD.lock()
 }
@@ -101,6 +105,20 @@ pub(crate) fn upload_copy_rect_rgba8_kernel() -> Option<UploadedKernelArtifact> 
 
     let upload = upload_artifact(dev, COPY_RECT_RGBA8_ADLS_ARTIFACT, COPY_RECT_RGBA8_ADLS_GPU)?;
     *COPY_RECT_RGBA8_UPLOAD.lock() = Some(upload);
+    Some(upload)
+}
+
+pub(crate) fn upload_subset_sum_collapse5_merge10_kernel() -> Option<UploadedKernelArtifact> {
+    if let Some(upload) = *SUBSET_SUM_COLLAPSE5_MERGE10_UPLOAD.lock() {
+        return Some(upload);
+    }
+    let dev = super::claimed_device()?;
+    let upload = upload_artifact(
+        dev,
+        SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_ARTIFACT,
+        SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_GPU,
+    )?;
+    *SUBSET_SUM_COLLAPSE5_MERGE10_UPLOAD.lock() = Some(upload);
     Some(upload)
 }
 
@@ -628,6 +646,7 @@ const GPGPU_KNOWN_ARTIFACT_NAMES: &[&str] = &[
     LFM25_Q8_PROJECT_PACKED_KERNEL_NAME,
     KOKORO_QGEMM_U8_I8_KERNEL_NAME,
     KOKORO_CONV1D_U8_U8_KERNEL_NAME,
+    SUBSET_SUM_COLLAPSE5_MERGE10_KERNEL_NAME,
     FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME,
     HELIO_RETAINED_TRANSFORM_KERNEL_NAME,
     LAB256_MULTIPHASE_KERNEL_NAME,
@@ -710,6 +729,7 @@ fn known_artifact_address_space(name: &str) -> GpgpuArtifactAddressSpace {
         | LFM25_Q8_PROJECT_PACKED_KERNEL_NAME
         | KOKORO_QGEMM_U8_I8_KERNEL_NAME
         | KOKORO_CONV1D_U8_U8_KERNEL_NAME
+        | SUBSET_SUM_COLLAPSE5_MERGE10_KERNEL_NAME
         | FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME
         | HELIO_RETAINED_TRANSFORM_KERNEL_NAME
         | LAB256_MULTIPHASE_KERNEL_NAME
@@ -862,6 +882,11 @@ fn known_artifact_slot(name: &str) -> Option<GpgpuKnownArtifactSlot> {
             artifact: KOKORO_CONV1D_U8_U8_ADLS_ARTIFACT,
             gpu: KOKORO_CONV1D_U8_U8_ADLS_GPU,
             upload: &KOKORO_CONV1D_U8_U8_UPLOAD,
+        }),
+        SUBSET_SUM_COLLAPSE5_MERGE10_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
+            artifact: SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_ARTIFACT,
+            gpu: SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_GPU,
+            upload: &SUBSET_SUM_COLLAPSE5_MERGE10_UPLOAD,
         }),
         FONT_OUTLINE_COVERAGE_R8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
             artifact: FONT_OUTLINE_COVERAGE_R8_ADLS_ARTIFACT,

@@ -14,6 +14,7 @@ const STATUS_NOT_FOUND: i32 = -5;
 const STATUS_IO: i32 = -6;
 const STATUS_TIMED_OUT: i32 = -7;
 const STATUS_NO_DEVICE: i32 = -8;
+const STATUS_RESOURCE_EXHAUSTED: i32 = -9;
 
 pub(crate) const READY_READABLE: u8 = 0b0000_0001;
 pub(crate) const READY_WRITABLE: u8 = 0b0000_0010;
@@ -26,15 +27,20 @@ pub(crate) const READY_WRITE_CLOSED: u8 = 0b0001_0000;
 pub(crate) struct ReadyEventRaw {
     pub token: usize,
     pub readiness: u8,
+    pub reserved: [u8; 7],
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 struct SocketAddrRaw {
     family: u8,
+    reserved: u8,
     port: u16,
     addr: [u8; 16],
 }
+
+const _: () = assert!(core::mem::size_of::<ReadyEventRaw>() == 16);
+const _: () = assert!(core::mem::size_of::<SocketAddrRaw>() == 20);
 
 unsafe extern "C" {
     fn trueos_mio_tcp_listener_bind(addr: SocketAddrRaw, out_socket_id: *mut u32) -> i32;
@@ -246,6 +252,7 @@ fn socket_addr_to_raw(addr: SocketAddr) -> SocketAddrRaw {
         SocketAddr::V4(addr) => {
             let mut raw = SocketAddrRaw {
                 family: 4,
+                reserved: 0,
                 port: addr.port(),
                 addr: [0; 16],
             };
@@ -254,6 +261,7 @@ fn socket_addr_to_raw(addr: SocketAddr) -> SocketAddrRaw {
         }
         SocketAddr::V6(addr) => SocketAddrRaw {
             family: 6,
+            reserved: 0,
             port: addr.port(),
             addr: addr.ip().octets(),
         },
@@ -310,6 +318,7 @@ fn status_to_error(status: i32, _detail: &'static str) -> io::Error {
         STATUS_NOT_FOUND => io::ErrorKind::NotFound,
         STATUS_TIMED_OUT => io::ErrorKind::TimedOut,
         STATUS_NO_DEVICE => io::ErrorKind::NotFound,
+        STATUS_RESOURCE_EXHAUSTED => io::ErrorKind::Other,
         STATUS_IO => io::ErrorKind::Other,
         _ => io::ErrorKind::Other,
     };

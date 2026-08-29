@@ -52,9 +52,9 @@ const SIGNAL_ACTION_CAPACITY: usize = 256;
 // equal local sequence numbers can never become the same mutex owner.
 const PTHREAD_THREAD_CARRIER_TAG: usize = crate::wls::BLUEPRINT_THREAD_CARRIER_TAG as usize;
 const PTHREAD_THREAD_SEQUENCE_MASK: usize = PTHREAD_THREAD_CARRIER_TAG - 1;
-const OPEN_FILE_CAPACITY: usize = 64;
-const FD_FLAG_CAPACITY: usize = 256;
-const SOCKET_FD_CAPACITY: usize = 128;
+const OPEN_FILE_CAPACITY: usize = crate::allcaps::io::DESCRIPTOR_SOFT_CAP;
+const FD_FLAG_CAPACITY: usize = crate::allcaps::io::DESCRIPTOR_SOFT_CAP;
+const SOCKET_FD_CAPACITY: usize = crate::allcaps::io::DESCRIPTOR_SOFT_CAP;
 
 pub(crate) const TRUEOS_EAGAIN: c_int = 11;
 const TRUEOS_EADDRINUSE: c_int = 98;
@@ -807,6 +807,7 @@ fn write_sockaddr_v4(addr: *mut c_void, addr_len: *mut u32, value: SocketAddrV4)
 fn socket_v4_to_mio(value: SocketAddrV4) -> crate::mio_compat::TrueosMioSocketAddr {
     let mut addr = crate::mio_compat::TrueosMioSocketAddr {
         family: 4,
+        reserved: 0,
         port: value.port,
         addr: [0; 16],
     };
@@ -2912,26 +2913,71 @@ pub unsafe extern "C" fn read(fd: c_int, buf: *mut c_void, count: usize) -> isiz
     copied as isize
 }
 
-pub(crate) fn open_file_read_ready(file: &OpenFile) -> bool {
-    match file {
-        OpenFile::Regular { world, offset, .. } => *offset < world.lock().bytes.len(),
-        OpenFile::PipeRead { pipe, .. } => !pipe.lock().bytes.is_empty(),
-        OpenFile::PipeWrite { .. } => false,
-        OpenFile::UnixSocket { rx, .. } => !rx.lock().bytes.is_empty(),
-    }
-}
+pub(crate) fn open_file_poll_events(file: &OpenFile, events: i16) -> i16 {
+    const POLLIN: i16 = 0x0001;
+    const POLLOUT: i16 = 0x0004;
+    const POLLERR: i16 = 0x0008;
+    const POLLHUP: i16 = 0x0010;
 
-pub(crate) fn open_file_write_ready(file: &OpenFile) -> bool {
     match file {
-        OpenFile::Regular { writable, .. } => *writable,
-        OpenFile::PipeRead { .. } => false,
+        // Ordinary regular-file I/O cannot block. Reaching EOF therefore
+        // remains readable readiness instead of making poll sleep forever.
+        OpenFile::Regular {
+            readable, writable, ..
+        } => {
+            let mut ready = 0;
+            if *readable && events & POLLIN != 0 {
+                ready |= POLLIN;
+            }
+            if *writable && events & POLLOUT != 0 {
+                ready |= POLLOUT;
+            }
+            ready
+        }
+        OpenFile::PipeRead { pipe, .. } => {
+            let pipe = pipe.lock();
+            let mut ready = 0;
+            if events & POLLIN != 0 && !pipe.bytes.is_empty() {
+                ready |= POLLIN;
+            }
+            if !pipe.write_open {
+                ready |= POLLHUP;
+            }
+            ready
+        }
         OpenFile::PipeWrite { pipe, .. } => {
             let pipe = pipe.lock();
-            pipe.read_open && pipe.write_open
+            if !pipe.read_open {
+                POLLERR
+            } else if events & POLLOUT != 0 && pipe.write_open {
+                POLLOUT
+            } else {
+                0
+            }
         }
-        OpenFile::UnixSocket { tx, .. } => {
-            let tx = tx.lock();
-            tx.read_open && tx.write_open
+        OpenFile::UnixSocket { rx, tx, .. } => {
+            let (has_input, peer_write_open) = {
+                let rx = rx.lock();
+                (!rx.bytes.is_empty(), rx.write_open)
+            };
+            let (peer_read_open, write_open) = {
+                let tx = tx.lock();
+                (tx.read_open, tx.write_open)
+            };
+            let mut ready = 0;
+            if events & POLLIN != 0 && has_input {
+                ready |= POLLIN;
+            }
+            if events & POLLOUT != 0 && peer_read_open && write_open {
+                ready |= POLLOUT;
+            }
+            if !peer_write_open {
+                ready |= POLLHUP;
+            }
+            if !peer_read_open {
+                ready |= POLLERR;
+            }
+            ready
         }
     }
 }

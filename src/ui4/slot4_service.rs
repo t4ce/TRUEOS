@@ -56,7 +56,7 @@ impl Slot4State {
 #[trueos_executor::task(pool_size = 1)]
 pub(crate) async fn ui4_slot4_service_task() {
     crate::log_info!(target: "ui4/slot4";
-        "ui4/slot4: service online carrier=ap1-ui-core plane=slot4 content=color-picker-rgba8+static-color-crosshairs+selected-frame-strips+selection-outline-1px+maximize-outline-1px+context-menu hardware-cursor=preferred-physical-source/concurrent cadence_hz={} cadence_clock=absolute-fractional wake=input-or-frame-state-change coalesce=display-cadence damage=ordered-linear-diff+window-old-new gpu_submits=0 synthetic-motion=off\n",
+        "ui4/slot4: service online carrier=ap1-ui-core plane=slot4 content=start-button+color-picker-rgba8+static-color-crosshairs+selected-frame-strips+selection-outline-1px+maximize-outline-1px+context-menu hardware-cursor=preferred-physical-source/concurrent cadence_hz={} cadence_clock=absolute-fractional wake=input-or-frame-state-change coalesce=display-cadence damage=ordered-linear-diff+window-old-new gpu_submits=0 synthetic-motion=off\n",
         super::INTERACTION_CADENCE_HZ,
     );
 
@@ -457,7 +457,15 @@ fn software_cursor_rects() -> Slot4Rects {
     }
 
     for visual in &visuals {
-        push_software_crosshair(&mut rects, visual.x, visual.y, screen_w, screen_h, visual.color);
+        push_software_crosshair(
+            &mut rects,
+            visual.x,
+            visual.y,
+            screen_w,
+            screen_h,
+            visual.color,
+            super::input_broker::software_cursor_scale(),
+        );
     }
 
     rects
@@ -679,33 +687,15 @@ fn push_software_crosshair(
     screen_w: u32,
     screen_h: u32,
     color: crate::graphics::primitives::Rgba8,
+    scale: u32,
 ) {
-    let long_before = SOFTWARE_CURSOR_LONG_PX / 2;
+    let scale = scale.max(1);
+    let stroke = SOFTWARE_CURSOR_STROKE_PX.saturating_mul(scale);
+    let long = SOFTWARE_CURSOR_LONG_PX.saturating_mul(scale);
+    let long_before = long / 2;
 
-    push_cursor_rect(
-        rects,
-        x,
-        y,
-        2,
-        long_before,
-        SOFTWARE_CURSOR_STROKE_PX,
-        SOFTWARE_CURSOR_LONG_PX,
-        screen_w,
-        screen_h,
-        color,
-    );
-    push_cursor_rect(
-        rects,
-        x,
-        y,
-        long_before,
-        2,
-        SOFTWARE_CURSOR_LONG_PX,
-        SOFTWARE_CURSOR_STROKE_PX,
-        screen_w,
-        screen_h,
-        color,
-    );
+    push_cursor_rect(rects, x, y, stroke / 2, long_before, stroke, long, screen_w, screen_h, color);
+    push_cursor_rect(rects, x, y, long_before, stroke / 2, long, stroke, screen_w, screen_h, color);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -821,6 +811,7 @@ mod tests {
             TEST_SCREEN_W,
             TEST_SCREEN_H,
             Rgba8::new(255, 0, 0, 255),
+            1,
         );
         rects
     }
@@ -949,6 +940,18 @@ mod tests {
         for (rect, (x, y, width, height)) in rects.iter().zip(expected) {
             assert_eq!((rect.x, rect.y, rect.width, rect.height), (x, y, width, height));
             assert_eq!(rect.color, Rgba8::new(255, 0, 0, 255));
+        }
+    }
+
+    #[test]
+    fn fat_software_cursor_is_three_times_the_normal_dimensions() {
+        let mut rects = Slot4Rects::new();
+        push_software_crosshair(&mut rects, 150, 150, 300, 300, Rgba8::new(255, 0, 0, 255), 3);
+
+        let expected = [(143, 110, 15, 81), (110, 143, 81, 15)];
+        assert_eq!(rects.len(), expected.len());
+        for (rect, (x, y, width, height)) in rects.iter().zip(expected) {
+            assert_eq!((rect.x, rect.y, rect.width, rect.height), (x, y, width, height));
         }
     }
 

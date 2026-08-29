@@ -93,7 +93,7 @@ SECTIONS
   .live_update_slot ALIGN(8) : AT(ADDR(.live_update_slot) - KERNEL_OFFSET) {
     QUAD(0x545255454F534C55); /* TRUEOSLU */
     QUAD(0x4C49564555504454); /* LIVEUPDT */
-    QUAD(1);                  /* ABI version */
+    QUAD(2);                  /* ABI version */
     QUAD(trueos_live_update_ap_entry);
     QUAD(__live_update_handoff_start);
     QUAD(__live_update_handoff_end - __live_update_handoff_start);

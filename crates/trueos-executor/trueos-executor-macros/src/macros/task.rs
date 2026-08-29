@@ -297,4 +297,3 @@ fn check_arg_ty(errors: &mut TokenStream, ty: &Type) {
 
     Visit::visit_type(&mut Visitor { errors }, ty);
 }
-

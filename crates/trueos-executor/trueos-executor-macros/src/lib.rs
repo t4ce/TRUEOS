@@ -222,4 +222,3 @@ pub fn main_wasm(args: TokenStream, item: TokenStream) -> TokenStream {
 pub fn main_unspecified(args: TokenStream, item: TokenStream) -> TokenStream {
     main::run(args.into(), item.into(), &main::ARCH_UNSPECIFIED).into()
 }
-

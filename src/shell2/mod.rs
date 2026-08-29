@@ -591,11 +591,6 @@ pub(crate) fn line_width_for_backend(io: &'static dyn ShellBackend2) -> usize {
     line_width_for_output(output_target_for_backend(io))
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-pub(crate) fn set_line_width_for_backend(io: &'static dyn ShellBackend2, width: usize) {
-    set_line_width_for_output(output_target_for_backend(io), width);
-}
-
 pub(crate) fn apply_reported_terminal_size_for_backend(
     io: &'static dyn ShellBackend2,
     cols: usize,
@@ -651,10 +646,6 @@ pub(crate) fn initialize_local_shell_session_view(
             },
         );
     }
-}
-
-pub(crate) fn minimum_line_width_for_backend(io: &'static dyn ShellBackend2) -> usize {
-    minimum_line_width_for_output(output_target_for_backend(io))
 }
 
 pub(crate) fn net_shell_terminal_size() -> (usize, usize) {
@@ -733,17 +724,6 @@ fn current_chrome_state(output_mask: OutputMask, mode: ShellMode2) -> ChromeStat
         is_vmx: active_matrix_slot_is_vmx(output_mask),
         mode,
     }
-}
-
-fn set_line_width_for_output(output_mask: OutputMask, width: usize) {
-    let mut width = width.max(minimum_line_width_for_output(output_mask));
-    if (output_mask & OUTPUT_LOCAL_MASK) != 0
-        && let Some((frontend_cols, _)) =
-            backends::session_pool::terminal_size_for_output_mask(output_mask)
-    {
-        width = width.min(frontend_cols.max(1));
-    }
-    matrix::set_active_line_width(output_mask, width.max(1));
 }
 
 fn apply_reported_terminal_size(output_mask: OutputMask, cols: usize, rows: usize) -> bool {
@@ -941,6 +921,23 @@ pub(crate) fn submit_online_launch_script_to_target(
         target,
         width,
         AllocString::from(selector),
+        AllocString::from(launch_script),
+    )
+}
+
+pub(crate) fn submit_online_args_with_launch_script_to_target(
+    spawner: &Spawner,
+    target: MatrixTarget,
+    args: Vec<AllocString>,
+    launch_script: &str,
+) -> Result<(), trueos_executor::SpawnError> {
+    let width = with_matrix_target_lease(&target, || line_width_for_output(target.output_mask))
+        .unwrap_or(matrix::DEFAULT_MATRIX_SLOT_LINE_WIDTH);
+    shell2_dl::submit_online_args_with_launch_script_to_target(
+        spawner,
+        target,
+        width,
+        args,
         AllocString::from(launch_script),
     )
 }
@@ -1637,9 +1634,6 @@ fn handle_submit(
 ) -> HandleSubmitResult {
     match mode {
         ShellMode2::Cmd => match shell2_cmd::try_parse(spawner, io, submitted) {
-            shell2_cmd::ParseOutcome::SetLineWidth(width) => {
-                HandleSubmitResult::SetLineWidth(width)
-            }
             shell2_cmd::ParseOutcome::StartSession(kind) => HandleSubmitResult::StartSession(kind),
             _ => HandleSubmitResult::None,
         },
@@ -1652,7 +1646,6 @@ fn handle_submit(
 
 enum HandleSubmitResult {
     None,
-    SetLineWidth(usize),
     StartSession(shell2_cmd::CommandSessionKind),
 }
 
@@ -2352,15 +2345,6 @@ async fn run_shell2(
                             }
                             let submit_result = handle_submit(&spawner, io, mode, submitted);
                             match submit_result {
-                                HandleSubmitResult::SetLineWidth(width) => {
-                                    set_line_width_for_output(output_mask, width);
-                                    configure_output_view(&out, output_mask);
-                                    out.banner(output_mask, mode, minute_text.as_str());
-                                    out.mode_status(output_mask, running_go2_phase);
-                                    transcript = current_transcript_for_task(io);
-                                    render_active_slot_content(&out, output_mask, &transcript);
-                                    last_chrome_state = current_chrome_state(output_mask, mode);
-                                }
                                 HandleSubmitResult::StartSession(kind) => {
                                     let slot_id = matrix::active_slot_id(output_mask);
                                     let slot_lifetime_generation =
