@@ -38,7 +38,8 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
       RUST_BACKTRACE: 1
-      TRUEOS_BLUEPRINTS_REV: 7ec5f1f32c7ae931d3a7ccadcc58f0f8d1d09c21
+      # Includes crates/log-os and the staged futures-family lock update.
+      TRUEOS_BLUEPRINTS_REV: 1bd9de6e5d20c550742195c7eff7f00d6517e057
 
     steps:
       - name: Prepare checkout dependencies
@@ -142,8 +143,6 @@ jobs:
           git -C "${blueprints_dir}" checkout --detach FETCH_HEAD
           test "$(git -C "${blueprints_dir}" rev-parse HEAD)" = \
             "${TRUEOS_BLUEPRINTS_REV}"
-          git -C "${blueprints_dir}" apply \
-            "${GITHUB_WORKSPACE}/tools/ci/blueprints-futures-family.patch"
           # These built-ins are gitlinks in TRUEOS-Blueprints, so the parent
           # checkout alone contains no Cargo manifests for them.
           git -C "${blueprints_dir}" submodule update --init --depth 1 -- \

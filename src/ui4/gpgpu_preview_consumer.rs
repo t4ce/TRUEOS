@@ -1496,7 +1496,7 @@ fn initialize_cpp_font_rush2_set(
         .saturating_mul(2)
         .saturating_mul(CPP_FONT_RUSH2_PLANE_COUNT as u64);
     crate::log_info!(target: "ui4";
-        "ui4 cpp-font-rush2 layout request={} producers={} plane_canvases={} producer_grid={}x{} scanout={}x{} canvas_extent={}x{} canvas_bytes={} frame_ring_bytes={} mapping=producer-modulo-four/second-wave-nonoverlap-band glyph_alignment=independent-cells glyph_fanout={} font_pixels=64,72,80,88 alpha=176..255 gpgpu=nonoverlap-walker-waves publication=one-per-changed-plane\n",
+        "ui4 cpp-font-rush2 layout request={} producers={} plane_canvases={} producer_grid={}x{} scanout={}x{} canvas_extent={}x{} canvas_bytes={} frame_ring_bytes={} mapping=producer-modulo-four/second-wave-nonoverlap-band glyph_alignment=independent-cells glyph_fanout={} font_pixels=32,80,128,176 alpha=176..255 gpgpu=nonoverlap-walker-waves publication=one-per-changed-plane\n",
         desired.serial,
         CPP_FONT_RUSH2_PRODUCER_COUNT,
         CPP_FONT_RUSH2_PLANE_COUNT,
@@ -1625,7 +1625,7 @@ fn initialize_cpp_font_rush2_set(
     }
 
     for producer_index in 0..CPP_FONT_RUSH2_PRODUCER_COUNT {
-        let font_pixels = 64.0 + (producer_index % CPP_FONT_RUSH2_PLANE_COUNT) as f32 * 8.0;
+        let font_pixels = 32.0 + (producer_index % CPP_FONT_RUSH2_PLANE_COUNT) as f32 * 48.0;
         let registration = crate::r::font_producer_service::FontProducerRegistration {
             face: crate::intel::gpu_font::GpuFontFace::Default.id() as u16,
             tier: cpp_font_rush2_tier(producer_index),
