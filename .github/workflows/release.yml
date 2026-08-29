@@ -39,7 +39,7 @@ jobs:
       CARGO_TERM_COLOR: always
       RUST_BACKTRACE: 1
       # Includes crates/log-os and the staged futures-family lock update.
-      TRUEOS_BLUEPRINTS_REV: 1bd9de6e5d20c550742195c7eff7f00d6517e057
+      TRUEOS_BLUEPRINTS_REV: 20d27f75bd46d8b9fc8d138d3552a9237bf5c31e
 
     steps:
       - name: Prepare checkout dependencies

@@ -1154,7 +1154,14 @@ pub(crate) async fn gpgpu_preview_consumer_service_task(worker_slot: u32) {
         let mut desired = PREVIEW_CONTROL.lock().desired;
         if desired.serial != applied_serial {
             if !active.is_empty() {
-                drain_cpp_font_rush_pending(&mut active).await;
+                // Rush2 owns ordinary UI4 frame rings, so its close animation
+                // must start immediately. Any final GPU row remains attached
+                // to the retired frame and is polled by the non-blocking
+                // retirement path below. Awaiting it here can pin the sole
+                // preview worker before UI4 is even told to close the windows.
+                if !active.iter().any(|preview| preview.font_rush2.is_some()) {
+                    drain_cpp_font_rush_pending(&mut active).await;
+                }
                 stop_active_previews(
                     core::mem::take(&mut active),
                     &mut retired_frames,
@@ -1300,7 +1307,9 @@ pub(crate) async fn gpgpu_preview_consumer_service_task(worker_slot: u32) {
 
         if let Some(reason) = render_fault {
             if !active.is_empty() {
-                drain_cpp_font_rush_pending(&mut active).await;
+                if !active.iter().any(|preview| preview.font_rush2.is_some()) {
+                    drain_cpp_font_rush_pending(&mut active).await;
+                }
                 let serial = active[0].request_serial;
                 let metrics = aggregate_preview_metrics(&active);
                 let members = preview_member_statuses(&active);
@@ -1326,7 +1335,9 @@ pub(crate) async fn gpgpu_preview_consumer_service_task(worker_slot: u32) {
 
         if duration_expired {
             if !active.is_empty() {
-                drain_cpp_font_rush_pending(&mut active).await;
+                if !active.iter().any(|preview| preview.font_rush2.is_some()) {
+                    drain_cpp_font_rush_pending(&mut active).await;
+                }
                 let serial = active[0].request_serial;
                 let metrics = aggregate_preview_metrics(&active);
                 let members = preview_member_statuses(&active);
@@ -6396,9 +6407,51 @@ fn stop_active_previews(
 }
 
 fn retire_cpp_font_rush2_frames() {
+    use crate::r::font_kernel_service::FontKernelError;
+
     let mut retired = CPP_FONT_RUSH2_RETIRED.lock();
     let mut index = 0;
     while index < retired.len() {
+        if let Some(mut pending) = retired[index].state.pending.take() {
+            let ticket = pending.pending.ticket();
+            let completion = pending.pending.try_take();
+            match completion {
+                None => {
+                    retired[index].state.pending = Some(pending);
+                    index += 1;
+                    continue;
+                }
+                Some(Ok(produced)) => {
+                    let _ = cancel_frame_buffer(pending.lease);
+                    retired[index].state.building.push(produced);
+                    crate::log_info!(target: "ui4";
+                        "ui4 cpp-font-rush2 retired producer drained ticket={} frame={} buffer={} action=cancel-unpublished-write+continue-frame-retirement\n",
+                        ticket.raw(),
+                        pending.lease.frame.raw(),
+                        pending.lease.buffer_index,
+                    );
+                }
+                Some(Err(FontKernelError::SubmittedIncomplete(reason))) => {
+                    crate::log_error!(target: "ui4";
+                        "ui4 cpp-font-rush2 retired producer quarantined ticket={} frame={} buffer={} reason={} action=retain-frame-write-lease+continue-ui4-close\n",
+                        ticket.raw(),
+                        pending.lease.frame.raw(),
+                        pending.lease.buffer_index,
+                        reason,
+                    );
+                }
+                Some(Err(error)) => {
+                    let _ = cancel_frame_buffer(pending.lease);
+                    crate::log_warn!(target: "ui4";
+                        "ui4 cpp-font-rush2 retired producer failed ticket={} frame={} buffer={} error={:?} action=cancel-unpublished-write+continue-frame-retirement\n",
+                        ticket.raw(),
+                        pending.lease.frame.raw(),
+                        pending.lease.buffer_index,
+                        error,
+                    );
+                }
+            }
+        }
         match destroy_frame(retired[index].frame) {
             Ok(()) | Err(FramePoolError::InvalidHandle) => {
                 let mut entry = retired.swap_remove(index);
