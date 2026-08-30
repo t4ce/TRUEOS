@@ -1,332 +1,260 @@
-```
-TRUE OS § ® 2026
-██████████████████████████████████████████████████████████████████████
-██░        ░░       ░░░  ░░░░  ░░        ░░░░░░░░░      ░░░░      ░░██
-██▒▒▒▒  ▒▒▒▒▒  ▒▒▒▒  ▒▒  ▒▒▒▒  ▒▒  ▒▒▒▒▒▒▒▒▒▒▒▒▒▒  ▒▒▒▒  ▒▒  ▒▒▒▒▒▒▒██
-██▓▓▓▓  ▓▓▓▓▓       ▓▓▓  ▓▓▓▓  ▓▓      ▓▓▓▓▓▓▓▓▓▓  ▓▓▓▓  ▓▓▓      ▓▓██
-██████  █████  ███  ███  ████  ██  ██████████████  ████  ████████  ███
-██████  █████  ████  ███      ███        █████████      ████      ████
-██████████████████████████████████████████████████████████████████████
-A Rust Based 64 Bit Paged X84 Baremetal OS Targeted at modern Intel XeLp
+<p align="center">
+  <img src="logo.jpg" width="720" alt="TRUEOS section-sign logo">
+</p>
 
-Think of rust as the world’s quiet, slow-moving “entropy tax”:
-A constant drain of resources, money, and safety.
+<h1 align="center">TRUEOS</h1>
 
-Think of TRUE OS as the world’s fast-moving “entropy dividend”:
-A constant influx of resources, money, and safety.
-```
+<p align="center">
+  <strong>A vertically integrated Rust desktop OS for modern Intel graphics.</strong><br>
+  Kernel, drivers, GPU runtime, compositor, media, services, application VMs, and developer tooling—built as one system.
+</p>
 
-# TRUEOS — native Intel Gen12 3D rendering on bare metal
+<p align="center">
+  <a href="https://github.com/t4ce/TRUEOS/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/t4ce/TRUEOS?display_name=tag&sort=semver"></a>
+  <img alt="Stage 4" src="https://img.shields.io/badge/status-Stage%204-8a2be2">
+  <img alt="Rust 2024" src="https://img.shields.io/badge/Rust-2024-b7410e?logo=rust&logoColor=white">
+  <img alt="x86-64" src="https://img.shields.io/badge/target-x86__64-30363d">
+</p>
 
-> “You can boot a tiny Rust OS and make it do real things.”
+TRUEOS is a from-scratch, `no_std`/`no_main`, x86-64 operating system. It is
+not a Linux distribution, desktop theme, or userspace shell. It boots its own
+kernel and directly owns the path from paging, SMP, interrupts, storage, and
+networking through Intel display, render, copy, media, GPGPU, UI composition,
+and application execution.
 
-## Download TRUEOS
+The project is well past the toy-kernel phase. It is now a large experimental
+desktop/workstation stack with a Rust application compatibility effort, a
+Blueprint VM runtime, real graphics and media output, remote UI streaming, and
+repeatable QEMU and physical-hardware validation. The goal is a modern Rust
+system that can eventually replace a conventional desktop OS for its supported
+hardware—not a thin proof of concept around a boot screen.
 
-> [!TIP]
-> **Ready-to-boot ISO:** [Download TRUEOS 0.0.189 (`.7z`, 6 MB)](https://github.com/t4ce/TRUEOS/releases/tag/v0.0.189)
->
-> [Latest release and notes](https://github.com/t4ce/TRUEOS/releases/tag/v0.0.189) ·
-> [All releases](https://github.com/t4ce/TRUEOS/releases) ·
-> [SHA-256 checksums](https://github.com/t4ce/TRUEOS/releases/download/v0.0.189/SHA256SUMS) ·
-> [Release public key](https://github.com/t4ce/TRUEOS/releases/download/v0.0.189/TRUEOS-release-public-key.json)
-
-The release archive contains the bootable ISO, provenance record, firmware, and
-one-command launchers for Linux and macOS. Use the latest-release link for
-release notes, checksums, and signatures.
-
-Copyright (c) 2026 Jonas Baethke. All rights reserved.
-
-TRUEOS uses a two-lane permission model under `LICENSE`: the first-party source
-is source-available for public view, while official TRUEOS binary releases may
-be used, run, evaluated, deployed, and commercially used.
-
-Do not copy, publish, redistribute, clone, or build a 1:1 source-derived TRUEOS
-from the first-party source without prior written permission. Blueprints,
-scripts, applications, data, and configuration are the intended path for
-extending and programming TRUEOS at runtime, including commercially.
-
-## Why it is interesting
-- Tiny bootable ISO, currently around 5 MB
-- Rust-first bare-metal runtime
-- Video/JPEG/media playback experiments
-- Async and parallel Rust workload support
-- Blueprint-based runtime extension model
-- Signed upstream GitHub Actions releases
-- QEMU, VFIO, bridge networking, and hardware bring-up workflows
-- Game Engine Integration progress with Helio Renderer 
-- Upcoming Data_Driven Webbrowser Solara
-
-## Release builds and verification
-
-> [!Note]
-> Makes it impossible to alter the build tools
-> and sourcefiles are signed & included
-
-### Cloud releases - Batteries included
-
-Official public releases are built upstream by GitHub Actions:
-
-`.github/workflows/release.yml` builds a clean checkout, packages the ISO bundle,
-signs the release assets with the TRUEOS Ed25519 release key, uploads them as a
-workflow artifact, and publishes a GitHub Release when you push a `v*` tag or
-manually run the workflow with `publish_release=true`.
-
-Manual workflow runs can leave `version` empty. The workflow then names the
-release `0.0.<tools/cnt>` from the tracked release counter.
-
-Set this repository secret before publishing:
-
-- `TRUEOS_RELEASE_ED25519_KEY`: private TRUEOS Ed25519 release key JSON. Keep
-  the matching public key in `TRUEOS-release-public-key.json`.
-
-Release assets include:
-
-- `TrueOS-<version>.7z`
-- `TRUEOS-<version>.provenance.json`
-- `SHA256SUMS`
-- `.trueos-sig.json` signatures
-- `TRUEOS-release-public-key.json`
-
-Local `make release` is a fallback for reproducing the CI release path on your
-own machine. It still requires a clean checkout, writes and verifies provenance,
-then packages the same ISO bundle. By default provenance uses compact Git source
-identity (`PROVENANCE_SOURCE_MANIFEST=git-commit`), so no large
-`TRUEOS.source-files.sha256` block is bundled. For old-style per-file source
-manifest audit work:
-
-```bash
-make release PROVENANCE_SOURCE_MANIFEST=git-index
-```
-
-Verifier flow:
-
-```bash
-sha256sum trueos.iso
-python3 tools/provenance_chain.py verify \
-  --source-root /path/to/TRUEOS-at-the-recorded-commit \
-  --record /path/to/release/TRUEOS.provenance.json
-```
-
-The verifier recomputes the compact Git source identity for default releases and
-checks the ISO hash named in `TRUEOS.provenance.json`. A wrong commit, swapped
-submodule/gitlink, or replaced ISO breaks the chain. Release assets also include
-`.trueos-sig.json` Ed25519 signatures and `TRUEOS-release-public-key.json`.
-
-### Tools
-```
-sudo apt install git make 7zip nodejs libigc2-tools rustup npm autoconf intel-ocloc  automake mtools nasm xorriso
-rustup toolchain install nightly-2026-07-10
-sudo apt-get install -y clang-21 llvm-spirv-21
-vs-code
-npm install express
-
-git submodule update --init --recursive
-```
-
-### Lic
 > [!IMPORTANT]
-> The source is public-view/protected. Official binaries are usable, including
-> commercially. Blueprints are the legit extension path: they can change runtime
-> behavior without being treated as prohibited source modification. Blueprints
-> belong to their authors.
+> TRUEOS is still a research and development OS. Stage 4 is the current
+> architectural generation, not a production-readiness label. The system has
+> substantial working vertical slices, but it does not yet claim general Linux
+> compatibility, production-secure multi-user isolation, broad hardware
+> support, or complete OpenCL/media conformance.
 
-# Network Console Access
-`konsole -e sh -c 'stty raw -echo; exec nc 192.168.178.94 4245'`
+## Scale of the current system
 
-### dummy (no persist across reboot)
-sudo ip link add NIC type dummy
-sudo ip link set dev NIC address 5c:60:ba:b5:58:0f
+The repository changes quickly; these numbers are an August 2026 snapshot and
+describe engineering surface area, not correctness:
 
-### rust-analyzer kernel-source smoke check
+| Surface | Current snapshot |
+| --- | ---: |
+| Tracked non-vendor Rust | approximately 485,000 lines |
+| Repository-owned Cargo workspace | 33 members |
+| Registered sibling Blueprint catalog | 44 applications and tools |
+| Primary architecture | x86-64 UEFI bare metal |
+| Primary graphics target | Intel Gen12 / Xe-LP, especially UHD 770 |
+| Validation environments | physical Intel systems and QEMU/OVMF |
 
-Use this from the repo root when you want rust-analyzer to load the TRUEOS custom
-target and inspect only the kernel source tree. The `CARGO_UNSTABLE_JSON_TARGET_SPEC`
-env var is needed because the repo target is `.cargo/x86_64-unknown-trueos.json`.
-The skip flags keep the CLI pass lightweight and avoid the full-workspace/vendor
-diagnostic noise.
+Several full-stack rewrites led to this generation. That history matters:
+TRUEOS now spans the surface of a small desktop operating environment, but the
+remaining work is also deeper than adding polish to a finished product.
 
-```bash
-CARGO_UNSTABLE_JSON_TARGET_SPEC=true \
-SMOLTCP_IFACE_MAX_ADDR_COUNT=4 \
-rust-analyzer analysis-stats . --only src \
-  --skip-inference --skip-mir-stats --skip-data-layout --skip-const-eval
+## What exists today
+
+| Area | Implemented system surface |
+| --- | --- |
+| **Kernel and execution** | UEFI/Limine boot, x86-64 paging and allocators, ACPI, exceptions, x2APIC, SMP and per-CPU state, asynchronous executors, worker domains, synchronization, profiling, and live-update machinery. |
+| **Intel graphics** | Direct display ownership plus GGTT/PPGTT, GuC bring-up and submission, render, copy/BLT, media, GPGPU, native shader artifacts, hardware cursor/planes, and device-specific validation. |
+| **Desktop and UI** | UI4 frame/window contracts, damage tracking, input routing, cursor and screenshot services, command/static/GPU/video surfaces, focus and layout state, remote display transport, and a four-display compositor model. |
+| **3D and compute** | Picasso/Helio retained scenes, native Intel shader compilation, indexed and textured rendering, GPU work queues, OpenCL-shaped APIs, GPGPU operations, and CPU/GPU oracle tooling. |
+| **Media and audio** | PNG/JPEG/BMP paths, video-frame publication, H.264 streaming and encode experiments, M4A/AAC work, an audio engine, synthesis, visualization, and Intel HDA/ALSA compatibility work. |
+| **Applications** | Blueprints with VM principals, terminal handoff, pause, warm snapshot, persistent store/load, preserve/restore, peer transfer, TRUEOSFS scopes, vGPU/UI/media/network ABIs, and crash/lifecycle control. |
+| **Rust ecosystem compatibility** | TRUEOS `std`/Unix ABI shims, file descriptors and sockets, `mio` readiness, Tokio carrier and blocking lanes, Hyper integration, async I/O, TLS, serde, redb, and a growing set of adapted crates and CLI tools. |
+| **Platform services** | NVMe and PCI infrastructure, USB/xHCI work, Ethernet and Wi-Fi bring-up paths, IPv4/IPv6, DHCP, DNS, TCP/UDP, TLS/HTTP, printing, mail, clipboard, fonts, gamepads, and network discovery. |
+| **Local AI** | Lumen LFM2.5 inference paths, CPU/VNNI and Intel GPGPU backends, Kokoro speech synthesis components, STT/TTS services, model packaging, parity tests, and bare-metal performance campaigns. |
+
+Some rows combine production paths, physically validated experiments, and
+work-in-progress compatibility layers. The detailed documents linked below
+mark those boundaries more precisely.
+
+## Current development captures
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/ui4-compositor-stream.png" alt="Physical TRUEOS display beside the live remote UI viewer"></td>
+    <td width="50%"><img src="docs/screenshots/picasso-gen12-model.png" alt="TRUEOS Intel Gen12 native 3D renderer output on a physical display"></td>
+  </tr>
+  <tr>
+    <td><sub>UI4 composition on the physical display beside the live host viewer during streaming validation.</sub></td>
+    <td><sub>Native Intel render output photographed on the target display during Stage 4 renderer work.</sub></td>
+  </tr>
+</table>
+
+<p align="center">
+  <img src="docs/screenshots/picasso-textured-scene.png" width="820" alt="Picasso and Helio textured retained-renderer development scene"><br>
+  <sub>Picasso/Helio retained and textured renderer development capture.</sub>
+</p>
+
+## One vertically owned stack
+
+```text
+Blueprints, ports, CLI tools, games, UI applications
+                  │
+        TRUEOS application and VM ABIs
+                  │
+      Blueprint lifecycle ── TRUEOSFS ── Shell2/Matrix
+                  │                         │
+          vGPU / media / input / network / terminal
+                  │
+      UI4 compositor, window graph, frames, video
+                  │
+ Picasso/Helio ── render ── GPGPU ── copy ── media
+                  │
+       Intel Gen12 display, GuC, GGTT and PPGTT
+                  │
+ SMP kernel, async runtime, memory, PCI, storage, USB, net
+                  │
+              x86-64 hardware
 ```
 
-Retired shell2 etc/go spinner sequences, kept as glyph references:
-go  = ⣿ ⣾ ⣽ ⣻ ⢿ ⡿ ⣟ ⣯ ⣷
-go2 = ⢈ ⡈ ⡐ ⡠ ⣀ ⢄ ⢂ ⢁ ⡁
+That ownership graph is the central experiment. TRUEOS can change a frame
+contract, scheduler, VM ABI, shader package, and application runtime together
+instead of negotiating a chain of independently versioned kernel, driver,
+userspace, display-server, and toolkit interfaces. The advantage is speed and
+coherence. The cost is a narrower compatibility envelope and a larger amount
+of privileged code that still needs fault containment and adversarial review.
 
-ConPink 	FF_55_FF 
-ConBlue 	08_18_30
-ConWhite 	FF_FF_FF
+## Shell2, Matrix, and Blueprints
 
-**bold**
-*italic*
-`inline code`
-> This is a quote.
- [!TIP] t
- [!WARNING] w
- [!CAUTION] c
- [!Note] n
+Shell2 is the operating surface rather than a Unix shell clone. It has a kernel
+command mode and an application mode. Matrix slots keep independent command,
+application, and VM contexts; the `§` operator selects and manages those slots.
 
-## Asset preview smoke test
+Blueprints are TRUEOS's intended extension model. They can be discovered,
+verified, installed, launched, paused, snapshotted, stored, restored, and moved
+between peers while the host retains ownership of capabilities and persistent
+TRUEOSFS state. A Blueprint may also lease the terminal for a TUI or publish UI4
+and vGPU content. See the
+[TRUEOS-Blueprints repository](https://github.com/t4ce/TRUEOS-Blueprints) for
+the application side of the system.
 
-<details>
-<summary>Repository images and generated dependency graphs</summary>
+Blueprint publication is currently an internal/local deployment workflow, not
+a claim of a stable general-purpose package registry.
 
-- `logo.jpg`  
-  ![logo.jpg](logo.jpg)
-- `tools/docs/depgraph/by-root/acpi-v6.1.1.svg`  
-  ![acpi v6.1.1.svg](tools/docs/depgraph/by-root/acpi-v6.1.1.svg)
-- `tools/docs/depgraph/by-root/alsa-v0.11.0.svg`  
-  ![alsa v0.11.0.svg](tools/docs/depgraph/by-root/alsa-v0.11.0.svg)
-- `tools/docs/depgraph/by-root/aml-v0.16.4.svg`  
-  ![aml v0.16.4.svg](tools/docs/depgraph/by-root/aml-v0.16.4.svg)
-- `tools/docs/depgraph/by-root/bytes-v1.12.0.svg`  
-  ![bytes v1.12.0.svg](tools/docs/depgraph/by-root/bytes-v1.12.0.svg)
-- `tools/docs/depgraph/by-root/core3-v0.1.2.svg`  
-  ![core3 v0.1.2.svg](tools/docs/depgraph/by-root/core3-v0.1.2.svg)
-- `tools/docs/depgraph/by-root/crab-usb-v0.9.1.svg`  
-  ![crab usb v0.9.1.svg](tools/docs/depgraph/by-root/crab-usb-v0.9.1.svg)
-- `tools/docs/depgraph/by-root/crc32fast-v1.5.0.svg`  
-  ![crc32fast v1.5.0.svg](tools/docs/depgraph/by-root/crc32fast-v1.5.0.svg)
-- `tools/docs/depgraph/by-root/dma-api-v0.7.3.svg`  
-  ![dma api v0.7.3.svg](tools/docs/depgraph/by-root/dma-api-v0.7.3.svg)
-- `tools/docs/depgraph/by-root/embassy-executor-v0.10.0.svg`  
-  ![embassy executor v0.10.0.svg](tools/docs/depgraph/by-root/embassy-executor-v0.10.0.svg)
-- `tools/docs/depgraph/by-root/embassy-sync-v0.8.0.svg`  
-  ![embassy sync v0.8.0.svg](tools/docs/depgraph/by-root/embassy-sync-v0.8.0.svg)
-- `tools/docs/depgraph/by-root/embassy-time-driver-v0.2.2.svg`  
-  ![embassy time driver v0.2.2.svg](tools/docs/depgraph/by-root/embassy-time-driver-v0.2.2.svg)
-- `tools/docs/depgraph/by-root/embassy-time-v0.5.1.svg`  
-  ![embassy time v0.5.1.svg](tools/docs/depgraph/by-root/embassy-time-v0.5.1.svg)
-- `tools/docs/depgraph/by-root/embedded-io-async-v0.7.0.svg`  
-  ![embedded io async v0.7.0.svg](tools/docs/depgraph/by-root/embedded-io-async-v0.7.0.svg)
-- `tools/docs/depgraph/by-root/embedded-websocket-v0.9.4.svg`  
-  ![embedded websocket v0.9.4.svg](tools/docs/depgraph/by-root/embedded-websocket-v0.9.4.svg)
-- `tools/docs/depgraph/by-root/euclid-v0.22.13.svg`  
-  ![euclid v0.22.13.svg](tools/docs/depgraph/by-root/euclid-v0.22.13.svg)
-- `tools/docs/depgraph/by-root/getrandom-v0.2.17.svg`  
-  ![getrandom v0.2.17.svg](tools/docs/depgraph/by-root/getrandom-v0.2.17.svg)
-- `tools/docs/depgraph/by-root/hashbrown-v0.17.1.svg`  
-  ![hashbrown v0.17.1.svg](tools/docs/depgraph/by-root/hashbrown-v0.17.1.svg)
-- `tools/docs/depgraph/by-root/heapless-v0.9.3.svg`  
-  ![heapless v0.9.3.svg](tools/docs/depgraph/by-root/heapless-v0.9.3.svg)
-- `tools/docs/depgraph/by-root/hyper-v1.9.0.svg`  
-  ![hyper v1.9.0.svg](tools/docs/depgraph/by-root/hyper-v1.9.0.svg)
-- `tools/docs/depgraph/by-root/kurbo-v0.11.3.svg`  
-  ![kurbo v0.11.3.svg](tools/docs/depgraph/by-root/kurbo-v0.11.3.svg)
-- `tools/docs/depgraph/by-root/libm-v0.2.16.svg`  
-  ![libm v0.2.16.svg](tools/docs/depgraph/by-root/libm-v0.2.16.svg)
-- `tools/docs/depgraph/by-root/limine-v0.6.5.svg`  
-  ![limine v0.6.5.svg](tools/docs/depgraph/by-root/limine-v0.6.5.svg)
-- `tools/docs/depgraph/by-root/lyon_geom-v1.0.19.svg`  
-  ![lyon geom v1.0.19.svg](tools/docs/depgraph/by-root/lyon_geom-v1.0.19.svg)
-- `tools/docs/depgraph/by-root/lyon_tessellation-v1.0.20.svg`  
-  ![lyon tessellation v1.0.20.svg](tools/docs/depgraph/by-root/lyon_tessellation-v1.0.20.svg)
-- `tools/docs/depgraph/by-root/lzma-rust2-v0.16.4.svg`  
-  ![lzma rust2 v0.16.4.svg](tools/docs/depgraph/by-root/lzma-rust2-v0.16.4.svg)
-- `tools/docs/depgraph/by-root/memchr-v2.8.2.svg`  
-  ![memchr v2.8.2.svg](tools/docs/depgraph/by-root/memchr-v2.8.2.svg)
-- `tools/docs/depgraph/by-root/miniz_oxide-v0.9.1.svg`  
-  ![miniz oxide v0.9.1.svg](tools/docs/depgraph/by-root/miniz_oxide-v0.9.1.svg)
-- `tools/docs/depgraph/by-root/mio-v1.2.0.svg`  
-  ![mio v1.2.0.svg](tools/docs/depgraph/by-root/mio-v1.2.0.svg)
-- `tools/docs/depgraph/by-root/parry2d-v0.26.1.svg`  
-  ![parry2d v0.26.1.svg](tools/docs/depgraph/by-root/parry2d-v0.26.1.svg)
-- `tools/docs/depgraph/by-root/png-v0.18.1.svg`  
-  ![png v0.18.1.svg](tools/docs/depgraph/by-root/png-v0.18.1.svg)
-- `tools/docs/depgraph/by-root/rand_chacha-v0.3.1.svg`  
-  ![rand chacha v0.3.1.svg](tools/docs/depgraph/by-root/rand_chacha-v0.3.1.svg)
-- `tools/docs/depgraph/by-root/rand_core-v0.6.4.svg`  
-  ![rand core v0.6.4.svg](tools/docs/depgraph/by-root/rand_core-v0.6.4.svg)
-- `tools/docs/depgraph/by-root/raw-cpuid-v11.6.0.svg`  
-  ![raw cpuid v11.6.0.svg](tools/docs/depgraph/by-root/raw-cpuid-v11.6.0.svg)
-- `tools/docs/depgraph/by-root/rdrand-v0.8.3.svg`  
-  ![rdrand v0.8.3.svg](tools/docs/depgraph/by-root/rdrand-v0.8.3.svg)
-- `tools/docs/depgraph/by-root/regex-automata-v0.4.14.svg`  
-  ![regex automata v0.4.14.svg](tools/docs/depgraph/by-root/regex-automata-v0.4.14.svg)
-- `tools/docs/depgraph/by-root/rustls-rustcrypto-v0.0.2-alpha.svg`  
-  ![rustls rustcrypto v0.0.2 alpha.svg](tools/docs/depgraph/by-root/rustls-rustcrypto-v0.0.2-alpha.svg)
-- `tools/docs/depgraph/by-root/rustls-v0.23.41.svg`  
-  ![rustls v0.23.41.svg](tools/docs/depgraph/by-root/rustls-v0.23.41.svg)
-- `tools/docs/depgraph/by-root/serde-v1.0.228.svg`  
-  ![serde v1.0.228.svg](tools/docs/depgraph/by-root/serde-v1.0.228.svg)
-- `tools/docs/depgraph/by-root/serde_json-v1.0.150.svg`  
-  ![serde json v1.0.150.svg](tools/docs/depgraph/by-root/serde_json-v1.0.150.svg)
-- `tools/docs/depgraph/by-root/sha2-v0.10.9.svg`  
-  ![sha2 v0.10.9.svg](tools/docs/depgraph/by-root/sha2-v0.10.9.svg)
-- `tools/docs/depgraph/by-root/smoltcp-v0.13.1.svg`  
-  ![smoltcp v0.13.1.svg](tools/docs/depgraph/by-root/smoltcp-v0.13.1.svg)
-- `tools/docs/depgraph/by-root/socket2-v0.6.3.svg`  
-  ![socket2 v0.6.3.svg](tools/docs/depgraph/by-root/socket2-v0.6.3.svg)
-- `tools/docs/depgraph/by-root/spin-v0.10.0.svg`  
-  ![spin v0.10.0.svg](tools/docs/depgraph/by-root/spin-v0.10.0.svg)
-- `tools/docs/depgraph/by-root/symphonia-codec-aac-v0.5.5.svg`  
-  ![symphonia codec aac v0.5.5.svg](tools/docs/depgraph/by-root/symphonia-codec-aac-v0.5.5.svg)
-- `tools/docs/depgraph/by-root/symphonia-core-v0.5.5.svg`  
-  ![symphonia core v0.5.5.svg](tools/docs/depgraph/by-root/symphonia-core-v0.5.5.svg)
-- `tools/docs/depgraph/by-root/tiny-skia-path-v0.11.4.svg`  
-  ![tiny skia path v0.11.4.svg](tools/docs/depgraph/by-root/tiny-skia-path-v0.11.4.svg)
-- `tools/docs/depgraph/by-root/tinyaudio-v2.0.0.svg`  
-  ![tinyaudio v2.0.0.svg](tools/docs/depgraph/by-root/tinyaudio-v2.0.0.svg)
-- `tools/docs/depgraph/by-root/tower-v0.5.3.svg`  
-  ![tower v0.5.3.svg](tools/docs/depgraph/by-root/tower-v0.5.3.svg)
-- `tools/docs/depgraph/by-root/trueos-esp-v0.1.0.svg`  
-  ![trueos esp v0.1.0.svg](tools/docs/depgraph/by-root/trueos-esp-v0.1.0.svg)
-- `tools/docs/depgraph/by-root/trueos-fs-v0.0.1.svg`  
-  ![trueos fs v0.0.1.svg](tools/docs/depgraph/by-root/trueos-fs-v0.0.1.svg)
-- `tools/docs/depgraph/by-root/trueos-io-v0.1.0.svg`  
-  ![trueos io v0.1.0.svg](tools/docs/depgraph/by-root/trueos-io-v0.1.0.svg)
-- `tools/docs/depgraph/by-root/trueos-locale-v0.1.0.svg`  
-  ![trueos locale v0.1.0.svg](tools/docs/depgraph/by-root/trueos-locale-v0.1.0.svg)
-- `tools/docs/depgraph/by-root/trueos-math-v0.1.0.svg`  
-  ![trueos math v0.1.0.svg](tools/docs/depgraph/by-root/trueos-math-v0.1.0.svg)
-- `tools/docs/depgraph/by-root/trueos-qjs-v0.1.0.svg`  
-  ![trueos qjs v0.1.0.svg](tools/docs/depgraph/by-root/trueos-qjs-v0.1.0.svg)
-- `tools/docs/depgraph/by-root/trueos-vm-v0.1.0.svg`  
-  ![trueos vm v0.1.0.svg](tools/docs/depgraph/by-root/trueos-vm-v0.1.0.svg)
-- `tools/docs/depgraph/by-root/unicode-segmentation-v1.13.3.svg`  
-  ![unicode segmentation v1.13.3.svg](tools/docs/depgraph/by-root/unicode-segmentation-v1.13.3.svg)
-- `tools/docs/depgraph/by-root/usvg-v0.45.1.svg`  
-  ![usvg v0.45.1.svg](tools/docs/depgraph/by-root/usvg-v0.45.1.svg)
-- `tools/docs/depgraph/by-root/v-v0.1.0.svg`  
-  ![v v0.1.0.svg](tools/docs/depgraph/by-root/v-v0.1.0.svg)
-- `tools/docs/depgraph/by-root/webpki-roots-v1.0.8.svg`  
-  ![webpki roots v1.0.8.svg](tools/docs/depgraph/by-root/webpki-roots-v1.0.8.svg)
-- `tools/docs/depgraph/by-root/x86_64-v0.15.4.svg`  
-  ![x86 64 v0.15.4.svg](tools/docs/depgraph/by-root/x86_64-v0.15.4.svg)
-- `tools/docs/depgraph/by-root/zeroize-v1.9.0.svg`  
-  ![zeroize v1.9.0.svg](tools/docs/depgraph/by-root/zeroize-v1.9.0.svg)
-- `tools/docs/depgraph/by-root/zune-core-v0.5.1.svg`  
-  ![zune core v0.5.1.svg](tools/docs/depgraph/by-root/zune-core-v0.5.1.svg)
-- `tools/docs/depgraph/by-root/zune-jpeg-v0.5.15.svg`  
-  ![zune jpeg v0.5.15.svg](tools/docs/depgraph/by-root/zune-jpeg-v0.5.15.svg)
-- `tools/docs/depgraph/trueos-depth-tree.svg`  
-  ![trueos depth tree.svg](tools/docs/depgraph/trueos-depth-tree.svg)
-- `tools/vid/Buro4K.jpeg`  
-  ![Buro4K.jpeg](tools/vid/Buro4K.jpeg)
-- `tools/vid/IMG_20260426_020424.jpg`  
-  ![IMG 20260426 020424.jpg](tools/vid/IMG_20260426_020424.jpg)
-- `tools/vid/Photo from 2026-04-26 02-00-42.935475.jpeg`  
-  ![Photo from 2026 04 26 02 00 42.935475.jpeg](<tools/vid/Photo from 2026-04-26 02-00-42.935475.jpeg>)
-- `tools/vid/YellyFHD.jpg`  
-  ![YellyFHD.jpg](tools/vid/YellyFHD.jpg)
-- `tools/vid/demo_yelly3_first_frame.png`  
-  ![demo yelly3 first frame.png](tools/vid/demo_yelly3_first_frame.png)
-- `tools/vid/demo_yelly_first_frame.png`  
-  ![demo yelly first frame.png](tools/vid/demo_yelly_first_frame.png)
-- `tools/vid/trueos_jpeg_diag_2560x1440.png`  
-  ![trueos jpeg diag 2560x1440.png](tools/vid/trueos_jpeg_diag_2560x1440.png)
-- `tools/vid/trueos_jpeg_diag_2560x1440_q95.jpg`  
-  ![trueos jpeg diag 2560x1440 q95.jpg](tools/vid/trueos_jpeg_diag_2560x1440_q95.jpg)
-- `tools/vid/trueos_yellow_2560x1440_q90.jpg`  
-  ![trueos yellow 2560x1440 q90.jpg](tools/vid/trueos_yellow_2560x1440_q90.jpg)
-- `vendor/CrabUSB/docs/layout.svg`  
-  ![layout.svg](vendor/CrabUSB/docs/layout.svg)
-- `vendor/CrabUSB/docs/异步请求.drawio.png`  
-  ![异步请求.drawio.png](vendor/CrabUSB/docs/异步请求.drawio.png)
-- `vendor/limine/logo.png`  
-  ![Limine logo](https://raw.githubusercontent.com/limine-bootloader/limine/e5d429e7dffb51fd1475ee5276a2c19c1ad6aff8/logo.png)
+## Hardware scope
 
-</details>
+TRUEOS deliberately targets a narrow Intel graphics family while the driver
+stack is being made coherent. The current source recognizes these principal
+display devices:
+
+- Alder Lake-S GT1 (`0x4680`)
+- Alder Lake-N / N100 UHD (`0x46D1`)
+- Raptor Lake-S UHD 770 (`0xA780`)
+
+Individual render, media, GPGPU, and shader paths may support only a subset or
+even a specific revision. The checked-in shader artifacts are admission-checked
+against their target rather than treated as portable binaries. QEMU is useful
+for boot, service, and application validation; it is not evidence that a native
+Intel acceleration path works on unrelated hardware.
+
+## Run an official release
+
+Download the [latest signed release](https://github.com/t4ce/TRUEOS/releases/latest).
+The release archive contains the bootable ISO, OVMF firmware, provenance data,
+and launchers for Linux and macOS. The adjacent release assets provide
+checksums, Ed25519 signatures, and the public verification key.
+
+```sh
+mkdir trueos-release
+7z x TrueOS-*.7z -otrueos-release
+cd trueos-release
+./run-linux.sh       # or ./run-macos.sh
+```
+
+The launchers boot the real TRUEOS ISO under QEMU/OVMF; they are not a hosted
+simulation of the kernel. Bare-metal installation and hardware acceleration
+remain target-specific and should be treated as development workflows.
+
+Official releases are built from clean checkouts by
+[the release workflow](.github/workflows/release.yml). It rebuilds and verifies
+the pinned Intel shader artifacts, produces the ISO bundle and provenance
+record, and signs the published assets. The public key is checked in as
+[`TRUEOS-release-public-key.json`](TRUEOS-release-public-key.json).
+
+> [!CAUTION]
+> The repository's maintainer command `make iso` is not a harmless generic
+> compile command. In the configured development environment it may publish an
+> archive, actuate the physical test rig, and start remote log capture. Use the
+> CI workflow as the reference for an isolated build.
+
+## Honest current boundaries
+
+TRUEOS is ambitious, but its claims need to stay testable:
+
+- **Not yet a general desktop replacement.** Hardware and application coverage
+  are intentionally narrow compared with Linux, Windows, or macOS.
+- **Not yet a production security boundary.** VM/Hull hardening, default-deny
+  mappings, W^X policy, DMA/IOMMU isolation, speculation boundaries, and
+  adversarial testing remain incomplete.
+- **Not yet a conformant OpenCL platform.** The OpenCL-shaped surface and many
+  native kernels are useful, but parts of execution and compatibility are
+  still experimental or stubbed.
+- **Not every media path is hardware-native.** CPU fallbacks, host oracles, and
+  staged Intel media/SFC work coexist with direct hardware paths.
+- **The UI failure domain is still too privileged.** Important compositor and
+  service work currently runs as kernel tasks; restartable recovery and session
+  survival are not yet proven end to end.
+- **Interfaces still move quickly.** Stage 4 is consolidating contracts that
+  have already gone through several architectural rewrites.
+
+These limits do not make the demonstrated system “just a concept.” They define
+the engineering work between a deep experimental OS and a dependable product.
+
+## Stage 4 priorities
+
+1. Stabilize the UI4, Picasso, Blueprint, VM, and resource-lifecycle contracts.
+2. Move untrusted workloads behind a demonstrably hardened isolation boundary.
+3. Make display, GPU, and compositor recovery preserve application and session
+   identity across injected failures.
+4. Finish and measure native media/GPGPU paths while retaining deterministic
+   CPU and host-oracle comparisons.
+5. Expand hardware validation without pretending device-family similarity is
+   compatibility proof.
+6. Turn the porting work into repeatable compatibility suites and documented
+   application support levels.
+7. Productize installation, update, rollback, diagnostics, and recovery.
+
+## Technical references
+
+- [The Scanout Convention](tools/docs/trueos_linux_failure_boundary_whitepaper.md)
+  — an equal-footing audit of TRUEOS and a conventional Linux desktop,
+  including security and recovery gaps.
+- [Mosaic four-display compositor](tools/docs/CompositorUI.html) — UI4 surface,
+  focus, layout, overview, and multi-display ownership model.
+- [Hypervisor State Atlas](tools/docs/docs/HYPERVISOR_STATE_MACHINE.html) — VM
+  principal, Blueprint, pause, snapshot, restore, and teardown contracts.
+- [Execution model](tools/docs/execution.html) — CPU/AP slots, async tasks,
+  worker models, locks, barriers, and event ordering.
+- [Intel UHD 770 target reference](tools/docs/intel-uhd770-cpu-reference.html) —
+  target devices, shader assumptions, and primary-source trail.
+- [Picasso DOM/SceneDB contract](tools/docs/PICASSO_DOM_SCENEDB_CONTRACT.md) and
+  [renderer artifacts](picasso/README.md).
+- [UI4 video playback](tools/docs/UI4_VIDEO_PLAYBACK.md),
+  [H.264 stream contract](tools/docs/UI4_H264_UDP_STREAM.md), and
+  [Intel media/SFC roadmap](tools/docs/intel_media_sfc_roadmap.md).
+- [Dependency graph](tools/docs/depgraph/index.html) — repository and ecosystem
+  dependency depth.
+
+## Source and licensing
+
+TRUEOS is **source-available, not open source**. The first-party source may be
+viewed for personal review, security research, education, evaluation, and
+reference. The license does not grant the usual right to modify, redistribute,
+publish a fork, or ship a source-derived build without written permission.
+
+Official, unmodified TRUEOS binary releases may be used, evaluated, deployed,
+and commercially used. Blueprints are the supported runtime extension path,
+including for commercial work, and independent Blueprint authors retain their
+own rights subject to their dependencies.
+
+Read the [TRUEOS license](lic/TrueOS.LICENSE), [project notice](lic/NOTICE), and
+[third-party notices](lic/THIRD_PARTY_NOTICES.md) before using the source or
+redistributing any component. To propose source work, request permission from
+the copyright holder first; audits and actionable issue reports are welcome.
+
+Copyright © 2026 Jonas Baethke. All rights reserved.

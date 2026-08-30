@@ -184,11 +184,8 @@ pub fn poll() {
 
     {
         let mut queue = QUEUE.lock();
-        while let Some(first) = queue.first() {
-            if first.at > now {
-                break;
-            }
-            let entry = queue.remove(0);
+        let due = queue.partition_point(|entry| entry.at <= now);
+        for entry in queue.drain(..due) {
             let _ = to_wake.push(entry.waker);
         }
     }
