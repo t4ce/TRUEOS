@@ -10,6 +10,7 @@ pub mod r8125;
 pub mod r8139;
 pub mod r8169;
 pub mod ring;
+mod tcp_tx_queue;
 pub mod tls;
 pub mod tls_socket;
 pub mod vio;

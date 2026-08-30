@@ -19,6 +19,8 @@ use smoltcp::wire::{
 use trueos_executor::task;
 use trueos_time::{Duration as EmbassyDuration, Timer};
 
+use super::tcp_tx_queue::TcpTxQueue;
+
 // Internal netbench (kernel-side) ------------------------------------------------
 //
 // `bench.net` via vnet is convenient but it copies payload bytes multiple times:
@@ -1720,12 +1722,17 @@ impl<'a> TxToken for AdapterTxTokenAt<'a> {
     fn set_meta(&mut self, _meta: PacketMeta) {}
 }
 
+enum TcpRoute {
+    Network(Vec<u8>),
+    Loopback(Result<(), ()>),
+}
+
 struct SocketRecord {
     owner: &'static str,
     handle: NetHandle,
     kind: SocketKind,
     socket: SocketHandle,
-    tcp_tx: VecDeque<u8>,
+    tcp_tx: TcpTxQueue,
     tcp_loopback_peer: Option<NetHandle>,
     tcp_connect: bool,
     tcp_local_port: Option<u16>,
@@ -2550,7 +2557,7 @@ impl NetService {
             handle,
             kind: SocketKind::Udp,
             socket: sh,
-            tcp_tx: VecDeque::new(),
+            tcp_tx: TcpTxQueue::new(),
             tcp_loopback_peer: None,
             tcp_connect: false,
             tcp_local_port: None,
@@ -2590,7 +2597,7 @@ impl NetService {
             handle,
             kind: SocketKind::Tcp,
             socket: sh,
-            tcp_tx: VecDeque::new(),
+            tcp_tx: TcpTxQueue::new(),
             tcp_loopback_peer: None,
             tcp_connect: false,
             tcp_local_port: Some(port),
@@ -2648,7 +2655,7 @@ impl NetService {
             handle: client_handle,
             kind: SocketKind::Tcp,
             socket: client_socket,
-            tcp_tx: VecDeque::new(),
+            tcp_tx: TcpTxQueue::new(),
             tcp_loopback_peer: Some(server_handle),
             tcp_connect: true,
             tcp_local_port: Some(local_port),
@@ -2663,7 +2670,7 @@ impl NetService {
             handle: server_handle,
             kind: SocketKind::Tcp,
             socket: server_socket,
-            tcp_tx: VecDeque::new(),
+            tcp_tx: TcpTxQueue::new(),
             tcp_loopback_peer: Some(client_handle),
             tcp_connect: false,
             tcp_local_port: Some(remote.port),
@@ -2764,7 +2771,7 @@ impl NetService {
             handle,
             kind: SocketKind::Tcp,
             socket: sh,
-            tcp_tx: VecDeque::new(),
+            tcp_tx: TcpTxQueue::new(),
             tcp_loopback_peer: None,
             tcp_connect: true,
             tcp_local_port: Some(local_port),
@@ -2837,7 +2844,7 @@ impl NetService {
             handle,
             kind: SocketKind::Tcp,
             socket: sh,
-            tcp_tx: VecDeque::new(),
+            tcp_tx: TcpTxQueue::new(),
             tcp_loopback_peer: None,
             tcp_connect: true,
             tcp_local_port: Some(local_port),
@@ -2849,27 +2856,31 @@ impl NetService {
         Ok(handle)
     }
 
-    fn send_loopback_tcp(&mut self, handle: NetHandle, data: Vec<u8>) -> Option<Result<(), ()>> {
-        let idx = self.records.iter().position(|r| r.handle == handle)?;
+    fn route_tcp_send(&mut self, handle: NetHandle, data: Vec<u8>) -> TcpRoute {
+        let Some(idx) = self.records.iter().position(|r| r.handle == handle) else {
+            return TcpRoute::Network(data);
+        };
         if self.records[idx].kind != SocketKind::Tcp {
-            return Some(Err(()));
+            return TcpRoute::Loopback(Err(()));
         }
 
-        let peer = self.records[idx].tcp_loopback_peer?;
+        let Some(peer) = self.records[idx].tcp_loopback_peer else {
+            return TcpRoute::Network(data);
+        };
         let owner = self.records[idx].owner;
         let peer_owner = match self.records.iter().find(|r| r.handle == peer) {
             Some(rec) => rec.owner,
             None => {
                 let _ = push_event(owner, NetEvent::Closed { handle });
                 self.remove_record(handle);
-                return Some(Ok(()));
+                return TcpRoute::Loopback(Ok(()));
             }
         };
 
         let len = data.len();
         let _ = push_event(peer_owner, NetEvent::TcpData { handle: peer, data });
         let _ = push_event(owner, NetEvent::TcpSent { handle, len });
-        Some(Ok(()))
+        TcpRoute::Loopback(Ok(()))
     }
 
     fn send_loopback_udp(
@@ -2996,11 +3007,9 @@ impl NetService {
         // Bound work per tick to keep other sockets responsive.
         let mut total_sent = 0usize;
         for _ in 0..64 {
-            let (a, b) = self.records[idx].tcp_tx.as_slices();
-            let chunk = if !a.is_empty() { a } else { b };
-            if chunk.is_empty() {
+            let Some(chunk) = self.records[idx].tcp_tx.front() else {
                 break;
-            }
+            };
 
             match socket.send_slice(chunk) {
                 Ok(sent) => {
@@ -3008,9 +3017,7 @@ impl NetService {
                         break;
                     }
                     total_sent = total_sent.saturating_add(sent);
-                    for _ in 0..sent {
-                        let _ = self.records[idx].tcp_tx.pop_front();
-                    }
+                    self.records[idx].tcp_tx.advance(sent);
                 }
                 Err(_) => {
                     let _ = push_event(
@@ -4238,12 +4245,15 @@ impl NetService {
                 }
             }
             NetCommand::SendTcp { handle, data } => {
-                if let Some(result) = self.send_loopback_tcp(handle, data.clone()) {
-                    if result.is_err() {
-                        let _ = push_event(owner, NetEvent::Error { msg: "not tcp" });
+                let data = match self.route_tcp_send(handle, data) {
+                    TcpRoute::Network(data) => data,
+                    TcpRoute::Loopback(result) => {
+                        if result.is_err() {
+                            let _ = push_event(owner, NetEvent::Error { msg: "not tcp" });
+                        }
+                        return;
                     }
-                    return;
-                }
+                };
 
                 if !self.link_up() {
                     let _ = push_event(owner, NetEvent::Error { msg: "link down" });
@@ -4265,7 +4275,7 @@ impl NetService {
                     }
                     // Don't drop on backpressure; queue and flush when the socket becomes writable.
                     // This is especially important for TLS handshakes (ClientHello) right after connect.
-                    self.records[idx].tcp_tx.extend(data);
+                    self.records[idx].tcp_tx.push(data);
                     self.flush_tcp_tx(idx);
                 } else {
                     let _ = push_event(owner, NetEvent::Closed { handle });

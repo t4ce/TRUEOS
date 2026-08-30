@@ -334,6 +334,68 @@ impl<'a> Structure<'a> {
     pub const fn type_name(self) -> &'static str {
         structure_type_name(self.type_id)
     }
+
+    /// Decode the stable, user-facing subset of an SMBIOS Type 17 record.
+    ///
+    /// The raw structure remains available to detailed diagnostics. This
+    /// helper gives concise consumers such as Shell2's `ram` command one
+    /// shared interpretation of module capacity, slot labels, and speed.
+    pub fn memory_device(self) -> Option<MemoryDevice<'a>> {
+        if self.type_id != 17 {
+            return None;
+        }
+
+        let size = match self.u16(0x0C)? {
+            0 => MemoryDeviceSize::NotInstalled,
+            0xFFFF => MemoryDeviceSize::Unknown,
+            0x7FFF => match self.u32(0x1C).map(|mib| mib & 0x7FFF_FFFF) {
+                Some(0) | None => MemoryDeviceSize::Unknown,
+                Some(mib) => MemoryDeviceSize::Bytes(u64::from(mib) * 1024 * 1024),
+            },
+            value if value & 0x8000 != 0 => {
+                MemoryDeviceSize::Bytes(u64::from(value & 0x7FFF) * 1024)
+            }
+            value => MemoryDeviceSize::Bytes(u64::from(value) * 1024 * 1024),
+        };
+
+        Some(MemoryDevice {
+            handle: self.handle,
+            locator: self.byte(0x10).and_then(|index| self.string_bytes(index)),
+            bank_locator: self.byte(0x11).and_then(|index| self.string_bytes(index)),
+            size,
+            speed_mt_s: memory_speed(self, 0x15, 0x54),
+            configured_speed_mt_s: memory_speed(self, 0x20, 0x58),
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MemoryDeviceSize {
+    NotInstalled,
+    Unknown,
+    Bytes(u64),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct MemoryDevice<'a> {
+    pub handle: u16,
+    pub locator: Option<&'a [u8]>,
+    pub bank_locator: Option<&'a [u8]>,
+    pub size: MemoryDeviceSize,
+    pub speed_mt_s: Option<u32>,
+    pub configured_speed_mt_s: Option<u32>,
+}
+
+fn memory_speed(
+    structure: Structure<'_>,
+    legacy_offset: usize,
+    extended_offset: usize,
+) -> Option<u32> {
+    match structure.u16(legacy_offset)? {
+        0 => None,
+        0xFFFF => structure.u32(extended_offset).filter(|speed| *speed != 0),
+        speed => Some(u32::from(speed)),
+    }
 }
 
 pub struct Strings<'a> {
@@ -488,7 +550,7 @@ pub const fn structure_type_name(type_id: u8) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{ParseError, Structures, checksum_is_zero};
+    use super::{MemoryDeviceSize, ParseError, Structure, Structures, checksum_is_zero};
 
     fn structures(bytes: &[u8]) -> Structures<'_> {
         Structures {
@@ -558,5 +620,69 @@ mod tests {
     fn checksum_requires_wrapping_sum_zero() {
         assert!(checksum_is_zero(&[0x5A, 0xA6]));
         assert!(!checksum_is_zero(&[0x5A, 0xA5]));
+    }
+
+    #[test]
+    fn decodes_installed_memory_device() {
+        let mut formatted = [0u8; 0x22];
+        formatted[0] = 17;
+        formatted[1] = formatted.len() as u8;
+        formatted[0x0C..0x0E].copy_from_slice(&16_384u16.to_le_bytes());
+        formatted[0x10] = 1;
+        formatted[0x11] = 2;
+        formatted[0x15..0x17].copy_from_slice(&3_200u16.to_le_bytes());
+        formatted[0x20..0x22].copy_from_slice(&2_933u16.to_le_bytes());
+        let structure = Structure {
+            table_offset: 0,
+            type_id: 17,
+            handle: 0x1234,
+            formatted: &formatted,
+            strings: b"DIMM_A1\0BANK 0",
+            total_bytes: formatted.len() + 16,
+        };
+
+        let device = structure.memory_device().unwrap();
+        assert_eq!(device.handle, 0x1234);
+        assert_eq!(device.locator, Some(&b"DIMM_A1"[..]));
+        assert_eq!(device.bank_locator, Some(&b"BANK 0"[..]));
+        assert_eq!(device.size, MemoryDeviceSize::Bytes(16 * 1024 * 1024 * 1024));
+        assert_eq!(device.speed_mt_s, Some(3_200));
+        assert_eq!(device.configured_speed_mt_s, Some(2_933));
+    }
+
+    #[test]
+    fn decodes_extended_memory_device_fields_and_empty_slot() {
+        let mut formatted = [0u8; 0x5C];
+        formatted[0] = 17;
+        formatted[1] = formatted.len() as u8;
+        formatted[0x0C..0x0E].copy_from_slice(&0x7FFFu16.to_le_bytes());
+        formatted[0x1C..0x20].copy_from_slice(&32_768u32.to_le_bytes());
+        formatted[0x15..0x17].copy_from_slice(&0xFFFFu16.to_le_bytes());
+        formatted[0x20..0x22].copy_from_slice(&0xFFFFu16.to_le_bytes());
+        formatted[0x54..0x58].copy_from_slice(&6_400u32.to_le_bytes());
+        formatted[0x58..0x5C].copy_from_slice(&5_600u32.to_le_bytes());
+        let structure = Structure {
+            table_offset: 0,
+            type_id: 17,
+            handle: 1,
+            formatted: &formatted,
+            strings: &[],
+            total_bytes: formatted.len() + 2,
+        };
+
+        let device = structure.memory_device().unwrap();
+        assert_eq!(device.size, MemoryDeviceSize::Bytes(32 * 1024 * 1024 * 1024));
+        assert_eq!(device.speed_mt_s, Some(6_400));
+        assert_eq!(device.configured_speed_mt_s, Some(5_600));
+
+        let mut empty_formatted = formatted;
+        empty_formatted[0x0C..0x0E].copy_from_slice(&0u16.to_le_bytes());
+        let empty = Structure {
+            formatted: &empty_formatted,
+            ..structure
+        }
+        .memory_device()
+        .unwrap();
+        assert_eq!(empty.size, MemoryDeviceSize::NotInstalled);
     }
 }

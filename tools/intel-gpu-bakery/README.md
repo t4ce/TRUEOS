@@ -96,3 +96,9 @@ Collapse5 tree probe. `make intel-gpu-bake-subset-sum-cpp` refreshes its
 artifact quartet, and the production aggregate includes that target. Runtime
 admission remains hash-, target-, and ABI-bound before the three ordered RCS
 walkers may touch their two-page non-display arena.
+
+## Related architecture
+
+The staged design for a sealed GPU-resident Rust-to-x86 compiler, its
+`rust_code_buffer` protocol, and the reboot-free development boundary is in
+[`docs/GPU_RUST_CODEGEN.md`](../../docs/GPU_RUST_CODEGEN.md).
