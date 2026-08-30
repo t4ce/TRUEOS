@@ -346,8 +346,6 @@ impl ResidentScenePrimitiveTopology {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ResidentSceneFragmentContract {
     ConstantRgba,
-    FilteredSample,
-    FixedTexelLoadProbe,
 }
 
 #[derive(Copy, Clone)]
@@ -1475,18 +1473,12 @@ fn stage_resident_scene_secondary(
     result_ggtt_gpu: u64,
 ) -> Result<usize, &'static str> {
     draw.state_gpu_addr = state_gpu;
-    let pipeline = match (fragment_contract, sampled_texture.is_some()) {
-        (ResidentSceneFragmentContract::ConstantRgba, false) => {
-            crate::intel::shader::triangle_pipeline_simd16()
-        }
-        (ResidentSceneFragmentContract::FilteredSample, true) => {
-            crate::intel::shader::picasso_filtered_texture_pipeline()
-        }
-        (ResidentSceneFragmentContract::FixedTexelLoadProbe, true) => {
-            crate::intel::shader::picasso_fixed_texel_load_pipeline()
-        }
-        _ => return Err("scene-fragment-contract-texture-mismatch"),
-    };
+    if fragment_contract != ResidentSceneFragmentContract::ConstantRgba
+        || sampled_texture.is_some()
+    {
+        return Err("scene-fragment-contract-texture-mismatch");
+    }
+    let pipeline = crate::intel::shader::triangle_pipeline_simd16();
     draw.sampled_texture = sampled_texture.map(|texture| TriangleSampledTextureBinding {
         gpu_addr: texture.storage.gpu_base(),
         width: texture.width,
@@ -1975,19 +1967,7 @@ fn submit_resident_scene_geometry_batched(
         );
     }
     let prepare_us = crate::chronos::monotonic_nanos().saturating_sub(prepare_started_ns) / 1_000;
-    let submit_name = if draws
-        .iter()
-        .any(|draw| draw.fragment_contract == ResidentSceneFragmentContract::FixedTexelLoadProbe)
-    {
-        "resident-scene-fixed-texel-probe"
-    } else if draws
-        .iter()
-        .any(|draw| draw.fragment_contract == ResidentSceneFragmentContract::FilteredSample)
-    {
-        "resident-scene-filtered-sample"
-    } else {
-        "resident-scene"
-    };
+    let submit_name = "resident-scene";
     let completed = match carrier {
         Some(lease) => submit_picasso_render1_batch(
             lease,

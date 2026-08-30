@@ -448,7 +448,6 @@ enum DirectRcsLane {
     Font,
     Execution,
     Lfm25,
-    HelioCloud,
 }
 
 impl DirectRcsLane {
@@ -458,7 +457,6 @@ impl DirectRcsLane {
             Self::Font => "font",
             Self::Execution => "execution",
             Self::Lfm25 => "lfm25",
-            Self::HelioCloud => "helioc",
         }
     }
 }
@@ -497,13 +495,6 @@ enum DirectRcsSubmissionState {
     Rejected,
     Submitted,
     Ambiguous,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum HelioCloudRcsRetirement {
-    Pending,
-    Complete,
-    Invalid,
 }
 
 impl DirectRcsSubmissionState {
@@ -553,42 +544,6 @@ fn lfm25_rcs_submit_batch(dev: super::Dev, state: DirectRcsState) -> bool {
     )
 }
 
-fn helioc_rcs_submit_batch_state(
-    _guard: &HelioCloudSubmitGuard,
-    dev: super::Dev,
-    state: DirectRcsState,
-    batch: helioc_native_package::HelioCloudMaterializedBatch,
-) -> DirectRcsSubmissionState {
-    if helioc_rcs_context_is_quarantined()
-        || HELIOC_RCS_SUBMIT_RUNTIME
-            .try_lock()
-            .is_none_or(|runtime| runtime.pending.is_some())
-    {
-        return DirectRcsSubmissionState::Rejected;
-    }
-    let Some(selected) = select_helioc_materialized_batch(state, batch) else {
-        return DirectRcsSubmissionState::Rejected;
-    };
-    let marker_bytes = 2 * core::mem::size_of::<u32>();
-    unsafe {
-        core::ptr::write_bytes(
-            selected
-                .result_virt
-                .add(HELIOC_RCS_COMPLETION_SLOT * core::mem::size_of::<u32>()),
-            0,
-            marker_bytes,
-        );
-        super::dma_flush(
-            selected
-                .result_virt
-                .add(HELIOC_RCS_COMPLETION_SLOT * core::mem::size_of::<u32>()),
-            marker_bytes,
-        );
-        super::dma_flush(selected.batch_virt, batch.length as usize);
-    }
-    direct_rcs_submit_batch_on_lane_state(dev, selected, DirectRcsLane::HelioCloud)
-}
-
 fn direct_rcs_submit_batch_on_lane_state(
     dev: super::Dev,
     state: DirectRcsState,
@@ -614,11 +569,6 @@ fn direct_rcs_submit_batch_on_lane_state(
             &LFM25_RCS_CONTEXT_QUARANTINED,
             &LFM25_RCS_SUBMIT_RUNTIME,
             crate::gpu::vgpu::KernelClient::Lfm25,
-        ),
-        DirectRcsLane::HelioCloud => (
-            &HELIOC_RCS_CONTEXT_QUARANTINED,
-            &HELIOC_RCS_SUBMIT_RUNTIME,
-            crate::gpu::vgpu::KernelClient::HelioCloud,
         ),
     };
     if quarantined.load(Ordering::Acquire) {
@@ -676,10 +626,6 @@ fn lfm25_rcs_context_is_quarantined() -> bool {
     !direct_rcs_state_reuse_permitted(&LFM25_RCS_CONTEXT_QUARANTINED)
 }
 
-fn helioc_rcs_context_is_quarantined() -> bool {
-    !direct_rcs_state_reuse_permitted(&HELIOC_RCS_CONTEXT_QUARANTINED)
-}
-
 fn ui4_compositor_rcs_context_is_quarantined() -> bool {
     !direct_rcs_state_reuse_permitted(&UI4_COMPOSITOR_RCS_CONTEXT_QUARANTINED)
 }
@@ -694,10 +640,6 @@ fn quarantine_font_rcs_context(reason: &'static str) {
 
 fn quarantine_lfm25_rcs_context(reason: &'static str) {
     quarantine_direct_rcs_lane(DirectRcsLane::Lfm25, reason);
-}
-
-fn quarantine_helioc_rcs_context(reason: &'static str) {
-    quarantine_direct_rcs_lane(DirectRcsLane::HelioCloud, reason);
 }
 
 fn quarantine_ui4_compositor_rcs_context(reason: &'static str) {
@@ -731,9 +673,6 @@ fn quarantine_direct_rcs_lane(lane: DirectRcsLane, reason: &'static str) {
         }
         DirectRcsLane::Lfm25 => {
             (&LFM25_RCS_CONTEXT_QUARANTINED, crate::gpu::vgpu::KernelClient::Lfm25)
-        }
-        DirectRcsLane::HelioCloud => {
-            (&HELIOC_RCS_CONTEXT_QUARANTINED, crate::gpu::vgpu::KernelClient::HelioCloud)
         }
     };
     if quarantined
@@ -929,7 +868,6 @@ fn direct_rcs_submit_runtime(lane: DirectRcsLane) -> &'static Mutex<DirectRcsSub
         DirectRcsLane::Font => &FONT_RCS_SUBMIT_RUNTIME,
         DirectRcsLane::Execution => &EXECUTION_RCS_SUBMIT_RUNTIME,
         DirectRcsLane::Lfm25 => &LFM25_RCS_SUBMIT_RUNTIME,
-        DirectRcsLane::HelioCloud => &HELIOC_RCS_SUBMIT_RUNTIME,
     }
 }
 
@@ -971,39 +909,6 @@ fn direct_rcs_retirement_proof_on_lane(
         saved_head_bytes,
         published_tail_bytes,
     }
-}
-
-/// Sample HelioC retirement once. The compositor/service task may call this on
-/// successive executor turns; this function never loops or burns a CPU while
-/// the EU threads or GuC context save are still in flight.
-fn helioc_rcs_observe_retirement(
-    _guard: &HelioCloudSubmitGuard,
-    state: DirectRcsState,
-) -> HelioCloudRcsRetirement {
-    if state.gpu_va.ring != HELIOC_RCS_GPU_VA_RING_BASE || helioc_rcs_context_is_quarantined() {
-        return HelioCloudRcsRetirement::Invalid;
-    }
-    let Some(runtime) = HELIOC_RCS_SUBMIT_RUNTIME.try_lock() else {
-        return HelioCloudRcsRetirement::Pending;
-    };
-    if runtime.pending.is_none() {
-        return HelioCloudRcsRetirement::Invalid;
-    }
-    let published_tail_bytes = runtime.ring_tail_bytes;
-    drop(runtime);
-
-    let marker = direct_rcs_read_result_slot(state, HELIOC_RCS_COMPLETION_SLOT);
-    let saved_head_bytes =
-        direct_rcs_read_lrc_ring_head(state) & (DIRECT_RCS_RING_BYTES as u32 - 1);
-    if !direct_rcs_retirement_is_proven(
-        marker == HELIOC_RCS_COMPLETION_MARKER,
-        saved_head_bytes,
-        published_tail_bytes,
-    ) {
-        return HelioCloudRcsRetirement::Pending;
-    }
-    complete_direct_rcs_submission_on_lane(DirectRcsLane::HelioCloud);
-    HelioCloudRcsRetirement::Complete
 }
 
 fn execution_rcs_retirement_proof(
@@ -1160,22 +1065,6 @@ fn lfm25_rcs_poll_result_slot_timeout_ms(
     )
 }
 
-#[expect(dead_code, reason = "reserved for the sealed HelioC frame encoder")]
-fn helioc_rcs_poll_result_slot_timeout_ms(
-    state: DirectRcsState,
-    slot: usize,
-    expected: u32,
-    timeout_ms: u64,
-) -> u32 {
-    direct_rcs_poll_result_slot_timeout_ms_on_lane(
-        state,
-        slot,
-        expected,
-        timeout_ms,
-        DirectRcsLane::HelioCloud,
-    )
-}
-
 fn lfm25_rcs_poll_result_slot_timeout_ms_with_timestamp(
     dev: super::Dev,
     state: DirectRcsState,
@@ -1221,7 +1110,6 @@ fn direct_rcs_poll_result_slot_timeout_ms_on_lane_with_timestamp(
         DirectRcsLane::Font => &FONT_RCS_TIMEOUT_POLL_PROBE_LOGGED,
         DirectRcsLane::Execution => &EXECUTION_RCS_TIMEOUT_POLL_PROBE_LOGGED,
         DirectRcsLane::Lfm25 => &LFM25_RCS_TIMEOUT_POLL_PROBE_LOGGED,
-        DirectRcsLane::HelioCloud => &HELIOC_RCS_TIMEOUT_POLL_PROBE_LOGGED,
     };
     let log_probe = probe_logged
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)

@@ -1,4 +1,4 @@
-/// Relocatable Helio-to-TRUEOS contract for persistent RGBA16F 3D resources.
+/// Relocatable, workload-neutral contract for persistent RGBA16F 3D resources.
 ///
 /// The artifact carries logical resources, views, sampler semantics, and the
 /// compiler-authenticated binding-table layout. Runtime resolution contributes
@@ -6,7 +6,7 @@
 /// SAMPLER_STATE bit encoding deliberately remains a later, hardware-proven
 /// lowering step.
 #[allow(dead_code)]
-pub(crate) mod helio_volume_resources {
+pub(crate) mod volume_resources {
     use super::{GPGPU_RGBA16_FLOAT_BYTES_PER_VOXEL, GpgpuRgba16FloatVolume3d};
     #[cfg(test)]
     use super::GpgpuVolumePhysicalBacking;
@@ -19,10 +19,10 @@ pub(crate) mod helio_volume_resources {
     include!("volume_resources/tests.rs");
 
     #[cfg(test)]
-    pub(crate) fn helioc_test_cloud_resource() -> (alloc::vec::Vec<u8>, &'static [u8]) {
-        const METADATA: &[u8] = br#"{\"source\":\"igc\",\"profile\":\"cloud-volume\"}
+    pub(crate) fn test_ping_pong_volume_resource() -> (alloc::vec::Vec<u8>, &'static [u8]) {
+        const METADATA: &[u8] = br#"{\"source\":\"igc\",\"profile\":\"ping-pong-volume\"}
 "#;
-        let mut resource = tests::cloud_fixture();
+        let mut resource = tests::ping_pong_fixture();
         let digest = Sha256::digest(METADATA);
         resource[48..80].copy_from_slice(&digest);
         (resource, METADATA)

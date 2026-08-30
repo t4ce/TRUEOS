@@ -278,10 +278,7 @@ pub(crate) fn broker_ui4_indexed_submit(
     queue: u64,
     draw: v::vgpu::IndexedDraw,
 ) -> Result<v::vgpu::TimelinePoint, i32> {
-    if draw.reserved != 0
-        || draw.texture_reserved != 0
-        || draw.sampler_flags & !v::vgpu::SAMPLER_FLAGS_ALL != 0
-    {
+    if draw.reserved != 0 {
         return Err(-22);
     }
     let owner = ui4_owner(principal)?;
@@ -300,11 +297,6 @@ pub(crate) fn broker_ui4_indexed_submit(
             first_index: draw.first_index,
             base_vertex: draw.base_vertex,
             clear_rgba8_srgb: draw.clear_rgba8_srgb,
-            sampled_texture: BufferHandle::from_raw(draw.sampled_texture),
-            texture_width: draw.texture_width,
-            texture_height: draw.texture_height,
-            texture_pitch: draw.texture_pitch,
-            sampler_flags: draw.sampler_flags,
         },
     )
     .map_err(|error| error.errno())?;
@@ -719,125 +711,6 @@ pub(crate) fn broker_wait(principal: Principal, device: u64, queue: u64, value: 
     .unwrap_or_else(|error| error.errno())
 }
 
-pub(crate) fn broker_cloud_work_graph_create(
-    principal: Principal,
-    device: u64,
-    descriptor: v::vgpu::CloudWorkGraphDescriptor,
-) -> Result<u64, i32> {
-    let d = vgpu::CloudWorkGraphDescriptor {
-        volume_a: BufferHandle::from_raw(descriptor.volume_a),
-        volume_b: BufferHandle::from_raw(descriptor.volume_b),
-        sim_params: BufferHandle::from_raw(descriptor.sim_params),
-        render_params: BufferHandle::from_raw(descriptor.render_params),
-        profile: descriptor.profile,
-    };
-    vgpu::create_cloud_work_graph(principal, DeviceHandle::from_raw(device), d)
-        .map(|h| h.raw())
-        .map_err(|e| e.errno())
-}
-
-pub(crate) fn broker_cloud_work_graph_destroy(
-    principal: Principal,
-    device: u64,
-    graph: u64,
-) -> i32 {
-    vgpu::destroy_cloud_work_graph(
-        principal,
-        DeviceHandle::from_raw(device),
-        vgpu::CloudWorkGraphHandle::from_raw(graph),
-    )
-    .map(|_| 0)
-    .unwrap_or_else(|e| e.errno())
-}
-
-pub(crate) fn broker_cloud_frame_submit(
-    principal: Principal,
-    device: u64,
-    queue: u64,
-    graph: u64,
-    surface: u64,
-    steps: u32,
-) -> Result<v::vgpu::CloudFrameTelemetry, i32> {
-    let owner = ui4_owner(principal)?;
-    let progress = vgpu::submit_cloud_frame(
-        principal,
-        DeviceHandle::from_raw(device),
-        QueueHandle::from_raw(queue),
-        vgpu::CloudWorkGraphHandle::from_raw(graph),
-        SurfaceHandle::from_raw(surface),
-        steps,
-    )
-    .map_err(|e| e.errno())?;
-    let vgpu::CloudFrameSubmissionProgress::Complete(completed) = progress else {
-        return Err(-16);
-    };
-    complete_cloud_frame_submission(owner, completed)
-}
-
-pub(crate) enum BrokerCloudFrameSubmissionProgress {
-    Pending,
-    Complete(v::vgpu::CloudFrameTelemetry),
-}
-
-/// Advance one matching VMCALL-owned Cloud ticket. The caller decides when to
-/// retry; this function never spins while the HelioC context is in flight.
-pub(crate) fn broker_cloud_frame_submit_retry(
-    principal: Principal,
-    device: u64,
-    queue: u64,
-    graph: u64,
-    surface: u64,
-    steps: u32,
-) -> Result<BrokerCloudFrameSubmissionProgress, i32> {
-    let owner = ui4_owner(principal)?;
-    match vgpu::retry_cloud_frame_submission(
-        principal,
-        DeviceHandle::from_raw(device),
-        QueueHandle::from_raw(queue),
-        vgpu::CloudWorkGraphHandle::from_raw(graph),
-        SurfaceHandle::from_raw(surface),
-        steps,
-    )
-    .map_err(|e| e.errno())?
-    {
-        vgpu::CloudFrameSubmissionProgress::Pending => {
-            Ok(BrokerCloudFrameSubmissionProgress::Pending)
-        }
-        vgpu::CloudFrameSubmissionProgress::Complete(completed) => {
-            complete_cloud_frame_submission(owner, completed)
-                .map(BrokerCloudFrameSubmissionProgress::Complete)
-        }
-    }
-}
-
-fn complete_cloud_frame_submission(
-    owner: crate::ui4::WindowOwner,
-    completed: vgpu::CloudFrameCompletion,
-) -> Result<v::vgpu::CloudFrameTelemetry, i32> {
-    // `submit_cloud_frame` reaches this boundary only after an authenticated
-    // native completion has retired the producer release and removed the
-    // tenant GPUVM alias. UI4 now owns the exact physical allocation until
-    // its display SURFLIVE release; the guest sees only the virtual timeline.
-    crate::ui4::blueprint_text::complete_vgpu_surface_submission(
-        owner,
-        completed.window_id,
-        completed.surface.handle.raw(),
-        completed.release,
-    )?;
-    Ok(v::vgpu::CloudFrameTelemetry {
-        point: v::vgpu::TimelinePoint {
-            value: completed.telemetry.point.value,
-            physical_serial: completed.telemetry.point.physical_serial,
-        },
-        gpu_active_ns: completed.telemetry.gpu_active_ns,
-        budget_window_ns: completed.telemetry.budget_window_ns,
-        simulation_steps: completed.telemetry.simulation_steps,
-        simd_width: completed.telemetry.simd_width,
-        flags: completed.telemetry.flags,
-        reserved: 0,
-    })
-}
-
 fn guest_rc(op: u32, arg0: u64, arg1: u64, request: &[u8]) -> i32 {
     let (status, data) = trueos_vm::vmcall::call_with_payload(op, arg0, arg1, request, &mut []);
     if status == trueos_vm::vmcall::STATUS_OK {
@@ -1048,94 +921,6 @@ pub unsafe extern "C" fn trueos_cabi_vgpu_ui4_surface_clear_submit(
     match result {
         Ok(point) => {
             unsafe { out_point.write(point) };
-            0
-        }
-        Err(rc) => rc,
-    }
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_cabi_vgpu_cloud_work_graph_create(
-    device: u64,
-    descriptor: *const v::vgpu::CloudWorkGraphDescriptor,
-    out_graph: *mut u64,
-) -> i32 {
-    if descriptor.is_null() || out_graph.is_null() {
-        return -14;
-    }
-    let d = unsafe { descriptor.read() };
-    if d.profile != v::vgpu::CLOUD_PROFILE_HELIO_ENGINE_V1 || d.flags != 0 || d.reserved != [0; 2] {
-        return -95;
-    }
-    let result = if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let payload = unsafe {
-            core::slice::from_raw_parts(
-                core::ptr::from_ref(&d).cast::<u8>(),
-                core::mem::size_of_val(&d),
-            )
-        };
-        guest_handle(trueos_vm::vmcall::OP_BP_VGPU_CLOUD_WORK_GRAPH_CREATE, device, 0, payload)
-    } else {
-        broker_cloud_work_graph_create(direct_principal(), device, d)
-    };
-    match result {
-        Ok(h) => {
-            unsafe { out_graph.write(h) };
-            0
-        }
-        Err(rc) => rc,
-    }
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_vgpu_cloud_work_graph_destroy(device: u64, graph: u64) -> i32 {
-    if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        guest_rc(trueos_vm::vmcall::OP_BP_VGPU_CLOUD_WORK_GRAPH_DESTROY, device, graph, &[])
-    } else {
-        broker_cloud_work_graph_destroy(direct_principal(), device, graph)
-    }
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_cabi_vgpu_cloud_frame_submit(
-    device: u64,
-    queue: u64,
-    submit: *const v::vgpu::CloudFrameSubmit,
-    out: *mut v::vgpu::CloudFrameTelemetry,
-) -> i32 {
-    if submit.is_null() || out.is_null() {
-        return -14;
-    }
-    let s = unsafe { submit.read() };
-    if s.flags != 0
-        || s.reserved != [0; 2]
-        || s.simulation_steps > v::vgpu::CLOUD_FRAME_MAX_SIMULATION_STEPS
-        || s.graph == 0
-        || s.surface == 0
-    {
-        return -95;
-    }
-    let payload = unsafe {
-        core::slice::from_raw_parts(
-            core::ptr::from_ref(&s).cast::<u8>(),
-            core::mem::size_of_val(&s),
-        )
-    };
-    let result = if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        guest_record(trueos_vm::vmcall::OP_BP_VGPU_CLOUD_FRAME_SUBMIT, device, queue, payload)
-    } else {
-        broker_cloud_frame_submit(
-            direct_principal(),
-            device,
-            queue,
-            s.graph,
-            s.surface,
-            s.simulation_steps,
-        )
-    };
-    match result {
-        Ok(t) => {
-            unsafe { out.write(t) };
             0
         }
         Err(rc) => rc,

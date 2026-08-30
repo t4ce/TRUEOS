@@ -43,35 +43,8 @@ pub(crate) const SAMPLER_ADDRESS_V_REPEAT: u32 = 1 << 1;
 
 pub(crate) const SHADER_PACKAGE_CLIP_POSITION3_RGBA_FNV1A64: u64 = 0x1438_5963_136A_A36F;
 pub(crate) const SHADER_PACKAGE_CLIP_POSITION3_IMMEDIATE_RGBA_FNV1A64: u64 = 0x4A7C_D238_6AA5_C232;
-pub(crate) const SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64: u64 = 0xD2A3_B942_FA09_24B6;
-pub(crate) const SHADER_PACKAGE_CLIP_POSITION3_UV_TEXEL_LOAD_FNV1A64: u64 = 0x0CFE_4DDB_C885_8871;
 const SHADER_PACKAGE_CLIP_POSITION3_RGBA_COLOR: u32 = u32::from_le_bytes([118, 221, 153, 255]);
 pub(crate) const MAX_INDEXED_BATCH_DRAWS: usize = v::vgpu::MAX_INDEXED_BATCH_V2_DRAWS;
-
-/// The only native cloud graph currently understood by the broker.  This is
-/// a profile selector, not a shader ID supplied by the tenant: the kernel maps
-/// it to the two baked, full-digest-authenticated Helio stages.
-pub(crate) const CLOUD_PROFILE_HELIO_ENGINE_V1: u32 = 1;
-pub(crate) const CLOUD_FRAME_MAX_SIMULATION_STEPS: u32 = 2;
-const CLOUD_WORK_GRAPH_LIMIT: usize = 4;
-const CLOUD_VOLUME_BYTES: usize = 3_538_944;
-const CLOUD_SIM_PARAMS_BYTES: usize = 112;
-const CLOUD_RENDER_PARAMS_BYTES: usize = 272;
-const CLOUD_VOLUME_REQUIRED_USAGE: u32 =
-    BUFFER_USAGE_STORAGE | BUFFER_USAGE_COPY_SRC | BUFFER_USAGE_COPY_DST;
-const CLOUD_PARAMS_REQUIRED_USAGE: u32 = BUFFER_USAGE_STORAGE | BUFFER_USAGE_COPY_DST;
-
-/// SHA-256 of the authored WGSL accepted by HelioC.  The eventual native
-/// payload must carry these identities in its sealed compiler metadata; a
-/// truncated application digest is never sufficient for execution admission.
-pub(crate) const CLOUD_SIMULATION_WGSL_SHA256: [u8; 32] = [
-    0xf5, 0x83, 0xd3, 0xc6, 0x3e, 0x5f, 0x38, 0x7a, 0x59, 0x26, 0x28, 0x1d, 0xf2, 0x9b, 0x76, 0x88,
-    0xeb, 0x09, 0xea, 0xa5, 0xf0, 0x61, 0x19, 0xd7, 0x4f, 0xff, 0xa7, 0x0d, 0x59, 0x20, 0x13, 0xf6,
-];
-pub(crate) const CLOUD_RENDER_WGSL_SHA256: [u8; 32] = [
-    0x5d, 0x53, 0x6a, 0x46, 0x8f, 0xcb, 0x69, 0x8c, 0x3d, 0xca, 0x79, 0xfa, 0xac, 0x0e, 0x5a, 0x49,
-    0x24, 0xfd, 0xc8, 0xce, 0x2c, 0x9c, 0xe3, 0xa9, 0xb5, 0xd2, 0x4c, 0x40, 0xa8, 0x4c, 0xc9, 0xff,
-];
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Capabilities(u64);
@@ -129,10 +102,6 @@ pub(crate) enum KernelClient {
     /// Independent compute lane for continuously executing GPU programs. Its
     /// context may remain in flight without blocking system-service compute.
     GpgpuExecution,
-    /// Authored Helio Cloud Engine frame graph. This mixed compute/render lane
-    /// owns one persistent RCS0 context and remains a normal-priority producer;
-    /// it must never borrow Font Engine's high-priority context or storage.
-    HelioCloud,
     /// Fixed-model compute lane with its own persistent PPGTT and GuC context.
     Lfm25,
     /// Persistent UI4 composition queue.  This is deliberately a separate
@@ -177,7 +146,6 @@ impl KernelClient {
             Self::GpgpuSystem => "kernel-gpgpu-system",
             Self::GpgpuFont => "kernel-gpgpu-font",
             Self::GpgpuExecution => "kernel-gpgpu-execution",
-            Self::HelioCloud => "kernel-helio-cloud",
             Self::Lfm25 => "kernel-lfm25",
             Self::Ui4Compositor => "kernel-ui4-compositor",
             Self::Ui4Blitter => "kernel-ui4-blitter",
@@ -192,7 +160,6 @@ impl KernelClient {
             Self::GpgpuSystem => Principal::KernelGpgpuSystem,
             Self::GpgpuFont => Principal::KernelGpgpuFont,
             Self::GpgpuExecution => Principal::KernelGpgpuExecution,
-            Self::HelioCloud => Principal::KernelHelioCloud,
             Self::Lfm25 => Principal::KernelLfm25,
             Self::Ui4Compositor => Principal::KernelUi4Compositor,
             Self::Ui4Blitter => Principal::KernelUi4Blitter,
@@ -201,7 +168,7 @@ impl KernelClient {
 
     const fn queue_class(self) -> QueueClass {
         match self {
-            Self::Render | Self::Render1 | Self::Render2 | Self::HelioCloud => QueueClass::Render,
+            Self::Render | Self::Render1 | Self::Render2 => QueueClass::Render,
             Self::GpgpuSystem | Self::GpgpuFont | Self::GpgpuExecution | Self::Lfm25 => {
                 QueueClass::Compute
             }
@@ -239,7 +206,6 @@ impl KernelClient {
             | Self::Render1
             | Self::Render2
             | Self::GpgpuExecution
-            | Self::HelioCloud
             | Self::Ui4Blitter => PhysicalContextPriority::KernelNormal,
         }
     }
@@ -257,7 +223,6 @@ impl KernelClient {
             | Self::GpgpuSystem
             | Self::GpgpuFont
             | Self::GpgpuExecution
-            | Self::HelioCloud
             | Self::Lfm25
             | Self::Ui4Compositor => {
                 matches!(engine.class, EngineClass::RenderCompute) && engine.instance == 0
@@ -296,10 +261,6 @@ const _: () = {
         KernelClient::GpgpuExecution.physical_priority(),
         PhysicalContextPriority::KernelNormal
     ));
-    assert!(matches!(
-        KernelClient::HelioCloud.physical_priority(),
-        PhysicalContextPriority::KernelNormal
-    ));
     assert!(matches!(KernelClient::Lfm25.physical_priority(), PhysicalContextPriority::KernelHigh));
     assert!(matches!(
         KernelClient::Ui4Blitter.physical_priority(),
@@ -323,10 +284,6 @@ mod kernel_client_priority_tests {
         }
         assert_eq!(
             KernelClient::GpgpuExecution.physical_priority(),
-            PhysicalContextPriority::KernelNormal,
-        );
-        assert_eq!(
-            KernelClient::HelioCloud.physical_priority(),
             PhysicalContextPriority::KernelNormal,
         );
     }
@@ -356,7 +313,6 @@ pub(crate) enum Principal {
     KernelGpgpuSystem,
     KernelGpgpuFont,
     KernelGpgpuExecution,
-    KernelHelioCloud,
     KernelLfm25,
     KernelUi4Compositor,
     KernelUi4Blitter,
@@ -374,7 +330,6 @@ impl Principal {
             Self::KernelGpgpuSystem => "kernel-gpgpu-system",
             Self::KernelGpgpuFont => "kernel-gpgpu-font",
             Self::KernelGpgpuExecution => "kernel-gpgpu-execution",
-            Self::KernelHelioCloud => "kernel-helio-cloud",
             Self::KernelLfm25 => "kernel-lfm25",
             Self::KernelUi4Compositor => "kernel-ui4-compositor",
             Self::KernelUi4Blitter => "kernel-ui4-blitter",
@@ -500,20 +455,6 @@ impl RenderPipelineHandle {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 #[repr(transparent)]
-pub(crate) struct CloudWorkGraphHandle(u64);
-
-impl CloudWorkGraphHandle {
-    pub(crate) const fn from_raw(raw: u64) -> Self {
-        Self(raw)
-    }
-
-    pub(crate) const fn raw(self) -> u64 {
-        self.0
-    }
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-#[repr(transparent)]
 pub(crate) struct RetainedMeshHandle(u64);
 
 impl RetainedMeshHandle {
@@ -560,16 +501,6 @@ pub(crate) struct TimelinePoint {
     pub(crate) value: u64,
     pub(crate) physical_serial: u64,
     pub(crate) physical_publish_sequence: u64,
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CloudFrameTelemetry {
-    pub(crate) point: TimelinePoint,
-    pub(crate) gpu_active_ns: u64,
-    pub(crate) budget_window_ns: u64,
-    pub(crate) simulation_steps: u32,
-    pub(crate) simd_width: u32,
-    pub(crate) flags: u32,
 }
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
@@ -802,30 +733,6 @@ struct RenderPipelineSlot {
     record: Option<RenderPipelineRecord>,
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(crate) struct CloudWorkGraphDescriptor {
-    pub(crate) volume_a: BufferHandle,
-    pub(crate) volume_b: BufferHandle,
-    pub(crate) sim_params: BufferHandle,
-    pub(crate) render_params: BufferHandle,
-    pub(crate) profile: u32,
-}
-
-struct CloudWorkGraphRecord {
-    resources: CloudWorkGraphDescriptor,
-    /// Immutable physical backing authenticated once when the graph is
-    /// created. Frame submission only clones four `Arc` handles; it never
-    /// recopies the 1,730-page ping-pong map on the CPU hot path.
-    buffer_metadata: [CloudBufferMetadata; 4],
-    backing_admission: crate::intel::gpgpu::HelioCloudBackingAdmission,
-    epoch: u64,
-    /// The volume sampled by a zero-step render. Each completed simulation
-    /// step flips this selector; the tenant never supplies a GPU address or a
-    /// ping-pong target.
-    current_volume: u8,
-    in_flight: u32,
-}
-
 struct RetainedMeshRecord {
     carrier: crate::intel::render::PicassoCarrierLease,
     resident: Arc<crate::intel::render::ResidentChurnForward>,
@@ -886,96 +793,6 @@ impl RetainedMaterialSubmission {
     }
 }
 
-struct CloudSubmissionLease {
-    device_epoch: u64,
-    queue: QueueHandle,
-    graph: CloudWorkGraphHandle,
-    surface: SurfaceHandle,
-    buffers: [BufferHandle; 4],
-    buffer_metadata: [CloudBufferMetadata; 4],
-    backing_admission: crate::intel::gpgpu::HelioCloudBackingAdmission,
-    surface_metadata: CloudSurfaceMetadata,
-    graph_resources: CloudWorkGraphDescriptor,
-    current_volume: u8,
-    simulation_steps: u32,
-}
-
-#[derive(Copy, Clone)]
-struct CloudSurfaceMetadata {
-    window_id: u32,
-    gpu: u64,
-    phys: u64,
-    producer_gpu: u64,
-    bytes: usize,
-    width: u32,
-    height: u32,
-    pitch: u32,
-}
-
-#[derive(Clone)]
-struct CloudBufferMetadata {
-    gpu: u64,
-    bytes: usize,
-    usage: u32,
-    epoch: u64,
-    mapping_digest: u64,
-    pages: Arc<[u64]>,
-}
-
-/// One fully retired Cloud submission prepared for UI4's existing direct
-/// presentation handoff. The release proof remains tied to the exact imported
-/// surface; callers must not manufacture a UI4 publication from telemetry.
-pub(crate) struct CloudFrameCompletion {
-    pub(crate) window_id: u32,
-    pub(crate) surface: SurfaceInfo,
-    pub(crate) release: crate::intel::gpgpu::GpgpuRgba8ReleaseFence,
-    pub(crate) telemetry: CloudFrameTelemetry,
-}
-
-/// A Cloud VMCALL may remain pending across executor turns while its one
-/// native batch retires. The caller must retry the exact request to observe it
-/// again; a different request cannot borrow the single HelioC lane.
-pub(crate) enum CloudFrameSubmissionProgress {
-    Pending,
-    Complete(CloudFrameCompletion),
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-struct CloudSubmissionRequest {
-    principal: Principal,
-    device: DeviceHandle,
-    queue: QueueHandle,
-    graph: CloudWorkGraphHandle,
-    surface: SurfaceHandle,
-    simulation_steps: u32,
-}
-
-struct CloudPendingSubmission {
-    request: CloudSubmissionRequest,
-    lease: CloudSubmissionLease,
-    ticket: crate::intel::gpgpu::HelioCloudNativeTicket,
-    simd_width: u32,
-}
-
-// This is intentionally the only switch that will receive an embedded HELIOA
-// payload after a reviewed native capture exists. `None` leaves the broker
-// fail-closed before any reservation, mapping, or hardware submission.
-const HELIOC_SEALED_ARTIFACT: Option<&[u8]> = None;
-
-static CLOUD_PENDING_SUBMISSION: Mutex<Option<CloudPendingSubmission>> = Mutex::new(None);
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-enum CloudResourceRole {
-    Volume,
-    SimulationParams,
-    RenderParams,
-}
-
-struct CloudWorkGraphSlot {
-    generation: u32,
-    record: Option<CloudWorkGraphRecord>,
-}
-
 struct QueueRecord {
     class: QueueClass,
     timeline: TimelineStatus,
@@ -1020,7 +837,6 @@ struct VirtualDevice {
     surfaces: Vec<SurfaceSlot>,
     shader_modules: Vec<ShaderModuleSlot>,
     render_pipelines: Vec<RenderPipelineSlot>,
-    cloud_work_graphs: Vec<CloudWorkGraphSlot>,
     retained_meshes: Vec<RetainedMeshSlot>,
     retained_textures: Vec<RetainedTextureSlot>,
     /// Phase-1 Picasso carrier. A VMX device may bind one RendererN lane for
@@ -1229,7 +1045,6 @@ pub(crate) fn open(
         surfaces: Vec::new(),
         shader_modules: Vec::new(),
         render_pipelines: Vec::new(),
-        cloud_work_graphs: Vec::new(),
         retained_meshes: Vec::new(),
         retained_textures: Vec::new(),
         picasso_carrier: None,
@@ -1856,14 +1671,6 @@ pub(crate) fn destroy_buffer(
     let device = lookup_device_mut(&mut broker, device_handle, principal)?;
     ensure_live(device)?;
     if device
-        .cloud_work_graphs
-        .iter()
-        .filter_map(|slot| slot.record.as_ref())
-        .any(|graph| cloud_graph_references_buffer(graph, buffer_handle))
-    {
-        return Err(VgpuError::Busy);
-    }
-    if device
         .retained_meshes
         .iter()
         .filter_map(|slot| slot.record.as_ref())
@@ -1894,109 +1701,6 @@ pub(crate) fn destroy_buffer(
     let mut record = buffer_slot.record.take().expect("validated vgpu buffer");
     device.memory_used = device.memory_used.saturating_sub(record.bytes);
     release_buffer_backing(&mut record);
-    Ok(())
-}
-
-/// Seal the four tenant allocations used by the authored Helio Cloud Engine
-/// into one bounded, opaque work graph. The tenant supplies resources, never
-/// shader code, GPU addresses, state selectors, or an arbitrary dispatch.
-pub(crate) fn create_cloud_work_graph(
-    principal: Principal,
-    device_handle: DeviceHandle,
-    descriptor: CloudWorkGraphDescriptor,
-) -> Result<CloudWorkGraphHandle, VgpuError> {
-    if descriptor.profile != CLOUD_PROFILE_HELIO_ENGINE_V1 {
-        return Err(VgpuError::Unsupported);
-    }
-    let handles = [
-        descriptor.volume_a.raw(),
-        descriptor.volume_b.raw(),
-        descriptor.sim_params.raw(),
-        descriptor.render_params.raw(),
-    ];
-    if handles.contains(&0)
-        || handles
-            .iter()
-            .enumerate()
-            .any(|(index, handle)| handles[..index].contains(handle))
-    {
-        return Err(VgpuError::InvalidHandle);
-    }
-
-    let mut broker = BROKER.lock();
-    let device = lookup_device_mut(&mut broker, device_handle, principal)?;
-    ensure_live(device)?;
-    let required_capabilities = Capabilities::COMPUTE
-        .union(Capabilities::RENDER)
-        .union(Capabilities::PRESENT);
-    if !device.capabilities.contains(required_capabilities) {
-        return Err(VgpuError::PermissionDenied);
-    }
-    if device
-        .cloud_work_graphs
-        .iter()
-        .filter(|slot| slot.record.is_some())
-        .count()
-        >= CLOUD_WORK_GRAPH_LIMIT
-    {
-        return Err(VgpuError::QuotaExceeded);
-    }
-
-    validate_cloud_buffer(device, descriptor.volume_a, CloudResourceRole::Volume)?;
-    validate_cloud_buffer(device, descriptor.volume_b, CloudResourceRole::Volume)?;
-    validate_cloud_buffer(device, descriptor.sim_params, CloudResourceRole::SimulationParams)?;
-    validate_cloud_buffer(device, descriptor.render_params, CloudResourceRole::RenderParams)?;
-    let buffer_metadata = [
-        snapshot_cloud_buffer(device, descriptor.volume_a)?,
-        snapshot_cloud_buffer(device, descriptor.volume_b)?,
-        snapshot_cloud_buffer(device, descriptor.sim_params)?,
-        snapshot_cloud_buffer(device, descriptor.render_params)?,
-    ];
-    let backing_admission = crate::intel::gpgpu::admit_helioc_backing(
-        cloud_buffer_pages(device, descriptor.volume_a)?,
-        cloud_buffer_pages(device, descriptor.volume_b)?,
-        cloud_buffer_pages(device, descriptor.sim_params)?,
-        cloud_buffer_pages(device, descriptor.render_params)?,
-    )
-    .ok_or(VgpuError::Unsupported)?;
-
-    Ok(insert_cloud_work_graph(
-        device,
-        CloudWorkGraphRecord {
-            resources: descriptor,
-            buffer_metadata,
-            backing_admission,
-            epoch: device.epoch,
-            current_volume: 0,
-            in_flight: 0,
-        },
-    ))
-}
-
-pub(crate) fn destroy_cloud_work_graph(
-    principal: Principal,
-    device_handle: DeviceHandle,
-    graph_handle: CloudWorkGraphHandle,
-) -> Result<(), VgpuError> {
-    let mut broker = BROKER.lock();
-    let device = lookup_device_mut(&mut broker, device_handle, principal)?;
-    ensure_live(device)?;
-    let graph = lookup_cloud_work_graph(device, graph_handle)?;
-    if graph.epoch != device.epoch {
-        return Err(VgpuError::DeviceLost);
-    }
-    if graph.in_flight != 0 {
-        return Err(VgpuError::Busy);
-    }
-    let (slot, generation) = decode_handle(graph_handle.raw())?;
-    let graph_slot = device
-        .cloud_work_graphs
-        .get_mut(slot)
-        .ok_or(VgpuError::InvalidHandle)?;
-    if graph_slot.generation != generation || graph_slot.record.is_none() {
-        return Err(VgpuError::InvalidHandle);
-    }
-    graph_slot.record.take();
     Ok(())
 }
 
@@ -2621,760 +2325,6 @@ pub(crate) fn resolve_retained_texture(
     Ok(Arc::clone(&record.resident))
 }
 
-/// Reserve the broker-owned side of one Cloud frame. The returned lease is
-/// either rolled back before native admission or retained in the single global
-/// pending state until its exact hardware retirement is proven.
-fn reserve_cloud_submission(
-    principal: Principal,
-    device_handle: DeviceHandle,
-    queue_handle: QueueHandle,
-    graph_handle: CloudWorkGraphHandle,
-    surface_handle: SurfaceHandle,
-    simulation_steps: u32,
-) -> Result<CloudSubmissionLease, VgpuError> {
-    if simulation_steps > CLOUD_FRAME_MAX_SIMULATION_STEPS {
-        return Err(VgpuError::Unsupported);
-    }
-    let lease = {
-        let mut broker = BROKER.lock();
-        let device = lookup_device_mut(&mut broker, device_handle, principal)?;
-        ensure_live(device)?;
-        let required_capabilities = Capabilities::COMPUTE
-            .union(Capabilities::RENDER)
-            .union(Capabilities::PRESENT);
-        if !device.capabilities.contains(required_capabilities) {
-            return Err(VgpuError::PermissionDenied);
-        }
-        let queue = lookup_queue(device, queue_handle)?;
-        if queue.class != QueueClass::Render {
-            return Err(VgpuError::PermissionDenied);
-        }
-        if queue.in_flight != 0 {
-            return Err(VgpuError::Busy);
-        }
-        let surface = lookup_surface(device, surface_handle)?;
-        if surface.epoch != device.epoch || surface.in_flight != 1 {
-            return Err(VgpuError::Busy);
-        }
-        let graph = lookup_cloud_work_graph(device, graph_handle)?;
-        if graph.epoch != device.epoch
-            || graph.resources.profile != CLOUD_PROFILE_HELIO_ENGINE_V1
-            || graph.current_volume > 1
-        {
-            return Err(VgpuError::DeviceLost);
-        }
-        if graph.in_flight != 0 {
-            return Err(VgpuError::Busy);
-        }
-        let buffers = [
-            graph.resources.volume_a,
-            graph.resources.volume_b,
-            graph.resources.sim_params,
-            graph.resources.render_params,
-        ];
-        let graph_resources = graph.resources;
-        let buffer_metadata = graph.buffer_metadata.clone();
-        let backing_admission = graph.backing_admission;
-        let current_volume = graph.current_volume;
-        let surface_metadata = CloudSurfaceMetadata {
-            window_id: surface.window_id,
-            gpu: surface.gpu,
-            phys: surface.phys,
-            producer_gpu: surface.producer_gpu,
-            bytes: surface.bytes,
-            width: surface.width,
-            height: surface.height,
-            pitch: surface.pitch,
-        };
-        validate_cloud_buffer(device, buffers[0], CloudResourceRole::Volume)?;
-        validate_cloud_buffer(device, buffers[1], CloudResourceRole::Volume)?;
-        validate_cloud_buffer(device, buffers[2], CloudResourceRole::SimulationParams)?;
-        validate_cloud_buffer(device, buffers[3], CloudResourceRole::RenderParams)?;
-        if buffers
-            .iter()
-            .zip(buffer_metadata.iter())
-            .any(|(buffer, metadata)| {
-                lookup_buffer(device, *buffer)
-                    .map_or(true, |record| !cloud_buffer_matches_snapshot(record, metadata, 0))
-            })
-        {
-            return Err(VgpuError::DeviceLost);
-        }
-
-        // All checks above are preflight. Only now publish the operation lease.
-        lookup_queue_mut(device, queue_handle)?.in_flight = 1;
-        lookup_surface_mut(device, surface_handle)?.in_flight = 2;
-        lookup_cloud_work_graph_mut(device, graph_handle)?.in_flight = 1;
-        for buffer in buffers {
-            lookup_buffer_mut(device, buffer)?.in_flight = 1;
-        }
-        CloudSubmissionLease {
-            device_epoch: device.epoch,
-            queue: queue_handle,
-            graph: graph_handle,
-            surface: surface_handle,
-            buffers,
-            buffer_metadata,
-            backing_admission,
-            surface_metadata,
-            graph_resources,
-            current_volume,
-            simulation_steps,
-        }
-    };
-
-    Ok(lease)
-}
-
-fn helioc_sealed_native_package()
--> Option<crate::intel::gpgpu::helioc_native_package::NativePackage<'static>> {
-    let bytes = HELIOC_SEALED_ARTIFACT?;
-    let artifact = trueos_helio_artifact::Artifact::parse(bytes).ok()?;
-    crate::intel::gpgpu::helioc_native_package::NativePackage::parse_artifact(artifact).ok()
-}
-
-fn cloud_retired_telemetry(
-    request: CloudSubmissionRequest,
-    lease: &CloudSubmissionLease,
-    release: crate::intel::gpgpu::GpgpuRgba8ReleaseFence,
-    simd_width: u32,
-) -> Option<CloudFrameTelemetry> {
-    if !release.matches(lease.surface_metadata.phys, lease.surface_metadata.bytes) {
-        return None;
-    }
-    let broker = BROKER.lock();
-    let device = lookup_device(&broker, request.device, request.principal).ok()?;
-    if device.epoch != lease.device_epoch {
-        return None;
-    }
-    let queue = lookup_queue(device, request.queue).ok()?;
-    let surface = lookup_surface(device, request.surface).ok()?;
-    let graph = lookup_cloud_work_graph(device, request.graph).ok()?;
-    if queue.in_flight != 1
-        || surface.in_flight != 2
-        || graph.in_flight != 1
-        || graph.current_volume != lease.current_volume
-        || graph.resources != lease.graph_resources
-    {
-        return None;
-    }
-    let value = queue.timeline.submitted.checked_add(1)?;
-    Some(CloudFrameTelemetry {
-        point: TimelinePoint {
-            queue: request.queue,
-            value,
-            physical_serial: release.sequence(),
-            physical_publish_sequence: release.sequence(),
-        },
-        // The marker/head proof establishes completion but contains no GPU
-        // timestamp pair. Leave timing unclaimed rather than manufacturing a
-        // budget result from executor wall time.
-        gpu_active_ns: 0,
-        budget_window_ns: 0,
-        simulation_steps: lease.simulation_steps,
-        simd_width,
-        flags: v::vgpu::CLOUD_TELEMETRY_FLAG_SEALED_PAYLOAD
-            | v::vgpu::CLOUD_TELEMETRY_FLAG_ONE_GUC_SUBMIT,
-    })
-}
-
-fn advance_pending_cloud_submission(
-    pending_slot: &mut Option<CloudPendingSubmission>,
-) -> Result<CloudFrameSubmissionProgress, VgpuError> {
-    let Some(pending) = pending_slot.as_mut() else {
-        return Err(VgpuError::InvalidHandle);
-    };
-    match crate::intel::gpgpu::observe_helioc_native_retirement(&mut pending.ticket) {
-        crate::intel::gpgpu::HelioCloudNativeRetirement::Pending => {
-            Ok(CloudFrameSubmissionProgress::Pending)
-        }
-        crate::intel::gpgpu::HelioCloudNativeRetirement::Invalid => {
-            let pending = pending_slot.take().expect("validated Cloud pending state");
-            quarantine_cloud_submission_lease(
-                pending.request.principal,
-                pending.request.device,
-                &pending.lease,
-            );
-            Err(VgpuError::DeviceLost)
-        }
-        crate::intel::gpgpu::HelioCloudNativeRetirement::Complete(release) => {
-            let pending = pending_slot.take().expect("validated Cloud pending state");
-            let Some(telemetry) = cloud_retired_telemetry(
-                pending.request,
-                &pending.lease,
-                release,
-                pending.simd_width,
-            ) else {
-                quarantine_cloud_submission_lease(
-                    pending.request.principal,
-                    pending.request.device,
-                    &pending.lease,
-                );
-                return Err(VgpuError::DeviceLost);
-            };
-            let Some(surface) = retire_cloud_submission_lease(
-                pending.request.principal,
-                pending.request.device,
-                &pending.lease,
-                &telemetry,
-            ) else {
-                quarantine_cloud_submission_lease(
-                    pending.request.principal,
-                    pending.request.device,
-                    &pending.lease,
-                );
-                return Err(VgpuError::DeviceLost);
-            };
-            Ok(CloudFrameSubmissionProgress::Complete(CloudFrameCompletion {
-                window_id: pending.lease.surface_metadata.window_id,
-                surface,
-                release,
-                telemetry,
-            }))
-        }
-    }
-}
-
-fn cloud_frame_submission(
-    request: CloudSubmissionRequest,
-    observe_pending: bool,
-) -> Result<CloudFrameSubmissionProgress, VgpuError> {
-    if request.simulation_steps > CLOUD_FRAME_MAX_SIMULATION_STEPS {
-        return Err(VgpuError::Unsupported);
-    }
-    let mut pending_slot = CLOUD_PENDING_SUBMISSION.lock();
-    if let Some(pending) = pending_slot.as_ref() {
-        if !cloud_pending_request_matches(pending.request, request) || !observe_pending {
-            return Err(VgpuError::Busy);
-        }
-        return advance_pending_cloud_submission(&mut pending_slot);
-    }
-
-    let package = helioc_sealed_native_package().ok_or(VgpuError::Unsupported)?;
-    let simd_width = u32::from(package.compute_simd_width());
-    let lease = reserve_cloud_submission(
-        request.principal,
-        request.device,
-        request.queue,
-        request.graph,
-        request.surface,
-        request.simulation_steps,
-    )?;
-    let surface = crate::intel::gpgpu::HelioCloudSurfaceDesc {
-        producer_gpu: lease.surface_metadata.producer_gpu,
-        phys: lease.surface_metadata.phys,
-        bytes: lease.surface_metadata.bytes,
-        width: lease.surface_metadata.width,
-        height: lease.surface_metadata.height,
-        pitch_bytes: lease.surface_metadata.pitch,
-    };
-    let resources = lease
-        .buffer_metadata
-        .each_ref()
-        .map(|metadata| metadata.pages.as_ref());
-    let plan = (!crate::intel::gpgpu::helioc_surface_overlaps_backing(surface, resources))
-        .then(|| {
-            crate::intel::gpgpu::plan_helioc_frame(
-                lease.backing_admission,
-                surface,
-                lease.simulation_steps,
-                lease.current_volume,
-            )
-        })
-        .flatten();
-    let Some(plan) = plan else {
-        if rollback_cloud_submission_lease(request.principal, request.device, &lease) {
-            return Err(VgpuError::Unsupported);
-        }
-        quarantine_cloud_submission_lease(request.principal, request.device, &lease);
-        return Err(VgpuError::DeviceLost);
-    };
-    let pages = lease
-        .buffer_metadata
-        .each_ref()
-        .map(|metadata| metadata.pages.as_ref());
-    match crate::intel::gpgpu::submit_helioc_native_frame(
-        package,
-        lease.backing_admission,
-        plan,
-        pages[0],
-        pages[1],
-        pages[2],
-        pages[3],
-    ) {
-        crate::intel::gpgpu::HelioCloudNativeSubmit::Submitted(ticket) => {
-            *pending_slot = Some(CloudPendingSubmission {
-                request,
-                lease,
-                ticket,
-                simd_width,
-            });
-            Ok(CloudFrameSubmissionProgress::Pending)
-        }
-        crate::intel::gpgpu::HelioCloudNativeSubmit::Busy => {
-            if rollback_cloud_submission_lease(request.principal, request.device, &lease) {
-                Err(VgpuError::Busy)
-            } else {
-                quarantine_cloud_submission_lease(request.principal, request.device, &lease);
-                Err(VgpuError::DeviceLost)
-            }
-        }
-        crate::intel::gpgpu::HelioCloudNativeSubmit::Rejected => {
-            if rollback_cloud_submission_lease(request.principal, request.device, &lease) {
-                Err(VgpuError::Unsupported)
-            } else {
-                quarantine_cloud_submission_lease(request.principal, request.device, &lease);
-                Err(VgpuError::DeviceLost)
-            }
-        }
-        crate::intel::gpgpu::HelioCloudNativeSubmit::Ambiguous => {
-            quarantine_cloud_submission_lease(request.principal, request.device, &lease);
-            Err(VgpuError::DeviceLost)
-        }
-    }
-}
-
-/// A pending ticket belongs to one VMCALL identity. This deliberately covers
-/// the principal and every submitted handle, rather than merely the queue.
-fn cloud_pending_request_matches(
-    pending: CloudSubmissionRequest,
-    retry: CloudSubmissionRequest,
-) -> bool {
-    pending == retry
-}
-
-/// Start a Cloud frame only when the global native lane is idle. Direct C ABI
-/// callers intentionally receive `Busy` rather than driving a live ticket.
-pub(crate) fn submit_cloud_frame(
-    principal: Principal,
-    device_handle: DeviceHandle,
-    queue_handle: QueueHandle,
-    graph_handle: CloudWorkGraphHandle,
-    surface_handle: SurfaceHandle,
-    simulation_steps: u32,
-) -> Result<CloudFrameSubmissionProgress, VgpuError> {
-    cloud_frame_submission(
-        CloudSubmissionRequest {
-            principal,
-            device: device_handle,
-            queue: queue_handle,
-            graph: graph_handle,
-            surface: surface_handle,
-            simulation_steps,
-        },
-        false,
-    )
-}
-
-/// Advance exactly the pending VMCALL request once, or start it when the lane
-/// is idle. Callers must schedule a later executor turn after `Pending`.
-pub(crate) fn retry_cloud_frame_submission(
-    principal: Principal,
-    device_handle: DeviceHandle,
-    queue_handle: QueueHandle,
-    graph_handle: CloudWorkGraphHandle,
-    surface_handle: SurfaceHandle,
-    simulation_steps: u32,
-) -> Result<CloudFrameSubmissionProgress, VgpuError> {
-    cloud_frame_submission(
-        CloudSubmissionRequest {
-            principal,
-            device: device_handle,
-            queue: queue_handle,
-            graph: graph_handle,
-            surface: surface_handle,
-            simulation_steps,
-        },
-        true,
-    )
-}
-
-fn rollback_cloud_submission_lease(
-    principal: Principal,
-    device_handle: DeviceHandle,
-    lease: &CloudSubmissionLease,
-) -> bool {
-    let mut broker = BROKER.lock();
-    let Ok(device) = lookup_device_mut(&mut broker, device_handle, principal) else {
-        return false;
-    };
-    if device.epoch != lease.device_epoch {
-        return false;
-    }
-    let Ok(queue) = lookup_queue(device, lease.queue) else {
-        return false;
-    };
-    let Ok(surface) = lookup_surface(device, lease.surface) else {
-        return false;
-    };
-    let Ok(graph) = lookup_cloud_work_graph(device, lease.graph) else {
-        return false;
-    };
-    if queue.in_flight != 1 || surface.in_flight != 2 || graph.in_flight != 1 {
-        return false;
-    }
-    if lease
-        .buffers
-        .iter()
-        .any(|buffer| lookup_buffer(device, *buffer).map_or(true, |record| record.in_flight != 1))
-    {
-        return false;
-    }
-    lookup_queue_mut(device, lease.queue)
-        .expect("validated Cloud queue")
-        .in_flight = 0;
-    lookup_surface_mut(device, lease.surface)
-        .expect("validated Cloud surface")
-        .in_flight = 1;
-    lookup_cloud_work_graph_mut(device, lease.graph)
-        .expect("validated Cloud graph")
-        .in_flight = 0;
-    for buffer in lease.buffers {
-        lookup_buffer_mut(device, buffer)
-            .expect("validated Cloud buffer")
-            .in_flight = 0;
-    }
-    true
-}
-
-fn retire_cloud_submission_lease(
-    principal: Principal,
-    device_handle: DeviceHandle,
-    lease: &CloudSubmissionLease,
-    telemetry: &CloudFrameTelemetry,
-) -> Option<SurfaceInfo> {
-    let physical = require_physical().ok()?;
-    let mut broker = BROKER.lock();
-    let Ok(device) = lookup_device_mut(&mut broker, device_handle, principal) else {
-        return None;
-    };
-    if device.epoch != lease.device_epoch {
-        return None;
-    }
-    let Ok(queue) = lookup_queue(device, lease.queue) else {
-        return None;
-    };
-    let Ok(surface) = lookup_surface(device, lease.surface) else {
-        return None;
-    };
-    let Ok(graph) = lookup_cloud_work_graph(device, lease.graph) else {
-        return None;
-    };
-    if telemetry.point.queue != lease.queue
-        || telemetry.point.value == 0
-        || telemetry.point.value <= queue.timeline.submitted
-        || queue.in_flight != 1
-        || surface.in_flight != 2
-        || graph.in_flight != 1
-        || graph.epoch != lease.device_epoch
-        || graph.resources != lease.graph_resources
-        || graph.current_volume != lease.current_volume
-        || surface.epoch != lease.device_epoch
-        || surface.window_id != lease.surface_metadata.window_id
-        || surface.gpu != lease.surface_metadata.gpu
-        || surface.phys != lease.surface_metadata.phys
-        || surface.producer_gpu != lease.surface_metadata.producer_gpu
-        || surface.bytes != lease.surface_metadata.bytes
-        || surface.width != lease.surface_metadata.width
-        || surface.height != lease.surface_metadata.height
-        || surface.pitch != lease.surface_metadata.pitch
-    {
-        return None;
-    }
-    if lease
-        .buffers
-        .iter()
-        .zip(lease.buffer_metadata.iter())
-        .any(|(buffer, metadata)| {
-            lookup_buffer(device, *buffer)
-                .map_or(true, |record| !cloud_buffer_matches_snapshot(record, metadata, 1))
-        })
-    {
-        return None;
-    }
-    let vm = match device.gpuvm {
-        GpuVmBinding::Owned(vm) => vm,
-        GpuVmBinding::Borrowed { .. } => return None,
-    };
-    // GPU retirement is already proven by the native release. Drop only the
-    // tenant's broker alias before passing the physical allocation to UI4;
-    // its display lease then remains the sole presentation owner.
-    if physical
-        .unmap_gpuvm(vm, lease.surface_metadata.gpu, lease.surface_metadata.bytes)
-        .is_err()
-    {
-        return None;
-    }
-    lookup_queue_mut(device, lease.queue)
-        .expect("validated Cloud queue")
-        .in_flight = 0;
-    let queue = lookup_queue_mut(device, lease.queue).expect("validated Cloud queue");
-    queue.timeline.submitted = telemetry.point.value;
-    queue.timeline.completed = telemetry.point.value;
-    queue.timeline.last_physical_serial = telemetry.point.physical_serial;
-    let (surface_slot, generation) = decode_handle(lease.surface.raw()).ok()?;
-    let surface = device.surfaces.get_mut(surface_slot)?;
-    if surface.generation != generation {
-        return None;
-    }
-    let record = surface.record.take()?;
-    device.memory_used = device.memory_used.saturating_sub(record.bytes);
-    lookup_cloud_work_graph_mut(device, lease.graph)
-        .expect("validated Cloud graph")
-        .in_flight = 0;
-    lookup_cloud_work_graph_mut(device, lease.graph)
-        .expect("validated Cloud graph")
-        .current_volume = cloud_next_volume(lease.current_volume, lease.simulation_steps);
-    for buffer in lease.buffers {
-        lookup_buffer_mut(device, buffer)
-            .expect("validated Cloud buffer")
-            .in_flight = 0;
-    }
-    Some(SurfaceInfo {
-        handle: lease.surface,
-        bytes: record.bytes,
-        width: record.width,
-        height: record.height,
-        pitch: record.pitch,
-    })
-}
-
-fn quarantine_cloud_submission_lease(
-    principal: Principal,
-    device_handle: DeviceHandle,
-    lease: &CloudSubmissionLease,
-) {
-    let mut broker = BROKER.lock();
-    if let Ok(device) = lookup_device_mut(&mut broker, device_handle, principal) {
-        if device.epoch == lease.device_epoch {
-            device.lost = true;
-        }
-    }
-}
-
-fn snapshot_cloud_buffer(
-    device: &VirtualDevice,
-    handle: BufferHandle,
-) -> Result<CloudBufferMetadata, VgpuError> {
-    let record = lookup_buffer(device, handle)?;
-    let pages = match &record.backing {
-        BufferBacking::GuestPages { pages, .. } => pages.clone(),
-        BufferBacking::Dma { .. } => return Err(VgpuError::PermissionDenied),
-    };
-    Ok(CloudBufferMetadata {
-        gpu: record.gpu,
-        bytes: record.bytes,
-        usage: record.usage,
-        epoch: record.epoch,
-        mapping_digest: record.mapping_digest,
-        pages: Arc::from(pages.as_slice()),
-    })
-}
-
-fn cloud_buffer_pages(device: &VirtualDevice, handle: BufferHandle) -> Result<&[u64], VgpuError> {
-    let record = lookup_buffer(device, handle)?;
-    match &record.backing {
-        BufferBacking::GuestPages { pages, .. } => Ok(pages.as_slice()),
-        BufferBacking::Dma { .. } => Err(VgpuError::PermissionDenied),
-    }
-}
-
-const fn cloud_next_volume(current_volume: u8, simulation_steps: u32) -> u8 {
-    current_volume ^ (simulation_steps as u8 & 1)
-}
-
-fn cloud_buffer_matches_snapshot(
-    record: &BufferRecord,
-    snapshot: &CloudBufferMetadata,
-    expected_in_flight: u32,
-) -> bool {
-    record.in_flight == expected_in_flight
-        && record.gpu == snapshot.gpu
-        && record.bytes == snapshot.bytes
-        && record.usage == snapshot.usage
-        && record.epoch == snapshot.epoch
-        && record.mapping_digest == snapshot.mapping_digest
-        && matches!(&record.backing, BufferBacking::GuestPages { pages, .. } if pages.as_slice() == snapshot.pages.as_ref())
-}
-
-fn validate_cloud_buffer(
-    device: &VirtualDevice,
-    handle: BufferHandle,
-    role: CloudResourceRole,
-) -> Result<(), VgpuError> {
-    let record = lookup_buffer(device, handle)?;
-    if record.epoch != device.epoch || record.in_flight != 0 {
-        return Err(VgpuError::Busy);
-    }
-    if !matches!(&record.backing, BufferBacking::GuestPages { .. }) {
-        return Err(VgpuError::PermissionDenied);
-    }
-    validate_cloud_resource_shape(role, record.bytes, record.usage)
-}
-
-fn validate_cloud_resource_shape(
-    role: CloudResourceRole,
-    mapped_bytes: usize,
-    usage: u32,
-) -> Result<(), VgpuError> {
-    let (logical_bytes, required_usage) = match role {
-        CloudResourceRole::Volume => (CLOUD_VOLUME_BYTES, CLOUD_VOLUME_REQUIRED_USAGE),
-        CloudResourceRole::SimulationParams => {
-            (CLOUD_SIM_PARAMS_BYTES, CLOUD_PARAMS_REQUIRED_USAGE)
-        }
-        CloudResourceRole::RenderParams => (CLOUD_RENDER_PARAMS_BYTES, CLOUD_PARAMS_REQUIRED_USAGE),
-    };
-    let expected_mapped = align_up(logical_bytes, PAGE_BYTES).ok_or(VgpuError::OutOfMemory)?;
-    if mapped_bytes != expected_mapped {
-        return Err(VgpuError::Unsupported);
-    }
-    if usage & required_usage != required_usage {
-        return Err(VgpuError::PermissionDenied);
-    }
-    Ok(())
-}
-
-fn cloud_graph_references_buffer(graph: &CloudWorkGraphRecord, buffer: BufferHandle) -> bool {
-    graph.resources.volume_a == buffer
-        || graph.resources.volume_b == buffer
-        || graph.resources.sim_params == buffer
-        || graph.resources.render_params == buffer
-}
-
-#[cfg(test)]
-mod cloud_resource_contract_tests {
-    use super::{
-        BUFFER_USAGE_COPY_DST, BUFFER_USAGE_COPY_SRC, BUFFER_USAGE_STORAGE,
-        CLOUD_PARAMS_REQUIRED_USAGE, CLOUD_RENDER_PARAMS_BYTES, CLOUD_SIM_PARAMS_BYTES,
-        CLOUD_VOLUME_BYTES, CLOUD_VOLUME_REQUIRED_USAGE, CloudResourceRole, CloudSubmissionRequest,
-        DeviceHandle, PAGE_BYTES, Principal, QueueHandle, SurfaceHandle, VgpuError, align_up,
-        cloud_next_volume, cloud_pending_request_matches, validate_cloud_resource_shape,
-    };
-
-    #[test]
-    fn exact_authored_resource_shapes_are_admitted() {
-        assert_eq!(CLOUD_VOLUME_BYTES, 96 * 48 * 96 * 8);
-        assert_eq!(CLOUD_VOLUME_BYTES % PAGE_BYTES, 0);
-        assert_eq!(CLOUD_SIM_PARAMS_BYTES, 112);
-        assert_eq!(CLOUD_RENDER_PARAMS_BYTES, 272);
-        assert_eq!(align_up(CLOUD_SIM_PARAMS_BYTES, PAGE_BYTES), Some(PAGE_BYTES));
-        assert_eq!(align_up(CLOUD_RENDER_PARAMS_BYTES, PAGE_BYTES), Some(PAGE_BYTES));
-        assert_eq!(
-            validate_cloud_resource_shape(
-                CloudResourceRole::Volume,
-                CLOUD_VOLUME_BYTES,
-                CLOUD_VOLUME_REQUIRED_USAGE,
-            ),
-            Ok(())
-        );
-        assert_eq!(
-            validate_cloud_resource_shape(
-                CloudResourceRole::SimulationParams,
-                PAGE_BYTES,
-                CLOUD_PARAMS_REQUIRED_USAGE,
-            ),
-            Ok(())
-        );
-        assert_eq!(
-            validate_cloud_resource_shape(
-                CloudResourceRole::RenderParams,
-                PAGE_BYTES,
-                CLOUD_PARAMS_REQUIRED_USAGE,
-            ),
-            Ok(())
-        );
-    }
-
-    #[test]
-    fn shape_and_usage_mismatches_fail_closed() {
-        assert_eq!(
-            validate_cloud_resource_shape(
-                CloudResourceRole::Volume,
-                CLOUD_VOLUME_BYTES - PAGE_BYTES,
-                CLOUD_VOLUME_REQUIRED_USAGE,
-            ),
-            Err(VgpuError::Unsupported)
-        );
-        assert_eq!(
-            validate_cloud_resource_shape(
-                CloudResourceRole::Volume,
-                CLOUD_VOLUME_BYTES,
-                BUFFER_USAGE_STORAGE | BUFFER_USAGE_COPY_DST,
-            ),
-            Err(VgpuError::PermissionDenied)
-        );
-        assert_eq!(
-            validate_cloud_resource_shape(
-                CloudResourceRole::SimulationParams,
-                PAGE_BYTES * 2,
-                CLOUD_PARAMS_REQUIRED_USAGE,
-            ),
-            Err(VgpuError::Unsupported)
-        );
-        assert_eq!(
-            validate_cloud_resource_shape(
-                CloudResourceRole::RenderParams,
-                PAGE_BYTES,
-                BUFFER_USAGE_COPY_SRC,
-            ),
-            Err(VgpuError::PermissionDenied)
-        );
-    }
-
-    #[test]
-    fn simulation_parity_controls_only_ping_pong_selector() {
-        assert_eq!(cloud_next_volume(0, 0), 0);
-        assert_eq!(cloud_next_volume(0, 1), 1);
-        assert_eq!(cloud_next_volume(1, 1), 0);
-        assert_eq!(cloud_next_volume(1, 2), 1);
-        assert_eq!(cloud_next_volume(0, 2), 0);
-        assert_eq!(cloud_next_volume(1, 3), 0);
-    }
-
-    #[test]
-    fn pending_cloud_ticket_accepts_only_the_exact_retry_identity() {
-        let request = CloudSubmissionRequest {
-            principal: Principal::HullGuest(7),
-            device: DeviceHandle::from_raw(11),
-            queue: QueueHandle::from_raw(12),
-            graph: super::CloudWorkGraphHandle::from_raw(13),
-            surface: SurfaceHandle::from_raw(14),
-            simulation_steps: 2,
-        };
-        assert!(cloud_pending_request_matches(request, request));
-
-        let cases = [
-            CloudSubmissionRequest {
-                principal: Principal::HullGuest(8),
-                ..request
-            },
-            CloudSubmissionRequest {
-                device: DeviceHandle::from_raw(21),
-                ..request
-            },
-            CloudSubmissionRequest {
-                queue: QueueHandle::from_raw(22),
-                ..request
-            },
-            CloudSubmissionRequest {
-                graph: super::CloudWorkGraphHandle::from_raw(23),
-                ..request
-            },
-            CloudSubmissionRequest {
-                surface: SurfaceHandle::from_raw(24),
-                ..request
-            },
-            CloudSubmissionRequest {
-                simulation_steps: 3,
-                ..request
-            },
-        ];
-        for retry in cases {
-            assert!(!cloud_pending_request_matches(request, retry));
-        }
-    }
-}
-
 pub(crate) fn import_ui4_surface(
     principal: Principal,
     device_handle: DeviceHandle,
@@ -3471,8 +2421,6 @@ pub(crate) fn create_shader_module(
 ) -> Result<ShaderModuleHandle, VgpuError> {
     if package_digest != SHADER_PACKAGE_CLIP_POSITION3_RGBA_FNV1A64
         && package_digest != SHADER_PACKAGE_CLIP_POSITION3_IMMEDIATE_RGBA_FNV1A64
-        && package_digest != SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64
-        && package_digest != SHADER_PACKAGE_CLIP_POSITION3_UV_TEXEL_LOAD_FNV1A64
     {
         return Err(VgpuError::Unsupported);
     }
@@ -3558,14 +2506,6 @@ pub(crate) fn create_render_pipeline(
     if shader.epoch != device.epoch {
         return Err(VgpuError::InvalidHandle);
     }
-    if matches!(
-        shader.package_digest,
-        SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64
-            | SHADER_PACKAGE_CLIP_POSITION3_UV_TEXEL_LOAD_FNV1A64
-    ) && (vertex_stride != 20 || position_offset != 0)
-    {
-        return Err(VgpuError::Unsupported);
-    }
     let record = RenderPipelineRecord {
         package_digest: shader.package_digest,
         vertex_stride,
@@ -3606,11 +2546,6 @@ pub(crate) struct Ui4IndexedDrawDescriptor {
     pub(crate) first_index: u32,
     pub(crate) base_vertex: i32,
     pub(crate) clear_rgba8_srgb: u32,
-    pub(crate) sampled_texture: BufferHandle,
-    pub(crate) texture_width: u32,
-    pub(crate) texture_height: u32,
-    pub(crate) texture_pitch: u32,
-    pub(crate) sampler_flags: u32,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -3640,23 +2575,9 @@ pub(crate) struct Ui4SurfaceIndexedCompletion {
     pub(crate) point: TimelinePoint,
 }
 
-enum IndexedVertexPayload {
-    Position(Vec<[f32; 3]>),
-    PositionUv(Vec<[f32; 5]>),
-}
-
-struct IndexedTexturePayload {
-    bytes: Vec<u8>,
-    width: u32,
-    height: u32,
-    pitch: u32,
-    sampler_flags: u32,
-}
-
 /// Resolve one bounded WGPU indexed draw into the existing authenticated
 /// Render frontier. The broker understands only byte layouts, opaque handles,
-/// and the admitted shader-package interface; Helio meshes and voxel meaning
-/// remain entirely above this boundary.
+/// and the admitted shader-package interface.
 pub(crate) fn submit_ui4_indexed_draw(
     principal: Principal,
     device_handle: DeviceHandle,
@@ -3666,19 +2587,7 @@ pub(crate) fn submit_ui4_indexed_draw(
     if draw.index_count == 0 || draw.base_vertex != 0 {
         return Err(VgpuError::Unsupported);
     }
-    let (
-        window_id,
-        phys,
-        producer_gpu,
-        bytes,
-        width,
-        height,
-        pitch,
-        package_digest,
-        vertices,
-        indices,
-        texture,
-    ) = {
+    let (window_id, phys, producer_gpu, bytes, width, height, pitch, vertices, indices) = {
         let mut broker = BROKER.lock();
         let device = lookup_device_mut(&mut broker, device_handle, principal)?;
         ensure_live(device)?;
@@ -3692,28 +2601,9 @@ pub(crate) fn submit_ui4_indexed_draw(
         }
         let pipeline = lookup_render_pipeline(device, draw.pipeline)?;
         if pipeline.epoch != device.epoch
-            || !matches!(
-                pipeline.package_digest,
-                SHADER_PACKAGE_CLIP_POSITION3_RGBA_FNV1A64
-                    | SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64
-                    | SHADER_PACKAGE_CLIP_POSITION3_UV_TEXEL_LOAD_FNV1A64
-            )
+            || pipeline.package_digest != SHADER_PACKAGE_CLIP_POSITION3_RGBA_FNV1A64
         {
             return Err(VgpuError::InvalidHandle);
-        }
-        let package_digest = pipeline.package_digest;
-        let textured = matches!(
-            package_digest,
-            SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64
-                | SHADER_PACKAGE_CLIP_POSITION3_UV_TEXEL_LOAD_FNV1A64
-        );
-        if textured
-            != (draw.sampled_texture.raw() != 0
-                && draw.texture_width != 0
-                && draw.texture_height != 0
-                && draw.texture_pitch != 0)
-        {
-            return Err(VgpuError::Unsupported);
         }
         let vertex_stride = pipeline.vertex_stride as usize;
         let position_offset = pipeline.position_offset as usize;
@@ -3803,72 +2693,19 @@ pub(crate) fn submit_ui4_indexed_draw(
                 unsafe { vertex_virt.add(draw.vertex_offset) },
                 vertex_end - draw.vertex_offset,
             );
-            let vertices = if textured {
-                let mut vertices = Vec::with_capacity(vertex_count);
-                for vertex in 0..vertex_count {
-                    let start = draw.vertex_offset + vertex * vertex_stride + position_offset;
-                    let raw = unsafe { core::slice::from_raw_parts(vertex_virt.add(start), 20) };
-                    vertices.push([
-                        f32::from_le_bytes(raw[0..4].try_into().unwrap()),
-                        f32::from_le_bytes(raw[4..8].try_into().unwrap()),
-                        f32::from_le_bytes(raw[8..12].try_into().unwrap()),
-                        f32::from_le_bytes(raw[12..16].try_into().unwrap()),
-                        f32::from_le_bytes(raw[16..20].try_into().unwrap()),
-                    ]);
-                }
-                IndexedVertexPayload::PositionUv(vertices)
-            } else {
-                let mut vertices = Vec::with_capacity(vertex_count);
-                for vertex in 0..vertex_count {
-                    let start = draw.vertex_offset + vertex * vertex_stride + position_offset;
-                    let raw = unsafe { core::slice::from_raw_parts(vertex_virt.add(start), 12) };
-                    vertices.push([
-                        f32::from_le_bytes(raw[0..4].try_into().unwrap()),
-                        f32::from_le_bytes(raw[4..8].try_into().unwrap()),
-                        f32::from_le_bytes(raw[8..12].try_into().unwrap()),
-                    ]);
-                }
-                IndexedVertexPayload::Position(vertices)
-            };
-            let texture = if textured {
-                let texture_bytes = usize::try_from(
-                    u64::from(draw.texture_pitch)
-                        .checked_mul(u64::from(draw.texture_height))
-                        .ok_or(VgpuError::Unsupported)?,
-                )
-                .map_err(|_| VgpuError::Unsupported)?;
-                if draw.texture_pitch < draw.texture_width.saturating_mul(4)
-                    || !draw.texture_pitch.is_multiple_of(4)
-                    || draw.sampler_flags != (SAMPLER_ADDRESS_U_REPEAT | SAMPLER_ADDRESS_V_REPEAT)
-                {
-                    return Err(VgpuError::Unsupported);
-                }
-                let texture_record = lookup_buffer(device, draw.sampled_texture)?;
-                if texture_record.usage & BUFFER_USAGE_STORAGE == 0
-                    || texture_bytes > texture_record.bytes
-                {
-                    return Err(VgpuError::PermissionDenied);
-                }
-                let texture_virt = match texture_record.backing {
-                    BufferBacking::Dma { virt, .. } => virt,
-                    BufferBacking::GuestPages { .. } => return Err(VgpuError::Unsupported),
-                };
-                crate::intel::dma_flush(texture_virt, texture_bytes);
-                Some(IndexedTexturePayload {
-                    bytes: unsafe {
-                        core::slice::from_raw_parts(texture_virt, texture_bytes).to_vec()
-                    },
-                    width: draw.texture_width,
-                    height: draw.texture_height,
-                    pitch: draw.texture_pitch,
-                    sampler_flags: draw.sampler_flags,
-                })
-            } else {
-                None
-            };
-            Ok((vertices, indices, texture))
+            let mut vertices = Vec::with_capacity(vertex_count);
+            for vertex in 0..vertex_count {
+                let start = draw.vertex_offset + vertex * vertex_stride + position_offset;
+                let raw = unsafe { core::slice::from_raw_parts(vertex_virt.add(start), 12) };
+                vertices.push([
+                    f32::from_le_bytes(raw[0..4].try_into().unwrap()),
+                    f32::from_le_bytes(raw[4..8].try_into().unwrap()),
+                    f32::from_le_bytes(raw[8..12].try_into().unwrap()),
+                ]);
+            }
+            Ok((vertices, indices))
         })();
-        let (vertices, mut indices, texture) = match copied {
+        let (vertices, mut indices) = match copied {
             Ok(copied) => copied,
             Err(error) => {
                 lookup_surface_mut(device, draw.surface)?.in_flight = 1;
@@ -3879,36 +2716,17 @@ pub(crate) fn submit_ui4_indexed_draw(
         // The authenticated package exposes cull-none WebGPU semantics while
         // the current resident fixed-function packet accepts one canonical
         // winding. Canonicalize each projected triangle without changing its
-        // topology; depth still resolves the visible voxel faces.
+        // topology; depth still resolves the visible faces.
         for triangle in indices.chunks_exact_mut(3) {
-            let position = |index: u32| match &vertices {
-                IndexedVertexPayload::Position(vertices) => vertices[index as usize],
-                IndexedVertexPayload::PositionUv(vertices) => {
-                    let vertex = vertices[index as usize];
-                    [vertex[0], vertex[1], vertex[2]]
-                }
-            };
-            let a = position(triangle[0]);
-            let b = position(triangle[1]);
-            let c = position(triangle[2]);
+            let a = vertices[triangle[0] as usize];
+            let b = vertices[triangle[1] as usize];
+            let c = vertices[triangle[2] as usize];
             let area = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
             if area < 0.0 {
                 triangle.swap(1, 2);
             }
         }
-        (
-            window_id,
-            phys,
-            producer_gpu,
-            bytes,
-            width,
-            height,
-            pitch,
-            package_digest,
-            vertices,
-            indices,
-            texture,
-        )
+        (window_id, phys, producer_gpu, bytes, width, height, pitch, vertices, indices)
     };
 
     let destination = crate::intel::gpgpu::GpgpuRgba8Surface::new(
@@ -3920,59 +2738,18 @@ pub(crate) fn submit_ui4_indexed_draw(
         pitch,
     )
     .ok_or(VgpuError::Unsupported)?;
-    let mesh = match &vertices {
-        IndexedVertexPayload::Position(vertices) => {
-            crate::intel::render::create_resident_triangle_mesh(vertices, &indices)
-        }
-        IndexedVertexPayload::PositionUv(vertices) => {
-            crate::intel::render::create_resident_textured_triangle_mesh(vertices, &indices)
-        }
-    };
-    let mesh = match mesh {
+    let mesh = match crate::intel::render::create_resident_triangle_mesh(&vertices, &indices) {
         Ok(mesh) => mesh,
         Err(_) => {
             rollback_indexed_submission_lease(principal, device_handle, queue_handle, draw.surface);
             return Err(VgpuError::OutOfMemory);
         }
     };
-    let resident_texture = match texture {
-        Some(texture) => match crate::intel::render::create_resident_sampled_rgba8_texture(
-            texture.width,
-            texture.height,
-            texture.pitch,
-            texture.sampler_flags,
-            &texture.bytes,
-        ) {
-            Ok(texture) => Some(texture),
-            Err(_) => {
-                let _ = crate::intel::render::release_resident_triangle_mesh(&mesh);
-                rollback_indexed_submission_lease(
-                    principal,
-                    device_handle,
-                    queue_handle,
-                    draw.surface,
-                );
-                return Err(VgpuError::OutOfMemory);
-            }
-        },
-        None => None,
-    };
     let scene_draw = crate::intel::render::ResidentSceneDraw {
         mesh: &mesh,
         rgba: SHADER_PACKAGE_CLIP_POSITION3_RGBA_COLOR.to_le_bytes(),
-        sampled_texture: resident_texture.as_ref(),
-        fragment_contract: match package_digest {
-            SHADER_PACKAGE_CLIP_POSITION3_RGBA_FNV1A64 => {
-                crate::intel::render::ResidentSceneFragmentContract::ConstantRgba
-            }
-            SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64 => {
-                crate::intel::render::ResidentSceneFragmentContract::FilteredSample
-            }
-            SHADER_PACKAGE_CLIP_POSITION3_UV_TEXEL_LOAD_FNV1A64 => {
-                crate::intel::render::ResidentSceneFragmentContract::FixedTexelLoadProbe
-            }
-            _ => unreachable!("shader package was validated before resident draw creation"),
-        },
+        sampled_texture: None,
+        fragment_contract: crate::intel::render::ResidentSceneFragmentContract::ConstantRgba,
         viewport_translation_px: [0.0, 0.0],
         topology: crate::intel::render::ResidentScenePrimitiveTopology::TriangleList,
     };
@@ -3982,18 +2759,15 @@ pub(crate) fn submit_ui4_indexed_draw(
         destination,
         false,
     );
-    let released_resources = if rendered.is_ok() || matches!(rendered, Err("render-busy")) {
-        let texture_released = resident_texture
-            .as_ref()
-            .is_none_or(crate::intel::render::release_resident_sampled_texture);
-        crate::intel::render::release_resident_triangle_mesh(&mesh) && texture_released
+    let released_mesh = if rendered.is_ok() || matches!(rendered, Err("render-busy")) {
+        crate::intel::render::release_resident_triangle_mesh(&mesh)
     } else {
         // Physical completion is ambiguous. Keep the resident geometry pinned
         // with the lost device instead of recycling storage still reachable by
         // Render0.
         false
     };
-    if matches!(rendered, Err("render-busy")) && released_resources {
+    if matches!(rendered, Err("render-busy")) && released_mesh {
         rollback_indexed_submission_lease(principal, device_handle, queue_handle, draw.surface);
         return Err(VgpuError::Busy);
     }
@@ -4007,7 +2781,7 @@ pub(crate) fn submit_ui4_indexed_draw(
                 .flatten()
         })
         .filter(|release| release.matches(phys, bytes));
-    let Some(release) = release.filter(|_| released_resources) else {
+    let Some(release) = release.filter(|_| released_mesh) else {
         let mut broker = BROKER.lock();
         if let Ok(device) = lookup_device_mut(&mut broker, device_handle, principal) {
             device.lost = true;
@@ -4061,7 +2835,7 @@ pub(crate) fn submit_ui4_indexed_draw(
     crate::log_info!(target: "vgpu";
         "vgpu: indexed UI4 draw retired principal={:?} shader_package=fnv1a64:{:016X} pipeline={} vertex_buffer={} index_buffer={} indices={} target={}x{} timeline={} render_release={} path=opaque-wgpu-objects->resident-render0->ui4\n",
         principal,
-        package_digest,
+        SHADER_PACKAGE_CLIP_POSITION3_RGBA_FNV1A64,
         draw.pipeline.raw(),
         draw.vertex_buffer.raw(),
         draw.index_buffer.raw(),
@@ -6164,7 +4938,6 @@ const fn kernel_client_for_principal(principal: Principal) -> Option<KernelClien
         Principal::KernelGpgpuSystem => Some(KernelClient::GpgpuSystem),
         Principal::KernelGpgpuFont => Some(KernelClient::GpgpuFont),
         Principal::KernelGpgpuExecution => Some(KernelClient::GpgpuExecution),
-        Principal::KernelHelioCloud => Some(KernelClient::HelioCloud),
         Principal::KernelLfm25 => Some(KernelClient::Lfm25),
         Principal::KernelUi4Compositor => Some(KernelClient::Ui4Compositor),
         Principal::KernelUi4Blitter => Some(KernelClient::Ui4Blitter),
@@ -6842,7 +5615,6 @@ fn allowed_capabilities(
         | Principal::KernelGpgpuSystem
         | Principal::KernelGpgpuFont
         | Principal::KernelGpgpuExecution
-        | Principal::KernelHelioCloud
         | Principal::KernelLfm25
         | Principal::KernelUi4Compositor
         | Principal::KernelUi4Blitter => caps
@@ -6861,7 +5633,6 @@ const fn quota_for(principal: Principal) -> Quota {
         | Principal::KernelGpgpuSystem
         | Principal::KernelGpgpuFont
         | Principal::KernelGpgpuExecution
-        | Principal::KernelHelioCloud
         | Principal::KernelLfm25
         | Principal::KernelUi4Compositor
         | Principal::KernelUi4Blitter => Quota::KERNEL,
@@ -6921,7 +5692,6 @@ fn ensure_kernel_device(
         surfaces: Vec::new(),
         shader_modules: Vec::new(),
         render_pipelines: Vec::new(),
-        cloud_work_graphs: Vec::new(),
         retained_meshes: Vec::new(),
         retained_textures: Vec::new(),
         picasso_carrier: None,
@@ -7060,10 +5830,6 @@ fn destroy_device_resources(
     if device.surfaces.iter().any(|slot| slot.record.is_some()) {
         return Err(VgpuError::Busy);
     }
-    // Work graphs own no physical allocation of their own. Once every lease
-    // is idle they must be dropped before their referenced buffers are
-    // unmapped, preserving the same dependency order as explicit teardown.
-    device.cloud_work_graphs.clear();
     for slot in &mut device.retained_textures {
         if let Some(record) = slot.record.take() {
             let resident = Arc::try_unwrap(record.resident).map_err(|_| VgpuError::Busy)?;
@@ -7143,11 +5909,6 @@ fn device_has_operation_leases(device: &VirtualDevice) -> bool {
             .any(|record| record.in_flight != 0)
         || device
             .queues
-            .iter()
-            .filter_map(|slot| slot.record.as_ref())
-            .any(|record| record.in_flight != 0)
-        || device
-            .cloud_work_graphs
             .iter()
             .filter_map(|slot| slot.record.as_ref())
             .any(|record| record.in_flight != 0)
@@ -7271,27 +6032,6 @@ fn insert_render_pipeline(
         record: Some(record),
     });
     RenderPipelineHandle(encode_handle(device.render_pipelines.len() - 1, 1))
-}
-
-fn insert_cloud_work_graph(
-    device: &mut VirtualDevice,
-    record: CloudWorkGraphRecord,
-) -> CloudWorkGraphHandle {
-    if let Some((slot, entry)) = device
-        .cloud_work_graphs
-        .iter_mut()
-        .enumerate()
-        .find(|(_, entry)| entry.record.is_none())
-    {
-        entry.generation = entry.generation.wrapping_add(1).max(1);
-        entry.record = Some(record);
-        return CloudWorkGraphHandle(encode_handle(slot, entry.generation));
-    }
-    device.cloud_work_graphs.push(CloudWorkGraphSlot {
-        generation: 1,
-        record: Some(record),
-    });
-    CloudWorkGraphHandle(encode_handle(device.cloud_work_graphs.len() - 1, 1))
 }
 
 fn insert_retained_mesh(
@@ -7496,36 +6236,6 @@ fn lookup_render_pipeline(
         return Err(VgpuError::InvalidHandle);
     }
     entry.record.as_ref().ok_or(VgpuError::InvalidHandle)
-}
-
-fn lookup_cloud_work_graph(
-    device: &VirtualDevice,
-    handle: CloudWorkGraphHandle,
-) -> Result<&CloudWorkGraphRecord, VgpuError> {
-    let (slot, generation) = decode_handle(handle.raw())?;
-    let entry = device
-        .cloud_work_graphs
-        .get(slot)
-        .ok_or(VgpuError::InvalidHandle)?;
-    if entry.generation != generation {
-        return Err(VgpuError::InvalidHandle);
-    }
-    entry.record.as_ref().ok_or(VgpuError::InvalidHandle)
-}
-
-fn lookup_cloud_work_graph_mut(
-    device: &mut VirtualDevice,
-    handle: CloudWorkGraphHandle,
-) -> Result<&mut CloudWorkGraphRecord, VgpuError> {
-    let (slot, generation) = decode_handle(handle.raw())?;
-    let entry = device
-        .cloud_work_graphs
-        .get_mut(slot)
-        .ok_or(VgpuError::InvalidHandle)?;
-    if entry.generation != generation {
-        return Err(VgpuError::InvalidHandle);
-    }
-    entry.record.as_mut().ok_or(VgpuError::InvalidHandle)
 }
 
 fn lookup_retained_mesh(

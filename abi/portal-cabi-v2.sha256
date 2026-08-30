@@ -140,12 +140,6 @@
 # additive. They bind opaque caller buffers once, accept only compact bounded
 # TRS/quaternion seeds plus ordinary static draw ranges per frame, and keep all
 # GPU addresses, matrices, compaction records, and indirect draws kernel-owned.
-# The HelioC cloud work-graph create, destroy, and frame-submit calls are
-# strictly additive. They bind only four caller-owned vVideoMem handles to one
-# immutable kernel profile with at most two simulation steps; no shader bytes,
-# GPU address, packet, dispatch shape, or ping-pong selector crosses the ABI.
-# Frame submission remains fail-closed until the exact sealed two-stage native
-# package and UI4 release-fence implementation are present.
 # Thirteen legacy declarations which never had kernel exports are intentionally
 # removed from both SDK copies: four old gfx texture calls, four raw input
 # queue/injection calls, and five shell1/shell-history/registry/line calls.
@@ -204,4 +198,4 @@
 # The UI4 frame-opacity setter is strictly additive. It applies one bounded
 # u8 opacity through the existing per-frame placement/compositor path; older
 # artifacts neither import it nor change their opaque-frame behavior.
-da1ac8ce6ba8342bc2a66a9f0e8db36f8bed6534519e7c60fd6890904ca46b0c
+ab11b65b53eac75b267b28a4cf84d70e0b86e9df41a1c72b525d48b7bfa1fe7f

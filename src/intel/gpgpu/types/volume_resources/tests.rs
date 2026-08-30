@@ -9,23 +9,23 @@
 
         #[test]
         fn opens_the_contract_from_helioa_and_verifies_compiler_metadata() {
-            let metadata = br#"{\"source\":\"igc\",\"profile\":\"cloud-volume\"}
+            let metadata = br#"{\"source\":\"igc\",\"profile\":\"ping-pong-volume\"}
 "#;
-            let mut resource = cloud_fixture();
+            let mut resource = ping_pong_fixture();
             let digest = Sha256::digest(metadata);
             resource[48..80].copy_from_slice(&digest);
             let artifact_bytes = helioa_fixture(&resource, metadata);
             let artifact = Artifact::parse(&artifact_bytes).expect("validated HELIOA");
             let program = Program::parse_artifact(artifact).expect("hash-bound volume contract");
-            assert!(program.is_helio_cloud_profile());
+            assert!(program.is_rgba16f_ping_pong_profile());
             assert_eq!(&program.compiler_metadata_sha256()[..], &digest[..]);
         }
 
         #[test]
         fn rejects_a_helioa_contract_bound_to_different_compiler_metadata() {
-            let metadata = br#"{\"source\":\"igc\",\"profile\":\"cloud-volume\"}
+            let metadata = br#"{\"source\":\"igc\",\"profile\":\"ping-pong-volume\"}
 "#;
-            let resource = cloud_fixture();
+            let resource = ping_pong_fixture();
             let artifact_bytes = helioa_fixture(&resource, metadata);
             let artifact = Artifact::parse(&artifact_bytes).expect("validated HELIOA");
             assert!(matches!(
@@ -36,7 +36,7 @@
 
         #[test]
         fn rejects_a_resource_section_without_a_compiler_metadata_digest() {
-            let mut bytes = cloud_fixture();
+            let mut bytes = ping_pong_fixture();
             bytes[48..80].fill(0);
             assert!(matches!(
                 Program::parse(&bytes),
@@ -45,10 +45,10 @@
         }
 
         #[test]
-        fn parses_cloud_pair_and_resolves_one_allocation_per_volume() {
-            let bytes = cloud_fixture();
-            let program = Program::parse(&bytes).expect("cloud volume resource contract");
-            assert!(program.is_helio_cloud_profile());
+        fn parses_ping_pong_pair_and_resolves_one_allocation_per_volume() {
+            let bytes = ping_pong_fixture();
+            let program = Program::parse(&bytes).expect("ping-pong volume resource contract");
+            assert!(program.is_rgba16f_ping_pong_profile());
             assert_eq!(program.volume_count(), 2);
             assert_eq!(program.view_count(), 4);
             assert_eq!(program.sampler_count(), 1);
@@ -56,13 +56,13 @@
             assert_eq!(program.sampler_binding_count(), 4);
 
             let resolved = program
-                .resolve_volume(1, PHYS, GPU, 3_538_944)
-                .expect("resolve cloud volume A");
-            assert_eq!(resolved.allocation.width, 96);
-            assert_eq!(resolved.allocation.height, 48);
-            assert_eq!(resolved.allocation.depth, 96);
-            assert_eq!(resolved.allocation.row_pitch_bytes, 768);
-            assert_eq!(resolved.allocation.slice_pitch_bytes, 36_864);
+                .resolve_volume(1, PHYS, GPU, 4096)
+                .expect("resolve ping-pong volume A");
+            assert_eq!(resolved.allocation.width, 16);
+            assert_eq!(resolved.allocation.height, 8);
+            assert_eq!(resolved.allocation.depth, 4);
+            assert_eq!(resolved.allocation.row_pitch_bytes, 128);
+            assert_eq!(resolved.allocation.slice_pitch_bytes, 1024);
             assert_eq!(resolved.sampled_view.resource_id, resolved.descriptor.resource_id);
             assert_eq!(resolved.storage_view.resource_id, resolved.descriptor.resource_id);
             assert_eq!(resolved.sampled_view.access, ViewAccess::Sampled);
@@ -71,8 +71,8 @@
             assert_eq!(resolved.descriptor.mapping_lifetime, MappingLifetime::Artifact);
 
             let paged = program
-                .resolve_exact_ppgtt_volume(1, GPU, 3_538_944)
-                .expect("resolve scatter-gather cloud volume through one PPGTT window");
+                .resolve_exact_ppgtt_volume(1, GPU, 4096)
+                .expect("resolve scatter-gather volume through one PPGTT window");
             assert_eq!(
                 paged.allocation.backing,
                 GpgpuVolumePhysicalBacking::ExactPpgttPages
@@ -81,18 +81,36 @@
         }
 
         #[test]
-        fn clamp_all_axes_remains_a_probe_not_the_final_cloud_abi() {
-            let mut bytes = cloud_fixture();
+        fn sampler_address_policy_is_not_hardcoded_by_the_ping_pong_topology() {
+            let mut bytes = ping_pong_fixture();
             let sampler_offset = read_u32(&bytes, 36).unwrap() as usize;
             put_u16(&mut bytes, sampler_offset + 4, AddressMode::ClampToEdge as u16);
             put_u16(&mut bytes, sampler_offset + 8, AddressMode::ClampToEdge as u16);
             let program = Program::parse(&bytes).expect("generic clamp sampler remains valid");
-            assert!(!program.is_helio_cloud_profile());
+            assert!(program.is_rgba16f_ping_pong_profile());
+        }
+
+        #[test]
+        fn ping_pong_topology_accepts_shared_dynamic_dimensions_and_pitches() {
+            let mut bytes = ping_pong_fixture();
+            let volume_offset = read_u32(&bytes, 28).unwrap() as usize;
+            for offset in [volume_offset, volume_offset + VOLUME_RECORD_LEN] {
+                put_u32(&mut bytes, offset + 4, 64);
+                put_u32(&mut bytes, offset + 8, 32);
+                put_u32(&mut bytes, offset + 12, 24);
+                put_u32(&mut bytes, offset + 16, 512);
+                put_u32(&mut bytes, offset + 20, 16_384);
+            }
+
+            let program = Program::parse(&bytes).expect("dynamic ping-pong volume contract");
+            assert!(program.is_rgba16f_ping_pong_profile());
+            assert_eq!(program.volume(0).unwrap().required_bytes(), Some(393_216));
+            assert!(program.resolve_volume(1, PHYS, GPU, 393_216).is_ok());
         }
 
         #[test]
         fn rejects_a_volume_without_distinct_sampled_and_storage_views() {
-            let mut bytes = cloud_fixture();
+            let mut bytes = ping_pong_fixture();
             let view_offset = read_u32(&bytes, 32).unwrap() as usize;
             put_u16(&mut bytes, view_offset + VIEW_RECORD_LEN + 8, ViewAccess::Sampled as u16);
             assert!(matches!(
@@ -103,7 +121,7 @@
 
         #[test]
         fn rejects_binding_table_collisions_inside_one_bound_variant() {
-            let mut bytes = cloud_fixture();
+            let mut bytes = ping_pong_fixture();
             let binding_offset = read_u32(&bytes, 40).unwrap() as usize;
             let sampled_bti = read_u16(&bytes, binding_offset + 18).unwrap();
             put_u16(
@@ -119,15 +137,15 @@
 
         #[test]
         fn rejects_runtime_backing_smaller_than_the_artifact_layout() {
-            let bytes = cloud_fixture();
+            let bytes = ping_pong_fixture();
             let program = Program::parse(&bytes).unwrap();
             assert_eq!(
-                program.resolve_volume(1, PHYS, GPU, 3_538_943),
+                program.resolve_volume(1, PHYS, GPU, 4095),
                 Err(Error::InvalidRuntimeAllocation)
             );
         }
 
-        pub(super) fn cloud_fixture() -> Vec<u8> {
+        pub(super) fn ping_pong_fixture() -> Vec<u8> {
             const VOLUMES: usize = 2;
             const VIEWS: usize = 4;
             const SAMPLERS: usize = 1;
@@ -270,11 +288,11 @@
 
         fn write_volume(bytes: &mut [u8], offset: usize, resource_id: u32) {
             put_u32(bytes, offset, resource_id);
-            put_u32(bytes, offset + 4, 96);
-            put_u32(bytes, offset + 8, 48);
-            put_u32(bytes, offset + 12, 96);
-            put_u32(bytes, offset + 16, 768);
-            put_u32(bytes, offset + 20, 36_864);
+            put_u32(bytes, offset + 4, 16);
+            put_u32(bytes, offset + 8, 8);
+            put_u32(bytes, offset + 12, 4);
+            put_u32(bytes, offset + 16, 128);
+            put_u32(bytes, offset + 20, 1024);
             put_u16(bytes, offset + 24, TextureFormat::Rgba16Float as u16);
             put_u16(bytes, offset + 26, TextureDimension::D3 as u16);
             put_u16(bytes, offset + 28, CachePolicy::WriteBack as u16);

@@ -274,13 +274,13 @@
             })
         }
 
-        /// Exact resource/view profile requested by `Helio-Examples/cloud_engine.rs`.
+        /// Workload-neutral compute/render ping-pong topology.
         ///
-        /// Compiler-selected BTI and sampler indices may vary, but the two
-        /// ping-pong bind-group variants must preserve one sampled source, one
-        /// write-only storage destination, and the shared repeat/clamp/repeat
-        /// normalized linear sampler.
-        pub(crate) fn is_helio_cloud_profile(self) -> bool {
+        /// Dimensions, pitches, sampler policy, and compiler-selected table
+        /// indices may vary. The two allocations must share one valid RGBA16F
+        /// 3D layout, and the bind-group variants must reverse sampled source
+        /// and write-only storage destination without aliasing them.
+        pub(crate) fn is_rgba16f_ping_pong_profile(self) -> bool {
             if self.volume_count != 2
                 || self.view_count != 4
                 || self.sampler_count != 1
@@ -299,12 +299,7 @@
                 None => return false,
             };
             for volume in [first, second] {
-                if volume.width != 96
-                    || volume.height != 48
-                    || volume.depth != 96
-                    || volume.row_pitch_bytes != 768
-                    || volume.slice_pitch_bytes != 36_864
-                    || !matches!(volume.format, TextureFormat::Rgba16Float)
+                if !matches!(volume.format, TextureFormat::Rgba16Float)
                     || !matches!(volume.dimension, TextureDimension::D3)
                     || !matches!(volume.cache_policy, CachePolicy::WriteBack)
                     || !matches!(volume.mapping_lifetime, MappingLifetime::Artifact)
@@ -313,11 +308,17 @@
                     return false;
                 }
             }
-            if first.resource_id == second.resource_id {
+            if first.resource_id == second.resource_id
+                || first.width != second.width
+                || first.height != second.height
+                || first.depth != second.depth
+                || first.row_pitch_bytes != second.row_pitch_bytes
+                || first.slice_pitch_bytes != second.slice_pitch_bytes
+            {
                 return false;
             }
             let sampler = match self.sampler(0) {
-                Some(sampler) if sampler.is_helio_cloud_sampler() => sampler,
+                Some(sampler) => sampler,
                 _ => return false,
             };
 

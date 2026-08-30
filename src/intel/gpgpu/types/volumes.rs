@@ -4,9 +4,9 @@ pub(crate) const GPGPU_RGBA16_FLOAT_BYTES_PER_VOXEL: usize = 8;
 
 /// Linear, page-backed 3D RGBA16F storage admitted to the direct-RCS PPGTT.
 ///
-/// This is the memory-layout half of the contract; the sealed HelioC package
-/// must additionally supply the hardware-proven Intel 3D surface and sampler
-/// state. A buffer interpretation or software-filtering fallback is forbidden.
+/// This is the workload-neutral memory-layout half of the contract. Executable
+/// state and render-engine policy are supplied separately; buffer
+/// reinterpretation and software-filtering fallbacks remain forbidden.
 #[allow(dead_code)]
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GpgpuVolumePhysicalBacking {
@@ -192,26 +192,26 @@ mod rgba16_float_volume_tests {
     const GPU: u64 = 0x0000_0000_4000_0000;
 
     #[test]
-    fn cloud_reference_extent_has_the_expected_linear_layout() {
-        let width = 96u32;
-        let height = 48u32;
-        let depth = 96u32;
+    fn tight_volume_has_the_expected_linear_layout() {
+        let width = 16u32;
+        let height = 8u32;
+        let depth = 4u32;
         let bytes = width as usize
             * height as usize
             * depth as usize
             * GPGPU_RGBA16_FLOAT_BYTES_PER_VOXEL;
         let volume = GpgpuRgba16FloatVolume3d::tight(PHYS, GPU, bytes, width, height, depth)
-            .expect("96x48x96 rgba16f volume");
+            .expect("tightly packed rgba16f volume");
 
-        assert_eq!(volume.row_pitch_bytes, 768);
-        assert_eq!(volume.slice_pitch_bytes, 36_864);
-        assert_eq!(volume.required_bytes(), Some(3_538_944));
-        assert_eq!(bytes, 3_538_944);
+        assert_eq!(volume.row_pitch_bytes, 128);
+        assert_eq!(volume.slice_pitch_bytes, 1024);
+        assert_eq!(volume.required_bytes(), Some(4096));
+        assert_eq!(bytes, 4096);
         assert_eq!(
             volume.voxel_byte_offset(width - 1, height - 1, depth - 1),
             Some(bytes - GPGPU_RGBA16_FLOAT_BYTES_PER_VOXEL)
         );
-        assert_eq!(bytes * 2, 7_077_888, "ping-pong pair remains 6.75 MiB");
+        assert_eq!(bytes * 2, 8192);
 
         let paged = GpgpuRgba16FloatVolume3d::from_exact_ppgtt_pages(
             GPU,
@@ -219,8 +219,8 @@ mod rgba16_float_volume_tests {
             width,
             height,
             depth,
-            768,
-            36_864,
+            128,
+            1024,
         )
         .expect("exact-page PPGTT volume");
         assert_eq!(paged.backing, GpgpuVolumePhysicalBacking::ExactPpgttPages);

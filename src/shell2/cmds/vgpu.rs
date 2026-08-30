@@ -182,7 +182,6 @@ fn print_status(io: &'static dyn ShellBackend2) {
     print_kernel_timeline(io, "gpgpu-system", KernelClient::GpgpuSystem);
     print_kernel_timeline(io, "gpgpu-font", KernelClient::GpgpuFont);
     print_kernel_timeline(io, "gpgpu-execution", KernelClient::GpgpuExecution);
-    print_kernel_timeline(io, "helio-cloud", KernelClient::HelioCloud);
     print_kernel_timeline(io, "ui4-compositor", KernelClient::Ui4Compositor);
     print_kernel_timeline(io, "ui4-blitter", KernelClient::Ui4Blitter);
 }

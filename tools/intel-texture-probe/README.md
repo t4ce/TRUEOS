@@ -7,12 +7,12 @@ state have been reviewed for the exact physical GPU.
 
 ## Existing 2D texture ladder
 
-Picasso keeps the texture ladder separate from application content:
+The future Picasso texture ladder remains separate from application content:
 
 1. the existing constant-colour indexed draw proves raster, Render0 and UI4;
 2. a texture can be resident and bound without being dereferenced;
-3. a fixed texel load proves the sampled surface and sampler message;
-4. a filtered sample proves interpolation and filter state;
+3. a fixed texel load would validate the sampled surface and sampler message;
+4. a filtered sample would validate interpolation and filter state;
 5. only then does Picasso admit filtered sampled materials.
 
 `sampler_probe.cl` is the small 2D compiler oracle. Compile it for both the
@@ -54,8 +54,9 @@ The host-side `GpgpuRgba16FloatVolume3d` contract lives in
 and slice pitch explicitly, so a later sampled-surface binding cannot silently
 reinterpret the linear simulation allocation.
 
-For the cloud reference extent `96 x 48 x 96`, one tightly packed RGBA16F
-volume is 3,538,944 bytes and the ping-pong pair is 7,077,888 bytes (6.75 MiB).
+Extent and pitch are artifact parameters. The driver contract does not select
+a cloud resolution; both ping-pong allocations must simply agree on one valid
+RGBA16F layout.
 
 Before enabling the hardware path on bare metal, compare the two probe kernels
 on a deterministic RGBA16F volume at coordinates that cover texel centers,

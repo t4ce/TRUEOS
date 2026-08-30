@@ -19,9 +19,6 @@ TRUEOS = Path(__file__).resolve().parents[2]
 BAKER_PATH = TRUEOS / "tools/helio-intel-bake/bake.py"
 WGSL = Path(__file__).resolve().parent / "shaders/retained_textured_forward.wgsl"
 OUT = TRUEOS / "picasso/picasso-retained-textured-forward"
-PROVEN_ADLS_TEXTURE_PS = (
-    TRUEOS / "picasso/picasso-immediate-texture/immediate_textured.ps.simd16.bin"
-)
 
 
 def load_baker():
@@ -70,6 +67,42 @@ def validate_vertex_isa(baker, work: Path, assembly: Path, binary: bytes) -> Non
         raise SystemExit(
             "retained vertex cache payload is reflection/trailer data, not complete EU ISA"
         )
+
+
+def validate_fragment_isa(work: Path, binary: bytes) -> None:
+    """Require independently decodable SIMD16 sampler and render sends."""
+    iga = shutil.which("iga64")
+    if iga is None:
+        raise SystemExit("iga64 is required to validate retained fragment ISA")
+    candidate = work / "retained_textured_forward.ps.simd16.recovered.bin"
+    candidate.write_bytes(binary)
+    decoded = subprocess.run(
+        [iga, "-d", "-p=12p5", "-Xprint-pc", str(candidate)],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        check=False,
+    )
+    rows = re.findall(r"^/\* \[[0-9A-Fa-f]+\]", decoded.stdout, re.MULTILINE)
+    sampler_send = re.search(
+        r"\bsend\.smpl\s+\(16\|[^\n]*\bsimd16 sample\b",
+        decoded.stdout,
+        re.IGNORECASE,
+    )
+    render_eot_send = re.search(
+        r"\bsendc?\.rc\s+\(16\|[^\n]*\{[^}\n]*\bEOT\b[^}\n]*\}"
+        r"[^\n]*\brender target write SIMD16\b",
+        decoded.stdout,
+        re.IGNORECASE,
+    )
+    if (
+        decoded.returncode != 0
+        or not rows
+        or sampler_send is None
+        or render_eot_send is None
+    ):
+        sys.stderr.write(decoded.stdout)
+        raise SystemExit("retained fragment ISA lacks the required sampler/RT messages")
 
 
 def main() -> None:
@@ -196,8 +229,9 @@ def main() -> None:
         if len(vertex_assemblies) != 1:
             raise SystemExit("retained pipeline exposed no unique vertex assembly")
         validate_vertex_isa(baker, work, vertex_assemblies[0], vs)
-        if ps16 is None or ps16 != PROVEN_ADLS_TEXTURE_PS.read_bytes():
-            raise SystemExit("retained fragment no longer matches proven ADL-S SIMD16 sampler")
+        if ps16 is None:
+            raise SystemExit("retained pipeline exposed no SIMD16 fragment executable")
+        validate_fragment_isa(work, ps16)
 
         OUT.mkdir(parents=True, exist_ok=True)
         (OUT / "retained_textured_forward.vs.simd8.bin").write_bytes(vs)
@@ -216,7 +250,7 @@ def main() -> None:
             "executables": list(executables.values()),
             "vertex_stride": 32,
             "runtime_dispatch": {"vertex": "simd8", "fragment": "simd16"},
-            "fragment_proof": "byte-identical-picasso-immediate-texture-simd16-sampler",
+            "fragment_validation": "iga64-decode-simd16-sampler-send-and-rt-eot",
             "storage_attributes": ["float32x3@0", "float32x3@12", "float32x2@24"],
             "shader_attributes": ["float32x3@0", "float32x2@24"],
             "bindings": [

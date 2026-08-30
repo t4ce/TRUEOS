@@ -89,8 +89,8 @@ work-in-progress compatibility layers. The detailed documents linked below
 mark those boundaries more precisely.
 
 Picasso and Helio are not one ownership bucket. Picasso is independent TRUEOS
-work. The old kernel-resident `helio` Shell2 launcher and the HelioV/HelioC
-integration experiments are retired. The remaining Churn and Portal ports are
+work. The old kernel-resident `helio` Shell2 launcher and the experimental
+voxel/cloud integrations are retired. The remaining Churn and Portal ports are
 explicitly named Helio examples with attribution to Tristan Poland's
 MIT-licensed [Helio](https://github.com/Far-Beyond-Pulsar/Helio).
 `trueos-picasso-example` remains the Picasso example; the `picasso` selector

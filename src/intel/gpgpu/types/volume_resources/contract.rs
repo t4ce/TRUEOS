@@ -1,7 +1,7 @@
     pub(crate) const SECTION_NAME: &str = "resources/volume3d-rgba16f-v1.bin";
     pub(crate) const COMPILER_METADATA_SECTION_NAME: &str =
-        "compiler/cloud-volume-bindings-v1.json";
-    pub(crate) const MAGIC: [u8; 8] = *b"HELV3D\0\0";
+        "compiler/volume3d-bindings-v1.json";
+    pub(crate) const MAGIC: [u8; 8] = *b"TOSV3D\0\0";
     pub(crate) const VERSION: u16 = 1;
     pub(crate) const HEADER_LEN: usize = 96;
 
@@ -286,16 +286,6 @@
             self.sampler_id != 0 && self.max_anisotropy == 1
         }
 
-        pub(crate) const fn is_helio_cloud_sampler(self) -> bool {
-            matches!(self.address_u, AddressMode::Repeat)
-                && matches!(self.address_v, AddressMode::ClampToEdge)
-                && matches!(self.address_w, AddressMode::Repeat)
-                && matches!(self.min_filter, FilterMode::Linear)
-                && matches!(self.mag_filter, FilterMode::Linear)
-                && matches!(self.mip_filter, FilterMode::Nearest)
-                && matches!(self.coordinate_mode, CoordinateMode::Normalized)
-                && self.max_anisotropy == 1
-        }
     }
 
     #[derive(Copy, Clone, Debug, Eq, PartialEq)]
