@@ -286,6 +286,7 @@ fn load_level(
             confidence_q15: confidence_slot.load(Ordering::Relaxed),
             source_timestamp_ms: timestamp_slot.load(Ordering::Relaxed),
         };
+        core::sync::atomic::fence(Ordering::Acquire);
         if before == sequence.load(Ordering::Acquire) {
             return Some(snapshot);
         }
@@ -305,6 +306,7 @@ fn load_wake() -> Option<WakeSnapshot> {
             confidence_q15: WAKE_CONFIDENCE_Q15.load(Ordering::Relaxed),
             source_timestamp_ms: WAKE_SOURCE_TIMESTAMP_MS.load(Ordering::Relaxed),
         };
+        core::sync::atomic::fence(Ordering::Acquire);
         if before == WAKE_SEQUENCE.load(Ordering::Acquire) {
             return Some(snapshot);
         }
