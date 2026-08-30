@@ -14,7 +14,7 @@ use serde::Serialize;
 use spin::Mutex;
 use trueos_time::{Duration, Timer};
 
-use crate::r::keyboard_control_service::{
+use crate::r::services::keyboard_control_service::{
     KEYBOARD_CONTROL_FLAG_CLEAR_QUEUE, KEYBOARD_CONTROL_OPCODE_STROKE, KeyboardControlCommand,
     KeyboardControlDevice, KeyboardControlPrincipal, keyboard_is_idle, submit_command, submit_text,
 };

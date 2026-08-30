@@ -73,7 +73,7 @@ impl PrintJobState {
 pub(crate) enum PrintDocument {
     GridPaperA4 {
         generation: u64,
-        size: crate::r::gridpaper_service::GridSize,
+        size: crate::r::services::gridpaper_service::GridSize,
         raw: Vec<u8>,
     },
 }
@@ -176,7 +176,7 @@ fn enqueue_gridpaper_request(owner: u8, token: u32) -> Result<u32, i64> {
             return Err(ERROR_QUEUE_FULL);
         }
         let Some((generation, size, raw)) =
-            crate::r::gridpaper_service::consume_print_request(owner, token)
+            crate::r::services::gridpaper_service::consume_print_request(owner, token)
         else {
             return Err(ERROR_NOT_OWNER);
         };
@@ -206,12 +206,12 @@ fn enqueue_gridpaper_request(owner: u8, token: u32) -> Result<u32, i64> {
 pub(crate) fn submit_for_owner(owner: u8, document_kind: u32, subject: u64, raw: &[u8]) -> i64 {
     let document = match document_kind {
         DOCUMENT_GRIDPAPER_A4 => {
-            if !crate::r::gridpaper_service::valid_print_snapshot(raw) {
+            if !crate::r::services::gridpaper_service::valid_print_snapshot(raw) {
                 return ERROR_INVALID_DOCUMENT;
             }
             PrintDocument::GridPaperA4 {
                 generation: subject,
-                size: crate::r::gridpaper_service::GridSize::FULL,
+                size: crate::r::services::gridpaper_service::GridSize::FULL,
                 raw: raw.to_vec(),
             }
         }
@@ -236,11 +236,11 @@ pub(crate) fn submit_for_owner(owner: u8, document_kind: u32, subject: u64, raw:
 pub(crate) fn submit_gridpaper_to_printer(
     owner: u8,
     generation: u64,
-    size: crate::r::gridpaper_service::GridSize,
+    size: crate::r::services::gridpaper_service::GridSize,
     raw: Vec<u8>,
     printer_uri: &str,
 ) -> Result<u32, i64> {
-    if printer_uri.is_empty() || !crate::r::gridpaper_service::valid_print_snapshot(&raw) {
+    if printer_uri.is_empty() || !crate::r::services::gridpaper_service::valid_print_snapshot(&raw) {
         return Err(ERROR_INVALID_DOCUMENT);
     }
     enqueue(
@@ -256,10 +256,10 @@ pub(crate) fn submit_gridpaper_to_printer(
 
 pub(crate) fn submit_kernel_gridpaper(
     generation: u64,
-    size: crate::r::gridpaper_service::GridSize,
+    size: crate::r::services::gridpaper_service::GridSize,
     raw: Vec<u8>,
 ) -> Result<u32, i64> {
-    if !crate::r::gridpaper_service::valid_print_snapshot(&raw) {
+    if !crate::r::services::gridpaper_service::valid_print_snapshot(&raw) {
         return Err(ERROR_INVALID_DOCUMENT);
     }
     enqueue(
@@ -275,11 +275,11 @@ pub(crate) fn submit_kernel_gridpaper(
 
 pub(crate) fn submit_kernel_gridpaper_to_printer(
     generation: u64,
-    size: crate::r::gridpaper_service::GridSize,
+    size: crate::r::services::gridpaper_service::GridSize,
     raw: Vec<u8>,
     printer_uri: &str,
 ) -> Result<u32, i64> {
-    if printer_uri.is_empty() || !crate::r::gridpaper_service::valid_print_snapshot(&raw) {
+    if printer_uri.is_empty() || !crate::r::services::gridpaper_service::valid_print_snapshot(&raw) {
         return Err(ERROR_INVALID_DOCUMENT);
     }
     enqueue(

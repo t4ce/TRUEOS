@@ -204,7 +204,7 @@ fn profile_for_window(window: crate::ui4::WindowSnapshot) -> Option<WindowVfxPro
     // Spirit's retained response document has its own cell-zero click and
     // keyboard choreography. Leave it to that path so the generic Gridpaper
     // selector cannot race the exact target or replace the current chat VFX.
-    if crate::r::gridpaper_service::is_spirit_response_grid_window(window.id) {
+    if crate::r::services::gridpaper_service::is_spirit_response_grid_window(window.id) {
         return None;
     }
     if window.owner == crate::ui4::WindowOwner::GRIDPAPER_SERVICE

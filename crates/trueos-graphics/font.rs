@@ -1266,7 +1266,7 @@ async fn font_warm_worker_task(worker_index: usize, expected_slot: u32, expected
             actual_kind,
         );
         FONT_WARM_WORKERS_ADMITTED.fetch_and(!(1u8 << worker_index), Ordering::AcqRel);
-        crate::r::spawn_service::retry_font_warm_pool_autostart();
+        crate::r::services::spawn_service::retry_font_warm_pool_autostart();
         return;
     }
 

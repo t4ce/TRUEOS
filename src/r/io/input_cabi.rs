@@ -1,15 +1,15 @@
 extern crate alloc;
 
-use crate::r::gamepad_control_service::{
+use crate::r::services::gamepad_control_service::{
     GamepadControlPrincipal, gamepad_is_idle, gamepad_snapshot, release_gamepad, request_gamepad,
     submit_command as submit_gamepad_command, submit_json as submit_gamepad_json,
 };
-use crate::r::keyboard_control_service::{
+use crate::r::services::keyboard_control_service::{
     KeyboardControlPrincipal, keyboard_is_idle, release_keyboard, request_keyboard,
     submit_command as submit_keyboard_command, submit_json as submit_keyboard_json,
     submit_text as submit_keyboard_text,
 };
-use crate::r::mouse_motion_service::{
+use crate::r::services::mouse_motion_service::{
     MouseControlPrincipal, legacy_write_cursor, release_cursor, request_cursor, submit_command,
     submit_json,
 };
@@ -795,7 +795,7 @@ pub extern "C" fn trueos_cabi_mouse_motion_cursor_idle(handle: u64) -> i32 {
             &[],
         );
     }
-    crate::r::mouse_motion_service::cursor_is_idle(mouse_motion_principal(), handle)
+    crate::r::services::mouse_motion_service::cursor_is_idle(mouse_motion_principal(), handle)
         .map(i32::from)
         .unwrap_or_else(|error| error.code())
 }

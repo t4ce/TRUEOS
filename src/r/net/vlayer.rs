@@ -167,7 +167,7 @@ pub fn vram_snapshot_read_host(offset: usize, out: &mut [u8]) -> usize {
 }
 
 pub fn system_services_snapshot_len_host() -> usize {
-    crate::r::spawn_service::latest_system_service_snapshot_text().len()
+    crate::r::services::spawn_service::latest_system_service_snapshot_text().len()
 }
 
 pub fn system_services_snapshot_read_host(offset: usize, out: &mut [u8]) -> usize {
@@ -175,7 +175,7 @@ pub fn system_services_snapshot_read_host(offset: usize, out: &mut [u8]) -> usiz
         return 0;
     }
 
-    let text = crate::r::spawn_service::latest_system_service_snapshot_text();
+    let text = crate::r::services::spawn_service::latest_system_service_snapshot_text();
     let bytes = text.as_bytes();
     if offset >= bytes.len() {
         return 0;

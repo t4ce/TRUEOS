@@ -11,7 +11,7 @@ use super::super::{
     print_shell_line,
 };
 use crate::intel::gpu_font::{GpuFontFace, GpuFontRgba};
-use crate::r::font_kernel_service::{
+use crate::r::services::font_kernel_service::{
     FONT_STAMP_MAX_EXTENT, FONT_STAMP_MAX_GLYPHS, FontStampFit, FontStampLayer, FontStampRequest,
     FontStampedBuffer, RetainSceneRequest, RetainedFontPositioning, RetainedFontRun,
 };
@@ -668,7 +668,7 @@ fn spirit(io: &'static dyn ShellBackend2, args: &mut SplitWhitespace<'_>) {
 }
 
 fn print_font_service_status(io: &'static dyn ShellBackend2) {
-    let status = crate::r::font_kernel_service::status();
+    let status = crate::r::services::font_kernel_service::status();
     let (outputs, output_bytes) = {
         let outputs = CPP_FONT_OUTPUTS.lock();
         (
@@ -867,7 +867,7 @@ fn parse_stamp_canvas(encoded: &str) -> Result<(u32, u32), &'static str> {
         || width > FONT_STAMP_MAX_EXTENT
         || height > FONT_STAMP_MAX_EXTENT
         || u64::from(width) * u64::from(height)
-            > crate::r::font_kernel_service::FONT_STAMP_MAX_PIXELS
+            > crate::r::services::font_kernel_service::FONT_STAMP_MAX_PIXELS
     {
         return Err("canvas-over-4k-softcap");
     }
@@ -1034,7 +1034,7 @@ fn parse_font_stamp(input: &str, present: bool) -> Result<ParsedFontStamp, &'sta
 }
 
 fn queue_font_service_stamp(spawner: &Spawner, io: &'static dyn ShellBackend2, input: &str) {
-    if !crate::r::font_kernel_service::status().online {
+    if !crate::r::services::font_kernel_service::status().online {
         print_shell_line(io, "cpp font stamp: queued=0 reason=font-service-offline");
         return;
     }
@@ -1055,7 +1055,7 @@ fn queue_font_service_stamp(spawner: &Spawner, io: &'static dyn ShellBackend2, i
         print_shell_line(io, "cpp font stamp: queued=0 reason=output-capacity");
         return;
     }
-    let pending = match crate::r::font_kernel_service::submit_stamp(parsed.request) {
+    let pending = match crate::r::services::font_kernel_service::submit_stamp(parsed.request) {
         Ok(pending) => pending,
         Err(error) => {
             release_font_output_reservation(1);
@@ -1094,7 +1094,7 @@ fn queue_font_service_stamp(spawner: &Spawner, io: &'static dyn ShellBackend2, i
 }
 
 fn queue_font_service_present(io: &'static dyn ShellBackend2, input: &str) {
-    if !crate::r::font_kernel_service::status().online {
+    if !crate::r::services::font_kernel_service::status().online {
         print_shell_line(io, "cpp font present: queued=0 reason=font-service-offline");
         return;
     }
@@ -1203,7 +1203,7 @@ fn stop_font_service_rush2(io: &'static dyn ShellBackend2) {
 #[trueos_executor::task(pool_size = 32)]
 async fn cpp_font_stamp_task(
     output_target: MatrixTarget,
-    pending: crate::r::font_kernel_service::PendingFontStamp,
+    pending: crate::r::services::font_kernel_service::PendingFontStamp,
 ) {
     let ticket = pending.ticket().raw();
     match pending.wait().await {

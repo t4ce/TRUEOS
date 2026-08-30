@@ -80,7 +80,7 @@ const CPP_FONT_RUSH_STORM_COLUMNS: u8 = 8;
 const CPP_FONT_RUSH_STORM_ROWS: u8 = 4;
 const CPP_FONT_RUSH_STORM_GLYPHS_PER_PRODUCER: usize = 2;
 const CPP_FONT_RUSH_RAW_STORM_GLYPHS: usize =
-    crate::r::font_plan_service::FONT_PLAN_WORKER_COUNT * CPP_FONT_RUSH_STORM_GLYPHS_PER_PRODUCER;
+    crate::r::services::font_plan_service::FONT_PLAN_WORKER_COUNT * CPP_FONT_RUSH_STORM_GLYPHS_PER_PRODUCER;
 const CPP_FONT_RUSH_GLYPH_ID_LOG_LIMIT: usize = 16;
 const CPP_FONT_RUSH_VIEWPORT_SCALE: u32 = 4;
 const CPP_FONT_RUSH_GLYPHS: [usize; CPP_FONT_RUSH_MAX_PLANES] = [1, 2, 4, 16];
@@ -462,7 +462,7 @@ impl PreviewControl {
 }
 
 static PREVIEW_CONTROL: Mutex<PreviewControl> = Mutex::new(PreviewControl::new());
-static CPP_FONT_REQUEST: Mutex<Option<(u64, crate::r::font_kernel_service::FontStampRequest)>> =
+static CPP_FONT_REQUEST: Mutex<Option<(u64, crate::r::services::font_kernel_service::FontStampRequest)>> =
     Mutex::new(None);
 static CPP_FONT_RUSH2_RETIRED: Mutex<Vec<CppFontRush2RetiredFrame>> = Mutex::new(Vec::new());
 
@@ -545,14 +545,14 @@ struct ActivePreview {
     extra_surfaces: Vec<StaticPreviewSurface>,
     particle_craft: Option<crate::intel::gpgpu::GpgpuOwnedParticleCraftState>,
     cloud_brush: CloudBrushState,
-    font_stamp: Option<crate::r::font_kernel_service::FontStampRequest>,
+    font_stamp: Option<crate::r::services::font_kernel_service::FontStampRequest>,
     font_rush: Option<CppFontRushPlaneState>,
     font_rush2: Option<CppFontRush2PlaneState>,
     metrics: GpgpuPreviewMetrics,
 }
 
 struct CppFontRush2WorkerState {
-    producer: crate::r::font_kernel_service::FontGpuProducer,
+    producer: crate::r::services::font_kernel_service::FontGpuProducer,
     producer_index: u8,
     font_pixels: f32,
     rng: crate::tyche::SoftRng,
@@ -564,7 +564,7 @@ struct CppFontRush2PlaneState {
     active_workers: usize,
     epoch_workers: usize,
     pending: Option<CppFontRush2PendingRow>,
-    building: Vec<crate::r::font_kernel_service::FontProducedRow>,
+    building: Vec<crate::r::services::font_kernel_service::FontProducedRow>,
     published: [Option<CppFontRush2PublishedPlane>; 2],
     epoch_started_ns: u64,
 }
@@ -572,11 +572,11 @@ struct CppFontRush2PlaneState {
 struct CppFontRush2PendingRow {
     lease: FrameWriteLease,
     worker: usize,
-    pending: crate::r::font_kernel_service::PendingFontProducerRow,
+    pending: crate::r::services::font_kernel_service::PendingFontProducerRow,
 }
 
 struct CppFontRush2PublishedPlane {
-    rows: Vec<crate::r::font_kernel_service::FontProducedRow>,
+    rows: Vec<crate::r::services::font_kernel_service::FontProducedRow>,
     publish_serial: u64,
     epoch_started_ns: u64,
     gpu_ready_ns: u64,
@@ -612,10 +612,10 @@ struct CppFontRushPlaneState {
 
 #[derive(Default)]
 struct CppFontRushShowcaseSources {
-    title_pending: Option<crate::r::font_kernel_service::PendingFontStamp>,
-    title: Option<Arc<crate::r::font_kernel_service::FontStampedBuffer>>,
-    section_pending: Option<crate::r::font_kernel_service::PendingFontStamp>,
-    section: Option<Arc<crate::r::font_kernel_service::FontStampedBuffer>>,
+    title_pending: Option<crate::r::services::font_kernel_service::PendingFontStamp>,
+    title: Option<Arc<crate::r::services::font_kernel_service::FontStampedBuffer>>,
+    section_pending: Option<crate::r::services::font_kernel_service::PendingFontStamp>,
+    section: Option<Arc<crate::r::services::font_kernel_service::FontStampedBuffer>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -698,7 +698,7 @@ impl CppFontRushLayerStage {
 }
 
 struct CppFontRushPendingPlan {
-    completion: crate::r::font_plan_service::PendingPreparedGlyphPlan,
+    completion: crate::r::services::font_plan_service::PendingPreparedGlyphPlan,
     sequence: u64,
     scheduled_at: Instant,
     enqueued_at: Instant,
@@ -710,8 +710,8 @@ struct CppFontRushPendingPlan {
 }
 
 struct CppFontRushReadyPlan {
-    plan: crate::r::font_plan_service::PreparedGlyphPlan,
-    stats: crate::r::font_plan_service::FontPlanBuildStats,
+    plan: crate::r::services::font_plan_service::PreparedGlyphPlan,
+    stats: crate::r::services::font_plan_service::FontPlanBuildStats,
     sequence: u64,
     scheduled_at: Instant,
     enqueued_at: Instant,
@@ -726,8 +726,8 @@ struct CppFontRushReadyPlan {
 
 struct CppFontRushPendingFrame {
     lease: FrameWriteLease,
-    completion: crate::r::font_kernel_service::PendingFontFrameStamp,
-    ticket: crate::r::font_kernel_service::FontKernelTicket,
+    completion: crate::r::services::font_kernel_service::PendingFontFrameStamp,
+    ticket: crate::r::services::font_kernel_service::FontKernelTicket,
     sequence: u64,
     scheduled_at: Instant,
     submit_started_at: Instant,
@@ -757,7 +757,7 @@ struct CppFontRushPendingFrame {
 
 #[derive(Copy, Clone, Debug)]
 struct CppFontRushPendingScanout {
-    ticket: crate::r::font_kernel_service::FontKernelTicket,
+    ticket: crate::r::services::font_kernel_service::FontKernelTicket,
     sequence: u64,
     producer_buffer: u8,
     frame_publish_serial: u64,
@@ -792,10 +792,10 @@ pub(crate) fn request_cpp_gallery_start() -> Result<u64, &'static str> {
 }
 
 pub(crate) fn request_cpp_font_preview_start(
-    request: crate::r::font_kernel_service::FontStampRequest,
+    request: crate::r::services::font_kernel_service::FontStampRequest,
 ) -> Result<u64, &'static str> {
     let first = request.layers.first().ok_or("font-stamp-layer-count")?;
-    if request.fit != crate::r::font_kernel_service::FontStampFit::Canvas {
+    if request.fit != crate::r::services::font_kernel_service::FontStampFit::Canvas {
         return Err("font-preview-requires-canvas");
     }
     let width = first.scene.raster_width;
@@ -826,11 +826,11 @@ pub(crate) fn request_cpp_font_preview_start(
 }
 
 pub(crate) fn request_cpp_font_rush_start() -> Result<u64, &'static str> {
-    if !crate::r::font_kernel_service::status().online {
+    if !crate::r::services::font_kernel_service::status().online {
         return Err("font-service-offline");
     }
-    if crate::r::font_plan_service::status().online_workers
-        != crate::r::font_plan_service::FONT_PLAN_WORKER_COUNT
+    if crate::r::services::font_plan_service::status().online_workers
+        != crate::r::services::font_plan_service::FONT_PLAN_WORKER_COUNT
     {
         return Err("font-plan-service-offline");
     }
@@ -890,7 +890,7 @@ pub(crate) fn request_cpp_font_rush_stop() -> Result<u64, &'static str> {
 }
 
 pub(crate) fn request_cpp_font_rush2_start() -> Result<u64, &'static str> {
-    if !crate::r::font_kernel_service::status().online {
+    if !crate::r::services::font_kernel_service::status().online {
         return Err("font-service-offline");
     }
     ensure_cpp_font_rush2_application_planes_idle("request-rush2")?;
@@ -1023,10 +1023,10 @@ fn cpp_font_rush_topology() -> Result<(OutputId, CppFontRushTopology), &'static 
     }
     if capabilities.width == 0
         || capabilities.height == 0
-        || capabilities.width > crate::r::font_kernel_service::FONT_STAMP_MAX_EXTENT
-        || capabilities.height > crate::r::font_kernel_service::FONT_STAMP_MAX_EXTENT
+        || capabilities.width > crate::r::services::font_kernel_service::FONT_STAMP_MAX_EXTENT
+        || capabilities.height > crate::r::services::font_kernel_service::FONT_STAMP_MAX_EXTENT
         || u64::from(capabilities.width) * u64::from(capabilities.height)
-            > crate::r::font_kernel_service::FONT_STAMP_MAX_PIXELS
+            > crate::r::services::font_kernel_service::FONT_STAMP_MAX_PIXELS
     {
         return Err("font-rush-output-extent-unsupported");
     }
@@ -1637,17 +1637,17 @@ fn initialize_cpp_font_rush2_set(
 
     for producer_index in 0..CPP_FONT_RUSH2_PRODUCER_COUNT {
         let font_pixels = 32.0 + (producer_index % CPP_FONT_RUSH2_PLANE_COUNT) as f32 * 48.0;
-        let registration = crate::r::font_producer_service::FontProducerRegistration {
+        let registration = crate::r::services::font_producer_service::FontProducerRegistration {
             face: crate::intel::gpu_font::GpuFontFace::Default.id() as u16,
             tier: cpp_font_rush2_tier(producer_index),
             font_pixels_milli: (font_pixels * 1_000.0) as u32,
             row_width_px: scanout_width,
             row_height_px: scanout_height,
-            format: crate::r::font_producer_service::FontProducerFormat::Rgba8Premultiplied,
+            format: crate::r::services::font_producer_service::FontProducerFormat::Rgba8Premultiplied,
             max_chars: CPP_FONT_RUSH2_GLYPHS_PER_ROW,
             row_ring_depth: 2,
         };
-        let producer = match crate::r::font_kernel_service::register_ui4_gpu_font_producer(
+        let producer = match crate::r::services::font_kernel_service::register_ui4_gpu_font_producer(
             registration,
         ) {
             Ok(producer) => producer,
@@ -2847,9 +2847,9 @@ async fn render_cpp_font_frame(preview: &mut ActivePreview) -> Result<(), &'stat
         return Err("font-preview-request-consumed");
     };
     let pending =
-        match crate::r::font_kernel_service::submit_frame_stamp(request.clone(), destination) {
+        match crate::r::services::font_kernel_service::submit_frame_stamp(request.clone(), destination) {
             Ok(pending) => pending,
-            Err(crate::r::font_kernel_service::FontKernelError::QueueFull) => {
+            Err(crate::r::services::font_kernel_service::FontKernelError::QueueFull) => {
                 preview.font_stamp = Some(request);
                 let _ = cancel_frame_buffer(lease);
                 preview.metrics.dropped_busy = preview.metrics.dropped_busy.saturating_add(1);
@@ -2863,7 +2863,7 @@ async fn render_cpp_font_frame(preview: &mut ActivePreview) -> Result<(), &'stat
         };
     let stamped = match pending.wait().await {
         Ok(stamped) => stamped,
-        Err(crate::r::font_kernel_service::FontKernelError::SubmittedIncomplete(_)) => {
+        Err(crate::r::services::font_kernel_service::FontKernelError::SubmittedIncomplete(_)) => {
             preview.metrics.failed = preview.metrics.failed.saturating_add(1);
             return Err("font-preview-submit-incomplete");
         }
@@ -2904,8 +2904,8 @@ async fn render_cpp_font_frame(preview: &mut ActivePreview) -> Result<(), &'stat
 }
 
 fn render_cpp_font_rush2_frame(preview: &mut ActivePreview) -> Result<(), &'static str> {
-    use crate::r::font_kernel_service::{FontGpuProducerError, FontKernelError};
-    use crate::r::font_producer_service::FontProducerError;
+    use crate::r::services::font_kernel_service::{FontGpuProducerError, FontKernelError};
+    use crate::r::services::font_producer_service::FontProducerError;
 
     preview.metrics.attempted = preview.metrics.attempted.saturating_add(1);
 
@@ -3163,8 +3163,8 @@ fn cpp_font_rush2_request(
     state: &mut CppFontRush2WorkerState,
     width: u32,
     height: u32,
-) -> crate::r::font_kernel_service::FontStampRequest {
-    use crate::r::font_kernel_service::{
+) -> crate::r::services::font_kernel_service::FontStampRequest {
+    use crate::r::services::font_kernel_service::{
         FontStampFit, FontStampLayer, FontStampRequest, RetainSceneRequest,
         RetainedFontPositioning, RetainedFontRun,
     };
@@ -3271,8 +3271,8 @@ fn cpp_font_rush_showcase_source_request(
     kind: CppFontRushShowcaseSource,
     width: u32,
     height: u32,
-) -> crate::r::font_kernel_service::FontStampRequest {
-    use crate::r::font_kernel_service::{
+) -> crate::r::services::font_kernel_service::FontStampRequest {
+    use crate::r::services::font_kernel_service::{
         FontStampFit, FontStampLayer, FontStampRequest, RetainSceneRequest,
         RetainedFontPositioning, RetainedFontRun,
     };
@@ -3345,7 +3345,7 @@ fn queue_cpp_font_rush_showcase_source(
     preview: &mut ActivePreview,
     kind: CppFontRushShowcaseSource,
 ) -> Result<(), &'static str> {
-    use crate::r::font_kernel_service::FontKernelError;
+    use crate::r::services::font_kernel_service::FontKernelError;
 
     let already_owned = {
         let sources = &preview
@@ -3366,7 +3366,7 @@ fn queue_cpp_font_rush_showcase_source(
         return Ok(());
     }
     let request = cpp_font_rush_showcase_source_request(kind, preview.width, preview.height);
-    let completion = match crate::r::font_kernel_service::submit_stamp(request) {
+    let completion = match crate::r::services::font_kernel_service::submit_stamp(request) {
         Ok(completion) => completion,
         Err(FontKernelError::QueueFull) => return Ok(()),
         Err(error) => {
@@ -3658,7 +3658,7 @@ fn poll_cpp_font_rush_plan(preview: &mut ActivePreview) -> Result<(), &'static s
 }
 
 fn try_submit_cpp_font_rush_ready_plan(preview: &mut ActivePreview) -> Result<(), &'static str> {
-    use crate::r::font_kernel_service::FontKernelError;
+    use crate::r::services::font_kernel_service::FontKernelError;
 
     let has_ready_plan = preview
         .font_rush
@@ -3721,13 +3721,13 @@ fn try_submit_cpp_font_rush_ready_plan(preview: &mut ActivePreview) -> Result<()
     let submit_started_at = Instant::now();
     let submitted = if let Some(clear_color) = stage.clear_color() {
         let clear_rgba = u32::from_le_bytes(clear_color.to_native_bytes());
-        crate::r::font_kernel_service::submit_prepared_frame_stamp_with_clear(
+        crate::r::services::font_kernel_service::submit_prepared_frame_stamp_with_clear(
             plan,
             destination,
             clear_rgba,
         )
     } else {
-        crate::r::font_kernel_service::submit_prepared_frame_stamp(plan, destination)
+        crate::r::services::font_kernel_service::submit_prepared_frame_stamp(plan, destination)
     };
     let completion = match submitted {
         Ok(pending) => pending,
@@ -3749,7 +3749,7 @@ fn try_submit_cpp_font_rush_ready_plan(preview: &mut ActivePreview) -> Result<()
                         sequence,
                         stats.batch_id(),
                         next_attempt,
-                        crate::r::font_kernel_service::status().queued,
+                        crate::r::services::font_kernel_service::status().queued,
                     );
                 }
                 preview
@@ -3917,7 +3917,7 @@ fn poll_cpp_font_rush_scanout(preview: &mut ActivePreview) -> Result<(), &'stati
 }
 
 fn poll_cpp_font_rush_frame(preview: &mut ActivePreview) -> Result<(), &'static str> {
-    use crate::r::font_kernel_service::FontKernelError;
+    use crate::r::services::font_kernel_service::FontKernelError;
 
     let completion = {
         let state = preview
@@ -4040,7 +4040,7 @@ fn poll_cpp_font_rush_frame(preview: &mut ActivePreview) -> Result<(), &'static 
             preview.metrics.scanout_superseded,
         );
     }
-    let service = crate::r::font_kernel_service::status();
+    let service = crate::r::services::font_kernel_service::status();
     if pending.stage == CppFontRushLayerStage::BlankPrime {
         crate::log_info!(
             target: "ui4";
@@ -4093,7 +4093,7 @@ fn poll_cpp_font_rush_frame(preview: &mut ActivePreview) -> Result<(), &'static 
             pending.plan_worker_slices,
             pending.plan_cooperative_yields,
             pending.stage.cadence_ms(),
-            crate::r::font_plan_service::FONT_PLAN_WORKER_COUNT,
+            crate::r::services::font_plan_service::FONT_PLAN_WORKER_COUNT,
             CPP_FONT_RUSH_STORM_GLYPHS_PER_PRODUCER,
         );
         return Ok(());
@@ -4264,7 +4264,7 @@ fn queue_due_cpp_font_rush_consumers(
                 preview.metrics.attempted,
                 due_ticks,
                 superseded,
-                crate::r::font_kernel_service::status().queued,
+                crate::r::services::font_kernel_service::status().queued,
                 stage.cadence_ms(),
             );
         }
@@ -4298,8 +4298,8 @@ fn queue_due_cpp_font_rush_consumers(
                 producer_stage,
                 active_sequence,
                 now.saturating_duration_since(active_since).as_millis(),
-                crate::r::font_plan_service::status().active_batches,
-                crate::r::font_kernel_service::status().queued,
+                crate::r::services::font_plan_service::status().active_batches,
+                crate::r::services::font_kernel_service::status().queued,
                 stage.cadence_ms(),
                 preview.next_render.saturating_duration_since(preview.started).as_millis(),
             );
@@ -4321,7 +4321,7 @@ fn queue_due_cpp_font_rush_consumers(
                 pending.ticket.raw(),
                 pending.sequence,
                 now.saturating_duration_since(pending.submit_started_at).as_millis(),
-                crate::r::font_kernel_service::status().queued,
+                crate::r::services::font_kernel_service::status().queued,
                 stage.cadence_ms(),
                 preview.next_render.saturating_duration_since(preview.started).as_millis(),
             );
@@ -4528,7 +4528,7 @@ fn queue_cpp_font_rush_showcase_sprite(
     sequence: u64,
     scheduled_at: Instant,
 ) -> Result<(), &'static str> {
-    use crate::r::font_kernel_service::FontKernelError;
+    use crate::r::services::font_kernel_service::FontKernelError;
 
     let (stage, source) = {
         let state = preview
@@ -4572,7 +4572,7 @@ fn queue_cpp_font_rush_showcase_sprite(
         }
     };
     let submit_started_at = Instant::now();
-    let completion = match crate::r::font_kernel_service::submit_font_rush_showcase_sprite_frame(
+    let completion = match crate::r::services::font_kernel_service::submit_font_rush_showcase_sprite_frame(
         source,
         layout.descriptors,
         layout.glyphs,
@@ -4664,7 +4664,7 @@ fn queue_cpp_font_rush_blank(
     sequence: u64,
     scheduled_at: Instant,
 ) -> Result<(), &'static str> {
-    use crate::r::font_kernel_service::FontKernelError;
+    use crate::r::services::font_kernel_service::FontKernelError;
 
     let stage = preview
         .font_rush
@@ -4692,7 +4692,7 @@ fn queue_cpp_font_rush_blank(
         }
     };
     let submit_started_at = Instant::now();
-    let completion = match crate::r::font_kernel_service::submit_font_rush_frame_clear(
+    let completion = match crate::r::services::font_kernel_service::submit_font_rush_frame_clear(
         destination,
         u32::from_le_bytes(PremultipliedRgba8::TRANSPARENT.to_native_bytes()),
     ) {
@@ -4769,7 +4769,7 @@ fn queue_cpp_font_rush_plan(
     scheduled_at: Instant,
     font: crate::intel::gpu_font::GpuFontFace,
 ) -> Result<(), &'static str> {
-    use crate::r::font_plan_service::FontPlanError;
+    use crate::r::services::font_plan_service::FontPlanError;
 
     let rank = cpp_font_rush_rank(preview)?;
     let plane_slot = cpp_font_rush_plane_slot(preview)?;
@@ -4778,7 +4778,7 @@ fn queue_cpp_font_rush_plan(
         .as_ref()
         .ok_or("font-rush-plane-state-missing")?
         .stage;
-    let batch_borrow = match crate::r::font_plan_service::borrow_plan_batch() {
+    let batch_borrow = match crate::r::services::font_plan_service::borrow_plan_batch() {
         Ok(batch) => batch,
         Err(FontPlanError::PoolFull) => {
             preview.metrics.dropped_busy = preview.metrics.dropped_busy.saturating_add(1);
@@ -4789,9 +4789,9 @@ fn queue_cpp_font_rush_plan(
                 rank,
                 plane_slot,
                 sequence,
-                crate::r::font_plan_service::status().active_batches,
-                crate::r::font_plan_service::status().active_cells,
-                crate::r::font_plan_service::status().queued_cells,
+                crate::r::services::font_plan_service::status().active_batches,
+                crate::r::services::font_plan_service::status().active_cells,
+                crate::r::services::font_plan_service::status().queued_cells,
                 stage.cadence_ms(),
             );
             return Ok(());
@@ -4830,8 +4830,8 @@ fn queue_cpp_font_rush_plan(
                 plane_slot,
                 sequence,
                 requested_glyphs,
-                crate::r::font_plan_service::status().active_batches,
-                crate::r::font_plan_service::status().active_cells,
+                crate::r::services::font_plan_service::status().active_batches,
+                crate::r::services::font_plan_service::status().active_cells,
                 stage.cadence_ms(),
             );
             return Ok(());
@@ -4886,8 +4886,8 @@ fn queue_cpp_font_rush_plan(
         scheduled_at.saturating_duration_since(preview.started).as_millis(),
         enqueued_at.saturating_duration_since(scheduled_at).as_millis(),
         requested_parallelism,
-        crate::r::font_plan_service::FONT_PLAN_MAX_ACTIVE_BATCHES,
-        crate::r::font_plan_service::FONT_PLAN_MAX_ACTIVE_CELLS,
+        crate::r::services::font_plan_service::FONT_PLAN_MAX_ACTIVE_BATCHES,
+        crate::r::services::font_plan_service::FONT_PLAN_MAX_ACTIVE_CELLS,
     );
     Ok(())
 }
@@ -4940,7 +4940,7 @@ fn cpp_font_rush_plane_slot(preview: &ActivePreview) -> Result<u8, &'static str>
 }
 
 async fn drain_cpp_font_rush_pending(previews: &mut [ActivePreview]) {
-    use crate::r::font_kernel_service::FontKernelError;
+    use crate::r::services::font_kernel_service::FontKernelError;
 
     for preview in previews {
         let rush2_pending = preview
@@ -5175,8 +5175,8 @@ fn cpp_font_rush_plan_request(
     _sequence: u64,
     font: crate::intel::gpu_font::GpuFontFace,
     rng: &mut crate::tyche::SoftRng,
-) -> Result<(crate::r::font_plan_service::FontPlanBatchRequest, usize, (u8, u8)), &'static str> {
-    use crate::r::font_plan_service::FontPlanCellRequest;
+) -> Result<(crate::r::services::font_plan_service::FontPlanBatchRequest, usize, (u8, u8)), &'static str> {
+    use crate::r::services::font_plan_service::FontPlanCellRequest;
 
     if let CppFontRushLayerStage::ProducerStorm { wave, .. } = stage {
         let viewport_width = width.div_ceil(CPP_FONT_RUSH_VIEWPORT_SCALE).max(1);
@@ -5190,7 +5190,7 @@ fn cpp_font_rush_plan_request(
             _ => crate::intel::gpu_font::GpuFontRgba::new(116, 255, 125, 210),
         };
         let mut cells = Vec::with_capacity(CPP_FONT_RUSH_RAW_STORM_GLYPHS);
-        for worker in 0..crate::r::font_plan_service::FONT_PLAN_WORKER_COUNT {
+        for worker in 0..crate::r::services::font_plan_service::FONT_PLAN_WORKER_COUNT {
             let column = worker % usize::from(CPP_FONT_RUSH_STORM_COLUMNS);
             let row = worker / usize::from(CPP_FONT_RUSH_STORM_COLUMNS);
             let region_left = (u64::from(viewport_width) * column as u64
@@ -5240,7 +5240,7 @@ fn cpp_font_rush_plan_request(
             }
         }
         return Ok((
-            crate::r::font_plan_service::FontPlanBatchRequest::new(
+            crate::r::services::font_plan_service::FontPlanBatchRequest::new(
                 "ui4-cpp-font-rush-raw-producer-storm",
                 font,
                 foreground,
@@ -5249,7 +5249,7 @@ fn cpp_font_rush_plan_request(
                 width,
                 height,
                 cells,
-                crate::r::font_plan_service::FONT_PLAN_WORKER_COUNT,
+                crate::r::services::font_plan_service::FONT_PLAN_WORKER_COUNT,
             ),
             CPP_FONT_RUSH_RAW_STORM_GLYPHS,
             (
@@ -5349,7 +5349,7 @@ fn cpp_font_rush_plan_request(
     };
 
     Ok((
-        crate::r::font_plan_service::FontPlanBatchRequest::new(
+        crate::r::services::font_plan_service::FontPlanBatchRequest::new(
             "ui4-cpp-font-rush",
             font,
             foreground,
@@ -5402,7 +5402,7 @@ async fn render_static30_frames(preview: &mut ActivePreview) -> Result<(), &'sta
         };
         let request =
             static30_font_stamp_request(destination.width, destination.height, surface.scheme);
-        let pending = match crate::r::font_kernel_service::submit_frame_stamp(request, destination)
+        let pending = match crate::r::services::font_kernel_service::submit_frame_stamp(request, destination)
         {
             Ok(pending) => pending,
             Err(_) => {
@@ -5413,7 +5413,7 @@ async fn render_static30_frames(preview: &mut ActivePreview) -> Result<(), &'sta
         };
         let stamped = match pending.wait().await {
             Ok(stamped) => stamped,
-            Err(crate::r::font_kernel_service::FontKernelError::SubmittedIncomplete(_)) => {
+            Err(crate::r::services::font_kernel_service::FontKernelError::SubmittedIncomplete(_)) => {
                 // The accepted producer may still target this exact surface.
                 // Preserve the write lease so neither UI4 nor a future
                 // producer can recycle it underneath a late GPU write.
@@ -5472,8 +5472,8 @@ fn static30_font_stamp_request(
     width: u32,
     height: u32,
     scheme: u8,
-) -> crate::r::font_kernel_service::FontStampRequest {
-    use crate::r::font_kernel_service::{
+) -> crate::r::services::font_kernel_service::FontStampRequest {
+    use crate::r::services::font_kernel_service::{
         FontStampFit, FontStampLayer, FontStampRequest, RetainSceneRequest,
         RetainedFontPositioning, RetainedFontRun,
     };
@@ -6407,7 +6407,7 @@ fn stop_active_previews(
 }
 
 fn retire_cpp_font_rush2_frames() {
-    use crate::r::font_kernel_service::FontKernelError;
+    use crate::r::services::font_kernel_service::FontKernelError;
 
     let mut retired = CPP_FONT_RUSH2_RETIRED.lock();
     let mut index = 0;
@@ -6834,7 +6834,7 @@ mod tests {
     #[test]
     fn static30_builds_bounded_lorem_canvas_layers() {
         let request = static30_font_stamp_request(320, 180, 7);
-        assert_eq!(request.fit, crate::r::font_kernel_service::FontStampFit::Canvas);
+        assert_eq!(request.fit, crate::r::services::font_kernel_service::FontStampFit::Canvas);
         assert_eq!(request.layers.len(), 2);
         assert!(request.layers.iter().all(|layer| {
             layer.scene.raster_width == 320
@@ -7020,7 +7020,7 @@ mod tests {
         }
         assert!(
             cpp_font_rush_glyph_count(3, true)
-                <= crate::r::font_plan_service::FONT_PLAN_MAX_CELLS_PER_BATCH
+                <= crate::r::services::font_plan_service::FONT_PLAN_MAX_CELLS_PER_BATCH
         );
     }
 
@@ -7046,9 +7046,9 @@ mod tests {
         assert_eq!(grid, (16, 4));
         assert_eq!(mirrored_glyphs, glyphs);
         assert_eq!(mirrored_grid, grid);
-        assert_eq!(first.parallelism(), crate::r::font_plan_service::FONT_PLAN_WORKER_COUNT);
+        assert_eq!(first.parallelism(), crate::r::services::font_plan_service::FONT_PLAN_WORKER_COUNT);
         assert_eq!(first.cells().len(), glyphs);
-        for worker in 0..crate::r::font_plan_service::FONT_PLAN_WORKER_COUNT {
+        for worker in 0..crate::r::services::font_plan_service::FONT_PLAN_WORKER_COUNT {
             let cells = &first.cells()[worker * 2..worker * 2 + 2];
             assert_eq!(cells[0].worker_affinity(), Some(worker as u8));
             assert_eq!(cells[1].worker_affinity(), Some(worker as u8));
@@ -7121,7 +7121,7 @@ mod tests {
 
     #[test]
     fn cpp_font_rush_showcase_builds_each_exact_white_source_once() {
-        use crate::r::font_kernel_service::{FontStampFit, RetainedFontPositioning};
+        use crate::r::services::font_kernel_service::{FontStampFit, RetainedFontPositioning};
 
         let title =
             cpp_font_rush_showcase_source_request(CppFontRushShowcaseSource::Title, 2_560, 1_440);

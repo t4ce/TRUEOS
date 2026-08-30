@@ -632,7 +632,7 @@ pub(crate) fn cursor_color(source: Ui4CursorSource) -> crate::graphics::primitiv
     // Otherwise the VLayer InputCombo owns the stable visual identity shared
     // by all independently clocked devices in that collection.
     if source.hid_kind == crate::r::cursor::HID_KIND_VIRTUAL_CURSOR
-        && let Some(color) = crate::r::mouse_motion_service::cursor_visual_color(source.slot_id)
+        && let Some(color) = crate::r::services::mouse_motion_service::cursor_visual_color(source.slot_id)
     {
         return color;
     }

@@ -314,13 +314,13 @@ async fn render_job(job: &PrintJob) -> Result<Vec<u8>, &'static str> {
         } => (*generation, *size, raw.clone()),
     };
     print2d::transition(job.id, PrintJobState::Rendering, "gridpaper-a4-100-percent");
-    if !crate::r::gridpaper_service::request_print_render(job.id, generation, size, raw) {
+    if !crate::r::services::gridpaper_service::request_print_render(job.id, generation, size, raw) {
         return Err("render-request-rejected");
     }
 
     let deadline = Instant::now() + Duration::from_millis(RENDER_TIMEOUT_MS);
     loop {
-        if let Some(rendered) = crate::r::gridpaper_service::take_print_render_result(job.id) {
+        if let Some(rendered) = crate::r::services::gridpaper_service::take_print_render_result(job.id) {
             let frame = rendered.result?;
             return pwg_raster::encode_gridpaper_a4(
                 size,

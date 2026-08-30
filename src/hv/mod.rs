@@ -2162,8 +2162,8 @@ pub fn eject(vm_id: u8) -> Result<bool, EjectError> {
     }
     clear_blueprint_lifecycle_capability(vm_id);
     let _ = crate::ai::lumen_service::close(vm_id);
-    let _ = crate::r::gridpaper_service::release_owner_lifecycle(vm_id);
-    let _ = crate::r::media_service::release_vm(vm_id);
+    let _ = crate::r::services::gridpaper_service::release_owner_lifecycle(vm_id);
+    let _ = crate::r::services::media_service::release_vm(vm_id);
     let _ = crate::ui4::release_owner_resources(crate::ui4::WindowOwner::Vm(vm_id));
     memory::clear_snapshot_state_for_vm(vm_id);
     let _ = memory::release_guest_hull_rw_for_vm(vm_id);
@@ -2303,7 +2303,7 @@ pub(crate) fn prepare_preserve_mode(vm_id: u8, mode: PreserveMode) -> Result<boo
             .store(crate::hv::store::current_committed_seq(vm_id), Ordering::Release);
         vm.pause_latched.store(true, Ordering::Release);
         suspend_blueprint_process_context(vm_id);
-        crate::r::gridpaper_service::pause_owner_lifecycle(vm_id);
+        crate::r::services::gridpaper_service::pause_owner_lifecycle(vm_id);
     }
 
     Ok(true)
@@ -2328,7 +2328,7 @@ pub fn mark_replicatable_resumed(vm_id: u8) {
             }
         }
         resume_blueprint_process_context(vm_id);
-        crate::r::gridpaper_service::resume_owner_lifecycle(vm_id);
+        crate::r::services::gridpaper_service::resume_owner_lifecycle(vm_id);
     }
 }
 
@@ -5557,14 +5557,14 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
     }
 
     if !vm.pause_latched.load(Ordering::Acquire) {
-        let gridpaper_released = crate::r::gridpaper_service::release_owner_lifecycle(vm_id);
+        let gridpaper_released = crate::r::services::gridpaper_service::release_owner_lifecycle(vm_id);
         if gridpaper_released != 0 {
             hvlogf(format_args!(
                 "hv: vm{} lifecycle: gridpaper cleanup released={}",
                 vm_id, gridpaper_released
             ));
         }
-        let media_released = crate::r::media_service::release_vm(vm_id);
+        let media_released = crate::r::services::media_service::release_vm(vm_id);
         if media_released != 0 {
             hvlogf(format_args!(
                 "hv: vm{} lifecycle: vmedia cleanup released_operations={}",
@@ -5582,14 +5582,14 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
                 released.context_menus,
             ));
         }
-        let cursors = crate::r::mouse_motion_service::release_principal(
-            crate::r::mouse_motion_service::MouseControlPrincipal::Vm(vm_id),
+        let cursors = crate::r::services::mouse_motion_service::release_principal(
+            crate::r::services::mouse_motion_service::MouseControlPrincipal::Vm(vm_id),
         );
-        let keyboards = crate::r::keyboard_control_service::release_principal(
-            crate::r::keyboard_control_service::KeyboardControlPrincipal::Vm(vm_id),
+        let keyboards = crate::r::services::keyboard_control_service::release_principal(
+            crate::r::services::keyboard_control_service::KeyboardControlPrincipal::Vm(vm_id),
         );
-        let gamepads = crate::r::gamepad_control_service::release_principal(
-            crate::r::gamepad_control_service::GamepadControlPrincipal::Vm(vm_id),
+        let gamepads = crate::r::services::gamepad_control_service::release_principal(
+            crate::r::services::gamepad_control_service::GamepadControlPrincipal::Vm(vm_id),
         );
         if cursors != 0 || keyboards != 0 || gamepads != 0 {
             hvlogf(format_args!(

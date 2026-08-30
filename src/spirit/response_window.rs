@@ -15,7 +15,7 @@ use embassy_sync::signal::Signal;
 use spin::Mutex;
 use trueos_time::{Duration, Instant, Timer, with_timeout};
 
-use crate::r::{
+use crate::r::services::{
     gridpaper_service::{KernelGridLease, KernelGridPresentation},
     keyboard_control_service::{
         KeyboardControlDevice, KeyboardControlPrincipal, cancel_program, keyboard_is_idle,
@@ -614,7 +614,7 @@ async fn wait_for_ready_presentation(
         if !input_run.is_live() {
             return Err("response-aborted");
         }
-        if let Some(presentation) = crate::r::gridpaper_service::kernel_grid_presentation(lease)
+        if let Some(presentation) = crate::r::services::gridpaper_service::kernel_grid_presentation(lease)
             && presentation.published_generation == generation
             && presentation_is_ready(presentation)
         {
@@ -769,7 +769,7 @@ async fn wait_for_grid_text_acceptance(
     let expected_cells = accepted_base.saturating_add(typed_cells);
     let deadline = Instant::now() + Duration::from_millis(GRID_TEXT_ACCEPT_TIMEOUT_MS);
     loop {
-        match crate::r::gridpaper_service::kernel_grid_accepted_text_cells(lease) {
+        match crate::r::services::gridpaper_service::kernel_grid_accepted_text_cells(lease) {
             Some(accepted) if accepted >= expected_cells => return Ok(()),
             Some(_) if Instant::now() < deadline => {
                 Timer::after(Duration::from_millis(RESPONSE_SERVICE_POLL_MS)).await;
@@ -789,7 +789,7 @@ async fn wait_for_grid_keyboard_edits(
     let expected_edits = accepted_base.saturating_add(edits);
     let deadline = Instant::now() + Duration::from_millis(STARTUP_WARMUP_READY_TIMEOUT_MS);
     loop {
-        match crate::r::gridpaper_service::kernel_grid_accepted_keyboard_edits(lease) {
+        match crate::r::services::gridpaper_service::kernel_grid_accepted_keyboard_edits(lease) {
             Some(accepted) if accepted >= expected_edits => return Ok(()),
             Some(_) if Instant::now() < deadline => {
                 Timer::after(Duration::from_millis(RESPONSE_SERVICE_POLL_MS)).await;
@@ -809,7 +809,7 @@ async fn wait_for_grid_published_keyboard_edits(
     let expected_edits = published_base.saturating_add(edits);
     let deadline = Instant::now() + Duration::from_millis(STARTUP_WARMUP_READY_TIMEOUT_MS);
     loop {
-        match crate::r::gridpaper_service::kernel_grid_published_keyboard_edits(lease) {
+        match crate::r::services::gridpaper_service::kernel_grid_published_keyboard_edits(lease) {
             Some(published) if published >= expected_edits => return Ok(()),
             Some(_) if Instant::now() < deadline => {
                 Timer::after(Duration::from_millis(RESPONSE_SERVICE_POLL_MS)).await;
@@ -823,7 +823,7 @@ async fn wait_for_grid_published_keyboard_edits(
 async fn request_spirit_grid() -> KernelGridLease {
     let mut last_error = None;
     loop {
-        match crate::r::gridpaper_service::request_spirit_response_grid(
+        match crate::r::services::gridpaper_service::request_spirit_response_grid(
             SPIRIT_FRAME_COLUMNS,
             SPIRIT_FRAME_ROWS,
             SPIRIT_GRID_SCALE_PERCENT,
@@ -856,7 +856,7 @@ async fn request_spirit_keyboard() -> KeyboardControlDevice {
             Ok(keyboard) => match super::lilly_cursor::bind_keyboard(keyboard.slot_id) {
                 Ok(()) => return keyboard,
                 Err(reason) => {
-                    let _ = crate::r::keyboard_control_service::release_keyboard(
+                    let _ = crate::r::services::keyboard_control_service::release_keyboard(
                         KeyboardControlPrincipal::Kernel,
                         keyboard.handle,
                     );
@@ -894,7 +894,7 @@ async fn wait_for_hidden_grid(
                 .iter()
                 .any(|snapshot| snapshot.id == window)
         });
-        if crate::r::gridpaper_service::kernel_grid_presentation(lease).is_none()
+        if crate::r::services::gridpaper_service::kernel_grid_presentation(lease).is_none()
             && !broker_window_live
         {
             return Ok(());
@@ -915,20 +915,20 @@ async fn run_visible_startup_warmup(
     // The greeting uses the embedded baseline face. Filesystem-backed future
     // faces warm independently and are not an admission dependency here.
     crate::intel::gpu_font::ensure_font_face_available(GpuFontFace::Default)?;
-    let generation = crate::r::gridpaper_service::reset_and_show_kernel_grid(lease)
+    let generation = crate::r::services::gridpaper_service::reset_and_show_kernel_grid(lease)
         .map_err(|_| "gridpaper-startup-reset")?;
     let input_run = SpiritGridInputRun::StartupWarmup;
     let presentation = wait_for_ready_presentation(lease, generation, input_run).await?;
     let greeting_publish_base = grid_window_publish_serial(presentation.window)
         .ok_or("gridpaper-startup-window-not-ready")?;
     focus_and_click_cell_zero(presentation, input_run).await?;
-    let text_accepted_base = crate::r::gridpaper_service::kernel_grid_accepted_text_cells(lease)
+    let text_accepted_base = crate::r::services::gridpaper_service::kernel_grid_accepted_text_cells(lease)
         .ok_or("gridpaper-startup-accept-counter-missing")?;
     let edit_accepted_base =
-        crate::r::gridpaper_service::kernel_grid_accepted_keyboard_edits(lease)
+        crate::r::services::gridpaper_service::kernel_grid_accepted_keyboard_edits(lease)
             .ok_or("gridpaper-startup-edit-counter-missing")?;
     let edit_published_base =
-        crate::r::gridpaper_service::kernel_grid_published_keyboard_edits(lease)
+        crate::r::services::gridpaper_service::kernel_grid_published_keyboard_edits(lease)
             .ok_or("gridpaper-startup-publish-counter-missing")?;
     let typed = type_response(keyboard, input_run, STARTUP_WARMUP_TEXT, true).await?;
     wait_for_grid_text_acceptance(lease, text_accepted_base, typed).await?;
@@ -952,10 +952,10 @@ async fn run_visible_startup_warmup(
     for _ in STARTUP_WARMUP_TEXT.chars() {
         backspaces.push('\u{0008}');
     }
-    let erase_edit_base = crate::r::gridpaper_service::kernel_grid_accepted_keyboard_edits(lease)
+    let erase_edit_base = crate::r::services::gridpaper_service::kernel_grid_accepted_keyboard_edits(lease)
         .ok_or("gridpaper-startup-edit-counter-missing")?;
     let erase_published_base =
-        crate::r::gridpaper_service::kernel_grid_published_keyboard_edits(lease)
+        crate::r::services::gridpaper_service::kernel_grid_published_keyboard_edits(lease)
             .ok_or("gridpaper-startup-publish-counter-missing")?;
     let erase_publish_base = wait_for_grid_window_acknowledged(presentation.window).await?;
     let backspace_count = type_response(keyboard, input_run, backspaces.as_str(), false).await?;
@@ -963,7 +963,7 @@ async fn run_visible_startup_warmup(
     wait_for_grid_published_keyboard_edits(lease, erase_published_base, backspace_count).await?;
     let erase_publish_serial =
         wait_for_grid_window_publish_after(presentation.window, erase_publish_base).await?;
-    crate::r::gridpaper_service::hide_kernel_grid(lease).map_err(|_| "gridpaper-startup-hide")?;
+    crate::r::services::gridpaper_service::hide_kernel_grid(lease).map_err(|_| "gridpaper-startup-hide")?;
     wait_for_hidden_grid(lease, presentation.window).await?;
     crate::log_info!(
         target: "gfx";
@@ -983,7 +983,7 @@ async fn present_claimed_response(
     keyboard: KeyboardControlDevice,
     request: ClaimedResponse,
 ) -> bool {
-    let generation = match crate::r::gridpaper_service::reset_and_show_kernel_grid(lease) {
+    let generation = match crate::r::services::gridpaper_service::reset_and_show_kernel_grid(lease) {
         Ok(generation) => generation,
         Err(error) => {
             crate::log_warn!(
@@ -1009,13 +1009,13 @@ async fn present_claimed_response(
                 reason,
             );
             cancel_response_keyboard(keyboard);
-            let _ = crate::r::gridpaper_service::hide_kernel_grid(lease);
+            let _ = crate::r::services::gridpaper_service::hide_kernel_grid(lease);
             return false;
         }
     };
     if !response_stream_is_live(request.id) {
         cancel_response_keyboard(keyboard);
-        let _ = crate::r::gridpaper_service::hide_kernel_grid(lease);
+        let _ = crate::r::services::gridpaper_service::hide_kernel_grid(lease);
         return false;
     }
     if let Err(reason) = focus_and_click_cell_zero(presentation, input_run).await {
@@ -1028,11 +1028,11 @@ async fn present_claimed_response(
             reason,
         );
         cancel_response_keyboard(keyboard);
-        let _ = crate::r::gridpaper_service::hide_kernel_grid(lease);
+        let _ = crate::r::services::gridpaper_service::hide_kernel_grid(lease);
         return false;
     }
 
-    let Some(accepted_base) = crate::r::gridpaper_service::kernel_grid_accepted_text_cells(lease)
+    let Some(accepted_base) = crate::r::services::gridpaper_service::kernel_grid_accepted_text_cells(lease)
     else {
         crate::log_warn!(
             target: "gfx";
@@ -1041,7 +1041,7 @@ async fn present_claimed_response(
             request.turn,
             presentation.window.raw(),
         );
-        let _ = crate::r::gridpaper_service::hide_kernel_grid(lease);
+        let _ = crate::r::services::gridpaper_service::hide_kernel_grid(lease);
         return false;
     };
 
@@ -1061,7 +1061,7 @@ async fn present_claimed_response(
                     request.turn,
                     presentation.window.raw(),
                 );
-                let _ = crate::r::gridpaper_service::hide_kernel_grid(lease);
+                let _ = crate::r::services::gridpaper_service::hide_kernel_grid(lease);
                 return false;
             }
             RESPONSE_WAKE.wait().await;
@@ -1079,7 +1079,7 @@ async fn present_claimed_response(
                 presentation.window.raw(),
                 typed,
             );
-            let _ = crate::r::gridpaper_service::hide_kernel_grid(lease);
+            let _ = crate::r::services::gridpaper_service::hide_kernel_grid(lease);
             return false;
         }
 
@@ -1096,7 +1096,7 @@ async fn present_claimed_response(
                 emitted.len(),
                 formatted.len(),
             );
-            let _ = crate::r::gridpaper_service::hide_kernel_grid(lease);
+            let _ = crate::r::services::gridpaper_service::hide_kernel_grid(lease);
             return false;
         };
         if !delta.is_empty() {
@@ -1131,7 +1131,7 @@ async fn present_claimed_response(
                         typed,
                         reason,
                     );
-                    let _ = crate::r::gridpaper_service::hide_kernel_grid(lease);
+                    let _ = crate::r::services::gridpaper_service::hide_kernel_grid(lease);
                     return false;
                 }
             }
@@ -1144,7 +1144,7 @@ async fn present_claimed_response(
         }
         let accepted = wait_for_grid_text_acceptance(lease, accepted_base, typed).await;
         match accepted.and_then(|()| {
-            crate::r::gridpaper_service::enable_spirit_response_rainbow_motion(lease)
+            crate::r::services::gridpaper_service::enable_spirit_response_rainbow_motion(lease)
                 .map_err(|_| "gridpaper-motion-enable")
         }) {
             Ok(animation_serial) => crate::log_info!(
@@ -1206,7 +1206,7 @@ pub(crate) async fn spirit_response_window_service_task(expected_slot: u32) {
     super::dobby_ui::release_response_io(keyboard);
     if let Err(reason) = startup_result {
         cancel_response_keyboard(keyboard);
-        let _ = crate::r::gridpaper_service::hide_kernel_grid(lease);
+        let _ = crate::r::services::gridpaper_service::hide_kernel_grid(lease);
         crate::log_warn!(
             target: "gfx";
             "trueos-spirit: startup Gridpaper warm incomplete reason={} action=hide+continue-response-service\n",
@@ -1234,7 +1234,7 @@ pub(crate) async fn spirit_response_window_service_task(expected_slot: u32) {
             // TODO(chat): replace this fixed reading timeout with an explicit
             // conversation/window lifecycle once chat history and dismissal
             // semantics are decided.
-            if let Err(error) = crate::r::gridpaper_service::hide_kernel_grid(lease) {
+            if let Err(error) = crate::r::services::gridpaper_service::hide_kernel_grid(lease) {
                 crate::log_warn!(
                     target: "gfx";
                     "trueos-spirit: response hide deferred id={} turn={} error={:?}\n",

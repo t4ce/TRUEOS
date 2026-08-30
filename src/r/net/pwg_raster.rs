@@ -5,9 +5,9 @@ extern crate alloc;
 use alloc::{vec, vec::Vec};
 
 const DPI: u32 = 300;
-const A4_WIDTH_TENTH_MM: u32 = crate::r::gridpaper_service::A4_WIDTH_MM * 10;
-const A4_HEIGHT_TENTH_MM: u32 = crate::r::gridpaper_service::A4_HEIGHT_MM * 10;
-const RULER_GUTTER_TENTH_MM: u32 = crate::r::gridpaper_service::RULER_GUTTER_MM * 10;
+const A4_WIDTH_TENTH_MM: u32 = crate::r::services::gridpaper_service::A4_WIDTH_MM * 10;
+const A4_HEIGHT_TENTH_MM: u32 = crate::r::services::gridpaper_service::A4_HEIGHT_MM * 10;
+const RULER_GUTTER_TENTH_MM: u32 = crate::r::services::gridpaper_service::RULER_GUTTER_MM * 10;
 const PAGE_HEADER_BYTES: usize = 1_796;
 const MAX_DOCUMENT_BYTES: usize = 7 * 1024 * 1024;
 
@@ -20,7 +20,7 @@ pub(crate) enum EncodeError {
 }
 
 pub(crate) fn encode_gridpaper_a4(
-    size: crate::r::gridpaper_service::GridSize,
+    size: crate::r::services::gridpaper_service::GridSize,
     source_width: u32,
     source_height: u32,
     rgba_premultiplied: &[u8],

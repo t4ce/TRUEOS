@@ -1,4 +1,4 @@
-use crate::r::media_service::{self, ImageInfo, RetainedTextureInfo};
+use crate::r::services::media_service::{self, ImageInfo, RetainedTextureInfo};
 
 #[inline]
 fn direct_owner() -> u32 {

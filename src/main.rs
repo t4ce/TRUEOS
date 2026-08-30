@@ -285,7 +285,7 @@ fn spawn_bsp_services(spawner: Spawner) {
             Err(e) => crate::log!("bsp-taskmon: reporter spawn failed err={:?}\n", e),
         }
     }
-    match crate::r::spawn_service::spawn_service_task(spawner) {
+    match crate::r::services::spawn_service::spawn_service_task(spawner) {
         Ok(token) => spawner.spawn(token),
         Err(e) => crate::log!("spawn-svc: spawn failed: {:?}\n", e),
     }

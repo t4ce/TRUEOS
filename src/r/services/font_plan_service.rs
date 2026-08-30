@@ -18,7 +18,7 @@ use trueos_executor::SpawnError;
 use trueos_time::{Duration as EmbassyDuration, Instant, Timer};
 
 use crate::intel::gpu_font::{GpuFontPreparedCenteredGlyph, GpuFontRgba};
-use crate::r::font_kernel_service::FontStampFit;
+use crate::r::services::font_kernel_service::FontStampFit;
 
 pub(crate) const FONT_PLAN_WORKER_COUNT: usize = 32;
 pub(crate) const FONT_PLAN_MAX_ACTIVE_BATCHES: usize = 4;
@@ -1172,7 +1172,7 @@ async fn font_plan_worker_task(worker_id: usize, expected_slot: u32, expected_ki
         || !crate::workers::is_general_background_worker_slot(actual_slot)
     {
         FONT_PLAN_ADMITTED_WORKERS.fetch_and(!bit, Ordering::AcqRel);
-        crate::r::spawn_service::retry_font_plan_pool_autostart();
+        crate::r::services::spawn_service::retry_font_plan_pool_autostart();
         crate::log_error!(
             target: "render";
             "font-plan-service: worker refused worker={} expected_slot={} actual_slot={} expected_kind={} actual_kind={} action=retry-complete-topology-placement\n",

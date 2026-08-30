@@ -28,7 +28,7 @@ use crate::intel::gpgpu::{
     sprite_quad_worklist_max_descs,
 };
 use crate::intel::gpu_font::{GpuFontFace, GpuFontRgba, MAX_DYNAMIC_TEXT_CHARS};
-use crate::r::font_kernel_service::{
+use crate::r::services::font_kernel_service::{
     FontKernelError, FontKernelRetainedScene, FontStampFit, FontStampLayer, FontStampRequest,
     FontStampedBuffer, PendingFontFrameStamp, PendingFontStamp, PendingRetainScene,
     RetainSceneRequest, RetainedFontPositioning, RetainedFontRun, submit_frame_stamp,
@@ -3502,7 +3502,7 @@ fn font_canvas_request(description: &BlueprintFontCanvasDescription) -> FontStam
             }
         })
         .collect::<Vec<_>>();
-    if let Ok(request) = crate::r::font_kernel_service::picasso_font_lookup_canvas_request(
+    if let Ok(request) = crate::r::services::font_kernel_service::picasso_font_lookup_canvas_request(
         lookup_rows.as_slice(),
         description.width,
         description.height,

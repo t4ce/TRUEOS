@@ -319,7 +319,7 @@ fn font_plan_pool_gate() -> bool {
 
 fn spawn_font_plan_pool(spawner: Spawner) -> SpawnAttempt {
     let _ = spawner;
-    spawn_bool_result_to_attempt(crate::r::font_plan_service::start_font_plan_workers())
+    spawn_bool_result_to_attempt(crate::r::services::font_plan_service::start_font_plan_workers())
 }
 
 pub(crate) fn retry_font_plan_pool_autostart() {
@@ -330,7 +330,7 @@ fn spawn_font_kernel_service(spawner: Spawner) -> SpawnAttempt {
     // This task is only the asynchronous queue controller. CPU font warming
     // and synchronous GPU retirement polling are dispatched through leased
     // blocking-service lanes, so a VM cannot strand the request pump.
-    spawn_local(spawner, |_spawner| crate::r::font_kernel_service::font_kernel_service_task())
+    spawn_local(spawner, |_spawner| crate::r::services::font_kernel_service::font_kernel_service_task())
 }
 
 pub(crate) fn retry_font_warm_pool_autostart() {
@@ -438,7 +438,7 @@ fn spawn_vmedia_service(spawner: Spawner) -> SpawnAttempt {
     for (worker_id, (worker_slot, core_kind, worker_spawner)) in
         worker_spawners.into_iter().enumerate()
     {
-        match crate::r::media_service::worker_task(worker_id, worker_slot, core_kind) {
+        match crate::r::services::media_service::worker_task(worker_id, worker_slot, core_kind) {
             Ok(token) => {
                 worker_spawner.spawn(token);
                 spawned = spawned.saturating_add(1);
@@ -727,12 +727,12 @@ fn spawn_helio_game(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_gridpaper_service(spawner: Spawner) -> SpawnAttempt {
     spawn_on_worker(spawner, |_worker_spawner| {
-        crate::r::gridpaper_service::gridpaper_service_task()
+        crate::r::services::gridpaper_service::gridpaper_service_task()
     })
 }
 
 fn spawn_hid_udp_srv(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |_spawner| crate::r::hid_udp_srv::hid_udp_srv_task())
+    spawn_local(spawner, |_spawner| crate::r::services::hid_udp_service::hid_udp_srv_task())
 }
 
 fn spawn_logtotcp(spawner: Spawner) -> SpawnAttempt {
@@ -843,19 +843,19 @@ fn spawn_spirit_response_window_task(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_mouse_motion_service_task(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ap1_ui_core(spawner, |_ap1_spawner| {
-        crate::r::mouse_motion_service::mouse_motion_service_task()
+        crate::r::services::mouse_motion_service::mouse_motion_service_task()
     })
 }
 
 fn spawn_keyboard_control_service_task(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ap1_ui_core(spawner, |_ap1_spawner| {
-        crate::r::keyboard_control_service::keyboard_control_service_task()
+        crate::r::services::keyboard_control_service::keyboard_control_service_task()
     })
 }
 
 fn spawn_gamepad_control_service_task(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ap1_ui_core(spawner, |_ap1_spawner| {
-        crate::r::gamepad_control_service::gamepad_control_service_task()
+        crate::r::services::gamepad_control_service::gamepad_control_service_task()
     })
 }
 

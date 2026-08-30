@@ -7,7 +7,7 @@
 use spin::Mutex;
 
 use crate::graphics::primitives::Rgba8;
-use crate::r::mouse_motion_service::{
+use crate::r::services::mouse_motion_service::{
     MOUSE_CONTROL_EASING_LINEAR, MOUSE_CONTROL_EASING_NATURAL, MOUSE_CONTROL_FLAG_CLEAR_QUEUE,
     MOUSE_CONTROL_OPCODE_BUTTONS, MOUSE_CONTROL_OPCODE_STROKE, MOUSE_CONTROL_PATH_LINE,
     MOUSE_CONTROL_PATH_QUADRATIC, MouseControlCommand, MouseControlCursor, MouseControlError,
@@ -42,7 +42,7 @@ impl LillyCursorState {
         if let Some(cursor) = self.cursor {
             return Ok(cursor);
         }
-        let cursor = crate::r::mouse_motion_service::request_cursor(
+        let cursor = crate::r::services::mouse_motion_service::request_cursor(
             MouseControlPrincipal::Kernel,
             LILLY_CURSOR_LABEL,
             Some(LILLY_CURSOR_COLOR),
@@ -99,7 +99,7 @@ pub(super) fn queue_window_approach(
         state.initial_outline_queued = true;
         cursor
     };
-    let (from_x, from_y) = crate::r::mouse_motion_service::cursor_position(
+    let (from_x, from_y) = crate::r::services::mouse_motion_service::cursor_position(
         MouseControlPrincipal::Kernel,
         cursor.handle,
     )?;
@@ -146,7 +146,7 @@ pub(super) fn queue_window_approach(
         control1_y: control_y,
         ..MouseControlCommand::default()
     };
-    crate::r::mouse_motion_service::submit_command(
+    crate::r::services::mouse_motion_service::submit_command(
         MouseControlPrincipal::Kernel,
         cursor.handle,
         command,
@@ -170,7 +170,7 @@ pub(super) fn queue_window_approach(
 
 pub(super) fn window_approach_complete() -> Result<bool, MouseControlError> {
     let cursor = register_once()?;
-    crate::r::mouse_motion_service::cursor_is_idle(MouseControlPrincipal::Kernel, cursor.handle)
+    crate::r::services::mouse_motion_service::cursor_is_idle(MouseControlPrincipal::Kernel, cursor.handle)
 }
 
 /// Bind Spirit's cursor and keyboard into one AI HUT combo. This keeps Lilly's
@@ -208,7 +208,7 @@ pub(super) fn queue_primary_click() -> Result<(), MouseControlError> {
             ..MouseControlCommand::default()
         },
     ];
-    crate::r::mouse_motion_service::submit_program(
+    crate::r::services::mouse_motion_service::submit_program(
         MouseControlPrincipal::Kernel,
         cursor.handle,
         &program,
@@ -240,7 +240,7 @@ pub(super) fn queue_pointer_action(
         return Err(MouseControlError::Invalid);
     }
     let cursor = register_once()?;
-    let (from_x, from_y) = crate::r::mouse_motion_service::cursor_position(
+    let (from_x, from_y) = crate::r::services::mouse_motion_service::cursor_position(
         MouseControlPrincipal::Kernel,
         cursor.handle,
     )?;
@@ -312,14 +312,14 @@ pub(super) fn queue_pointer_action(
             }
             click_index += 1;
         }
-        crate::r::mouse_motion_service::submit_program(
+        crate::r::services::mouse_motion_service::submit_program(
             MouseControlPrincipal::Kernel,
             cursor.handle,
             &click_program[..command_count],
         )?;
         return Ok(duration_ms);
     }
-    let buttons_down = crate::r::mouse_motion_service::cursor_buttons(
+    let buttons_down = crate::r::services::mouse_motion_service::cursor_buttons(
         MouseControlPrincipal::Kernel,
         cursor.handle,
     )?;
@@ -330,7 +330,7 @@ pub(super) fn queue_pointer_action(
         ..MouseControlCommand::default()
     };
     if button_command.buttons_set == 0 && button_command.buttons_clear == 0 {
-        crate::r::mouse_motion_service::submit_program(
+        crate::r::services::mouse_motion_service::submit_program(
             MouseControlPrincipal::Kernel,
             cursor.handle,
             core::slice::from_ref(&move_command),
@@ -338,7 +338,7 @@ pub(super) fn queue_pointer_action(
         return Ok(duration_ms);
     }
     let move_and_button_program = [button_command, move_command];
-    crate::r::mouse_motion_service::submit_program(
+    crate::r::services::mouse_motion_service::submit_program(
         MouseControlPrincipal::Kernel,
         cursor.handle,
         &move_and_button_program,
@@ -372,7 +372,7 @@ pub(super) fn queue_window_outline(
         stroke(left, bottom, LILLY_OUTLINE_EDGE_MS, MOUSE_CONTROL_EASING_LINEAR, false),
         stroke(left, top, LILLY_OUTLINE_EDGE_MS, MOUSE_CONTROL_EASING_LINEAR, false),
     ];
-    crate::r::mouse_motion_service::submit_program(
+    crate::r::services::mouse_motion_service::submit_program(
         MouseControlPrincipal::Kernel,
         cursor.handle,
         &program,
@@ -425,7 +425,7 @@ pub(super) fn queue_initial_outline_once(
         stroke(left, bottom, LILLY_OUTLINE_EDGE_MS, MOUSE_CONTROL_EASING_LINEAR, false),
         stroke(left, top, LILLY_OUTLINE_EDGE_MS, MOUSE_CONTROL_EASING_LINEAR, false),
     ];
-    crate::r::mouse_motion_service::submit_program(
+    crate::r::services::mouse_motion_service::submit_program(
         MouseControlPrincipal::Kernel,
         cursor.handle,
         &program,

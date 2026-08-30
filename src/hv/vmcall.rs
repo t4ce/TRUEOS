@@ -2659,7 +2659,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         }
         OP_BP_VMEDIA_IMAGE_DECODE_BEGIN => {
             let owner = crate::r::io::async_fs_cabi::owner_for_vm(vm_id);
-            let rc = crate::r::media_service::begin(owner, arg0 as u32, arg1 as usize);
+            let rc = crate::r::services::media_service::begin(owner, arg0 as u32, arg1 as usize);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
@@ -2667,7 +2667,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             let owner = crate::r::io::async_fs_cabi::owner_for_vm(vm_id);
             let format = (arg1 >> 32) as u32;
             let total_len = arg1 as u32 as usize;
-            let rc = crate::r::media_service::begin_retained(owner, arg0, format, total_len);
+            let rc = crate::r::services::media_service::begin_retained(owner, arg0, format, total_len);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
@@ -2677,25 +2677,25 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 return DispatchOutcome::Resume;
             };
             let owner = crate::r::io::async_fs_cabi::owner_for_vm(vm_id);
-            let rc = crate::r::media_service::write(owner, arg0 as u32, arg1 as usize, payload);
+            let rc = crate::r::services::media_service::write(owner, arg0 as u32, arg1 as usize, payload);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_VMEDIA_IMAGE_DECODE_COMMIT => {
             let owner = crate::r::io::async_fs_cabi::owner_for_vm(vm_id);
-            let rc = crate::r::media_service::commit(owner, arg0 as u32);
+            let rc = crate::r::services::media_service::commit(owner, arg0 as u32);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_VMEDIA_IMAGE_DECODE_STATUS => {
             let owner = crate::r::io::async_fs_cabi::owner_for_vm(vm_id);
-            let rc = crate::r::media_service::status(owner, arg0 as u32);
+            let rc = crate::r::services::media_service::status(owner, arg0 as u32);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_VMEDIA_IMAGE_DECODE_INFO => {
             let owner = crate::r::io::async_fs_cabi::owner_for_vm(vm_id);
-            match crate::r::media_service::info(owner, arg0 as u32) {
+            match crate::r::services::media_service::info(owner, arg0 as u32) {
                 Ok(info) => write_record_response(vm_id, seq, 0, &info),
                 Err(error) => write_response(vm_id, seq, STATUS_OK, (error as i64) as u64, 0),
             }
@@ -2703,7 +2703,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         }
         OP_BP_VMEDIA_TEXTURE_DECODE_INFO => {
             let owner = crate::r::io::async_fs_cabi::owner_for_vm(vm_id);
-            match crate::r::media_service::retained_info(owner, arg0 as u32) {
+            match crate::r::services::media_service::retained_info(owner, arg0 as u32) {
                 Ok(info) => write_record_response(vm_id, seq, 0, &info),
                 Err(error) => write_response(vm_id, seq, STATUS_OK, (error as i64) as u64, 0),
             }
@@ -2718,7 +2718,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                     vm_id,
                     seq,
                     STATUS_OK,
-                    (crate::r::media_service::ERR_INVALID as i64) as u64,
+                    (crate::r::services::media_service::ERR_INVALID as i64) as u64,
                     0,
                 );
                 return DispatchOutcome::Resume;
@@ -2728,7 +2728,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 return DispatchOutcome::Resume;
             };
             let out = unsafe { &mut (&mut (*p).payload)[..capacity] };
-            match crate::r::media_service::read(owner, arg0 as u32, offset, out) {
+            match crate::r::services::media_service::read(owner, arg0 as u32, offset, out) {
                 Ok(copied) => write_response(vm_id, seq, STATUS_OK, copied as u64, copied as u32),
                 Err(error) => write_response(vm_id, seq, STATUS_OK, (error as i64) as u64, 0),
             }
@@ -2736,13 +2736,13 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         }
         OP_BP_VMEDIA_IMAGE_DECODE_DISCARD => {
             let owner = crate::r::io::async_fs_cabi::owner_for_vm(vm_id);
-            let rc = crate::r::media_service::discard(owner, arg0 as u32);
+            let rc = crate::r::services::media_service::discard(owner, arg0 as u32);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_VMEDIA_TEXTURE_RELEASE => {
             let owner = crate::r::io::async_fs_cabi::owner_for_vm(vm_id);
-            let rc = crate::r::media_service::release_retained(owner, arg0, arg1);
+            let rc = crate::r::services::media_service::release_retained(owner, arg0, arg1);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
@@ -2803,12 +2803,12 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 return DispatchOutcome::Resume;
             };
-            let rc = if arg1 & crate::r::gridpaper_service::SIZED_SNAPSHOT_VMCALL_MARKER != 0 {
+            let rc = if arg1 & crate::r::services::gridpaper_service::SIZED_SNAPSHOT_VMCALL_MARKER != 0 {
                 let instance_id = ((arg1 >> 32) & 0x7fff_ffff) as u32;
                 let rows = ((arg1 >> 24) & 0xff) as u32;
                 let columns = ((arg1 >> 16) & 0xff) as u32;
                 let scale_percent = (arg1 & 0xffff) as u32;
-                crate::r::gridpaper_service::submit_sized_snapshot_for_owner(
+                crate::r::services::gridpaper_service::submit_sized_snapshot_for_owner(
                     vm_id,
                     instance_id,
                     arg0,
@@ -2820,7 +2820,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             } else {
                 let instance_id = (arg1 >> 32) as u32;
                 let scale_percent = arg1 as u32;
-                crate::r::gridpaper_service::submit_snapshot_for_owner(
+                crate::r::services::gridpaper_service::submit_snapshot_for_owner(
                     vm_id,
                     instance_id,
                     arg0,
@@ -2837,11 +2837,11 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 return DispatchOutcome::Resume;
             };
             let out =
-                unsafe { &mut (&mut (*page).payload)[..crate::r::gridpaper_service::PAGE_BYTES] };
+                unsafe { &mut (&mut (*page).payload)[..crate::r::services::gridpaper_service::PAGE_BYTES] };
             let rc =
-                crate::r::gridpaper_service::checkpoint_snapshot_for_owner(vm_id, arg0 as u32, out);
+                crate::r::services::gridpaper_service::checkpoint_snapshot_for_owner(vm_id, arg0 as u32, out);
             let len = if rc == 0 {
-                crate::r::gridpaper_service::PAGE_BYTES as u32
+                crate::r::services::gridpaper_service::PAGE_BYTES as u32
             } else {
                 0
             };
@@ -2853,7 +2853,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 return DispatchOutcome::Resume;
             };
-            let rc = crate::r::gridpaper_service::submit_text_animations_for_owner(
+            let rc = crate::r::services::gridpaper_service::submit_text_animations_for_owner(
                 vm_id,
                 arg0 as u32,
                 payload,
@@ -2862,13 +2862,13 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_GRIDPAPER_CLOSE => {
-            let rc = crate::r::gridpaper_service::close_owner(vm_id, arg0 as u32);
+            let rc = crate::r::services::gridpaper_service::close_owner(vm_id, arg0 as u32);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_GRIDPAPER_PRINT_REQUEST_TAKE => {
             let packed =
-                crate::r::gridpaper_service::take_print_request_for_owner(vm_id, arg0 as u32)
+                crate::r::services::gridpaper_service::take_print_request_for_owner(vm_id, arg0 as u32)
                     .map(|(token, _generation)| u64::from(token))
                     .unwrap_or(0);
             write_response(vm_id, seq, STATUS_OK, packed, 0);
