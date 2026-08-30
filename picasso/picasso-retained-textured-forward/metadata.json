@@ -77,7 +77,7 @@
       }
     }
   ],
-  "fragment_proof": "byte-identical-heliov-adls-simd16-sampler",
+  "fragment_proof": "byte-identical-picasso-immediate-texture-simd16-sampler",
   "frontend": "wgsl-via-checked-in-naga-wrapper",
   "native_bytes": {
     "ps16": 160,

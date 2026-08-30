@@ -110,10 +110,10 @@ pub(crate) fn triangle_pipeline_simd16() -> &'static TrianglePipeline {
     generated_triangle::triangle_pipeline_simd16()
 }
 
-// Reproducibly baked by tools/heliov-texture-shader-bake from the exact WGSL
-// admitted by the public VMX shader-module digest. This is an authenticated
-// WGPU interface package, not application dispatch logic.
-static HELIOV_TEXTURED_VS: [u32; 44] = [
+// Reproducibly baked by tools/picasso-immediate-texture-bake from the exact
+// WGSL admitted by the public VMX shader-module digest. This is an
+// authenticated Picasso driver package, not application dispatch logic.
+static PICASSO_TEXTURED_VS: [u32; 44] = [
     0x00030061, 0x07054220, 0x00000000, 0x00000000, 0x00030061, 0x08054220, 0x00000000, 0x00000000,
     0x00030061, 0x09054220, 0x00000000, 0x00000000, 0x00030061, 0x0a054220, 0x00000000, 0x00000000,
     0x610b0061, 0x00100200, 0x610c0061, 0x00120300, 0x610d0061, 0x00100400, 0xa10e0061, 0x3f810000,
@@ -122,7 +122,7 @@ static HELIOV_TEXTURED_VS: [u32; 44] = [
     0x00030131, 0x00000004, 0x604e7f0c, 0x02007b24,
 ];
 
-static HELIOV_TEXTURED_PS_SIMD16: [u32; 40] = [
+static PICASSO_TEXTURED_PS_SIMD16: [u32; 40] = [
     0x640b0061, 0x00100200, 0x640c0061, 0x00100400, 0x64000061, 0x00100300, 0x64010061, 0x00100500,
     0x80000101, 0x00000000, 0x00000000, 0x00000000, 0x0004005b, 0x020402a0, 0x02020664, 0x00050624,
     0x0004005b, 0x070402a0, 0x020206e4, 0x000506a4, 0x80000201, 0x00000000, 0x00000000, 0x00000000,
@@ -130,12 +130,11 @@ static HELIOV_TEXTURED_PS_SIMD16: [u32; 40] = [
     0x80002001, 0x00000000, 0x00000000, 0x00000000, 0x00040132, 0x00000004, 0x50007844, 0x00c40000,
 ];
 
-// Diagnostic rung baked from apps/HelioV/src/texture_probe_load.wgsl. Unlike
-// the material shader above, this emits `ld_lz`: no implicit derivatives and
-// no filtering. Keeping it as a separate authenticated package lets a
-// bare-metal run decide whether the failure is in sampled-surface access or in
-// the higher-level filtered pixel contract.
-static HELIOV_TEXEL_LOAD_PS_SIMD16: [u32; 64] = [
+// Diagnostic rung baked from Picasso's fixed-texel-load probe. Unlike the
+// material shader above, this emits `ld_lz`: no implicit derivatives and no
+// filtering. Keeping it separate isolates sampled-surface access from the
+// higher-level filtered pixel contract.
+static PICASSO_TEXEL_LOAD_PS_SIMD16: [u32; 64] = [
     0x641e0061, 0x00100200, 0x641f0061, 0x00100400, 0x64000061, 0x00100300, 0x64010061, 0x00100500,
     0x80000101, 0x00000000, 0x00000000, 0x00000000, 0x0004005b, 0x020402a0, 0x02020664, 0x00050624,
     0x0004005b, 0x070402a0, 0x020206e4, 0x000506a4, 0x80000201, 0x00000000, 0x00000000, 0x00000000,
@@ -146,9 +145,9 @@ static HELIOV_TEXEL_LOAD_PS_SIMD16: [u32; 64] = [
     0x80002001, 0x00000000, 0x00000000, 0x00000000, 0x00040132, 0x00000004, 0x50007844, 0x00c40000,
 ];
 
-static HELIOV_TEXTURED_PIPELINE: TrianglePipeline = TrianglePipeline {
+static PICASSO_TEXTURED_PIPELINE: TrianglePipeline = TrianglePipeline {
     vs: TriangleVertexShader {
-        code: &HELIOV_TEXTURED_VS,
+        code: &PICASSO_TEXTURED_VS,
         meta: TriangleVertexShaderMetadata {
             kernel: ShaderKernelMetadata {
                 code_offset_bytes: 0,
@@ -167,7 +166,7 @@ static HELIOV_TEXTURED_PIPELINE: TrianglePipeline = TrianglePipeline {
         },
     },
     ps: TrianglePixelShader {
-        code: &HELIOV_TEXTURED_PS_SIMD16,
+        code: &PICASSO_TEXTURED_PS_SIMD16,
         meta: TrianglePixelShaderMetadata {
             kernel: ShaderKernelMetadata {
                 code_offset_bytes: 192,
@@ -194,14 +193,14 @@ static HELIOV_TEXTURED_PIPELINE: TrianglePipeline = TrianglePipeline {
     },
 };
 
-pub(crate) fn heliov_textured_pipeline() -> &'static TrianglePipeline {
-    &HELIOV_TEXTURED_PIPELINE
+pub(crate) fn picasso_filtered_texture_pipeline() -> &'static TrianglePipeline {
+    &PICASSO_TEXTURED_PIPELINE
 }
 
-static HELIOV_TEXEL_LOAD_PIPELINE: TrianglePipeline = TrianglePipeline {
-    vs: HELIOV_TEXTURED_PIPELINE.vs,
+static PICASSO_TEXEL_LOAD_PIPELINE: TrianglePipeline = TrianglePipeline {
+    vs: PICASSO_TEXTURED_PIPELINE.vs,
     ps: TrianglePixelShader {
-        code: &HELIOV_TEXEL_LOAD_PS_SIMD16,
+        code: &PICASSO_TEXEL_LOAD_PS_SIMD16,
         meta: TrianglePixelShaderMetadata {
             kernel: ShaderKernelMetadata {
                 code_offset_bytes: 192,
@@ -225,17 +224,19 @@ static HELIOV_TEXEL_LOAD_PIPELINE: TrianglePipeline = TrianglePipeline {
     },
 };
 
-pub(crate) fn heliov_texel_load_pipeline() -> &'static TrianglePipeline {
-    &HELIOV_TEXEL_LOAD_PIPELINE
+pub(crate) fn picasso_fixed_texel_load_pipeline() -> &'static TrianglePipeline {
+    &PICASSO_TEXEL_LOAD_PIPELINE
 }
 
 #[cfg(test)]
-mod heliov_textured_pipeline_tests {
-    use super::{DispatchMode, heliov_texel_load_pipeline, heliov_textured_pipeline};
+mod picasso_textured_pipeline_tests {
+    use super::{
+        DispatchMode, picasso_filtered_texture_pipeline, picasso_fixed_texel_load_pipeline,
+    };
 
     #[test]
     fn uses_the_adls_standalone_simd16_pixel_contract() {
-        let pipeline = heliov_textured_pipeline();
+        let pipeline = picasso_filtered_texture_pipeline();
         assert!(matches!(pipeline.ps.meta.kernel.dispatch_mode, DispatchMode::Simd16));
         assert_eq!(pipeline.ps.meta.kernel.code_size_bytes, 160);
         assert_eq!(pipeline.ps.meta.kernel.sampler_count, 1);
@@ -244,8 +245,8 @@ mod heliov_textured_pipeline_tests {
 
     #[test]
     fn fixed_texel_probe_is_a_distinct_simd16_sampler_package() {
-        let filtered = heliov_textured_pipeline();
-        let fixed = heliov_texel_load_pipeline();
+        let filtered = picasso_filtered_texture_pipeline();
+        let fixed = picasso_fixed_texel_load_pipeline();
         assert!(matches!(fixed.ps.meta.kernel.dispatch_mode, DispatchMode::Simd16));
         assert_eq!(fixed.ps.meta.kernel.code_size_bytes, 256);
         assert_eq!(fixed.ps.meta.kernel.sampler_count, 1);

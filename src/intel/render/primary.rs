@@ -1480,10 +1480,10 @@ fn stage_resident_scene_secondary(
             crate::intel::shader::triangle_pipeline_simd16()
         }
         (ResidentSceneFragmentContract::FilteredSample, true) => {
-            crate::intel::shader::heliov_textured_pipeline()
+            crate::intel::shader::picasso_filtered_texture_pipeline()
         }
         (ResidentSceneFragmentContract::FixedTexelLoadProbe, true) => {
-            crate::intel::shader::heliov_texel_load_pipeline()
+            crate::intel::shader::picasso_fixed_texel_load_pipeline()
         }
         _ => return Err("scene-fragment-contract-texture-mismatch"),
     };

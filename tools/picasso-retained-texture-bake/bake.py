@@ -20,7 +20,7 @@ BAKER_PATH = TRUEOS / "tools/helio-intel-bake/bake.py"
 WGSL = Path(__file__).resolve().parent / "shaders/retained_textured_forward.wgsl"
 OUT = TRUEOS / "picasso/picasso-retained-textured-forward"
 PROVEN_ADLS_TEXTURE_PS = (
-    TRUEOS / "picasso/heliov-textured-mesh/voxel_textured.ps.simd16.bin"
+    TRUEOS / "picasso/picasso-immediate-texture/immediate_textured.ps.simd16.bin"
 )
 
 
@@ -216,7 +216,7 @@ def main() -> None:
             "executables": list(executables.values()),
             "vertex_stride": 32,
             "runtime_dispatch": {"vertex": "simd8", "fragment": "simd16"},
-            "fragment_proof": "byte-identical-heliov-adls-simd16-sampler",
+            "fragment_proof": "byte-identical-picasso-immediate-texture-simd16-sampler",
             "storage_attributes": ["float32x3@0", "float32x3@12", "float32x2@24"],
             "shader_attributes": ["float32x3@0", "float32x2@24"],
             "bindings": [

@@ -1,6 +1,3 @@
-// This authenticated diagnostic package proves a fixed mip-0 texel fetch
-// without relying on implicit derivatives or filtering. It is separate from
-// Picasso's filtered sampled-material path.
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
@@ -25,7 +22,5 @@ fn vs_main(
 
 @fragment
 fn fs_main(input: VertexOutput) -> @location(0) vec4<f32> {
-    let wrapped_uv = fract(input.uv);
-    let texel = vec2<i32>(wrapped_uv * vec2<f32>(16.0, 16.0));
-    return textureLoad(base_color_texture, texel, 0);
+    return textureSample(base_color_texture, base_color_sampler, input.uv);
 }

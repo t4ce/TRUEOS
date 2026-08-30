@@ -39,7 +39,7 @@ pub const BUFFER_INFO_FLAG_VVIDEO_MEM: u32 = 1 << 0;
 pub const SURFACE_FORMAT_RGBA8_UNORM_SRGB: u32 = 1;
 /// Authenticated AOT package backing the first WGPU graphics-module contract.
 /// The value is the stable FNV-1a digest of the exact WGSL accepted by the
-/// HelioV adapter, not an application/demo selector.
+/// Picasso renderer adapter, not an application/demo selector.
 pub const SHADER_PACKAGE_CLIP_POSITION3_RGBA_FNV1A64: u64 = 0x1438_5963_136A_A36F;
 /// Authenticated position-only package whose fragment color is supplied as
 /// one `vec4<f32>` block of WGPU immediate data for each indexed draw.

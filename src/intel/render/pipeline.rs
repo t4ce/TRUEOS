@@ -36,7 +36,7 @@ const fn sbe_swiz_payload(artifact_native_fixed_function: bool, native_sampled: 
 /// 3DSTATE_WM barycentric interpolation payload required by a fragment
 /// executable with user varyings.
 ///
-/// This follows the pixel-shader ABI, not the draw-source kind. HelioV's
+/// This follows the pixel-shader ABI, not the draw-source kind. Picasso's
 /// sampled shader is an ordinary VF-fed draw, but it consumes one perspective
 /// UV varying just as the artifact-native Churn shader consumes its inputs.
 const fn wm_barycentric_mode(num_varying_inputs: u8, force_barycentric_planes: bool) -> u32 {
@@ -2128,7 +2128,7 @@ fn encode_triangle_probe_batch(
     // Mesa's simple-shader path emits a nearly all-default WM packet here.
     // Keep this dedicated triangle path equally boring rather than forcing
     // point-rule / line-AA bits that the host reference never asked for.
-    // Program interpolation from the fragment executable ABI. HelioV's
+    // Program interpolation from the fragment executable ABI. Picasso's
     // sampled shader is not an artifact-native Churn draw, but it still reads
     // a perspective UV varying and therefore needs the same pixel payload.
     let wm_barycentric_mode = wm_barycentric_mode(

@@ -7,7 +7,7 @@
     "sampled-rgba8-2d@0",
     "sampler@1"
   ],
-  "contract": "filtered-sample",
+  "contract": "picasso-immediate-filtered-sample",
   "device": {
     "device_id": 42880,
     "name": "Intel(R) Graphics (RPL-S)",

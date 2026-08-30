@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bake HelioV's exact WGPU textured-mesh shader to authenticated Intel ISA."""
+"""Bake Picasso's immediate sampled-texture shader to authenticated Intel ISA."""
 
 from __future__ import annotations
 
@@ -14,17 +14,15 @@ import tempfile
 
 
 TRUEOS = Path(__file__).resolve().parents[2]
-HELIO = TRUEOS.parent / "Helio"
-BLUEPRINTS = TRUEOS.parent / "TRUEOS-Blueprints"
-DEFAULT_WGSL = BLUEPRINTS / "apps/HelioV/src/voxel_textured.wgsl"
-DEFAULT_OUT = TRUEOS / "picasso/heliov-textured-mesh"
+DEFAULT_WGSL = Path(__file__).resolve().parent / "shaders/immediate_textured.wgsl"
+DEFAULT_OUT = TRUEOS / "picasso/picasso-immediate-texture"
 BAKER_PATH = TRUEOS / "tools/helio-intel-bake/bake.py"
 
 
 def load_baker():
-    spec = importlib.util.spec_from_file_location("trueos_helio_baker", BAKER_PATH)
+    spec = importlib.util.spec_from_file_location("trueos_shader_baker", BAKER_PATH)
     if spec is None or spec.loader is None:
-        raise SystemExit("cannot load Helio Intel baker")
+        raise SystemExit("cannot load TRUEOS Intel shader baker")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
@@ -38,11 +36,11 @@ def replace_once(source: str, old: str, new: str) -> str:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Bake one authenticated HelioV texture shader package",
+        description="Bake the authenticated Picasso immediate-texture package",
     )
     parser.add_argument("--wgsl", type=Path, default=DEFAULT_WGSL)
     parser.add_argument("--out", type=Path, default=DEFAULT_OUT)
-    parser.add_argument("--stem", default="voxel_textured")
+    parser.add_argument("--stem", default="immediate_textured")
     parser.add_argument(
         "--contract",
         default="filtered-sample",
@@ -58,7 +56,7 @@ def main() -> None:
     if not wgsl.is_file():
         raise SystemExit(f"missing WGSL source: {wgsl}")
     baker = load_baker()
-    with tempfile.TemporaryDirectory(prefix="heliov-texture-bake-") as raw:
+    with tempfile.TemporaryDirectory(prefix="picasso-immediate-texture-bake-") as raw:
         work = Path(raw)
         vs_spv = work / f"{args.stem}.vs.spv"
         fs_spv = work / f"{args.stem}.fs.spv"
