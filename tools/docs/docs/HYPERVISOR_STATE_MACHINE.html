@@ -530,7 +530,7 @@
                 <rect width="174" height="55" rx="10"/>
                 <circle class="status-led" cx="157" cy="17" r="3"/>
                 <text class="name" x="13" y="21">F2 Apps / Shell2</text>
-                <text class="detail" x="13" y="39">pause · snapshot · load · stop</text>
+                <text class="detail" x="13" y="39">14 Apps commands · warm + disk state</text>
               </g>
               <g class="component" data-component="admission" tabindex="0" transform="translate(58 207)">
                 <rect width="174" height="55" rx="10"/>
@@ -554,7 +554,7 @@
                 <rect width="174" height="55" rx="10"/>
                 <circle class="status-led" cx="157" cy="17" r="3"/>
                 <text class="name" x="13" y="21">Checkpoint store</text>
-                <text class="detail" x="13" y="39">per-slot snapshot index · v3</text>
+                <text class="detail" x="13" y="39">warm Arc · snapshot v5 · named disk images</text>
               </g>
               <g class="component" data-component="trueosfs" tabindex="0" transform="translate(58 483)">
                 <rect width="174" height="55" rx="10"/>
@@ -882,7 +882,7 @@
           </div>
           <div class="doc-content">
             <h3>Retain locally; snapshot deliberately; rebind reality.</h3>
-            <p>A cooperative <code>pause</code> retains the quiesced VM in memory without writing the checkpoint store. <code>snapshot &lt;vmid&gt;</code> uses the same <code>PreparePause → Ready</code> boundary and then commits snapshot v3 under that VM ID. Numeric handles to host resources are never portable state; release them before <code>Ready</code>, then recreate them after that exact call returns on Resume.</p>
+            <p>A cooperative <code>pause</code> retains the quiesced VM in memory without writing the checkpoint store. <code>snapshot &lt;vmid&gt;</code> uses the same <code>PreparePause → Ready</code> boundary and then commits a warm snapshot v5 under that VM ID. Numeric handles to host resources are never portable state; release them before <code>Ready</code>, then recreate them after that exact call returns on Resume.</p>
             <table class="resource-table">
               <thead><tr><th>Resource</th><th>At Ready</th><th>After Resume</th></tr></thead>
               <tbody>
@@ -901,6 +901,56 @@
           <div class="source-strip">
             <strong>Grounded in</strong>
             <code>src/hv/mod.rs · src/hv/snapshot.rs · TRUEOS-Blueprints/docs/replicatable-blueprints.md</code>
+          </div>
+        </article>
+      </section>
+
+      <section class="docs-grid" aria-label="Lifecycle command atlas">
+        <article class="panel doc-panel" style="grid-column: 1 / -1">
+          <div class="panel-head">
+            <div class="panel-title"><h2>Lifecycle command atlas</h2><span>public Apps surface · VMX shell · guest ABI</span></div>
+          </div>
+          <div class="doc-content">
+            <h3>Three control planes, one VM principal.</h3>
+            <p>Shell2 Apps mode is the public operator surface. A VM-owned terminal exposes a smaller <code>vmx_</code> control shell, and the Blueprint itself completes the cooperative boundary through VMCALL. Commands below are grouped by the authority that can issue them; aliases are shown inline.</p>
+            <table class="resource-table">
+              <thead><tr><th>Surface</th><th>Commands / ABI</th><th>Transition and persistence contract</th></tr></thead>
+              <tbody>
+                <tr><td>Shell2 Apps: admission</td><td><code>start [selector]</code><br><code>online [selector]</code><br><code>dl [selector]</code><br><code>peer […]</code></td><td><code>start</code> launches an installed Blueprint. <code>online</code> fetches, verifies and launches; <code>dl</code> installs only. <code>peer</code> lists/offers or requests a transfer; cross-principal restore remains safety-gated.</td></tr>
+                <tr><td>Shell2 Apps: retained lifecycle</td><td><code>pause|unpause &lt;vmid&gt;</code><br><code>snapshot|snap &lt;vmid&gt;</code><br><code>load [vmid|name|URL] [vmid]</code></td><td><code>pause</code> requests <code>PreparePause(Pause)</code>, then retains the same slot without a warm-store write. <code>snapshot</code> requests <code>PreparePause(Replicate)</code>, then writes a warm snapshot. <code>load vmid</code> consumes that warm image; a named or URL load is an import path with same-principal checks.</td></tr>
+                <tr><td>Shell2 Apps: durable state</td><td><code>store &lt;vmid&gt; &lt;name&gt;</code><br><code>eject|drop &lt;vmid&gt;</code><br><code>delete|del &lt;name&gt;</code></td><td><code>store</code> requires an offline, latched VM with a completed warm checkpoint and writes a named <code>vm/snapshots/*.tvm</code> envelope to TRUEOSFS. It contains the warm snapshot plus guest heap, Hull RW, and portable Blueprint state. <code>eject</code> frees only warm retained state; <code>delete</code> removes only the named disk image.</td></tr>
+                <tr><td>Shell2 Apps: termination / observation</td><td><code>preserve|save [vmid]</code><br><code>stop [vmid]</code><br><code>kick &lt;vmid&gt;</code><br><code>status</code></td><td>The intended contract for <code>preserve</code> is <code>PreserveMode::Stop</code>: checkpoint, then terminal teardown. <code>stop</code> has no checkpoint. <code>kick</code> only nudges a running VM toward an observable control exit. <code>status</code> is observational.</td></tr>
+                <tr><td>VMX terminal (not Apps mode)</td><td><code>vmx_tui [demo]</code>, <code>vmx_env</code>, <code>vmx_smp</code>, <code>vmx_leave</code>, <code>vmx_help</code><br><code>vmx_stop</code>, <code>vmx_pause</code>, <code>vmx_snapshot</code>, <code>vmx_preserve</code></td><td>These are routed only while a Blueprint terminal lease is attached. <code>vmx_pause</code> and <code>vmx_snapshot</code> use the cooperative Blueprint lifecycle; <code>vmx_preserve</code> invokes raw <code>OP_PRESERVE</code>. When app-command passthrough is enabled, non-<code>vmx_</code> input belongs to the Blueprint rather than this control shell.</td></tr>
+                <tr><td>Guest lifecycle VMCALL (invisible to Apps)</td><td><code>OP_PRESERVE</code><br><code>OP_LIFECYCLE_PAUSE</code><br><code>OP_LIFECYCLE_SNAPSHOT</code><br><code>OP_BP_LIFECYCLE_POLL</code><br><code>OP_BP_LIFECYCLE_READY</code><br><code>OP_BP_LIFECYCLE_IDENTITY</code></td><td><code>PAUSE</code>/<code>SNAPSHOT</code> arm a host request; the app polls an operation ID, deadline and reason. Its matching <code>READY(operation, checkpoint_version)</code> selects Pause or Snapshot disposition at the exact VM-exit boundary. On resume, the identity VMCALL is the commit point: generation advances and only then may retained-resume protection clear.</td></tr>
+              </tbody>
+            </table>
+            <div class="fs-callout" style="margin-top:18px">
+              <strong>Warm is RAM, named is disk.</strong> The per-VM checkpoint store is an in-memory immutable Arc image. A warm <code>snapshot</code> or <code>preserve</code> therefore survives only while the host stays up. Only <code>store &lt;vmid&gt; &lt;name&gt;</code> creates the TRUEOSFS envelope that can survive reboot.
+            </div>
+          </div>
+          <div class="source-strip">
+            <strong>Grounded in</strong>
+            <code>src/shell2/shell2_apps.rs · src/shell2/mod.rs · src/hv/mod.rs · src/hv/vmcall.rs · src/hv/store.rs</code>
+          </div>
+        </article>
+
+        <article class="panel doc-panel" style="grid-column: 1 / -1">
+          <div class="panel-head">
+            <div class="panel-title"><h2>Current working-tree audit</h2><span>contract mismatches requiring an implementation decision</span></div>
+          </div>
+          <div class="doc-content">
+            <h3>Do not treat these as settled lifecycle semantics.</h3>
+            <table class="resource-table">
+              <thead><tr><th>Expected contract</th><th>Current working-tree behavior</th><th>Why it matters</th></tr></thead>
+              <tbody>
+                <tr><td><code>PreserveMode::Stop</code> means checkpoint then terminal teardown; only <code>PreserveMode::Pause</code> owns retained lifecycle state.</td><td><code>snapshot_on_preserve_exit</code> now sets <code>pause_latched</code> and suspends the Blueprint process context after any successful preserve, including Stop. Teardown consequently retains launch/process context.</td><td>The enum documentation, VMX-shell help, and the main diagram's preserve path still say “stop.” The implementation currently turns a successful preserve into a retained warm state. This is the exact semantic fork under review, not a documented contract.</td></tr>
+                <tr><td>A plain cooperative pause can directly resume the exact in-memory continuation.</td><td>VM exit updates <code>VM_SNAPSHOT_META</code>, while <code>start_with_mode</code> requires <code>VM_RESTORE_META</code> whenever <code>pause_latched</code> is set. Ordinary pause does not populate that restore meta. After a prior <code>load</code>, it can instead retain an older restore meta.</td><td>Fresh pause/resume can reject with <code>GuestMemoryUnavailable</code>; Load → Pause → resume risks using stale restore state. The direct-resume edge in the diagram is therefore the intended model, not yet a proven implementation invariant.</td></tr>
+              </tbody>
+            </table>
+          </div>
+          <div class="source-strip">
+            <strong>Audit sources</strong>
+            <code>src/hv/mod.rs: PreserveMode, prepare_preserve_mode, snapshot_on_preserve_exit, start_with_mode · src/hv/snapshot.rs: capture_snapshot_meta · src/hv/memory.rs: VM_SNAPSHOT_META / VM_RESTORE_META</code>
           </div>
         </article>
       </section>
@@ -963,13 +1013,13 @@
         snapshotting: {
           name: "Checkpointing", chip: "host owned", progress: 3,
           summary: "TRUEOS captures VMCS execution state and guest-writable memory into the per-slot checkpoint store.",
-          tip: "Snapshot format v3 includes live RIP/RSP, GPRs, RFLAGS and extended state. Mutable application files remain outside this image.",
+          tip: "Snapshot format v5 includes live RIP/RSP, GPRs, RFLAGS and extended state, then identifies immutable code by SHA-256 rather than embedding a second code image. Mutable application files remain outside this image.",
           source: "src/hv/snapshot.rs · src/hv/store.rs"
         },
         paused: {
           name: "Paused", chip: "lifecycle latched", progress: 2,
           summary: "Execution is stopped and the live VM, launch context, and process context are retained for direct same-slot resume.",
-          tip: "A plain pause does not serialize the VM. A snapshot reaches this same retained state after also committing snapshot v3 under the VM ID.",
+          tip: "A plain pause does not serialize the VM. A snapshot reaches this same retained state after also committing snapshot v5 under the VM ID.",
           source: "src/hv/mod.rs: PreserveMode::Pause"
         },
         restoring: {
@@ -1194,7 +1244,7 @@
               await setBusy(true);
               model.busy = false;
               model.snapshot = true;
-              transition("paused", "snapshotting-paused", `snapshot v3 committed as VM ID ${model.vmId}; live context retained`);
+              transition("paused", "snapshotting-paused", `snapshot v5 committed as VM ID ${model.vmId}; live context retained`);
             } else {
               transition("paused", "ready-paused", "VM stopped at exact Ready boundary; live state retained without store write");
             }
