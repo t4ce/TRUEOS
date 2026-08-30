@@ -1869,18 +1869,33 @@ fn expand_origin_runs(
     set_active_stage(ticket, "font-layout");
     ensure_font_face_available(request.font).map_err(FontKernelError::Unavailable)?;
     let mut glyph_runs = Vec::new();
+    let mut fallback_glyphs = 0usize;
+    let fallback_glyph = if font_face_supports_text(request.font, "\u{2022}") {
+        '\u{2022}'
+    } else if font_face_supports_text(request.font, "\u{FFFD}") {
+        '\u{FFFD}'
+    } else if font_face_supports_text(request.font, "?") {
+        '?'
+    } else {
+        return Err(FontKernelError::Unavailable("font-fallback-glyph-missing"));
+    };
     for run in &request.runs {
         let mut pen_x = 0.0f32;
         for ch in run.text.chars() {
             let mut glyph = String::new();
             glyph.push(ch);
+            if !ch.is_whitespace() && !font_face_supports_text(request.font, glyph.as_str()) {
+                glyph.clear();
+                glyph.push(fallback_glyph);
+                fallback_glyphs = fallback_glyphs.saturating_add(1);
+            }
             let advance = crate::graphics::font::text_advance_width(
                 request.font.registry_name(),
                 glyph.as_str(),
                 run.font_pixels,
             )
             .map_err(FontKernelError::Unavailable)?;
-            if !ch.is_whitespace() && font_face_supports_text(request.font, glyph.as_str()) {
+            if !ch.is_whitespace() {
                 glyph_runs.push(RetainedFontRun {
                     text: glyph,
                     position: [run.position[0] + pen_x, run.position[1]],
@@ -1896,10 +1911,12 @@ fn expand_origin_runs(
     }
     crate::log_info!(
         target: "global";
-        "font-kernel-service: bounded glyph layout ticket={} source_runs={} glyph_entries={} positioning=scene-origin policy=per-glyph-analytical-coverage\n",
+        "font-kernel-service: bounded glyph layout ticket={} source_runs={} glyph_entries={} fallback_glyphs={} fallback=U+{:04X} positioning=scene-origin policy=per-glyph-analytical-coverage\n",
         ticket.raw(),
         request.runs.len(),
         glyph_runs.len(),
+        fallback_glyphs,
+        u32::from(fallback_glyph),
     );
     Ok(glyph_runs)
 }
@@ -1984,6 +2001,7 @@ fn collect_stamp_scenes(
 ) -> Result<(), FontKernelError> {
     let scene = match process_retain_scene_runs(ticket, &layer.scene, runs) {
         Ok(scene) => scene,
+        Err(FontKernelError::Unavailable("font-coverage-empty")) => return Ok(()),
         Err(FontKernelError::Unavailable("font-coverage-workload"))
             if runs.len() > 1
                 && layer.scene.positioning == RetainedFontPositioning::SceneOrigin =>
@@ -2066,14 +2084,39 @@ fn prepare_stamp_scenes(
 ) -> Result<(Vec<(GpuFontRetainedScene, GpuFontRgba)>, usize), FontKernelError> {
     let mut scenes = Vec::new();
     let mut glyphs = 0usize;
+    let mut transparent_layers = 0usize;
     for layer in &request.layers {
         glyphs = layer
             .scene
             .runs
             .iter()
             .fold(glyphs, |total, run| total.saturating_add(run.text.chars().count()));
-        let glyph_runs = expand_origin_runs(ticket, &layer.scene)?;
+        let glyph_runs = match expand_origin_runs(ticket, &layer.scene) {
+            Ok(glyph_runs) => glyph_runs,
+            Err(FontKernelError::Unavailable("font-coverage-empty")) => {
+                transparent_layers = transparent_layers.saturating_add(1);
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        let scenes_before = scenes.len();
         collect_stamp_scenes(ticket, layer, glyph_runs.as_slice(), &mut scenes)?;
+        if scenes.len() == scenes_before {
+            transparent_layers = transparent_layers.saturating_add(1);
+        }
+    }
+    if scenes.is_empty() {
+        return Err(FontKernelError::Unavailable("font-coverage-empty"));
+    }
+    if transparent_layers != 0 {
+        crate::log_info!(
+            target: "render";
+            "font-kernel-service: stamp transparent layers ticket={} layers={} transparent_layers={} retained_layers={} reason=font-coverage-empty action=skip-empty-layer\n",
+            ticket.raw(),
+            request.layers.len(),
+            transparent_layers,
+            scenes.len(),
+        );
     }
     Ok((scenes, glyphs))
 }

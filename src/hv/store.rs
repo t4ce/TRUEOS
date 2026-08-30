@@ -187,7 +187,6 @@ pub fn replication_online() -> bool {
 }
 
 pub struct PersistentVmImage {
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub source_vm_id: u8,
     pub snapshot: Vec<u8>,
     pub guest_heap: Vec<u8>,

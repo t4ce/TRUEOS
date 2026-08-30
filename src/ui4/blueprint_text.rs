@@ -3846,7 +3846,7 @@ fn retain_scene_entries_for_surface(
                     viewport_height,
                 );
             }
-            Err(error) if retained_text_error_is_no_coverage(error) => {
+            Err(error) if font_error_is_no_coverage(error) => {
                 let ticket = match &layer.state {
                     BlueprintRetainedTextState::Pending(pending) => pending.ticket().raw(),
                     BlueprintRetainedTextState::Ready(_)
@@ -3914,7 +3914,7 @@ fn log_font_kernel_error(
     );
 }
 
-fn retained_text_error_is_no_coverage(error: FontKernelError) -> bool {
+fn font_error_is_no_coverage(error: FontKernelError) -> bool {
     matches!(error, FontKernelError::Unavailable("font-coverage-empty"))
 }
 
@@ -4201,6 +4201,19 @@ fn render_stamped_text_for_surface(owner: WindowOwner, window_id: u32) -> i32 {
         surface.stamped_text_pending = match submit_frame_stamp(request, destination) {
             Ok(pending) => Some(pending),
             Err(FontKernelError::QueueFull) => return ERROR_BUSY,
+            Err(error) if font_error_is_no_coverage(error) => {
+                surface.stamped_text_rendered = true;
+                crate::log_info!(
+                    target: "ui4/solara-text";
+                    "FontKernel frame stamp no-coverage owner={:?} window={} layers={} target={}x{} action=transparent-noop\n",
+                    owner,
+                    window_id,
+                    surface.stamped_text_cursor,
+                    surface.width,
+                    surface.height,
+                );
+                return 0;
+            }
             Err(error) => {
                 log_font_kernel_error(
                     "frame-stamp",
@@ -4238,6 +4251,19 @@ fn render_stamped_text_for_surface(owner: WindowOwner, window_id: u32) -> i32 {
                 reason,
             );
             return ERROR_BUSY;
+        }
+        Err(error) if font_error_is_no_coverage(error) => {
+            surface.stamped_text_rendered = true;
+            crate::log_info!(
+                target: "ui4/solara-text";
+                "FontKernel frame stamp no-coverage owner={:?} window={} layers={} target={}x{} action=transparent-noop\n",
+                owner,
+                window_id,
+                surface.stamped_text_cursor,
+                surface.width,
+                surface.height,
+            );
+            return 0;
         }
         Err(error) => {
             log_font_kernel_error(
@@ -6764,13 +6790,9 @@ mod tests {
 
     #[test]
     fn retained_text_treats_only_empty_coverage_as_a_transparent_noop() {
-        assert!(retained_text_error_is_no_coverage(FontKernelError::Unavailable(
-            "font-coverage-empty"
-        )));
-        assert!(!retained_text_error_is_no_coverage(FontKernelError::Unavailable(
-            "font-coverage-workload"
-        )));
-        assert!(!retained_text_error_is_no_coverage(FontKernelError::SubmittedIncomplete(
+        assert!(font_error_is_no_coverage(FontKernelError::Unavailable("font-coverage-empty")));
+        assert!(!font_error_is_no_coverage(FontKernelError::Unavailable("font-coverage-workload")));
+        assert!(!font_error_is_no_coverage(FontKernelError::SubmittedIncomplete(
             "font-coverage-submit-incomplete"
         )));
 

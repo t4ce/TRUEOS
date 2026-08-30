@@ -803,6 +803,18 @@ pub(crate) async fn warm_vm_restart_plan() -> Option<WarmVmRestartPlan> {
     let resume_mask = handoff.resume_mask;
     let transition_slot = handoff.transition_slot;
     let generation = handoff.generation;
+    if restore_mask
+        .iter()
+        .zip(resume_mask.iter())
+        .any(|(restore, resume)| resume & !restore != 0)
+    {
+        crate::log_error!(target: "global";
+            "live-update: invalid VM restart masks generation={} reason=resume-without-restore\n",
+            generation,
+        );
+        mark_post_boot_uplift_complete(generation);
+        return None;
+    }
     let topology_deadline = Instant::now()
         .as_millis()
         .saturating_add(POST_BOOT_SERVICE_TIMEOUT_MS);
@@ -1211,6 +1223,8 @@ async fn checkpoint_active_vms(
             if state.pause_latched
                 && state.pause_snapshot_ready
                 && crate::hv::store::has_committed_vm(vm_id)
+                && !state.running
+                && !state.starting
             {
                 break;
             }
@@ -1298,18 +1312,57 @@ async fn checkpoint_abort(
 async fn resume_checkpointed_vms(spawner: &Spawner, target: &MatrixTarget, vm_ids: &[u8]) {
     for &vm_id in vm_ids {
         // A PreparePause may cross its Ready boundary just after an update
-        // cancellation. Wait briefly for that boundary so the compensating
-        // start cannot race and leave the VM paused after this task returns.
-        let deadline = Instant::now().as_millis().saturating_add(2_000);
+        // cancellation. Use the checkpoint timeout for the VM to publish its
+        // offline state so compensation cannot race teardown.
+        let deadline = Instant::now()
+            .as_millis()
+            .saturating_add(VM_CHECKPOINT_TIMEOUT_MS);
         loop {
             let state = crate::hv::vm_state(vm_id);
-            if state.pause_latched || !state.prepare_pause_pending {
+            if (state.pause_latched || !state.prepare_pause_pending)
+                && !state.running
+                && !state.starting
+            {
                 break;
             }
             if Instant::now().as_millis() >= deadline {
                 break;
             }
             Timer::after(EmbassyDuration::from_millis(10)).await;
+        }
+
+        let state = crate::hv::vm_state(vm_id);
+        if state.running || state.starting {
+            print_matrix_target_line(
+                target,
+                format!(
+                    "update live: vm{} abort recovery timed out while VM remained active",
+                    vm_id
+                )
+                .as_str(),
+            );
+            continue;
+        }
+        if !crate::hv::store::has_committed_vm(vm_id) {
+            print_matrix_target_line(
+                target,
+                format!("update live: vm{} abort recovery has no committed warm checkpoint", vm_id)
+                    .as_str(),
+            );
+            continue;
+        }
+
+        // A failed update has left a committed warm checkpoint behind.
+        // Re-arm its restore metadata before starting; start() deliberately
+        // rejects a retained pause without that metadata. Cold-start policy
+        // never reaches this path and therefore cannot consume this image.
+        if let Err(error) = crate::hv::restore_snapshot_async(vm_id).await {
+            print_matrix_target_line(
+                target,
+                format!("update live: vm{} warm restore after abort failed ({:?})", vm_id, error)
+                    .as_str(),
+            );
+            continue;
         }
 
         match crate::hv::start(vm_id, spawner, None) {

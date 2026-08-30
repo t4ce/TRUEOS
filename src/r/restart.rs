@@ -263,6 +263,16 @@ async fn queue_live_update_vm_restore(
             return;
         }
     };
+    if image.source_vm_id != vm_id {
+        crate::log!(
+            "restart: vm{} checkpoint source mismatch checkpoint={} source_vm={} action=reject\n",
+            vm_id,
+            name,
+            image.source_vm_id,
+        );
+        crate::hv::finish_restore(vm_id);
+        return;
+    }
     if let Err(error) = crate::hv::store::save_bytes_async(vm_id, image.snapshot.clone()).await {
         crate::log!(
             "restart: vm{} warm-store seed failed checkpoint={} error={error:?}\n",

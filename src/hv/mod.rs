@@ -2618,8 +2618,7 @@ fn classify_blueprint_memory(
 
     let tokio_signal = archive_has(archive, "tokio")
         || import_name_has(imports, "trueos_tokio_")
-        || import_name_has(imports, "tokio_")
-        || import_name_has(imports, "sleep_ms");
+        || import_name_has(imports, "tokio_");
     if tokio_signal {
         return BlueprintMemoryClass::TokioRuntime;
     }
