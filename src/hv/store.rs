@@ -21,6 +21,9 @@ const PERSISTENT_VM_MAGIC: &[u8; 8] = b"TVMSTR1\0";
 const PERSISTENT_VM_VERSION: u32 = 1;
 const PERSISTENT_VM_PREFIX: &str = "vm/snapshots/";
 const PERSISTENT_VM_SUFFIX: &str = ".tvm";
+const PERSISTENT_REPLICATION_MAGIC: &[u8; 8] = b"TRPL1\0\0\0";
+const PERSISTENT_REPLICATION_VERSION: u32 = 1;
+const PERSISTENT_REPLICATION_SUFFIX: &str = ".trp";
 
 #[inline]
 fn boot_probe_ms() -> u64 {
@@ -196,6 +199,24 @@ pub struct PersistentVmImage {
     blueprint: Range<usize>,
 }
 
+pub struct PersistentReplicationImage {
+    pub source_vm_id: u8,
+    pub checkpoint_version: u64,
+    bytes: Vec<u8>,
+    relaunch: Range<usize>,
+    checkpoint: Range<usize>,
+}
+
+impl PersistentReplicationImage {
+    pub fn relaunch(&self) -> &[u8] {
+        &self.bytes[self.relaunch.clone()]
+    }
+
+    pub fn checkpoint(&self) -> &[u8] {
+        &self.bytes[self.checkpoint.clone()]
+    }
+}
+
 impl PersistentVmImage {
     pub fn snapshot(&self) -> &[u8] {
         &self.bytes[self.snapshot.clone()]
@@ -229,6 +250,13 @@ fn persistent_path(name: &str) -> Result<String, VmStoreError> {
         return Err(VmStoreError::InvalidName);
     }
     Ok(format!("{}{}{}", PERSISTENT_VM_PREFIX, name, PERSISTENT_VM_SUFFIX))
+}
+
+fn persistent_replication_path(name: &str) -> Result<String, VmStoreError> {
+    if !valid_persistent_name(name) {
+        return Err(VmStoreError::InvalidName);
+    }
+    Ok(format!("{}{}{}", PERSISTENT_VM_PREFIX, name, PERSISTENT_REPLICATION_SUFFIX))
 }
 
 fn persistent_root() -> Result<block::DeviceHandle, VmStoreError> {
@@ -325,6 +353,62 @@ pub async fn store_persistent_async(vm_id: u8, name: &str) -> Result<usize, VmSt
     Ok(total)
 }
 
+/// Persist only the Blueprint launch contract and its application-defined
+/// checkpoint. Unlike a VM image, this envelope is intentionally independent
+/// of Hull code, guest registers, page tables, and pointer-bearing memory.
+pub async fn store_replication_async(vm_id: u8, name: &str) -> Result<usize, VmStoreError> {
+    let state = crate::hv::vm_state(vm_id);
+    if !state.supported || !state.replicatable || !state.pause_latched || state.running || state.starting {
+        return Err(VmStoreError::BadEnvelope);
+    }
+    let path = persistent_replication_path(name)?;
+    let disk = persistent_root()?;
+    let relaunch = crate::hv::snapshot_blueprint_relaunch_state(vm_id)
+        .map_err(|_| VmStoreError::BadEnvelope)?;
+    let checkpoint = crate::hv::blueprint_replication_checkpoint(vm_id)
+        .ok_or(VmStoreError::MissingSnapshot)?;
+    let mut header = Vec::with_capacity(40);
+    header.extend_from_slice(PERSISTENT_REPLICATION_MAGIC);
+    header.extend_from_slice(&PERSISTENT_REPLICATION_VERSION.to_le_bytes());
+    header.push(vm_id);
+    header.extend_from_slice(&[0; 3]);
+    header.extend_from_slice(&checkpoint.version.to_le_bytes());
+    header.extend_from_slice(&(relaunch.len() as u64).to_le_bytes());
+    header.extend_from_slice(&(checkpoint.bytes.len() as u64).to_le_bytes());
+    let total = header
+        .len()
+        .checked_add(relaunch.len())
+        .and_then(|value| value.checked_add(checkpoint.bytes.len()))
+        .ok_or(VmStoreError::BadEnvelope)?;
+    let Some(handle) =
+        crate::r::fs::trueosfs::file_write_begin_async(disk, path.as_str(), total as u64)
+            .await
+            .map_err(VmStoreError::BeginWrite)?
+    else {
+        return Err(VmStoreError::BeginWrite(block::Error::Io));
+    };
+    for chunk in [header.as_slice(), relaunch.as_slice(), checkpoint.bytes.as_slice()] {
+        if let Err(error) = crate::r::fs::trueosfs::file_write_chunk_async(handle, chunk).await {
+            let _ = crate::r::fs::trueosfs::file_write_abort_async(handle).await;
+            return Err(VmStoreError::Write(error));
+        }
+    }
+    crate::r::fs::trueosfs::file_write_finish_async(handle)
+        .await
+        .map_err(VmStoreError::Write)?;
+    crate::log!(
+        "hv-store: replication commit name={} vm_id={} bytes={} relaunch={} checkpoint={} version={} disk={} vm_image=0\n",
+        name,
+        vm_id,
+        total,
+        relaunch.len(),
+        checkpoint.bytes.len(),
+        checkpoint.version,
+        disk.id().raw()
+    );
+    Ok(total)
+}
+
 fn envelope_take_u32(bytes: &[u8], offset: &mut usize) -> Option<u32> {
     let end = offset.checked_add(4)?;
     let raw = bytes.get(*offset..end)?.try_into().ok()?;
@@ -389,6 +473,51 @@ pub async fn load_persistent_async(name: &str) -> Result<PersistentVmImage, VmSt
         guest_heap,
         hull_rw,
         blueprint,
+    })
+}
+
+pub async fn load_replication_async(name: &str) -> Result<PersistentReplicationImage, VmStoreError> {
+    let path = persistent_replication_path(name)?;
+    let disk = persistent_root()?;
+    let bytes = crate::r::fs::trueosfs::file_out_async(disk, path.as_str())
+        .await
+        .map_err(VmStoreError::Read)?
+        .ok_or(VmStoreError::MissingSnapshot)?;
+    let mut offset = 0usize;
+    if bytes.get(..PERSISTENT_REPLICATION_MAGIC.len())
+        != Some(PERSISTENT_REPLICATION_MAGIC.as_slice())
+    {
+        return Err(VmStoreError::BadEnvelope);
+    }
+    offset += PERSISTENT_REPLICATION_MAGIC.len();
+    if envelope_take_u32(bytes.as_slice(), &mut offset) != Some(PERSISTENT_REPLICATION_VERSION) {
+        return Err(VmStoreError::BadEnvelope);
+    }
+    let source_vm_id = *bytes.get(offset).ok_or(VmStoreError::BadEnvelope)?;
+    offset = offset.checked_add(4).ok_or(VmStoreError::BadEnvelope)?;
+    let checkpoint_version =
+        envelope_take_u64(bytes.as_slice(), &mut offset).ok_or(VmStoreError::BadEnvelope)?;
+    let relaunch_len = usize::try_from(
+        envelope_take_u64(bytes.as_slice(), &mut offset).ok_or(VmStoreError::BadEnvelope)?,
+    )
+    .map_err(|_| VmStoreError::BadEnvelope)?;
+    let checkpoint_len = usize::try_from(
+        envelope_take_u64(bytes.as_slice(), &mut offset).ok_or(VmStoreError::BadEnvelope)?,
+    )
+    .map_err(|_| VmStoreError::BadEnvelope)?;
+    let relaunch = envelope_take_range(bytes.as_slice(), &mut offset, relaunch_len)
+        .ok_or(VmStoreError::BadEnvelope)?;
+    let checkpoint = envelope_take_range(bytes.as_slice(), &mut offset, checkpoint_len)
+        .ok_or(VmStoreError::BadEnvelope)?;
+    if offset != bytes.len() || checkpoint_version == 0 || checkpoint.is_empty() {
+        return Err(VmStoreError::BadEnvelope);
+    }
+    Ok(PersistentReplicationImage {
+        source_vm_id,
+        checkpoint_version,
+        bytes,
+        relaunch,
+        checkpoint,
     })
 }
 

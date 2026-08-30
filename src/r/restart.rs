@@ -232,6 +232,10 @@ async fn queue_live_update_vm_restore(
     generation: u64,
     entry: crate::live_update::WarmVmRestartEntry,
 ) {
+    if entry.replicate {
+        queue_live_update_blueprint_replica(spawner, generation, entry).await;
+        return;
+    }
     let vm_id = entry.vm_id;
     let name = entry.checkpoint_name;
     let _ = crate::hv::eject(vm_id);
@@ -330,6 +334,113 @@ async fn queue_live_update_vm_restore(
         );
     }
     crate::hv::finish_restore(vm_id);
+}
+
+async fn queue_live_update_blueprint_replica(
+    spawner: &Spawner,
+    generation: u64,
+    entry: crate::live_update::WarmVmRestartEntry,
+) {
+    let vm_id = entry.vm_id;
+    let name = entry.checkpoint_name;
+    let _ = crate::hv::eject(vm_id);
+    match crate::hv::try_begin_restore(vm_id) {
+        Ok(true) => {}
+        Ok(false) => {
+            crate::log!("restart: vm{} replica already queued checkpoint={}\n", vm_id, name);
+            return;
+        }
+        Err(error) => {
+            crate::log!(
+                "restart: vm{} replica admission failed checkpoint={} error={error:?}\n",
+                vm_id,
+                name,
+            );
+            return;
+        }
+    }
+    let image = match crate::hv::store::load_replication_async(name.as_str()).await {
+        Ok(image) => image,
+        Err(error) => {
+            crate::log!(
+                "restart: vm{} replication checkpoint load failed checkpoint={} error={error:?}\n",
+                vm_id,
+                name,
+            );
+            crate::hv::finish_restore(vm_id);
+            return;
+        }
+    };
+    if image.source_vm_id != vm_id {
+        crate::log!(
+            "restart: vm{} replication source mismatch checkpoint={} source_vm={} action=reject\n",
+            vm_id,
+            name,
+            image.source_vm_id,
+        );
+        crate::hv::finish_restore(vm_id);
+        return;
+    }
+    let relaunch = match crate::hv::decode_blueprint_relaunch_state(image.relaunch()) {
+        Ok(relaunch) => relaunch,
+        Err(error) => {
+            crate::log!(
+                "restart: vm{} replication relaunch decode failed checkpoint={} error={}\n",
+                vm_id,
+                name,
+                error,
+            );
+            crate::hv::finish_restore(vm_id);
+            return;
+        }
+    };
+    let checkpoint = crate::hv::BlueprintReplicationCheckpoint {
+        operation: 0,
+        version: image.checkpoint_version,
+        bytes: image.checkpoint().to_vec(),
+    };
+    match crate::hv::start_blueprint_replica_vm(vm_id, spawner, relaunch, checkpoint) {
+        Ok(()) => crate::log!(
+            "restart: vm{} fresh-Hull replica queued checkpoint={} generation={} original_running={}\n",
+            vm_id,
+            name,
+            generation,
+            entry.resume as u8,
+        ),
+        Err(error) => {
+            crate::log!(
+                "restart: vm{} fresh-Hull replica failed checkpoint={} error={error:?}\n",
+                vm_id,
+                name,
+            );
+            crate::hv::finish_restore(vm_id);
+            return;
+        }
+    }
+    crate::hv::finish_restore(vm_id);
+
+    if !entry.resume {
+        let deadline = trueos_time::Instant::now()
+            .as_millis()
+            .saturating_add(VM_STORE_READY_TIMEOUT_MS);
+        while trueos_time::Instant::now().as_millis() < deadline {
+            let state = crate::hv::vm_state(vm_id);
+            if state.running && crate::hv::request_replicatable_pause(vm_id).unwrap_or(false) {
+                crate::log!(
+                    "restart: vm{} replica re-pause requested checkpoint={} policy=preserve-paused\n",
+                    vm_id,
+                    name,
+                );
+                return;
+            }
+            Timer::after(VM_STORE_POLL_INTERVAL).await;
+        }
+        crate::log!(
+            "restart: vm{} replica re-pause timed out checkpoint={}\n",
+            vm_id,
+            name,
+        );
+    }
 }
 
 #[trueos_executor::task]

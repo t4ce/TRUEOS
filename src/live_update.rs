@@ -774,6 +774,7 @@ pub(crate) struct WarmVmRestartEntry {
     pub(crate) vm_id: u8,
     pub(crate) checkpoint_name: String,
     pub(crate) resume: bool,
+    pub(crate) replicate: bool,
 }
 
 pub(crate) struct WarmVmRestartPlan {
@@ -836,6 +837,7 @@ pub(crate) async fn warm_vm_restart_plan() -> Option<WarmVmRestartPlan> {
                 vm_id,
                 checkpoint_name: checkpoint_name(vm_id),
                 resume: mask_contains(&resume_mask, vm_index),
+                replicate: !handoff.vm_heap_ranges[vm_index].valid(),
             });
         }
     }
@@ -1219,37 +1221,20 @@ async fn checkpoint_active_vms(
         }
 
         let name = checkpoint_name(vm_id);
-        match crate::hv::store::store_persistent_async(vm_id, name.as_str()).await {
+        match crate::hv::store::store_replication_async(vm_id, name.as_str()).await {
             Ok(bytes) => {
-                let Some(stats) = crate::allocators::hv_guest_heap_stats_if_configured(vm_id)
-                else {
-                    return checkpoint_abort(
-                        spawner,
-                        target,
-                        &paused_by_update,
-                        LiveUpdateError::VmCheckpointStore(vm_id),
-                    )
-                    .await;
-                };
-                let heap_len = stats.heap_end.saturating_sub(stats.heap_start);
-                if stats.phys_start == 0 || heap_len == 0 {
-                    return checkpoint_abort(
-                        spawner,
-                        target,
-                        &paused_by_update,
-                        LiveUpdateError::VmCheckpointStore(vm_id),
-                    )
-                    .await;
-                }
-                vm_heap_ranges[vm_index] = WarmReservedRange {
-                    phys_start: stats.phys_start as u64,
-                    length: heap_len as u64,
-                };
+                // An empty warm range marks application-level replication.
+                // The candidate launches a fresh Hull and never claims the old
+                // pointer-bearing guest heap.
+                vm_heap_ranges[vm_index] = WarmReservedRange::EMPTY;
                 mask_insert(&mut restore_mask, vm_index);
                 print_matrix_target_line(
                     target,
-                    format!("update live: vm{} checkpointed as {} ({} bytes)", vm_id, name, bytes)
-                        .as_str(),
+                    format!(
+                        "update live: vm{} application checkpointed as {} ({} bytes; fresh-Hull relaunch)",
+                        vm_id, name, bytes
+                    )
+                    .as_str(),
                 );
             }
             Err(error) => {

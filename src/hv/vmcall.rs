@@ -56,6 +56,7 @@ pub const OP_BP_LIFECYCLE_POLL: u32 = 0x0C; // response operation + deadline/rea
 pub const OP_BP_LIFECYCLE_READY: u32 = 0x0D; // arg0 operation,arg1 checkpoint version -> pause/snapshot at exact boundary
 pub const OP_BP_LIFECYCLE_IDENTITY: u32 = 0x0E; // response generation/flags + instance/lineage UUID bytes
 pub const OP_LIFECYCLE_SNAPSHOT: u32 = 0x0F; // request PreparePause with warm snapshot disposition
+pub const OP_BP_LIFECYCLE_CHECKPOINT_RESTORE: u32 = 0x160; // consume fresh-launch app checkpoint
 pub const OP_BP_RAPL_SNAPSHOT_READ: u32 = 0x91; // arg0 offset, arg1 cap -> latest RAPL snapshot text
 pub const OP_BP_RAPL_HISTORY_READ: u32 = 0x92; // arg0 offset, arg1 cap -> capped RAPL history text
 pub const OP_BP_PCI_SNAPSHOT_READ: u32 = 0x93; // arg0 offset, arg1 cap -> latest PCI snapshot text
@@ -767,7 +768,16 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             }
             DispatchOutcome::Resume
         }
-        OP_BP_LIFECYCLE_READY => match crate::hv::acknowledge_blueprint_ready(vm_id, arg0, arg1) {
+        OP_BP_LIFECYCLE_READY => {
+            if req_len != 0
+                && !request_payload(vm_id, req_len).is_some_and(|bytes| {
+                    crate::hv::submit_blueprint_replication_checkpoint(vm_id, arg0, arg1, bytes)
+                })
+            {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            }
+            match crate::hv::acknowledge_blueprint_ready(vm_id, arg0, arg1) {
             Some(crate::hv::BlueprintReadyDisposition::Pause) => {
                 write_response(vm_id, seq, STATUS_OK, arg0, 0);
                 DispatchOutcome::Pause
@@ -780,7 +790,8 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 DispatchOutcome::Resume
             }
-        },
+            }
+        }
         OP_BP_LIFECYCLE_IDENTITY => {
             #[repr(C)]
             #[derive(Copy, Clone)]
@@ -806,6 +817,44 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             } else {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
             }
+            DispatchOutcome::Resume
+        }
+        OP_BP_LIFECYCLE_CHECKPOINT_RESTORE => {
+            let Some(pending) = crate::hv::blueprint_replication_checkpoint(vm_id) else {
+                write_response(vm_id, seq, STATUS_OK, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            if arg0 < pending.bytes.len() as u64 {
+                write_response(vm_id, seq, STATUS_BAD_ARG, pending.bytes.len() as u64, 0);
+                return DispatchOutcome::Resume;
+            }
+            let Some(checkpoint) = crate::hv::take_blueprint_replication_checkpoint(vm_id) else {
+                write_response(vm_id, seq, STATUS_OK, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            if checkpoint.bytes.len() > PAYLOAD_CAP {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            }
+            let Some(page) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    checkpoint.bytes.as_ptr(),
+                    (*page).payload.as_mut_ptr(),
+                    checkpoint.bytes.len(),
+                );
+            }
+            write_response(
+                vm_id,
+                seq,
+                STATUS_OK,
+                ((checkpoint.version & u64::from(u32::MAX)) << 32)
+                    | checkpoint.bytes.len() as u64,
+                checkpoint.bytes.len() as u32,
+            );
             DispatchOutcome::Resume
         }
         OP_BP_LUMEN_TEMPLATE_OPEN => {

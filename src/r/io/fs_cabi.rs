@@ -1901,6 +1901,66 @@ pub extern "C" fn trueos_cabi_lifecycle_ready(operation: u64, checkpoint_version
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_lifecycle_ready_with_checkpoint(
+    operation: u64,
+    checkpoint_version: u64,
+    checkpoint_ptr: *const u8,
+    checkpoint_len: usize,
+) -> i32 {
+    if operation == 0
+        || checkpoint_version == 0
+        || checkpoint_ptr.is_null()
+        || checkpoint_len == 0
+        || checkpoint_len > trueos_vm::vmcall::PAYLOAD_CAP
+        || crate::hv::current_hull_guest_context_vm_id().is_none()
+    {
+        return -1;
+    }
+    let checkpoint = unsafe { core::slice::from_raw_parts(checkpoint_ptr, checkpoint_len) };
+    let (status, _) = trueos_vm::vmcall::call_with_payload(
+        trueos_vm::vmcall::OP_BP_LIFECYCLE_READY,
+        operation,
+        checkpoint_version,
+        checkpoint,
+        &mut [],
+    );
+    if status == trueos_vm::vmcall::STATUS_OK {
+        0
+    } else {
+        -1
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_lifecycle_checkpoint_restore(
+    out_ptr: *mut u8,
+    out_cap: usize,
+    out_version: *mut u64,
+) -> isize {
+    if out_ptr.is_null()
+        || out_version.is_null()
+        || out_cap == 0
+        || out_cap > trueos_vm::vmcall::PAYLOAD_CAP
+        || crate::hv::current_hull_guest_context_vm_id().is_none()
+    {
+        return -1;
+    }
+    let out = unsafe { core::slice::from_raw_parts_mut(out_ptr, out_cap) };
+    let (status, data) = trueos_vm::vmcall::call_with_payload(
+        trueos_vm::vmcall::OP_BP_LIFECYCLE_CHECKPOINT_RESTORE,
+        out_cap as u64,
+        0,
+        &[],
+        out,
+    );
+    if status != trueos_vm::vmcall::STATUS_OK {
+        return -1;
+    }
+    unsafe { out_version.write(data >> 32) };
+    core::cmp::min(data as u32 as usize, out_cap) as isize
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_lifecycle_identity(
     out: *mut v::bp_abi::TrueosLifecycleIdentity,
 ) -> i32 {
