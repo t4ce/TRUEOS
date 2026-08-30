@@ -585,8 +585,8 @@ def transform_boot_warm(text: str) -> str:
         actual_worker_slot,
         actual_core_kind,
         crate::allcaps::lumen::BOOT_RESIDENT_WARM_SETTLE_MS,
-        crate::r::lfm25_tokenizer::TOKENIZER_BYTES,
-        crate::r::lfm25_model::NATIVE_IMAGE_BYTES,
+        crate::ai::lfm25_tokenizer::TOKENIZER_BYTES,
+        crate::ai::lfm25_model::NATIVE_IMAGE_BYTES,
         trueos_lfm25_cpu::F32_SIDECAR_BYTES,
         capabilities.ymm_state() as u8,
         capabilities.avx2() as u8,
@@ -612,7 +612,7 @@ def transform_boot_warm(text: str) -> str:
         "boot warm model log",
     )
 
-    completion = r'''    let assets_ready = crate::r::lfm25_hybrid_cpu_backend::cpu_vnni_resident_assets_ready();
+    completion = r'''    let assets_ready = crate::ai::lfm25_hybrid_cpu_backend::cpu_vnni_resident_assets_ready();
     let accepted = tokenizer_ready && model_ready && f32_ready && assets_ready;
     crate::log_info!(
         target: "service";
@@ -650,11 +650,11 @@ def build_changes(repo: Path, bundle: Path) -> dict[Path, tuple[str, str]]:
         targets[path] = (before, after)
 
     transformed("crates/trueos-lfm25-cpu/src/lib.rs", transform_lfm25_cpu_lib)
-    transformed("src/r/lfm25_hybrid_cpu_backend.rs", transform_backend)
+    transformed("src/ai/lfm25_hybrid_cpu_backend.rs", transform_backend)
     transformed("src/lumen/decode.rs", transform_decode)
-    transformed("src/r/lumen_service.rs", transform_lumen_service)
+    transformed("src/ai/lumen_service.rs", transform_lumen_service)
 
-    transformed("src/r/lfm25_boot_warm.rs", transform_boot_warm)
+    transformed("src/ai/lfm25_boot_warm.rs", transform_boot_warm)
 
     module_path = repo / "crates/trueos-lfm25-cpu/src/cpu_vnni.rs"
     module_after = read(bundle / "files/crates/trueos-lfm25-cpu/src/cpu_vnni.rs")

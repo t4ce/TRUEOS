@@ -16,6 +16,7 @@ const MAX_WAKEUPS: usize = 9000;
 
 static START_TSC: AtomicU64 = AtomicU64::new(0);
 static TSC_HZ: AtomicU64 = AtomicU64::new(0);
+static TSC_TO_TICKS_Q64: AtomicU64 = AtomicU64::new(0);
 static INIT: Once<()> = Once::new();
 
 static QUEUE: Mutex<Vec<WakeEntry, MAX_WAKEUPS>> = Mutex::new(Vec::new());
@@ -56,10 +57,12 @@ fn init_once() {
         let start = read_cycle_counter();
         START_TSC.store(start, Ordering::Relaxed);
         let hz = detect_tsc_hz().max(1);
+        let tick_scale_q64 = tsc_to_ticks_q64(hz);
         if crate::log_os::flags::BOOT_INFO_LOGS {
             crate::log!("time: tsc_hz={}\n", hz);
         }
         TSC_HZ.store(hz, Ordering::Relaxed);
+        TSC_TO_TICKS_Q64.store(tick_scale_q64, Ordering::Relaxed);
     });
 }
 
@@ -155,8 +158,22 @@ fn calibrate_tsc_hz_with_hpet(hpet: &crate::efi::acpi::hpet::Hpet) -> Option<u64
     }
 }
 
-fn ticks_from_tsc_delta(delta_tsc: u64, tsc_hz: u64) -> u64 {
-    ((delta_tsc as u128) * (TICK_HZ as u128) / (tsc_hz as u128)) as u64
+fn tsc_to_ticks_q64(tsc_hz: u64) -> u64 {
+    debug_assert!(tsc_hz > TICK_HZ);
+    (((TICK_HZ as u128) << 64) / (tsc_hz as u128)) as u64
+}
+
+#[inline]
+fn ticks_from_tsc_delta(delta_tsc: u64, tsc_hz: u64, tick_scale_q64: u64) -> u64 {
+    let estimate =
+        (((delta_tsc as u128) * (tick_scale_q64 as u128)) >> 64) as u64;
+
+    // The floored Q64 reciprocal can leave the estimate at most one tick low
+    // for any u64 delta. Test that sole candidate with multiplication so the
+    // result stays identical to `delta_tsc * TICK_HZ / tsc_hz`.
+    let next = estimate + 1;
+    let exact_numerator = (delta_tsc as u128) * (TICK_HZ as u128);
+    estimate + (((next as u128) * (tsc_hz as u128) <= exact_numerator) as u64)
 }
 
 pub fn poll() {
@@ -216,9 +233,10 @@ impl Driver for TimeDriver {
 
         let start = START_TSC.load(Ordering::Relaxed);
         let tsc_hz = TSC_HZ.load(Ordering::Relaxed).max(1);
+        let tick_scale_q64 = TSC_TO_TICKS_Q64.load(Ordering::Relaxed);
         let tsc = read_cycle_counter();
         let delta = tsc.wrapping_sub(start);
-        ticks_from_tsc_delta(delta, tsc_hz)
+        ticks_from_tsc_delta(delta, tsc_hz, tick_scale_q64)
     }
 
     fn schedule_wake(&self, at: u64, waker: &Waker) {

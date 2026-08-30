@@ -179,7 +179,7 @@ def decode_fixture() -> str:
 /// callback. The generic boundary keeps the scheduler independent of the Intel
 /// execution transport.
 
-use crate::r::lfm25_hybrid_cpu_backend::IntelIgcAotDecodeBackend;
+use crate::ai::lfm25_hybrid_cpu_backend::IntelIgcAotDecodeBackend;
 
 /// Bind the sealed scalar CPU stages and the admitted Intel C++/IGC projection
 /// program to the same fixed 99-operation Lumen module.
@@ -202,7 +202,7 @@ def service_fixture() -> str:
 
 use crate::lumen::decode::{checkpoint_intel_igc, restore_intel_igc};
 type LfmModule = crate::lumen::decode::Lfm25Decode<
-    crate::r::lfm25_hybrid_cpu_backend::IntelIgcAotDecodeBackend,
+    crate::ai::lfm25_hybrid_cpu_backend::IntelIgcAotDecodeBackend,
 >;
 
 async fn open() {
@@ -229,12 +229,12 @@ fn service_task() {
 
     let tokenizer_started = Instant::now();
     let _ = tokenizer_started;
-    let _ = crate::r::lfm25_hybrid_cpu_backend::warm_intel_igc_model();
-    let _ = crate::r::lfm25_hybrid_cpu_backend::warm_intel_igc_f32();
+    let _ = crate::ai::lfm25_hybrid_cpu_backend::warm_intel_igc_model();
+    let _ = crate::ai::lfm25_hybrid_cpu_backend::warm_intel_igc_f32();
     let model_log = \"lfm25: boot-warm stage=model-ready elapsed_ms={} resident=1 layout=pair1088-x16-dp4a gpu_runtime_mapping=ready warm_contract=no-submit\\n\";
     let _ = model_log;
 
-    let assets_ready = crate::r::lfm25_hybrid_cpu_backend::intel_igc_resident_assets_ready();
+    let assets_ready = crate::ai::lfm25_hybrid_cpu_backend::intel_igc_resident_assets_ready();
     let accepted = assets_ready;
     let submissions_after = crate::intel::gpgpu::lfm25_q8_project_stats().submissions;
     let _ = (accepted, submissions_before, submissions_after, started);
@@ -293,10 +293,10 @@ def main() -> None:
         repo = Path(temporary)
         sources = {
             "crates/trueos-lfm25-cpu/src/lib.rs": cpu_lib_fixture(),
-            "src/r/lfm25_hybrid_cpu_backend.rs": backend_fixture(),
+            "src/ai/lfm25_hybrid_cpu_backend.rs": backend_fixture(),
             "src/lumen/decode.rs": decode_fixture(),
-            "src/r/lumen_service.rs": service_fixture(),
-            "src/r/lfm25_boot_warm.rs": boot_fixture(),
+            "src/ai/lumen_service.rs": service_fixture(),
+            "src/ai/lfm25_boot_warm.rs": boot_fixture(),
         }
         for relative, source in sources.items():
             destination = repo / relative
@@ -329,19 +329,19 @@ def main() -> None:
             ROOT / "files/crates/trueos-lfm25-cpu/src/cpu_vnni.rs"
         ).read_bytes()
         assert "open_cpu_vnni_backend" in (
-            repo / "src/r/lfm25_hybrid_cpu_backend.rs"
+            repo / "src/ai/lfm25_hybrid_cpu_backend.rs"
         ).read_text(encoding="utf-8")
 
     with tempfile.TemporaryDirectory(prefix="trueos-vnni-drift-") as temporary:
         repo = Path(temporary)
         sources = {
             "crates/trueos-lfm25-cpu/src/lib.rs": cpu_lib_fixture(),
-            "src/r/lfm25_hybrid_cpu_backend.rs": backend_fixture(),
+            "src/ai/lfm25_hybrid_cpu_backend.rs": backend_fixture(),
             "src/lumen/decode.rs": decode_fixture(),
-            "src/r/lumen_service.rs": service_fixture(),
+            "src/ai/lumen_service.rs": service_fixture(),
             # Deliberately drift the last source anchor so every earlier
             # transform has been evaluated but no destination is written.
-            "src/r/lfm25_boot_warm.rs": boot_fixture().replace(
+            "src/ai/lfm25_boot_warm.rs": boot_fixture().replace(
                 "GPU submissions remain demand-driven",
                 "GPU work remains demand-driven",
             ),

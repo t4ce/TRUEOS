@@ -10,8 +10,8 @@ const _: f16 = 0.0_f16;
 pub extern crate alloc;
 
 // Modules
-mod allcaps;
 mod ai;
+mod allcaps;
 mod allocators;
 pub mod allports;
 mod app_db;

@@ -32,10 +32,10 @@ writing. The normal invocation writes six paths:
 ```text
 crates/trueos-lfm25-cpu/src/cpu_vnni.rs       new kernel + tests
 crates/trueos-lfm25-cpu/src/lib.rs            exports + model constants
-src/r/lfm25_hybrid_cpu_backend.rs             native model + CPU projection
+src/ai/lfm25_hybrid_cpu_backend.rs            native model + CPU projection
 src/lumen/decode.rs                           CPU-VNNI open/checkpoint/restore
-src/r/lumen_service.rs                        production Lumen route
-src/r/lfm25_boot_warm.rs                      native CPU asset warmup
+src/ai/lumen_service.rs                       production Lumen route
+src/ai/lfm25_boot_warm.rs                     native CPU asset warmup
 ```
 
 `files/crates/trueos-lfm25-cpu/src/cpu_vnni.rs` is the exact new Rust module.

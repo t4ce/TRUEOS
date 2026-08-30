@@ -52,8 +52,8 @@ pub(crate) async fn service_task(expected_worker_slot: u32) {
         actual_worker_slot,
         actual_core_kind,
         crate::allcaps::lumen::BOOT_RESIDENT_WARM_SETTLE_MS,
-        crate::r::lfm25_tokenizer::TOKENIZER_BYTES,
-        crate::r::lfm25_model::NATIVE_IMAGE_BYTES,
+        crate::ai::lfm25_tokenizer::TOKENIZER_BYTES,
+        crate::ai::lfm25_model::NATIVE_IMAGE_BYTES,
         trueos_lfm25_cpu::F32_SIDECAR_BYTES,
         capabilities.ymm_state() as u8,
         capabilities.avx2() as u8,
@@ -62,7 +62,7 @@ pub(crate) async fn service_task(expected_worker_slot: u32) {
     );
 
     let tokenizer_started = Instant::now();
-    let tokenizer_ready = match crate::r::lfm25_tokenizer::load().await {
+    let tokenizer_ready = match crate::ai::lfm25_tokenizer::load().await {
         Ok(_) => {
             crate::log_info!(
                 target: "service";
@@ -83,7 +83,7 @@ pub(crate) async fn service_task(expected_worker_slot: u32) {
     };
 
     let model_started = Instant::now();
-    let model_ready = match crate::r::lfm25_hybrid_cpu_backend::warm_cpu_vnni_model().await {
+    let model_ready = match crate::ai::lfm25_hybrid_cpu_backend::warm_cpu_vnni_model().await {
         Ok(()) => {
             crate::log_info!(
                 target: "service";
@@ -104,7 +104,7 @@ pub(crate) async fn service_task(expected_worker_slot: u32) {
     };
 
     let f32_started = Instant::now();
-    let f32_ready = match crate::r::lfm25_hybrid_cpu_backend::warm_cpu_vnni_f32().await {
+    let f32_ready = match crate::ai::lfm25_hybrid_cpu_backend::warm_cpu_vnni_f32().await {
         Ok(()) => {
             crate::log_info!(
                 target: "service";
@@ -124,7 +124,7 @@ pub(crate) async fn service_task(expected_worker_slot: u32) {
         }
     };
 
-    let assets_ready = crate::r::lfm25_hybrid_cpu_backend::cpu_vnni_resident_assets_ready();
+    let assets_ready = crate::ai::lfm25_hybrid_cpu_backend::cpu_vnni_resident_assets_ready();
     let accepted = tokenizer_ready && model_ready && f32_ready && assets_ready;
     crate::log_info!(
         target: "service";
