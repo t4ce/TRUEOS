@@ -1326,7 +1326,7 @@ pub(super) fn gpu_snapshot() -> SpiritVfxGpuSnapshot {
     let (revision, panel) = control_panel_snapshot();
     let now = Instant::now();
     let now_ms = now.as_millis();
-    let reasoning_active = crate::r::ai_activity::reasoning_active();
+    let reasoning_active = crate::ai::ai_activity::reasoning_active();
     let (reasoning_level, reasoning_phase, reasoning_speed, reasoning_visible) = {
         let mut state = REASONING_VFX_STATE.lock();
         let (level, phase, speed) = state.sample(reasoning_active, now_ms);

@@ -806,7 +806,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         }
         OP_BP_LUMEN_TEMPLATE_OPEN => {
             let rc = request_payload(vm_id, req_len)
-                .map(|system| crate::r::lumen_service::template_open(vm_id, system))
+                .map(|system| crate::ai::lumen_service::template_open(vm_id, system))
                 .unwrap_or(-3);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
@@ -825,7 +825,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                         tail[index] = u32::from_le_bytes(chunk.try_into().ok()?);
                     }
                     let prompt = payload.get(tail_end..)?;
-                    Some(crate::r::lumen_service::prompt_submit(
+                    Some(crate::ai::lumen_service::prompt_submit(
                         vm_id,
                         arg0,
                         &tail[..tail_len],
@@ -854,7 +854,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                     for (index, chunk) in tail_bytes.chunks_exact(4).enumerate() {
                         tail[index] = u32::from_le_bytes(chunk.try_into().ok()?);
                     }
-                    Some(crate::r::lumen_service::prompt_submit_with_no_argument_tool(
+                    Some(crate::ai::lumen_service::prompt_submit_with_no_argument_tool(
                         vm_id,
                         arg0,
                         &tail[..tail_len],
@@ -880,7 +880,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                         tail[index] = u32::from_le_bytes(chunk.try_into().ok()?);
                     }
                     let result = payload.get(tail_end..)?;
-                    Some(crate::r::lumen_service::tool_result_submit(
+                    Some(crate::ai::lumen_service::tool_result_submit(
                         vm_id,
                         arg0,
                         &tail[..tail_len],
@@ -892,7 +892,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_LUMEN_STATUS => {
-            if let Some(status) = crate::r::lumen_service::status(vm_id) {
+            if let Some(status) = crate::ai::lumen_service::status(vm_id) {
                 write_record_response(vm_id, seq, 0, &status);
             } else {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
@@ -906,14 +906,14 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             };
             let cap = (arg0 as usize).min(PAYLOAD_CAP);
             let rc = unsafe {
-                crate::r::lumen_service::reply_read(vm_id, &mut (&mut (*page).payload)[..cap])
+                crate::ai::lumen_service::reply_read(vm_id, &mut (&mut (*page).payload)[..cap])
             };
             let len = usize::try_from(rc).unwrap_or(0).min(cap);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, len as u32);
             DispatchOutcome::Resume
         }
         OP_BP_LUMEN_CHECKPOINT_REQUEST => {
-            let rc = crate::r::lumen_service::checkpoint_request(vm_id);
+            let rc = crate::ai::lumen_service::checkpoint_request(vm_id);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
@@ -924,7 +924,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             };
             let cap = (arg1 as usize).min(PAYLOAD_CAP);
             let rc = unsafe {
-                crate::r::lumen_service::checkpoint_read(
+                crate::ai::lumen_service::checkpoint_read(
                     vm_id,
                     arg0 as usize,
                     &mut (&mut (*page).payload)[..cap],
@@ -935,24 +935,24 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_LUMEN_RESTORE_BEGIN => {
-            let rc = crate::r::lumen_service::restore_begin(vm_id, arg0 as usize);
+            let rc = crate::ai::lumen_service::restore_begin(vm_id, arg0 as usize);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_LUMEN_RESTORE_WRITE => {
             let rc = request_payload(vm_id, req_len)
-                .map(|data| crate::r::lumen_service::restore_write(vm_id, arg0 as usize, data))
+                .map(|data| crate::ai::lumen_service::restore_write(vm_id, arg0 as usize, data))
                 .unwrap_or(-3);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_LUMEN_RESTORE_COMMIT => {
-            let rc = crate::r::lumen_service::restore_commit(vm_id);
+            let rc = crate::ai::lumen_service::restore_commit(vm_id);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_LUMEN_CLOSE => {
-            let rc = crate::r::lumen_service::close(vm_id);
+            let rc = crate::ai::lumen_service::close(vm_id);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
@@ -970,14 +970,14 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         }
         OP_BP_SPIRIT_RESPONSE_PRESENT => {
             let rc = request_payload(vm_id, req_len)
-                .map(|text| crate::r::lumen_service::spirit_response_present(vm_id, arg0, text))
+                .map(|text| crate::ai::lumen_service::spirit_response_present(vm_id, arg0, text))
                 .unwrap_or(-3);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_SPIRIT_TEXT_PRESENT_SILENT => {
             let rc = request_payload(vm_id, req_len)
-                .map(|text| crate::r::lumen_service::spirit_text_present_silent(arg0, text))
+                .map(|text| crate::ai::lumen_service::spirit_text_present_silent(arg0, text))
                 .unwrap_or(-3);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
@@ -985,7 +985,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         OP_BP_SPIRIT_MOVE => {
             let x = f32::from_bits(arg0 as u32);
             let y = f32::from_bits(arg1 as u32);
-            let rc = crate::r::lumen_service::spirit_move(x, y);
+            let rc = crate::ai::lumen_service::spirit_move(x, y);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }

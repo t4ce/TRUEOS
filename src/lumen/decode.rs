@@ -10,7 +10,7 @@ extern crate alloc;
 use alloc::vec::Vec;
 use core::cell::RefCell;
 
-use crate::r::lfm25_decode::{
+use crate::ai::lfm25_decode::{
     AotDecodeBackend, DecodeError, DecodePrefillOutput, DecodeSession, DecodeTokenOutput,
 };
 
@@ -146,20 +146,20 @@ impl<Backend> Lfm25Decode<Backend> {
 /// kernel to the same fixed 99-operation Lumen module.
 #[cfg(target_os = "trueos")]
 pub(crate) async fn open_cpu_vnni() -> Result<
-    Lfm25Decode<crate::r::lfm25_hybrid_cpu_backend::CpuVnniAotDecodeBackend>,
-    crate::r::lfm25_hybrid_cpu_backend::HybridCpuBackendError,
+    Lfm25Decode<crate::ai::lfm25_hybrid_cpu_backend::CpuVnniAotDecodeBackend>,
+    crate::ai::lfm25_hybrid_cpu_backend::HybridCpuBackendError,
 > {
-    let backend = crate::r::lfm25_hybrid_cpu_backend::open_cpu_vnni_backend().await?;
+    let backend = crate::ai::lfm25_hybrid_cpu_backend::open_cpu_vnni_backend().await?;
     Ok(Lfm25Decode::new(backend))
 }
 
 #[cfg(target_os = "trueos")]
 pub(crate) fn checkpoint_cpu_vnni(
-    module: Lfm25Decode<crate::r::lfm25_hybrid_cpu_backend::CpuVnniAotDecodeBackend>,
-) -> Result<Vec<u8>, crate::r::lfm25_hybrid_cpu_backend::HybridCpuBackendError> {
+    module: Lfm25Decode<crate::ai::lfm25_hybrid_cpu_backend::CpuVnniAotDecodeBackend>,
+) -> Result<Vec<u8>, crate::ai::lfm25_hybrid_cpu_backend::HybridCpuBackendError> {
     let (session, backend) = module.into_parts();
     if session.is_poisoned() {
-        return Err(crate::r::lfm25_hybrid_cpu_backend::HybridCpuBackendError::SessionImage);
+        return Err(crate::ai::lfm25_hybrid_cpu_backend::HybridCpuBackendError::SessionImage);
     }
     backend.checkpoint_state(session.position(), session.callback_sequence())
 }
@@ -168,21 +168,21 @@ pub(crate) fn checkpoint_cpu_vnni(
 pub(crate) async fn restore_cpu_vnni(
     image: &[u8],
 ) -> Result<
-    Lfm25Decode<crate::r::lfm25_hybrid_cpu_backend::CpuVnniAotDecodeBackend>,
-    crate::r::lfm25_hybrid_cpu_backend::HybridCpuBackendError,
+    Lfm25Decode<crate::ai::lfm25_hybrid_cpu_backend::CpuVnniAotDecodeBackend>,
+    crate::ai::lfm25_hybrid_cpu_backend::HybridCpuBackendError,
 > {
-    let mut backend = crate::r::lfm25_hybrid_cpu_backend::open_cpu_vnni_backend().await?;
+    let mut backend = crate::ai::lfm25_hybrid_cpu_backend::open_cpu_vnni_backend().await?;
     let checkpoint = backend.restore_state(image)?;
     let session = DecodeSession::from_checkpoint(checkpoint.position, checkpoint.callback_sequence)
-        .ok_or(crate::r::lfm25_hybrid_cpu_backend::HybridCpuBackendError::SessionImage)?;
+        .ok_or(crate::ai::lfm25_hybrid_cpu_backend::HybridCpuBackendError::SessionImage)?;
     Ok(Lfm25Decode::from_parts(session, backend))
 }
 
 #[cfg(target_os = "trueos")]
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) async fn open_hybrid_cpu() -> Result<
-    Lfm25Decode<crate::r::lfm25_hybrid_cpu_backend::HybridCpuAotDecodeBackend>,
-    crate::r::lfm25_hybrid_cpu_backend::HybridCpuBackendError,
+    Lfm25Decode<crate::ai::lfm25_hybrid_cpu_backend::HybridCpuAotDecodeBackend>,
+    crate::ai::lfm25_hybrid_cpu_backend::HybridCpuBackendError,
 > {
     open_cpu_vnni().await
 }
@@ -197,7 +197,7 @@ mod tests {
     use core::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
     use super::*;
-    use crate::r::lfm25_decode::{
+    use crate::ai::lfm25_decode::{
         AotDecodeCallback, AotDecodeOutput, AotDecodeRequest, FailClosedBackend, HiddenQ8,
         HiddenQ30, ResidentTensorHandle,
     };

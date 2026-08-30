@@ -37,7 +37,7 @@ const ERROR_INFERENCE: i32 = -6;
 const ERROR_TRANSPORT: i32 = -7;
 
 type LfmModule =
-    crate::lumen::decode::Lfm25Decode<crate::r::lfm25_hybrid_cpu_backend::CpuVnniAotDecodeBackend>;
+    crate::lumen::decode::Lfm25Decode<crate::ai::lfm25_hybrid_cpu_backend::CpuVnniAotDecodeBackend>;
 
 enum LumenRequest {
     TemplateOpen(String),
@@ -519,7 +519,7 @@ async fn lumen_blueprint_worker(owner: u8) {
         return;
     };
 
-    let tokenizer = match crate::r::lfm25_tokenizer::load().await {
+    let tokenizer = match crate::ai::lfm25_tokenizer::load().await {
         Ok(tokenizer) => tokenizer,
         Err(error) => {
             crate::log_warn!(
@@ -767,8 +767,8 @@ async fn run_generation(
     mut prompt_tokens: Vec<u32>,
     no_argument_tool: Option<&str>,
 ) -> Result<PromptReply, ()> {
-    let reasoning = crate::r::ai_activity::begin_reasoning(
-        crate::r::ai_activity::AiActivitySource::Lumen,
+    let reasoning = crate::ai::ai_activity::begin_reasoning(
+        crate::ai::ai_activity::AiActivitySource::Lumen,
         turn.saturating_add(1),
     );
     let _lumen_gt_boost = crate::intel::begin_lumen_gt_boost();

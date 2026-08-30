@@ -14,7 +14,7 @@ use super::super::{
     MatrixTarget, ShellBackend2, matrix_target_for_backend, print_matrix_target_line,
     print_shell_line, set_matrix_target_active, switch_matrix_target_slot,
 };
-use crate::r::ttstt_service::{
+use crate::ai::ttstt_service::{
     ServiceState, SpeechRequestError, SttRequest, TtsAudioChunk, TtsRequest, TtsStreamEvent,
 };
 use crate::shell2::shell2_cmd::ParseOutcome;
@@ -24,7 +24,7 @@ const DEFAULT_SPEED: f32 = 1.0;
 // This is a defensive shell allocation cap, not Kokoro's model limit. The
 // backend must enforce KOKORO_MAX_PHONEMES after language-specific G2P.
 const TTS_TEXT_MAX_BYTES: usize = 8 * 1024;
-const TTS_SHELL_QUEUE_DEPTH: usize = crate::r::ttstt_service::TTS_QUEUE_DEPTH;
+const TTS_SHELL_QUEUE_DEPTH: usize = crate::ai::ttstt_service::TTS_QUEUE_DEPTH;
 const TTS_PCM_BACKPRESSURE_TIMEOUT_MS: u64 = 30_000;
 const STT_AUDIO_MAX_BYTES: u64 = 64 * 1024 * 1024;
 const STT_AUDIO_MAX_SECONDS: usize = 5 * 60;
@@ -40,7 +40,7 @@ struct ShellTtsRequest {
     spirit_talk: bool,
     stop_generation: u32,
     queued_at: Instant,
-    capture: Option<crate::r::ttstt_capture::CaptureSession>,
+    capture: Option<crate::ai::ttstt_capture::CaptureSession>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -127,8 +127,8 @@ pub(crate) fn try_parse_tts(
             return ParseOutcome::Handled;
         }
     };
-    if crate::r::ttstt_service::status().state != ServiceState::Ready {
-        match crate::r::ttstt_service::ensure_service_started(*spawner) {
+    if crate::ai::ttstt_service::status().state != ServiceState::Ready {
+        match crate::ai::ttstt_service::ensure_service_started(*spawner) {
             Ok(started) => print_shell_line(
                 io,
                 alloc::format!(
@@ -145,7 +145,7 @@ pub(crate) fn try_parse_tts(
         print_status(io, "tts");
         return ParseOutcome::Handled;
     }
-    if crate::r::ttstt_service::speech_backend_name().is_none() {
+    if crate::ai::ttstt_service::speech_backend_name().is_none() {
         print_shell_line(
             io,
             "tts: unavailable reason=native-kokoro-backend-unregistered; models/pool status follows",
@@ -153,8 +153,8 @@ pub(crate) fn try_parse_tts(
         print_status(io, "tts");
         return ParseOutcome::Handled;
     }
-    if !crate::r::ttstt_service::tts_backend_ready() {
-        if let Some(reason) = crate::r::ttstt_service::speech_backend_warm_failure_reason() {
+    if !crate::ai::ttstt_service::tts_backend_ready() {
+        if let Some(reason) = crate::ai::ttstt_service::speech_backend_warm_failure_reason() {
             print_shell_line(
                 io,
                 alloc::format!(
@@ -182,7 +182,7 @@ pub(crate) fn try_parse_tts(
     let target = switch_matrix_target_slot(&active_target, "tts");
     set_matrix_target_active(&target, true);
     let request_id = NEXT_TTS_SHELL_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
-    let capture = crate::r::ttstt_capture::claim_next(request_id, &text, &voice, speed);
+    let capture = crate::ai::ttstt_capture::claim_next(request_id, &text, &voice, speed);
     let request = ShellTtsRequest {
         id: request_id,
         target: Some(target.clone()),
@@ -222,7 +222,7 @@ pub(crate) fn try_parse_tts(
     TTS_SHELL_QUEUE_WAIT.notify_one();
     let capture_report = capture.as_ref().map_or_else(
         || {
-            let capture_status = crate::r::ttstt_capture::status();
+            let capture_status = crate::ai::ttstt_capture::status();
             alloc::format!(
                 "capture_mode=none recent_remaining={} physical_budget=3-per-arm",
                 capture_status.recent_claims_remaining,
@@ -247,8 +247,8 @@ pub(crate) fn try_parse_tts(
         &target,
         alloc::format!(
             "tts: queued request={request_id} waiting={depth}/{TTS_SHELL_QUEUE_DEPTH} voice={voice} speed={speed:.2} model_chunk_max_phonemes={} pcm_chunk_max_frames={} {}",
-            crate::r::ttstt_service::KOKORO_MAX_PHONEMES,
-            crate::r::ttstt_service::TTS_PCM_CHUNK_MAX_FRAMES,
+            crate::ai::ttstt_service::KOKORO_MAX_PHONEMES,
+            crate::ai::ttstt_service::TTS_PCM_CHUNK_MAX_FRAMES,
             capture_report,
         )
         .as_str(),
@@ -267,13 +267,13 @@ pub(crate) fn enqueue_lumen_tts(text: &str) -> Result<u64, &'static str> {
     if text.len() > TTS_TEXT_MAX_BYTES {
         return Err("text-too-long");
     }
-    if crate::r::ttstt_service::speech_backend_name().is_none() {
+    if crate::ai::ttstt_service::speech_backend_name().is_none() {
         return Err("native-kokoro-backend-unregistered");
     }
-    if crate::r::ttstt_service::status().state != ServiceState::Ready {
+    if crate::ai::ttstt_service::status().state != ServiceState::Ready {
         return Err("model-service-not-ready");
     }
-    if !crate::r::ttstt_service::tts_backend_ready() {
+    if !crate::ai::ttstt_service::tts_backend_ready() {
         return Err("native-kokoro-backend-not-ready");
     }
     if !crate::r::readiness::is_set(crate::r::readiness::INTEL_HDA_READY) {
@@ -355,7 +355,7 @@ fn finish_tts_request(request: &ShellTtsRequest) {
 
 fn handle_tts_capture_command(io: &'static dyn ShellBackend2, argument: &str) {
     if argument.eq_ignore_ascii_case("next") {
-        let armed = crate::r::ttstt_capture::arm_next();
+        let armed = crate::ai::ttstt_capture::arm_next();
         print_shell_line(
             io,
             if armed {
@@ -377,7 +377,7 @@ fn handle_tts_capture_command(io: &'static dyn ShellBackend2, argument: &str) {
             return;
         }
         if action.eq_ignore_ascii_case("on") {
-            let previous_remaining = crate::r::ttstt_capture::arm_recent();
+            let previous_remaining = crate::ai::ttstt_capture::arm_recent();
             print_shell_line(
                 io,
                 alloc::format!(
@@ -389,7 +389,7 @@ fn handle_tts_capture_command(io: &'static dyn ShellBackend2, argument: &str) {
             return;
         }
         if action.eq_ignore_ascii_case("off") {
-            let previous_remaining = crate::r::ttstt_capture::disable_recent();
+            let previous_remaining = crate::ai::ttstt_capture::disable_recent();
             print_shell_line(
                 io,
                 alloc::format!(
@@ -408,7 +408,7 @@ fn handle_tts_capture_command(io: &'static dyn ShellBackend2, argument: &str) {
         return;
     }
     if argument.eq_ignore_ascii_case("off") {
-        let was_armed = crate::r::ttstt_capture::disarm();
+        let was_armed = crate::ai::ttstt_capture::disarm();
         print_shell_line(
             io,
             if was_armed {
@@ -430,7 +430,7 @@ fn handle_tts_capture_command(io: &'static dyn ShellBackend2, argument: &str) {
 }
 
 fn print_tts_capture_status(io: &'static dyn ShellBackend2) {
-    let status = crate::r::ttstt_capture::status();
+    let status = crate::ai::ttstt_capture::status();
     print_shell_line(
         io,
         alloc::format!(
@@ -527,7 +527,7 @@ async fn process_tts_request(request: ShellTtsRequest) {
     }
 
     let voice = request.voice.clone();
-    let submission = match crate::r::ttstt_service::submit_tts(TtsRequest {
+    let submission = match crate::ai::ttstt_service::submit_tts(TtsRequest {
         text: request.text.clone(),
         voice: request.voice.clone(),
         speed: request.speed,
@@ -707,7 +707,7 @@ async fn process_tts_request(request: ShellTtsRequest) {
                         summary.model_chunks,
                         summary.pcm_chunks,
                         summary.pcm_frames,
-                        crate::r::ttstt_capture::CaptureTiming {
+                        crate::ai::ttstt_capture::CaptureTiming {
                             queue_wait_ms,
                             service_queue_wait_us,
                             service_dispatch_to_first_pcm_us,
@@ -730,7 +730,7 @@ async fn process_tts_request(request: ShellTtsRequest) {
                         summary.pcm_chunks,
                         summary.pcm_frames,
                         summary.pcm_frames.saturating_mul(1_000)
-                            / crate::r::ttstt_service::TTS_PCM_SAMPLE_RATE_HZ as u64,
+                            / crate::ai::ttstt_service::TTS_PCM_SAMPLE_RATE_HZ as u64,
                         queue_wait_ms,
                         service_queue_wait_us,
                         service_dispatch_to_first_pcm_us,
@@ -795,8 +795,8 @@ pub(crate) fn try_parse_stt(
         );
         return ParseOutcome::Handled;
     }
-    if crate::r::ttstt_service::status().state != ServiceState::Ready {
-        match crate::r::ttstt_service::ensure_service_started(*spawner) {
+    if crate::ai::ttstt_service::status().state != ServiceState::Ready {
+        match crate::ai::ttstt_service::ensure_service_started(*spawner) {
             Ok(started) => print_shell_line(
                 io,
                 alloc::format!(
@@ -813,7 +813,7 @@ pub(crate) fn try_parse_stt(
         print_status(io, "stt");
         return ParseOutcome::Handled;
     }
-    if crate::r::ttstt_service::speech_backend_name().is_none() {
+    if crate::ai::ttstt_service::speech_backend_name().is_none() {
         print_shell_line(
             io,
             "stt: unavailable reason=native-whisper-backend-unregistered; no audio file was read",
@@ -821,8 +821,8 @@ pub(crate) fn try_parse_stt(
         print_status(io, "stt");
         return ParseOutcome::Handled;
     }
-    if !crate::r::ttstt_service::stt_backend_ready() {
-        if let Some(reason) = crate::r::ttstt_service::speech_backend_warm_failure_reason() {
+    if !crate::ai::ttstt_service::stt_backend_ready() {
+        if let Some(reason) = crate::ai::ttstt_service::speech_backend_warm_failure_reason() {
             print_shell_line(
                 io,
                 alloc::format!("stt: unavailable reason=speech-backend-rejected detail={reason}; no audio file was read")
@@ -866,19 +866,19 @@ pub(crate) fn try_parse_stt(
 }
 
 fn print_status(io: &'static dyn ShellBackend2, command: &str) {
-    let status = crate::r::ttstt_service::status();
+    let status = crate::ai::ttstt_service::status();
     let state = match status.state {
         ServiceState::WaitingForModels => "waiting-models",
         ServiceState::LoadingModels => "loading-models",
         ServiceState::ModelsResident => "models-resident",
         ServiceState::Ready => "ready",
     };
-    let backend = crate::r::ttstt_service::speech_backend_name().unwrap_or("unregistered");
-    let backend_failure = crate::r::ttstt_service::speech_backend_warm_failure_reason();
+    let backend = crate::ai::ttstt_service::speech_backend_name().unwrap_or("unregistered");
+    let backend_failure = crate::ai::ttstt_service::speech_backend_warm_failure_reason();
     let direction_ready = if command == "tts" {
-        crate::r::ttstt_service::tts_backend_ready()
+        crate::ai::ttstt_service::tts_backend_ready()
     } else {
-        crate::r::ttstt_service::stt_backend_ready()
+        crate::ai::ttstt_service::stt_backend_ready()
     };
     let backend_state = if backend == "unregistered" {
         "unregistered"
@@ -903,7 +903,7 @@ fn print_status(io: &'static dyn ShellBackend2, command: &str) {
                 status.queued_tts_jobs,
                 status.active_tts_job_id.unwrap_or(0),
                 status.tts_pcm_chunks_buffered,
-                crate::r::ttstt_service::TTS_OUTPUT_QUEUE_DEPTH,
+                crate::ai::ttstt_service::TTS_OUTPUT_QUEUE_DEPTH,
                 status.tts_pcm_frames_buffered,
                 shell.waiting,
                 TTS_SHELL_QUEUE_DEPTH,
@@ -913,8 +913,8 @@ fn print_status(io: &'static dyn ShellBackend2, command: &str) {
                 crate::aud::pcm_lane::pending_frames(),
                 crate::aud::pcm_lane::paused() as u8,
                 crate::r::readiness::is_set(crate::r::readiness::INTEL_HDA_READY) as u8,
-                crate::r::ttstt_service::KOKORO_MAX_PHONEMES,
-                crate::r::ttstt_service::TTS_PCM_CHUNK_MAX_FRAMES,
+                crate::ai::ttstt_service::KOKORO_MAX_PHONEMES,
+                crate::ai::ttstt_service::TTS_PCM_CHUNK_MAX_FRAMES,
                 status.tts_pcm_chunks_emitted,
                 status.tts_pcm_frames_emitted,
                 status.tts_streams_completed,
@@ -1108,7 +1108,7 @@ async fn stt_file_task(target: MatrixTarget, command: SttFileCommand) {
         }
         set_matrix_target_active(&completion_target, false);
     });
-    match crate::r::ttstt_service::submit_stt(SttRequest {
+    match crate::ai::ttstt_service::submit_stt(SttRequest {
         pcm_f32_mono_16k: pcm,
         language: command.language,
         translate: command.translate,
@@ -1221,7 +1221,7 @@ async fn handoff_tts_audio_chunk(
             return Err(String::from("stopped"));
         }
         if crate::aud::pcm_lane::pending_frames().saturating_add(frames)
-            > crate::r::ttstt_service::TTS_PCM_SAMPLE_RATE_HZ as usize
+            > crate::ai::ttstt_service::TTS_PCM_SAMPLE_RATE_HZ as usize
         {
             if Instant::now()
                 .saturating_duration_since(wait_started)

@@ -358,12 +358,6 @@ impl StagedCandidate {
         handoff.checksum = handoff_checksum(handoff);
     }
 
-    fn set_shell_tcp_handoff(&mut self, handoff: crate::net::adapter::TcpQuietHandoff) {
-        let warm = self.handoff_mut();
-        warm.shell_tcp = handoff;
-        warm.checksum = handoff_checksum(warm);
-    }
-
     fn mark_committed(&mut self) {
         let handoff = self.handoff_mut();
         handoff.state = HANDOFF_STATE_COMMITTED;
@@ -706,13 +700,6 @@ pub fn warm_kernel_file_bytes() -> Option<&'static [u8]> {
     Some(unsafe { core::slice::from_raw_parts(virt as *const u8, len) })
 }
 
-/// The candidate consumes this only during early Shell2 startup. An all-zero
-/// capsule deliberately means "open the ordinary fresh listener".
-pub(crate) fn warm_shell_tcp_handoff() -> Option<crate::net::adapter::TcpQuietHandoff> {
-    let handoff = warm_handoff()?;
-    (handoff.shell_tcp != crate::net::adapter::TcpQuietHandoff::EMPTY).then_some(handoff.shell_tcp)
-}
-
 pub fn log_boot_mode() {
     if let Some(handoff) = warm_handoff() {
         crate::log_info!(
@@ -986,19 +973,10 @@ pub(crate) async fn stage_and_swap(
     switch_ap_transition_stacks(&target, &staged).await;
     quiesce_pci_for_commit(&target, pci_snapshot.as_slice()).await;
 
-    // NIC DMA is now disabled and APs are parked, so no old-kernel poll can
-    // ACK data after this scalar snapshot. Anything still sitting in a NIC
-    // ring is intentionally discarded; eligibility requires it could not have
-    // reached either TCP or Shell2 queues.
-    if let Some(handle) =
-        crate::shell2::backends::net_tcp::net_shell_quiet_handle_for_warm_handoff()
-        && let Some(tcp) = crate::net::adapter::capture_tcp_quiet_handoff("net-shell", handle)
-    {
-        staged.set_shell_tcp_handoff(tcp);
-        transition_marker(b"live-update: shell2-quiet-tcp-handoff=armed scalar-only\n");
-    } else {
-        transition_marker(b"live-update: shell2-quiet-tcp-handoff=ineligible fresh-listener\n");
-    }
+    // ABI v2 retains the TCP field and checksum coverage so a predecessor that
+    // populated it can deploy this kernel safely. This kernel leaves it EMPTY;
+    // the candidate ignores it and opens a fresh listener.
+    transition_marker(b"live-update: shell2-tcp-handoff=disabled fresh-listener\n");
 
     staged.mark_committed();
     unsafe { commit_fullforget(&staged) }

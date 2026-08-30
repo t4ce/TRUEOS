@@ -21,11 +21,11 @@ use trueos_lfm25_model::lfm25_decode::{
     DecodeCapabilities, DecodeOpKind, EmbeddingRowPlan, LayerStateSlot,
 };
 
-use crate::r::lfm25_decode::{
+use crate::ai::lfm25_decode::{
     AotDecodeBackend, AotDecodeCallback, AotDecodeOutput, AotDecodeRequest, HiddenQ8, HiddenQ30,
     ResidentTensorHandle,
 };
-use crate::r::{lfm25_f32, lfm25_model};
+use crate::ai::{lfm25_f32, lfm25_model};
 
 const HIDDEN: usize = lfm25::MODEL_HIDDEN_SIZE as usize;
 const HEADS: usize = lfm25::MODEL_ATTENTION_HEADS as usize;

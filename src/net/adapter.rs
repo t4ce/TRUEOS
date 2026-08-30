@@ -537,8 +537,9 @@ pub struct NetEndpointV6 {
     pub port: u16,
 }
 
-/// Scalar-only TCP capsule used by the live-update path. It never contains a
-/// socket handle, allocation, descriptor, packet, or payload buffer.
+/// ABI-v2 compatibility field for the retired live TCP handoff experiment.
+/// A predecessor may populate it while deploying this kernel; it is ignored,
+/// and kernels built from this source emit `EMPTY` for their successors.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(C)]
 pub struct TcpQuietHandoff {
@@ -575,47 +576,6 @@ impl TcpQuietHandoff {
         remote_mss: 0,
         last_remote_tsval: 0,
     };
-
-    fn from_smoltcp(snapshot: tcp::QuietSnapshot) -> Self {
-        Self {
-            local_addr: snapshot.local_addr,
-            local_port: snapshot.local_port,
-            remote_addr: snapshot.remote_addr,
-            remote_port: snapshot.remote_port,
-            local_seq_no: snapshot.local_seq_no,
-            remote_seq_no: snapshot.remote_seq_no,
-            remote_last_ack: snapshot.remote_last_ack,
-            remote_last_win: snapshot.remote_last_win,
-            remote_win_shift: snapshot.remote_win_shift,
-            remote_win_len: snapshot.remote_win_len,
-            remote_win_scale: snapshot.remote_win_scale.unwrap_or(u8::MAX),
-            remote_has_sack: u8::from(snapshot.remote_has_sack),
-            remote_mss: snapshot.remote_mss,
-            last_remote_tsval: snapshot.last_remote_tsval,
-        }
-    }
-
-    fn to_smoltcp(self) -> Option<tcp::QuietSnapshot> {
-        (self.local_port != 0 && self.remote_port != 0 && self.remote_mss != 0).then_some(
-            tcp::QuietSnapshot {
-                local_addr: self.local_addr,
-                local_port: self.local_port,
-                remote_addr: self.remote_addr,
-                remote_port: self.remote_port,
-                local_seq_no: self.local_seq_no,
-                remote_seq_no: self.remote_seq_no,
-                remote_last_ack: self.remote_last_ack,
-                remote_last_win: self.remote_last_win,
-                remote_win_shift: self.remote_win_shift,
-                remote_win_len: self.remote_win_len,
-                remote_win_scale: (self.remote_win_scale != u8::MAX)
-                    .then_some(self.remote_win_scale),
-                remote_has_sack: self.remote_has_sack != 0,
-                remote_mss: self.remote_mss,
-                last_remote_tsval: self.last_remote_tsval,
-            },
-        )
-    }
 }
 
 /// One immutable payload allocation shared by a command producer and the
@@ -671,9 +631,6 @@ pub enum NetCommand {
     },
     OpenTcpListen {
         port: u16,
-    },
-    RestoreTcpQuiet {
-        handoff: TcpQuietHandoff,
     },
     OpenTcpConnect {
         remote: NetEndpoint,
@@ -832,11 +789,6 @@ impl<T> NetQueue<T> {
         }
         out
     }
-
-    #[inline]
-    pub fn is_empty(&self) -> bool {
-        self.inner.lock().is_empty()
-    }
 }
 
 struct AppQueues {
@@ -915,14 +867,6 @@ fn pop_command_for_device(device_index: usize) -> Option<(&'static str, NetComma
         }
     }
     None
-}
-
-fn owner_queues_empty(owner: &'static str) -> bool {
-    let guard = APP_QUEUES.lock();
-    guard
-        .iter()
-        .find(|entry| entry.name == owner)
-        .is_some_and(|entry| entry.cmds.is_empty() && entry.events.is_empty())
 }
 
 fn push_event(target: &'static str, event: NetEvent) -> bool {
@@ -2658,70 +2602,6 @@ impl NetService {
         Ok(handle)
     }
 
-    fn restore_tcp_quiet(
-        &mut self,
-        owner: &'static str,
-        handoff: TcpQuietHandoff,
-    ) -> Result<NetHandle, &'static str> {
-        self.require_link_up()?;
-        if self.records.len() >= SOCKET_SOFT_CAP
-            || self.local_ipv4.map(|ip| ip.octets()) != Some(handoff.local_addr)
-        {
-            return Err("quiet tcp restore unavailable");
-        }
-        let snapshot = handoff.to_smoltcp().ok_or("bad quiet tcp handoff")?;
-        let rx = tcp::SocketBuffer::new(vec![0; TCP_RX_BUF_BYTES]);
-        let tx = tcp::SocketBuffer::new(vec![0; TCP_TX_BUF_BYTES]);
-        let mut socket = tcp::Socket::new(rx, tx);
-        socket
-            .restore_quiet_snapshot(snapshot)
-            .map_err(|_| "bad quiet tcp handoff")?;
-        socket.set_keep_alive(Some(SmolDuration::from_secs(30)));
-        if owner == "net-shell" {
-            socket.set_nagle_enabled(false);
-            socket.set_ack_delay(None);
-        }
-        let handle = self.alloc_handle();
-        let sh = self.sockets.add(socket);
-        self.records.push(SocketRecord {
-            owner,
-            handle,
-            kind: SocketKind::Tcp,
-            socket: sh,
-            tcp_tx: VecDeque::new(),
-            tcp_loopback_peer: None,
-            tcp_connect: false,
-            tcp_local_port: Some(handoff.local_port),
-            tcp_remote_v4: Some(NetEndpoint {
-                addr: handoff.remote_addr,
-                port: handoff.remote_port,
-            }),
-            tcp_remote_v6: None,
-            established: true,
-            last_tcp_state: Some(tcp::State::Established),
-        });
-        Ok(handle)
-    }
-
-    fn capture_tcp_quiet(
-        &mut self,
-        owner: &'static str,
-        handle: NetHandle,
-    ) -> Option<TcpQuietHandoff> {
-        let rec = self.records.iter().find(|rec| {
-            rec.owner == owner
-                && rec.handle == handle
-                && rec.kind == SocketKind::Tcp
-                && rec.established
-                && rec.tcp_tx.is_empty()
-                && rec.tcp_loopback_peer.is_none()
-        })?;
-        self.sockets
-            .get::<tcp::Socket>(rec.socket)
-            .quiet_snapshot()
-            .map(TcpQuietHandoff::from_smoltcp)
-    }
-
     fn open_loopback_tcp_connect(
         &mut self,
         owner: &'static str,
@@ -4153,32 +4033,6 @@ impl NetService {
                     let _ = push_event(owner, NetEvent::Error { msg });
                 }
             },
-            NetCommand::RestoreTcpQuiet { handoff } => match self.restore_tcp_quiet(owner, handoff)
-            {
-                Ok(handle) => {
-                    let _ = push_event(
-                        owner,
-                        NetEvent::Opened {
-                            handle,
-                            kind: SocketKind::Tcp,
-                        },
-                    );
-                    let _ = push_event(
-                        owner,
-                        NetEvent::TcpEstablished {
-                            handle,
-                            peer: Some(NetEndpoint {
-                                addr: handoff.remote_addr,
-                                port: handoff.remote_port,
-                            }),
-                            peer6: None,
-                        },
-                    );
-                }
-                Err(msg) => {
-                    let _ = push_event(owner, NetEvent::Error { msg });
-                }
-            },
             NetCommand::OpenTcpConnect { remote } => {
                 if is_ipv4_loopback(remote.addr) {
                     match self.open_loopback_tcp_connect(owner, remote) {
@@ -5484,22 +5338,6 @@ fn service_for_device(device_index: usize) -> Option<&'static spin::Mutex<NetSer
     services.get(device_index).copied()
 }
 
-/// Capture one established owner socket only after its event queue has drained.
-/// The caller must have already frozen the NIC DMA path; this function does not
-/// retain descriptors, adapter queues, or any TCP payload bytes.
-pub fn capture_tcp_quiet_handoff(
-    owner: &'static str,
-    handle: NetHandle,
-) -> Option<TcpQuietHandoff> {
-    if !owner_queues_empty(owner) {
-        return None;
-    }
-    let service = service_for_device(
-        owner_device_index(owner).unwrap_or_else(crate::net::primary_device_index),
-    )?;
-    service.lock().capture_tcp_quiet(owner, handle)
-}
-
 fn service_tick_once(device_index: usize) -> bool {
     let Some(service) = service_for_device(device_index) else {
         return false;
@@ -5641,32 +5479,4 @@ pub async fn net_service_task(index: usize) {
         }
     }
     .await;
-}
-
-#[cfg(test)]
-mod quiet_handoff_tests {
-    use super::TcpQuietHandoff;
-
-    #[test]
-    fn quiet_handoff_round_trips_only_scalars() {
-        let handoff = TcpQuietHandoff {
-            local_addr: [192, 0, 2, 10],
-            local_port: 4245,
-            remote_addr: [192, 0, 2, 20],
-            remote_port: 50123,
-            local_seq_no: -7,
-            remote_seq_no: 9,
-            remote_last_ack: 9,
-            remote_last_win: 128,
-            remote_win_shift: 2,
-            remote_win_len: 4096,
-            remote_win_scale: 3,
-            remote_has_sack: 1,
-            remote_mss: 1460,
-            last_remote_tsval: 42,
-        };
-        let rebuilt = TcpQuietHandoff::from_smoltcp(handoff.to_smoltcp().unwrap());
-        assert_eq!(rebuilt, handoff);
-        assert!(TcpQuietHandoff::EMPTY.to_smoltcp().is_none());
-    }
 }

@@ -338,7 +338,7 @@ pub(crate) fn retry_font_warm_pool_autostart() {
 }
 
 fn spawn_ttstt_cpu_service(spawner: Spawner) -> SpawnAttempt {
-    match crate::r::ttstt_service::ensure_service_started(spawner) {
+    match crate::ai::ttstt_service::ensure_service_started(spawner) {
         Ok(_) => SpawnAttempt::Spawned,
         Err(error) => SpawnAttempt::Failed(error),
     }
@@ -346,7 +346,7 @@ fn spawn_ttstt_cpu_service(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_ttstt_capture_writer(spawner: Spawner) -> SpawnAttempt {
     // TRUEOSFS futures are intentionally local to the BSP executor.
-    spawn_local(spawner, |_spawner| crate::r::ttstt_capture::writer_task())
+    spawn_local(spawner, |_spawner| crate::ai::ttstt_capture::writer_task())
 }
 
 #[cfg(feature = "trueos_lumen")]
@@ -357,7 +357,7 @@ fn spawn_lumen_boot_warm(spawner: Spawner) -> SpawnAttempt {
     else {
         return SpawnAttempt::Skipped;
     };
-    let token = match crate::r::lfm25_boot_warm::service_task(worker_slot) {
+    let token = match crate::ai::lfm25_boot_warm::service_task(worker_slot) {
         Ok(token) => token,
         Err(error) => return SpawnAttempt::Failed(error),
     };

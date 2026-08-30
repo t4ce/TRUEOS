@@ -1,5 +1,6 @@
 use alloc::collections::VecDeque;
 use alloc::vec::Vec;
+use core::sync::atomic::Ordering;
 
 use trueos_executor::task;
 use trueos_time::{Duration as EmbassyDuration, Instant, with_timeout};
@@ -8,10 +9,11 @@ use crate::net::adapter::{
     NetCommand, NetEvent, NetHandle, NetQueue, SocketKind, register_app_queues,
 };
 use crate::shell2::backends::net_tcp::{
-    NET_SHELL_STATE, NET_SHELL_TCP_PORT, NetShellDirectControlToken, NetShellOwnershipSnapshot,
-    admit_net_shell_tx, enqueue_net_shell_rx_if_unchanged, net_shell_begin_connection,
-    net_shell_direct_reset_terminal, net_shell_ownership_snapshot, net_shell_terminal_size_query,
-    net_shell_write_bytes, update_net_shell_surface_size, wait_for_net_shell_work,
+    NET_SHELL_STARTED, NET_SHELL_STATE, NET_SHELL_TCP_PORT, NetShellDirectControlToken,
+    NetShellOwnershipSnapshot, admit_net_shell_tx, enqueue_net_shell_rx_if_unchanged,
+    net_shell_begin_connection, net_shell_direct_reset_terminal, net_shell_ownership_snapshot,
+    net_shell_terminal_size_query, net_shell_write_bytes, update_net_shell_surface_size,
+    wait_for_net_shell_work,
 };
 
 const TERMINAL_SIZE_QUERY: &[u8] = b"\x1b[18t";
@@ -149,6 +151,10 @@ fn looks_like_incomplete_terminal_size_report(data: &[u8]) -> bool {
 #[task]
 pub async fn net_shell_task() {
     async move {
+        if NET_SHELL_STARTED.swap(true, Ordering::SeqCst) {
+            return;
+        }
+
         // Deliberate BSP recovery privilege: net-shell must be reachable before the
         // ordinary network readiness gates open. `NetService::new` installs a
         // per-NIC static IPv4 fallback before starting DHCP, so a TCP listener can
@@ -221,19 +227,9 @@ pub async fn net_shell_task() {
         let events = NetQueue::new_leaked("net-shell-evt", 256);
         register_app_queues(owner, cmds, events);
 
-        // A warm capsule is valid only for an already-quiet connection. It is
-        // restored before opening a listener so the peer's original 4-tuple
-        // owns the single TCP socket; any failure falls straight back to the
-        // ordinary listener.
-        let mut warm_restore_pending = crate::live_update::warm_shell_tcp_handoff();
-        let mut warm_restore_active = false;
-        let _ = if let Some(handoff) = warm_restore_pending {
-            cmds.push(NetCommand::RestoreTcpQuiet { handoff })
-        } else {
-            cmds.push(NetCommand::OpenTcpListen {
-                port: NET_SHELL_TCP_PORT,
-            })
-        };
+        let _ = cmds.push(NetCommand::OpenTcpListen {
+            port: NET_SHELL_TCP_PORT,
+        });
         crate::log!(
             "net-shell: listening on tcp {} owner={} ms={}\n",
             NET_SHELL_TCP_PORT,
@@ -274,10 +270,6 @@ pub async fn net_shell_task() {
                         }
                     }
                     NetEvent::TcpEstablished { handle, .. } => {
-                        if warm_restore_pending.is_some() {
-                            warm_restore_pending = None;
-                            warm_restore_active = true;
-                        }
                         let (schedule_initial_repaint, ownership) =
                             net_shell_begin_connection(handle);
                         if schedule_initial_repaint {
@@ -316,8 +308,7 @@ pub async fn net_shell_task() {
                             handle.0,
                             Instant::now().as_millis()
                         );
-                        if !warm_restore_active
-                            && let Some(notice) = crate::live_update::take_shell_notice()
+                        if let Some(notice) = crate::live_update::take_shell_notice()
                             && !net_shell_write_bytes(notice)
                         {
                             crate::live_update::rearm_shell_notice();
@@ -517,10 +508,6 @@ pub async fn net_shell_task() {
                             }
                         };
                         if closed_active {
-                            // The original quiet-resumed peer is gone. A later
-                            // listener connection is genuinely fresh and must
-                            // receive the normal post-update notice.
-                            warm_restore_active = false;
                             if initial_repaint_handle == Some(handle) {
                                 initial_repaint_handle = None;
                                 initial_repaint_deadline = None;
@@ -551,12 +538,7 @@ pub async fn net_shell_task() {
                         // early OpenTcpListen then fails with `link down`; retry it instead
                         // of waiting for an IP-readiness transition that this task is
                         // intentionally allowed to bypass.
-                        if warm_restore_pending.take().is_some() {
-                            warm_restore_active = false;
-                            let _ = cmds.push(NetCommand::OpenTcpListen {
-                                port: NET_SHELL_TCP_PORT,
-                            });
-                        } else if tcp_handle.is_none() {
+                        if tcp_handle.is_none() {
                             let _ = cmds.push(NetCommand::OpenTcpListen {
                                 port: NET_SHELL_TCP_PORT,
                             });

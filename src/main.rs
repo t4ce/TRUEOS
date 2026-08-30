@@ -11,6 +11,7 @@ pub extern crate alloc;
 
 // Modules
 mod allcaps;
+mod ai;
 mod allocators;
 pub mod allports;
 mod app_db;

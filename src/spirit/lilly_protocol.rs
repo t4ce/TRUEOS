@@ -700,13 +700,13 @@ pub(crate) fn stop_after_boundary() -> usize {
 #[allow(dead_code)]
 pub(crate) fn next_animation() -> Result<LillyScheduledAnimation, LillyProtocolError> {
     loop {
-        if let Some(event) = crate::r::ai_activity::try_take_reasoning_event() {
+        if let Some(event) = crate::ai::ai_activity::try_take_reasoning_event() {
             pause_idle_strategy();
             let (event_name, animation_key) = match event.phase {
-                crate::r::ai_activity::AiReasoningPhase::Started => {
+                crate::ai::ai_activity::AiReasoningPhase::Started => {
                     ("reasoning-start", AI_REASONING_START_ANIMATION)
                 }
-                crate::r::ai_activity::AiReasoningPhase::Finished => {
+                crate::ai::ai_activity::AiReasoningPhase::Finished => {
                     ("reasoning-finish", AI_REASONING_FINISH_ANIMATION)
                 }
             };
@@ -721,7 +721,7 @@ pub(crate) fn next_animation() -> Result<LillyScheduledAnimation, LillyProtocolE
             return resolve(animation_key, *LAST_RGBA.lock());
         }
 
-        if crate::r::ai_activity::reasoning_active() {
+        if crate::ai::ai_activity::reasoning_active() {
             return next_idle_animation(*LAST_RGBA.lock());
         }
 

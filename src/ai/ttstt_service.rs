@@ -695,7 +695,7 @@ pub struct TtsRequest {
     pub text: String,
     pub voice: String,
     pub speed: f32,
-    pub(crate) capture: Option<crate::r::ttstt_capture::CaptureSession>,
+    pub(crate) capture: Option<crate::ai::ttstt_capture::CaptureSession>,
 }
 
 /// Request delivered to the native backend after service admission.
@@ -1668,7 +1668,7 @@ async fn start_worker_pool(models: &'static ModelSet) -> Result<usize, SpawnErro
 /// task locally; only the inference workers are placed on AP executors.
 #[trueos_executor::task]
 pub async fn service_task() {
-    crate::r::ttstt_kokoro::install();
+    crate::ai::ttstt_kokoro::install();
     loop {
         let models = if let Some(models) = resident_models() {
             // A previous worker-pool attempt failed before spawning anything.

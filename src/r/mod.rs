@@ -1,4 +1,3 @@
-pub mod ai_activity;
 pub mod archive_cabi;
 pub mod blocking;
 pub mod clipboard_service;
@@ -17,14 +16,6 @@ pub mod io;
 pub mod kernel_task_domain;
 pub mod keyboard;
 pub mod keyboard_control_service;
-#[cfg(feature = "trueos_lumen")]
-pub mod lfm25_boot_warm;
-pub mod lfm25_decode;
-pub mod lfm25_f32;
-pub mod lfm25_hybrid_cpu_backend;
-pub mod lfm25_model;
-pub mod lfm25_tokenizer;
-pub mod lumen_service;
 pub mod media_cabi;
 pub mod media_service;
 pub mod mouse_motion_service;
@@ -42,8 +33,5 @@ pub mod static_slots;
 pub mod stream;
 pub mod sync;
 pub mod time;
-pub mod ttstt_capture;
-pub mod ttstt_kokoro;
-pub mod ttstt_service;
 pub mod ui_cursor;
 pub mod ui_surface;

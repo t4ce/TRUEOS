@@ -456,29 +456,6 @@ pub enum CongestionControl {
     Cubic,
 }
 
-/// Pointer-free state sufficient to resume one *quiet* IPv4 ESTABLISHED
-/// connection. This is intentionally not a general TCP checkpoint: payload,
-/// retransmit, out-of-order, timer, and congestion-controller state are never
-/// exported. Callers must fall back to a new connection when `quiet_snapshot`
-/// returns `None`.
-#[derive(Debug, Copy, Clone, Eq, PartialEq)]
-pub struct QuietSnapshot {
-    pub local_addr: [u8; 4],
-    pub local_port: u16,
-    pub remote_addr: [u8; 4],
-    pub remote_port: u16,
-    pub local_seq_no: i32,
-    pub remote_seq_no: i32,
-    pub remote_last_ack: i32,
-    pub remote_last_win: u16,
-    pub remote_win_shift: u8,
-    pub remote_win_len: u32,
-    pub remote_win_scale: Option<u8>,
-    pub remote_has_sack: bool,
-    pub remote_mss: u16,
-    pub last_remote_tsval: u32,
-}
-
 /// A Transmission Control Protocol socket.
 ///
 /// A TCP socket may passively listen for connections or actively connect to another endpoint.
@@ -575,82 +552,6 @@ pub struct Socket<'a> {
 const DEFAULT_MSS: usize = 536;
 
 impl<'a> Socket<'a> {
-    /// Return a scalar-only resume capsule when there is no TCP payload or
-    /// control ambiguity to carry. In particular, no caller may use this to
-    /// preserve an ACK debt, a retransmit, FIN state, or out-of-order bytes.
-    pub fn quiet_snapshot(&self) -> Option<QuietSnapshot> {
-        let tuple = self.tuple?;
-        let (IpAddress::Ipv4(local), IpAddress::Ipv4(remote)) =
-            (tuple.local.addr, tuple.remote.addr)
-        else {
-            return None;
-        };
-        (self.state == State::Established
-            && self.rx_buffer.is_empty()
-            && self.tx_buffer.is_empty()
-            && self.assembler.is_empty()
-            && !self.rx_fin_received
-            && self.remote_last_seq == self.local_seq_no
-            && self.remote_last_ack == Some(self.remote_seq_no)
-            && matches!(self.ack_delay_timer, AckDelayTimer::Idle))
-        .then_some(QuietSnapshot {
-            local_addr: local.octets(),
-            local_port: tuple.local.port,
-            remote_addr: remote.octets(),
-            remote_port: tuple.remote.port,
-            local_seq_no: self.local_seq_no.0,
-            remote_seq_no: self.remote_seq_no.0,
-            remote_last_ack: self.remote_last_ack?.0,
-            remote_last_win: self.remote_last_win,
-            remote_win_shift: self.remote_win_shift,
-            remote_win_len: u32::try_from(self.remote_win_len).ok()?,
-            remote_win_scale: self.remote_win_scale,
-            remote_has_sack: self.remote_has_sack,
-            remote_mss: u16::try_from(self.remote_mss).ok()?,
-            last_remote_tsval: self.last_remote_tsval,
-        })
-    }
-
-    /// Restore a `quiet_snapshot` into a newly allocated socket. Volatile
-    /// timers, RTT, and congestion state deliberately start fresh; this avoids
-    /// inheriting timing assumptions from the replaced kernel.
-    pub fn restore_quiet_snapshot(&mut self, snapshot: QuietSnapshot) -> Result<(), ConnectError> {
-        if self.is_open()
-            || snapshot.local_port == 0
-            || snapshot.remote_port == 0
-            || snapshot.remote_mss == 0
-        {
-            return Err(ConnectError::InvalidState);
-        }
-        self.reset();
-        self.tuple = Some(Tuple {
-            local: IpEndpoint::new(
-                IpAddress::Ipv4(snapshot.local_addr.into()),
-                snapshot.local_port,
-            ),
-            remote: IpEndpoint::new(
-                IpAddress::Ipv4(snapshot.remote_addr.into()),
-                snapshot.remote_port,
-            ),
-        });
-        self.local_seq_no = TcpSeqNumber(snapshot.local_seq_no);
-        self.remote_seq_no = TcpSeqNumber(snapshot.remote_seq_no);
-        self.remote_last_seq = self.local_seq_no;
-        self.remote_last_ack = Some(TcpSeqNumber(snapshot.remote_last_ack));
-        self.remote_last_win = snapshot.remote_last_win;
-        self.remote_win_shift = snapshot.remote_win_shift;
-        self.remote_win_len = snapshot.remote_win_len as usize;
-        self.remote_win_scale = snapshot.remote_win_scale;
-        self.remote_has_sack = snapshot.remote_has_sack;
-        self.remote_mss = snapshot.remote_mss as usize;
-        self.last_remote_tsval = snapshot.last_remote_tsval;
-        self.timer = Timer::new();
-        self.rtte = RttEstimator::default();
-        self.congestion_controller = congestion::AnyController::new();
-        self.ack_delay_timer = AckDelayTimer::Idle;
-        self.set_state(State::Established);
-        Ok(())
-    }
     #[allow(unused_comparisons)] // small usize platforms always pass rx_capacity check
     /// Create a socket using the given buffers.
     pub fn new<T>(rx_buffer: T, tx_buffer: T) -> Socket<'a>
