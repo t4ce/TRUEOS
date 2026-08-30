@@ -77,7 +77,7 @@ remaining work is also deeper than adding polish to a finished product.
 | **Kernel and execution** | UEFI/Limine boot, x86-64 paging and allocators, ACPI, exceptions, x2APIC, SMP and per-CPU state, asynchronous executors, worker domains, synchronization, profiling, and live-update machinery. |
 | **Intel graphics** | Direct display ownership plus GGTT/PPGTT, GuC bring-up and submission, render, copy/BLT, media, GPGPU, native shader artifacts, hardware cursor/planes, and device-specific validation. |
 | **Desktop and UI** | UI4 frame/window contracts, damage tracking, input routing, cursor and screenshot services, command/static/GPU/video surfaces, focus and layout state, remote display transport, and a four-display compositor model. |
-| **3D and compute** | Independent Picasso retained scenes, explicitly named Helio Blueprint integrations, native Intel shader compilation, indexed and textured rendering, GPU work queues, OpenCL-shaped APIs, GPGPU operations, and CPU/GPU oracle tooling. |
+| **3D and compute** | Independent Picasso retained scenes, two explicitly named Helio-derived examples, native Intel shader compilation, indexed and textured rendering, GPU work queues, OpenCL-shaped APIs, GPGPU operations, and CPU/GPU oracle tooling. |
 | **Media and audio** | PNG/JPEG/BMP paths, video-frame publication, H.264 streaming and encode experiments, M4A/AAC work, an audio engine, synthesis, visualization, and Intel HDA/ALSA compatibility work. |
 | **Applications** | Blueprints with VM principals, terminal handoff, pause, warm snapshot, persistent store/load, preserve/restore, peer transfer, TRUEOSFS scopes, vGPU/UI/media/network ABIs, and crash/lifecycle control. |
 | **Rust ecosystem compatibility** | TRUEOS `std`/Unix ABI shims, file descriptors and sockets, `mio` readiness, Tokio carrier and blocking lanes, Hyper integration, async I/O, TLS, serde, redb, and a growing set of adapted crates and CLI tools. |
@@ -89,13 +89,12 @@ work-in-progress compatibility layers. The detailed documents linked below
 mark those boundaries more precisely.
 
 Picasso and Helio are not one ownership bucket. Picasso is independent TRUEOS
-work. `HelioV` and `HelioC` are explicitly named integrations of Tristan
-Poland's MIT-licensed [Helio](https://github.com/Far-Beyond-Pulsar/Helio). The
-old kernel-resident `helio` Shell2 demo launcher has been retired. The
-`helio-example` selector is reserved for a separate, genuinely Helio-backed
-Blueprint and is not currently registered. `trueos-picasso-example` remains
-the Picasso example; the `picasso` selector remains reserved for a Blueprint
-of the actual custom TRUEOS renderer.
+work. The old kernel-resident `helio` Shell2 launcher and the HelioV/HelioC
+integration experiments are retired. The remaining Churn and Portal ports are
+explicitly named Helio examples with attribution to Tristan Poland's
+MIT-licensed [Helio](https://github.com/Far-Beyond-Pulsar/Helio).
+`trueos-picasso-example` remains the Picasso example; the `picasso` selector
+remains reserved for a Blueprint of the actual custom TRUEOS renderer.
 
 ## Current development captures
 
@@ -165,7 +164,7 @@ contains:
 The current catalog spans graphical applications, terminal tools, games,
 rendering demos, web/network software, editors, viewers, local AI, printing,
 shells, and system utilities. Representative ports and applications include
-Solara, HelioV/HelioC, Shadertoy, Lumen, Monaco, QuickJS, ripgrep, `fd`, SSH,
+Solara, Shadertoy, Lumen, Monaco, QuickJS, ripgrep, `fd`, SSH,
 webmail, image viewing, Gridpaper, GBOI, and multiple Tokio/network probes.
 
 ### Application API surface
@@ -185,8 +184,7 @@ Start with the
 then use the
 [`hello_world_replicatable` example](https://github.com/t4ce/TRUEOS-Blueprints/tree/main/apps/hello_world_replicatable)
 for the cooperative lifecycle boundary. Larger examples include
-[`Solara`](https://github.com/t4ce/TRUEOS-Blueprints/tree/main/apps/solara),
-[`HelioV`](https://github.com/t4ce/TRUEOS-Blueprints/tree/main/apps/HelioV), and
+[`Solara`](https://github.com/t4ce/TRUEOS-Blueprints/tree/main/apps/solara) and
 [`Player`](https://github.com/t4ce/TRUEOS-Blueprints/tree/main/apps/Player).
 
 Blueprint developer references live with the application platform:

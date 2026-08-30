@@ -31,8 +31,8 @@ SURFLIVE
 scanout
 ~~~
 
-SceneDB and Helio/HelioV are retained implementation vocabulary inside the
-Solara-to-Picasso handoff; they are not additional product-level stages in this
+GLBimport->ReDB and Bakery are implementation vocabulary inside the Solara-to-Picasso
+handoff; they are not additional product-level stages in this
 first-stage chain. The DOM owns the scene semantically. Its SceneDB shadow is
 the committed visual input to Picasso, not a second DOM, a widget hierarchy, a
 CSS object model, or a renderer command stream.
@@ -51,7 +51,7 @@ contract.
 | Solara (Rust and QuickJS) | nodes, attributes, JS objects, event listeners, document state, CSS inputs, browser semantics | frame buffers, GPU addresses, residency slots |
 | Solara scene compiler | cascade, layout, fragmentation, CSS paint-order compilation, DOM-to-fragment mapping, the only authored SceneDB transaction | presentation leases, GPU scheduling |
 | Picasso scene input (currently the SceneDB shadow) | the last atomically committed visual facts and hit-test facts | DOM semantics, layout constraints, backend worklists |
-| Picasso renderer backend (currently Helio/HelioV and Bakery) | read-only derivation of world transforms, visibility, clips, damage, tile bins, effect passes, indirect work | mutation of authored scene rows |
+| Picasso renderer backend | read-only derivation of world transforms, visibility, clips, damage, tile bins, effect passes, indirect work | mutation of authored scene rows |
 | Picasso | validated resource resolution and deterministic rendering into a leased UI4 target | DOM traversal, CSS decisions, public GPU pointers |
 | UI4 | viewport and input brokerage, write/read leases, publication cadence, replacement ownership | document semantics |
 | SURFLIVE and scanout | the final display/scanout lifetime | scene mutation or rendering policy |
@@ -282,7 +282,7 @@ mapping. Pinch zoom is therefore not confused with device pixel ratio.
 
 Primitive and clip conservative_local_bounds use their referenced spatial
 space. Paint-group conservative_bounds use composite_spatial. Hit geometry uses
-the HitRow spatial space. HelioV-derived device bounds and tile bins are in
+the HitRow spatial space. Picasso-derived device bounds and tile bins are in
 physical target pixels.
 
 The packed V1 ABI must additionally freeze rectangle edge, pixel-center,
@@ -343,7 +343,7 @@ SpatialRow {
 ~~~
 
 Spatial rows form an acyclic, depth-bounded tree. They carry authored local
-state. HelioV derives world transforms, inverse transforms, device bounds, and
+state. Picasso derives world transforms, inverse transforms, device bounds, and
 visibility.
 
 The logical transform can represent browser transform semantics, including a
@@ -374,7 +374,7 @@ rectangle, path or coverage mask, and empty. A clip is not destructively folded
 into every primitive because retained chains allow scroll and ancestor clip
 changes to remain local.
 
-HelioV may pre-intersect simple axis-aligned clips and may rasterize complex
+Picasso may pre-intersect simple axis-aligned clips and may rasterize complex
 chains to coverage masks, provided the result is visually equivalent.
 
 ### 5.4 Paint-group rows
@@ -408,7 +408,7 @@ blending must preserve offscreen group semantics. Flattening may never change
 the picture.
 
 backdrop_input_mode declares whether an effect consumes already-composited
-pixels behind the group at its exact paint position. HelioV models that as an
+pixels behind the group at its exact paint position. Picasso models that as an
 explicit pass dependency; an ordinary isolated child surface is insufficient
 for backdrop-filter.
 
@@ -772,11 +772,11 @@ newer frame.
 damage_hint is conservative root layout-viewport CSS-space damage. It includes
 both the old and new visual bounds of changed or removed content and expands for
 filters, antialiasing, shadows, masks, and transformed conservative bounds.
-Uncertain bounds fall back to the containing group or full viewport. HelioV
+Uncertain bounds fall back to the containing group or full viewport. Picasso
 applies the visual-viewport mapping and clipping to derive physical-target
 damage.
 
-The scene compiler may publish that conservative result as damage_hint. HelioV
+The scene compiler may publish that conservative result as damage_hint. Picasso
 may verify, expand, or replace it while comparing coherent snapshots. The hint
 is never authority for omitting pixels: v1 repaints the full target, and a
 future partial renderer must prove untouched-pixel coherence independently.
@@ -806,7 +806,7 @@ A non-invertible spatial transform cannot produce an accidental hit. Its hit
 rows are treated as non-hittable unless a future version defines an explicit
 alternative.
 
-CPU hit testing is a valid first wave. A later HelioV spatial index or GPU query
+CPU hit testing is a valid first wave. A later Picasso spatial index or GPU query
 is an optimization over the same HitRow contract.
 
 ## 10. The public Picasso trust seam
@@ -955,7 +955,7 @@ tile table -> ordered primitive indices -> immutable resolved primitive table
 ~~~
 
 This removes cross-workgroup races between overlapping rectangles and avoids
-serializing one GPU submission per DOM primitive. CPU compilation or HelioV
+serializing one GPU submission per DOM primitive. CPU compilation or Picasso
 builds ordered tile bins; the walker remains simple enough for the Bakery
 artifact contract.
 
@@ -1234,7 +1234,7 @@ The first implementation work should close these precise gaps:
 
 - Add optimistic pointer-free Begin/Chunk/Finish delta/full-resync transport and
   its native queue twin.
-- Build HelioV world transforms, clip derivation, and ordered tile bins.
+- Build Picasso world transforms, clip derivation, and ordered tile bins.
 - Bake the full-repaint pixel-owned V1 walker.
 - Add atomic host-only resource resolution, RenderTicket, stale-result rejection,
   full accepted-timeout quarantine, and the existing exact UI4

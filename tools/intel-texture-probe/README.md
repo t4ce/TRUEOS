@@ -7,13 +7,13 @@ state have been reviewed for the exact physical GPU.
 
 ## Existing 2D texture ladder
 
-The HelioV stages remain intentionally separate from the world renderer:
+Picasso keeps the texture ladder separate from application content:
 
 1. the existing constant-colour indexed draw proves raster, Render0 and UI4;
 2. a texture can be resident and bound without being dereferenced;
 3. a fixed texel load proves the sampled surface and sampler message;
 4. a filtered sample proves interpolation and filter state;
-5. only then does HelioV enable the full voxel material shader.
+5. only then does Picasso admit filtered sampled materials.
 
 `sampler_probe.cl` is the small 2D compiler oracle. Compile it for both the
 physical ADL-S `0x4680` and the hosted RPL-S target and compare their generated
