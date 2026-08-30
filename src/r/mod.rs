@@ -4,7 +4,6 @@ pub mod codec;
 pub mod cursor;
 pub mod disc;
 pub mod fs;
-pub mod helio_game;
 pub mod io;
 pub mod kernel_task_domain;
 pub mod keyboard;

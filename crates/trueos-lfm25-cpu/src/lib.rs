@@ -11,8 +11,8 @@ extern crate alloc;
 mod cpu_vnni;
 
 pub use cpu_vnni::{
-    Q8_VNNI_ROWS_PER_TILE, Q8VnniActivation, Q8VnniCapabilities, Q8VnniProjector,
-    validate_q8_vnni_matrix,
+    Q8_VNNI_ROWS_PER_TILE, Q8VnniActivation, Q8VnniCapabilities, Q8VnniProjector, Q8VnniRowPlan,
+    Q8VnniRowRange, validate_q8_vnni_matrix,
 };
 
 use alloc::collections::BTreeMap;

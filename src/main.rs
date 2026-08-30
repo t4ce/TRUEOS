@@ -26,6 +26,7 @@ mod blueprint_shims;
 #[path = "Chronos.rs"]
 mod chronos;
 mod cpu;
+mod cpu_task_pool;
 mod crypt;
 mod disc;
 pub mod dma;

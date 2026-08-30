@@ -22,7 +22,6 @@ mod slot4_service;
 mod start_button;
 mod video_frame;
 mod window_broker;
-pub(crate) mod winit_input;
 
 const INTERACTION_CADENCE_HZ: u64 = 60;
 

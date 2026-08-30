@@ -7,6 +7,7 @@
 
 extern crate alloc;
 
+use alloc::boxed::Box;
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
@@ -26,6 +27,9 @@ use crate::ai::lfm25_decode::{
     ResidentTensorHandle,
 };
 use crate::ai::{lfm25_f32, lfm25_model};
+use crate::cpu_task_pool::{CpuTaskPool, CpuTaskPoolSnapshot};
+use crate::wait::CompletionCell;
+use crate::workers::ComputeWorkerPolicy;
 
 const HIDDEN: usize = lfm25::MODEL_HIDDEN_SIZE as usize;
 const HEADS: usize = lfm25::MODEL_ATTENTION_HEADS as usize;
@@ -34,6 +38,14 @@ const HEAD_DIM: usize = lfm25::MODEL_HEAD_DIMENSION as usize;
 const KV_ELEMENTS: usize = KV_HEADS * HEAD_DIM;
 const ATTENTION_REDUCTION_TILE: usize = 256;
 const CPU_VNNI_MAX_BATCH_PROJECTIONS: usize = 3;
+// Fill performance cores first, then admit E/unknown AP lanes under the same
+// cap. Every selected worker rechecks VNNI before touching a shard. This is a
+// separate cap from Lumen's session task pool: it bounds only one projection's
+// row fan-out, while the scheduler still issues AOT operations in order.
+const CPU_VNNI_ROW_POOL_CAP: usize = 16;
+const CPU_VNNI_VALUES_PER_SHARD: usize = 1_024 * 1_024;
+static CPU_VNNI_ROW_POOL: CpuTaskPool =
+    CpuTaskPool::new(ComputeWorkerPolicy::PerformanceFirst, CPU_VNNI_ROW_POOL_CAP);
 const MODEL_READ_CHUNK: usize = 256 * 1024;
 const MODEL_ALIGNMENT: usize = 64;
 const CPU_CONNECTION_GENERATION: u32 = 0x4350_5531; // "CPU1"
@@ -123,6 +135,11 @@ pub(crate) struct Lfm25HybridCpuPerfStats {
     pub(crate) attention_positions: u64,
     pub(crate) attention_us: u64,
     pub(crate) projection_calls: u64,
+    pub(crate) projection_matrices: u64,
+    pub(crate) projection_rows: u64,
+    pub(crate) projection_row_ranges: u64,
+    pub(crate) projection_pool_dispatched_ranges: u64,
+    pub(crate) projection_pool_fallback_ranges: u64,
     pub(crate) projection_prepare_us: u64,
     pub(crate) projection_quantize_us: u64,
     pub(crate) projection_batch_us: u64,
@@ -139,6 +156,19 @@ impl Lfm25HybridCpuPerfStats {
             projection_calls: self
                 .projection_calls
                 .saturating_sub(before.projection_calls),
+            projection_matrices: self
+                .projection_matrices
+                .saturating_sub(before.projection_matrices),
+            projection_rows: self.projection_rows.saturating_sub(before.projection_rows),
+            projection_row_ranges: self
+                .projection_row_ranges
+                .saturating_sub(before.projection_row_ranges),
+            projection_pool_dispatched_ranges: self
+                .projection_pool_dispatched_ranges
+                .saturating_sub(before.projection_pool_dispatched_ranges),
+            projection_pool_fallback_ranges: self
+                .projection_pool_fallback_ranges
+                .saturating_sub(before.projection_pool_fallback_ranges),
             projection_prepare_us: self
                 .projection_prepare_us
                 .saturating_sub(before.projection_prepare_us),
@@ -158,27 +188,42 @@ const _: () = {
         attention_positions: 20,
         attention_us: 30,
         projection_calls: 40,
-        projection_prepare_us: 50,
-        projection_quantize_us: 60,
-        projection_batch_us: 70,
+        projection_matrices: 50,
+        projection_rows: 60,
+        projection_row_ranges: 70,
+        projection_pool_dispatched_ranges: 80,
+        projection_pool_fallback_ranges: 90,
+        projection_prepare_us: 100,
+        projection_quantize_us: 110,
+        projection_batch_us: 120,
     };
     let after = Lfm25HybridCpuPerfStats {
         attention_calls: 8,
         attention_positions: 27,
         attention_us: 41,
         projection_calls: 53,
-        projection_prepare_us: 67,
-        projection_quantize_us: 79,
-        projection_batch_us: 93,
+        projection_matrices: 65,
+        projection_rows: 83,
+        projection_row_ranges: 95,
+        projection_pool_dispatched_ranges: 107,
+        projection_pool_fallback_ranges: 119,
+        projection_prepare_us: 131,
+        projection_quantize_us: 143,
+        projection_batch_us: 157,
     };
     let delta = after.delta_since(before);
     assert!(delta.attention_calls == 3);
     assert!(delta.attention_positions == 7);
     assert!(delta.attention_us == 11);
     assert!(delta.projection_calls == 13);
-    assert!(delta.projection_prepare_us == 17);
-    assert!(delta.projection_quantize_us == 19);
-    assert!(delta.projection_batch_us == 23);
+    assert!(delta.projection_matrices == 15);
+    assert!(delta.projection_rows == 23);
+    assert!(delta.projection_row_ranges == 25);
+    assert!(delta.projection_pool_dispatched_ranges == 27);
+    assert!(delta.projection_pool_fallback_ranges == 29);
+    assert!(delta.projection_prepare_us == 31);
+    assert!(delta.projection_quantize_us == 33);
+    assert!(delta.projection_batch_us == 37);
 };
 
 struct Lfm25HybridCpuPerfCounters {
@@ -186,6 +231,11 @@ struct Lfm25HybridCpuPerfCounters {
     attention_positions: AtomicU64,
     attention_ticks: AtomicU64,
     projection_calls: AtomicU64,
+    projection_matrices: AtomicU64,
+    projection_rows: AtomicU64,
+    projection_row_ranges: AtomicU64,
+    projection_pool_dispatched_ranges: AtomicU64,
+    projection_pool_fallback_ranges: AtomicU64,
     projection_prepare_ticks: AtomicU64,
     projection_quantize_ticks: AtomicU64,
     projection_batch_ticks: AtomicU64,
@@ -198,6 +248,11 @@ impl Lfm25HybridCpuPerfCounters {
             attention_positions: AtomicU64::new(0),
             attention_ticks: AtomicU64::new(0),
             projection_calls: AtomicU64::new(0),
+            projection_matrices: AtomicU64::new(0),
+            projection_rows: AtomicU64::new(0),
+            projection_row_ranges: AtomicU64::new(0),
+            projection_pool_dispatched_ranges: AtomicU64::new(0),
+            projection_pool_fallback_ranges: AtomicU64::new(0),
             projection_prepare_ticks: AtomicU64::new(0),
             projection_quantize_ticks: AtomicU64::new(0),
             projection_batch_ticks: AtomicU64::new(0),
@@ -211,6 +266,15 @@ impl Lfm25HybridCpuPerfCounters {
             attention_positions: self.attention_positions.load(Ordering::Relaxed),
             attention_us: ticks_to_us(self.attention_ticks.load(Ordering::Relaxed)),
             projection_calls: self.projection_calls.load(Ordering::Relaxed),
+            projection_matrices: self.projection_matrices.load(Ordering::Relaxed),
+            projection_rows: self.projection_rows.load(Ordering::Relaxed),
+            projection_row_ranges: self.projection_row_ranges.load(Ordering::Relaxed),
+            projection_pool_dispatched_ranges: self
+                .projection_pool_dispatched_ranges
+                .load(Ordering::Relaxed),
+            projection_pool_fallback_ranges: self
+                .projection_pool_fallback_ranges
+                .load(Ordering::Relaxed),
             projection_prepare_us: ticks_to_us(
                 self.projection_prepare_ticks.load(Ordering::Relaxed),
             ),
@@ -229,7 +293,27 @@ impl Lfm25HybridCpuPerfCounters {
         self.attention_calls.fetch_add(1, Ordering::Relaxed);
     }
 
-    fn record_projection(&self, prepare_ticks: u64, quantize_ticks: u64, batch_ticks: u64) {
+    fn record_projection(
+        &self,
+        matrices: usize,
+        rows: usize,
+        row_ranges: usize,
+        pool_dispatched_ranges: usize,
+        pool_fallback_ranges: usize,
+        prepare_ticks: u64,
+        quantize_ticks: u64,
+        batch_ticks: u64,
+    ) {
+        self.projection_matrices
+            .fetch_add(matrices as u64, Ordering::Relaxed);
+        self.projection_rows
+            .fetch_add(rows as u64, Ordering::Relaxed);
+        self.projection_row_ranges
+            .fetch_add(row_ranges as u64, Ordering::Relaxed);
+        self.projection_pool_dispatched_ranges
+            .fetch_add(pool_dispatched_ranges as u64, Ordering::Relaxed);
+        self.projection_pool_fallback_ranges
+            .fetch_add(pool_fallback_ranges as u64, Ordering::Relaxed);
         self.projection_prepare_ticks
             .fetch_add(prepare_ticks, Ordering::Relaxed);
         self.projection_quantize_ticks
@@ -244,6 +328,20 @@ static LFM25_HYBRID_CPU_PERF: Lfm25HybridCpuPerfCounters = Lfm25HybridCpuPerfCou
 
 fn elapsed_ticks_since(start_tick: u64) -> u64 {
     embassy_time_driver::now().saturating_sub(start_tick)
+}
+
+/// Bound a projection's row fan-out by its actual multiply-accumulate work,
+/// rather than only its number of output rows. This admits both FFN-down
+/// (1024×4608) and gate/up (4608×1024) to the same four-way lowering while
+/// retaining a one-shard minimum for smaller matrices.
+fn cpu_vnni_row_worker_cap(rows: usize, columns: usize, pool_cap: usize) -> Option<usize> {
+    if rows == 0 || columns == 0 {
+        return None;
+    }
+    let values = rows.checked_mul(columns)?;
+    let work_cap = (values / CPU_VNNI_VALUES_PER_SHARD).max(1);
+    let tile_cap = rows.div_ceil(cpu::Q8_VNNI_ROWS_PER_TILE);
+    Some(pool_cap.min(work_cap).min(tile_cap))
 }
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
@@ -285,6 +383,12 @@ pub(crate) fn lfm25_hybrid_cpu_perf_snapshot() -> Lfm25HybridCpuPerfStats {
     LFM25_HYBRID_CPU_PERF.snapshot()
 }
 
+/// Kernel-owned row-pool admission and P/E-policy telemetry for Lumen's CPU
+/// lowering.  Session concurrency is intentionally not represented here.
+pub(crate) fn lfm25_cpu_vnni_row_pool_snapshot() -> CpuTaskPoolSnapshot {
+    CPU_VNNI_ROW_POOL.snapshot()
+}
+
 struct CpuQ8Tensor {
     /// Preserve the normalized F32 result for CPU stages. Each admitted CPU
     /// VNNI projection quantizes this exact vector into the fixed Q8_0 input ABI.
@@ -305,6 +409,64 @@ struct KvCache {
 struct CpuVnniResidentModel {
     model_storage: Vec<u8>,
     model_offset: usize,
+}
+
+/// Result ownership for one lowered projection.  Shards return independent
+/// vectors and are copied into the caller-owned output only after their join,
+/// so a partial AP admission never races the local fallback.
+struct CpuVnniLoweredProjection {
+    rows: usize,
+    ranges: usize,
+    dispatched_ranges: usize,
+    fallback_ranges: usize,
+}
+
+fn resident_q8_matrix(
+    model: &CpuVnniResidentModel,
+    descriptor: NativeTensorDescriptor,
+) -> Result<&[u8], cpu::Error> {
+    let model_end = model
+        .model_offset
+        .checked_add(lfm25::PINNED_NATIVE_IMAGE_BYTES as usize)
+        .ok_or(cpu::Error::Shape)?;
+    let model = model
+        .model_storage
+        .get(model.model_offset..model_end)
+        .ok_or(cpu::Error::Shape)?;
+    let start = descriptor.native_offset as usize;
+    let end = start
+        .checked_add(descriptor.native_bytes as usize)
+        .ok_or(cpu::Error::Shape)?;
+    model.get(start..end).ok_or(cpu::Error::Shape)
+}
+
+fn zeroed_projection_rows(rows: usize) -> Result<Vec<f32>, cpu::Error> {
+    let mut output = Vec::new();
+    output
+        .try_reserve_exact(rows)
+        .map_err(|_| cpu::Error::Allocation)?;
+    output.resize(rows, 0.0);
+    Ok(output)
+}
+
+fn project_q8_row_range(
+    projector: cpu::Q8VnniProjector,
+    model: &CpuVnniResidentModel,
+    descriptor: NativeTensorDescriptor,
+    activation: &cpu::Q8VnniActivation,
+    range: cpu::Q8VnniRowRange,
+) -> Result<Vec<f32>, cpu::Error> {
+    let matrix = resident_q8_matrix(model, descriptor)?;
+    let mut output = zeroed_projection_rows(range.row_count())?;
+    projector.project_rows(
+        matrix,
+        descriptor.ggml_ne1 as usize,
+        descriptor.ggml_ne0 as usize,
+        activation,
+        range.first_row(),
+        &mut output,
+    )?;
+    Ok(output)
 }
 
 struct CpuVnniResidentAssets {
@@ -528,6 +690,19 @@ pub async fn open_cpu_vnni_backend() -> Result<CpuVnniAotDecodeBackend, HybridCp
     // state. The projector is admitted on this worker; immutable model
     // admission remains shared through the resident asset.
     let assets = resident_assets().await?;
+    let row_pool = lfm25_cpu_vnni_row_pool_snapshot();
+    crate::log_info!(
+        target: "r";
+        "lfm25: cpu-vnni lowering row_pool_policy={} configured_cap={} runtime_cap={} values_per_shard={} eligible_workers={} pcore_workers={} ecore_workers={} active={} session_pool_is_not_row_fanout=1\n",
+        row_pool.policy.label(),
+        row_pool.configured_cap,
+        row_pool.runtime_cap,
+        CPU_VNNI_VALUES_PER_SHARD,
+        row_pool.worker.eligible,
+        row_pool.worker.performance,
+        row_pool.worker.efficiency,
+        row_pool.active,
+    );
     let mut shortconv = Vec::new();
     shortconv
         .try_reserve_exact(trueos_lfm25_model::lfm25_decode::SHORTCONV_STATE_COUNT)
@@ -742,23 +917,8 @@ impl HybridCpuAotDecodeBackend {
     }
 
     fn tensor(&self, descriptor: NativeTensorDescriptor) -> Result<&[u8], HybridCpuBackendError> {
-        let model_end = self
-            .assets
-            .model
-            .model_offset
-            .checked_add(lfm25::PINNED_NATIVE_IMAGE_BYTES as usize)
-            .ok_or(HybridCpuBackendError::Tensor)?;
-        let model = self
-            .assets
-            .model
-            .model_storage
-            .get(self.assets.model.model_offset..model_end)
-            .ok_or(HybridCpuBackendError::Tensor)?;
-        let start = descriptor.native_offset as usize;
-        let end = start
-            .checked_add(descriptor.native_bytes as usize)
-            .ok_or(HybridCpuBackendError::Tensor)?;
-        model.get(start..end).ok_or(HybridCpuBackendError::Tensor)
+        resident_q8_matrix(&self.assets.model, descriptor)
+            .map_err(|_| HybridCpuBackendError::Tensor)
     }
 
     fn f32_tensor(
@@ -780,6 +940,137 @@ impl HybridCpuAotDecodeBackend {
             .await?
             .pop()
             .ok_or(HybridCpuBackendError::Tensor)
+    }
+
+    /// Lower one validated native matrix into contiguous VNNI row shards.
+    ///
+    /// The pool owns AP admission and P-core policy.  Each closure owns an
+    /// immutable model/activation reference plus one private result vector;
+    /// joining into `output` happens only on this ordered Lumen lane.  That
+    /// gives partial admission a correct local fallback and keeps the fixed
+    /// reduction tree bitwise invariant per output row.
+    async fn project_lowered(
+        &self,
+        descriptor: NativeTensorDescriptor,
+        activation: Arc<cpu::Q8VnniActivation>,
+        output: &mut [f32],
+    ) -> Result<CpuVnniLoweredProjection, HybridCpuBackendError> {
+        let rows = descriptor.ggml_ne1 as usize;
+        if output.len() != rows {
+            return Err(HybridCpuBackendError::Tensor);
+        }
+        let pool = CPU_VNNI_ROW_POOL.snapshot();
+        let worker_cap =
+            cpu_vnni_row_worker_cap(rows, descriptor.ggml_ne0 as usize, pool.runtime_cap)
+                .ok_or(HybridCpuBackendError::Tensor)?;
+        if worker_cap <= 1 {
+            let plan = cpu::Q8VnniRowPlan::lower(rows, 1)?;
+            self.projector.project_plan(
+                self.tensor(descriptor)?,
+                rows,
+                descriptor.ggml_ne0 as usize,
+                &activation,
+                &plan,
+                output,
+            )?;
+            return Ok(CpuVnniLoweredProjection {
+                rows,
+                ranges: 1,
+                dispatched_ranges: 0,
+                fallback_ranges: 1,
+            });
+        }
+
+        let plan = cpu::Q8VnniRowPlan::lower(rows, worker_cap)?;
+        let model = self.assets.model.clone();
+        let projector = self.projector;
+        let mut completions = Vec::new();
+        completions
+            .try_reserve_exact(plan.worker_count())
+            .map_err(|_| HybridCpuBackendError::Allocation)?;
+        let mut local_shards = Vec::new();
+        local_shards
+            .try_reserve_exact(plan.worker_count())
+            .map_err(|_| HybridCpuBackendError::Allocation)?;
+        let mut dispatched_ranges = 0usize;
+        let mut fallback_ranges = 0usize;
+
+        for range in plan.ranges().iter().copied() {
+            let completion = Arc::new(CompletionCell::new());
+            let job_model = model.clone();
+            let job_activation = activation.clone();
+            let job_completion = completion.clone();
+            match CPU_VNNI_ROW_POOL.try_dispatch(
+                "lfm25-vnni-row",
+                Box::new(move |context| {
+                    let result = if context.vnni_supported() {
+                        project_q8_row_range(
+                            projector,
+                            &job_model,
+                            descriptor,
+                            &job_activation,
+                            range,
+                        )
+                    } else {
+                        Err(cpu::Error::UnsupportedCpu)
+                    };
+                    let _ = job_completion.complete(result);
+                }),
+            ) {
+                Ok(_) => {
+                    dispatched_ranges += 1;
+                    completions.push(Some(completion));
+                    local_shards.push(None);
+                }
+                Err(_) => {
+                    // Earlier shards can still be in flight.  Consume this
+                    // one locally now, before awaiting them, so the ordered
+                    // Lumen lane contributes useful work on partial admission.
+                    fallback_ranges += 1;
+                    completions.push(None);
+                    local_shards.push(Some(project_q8_row_range(
+                        projector,
+                        &model,
+                        descriptor,
+                        &activation,
+                        range,
+                    )?));
+                }
+            }
+        }
+
+        for (index, range) in plan.ranges().iter().copied().enumerate() {
+            let shard = match local_shards.get_mut(index).and_then(Option::take) {
+                Some(shard) => shard,
+                None => match completions.get_mut(index).and_then(Option::take) {
+                    Some(completion) => match completion.join().await {
+                        Ok(shard) => shard,
+                        // A heterogeneous worker may fail the VNNI recheck.
+                        // Recompute only its disjoint range on the admitted
+                        // Lumen lane; do not make another pool submission.
+                        Err(cpu::Error::UnsupportedCpu) => {
+                            fallback_ranges += 1;
+                            project_q8_row_range(projector, &model, descriptor, &activation, range)?
+                        }
+                        Err(error) => return Err(error.into()),
+                    },
+                    None => return Err(HybridCpuBackendError::Tensor),
+                },
+            };
+            let destination = output
+                .get_mut(range.first_row()..range.end_row())
+                .ok_or(HybridCpuBackendError::Tensor)?;
+            if shard.len() != destination.len() {
+                return Err(HybridCpuBackendError::Tensor);
+            }
+            destination.copy_from_slice(&shard);
+        }
+        Ok(CpuVnniLoweredProjection {
+            rows,
+            ranges: plan.worker_count(),
+            dispatched_ranges,
+            fallback_ranges,
+        })
     }
 
     async fn project_many(
@@ -812,22 +1103,42 @@ impl HybridCpuAotDecodeBackend {
         let prepare_ticks = elapsed_ticks_since(prepare_started);
 
         let quantize_started = embassy_time_driver::now();
-        let activation = cpu::Q8VnniActivation::quantize(input)?;
+        let activation = Arc::new(cpu::Q8VnniActivation::quantize(input)?);
         let quantize_ticks = elapsed_ticks_since(quantize_started);
 
         let batch_started = embassy_time_driver::now();
-        let projector = self.projector;
+        let mut lowered_rows = 0usize;
+        let mut lowered_ranges = 0usize;
+        let mut pool_dispatched_ranges = 0usize;
+        let mut pool_fallback_ranges = 0usize;
         for (descriptor, output) in descriptors.iter().zip(&mut outputs) {
-            projector.project(
-                self.tensor(*descriptor)?,
-                descriptor.ggml_ne1 as usize,
-                descriptor.ggml_ne0 as usize,
-                &activation,
-                output.as_mut_slice(),
-            )?;
+            let lowered = self
+                .project_lowered(*descriptor, activation.clone(), output.as_mut_slice())
+                .await?;
+            lowered_rows = lowered_rows
+                .checked_add(lowered.rows)
+                .ok_or(HybridCpuBackendError::Tensor)?;
+            lowered_ranges = lowered_ranges
+                .checked_add(lowered.ranges)
+                .ok_or(HybridCpuBackendError::Tensor)?;
+            pool_dispatched_ranges = pool_dispatched_ranges
+                .checked_add(lowered.dispatched_ranges)
+                .ok_or(HybridCpuBackendError::Tensor)?;
+            pool_fallback_ranges = pool_fallback_ranges
+                .checked_add(lowered.fallback_ranges)
+                .ok_or(HybridCpuBackendError::Tensor)?;
         }
         let batch_ticks = elapsed_ticks_since(batch_started);
-        LFM25_HYBRID_CPU_PERF.record_projection(prepare_ticks, quantize_ticks, batch_ticks);
+        LFM25_HYBRID_CPU_PERF.record_projection(
+            descriptors.len(),
+            lowered_rows,
+            lowered_ranges,
+            pool_dispatched_ranges,
+            pool_fallback_ranges,
+            prepare_ticks,
+            quantize_ticks,
+            batch_ticks,
+        );
         Ok(outputs)
     }
 
@@ -1321,5 +1632,26 @@ impl AotDecodeBackend for HybridCpuAotDecodeBackend {
 
     fn finish_prefill_token(&mut self, output: HiddenQ30) -> Result<(), Self::Error> {
         self.release_q30(output)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vnni_row_fanout_is_bounded_by_matrix_work_not_only_rows() {
+        const CAP: usize = 16;
+        assert_eq!(cpu_vnni_row_worker_cap(1_024, 4_608, CAP), Some(4));
+        assert_eq!(cpu_vnni_row_worker_cap(4_608, 1_024, CAP), Some(4));
+        assert_eq!(cpu_vnni_row_worker_cap(65_536, 1_024, CAP), Some(CAP));
+    }
+
+    #[test]
+    fn vnni_row_fanout_retains_one_small_matrix_shard_and_rejects_invalid_shape() {
+        assert_eq!(cpu_vnni_row_worker_cap(512, 1_024, 16), Some(1));
+        assert_eq!(cpu_vnni_row_worker_cap(0, 1_024, 16), None);
+        assert_eq!(cpu_vnni_row_worker_cap(1_024, 0, 16), None);
+        assert_eq!(cpu_vnni_row_worker_cap(usize::MAX, 2, 16), None);
     }
 }

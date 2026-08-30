@@ -17,6 +17,19 @@ pub mod executor {
     pub const BSP_TASK_PROFILE_WATCHERS: usize = 8;
 }
 
+/// Bounds for explicitly admitted CPU-intensive jobs running on AP executors.
+///
+/// This is deliberately separate from the executor's general task storage:
+/// a VNNI/GEMM row shard can occupy a carrier for a substantial amount of
+/// time, so its admission must remain bounded by both this storage limit and
+/// the number of worker CPUs discovered at runtime.
+pub mod cpu_task_pool {
+    /// Maximum number of live kernel-dispatched compute jobs. 32 covers a
+    /// 30-thread i9/H-class topology after BSP and UI/service reservations
+    /// without making the kernel reserve 256 task frames for one service.
+    pub const TASK_STORAGE_SLOTS: usize = 32;
+}
+
 pub mod probes {
     pub const MIO_BOOT_PROBE: bool = false;
     pub const UNIX_FD_PROBE: bool = false;

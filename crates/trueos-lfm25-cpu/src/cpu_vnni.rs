@@ -23,6 +23,99 @@ const _: () = assert!(Q8_BLOCK_VALUES == 32);
 const _: () = assert!(Q8_BLOCK_BYTES == 34);
 const _: () = assert!(Q8_VNNI_F32_LANES * 4 == Q8_BLOCK_VALUES);
 
+/// One contiguous output-row ownership range produced by
+/// [`Q8VnniRowPlan::lower`].
+///
+/// A range never overlaps another range in the same plan.  Every range except
+/// the final one ends on a native four-row VNNI tile boundary, so a future AP
+/// pool can assign one range to one worker without changing the established
+/// per-row reduction order.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Q8VnniRowRange {
+    first_row: usize,
+    row_count: usize,
+}
+
+impl Q8VnniRowRange {
+    pub const fn first_row(self) -> usize {
+        self.first_row
+    }
+
+    pub const fn row_count(self) -> usize {
+        self.row_count
+    }
+
+    pub const fn end_row(self) -> usize {
+        self.first_row + self.row_count
+    }
+}
+
+/// Lower one native Q8_0 projection into independent contiguous row ranges.
+///
+/// This is deliberately only a numerical-work plan: it does not select CPUs,
+/// spawn tasks, or make a scheduling policy decision.  The kernel supplies
+/// that policy and a bounded worker lease; callers then use the plan's ranges
+/// with [`Q8VnniProjector::project_rows`].  That separation prevents a session
+/// task-pool limit from being mistaken for intra-projection parallelism.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Q8VnniRowPlan {
+    rows: usize,
+    ranges: Vec<Q8VnniRowRange>,
+}
+
+impl Q8VnniRowPlan {
+    /// Produce at most `worker_cap` ranges, further bounded by the number of
+    /// native four-row tiles in `rows`.
+    pub fn lower(rows: usize, worker_cap: usize) -> Result<Self, Error> {
+        if rows == 0 || worker_cap == 0 {
+            return Err(Error::Shape);
+        }
+        let tile_count = rows.div_ceil(Q8_VNNI_ROWS_PER_TILE);
+        let range_count = core::cmp::min(worker_cap, tile_count);
+        let mut ranges = Vec::new();
+        ranges
+            .try_reserve_exact(range_count)
+            .map_err(|_| Error::Allocation)?;
+
+        let mut first_row = 0usize;
+        let mut remaining_tiles = tile_count;
+        for range_index in 0..range_count {
+            let remaining_ranges = range_count - range_index;
+            let tiles = remaining_tiles.div_ceil(remaining_ranges);
+            let nominal_end = first_row
+                .checked_add(
+                    tiles
+                        .checked_mul(Q8_VNNI_ROWS_PER_TILE)
+                        .ok_or(Error::Shape)?,
+                )
+                .ok_or(Error::Shape)?;
+            let end_row = core::cmp::min(nominal_end, rows);
+            ranges.push(Q8VnniRowRange {
+                first_row,
+                row_count: end_row - first_row,
+            });
+            first_row = end_row;
+            remaining_tiles -= tiles;
+        }
+        if first_row != rows || ranges.iter().any(|range| range.row_count == 0) {
+            return Err(Error::Shape);
+        }
+        Ok(Self { rows, ranges })
+    }
+
+    pub const fn rows(&self) -> usize {
+        self.rows
+    }
+
+    pub fn ranges(&self) -> &[Q8VnniRowRange] {
+        &self.ranges
+    }
+
+    pub fn worker_count(&self) -> usize {
+        self.ranges.len()
+    }
+}
+
 /// CPU and OS state required by the native-row LFM Q8 projection kernel.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct Q8VnniCapabilities {
@@ -91,6 +184,34 @@ impl Q8VnniProjector {
             return Err(Error::Shape);
         }
         self.project_rows(matrix, rows, columns, activation, 0, output)
+    }
+
+    /// Execute a previously lowered row plan synchronously.
+    ///
+    /// This is the single-worker fallback and validation path.  A pool-backed
+    /// caller may instead hand each [`Q8VnniRowRange`] to a distinct worker and
+    /// invoke [`Self::project_rows`] on that worker's disjoint output slice.
+    /// Both paths retain the exact per-row numerical result.
+    pub fn project_plan(
+        self,
+        matrix: &[u8],
+        rows: usize,
+        columns: usize,
+        activation: &Q8VnniActivation,
+        plan: &Q8VnniRowPlan,
+        output: &mut [f32],
+    ) -> Result<(), Error> {
+        if plan.rows != rows || output.len() != rows {
+            return Err(Error::Shape);
+        }
+        for range in plan.ranges() {
+            let output_end = range.end_row();
+            let output = output
+                .get_mut(range.first_row()..output_end)
+                .ok_or(Error::Shape)?;
+            self.project_rows(matrix, rows, columns, activation, range.first_row(), output)?;
+        }
+        Ok(())
     }
 
     /// Project one contiguous output-row range.
@@ -600,6 +721,77 @@ mod tests {
                 .map(|value| value.to_bits())
                 .collect::<Vec<_>>(),
             all[2..7]
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn row_plan_is_contiguous_and_tile_aligned_before_the_tail() {
+        let plan = Q8VnniRowPlan::lower(17, 3).unwrap();
+        assert_eq!(plan.rows(), 17);
+        assert_eq!(plan.worker_count(), 3);
+        assert_eq!(
+            plan.ranges(),
+            &[
+                Q8VnniRowRange {
+                    first_row: 0,
+                    row_count: 8,
+                },
+                Q8VnniRowRange {
+                    first_row: 8,
+                    row_count: 8,
+                },
+                Q8VnniRowRange {
+                    first_row: 16,
+                    row_count: 1,
+                },
+            ]
+        );
+        assert!(
+            plan.ranges()
+                .iter()
+                .take(plan.worker_count() - 1)
+                .all(|range| range.end_row().is_multiple_of(Q8_VNNI_ROWS_PER_TILE))
+        );
+    }
+
+    #[test]
+    fn row_plan_caps_to_available_native_tiles() {
+        let plan = Q8VnniRowPlan::lower(3, 32).unwrap();
+        assert_eq!(plan.worker_count(), 1);
+        assert_eq!(plan.ranges()[0].first_row(), 0);
+        assert_eq!(plan.ranges()[0].row_count(), 3);
+        assert_eq!(Q8VnniRowPlan::lower(0, 1), Err(Error::Shape));
+        assert_eq!(Q8VnniRowPlan::lower(1, 0), Err(Error::Shape));
+    }
+
+    #[test]
+    fn serial_row_plan_keeps_the_projection_oracle_bits() {
+        let Ok(projector) = Q8VnniProjector::detect() else {
+            return;
+        };
+        let rows = 9;
+        let columns = 1024;
+        let matrix = native_matrix(rows, columns);
+        let input = input(columns);
+        let activation = Q8VnniActivation::quantize(&input).unwrap();
+        let mut direct = vec![0.0f32; rows];
+        projector
+            .project(&matrix, rows, columns, &activation, &mut direct)
+            .unwrap();
+        let mut planned = vec![0.0f32; rows];
+        let plan = Q8VnniRowPlan::lower(rows, 3).unwrap();
+        projector
+            .project_plan(&matrix, rows, columns, &activation, &plan, &mut planned)
+            .unwrap();
+        assert_eq!(
+            planned
+                .iter()
+                .map(|value| value.to_bits())
+                .collect::<Vec<_>>(),
+            direct
                 .iter()
                 .map(|value| value.to_bits())
                 .collect::<Vec<_>>()

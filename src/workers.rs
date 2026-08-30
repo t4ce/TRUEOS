@@ -39,11 +39,89 @@ static REGISTERED_SLOTS: [AtomicU64; REGISTERED_SLOT_WORDS] =
 static REGISTERED_SLOT_END: AtomicU32 = AtomicU32::new(0);
 static SPAWN_RR: AtomicU32 = AtomicU32::new(0);
 static WORKER_SUMMARY_LOGGED: AtomicBool = AtomicBool::new(false);
+// CPU-intensive work is explicitly admitted per AP. This prevents two row
+// shards from accidentally occupying the same cooperative executor while
+// leaving ordinary executor tasks outside this opt-in contract.
+static COMPUTE_CLAIMED_BY_SLOT: [AtomicBool; WORKER_SLOT_LIMIT] =
+    [const { AtomicBool::new(false) }; WORKER_SLOT_LIMIT];
+static COMPUTE_CLAIM_RR: AtomicU32 = AtomicU32::new(0);
 
 #[derive(Clone, Copy)]
 pub struct WorkerSpawner {
     cpu_slot: u32,
     spawner: SendSpawner,
+}
+
+/// Placement policy for bounded CPU-intensive work.
+///
+/// All policies exclude the BSP, AP1 UI/service carrier, and an enabled final
+/// AP media reservation. `PerformanceFirst` is the normal inference policy:
+/// it fills P cores before using E or unclassified cores, rather than assuming
+/// a desktop core count or a fixed Intel SKU layout.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ComputeWorkerPolicy {
+    #[expect(dead_code, reason = "public policy for strict P-core compute pools")]
+    PerformanceOnly,
+    PerformanceFirst,
+    #[expect(dead_code, reason = "public policy for E-core-affine compute pools")]
+    EfficiencyOnly,
+    #[expect(dead_code, reason = "public policy for topology-wide compute pools")]
+    AnyBackground,
+}
+
+impl ComputeWorkerPolicy {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::PerformanceOnly => "perf-only",
+            Self::PerformanceFirst => "perf-first",
+            Self::EfficiencyOnly => "eff-only",
+            Self::AnyBackground => "any-background",
+        }
+    }
+}
+
+/// Runtime view of the AP carriers eligible for a compute policy.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ComputeWorkerSnapshot {
+    pub eligible: usize,
+    pub claimed: usize,
+    pub available: usize,
+    pub performance: usize,
+    pub efficiency: usize,
+    pub unknown: usize,
+}
+
+/// An exclusive, kernel-owned claim on one registered AP executor.
+///
+/// Dropping this lease returns the carrier to the compute scheduler. The lease
+/// is intended to be moved into a dispatched task, so a job owns its CPU lane
+/// for its entire synchronous compute section.
+pub struct ComputeWorkerLease {
+    cpu_slot: u32,
+    core_kind: u8,
+    spawner: WorkerSpawner,
+}
+
+impl ComputeWorkerLease {
+    pub const fn cpu_slot(&self) -> u32 {
+        self.cpu_slot
+    }
+
+    pub const fn core_kind(&self) -> u8 {
+        self.core_kind
+    }
+
+    pub fn spawner(&self) -> WorkerSpawner {
+        self.spawner
+    }
+}
+
+impl Drop for ComputeWorkerLease {
+    fn drop(&mut self) {
+        if let Some(claimed) = COMPUTE_CLAIMED_BY_SLOT.get(self.cpu_slot as usize) {
+            claimed.store(false, Ordering::Release);
+        }
+    }
 }
 
 impl WorkerSpawner {
@@ -305,6 +383,104 @@ pub fn has_background_worker_slot() -> bool {
         .any(|slot| is_slot_registered(slot) && is_general_background_worker_slot(slot))
 }
 
+/// Return the current capacity for an explicit compute placement policy.
+///
+/// This only counts AP executors which completed worker registration. It is
+/// therefore safe to call while AP startup is still in progress; an empty
+/// snapshot means callers should retry after registration, not target the BSP.
+pub fn compute_worker_snapshot(policy: ComputeWorkerPolicy) -> ComputeWorkerSnapshot {
+    let mut snapshot = ComputeWorkerSnapshot::default();
+    for slot in registered_background_slot_range() {
+        if !is_compute_eligible_slot(slot, policy) {
+            continue;
+        }
+
+        snapshot.eligible += 1;
+        match core_kind_for_slot(slot) {
+            CORE_KIND_PERF => snapshot.performance += 1,
+            CORE_KIND_EFF => snapshot.efficiency += 1,
+            _ => snapshot.unknown += 1,
+        }
+        if COMPUTE_CLAIMED_BY_SLOT[slot as usize].load(Ordering::Acquire) {
+            snapshot.claimed += 1;
+        }
+    }
+    snapshot.available = snapshot.eligible.saturating_sub(snapshot.claimed);
+    snapshot
+}
+
+/// Claim one idle AP executor for CPU-intensive work.
+///
+/// The returned lease is exclusive among clients using this compute interface.
+/// General executor work still shares the carrier cooperatively, so callers
+/// must keep jobs finite and use a policy/cap appropriate for system latency.
+/// `None` means no registered eligible AP is currently available; it never
+/// falls back to BSP or AP1.
+pub fn try_claim_compute_worker(policy: ComputeWorkerPolicy) -> Option<ComputeWorkerLease> {
+    let start = FIRST_BACKGROUND_SLOT;
+    let end = registered_slot_end();
+    let span = end.saturating_sub(start);
+    if span == 0 {
+        return None;
+    }
+
+    let first = COMPUTE_CLAIM_RR.fetch_add(1, Ordering::Relaxed) % span;
+    // Performance-first needs two ordered passes. The other policies expose a
+    // single class and therefore retain the same round-robin ordering.
+    let passes = if policy == ComputeWorkerPolicy::PerformanceFirst {
+        2
+    } else {
+        1
+    };
+    for class in 0..passes {
+        for offset in 0..span {
+            let slot = start + (first + offset) % span;
+            if compute_policy_class(policy, core_kind_for_slot(slot)) != Some(class) {
+                continue;
+            }
+            if !is_compute_eligible_slot(slot, policy) {
+                continue;
+            }
+            let Some(spawner) = spawner_for_slot(slot) else {
+                continue;
+            };
+            let claimed = &COMPUTE_CLAIMED_BY_SLOT[slot as usize];
+            if claimed
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                return Some(ComputeWorkerLease {
+                    cpu_slot: slot,
+                    core_kind: core_kind_for_slot(slot),
+                    spawner,
+                });
+            }
+        }
+    }
+    None
+}
+
+#[inline]
+fn is_compute_eligible_slot(slot: u32, policy: ComputeWorkerPolicy) -> bool {
+    is_slot_registered(slot)
+        && is_general_background_worker_slot(slot)
+        && compute_policy_class(policy, core_kind_for_slot(slot)).is_some()
+}
+
+/// Returns the policy priority class for this core. Lower classes are selected
+/// first; `None` means the core is not eligible for the policy.
+#[inline]
+fn compute_policy_class(policy: ComputeWorkerPolicy, core_kind: u8) -> Option<u32> {
+    match policy {
+        ComputeWorkerPolicy::PerformanceOnly => (core_kind == CORE_KIND_PERF).then_some(0),
+        ComputeWorkerPolicy::PerformanceFirst => {
+            Some(if core_kind == CORE_KIND_PERF { 0 } else { 1 })
+        }
+        ComputeWorkerPolicy::EfficiencyOnly => (core_kind == CORE_KIND_EFF).then_some(0),
+        ComputeWorkerPolicy::AnyBackground => Some(0),
+    }
+}
+
 pub fn pick_background_spawner() -> Option<WorkerSpawner> {
     pick_background_spawner_with_slot().map(|(_, _, spawner)| spawner)
 }
@@ -415,4 +591,38 @@ where
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn compute_policy_classes_are_strict_except_perf_first_fallback() {
+        assert_eq!(
+            compute_policy_class(ComputeWorkerPolicy::PerformanceOnly, CORE_KIND_PERF),
+            Some(0)
+        );
+        assert_eq!(compute_policy_class(ComputeWorkerPolicy::PerformanceOnly, CORE_KIND_EFF), None);
+        assert_eq!(
+            compute_policy_class(ComputeWorkerPolicy::EfficiencyOnly, CORE_KIND_EFF),
+            Some(0)
+        );
+        assert_eq!(
+            compute_policy_class(ComputeWorkerPolicy::EfficiencyOnly, CORE_KIND_UNKNOWN),
+            None
+        );
+        assert_eq!(
+            compute_policy_class(ComputeWorkerPolicy::PerformanceFirst, CORE_KIND_PERF),
+            Some(0)
+        );
+        assert_eq!(
+            compute_policy_class(ComputeWorkerPolicy::PerformanceFirst, CORE_KIND_EFF),
+            Some(1)
+        );
+        assert_eq!(
+            compute_policy_class(ComputeWorkerPolicy::AnyBackground, CORE_KIND_UNKNOWN),
+            Some(0)
+        );
+    }
 }

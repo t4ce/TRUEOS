@@ -77,7 +77,7 @@ remaining work is also deeper than adding polish to a finished product.
 | **Kernel and execution** | UEFI/Limine boot, x86-64 paging and allocators, ACPI, exceptions, x2APIC, SMP and per-CPU state, asynchronous executors, worker domains, synchronization, profiling, and live-update machinery. |
 | **Intel graphics** | Direct display ownership plus GGTT/PPGTT, GuC bring-up and submission, render, copy/BLT, media, GPGPU, native shader artifacts, hardware cursor/planes, and device-specific validation. |
 | **Desktop and UI** | UI4 frame/window contracts, damage tracking, input routing, cursor and screenshot services, command/static/GPU/video surfaces, focus and layout state, remote display transport, and a four-display compositor model. |
-| **3D and compute** | Picasso/Helio retained scenes, native Intel shader compilation, indexed and textured rendering, GPU work queues, OpenCL-shaped APIs, GPGPU operations, and CPU/GPU oracle tooling. |
+| **3D and compute** | Independent Picasso retained scenes, explicitly named Helio Blueprint integrations, native Intel shader compilation, indexed and textured rendering, GPU work queues, OpenCL-shaped APIs, GPGPU operations, and CPU/GPU oracle tooling. |
 | **Media and audio** | PNG/JPEG/BMP paths, video-frame publication, H.264 streaming and encode experiments, M4A/AAC work, an audio engine, synthesis, visualization, and Intel HDA/ALSA compatibility work. |
 | **Applications** | Blueprints with VM principals, terminal handoff, pause, warm snapshot, persistent store/load, preserve/restore, peer transfer, TRUEOSFS scopes, vGPU/UI/media/network ABIs, and crash/lifecycle control. |
 | **Rust ecosystem compatibility** | TRUEOS `std`/Unix ABI shims, file descriptors and sockets, `mio` readiness, Tokio carrier and blocking lanes, Hyper integration, async I/O, TLS, serde, redb, and a growing set of adapted crates and CLI tools. |
@@ -87,6 +87,15 @@ remaining work is also deeper than adding polish to a finished product.
 Some rows combine production paths, physically validated experiments, and
 work-in-progress compatibility layers. The detailed documents linked below
 mark those boundaries more precisely.
+
+Picasso and Helio are not one ownership bucket. Picasso is independent TRUEOS
+work. `HelioV` and `HelioC` are explicitly named integrations of Tristan
+Poland's MIT-licensed [Helio](https://github.com/Far-Beyond-Pulsar/Helio). The
+old kernel-resident `helio` Shell2 demo launcher has been retired. The
+`helio-example` selector is reserved for a separate, genuinely Helio-backed
+Blueprint and is not currently registered. `trueos-picasso-example` remains
+the Picasso example; the `picasso` selector remains reserved for a Blueprint
+of the actual custom TRUEOS renderer.
 
 ## Current development captures
 
@@ -102,8 +111,8 @@ mark those boundaries more precisely.
 </table>
 
 <p align="center">
-  <img src="docs/screenshots/picasso-textured-scene.png" width="820" alt="Picasso and Helio textured retained-renderer development scene"><br>
-  <sub>Picasso/Helio retained and textured renderer development capture.</sub>
+  <img src="docs/screenshots/picasso-textured-scene.png" width="820" alt="Textured retained-renderer development scene"><br>
+  <sub>Retained and textured renderer development capture; Picasso and Helio integration provenance remains separate.</sub>
 </p>
 
 ## One vertically owned stack
@@ -119,7 +128,7 @@ Blueprints, ports, CLI tools, games, UI applications
                   │
       UI4 compositor, window graph, frames, video
                   │
- Picasso/Helio ── render ── GPGPU ── copy ── media
+ Picasso + named Helio integrations ── render ── GPGPU ── copy ── media
                   │
        Intel Gen12 display, GuC, GGTT and PPGTT
                   │
@@ -185,6 +194,7 @@ Blueprint developer references live with the application platform:
 - [API crate and feature surface](https://github.com/t4ce/TRUEOS-Blueprints/blob/main/api/Cargo.toml)
 - [Pinned Rust application contract](https://github.com/t4ce/TRUEOS-Blueprints/blob/main/RUST_TOOLCHAIN.md)
 - [Replicatable Blueprint lifecycle](https://github.com/t4ce/TRUEOS-Blueprints/blob/main/docs/replicatable-blueprints.md)
+- [Picasso/Helio renderer ownership boundary](https://github.com/t4ce/TRUEOS-Blueprints/blob/main/docs/renderer-ownership.md)
 - [Async archive and filesystem model](https://github.com/t4ce/TRUEOS-Blueprints/blob/main/docs/async-archive.md)
 - [Full application and built-in tree](https://github.com/t4ce/TRUEOS-Blueprints/tree/main/apps)
 
