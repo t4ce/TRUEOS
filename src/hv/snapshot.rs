@@ -1,5 +1,7 @@
 use alloc::{format, string::String, vec::Vec};
 
+use sha2::{Digest, Sha256};
+
 use super::hvlogf;
 use crate::hv::memory::*;
 
@@ -7,12 +9,18 @@ pub const VM_SNAPSHOT_MAGIC: u32 = 0x3153_4D56; // "VMS1"
 pub const VM_SNAPSHOT_VERSION_LEGACY: u32 = 1;
 pub const VM_SNAPSHOT_VERSION_SPARSE: u32 = 2;
 pub const VM_SNAPSHOT_VERSION_GPRS: u32 = 3;
-pub const VM_SNAPSHOT_VERSION: u32 = 4;
+pub const VM_SNAPSHOT_VERSION_EXTENDED_STATE: u32 = 4;
+/// Version 5 replaces the serialized immutable hull image with a SHA-256
+/// identity of the mapped text/rodata spans.  The image is supplied by the
+/// candidate kernel; snapshots must never carry a second 100+ MiB copy only
+/// to compare it during restore.
+pub const VM_SNAPSHOT_VERSION: u32 = 5;
 const VM_SNAPSHOT_LEGACY_HEADER_BYTES: usize = 8 + 10 * core::mem::size_of::<u64>();
 const VM_SNAPSHOT_GPRS_HEADER_BYTES: usize = 216;
+const VM_SNAPSHOT_EXTENDED_STATE_HEADER_BYTES: usize = 1056;
 pub const GUEST_SNAPSHOT_PAGE_COUNT: usize = 6 + GUEST_LOW_PT_COUNT + GUEST_HIGH_IMAGE_PT_COUNT;
 pub const GUEST_SNAPSHOT_PAGE_BITMAP_BYTES: usize = GUEST_SNAPSHOT_PAGE_COUNT.div_ceil(8);
-// Versions 2 through 4 store this fixed bitmap immediately after the header,
+// Versions 2 through 5 store this fixed bitmap immediately after the header,
 // followed by only the 4 KiB page-table pages whose bits are set. Version 3
 // adds the live guest GPR/RFLAGS continuation state, and version 4 adds the
 // VM-owned x87/SSE/YMM state. Version 1 has no bitmap and stores every table
@@ -41,9 +49,12 @@ pub struct VmSnapshotHeader {
     pub guest_rflags: u64,
     pub guest_extended_state_mask: u64,
     pub guest_extended_state: [u8; crate::hv::vmx::VMX_EXTENDED_STATE_BYTES],
+    /// SHA-256 over the immutable guest image identity and its text/rodata.
+    /// Zero for formats before version 5, which stored the full image instead.
+    pub immutable_code_sha256: [u8; 32],
 }
 
-const _: [(); 1056] = [(); core::mem::size_of::<VmSnapshotHeader>()];
+const _: [(); 1088] = [(); core::mem::size_of::<VmSnapshotHeader>()];
 
 #[derive(Copy, Clone, Debug)]
 pub enum SaveError {
@@ -100,6 +111,8 @@ pub fn snapshot_bytes(vm_id: u8) -> Result<Vec<u8>, SaveError> {
     let Some(meta) = *meta_lock.lock() else {
         return Err(SaveError::NoSnapshot);
     };
+    let immutable_code_sha256 =
+        immutable_code_digest(meta.code_base, meta.code_len).ok_or(SaveError::NoSnapshot)?;
 
     let header = VmSnapshotHeader {
         magic: VM_SNAPSHOT_MAGIC,
@@ -118,14 +131,14 @@ pub fn snapshot_bytes(vm_id: u8) -> Result<Vec<u8>, SaveError> {
         guest_rflags: meta.guest_rflags,
         guest_extended_state_mask: meta.guest_extended_state_mask,
         guest_extended_state: meta.guest_extended_state,
+        immutable_code_sha256,
     };
     let guest_stack = guest_stack_slice_for_vm(vm_id).ok_or(SaveError::NoSnapshot)?;
 
     let total_capacity = core::mem::size_of::<VmSnapshotHeader>()
         + GUEST_SNAPSHOT_PAGE_BITMAP_BYTES
         + (GUEST_SNAPSHOT_PAGE_COUNT * PAGE_SIZE_4K)
-        + guest_stack.len()
-        + meta.code_len as usize;
+        + guest_stack.len();
     let mut out = Vec::with_capacity(total_capacity);
     push_bytes(&mut out, unsafe {
         core::slice::from_raw_parts(
@@ -149,10 +162,6 @@ pub fn snapshot_bytes(vm_id: u8) -> Result<Vec<u8>, SaveError> {
                 .saturating_sub(GUEST_SNAPSHOT_PAGE_BITMAP_BYTES),
         ));
         push_bytes(&mut out, guest_stack);
-        push_bytes(
-            &mut out,
-            core::slice::from_raw_parts(meta.code_base as *const u8, meta.code_len as usize),
-        );
     }
     Ok(out)
 }
@@ -178,6 +187,7 @@ pub fn restore_snapshot_bytes(vm_id: u8, bytes: &[u8]) -> Result<(), RestoreErro
     );
     let header_len = match version {
         VM_SNAPSHOT_VERSION => core::mem::size_of::<VmSnapshotHeader>(),
+        VM_SNAPSHOT_VERSION_EXTENDED_STATE => VM_SNAPSHOT_EXTENDED_STATE_HEADER_BYTES,
         VM_SNAPSHOT_VERSION_GPRS => VM_SNAPSHOT_GPRS_HEADER_BYTES,
         _ => VM_SNAPSHOT_LEGACY_HEADER_BYTES,
     };
@@ -202,7 +212,12 @@ pub fn restore_snapshot_bytes(vm_id: u8, bytes: &[u8]) -> Result<(), RestoreErro
         .checked_add(bitmap.len())
         .and_then(|len| len.checked_add(stored_page_count.checked_mul(PAGE_SIZE_4K)?))
         .and_then(|len| len.checked_add(usize::try_from(header.guest_stack_bytes).ok()?))
-        .and_then(|len| len.checked_add(usize::try_from(header.code_len).ok()?))
+        .and_then(|len| {
+            (header.version < VM_SNAPSHOT_VERSION)
+                .then(|| usize::try_from(header.code_len).ok())
+                .flatten()
+                .map_or(Some(len), |code_len| len.checked_add(code_len))
+        })
         .ok_or(RestoreError::BadSnapshot)?;
     if bytes.len() < expected || header.guest_page_bytes as usize != PAGE_SIZE_4K {
         return Err(RestoreError::BadSnapshot);
@@ -230,15 +245,25 @@ pub fn restore_snapshot_bytes(vm_id: u8, bytes: &[u8]) -> Result<(), RestoreErro
         off += header_stack_bytes;
     }
 
-    let code_len = usize::try_from(header.code_len).map_err(|_| RestoreError::BadSnapshot)?;
-    let code_end = off.checked_add(code_len).ok_or(RestoreError::BadSnapshot)?;
-    let stored_code = bytes.get(off..code_end).ok_or(RestoreError::BadSnapshot)?;
-    if !immutable_code_matches(&header, stored_code) {
-        return Err(RestoreError::CodeMismatch);
+    if header.version == VM_SNAPSHOT_VERSION {
+        if !expected_code_identity_matches(&header)
+            || immutable_code_digest(header.code_base, header.code_len)
+                .is_none_or(|digest| digest != header.immutable_code_sha256)
+        {
+            return Err(RestoreError::CodeMismatch);
+        }
+    } else {
+        let code_len = usize::try_from(header.code_len).map_err(|_| RestoreError::BadSnapshot)?;
+        let code_end = off.checked_add(code_len).ok_or(RestoreError::BadSnapshot)?;
+        let stored_code = bytes.get(off..code_end).ok_or(RestoreError::BadSnapshot)?;
+        if !immutable_code_matches(&header, stored_code) {
+            return Err(RestoreError::CodeMismatch);
+        }
     }
 
     let guest_cr3 = guest_cr3_pa_for_vm(vm_id).map_err(|_| RestoreError::BadSnapshot)?;
-    let (guest_extended_state_mask, guest_extended_state) = if header.version == VM_SNAPSHOT_VERSION
+    let (guest_extended_state_mask, guest_extended_state) = if header.version
+        >= VM_SNAPSHOT_VERSION_EXTENDED_STATE
     {
         crate::hv::vmx::restore_guest_extended_state(
             vm_id,
@@ -318,16 +343,22 @@ fn parse_snapshot_header(bytes: &[u8]) -> Result<VmSnapshotHeader, RestoreError>
     }
     let mut guest_extended_state_mask = crate::cpu::vmx_xsave_mask();
     let mut guest_extended_state = [0u8; crate::hv::vmx::VMX_EXTENDED_STATE_BYTES];
-    if version == VM_SNAPSHOT_VERSION {
+    if version >= VM_SNAPSHOT_VERSION_EXTENDED_STATE {
         guest_extended_state_mask = take_u64(bytes, &mut off)?;
         guest_extended_state = take_bytes(bytes, &mut off)?;
     }
+    let immutable_code_sha256 = if version == VM_SNAPSHOT_VERSION {
+        take_bytes(bytes, &mut off)?
+    } else {
+        [0; 32]
+    };
     if magic != VM_SNAPSHOT_MAGIC
         || !matches!(
             version,
             VM_SNAPSHOT_VERSION_LEGACY
                 | VM_SNAPSHOT_VERSION_SPARSE
                 | VM_SNAPSHOT_VERSION_GPRS
+                | VM_SNAPSHOT_VERSION_EXTENDED_STATE
                 | VM_SNAPSHOT_VERSION
         )
     {
@@ -350,6 +381,7 @@ fn parse_snapshot_header(bytes: &[u8]) -> Result<VmSnapshotHeader, RestoreError>
         guest_rflags,
         guest_extended_state_mask,
         guest_extended_state,
+        immutable_code_sha256,
     })
 }
 
@@ -405,6 +437,51 @@ fn immutable_code_matches(header: &VmSnapshotHeader, stored_code: &[u8]) -> bool
             layout.rodata_start,
             layout.rodata_end,
         )
+}
+
+fn expected_code_identity_matches(header: &VmSnapshotHeader) -> bool {
+    // Persistent restore validates the snapshot before rebind_restored_guest_memory_for_vm
+    // builds a new VM and publishes VmSnapshotMeta. Derive the expected Hull mapping from
+    // the candidate itself instead of depending on that later per-VM bookkeeping.
+    let Some((candidate_base, _)) = crate::limine::executable_address_bases() else {
+        return false;
+    };
+    let (_, candidate_end) = crate::hv::guest::hull_image_bounds();
+    candidate_base == header.code_base
+        && candidate_end.saturating_sub(candidate_base) == header.code_len
+}
+
+fn immutable_code_digest(code_base: u64, code_len: u64) -> Option<[u8; 32]> {
+    let layout = crate::hv::guest::hull_image_layout();
+    let mut hasher = Sha256::new();
+    hasher.update(b"TRUEOS/vm-snapshot/immutable-code/v1\0");
+    hasher.update(code_base.to_le_bytes());
+    hasher.update(code_len.to_le_bytes());
+    hash_immutable_span(&mut hasher, code_base, code_len, layout.text_start, layout.text_end)?;
+    hash_immutable_span(&mut hasher, code_base, code_len, layout.rodata_start, layout.rodata_end)?;
+    Some(hasher.finalize().into())
+}
+
+fn hash_immutable_span(
+    hasher: &mut Sha256,
+    code_base: u64,
+    code_len: u64,
+    span_start: u64,
+    span_end: u64,
+) -> Option<()> {
+    if span_end < span_start
+        || span_start < code_base
+        || span_end.checked_sub(code_base)? > code_len
+    {
+        return None;
+    }
+    let span_len = usize::try_from(span_end.checked_sub(span_start)?).ok()?;
+    hasher.update(span_start.to_le_bytes());
+    hasher.update(span_end.to_le_bytes());
+    // SAFETY: the hull layout publishes mapped immutable image spans.
+    let bytes = unsafe { core::slice::from_raw_parts(span_start as *const u8, span_len) };
+    hasher.update(bytes);
+    Some(())
 }
 
 fn immutable_span_matches(

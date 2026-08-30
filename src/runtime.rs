@@ -8,8 +8,9 @@ fn local_cpu() -> Option<&'static crate::percpu::PerCpu> {
 }
 
 #[inline]
-fn local_executor() -> Option<&'static trueos_executor::raw::Executor> {
-    let cpu = local_cpu()?;
+fn local_executor(
+    cpu: &'static crate::percpu::PerCpu,
+) -> Option<&'static trueos_executor::raw::Executor> {
     let ex_ptr = cpu.executor_ptr();
     if ex_ptr.is_null() {
         return None;
@@ -21,7 +22,7 @@ fn local_executor() -> Option<&'static trueos_executor::raw::Executor> {
 #[inline]
 pub fn poll_local_executor() {
     let Some(cpu) = local_cpu() else { return };
-    let Some(executor) = local_executor() else {
+    let Some(executor) = local_executor(cpu) else {
         return;
     };
 
@@ -35,7 +36,7 @@ pub fn poll_local_executor() {
 
 #[inline]
 fn wants_chill(sleep_ticks: u64) -> Option<u64> {
-    let executor = local_executor()?;
+    let executor = local_executor(local_cpu()?)?;
     if executor.ready_task_count() != 0 {
         return None;
     }

@@ -251,6 +251,12 @@ async fn queue_live_update_vm_restore(
         }
     }
 
+    crate::log!(
+        "restart: vm{} checkpoint load begin checkpoint={} generation={}\n",
+        vm_id,
+        name,
+        generation,
+    );
     let image = match crate::hv::store::load_persistent_async(name.as_str()).await {
         Ok(image) => image,
         Err(error) => {
@@ -263,6 +269,15 @@ async fn queue_live_update_vm_restore(
             return;
         }
     };
+    crate::log!(
+        "restart: vm{} checkpoint load complete checkpoint={} snapshot={} guest_heap={} hull_rw={} blueprint={}\n",
+        vm_id,
+        name,
+        image.snapshot().len(),
+        image.guest_heap().len(),
+        image.hull_rw().len(),
+        image.blueprint().len(),
+    );
     if image.source_vm_id != vm_id {
         crate::log!(
             "restart: vm{} checkpoint source mismatch checkpoint={} source_vm={} action=reject\n",
@@ -273,7 +288,7 @@ async fn queue_live_update_vm_restore(
         crate::hv::finish_restore(vm_id);
         return;
     }
-    if let Err(error) = crate::hv::store::save_bytes_async(vm_id, image.snapshot.clone()).await {
+    if let Err(error) = crate::hv::store::save_bytes_async(vm_id, image.snapshot().to_vec()).await {
         crate::log!(
             "restart: vm{} warm-store seed failed checkpoint={} error={error:?}\n",
             vm_id,

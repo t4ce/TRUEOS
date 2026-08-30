@@ -94,6 +94,7 @@ struct TrueosVmId {
     lifecycle_checkpoint_version: AtomicU64,
     run_generation: AtomicU64,
     restore_inflight: AtomicBool,
+    resume_prepared: AtomicBool,
     marker_seen: AtomicBool,
 }
 
@@ -116,6 +117,7 @@ impl TrueosVmId {
             lifecycle_checkpoint_version: AtomicU64::new(0),
             run_generation: AtomicU64::new(0),
             restore_inflight: AtomicBool::new(false),
+            resume_prepared: AtomicBool::new(false),
             marker_seen: AtomicBool::new(false),
         }
     }
@@ -1602,6 +1604,7 @@ fn set_blueprint_lifecycle_capability(vm_id: u8, archive: &str, replicatable: bo
     };
     vm.replicatable.store(replicatable, Ordering::Release);
     vm.pause_latched.store(false, Ordering::Release);
+    vm.resume_prepared.store(false, Ordering::Release);
     vm.pause_store_seq.store(0, Ordering::Release);
     reset_prepare_pause(vm);
     if let Some(slot) = BLUEPRINT_LIFECYCLE_ARCHIVES.get(vm_id as usize) {
@@ -1615,6 +1618,7 @@ fn clear_blueprint_lifecycle_capability(vm_id: u8) {
     };
     vm.replicatable.store(false, Ordering::Release);
     vm.pause_latched.store(false, Ordering::Release);
+    vm.resume_prepared.store(false, Ordering::Release);
     vm.pause_store_seq.store(0, Ordering::Release);
     reset_prepare_pause(vm);
     if let Some(slot) = BLUEPRINT_LIFECYCLE_ARCHIVES.get(vm_id as usize) {
@@ -2083,8 +2087,19 @@ fn start_with_mode(
             if memory::active_restore_meta(vm_id).is_some()
                 && vm.pause_latched.load(Ordering::Acquire)
             {
-                mark_replicatable_resumed(vm_id);
-                hvlogf(format_args!("hv: vm{} lifecycle: resume committed before VM wake", vm_id));
+                if vm.replicatable.load(Ordering::Acquire) {
+                    prepare_replicatable_resume(vm_id);
+                    hvlogf(format_args!(
+                        "hv: vm{} lifecycle: resume prepared; retention held until guest identity handshake",
+                        vm_id
+                    ));
+                } else {
+                    vm.pause_latched.store(false, Ordering::Release);
+                    hvlogf(format_args!(
+                        "hv: vm{} lifecycle: non-Blueprint resume committed before VM wake",
+                        vm_id
+                    ));
+                }
             }
             let wake_sent = target.spawner.spawn_and_wake_remote(token);
             hvlogf(format_args!(
@@ -2182,6 +2197,7 @@ pub fn eject(vm_id: u8) -> Result<bool, EjectError> {
     }
     let _ = crate::hv::store::eject_warm(vm_id);
     vm.pause_latched.store(false, Ordering::Release);
+    vm.resume_prepared.store(false, Ordering::Release);
     vm.pause_store_seq.store(0, Ordering::Release);
     reset_prepare_pause(vm);
     Ok(had_state)
@@ -2295,12 +2311,12 @@ pub(crate) fn prepare_preserve_mode(vm_id: u8, mode: PreserveMode) -> Result<boo
         return Err(StopError::UnsupportedVmId);
     };
 
+    vm.pause_store_seq
+        .store(crate::hv::store::current_committed_seq(vm_id), Ordering::Release);
     if mode == PreserveMode::Pause {
         if !vm.replicatable.load(Ordering::Acquire) {
             return Ok(false);
         }
-        vm.pause_store_seq
-            .store(crate::hv::store::current_committed_seq(vm_id), Ordering::Release);
         vm.pause_latched.store(true, Ordering::Release);
         suspend_blueprint_process_context(vm_id);
         crate::r::services::gridpaper_service::pause_owner_lifecycle(vm_id);
@@ -2309,9 +2325,15 @@ pub(crate) fn prepare_preserve_mode(vm_id: u8, mode: PreserveMode) -> Result<boo
     Ok(true)
 }
 
-pub fn mark_replicatable_resumed(vm_id: u8) {
+fn prepare_replicatable_resume(vm_id: u8) {
     if let Some(vm) = vm_slot(vm_id) {
-        vm.pause_latched.store(false, Ordering::Release);
+        if vm
+            .resume_prepared
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_err()
+        {
+            return;
+        }
         reset_prepare_pause(vm);
         if let Some(identity_slot) = BLUEPRINT_INSTANCE_IDENTITIES.get(vm_id as usize) {
             let mut identity = identity_slot.lock();
@@ -2330,6 +2352,24 @@ pub fn mark_replicatable_resumed(vm_id: u8) {
         resume_blueprint_process_context(vm_id);
         crate::r::services::gridpaper_service::resume_owner_lifecycle(vm_id);
     }
+}
+
+/// Commit an exact-continuation resume only after the guest has returned from
+/// its Ready boundary and requested the resumed identity. Until this
+/// handshake, teardown retains the reconstructed state so a failed VM entry
+/// remains retryable.
+pub(crate) fn commit_replicatable_resume(vm_id: u8) {
+    let Some(vm) = vm_slot(vm_id) else {
+        return;
+    };
+    if !vm.resume_prepared.swap(false, Ordering::AcqRel) {
+        return;
+    }
+    vm.pause_latched.store(false, Ordering::Release);
+    hvlogf(format_args!(
+        "hv: vm{} lifecycle: resume committed at guest identity handshake",
+        vm_id
+    ));
 }
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
@@ -2384,17 +2424,44 @@ pub fn restore_persistent_image(
     if !crate::gpu::vgpu::hull_guest_storage_reusable(vm_id) {
         return Err(RestoreError::VgpuQuarantined);
     }
+    if image.source_vm_id != vm_id && !cross_principal_snapshot_restore_supported() {
+        return Err(RestoreError::BadSnapshot);
+    }
     let result = (|| {
-        crate::allocators::restore_hv_guest_heap(vm_id, image.guest_heap.as_slice())
-            .map_err(|_| RestoreError::BadSnapshot)?;
-        memory::restore_guest_hull_rw_for_vm(vm_id, image.hull_rw.as_slice())
-            .map_err(|_| RestoreError::BadSnapshot)?;
-        restore_blueprint_portable_state(vm_id, image.blueprint.as_slice(), console_target)
-            .map_err(|_| RestoreError::BadSnapshot)?;
-        restore_snapshot_bytes(vm_id, image.snapshot.as_slice())?;
+        crate::allocators::restore_hv_guest_heap(vm_id, image.guest_heap())
+            .map_err(|reason| {
+                hvwarnf(format_args!(
+                    "hv: vm{} persistent restore failed stage=guest-heap reason={}",
+                    vm_id, reason
+                ));
+                RestoreError::BadSnapshot
+            })?;
+        memory::restore_guest_hull_rw_for_vm(vm_id, image.hull_rw())
+            .map_err(|reason| {
+                hvwarnf(format_args!(
+                    "hv: vm{} persistent restore failed stage=hull-rw reason={}",
+                    vm_id, reason
+                ));
+                RestoreError::BadSnapshot
+            })?;
+        restore_blueprint_portable_state(vm_id, image.blueprint(), console_target)
+            .map_err(|reason| {
+                hvwarnf(format_args!(
+                    "hv: vm{} persistent restore failed stage=blueprint reason={}",
+                    vm_id, reason
+                ));
+                RestoreError::BadSnapshot
+            })?;
+        restore_snapshot_bytes(vm_id, image.snapshot())?;
         memory::rebind_restored_guest_memory_for_vm(vm_id, VmBootMode::Hull)
-            .map_err(|_| RestoreError::BadSnapshot)?;
-        Ok(image.snapshot.len())
+            .map_err(|reason| {
+                hvwarnf(format_args!(
+                    "hv: vm{} persistent restore failed stage=rebind reason={}",
+                    vm_id, reason
+                ));
+                RestoreError::BadSnapshot
+            })?;
+        Ok(image.snapshot().len())
     })();
     if result.is_err() {
         if let Some(vm) = vm_slot(vm_id) {
@@ -2507,7 +2574,17 @@ fn snapshot_on_preserve_exit(vm_id: u8) {
             false
         }
     };
-    if !saved {
+    if saved {
+        if let Some(vm) = vm_slot(vm_id)
+            && !vm.pause_latched.swap(true, Ordering::AcqRel)
+        {
+            suspend_blueprint_process_context(vm_id);
+            hvlogf(format_args!(
+                "hv: vm{} lifecycle: successful preserve retained exact continuation state",
+                vm_id
+            ));
+        }
+    } else {
         if let Some(vm) = vm_slot(vm_id) {
             if vm.pause_latched.swap(false, Ordering::AcqRel) {
                 vm.pause_store_seq.store(0, Ordering::Release);
@@ -3020,7 +3097,9 @@ fn clear_blueprint_launch_script(vm_id: u8) {
 }
 
 const BLUEPRINT_PORTABLE_MAGIC: u32 = u32::from_le_bytes(*b"BPS1");
-const BLUEPRINT_PORTABLE_VERSION: u32 = 1;
+const BLUEPRINT_PORTABLE_VERSION_LEGACY: u32 = 1;
+const BLUEPRINT_PORTABLE_VERSION_WITHOUT_UNPACKED_ELF: u32 = 2;
+const BLUEPRINT_PORTABLE_VERSION: u32 = 3;
 
 fn portable_push_u32(out: &mut AllocVec<u8>, value: u32) {
     out.extend_from_slice(&value.to_le_bytes());
@@ -3060,9 +3139,15 @@ pub fn snapshot_blueprint_portable_state(vm_id: u8) -> Result<AllocVec<u8>, &'st
         BlueprintConsoleSurface::Text => 0,
         BlueprintConsoleSurface::Terminal => 1,
     });
+    let (exec_start, exec_end) = memory::active_guest_rel_exec_range_for_vm(vm_id)
+        .ok_or("blueprint executable range missing")?;
+    portable_push_u64(&mut out, exec_start);
+    portable_push_u64(&mut out, exec_end);
     portable_push_bytes(&mut out, state.archive.as_bytes());
     portable_push_bytes(&mut out, state.module_bytes.as_slice());
-    portable_push_bytes(&mut out, state.unpacked_bytes.as_slice());
+    // The unpacked ELF is immutable and fully derivable from module_bytes.
+    // Persist the self-contained Blueprint module once and rebuild the normal
+    // runtime representation during restore.
     portable_push_u32(&mut out, state.app_args.len() as u32);
     for arg in state.app_args.iter() {
         portable_push_bytes(&mut out, arg.as_bytes());
@@ -3126,9 +3211,16 @@ pub fn restore_blueprint_portable_state(
         return Err("vm slot is busy");
     }
     let mut offset = 0usize;
-    if portable_take_u32(bytes, &mut offset) != Some(BLUEPRINT_PORTABLE_MAGIC)
-        || portable_take_u32(bytes, &mut offset) != Some(BLUEPRINT_PORTABLE_VERSION)
-    {
+    if portable_take_u32(bytes, &mut offset) != Some(BLUEPRINT_PORTABLE_MAGIC) {
+        return Err("bad blueprint state image");
+    }
+    let version = portable_take_u32(bytes, &mut offset).ok_or("blueprint state version")?;
+    if !matches!(
+        version,
+        BLUEPRINT_PORTABLE_VERSION_LEGACY
+            | BLUEPRINT_PORTABLE_VERSION_WITHOUT_UNPACKED_ELF
+            | BLUEPRINT_PORTABLE_VERSION
+    ) {
         return Err("bad blueprint state image");
     }
     let surface = match bytes.get(offset).copied() {
@@ -3137,13 +3229,27 @@ pub fn restore_blueprint_portable_state(
         _ => return Err("bad blueprint console surface"),
     };
     offset += 1;
+    let exec_range = if version == BLUEPRINT_PORTABLE_VERSION {
+        Some((
+            portable_take_u64(bytes, &mut offset).ok_or("blueprint executable start")?,
+            portable_take_u64(bytes, &mut offset).ok_or("blueprint executable end")?,
+        ))
+    } else {
+        None
+    };
     let archive = portable_take_string(bytes, &mut offset).ok_or("blueprint archive")?;
     let module_bytes = portable_take_bytes(bytes, &mut offset)
         .ok_or("blueprint module")?
         .to_vec();
-    let unpacked_bytes = portable_take_bytes(bytes, &mut offset)
-        .ok_or("blueprint payload")?
-        .to_vec();
+    let unpacked_bytes = if version == BLUEPRINT_PORTABLE_VERSION_LEGACY {
+        portable_take_bytes(bytes, &mut offset)
+            .ok_or("blueprint payload")?
+            .to_vec()
+    } else {
+        let module = crate::hv::blueprint::parse_blueprint(module_bytes.as_slice())
+            .map_err(|_| "blueprint module decode")?;
+        crate::hv::blueprint::unpack_blueprint(&module).map_err(|_| "blueprint payload decode")?
+    };
     let arg_count = portable_take_u32(bytes, &mut offset).ok_or("blueprint args")? as usize;
     let mut app_args = AllocVec::with_capacity(arg_count);
     for _ in 0..arg_count {
@@ -3185,6 +3291,14 @@ pub fn restore_blueprint_portable_state(
     if !memory::arm_guest_rel_exec_for_vm(vm_id) {
         return Err("blueprint execute capability unavailable");
     }
+    let Some((exec_start, exec_end)) = exec_range else {
+        memory::release_guest_rel_exec_for_vm(vm_id);
+        return Err("blueprint state predates executable-range persistence");
+    };
+    if memory::restore_guest_rel_exec_range_for_vm(vm_id, exec_start, exec_end).is_err() {
+        memory::release_guest_rel_exec_for_vm(vm_id);
+        return Err("blueprint executable range restore failed");
+    }
     let state = BlueprintLaunchState {
         archive: archive.clone(),
         module_bytes,
@@ -3208,6 +3322,7 @@ pub fn restore_blueprint_portable_state(
     vm.pause_store_seq
         .store(crate::hv::store::current_committed_seq(vm_id), Ordering::Release);
     vm.pause_latched.store(true, Ordering::Release);
+    vm.resume_prepared.store(false, Ordering::Release);
     suspend_blueprint_process_context(vm_id);
     Ok(())
 }

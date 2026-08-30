@@ -791,7 +791,11 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 reserved: u32,
             }
 
+            // replication::ready performs this call immediately after exact
+            // continuation returns to guest code. VM entry alone is not proof
+            // that the retained checkpoint may be discarded.
             if let Some(identity) = crate::hv::blueprint_instance_identity(vm_id) {
+                crate::hv::commit_replicatable_resume(vm_id);
                 let wire = IdentityWire {
                     instance: identity.instance,
                     lineage: identity.lineage,

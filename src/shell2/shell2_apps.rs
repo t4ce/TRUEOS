@@ -744,10 +744,25 @@ fn schedule_store_persistent(spawner: &Spawner, io: &'static dyn ShellBackend2, 
 async fn load_persistent_vm_task(spawner: Spawner, target: MatrixTarget, vm_id: u8, name: String) {
     let result = async {
         let image = crate::hv::store::load_persistent_async(name.as_str()).await?;
-        crate::hv::store::save_bytes_async(vm_id, image.snapshot.clone()).await?;
+        if image.source_vm_id != vm_id
+            && !crate::hv::cross_principal_snapshot_restore_supported()
+        {
+            print_matrix_target_line(
+                &target,
+                alloc::format!(
+                    "apps: persistent load rejected: {} belongs to vm{}; exact restore into vm{} requires relocation",
+                    name,
+                    image.source_vm_id,
+                    vm_id
+                )
+                .as_str(),
+            );
+            return Err(crate::hv::store::VmStoreError::BadEnvelope);
+        }
+        crate::hv::store::save_bytes_async(vm_id, image.snapshot().to_vec()).await?;
         crate::hv::restore_persistent_image(vm_id, &image, Some(target.clone()))
             .map_err(|_| crate::hv::store::VmStoreError::BadEnvelope)?;
-        Ok::<usize, crate::hv::store::VmStoreError>(image.snapshot.len())
+        Ok::<usize, crate::hv::store::VmStoreError>(image.snapshot().len())
     }
     .await;
     match result {

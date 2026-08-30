@@ -1,4 +1,5 @@
 use alloc::{boxed::Box, collections::BTreeMap, format, string::String, sync::Arc, vec::Vec};
+use core::ops::Range;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use heapless::Deque;
@@ -188,10 +189,29 @@ pub fn replication_online() -> bool {
 
 pub struct PersistentVmImage {
     pub source_vm_id: u8,
-    pub snapshot: Vec<u8>,
-    pub guest_heap: Vec<u8>,
-    pub hull_rw: Vec<u8>,
-    pub blueprint: Vec<u8>,
+    bytes: Vec<u8>,
+    snapshot: Range<usize>,
+    guest_heap: Range<usize>,
+    hull_rw: Range<usize>,
+    blueprint: Range<usize>,
+}
+
+impl PersistentVmImage {
+    pub fn snapshot(&self) -> &[u8] {
+        &self.bytes[self.snapshot.clone()]
+    }
+
+    pub fn guest_heap(&self) -> &[u8] {
+        &self.bytes[self.guest_heap.clone()]
+    }
+
+    pub fn hull_rw(&self) -> &[u8] {
+        &self.bytes[self.hull_rw.clone()]
+    }
+
+    pub fn blueprint(&self) -> &[u8] {
+        &self.bytes[self.blueprint.clone()]
+    }
 }
 
 fn valid_persistent_name(name: &str) -> bool {
@@ -292,10 +312,14 @@ pub async fn store_persistent_async(vm_id: u8, name: &str) -> Result<usize, VmSt
         .await
         .map_err(VmStoreError::Write)?;
     crate::log!(
-        "hv-store: persistent commit name={} vm_id={} bytes={} disk={} warm_retained=1\n",
+        "hv-store: persistent commit name={} vm_id={} bytes={} snapshot={} guest_heap={} hull_rw={} blueprint={} disk={} warm_retained=1\n",
         name,
         vm_id,
         total,
+        snapshot.len(),
+        guest_heap.len(),
+        hull_rw.len(),
+        blueprint.len(),
         disk.id().raw()
     );
     Ok(total)
@@ -315,11 +339,12 @@ fn envelope_take_u64(bytes: &[u8], offset: &mut usize) -> Option<u64> {
     Some(u64::from_le_bytes(raw))
 }
 
-fn envelope_take_vec(bytes: &[u8], offset: &mut usize, len: usize) -> Option<Vec<u8>> {
+fn envelope_take_range(bytes: &[u8], offset: &mut usize, len: usize) -> Option<Range<usize>> {
+    let start = *offset;
     let end = offset.checked_add(len)?;
-    let value = bytes.get(*offset..end)?.to_vec();
+    bytes.get(start..end)?;
     *offset = end;
-    Some(value)
+    Some(start..end)
 }
 
 pub async fn load_persistent_async(name: &str) -> Result<PersistentVmImage, VmStoreError> {
@@ -346,19 +371,20 @@ pub async fn load_persistent_async(name: &str) -> Result<PersistentVmImage, VmSt
         )
         .map_err(|_| VmStoreError::BadEnvelope)?;
     }
-    let snapshot = envelope_take_vec(bytes.as_slice(), &mut offset, lengths[0])
+    let snapshot = envelope_take_range(bytes.as_slice(), &mut offset, lengths[0])
         .ok_or(VmStoreError::BadEnvelope)?;
-    let guest_heap = envelope_take_vec(bytes.as_slice(), &mut offset, lengths[1])
+    let guest_heap = envelope_take_range(bytes.as_slice(), &mut offset, lengths[1])
         .ok_or(VmStoreError::BadEnvelope)?;
-    let hull_rw = envelope_take_vec(bytes.as_slice(), &mut offset, lengths[2])
+    let hull_rw = envelope_take_range(bytes.as_slice(), &mut offset, lengths[2])
         .ok_or(VmStoreError::BadEnvelope)?;
-    let blueprint = envelope_take_vec(bytes.as_slice(), &mut offset, lengths[3])
+    let blueprint = envelope_take_range(bytes.as_slice(), &mut offset, lengths[3])
         .ok_or(VmStoreError::BadEnvelope)?;
     if offset != bytes.len() {
         return Err(VmStoreError::BadEnvelope);
     }
     Ok(PersistentVmImage {
         source_vm_id,
+        bytes,
         snapshot,
         guest_heap,
         hull_rw,

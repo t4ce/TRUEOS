@@ -1777,6 +1777,43 @@ pub(crate) fn release_guest_rel_exec_for_vm(vm_id: u8) {
     };
 }
 
+pub(crate) fn active_guest_rel_exec_range_for_vm(vm_id: u8) -> Option<(u64, u64)> {
+    let state = *GUEST_REL_EXEC_STATES.get(vm_id as usize)?.lock();
+    (state.phase == GuestRelExecPhase::Active && state.start < state.end)
+        .then_some((state.start, state.end))
+}
+
+/// Restore the trusted REL executable overlay before guest page tables are
+/// rebuilt. `build_guest_cr3_for_vm_with_mode` validates and reapplies it to
+/// the freshly constructed heap mappings.
+pub(crate) fn restore_guest_rel_exec_range_for_vm(
+    vm_id: u8,
+    start: u64,
+    end: u64,
+) -> Result<(), &'static str> {
+    if start & (PAGE_SIZE_4K as u64 - 1) != 0
+        || end & (PAGE_SIZE_4K as u64 - 1) != 0
+        || start >= end
+        || end.saturating_sub(start) > crate::allcaps::blueprint::PORTAL_IMAGE_CAP_BYTES as u64
+    {
+        return Err("guest rel exec saved range");
+    }
+    let heap =
+        crate::allocators::hv_guest_heap_stats_if_configured(vm_id).ok_or("guest rel exec heap")?;
+    if !heap.initialized || start < heap.heap_start as u64 || end > heap.heap_end as u64 {
+        return Err("guest rel exec saved range outside heap");
+    }
+    let slot = GUEST_REL_EXEC_STATES
+        .get(vm_id as usize)
+        .ok_or("guest rel exec vm")?;
+    *slot.lock() = GuestRelExecState {
+        phase: GuestRelExecPhase::Active,
+        start,
+        end,
+    };
+    Ok(())
+}
+
 /// Temporarily make only the trusted loader's REL allocation executable.
 /// Guest heap leaves are NX by default, and vVideoMem admission requires that
 /// NX bit, so an active code page cannot also become a GPU buffer.
@@ -1866,6 +1903,13 @@ fn reapply_active_guest_rel_exec(vm_id: u8) -> Result<(), &'static str> {
     let state = *slot.lock();
     if state.phase == GuestRelExecPhase::Active {
         apply_guest_rel_exec_pages(vm_id, state.start, state.end, false)?;
+        hvlogf(format_args!(
+            "blueprint-rel: vm={} stage=restore-exec-reapply status=ok pages={} gva=0x{:X}..0x{:X}",
+            vm_id,
+            state.end.saturating_sub(state.start) / PAGE_SIZE_4K as u64,
+            state.start,
+            state.end
+        ));
     }
     Ok(())
 }

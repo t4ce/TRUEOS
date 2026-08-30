@@ -909,13 +909,15 @@ fn current_alloc_domain() -> AllocDomain {
         return AllocDomain::HvGuest(vm_id);
     }
 
-    if let Some(slot) = cpuid_slot()
+    let slot = cpuid_slot();
+
+    if let Some(slot) = slot
         && HOST_ALLOC_DOMAIN_STRONG_DEPTH_BY_CPU[slot].load(Ordering::Acquire) != 0
     {
         return AllocDomain::Host;
     }
 
-    if let Some(slot) = cpuid_slot()
+    if let Some(slot) = slot
         && HV_GUEST_ALLOC_DOMAIN_FORCE_DEPTH_BY_CPU[slot].load(Ordering::Acquire) != 0
     {
         let vm_tag = HV_GUEST_ALLOC_DOMAIN_FORCE_VM_BY_CPU[slot].load(Ordering::Acquire);
@@ -924,7 +926,7 @@ fn current_alloc_domain() -> AllocDomain {
         }
     }
 
-    if let Some(slot) = cpuid_slot()
+    if let Some(slot) = slot
         && HOST_ALLOC_DOMAIN_FORCE_DEPTH_BY_CPU[slot].load(Ordering::Acquire) != 0
     {
         return AllocDomain::Host;
@@ -941,10 +943,6 @@ fn current_alloc_domain() -> AllocDomain {
         return AllocDomain::HvGuest(vm_id);
     }
 
-    let slot = crate::percpu::current_slot();
-    if slot >= 64 {
-        return AllocDomain::Host;
-    }
     AllocDomain::Host
 }
 
