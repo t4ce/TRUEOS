@@ -561,6 +561,16 @@ pub(crate) fn print_native_line(io: &dyn ShellIo2, text: &str) {
     enqueue_transcript_line(io, text);
 }
 
+/// Write a multi-line visual block with its supplied row order preserved on
+/// the newest-first Matrix transcript.
+pub(crate) fn print_ordered_block(io: &dyn ShellIo2, lines: &[AllocString]) {
+    let output_mask = output_mask_for_io(io);
+    if output_mask == 0 {
+        return;
+    }
+    let _ = matrix::record_ordered_block_for_output(output_mask, lines);
+}
+
 fn same_backend_io(io: &dyn ShellIo2, target: &'static dyn ShellIo2) -> bool {
     (io as *const dyn ShellIo2 as *const ()) == (target as *const dyn ShellIo2 as *const ())
 }

@@ -52,18 +52,23 @@ The first kernel/GPU slice is now present:
   acknowledgement abandons and pins the generation instead of manufacturing
   a reusable row.
 
-`cpp font rush2` is the first UI4 consumer. It allocates 32 row Frames and
-windows upfront, distributes them across application plane groups 0..3, keeps
-slot 4 reserved, and activates producers in a 1/2/4/8/16/24/32 ladder. Each
-lease keeps one of four static font sizes while SoftRng changes its one-glyph
-payload, color, and alpha. A published row retains its capability by exact
-double-buffer index; reacquiring that index supplies the CPU ACK. On shutdown,
-the capability is retained until the whole UI4 Frame is destroyed, then an
-exact completion-checked retirement ACK releases the producer generation.
+`cpp font rush` and `cpp font rush2` are the UI4 consumers. Rush stages up to
+32 producer leases (eight per active plane) while retaining its original
+showcase sequence. Its terminal producer storm reactivates every available
+canvas in lockstep, mapping each plane rank to one row of the shared 8x4
+producer grid. Rush2 settles four Frames/windows on application planes 0..3,
+keeps slot 4 reserved, registers two producers per plane, and activates them
+in a 1/2/4/8 ladder. Each lease keeps one of four static font sizes while
+SoftRng changes its row payload, color, and alpha. A published row retains its
+capability by exact double-buffer index; reacquiring that index supplies the
+CPU ACK. On shutdown, the capability is retained until the whole UI4 Frame is
+destroyed, then an exact completion-checked retirement ACK releases the
+producer generation.
 
-The Font RCS runtime still remains one job slot. Rush2 therefore demonstrates
-32 independently backpressured producer queues and persistent UI4 rings, but
-does not claim 32 parallel GPU submissions or a one-producer-per-EU mapping.
+The Font RCS runtime still remains one job slot. Both Rush variants therefore
+demonstrate independently backpressured producer queues and persistent UI4
+rings, but do not claim 32 parallel GPU submissions or a one-producer-per-EU
+mapping.
 Abandoned ACK capabilities and ambiguous GPU retirement currently pin their
 complete producer generation until reboot; a future device-reset recovery path
 must reclaim those quarantined generations only after it proves the old

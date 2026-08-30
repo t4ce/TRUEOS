@@ -1,4 +1,4 @@
-use alloc::string::String;
+use alloc::{string::String, vec::Vec};
 use core::fmt::Write;
 
 use qrcodegen::{QrCode, QrCodeEcc, Version};
@@ -6,8 +6,8 @@ use qrcodegen::{QrCode, QrCodeEcc, Version};
 use super::super::{
     ShellBackend2, TRANSPORT_CONTAINER_SCOPE, TRANSPORT_NET_TCP_SCOPE,
     claim_matrix_target_for_app_slot_selected, konsole_viewport_size_for_target,
-    matrix_target_for_backend, output_target_for_backend, print_native_line, print_shell_line,
-    transport_scope_for_backend,
+    matrix_target_for_backend, output_target_for_backend, print_native_line, print_ordered_block,
+    print_shell_line, transport_scope_for_backend,
 };
 use crate::crypt::{self, CryError, CryTwoFactorState};
 use crate::shell2::shell2_cmd::ParseOutcome;
@@ -364,20 +364,21 @@ fn render_qr(
         });
     }
 
-    crate::shell2::matrix::clear_active_lines(output_mask);
-    print_network_trust_warning(io);
-    print_native_line(
-        io,
-        alloc::format!(
-            "cry 2fa: scan with Google Authenticator; account=root-{}",
-            full_hex(account_tag),
-        )
-        .as_str(),
+    let mut enrollment_block = Vec::with_capacity(
+        (symbol_with_quiet_zone as usize).div_ceil(2) + 4 + network_warning_rows,
     );
-    print_native_line(
-        io,
+    if transport_scope_for_backend(io) == TRANSPORT_NET_TCP_SCOPE {
+        enrollment_block.push(String::from(
+            "cry 2fa: warning: this F4 session crosses the network; use only on a trusted link",
+        ));
+    }
+    enrollment_block.push(alloc::format!(
+        "cry 2fa: scan with Google Authenticator; account=root-{}",
+        full_hex(account_tag),
+    ));
+    enrollment_block.push(String::from(
         "cry 2fa: QR contains the shared secret; enter the 6-digit code in this slot",
-    );
+    ));
 
     let first = -QR_QUIET_ZONE;
     let last = qr.size() + QR_QUIET_ZONE;
@@ -397,10 +398,14 @@ fn render_qr(
             });
         }
         line.push_str("\x1b[0m");
-        print_native_line(io, line.as_str());
+        enrollment_block.push(line);
         top += 2;
     }
-    print_native_line(io, "cry 2fa: waiting for the first authenticator code (digits only)");
+    enrollment_block
+        .push(String::from("cry 2fa: waiting for the first authenticator code (digits only)"));
+
+    crate::shell2::matrix::clear_active_lines(output_mask);
+    print_ordered_block(io, enrollment_block.as_slice());
     Ok(())
 }
 

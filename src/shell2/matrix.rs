@@ -107,6 +107,10 @@ struct MatrixState {
     slot_strip_revision: u64,
     view_line_widths: [usize; super::OUTPUT_SCOPE_COUNT],
     view_terminal_rows: [usize; super::OUTPUT_SCOPE_COUNT],
+    // TODO(shell2-user-history): Replace this boot-local Matrix-wide recall
+    // cache with authenticated user/key-scoped history and encrypted
+    // persistence. Keep the policy in host Shell2 rather than `shell.bp` so
+    // UI4, remote, and container frontends can share one user's history.
     live_user_input_record: VecDeque<LiveUserInputEntry>,
     revision: u64,
 }
@@ -268,6 +272,18 @@ fn push_transient_line(slot: &mut MatrixSlot, text: &str) {
         text: AllocString::from(text),
         transient: true,
     });
+}
+
+fn push_ordered_block(slot: &mut MatrixSlot, lines: &[AllocString], transient: bool) {
+    // Transcript entries render newest-first. Storing the supplied rows in
+    // reverse gives callers one atomic visual block in their natural order.
+    for line in lines.iter().rev() {
+        if transient {
+            push_transient_line(slot, line.as_str());
+        } else {
+            push_line(slot, line.as_str());
+        }
+    }
 }
 
 fn push_live_user_input_record(state: &mut MatrixState, text: &str) {
@@ -707,6 +723,23 @@ pub(crate) fn record_line_for_output(output_mask: super::OutputMask, text: &str)
     slot_id
 }
 
+/// Append a multi-line visual block while preserving the caller's row order
+/// when the newest-first transcript is displayed.
+pub(crate) fn record_ordered_block_for_output(
+    output_mask: super::OutputMask,
+    lines: &[AllocString],
+) -> Option<MatrixSlotId> {
+    if lines.is_empty() {
+        return None;
+    }
+    let mut guard = state().lock();
+    let slot_id = active_slot_id_ref(&guard, output_mask).clone();
+    let idx = ensure_slot_index(&mut guard.slots, &slot_id);
+    push_ordered_block(&mut guard.slots[idx], lines, false);
+    bump_slot_revision(&mut guard, idx);
+    Some(slot_id)
+}
+
 pub(crate) fn record_line_in_default(text: &str) {
     let default_id = default_slot_id();
     record_line_in_slot(&default_id, text);
@@ -777,11 +810,7 @@ pub(crate) fn replace_transient_lines_in_live_slot(
     }
 
     guard.slots[idx].lines.retain(|line| !line.transient);
-    // Transcript entries are presented newest-first. Store the block bottom-up
-    // so callers can provide its rows in their natural visual order.
-    for line in lines.iter().rev() {
-        push_transient_line(&mut guard.slots[idx], line.as_str());
-    }
+    push_ordered_block(&mut guard.slots[idx], lines, true);
     bump_slot_revision(&mut guard, idx);
     true
 }
@@ -1152,6 +1181,8 @@ pub(crate) fn slot_transcript_text(slot_id: &MatrixSlotId) -> AllocString {
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec::Vec;
+
     use super::*;
 
     #[test]
@@ -1176,6 +1207,28 @@ mod tests {
         assert_eq!(broad_slot_candidate(0).as_str(), "00000");
         assert_eq!(broad_slot_candidate(35).as_str(), "0000z");
         assert_eq!(broad_slot_candidate(36).as_str(), "00010");
+    }
+
+    #[test]
+    fn ordered_block_preserves_the_callers_visual_row_order() {
+        let slot_id = slot_id_from_name("ordrd");
+        let lines = [
+            AllocString::from("top"),
+            AllocString::from("middle"),
+            AllocString::from("bottom"),
+        ];
+        let mut guard = state().lock();
+        let idx = ensure_slot_index(&mut guard.slots, &slot_id);
+        guard.slots[idx].lines.clear();
+        push_ordered_block(&mut guard.slots[idx], &lines, false);
+
+        let displayed: Vec<AllocString> = guard.slots[idx]
+            .lines
+            .iter()
+            .rev()
+            .map(|entry| entry.text.clone())
+            .collect();
+        assert_eq!(displayed.as_slice(), lines.as_slice());
     }
 
     #[test]

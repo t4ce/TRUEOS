@@ -4,7 +4,7 @@
 #![feature(f16)]
 #![allow(unsafe_op_in_unsafe_fn)]
 
-const _: f16 = 0.0_f16;
+const _: f16 = 0.0_f16; 
 
 #[macro_use]
 pub extern crate alloc;
