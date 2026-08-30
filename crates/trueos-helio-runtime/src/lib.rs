@@ -6,14 +6,10 @@
 
 extern crate alloc;
 
-pub mod battle;
 pub mod churn;
-pub mod pendulum_bigcloth;
 pub mod picasso_scene;
-pub mod portal_rooms;
 pub mod retained_transform;
 pub mod scene_db;
-pub mod sprite_dig;
 
 use alloc::vec::Vec;
 use trueos_helio_artifact::render_ir::{
@@ -197,13 +193,6 @@ pub enum Error {
     InvalidChurnScene,
     MissingChurnLighting,
     InvalidChurnLighting,
-    MissingBattleScene,
-    InvalidBattleScene,
-    MissingPendulumScene,
-    InvalidPendulumScene,
-    MissingSpriteDigScene,
-    InvalidSpriteDigScene,
-    InvalidSpriteDigAtlas,
     MissingPortalRoomsScene,
     InvalidPortalRoomsScene,
     MissingRetainedTransformTemplate,
@@ -448,7 +437,7 @@ fn read_f32x3(
     ])
 }
 
-pub(crate) struct Projector {
+pub struct Projector {
     position: [f32; 3],
     right: [f32; 3],
     up: [f32; 3],
@@ -460,7 +449,7 @@ pub(crate) struct Projector {
 }
 
 impl Projector {
-    pub(crate) fn new(camera: Camera, aspect: f32) -> Result<Self, Error> {
+    pub fn new(camera: Camera, aspect: f32) -> Result<Self, Error> {
         if !aspect.is_finite()
             || aspect <= 0.0
             || !camera.vertical_fov_radians.is_finite()
@@ -492,7 +481,7 @@ impl Projector {
         })
     }
 
-    pub(crate) fn project(&self, point: [f32; 3]) -> Result<[f32; 3], Error> {
+    pub fn project(&self, point: [f32; 3]) -> Result<[f32; 3], Error> {
         let relative = sub(point, self.position);
         let depth = dot(relative, self.forward);
         if !depth.is_finite() || depth < self.near || depth > self.far {
@@ -520,7 +509,7 @@ fn linear_rgb_to_srgba8(rgb: [f32; 3]) -> Result<[u8; 4], Error> {
     ])
 }
 
-pub(crate) fn linear_rgba_to_srgba8(rgba: [f32; 4]) -> Result<[u8; 4], Error> {
+pub fn linear_rgba_to_srgba8(rgba: [f32; 4]) -> Result<[u8; 4], Error> {
     if rgba
         .iter()
         .any(|value| !value.is_finite() || !(0.0..=1.0).contains(value))

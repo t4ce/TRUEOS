@@ -19,7 +19,7 @@ Run from anywhere:
 tools/helio-build/build-simple-cube.sh
 ```
 
-The default Helio checkout is the sibling `../Helio`. A different checkout
+The default Helio checkout is the sibling `../helio`. A different checkout
 can supply the real capture with `HELIO_REPO=/path/to/Helio`. Set
 `INTEL_DEVICE_ID=0x....` only when the Intel Vulkan compiler device must be
 selected explicitly.
@@ -68,28 +68,9 @@ tools/helio-build/build-gbuffer.sh
 tools/helio-build/build-gbuffer.sh --validate-only
 ```
 
-`build-sprite-dig-atlas.sh` selects the complete used Sprite Dig texture set
-from the sibling Helio checkout: terrain, normalized player/mob animation
-groups, bushes, cabin, layered tree variants, background, and the three
-deterministic crack textures. It atomically publishes the strict
-`HDIGATL` RGBA container used by example 5:
-
-```sh
-tools/helio-build/build-sprite-dig-atlas.sh
-tools/helio-build/build-sprite-dig-atlas.sh --validate-only
-```
-
-Its pixel CRC, dense 93-entry sprite identity table, dimensions, reserved fields, and
-normalized player extent are validated independently of the Helio scene
-container. The runtime feeds this atlas to the Bakery-produced C++ for OpenCL
-sprite kernel: sky and negative-depth background descriptors precede one
-alpha-composited tilemap descriptor, followed by the depth-ordered retained
-world, animation, cracks, arbitrary placement, and hotbar descriptors.
-
-`make iso` runs the lightweight validation for both checked-in programs, the
-G-buffer compiler baseline, and the Sprite Dig atlas before linking. It does
-not repeat the hosted Vulkan compilation or atlas extraction on every OS
-build.
+`make iso` runs the lightweight validation for both checked-in programs and
+the G-buffer compiler baseline before linking. It does not repeat the hosted
+Vulkan compilation on every OS build.
 Use the explicit build scripts when Helio, WGPU, a shader, or a captured ABI
 changes; a failed rebuild never replaces the last validated asset.
 
@@ -131,16 +112,8 @@ batch and one GuC-scheduled frame. Press `C` in the UI4 window to toggle the
 bounded collision-style burst; press it again to return to the procedural
 orbit.
 
-The simple-cube artifact additionally carries `scene/sprite-dig-v1.bin` for
-Shell2 Helio example 5. The fixed 256-byte section describes the 240-column
-terrain, dirt/stone depth, lake bounds, pool limits, original movement and
-mining constants, hotbar layout, camera bias, and retained visualization
-colors. The validator treats those values as a strict gameplay ABI. Runtime
-input comes from UI4's winit-shaped event bridge: A/D or arrows move, Space
-jumps, holding the left mouse button mines, right-click places the selected
-block, and the wheel changes the hotbar selection.
-
-It also carries `scene/portal-rooms-v1.bin` for Shell2 Helio example 6. The
+The simple-cube artifact also carries `scene/portal-rooms-v1.bin` for the
+`helio_portal_trueos` Blueprint. The
 fixed 3,072-byte section describes six portal frames, fourteen materials, and
 74 texture-free room objects. Runtime projection clips each room's boxes and
 octa-spheres against its portal rectangle and camera depth planes before the

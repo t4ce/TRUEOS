@@ -138,7 +138,7 @@ impl RetainedTransformTemplate {
         Self::decode(&artifact)
     }
 
-    pub(crate) fn decode(artifact: &Artifact<'_>) -> Result<Self, Error> {
+    pub fn decode(artifact: &Artifact<'_>) -> Result<Self, Error> {
         let section = artifact
             .section(TEMPLATE_SECTION_NAME)
             .ok_or(Error::MissingRetainedTransformTemplate)?;

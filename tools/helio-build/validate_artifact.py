@@ -21,9 +21,6 @@ CHURN_FORWARD_SOURCE = "render/churn-forward.wgsl"
 CHURN_FORWARD_VS = "intel-xe-lp/churn-forward.vs.simd8.bin"
 CHURN_FORWARD_PS = "intel-xe-lp/churn-forward.ps.simd8.bin"
 CHURN_LIGHT_SECTION = "scene/churn-light-v1.bin"
-BATTLE_SECTION = "scene/shape-battle-v1.bin"
-BIGCLOTH_SECTION = "scene/pendulum-bigcloth-v1.bin"
-SPRITE_DIG_SECTION = "scene/sprite-dig-v1.bin"
 PORTAL_ROOMS_SECTION = "scene/portal-rooms-v1.bin"
 RETAINED_TRANSFORM_SECTION = "scene/retained-transform-template-v1.bin"
 RETAINED_TRANSFORM_MAGIC = b"HRTXFM\0\0"
@@ -543,61 +540,6 @@ def validate_scene_contracts(sections: dict[str, tuple[int, bytes]]) -> None:
     )
     if light != bytes(expected_light):
         fail("churn-light payload changed")
-
-    battle = section(sections, BATTLE_SECTION, 0xFFFF)
-    if len(battle) != 320 or battle[:8] != b"HBATTLE\0":
-        fail("bad shape-battle scene header")
-    if u16(battle, 8) != 1 or u16(battle, 10) != 320 or u32(battle, 12) != 320:
-        fail("unsupported shape-battle scene version")
-    if tuple(u32(battle, offset) for offset in (16, 20, 24, 28, 32, 36)) != (
-        4, 4, 16, 4, 4, 16,
-    ):
-        fail("shape-battle count contract changed")
-    if any(battle[288:]):
-        fail("nonzero shape-battle reserved bytes")
-
-    cloth = section(sections, BIGCLOTH_SECTION, 0xFFFF)
-    if len(cloth) != 192 or cloth[:8] != b"HPENDUL\0":
-        fail("bad pendulum-bigcloth scene header")
-    if u16(cloth, 8) != 1 or u16(cloth, 10) != 192 or u32(cloth, 12) != 192:
-        fail("unsupported pendulum-bigcloth scene version")
-    if tuple(u16(cloth, offset) for offset in (16, 18, 20, 22)) != (14, 24, 8, 0):
-        fail("pendulum-bigcloth topology contract changed")
-    if any(cloth[56:60]) or any(cloth[156:]):
-        fail("nonzero pendulum-bigcloth reserved bytes")
-
-    sprite_dig = section(sections, SPRITE_DIG_SECTION, 0xFFFF)
-    if len(sprite_dig) != 256 or sprite_dig[:8] != b"HDIG2D\0\0":
-        fail("bad sprite-dig scene header")
-    if (u16(sprite_dig, 8), u16(sprite_dig, 10), u32(sprite_dig, 12)) != (1, 256, 256):
-        fail("unsupported sprite-dig scene version")
-    if tuple(u16(sprite_dig, offset) for offset in range(16, 32, 2)) != (
-        240, 8, 14, 7500, 8, 64, 42, 50,
-    ):
-        fail("sprite-dig world/capacity contract changed")
-    expected_scalars = (
-        48.0, 1.5, 2.0, -2400.0, 260.0, 780.0, 0.22,
-        56.0, 40.0, 46.0, 100.0,
-    )
-    if sprite_dig[32:76] != struct.pack("<11f", *expected_scalars):
-        fail("sprite-dig gameplay contract changed")
-    if u32(sprite_dig, 76) != 3:
-        fail("sprite-dig mining-stage contract changed")
-    expected_colors = (
-        (0.32, 0.55, 0.12, 1.0),
-        (0.12, 0.45, 0.65, 1.0),
-        (0.22, 0.17, 0.07, 1.0),
-        (0.35, 0.37, 0.40, 1.0),
-        (0.70, 0.50, 0.20, 1.0),
-        (0.95, 0.65, 0.12, 1.0),
-        (0.80, 0.12, 0.08, 0.75),
-        (0.45, 0.72, 0.18, 1.0),
-        (0.42, 0.30, 0.12, 1.0),
-        (0.58, 0.61, 0.66, 1.0),
-        (1.00, 0.85, 0.20, 0.45),
-    )
-    if sprite_dig[80:] != b"".join(struct.pack("<4f", *rgba) for rgba in expected_colors):
-        fail("sprite-dig retained-color contract changed")
 
     portal_rooms = section(sections, PORTAL_ROOMS_SECTION, 0xFFFF)
     if len(portal_rooms) < 64 or portal_rooms[:8] != b"HPORTAL\0":

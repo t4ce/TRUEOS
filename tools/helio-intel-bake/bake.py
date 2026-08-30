@@ -23,7 +23,7 @@ import zlib
 
 
 TRUEOS = Path(__file__).resolve().parents[2]
-HELIO = TRUEOS.parent / "Helio"
+HELIO = Path(os.environ.get("HELIO_REPO", TRUEOS.parent / "helio")).resolve()
 HELIO_EXAMPLES = TRUEOS.parent / "Helio-Examples"
 NAGA_MANIFEST = HELIO / "vendor/wgpu/naga-cli/Cargo.toml"
 UPSTREAM_DUMPER = (
@@ -48,10 +48,10 @@ CHURN_FORWARD_VS = "intel-xe-lp/churn-forward.vs.simd8.bin"
 CHURN_FORWARD_PS = "intel-xe-lp/churn-forward.ps.simd8.bin"
 CHURN_FORWARD_MAGIC = b"HCFWD\0\0\0"
 CHURN_FORWARD_BYTES = 768
+CHURN_SCENE_SECTION = "scene/churn-v1.bin"
 CHURN_LIGHT_SECTION = "scene/churn-light-v1.bin"
 CHURN_LIGHT_MAGIC = b"HCHLIT\0\0"
 CHURN_LIGHT_BYTES = 160
-SPRITE_DIG_SECTION = "scene/sprite-dig-v1.bin"
 PORTAL_ROOMS_SECTION = "scene/portal-rooms-v1.bin"
 RETAINED_TRANSFORM_SECTION = "scene/retained-transform-template-v1.bin"
 RETAINED_TRANSFORM_MAGIC = b"HRTXFM\0\0"
@@ -455,97 +455,6 @@ def encode_churn_forward_program(wgsl: bytes, vs: bytes, ps: bytes) -> bytes:
     # brw_nir_pack_vs_input packs position.xyz (7), normal.xyz (7), then the
     # synthetic base_instance.y + instance_id.w components (A): eight inputs.
     struct.pack_into("<IHH", out, 756, 0x0000_0A77, 8, 1)
-    return bytes(out)
-
-
-def encode_shape_battle_scene() -> bytes:
-    """Encode the stable no_std port contract for shape_battle_royale.rs."""
-    out = bytearray(320)
-    out[:8] = b"HBATTLE\0"
-    struct.pack_into("<HHI", out, 8, 1, len(out), len(out))
-    struct.pack_into("<IIIII", out, 16, 4, 4, 16, 4, 4)
-    struct.pack_into("<I", out, 36, 16)
-    struct.pack_into("<Q", out, 40, 0x4BA7_71E5_2026_0801)
-    _put_f32s(out, 48, (0.0, 16.0, 32.0, 0.0, -0.45,
-                       0.7853981633974483, 0.1, 200.0))
-    _put_f32s(out, 80, (0.0, 0.0, 0.0, 0.0))
-    _put_f32s(out, 96, (0.15, 0.15, 0.18, 1.0))
-    _put_f32s(out, 112, (17.5, 6.0, 1.0, 0.95))
-    for index, rgba in enumerate((
-        (0.84, 0.14, 0.14, 1.0),
-        (0.18, 0.85, 0.25, 1.0),
-        (0.20, 0.38, 0.90, 1.0),
-        (0.95, 0.85, 0.17, 1.0),
-    )):
-        _put_f32s(out, 128 + index * 16, rgba)
-    for index, extents in enumerate((
-        (0.40, 0.40, 0.40),
-        (0.35, 0.55, 0.25),
-        (0.35, 0.55, 0.35),
-        (0.30, 0.60, 0.30),
-    )):
-        _put_f32s(out, 192 + index * 12, extents)
-    _put_f32s(out, 240, (0.45, 0.50, 0.75, 0.66))
-    _put_f32s(out, 256, (
-        1.0 / 60.0, 16.0, 2.0, -9.81, 0.8, 4.0,
-    ))
-    struct.pack_into("<II", out, 280, 42, 120)
-    return bytes(out)
-
-
-def encode_pendulum_bigcloth_scene() -> bytes:
-    """Encode the stable no_std port contract for rapier_pendulum_bigcloth.rs."""
-    out = bytearray(192)
-    out[:8] = b"HPENDUL\0"
-    struct.pack_into("<HHI", out, 8, 1, len(out), len(out))
-    struct.pack_into("<HHHH", out, 16, 14, 24, 8, 0)
-    # The hosted demo camera starts below the y=18 cloth and looks down, so
-    # its entire first frame is above the viewport. Center the artifact camera
-    # on the authored x=1..24, y=0..18 motion envelope instead.
-    _put_f32s(out, 24, (12.5, 9.0, 42.0, 0.0, 0.0,
-                       0.7853981633974483, 0.1, 300.0))
-    _put_f32s(out, 60, (
-        1.35, 1.0, 18.0, 0.4, 0.8, -9.81, 1.0 / 60.0,
-        0.995, -0.2, 0.4, 0.2,
-    ))
-    _put_f32s(out, 104, (0.20, 0.50, 0.80, 1.0))
-    _put_f32s(out, 120, (0.25, 0.25, 0.30, 1.0))
-    struct.pack_into("<f", out, 136, 50.0)
-    _put_f32s(out, 140, (0.0, 0.0, 0.0, 0.0))
-    return bytes(out)
-
-
-def encode_sprite_dig_scene() -> bytes:
-    """Encode the stable no_std gameplay contract for sprite_dig_demo.rs."""
-    out = bytearray(256)
-    out[:8] = b"HDIG2D\0\0"
-    struct.pack_into("<HHI", out, 8, 1, len(out), len(out))
-    # WORLD_COLS, DIRT_ROWS, STONE_ROWS, POOL_CAPACITY, hotbar/placed caps,
-    # and the authored lake band. The first four values are copied directly
-    # from Helio's demo; the two caps bound TRUEOS-owned dynamic state.
-    struct.pack_into("<8H", out, 16, 240, 8, 14, 7500, 8, 64, 42, 50)
-    _put_f32s(out, 32, (
-        48.0, 1.5, 2.0, -2400.0, 260.0, 780.0, 0.22,
-        56.0, 40.0, 46.0, 100.0,
-    ))
-    struct.pack_into("<I", out, 76, 3)
-    # Retained color-quad visualization for the atlas-backed hosted scene:
-    # grass, water, dirt, stone, placed block, player, crack overlay, three
-    # hotbar material icons, and selected-slot highlight.
-    for index, rgba in enumerate((
-        (0.32, 0.55, 0.12, 1.0),
-        (0.12, 0.45, 0.65, 1.0),
-        (0.22, 0.17, 0.07, 1.0),
-        (0.35, 0.37, 0.40, 1.0),
-        (0.70, 0.50, 0.20, 1.0),
-        (0.95, 0.65, 0.12, 1.0),
-        (0.80, 0.12, 0.08, 0.75),
-        (0.45, 0.72, 0.18, 1.0),
-        (0.42, 0.30, 0.12, 1.0),
-        (0.58, 0.61, 0.66, 1.0),
-        (1.00, 0.85, 0.20, 0.45),
-    )):
-        _put_f32s(out, 80 + index * 16, rgba)
     return bytes(out)
 
 
@@ -2901,12 +2810,12 @@ def make_compile_only_dumper(destination: Path) -> None:
     source = replace_once(source, '''    dump_pipeline_cache_blob(device, pipeline_cache);
     dump_pipeline_executables(device, pipeline);
 
-    const float vertices[9] = {''', '''    dump_pipeline_cache_blob(device, pipeline_cache);
+    const float ordinary_vertices[9] = {''', '''    dump_pipeline_cache_blob(device, pipeline_cache);
     dump_pipeline_executables(device, pipeline);
     printf("helio_pipeline_dump: compiled_only=1\\n");
     return 0;
 
-    const float vertices[9] = {''')
+    const float ordinary_vertices[9] = {''')
     destination.write_text(source)
 
 
@@ -3933,15 +3842,15 @@ def main() -> None:
     sections[CHURN_LIGHT_SECTION] = (
         OTHER_SECTION_KIND, encode_churn_light_scene(),
     )
-    sections["scene/shape-battle-v1.bin"] = (
-        OTHER_SECTION_KIND, encode_shape_battle_scene(),
-    )
-    sections["scene/pendulum-bigcloth-v1.bin"] = (
-        OTHER_SECTION_KIND, encode_pendulum_bigcloth_scene(),
-    )
-    sections[SPRITE_DIG_SECTION] = (
-        OTHER_SECTION_KIND, encode_sprite_dig_scene(),
-    )
+    allowed_scene_sections = {
+        CHURN_SCENE_SECTION,
+        CHURN_LIGHT_SECTION,
+        PORTAL_ROOMS_SECTION,
+        RETAINED_TRANSFORM_SECTION,
+    }
+    for scene_section in tuple(sections):
+        if scene_section.startswith("scene/") and scene_section not in allowed_scene_sections:
+            sections.pop(scene_section)
     sections[PORTAL_ROOMS_SECTION] = (
         OTHER_SECTION_KIND, encode_portal_rooms_scene(),
     )
