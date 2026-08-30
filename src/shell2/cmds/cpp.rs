@@ -1175,7 +1175,7 @@ fn queue_font_service_rush2(io: &'static dyn ShellBackend2) {
         Ok(serial) => print_shell_line(
             io,
             alloc::format!(
-                "cpp font rush2: queued=1 request={} pool_soft_max=32 active_test_workers=8 ladder=1,2,4,8 glyphs_per_row=8 gpgpu_fanout=independent-nonoverlap-walker-waves frames=4 windows=4 plane_canvases=4 producer_mapping=modulo-four/second-wave-band plane_slots=0..3 slot4=reserved gpu_submit_lanes=1 buffering=double font_size=static-per-lease color=soft-rng-rgba recipe_cache=80KiB-per-lease lazy-first-fill-no-evict ui4=ordinary-open-close+steady-direct ack=surflive-observed+exact-buffer-reacquire telemetry=first8+every120 stop=\"cpp font rush2 stop\"",
+                "cpp font rush2: queued=1 request={} pool_soft_max=32 active_test_workers=8 ladder=1,2,4,8 glyphs_per_row=8 gpgpu_fanout=independent-nonoverlap-walker-waves frames=4 windows=4 plane_canvases=4 producer_mapping=modulo-four/second-wave-band plane_slots=0..3 slot4=reserved gpu_submit_lanes=1 buffering=double font_size=static-per-lease fonts=font,noto-sans-sc,inconsolata face_step_ms=30000 face_switch=stop-admission+exact-buffer-drain+unregister+fresh-register color=soft-rng-rgba recipe_cache=80KiB-per-lease/fresh-per-face-generation lazy-first-fill-no-evict ui4=ordinary-open-close+steady-direct ack=surflive-observed+exact-buffer-reacquire telemetry=first8+every120 stop=\"cpp font rush2 stop\"",
                 serial,
             )
             .as_str(),

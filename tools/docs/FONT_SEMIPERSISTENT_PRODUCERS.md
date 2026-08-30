@@ -61,9 +61,11 @@ keeps slot 4 reserved, registers two producers per plane, and activates them
 in a 1/2/4/8 ladder. Each lease keeps one of four static font sizes while
 SoftRng changes its row payload, color, and alpha. A published row retains its
 capability by exact double-buffer index; reacquiring that index supplies the
-CPU ACK. On shutdown, the capability is retained until the whole UI4 Frame is
-destroyed, then an exact completion-checked retirement ACK releases the
-producer generation.
+CPU ACK. Every 30 seconds Rush2 drains both exact frame generations, releases
+the current eight leases and their caches, then freshly registers the same
+tiers for `font`, `noto-sans-sc`, and `inconsolata` in rotation. On shutdown,
+the capability is retained until the whole UI4 Frame is destroyed, then an
+exact completion-checked retirement ACK releases the producer generation.
 
 The Font RCS runtime still remains one job slot. Both Rush variants therefore
 demonstrate independently backpressured producer queues and persistent UI4

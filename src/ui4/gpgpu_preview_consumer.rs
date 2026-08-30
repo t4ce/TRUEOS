@@ -55,6 +55,16 @@ const CPP_FONT_RUSH2_PLANE_COUNT: usize = 4;
 const CPP_FONT_RUSH2_COLUMNS: u32 = 4;
 const CPP_FONT_RUSH2_ROWS: u32 = 2;
 const CPP_FONT_RUSH2_LADDER: [usize; 4] = [1, 2, 4, 8];
+const CPP_FONT_RUSH2_FACE_MS: u64 = 30_000;
+const CPP_FONT_RUSH2_FACES: [crate::intel::gpu_font::GpuFontFace; 3] = [
+    crate::intel::gpu_font::GpuFontFace::Default,
+    crate::intel::gpu_font::GpuFontFace::NotoSansSc,
+    crate::intel::gpu_font::GpuFontFace::Inconsolata,
+];
+
+const fn cpp_font_rush2_next_face_index(index: usize) -> usize {
+    (index + 1) % CPP_FONT_RUSH2_FACES.len()
+}
 /// One producer request deliberately contains several independently placed
 /// glyphs.  The Font RCS encoder can keep non-overlapping analytical walkers
 /// in flight as one GPGPU wave instead of retiring a one-glyph batch at a
@@ -574,13 +584,23 @@ struct ActivePreview {
 struct CppFontRush2WorkerState {
     producer: crate::r::services::font_kernel_service::FontGpuProducer,
     producer_index: u8,
+    font: crate::intel::gpu_font::GpuFontFace,
     font_pixels: f32,
     rng: crate::tyche::SoftRng,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CppFontRush2LeasePhase {
+    Running,
+    Draining,
 }
 
 struct CppFontRush2PlaneState {
     plane_index: u8,
     workers: Vec<CppFontRush2WorkerState>,
+    font_index: u8,
+    font_activated_at: Instant,
+    lease_phase: CppFontRush2LeasePhase,
     active_workers: usize,
     epoch_workers: usize,
     pending: Option<CppFontRush2PendingRow>,
@@ -1545,7 +1565,7 @@ fn initialize_cpp_font_rush2_set(
         .saturating_mul(2)
         .saturating_mul(CPP_FONT_RUSH2_PLANE_COUNT as u64);
     crate::log_info!(target: "ui4";
-        "ui4 cpp-font-rush2 layout request={} producers={} plane_canvases={} producer_grid={}x{} scanout={}x{} canvas_extent={}x{} canvas_bytes={} frame_ring_bytes={} mapping=producer-modulo-four/second-wave-nonoverlap-band glyph_alignment=independent-cells glyph_fanout={} font_pixels=32,80,128,176 alpha=176..255 gpgpu=nonoverlap-walker-waves publication=one-per-changed-plane\n",
+        "ui4 cpp-font-rush2 layout request={} producers={} plane_canvases={} producer_grid={}x{} scanout={}x{} canvas_extent={}x{} canvas_bytes={} frame_ring_bytes={} mapping=producer-modulo-four/second-wave-nonoverlap-band glyph_alignment=independent-cells glyph_fanout={} font_pixels=32,80,128,176 faces=font,noto-sans-sc,inconsolata face_step_ms={} face_switch=exact-buffer-drain+lease-reregister alpha=176..255 gpgpu=nonoverlap-walker-waves publication=one-per-changed-plane\n",
         desired.serial,
         CPP_FONT_RUSH2_PRODUCER_COUNT,
         CPP_FONT_RUSH2_PLANE_COUNT,
@@ -1558,6 +1578,7 @@ fn initialize_cpp_font_rush2_set(
         canvas_bytes,
         frame_ring_bytes,
         CPP_FONT_RUSH2_GLYPHS_PER_ROW,
+        CPP_FONT_RUSH2_FACE_MS,
     );
     let session =
         begin_window_session(PREVIEW_OWNER).map_err(|_| "font-rush2-session-create-failed")?;
@@ -1638,6 +1659,9 @@ fn initialize_cpp_font_rush2_set(
         let rush2 = CppFontRush2PlaneState {
             plane_index: plane_index as u8,
             workers: Vec::with_capacity(CPP_FONT_RUSH2_ROWS as usize),
+            font_index: 0,
+            font_activated_at: now,
+            lease_phase: CppFontRush2LeasePhase::Running,
             active_workers: 0,
             epoch_workers: 0,
             pending: None,
@@ -1711,6 +1735,7 @@ fn initialize_cpp_font_rush2_set(
         let worker = CppFontRush2WorkerState {
             producer,
             producer_index: producer_index as u8,
+            font: CPP_FONT_RUSH2_FACES[0],
             font_pixels,
             rng: crate::tyche::SoftRng::from_seed(
                 desired.serial ^ (producer_index as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15),
@@ -1746,6 +1771,99 @@ fn initialize_cpp_font_rush2_set(
 }
 
 fn grow_cpp_font_rush2(previews: &mut [ActivePreview], now: Instant) -> Result<(), &'static str> {
+    let (lease_phase, font_index, font_activated_at) = previews
+        .first()
+        .and_then(|preview| preview.font_rush2.as_ref())
+        .map(|state| (state.lease_phase, state.font_index, state.font_activated_at))
+        .ok_or("font-rush2-plane-state-missing")?;
+    if lease_phase == CppFontRush2LeasePhase::Running
+        && now.saturating_duration_since(font_activated_at).as_millis() >= CPP_FONT_RUSH2_FACE_MS
+    {
+        let next_font_index = cpp_font_rush2_next_face_index(usize::from(font_index));
+        let next_font = CPP_FONT_RUSH2_FACES[next_font_index];
+        crate::intel::gpu_font::ensure_font_face_available(next_font)
+            .map_err(|_| "font-rush2-next-face-unavailable")?;
+
+        for preview in previews.iter_mut() {
+            let state = preview
+                .font_rush2
+                .as_mut()
+                .ok_or("font-rush2-plane-state-missing")?;
+            if state.font_index != font_index {
+                return Err("font-rush2-face-generation-mismatch");
+            }
+            state.lease_phase = CppFontRush2LeasePhase::Draining;
+            state.active_workers = 0;
+            preview.static_needs_publish = true;
+        }
+        crate::log_info!(target: "ui4";
+            "ui4 cpp-font-rush2 face switch draining request={} from_face={} from_font={} planes={} producers={} interval_ms={} action=stop-admission+exact-buffer-reacquire-before-unregister\n",
+            previews[0].request_serial,
+            CPP_FONT_RUSH2_FACES[usize::from(font_index)].id(),
+            CPP_FONT_RUSH2_FACES[usize::from(font_index)].registry_name(),
+            previews.len(),
+            previews.iter().filter_map(|preview| preview.font_rush2.as_ref()).map(|state| state.workers.len()).sum::<usize>(),
+            CPP_FONT_RUSH2_FACE_MS,
+        );
+        return Ok(());
+    }
+    if lease_phase == CppFontRush2LeasePhase::Draining {
+        let drained = previews.iter().all(|preview| {
+            preview.font_rush2.as_ref().is_some_and(|state| {
+                state.pending.is_none()
+                    && state.building.is_empty()
+                    && state.published.iter().all(Option::is_none)
+            })
+        });
+        if !drained {
+            for preview in previews.iter_mut() {
+                preview.static_needs_publish = true;
+            }
+            return Ok(());
+        }
+
+        let next_font_index = cpp_font_rush2_next_face_index(usize::from(font_index));
+        let next_font = CPP_FONT_RUSH2_FACES[next_font_index];
+        crate::intel::gpu_font::ensure_font_face_available(next_font)
+            .map_err(|_| "font-rush2-next-face-unavailable")?;
+        for preview in previews.iter_mut() {
+            let state = preview
+                .font_rush2
+                .as_mut()
+                .ok_or("font-rush2-plane-state-missing")?;
+            for worker in &state.workers {
+                if !worker
+                    .producer
+                    .request_release()
+                    .map_err(|_| "font-rush2-producer-release-failed")?
+                {
+                    return Err("font-rush2-producer-release-deferred");
+                }
+            }
+            state.workers.clear();
+        }
+
+        register_cpp_font_rush2_workers(previews, next_font, next_font_index as u8)?;
+        for preview in previews.iter_mut() {
+            let state = preview
+                .font_rush2
+                .as_mut()
+                .ok_or("font-rush2-plane-state-missing")?;
+            state.font_index = next_font_index as u8;
+            state.font_activated_at = now;
+            state.lease_phase = CppFontRush2LeasePhase::Running;
+            preview.static_needs_publish = true;
+        }
+        crate::log_info!(target: "ui4";
+            "ui4 cpp-font-rush2 face switch complete request={} face={} font={} planes={} producers={} tiers=32,80,128,176 cache=fresh-per-lease action=old-generation-released+new-generation-registered\n",
+            previews[0].request_serial,
+            next_font.id(),
+            next_font.registry_name(),
+            previews.len(),
+            CPP_FONT_RUSH2_PRODUCER_COUNT,
+        );
+    }
+
     let elapsed = now
         .saturating_duration_since(previews.first().map_or(now, |p| p.started))
         .as_millis();
@@ -1763,6 +1881,53 @@ fn grow_cpp_font_rush2(previews: &mut [ActivePreview], now: Instant) -> Result<(
             .count();
         state.active_workers = active_workers;
         preview.static_needs_publish = active_workers != 0;
+    }
+    Ok(())
+}
+
+fn register_cpp_font_rush2_workers(
+    previews: &mut [ActivePreview],
+    font: crate::intel::gpu_font::GpuFontFace,
+    font_generation: u8,
+) -> Result<(), &'static str> {
+    if previews.len() != CPP_FONT_RUSH2_PLANE_COUNT {
+        return Err("font-rush2-plane-count-mismatch");
+    }
+    let request_serial = previews[0].request_serial;
+    let width = previews[0].width;
+    let height = previews[0].height;
+    for producer_index in 0..CPP_FONT_RUSH2_PRODUCER_COUNT {
+        let font_pixels = 32.0 + (producer_index % CPP_FONT_RUSH2_PLANE_COUNT) as f32 * 48.0;
+        let registration = crate::r::services::font_producer_service::FontProducerRegistration {
+            face: font.id() as u16,
+            tier: cpp_font_rush2_tier(producer_index),
+            font_pixels_milli: (font_pixels * 1_000.0) as u32,
+            row_width_px: width,
+            row_height_px: height,
+            format:
+                crate::r::services::font_producer_service::FontProducerFormat::Rgba8Premultiplied,
+            max_chars: CPP_FONT_RUSH2_GLYPHS_PER_ROW,
+            row_ring_depth: 2,
+        };
+        let producer =
+            crate::r::services::font_kernel_service::register_ui4_gpu_font_producer(registration)
+                .map_err(|_| "font-rush2-producer-reregister-failed")?;
+        previews[producer_index % CPP_FONT_RUSH2_PLANE_COUNT]
+            .font_rush2
+            .as_mut()
+            .ok_or("font-rush2-plane-state-missing")?
+            .workers
+            .push(CppFontRush2WorkerState {
+                producer,
+                producer_index: producer_index as u8,
+                font,
+                font_pixels,
+                rng: crate::tyche::SoftRng::from_seed(
+                    request_serial
+                        ^ (u64::from(font_generation) << 56)
+                        ^ (producer_index as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15),
+                ),
+            });
     }
     Ok(())
 }
@@ -1822,6 +1987,7 @@ fn create_cpp_font_rush_preview(
         producers.push(CppFontRush2WorkerState {
             producer,
             producer_index: producer_index as u8,
+            font: crate::intel::gpu_font::GpuFontFace::Default,
             font_pixels,
             rng: crate::tyche::SoftRng::from_seed(
                 desired.serial ^ (producer_index as u64 + 1).wrapping_mul(0x9E37_79B9_7F4A_7C15),
@@ -3191,10 +3357,6 @@ fn render_cpp_font_rush2_frame(preview: &mut ActivePreview) -> Result<(), &'stat
         .font_rush2
         .as_mut()
         .ok_or("font-rush2-plane-state-missing")?;
-    if state.active_workers == 0 {
-        let _ = cancel_frame_buffer(lease);
-        return Ok(());
-    }
     let index = usize::from(lease.buffer_index);
     if let Some(mut displayed) = state.published[index].take() {
         let reacquired_ns = crate::chronos::monotonic_nanos();
@@ -3233,6 +3395,24 @@ fn render_cpp_font_rush2_frame(preview: &mut ActivePreview) -> Result<(), &'stat
                 if crossed_surflive { "surflive" } else { "coalesced-before-surflive" },
             );
         }
+    }
+    if state.lease_phase == CppFontRush2LeasePhase::Draining {
+        if state.published.iter().any(Option::is_some) {
+            // This buffer's producer token was just ACKed. Re-publish its
+            // already-complete pixels without attaching a new token so UI4
+            // can displace and return the final live producer generation.
+            publish_frame_buffer(lease).map_err(|_| "font-rush2-drain-frame-publish-failed")?;
+            publish_window_frame(PREVIEW_OWNER, preview.window, DamageRect::FULL)
+                .map_err(|_| "font-rush2-drain-window-publish-failed")?;
+        } else {
+            let _ = cancel_frame_buffer(lease);
+            preview.static_needs_publish = false;
+        }
+        return Ok(());
+    }
+    if state.active_workers == 0 {
+        let _ = cancel_frame_buffer(lease);
+        return Ok(());
     }
     let destination = match gpgpu_rgba_surface(lease) {
         Ok(surface) => surface,
@@ -3341,7 +3521,7 @@ fn cpp_font_rush2_request(
         layers: alloc::vec![FontStampLayer {
             scene: RetainSceneRequest {
                 runs,
-                font: crate::intel::gpu_font::GpuFontFace::Default,
+                font: state.font,
                 viewport_width: width,
                 viewport_height: height,
                 raster_width: width,
@@ -5729,7 +5909,7 @@ fn cpp_font_rush_producer_request(
         layers: alloc::vec![FontStampLayer {
             scene: RetainSceneRequest {
                 runs,
-                font: crate::intel::gpu_font::GpuFontFace::Default,
+                font: state.font,
                 viewport_width: width,
                 viewport_height: height,
                 raster_width: width,
@@ -7510,17 +7690,36 @@ mod tests {
         CPP_FONT_RUSH_SECTION_PRESENTATION_SCALE, CPP_FONT_RUSH_TITLE_LETTER_MAX_FONT_PIXELS,
         CPP_FONT_RUSH_TITLE_LETTERS, CPP_FONT_RUSH_TITLE_WORD,
         CPP_FONT_RUSH_TITLE_WORD_MAX_FONT_PIXELS, CPP_FONT_RUSH_TITLE_WORD_PRESENTATION_SCALE,
-        CPP_FONT_RUSH_TITLE_WORD_X_FRACTIONS, CPP_GALLERY_PRESETS, CppFontRushLayerStage,
-        CppFontRushShowcaseSource, FramePlanError, FramePoolError, GPGPU_PREVIEW_MAX_CADENCE_MS,
-        GpgpuPreviewConfig, GpgpuPreviewPreset, LAB256_PREVIEW_SIZE, PREVIEW_HEIGHT, PREVIEW_WIDTH,
-        cpp_font_rush_due_tick_count, cpp_font_rush_glyph_count, cpp_font_rush_grid,
-        cpp_font_rush_plan_request, cpp_font_rush_plane_slots, cpp_font_rush_producer_font_pixels,
+        CPP_FONT_RUSH_TITLE_WORD_X_FRACTIONS, CPP_FONT_RUSH2_FACE_MS, CPP_FONT_RUSH2_FACES,
+        CPP_GALLERY_PRESETS, CppFontRushLayerStage, CppFontRushShowcaseSource, FramePlanError,
+        FramePoolError, GPGPU_PREVIEW_MAX_CADENCE_MS, GpgpuPreviewConfig, GpgpuPreviewPreset,
+        LAB256_PREVIEW_SIZE, PREVIEW_HEIGHT, PREVIEW_WIDTH, cpp_font_rush_due_tick_count,
+        cpp_font_rush_glyph_count, cpp_font_rush_grid, cpp_font_rush_plan_request,
+        cpp_font_rush_plane_slots, cpp_font_rush_producer_font_pixels,
         cpp_font_rush_producer_glyph_range, cpp_font_rush_producer_worker_count,
         cpp_font_rush_showcase_next_stage, cpp_font_rush_showcase_source_request,
         cpp_font_rush_showcase_sprite_layout, cpp_font_rush_target_plane_count,
-        cycled_cpp_gallery_preset, preview_extent, preview_frame_create_error_label,
-        preview_plane_slot, static30_font_stamp_request,
+        cpp_font_rush2_next_face_index, cycled_cpp_gallery_preset, preview_extent,
+        preview_frame_create_error_label, preview_plane_slot, static30_font_stamp_request,
     };
+
+    #[test]
+    fn cpp_font_rush2_rotates_all_registered_faces_every_thirty_seconds() {
+        use crate::intel::gpu_font::GpuFontFace;
+
+        assert_eq!(CPP_FONT_RUSH2_FACE_MS, 30_000);
+        assert_eq!(
+            CPP_FONT_RUSH2_FACES,
+            [
+                GpuFontFace::Default,
+                GpuFontFace::NotoSansSc,
+                GpuFontFace::Inconsolata,
+            ]
+        );
+        assert_eq!(cpp_font_rush2_next_face_index(0), 1);
+        assert_eq!(cpp_font_rush2_next_face_index(1), 2);
+        assert_eq!(cpp_font_rush2_next_face_index(2), 0);
+    }
 
     #[test]
     fn lab256_preview_keeps_artifact_extent() {
