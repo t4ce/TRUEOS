@@ -36,6 +36,22 @@ hardware—not a thin proof of concept around a boot screen.
 > compatibility, production-secure multi-user isolation, broad hardware
 > support, or complete OpenCL/media conformance.
 
+## Start here
+
+| If you want to… | Start with… |
+| --- | --- |
+| **Use TRUEOS** | The [latest official cloud release](https://github.com/t4ce/TRUEOS/releases/latest). It contains the supported bootable image, verification material, and launch guidance. |
+| **Develop an application** | [TRUEOS-Blueprints](https://github.com/t4ce/TRUEOS-Blueprints), the primary application SDK, catalog, examples, compatibility ports, and Blueprint lifecycle repository. |
+| **Understand the OS** | This repository and the [technical references](#technical-references) below: kernel, drivers, UI4, GPU, media, VM lifecycle, and architecture contracts. |
+| **Extend the platform** | A Blueprint using mediated TRUEOS APIs. Kernel-source modification is not the normal application-development path. |
+
+> [!TIP]
+> **Application developers should treat
+> [TRUEOS-Blueprints](https://github.com/t4ce/TRUEOS-Blueprints) as the main
+> entry point.** This repository explains and implements the platform beneath
+> it; platform implementation and maintainer deployment workflows are
+> intentionally out of scope here.
+
 ## Scale of the current system
 
 The repository changes quickly; these numbers are an August 2026 snapshot and
@@ -119,22 +135,79 @@ userspace, display-server, and toolkit interfaces. The advantage is speed and
 coherence. The cost is a narrower compatibility envelope and a larger amount
 of privileged code that still needs fault containment and adversarial review.
 
-## Shell2, Matrix, and Blueprints
+## Applications are Blueprints
 
-Shell2 is the operating surface rather than a Unix shell clone. It has a kernel
-command mode and an application mode. Matrix slots keep independent command,
-application, and VM contexts; the `§` operator selects and manages those slots.
+Blueprints are TRUEOS's native application and extension format. They are not
+kernel patches and do not require an application author to own the display,
+network device, filesystem, or physical GPU. Each Blueprint runs as a VM
+principal and reaches platform services through mediated Rust and C ABI
+surfaces.
 
-Blueprints are TRUEOS's intended extension model. They can be discovered,
-verified, installed, launched, paused, snapshotted, stored, restored, and moved
-between peers while the host retains ownership of capabilities and persistent
-TRUEOSFS state. A Blueprint may also lease the terminal for a TUI or publish UI4
-and vGPU content. See the
-[TRUEOS-Blueprints repository](https://github.com/t4ce/TRUEOS-Blueprints) for
-the application side of the system.
+The dedicated [TRUEOS-Blueprints repository](https://github.com/t4ce/TRUEOS-Blueprints)
+contains:
+
+- the high-level [`trueos` application API](https://github.com/t4ce/TRUEOS-Blueprints/tree/main/api);
+- the lower-level [`trueos-v` capability facade](https://github.com/t4ce/TRUEOS-Blueprints/tree/main/crates/trueos-v);
+- the registered [`apps.json` catalog](https://github.com/t4ce/TRUEOS-Blueprints/blob/main/apps.json);
+- applications, built-ins, compatibility probes, adapted ecosystem crates, and
+  concrete UI, network, storage, media, and lifecycle examples;
+- the pinned Blueprint-specific Rust contract and application packaging tools.
+
+The current catalog spans graphical applications, terminal tools, games,
+rendering demos, web/network software, editors, viewers, local AI, printing,
+shells, and system utilities. Representative ports and applications include
+Solara, HelioV/HelioC, Shadertoy, Lumen, Monaco, QuickJS, ripgrep, `fd`, SSH,
+webmail, image viewing, Gridpaper, GBOI, and multiple Tokio/network probes.
+
+### Application API surface
+
+| Capability | Blueprint-facing model |
+| --- | --- |
+| **UI and input** | UI4 frames and windows, damage publication, routed keyboard/pointer events, cursors, print2D, images, and retained scene content. |
+| **GPU and media** | Opaque vGPU resources, validated render packages, media playback/publication, audio, and host-owned presentation. Raw MMIO and physical addresses are not application APIs. |
+| **Files and data** | Async filesystem access, TRUEOSFS scopes, per-instance writable roots, archives, and network-backed file services. |
+| **Networking** | TCP/UDP-shaped services, HTTP/fetch, TLS-enabled ecosystem ports, mail and printing, plus Tokio/mio/socket compatibility where the selected Blueprint enables it. |
+| **Runtime** | Poll/sleep, clocks, logging, environment, worker-local identity, blocking lanes, synchronization, and optional Tokio runtime features. |
+| **Lifecycle** | Cooperative pause readiness, warm snapshots, persistent images, resume/replication identity, and explicit capability reacquisition. |
+| **Terminal** | Shell2 stream output, styled text, terminal leases, TUI input, and VM control handoff. |
+
+Start with the
+[`hello_world` UI4 application](https://github.com/t4ce/TRUEOS-Blueprints/tree/main/apps/hello_world),
+then use the
+[`hello_world_replicatable` example](https://github.com/t4ce/TRUEOS-Blueprints/tree/main/apps/hello_world_replicatable)
+for the cooperative lifecycle boundary. Larger examples include
+[`Solara`](https://github.com/t4ce/TRUEOS-Blueprints/tree/main/apps/solara),
+[`HelioV`](https://github.com/t4ce/TRUEOS-Blueprints/tree/main/apps/HelioV), and
+[`Player`](https://github.com/t4ce/TRUEOS-Blueprints/tree/main/apps/Player).
+
+Blueprint developer references live with the application platform:
+
+- [API crate and feature surface](https://github.com/t4ce/TRUEOS-Blueprints/blob/main/api/Cargo.toml)
+- [Pinned Rust application contract](https://github.com/t4ce/TRUEOS-Blueprints/blob/main/RUST_TOOLCHAIN.md)
+- [Replicatable Blueprint lifecycle](https://github.com/t4ce/TRUEOS-Blueprints/blob/main/docs/replicatable-blueprints.md)
+- [Async archive and filesystem model](https://github.com/t4ce/TRUEOS-Blueprints/blob/main/docs/async-archive.md)
+- [Full application and built-in tree](https://github.com/t4ce/TRUEOS-Blueprints/tree/main/apps)
+
+### Runtime lifecycle
+
+Installed or online Blueprints can be discovered, verified, launched, paused,
+snapshotted, stored, restored, preserved, stopped, or transferred between
+peers. Persistent TRUEOSFS state remains host-owned and separate from a VM's
+warm snapshot. Replicatable applications must release sockets, GPU queues, UI
+windows, audio streams, and other live capabilities before reporting ready;
+they reacquire those resources after resume or replication.
+
+Shell2 is the user-facing operating surface rather than a Unix shell clone. It
+has kernel-command and application modes. Matrix slots retain independent
+command, application, and VM contexts, while the `§` operator navigates those
+contexts. `§§<selector>` can fetch and launch an online Blueprint directly. A
+terminal application may lease Shell2 for its TUI and later return control
+without destroying its VM.
 
 Blueprint publication is currently an internal/local deployment workflow, not
-a claim of a stable general-purpose package registry.
+a claim of a stable general-purpose public package registry. The Blueprint
+repository remains the authoritative place for the current application
+toolchain and catalog contract.
 
 ## Hardware scope
 
@@ -152,35 +225,18 @@ against their target rather than treated as portable binaries. QEMU is useful
 for boot, service, and application validation; it is not evidence that a native
 Intel acceleration path works on unrelated hardware.
 
-## Run an official release
+## Official cloud releases
 
 Download the [latest signed release](https://github.com/t4ce/TRUEOS/releases/latest).
-The release archive contains the bootable ISO, OVMF firmware, provenance data,
-and launchers for Linux and macOS. The adjacent release assets provide
-checksums, Ed25519 signatures, and the public verification key.
+That is the supported distribution path for users and application developers.
+The release provides the bootable TRUEOS image, QEMU/OVMF launch bundle,
+provenance record, checksums, Ed25519 signatures, public verification key, and
+its own run guidance. The launch bundle boots the real TRUEOS image; it is not
+a hosted reimplementation of the kernel.
 
-```sh
-mkdir trueos-release
-7z x TrueOS-*.7z -otrueos-release
-cd trueos-release
-./run-linux.sh       # or ./run-macos.sh
-```
-
-The launchers boot the real TRUEOS ISO under QEMU/OVMF; they are not a hosted
-simulation of the kernel. Bare-metal installation and hardware acceleration
-remain target-specific and should be treated as development workflows.
-
-Official releases are built from clean checkouts by
-[the release workflow](.github/workflows/release.yml). It rebuilds and verifies
-the pinned Intel shader artifacts, produces the ISO bundle and provenance
-record, and signs the published assets. The public key is checked in as
-[`TRUEOS-release-public-key.json`](TRUEOS-release-public-key.json).
-
-> [!CAUTION]
-> The repository's maintainer command `make iso` is not a harmless generic
-> compile command. In the configured development environment it may publish an
-> archive, actuate the physical test rig, and start remote log capture. Use the
-> CI workflow as the reference for an isolated build.
+Platform implementation and deployment procedures are maintainer concerns and
+are deliberately not part of this README. They are not prerequisites for
+understanding TRUEOS or developing against its Blueprint application model.
 
 ## Honest current boundaries
 
