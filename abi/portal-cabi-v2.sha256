@@ -66,6 +66,9 @@
 # The lifecycle poll, Ready boundary, and identity calls are strictly additive.
 # Old artifacts remain non-participants; tagged production artifacts can now
 # quiesce before the host freezes them and observe identity after Resume.
+# The lifecycle Ready-with-checkpoint and checkpoint-restore calls are strictly
+# additive. They carry a bounded, application-versioned payload for fresh-Hull
+# live-update replication; older artifacts retain exact same-Hull Resume.
 # The Lumen session calls are strictly additive. They transfer prompts, replies,
 # and a pointer-free mutable inference checkpoint while immutable model/GPU
 # resources remain kernel capabilities. Spirit emotion playback is likewise an
@@ -201,4 +204,4 @@
 # The UI4 frame-opacity setter is strictly additive. It applies one bounded
 # u8 opacity through the existing per-frame placement/compositor path; older
 # artifacts neither import it nor change their opaque-frame behavior.
-f7767b4b5fb97cddc2eb5ec3c3862a8546c5d7aa93f9588657063184afa08cd5
+da1ac8ce6ba8342bc2a66a9f0e8db36f8bed6534519e7c60fd6890904ca46b0c

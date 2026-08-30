@@ -1357,6 +1357,17 @@ unsafe extern "C" {
     ) -> isize;
     pub fn trueos_cabi_lifecycle_poll(out: *mut TrueosLifecyclePreparePause) -> i32;
     pub fn trueos_cabi_lifecycle_ready(operation: u64, checkpoint_version: u64) -> i32;
+    pub fn trueos_cabi_lifecycle_ready_with_checkpoint(
+        operation: u64,
+        checkpoint_version: u64,
+        checkpoint_ptr: *const u8,
+        checkpoint_len: usize,
+    ) -> i32;
+    pub fn trueos_cabi_lifecycle_checkpoint_restore(
+        out_ptr: *mut u8,
+        out_cap: usize,
+        out_version: *mut u64,
+    ) -> isize;
     pub fn trueos_cabi_lifecycle_identity(out: *mut TrueosLifecycleIdentity) -> i32;
     pub fn trueos_cabi_shell_attached_write(data_ptr: *const u8, data_len: usize) -> usize;
     pub fn trueos_cabi_shell_attached_read_byte() -> i32;

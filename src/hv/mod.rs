@@ -990,6 +990,7 @@ pub(crate) fn submit_blueprint_replication_checkpoint(
     };
     if operation == 0
         || version == 0
+        || version > u32::MAX as u64
         || bytes.is_empty()
         || bytes.len() > BLUEPRINT_REPLICATION_CHECKPOINT_MAX_BYTES
         || vm.lifecycle_phase.load(Ordering::Acquire) != BLUEPRINT_LIFECYCLE_PHASE_PREPARE_PAUSE

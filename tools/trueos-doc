@@ -305,7 +305,7 @@ TOPICS: dict[str, dict[str, Any]] = {
                 "name": "hypervisor-state-machine",
                 "title": "TRUEOS · Hypervisor State Atlas",
                 "path": "tools/docs/docs/HYPERVISOR_STATE_MACHINE.html",
-                "fact_scope": "Host, VM-principal, and Blueprint lifecycle contract: admission, running, cooperative PreparePause/Ready, retained pause, snapshot v5, same-principal restore, teardown, host-owned capabilities, persistent TRUEOSFS state outside VM snapshots, and an explicit working-tree contract audit.",
+                "fact_scope": "Host, VM-principal, and Blueprint lifecycle contract: admission, running, cooperative PreparePause/Ready, retained pause, snapshot v5, same-principal restore, compact application-checkpoint live-update replication onto a fresh Hull, teardown, host-owned capabilities, persistent TRUEOSFS state outside VM snapshots, and an explicit working-tree contract audit.",
                 "related_topics": ["apps", "tui"],
             },
         ],
