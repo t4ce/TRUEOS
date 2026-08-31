@@ -1,3 +1,4 @@
+pub(crate) mod hfi;
 pub(crate) mod hwp;
 pub(crate) mod rapl;
 pub(crate) mod thermal;

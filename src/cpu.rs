@@ -1,4 +1,5 @@
 use crate::limine::MpCpu as LimineCpu;
+use crate::power::hfi::IntelHfiCpuid;
 use crate::{exceptions, percpu, runtime};
 use alloc::vec::Vec;
 use core::arch::x86_64::__cpuid;
@@ -17,7 +18,12 @@ static ATOMIC_BOMB_RESTARTS: AtomicU32 = AtomicU32::new(0);
 struct CpuProfileRecord {
     registered: AtomicU8,
     core_kind: AtomicU8,
+    hfi_flags: AtomicU8,
     lapic_id: AtomicU32,
+    hfi_eax: AtomicU32,
+    hfi_ebx: AtomicU32,
+    hfi_ecx: AtomicU32,
+    hfi_edx: AtomicU32,
 }
 
 impl CpuProfileRecord {
@@ -25,7 +31,12 @@ impl CpuProfileRecord {
         Self {
             registered: AtomicU8::new(0),
             core_kind: AtomicU8::new(crate::workers::CORE_KIND_UNKNOWN),
+            hfi_flags: AtomicU8::new(0),
             lapic_id: AtomicU32::new(0),
+            hfi_eax: AtomicU32::new(0),
+            hfi_ebx: AtomicU32::new(0),
+            hfi_ecx: AtomicU32::new(0),
+            hfi_edx: AtomicU32::new(0),
         }
     }
 }
@@ -87,6 +98,7 @@ pub struct CpuProfile {
     slot: u32,
     lapic_id: u32,
     core_kind: u8,
+    hfi_cpuid: IntelHfiCpuid,
 }
 
 impl CpuProfile {
@@ -95,6 +107,16 @@ impl CpuProfile {
             slot,
             lapic_id,
             core_kind,
+            hfi_cpuid: IntelHfiCpuid::unavailable(),
+        }
+    }
+
+    fn detected(slot: u32, lapic_id: u32, core_kind: u8) -> Self {
+        Self {
+            slot,
+            lapic_id,
+            core_kind,
+            hfi_cpuid: IntelHfiCpuid::detect_current(),
         }
     }
 
@@ -105,8 +127,13 @@ impl CpuProfile {
         }
 
         let cpu = unsafe { &*cpu_ptr };
-        Self::for_slot(cpu.cpu_index())
-            .or_else(|| Some(Self::new(cpu.cpu_index(), cpu.lapic_id(), intel_core_kind_hint())))
+        Self::for_slot(cpu.cpu_index()).or_else(|| {
+            Some(Self::detected(
+                cpu.cpu_index(),
+                cpu.lapic_id(),
+                intel_core_kind_hint(),
+            ))
+        })
     }
 
     pub fn for_slot(slot: u32) -> Option<Self> {
@@ -119,6 +146,13 @@ impl CpuProfile {
             slot,
             lapic_id: rec.lapic_id.load(Ordering::Acquire),
             core_kind: rec.core_kind.load(Ordering::Acquire),
+            hfi_cpuid: IntelHfiCpuid::from_profile_storage(
+                rec.hfi_flags.load(Ordering::Acquire),
+                rec.hfi_eax.load(Ordering::Acquire),
+                rec.hfi_ebx.load(Ordering::Acquire),
+                rec.hfi_ecx.load(Ordering::Acquire),
+                rec.hfi_edx.load(Ordering::Acquire),
+            ),
         })
     }
 
@@ -152,6 +186,10 @@ impl CpuProfile {
             crate::workers::CORE_KIND_EFF => "eff",
             _ => "unknown",
         }
+    }
+
+    pub(crate) const fn hfi_cpuid(self) -> IntelHfiCpuid {
+        self.hfi_cpuid
     }
 
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
@@ -202,7 +240,7 @@ pub fn register_current_profile() -> Option<CpuProfile> {
     }
 
     let cpu = unsafe { &*cpu_ptr };
-    let profile = CpuProfile::new(cpu.cpu_index(), cpu.lapic_id(), intel_core_kind_hint());
+    let profile = CpuProfile::detected(cpu.cpu_index(), cpu.lapic_id(), intel_core_kind_hint());
     store_profile(profile);
     Some(profile)
 }
@@ -355,6 +393,14 @@ fn store_profile(profile: CpuProfile) {
 
     rec.lapic_id.store(profile.lapic_id, Ordering::Release);
     rec.core_kind.store(profile.core_kind, Ordering::Release);
+    rec.hfi_eax.store(profile.hfi_cpuid.eax, Ordering::Release);
+    rec.hfi_ebx.store(profile.hfi_cpuid.ebx, Ordering::Release);
+    rec.hfi_ecx.store(profile.hfi_cpuid.ecx, Ordering::Release);
+    rec.hfi_edx.store(profile.hfi_cpuid.edx, Ordering::Release);
+    rec.hfi_flags.store(
+        profile.hfi_cpuid.profile_storage_flags(),
+        Ordering::Release,
+    );
     rec.registered.store(1, Ordering::Release);
 }
 

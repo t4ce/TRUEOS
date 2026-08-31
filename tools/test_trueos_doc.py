@@ -40,6 +40,11 @@ class TrueosDocTests(unittest.TestCase):
         self.assertEqual(data["parameters"]["type"], "object")
         self.assertIn("command", data["parameters"]["properties"])
 
+    def test_tlb_schema_exposes_hfi_target(self) -> None:
+        data = run("command", "tlb")["data"]
+        targets = data["parameters"]["properties"]["target"]["enum"]
+        self.assertIn("hfi", targets)
+
     def test_os_command_carries_live_update_tui_contract(self) -> None:
         data = run("command", "os")["data"]
         self.assertEqual(data["invocation"], "os")

@@ -18,18 +18,19 @@ use crate::shell2::shell2_cmd::ParseOutcome;
 
 pub(crate) const DUMP_FILE_PATH: &str = "trueos/pci/tlb.txt";
 
-const TLB_USAGE: &str = "tlb: usage `tlb [pci|pcibar|mem|cpu|turbo|ucode|pmu|rapl [store]|thermal|acpi [sig [index]]|aml [ec|symbol <path>|prefix <path>]|facp|madt|hpet|mcfg|ssdt|uefi|smbios|x2apic|usb [probe]|dump]`";
+const TLB_USAGE: &str = "tlb: usage `tlb [pci|pcibar|mem|cpu|hfi|turbo|ucode|pmu|rapl [store]|thermal|acpi [sig [index]]|aml [ec|symbol <path>|prefix <path>]|facp|madt|hpet|mcfg|ssdt|uefi|smbios|x2apic|usb [probe]|dump]`";
 const TLB_ACPI_USAGE: &str = "tlb: usage `tlb acpi [sig [index]]`";
 const TLB_AML_USAGE: &str = "tlb: usage `tlb aml [ec|symbol <path>|prefix <path>]`";
 const ACPI_HEXDUMP_MAX_BYTES: usize = 512;
 const ACPI_HEXDUMP_ROW_BYTES: usize = 16;
 const ACPI_AML_DUMP_MAX_BYTES: usize = 1024;
 const TLB_MENU_HEADERS: [&str; 2] = ["Subcommand", "Description"];
-const TLB_MENU_ROWS: [(&str, &str); 21] = [
+const TLB_MENU_ROWS: [(&str, &str); 22] = [
     ("pci", "List PCI devices"),
     ("pcibar", "List PCI BAR windows"),
     ("mem", "List memory map"),
     ("cpu", "List CPU cores"),
+    ("hfi", "Show Intel HFI / Thread Director CPUID metadata"),
     ("turbo", "List CPU turbo state and all-core verify stats"),
     ("ucode", "Show Intel microcode loader snapshot"),
     ("pmu", "Show architectural PMU/perf snapshot"),
@@ -1343,6 +1344,208 @@ fn cmd_tlb_cpu(io: &'static dyn ShellBackend2) {
             emit_table_row(io, &cols, &[&slot_s, &apic, role, state, &seq]);
         }
     }
+}
+
+fn hfi_registered_profiles() -> Vec<crate::cpu::CpuProfile> {
+    let count = crate::percpu::total_slots().max(crate::smp::cpu_count());
+    (0..count)
+        .filter_map(|slot| crate::cpu::CpuProfile::for_slot(slot as u32))
+        .collect()
+}
+
+fn hfi_summary_cpuid(
+    profiles: &[crate::cpu::CpuProfile],
+) -> Option<crate::power::hfi::IntelHfiCpuid> {
+    profiles
+        .iter()
+        .find(|profile| profile.slot() == 0)
+        .copied()
+        .or_else(|| profiles.first().copied())
+        .or_else(crate::cpu::CpuProfile::current)
+        .map(|profile| profile.hfi_cpuid())
+}
+
+fn fmt_hfi_option<T: core::fmt::Display>(value: Option<T>) -> String {
+    value
+        .map(|value| alloc::format!("{}", value))
+        .unwrap_or_else(|| String::from("-"))
+}
+
+fn cmd_tlb_hfi(io: &'static dyn ShellBackend2) {
+    let profiles = hfi_registered_profiles();
+    let Some(summary) = hfi_summary_cpuid(&profiles) else {
+        line(io, "tlb hfi: no registered CPU profile is available");
+        return;
+    };
+
+    line(io, "Intel Hardware Feedback Interface / Thread Director");
+    line(
+        io,
+        "Capture is CPUID-only; IA32_HW_FEEDBACK_* and the hardware feedback table are untouched.",
+    );
+    line(
+        io,
+        alloc::format!(
+            "Profiles: {}/{}  CPUID.06={}  CPUID.MSR={}  HFI={}  ThreadDirector={}  Classes={}",
+            profiles.len(),
+            crate::percpu::total_slots().max(crate::smp::cpu_count()),
+            yes_no(summary.leaf_available),
+            yes_no(summary.msr_instruction),
+            yes_no(summary.hfi_supported()),
+            yes_no(summary.thread_director_supported()),
+            fmt_hfi_option(
+                summary
+                    .thread_director_supported()
+                    .then_some(summary.thread_director_classes())
+            )
+        )
+        .as_str(),
+    );
+    line(
+        io,
+        alloc::format!(
+            "Capabilities: mask=0x{:02X} performance={} efficiency={} table_pages={} table_bytes={}",
+            summary.capability_mask(),
+            yes_no(summary.performance_reporting()),
+            yes_no(summary.energy_efficiency_reporting()),
+            fmt_hfi_option(summary.table_pages()),
+            summary
+                .table_bytes()
+                .map(|bytes| alloc::format!("0x{:X}", bytes))
+                .unwrap_or_else(|| String::from("-"))
+        )
+        .as_str(),
+    );
+    line(
+        io,
+        alloc::format!(
+            "Summary CPUID.06: EAX=0x{:08X} EBX=0x{:08X} ECX=0x{:08X} EDX=0x{:08X}",
+            summary.eax, summary.ebx, summary.ecx, summary.edx
+        )
+        .as_str(),
+    );
+    blank(io);
+
+    const HEADERS: [&str; 8] = [
+        "Slot",
+        "APIC",
+        "Pkg",
+        "Core",
+        "SMT",
+        "Kind",
+        "HFI row",
+        "CPUID.06 EAX:ECX:EDX",
+    ];
+    let table = TlbTable::with_width(&HEADERS, line_width_for_backend(io).saturating_sub(2))
+        .with_max_col_widths(&[5, 10, 4, 5, 4, 8, 7, 0]);
+    table.emit_header(|text| line(io, text));
+
+    let topology = crate::x2apic::detect_x2apic_topology();
+    for profile in profiles {
+        let cpuid = profile.hfi_cpuid();
+        let (package, core, smt) = topology.decode(profile.lapic_id());
+        let raw = if cpuid.leaf_available {
+            alloc::format!("{:08X}:{:08X}:{:08X}", cpuid.eax, cpuid.ecx, cpuid.edx)
+        } else {
+            String::from("-")
+        };
+        let row = [
+            profile.slot().to_string(),
+            alloc::format!("0x{:X}", profile.lapic_id()),
+            package.to_string(),
+            core.to_string(),
+            smt.to_string(),
+            String::from(profile.core_kind_name()),
+            fmt_hfi_option(cpuid.row_index()),
+            raw,
+        ];
+        table.emit_row(&row, |text| line(io, text));
+    }
+    table.emit_footer(|text| line(io, text));
+    line(io, "HFI row indexes are package-local.");
+}
+
+fn append_hfi_dump(out: &mut String) {
+    let profiles = hfi_registered_profiles();
+
+    writeln!(out, "=== Intel HFI / Thread Director CPUID ===").unwrap();
+    writeln!(
+        out,
+        "capture_policy=registration-time-cpuid-only msr_programming=no hardware_table=unconfigured scheduler_consumer=none"
+    )
+    .unwrap();
+
+    let Some(summary) = hfi_summary_cpuid(&profiles) else {
+        writeln!(out, "metadata=unavailable").unwrap();
+        writeln!(out).unwrap();
+        return;
+    };
+
+    writeln!(
+        out,
+        "profiles={}/{} leaf6={} msr_instruction={} hfi={} thread_director={} classes={} capability_mask=0x{:02X} performance={} efficiency={} table_pages={} table_bytes={}",
+        profiles.len(),
+        crate::percpu::total_slots().max(crate::smp::cpu_count()),
+        yes_no(summary.leaf_available),
+        yes_no(summary.msr_instruction),
+        yes_no(summary.hfi_supported()),
+        yes_no(summary.thread_director_supported()),
+        fmt_hfi_option(
+            summary
+                .thread_director_supported()
+                .then_some(summary.thread_director_classes())
+        ),
+        summary.capability_mask(),
+        yes_no(summary.performance_reporting()),
+        yes_no(summary.energy_efficiency_reporting()),
+        fmt_hfi_option(summary.table_pages()),
+        summary
+            .table_bytes()
+            .map(|bytes| alloc::format!("0x{:X}", bytes))
+            .unwrap_or_else(|| String::from("-"))
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "summary_cpuid.06 eax=0x{:08X} ebx=0x{:08X} ecx=0x{:08X} edx=0x{:08X}",
+        summary.eax, summary.ebx, summary.ecx, summary.edx
+    )
+    .unwrap();
+
+    let topology = crate::x2apic::detect_x2apic_topology();
+    for profile in profiles {
+        let cpuid = profile.hfi_cpuid();
+        let (package, core, smt) = topology.decode(profile.lapic_id());
+        writeln!(
+            out,
+            "slot={} apic=0x{:X} package={} core={} smt={} kind={} leaf6={} hfi={} thread_director={} classes={} performance={} efficiency={} table_pages={} hfi_row={} eax=0x{:08X} ebx=0x{:08X} ecx=0x{:08X} edx=0x{:08X}",
+            profile.slot(),
+            profile.lapic_id(),
+            package,
+            core,
+            smt,
+            profile.core_kind_name(),
+            yes_no(cpuid.leaf_available),
+            yes_no(cpuid.hfi_supported()),
+            yes_no(cpuid.thread_director_supported()),
+            fmt_hfi_option(
+                cpuid
+                    .thread_director_supported()
+                    .then_some(cpuid.thread_director_classes())
+            ),
+            yes_no(cpuid.performance_reporting()),
+            yes_no(cpuid.energy_efficiency_reporting()),
+            fmt_hfi_option(cpuid.table_pages()),
+            fmt_hfi_option(cpuid.row_index()),
+            cpuid.eax,
+            cpuid.ebx,
+            cpuid.ecx,
+            cpuid.edx
+        )
+        .unwrap();
+    }
+    writeln!(out, "hfi_row_scope=package-local").unwrap();
+    writeln!(out).unwrap();
 }
 
 fn fmt_opt_u64_hex(value: Option<u64>) -> String {
@@ -3085,7 +3288,7 @@ pub(crate) async fn build_dump_text() -> String {
     .unwrap();
     writeln!(
         out,
-        "Capture is observational: invasive PMU, turbo, and HPET setup paths are not triggered."
+        "Capture is observational: invasive PMU, turbo, HPET, and HFI setup paths are not triggered."
     )
     .unwrap();
     writeln!(out).unwrap();
@@ -3184,6 +3387,7 @@ pub(crate) async fn build_dump_text() -> String {
     }
     writeln!(out).unwrap();
 
+    append_hfi_dump(&mut out);
     append_microcode_dump(&mut out);
     append_pmu_dump(&mut out);
     append_intel_gpu_dump(&mut out);
@@ -4484,6 +4688,7 @@ pub(crate) fn try_parse(
         }
         Some("mem") if ensure_no_args(io, args, "tlb: usage `tlb mem`") => cmd_tlb_mem(io),
         Some("cpu") if ensure_no_args(io, args, "tlb: usage `tlb cpu`") => cmd_tlb_cpu(io),
+        Some("hfi") if ensure_no_args(io, args, "tlb: usage `tlb hfi`") => cmd_tlb_hfi(io),
         Some("turbo") if ensure_no_args(io, args, "tlb: usage `tlb turbo`") => cmd_tlb_turbo(io),
         Some("ucode") if ensure_no_args(io, args, "tlb: usage `tlb ucode`") => cmd_tlb_ucode(io),
         Some("pmu") if ensure_no_args(io, args, "tlb: usage `tlb pmu`") => cmd_tlb_pmu(io),
