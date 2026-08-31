@@ -56,7 +56,9 @@ impl CodecRequest {
         match self {
             Self::SevenZPackPath { owner, id, .. }
             | Self::SevenZPackPaths { owner, id, .. }
-            | Self::SevenZUnpackPath { owner, id, .. } => (*owner, *id),
+            | Self::SevenZUnpackPath { owner, id, .. } => {
+                (*owner, *id)
+            }
         }
     }
 }

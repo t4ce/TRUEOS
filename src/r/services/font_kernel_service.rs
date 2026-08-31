@@ -987,7 +987,9 @@ impl FontGpuProducer {
             || destination.height != registration.row_height_px
             || destination.storage_order != crate::intel::gpgpu::GpgpuRgba8StorageOrder::Rgba
         {
-            return Err(FontKernelError::InvalidRequest("font-producer-ui4-cache-surface"));
+            return Err(FontKernelError::InvalidRequest(
+                "font-producer-ui4-cache-surface",
+            ));
         }
         queue_frame_stamp(
             FrameStampInput::ProducerRequest {
@@ -2188,7 +2190,12 @@ fn prepare_producer_stamp_scenes(
     request: &FontStampRequest,
     resources: &Arc<FontGpuProducerResources>,
 ) -> Result<
-    (Vec<GpuFontRetainedIdentityStamp>, usize, ((u64, u64, u64), (u64, u64, u64)), bool),
+    (
+        Vec<GpuFontRetainedIdentityStamp>,
+        usize,
+        ((u64, u64, u64), (u64, u64, u64)),
+        bool,
+    ),
     FontKernelError,
 > {
     // Producer rows use a one-to-one viewport/raster contract, so ppem is the
@@ -2845,13 +2852,11 @@ fn process_frame_stamp(
     };
     let submits = rendered.submits;
     let active_walkers = rendered.active_walkers;
-    let release = rendered
-        .release
-        .ok_or(if clear_rgba.is_some() || submits != 0 {
-            FontKernelError::SubmittedIncomplete("font-frame-stamp-release-missing")
-        } else {
-            FontKernelError::Unavailable("font-frame-stamp-release-missing")
-        })?;
+    let release = rendered.release.ok_or(if clear_rgba.is_some() || submits != 0 {
+        FontKernelError::SubmittedIncomplete("font-frame-stamp-release-missing")
+    } else {
+        FontKernelError::Unavailable("font-frame-stamp-release-missing")
+    })?;
     let completed_ms = Instant::now().as_millis();
     Ok(FontFrameStamp {
         ticket,
