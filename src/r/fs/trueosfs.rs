@@ -1434,7 +1434,8 @@ pub async fn file_write_begin_typed_async(
         .await?
         .map(|i| i.record_key)
         .unwrap_or(RecordKey::Ffa);
-    file_write_begin_with_metadata_async(disk, name, total_len, content_type, record_key, false).await
+    file_write_begin_with_metadata_async(disk, name, total_len, content_type, record_key, false)
+        .await
 }
 
 /// Begin a streamed file write with an explicit native record key.
@@ -1444,8 +1445,15 @@ pub async fn file_write_begin_with_key_async(
     total_len: u64,
     record_key: RecordKey,
 ) -> Result<Option<u32>, block::Error> {
-    file_write_begin_with_metadata_async(disk, name, total_len, ContentTypeId::BLOB, record_key, true)
-        .await
+    file_write_begin_with_metadata_async(
+        disk,
+        name,
+        total_len,
+        ContentTypeId::BLOB,
+        record_key,
+        true,
+    )
+    .await
 }
 
 async fn file_write_begin_with_metadata_async(
@@ -2426,7 +2434,11 @@ pub async fn list_dir_async(
             truncated = true;
             break;
         }
-        entries.push(DirEntry { name, kind, content_type });
+        entries.push(DirEntry {
+            name,
+            kind,
+            content_type,
+        });
     }
     if truncated {
         crate::log_warn!(target: "filesystem";

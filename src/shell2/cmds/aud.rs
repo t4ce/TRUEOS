@@ -1,5 +1,3 @@
-use alloc::string::String;
-
 use trueos_executor::{Spawner, task};
 
 use super::super::shell2_cmd::ParseOutcome;
@@ -13,19 +11,16 @@ const AUD_ARCHIVE: &str = "Player.bp";
 
 #[task(pool_size = 2)]
 async fn launch_aud(spawner: Spawner, target: MatrixTarget) {
-    let app_args = alloc::vec![String::from(crate::hv::BLUEPRINT_VMX_MINISHELL_ARG)];
     match super::run::submit_archive_name_to_target_from_app_db_async(
         target.clone(),
         AUD_ARCHIVE,
-        app_args.clone(),
+        alloc::vec::Vec::new(),
     )
     .await
     {
         Ok(_) => {}
         Err(error) if error == "archive not found" => {
-            let online_args = core::iter::once(String::from(AUD_APP))
-                .chain(app_args)
-                .collect();
+            let online_args = alloc::vec![alloc::string::String::from(AUD_APP)];
             if submit_online_to_target(&spawner, target.clone(), online_args).is_err() {
                 print_matrix_target_system_line(&target, "aud: online launch task unavailable");
             }
@@ -44,10 +39,7 @@ pub(crate) fn try_parse(
 ) -> ParseOutcome {
     let trimmed = rest.trim();
     if matches!(trimmed, "help" | "-h" | "--help") {
-        print_shell_line(
-            io,
-            "aud: launch Player without its terminal TUI; use Player commands in the VMX minishell and `vmx help` for VM controls",
-        );
+        print_shell_line(io, "aud: open the Player Blueprint terminal UI");
         return ParseOutcome::Handled;
     }
     if !trimmed.is_empty() {

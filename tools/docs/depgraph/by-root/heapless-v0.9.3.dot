@@ -11,8 +11,6 @@ digraph "heapless-v0.9.3" {
   in2 -> n0 [style=dashed, color="#4b8fc5"];
   in3 [label=<from smoltcp-v0.13.1.svg<BR/><B>heapless</B><BR/>0.9.3>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
   in3 -> n0 [style=dashed, color="#4b8fc5"];
-  in4 [label=<from trueos-esp-v0.1.0.svg<BR/><B>heapless</B><BR/>0.9.3>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
-  in4 -> n0 [style=dashed, color="#4b8fc5"];
   // collapsed leaf ends: 0
   // centered two-input leaves: 0
   // nested two-input leaves: 0

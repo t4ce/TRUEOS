@@ -6,7 +6,7 @@
 //! and publishes compact observations through the lock-free ingress functions
 //! below.
 
-use core::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, AtomicU8, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, AtomicU32, AtomicU64, Ordering};
 
 use trueos_time::{Duration, Timer};
 
@@ -174,12 +174,7 @@ pub(crate) fn status() -> FrontEndStatus {
         &NOISE_CONFIDENCE_Q15,
         &NOISE_SOURCE_TIMESTAMP_MS,
     );
-    let vad = load_level(
-        &VAD_SEQUENCE,
-        &VAD_ACTIVE,
-        &VAD_CONFIDENCE_Q15,
-        &VAD_SOURCE_TIMESTAMP_MS,
-    );
+    let vad = load_level(&VAD_SEQUENCE, &VAD_ACTIVE, &VAD_CONFIDENCE_Q15, &VAD_SOURCE_TIMESTAMP_MS);
     FrontEndStatus {
         pipeline: PipelineState::from_u8(PIPELINE_STATE.load(Ordering::Acquire)),
         noise_reduction_active: noise.is_some_and(|snapshot| snapshot.active),
@@ -418,6 +413,8 @@ pub(crate) async fn gna_audio_frontend_service_task() {
         "gna-audio-front-end: online microphone_owner=hda-capture-lane pcm=s16le-48k-interleaved role=gna-consumer-only path=hda-capture->gna3(noise-reduction,vad,wake-word)->speech-detected sink=global-log poll_softcap_ms={} wake_log_softcap_ms={} inference=awaiting-hardware-owner fail_closed=1\n",
         POLL_SOFTCAP_MS,
         WAKE_LOG_SOFTCAP_MS,
+        "gna-audio-front-end: online path=hda-microphone->gna3(noise-reduction,vad,wake-word)->speech-detected sink=global-log poll_softcap_ms={} wake_log_softcap_ms={} inference=awaiting-hardware-owner fail_closed=1\n",
+        POLL_SOFTCAP_MS, WAKE_LOG_SOFTCAP_MS,
     ));
 
     let mut capture_spawned = false;
@@ -457,11 +454,7 @@ pub(crate) async fn gna_audio_frontend_service_task() {
         if let Some(report) = cadence_probe.observe(now_ms) {
             crate::log_os::service_important_line(format_args!(
                 "gna-audio-front-end: baremetal=poll-cadence samples={} target_ms={} min_ms={} max_ms={} average_ms={} result=observed\n",
-                report.samples,
-                POLL_SOFTCAP_MS,
-                report.min_ms,
-                report.max_ms,
-                report.average_ms,
+                report.samples, POLL_SOFTCAP_MS, report.min_ms, report.max_ms, report.average_ms,
             ));
         }
 
@@ -490,12 +483,9 @@ pub(crate) async fn gna_audio_frontend_service_task() {
             }
         }
 
-        if let Some(snapshot) = load_level(
-            &VAD_SEQUENCE,
-            &VAD_ACTIVE,
-            &VAD_CONFIDENCE_Q15,
-            &VAD_SOURCE_TIMESTAMP_MS,
-        ) && snapshot.sequence != last_vad_sequence
+        if let Some(snapshot) =
+            load_level(&VAD_SEQUENCE, &VAD_ACTIVE, &VAD_CONFIDENCE_Q15, &VAD_SOURCE_TIMESTAMP_MS)
+            && snapshot.sequence != last_vad_sequence
         {
             last_vad_sequence = snapshot.sequence;
             if last_vad_active != Some(snapshot.active) {

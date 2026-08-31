@@ -1366,7 +1366,8 @@ async fn begin_write_file_stream_with_metadata_inner<D: BlockIo>(
     let bs = dev.block_size();
     if bs < RECORD_HEADER_MIN_BYTES
         || metadata.content_type == ContentTypeId::NONE
-        || (!allow_unregistered_existing_type && !valid_new_file_content_type(metadata.content_type))
+        || (!allow_unregistered_existing_type
+            && !valid_new_file_content_type(metadata.content_type))
     {
         return Err(FsError::InvalidParam);
     }
@@ -2404,12 +2405,15 @@ pub async fn copy_file_from_record<D: BlockIo>(
     if !is_normalized_nonempty_path(destination_name) {
         return Ok(false);
     }
-    let Some(validated) =
-        get_file_record_at(dev, params, source.entry_lba, source_name).await?
+    let Some(validated) = get_file_record_at(dev, params, source.entry_lba, source_name).await?
     else {
         return Ok(false);
     };
-    if validated != *source || lookup_node_record(dev, params, destination_name).await?.is_some() {
+    if validated != *source
+        || lookup_node_record(dev, params, destination_name)
+            .await?
+            .is_some()
+    {
         return Ok(false);
     }
     let Some(bytes) = read_file_at_record(dev, params, source).await? else {
@@ -3578,7 +3582,11 @@ mod tests {
             ),
             ContentTypeId::BLOB.raw()
         );
-        assert!(file[RECORD_HEADER_MIN_BYTES..].iter().all(|byte| *byte == 0));
+        assert!(
+            file[RECORD_HEADER_MIN_BYTES..]
+                .iter()
+                .all(|byte| *byte == 0)
+        );
         file[RECORD_HEADER_MIN_BYTES] = 1;
         assert!(LogHeader::decode_from_block(&file).is_none());
 
@@ -3615,7 +3623,8 @@ mod tests {
         wrong_magic[0] = b'X';
         assert_eq!(decode_index_checkpoint_payload(&wrong_magic), None);
         let mut wrong_directory_type = payload;
-        wrong_directory_type[INDEX_CHECKPOINT_HEADER_BYTES + 12..INDEX_CHECKPOINT_HEADER_BYTES + 16]
+        wrong_directory_type
+            [INDEX_CHECKPOINT_HEADER_BYTES + 12..INDEX_CHECKPOINT_HEADER_BYTES + 16]
             .copy_from_slice(&ContentTypeId::BLOB.raw().to_le_bytes());
         assert_eq!(decode_index_checkpoint_payload(&wrong_directory_type), None);
     }
@@ -3727,8 +3736,7 @@ mod tests {
                 Err(FsError::InvalidParam)
             ));
             assert!(matches!(
-                begin_write_file_stream_with_key(&disk, &params, "typed", 6, RecordKey::Ffa)
-                    .await,
+                begin_write_file_stream_with_key(&disk, &params, "typed", 6, RecordKey::Ffa).await,
                 Err(FsError::InvalidParam)
             ));
             assert_eq!(
@@ -3775,7 +3783,10 @@ mod tests {
                 .unwrap()
                 .unwrap();
             assert_eq!(record.content_type, ContentTypeId::PNG);
-            assert_eq!(read_file_at_record(&disk, &params, &record).await, Ok(Some(b"onetwo".to_vec())));
+            assert_eq!(
+                read_file_at_record(&disk, &params, &record).await,
+                Ok(Some(b"onetwo".to_vec()))
+            );
         });
     }
 
@@ -3822,7 +3833,8 @@ mod tests {
                 .unwrap()
                 .unwrap();
             assert_eq!(
-                copy_file_from_record(&disk, &params, "source", &future_source, "future-copy").await,
+                copy_file_from_record(&disk, &params, "source", &future_source, "future-copy")
+                    .await,
                 Ok(true)
             );
             assert_eq!(
@@ -3843,14 +3855,8 @@ mod tests {
             );
             assert_eq!(disk.log_head(), head);
             assert_eq!(
-                copy_file_from_record(
-                    &disk,
-                    &params,
-                    "source",
-                    &future_source,
-                    "registered-copy",
-                )
-                .await,
+                copy_file_from_record(&disk, &params, "source", &future_source, "registered-copy",)
+                    .await,
                 Ok(false)
             );
             assert_eq!(disk.log_head(), head);
@@ -3863,10 +3869,7 @@ mod tests {
             let disk = MemoryBlockIo::new();
             let params = params();
             assert_eq!(create_directory(&disk, &params, "source").await, Ok(true));
-            assert_eq!(
-                write_file(&disk, &params, "source/future", b"bytes").await,
-                Ok(true)
-            );
+            assert_eq!(write_file(&disk, &params, "source/future", b"bytes").await, Ok(true));
             let record = lookup_file_record(&disk, &params, "source/future")
                 .await
                 .unwrap()
@@ -3884,10 +3887,11 @@ mod tests {
             );
 
             let scan = scan_raw_log(&disk, &params, 16).await.unwrap();
-            assert!(scan
-                .records
-                .iter()
-                .any(|entry| entry.entry_lba == reread.entry_lba && entry.content_type == future));
+            assert!(
+                scan.records.iter().any(
+                    |entry| entry.entry_lba == reread.entry_lba && entry.content_type == future
+                )
+            );
             let sb = parse_superblock(&disk.read_blocks(0, 1).await.unwrap()).unwrap();
             let mut replayed = None;
             replay_log_range(&disk, &params, 0, sb.log_head_rel_blocks, |kind, name, _, _, id| {
@@ -3909,7 +3913,12 @@ mod tests {
                     &params,
                     sb.log_head_rel_blocks,
                     vec![
-                        (b"source".to_vec(), LogKind::Directory, source.entry_lba, ContentTypeId::NONE),
+                        (
+                            b"source".to_vec(),
+                            LogKind::Directory,
+                            source.entry_lba,
+                            ContentTypeId::NONE
+                        ),
                         (b"source/future".to_vec(), LogKind::Put, reread.entry_lba, future),
                     ]
                     .into_iter(),
@@ -3917,13 +3926,17 @@ mod tests {
                 .await,
                 Ok(true)
             );
-            assert!(read_index_checkpoint(&disk, &params)
-                .await
-                .unwrap()
-                .unwrap()
-                .entries
-                .iter()
-                .any(|(path, kind, _, id)| path == b"source/future" && *kind == LogKind::Put && *id == future));
+            assert!(
+                read_index_checkpoint(&disk, &params)
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .entries
+                    .iter()
+                    .any(|(path, kind, _, id)| path == b"source/future"
+                        && *kind == LogKind::Put
+                        && *id == future)
+            );
 
             assert_eq!(
                 delete_file_at_record(&disk, &params, "source/future", &reread).await,

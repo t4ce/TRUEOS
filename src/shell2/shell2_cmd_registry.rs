@@ -82,7 +82,7 @@ fn dispatch_lum(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -
     super::cmds::lum::try_parse(spawner, io, rest)
 }
 
-fn dispatch_shot(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+fn dispatch_shot(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let rest = rest.trim();
     if matches!(rest, "help" | "-h" | "--help") {
         super::print_shell_line(
@@ -96,10 +96,13 @@ fn dispatch_shot(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> Par
         return ParseOutcome::Handled;
     }
     match crate::ui4::request_wd_postblend_capture() {
-        Ok(()) => super::print_shell_line(
-            io,
-            "shot: armed; next WD frame will be saved under trueosfs:/screenshots",
-        ),
+        Ok(()) => {
+            crate::intel::begin_transient_global_gt_boost(spawner, "shell2-shot");
+            super::print_shell_line(
+                io,
+                "shot: armed; next WD frame will be saved under trueosfs:/screenshots",
+            );
+        }
         Err(reason) => super::print_shell_line(io, alloc::format!("shot: {reason}").as_str()),
     }
     ParseOutcome::Handled
@@ -209,9 +212,7 @@ const SHELL2_COMMAND_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         color: Some(STATUS_ORANGE_RGB),
         advertised: true,
         handler: dispatch_aud,
-        tool_description: Some(
-            "Launch the Player Blueprint in VMX-minishell mode without its terminal TUI.",
-        ),
+        tool_description: Some("Open the Player Blueprint terminal UI."),
         tool_parameters_json: Some(TOOL_JSON_AUD),
     },
     BuiltinShell2CmdEntry {
@@ -490,7 +491,10 @@ fn starts_with_command<'a>(submitted: &'a str, name: &str) -> Option<&'a str> {
 
 #[cfg(test)]
 mod tests {
-    use super::{TOOL_JSON_CPP, command_registry_json, starts_with_command};
+    use super::{
+        TOOL_JSON_CPP, command_registry_json, starts_with_command, titlebar_right_alias_names_text,
+        titlebar_right_command_names_text,
+    };
 
     #[test]
     fn unrelated_command_length_may_land_inside_utf8() {
@@ -510,18 +514,18 @@ mod tests {
     }
 
     #[test]
-    fn titlebar_accents_media_commands_and_acpi() {
+    fn command_titlebar_uses_misc_and_admin_groups() {
         let status = titlebar_right_command_names_text();
 
-        let rainbow_start = "\x1b[1;4;38;5;199m";
-        assert_eq!(status.matches(rainbow_start).count(), 4);
-        assert!(status.contains("\x1b[1;38;2;139;0;0macpi\x1b[0m"));
+        assert!(status.starts_with("Misc["));
+        assert!(status.contains("] Admin["));
+        assert!(status.ends_with(']'));
     }
 
     #[test]
-    fn titlebar_groups_cry_and_display_only_backup_with_pink_commands() {
+    fn command_titlebar_paints_first_four_admin_entries_pink() {
         let status = titlebar_right_command_names_text();
-        let positions = ["cry", "backup", "os", "shell"].map(|label| {
+        let positions = ["cry", "os", "backup", "disc"].map(|label| {
             let token = alloc::format!("\x1b[1;38;2;255;55;255m{label}\x1b[0m");
             status.find(token.as_str()).unwrap()
         });
@@ -547,10 +551,24 @@ mod tests {
     }
 
     #[test]
-    fn titlebar_includes_green_file_surface_commands() {
-        let status = titlebar_right_command_names_text();
-        for label in ["td", "shot", "disc", "edit"] {
-            assert!(status.contains(label), "titlebar is missing {label}");
+    fn alias_titlebar_is_exactly_grouped_and_gray() {
+        let status = titlebar_right_alias_names_text();
+        assert!(status.starts_with("Alias["));
+        assert!(status.ends_with(']'));
+        assert_eq!(status.matches("\x1b[1;38;2;160;168;176m").count(), 9);
+        let positions = [
+            "td", "edit", "img", "shell", "surf", "qjs", "aud", "ssh", "grid",
+        ]
+        .map(|label| status.find(label).unwrap());
+        assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+
+        for label in [
+            "td", "edit", "img", "shell", "surf", "qjs", "aud", "ssh", "grid",
+        ] {
+            assert!(
+                !titlebar_right_command_names_text().contains(label),
+                "command titlebar still contains alias {label}"
+            );
         }
 
         let registry = command_registry_json();
@@ -595,19 +613,76 @@ pub(crate) fn try_dispatch(
     ParseOutcome::NotCommand
 }
 
-/// Render the command portion of Shell2's right-aligned titlebar section.
-///
-/// Every advertised entry in [`SHELL2_COMMAND_REGISTRY`] is included, so a
-/// newly registered command cannot be omitted from this titlebar listing.
+const TITLEBAR_MISC_COMMANDS: &[&str] = &["cpp", "hyper", "shot", "lum", "tts", "stt", "vid"];
+const TITLEBAR_ADMIN_COMMANDS: &[&str] = &[
+    "cry", "os", "backup", "disc", "tlb", "xhci", "ram", "smp", "net", "bios", "acpi", "vgpu",
+];
+const TITLEBAR_ALIAS_COMMANDS: &[&str] = &[
+    "td", "edit", "img", "shell", "surf", "qjs", "aud", "ssh", "grid",
+];
+
+/// Render the curated command-mode portion of Shell2's right-aligned titlebar.
 pub(crate) fn titlebar_right_command_names_text() -> AllocString {
-    let mut out = AllocString::new();
-    visit_titlebar_right_entries(|entry| {
-        if !out.is_empty() {
+    render_command_titlebar(usize::MAX)
+}
+
+/// Render the commands moved into Shell2's gray Alias mode.
+pub(crate) fn titlebar_right_alias_names_text() -> AllocString {
+    render_alias_titlebar(usize::MAX)
+}
+
+fn render_command_titlebar(max_entries: usize) -> AllocString {
+    let mut out = AllocString::from("Misc[");
+    let mut rendered = 0usize;
+    for name in TITLEBAR_MISC_COMMANDS {
+        if *name == "lum" && find_advertised_entry(name).is_none() {
+            continue;
+        }
+        if rendered == max_entries {
+            out.push_str("...]");
+            return out;
+        }
+        if rendered != 0 {
             out.push(' ');
         }
-        push_titlebar_right_entry(&mut out, entry);
-    });
+        push_registry_titlebar_entry(&mut out, name);
+        rendered += 1;
+    }
 
+    out.push_str("] Admin[");
+    for name in TITLEBAR_ADMIN_COMMANDS {
+        if rendered == max_entries {
+            out.push_str("...]");
+            return out;
+        }
+        if !out.ends_with('[') {
+            out.push(' ');
+        }
+        let color = if matches!(*name, "cry" | "os" | "backup" | "disc") {
+            STATUS_PINK_RGB
+        } else {
+            STATUS_GRAY_RGB
+        };
+        push_colored_status_token(&mut out, name, color);
+        rendered += 1;
+    }
+    out.push(']');
+    out
+}
+
+fn render_alias_titlebar(max_entries: usize) -> AllocString {
+    let mut out = AllocString::from("Alias[");
+    for (index, name) in TITLEBAR_ALIAS_COMMANDS.iter().enumerate() {
+        if index == max_entries {
+            out.push_str("...]");
+            return out;
+        }
+        if index != 0 {
+            out.push(' ');
+        }
+        push_colored_status_token(&mut out, name, STATUS_GRAY_RGB);
+    }
+    out.push(']');
     out
 }
 
@@ -620,50 +695,37 @@ pub(crate) fn titlebar_right_command_names_text_fitting(max_width: usize) -> All
         return full;
     }
 
-    let content_width = max_width.saturating_sub(3);
-    let mut out = AllocString::new();
-    let mut truncated = false;
-    visit_titlebar_right_entries(|entry| {
-        if truncated {
-            return;
+    for entry_count in (0..TITLEBAR_MISC_COMMANDS.len() + TITLEBAR_ADMIN_COMMANDS.len()).rev() {
+        let candidate = render_command_titlebar(entry_count);
+        if super::ecma48::visible_width(candidate.as_str()) <= max_width {
+            return candidate;
         }
-        let mut token = AllocString::new();
-        push_titlebar_right_entry(&mut token, entry);
-
-        let separator = if out.is_empty() { "" } else { " " };
-        let candidate_width = super::ecma48::visible_width(out.as_str())
-            .saturating_add(separator.len())
-            .saturating_add(super::ecma48::visible_width(token.as_str()));
-        if candidate_width > content_width {
-            truncated = true;
-            return;
-        }
-        out.push_str(separator);
-        out.push_str(token.as_str());
-    });
-    if out.is_empty() {
-        return AllocString::from("...");
     }
-    out.push_str("...");
-    out
+    AllocString::from("...")
 }
 
-fn visit_titlebar_right_entries(mut visit: impl FnMut(Option<&BuiltinShell2CmdEntry>)) {
-    for entry in SHELL2_COMMAND_REGISTRY
+pub(crate) fn titlebar_right_alias_names_text_fitting(max_width: usize) -> AllocString {
+    let full = titlebar_right_alias_names_text();
+    if super::ecma48::visible_width(full.as_str()) <= max_width {
+        return full;
+    }
+    for entry_count in (0..TITLEBAR_ALIAS_COMMANDS.len()).rev() {
+        let candidate = render_alias_titlebar(entry_count);
+        if super::ecma48::visible_width(candidate.as_str()) <= max_width {
+            return candidate;
+        }
+    }
+    AllocString::from("...")
+}
+
+fn find_advertised_entry(name: &str) -> Option<&'static BuiltinShell2CmdEntry> {
+    SHELL2_COMMAND_REGISTRY
         .iter()
-        .filter(|entry| entry.advertised)
-    {
-        visit(Some(entry));
-        if entry.name == "cry" {
-            // `backup` is a titlebar-only visual label, not a shell command.
-            visit(None);
-        }
-    }
+        .find(|entry| entry.advertised && entry.name == name)
 }
 
-fn push_titlebar_right_entry(out: &mut AllocString, entry: Option<&BuiltinShell2CmdEntry>) {
-    let Some(entry) = entry else {
-        push_colored_status_token(out, "backup", STATUS_PINK_RGB);
+fn push_registry_titlebar_entry(out: &mut AllocString, name: &str) {
+    let Some(entry) = find_advertised_entry(name) else {
         return;
     };
     let label = status_command_label(entry);

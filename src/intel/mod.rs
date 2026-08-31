@@ -36,6 +36,8 @@ pub(crate) use self::media::xelp_media2_ngin_hw_pic;
 
 use core::sync::atomic::{AtomicBool, Ordering};
 use spin::Once;
+use trueos_executor::{Spawner, task};
+use trueos_time::{Duration as EmbassyDuration, Timer};
 
 pub(crate) const INTEL_VENDOR_ID: u16 = 0x8086;
 pub(crate) const PCI_CLASS_DISPLAY: u8 = 0x03;
@@ -424,6 +426,89 @@ pub(crate) fn toggle_global_gt_power_mode()
         return Err("physical-gt-not-ready");
     }
     self::gt_state::toggle_global_gt_power_mode(dev)
+}
+
+const TRANSIENT_GT_BOOST_MILLIS: u64 = 2_000;
+
+/// Ask for a short F12-equivalent boost for an interactive operation.
+///
+/// This only enables the global mode when it was previously inactive.  A
+/// pre-existing manual F12 selection remains entirely untouched.  The timer
+/// carries the generation created by this call, so it cannot switch off a
+/// later manual selection or a later transient lease.
+pub(crate) fn begin_transient_global_gt_boost(spawner: &Spawner, origin: &'static str) {
+    let Some(dev) = claimed_device() else {
+        return;
+    };
+    if !device_uses_gen12_integrated_pat(dev.device_id) || !physical_gt_ready(dev) {
+        return;
+    }
+
+    match self::gt_state::begin_transient_global_gt_boost(dev) {
+        Ok(self::gt_state::Gen12TransientGtBoostStart::AlreadyActive) => {
+            crate::log_info!(
+                target: "render";
+                "intel/gt-transient-boost: origin={} accepted=0 reason=global-f12-already-active action=unclaimed-state-preserved\n",
+                origin,
+            );
+        }
+        Ok(self::gt_state::Gen12TransientGtBoostStart::Armed(lease)) => {
+            match transient_global_gt_boost_expiry(lease) {
+                Ok(token) => {
+                    spawner.spawn(token);
+                    crate::log_info!(
+                        target: "render";
+                        "intel/gt-transient-boost: origin={} accepted=1 duration_ms={} generation={} ownership=timed-generation-lease\n",
+                        origin,
+                        TRANSIENT_GT_BOOST_MILLIS,
+                        lease.generation,
+                    );
+                }
+                Err(_) => {
+                    // Never leave an enabled transient mode behind merely
+                    // because its bounded expiry task could not be allocated.
+                    let _ = self::gt_state::expire_transient_global_gt_boost(dev, lease);
+                    crate::log_warn!(
+                        target: "render";
+                        "intel/gt-transient-boost: origin={} accepted=0 reason=expiry-task-unavailable action=immediate-owned-restore\n",
+                        origin,
+                    );
+                }
+            }
+        }
+        Err(reason) => crate::log_info!(
+            target: "render";
+            "intel/gt-transient-boost: origin={} accepted=0 reason={} ownership=none\n",
+            origin,
+            reason,
+        ),
+    }
+}
+
+#[task(pool_size = 2)]
+async fn transient_global_gt_boost_expiry(lease: self::gt_state::Gen12TransientGtBoostLease) {
+    Timer::after(EmbassyDuration::from_millis(TRANSIENT_GT_BOOST_MILLIS)).await;
+    let Some(dev) = claimed_device() else {
+        return;
+    };
+    match self::gt_state::expire_transient_global_gt_boost(dev, lease) {
+        Ok(true) => crate::log_info!(
+            target: "render";
+            "intel/gt-transient-boost: stage=expiry accepted=1 generation={} action=owned-f12-restore\n",
+            lease.generation,
+        ),
+        Ok(false) => crate::log_info!(
+            target: "render";
+            "intel/gt-transient-boost: stage=expiry accepted=0 generation={} reason=state-or-generation-changed action=manual-state-preserved\n",
+            lease.generation,
+        ),
+        Err(reason) => crate::log_warn!(
+            target: "render";
+            "intel/gt-transient-boost: stage=expiry accepted=0 generation={} reason={} action=no-unowned-toggle\n",
+            lease.generation,
+            reason,
+        ),
+    }
 }
 
 pub(crate) fn begin_lumen_gt_boost() -> Option<self::gt_state::Gen12LumenGtBoost> {

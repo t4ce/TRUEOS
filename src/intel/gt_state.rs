@@ -47,6 +47,8 @@ pub(crate) struct Gen12GlobalGtPowerMarker {
 struct Gen12GlobalGtPowerState {
     active: bool,
     generation: u64,
+    transient_boost: Option<Gen12TransientGtBoostLease>,
+    next_transient_boost_token: u64,
     saved_request: u32,
     boost_ratio: u32,
     marker: Gen12GlobalGtPowerMarker,
@@ -56,6 +58,8 @@ static GEN12_GLOBAL_GT_POWER_STATE: Mutex<Gen12GlobalGtPowerState> =
     Mutex::new(Gen12GlobalGtPowerState {
         active: false,
         generation: 0,
+        transient_boost: None,
+        next_transient_boost_token: 0,
         saved_request: 0,
         boost_ratio: 0,
         marker: Gen12GlobalGtPowerMarker {
@@ -66,6 +70,21 @@ static GEN12_GLOBAL_GT_POWER_STATE: Mutex<Gen12GlobalGtPowerState> =
             rp0_mhz: 0,
         },
     });
+
+/// A short-lived caller owns a global GT enable only when this exact marker
+/// generation remains active.  The token distinguishes a stale timer from a
+/// later lease even if the generation counter eventually wraps.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(super) struct Gen12TransientGtBoostLease {
+    pub(super) token: u64,
+    pub(super) generation: u64,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(super) enum Gen12TransientGtBoostStart {
+    Armed(Gen12TransientGtBoostLease),
+    AlreadyActive,
+}
 
 const fn expected_mocs_control_table() -> [u32; GEN12_GLOBAL_MOCS_ENTRIES] {
     let mut table = [GEN12_MOCS_DEFAULT_CONTROL; GEN12_GLOBAL_MOCS_ENTRIES];
@@ -436,9 +455,7 @@ pub(super) fn global_gt_power_marker() -> Gen12GlobalGtPowerMarker {
     GEN12_GLOBAL_GT_POWER_STATE.lock().marker
 }
 
-pub(super) fn toggle_global_gt_power_mode(
-    dev: super::Dev,
-) -> Result<Gen12GlobalGtPowerMarker, &'static str> {
+fn fused_rp0_ratio(dev: super::Dev) -> Result<u32, &'static str> {
     if !gt_state_registers_available(dev) {
         return Err("gt-frequency-registers-unavailable");
     }
@@ -448,8 +465,14 @@ pub(super) fn toggle_global_gt_power_mode(
     if rp0_ratio == 0 || rp0_ratio > GEN12_CAGF_MASK {
         return Err("invalid-fused-rp0");
     }
+    Ok(rp0_ratio)
+}
 
-    let mut state = GEN12_GLOBAL_GT_POWER_STATE.lock();
+fn transition_global_gt_power_mode_locked(
+    dev: super::Dev,
+    state: &mut Gen12GlobalGtPowerState,
+    rp0_ratio: u32,
+) -> Result<Gen12GlobalGtPowerMarker, &'static str> {
     let observed_before = super::mmio_read(dev, GEN12_RPNSWREQ);
     let observed_before_ratio =
         (observed_before & GEN9_SW_REQ_UNSLICE_RATIO_MASK) >> GEN9_SW_REQ_UNSLICE_RATIO_SHIFT;
@@ -520,6 +543,72 @@ pub(super) fn toggle_global_gt_power_mode(
         lumen_active as u8,
     );
     Ok(marker)
+}
+
+pub(super) fn toggle_global_gt_power_mode(
+    dev: super::Dev,
+) -> Result<Gen12GlobalGtPowerMarker, &'static str> {
+    let rp0_ratio = fused_rp0_ratio(dev)?;
+    let mut state = GEN12_GLOBAL_GT_POWER_STATE.lock();
+    let marker = transition_global_gt_power_mode_locked(dev, &mut state, rp0_ratio)?;
+    // A human F12 decision always wins over any pending bounded boost.  Its
+    // timer will observe the missing lease and cannot undo this transition.
+    state.transient_boost = None;
+    Ok(marker)
+}
+
+pub(super) fn begin_transient_global_gt_boost(
+    dev: super::Dev,
+) -> Result<Gen12TransientGtBoostStart, &'static str> {
+    let rp0_ratio = fused_rp0_ratio(dev)?;
+    let mut state = GEN12_GLOBAL_GT_POWER_STATE.lock();
+    if state.active {
+        return Ok(Gen12TransientGtBoostStart::AlreadyActive);
+    }
+
+    let marker = transition_global_gt_power_mode_locked(dev, &mut state, rp0_ratio)?;
+    debug_assert!(marker.active);
+    state.next_transient_boost_token = state.next_transient_boost_token.wrapping_add(1).max(1);
+    let lease = Gen12TransientGtBoostLease {
+        token: state.next_transient_boost_token,
+        generation: marker.generation,
+    };
+    state.transient_boost = Some(lease);
+    Ok(Gen12TransientGtBoostStart::Armed(lease))
+}
+
+/// Expire a bounded boost only if the global state has not changed since the
+/// boost itself enabled it.  In particular, an F12 toggle clears the lease and
+/// changes the marker generation before this can reach the hardware.
+pub(super) fn expire_transient_global_gt_boost(
+    dev: super::Dev,
+    lease: Gen12TransientGtBoostLease,
+) -> Result<bool, &'static str> {
+    let mut state = GEN12_GLOBAL_GT_POWER_STATE.lock();
+    if !transient_boost_owns_current_state(&state, lease) {
+        return Ok(false);
+    }
+
+    // The off path must not depend on being able to rediscover RP0 two
+    // seconds later.  This lease already proved the fused ratio when it was
+    // admitted, and `boost_ratio` is the exact value that transition stored
+    // for its owned request.  Reusing it keeps expiry able to restore the
+    // predecessor even if a later capability read is temporarily unavailable.
+    let rp0_ratio = state.boost_ratio;
+    let marker = transition_global_gt_power_mode_locked(dev, &mut state, rp0_ratio)?;
+    debug_assert!(!marker.active);
+    state.transient_boost = None;
+    Ok(true)
+}
+
+fn transient_boost_owns_current_state(
+    state: &Gen12GlobalGtPowerState,
+    lease: Gen12TransientGtBoostLease,
+) -> bool {
+    state.transient_boost == Some(lease)
+        && state.active
+        && state.marker.active
+        && state.marker.generation == lease.generation
 }
 
 pub(super) fn begin_lumen_gt_boost(dev: super::Dev) -> Option<Gen12LumenGtBoost> {
@@ -617,5 +706,67 @@ pub(super) fn read(dev: super::Dev) -> Gen12GtStateSnapshot {
         throttle_reasons_raw,
         rpstat1_raw,
         rpnswreq_raw,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn active_state(lease: Gen12TransientGtBoostLease) -> Gen12GlobalGtPowerState {
+        Gen12GlobalGtPowerState {
+            active: true,
+            generation: lease.generation,
+            transient_boost: Some(lease),
+            next_transient_boost_token: lease.token,
+            saved_request: 0,
+            boost_ratio: 0,
+            marker: Gen12GlobalGtPowerMarker {
+                generation: lease.generation,
+                active: true,
+                requested_mhz: 0,
+                actual_mhz: 0,
+                rp0_mhz: 0,
+            },
+        }
+    }
+
+    #[test]
+    fn transient_expiry_requires_the_exact_owned_generation() {
+        let lease = Gen12TransientGtBoostLease {
+            token: 7,
+            generation: 41,
+        };
+        let state = active_state(lease);
+        assert!(transient_boost_owns_current_state(&state, lease));
+        assert!(!transient_boost_owns_current_state(
+            &state,
+            Gen12TransientGtBoostLease {
+                token: 8,
+                generation: 41,
+            },
+        ));
+        assert!(!transient_boost_owns_current_state(
+            &state,
+            Gen12TransientGtBoostLease {
+                token: 7,
+                generation: 42,
+            },
+        ));
+    }
+
+    #[test]
+    fn transient_expiry_cannot_override_a_manual_f12_transition() {
+        let lease = Gen12TransientGtBoostLease {
+            token: 9,
+            generation: 12,
+        };
+        let mut state = active_state(lease);
+        // Manual F12 changes both the generation and the pending ownership.
+        state.active = false;
+        state.marker.active = false;
+        state.marker.generation = 13;
+        state.transient_boost = None;
+        assert!(!transient_boost_owns_current_state(&state, lease));
     }
 }

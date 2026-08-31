@@ -3,6 +3,12 @@ digraph "trueos-fs-v0.0.1" {
   node [shape=box, style="rounded,filled", fontname="Inter,Arial", fontsize=10, margin="0.13,0.10", color="#8b9bb0", fillcolor="#f7f9fb", fontcolor="#172033"];
   edge [color="#9aa8b8", arrowsize=0.55, penwidth=7.2];
   n0 [label=<<FONT POINT-SIZE="13"><B>trueos-fs</B></FONT><BR/><FONT POINT-SIZE="12">0.0.1</FONT><BR/><FONT POINT-SIZE="11">/crates/trueos-fs</FONT>>, fillcolor="#dff3ff", color="#1b78a6"];
+  out0 [label=<to infer-v0.22.0-trueos.1.svg<BR/><B>infer</B><BR/>0.22.0-trueos.1<BR/>/vendor/infer>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out0 [style=dashed, color="#d19922"];
+  out1 [label=<to trueos-crypto-v0.1.0.svg<BR/><B>trueos-crypto</B><BR/>0.1.0<BR/>/crates/trueos-crypto>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out1 [style=dashed, color="#d19922"];
+  in2 [label=<from v-v0.1.0.svg<BR/><B>trueos-fs</B><BR/>0.0.1<BR/>/crates/trueos-fs>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in2 -> n0 [style=dashed, color="#4b8fc5"];
   // collapsed leaf ends: 0
   // centered two-input leaves: 0
   // nested two-input leaves: 0

@@ -44,6 +44,17 @@ The first kernel/GPU slice is now present:
   worker credits `PRODUCED` only after the returned release fence matches the
   exact row allocation; a reversible failure restores the reservation, while
   `SubmittedIncomplete` pins the row and its complete lease generation.
+- `src/r/services/oceancache.rs` owns the shared retained R8 fast path. At
+  registration, producers with the same face and exact native pixel size seal
+  onto one OceanCache domain while retaining separate row rings, generations,
+  credits, and ACKs. Each domain keeps position-independent colorless glyph R8
+  masks in a first-fill, no-eviction 512 KiB budget, including GPU masks and
+  CPU key/stamp metadata. Rows with new text or placement reuse every warmed
+  glyph and may change RGBA without rebuilding or auditing its analytical
+  coverage. Non-overlapping glyph masks are packed into the existing bounded
+  64-layer RCS submission; overlapping placements conservatively retain the
+  established max-union scene path. A full ocean falls back normally; its
+  final registration claim dropping retires it naturally.
 - `FontProducedRow::mark_surflive` records that the row became display-live
   but deliberately does not restore its credit. Only
   `acknowledge_display_release`, called after a later replacement becomes
@@ -66,6 +77,14 @@ the current eight leases and their caches, then freshly registers the same
 tiers for `font`, `noto-sans-sc`, and `inconsolata` in rotation. On shutdown,
 the capability is retained until the whole UI4 Frame is destroyed, then an
 exact completion-checked retirement ACK releases the producer generation.
+
+The additive Shell2/UI4 scale bridge exposes 25 effective sizes backed by five
+native tiers (16, 24, 36, 54, and 80 px) plus a residual presentation scale.
+The existing font-sprite v1 request remains exact, but deduplicates an
+identical live surface-scoped face/scalar/size/RGBA request to its existing
+ticket. UI4 coalesces button-stable wheel samples while preserving their total
+signed detent distance, so a frontend can traverse the scale ladder without
+overflowing its bounded owner-event queue.
 
 The Font RCS runtime still remains one job slot. Both Rush variants therefore
 demonstrate independently backpressured producer queues and persistent UI4

@@ -5,9 +5,9 @@ digraph "mio-v1.2.0" {
   n0 [label=<<FONT POINT-SIZE="13"><B>mio</B></FONT><BR/><FONT POINT-SIZE="12">1.2.0</FONT><BR/><FONT POINT-SIZE="11">/vendor/mio-1.2.0</FONT>>, fillcolor="#dff3ff", color="#1b78a6"];
   out0 [label=<to core3-v0.1.2.svg<BR/><B>core3</B><BR/>0.1.2>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
   n0 -> out0 [style=dashed, color="#d19922"];
-  out1 [label=<to spin-v0.10.0.svg<BR/><B>spin</B><BR/>0.10.0>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  out1 [label=<to hyper-v1.9.0.svg<BR/><B>trueos-io</B><BR/>0.1.0<BR/>/crates/trueos-io>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
   n0 -> out1 [style=dashed, color="#d19922"];
-  out2 [label=<to trueos-io-v0.1.0.svg<BR/><B>trueos-io</B><BR/>0.1.0<BR/>/crates/trueos-io>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  out2 [label=<to spin-v0.10.1.svg<BR/><B>spin</B><BR/>0.10.1>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
   n0 -> out2 [style=dashed, color="#d19922"];
   // collapsed leaf ends: 0
   // centered two-input leaves: 0

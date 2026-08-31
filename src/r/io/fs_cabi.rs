@@ -1793,6 +1793,12 @@ pub unsafe extern "C" fn trueos_cabi_shell_attached_write(
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
         return guest_shell_attached_write(data);
     }
+    // Tokio/pthread carriers run on host service-lane stacks, but retain the
+    // owning Blueprint process in KernelTaskDomain. Route them through the
+    // same VM console without pretending that a host carrier may vmcall.
+    if let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() {
+        return crate::hv::blueprint_console_write(vm_id, data);
+    }
     if let Some(target) = super::env::console_target() {
         return crate::shell2::raw_write_matrix_target(&target, data);
     }
@@ -2653,6 +2659,9 @@ pub fn read_attached_console_bytes(out: &mut [u8]) -> usize {
         }
         return 0;
     }
+    if let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() {
+        return crate::hv::blueprint_console_read(vm_id, out);
+    }
     if let Some(target) = super::env::console_target() {
         let mut read = 0usize;
         while read < out.len() {
@@ -2676,6 +2685,9 @@ pub extern "C" fn trueos_cabi_shell_attached_readable_len() -> usize {
             return data as usize;
         }
         return 0;
+    }
+    if let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() {
+        return crate::hv::blueprint_console_readable_len(vm_id);
     }
     if let Some(target) = super::env::console_target() {
         return crate::shell2::read_matrix_target_pending_len(&target);

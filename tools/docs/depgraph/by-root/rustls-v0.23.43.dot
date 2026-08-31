@@ -1,0 +1,29 @@
+digraph "rustls-v0.23.43" {
+  graph [rankdir=LR, bgcolor="white", overlap=false, splines=true, nodesep=0.35, ranksep=0.55];
+  node [shape=box, style="rounded,filled", fontname="Inter,Arial", fontsize=10, margin="0.13,0.10", color="#8b9bb0", fillcolor="#f7f9fb", fontcolor="#172033"];
+  edge [color="#9aa8b8", arrowsize=0.55, penwidth=7.2];
+  n0 [label=<<FONT POINT-SIZE="13"><B>rustls</B></FONT><BR/><FONT POINT-SIZE="12">0.23.43</FONT>>, fillcolor="#dff3ff", color="#1b78a6"];
+  n1 [label=<<FONT POINT-SIZE="13"><B>rustls-pki-types</B></FONT><BR/><FONT POINT-SIZE="12">1.15.1</FONT>>, fillcolor="#f7f9fb", color="#8b9bb0"];
+  n2 [label=<<FONT POINT-SIZE="13"><B>rustls-webpki</B></FONT><BR/><FONT POINT-SIZE="12">0.103.15</FONT>>, fillcolor="#f7f9fb", color="#8b9bb0"];
+  n0 -> n1;
+  n0 -> n2;
+  n2 -> n1;
+  out0 [label=<to chacha20poly1305-v0.10.1.svg<BR/><B>subtle</B><BR/>2.6.1>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out0 [style=dashed, color="#d19922"];
+  out1 [label=<to crab-usb-v0.9.1.svg<BR/><B>once_cell</B><BR/>1.21.4>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out1 [style=dashed, color="#d19922"];
+  out2 [label=<to ring-v0.17.14.svg<BR/><B>untrusted</B><BR/>0.9.0>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n2 -> out2 [style=dashed, color="#d19922"];
+  out3 [label=<to zeroize-v1.9.0.svg<BR/><B>zeroize</B><BR/>1.9.0>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out3 [style=dashed, color="#d19922"];
+  n1 -> out3 [style=dashed, color="#d19922"];
+  in4 [label=<from rustls-rustcrypto-v0.0.2-alpha.svg<BR/><B>rustls</B><BR/>0.23.43<BR/><B>rustls-pki-types</B><BR/>1.15.1<BR/><B>rustls-webpki</B><BR/>0.103.15>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in4 -> n0 [style=dashed, color="#4b8fc5"];
+  in4 -> n1 [style=dashed, color="#4b8fc5"];
+  in4 -> n2 [style=dashed, color="#4b8fc5"];
+  in5 [label=<from webpki-roots-v1.0.9.svg<BR/><B>rustls-pki-types</B><BR/>1.15.1>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in5 -> n1 [style=dashed, color="#4b8fc5"];
+  // collapsed leaf ends: 0
+  // centered two-input leaves: 0
+  // nested two-input leaves: 0
+}

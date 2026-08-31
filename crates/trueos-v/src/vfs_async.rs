@@ -621,9 +621,8 @@ pub async fn typed_metadata(path: &[u8]) -> Result<TypedMetadata, i32> {
         2 => NodeKind::Directory,
         _ => return Err(ERR_IO),
     };
-    let content_type = ContentTypeId::from_raw(u32::from_le_bytes(
-        result[12..16].try_into().map_err(|_| ERR_IO)?,
-    ));
+    let content_type =
+        ContentTypeId::from_raw(u32::from_le_bytes(result[12..16].try_into().map_err(|_| ERR_IO)?));
     if (kind == NodeKind::File && content_type == ContentTypeId::NONE)
         || (kind == NodeKind::Directory && content_type != ContentTypeId::NONE)
     {

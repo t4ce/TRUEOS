@@ -29,10 +29,10 @@ use crate::intel::gpgpu::{
 };
 use crate::intel::gpu_font::{GpuFontFace, GpuFontRgba, MAX_DYNAMIC_TEXT_CHARS};
 use crate::r::services::font_kernel_service::{
-    FontKernelError, FontKernelRetainedScene, FontStampFit, FontStampLayer, FontStampRequest,
-    FontStampedBuffer, PendingFontFrameStamp, PendingFontStamp, PendingRetainScene,
-    RetainSceneRequest, RetainedFontPositioning, RetainedFontRun, submit_frame_stamp,
-    submit_retain_scene, submit_stamp,
+    FontGpuProducer, FontKernelError, FontKernelRetainedScene, FontStampFit, FontStampLayer,
+    FontStampRequest, FontStampedBuffer, PendingFontFrameStamp, PendingFontStamp,
+    PendingRetainScene, RetainSceneRequest, RetainedFontPositioning, RetainedFontRun,
+    register_ui4_gpu_font_producer, submit_frame_stamp, submit_retain_scene, submit_stamp,
 };
 
 use super::{
@@ -59,6 +59,7 @@ const MAX_FONT_CANVAS_RUNS_PER_LAYER: usize = 64;
 const MAX_FONT_CANVAS_INTERNAL_LAYERS: usize = 64;
 const MAX_TEXT_ROW_BYTES: usize = 1_024;
 const MAX_NATIVE_FONT_SIZES: usize = 32;
+const SHELL2_WARM_PRODUCER_SEALS_PER_SURFACE: usize = 5;
 /// Shell2's wheel UI offers a bounded set of effective sizes.  The source
 /// tiers are deliberately few so a future persistent sprite producer only
 /// needs to warm five native ppem variants; the residual is presentation
@@ -674,6 +675,12 @@ struct BlueprintSceneSurface {
     stamped_text_layers: Vec<BlueprintStampedTextLayer>,
     stamped_text_cursor: usize,
     stamped_text_pending: Option<PendingFontFrameStamp>,
+    /// Up to five recent face/size/extent registrations stay warm. Distinct
+    /// shells still claim distinct producer slots, while OceanCache seals
+    /// equal face/size claims to the same R8 glyphs. Once residual presentation
+    /// scaling lands, these five exact-size seals become the five native tiers.
+    stamped_text_producers: Vec<BlueprintStampedTextProducer>,
+    stamped_text_pending_ocean: bool,
     stamped_text_rendered: bool,
 }
 
@@ -751,6 +758,11 @@ enum BlueprintRetainedTextState {
 struct BlueprintStampedTextLayer {
     description: BlueprintRetainedTextDescription,
     color_rgba: u32,
+}
+
+struct BlueprintStampedTextProducer {
+    registration: crate::r::services::font_producer_service::FontProducerRegistration,
+    producer: FontGpuProducer,
 }
 
 #[derive(Clone)]
@@ -1321,6 +1333,10 @@ fn open_blueprint_frame(
                 stamped_text_layers: Vec::new(),
                 stamped_text_cursor: 0,
                 stamped_text_pending: None,
+                stamped_text_producers: Vec::with_capacity(
+                    SHELL2_WARM_PRODUCER_SEALS_PER_SURFACE,
+                ),
+                stamped_text_pending_ocean: false,
                 stamped_text_rendered: false,
             },
             BlueprintSurfaceRelease::Animated,
@@ -1367,6 +1383,8 @@ fn open_blueprint_frame(
         stamped_text_layers: Vec::new(),
         stamped_text_cursor: 0,
         stamped_text_pending: None,
+        stamped_text_producers: Vec::with_capacity(SHELL2_WARM_PRODUCER_SEALS_PER_SURFACE),
+        stamped_text_pending_ocean: false,
         stamped_text_rendered: false,
     });
     let (cadence_name, buffer_count) = match frame_cadence {
@@ -1706,6 +1724,7 @@ pub(crate) fn begin_blueprint_frame(
     surface.retained_text_rendered = false;
     surface.stamped_text_cursor = 0;
     surface.stamped_text_pending = None;
+    surface.stamped_text_pending_ocean = false;
     surface.stamped_text_rendered = false;
     surface.write_lease = Some(lease);
     if let Some(cadence) = surface.visual_cadence.as_mut() {
@@ -2694,6 +2713,7 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_resize(
         surface.stamped_text_layers.clear();
         surface.stamped_text_cursor = 0;
         surface.stamped_text_pending = None;
+        surface.stamped_text_pending_ocean = false;
         surface.stamped_text_rendered = false;
         superseded
     };
@@ -4268,6 +4288,114 @@ fn render_retained_text_backbuffer_for_surface(owner: WindowOwner, window_id: u3
     0
 }
 
+fn shell2_stamped_text_registration(
+    request: &FontStampRequest,
+) -> Option<crate::r::services::font_producer_service::FontProducerRegistration> {
+    let first_scene = &request.layers.first()?.scene;
+    if first_scene.font != GpuFontFace::Inconsolata
+        || first_scene.positioning != RetainedFontPositioning::SceneOrigin
+        || first_scene.viewport_width != first_scene.raster_width
+        || first_scene.viewport_height != first_scene.raster_height
+    {
+        return None;
+    }
+    let first_pixels = first_scene.runs.first()?.font_pixels;
+    if !first_pixels.is_finite() || first_pixels <= 0.0 {
+        return None;
+    }
+    let font_pixels_milli = libm::roundf(first_pixels * 1_000.0) as u32;
+    let effective_pixels = font_pixels_milli.saturating_add(500) / 1_000;
+    let scale_step = shell2_font_scale_step(effective_pixels)?;
+    if font_pixels_milli != effective_pixels.saturating_mul(1_000) {
+        return None;
+    }
+    let mut glyphs = 0usize;
+    for layer in &request.layers {
+        let scene = &layer.scene;
+        if scene.font != first_scene.font
+            || scene.positioning != first_scene.positioning
+            || scene.viewport_width != first_scene.viewport_width
+            || scene.viewport_height != first_scene.viewport_height
+            || scene.raster_width != first_scene.raster_width
+            || scene.raster_height != first_scene.raster_height
+        {
+            return None;
+        }
+        for run in &scene.runs {
+            if libm::roundf(run.font_pixels * 1_000.0) as u32 != font_pixels_milli {
+                return None;
+            }
+            glyphs = glyphs.saturating_add(run.text.chars().count());
+        }
+    }
+    if glyphs == 0 || glyphs > TEXT_BACKBUFFER_MAX_GLYPHS {
+        return None;
+    }
+    Some(crate::r::services::font_producer_service::FontProducerRegistration {
+        face: first_scene.font.id() as u16,
+        tier: scale_step.native_tier_pixels as u16,
+        font_pixels_milli,
+        row_width_px: first_scene.raster_width,
+        row_height_px: first_scene.raster_height,
+        format: crate::r::services::font_producer_service::FontProducerFormat::Rgba8Premultiplied,
+        max_chars: TEXT_BACKBUFFER_MAX_GLYPHS,
+        row_ring_depth: 2,
+    })
+}
+
+fn submit_stamped_text_request(
+    surface: &mut BlueprintSceneSurface,
+    owner: WindowOwner,
+    window_id: u32,
+    request: FontStampRequest,
+    destination: GpgpuRgba8Surface,
+) -> Result<(PendingFontFrameStamp, bool), FontKernelError> {
+    let Some(registration) = shell2_stamped_text_registration(&request) else {
+        return submit_frame_stamp(request, destination).map(|pending| (pending, false));
+    };
+    let producer_index = match surface
+        .stamped_text_producers
+        .iter()
+        .position(|entry| entry.registration == registration)
+    {
+        Some(index) => index,
+        None => {
+            if surface.stamped_text_producers.len() >= SHELL2_WARM_PRODUCER_SEALS_PER_SURFACE {
+                surface.stamped_text_producers.remove(0);
+            }
+            let producer = match register_ui4_gpu_font_producer(registration) {
+                Ok(producer) => producer,
+                Err(error) => {
+                    crate::log_warn!(target: "ui4/solara-text";
+                        "Shell2 OceanCache registration unavailable owner={:?} window={} face={} tier={} font_pixels_milli={} extent={}x{} error={:?} action=request-outline-fallback\n",
+                        owner,
+                        window_id,
+                        registration.face,
+                        registration.tier,
+                        registration.font_pixels_milli,
+                        registration.row_width_px,
+                        registration.row_height_px,
+                        error,
+                    );
+                    return submit_frame_stamp(request, destination)
+                        .map(|pending| (pending, false));
+                }
+            };
+            surface
+                .stamped_text_producers
+                .push(BlueprintStampedTextProducer {
+                    registration,
+                    producer,
+                });
+            surface.stamped_text_producers.len() - 1
+        }
+    };
+    surface.stamped_text_producers[producer_index]
+        .producer
+        .submit_ui4_cached_frame(request, destination)
+        .map(|pending| (pending, true))
+}
+
 fn render_stamped_text_for_surface(owner: WindowOwner, window_id: u32) -> i32 {
     let mut surfaces = SURFACES.lock();
     let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
@@ -4311,8 +4439,17 @@ fn render_stamped_text_for_surface(owner: WindowOwner, window_id: u32) -> i32 {
             layers,
             fit: FontStampFit::Canvas,
         };
-        surface.stamped_text_pending = match submit_frame_stamp(request, destination) {
-            Ok(pending) => Some(pending),
+        surface.stamped_text_pending = match submit_stamped_text_request(
+            surface,
+            owner,
+            window_id,
+            request,
+            destination,
+        ) {
+            Ok((pending, ocean)) => {
+                surface.stamped_text_pending_ocean = ocean;
+                Some(pending)
+            }
             Err(FontKernelError::QueueFull) => return ERROR_BUSY,
             Err(error) if font_error_is_no_coverage(error) => {
                 surface.stamped_text_rendered = true;
@@ -4348,7 +4485,9 @@ fn render_stamped_text_for_surface(owner: WindowOwner, window_id: u32) -> i32 {
     let Some(completion) = completion else {
         return ERROR_BUSY;
     };
+    let ocean = surface.stamped_text_pending_ocean;
     surface.stamped_text_pending = None;
+    surface.stamped_text_pending_ocean = false;
     let stamped = match completion {
         Ok(stamped) => stamped,
         Err(FontKernelError::SubmittedIncomplete(reason)) => {
@@ -4394,7 +4533,7 @@ fn render_stamped_text_for_surface(owner: WindowOwner, window_id: u32) -> i32 {
     surface.stamped_text_rendered = true;
     crate::log_info!(
         target: "ui4/solara-text";
-        "FontKernel frame stamped owner={:?} window={} layers={} glyphs={} submits={} walkers={} target={}x{} context=kernel-gpgpu-font path=skrifa->gpu-vm-r8->cpp-igc->guc-font-rcs->ui4-frame-rgba8 cpu_readback=0 cpu_frame_copy=0 staging_rgba=0\n",
+        "FontKernel frame stamped owner={:?} window={} layers={} glyphs={} submits={} walkers={} target={}x{} context=kernel-gpgpu-font input={} cache={} path=skrifa->gpu-vm-r8->cpp-igc->guc-font-rcs->ui4-frame-rgba8 cpu_readback=0 cpu_frame_copy=0 staging_rgba=0\n",
         owner,
         window_id,
         surface.stamped_text_cursor,
@@ -4403,6 +4542,8 @@ fn render_stamped_text_for_surface(owner: WindowOwner, window_id: u32) -> i32 {
         stamped.active_walkers(),
         surface.width,
         surface.height,
+        if ocean { "producer-oceancache" } else { "request-outline" },
+        if ocean { "shared-registration-seal" } else { "none" },
     );
     0
 }
@@ -4546,6 +4687,7 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_publish(
     surface.stamped_text_layers.clear();
     surface.stamped_text_cursor = 0;
     surface.stamped_text_pending = None;
+    surface.stamped_text_pending_ocean = false;
     surface.stamped_text_rendered = false;
     let launch_selection = surface.launch_selection.take();
     let launched_window = surface.window;
@@ -6931,6 +7073,59 @@ mod tests {
         assert!(large.columns_at_1280 < native.columns_at_1280);
         assert!(large.rows_at_720 < native.rows_at_720);
         assert_eq!(shell2_font_scale_step(17), None);
+    }
+
+    fn stamped_shell_request(font: GpuFontFace, font_pixels: f32) -> FontStampRequest {
+        FontStampRequest {
+            layers: alloc::vec![FontStampLayer {
+                scene: RetainSceneRequest {
+                    runs: alloc::vec![RetainedFontRun {
+                        text: String::from("shell prompt"),
+                        position: [12.0, 24.0],
+                        font_pixels,
+                        slant: 0.0,
+                    }],
+                    font,
+                    viewport_width: 1_280,
+                    viewport_height: 720,
+                    raster_width: 1_280,
+                    raster_height: 720,
+                    positioning: RetainedFontPositioning::SceneOrigin,
+                },
+                foreground: GpuFontRgba::new(255, 255, 255, 255),
+            }],
+            fit: FontStampFit::Canvas,
+        }
+    }
+
+    #[test]
+    fn shell2_stamp_registration_seals_inconsolata_size_and_extent() {
+        let registration = shell2_stamped_text_registration(&stamped_shell_request(
+            GpuFontFace::Inconsolata,
+            24.0,
+        ))
+        .expect("Shell2's default tier should be OceanCache eligible");
+
+        assert_eq!(registration.face, GpuFontFace::Inconsolata.id() as u16);
+        assert_eq!(registration.tier, 24);
+        assert_eq!(registration.font_pixels_milli, 24_000);
+        assert_eq!((registration.row_width_px, registration.row_height_px), (1_280, 720));
+        assert_eq!(registration.row_ring_depth, 2);
+
+        assert!(
+            shell2_stamped_text_registration(&stamped_shell_request(
+                GpuFontFace::Default,
+                24.0,
+            ))
+            .is_none()
+        );
+        assert!(
+            shell2_stamped_text_registration(&stamped_shell_request(
+                GpuFontFace::Inconsolata,
+                17.0,
+            ))
+            .is_none()
+        );
     }
 
     #[test]
