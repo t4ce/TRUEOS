@@ -64,6 +64,16 @@ pub(crate) fn try_parse(
                 }
             }
         }
+        Some("dump") => {
+            let mut probe = args.clone();
+            let _ = probe.next();
+            if probe.next().is_none() {
+                super::tlb_hfi_dump::start(spawner, io);
+            } else {
+                line(io, "tlb: usage `tlb dump`");
+            }
+            ParseOutcome::Handled
+        }
         None => {
             let outcome = super::tlb_core::try_parse(spawner, io, args);
             line(io, "hfi       Explicit HFI table bring-up (`tlb hfi enable|table|dump|disable`)");
