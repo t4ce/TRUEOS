@@ -65,6 +65,7 @@ jobs:
           git submodule update --init \
             crates/trueos-shader \
             vendor/CrabUSB \
+            vendor/infer \
             vendor/limine \
             vendor/tinyaudio
 
