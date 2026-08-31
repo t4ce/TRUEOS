@@ -44,7 +44,10 @@ pub(crate) fn try_parse(
     }
 
     match launch_td(matrix_target_for_backend(io)) {
-        Ok(token) => spawner.spawn(token),
+        Ok(token) => {
+            crate::intel::begin_transient_global_gt_boost(spawner, "shell2-td");
+            spawner.spawn(token);
+        }
         Err(_) => print_shell_line(io, "td: termdir app.db launch task unavailable"),
     }
     ParseOutcome::Handled

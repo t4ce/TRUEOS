@@ -82,7 +82,7 @@ fn dispatch_lum(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -
     super::cmds::lum::try_parse(spawner, io, rest)
 }
 
-fn dispatch_shot(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+fn dispatch_shot(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let rest = rest.trim();
     if matches!(rest, "help" | "-h" | "--help") {
         super::print_shell_line(
@@ -96,10 +96,13 @@ fn dispatch_shot(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> Par
         return ParseOutcome::Handled;
     }
     match crate::ui4::request_wd_postblend_capture() {
-        Ok(()) => super::print_shell_line(
-            io,
-            "shot: armed; next WD frame will be saved under trueosfs:/screenshots",
-        ),
+        Ok(()) => {
+            crate::intel::begin_transient_global_gt_boost(spawner, "shell2-shot");
+            super::print_shell_line(
+                io,
+                "shot: armed; next WD frame will be saved under trueosfs:/screenshots",
+            );
+        }
         Err(reason) => super::print_shell_line(io, alloc::format!("shot: {reason}").as_str()),
     }
     ParseOutcome::Handled
