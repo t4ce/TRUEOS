@@ -59,6 +59,13 @@ unsafe extern "C" {
         out_ptr: *mut u8,
         out_cap: usize,
     ) -> isize;
+    #[link_name = "trueos_kernel_sync_fs_typed_list_dir"]
+    pub fn trueos_cabi_fs_typed_list_dir(
+        path_ptr: *const u8,
+        path_len: usize,
+        out_ptr: *mut u8,
+        out_cap: usize,
+    ) -> isize;
     #[link_name = "trueos_kernel_sync_fs_remove"]
     pub fn trueos_cabi_fs_remove(path_ptr: *const u8, path_len: usize) -> i32;
     #[link_name = "trueos_kernel_sync_trueosfs_primary_html_tree"]

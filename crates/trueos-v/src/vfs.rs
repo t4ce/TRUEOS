@@ -8,6 +8,7 @@ extern crate alloc;
 use alloc::{string::String, vec, vec::Vec};
 
 use crate::legacy_fs_abi as vcabi;
+pub use crate::vfs_async::{TypedDirEntry, TypedDirListing};
 pub use trueos_fs::ContentTypeId;
 pub const ERR_TYPE_REQUIRED: i32 = -15;
 pub const ERR_TYPE_MISMATCH: i32 = -16;
@@ -144,6 +145,32 @@ pub fn list_dir(path: &[u8]) -> Result<Vec<u8>, i32> {
     }
     bytes.truncate(got as usize);
     Ok(bytes)
+}
+
+#[inline]
+pub fn list_dir_typed(path: &[u8]) -> Result<TypedDirListing, i32> {
+    let len = unsafe {
+        vcabi::trueos_cabi_fs_typed_list_dir(path.as_ptr(), path.len(), core::ptr::null_mut(), 0)
+    };
+    if len < 0 {
+        return Err(len as i32);
+    }
+    let mut bytes = vec![0u8; len as usize];
+    let got = unsafe {
+        vcabi::trueos_cabi_fs_typed_list_dir(
+            path.as_ptr(),
+            path.len(),
+            bytes.as_mut_ptr(),
+            bytes.len(),
+        )
+    };
+    if got < 0 {
+        return Err(got as i32);
+    }
+    if got as usize != bytes.len() {
+        return Err(-2);
+    }
+    crate::vfs_async::decode_typed_dir_listing(bytes.as_slice())
 }
 
 #[inline]

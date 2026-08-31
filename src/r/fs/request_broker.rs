@@ -121,6 +121,12 @@ enum Request {
         path: String,
         completion: Completion<String>,
     },
+    TypedListDir {
+        id: u64,
+        disk: block::DeviceHandle,
+        path: String,
+        completion: Completion<super::trueosfs::DirListing>,
+    },
     Remove {
         id: u64,
         disk: block::DeviceHandle,
@@ -152,6 +158,7 @@ impl Request {
             Self::HtmlTree { id, .. } => (*id, "html-tree"),
             Self::JsonAll { id, .. } => (*id, "json-all"),
             Self::ListDir { id, .. } => (*id, "list-dir"),
+            Self::TypedListDir { id, .. } => (*id, "typed-list-dir"),
             Self::Remove { id, .. } => (*id, "remove"),
             Self::Exists { id, .. } => (*id, "exists"),
         }
@@ -262,8 +269,31 @@ pub fn stat(
     })
 }
 
-pub fn typed_stat(disk: block::DeviceHandle, path: String) -> core::result::Result<FsResult<(FsStat, crate::r::fs::trueosfs::ContentTypeId)>, BlockingRequestError> {
-    submit(|id, completion| Request::TypedStat { id, disk, path, completion })
+pub fn typed_stat(
+    disk: block::DeviceHandle,
+    path: String,
+) -> core::result::Result<
+    FsResult<(FsStat, crate::r::fs::trueosfs::ContentTypeId)>,
+    BlockingRequestError,
+> {
+    submit(|id, completion| Request::TypedStat {
+        id,
+        disk,
+        path,
+        completion,
+    })
+}
+
+pub fn typed_list_dir(
+    disk: block::DeviceHandle,
+    path: String,
+) -> core::result::Result<FsResult<super::trueosfs::DirListing>, BlockingRequestError> {
+    submit(|id, completion| Request::TypedListDir {
+        id,
+        disk,
+        path,
+        completion,
+    })
 }
 
 pub fn write_file_begin(
@@ -280,8 +310,20 @@ pub fn write_file_begin(
     })
 }
 
-pub fn write_file_begin_typed(disk: block::DeviceHandle, path: String, total_len: u64, content_type: crate::r::fs::trueosfs::ContentTypeId) -> core::result::Result<FsResult<u32>, BlockingRequestError> {
-    submit(|id, completion| Request::WriteFileBeginTyped { id, disk, path, total_len, content_type, completion })
+pub fn write_file_begin_typed(
+    disk: block::DeviceHandle,
+    path: String,
+    total_len: u64,
+    content_type: crate::r::fs::trueosfs::ContentTypeId,
+) -> core::result::Result<FsResult<u32>, BlockingRequestError> {
+    submit(|id, completion| Request::WriteFileBeginTyped {
+        id,
+        disk,
+        path,
+        total_len,
+        content_type,
+        completion,
+    })
 }
 
 pub fn create_dir_all(
@@ -453,10 +495,25 @@ async fn process_request(request: Request) {
             let result = stat_async(disk, path.as_str()).await;
             finish(id, "stat", completion, result);
         }
-        Request::TypedStat { id, disk, path, completion } => {
+        Request::TypedStat {
+            id,
+            disk,
+            path,
+            completion,
+        } => {
             let result = match super::trueosfs::node_info_async(disk, path.as_str()).await {
-                Ok(Some(info)) => Ok((FsStat { kind: match info.kind { super::trueosfs::NodeKind::File => FsNodeKind::File, super::trueosfs::NodeKind::Directory => FsNodeKind::Directory }, len: info.data_len }, info.content_type)),
-                Ok(None) => Err(FsError::NotFound), Err(error) => Err(error.into()),
+                Ok(Some(info)) => Ok((
+                    FsStat {
+                        kind: match info.kind {
+                            super::trueosfs::NodeKind::File => FsNodeKind::File,
+                            super::trueosfs::NodeKind::Directory => FsNodeKind::Directory,
+                        },
+                        len: info.data_len,
+                    },
+                    info.content_type,
+                )),
+                Ok(None) => Err(FsError::NotFound),
+                Err(error) => Err(error.into()),
             };
             finish(id, "typed-stat", completion, result);
         }
@@ -467,18 +524,45 @@ async fn process_request(request: Request) {
             total_len,
             completion,
         } => {
-            let result =
-                match super::trueosfs::file_write_begin_async(disk, path.as_str(), total_len).await
-                {
-                    Ok(Some(handle)) => Ok(handle),
-                    Ok(None) => Err(FsError::NoSpace),
-                    Err(error) => Err(error.into()),
-                };
+            let result = match super::trueosfs::file_info_async(disk, path.as_str()).await {
+                Ok(Some(info)) if info.content_type != super::trueosfs::ContentTypeId::BLOB => {
+                    super::trueosfs::record_type_reject(
+                        super::trueosfs::ContentIdentityRejectReason::LegacyDowngrade,
+                    );
+                    Err(FsError::TypeRequired)
+                }
+                Ok(_) => {
+                    match super::trueosfs::file_write_begin_async(disk, path.as_str(), total_len)
+                        .await
+                    {
+                        Ok(Some(handle)) => Ok(handle),
+                        Ok(None) => Err(FsError::NoSpace),
+                        Err(error) => Err(error.into()),
+                    }
+                }
+                Err(error) => Err(error.into()),
+            };
             finish(id, "write-file-begin", completion, result);
         }
-        Request::WriteFileBeginTyped { id, disk, path, total_len, content_type, completion } => {
-            let result = match super::trueosfs::file_write_begin_typed_async(disk, path.as_str(), total_len, content_type).await {
-                Ok(Some(handle)) => Ok(handle), Ok(None) => Err(FsError::NoSpace), Err(error) => Err(error.into()),
+        Request::WriteFileBeginTyped {
+            id,
+            disk,
+            path,
+            total_len,
+            content_type,
+            completion,
+        } => {
+            let result = match super::trueosfs::file_write_begin_typed_async(
+                disk,
+                path.as_str(),
+                total_len,
+                content_type,
+            )
+            .await
+            {
+                Ok(Some(handle)) => Ok(handle),
+                Ok(None) => Err(FsError::NoSpace),
+                Err(error) => Err(error.into()),
             };
             finish(id, "write-file-begin-typed", completion, result);
         }
@@ -568,6 +652,19 @@ async fn process_request(request: Request) {
                 Err(error) => Err(error.into()),
             };
             finish(id, "list-dir", completion, result);
+        }
+        Request::TypedListDir {
+            id,
+            disk,
+            path,
+            completion,
+        } => {
+            let result = match super::trueosfs::list_dir_async(disk, path.as_str()).await {
+                Ok(Some(value)) => Ok(value),
+                Ok(None) => Err(FsError::NoRoot),
+                Err(error) => Err(error.into()),
+            };
+            finish(id, "typed-list-dir", completion, result);
         }
         Request::Remove {
             id,

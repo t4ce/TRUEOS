@@ -123,7 +123,9 @@ fn encode_dir_listing(listing: &crate::r::fs::trueosfs::DirListing) -> Option<Ve
     Some(bytes)
 }
 
-fn encode_typed_dir_listing(listing: &crate::r::fs::trueosfs::DirListing) -> Option<Vec<u8>> {
+pub(crate) fn encode_typed_dir_listing(
+    listing: &crate::r::fs::trueosfs::DirListing,
+) -> Option<Vec<u8>> {
     let count = u32::try_from(listing.entries.len()).ok()?;
     let mut out = Vec::new();
     out.extend_from_slice(b"TDL2");
@@ -134,6 +136,19 @@ fn encode_typed_dir_listing(listing: &crate::r::fs::trueosfs::DirListing) -> Opt
         if entry.name.is_empty() || entry.name.contains('/') || entry.name.len() > u16::MAX as usize
         {
             return None;
+        }
+        match entry.kind {
+            crate::r::fs::trueosfs::NodeKind::File
+                if entry.content_type == crate::r::fs::trueosfs::ContentTypeId::NONE =>
+            {
+                return None;
+            }
+            crate::r::fs::trueosfs::NodeKind::Directory
+                if entry.content_type != crate::r::fs::trueosfs::ContentTypeId::NONE =>
+            {
+                return None;
+            }
+            _ => {}
         }
         out.push(match entry.kind {
             crate::r::fs::trueosfs::NodeKind::File => 1,
@@ -248,13 +263,7 @@ fn start_completed_read(owner: u32, bytes: Vec<u8>) -> i32 {
 }
 
 pub(crate) fn start_write(owner: u32, path: String, total_len: usize) -> i32 {
-    start_write_inner(
-        owner,
-        path,
-        total_len,
-        crate::r::fs::trueosfs::ContentTypeId::BLOB,
-        true,
-    )
+    start_write_inner(owner, path, total_len, crate::r::fs::trueosfs::ContentTypeId::BLOB, true)
 }
 
 pub(crate) fn start_write_typed(
@@ -656,8 +665,7 @@ async fn process(request: &Request) -> OperationState {
             if *legacy_blob {
                 match crate::r::fs::trueosfs::file_info_async(disk, selected_path).await {
                     Ok(Some(info))
-                        if info.content_type
-                            != crate::r::fs::trueosfs::ContentTypeId::BLOB =>
+                        if info.content_type != crate::r::fs::trueosfs::ContentTypeId::BLOB =>
                     {
                         crate::r::fs::trueosfs::record_type_reject(
                             crate::r::fs::trueosfs::ContentIdentityRejectReason::LegacyDowngrade,

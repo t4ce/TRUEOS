@@ -31,12 +31,21 @@ pub mod kfs {
     }
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub struct TypedFsStat {
+        pub kind: FsNodeKind,
+        pub len: u64,
+        pub content_type: crate::r::fs::trueosfs::ContentTypeId,
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     pub enum FsError {
         NoRoot,
         BadPath,
         NoSpace,
         NotFound,
         AlreadyExists,
+        TypeRequired,
+        TypeMismatch,
         Device(block::Error),
     }
 
@@ -121,10 +130,39 @@ pub mod kfs {
     }
 
     #[inline]
+    pub fn typed_stat(path: &str) -> Result<TypedFsStat> {
+        let disk = root_disk()?;
+        let name = normalize_rel(path, true)?;
+        let (stat, content_type) =
+            wait_for_filesystem(crate::r::fs::request_broker::typed_stat(disk, name))?;
+        Ok(TypedFsStat {
+            kind: stat.kind,
+            len: stat.len,
+            content_type,
+        })
+    }
+
+    #[inline]
     pub fn write_file_begin(path: &str, total_len: u64) -> Result<u32> {
         let disk = root_disk()?;
         let name = normalize_rel(path, false)?;
         wait_for_filesystem(crate::r::fs::request_broker::write_file_begin(disk, name, total_len))
+    }
+
+    #[inline]
+    pub fn write_file_begin_typed(
+        path: &str,
+        total_len: u64,
+        content_type: crate::r::fs::trueosfs::ContentTypeId,
+    ) -> Result<u32> {
+        let disk = root_disk()?;
+        let name = normalize_rel(path, false)?;
+        wait_for_filesystem(crate::r::fs::request_broker::write_file_begin_typed(
+            disk,
+            name,
+            total_len,
+            content_type,
+        ))
     }
 
     #[inline]
@@ -180,6 +218,13 @@ pub mod kfs {
         let disk = root_disk()?;
         let name = normalize_rel(path, true)?;
         wait_for_filesystem(crate::r::fs::request_broker::list_dir(disk, name))
+    }
+
+    #[inline]
+    pub fn list_dir_typed(path: &str) -> Result<crate::r::fs::trueosfs::DirListing> {
+        let disk = root_disk()?;
+        let name = normalize_rel(path, true)?;
+        wait_for_filesystem(crate::r::fs::request_broker::typed_list_dir(disk, name))
     }
 
     #[inline]

@@ -198,4 +198,7 @@
 # The UI4 frame-opacity setter is strictly additive. It applies one bounded
 # u8 opacity through the existing per-frame placement/compositor path; older
 # artifacts neither import it nor change their opaque-frame behavior.
-4400f826ad44ea8eea37f4dd68fa4c4b168a86ef5a0b81c426042f7596ceddcd
+# TRUEOSFS v3 typed write, typed stat, and TDL2 listing calls are strictly
+# additive. They carry stable raw content IDs while the established untyped
+# filesystem calls retain their Blob/metadata-omitting compatibility behavior.
+e6450d265183f952b89efcacf8be834b052e2e206ba294db380cc3fb1032a84b

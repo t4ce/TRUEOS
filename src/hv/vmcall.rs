@@ -134,6 +134,9 @@ pub const OP_BP_ASYNC_FS_RENAME_START: u32 = 0x13A; // payload src-len + resolve
 pub const OP_BP_ASYNC_FS_TYPED_STAT_START: u32 = 0x170; // payload resolved path -> typed metadata operation id/rc
 pub const OP_BP_ASYNC_FS_TYPED_LIST_DIR_START: u32 = 0x171; // payload resolved path -> TDL2 operation id/rc
 pub const OP_BP_ASYNC_FS_TYPED_WRITE_BEGIN: u32 = 0x172; // arg0 total bytes,arg1 content type,payload path
+pub const OP_BP_FS_TYPED_WRITE_BEGIN: u32 = 0x173; // arg0 total bytes,arg1 content type,payload path
+pub const OP_BP_FS_TYPED_STAT: u32 = 0x174; // payload path -> kind,len,content type
+pub const OP_BP_FS_TYPED_LIST_DIR: u32 = 0x175; // arg0 offset,arg1 cap,payload path -> TDL2 bytes
 pub const OP_BP_SHELL_ATTACHED_WAIT_READABLE: u32 = 0x13B; // arg0 timeout ms -> event-driven terminal wake
 // Generic same-archive child-Hull service.  Child handle 0 names the worker's
 // parent endpoint; nonzero handles are opaque parent-owned values.
@@ -4554,8 +4557,12 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 OP_BP_ASYNC_FS_LIST_DIR_START => {
                     crate::r::io::async_fs_cabi::start_list_dir(owner, path)
                 }
-                OP_BP_ASYNC_FS_TYPED_STAT_START => crate::r::io::async_fs_cabi::start_typed_stat(owner, path),
-                OP_BP_ASYNC_FS_TYPED_LIST_DIR_START => crate::r::io::async_fs_cabi::start_typed_list_dir(owner, path),
+                OP_BP_ASYNC_FS_TYPED_STAT_START => {
+                    crate::r::io::async_fs_cabi::start_typed_stat(owner, path)
+                }
+                OP_BP_ASYNC_FS_TYPED_LIST_DIR_START => {
+                    crate::r::io::async_fs_cabi::start_typed_list_dir(owner, path)
+                }
                 OP_BP_ASYNC_FS_RECORD_KEY_START => {
                     crate::r::io::async_fs_cabi::start_record_key(owner, path)
                 }
@@ -4658,6 +4665,44 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             write_response(vm_id, seq, STATUS_OK, out_n as u64, out_n as u32);
             DispatchOutcome::Resume
         }
+        OP_BP_FS_TYPED_LIST_DIR => {
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let path_bytes = unsafe { &(&(*p).payload)[..n] };
+            let Ok(path) = core::str::from_utf8(path_bytes) else {
+                write_response(
+                    vm_id,
+                    seq,
+                    STATUS_OK,
+                    (crate::r::io::cabi::FS_ERR_BAD_UTF8 as i64) as u64,
+                    0,
+                );
+                return DispatchOutcome::Resume;
+            };
+            let bytes = match crate::r::io::cabi::fs_typed_list_dir_host_bytes(path) {
+                Ok(bytes) => bytes,
+                Err(rc) => {
+                    write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+                    return DispatchOutcome::Resume;
+                }
+            };
+            if arg1 == 0 {
+                write_response(vm_id, seq, STATUS_OK, bytes.len() as u64, 0);
+                return DispatchOutcome::Resume;
+            }
+            let offset = core::cmp::min(arg0 as usize, bytes.len());
+            let want = core::cmp::min(arg1 as usize, PAYLOAD_CAP);
+            let end = core::cmp::min(offset.saturating_add(want), bytes.len());
+            let out_n = end.saturating_sub(offset);
+            unsafe {
+                (&mut (&mut (*p).payload)[..out_n]).copy_from_slice(&bytes[offset..end]);
+            }
+            write_response(vm_id, seq, STATUS_OK, out_n as u64, out_n as u32);
+            DispatchOutcome::Resume
+        }
         OP_BP_FS_READ_FILE => {
             let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
             let Some(p) = host_ptr(vm_id) else {
@@ -4705,6 +4750,28 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 return DispatchOutcome::Resume;
             };
             let rc = crate::r::io::cabi::fs_write_begin_host(path, arg0);
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_FS_TYPED_WRITE_BEGIN => {
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let path_bytes = unsafe { &(&(*p).payload)[..n] };
+            let Ok(path) = core::str::from_utf8(path_bytes) else {
+                write_response(
+                    vm_id,
+                    seq,
+                    STATUS_OK,
+                    (crate::r::io::cabi::FS_ERR_BAD_UTF8 as i64) as u64,
+                    0,
+                );
+                return DispatchOutcome::Resume;
+            };
+            let content_type = crate::r::fs::trueosfs::ContentTypeId::from_raw(arg1 as u32);
+            let rc = crate::r::io::cabi::fs_typed_write_begin_host(path, arg0, content_type);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
@@ -4789,6 +4856,44 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 0
             };
             write_response(vm_id, seq, STATUS_OK, data, out_len);
+            DispatchOutcome::Resume
+        }
+        OP_BP_FS_TYPED_STAT => {
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let path_bytes = unsafe { &(&(*p).payload)[..n] };
+            let Ok(path) = core::str::from_utf8(path_bytes) else {
+                write_response(
+                    vm_id,
+                    seq,
+                    STATUS_OK,
+                    (crate::r::io::cabi::FS_ERR_BAD_UTF8 as i64) as u64,
+                    0,
+                );
+                return DispatchOutcome::Resume;
+            };
+            let mut kind = 0u32;
+            let mut len = 0u64;
+            let mut content_type = 0u32;
+            let rc = crate::r::io::cabi::fs_typed_stat_host(
+                path,
+                &mut kind,
+                &mut len,
+                &mut content_type,
+            );
+            let out_len = if rc == 0 {
+                let payload = unsafe { &mut (&mut (*p).payload)[..16] };
+                payload[..4].copy_from_slice(&kind.to_le_bytes());
+                payload[4..12].copy_from_slice(&len.to_le_bytes());
+                payload[12..16].copy_from_slice(&content_type.to_le_bytes());
+                16
+            } else {
+                0
+            };
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, out_len);
             DispatchOutcome::Resume
         }
         OP_BP_FS_REMOVE => {

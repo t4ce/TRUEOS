@@ -356,6 +356,8 @@ fn fs_error_to_code(err: super::kfs::FsError) -> i32 {
         FsError::NoSpace => FS_ERR_NO_SPACE,
         FsError::NotFound => FS_ERR_NOT_FOUND,
         FsError::AlreadyExists => FS_ERR_ALREADY_EXISTS,
+        FsError::TypeRequired => FS_ERR_TYPE_REQUIRED,
+        FsError::TypeMismatch => FS_ERR_TYPE_MISMATCH,
         FsError::Device(e) => match e {
             crate::disc::block::Error::InvalidParam => FS_ERR_BAD_PARAM,
             crate::disc::block::Error::OutOfBounds => FS_ERR_BAD_PARAM,
@@ -578,6 +580,38 @@ pub(crate) fn fs_write_begin_host(path: &str, total_len: u64) -> i64 {
     }
 }
 
+pub(crate) fn fs_typed_write_begin_host(
+    path: &str,
+    total_len: u64,
+    content_type: crate::r::fs::trueosfs::ContentTypeId,
+) -> i64 {
+    if content_type == crate::r::fs::trueosfs::ContentTypeId::NONE {
+        crate::r::fs::trueosfs::record_type_reject(
+            crate::r::fs::trueosfs::ContentIdentityRejectReason::TypeRequired,
+        );
+        return FS_ERR_TYPE_REQUIRED as i64;
+    }
+    if !content_type.is_registered() {
+        crate::r::fs::trueosfs::record_type_reject(
+            crate::r::fs::trueosfs::ContentIdentityRejectReason::UnregisteredType,
+        );
+        return FS_ERR_BAD_PARAM as i64;
+    }
+    if path.len() > BLUEPRINT_ASYNC_FS_MAX_PATH {
+        return FS_ERR_TOO_LARGE as i64;
+    }
+    let Some(path) = super::env::resolve_fs_path(path, false) else {
+        return FS_ERR_BAD_PATH as i64;
+    };
+    if path.len() > BLUEPRINT_ASYNC_FS_MAX_PATH {
+        return FS_ERR_TOO_LARGE as i64;
+    }
+    match super::kfs::write_file_begin_typed(path.as_str(), total_len, content_type) {
+        Ok(handle) => handle as i64,
+        Err(error) => fs_error_to_code(error) as i64,
+    }
+}
+
 pub(crate) fn fs_write_chunk_host(handle: u32, data: &[u8]) -> i32 {
     match super::kfs::write_file_chunk(handle, data) {
         Ok(()) => 0,
@@ -759,6 +793,35 @@ pub(crate) fn fs_stat_host(path: &str, out_kind: &mut u32, out_len: &mut u64) ->
     }
 }
 
+pub(crate) fn fs_typed_stat_host(
+    path: &str,
+    out_kind: &mut u32,
+    out_len: &mut u64,
+    out_content_type: &mut u32,
+) -> i32 {
+    if path.len() > BLUEPRINT_ASYNC_FS_MAX_PATH {
+        return FS_ERR_TOO_LARGE;
+    }
+    let Some(path) = super::env::resolve_fs_path(path, true) else {
+        return FS_ERR_BAD_PATH;
+    };
+    if path.len() > BLUEPRINT_ASYNC_FS_MAX_PATH {
+        return FS_ERR_TOO_LARGE;
+    }
+    match super::kfs::typed_stat(path.as_str()) {
+        Ok(stat) => {
+            *out_kind = match stat.kind {
+                super::kfs::FsNodeKind::File => 1,
+                super::kfs::FsNodeKind::Directory => 2,
+            };
+            *out_len = stat.len;
+            *out_content_type = stat.content_type.raw();
+            0
+        }
+        Err(error) => fs_error_to_code(error),
+    }
+}
+
 pub(crate) fn fs_list_dir_host_text(path: &str) -> core::result::Result<String, i32> {
     if path.len() > BLUEPRINT_ASYNC_FS_MAX_PATH {
         log_fs_cabi_path_fail(
@@ -798,6 +861,27 @@ pub(crate) fn fs_list_dir_host_text(path: &str) -> core::result::Result<String, 
 pub(crate) fn fs_list_dir_host(path: &str, out_ptr: *mut u8, out_cap: usize) -> isize {
     match fs_list_dir_host_text(path) {
         Ok(text) => unsafe { copy_text(text.as_bytes(), out_ptr, out_cap) },
+        Err(rc) => rc as isize,
+    }
+}
+
+pub(crate) fn fs_typed_list_dir_host_bytes(path: &str) -> core::result::Result<Vec<u8>, i32> {
+    if path.len() > BLUEPRINT_ASYNC_FS_MAX_PATH {
+        return Err(FS_ERR_TOO_LARGE);
+    }
+    let Some(path) = super::env::resolve_fs_path(path, true) else {
+        return Err(FS_ERR_BAD_PATH);
+    };
+    if path.len() > BLUEPRINT_ASYNC_FS_MAX_PATH {
+        return Err(FS_ERR_TOO_LARGE);
+    }
+    let listing = super::kfs::list_dir_typed(path.as_str()).map_err(fs_error_to_code)?;
+    super::async_fs_cabi::encode_typed_dir_listing(&listing).ok_or(FS_ERR_IO)
+}
+
+pub(crate) fn fs_typed_list_dir_host(path: &str, out_ptr: *mut u8, out_cap: usize) -> isize {
+    match fs_typed_list_dir_host_bytes(path) {
+        Ok(bytes) => unsafe { copy_text(bytes.as_slice(), out_ptr, out_cap) },
         Err(rc) => rc as isize,
     }
 }
@@ -911,6 +995,35 @@ fn guest_fs_write_begin(path_bytes: &[u8], total_len: u64, out_handle: *mut u32)
     0
 }
 
+fn guest_fs_typed_write_begin(
+    path_bytes: &[u8],
+    total_len: u64,
+    content_type: u32,
+    out_handle: *mut u32,
+) -> i32 {
+    if path_bytes.len() > trueos_vm::vmcall::PAYLOAD_CAP {
+        return FS_ERR_TOO_LARGE;
+    }
+    let (status, data) = trueos_vm::vmcall::call_with_payload(
+        trueos_vm::vmcall::OP_BP_FS_TYPED_WRITE_BEGIN,
+        total_len,
+        u64::from(content_type),
+        path_bytes,
+        &mut [],
+    );
+    if status != trueos_vm::vmcall::STATUS_OK {
+        return FS_ERR_BAD_PARAM;
+    }
+    let rc = data as i64;
+    if rc <= 0 {
+        return rc as i32;
+    }
+    unsafe {
+        *out_handle = rc as u32;
+    }
+    0
+}
+
 fn guest_fs_write_chunk(handle: u32, data: &[u8]) -> i32 {
     let mut offset = 0usize;
     while offset < data.len() {
@@ -984,19 +1097,53 @@ fn guest_fs_stat(path_bytes: &[u8], out_kind: *mut u32, out_len: *mut u64) -> i3
     0
 }
 
-unsafe fn guest_fs_list_dir(path_bytes: &[u8], out_ptr: *mut u8, out_cap: usize) -> isize {
+fn guest_fs_typed_stat(
+    path_bytes: &[u8],
+    out_kind: *mut u32,
+    out_len: *mut u64,
+    out_content_type: *mut u32,
+) -> i32 {
+    if out_kind.is_null() || out_len.is_null() || out_content_type.is_null() {
+        return FS_ERR_BAD_PARAM;
+    }
+    if path_bytes.len() > trueos_vm::vmcall::PAYLOAD_CAP {
+        return FS_ERR_TOO_LARGE;
+    }
+    let mut out = [0u8; 16];
+    let (status, data) = trueos_vm::vmcall::call_with_payload(
+        trueos_vm::vmcall::OP_BP_FS_TYPED_STAT,
+        0,
+        0,
+        path_bytes,
+        &mut out,
+    );
+    if status != trueos_vm::vmcall::STATUS_OK {
+        return FS_ERR_BAD_PARAM;
+    }
+    let rc = vmcall_signed_i32(data);
+    if rc != 0 {
+        return rc;
+    }
+    unsafe {
+        *out_kind = u32::from_le_bytes(out[0..4].try_into().unwrap());
+        *out_len = u64::from_le_bytes(out[4..12].try_into().unwrap());
+        *out_content_type = u32::from_le_bytes(out[12..16].try_into().unwrap());
+    }
+    0
+}
+
+unsafe fn guest_fs_list_dir_with_op(
+    op: u32,
+    path_bytes: &[u8],
+    out_ptr: *mut u8,
+    out_cap: usize,
+) -> isize {
     if path_bytes.len() > trueos_vm::vmcall::PAYLOAD_CAP {
         return FS_ERR_TOO_LARGE as isize;
     }
 
     let mut probe = [0u8; trueos_vm::vmcall::PAYLOAD_CAP];
-    let (status, len) = trueos_vm::vmcall::call_with_payload(
-        trueos_vm::vmcall::OP_BP_FS_LIST_DIR,
-        0,
-        0,
-        path_bytes,
-        &mut probe,
-    );
+    let (status, len) = trueos_vm::vmcall::call_with_payload(op, 0, 0, path_bytes, &mut probe);
     if status != trueos_vm::vmcall::STATUS_OK {
         return FS_ERR_BAD_PARAM as isize;
     }
@@ -1018,7 +1165,7 @@ unsafe fn guest_fs_list_dir(path_bytes: &[u8], out_ptr: *mut u8, out_cap: usize)
         let mut bytes = [0u8; trueos_vm::vmcall::PAYLOAD_CAP];
         let want = core::cmp::min(trueos_vm::vmcall::PAYLOAD_CAP, len - offset);
         let (status, got) = trueos_vm::vmcall::call_with_payload(
-            trueos_vm::vmcall::OP_BP_FS_LIST_DIR,
+            op,
             offset as u64,
             want as u64,
             path_bytes,
@@ -1040,6 +1187,28 @@ unsafe fn guest_fs_list_dir(path_bytes: &[u8], out_ptr: *mut u8, out_cap: usize)
     }
 
     offset as isize
+}
+
+unsafe fn guest_fs_list_dir(path_bytes: &[u8], out_ptr: *mut u8, out_cap: usize) -> isize {
+    unsafe {
+        guest_fs_list_dir_with_op(
+            trueos_vm::vmcall::OP_BP_FS_LIST_DIR,
+            path_bytes,
+            out_ptr,
+            out_cap,
+        )
+    }
+}
+
+unsafe fn guest_fs_typed_list_dir(path_bytes: &[u8], out_ptr: *mut u8, out_cap: usize) -> isize {
+    unsafe {
+        guest_fs_list_dir_with_op(
+            trueos_vm::vmcall::OP_BP_FS_TYPED_LIST_DIR,
+            path_bytes,
+            out_ptr,
+            out_cap,
+        )
+    }
 }
 
 fn guest_resolved_fs_path(path: &str, allow_empty: bool) -> Result<String, i32> {
@@ -1130,22 +1299,51 @@ pub unsafe extern "C" fn trueos_cabi_fs_write_begin(
 }
 
 #[unsafe(export_name = "trueos_kernel_sync_fs_typed_write_begin")]
-pub unsafe extern "C" fn trueos_cabi_fs_typed_write_begin(path_ptr: *const u8, path_len: usize, total_len: u64, content_type: u32, out_handle: *mut u32) -> i32 {
-    if out_handle.is_null() { return FS_ERR_BAD_PARAM; }
-    let id = crate::r::fs::trueosfs::ContentTypeId::from_raw(content_type);
-    if id == crate::r::fs::trueosfs::ContentTypeId::NONE { return FS_ERR_TYPE_REQUIRED; }
-    if !id.is_registered() { return FS_ERR_BAD_PARAM; }
-    if path_ptr.is_null() && path_len != 0 { return FS_ERR_BAD_PARAM; }
-    let path_bytes = unsafe { core::slice::from_raw_parts(path_ptr, path_len) };
-    let Ok(path) = core::str::from_utf8(path_bytes) else { return FS_ERR_BAD_UTF8; };
-    if crate::hv::current_hull_guest_context_vm_id().is_some() { return FS_ERR_BAD_PARAM; }
-    let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else { return FS_ERR_NOT_FOUND; };
-    let Ok(path) = crate::r::path::FsPath::parse(path, false).map(|p| p.to_relative_string()) else { return FS_ERR_BAD_PATH; };
-    match crate::r::fs::request_broker::write_file_begin_typed(disk, path, total_len, id) {
-        Ok(Ok(handle)) => { unsafe { *out_handle = handle; } 0 }
-        Ok(Err(error)) => fs_error_to_code(error),
-        Err(_) => FS_ERR_IO,
+pub unsafe extern "C" fn trueos_cabi_fs_typed_write_begin(
+    path_ptr: *const u8,
+    path_len: usize,
+    total_len: u64,
+    content_type: u32,
+    out_handle: *mut u32,
+) -> i32 {
+    if out_handle.is_null() || (path_ptr.is_null() && path_len != 0) {
+        return FS_ERR_BAD_PARAM;
     }
+    if path_len > BLUEPRINT_ASYNC_FS_MAX_PATH {
+        return FS_ERR_TOO_LARGE;
+    }
+    let id = crate::r::fs::trueosfs::ContentTypeId::from_raw(content_type);
+    if id == crate::r::fs::trueosfs::ContentTypeId::NONE {
+        crate::r::fs::trueosfs::record_type_reject(
+            crate::r::fs::trueosfs::ContentIdentityRejectReason::TypeRequired,
+        );
+        return FS_ERR_TYPE_REQUIRED;
+    }
+    if !id.is_registered() {
+        crate::r::fs::trueosfs::record_type_reject(
+            crate::r::fs::trueosfs::ContentIdentityRejectReason::UnregisteredType,
+        );
+        return FS_ERR_BAD_PARAM;
+    }
+    let path_bytes = unsafe { core::slice::from_raw_parts(path_ptr, path_len) };
+    let Ok(path) = core::str::from_utf8(path_bytes) else {
+        return FS_ERR_BAD_UTF8;
+    };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let path = match guest_resolved_fs_path(path, false) {
+            Ok(path) => path,
+            Err(rc) => return rc,
+        };
+        return guest_fs_typed_write_begin(path.as_bytes(), total_len, content_type, out_handle);
+    }
+    let rc = fs_typed_write_begin_host(path, total_len, id);
+    if rc <= 0 {
+        return rc as i32;
+    }
+    unsafe {
+        *out_handle = rc as u32;
+    }
+    0
 }
 
 #[unsafe(export_name = "trueos_kernel_sync_fs_create_dir_all")]
@@ -1267,17 +1465,35 @@ pub unsafe extern "C" fn trueos_cabi_fs_stat(
 }
 
 #[unsafe(export_name = "trueos_kernel_sync_fs_typed_stat")]
-pub unsafe extern "C" fn trueos_cabi_fs_typed_stat(path_ptr: *const u8, path_len: usize, out_kind: *mut u32, out_len: *mut u64, out_content_type: *mut u32) -> i32 {
-    if out_kind.is_null() || out_len.is_null() || out_content_type.is_null() || (path_ptr.is_null() && path_len != 0) { return FS_ERR_BAD_PARAM; }
-    let bytes = unsafe { core::slice::from_raw_parts(path_ptr, path_len) };
-    let Ok(raw) = core::str::from_utf8(bytes) else { return FS_ERR_BAD_UTF8; };
-    if crate::hv::current_hull_guest_context_vm_id().is_some() { return FS_ERR_BAD_PARAM; }
-    let Ok(path) = crate::r::path::FsPath::parse(raw, true).map(|p| p.to_relative_string()) else { return FS_ERR_BAD_PATH; };
-    let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else { return FS_ERR_NOT_FOUND; };
-    match crate::r::fs::request_broker::typed_stat(disk, path) {
-        Ok(Ok((stat, id))) => { unsafe { *out_kind = match stat.kind { crate::r::io::kfs::FsNodeKind::File => 1, crate::r::io::kfs::FsNodeKind::Directory => 2 }; *out_len = stat.len; *out_content_type = id.raw(); } 0 }
-        Ok(Err(error)) => fs_error_to_code(error), Err(_) => FS_ERR_IO,
+pub unsafe extern "C" fn trueos_cabi_fs_typed_stat(
+    path_ptr: *const u8,
+    path_len: usize,
+    out_kind: *mut u32,
+    out_len: *mut u64,
+    out_content_type: *mut u32,
+) -> i32 {
+    if out_kind.is_null()
+        || out_len.is_null()
+        || out_content_type.is_null()
+        || (path_ptr.is_null() && path_len != 0)
+    {
+        return FS_ERR_BAD_PARAM;
     }
+    if path_len > BLUEPRINT_ASYNC_FS_MAX_PATH {
+        return FS_ERR_TOO_LARGE;
+    }
+    let bytes = unsafe { core::slice::from_raw_parts(path_ptr, path_len) };
+    let Ok(path) = core::str::from_utf8(bytes) else {
+        return FS_ERR_BAD_UTF8;
+    };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let path = match guest_resolved_fs_path(path, true) {
+            Ok(path) => path,
+            Err(rc) => return rc,
+        };
+        return guest_fs_typed_stat(path.as_bytes(), out_kind, out_len, out_content_type);
+    }
+    unsafe { fs_typed_stat_host(path, &mut *out_kind, &mut *out_len, &mut *out_content_type) }
 }
 
 #[unsafe(export_name = "trueos_kernel_sync_fs_list_dir")]
@@ -1305,6 +1521,33 @@ pub unsafe extern "C" fn trueos_cabi_fs_list_dir(
         return unsafe { guest_fs_list_dir(path.as_bytes(), out_ptr, out_cap) };
     }
     fs_list_dir_host(path, out_ptr, out_cap)
+}
+
+#[unsafe(export_name = "trueos_kernel_sync_fs_typed_list_dir")]
+pub unsafe extern "C" fn trueos_cabi_fs_typed_list_dir(
+    path_ptr: *const u8,
+    path_len: usize,
+    out_ptr: *mut u8,
+    out_cap: usize,
+) -> isize {
+    if path_ptr.is_null() && path_len != 0 {
+        return FS_ERR_BAD_PARAM as isize;
+    }
+    if path_len > BLUEPRINT_ASYNC_FS_MAX_PATH {
+        return FS_ERR_TOO_LARGE as isize;
+    }
+    let path_bytes = unsafe { core::slice::from_raw_parts(path_ptr, path_len) };
+    let Ok(path) = core::str::from_utf8(path_bytes) else {
+        return FS_ERR_BAD_UTF8 as isize;
+    };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let path = match guest_resolved_fs_path(path, true) {
+            Ok(path) => path,
+            Err(rc) => return rc as isize,
+        };
+        return unsafe { guest_fs_typed_list_dir(path.as_bytes(), out_ptr, out_cap) };
+    }
+    fs_typed_list_dir_host(path, out_ptr, out_cap)
 }
 
 #[unsafe(export_name = "trueos_kernel_sync_fs_remove")]

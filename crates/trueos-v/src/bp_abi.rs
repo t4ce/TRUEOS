@@ -814,6 +814,12 @@ unsafe extern "C" {
         out_len: *mut u64,
         out_content_type: *mut u32,
     ) -> i32;
+    pub fn trueos_cabi_fs_typed_list_dir(
+        path_ptr: *const u8,
+        path_len: usize,
+        out_ptr: *mut u8,
+        out_cap: usize,
+    ) -> isize;
     pub fn trueos_cabi_fs_write_chunk(handle: u32, data_ptr: *const u8, data_len: usize) -> i32;
     pub fn trueos_cabi_fs_write_finish(handle: u32) -> i32;
     pub fn trueos_cabi_fs_write_abort(handle: u32) -> i32;

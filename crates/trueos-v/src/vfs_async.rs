@@ -45,11 +45,22 @@ pub struct DirEntry {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct TypedMetadata { pub kind: NodeKind, pub len: u64, pub content_type: ContentTypeId }
+pub struct TypedMetadata {
+    pub kind: NodeKind,
+    pub len: u64,
+    pub content_type: ContentTypeId,
+}
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TypedDirEntry { pub name: String, pub kind: NodeKind, pub content_type: ContentTypeId }
+pub struct TypedDirEntry {
+    pub name: String,
+    pub kind: NodeKind,
+    pub content_type: ContentTypeId,
+}
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct TypedDirListing { pub entries: Vec<TypedDirEntry>, pub truncated: bool }
+pub struct TypedDirListing {
+    pub entries: Vec<TypedDirEntry>,
+    pub truncated: bool,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DirListing {
@@ -271,7 +282,7 @@ fn decode_dir_listing(bytes: &[u8]) -> Result<DirListing, i32> {
     })
 }
 
-fn decode_typed_dir_listing(bytes: &[u8]) -> Result<TypedDirListing, i32> {
+pub(crate) fn decode_typed_dir_listing(bytes: &[u8]) -> Result<TypedDirListing, i32> {
     if bytes.len() < DIR_LIST_HEADER_BYTES || bytes[..4] != TYPED_DIR_LIST_MAGIC {
         return Err(ERR_IO);
     }
@@ -592,7 +603,9 @@ pub async fn list_dir_typed(path: &[u8]) -> Result<TypedDirListing, i32> {
     decode_typed_dir_listing(&bytes)
 }
 
-pub async fn typed_list_dir(path: &[u8]) -> Result<TypedDirListing, i32> { list_dir_typed(path).await }
+pub async fn typed_list_dir(path: &[u8]) -> Result<TypedDirListing, i32> {
+    list_dir_typed(path).await
+}
 
 /// Read the access key persisted in a TRUEOSFS file's on-disk record header.
 pub async fn record_key(path: &[u8]) -> Result<RecordKey, i32> {
