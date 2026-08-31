@@ -413,8 +413,6 @@ pub(crate) async fn gna_audio_frontend_service_task() {
         "gna-audio-front-end: online microphone_owner=hda-capture-lane pcm=s16le-48k-interleaved role=gna-consumer-only path=hda-capture->gna3(noise-reduction,vad,wake-word)->speech-detected sink=global-log poll_softcap_ms={} wake_log_softcap_ms={} inference=awaiting-hardware-owner fail_closed=1\n",
         POLL_SOFTCAP_MS,
         WAKE_LOG_SOFTCAP_MS,
-        "gna-audio-front-end: online path=hda-microphone->gna3(noise-reduction,vad,wake-word)->speech-detected sink=global-log poll_softcap_ms={} wake_log_softcap_ms={} inference=awaiting-hardware-owner fail_closed=1\n",
-        POLL_SOFTCAP_MS, WAKE_LOG_SOFTCAP_MS,
     ));
 
     let mut capture_spawned = false;
