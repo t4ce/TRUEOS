@@ -12,6 +12,7 @@ const LANE_FREE: u8 = 0;
 const LANE_VM_HULL: u8 = 1;
 const LANE_TOKIO_BLOCKING: u8 = 2;
 const LANE_WORKER: u8 = 3;
+const LANE_QUARANTINED: u8 = u8::MAX;
 
 static LANE_OWNER: [AtomicU8; crate::allcaps::hv::VM_CPU_SLOT_LIMIT] =
     [const { AtomicU8::new(LANE_FREE) }; crate::allcaps::hv::VM_CPU_SLOT_LIMIT];
@@ -94,6 +95,26 @@ impl LaneLease {
         if !self.armed {
             return;
         }
+
+        if self.role == LaneRole::VmHull && !crate::hv::vpid::lane_reusable(self.slot as usize) {
+            if let Some(owner) = LANE_OWNER.get(self.slot as usize) {
+                let _ = owner.compare_exchange(
+                    self.role.code(),
+                    LANE_QUARANTINED,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                );
+            }
+            crate::hv::hverrorf(format_args!(
+                "hv: lane quarantine slot={} role={} vpid_state={} action=deny-executor-reuse-until-reboot",
+                self.slot,
+                self.role.owner_label(),
+                crate::hv::vpid::lane_state_name(self.slot as usize),
+            ));
+            self.armed = false;
+            return;
+        }
+
         drop(self.wls_identity.take());
         if let Some(owner) = LANE_OWNER.get(self.slot as usize) {
             if owner
@@ -109,6 +130,10 @@ impl LaneLease {
 
     pub(crate) fn release_now(&mut self) {
         self.release();
+    }
+
+    pub(crate) const fn slot(&self) -> u32 {
+        self.slot
     }
 
     pub(crate) fn enter_wls(&self) -> crate::wls::WorkerIdentityGuard {

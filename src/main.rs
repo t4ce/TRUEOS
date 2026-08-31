@@ -11,6 +11,7 @@ pub extern crate alloc;
 
 // Modules
 mod ai;
+mod aes_ni;
 mod allcaps;
 mod allocators;
 pub mod allports;
@@ -155,6 +156,8 @@ pub extern "C" fn kmain() -> ! {
         crate::log_os::flags::UI4_DIAG_PROFILE_ENABLED as u8,
     );
     exceptions::init();
+    // Keep the IDT live before the CPUID-gated instruction KAT executes.
+    let _ = aes_ni::boot_probe_once();
     if crate::log_os::flags::BOOT_INFO_LOGS {
         crate::log!("long_mode_active: {}\n", cpu::long_mode_active());
     }

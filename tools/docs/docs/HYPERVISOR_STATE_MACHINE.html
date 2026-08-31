@@ -548,7 +548,7 @@
                 <rect width="174" height="55" rx="10"/>
                 <circle class="status-led" cx="157" cy="17" r="3"/>
                 <text class="name" x="13" y="21">VMX lane scheduler</text>
-                <text class="detail" x="13" y="39">reserved AP · VMCS · control kick</text>
+                <text class="detail" x="13" y="39">reserved AP · VMCS · VPID</text>
               </g>
               <g class="component" data-component="store" tabindex="0" transform="translate(58 414)">
                 <rect width="174" height="55" rx="10"/>
@@ -892,6 +892,7 @@
                 <tr><td>UI4, GPU, audio, device</td><td><span class="policy drop">release</span></td><td>Recreate for VM owner</td></tr>
                 <tr><td>In-flight fetch / FS write</td><td><span class="policy drop">drain</span></td><td>Restart by app policy</td></tr>
                 <tr><td>Instance + lineage identity</td><td><span class="policy keep">retain</span></td><td>Generation increments</td></tr>
+                <tr><td>VPID / cached translations</td><td><span class="policy drop">invalidate / discard</span></td><td>Lane assigns a nonzero tag; <code>INVVPID</code> and EPTP <code>INVEPT</code> precede first entry</td></tr>
               </tbody>
             </table>
             <div class="fs-callout" style="margin-top:18px">
@@ -900,7 +901,7 @@
           </div>
           <div class="source-strip">
             <strong>Grounded in</strong>
-            <code>src/hv/mod.rs · src/hv/snapshot.rs · TRUEOS-Blueprints/docs/replicatable-blueprints.md</code>
+            <code>src/hv/mod.rs · src/hv/vpid.rs · src/hv/snapshot.rs · TRUEOS-Blueprints/docs/replicatable-blueprints.md</code>
           </div>
         </article>
       </section>
@@ -1049,7 +1050,7 @@
         f2: ["Orchestrator", "F2 Apps / Shell2", "The user-facing control plane lists capable instances and issues launch, pause, direct resume, snapshot, load, preserve and stop requests. It never assumes VM0.", "src/hv/mod.rs · src/shell2"],
         admission: ["Host component", "Artifact admission", "Parses TRBP, decompresses the Blueprint, requires ELF REL, inspects imports, validates ABI shape, selects a memory profile, and materializes packaged assets.", "src/hv/blueprint · src/shell2/cmds/run.rs"],
         lifecycle: ["Host component", "Lifecycle controller", "Tracks Running → PreparePause → Ready and selects retained-pause or durable-snapshot disposition by reason. Operation IDs and a 15-second deadline reject stale acknowledgements.", "src/hv/mod.rs"],
-        scheduler: ["Host component", "VMX lane scheduler", "Assigns a reserved AP execution lane and maintains per-slot VMXON/VMCS backing. Targeted lifecycle kicks force an observable VM exit.", "src/hv/guest_work.rs · src/hv/control_kick.rs"],
+        scheduler: ["Host component", "VMX lane scheduler", "Assigns a reserved AP execution lane and maintains per-slot VMXON/VMCS backing. Each active assignment is tagged with lane-local (VPID, VM owner, run generation) metadata. Single-context INVVPID fences first entry, restore/reassignment, retirement, and reuse; single-context INVEPT separately fences each rebuilt EPTP before entry. A failed fence quarantines the lane. VPID is disposable acceleration state, never VM identity or snapshot data. Targeted lifecycle kicks force an observable VM exit.", "src/hv/guest_work.rs · src/hv/lane.rs · src/hv/vpid.rs · src/hv/control_kick.rs"],
         store: ["Host component", "Checkpoint store", "Stores independent snapshot streams per VM slot. Plain pause never writes it; snapshot, raw preserve, and accepted peer fetches create committed entries.", "src/hv/store.rs"],
         trueosfs: ["Host component", "TRUEOSFS service", "Performs storage work away from the Blueprint lane. App calls poll lightweight operation state and retrieve bounded results.", "crates/trueos-v/src/vfs_async.rs"],
         cleanup: ["Host component", "Owner cleanup", "Releases host capabilities by VM principal during terminal teardown. Pause may retain explicitly managed state, but handles still follow their lifecycle policy.", "src/hv/mod.rs: teardown"],

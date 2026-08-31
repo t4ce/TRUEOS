@@ -15,6 +15,7 @@ pub mod sync;
 pub mod vmcall;
 pub mod vmx;
 pub mod vnet;
+pub mod vpid;
 
 use crate::hv::vmx::*;
 
@@ -306,7 +307,7 @@ fn maybe_log_vmx_core_contract_summary(revision: u32) {
     }
 
     hvlogf(format_args!(
-        "hv: vmx core-contract summary slots={}..{} active={}/{} revision=0x{:08X} vmxon_pa_span=0x{:016X}-0x{:016X}",
+        "hv: vmx core-contract summary slots={}..{} active={}/{} revision=0x{:08X} vmxon_pa_span=0x{:016X}-0x{:016X} vpid=required",
         FIRST_VMX_SLOT,
         topology_slots - 1,
         active,
@@ -341,6 +342,15 @@ pub fn enter_vmx_root_for_current_cpu_contract() -> Result<(), &'static str> {
         return Err("vmxon");
     }
 
+    if let Err(error) = vpid::initialize_current_lane() {
+        let vmxoff = vmx::vmxoff();
+        hverrorf(format_args!(
+            "hv: vmx core-contract failed slot={} stage=vpid reason={} cleanup_vmxoff={}",
+            slot, error, vmxoff as u8
+        ));
+        return Err(error);
+    }
+
     VMXON_PA_BY_CPU[slot].store(vmxon_pa, Ordering::Release);
     VMX_ROOT_ACTIVE_BY_CPU[slot].store(true, Ordering::Release);
     if slot >= 2 {
@@ -359,12 +369,14 @@ pub fn leave_vmx_root_for_current_cpu_contract() -> Result<bool, &'static str> {
     if slot <= 1 || !VMX_ROOT_ACTIVE_BY_CPU[slot].load(Ordering::Acquire) {
         return Ok(false);
     }
+    vpid::prepare_current_lane_for_vmxoff()?;
     if !vmx::vmxoff() {
         return Err("vmxoff");
     }
     VMX_EXTERNAL_INTERRUPT_EXITING_BY_CPU[slot].store(false, Ordering::Release);
     VMXON_PA_BY_CPU[slot].store(0, Ordering::Release);
     VMX_ROOT_ACTIVE_BY_CPU[slot].store(false, Ordering::Release);
+    vpid::mark_current_lane_offline()?;
     Ok(true)
 }
 
@@ -5851,7 +5863,12 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
         boot_mode,
         memory::active_guest_stack_mb_for_vm(vm_id)
     );
-    let launch_result = vmx_launch_once_with_ept(lineage_record).await;
+    let launch_result = vmx_launch_once_with_ept(
+        lineage_record,
+        lane_lease.slot() as usize,
+        vm.run_generation.load(Ordering::Acquire),
+    )
+    .await;
     if let Ok(lr) = launch_result {
         capture_snapshot_meta(vm_id, lr);
     }
@@ -6089,9 +6106,10 @@ fn vmx_caps() -> (bool, bool, bool, bool, bool) {
 
 async fn vmx_launch_once_with_ept(
     lineage_record: LineageRecord,
+    expected_lane_slot: usize,
+    generation: u64,
 ) -> Result<LaunchResult, &'static str> {
     let vm_id = current_vm_id().ok_or("vm context missing")?;
-    let vm = vm_slot(vm_id);
     if !current_vmx_root_active()? {
         hvlogf(format_args!(
             "hv: vm{} reporting: vmx launch aborted: core contract not active slot={}",
@@ -6100,6 +6118,28 @@ async fn vmx_launch_once_with_ept(
         ));
         return Err("vmx core contract inactive");
     }
+
+    let assignment = vpid::assign_current_lane(vm_id, generation, expected_lane_slot)?;
+    let run_result = vmx_launch_once_with_ept_vpid(lineage_record, &assignment).await;
+    if let Err(retire_error) = assignment.retire() {
+        if let Err(run_error) = &run_result {
+            hverrorf(format_args!(
+                "hv: vm{} reporting: VPID retirement superseded VM run error={} retirement_error={}",
+                vm_id, run_error, retire_error
+            ));
+        }
+        return Err(retire_error);
+    }
+    run_result
+}
+
+async fn vmx_launch_once_with_ept_vpid(
+    lineage_record: LineageRecord,
+    assignment: &vpid::VpidAssignment,
+) -> Result<LaunchResult, &'static str> {
+    let vm_id = current_vm_id().ok_or("vm context missing")?;
+    let vm = vm_slot(vm_id);
+    let vpid = assignment.vpid();
 
     let basic = unsafe { Msr::new(crate::hv::vmx::IA32_VMX_BASIC).read() };
     let revision = (basic & 0x7fff_ffff) as u32;
@@ -6129,12 +6169,13 @@ async fn vmx_launch_once_with_ept(
         Ok(v) => v,
         Err(e) => return Err(e),
     };
+    assignment.fence_ept(eptp)?;
     let reset_vmcall_transport = active_restore_meta(vm_id).is_none();
     if !crate::hv::vmcall::prepare_for_vm(vm_id, reset_vmcall_transport) {
         return Err("vmcall comm page");
     }
     let preemption_timer_enabled =
-        setup_vmcs_for_launch(vm_id, eptp, lineage_record, boot_mode_for_vm(vm_id))?;
+        setup_vmcs_for_launch(vm_id, vpid, eptp, lineage_record, boot_mode_for_vm(vm_id))?;
     let preemption_timer_ticks = preemption_timer_enabled.then(|| {
         let (ticks, rate_shift) =
             vmx_preemption_timer_ticks(crate::allcaps::hv::VMX_LIFECYCLE_PREEMPTION_QUANTUM_MS);
@@ -6170,6 +6211,7 @@ async fn vmx_launch_once_with_ept(
             break;
         }
 
+        assignment.verify_entry_lane()?;
         if let Some(ticks) = preemption_timer_ticks {
             vmwrite(VMCS_GUEST_VMCS_PREEMPT_TIMER, ticks as u64)?;
         }
@@ -6667,10 +6709,14 @@ fn handle_guest_wrmsr(vm_id: u8, guest_rip: u64) -> Result<bool, &'static str> {
 
 fn setup_vmcs_for_launch(
     vm_id: u8,
+    vpid: u16,
     eptp: u64,
     lineage_record: LineageRecord,
     boot_mode: VmBootMode,
 ) -> Result<bool, &'static str> {
+    if vpid == 0 {
+        return Err("zero VPID is forbidden");
+    }
     let current_cpu_slot = crate::percpu::current_slot();
     if let Some(slot) = VMX_EXTERNAL_INTERRUPT_EXITING_BY_CPU.get(current_cpu_slot) {
         slot.store(false, Ordering::Release);
@@ -6712,7 +6758,7 @@ fn setup_vmcs_for_launch(
     );
     let proc2 = crate::hv::vmx::adjust_vmx_ctrl(
         crate::hv::vmx::IA32_VMX_PROCBASED_CTLS2,
-        PROC2_BASED_ENABLE_EPT | PROC2_BASED_ENABLE_VMFUNC,
+        PROC2_BASED_ENABLE_EPT | PROC2_BASED_ENABLE_VPID | PROC2_BASED_ENABLE_VMFUNC,
     );
     let requested_exit = crate::hv::vmx::adjust_vmx_ctrl(
         exit_msr,
@@ -6736,14 +6782,15 @@ fn setup_vmcs_for_launch(
     };
     let entry = crate::hv::vmx::adjust_vmx_ctrl(entry_msr, ENTRY_CTL_IA32E_MODE_GUEST);
     hvlogf(format_args!(
-        "hv: vm{}-{} reporting: vmcs controls pin=0x{:08X} proc=0x{:08X} proc2=0x{:08X} exit=0x{:08X} entry=0x{:08X}",
+        "hv: vm{}-{} reporting: vmcs controls pin=0x{:08X} proc=0x{:08X} proc2=0x{:08X} exit=0x{:08X} entry=0x{:08X} vpid={}",
         current_vm_id_for_log(),
         lineage_record.level,
         pin as u32,
         proc as u32,
         proc2 as u32,
         exit as u32,
-        entry as u32
+        entry as u32,
+        vpid,
     ));
 
     if (proc & PROC_BASED_ACTIVATE_SECONDARY) == 0 {
@@ -6784,8 +6831,17 @@ fn setup_vmcs_for_launch(
         ));
         return Err("ept unsupported");
     }
+    if (proc2 & PROC2_BASED_ENABLE_VPID) == 0 {
+        hvwarnf(format_args!(
+            "hv: vm{}-{} reporting: vmcs ctrl unsupported: secondary bit ENABLE_VPID not available",
+            current_vm_id_for_log(),
+            lineage_record.level
+        ));
+        return Err("vpid unsupported");
+    }
 
     vmwrite(VMCS_CTRL_PIN_BASED, pin)?;
+    vmwrite(VMCS_CTRL_VPID, u64::from(vpid))?;
     vmwrite(VMCS_CTRL_CPU_BASED, proc)?;
     vmwrite(VMCS_CTRL_SECONDARY, proc2)?;
     vmwrite(VMCS_CTRL_EXCEPTION_BITMAP, EXCEPTION_BITMAP_ALL)?;

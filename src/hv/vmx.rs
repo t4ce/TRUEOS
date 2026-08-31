@@ -10,6 +10,7 @@ pub const IA32_VMX_TRUE_PROCBASED_CTLS: u32 = 0x48E;
 pub const IA32_VMX_TRUE_EXIT_CTLS: u32 = 0x48F;
 pub const IA32_VMX_TRUE_ENTRY_CTLS: u32 = 0x490;
 pub const IA32_VMX_PROCBASED_CTLS2: u32 = 0x48B;
+pub const IA32_VMX_EPT_VPID_CAP: u32 = 0x48C;
 pub const IA32_VMX_MISC: u32 = 0x485;
 pub const IA32_VMX_CR0_FIXED0: u32 = 0x486;
 pub const IA32_VMX_CR0_FIXED1: u32 = 0x487;
@@ -31,6 +32,7 @@ pub const IA32_FEATURE_CONTROL_VMX_OUTSIDE_SMX: u64 = 1 << 2;
 
 // VMCS field indices
 pub const VMCS_CTRL_PIN_BASED: u64 = 0x4000;
+pub const VMCS_CTRL_VPID: u64 = 0x0000;
 pub const VMCS_CTRL_CPU_BASED: u64 = 0x4002;
 pub const VMCS_CTRL_EXCEPTION_BITMAP: u64 = 0x4004;
 pub const VMCS_CTRL_EXIT: u64 = 0x400C;
@@ -140,6 +142,7 @@ pub const PIN_BASED_VMX_PREEMPTION_TIMER: u64 = 1 << 6;
 pub const PROC_BASED_PAUSE_EXITING: u64 = 1 << 30;
 pub const PROC_BASED_ACTIVATE_SECONDARY: u64 = 1 << 31;
 pub const PROC2_BASED_ENABLE_EPT: u64 = 1 << 1;
+pub const PROC2_BASED_ENABLE_VPID: u64 = 1 << 5;
 pub const PROC_BASED_USE_TSC_OFFSETTING: u64 = 1 << 3;
 pub const PROC2_BASED_ENABLE_VMFUNC: u64 = 1 << 13;
 pub const VMFUNC_EPTP_SWITCHING: u64 = 1 << 0;
@@ -482,6 +485,70 @@ pub fn vmptrld(pa: u64) -> bool {
             pa = in(reg) &pa_ptr,
             fail = lateout(reg_byte) fail,
             options(nostack, preserves_flags),
+        );
+        fail == 0
+    }
+}
+
+/// Invalidate guest-physical and combined translations associated with one
+/// EPT pointer on the current logical processor.
+///
+/// The caller must establish VMX root operation and verify INVEPT plus its
+/// single-context type through IA32_VMX_EPT_VPID_CAP first.
+pub fn invept_single_context(eptp: u64) -> bool {
+    #[repr(C, align(16))]
+    struct InveptDescriptor {
+        eptp: u64,
+        reserved: u64,
+    }
+
+    const INVEPT_SINGLE_CONTEXT: u64 = 1;
+    let descriptor = InveptDescriptor { eptp, reserved: 0 };
+    unsafe {
+        let mut fail: u8;
+        core::arch::asm!(
+            "invept {kind}, [{descriptor}]",
+            "setna {fail}",
+            kind = in(reg) INVEPT_SINGLE_CONTEXT,
+            descriptor = in(reg) &descriptor,
+            fail = lateout(reg_byte) fail,
+            options(nostack),
+        );
+        fail == 0
+    }
+}
+
+/// Invalidate every linear and combined translation associated with one VPID
+/// on the current logical processor.
+///
+/// The caller must establish VMX root operation and verify both INVVPID and
+/// the single-context invalidation type through IA32_VMX_EPT_VPID_CAP first.
+/// VPID zero is architecturally invalid for this operation.
+pub fn invvpid_single_context(vpid: u16) -> bool {
+    if vpid == 0 {
+        return false;
+    }
+
+    #[repr(C, align(16))]
+    struct InvvpidDescriptor {
+        vpid_and_reserved: u64,
+        linear_address: u64,
+    }
+
+    const INVVPID_SINGLE_CONTEXT: u64 = 1;
+    let descriptor = InvvpidDescriptor {
+        vpid_and_reserved: u64::from(vpid),
+        linear_address: 0,
+    };
+    unsafe {
+        let mut fail: u8;
+        core::arch::asm!(
+            "invvpid {kind}, [{descriptor}]",
+            "setna {fail}",
+            kind = in(reg) INVVPID_SINGLE_CONTEXT,
+            descriptor = in(reg) &descriptor,
+            fail = lateout(reg_byte) fail,
+            options(nostack),
         );
         fail == 0
     }

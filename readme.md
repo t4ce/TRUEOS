@@ -291,7 +291,9 @@ the engineering work between a deep experimental OS and a dependable product.
 - [Mosaic four-display compositor](tools/docs/CompositorUI.html) — UI4 surface,
   focus, layout, overview, and multi-display ownership model.
 - [Hypervisor State Atlas](tools/docs/docs/HYPERVISOR_STATE_MACHINE.html) — VM
-  principal, Blueprint, pause, snapshot, restore, and teardown contracts.
+  principal, Blueprint, pause, snapshot, restore, and teardown contracts; the
+  [VPID runtime validation](tools/docs/vpid_runtime_validation.md) records the
+  lane-local translation-tag and invalidation evidence expected from hardware.
 - [Execution model](tools/docs/execution.html) — CPU/AP slots, async tasks,
   worker models, locks, barriers, and event ordering.
 - [Intel UHD 770 target reference](tools/docs/intel-uhd770-cpu-reference.html) —
