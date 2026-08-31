@@ -108,12 +108,18 @@ static WAKE_SOURCE_TIMESTAMP_MS: AtomicU64 = AtomicU64::new(0);
 static WAKE_LOGS: AtomicU64 = AtomicU64::new(0);
 static WAKE_EVENTS_COALESCED: AtomicU64 = AtomicU64::new(0);
 
-#[allow(dead_code, reason = "GNA hardware/model owner integration follows capture bring-up")]
+#[allow(
+    dead_code,
+    reason = "GNA hardware/model owner integration follows capture bring-up"
+)]
 pub(crate) fn publish_pipeline_state(state: PipelineState) {
     PIPELINE_STATE.store(state as u8, Ordering::Release);
 }
 
-#[allow(dead_code, reason = "GNA hardware/model owner integration follows capture bring-up")]
+#[allow(
+    dead_code,
+    reason = "GNA hardware/model owner integration follows capture bring-up"
+)]
 #[must_use]
 pub(crate) fn publish_noise_reduction_observation(
     active: bool,
@@ -131,7 +137,10 @@ pub(crate) fn publish_noise_reduction_observation(
     )
 }
 
-#[allow(dead_code, reason = "GNA hardware/model owner integration follows capture bring-up")]
+#[allow(
+    dead_code,
+    reason = "GNA hardware/model owner integration follows capture bring-up"
+)]
 #[must_use]
 pub(crate) fn publish_vad_observation(
     active: bool,
@@ -149,7 +158,10 @@ pub(crate) fn publish_vad_observation(
     )
 }
 
-#[allow(dead_code, reason = "GNA hardware/model owner integration follows capture bring-up")]
+#[allow(
+    dead_code,
+    reason = "GNA hardware/model owner integration follows capture bring-up"
+)]
 #[must_use]
 pub(crate) fn publish_wake_word(
     word_id: u32,
@@ -166,7 +178,10 @@ pub(crate) fn publish_wake_word(
     true
 }
 
-#[allow(dead_code, reason = "GNA hardware/model owner integration follows capture bring-up")]
+#[allow(
+    dead_code,
+    reason = "GNA hardware/model owner integration follows capture bring-up"
+)]
 pub(crate) fn status() -> FrontEndStatus {
     let noise = load_level(
         &NOISE_SEQUENCE,
@@ -411,8 +426,7 @@ fn log_level(name: &str, snapshot: LevelSnapshot, observed_ms: u64) {
 pub(crate) async fn gna_audio_frontend_service_task() {
     crate::log_os::service_important_line(format_args!(
         "gna-audio-front-end: online microphone_owner=hda-capture-lane pcm=s16le-48k-interleaved role=gna-consumer-only path=hda-capture->gna3(noise-reduction,vad,wake-word)->speech-detected sink=global-log poll_softcap_ms={} wake_log_softcap_ms={} inference=awaiting-hardware-owner fail_closed=1\n",
-        POLL_SOFTCAP_MS,
-        WAKE_LOG_SOFTCAP_MS,
+        POLL_SOFTCAP_MS, WAKE_LOG_SOFTCAP_MS,
     ));
 
     let mut capture_spawned = false;

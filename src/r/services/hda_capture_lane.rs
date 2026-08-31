@@ -316,8 +316,8 @@ impl CaptureEngine {
         // remain independent of the stream-descriptor index.
         let stream_tag = 2 + (input_stream_index % 14);
 
-        let (dma_phys, dma_ptr) =
-            crate::dma::alloc(CAPTURE_DMA_BYTES, 4096).ok_or("hda-capture-dma-allocation-failed")?;
+        let (dma_phys, dma_ptr) = crate::dma::alloc(CAPTURE_DMA_BYTES, 4096)
+            .ok_or("hda-capture-dma-allocation-failed")?;
         let Some((bdl_phys, bdl_ptr)) = crate::dma::alloc(CAPTURE_BDL_BYTES, 128) else {
             crate::dma::dealloc(dma_ptr, CAPTURE_DMA_BYTES);
             return Err("hda-capture-bdl-allocation-failed");
@@ -372,7 +372,12 @@ impl CaptureEngine {
                 VERB_SET_CHANNEL_STREAM,
                 (stream_tag << 4) | 0,
             )?;
-            codec_io.set_verb_16(route.codec, route.adc_nid, VERB_SET_STREAM_FORMAT, route.format)?;
+            codec_io.set_verb_16(
+                route.codec,
+                route.adc_nid,
+                VERB_SET_STREAM_FORMAT,
+                route.format,
+            )?;
             Ok(())
         })?;
 
@@ -417,8 +422,10 @@ impl CaptureEngine {
         unsafe {
             let ctl = read8(self.mmio, base + SD_CTL);
             write8(self.mmio, base + SD_CTL, ctl & !SCTL_RUN);
-            if !wait_until(|| read8(self.mmio, base + SD_CTL) & SCTL_RUN == 0, STREAM_RESET_POLL_LIMIT)
-            {
+            if !wait_until(
+                || read8(self.mmio, base + SD_CTL) & SCTL_RUN == 0,
+                STREAM_RESET_POLL_LIMIT,
+            ) {
                 return Err("hda-input-stop-timeout");
             }
 
@@ -469,13 +476,11 @@ impl CaptureEngine {
             write8(self.mmio, base + SD_STS, SSTS_W1C);
 
             let ctl = read8(self.mmio, base + SD_CTL);
-            write8(
-                self.mmio,
-                base + SD_CTL,
-                (ctl | SCTL_RUN) & !SCTL_IOCE,
-            );
-            if !wait_until(|| read8(self.mmio, base + SD_CTL) & SCTL_RUN != 0, STREAM_RESET_POLL_LIMIT)
-            {
+            write8(self.mmio, base + SD_CTL, (ctl | SCTL_RUN) & !SCTL_IOCE);
+            if !wait_until(
+                || read8(self.mmio, base + SD_CTL) & SCTL_RUN != 0,
+                STREAM_RESET_POLL_LIMIT,
+            ) {
                 return Err("hda-input-run-timeout");
             }
         }
@@ -520,11 +525,8 @@ impl CaptureEngine {
 
         let lpib = unsafe { read32(self.mmio, base + SD_LPIB) }.min(CAPTURE_DMA_BYTES as u32);
         if lpib != self.last_lpib {
-            let delta_bytes = ring_distance_bytes(
-                self.last_lpib as usize,
-                lpib as usize,
-                CAPTURE_DMA_BYTES,
-            );
+            let delta_bytes =
+                ring_distance_bytes(self.last_lpib as usize, lpib as usize, CAPTURE_DMA_BYTES);
             self.observe_completed_bytes(self.last_lpib as usize, delta_bytes);
             self.last_lpib = lpib;
             self.last_progress_ms = now_ms;
@@ -566,8 +568,7 @@ impl CaptureEngine {
                 self.publish_status(CaptureState::Faulted);
                 crate::log_os::service_important_line(format_args!(
                     "hda-capture: recovery-failed error={} stream_index={} action=retry-next-poll playback_untouched=1\n",
-                    error,
-                    self.input_stream_index,
+                    error, self.input_stream_index,
                 ));
             }
         }
@@ -688,13 +689,7 @@ struct CodecIo {
 }
 
 impl CodecIo {
-    fn codec_cmd(
-        &mut self,
-        codec: u8,
-        nid: u16,
-        verb: u32,
-        data: u8,
-    ) -> Result<u32, &'static str> {
+    fn codec_cmd(&mut self, codec: u8, nid: u16, verb: u32, data: u8) -> Result<u32, &'static str> {
         let raw20 = (verb << 8) | u32::from(data);
         self.raw(codec, nid, raw20)
     }
@@ -718,10 +713,7 @@ impl CodecIo {
         let command =
             (u32::from(codec) << 28) | ((u32::from(nid) & 0xFF) << 20) | (raw20 & 0xFFFFF);
         unsafe {
-            if !wait_until(
-                || read16(self.mmio, REG_ICS) & ICS_ICB == 0,
-                COMMAND_POLL_LIMIT,
-            ) {
+            if !wait_until(|| read16(self.mmio, REG_ICS) & ICS_ICB == 0, COMMAND_POLL_LIMIT) {
                 return Err("hda-immediate-command-busy-timeout");
             }
             // IRV is write-one-to-clear.
@@ -761,9 +753,7 @@ fn with_codec_command_window<T>(
         write8(mmio, REG_RIRBCTL, saved_rirbctl & !0x02);
     }
     if !wait_until(
-        || unsafe {
-            read8(mmio, REG_CORBCTL) & 0x02 == 0 && read8(mmio, REG_RIRBCTL) & 0x02 == 0
-        },
+        || unsafe { read8(mmio, REG_CORBCTL) & 0x02 == 0 && read8(mmio, REG_RIRBCTL) & 0x02 == 0 },
         COMMAND_POLL_LIMIT,
     ) {
         unsafe {
@@ -803,11 +793,15 @@ fn discover_and_configure_route(codec_io: &mut CodecIo) -> Result<Route, &'stati
         }
 
         let _ = codec_io.codec_cmd(codec, afg_nid, VERB_SET_POWER_STATE, 0);
-        let afg_pcm_rates = codec_io.get_param(codec, afg_nid, PARAM_PCM_RATES).unwrap_or(0);
-        let afg_stream_formats =
-            codec_io.get_param(codec, afg_nid, PARAM_STREAM_FMTS).unwrap_or(0);
-        let afg_amp_in_caps =
-            codec_io.get_param(codec, afg_nid, PARAM_AMP_IN_CAPS).unwrap_or(0);
+        let afg_pcm_rates = codec_io
+            .get_param(codec, afg_nid, PARAM_PCM_RATES)
+            .unwrap_or(0);
+        let afg_stream_formats = codec_io
+            .get_param(codec, afg_nid, PARAM_STREAM_FMTS)
+            .unwrap_or(0);
+        let afg_amp_in_caps = codec_io
+            .get_param(codec, afg_nid, PARAM_AMP_IN_CAPS)
+            .unwrap_or(0);
         let widgets = discover_widgets(
             codec_io,
             codec,
@@ -821,7 +815,10 @@ fn discover_and_configure_route(codec_io: &mut CodecIo) -> Result<Route, &'stati
         };
 
         configure_codec_route(codec_io, codec, &widgets, &path, pin_nid)?;
-        let pin = widgets.iter().find(|widget| widget.nid == pin_nid).ok_or("hda-pin-lost")?;
+        let pin = widgets
+            .iter()
+            .find(|widget| widget.nid == pin_nid)
+            .ok_or("hda-pin-lost")?;
 
         return Ok(Route {
             codec,
@@ -899,7 +896,9 @@ fn discover_widgets(
 
         if widget_type == WIDGET_AUDIO_INPUT {
             let own_pcm = codec_io.get_param(codec, nid, PARAM_PCM_RATES).unwrap_or(0);
-            let own_stream = codec_io.get_param(codec, nid, PARAM_STREAM_FMTS).unwrap_or(0);
+            let own_stream = codec_io
+                .get_param(codec, nid, PARAM_STREAM_FMTS)
+                .unwrap_or(0);
             widget.pcm_rates = if own_pcm == 0 { afg_pcm_rates } else { own_pcm };
             widget.stream_formats = if own_stream == 0 {
                 afg_stream_formats
@@ -909,18 +908,22 @@ fn discover_widgets(
         }
 
         if widget_type == WIDGET_PIN_COMPLEX {
-            widget.pin_config =
-                codec_io.codec_cmd(codec, nid, VERB_GET_CONFIG_DEFAULT, 0).unwrap_or(0);
+            widget.pin_config = codec_io
+                .codec_cmd(codec, nid, VERB_GET_CONFIG_DEFAULT, 0)
+                .unwrap_or(0);
             widget.pin_caps = codec_io.get_param(codec, nid, PARAM_PIN_CAPS).unwrap_or(0);
             if widget.pin_caps & PINCAP_PRES_DETECT != 0 {
-                widget.pin_sense =
-                    codec_io.codec_cmd(codec, nid, VERB_GET_PIN_SENSE, 0).unwrap_or(0);
+                widget.pin_sense = codec_io
+                    .codec_cmd(codec, nid, VERB_GET_PIN_SENSE, 0)
+                    .unwrap_or(0);
             }
         }
 
         if caps & WCAP_IN_AMP != 0 {
             widget.amp_in_caps = if caps & WCAP_AMP_OVERRIDE != 0 {
-                codec_io.get_param(codec, nid, PARAM_AMP_IN_CAPS).unwrap_or(afg_amp_in_caps)
+                codec_io
+                    .get_param(codec, nid, PARAM_AMP_IN_CAPS)
+                    .unwrap_or(afg_amp_in_caps)
             } else {
                 afg_amp_in_caps
             };
@@ -981,10 +984,11 @@ fn read_connection_list(
 fn choose_route(widgets: &[Widget]) -> Option<(u16, u16, Vec<u16>, u8, u16)> {
     let mut best: Option<(u32, u16, u16, Vec<u16>, u8, u16)> = None;
 
-    for adc in widgets.iter().filter(|widget| widget.widget_type == WIDGET_AUDIO_INPUT) {
-        if adc.pcm_rates & (PCM_RATE_48KHZ | PCM_BITS_16)
-            != (PCM_RATE_48KHZ | PCM_BITS_16)
-        {
+    for adc in widgets
+        .iter()
+        .filter(|widget| widget.widget_type == WIDGET_AUDIO_INPUT)
+    {
+        if adc.pcm_rates & (PCM_RATE_48KHZ | PCM_BITS_16) != (PCM_RATE_48KHZ | PCM_BITS_16) {
             continue;
         }
         if adc.stream_formats != 0 && adc.stream_formats & STREAM_FORMAT_PCM == 0 {
@@ -1081,7 +1085,11 @@ fn configure_codec_route(
         let Some(widget) = widgets.iter().find(|widget| widget.nid == nid) else {
             continue;
         };
-        if let Some(index) = widget.connections.iter().position(|&candidate| candidate == next) {
+        if let Some(index) = widget
+            .connections
+            .iter()
+            .position(|&candidate| candidate == next)
+        {
             let _ = codec_io.codec_cmd(codec, nid, VERB_SET_CONN_SELECT, index as u8);
             unmute_input_amp(codec_io, codec, widget, index as u16);
         }
@@ -1232,9 +1240,8 @@ pub(crate) fn copy_latest_i16(out: &mut [i16]) -> Option<CaptureRead> {
     let start_sample = (end_sample + capacity_samples - sample_count) % capacity_samples;
     for (index, slot) in out.iter_mut().take(sample_count).enumerate() {
         let sample_index = (start_sample + index) % capacity_samples;
-        *slot = unsafe {
-            core::ptr::read_volatile((engine.dma_virt as *const i16).add(sample_index))
-        };
+        *slot =
+            unsafe { core::ptr::read_volatile((engine.dma_virt as *const i16).add(sample_index)) };
     }
     Some(CaptureRead {
         samples: sample_count,
@@ -1300,8 +1307,7 @@ async fn hda_capture_task() {
                     {
                         crate::log_os::service_important_line(format_args!(
                             "hda-capture: waiting owner=hda-capture-lane error={} retry_ms={} playback_untouched=1\n",
-                            error,
-                            CAPTURE_RETRY_MS,
+                            error, CAPTURE_RETRY_MS,
                         ));
                         last_error = Some(error);
                         last_wait_log_ms = now_ms;

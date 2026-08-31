@@ -1333,9 +1333,7 @@ fn open_blueprint_frame(
                 stamped_text_layers: Vec::new(),
                 stamped_text_cursor: 0,
                 stamped_text_pending: None,
-                stamped_text_producers: Vec::with_capacity(
-                    SHELL2_WARM_PRODUCER_SEALS_PER_SURFACE,
-                ),
+                stamped_text_producers: Vec::with_capacity(SHELL2_WARM_PRODUCER_SEALS_PER_SURFACE),
                 stamped_text_pending_ocean: false,
                 stamped_text_rendered: false,
             },
@@ -7116,11 +7114,9 @@ mod tests {
 
     #[test]
     fn shell2_stamp_registration_seals_terminal_face_size_and_extent() {
-        let registration = shell2_stamped_text_registration(&stamped_shell_request(
-            GpuFontFace::JuliaMono,
-            24.0,
-        ))
-        .expect("Shell2's default tier should be OceanCache eligible");
+        let registration =
+            shell2_stamped_text_registration(&stamped_shell_request(GpuFontFace::JuliaMono, 24.0))
+                .expect("Shell2's default tier should be OceanCache eligible");
 
         assert_eq!(registration.face, GpuFontFace::JuliaMono.id() as u16);
         assert_eq!(registration.tier, 24);
@@ -7137,11 +7133,8 @@ mod tests {
         );
 
         assert!(
-            shell2_stamped_text_registration(&stamped_shell_request(
-                GpuFontFace::Default,
-                24.0,
-            ))
-            .is_none()
+            shell2_stamped_text_registration(&stamped_shell_request(GpuFontFace::Default, 24.0,))
+                .is_none()
         );
         assert!(
             shell2_stamped_text_registration(&stamped_shell_request(
