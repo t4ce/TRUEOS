@@ -18,8 +18,8 @@ use crate::intel::gpu_font::{GpuFontGlyphRecipeKey, GpuFontRetainedScene};
 
 use super::font_producer_service::FontProducerRegistration;
 
-/// Complete per-producer-generation budget, including the GPU R8 masks and
-/// their CPU key/stamp metadata.
+/// Complete per-registration-seal budget, including the GPU R8 masks and their
+/// CPU key/stamp metadata.
 pub(crate) const OCEAN_CACHE_BYTES: usize = 512 * 1024;
 pub(crate) const OCEAN_CACHE_THEORETICAL_32_BYTES: usize = OCEAN_CACHE_BYTES * 32;
 const OCEAN_CACHE_RASTER_POLICY_VERSION: u16 = 1;

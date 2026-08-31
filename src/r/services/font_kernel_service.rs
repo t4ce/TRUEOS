@@ -2153,7 +2153,15 @@ fn prepare_producer_stamp_scenes(
     ticket: FontKernelTicket,
     request: &FontStampRequest,
     resources: &Arc<FontGpuProducerResources>,
-) -> Result<(Vec<GpuFontRetainedIdentityStamp>, usize, (u64, u64, u64), bool), FontKernelError> {
+) -> Result<
+    (
+        Vec<GpuFontRetainedIdentityStamp>,
+        usize,
+        ((u64, u64, u64), (u64, u64, u64)),
+        bool,
+    ),
+    FontKernelError,
+> {
     // Producer rows use a one-to-one viewport/raster contract, so ppem is the
     // registered font pixel size.  The origin recipe path rounds
     // `position_y + ppem`, while the legacy path rounds position and applies
@@ -2176,13 +2184,14 @@ fn prepare_producer_stamp_scenes(
                 })
                 .collect(),
             glyphs,
-            (0, 0, 0),
+            ((0, 0, 0), (0, 0, 0)),
             false,
         ));
     }
     let mut stamps = Vec::new();
     let mut glyphs = 0usize;
     let before = resources.glyph_cache.lock().diagnostics();
+    let ocean_before = resources.ocean_cache.diagnostics();
     for layer in &request.layers {
         // Registered row requests deliberately require SceneOrigin. Keep the
         // generic path below as a defensive compatibility fallback if a
@@ -2197,7 +2206,7 @@ fn prepare_producer_stamp_scenes(
                     })
                     .collect(),
                 glyphs,
-                (0, 0, 0),
+                ((0, 0, 0), (0, 0, 0)),
                 false,
             ));
         }
@@ -2265,15 +2274,15 @@ fn prepare_producer_stamp_scenes(
             unique_indices.next();
             let key = prepared_glyph.recipe().key();
             let destination_xy = prepared_glyph.destination_xy();
-            let scene = if let Some(scene) = resources.ocean_cache.get(&key) {
-                scene
+            let (scene, reused) = if let Some(scene) = resources.ocean_cache.get(&key) {
+                (scene, true)
             } else {
                 let scene = Arc::new(
                     retain_gpu_font_prepared_origin_scene(alloc::vec![prepared_glyph])
                         .map_err(FontKernelError::Unavailable)?,
                 );
                 resources.ocean_cache.insert(key, Arc::clone(&scene));
-                scene
+                (scene, false)
             };
             let cached_origin = scene
                 .origin_px()
@@ -2286,17 +2295,29 @@ fn prepare_producer_stamp_scenes(
                     .checked_sub(cached_origin[1])
                     .ok_or(FontKernelError::InvalidRequest("font-oceancache-y-range"))?,
             ];
-            stamps.push(GpuFontRetainedIdentityStamp::new(scene, translation_px, layer.foreground));
+            stamps.push(if reused {
+                GpuFontRetainedIdentityStamp::reused(scene, translation_px, layer.foreground)
+            } else {
+                GpuFontRetainedIdentityStamp::new(scene, translation_px, layer.foreground)
+            });
         }
     }
     let after = resources.glyph_cache.lock().diagnostics();
+    let ocean_after = resources.ocean_cache.diagnostics();
     Ok((
         stamps,
         glyphs,
         (
-            after.2.saturating_sub(before.2),
-            after.3.saturating_sub(before.3),
-            after.4.saturating_sub(before.4),
+            (
+                after.2.saturating_sub(before.2),
+                after.3.saturating_sub(before.3),
+                after.4.saturating_sub(before.4),
+            ),
+            (
+                ocean_after.2.saturating_sub(ocean_before.2),
+                ocean_after.3.saturating_sub(ocean_before.3),
+                ocean_after.4.saturating_sub(ocean_before.4),
+            ),
         ),
         true,
     ))
@@ -2716,22 +2737,25 @@ fn process_frame_stamp(
     };
     let cache_log = if let Some((diagnostics, delta)) = producer_cache {
         alloc::format!(
-            "cache=producer-recipe-colorless budget_bytes={} used_bytes={} entries={} hits={} misses={} uncached={} request_hits={} request_misses={} request_uncached={} ocean_budget_bytes={} ocean_used_bytes={} ocean_entries={} ocean_hits={} ocean_misses={} ocean_uncached={}",
+            "cache=producer-recipe-colorless budget_bytes={} used_bytes={} entries={} hits={} misses={} uncached={} recipe_request_hits={} recipe_request_misses={} recipe_request_uncached={} ocean_budget_bytes={} ocean_used_bytes={} ocean_entries={} ocean_hits={} ocean_misses={} ocean_uncached={} ocean_request_hits={} ocean_request_misses={} ocean_request_uncached={}",
             FONT_PRODUCER_GLYPH_CACHE_BYTES,
             diagnostics.0.1,
             diagnostics.0.0,
             diagnostics.0.2,
             diagnostics.0.3,
             diagnostics.0.4,
-            delta.0,
-            delta.1,
-            delta.2,
+            delta.0.0,
+            delta.0.1,
+            delta.0.2,
             OCEAN_CACHE_BYTES,
             diagnostics.1.1,
             diagnostics.1.0,
             diagnostics.1.2,
             diagnostics.1.3,
             diagnostics.1.4,
+            delta.1.0,
+            delta.1.1,
+            delta.1.2,
         )
     } else {
         String::from("cache=none")

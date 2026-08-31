@@ -650,6 +650,7 @@ pub(crate) struct GpuFontRetainedIdentityStamp {
     scene: Arc<GpuFontRetainedScene>,
     translation_px: [i32; 2],
     foreground: GpuFontRgba,
+    report_coverage_build: bool,
 }
 
 impl GpuFontRetainedIdentityStamp {
@@ -662,19 +663,45 @@ impl GpuFontRetainedIdentityStamp {
             scene,
             translation_px,
             foreground,
+            report_coverage_build: true,
+        }
+    }
+
+    pub(crate) const fn reused(
+        scene: Arc<GpuFontRetainedScene>,
+        translation_px: [i32; 2],
+        foreground: GpuFontRgba,
+    ) -> Self {
+        Self {
+            scene,
+            translation_px,
+            foreground,
+            report_coverage_build: false,
         }
     }
 
     pub(crate) fn coverage_build_ms(&self) -> u64 {
-        self.scene.coverage_build_ms()
+        if self.report_coverage_build {
+            self.scene.coverage_build_ms()
+        } else {
+            0
+        }
     }
 
     pub(crate) fn coverage_audit_ms(&self) -> u64 {
-        self.scene.coverage_audit_ms()
+        if self.report_coverage_build {
+            self.scene.coverage_audit_ms()
+        } else {
+            0
+        }
     }
 
     pub(crate) fn coverage_submits(&self) -> usize {
-        self.scene.coverage_submits()
+        if self.report_coverage_build {
+            self.scene.coverage_submits()
+        } else {
+            0
+        }
     }
 }
 
