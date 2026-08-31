@@ -5,22 +5,32 @@ digraph "libm-v0.2.16" {
   n0 [label=<<FONT POINT-SIZE="13"><B>libm</B></FONT><BR/><FONT POINT-SIZE="12">0.2.16</FONT>>, fillcolor="#dff3ff", color="#1b78a6"];
   in0 [label=<from crab-usb-v0.9.1.svg<BR/><B>libm</B><BR/>0.2.16>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
   in0 -> n0 [style=dashed, color="#4b8fc5"];
-  in1 [label=<from kurbo-v0.11.3.svg<BR/><B>libm</B><BR/>0.2.16>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in1 [label=<from rustls-rustcrypto-v0.0.2-alpha.svg<BR/><B>libm</B><BR/>0.2.16>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
   in1 -> n0 [style=dashed, color="#4b8fc5"];
-  in2 [label=<from parry2d-v0.26.1.svg<BR/><B>libm</B><BR/>0.2.16>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in2 [label=<from skrifa-v0.44.0.svg<BR/><B>libm</B><BR/>0.2.16>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
   in2 -> n0 [style=dashed, color="#4b8fc5"];
-  in3 [label=<from rustls-rustcrypto-v0.0.2-alpha.svg<BR/><B>libm</B><BR/>0.2.16>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in3 [label=<from symphonia-codec-aac-v0.5.5.svg<BR/><B>libm</B><BR/>0.2.16>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
   in3 -> n0 [style=dashed, color="#4b8fc5"];
-  in4 [label=<from symphonia-codec-aac-v0.5.5.svg<BR/><B>libm</B><BR/>0.2.16>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in4 [label=<from symphonia-core-v0.5.5.svg<BR/><B>libm</B><BR/>0.2.16>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
   in4 -> n0 [style=dashed, color="#4b8fc5"];
-  in5 [label=<from symphonia-core-v0.5.5.svg<BR/><B>libm</B><BR/>0.2.16>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in5 [label=<from trueos-helio-runtime-v0.1.0.svg<BR/><B>libm</B><BR/>0.2.16>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
   in5 -> n0 [style=dashed, color="#4b8fc5"];
-  in6 [label=<from tiny-skia-path-v0.11.4.svg<BR/><B>libm</B><BR/>0.2.16>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in6 [label=<from trueos-kokoro-conv-v0.1.0.svg<BR/><B>libm</B><BR/>0.2.16>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
   in6 -> n0 [style=dashed, color="#4b8fc5"];
-  in7 [label=<from trueos-math-v0.1.0.svg<BR/><B>libm</B><BR/>0.2.16>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in7 [label=<from trueos-kokoro-duration-v0.1.0.svg<BR/><B>libm</B><BR/>0.2.16>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
   in7 -> n0 [style=dashed, color="#4b8fc5"];
-  in8 [label=<from trueos-qjs-v0.1.0.svg<BR/><B>libm</B><BR/>0.2.16>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in8 [label=<from trueos-kokoro-f32-v0.1.0.svg<BR/><B>libm</B><BR/>0.2.16>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
   in8 -> n0 [style=dashed, color="#4b8fc5"];
+  in9 [label=<from trueos-kokoro-gemm-v0.1.0.svg<BR/><B>libm</B><BR/>0.2.16>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in9 -> n0 [style=dashed, color="#4b8fc5"];
+  in10 [label=<from trueos-kokoro-lstm-v0.1.0.svg<BR/><B>libm</B><BR/>0.2.16>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in10 -> n0 [style=dashed, color="#4b8fc5"];
+  in11 [label=<from trueos-kokoro-resize-v0.1.0.svg<BR/><B>libm</B><BR/>0.2.16>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in11 -> n0 [style=dashed, color="#4b8fc5"];
+  in12 [label=<from trueos-lfm25-cpu-v0.1.0.svg<BR/><B>libm</B><BR/>0.2.16>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in12 -> n0 [style=dashed, color="#4b8fc5"];
+  in13 [label=<from trueos-math-v0.1.0.svg<BR/><B>libm</B><BR/>0.2.16>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in13 -> n0 [style=dashed, color="#4b8fc5"];
   // collapsed leaf ends: 0
   // centered two-input leaves: 0
   // nested two-input leaves: 0

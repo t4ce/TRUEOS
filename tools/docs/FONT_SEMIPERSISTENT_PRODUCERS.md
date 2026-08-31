@@ -47,11 +47,14 @@ The first kernel/GPU slice is now present:
 - `src/r/services/oceancache.rs` owns the shared retained R8 fast path. At
   registration, producers with the same face and exact native pixel size seal
   onto one OceanCache domain while retaining separate row rings, generations,
-  credits, and ACKs. Each domain keeps exact colorless layer coverage in a
-  first-fill, no-eviction 512 KiB budget, including GPU masks and CPU key/stamp
-  metadata. Matching layout/text/size/slant rows may change RGBA and restamp
-  without rebuilding or auditing analytical coverage. A full ocean falls back
-  normally; its final registration claim dropping retires it naturally.
+  credits, and ACKs. Each domain keeps position-independent colorless glyph R8
+  masks in a first-fill, no-eviction 512 KiB budget, including GPU masks and
+  CPU key/stamp metadata. Rows with new text or placement reuse every warmed
+  glyph and may change RGBA without rebuilding or auditing its analytical
+  coverage. Non-overlapping glyph masks are packed into the existing bounded
+  64-layer RCS submission; overlapping placements conservatively retain the
+  established max-union scene path. A full ocean falls back normally; its
+  final registration claim dropping retires it naturally.
 - `FontProducedRow::mark_surflive` records that the row became display-live
   but deliberately does not restore its credit. Only
   `acknowledge_display_release`, called after a later replacement becomes

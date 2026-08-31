@@ -584,12 +584,17 @@ pub(super) fn expire_transient_global_gt_boost(
     dev: super::Dev,
     lease: Gen12TransientGtBoostLease,
 ) -> Result<bool, &'static str> {
-    let rp0_ratio = fused_rp0_ratio(dev)?;
     let mut state = GEN12_GLOBAL_GT_POWER_STATE.lock();
     if !transient_boost_owns_current_state(&state, lease) {
         return Ok(false);
     }
 
+    // The off path must not depend on being able to rediscover RP0 two
+    // seconds later.  This lease already proved the fused ratio when it was
+    // admitted, and `boost_ratio` is the exact value that transition stored
+    // for its owned request.  Reusing it keeps expiry able to restore the
+    // predecessor even if a later capability read is temporarily unavailable.
+    let rp0_ratio = state.boost_ratio;
     let marker = transition_global_gt_power_mode_locked(dev, &mut state, rp0_ratio)?;
     debug_assert!(!marker.active);
     state.transient_boost = None;

@@ -1,9 +1,10 @@
 //! GPU font request construction and explicitly leased render resources.
 //!
-//! The graphics font registry owns only raw registered font bytes; outlines and
-//! glyph recipes are built per request. This module also manages one-shot text
-//! jobs and explicitly tagged persistent render jobs. A persistent-job lease is
-//! an owned scene resource, not a glyph-keyed font cache.
+//! The graphics font registry owns only raw registered font bytes. Generic
+//! callers build outlines and glyph recipes per request; registered producers
+//! may instead supply a bounded OceanCache hit. This module also manages
+//! one-shot text jobs and explicitly tagged persistent render jobs. The cache
+//! policy itself remains in the kernel font service.
 
 use alloc::{boxed::Box, string::String, sync::Arc, vec::Vec};
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -640,6 +641,43 @@ pub(crate) struct GpuFontRetainedDrawResult {
     pub(crate) release: Option<crate::intel::gpgpu::GpgpuRgba8ReleaseFence>,
 }
 
+/// One immutable retained mask plus its request-local placement and color.
+///
+/// Keeping these three values together lets producer rows assemble many
+/// glyph-local OceanCache hits into the existing bounded mask batch without
+/// exposing a retained scene's allocation internals outside this module.
+pub(crate) struct GpuFontRetainedIdentityStamp {
+    scene: Arc<GpuFontRetainedScene>,
+    translation_px: [i32; 2],
+    foreground: GpuFontRgba,
+}
+
+impl GpuFontRetainedIdentityStamp {
+    pub(crate) const fn new(
+        scene: Arc<GpuFontRetainedScene>,
+        translation_px: [i32; 2],
+        foreground: GpuFontRgba,
+    ) -> Self {
+        Self {
+            scene,
+            translation_px,
+            foreground,
+        }
+    }
+
+    pub(crate) fn coverage_build_ms(&self) -> u64 {
+        self.scene.coverage_build_ms()
+    }
+
+    pub(crate) fn coverage_audit_ms(&self) -> u64 {
+        self.scene.coverage_audit_ms()
+    }
+
+    pub(crate) fn coverage_submits(&self) -> usize {
+        self.scene.coverage_submits()
+    }
+}
+
 /// One GPU-VM-resident font scene which may be restamped repeatedly.
 ///
 /// The scene owns its analytical R8 mask and lazily allocates a C++ instance
@@ -686,7 +724,6 @@ impl GpuFontRetainedScene {
         self.coverage.as_ref().map(GpuFontCoverageMask::origin_px)
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn quarantined(&self) -> bool {
         self.quarantined.load(Ordering::Acquire)
     }
@@ -884,6 +921,88 @@ impl GpuFontRetainedScene {
             release,
         })
     }
+}
+
+/// Composite ordered retained identity stamps in bounded hardware batches.
+///
+/// The Font RCS runtime remains serialized. This only packs independently
+/// resident, colorless masks into the already-proven 64-layer submission
+/// format; it does not introduce another context or in-flight job slot.
+pub(crate) fn restamp_gpu_font_identity_batch(
+    stamps: &[GpuFontRetainedIdentityStamp],
+    destination: crate::intel::gpgpu::GpgpuRgba8Surface,
+    direct_scanout: bool,
+) -> Result<GpuFontRetainedDrawResult, GpuFontRetainedSceneError> {
+    if stamps.is_empty() {
+        return Err(GpuFontRetainedSceneError::Unavailable("font-retained-identity-batch-empty"));
+    }
+
+    // Validate every input and retain every Arc before crossing the first
+    // irreversible submission boundary. Layer order remains scene order then
+    // stamp-rect order, preserving ordered multi-color composition.
+    let mut layers = Vec::new();
+    for stamp in stamps {
+        let coverage = stamp.scene.coverage()?;
+        let origin = coverage.origin_px();
+        layers.reserve(coverage.stamp_rects().len());
+        for &mask_rect in coverage.stamp_rects() {
+            layers.push(crate::intel::gpgpu::GpgpuGlyphMaskLayer {
+                mask: coverage.surface(),
+                mask_rect,
+                dst_xy: crate::intel::gpgpu::GpgpuPoint::new(
+                    origin[0]
+                        .saturating_add(mask_rect.x)
+                        .saturating_add(stamp.translation_px[0]),
+                    origin[1]
+                        .saturating_add(mask_rect.y)
+                        .saturating_add(stamp.translation_px[1]),
+                ),
+                color_rgba: gpu_font_rgba_u32(stamp.foreground),
+            });
+        }
+    }
+
+    let mut submits = 0usize;
+    let mut active_walkers = 0usize;
+    let mut release = None;
+    for chunk in layers.chunks(crate::intel::gpgpu::GLYPH_MASK_BATCH_MAX_LAYERS) {
+        let rendered = crate::intel::gpgpu::glyph_mask_layers_rgba8_2d_mode(
+            chunk,
+            destination,
+            direct_scanout,
+        );
+        if !rendered.ok {
+            if rendered.submitted {
+                for stamp in stamps {
+                    stamp.scene.quarantined.store(true, Ordering::Release);
+                }
+                return Err(GpuFontRetainedSceneError::SubmittedIncomplete(
+                    "font-retained-identity-batch-incomplete",
+                ));
+            }
+            return Err(if submits != 0 {
+                GpuFontRetainedSceneError::SubmittedIncomplete(
+                    "font-retained-identity-batch-partial",
+                )
+            } else {
+                GpuFontRetainedSceneError::Unavailable("font-retained-identity-batch-unavailable")
+            });
+        }
+        submits = submits.saturating_add(rendered.submits);
+        active_walkers = active_walkers.saturating_add(rendered.active_walkers);
+        if rendered.release.is_some() {
+            release = rendered.release;
+        }
+    }
+    if direct_scanout && release.is_none() {
+        release = retained_font_scanout_release(destination, true)?;
+        submits = submits.saturating_add(1);
+    }
+    Ok(GpuFontRetainedDrawResult {
+        submits,
+        active_walkers,
+        release,
+    })
 }
 
 impl Drop for GpuFontRetainedScene {

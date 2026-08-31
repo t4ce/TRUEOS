@@ -53,18 +53,18 @@
 <!-- out2 -->
 <g id="node4" class="node">
 <title>out2</title>
-<polygon fill="#fff8e8" stroke="#d19922" points="629.66,-44.4 461.69,-44.4 461.69,0 635.66,0 635.66,-38.4 629.66,-44.4"/>
-<polyline fill="none" stroke="#d19922" points="629.66,-44.4 629.66,-38.4"/>
-<polyline fill="none" stroke="#d19922" points="635.66,-38.4 629.66,-38.4"/>
-<text xml:space="preserve" text-anchor="start" x="471.05" y="-28.7" font-family="Inter,Arial" font-size="10.00" fill="#614000">to symphonia&#45;codec&#45;aac&#45;v0.5.5.svg</text>
+<polygon fill="#fff8e8" stroke="#d19922" points="596.66,-44.4 494.69,-44.4 494.69,0 602.66,0 602.66,-38.4 596.66,-44.4"/>
+<polyline fill="none" stroke="#d19922" points="596.66,-44.4 596.66,-38.4"/>
+<polyline fill="none" stroke="#d19922" points="602.66,-38.4 596.66,-38.4"/>
+<text xml:space="preserve" text-anchor="start" x="504.05" y="-28.7" font-family="Inter,Arial" font-size="10.00" fill="#614000">to skrifa&#45;v0.44.0.svg</text>
 <text xml:space="preserve" text-anchor="start" x="526.17" y="-18.7" font-family="Inter,Arial" font-weight="bold" font-size="10.00" fill="#614000">bytemuck</text>
-<text xml:space="preserve" text-anchor="start" x="535.17" y="-8.7" font-family="Inter,Arial" font-size="10.00" fill="#614000">1.25.0</text>
+<text xml:space="preserve" text-anchor="start" x="535.17" y="-8.7" font-family="Inter,Arial" font-size="10.00" fill="#614000">1.25.2</text>
 </g>
 <!-- n0&#45;&gt;out2 -->
 <g id="edge3" class="edge">
 <title>n0&#45;&gt;out2</title>
-<path fill="none" stroke="#d19922" stroke-width="7.2" stroke-dasharray="5,2" d="M401.66,-70.53C423.04,-63.45 446.27,-55.76 467.78,-48.64"/>
-<polygon fill="#d19922" stroke="#d19922" stroke-width="7.2" points="468.65,-52 472.78,-46.99 466.47,-45.42 468.65,-52"/>
+<path fill="none" stroke="#d19922" stroke-width="7.2" stroke-dasharray="5,2" d="M401.66,-70.53C428.23,-61.73 457.67,-51.99 483.11,-43.57"/>
+<polygon fill="#d19922" stroke="#d19922" stroke-width="7.2" points="483.95,-46.94 488.08,-41.92 481.77,-40.36 483.95,-46.94"/>
 </g>
 <!-- in3 -->
 <g id="node5" class="node">

@@ -1,26 +1,22 @@
 //! Bounded retained-R8 fast path for semi-persistent font producers.
 //!
-//! OceanCache is deliberately generation-local and colorless.  Its key owns
-//! every layout input that changes analytical glyph coverage, while RGBA stays
-//! a cheap restamp parameter in FontKernel. A full ocean falls back to
-//! ordinary coverage production; its final registration claim dropping
-//! retires it naturally without manufacturing a producer credit.
+//! OceanCache is deliberately registration-sealed and colorless. Its entries
+//! are position-independent glyph masks, while placement and RGBA remain cheap
+//! restamp parameters in FontKernel. A full ocean falls back to ordinary
+//! coverage production; its final registration claim dropping retires it
+//! naturally without manufacturing a producer credit.
 
 extern crate alloc;
 
 use alloc::{
-    string::String,
     sync::{Arc, Weak},
     vec::Vec,
 };
 use spin::Mutex;
 
-use crate::intel::gpu_font::{GpuFontFace, GpuFontRetainedScene};
+use crate::intel::gpu_font::{GpuFontGlyphRecipeKey, GpuFontRetainedScene};
 
-use super::{
-    font_kernel_service::{RetainSceneRequest, RetainedFontPositioning},
-    font_producer_service::FontProducerRegistration,
-};
+use super::font_producer_service::FontProducerRegistration;
 
 /// Complete per-producer-generation budget, including the GPU R8 masks and
 /// their CPU key/stamp metadata.
@@ -87,11 +83,11 @@ impl OceanCacheClaim {
         Arc::strong_count(&self.ocean)
     }
 
-    pub(crate) fn get(&self, key: &OceanCacheKey) -> Option<Arc<GpuFontRetainedScene>> {
+    pub(crate) fn get(&self, key: &GpuFontGlyphRecipeKey) -> Option<Arc<GpuFontRetainedScene>> {
         self.ocean.lock().get(key)
     }
 
-    pub(crate) fn insert(&self, key: OceanCacheKey, scene: Arc<GpuFontRetainedScene>) {
+    pub(crate) fn insert(&self, key: GpuFontGlyphRecipeKey, scene: Arc<GpuFontRetainedScene>) {
         self.ocean.lock().insert(key, scene);
     }
 
@@ -105,69 +101,13 @@ impl OceanCacheClaim {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct OceanCacheKey {
-    font: GpuFontFace,
-    viewport_width: u32,
-    viewport_height: u32,
-    raster_width: u32,
-    raster_height: u32,
-    positioning: RetainedFontPositioning,
-    runs: Vec<OceanCacheRunKey>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct OceanCacheRunKey {
-    text: String,
-    position_bits: [u32; 2],
-    font_pixels_bits: u32,
-    slant_bits: u32,
-}
-
-impl OceanCacheKey {
-    pub(crate) fn from_scene(scene: &RetainSceneRequest) -> Self {
-        Self {
-            font: scene.font,
-            viewport_width: scene.viewport_width,
-            viewport_height: scene.viewport_height,
-            raster_width: scene.raster_width,
-            raster_height: scene.raster_height,
-            positioning: scene.positioning,
-            runs: scene
-                .runs
-                .iter()
-                .map(|run| OceanCacheRunKey {
-                    text: run.text.clone(),
-                    position_bits: run.position.map(f32::to_bits),
-                    font_pixels_bits: run.font_pixels.to_bits(),
-                    slant_bits: run.slant.to_bits(),
-                })
-                .collect(),
-        }
-    }
-
-    fn retained_bytes(&self) -> usize {
-        core::mem::size_of::<Self>()
-            .saturating_add(
-                self.runs
-                    .capacity()
-                    .saturating_mul(core::mem::size_of::<OceanCacheRunKey>()),
-            )
-            .saturating_add(
-                self.runs
-                    .iter()
-                    .fold(0usize, |bytes, run| bytes.saturating_add(run.text.capacity())),
-            )
-    }
-}
-
 struct OceanCacheEntry {
-    key: OceanCacheKey,
+    key: GpuFontGlyphRecipeKey,
     scene: Arc<GpuFontRetainedScene>,
     accounted_bytes: usize,
 }
 
-/// First-fill/no-eviction ocean owned by exactly one producer generation.
+/// First-fill/no-eviction ocean shared by one registration seal.
 pub(crate) struct OceanCache {
     entries: Vec<OceanCacheEntry>,
     used_bytes: usize,
@@ -187,16 +127,20 @@ impl OceanCache {
         }
     }
 
-    pub(crate) fn get(&mut self, key: &OceanCacheKey) -> Option<Arc<GpuFontRetainedScene>> {
-        let entry = self.entries.iter().find(|entry| &entry.key == key)?;
+    pub(crate) fn get(&mut self, key: &GpuFontGlyphRecipeKey) -> Option<Arc<GpuFontRetainedScene>> {
+        let index = self.entries.iter().position(|entry| &entry.key == key)?;
+        if self.entries[index].scene.quarantined() {
+            let retired = self.entries.remove(index);
+            self.used_bytes = self.used_bytes.saturating_sub(retired.accounted_bytes);
+            return None;
+        }
         self.hits = self.hits.saturating_add(1);
-        Some(Arc::clone(&entry.scene))
+        Some(Arc::clone(&self.entries[index].scene))
     }
 
-    pub(crate) fn insert(&mut self, key: OceanCacheKey, scene: Arc<GpuFontRetainedScene>) {
+    pub(crate) fn insert(&mut self, key: GpuFontGlyphRecipeKey, scene: Arc<GpuFontRetainedScene>) {
         self.misses = self.misses.saturating_add(1);
-        let bytes = key
-            .retained_bytes()
+        let bytes = core::mem::size_of::<GpuFontGlyphRecipeKey>()
             .saturating_add(scene.identity_cache_bytes())
             .saturating_add(core::mem::size_of::<OceanCacheEntry>());
         if bytes == 0 || bytes > OCEAN_CACHE_BYTES.saturating_sub(self.used_bytes) {
@@ -225,35 +169,6 @@ impl OceanCache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::r::services::font_kernel_service::RetainedFontRun;
-
-    fn request() -> RetainSceneRequest {
-        RetainSceneRequest {
-            runs: alloc::vec![RetainedFontRun {
-                text: String::from("Ocean"),
-                position: [4.0, 24.0],
-                font_pixels: 24.0,
-                slant: 0.0,
-            }],
-            font: GpuFontFace::Inconsolata,
-            viewport_width: 320,
-            viewport_height: 64,
-            raster_width: 320,
-            raster_height: 64,
-            positioning: RetainedFontPositioning::SceneOrigin,
-        }
-    }
-
-    #[test]
-    fn ocean_key_is_exact_and_colorless_by_construction() {
-        let scene = request();
-        let key = OceanCacheKey::from_scene(&scene);
-        assert_eq!(key, OceanCacheKey::from_scene(&scene));
-
-        let mut moved = scene.clone();
-        moved.runs[0].position[0] += 1.0;
-        assert_ne!(key, OceanCacheKey::from_scene(&moved));
-    }
 
     #[test]
     fn equal_registration_seals_claim_the_same_ocean() {

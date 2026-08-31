@@ -14,7 +14,7 @@ FULL_DOT_PATH = Path("tools/docs/depgraph/trueos-depth-tree.dot")
 FULL_SVG_PATH = Path("tools/docs/depgraph/trueos-depth-tree.svg")
 OUT_DIR = Path("tools/docs/depgraph/by-root")
 HTML_INDEX_PATH = Path("tools/docs/depgraph/index.html")
-REPO_ROOT = "/home/t4ce/REPOS/TRUEOS"
+REPO_ROOT = str(Path(__file__).resolve().parents[3])
 NODE_MARGIN = "0.13,0.10"
 INNER_BUBBLE_PADDING = 8
 INNER_BUBBLE_SPACING = 6
@@ -339,9 +339,9 @@ def port_for(label: str) -> str:
 
 
 def node_style(label: str) -> tuple[str, str]:
-    if "(/home/t4ce/REPOS/TRUEOS/crates/" in label or "(/home/t4ce/REPOS/TRUEOS/kernel/" in label:
+    if f"({REPO_ROOT}/crates/" in label or f"({REPO_ROOT}/kernel/" in label:
         return "#e7f7e7", "#3f8f46"
-    if "(/home/t4ce/REPOS/TRUEOS/vendor/" in label:
+    if f"({REPO_ROOT}/vendor/" in label:
         return "#fff0d5", "#c47a1a"
     if "https://github.com/t4ce/trait-ffi" in label:
         return "#f0e6ff", "#8656c9"

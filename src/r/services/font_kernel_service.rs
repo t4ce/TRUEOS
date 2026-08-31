@@ -3,9 +3,9 @@
 //! `RetainScene` yields GPU-VM-resident Skrifa coverage that a caller may
 //! restamp repeatedly. `Stamp` is the one-shot path: the worker creates the
 //! same retained representation temporarily. Prepared glyph plans are
-//! materialized as request-local coverage; there is no kernel-global glyph
-//! lookup or tile cache. Overlapping placements retain the proven max-union
-//! representation.
+//! materialized as request-local coverage. Registered producers additionally
+//! share bounded glyph-local OceanCache masks by face/native-size seal;
+//! overlapping placements retain the proven max-union representation.
 //! The service composites ordered font/color layers into either a new
 //! GPU-visible premultiplied RGBA8 buffer or a leased UI4 frame, and returns
 //! the owned buffer or exact producer-release proof asynchronously. Stamp
@@ -23,17 +23,19 @@ use spin::Mutex;
 use trueos_time::{Duration as EmbassyDuration, Instant, Timer};
 
 use crate::intel::gpu_font::{
-    GpuFontFace, GpuFontGlyphRecipe, GpuFontGlyphRecipeKey, GpuFontJobEntry, GpuFontRetainedScene,
-    GpuFontRetainedSceneError, GpuFontRgba, GpuFontTextRequest, MAX_DYNAMIC_TEXT_CHARS,
-    build_gpu_font_glyph_recipe, ensure_font_face_available, font_face_is_available,
+    GpuFontFace, GpuFontGlyphRecipe, GpuFontGlyphRecipeKey, GpuFontJobEntry,
+    GpuFontRetainedIdentityStamp, GpuFontRetainedScene, GpuFontRetainedSceneError, GpuFontRgba,
+    GpuFontTextRequest, MAX_DYNAMIC_TEXT_CHARS, build_gpu_font_glyph_recipe,
+    classify_gpu_font_prepared_placements, ensure_font_face_available, font_face_is_available,
     font_face_supports_text, gpu_font_centered_glyph_recipe_key,
-    place_gpu_font_origin_glyph_recipe, retain_gpu_font_centered_scene_at_raster,
-    retain_gpu_font_prepared_centered_scene, retain_gpu_font_prepared_origin_scene,
-    retain_gpu_font_scene_at_raster, wait_for_font_face_available,
+    place_gpu_font_origin_glyph_recipe, restamp_gpu_font_identity_batch,
+    retain_gpu_font_centered_scene_at_raster, retain_gpu_font_prepared_centered_scene,
+    retain_gpu_font_prepared_origin_scene, retain_gpu_font_scene_at_raster,
+    wait_for_font_face_available,
 };
 use crate::r::services::font_plan_service::PreparedGlyphPlan;
 use crate::r::services::oceancache::{
-    OCEAN_CACHE_BYTES, OCEAN_CACHE_THEORETICAL_32_BYTES, OceanCacheClaim, OceanCacheKey,
+    OCEAN_CACHE_BYTES, OCEAN_CACHE_THEORETICAL_32_BYTES, OceanCacheClaim,
 };
 
 const FONT_KERNEL_QUEUE_CAPACITY: usize = 32;
@@ -464,9 +466,8 @@ pub(crate) struct FontFrameStamp {
 struct FontGpuProducerResources {
     lease: crate::r::services::font_producer_service::FontProducerLease,
     storage: FontGpuProducerStorage,
-    /// The cache is owned by this lease/generation, never by a face or a
-    /// registry slot. Re-registration therefore installs a fresh cache even
-    /// if the numerical producer id is reused.
+    /// Outline recipes remain owned by this lease/generation. The OceanCache
+    /// claim below is instead shared by the immutable registration seal.
     glyph_cache: Mutex<ProducerGlyphRecipeCache>,
     ocean_cache: OceanCacheClaim,
 }
@@ -789,7 +790,7 @@ pub(crate) fn register_gpu_font_producer(
     }
     let ocean_cache = OceanCacheClaim::claim(registration);
     crate::log_info!(target: "render";
-        "font-kernel-service: producer registered id={} generation={} face={} tier={} font_pixels_milli={} extent={}x{} rows={} max_chars={} storage=persistent-font-rgba8 glyph_recipe_cache=colorless-first-fill-no-evict cache_budget_bytes={} theoretical_32_cache_bytes={} ocean_cache=shared-registration-seal-face+pixels ocean_budget_bytes={} ocean_claims={} submit_lane=serialized-font-rcs\n",
+        "font-kernel-service: producer registered id={} generation={} face={} tier={} font_pixels_milli={} extent={}x{} rows={} max_chars={} storage=persistent-font-rgba8 glyph_recipe_cache=colorless-first-fill-no-evict cache_budget_bytes={} theoretical_32_cache_bytes={} ocean_cache=shared-registration-seal-face+pixels-glyph-local-r8 ocean_budget_bytes={} ocean_claims={} submit_lane=serialized-font-rcs\n",
         lease.producer_id(),
         lease.generation(),
         face.registry_name(),
@@ -834,7 +835,7 @@ pub(crate) fn register_ui4_gpu_font_producer(
     let lease = crate::r::services::font_producer_service::register_producer(registration)?;
     let ocean_cache = OceanCacheClaim::claim(registration);
     crate::log_info!(target: "render";
-        "font-kernel-service: UI4 producer registered id={} generation={} face={} tier={} font_pixels_milli={} extent={}x{} rows={} max_chars={} storage=ui4-frame-ring glyph_recipe_cache=colorless-first-fill-no-evict cache_budget_bytes={} theoretical_32_cache_bytes={} ocean_cache=shared-registration-seal-face+pixels ocean_budget_bytes={} ocean_claims={} submit_lane=serialized-font-rcs\n",
+        "font-kernel-service: UI4 producer registered id={} generation={} face={} tier={} font_pixels_milli={} extent={}x{} rows={} max_chars={} storage=ui4-frame-ring glyph_recipe_cache=colorless-first-fill-no-evict cache_budget_bytes={} theoretical_32_cache_bytes={} ocean_cache=shared-registration-seal-face+pixels-glyph-local-r8 ocean_budget_bytes={} ocean_claims={} submit_lane=serialized-font-rcs\n",
         lease.producer_id(),
         lease.generation(),
         face.registry_name(),
@@ -2152,10 +2153,7 @@ fn prepare_producer_stamp_scenes(
     ticket: FontKernelTicket,
     request: &FontStampRequest,
     resources: &Arc<FontGpuProducerResources>,
-) -> Result<
-    (Vec<(Arc<GpuFontRetainedScene>, GpuFontRgba)>, usize, (u64, u64, u64), bool),
-    FontKernelError,
-> {
+) -> Result<(Vec<GpuFontRetainedIdentityStamp>, usize, (u64, u64, u64), bool), FontKernelError> {
     // Producer rows use a one-to-one viewport/raster contract, so ppem is the
     // registered font pixel size.  The origin recipe path rounds
     // `position_y + ppem`, while the legacy path rounds position and applies
@@ -2173,14 +2171,16 @@ fn prepare_producer_stamp_scenes(
         return Ok((
             scenes
                 .into_iter()
-                .map(|(scene, color)| (Arc::new(scene), color))
+                .map(|(scene, color)| {
+                    GpuFontRetainedIdentityStamp::new(Arc::new(scene), [0, 0], color)
+                })
                 .collect(),
             glyphs,
             (0, 0, 0),
             false,
         ));
     }
-    let mut scenes = Vec::with_capacity(request.layers.len());
+    let mut stamps = Vec::new();
     let mut glyphs = 0usize;
     let before = resources.glyph_cache.lock().diagnostics();
     for layer in &request.layers {
@@ -2192,25 +2192,14 @@ fn prepare_producer_stamp_scenes(
             return Ok((
                 scenes
                     .into_iter()
-                    .map(|(scene, color)| (Arc::new(scene), color))
+                    .map(|(scene, color)| {
+                        GpuFontRetainedIdentityStamp::new(Arc::new(scene), [0, 0], color)
+                    })
                     .collect(),
                 glyphs,
                 (0, 0, 0),
                 false,
             ));
-        }
-        let retained_key = OceanCacheKey::from_scene(&layer.scene);
-        if let Some(scene) = resources.ocean_cache.get(&retained_key) {
-            glyphs = glyphs.saturating_add(
-                layer
-                    .scene
-                    .runs
-                    .iter()
-                    .map(|run| run.text.chars().count())
-                    .sum::<usize>(),
-            );
-            scenes.push((scene, layer.foreground));
-            continue;
         }
         let glyph_runs = expand_origin_runs(ticket, &layer.scene)?;
         let prepared = {
@@ -2254,18 +2243,55 @@ fn prepare_producer_stamp_scenes(
             prepared
         };
         glyphs = glyphs.saturating_add(prepared.len());
-        let scene = Arc::new(
-            retain_gpu_font_prepared_origin_scene(prepared)
-                .map_err(FontKernelError::Unavailable)?,
-        );
-        resources
-            .ocean_cache
-            .insert(retained_key, Arc::clone(&scene));
-        scenes.push((scene, layer.foreground));
+
+        // Independent R8 masks are only composition-equivalent while their
+        // final rectangles do not overlap. Preserve the established max-union
+        // coverage path for slanted/overprinted placements and exact-dedup
+        // repeated recipe+destination pairs on the fast path.
+        let classification = classify_gpu_font_prepared_placements(&prepared);
+        if classification.requires_union_coverage() {
+            let scene = Arc::new(
+                retain_gpu_font_prepared_origin_scene(prepared)
+                    .map_err(FontKernelError::Unavailable)?,
+            );
+            stamps.push(GpuFontRetainedIdentityStamp::new(scene, [0, 0], layer.foreground));
+            continue;
+        }
+        let mut unique_indices = classification.unique_indices().iter().copied().peekable();
+        for (prepared_index, prepared_glyph) in prepared.into_iter().enumerate() {
+            if unique_indices.peek().copied() != Some(prepared_index) {
+                continue;
+            }
+            unique_indices.next();
+            let key = prepared_glyph.recipe().key();
+            let destination_xy = prepared_glyph.destination_xy();
+            let scene = if let Some(scene) = resources.ocean_cache.get(&key) {
+                scene
+            } else {
+                let scene = Arc::new(
+                    retain_gpu_font_prepared_origin_scene(alloc::vec![prepared_glyph])
+                        .map_err(FontKernelError::Unavailable)?,
+                );
+                resources.ocean_cache.insert(key, Arc::clone(&scene));
+                scene
+            };
+            let cached_origin = scene
+                .origin_px()
+                .ok_or(FontKernelError::Unavailable("font-oceancache-scene-released"))?;
+            let translation_px = [
+                destination_xy[0]
+                    .checked_sub(cached_origin[0])
+                    .ok_or(FontKernelError::InvalidRequest("font-oceancache-x-range"))?,
+                destination_xy[1]
+                    .checked_sub(cached_origin[1])
+                    .ok_or(FontKernelError::InvalidRequest("font-oceancache-y-range"))?,
+            ];
+            stamps.push(GpuFontRetainedIdentityStamp::new(scene, translation_px, layer.foreground));
+        }
     }
     let after = resources.glyph_cache.lock().diagnostics();
     Ok((
-        scenes,
+        stamps,
         glyphs,
         (
             after.2.saturating_sub(before.2),
@@ -2382,7 +2408,7 @@ fn validate_frame_clear_outcome(
 }
 
 enum FontFrameCoverage {
-    Retained(Vec<(Arc<GpuFontRetainedScene>, GpuFontRgba)>),
+    Retained(Vec<GpuFontRetainedIdentityStamp>),
 }
 
 fn process_font_rush_frame_clear(
@@ -2618,7 +2644,11 @@ fn process_frame_stamp(
             let scene = retain_gpu_font_prepared_centered_scene(prepared)
                 .map_err(FontKernelError::Unavailable)?;
             (
-                FontFrameCoverage::Retained(alloc::vec![(Arc::new(scene), foreground)]),
+                FontFrameCoverage::Retained(alloc::vec![GpuFontRetainedIdentityStamp::new(
+                    Arc::new(scene),
+                    [0, 0],
+                    foreground,
+                )]),
                 glyphs,
                 "prepared-plan-union-coverage",
                 None,
@@ -2630,7 +2660,9 @@ fn process_frame_stamp(
                 FontFrameCoverage::Retained(
                     scenes
                         .into_iter()
-                        .map(|(scene, color)| (Arc::new(scene), color))
+                        .map(|(scene, color)| {
+                            GpuFontRetainedIdentityStamp::new(Arc::new(scene), [0, 0], color)
+                        })
                         .collect(),
                 ),
                 glyphs,
@@ -2654,7 +2686,7 @@ fn process_frame_stamp(
                 FontFrameCoverage::Retained(scenes),
                 glyphs,
                 if cache_used {
-                    "producer-recipe-cache"
+                    "producer-oceancache-glyph-local"
                 } else {
                     "producer-outline-fallback"
                 },
@@ -2672,13 +2704,13 @@ fn process_frame_stamp(
         FontFrameCoverage::Retained(scenes) => (
             scenes
                 .iter()
-                .fold(0u64, |total, (scene, _)| total.saturating_add(scene.coverage_build_ms())),
+                .fold(0u64, |total, stamp| total.saturating_add(stamp.coverage_build_ms())),
             scenes
                 .iter()
-                .fold(0u64, |total, (scene, _)| total.saturating_add(scene.coverage_audit_ms())),
+                .fold(0u64, |total, stamp| total.saturating_add(stamp.coverage_audit_ms())),
             scenes
                 .iter()
-                .fold(0usize, |total, (scene, _)| total.saturating_add(scene.coverage_submits())),
+                .fold(0usize, |total, stamp| total.saturating_add(stamp.coverage_submits())),
             scenes.len(),
         ),
     };
@@ -2740,37 +2772,27 @@ fn process_frame_stamp(
         0
     };
 
-    let mut submits = 0usize;
-    let mut active_walkers = 0usize;
-    let mut release = None;
     let instance_started_ms = Instant::now().as_millis();
-    match coverage {
+    let rendered = match coverage {
         FontFrameCoverage::Retained(scenes) => {
-            for (scene, foreground) in scenes {
-                set_active_stage(ticket, "frame-instance");
-                let rendered = match scene.restamp_identity(destination, [0, 0], foreground, true) {
-                    Ok(rendered) => rendered,
-                    Err(error) => {
-                        let error = FontKernelError::from(error);
-                        if (clear_rgba.is_some() || submits != 0)
-                            && matches!(error, FontKernelError::Unavailable(_))
-                        {
-                            return Err(FontKernelError::SubmittedIncomplete(
-                                "font-frame-after-clear-partial",
-                            ));
-                        }
-                        return Err(error);
+            set_active_stage(ticket, "frame-instance");
+            match restamp_gpu_font_identity_batch(scenes.as_slice(), destination, true) {
+                Ok(rendered) => rendered,
+                Err(error) => {
+                    let error = FontKernelError::from(error);
+                    if clear_rgba.is_some() && matches!(error, FontKernelError::Unavailable(_)) {
+                        return Err(FontKernelError::SubmittedIncomplete(
+                            "font-frame-after-clear-partial",
+                        ));
                     }
-                };
-                submits = submits.saturating_add(rendered.submits);
-                active_walkers = active_walkers.saturating_add(rendered.active_walkers);
-                if rendered.release.is_some() {
-                    release = rendered.release;
+                    return Err(error);
                 }
             }
         }
-    }
-    let release = release.ok_or(if clear_rgba.is_some() || submits != 0 {
+    };
+    let submits = rendered.submits;
+    let active_walkers = rendered.active_walkers;
+    let release = rendered.release.ok_or(if clear_rgba.is_some() || submits != 0 {
         FontKernelError::SubmittedIncomplete("font-frame-stamp-release-missing")
     } else {
         FontKernelError::Unavailable("font-frame-stamp-release-missing")
@@ -3026,7 +3048,7 @@ pub(crate) async fn font_kernel_service_task() {
     ONLINE.store(true, Ordering::Release);
     crate::log_info!(
         target: "render";
-        "font-kernel-service: online paths=retain-scene+async-stamp+async-frame-stamp+prepared-frame-stamp+registered-persistent-row+font-rush-clear-only+font-rush-showcase-rgba8-sprite controller=bsp worker=leased-blocking-service-lane font_lane=fair-fifo-font-only gpu_context=kernel-gpgpu-font queue_capacity={} producer_slots=32 producer_rows=persistent-generation-tagged-ack-credit retained_storage=gpu-vm-r8 prepared_storage=bounded-transient-move-once glyph_cache=per-producer-colorless-recipe-first-fill-no-evict cache_budget_bytes={} theoretical_32_cache_bytes={} ocean_cache=shared-registration-seal-face+pixels-exact-layer-first-fill-no-evict ocean_budget_bytes={} ocean_worst_case_32_unique_seals_bytes={} stamp_output=owned-or-ui4-leased-gpu-vm-rgba8 completion=signal\n",
+        "font-kernel-service: online paths=retain-scene+async-stamp+async-frame-stamp+prepared-frame-stamp+registered-persistent-row+font-rush-clear-only+font-rush-showcase-rgba8-sprite controller=bsp worker=leased-blocking-service-lane font_lane=fair-fifo-font-only gpu_context=kernel-gpgpu-font queue_capacity={} producer_slots=32 producer_rows=persistent-generation-tagged-ack-credit retained_storage=gpu-vm-r8 prepared_storage=bounded-transient-move-once glyph_cache=per-producer-colorless-recipe-first-fill-no-evict cache_budget_bytes={} theoretical_32_cache_bytes={} ocean_cache=shared-registration-seal-face+pixels-glyph-local-r8-first-fill-no-evict ocean_budget_bytes={} ocean_worst_case_32_unique_seals_bytes={} stamp_output=owned-or-ui4-leased-gpu-vm-rgba8 completion=signal\n",
         FONT_KERNEL_QUEUE_CAPACITY,
         FONT_PRODUCER_GLYPH_CACHE_BYTES,
         FONT_PRODUCER_GLYPH_CACHE_THEORETICAL_32_BYTES,

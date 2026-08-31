@@ -3,20 +3,24 @@ digraph "v-v0.1.0" {
   node [shape=box, style="rounded,filled", fontname="Inter,Arial", fontsize=10, margin="0.13,0.10", color="#8b9bb0", fillcolor="#f7f9fb", fontcolor="#172033"];
   edge [color="#9aa8b8", arrowsize=0.55, penwidth=7.2];
   n0 [label=<<FONT POINT-SIZE="13"><B>v</B></FONT><BR/><FONT POINT-SIZE="12">0.1.0</FONT><BR/><FONT POINT-SIZE="11">/crates/trueos-v</FONT>>, fillcolor="#dff3ff", color="#1b78a6"];
-  out0 [label=<to serde-v1.0.228.svg<BR/><B>serde</B><BR/>1.0.228>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  out0 [label=<to hashbrown-v0.17.1.svg<BR/><B>hashbrown</B><BR/>0.17.1>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
   n0 -> out0 [style=dashed, color="#d19922"];
-  out1 [label=<to serde_json-v1.0.150.svg<BR/><B>serde_json</B><BR/>1.0.150>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  out1 [label=<to infer-v0.22.0-trueos.1.svg<BR/><B>infer</B><BR/>0.22.0-trueos.1<BR/>/vendor/infer>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
   n0 -> out1 [style=dashed, color="#d19922"];
-  out2 [label=<to spin-v0.10.0.svg<BR/><B>spin</B><BR/>0.10.0>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  out2 [label=<to serde-v1.0.229.svg<BR/><B>serde</B><BR/>1.0.229>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
   n0 -> out2 [style=dashed, color="#d19922"];
-  in3 [label=<from trueos-esp-v0.1.0.svg<BR/><B>v</B><BR/>0.1.0<BR/>/crates/trueos-v>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
-  in3 -> n0 [style=dashed, color="#4b8fc5"];
-  in4 [label=<from trueos-locale-v0.1.0.svg<BR/><B>v</B><BR/>0.1.0<BR/>/crates/trueos-v>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
-  in4 -> n0 [style=dashed, color="#4b8fc5"];
-  in5 [label=<from trueos-qjs-v0.1.0.svg<BR/><B>v</B><BR/>0.1.0<BR/>/crates/trueos-v>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
-  in5 -> n0 [style=dashed, color="#4b8fc5"];
-  in6 [label=<from trueos-vm-v0.1.0.svg<BR/><B>v</B><BR/>0.1.0<BR/>/crates/trueos-v>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
-  in6 -> n0 [style=dashed, color="#4b8fc5"];
+  out3 [label=<to serde_json-v1.0.151.svg<BR/><B>serde_json</B><BR/>1.0.151>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out3 [style=dashed, color="#d19922"];
+  out4 [label=<to spin-v0.10.1.svg<BR/><B>spin</B><BR/>0.10.1>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out4 [style=dashed, color="#d19922"];
+  out5 [label=<to trueos-crypto-v0.1.0.svg<BR/><B>trueos-crypto</B><BR/>0.1.0<BR/>/crates/trueos-crypto>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out5 [style=dashed, color="#d19922"];
+  out6 [label=<to trueos-fs-v0.0.1.svg<BR/><B>trueos-fs</B><BR/>0.0.1<BR/>/crates/trueos-fs>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out6 [style=dashed, color="#d19922"];
+  out7 [label=<to trueos-math-v0.1.0.svg<BR/><B>trueos-math</B><BR/>0.1.0<BR/>/crates/trueos-math>, shape=note, style="filled", fillcolor="#fff8e8", color="#d19922", fontcolor="#614000"];
+  n0 -> out7 [style=dashed, color="#d19922"];
+  in8 [label=<from trueos-vm-v0.1.0.svg<BR/><B>v</B><BR/>0.1.0<BR/>/crates/trueos-v>, shape=note, style="filled", fillcolor="#eef6ff", color="#4b8fc5", fontcolor="#123d5c"];
+  in8 -> n0 [style=dashed, color="#4b8fc5"];
   // collapsed leaf ends: 0
   // centered two-input leaves: 0
   // nested two-input leaves: 0
