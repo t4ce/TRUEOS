@@ -137,6 +137,7 @@ pub enum FontFace {
     NotoSansSc = 2,
     #[default]
     Inconsolata = 3,
+    JuliaMono = 4,
 }
 
 impl FontFace {
@@ -145,6 +146,7 @@ impl FontFace {
             1 => Some(Self::Default),
             2 => Some(Self::NotoSansSc),
             3 => Some(Self::Inconsolata),
+            4 => Some(Self::JuliaMono),
             _ => None,
         }
     }

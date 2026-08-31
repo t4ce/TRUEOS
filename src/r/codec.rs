@@ -37,6 +37,12 @@ enum CodecRequest {
         source_path: String,
         archive_path: String,
     },
+    SevenZPackPaths {
+        owner: u32,
+        id: u32,
+        source_paths: Vec<String>,
+        archive_path: String,
+    },
     SevenZUnpackPath {
         owner: u32,
         id: u32,
@@ -48,7 +54,9 @@ enum CodecRequest {
 impl CodecRequest {
     fn operation_key(&self) -> (u32, u32) {
         match self {
-            Self::SevenZPackPath { owner, id, .. } | Self::SevenZUnpackPath { owner, id, .. } => {
+            Self::SevenZPackPath { owner, id, .. }
+            | Self::SevenZPackPaths { owner, id, .. }
+            | Self::SevenZUnpackPath { owner, id, .. } => {
                 (*owner, *id)
             }
         }
@@ -195,6 +203,38 @@ pub fn enqueue_7z_pack(
         owner,
         id,
         source_path,
+        archive_path,
+    })
+}
+
+/// Queue one deterministic archive from several explicit regular files. This
+/// differs from `enqueue_7z_pack`, which accepts one file or recursively packs
+/// one directory.
+pub fn enqueue_7z_pack_many(
+    owner: u32,
+    source_paths: Vec<String>,
+    archive_path: String,
+) -> Result<u32, CodecError> {
+    if source_paths.is_empty() || source_paths.len() > MAX_ARCHIVE_ENTRIES {
+        return Err(CodecError::BadPath);
+    }
+    let archive_path = normalize_path(archive_path.as_str(), false)?;
+    let mut unique_sources = BTreeSet::new();
+    let mut normalized_sources = Vec::new();
+    normalized_sources
+        .try_reserve_exact(source_paths.len())
+        .map_err(|_| CodecError::LimitExceeded)?;
+    for source_path in source_paths {
+        let source_path = normalize_path(source_path.as_str(), false)?;
+        if source_path == archive_path || !unique_sources.insert(source_path.clone()) {
+            return Err(CodecError::BadPath);
+        }
+        normalized_sources.push(source_path);
+    }
+    enqueue_operation(owner, |id| CodecRequest::SevenZPackPaths {
+        owner,
+        id,
+        source_paths: normalized_sources,
         archive_path,
     })
 }
@@ -459,6 +499,57 @@ async fn pack_path_job(source_path: &str, archive_path: &str) -> Result<CodecRep
     })
 }
 
+async fn pack_paths_job(
+    source_paths: &[String],
+    archive_path: &str,
+) -> Result<CodecReport, CodecError> {
+    let disk = crate::r::fs::trueosfs::primary_root_handle().ok_or(CodecError::NoRoot)?;
+    let mut total = 0usize;
+    let mut names = BTreeSet::new();
+    let mut entries = Vec::new();
+    entries
+        .try_reserve_exact(source_paths.len())
+        .map_err(|_| CodecError::LimitExceeded)?;
+    for source_path in source_paths {
+        let name = validate_archive_entry_name(basename(source_path.as_str()))?;
+        if !names.insert(name.clone()) {
+            return Err(CodecError::PathConflict);
+        }
+        entries.push(read_source_file(disk, source_path.as_str(), name, &mut total).await?);
+    }
+    entries.sort_by(|left, right| left.name.cmp(&right.name));
+    let source_bytes = entries.iter().try_fold(0u64, |total, entry| {
+        total
+            .checked_add(entry.bytes.len() as u64)
+            .ok_or(CodecError::LimitExceeded)
+    })?;
+    let sources: Vec<crate::z7::SevenZSourceEntry<'_>> = entries
+        .iter()
+        .map(|entry| crate::z7::SevenZSourceEntry {
+            name: entry.name.as_str(),
+            bytes: entry.bytes.as_slice(),
+        })
+        .collect();
+    let archive = crate::z7::compress_files_to_vec(sources.as_slice())?;
+    if archive.len() > MAX_ARCHIVE_BYTES {
+        return Err(CodecError::LimitExceeded);
+    }
+    if let Some(parent) = parent_path(archive_path)
+        && !crate::r::fs::trueosfs::dir_create_all_async(disk, parent).await?
+    {
+        return Err(CodecError::WriteFailed);
+    }
+    if !crate::r::fs::trueosfs::file_write_all_async(disk, archive_path, archive.as_slice()).await?
+    {
+        return Err(CodecError::WriteFailed);
+    }
+    Ok(CodecReport {
+        input_bytes: source_bytes,
+        output_bytes: archive.len() as u64,
+        file_count: u32::try_from(entries.len()).map_err(|_| CodecError::LimitExceeded)?,
+    })
+}
+
 fn validate_entry_set(entries: &[crate::z7::SevenZEntry]) -> Result<Vec<String>, CodecError> {
     let mut path_set = BTreeSet::new();
     let mut paths = Vec::new();
@@ -567,6 +658,11 @@ async fn execute_request(request: CodecRequest) {
             archive_path,
             ..
         } => pack_path_job(source_path.as_str(), archive_path.as_str()).await,
+        CodecRequest::SevenZPackPaths {
+            source_paths,
+            archive_path,
+            ..
+        } => pack_paths_job(source_paths.as_slice(), archive_path.as_str()).await,
         CodecRequest::SevenZUnpackPath {
             archive_path,
             output_path,

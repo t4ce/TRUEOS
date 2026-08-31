@@ -3508,7 +3508,7 @@ pub unsafe extern "C" fn trueos_cabi_ui4_solara_text_scene(
         retain_scene_entries_for_surface(
             owner,
             window_id,
-            font,
+            font.resolve_optional(),
             viewport_width,
             viewport_height,
             rgba,
@@ -3544,6 +3544,7 @@ pub unsafe extern "C" fn trueos_cabi_ui4_font_canvas(
     let Some(font) = GpuFontFace::from_id(font_id) else {
         return ERROR_FONT;
     };
+    let font = font.resolve_optional();
     if rows.is_null()
         || row_count == 0
         || row_count > MAX_FONT_CANVAS_ROWS
@@ -3618,6 +3619,7 @@ fn font_canvas_request(description: &BlueprintFontCanvasDescription) -> FontStam
         GpuFontFace::Default => FontFace::Default,
         GpuFontFace::NotoSansSc => FontFace::NotoSansSc,
         GpuFontFace::Inconsolata => FontFace::Inconsolata,
+        GpuFontFace::JuliaMono => FontFace::JuliaMono,
     };
     let lookup_rows = description
         .rows
@@ -3818,12 +3820,6 @@ fn stamp_scene_entries_for_surface(
     rgba: u32,
     runs: Vec<RetainedFontRun>,
 ) -> i32 {
-    let description = BlueprintRetainedTextDescription {
-        font,
-        viewport_width,
-        viewport_height,
-        runs,
-    };
     let mut surfaces = SURFACES.lock();
     let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
         return ERROR_NOT_FOUND;
@@ -3837,6 +3833,25 @@ fn stamp_scene_entries_for_surface(
     if surface.stamped_text_pending.is_some() {
         return ERROR_STATE;
     }
+
+    // A Shell2 frame can arrive as several color-layer calls. If JuliaMono is
+    // published between two calls, finish the current frame with the face it
+    // began with and switch only at the next frame boundary.
+    let font = if font == GpuFontFace::JuliaMono && surface.stamped_text_cursor != 0 {
+        surface
+            .stamped_text_layers
+            .first()
+            .map(|layer| layer.description.font)
+            .unwrap_or_else(|| font.resolve_optional())
+    } else {
+        font.resolve_optional()
+    };
+    let description = BlueprintRetainedTextDescription {
+        font,
+        viewport_width,
+        viewport_height,
+        runs,
+    };
 
     let layer_index = surface.stamped_text_cursor;
     let replacement = BlueprintStampedTextLayer {
@@ -4292,7 +4307,7 @@ fn shell2_stamped_text_registration(
     request: &FontStampRequest,
 ) -> Option<crate::r::services::font_producer_service::FontProducerRegistration> {
     let first_scene = &request.layers.first()?.scene;
-    if first_scene.font != GpuFontFace::Inconsolata
+    if !matches!(first_scene.font, GpuFontFace::Inconsolata | GpuFontFace::JuliaMono)
         || first_scene.positioning != RetainedFontPositioning::SceneOrigin
         || first_scene.viewport_width != first_scene.raster_width
         || first_scene.viewport_height != first_scene.raster_height
@@ -5388,6 +5403,7 @@ pub(crate) fn request_font_sprite(
     let Some(font) = GpuFontFace::from_id(font_id) else {
         return ERROR_INVALID;
     };
+    let font = font.resolve_optional();
     let Some(scalar) = char::from_u32(scalar) else {
         return ERROR_INVALID;
     };
@@ -7099,18 +7115,26 @@ mod tests {
     }
 
     #[test]
-    fn shell2_stamp_registration_seals_inconsolata_size_and_extent() {
+    fn shell2_stamp_registration_seals_terminal_face_size_and_extent() {
         let registration = shell2_stamped_text_registration(&stamped_shell_request(
-            GpuFontFace::Inconsolata,
+            GpuFontFace::JuliaMono,
             24.0,
         ))
         .expect("Shell2's default tier should be OceanCache eligible");
 
-        assert_eq!(registration.face, GpuFontFace::Inconsolata.id() as u16);
+        assert_eq!(registration.face, GpuFontFace::JuliaMono.id() as u16);
         assert_eq!(registration.tier, 24);
         assert_eq!(registration.font_pixels_milli, 24_000);
         assert_eq!((registration.row_width_px, registration.row_height_px), (1_280, 720));
         assert_eq!(registration.row_ring_depth, 2);
+
+        assert!(
+            shell2_stamped_text_registration(&stamped_shell_request(
+                GpuFontFace::Inconsolata,
+                24.0,
+            ))
+            .is_some()
+        );
 
         assert!(
             shell2_stamped_text_registration(&stamped_shell_request(

@@ -8,6 +8,10 @@ use crate::r::io::cabi::{
     FS_ERR_NO_SPACE, FS_ERR_NOT_FOUND, FS_ERR_TOO_LARGE,
 };
 
+/// A bounded path list keeps a guest request inside one comm-page payload and
+/// matches the explorer's 256-node visible-directory cap.
+pub const PACK_MANY_SOURCE_CAP: usize = 256;
+
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct TrueosArchiveReport {
@@ -39,6 +43,13 @@ pub(crate) fn map_error(error: &crate::r::codec::CodecError) -> i32 {
 
 pub(crate) fn start_pack(owner: u32, source: String, archive: String) -> i32 {
     match crate::r::codec::enqueue_7z_pack(owner, source, archive) {
+        Ok(id) => id as i32,
+        Err(error) => map_error(&error),
+    }
+}
+
+pub(crate) fn start_pack_many(owner: u32, sources: Vec<String>, archive: String) -> i32 {
+    match crate::r::codec::enqueue_7z_pack_many(owner, sources, archive) {
         Ok(id) => id as i32,
         Err(error) => map_error(&error),
     }
@@ -118,6 +129,67 @@ fn guest_start(op: u32, first: &str, second: &str) -> i32 {
     }
 }
 
+fn parse_path_list(paths_ptr: *const u8, paths_len: usize) -> Result<Vec<String>, i32> {
+    if paths_ptr.is_null() || paths_len == 0 {
+        return Err(FS_ERR_BAD_PARAM);
+    }
+    let bytes = unsafe { core::slice::from_raw_parts(paths_ptr, paths_len) };
+    let mut paths = Vec::new();
+    for encoded_path in bytes.split(|byte| *byte == 0) {
+        if encoded_path.is_empty() || paths.len() >= PACK_MANY_SOURCE_CAP {
+            return Err(FS_ERR_BAD_PARAM);
+        }
+        paths.push(parse_path(encoded_path.as_ptr(), encoded_path.len())?);
+    }
+    Ok(paths)
+}
+
+fn guest_start_many(op: u32, sources: &[String], archive: &str) -> i32 {
+    if sources.is_empty() || sources.len() > PACK_MANY_SOURCE_CAP {
+        return FS_ERR_BAD_PARAM;
+    }
+    let source_bytes = match sources
+        .iter()
+        .enumerate()
+        .try_fold(0usize, |total, (index, source)| {
+            total
+                .checked_add(usize::from(index != 0))
+                .and_then(|total| total.checked_add(source.len()))
+                .ok_or(())
+        })
+    {
+        Ok(bytes) => bytes,
+        Err(()) => return FS_ERR_TOO_LARGE,
+    };
+    let total = match source_bytes.checked_add(archive.len()) {
+        Some(total) if total <= trueos_vm::vmcall::PAYLOAD_CAP => total,
+        _ => return FS_ERR_TOO_LARGE,
+    };
+    let mut payload = Vec::new();
+    if payload.try_reserve_exact(total).is_err() {
+        return FS_ERR_NO_SPACE;
+    }
+    for (index, source) in sources.iter().enumerate() {
+        if index != 0 {
+            payload.push(0);
+        }
+        payload.extend_from_slice(source.as_bytes());
+    }
+    payload.extend_from_slice(archive.as_bytes());
+    let (call_status, value) = trueos_vm::vmcall::call_with_payload(
+        op,
+        source_bytes as u64,
+        0,
+        payload.as_slice(),
+        &mut [],
+    );
+    if call_status == trueos_vm::vmcall::STATUS_OK {
+        (value as i64) as i32
+    } else {
+        FS_ERR_BAD_PARAM
+    }
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trueos_cabi_archive_pack_start(
     source_ptr: *const u8,
@@ -137,6 +209,35 @@ pub unsafe extern "C" fn trueos_cabi_archive_pack_start(
         guest_start(trueos_vm::vmcall::OP_BP_ARCHIVE_PACK_START, source.as_str(), archive.as_str())
     } else {
         start_pack(direct_owner(), source, archive)
+    }
+}
+
+/// Start one archive operation for a NUL-separated non-empty list of regular
+/// file paths. The archive itself is written only when every source has been
+/// read and encoded successfully.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_archive_pack_many_start(
+    sources_ptr: *const u8,
+    sources_len: usize,
+    archive_ptr: *const u8,
+    archive_len: usize,
+) -> i32 {
+    let sources = match parse_path_list(sources_ptr, sources_len) {
+        Ok(paths) => paths,
+        Err(error) => return error,
+    };
+    let archive = match parse_path(archive_ptr, archive_len) {
+        Ok(path) => path,
+        Err(error) => return error,
+    };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        guest_start_many(
+            trueos_vm::vmcall::OP_BP_ARCHIVE_PACK_MANY_START,
+            sources.as_slice(),
+            archive.as_str(),
+        )
+    } else {
+        start_pack_many(direct_owner(), sources, archive)
     }
 }
 

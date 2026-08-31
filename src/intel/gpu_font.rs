@@ -420,7 +420,10 @@ pub(crate) enum GpuFontFace {
     Default = 1,
     NotoSansSc = 2,
     Inconsolata = 3,
+    JuliaMono = 4,
 }
+
+static JULIA_MONO_FALLBACK_LOGGED: AtomicBool = AtomicBool::new(false);
 
 impl GpuFontFace {
     pub(crate) const fn from_id(id: u32) -> Option<Self> {
@@ -428,6 +431,7 @@ impl GpuFontFace {
             1 => Some(Self::Default),
             2 => Some(Self::NotoSansSc),
             3 => Some(Self::Inconsolata),
+            4 => Some(Self::JuliaMono),
             _ => None,
         }
     }
@@ -441,6 +445,29 @@ impl GpuFontFace {
             Self::Default => "font",
             Self::NotoSansSc => "noto-sans-sc",
             Self::Inconsolata => "inconsolata",
+            Self::JuliaMono => "julia-mono",
+        }
+    }
+
+    /// JuliaMono is an optional user-installed TrueOSFS face. Resolve it at
+    /// the UI/service admission boundary, before any retained-scene or cache
+    /// identity is formed, so fallback glyphs can never inhabit face 4's
+    /// OceanCache domain.
+    pub(crate) fn resolve_optional(self) -> Self {
+        if self == Self::JuliaMono
+            && !crate::graphics::font::font_is_available(Self::JuliaMono.registry_name())
+        {
+            if JULIA_MONO_FALLBACK_LOGGED
+                .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                .is_ok()
+            {
+                crate::log_info!(target: "render";
+                    "gpu-font: optional face unavailable requested=julia-mono resolved=inconsolata path=trueosfs:/fonts/JuliaMono-Regular.ttf cache_identity=resolved-face action=embedded-terminal-fallback\n"
+                );
+            }
+            Self::Inconsolata
+        } else {
+            self
         }
     }
 }
@@ -5464,6 +5491,14 @@ mod tests {
         retained_font_identity_translation, small_font_hint_ppem, small_font_optical_bias_px,
         transform_owned_outline_to_raster,
     };
+
+    #[test]
+    fn julia_mono_keeps_a_distinct_stable_face_identity() {
+        assert_eq!(GpuFontFace::JuliaMono.id(), 4);
+        assert_eq!(GpuFontFace::from_id(4), Some(GpuFontFace::JuliaMono));
+        assert_eq!(GpuFontFace::JuliaMono.registry_name(), "julia-mono");
+        assert_ne!(GpuFontFace::JuliaMono, GpuFontFace::Inconsolata);
+    }
 
     fn prepared_rect(rect: (i32, i32, i32, i32)) -> PreparedGpuFontCoverageEntry {
         PreparedGpuFontCoverageEntry {

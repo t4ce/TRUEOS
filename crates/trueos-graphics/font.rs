@@ -46,14 +46,21 @@ const EMBEDDED_FONTS: [EmbeddedFontSpec; 2] = [
         bytes: include_bytes!("../../tools/fnt/Inconsolata-Regular.ttf"),
     },
 ];
-const TRUEOSFS_FONTS: [TrueosFsFontSpec; 1] = [TrueosFsFontSpec {
-    name: "noto-sans-sc",
-    file_name: "NotoSansSC[wght].ttf",
-    path: "fonts/NotoSansSC[wght].ttf",
-}];
+const TRUEOSFS_FONTS: [TrueosFsFontSpec; 2] = [
+    TrueosFsFontSpec {
+        name: "noto-sans-sc",
+        file_name: "NotoSansSC[wght].ttf",
+        path: "fonts/NotoSansSC[wght].ttf",
+    },
+    TrueosFsFontSpec {
+        name: "julia-mono",
+        file_name: "JuliaMono-Regular.ttf",
+        path: "fonts/JuliaMono-Regular.ttf",
+    },
+];
 const TRUEOSFS_FONT_HEARTBEAT_SECS: u64 = 30;
 const FONT_WARM_POOL_SIZE: usize = 2;
-const FONT_WARM_JOB_COUNT: usize = 3;
+const FONT_WARM_JOB_COUNT: usize = 4;
 const FONT_WARM_ALL_READY: u8 = (1 << FONT_WARM_JOB_COUNT) - 1;
 static FONT_REGISTRY: Mutex<FontRegistry> = Mutex::new(FontRegistry::new());
 static FONT_WARM_WORKERS_ADMITTED: AtomicU8 = AtomicU8::new(0);
@@ -81,6 +88,7 @@ const FONT_WARM_JOBS: [FontWarmJob; FONT_WARM_JOB_COUNT] = [
     FontWarmJob::Embedded(0),
     FontWarmJob::Embedded(1),
     FontWarmJob::TrueosFs(0),
+    FontWarmJob::TrueosFs(1),
 ];
 
 #[derive(Clone, Copy)]
@@ -1736,6 +1744,20 @@ fn elapsed_ms_since(start: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn optional_julia_mono_uses_the_documented_trueosfs_path() {
+        let spec = TRUEOSFS_FONTS
+            .iter()
+            .find(|spec| spec.name == "julia-mono")
+            .expect("JuliaMono TrueOSFS registration");
+
+        assert_eq!(spec.file_name, "JuliaMono-Regular.ttf");
+        assert_eq!(spec.path, "fonts/JuliaMono-Regular.ttf");
+        assert!(FONT_WARM_JOBS.iter().any(
+            |job| matches!(job, FontWarmJob::TrueosFs(index) if *index == 1)
+        ));
+    }
 
     #[test]
     fn registered_font_arc_lease_survives_registry_mutation() {

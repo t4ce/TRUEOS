@@ -269,7 +269,9 @@ pub(crate) fn picasso_font_lookup_canvas_request(
             FontFace::Default => GpuFontFace::Default,
             FontFace::NotoSansSc => GpuFontFace::NotoSansSc,
             FontFace::Inconsolata => GpuFontFace::Inconsolata,
-        };
+            FontFace::JuliaMono => GpuFontFace::JuliaMono,
+        }
+        .resolve_optional();
         let color =
             GpuFontRgba::new(row.color.red, row.color.green, row.color.blue, row.color.alpha);
         let group = layers

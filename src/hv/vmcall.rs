@@ -249,6 +249,7 @@ pub const OP_BP_VMEDIA_IMAGE_DECODE_DISCARD: u32 = 0x148; // arg0 operation -> r
 pub const OP_BP_VMEDIA_TEXTURE_DECODE_BEGIN: u32 = 0x157; // arg0 device,arg1 format:u32|encoded_len:u32 -> retained operation id/rc
 pub const OP_BP_VMEDIA_TEXTURE_DECODE_INFO: u32 = 0x158; // arg0 operation -> opaque retained texture contract/rc
 pub const OP_BP_VMEDIA_TEXTURE_RELEASE: u32 = 0x159; // arg0 device,arg1 opaque texture id -> rc
+pub const OP_BP_ARCHIVE_PACK_MANY_START: u32 = 0x15A; // arg0 NUL-separated source-path bytes,payload sources+archive path -> operation id/rc
 pub const OP_BP_TERMINAL_LEASE_CURRENT_V1: u32 = 0x134; // arg0 ready epoch or 0 -> active epoch/error
 pub const OP_BP_TERMINAL_LEASE_RELEASE_V1: u32 = 0x135; // arg0 expected active epoch -> parking ticket/error
 pub const OP_BP_TERMINAL_LEASE_POLL_REENTRY_V1: u32 = 0x136; // arg0 parking ticket -> pending/active epoch/error
@@ -4217,6 +4218,86 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             } else {
                 crate::r::archive_cabi::start_unpack(owner, first, second)
             };
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_ARCHIVE_PACK_MANY_START => {
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            let sources_len = arg0 as usize;
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            if sources_len == 0 || sources_len >= n {
+                write_response(
+                    vm_id,
+                    seq,
+                    STATUS_OK,
+                    (crate::r::io::cabi::FS_ERR_BAD_PARAM as i64) as u64,
+                    0,
+                );
+                return DispatchOutcome::Resume;
+            }
+            let bytes = unsafe { &(&(*p).payload)[..n] };
+            let (source_bytes, archive_bytes) = bytes.split_at(sources_len);
+            let Ok(archive) = core::str::from_utf8(archive_bytes) else {
+                write_response(
+                    vm_id,
+                    seq,
+                    STATUS_OK,
+                    (crate::r::io::cabi::FS_ERR_BAD_UTF8 as i64) as u64,
+                    0,
+                );
+                return DispatchOutcome::Resume;
+            };
+            let mut sources = alloc::vec::Vec::new();
+            for source_bytes in source_bytes.split(|byte| *byte == 0) {
+                if source_bytes.is_empty()
+                    || sources.len() >= crate::r::archive_cabi::PACK_MANY_SOURCE_CAP
+                {
+                    write_response(
+                        vm_id,
+                        seq,
+                        STATUS_OK,
+                        (crate::r::io::cabi::FS_ERR_BAD_PARAM as i64) as u64,
+                        0,
+                    );
+                    return DispatchOutcome::Resume;
+                }
+                let Ok(source) = core::str::from_utf8(source_bytes) else {
+                    write_response(
+                        vm_id,
+                        seq,
+                        STATUS_OK,
+                        (crate::r::io::cabi::FS_ERR_BAD_UTF8 as i64) as u64,
+                        0,
+                    );
+                    return DispatchOutcome::Resume;
+                };
+                let Some(source) = crate::r::io::env::resolve_fs_path(source, false) else {
+                    write_response(
+                        vm_id,
+                        seq,
+                        STATUS_OK,
+                        (crate::r::io::cabi::FS_ERR_BAD_PATH as i64) as u64,
+                        0,
+                    );
+                    return DispatchOutcome::Resume;
+                };
+                sources.push(source);
+            }
+            let Some(archive) = crate::r::io::env::resolve_fs_path(archive, false) else {
+                write_response(
+                    vm_id,
+                    seq,
+                    STATUS_OK,
+                    (crate::r::io::cabi::FS_ERR_BAD_PATH as i64) as u64,
+                    0,
+                );
+                return DispatchOutcome::Resume;
+            };
+            let owner = crate::r::io::async_fs_cabi::owner_for_vm(vm_id);
+            let rc = crate::r::archive_cabi::start_pack_many(owner, sources, archive);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
