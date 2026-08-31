@@ -887,6 +887,12 @@ unsafe extern "C" {
         archive_ptr: *const u8,
         archive_len: usize,
     ) -> i32;
+    pub fn trueos_cabi_archive_pack_many_start(
+        sources_ptr: *const u8,
+        sources_len: usize,
+        archive_ptr: *const u8,
+        archive_len: usize,
+    ) -> i32;
     pub fn trueos_cabi_archive_unpack_start(
         archive_ptr: *const u8,
         archive_len: usize,

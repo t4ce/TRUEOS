@@ -1,6 +1,6 @@
 extern crate alloc;
 
-use alloc::{string::String, vec::Vec};
+use alloc::{collections::BTreeMap, string::String, vec::Vec};
 use core::num::NonZeroU64;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -40,6 +40,15 @@ const K_EMPTY_FILE: u8 = 0x0F;
 const K_ANTI: u8 = 0x10;
 const K_NAME: u8 = 0x11;
 const K_ENCODED_HEADER: u8 = 0x17;
+
+// The metadata is an ordinary reserved archive member rather than a private 7z
+// header property: standard 7z readers reject unknown FilesInfo properties.
+// This exact name is reserved by `compress_files_to_vec` when type metadata is
+// present and is removed from TRUEOS extraction results.
+const TRUEOS_CONTENT_TYPES_MEMBER: &str = ".trueos-content-types.v1";
+const TRUEOS_CONTENT_TYPES_MAGIC: &[u8; 4] = b"T7CT";
+const TRUEOS_CONTENT_TYPES_VERSION_V1: u8 = 1;
+const TRUEOS_CONTENT_TYPES_MAX_BYTES: usize = 64 * 1024 * 1024;
 
 const METHOD_COPY: &[u8] = &[0x00];
 const METHOD_LZMA: &[u8] = &[0x03, 0x01, 0x01];
@@ -82,15 +91,21 @@ fn push_property(out: &mut Vec<u8>, property: u8, body: &[u8]) {
 pub struct SevenZSourceEntry<'a> {
     pub name: &'a str,
     pub bytes: &'a [u8],
+    /// Raw TRUEOSFS `ContentTypeId`, when the caller has one. Either every
+    /// source carries this metadata or none do; the latter preserves ordinary
+    /// 7z output for callers that have no TRUEOSFS identity to retain. Typed
+    /// archives reserve `.trueos-content-types.v1` for their metadata member.
+    pub content_type_raw: Option<u32>,
 }
 
-struct PackedSourceEntry<'a> {
-    source: SevenZSourceEntry<'a>,
+struct PackedSourceEntry {
+    name: String,
+    unpacked_len: usize,
     packed: Vec<u8>,
     crc: u32,
 }
 
-fn build_multi_file_header(entries: &[PackedSourceEntry<'_>]) -> Vec<u8> {
+fn build_multi_file_header(entries: &[PackedSourceEntry]) -> Vec<u8> {
     let mut header = Vec::new();
     header.push(K_HEADER);
     header.push(K_MAIN_STREAMS_INFO);
@@ -117,7 +132,7 @@ fn build_multi_file_header(entries: &[PackedSourceEntry<'_>]) -> Vec<u8> {
     }
     header.push(K_CODERS_UNPACK_SIZE);
     for entry in entries {
-        push_variable_u64(&mut header, entry.source.bytes.len() as u64);
+        push_variable_u64(&mut header, entry.unpacked_len as u64);
     }
     header.push(K_CRC);
     header.push(1);
@@ -132,7 +147,7 @@ fn build_multi_file_header(entries: &[PackedSourceEntry<'_>]) -> Vec<u8> {
     let mut names = Vec::new();
     names.push(0);
     for entry in entries {
-        for unit in entry.source.name.encode_utf16() {
+        for unit in entry.name.encode_utf16() {
             names.extend_from_slice(&unit.to_le_bytes());
         }
         names.extend_from_slice(&0u16.to_le_bytes());
@@ -141,6 +156,37 @@ fn build_multi_file_header(entries: &[PackedSourceEntry<'_>]) -> Vec<u8> {
     header.push(K_END);
     header.push(K_END);
     header
+}
+
+fn build_trueos_content_types_member(
+    entries: &[SevenZSourceEntry<'_>],
+    content_types: &[u32],
+) -> Result<Vec<u8>, SevenZError> {
+    if entries.len() != content_types.len() || entries.len() > u32::MAX as usize {
+        return Err(SevenZError::BadHeader);
+    }
+    let capacity = entries.iter().try_fold(9usize, |size, entry| {
+        size.checked_add(8)
+            .and_then(|size| size.checked_add(entry.name.len()))
+            .ok_or(SevenZError::BadOffset)
+    })?;
+    if capacity > TRUEOS_CONTENT_TYPES_MAX_BYTES {
+        return Err(SevenZError::Unsupported);
+    }
+    let mut metadata = Vec::new();
+    metadata
+        .try_reserve_exact(capacity)
+        .map_err(|_| SevenZError::DecodeFailed)?;
+    metadata.extend_from_slice(TRUEOS_CONTENT_TYPES_MAGIC);
+    metadata.push(TRUEOS_CONTENT_TYPES_VERSION_V1);
+    metadata.extend_from_slice(&(entries.len() as u32).to_le_bytes());
+    for (entry, content_type) in entries.iter().zip(content_types) {
+        let name_len = u32::try_from(entry.name.len()).map_err(|_| SevenZError::BadOffset)?;
+        metadata.extend_from_slice(&name_len.to_le_bytes());
+        metadata.extend_from_slice(entry.name.as_bytes());
+        metadata.extend_from_slice(&content_type.to_le_bytes());
+    }
+    Ok(metadata)
 }
 
 fn lzma2_compress_to_vec(bytes: &[u8]) -> Result<Vec<u8>, SevenZError> {
@@ -169,20 +215,47 @@ pub fn compress_files_to_vec(entries: &[SevenZSourceEntry<'_>]) -> Result<Vec<u8
     for entry in &sorted {
         if entry.name.is_empty()
             || entry.name.as_bytes().contains(&0)
+            || entry.name == TRUEOS_CONTENT_TYPES_MEMBER
             || previous == Some(entry.name)
         {
             return Err(SevenZError::BadHeader);
         }
         previous = Some(entry.name);
     }
+    if sorted.iter().any(|entry| entry.content_type_raw.is_some())
+        && sorted.iter().any(|entry| entry.content_type_raw.is_none())
+    {
+        return Err(SevenZError::BadHeader);
+    }
 
-    let mut packed_entries = Vec::with_capacity(sorted.len());
+    let content_types = sorted
+        .iter()
+        .map(|entry| entry.content_type_raw)
+        .collect::<Option<Vec<_>>>();
+    let metadata = content_types
+        .as_ref()
+        .map(|content_types| {
+            build_trueos_content_types_member(sorted.as_slice(), content_types.as_slice())
+        })
+        .transpose()?;
+
+    let mut packed_entries = Vec::with_capacity(sorted.len() + usize::from(metadata.is_some()));
     for source in sorted {
         packed_entries.push(PackedSourceEntry {
-            source,
+            name: String::from(source.name),
+            unpacked_len: source.bytes.len(),
             packed: lzma2_compress_to_vec(source.bytes)?,
             crc: crc32fast::hash(source.bytes),
         });
+    }
+    if let Some(metadata) = metadata {
+        packed_entries.push(PackedSourceEntry {
+            name: String::from(TRUEOS_CONTENT_TYPES_MEMBER),
+            unpacked_len: metadata.len(),
+            packed: lzma2_compress_to_vec(metadata.as_slice())?,
+            crc: crc32fast::hash(metadata.as_slice()),
+        });
+        packed_entries.sort_by(|left, right| left.name.cmp(&right.name));
     }
 
     let header = build_multi_file_header(packed_entries.as_slice());
@@ -227,6 +300,7 @@ enum Method {
 
 struct ArchiveShape<'a> {
     name: String,
+    content_type_raw: Option<u32>,
     packed_stream: &'a [u8],
     method: Method,
     folder_unpacked_size: usize,
@@ -239,6 +313,10 @@ struct ArchiveShape<'a> {
 pub struct SevenZEntry {
     pub name: String,
     pub bytes: Vec<u8>,
+    /// The raw TRUEOSFS content identity carried by the optional versioned
+    /// manifest member. `None` means the archive predates the extension (or
+    /// came from another 7z writer).
+    pub content_type_raw: Option<u32>,
 }
 
 struct FolderInfo {
@@ -447,6 +525,7 @@ fn read_encoded_header(payload: &[u8], encoded_header: &[u8]) -> Result<Vec<u8>,
     let folder = &folders[0];
     let archive = ArchiveShape {
         name: String::new(),
+        content_type_raw: None,
         packed_stream,
         method: folder.method,
         folder_unpacked_size: usize::try_from(folder.unpacked_size)
@@ -845,7 +924,7 @@ fn parse_files_info(reader: &mut Cursor<'_>) -> Result<FilesInfo, SevenZError> {
     })
 }
 
-fn parse_archive(payload: &[u8]) -> Result<Vec<ArchiveShape<'_>>, SevenZError> {
+fn parse_archive_shapes(payload: &[u8]) -> Result<Vec<ArchiveShape<'_>>, SevenZError> {
     let next_header = read_next_header(payload)?;
     let mut reader = Cursor::new(next_header.as_slice());
 
@@ -981,6 +1060,7 @@ fn parse_archive(payload: &[u8]) -> Result<Vec<ArchiveShape<'_>>, SevenZError> {
                 .get(file_index)
                 .cloned()
                 .ok_or(SevenZError::BadHeader)?,
+            content_type_raw: None,
             packed_stream,
             method: folder.method,
             folder_unpacked_size: usize::try_from(folder.unpacked_size)
@@ -994,6 +1074,118 @@ fn parse_archive(payload: &[u8]) -> Result<Vec<ArchiveShape<'_>>, SevenZError> {
     }
 
     Ok(archives)
+}
+
+fn parse_archive(payload: &[u8]) -> Result<Vec<ArchiveShape<'_>>, SevenZError> {
+    split_trueos_content_types_member(parse_archive_shapes(payload)?)
+}
+
+fn split_trueos_content_types_member<'a>(
+    mut archives: Vec<ArchiveShape<'a>>,
+) -> Result<Vec<ArchiveShape<'a>>, SevenZError> {
+    let Some(metadata_index) = trueos_content_types_member_index(archives.as_slice())? else {
+        return Ok(archives);
+    };
+    let metadata = archives.remove(metadata_index);
+    let metadata_bytes = extract_archive_shape_to_vec(&metadata)?;
+    apply_trueos_content_types_member(metadata_bytes.as_slice(), archives.as_mut_slice())?;
+    Ok(archives)
+}
+
+fn split_trueos_content_types_member_bounded<'a>(
+    mut archives: Vec<ArchiveShape<'a>>,
+    max_entries: usize,
+    max_dictionary_size: usize,
+) -> Result<Vec<ArchiveShape<'a>>, SevenZError> {
+    // A typed archive has exactly one extra reserved member. Reject larger
+    // raw sets before allocating or decoding that metadata member.
+    if archives.len() > max_entries.saturating_add(1) {
+        return Err(SevenZError::Unsupported);
+    }
+    let Some(metadata_index) = trueos_content_types_member_index(archives.as_slice())? else {
+        return Ok(archives);
+    };
+    let metadata = archives.remove(metadata_index);
+    if metadata.substream_size > TRUEOS_CONTENT_TYPES_MAX_BYTES
+        || metadata.folder_unpacked_size > TRUEOS_CONTENT_TYPES_MAX_BYTES
+    {
+        return Err(SevenZError::Unsupported);
+    }
+    match metadata.method {
+        Method::Copy => {}
+        Method::Lzma { dict_size, .. } | Method::Lzma2 { dict_size }
+            if dict_size as usize > max_dictionary_size =>
+        {
+            return Err(SevenZError::Unsupported);
+        }
+        Method::Lzma { .. } | Method::Lzma2 { .. } => {}
+    }
+    let folder = decode_folder_to_vec_bounded(&metadata)?;
+    let metadata_bytes = extract_archive_substream_to_vec(&metadata, folder.as_slice())?;
+    apply_trueos_content_types_member(metadata_bytes.as_slice(), archives.as_mut_slice())?;
+    Ok(archives)
+}
+
+fn trueos_content_types_member_index(
+    archives: &[ArchiveShape<'_>],
+) -> Result<Option<usize>, SevenZError> {
+    let mut index = None;
+    for (candidate, archive) in archives.iter().enumerate() {
+        if archive.name != TRUEOS_CONTENT_TYPES_MEMBER {
+            continue;
+        }
+        if index.replace(candidate).is_some() {
+            return Err(SevenZError::BadHeader);
+        }
+    }
+    Ok(index)
+}
+
+fn apply_trueos_content_types_member(
+    metadata: &[u8],
+    archives: &mut [ArchiveShape<'_>],
+) -> Result<(), SevenZError> {
+    let mut body = Cursor::new(metadata);
+    if body.read_exact(TRUEOS_CONTENT_TYPES_MAGIC.len())? != TRUEOS_CONTENT_TYPES_MAGIC {
+        return Err(SevenZError::BadHeader);
+    }
+    if body.read_u8()? != TRUEOS_CONTENT_TYPES_VERSION_V1 {
+        return Err(SevenZError::Unsupported);
+    }
+    let count = usize::try_from(body.read_u32_le()?).map_err(|_| SevenZError::BadOffset)?;
+    if count != archives.len() {
+        return Err(SevenZError::BadHeader);
+    }
+    let mut content_types = BTreeMap::new();
+    for _ in 0..count {
+        let name_len = usize::try_from(body.read_u32_le()?).map_err(|_| SevenZError::BadOffset)?;
+        let name =
+            core::str::from_utf8(body.read_exact(name_len)?).map_err(|_| SevenZError::BadHeader)?;
+        if name == TRUEOS_CONTENT_TYPES_MEMBER {
+            return Err(SevenZError::BadHeader);
+        }
+        let content_type = body.read_u32_le()?;
+        if content_types
+            .insert(String::from(name), content_type)
+            .is_some()
+        {
+            return Err(SevenZError::BadHeader);
+        }
+    }
+    if !body.is_empty() {
+        return Err(SevenZError::BadHeader);
+    }
+    for archive in archives {
+        archive.content_type_raw = Some(
+            content_types
+                .remove(archive.name.as_str())
+                .ok_or(SevenZError::BadHeader)?,
+        );
+    }
+    if !content_types.is_empty() {
+        return Err(SevenZError::BadHeader);
+    }
+    Ok(())
 }
 
 fn parse_single_file_archive(payload: &[u8]) -> Result<ArchiveShape<'_>, SevenZError> {
@@ -1230,6 +1422,7 @@ pub fn extract_all_to_vec(payload: &[u8]) -> Result<Vec<SevenZEntry>, SevenZErro
         out.push(SevenZEntry {
             name: archive.name.clone(),
             bytes: extract_archive_substream_to_vec(archive, cached_folder.as_slice())?,
+            content_type_raw: archive.content_type_raw,
         });
     }
     Ok(out)
@@ -1247,7 +1440,9 @@ pub fn extract_all_to_vec_bounded(
     max_total_unpacked_size: usize,
     max_dictionary_size: usize,
 ) -> Result<Vec<SevenZEntry>, SevenZError> {
-    let archives = parse_archive(payload)?;
+    let archives = parse_archive_shapes(payload)?;
+    let archives =
+        split_trueos_content_types_member_bounded(archives, max_entries, max_dictionary_size)?;
     if archives.is_empty() || archives.len() > max_entries {
         return Err(SevenZError::Unsupported);
     }
@@ -1293,6 +1488,7 @@ pub fn extract_all_to_vec_bounded(
         out.push(SevenZEntry {
             name: archive.name.clone(),
             bytes: extract_archive_substream_to_vec(archive, cached_folder.as_slice())?,
+            content_type_raw: archive.content_type_raw,
         });
     }
     Ok(out)
@@ -1314,8 +1510,12 @@ pub fn extract_file_to_vec(payload: &[u8], wanted_name: &str) -> Result<Vec<u8>,
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec::Vec;
+
     use super::{
-        SevenZError, SevenZSourceEntry, compress_files_to_vec, extract_all_to_vec_bounded,
+        ArchiveShape, Method, SevenZError, SevenZSourceEntry, TRUEOS_CONTENT_TYPES_MAGIC,
+        TRUEOS_CONTENT_TYPES_MEMBER, TRUEOS_CONTENT_TYPES_VERSION_V1,
+        apply_trueos_content_types_member, compress_files_to_vec, extract_all_to_vec_bounded,
     };
 
     #[test]
@@ -1324,18 +1524,22 @@ mod tests {
             SevenZSourceEntry {
                 name: "src/z.rs",
                 bytes: b"zed",
+                content_type_raw: None,
             },
             SevenZSourceEntry {
                 name: "Cargo.toml",
                 bytes: b"[package]\n",
+                content_type_raw: None,
             },
             SevenZSourceEntry {
                 name: "src/a.rs",
                 bytes: b"aye",
+                content_type_raw: None,
             },
             SevenZSourceEntry {
                 name: "empty",
                 bytes: b"",
+                content_type_raw: None,
             },
         ];
         let second = [first[2], first[0], first[3], first[1]];
@@ -1357,6 +1561,118 @@ mod tests {
         assert_eq!(entries[1].bytes, b"");
         assert_eq!(entries[2].bytes, b"aye");
         assert_eq!(entries[3].bytes, b"zed");
+        assert!(entries.iter().all(|entry| entry.content_type_raw.is_none()));
+    }
+
+    #[test]
+    fn multi_file_archive_preserves_versioned_raw_content_types() {
+        let inputs = [
+            SevenZSourceEntry {
+                name: "movie.annexb.h264",
+                bytes: b"\0\0\0\x01\x67",
+                // Annex-B H.264 has no frozen registry ID yet, so the caller's
+                // explicit Blob declaration is the honest identity to retain.
+                content_type_raw: Some(1),
+            },
+            SevenZSourceEntry {
+                name: "frame.png",
+                bytes: b"png",
+                content_type_raw: Some(0x0001_0040),
+            },
+        ];
+        let archive = compress_files_to_vec(&inputs).expect("pack typed files");
+        assert_eq!(
+            archive,
+            compress_files_to_vec(&[inputs[1], inputs[0]]).expect("pack reordered typed files")
+        );
+        let entries =
+            extract_all_to_vec_bounded(archive.as_slice(), 8, 1024, 4096, 2 * 1024 * 1024)
+                .expect("extract typed files");
+
+        assert_eq!(entries[0].name, "frame.png");
+        assert_eq!(entries[0].content_type_raw, Some(0x0001_0040));
+        assert_eq!(entries[1].name, "movie.annexb.h264");
+        assert_eq!(entries[1].content_type_raw, Some(1));
+    }
+
+    #[test]
+    fn content_type_metadata_requires_one_versioned_value_per_file() {
+        let typed = SevenZSourceEntry {
+            name: "typed",
+            bytes: b"",
+            content_type_raw: Some(1),
+        };
+        let untyped = SevenZSourceEntry {
+            name: "untyped",
+            bytes: b"",
+            content_type_raw: None,
+        };
+        assert_eq!(compress_files_to_vec(&[typed, untyped]), Err(SevenZError::BadHeader));
+
+        assert_eq!(
+            compress_files_to_vec(&[SevenZSourceEntry {
+                name: TRUEOS_CONTENT_TYPES_MEMBER,
+                bytes: b"",
+                content_type_raw: Some(1),
+            }]),
+            Err(SevenZError::BadHeader)
+        );
+
+        let mut body = Vec::new();
+        body.extend_from_slice(TRUEOS_CONTENT_TYPES_MAGIC);
+        body.push(TRUEOS_CONTENT_TYPES_VERSION_V1 + 1);
+        body.extend_from_slice(&0u32.to_le_bytes());
+        assert_eq!(
+            apply_trueos_content_types_member(body.as_slice(), &mut []),
+            Err(SevenZError::Unsupported)
+        );
+    }
+
+    #[test]
+    fn content_type_manifest_must_map_every_member_name_exactly_once() {
+        let mut body = Vec::new();
+        body.extend_from_slice(TRUEOS_CONTENT_TYPES_MAGIC);
+        body.push(TRUEOS_CONTENT_TYPES_VERSION_V1);
+        body.extend_from_slice(&1u32.to_le_bytes());
+        body.extend_from_slice(&9u32.to_le_bytes());
+        body.extend_from_slice(b"different");
+        body.extend_from_slice(&1u32.to_le_bytes());
+        let mut archives = [ArchiveShape {
+            name: String::from("member"),
+            content_type_raw: None,
+            packed_stream: &[],
+            method: Method::Copy,
+            folder_unpacked_size: 0,
+            folder_crc: None,
+            substream_offset: 0,
+            substream_size: 0,
+            substream_crc: None,
+        }];
+        assert_eq!(
+            apply_trueos_content_types_member(body.as_slice(), archives.as_mut_slice()),
+            Err(SevenZError::BadHeader)
+        );
+        assert_eq!(archives[0].content_type_raw, None);
+    }
+
+    #[test]
+    fn bounded_extract_does_not_charge_the_manifest_to_user_caps() {
+        let inputs = [
+            SevenZSourceEntry {
+                name: "a",
+                bytes: b"1234",
+                content_type_raw: Some(1),
+            },
+            SevenZSourceEntry {
+                name: "b",
+                bytes: b"5678",
+                content_type_raw: Some(2),
+            },
+        ];
+        let archive = compress_files_to_vec(&inputs).expect("pack typed files");
+        let entries = extract_all_to_vec_bounded(archive.as_slice(), 2, 4, 8, 2 * 1024 * 1024)
+            .expect("metadata member does not consume a user entry or byte budget");
+        assert_eq!(entries.len(), 2);
     }
 
     #[test]
@@ -1365,10 +1681,12 @@ mod tests {
             SevenZSourceEntry {
                 name: "a",
                 bytes: b"1234",
+                content_type_raw: None,
             },
             SevenZSourceEntry {
                 name: "b",
                 bytes: b"5678",
+                content_type_raw: None,
             },
         ];
         let archive = compress_files_to_vec(&inputs).expect("pack files");

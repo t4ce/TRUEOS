@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 
 use crate::r::io::cabi::{
     BLUEPRINT_ASYNC_FS_MAX_PATH, FS_ERR_BAD_PARAM, FS_ERR_BAD_PATH, FS_ERR_BAD_UTF8, FS_ERR_IO,
-    FS_ERR_NO_SPACE, FS_ERR_NOT_FOUND, FS_ERR_TOO_LARGE,
+    FS_ERR_NO_SPACE, FS_ERR_NOT_FOUND, FS_ERR_TOO_LARGE, FS_ERR_TYPE_REQUIRED,
 };
 
 /// A bounded path list keeps a guest request inside one comm-page payload and
@@ -33,7 +33,13 @@ pub(crate) fn map_error(error: &crate::r::codec::CodecError) -> i32 {
         CodecError::NotFound | CodecError::NoRoot => FS_ERR_NOT_FOUND,
         CodecError::QueueFull => FS_ERR_NO_SPACE,
         CodecError::LimitExceeded => FS_ERR_TOO_LARGE,
-        CodecError::NotReady | CodecError::PathConflict => FS_ERR_BAD_PARAM,
+        CodecError::UnsupportedContentType(
+            crate::r::fs::trueosfs::ContentIdentityRejectReason::TypeRequired
+            | crate::r::fs::trueosfs::ContentIdentityRejectReason::LegacyDowngrade,
+        ) => FS_ERR_TYPE_REQUIRED,
+        CodecError::NotReady | CodecError::PathConflict | CodecError::UnsupportedContentType(_) => {
+            FS_ERR_BAD_PARAM
+        }
         CodecError::ReadFailed
         | CodecError::WriteFailed
         | CodecError::Archive(_)

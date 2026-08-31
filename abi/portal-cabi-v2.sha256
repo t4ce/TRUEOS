@@ -83,8 +83,10 @@
 # scanout coordinates and queues them through Spirit's existing bounded,
 # latest-wins movement capability; older Blueprints import no such authority.
 # The archive operation calls are strictly additive. They expose owner-scoped,
-# bounded, asynchronous TRUEOSFS path operations; older Blueprints do not
-# import them, and no existing filesystem or codec contract changes.
+# bounded, asynchronous TRUEOSFS path operations; the multi-file pack start is
+# likewise additive and retains the original single-source pack signature.
+# Older Blueprints import none of the new symbols, and no existing filesystem
+# or codec contract changes.
 # The UI4 font-canvas call is strictly additive. It accepts bounded colored
 # rows and builds one window-retained premultiplied RGBA8 canvas without
 # changing the legacy text-scene or frame-publish contracts.
@@ -204,4 +206,4 @@
 # TRUEOSFS v3 typed write, typed stat, and TDL2 listing calls are strictly
 # additive. They carry stable raw content IDs while the established untyped
 # filesystem calls retain their Blob/metadata-omitting compatibility behavior.
-fdd0d09226b32f92015d1c3756d9117974afc329027caf991b1ea7895a0e2177
+6fce904612f6f49eec6b7d0f5d0d1e78167bfd367fbccc5b3d8fdace998ceab2
