@@ -13,7 +13,9 @@
   <a href="https://github.com/t4ce/TRUEOS/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/t4ce/TRUEOS?display_name=tag&sort=semver"></a>
   <img alt="Stage 4" src="https://img.shields.io/badge/status-Stage%204-8a2be2">
   <img alt="Rust 2024" src="https://img.shields.io/badge/Rust-2024-b7410e?logo=rust&logoColor=white">
-  <img alt="x86-64" src="https://img.shields.io/badge/target-x86__64-30363d">
+  <img alt="Platform: Intel x86-64 and adaptive SMP" src="https://img.shields.io/badge/platform-Intel%20x86__64%20%2B%20adaptive%20SMP-30363d">
+  <img alt="Graphics target: Intel Gen12 to Gen12.5 Xe-LP" src="https://img.shields.io/badge/graphics-Intel%20Gen12%E2%80%9312.5%20Xe--LP-0071c5">
+  <img alt="Compute artifacts: SPIR-V to Intel Zebin" src="https://img.shields.io/badge/compute-SPIR--V%20%E2%86%92%20Intel%20Zebin-7c3aed">
 </p>
 
 TRUEOS is a from-scratch, `no_std`/`no_main`, x86-64 operating system. It is
@@ -21,6 +23,23 @@ not a Linux distribution, desktop theme, or userspace shell. It boots its own
 kernel and directly owns the path from paging, SMP, interrupts, storage, and
 networking through Intel display, render, copy, media, GPGPU, UI composition,
 and application execution.
+
+**The x86-64 target is a coordinated Intel machine, not a generic architecture
+checkbox.** TRUEOS discovers CPU topology and brings AP executors online as
+they register; services can reserve lanes, and compute work can select from the
+currently eligible workers with performance-first, efficiency-only, or broader
+policies. That makes SMP capacity responsive to the real processor topology and
+the work in flight instead of baking a particular “10-core” desktop into the OS.
+
+On the graphics side, the primary Intel Gen12/Gen12.5 Xe-LP-class target is a
+set of cooperating silicon blocks: display and planes, render/EUs, copy/BLT,
+media/VDBOX, shared GGTT/PPGTT address spaces, and the GuC controller and
+submission path. TRUEOS owns those paths together, so a decoded frame can move
+through media, GPU composition, and scanout without turning into a CPU-pixel
+copy. Its maintained compute artifacts follow an audited C++ for OpenCL →
+SPIR-V → Intel IGC/Zebin pipeline and dispatch through that same native runtime.
+This is deliberately a targeted, artifact-checked compatibility path—not a
+claim that arbitrary SPIR-V or every Intel GPU is supported.
 
 The project is well past the toy-kernel phase. It is now a large experimental
 desktop/workstation stack with a Rust application compatibility effort, a

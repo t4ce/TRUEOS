@@ -528,6 +528,9 @@ fn http_upload_content_type(
             );
             return Ok((infer::ContentTypeId::BLOB, true));
         }
+        crate::r::fs::trueosfs::record_type_reject(
+            crate::r::fs::trueosfs::ContentIdentityRejectReason::Other,
+        );
         return Err(http_plain_response(
             "HTTP/1.1 400 Bad Request\r\n",
             "unsupported content override\n",
@@ -537,6 +540,9 @@ fn http_upload_content_type(
     match verify_named_bytes(name, bytes) {
         Ok(content_type) => Ok((content_type, false)),
         Err(IngressTypeError::MissingExtension | IngressTypeError::UnsupportedExtension) => {
+            crate::r::fs::trueosfs::record_type_reject(
+                crate::r::fs::trueosfs::ContentIdentityRejectReason::UnsupportedIngress,
+            );
             crate::log_important!(
                 target: "storage";
                 "http-trueosfs: content-admission decision=reject-unsupported name={} bytes={}\n",
@@ -549,6 +555,9 @@ fn http_upload_content_type(
             ))
         }
         Err(IngressTypeError::Mismatch { expected, observed }) => {
+            crate::r::fs::trueosfs::record_type_reject(
+                crate::r::fs::trueosfs::ContentIdentityRejectReason::EvidenceMismatch,
+            );
             let observed_raw = observed.map(infer::ContentTypeId::raw);
             crate::log_important!(
                 target: "storage";
@@ -1095,7 +1104,7 @@ pub async fn http_trueosfs_task() {
                                         );
                                     }
                                 };
-                                let (content_type, _explicit_blob) =
+                                let (content_type, explicit_blob) =
                                     match http_upload_content_type(target.as_str(), name.as_str(), body_bytes) {
                                         Ok(value) => value,
                                         Err(response) => break 'resp response,
@@ -1110,6 +1119,9 @@ pub async fn http_trueosfs_task() {
                                 .await
                                 {
                                     Ok(true) => {
+                                        if explicit_blob {
+                                            crate::r::fs::trueosfs::record_explicit_blob_import();
+                                        }
                                         if http_is_runnable_root_artifact(full_path.as_str()) {
                                             let stamp_path = http_root_artifact_timestamp_path(full_path.as_str());
                                             let mut stamp = http_current_timestamp_label();

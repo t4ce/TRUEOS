@@ -4437,13 +4437,49 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         }
         OP_BP_ASYNC_FS_TYPED_WRITE_BEGIN => {
             let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
-            let Some(p) = host_ptr(vm_id) else { write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0); return DispatchOutcome::Resume; };
+            let Some(p) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
             let path_bytes = unsafe { &(&(*p).payload)[..n] };
-            let Ok(path) = core::str::from_utf8(path_bytes) else { write_response(vm_id, seq, STATUS_OK, (crate::r::io::cabi::FS_ERR_BAD_UTF8 as i64) as u64, 0); return DispatchOutcome::Resume; };
-            let Ok(path) = crate::r::path::FsPath::parse(path, false) else { write_response(vm_id, seq, STATUS_OK, (crate::r::io::cabi::FS_ERR_BAD_PATH as i64) as u64, 0); return DispatchOutcome::Resume; };
-            if !vm_mount_selector_allowed(vm_id, path.to_relative_string().as_str()) { write_response(vm_id, seq, STATUS_OK, (crate::r::io::cabi::FS_ERR_BAD_PATH as i64) as u64, 0); return DispatchOutcome::Resume; }
+            let Ok(path) = core::str::from_utf8(path_bytes) else {
+                write_response(
+                    vm_id,
+                    seq,
+                    STATUS_OK,
+                    (crate::r::io::cabi::FS_ERR_BAD_UTF8 as i64) as u64,
+                    0,
+                );
+                return DispatchOutcome::Resume;
+            };
+            let Ok(path) = crate::r::path::FsPath::parse(path, false) else {
+                write_response(
+                    vm_id,
+                    seq,
+                    STATUS_OK,
+                    (crate::r::io::cabi::FS_ERR_BAD_PATH as i64) as u64,
+                    0,
+                );
+                return DispatchOutcome::Resume;
+            };
+            let path = path.to_relative_string();
+            if !vm_mount_selector_allowed(vm_id, path.as_str()) {
+                write_response(
+                    vm_id,
+                    seq,
+                    STATUS_OK,
+                    (crate::r::io::cabi::FS_ERR_BAD_PATH as i64) as u64,
+                    0,
+                );
+                return DispatchOutcome::Resume;
+            }
             let id = crate::r::fs::trueosfs::ContentTypeId::from_raw(arg1 as u32);
-            let rc = if !id.is_registered() || id == crate::r::fs::trueosfs::ContentTypeId::NONE { crate::r::io::cabi::FS_ERR_BAD_PARAM } else { crate::r::io::async_fs_cabi::start_write_typed(crate::r::io::async_fs_cabi::owner_for_vm(vm_id), path.to_relative_string(), arg0 as usize, id) };
+            let rc = crate::r::io::async_fs_cabi::start_write_typed(
+                crate::r::io::async_fs_cabi::owner_for_vm(vm_id),
+                path,
+                arg0 as usize,
+                id,
+            );
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }

@@ -15,6 +15,8 @@ pub const ERR_IO: i32 = -2;
 pub const ERR_BAD_PARAM: i32 = -4;
 pub const ERR_NOT_FOUND: i32 = -8;
 pub const ERR_ALREADY_EXISTS: i32 = -9;
+pub const ERR_TYPE_REQUIRED: i32 = -15;
+pub const ERR_TYPE_MISMATCH: i32 = -16;
 
 const READ_CHUNK_BYTES: usize = 64 * 1024;
 const WRITE_CHUNK_BYTES: usize = 64 * 1024;

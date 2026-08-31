@@ -83,6 +83,38 @@ static CONTENT_TYPED_COMMITS: AtomicU64 = AtomicU64::new(0);
 static CONTENT_LEGACY_BLOB_COMMITS: AtomicU64 = AtomicU64::new(0);
 static CONTENT_EXPLICIT_BLOB_IMPORTS: AtomicU64 = AtomicU64::new(0);
 static CONTENT_REJECTS: AtomicU64 = AtomicU64::new(0);
+static CONTENT_REJECT_UNSUPPORTED_INGRESS: AtomicU64 = AtomicU64::new(0);
+static CONTENT_REJECT_EVIDENCE_MISMATCH: AtomicU64 = AtomicU64::new(0);
+static CONTENT_REJECT_TYPE_REQUIRED: AtomicU64 = AtomicU64::new(0);
+static CONTENT_REJECT_UNREGISTERED: AtomicU64 = AtomicU64::new(0);
+static CONTENT_REJECT_LEGACY_DOWNGRADE: AtomicU64 = AtomicU64::new(0);
+static CONTENT_REJECT_TYPE_MISMATCH: AtomicU64 = AtomicU64::new(0);
+static CONTENT_REJECT_OTHER: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ContentIdentityRejectReason {
+    UnsupportedIngress,
+    EvidenceMismatch,
+    TypeRequired,
+    UnregisteredType,
+    LegacyDowngrade,
+    TypeMismatch,
+    Other,
+}
+
+impl ContentIdentityRejectReason {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::UnsupportedIngress => "unsupported-ingress",
+            Self::EvidenceMismatch => "evidence-mismatch",
+            Self::TypeRequired => "type-required",
+            Self::UnregisteredType => "unregistered-type",
+            Self::LegacyDowngrade => "legacy-downgrade",
+            Self::TypeMismatch => "type-mismatch",
+            Self::Other => "other",
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ContentIdentityDecisionSnapshot {
@@ -90,6 +122,13 @@ pub struct ContentIdentityDecisionSnapshot {
     pub legacy_blob_commits: u64,
     pub explicit_blob_imports: u64,
     pub rejects: u64,
+    pub reject_unsupported_ingress: u64,
+    pub reject_evidence_mismatch: u64,
+    pub reject_type_required: u64,
+    pub reject_unregistered_type: u64,
+    pub reject_legacy_downgrade: u64,
+    pub reject_type_mismatch: u64,
+    pub reject_other: u64,
 }
 
 pub fn content_identity_decisions() -> ContentIdentityDecisionSnapshot {
@@ -98,19 +137,65 @@ pub fn content_identity_decisions() -> ContentIdentityDecisionSnapshot {
         legacy_blob_commits: CONTENT_LEGACY_BLOB_COMMITS.load(Ordering::Relaxed),
         explicit_blob_imports: CONTENT_EXPLICIT_BLOB_IMPORTS.load(Ordering::Relaxed),
         rejects: CONTENT_REJECTS.load(Ordering::Relaxed),
+        reject_unsupported_ingress: CONTENT_REJECT_UNSUPPORTED_INGRESS.load(Ordering::Relaxed),
+        reject_evidence_mismatch: CONTENT_REJECT_EVIDENCE_MISMATCH.load(Ordering::Relaxed),
+        reject_type_required: CONTENT_REJECT_TYPE_REQUIRED.load(Ordering::Relaxed),
+        reject_unregistered_type: CONTENT_REJECT_UNREGISTERED.load(Ordering::Relaxed),
+        reject_legacy_downgrade: CONTENT_REJECT_LEGACY_DOWNGRADE.load(Ordering::Relaxed),
+        reject_type_mismatch: CONTENT_REJECT_TYPE_MISMATCH.load(Ordering::Relaxed),
+        reject_other: CONTENT_REJECT_OTHER.load(Ordering::Relaxed),
     }
 }
 
-pub fn record_explicit_blob_import() { CONTENT_EXPLICIT_BLOB_IMPORTS.fetch_add(1, Ordering::Relaxed); }
-pub fn record_type_reject(reason: &'static str) {
+pub fn record_explicit_blob_import() {
+    CONTENT_EXPLICIT_BLOB_IMPORTS.fetch_add(1, Ordering::Relaxed);
+    crate::log_info!(target: "storage";
+        "trueosfs: content import type={} explicit_blob=true decision=accepted\n",
+        ContentTypeId::BLOB.raw(),
+    );
+}
+
+pub fn record_type_reject(reason: ContentIdentityRejectReason) {
     CONTENT_REJECTS.fetch_add(1, Ordering::Relaxed);
-    crate::log_important!(target: "storage"; "trueosfs: content-type reject reason={} decision=rejected\n", reason);
+    match reason {
+        ContentIdentityRejectReason::UnsupportedIngress => {
+            CONTENT_REJECT_UNSUPPORTED_INGRESS.fetch_add(1, Ordering::Relaxed);
+        }
+        ContentIdentityRejectReason::EvidenceMismatch => {
+            CONTENT_REJECT_EVIDENCE_MISMATCH.fetch_add(1, Ordering::Relaxed);
+        }
+        ContentIdentityRejectReason::TypeRequired => {
+            CONTENT_REJECT_TYPE_REQUIRED.fetch_add(1, Ordering::Relaxed);
+        }
+        ContentIdentityRejectReason::UnregisteredType => {
+            CONTENT_REJECT_UNREGISTERED.fetch_add(1, Ordering::Relaxed);
+        }
+        ContentIdentityRejectReason::LegacyDowngrade => {
+            CONTENT_REJECT_LEGACY_DOWNGRADE.fetch_add(1, Ordering::Relaxed);
+        }
+        ContentIdentityRejectReason::TypeMismatch => {
+            CONTENT_REJECT_TYPE_MISMATCH.fetch_add(1, Ordering::Relaxed);
+        }
+        ContentIdentityRejectReason::Other => {
+            CONTENT_REJECT_OTHER.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+    crate::log_important!(target: "storage";
+        "trueosfs: content-type reject reason={} decision=rejected\n",
+        reason.as_str(),
+    );
 }
 
 fn record_successful_content_commit(content_type: ContentTypeId, legacy: bool) {
-    if legacy { CONTENT_LEGACY_BLOB_COMMITS.fetch_add(1, Ordering::Relaxed); }
-    else { CONTENT_TYPED_COMMITS.fetch_add(1, Ordering::Relaxed); }
-    crate::log_info!(target: "storage"; "trueosfs: content commit type={} legacy={} decision=accepted\n", content_type.raw(), legacy);
+    if legacy {
+        CONTENT_LEGACY_BLOB_COMMITS.fetch_add(1, Ordering::Relaxed);
+    } else {
+        CONTENT_TYPED_COMMITS.fetch_add(1, Ordering::Relaxed);
+    }
+    crate::log_info!(target: "storage";
+        "trueosfs: content commit type={} legacy={} decision=accepted\n",
+        content_type.raw(), legacy,
+    );
 }
 
 static MOUNT_REQUESTED: AtomicBool = AtomicBool::new(false);
@@ -1207,6 +1292,22 @@ async fn file_in_with_metadata_async(
     if disk.parent().is_some() {
         return Err(block::Error::InvalidParam);
     }
+    if content_type == ContentTypeId::NONE {
+        record_type_reject(ContentIdentityRejectReason::TypeRequired);
+        return Err(block::Error::InvalidParam);
+    }
+    if !content_type.is_registered() {
+        record_type_reject(ContentIdentityRejectReason::UnregisteredType);
+        return Err(block::Error::InvalidParam);
+    }
+    if legacy_blob
+        && file_info_async(disk, name)
+            .await?
+            .is_some_and(|info| info.content_type != ContentTypeId::BLOB)
+    {
+        record_type_reject(ContentIdentityRejectReason::LegacyDowngrade);
+        return Err(block::Error::InvalidParam);
+    }
     prepare_file_target_async(disk, name).await?;
     let Some(placement) = placement_for_io_async(disk).await? else {
         return Ok(false);
@@ -1298,7 +1399,19 @@ pub async fn file_write_begin_async(
     name: &str,
     total_len: u64,
 ) -> Result<Option<u32>, block::Error> {
-    file_write_begin_typed_async(disk, name, total_len, ContentTypeId::BLOB).await
+    let record_key = file_info_async(disk, name)
+        .await?
+        .map(|info| info.record_key)
+        .unwrap_or(RecordKey::Ffa);
+    file_write_begin_with_metadata_async(
+        disk,
+        name,
+        total_len,
+        ContentTypeId::BLOB,
+        record_key,
+        true,
+    )
+    .await
 }
 
 pub async fn file_write_begin_typed_async(
@@ -1344,6 +1457,22 @@ async fn file_write_begin_with_metadata_async(
             "trueosfs: file-write-begin failed stage=start disk={} err=InvalidParamParent\n",
             disk.id().raw()
         );
+        return Err(block::Error::InvalidParam);
+    }
+    if content_type == ContentTypeId::NONE {
+        record_type_reject(ContentIdentityRejectReason::TypeRequired);
+        return Err(block::Error::InvalidParam);
+    }
+    if !content_type.is_registered() {
+        record_type_reject(ContentIdentityRejectReason::UnregisteredType);
+        return Err(block::Error::InvalidParam);
+    }
+    if legacy_blob
+        && file_info_async(disk, name)
+            .await?
+            .is_some_and(|info| info.content_type != ContentTypeId::BLOB)
+    {
+        record_type_reject(ContentIdentityRejectReason::LegacyDowngrade);
         return Err(block::Error::InvalidParam);
     }
     prepare_file_target_async(disk, name).await?;
@@ -2014,18 +2143,40 @@ pub async fn file_rename_async(
         return Ok(false);
     }
 
-    let Some(source_info) = file_info_async(disk, src).await? else {
-        return Ok(false);
-    };
     let Some(source_record) = lookup_file_record_async(disk, src).await? else {
         return Ok(false);
     };
-    let Some(placement) = placement_for_io_async(disk).await? else { return Ok(false); };
-    let params = trueos_fs::FsParams { super_lba: placement.super_lba, data_lba: placement.data_lba, data_end_lba_exclusive: placement.data_end_lba_exclusive };
-    let ok = trueos_fs::copy_file_from_record(&KernelBlockIo::new(disk), &params, src, &source_record, dst)
-        .await.map_err(map_engine_err)?;
+    let Some(placement) = placement_for_io_async(disk).await? else {
+        return Ok(false);
+    };
+    let params = trueos_fs::FsParams {
+        super_lba: placement.super_lba,
+        data_lba: placement.data_lba,
+        data_end_lba_exclusive: placement.data_end_lba_exclusive,
+    };
+    let io = KernelBlockIo::new(disk);
+    let ok = trueos_fs::copy_file_from_record(&io, &params, src, &source_record, dst)
+        .await
+        .map_err(map_engine_err)?;
     if !ok {
         return Ok(false);
+    }
+
+    // The engine copy is a direct physical operation, so publish the new
+    // record into every kernel-side view before removing the old logical name.
+    let Some(destination_record) = trueos_fs::lookup_file_record(&io, &params, dst)
+        .await
+        .map_err(map_engine_err)?
+    else {
+        invalidate_root_index(disk.id());
+        return Err(block::Error::Corrupted);
+    };
+    record_successful_content_commit(destination_record.content_type, false);
+    bump_root_cache_gen(disk.id());
+    file_record_cache_invalidate_path(disk.id(), dst);
+    file_record_cache_insert(disk.id(), dst, destination_record);
+    if !update_root_index_put(disk.id(), dst, destination_record) {
+        invalidate_root_index(disk.id());
     }
 
     // Best-effort cleanup; ignore failure.
@@ -2033,8 +2184,13 @@ pub async fn file_rename_async(
     Ok(true)
 }
 
-async fn lookup_file_record_async(disk: block::DeviceHandle, name: &str) -> Result<Option<trueos_fs::FileRecordRef>, block::Error> {
-    let Some(placement) = placement_for_io_async(disk).await? else { return Ok(None); };
+async fn lookup_file_record_async(
+    disk: block::DeviceHandle,
+    name: &str,
+) -> Result<Option<trueos_fs::FileRecordRef>, block::Error> {
+    let Some(placement) = placement_for_io_async(disk).await? else {
+        return Ok(None);
+    };
     lookup_via_index_async(disk, &placement, name).await
 }
 
@@ -2771,15 +2927,18 @@ pub async fn file_append_async(
     };
     let io = KernelBlockIo::new(disk);
 
-    if append_bytes.is_empty() {
-        return Ok(true);
-    }
-
     let disk_id = disk.id();
     let record = match file_record_cache_lookup(disk_id, name) {
         Some(record) => Some(record),
         None => lookup_via_index_async(disk, &placement, name).await?,
     };
+    if record.is_some_and(|record| record.content_type != ContentTypeId::BLOB) {
+        record_type_reject(ContentIdentityRejectReason::LegacyDowngrade);
+        return Err(block::Error::InvalidParam);
+    }
+    if append_bytes.is_empty() {
+        return Ok(true);
+    }
     let (mut bytes, record_key) = match record {
         Some(record) => {
             let Some(existing) = trueos_fs::read_file_at_record(&io, &params, &record)
@@ -2813,6 +2972,7 @@ pub async fn file_append_async(
     trueos_fs::finish_write_file_stream(&io, &params, stream)
         .await
         .map_err(map_engine_err)?;
+    record_successful_content_commit(record.content_type, true);
 
     bump_root_cache_gen(disk_id);
     file_record_cache_invalidate_path(disk_id, name);
@@ -2823,10 +2983,30 @@ pub async fn file_append_async(
     Ok(true)
 }
 
-pub async fn file_append_typed_async(disk: block::DeviceHandle, name: &str, append_bytes: &[u8], content_type: ContentTypeId) -> Result<bool, block::Error> {
-    let Some(info) = file_info_async(disk, name).await? else { return file_in_typed_async(disk, name, append_bytes, content_type).await; };
-    if info.content_type != content_type { record_type_reject("append-type-mismatch"); return Err(block::Error::InvalidParam); }
-    let Some(mut bytes) = file_out_async(disk, name).await? else { return Ok(false); };
+pub async fn file_append_typed_async(
+    disk: block::DeviceHandle,
+    name: &str,
+    append_bytes: &[u8],
+    content_type: ContentTypeId,
+) -> Result<bool, block::Error> {
+    if content_type == ContentTypeId::NONE {
+        record_type_reject(ContentIdentityRejectReason::TypeRequired);
+        return Err(block::Error::InvalidParam);
+    }
+    if !content_type.is_registered() {
+        record_type_reject(ContentIdentityRejectReason::UnregisteredType);
+        return Err(block::Error::InvalidParam);
+    }
+    let Some(info) = file_info_async(disk, name).await? else {
+        return file_in_typed_async(disk, name, append_bytes, content_type).await;
+    };
+    if info.content_type != content_type {
+        record_type_reject(ContentIdentityRejectReason::TypeMismatch);
+        return Err(block::Error::InvalidParam);
+    }
+    let Some(mut bytes) = file_out_async(disk, name).await? else {
+        return Ok(false);
+    };
     bytes.extend_from_slice(append_bytes);
     file_in_typed_async(disk, name, &bytes, content_type).await
 }

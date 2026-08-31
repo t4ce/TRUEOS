@@ -28,6 +28,7 @@ enum RequestKind {
         path: String,
         bytes: Vec<u8>,
         content_type: crate::r::fs::trueosfs::ContentTypeId,
+        legacy_blob: bool,
     },
     CreateDirAll {
         path: String,
@@ -72,6 +73,7 @@ enum OperationState {
         bytes: Vec<u8>,
         total_len: usize,
         content_type: crate::r::fs::trueosfs::ContentTypeId,
+        legacy_blob: bool,
     },
     Read(Vec<u8>),
     Unit,
@@ -246,13 +248,42 @@ fn start_completed_read(owner: u32, bytes: Vec<u8>) -> i32 {
 }
 
 pub(crate) fn start_write(owner: u32, path: String, total_len: usize) -> i32 {
-    start_write_typed(owner, path, total_len, crate::r::fs::trueosfs::ContentTypeId::BLOB)
+    start_write_inner(
+        owner,
+        path,
+        total_len,
+        crate::r::fs::trueosfs::ContentTypeId::BLOB,
+        true,
+    )
 }
+
 pub(crate) fn start_write_typed(
     owner: u32,
     path: String,
     total_len: usize,
     content_type: crate::r::fs::trueosfs::ContentTypeId,
+) -> i32 {
+    if content_type == crate::r::fs::trueosfs::ContentTypeId::NONE {
+        crate::r::fs::trueosfs::record_type_reject(
+            crate::r::fs::trueosfs::ContentIdentityRejectReason::TypeRequired,
+        );
+        return FS_ERR_TYPE_REQUIRED;
+    }
+    if !content_type.is_registered() {
+        crate::r::fs::trueosfs::record_type_reject(
+            crate::r::fs::trueosfs::ContentIdentityRejectReason::UnregisteredType,
+        );
+        return FS_ERR_BAD_PARAM;
+    }
+    start_write_inner(owner, path, total_len, content_type, false)
+}
+
+fn start_write_inner(
+    owner: u32,
+    path: String,
+    total_len: usize,
+    content_type: crate::r::fs::trueosfs::ContentTypeId,
+    legacy_blob: bool,
 ) -> i32 {
     if total_len as u64 > ASYNC_FS_MAX_RESULT_BYTES {
         return FS_ERR_TOO_LARGE;
@@ -279,6 +310,7 @@ pub(crate) fn start_write_typed(
                 bytes,
                 total_len,
                 content_type,
+                legacy_blob,
             },
         },
     );
@@ -322,6 +354,7 @@ pub(crate) fn write_commit(owner: u32, id: u32) -> i32 {
                 bytes,
                 total_len,
                 content_type,
+                legacy_blob,
             } if bytes.len() == total_len => Request {
                 id,
                 owner,
@@ -329,6 +362,7 @@ pub(crate) fn write_commit(owner: u32, id: u32) -> i32 {
                     path,
                     bytes,
                     content_type,
+                    legacy_blob,
                 },
             },
             state => {
@@ -616,16 +650,36 @@ async fn process(request: &Request) -> OperationState {
             path,
             bytes,
             content_type,
+            legacy_blob,
         } => {
             let _ = path;
-            match crate::r::fs::trueosfs::file_in_typed_async(
-                disk,
-                selected_path,
-                bytes.as_slice(),
-                *content_type,
-            )
-            .await
-            {
+            if *legacy_blob {
+                match crate::r::fs::trueosfs::file_info_async(disk, selected_path).await {
+                    Ok(Some(info))
+                        if info.content_type
+                            != crate::r::fs::trueosfs::ContentTypeId::BLOB =>
+                    {
+                        crate::r::fs::trueosfs::record_type_reject(
+                            crate::r::fs::trueosfs::ContentIdentityRejectReason::LegacyDowngrade,
+                        );
+                        return OperationState::Failed(FS_ERR_TYPE_REQUIRED);
+                    }
+                    Ok(_) => {}
+                    Err(error) => return OperationState::Failed(map_block_error(error)),
+                }
+            }
+            let result = if *legacy_blob {
+                crate::r::fs::trueosfs::file_in_async(disk, selected_path, bytes.as_slice()).await
+            } else {
+                crate::r::fs::trueosfs::file_in_typed_async(
+                    disk,
+                    selected_path,
+                    bytes.as_slice(),
+                    *content_type,
+                )
+                .await
+            };
+            match result {
                 Ok(true) => OperationState::Unit,
                 Ok(false) => OperationState::Failed(FS_ERR_NO_SPACE),
                 Err(error) => OperationState::Failed(map_block_error(error)),
@@ -934,7 +988,16 @@ pub unsafe extern "C" fn trueos_cabi_async_fs_typed_write_begin(
         Err(code) => return code,
     };
     let id = crate::r::fs::trueosfs::ContentTypeId::from_raw(content_type);
-    if !id.is_registered() || id == crate::r::fs::trueosfs::ContentTypeId::NONE {
+    if id == crate::r::fs::trueosfs::ContentTypeId::NONE {
+        crate::r::fs::trueosfs::record_type_reject(
+            crate::r::fs::trueosfs::ContentIdentityRejectReason::TypeRequired,
+        );
+        return FS_ERR_TYPE_REQUIRED;
+    }
+    if !id.is_registered() {
+        crate::r::fs::trueosfs::record_type_reject(
+            crate::r::fs::trueosfs::ContentIdentityRejectReason::UnregisteredType,
+        );
         return FS_ERR_BAD_PARAM;
     }
     if crate::hv::current_hull_guest_context_vm_id().is_some() {

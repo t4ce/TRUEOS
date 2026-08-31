@@ -1268,10 +1268,16 @@ pub unsafe extern "C" fn trueos_cabi_fs_stat(
 
 #[unsafe(export_name = "trueos_kernel_sync_fs_typed_stat")]
 pub unsafe extern "C" fn trueos_cabi_fs_typed_stat(path_ptr: *const u8, path_len: usize, out_kind: *mut u32, out_len: *mut u64, out_content_type: *mut u32) -> i32 {
-    if out_content_type.is_null() { return FS_ERR_BAD_PARAM; }
-    let rc = trueos_cabi_fs_stat(path_ptr, path_len, out_kind, out_len);
-    if rc == 0 { unsafe { *out_content_type = crate::r::fs::trueosfs::ContentTypeId::NONE.raw(); } }
-    rc
+    if out_kind.is_null() || out_len.is_null() || out_content_type.is_null() || (path_ptr.is_null() && path_len != 0) { return FS_ERR_BAD_PARAM; }
+    let bytes = unsafe { core::slice::from_raw_parts(path_ptr, path_len) };
+    let Ok(raw) = core::str::from_utf8(bytes) else { return FS_ERR_BAD_UTF8; };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() { return FS_ERR_BAD_PARAM; }
+    let Ok(path) = crate::r::path::FsPath::parse(raw, true).map(|p| p.to_relative_string()) else { return FS_ERR_BAD_PATH; };
+    let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else { return FS_ERR_NOT_FOUND; };
+    match crate::r::fs::request_broker::typed_stat(disk, path) {
+        Ok(Ok((stat, id))) => { unsafe { *out_kind = match stat.kind { crate::r::io::kfs::FsNodeKind::File => 1, crate::r::io::kfs::FsNodeKind::Directory => 2 }; *out_len = stat.len; *out_content_type = id.raw(); } 0 }
+        Ok(Err(error)) => fs_error_to_code(error), Err(_) => FS_ERR_IO,
+    }
 }
 
 #[unsafe(export_name = "trueos_kernel_sync_fs_list_dir")]

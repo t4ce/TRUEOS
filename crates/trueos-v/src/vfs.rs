@@ -9,6 +9,8 @@ use alloc::{string::String, vec, vec::Vec};
 
 use crate::legacy_fs_abi as vcabi;
 pub use trueos_fs::ContentTypeId;
+pub const ERR_TYPE_REQUIRED: i32 = -15;
+pub const ERR_TYPE_MISMATCH: i32 = -16;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FsNodeKind {

@@ -60,6 +60,12 @@ enum Request {
         path: String,
         completion: Completion<FsStat>,
     },
+    TypedStat {
+        id: u64,
+        disk: block::DeviceHandle,
+        path: String,
+        completion: Completion<(FsStat, crate::r::fs::trueosfs::ContentTypeId)>,
+    },
     WriteFileBegin {
         id: u64,
         disk: block::DeviceHandle,
@@ -136,7 +142,9 @@ impl Request {
             Self::ReadFileLen { id, .. } => (*id, "read-file-len"),
             Self::ReadFileRange { id, .. } => (*id, "read-file-range"),
             Self::Stat { id, .. } => (*id, "stat"),
+            Self::TypedStat { id, .. } => (*id, "typed-stat"),
             Self::WriteFileBegin { id, .. } => (*id, "write-file-begin"),
+            Self::WriteFileBeginTyped { id, .. } => (*id, "write-file-begin-typed"),
             Self::CreateDirAll { id, .. } => (*id, "create-dir-all"),
             Self::WriteFileChunk { id, .. } => (*id, "write-file-chunk"),
             Self::WriteFileFinish { id, .. } => (*id, "write-file-finish"),
@@ -252,6 +260,10 @@ pub fn stat(
         path,
         completion,
     })
+}
+
+pub fn typed_stat(disk: block::DeviceHandle, path: String) -> core::result::Result<FsResult<(FsStat, crate::r::fs::trueosfs::ContentTypeId)>, BlockingRequestError> {
+    submit(|id, completion| Request::TypedStat { id, disk, path, completion })
 }
 
 pub fn write_file_begin(
@@ -440,6 +452,13 @@ async fn process_request(request: Request) {
         } => {
             let result = stat_async(disk, path.as_str()).await;
             finish(id, "stat", completion, result);
+        }
+        Request::TypedStat { id, disk, path, completion } => {
+            let result = match super::trueosfs::node_info_async(disk, path.as_str()).await {
+                Ok(Some(info)) => Ok((FsStat { kind: match info.kind { super::trueosfs::NodeKind::File => FsNodeKind::File, super::trueosfs::NodeKind::Directory => FsNodeKind::Directory }, len: info.data_len }, info.content_type)),
+                Ok(None) => Err(FsError::NotFound), Err(error) => Err(error.into()),
+            };
+            finish(id, "typed-stat", completion, result);
         }
         Request::WriteFileBegin {
             id,

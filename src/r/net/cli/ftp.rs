@@ -1,6 +1,10 @@
 extern crate alloc;
 
-use alloc::{format, string::String, vec::Vec};
+use alloc::{
+    format,
+    string::{String, ToString},
+    vec::Vec,
+};
 use core::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 
 use trueos_time::{Duration, Instant, Timer};
@@ -897,9 +901,9 @@ async fn ftp_handle_command(vnet: &mut VNet, sess: &mut FtpServerSession, line: 
                         });
                         ftp_close_passive(vnet, sess);
 
-                        let content_type = if final_extension(path.as_str())
-                            .is_some_and(|extension| extension.eq_ignore_ascii_case("bin"))
-                        {
+                        let explicit_blob = final_extension(path.as_str())
+                            .is_some_and(|extension| extension.eq_ignore_ascii_case("bin"));
+                        let content_type = if explicit_blob {
                             crate::log_important!(
                                 target: "storage";
                                 "ftp: content-admission decision=explicit-blob path={} bytes={} type={}\n",
@@ -915,6 +919,9 @@ async fn ftp_handle_command(vnet: &mut VNet, sess: &mut FtpServerSession, line: 
                                     IngressTypeError::MissingExtension
                                     | IngressTypeError::UnsupportedExtension,
                                 ) => {
+                                    crate::r::fs::trueosfs::record_type_reject(
+                                        crate::r::fs::trueosfs::ContentIdentityRejectReason::UnsupportedIngress,
+                                    );
                                     crate::log_important!(
                                         target: "storage";
                                         "ftp: content-admission decision=reject-unsupported path={} bytes={}\n",
@@ -930,6 +937,9 @@ async fn ftp_handle_command(vnet: &mut VNet, sess: &mut FtpServerSession, line: 
                                     return false;
                                 }
                                 Err(IngressTypeError::Mismatch { expected, observed }) => {
+                                    crate::r::fs::trueosfs::record_type_reject(
+                                        crate::r::fs::trueosfs::ContentIdentityRejectReason::EvidenceMismatch,
+                                    );
                                     let observed_raw = observed.map(infer::ContentTypeId::raw);
                                     crate::log_important!(
                                         target: "storage";
@@ -961,6 +971,9 @@ async fn ftp_handle_command(vnet: &mut VNet, sess: &mut FtpServerSession, line: 
                         .await
                         {
                             Ok(true) => {
+                                if explicit_blob {
+                                    crate::r::fs::trueosfs::record_explicit_blob_import();
+                                }
                                 let _ = ftp_send_reply(vnet, sess, 226, "transfer complete");
                             }
                             _ => {
