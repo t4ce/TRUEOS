@@ -30,7 +30,10 @@ const MIDDLE_BUTTON_MASK: u32 = 1 << 2;
 // display capture is deliberately available only through Shell2 `shot`.
 const INTERACTIVE_SCREENSHOT_ENABLED: bool = false;
 const FRAME_DRAG_GESTURE_MIN_TRAVEL_PX: u32 = 8;
-const MAXIMIZE_LATCH_TOP_PX: u32 = 48;
+const DOCK_REFERENCE_WIDTH_MM: u32 = 64;
+const DOCK_REFERENCE_HEIGHT_MM: u32 = 40;
+const DOCK_CORNER_MM: u32 = 24;
+const DOCK_EDGE_DEPTH_MM: u32 = 12;
 const CONTEXT_MENU_BORDER_PX: u32 = 2;
 pub(super) const CONTEXT_MENU_OFFSET_PX: u32 = 14;
 pub(super) const CONTEXT_MENU_WIDTH_PX: u32 = super::color_picker::PICKER_WIDTH;
@@ -188,13 +191,26 @@ pub(crate) struct Ui4VisualRect {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Ui4DockPreview {
+    pub(crate) target: super::WindowDockTarget,
+    pub(crate) destination: Ui4VisualRect,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(super) struct Ui4DockZone {
+    pub(super) target: super::WindowDockTarget,
+    pub(super) rect: Ui4VisualRect,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Ui4SoftwareCursorVisual {
     pub(crate) x: u32,
     pub(crate) y: u32,
     pub(crate) color: crate::graphics::primitives::Rgba8,
     pub(crate) context_menu: Option<(u32, u32)>,
     pub(crate) selection: Option<Ui4VisualRect>,
-    pub(crate) maximize_preview: Option<Ui4VisualRect>,
+    pub(crate) dock_fields_visible: bool,
+    pub(crate) dock_preview: Option<Ui4DockPreview>,
 }
 
 #[derive(Clone, Debug)]
@@ -276,8 +292,9 @@ struct CursorRoute {
     secondary_anchor: Option<(u32, u32)>,
     secondary_start_placement: Option<WindowPlacement>,
     secondary_dragged: bool,
-    secondary_restored_from_maximize: bool,
-    maximize_preview: Option<Ui4VisualRect>,
+    secondary_restored_from_dock: bool,
+    dock_fields_visible: bool,
+    dock_preview: Option<Ui4DockPreview>,
     context_menu: Option<(u32, u32)>,
     context_menu_owns_gesture: bool,
     context_menu_pressed_action: Option<DesktopContextMenuAction>,
@@ -302,8 +319,9 @@ impl CursorRoute {
             secondary_anchor: None,
             secondary_start_placement: None,
             secondary_dragged: false,
-            secondary_restored_from_maximize: false,
-            maximize_preview: None,
+            secondary_restored_from_dock: false,
+            dock_fields_visible: false,
+            dock_preview: None,
             context_menu: None,
             context_menu_owns_gesture: false,
             context_menu_pressed_action: None,
@@ -320,8 +338,9 @@ impl CursorRoute {
         self.secondary_anchor = None;
         self.secondary_start_placement = None;
         self.secondary_dragged = false;
-        self.secondary_restored_from_maximize = false;
-        self.maximize_preview = None;
+        self.secondary_restored_from_dock = false;
+        self.dock_fields_visible = false;
+        self.dock_preview = None;
         self.selection_anchor = None;
     }
 
@@ -538,7 +557,8 @@ impl InputBroker {
         if dx != 0 || dy != 0 {
             self.cursors[index].visible_after_motion = true;
         }
-        self.cursors[index].maximize_preview = None;
+        self.cursors[index].dock_fields_visible = false;
+        self.cursors[index].dock_preview = None;
 
         if pressed != 0
             && let Some(serial) = super::context_menu::pointer_down(source, x, y, width, height)
@@ -634,7 +654,7 @@ impl InputBroker {
             self.cursors[index].secondary_anchor = Some((x, y));
             self.cursors[index].secondary_start_placement = hit.map(|window| window.placement);
             self.cursors[index].secondary_dragged = false;
-            self.cursors[index].secondary_restored_from_maximize = false;
+            self.cursors[index].secondary_restored_from_dock = false;
             self.cursors[index].context_menu = None;
             self.cursors[index].context_menu_pressed_action = None;
         }
@@ -697,25 +717,19 @@ impl InputBroker {
             });
         if let Some(mut target) = target {
             let mut restored_this_event = false;
-            if target.maximized
+            if target.dock_target.is_some()
                 && buttons_down & SECONDARY_BUTTON_MASK != 0
                 && self.cursors[index].secondary_dragged
             {
-                match super::toggle_window_maximized(
-                    target.owner,
-                    target.id,
-                    width,
-                    height,
-                    None,
-                    Some((x, y)),
-                ) {
+                match super::restore_docked_window(target.owner, target.id, width, height, (x, y)) {
                     Ok(transition) => {
                         target.placement = transition.placement;
-                        target.maximized = transition.maximized;
-                        self.cursors[index].secondary_restored_from_maximize = true;
+                        target.dock_target = transition.dock_target;
+                        target.maximized = false;
+                        self.cursors[index].secondary_restored_from_dock = true;
                         restored_this_event = true;
                         crate::log_info!(target: "ui4";
-                            "ui4/input: frame-maximize-toggle owner={:?} window={} plane={} state=restored old={}x{}@{},{} new={}x{}@{},{} cursor={}:{}:{} trigger=secondary-drag-begin\n",
+                            "ui4/input: frame-dock owner={:?} window={} plane={} state=restored old={}x{}@{},{} new={}x{}@{},{} cursor={}:{}:{} trigger=secondary-drag-begin\n",
                             target.owner,
                             target.id.raw(),
                             target.plane.slot(),
@@ -734,7 +748,7 @@ impl InputBroker {
                     }
                     Err(error) => {
                         crate::log_warn!(target: "ui4";
-                            "ui4/input: frame-maximize-restore rejected owner={:?} window={} error={:?}\n",
+                            "ui4/input: frame-dock-restore rejected owner={:?} window={} error={:?}\n",
                             target.owner,
                             target.id.raw(),
                             error,
@@ -783,48 +797,54 @@ impl InputBroker {
                     }
                 }
             }
-            if target.interaction.maximizable
-                && !target.maximized
-                && !self.cursors[index].secondary_restored_from_maximize
-                && buttons_down & SECONDARY_BUTTON_MASK != 0
-                && self.cursors[index].secondary_dragged
-                && maximize_latch_contains(x, y, width, height)
-            {
-                let preview = super::window_broker::maximized_window_placement(
-                    target.interaction,
-                    target.placement,
-                    width,
-                    height,
-                );
-                self.cursors[index].maximize_preview = Some(Ui4VisualRect {
-                    x: preview.x.max(0) as u32,
-                    y: preview.y.max(0) as u32,
-                    width: preview.width,
-                    height: preview.height,
-                });
+            let docking_gesture = target.interaction.maximizable
+                && target.dock_target.is_none()
+                && !self.cursors[index].secondary_restored_from_dock
+                && (self.cursors[index].secondary_dragged || secondary_drop);
+            let dock_target = docking_gesture
+                .then(|| dock_target_at(x, y, width, height))
+                .flatten();
+            if docking_gesture && buttons_down & SECONDARY_BUTTON_MASK != 0 {
+                self.cursors[index].dock_fields_visible = true;
+                if let Some(dock_target) = dock_target {
+                    let preview = super::window_broker::docked_window_placement(
+                        target.interaction,
+                        target.placement,
+                        dock_target,
+                        width,
+                        height,
+                    );
+                    self.cursors[index].dock_preview = Some(Ui4DockPreview {
+                        target: dock_target,
+                        destination: Ui4VisualRect {
+                            x: preview.x.max(0) as u32,
+                            y: preview.y.max(0) as u32,
+                            width: preview.width,
+                            height: preview.height,
+                        },
+                    });
+                }
             }
-            let maximize_latched = target.interaction.maximizable
-                && secondary_drop
-                && !self.cursors[index].secondary_restored_from_maximize
-                && maximize_latch_contains(x, y, width, height);
-            if maximize_latched {
-                match super::toggle_window_maximized(
+            if secondary_drop && let Some(dock_target) = dock_target {
+                match super::dock_window(
                     target.owner,
                     target.id,
+                    dock_target,
                     width,
                     height,
                     self.cursors[index].secondary_start_placement,
-                    None,
                 ) {
                     Ok(transition) => {
                         target.placement = transition.placement;
-                        target.maximized = transition.maximized;
+                        target.dock_target = transition.dock_target;
+                        target.maximized =
+                            transition.dock_target == Some(super::WindowDockTarget::Maximize);
                         crate::log_info!(target: "ui4";
-                            "ui4/input: frame-maximize-toggle owner={:?} window={} plane={} state={} old={}x{}@{},{} new={}x{}@{},{} cursor={}:{}:{} trigger=secondary-drag-drop\n",
+                            "ui4/input: frame-dock owner={:?} window={} plane={} target={} old={}x{}@{},{} new={}x{}@{},{} cursor={}:{}:{} trigger=secondary-drag-drop\n",
                             target.owner,
                             target.id.raw(),
                             target.plane.slot(),
-                            if transition.maximized { "maximized" } else { "restored" },
+                            dock_target_label(dock_target),
                             transition.previous.width,
                             transition.previous.height,
                             transition.previous.x,
@@ -840,9 +860,10 @@ impl InputBroker {
                     }
                     Err(error) => {
                         crate::log_warn!(target: "ui4";
-                            "ui4/input: frame-maximize-toggle rejected owner={:?} window={} error={:?}\n",
+                            "ui4/input: frame-dock rejected owner={:?} window={} target={} error={:?}\n",
                             target.owner,
                             target.id.raw(),
+                            dock_target_label(dock_target),
                             error,
                         );
                     }
@@ -959,8 +980,9 @@ impl InputBroker {
         self.cursors[index].buttons_down = event.buttons_down;
         if secondary_released {
             self.cursors[index].secondary_start_placement = None;
-            self.cursors[index].secondary_restored_from_maximize = false;
-            self.cursors[index].maximize_preview = None;
+            self.cursors[index].secondary_restored_from_dock = false;
+            self.cursors[index].dock_fields_visible = false;
+            self.cursors[index].dock_preview = None;
         }
         if buttons_down == 0 {
             self.cursors[index].capture = None;
@@ -1342,7 +1364,8 @@ impl InputBroker {
                 y: route.y,
                 color: route.color,
                 context_menu: route.context_menu,
-                maximize_preview: route.maximize_preview,
+                dock_fields_visible: route.dock_fields_visible,
+                dock_preview: route.dock_preview,
                 selection: route.selection_anchor.and_then(|anchor| {
                     (route.buttons_down & PRIMARY_BUTTON_MASK != 0)
                         .then(|| selection_rect_between(anchor, (route.x, route.y)))
@@ -1450,7 +1473,7 @@ pub(crate) async fn ui4_input_service_task(ap1_spawner: crate::workers::WorkerSp
         ),
     }
     crate::log_info!(target: "ui4";
-        "ui4/input: service online source=hid-sequence-rings cursor_wake=producer-signal keyboard_watchdog_hz={} selection=per-cursor-zero-or-one-frame+most-recent-input-focus first-click=absorb-select keyboard=global-hooks-before-ui4/hut-combo/exact-slot/recent-selector-fallback start_key=reveal-menu-button cursor=slot4-software/all-active-sources/per-frame-per-cursor hardware-cursor=preferred-physical-source/concurrent virtual=vcursor frame_drag=secondary-button/per-cursor-selected-frame-only maximize=interaction-capability-gated outline=primary-button/selected-frame-only desktop_menu=per-cursor/color-picker+shell owner_events=selected-frame-only screenshot=parked\n",
+        "ui4/input: service online source=hid-sequence-rings cursor_wake=producer-signal keyboard_watchdog_hz={} selection=per-cursor-zero-or-one-frame+most-recent-input-focus first-click=absorb-select keyboard=global-hooks-before-ui4/hut-combo/exact-slot/recent-selector-fallback start_key=reveal-menu-button cursor=slot4-software/all-active-sources/per-frame-per-cursor hardware-cursor=preferred-physical-source/concurrent virtual=vcursor frame_drag=secondary-button/per-cursor-selected-frame-only dock=top-center-maximize+center-sides-halves+corners-quadrants/dpi-mm-first outline=primary-button/selected-frame-only desktop_menu=per-cursor/color-picker+shell owner_events=selected-frame-only screenshot=parked\n",
         super::INTERACTION_CADENCE_HZ,
     );
     loop {
@@ -2020,13 +2043,183 @@ fn point_travel_reached(origin: (u32, u32), point: (u32, u32), threshold: u32) -
         >= threshold.saturating_mul(threshold)
 }
 
-/// Monitor-wide top-edge drop target. The dedicated slot-4 plane previews the
-/// result while the cursor remains inside this narrow activation band.
-fn maximize_latch_contains(_x: u32, y: u32, screen_width: u32, screen_height: u32) -> bool {
-    if screen_width == 0 || screen_height == 0 {
-        return false;
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct DockZoneMetrics {
+    corner_width: u32,
+    corner_height: u32,
+    side_depth: u32,
+    side_span: u32,
+    top_span: u32,
+    top_depth: u32,
+}
+
+/// Resolve physically stable edge targets from EDID. The proportional fallback
+/// follows the supplied Full-HD layout when monitor size is unavailable.
+fn dock_zone_metrics(
+    screen_width: u32,
+    screen_height: u32,
+    physical_reference: Option<(u32, u32)>,
+) -> DockZoneMetrics {
+    let (corner_width, corner_height, side_depth, side_span, top_span, top_depth) =
+        if let Some((reference_width, reference_height)) = physical_reference {
+            (
+                scale_reference(reference_width, DOCK_CORNER_MM, DOCK_REFERENCE_WIDTH_MM),
+                scale_reference(reference_height, DOCK_CORNER_MM, DOCK_REFERENCE_HEIGHT_MM),
+                scale_reference(reference_width, DOCK_EDGE_DEPTH_MM, DOCK_REFERENCE_WIDTH_MM),
+                reference_height,
+                reference_width,
+                scale_reference(reference_height, DOCK_EDGE_DEPTH_MM, DOCK_REFERENCE_HEIGHT_MM),
+            )
+        } else {
+            (
+                screen_width / 20,
+                screen_height / 11,
+                screen_width / 40,
+                screen_height / 7,
+                screen_width / 8,
+                screen_height / 24,
+            )
+        };
+    DockZoneMetrics {
+        corner_width: clamp_zone_metric(corner_width, screen_width / 4, screen_width),
+        corner_height: clamp_zone_metric(corner_height, screen_height / 4, screen_height),
+        side_depth: clamp_zone_metric(side_depth, screen_width / 4, screen_width),
+        side_span: clamp_zone_metric(side_span, screen_height / 2, screen_height),
+        top_span: clamp_zone_metric(top_span, screen_width / 2, screen_width),
+        top_depth: clamp_zone_metric(top_depth, screen_height / 4, screen_height),
     }
-    y < MAXIMIZE_LATCH_TOP_PX.min(screen_height)
+}
+
+fn scale_reference(pixels: u32, millimeters: u32, reference_millimeters: u32) -> u32 {
+    ((u64::from(pixels)
+        .saturating_mul(u64::from(millimeters))
+        .saturating_add(u64::from(reference_millimeters / 2)))
+        / u64::from(reference_millimeters.max(1)))
+    .min(u64::from(u32::MAX)) as u32
+}
+
+fn clamp_zone_metric(value: u32, limit: u32, screen_extent: u32) -> u32 {
+    if screen_extent == 0 {
+        return 0;
+    }
+    value.max(1).min(limit.max(1)).min(screen_extent)
+}
+
+pub(super) fn dock_zones(screen_width: u32, screen_height: u32) -> [Ui4DockZone; 7] {
+    let physical_reference =
+        crate::intel::physical_extent_pixels(DOCK_REFERENCE_WIDTH_MM, DOCK_REFERENCE_HEIGHT_MM);
+    dock_zones_with_reference(screen_width, screen_height, physical_reference)
+}
+
+fn dock_zones_with_reference(
+    screen_width: u32,
+    screen_height: u32,
+    physical_reference: Option<(u32, u32)>,
+) -> [Ui4DockZone; 7] {
+    use super::WindowDockTarget;
+
+    let metrics = dock_zone_metrics(screen_width, screen_height, physical_reference);
+    let right_x = screen_width.saturating_sub(metrics.corner_width);
+    let bottom_y = screen_height.saturating_sub(metrics.corner_height);
+    let side_y = screen_height.saturating_sub(metrics.side_span) / 2;
+    let top_x = screen_width.saturating_sub(metrics.top_span) / 2;
+    [
+        Ui4DockZone {
+            target: WindowDockTarget::TopLeft,
+            rect: Ui4VisualRect {
+                x: 0,
+                y: 0,
+                width: metrics.corner_width,
+                height: metrics.corner_height,
+            },
+        },
+        Ui4DockZone {
+            target: WindowDockTarget::TopRight,
+            rect: Ui4VisualRect {
+                x: right_x,
+                y: 0,
+                width: metrics.corner_width,
+                height: metrics.corner_height,
+            },
+        },
+        Ui4DockZone {
+            target: WindowDockTarget::BottomLeft,
+            rect: Ui4VisualRect {
+                x: 0,
+                y: bottom_y,
+                width: metrics.corner_width,
+                height: metrics.corner_height,
+            },
+        },
+        Ui4DockZone {
+            target: WindowDockTarget::BottomRight,
+            rect: Ui4VisualRect {
+                x: right_x,
+                y: bottom_y,
+                width: metrics.corner_width,
+                height: metrics.corner_height,
+            },
+        },
+        Ui4DockZone {
+            target: WindowDockTarget::LeftHalf,
+            rect: Ui4VisualRect {
+                x: 0,
+                y: side_y,
+                width: metrics.side_depth,
+                height: metrics.side_span,
+            },
+        },
+        Ui4DockZone {
+            target: WindowDockTarget::RightHalf,
+            rect: Ui4VisualRect {
+                x: screen_width.saturating_sub(metrics.side_depth),
+                y: side_y,
+                width: metrics.side_depth,
+                height: metrics.side_span,
+            },
+        },
+        Ui4DockZone {
+            target: WindowDockTarget::Maximize,
+            rect: Ui4VisualRect {
+                x: top_x,
+                y: 0,
+                width: metrics.top_span,
+                height: metrics.top_depth,
+            },
+        },
+    ]
+}
+
+fn dock_target_at(
+    x: u32,
+    y: u32,
+    screen_width: u32,
+    screen_height: u32,
+) -> Option<super::WindowDockTarget> {
+    dock_target_at_in_zones(x, y, &dock_zones(screen_width, screen_height))
+}
+
+fn dock_target_at_in_zones(
+    x: u32,
+    y: u32,
+    zones: &[Ui4DockZone],
+) -> Option<super::WindowDockTarget> {
+    zones
+        .into_iter()
+        .find(|zone| visual_rect_contains(zone.rect, x, y))
+        .map(|zone| zone.target)
+}
+
+const fn dock_target_label(target: super::WindowDockTarget) -> &'static str {
+    match target {
+        super::WindowDockTarget::Maximize => "maximize",
+        super::WindowDockTarget::LeftHalf => "left-half",
+        super::WindowDockTarget::RightHalf => "right-half",
+        super::WindowDockTarget::TopLeft => "top-left",
+        super::WindowDockTarget::TopRight => "top-right",
+        super::WindowDockTarget::BottomLeft => "bottom-left",
+        super::WindowDockTarget::BottomRight => "bottom-right",
+    }
 }
 
 fn translated_frame_placement(
@@ -2186,8 +2379,10 @@ fn keyboard_hut_metadata(event: &crate::r::keyboard::TrueosKeyboardOutputEvent) 
 mod tests {
     use super::{
         Ui4CursorSource, Ui4InputEvent, Ui4PointerEvent, WindowId, coalesce_owner_state_sample,
+        dock_target_at_in_zones, dock_zone_metrics, dock_zones_with_reference,
         owner_event_is_state_sample,
     };
+    use crate::ui4::WindowDockTarget;
 
     fn pointer(wheel: i16) -> Ui4InputEvent {
         Ui4InputEvent::Pointer(Ui4PointerEvent {
@@ -2233,5 +2428,76 @@ mod tests {
             panic!("pointer was replaced with another event kind");
         };
         assert_eq!(event.wheel, i16::MAX);
+    }
+
+    #[test]
+    fn dock_fields_follow_physical_monitor_scale() {
+        let zones = dock_zones_with_reference(1_920, 1_080, Some((256, 160)));
+        assert_eq!(
+            (zones[0].rect.width, zones[0].rect.height),
+            (96, 96),
+            "24 mm corners at four pixels per millimetre"
+        );
+        assert_eq!(
+            (
+                zones[4].rect.x,
+                zones[4].rect.y,
+                zones[4].rect.width,
+                zones[4].rect.height,
+            ),
+            (0, 460, 48, 160)
+        );
+        assert_eq!(
+            (
+                zones[6].rect.x,
+                zones[6].rect.y,
+                zones[6].rect.width,
+                zones[6].rect.height,
+            ),
+            (832, 0, 256, 48)
+        );
+    }
+
+    #[test]
+    fn dock_hitboxes_map_corners_sides_and_top_center_without_whole_edge_latches() {
+        let zones = dock_zones_with_reference(1_920, 1_080, Some((256, 160)));
+        assert_eq!(
+            dock_target_at_in_zones(0, 0, &zones),
+            Some(WindowDockTarget::TopLeft)
+        );
+        assert_eq!(
+            dock_target_at_in_zones(1_919, 1_079, &zones),
+            Some(WindowDockTarget::BottomRight)
+        );
+        assert_eq!(
+            dock_target_at_in_zones(0, 540, &zones),
+            Some(WindowDockTarget::LeftHalf)
+        );
+        assert_eq!(
+            dock_target_at_in_zones(1_919, 540, &zones),
+            Some(WindowDockTarget::RightHalf)
+        );
+        assert_eq!(
+            dock_target_at_in_zones(960, 0, &zones),
+            Some(WindowDockTarget::Maximize)
+        );
+        assert_eq!(dock_target_at_in_zones(500, 0, &zones), None);
+        assert_eq!(dock_target_at_in_zones(960, 200, &zones), None);
+    }
+
+    #[test]
+    fn dock_fields_have_full_hd_proportional_fallback() {
+        let metrics = dock_zone_metrics(1_920, 1_080, None);
+        assert_eq!(
+            (
+                metrics.corner_width,
+                metrics.corner_height,
+                metrics.side_depth,
+                metrics.side_span,
+                metrics.top_span,
+                metrics.top_depth,
+            ),
+            (96, 98, 48, 154, 240, 45)
+        );
     }
 }

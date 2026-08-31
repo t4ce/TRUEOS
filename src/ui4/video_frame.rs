@@ -1565,7 +1565,7 @@ pub(crate) fn stop_decoded_nv12_stream(reason: &str) -> bool {
             reason,
             stream.frame.raw(),
             stream.window.raw(),
-            if animated { "direct-plane-shrink+fade" } else { "immediate-fallback" },
+            if animated { "direct-plane-puff+fade" } else { "immediate-fallback" },
         );
         true
     } else if reserved {

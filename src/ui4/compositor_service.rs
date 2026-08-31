@@ -437,7 +437,7 @@ fn prepare_async_frame(runtime: &mut Runtime) -> Result<Option<PendingFrame>, Ui
     let output = OutputId::from_slot(0).expect("UI4 D01 must exist");
     let phase_started_ns = crate::chronos::monotonic_nanos();
     super::advance_window_close_transitions();
-    super::advance_window_placement_transitions();
+    super::advance_window_open_transitions();
     runtime.profile.close_ns = runtime
         .profile
         .close_ns
@@ -1418,10 +1418,8 @@ fn direct_overlay_geometry_eligible(window: WindowSnapshot, view: FrameRgbaView)
     let scaler_safe_close = window.state == super::WindowState::Closing
         && placement.width >= 8
         && placement.height >= 8
-        && placement.width <= view.width
-        && placement.height <= view.height
-        && u64::from(view.width) < u64::from(placement.width).saturating_mul(3)
-        && u64::from(view.height) < u64::from(placement.height).saturating_mul(3);
+        && bounded_direct_plane_scale(view.width, placement.width)
+        && bounded_direct_plane_scale(view.height, placement.height);
     placement.x >= 0
         && placement.y >= 0
         && (exact_size || scaler_safe_resize || scaler_safe_close)
@@ -1433,11 +1431,9 @@ fn direct_overlay_geometry_eligible(window: WindowSnapshot, view: FrameRgbaView)
             .is_some_and(|bottom| bottom <= output_height)
 }
 
-/// Resolve the broker's display-only geometry. Logical placement has already
-/// moved to the final target and generated at most one producer resize; this
-/// projection alone advances at compositor cadence. The old published frame
-/// is therefore useful throughout maximize instead of snapping to the target
-/// or sitting centered at 1:1 while the producer prepares its replacement.
+/// Resolve broker-owned display geometry. A maximize/dock resize holds the old
+/// published frame at 1:1 until the producer publishes its final-sized frame;
+/// only opening and closing visuals advance at compositor cadence.
 pub(super) fn presentation_placement(
     window: WindowSnapshot,
     _backing_width: u32,

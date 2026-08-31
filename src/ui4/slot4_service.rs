@@ -1,7 +1,7 @@
 //! Independent UI4 interaction-plane service.
 //!
 //! Slot 4 contains the kernel color picker, fixed-shape colored crosshairs,
-//! one-pixel selection and maximize outlines, selected-frame strips, and
+//! one-pixel selection and dock outlines, translucent dock fields, selected-frame strips, and
 //! context menus. It deliberately does not participate in application-plane
 //! composition or its atomic SURF batch. Cursor input is coalesced to the
 //! display cadence.
@@ -14,6 +14,7 @@ use trueos_time::{Duration, Instant, with_timeout};
 const SLOT4_RECT_CAPACITY: usize = 3_072;
 const SOFTWARE_CURSOR_STROKE_PX: u32 = 5;
 const SOFTWARE_CURSOR_LONG_PX: u32 = 27;
+const DOCK_FIELD_ALPHA: u8 = 84;
 
 type Slot4Rects = heapless::Vec<crate::intel::LiveOverlayRect, SLOT4_RECT_CAPACITY>;
 
@@ -56,7 +57,7 @@ impl Slot4State {
 #[trueos_executor::task(pool_size = 1)]
 pub(crate) async fn ui4_slot4_service_task() {
     crate::log_info!(target: "ui4/slot4";
-        "ui4/slot4: service online carrier=ap1-ui-core plane=slot4 content=start-button+color-picker-rgba8+static-color-crosshairs+selected-frame-strips+selection-outline-1px+maximize-outline-1px+context-menu hardware-cursor=preferred-physical-source/concurrent cadence_hz={} cadence_clock=absolute-fractional wake=input-or-frame-state-change coalesce=display-cadence damage=ordered-linear-diff+window-old-new gpu_submits=0 synthetic-motion=off\n",
+        "ui4/slot4: service online carrier=ap1-ui-core plane=slot4 content=start-button+color-picker-rgba8+static-color-crosshairs+selected-frame-strips+selection-outline-1px+dpi-dock-fields-33pct+dock-destination-outline+context-menu hardware-cursor=preferred-physical-source/concurrent cadence_hz={} cadence_clock=absolute-fractional wake=input-or-frame-state-change coalesce=display-cadence damage=ordered-linear-diff+window-old-new gpu_submits=0 synthetic-motion=off\n",
         super::INTERACTION_CADENCE_HZ,
     );
 
@@ -389,12 +390,41 @@ fn software_cursor_rects() -> Slot4Rects {
         }
     }
 
+    if visuals.iter().any(|visual| visual.dock_fields_visible) {
+        for zone in super::input_broker::dock_zones(screen_w, screen_h) {
+            let active = visuals.iter().any(|visual| {
+                visual.dock_fields_visible
+                    && visual
+                        .dock_preview
+                        .is_some_and(|preview| preview.target == zone.target)
+            });
+            let color = if active {
+                Rgba8::new(205, 210, 220, DOCK_FIELD_ALPHA)
+            } else {
+                Rgba8::new(118, 124, 136, DOCK_FIELD_ALPHA)
+            };
+            push_overlay_rect(
+                &mut rects,
+                zone.rect.x,
+                zone.rect.y,
+                zone.rect.width,
+                zone.rect.height,
+                color,
+            );
+        }
+    }
+
     for visual in &visuals {
         if let Some(selection) = visual.selection {
             push_selection_outline(&mut rects, selection, visual.color);
         }
-        if let Some(maximize_preview) = visual.maximize_preview {
-            push_selection_outline(&mut rects, maximize_preview, visual.color);
+        if let Some(dock_preview) = visual.dock_preview {
+            push_rect_border(
+                &mut rects,
+                dock_preview.destination,
+                2,
+                Rgba8::new(220, 224, 232, 160),
+            );
         }
     }
 
