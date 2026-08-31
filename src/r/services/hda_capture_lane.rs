@@ -1027,7 +1027,10 @@ fn pin_score(pin: &Widget) -> u32 {
         0xF => 250,
         _ => 100,
     };
-    base + if pin.present() { 500 } else { 0 } + if pin.connectivity() == 2 { 25 } else { 0 }
+    // A physically present jack wins over a fixed/internal microphone. This
+    // is especially important for headset combo pins whose BIOS default
+    // device can still be HP Out even though the widget is input-capable.
+    base + if pin.present() { 1000 } else { 0 } + if pin.connectivity() == 2 { 25 } else { 0 }
 }
 
 fn trace_path(
@@ -1092,9 +1095,8 @@ fn configure_codec_route(
         .codec_cmd(codec, pin_nid, VERB_GET_PIN_CONTROL, 0)
         .unwrap_or(0) as u8;
     let mut next_ctl = current_ctl | PINCTL_INPUT_ENABLE;
-    if pin.default_device() == 0xA
-        && ((pin.pin_caps >> PINCAP_VREF_SHIFT) & PINCAP_VREF_80) != 0
-    {
+    let mic_bias_candidate = matches!(pin.default_device(), 0xA | 0x2 | 0xF);
+    if mic_bias_candidate && ((pin.pin_caps >> PINCAP_VREF_SHIFT) & PINCAP_VREF_80) != 0 {
         next_ctl = (next_ctl & !PINCTL_VREF_MASK) | PINCTL_VREF_80;
     }
     codec_io.codec_cmd(codec, pin_nid, VERB_SET_PIN_CONTROL, next_ctl)?;
