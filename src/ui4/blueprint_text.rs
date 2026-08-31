@@ -60,11 +60,15 @@ const MAX_FONT_CANVAS_INTERNAL_LAYERS: usize = 64;
 const MAX_TEXT_ROW_BYTES: usize = 1_024;
 const MAX_NATIVE_FONT_SIZES: usize = 32;
 const SHELL2_WARM_PRODUCER_SEALS_PER_SURFACE: usize = 5;
-/// Shell2's wheel UI offers a bounded set of effective sizes.  The source
+/// Shell2's app-owned scale UI offers a bounded set of effective sizes. The source
 /// tiers are deliberately few so a future persistent sprite producer only
 /// needs to warm five native ppem variants; the residual is presentation
 /// scale, not a request to retessellate a new glyph source.
 const SHELL2_FONT_SCALE_STEP_COUNT: usize = 25;
+const SHELL2_MONO_ADVANCE_NUMERATOR: u32 = 3;
+const SHELL2_MONO_ADVANCE_DENOMINATOR: u32 = 5;
+const SHELL2_ROW_HEIGHT_NUMERATOR: u32 = 13;
+const SHELL2_ROW_HEIGHT_DENOMINATOR: u32 = 12;
 const MAX_PENDING_POINTER_EVENTS: usize = 256;
 const MAX_PENDING_PAN_EVENTS: usize = 256;
 const MAX_PENDING_KEYBOARD_EVENTS: usize = 256;
@@ -298,7 +302,7 @@ pub struct TrueosUi4SolaraFontSize {
     pub target_pixels: u32,
 }
 
-/// One Shell2/UI4 wheel-font scale step.
+/// One Shell2/UI4 font scale step.
 ///
 /// `effective_pixels` is the exact user-visible size.  `native_tier_pixels`
 /// names the warmed source tier suitable for a cache-backed sprite path, and
@@ -311,9 +315,9 @@ pub struct TrueosUi4Shell2FontScaleStep {
     pub effective_pixels: u32,
     pub native_tier_pixels: u32,
     pub residual_milli: u32,
-    /// Monospace columns at a 1280 pixel viewport using an 0.5em cell.
+    /// Monospace columns at a 1280 pixel viewport using JuliaMono's 0.6em cell.
     pub columns_at_1280: u32,
-    /// Text rows at a 720 pixel viewport using a one-em cell height.
+    /// Text rows at a 720 pixel viewport using Shell's 13/12-em row height.
     pub rows_at_720: u32,
     /// One only when the size is a declared Shell2 scale step and therefore
     /// structurally eligible for a future tiered sprite-cache lookup.
@@ -342,8 +346,14 @@ fn shell2_font_scale_step(effective_pixels: u32) -> Option<TrueosUi4Shell2FontSc
         effective_pixels,
         native_tier_pixels,
         residual_milli,
-        columns_at_1280: 2_560 / effective_pixels.max(1),
-        rows_at_720: 720 / effective_pixels.max(1),
+        columns_at_1280: 1_280_u32.saturating_mul(SHELL2_MONO_ADVANCE_DENOMINATOR)
+            / effective_pixels
+                .saturating_mul(SHELL2_MONO_ADVANCE_NUMERATOR)
+                .max(1),
+        rows_at_720: 720_u32.saturating_mul(SHELL2_ROW_HEIGHT_DENOMINATOR)
+            / effective_pixels
+                .saturating_mul(SHELL2_ROW_HEIGHT_NUMERATOR)
+                .max(1),
         cache_eligible: 1,
     })
 }
@@ -1037,7 +1047,7 @@ pub unsafe extern "C" fn trueos_cabi_ui4_solara_font_sizes(
     count as isize
 }
 
-/// Enumerate Shell2's fixed wheel-scale ladder.
+/// Enumerate Shell2's fixed app-owned scale ladder.
 ///
 /// This is intentionally separate from the older native render-target size
 /// enumeration: existing callers retain its native-scale semantics, while a
@@ -5420,7 +5430,7 @@ pub(crate) fn request_font_sprite(
         font_pixels_bits: font_pixels.to_bits(),
         color_rgba,
     };
-    // A Shell2 wheel frontend should first obtain an exact step from
+    // A Shell2 scale frontend should first obtain an exact step from
     // `trueos_cabi_ui4_shell2_font_scale_steps_v1`, request that step's
     // `native_tier_pixels` here, and apply the published residual to its
     // sprite quad. v1 deliberately does not quantize arbitrary caller sizes:
@@ -7071,8 +7081,8 @@ mod tests {
                 effective_pixels: 12,
                 native_tier_pixels: 16,
                 residual_milli: 750,
-                columns_at_1280: 213,
-                rows_at_720: 60,
+                columns_at_1280: 177,
+                rows_at_720: 55,
                 cache_eligible: 1,
             })
         );
@@ -7082,7 +7092,7 @@ mod tests {
             shell2_font_scale_step(13)
                 .expect("declared odd scale")
                 .columns_at_1280,
-            196
+            164
         );
         let large = shell2_font_scale_step(108).expect("declared large scale");
         assert_eq!((large.native_tier_pixels, large.residual_milli), (80, 1_350));

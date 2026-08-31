@@ -144,7 +144,13 @@ pub(in crate::intel) const PLANE_CUS_VPHASE_0_5: u32 = 2 << 12;
 pub(in crate::intel) const PLANE_WM_ENABLE: u32 = 1 << 31;
 // At 2560-wide RGBA8, the linear-plane fetch model consumes 21 512-byte
 // blocks per scanline. Eight scanlines therefore require 168 blocks.
-pub(in crate::intel) const PLANE_WM_LEVEL0_BOOT_SAFE: u32 = PLANE_WM_ENABLE | (2 << 14) | 168;
+const PLANE_WM_LEVEL0_LINES: u32 = 8;
+const PLANE_WM_LEVEL0_BLOCKS: u32 = 168;
+const PLANE_WM_LINES_SHIFT: u32 = 14;
+const PLANE_WM_LINES_MASK: u32 = 0x1F;
+const PLANE_WM_BLOCKS_MASK: u32 = 0x7FF;
+pub(in crate::intel) const PLANE_WM_LEVEL0_BOOT_SAFE: u32 =
+    PLANE_WM_ENABLE | (PLANE_WM_LEVEL0_LINES << PLANE_WM_LINES_SHIFT) | PLANE_WM_LEVEL0_BLOCKS;
 // Pipe-local DBUF policy for the five universal planes exposed by display
 // version 13: primary plus four sprites. UI4 converts decoded video into its
 // normal RGBA frame contract, so every slot is independently usable as a
@@ -205,7 +211,16 @@ const _: () = assert!(PLANE_DBUF_SLOT_1_END + 1 == PLANE_DBUF_SLOT_2_START);
 const _: () = assert!(PLANE_DBUF_SLOT_2_END + 1 == PLANE_DBUF_SLOT_3_START);
 const _: () = assert!(PLANE_DBUF_SLOT_3_END + 1 == PLANE_DBUF_SLOT_4_START);
 const _: () = assert!(PLANE_DBUF_SLOT_4_END + 1 == PLANE_DBUF_TOTAL_BLOCKS);
-const _: () = assert!((PLANE_WM_LEVEL0_BOOT_SAFE & 0x3FF) <= PLANE_DBUF_TOP_BLOCKS as u32);
+const _: () = assert!(
+    (PLANE_WM_LEVEL0_BOOT_SAFE >> PLANE_WM_LINES_SHIFT) & PLANE_WM_LINES_MASK
+        == PLANE_WM_LEVEL0_LINES
+);
+const _: () = assert!(PLANE_WM_LEVEL0_BOOT_SAFE & PLANE_WM_BLOCKS_MASK == PLANE_WM_LEVEL0_BLOCKS);
+// Linear planes need the programmed watermark plus 10% (rounded up) in
+// their DDB allocation. Keep the smallest slot strictly above that limit.
+const PLANE_WM_MIN_LINEAR_DBUF_BLOCKS: u32 =
+    PLANE_WM_LEVEL0_BLOCKS + PLANE_WM_LEVEL0_BLOCKS.div_ceil(10);
+const _: () = assert!(PLANE_WM_MIN_LINEAR_DBUF_BLOCKS < PLANE_DBUF_TOP_BLOCKS as u32);
 
 #[derive(Copy, Clone)]
 pub(in crate::intel) struct PipeInfo {

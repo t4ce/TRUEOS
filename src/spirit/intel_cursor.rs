@@ -30,8 +30,10 @@ const CURSOR_A_BASE: usize = 0x70080;
 const CURSOR_CTL_OFF: usize = 0x00;
 const CURSOR_BASE_OFF: usize = 0x04;
 const CURSOR_POS_OFF: usize = 0x08;
+const CURSOR_FBC_CTL_OFF: usize = 0x20;
 const CURSOR_SURF_LIVE_OFF: usize = 0x2C;
 const CURSOR_WM_A0: usize = 0x70140;
+const CURSOR_WM_A1: usize = 0x70144;
 const CURSOR_WM_TRANS_A: usize = 0x70168;
 const CURSOR_WM_SAGV_A: usize = 0x70158;
 const CURSOR_WM_SAGV_TRANS_A: usize = 0x7015C;
@@ -51,6 +53,11 @@ const CUR_WM_ENABLE: u32 = 1 << 31;
 const CUR_WM_LINES_2: u32 = 2 << 14;
 const CUR_WM_BLOCKS_4: u32 = 4;
 const CUR_WM_LEVEL0_SPIRIT: u32 = CUR_WM_ENABLE | CUR_WM_LINES_2 | CUR_WM_BLOCKS_4;
+// Intel's permanent cursor-underrun workaround requires WM1[30:0] to shadow
+// WM0[30:0] when WM0 is the only enabled level. WM1 itself stays disabled.
+const CUR_WM_LEVEL1_SPIRIT_SHADOW: u32 = CUR_WM_LEVEL0_SPIRIT & !CUR_WM_ENABLE;
+const _: () = assert!(CUR_WM_LEVEL1_SPIRIT_SHADOW & CUR_WM_ENABLE == 0);
+const _: () = assert!(CUR_WM_LEVEL1_SPIRIT_SHADOW == CUR_WM_LEVEL0_SPIRIT & (CUR_WM_ENABLE - 1));
 const GEN12_DDB_BLOCK_BYTES: u32 = 512;
 // Gen10+ linear scanout adds one fetch block beyond the rounded scanline.
 // A 256-wide ARGB line therefore consumes three 512-byte DDB blocks, still
@@ -177,8 +184,10 @@ struct CursorRegs {
     ctl: usize,
     base: usize,
     pos: usize,
+    fbc_ctl: usize,
     surf_live: usize,
     wm0: usize,
+    wm1: usize,
     wm_trans: usize,
     wm_sagv: usize,
     wm_sagv_trans: usize,
@@ -376,11 +385,13 @@ pub(super) fn spirit_cursor_arm(
     // deliberately last: it arms CTL and the new surface for the next vblank
     // without coupling motion to the frame/flip cadence.
     write_if_changed(dev, regs.buf_cfg, buf_cfg);
+    write_if_changed(dev, regs.wm1, CUR_WM_LEVEL1_SPIRIT_SHADOW);
     write_if_changed(dev, regs.wm0, CUR_WM_LEVEL0_SPIRIT);
     write_if_changed(dev, regs.wm_trans, 0);
     write_if_changed(dev, regs.wm_sagv, 0);
     write_if_changed(dev, regs.wm_sagv_trans, 0);
     write_if_changed(dev, regs.sel_fetch_ctl, 0);
+    write_if_changed(dev, regs.fbc_ctl, 0);
     write_if_changed(dev, regs.ctl, ctl);
     crate::intel::mmio_write(dev, regs.base, base);
 
@@ -469,11 +480,13 @@ pub(super) fn spirit_cursor_retry_arm(flip: SpiritCursorFlip) -> Result<(), Spir
     }
 
     write_if_changed(dev, regs.buf_cfg, cursor_ddb_cfg(channel_index));
+    write_if_changed(dev, regs.wm1, CUR_WM_LEVEL1_SPIRIT_SHADOW);
     write_if_changed(dev, regs.wm0, CUR_WM_LEVEL0_SPIRIT);
     write_if_changed(dev, regs.wm_trans, 0);
     write_if_changed(dev, regs.wm_sagv, 0);
     write_if_changed(dev, regs.wm_sagv_trans, 0);
     write_if_changed(dev, regs.sel_fetch_ctl, 0);
+    write_if_changed(dev, regs.fbc_ctl, 0);
     write_if_changed(dev, regs.ctl, cursor_ctl(dev.device_id));
     crate::intel::mmio_write(dev, regs.base, base);
     Ok(())
@@ -520,7 +533,9 @@ pub(super) fn spirit_cursor_rearm_needed(channel: u8) -> Result<bool, SpiritCurs
             || crate::intel::mmio_read(dev, regs.ctl) != cursor_ctl(dev.device_id)
             || crate::intel::mmio_read(dev, regs.surf_live) != expected_gpu
             || crate::intel::mmio_read(dev, regs.buf_cfg) != cursor_ddb_cfg(channel_index)
-            || crate::intel::mmio_read(dev, regs.wm0) != CUR_WM_LEVEL0_SPIRIT;
+            || crate::intel::mmio_read(dev, regs.wm0) != CUR_WM_LEVEL0_SPIRIT
+            || crate::intel::mmio_read(dev, regs.wm1) != CUR_WM_LEVEL1_SPIRIT_SHADOW
+            || crate::intel::mmio_read(dev, regs.fbc_ctl) != 0;
     if contract_lost {
         SPIRIT_CURSOR_STATE.lock().channels[channel_index].visible = false;
     }
@@ -632,8 +647,10 @@ fn cursor_regs(channel: usize) -> CursorRegs {
         ctl: cursor_base + CURSOR_CTL_OFF,
         base: cursor_base + CURSOR_BASE_OFF,
         pos: cursor_base + CURSOR_POS_OFF,
+        fbc_ctl: cursor_base + CURSOR_FBC_CTL_OFF,
         surf_live: cursor_base + CURSOR_SURF_LIVE_OFF,
         wm0: CURSOR_WM_A0 + channel * CURSOR_PIPE_STRIDE,
+        wm1: CURSOR_WM_A1 + channel * CURSOR_PIPE_STRIDE,
         wm_trans: CURSOR_WM_TRANS_A + channel * CURSOR_PIPE_STRIDE,
         wm_sagv: CURSOR_WM_SAGV_A + channel * CURSOR_PIPE_STRIDE,
         wm_sagv_trans: CURSOR_WM_SAGV_TRANS_A + channel * CURSOR_PIPE_STRIDE,

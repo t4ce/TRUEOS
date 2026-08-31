@@ -71,13 +71,16 @@ const CURSOR_PIPE_STRIDE: usize = 0x1000;
 const CURSOR_CTL_OFF: usize = 0x00;
 const CURSOR_BASE_OFF: usize = 0x04;
 const CURSOR_POS_OFF: usize = 0x08;
+const CURSOR_FBC_CTL_OFF: usize = 0x20;
 const CURSOR_SURFLIVE_OFF: usize = 0x2C;
 const CURSOR_WM_A0: usize = 0x70140;
+const CURSOR_WM_A1: usize = 0x70144;
 const CURSOR_WM_TRANS_A: usize = 0x70168;
 const CURSOR_WM_SAGV_A: usize = 0x70158;
 const CURSOR_WM_SAGV_TRANS_A: usize = 0x7015C;
 const CURSOR_BUF_CFG_A: usize = 0x7017C;
 const SEL_FETCH_CUR_CTL_A: usize = 0x70880;
+const CURSOR_WM_ENABLE: u32 = 1 << 31;
 
 const POWER_WELL_FIRST_INDEX: usize = 0;
 const POWER_WELL_LAST_INDEX: usize = 3;
@@ -445,11 +448,17 @@ fn mirror_cursor(dev: crate::intel::Dev) {
         dst + CURSOR_POS_OFF,
         crate::intel::mmio_read(dev, src + CURSOR_POS_OFF),
     );
+    let source_wm0 =
+        crate::intel::mmio_read(dev, CURSOR_WM_A0 + SOURCE_PIPE_SLOT * CURSOR_PIPE_STRIDE);
+    // The cursor register unit can consume WM1 even when only WM0 is enabled.
+    // Keep WM1 disabled but shadow WM0's payload, as required by Intel's
+    // permanent cursor-underrun workaround.
     crate::intel::mmio_write(
         dev,
-        CURSOR_WM_A0 + MIRROR_PIPE_SLOT * CURSOR_PIPE_STRIDE,
-        crate::intel::mmio_read(dev, CURSOR_WM_A0 + SOURCE_PIPE_SLOT * CURSOR_PIPE_STRIDE),
+        CURSOR_WM_A1 + MIRROR_PIPE_SLOT * CURSOR_PIPE_STRIDE,
+        source_wm0 & !CURSOR_WM_ENABLE,
     );
+    crate::intel::mmio_write(dev, CURSOR_WM_A0 + MIRROR_PIPE_SLOT * CURSOR_PIPE_STRIDE, source_wm0);
     for base in [CURSOR_WM_TRANS_A, CURSOR_WM_SAGV_A, CURSOR_WM_SAGV_TRANS_A] {
         crate::intel::mmio_write(
             dev,
@@ -468,6 +477,9 @@ fn mirror_cursor(dev: crate::intel::Dev) {
         SEL_FETCH_CUR_CTL_A + MIRROR_PIPE_SLOT * CURSOR_PIPE_STRIDE,
         crate::intel::mmio_read(dev, SEL_FETCH_CUR_CTL_A + SOURCE_PIPE_SLOT * CURSOR_PIPE_STRIDE),
     );
+    // The mirrored cursor always uses its full mode-defined height. Clear any
+    // soft-reset cursor-size-reduction state before CUR_BASE arms the update.
+    crate::intel::mmio_write(dev, dst + CURSOR_FBC_CTL_OFF, 0);
     crate::intel::mmio_write(dev, dst + CURSOR_CTL_OFF, ctl);
     crate::intel::mmio_write(
         dev,
