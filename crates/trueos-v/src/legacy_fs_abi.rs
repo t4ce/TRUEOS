@@ -19,6 +19,22 @@ unsafe extern "C" {
         total_len: u64,
         out_handle: *mut u32,
     ) -> i32;
+    #[link_name = "trueos_kernel_sync_fs_typed_write_begin"]
+    pub fn trueos_cabi_fs_typed_write_begin(
+        path_ptr: *const u8,
+        path_len: usize,
+        total_len: u64,
+        content_type: u32,
+        out_handle: *mut u32,
+    ) -> i32;
+    #[link_name = "trueos_kernel_sync_fs_typed_stat"]
+    pub fn trueos_cabi_fs_typed_stat(
+        path_ptr: *const u8,
+        path_len: usize,
+        out_kind: *mut u32,
+        out_len: *mut u64,
+        out_content_type: *mut u32,
+    ) -> i32;
     #[link_name = "trueos_kernel_sync_fs_create_dir_all"]
     pub fn trueos_cabi_fs_create_dir_all(path_ptr: *const u8, path_len: usize) -> i32;
     #[link_name = "trueos_kernel_sync_fs_write_chunk"]

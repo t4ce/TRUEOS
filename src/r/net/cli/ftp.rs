@@ -6,6 +6,7 @@ use core::sync::atomic::{AtomicBool, AtomicU16, Ordering};
 use trueos_time::{Duration, Instant, Timer};
 use v::vnet::{Command, EndpointV4, Event, NetHandle, SocketKind};
 
+use crate::r::fs::content_type_boundary::{IngressTypeError, final_extension, verify_named_bytes};
 use crate::r::net::dns::{self, DnsConfig};
 use crate::r::net::{NetProfile, VNet, ports};
 
@@ -895,10 +896,67 @@ async fn ftp_handle_command(vnet: &mut VNet, sess: &mut FtpServerSession, line: 
                             handle: data_handle,
                         });
                         ftp_close_passive(vnet, sess);
-                        match crate::r::fs::trueosfs::file_in_async(
+
+                        let content_type = if final_extension(path.as_str())
+                            .is_some_and(|extension| extension.eq_ignore_ascii_case("bin"))
+                        {
+                            crate::log_important!(
+                                target: "storage";
+                                "ftp: content-admission decision=explicit-blob path={} bytes={} type={}\n",
+                                path,
+                                bytes.len(),
+                                infer::ContentTypeId::BLOB.raw(),
+                            );
+                            infer::ContentTypeId::BLOB
+                        } else {
+                            match verify_named_bytes(path.as_str(), bytes.as_slice()) {
+                                Ok(content_type) => content_type,
+                                Err(
+                                    IngressTypeError::MissingExtension
+                                    | IngressTypeError::UnsupportedExtension,
+                                ) => {
+                                    crate::log_important!(
+                                        target: "storage";
+                                        "ftp: content-admission decision=reject-unsupported path={} bytes={}\n",
+                                        path,
+                                        bytes.len(),
+                                    );
+                                    let _ = ftp_send_reply(
+                                        vnet,
+                                        sess,
+                                        550,
+                                        "unsupported or missing file type; use .bin for explicit Blob",
+                                    );
+                                    return false;
+                                }
+                                Err(IngressTypeError::Mismatch { expected, observed }) => {
+                                    let observed_raw = observed.map(infer::ContentTypeId::raw);
+                                    crate::log_important!(
+                                        target: "storage";
+                                        "ftp: content-admission decision=reject-mismatch path={} bytes={} expected={} observed={:?}\n",
+                                        path,
+                                        bytes.len(),
+                                        expected.raw(),
+                                        observed_raw,
+                                    );
+                                    let reply = format!(
+                                        "content type mismatch expected={} observed={}; use .bin for explicit Blob",
+                                        expected.raw(),
+                                        observed_raw
+                                            .map(|raw| raw.to_string())
+                                            .unwrap_or_else(|| String::from("none")),
+                                    );
+                                    let _ = ftp_send_reply(vnet, sess, 550, reply.as_str());
+                                    return false;
+                                }
+                            }
+                        };
+
+                        match crate::r::fs::trueosfs::file_in_typed_async(
                             disk,
                             path.as_str(),
                             bytes.as_slice(),
+                            content_type,
                         )
                         .await
                         {

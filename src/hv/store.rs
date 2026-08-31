@@ -358,15 +358,20 @@ pub async fn store_persistent_async(vm_id: u8, name: &str) -> Result<usize, VmSt
 /// of Hull code, guest registers, page tables, and pointer-bearing memory.
 pub async fn store_replication_async(vm_id: u8, name: &str) -> Result<usize, VmStoreError> {
     let state = crate::hv::vm_state(vm_id);
-    if !state.supported || !state.replicatable || !state.pause_latched || state.running || state.starting {
+    if !state.supported
+        || !state.replicatable
+        || !state.pause_latched
+        || state.running
+        || state.starting
+    {
         return Err(VmStoreError::BadEnvelope);
     }
     let path = persistent_replication_path(name)?;
     let disk = persistent_root()?;
     let relaunch = crate::hv::snapshot_blueprint_relaunch_state(vm_id)
         .map_err(|_| VmStoreError::BadEnvelope)?;
-    let checkpoint = crate::hv::blueprint_replication_checkpoint(vm_id)
-        .ok_or(VmStoreError::MissingSnapshot)?;
+    let checkpoint =
+        crate::hv::blueprint_replication_checkpoint(vm_id).ok_or(VmStoreError::MissingSnapshot)?;
     let mut header = Vec::with_capacity(40);
     header.extend_from_slice(PERSISTENT_REPLICATION_MAGIC);
     header.extend_from_slice(&PERSISTENT_REPLICATION_VERSION.to_le_bytes());
@@ -387,7 +392,11 @@ pub async fn store_replication_async(vm_id: u8, name: &str) -> Result<usize, VmS
     else {
         return Err(VmStoreError::BeginWrite(block::Error::Io));
     };
-    for chunk in [header.as_slice(), relaunch.as_slice(), checkpoint.bytes.as_slice()] {
+    for chunk in [
+        header.as_slice(),
+        relaunch.as_slice(),
+        checkpoint.bytes.as_slice(),
+    ] {
         if let Err(error) = crate::r::fs::trueosfs::file_write_chunk_async(handle, chunk).await {
             let _ = crate::r::fs::trueosfs::file_write_abort_async(handle).await;
             return Err(VmStoreError::Write(error));
@@ -476,7 +485,9 @@ pub async fn load_persistent_async(name: &str) -> Result<PersistentVmImage, VmSt
     })
 }
 
-pub async fn load_replication_async(name: &str) -> Result<PersistentReplicationImage, VmStoreError> {
+pub async fn load_replication_async(
+    name: &str,
+) -> Result<PersistentReplicationImage, VmStoreError> {
     let path = persistent_replication_path(name)?;
     let disk = persistent_root()?;
     let bytes = crate::r::fs::trueosfs::file_out_async(disk, path.as_str())

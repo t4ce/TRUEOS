@@ -142,6 +142,7 @@ trueos-kokoro-scalar = { path = "crates/trueos-kokoro/scalar" }
 trueos-kokoro-stft = { path = "crates/trueos-kokoro/stft" }
 trueos-kokoro-voice = { path = "crates/trueos-kokoro/voice" }
 trueos-fs = { path = "crates/trueos-fs" }
+infer = { path = "vendor/infer", default-features = false }
 v = { path = "crates/trueos-v" }
 trueos-vm = { path = "crates/trueos-vm" }
 trueos-locale = { path = "crates/trueos-locale", default-features = false }

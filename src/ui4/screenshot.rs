@@ -1131,7 +1131,14 @@ pub(crate) async fn ui4_screenshot_service_task() {
             }
         };
         let encoded_ns = crate::chronos::monotonic_nanos();
-        match crate::r::fs::trueosfs::file_in_async(disk, path.as_str(), png.as_slice()).await {
+        match crate::r::fs::trueosfs::file_in_typed_async(
+            disk,
+            path.as_str(),
+            png.as_slice(),
+            infer::ContentTypeId::PNG,
+        )
+        .await
+        {
             Ok(true) => crate::log_info!(target: "ui4/screenshot";
                 "ui4/screenshot: saved path=trueosfs:/{} disk_id={} sequence={} format=png-rgba size={}x{} png_bytes={} encode_us={} write_us={}\n",
                 path,

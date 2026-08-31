@@ -328,7 +328,9 @@ fn spawn_font_kernel_service(spawner: Spawner) -> SpawnAttempt {
     // This task is only the asynchronous queue controller. CPU font warming
     // and synchronous GPU retirement polling are dispatched through leased
     // blocking-service lanes, so a VM cannot strand the request pump.
-    spawn_local(spawner, |_spawner| crate::r::services::font_kernel_service::font_kernel_service_task())
+    spawn_local(spawner, |_spawner| {
+        crate::r::services::font_kernel_service::font_kernel_service_task()
+    })
 }
 
 pub(crate) fn retry_font_warm_pool_autostart() {

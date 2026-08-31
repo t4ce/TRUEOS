@@ -41,34 +41,22 @@ pub(crate) struct DecodedRgbaImage {
 }
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-pub(crate) fn infer_encoded_image_kind(
-    declared_kind: &str,
-    url: &str,
-    bytes: &[u8],
-) -> EncodedImageKind {
-    let kind = declared_kind.to_ascii_lowercase();
-    let url = url.to_ascii_lowercase();
-    if kind.contains("png") || url.ends_with(".png") || bytes.starts_with(b"\x89PNG\r\n\x1A\n") {
-        return EncodedImageKind::Png;
+pub(crate) const fn encoded_image_kind(content_type: infer::ContentTypeId) -> EncodedImageKind {
+    if content_type.raw() == infer::ContentTypeId::PNG.raw() {
+        EncodedImageKind::Png
+    } else if content_type.raw() == infer::ContentTypeId::JPEG.raw() {
+        EncodedImageKind::Jpeg
+    } else {
+        EncodedImageKind::Unknown
     }
-    if kind.contains("jpg")
-        || kind.contains("jpeg")
-        || url.ends_with(".jpg")
-        || url.ends_with(".jpeg")
-        || bytes.starts_with(&[0xFF, 0xD8, 0xFF])
-    {
-        return EncodedImageKind::Jpeg;
-    }
-    EncodedImageKind::Unknown
 }
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn decode_encoded_image_rgba(
-    declared_kind: &str,
-    url: &str,
+    content_type: infer::ContentTypeId,
     bytes: &[u8],
 ) -> Result<DecodedRgbaImage, i32> {
-    decode_encoded_image_kind_rgba(infer_encoded_image_kind(declared_kind, url, bytes), bytes)
+    decode_encoded_image_kind_rgba(encoded_image_kind(content_type), bytes)
 }
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]

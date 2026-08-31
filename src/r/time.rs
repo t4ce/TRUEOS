@@ -165,8 +165,7 @@ fn tsc_to_ticks_q64(tsc_hz: u64) -> u64 {
 
 #[inline]
 fn ticks_from_tsc_delta(delta_tsc: u64, tsc_hz: u64, tick_scale_q64: u64) -> u64 {
-    let estimate =
-        (((delta_tsc as u128) * (tick_scale_q64 as u128)) >> 64) as u64;
+    let estimate = (((delta_tsc as u128) * (tick_scale_q64 as u128)) >> 64) as u64;
 
     // The floored Q64 reciprocal can leave the estimate at most one tick low
     // for any u64 delta. Test that sole candidate with multiplication so the

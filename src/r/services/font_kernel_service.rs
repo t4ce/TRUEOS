@@ -868,7 +868,8 @@ impl FontGpuProducer {
     pub(crate) fn request_release(
         &self,
     ) -> Result<bool, crate::r::services::font_producer_service::FontProducerError> {
-        let retired = crate::r::services::font_producer_service::release_producer(self.resources.lease)?;
+        let retired =
+            crate::r::services::font_producer_service::release_producer(self.resources.lease)?;
         // Retirement prohibits further row reservations. Existing queued work
         // keeps its normal exact-buffer lifecycle, but must fall back to
         // uncached preparation rather than retain producer-owned state.
@@ -914,7 +915,8 @@ impl FontGpuProducer {
         ) {
             Ok(completion) => completion,
             Err(rejection) => {
-                let _ = crate::r::services::font_producer_service::cancel_reserved_producer_row(token);
+                let _ =
+                    crate::r::services::font_producer_service::cancel_reserved_producer_row(token);
                 return Err(rejection.error.into());
             }
         };
@@ -990,7 +992,8 @@ impl FontGpuProducer {
         ) {
             Ok(completion) => completion,
             Err(rejection) => {
-                let _ = crate::r::services::font_producer_service::cancel_reserved_producer_row(token);
+                let _ =
+                    crate::r::services::font_producer_service::cancel_reserved_producer_row(token);
                 return Err(rejection.error.into());
             }
         };
@@ -1083,7 +1086,9 @@ impl FontProducedRow {
             release_fence: self.stamp.release().sequence(),
             metadata: self.stamp.ticket().raw(),
         };
-        crate::r::services::font_producer_service::mark_producer_row_surflive(self.token, expected)?;
+        crate::r::services::font_producer_service::mark_producer_row_surflive(
+            self.token, expected,
+        )?;
         self.surflive = true;
         Ok(())
     }
@@ -1094,7 +1099,9 @@ impl FontProducedRow {
         mut self,
     ) -> Result<(), crate::r::services::font_producer_service::FontProducerError> {
         if !self.surflive {
-            return Err(crate::r::services::font_producer_service::FontProducerError::RowNotSurfLive);
+            return Err(
+                crate::r::services::font_producer_service::FontProducerError::RowNotSurfLive,
+            );
         }
         crate::r::services::font_producer_service::acknowledge_producer_row(self.token)?;
         self.acknowledged = true;
@@ -1108,7 +1115,9 @@ impl FontProducedRow {
         mut self,
     ) -> Result<(), crate::r::services::font_producer_service::FontProducerError> {
         if self.surflive {
-            return Err(crate::r::services::font_producer_service::FontProducerError::RowNotProduced);
+            return Err(
+                crate::r::services::font_producer_service::FontProducerError::RowNotProduced,
+            );
         }
         let expected = crate::r::services::font_producer_service::FontRowCompletion {
             release_fence: self.stamp.release().sequence(),
@@ -1131,7 +1140,9 @@ impl FontProducedRow {
             release_fence: self.stamp.release().sequence(),
             metadata: self.stamp.ticket().raw(),
         };
-        crate::r::services::font_producer_service::acknowledge_retired_producer_row(self.token, expected)?;
+        crate::r::services::font_producer_service::acknowledge_retired_producer_row(
+            self.token, expected,
+        )?;
         self.acknowledged = true;
         Ok(())
     }
@@ -2865,10 +2876,11 @@ fn process_queued_request(request: QueuedFontRequest) {
             if let Some(producer_row) = producer_row {
                 match &result {
                     Ok(stamp) if stamp.release().matches(destination.phys, destination.bytes) => {
-                        let completion = crate::r::services::font_producer_service::FontRowCompletion {
-                            release_fence: stamp.release().sequence(),
-                            metadata: stamp.ticket().raw(),
-                        };
+                        let completion =
+                            crate::r::services::font_producer_service::FontRowCompletion {
+                                release_fence: stamp.release().sequence(),
+                                metadata: stamp.ticket().raw(),
+                            };
                         if crate::r::services::font_producer_service::mark_producer_row_gpu_complete(
                             producer_row.token,
                             completion,
@@ -2888,9 +2900,10 @@ fn process_queued_request(request: QueuedFontRequest) {
                         core::mem::forget(producer_row.resources);
                     }
                     Err(_) => {
-                        let _ = crate::r::services::font_producer_service::cancel_reserved_producer_row(
-                            producer_row.token,
-                        );
+                        let _ =
+                            crate::r::services::font_producer_service::cancel_reserved_producer_row(
+                                producer_row.token,
+                            );
                     }
                 }
             }

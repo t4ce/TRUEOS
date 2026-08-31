@@ -575,7 +575,14 @@ async fn write_pcm_dump(path: &'static str, seconds: usize, samples: Vec<i16>) {
 
     let wav = wav_pcm_s16_stereo_48k(samples.as_slice());
     let bytes = wav.len();
-    match crate::r::fs::trueosfs::file_in_async(disk, path, wav.as_slice()).await {
+    match crate::r::fs::trueosfs::file_in_typed_async(
+        disk,
+        path,
+        wav.as_slice(),
+        infer::ContentTypeId::WAV,
+    )
+    .await
+    {
         Ok(true) => {
             crate::log_info!(
                 target: "audio";

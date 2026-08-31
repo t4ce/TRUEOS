@@ -6,7 +6,7 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering
 use spin::Mutex;
 use trueos_time::{Duration as EmbassyDuration, Timer};
 
-pub use trueos_fs::{DirEntry, FileInfo, NodeInfo, NodeKind, RecordKey};
+pub use trueos_fs::{ContentTypeId, DirEntry, FileInfo, NodeInfo, NodeKind, RecordKey};
 
 /// A bounded, sorted directory listing.  `truncated` is out-of-band so an
 /// on-disk filename can never be mistaken for a pagination sentinel.
@@ -20,6 +20,7 @@ pub struct DirListing {
 struct IndexRef {
     kind: trueos_fs::LogKind,
     entry_lba: u64,
+    content_type: ContentTypeId,
 }
 
 // Switch to alloc::collections::BTreeMap for full delete support
@@ -78,6 +79,40 @@ static PRIMARY_ROOT_HANDLE_RAW: AtomicUsize = AtomicUsize::new(0);
 static FILE_RECORD_CACHE_SEQ: AtomicU64 = AtomicU64::new(1);
 static FILE_RECORD_CACHE: Mutex<Vec<FileRecordCacheEntry>> = Mutex::new(Vec::new());
 
+static CONTENT_TYPED_COMMITS: AtomicU64 = AtomicU64::new(0);
+static CONTENT_LEGACY_BLOB_COMMITS: AtomicU64 = AtomicU64::new(0);
+static CONTENT_EXPLICIT_BLOB_IMPORTS: AtomicU64 = AtomicU64::new(0);
+static CONTENT_REJECTS: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ContentIdentityDecisionSnapshot {
+    pub typed_commits: u64,
+    pub legacy_blob_commits: u64,
+    pub explicit_blob_imports: u64,
+    pub rejects: u64,
+}
+
+pub fn content_identity_decisions() -> ContentIdentityDecisionSnapshot {
+    ContentIdentityDecisionSnapshot {
+        typed_commits: CONTENT_TYPED_COMMITS.load(Ordering::Relaxed),
+        legacy_blob_commits: CONTENT_LEGACY_BLOB_COMMITS.load(Ordering::Relaxed),
+        explicit_blob_imports: CONTENT_EXPLICIT_BLOB_IMPORTS.load(Ordering::Relaxed),
+        rejects: CONTENT_REJECTS.load(Ordering::Relaxed),
+    }
+}
+
+pub fn record_explicit_blob_import() { CONTENT_EXPLICIT_BLOB_IMPORTS.fetch_add(1, Ordering::Relaxed); }
+pub fn record_type_reject(reason: &'static str) {
+    CONTENT_REJECTS.fetch_add(1, Ordering::Relaxed);
+    crate::log_important!(target: "storage"; "trueosfs: content-type reject reason={} decision=rejected\n", reason);
+}
+
+fn record_successful_content_commit(content_type: ContentTypeId, legacy: bool) {
+    if legacy { CONTENT_LEGACY_BLOB_COMMITS.fetch_add(1, Ordering::Relaxed); }
+    else { CONTENT_TYPED_COMMITS.fetch_add(1, Ordering::Relaxed); }
+    crate::log_info!(target: "storage"; "trueosfs: content commit type={} legacy={} decision=accepted\n", content_type.raw(), legacy);
+}
+
 static MOUNT_REQUESTED: AtomicBool = AtomicBool::new(false);
 static MOUNT_QUEUE: Mutex<heapless::Vec<block::DeviceHandle, 8>> = Mutex::new(heapless::Vec::new());
 static INDEX_REQUESTED: AtomicBool = AtomicBool::new(false);
@@ -88,6 +123,7 @@ struct FileWriteStream {
     path: String,
     params: trueos_fs::FsParams,
     stream: trueos_fs::PutWriteStream,
+    legacy_blob: bool,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -952,6 +988,7 @@ fn update_root_index_put(
         IndexRef {
             kind: trueos_fs::LogKind::Put,
             entry_lba: record.entry_lba,
+            content_type: record.content_type,
         },
     );
     mount.writes_since_checkpoint = mount.writes_since_checkpoint.saturating_add(1);
@@ -1029,13 +1066,13 @@ fn apply_index_rename_tree(index: &mut TrueosFsIndex, src_dir: &str, dst_dir: &s
 
 fn snapshot_index_for_checkpoint(
     disk_id: block::DiscId,
-) -> Option<Vec<(Vec<u8>, trueos_fs::LogKind, u64)>> {
+) -> Option<Vec<(Vec<u8>, trueos_fs::LogKind, u64, ContentTypeId)>> {
     let roots = ROOTS.lock();
     let mount = roots.iter().find(|m| m.disk_id == disk_id)?;
     let index = mount.index.as_ref()?;
     let mut entries = Vec::with_capacity(index.len());
     for (key, index_ref) in index.iter() {
-        entries.push((key.clone(), index_ref.kind, index_ref.entry_lba));
+        entries.push((key.clone(), index_ref.kind, index_ref.entry_lba, index_ref.content_type));
     }
     Some(entries)
 }
@@ -1136,18 +1173,36 @@ pub async fn file_in_async(
         .await?
         .map(|info| info.record_key)
         .unwrap_or(RecordKey::Ffa);
-    file_in_with_key_async(disk, name, bytes, record_key).await
+    file_in_with_metadata_async(disk, name, bytes, ContentTypeId::BLOB, record_key, true).await
 }
 
-/// Async TRUEOSFS write with an explicit native record key.
-///
-/// Key enforcement/encryption is not active yet; this persists the identity
-/// contract in the record header and exposes it through metadata.
-pub async fn file_in_with_key_async(
+pub async fn file_in_typed_async(
     disk: block::DeviceHandle,
     name: &str,
     bytes: &[u8],
+    content_type: ContentTypeId,
+) -> Result<bool, block::Error> {
+    file_in_with_metadata_async(
+        disk,
+        name,
+        bytes,
+        content_type,
+        file_info_async(disk, name)
+            .await?
+            .map(|i| i.record_key)
+            .unwrap_or(RecordKey::Ffa),
+        false,
+    )
+    .await
+}
+
+async fn file_in_with_metadata_async(
+    disk: block::DeviceHandle,
+    name: &str,
+    bytes: &[u8],
+    content_type: ContentTypeId,
     record_key: RecordKey,
+    legacy_blob: bool,
 ) -> Result<bool, block::Error> {
     if disk.parent().is_some() {
         return Err(block::Error::InvalidParam);
@@ -1163,12 +1218,15 @@ pub async fn file_in_with_key_async(
         data_end_lba_exclusive: placement.data_end_lba_exclusive,
     };
     let io = KernelBlockIo::new(disk);
-    let Some(mut stream) = trueos_fs::begin_write_file_stream_with_key(
+    let Some(mut stream) = trueos_fs::begin_write_file_stream_with_metadata(
         &io,
         &params,
         name,
         bytes.len() as u64,
-        record_key,
+        trueos_fs::FileWriteMetadata {
+            content_type,
+            record_key,
+        },
     )
     .await
     .map_err(map_engine_err)?
@@ -1182,6 +1240,7 @@ pub async fn file_in_with_key_async(
     trueos_fs::finish_write_file_stream(&io, &params, stream)
         .await
         .map_err(map_engine_err)?;
+    record_successful_content_commit(record.content_type, legacy_blob);
 
     let disk_id = disk.id();
     bump_root_cache_gen(disk_id);
@@ -1191,6 +1250,16 @@ pub async fn file_in_with_key_async(
         invalidate_root_index(disk_id);
     }
     Ok(true)
+}
+
+#[deprecated(note = "use file_in_typed_async")]
+pub async fn file_in_with_key_async(
+    disk: block::DeviceHandle,
+    name: &str,
+    bytes: &[u8],
+    record_key: RecordKey,
+) -> Result<bool, block::Error> {
+    file_in_with_metadata_async(disk, name, bytes, ContentTypeId::BLOB, record_key, true).await
 }
 
 /// Asynchronously materialize every directory prefix using TRUEOSFS marker files.
@@ -1229,11 +1298,20 @@ pub async fn file_write_begin_async(
     name: &str,
     total_len: u64,
 ) -> Result<Option<u32>, block::Error> {
+    file_write_begin_typed_async(disk, name, total_len, ContentTypeId::BLOB).await
+}
+
+pub async fn file_write_begin_typed_async(
+    disk: block::DeviceHandle,
+    name: &str,
+    total_len: u64,
+    content_type: ContentTypeId,
+) -> Result<Option<u32>, block::Error> {
     let record_key = file_info_async(disk, name)
         .await?
-        .map(|info| info.record_key)
+        .map(|i| i.record_key)
         .unwrap_or(RecordKey::Ffa);
-    file_write_begin_with_key_async(disk, name, total_len, record_key).await
+    file_write_begin_with_metadata_async(disk, name, total_len, content_type, record_key, false).await
 }
 
 /// Begin a streamed file write with an explicit native record key.
@@ -1242,6 +1320,18 @@ pub async fn file_write_begin_with_key_async(
     name: &str,
     total_len: u64,
     record_key: RecordKey,
+) -> Result<Option<u32>, block::Error> {
+    file_write_begin_with_metadata_async(disk, name, total_len, ContentTypeId::BLOB, record_key, true)
+        .await
+}
+
+async fn file_write_begin_with_metadata_async(
+    disk: block::DeviceHandle,
+    name: &str,
+    total_len: u64,
+    content_type: ContentTypeId,
+    record_key: RecordKey,
+    legacy_blob: bool,
 ) -> Result<Option<u32>, block::Error> {
     crate::log!(
         "trueosfs: file-write-begin stage=start disk={} path={} bytes={}\n",
@@ -1279,10 +1369,18 @@ pub async fn file_write_begin_with_key_async(
         data_end_lba_exclusive: placement.data_end_lba_exclusive,
     };
     let io = KernelBlockIo::new(disk);
-    let Some(stream) =
-        trueos_fs::begin_write_file_stream_with_key(&io, &params, name, total_len, record_key)
-            .await
-            .map_err(map_engine_err)?
+    let Some(stream) = trueos_fs::begin_write_file_stream_with_metadata(
+        &io,
+        &params,
+        name,
+        total_len,
+        trueos_fs::FileWriteMetadata {
+            content_type,
+            record_key,
+        },
+    )
+    .await
+    .map_err(map_engine_err)?
     else {
         crate::log!(
             "trueosfs: file-write-begin failed stage=engine disk={} err=no-space\n",
@@ -1297,6 +1395,7 @@ pub async fn file_write_begin_with_key_async(
         path: name.into(),
         params,
         stream,
+        legacy_blob,
     };
     FILE_WRITE_STREAMS.lock().insert(handle, entry);
     crate::log!(
@@ -1349,6 +1448,7 @@ pub async fn file_write_finish_async(stream_handle: u32) -> Result<(), block::Er
     trueos_fs::finish_write_file_stream(&io, &entry.params, entry.stream)
         .await
         .map_err(map_engine_err)?;
+    record_successful_content_commit(record.content_type, entry.legacy_blob);
 
     let disk_id = entry.disk.id();
     bump_root_cache_gen(disk_id);
@@ -1441,6 +1541,7 @@ async fn lookup_via_index_async(
                 entry_lba: record.entry_lba,
                 data_lba: record.data_lba,
                 data_len: record.data_len,
+                content_type: record.content_type,
                 record_key: record.record_key,
             })
         }))
@@ -1543,6 +1644,7 @@ pub async fn file_out_if_index_ready_async(
                             entry_lba: record.entry_lba,
                             data_lba: record.data_lba,
                             data_len: record.data_len,
+                            content_type: record.content_type,
                             record_key: record.record_key,
                         })
                     });
@@ -1582,6 +1684,7 @@ pub async fn node_info_async(
         return Ok(Some(NodeInfo {
             kind: NodeKind::Directory,
             data_len: 0,
+            content_type: ContentTypeId::NONE,
             record_key: RecordKey::Ffa,
         }));
     }
@@ -1914,11 +2017,13 @@ pub async fn file_rename_async(
     let Some(source_info) = file_info_async(disk, src).await? else {
         return Ok(false);
     };
-    let Some(bytes) = file_out_async(disk, src).await? else {
+    let Some(source_record) = lookup_file_record_async(disk, src).await? else {
         return Ok(false);
     };
-
-    let ok = file_in_with_key_async(disk, dst, bytes.as_slice(), source_info.record_key).await?;
+    let Some(placement) = placement_for_io_async(disk).await? else { return Ok(false); };
+    let params = trueos_fs::FsParams { super_lba: placement.super_lba, data_lba: placement.data_lba, data_end_lba_exclusive: placement.data_end_lba_exclusive };
+    let ok = trueos_fs::copy_file_from_record(&KernelBlockIo::new(disk), &params, src, &source_record, dst)
+        .await.map_err(map_engine_err)?;
     if !ok {
         return Ok(false);
     }
@@ -1926,6 +2031,11 @@ pub async fn file_rename_async(
     // Best-effort cleanup; ignore failure.
     let _ = file_delete_async(disk, src).await;
     Ok(true)
+}
+
+async fn lookup_file_record_async(disk: block::DeviceHandle, name: &str) -> Result<Option<trueos_fs::FileRecordRef>, block::Error> {
+    let Some(placement) = placement_for_io_async(disk).await? else { return Ok(None); };
+    lookup_via_index_async(disk, &placement, name).await
 }
 
 fn normalize_dir_name(path: &str) -> String {
@@ -2097,7 +2207,7 @@ pub async fn list_dir_async(
         return Err(block::Error::InvalidParam);
     }
 
-    let mut children: BTreeMap<String, NodeKind> = BTreeMap::new();
+    let mut children: BTreeMap<String, (NodeKind, ContentTypeId)> = BTreeMap::new();
 
     if prefix.is_empty() {
         for (key, index_ref) in index.iter() {
@@ -2110,7 +2220,7 @@ pub async fn list_dir_async(
                     trueos_fs::LogKind::Directory => NodeKind::Directory,
                     _ => continue,
                 };
-                children.insert(String::from(name), kind);
+                children.insert(String::from(name), (kind, index_ref.content_type));
             }
         }
     } else {
@@ -2130,19 +2240,19 @@ pub async fn list_dir_async(
                     trueos_fs::LogKind::Directory => NodeKind::Directory,
                     _ => continue,
                 };
-                children.insert(String::from(rest_str), kind);
+                children.insert(String::from(rest_str), (kind, index_ref.content_type));
             }
         }
     }
 
     let mut entries = Vec::new();
     let mut truncated = children.len() > TRUEOSFS_LIST_SOFT_CAP;
-    for (name, kind) in children {
+    for (name, (kind, content_type)) in children {
         if entries.len() >= TRUEOSFS_LIST_SOFT_CAP {
             truncated = true;
             break;
         }
-        entries.push(DirEntry { name, kind });
+        entries.push(DirEntry { name, kind, content_type });
     }
     if truncated {
         crate::log_warn!(target: "filesystem";
@@ -2260,10 +2370,10 @@ async fn ensure_index_async(
                 replay_from = ckpt.replay_from_rel_blocks;
                 let checkpoint_entry_count = ckpt.entries.len();
                 let mut checkpoint_entries_since_yield = 0usize;
-                for (key, kind, lba) in ckpt.entries {
+                for (key, kind, lba, content_type) in ckpt.entries {
                     match kind {
                         trueos_fs::LogKind::Put | trueos_fs::LogKind::Directory => {
-                            tree.insert(key, IndexRef { kind, entry_lba: lba });
+                            tree.insert(key, IndexRef { kind, entry_lba: lba, content_type });
                         }
                         trueos_fs::LogKind::Delete => {
                             tree.remove(&key);
@@ -2296,7 +2406,7 @@ async fn ensure_index_async(
         let mut replay_records = 0u64;
         let mut last_progress_ms = replay_started_ms;
 
-        let replay_stats = trueos_fs::replay_log_range_with_stats(&io, &params, replay_from, end_rel, |kind, name, data, lba| {
+        let replay_stats = trueos_fs::replay_log_range_with_stats(&io, &params, replay_from, end_rel, |kind, name, data, lba, content_type| {
             replay_records = replay_records.saturating_add(1);
             let now_ms = trueosfs_trace_now_ms();
             if now_ms.saturating_sub(last_progress_ms) >= 1_000 {
@@ -2314,6 +2424,7 @@ async fn ensure_index_async(
                         IndexRef {
                             kind,
                             entry_lba: lba,
+                            content_type,
                         },
                     );
                 }
@@ -2712,6 +2823,14 @@ pub async fn file_append_async(
     Ok(true)
 }
 
+pub async fn file_append_typed_async(disk: block::DeviceHandle, name: &str, append_bytes: &[u8], content_type: ContentTypeId) -> Result<bool, block::Error> {
+    let Some(info) = file_info_async(disk, name).await? else { return file_in_typed_async(disk, name, append_bytes, content_type).await; };
+    if info.content_type != content_type { record_type_reject("append-type-mismatch"); return Err(block::Error::InvalidParam); }
+    let Some(mut bytes) = file_out_async(disk, name).await? else { return Ok(false); };
+    bytes.extend_from_slice(append_bytes);
+    file_in_typed_async(disk, name, &bytes, content_type).await
+}
+
 // NOTE: synchronous TRUEOSFS file operations (`file_in`, `file_out`, etc.) were removed.
 // Use the async entrypoints above.
 
@@ -3092,8 +3211,8 @@ pub async fn locate_async(
                                     }));
                                 }
                                 SuperblockProbe::UnsupportedTrueosFs => {
-                                    crate::log!(
-                                        "trueosfs: unsupported format disk={} super_lba={} expected_version={}\n",
+                                    crate::log_important!(target: "storage";
+                                        "trueosfs: unsupported format disk={} super_lba={} expected_version={} decision=reformat-required\n",
                                         handle.id().raw(),
                                         p.range.first_lba(),
                                         trueos_fs::FORMAT_VERSION,
@@ -3146,8 +3265,8 @@ pub async fn locate_async(
             data_end_lba_exclusive: None,
         })),
         SuperblockProbe::UnsupportedTrueosFs => {
-            crate::log!(
-                "trueosfs: unsupported format disk={} super_lba=0 expected_version={}\n",
+            crate::log_important!(target: "storage";
+                "trueosfs: unsupported format disk={} super_lba=0 expected_version={} decision=reformat-required\n",
                 handle.id().raw(),
                 trueos_fs::FORMAT_VERSION,
             );

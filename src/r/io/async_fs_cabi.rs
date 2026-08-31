@@ -21,15 +21,40 @@ const LEGACY_VMX_LAUNCH_SCRIPT_PATH: &str = "/.trueos/launch";
 
 #[derive(Debug)]
 enum RequestKind {
-    Read { path: String },
-    Write { path: String, bytes: Vec<u8> },
-    CreateDirAll { path: String },
-    Stat { path: String },
-    RecordKey { path: String },
-    ListDir { path: String },
+    Read {
+        path: String,
+    },
+    Write {
+        path: String,
+        bytes: Vec<u8>,
+        content_type: crate::r::fs::trueosfs::ContentTypeId,
+    },
+    CreateDirAll {
+        path: String,
+    },
+    Stat {
+        path: String,
+    },
+    TypedStat {
+        path: String,
+    },
+    RecordKey {
+        path: String,
+    },
+    ListDir {
+        path: String,
+    },
+    TypedListDir {
+        path: String,
+    },
     ListMounts,
-    Remove { path: String },
-    Rename { source: String, destination: String },
+    Remove {
+        path: String,
+    },
+    Rename {
+        source: String,
+        destination: String,
+    },
 }
 
 #[derive(Debug)]
@@ -46,6 +71,7 @@ enum OperationState {
         path: String,
         bytes: Vec<u8>,
         total_len: usize,
+        content_type: crate::r::fs::trueosfs::ContentTypeId,
     },
     Read(Vec<u8>),
     Unit,
@@ -93,6 +119,30 @@ fn encode_dir_listing(listing: &crate::r::fs::trueosfs::DirListing) -> Option<Ve
         bytes.extend_from_slice(entry.name.as_bytes());
     }
     Some(bytes)
+}
+
+fn encode_typed_dir_listing(listing: &crate::r::fs::trueosfs::DirListing) -> Option<Vec<u8>> {
+    let count = u32::try_from(listing.entries.len()).ok()?;
+    let mut out = Vec::new();
+    out.extend_from_slice(b"TDL2");
+    out.push(u8::from(listing.truncated));
+    out.extend_from_slice(&[0, 0, 0]);
+    out.extend_from_slice(&count.to_le_bytes());
+    for entry in &listing.entries {
+        if entry.name.is_empty() || entry.name.contains('/') || entry.name.len() > u16::MAX as usize
+        {
+            return None;
+        }
+        out.push(match entry.kind {
+            crate::r::fs::trueosfs::NodeKind::File => 1,
+            crate::r::fs::trueosfs::NodeKind::Directory => 2,
+        });
+        out.push(0);
+        out.extend_from_slice(&(entry.name.len() as u16).to_le_bytes());
+        out.extend_from_slice(&entry.content_type.raw().to_le_bytes());
+        out.extend_from_slice(entry.name.as_bytes());
+    }
+    Some(out)
 }
 
 #[inline]
@@ -196,6 +246,14 @@ fn start_completed_read(owner: u32, bytes: Vec<u8>) -> i32 {
 }
 
 pub(crate) fn start_write(owner: u32, path: String, total_len: usize) -> i32 {
+    start_write_typed(owner, path, total_len, crate::r::fs::trueosfs::ContentTypeId::BLOB)
+}
+pub(crate) fn start_write_typed(
+    owner: u32,
+    path: String,
+    total_len: usize,
+    content_type: crate::r::fs::trueosfs::ContentTypeId,
+) -> i32 {
     if total_len as u64 > ASYNC_FS_MAX_RESULT_BYTES {
         return FS_ERR_TOO_LARGE;
     }
@@ -220,6 +278,7 @@ pub(crate) fn start_write(owner: u32, path: String, total_len: usize) -> i32 {
                 path,
                 bytes,
                 total_len,
+                content_type,
             },
         },
     );
@@ -262,10 +321,15 @@ pub(crate) fn write_commit(owner: u32, id: u32) -> i32 {
                 path,
                 bytes,
                 total_len,
+                content_type,
             } if bytes.len() == total_len => Request {
                 id,
                 owner,
-                kind: RequestKind::Write { path, bytes },
+                kind: RequestKind::Write {
+                    path,
+                    bytes,
+                    content_type,
+                },
             },
             state => {
                 operation.state = state;
@@ -294,6 +358,10 @@ pub(crate) fn start_stat(owner: u32, path: String) -> i32 {
     start(owner, RequestKind::Stat { path })
 }
 
+pub(crate) fn start_typed_stat(owner: u32, path: String) -> i32 {
+    start(owner, RequestKind::TypedStat { path })
+}
+
 pub(crate) fn start_record_key(owner: u32, path: String) -> i32 {
     start(owner, RequestKind::RecordKey { path })
 }
@@ -308,6 +376,10 @@ pub(crate) fn start_list_dir(owner: u32, path: String) -> i32 {
         path_for_log
     );
     id
+}
+
+pub(crate) fn start_typed_list_dir(owner: u32, path: String) -> i32 {
+    start(owner, RequestKind::TypedListDir { path })
 }
 
 pub(crate) fn start_list_mounts(owner: u32) -> i32 {
@@ -513,8 +585,10 @@ async fn process(request: &Request) -> OperationState {
         | RequestKind::Write { path, .. }
         | RequestKind::CreateDirAll { path }
         | RequestKind::Stat { path }
+        | RequestKind::TypedStat { path }
         | RequestKind::RecordKey { path }
         | RequestKind::ListDir { path }
+        | RequestKind::TypedListDir { path }
         | RequestKind::Remove { path } => path.as_str(),
         RequestKind::ListMounts | RequestKind::Rename { .. } => unreachable!(),
     };
@@ -538,9 +612,19 @@ async fn process(request: &Request) -> OperationState {
                 Err(error) => OperationState::Failed(map_block_error(error)),
             }
         }
-        RequestKind::Write { path, bytes } => {
+        RequestKind::Write {
+            path,
+            bytes,
+            content_type,
+        } => {
             let _ = path;
-            match crate::r::fs::trueosfs::file_in_async(disk, selected_path, bytes.as_slice()).await
+            match crate::r::fs::trueosfs::file_in_typed_async(
+                disk,
+                selected_path,
+                bytes.as_slice(),
+                *content_type,
+            )
+            .await
             {
                 Ok(true) => OperationState::Unit,
                 Ok(false) => OperationState::Failed(FS_ERR_NO_SPACE),
@@ -581,6 +665,25 @@ async fn process(request: &Request) -> OperationState {
                     OperationState::Read(bytes)
                 }
                 Err(code) => OperationState::Failed(code),
+            }
+        }
+        RequestKind::TypedStat { path: _ } => {
+            match crate::r::fs::trueosfs::node_info_async(disk, selected_path).await {
+                Ok(Some(info)) => {
+                    let mut bytes = Vec::with_capacity(16);
+                    bytes.extend_from_slice(
+                        &(match info.kind {
+                            crate::r::fs::trueosfs::NodeKind::File => 1u32,
+                            crate::r::fs::trueosfs::NodeKind::Directory => 2,
+                        })
+                        .to_le_bytes(),
+                    );
+                    bytes.extend_from_slice(&info.data_len.to_le_bytes());
+                    bytes.extend_from_slice(&info.content_type.raw().to_le_bytes());
+                    OperationState::Read(bytes)
+                }
+                Ok(None) => OperationState::Failed(FS_ERR_NOT_FOUND),
+                Err(error) => OperationState::Failed(map_block_error(error)),
             }
         }
         RequestKind::RecordKey { path } => {
@@ -637,6 +740,16 @@ async fn process(request: &Request) -> OperationState {
                 _ => {}
             }
             state
+        }
+        RequestKind::TypedListDir { path: _ } => {
+            match crate::r::fs::trueosfs::list_dir_async(disk, selected_path).await {
+                Ok(Some(listing)) => match encode_typed_dir_listing(&listing) {
+                    Some(bytes) => OperationState::Read(bytes),
+                    None => OperationState::Failed(FS_ERR_IO),
+                },
+                Ok(None) => OperationState::Failed(FS_ERR_NOT_FOUND),
+                Err(error) => OperationState::Failed(map_block_error(error)),
+            }
         }
         RequestKind::Remove { path } => {
             let _ = path;
@@ -719,6 +832,21 @@ fn guest_write_begin(path: &str, total_len: usize) -> i32 {
     }
 }
 
+fn guest_typed_write_begin(path: &str, total_len: usize, content_type: u32) -> i32 {
+    let (status, value) = trueos_vm::vmcall::call_with_payload(
+        trueos_vm::vmcall::OP_BP_ASYNC_FS_TYPED_WRITE_BEGIN,
+        total_len as u64,
+        content_type as u64,
+        path.as_bytes(),
+        &mut [],
+    );
+    if status == trueos_vm::vmcall::STATUS_OK {
+        (value as i64) as i32
+    } else {
+        FS_ERR_BAD_PARAM
+    }
+}
+
 fn guest_rename_start(source: &str, destination: &str) -> i32 {
     let Some(payload_len) = 4usize
         .checked_add(source.len())
@@ -791,6 +919,28 @@ pub unsafe extern "C" fn trueos_cabi_async_fs_write_begin(
         guest_write_begin(path.as_str(), total_len)
     } else {
         start_write(direct_owner(), path, total_len)
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_async_fs_typed_write_begin(
+    path_ptr: *const u8,
+    path_len: usize,
+    total_len: usize,
+    content_type: u32,
+) -> i32 {
+    let path = match parse_path(path_ptr, path_len, false) {
+        Ok(path) => path,
+        Err(code) => return code,
+    };
+    let id = crate::r::fs::trueosfs::ContentTypeId::from_raw(content_type);
+    if !id.is_registered() || id == crate::r::fs::trueosfs::ContentTypeId::NONE {
+        return FS_ERR_BAD_PARAM;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        guest_typed_write_begin(path.as_str(), total_len, content_type)
+    } else {
+        start_write_typed(direct_owner(), path, total_len, id)
     }
 }
 
@@ -884,6 +1034,22 @@ pub unsafe extern "C" fn trueos_cabi_async_fs_stat_start(
     }
 }
 
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_async_fs_typed_stat_start(
+    path_ptr: *const u8,
+    path_len: usize,
+) -> i32 {
+    let path = match parse_path(path_ptr, path_len, true) {
+        Ok(path) => path,
+        Err(code) => return code,
+    };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        guest_start(trueos_vm::vmcall::OP_BP_ASYNC_FS_TYPED_STAT_START, path.as_str())
+    } else {
+        start_typed_stat(direct_owner(), path)
+    }
+}
+
 /// Start a metadata-only read of the `RecordKey` stored in a TRUEOSFS file header.
 ///
 /// The result is a fixed 56-byte wire record: kind (0 = FFA, 1 = key), seven
@@ -917,6 +1083,22 @@ pub unsafe extern "C" fn trueos_cabi_async_fs_list_dir_start(
         guest_start(trueos_vm::vmcall::OP_BP_ASYNC_FS_LIST_DIR_START, path.as_str())
     } else {
         start_list_dir(direct_owner(), path)
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_async_fs_typed_list_dir_start(
+    path_ptr: *const u8,
+    path_len: usize,
+) -> i32 {
+    let path = match parse_path(path_ptr, path_len, true) {
+        Ok(path) => path,
+        Err(code) => return code,
+    };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        guest_start(trueos_vm::vmcall::OP_BP_ASYNC_FS_TYPED_LIST_DIR_START, path.as_str())
+    } else {
+        start_typed_list_dir(direct_owner(), path)
     }
 }
 

@@ -1420,7 +1420,10 @@ fn cmd_tlb_hfi(io: &'static dyn ShellBackend2) {
         io,
         alloc::format!(
             "Summary CPUID.06: EAX=0x{:08X} EBX=0x{:08X} ECX=0x{:08X} EDX=0x{:08X}",
-            summary.eax, summary.ebx, summary.ecx, summary.edx
+            summary.eax,
+            summary.ebx,
+            summary.ecx,
+            summary.edx
         )
         .as_str(),
     );
@@ -3732,7 +3735,14 @@ pub(crate) async fn write_dump_bytes_to_default_path(
         return Err(crate::disc::block::Error::NotReady);
     };
 
-    match crate::r::fs::trueosfs::file_in_async(handle, DUMP_FILE_PATH, bytes).await {
+    match crate::r::fs::trueosfs::file_in_typed_async(
+        handle,
+        DUMP_FILE_PATH,
+        bytes,
+        infer::ContentTypeId::UTF8_TEXT,
+    )
+    .await
+    {
         Ok(true) => Ok(()),
         Ok(false) => Err(crate::disc::block::Error::Io),
         Err(err) => Err(err),

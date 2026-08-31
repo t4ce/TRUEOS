@@ -77,7 +77,14 @@ async fn write_template(disk: crate::disc::block::DeviceHandle) -> Result<(), &'
     });
     let bytes =
         serde_json::to_vec_pretty(&template).map_err(|_| "config template serialize failed")?;
-    match crate::r::fs::trueosfs::file_in_async(disk, MAIL_CONFIG_PATH, bytes.as_slice()).await {
+    match crate::r::fs::trueosfs::file_in_typed_async(
+        disk,
+        MAIL_CONFIG_PATH,
+        bytes.as_slice(),
+        infer::ContentTypeId::UTF8_TEXT,
+    )
+    .await
+    {
         Ok(true) => Ok(()),
         Ok(false) => Err("config template write refused"),
         Err(_) => Err("config template write failed"),
@@ -107,7 +114,14 @@ pub async fn save_runtime_config(config: &RuntimeMailConfig) -> Result<(), &'sta
     let disk = primary_root()?;
     ensure_mail_dir(disk).await?;
     let bytes = serde_json::to_vec_pretty(config).map_err(|_| "config serialize failed")?;
-    match crate::r::fs::trueosfs::file_in_async(disk, MAIL_CONFIG_PATH, bytes.as_slice()).await {
+    match crate::r::fs::trueosfs::file_in_typed_async(
+        disk,
+        MAIL_CONFIG_PATH,
+        bytes.as_slice(),
+        infer::ContentTypeId::UTF8_TEXT,
+    )
+    .await
+    {
         Ok(true) => Ok(()),
         Ok(false) => Err("config write refused"),
         Err(_) => Err("config write failed"),

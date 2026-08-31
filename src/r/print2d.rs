@@ -240,7 +240,8 @@ pub(crate) fn submit_gridpaper_to_printer(
     raw: Vec<u8>,
     printer_uri: &str,
 ) -> Result<u32, i64> {
-    if printer_uri.is_empty() || !crate::r::services::gridpaper_service::valid_print_snapshot(&raw) {
+    if printer_uri.is_empty() || !crate::r::services::gridpaper_service::valid_print_snapshot(&raw)
+    {
         return Err(ERROR_INVALID_DOCUMENT);
     }
     enqueue(
@@ -279,7 +280,8 @@ pub(crate) fn submit_kernel_gridpaper_to_printer(
     raw: Vec<u8>,
     printer_uri: &str,
 ) -> Result<u32, i64> {
-    if printer_uri.is_empty() || !crate::r::services::gridpaper_service::valid_print_snapshot(&raw) {
+    if printer_uri.is_empty() || !crate::r::services::gridpaper_service::valid_print_snapshot(&raw)
+    {
         return Err(ERROR_INVALID_DOCUMENT);
     }
     enqueue(

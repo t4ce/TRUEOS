@@ -67,6 +67,14 @@ enum Request {
         total_len: u64,
         completion: Completion<u32>,
     },
+    WriteFileBeginTyped {
+        id: u64,
+        disk: block::DeviceHandle,
+        path: String,
+        total_len: u64,
+        content_type: crate::r::fs::trueosfs::ContentTypeId,
+        completion: Completion<u32>,
+    },
     CreateDirAll {
         id: u64,
         disk: block::DeviceHandle,
@@ -260,6 +268,10 @@ pub fn write_file_begin(
     })
 }
 
+pub fn write_file_begin_typed(disk: block::DeviceHandle, path: String, total_len: u64, content_type: crate::r::fs::trueosfs::ContentTypeId) -> core::result::Result<FsResult<u32>, BlockingRequestError> {
+    submit(|id, completion| Request::WriteFileBeginTyped { id, disk, path, total_len, content_type, completion })
+}
+
 pub fn create_dir_all(
     disk: block::DeviceHandle,
     path: String,
@@ -444,6 +456,12 @@ async fn process_request(request: Request) {
                     Err(error) => Err(error.into()),
                 };
             finish(id, "write-file-begin", completion, result);
+        }
+        Request::WriteFileBeginTyped { id, disk, path, total_len, content_type, completion } => {
+            let result = match super::trueosfs::file_write_begin_typed_async(disk, path.as_str(), total_len, content_type).await {
+                Ok(Some(handle)) => Ok(handle), Ok(None) => Err(FsError::NoSpace), Err(error) => Err(error.into()),
+            };
+            finish(id, "write-file-begin-typed", completion, result);
         }
         Request::CreateDirAll {
             id,

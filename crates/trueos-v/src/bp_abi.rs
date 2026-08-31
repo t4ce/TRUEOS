@@ -800,6 +800,20 @@ unsafe extern "C" {
         total_len: u64,
         out_handle: *mut u32,
     ) -> i32;
+    pub fn trueos_cabi_fs_typed_write_begin(
+        path_ptr: *const u8,
+        path_len: usize,
+        total_len: u64,
+        content_type: u32,
+        out_handle: *mut u32,
+    ) -> i32;
+    pub fn trueos_cabi_fs_typed_stat(
+        path_ptr: *const u8,
+        path_len: usize,
+        out_kind: *mut u32,
+        out_len: *mut u64,
+        out_content_type: *mut u32,
+    ) -> i32;
     pub fn trueos_cabi_fs_write_chunk(handle: u32, data_ptr: *const u8, data_len: usize) -> i32;
     pub fn trueos_cabi_fs_write_finish(handle: u32) -> i32;
     pub fn trueos_cabi_fs_write_abort(handle: u32) -> i32;
@@ -810,6 +824,12 @@ unsafe extern "C" {
         path_len: usize,
         total_len: usize,
     ) -> i32;
+    pub fn trueos_cabi_async_fs_typed_write_begin(
+        path_ptr: *const u8,
+        path_len: usize,
+        total_len: usize,
+        content_type: u32,
+    ) -> i32;
     pub fn trueos_cabi_async_fs_write_chunk(
         id: u32,
         offset: usize,
@@ -819,8 +839,10 @@ unsafe extern "C" {
     pub fn trueos_cabi_async_fs_write_commit(id: u32) -> i32;
     pub fn trueos_cabi_async_fs_create_dir_all_start(path_ptr: *const u8, path_len: usize) -> i32;
     pub fn trueos_cabi_async_fs_stat_start(path_ptr: *const u8, path_len: usize) -> i32;
+    pub fn trueos_cabi_async_fs_typed_stat_start(path_ptr: *const u8, path_len: usize) -> i32;
     pub fn trueos_cabi_async_fs_record_key_start(path_ptr: *const u8, path_len: usize) -> i32;
     pub fn trueos_cabi_async_fs_list_dir_start(path_ptr: *const u8, path_len: usize) -> i32;
+    pub fn trueos_cabi_async_fs_typed_list_dir_start(path_ptr: *const u8, path_len: usize) -> i32;
     pub fn trueos_cabi_async_fs_list_mounts_start() -> i32;
     pub fn trueos_cabi_async_fs_remove_start(path_ptr: *const u8, path_len: usize) -> i32;
     pub fn trueos_cabi_async_fs_rename_start(

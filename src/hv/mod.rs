@@ -2478,10 +2478,7 @@ pub(crate) fn commit_replicatable_resume(vm_id: u8) {
     }
     vm.pause_latched.store(false, Ordering::Release);
     clear_blueprint_replication_checkpoint(vm_id);
-    hvlogf(format_args!(
-        "hv: vm{} lifecycle: resume committed at guest identity handshake",
-        vm_id
-    ));
+    hvlogf(format_args!("hv: vm{} lifecycle: resume committed at guest identity handshake", vm_id));
 }
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
@@ -2540,39 +2537,37 @@ pub fn restore_persistent_image(
         return Err(RestoreError::BadSnapshot);
     }
     let result = (|| {
-        crate::allocators::restore_hv_guest_heap(vm_id, image.guest_heap())
-            .map_err(|reason| {
-                hvwarnf(format_args!(
-                    "hv: vm{} persistent restore failed stage=guest-heap reason={}",
-                    vm_id, reason
-                ));
-                RestoreError::BadSnapshot
-            })?;
-        memory::restore_guest_hull_rw_for_vm(vm_id, image.hull_rw())
-            .map_err(|reason| {
-                hvwarnf(format_args!(
-                    "hv: vm{} persistent restore failed stage=hull-rw reason={}",
-                    vm_id, reason
-                ));
-                RestoreError::BadSnapshot
-            })?;
-        restore_blueprint_portable_state(vm_id, image.blueprint(), console_target)
-            .map_err(|reason| {
+        crate::allocators::restore_hv_guest_heap(vm_id, image.guest_heap()).map_err(|reason| {
+            hvwarnf(format_args!(
+                "hv: vm{} persistent restore failed stage=guest-heap reason={}",
+                vm_id, reason
+            ));
+            RestoreError::BadSnapshot
+        })?;
+        memory::restore_guest_hull_rw_for_vm(vm_id, image.hull_rw()).map_err(|reason| {
+            hvwarnf(format_args!(
+                "hv: vm{} persistent restore failed stage=hull-rw reason={}",
+                vm_id, reason
+            ));
+            RestoreError::BadSnapshot
+        })?;
+        restore_blueprint_portable_state(vm_id, image.blueprint(), console_target).map_err(
+            |reason| {
                 hvwarnf(format_args!(
                     "hv: vm{} persistent restore failed stage=blueprint reason={}",
                     vm_id, reason
                 ));
                 RestoreError::BadSnapshot
-            })?;
+            },
+        )?;
         restore_snapshot_bytes(vm_id, image.snapshot())?;
-        memory::rebind_restored_guest_memory_for_vm(vm_id, VmBootMode::Hull)
-            .map_err(|reason| {
-                hvwarnf(format_args!(
-                    "hv: vm{} persistent restore failed stage=rebind reason={}",
-                    vm_id, reason
-                ));
-                RestoreError::BadSnapshot
-            })?;
+        memory::rebind_restored_guest_memory_for_vm(vm_id, VmBootMode::Hull).map_err(|reason| {
+            hvwarnf(format_args!(
+                "hv: vm{} persistent restore failed stage=rebind reason={}",
+                vm_id, reason
+            ));
+            RestoreError::BadSnapshot
+        })?;
         Ok(image.snapshot().len())
     })();
     if result.is_err() {
@@ -3371,7 +3366,8 @@ pub(crate) fn decode_blueprint_relaunch_state(
     let module_bytes = portable_take_bytes(bytes, &mut offset)
         .ok_or("blueprint relaunch module")?
         .to_vec();
-    let arg_count = portable_take_u32(bytes, &mut offset).ok_or("blueprint relaunch args")? as usize;
+    let arg_count =
+        portable_take_u32(bytes, &mut offset).ok_or("blueprint relaunch args")? as usize;
     let mut app_args = AllocVec::with_capacity(arg_count);
     for _ in 0..arg_count {
         app_args.push(portable_take_string(bytes, &mut offset).ok_or("blueprint relaunch arg")?);
@@ -3380,7 +3376,9 @@ pub(crate) fn decode_blueprint_relaunch_state(
         portable_take_optional_string(bytes, &mut offset).ok_or("blueprint relaunch script")?;
     let app_fs_root =
         portable_take_string(bytes, &mut offset).ok_or("blueprint relaunch fs root")?;
-    let instance_end = offset.checked_add(16).ok_or("blueprint relaunch instance")?;
+    let instance_end = offset
+        .checked_add(16)
+        .ok_or("blueprint relaunch instance")?;
     let instance = bytes
         .get(offset..instance_end)
         .and_then(|value| value.try_into().ok())
@@ -3401,8 +3399,10 @@ pub(crate) fn decode_blueprint_relaunch_state(
         _ => return Err("blueprint relaunch clone flag"),
     };
     offset += 1;
-    let name = portable_take_optional_string(bytes, &mut offset).ok_or("blueprint relaunch name")?;
-    let peer = portable_take_optional_string(bytes, &mut offset).ok_or("blueprint relaunch peer")?;
+    let name =
+        portable_take_optional_string(bytes, &mut offset).ok_or("blueprint relaunch name")?;
+    let peer =
+        portable_take_optional_string(bytes, &mut offset).ok_or("blueprint relaunch peer")?;
     if offset != bytes.len() {
         return Err("trailing blueprint relaunch bytes");
     }
@@ -5940,7 +5940,8 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
     }
 
     if !vm.pause_latched.load(Ordering::Acquire) {
-        let gridpaper_released = crate::r::services::gridpaper_service::release_owner_lifecycle(vm_id);
+        let gridpaper_released =
+            crate::r::services::gridpaper_service::release_owner_lifecycle(vm_id);
         if gridpaper_released != 0 {
             hvlogf(format_args!(
                 "hv: vm{} lifecycle: gridpaper cleanup released={}",

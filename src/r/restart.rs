@@ -435,11 +435,7 @@ async fn queue_live_update_blueprint_replica(
             }
             Timer::after(VM_STORE_POLL_INTERVAL).await;
         }
-        crate::log!(
-            "restart: vm{} replica re-pause timed out checkpoint={}\n",
-            vm_id,
-            name,
-        );
+        crate::log!("restart: vm{} replica re-pause timed out checkpoint={}\n", vm_id, name,);
     }
 }
 

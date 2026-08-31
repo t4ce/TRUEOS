@@ -131,6 +131,9 @@ pub const OP_BP_ASYNC_FS_STAT_START: u32 = 0xD9; // payload resolved path -> ope
 pub const OP_BP_ASYNC_FS_LIST_DIR_START: u32 = 0xDA; // payload resolved path -> operation id/rc
 pub const OP_BP_ASYNC_FS_LIST_MOUNTS_START: u32 = 0x139; // no payload -> mounted TRUEOSFS roots
 pub const OP_BP_ASYNC_FS_RENAME_START: u32 = 0x13A; // payload src-len + resolved src/dst -> operation id/rc
+pub const OP_BP_ASYNC_FS_TYPED_STAT_START: u32 = 0x170; // payload resolved path -> typed metadata operation id/rc
+pub const OP_BP_ASYNC_FS_TYPED_LIST_DIR_START: u32 = 0x171; // payload resolved path -> TDL2 operation id/rc
+pub const OP_BP_ASYNC_FS_TYPED_WRITE_BEGIN: u32 = 0x172; // arg0 total bytes,arg1 content type,payload path
 pub const OP_BP_SHELL_ATTACHED_WAIT_READABLE: u32 = 0x13B; // arg0 timeout ms -> event-driven terminal wake
 // Generic same-archive child-Hull service.  Child handle 0 names the worker's
 // parent endpoint; nonzero handles are opaque parent-owned values.
@@ -769,18 +772,18 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 return DispatchOutcome::Resume;
             }
             match crate::hv::acknowledge_blueprint_ready(vm_id, arg0, arg1) {
-            Some(crate::hv::BlueprintReadyDisposition::Pause) => {
-                write_response(vm_id, seq, STATUS_OK, arg0, 0);
-                DispatchOutcome::Pause
-            }
-            Some(crate::hv::BlueprintReadyDisposition::Snapshot) => {
-                write_response(vm_id, seq, STATUS_OK, arg0, 0);
-                DispatchOutcome::Preserve
-            }
-            None => {
-                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
-                DispatchOutcome::Resume
-            }
+                Some(crate::hv::BlueprintReadyDisposition::Pause) => {
+                    write_response(vm_id, seq, STATUS_OK, arg0, 0);
+                    DispatchOutcome::Pause
+                }
+                Some(crate::hv::BlueprintReadyDisposition::Snapshot) => {
+                    write_response(vm_id, seq, STATUS_OK, arg0, 0);
+                    DispatchOutcome::Preserve
+                }
+                None => {
+                    write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                    DispatchOutcome::Resume
+                }
             }
         }
         OP_BP_LIFECYCLE_IDENTITY => {
@@ -842,8 +845,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 vm_id,
                 seq,
                 STATUS_OK,
-                ((checkpoint.version & u64::from(u32::MAX)) << 32)
-                    | checkpoint.bytes.len() as u64,
+                ((checkpoint.version & u64::from(u32::MAX)) << 32) | checkpoint.bytes.len() as u64,
                 checkpoint.bytes.len() as u32,
             );
             DispatchOutcome::Resume
@@ -2666,7 +2668,8 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             let owner = crate::r::io::async_fs_cabi::owner_for_vm(vm_id);
             let format = (arg1 >> 32) as u32;
             let total_len = arg1 as u32 as usize;
-            let rc = crate::r::services::media_service::begin_retained(owner, arg0, format, total_len);
+            let rc =
+                crate::r::services::media_service::begin_retained(owner, arg0, format, total_len);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
@@ -2676,7 +2679,12 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 return DispatchOutcome::Resume;
             };
             let owner = crate::r::io::async_fs_cabi::owner_for_vm(vm_id);
-            let rc = crate::r::services::media_service::write(owner, arg0 as u32, arg1 as usize, payload);
+            let rc = crate::r::services::media_service::write(
+                owner,
+                arg0 as u32,
+                arg1 as usize,
+                payload,
+            );
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
@@ -2802,7 +2810,9 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 return DispatchOutcome::Resume;
             };
-            let rc = if arg1 & crate::r::services::gridpaper_service::SIZED_SNAPSHOT_VMCALL_MARKER != 0 {
+            let rc = if arg1 & crate::r::services::gridpaper_service::SIZED_SNAPSHOT_VMCALL_MARKER
+                != 0
+            {
                 let instance_id = ((arg1 >> 32) & 0x7fff_ffff) as u32;
                 let rows = ((arg1 >> 24) & 0xff) as u32;
                 let columns = ((arg1 >> 16) & 0xff) as u32;
@@ -2835,10 +2845,14 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
                 return DispatchOutcome::Resume;
             };
-            let out =
-                unsafe { &mut (&mut (*page).payload)[..crate::r::services::gridpaper_service::PAGE_BYTES] };
-            let rc =
-                crate::r::services::gridpaper_service::checkpoint_snapshot_for_owner(vm_id, arg0 as u32, out);
+            let out = unsafe {
+                &mut (&mut (*page).payload)[..crate::r::services::gridpaper_service::PAGE_BYTES]
+            };
+            let rc = crate::r::services::gridpaper_service::checkpoint_snapshot_for_owner(
+                vm_id,
+                arg0 as u32,
+                out,
+            );
             let len = if rc == 0 {
                 crate::r::services::gridpaper_service::PAGE_BYTES as u32
             } else {
@@ -2866,10 +2880,12 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_GRIDPAPER_PRINT_REQUEST_TAKE => {
-            let packed =
-                crate::r::services::gridpaper_service::take_print_request_for_owner(vm_id, arg0 as u32)
-                    .map(|(token, _generation)| u64::from(token))
-                    .unwrap_or(0);
+            let packed = crate::r::services::gridpaper_service::take_print_request_for_owner(
+                vm_id,
+                arg0 as u32,
+            )
+            .map(|(token, _generation)| u64::from(token))
+            .unwrap_or(0);
             write_response(vm_id, seq, STATUS_OK, packed, 0);
             DispatchOutcome::Resume
         }
@@ -4419,6 +4435,18 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
+        OP_BP_ASYNC_FS_TYPED_WRITE_BEGIN => {
+            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
+            let Some(p) = host_ptr(vm_id) else { write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0); return DispatchOutcome::Resume; };
+            let path_bytes = unsafe { &(&(*p).payload)[..n] };
+            let Ok(path) = core::str::from_utf8(path_bytes) else { write_response(vm_id, seq, STATUS_OK, (crate::r::io::cabi::FS_ERR_BAD_UTF8 as i64) as u64, 0); return DispatchOutcome::Resume; };
+            let Ok(path) = crate::r::path::FsPath::parse(path, false) else { write_response(vm_id, seq, STATUS_OK, (crate::r::io::cabi::FS_ERR_BAD_PATH as i64) as u64, 0); return DispatchOutcome::Resume; };
+            if !vm_mount_selector_allowed(vm_id, path.to_relative_string().as_str()) { write_response(vm_id, seq, STATUS_OK, (crate::r::io::cabi::FS_ERR_BAD_PATH as i64) as u64, 0); return DispatchOutcome::Resume; }
+            let id = crate::r::fs::trueosfs::ContentTypeId::from_raw(arg1 as u32);
+            let rc = if !id.is_registered() || id == crate::r::fs::trueosfs::ContentTypeId::NONE { crate::r::io::cabi::FS_ERR_BAD_PARAM } else { crate::r::io::async_fs_cabi::start_write_typed(crate::r::io::async_fs_cabi::owner_for_vm(vm_id), path.to_relative_string(), arg0 as usize, id) };
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
         OP_BP_ASYNC_FS_WRITE_CHUNK => {
             let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
             let Some(p) = host_ptr(vm_id) else {
@@ -4441,6 +4469,8 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         OP_BP_ASYNC_FS_CREATE_DIR_ALL_START
         | OP_BP_ASYNC_FS_STAT_START
         | OP_BP_ASYNC_FS_LIST_DIR_START
+        | OP_BP_ASYNC_FS_TYPED_STAT_START
+        | OP_BP_ASYNC_FS_TYPED_LIST_DIR_START
         | OP_BP_ASYNC_FS_RECORD_KEY_START => {
             let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
             let Some(p) = host_ptr(vm_id) else {
@@ -4488,6 +4518,8 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 OP_BP_ASYNC_FS_LIST_DIR_START => {
                     crate::r::io::async_fs_cabi::start_list_dir(owner, path)
                 }
+                OP_BP_ASYNC_FS_TYPED_STAT_START => crate::r::io::async_fs_cabi::start_typed_stat(owner, path),
+                OP_BP_ASYNC_FS_TYPED_LIST_DIR_START => crate::r::io::async_fs_cabi::start_typed_list_dir(owner, path),
                 OP_BP_ASYNC_FS_RECORD_KEY_START => {
                     crate::r::io::async_fs_cabi::start_record_key(owner, path)
                 }

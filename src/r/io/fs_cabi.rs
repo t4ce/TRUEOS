@@ -1129,6 +1129,25 @@ pub unsafe extern "C" fn trueos_cabi_fs_write_begin(
     0
 }
 
+#[unsafe(export_name = "trueos_kernel_sync_fs_typed_write_begin")]
+pub unsafe extern "C" fn trueos_cabi_fs_typed_write_begin(path_ptr: *const u8, path_len: usize, total_len: u64, content_type: u32, out_handle: *mut u32) -> i32 {
+    if out_handle.is_null() { return FS_ERR_BAD_PARAM; }
+    let id = crate::r::fs::trueosfs::ContentTypeId::from_raw(content_type);
+    if id == crate::r::fs::trueosfs::ContentTypeId::NONE { return FS_ERR_TYPE_REQUIRED; }
+    if !id.is_registered() { return FS_ERR_BAD_PARAM; }
+    if path_ptr.is_null() && path_len != 0 { return FS_ERR_BAD_PARAM; }
+    let path_bytes = unsafe { core::slice::from_raw_parts(path_ptr, path_len) };
+    let Ok(path) = core::str::from_utf8(path_bytes) else { return FS_ERR_BAD_UTF8; };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() { return FS_ERR_BAD_PARAM; }
+    let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else { return FS_ERR_NOT_FOUND; };
+    let Ok(path) = crate::r::path::FsPath::parse(path, false).map(|p| p.to_relative_string()) else { return FS_ERR_BAD_PATH; };
+    match crate::r::fs::request_broker::write_file_begin_typed(disk, path, total_len, id) {
+        Ok(Ok(handle)) => { unsafe { *out_handle = handle; } 0 }
+        Ok(Err(error)) => fs_error_to_code(error),
+        Err(_) => FS_ERR_IO,
+    }
+}
+
 #[unsafe(export_name = "trueos_kernel_sync_fs_create_dir_all")]
 pub unsafe extern "C" fn trueos_cabi_fs_create_dir_all(
     path_ptr: *const u8,
@@ -1245,6 +1264,14 @@ pub unsafe extern "C" fn trueos_cabi_fs_stat(
         return guest_fs_stat(path.as_bytes(), out_kind, out_len);
     }
     unsafe { fs_stat_host(path, &mut *out_kind, &mut *out_len) }
+}
+
+#[unsafe(export_name = "trueos_kernel_sync_fs_typed_stat")]
+pub unsafe extern "C" fn trueos_cabi_fs_typed_stat(path_ptr: *const u8, path_len: usize, out_kind: *mut u32, out_len: *mut u64, out_content_type: *mut u32) -> i32 {
+    if out_content_type.is_null() { return FS_ERR_BAD_PARAM; }
+    let rc = trueos_cabi_fs_stat(path_ptr, path_len, out_kind, out_len);
+    if rc == 0 { unsafe { *out_content_type = crate::r::fs::trueosfs::ContentTypeId::NONE.raw(); } }
+    rc
 }
 
 #[unsafe(export_name = "trueos_kernel_sync_fs_list_dir")]

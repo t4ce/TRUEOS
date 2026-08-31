@@ -391,7 +391,14 @@ pub async fn store_history_to_trueosfs() -> Result<usize, RaplStoreError> {
     };
 
     let history = history_bytes_snapshot();
-    match crate::r::fs::trueosfs::file_in_async(disk, RAPL_TRUEOSFS_PATH, &history).await {
+    match crate::r::fs::trueosfs::file_in_typed_async(
+        disk,
+        RAPL_TRUEOSFS_PATH,
+        &history,
+        infer::ContentTypeId::UTF8_TEXT,
+    )
+    .await
+    {
         Ok(true) => Ok(history.len()),
         Ok(false) => Err(RaplStoreError::NoSpaceOrFs),
         Err(err) => Err(RaplStoreError::Io(err)),

@@ -170,7 +170,10 @@ pub(super) fn queue_window_approach(
 
 pub(super) fn window_approach_complete() -> Result<bool, MouseControlError> {
     let cursor = register_once()?;
-    crate::r::services::mouse_motion_service::cursor_is_idle(MouseControlPrincipal::Kernel, cursor.handle)
+    crate::r::services::mouse_motion_service::cursor_is_idle(
+        MouseControlPrincipal::Kernel,
+        cursor.handle,
+    )
 }
 
 /// Bind Spirit's cursor and keyboard into one AI HUT combo. This keeps Lilly's

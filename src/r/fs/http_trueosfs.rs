@@ -9,6 +9,9 @@ use v::vhttp_srv;
 use v::vnet as api;
 
 use crate::disc::block::DeviceHandle;
+use crate::r::fs::content_type_boundary::{
+    IngressTypeError, mime_or_octet_stream, verify_named_bytes,
+};
 use crate::r::net::{VNet, ports};
 
 #[inline]
@@ -69,7 +72,6 @@ const HTTP_TRUEOSFS_MAX_REQUEST_BYTES: usize = 500 * MIB;
 const HTTP_TRUEOSFS_STREAM_MAX_BYTES: usize = 64 * 1024;
 const HTTP_TRUEOSFS_SEND_YIELD_COMMANDS: usize = 16;
 const HTTP_TRUEOSFS_STREAM_PACE_US: u64 = 250;
-const HTTP_OCTET_STREAM: &str = "application/octet-stream";
 const HTTP_MULTIPART_BOUNDARY: &str = "trueosfs-boundary";
 const HTTP_MULTIPART_CONTENT_TYPE: &str = "multipart/byteranges; boundary=trueosfs-boundary";
 
@@ -499,6 +501,77 @@ fn http_plain_response(status: &'static str, msg: &'static str) -> HttpResponseP
     }
 }
 
+fn http_owned_plain_response(status: &'static str, msg: String) -> HttpResponsePlan {
+    let body = msg.into_bytes();
+    HttpResponsePlan {
+        status,
+        content_type: "text/plain; charset=utf-8",
+        extra_headers: String::new(),
+        body_len: body.len() as u64,
+        body: HttpBodyPlan::Bytes(body),
+    }
+}
+
+fn http_upload_content_type(
+    target: &str,
+    name: &str,
+    bytes: &[u8],
+) -> Result<(infer::ContentTypeId, bool), HttpResponsePlan> {
+    if let Some(raw) = vhttp_srv::query_param(target, "content") {
+        if raw.eq_ignore_ascii_case("blob") {
+            crate::log_important!(
+                target: "storage";
+                "http-trueosfs: content-admission decision=explicit-blob name={} bytes={} type={}\n",
+                name,
+                bytes.len(),
+                infer::ContentTypeId::BLOB.raw(),
+            );
+            return Ok((infer::ContentTypeId::BLOB, true));
+        }
+        return Err(http_plain_response(
+            "HTTP/1.1 400 Bad Request\r\n",
+            "unsupported content override\n",
+        ));
+    }
+
+    match verify_named_bytes(name, bytes) {
+        Ok(content_type) => Ok((content_type, false)),
+        Err(IngressTypeError::MissingExtension | IngressTypeError::UnsupportedExtension) => {
+            crate::log_important!(
+                target: "storage";
+                "http-trueosfs: content-admission decision=reject-unsupported name={} bytes={}\n",
+                name,
+                bytes.len(),
+            );
+            Err(http_plain_response(
+                "HTTP/1.1 415 Unsupported Media Type\r\n",
+                "unsupported or missing file type; choose Store as Blob to preserve opaque bytes\n",
+            ))
+        }
+        Err(IngressTypeError::Mismatch { expected, observed }) => {
+            let observed_raw = observed.map(infer::ContentTypeId::raw);
+            crate::log_important!(
+                target: "storage";
+                "http-trueosfs: content-admission decision=reject-mismatch name={} bytes={} expected={} observed={:?}\n",
+                name,
+                bytes.len(),
+                expected.raw(),
+                observed_raw,
+            );
+            Err(http_owned_plain_response(
+                "HTTP/1.1 409 Conflict\r\n",
+                format!(
+                    "content type mismatch: expected={} observed={}\n",
+                    expected.raw(),
+                    observed_raw
+                        .map(|raw| raw.to_string())
+                        .unwrap_or_else(|| "none".to_string()),
+                ),
+            ))
+        }
+    }
+}
+
 fn http_normalize_rel_path(raw: &str, max_len: usize) -> Option<String> {
     let mut out = String::new();
     for seg in raw.split('/') {
@@ -647,6 +720,7 @@ async fn http_prepare_file_response(
     };
 
     let total_len = info.data_len;
+    let content_mime = mime_or_octet_stream(info.content_type);
     let etag = http_etag_from_len(info.data_len);
     let mut extra_headers = String::new();
     extra_headers.push_str("Accept-Ranges: bytes\r\n");
@@ -697,7 +771,7 @@ async fn http_prepare_file_response(
             );
             return HttpResponsePlan {
                 status: "HTTP/1.1 206 Partial Content\r\n",
-                content_type: HTTP_OCTET_STREAM,
+                content_type: content_mime,
                 extra_headers: headers,
                 body_len: len,
                 body: HttpBodyPlan::File {
@@ -714,7 +788,7 @@ async fn http_prepare_file_response(
         for (start, end) in ranges.into_iter() {
             let header = format!(
                 "--{}\r\nContent-Type: {}\r\nContent-Range: bytes {}-{}/{}\r\n\r\n",
-                HTTP_MULTIPART_BOUNDARY, HTTP_OCTET_STREAM, start, end, total_len
+                HTTP_MULTIPART_BOUNDARY, content_mime, start, end, total_len
             );
             let len = end.saturating_sub(start).saturating_add(1);
             total_len_out = total_len_out.saturating_add(header.len() as u64);
@@ -741,7 +815,7 @@ async fn http_prepare_file_response(
 
     HttpResponsePlan {
         status: "HTTP/1.1 200 OK\r\n",
-        content_type: HTTP_OCTET_STREAM,
+        content_type: content_mime,
         extra_headers,
         body_len: total_len,
         body: HttpBodyPlan::File {
@@ -771,10 +845,10 @@ function pathFor(li){var parts=[];var cur=li;while(cur){var label=trimmedPathPar
 function encodePath(path){if(!path){return "";}return path.split("/").filter(Boolean).map(function(seg){return encodeURIComponent(seg);}).join("/");}
 function dlHref(root,path){var enc=encodePath(path);return enc?"/dl/"+root+"/"+enc:"#";}
 function rmHref(root,path){var enc=encodePath(path);return enc?"/rm/"+root+"/"+enc:"#";}
-function upHref(root,dir,name){var base="/up/"+root;var enc=encodePath(dir);if(enc){base+="/"+enc;}return base+"?name="+encodeURIComponent(name);}
+function upHref(root,dir,name,asBlob){var base="/up/"+root;var enc=encodePath(dir);if(enc){base+="/"+enc;}base+="?name="+encodeURIComponent(name);if(asBlob){base+="&content=blob";}return base;}
 function mkdirHref(root,dir,name){var base="/mkdir/"+root;var enc=encodePath(dir);if(enc){base+="/"+enc;}return base+"?name="+encodeURIComponent(name);}
 function setStatus(target,msg){if(target){target.textContent=msg;}}
-function uploadFile(root,dir,file,status){if(!file){return;}var started=Date.now();var xhr=new XMLHttpRequest();xhr.open("POST",upHref(root,dir,file.name));xhr.setRequestHeader("Content-Type","application/octet-stream");xhr.upload.onprogress=function(ev){if(!ev.lengthComputable){setStatus(status,"uploading "+file.name+" ...");return;}var elapsed=Math.max((Date.now()-started)/1000,0.001);var rate=ev.loaded/elapsed;setStatus(status,"uploading "+file.name+" "+ev.loaded+"/"+ev.total+" bytes @ "+Math.round(rate/1024)+" KiB/s");};xhr.onload=function(){if(xhr.status>=200&&xhr.status<300){setStatus(status,"uploaded "+file.name);window.setTimeout(function(){window.location.reload();},250);}else{setStatus(status,"upload failed: HTTP "+xhr.status);}};xhr.onerror=function(){setStatus(status,"upload failed");};xhr.send(file);}
+function uploadFile(root,dir,file,status,asBlob){if(!file){return;}var started=Date.now();var xhr=new XMLHttpRequest();xhr.open("POST",upHref(root,dir,file.name,!!asBlob));xhr.setRequestHeader("Content-Type","application/octet-stream");xhr.upload.onprogress=function(ev){if(!ev.lengthComputable){setStatus(status,"uploading "+file.name+" ...");return;}var elapsed=Math.max((Date.now()-started)/1000,0.001);var rate=ev.loaded/elapsed;setStatus(status,"uploading "+file.name+" "+ev.loaded+"/"+ev.total+" bytes @ "+Math.round(rate/1024)+" KiB/s");};xhr.onload=function(){if(xhr.status>=200&&xhr.status<300){setStatus(status,"uploaded "+file.name+(asBlob?" as Blob":""));window.setTimeout(function(){window.location.reload();},250);}else if(!asBlob&&(xhr.status===409||xhr.status===415)&&window.confirm("TRUEOS could not prove the named type. Store this file explicitly as Blob?")){uploadFile(root,dir,file,status,true);}else{setStatus(status,"upload failed: HTTP "+xhr.status+" "+(xhr.responseText||""));}};xhr.onerror=function(){setStatus(status,"upload failed");};xhr.send(file);}
 function deleteFile(root,path,label,status){if(!window.confirm("Delete "+label+"?")){return;}setStatus(status,"deleting "+label+" ...");fetch(rmHref(root,path),{method:"POST"}).then(function(resp){if(!resp.ok){throw new Error(String(resp.status));}setStatus(status,"deleted "+label);window.setTimeout(function(){window.location.reload();},250);}).catch(function(err){setStatus(status,"delete failed: "+err.message);});}
 function wireFile(root,li,path,label){var text=firstTextNode(li);if(text){text.textContent="";}var del=document.createElement("button");del.type="button";del.textContent="x";var a=document.createElement("a");a.href=dlHref(root,path);a.textContent=label;a.setAttribute("download","");var status=document.createElement("small");li.insertBefore(del,li.firstChild);li.insertBefore(document.createTextNode(" "),del.nextSibling);li.insertBefore(a,del.nextSibling.nextSibling);li.appendChild(document.createTextNode(" "));li.appendChild(status);del.addEventListener("click",function(){deleteFile(root,path,label,status);});}
 function wireRoot(root,tree){var details=tree.parentElement;if(!details||details.getAttribute("data-trueosfs-root")==="1"){return;}details.setAttribute("data-trueosfs-root","1");var summary=details.querySelector("summary");if(!summary){return;}var host=document.createElement("span");var uploadBtn=document.createElement("button");uploadBtn.type="button";uploadBtn.textContent="upload";var createBtn=document.createElement("button");createBtn.type="button";createBtn.textContent="+";var picker=document.createElement("input");picker.type="file";picker.hidden=true;var status=document.createElement("small");host.appendChild(document.createTextNode(" "));host.appendChild(uploadBtn);host.appendChild(document.createTextNode(" "));host.appendChild(createBtn);host.appendChild(document.createTextNode(" "));host.appendChild(status);summary.appendChild(host);details.appendChild(picker);uploadBtn.addEventListener("click",function(ev){ev.preventDefault();ev.stopPropagation();picker.click();});picker.addEventListener("change",function(){if(picker.files&&picker.files[0]){uploadFile(root,"",picker.files[0],status);}picker.value="";});createBtn.addEventListener("click",function(ev){ev.preventDefault();ev.stopPropagation();var name=window.prompt("Folder name");if(!name){return;}setStatus(status,"creating "+name+" ...");fetch(mkdirHref(root,"",name),{method:"POST"}).then(function(resp){if(!resp.ok){throw new Error(String(resp.status));}setStatus(status,"created "+name);window.setTimeout(function(){window.location.reload();},250);}).catch(function(err){setStatus(status,"create failed: "+err.message);});});}
@@ -1021,17 +1095,30 @@ pub async fn http_trueosfs_task() {
                                         );
                                     }
                                 };
+                                let (content_type, _explicit_blob) =
+                                    match http_upload_content_type(target.as_str(), name.as_str(), body_bytes) {
+                                        Ok(value) => value,
+                                        Err(response) => break 'resp response,
+                                    };
                                 let full_path = http_join_rel_path(dir.as_str(), name.as_str());
-                                match crate::r::fs::trueosfs::file_in_async(disk, full_path.as_str(), body_bytes).await {
+                                match crate::r::fs::trueosfs::file_in_typed_async(
+                                    disk,
+                                    full_path.as_str(),
+                                    body_bytes,
+                                    content_type,
+                                )
+                                .await
+                                {
                                     Ok(true) => {
                                         if http_is_runnable_root_artifact(full_path.as_str()) {
                                             let stamp_path = http_root_artifact_timestamp_path(full_path.as_str());
                                             let mut stamp = http_current_timestamp_label();
                                             stamp.push('\n');
-                                            let _ = crate::r::fs::trueosfs::file_in_async(
+                                            let _ = crate::r::fs::trueosfs::file_in_typed_async(
                                                 disk,
                                                 stamp_path.as_str(),
                                                 stamp.as_bytes(),
+                                                infer::ContentTypeId::UTF8_TEXT,
                                             )
                                             .await;
                                         }

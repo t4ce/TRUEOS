@@ -9,18 +9,27 @@ extern crate std;
 use alloc::{collections::BTreeMap, format, string::String, vec, vec::Vec};
 use trueos_crypto::{KeyHandle, KeyRef, ProviderId};
 
+/// Stable, first-class content identity defined by the vendored `infer` registry.
+///
+/// TRUEOSFS persists the raw `u32` in every file record header.  The filesystem
+/// intentionally preserves an unrecognised non-zero value on read so a newer
+/// registry does not make an older kernel unable to mount the volume; only
+/// registered values may originate a new write.
+pub use infer::ContentTypeId;
+
 pub const MAGIC: [u8; 8] = *b"TRUEOSFS";
 
-// Superblock layout (little-endian, format version 2):
+// Superblock layout (little-endian, format version 3):
 // [0..8]   MAGIC
 // [8..10]  FORMAT_VERSION: u16
 // [10..16] reserved (zero)
 // [16..24] LOG_HEAD_REL_BLOCKS: u64 (relative to data_lba)
 // [24..32] CHECKPOINT_REL_BLOCKS: u64 (relative to data_lba; 0 = none)
 //
-// Version 2 is an intentional clean break from the unversioned marker-file
-// format.  The parser must not accept those older media as a current volume.
-pub const FORMAT_VERSION: u16 = 2;
+// Version 3 is an intentional clean break: every `Put` has mandatory on-disk
+// content identity. The parser must not accept earlier media as a current
+// volume.
+pub const FORMAT_VERSION: u16 = 3;
 pub const SUPERBLOCK_MIN_BYTES: usize = 32;
 pub const SUPERBLOCK_VERSION_OFF: usize = 8;
 pub const SUPERBLOCK_RESERVED_OFF: usize = 10;
@@ -39,7 +48,7 @@ pub struct Superblock {
 }
 
 pub fn parse_superblock(block0: &[u8]) -> Option<Superblock> {
-    if block0.len() < SUPERBLOCK_MIN_BYTES {
+    if block0.len() < RECORD_HEADER_MIN_BYTES {
         return None;
     }
     if &block0[0..8] != &MAGIC {
@@ -86,7 +95,7 @@ pub fn parse_superblock(block0: &[u8]) -> Option<Superblock> {
 }
 
 pub fn write_superblock(block0: &mut [u8], sb: Superblock) {
-    if block0.len() < SUPERBLOCK_MIN_BYTES {
+    if block0.len() < RECORD_HEADER_MIN_BYTES {
         return;
     }
     // Keep any extra bytes beyond our known fields zeroed for now.
@@ -116,7 +125,7 @@ pub const fn data_lba_from_super(super_lba: u64) -> u64 {
 }
 
 pub fn write_blank_superblock(block0: &mut [u8]) {
-    if block0.len() < SUPERBLOCK_MIN_BYTES {
+    if block0.len() < RECORD_HEADER_MIN_BYTES {
         return;
     }
 
@@ -217,6 +226,10 @@ const RECORD_KEY_KIND_OFF: usize = RECORD_KEY_EXT_OFF + 5;
 const RECORD_KEY_PROVIDER_OFF: usize = RECORD_KEY_EXT_OFF + 8;
 const RECORD_KEY_HANDLE_OFF: usize = RECORD_KEY_PROVIDER_OFF + 16;
 pub const RECORD_KEY_HEADER_MIN_BYTES: usize = RECORD_KEY_HANDLE_OFF + 32;
+/// First-class content type identity, little-endian `u32`.
+pub const CONTENT_TYPE_ID_OFF: usize = RECORD_KEY_HEADER_MIN_BYTES;
+/// Minimum V3 record header. All TRUEOSFS block devices must accommodate this.
+pub const RECORD_HEADER_MIN_BYTES: usize = CONTENT_TYPE_ID_OFF + 4;
 
 /// Native access identity stored in each TRUEOSFS record header.
 ///
@@ -263,6 +276,7 @@ impl NodeKind {
 pub struct NodeInfo {
     pub kind: NodeKind,
     pub data_len: u64,
+    pub content_type: ContentTypeId,
     pub record_key: RecordKey,
 }
 
@@ -273,6 +287,7 @@ pub struct NodeRecordRef {
     pub data_lba: u64,
     pub kind: NodeKind,
     pub data_len: u64,
+    pub content_type: ContentTypeId,
     pub record_key: RecordKey,
 }
 
@@ -281,6 +296,15 @@ pub struct NodeRecordRef {
 pub struct DirEntry {
     pub name: String,
     pub kind: NodeKind,
+    pub content_type: ContentTypeId,
+}
+
+/// Metadata fixed at stream creation and persisted in both pre-commit and
+/// committed file headers.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FileWriteMetadata {
+    pub content_type: ContentTypeId,
+    pub record_key: RecordKey,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -292,6 +316,7 @@ struct LogHeader {
     // Reserved compatibility bytes in baseline mode.
     // Writers currently store ZERO_INTEGRITY_TAG and readers ignore this field.
     integrity_tag: [u8; 32],
+    content_type: ContentTypeId,
     record_key: RecordKey,
 }
 
@@ -302,7 +327,7 @@ struct LogHeader {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct IndexCheckpoint {
     pub replay_from_rel_blocks: u64,
-    pub entries: Vec<(Vec<u8>, LogKind, u64)>,
+    pub entries: Vec<(Vec<u8>, LogKind, u64, ContentTypeId)>,
 }
 
 /// Result of reading the checkpoint selected by the superblock.
@@ -346,6 +371,7 @@ pub struct RawLogRecord {
     pub delete_ref_lba: Option<u64>,
     pub checkpoint_replay_from_rel_blocks: Option<u64>,
     pub checkpoint_entry_count: Option<usize>,
+    pub content_type: ContentTypeId,
     pub record_key: RecordKey,
 }
 
@@ -368,47 +394,65 @@ pub struct RawLogScan {
     pub stop: RawLogStop,
 }
 
-/// Encode the checkpoint payload as:
-/// - `replay_from_rel_blocks: u64` (LE)
-/// - repeated entries:
-///   - `key_len: u16` (LE)
-///   - `reserved: u16` (stores `kind` in low byte; 0 means "assume Put" for backward compat)
-///   - `value_lba: u64` (LE) (the log entry LBA for the latest record)
-///   - `key_bytes: [u8; key_len]`
+const INDEX_CHECKPOINT_MAGIC: [u8; 4] = *b"TICP";
+const INDEX_CHECKPOINT_VERSION: u8 = 1;
+const INDEX_CHECKPOINT_HEADER_BYTES: usize = 16;
+const INDEX_CHECKPOINT_ENTRY_BYTES: usize = 16;
+
+/// Encode the V3 checkpoint payload as:
+/// - `TICP`, version 1, three reserved zero bytes, `replay_from_rel_blocks: u64` (LE)
+/// - repeated entries: `{ key_len:u16, kind:u8, reserved:u8, entry_lba:u64,
+///   content_type_id:u32, key_bytes }`.
+///
+/// Checkpoints are acceleration data only, but retain the on-disk file type so
+/// listing and metadata do not need one header read per entry.
 pub fn encode_index_checkpoint_payload<'a>(
     replay_from_rel_blocks: u64,
-    entries: impl Iterator<Item = (&'a [u8], LogKind, u64)>,
+    entries: impl Iterator<Item = (&'a [u8], LogKind, u64, ContentTypeId)>,
 ) -> Vec<u8> {
     let mut out = Vec::new();
+    out.extend_from_slice(&INDEX_CHECKPOINT_MAGIC);
+    out.push(INDEX_CHECKPOINT_VERSION);
+    out.extend_from_slice(&[0; 3]);
     out.extend_from_slice(&replay_from_rel_blocks.to_le_bytes());
-    for (key, kind, entry_lba) in entries {
+    for (key, kind, entry_lba, content_type) in entries {
         let key_len = core::cmp::min(key.len(), u16::MAX as usize) as u16;
         out.extend_from_slice(&key_len.to_le_bytes());
-        let reserved = (kind as u8) as u16;
-        out.extend_from_slice(&reserved.to_le_bytes());
+        out.push(kind as u8);
+        out.push(0);
         out.extend_from_slice(&entry_lba.to_le_bytes());
+        out.extend_from_slice(&content_type.raw().to_le_bytes());
         out.extend_from_slice(&key[..key_len as usize]);
     }
     out
 }
 
 pub fn decode_index_checkpoint_payload(payload: &[u8]) -> Option<IndexCheckpoint> {
-    if payload.len() < 8 {
+    if payload.len() < INDEX_CHECKPOINT_HEADER_BYTES
+        || payload[..4] != INDEX_CHECKPOINT_MAGIC
+        || payload[4] != INDEX_CHECKPOINT_VERSION
+        || payload[5..8].iter().any(|byte| *byte != 0)
+    {
         return None;
     }
-    let replay_from_rel_blocks = u64::from_le_bytes(payload[0..8].try_into().ok()?);
-    let mut off = 8usize;
-    let mut entries: Vec<(Vec<u8>, LogKind, u64)> = Vec::new();
+    let replay_from_rel_blocks = u64::from_le_bytes(payload[8..16].try_into().ok()?);
+    let mut off = INDEX_CHECKPOINT_HEADER_BYTES;
+    let mut entries: Vec<(Vec<u8>, LogKind, u64, ContentTypeId)> = Vec::new();
     while off < payload.len() {
-        if payload.len().saturating_sub(off) < 12 {
+        if payload.len().saturating_sub(off) < INDEX_CHECKPOINT_ENTRY_BYTES {
             return None;
         }
         let key_len = u16::from_le_bytes(payload[off..off + 2].try_into().ok()?) as usize;
-        let reserved = u16::from_le_bytes(payload[off + 2..off + 4].try_into().ok()?);
+        let kind_byte = payload[off + 2];
+        if payload[off + 3] != 0 {
+            return None;
+        }
         let entry_lba = u64::from_le_bytes(payload[off + 4..off + 12].try_into().ok()?);
-        off = off.saturating_add(12);
+        let content_type = ContentTypeId::from_raw(u32::from_le_bytes(
+            payload[off + 12..off + 16].try_into().ok()?,
+        ));
+        off = off.saturating_add(INDEX_CHECKPOINT_ENTRY_BYTES);
 
-        let kind_byte = (reserved & 0x00FF) as u8;
         let kind = match kind_byte {
             1 => LogKind::Put,
             2 => LogKind::Delete,
@@ -418,6 +462,11 @@ pub fn decode_index_checkpoint_payload(payload: &[u8]) -> Option<IndexCheckpoint
             6 => LogKind::DeleteTree,
             _ => return None,
         };
+        if !matches!(kind, LogKind::Put | LogKind::Directory)
+            || !valid_content_type_for_kind(kind, content_type)
+        {
+            return None;
+        }
 
         if payload.len().saturating_sub(off) < key_len {
             return None;
@@ -426,7 +475,7 @@ pub fn decode_index_checkpoint_payload(payload: &[u8]) -> Option<IndexCheckpoint
         key.copy_from_slice(&payload[off..off + key_len]);
         off = off.saturating_add(key_len);
 
-        entries.push((key, kind, entry_lba));
+        entries.push((key, kind, entry_lba, content_type));
     }
 
     Some(IndexCheckpoint {
@@ -437,8 +486,7 @@ pub fn decode_index_checkpoint_payload(payload: &[u8]) -> Option<IndexCheckpoint
 
 impl LogHeader {
     fn encode_into_block(&self, block: &mut [u8]) {
-        const MIN: usize = 52;
-        if block.len() < MIN {
+        if block.len() < RECORD_HEADER_MIN_BYTES {
             return;
         }
         block[0..8].copy_from_slice(&LOG_ENTRY_MAGIC);
@@ -467,10 +515,12 @@ impl LogHeader {
                     .copy_from_slice(key.handle.as_bytes());
             }
         }
+        block[CONTENT_TYPE_ID_OFF..RECORD_HEADER_MIN_BYTES]
+            .copy_from_slice(&self.content_type.raw().to_le_bytes());
     }
 
     fn decode_from_block(block: &[u8]) -> Option<Self> {
-        if block.len() < 52 {
+        if block.len() < RECORD_HEADER_MIN_BYTES {
             return None;
         }
         if &block[0..8] != &LOG_ENTRY_MAGIC {
@@ -485,7 +535,11 @@ impl LogHeader {
             6 => LogKind::DeleteTree,
             _ => return None,
         };
-        let committed = block[9] == 1;
+        let committed = match block[9] {
+            0 => false,
+            1 => true,
+            _ => return None,
+        };
         let name_len = u16::from_le_bytes([block[10], block[11]]);
         let data_len = u64::from_le_bytes([
             block[12], block[13], block[14], block[15], block[16], block[17], block[18], block[19],
@@ -493,27 +547,39 @@ impl LogHeader {
         let mut integrity_tag = [0u8; 32];
         integrity_tag.copy_from_slice(&block[20..52]);
         let record_key = decode_record_key(block)?;
+        let content_type = ContentTypeId::from_raw(u32::from_le_bytes(
+            block[CONTENT_TYPE_ID_OFF..RECORD_HEADER_MIN_BYTES]
+                .try_into()
+                .ok()?,
+        ));
+        if block[RECORD_HEADER_MIN_BYTES..]
+            .iter()
+            .any(|byte| *byte != 0)
+            || !valid_content_type_for_kind(kind, content_type)
+        {
+            return None;
+        }
         Some(Self {
             kind,
             committed,
             name_len,
             data_len,
             integrity_tag,
+            content_type,
             record_key,
         })
     }
 }
 
 fn decode_record_key(block: &[u8]) -> Option<RecordKey> {
-    if block.len() < RECORD_KEY_HEADER_MIN_BYTES {
-        return Some(RecordKey::Ffa);
-    }
-    let extension = &block[RECORD_KEY_EXT_OFF..RECORD_KEY_HEADER_MIN_BYTES];
-    if extension.iter().all(|byte| *byte == 0) {
-        return Some(RecordKey::Ffa);
+    if block.len() < RECORD_HEADER_MIN_BYTES {
+        return None;
     }
     if block[RECORD_KEY_EXT_OFF..RECORD_KEY_EXT_OFF + 4] != RECORD_KEY_MAGIC
         || block[RECORD_KEY_EXT_OFF + 4] != RECORD_KEY_VERSION
+        || block[RECORD_KEY_EXT_OFF + 6..RECORD_KEY_PROVIDER_OFF]
+            .iter()
+            .any(|byte| *byte != 0)
     {
         return None;
     }
@@ -543,6 +609,23 @@ fn decode_record_key(block: &[u8]) -> Option<RecordKey> {
     }
 }
 
+#[inline]
+fn valid_content_type_for_kind(kind: LogKind, content_type: ContentTypeId) -> bool {
+    match kind {
+        LogKind::Put => content_type != ContentTypeId::NONE,
+        LogKind::Delete
+        | LogKind::IndexCheckpoint
+        | LogKind::RenameTree
+        | LogKind::Directory
+        | LogKind::DeleteTree => content_type == ContentTypeId::NONE,
+    }
+}
+
+#[inline]
+fn valid_new_file_content_type(content_type: ContentTypeId) -> bool {
+    content_type != ContentTypeId::NONE && content_type.is_registered()
+}
+
 fn disk_data_end_lba_exclusive<D: BlockIo>(dev: &D, params: &FsParams) -> u64 {
     params
         .data_end_lba_exclusive
@@ -565,7 +648,7 @@ fn valid_record_shape(kind: LogKind, name_len: usize, data_len: usize) -> bool {
             name_len > 0 && name_len <= 4096 && data_len == 0
         }
         LogKind::Delete => name_len > 0 && name_len <= 4096 && data_len == DELETE_REF_BYTES,
-        LogKind::IndexCheckpoint => name_len == 0 && data_len >= 8,
+        LogKind::IndexCheckpoint => name_len == 0 && data_len >= INDEX_CHECKPOINT_HEADER_BYTES,
         LogKind::RenameTree => name_len > 0 && name_len <= 4096 && data_len > 0 && data_len <= 4096,
     }
 }
@@ -584,7 +667,7 @@ async fn read_exact_bytes<D: BlockIo>(
         return Ok(());
     }
     let bs = dev.block_size();
-    if bs == 0 {
+    if bs < RECORD_HEADER_MIN_BYTES {
         return Err(FsError::InvalidParam);
     }
 
@@ -644,7 +727,7 @@ async fn check_space_for_put<D: BlockIo>(
     data_len: usize,
 ) -> Result<Option<(Superblock, u64, u64)>, FsError<D::Error>> {
     let bs = dev.block_size();
-    if bs == 0 {
+    if bs < RECORD_HEADER_MIN_BYTES {
         return Err(FsError::InvalidParam);
     }
     let sb_block = read_one_block(dev, params.super_lba).await?;
@@ -677,7 +760,7 @@ async fn write_superblock_to_disk<D: BlockIo>(
     sb: Superblock,
 ) -> Result<(), FsError<D::Error>> {
     let bs = dev.block_size();
-    if bs == 0 {
+    if bs < RECORD_HEADER_MIN_BYTES {
         return Err(FsError::InvalidParam);
     }
     let mut tmp = vec![0u8; bs];
@@ -698,7 +781,7 @@ pub async fn read_index_checkpoint_with_status<D: BlockIo>(
     params: &FsParams,
 ) -> Result<IndexCheckpointRead, FsError<D::Error>> {
     let bs = dev.block_size();
-    if bs == 0 {
+    if bs < RECORD_HEADER_MIN_BYTES {
         return Err(FsError::InvalidParam);
     }
     let sb_block = read_one_block(dev, params.super_lba).await?;
@@ -720,7 +803,7 @@ pub async fn read_index_checkpoint_with_status<D: BlockIo>(
     if hdr.name_len != 0 {
         return Ok(IndexCheckpointRead::Invalid);
     }
-    if hdr.data_len < 8 {
+    if hdr.data_len < INDEX_CHECKPOINT_HEADER_BYTES as u64 {
         return Ok(IndexCheckpointRead::Invalid);
     }
 
@@ -754,27 +837,26 @@ pub async fn write_index_checkpoint<D: BlockIo>(
     dev: &D,
     params: &FsParams,
     replay_from_rel_blocks: u64,
-    entries: impl Iterator<Item = (Vec<u8>, LogKind, u64)>,
+    entries: impl Iterator<Item = (Vec<u8>, LogKind, u64, ContentTypeId)>,
 ) -> Result<bool, FsError<D::Error>> {
     let bs = dev.block_size();
-    if bs == 0 {
+    if bs < RECORD_HEADER_MIN_BYTES {
         return Err(FsError::InvalidParam);
     }
 
-    // Encode payload as (replay_from u64) + repeated entries.
-    let payload = {
-        let mut buf = Vec::new();
-        buf.extend_from_slice(&replay_from_rel_blocks.to_le_bytes());
-        for (k, kind, entry_lba) in entries {
-            let key_len = core::cmp::min(k.len(), u16::MAX as usize) as u16;
-            buf.extend_from_slice(&key_len.to_le_bytes());
-            let reserved = (kind as u8) as u16;
-            buf.extend_from_slice(&reserved.to_le_bytes());
-            buf.extend_from_slice(&entry_lba.to_le_bytes());
-            buf.extend_from_slice(&k[..key_len as usize]);
-        }
-        buf
-    };
+    let entries: Vec<(Vec<u8>, LogKind, u64, ContentTypeId)> = entries.collect();
+    if entries.iter().any(|(_, kind, _, content_type)| {
+        !matches!(kind, LogKind::Put | LogKind::Directory)
+            || !valid_content_type_for_kind(*kind, *content_type)
+    }) {
+        return Err(FsError::InvalidParam);
+    }
+    let payload = encode_index_checkpoint_payload(
+        replay_from_rel_blocks,
+        entries.iter().map(|(key, kind, entry_lba, content_type)| {
+            (key.as_slice(), *kind, *entry_lba, *content_type)
+        }),
+    );
 
     let Some((mut sb, entry_lba, blocks)) =
         check_space_for_put(dev, params, 0, payload.len()).await?
@@ -790,6 +872,7 @@ pub async fn write_index_checkpoint<D: BlockIo>(
         name_len: 0,
         data_len: payload.len() as u64,
         integrity_tag: ZERO_INTEGRITY_TAG,
+        content_type: ContentTypeId::NONE,
         record_key: RecordKey::Ffa,
     }
     .encode_into_block(&mut hdr0);
@@ -830,6 +913,7 @@ pub async fn write_index_checkpoint<D: BlockIo>(
         name_len: 0,
         data_len: payload.len() as u64,
         integrity_tag: ZERO_INTEGRITY_TAG,
+        content_type: ContentTypeId::NONE,
         record_key: RecordKey::Ffa,
     }
     .encode_into_block(&mut hdr1);
@@ -855,10 +939,10 @@ pub async fn replay_log_range_with_stats<D: BlockIo>(
     params: &FsParams,
     start_rel_blocks: u64,
     end_rel_blocks: u64,
-    mut apply: impl FnMut(LogKind, Vec<u8>, Vec<u8>, u64),
+    mut apply: impl FnMut(LogKind, Vec<u8>, Vec<u8>, u64, ContentTypeId),
 ) -> Result<ReplayLogStats, FsError<D::Error>> {
     let bs = dev.block_size();
-    if bs == 0 {
+    if bs < RECORD_HEADER_MIN_BYTES {
         return Err(FsError::InvalidParam);
     }
 
@@ -903,7 +987,7 @@ pub async fn replay_log_range_with_stats<D: BlockIo>(
             let data_lba = lba.saturating_add(1).saturating_add(name_blocks as u64);
             read_exact_bytes(dev, data_lba, 0, data.as_mut_slice()).await?;
         }
-        apply(hdr.kind, name_bytes, data, lba);
+        apply(hdr.kind, name_bytes, data, lba, hdr.content_type);
         logical_records = logical_records.saturating_add(1);
 
         lba = lba.saturating_add(blocks);
@@ -924,7 +1008,7 @@ pub async fn replay_log_range<D: BlockIo>(
     params: &FsParams,
     start_rel_blocks: u64,
     end_rel_blocks: u64,
-    apply: impl FnMut(LogKind, Vec<u8>, Vec<u8>, u64),
+    apply: impl FnMut(LogKind, Vec<u8>, Vec<u8>, u64, ContentTypeId),
 ) -> Result<(), FsError<D::Error>> {
     replay_log_range_with_stats(dev, params, start_rel_blocks, end_rel_blocks, apply)
         .await
@@ -1073,6 +1157,7 @@ pub async fn scan_raw_log<D: BlockIo>(
             delete_ref_lba,
             checkpoint_replay_from_rel_blocks,
             checkpoint_entry_count,
+            content_type: hdr.content_type,
             record_key: hdr.record_key,
         });
 
@@ -1173,6 +1258,7 @@ pub struct PutWriteStream {
     batch: Vec<u8>,
     batch_off: usize,
     pending: Vec<u8>,
+    metadata: FileWriteMetadata,
     record_key: RecordKey,
 }
 
@@ -1185,6 +1271,7 @@ pub fn write_stream_record_ref(stream: &PutWriteStream) -> FileRecordRef {
             .saturating_add(1)
             .saturating_add(name_blocks as u64),
         data_len: stream.data_len,
+        content_type: stream.metadata.content_type,
         record_key: stream.record_key,
     }
 }
@@ -1231,27 +1318,59 @@ pub async fn begin_write_file_stream<D: BlockIo>(
     if existing.is_some_and(|record| record.kind != NodeKind::File) {
         return Ok(None);
     }
+    if existing.is_some_and(|record| record.content_type != ContentTypeId::BLOB) {
+        return Err(FsError::InvalidParam);
+    }
     let record_key = existing
         .map(|record| record.record_key)
         .unwrap_or(RecordKey::Ffa);
-    begin_write_file_stream_with_key(dev, params, name, data_len, record_key).await
+    begin_write_file_stream_with_metadata(
+        dev,
+        params,
+        name,
+        data_len,
+        FileWriteMetadata {
+            content_type: ContentTypeId::BLOB,
+            record_key,
+        },
+    )
+    .await
 }
 
-/// Begin a streamed `Put` whose record header carries `record_key`.
-pub async fn begin_write_file_stream_with_key<D: BlockIo>(
+/// Begin a typed streamed `Put`. The supplied registered nonzero identity is
+/// committed into the record header before payload streaming starts.
+pub async fn begin_write_file_stream_with_metadata<D: BlockIo>(
     dev: &D,
     params: &FsParams,
     name: &str,
     data_len: u64,
-    record_key: RecordKey,
+    metadata: FileWriteMetadata,
+) -> Result<Option<PutWriteStream>, FsError<D::Error>> {
+    begin_write_file_stream_with_metadata_inner(dev, params, name, data_len, metadata, false).await
+}
+
+/// Internal restoration path.  A nonzero type unknown to this build is never
+/// admitted as a new declaration, but can be replayed from an existing record
+/// by operations such as undelete without changing its raw identity.
+async fn begin_write_file_stream_with_metadata_inner<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    name: &str,
+    data_len: u64,
+    metadata: FileWriteMetadata,
+    allow_unregistered_existing_type: bool,
 ) -> Result<Option<PutWriteStream>, FsError<D::Error>> {
     if !is_normalized_nonempty_path(name) || name.as_bytes().len() > (u16::MAX as usize) {
         return Ok(None);
     }
     let bs = dev.block_size();
-    if bs == 0 {
+    if bs < RECORD_HEADER_MIN_BYTES
+        || metadata.content_type == ContentTypeId::NONE
+        || (!allow_unregistered_existing_type && !valid_new_file_content_type(metadata.content_type))
+    {
         return Err(FsError::InvalidParam);
     }
+    let record_key = metadata.record_key;
     if matches!(record_key, RecordKey::Key(_)) && bs < RECORD_KEY_HEADER_MIN_BYTES {
         return Err(FsError::InvalidParam);
     }
@@ -1284,6 +1403,7 @@ pub async fn begin_write_file_stream_with_key<D: BlockIo>(
         name_len: name.len() as u16,
         data_len,
         integrity_tag: ZERO_INTEGRITY_TAG,
+        content_type: metadata.content_type,
         record_key,
     }
     .encode_into_block(&mut hdr0);
@@ -1328,8 +1448,39 @@ pub async fn begin_write_file_stream_with_key<D: BlockIo>(
         batch: Vec::with_capacity(batch_capacity),
         batch_off: 0,
         pending: Vec::new(),
+        metadata,
         record_key,
     }))
+}
+
+/// Compatibility adapter for key-only callers. New native callers must use
+/// [`begin_write_file_stream_with_metadata`] so no file reaches disk without a
+/// declared type.
+#[deprecated(note = "use begin_write_file_stream_with_metadata")]
+pub async fn begin_write_file_stream_with_key<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    name: &str,
+    data_len: u64,
+    record_key: RecordKey,
+) -> Result<Option<PutWriteStream>, FsError<D::Error>> {
+    if lookup_node_record(dev, params, name)
+        .await?
+        .is_some_and(|record| record.content_type != ContentTypeId::BLOB)
+    {
+        return Err(FsError::InvalidParam);
+    }
+    begin_write_file_stream_with_metadata(
+        dev,
+        params,
+        name,
+        data_len,
+        FileWriteMetadata {
+            content_type: ContentTypeId::BLOB,
+            record_key,
+        },
+    )
+    .await
 }
 
 pub async fn write_file_stream_chunk<D: BlockIo>(
@@ -1445,6 +1596,7 @@ pub async fn finish_write_file_stream<D: BlockIo>(
         name_len: stream.name_len,
         data_len: stream.data_len,
         integrity_tag: ZERO_INTEGRITY_TAG,
+        content_type: stream.metadata.content_type,
         record_key: stream.record_key,
     }
     .encode_into_block(&mut hdr1);
@@ -1466,7 +1618,7 @@ async fn write_empty_node_entry<D: BlockIo>(
 ) -> Result<u64, FsError<D::Error>> {
     debug_assert!(matches!(kind, LogKind::Directory | LogKind::DeleteTree));
     let bs = dev.block_size();
-    if bs == 0 {
+    if bs < RECORD_HEADER_MIN_BYTES {
         return Err(FsError::InvalidParam);
     }
     let name_bytes = name.as_bytes();
@@ -1480,6 +1632,7 @@ async fn write_empty_node_entry<D: BlockIo>(
         name_len: name_bytes.len() as u16,
         data_len: 0,
         integrity_tag: ZERO_INTEGRITY_TAG,
+        content_type: ContentTypeId::NONE,
         record_key: RecordKey::Ffa,
     }
     .encode_into_block(&mut hdr0);
@@ -1503,6 +1656,7 @@ async fn write_empty_node_entry<D: BlockIo>(
         name_len: name_bytes.len() as u16,
         data_len: 0,
         integrity_tag: ZERO_INTEGRITY_TAG,
+        content_type: ContentTypeId::NONE,
         record_key: RecordKey::Ffa,
     }
     .encode_into_block(&mut hdr1);
@@ -1521,7 +1675,7 @@ async fn write_delete_entry<D: BlockIo>(
     record_key: RecordKey,
 ) -> Result<u64, FsError<D::Error>> {
     let bs = dev.block_size();
-    if bs == 0 {
+    if bs < RECORD_HEADER_MIN_BYTES {
         return Err(FsError::InvalidParam);
     }
     let name_len = name.len();
@@ -1535,6 +1689,7 @@ async fn write_delete_entry<D: BlockIo>(
         name_len: name_len as u16,
         data_len: DELETE_REF_BYTES as u64,
         integrity_tag: ZERO_INTEGRITY_TAG,
+        content_type: ContentTypeId::NONE,
         record_key,
     }
     .encode_into_block(&mut hdr0);
@@ -1602,6 +1757,7 @@ async fn write_delete_entry<D: BlockIo>(
         name_len: name_len as u16,
         data_len: DELETE_REF_BYTES as u64,
         integrity_tag: ZERO_INTEGRITY_TAG,
+        content_type: ContentTypeId::NONE,
         record_key,
     }
     .encode_into_block(&mut hdr1);
@@ -1619,7 +1775,7 @@ async fn write_rename_tree_entry<D: BlockIo>(
     dst_dir: &str,
 ) -> Result<u64, FsError<D::Error>> {
     let bs = dev.block_size();
-    if bs == 0 {
+    if bs < RECORD_HEADER_MIN_BYTES {
         return Err(FsError::InvalidParam);
     }
     let name_len = src_dir.len();
@@ -1633,6 +1789,7 @@ async fn write_rename_tree_entry<D: BlockIo>(
         name_len: name_len as u16,
         data_len: data_len as u64,
         integrity_tag: ZERO_INTEGRITY_TAG,
+        content_type: ContentTypeId::NONE,
         record_key: RecordKey::Ffa,
     }
     .encode_into_block(&mut hdr0);
@@ -1698,6 +1855,7 @@ async fn write_rename_tree_entry<D: BlockIo>(
         name_len: name_len as u16,
         data_len: data_len as u64,
         integrity_tag: ZERO_INTEGRITY_TAG,
+        content_type: ContentTypeId::NONE,
         record_key: RecordKey::Ffa,
     }
     .encode_into_block(&mut hdr1);
@@ -1711,7 +1869,7 @@ async fn write_rename_tree_entry<D: BlockIo>(
 async fn read_put_entry_data<D: BlockIo>(
     dev: &D,
     entry_lba: u64,
-) -> Result<Option<(Vec<u8>, RecordKey)>, FsError<D::Error>> {
+) -> Result<Option<(Vec<u8>, FileWriteMetadata)>, FsError<D::Error>> {
     let bs = dev.block_size();
     if bs == 0 {
         return Err(FsError::InvalidParam);
@@ -1739,7 +1897,13 @@ async fn read_put_entry_data<D: BlockIo>(
     let mut out = vec![0u8; data_len];
     read_exact_bytes(dev, data_lba, 0, &mut out).await?;
 
-    Ok(Some((out, hdr.record_key)))
+    Ok(Some((
+        out,
+        FileWriteMetadata {
+            content_type: hdr.content_type,
+            record_key: hdr.record_key,
+        },
+    )))
 }
 
 async fn find_latest_delete_ref<D: BlockIo>(
@@ -1830,11 +1994,11 @@ pub async fn undelete_file<D: BlockIo>(
     };
 
     // Restore from the referenced Put entry.
-    let Some((data, record_key)) = read_put_entry_data(dev, deleted_entry_lba).await? else {
+    let Some((data, metadata)) = read_put_entry_data(dev, deleted_entry_lba).await? else {
         return Ok(false);
     };
 
-    write_file_with_key(dev, params, name, &data, record_key).await
+    restore_file_with_metadata(dev, params, name, &data, metadata).await
 }
 
 async fn find_latest_record<D: BlockIo>(
@@ -1905,6 +2069,7 @@ async fn build_live_nodes<D: BlockIo>(
                         data_lba: lba.saturating_add(1).saturating_add(name_blocks as u64),
                         kind,
                         data_len: hdr.data_len,
+                        content_type: hdr.content_type,
                         record_key: hdr.record_key,
                     },
                 );
@@ -1962,7 +2127,52 @@ pub async fn write_file<D: BlockIo>(
     Ok(true)
 }
 
-/// Write a complete file with an explicit native record key.
+/// Write a complete file with immutable first-class metadata.
+pub async fn write_file_with_metadata<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    name: &str,
+    bytes: &[u8],
+    metadata: FileWriteMetadata,
+) -> Result<bool, FsError<D::Error>> {
+    let Some(mut stream) =
+        begin_write_file_stream_with_metadata(dev, params, name, bytes.len() as u64, metadata)
+            .await?
+    else {
+        return Ok(false);
+    };
+    write_file_stream_chunk(dev, &mut stream, bytes).await?;
+    finish_write_file_stream(dev, params, stream).await?;
+    Ok(true)
+}
+
+async fn restore_file_with_metadata<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    name: &str,
+    bytes: &[u8],
+    metadata: FileWriteMetadata,
+) -> Result<bool, FsError<D::Error>> {
+    let Some(mut stream) = begin_write_file_stream_with_metadata_inner(
+        dev,
+        params,
+        name,
+        bytes.len() as u64,
+        metadata,
+        true,
+    )
+    .await?
+    else {
+        return Ok(false);
+    };
+    write_file_stream_chunk(dev, &mut stream, bytes).await?;
+    finish_write_file_stream(dev, params, stream).await?;
+    Ok(true)
+}
+
+/// Compatibility adapter for key-only callers. New callers must declare
+/// content identity with [`write_file_with_metadata`].
+#[deprecated(note = "use write_file_with_metadata")]
 pub async fn write_file_with_key<D: BlockIo>(
     dev: &D,
     params: &FsParams,
@@ -1970,14 +2180,23 @@ pub async fn write_file_with_key<D: BlockIo>(
     bytes: &[u8],
     record_key: RecordKey,
 ) -> Result<bool, FsError<D::Error>> {
-    let Some(mut stream) =
-        begin_write_file_stream_with_key(dev, params, name, bytes.len() as u64, record_key).await?
-    else {
-        return Ok(false);
-    };
-    write_file_stream_chunk(dev, &mut stream, bytes).await?;
-    finish_write_file_stream(dev, params, stream).await?;
-    Ok(true)
+    if lookup_node_record(dev, params, name)
+        .await?
+        .is_some_and(|record| record.content_type != ContentTypeId::BLOB)
+    {
+        return Err(FsError::InvalidParam);
+    }
+    write_file_with_metadata(
+        dev,
+        params,
+        name,
+        bytes,
+        FileWriteMetadata {
+            content_type: ContentTypeId::BLOB,
+            record_key,
+        },
+    )
+    .await
 }
 
 /// Create an empty, first-class directory record.
@@ -2013,6 +2232,7 @@ pub async fn create_directory<D: BlockIo>(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct FileInfo {
     pub data_len: u64,
+    pub content_type: ContentTypeId,
     pub record_key: RecordKey,
 }
 
@@ -2021,6 +2241,7 @@ pub struct FileRecordRef {
     pub entry_lba: u64,
     pub data_lba: u64,
     pub data_len: u64,
+    pub content_type: ContentTypeId,
     pub record_key: RecordKey,
 }
 
@@ -2031,6 +2252,7 @@ impl From<FileRecordRef> for NodeRecordRef {
             data_lba: record.data_lba,
             kind: NodeKind::File,
             data_len: record.data_len,
+            content_type: record.content_type,
             record_key: record.record_key,
         }
     }
@@ -2047,6 +2269,7 @@ pub async fn read_node_info<D: BlockIo>(
         .map(|record| NodeInfo {
             kind: record.kind,
             data_len: record.data_len,
+            content_type: record.content_type,
             record_key: record.record_key,
         }))
 }
@@ -2073,6 +2296,7 @@ pub async fn read_file_info<D: BlockIo>(
     }
     Ok(Some(FileInfo {
         data_len: rec.data_len,
+        content_type: rec.content_type,
         record_key: rec.record_key,
     }))
 }
@@ -2092,6 +2316,7 @@ pub async fn lookup_file_record<D: BlockIo>(
         entry_lba: rec.entry_lba,
         data_lba: rec.data_lba,
         data_len: rec.data_len,
+        content_type: rec.content_type,
         record_key: rec.record_key,
     }))
 }
@@ -2100,6 +2325,7 @@ pub async fn lookup_file_record<D: BlockIo>(
 pub fn file_info_from_record(record: &FileRecordRef) -> FileInfo {
     FileInfo {
         data_len: record.data_len,
+        content_type: record.content_type,
         record_key: record.record_key,
     }
 }
@@ -2120,6 +2346,7 @@ pub async fn read_file<D: BlockIo>(
         entry_lba: rec.entry_lba,
         data_lba: rec.data_lba,
         data_len: rec.data_len,
+        content_type: rec.content_type,
         record_key: rec.record_key,
     };
 
@@ -2158,6 +2385,47 @@ pub async fn read_file_at_record<D: BlockIo>(
     read_exact_bytes(dev, record.data_lba, 0, &mut out).await?;
 
     Ok(Some(out))
+}
+
+/// Copy one validated physical file record to a new logical path.
+///
+/// This is deliberately narrower than a generic untyped copy: `source` must
+/// still be the committed record stored at `source_name`, the destination must
+/// be absent, and the raw content ID and key are retained exactly.  In
+/// particular, this is the only copy path that can carry an opaque future ID
+/// without admitting that ID as a new locally-declared type.
+pub async fn copy_file_from_record<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    source_name: &str,
+    source: &FileRecordRef,
+    destination_name: &str,
+) -> Result<bool, FsError<D::Error>> {
+    if !is_normalized_nonempty_path(destination_name) {
+        return Ok(false);
+    }
+    let Some(validated) =
+        get_file_record_at(dev, params, source.entry_lba, source_name).await?
+    else {
+        return Ok(false);
+    };
+    if validated != *source || lookup_node_record(dev, params, destination_name).await?.is_some() {
+        return Ok(false);
+    }
+    let Some(bytes) = read_file_at_record(dev, params, source).await? else {
+        return Ok(false);
+    };
+    restore_file_with_metadata(
+        dev,
+        params,
+        destination_name,
+        &bytes,
+        FileWriteMetadata {
+            content_type: source.content_type,
+            record_key: source.record_key,
+        },
+    )
+    .await
 }
 
 /// Validate an entry at `entry_lba` and return its node record if it matches `expected_name`.
@@ -2240,6 +2508,7 @@ pub async fn get_node_record_by_lba<D: BlockIo>(
         data_lba,
         kind,
         data_len: hdr.data_len,
+        content_type: hdr.content_type,
         record_key: hdr.record_key,
     }))
 }
@@ -2261,6 +2530,7 @@ pub async fn get_file_record_at<D: BlockIo>(
         entry_lba: record.entry_lba,
         data_lba: record.data_lba,
         data_len: record.data_len,
+        content_type: record.content_type,
         record_key: record.record_key,
     }))
 }
@@ -2282,6 +2552,7 @@ pub async fn read_file_range<D: BlockIo>(
         entry_lba: rec.entry_lba,
         data_lba: rec.data_lba,
         data_len: rec.data_len,
+        content_type: rec.content_type,
         record_key: rec.record_key,
     };
     read_file_range_at(dev, params, &rec, offset, out).await
@@ -2448,6 +2719,28 @@ pub async fn read_record_key_at<D: BlockIo>(
         return Ok(None);
     }
     Ok(Some(hdr.record_key))
+}
+
+/// Read the raw first-class content identity from one committed log header.
+///
+/// The returned nonzero value may be newer than this build's registry; callers
+/// must treat such a value as opaque rather than guessing an interpretation.
+pub async fn read_record_content_type_at<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    entry_lba: u64,
+) -> Result<Option<ContentTypeId>, FsError<D::Error>> {
+    if entry_lba < params.data_lba || entry_lba >= disk_data_end_lba_exclusive(dev, params) {
+        return Ok(None);
+    }
+    let hdr_block = read_one_block(dev, entry_lba).await?;
+    let Some(hdr) = LogHeader::decode_from_block(&hdr_block) else {
+        return Ok(None);
+    };
+    if !hdr.committed {
+        return Ok(None);
+    }
+    Ok(Some(hdr.content_type))
 }
 
 /// Read a file from a specific entry LBA, but only if the entry's name matches
@@ -2822,7 +3115,7 @@ pub async fn list_dir<D: BlockIo>(
     {
         return Ok(Vec::new());
     }
-    let mut children: BTreeMap<String, NodeKind> = BTreeMap::new();
+    let mut children: BTreeMap<String, (NodeKind, ContentTypeId)> = BTreeMap::new();
     for (path, record) in live.iter() {
         let Some(rest) = path.strip_prefix(prefix.as_str()) else {
             continue;
@@ -2833,11 +3126,15 @@ pub async fn list_dir<D: BlockIo>(
         if rest.contains('/') {
             continue;
         }
-        children.insert(String::from(rest), record.kind);
+        children.insert(String::from(rest), (record.kind, record.content_type));
     }
     Ok(children
         .into_iter()
-        .map(|(name, kind)| DirEntry { name, kind })
+        .map(|(name, (kind, content_type))| DirEntry {
+            name,
+            kind,
+            content_type,
+        })
         .collect())
 }
 
@@ -2852,16 +3149,78 @@ pub async fn append_file<D: BlockIo>(
     }
 
     let Some(record) = lookup_file_record(dev, params, name).await? else {
-        return write_file(dev, params, name, append_bytes).await;
+        return write_file_with_metadata(
+            dev,
+            params,
+            name,
+            append_bytes,
+            FileWriteMetadata {
+                content_type: ContentTypeId::BLOB,
+                record_key: RecordKey::Ffa,
+            },
+        )
+        .await;
     };
+    if record.content_type != ContentTypeId::BLOB {
+        return Err(FsError::InvalidParam);
+    }
     let Some(mut base) = read_file_at_record(dev, params, &record).await? else {
         return Ok(false);
     };
     base.extend_from_slice(append_bytes);
-    write_file_with_key(dev, params, name, &base, record.record_key).await
+    write_file_with_metadata(
+        dev,
+        params,
+        name,
+        &base,
+        FileWriteMetadata {
+            content_type: record.content_type,
+            record_key: record.record_key,
+        },
+    )
+    .await
+}
+
+/// Append to a typed file only when the caller proves it is preserving the
+/// existing declaration. A missing target is created with that type.
+pub async fn append_file_typed<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    name: &str,
+    append_bytes: &[u8],
+    metadata: FileWriteMetadata,
+) -> Result<bool, FsError<D::Error>> {
+    if !valid_new_file_content_type(metadata.content_type) {
+        return Err(FsError::InvalidParam);
+    }
+    if append_bytes.is_empty() {
+        return Ok(true);
+    }
+    let Some(record) = lookup_file_record(dev, params, name).await? else {
+        return write_file_with_metadata(dev, params, name, append_bytes, metadata).await;
+    };
+    if record.content_type != metadata.content_type {
+        return Err(FsError::InvalidParam);
+    }
+    let Some(mut base) = read_file_at_record(dev, params, &record).await? else {
+        return Ok(false);
+    };
+    base.extend_from_slice(append_bytes);
+    write_file_with_metadata(
+        dev,
+        params,
+        name,
+        &base,
+        FileWriteMetadata {
+            content_type: record.content_type,
+            record_key: metadata.record_key,
+        },
+    )
+    .await
 }
 
 #[cfg(test)]
+#[allow(deprecated)]
 mod tests {
     use super::*;
     use core::future::Future;
@@ -2899,6 +3258,46 @@ mod tests {
             let start = entry_lba as usize * BLOCK_SIZE;
             let mut bytes = self.bytes.lock().unwrap();
             bytes[start + RECORD_KEY_EXT_OFF..start + RECORD_KEY_HEADER_MIN_BYTES].fill(0);
+        }
+
+        fn set_content_type(&self, entry_lba: u64, content_type: ContentTypeId) {
+            let start = entry_lba as usize * BLOCK_SIZE;
+            let mut bytes = self.bytes.lock().unwrap();
+            bytes[start + CONTENT_TYPE_ID_OFF..start + RECORD_HEADER_MIN_BYTES]
+                .copy_from_slice(&content_type.raw().to_le_bytes());
+        }
+
+        fn log_head(&self) -> u64 {
+            let bytes = self.bytes.lock().unwrap();
+            parse_superblock(&bytes[..BLOCK_SIZE])
+                .unwrap()
+                .log_head_rel_blocks
+        }
+    }
+
+    struct TooSmallBlockIo;
+
+    impl BlockIo for TooSmallBlockIo {
+        type Error = ();
+
+        fn block_size(&self) -> usize {
+            RECORD_HEADER_MIN_BYTES - 1
+        }
+
+        fn block_count(&self) -> u64 {
+            16
+        }
+
+        async fn read_blocks(&self, _lba: u64, _blocks: usize) -> Result<Vec<u8>, Self::Error> {
+            Err(())
+        }
+
+        async fn write_blocks(&self, _lba: u64, _buf: &[u8]) -> Result<(), Self::Error> {
+            Err(())
+        }
+
+        async fn flush(&self) -> Result<(), Self::Error> {
+            Err(())
         }
     }
 
@@ -2963,7 +3362,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_zero_extension_decodes_as_ffa() {
+    fn v3_rejects_missing_record_key_extension() {
         block_on(async {
             let disk = MemoryBlockIo::new();
             let params = params();
@@ -2974,11 +3373,7 @@ mod tests {
                 .unwrap();
             disk.clear_record_key_extension(record.entry_lba);
 
-            let info = read_file_info(&disk, &params, "legacy")
-                .await
-                .unwrap()
-                .unwrap();
-            assert_eq!(info.record_key, RecordKey::Ffa);
+            assert_eq!(read_file_info(&disk, &params, "legacy").await, Ok(None));
         });
     }
 
@@ -3112,18 +3507,461 @@ mod tests {
     }
 
     #[test]
-    fn superblock_rejects_old_and_unknown_versions() {
+    fn v3_rejects_unversioned_v2_and_future_media_without_mutating_it() {
         let disk = MemoryBlockIo::new();
         let mut block = disk.bytes.lock().unwrap()[..BLOCK_SIZE].to_vec();
         assert!(parse_superblock(&block).is_some());
 
         block[SUPERBLOCK_VERSION_OFF..SUPERBLOCK_VERSION_OFF + 2]
-            .copy_from_slice(&1u16.to_le_bytes());
+            .copy_from_slice(&2u16.to_le_bytes());
         assert_eq!(parse_superblock(&block), None);
 
         block[SUPERBLOCK_VERSION_OFF..SUPERBLOCK_VERSION_OFF + 2]
             .copy_from_slice(&99u16.to_le_bytes());
         assert_eq!(parse_superblock(&block), None);
+
+        let unversioned = vec![0xA5; BLOCK_SIZE];
+        let before = unversioned.clone();
+        assert_eq!(parse_superblock(&unversioned), None);
+        assert_eq!(unversioned, before);
+    }
+
+    #[test]
+    fn v3_requires_a_112_byte_block_for_format_and_writes() {
+        let mut short = [0xA5; RECORD_HEADER_MIN_BYTES - 1];
+        write_blank_superblock(&mut short);
+        assert!(short.iter().all(|byte| *byte == 0xA5));
+        assert_eq!(parse_superblock(&short), None);
+
+        block_on(async {
+            let dev = TooSmallBlockIo;
+            assert!(matches!(
+                begin_write_file_stream_with_metadata(
+                    &dev,
+                    &FsParams {
+                        super_lba: 0,
+                        data_lba: 8,
+                        data_end_lba_exclusive: Some(16),
+                    },
+                    "file",
+                    0,
+                    FileWriteMetadata {
+                        content_type: ContentTypeId::BLOB,
+                        record_key: RecordKey::Ffa,
+                    },
+                )
+                .await,
+                Err(FsError::InvalidParam)
+            ));
+        });
+    }
+
+    #[test]
+    fn v3_header_requires_typed_put_and_zero_control_metadata() {
+        let mut file = [0u8; BLOCK_SIZE];
+        LogHeader {
+            kind: LogKind::Put,
+            committed: true,
+            name_len: 1,
+            data_len: 0,
+            integrity_tag: ZERO_INTEGRITY_TAG,
+            content_type: ContentTypeId::BLOB,
+            record_key: RecordKey::Ffa,
+        }
+        .encode_into_block(&mut file);
+        assert!(LogHeader::decode_from_block(&file).is_some());
+        assert_eq!(
+            u32::from_le_bytes(
+                file[CONTENT_TYPE_ID_OFF..RECORD_HEADER_MIN_BYTES]
+                    .try_into()
+                    .unwrap()
+            ),
+            ContentTypeId::BLOB.raw()
+        );
+        assert!(file[RECORD_HEADER_MIN_BYTES..].iter().all(|byte| *byte == 0));
+        file[RECORD_HEADER_MIN_BYTES] = 1;
+        assert!(LogHeader::decode_from_block(&file).is_none());
+
+        let mut control = [0u8; BLOCK_SIZE];
+        LogHeader {
+            kind: LogKind::Directory,
+            committed: true,
+            name_len: 1,
+            data_len: 0,
+            integrity_tag: ZERO_INTEGRITY_TAG,
+            content_type: ContentTypeId::NONE,
+            record_key: RecordKey::Ffa,
+        }
+        .encode_into_block(&mut control);
+        control[CONTENT_TYPE_ID_OFF..RECORD_HEADER_MIN_BYTES]
+            .copy_from_slice(&ContentTypeId::BLOB.raw().to_le_bytes());
+        assert!(LogHeader::decode_from_block(&control).is_none());
+    }
+
+    #[test]
+    fn checkpoint_is_tagged_and_enforces_live_node_type_rules() {
+        let payload = encode_index_checkpoint_payload(
+            42,
+            [(b"dir".as_slice(), LogKind::Directory, 99, ContentTypeId::NONE)].into_iter(),
+        );
+        assert_eq!(
+            decode_index_checkpoint_payload(&payload),
+            Some(IndexCheckpoint {
+                replay_from_rel_blocks: 42,
+                entries: vec![(b"dir".to_vec(), LogKind::Directory, 99, ContentTypeId::NONE)],
+            })
+        );
+        let mut wrong_magic = payload.clone();
+        wrong_magic[0] = b'X';
+        assert_eq!(decode_index_checkpoint_payload(&wrong_magic), None);
+        let mut wrong_directory_type = payload;
+        wrong_directory_type[INDEX_CHECKPOINT_HEADER_BYTES + 12..INDEX_CHECKPOINT_HEADER_BYTES + 16]
+            .copy_from_slice(&ContentTypeId::BLOB.raw().to_le_bytes());
+        assert_eq!(decode_index_checkpoint_payload(&wrong_directory_type), None);
+    }
+
+    #[test]
+    fn typed_put_writes_header_identity_and_rejects_unregistered_ids() {
+        block_on(async {
+            let disk = MemoryBlockIo::new();
+            let params = params();
+            let metadata = FileWriteMetadata {
+                content_type: ContentTypeId::PNG,
+                record_key: RecordKey::Ffa,
+            };
+            assert_eq!(
+                write_file_with_metadata(&disk, &params, "picture", b"png", metadata).await,
+                Ok(true)
+            );
+            let record = lookup_file_record(&disk, &params, "picture")
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(record.content_type, ContentTypeId::PNG);
+            let bytes = disk.read_blocks(record.entry_lba, 1).await.unwrap();
+            assert_eq!(
+                u32::from_le_bytes(
+                    bytes[CONTENT_TYPE_ID_OFF..RECORD_HEADER_MIN_BYTES]
+                        .try_into()
+                        .unwrap()
+                ),
+                ContentTypeId::PNG.raw()
+            );
+            assert_eq!(
+                write_file_with_metadata(
+                    &disk,
+                    &params,
+                    "bad",
+                    b"x",
+                    FileWriteMetadata {
+                        content_type: ContentTypeId::from_raw(0x00ff_ffff),
+                        record_key: RecordKey::Ffa,
+                    },
+                )
+                .await,
+                Err(FsError::InvalidParam)
+            );
+            assert_eq!(lookup_file_record(&disk, &params, "bad").await, Ok(None));
+            assert_eq!(
+                write_file(&disk, &params, "picture", b"legacy").await,
+                Err(FsError::InvalidParam)
+            );
+        });
+    }
+
+    #[test]
+    fn rejected_type_admission_never_advances_the_log_head() {
+        block_on(async {
+            let disk = MemoryBlockIo::new();
+            let params = params();
+            let head = disk.log_head();
+            for content_type in [ContentTypeId::NONE, ContentTypeId::from_raw(0x00ff_ffff)] {
+                assert!(matches!(
+                    begin_write_file_stream_with_metadata(
+                        &disk,
+                        &params,
+                        "rejected",
+                        4,
+                        FileWriteMetadata {
+                            content_type,
+                            record_key: RecordKey::Ffa,
+                        },
+                    )
+                    .await,
+                    Err(FsError::InvalidParam)
+                ));
+                assert_eq!(disk.log_head(), head);
+            }
+        });
+    }
+
+    #[test]
+    fn every_legacy_adapter_refuses_to_downgrade_a_typed_file() {
+        block_on(async {
+            let disk = MemoryBlockIo::new();
+            let params = params();
+            assert_eq!(
+                write_file_with_metadata(
+                    &disk,
+                    &params,
+                    "typed",
+                    b"png",
+                    FileWriteMetadata {
+                        content_type: ContentTypeId::PNG,
+                        record_key: RecordKey::Ffa,
+                    },
+                )
+                .await,
+                Ok(true)
+            );
+            assert_eq!(
+                write_file(&disk, &params, "typed", b"legacy").await,
+                Err(FsError::InvalidParam)
+            );
+            assert_eq!(
+                write_file_with_key(&disk, &params, "typed", b"legacy", RecordKey::Ffa).await,
+                Err(FsError::InvalidParam)
+            );
+            assert!(matches!(
+                begin_write_file_stream(&disk, &params, "typed", 6).await,
+                Err(FsError::InvalidParam)
+            ));
+            assert!(matches!(
+                begin_write_file_stream_with_key(&disk, &params, "typed", 6, RecordKey::Ffa)
+                    .await,
+                Err(FsError::InvalidParam)
+            ));
+            assert_eq!(
+                lookup_file_record(&disk, &params, "typed")
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .content_type,
+                ContentTypeId::PNG
+            );
+        });
+    }
+
+    #[test]
+    fn typed_append_requires_exact_stored_identity() {
+        block_on(async {
+            let disk = MemoryBlockIo::new();
+            let params = params();
+            let png = FileWriteMetadata {
+                content_type: ContentTypeId::PNG,
+                record_key: RecordKey::Ffa,
+            };
+            assert_eq!(
+                write_file_with_metadata(&disk, &params, "typed", b"one", png).await,
+                Ok(true)
+            );
+            assert_eq!(
+                append_file_typed(
+                    &disk,
+                    &params,
+                    "typed",
+                    b"two",
+                    FileWriteMetadata {
+                        content_type: ContentTypeId::BLOB,
+                        record_key: RecordKey::Ffa,
+                    },
+                )
+                .await,
+                Err(FsError::InvalidParam)
+            );
+            assert_eq!(append_file_typed(&disk, &params, "typed", b"two", png).await, Ok(true));
+            let record = lookup_file_record(&disk, &params, "typed")
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(record.content_type, ContentTypeId::PNG);
+            assert_eq!(read_file_at_record(&disk, &params, &record).await, Ok(Some(b"onetwo".to_vec())));
+        });
+    }
+
+    #[test]
+    fn validated_copy_preserves_registered_and_future_ids_without_publishing_failures() {
+        block_on(async {
+            let disk = MemoryBlockIo::new();
+            let params = params();
+            assert_eq!(
+                write_file_with_metadata(
+                    &disk,
+                    &params,
+                    "source",
+                    b"payload",
+                    FileWriteMetadata {
+                        content_type: ContentTypeId::PNG,
+                        record_key: RecordKey::Ffa,
+                    },
+                )
+                .await,
+                Ok(true)
+            );
+            let source = lookup_file_record(&disk, &params, "source")
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                copy_file_from_record(&disk, &params, "source", &source, "registered-copy").await,
+                Ok(true)
+            );
+            assert_eq!(
+                lookup_file_record(&disk, &params, "registered-copy")
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .content_type,
+                ContentTypeId::PNG
+            );
+
+            let future = ContentTypeId::from_raw(0x00fe_0002);
+            disk.set_content_type(source.entry_lba, future);
+            let future_source = lookup_file_record(&disk, &params, "source")
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                copy_file_from_record(&disk, &params, "source", &future_source, "future-copy").await,
+                Ok(true)
+            );
+            assert_eq!(
+                lookup_file_record(&disk, &params, "future-copy")
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .content_type,
+                future
+            );
+
+            let head = disk.log_head();
+            let mut invalid = future_source;
+            invalid.data_len = invalid.data_len.saturating_add(1);
+            assert_eq!(
+                copy_file_from_record(&disk, &params, "source", &invalid, "invalid-copy").await,
+                Ok(false)
+            );
+            assert_eq!(disk.log_head(), head);
+            assert_eq!(
+                copy_file_from_record(
+                    &disk,
+                    &params,
+                    "source",
+                    &future_source,
+                    "registered-copy",
+                )
+                .await,
+                Ok(false)
+            );
+            assert_eq!(disk.log_head(), head);
+        });
+    }
+
+    #[test]
+    fn future_content_id_survives_scan_replay_checkpoint_rename_and_undelete() {
+        block_on(async {
+            let disk = MemoryBlockIo::new();
+            let params = params();
+            assert_eq!(create_directory(&disk, &params, "source").await, Ok(true));
+            assert_eq!(
+                write_file(&disk, &params, "source/future", b"bytes").await,
+                Ok(true)
+            );
+            let record = lookup_file_record(&disk, &params, "source/future")
+                .await
+                .unwrap()
+                .unwrap();
+            let future = ContentTypeId::from_raw(0x00fe_0001);
+            disk.set_content_type(record.entry_lba, future);
+            let reread = lookup_file_record(&disk, &params, "source/future")
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(reread.content_type, future);
+            assert_eq!(
+                read_file_at_record(&disk, &params, &reread).await,
+                Ok(Some(b"bytes".to_vec()))
+            );
+
+            let scan = scan_raw_log(&disk, &params, 16).await.unwrap();
+            assert!(scan
+                .records
+                .iter()
+                .any(|entry| entry.entry_lba == reread.entry_lba && entry.content_type == future));
+            let sb = parse_superblock(&disk.read_blocks(0, 1).await.unwrap()).unwrap();
+            let mut replayed = None;
+            replay_log_range(&disk, &params, 0, sb.log_head_rel_blocks, |kind, name, _, _, id| {
+                if kind == LogKind::Put && name == b"source/future" {
+                    replayed = Some(id);
+                }
+            })
+            .await
+            .unwrap();
+            assert_eq!(replayed, Some(future));
+
+            let source = lookup_node_record(&disk, &params, "source")
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                write_index_checkpoint(
+                    &disk,
+                    &params,
+                    sb.log_head_rel_blocks,
+                    vec![
+                        (b"source".to_vec(), LogKind::Directory, source.entry_lba, ContentTypeId::NONE),
+                        (b"source/future".to_vec(), LogKind::Put, reread.entry_lba, future),
+                    ]
+                    .into_iter(),
+                )
+                .await,
+                Ok(true)
+            );
+            assert!(read_index_checkpoint(&disk, &params)
+                .await
+                .unwrap()
+                .unwrap()
+                .entries
+                .iter()
+                .any(|(path, kind, _, id)| path == b"source/future" && *kind == LogKind::Put && *id == future));
+
+            assert_eq!(
+                delete_file_at_record(&disk, &params, "source/future", &reread).await,
+                Ok(true)
+            );
+            assert_eq!(undelete_file(&disk, &params, "source/future").await, Ok(true));
+            assert_eq!(
+                lookup_file_record(&disk, &params, "source/future")
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .content_type,
+                future
+            );
+            assert_eq!(rename_tree(&disk, &params, "source", "moved").await, Ok(true));
+            assert_eq!(
+                lookup_file_record(&disk, &params, "moved/future")
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .content_type,
+                future
+            );
+            assert_eq!(
+                write_file_with_metadata(
+                    &disk,
+                    &params,
+                    "new",
+                    b"bytes",
+                    FileWriteMetadata {
+                        content_type: future,
+                        record_key: RecordKey::Ffa
+                    },
+                )
+                .await,
+                Err(FsError::InvalidParam)
+            );
+        });
     }
 
     #[test]
@@ -3138,6 +3976,7 @@ mod tests {
                 Ok(Some(NodeInfo {
                     kind: NodeKind::Directory,
                     data_len: 0,
+                    content_type: ContentTypeId::NONE,
                     record_key: RecordKey::Ffa,
                 }))
             );
@@ -3146,6 +3985,7 @@ mod tests {
                 Ok(vec![DirEntry {
                     name: String::from("empty"),
                     kind: NodeKind::Directory,
+                    content_type: ContentTypeId::NONE,
                 }])
             );
             assert_eq!(list_dir(&disk, &params, "empty").await, Ok(Vec::new()));
@@ -3199,7 +4039,13 @@ mod tests {
                     &disk,
                     &params,
                     sb.log_head_rel_blocks,
-                    vec![(b"docs".to_vec(), LogKind::Directory, directory.entry_lba)].into_iter(),
+                    vec![(
+                        b"docs".to_vec(),
+                        LogKind::Directory,
+                        directory.entry_lba,
+                        ContentTypeId::NONE
+                    )]
+                    .into_iter(),
                 )
                 .await,
                 Ok(true)
@@ -3210,7 +4056,12 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 checkpoint.entries,
-                vec![(b"docs".to_vec(), LogKind::Directory, directory.entry_lba)]
+                vec![(
+                    b"docs".to_vec(),
+                    LogKind::Directory,
+                    directory.entry_lba,
+                    ContentTypeId::NONE
+                )]
             );
         });
     }
@@ -3227,7 +4078,7 @@ mod tests {
             let sb_block = disk.read_blocks(0, 1).await.unwrap();
             let sb = parse_superblock(&sb_block).unwrap();
             let mut replayed = Vec::new();
-            replay_log_range(&disk, &params, 0, sb.log_head_rel_blocks, |kind, name, _, _| {
+            replay_log_range(&disk, &params, 0, sb.log_head_rel_blocks, |kind, name, _, _, _| {
                 replayed.push((kind, name));
             })
             .await
@@ -3270,10 +4121,12 @@ mod tests {
                     DirEntry {
                         name: String::from("empty"),
                         kind: NodeKind::Directory,
+                        content_type: ContentTypeId::NONE,
                     },
                     DirEntry {
                         name: String::from("file"),
                         kind: NodeKind::File,
+                        content_type: ContentTypeId::BLOB,
                     },
                 ])
             );

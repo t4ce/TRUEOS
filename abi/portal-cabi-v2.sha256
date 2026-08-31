@@ -198,4 +198,4 @@
 # The UI4 frame-opacity setter is strictly additive. It applies one bounded
 # u8 opacity through the existing per-frame placement/compositor path; older
 # artifacts neither import it nor change their opaque-frame behavior.
-ab11b65b53eac75b267b28a4cf84d70e0b86e9df41a1c72b525d48b7bfa1fe7f
+4400f826ad44ea8eea37f4dd68fa4c4b168a86ef5a0b81c426042f7596ceddcd

@@ -1,7 +1,7 @@
 use alloc::string::{String, ToString};
 use core::arch::x86_64::__cpuid;
 use core::fmt::Write;
-use core::sync::atomic::{compiler_fence, Ordering};
+use core::sync::atomic::{Ordering, compiler_fence};
 
 use spin::Mutex;
 use x86_64::registers::model_specific::Msr;
@@ -186,18 +186,11 @@ fn capability_layout(mask: u8) -> Option<(usize, usize, Option<usize>, Option<us
         None
     };
     let efficiency_offset = if (mask & CPUID_HFI_ENERGY_EFFICIENCY as u8) != 0 {
-        Some(usize::from(
-            (mask & ((CPUID_HFI_ENERGY_EFFICIENCY as u8) - 1)).count_ones() as u8,
-        ))
+        Some(usize::from((mask & ((CPUID_HFI_ENERGY_EFFICIENCY as u8) - 1)).count_ones() as u8))
     } else {
         None
     };
-    Some((
-        header_size,
-        row_stride,
-        performance_offset,
-        efficiency_offset,
-    ))
+    Some((header_size, row_stride, performance_offset, efficiency_offset))
 }
 
 fn registered_row_count() -> Option<usize> {

@@ -7,4 +7,5 @@ edition = "2024"
 default = []
 
 [dependencies]
+infer = { path = "../../vendor/infer", default-features = false }
 trueos-crypto = { path = "../trueos-crypto" }

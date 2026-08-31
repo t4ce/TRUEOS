@@ -43,11 +43,15 @@ async fn persist_solara_handoff(html: &html_shack::Html) -> Result<String, Strin
     let sequence = SURF_HANDOFF_SEQUENCE.fetch_add(1, Ordering::AcqRel);
     let tag = alloc::format!("surf-{sequence:08x}");
     let path = alloc::format!("{SURF_HANDOFF_DIR}/{tag}.html");
-    let handle =
-        crate::r::fs::trueosfs::file_write_begin_async(disk, path.as_str(), html.html.len() as u64)
-            .await
-            .map_err(|error| alloc::format!("write begin failed: {error:?}"))?
-            .ok_or_else(|| String::from("write begin failed: no space"))?;
+    let handle = crate::r::fs::trueosfs::file_write_begin_typed_async(
+        disk,
+        path.as_str(),
+        html.html.len() as u64,
+        infer::ContentTypeId::HTML,
+    )
+    .await
+    .map_err(|error| alloc::format!("write begin failed: {error:?}"))?
+    .ok_or_else(|| String::from("write begin failed: no space"))?;
     if let Err(error) =
         crate::r::fs::trueosfs::file_write_chunk_async(handle, html.html.as_bytes()).await
     {

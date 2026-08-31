@@ -197,7 +197,14 @@ pub async fn write(vm_id: u8, pending: PendingCrashReport) {
         return;
     };
 
-    match crate::r::fs::trueosfs::file_in_async(disk, path.as_str(), report.as_bytes()).await {
+    match crate::r::fs::trueosfs::file_in_typed_async(
+        disk,
+        path.as_str(),
+        report.as_bytes(),
+        infer::ContentTypeId::UTF8_TEXT,
+    )
+    .await
+    {
         Ok(true) => hvlogf(format_args!(
             "hv: vm{} appcrash saved path={} bytes={}",
             vm_id,

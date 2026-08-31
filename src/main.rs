@@ -4,14 +4,14 @@
 #![feature(f16)]
 #![allow(unsafe_op_in_unsafe_fn)]
 
-const _: f16 = 0.0_f16; 
+const _: f16 = 0.0_f16;
 
 #[macro_use]
 pub extern crate alloc;
 
 // Modules
-mod ai;
 mod aes_ni;
+mod ai;
 mod allcaps;
 mod allocators;
 pub mod allports;

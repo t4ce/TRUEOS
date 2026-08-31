@@ -3,3 +3,6 @@
 	url = https://github.com/limine-bootloader/limine.git
 	branch = v12.x
 	ignore = untracked
+[submodule "vendor/infer"]
+	path = vendor/infer
+	url = https://github.com/t4ce/infer.git

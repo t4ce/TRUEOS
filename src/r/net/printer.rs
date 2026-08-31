@@ -320,7 +320,9 @@ async fn render_job(job: &PrintJob) -> Result<Vec<u8>, &'static str> {
 
     let deadline = Instant::now() + Duration::from_millis(RENDER_TIMEOUT_MS);
     loop {
-        if let Some(rendered) = crate::r::services::gridpaper_service::take_print_render_result(job.id) {
+        if let Some(rendered) =
+            crate::r::services::gridpaper_service::take_print_render_result(job.id)
+        {
             let frame = rendered.result?;
             return pwg_raster::encode_gridpaper_a4(
                 size,

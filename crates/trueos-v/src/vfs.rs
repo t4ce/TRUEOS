@@ -8,6 +8,7 @@ extern crate alloc;
 use alloc::{string::String, vec, vec::Vec};
 
 use crate::legacy_fs_abi as vcabi;
+pub use trueos_fs::ContentTypeId;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FsNodeKind {
@@ -19,6 +20,13 @@ pub enum FsNodeKind {
 pub struct FsStat {
     pub kind: FsNodeKind,
     pub len: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct TypedFsStat {
+    pub kind: FsNodeKind,
+    pub len: u64,
+    pub content_type: ContentTypeId,
 }
 
 #[inline]
@@ -154,6 +162,59 @@ pub fn write_file(path: &[u8], data: &[u8]) -> Result<(), i32> {
         return Err(rc);
     }
     Ok(())
+}
+
+pub fn write_file_typed(path: &[u8], data: &[u8], content_type: ContentTypeId) -> Result<(), i32> {
+    let mut handle = 0u32;
+    let rc = unsafe {
+        vcabi::trueos_cabi_fs_typed_write_begin(
+            path.as_ptr(),
+            path.len(),
+            data.len() as u64,
+            content_type.raw(),
+            &mut handle,
+        )
+    };
+    if rc != 0 {
+        return Err(rc);
+    }
+    if let Err(rc) = write_chunk(handle, data) {
+        let _ = write_abort(handle);
+        return Err(rc);
+    }
+    if let Err(rc) = write_finish(handle) {
+        let _ = write_abort(handle);
+        return Err(rc);
+    }
+    Ok(())
+}
+
+pub fn typed_stat(path: &[u8]) -> Result<TypedFsStat, i32> {
+    let mut kind = 0u32;
+    let mut len = 0u64;
+    let mut content_type = 0u32;
+    let rc = unsafe {
+        vcabi::trueos_cabi_fs_typed_stat(
+            path.as_ptr(),
+            path.len(),
+            &mut kind,
+            &mut len,
+            &mut content_type,
+        )
+    };
+    if rc != 0 {
+        return Err(rc);
+    }
+    let kind = match kind {
+        1 => FsNodeKind::File,
+        2 => FsNodeKind::Directory,
+        _ => return Err(-4),
+    };
+    Ok(TypedFsStat {
+        kind,
+        len,
+        content_type: ContentTypeId::from_raw(content_type),
+    })
 }
 
 #[inline]

@@ -1,8 +1,8 @@
 use trueos_executor::Spawner;
 
 use super::super::{
-    MatrixTarget, ShellBackend2, matrix_target_for_backend, print_matrix_target_line, print_shell_line,
-    set_matrix_target_active,
+    MatrixTarget, ShellBackend2, matrix_target_for_backend, print_matrix_target_line,
+    print_shell_line, set_matrix_target_active,
 };
 
 #[trueos_executor::task(pool_size = 2)]
@@ -16,12 +16,8 @@ async fn dump_task(target: MatrixTarget) {
 
     print_matrix_target_line(
         &target,
-        alloc::format!(
-            "Writing {} bytes to {}...",
-            out.len(),
-            super::tlb_core::DUMP_FILE_PATH
-        )
-        .as_str(),
+        alloc::format!("Writing {} bytes to {}...", out.len(), super::tlb_core::DUMP_FILE_PATH)
+            .as_str(),
     );
 
     let bytes = out.into_bytes();

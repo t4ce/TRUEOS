@@ -128,11 +128,7 @@ impl CpuProfile {
 
         let cpu = unsafe { &*cpu_ptr };
         Self::for_slot(cpu.cpu_index()).or_else(|| {
-            Some(Self::detected(
-                cpu.cpu_index(),
-                cpu.lapic_id(),
-                intel_core_kind_hint(),
-            ))
+            Some(Self::detected(cpu.cpu_index(), cpu.lapic_id(), intel_core_kind_hint()))
         })
     }
 
@@ -397,10 +393,8 @@ fn store_profile(profile: CpuProfile) {
     rec.hfi_ebx.store(profile.hfi_cpuid.ebx, Ordering::Release);
     rec.hfi_ecx.store(profile.hfi_cpuid.ecx, Ordering::Release);
     rec.hfi_edx.store(profile.hfi_cpuid.edx, Ordering::Release);
-    rec.hfi_flags.store(
-        profile.hfi_cpuid.profile_storage_flags(),
-        Ordering::Release,
-    );
+    rec.hfi_flags
+        .store(profile.hfi_cpuid.profile_storage_flags(), Ordering::Release);
     rec.registered.store(1, Ordering::Release);
 }
 

@@ -786,7 +786,8 @@ async fn write_completed_capture(mut capture: CompletedCapture) -> bool {
     if !prepare_capture_slot(disk, capture.slot, metadata_path.as_str()).await {
         return false;
     }
-    if !write_artifact(disk, pcm_path.as_str(), pcm_wav.as_slice()).await {
+    if !write_artifact(disk, pcm_path.as_str(), pcm_wav.as_slice(), infer::ContentTypeId::WAV).await
+    {
         return false;
     }
     drop(pcm_wav);
@@ -807,7 +808,9 @@ async fn write_completed_capture(mut capture: CompletedCapture) -> bool {
             cleanup_artifacts(disk, written_paths.as_slice()).await;
             return false;
         };
-        if !write_artifact(disk, raw_path.as_str(), raw_wav.as_slice()).await {
+        if !write_artifact(disk, raw_path.as_str(), raw_wav.as_slice(), infer::ContentTypeId::WAV)
+            .await
+        {
             cleanup_artifacts(disk, written_paths.as_slice()).await;
             return false;
         }
@@ -816,7 +819,14 @@ async fn write_completed_capture(mut capture: CompletedCapture) -> bool {
 
     // Metadata is the bundle's commit marker. A visible metadata file therefore
     // means every referenced WAV was already published successfully.
-    if !write_artifact(disk, metadata_path.as_str(), metadata.as_bytes()).await {
+    if !write_artifact(
+        disk,
+        metadata_path.as_str(),
+        metadata.as_bytes(),
+        infer::ContentTypeId::UTF8_TEXT,
+    )
+    .await
+    {
         cleanup_artifacts(disk, written_paths.as_slice()).await;
         return false;
     }
@@ -948,8 +958,13 @@ async fn cleanup_artifacts(disk: crate::disc::block::DeviceHandle, paths: &[Stri
     }
 }
 
-async fn write_artifact(disk: crate::disc::block::DeviceHandle, path: &str, bytes: &[u8]) -> bool {
-    match crate::r::fs::trueosfs::file_write_all_async(disk, path, bytes).await {
+async fn write_artifact(
+    disk: crate::disc::block::DeviceHandle,
+    path: &str,
+    bytes: &[u8],
+    content_type: infer::ContentTypeId,
+) -> bool {
+    match crate::r::fs::trueosfs::file_in_typed_async(disk, path, bytes, content_type).await {
         Ok(true) => true,
         Ok(false) => {
             crate::log_warn!(target: "ttstt";
