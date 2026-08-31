@@ -967,6 +967,40 @@ impl FontGpuProducer {
         self.submit_ui4_row_with_clear(request, destination, buffer_index, None)
     }
 
+    /// Submit a full UI4 text frame through this registration's cache seal
+    /// without borrowing a producer row credit. UI4 already owns and tracks
+    /// the exact dirty-frame buffer and its release fence; the producer lease
+    /// is used here solely to retain the face/size recipe cache and shared
+    /// OceanCache claim across frame reacquisitions.
+    pub(crate) fn submit_ui4_cached_frame(
+        &self,
+        request: FontStampRequest,
+        destination: crate::intel::gpgpu::GpgpuRgba8Surface,
+    ) -> Result<PendingFontFrameStamp, FontKernelError> {
+        let registration = self.resources.lease.registration();
+        validate_font_producer_row_request(registration, &request)?;
+        if !matches!(&self.resources.storage, FontGpuProducerStorage::Ui4FrameRing)
+            || !destination.is_valid()
+            || destination.width != registration.row_width_px
+            || destination.height != registration.row_height_px
+            || destination.storage_order != crate::intel::gpgpu::GpgpuRgba8StorageOrder::Rgba
+        {
+            return Err(FontKernelError::InvalidRequest(
+                "font-producer-ui4-cache-surface",
+            ));
+        }
+        queue_frame_stamp(
+            FrameStampInput::ProducerRequest {
+                request,
+                glyph_cache: Arc::clone(&self.resources),
+            },
+            destination,
+            None,
+            None,
+        )
+        .map_err(|rejection| rejection.error)
+    }
+
     fn submit_ui4_row_with_clear(
         &self,
         request: FontStampRequest,

@@ -29,10 +29,10 @@ use crate::intel::gpgpu::{
 };
 use crate::intel::gpu_font::{GpuFontFace, GpuFontRgba, MAX_DYNAMIC_TEXT_CHARS};
 use crate::r::services::font_kernel_service::{
-    FontKernelError, FontKernelRetainedScene, FontStampFit, FontStampLayer, FontStampRequest,
-    FontStampedBuffer, PendingFontFrameStamp, PendingFontStamp, PendingRetainScene,
-    RetainSceneRequest, RetainedFontPositioning, RetainedFontRun, submit_frame_stamp,
-    submit_retain_scene, submit_stamp,
+    FontGpuProducer, FontKernelError, FontKernelRetainedScene, FontStampFit, FontStampLayer,
+    FontStampRequest, FontStampedBuffer, PendingFontFrameStamp, PendingFontStamp,
+    PendingRetainScene, RetainSceneRequest, RetainedFontPositioning, RetainedFontRun,
+    register_ui4_gpu_font_producer, submit_frame_stamp, submit_retain_scene, submit_stamp,
 };
 
 use super::{
@@ -59,6 +59,7 @@ const MAX_FONT_CANVAS_RUNS_PER_LAYER: usize = 64;
 const MAX_FONT_CANVAS_INTERNAL_LAYERS: usize = 64;
 const MAX_TEXT_ROW_BYTES: usize = 1_024;
 const MAX_NATIVE_FONT_SIZES: usize = 32;
+const SHELL2_WARM_PRODUCER_TIERS_PER_SURFACE: usize = 5;
 /// Shell2's wheel UI offers a bounded set of effective sizes.  The source
 /// tiers are deliberately few so a future persistent sprite producer only
 /// needs to warm five native ppem variants; the residual is presentation
@@ -674,6 +675,11 @@ struct BlueprintSceneSurface {
     stamped_text_layers: Vec<BlueprintStampedTextLayer>,
     stamped_text_cursor: usize,
     stamped_text_pending: Option<PendingFontFrameStamp>,
+    /// Up to five face/size/extent registrations keep Shell2's declared
+    /// native tiers warm. Distinct shells still claim distinct producer slots,
+    /// while OceanCache seals equal face/size claims to the same R8 glyphs.
+    stamped_text_producers: Vec<BlueprintStampedTextProducer>,
+    stamped_text_pending_ocean: bool,
     stamped_text_rendered: bool,
 }
 
@@ -751,6 +757,11 @@ enum BlueprintRetainedTextState {
 struct BlueprintStampedTextLayer {
     description: BlueprintRetainedTextDescription,
     color_rgba: u32,
+}
+
+struct BlueprintStampedTextProducer {
+    registration: crate::r::services::font_producer_service::FontProducerRegistration,
+    producer: FontGpuProducer,
 }
 
 #[derive(Clone)]
