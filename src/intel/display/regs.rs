@@ -143,9 +143,14 @@ pub(in crate::intel) const PLANE_CUS_VPHASE_0_25: u32 = 1 << 12;
 pub(in crate::intel) const PLANE_CUS_VPHASE_0_5: u32 = 2 << 12;
 pub(in crate::intel) const PLANE_WM_ENABLE: u32 = 1 << 31;
 // At 2560-wide RGBA8, the linear-plane fetch model consumes 21 512-byte
-// blocks per scanline. Eight scanlines therefore require 168 blocks.
+// blocks per scanline. Eight scanlines select 168 blocks; the PRM watermark
+// conversion then adds one result block, so WM0 must encode 169 rather than
+// the selected-block count.
 const PLANE_WM_LEVEL0_LINES: u32 = 8;
-const PLANE_WM_LEVEL0_BLOCKS: u32 = 168;
+const PLANE_WM_LINEAR_BLOCKS_PER_LINE: u32 = 21;
+const PLANE_WM_LEVEL0_SELECTED_BLOCKS: u32 =
+    PLANE_WM_LEVEL0_LINES * PLANE_WM_LINEAR_BLOCKS_PER_LINE;
+const PLANE_WM_LEVEL0_BLOCKS: u32 = PLANE_WM_LEVEL0_SELECTED_BLOCKS + 1;
 const PLANE_WM_LINES_SHIFT: u32 = 14;
 const PLANE_WM_LINES_MASK: u32 = 0x1F;
 const PLANE_WM_BLOCKS_MASK: u32 = 0x7FF;
@@ -216,6 +221,8 @@ const _: () = assert!(
         == PLANE_WM_LEVEL0_LINES
 );
 const _: () = assert!(PLANE_WM_LEVEL0_BOOT_SAFE & PLANE_WM_BLOCKS_MASK == PLANE_WM_LEVEL0_BLOCKS);
+const _: () = assert!(PLANE_WM_LEVEL0_LINES <= PLANE_WM_LINES_MASK);
+const _: () = assert!(PLANE_WM_LEVEL0_BLOCKS <= PLANE_WM_BLOCKS_MASK);
 // Linear planes need the programmed watermark plus 10% (rounded up) in
 // their DDB allocation. Keep the smallest slot strictly above that limit.
 const PLANE_WM_MIN_LINEAR_DBUF_BLOCKS: u32 =

@@ -17,3 +17,6 @@ outlines.
 
 Lucida Sans Unicode remains the embedded general typography face, and Noto
 Sans SC remains the optional CJK face at `fonts/NotoSansSC[wght].ttf`.
+
+The Copy here is just because i often delete my Development Host main Filesystem, when i develop parts about that.
+And need it at hand to redeploy. It is one to one, the upstream font to prove the point, that it works nice, as any TTF does.

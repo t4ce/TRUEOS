@@ -81,6 +81,7 @@ const CURSOR_WM_SAGV_TRANS_A: usize = 0x7015C;
 const CURSOR_BUF_CFG_A: usize = 0x7017C;
 const SEL_FETCH_CUR_CTL_A: usize = 0x70880;
 const CURSOR_WM_ENABLE: u32 = 1 << 31;
+const CURSOR_WM_ORDINARY_LEVELS: usize = 6;
 
 const POWER_WELL_FIRST_INDEX: usize = 0;
 const POWER_WELL_LAST_INDEX: usize = 3;
@@ -458,14 +459,19 @@ fn mirror_cursor(dev: crate::intel::Dev) {
         CURSOR_WM_A1 + MIRROR_PIPE_SLOT * CURSOR_PIPE_STRIDE,
         source_wm0 & !CURSOR_WM_ENABLE,
     );
-    crate::intel::mmio_write(dev, CURSOR_WM_A0 + MIRROR_PIPE_SLOT * CURSOR_PIPE_STRIDE, source_wm0);
-    for base in [CURSOR_WM_TRANS_A, CURSOR_WM_SAGV_A, CURSOR_WM_SAGV_TRANS_A] {
+    let mut level = 2usize;
+    while level < CURSOR_WM_ORDINARY_LEVELS {
         crate::intel::mmio_write(
             dev,
-            base + MIRROR_PIPE_SLOT * CURSOR_PIPE_STRIDE,
-            crate::intel::mmio_read(dev, base + SOURCE_PIPE_SLOT * CURSOR_PIPE_STRIDE),
+            CURSOR_WM_A0 + MIRROR_PIPE_SLOT * CURSOR_PIPE_STRIDE + level * 4,
+            0,
         );
+        level += 1;
     }
+    for base in [CURSOR_WM_TRANS_A, CURSOR_WM_SAGV_A, CURSOR_WM_SAGV_TRANS_A] {
+        crate::intel::mmio_write(dev, base + MIRROR_PIPE_SLOT * CURSOR_PIPE_STRIDE, 0);
+    }
+    crate::intel::mmio_write(dev, CURSOR_WM_A0 + MIRROR_PIPE_SLOT * CURSOR_PIPE_STRIDE, source_wm0);
     // Pipe C owns blocks 2040..2047; do not clone Pipe A's S1 allocation.
     crate::intel::mmio_write(
         dev,
@@ -477,9 +483,13 @@ fn mirror_cursor(dev: crate::intel::Dev) {
         SEL_FETCH_CUR_CTL_A + MIRROR_PIPE_SLOT * CURSOR_PIPE_STRIDE,
         crate::intel::mmio_read(dev, SEL_FETCH_CUR_CTL_A + SOURCE_PIPE_SLOT * CURSOR_PIPE_STRIDE),
     );
-    // The mirrored cursor always uses its full mode-defined height. Clear any
-    // soft-reset cursor-size-reduction state before CUR_BASE arms the update.
-    crate::intel::mmio_write(dev, dst + CURSOR_FBC_CTL_OFF, 0);
+    // CUR_FBC_CTL is double-buffered with CUR_CTL/CUR_BASE. Preserve the
+    // source's mode-defined height contract before CUR_BASE arms the mirror.
+    crate::intel::mmio_write(
+        dev,
+        dst + CURSOR_FBC_CTL_OFF,
+        crate::intel::mmio_read(dev, src + CURSOR_FBC_CTL_OFF),
+    );
     crate::intel::mmio_write(dev, dst + CURSOR_CTL_OFF, ctl);
     crate::intel::mmio_write(
         dev,

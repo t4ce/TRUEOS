@@ -40,6 +40,8 @@ const CURSOR_WM_SAGV_TRANS_A: usize = 0x7015C;
 const CURSOR_BUF_CFG_A: usize = 0x7017C;
 const SEL_FETCH_CUR_CTL_A: usize = 0x70880;
 const CURSOR_PIPE_STRIDE: usize = 0x1000;
+// Display version 13 exposes WM0..WM5 plus the separate SAGV watermark pair.
+const CURSOR_WM_ORDINARY_LEVELS: usize = 6;
 
 const CURSOR_ARB_SLOTS_1: u32 = 1 << 28;
 const CURSOR_MODE_MASK: u32 = 0x27;
@@ -330,9 +332,10 @@ pub(super) fn spirit_cursor_flush_cpu(
     Ok(())
 }
 
-/// Program only CUR_POS for Spirit's selected pipe. The dedicated movement
-/// task is the sole caller; frame production and CUR_BASE flips never write
-/// this register after ownership has been split.
+/// Program CUR_POS for Spirit's selected pipe, then re-arm that position with
+/// the currently queued surface. Intel cursor updates are cancelled by a
+/// subsequent cursor-register write on this display generation, so movement
+/// serializes with frame flips and leaves CUR_BASE as the final write.
 pub(super) fn spirit_cursor_move(
     channel: u8,
     frame: SpiritCursorFrame,
@@ -345,7 +348,31 @@ pub(super) fn spirit_cursor_move(
     let (scanout_width, scanout_height) = pipe_dimensions(channel_index)?;
     let x = normalized_cursor_to_px(frame.x_normalized, scanout_width);
     let y = normalized_cursor_to_px(frame.y_normalized, scanout_height);
-    write_if_changed(dev, cursor_regs(channel_index).pos, cursor_pos_reg_value(x, y));
+    let regs = cursor_regs(channel_index);
+    let state = SPIRIT_CURSOR_STATE.lock();
+    let channel_state = &state.channels[channel_index];
+    let armed_surface = channel_state.pending.or_else(|| {
+        if channel_state.visible {
+            channel_state.front
+        } else {
+            None
+        }
+    });
+    let armed_base = match armed_surface {
+        Some(surface_index) => {
+            let surface = channel_state.surfaces[surface_index as usize]
+                .ok_or(SpiritCursorError::HardwareNotReady)?;
+            Some(u32::try_from(surface.gpu).map_err(|_| SpiritCursorError::MappingFailed)?)
+        }
+        None => None,
+    };
+    let pos = cursor_pos_reg_value(x, y);
+    if crate::intel::mmio_read(dev, regs.pos) != pos {
+        crate::intel::mmio_write(dev, regs.pos, pos);
+        if let Some(base) = armed_base {
+            crate::intel::mmio_write(dev, regs.base, base);
+        }
+    }
     Ok((x, y))
 }
 
@@ -381,15 +408,11 @@ pub(super) fn spirit_cursor_arm(
     let buf_cfg = cursor_ddb_cfg(channel_index);
     let base = u32::try_from(surface.gpu).map_err(|_| SpiritCursorError::MappingFailed)?;
 
-    // Frame production owns CUR_BASE but never CUR_POS. CUR_BASE is
-    // deliberately last: it arms CTL and the new surface for the next vblank
-    // without coupling motion to the frame/flip cadence.
+    // Frame production selects CUR_BASE but never CUR_POS; movement may only
+    // reissue that selected base after a position update. CUR_BASE remains
+    // last so CTL and the new surface arm together for the next vblank.
     write_if_changed(dev, regs.buf_cfg, buf_cfg);
-    write_if_changed(dev, regs.wm1, CUR_WM_LEVEL1_SPIRIT_SHADOW);
-    write_if_changed(dev, regs.wm0, CUR_WM_LEVEL0_SPIRIT);
-    write_if_changed(dev, regs.wm_trans, 0);
-    write_if_changed(dev, regs.wm_sagv, 0);
-    write_if_changed(dev, regs.wm_sagv_trans, 0);
+    program_cursor_watermark_contract(dev, regs);
     write_if_changed(dev, regs.sel_fetch_ctl, 0);
     write_if_changed(dev, regs.fbc_ctl, 0);
     write_if_changed(dev, regs.ctl, ctl);
@@ -480,11 +503,7 @@ pub(super) fn spirit_cursor_retry_arm(flip: SpiritCursorFlip) -> Result<(), Spir
     }
 
     write_if_changed(dev, regs.buf_cfg, cursor_ddb_cfg(channel_index));
-    write_if_changed(dev, regs.wm1, CUR_WM_LEVEL1_SPIRIT_SHADOW);
-    write_if_changed(dev, regs.wm0, CUR_WM_LEVEL0_SPIRIT);
-    write_if_changed(dev, regs.wm_trans, 0);
-    write_if_changed(dev, regs.wm_sagv, 0);
-    write_if_changed(dev, regs.wm_sagv_trans, 0);
+    program_cursor_watermark_contract(dev, regs);
     write_if_changed(dev, regs.sel_fetch_ctl, 0);
     write_if_changed(dev, regs.fbc_ctl, 0);
     write_if_changed(dev, regs.ctl, cursor_ctl(dev.device_id));
@@ -533,9 +552,9 @@ pub(super) fn spirit_cursor_rearm_needed(channel: u8) -> Result<bool, SpiritCurs
             || crate::intel::mmio_read(dev, regs.ctl) != cursor_ctl(dev.device_id)
             || crate::intel::mmio_read(dev, regs.surf_live) != expected_gpu
             || crate::intel::mmio_read(dev, regs.buf_cfg) != cursor_ddb_cfg(channel_index)
-            || crate::intel::mmio_read(dev, regs.wm0) != CUR_WM_LEVEL0_SPIRIT
-            || crate::intel::mmio_read(dev, regs.wm1) != CUR_WM_LEVEL1_SPIRIT_SHADOW
-            || crate::intel::mmio_read(dev, regs.fbc_ctl) != 0;
+            || !cursor_watermark_contract_matches(dev, regs)
+            || crate::intel::mmio_read(dev, regs.fbc_ctl) != 0
+            || crate::intel::mmio_read(dev, regs.sel_fetch_ctl) != 0;
     if contract_lost {
         SPIRIT_CURSOR_STATE.lock().channels[channel_index].visible = false;
     }
@@ -657,6 +676,41 @@ fn cursor_regs(channel: usize) -> CursorRegs {
         buf_cfg: CURSOR_BUF_CFG_A + channel * CURSOR_PIPE_STRIDE,
         sel_fetch_ctl: SEL_FETCH_CUR_CTL_A + channel * CURSOR_PIPE_STRIDE,
     }
+}
+
+fn program_cursor_watermark_contract(dev: crate::intel::Dev, regs: CursorRegs) {
+    // Wa: the cursor register unit can consume WM1 when only WM0 is enabled.
+    // Shadow WM0's payload in disabled WM1, and explicitly retire every
+    // unsupported latency level inherited through the soft-reset domain.
+    write_if_changed(dev, regs.wm1, CUR_WM_LEVEL1_SPIRIT_SHADOW);
+    let mut level = 2usize;
+    while level < CURSOR_WM_ORDINARY_LEVELS {
+        write_if_changed(dev, regs.wm0 + level * 4, 0);
+        level += 1;
+    }
+    write_if_changed(dev, regs.wm_trans, 0);
+    write_if_changed(dev, regs.wm_sagv, 0);
+    write_if_changed(dev, regs.wm_sagv_trans, 0);
+    write_if_changed(dev, regs.wm0, CUR_WM_LEVEL0_SPIRIT);
+}
+
+fn cursor_watermark_contract_matches(dev: crate::intel::Dev, regs: CursorRegs) -> bool {
+    if crate::intel::mmio_read(dev, regs.wm0) != CUR_WM_LEVEL0_SPIRIT
+        || crate::intel::mmio_read(dev, regs.wm1) != CUR_WM_LEVEL1_SPIRIT_SHADOW
+        || crate::intel::mmio_read(dev, regs.wm_trans) != 0
+        || crate::intel::mmio_read(dev, regs.wm_sagv) != 0
+        || crate::intel::mmio_read(dev, regs.wm_sagv_trans) != 0
+    {
+        return false;
+    }
+    let mut level = 2usize;
+    while level < CURSOR_WM_ORDINARY_LEVELS {
+        if crate::intel::mmio_read(dev, regs.wm0 + level * 4) != 0 {
+            return false;
+        }
+        level += 1;
+    }
+    true
 }
 
 fn cursor_ctl(device_id: u16) -> u32 {
