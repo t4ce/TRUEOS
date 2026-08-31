@@ -1,4 +1,4 @@
-use alloc::string::String;
+use alloc::string::{String, ToString};
 use core::arch::x86_64::__cpuid;
 use core::fmt::Write;
 use core::sync::atomic::{compiler_fence, Ordering};
