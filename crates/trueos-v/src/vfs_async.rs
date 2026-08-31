@@ -50,12 +50,14 @@ pub struct TypedMetadata {
     pub len: u64,
     pub content_type: ContentTypeId,
 }
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TypedDirEntry {
     pub name: String,
     pub kind: NodeKind,
     pub content_type: ContentTypeId,
 }
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TypedDirListing {
     pub entries: Vec<TypedDirEntry>,
@@ -99,6 +101,51 @@ impl Metadata {
 
 struct Operation {
     id: u32,
+}
+
+/// An admitted typed upload. Dropping it before `commit` aborts the operation.
+pub struct TypedWrite {
+    operation: Operation,
+    total_len: usize,
+    next_offset: usize,
+}
+
+impl TypedWrite {
+    /// Append the next contiguous chunk to the upload buffer.
+    pub fn write_chunk(&mut self, bytes: &[u8]) -> Result<(), i32> {
+        let end = self
+            .next_offset
+            .checked_add(bytes.len())
+            .filter(|end| *end <= self.total_len)
+            .ok_or(ERR_BAD_PARAM)?;
+        let status = unsafe {
+            vcabi::trueos_cabi_async_fs_write_chunk(
+                self.operation.id,
+                self.next_offset,
+                bytes.as_ptr(),
+                bytes.len(),
+            )
+        };
+        if status != 0 {
+            return Err(status);
+        }
+        self.next_offset = end;
+        Ok(())
+    }
+
+    /// Commit only after the declared byte count has been supplied exactly.
+    pub async fn commit(mut self) -> Result<(), i32> {
+        if self.next_offset != self.total_len {
+            return Err(ERR_BAD_PARAM);
+        }
+        let status = unsafe { vcabi::trueos_cabi_async_fs_write_commit(self.operation.id) };
+        if status != 0 {
+            return Err(status);
+        }
+        self.operation.ready().await?;
+        self.operation.discard();
+        Ok(())
+    }
 }
 
 impl Operation {
@@ -311,6 +358,11 @@ pub(crate) fn decode_typed_dir_listing(bytes: &[u8]) -> Result<TypedDirListing, 
                 .try_into()
                 .map_err(|_| ERR_IO)?,
         ));
+        if (kind == NodeKind::File && content_type == ContentTypeId::NONE)
+            || (kind == NodeKind::Directory && content_type != ContentTypeId::NONE)
+        {
+            return Err(ERR_IO);
+        }
         offset += 8;
         if name_len == 0 || bytes.len().saturating_sub(offset) < name_len {
             return Err(ERR_IO);
@@ -475,37 +527,32 @@ pub async fn write_file_typed(
     bytes: &[u8],
     content_type: ContentTypeId,
 ) -> Result<(), i32> {
-    let mut operation = Operation::from_start(unsafe {
+    let mut write = write_file_begin_typed(path, bytes.len(), content_type)?;
+    for chunk in bytes.chunks(WRITE_CHUNK_BYTES) {
+        write.write_chunk(chunk)?;
+    }
+    write.commit().await
+}
+
+/// Admit a streamed typed write before accepting any body chunks.
+pub fn write_file_begin_typed(
+    path: &[u8],
+    total_len: usize,
+    content_type: ContentTypeId,
+) -> Result<TypedWrite, i32> {
+    let operation = Operation::from_start(unsafe {
         vcabi::trueos_cabi_async_fs_typed_write_begin(
             path.as_ptr(),
             path.len(),
-            bytes.len(),
+            total_len,
             content_type.raw(),
         )
     })?;
-    let mut offset = 0usize;
-    while offset < bytes.len() {
-        let end = core::cmp::min(offset.saturating_add(WRITE_CHUNK_BYTES), bytes.len());
-        let status = unsafe {
-            vcabi::trueos_cabi_async_fs_write_chunk(
-                operation.id,
-                offset,
-                bytes[offset..end].as_ptr(),
-                end - offset,
-            )
-        };
-        if status != 0 {
-            return Err(status);
-        }
-        offset = end;
-    }
-    let status = unsafe { vcabi::trueos_cabi_async_fs_write_commit(operation.id) };
-    if status != 0 {
-        return Err(status);
-    }
-    operation.ready().await?;
-    operation.discard();
-    Ok(())
+    Ok(TypedWrite {
+        operation,
+        total_len,
+        next_offset: 0,
+    })
 }
 
 /// Materialize a directory and every missing parent directory.
@@ -574,12 +621,18 @@ pub async fn typed_metadata(path: &[u8]) -> Result<TypedMetadata, i32> {
         2 => NodeKind::Directory,
         _ => return Err(ERR_IO),
     };
+    let content_type = ContentTypeId::from_raw(u32::from_le_bytes(
+        result[12..16].try_into().map_err(|_| ERR_IO)?,
+    ));
+    if (kind == NodeKind::File && content_type == ContentTypeId::NONE)
+        || (kind == NodeKind::Directory && content_type != ContentTypeId::NONE)
+    {
+        return Err(ERR_IO);
+    }
     Ok(TypedMetadata {
         kind,
         len: u64::from_le_bytes(result[4..12].try_into().map_err(|_| ERR_IO)?),
-        content_type: ContentTypeId::from_raw(u32::from_le_bytes(
-            result[12..16].try_into().map_err(|_| ERR_IO)?,
-        )),
+        content_type,
     })
 }
 

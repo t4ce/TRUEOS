@@ -1281,6 +1281,16 @@ pub async fn file_in_typed_async(
     .await
 }
 
+/// Primary typed complete-file write API.
+pub async fn write_file_typed_async(
+    disk: block::DeviceHandle,
+    name: &str,
+    bytes: &[u8],
+    content_type: ContentTypeId,
+) -> Result<bool, block::Error> {
+    file_in_typed_async(disk, name, bytes, content_type).await
+}
+
 async fn file_in_with_metadata_async(
     disk: block::DeviceHandle,
     name: &str,
@@ -1828,6 +1838,14 @@ pub async fn node_info_async(
     trueos_fs::read_node_info(&KernelBlockIo::new(disk), &params, name)
         .await
         .map_err(map_engine_err)
+}
+
+/// Primary metadata API carrying the stored raw content identity.
+pub async fn typed_metadata_async(
+    disk: block::DeviceHandle,
+    name: &str,
+) -> Result<Option<NodeInfo>, block::Error> {
+    node_info_async(disk, name).await
 }
 
 pub async fn dir_exists_async(disk: block::DeviceHandle, path: &str) -> Result<bool, block::Error> {
@@ -2418,6 +2436,14 @@ pub async fn list_dir_async(
     }
 
     Ok(Some(DirListing { entries, truncated }))
+}
+
+/// Primary typed directory API; raw future IDs are preserved in file entries.
+pub async fn list_dir_typed_async(
+    disk: block::DeviceHandle,
+    dir: &str,
+) -> Result<Option<DirListing>, block::Error> {
+    list_dir_async(disk, dir).await
 }
 
 fn normalized_dir_prefix(dir: &str) -> String {

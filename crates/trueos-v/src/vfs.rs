@@ -70,6 +70,28 @@ pub fn write_begin(path: &[u8], total_len: u64) -> Result<u32, i32> {
 }
 
 #[inline]
+pub fn write_begin_typed(
+    path: &[u8],
+    total_len: u64,
+    content_type: ContentTypeId,
+) -> Result<u32, i32> {
+    let mut handle = 0u32;
+    let rc = unsafe {
+        vcabi::trueos_cabi_fs_typed_write_begin(
+            path.as_ptr(),
+            path.len(),
+            total_len,
+            content_type.raw(),
+            &mut handle,
+        )
+    };
+    if rc != 0 {
+        return Err(rc);
+    }
+    Ok(handle)
+}
+
+#[inline]
 pub fn write_chunk(handle: u32, data: &[u8]) -> Result<(), i32> {
     let rc = unsafe { vcabi::trueos_cabi_fs_write_chunk(handle, data.as_ptr(), data.len()) };
     if rc != 0 {
@@ -194,19 +216,7 @@ pub fn write_file(path: &[u8], data: &[u8]) -> Result<(), i32> {
 }
 
 pub fn write_file_typed(path: &[u8], data: &[u8], content_type: ContentTypeId) -> Result<(), i32> {
-    let mut handle = 0u32;
-    let rc = unsafe {
-        vcabi::trueos_cabi_fs_typed_write_begin(
-            path.as_ptr(),
-            path.len(),
-            data.len() as u64,
-            content_type.raw(),
-            &mut handle,
-        )
-    };
-    if rc != 0 {
-        return Err(rc);
-    }
+    let handle = write_begin_typed(path, data.len() as u64, content_type)?;
     if let Err(rc) = write_chunk(handle, data) {
         let _ = write_abort(handle);
         return Err(rc);
@@ -239,11 +249,27 @@ pub fn typed_stat(path: &[u8]) -> Result<TypedFsStat, i32> {
         2 => FsNodeKind::Directory,
         _ => return Err(-4),
     };
+    let content_type = ContentTypeId::from_raw(content_type);
+    if (kind == FsNodeKind::File && content_type == ContentTypeId::NONE)
+        || (kind == FsNodeKind::Directory && content_type != ContentTypeId::NONE)
+    {
+        return Err(-2);
+    }
     Ok(TypedFsStat {
         kind,
         len,
-        content_type: ContentTypeId::from_raw(content_type),
+        content_type,
     })
+}
+
+#[inline]
+pub fn typed_metadata(path: &[u8]) -> Result<TypedFsStat, i32> {
+    typed_stat(path)
+}
+
+#[inline]
+pub fn typed_list_dir(path: &[u8]) -> Result<TypedDirListing, i32> {
+    list_dir_typed(path)
 }
 
 #[inline]
