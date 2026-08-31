@@ -169,14 +169,16 @@ fn with_matrix_target_geometry<R>(
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ShellMode2 {
     Apps,
+    Alias,
     Cmd,
 }
 
 impl ShellMode2 {
     const fn next(self) -> Self {
         match self {
-            Self::Apps => Self::Cmd,
             Self::Cmd => Self::Apps,
+            Self::Apps => Self::Alias,
+            Self::Alias => Self::Cmd,
         }
     }
 }
@@ -512,6 +514,10 @@ impl<'a> AlignedWriter<'a> {
             .saturating_sub(BANNER_GROUP_GAP_WIDTH);
         match mode {
             ShellMode2::Apps => shell2_apps::command_names_text(),
+            ShellMode2::Alias if (self.io.output_mask() & OUTPUT_LOCAL_MASK) != 0 => {
+                shell2_cmd_registry::titlebar_right_alias_names_text_fitting(available_width)
+            }
+            ShellMode2::Alias => shell2_cmd_registry::titlebar_right_alias_names_text(),
             ShellMode2::Cmd if (self.io.output_mask() & OUTPUT_LOCAL_MASK) != 0 => {
                 shell2_cmd_registry::titlebar_right_command_names_text_fitting(available_width)
             }
@@ -924,8 +930,10 @@ fn banner_right_visible_width(output_mask: OutputMask) -> usize {
     }
 
     let cmd_width = ecma48::visible_width(titlebar_right_command_names_text().as_str());
+    let alias_width =
+        ecma48::visible_width(shell2_cmd_registry::titlebar_right_alias_names_text().as_str());
     let apps_width = ecma48::visible_width(shell2_apps::command_names_text().as_str());
-    cmd_width.max(apps_width)
+    cmd_width.max(alias_width).max(apps_width)
 }
 
 pub(crate) fn output_target_for_backend(io: &'static dyn ShellBackend2) -> OutputMask {
@@ -1439,8 +1447,16 @@ pub(crate) fn konsole_viewport_size_for_target(target: &MatrixTarget) -> (usize,
 #[cfg(test)]
 mod tests {
     use super::{
-        TRUE_COMBO_BADGE_WIDTH, TrueCombo, titlebar_app_name, titlebar_sha256, true_combo_label,
+        ShellMode2, TRUE_COMBO_BADGE_WIDTH, TrueCombo, titlebar_app_name, titlebar_sha256,
+        true_combo_label,
     };
+
+    #[test]
+    fn tab_mode_cycle_is_command_apps_alias() {
+        assert!(ShellMode2::Cmd.next() == ShellMode2::Apps);
+        assert!(ShellMode2::Apps.next() == ShellMode2::Alias);
+        assert!(ShellMode2::Alias.next() == ShellMode2::Cmd);
+    }
 
     #[test]
     fn titlebar_app_name_discards_characters_after_eight() {
@@ -1796,10 +1812,14 @@ fn handle_submit(
     submitted: &str,
 ) -> HandleSubmitResult {
     match mode {
-        ShellMode2::Cmd => match shell2_cmd::try_parse(spawner, io, submitted) {
-            shell2_cmd::ParseOutcome::StartSession(kind) => HandleSubmitResult::StartSession(kind),
-            _ => HandleSubmitResult::None,
-        },
+        ShellMode2::Cmd | ShellMode2::Alias => {
+            match shell2_cmd::try_parse(spawner, io, submitted) {
+                shell2_cmd::ParseOutcome::StartSession(kind) => {
+                    HandleSubmitResult::StartSession(kind)
+                }
+                _ => HandleSubmitResult::None,
+            }
+        }
         ShellMode2::Apps => {
             shell2_apps::submit(spawner, io, submitted);
             HandleSubmitResult::None

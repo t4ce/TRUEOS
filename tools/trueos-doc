@@ -58,14 +58,15 @@ COMMAND_DETAILS: dict[str, dict[str, Any]] = {
 
 TOPICS: dict[str, dict[str, Any]] = {
     "shell2": {
-        "summary": "Shell2 is a two-mode command surface over per-transport Matrix slots.",
+        "summary": "Shell2 is a three-mode command surface over per-transport Matrix slots.",
         "default_mode": "cmd",
         "modes": {
             "cmd": "Dispatches the kernel command registry.",
+            "alias": "Dispatches the kernel command registry while presenting the gray convenience-command legend.",
             "apps": "Dispatches Blueprint lifecycle and catalog commands.",
         },
-        "tab": "TAB toggles cmd <-> apps while editing, but is ignored whenever the active Matrix slot owns a VM.",
-        "routing_order_on_enter": ["§§ operator", "§ Matrix operator", "VM leave/control/app input", "interactive command session", "current cmd/apps mode"],
+        "tab": "TAB cycles cmd -> apps -> alias -> cmd while editing, but is ignored whenever the active Matrix slot owns a VM.",
+        "routing_order_on_enter": ["§§ operator", "§ Matrix operator", "VM leave/control/app input", "interactive command session", "current cmd/apps/alias mode"],
         "sources": ["src/shell2/mod.rs::ShellMode2", "src/shell2/mod.rs::handle_submit", "src/shell2/mod.rs::run_shell2_on_backend"],
     },
     "headjack": {
