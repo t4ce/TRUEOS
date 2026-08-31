@@ -7,6 +7,7 @@ pub mod font_producer_service;
 pub mod gamepad_control_service;
 pub mod gna_audio_frontend_service;
 pub mod gridpaper_service;
+pub mod hda_capture_lane;
 pub mod hid_udp_service;
 pub mod keyboard_control_service;
 pub mod media_service;

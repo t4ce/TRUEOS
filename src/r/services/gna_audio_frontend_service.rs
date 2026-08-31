@@ -1,20 +1,16 @@
 //! Low-power microphone precondition service for Intel GNA bring-up.
 //!
-//! The service deliberately owns policy rather than hardware. The future HDA
-//! capture/GNA owner publishes compact observations through the lock-free
-//! ingress functions below; this task samples them at a 100 ms soft cadence,
-//! logs VAD level edges, and rate-limits wake-word evidence to one Important
-//! record per 250 ms. Until a hardware owner publishes readiness or inference
-//! results, the service remains visibly fail-closed in `AwaitingGna`.
+//! The service owns inference policy and observability, not microphone
+//! hardware. `hda_capture_lane` owns the HDA input stream and publishes a
+//! read-only S16LE PCM/status surface. A future GNA owner consumes that surface
+//! and publishes compact observations through the lock-free ingress functions
+//! below.
 
 use core::sync::atomic::{AtomicBool, AtomicU8, AtomicU16, AtomicU32, AtomicU64, Ordering};
 
 use trueos_time::{Duration, Timer};
 
-/// Service-side sampling cadence. The GNA owner may run its native frame clock
-/// faster; only observation and logging policy is sampled at this interval.
 pub const POLL_SOFTCAP_MS: u64 = 100;
-/// Minimum distance between globally visible wake-word records.
 pub const WAKE_LOG_SOFTCAP_MS: u64 = 250;
 const CADENCE_VALIDATION_SAMPLES: u32 = 10;
 const Q15_MAX: u16 = i16::MAX as u16;
@@ -26,7 +22,6 @@ const _: () = {
     assert!(CADENCE_VALIDATION_SAMPLES != 0);
 };
 
-/// Hardware/model lifecycle published by the eventual GNA owner.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub enum PipelineState {
@@ -95,9 +90,6 @@ struct WakeLogRecord {
 
 static PIPELINE_STATE: AtomicU8 = AtomicU8::new(PipelineState::AwaitingGna as u8);
 
-// Even values are stable snapshots; odd values mean the single hardware owner
-// is publishing fields. Readers never spin indefinitely if that owner is
-// pre-empted: the service retries on its next 100 ms observation tick.
 static NOISE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static NOISE_ACTIVE: AtomicBool = AtomicBool::new(false);
 static NOISE_CONFIDENCE_Q15: AtomicU16 = AtomicU16::new(0);
@@ -116,27 +108,12 @@ static WAKE_SOURCE_TIMESTAMP_MS: AtomicU64 = AtomicU64::new(0);
 static WAKE_LOGS: AtomicU64 = AtomicU64::new(0);
 static WAKE_EVENTS_COALESCED: AtomicU64 = AtomicU64::new(0);
 
-/// Publish lifecycle from the HDA/GNA hardware owner.
-///
-/// `AwaitingGna` is the boot default, so this service never claims that an
-/// accelerator or model exists merely because its scheduler task is online.
-#[allow(
-    dead_code,
-    reason = "GNA hardware owner integration follows this service milestone"
-)]
+#[allow(dead_code, reason = "GNA hardware/model owner integration follows capture bring-up")]
 pub(crate) fn publish_pipeline_state(state: PipelineState) {
     PIPELINE_STATE.store(state as u8, Ordering::Release);
 }
 
-/// Publish the latest noise-reduction level and confidence.
-///
-/// This ingress is lock-free so a future completion path can publish without
-/// taking a service mutex. Concurrent publishers fail closed by returning
-/// `false`; this boundary does not perform inference.
-#[allow(
-    dead_code,
-    reason = "GNA hardware owner integration follows this service milestone"
-)]
+#[allow(dead_code, reason = "GNA hardware/model owner integration follows capture bring-up")]
 #[must_use]
 pub(crate) fn publish_noise_reduction_observation(
     active: bool,
@@ -154,11 +131,7 @@ pub(crate) fn publish_noise_reduction_observation(
     )
 }
 
-/// Publish the latest voice-activity level and confidence.
-#[allow(
-    dead_code,
-    reason = "GNA hardware owner integration follows this service milestone"
-)]
+#[allow(dead_code, reason = "GNA hardware/model owner integration follows capture bring-up")]
 #[must_use]
 pub(crate) fn publish_vad_observation(
     active: bool,
@@ -176,14 +149,7 @@ pub(crate) fn publish_vad_observation(
     )
 }
 
-/// Publish one wake-word event from the admitted GNA model.
-///
-/// `word_id` is deliberately numeric at this boundary. Model-specific labels
-/// belong to the authenticated model manifest, not an interrupt-adjacent path.
-#[allow(
-    dead_code,
-    reason = "GNA hardware owner integration follows this service milestone"
-)]
+#[allow(dead_code, reason = "GNA hardware/model owner integration follows capture bring-up")]
 #[must_use]
 pub(crate) fn publish_wake_word(
     word_id: u32,
@@ -200,10 +166,7 @@ pub(crate) fn publish_wake_word(
     true
 }
 
-#[allow(
-    dead_code,
-    reason = "service status consumer follows this bring-up milestone"
-)]
+#[allow(dead_code, reason = "GNA hardware/model owner integration follows capture bring-up")]
 pub(crate) fn status() -> FrontEndStatus {
     let noise = load_level(
         &NOISE_SEQUENCE,
@@ -444,17 +407,18 @@ fn log_level(name: &str, snapshot: LevelSnapshot, observed_ms: u64) {
     ));
 }
 
-/// Policy/service milestone for the eventual HDA microphone → GNA 3.0 path.
-///
-/// No inference is synthesized here. Bare-metal logs prove scheduler cadence
-/// and expose only observations explicitly published by a hardware/model owner.
 #[trueos_executor::task]
 pub(crate) async fn gna_audio_frontend_service_task() {
     crate::log_os::service_important_line(format_args!(
+        "gna-audio-front-end: online microphone_owner=hda-capture-lane pcm=s16le-48k-interleaved role=gna-consumer-only path=hda-capture->gna3(noise-reduction,vad,wake-word)->speech-detected sink=global-log poll_softcap_ms={} wake_log_softcap_ms={} inference=awaiting-hardware-owner fail_closed=1\n",
+        POLL_SOFTCAP_MS,
+        WAKE_LOG_SOFTCAP_MS,
         "gna-audio-front-end: online path=hda-microphone->gna3(noise-reduction,vad,wake-word)->speech-detected sink=global-log poll_softcap_ms={} wake_log_softcap_ms={} inference=awaiting-hardware-owner fail_closed=1\n",
         POLL_SOFTCAP_MS, WAKE_LOG_SOFTCAP_MS,
     ));
 
+    let mut capture_spawned = false;
+    let mut last_capture_state = crate::r::services::hda_capture_lane::CaptureState::Offline;
     let mut last_pipeline = PipelineState::AwaitingGna;
     let mut last_noise_sequence = 0u64;
     let mut last_noise_active = None;
@@ -466,6 +430,26 @@ pub(crate) async fn gna_audio_frontend_service_task() {
 
     loop {
         let now_ms = uptime_ms();
+
+        if !capture_spawned {
+            capture_spawned =
+                crate::r::services::hda_capture_lane::ensure_started_on_current_worker();
+        }
+
+        let capture = crate::r::services::hda_capture_lane::status();
+        if capture.state != last_capture_state {
+            crate::log_os::service_important_line(format_args!(
+                "gna-audio-front-end: event=capture-state previous={:?} current={:?} observed_ms={} microphone_owner=hda-capture-lane consumer_only=1 rate_hz={} channels={} bits={} total_frames={}\n",
+                last_capture_state,
+                capture.state,
+                now_ms,
+                capture.sample_rate_hz,
+                capture.channels,
+                capture.sample_bits,
+                capture.total_frames,
+            ));
+            last_capture_state = capture.state;
+        }
 
         if let Some(report) = cadence_probe.observe(now_ms) {
             crate::log_os::service_important_line(format_args!(
