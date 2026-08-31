@@ -41,8 +41,32 @@ pub(crate) fn try_parse(
             }
             ParseOutcome::Handled
         }
+        Some("hfi") => {
+            let mut probe = args.clone();
+            let _ = probe.next();
+            match (probe.next(), probe.next()) {
+                (None, None) => super::tlb_core::try_parse(spawner, io, args),
+                (Some("enable"), None) => {
+                    multiline(io, &crate::power::hfi::explicit_bringup_text());
+                    ParseOutcome::Handled
+                }
+                (Some("table"), None) | (Some("dump"), None) => {
+                    multiline(io, &crate::power::hfi::table_snapshot_text());
+                    ParseOutcome::Handled
+                }
+                (Some("disable"), None) => {
+                    multiline(io, &crate::power::hfi::explicit_disable_text());
+                    ParseOutcome::Handled
+                }
+                _ => {
+                    line(io, "tlb: usage `tlb hfi [enable|table|dump|disable]`");
+                    ParseOutcome::Handled
+                }
+            }
+        }
         None => {
             let outcome = super::tlb_core::try_parse(spawner, io, args);
+            line(io, "hfi       Explicit HFI table bring-up (`tlb hfi enable|table|dump|disable`)");
             line(io, "nct       Verify NCT5585D Super-I/O identity (`tlb nct probe`)");
             line(io, "mei       Verify reversible MEI status-window access (`tlb mei probe`)");
             outcome
