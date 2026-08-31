@@ -94,6 +94,7 @@ define_started_flags!(
     HW_PIC_SERVICE_STARTED,
     FALLBACK_LOGO_UI_STARTED,
     INTEL_HDA_AUDIO_DEMO_STARTED,
+    GNA_AUDIO_FRONTEND_SERVICE_STARTED,
     RAPLE_SERVICE_STARTED,
     THERMAL_SERVICE_STARTED,
     HTML_SHACK_SERVICE_STARTED,
@@ -848,6 +849,12 @@ fn html_fetch_service(spawner: Spawner) -> SpawnAttempt {
     spawn_bool_result_to_attempt(crate::surfer::spawn_html_fetch_service())
 }
 
+fn spawn_gna_audio_frontend_service(spawner: Spawner) -> SpawnAttempt {
+    spawn_on_eff_worker(spawner, |_worker_spawner| {
+        crate::r::services::gna_audio_frontend_service::gna_audio_frontend_service_task()
+    })
+}
+
 fn spawn_tinyaudio_service(spawner: Spawner) -> SpawnAttempt {
     spawn_on_eff_worker(spawner, |_worker_spawner| crate::aud::esynth::tinyaudio_service_task())
 }
@@ -1342,7 +1349,7 @@ const NET_ANY_CONFIGURED_AND_ROOT_READY: u32 =
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 73
+const TASK_COUNT: usize = 74
     + cfg!(feature = "trueos_h264_encode_stream") as usize
     + cfg!(feature = "trueos_lumen") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
@@ -1749,6 +1756,12 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         html_shack_gate,
         &HTML_SHACK_SERVICE_STARTED,
         html_fetch_service,
+    ),
+    TaskSpec::enabled(
+        "gna-audio-front-end",
+        crate::r::readiness::INTEL_HDA_READY | crate::r::readiness::BACKGROUND_AP_WORKER_READY,
+        &GNA_AUDIO_FRONTEND_SERVICE_STARTED,
+        spawn_gna_audio_frontend_service,
     ),
     TaskSpec::enabled(
         "tinyaudio_service",
