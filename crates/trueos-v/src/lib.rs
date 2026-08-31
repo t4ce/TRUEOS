@@ -3,6 +3,7 @@
 extern crate alloc;
 
 pub mod collections;
+pub mod content_identity;
 pub mod fmt;
 pub mod iter;
 pub mod vled {

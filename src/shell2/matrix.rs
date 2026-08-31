@@ -835,6 +835,11 @@ pub(crate) fn clear_transient_lines_in_live_slot(
 }
 
 pub(crate) fn record_user_input(transport_scope: u8, text: &str) {
+    // Shell history and durable command recording share the same explicit
+    // gate: neither retains pre-login enrollment, TOTP, or recovery input.
+    if !crate::crypt::has_authenticated_two_factor_session(transport_scope) {
+        return;
+    }
     crate::user_input_record::capture(transport_scope, text);
     let mut guard = state().lock();
     push_live_user_input_record(&mut guard, text);

@@ -130,8 +130,8 @@ fn dispatch_cpp(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -
     super::cmds::cpp::try_parse(spawner, io, rest)
 }
 
-fn dispatch_cry(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    super::cmds::cry::try_parse(io, rest)
+fn dispatch_cry(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::cry::try_parse(spawner, io, rest)
 }
 
 fn dispatch_disc(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {

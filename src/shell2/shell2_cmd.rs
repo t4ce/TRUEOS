@@ -26,7 +26,7 @@ pub(crate) fn try_parse(
     io: &'static dyn ShellBackend2,
     line: &str,
 ) -> ParseOutcome {
-    if let Some(outcome) = super::cmds::cry::try_parse_slot_input(io, line) {
+    if let Some(outcome) = super::cmds::cry::try_parse_slot_input(spawner, io, line) {
         return outcome;
     }
 

@@ -2979,12 +2979,15 @@ pub async fn file_append_async(
     };
     bytes.extend_from_slice(append_bytes);
 
-    let Some(mut stream) = trueos_fs::begin_write_file_stream_with_key(
+    let Some(mut stream) = trueos_fs::begin_write_file_stream_with_metadata(
         &io,
         &params,
         name,
         bytes.len() as u64,
-        record_key,
+        trueos_fs::FileWriteMetadata {
+            content_type: ContentTypeId::BLOB,
+            record_key,
+        },
     )
     .await
     .map_err(map_engine_err)?

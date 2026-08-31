@@ -12,6 +12,7 @@ license-file = "LICENSE"
 resolver = "3"
 members = [
     "crates/trueos-crypto",
+    "crates/trueos-credential-store",
     "crates/trueos-executor",
     "crates/trueos-executor/embassy-time",
     "crates/trueos-executor/trueos-executor-macros",
@@ -78,6 +79,7 @@ trueos-time = { path = "crates/trueos-executor/embassy-time", default-features =
 embassy-time-driver = { version = "0.2.2", default-features = false }
 embedded-io-async = { version = "0.7.0", default-features = false }
 trueos-crypto = { path = "crates/trueos-crypto" }
+trueos-credential-store = { path = "crates/trueos-credential-store" }
 ed25519-dalek = { version = "2.2", default-features = false, features = ["zeroize"] }
 qrcodegen = { package = "qrcodegen-no-heap", version = "1.8.1", default-features = false }
 heapless = { version = "0.9", default-features = false }

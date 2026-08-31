@@ -8,7 +8,7 @@ use core::task::{Context, Poll, Waker};
 
 use crate::vcabi;
 
-pub use trueos_fs::ContentTypeId;
+pub use crate::content_identity::ContentTypeId;
 
 pub const ERR_BAD_UTF8: i32 = -1;
 pub const ERR_IO: i32 = -2;

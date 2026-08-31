@@ -8,8 +8,8 @@ extern crate alloc;
 use alloc::{string::String, vec, vec::Vec};
 
 use crate::legacy_fs_abi as vcabi;
+pub use crate::content_identity::ContentTypeId;
 pub use crate::vfs_async::{TypedDirEntry, TypedDirListing};
-pub use trueos_fs::ContentTypeId;
 pub const ERR_TYPE_REQUIRED: i32 = -15;
 pub const ERR_TYPE_MISMATCH: i32 = -16;
 

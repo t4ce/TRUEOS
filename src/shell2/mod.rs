@@ -6,7 +6,7 @@ use core::fmt::Write as _;
 use core::sync::atomic::{AtomicU16, Ordering};
 use heapless::String as HString;
 use trueos_executor::Spawner;
-use trueos_time::{Duration as EmbassyDuration, Timer};
+use trueos_time::{Duration as EmbassyDuration, Instant as EmbassyInstant, Timer};
 use unicode_segmentation::UnicodeSegmentation;
 pub(crate) mod backends;
 pub(crate) mod cmds;
@@ -46,6 +46,14 @@ const SYSTEM_TEXT_RGB: (u8, u8, u8) = (60, 183, 161);
 const VMX_STATUS_RGB: (u8, u8, u8) = (120, 210, 255);
 const VMX_TUI_RGB: (u8, u8, u8) = (255, 90, 90);
 const APP_HASH_RGB: (u8, u8, u8) = (60, 220, 120);
+const TRUE_COMBO_LOW_RGB: (u8, u8, u8) = (60, 220, 120);
+const TRUE_COMBO_HIGH_RGB: (u8, u8, u8) = (255, 55, 255);
+const TRUE_COMBO_MAX_RGB: (u8, u8, u8) = (255, 220, 80);
+const TRUE_COMBO_CHAIN_MS: u64 = 700;
+const TRUE_COMBO_HOLD_MS: u64 = 1200;
+const TRUE_COMBO_MAX: u8 = 99;
+const TRUE_COMBO_BADGE_WIDTH: usize = 8;
+const TRUE_COMBO_INPUT_GAP: usize = 1;
 pub(crate) type OutputMask = u16;
 pub(crate) const OUTPUT_NET_TCP_MASK: OutputMask = 1 << 0;
 pub(crate) const LOCAL_SHELL_SESSION_CAP: usize = 9;
@@ -253,6 +261,56 @@ struct ShellMouseEvent {
     pressed: bool,
 }
 
+#[derive(Clone, Copy)]
+struct TrueCombo {
+    count: u8,
+    last_hit_ms: Option<u64>,
+}
+
+impl TrueCombo {
+    const fn new() -> Self {
+        Self {
+            count: 0,
+            last_hit_ms: None,
+        }
+    }
+
+    fn hit(&mut self, now_ms: u64) {
+        self.count = match self.last_hit_ms {
+            Some(last_hit_ms) if now_ms.saturating_sub(last_hit_ms) <= TRUE_COMBO_CHAIN_MS => {
+                self.count.saturating_add(1).min(TRUE_COMBO_MAX)
+            }
+            _ => 1,
+        };
+        self.last_hit_ms = Some(now_ms);
+    }
+
+    fn reset(&mut self) {
+        *self = Self::new();
+    }
+
+    fn visible_count(&self, now_ms: u64) -> Option<u8> {
+        let last_hit_ms = self.last_hit_ms?;
+        (self.count >= 2 && now_ms.saturating_sub(last_hit_ms) <= TRUE_COMBO_HOLD_MS)
+            .then_some(self.count)
+    }
+
+    fn expire(&mut self, now_ms: u64) -> bool {
+        let should_expire = self
+            .last_hit_ms
+            .is_some_and(|last_hit_ms| now_ms.saturating_sub(last_hit_ms) > TRUE_COMBO_HOLD_MS);
+        let badge_was_visible = self.count >= 2;
+        if should_expire {
+            self.reset();
+        }
+        should_expire && badge_was_visible
+    }
+}
+
+fn true_combo_label(count: u8) -> AllocString {
+    alloc::format!("COMBO{:>2}×", count.min(TRUE_COMBO_MAX))
+}
+
 impl ShellMouseEvent {
     fn is_primary_press(self) -> bool {
         self.pressed && self.code & 0b0110_0011 == 0
@@ -276,6 +334,7 @@ struct AlignedWriter<'a> {
     line_width: Cell<usize>,
     transcript_view_rows: Cell<usize>,
     hovered_matrix_slot: RefCell<Option<matrix::MatrixSlotId>>,
+    true_combo: RefCell<TrueCombo>,
 }
 
 impl<'a> AlignedWriter<'a> {
@@ -285,6 +344,7 @@ impl<'a> AlignedWriter<'a> {
             line_width: Cell::new(matrix::DEFAULT_MATRIX_SLOT_LINE_WIDTH),
             transcript_view_rows: Cell::new(DEFAULT_TRANSCRIPT_VIEW_ROWS),
             hovered_matrix_slot: RefCell::new(None),
+            true_combo: RefCell::new(TrueCombo::new()),
         }
     }
 
@@ -506,6 +566,56 @@ impl<'a> AlignedWriter<'a> {
         self.io.raw_write_str(ecma48::SHOW_CURSOR);
         self.io.raw_write_str(ecma48::CURSOR_COLOR_GRAY);
         self.io.raw_write_str(ecma48::CURSOR_BLINKING_BLOCK);
+    }
+
+    fn true_combo_hit(&self) {
+        self.true_combo
+            .borrow_mut()
+            .hit(EmbassyInstant::now().as_millis());
+    }
+
+    fn true_combo_reset(&self) {
+        self.true_combo.borrow_mut().reset();
+    }
+
+    fn expire_true_combo(&self) -> bool {
+        self.true_combo
+            .borrow_mut()
+            .expire(EmbassyInstant::now().as_millis())
+    }
+
+    fn true_combo_badge_fits(&self, input_width: usize) -> bool {
+        self.true_combo
+            .borrow()
+            .visible_count(EmbassyInstant::now().as_millis())
+            .is_some()
+            && input_width
+                .saturating_add(TRUE_COMBO_INPUT_GAP)
+                .saturating_add(TRUE_COMBO_BADGE_WIDTH)
+                <= self.line_width()
+    }
+
+    fn true_combo_badge(&self, input_width: usize) {
+        if !self.true_combo_badge_fits(input_width) {
+            return;
+        }
+        let Some(count) = self
+            .true_combo
+            .borrow()
+            .visible_count(EmbassyInstant::now().as_millis())
+        else {
+            return;
+        };
+        let color = match count {
+            10.. => TRUE_COMBO_MAX_RGB,
+            5..=9 => TRUE_COMBO_HIGH_RGB,
+            _ => TRUE_COMBO_LOW_RGB,
+        };
+        let label = true_combo_label(count);
+        let styled = alloc::format!("{}", term_style::paint(label.as_str()).bold().color(color));
+        self.io.raw_write_str(ecma48::SAVE_CURSOR);
+        self.right_text(PROMPT_ROW, styled.as_str());
+        self.io.raw_write_str(ecma48::RESTORE_CURSOR);
     }
 
     fn user_char(&self, ch: char) {
@@ -1328,7 +1438,9 @@ pub(crate) fn konsole_viewport_size_for_target(target: &MatrixTarget) -> (usize,
 
 #[cfg(test)]
 mod tests {
-    use super::{titlebar_app_name, titlebar_sha256};
+    use super::{
+        TRUE_COMBO_BADGE_WIDTH, TrueCombo, titlebar_app_name, titlebar_sha256, true_combo_label,
+    };
 
     #[test]
     fn titlebar_app_name_discards_characters_after_eight() {
@@ -1340,6 +1452,50 @@ mod tests {
     fn titlebar_sha256_keeps_sixteen_hex_digits_from_each_end() {
         let digest = core::array::from_fn(|index| index as u8);
         assert_eq!(titlebar_sha256(&digest), "0001020304050607…18191a1b1c1d1e1f");
+    }
+
+    #[test]
+    fn true_combo_counts_fast_hits_and_restarts_after_chain_window() {
+        let mut combo = TrueCombo::new();
+        combo.hit(1000);
+        combo.hit(1700);
+        assert_eq!(combo.visible_count(1700), Some(2));
+        combo.hit(2401);
+
+        assert_eq!(combo.count, 1);
+        assert_eq!(combo.visible_count(2401), None);
+    }
+
+    #[test]
+    fn true_combo_appears_at_two_and_expires_after_hold_window() {
+        let mut combo = TrueCombo::new();
+        combo.hit(1000);
+        combo.hit(1600);
+
+        assert_eq!(combo.visible_count(1600), Some(2));
+        assert_eq!(combo.visible_count(2800), Some(2));
+        assert!(combo.expire(2801));
+        assert_eq!(combo.visible_count(2801), None);
+    }
+
+    #[test]
+    fn true_combo_saturates_at_two_display_digits() {
+        let mut combo = TrueCombo::new();
+        for now_ms in 0..150 {
+            combo.hit(now_ms);
+        }
+
+        assert_eq!(combo.visible_count(149), Some(99));
+    }
+
+    #[test]
+    fn true_combo_badge_is_always_eight_cells_wide() {
+        for count in [2, 9, 10, 99] {
+            assert_eq!(
+                super::ecma48::visible_width(true_combo_label(count).as_str()),
+                TRUE_COMBO_BADGE_WIDTH
+            );
+        }
     }
 }
 
@@ -1438,29 +1594,26 @@ fn user_submission_for_recording(output_mask: OutputMask, submitted: &str) -> &s
     let first = args.next();
     let second = args.next();
     let third = args.next();
-    let fourth = args.next();
 
-    let named_login = matches!((first, second, third, fourth),
-        (Some(command), Some(login), Some(code), None)
-            if command.eq_ignore_ascii_case("cry")
-                && login.eq_ignore_ascii_case("login")
-                && is_six_digit_code(code));
-    let named_root_login = matches!((first, second, third, fourth),
-        (Some(command), Some(login), Some(account), Some(code))
-            if command.eq_ignore_ascii_case("cry")
-                && login.eq_ignore_ascii_case("login")
-                && account.eq_ignore_ascii_case("root")
-                && is_six_digit_code(code));
+    // Redact by command shape, even when the user mistypes a code/key length
+    // or adds an extra token. Secret-bearing error paths must not become a
+    // side door into live history or the encrypted command recorder.
+    let login_secret = first.is_some_and(|command| command.eq_ignore_ascii_case("cry"))
+        && second.is_some_and(|action| action.eq_ignore_ascii_case("login"))
+        && third.is_some();
+    let unlock_secret = first.is_some_and(|command| command.eq_ignore_ascii_case("cry"))
+        && second.is_some_and(|action| action.eq_ignore_ascii_case("unlock"))
+        && third.is_some();
     let bare_cry_code = first.is_some_and(is_six_digit_code)
         && second.is_none()
         && matrix::active_slot_app_label(output_mask).as_deref() == Some(CRY_APP_LABEL);
 
     if bare_cry_code {
         "******"
-    } else if named_login {
+    } else if login_secret {
         "cry login ******"
-    } else if named_root_login {
-        "cry login root ******"
+    } else if unlock_secret {
+        "cry unlock ******"
     } else {
         submitted
     }
@@ -1740,8 +1893,14 @@ fn apply_matrix_operator_and_refresh(
 }
 
 fn push_input_char(out: &AlignedWriter<'_>, line: &mut HString<MAX_LINE>, ch: char) {
+    let badge_was_visible = out.true_combo_badge_fits(ecma48::visible_width(line.as_str()));
     if line.push(ch).is_ok() {
-        out.user_char(ch);
+        let input_width = ecma48::visible_width(line.as_str());
+        if badge_was_visible && !out.true_combo_badge_fits(input_width) {
+            render_prompt_line(out, out.io.output_mask(), line);
+        } else {
+            out.user_char(ch);
+        }
     }
 }
 
@@ -1777,6 +1936,7 @@ fn render_prompt_line(out: &AlignedWriter<'_>, output_mask: OutputMask, line: &H
     for ch in line.chars() {
         out.user_char(ch);
     }
+    out.true_combo_badge(ecma48::visible_width(line.as_str()));
 }
 
 fn set_input_line(
@@ -2005,6 +2165,9 @@ async fn run_shell2(
             last_minute_bucket = minute_bucket;
             redraw_clock_preserving_cursor(&out, output_mask, minute_text.as_str());
         }
+        if out.expire_true_combo() {
+            render_prompt_line(&out, output_mask, &line);
+        }
 
         if let Some(b) = io.read_byte() {
             if let Some(click_input) = matrix_click_input.as_mut() {
@@ -2056,6 +2219,7 @@ async fn run_shell2(
                 live_history_cursor = None;
                 if active_matrix_slot_is_vmx(output_mask) {
                     zeroize_input_line(&mut line);
+                    out.true_combo_hit();
                     transcript = apply_matrix_operator_and_refresh(
                         &out,
                         io,
@@ -2065,6 +2229,7 @@ async fn run_shell2(
                         minute_text.as_str(),
                         "§",
                     );
+                    render_prompt_line(&out, output_mask, &line);
                     last_chrome_state = current_chrome_state(output_mask, mode);
                     last_matrix_revision = matrix::visible_revision(output_mask);
                 }
@@ -2210,6 +2375,7 @@ async fn run_shell2(
                     if active_matrix_vm_id(output_mask).is_some() {
                         continue;
                     }
+                    out.true_combo_hit();
                     mode = mode.next();
                     apply_mode_toggle(
                         &out,
@@ -2231,11 +2397,14 @@ async fn run_shell2(
                         user_submission_for_recording(output_mask, submitted_raw),
                     );
                     let submitted = submitted_raw.trim();
+                    let mut true_combo_action = false;
                     out.prompt(output_mask);
                     let active_slot = matrix::active_slot_id(output_mask);
                     let active_slot_lifetime_generation =
                         matrix::slot_lifetime_generation(&active_slot);
                     if let Some(operator) = parse_double_section_operator(submitted) {
+                        out.true_combo_hit();
+                        true_combo_action = true;
                         match operator {
                             DoubleSectionOperator::Clear => {
                                 matrix::clear_active_lines(output_mask);
@@ -2248,6 +2417,8 @@ async fn run_shell2(
                         transcript = current_transcript_for_task(io);
                         render_active_slot_content(&out, output_mask, &transcript);
                     } else if is_matrix_operator(submitted) {
+                        out.true_combo_hit();
+                        true_combo_action = true;
                         transcript = apply_matrix_operator_and_refresh(
                             &out,
                             io,
@@ -2261,6 +2432,8 @@ async fn run_shell2(
                     } else if active_matrix_slot_is_vmx(output_mask)
                         && is_vmx_leave_command(submitted)
                     {
+                        out.true_combo_hit();
+                        true_combo_action = true;
                         transcript = apply_matrix_operator_and_refresh(
                             &out,
                             io,
@@ -2378,8 +2551,11 @@ async fn run_shell2(
                             }
                         }
                     }
+                    if !true_combo_action {
+                        out.true_combo_reset();
+                    }
                     zeroize_input_line(&mut line);
-                    out.prompt(output_mask);
+                    render_prompt_line(&out, output_mask, &line);
                     input_bytes_since_yield = 0;
                     if (output_mask & OUTPUT_NET_TCP_MASK) != 0 {
                         Timer::after(EmbassyDuration::from_millis(10)).await;

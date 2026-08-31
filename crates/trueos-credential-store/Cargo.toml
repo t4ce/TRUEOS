@@ -1,0 +1,10 @@
+[package]
+name = "trueos-credential-store"
+version = "0.1.0"
+edition = "2024"
+license-file = "../../LICENSE"
+
+[dependencies]
+ring = { version = "=0.17.14", default-features = false }
+getrandom_02 = { package = "getrandom", version = "0.2", default-features = false, features = ["custom"] }
+zeroize = { version = "1", default-features = false, features = ["alloc"] }
