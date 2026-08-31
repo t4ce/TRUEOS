@@ -1202,6 +1202,27 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 executable,
             ) {
                 Ok((start, end)) => {
+                    let boundary = if executable {
+                        "rel-exec-enable"
+                    } else {
+                        "rel-exec-disable"
+                    };
+                    if let Err(error) =
+                        crate::hv::vpid::invalidate_active_guest_translations(vm_id, boundary)
+                    {
+                        crate::hv::hverrorf(format_args!(
+                            "blueprint-rel: vm={} stage={} status=fatal reason={} action=stop-vm",
+                            vm_id,
+                            if executable {
+                                "exec-enable"
+                            } else {
+                                "exec-disable"
+                            },
+                            error,
+                        ));
+                        write_response(vm_id, seq, STATUS_BAD_ARG, (-13i64) as u64, 0);
+                        return DispatchOutcome::Stop;
+                    }
                     hvlogf(format_args!(
                         "blueprint-rel: vm={} stage={} status=ok pages={} gva=0x{:016X}..0x{:016X}",
                         vm_id,

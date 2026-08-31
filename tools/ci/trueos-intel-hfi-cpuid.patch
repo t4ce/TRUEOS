@@ -1,0 +1,604 @@
+diff --git a/src/power/hfi.rs b/src/power/hfi.rs
+new file mode 100644
+index 0000000..18f3e89
+--- /dev/null
++++ b/src/power/hfi.rs
+@@ -0,0 +1,196 @@
++use core::arch::x86_64::__cpuid;
++
++const CPUID_LEAF_FEATURES: u32 = 0x01;
++const CPUID_LEAF_THERMAL_POWER: u32 = 0x06;
++const CPUID_FEATURE_MSR: u32 = 1 << 5;
++const CPUID_HFI: u32 = 1 << 19;
++const CPUID_THREAD_DIRECTOR: u32 = 1 << 23;
++const CPUID_TD_CLASS_SHIFT: u32 = 8;
++const CPUID_HFI_PERFORMANCE: u32 = 1 << 0;
++const CPUID_HFI_ENERGY_EFFICIENCY: u32 = 1 << 1;
++const CPUID_HFI_PAGE_SHIFT: u32 = 8;
++const CPUID_HFI_INDEX_SHIFT: u32 = 16;
++const HFI_PAGE_BYTES: usize = 4096;
++
++const PROFILE_FLAG_LEAF_AVAILABLE: u8 = 1 << 0;
++const PROFILE_FLAG_MSR_INSTRUCTION: u8 = 1 << 1;
++
++const INTEL_VENDOR_EBX: u32 = 0x756E_6547;
++const INTEL_VENDOR_EDX: u32 = 0x4965_6E69;
++const INTEL_VENDOR_ECX: u32 = 0x6C65_746E;
++
++/// CPUID-only Intel Hardware Feedback Interface / Thread Director metadata for
++/// one logical processor. This does not mean TRUEOS has configured an HFI table
++/// or touched any `IA32_HW_FEEDBACK_*` MSR.
++#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
++pub(crate) struct IntelHfiCpuid {
++    pub(crate) leaf_available: bool,
++    pub(crate) msr_instruction: bool,
++    pub(crate) eax: u32,
++    pub(crate) ebx: u32,
++    pub(crate) ecx: u32,
++    pub(crate) edx: u32,
++}
++
++impl IntelHfiCpuid {
++    pub(crate) const fn unavailable() -> Self {
++        Self {
++            leaf_available: false,
++            msr_instruction: false,
++            eax: 0,
++            ebx: 0,
++            ecx: 0,
++            edx: 0,
++        }
++    }
++
++    pub(crate) const fn from_profile_storage(
++        flags: u8,
++        eax: u32,
++        ebx: u32,
++        ecx: u32,
++        edx: u32,
++    ) -> Self {
++        Self {
++            leaf_available: (flags & PROFILE_FLAG_LEAF_AVAILABLE) != 0,
++            msr_instruction: (flags & PROFILE_FLAG_MSR_INSTRUCTION) != 0,
++            eax,
++            ebx,
++            ecx,
++            edx,
++        }
++    }
++
++    pub(crate) fn profile_storage_flags(self) -> u8 {
++        let mut flags = 0;
++        if self.leaf_available {
++            flags |= PROFILE_FLAG_LEAF_AVAILABLE;
++        }
++        if self.msr_instruction {
++            flags |= PROFILE_FLAG_MSR_INSTRUCTION;
++        }
++        flags
++    }
++
++    pub(crate) fn detect_current() -> Self {
++        let leaf0 = __cpuid(0);
++        let vendor_intel = leaf0.ebx == INTEL_VENDOR_EBX
++            && leaf0.edx == INTEL_VENDOR_EDX
++            && leaf0.ecx == INTEL_VENDOR_ECX;
++        if !vendor_intel || leaf0.eax < CPUID_LEAF_THERMAL_POWER {
++            return Self::unavailable();
++        }
++
++        let features = __cpuid(CPUID_LEAF_FEATURES);
++        let leaf6 = __cpuid(CPUID_LEAF_THERMAL_POWER);
++        Self {
++            leaf_available: true,
++            msr_instruction: (features.edx & CPUID_FEATURE_MSR) != 0,
++            eax: leaf6.eax,
++            ebx: leaf6.ebx,
++            ecx: leaf6.ecx,
++            edx: leaf6.edx,
++        }
++    }
++
++    pub(crate) const fn hfi_supported(self) -> bool {
++        self.leaf_available && (self.eax & CPUID_HFI) != 0
++    }
++
++    pub(crate) const fn thread_director_supported(self) -> bool {
++        self.leaf_available && (self.eax & CPUID_THREAD_DIRECTOR) != 0
++    }
++
++    pub(crate) const fn thread_director_classes(self) -> u8 {
++        ((self.ecx >> CPUID_TD_CLASS_SHIFT) & 0xFF) as u8
++    }
++
++    pub(crate) const fn capability_mask(self) -> u8 {
++        (self.edx & 0xFF) as u8
++    }
++
++    pub(crate) const fn performance_reporting(self) -> bool {
++        self.hfi_supported() && (self.edx & CPUID_HFI_PERFORMANCE) != 0
++    }
++
++    pub(crate) const fn energy_efficiency_reporting(self) -> bool {
++        self.hfi_supported() && (self.edx & CPUID_HFI_ENERGY_EFFICIENCY) != 0
++    }
++
++    pub(crate) const fn table_pages(self) -> Option<u8> {
++        if self.hfi_supported() {
++            Some((((self.edx >> CPUID_HFI_PAGE_SHIFT) & 0x0F) + 1) as u8)
++        } else {
++            None
++        }
++    }
++
++    pub(crate) const fn table_bytes(self) -> Option<usize> {
++        match self.table_pages() {
++            Some(pages) => Some((pages as usize) * HFI_PAGE_BYTES),
++            None => None,
++        }
++    }
++
++    pub(crate) const fn row_index(self) -> Option<i16> {
++        if self.hfi_supported() {
++            Some(((self.edx >> CPUID_HFI_INDEX_SHIFT) as u16) as i16)
++        } else {
++            None
++        }
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn decodes_hfi_and_thread_director_metadata() {
++        let raw = IntelHfiCpuid {
++            leaf_available: true,
++            msr_instruction: true,
++            eax: CPUID_HFI | CPUID_THREAD_DIRECTOR,
++            ebx: 0,
++            ecx: 4 << CPUID_TD_CLASS_SHIFT,
++            edx: CPUID_HFI_PERFORMANCE
++                | CPUID_HFI_ENERGY_EFFICIENCY
++                | (2 << CPUID_HFI_PAGE_SHIFT)
++                | (7 << CPUID_HFI_INDEX_SHIFT),
++        };
++
++        assert!(raw.hfi_supported());
++        assert!(raw.thread_director_supported());
++        assert_eq!(raw.thread_director_classes(), 4);
++        assert_eq!(raw.capability_mask(), 0x03);
++        assert!(raw.performance_reporting());
++        assert!(raw.energy_efficiency_reporting());
++        assert_eq!(raw.table_pages(), Some(3));
++        assert_eq!(raw.table_bytes(), Some(3 * HFI_PAGE_BYTES));
++        assert_eq!(raw.row_index(), Some(7));
++        assert_eq!(
++            IntelHfiCpuid::from_profile_storage(
++                raw.profile_storage_flags(),
++                raw.eax,
++                raw.ebx,
++                raw.ecx,
++                raw.edx,
++            ),
++            raw
++        );
++    }
++
++    #[test]
++    fn preserves_signed_hfi_row_index() {
++        let raw = IntelHfiCpuid {
++            leaf_available: true,
++            msr_instruction: true,
++            eax: CPUID_HFI,
++            ebx: 0,
++            ecx: 0,
++            edx: CPUID_HFI_PERFORMANCE | (0xFFFF << CPUID_HFI_INDEX_SHIFT),
++        };
++
++        assert_eq!(raw.row_index(), Some(-1));
++    }
++}
+diff --git a/src/power/mod.rs b/src/power/mod.rs
+--- a/src/power/mod.rs
++++ b/src/power/mod.rs
+@@ -1,3 +1,4 @@
++pub(crate) mod hfi;
+ pub(crate) mod hwp;
+ pub(crate) mod rapl;
+ pub(crate) mod thermal;
+diff --git a/src/cpu.rs b/src/cpu.rs
+--- a/src/cpu.rs
++++ b/src/cpu.rs
+@@ -1,3 +1,4 @@
+ use crate::limine::MpCpu as LimineCpu;
++use crate::power::hfi::IntelHfiCpuid;
+ use crate::{exceptions, percpu, runtime};
+ use alloc::vec::Vec;
+@@ -17,7 +18,12 @@
+ struct CpuProfileRecord {
+     registered: AtomicU8,
+     core_kind: AtomicU8,
++    hfi_flags: AtomicU8,
+     lapic_id: AtomicU32,
++    hfi_eax: AtomicU32,
++    hfi_ebx: AtomicU32,
++    hfi_ecx: AtomicU32,
++    hfi_edx: AtomicU32,
+ }
+ 
+ impl CpuProfileRecord {
+@@ -25,7 +31,12 @@
+         Self {
+             registered: AtomicU8::new(0),
+             core_kind: AtomicU8::new(crate::workers::CORE_KIND_UNKNOWN),
++            hfi_flags: AtomicU8::new(0),
+             lapic_id: AtomicU32::new(0),
++            hfi_eax: AtomicU32::new(0),
++            hfi_ebx: AtomicU32::new(0),
++            hfi_ecx: AtomicU32::new(0),
++            hfi_edx: AtomicU32::new(0),
+         }
+     }
+ }
+@@ -87,6 +98,7 @@
+     slot: u32,
+     lapic_id: u32,
+     core_kind: u8,
++    hfi_cpuid: IntelHfiCpuid,
+ }
+ 
+ impl CpuProfile {
+@@ -95,6 +107,16 @@
+             slot,
+             lapic_id,
+             core_kind,
++            hfi_cpuid: IntelHfiCpuid::unavailable(),
++        }
++    }
++
++    fn detected(slot: u32, lapic_id: u32, core_kind: u8) -> Self {
++        Self {
++            slot,
++            lapic_id,
++            core_kind,
++            hfi_cpuid: IntelHfiCpuid::detect_current(),
+         }
+     }
+ 
+@@ -105,8 +127,13 @@
+         }
+ 
+         let cpu = unsafe { &*cpu_ptr };
+-        Self::for_slot(cpu.cpu_index())
+-            .or_else(|| Some(Self::new(cpu.cpu_index(), cpu.lapic_id(), intel_core_kind_hint())))
++        Self::for_slot(cpu.cpu_index()).or_else(|| {
++            Some(Self::detected(
++                cpu.cpu_index(),
++                cpu.lapic_id(),
++                intel_core_kind_hint(),
++            ))
++        })
+     }
+ 
+     pub fn for_slot(slot: u32) -> Option<Self> {
+@@ -119,6 +146,13 @@
+             slot,
+             lapic_id: rec.lapic_id.load(Ordering::Acquire),
+             core_kind: rec.core_kind.load(Ordering::Acquire),
++            hfi_cpuid: IntelHfiCpuid::from_profile_storage(
++                rec.hfi_flags.load(Ordering::Acquire),
++                rec.hfi_eax.load(Ordering::Acquire),
++                rec.hfi_ebx.load(Ordering::Acquire),
++                rec.hfi_ecx.load(Ordering::Acquire),
++                rec.hfi_edx.load(Ordering::Acquire),
++            ),
+         })
+     }
+ 
+@@ -150,4 +184,8 @@
+         }
+     }
+ 
++    pub(crate) const fn hfi_cpuid(self) -> IntelHfiCpuid {
++        self.hfi_cpuid
++    }
++
+     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
+@@ -201,3 +239,3 @@
+     let cpu = unsafe { &*cpu_ptr };
+-    let profile = CpuProfile::new(cpu.cpu_index(), cpu.lapic_id(), intel_core_kind_hint());
++    let profile = CpuProfile::detected(cpu.cpu_index(), cpu.lapic_id(), intel_core_kind_hint());
+     store_profile(profile);
+@@ -354,3 +392,11 @@
+     rec.lapic_id.store(profile.lapic_id, Ordering::Release);
+     rec.core_kind.store(profile.core_kind, Ordering::Release);
++    rec.hfi_eax.store(profile.hfi_cpuid.eax, Ordering::Release);
++    rec.hfi_ebx.store(profile.hfi_cpuid.ebx, Ordering::Release);
++    rec.hfi_ecx.store(profile.hfi_cpuid.ecx, Ordering::Release);
++    rec.hfi_edx.store(profile.hfi_cpuid.edx, Ordering::Release);
++    rec.hfi_flags.store(
++        profile.hfi_cpuid.profile_storage_flags(),
++        Ordering::Release,
++    );
+     rec.registered.store(1, Ordering::Release);
+diff --git a/src/shell2/cmds/tlb.rs b/src/shell2/cmds/tlb.rs
+--- a/src/shell2/cmds/tlb.rs
++++ b/src/shell2/cmds/tlb.rs
+@@ -20,13 +20,14 @@
+-const TLB_USAGE: &str = "tlb: usage `tlb [pci|pcibar|mem|cpu|turbo|ucode|pmu|rapl [store]|thermal|acpi [sig [index]]|aml [ec|symbol <path>|prefix <path>]|facp|madt|hpet|mcfg|ssdt|uefi|smbios|x2apic|usb [probe]|dump]`";
++const TLB_USAGE: &str = "tlb: usage `tlb [pci|pcibar|mem|cpu|hfi|turbo|ucode|pmu|rapl [store]|thermal|acpi [sig [index]]|aml [ec|symbol <path>|prefix <path>]|facp|madt|hpet|mcfg|ssdt|uefi|smbios|x2apic|usb [probe]|dump]`";
+ const TLB_ACPI_USAGE: &str = "tlb: usage `tlb acpi [sig [index]]`";
+ const TLB_AML_USAGE: &str = "tlb: usage `tlb aml [ec|symbol <path>|prefix <path>]`";
+ const ACPI_HEXDUMP_MAX_BYTES: usize = 512;
+ const ACPI_HEXDUMP_ROW_BYTES: usize = 16;
+ const ACPI_AML_DUMP_MAX_BYTES: usize = 1024;
+ const TLB_MENU_HEADERS: [&str; 2] = ["Subcommand", "Description"];
+-const TLB_MENU_ROWS: [(&str, &str); 21] = [
++const TLB_MENU_ROWS: [(&str, &str); 22] = [
+     ("pci", "List PCI devices"),
+     ("pcibar", "List PCI BAR windows"),
+     ("mem", "List memory map"),
+     ("cpu", "List CPU cores"),
++    ("hfi", "Show Intel HFI / Thread Director CPUID metadata"),
+     ("turbo", "List CPU turbo state and all-core verify stats"),
+@@ -1345,4 +1346,206 @@
+     }
+ }
+ 
++fn hfi_registered_profiles() -> Vec<crate::cpu::CpuProfile> {
++    let count = crate::percpu::total_slots().max(crate::smp::cpu_count());
++    (0..count)
++        .filter_map(|slot| crate::cpu::CpuProfile::for_slot(slot as u32))
++        .collect()
++}
++
++fn hfi_summary_cpuid(
++    profiles: &[crate::cpu::CpuProfile],
++) -> Option<crate::power::hfi::IntelHfiCpuid> {
++    profiles
++        .iter()
++        .find(|profile| profile.slot() == 0)
++        .copied()
++        .or_else(|| profiles.first().copied())
++        .or_else(crate::cpu::CpuProfile::current)
++        .map(|profile| profile.hfi_cpuid())
++}
++
++fn fmt_hfi_option<T: core::fmt::Display>(value: Option<T>) -> String {
++    value
++        .map(|value| alloc::format!("{}", value))
++        .unwrap_or_else(|| String::from("-"))
++}
++
++fn cmd_tlb_hfi(io: &'static dyn ShellBackend2) {
++    let profiles = hfi_registered_profiles();
++    let Some(summary) = hfi_summary_cpuid(&profiles) else {
++        line(io, "tlb hfi: no registered CPU profile is available");
++        return;
++    };
++
++    line(io, "Intel Hardware Feedback Interface / Thread Director");
++    line(
++        io,
++        "Capture is CPUID-only; IA32_HW_FEEDBACK_* and the hardware feedback table are untouched.",
++    );
++    line(
++        io,
++        alloc::format!(
++            "Profiles: {}/{}  CPUID.06={}  CPUID.MSR={}  HFI={}  ThreadDirector={}  Classes={}",
++            profiles.len(),
++            crate::percpu::total_slots().max(crate::smp::cpu_count()),
++            yes_no(summary.leaf_available),
++            yes_no(summary.msr_instruction),
++            yes_no(summary.hfi_supported()),
++            yes_no(summary.thread_director_supported()),
++            fmt_hfi_option(
++                summary
++                    .thread_director_supported()
++                    .then_some(summary.thread_director_classes())
++            )
++        )
++        .as_str(),
++    );
++    line(
++        io,
++        alloc::format!(
++            "Capabilities: mask=0x{:02X} performance={} efficiency={} table_pages={} table_bytes={}",
++            summary.capability_mask(),
++            yes_no(summary.performance_reporting()),
++            yes_no(summary.energy_efficiency_reporting()),
++            fmt_hfi_option(summary.table_pages()),
++            summary
++                .table_bytes()
++                .map(|bytes| alloc::format!("0x{:X}", bytes))
++                .unwrap_or_else(|| String::from("-"))
++        )
++        .as_str(),
++    );
++    line(
++        io,
++        alloc::format!(
++            "Summary CPUID.06: EAX=0x{:08X} EBX=0x{:08X} ECX=0x{:08X} EDX=0x{:08X}",
++            summary.eax, summary.ebx, summary.ecx, summary.edx
++        )
++        .as_str(),
++    );
++    blank(io);
++
++    const HEADERS: [&str; 8] = [
++        "Slot",
++        "APIC",
++        "Pkg",
++        "Core",
++        "SMT",
++        "Kind",
++        "HFI row",
++        "CPUID.06 EAX:ECX:EDX",
++    ];
++    let table = TlbTable::with_width(&HEADERS, line_width_for_backend(io).saturating_sub(2))
++        .with_max_col_widths(&[5, 10, 4, 5, 4, 8, 7, 0]);
++    table.emit_header(|text| line(io, text));
++
++    let topology = crate::x2apic::detect_x2apic_topology();
++    for profile in profiles {
++        let cpuid = profile.hfi_cpuid();
++        let (package, core, smt) = topology.decode(profile.lapic_id());
++        let raw = if cpuid.leaf_available {
++            alloc::format!("{:08X}:{:08X}:{:08X}", cpuid.eax, cpuid.ecx, cpuid.edx)
++        } else {
++            String::from("-")
++        };
++        let row = [
++            profile.slot().to_string(),
++            alloc::format!("0x{:X}", profile.lapic_id()),
++            package.to_string(),
++            core.to_string(),
++            smt.to_string(),
++            String::from(profile.core_kind_name()),
++            fmt_hfi_option(cpuid.row_index()),
++            raw,
++        ];
++        table.emit_row(&row, |text| line(io, text));
++    }
++    table.emit_footer(|text| line(io, text));
++    line(io, "HFI row indexes are package-local.");
++}
++
++fn append_hfi_dump(out: &mut String) {
++    let profiles = hfi_registered_profiles();
++
++    writeln!(out, "=== Intel HFI / Thread Director CPUID ===").unwrap();
++    writeln!(
++        out,
++        "capture_policy=registration-time-cpuid-only msr_programming=no hardware_table=unconfigured scheduler_consumer=none"
++    )
++    .unwrap();
++
++    let Some(summary) = hfi_summary_cpuid(&profiles) else {
++        writeln!(out, "metadata=unavailable").unwrap();
++        writeln!(out).unwrap();
++        return;
++    };
++
++    writeln!(
++        out,
++        "profiles={}/{} leaf6={} msr_instruction={} hfi={} thread_director={} classes={} capability_mask=0x{:02X} performance={} efficiency={} table_pages={} table_bytes={}",
++        profiles.len(),
++        crate::percpu::total_slots().max(crate::smp::cpu_count()),
++        yes_no(summary.leaf_available),
++        yes_no(summary.msr_instruction),
++        yes_no(summary.hfi_supported()),
++        yes_no(summary.thread_director_supported()),
++        fmt_hfi_option(
++            summary
++                .thread_director_supported()
++                .then_some(summary.thread_director_classes())
++        ),
++        summary.capability_mask(),
++        yes_no(summary.performance_reporting()),
++        yes_no(summary.energy_efficiency_reporting()),
++        fmt_hfi_option(summary.table_pages()),
++        summary
++            .table_bytes()
++            .map(|bytes| alloc::format!("0x{:X}", bytes))
++            .unwrap_or_else(|| String::from("-"))
++    )
++    .unwrap();
++    writeln!(
++        out,
++        "summary_cpuid.06 eax=0x{:08X} ebx=0x{:08X} ecx=0x{:08X} edx=0x{:08X}",
++        summary.eax, summary.ebx, summary.ecx, summary.edx
++    )
++    .unwrap();
++
++    let topology = crate::x2apic::detect_x2apic_topology();
++    for profile in profiles {
++        let cpuid = profile.hfi_cpuid();
++        let (package, core, smt) = topology.decode(profile.lapic_id());
++        writeln!(
++            out,
++            "slot={} apic=0x{:X} package={} core={} smt={} kind={} leaf6={} hfi={} thread_director={} classes={} performance={} efficiency={} table_pages={} hfi_row={} eax=0x{:08X} ebx=0x{:08X} ecx=0x{:08X} edx=0x{:08X}",
++            profile.slot(),
++            profile.lapic_id(),
++            package,
++            core,
++            smt,
++            profile.core_kind_name(),
++            yes_no(cpuid.leaf_available),
++            yes_no(cpuid.hfi_supported()),
++            yes_no(cpuid.thread_director_supported()),
++            fmt_hfi_option(
++                cpuid
++                    .thread_director_supported()
++                    .then_some(cpuid.thread_director_classes())
++            ),
++            yes_no(cpuid.performance_reporting()),
++            yes_no(cpuid.energy_efficiency_reporting()),
++            fmt_hfi_option(cpuid.table_pages()),
++            fmt_hfi_option(cpuid.row_index()),
++            cpuid.eax,
++            cpuid.ebx,
++            cpuid.ecx,
++            cpuid.edx
++        )
++        .unwrap();
++    }
++    writeln!(out, "hfi_row_scope=package-local").unwrap();
++    writeln!(out).unwrap();
++}
++
+ fn fmt_opt_u64_hex(value: Option<u64>) -> String {
+@@ -3080,13 +3283,13 @@ pub(crate) async fn build_dump_text() -> String {
+     writeln!(out, "TRUEOS TLB UNDER-THE-HOOD DUMP v2").unwrap();
+     writeln!(
+         out,
+         "Contains live hardware identifiers, firmware serials, UUIDs, addresses, and raw table data."
+     )
+     .unwrap();
+     writeln!(
+         out,
+-        "Capture is observational: invasive PMU, turbo, and HPET setup paths are not triggered."
++        "Capture is observational: invasive PMU, turbo, HPET, and HFI setup paths are not triggered."
+     )
+     .unwrap();
+     writeln!(out).unwrap();
+ 
+@@ -3186,8 +3389,9 @@ pub(crate) async fn build_dump_text() -> String {
+     }
+     writeln!(out).unwrap();
+ 
++    append_hfi_dump(&mut out);
+     append_microcode_dump(&mut out);
+     append_pmu_dump(&mut out);
+     append_intel_gpu_dump(&mut out);
+     append_power_dump(&mut out);
+ 
+@@ -4485,4 +4689,5 @@ pub(crate) fn try_parse(
+         }
+         Some("mem") if ensure_no_args(io, args, "tlb: usage `tlb mem`") => cmd_tlb_mem(io),
+         Some("cpu") if ensure_no_args(io, args, "tlb: usage `tlb cpu`") => cmd_tlb_cpu(io),
++        Some("hfi") if ensure_no_args(io, args, "tlb: usage `tlb hfi`") => cmd_tlb_hfi(io),
+         Some("turbo") if ensure_no_args(io, args, "tlb: usage `tlb turbo`") => cmd_tlb_turbo(io),
+diff --git a/src/shell2/shell2_cmd_registry.rs b/src/shell2/shell2_cmd_registry.rs
+--- a/src/shell2/shell2_cmd_registry.rs
++++ b/src/shell2/shell2_cmd_registry.rs
+@@ -50,3 +50,3 @@
+ const TOOL_JSON_SURF: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["https","http","file","html"],"description":"Surf input type."},"input":{"type":"string","description":"Host, URL, TRUEOSFS path, or inline HTML selected by subcommand."}},"required":["subcommand","input"],"additionalProperties":false}"#;
+-const TOOL_JSON_TLB: &str = r#"{"type":"object","properties":{"target":{"type":"string","enum":["pci","pcibar","mem","cpu","turbo","ucode","pmu","rapl","acpi","aml","facp","madt","hpet","mcfg","ssdt","uefi","smbios","x2apic","usb","usb_probe","dump"],"description":"Table or view to print."},"action":{"type":"string","enum":["store"],"description":"Optional RAPL action when target=rapl."},"signature":{"type":"string","minLength":4,"maxLength":4,"description":"Optional ACPI signature when target=acpi, for example SSDT or FACP."},"index":{"type":"integer","minimum":1,"description":"Optional 1-based instance index when target=acpi and the signature repeats."},"subcommand":{"type":"string","enum":["ec","symbol","prefix"],"description":"Optional AML subcommand when target=aml."},"path":{"type":"string","description":"Optional AML path or prefix when target=aml and subcommand is symbol or prefix."}},"required":["target"],"additionalProperties":false}"#;
++const TOOL_JSON_TLB: &str = r#"{"type":"object","properties":{"target":{"type":"string","enum":["pci","pcibar","mem","cpu","hfi","turbo","ucode","pmu","rapl","acpi","aml","facp","madt","hpet","mcfg","ssdt","uefi","smbios","x2apic","usb","usb_probe","dump"],"description":"Table or view to print."},"action":{"type":"string","enum":["store"],"description":"Optional RAPL action when target=rapl."},"signature":{"type":"string","minLength":4,"maxLength":4,"description":"Optional ACPI signature when target=acpi, for example SSDT or FACP."},"index":{"type":"integer","minimum":1,"description":"Optional 1-based instance index when target=acpi and the signature repeats."},"subcommand":{"type":"string","enum":["ec","symbol","prefix"],"description":"Optional AML subcommand when target=aml."},"path":{"type":"string","description":"Optional AML path or prefix when target=aml and subcommand is symbol or prefix."}},"required":["target"],"additionalProperties":false}"#;
+ const TOOL_JSON_TTS: &str = r#"{"type":"object","properties":{"text":{"type":"string","maxLength":8192,"description":"Text to synthesize asynchronously. The native backend performs G2P and splits it into ordered model chunks of at most 510 phonemes."},"voice":{"type":"string","description":"Kokoro voice name; defaults to af_heart."},"speed":{"type":"number","minimum":0.5,"maximum":2.0,"description":"Kokoro speech speed multiplier."}},"required":["text"],"additionalProperties":false}"#;
+diff --git a/tools/test_trueos_doc.py b/tools/test_trueos_doc.py
+--- a/tools/test_trueos_doc.py
++++ b/tools/test_trueos_doc.py
+@@ -37,4 +37,9 @@
+         self.assertEqual(data["parameters"]["type"], "object")
+         self.assertIn("command", data["parameters"]["properties"])
+ 
++    def test_tlb_schema_exposes_hfi_target(self) -> None:
++        data = run("command", "tlb")["data"]
++        targets = data["parameters"]["properties"]["target"]["enum"]
++        self.assertIn("hfi", targets)
++
+     def test_os_command_carries_live_update_tui_contract(self) -> None:

@@ -359,6 +359,56 @@ pub fn assign_current_lane(
     })
 }
 
+/// Invalidate cached guest-linear and combined translations after the host
+/// changes an active guest's page tables while its VPID remains assigned.
+///
+/// VPID deliberately preserves translations across VM exits, so changing a
+/// guest PTE from NX to executable (or back to NX) is not complete until this
+/// fence succeeds on the exact executor lane that owns the assignment.
+pub fn invalidate_active_guest_translations(
+    vm_id: u8,
+    boundary: &'static str,
+) -> Result<(), &'static str> {
+    let slot = current_lane_slot()?;
+    let expected_vpid = vpid_for_vm(vm_id).ok_or("VM id cannot be represented as a VPID")?;
+    let lane = &LANE_VPID_STATE[slot];
+    let state = lane.state.load(Ordering::Acquire);
+    let owner_tag = lane.owner_tag.load(Ordering::Acquire);
+    let vpid = lane.vpid.load(Ordering::Acquire);
+    let generation = lane.generation.load(Ordering::Acquire);
+
+    if state != LANE_ACTIVE
+        || owner_tag != u16::from(vm_id) + 1
+        || vpid != expected_vpid
+        || generation == 0
+    {
+        quarantine_lane(slot, "active VPID invalidation metadata mismatch");
+        hverrorf(format_args!(
+            "hv: vpid invalidation rejected vm={} expected_vpid={} observed_vpid={} generation={} slot={} state={} owner_tag={} boundary={} action=quarantine-lane",
+            vm_id,
+            expected_vpid,
+            vpid,
+            generation,
+            slot,
+            state_name(state),
+            owner_tag,
+            boundary,
+        ));
+        return Err("active VPID invalidation metadata mismatch");
+    }
+
+    if !crate::hv::vmx::invvpid_single_context(vpid) {
+        quarantine_lane(slot, "active VPID invalidation failed");
+        return Err("active VPID invalidation failed");
+    }
+
+    hvlogf(format_args!(
+        "hv: vpid invalidated vm={} vpid={} generation={} slot={} boundary={} invalidation=single-context",
+        vm_id, vpid, generation, slot, boundary
+    ));
+    Ok(())
+}
+
 /// A VM hull lane may return to the executor pool only in the clean state
 /// established by successful VPID retirement.
 pub fn lane_reusable(slot: usize) -> bool {
