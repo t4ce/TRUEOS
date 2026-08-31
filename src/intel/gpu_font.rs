@@ -666,6 +666,22 @@ impl GpuFontRetainedScene {
         self.coverage.as_ref().map(GpuFontCoverageMask::surface)
     }
 
+    /// Bytes retained specifically by a cached identity-stamp scene.
+    ///
+    /// This includes the GPU R8 allocation and the CPU-side sparse stamp
+    /// rectangles. The lazily allocated affine instance state is excluded:
+    /// identity restamps never create it.
+    pub(crate) fn identity_cache_bytes(&self) -> usize {
+        core::mem::size_of::<Self>().saturating_add(self.coverage.as_ref().map_or(0, |coverage| {
+            coverage.surface().bytes.saturating_add(
+                coverage
+                    .stamp_rects
+                    .capacity()
+                    .saturating_mul(core::mem::size_of::<crate::intel::gpgpu::GpgpuRect>()),
+            )
+        }))
+    }
+
     pub(crate) fn origin_px(&self) -> Option<[i32; 2]> {
         self.coverage.as_ref().map(GpuFontCoverageMask::origin_px)
     }

@@ -1846,8 +1846,11 @@ fn enqueue_owner_event(owner: WindowOwner, event: Ui4InputEvent) {
 
     // UI4 keyboard events are ordered transitions. Never silently evict an
     // earlier transition to admit a newer event. Under pressure, discard one
-    // replaceable motion/pan sample first; consumers still receive the newest
-    // absolute coordinates and accumulated delta for every coalesced stream.
+    // replaceable pointer/pan sample first; consumers still receive the newest
+    // absolute coordinates and accumulated deltas.  Wheel samples belong to
+    // this class when no button changed: consumers such as Shell2's scalable
+    // text frontend need the complete signed wheel distance, not every raw
+    // HID report as a separately queued event.
     if !owner_event_is_state_sample(&event)
         && let Some(index) = queue.iter().position(owner_event_is_state_sample)
     {
@@ -1863,7 +1866,7 @@ fn enqueue_owner_event(owner: WindowOwner, event: Ui4InputEvent) {
 fn owner_event_is_state_sample(event: &Ui4InputEvent) -> bool {
     match event {
         Ui4InputEvent::Pointer(pointer) => {
-            pointer.wheel == 0 && pointer.buttons_pressed == 0 && pointer.buttons_released == 0
+            pointer.buttons_pressed == 0 && pointer.buttons_released == 0
         }
         Ui4InputEvent::Pan(pan) => pan.phase == Ui4PanPhase::Update,
         _ => false,
@@ -1892,6 +1895,10 @@ fn coalesce_owner_state_sample(queued: &mut Ui4InputEvent, incoming: Ui4InputEve
         {
             next.dx = previous.dx.saturating_add(next.dx);
             next.dy = previous.dy.saturating_add(next.dy);
+            // Preserve the total detent distance under input pressure.  This
+            // keeps wheel-driven continuous scale deterministic while still
+            // bounding an owner queue to its most recent pointer state.
+            next.wheel = previous.wheel.saturating_add(next.wheel);
             *previous = next;
             true
         }
@@ -2173,4 +2180,58 @@ fn keyboard_hut_metadata(event: &crate::r::keyboard::TrueosKeyboardOutputEvent) 
             )
         })
         .unwrap_or((combo_id, event.controller_id == 0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        Ui4CursorSource, Ui4InputEvent, Ui4PointerEvent, WindowId, coalesce_owner_state_sample,
+        owner_event_is_state_sample,
+    };
+
+    fn pointer(wheel: i16) -> Ui4InputEvent {
+        Ui4InputEvent::Pointer(Ui4PointerEvent {
+            source: Ui4CursorSource {
+                controller_id: 1,
+                slot_id: 2,
+                ep_target: 3,
+                hid_kind: 4,
+            },
+            window: WindowId::from_raw(7).expect("non-zero test window"),
+            x: 40,
+            y: 50,
+            local_x: 4,
+            local_y: 5,
+            dx: 2,
+            dy: -3,
+            wheel,
+            buttons_down: 0,
+            buttons_pressed: 0,
+            buttons_released: 0,
+            combo_id: 0,
+            vcursor: false,
+        })
+    }
+
+    #[test]
+    fn wheel_samples_are_coalesced_without_losing_signed_distance() {
+        let mut queued = pointer(3);
+        assert!(owner_event_is_state_sample(&queued));
+        assert!(coalesce_owner_state_sample(&mut queued, pointer(-1)));
+        let Ui4InputEvent::Pointer(event) = queued else {
+            panic!("pointer was replaced with another event kind");
+        };
+        assert_eq!(event.wheel, 2);
+        assert_eq!((event.dx, event.dy), (4, -6));
+    }
+
+    #[test]
+    fn wheel_accumulation_saturates_at_the_abi_limit() {
+        let mut queued = pointer(i16::MAX);
+        assert!(coalesce_owner_state_sample(&mut queued, pointer(1)));
+        let Ui4InputEvent::Pointer(event) = queued else {
+            panic!("pointer was replaced with another event kind");
+        };
+        assert_eq!(event.wheel, i16::MAX);
+    }
 }

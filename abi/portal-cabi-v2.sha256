@@ -198,7 +198,10 @@
 # The UI4 frame-opacity setter is strictly additive. It applies one bounded
 # u8 opacity through the existing per-frame placement/compositor path; older
 # artifacts neither import it nor change their opaque-frame behavior.
+# The Shell2 font-scale-steps v1 query is strictly additive and read-only. It
+# returns fixed-width size/tier/scale metadata; older v2 artifacts import no
+# new symbol and retain their exact font-sprite request behavior.
 # TRUEOSFS v3 typed write, typed stat, and TDL2 listing calls are strictly
 # additive. They carry stable raw content IDs while the established untyped
 # filesystem calls retain their Blob/metadata-omitting compatibility behavior.
-e6450d265183f952b89efcacf8be834b052e2e206ba294db380cc3fb1032a84b
+fdd0d09226b32f92015d1c3756d9117974afc329027caf991b1ea7895a0e2177

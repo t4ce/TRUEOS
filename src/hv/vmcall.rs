@@ -91,6 +91,7 @@ pub const OP_BP_ASYNC_FS_RECORD_KEY_START: u32 = 0x12C; // payload resolved file
 // arg0 window,arg1 x/y,payload w/h -> rc. The active BlueprintScene producer
 // is identified by its release proof, not by a UI toolkit or render engine.
 pub const OP_BP_UI4_SCENE_COMPUTE_FRAME_PUBLISH: u32 = 0x12D;
+pub const OP_BP_UI4_SHELL2_FONT_SCALE_STEPS_V1: u32 = 0x12E; // arg0 cap -> Shell2FontScaleStep payload
 pub const OP_BP_UI4_SOLARA_FONT_SIZES: u32 = 0xB2; // arg0 cap -> count + FontSize payload
 pub const OP_BP_UI4_SOLARA_FRAME_OPEN: u32 = 0xB3; // arg0 x/y,arg1 width/height -> window
 pub const OP_BP_UI4_SOLARA_FRAME_BEGIN: u32 = 0xB4; // arg0 window,arg1 clear RGBA -> rc
@@ -1743,6 +1744,28 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             let cap = (arg0 as usize).min(PAYLOAD_CAP / entry_bytes);
             let result = unsafe {
                 crate::ui4::blueprint_text::trueos_cabi_ui4_solara_font_sizes(
+                    (*page).payload.as_mut_ptr().cast(),
+                    cap,
+                )
+            };
+            let response_len = if result > 0 {
+                (result as usize).min(cap).saturating_mul(entry_bytes)
+            } else {
+                0
+            };
+            write_response(vm_id, seq, STATUS_OK, (result as i64) as u64, response_len as u32);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_SHELL2_FONT_SCALE_STEPS_V1 => {
+            let Some(page) = host_ptr(vm_id) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let entry_bytes =
+                core::mem::size_of::<crate::ui4::blueprint_text::TrueosUi4Shell2FontScaleStep>();
+            let cap = (arg0 as usize).min(PAYLOAD_CAP / entry_bytes);
+            let result = unsafe {
+                crate::ui4::blueprint_text::trueos_cabi_ui4_shell2_font_scale_steps_v1(
                     (*page).payload.as_mut_ptr().cast(),
                     cap,
                 )

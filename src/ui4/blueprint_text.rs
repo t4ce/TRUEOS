@@ -59,6 +59,11 @@ const MAX_FONT_CANVAS_RUNS_PER_LAYER: usize = 64;
 const MAX_FONT_CANVAS_INTERNAL_LAYERS: usize = 64;
 const MAX_TEXT_ROW_BYTES: usize = 1_024;
 const MAX_NATIVE_FONT_SIZES: usize = 32;
+/// Shell2's wheel UI offers a bounded set of effective sizes.  The source
+/// tiers are deliberately few so a future persistent sprite producer only
+/// needs to warm five native ppem variants; the residual is presentation
+/// scale, not a request to retessellate a new glyph source.
+const SHELL2_FONT_SCALE_STEP_COUNT: usize = 25;
 const MAX_PENDING_POINTER_EVENTS: usize = 256;
 const MAX_PENDING_PAN_EVENTS: usize = 256;
 const MAX_PENDING_KEYBOARD_EVENTS: usize = 256;
@@ -290,6 +295,56 @@ pub const UI4_VISUAL_SOFT_CAP_HZ: u32 = 60;
 pub struct TrueosUi4SolaraFontSize {
     pub native_scale: u32,
     pub target_pixels: u32,
+}
+
+/// One Shell2/UI4 wheel-font scale step.
+///
+/// `effective_pixels` is the exact user-visible size.  `native_tier_pixels`
+/// names the warmed source tier suitable for a cache-backed sprite path, and
+/// `residual_milli` is `effective/native * 1000`, rounded to the nearest
+/// milli-scale.  The current generic sprite request remains exact on a cache
+/// miss; callers must never infer that a reusable source was installed.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub struct TrueosUi4Shell2FontScaleStep {
+    pub effective_pixels: u32,
+    pub native_tier_pixels: u32,
+    pub residual_milli: u32,
+    /// Monospace columns at a 1280 pixel viewport using an 0.5em cell.
+    pub columns_at_1280: u32,
+    /// Text rows at a 720 pixel viewport using a one-em cell height.
+    pub rows_at_720: u32,
+    /// One only when the size is a declared Shell2 scale step and therefore
+    /// structurally eligible for a future tiered sprite-cache lookup.
+    pub cache_eligible: u32,
+}
+
+const SHELL2_FONT_SCALE_EFFECTIVE_PIXELS: [u32; SHELL2_FONT_SCALE_STEP_COUNT] = [
+    12, 13, 14, 15, 16, 18, 20, 22, 24, 27, 30, 33, 36, 40, 44, 48, 54, 60, 66, 72, 80, 88, 96,
+    104, 108,
+];
+const SHELL2_FONT_SCALE_NATIVE_TIERS: [u32; 5] = [16, 24, 36, 54, 80];
+
+fn shell2_font_scale_step(effective_pixels: u32) -> Option<TrueosUi4Shell2FontScaleStep> {
+    if !SHELL2_FONT_SCALE_EFFECTIVE_PIXELS.contains(&effective_pixels) {
+        return None;
+    }
+    let native_tier_pixels = SHELL2_FONT_SCALE_NATIVE_TIERS
+        .iter()
+        .copied()
+        .min_by_key(|tier| tier.abs_diff(effective_pixels))?;
+    let residual_milli = effective_pixels
+        .saturating_mul(1_000)
+        .saturating_add(native_tier_pixels / 2)
+        / native_tier_pixels;
+    Some(TrueosUi4Shell2FontScaleStep {
+        effective_pixels,
+        native_tier_pixels,
+        residual_milli,
+        columns_at_1280: 2_560 / effective_pixels.max(1),
+        rows_at_720: 720 / effective_pixels.max(1),
+        cache_eligible: 1,
+    })
 }
 
 /// Legacy positioned-row ABI descriptor retained for portal compatibility.
@@ -847,9 +902,24 @@ const fn sprite_source_is_premultiplied(font_owned: bool) -> bool {
 }
 
 struct BlueprintFontSpriteRequest {
+    key: BlueprintFontSpriteKey,
     ticket: u64,
     sprite_id: u32,
     state: BlueprintFontSpriteState,
+}
+
+/// Exact per-UI4-surface identity for the Shell2 sprite request ABI.
+///
+/// This is intentionally a request/ticket deduplicator, not a general glyph
+/// cache: it neither clones GPU sources nor extends their lifetime beyond the
+/// owning `BlueprintSceneSurface`.  Color stays in the key because v1 asks
+/// for a fully coloured sprite.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+struct BlueprintFontSpriteKey {
+    font: GpuFontFace,
+    scalar: char,
+    font_pixels_bits: u32,
+    color_rgba: u32,
 }
 
 enum BlueprintFontSpriteState {
@@ -860,6 +930,18 @@ enum BlueprintFontSpriteState {
         origin_px: [i32; 2],
     },
     Failed,
+}
+
+fn live_font_sprite_ticket(
+    requests: &[BlueprintFontSpriteRequest],
+    key: BlueprintFontSpriteKey,
+) -> Option<u64> {
+    requests
+        .iter()
+        .find(|request| {
+            request.key == key && !matches!(&request.state, BlueprintFontSpriteState::Failed)
+        })
+        .map(|request| request.ticket)
 }
 
 unsafe impl Send for OwnedRgba8Surface {}
@@ -941,6 +1023,37 @@ pub unsafe extern "C" fn trueos_cabi_ui4_solara_font_sizes(
         }
     }
     count as isize
+}
+
+/// Enumerate Shell2's fixed wheel-scale ladder.
+///
+/// This is intentionally separate from the older native render-target size
+/// enumeration: existing callers retain its native-scale semantics, while a
+/// Shell2 frontend can choose one of 25 effective sizes and know both its
+/// warmed tier/cache eligibility and its reduced terminal-cell density.
+pub unsafe extern "C" fn trueos_cabi_ui4_shell2_font_scale_steps_v1(
+    out: *mut TrueosUi4Shell2FontScaleStep,
+    out_cap: usize,
+) -> isize {
+    if out.is_null() && out_cap != 0 {
+        return ERROR_INVALID as isize;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return unsafe { guest_shell2_font_scale_steps(out, out_cap) };
+    }
+    for (slot, effective_pixels) in SHELL2_FONT_SCALE_EFFECTIVE_PIXELS
+        .iter()
+        .copied()
+        .take(out_cap.min(SHELL2_FONT_SCALE_STEP_COUNT))
+        .enumerate()
+    {
+        // SAFETY: `slot` is bounded by the caller supplied capacity.
+        unsafe {
+            out.add(slot)
+                .write(shell2_font_scale_step(effective_pixels).expect("declared scale step"));
+        }
+    }
+    SHELL2_FONT_SCALE_STEP_COUNT as isize
 }
 
 /// Create one dirty-cadence UI4 frame and broker window for the active VM.
@@ -4625,6 +4738,39 @@ unsafe fn guest_font_sizes(out: *mut TrueosUi4SolaraFontSize, out_cap: usize) ->
     count as isize
 }
 
+unsafe fn guest_shell2_font_scale_steps(
+    out: *mut TrueosUi4Shell2FontScaleStep,
+    out_cap: usize,
+) -> isize {
+    let response_cap = out_cap.min(SHELL2_FONT_SCALE_STEP_COUNT);
+    let entry_bytes = core::mem::size_of::<TrueosUi4Shell2FontScaleStep>();
+    let mut response = alloc::vec![0u8; response_cap.saturating_mul(entry_bytes)];
+    let (status, data) = trueos_vm::vmcall::call_with_payload(
+        trueos_vm::vmcall::OP_BP_UI4_SHELL2_FONT_SCALE_STEPS_V1,
+        response_cap as u64,
+        0,
+        &[],
+        response.as_mut_slice(),
+    );
+    if status != trueos_vm::vmcall::STATUS_OK {
+        return ERROR_UI4 as isize;
+    }
+    let count = data as i64;
+    if count < 0 {
+        return count as isize;
+    }
+    let copied_entries = (count as usize).min(response_cap);
+    let copied_bytes = copied_entries.saturating_mul(entry_bytes);
+    if copied_bytes != 0 {
+        // SAFETY: `out` has `response_cap` entries and the VM call filled the
+        // response prefix represented by `copied_entries`.
+        unsafe {
+            core::ptr::copy_nonoverlapping(response.as_ptr(), out.cast::<u8>(), copied_bytes)
+        };
+    }
+    count as isize
+}
+
 unsafe fn guest_image_source_info(
     name_ptr: *const u8,
     name_len: usize,
@@ -5110,6 +5256,20 @@ pub(crate) fn request_font_sprite(
     {
         return ERROR_INVALID;
     }
+    let key = BlueprintFontSpriteKey {
+        font,
+        scalar,
+        font_pixels_bits: font_pixels.to_bits(),
+        color_rgba,
+    };
+    // A Shell2 wheel frontend should first obtain an exact step from
+    // `trueos_cabi_ui4_shell2_font_scale_steps_v1`, request that step's
+    // `native_tier_pixels` here, and apply the published residual to its
+    // sprite quad. v1 deliberately does not quantize arbitrary caller sizes:
+    // a non-tier request remains an exact generic stamp fallback.
+    let scale_step = (font_pixels == libm::truncf(font_pixels))
+        .then(|| shell2_font_scale_step(font_pixels as u32))
+        .flatten();
     {
         let surfaces = SURFACES.lock();
         let Some(surface) = surfaces
@@ -5118,12 +5278,32 @@ pub(crate) fn request_font_sprite(
         else {
             return ERROR_NOT_FOUND;
         };
+        if let Some(ticket) = live_font_sprite_ticket(&surface.font_sprite_requests, key) {
+            // This is the safe cache-backed fast path currently available to
+            // v1: reuse the caller-owned ticket/source while its UI4 surface
+            // is alive.  No cross-surface source reuse or GPU lifetime change
+            // occurs here.
+            crate::log_trace!(target: "ui4/solara-text";
+                "ui4/font-sprite: request-hit ticket={} cache_eligible={} cache_scope=surface-exact path=retain-existing-ticket\n",
+                ticket, u32::from(scale_step.is_some()),
+            );
+            *out_ticket = ticket;
+            return 0;
+        }
         if surface.font_sprite_requests.len() >= MAX_BLUEPRINT_FONT_SPRITES {
             return ERROR_BUSY;
         }
     }
-    // The kernel receives no reusable glyph identity here.  A caller that
-    // asks twice gets two producer tickets; Shell2 is the sole key owner.
+    // A first exact request takes the generic stamp fallback.  Its per-surface
+    // ticket is retained above, so subsequent v1 requests can avoid another
+    // analytical coverage pass without widening font-core ownership.
+    if let Some(step) = scale_step {
+        crate::log_trace!(target: "ui4/solara-text";
+            "ui4/font-sprite: tiered-request effective_px={} native_tier_px={} residual_milli={} cache_eligible={} cache_hit=0 path=exact-generic-stamp\n",
+            step.effective_pixels, step.native_tier_pixels, step.residual_milli,
+            step.cache_eligible,
+        );
+    }
     // One conservative pixel avoids needing a floating-point `ceil` runtime
     // in the kernel while preserving the exact fractional em size below.
     let extent = (font_pixels * 4.0 + 1.0).max(32.0) as u32;
@@ -5168,6 +5348,7 @@ pub(crate) fn request_font_sprite(
     surface
         .font_sprite_requests
         .push(BlueprintFontSpriteRequest {
+            key,
             ticket,
             sprite_id,
             state: BlueprintFontSpriteState::Pending(pending),
@@ -6706,6 +6887,84 @@ fn reap_retired_frames() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shell2_font_scale_ladder_has_25_effective_sizes_and_five_warmed_tiers() {
+        assert_eq!(SHELL2_FONT_SCALE_EFFECTIVE_PIXELS.len(), 25);
+        assert_eq!(SHELL2_FONT_SCALE_NATIVE_TIERS.len(), 5);
+        assert!(
+            SHELL2_FONT_SCALE_EFFECTIVE_PIXELS
+                .windows(2)
+                .all(|pair| pair[0] < pair[1])
+        );
+        assert!(SHELL2_FONT_SCALE_EFFECTIVE_PIXELS.iter().all(|pixels| {
+            shell2_font_scale_step(*pixels).is_some_and(|step| {
+                SHELL2_FONT_SCALE_NATIVE_TIERS.contains(&step.native_tier_pixels)
+                    && step.cache_eligible == 1
+            })
+        }));
+    }
+
+    #[test]
+    fn shell2_font_scale_ladder_reports_residual_and_reduced_cell_density() {
+        assert_eq!(
+            shell2_font_scale_step(12),
+            Some(TrueosUi4Shell2FontScaleStep {
+                effective_pixels: 12,
+                native_tier_pixels: 16,
+                residual_milli: 750,
+                columns_at_1280: 213,
+                rows_at_720: 60,
+                cache_eligible: 1,
+            })
+        );
+        let native = shell2_font_scale_step(54).expect("declared native tier");
+        assert_eq!((native.native_tier_pixels, native.residual_milli), (54, 1_000));
+        assert_eq!(
+            shell2_font_scale_step(13)
+                .expect("declared odd scale")
+                .columns_at_1280,
+            196
+        );
+        let large = shell2_font_scale_step(108).expect("declared large scale");
+        assert_eq!((large.native_tier_pixels, large.residual_milli), (80, 1_350));
+        assert!(large.columns_at_1280 < native.columns_at_1280);
+        assert!(large.rows_at_720 < native.rows_at_720);
+        assert_eq!(shell2_font_scale_step(17), None);
+    }
+
+    #[test]
+    fn font_sprite_fast_path_deduplicates_only_live_exact_surface_requests() {
+        let key = BlueprintFontSpriteKey {
+            font: GpuFontFace::Inconsolata,
+            scalar: 'A',
+            font_pixels_bits: 36.0_f32.to_bits(),
+            color_rgba: 0xFFFF_FFFF,
+        };
+        let requests = alloc::vec![
+            BlueprintFontSpriteRequest {
+                key,
+                ticket: 41,
+                sprite_id: 1,
+                state: BlueprintFontSpriteState::Ready {
+                    width: 16,
+                    height: 24,
+                    origin_px: [0, 0],
+                },
+            },
+            BlueprintFontSpriteRequest {
+                key: BlueprintFontSpriteKey { scalar: 'B', ..key },
+                ticket: 42,
+                sprite_id: 2,
+                state: BlueprintFontSpriteState::Failed,
+            },
+        ];
+        assert_eq!(live_font_sprite_ticket(&requests, key), Some(41));
+        assert_eq!(
+            live_font_sprite_ticket(&requests, BlueprintFontSpriteKey { scalar: 'B', ..key }),
+            None
+        );
+    }
 
     fn keyboard_event(
         seq: u32,

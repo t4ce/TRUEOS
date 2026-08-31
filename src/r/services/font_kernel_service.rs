@@ -47,6 +47,13 @@ const FONT_KERNEL_GPU_WAITERS: usize = 32;
 /// can retain its independently changing foreground color.
 pub(crate) const FONT_PRODUCER_GLYPH_CACHE_BYTES: usize = 80 * 1024;
 const FONT_PRODUCER_GLYPH_CACHE_THEORETICAL_32_BYTES: usize = FONT_PRODUCER_GLYPH_CACHE_BYTES * 32;
+/// Colorless coverage retained for exact repeated producer layers. The
+/// budget includes the GPU R8 mask and its CPU key/stamp metadata; a hit lets
+/// another foreground restamp without rerunning analytical coverage. The cap
+/// is per producer generation.
+const FONT_PRODUCER_RETAINED_COVERAGE_BYTES: usize = 512 * 1024;
+const FONT_PRODUCER_RETAINED_COVERAGE_THEORETICAL_32_BYTES: usize =
+    FONT_PRODUCER_RETAINED_COVERAGE_BYTES * 32;
 static NEXT_TICKET: AtomicU64 = AtomicU64::new(1);
 static ONLINE: AtomicBool = AtomicBool::new(false);
 static IN_FLIGHT: AtomicBool = AtomicBool::new(false);
@@ -465,6 +472,7 @@ struct FontGpuProducerResources {
     /// registry slot. Re-registration therefore installs a fresh cache even
     /// if the numerical producer id is reused.
     glyph_cache: Mutex<ProducerGlyphRecipeCache>,
+    retained_coverage: Mutex<ProducerRetainedCoverageCache>,
 }
 
 struct ProducerGlyphRecipeCacheEntry {
@@ -560,6 +568,138 @@ impl ProducerGlyphRecipeCache {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ProducerRetainedLayerKey {
+    font: GpuFontFace,
+    viewport_width: u32,
+    viewport_height: u32,
+    raster_width: u32,
+    raster_height: u32,
+    positioning: RetainedFontPositioning,
+    runs: Vec<ProducerRetainedRunKey>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct ProducerRetainedRunKey {
+    text: String,
+    position_bits: [u32; 2],
+    font_pixels_bits: u32,
+    slant_bits: u32,
+}
+
+impl ProducerRetainedLayerKey {
+    fn from_scene(scene: &RetainSceneRequest) -> Self {
+        Self {
+            font: scene.font,
+            viewport_width: scene.viewport_width,
+            viewport_height: scene.viewport_height,
+            raster_width: scene.raster_width,
+            raster_height: scene.raster_height,
+            positioning: scene.positioning,
+            runs: scene
+                .runs
+                .iter()
+                .map(|run| ProducerRetainedRunKey {
+                    text: run.text.clone(),
+                    position_bits: run.position.map(f32::to_bits),
+                    font_pixels_bits: run.font_pixels.to_bits(),
+                    slant_bits: run.slant.to_bits(),
+                })
+                .collect(),
+        }
+    }
+
+    fn retained_bytes(&self) -> usize {
+        core::mem::size_of::<Self>()
+            .saturating_add(
+                self.runs
+                    .capacity()
+                    .saturating_mul(core::mem::size_of::<ProducerRetainedRunKey>()),
+            )
+            .saturating_add(
+                self.runs
+                    .iter()
+                    .fold(0usize, |bytes, run| bytes.saturating_add(run.text.capacity())),
+            )
+    }
+}
+
+struct ProducerRetainedCoverageEntry {
+    key: ProducerRetainedLayerKey,
+    scene: Arc<GpuFontRetainedScene>,
+    accounted_bytes: usize,
+}
+
+/// Exact retained scene masks, owned solely by one producer generation.
+/// Color deliberately stays outside the key and is supplied at restamp.
+struct ProducerRetainedCoverageCache {
+    entries: Vec<ProducerRetainedCoverageEntry>,
+    used_bytes: usize,
+    hits: u64,
+    misses: u64,
+    uncached: u64,
+    accepting_fills: bool,
+}
+
+impl ProducerRetainedCoverageCache {
+    const fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+            used_bytes: 0,
+            hits: 0,
+            misses: 0,
+            uncached: 0,
+            accepting_fills: true,
+        }
+    }
+
+    fn get(&mut self, key: &ProducerRetainedLayerKey) -> Option<Arc<GpuFontRetainedScene>> {
+        let entry = self.entries.iter().find(|entry| &entry.key == key)?;
+        self.hits = self.hits.saturating_add(1);
+        Some(Arc::clone(&entry.scene))
+    }
+
+    fn insert(&mut self, key: ProducerRetainedLayerKey, scene: Arc<GpuFontRetainedScene>) {
+        self.misses = self.misses.saturating_add(1);
+        let bytes = key
+            .retained_bytes()
+            .saturating_add(scene.identity_cache_bytes())
+            .saturating_add(core::mem::size_of::<ProducerRetainedCoverageEntry>());
+        if !self.accepting_fills
+            || bytes == 0
+            || bytes > FONT_PRODUCER_RETAINED_COVERAGE_BYTES.saturating_sub(self.used_bytes)
+        {
+            self.uncached = self.uncached.saturating_add(1);
+            return;
+        }
+        self.used_bytes = self.used_bytes.saturating_add(bytes);
+        self.entries.push(ProducerRetainedCoverageEntry {
+            key,
+            scene,
+            accounted_bytes: bytes,
+        });
+    }
+
+    fn retire(&mut self) {
+        self.entries.clear();
+        self.used_bytes = 0;
+        self.hits = 0;
+        self.misses = 0;
+        self.uncached = 0;
+        self.accepting_fills = false;
+    }
+
+    fn diagnostics(&self) -> (usize, usize, u64, u64, u64) {
+        debug_assert_eq!(
+            self.used_bytes,
+            self.entries
+                .iter()
+                .fold(0usize, |total, entry| total.saturating_add(entry.accounted_bytes))
+        );
+        (self.entries.len(), self.used_bytes, self.hits, self.misses, self.uncached)
+    }
+}
+
 enum FontGpuProducerStorage {
     /// Producer-owned output used by non-UI4 clients.
     RetainedRows(Vec<crate::intel::gpgpu::GpgpuOwnedRgba8Surface>),
@@ -571,6 +711,7 @@ enum FontGpuProducerStorage {
 impl Drop for FontGpuProducerResources {
     fn drop(&mut self) {
         self.glyph_cache.lock().retire();
+        self.retained_coverage.lock().retire();
         let _ = crate::r::services::font_producer_service::release_producer(self.lease);
     }
 }
@@ -784,7 +925,7 @@ pub(crate) fn register_gpu_font_producer(
         rows.push(row);
     }
     crate::log_info!(target: "render";
-        "font-kernel-service: producer registered id={} generation={} face={} tier={} font_pixels_milli={} extent={}x{} rows={} max_chars={} storage=persistent-font-rgba8 glyph_recipe_cache=colorless-first-fill-no-evict cache_budget_bytes={} theoretical_32_cache_bytes={} submit_lane=serialized-font-rcs\n",
+        "font-kernel-service: producer registered id={} generation={} face={} tier={} font_pixels_milli={} extent={}x{} rows={} max_chars={} storage=persistent-font-rgba8 glyph_recipe_cache=colorless-first-fill-no-evict cache_budget_bytes={} theoretical_32_cache_bytes={} retained_r8_cache=exact-layer-colorless-first-fill-no-evict retained_r8_budget_bytes={} submit_lane=serialized-font-rcs\n",
         lease.producer_id(),
         lease.generation(),
         face.registry_name(),
@@ -796,12 +937,14 @@ pub(crate) fn register_gpu_font_producer(
         registration.max_chars,
         FONT_PRODUCER_GLYPH_CACHE_BYTES,
         FONT_PRODUCER_GLYPH_CACHE_THEORETICAL_32_BYTES,
+        FONT_PRODUCER_RETAINED_COVERAGE_BYTES,
     );
     Ok(FontGpuProducer {
         resources: Arc::new(FontGpuProducerResources {
             lease,
             storage: FontGpuProducerStorage::RetainedRows(rows),
             glyph_cache: Mutex::new(ProducerGlyphRecipeCache::new()),
+            retained_coverage: Mutex::new(ProducerRetainedCoverageCache::new()),
         }),
     })
 }
@@ -825,7 +968,7 @@ pub(crate) fn register_ui4_gpu_font_producer(
     ensure_font_face_available(face).map_err(FontKernelError::Unavailable)?;
     let lease = crate::r::services::font_producer_service::register_producer(registration)?;
     crate::log_info!(target: "render";
-        "font-kernel-service: UI4 producer registered id={} generation={} face={} tier={} font_pixels_milli={} extent={}x{} rows={} max_chars={} storage=ui4-frame-ring glyph_recipe_cache=colorless-first-fill-no-evict cache_budget_bytes={} theoretical_32_cache_bytes={} submit_lane=serialized-font-rcs\n",
+        "font-kernel-service: UI4 producer registered id={} generation={} face={} tier={} font_pixels_milli={} extent={}x{} rows={} max_chars={} storage=ui4-frame-ring glyph_recipe_cache=colorless-first-fill-no-evict cache_budget_bytes={} theoretical_32_cache_bytes={} retained_r8_cache=exact-layer-colorless-first-fill-no-evict retained_r8_budget_bytes={} submit_lane=serialized-font-rcs\n",
         lease.producer_id(),
         lease.generation(),
         face.registry_name(),
@@ -837,12 +980,14 @@ pub(crate) fn register_ui4_gpu_font_producer(
         registration.max_chars,
         FONT_PRODUCER_GLYPH_CACHE_BYTES,
         FONT_PRODUCER_GLYPH_CACHE_THEORETICAL_32_BYTES,
+        FONT_PRODUCER_RETAINED_COVERAGE_BYTES,
     );
     Ok(FontGpuProducer {
         resources: Arc::new(FontGpuProducerResources {
             lease,
             storage: FontGpuProducerStorage::Ui4FrameRing,
             glyph_cache: Mutex::new(ProducerGlyphRecipeCache::new()),
+            retained_coverage: Mutex::new(ProducerRetainedCoverageCache::new()),
         }),
     })
 }
@@ -874,6 +1019,7 @@ impl FontGpuProducer {
         // keeps its normal exact-buffer lifecycle, but must fall back to
         // uncached preparation rather than retain producer-owned state.
         self.resources.glyph_cache.lock().retire();
+        self.resources.retained_coverage.lock().retire();
         Ok(retired)
     }
 
@@ -2140,8 +2286,10 @@ fn prepare_producer_stamp_scenes(
     ticket: FontKernelTicket,
     request: &FontStampRequest,
     resources: &Arc<FontGpuProducerResources>,
-) -> Result<(Vec<(GpuFontRetainedScene, GpuFontRgba)>, usize, (u64, u64, u64), bool), FontKernelError>
-{
+) -> Result<
+    (Vec<(Arc<GpuFontRetainedScene>, GpuFontRgba)>, usize, (u64, u64, u64), bool),
+    FontKernelError,
+> {
     // Producer rows use a one-to-one viewport/raster contract, so ppem is the
     // registered font pixel size.  The origin recipe path rounds
     // `position_y + ppem`, while the legacy path rounds position and applies
@@ -2156,7 +2304,15 @@ fn prepare_producer_stamp_scenes(
             .any(|run| run.font_pixels != libm::truncf(run.font_pixels))
     }) {
         let (scenes, glyphs) = prepare_stamp_scenes(ticket, request)?;
-        return Ok((scenes, glyphs, (0, 0, 0), false));
+        return Ok((
+            scenes
+                .into_iter()
+                .map(|(scene, color)| (Arc::new(scene), color))
+                .collect(),
+            glyphs,
+            (0, 0, 0),
+            false,
+        ));
     }
     let mut scenes = Vec::with_capacity(request.layers.len());
     let mut glyphs = 0usize;
@@ -2167,7 +2323,28 @@ fn prepare_producer_stamp_scenes(
         // future producer contract broadens that rule.
         if layer.scene.positioning != RetainedFontPositioning::SceneOrigin {
             let (scenes, glyphs) = prepare_stamp_scenes(ticket, request)?;
-            return Ok((scenes, glyphs, (0, 0, 0), false));
+            return Ok((
+                scenes
+                    .into_iter()
+                    .map(|(scene, color)| (Arc::new(scene), color))
+                    .collect(),
+                glyphs,
+                (0, 0, 0),
+                false,
+            ));
+        }
+        let retained_key = ProducerRetainedLayerKey::from_scene(&layer.scene);
+        if let Some(scene) = resources.retained_coverage.lock().get(&retained_key) {
+            glyphs = glyphs.saturating_add(
+                layer
+                    .scene
+                    .runs
+                    .iter()
+                    .map(|run| run.text.chars().count())
+                    .sum::<usize>(),
+            );
+            scenes.push((scene, layer.foreground));
+            continue;
         }
         let glyph_runs = expand_origin_runs(ticket, &layer.scene)?;
         let prepared = {
@@ -2211,8 +2388,14 @@ fn prepare_producer_stamp_scenes(
             prepared
         };
         glyphs = glyphs.saturating_add(prepared.len());
-        let scene = retain_gpu_font_prepared_origin_scene(prepared)
-            .map_err(FontKernelError::Unavailable)?;
+        let scene = Arc::new(
+            retain_gpu_font_prepared_origin_scene(prepared)
+                .map_err(FontKernelError::Unavailable)?,
+        );
+        resources
+            .retained_coverage
+            .lock()
+            .insert(retained_key, Arc::clone(&scene));
         scenes.push((scene, layer.foreground));
     }
     let after = resources.glyph_cache.lock().diagnostics();
@@ -2334,7 +2517,7 @@ fn validate_frame_clear_outcome(
 }
 
 enum FontFrameCoverage {
-    Retained(Vec<(GpuFontRetainedScene, GpuFontRgba)>),
+    Retained(Vec<(Arc<GpuFontRetainedScene>, GpuFontRgba)>),
 }
 
 fn process_font_rush_frame_clear(
@@ -2570,7 +2753,7 @@ fn process_frame_stamp(
             let scene = retain_gpu_font_prepared_centered_scene(prepared)
                 .map_err(FontKernelError::Unavailable)?;
             (
-                FontFrameCoverage::Retained(alloc::vec![(scene, foreground)]),
+                FontFrameCoverage::Retained(alloc::vec![(Arc::new(scene), foreground)]),
                 glyphs,
                 "prepared-plan-union-coverage",
                 None,
@@ -2578,7 +2761,17 @@ fn process_frame_stamp(
         }
         FrameStampInput::Request(request) => {
             let (scenes, glyphs) = prepare_stamp_scenes(ticket, &request)?;
-            (FontFrameCoverage::Retained(scenes), glyphs, "request-outline", None)
+            (
+                FontFrameCoverage::Retained(
+                    scenes
+                        .into_iter()
+                        .map(|(scene, color)| (Arc::new(scene), color))
+                        .collect(),
+                ),
+                glyphs,
+                "request-outline",
+                None,
+            )
         }
         FrameStampInput::ProducerRequest {
             request,
@@ -2586,7 +2779,12 @@ fn process_frame_stamp(
         } => {
             let (scenes, glyphs, delta, cache_used) =
                 prepare_producer_stamp_scenes(ticket, &request, &glyph_cache)?;
-            let diagnostics = cache_used.then(|| glyph_cache.glyph_cache.lock().diagnostics());
+            let diagnostics = cache_used.then(|| {
+                (
+                    glyph_cache.glyph_cache.lock().diagnostics(),
+                    glyph_cache.retained_coverage.lock().diagnostics(),
+                )
+            });
             (
                 FontFrameCoverage::Retained(scenes),
                 glyphs,
@@ -2621,16 +2819,22 @@ fn process_frame_stamp(
     };
     let cache_log = if let Some((diagnostics, delta)) = producer_cache {
         alloc::format!(
-            "cache=producer-recipe-colorless budget_bytes={} used_bytes={} entries={} hits={} misses={} uncached={} request_hits={} request_misses={} request_uncached={}",
+            "cache=producer-recipe-colorless budget_bytes={} used_bytes={} entries={} hits={} misses={} uncached={} request_hits={} request_misses={} request_uncached={} retained_r8_budget_bytes={} retained_r8_used_bytes={} retained_r8_entries={} retained_r8_hits={} retained_r8_misses={} retained_r8_uncached={}",
             FONT_PRODUCER_GLYPH_CACHE_BYTES,
-            diagnostics.1,
-            diagnostics.0,
-            diagnostics.2,
-            diagnostics.3,
-            diagnostics.4,
+            diagnostics.0.1,
+            diagnostics.0.0,
+            diagnostics.0.2,
+            diagnostics.0.3,
+            diagnostics.0.4,
             delta.0,
             delta.1,
             delta.2,
+            FONT_PRODUCER_RETAINED_COVERAGE_BYTES,
+            diagnostics.1.1,
+            diagnostics.1.0,
+            diagnostics.1.2,
+            diagnostics.1.3,
+            diagnostics.1.4,
         )
     } else {
         String::from("cache=none")
@@ -2957,10 +3161,12 @@ pub(crate) async fn font_kernel_service_task() {
     ONLINE.store(true, Ordering::Release);
     crate::log_info!(
         target: "render";
-        "font-kernel-service: online paths=retain-scene+async-stamp+async-frame-stamp+prepared-frame-stamp+registered-persistent-row+font-rush-clear-only+font-rush-showcase-rgba8-sprite controller=bsp worker=leased-blocking-service-lane font_lane=fair-fifo-font-only gpu_context=kernel-gpgpu-font queue_capacity={} producer_slots=32 producer_rows=persistent-generation-tagged-ack-credit retained_storage=gpu-vm-r8 prepared_storage=bounded-transient-move-once glyph_cache=per-producer-colorless-recipe-first-fill-no-evict cache_budget_bytes={} theoretical_32_cache_bytes={} r8_atlas_cache=not-yet stamp_output=owned-or-ui4-leased-gpu-vm-rgba8 completion=signal\n",
+        "font-kernel-service: online paths=retain-scene+async-stamp+async-frame-stamp+prepared-frame-stamp+registered-persistent-row+font-rush-clear-only+font-rush-showcase-rgba8-sprite controller=bsp worker=leased-blocking-service-lane font_lane=fair-fifo-font-only gpu_context=kernel-gpgpu-font queue_capacity={} producer_slots=32 producer_rows=persistent-generation-tagged-ack-credit retained_storage=gpu-vm-r8 prepared_storage=bounded-transient-move-once glyph_cache=per-producer-colorless-recipe-first-fill-no-evict cache_budget_bytes={} theoretical_32_cache_bytes={} retained_r8_cache=per-producer-exact-layer-first-fill-no-evict retained_r8_budget_bytes={} retained_r8_theoretical_32_bytes={} stamp_output=owned-or-ui4-leased-gpu-vm-rgba8 completion=signal\n",
         FONT_KERNEL_QUEUE_CAPACITY,
         FONT_PRODUCER_GLYPH_CACHE_BYTES,
         FONT_PRODUCER_GLYPH_CACHE_THEORETICAL_32_BYTES,
+        FONT_PRODUCER_RETAINED_COVERAGE_BYTES,
+        FONT_PRODUCER_RETAINED_COVERAGE_THEORETICAL_32_BYTES,
     );
     loop {
         if GPU_RETRY_DELAY_PENDING.swap(false, Ordering::AcqRel) {
@@ -3026,6 +3232,35 @@ mod tests {
         assert_eq!(FONT_PRODUCER_GLYPH_CACHE_BYTES * 32, 2_560 * 1024);
         assert_eq!(cache.diagnostics(), (0, 0, 0, 0, 0));
         assert!(cache.accepting_fills);
+        cache.retire();
+        assert_eq!(cache.diagnostics(), (0, 0, 0, 0, 0));
+        assert!(!cache.accepting_fills);
+    }
+
+    #[test]
+    fn retained_coverage_key_is_exact_and_has_no_color_component() {
+        let scene = request();
+        let key = ProducerRetainedLayerKey::from_scene(&scene);
+        assert_eq!(key, ProducerRetainedLayerKey::from_scene(&scene));
+
+        let mut moved = scene.clone();
+        moved.runs[0].position[0] += 1.0;
+        assert_ne!(key, ProducerRetainedLayerKey::from_scene(&moved));
+
+        let mut recolored_layer = FontStampLayer {
+            scene: scene.clone(),
+            foreground: GpuFontRgba::new(1, 2, 3, 4),
+        };
+        let recolored_key = ProducerRetainedLayerKey::from_scene(&recolored_layer.scene);
+        recolored_layer.foreground = GpuFontRgba::new(200, 100, 50, 255);
+        assert_eq!(recolored_key, ProducerRetainedLayerKey::from_scene(&recolored_layer.scene));
+    }
+
+    #[test]
+    fn retained_coverage_cache_retirement_releases_its_bounded_accounting() {
+        let mut cache = ProducerRetainedCoverageCache::new();
+        assert_eq!(FONT_PRODUCER_RETAINED_COVERAGE_THEORETICAL_32_BYTES, 16 * 1024 * 1024);
+        assert_eq!(cache.diagnostics(), (0, 0, 0, 0, 0));
         cache.retire();
         assert_eq!(cache.diagnostics(), (0, 0, 0, 0, 0));
         assert!(!cache.accepting_fills);
