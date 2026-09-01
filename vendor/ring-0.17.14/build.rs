@@ -594,13 +594,22 @@ fn configure_cc(c: &mut cc::Build, target: &Target, c_root_dir: &Path, include_d
     }
 
     // Allow cross-compiling without a target sysroot for these targets.
+    //
+    // TRUEOS is a freestanding target. In particular, its custom target triple
+    // must not pick up the host's libc headers. On x86 Clang's immintrin.h
+    // includes mm_malloc.h, which in turn includes stdlib.h even though ring
+    // only needs the intrinsic declarations. Skip that host-only helper too.
     if (target.arch == WASM32)
         || (target.os == "linux" && target.env == "musl" && target.arch != X86_64)
+        || target.os == "trueos"
     {
         // TODO: Expand this to non-clang compilers in 0.17.0 if practical.
         if compiler.is_like_clang() {
             let _ = c.flag("-nostdlibinc");
             let _ = c.define("RING_CORE_NOSTDLIBINC", "1");
+            if target.os == "trueos" && [X86, X86_64].contains(&target.arch.as_str()) {
+                let _ = c.define("__MM_MALLOC_H", "1");
+            }
         }
     }
 
