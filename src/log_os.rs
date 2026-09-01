@@ -72,6 +72,16 @@ pub(crate) mod flags {
     /// noisy by design and belongs off in ordinary boots.
     pub(crate) const UI4_DIAG_PROFILE_ENABLED: bool = false;
 
+    /// Focused Shell2 single-keystroke/render latency profile.
+    ///
+    /// The probe sites sample their first 16 observations and then one in 128.
+    /// They deliberately emit through the already-admitted Render/Info lane
+    /// instead of widening Render to Trace: enabling every Intel render trace
+    /// would perturb the exact FontKernel/UI4 path this profile measures.
+    pub(crate) const SHELL2_RENDER_DIAG_PROFILE_ENABLED: bool = true;
+    pub(crate) const SHELL2_RENDER_DIAG_FIRST: u64 = 16;
+    pub(crate) const SHELL2_RENDER_DIAG_EVERY: u64 = 128;
+
     /// Focused Helio/Intel graphics bring-up profile.
     ///
     /// This admits the iGPU device, display, render and direct-RCS readiness
@@ -429,6 +439,38 @@ macro_rules! log_rate_limited {
                     format_args!($($tt)*),
                 ),
             );
+        }
+    }};
+}
+
+/// Rate-bounded record for the Shell2 -> UI4 -> FontKernel latency hunt.
+///
+/// This is intentionally a semantic Render/Info lane even though the record
+/// calls itself a trace. See `SHELL2_RENDER_DIAG_PROFILE_ENABLED`: admitting
+/// the whole Render/Trace area also admits per-submit Intel render chatter.
+#[macro_export]
+macro_rules! log_shell2_render_trace {
+    ($($tt:tt)*) => {{
+        if $crate::log_os::flags::SHELL2_RENDER_DIAG_PROFILE_ENABLED {
+            static STATE: $crate::log_os::LogRateLimitState =
+                $crate::log_os::LogRateLimitState::new();
+            let observation = STATE.observe(
+                $crate::log_os::flags::SHELL2_RENDER_DIAG_FIRST,
+                $crate::log_os::flags::SHELL2_RENDER_DIAG_EVERY,
+            );
+            if observation.should_emit() {
+                $crate::log_os::log_with_area_purpose(
+                    $crate::log_os::flags::LogArea::Render,
+                    $crate::log_os::LogLevel::Info,
+                    Some("shell2-render-trace"),
+                    format_args!(
+                        "sample={} suppressed_since_last={} {}",
+                        observation.occurrence(),
+                        observation.suppressed_since_last(),
+                        format_args!($($tt)*),
+                    ),
+                );
+            }
         }
     }};
 }

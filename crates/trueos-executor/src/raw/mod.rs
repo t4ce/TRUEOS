@@ -118,6 +118,11 @@ pub(crate) struct TaskHeader {
 
     pub(crate) metadata: Metadata,
 
+    #[cfg(feature = "metadata-name")]
+    diagnostic_name_ptr: AtomicPtr<u8>,
+    #[cfg(feature = "metadata-name")]
+    diagnostic_name_len: AtomicUsize,
+
     #[cfg(feature = "rtos-trace")]
     all_tasks_next: AtomicPtr<TaskHeader>,
 }
@@ -151,6 +156,17 @@ impl TaskRef {
 
     pub(crate) fn metadata(self) -> &'static Metadata {
         unsafe { &self.ptr.as_ref().metadata }
+    }
+
+    #[cfg(feature = "metadata-name")]
+    fn diagnostic_name(self) -> Option<&'static str> {
+        let header = self.header();
+        let ptr = header.diagnostic_name_ptr.load(Ordering::Acquire);
+        if ptr.is_null() {
+            return None;
+        }
+        let len = header.diagnostic_name_len.load(Ordering::Relaxed);
+        Some(unsafe { core::str::from_utf8_unchecked(core::slice::from_raw_parts(ptr, len)) })
     }
 
     /// Returns a reference to the executor that the task is currently running on.
@@ -221,6 +237,10 @@ impl<F: Future + 'static> TaskStorage<F> {
 
                 timer_queue_item: TimerQueueItem::new(),
                 metadata: Metadata::new(),
+                #[cfg(feature = "metadata-name")]
+                diagnostic_name_ptr: AtomicPtr::new(core::ptr::null_mut()),
+                #[cfg(feature = "metadata-name")]
+                diagnostic_name_len: AtomicUsize::new(0),
                 #[cfg(feature = "rtos-trace")]
                 all_tasks_next: AtomicPtr::new(core::ptr::null_mut()),
             },
@@ -316,7 +336,18 @@ impl<F: Future + 'static> AvailableTask<F> {
         unsafe {
             self.task.raw.metadata.reset();
             #[cfg(feature = "metadata-name")]
-            self.task.raw.metadata.set_name(core::any::type_name::<F>());
+            {
+                let name = core::any::type_name::<F>();
+                self.task.raw.metadata.set_name(name);
+                self.task
+                    .raw
+                    .diagnostic_name_len
+                    .store(name.len(), Ordering::Relaxed);
+                self.task
+                    .raw
+                    .diagnostic_name_ptr
+                    .store(name.as_ptr().cast_mut(), Ordering::Release);
+            }
             self.task
                 .raw
                 .migration_target
@@ -450,67 +481,13 @@ impl Pender {
     }
 }
 
-struct TaskNameSnapshot {
-    sequence: AtomicUsize,
-    ptr: AtomicPtr<u8>,
-    len: AtomicUsize,
-}
-
-impl TaskNameSnapshot {
-    const fn new() -> Self {
-        Self {
-            sequence: AtomicUsize::new(0),
-            ptr: AtomicPtr::new(null_mut()),
-            len: AtomicUsize::new(0),
-        }
-    }
-
-    fn store(&self, name: Option<&'static str>) {
-        self.sequence.fetch_add(1, Ordering::AcqRel);
-        match name {
-            Some(name) => {
-                self.ptr.store(name.as_ptr().cast_mut(), Ordering::Relaxed);
-                self.len.store(name.len(), Ordering::Relaxed);
-            }
-            None => {
-                self.ptr.store(null_mut(), Ordering::Relaxed);
-                self.len.store(0, Ordering::Relaxed);
-            }
-        }
-        self.sequence.fetch_add(1, Ordering::Release);
-    }
-
-    fn load(&self) -> Option<&'static str> {
-        loop {
-            let before = self.sequence.load(Ordering::Acquire);
-            if before & 1 != 0 {
-                core::hint::spin_loop();
-                continue;
-            }
-            let ptr = self.ptr.load(Ordering::Relaxed);
-            let len = self.len.load(Ordering::Relaxed);
-            let after = self.sequence.load(Ordering::Acquire);
-            if before != after {
-                core::hint::spin_loop();
-                continue;
-            }
-            if ptr.is_null() {
-                return None;
-            }
-            return Some(unsafe {
-                core::str::from_utf8_unchecked(core::slice::from_raw_parts(ptr, len))
-            });
-        }
-    }
-}
-
 pub(crate) struct SyncExecutor {
     run_queue: RunQueue,
     pender: Pender,
     ready_tasks: AtomicUsize,
     spawned_tasks: AtomicUsize,
-    current_task_name: TaskNameSnapshot,
-    last_task_name: TaskNameSnapshot,
+    current_trueos_executor_task: AtomicPtr<TaskHeader>,
+    last_trueos_executor_task: AtomicPtr<TaskHeader>,
     timer_slack_ticks: AtomicU64,
     poll_limit_tasks: AtomicUsize,
 }
@@ -540,8 +517,8 @@ impl SyncExecutor {
             pender,
             ready_tasks: AtomicUsize::new(0),
             spawned_tasks: AtomicUsize::new(0),
-            current_task_name: TaskNameSnapshot::new(),
-            last_task_name: TaskNameSnapshot::new(),
+            current_trueos_executor_task: AtomicPtr::new(null_mut()),
+            last_trueos_executor_task: AtomicPtr::new(null_mut()),
             timer_slack_ticks: AtomicU64::new(0),
             poll_limit_tasks: AtomicUsize::new(0),
         }
@@ -639,12 +616,11 @@ impl SyncExecutor {
     unsafe fn poll_task(&'static self, p: TaskRef) {
         self.note_task_dequeued();
         let task = p.header();
-        #[cfg(feature = "metadata-name")]
-        let task_name = p.metadata().name();
-        #[cfg(not(feature = "metadata-name"))]
-        let task_name = None;
-        self.current_task_name.store(task_name);
-        self.last_task_name.store(task_name);
+        let trueos_executor_task = p.as_ptr().cast_mut();
+        self.current_trueos_executor_task
+            .store(trueos_executor_task, Ordering::Release);
+        self.last_trueos_executor_task
+            .store(trueos_executor_task, Ordering::Release);
 
         #[cfg(feature = "trueos-task-profile")]
         unsafe {
@@ -656,7 +632,8 @@ impl SyncExecutor {
 
         task.poll_fn.get().unwrap_unchecked()(p);
 
-        self.current_task_name.store(None);
+        self.current_trueos_executor_task
+            .store(null_mut(), Ordering::Release);
 
         #[cfg(feature = "trueos-task-profile")]
         unsafe {
@@ -700,13 +677,28 @@ impl SyncExecutor {
     }
 
     /// Return the name of the TRUEOS executor task currently being polled.
-    pub fn current_task_name(&self) -> Option<&'static str> {
-        self.current_task_name.load()
+    pub fn current_trueos_executor_task_name(&self) -> Option<&'static str> {
+        self.trueos_executor_task_name(self.current_trueos_executor_task.load(Ordering::Acquire))
     }
 
     /// Return the name of the TRUEOS executor task most recently polled.
-    pub fn last_task_name(&self) -> Option<&'static str> {
-        self.last_task_name.load()
+    pub fn last_trueos_executor_task_name(&self) -> Option<&'static str> {
+        self.trueos_executor_task_name(self.last_trueos_executor_task.load(Ordering::Acquire))
+    }
+
+    fn trueos_executor_task_name(&self, task: *mut TaskHeader) -> Option<&'static str> {
+        if task.is_null() {
+            return None;
+        }
+        #[cfg(feature = "metadata-name")]
+        {
+            return unsafe { TaskRef::from_ptr(task) }.diagnostic_name();
+        }
+        #[cfg(not(feature = "metadata-name"))]
+        {
+            let _ = task;
+            None
+        }
     }
 
     pub fn set_timer_slack_ticks(&self, ticks: u64) {
@@ -877,13 +869,13 @@ impl Executor {
     }
 
     /// Return the name of the TRUEOS executor task currently being polled.
-    pub fn current_task_name(&self) -> Option<&'static str> {
-        self.inner.current_task_name()
+    pub fn current_trueos_executor_task_name(&self) -> Option<&'static str> {
+        self.inner.current_trueos_executor_task_name()
     }
 
     /// Return the name of the TRUEOS executor task most recently polled.
-    pub fn last_task_name(&self) -> Option<&'static str> {
-        self.inner.last_task_name()
+    pub fn last_trueos_executor_task_name(&self) -> Option<&'static str> {
+        self.inner.last_trueos_executor_task_name()
     }
 
     /// Get a spawner that spawns tasks in this executor.

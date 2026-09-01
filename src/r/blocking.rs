@@ -376,7 +376,9 @@ pub fn service_lane_activity_text(slot: usize) -> Option<alloc::string::String> 
     if activity.active_id != 0 {
         let identity = if activity.active_pthread_name.is_empty() {
             alloc::format!("purpose={}", activity.active_purpose)
-        } else if activity.active_purpose.contains("tokio") {
+        } else if activity.active_purpose.contains("tokio")
+            || activity.active_pthread_name.starts_with("tokio-")
+        {
             alloc::format!("Tokio worker={}", activity.active_pthread_name)
         } else {
             alloc::format!("logical std thread={}", activity.active_pthread_name)
@@ -395,7 +397,9 @@ pub fn service_lane_activity_text(slot: usize) -> Option<alloc::string::String> 
     if activity.recent_id != 0 {
         let identity = if activity.recent_pthread_name.is_empty() {
             alloc::format!("purpose={}", activity.recent_purpose)
-        } else if activity.recent_purpose.contains("tokio") {
+        } else if activity.recent_purpose.contains("tokio")
+            || activity.recent_pthread_name.starts_with("tokio-")
+        {
             alloc::format!("Tokio worker={}", activity.recent_pthread_name)
         } else {
             alloc::format!("logical std thread={}", activity.recent_pthread_name)

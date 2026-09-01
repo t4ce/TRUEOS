@@ -39,10 +39,14 @@ fn slot_placement(slot: usize) -> alloc::string::String {
 
 fn concise_trueos_executor_task_name(name: &'static str) -> &'static str {
     let clean = name.strip_suffix('\0').unwrap_or(name);
+    for part in clean.rsplit("::") {
+        if part.is_empty() || part.starts_with('{') || part.ends_with("_inner_function") {
+            continue;
+        }
+        let part = part.strip_prefix("__").unwrap_or(part);
+        return part.strip_suffix("_task").unwrap_or(part);
+    }
     clean
-        .rsplit("::")
-        .find(|part| !part.is_empty() && !part.starts_with('{'))
-        .unwrap_or(clean)
 }
 
 fn trueos_executor_task(slot: usize) -> alloc::string::String {
@@ -51,7 +55,7 @@ fn trueos_executor_task(slot: usize) -> alloc::string::String {
     };
     let spawned = spawner.spawned_task_count();
     let ready = spawner.ready_task_count();
-    if let Some(name) = spawner.current_task_name() {
+    if let Some(name) = spawner.current_trueos_executor_task_name() {
         return alloc::format!(
             "current:{} s={} r={}",
             concise_trueos_executor_task_name(name),
@@ -59,7 +63,7 @@ fn trueos_executor_task(slot: usize) -> alloc::string::String {
             ready,
         );
     }
-    if let Some(name) = spawner.last_task_name() {
+    if let Some(name) = spawner.last_trueos_executor_task_name() {
         return alloc::format!(
             "last:{} s={} r={}",
             concise_trueos_executor_task_name(name),
@@ -127,7 +131,7 @@ pub(crate) fn try_parse(
 
     let total = crate::smp::cpu_count();
     let count_msg = alloc::format!(
-        "smp: cpu_count={} hlt_hist={}x{}ms samples={} (.=HLT !=sampled-non-HLT; placement/current are live, trace is history)",
+        "smp: cpu_count={} hlt_hist={}x{}ms samples={} (.=HLT !=sampled-non-HLT; placement/current are live, last is the most-recent poll, trace is history)",
         total,
         crate::smp::HLT_HISTORY_LEN,
         crate::smp::HLT_SAMPLE_MS,

@@ -147,13 +147,14 @@ pub extern "C" fn kmain() -> ! {
     live_update::log_boot_mode();
     crate::log_info!(
         target: "global";
-        "boot: stage=bsp-early log_config boot_level={:?} gfx_level={:?} gpgpu_level={:?} render_level={:?} helio_gfx_diag={} ui4_diag={}\n",
+        "boot: stage=bsp-early log_config boot_level={:?} gfx_level={:?} gpgpu_level={:?} render_level={:?} helio_gfx_diag={} ui4_diag={} shell2_render_diag={}\n",
         crate::log_os::flags::BOOT_LOG_LEVEL,
         crate::log_os::flags::GFX_LOG_LEVEL,
         crate::log_os::flags::GPGPU_LOG_LEVEL,
         crate::log_os::flags::RENDER_LOG_LEVEL,
         crate::log_os::flags::HELIO_GFX_DIAG_PROFILE_ENABLED as u8,
         crate::log_os::flags::UI4_DIAG_PROFILE_ENABLED as u8,
+        crate::log_os::flags::SHELL2_RENDER_DIAG_PROFILE_ENABLED as u8,
     );
     exceptions::init();
     // Keep the IDT live before the CPUID-gated instruction KAT executes.

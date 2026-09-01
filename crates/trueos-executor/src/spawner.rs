@@ -193,13 +193,13 @@ impl Spawner {
     }
 
     /// Return the name of the TRUEOS executor task currently being polled.
-    pub fn current_task_name(&self) -> Option<&'static str> {
-        self.executor.current_task_name()
+    pub fn current_trueos_executor_task_name(&self) -> Option<&'static str> {
+        self.executor.current_trueos_executor_task_name()
     }
 
     /// Return the name of the TRUEOS executor task most recently polled.
-    pub fn last_task_name(&self) -> Option<&'static str> {
-        self.executor.last_task_name()
+    pub fn last_trueos_executor_task_name(&self) -> Option<&'static str> {
+        self.executor.last_trueos_executor_task_name()
     }
 
     /// Set the timer slack for tasks owned by this Spawner's Executor.
@@ -300,13 +300,13 @@ impl SendSpawner {
     }
 
     /// Return the name of the TRUEOS executor task currently being polled.
-    pub fn current_task_name(&self) -> Option<&'static str> {
-        self.executor.current_task_name()
+    pub fn current_trueos_executor_task_name(&self) -> Option<&'static str> {
+        self.executor.current_trueos_executor_task_name()
     }
 
     /// Return the name of the TRUEOS executor task most recently polled.
-    pub fn last_task_name(&self) -> Option<&'static str> {
-        self.executor.last_task_name()
+    pub fn last_trueos_executor_task_name(&self) -> Option<&'static str> {
+        self.executor.last_trueos_executor_task_name()
     }
 
     /// Set the timer slack for tasks owned by this SendSpawner's Executor.
