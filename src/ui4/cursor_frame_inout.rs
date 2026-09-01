@@ -43,8 +43,9 @@ impl Ui4CursorSource {
     }
 }
 
-/// Kernel-provided cursor sprites. `AppOwned` is the escape hatch for a frame
-/// such as Blueprint Tactics which already paints a cursor into its own pixels.
+/// Kernel-provided cursor presentations. `AppOwned` is the escape hatch for a
+/// frame such as Blueprint Tactics which already paints a cursor into its own
+/// pixels.
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 #[repr(u32)]
 pub(crate) enum Ui4CursorIcon {
@@ -55,6 +56,8 @@ pub(crate) enum Ui4CursorIcon {
     ResizeVertical = 3,
     ResizeDiagonal = 4,
     AppOwned = 5,
+    /// A cell-snapped outline owned and moved by the slot-4 cursor plane.
+    CellOutline = 6,
 }
 
 impl Ui4CursorIcon {
@@ -66,6 +69,7 @@ impl Ui4CursorIcon {
             3 => Some(Self::ResizeVertical),
             4 => Some(Self::ResizeDiagonal),
             5 => Some(Self::AppOwned),
+            6 => Some(Self::CellOutline),
             _ => None,
         }
     }
@@ -83,6 +87,41 @@ impl CursorFrameKey {
     }
 }
 
+/// One application grid that the slot-4 cursor plane can outline without the
+/// application repainting as the pointer moves. Horizontal advances are in
+/// 1/1024 pixel units so fractional monospace cell widths stay aligned across
+/// a long terminal row.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Ui4CursorCellOutline {
+    pub(crate) origin_x: u32,
+    pub(crate) origin_y: u32,
+    pub(crate) cell_width_subpx: u32,
+    pub(crate) cell_height: u32,
+    pub(crate) columns: u32,
+    pub(crate) rows: u32,
+    pub(crate) stroke: u32,
+}
+
+impl Ui4CursorCellOutline {
+    const SUBPIXELS_PER_PIXEL: u64 = 1_024;
+
+    pub(crate) const fn is_valid(self) -> bool {
+        self.cell_width_subpx != 0
+            && self.cell_height != 0
+            && self.columns != 0
+            && self.rows != 0
+            && self.stroke != 0
+    }
+}
+
+/// A selected frame's grid configuration paired with the frame whose
+/// presentation placement establishes the grid's screen-space origin.
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Ui4CursorCellOutlineVisual {
+    pub(crate) key: CursorFrameKey,
+    pub(crate) outline: Ui4CursorCellOutline,
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct CursorOverride {
     source: Ui4CursorSource,
@@ -94,6 +133,7 @@ struct FrameCursorState {
     session: WindowSessionId,
     fallback: Ui4CursorIcon,
     overrides: Vec<CursorOverride, MAX_CURSOR_SOURCES>,
+    cell_outline: Option<Ui4CursorCellOutline>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -156,6 +196,7 @@ impl CursorFrameRig {
             frame.session = session;
             frame.fallback = Ui4CursorIcon::Default;
             frame.overrides.clear();
+            frame.cell_outline = None;
             return Ok(());
         }
         self.frames
@@ -164,6 +205,7 @@ impl CursorFrameRig {
                 session,
                 fallback: Ui4CursorIcon::Default,
                 overrides: Vec::new(),
+                cell_outline: None,
             })
             .map_err(|_| CursorFrameError::Capacity)
     }
@@ -313,6 +355,27 @@ impl CursorFrameRig {
                 .any(|cursor| cursor.selected == key))
     }
 
+    fn set_cell_outline(
+        &mut self,
+        key: CursorFrameKey,
+        outline: Ui4CursorCellOutline,
+    ) -> Result<bool, CursorFrameError> {
+        let frame = self
+            .frames
+            .iter_mut()
+            .find(|frame| frame.key == key)
+            .ok_or(CursorFrameError::NotFound)?;
+        let changed = frame.fallback != Ui4CursorIcon::CellOutline
+            || frame.cell_outline != Some(outline);
+        frame.fallback = Ui4CursorIcon::CellOutline;
+        frame.cell_outline = Some(outline);
+        Ok(changed
+            && self
+                .selecting_cursors
+                .iter()
+                .any(|cursor| cursor.selected == key))
+    }
+
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     fn cursor_icon(&self, key: CursorFrameKey, source: Ui4CursorSource) -> Ui4CursorIcon {
         if self.selected_frame_for_source(source) != Some(key) {
@@ -339,6 +402,24 @@ impl CursorFrameRig {
             .iter()
             .find(|cursor| cursor.source == source)
             .map(|cursor| cursor.selected)
+    }
+
+    fn cell_outline_for_source(
+        &self,
+        source: Ui4CursorSource,
+    ) -> Option<Ui4CursorCellOutlineVisual> {
+        let key = self.selected_frame_for_source(source)?;
+        let frame = self.frames.iter().find(|frame| frame.key == key)?;
+        let icon = frame
+            .overrides
+            .iter()
+            .find(|cursor| cursor.source == source)
+            .map(|cursor| cursor.icon)
+            .unwrap_or(frame.fallback);
+        (icon == Ui4CursorIcon::CellOutline).then_some(Ui4CursorCellOutlineVisual {
+            key,
+            outline: frame.cell_outline?,
+        })
     }
 
     fn cursor_retired(&mut self, source: Ui4CursorSource) -> bool {
@@ -406,6 +487,12 @@ pub(crate) fn selected_frame_for_source(source: Ui4CursorSource) -> Option<Curso
     CURSOR_FRAME_RIG.lock().selected_frame_for_source(source)
 }
 
+pub(crate) fn cursor_cell_outline_for_source(
+    source: Ui4CursorSource,
+) -> Option<Ui4CursorCellOutlineVisual> {
+    CURSOR_FRAME_RIG.lock().cell_outline_for_source(source)
+}
+
 pub(super) fn cursor_retired(source: Ui4CursorSource) {
     if CURSOR_FRAME_RIG.lock().cursor_retired(source) {
         signal_visual_change();
@@ -444,6 +531,23 @@ pub(crate) fn set_window_cursor_icon(
         CURSOR_FRAME_RIG
             .lock()
             .set_cursor(CursorFrameKey::new(owner, window), source, icon)?;
+    if selected_visual_changed {
+        signal_visual_change();
+    }
+    Ok(())
+}
+
+/// Configure the selected frame's fallback as one kernel-rendered, cell-sized
+/// outline. The application supplies static grid geometry once per layout
+/// change; the kernel supplies pointer motion and per-cursor color on slot 4.
+pub(crate) fn set_window_cursor_cell_outline(
+    owner: WindowOwner,
+    window: WindowId,
+    outline: Ui4CursorCellOutline,
+) -> Result<(), CursorFrameError> {
+    let selected_visual_changed = CURSOR_FRAME_RIG
+        .lock()
+        .set_cell_outline(CursorFrameKey::new(owner, window), outline)?;
     if selected_visual_changed {
         signal_visual_change();
     }

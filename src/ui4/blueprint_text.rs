@@ -37,18 +37,19 @@ use crate::r::services::font_kernel_service::{
 
 use super::{
     DamageRect, FrameCadence, FrameContent, FrameHandle, FramePoolError, FrameSpec,
-    FrameWriteLease, OutputId, PremultipliedRgba8, ScanoutFormat, Ui4CursorIcon, Ui4CursorSource,
-    Ui4InputEvent, WindowBrokerError, WindowCreate, WindowId, WindowOwner, WindowPlacement,
-    WindowPlane, WindowSessionCloseRequest, WindowSessionId, acquire_frame_buffer,
+    FrameWriteLease, OutputId, PremultipliedRgba8, ScanoutFormat, Ui4CursorCellOutline,
+    Ui4CursorIcon, Ui4CursorSource, Ui4InputEvent, WindowBrokerError, WindowCreate, WindowId,
+    WindowOwner, WindowPlacement, WindowPlane, WindowSessionCloseRequest, WindowSessionId,
+    acquire_frame_buffer,
     begin_additional_window_session, cancel_frame_buffer, commit_window_frame_refresh,
     commit_window_frame_replacement, create_frame, create_gpu_full_overwrite_frame, create_window,
-    destroy_frame,
-    finish_window_session, finish_window_session_with_request, focused_keyboard_state,
-    gpgpu_rgba_surface, mark_frame_buffer_cpu_authored, mark_frame_buffer_fully_opaque,
-    publish_frame_buffer, publish_gpgpu_scene_frame_buffer, publish_resident_scene_frame_buffer,
-    publish_window_frame, set_window_cursor_icon, set_window_custom_cursor, set_window_hit_testable,
-    set_window_opacity, set_window_position, take_owner_input_events,
-    take_window_first_presentation, window_input_routes, window_resize_state, writable_rgba_view,
+    destroy_frame, finish_window_session, finish_window_session_with_request,
+    focused_keyboard_state, gpgpu_rgba_surface, mark_frame_buffer_cpu_authored,
+    mark_frame_buffer_fully_opaque, publish_frame_buffer, publish_gpgpu_scene_frame_buffer,
+    publish_resident_scene_frame_buffer, publish_window_frame, set_window_cursor_cell_outline,
+    set_window_cursor_icon, set_window_custom_cursor, set_window_hit_testable, set_window_opacity,
+    set_window_position, take_owner_input_events, take_window_first_presentation,
+    window_input_routes, window_resize_state, writable_rgba_view,
 };
 
 const MAX_SURFACES: usize = 32;
@@ -443,6 +444,23 @@ pub struct TrueosUi4CursorSource {
 
 const _: () = assert!(core::mem::size_of::<TrueosUi4CursorSource>() == 4 * 4);
 
+/// Static geometry for one kernel-rendered, cell-snapped cursor outline. The
+/// grid origin is frame-local; width uses 1/1024-pixel units to preserve
+/// fractional monospace advances over a long row.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosUi4CursorCellOutline {
+    pub origin_x: u32,
+    pub origin_y: u32,
+    pub cell_width_subpx: u32,
+    pub cell_height: u32,
+    pub columns: u32,
+    pub rows: u32,
+    pub stroke: u32,
+}
+
+const _: () = assert!(core::mem::size_of::<TrueosUi4CursorCellOutline>() == 7 * 4);
+
 /// One row of a Blueprint-requested context menu. `enabled` is zero for a
 /// greyed label which reports no action, non-zero for a selectable row.
 #[repr(C)]
@@ -687,6 +705,8 @@ struct BlueprintSceneSurface {
     stamped_text_layers: Vec<BlueprintStampedTextLayer>,
     stamped_text_cursor: usize,
     stamped_text_pending: Option<PendingFontFrameStamp>,
+    stamped_text_pending_started_ns: u64,
+    stamped_text_pending_polls: u64,
     /// Up to five recent face/size/extent registrations stay warm. Distinct
     /// shells still claim distinct producer slots, while OceanCache seals
     /// equal face/size claims to the same R8 glyphs. Once residual presentation
@@ -1356,9 +1376,9 @@ fn open_blueprint_frame(
                 stamped_text_layers: Vec::new(),
                 stamped_text_cursor: 0,
                 stamped_text_pending: None,
-                stamped_text_producers: Vec::with_capacity(
-                    SHELL2_WARM_PRODUCER_SEALS_PER_SURFACE,
-                ),
+                stamped_text_pending_started_ns: 0,
+                stamped_text_pending_polls: 0,
+                stamped_text_producers: Vec::with_capacity(SHELL2_WARM_PRODUCER_SEALS_PER_SURFACE),
                 stamped_text_pending_ocean: false,
                 stamped_text_rendered: false,
             },
@@ -1407,6 +1427,8 @@ fn open_blueprint_frame(
         stamped_text_layers: Vec::new(),
         stamped_text_cursor: 0,
         stamped_text_pending: None,
+        stamped_text_pending_started_ns: 0,
+        stamped_text_pending_polls: 0,
         stamped_text_producers: Vec::with_capacity(SHELL2_WARM_PRODUCER_SEALS_PER_SURFACE),
         stamped_text_pending_ocean: false,
         stamped_text_rendered: false,
@@ -1756,6 +1778,8 @@ pub(crate) fn begin_blueprint_frame(
     surface.retained_text_rendered = false;
     surface.stamped_text_cursor = 0;
     surface.stamped_text_pending = None;
+    surface.stamped_text_pending_started_ns = 0;
+    surface.stamped_text_pending_polls = 0;
     surface.stamped_text_pending_ocean = false;
     surface.stamped_text_rendered = false;
     surface.write_lease = Some(lease);
@@ -2317,15 +2341,17 @@ fn route_owner_input_events(owner: WindowOwner) {
                 // dock/restore request matters if the producer has not
                 // serviced an older one yet.
                 surface.pending_resize_events.clear();
-                surface.pending_resize_events.push_back(BlueprintResizeEvent {
-                    abi: TrueosUi4ResizeEvent {
-                        old_width: event.old_width,
-                        old_height: event.old_height,
-                        width: event.width,
-                        height: event.height,
-                    },
-                    resize_epoch: event.resize_epoch,
-                });
+                surface
+                    .pending_resize_events
+                    .push_back(BlueprintResizeEvent {
+                        abi: TrueosUi4ResizeEvent {
+                            old_width: event.old_width,
+                            old_height: event.old_height,
+                            width: event.width,
+                            height: event.height,
+                        },
+                        resize_epoch: event.resize_epoch,
+                    });
             }
             Ui4InputEvent::Keyboard(event) => {
                 let Some(surface) = surface_mut(&mut surfaces, owner, event.window.raw()) else {
@@ -2615,6 +2641,93 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_set_cursor_icon(
     0
 }
 
+/// Configure one frame-wide cell cursor. The kernel retains only this static
+/// grid description; pointer motion and cursor color stay on UI4's slot-4
+/// software-cursor plane rather than causing application-frame repaints.
+pub unsafe extern "C" fn trueos_cabi_ui4_scene_set_cursor_cell_outline(
+    window_id: u32,
+    outline: *const TrueosUi4CursorCellOutline,
+) -> i32 {
+    if outline.is_null() {
+        return ERROR_INVALID;
+    }
+    // SAFETY: the C ABI requires one readable outline record.
+    let raw_outline = unsafe { outline.read() };
+    let Some(outline) = cursor_cell_outline_from_raw(raw_outline) else {
+        return ERROR_INVALID;
+    };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let payload = unsafe {
+            core::slice::from_raw_parts(
+                (&raw_outline as *const TrueosUi4CursorCellOutline).cast::<u8>(),
+                core::mem::size_of::<TrueosUi4CursorCellOutline>(),
+            )
+        };
+        return guest_status(
+            trueos_vm::vmcall::OP_BP_UI4_SCENE_SET_CURSOR_CELL_OUTLINE,
+            window_id as u64,
+            0,
+            payload,
+        );
+    }
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT;
+    };
+    let (window, width, height) = {
+        let mut surfaces = SURFACES.lock();
+        let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+            return ERROR_NOT_FOUND;
+        };
+        (surface.window, surface.width, surface.height)
+    };
+    if !cursor_cell_outline_fits_frame(outline, width, height)
+        || set_window_cursor_cell_outline(owner, window, outline).is_err()
+    {
+        return ERROR_UI4;
+    }
+    0
+}
+
+fn cursor_cell_outline_from_raw(
+    outline: TrueosUi4CursorCellOutline,
+) -> Option<Ui4CursorCellOutline> {
+    let outline = Ui4CursorCellOutline {
+        origin_x: outline.origin_x,
+        origin_y: outline.origin_y,
+        cell_width_subpx: outline.cell_width_subpx,
+        cell_height: outline.cell_height,
+        columns: outline.columns,
+        rows: outline.rows,
+        stroke: outline.stroke,
+    };
+    if !outline.is_valid()
+        || outline.cell_width_subpx < 1_024
+        || outline.cell_height > MAX_FRAME_HEIGHT
+        || outline.columns > MAX_FRAME_WIDTH
+        || outline.rows > MAX_FRAME_HEIGHT
+    {
+        return None;
+    }
+    let cell_width_px = (u64::from(outline.cell_width_subpx).saturating_add(1_023) / 1_024)
+        .min(u64::from(MAX_FRAME_WIDTH));
+    let max_stroke = (cell_width_px / 2).min(u64::from(outline.cell_height) / 2);
+    (u64::from(outline.stroke) <= max_stroke).then_some(outline)
+}
+
+fn cursor_cell_outline_fits_frame(
+    outline: Ui4CursorCellOutline,
+    frame_width: u32,
+    frame_height: u32,
+) -> bool {
+    let grid_width = u64::from(outline.cell_width_subpx)
+        .saturating_mul(u64::from(outline.columns))
+        .saturating_add(1_023)
+        / 1_024;
+    let grid_height = u64::from(outline.cell_height).saturating_mul(u64::from(outline.rows));
+    u64::from(outline.origin_x).saturating_add(grid_width) <= u64::from(frame_width)
+        && u64::from(outline.origin_y).saturating_add(grid_height) <= u64::from(frame_height)
+}
+
 /// Replace the backing frame while retaining the UI4 window and scene assets.
 pub extern "C" fn trueos_cabi_ui4_scene_frame_resize(
     window_id: u32,
@@ -2776,6 +2889,8 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_resize(
         surface.stamped_text_layers.clear();
         surface.stamped_text_cursor = 0;
         surface.stamped_text_pending = None;
+        surface.stamped_text_pending_started_ns = 0;
+        surface.stamped_text_pending_polls = 0;
         surface.stamped_text_pending_ocean = false;
         surface.stamped_text_rendered = false;
     }
@@ -4420,15 +4535,38 @@ fn submit_stamped_text_request(
     request: FontStampRequest,
     destination: GpgpuRgba8Surface,
 ) -> Result<(PendingFontFrameStamp, bool), FontKernelError> {
+    let submit_started_ns = crate::chronos::monotonic_nanos();
+    let layer_count = request.layers.len();
+    let glyph_count =
+        request.layers.iter().fold(0usize, |total, layer| {
+            total.saturating_add(
+                layer.scene.runs.iter().fold(0usize, |run_total, run| {
+                    run_total.saturating_add(run.text.chars().count())
+                }),
+            )
+        });
     let Some(registration) = shell2_stamped_text_registration(&request) else {
-        return submit_frame_stamp(request, destination).map(|pending| (pending, false));
+        return submit_frame_stamp(request, destination).map(|pending| {
+            crate::log_shell2_render_trace!(
+                "stage=ui4-submit owner={:?} window={} ticket={} queued_ahead={} layers={} glyphs={} producer_reused=0 producer_seals={} path=request-outline submit_us={}\n",
+                owner,
+                window_id,
+                pending.ticket().raw(),
+                pending.queued_ahead(),
+                layer_count,
+                glyph_count,
+                surface.stamped_text_producers.len(),
+                crate::chronos::monotonic_nanos().saturating_sub(submit_started_ns) / 1_000,
+            );
+            (pending, false)
+        });
     };
-    let producer_index = match surface
+    let (producer_index, producer_reused) = match surface
         .stamped_text_producers
         .iter()
         .position(|entry| entry.registration == registration)
     {
-        Some(index) => index,
+        Some(index) => (index, true),
         None => {
             if surface.stamped_text_producers.len() >= SHELL2_WARM_PRODUCER_SEALS_PER_SURFACE {
                 surface.stamped_text_producers.remove(0);
@@ -4457,13 +4595,29 @@ fn submit_stamped_text_request(
                     registration,
                     producer,
                 });
-            surface.stamped_text_producers.len() - 1
+            (surface.stamped_text_producers.len() - 1, false)
         }
     };
-    surface.stamped_text_producers[producer_index]
+    let result = surface.stamped_text_producers[producer_index]
         .producer
-        .submit_ui4_cached_frame(request, destination)
-        .map(|pending| (pending, true))
+        .submit_ui4_cached_frame(request, destination);
+    result.map(|pending| {
+        crate::log_shell2_render_trace!(
+            "stage=ui4-submit owner={:?} window={} ticket={} queued_ahead={} layers={} glyphs={} producer_reused={} producer_seals={} face={} font_pixels_milli={} path=producer-oceancache submit_us={}\n",
+            owner,
+            window_id,
+            pending.ticket().raw(),
+            pending.queued_ahead(),
+            layer_count,
+            glyph_count,
+            producer_reused as u8,
+            surface.stamped_text_producers.len(),
+            registration.face,
+            registration.font_pixels_milli,
+            crate::chronos::monotonic_nanos().saturating_sub(submit_started_ns) / 1_000,
+        );
+        (pending, true)
+    })
 }
 
 fn render_stamped_text_for_surface(owner: WindowOwner, window_id: u32) -> i32 {
@@ -4509,6 +4663,7 @@ fn render_stamped_text_for_surface(owner: WindowOwner, window_id: u32) -> i32 {
             layers,
             fit: FontStampFit::Canvas,
         };
+        let pending_started_ns = crate::chronos::monotonic_nanos();
         surface.stamped_text_pending = match submit_stamped_text_request(
             surface,
             owner,
@@ -4518,6 +4673,8 @@ fn render_stamped_text_for_surface(owner: WindowOwner, window_id: u32) -> i32 {
         ) {
             Ok((pending, ocean)) => {
                 surface.stamped_text_pending_ocean = ocean;
+                surface.stamped_text_pending_started_ns = pending_started_ns;
+                surface.stamped_text_pending_polls = 0;
                 Some(pending)
             }
             Err(FontKernelError::QueueFull) => return ERROR_BUSY,
@@ -4548,15 +4705,25 @@ fn render_stamped_text_for_surface(owner: WindowOwner, window_id: u32) -> i32 {
         };
     }
 
-    let completion = surface
-        .stamped_text_pending
-        .as_mut()
-        .and_then(PendingFontFrameStamp::try_take);
+    let (pending_ticket, queued_ahead, completion) = {
+        let pending = surface
+            .stamped_text_pending
+            .as_mut()
+            .expect("stamped text pending exists after submission");
+        (pending.ticket().raw(), pending.queued_ahead(), pending.try_take())
+    };
     let Some(completion) = completion else {
+        surface.stamped_text_pending_polls = surface.stamped_text_pending_polls.saturating_add(1);
         return ERROR_BUSY;
     };
     let ocean = surface.stamped_text_pending_ocean;
+    let pending_wait_us = crate::chronos::monotonic_nanos()
+        .saturating_sub(surface.stamped_text_pending_started_ns)
+        / 1_000;
+    let pending_polls = surface.stamped_text_pending_polls;
     surface.stamped_text_pending = None;
+    surface.stamped_text_pending_started_ns = 0;
+    surface.stamped_text_pending_polls = 0;
     surface.stamped_text_pending_ocean = false;
     let stamped = match completion {
         Ok(stamped) => stamped,
@@ -4601,19 +4768,39 @@ fn render_stamped_text_for_surface(owner: WindowOwner, window_id: u32) -> i32 {
     };
     surface.pending_gpu_release = Some(stamped.release());
     surface.stamped_text_rendered = true;
-    crate::log_info!(
-        target: "ui4/solara-text";
-        "FontKernel frame stamped owner={:?} window={} layers={} glyphs={} submits={} walkers={} target={}x{} context=kernel-gpgpu-font input={} cache={} path=skrifa->gpu-vm-r8->cpp-igc->guc-font-rcs->ui4-frame-rgba8 cpu_readback=0 cpu_frame_copy=0 staging_rgba=0\n",
+    crate::log_shell2_render_trace!(
+        "stage=ui4-complete owner={:?} window={} ticket={} queued_ahead={} pending_polls={} pending_wait_us={} layers={} glyphs={} submits={} clear_submits={} walkers={} pre_service_ms={} prepare_coverage_ms={} coverage_build_ms={} coverage_audit_ms={} coverage_submits={} clear_ms={} instance_release_ms={} service_ms={} target={}x{} input={} cache={} cpu_readback=0 cpu_frame_copy=0 staging_rgba=0\n",
         owner,
         window_id,
+        pending_ticket,
+        queued_ahead,
+        pending_polls,
+        pending_wait_us,
         surface.stamped_text_cursor,
         stamped.glyphs(),
         stamped.submits(),
+        stamped.clear_submits(),
         stamped.active_walkers(),
+        stamped.pre_service_ms(),
+        stamped.prepare_coverage_ms(),
+        stamped.coverage_build_ms(),
+        stamped.coverage_audit_ms(),
+        stamped.coverage_submits(),
+        stamped.clear_ms(),
+        stamped.instance_release_ms(),
+        stamped.total_service_ms(),
         surface.width,
         surface.height,
-        if ocean { "producer-oceancache" } else { "request-outline" },
-        if ocean { "shared-registration-seal" } else { "none" },
+        if ocean {
+            "producer-oceancache"
+        } else {
+            "request-outline"
+        },
+        if ocean {
+            "shared-registration-seal"
+        } else {
+            "none"
+        },
     );
     0
 }
@@ -4784,6 +4971,8 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_publish(
     surface.stamped_text_layers.clear();
     surface.stamped_text_cursor = 0;
     surface.stamped_text_pending = None;
+    surface.stamped_text_pending_started_ns = 0;
+    surface.stamped_text_pending_polls = 0;
     surface.stamped_text_pending_ocean = false;
     surface.stamped_text_rendered = false;
     let launch_selection = surface.launch_selection.take();
@@ -7047,13 +7236,12 @@ fn revert_blueprint_pending_resize(
     surface.frame = pending.previous_frame;
     surface.width = pending.previous_width;
     surface.height = pending.previous_height;
-    surface.placement = live_presentation.map_or(pending.previous_placement, |presentation| {
-        WindowPlacement {
+    surface.placement =
+        live_presentation.map_or(pending.previous_placement, |presentation| WindowPlacement {
             width: pending.previous_placement.width,
             height: pending.previous_placement.height,
             ..presentation
-        }
-    });
+        });
     Some(superseded)
 }
 
@@ -7217,11 +7405,9 @@ mod tests {
 
     #[test]
     fn shell2_stamp_registration_seals_terminal_face_size_and_extent() {
-        let registration = shell2_stamped_text_registration(&stamped_shell_request(
-            GpuFontFace::JuliaMono,
-            24.0,
-        ))
-        .expect("Shell2's default tier should be OceanCache eligible");
+        let registration =
+            shell2_stamped_text_registration(&stamped_shell_request(GpuFontFace::JuliaMono, 24.0))
+                .expect("Shell2's default tier should be OceanCache eligible");
 
         assert_eq!(registration.face, GpuFontFace::JuliaMono.id() as u16);
         assert_eq!(registration.tier, 24);
@@ -7238,11 +7424,8 @@ mod tests {
         );
 
         assert!(
-            shell2_stamped_text_registration(&stamped_shell_request(
-                GpuFontFace::Default,
-                24.0,
-            ))
-            .is_none()
+            shell2_stamped_text_registration(&stamped_shell_request(GpuFontFace::Default, 24.0,))
+                .is_none()
         );
         assert!(
             shell2_stamped_text_registration(&stamped_shell_request(

@@ -138,6 +138,7 @@ pub const OP_BP_ASYNC_FS_TYPED_WRITE_BEGIN: u32 = 0x172; // arg0 total bytes,arg
 pub const OP_BP_FS_TYPED_WRITE_BEGIN: u32 = 0x173; // arg0 total bytes,arg1 content type,payload path
 pub const OP_BP_FS_TYPED_STAT: u32 = 0x174; // payload path -> kind,len,content type
 pub const OP_BP_FS_TYPED_LIST_DIR: u32 = 0x175; // arg0 offset,arg1 cap,payload path -> TDL2 bytes
+pub const OP_BP_UI4_SCENE_SET_CURSOR_CELL_OUTLINE: u32 = 0x176; // arg0 window,payload cell-outline geometry -> rc
 pub const OP_BP_SHELL_ATTACHED_WAIT_READABLE: u32 = 0x13B; // arg0 timeout ms -> event-driven terminal wake
 // Generic same-archive child-Hull service.  Child handle 0 names the worker's
 // parent endpoint; nonzero handles are opaque parent-owned values.
@@ -2572,6 +2573,33 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                         .as_ref()
                         .map_or(core::ptr::null(), |source| source as *const _),
                     arg1 as u32,
+                )
+            };
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_SCENE_SET_CURSOR_CELL_OUTLINE => {
+            if req_len as usize
+                != core::mem::size_of::<crate::ui4::blueprint_text::TrueosUi4CursorCellOutline>()
+            {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            }
+            let Some(payload) = request_payload(vm_id, req_len) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let outline = unsafe {
+                core::ptr::read_unaligned(
+                    payload
+                        .as_ptr()
+                        .cast::<crate::ui4::blueprint_text::TrueosUi4CursorCellOutline>(),
+                )
+            };
+            let rc = unsafe {
+                crate::ui4::blueprint_text::trueos_cabi_ui4_scene_set_cursor_cell_outline(
+                    arg0 as u32,
+                    &outline,
                 )
             };
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);

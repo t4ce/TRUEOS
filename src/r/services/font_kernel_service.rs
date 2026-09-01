@@ -987,9 +987,7 @@ impl FontGpuProducer {
             || destination.height != registration.row_height_px
             || destination.storage_order != crate::intel::gpgpu::GpgpuRgba8StorageOrder::Rgba
         {
-            return Err(FontKernelError::InvalidRequest(
-                "font-producer-ui4-cache-surface",
-            ));
+            return Err(FontKernelError::InvalidRequest("font-producer-ui4-cache-surface"));
         }
         queue_frame_stamp(
             FrameStampInput::ProducerRequest {
@@ -1403,6 +1401,7 @@ enum QueuedFontRequest {
         clear_rgba: Option<u32>,
         producer_row: Option<QueuedFontProducerRow>,
         enqueued_ms: u64,
+        enqueued_ns: u64,
         reply:
             Arc<Signal<crate::wait::EmbassySpinRawMutex, Result<FontFrameStamp, FontKernelError>>>,
     },
@@ -1784,6 +1783,7 @@ fn queue_frame_stamp(
             clear_rgba,
             producer_row,
             enqueued_ms: Instant::now().as_millis(),
+            enqueued_ns: crate::chronos::monotonic_nanos(),
             reply: Arc::clone(&reply),
         });
         queued_ahead
@@ -2195,6 +2195,7 @@ fn prepare_producer_stamp_scenes(
         usize,
         ((u64, u64, u64), (u64, u64, u64)),
         bool,
+        u64,
     ),
     FontKernelError,
 > {
@@ -2222,10 +2223,12 @@ fn prepare_producer_stamp_scenes(
             glyphs,
             ((0, 0, 0), (0, 0, 0)),
             false,
+            0,
         ));
     }
     let mut stamps = Vec::new();
     let mut glyphs = 0usize;
+    let mut tail_key_fingerprint = 0u64;
     let before = resources.glyph_cache.lock().diagnostics();
     let ocean_before = resources.ocean_cache.diagnostics();
     for layer in &request.layers {
@@ -2244,6 +2247,7 @@ fn prepare_producer_stamp_scenes(
                 glyphs,
                 ((0, 0, 0), (0, 0, 0)),
                 false,
+                0,
             ));
         }
         let glyph_runs = expand_origin_runs(ticket, &layer.scene)?;
@@ -2267,6 +2271,7 @@ fn prepare_producer_stamp_scenes(
                     layer.scene.raster_height,
                 )
                 .map_err(FontKernelError::Unavailable)?;
+                tail_key_fingerprint = key.fingerprint();
                 let (recipe, _) = cache
                     .get_or_build(key)
                     .map_err(FontKernelError::Unavailable)?;
@@ -2356,6 +2361,7 @@ fn prepare_producer_stamp_scenes(
             ),
         ),
         true,
+        tail_key_fingerprint,
     ))
 }
 
@@ -2660,6 +2666,7 @@ fn process_frame_stamp(
     destination: crate::intel::gpgpu::GpgpuRgba8Surface,
     clear_rgba: Option<u32>,
     enqueued_ms: u64,
+    enqueued_ns: u64,
 ) -> Result<FontFrameStamp, FontKernelError> {
     let input = match input {
         FrameStampInput::FontRushClear { color_rgba, .. } => {
@@ -2688,10 +2695,13 @@ fn process_frame_stamp(
 
     use crate::intel::gpgpu::GpgpuSolidRect;
 
+    let service_started_ns = crate::chronos::monotonic_nanos();
     let service_started_ms = Instant::now().as_millis();
     let pre_service_ms = service_started_ms.saturating_sub(enqueued_ms);
+    let pre_service_us = service_started_ns.saturating_sub(enqueued_ns) / 1_000;
     ensure_font_rcs_lane_available()?;
     set_active_stage(ticket, "frame-prepare-coverage");
+    let prepare_started_ns = crate::chronos::monotonic_nanos();
     let prepare_started_ms = Instant::now().as_millis();
     let (coverage, glyphs, coverage_input, producer_cache) = match input {
         FrameStampInput::Prepared(plan) => {
@@ -2731,7 +2741,7 @@ fn process_frame_stamp(
             request,
             glyph_cache,
         } => {
-            let (scenes, glyphs, delta, cache_used) =
+            let (scenes, glyphs, delta, cache_used, tail_key_fingerprint) =
                 prepare_producer_stamp_scenes(ticket, &request, &glyph_cache)?;
             let diagnostics = cache_used.then(|| {
                 (
@@ -2747,7 +2757,7 @@ fn process_frame_stamp(
                 } else {
                     "producer-outline-fallback"
                 },
-                diagnostics.map(|diagnostics| (diagnostics, delta)),
+                diagnostics.map(|diagnostics| (diagnostics, delta, tail_key_fingerprint)),
             )
         }
         FrameStampInput::FontRushClear { .. } | FrameStampInput::FontRushRgba8Sprites { .. } => {
@@ -2757,6 +2767,8 @@ fn process_frame_stamp(
     let prepare_coverage_ms = Instant::now()
         .as_millis()
         .saturating_sub(prepare_started_ms);
+    let prepare_coverage_us =
+        crate::chronos::monotonic_nanos().saturating_sub(prepare_started_ns) / 1_000;
     let (coverage_build_ms, coverage_audit_ms, coverage_submits, scene_count) = match &coverage {
         FontFrameCoverage::Retained(scenes) => (
             scenes
@@ -2771,52 +2783,15 @@ fn process_frame_stamp(
             scenes.len(),
         ),
     };
-    let cache_log = if let Some((diagnostics, delta)) = producer_cache {
-        alloc::format!(
-            "cache=producer-recipe-colorless budget_bytes={} used_bytes={} entries={} hits={} misses={} uncached={} recipe_request_hits={} recipe_request_misses={} recipe_request_uncached={} ocean_budget_bytes={} ocean_used_bytes={} ocean_entries={} ocean_hits={} ocean_misses={} ocean_uncached={} ocean_request_hits={} ocean_request_misses={} ocean_request_uncached={}",
-            FONT_PRODUCER_GLYPH_CACHE_BYTES,
-            diagnostics.0.1,
-            diagnostics.0.0,
-            diagnostics.0.2,
-            diagnostics.0.3,
-            diagnostics.0.4,
-            delta.0.0,
-            delta.0.1,
-            delta.0.2,
-            OCEAN_CACHE_BYTES,
-            diagnostics.1.1,
-            diagnostics.1.0,
-            diagnostics.1.2,
-            diagnostics.1.3,
-            diagnostics.1.4,
-            delta.1.0,
-            delta.1.1,
-            delta.1.2,
-        )
-    } else {
-        String::from("cache=none")
-    };
-    crate::log_info!(
-        target: "render";
-        "font-kernel-service: frame coverage ticket={} input={} glyphs={} scenes={} prepare_coverage_ms={} coverage_build_ms={} coverage_audit_ms={} coverage_submits={} {}\n",
-        ticket.raw(),
-        coverage_input,
-        glyphs,
-        scene_count,
-        prepare_coverage_ms,
-        coverage_build_ms,
-        coverage_audit_ms,
-        coverage_submits,
-        cache_log,
-    );
-
     // Coverage admission is still reversible: until every mask exists, the
     // caller's leased destination must remain byte-for-byte untouched.  Clear
     // only after preparation succeeds so an unsupported/over-budget glyph
     // cannot consume the frame and strand an unreplayable partial request.
     let mut clear_submits = 0usize;
+    let mut clear_us = 0u64;
     let clear_ms = if let Some(color_rgba) = clear_rgba {
         set_active_stage(ticket, "frame-clear-irreversible");
+        let clear_started_ns = crate::chronos::monotonic_nanos();
         let clear_started_ms = Instant::now().as_millis();
         let clear = GpgpuSolidRect {
             rect: destination.bounds(),
@@ -2826,12 +2801,14 @@ fn process_frame_stamp(
             crate::intel::gpgpu::font_fill_solid_rect_rgba8_scanout_result(destination, clear);
         clear_submits = cleared.stats.submits;
         let elapsed_ms = Instant::now().as_millis().saturating_sub(clear_started_ms);
+        clear_us = crate::chronos::monotonic_nanos().saturating_sub(clear_started_ns) / 1_000;
         validate_frame_clear_outcome(cleared.outcome)?;
         elapsed_ms
     } else {
         0
     };
 
+    let instance_started_ns = crate::chronos::monotonic_nanos();
     let instance_started_ms = Instant::now().as_millis();
     let rendered = match coverage {
         FontFrameCoverage::Retained(scenes) => {
@@ -2852,12 +2829,73 @@ fn process_frame_stamp(
     };
     let submits = rendered.submits;
     let active_walkers = rendered.active_walkers;
-    let release = rendered.release.ok_or(if clear_rgba.is_some() || submits != 0 {
-        FontKernelError::SubmittedIncomplete("font-frame-stamp-release-missing")
-    } else {
-        FontKernelError::Unavailable("font-frame-stamp-release-missing")
-    })?;
+    let release = rendered
+        .release
+        .ok_or(if clear_rgba.is_some() || submits != 0 {
+            FontKernelError::SubmittedIncomplete("font-frame-stamp-release-missing")
+        } else {
+            FontKernelError::Unavailable("font-frame-stamp-release-missing")
+        })?;
+    let completed_ns = crate::chronos::monotonic_nanos();
     let completed_ms = Instant::now().as_millis();
+    let instance_release_us = completed_ns.saturating_sub(instance_started_ns) / 1_000;
+    let total_service_us = completed_ns.saturating_sub(service_started_ns) / 1_000;
+    if let Some((diagnostics, delta, tail_key_fingerprint)) = producer_cache {
+        crate::log_shell2_render_trace!(
+            "stage=font-kernel ticket={} input={} glyphs={} scenes={} tail_glyph_key=0x{:016X} queue_us={} prepare_us={} coverage_build_ms={} coverage_audit_ms={} coverage_submits={} clear_us={} instance_release_us={} service_us={} submits={} clear_submits={} walkers={} recipe_entries={} recipe_used_bytes={} recipe_total_hits={} recipe_total_misses={} recipe_total_uncached={} recipe_request_hits={} recipe_request_misses={} recipe_request_uncached={} ocean_entries={} ocean_used_bytes={} ocean_total_hits={} ocean_total_misses={} ocean_total_uncached={} ocean_request_hits={} ocean_request_misses={} ocean_request_uncached={}\n",
+            ticket.raw(),
+            coverage_input,
+            glyphs,
+            scene_count,
+            tail_key_fingerprint,
+            pre_service_us,
+            prepare_coverage_us,
+            coverage_build_ms,
+            coverage_audit_ms,
+            coverage_submits,
+            clear_us,
+            instance_release_us,
+            total_service_us,
+            submits,
+            clear_submits,
+            active_walkers,
+            diagnostics.0.0,
+            diagnostics.0.1,
+            diagnostics.0.2,
+            diagnostics.0.3,
+            diagnostics.0.4,
+            delta.0.0,
+            delta.0.1,
+            delta.0.2,
+            diagnostics.1.0,
+            diagnostics.1.1,
+            diagnostics.1.2,
+            diagnostics.1.3,
+            diagnostics.1.4,
+            delta.1.0,
+            delta.1.1,
+            delta.1.2,
+        );
+    } else {
+        crate::log_shell2_render_trace!(
+            "stage=font-kernel ticket={} input={} glyphs={} scenes={} queue_us={} prepare_us={} coverage_build_ms={} coverage_audit_ms={} coverage_submits={} clear_us={} instance_release_us={} service_us={} submits={} clear_submits={} walkers={} cache=none\n",
+            ticket.raw(),
+            coverage_input,
+            glyphs,
+            scene_count,
+            pre_service_us,
+            prepare_coverage_us,
+            coverage_build_ms,
+            coverage_audit_ms,
+            coverage_submits,
+            clear_us,
+            instance_release_us,
+            total_service_us,
+            submits,
+            clear_submits,
+            active_walkers,
+        );
+    }
     Ok(FontFrameStamp {
         ticket,
         glyphs,
@@ -3020,10 +3058,18 @@ fn process_queued_request(request: QueuedFontRequest) {
             clear_rgba,
             producer_row,
             enqueued_ms,
+            enqueued_ns,
             reply,
         } => {
             set_active_stage(ticket, "dispatch");
-            let result = process_frame_stamp(ticket, input, destination, clear_rgba, enqueued_ms);
+            let result = process_frame_stamp(
+                ticket,
+                input,
+                destination,
+                clear_rgba,
+                enqueued_ms,
+                enqueued_ns,
+            );
             if let Some(producer_row) = producer_row {
                 match &result {
                     Ok(stamp) if stamp.release().matches(destination.phys, destination.bytes) => {
@@ -3065,13 +3111,6 @@ fn process_queued_request(request: QueuedFontRequest) {
                 log_failure(ticket, "frame-stamp", error);
             }
             complete_status(ticket, false, result.is_ok());
-            crate::log_info!(
-                target: "render";
-                "font-kernel-service: frame-stamp complete ticket={} ok={} queued={}\n",
-                ticket.raw(),
-                result.is_ok() as u8,
-                REQUESTS.lock().len(),
-            );
             reply.signal(result);
         }
     }
