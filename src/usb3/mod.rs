@@ -2,6 +2,7 @@ mod api;
 pub mod class;
 mod descriptor;
 mod dev_gears;
+mod heal_service;
 pub mod hid;
 pub(crate) mod lab;
 mod lib;
@@ -10,6 +11,11 @@ mod pen;
 mod scsi;
 mod skhynix;
 
+pub use self::heal_service::{
+    HealPortReport, HealServiceReport, HealServiceStage, HealXhciSeed, IntelXhciProfile,
+    QemuXhciProfile, XhciBackendSelection, latest_report as xhci_heal_report,
+    latest_selection as xhci_backend_selection,
+};
 pub use self::hid::midi;
 pub use self::lib::*;
 pub use crab_usb as crabusb;
@@ -33,8 +39,32 @@ pub async fn usb_controller_service_task() {
         );
         return;
     }
-    let Some((mmio, mmio_len, kernel, root_hub_policy)) = lib::known_xhci_host_inputs() else {
+    let Some(selection) = heal_service::select_first_backend() else {
         return;
+    };
+    let Some((mmio, mmio_len, kernel, _legacy_root_hub_policy)) =
+        lib::known_xhci_host_inputs()
+    else {
+        return;
+    };
+    let root_hub_policy = match selection {
+        XhciBackendSelection::KnownIntel(profile) => {
+            crate::log!(
+                "crabusb: xhci backend=known-intel profile={} normal-init=admitted\n",
+                profile.label()
+            );
+            crabusb::XhciRootHubInitPolicy::SelectivePorts3And4Skip11
+        }
+        XhciBackendSelection::KnownQemu(profile) => {
+            crate::log!(
+                "crabusb: xhci backend=known-qemu profile={} normal-init=admitted\n",
+                profile.label()
+            );
+            crabusb::XhciRootHubInitPolicy::FullAllPorts
+        }
+        XhciBackendSelection::HealRequired(seed) => {
+            heal_service::run_quarantined(mmio, mmio_len, kernel, seed).await
+        }
     };
     let mut host = match crabusb::USBHost::new_xhci_with_root_hub_init_policy_and_mmio_len(
         mmio,
