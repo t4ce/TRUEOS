@@ -2384,21 +2384,29 @@ pub(super) fn dock_zone_row_span(zone: Ui4DockZone, row: u32) -> Option<Ui4Visua
         return None;
     }
 
-    let mut first = None;
-    let mut last = 0;
-    for column in 0..zone.rect.width {
-        if dock_zone_local_contains(
-            zone.target,
-            zone.rect.width,
-            zone.rect.height,
-            column,
-            row,
-        ) {
-            first.get_or_insert(column);
-            last = column;
+    use super::WindowDockTarget;
+
+    let contains = |column| {
+        dock_zone_local_contains(zone.target, zone.rect.width, zone.rect.height, column, row)
+    };
+    let (first, last) = match zone.target {
+        WindowDockTarget::TopLeft | WindowDockTarget::BottomLeft | WindowDockTarget::LeftHalf => {
+            let last = last_true_prefix(zone.rect.width, contains)?;
+            (0, last)
         }
-    }
-    first.map(|first| Ui4VisualRect {
+        WindowDockTarget::TopRight
+        | WindowDockTarget::BottomRight
+        | WindowDockTarget::RightHalf => {
+            let first = first_true_suffix(zone.rect.width, contains)?;
+            (first, zone.rect.width.saturating_sub(1))
+        }
+        WindowDockTarget::Maximize => {
+            let left_half = zone.rect.width / 2 + zone.rect.width % 2;
+            let first = first_true_suffix(left_half, contains)?;
+            (first, zone.rect.width.saturating_sub(1).saturating_sub(first))
+        }
+    };
+    Some(Ui4VisualRect {
         x: zone.rect.x.saturating_add(first),
         y: zone.rect.y.saturating_add(row),
         width: last.saturating_sub(first).saturating_add(1),
@@ -2407,33 +2415,66 @@ pub(super) fn dock_zone_row_span(zone: Ui4DockZone, row: u32) -> Option<Ui4Visua
 }
 
 /// Column equivalent of [`dock_zone_row_span`]. Tall side fields are emitted
-/// column-wise to keep Slot 4's fixed rectangle budget independent of their
-/// much longer vertical diameter.
+/// column-wise so Slot 4's rectangle count follows the shorter dimension
+/// instead of their much longer vertical diameter.
 pub(super) fn dock_zone_column_span(zone: Ui4DockZone, column: u32) -> Option<Ui4VisualRect> {
     if column >= zone.rect.width {
         return None;
     }
 
-    let mut first = None;
-    let mut last = 0;
-    for row in 0..zone.rect.height {
-        if dock_zone_local_contains(
-            zone.target,
-            zone.rect.width,
-            zone.rect.height,
-            column,
-            row,
-        ) {
-            first.get_or_insert(row);
-            last = row;
+    use super::WindowDockTarget;
+
+    let contains =
+        |row| dock_zone_local_contains(zone.target, zone.rect.width, zone.rect.height, column, row);
+    let (first, last) = match zone.target {
+        WindowDockTarget::TopLeft | WindowDockTarget::TopRight | WindowDockTarget::Maximize => {
+            let last = last_true_prefix(zone.rect.height, contains)?;
+            (0, last)
         }
-    }
-    first.map(|first| Ui4VisualRect {
+        WindowDockTarget::BottomLeft | WindowDockTarget::BottomRight => {
+            let first = first_true_suffix(zone.rect.height, contains)?;
+            (first, zone.rect.height.saturating_sub(1))
+        }
+        WindowDockTarget::LeftHalf | WindowDockTarget::RightHalf => {
+            let top_half = zone.rect.height / 2 + zone.rect.height % 2;
+            let first = first_true_suffix(top_half, contains)?;
+            (first, zone.rect.height.saturating_sub(1).saturating_sub(first))
+        }
+    };
+    Some(Ui4VisualRect {
         x: zone.rect.x.saturating_add(column),
         y: zone.rect.y.saturating_add(first),
         width: 1,
         height: last.saturating_sub(first).saturating_add(1),
     })
+}
+
+fn last_true_prefix(extent: u32, mut predicate: impl FnMut(u32) -> bool) -> Option<u32> {
+    let mut low = 0;
+    let mut high = extent;
+    while low < high {
+        let middle = low.saturating_add(high.saturating_sub(low) / 2);
+        if predicate(middle) {
+            low = middle.saturating_add(1);
+        } else {
+            high = middle;
+        }
+    }
+    low.checked_sub(1)
+}
+
+fn first_true_suffix(extent: u32, mut predicate: impl FnMut(u32) -> bool) -> Option<u32> {
+    let mut low = 0;
+    let mut high = extent;
+    while low < high {
+        let middle = low.saturating_add(high.saturating_sub(low) / 2);
+        if predicate(middle) {
+            high = middle;
+        } else {
+            low = middle.saturating_add(1);
+        }
+    }
+    (low < extent).then_some(low)
 }
 
 fn dock_zone_local_contains(
@@ -2458,22 +2499,18 @@ fn dock_zone_local_contains(
         | WindowDockTarget::TopRight
         | WindowDockTarget::BottomLeft
         | WindowDockTarget::BottomRight => {
-            let corner_x = if matches!(
-                target,
-                WindowDockTarget::TopRight | WindowDockTarget::BottomRight
-            ) {
-                width.saturating_sub(1).saturating_sub(x)
-            } else {
-                x
-            };
-            let corner_y = if matches!(
-                target,
-                WindowDockTarget::BottomLeft | WindowDockTarget::BottomRight
-            ) {
-                height.saturating_sub(1).saturating_sub(y)
-            } else {
-                y
-            };
+            let corner_x =
+                if matches!(target, WindowDockTarget::TopRight | WindowDockTarget::BottomRight) {
+                    width.saturating_sub(1).saturating_sub(x)
+                } else {
+                    x
+                };
+            let corner_y =
+                if matches!(target, WindowDockTarget::BottomLeft | WindowDockTarget::BottomRight) {
+                    height.saturating_sub(1).saturating_sub(y)
+                } else {
+                    y
+                };
             normalized_ellipse_contains(
                 corner_x.saturating_mul(2).saturating_add(1),
                 width.saturating_mul(2),
@@ -2822,9 +2859,8 @@ mod tests {
                 for column in 0..zone.rect.width {
                     let x = zone.rect.x.saturating_add(column);
                     let y = zone.rect.y.saturating_add(row);
-                    let painted = span.is_some_and(|span| {
-                        x >= span.x && x < span.x.saturating_add(span.width)
-                    });
+                    let painted = span
+                        .is_some_and(|span| x >= span.x && x < span.x.saturating_add(span.width));
                     assert_eq!(painted, dock_zone_contains(zone, x, y));
                 }
             }
@@ -2833,9 +2869,8 @@ mod tests {
                 for row in 0..zone.rect.height {
                     let x = zone.rect.x.saturating_add(column);
                     let y = zone.rect.y.saturating_add(row);
-                    let painted = span.is_some_and(|span| {
-                        y >= span.y && y < span.y.saturating_add(span.height)
-                    });
+                    let painted = span
+                        .is_some_and(|span| y >= span.y && y < span.y.saturating_add(span.height));
                     assert_eq!(painted, dock_zone_contains(zone, x, y));
                 }
             }

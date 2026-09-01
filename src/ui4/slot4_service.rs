@@ -11,12 +11,12 @@ use alloc::vec::Vec;
 use spin::Mutex;
 use trueos_time::{Duration, Instant, with_timeout};
 
-const SLOT4_RECT_CAPACITY: usize = 3_072;
+const SLOT4_RECT_BASE_CAPACITY: usize = 64;
 const SOFTWARE_CURSOR_STROKE_PX: u32 = 5;
 const SOFTWARE_CURSOR_LONG_PX: u32 = 27;
 const DOCK_FIELD_ALPHA: u8 = 84;
 
-type Slot4Rects = heapless::Vec<crate::intel::LiveOverlayRect, SLOT4_RECT_CAPACITY>;
+type Slot4Rects = Vec<crate::intel::LiveOverlayRect>;
 
 static PRESENTED_RECTS: Mutex<Slot4Rects> = Mutex::new(Slot4Rects::new());
 
@@ -381,7 +381,7 @@ fn software_cursor_rects() -> Slot4Rects {
     use crate::graphics::primitives::Rgba8;
 
     let visuals = super::software_cursor_visuals();
-    let mut rects = Slot4Rects::new();
+    let mut rects = Slot4Rects::with_capacity(SLOT4_RECT_BASE_CAPACITY);
     let (screen_w, screen_h) = crate::intel::active_scanout_dimensions().unwrap_or((2560, 1440));
 
     if let Some(output) = super::OutputId::from_slot(0) {
@@ -391,7 +391,15 @@ fn software_cursor_rects() -> Slot4Rects {
     }
 
     if visuals.iter().any(|visual| visual.dock_fields_visible) {
-        for zone in super::input_broker::dock_zones(screen_w, screen_h) {
+        let zones = super::input_broker::dock_zones(screen_w, screen_h);
+        // A convex field emits at most one rectangle per row or column. Make
+        // one density-aware reservation while still allowing the list to grow
+        // for valid high-DPI EDIDs instead of silently dropping later chrome.
+        let dock_rect_bound = zones.iter().fold(0usize, |total, zone| {
+            total.saturating_add(zone.rect.width.min(zone.rect.height) as usize)
+        });
+        rects.reserve(dock_rect_bound);
+        for zone in zones {
             let active = visuals.iter().any(|visual| {
                 visual.dock_fields_visible
                     && visual
@@ -878,7 +886,7 @@ fn push_overlay_rect(
     if width == 0 || height == 0 {
         return;
     }
-    let _ = rects.push(crate::intel::LiveOverlayRect::new(x, y, width, height, color));
+    rects.push(crate::intel::LiveOverlayRect::new(x, y, width, height, color));
 }
 
 #[cfg(test)]
@@ -925,6 +933,16 @@ mod tests {
                 visible: true,
             },
         }
+    }
+
+    #[test]
+    fn slot4_rect_storage_grows_past_the_legacy_high_dpi_limit() {
+        let mut rects = Slot4Rects::new();
+        let color = Rgba8::new(118, 124, 136, DOCK_FIELD_ALPHA);
+        for x in 0..4_096 {
+            push_overlay_rect(&mut rects, x, 0, 1, 1, color);
+        }
+        assert_eq!(rects.len(), 4_096);
     }
 
     #[test]

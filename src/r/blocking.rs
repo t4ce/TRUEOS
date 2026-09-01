@@ -28,6 +28,40 @@ static SERVICE_LANE_QUEUES: [Mutex<VecDeque<ServiceLaneRequest>>;
     [const { Mutex::new(VecDeque::new()) }; crate::allcaps::hv::VM_CPU_SLOT_LIMIT];
 static SERVICE_LANE_WAITS: [crate::wait::WaitQueue; crate::allcaps::hv::VM_CPU_SLOT_LIMIT] =
     [const { crate::wait::WaitQueue::new() }; crate::allcaps::hv::VM_CPU_SLOT_LIMIT];
+static SERVICE_LANE_JOB_ACTIVE: [AtomicBool; crate::allcaps::hv::VM_CPU_SLOT_LIMIT] =
+    [const { AtomicBool::new(false) }; crate::allcaps::hv::VM_CPU_SLOT_LIMIT];
+
+struct ServiceLaneJobActiveGuard {
+    slot: Option<usize>,
+}
+
+impl ServiceLaneJobActiveGuard {
+    fn enter() -> Self {
+        let slot = crate::percpu::current_slot();
+        let slot = SERVICE_LANE_JOB_ACTIVE.get(slot).map(|active| {
+            active.store(true, Ordering::Release);
+            slot
+        });
+        Self { slot }
+    }
+}
+
+impl Drop for ServiceLaneJobActiveGuard {
+    fn drop(&mut self) {
+        if let Some(slot) = self.slot {
+            SERVICE_LANE_JOB_ACTIVE[slot].store(false, Ordering::Release);
+        }
+    }
+}
+
+/// True only while the current AP is synchronously executing one leased
+/// service-lane job. Blocking wait queues use this to keep `hlt` out of driver
+/// and BSP polling paths which require active progress.
+pub(crate) fn current_service_lane_job_active() -> bool {
+    SERVICE_LANE_JOB_ACTIVE
+        .get(crate::percpu::current_slot())
+        .is_some_and(|active| active.load(Ordering::Acquire))
+}
 
 pub enum BlockingJobCall {
     Host(BlockingJobFn),
@@ -90,6 +124,7 @@ fn run_blocking_job_call(call: BlockingJobCall) {
 }
 
 fn run_blocking_job_entry(entry: BlockingJobEntry) {
+    let _active = ServiceLaneJobActiveGuard::enter();
     let BlockingJobEntry {
         id,
         vm_id,

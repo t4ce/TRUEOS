@@ -249,6 +249,13 @@ struct TrueosTimeval {
 
 #[repr(C)]
 #[derive(Clone, Copy)]
+struct TrueosTimespec {
+    tv_sec: i64,
+    tv_nsec: i64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
 struct TrueosTm {
     tm_sec: c_int,
     tm_min: c_int,
@@ -1172,13 +1179,80 @@ fn pthread_cond_generation(state: &PthreadCondStorage) -> u64 {
     state.generation.load(Ordering::Acquire)
 }
 
-fn pthread_cond_notify_key(key: usize) -> c_int {
+fn pthread_cond_notify_key(key: usize, wake_all: bool) -> c_int {
     let Some(state) = pthread_cond_storage(key) else {
         return TRUEOS_EINVAL;
     };
     let state = unsafe { state.as_ref() };
     state.generation.fetch_add(1, Ordering::Release);
+    if wake_all {
+        crate::r::platform::trueos_tokio_platform_wake_all(key as u64);
+    } else {
+        crate::r::platform::trueos_tokio_platform_wake_one(key as u64);
+    }
     0
+}
+
+fn pthread_cond_wait_observe(key: usize) -> u32 {
+    crate::r::platform::trueos_tokio_platform_wait_observe(key as u64)
+}
+
+fn pthread_cond_wait_after(key: usize, observed: u32, timeout_ms: u64) -> bool {
+    crate::r::platform::trueos_tokio_platform_wait_after(key as u64, observed, timeout_ms)
+}
+
+fn pthread_cond_timeout_ms(abstime: *const c_void) -> Result<u64, c_int> {
+    let Some(abstime) = abi_read_struct(abstime.cast::<TrueosTimespec>()) else {
+        return Err(TRUEOS_EINVAL);
+    };
+    pthread_cond_timeout_ms_at(abstime, crate::r::platform::trueos_platform_monotonic_nanos())
+}
+
+fn pthread_cond_timeout_ms_at(abstime: TrueosTimespec, now_ns: u64) -> Result<u64, c_int> {
+    if abstime.tv_sec < 0 || !(0..1_000_000_000).contains(&abstime.tv_nsec) {
+        return Err(TRUEOS_EINVAL);
+    }
+    let target_ns = (abstime.tv_sec as u128)
+        .saturating_mul(1_000_000_000)
+        .saturating_add(abstime.tv_nsec as u128);
+    let now_ns = now_ns as u128;
+    if target_ns <= now_ns {
+        return Ok(0);
+    }
+    let remaining_ns = target_ns - now_ns;
+    Ok(remaining_ns.div_ceil(1_000_000).min(u64::MAX as u128) as u64)
+}
+
+#[cfg(test)]
+mod pthread_cond_tests {
+    use super::*;
+
+    #[test]
+    fn monotonic_abstime_rounds_up_to_kernel_milliseconds() {
+        let abstime = TrueosTimespec {
+            tv_sec: 12,
+            tv_nsec: 1,
+        };
+        assert_eq!(pthread_cond_timeout_ms_at(abstime, 11_000_000_002), Ok(1_000));
+    }
+
+    #[test]
+    fn elapsed_monotonic_abstime_is_immediate_timeout() {
+        let abstime = TrueosTimespec {
+            tv_sec: 7,
+            tv_nsec: 20,
+        };
+        assert_eq!(pthread_cond_timeout_ms_at(abstime, 7_000_000_020), Ok(0));
+    }
+
+    #[test]
+    fn invalid_timespec_nanoseconds_are_rejected() {
+        let abstime = TrueosTimespec {
+            tv_sec: 7,
+            tv_nsec: 1_000_000_000,
+        };
+        assert_eq!(pthread_cond_timeout_ms_at(abstime, 0), Err(TRUEOS_EINVAL));
+    }
 }
 
 fn c_allocation_layout(size: usize, align: usize) -> Option<Layout> {
@@ -5892,13 +5966,15 @@ pub unsafe extern "C" fn pthread_cond_wait(cond: *mut c_void, mutex: *mut c_void
     };
     let cond_state = unsafe { cond_state.as_ref() };
     let generation = pthread_cond_generation(cond_state);
+    let mut observed = pthread_cond_wait_observe(cond_key);
     let unlock_rc = pthread_mutex_unlock_key(mutex_key);
     if unlock_rc != 0 {
         return unlock_rc;
     }
 
     while pthread_cond_generation(cond_state) == generation {
-        core::hint::spin_loop();
+        let _ = pthread_cond_wait_after(cond_key, observed, 0);
+        observed = pthread_cond_wait_observe(cond_key);
     }
 
     pthread_mutex_lock_key(mutex_key)
@@ -5908,7 +5984,7 @@ pub unsafe extern "C" fn pthread_cond_wait(cond: *mut c_void, mutex: *mut c_void
 pub unsafe extern "C" fn pthread_cond_timedwait(
     cond: *mut c_void,
     mutex: *mut c_void,
-    _abstime: *const c_void,
+    abstime: *const c_void,
 ) -> c_int {
     let Some(cond_key) = pthread_key(cond) else {
         return TRUEOS_EINVAL;
@@ -5925,16 +6001,21 @@ pub unsafe extern "C" fn pthread_cond_timedwait(
     };
     let cond_state = unsafe { cond_state.as_ref() };
     let generation = pthread_cond_generation(cond_state);
+    let observed = pthread_cond_wait_observe(cond_key);
+    let timeout_ms = match pthread_cond_timeout_ms(abstime) {
+        Ok(timeout_ms) => timeout_ms,
+        Err(rc) => return rc,
+    };
     let unlock_rc = pthread_mutex_unlock_key(mutex_key);
     if unlock_rc != 0 {
         return unlock_rc;
     }
 
-    for _ in 0..4096 {
-        if pthread_cond_generation(cond_state) != generation {
-            return pthread_mutex_lock_key(mutex_key);
-        }
-        core::hint::spin_loop();
+    if timeout_ms != 0 {
+        let _ = pthread_cond_wait_after(cond_key, observed, timeout_ms);
+    }
+    if pthread_cond_generation(cond_state) != generation {
+        return pthread_mutex_lock_key(mutex_key);
     }
 
     let _ = pthread_mutex_lock_key(mutex_key);
@@ -5947,7 +6028,7 @@ pub unsafe extern "C" fn pthread_cond_signal(cond: *mut c_void) -> c_int {
         return TRUEOS_EINVAL;
     };
     pthread_sync_trace("cond.signal", key);
-    pthread_cond_notify_key(key)
+    pthread_cond_notify_key(key, false)
 }
 
 #[unsafe(no_mangle)]
@@ -5956,7 +6037,7 @@ pub unsafe extern "C" fn pthread_cond_broadcast(cond: *mut c_void) -> c_int {
         return TRUEOS_EINVAL;
     };
     pthread_sync_trace("cond.broadcast", key);
-    pthread_cond_notify_key(key)
+    pthread_cond_notify_key(key, true)
 }
 
 #[unsafe(no_mangle)]
