@@ -37,17 +37,16 @@ use crate::r::services::font_kernel_service::{
 
 use super::{
     DamageRect, FrameCadence, FrameContent, FrameHandle, FramePoolError, FrameSpec,
-    FrameWriteLease, OutputId, PremultipliedRgba8, ScanoutFormat, Ui4CursorCellOutline,
-    Ui4CursorIcon, Ui4CursorSource, Ui4InputEvent, WindowBrokerError, WindowCreate, WindowId,
-    WindowOwner, WindowPlacement, WindowPlane, WindowSessionCloseRequest, WindowSessionId,
-    acquire_frame_buffer,
+    FrameWriteLease, OutputId, PremultipliedRgba8, ScanoutFormat, Ui4CursorIcon, Ui4CursorSource,
+    Ui4CursorStep, Ui4InputEvent, WindowBrokerError, WindowCreate, WindowId, WindowOwner,
+    WindowPlacement, WindowPlane, WindowSessionCloseRequest, WindowSessionId, acquire_frame_buffer,
     begin_additional_window_session, cancel_frame_buffer, commit_window_frame_refresh,
     commit_window_frame_replacement, create_frame, create_gpu_full_overwrite_frame, create_window,
     destroy_frame, finish_window_session, finish_window_session_with_request,
     focused_keyboard_state, gpgpu_rgba_surface, mark_frame_buffer_cpu_authored,
     mark_frame_buffer_fully_opaque, publish_frame_buffer, publish_gpgpu_scene_frame_buffer,
-    publish_resident_scene_frame_buffer, publish_window_frame, set_window_cursor_cell_outline,
-    set_window_cursor_icon, set_window_custom_cursor, set_window_hit_testable, set_window_opacity,
+    publish_resident_scene_frame_buffer, publish_window_frame, set_window_cursor_icon,
+    set_window_cursor_step, set_window_custom_cursor, set_window_hit_testable, set_window_opacity,
     set_window_position, take_owner_input_events, take_window_first_presentation,
     window_input_routes, window_resize_state, writable_rgba_view,
 };
@@ -444,22 +443,19 @@ pub struct TrueosUi4CursorSource {
 
 const _: () = assert!(core::mem::size_of::<TrueosUi4CursorSource>() == 4 * 4);
 
-/// Static geometry for one kernel-rendered, cell-snapped cursor outline. The
-/// grid origin is frame-local; width uses 1/1024-pixel units to preserve
-/// fractional monospace advances over a long row.
+/// Static cell spacing for a frame which already owns its cursor pixels via
+/// `AppOwned`. The origin is in frame-local pixels and advances are 1/1024
+/// pixel units.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
-pub struct TrueosUi4CursorCellOutline {
+pub struct TrueosUi4CursorStep {
     pub origin_x: u32,
     pub origin_y: u32,
     pub cell_width_subpx: u32,
-    pub cell_height: u32,
-    pub columns: u32,
-    pub rows: u32,
-    pub stroke: u32,
+    pub cell_height_subpx: u32,
 }
 
-const _: () = assert!(core::mem::size_of::<TrueosUi4CursorCellOutline>() == 7 * 4);
+const _: () = assert!(core::mem::size_of::<TrueosUi4CursorStep>() == 4 * 4);
 
 /// One row of a Blueprint-requested context menu. `enabled` is zero for a
 /// greyed label which reports no action, non-zero for a selectable row.
@@ -2641,30 +2637,44 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_set_cursor_icon(
     0
 }
 
-/// Configure one frame-wide cell cursor. The kernel retains only this static
-/// grid description; pointer motion and cursor color stay on UI4's slot-4
-/// software-cursor plane rather than causing application-frame repaints.
-pub unsafe extern "C" fn trueos_cabi_ui4_scene_set_cursor_cell_outline(
+/// Configure cell stepping for a frame's already-`AppOwned` cursor. Passing
+/// null clears the request. This affects selected-frame pointer delivery only;
+/// it never changes physical cursor movement, keyboard routing, or selection.
+pub unsafe extern "C" fn trueos_cabi_ui4_scene_set_cursor_step(
     window_id: u32,
-    outline: *const TrueosUi4CursorCellOutline,
+    step: *const TrueosUi4CursorStep,
 ) -> i32 {
-    if outline.is_null() {
-        return ERROR_INVALID;
-    }
-    // SAFETY: the C ABI requires one readable outline record.
-    let raw_outline = unsafe { outline.read() };
-    let Some(outline) = cursor_cell_outline_from_raw(raw_outline) else {
-        return ERROR_INVALID;
+    let step = if step.is_null() {
+        None
+    } else {
+        // SAFETY: the C ABI requires one readable step record when non-null.
+        let step = unsafe { step.read() };
+        let step = Ui4CursorStep {
+            origin_x: step.origin_x,
+            origin_y: step.origin_y,
+            cell_width_subpx: step.cell_width_subpx,
+            cell_height_subpx: step.cell_height_subpx,
+        };
+        if !step.is_valid() {
+            return ERROR_INVALID;
+        }
+        Some(step)
     };
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let payload = unsafe {
+        let payload = step.map(|step| TrueosUi4CursorStep {
+            origin_x: step.origin_x,
+            origin_y: step.origin_y,
+            cell_width_subpx: step.cell_width_subpx,
+            cell_height_subpx: step.cell_height_subpx,
+        });
+        let payload = payload.as_ref().map_or(&[][..], |step| unsafe {
             core::slice::from_raw_parts(
-                (&raw_outline as *const TrueosUi4CursorCellOutline).cast::<u8>(),
-                core::mem::size_of::<TrueosUi4CursorCellOutline>(),
+                (step as *const TrueosUi4CursorStep).cast::<u8>(),
+                core::mem::size_of::<TrueosUi4CursorStep>(),
             )
-        };
+        });
         return guest_status(
-            trueos_vm::vmcall::OP_BP_UI4_SCENE_SET_CURSOR_CELL_OUTLINE,
+            trueos_vm::vmcall::OP_BP_UI4_SCENE_SET_CURSOR_STEP,
             window_id as u64,
             0,
             payload,
@@ -2673,59 +2683,17 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_set_cursor_cell_outline(
     let Some(owner) = blueprint_owner() else {
         return ERROR_CONTEXT;
     };
-    let (window, width, height) = {
+    let window = {
         let mut surfaces = SURFACES.lock();
         let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
             return ERROR_NOT_FOUND;
         };
-        (surface.window, surface.width, surface.height)
+        surface.window
     };
-    if !cursor_cell_outline_fits_frame(outline, width, height)
-        || set_window_cursor_cell_outline(owner, window, outline).is_err()
-    {
+    if set_window_cursor_step(owner, window, step).is_err() {
         return ERROR_UI4;
     }
     0
-}
-
-fn cursor_cell_outline_from_raw(
-    outline: TrueosUi4CursorCellOutline,
-) -> Option<Ui4CursorCellOutline> {
-    let outline = Ui4CursorCellOutline {
-        origin_x: outline.origin_x,
-        origin_y: outline.origin_y,
-        cell_width_subpx: outline.cell_width_subpx,
-        cell_height: outline.cell_height,
-        columns: outline.columns,
-        rows: outline.rows,
-        stroke: outline.stroke,
-    };
-    if !outline.is_valid()
-        || outline.cell_width_subpx < 1_024
-        || outline.cell_height > MAX_FRAME_HEIGHT
-        || outline.columns > MAX_FRAME_WIDTH
-        || outline.rows > MAX_FRAME_HEIGHT
-    {
-        return None;
-    }
-    let cell_width_px = (u64::from(outline.cell_width_subpx).saturating_add(1_023) / 1_024)
-        .min(u64::from(MAX_FRAME_WIDTH));
-    let max_stroke = (cell_width_px / 2).min(u64::from(outline.cell_height) / 2);
-    (u64::from(outline.stroke) <= max_stroke).then_some(outline)
-}
-
-fn cursor_cell_outline_fits_frame(
-    outline: Ui4CursorCellOutline,
-    frame_width: u32,
-    frame_height: u32,
-) -> bool {
-    let grid_width = u64::from(outline.cell_width_subpx)
-        .saturating_mul(u64::from(outline.columns))
-        .saturating_add(1_023)
-        / 1_024;
-    let grid_height = u64::from(outline.cell_height).saturating_mul(u64::from(outline.rows));
-    u64::from(outline.origin_x).saturating_add(grid_width) <= u64::from(frame_width)
-        && u64::from(outline.origin_y).saturating_add(grid_height) <= u64::from(frame_height)
 }
 
 /// Replace the backing frame while retaining the UI4 window and scene assets.

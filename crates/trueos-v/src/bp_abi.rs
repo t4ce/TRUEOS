@@ -279,6 +279,17 @@ pub struct TrueosUi4CursorSource {
     pub hid_kind: u32,
 }
 
+/// Frame-local cell spacing for an `AppOwned` UI4 cursor. Advances use 1/1024
+/// pixel units so fractional glyph widths stay aligned.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosUi4CursorStep {
+    pub origin_x: u32,
+    pub origin_y: u32,
+    pub cell_width_subpx: u32,
+    pub cell_height_subpx: u32,
+}
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
 pub struct TrueosUi4PointerEvent {
@@ -699,6 +710,10 @@ unsafe extern "C" {
         window_id: u32,
         source: *const TrueosUi4CursorSource,
         icon: u32,
+    ) -> i32;
+    pub fn trueos_cabi_ui4_scene_set_cursor_step(
+        window_id: u32,
+        step: *const TrueosUi4CursorStep,
     ) -> i32;
     pub fn trueos_cabi_ui4_scene_pointer_event_take(
         window_id: u32,
