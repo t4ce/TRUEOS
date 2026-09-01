@@ -46,7 +46,6 @@ impl KnownAotKernel {
 pub(crate) enum KnownKernelRole {
     Copy,
     Fill,
-    WorklistFill,
     WorklistGradient,
     WorklistBlend,
     Glyph,
@@ -71,7 +70,6 @@ const TEXT_OFFSET: u64 = 0x40;
 const COPY_CROSS_THREAD_BYTES: u32 = 96;
 const COPY_PER_THREAD_BYTES: u32 = 96;
 const RECT_WORKLIST_CROSS_THREAD_BYTES: u32 = 96;
-const FILL_RECT_WORKLIST_CROSS_THREAD_BYTES: u32 = 64;
 const RECT_WORKLIST_PER_THREAD_BYTES: u32 = 96;
 const SPRITE_QUAD_WORKLIST_CROSS_THREAD_BYTES: u32 = 128;
 const SPRITE_QUAD_WORKLIST_PER_THREAD_BYTES: u32 = 96;
@@ -98,18 +96,10 @@ const GENERIC_PER_THREAD_BYTES: u32 = 96;
 const BOOT_UPLOAD_CONSUMERS: &[&str] = &["intel::init_once upload"];
 const RECT_WORKLIST_CONSUMERS: &[&str] = &[
     "intel::init_once upload",
-    "font service rect/gradient loops",
-    "gpgpu rect worklist probes",
+    "font service gradient loops",
+    "gpgpu descriptor-worklist probes",
 ];
 const TEXT_RENDER_CONSUMERS: &[&str] = &["intel::init_once upload", "font service text loop"];
-
-const FILL_RECT_DESC_FIELDS: &[DescriptorField<'_>] = &[
-    DescriptorField::new("dst_xy", 0, 1),
-    DescriptorField::new("size", 1, 1),
-    DescriptorField::new("color_rgba", 2, 1),
-];
-const FILL_RECT_DESC: DescriptorLayout<'_> =
-    DescriptorLayout::new("FillRectDesc", 3, Some(256), FILL_RECT_DESC_FIELDS);
 
 const GRADIENT_RECT_DESC_FIELDS: &[DescriptorField<'_>] = &[
     DescriptorField::new("dst_xy", 0, 1),
@@ -189,7 +179,6 @@ macro_rules! f32_arg {
 }
 
 const NO_DESCS: &[DescriptorLayout<'_>] = &[];
-const FILL_RECT_DESCS: &[DescriptorLayout<'_>] = &[FILL_RECT_DESC];
 const GRADIENT_RECT_DESCS: &[DescriptorLayout<'_>] = &[GRADIENT_RECT_DESC];
 const ALPHA_BLEND_DESCS: &[DescriptorLayout<'_>] = &[ALPHA_BLEND_DESC];
 const SPRITE_QUAD_DESCS: &[DescriptorLayout<'_>] = &[SPRITE_QUAD_DESC];
@@ -247,29 +236,14 @@ const FILL_RECT_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     consumers: BOOT_UPLOAD_CONSUMERS,
 };
 
-const FILL_RECT_WORKLIST_ARGS: &[KernelCallArg<'_>] = &[
+const DESTINATION_WORKLIST_ARGS: &[KernelCallArg<'_>] = &[
     rw_buf!(0, "dst_rgba", "__global uint*", 0, 8),
     ro_buf!(1, "descs", "__global const uint*", 1, 10),
     u32_arg!(2, "dst_pitch_bytes", 12),
     u32_arg!(3, "desc_base", 13),
     u32_arg!(4, "desc_count", 14),
 ];
-const FILL_RECT_WORKLIST_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
-    name: gpgpu::FILL_RECT_WORKLIST_RGBA8_KERNEL_NAME,
-    source_path: "src/intel/gpgpu/kernels/fill_rect_worklist_rgba8.clcpp",
-    producer: IGC,
-    target: ADLS,
-    entry_text_offset_bytes: TEXT_OFFSET,
-    cross_thread_bytes: FILL_RECT_WORKLIST_CROSS_THREAD_BYTES,
-    per_thread_bytes: RECT_WORKLIST_PER_THREAD_BYTES,
-    binding_count: 2,
-    args: FILL_RECT_WORKLIST_ARGS,
-    descriptor_layouts: FILL_RECT_DESCS,
-    launch: KernelLaunchContract::descriptor_worklist(16),
-    consumers: RECT_WORKLIST_CONSUMERS,
-};
-
-const GRADIENT_RECT_WORKLIST_ARGS: &[KernelCallArg<'_>] = FILL_RECT_WORKLIST_ARGS;
+const GRADIENT_RECT_WORKLIST_ARGS: &[KernelCallArg<'_>] = DESTINATION_WORKLIST_ARGS;
 const GRADIENT_RECT_WORKLIST_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     name: gpgpu::GRADIENT_RECT_WORKLIST_RGBA8_KERNEL_NAME,
     source_path: "src/intel/gpgpu/kernels/gradient_rect_worklist_rgba8.clcpp",
@@ -395,7 +369,7 @@ const UI4_COMPOSE_LAYERS_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     consumers: &["ui4 persistent GuC compositor"],
 };
 
-const MANDEL64_ARGS: &[KernelCallArg<'_>] = FILL_RECT_WORKLIST_ARGS;
+const MANDEL64_ARGS: &[KernelCallArg<'_>] = DESTINATION_WORKLIST_ARGS;
 const MANDEL64_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     name: gpgpu::MANDEL64_WORKLIST_RGBA8_KERNEL_NAME,
     source_path: "src/intel/gpgpu/kernels/mandel64_worklist_rgba8.clcpp",
@@ -757,14 +731,6 @@ pub(crate) const KNOWN_AOT_KERNELS: &[KnownAotKernel] = &[
         upload: gpgpu::upload_fill_rect_rgba8_kernel,
         status: gpgpu::fill_rect_rgba8_upload_status,
         role: KnownKernelRole::Fill,
-    },
-    KnownAotKernel {
-        name: gpgpu::FILL_RECT_WORKLIST_RGBA8_KERNEL_NAME,
-        artifact: &gpgpu::FILL_RECT_WORKLIST_RGBA8_ADLS_ARTIFACT,
-        contract: &FILL_RECT_WORKLIST_CONTRACT,
-        upload: gpgpu::upload_fill_rect_worklist_rgba8_kernel,
-        status: gpgpu::fill_rect_worklist_rgba8_upload_status,
-        role: KnownKernelRole::WorklistFill,
     },
     KnownAotKernel {
         name: gpgpu::GRADIENT_RECT_WORKLIST_RGBA8_KERNEL_NAME,

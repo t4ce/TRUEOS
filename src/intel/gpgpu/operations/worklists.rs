@@ -339,23 +339,13 @@ fn submit_solid_rect_worklist(
     let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
     let kernel_ppgtt_ok = ppgtt_ok
         && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
-    // Source-free SOLID descriptors bind the descriptor allocation at both
-    // source and descriptor BTIs. It remains one PAT0/WB mapping and is never
-    // read through the source pointer by the consolidated artifact.
-    let source_ppgtt_ok = kernel_ppgtt_ok
-        && direct_rcs_map_ppgtt_kernel(state, desc.gpu, desc.phys, desc.bytes);
-    let dst_ppgtt_ok = source_ppgtt_ok
+    let dst_ppgtt_ok = kernel_ppgtt_ok
         && direct_rcs_map_ppgtt_destination(state, dst.gpu, dst.phys, dst.bytes, direct_scanout);
     let desc_ppgtt_ok =
         dst_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, desc.gpu, desc.phys, desc.bytes);
     let batch_ok = desc_ppgtt_ok
         && direct_rcs_encode_alpha_blend_worklist_batch(
-            state,
-            upload,
-            params,
-            desc.bytes,
-            dst.bytes,
-            desc.bytes,
+            state, upload, params, dst.bytes, dst.bytes, desc.bytes,
         );
     let submission = if batch_ok {
         direct_rcs_submit_batch_state(dev, state)

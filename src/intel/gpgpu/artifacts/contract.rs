@@ -1047,5 +1047,4 @@ mod tests {
                 .supports(0xA780, 0x0C)
         );
     }
-
 }

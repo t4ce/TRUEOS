@@ -1,5 +1,6 @@
 static COPY_RECT_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
-static SUBSET_SUM_COLLAPSE5_MERGE10_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
+static SUBSET_SUM_COLLAPSE5_MERGE10_UPLOAD: Mutex<Option<UploadedKernelArtifact>> =
+    Mutex::new(None);
 static FILL_RECT_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static GRADIENT_RECT_WORKLIST_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> =
     Mutex::new(None);

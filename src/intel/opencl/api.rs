@@ -8,7 +8,7 @@ use super::{
     BuiltProgram, ClError, ClResult, GpuArtifactProducer, IntelOpenClBackend, KernelLaunchModel,
     KnownAotValidationReport, KnownKernelRole,
     backend::UploadedKernelRef,
-    example::{KnownAotQueueProbe, fill_rect_worklist_queue_probe},
+    example::{KnownAotQueueProbe, alpha_compositor_queue_probe},
     registry::{KNOWN_AOT_KERNELS, known_aot_kernel},
     validation::{validate_known_aot_registry, validate_known_aot_status},
 };
@@ -44,7 +44,7 @@ pub(crate) struct SourceBuildSmoke {
     pub(crate) registry_kernels: usize,
     pub(crate) registry_passed: bool,
     pub(crate) queue_completed_commands: usize,
-    pub(crate) fill_rect_uploaded: bool,
+    pub(crate) queue_artifact_uploaded: bool,
     pub(crate) queue_error: Option<ClError>,
 }
 
@@ -115,7 +115,7 @@ pub(crate) fn trueos_cl_known_kernel_uploaded(name: &str) -> ClResult<bool> {
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn trueos_cl_probe_known_aot_queue() -> ClResult<KnownAotQueueProbe> {
-    fill_rect_worklist_queue_probe()
+    alpha_compositor_queue_probe()
 }
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
@@ -139,9 +139,9 @@ pub(crate) fn trueos_cl_source_build_smoke() -> SourceBuildSmoke {
         Err(err) => Some(err),
     };
     let registry = validate_known_aot_registry();
-    let (queue_completed_commands, fill_rect_uploaded, queue_error) =
-        match fill_rect_worklist_queue_probe() {
-            Ok(probe) => (probe.completed_commands, probe.fill_rect_uploaded, None),
+    let (queue_completed_commands, queue_artifact_uploaded, queue_error) =
+        match alpha_compositor_queue_probe() {
+            Ok(probe) => (probe.completed_commands, probe.compositor_uploaded, None),
             Err(err) => (0, false, Some(err)),
         };
 
@@ -152,7 +152,7 @@ pub(crate) fn trueos_cl_source_build_smoke() -> SourceBuildSmoke {
         registry_kernels: registry.registry_kernels,
         registry_passed: registry.passed(),
         queue_completed_commands,
-        fill_rect_uploaded,
+        queue_artifact_uploaded,
         queue_error,
     }
 }

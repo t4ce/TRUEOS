@@ -15,17 +15,17 @@ use super::{
 pub(crate) struct KnownAotQueueProbe {
     pub(crate) known_kernels: usize,
     pub(crate) completed_commands: usize,
-    pub(crate) fill_rect_uploaded: bool,
+    pub(crate) compositor_uploaded: bool,
 }
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-pub(crate) fn fill_rect_worklist_runtime_example() -> ClResult<()> {
-    let _ = fill_rect_worklist_queue_probe()?;
+pub(crate) fn alpha_compositor_runtime_example() -> ClResult<()> {
+    let _ = alpha_compositor_queue_probe()?;
     Ok(())
 }
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-pub(crate) fn fill_rect_worklist_queue_probe() -> ClResult<KnownAotQueueProbe> {
+pub(crate) fn alpha_compositor_queue_probe() -> ClResult<KnownAotQueueProbe> {
     let device = DeviceId::from_raw(1);
     let backend = IntelOpenClBackend::new();
     let caps = backend.caps();
@@ -34,26 +34,31 @@ pub(crate) fn fill_rect_worklist_queue_probe() -> ClResult<KnownAotQueueProbe> {
     }
 
     const ARGS: &[KernelArgDesc<'_>] = &[
-        KernelArgDesc::new(0, "dst_rgba8", "__global uchar4*", KernelArgKind::Buffer, 8, 8),
-        KernelArgDesc::new(1, "descs", "__global const FillRectDesc*", KernelArgKind::Buffer, 8, 8),
-        KernelArgDesc::new(2, "dst_bytes", "uint", KernelArgKind::Scalar, 4, 4),
-        KernelArgDesc::new(3, "desc_count", "uint", KernelArgKind::Scalar, 4, 4),
+        KernelArgDesc::new(0, "src_rgba", "__global const uint*", KernelArgKind::Buffer, 8, 8),
+        KernelArgDesc::new(1, "dst_rgba", "__global uint*", KernelArgKind::Buffer, 8, 8),
+        KernelArgDesc::new(2, "descs", "__global const uint*", KernelArgKind::Buffer, 8, 8),
+        KernelArgDesc::new(3, "src_pitch_bytes", "uint", KernelArgKind::Scalar, 4, 4),
+        KernelArgDesc::new(4, "dst_pitch_bytes", "uint", KernelArgKind::Scalar, 4, 4),
+        KernelArgDesc::new(5, "desc_base", "uint", KernelArgKind::Scalar, 4, 4),
+        KernelArgDesc::new(6, "desc_count", "uint", KernelArgKind::Scalar, 4, 4),
     ];
-    const KERNELS: &[KernelMetadata<'_>] = &[KernelMetadata::new("fill_rect_worklist_rgba8", ARGS)];
+    const KERNELS: &[KernelMetadata<'_>] =
+        &[KernelMetadata::new("alpha_blend_worklist_rgba8", ARGS)];
     const PROGRAM: ProgramArtifact<'_> = ProgramArtifact::new(
         "trueos.ui.primitives",
         "adls",
         super::ProgramBinaryKind::IntelGenBinary,
-        crate::intel::gpgpu::FILL_RECT_WORKLIST_RGBA8_ADLS_BIN,
+        crate::intel::gpgpu::ALPHA_BLEND_WORKLIST_RGBA8_ADLS_BIN,
         KERNELS,
     );
 
     let built = BuiltProgram::from_artifact(&PROGRAM);
     let kernel = built
-        .find_kernel("fill_rect_worklist_rgba8")
+        .find_kernel("alpha_blend_worklist_rgba8")
         .ok_or(ClError::InvalidKernelName)?;
 
     let mut memory = BufferRegistry::new();
+    let src = memory.create_buffer(MemFlags::READ_ONLY, 4)?;
     let dst = memory.create_buffer(MemFlags::READ_WRITE, 640 * 480 * 4)?;
     let descs = memory.create_buffer(MemFlags::READ_ONLY, 4096)?;
 
@@ -63,19 +68,20 @@ pub(crate) fn fill_rect_worklist_queue_probe() -> ClResult<KnownAotQueueProbe> {
         device,
         QueueProperties::EMPTY,
     );
-    queue.enqueue_write_buffer(EventId::from_raw(1), descs, 0, &[], &[])?;
-    queue.enqueue_known_kernel(EventId::from_raw(2), kernel.name(), NdRange::new_1d(16), &[])?;
-    queue.enqueue_read_buffer(EventId::from_raw(3), dst, 0, 0, &[])?;
+    queue.enqueue_write_buffer(EventId::from_raw(1), src, 0, &[], &[])?;
+    queue.enqueue_write_buffer(EventId::from_raw(2), descs, 0, &[], &[])?;
+    queue.enqueue_known_kernel(EventId::from_raw(3), kernel.name(), NdRange::new_1d(16), &[])?;
+    queue.enqueue_read_buffer(EventId::from_raw(4), dst, 0, 0, &[])?;
 
     let completed_commands = backend.finish_known_queue(&mut queue)?;
-    let fill_rect_uploaded = backend
-        .fill_rect_worklist_upload_status()
+    let compositor_uploaded = backend
+        .upload_status("alpha_blend_worklist_rgba8")
         .map(|upload| upload.is_ready())
         .unwrap_or(false);
 
     Ok(KnownAotQueueProbe {
         known_kernels: backend.known_kernel_count(),
         completed_commands,
-        fill_rect_uploaded,
+        compositor_uploaded,
     })
 }

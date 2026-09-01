@@ -75,7 +75,7 @@ const MAX_PENDING_POINTER_EVENTS: usize = 256;
 const MAX_PENDING_PAN_EVENTS: usize = 256;
 const MAX_PENDING_KEYBOARD_EVENTS: usize = 256;
 const MAX_INPUT_ROUTES: usize = 32;
-/// Keep the flattened solid scene inside one proven fill-worklist submission.
+/// Keep the flattened solid scene inside one proven compositor submission.
 /// Larger or noncanonical scenes retain the arbitrary-quad fallback.
 const UI4_SOLID_FAST_RECT_LIMIT: usize = 256;
 const IMAGE_SOURCE_READ_CHUNK_BYTES: usize = 16 * 1024;
@@ -6672,16 +6672,17 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
 
     // Shell2's immediate scene is a clear plus a handful of frame-owned solid
     // rectangles (background runs, underlines/hover, and cursor). Flatten
-    // their overwrite order into disjoint rectangles and use the bounded fill
-    // worklist. The former path launched one full-destination arbitrary-quad
-    // walker per rectangle and synchronously waited for all of them.
+    // their overwrite order into disjoint rectangles and use the alpha
+    // compositor's source-free SOLID mode. The former path paid general UV,
+    // sampling, and arbitrary-quad setup for every decoration.
     if let Some(rects) = solid_scene_fast_rects(clear_rgba, &upload.quads, destination) {
-        let fill_started_ns = crate::chronos::monotonic_nanos();
-        let filled = fill_solid_rects_rgba8_scanout_result(destination, rects.as_slice());
-        let fill_us = crate::chronos::monotonic_nanos().saturating_sub(fill_started_ns) / 1_000;
-        match filled.outcome {
+        let composite_started_ns = crate::chronos::monotonic_nanos();
+        let composited = fill_solid_rects_rgba8_scanout_result(destination, rects.as_slice());
+        let composite_us =
+            crate::chronos::monotonic_nanos().saturating_sub(composite_started_ns) / 1_000;
+        match composited.outcome {
             GpgpuSubmissionOutcome::Complete
-                if filled.stats.descs == rects.len() && filled.stats.submits == 1 => {}
+                if composited.stats.descs == rects.len() && composited.stats.submits == 1 => {}
             GpgpuSubmissionOutcome::Unavailable => {
                 cancel_blueprint_sprite_frame_without_live_gpu(surface);
                 return ERROR_UI4;
@@ -6694,7 +6695,7 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
                     lease,
                     0,
                     1,
-                    "solid-fill-retirement-incomplete",
+                    "solid-composite-retirement-incomplete",
                 );
                 return ERROR_UI4;
             }
@@ -6712,9 +6713,9 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
                 0,
                 1,
                 if finalizer.submitted {
-                    "solid-fill-release-incomplete"
+                    "solid-composite-release-incomplete"
                 } else {
-                    "solid-fill-release-unavailable"
+                    "solid-composite-release-unavailable"
                 },
             );
             return ERROR_UI4;
@@ -6722,15 +6723,15 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
         surface.pending_gpu_release = Some(release);
         surface.sprite_clear_rgba = None;
         crate::log_shell2_render_trace!(
-            "stage=solid-kernel owner={:?} window={} input_quads={} flattened_rects={} fill_us={} release_us={} submits={} walkers={} path=disjoint-fill-worklist\n",
+            "stage=solid-kernel owner={:?} window={} input_quads={} flattened_rects={} composite_us={} release_us={} submits={} walkers={} path=disjoint-alpha-solid\n",
             owner,
             window_id,
             upload.quads.len(),
             rects.len(),
-            fill_us,
+            composite_us,
             release_us,
-            filled.stats.submits,
-            filled.stats.walkers,
+            composited.stats.submits,
+            composited.stats.walkers,
         );
         return 0;
     }

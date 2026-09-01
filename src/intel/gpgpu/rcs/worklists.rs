@@ -94,7 +94,7 @@ fn direct_rcs_encode_mandel64_worklist_batch(
     if !direct_rcs_write_mandel64_worklist_interface_descriptor(state) {
         return false;
     }
-    if !direct_rcs_write_fill_rect_worklist_surface_states(
+    if !direct_rcs_write_destination_worklist_surface_states(
         state,
         params.dst_gpu,
         dst_bytes,

@@ -61,14 +61,14 @@ fn solid_rects_rgba8_result_mode(
         }
         super::dma_flush(desc_buffer.virt, desc_buffer.bytes);
 
-        // SOLID descriptors never dereference the source. Reuse the immutable
-        // descriptor allocation as the harmless bound source surface instead
-        // of creating a second legacy singleton allocation solely for ABI.
+        // SOLID descriptors do not logically dereference the source. Bind the
+        // already-mapped destination at both surface slots so even compiler
+        // speculation remains inside a valid, identically cached allocation.
         let params = AlphaBlendWorklistRgba8Params {
-            src_gpu: desc_buffer.gpu,
+            src_gpu: dst.gpu,
             dst_gpu: dst.gpu,
             desc_gpu: desc_buffer.gpu,
-            src_pitch_bytes: core::mem::size_of::<u32>() as u32,
+            src_pitch_bytes: dst.pitch_bytes,
             dst_pitch_bytes: dst.pitch_bytes,
             desc_base: 0,
             desc_count: chunk.len() as u32,
