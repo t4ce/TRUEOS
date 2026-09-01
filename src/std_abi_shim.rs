@@ -5965,7 +5965,14 @@ pub unsafe extern "C" fn pthread_self() -> usize {
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn pthread_setname_np(_thread: usize, _name: *const c_char) -> c_int {
+pub unsafe extern "C" fn pthread_setname_np(thread: usize, name: *const c_char) -> c_int {
+    const LINUX_PTHREAD_NAME_BYTES_WITH_NUL: usize = 16;
+    let Some(name) = abi_cstr_to_string(name, LINUX_PTHREAD_NAME_BYTES_WITH_NUL) else {
+        return TRUEOS_EINVAL;
+    };
+    if thread == pthread_current_id() {
+        crate::r::blocking::set_current_service_lane_pthread_name(name.as_str());
+    }
     0
 }
 

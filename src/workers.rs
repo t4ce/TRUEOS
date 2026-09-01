@@ -152,6 +152,16 @@ impl WorkerSpawner {
     }
 
     #[inline]
+    pub fn current_task_name(&self) -> Option<&'static str> {
+        self.spawner.current_task_name()
+    }
+
+    #[inline]
+    pub fn last_task_name(&self) -> Option<&'static str> {
+        self.spawner.last_task_name()
+    }
+
+    #[inline]
     pub const fn raw(self) -> SendSpawner {
         self.spawner
     }

@@ -39,7 +39,8 @@ impl LaneRole {
     pub const fn owner_label(self) -> &'static str {
         match self {
             Self::VmHull => "hull",
-            Self::TokioBlocking | Self::Worker => "worker",
+            Self::TokioBlocking => "tokio-blocking-lane",
+            Self::Worker => "TRUEOS-executor-lane",
         }
     }
 }

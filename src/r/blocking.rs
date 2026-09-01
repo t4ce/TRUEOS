@@ -4,6 +4,7 @@ use alloc::boxed::Box;
 use alloc::collections::VecDeque;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+use heapless::String as HString;
 use spin::Mutex;
 use trueos_time::{Duration as EmbassyDuration, Timer};
 
@@ -19,6 +20,7 @@ const SERVICE_LANE_SOFT_THROTTLE_DEPTH: usize = 64;
 const SERVICE_LANE_TASK_POOL: usize = crate::allcaps::hv::VM_CPU_SLOT_LIMIT;
 const BLOCKING_JOB_TAG_HOST: &str = "host-blocking-job";
 const BLOCKING_JOB_TAG_VMX: &str = "vmx-respect-architecture";
+const SERVICE_LANE_PTHREAD_NAME_CAPACITY: usize = 15;
 static NEXT_BLOCKING_JOB_ID: AtomicU64 = AtomicU64::new(1);
 static SERVICE_LANE_RR: AtomicU64 = AtomicU64::new(0);
 static SERVICE_LANE_STARTED: [AtomicBool; crate::allcaps::hv::VM_CPU_SLOT_LIMIT] =
@@ -28,6 +30,36 @@ static SERVICE_LANE_QUEUES: [Mutex<VecDeque<ServiceLaneRequest>>;
     [const { Mutex::new(VecDeque::new()) }; crate::allcaps::hv::VM_CPU_SLOT_LIMIT];
 static SERVICE_LANE_WAITS: [crate::wait::WaitQueue; crate::allcaps::hv::VM_CPU_SLOT_LIMIT] =
     [const { crate::wait::WaitQueue::new() }; crate::allcaps::hv::VM_CPU_SLOT_LIMIT];
+static SERVICE_LANE_ACTIVITY: [Mutex<ServiceLaneActivity>; crate::allcaps::hv::VM_CPU_SLOT_LIMIT] =
+    [const { Mutex::new(ServiceLaneActivity::new()) }; crate::allcaps::hv::VM_CPU_SLOT_LIMIT];
+
+struct ServiceLaneActivity {
+    active_id: u64,
+    active_vm_id: Option<u8>,
+    active_purpose: &'static str,
+    active_pthread_name: HString<SERVICE_LANE_PTHREAD_NAME_CAPACITY>,
+    recent_id: u64,
+    recent_vm_id: Option<u8>,
+    recent_purpose: &'static str,
+    recent_pthread_name: HString<SERVICE_LANE_PTHREAD_NAME_CAPACITY>,
+    recent_completed_ms: u64,
+}
+
+impl ServiceLaneActivity {
+    const fn new() -> Self {
+        Self {
+            active_id: 0,
+            active_vm_id: None,
+            active_purpose: "",
+            active_pthread_name: HString::new(),
+            recent_id: 0,
+            recent_vm_id: None,
+            recent_purpose: "",
+            recent_pthread_name: HString::new(),
+            recent_completed_ms: 0,
+        }
+    }
+}
 
 pub enum BlockingJobCall {
     Host(BlockingJobFn),
@@ -89,7 +121,7 @@ fn run_blocking_job_call(call: BlockingJobCall) {
     }
 }
 
-fn run_blocking_job_entry(entry: BlockingJobEntry) {
+fn run_blocking_job_entry(slot: u32, entry: BlockingJobEntry) {
     let BlockingJobEntry {
         id,
         vm_id,
@@ -98,6 +130,7 @@ fn run_blocking_job_entry(entry: BlockingJobEntry) {
         call,
     } = entry;
     let started_ms = now_ms();
+    service_lane_activity_begin(slot, id, vm_id, purpose);
     crate::log_info!(
         target: "service";
         "blocking-job: run begin id={} vm={:?} purpose={} tag={}\n",
@@ -157,13 +190,14 @@ fn run_blocking_job_entry(entry: BlockingJobEntry) {
         policy_tag,
         now_ms().saturating_sub(started_ms)
     );
+    service_lane_activity_finish(slot);
 }
 
 #[trueos_executor::task(pool_size = SERVICE_LANE_TASK_POOL)]
-async fn service_lane_worker_task(slot: u32, core_kind: u8) {
+async fn service_lane_executor_task(slot: u32, core_kind: u8) {
     crate::log_info!(
         target: "service";
-        "service-lane: worker start slot={} core_kind={}\n",
+        "service-lane: TRUEOS executor task start slot={} core_kind={}\n",
         slot,
         core_kind
     );
@@ -208,7 +242,7 @@ async fn service_lane_worker_task(slot: u32, core_kind: u8) {
             lease.clear_vm_owner();
         }
         let wls_guard = lease.enter_wls();
-        run_blocking_job_entry(entry);
+        run_blocking_job_entry(slot, entry);
         drop(wls_guard);
         lease.clear_vm_owner();
     }
@@ -247,7 +281,7 @@ pub fn start_service_lane_for_slot(slot: u32) -> bool {
         return false;
     };
     let core_kind = crate::workers::core_kind_for_slot(slot);
-    match service_lane_worker_task(slot, core_kind) {
+    match service_lane_executor_task(slot, core_kind) {
         Ok(token) => {
             spawner.spawn(token);
             crate::log_info!(
@@ -284,6 +318,101 @@ pub fn service_lane_started_for_slot(slot: usize) -> bool {
         .get(slot)
         .map(|started| started.load(Ordering::Acquire))
         .unwrap_or(false)
+}
+
+fn copy_pthread_name(destination: &mut HString<SERVICE_LANE_PTHREAD_NAME_CAPACITY>, name: &str) {
+    destination.clear();
+    for ch in name.chars() {
+        if destination.push(ch).is_err() {
+            break;
+        }
+    }
+}
+
+fn service_lane_activity_begin(slot: u32, id: u64, vm_id: Option<u8>, purpose: &'static str) {
+    let Some(activity) = SERVICE_LANE_ACTIVITY.get(slot as usize) else {
+        return;
+    };
+    let mut activity = activity.lock();
+    activity.active_id = id;
+    activity.active_vm_id = vm_id;
+    activity.active_purpose = purpose;
+    activity.active_pthread_name.clear();
+}
+
+fn service_lane_activity_finish(slot: u32) {
+    let Some(activity) = SERVICE_LANE_ACTIVITY.get(slot as usize) else {
+        return;
+    };
+    let mut activity = activity.lock();
+    activity.recent_id = activity.active_id;
+    activity.recent_vm_id = activity.active_vm_id;
+    activity.recent_purpose = activity.active_purpose;
+    activity.recent_pthread_name = activity.active_pthread_name.clone();
+    activity.recent_completed_ms = now_ms();
+    activity.active_id = 0;
+    activity.active_vm_id = None;
+    activity.active_purpose = "";
+    activity.active_pthread_name.clear();
+}
+
+pub fn set_current_service_lane_pthread_name(name: &str) {
+    let slot = crate::percpu::current_slot();
+    let Some(activity) = SERVICE_LANE_ACTIVITY.get(slot) else {
+        return;
+    };
+    let mut activity = activity.lock();
+    if activity.active_id != 0 {
+        copy_pthread_name(&mut activity.active_pthread_name, name);
+    }
+}
+
+pub fn service_lane_activity_text(slot: usize) -> Option<alloc::string::String> {
+    if !service_lane_started_for_slot(slot) {
+        return None;
+    }
+    let queue_depth = service_lane_queue_depth(slot as u32);
+    let activity = SERVICE_LANE_ACTIVITY.get(slot)?.lock();
+    if activity.active_id != 0 {
+        let identity = if activity.active_pthread_name.is_empty() {
+            alloc::format!("purpose={}", activity.active_purpose)
+        } else if activity.active_purpose.contains("tokio") {
+            alloc::format!("Tokio worker={}", activity.active_pthread_name)
+        } else {
+            alloc::format!("logical std thread={}", activity.active_pthread_name)
+        };
+        return Some(alloc::format!(
+            "active#{} vm={} {} q={}",
+            activity.active_id,
+            activity
+                .active_vm_id
+                .map(|vm_id| alloc::format!("vm{vm_id}"))
+                .unwrap_or_else(|| alloc::string::String::from("host")),
+            identity,
+            queue_depth,
+        ));
+    }
+    if activity.recent_id != 0 {
+        let identity = if activity.recent_pthread_name.is_empty() {
+            alloc::format!("purpose={}", activity.recent_purpose)
+        } else if activity.recent_purpose.contains("tokio") {
+            alloc::format!("Tokio worker={}", activity.recent_pthread_name)
+        } else {
+            alloc::format!("logical std thread={}", activity.recent_pthread_name)
+        };
+        return Some(alloc::format!(
+            "idle q={} recent#{} vm={} {} age={}ms",
+            queue_depth,
+            activity.recent_id,
+            activity
+                .recent_vm_id
+                .map(|vm_id| alloc::format!("vm{vm_id}"))
+                .unwrap_or_else(|| alloc::string::String::from("host")),
+            identity,
+            now_ms().saturating_sub(activity.recent_completed_ms),
+        ));
+    }
+    Some(alloc::format!("idle q={queue_depth}"))
 }
 
 fn service_lane_wait(slot: u32) -> &'static crate::wait::WaitQueue {

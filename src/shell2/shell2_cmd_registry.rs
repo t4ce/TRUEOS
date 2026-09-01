@@ -453,7 +453,9 @@ const SHELL2_COMMAND_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         color: Some(STATUS_GRAY_RGB),
         advertised: true,
         handler: dispatch_smp,
-        tool_description: Some("Inspect SMP slot state."),
+        tool_description: Some(
+            "Inspect physical AP placement, TRUEOS executor task, service-lane job, and HLT history.",
+        ),
         tool_parameters_json: Some(TOOL_JSON_SMP),
     },
     BuiltinShell2CmdEntry {

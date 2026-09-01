@@ -192,6 +192,16 @@ impl Spawner {
         self.executor.ready_task_count()
     }
 
+    /// Return the name of the TRUEOS executor task currently being polled.
+    pub fn current_task_name(&self) -> Option<&'static str> {
+        self.executor.current_task_name()
+    }
+
+    /// Return the name of the TRUEOS executor task most recently polled.
+    pub fn last_task_name(&self) -> Option<&'static str> {
+        self.executor.last_task_name()
+    }
+
     /// Set the timer slack for tasks owned by this Spawner's Executor.
     ///
     /// A value of zero means exact timer wakes.
@@ -287,6 +297,16 @@ impl SendSpawner {
     /// Return the number of tasks currently queued to be polled on this SendSpawner's Executor.
     pub fn ready_task_count(&self) -> usize {
         self.executor.ready_task_count()
+    }
+
+    /// Return the name of the TRUEOS executor task currently being polled.
+    pub fn current_task_name(&self) -> Option<&'static str> {
+        self.executor.current_task_name()
+    }
+
+    /// Return the name of the TRUEOS executor task most recently polled.
+    pub fn last_task_name(&self) -> Option<&'static str> {
+        self.executor.last_task_name()
     }
 
     /// Set the timer slack for tasks owned by this SendSpawner's Executor.
