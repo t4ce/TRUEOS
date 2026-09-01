@@ -55,11 +55,27 @@ pub(crate) const GPU_VA_DISPLAY_PRIMARY_BASE: u64 = 0x0200_0000;
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) const GPU_VA_DISPLAY_OVERLAY_BASE: u64 = 0x0300_0000;
 pub(crate) const GPU_VA_DISPLAY_CURSOR_BASE: u64 = 0x0600_0000;
+// Shared high-GGTT ownership boundaries. Display scanout and VDBOX control
+// structures use the global GGTT, so their numeric ranges must be disjoint.
+// VDBOX/render PPGTT aliases may independently reuse these numbers.
+pub(crate) const DISPLAY_INTERACTION_GGTT_BASE: u64 = 0x4000_0000;
+pub(crate) const DISPLAY_INTERACTION_GGTT_LIMIT: u64 = 0x4800_0000;
+pub(crate) const AVC_CONTROL_GGTT_BASE: u64 = 0x4F00_0000;
+pub(crate) const DISPLAY_DIRECT_SCANOUT_GGTT_BASE: u64 = 0x5000_0000;
 pub(crate) const SPIRIT_CURSOR_DBUF_S1_START: u16 = 1008;
 pub(crate) const WARM_ALIGN: usize = 4096;
 const GGTT_ALIAS_BASE_OFF: usize = 0x0080_0000;
 const GGTT_ALIAS_BYTES: usize = 0x0080_0000;
 const GGTT_PAGE_BYTES: u64 = 4096;
+const _: () = {
+    assert!(DISPLAY_INTERACTION_GGTT_BASE.is_multiple_of(GGTT_PAGE_BYTES));
+    assert!(DISPLAY_INTERACTION_GGTT_LIMIT.is_multiple_of(GGTT_PAGE_BYTES));
+    assert!(AVC_CONTROL_GGTT_BASE.is_multiple_of(GGTT_PAGE_BYTES));
+    assert!(DISPLAY_DIRECT_SCANOUT_GGTT_BASE.is_multiple_of(GGTT_PAGE_BYTES));
+    assert!(DISPLAY_INTERACTION_GGTT_BASE < DISPLAY_INTERACTION_GGTT_LIMIT);
+    assert!(DISPLAY_INTERACTION_GGTT_LIMIT <= AVC_CONTROL_GGTT_BASE);
+    assert!(AVC_CONTROL_GGTT_BASE < DISPLAY_DIRECT_SCANOUT_GGTT_BASE);
+};
 const GEN8_PAGE_PRESENT: u64 = 1;
 const GEN12_GGTT_PTE_ADDR_MASK: u64 = ((1u64 << 46) - 1) & !0xFFF;
 const GEN12_PAT_INDEX_BASE: usize = 0x4800;

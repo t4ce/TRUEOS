@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 use spin::Mutex;
 use trueos_time::{Duration, Timer};
 
-pub const TOKENIZER_PATH: &str = "models/lfm2.5/LFM2.5-350M-Q8_0.tokenizer.bin";
+pub const TOKENIZER_PATH: &str = "apps/lumen/LFM2.5-350M-Q8_0.tokenizer.bin";
 pub const TOKENIZER_BYTES: usize = 1_497_463;
 pub const TOKENIZER_SHA256: [u8; 32] = [
     0xdd, 0x64, 0x54, 0xb2, 0x2f, 0x29, 0x5c, 0x43, 0x35, 0x8b, 0x06, 0xcd, 0xd0, 0xef, 0x51, 0x1e,

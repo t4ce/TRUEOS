@@ -1255,6 +1255,11 @@ pub(crate) struct GpuFontGlyphRecipe {
     mask_width: u32,
     mask_height: u32,
     audit_rect: (i32, i32, i32, i32),
+    /// Conservative nonzero support inside the padded local mask.  The mask
+    /// itself carries a one-pixel analytical guard band; overlapping guard
+    /// bands do not require max-union coverage when these support rectangles
+    /// remain disjoint.
+    support_rect: (i32, i32, i32, i32),
     /// Offset from the glyph-local visual origin to the mask's upper-left.
     mask_offset_px: [i32; 2],
     visual_center_px: [f32; 2],
@@ -1378,6 +1383,7 @@ impl GpuFontPreparedCenteredGlyph {
         self.destination_xy
     }
 
+    #[cfg(test)]
     pub(crate) fn destination_rect(&self) -> crate::intel::gpgpu::GpgpuRect {
         let (width, height) = self.recipe.mask_extent();
         crate::intel::gpgpu::GpgpuRect::new(
@@ -1385,6 +1391,16 @@ impl GpuFontPreparedCenteredGlyph {
             self.destination_xy[1],
             width,
             height,
+        )
+    }
+
+    fn destination_support_rect(&self) -> crate::intel::gpgpu::GpgpuRect {
+        let support = self.recipe.support_rect;
+        crate::intel::gpgpu::GpgpuRect::new(
+            self.destination_xy[0].saturating_add(support.0),
+            self.destination_xy[1].saturating_add(support.1),
+            support.2.saturating_sub(support.0) as u32,
+            support.3.saturating_sub(support.1) as u32,
         )
     }
 
@@ -1432,8 +1448,10 @@ impl GpuFontPreparedCenteredGlyph {
 ///
 /// `unique_indices` retains the first occurrence of each exact
 /// recipe/destination pair. A strict overlap between any two remaining
-/// rectangles makes direct per-glyph stamping unsafe because analytical
-/// coverage must first be max-combined across the connected overlap group.
+/// nonzero-support rectangles makes direct per-glyph stamping unsafe because
+/// analytical coverage must first be max-combined across the connected
+/// overlap group. Padded mask rectangles may overlap while their support does
+/// not; those transparent guard bands remain safe for independent stamps.
 pub(crate) struct GpuFontPreparedPlacementClassification {
     unique_indices: Vec<usize>,
     requires_union_coverage: bool,
@@ -1470,9 +1488,12 @@ pub(crate) fn classify_gpu_font_prepared_placements(
             continue;
         }
 
-        let candidate_rect = candidate.destination_rect();
+        let candidate_rect = candidate.destination_support_rect();
         if unique_indices.iter().copied().any(|existing_index| {
-            coverage_rects_overlap(candidate_rect, prepared[existing_index].destination_rect())
+            coverage_rects_overlap(
+                candidate_rect,
+                prepared[existing_index].destination_support_rect(),
+            )
         }) {
             requires_union_coverage = true;
         }
@@ -3814,6 +3835,7 @@ pub(crate) fn build_gpu_font_glyph_recipe(
     let optical_bias_px = small_font_optical_bias_px(ppem);
     let rect = coverage_integer_rect(bounds, optical_bias_px)?;
     let audit_rect = coverage_integer_rect(flattened_bounds, optical_bias_px)?;
+    let support_rect = coverage_support_integer_rect(flattened_bounds, optical_bias_px)?;
     let mask_width = u32::try_from(i64::from(rect.2) - i64::from(rect.0))
         .map_err(|_| "font-coverage-workload")?;
     let mask_height = u32::try_from(i64::from(rect.3) - i64::from(rect.1))
@@ -3832,12 +3854,19 @@ pub(crate) fn build_gpu_font_glyph_recipe(
         audit_rect.2.saturating_sub(rect.0),
         audit_rect.3.saturating_sub(rect.1),
     );
+    let support_rect = (
+        support_rect.0.saturating_sub(rect.0),
+        support_rect.1.saturating_sub(rect.1),
+        support_rect.2.saturating_sub(rect.0),
+        support_rect.3.saturating_sub(rect.1),
+    );
     Ok(Arc::new(GpuFontGlyphRecipe {
         key,
         ops: ops.into_boxed_slice(),
         mask_width,
         mask_height,
         audit_rect,
+        support_rect,
         mask_offset_px: [rect.0, rect.1],
         visual_center_px: [(bounds.0 + bounds.2) * 0.5, (bounds.1 + bounds.3) * 0.5],
         optical_bias_px,
@@ -4295,6 +4324,31 @@ fn coverage_integer_rect(
         .ok_or("font-coverage-rect-empty")
 }
 
+/// Bound every pixel that can carry nonzero signed-distance coverage without
+/// including the extra one-pixel allocation guard band.  Optical bias can
+/// expand the visible edge and therefore remains part of the support bound.
+fn coverage_support_integer_rect(
+    bounds: (f32, f32, f32, f32),
+    optical_bias_px: f32,
+) -> Result<(i32, i32, i32, i32), &'static str> {
+    let values = [
+        libm::floorf(bounds.0 - optical_bias_px),
+        libm::floorf(bounds.1 - optical_bias_px),
+        libm::ceilf(bounds.2 + optical_bias_px),
+        libm::ceilf(bounds.3 + optical_bias_px),
+    ];
+    if values
+        .iter()
+        .any(|value| !value.is_finite() || *value < i32::MIN as f32 || *value > i32::MAX as f32)
+    {
+        return Err("font-coverage-support-range");
+    }
+    let rect = (values[0] as i32, values[1] as i32, values[2] as i32, values[3] as i32);
+    (rect.2 > rect.0 && rect.3 > rect.1)
+        .then_some(rect)
+        .ok_or("font-coverage-support-empty")
+}
+
 #[derive(Clone, Copy)]
 enum GpuFontOutlineAccess {
     EnsureAvailable,
@@ -4727,8 +4781,11 @@ fn create_gpu_font_coverage_mask_from_prepared(
         return Err("font-coverage-truncated-output");
     }
 
-    crate::log_info!(
+    crate::log_rate_limited!(
         target: "render";
+        level: crate::log_os::LogLevel::Info;
+        first: 8;
+        every: 128;
         "intel/gpu-font: analytical-coverage font={} entries={} positioning={} mask={}x{} mask_gpu=0x{:X} origin={},{} occupied={},{},{}x{} expected_local={},{},{},{} nonzero={} ppem_range={:.2}..={:.2} bias_max_px={:.3} coverage_build_ms={} coverage_audit_ms={} walker_dependency_waves={} walker_fanout={} outline=skrifa-warm-ops fill=gpgpu-nonzero-winding edge=signed-distance-r8 subdivisions={} va=unique-resident audit=flattened-edge-span audit_cpu_readback=1 fallback=resident-triangles\n",
         font.registry_name(),
         prepared.len(),
@@ -5524,6 +5581,7 @@ mod tests {
             mask_width: 10,
             mask_height: 20,
             audit_rect: (0, 0, 10, 20),
+            support_rect: (1, 1, 9, 19),
             mask_offset_px: [1, 2],
             visual_center_px: [5.0, 10.0],
             optical_bias_px: 0.1,
@@ -5682,17 +5740,34 @@ mod tests {
     }
 
     #[test]
+    fn prepared_placement_classifier_ignores_overlapping_transparent_guard_bands() {
+        let prepared = [placed_glyph('A', [0, 0]), placed_glyph('B', [8, 0])];
+
+        assert!(coverage_rects_overlap(
+            prepared[0].destination_rect(),
+            prepared[1].destination_rect(),
+        ));
+        assert!(!coverage_rects_overlap(
+            prepared[0].destination_support_rect(),
+            prepared[1].destination_support_rect(),
+        ));
+        let classified = classify_gpu_font_prepared_placements(&prepared);
+        assert_eq!(classified.unique_indices(), &[0, 1]);
+        assert!(!classified.requires_union_coverage());
+    }
+
+    #[test]
     fn prepared_placement_classifier_detects_transitive_overlap_chain() {
         // A overlaps B and B overlaps C, while A and C remain disjoint.
         let prepared = [
             placed_glyph('A', [0, 0]),
-            placed_glyph('B', [8, 0]),
-            placed_glyph('C', [16, 0]),
+            placed_glyph('B', [7, 0]),
+            placed_glyph('C', [14, 0]),
         ];
 
         assert!(!coverage_rects_overlap(
-            prepared[0].destination_rect(),
-            prepared[2].destination_rect(),
+            prepared[0].destination_support_rect(),
+            prepared[2].destination_support_rect(),
         ));
         let classified = classify_gpu_font_prepared_placements(&prepared);
         assert_eq!(classified.unique_indices(), &[0, 1, 2]);

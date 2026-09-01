@@ -3435,7 +3435,7 @@ fn write_triangle_vertex_slice(
     //   4. the cache maintenance hook has been issued for that byte range.
     //
     // Facts not proven here:
-    //   - the GGTT mapping points at this allocation,
+    //   - the Render0 PPGTT mapping points at this allocation,
     //   - the command streamer consumed 3DSTATE_VERTEX_BUFFERS,
     //   - vertex fetch read these bytes,
     //   - any shader or raster stage produced pixels.

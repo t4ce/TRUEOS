@@ -18,8 +18,8 @@ const RGB_PLANE_PROBE_GPU_STRIDE: u64 = 0x0010_0000;
 const DIRECT_NV12_PLANE_PROBE_ENABLED: bool = true;
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const DIRECT_NV12_LINEAR_PATTERN_PROBE_ONLY: bool = false;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-const DIRECT_NV12_LINEAR_PATTERN_GPU: u64 = 0x1200_0000;
+const DIRECT_NV12_LINEAR_PATTERN_GGTT_BASE: u64 = 0x1200_0000;
+const DIRECT_NV12_LINEAR_PATTERN_GGTT_LIMIT: u64 = 0x1300_0000;
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const DIRECT_NV12_LINEAR_PATTERN_WIDTH: u32 = 640;
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
@@ -28,12 +28,49 @@ const DIRECT_NV12_LINEAR_PATTERN_HEIGHT: u32 = 360;
 const DIRECT_NV12_DECODED_LINEAR_STAGING_ENABLED: bool = true;
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const DIRECT_NV12_DECODED_LINEAR_STAGING_SCALE: u32 = 2;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-const DIRECT_NV12_DECODED_LINEAR_STAGING_GPU: u64 = 0x1300_0000;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
+const DIRECT_NV12_DECODED_LINEAR_STAGING_GGTT_BASE: u64 = DIRECT_NV12_LINEAR_PATTERN_GGTT_LIMIT;
 const DIRECT_NV12_DECODED_LINEAR_STAGING_COUNT: usize = 3;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-const DIRECT_NV12_DECODED_LINEAR_STAGING_GPU_STRIDE: u64 = 0x0040_0000;
+const DIRECT_NV12_DECODED_LINEAR_STAGING_GGTT_STRIDE: u64 = 0x0100_0000;
+const DIRECT_NV12_DECODED_LINEAR_STAGING_GGTT_LIMIT: u64 =
+    DIRECT_NV12_DECODED_LINEAR_STAGING_GGTT_BASE
+        + DIRECT_NV12_DECODED_LINEAR_STAGING_COUNT as u64
+            * DIRECT_NV12_DECODED_LINEAR_STAGING_GGTT_STRIDE;
+const DIRECT_NV12_DECODED_LINEAR_STAGING_MAX_WIDTH: u32 = 4_096;
+const DIRECT_NV12_DECODED_LINEAR_STAGING_MAX_HEIGHT: u32 = 2_160;
+const DIRECT_NV12_DECODED_LINEAR_STAGING_MAX_BYTES: u64 = 0x00CA_8000;
+const _: () = {
+    // Keep the probe-only display GGTT reservations consecutive and below the
+    // ordinary overlay pool. Three 16 MiB slots occupy 0x1300_0000..0x1600_0000.
+    assert!(
+        DIRECT_NV12_LINEAR_PATTERN_GGTT_BASE + 0x0100_0000 == DIRECT_NV12_LINEAR_PATTERN_GGTT_LIMIT
+    );
+    assert!(DIRECT_NV12_LINEAR_PATTERN_GGTT_LIMIT == DIRECT_NV12_DECODED_LINEAR_STAGING_GGTT_BASE);
+    assert!(DIRECT_NV12_DECODED_LINEAR_STAGING_GGTT_LIMIT == 0x1600_0000);
+    assert!(DIRECT_NV12_DECODED_LINEAR_STAGING_GGTT_LIMIT <= OVERLAY_SWAP_GPU_BASE);
+    assert!(
+        DIRECT_NV12_DECODED_LINEAR_STAGING_GGTT_BASE
+            .is_multiple_of(crate::intel::WARM_ALIGN as u64)
+    );
+    assert!(
+        DIRECT_NV12_DECODED_LINEAR_STAGING_GGTT_STRIDE
+            .is_multiple_of(crate::intel::WARM_ALIGN as u64)
+    );
+    // One 16 MiB slot admits a DCI-4K 4096x2160 linear NV12 allocation:
+    // 4096-byte pitch, 0x870000 Y bytes, and 0x438000 UV bytes.
+    assert!(DIRECT_NV12_DECODED_LINEAR_STAGING_MAX_WIDTH.is_multiple_of(64));
+    assert!(DIRECT_NV12_DECODED_LINEAR_STAGING_MAX_HEIGHT.is_multiple_of(2));
+    assert!(
+        DIRECT_NV12_DECODED_LINEAR_STAGING_MAX_BYTES
+            == DIRECT_NV12_DECODED_LINEAR_STAGING_MAX_WIDTH as u64
+                * DIRECT_NV12_DECODED_LINEAR_STAGING_MAX_HEIGHT as u64
+                + DIRECT_NV12_DECODED_LINEAR_STAGING_MAX_WIDTH as u64
+                    * (DIRECT_NV12_DECODED_LINEAR_STAGING_MAX_HEIGHT as u64 / 2)
+    );
+    assert!(
+        DIRECT_NV12_DECODED_LINEAR_STAGING_MAX_BYTES
+            <= DIRECT_NV12_DECODED_LINEAR_STAGING_GGTT_STRIDE
+    );
+};
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const DIRECT_NV12_INPUT_CSC_PROBE_ENABLED: bool = true;
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
@@ -608,7 +645,7 @@ fn ensure_linear_nv12_pattern_surface(
 ) -> Option<Nv12PlaneProbeSurface> {
     let width = DIRECT_NV12_LINEAR_PATTERN_WIDTH;
     let height = DIRECT_NV12_LINEAR_PATTERN_HEIGHT;
-    let gpu = DIRECT_NV12_LINEAR_PATTERN_GPU;
+    let gpu = DIRECT_NV12_LINEAR_PATTERN_GGTT_BASE;
 
     {
         let state = DIRECT_NV12_LINEAR_PATTERN_SURFACE.lock();
@@ -747,11 +784,46 @@ fn ensure_decoded_linear_nv12_staging_surface_at(
     height: u32,
     slot: usize,
 ) -> Option<crate::ui4::NativeNv12Surface> {
-    if slot >= DIRECT_NV12_DECODED_LINEAR_STAGING_COUNT {
+    if slot >= DIRECT_NV12_DECODED_LINEAR_STAGING_COUNT
+        || width == 0
+        || height == 0
+        || width > DIRECT_NV12_DECODED_LINEAR_STAGING_MAX_WIDTH
+        || height > DIRECT_NV12_DECODED_LINEAR_STAGING_MAX_HEIGHT
+    {
+        crate::log_warn!(
+            target: "intel/display";
+            "intel/display: decoded-nv12-linear-staging rejected pipe={} stage_slot={} size={}x{} max={}x{} reason=unsupported-geometry\n",
+            pipe.name,
+            slot,
+            width,
+            height,
+            DIRECT_NV12_DECODED_LINEAR_STAGING_MAX_WIDTH,
+            DIRECT_NV12_DECODED_LINEAR_STAGING_MAX_HEIGHT
+        );
         return None;
     }
-    let gpu = DIRECT_NV12_DECODED_LINEAR_STAGING_GPU
-        .checked_add((slot as u64).checked_mul(DIRECT_NV12_DECODED_LINEAR_STAGING_GPU_STRIDE)?)?;
+    let pitch_bytes = aligned_pitch_bytes(width, 1)?;
+    let raw_uv_offset = usize::try_from(u64::from(pitch_bytes) * u64::from(height)).ok()?;
+    let uv_offset = crate::intel::align_up(raw_uv_offset, crate::intel::WARM_ALIGN)?;
+    let uv_rows = height.div_ceil(2);
+    let uv_bytes = usize::try_from(u64::from(pitch_bytes) * u64::from(uv_rows)).ok()?;
+    let byte_len = uv_offset.checked_add(uv_bytes)?;
+    if byte_len as u64 > DIRECT_NV12_DECODED_LINEAR_STAGING_GGTT_STRIDE {
+        crate::log_warn!(
+            target: "intel/display";
+            "intel/display: decoded-nv12-linear-staging rejected pipe={} stage_slot={} size={}x{} pitch=0x{:X} bytes=0x{:X} slot_bytes=0x{:X} reason=slot-capacity\n",
+            pipe.name,
+            slot,
+            width,
+            height,
+            pitch_bytes,
+            byte_len,
+            DIRECT_NV12_DECODED_LINEAR_STAGING_GGTT_STRIDE
+        );
+        return None;
+    }
+    let gpu = DIRECT_NV12_DECODED_LINEAR_STAGING_GGTT_BASE
+        .checked_add((slot as u64).checked_mul(DIRECT_NV12_DECODED_LINEAR_STAGING_GGTT_STRIDE)?)?;
     {
         let state = DIRECT_NV12_DECODED_LINEAR_STAGING_SURFACES.lock();
         if let Some(surface) = state[slot]
@@ -774,12 +846,6 @@ fn ensure_decoded_linear_nv12_staging_surface_at(
         }
     }
 
-    let pitch_bytes = aligned_pitch_bytes(width, 1)?;
-    let raw_uv_offset = usize::try_from(u64::from(pitch_bytes) * u64::from(height)).ok()?;
-    let uv_offset = crate::intel::align_up(raw_uv_offset, crate::intel::WARM_ALIGN)?;
-    let uv_rows = height.div_ceil(2);
-    let uv_bytes = usize::try_from(u64::from(pitch_bytes) * u64::from(uv_rows)).ok()?;
-    let byte_len = uv_offset.checked_add(uv_bytes)?;
     let (phys, virt) = crate::dma::alloc(byte_len, crate::intel::WARM_ALIGN)?;
     unsafe {
         core::ptr::write_bytes(virt, 16, raw_uv_offset);
