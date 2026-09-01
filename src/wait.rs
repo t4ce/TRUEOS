@@ -8,7 +8,7 @@ use core::pin::Pin;
 use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use core::task::{Context, Poll, Waker};
 use embassy_sync::blocking_mutex::raw::RawMutex;
-use embassy_time_driver::{now, TICK_HZ};
+use embassy_time_driver::{TICK_HZ, now};
 use spin::Mutex;
 use trueos_executor::task;
 
