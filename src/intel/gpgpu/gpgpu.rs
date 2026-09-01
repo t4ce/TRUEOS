@@ -30,6 +30,7 @@ include!("operations/lab256.rs");
 include!("operations/spirit_vfx.rs");
 include!("operations/probes.rs");
 include!("operations/subset_sum_probe.rs");
+include!("operations/entropy_stream.rs");
 include!("operations/submission_2d.rs");
 include!("operations/effects.rs");
 include!("operations/cpp_demo.rs");
