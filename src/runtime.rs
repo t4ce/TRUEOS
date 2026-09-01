@@ -48,36 +48,6 @@ fn wants_chill(sleep_ticks: u64) -> Option<u64> {
     Some(sleep_ticks)
 }
 
-/// Park a synchronous service-lane caller only while no other task is ready on
-/// this AP's executor.
-///
-/// The caller must publish whatever wake routing it needs before calling this
-/// function and use `still_waiting` for the final lost-wake check. Interrupts
-/// are disabled before the executor/readiness checks, so a remote enqueue or
-/// explicit wait-queue IPI racing after them remains pending across the atomic
-/// `sti; hlt` window.
-///
-/// This is deliberately not an executor re-entry point. The currently polled
-/// synchronous carrier remains on the stack; another ready task makes this
-/// return `false` so callers can retain the existing non-reentrant fallback.
-pub(crate) fn park_local_executor_blocking_if_idle(
-    sleep_ticks: u64,
-    still_waiting: impl FnOnce() -> bool,
-) -> bool {
-    if sleep_ticks == 0 {
-        return false;
-    }
-
-    let interrupts_were_enabled = interrupts_enabled();
-    disable_interrupts();
-    let can_park = wants_chill(sleep_ticks).is_some() && still_waiting();
-    let parked = can_park && try_sti_hlt(sleep_ticks);
-    if interrupts_were_enabled {
-        enable_interrupts();
-    }
-    parked
-}
-
 pub fn run_ap_forever() -> ! {
     loop {
         crate::live_update::poll_ap_transition_safe_point();
@@ -122,25 +92,4 @@ fn disable_interrupts() {
     unsafe {
         core::arch::asm!("cli", options(nomem, nostack, preserves_flags));
     }
-}
-
-#[inline(always)]
-fn enable_interrupts() {
-    unsafe {
-        core::arch::asm!("sti", options(nomem, nostack, preserves_flags));
-    }
-}
-
-#[inline(always)]
-fn interrupts_enabled() -> bool {
-    let flags: u64;
-    unsafe {
-        core::arch::asm!(
-            "pushfq",
-            "pop {}",
-            out(reg) flags,
-            options(preserves_flags)
-        );
-    }
-    flags & (1 << 9) != 0
 }

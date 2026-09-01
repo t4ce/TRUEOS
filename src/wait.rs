@@ -5,68 +5,12 @@ use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use core::future::Future;
 use core::pin::Pin;
-use core::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicU32, Ordering};
 use core::task::{Context, Poll, Waker};
 use embassy_sync::blocking_mutex::raw::RawMutex;
 use embassy_time_driver::{TICK_HZ, now};
 use spin::Mutex;
 use trueos_executor::task;
-
-// A synchronous service-lane wait has no executor waker: its call stack is
-// still inside the task currently being polled. Publish the waited-on queue by
-// CPU so notify can route an IPI which breaks that CPU's `sti; hlt`. Registering
-// happens before the final sequence check, closing the classic lost-wake race.
-static BLOCKING_PARKED_WAIT_BY_CPU: [AtomicUsize; crate::percpu::CPU_SLOT_LIMIT] =
-    [const { AtomicUsize::new(0) }; crate::percpu::CPU_SLOT_LIMIT];
-
-struct BlockingParkRegistration {
-    slot: usize,
-    queue: usize,
-}
-
-impl BlockingParkRegistration {
-    fn publish(queue: &WaitQueue) -> Option<Self> {
-        if !crate::r::blocking::current_service_lane_job_active() {
-            return None;
-        }
-        let slot = crate::percpu::current_slot();
-        let parked = BLOCKING_PARKED_WAIT_BY_CPU.get(slot)?;
-        let queue = queue as *const WaitQueue as usize;
-        // SeqCst pairs with notify's sequence increment and parked-slot scan:
-        // either the notifier observes this publication and sends an IPI, or
-        // the final SeqCst generation check observes the notification.
-        parked.store(queue, Ordering::SeqCst);
-        Some(Self { slot, queue })
-    }
-}
-
-impl Drop for BlockingParkRegistration {
-    fn drop(&mut self) {
-        let _ = BLOCKING_PARKED_WAIT_BY_CPU[self.slot].compare_exchange(
-            self.queue,
-            0,
-            Ordering::SeqCst,
-            Ordering::SeqCst,
-        );
-    }
-}
-
-fn wake_blocking_parked(queue: &WaitQueue, wake_all: bool) -> usize {
-    let queue = queue as *const WaitQueue as usize;
-    let mut count = 0usize;
-    for (slot, parked) in BLOCKING_PARKED_WAIT_BY_CPU.iter().enumerate() {
-        if parked.load(Ordering::SeqCst) != queue {
-            continue;
-        }
-        if crate::remote_work_wake::wake_cpu_for_remote_work(slot as u32) {
-            count += 1;
-        }
-        if !wake_all {
-            break;
-        }
-    }
-    count
-}
 
 /// Embassy sync primitives are generic over a raw blocking mutex backend.
 /// This adapts the kernel's `spin::Mutex` so shared Embassy types like
@@ -260,13 +204,7 @@ impl WaitQueue {
 
     #[inline]
     pub fn notify_one(&self) -> bool {
-        self.seq.fetch_add(1, Ordering::SeqCst);
-        // Prefer the synchronous CPU which may actually be in `hlt`. Wakers
-        // left behind by a completed timed future must not consume the only
-        // notification while that CPU remains asleep.
-        if wake_blocking_parked(self, false) != 0 {
-            return true;
-        }
+        self.seq.fetch_add(1, Ordering::Release);
         let waker = {
             let mut wakers = self.wakers.lock();
             if wakers.is_empty() {
@@ -284,7 +222,7 @@ impl WaitQueue {
 
     #[inline]
     pub fn notify_all(&self) -> usize {
-        self.seq.fetch_add(1, Ordering::SeqCst);
+        self.seq.fetch_add(1, Ordering::Release);
         let wakers = {
             let mut wakers = self.wakers.lock();
             core::mem::take(&mut *wakers)
@@ -293,7 +231,7 @@ impl WaitQueue {
         for waker in wakers {
             waker.wake();
         }
-        count + wake_blocking_parked(self, true)
+        count
     }
 
     #[inline]
@@ -403,29 +341,6 @@ impl WaitQueue {
             let current = self.seq.load(Ordering::Acquire);
             if current != observed {
                 return true;
-            }
-
-            if let Some(_registration) = BlockingParkRegistration::publish(self) {
-                // Wake no later than this wait's own timeout, but preserve the
-                // executor runtime's earlier global timer budget as well.
-                let wait_ticks = if ticks == 0 {
-                    u64::MAX
-                } else {
-                    deadline.saturating_sub(now())
-                };
-                let sleep_ticks =
-                    wait_ticks.min(crate::time::ticks_until_next_wake().unwrap_or(u64::MAX));
-                let parked =
-                    crate::runtime::park_local_executor_blocking_if_idle(sleep_ticks, || {
-                        self.seq.load(Ordering::SeqCst) == observed
-                            && (ticks == 0 || now() < deadline)
-                    });
-                if parked {
-                    // Materialize due timer wakers before deciding whether the
-                    // next pass may return to `hlt`.
-                    crate::time::poll();
-                    continue;
-                }
             }
 
             // Parked blocking waits are used by runtime/platform primitives that
