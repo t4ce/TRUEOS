@@ -314,20 +314,20 @@ fn submit_font_sprite_quad_worklist_runs(
     }
 }
 
-fn submit_fill_rect_worklist(
+fn submit_solid_rect_worklist(
     dst: GpgpuRgba8Surface,
     desc: GpgpuRectWorklistDescBuffer,
-    params: FillRectWorklistRgba8Params,
+    params: AlphaBlendWorklistRgba8Params,
     direct_scanout: bool,
 ) -> GpgpuSubmissionOutcome {
-    if params.desc_count == 0 || params.desc_count as usize > RECT_WORKLIST_MAX_DESCS {
+    if params.desc_count == 0 || params.desc_count as usize > ALPHA_BLEND_WORKLIST_MAX_DESCS {
         return GpgpuSubmissionOutcome::Unavailable;
     }
     let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
     let Some(dev) = super::claimed_device() else {
         return GpgpuSubmissionOutcome::Unavailable;
     };
-    let Some(upload) = upload_fill_rect_worklist_rgba8_kernel() else {
+    let Some(upload) = upload_alpha_blend_worklist_rgba8_kernel() else {
         return GpgpuSubmissionOutcome::Unavailable;
     };
     let Some(state) = direct_rcs_state_once(dev) else {
@@ -339,12 +339,24 @@ fn submit_fill_rect_worklist(
     let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
     let kernel_ppgtt_ok = ppgtt_ok
         && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
-    let dst_ppgtt_ok = kernel_ppgtt_ok
+    // Source-free SOLID descriptors bind the descriptor allocation at both
+    // source and descriptor BTIs. It remains one PAT0/WB mapping and is never
+    // read through the source pointer by the consolidated artifact.
+    let source_ppgtt_ok = kernel_ppgtt_ok
+        && direct_rcs_map_ppgtt_kernel(state, desc.gpu, desc.phys, desc.bytes);
+    let dst_ppgtt_ok = source_ppgtt_ok
         && direct_rcs_map_ppgtt_destination(state, dst.gpu, dst.phys, dst.bytes, direct_scanout);
     let desc_ppgtt_ok =
         dst_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, desc.gpu, desc.phys, desc.bytes);
     let batch_ok = desc_ppgtt_ok
-        && direct_rcs_encode_fill_rect_worklist_batch(state, upload, params, dst.bytes, desc.bytes);
+        && direct_rcs_encode_alpha_blend_worklist_batch(
+            state,
+            upload,
+            params,
+            desc.bytes,
+            dst.bytes,
+            desc.bytes,
+        );
     let submission = if batch_ok {
         direct_rcs_submit_batch_state(dev, state)
     } else {
@@ -359,13 +371,13 @@ fn submit_fill_rect_worklist(
         direct_rcs_poll_result_slot_timeout_ms(
             state,
             RECT_WORKLIST_POST_MARKER_SLOT,
-            FILL_RECT_WORKLIST_POST_MARKER,
+            ALPHA_BLEND_WORKLIST_POST_MARKER,
             UI4_COMPUTE_PRODUCER_RETIRE_TIMEOUT_MS,
         )
     } else {
         0
     };
-    if observed == FILL_RECT_WORKLIST_POST_MARKER {
+    if observed == ALPHA_BLEND_WORKLIST_POST_MARKER {
         GpgpuSubmissionOutcome::Complete
     } else if submission.may_have_submitted() {
         GpgpuSubmissionOutcome::SubmittedIncomplete

@@ -10,6 +10,7 @@
 // - flags bit2 multiplies source RGB by color_rgba.rgb.
 // - flags bit3 multiplies source alpha by color_rgba.a.
 // - flags bit4 treats source RGB as premultiplied by source alpha.
+// - flags bit5 uses color_rgba as a source-free solid copy.
 // - One workgroup consumes one descriptor; its SIMD16 lanes split every row.
 // - One walker launches one workgroup for each descriptor in its slice.
 
@@ -18,6 +19,7 @@
 #define COMPOSITE_FLAG_TINT_RGB   (1u << 2)
 #define COMPOSITE_FLAG_TINT_ALPHA (1u << 3)
 #define COMPOSITE_FLAG_PREMUL_SRC (1u << 4)
+#define COMPOSITE_FLAG_SOLID      (1u << 5)
 
 static inline int unpack_i16(uint value)
 {
@@ -178,7 +180,9 @@ __kernel void alpha_blend_worklist_rgba8(
                 continue;
             }
 
-            uint src = src_rgba[(src_y + y) * src_pitch_pixels + src_x + x];
+            uint src = (flags & COMPOSITE_FLAG_SOLID) != 0u
+                ? color_rgba
+                : src_rgba[(src_y + y) * src_pitch_pixels + src_x + x];
             uint dst_index = (uint)out_y * dst_pitch_pixels + (uint)out_x;
             dst_rgba[dst_index] = composite(src, dst_rgba[dst_index], flags, color_rgba);
         }

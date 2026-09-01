@@ -13,9 +13,6 @@ pub(crate) const COPY_RECT_RGBA8_ARTIFACT_FRONTEND: &str = "cpp-for-opencl";
 pub(crate) const FILL_RECT_RGBA8_KERNEL_NAME: &str = "fill_rect_rgba8";
 pub(crate) const FILL_RECT_RGBA8_OPENCL_SOURCE: &str =
     include_str!("kernels/fill_rect_rgba8.clcpp");
-pub(crate) const FILL_RECT_WORKLIST_RGBA8_KERNEL_NAME: &str = "fill_rect_worklist_rgba8";
-pub(crate) const FILL_RECT_WORKLIST_RGBA8_OPENCL_SOURCE: &str =
-    include_str!("kernels/fill_rect_worklist_rgba8.clcpp");
 pub(crate) const GRADIENT_RECT_WORKLIST_RGBA8_KERNEL_NAME: &str = "gradient_rect_worklist_rgba8";
 pub(crate) const GRADIENT_RECT_WORKLIST_RGBA8_OPENCL_SOURCE: &str =
     include_str!("kernels/gradient_rect_worklist_rgba8.clcpp");
@@ -129,7 +126,6 @@ pub(crate) fn kernel_opencl_source(name: &str) -> Option<&'static str> {
         }
         COPY_RECT_RGBA8_KERNEL_NAME => Some(COPY_RECT_RGBA8_OPENCL_SOURCE),
         FILL_RECT_RGBA8_KERNEL_NAME => Some(FILL_RECT_RGBA8_OPENCL_SOURCE),
-        FILL_RECT_WORKLIST_RGBA8_KERNEL_NAME => Some(FILL_RECT_WORKLIST_RGBA8_OPENCL_SOURCE),
         GRADIENT_RECT_WORKLIST_RGBA8_KERNEL_NAME => {
             Some(GRADIENT_RECT_WORKLIST_RGBA8_OPENCL_SOURCE)
         }
@@ -173,9 +169,6 @@ pub(crate) fn kernel_source_path(name: &str) -> Option<&'static str> {
         }
         COPY_RECT_RGBA8_KERNEL_NAME => Some(COPY_RECT_RGBA8_SOURCE_PATH),
         FILL_RECT_RGBA8_KERNEL_NAME => Some("src/intel/gpgpu/kernels/fill_rect_rgba8.clcpp"),
-        FILL_RECT_WORKLIST_RGBA8_KERNEL_NAME => {
-            Some("src/intel/gpgpu/kernels/fill_rect_worklist_rgba8.clcpp")
-        }
         GRADIENT_RECT_WORKLIST_RGBA8_KERNEL_NAME => {
             Some("src/intel/gpgpu/kernels/gradient_rect_worklist_rgba8.clcpp")
         }
@@ -231,7 +224,6 @@ include!("kernels/artifacts/adls/cpp/subset_sum_collapse5_merge10.contract.rs");
 include!("kernels/artifacts/adls/cpp/alpha_blend_worklist_rgba8.contract.rs");
 include!("kernels/artifacts/adls/cpp/chart_sine_rgba8.contract.rs");
 include!("kernels/artifacts/adls/cpp/fill_rect_rgba8.contract.rs");
-include!("kernels/artifacts/adls/cpp/fill_rect_worklist_rgba8.contract.rs");
 include!("kernels/artifacts/adls/cpp/font_outline_coverage_r8.contract.rs");
 include!("kernels/artifacts/adls/cpp/glyph_mask_rgba8.contract.rs");
 include!("kernels/artifacts/adls/cpp/gradient_rect_worklist_rgba8.contract.rs");
@@ -340,10 +332,6 @@ pub(crate) const FILL_RECT_RGBA8_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/cpp/fill_rect_rgba8.bin");
 pub(crate) const FILL_RECT_RGBA8_ADLS_SPV: &[u8] =
     include_bytes!("kernels/artifacts/adls/cpp/fill_rect_rgba8.spv");
-pub(crate) const FILL_RECT_WORKLIST_RGBA8_ADLS_BIN: &[u8] =
-    include_bytes!("kernels/artifacts/adls/cpp/fill_rect_worklist_rgba8.bin");
-pub(crate) const FILL_RECT_WORKLIST_RGBA8_ADLS_SPV: &[u8] =
-    include_bytes!("kernels/artifacts/adls/cpp/fill_rect_worklist_rgba8.spv");
 pub(crate) const GRADIENT_RECT_WORKLIST_RGBA8_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/cpp/gradient_rect_worklist_rgba8.bin");
 pub(crate) const GRADIENT_RECT_WORKLIST_RGBA8_ADLS_SPV: &[u8] =
@@ -818,9 +806,6 @@ const _: () = {
 };
 pub(crate) const FILL_RECT_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
     FILL_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
-pub(crate) const FILL_RECT_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
-    FILL_RECT_WORKLIST_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
-const _: () = assert!(matches!(FILL_RECT_WORKLIST_RGBA8_ADLS_CPP_ABI_CONTRACT.validate(), Ok(())));
 pub(crate) const GRADIENT_RECT_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
     GRADIENT_RECT_WORKLIST_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
 

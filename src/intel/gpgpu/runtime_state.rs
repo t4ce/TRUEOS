@@ -1,7 +1,6 @@
 static COPY_RECT_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static SUBSET_SUM_COLLAPSE5_MERGE10_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static FILL_RECT_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
-static FILL_RECT_WORKLIST_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static GRADIENT_RECT_WORKLIST_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> =
     Mutex::new(None);
 
@@ -110,11 +109,7 @@ static FONT_OUTLINE_COVERAGE_R8_INCOMPLETE_SEQ: AtomicU64 = AtomicU64::new(0);
 static GLYPH_MASK_BATCH_INCOMPLETE_SEQ: AtomicU64 = AtomicU64::new(0);
 static FONT_INSTANCE_BATCH_INCOMPLETE_SEQ: AtomicU64 = AtomicU64::new(0);
 
-static FILL_RECT_WORKLIST_RAN: AtomicBool = AtomicBool::new(false);
-
 static SPRITE_QUAD_WORKLIST_RAN: AtomicBool = AtomicBool::new(false);
-static FILL_RECT_WORKLIST_OK: AtomicBool = AtomicBool::new(false);
-
 static SPRITE_QUAD_WORKLIST_OK: AtomicBool = AtomicBool::new(false);
 
 static SPRITE_QUAD_WORKLIST_SUBMIT_FAIL_LOGS: AtomicU32 = AtomicU32::new(0);
