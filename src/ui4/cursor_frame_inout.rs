@@ -56,6 +56,8 @@ pub(crate) enum Ui4CursorIcon {
     ResizeVertical = 3,
     ResizeDiagonal = 4,
     AppOwned = 5,
+    /// A cell-sized outline rendered by the slot-4 software-cursor plane.
+    CellOutline = 6,
 }
 
 impl Ui4CursorIcon {
@@ -67,6 +69,7 @@ impl Ui4CursorIcon {
             3 => Some(Self::ResizeVertical),
             4 => Some(Self::ResizeDiagonal),
             5 => Some(Self::AppOwned),
+            6 => Some(Self::CellOutline),
             _ => None,
         }
     }
@@ -78,10 +81,10 @@ pub(crate) struct CursorFrameKey {
     pub(crate) window: WindowId,
 }
 
-/// Static grid spacing for an `AppOwned` cursor. Origins are frame-local
-/// pixels and cell advances are 1/1024 pixel units, preserving fractional
-/// terminal glyph advances. Positions before either origin remain unsnapped
-/// so frame chrome can retain its normal pointer behavior.
+/// Static grid spacing for a frame-scoped software cursor. Origins are
+/// frame-local pixels and cell advances are 1/1024 pixel units, preserving
+/// fractional terminal glyph advances. Application input coordinates are not
+/// modified by this presentation policy.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Ui4CursorStep {
     pub(crate) origin_x: u32,
@@ -95,28 +98,27 @@ impl Ui4CursorStep {
         self.cell_width_subpx != 0 && self.cell_height_subpx != 0
     }
 
-    pub(crate) fn snap_local(self, x: u32, y: u32) -> (u32, u32) {
-        (
-            snap_axis(x, self.origin_x, self.cell_width_subpx),
-            snap_axis(y, self.origin_y, self.cell_height_subpx),
-        )
+    pub(crate) fn cell_bounds_local(self, x: u32, y: u32) -> Option<(u32, u32, u32, u32)> {
+        let (left, right) = cell_axis_bounds(x, self.origin_x, self.cell_width_subpx)?;
+        let (top, bottom) = cell_axis_bounds(y, self.origin_y, self.cell_height_subpx)?;
+        Some((left, top, right.saturating_sub(left), bottom.saturating_sub(top)))
     }
 }
 
-fn snap_axis(value: u32, origin: u32, step_subpx: u32) -> u32 {
+fn cell_axis_bounds(value: u32, origin: u32, step_subpx: u32) -> Option<(u32, u32)> {
     const SUBPIXELS_PER_PIXEL: u64 = 1_024;
     if value < origin || step_subpx == 0 {
-        return value;
+        return None;
     }
     let offset_subpx = u64::from(value.saturating_sub(origin)).saturating_mul(SUBPIXELS_PER_PIXEL);
     let cell = offset_subpx / u64::from(step_subpx);
-    let left_subpx = cell.saturating_mul(u64::from(step_subpx));
-    // A frame receives integer pixels. Round the cell's leading edge upward
-    // so its ordinary floor-based cell mapping observes the newly entered
-    // fractional-width cell rather than the preceding one.
-    let left =
-        left_subpx.saturating_add(SUBPIXELS_PER_PIXEL.saturating_sub(1)) / SUBPIXELS_PER_PIXEL;
-    origin.saturating_add(left.min(u64::from(u32::MAX)) as u32)
+    let origin_subpx = u64::from(origin).saturating_mul(SUBPIXELS_PER_PIXEL);
+    let left_subpx = origin_subpx.saturating_add(cell.saturating_mul(u64::from(step_subpx)));
+    let right_subpx = left_subpx.saturating_add(u64::from(step_subpx));
+    let round = |subpx: u64| subpx.saturating_add(SUBPIXELS_PER_PIXEL / 2) / SUBPIXELS_PER_PIXEL;
+    let left = u32::try_from(round(left_subpx)).ok()?;
+    let right = u32::try_from(round(right_subpx)).ok()?;
+    (right > left).then_some((left, right))
 }
 
 impl CursorFrameKey {
@@ -405,7 +407,10 @@ impl CursorFrameRig {
             .map(|cursor| cursor.selected)
     }
 
-    fn app_owned_cursor_step_for_source(&self, source: Ui4CursorSource) -> Option<Ui4CursorStep> {
+    fn cursor_presentation_for_source(
+        &self,
+        source: Ui4CursorSource,
+    ) -> Option<(CursorFrameKey, Ui4CursorIcon, Option<Ui4CursorStep>)> {
         let key = self.selected_frame_for_source(source)?;
         let frame = self.frames.iter().find(|frame| frame.key == key)?;
         let icon = frame
@@ -414,25 +419,7 @@ impl CursorFrameRig {
             .find(|cursor| cursor.source == source)
             .map(|cursor| cursor.icon)
             .unwrap_or(frame.fallback);
-        (icon == Ui4CursorIcon::AppOwned)
-            .then_some(frame.cursor_step)
-            .flatten()
-    }
-
-    fn app_owns_cursor_for_source(&self, source: Ui4CursorSource) -> bool {
-        let Some(key) = self.selected_frame_for_source(source) else {
-            return false;
-        };
-        let Some(frame) = self.frames.iter().find(|frame| frame.key == key) else {
-            return false;
-        };
-        frame
-            .overrides
-            .iter()
-            .find(|cursor| cursor.source == source)
-            .map(|cursor| cursor.icon)
-            .unwrap_or(frame.fallback)
-            == Ui4CursorIcon::AppOwned
+        Some((key, icon, frame.cursor_step))
     }
 
     fn cursor_retired(&mut self, source: Ui4CursorSource) -> bool {
@@ -500,18 +487,14 @@ pub(crate) fn selected_frame_for_source(source: Ui4CursorSource) -> Option<Curso
     CURSOR_FRAME_RIG.lock().selected_frame_for_source(source)
 }
 
-/// Return the selected frame's grid spacing only while that frame has chosen
-/// the established `AppOwned` cursor contract.
-pub(crate) fn app_owned_cursor_step_for_source(source: Ui4CursorSource) -> Option<Ui4CursorStep> {
+/// Resolve the selected frame's cursor icon and optional presentation-only
+/// stepping policy for one independent cursor source.
+pub(crate) fn cursor_presentation_for_source(
+    source: Ui4CursorSource,
+) -> Option<(CursorFrameKey, Ui4CursorIcon, Option<Ui4CursorStep>)> {
     CURSOR_FRAME_RIG
         .lock()
-        .app_owned_cursor_step_for_source(source)
-}
-
-/// An application-owned cursor must not have a slot-4 crosshair painted over
-/// its own cursor pixels, whether or not it requests grid stepping.
-pub(crate) fn app_owns_cursor_for_source(source: Ui4CursorSource) -> bool {
-    CURSOR_FRAME_RIG.lock().app_owns_cursor_for_source(source)
+        .cursor_presentation_for_source(source)
 }
 
 pub(super) fn cursor_retired(source: Ui4CursorSource) {
@@ -558,8 +541,7 @@ pub(crate) fn set_window_cursor_icon(
     Ok(())
 }
 
-/// Configure or clear the selected frame's `AppOwned` cursor grid spacing.
-/// The setting is inert until the frame resolves to `Ui4CursorIcon::AppOwned`.
+/// Configure or clear a selected frame's software-cursor presentation grid.
 pub(crate) fn set_window_cursor_step(
     owner: WindowOwner,
     window: WindowId,
@@ -918,7 +900,7 @@ mod tests {
     }
 
     #[test]
-    fn app_owned_step_is_selected_frame_scoped_and_snaps_from_its_origin() {
+    fn cursor_step_is_selected_frame_scoped_and_presentation_only() {
         let mut rig = CursorFrameRig::new();
         let frame = CursorFrameKey::new(WindowOwner::KernelApp(1), WindowId::from_raw(1).unwrap());
         let session = WindowSessionId::from_raw(1).unwrap();
@@ -932,25 +914,26 @@ mod tests {
         rig.set_cursor_step(frame, Some(step)).unwrap();
         rig.select(Some(frame), source(1), Rgba8::new(1, 2, 3, 255));
 
-        assert!(!rig.app_owns_cursor_for_source(source(1)));
-        assert_eq!(rig.app_owned_cursor_step_for_source(source(1)), None);
-
-        rig.set_cursor(frame, None, Ui4CursorIcon::AppOwned)
+        rig.set_cursor(frame, None, Ui4CursorIcon::CellOutline)
             .unwrap();
-        assert!(rig.app_owns_cursor_for_source(source(1)));
-        assert_eq!(rig.app_owned_cursor_step_for_source(source(1)), Some(step));
-        assert_eq!(step.snap_local(11, 7), (11, 7));
-        assert_eq!(step.snap_local(28, 41), (21, 40));
+        assert_eq!(
+            rig.cursor_presentation_for_source(source(1)),
+            Some((frame, Ui4CursorIcon::CellOutline, Some(step)))
+        );
+        assert_eq!(step.cell_bounds_local(11, 7), None);
+        assert_eq!(step.cell_bounds_local(28, 41), Some((21, 40, 9, 16)));
         let fractional_step = Ui4CursorStep {
             cell_width_subpx: 14_746,
             cell_height_subpx: 26 * 1_024,
             ..step
         };
-        assert_eq!(fractional_step.snap_local(27, 53), (27, 34));
+        assert_eq!(fractional_step.cell_bounds_local(60, 40), Some((55, 34, 15, 26)));
 
         rig.set_cursor(frame, None, Ui4CursorIcon::Default).unwrap();
-        assert!(!rig.app_owns_cursor_for_source(source(1)));
-        assert_eq!(rig.app_owned_cursor_step_for_source(source(1)), None);
+        assert_eq!(
+            rig.cursor_presentation_for_source(source(1)),
+            Some((frame, Ui4CursorIcon::Default, Some(step)))
+        );
     }
 
     #[test]

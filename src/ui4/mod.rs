@@ -69,9 +69,9 @@ pub(crate) use context_menu::{
 };
 pub(crate) use cursor_frame_inout::{
     CursorFrameKey, GlobalKeyboardDisposition, GlobalKeyboardHookId, Ui4CursorIcon,
-    Ui4CursorSource, Ui4CursorStep, app_owned_cursor_step_for_source, app_owns_cursor_for_source,
-    cursor_color, register_global_keyboard_hook, selected_frame, selected_frame_for_source,
-    selection_strips, set_window_cursor_icon, set_window_cursor_step, set_window_custom_cursor,
+    Ui4CursorSource, Ui4CursorStep, cursor_color, cursor_presentation_for_source,
+    register_global_keyboard_hook, selected_frame, selected_frame_for_source, selection_strips,
+    set_window_cursor_icon, set_window_cursor_step, set_window_custom_cursor,
     unregister_global_keyboard_hook,
 };
 pub(crate) use damage::{DamageRect, DamageRegion};

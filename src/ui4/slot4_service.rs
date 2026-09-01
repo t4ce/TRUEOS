@@ -488,21 +488,40 @@ fn software_cursor_rects() -> Slot4Rects {
     }
 
     for visual in &visuals {
-        if visual.app_owned {
-            continue;
-        }
-        push_software_crosshair(
-            &mut rects,
-            visual.x,
-            visual.y,
-            screen_w,
-            screen_h,
-            visual.color,
-            super::input_broker::software_cursor_scale(),
-        );
+        push_software_cursor_visual(&mut rects, visual, screen_w, screen_h);
     }
 
     rects
+}
+
+fn push_software_cursor_visual(
+    rects: &mut Slot4Rects,
+    visual: &super::input_broker::Ui4SoftwareCursorVisual,
+    screen_w: u32,
+    screen_h: u32,
+) {
+    match visual.icon {
+        super::Ui4CursorIcon::AppOwned => return,
+        super::Ui4CursorIcon::CellOutline => {
+            if let Some(cell) = visual
+                .stepped_cell
+                .and_then(|cell| clip_visual_rect(cell, screen_w, screen_h))
+            {
+                push_rect_border(rects, cell, 3, visual.color);
+                return;
+            }
+        }
+        _ => {}
+    }
+    push_software_crosshair(
+        rects,
+        visual.x,
+        visual.y,
+        screen_w,
+        screen_h,
+        visual.color,
+        super::input_broker::software_cursor_scale(),
+    );
 }
 
 fn push_requested_context_menu(
@@ -831,6 +850,21 @@ fn push_visual_rect(
     push_overlay_rect(rects, rect.x, rect.y, rect.width, rect.height, color);
 }
 
+fn clip_visual_rect(
+    rect: super::Ui4VisualRect,
+    screen_width: u32,
+    screen_height: u32,
+) -> Option<super::Ui4VisualRect> {
+    let right = rect.x.saturating_add(rect.width).min(screen_width);
+    let bottom = rect.y.saturating_add(rect.height).min(screen_height);
+    (right > rect.x && bottom > rect.y).then_some(super::Ui4VisualRect {
+        x: rect.x,
+        y: rect.y,
+        width: right.saturating_sub(rect.x),
+        height: bottom.saturating_sub(rect.y),
+    })
+}
+
 fn push_rect_border(
     rects: &mut Slot4Rects,
     rect: super::Ui4VisualRect,
@@ -1049,6 +1083,34 @@ mod tests {
             assert_eq!((rect.x, rect.y, rect.width, rect.height), (x, y, width, height));
             assert_eq!(rect.color, Rgba8::new(255, 0, 0, 255));
         }
+    }
+
+    #[test]
+    fn cell_outline_cursor_uses_the_route_color_on_slot_four() {
+        let color = Rgba8::new(17, 91, 203, 255);
+        let visual = super::super::input_broker::Ui4SoftwareCursorVisual {
+            x: 10,
+            y: 20,
+            color,
+            icon: super::super::Ui4CursorIcon::CellOutline,
+            stepped_cell: Some(super::super::Ui4VisualRect {
+                x: 10,
+                y: 20,
+                width: 15,
+                height: 26,
+            }),
+            context_menu: None,
+            selection: None,
+            dock_fields_visible: false,
+            dock_preview: None,
+        };
+        let mut rects = Slot4Rects::new();
+        push_software_cursor_visual(&mut rects, &visual, TEST_SCREEN_W, TEST_SCREEN_H);
+
+        assert_eq!(rects.len(), 4);
+        assert!(rects.iter().all(|rect| rect.color == color));
+        assert_eq!((rects[0].x, rects[0].y, rects[0].width, rects[0].height), (10, 20, 15, 3));
+        assert_eq!((rects[1].x, rects[1].y, rects[1].width, rects[1].height), (10, 43, 15, 3));
     }
 
     #[test]

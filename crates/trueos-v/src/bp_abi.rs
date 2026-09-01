@@ -279,8 +279,8 @@ pub struct TrueosUi4CursorSource {
     pub hid_kind: u32,
 }
 
-/// Frame-local cell spacing for an `AppOwned` UI4 cursor. Advances use 1/1024
-/// pixel units so fractional glyph widths stay aligned.
+/// Frame-local presentation spacing for a UI4 software cursor. Advances use
+/// 1/1024 pixel units so fractional glyph widths stay aligned.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
 pub struct TrueosUi4CursorStep {

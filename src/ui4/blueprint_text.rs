@@ -443,9 +443,8 @@ pub struct TrueosUi4CursorSource {
 
 const _: () = assert!(core::mem::size_of::<TrueosUi4CursorSource>() == 4 * 4);
 
-/// Static cell spacing for a frame which already owns its cursor pixels via
-/// `AppOwned`. The origin is in frame-local pixels and advances are 1/1024
-/// pixel units.
+/// Static frame-local spacing for presentation-only cursor stepping. Advances
+/// are 1/1024 pixel units; pointer input remains continuous and unmodified.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
 pub struct TrueosUi4CursorStep {
@@ -2637,9 +2636,9 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_set_cursor_icon(
     0
 }
 
-/// Configure cell stepping for a frame's already-`AppOwned` cursor. Passing
-/// null clears the request. This affects selected-frame pointer delivery only;
-/// it never changes physical cursor movement, keyboard routing, or selection.
+/// Configure presentation-only cell stepping for a frame's software cursor.
+/// Passing null clears it. Pointer input, keyboard routing, hit testing, and
+/// selection remain unchanged.
 pub unsafe extern "C" fn trueos_cabi_ui4_scene_set_cursor_step(
     window_id: u32,
     step: *const TrueosUi4CursorStep,
