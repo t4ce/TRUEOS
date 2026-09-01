@@ -1,7 +1,8 @@
 use alloc::string::{String, ToString};
+use alloc::vec::Vec;
 use core::arch::x86_64::__cpuid;
 use core::fmt::Write;
-use core::sync::atomic::{Ordering, compiler_fence};
+use core::sync::atomic::{compiler_fence, Ordering};
 
 use spin::Mutex;
 use x86_64::registers::model_specific::Msr;
@@ -19,6 +20,8 @@ const CPUID_HFI_INDEX_SHIFT: u32 = 16;
 const HFI_PAGE_BYTES: usize = 4096;
 const HFI_MAX_TABLE_PAGES: usize = 16;
 const HFI_TIMESTAMP_BYTES: usize = core::mem::size_of::<u64>();
+const HFI_STABLE_CAPTURE_ATTEMPTS: usize = 32;
+const HFI_INITIAL_READY_POLLS: usize = 200_000;
 
 const MSR_IA32_HW_FEEDBACK_PTR: u32 = 0x17D0;
 const MSR_IA32_HW_FEEDBACK_CONFIG: u32 = 0x17D1;
@@ -42,6 +45,14 @@ struct HfiTableState {
     row_stride: usize,
     row_count: usize,
     enabled: bool,
+    initial_ready: bool,
+}
+
+struct HfiTableCapture {
+    timestamp: u64,
+    image: Vec<u8>,
+    attempts: usize,
+    stable: bool,
 }
 
 static HFI_TABLE: Mutex<Option<HfiTableState>> = Mutex::new(None);
@@ -186,11 +197,18 @@ fn capability_layout(mask: u8) -> Option<(usize, usize, Option<usize>, Option<us
         None
     };
     let efficiency_offset = if (mask & CPUID_HFI_ENERGY_EFFICIENCY as u8) != 0 {
-        Some(usize::from((mask & ((CPUID_HFI_ENERGY_EFFICIENCY as u8) - 1)).count_ones() as u8))
+        Some(usize::from(
+            (mask & ((CPUID_HFI_ENERGY_EFFICIENCY as u8) - 1)).count_ones() as u8,
+        ))
     } else {
         None
     };
-    Some((header_size, row_stride, performance_offset, efficiency_offset))
+    Some((
+        header_size,
+        row_stride,
+        performance_offset,
+        efficiency_offset,
+    ))
 }
 
 fn registered_row_count() -> Option<usize> {
@@ -233,16 +251,113 @@ fn single_package_registered() -> bool {
     package.is_some()
 }
 
-fn wait_for_initial_timestamp(virt: usize) -> u64 {
-    let ptr = virt as *const u64;
-    for _ in 0..200_000usize {
-        let timestamp = unsafe { core::ptr::read_volatile(ptr) };
-        if timestamp != 0 {
-            return timestamp;
+fn read_u8(base: usize, offset: usize) -> u8 {
+    unsafe { core::ptr::read_volatile((base + offset) as *const u8) }
+}
+
+fn read_u64(base: usize, offset: usize) -> u64 {
+    unsafe { core::ptr::read_volatile((base + offset) as *const u64) }
+}
+
+fn used_table_bytes(state: HfiTableState) -> Option<usize> {
+    HFI_TIMESTAMP_BYTES
+        .checked_add(state.header_size)?
+        .checked_add(state.row_count.checked_mul(state.row_stride)?)
+}
+
+fn capture_once(state: HfiTableState, attempt: usize) -> Option<HfiTableCapture> {
+    let used_bytes = used_table_bytes(state)?;
+    if used_bytes > state.bytes || used_bytes < HFI_TIMESTAMP_BYTES {
+        return None;
+    }
+
+    let before = read_u64(state.virt, 0);
+    compiler_fence(Ordering::SeqCst);
+    let mut image = Vec::with_capacity(used_bytes);
+    for offset in 0..used_bytes {
+        image.push(read_u8(state.virt, offset));
+    }
+    compiler_fence(Ordering::SeqCst);
+    let after = read_u64(state.virt, 0);
+
+    let mut timestamp_bytes = [0u8; HFI_TIMESTAMP_BYTES];
+    timestamp_bytes.copy_from_slice(&image[..HFI_TIMESTAMP_BYTES]);
+    let copied_timestamp = u64::from_le_bytes(timestamp_bytes);
+    if before == 0 || before != after || before != copied_timestamp {
+        return None;
+    }
+
+    Some(HfiTableCapture {
+        timestamp: before,
+        image,
+        attempts: attempt,
+        stable: false,
+    })
+}
+
+fn capture_stable(state: HfiTableState) -> Option<HfiTableCapture> {
+    let mut previous: Option<HfiTableCapture> = None;
+    for attempt in 1..=HFI_STABLE_CAPTURE_ATTEMPTS {
+        let Some(mut current) = capture_once(state, attempt) else {
+            previous = None;
+            core::hint::spin_loop();
+            continue;
+        };
+
+        if let Some(previous) = previous.as_ref()
+            && previous.timestamp == current.timestamp
+            && previous.image == current.image
+        {
+            current.stable = true;
+            return Some(current);
+        }
+
+        previous = Some(current);
+        core::hint::spin_loop();
+    }
+    previous
+}
+
+fn advertised_columns_ready(mask: u8, image: &[u8]) -> bool {
+    let column_count = mask.count_ones() as usize;
+    if column_count == 0 || image.len() < HFI_TIMESTAMP_BYTES + column_count {
+        return false;
+    }
+    image[HFI_TIMESTAMP_BYTES..HFI_TIMESTAMP_BYTES + column_count]
+        .iter()
+        .all(|value| *value != 0)
+}
+
+fn capture_completes_initial_population(state: HfiTableState, capture: &HfiTableCapture) -> bool {
+    state.enabled
+        && capture.stable
+        && capture.timestamp != 0
+        && advertised_columns_ready(state.capability_mask, &capture.image)
+}
+
+fn wait_for_initial_population(state: &mut HfiTableState) {
+    if state.initial_ready || !state.enabled {
+        return;
+    }
+
+    let column_count = state.capability_mask.count_ones() as usize;
+    for _ in 0..HFI_INITIAL_READY_POLLS {
+        let before = read_u64(state.virt, 0);
+        let mut columns_ready = before != 0;
+        for column in 0..column_count {
+            columns_ready &= read_u8(state.virt, HFI_TIMESTAMP_BYTES + column) != 0;
+        }
+        let after = read_u64(state.virt, 0);
+        if columns_ready
+            && before == after
+            && let Some(capture) = capture_stable(*state)
+            && capture_completes_initial_population(*state, &capture)
+        {
+            state.initial_ready = true;
+            return;
         }
         core::hint::spin_loop();
     }
-    unsafe { core::ptr::read_volatile(ptr) }
 }
 
 /// Explicitly configure the package-0 HFI memory table on the BSP.
@@ -297,14 +412,17 @@ pub(crate) fn enable_table_explicit() -> Result<(), &'static str> {
         if existing.bytes != bytes || existing.capability_mask != mask {
             return Err("existing HFI allocation does not match current CPUID layout");
         }
-        unsafe {
-            Msr::new(MSR_IA32_HW_FEEDBACK_PTR).write(existing.phys | HW_FEEDBACK_PTR_VALID);
-            let mut config = Msr::new(MSR_IA32_HW_FEEDBACK_CONFIG);
-            let value = config.read();
-            config.write(value | HW_FEEDBACK_CONFIG_HFI_ENABLE);
+        if !existing.enabled {
+            unsafe {
+                Msr::new(MSR_IA32_HW_FEEDBACK_PTR)
+                    .write(existing.phys | HW_FEEDBACK_PTR_VALID);
+                let mut config = Msr::new(MSR_IA32_HW_FEEDBACK_CONFIG);
+                let value = config.read();
+                config.write(value | HW_FEEDBACK_CONFIG_HFI_ENABLE);
+            }
+            existing.enabled = true;
         }
-        existing.enabled = true;
-        let _ = wait_for_initial_timestamp(existing.virt);
+        wait_for_initial_population(existing);
         return Ok(());
     }
 
@@ -335,8 +453,11 @@ pub(crate) fn enable_table_explicit() -> Result<(), &'static str> {
         row_stride,
         row_count,
         enabled: true,
+        initial_ready: false,
     });
-    let _ = wait_for_initial_timestamp(virt);
+    if let Some(existing) = state.as_mut() {
+        wait_for_initial_population(existing);
+    }
     Ok(())
 }
 
@@ -360,22 +481,25 @@ pub(crate) fn disable_table_explicit() -> Result<(), &'static str> {
     Ok(())
 }
 
-fn read_u8(base: usize, offset: usize) -> u8 {
-    unsafe { core::ptr::read_volatile((base + offset) as *const u8) }
-}
-
-fn read_u64(base: usize, offset: usize) -> u64 {
-    unsafe { core::ptr::read_volatile((base + offset) as *const u64) }
-}
-
 pub(crate) fn table_snapshot_text() -> String {
-    let state = HFI_TABLE.lock().as_ref().copied();
     let mut out = String::new();
-    let Some(state) = state else {
-        out.push_str(
-            "HFI table: unconfigured (use `tlb hfi enable` for explicit MSR/table bring-up)\n",
-        );
-        return out;
+    let (state, capture, initial_ready) = {
+        let mut state = HFI_TABLE.lock();
+        let Some(state) = state.as_mut() else {
+            out.push_str(
+                "HFI table: unconfigured (use `tlb hfi enable` for explicit MSR/table bring-up)\n",
+            );
+            return out;
+        };
+
+        let capture = capture_stable(*state);
+        if !state.initial_ready
+            && let Some(capture) = capture.as_ref()
+            && capture_completes_initial_population(*state, capture)
+        {
+            state.initial_ready = true;
+        }
+        (*state, capture, state.initial_ready)
     };
 
     let Some((_, _, performance_offset, efficiency_offset)) =
@@ -385,21 +509,50 @@ pub(crate) fn table_snapshot_text() -> String {
         return out;
     };
 
-    compiler_fence(Ordering::Acquire);
-    let timestamp = read_u64(state.virt, 0);
+    let Some(capture) = capture else {
+        writeln!(
+            out,
+            "HFI table: enabled={} capture_status=unstable coherent=no stable=no phys=0x{:016X} bytes=0x{:X} rows={} stride={} header={} mask=0x{:02X}",
+            if state.enabled { "yes" } else { "no" },
+            state.phys,
+            state.bytes,
+            state.row_count,
+            state.row_stride,
+            state.header_size,
+            state.capability_mask
+        )
+        .unwrap();
+        out.push_str(
+            "HFI rows: withheld because a timestamp-consistent table image could not be captured; scheduler_consumer=none\n",
+        );
+        return out;
+    };
+
+    let capture_status = if !state.enabled {
+        "disabled-retained"
+    } else if !initial_ready {
+        "initializing"
+    } else if capture.stable {
+        "ready"
+    } else {
+        "changing"
+    };
     let data_offset = HFI_TIMESTAMP_BYTES + state.header_size;
-    let perf_updated =
-        performance_offset.map(|offset| read_u8(state.virt, HFI_TIMESTAMP_BYTES + offset));
-    let eff_updated =
-        efficiency_offset.map(|offset| read_u8(state.virt, HFI_TIMESTAMP_BYTES + offset));
+    let perf_updated = performance_offset
+        .and_then(|offset| capture.image.get(HFI_TIMESTAMP_BYTES + offset).copied());
+    let eff_updated = efficiency_offset
+        .and_then(|offset| capture.image.get(HFI_TIMESTAMP_BYTES + offset).copied());
 
     writeln!(
         out,
-        "HFI table: enabled={} phys=0x{:016X} bytes=0x{:X} timestamp=0x{:016X} rows={} stride={} header={} mask=0x{:02X}",
+        "HFI table: enabled={} capture_status={} coherent=yes stable={} attempts={} phys=0x{:016X} bytes=0x{:X} timestamp=0x{:016X} rows={} stride={} header={} mask=0x{:02X}",
         if state.enabled { "yes" } else { "no" },
+        capture_status,
+        if capture.stable { "yes" } else { "no" },
+        capture.attempts,
         state.phys,
         state.bytes,
-        timestamp,
+        capture.timestamp,
         state.row_count,
         state.row_stride,
         state.header_size,
@@ -408,34 +561,47 @@ pub(crate) fn table_snapshot_text() -> String {
     .unwrap();
     writeln!(
         out,
-        "HFI header: performance_updated={} efficiency_updated={} update_interrupt=not-configured scheduler_consumer=none",
+        "HFI header: performance_updated={} efficiency_updated={} initial_population={} update_interrupt=not-configured scheduler_consumer=none",
         perf_updated
-            .map(|v| v.to_string())
+            .map(|value| value.to_string())
             .unwrap_or_else(|| String::from("-")),
         eff_updated
-            .map(|v| v.to_string())
+            .map(|value| value.to_string())
             .unwrap_or_else(|| String::from("-")),
+        if initial_ready { "ready" } else { "incomplete" },
     )
     .unwrap();
+    if !initial_ready {
+        out.push_str(
+            "HFI note: advertised capability columns are not fully populated; rows are diagnostic-only and not eligible for consumers.\n",
+        );
+    } else if !capture.stable {
+        out.push_str(
+            "HFI note: the image is timestamp-consistent but changed between capture attempts; rows are a coherent point-in-time diagnostic.\n",
+        );
+    }
+
     writeln!(out, "Row  Performance  Efficiency  Raw8").unwrap();
     for row in 0..state.row_count {
         let row_base = data_offset + row * state.row_stride;
-        let performance = performance_offset.map(|offset| read_u8(state.virt, row_base + offset));
-        let efficiency = efficiency_offset.map(|offset| read_u8(state.virt, row_base + offset));
+        let performance = performance_offset
+            .and_then(|offset| capture.image.get(row_base + offset).copied());
+        let efficiency = efficiency_offset
+            .and_then(|offset| capture.image.get(row_base + offset).copied());
         let mut raw = [0u8; 8];
         let raw_len = state.row_stride.min(raw.len());
-        for (index, byte) in raw.iter_mut().enumerate().take(raw_len) {
-            *byte = read_u8(state.virt, row_base + index);
+        if let Some(bytes) = capture.image.get(row_base..row_base + raw_len) {
+            raw[..raw_len].copy_from_slice(bytes);
         }
         writeln!(
             out,
             "{:<4} {:<12} {:<11} {:02X}{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}",
             row,
             performance
-                .map(|v| v.to_string())
+                .map(|value| value.to_string())
                 .unwrap_or_else(|| String::from("-")),
             efficiency
-                .map(|v| v.to_string())
+                .map(|value| value.to_string())
                 .unwrap_or_else(|| String::from("-")),
             raw[0],
             raw[1],
@@ -455,7 +621,7 @@ pub(crate) fn explicit_bringup_text() -> String {
     let mut out = String::new();
     match enable_table_explicit() {
         Ok(()) => {
-            out.push_str("HFI explicit bring-up: enabled\n");
+            out.push_str("HFI explicit bring-up: enabled; scheduler remains disconnected\n");
             out.push_str(&table_snapshot_text());
         }
         Err(error) => {
@@ -539,5 +705,22 @@ mod tests {
         assert_eq!(stride, 8);
         assert_eq!(perf, Some(0));
         assert_eq!(eff, Some(1));
+    }
+
+    #[test]
+    fn initial_population_requires_every_advertised_column() {
+        let mut image = [0u8; 16];
+        image[HFI_TIMESTAMP_BYTES] = 1;
+        assert!(!advertised_columns_ready(0x03, &image));
+        image[HFI_TIMESTAMP_BYTES + 1] = 1;
+        assert!(advertised_columns_ready(0x03, &image));
+    }
+
+    #[test]
+    fn row_zero_values_do_not_define_initial_readiness() {
+        let mut image = [0u8; 24];
+        image[HFI_TIMESTAMP_BYTES] = 1;
+        image[HFI_TIMESTAMP_BYTES + 1] = 1;
+        assert!(advertised_columns_ready(0x03, &image));
     }
 }
