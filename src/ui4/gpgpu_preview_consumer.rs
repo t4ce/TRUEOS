@@ -19,13 +19,14 @@ use trueos_time::{Duration, Instant, Timer};
 use super::{
     DamageRect, FrameCadence, FrameContent, FrameHandle, FramePlanError, FramePoolError, FrameSpec,
     FrameWriteLease, OutputId, PremultipliedRgba8, ScanoutFormat, Ui4CursorSource, Ui4InputEvent,
-    WindowCreate, WindowId, WindowOwner, WindowPlacement, WindowPlane, WindowSessionCloseRequest,
-    WindowSessionId, acquire_frame_buffer, begin_window_session, cancel_frame_buffer, create_frame,
-    create_window, destroy_frame, finish_window_session, finish_window_session_with_request,
-    gpgpu_rgba_surface, publish_frame_buffer, publish_gpgpu_frame_buffer,
-    publish_gpu_font_frame_buffer, publish_window_frame, publish_window_frames,
-    replace_window_frame, reselect_window_for_cursor, set_windows_visible, take_owner_input_events,
-    window_frame_was_presented, window_placement, writable_rgba_view,
+    WindowBrokerError, WindowCreate, WindowId, WindowOwner, WindowPlacement, WindowPlane,
+    WindowSessionCloseRequest, WindowSessionId, acquire_frame_buffer, begin_window_session,
+    cancel_frame_buffer, commit_window_frame_replacement, create_frame, create_window,
+    destroy_frame, finish_window_session, finish_window_session_with_request, gpgpu_rgba_surface,
+    publish_frame_buffer, publish_gpgpu_frame_buffer, publish_gpu_font_frame_buffer,
+    publish_window_frame, publish_window_frames, reselect_window_for_cursor,
+    retire_frame_when_released, set_windows_visible, take_owner_input_events,
+    window_frame_was_presented, window_placement, window_resize_state, writable_rgba_view,
 };
 
 const PREVIEW_OWNER: WindowOwner = WindowOwner::GPGPU_PREVIEW;
@@ -569,6 +570,12 @@ struct ActivePreview {
     resize_retry_width: u32,
     resize_retry_height: u32,
     resize_retry_at: Instant,
+    /// The broker keeps this exact front live until `frame` has completed and
+    /// is atomically committed as its replacement.
+    pending_resize_previous_frame: Option<FrameHandle>,
+    pending_resize_logical_extent: Option<(u32, u32)>,
+    pending_resize_epoch: Option<u64>,
+    committed_logical_extent: (u32, u32),
     started: Instant,
     next_render: Instant,
     static_needs_publish: bool,
@@ -1501,6 +1508,10 @@ fn initialize_compute_preview_set(
             resize_retry_width: 0,
             resize_retry_height: 0,
             resize_retry_at: now,
+            pending_resize_previous_frame: None,
+            pending_resize_logical_extent: None,
+            pending_resize_epoch: None,
+            committed_logical_extent: (PREVIEW_WIDTH, PREVIEW_HEIGHT),
             started: now,
             next_render: now,
             static_needs_publish: true,
@@ -1684,6 +1695,10 @@ fn initialize_cpp_font_rush2_set(
             resize_retry_width: 0,
             resize_retry_height: 0,
             resize_retry_at: now,
+            pending_resize_previous_frame: None,
+            pending_resize_logical_extent: None,
+            pending_resize_epoch: None,
+            committed_logical_extent: (scanout_width, scanout_height),
             started: now,
             next_render: now,
             static_needs_publish: false,
@@ -2041,6 +2056,10 @@ fn create_cpp_font_rush_preview(
         resize_retry_width: 0,
         resize_retry_height: 0,
         resize_retry_at: started,
+        pending_resize_previous_frame: None,
+        pending_resize_logical_extent: None,
+        pending_resize_epoch: None,
+        committed_logical_extent: (topology.width, topology.height),
         started,
         // Each newly added plane is an independent consumer whose cadence
         // begins when that consumer joins, not at Slot0's older start time.
@@ -2594,7 +2613,7 @@ fn initialize_preview(desired: DesiredPreview) -> Result<ActivePreview, &'static
             opacity: u8::MAX,
             visible: true,
         },
-        // Every C++ demo consumes UI4's maximize/restore extent notification
+        // Every C++ demo consumes UI4's dock/restore extent notification
         // and replaces its double-buffer frame. Other probes retain their
         // proven fixed-size placement behavior.
         interaction: if desired.config.preset.is_resizable_cpp() {
@@ -2624,6 +2643,10 @@ fn initialize_preview(desired: DesiredPreview) -> Result<ActivePreview, &'static
         resize_retry_width: 0,
         resize_retry_height: 0,
         resize_retry_at: now,
+        pending_resize_previous_frame: None,
+        pending_resize_logical_extent: None,
+        pending_resize_epoch: None,
+        committed_logical_extent: (width, height),
         started: now,
         next_render: now,
         static_needs_publish: true,
@@ -2710,6 +2733,10 @@ fn initialize_cpp_font_preview(desired: DesiredPreview) -> Result<ActivePreview,
         resize_retry_width: 0,
         resize_retry_height: 0,
         resize_retry_at: now,
+        pending_resize_previous_frame: None,
+        pending_resize_logical_extent: None,
+        pending_resize_epoch: None,
+        committed_logical_extent: (width, height),
         started: now,
         next_render: now,
         static_needs_publish: true,
@@ -2822,6 +2849,16 @@ fn initialize_static30_preview(desired: DesiredPreview) -> Result<ActivePreview,
         resize_retry_width: 0,
         resize_retry_height: 0,
         resize_retry_at: now,
+        pending_resize_previous_frame: None,
+        pending_resize_logical_extent: None,
+        pending_resize_epoch: None,
+        committed_logical_extent: (
+            cell_width.saturating_sub(24).min(STATIC30_MAX_WIDTH).max(1),
+            cell_height
+                .saturating_sub(24)
+                .min(STATIC30_MAX_HEIGHT)
+                .max(1),
+        ),
         started: now,
         next_render: now,
         static_needs_publish: true,
@@ -2961,8 +2998,8 @@ async fn render_preview_frame(preview: &mut ActivePreview) -> Result<(), &'stati
         return render_static30_frames(preview).await;
     }
     preview.metrics.attempted = preview.metrics.attempted.saturating_add(1);
-    let publish_this_frame =
-        (preview.metrics.attempted - 1) % u64::from(preview.config.publish_every) == 0;
+    let publish_this_frame = preview.pending_resize_previous_frame.is_some()
+        || (preview.metrics.attempted - 1) % u64::from(preview.config.publish_every) == 0;
     let lease = match acquire_frame_buffer(preview.frame) {
         Ok(lease) => lease,
         Err(FramePoolError::Busy) => {
@@ -3059,9 +3096,13 @@ async fn render_preview_frame(preview: &mut ActivePreview) -> Result<(), &'stati
             return Err("frame-publish-failed");
         }
     };
-    if publish_window_frame(PREVIEW_OWNER, preview.window, DamageRect::FULL).is_err() {
-        preview.metrics.failed = preview.metrics.failed.saturating_add(1);
-        return Err("window-publish-failed");
+    match publish_preview_window_frame(preview, DamageRect::FULL) {
+        Ok(true) => {}
+        Ok(false) => return Ok(()),
+        Err(_) => {
+            preview.metrics.failed = preview.metrics.failed.saturating_add(1);
+            return Err("window-publish-failed");
+        }
     }
     preview.metrics.published = preview.metrics.published.saturating_add(1);
     if preview.policy.frame_limit != 0 && preview.metrics.published == preview.policy.frame_limit {
@@ -3102,6 +3143,96 @@ async fn render_preview_frame(preview: &mut ActivePreview) -> Result<(), &'stati
         );
     }
     Ok(())
+}
+
+fn publish_preview_window_frame(
+    preview: &mut ActivePreview,
+    damage: DamageRect,
+) -> Result<bool, &'static str> {
+    let Some(previous) = preview.pending_resize_previous_frame else {
+        return publish_window_frame(PREVIEW_OWNER, preview.window, damage)
+            .map(|_| true)
+            .map_err(|_| "window-publish-failed");
+    };
+    let (logical_width, logical_height) = preview
+        .pending_resize_logical_extent
+        .ok_or("resize-logical-extent-missing")?;
+    let resize_epoch = preview
+        .pending_resize_epoch
+        .ok_or("resize-epoch-missing")?;
+    let current_placement = window_placement(PREVIEW_OWNER, preview.window)
+        .map_err(|_| "resize-placement-unavailable")?;
+    let staged_placement = WindowPlacement {
+        width: logical_width,
+        height: logical_height,
+        ..current_placement
+    };
+    match commit_window_frame_replacement(
+        PREVIEW_OWNER,
+        preview.window,
+        preview.frame,
+        staged_placement,
+        resize_epoch,
+        damage,
+    ) {
+        Ok(_) => {}
+        Err(WindowBrokerError::StaleResize) => {
+            if (current_placement.width, current_placement.height)
+                == preview.committed_logical_extent
+            {
+                let superseded = preview.frame;
+                preview.frame = previous;
+                (preview.width, preview.height) = preview_backing_extent(
+                    preview.config.preset,
+                    preview.committed_logical_extent.0,
+                    preview.committed_logical_extent.1,
+                );
+                preview.pending_resize_previous_frame = None;
+                preview.pending_resize_logical_extent = None;
+                preview.pending_resize_epoch = None;
+                retire_frame_when_released(superseded);
+                crate::log_info!(
+                    target: "ui4";
+                    "ui4 gpgpu-preview resize front superseded request={} window={} frame={} live_extent={}x{} action=reuse-committed-front\n",
+                    preview.request_serial,
+                    preview.window.raw(),
+                    superseded.raw(),
+                    current_placement.width,
+                    current_placement.height,
+                );
+                return Ok(false);
+            }
+            crate::log_info!(
+                target: "ui4";
+                "ui4 gpgpu-preview resize front superseded request={} window={} frame={} staged_extent={}x{} current_extent={}x{} action=retain-old-front-and-restage\n",
+                preview.request_serial,
+                preview.window.raw(),
+                preview.frame.raw(),
+                staged_placement.width,
+                staged_placement.height,
+                current_placement.width,
+                current_placement.height,
+            );
+            return Ok(false);
+        }
+        Err(_) => return Err("resize-window-commit-failed"),
+    }
+    preview.committed_logical_extent = (staged_placement.width, staged_placement.height);
+    preview.pending_resize_previous_frame = None;
+    preview.pending_resize_logical_extent = None;
+    preview.pending_resize_epoch = None;
+    retire_frame_when_released(previous);
+    crate::log_info!(
+        target: "ui4";
+        "ui4 gpgpu-preview resize front committed request={} window={} old_frame={} frame={} logical_extent={}x{} action=atomic-published-replacement old_front=held-1:1-until-commit\n",
+        preview.request_serial,
+        preview.window.raw(),
+        previous.raw(),
+        preview.frame.raw(),
+        staged_placement.width,
+        staged_placement.height,
+    );
+    Ok(true)
 }
 
 async fn render_cpp_font_frame(preview: &mut ActivePreview) -> Result<(), &'static str> {
@@ -6687,6 +6818,11 @@ const fn should_log_preview_checkpoint(sequence: u64) -> bool {
 }
 
 fn preview_needs_render(preview: &ActivePreview) -> bool {
+    if preview.pending_resize_previous_frame.is_some() {
+        // A completed replacement must be allowed to reach the atomic broker
+        // commit even after a demo's ordinary frame limit has been reached.
+        return true;
+    }
     if preview.policy.frame_limit != 0 && preview.metrics.published >= preview.policy.frame_limit {
         return false;
     }
@@ -6772,6 +6908,8 @@ fn drain_preview_input(active: &mut [ActivePreview], retired_frames: &mut Vec<Fr
                     event.width,
                     event.height,
                     retired_frames,
+                    true,
+                    event.resize_epoch,
                     "input-event",
                 );
             }
@@ -6919,23 +7057,28 @@ fn restore_interactive_cpp_focus(active: &mut [ActivePreview]) {
     }
 }
 
-/// Resize notifications are intentionally only a wakeup hint. The broker's
-/// geometry is authoritative, so a dropped event or a transient allocation
-/// failure cannot leave a maximized C++ preview permanently backed by its
-/// original 640x400 frame or repeatedly request an already-live scaled backing.
+/// Resize notifications wake the fast path, while the broker's logical extent
+/// remains authoritative for retries and superseded targets. The committed
+/// logical extent is tracked separately because Particle Craft can use the
+/// same backing allocation for two different presentation extents.
 fn reconcile_preview_extents(active: &mut [ActivePreview], retired_frames: &mut Vec<FrameHandle>) {
     for preview in active {
         if !preview.config.preset.is_resizable_cpp() {
             continue;
         }
-        let Ok(placement) = window_placement(PREVIEW_OWNER, preview.window) else {
+        let Ok((placement, resize_epoch)) = window_resize_state(PREVIEW_OWNER, preview.window)
+        else {
             continue;
         };
-        let (backing_width, backing_height) =
-            preview_backing_extent(preview.config.preset, placement.width, placement.height);
+        let logical_extent = (placement.width, placement.height);
+        let retry_targets_extent =
+            (preview.resize_retry_width, preview.resize_retry_height) == logical_extent;
         if placement.width == 0
             || placement.height == 0
-            || (backing_width == preview.width && backing_height == preview.height)
+            || preview.pending_resize_logical_extent == Some(logical_extent)
+            || (preview.pending_resize_logical_extent.is_none()
+                && preview.committed_logical_extent == logical_extent
+                && !retry_targets_extent)
         {
             continue;
         }
@@ -6944,6 +7087,8 @@ fn reconcile_preview_extents(active: &mut [ActivePreview], retired_frames: &mut 
             placement.width,
             placement.height,
             retired_frames,
+            false,
+            resize_epoch,
             "broker-reconcile",
         );
     }
@@ -6954,11 +7099,28 @@ fn try_resize_preview(
     width: u32,
     height: u32,
     retired_frames: &mut Vec<FrameHandle>,
+    broker_resize_event: bool,
+    resize_epoch: u64,
     source: &'static str,
 ) {
-    let (backing_width, backing_height) =
-        preview_backing_extent(preview.config.preset, width, height);
-    if backing_width == preview.width && backing_height == preview.height {
+    let logical_extent = (width, height);
+    if preview.pending_resize_previous_frame.is_some()
+        && preview.committed_logical_extent == logical_extent
+    {
+        discard_pending_preview_resize(preview, retired_frames);
+        preview.resize_retry_width = 0;
+        preview.resize_retry_height = 0;
+        preview.resize_retry_at = Instant::now();
+        return;
+    }
+    let retry_targets_extent =
+        (preview.resize_retry_width, preview.resize_retry_height) == logical_extent;
+    if preview.pending_resize_logical_extent == Some(logical_extent)
+        || (preview.pending_resize_logical_extent.is_none()
+            && preview.committed_logical_extent == logical_extent)
+            && !broker_resize_event
+            && !retry_targets_extent
+    {
         return;
     }
     let now = Instant::now();
@@ -6968,7 +7130,7 @@ fn try_resize_preview(
     {
         return;
     }
-    match resize_preview(preview, width, height, retired_frames) {
+    match resize_preview(preview, width, height, resize_epoch, retired_frames) {
         Ok(()) => {
             preview.resize_retry_width = 0;
             preview.resize_retry_height = 0;
@@ -6999,29 +7161,29 @@ fn resize_preview(
     preview: &mut ActivePreview,
     logical_width: u32,
     logical_height: u32,
+    resize_epoch: u64,
     retired_frames: &mut Vec<FrameHandle>,
 ) -> Result<(), &'static str> {
     let output = OutputId::from_slot(0).ok_or("output-d01-unavailable")?;
+    let previous = discard_pending_preview_resize(preview, retired_frames).unwrap_or(preview.frame);
     let (backing_width, backing_height) =
         preview_backing_extent(preview.config.preset, logical_width, logical_height);
     let replacement = create_preview_frame(output, backing_width, backing_height)
         .map_err(preview_frame_create_error_label)?;
-    if replace_window_frame(PREVIEW_OWNER, preview.window, replacement).is_err() {
-        let _ = destroy_frame(replacement);
-        return Err("resize-window-replace-failed");
-    }
-    let previous = preview.frame;
+    preview.pending_resize_previous_frame = Some(previous);
+    preview.pending_resize_logical_extent = Some((logical_width, logical_height));
+    preview.pending_resize_epoch = Some(resize_epoch);
     preview.frame = replacement;
     preview.width = backing_width;
     preview.height = backing_height;
     preview.next_render = Instant::now();
     preview.static_needs_publish = true;
-    retired_frames.push(previous);
     crate::log_info!(
         target: "ui4";
-        "ui4 gpgpu-preview resize applied request={} window={} frame={} logical_extent={}x{} backing_extent={}x{} presentation={} plane_mutation=scaler-only\n",
+        "ui4 gpgpu-preview resize staged request={} window={} old_frame={} frame={} logical_extent={}x{} backing_extent={}x{} presentation={} broker_front=held-1:1-until-atomic-commit\n",
         preview.request_serial,
         preview.window.raw(),
+        previous.raw(),
         replacement.raw(),
         logical_width,
         logical_height,
@@ -7034,6 +7196,30 @@ fn resize_preview(
         },
     );
     Ok(())
+}
+
+fn discard_pending_preview_resize(
+    preview: &mut ActivePreview,
+    retired_frames: &mut Vec<FrameHandle>,
+) -> Option<FrameHandle> {
+    let previous = preview.pending_resize_previous_frame.take()?;
+    // Release the obsolete staged allocation before asking the bounded frame
+    // pool for its successor. The broker still pins `previous` as its live
+    // front, so reverting local producer state is safe if allocation retries.
+    let superseded = preview.frame;
+    preview.frame = previous;
+    (preview.width, preview.height) = preview_backing_extent(
+        preview.config.preset,
+        preview.committed_logical_extent.0,
+        preview.committed_logical_extent.1,
+    );
+    preview.pending_resize_logical_extent = None;
+    preview.pending_resize_epoch = None;
+    if !retired_frames.contains(&superseded) {
+        retired_frames.push(superseded);
+    }
+    retire_frames(retired_frames);
+    Some(previous)
 }
 
 fn preview_backing_extent(
@@ -7151,6 +7337,25 @@ fn stop_active_previews(
             preview.metrics.elapsed_ms,
             reason,
         );
+        let pending_resize_previous = preview.pending_resize_previous_frame.take();
+        if let Some(previous) = pending_resize_previous {
+            // `preview.frame` was never attached to the broker; the broker
+            // still owns `previous` and may already have transferred its
+            // lifetime to the close animation above.
+            if !retired_frames.contains(&preview.frame) {
+                retired_frames.push(preview.frame);
+            }
+            if !frame_lifecycle_transferred && !retired_frames.contains(&previous) {
+                retired_frames.push(previous);
+            }
+            if !frame_lifecycle_transferred {
+                for surface in &preview.extra_surfaces {
+                    if !retired_frames.contains(&surface.frame) {
+                        retired_frames.push(surface.frame);
+                    }
+                }
+            }
+        }
         if let Some(state) = preview.font_rush2.take() {
             CPP_FONT_RUSH2_RETIRED
                 .lock()
@@ -7163,7 +7368,7 @@ fn stop_active_previews(
                 frame: preview.frame,
                 state,
             });
-        } else if !frame_lifecycle_transferred {
+        } else if pending_resize_previous.is_none() && !frame_lifecycle_transferred {
             if !retired_frames.contains(&preview.frame) {
                 retired_frames.push(preview.frame);
             }

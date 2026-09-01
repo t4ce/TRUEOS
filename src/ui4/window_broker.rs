@@ -450,6 +450,7 @@ pub(crate) enum WindowBrokerError {
     EmptyDamage,
     InvalidPlane,
     InteractionDenied,
+    StaleResize,
     Capacity,
     Closed,
 }
@@ -479,6 +480,17 @@ struct WindowRecord {
     damage: Option<DamageRegion>,
     restore_placement: Option<WindowPlacement>,
     dock_target: Option<WindowDockTarget>,
+    /// Final logical extent which the producer still needs to acknowledge
+    /// with an atomically published replacement. This is deliberately
+    /// independent from `replacement_presentation`: owner position/opacity
+    /// updates may move that 1:1 hold without weakening stale-frame rejection.
+    pending_resize_extent: Option<(u32, u32)>,
+    /// Logical extent represented by the broker's currently attached frame.
+    committed_resize_extent: (u32, u32),
+    /// Changes whenever broker-owned logical extent changes, allowing a late
+    /// producer replacement to be rejected even after a rapid restore has
+    /// returned to the already-committed extent and cleared the visual hold.
+    resize_epoch: u64,
     replacement_presentation: Option<WindowPlacement>,
     open_transition: Option<WindowOpenTransition>,
     close_transition: Option<WindowCloseTransition>,
@@ -988,6 +1000,12 @@ impl WindowBroker {
             WindowState::Closed => return Err(WindowBrokerError::Closed),
             WindowState::Pending | WindowState::Ready => {}
         }
+        if current.pending_resize_extent.is_some() {
+            // A legacy Pending->publish swap cannot prove that its allocation
+            // represents the broker's final logical target and would also
+            // drop the exact 1:1 presentation hold between transactions.
+            return Err(WindowBrokerError::StaleResize);
+        }
         // The plane follows this window's lease, not its frame plan, so a
         // replacement never migrates the window between planes.
         let window = &mut self.windows[slot];
@@ -1084,6 +1102,7 @@ impl WindowBroker {
                     )
                 };
                 let presentation = (*window).presentation_placement();
+                window.pending_resize_extent = None;
                 window.replacement_presentation = None;
                 window.open_transition = None;
                 let transition = if animate && window.state == WindowState::Ready {
@@ -1394,6 +1413,9 @@ impl WindowRecord {
             damage: None,
             restore_placement: None,
             dock_target: None,
+            pending_resize_extent: None,
+            committed_resize_extent: (request.placement.width, request.placement.height),
+            resize_epoch: 1,
             replacement_presentation: None,
             open_transition: None,
             close_transition: None,
@@ -1716,6 +1738,7 @@ pub(crate) fn commit_window_frame_replacement(
     id: WindowId,
     frame: FrameHandle,
     placement: WindowPlacement,
+    resize_epoch: u64,
     damage: DamageRect,
 ) -> Result<u64, WindowBrokerError> {
     if !placement.valid() {
@@ -1745,12 +1768,36 @@ pub(crate) fn commit_window_frame_replacement(
         WindowState::Pending | WindowState::Ready => {}
     }
     let previous_placement = current.placement;
+    if current.resize_epoch != resize_epoch {
+        return Err(WindowBrokerError::StaleResize);
+    }
+    // A broker-requested dock/restore may have changed again while the producer
+    // rendered this replacement. Never install a stale-sized frame into the
+    // newer logical target: that would recreate the intermediate scaler path
+    // this transaction is meant to avoid. Position-only movement is safe; the
+    // current broker position remains authoritative for the matching extent.
+    let broker_resize_pending = current.pending_resize_extent;
+    if let Some(expected_extent) = broker_resize_pending
+        && (expected_extent != (placement.width, placement.height)
+            || expected_extent != (previous_placement.width, previous_placement.height))
+    {
+        return Err(WindowBrokerError::StaleResize);
+    }
+    // Position, stacking, visibility, and opacity may legitimately change
+    // while the producer renders. Only its staged logical extent is applied.
+    let placement = WindowPlacement {
+        width: placement.width,
+        height: placement.height,
+        ..previous_placement
+    };
     let stack_changed = current.state == WindowState::Pending || previous_placement != placement;
     // The plane follows this window's lease, not its frame plan.
     let window = &mut broker.windows[slot];
     window.frame = frame;
     window.buffering = plan.buffering;
     window.placement = placement;
+    window.pending_resize_extent = None;
+    window.committed_resize_extent = (placement.width, placement.height);
     window.replacement_presentation = None;
     window.open_transition = None;
     window.state = WindowState::Ready;
@@ -1769,6 +1816,7 @@ pub(crate) fn commit_window_frame_replacement(
         super::input_broker::enqueue_window_resize(
             owner,
             id,
+            resize_epoch,
             previous_placement.width,
             previous_placement.height,
             placement.width,
@@ -1779,15 +1827,84 @@ pub(crate) fn commit_window_frame_replacement(
     Ok(publish_serial)
 }
 
+/// Atomically swap an already-published frame without acknowledging or
+/// weakening a broker-requested resize. Immutable producers use this to keep
+/// refreshing their old-sized 1:1 front while a dock target is deferred.
+pub(crate) fn commit_window_frame_refresh(
+    owner: WindowOwner,
+    id: WindowId,
+    frame: FrameHandle,
+    damage: DamageRect,
+) -> Result<u64, WindowBrokerError> {
+    if !damage.valid() {
+        return Err(WindowBrokerError::EmptyDamage);
+    }
+    let plan = super::frame_snapshot(frame)
+        .map_err(|_| WindowBrokerError::InvalidHandle)?
+        .plan;
+    let started_ms = trueos_time::Instant::now().as_millis();
+    let mut broker = WINDOW_BROKER.lock();
+    let (slot, generation) = unpack_handle(id.0)?;
+    let current = broker
+        .windows
+        .get(slot)
+        .ok_or(WindowBrokerError::InvalidHandle)?;
+    if current.generation != generation {
+        return Err(WindowBrokerError::InvalidHandle);
+    }
+    if current.owner != owner {
+        return Err(WindowBrokerError::OwnerMismatch);
+    }
+    match current.state {
+        WindowState::Closing => return Err(WindowBrokerError::SessionClosed),
+        WindowState::Closed => return Err(WindowBrokerError::Closed),
+        WindowState::Pending | WindowState::Ready => {}
+    }
+    let became_ready = current.state == WindowState::Pending;
+    let window = &mut broker.windows[slot];
+    window.frame = frame;
+    window.buffering = plan.buffering;
+    if became_ready
+        && window.pending_resize_extent.is_none()
+        && !window.first_presentation_emitted
+        && window.replacement_presentation.is_none()
+    {
+        window.open_transition = Some(open_transition(window.placement, window.plane, started_ms));
+    }
+    window.state = WindowState::Ready;
+    window.publish_serial = next_serial(window.publish_serial);
+    window.revision = next_serial(window.revision);
+    let pending = window.damage.get_or_insert(DamageRegion::EMPTY);
+    pending.add(damage);
+    let publish_serial = window.publish_serial;
+    broker.mark_composition_changed();
+    drop(broker);
+    if became_ready {
+        super::cursor_frame_inout::selection_strip_stack_changed();
+    }
+    super::cursor_frame_inout::frame_visual_changed(owner, id);
+    Ok(publish_serial)
+}
+
 /// Read the broker's live geometry for a producer which is about to replace
-/// its backing frame. This preserves maximize/restore position changes that
+/// its backing frame. This preserves dock/restore position changes that
 /// are newer than a producer's own cached scene placement.
 pub(crate) fn window_placement(
     owner: WindowOwner,
     id: WindowId,
 ) -> Result<WindowPlacement, WindowBrokerError> {
+    window_resize_state(owner, id).map(|(placement, _)| placement)
+}
+
+/// Atomically snapshot the current logical target and its resize generation
+/// before a producer stages a replacement frame.
+pub(crate) fn window_resize_state(
+    owner: WindowOwner,
+    id: WindowId,
+) -> Result<(WindowPlacement, u64), WindowBrokerError> {
     let mut broker = WINDOW_BROKER.lock();
-    Ok(broker.checked_window_mut(owner, id)?.placement)
+    let window = broker.checked_window_mut(owner, id)?;
+    Ok((window.placement, window.resize_epoch))
 }
 
 pub(crate) fn set_window_placement(
@@ -1801,15 +1918,54 @@ pub(crate) fn set_window_placement(
     let mut broker = WINDOW_BROKER.lock();
     let window = broker.checked_window_mut(owner, id)?;
     let previous = window.placement;
+    // A dock request during the opening reveal must hold the real producer
+    // geometry, not freeze the transient shrunken/faded projection.
+    let previous_presentation = window.replacement_presentation.unwrap_or(previous);
     let notify_resize = producer_resize_required(window.interaction, previous, placement);
+    let extent_changed =
+        (previous.width, previous.height) != (placement.width, placement.height);
+    let resize_pending = window.interaction.resize_on_maximize
+        && window.committed_resize_extent != (placement.width, placement.height);
     let changed = window.placement != placement;
     if changed {
+        if extent_changed {
+            window.resize_epoch = next_serial(window.resize_epoch);
+        }
         window.placement = placement;
-        window.dock_target = None;
-        window.restore_placement = None;
-        window.replacement_presentation = None;
+        if previous.x != placement.x
+            || previous.y != placement.y
+            || previous.width != placement.width
+            || previous.height != placement.height
+        {
+            window.dock_target = None;
+            window.restore_placement = None;
+        }
+        if resize_pending {
+            let mut presentation = previous_presentation;
+            presentation.x = i64::from(presentation.x)
+                .saturating_add(i64::from(placement.x) - i64::from(previous.x))
+                .clamp(i64::from(i32::MIN), i64::from(i32::MAX))
+                as i32;
+            presentation.y = i64::from(presentation.y)
+                .saturating_add(i64::from(placement.y) - i64::from(previous.y))
+                .clamp(i64::from(i32::MIN), i64::from(i32::MAX))
+                as i32;
+            presentation.z = placement.z;
+            presentation.opacity = placement.opacity;
+            presentation.visible = placement.visible;
+            window.pending_resize_extent = Some((placement.width, placement.height));
+            window.replacement_presentation = Some(presentation);
+            window.open_transition = None;
+        } else {
+            window.pending_resize_extent = None;
+            window.replacement_presentation = None;
+            if !window.interaction.resize_on_maximize {
+                window.committed_resize_extent = (placement.width, placement.height);
+            }
+        }
         window.revision = next_serial(window.revision);
     }
+    let resize_epoch = window.resize_epoch;
     if changed {
         broker.mark_composition_changed();
     }
@@ -1818,6 +1974,7 @@ pub(crate) fn set_window_placement(
         super::input_broker::enqueue_window_resize(
             owner,
             id,
+            resize_epoch,
             previous.width,
             previous.height,
             placement.width,
@@ -1954,7 +2111,19 @@ pub(crate) fn move_window(
     }
     let changed = window.placement != placement;
     if changed {
+        let previous = window.placement;
         window.placement = placement;
+        if let Some(mut presentation) = window.replacement_presentation {
+            presentation.x = i64::from(presentation.x)
+                .saturating_add(i64::from(placement.x) - i64::from(previous.x))
+                .clamp(i64::from(i32::MIN), i64::from(i32::MAX))
+                as i32;
+            presentation.y = i64::from(presentation.y)
+                .saturating_add(i64::from(placement.y) - i64::from(previous.y))
+                .clamp(i64::from(i32::MIN), i64::from(i32::MAX))
+                as i32;
+            window.replacement_presentation = Some(presentation);
+        }
         window.revision = next_serial(window.revision);
         broker.mark_composition_changed();
     }
@@ -2036,6 +2205,7 @@ struct WindowDockChange {
     transition: WindowPlacementTransition,
     changed: bool,
     notify_resize: bool,
+    resize_epoch: u64,
 }
 
 fn change_window_dock_record(
@@ -2050,6 +2220,9 @@ fn change_window_dock_record(
         return Err(WindowBrokerError::InteractionDenied);
     }
     let previous = window.placement;
+    // Exclude the opening reveal from a resize hold. Maximizing during open
+    // completes that reveal and keeps the actual producer-sized frame 1:1.
+    let previous_presentation = window.replacement_presentation.unwrap_or(previous);
     let previous_target = window.dock_target;
     let placement = if let Some(target) = target {
         if window.restore_placement.is_none() {
@@ -2075,12 +2248,32 @@ fn change_window_dock_record(
     };
     let notify_resize = window.interaction.resize_on_maximize
         && producer_resize_required(window.interaction, previous, placement);
+    let extent_changed =
+        (previous.width, previous.height) != (placement.width, placement.height);
+    let resize_pending = window.interaction.resize_on_maximize
+        && window.committed_resize_extent != (placement.width, placement.height);
     let changed = previous != placement || previous_target != window.dock_target;
     if changed {
+        if extent_changed {
+            window.resize_epoch = next_serial(window.resize_epoch);
+        }
         window.placement = placement;
         // Keep the old producer-sized frame at 1:1 until the replacement is
         // published. UI4 never stretches an intermediate maximize/dock frame.
-        window.replacement_presentation = notify_resize.then_some(previous);
+        window.pending_resize_extent =
+            resize_pending.then_some((placement.width, placement.height));
+        window.replacement_presentation = resize_pending.then(|| {
+            restore_center.map_or(previous_presentation, |(cursor_x, cursor_y)| {
+                center_restored_window_on_cursor(
+                    previous_presentation,
+                    cursor_x,
+                    cursor_y,
+                    output_width,
+                    output_height,
+                )
+            })
+        });
+        window.open_transition = None;
         window.damage = Some(DamageRegion::FULL);
         window.revision = next_serial(window.revision);
     }
@@ -2092,6 +2285,7 @@ fn change_window_dock_record(
         },
         changed,
         notify_resize,
+        resize_epoch: window.resize_epoch,
     })
 }
 
@@ -2127,6 +2321,7 @@ fn change_window_dock(
         super::input_broker::enqueue_window_resize(
             owner,
             id,
+            change.resize_epoch,
             change.transition.previous.width,
             change.transition.previous.height,
             change.transition.placement.width,
@@ -2197,11 +2392,13 @@ pub(crate) fn publish_window_frame(
     let window = broker.checked_window_mut(owner, id)?;
     let became_ready = window.state == WindowState::Pending;
     if became_ready {
-        if !window.first_presentation_emitted && window.replacement_presentation.is_none() {
-            window.open_transition =
-                Some(open_transition(window.placement, window.plane, started_ms));
+        if window.pending_resize_extent.is_none() {
+            if !window.first_presentation_emitted && window.replacement_presentation.is_none() {
+                window.open_transition =
+                    Some(open_transition(window.placement, window.plane, started_ms));
+            }
+            window.replacement_presentation = None;
         }
-        window.replacement_presentation = None;
     }
     window.state = WindowState::Ready;
     window.publish_serial = next_serial(window.publish_serial);
@@ -2262,11 +2459,13 @@ pub(crate) fn publish_window_frames(
         let (slot, _) = unpack_handle(id.0)?;
         let window = &mut broker.windows[slot];
         if window.state == WindowState::Pending {
-            if !window.first_presentation_emitted && window.replacement_presentation.is_none() {
-                window.open_transition =
-                    Some(open_transition(window.placement, window.plane, started_ms));
+            if window.pending_resize_extent.is_none() {
+                if !window.first_presentation_emitted && window.replacement_presentation.is_none() {
+                    window.open_transition =
+                        Some(open_transition(window.placement, window.plane, started_ms));
+                }
+                window.replacement_presentation = None;
             }
-            window.replacement_presentation = None;
         }
         window.state = WindowState::Ready;
         window.publish_serial = next_serial(window.publish_serial);
@@ -2643,11 +2842,44 @@ fn clamp_transition_to_output(
     let Some((output_width, output_height)) = output_extent else {
         return placement;
     };
-    placement.width = placement.width.min(output_width).max(1);
-    placement.height = placement.height.min(output_height).max(1);
+    let center_x_twice = i64::from(placement.x)
+        .saturating_mul(2)
+        .saturating_add(i64::from(placement.width));
+    let center_y_twice = i64::from(placement.y)
+        .saturating_mul(2)
+        .saturating_add(i64::from(placement.height));
+    // If one puff dimension exceeds scanout, reduce both by the same ratio.
+    // Independent caps turn a half-height/full-height dock into a visibly
+    // anisotropic stretch, which is the opposite of a uniform puff.
+    if placement.width > output_width {
+        placement.height = (u64::from(placement.height).saturating_mul(u64::from(output_width))
+            / u64::from(placement.width.max(1)))
+        .max(1)
+        .min(u64::from(u32::MAX)) as u32;
+        placement.width = output_width.max(1);
+    }
+    if placement.height > output_height {
+        placement.width = (u64::from(placement.width).saturating_mul(u64::from(output_height))
+            / u64::from(placement.height.max(1)))
+        .max(1)
+        .min(u64::from(u32::MAX)) as u32;
+        placement.height = output_height.max(1);
+    }
+    // The pre-fit puff is centered on the original window. Recenter after a
+    // uniform fit before clipping to scanout, otherwise right/bottom docks
+    // visibly slide toward the middle during their fade.
+    placement.x = center_x_twice
+        .saturating_sub(i64::from(placement.width))
+        .checked_div(2)
+        .unwrap_or(0)
+        .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
+    placement.y = center_y_twice
+        .saturating_sub(i64::from(placement.height))
+        .checked_div(2)
+        .unwrap_or(0)
+        .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
     placement.x = i64::from(placement.x)
-        .clamp(0, i64::from(output_width.saturating_sub(placement.width)))
-        as i32;
+        .clamp(0, i64::from(output_width.saturating_sub(placement.width))) as i32;
     placement.y = i64::from(placement.y)
         .clamp(0, i64::from(output_height.saturating_sub(placement.height)))
         as i32;
@@ -2971,7 +3203,7 @@ mod tests {
     }
 
     #[test]
-    fn restoring_a_docked_application_also_holds_its_old_frame_at_one_to_one() {
+    fn rapid_dock_restore_keeps_the_actual_old_frame_at_one_to_one() {
         let owner = WindowOwner::GPGPU_PREVIEW;
         let mut broker = WindowBroker::new();
         let session = broker.begin_additional_session(owner).unwrap();
@@ -2981,6 +3213,13 @@ mod tests {
         let (slot, _) = unpack_handle(id.raw()).unwrap();
         let saved = broker.windows[slot].placement;
         broker.windows[slot].interaction = WindowInteraction::APPLICATION;
+        broker.windows[slot].open_transition = Some(WindowOpenTransition {
+            initial: saved,
+            current: open_transition_placement(saved, 75, 300, 900),
+            started_ms: 0,
+            duration_ms: 300,
+            shrink_per_mille: 900,
+        });
 
         let maximized = change_window_dock_record(
             &mut broker.windows[slot],
@@ -2993,27 +3232,25 @@ mod tests {
         .unwrap();
         assert_eq!(maximized.transition.dock_target, Some(WindowDockTarget::Maximize));
         assert_eq!(broker.windows[slot].placement.width, 2_560);
-        let maximized_placement = broker.windows[slot].placement;
-        broker.windows[slot].replacement_presentation = None;
-
-        let restored = change_window_dock_record(
-            &mut broker.windows[slot],
-            None,
-            2_560,
-            1_440,
-            None,
-            None,
-        )
-        .unwrap();
+        assert_eq!(broker.windows[slot].replacement_presentation, Some(saved));
+        assert!(broker.windows[slot].open_transition.is_none());
+        let restored =
+            change_window_dock_record(&mut broker.windows[slot], None, 2_560, 1_440, None, None)
+                .unwrap();
         assert_eq!(restored.transition.dock_target, None);
         assert!(restored.notify_resize);
         assert_eq!(broker.windows[slot].placement, saved);
+        assert_eq!(
+            broker.windows[slot].pending_resize_extent,
+            None,
+            "returning to the committed extent reuses the correct old frame immediately"
+        );
         assert_eq!(
             broker.windows[slot]
                 .snapshot(slot)
                 .unwrap()
                 .presentation_placement,
-            maximized_placement
+            saved
         );
     }
 
@@ -3082,6 +3319,54 @@ mod tests {
         );
         assert_eq!((clamped.x, clamped.y, clamped.width, clamped.height), (0, 0, 1_920, 1_080));
         assert_eq!(clamped.opacity, 0);
+
+        let left_half = WindowPlacement {
+            x: 0,
+            y: 0,
+            width: 960,
+            height: 1_080,
+            ..initial
+        };
+        let clamped_half = clamp_transition_to_output(
+            close_transition_placement(left_half, 300, 300, 50),
+            Some((1_920, 1_080)),
+        );
+        assert_eq!(
+            (clamped_half.x, clamped_half.y, clamped_half.width, clamped_half.height,),
+            (0, 0, 960, 1_080),
+            "output fitting preserves aspect ratio instead of stretching one axis"
+        );
+
+        let right_half = WindowPlacement {
+            x: 960,
+            ..left_half
+        };
+        let clamped_right = clamp_transition_to_output(
+            close_transition_placement(right_half, 300, 300, 50),
+            Some((1_920, 1_080)),
+        );
+        assert_eq!(
+            (clamped_right.x, clamped_right.y, clamped_right.width, clamped_right.height,),
+            (960, 0, 960, 1_080),
+            "uniform fitting keeps a right dock centered instead of sliding it inward"
+        );
+
+        let bottom_half = WindowPlacement {
+            x: 0,
+            y: 540,
+            width: 1_920,
+            height: 540,
+            ..initial
+        };
+        let clamped_bottom = clamp_transition_to_output(
+            close_transition_placement(bottom_half, 300, 300, 50),
+            Some((1_920, 1_080)),
+        );
+        assert_eq!(
+            (clamped_bottom.x, clamped_bottom.y, clamped_bottom.width, clamped_bottom.height,),
+            (0, 540, 1_920, 540),
+            "uniform fitting keeps a bottom dock centered instead of sliding it upward"
+        );
 
         let opening = open_transition_placement(initial, 0, 300, 900);
         assert_eq!((opening.x, opening.y, opening.width, opening.height), (460, 350, 80, 60));

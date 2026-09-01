@@ -6,7 +6,7 @@
 
 The recorded runs show recognizable moving video, complete GuC conversion
 submission/retirement, normal SURFLIVE ownership, and the final 200 ms
-shrink/fade close. This validates the fixed asset and hardware path; it does
+puff/fade close. This validates the fixed asset and hardware path; it does
 not yet validate arbitrary codecs, resolutions, color metadata, or sources.
 The two-slot continuously fed RCS ring is hardware-validated: queued depth-2
 followers enter the next batch within microseconds of the preceding release
@@ -247,7 +247,7 @@ and identifies a video flip coupled to another plane or GuC job.
 4. The persistent RCS ring retires markers in order; broker publication also waits for the request's exact order turn.
 5. UI4 retains the exact published allocation; replacement SURFLIVE supplies display backpressure and releases the older buffer.
 6. End-of-stream, error, or Embassy task drop calls `stop_decoded_nv12_stream`.
-7. Normal completion uses the broker’s direct-plane shrink/fade and retires the final Frame only after display ownership ends.
+7. Normal completion uses the broker’s direct-plane puff/fade and retires the final Frame only after display ownership ends.
 
 The RAII `VidUi4Session` is the close guarantee: even an early return from the shell task cannot strand the UI4 owner/window.
 

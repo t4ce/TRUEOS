@@ -38,16 +38,18 @@ use crate::r::services::font_kernel_service::{
 use super::{
     DamageRect, FrameCadence, FrameContent, FrameHandle, FramePoolError, FrameSpec,
     FrameWriteLease, OutputId, PremultipliedRgba8, ScanoutFormat, Ui4CursorIcon, Ui4CursorSource,
-    Ui4InputEvent, WindowCreate, WindowId, WindowOwner, WindowPlacement, WindowPlane,
-    WindowSessionCloseRequest, WindowSessionId, acquire_frame_buffer,
-    begin_additional_window_session, cancel_frame_buffer, commit_window_frame_replacement,
-    create_frame, create_gpu_full_overwrite_frame, create_window, destroy_frame,
+    Ui4InputEvent, WindowBrokerError, WindowCreate, WindowId, WindowOwner, WindowPlacement,
+    WindowPlane, WindowSessionCloseRequest, WindowSessionId, acquire_frame_buffer,
+    begin_additional_window_session, cancel_frame_buffer, commit_window_frame_refresh,
+    commit_window_frame_replacement, create_frame, create_gpu_full_overwrite_frame, create_window,
+    destroy_frame,
     finish_window_session, finish_window_session_with_request, focused_keyboard_state,
     gpgpu_rgba_surface, mark_frame_buffer_cpu_authored, mark_frame_buffer_fully_opaque,
     publish_frame_buffer, publish_gpgpu_scene_frame_buffer, publish_resident_scene_frame_buffer,
-    publish_window_frame, replace_window_frame, set_window_cursor_icon, set_window_custom_cursor,
-    set_window_hit_testable, set_window_placement, take_owner_input_events,
-    take_window_first_presentation, window_input_routes, window_placement, writable_rgba_view,
+    publish_window_frame, set_window_cursor_icon, set_window_custom_cursor, set_window_hit_testable,
+    set_window_placement, take_owner_input_events,
+    take_window_first_presentation, window_input_routes, window_placement, window_resize_state,
+    writable_rgba_view,
 };
 
 const MAX_SURFACES: usize = 32;
@@ -414,10 +416,10 @@ pub struct TrueosUi4PanEvent {
 
 const _: () = assert!(core::mem::size_of::<TrueosUi4PanEvent>() == 13 * 4);
 
-/// One broker-requested final frame extent. UI4 may animate the already-live
-/// surface toward this geometry in its presentation plane, but never emits
-/// intermediate animation sizes to the Blueprint. The Blueprint may ignore
-/// the event or replace its allocation through
+/// One broker-requested final frame extent. UI4 keeps the already-live surface
+/// at its exact 1:1 presentation geometry and never emits intermediate sizes
+/// to the Blueprint. The Blueprint may defer the event or replace its
+/// allocation through
 /// `trueos_cabi_ui4_scene_frame_resize` exactly once.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
@@ -673,7 +675,8 @@ struct BlueprintSceneSurface {
     sprite_scene_upload: Option<SpriteSceneUpload>,
     pending_pointer_events: VecDeque<TrueosUi4PointerEvent>,
     pending_pan_events: VecDeque<TrueosUi4PanEvent>,
-    pending_resize_events: VecDeque<TrueosUi4ResizeEvent>,
+    pending_resize_events: VecDeque<BlueprintResizeEvent>,
+    taken_resize_event: Option<BlueprintResizeEvent>,
     pending_keyboard_events: VecDeque<crate::r::keyboard::TrueosKeyboardOutputEvent>,
     pending_keyboard_burst: VecDeque<crate::r::keyboard::TrueosKeyboardOutputEvent>,
     retained_text_layers: Vec<BlueprintRetainedTextLayer>,
@@ -699,7 +702,17 @@ struct BlueprintPendingResize {
     /// The broker continues presenting this frame until `frame` has a
     /// released front and both frame and placement can be committed together.
     previous_frame: FrameHandle,
+    previous_width: u32,
+    previous_height: u32,
+    previous_placement: WindowPlacement,
     placement: WindowPlacement,
+    resize_epoch: u64,
+}
+
+#[derive(Copy, Clone, Debug)]
+struct BlueprintResizeEvent {
+    abi: TrueosUi4ResizeEvent,
+    resize_epoch: u64,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -1332,6 +1345,7 @@ fn open_blueprint_frame(
                 pending_pointer_events: VecDeque::new(),
                 pending_pan_events: VecDeque::new(),
                 pending_resize_events: VecDeque::new(),
+                taken_resize_event: None,
                 pending_keyboard_events: VecDeque::new(),
                 pending_keyboard_burst: VecDeque::new(),
                 retained_text_layers: Vec::new(),
@@ -1382,6 +1396,7 @@ fn open_blueprint_frame(
         pending_pointer_events: VecDeque::new(),
         pending_pan_events: VecDeque::new(),
         pending_resize_events: VecDeque::new(),
+        taken_resize_event: None,
         pending_keyboard_events: VecDeque::new(),
         pending_keyboard_burst: VecDeque::new(),
         retained_text_layers: Vec::new(),
@@ -1653,6 +1668,14 @@ pub(crate) fn begin_blueprint_frame(
     }
     let lease = match acquire_frame_buffer(surface.frame) {
         Ok(lease) => lease,
+        Err(FramePoolError::ImmutablePublished)
+            if surface.cadence == FrameCadence::Immutable && surface.pending_resize.is_some() =>
+        {
+            // The published staged resize must either commit or be superseded
+            // before another single-buffer refresh can be created. Otherwise
+            // its lease would have no broker attachment and could leak.
+            return ERROR_BUSY;
+        }
         Err(FramePoolError::ImmutablePublished) if surface.cadence == FrameCadence::Immutable => {
             let output = OutputId::from_slot(0).expect("UI4 D01 must exist");
             let replacement = match create_frame(FrameSpec {
@@ -2055,7 +2078,7 @@ pub extern "C" fn trueos_cabi_ui4_scene_output_dimensions() -> u64 {
     pack_u32_pair(width, height)
 }
 
-/// Take the next maximize/restore extent notification for this Blueprint
+/// Take the next dock/restore extent notification for this Blueprint
 /// window. A return value of one means the queue is currently empty; zero
 /// writes one event. The producer chooses whether and when to resize.
 pub unsafe extern "C" fn trueos_cabi_ui4_scene_resize_event_take(
@@ -2086,8 +2109,9 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_resize_event_take(
     let Some(event) = surface.pending_resize_events.pop_front() else {
         return 1;
     };
+    surface.taken_resize_event = Some(event);
     // SAFETY: the non-null output points to one writable ABI event.
-    unsafe { out.write(event) };
+    unsafe { out.write(event.abi) };
     0
 }
 
@@ -2282,17 +2306,18 @@ fn route_owner_input_events(owner: WindowOwner) {
                     continue;
                 };
                 // Extents are target state, not deltas. Only the newest
-                // maximize/restore request matters if the producer has not
+                // dock/restore request matters if the producer has not
                 // serviced an older one yet.
                 surface.pending_resize_events.clear();
-                surface
-                    .pending_resize_events
-                    .push_back(TrueosUi4ResizeEvent {
+                surface.pending_resize_events.push_back(BlueprintResizeEvent {
+                    abi: TrueosUi4ResizeEvent {
                         old_width: event.old_width,
                         old_height: event.old_height,
                         width: event.width,
                         height: event.height,
-                    });
+                    },
+                    resize_epoch: event.resize_epoch,
+                });
             }
             Ui4InputEvent::Keyboard(event) => {
                 let Some(surface) = surface_mut(&mut surfaces, owner, event.window.raw()) else {
@@ -2387,11 +2412,11 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_set_position(window_id: u32, x: i3
     let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
         return ERROR_NOT_FOUND;
     };
-    let placement = WindowPlacement {
-        x,
-        y,
-        ..surface.placement
+    let live = match window_placement(owner, surface.window) {
+        Ok(placement) => placement,
+        Err(_) => return ERROR_UI4,
     };
+    let placement = WindowPlacement { x, y, ..live };
     if set_window_placement(owner, surface.window, placement).is_err() {
         return ERROR_UI4;
     }
@@ -2419,9 +2444,13 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_set_opacity(window_id: u32, opacit
     let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
         return ERROR_NOT_FOUND;
     };
+    let live = match window_placement(owner, surface.window) {
+        Ok(placement) => placement,
+        Err(_) => return ERROR_UI4,
+    };
     let placement = WindowPlacement {
         opacity: opacity as u8,
-        ..surface.placement
+        ..live
     };
     if set_window_placement(owner, surface.window, placement).is_err() {
         return ERROR_UI4;
@@ -2610,7 +2639,18 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_resize(
     let Some(owner) = blueprint_owner() else {
         return ERROR_CONTEXT;
     };
-    let (cadence, window, particle_craft, visual, current_frame, previous_frame) = {
+    let (
+        cadence,
+        window,
+        particle_craft,
+        visual,
+        current_frame,
+        previous_width,
+        previous_height,
+        previous_placement,
+        requested_resize_epoch,
+        superseded,
+    ) = {
         let mut surfaces = SURFACES.lock();
         let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
             return ERROR_NOT_FOUND;
@@ -2618,17 +2658,50 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_resize(
         if surface.write_lease.is_some() {
             return ERROR_STATE;
         }
+        let superseded = surface.pending_resize.take().map(|pending| {
+            let superseded = surface.frame;
+            surface.frame = pending.previous_frame;
+            surface.width = pending.previous_width;
+            surface.height = pending.previous_height;
+            surface.placement = pending.previous_placement;
+            superseded
+        });
+        let requested_resize_epoch = surface.taken_resize_event.and_then(|event| {
+            ((event.abi.width, event.abi.height) == (width, height)).then_some(event.resize_epoch)
+        });
         (
             surface.cadence,
             surface.window,
             surface.particle_craft.is_some(),
             surface.visual_cadence.is_some(),
             surface.frame,
-            surface
-                .pending_resize
-                .map_or(surface.frame, |pending| pending.previous_frame),
+            surface.width,
+            surface.height,
+            surface.placement,
+            requested_resize_epoch,
+            superseded,
         )
     };
+    if let Some(superseded) = superseded
+        && let Err(error) = destroy_frame(superseded)
+        && error == FramePoolError::Busy
+    {
+        RETIRED_FRAMES.lock().push(superseded);
+    }
+    let (live_placement, live_resize_epoch) = match window_resize_state(owner, window) {
+        Ok(state) => state,
+        Err(error) => {
+            crate::log_error!(
+                target: "ui4/blueprint-frame";
+                "frame resize placement lookup failed owner={:?} window={} error={:?}\n",
+                owner,
+                window_id,
+                error,
+            );
+            return ERROR_UI4;
+        }
+    };
+    let resize_epoch = requested_resize_epoch.unwrap_or(live_resize_epoch);
     let (backing_width, backing_height) = if particle_craft {
         crate::intel::gpgpu::particle_craft_backing_extent(width, height)
     } else {
@@ -2672,21 +2745,7 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_resize(
         }
     };
 
-    let live_placement = match window_placement(owner, window) {
-        Ok(placement) => placement,
-        Err(error) => {
-            let _ = destroy_frame(replacement);
-            crate::log_error!(
-                target: "ui4/blueprint-frame";
-                "frame resize placement lookup failed owner={:?} window={} error={:?}\n",
-                owner,
-                window_id,
-                error,
-            );
-            return ERROR_UI4;
-        }
-    };
-    let superseded = {
+    {
         let mut surfaces = SURFACES.lock();
         let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
             let _ = destroy_frame(replacement);
@@ -2701,15 +2760,19 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_resize(
             height,
             ..live_placement
         };
-        let superseded = surface.pending_resize.map(|_| surface.frame);
         surface.frame = replacement;
         surface.width = backing_width;
         surface.height = backing_height;
         surface.placement = placement;
         surface.pending_resize = Some(BlueprintPendingResize {
-            previous_frame,
+            previous_frame: current_frame,
+            previous_width,
+            previous_height,
+            previous_placement,
             placement,
+            resize_epoch,
         });
+        surface.taken_resize_event = None;
         surface.retained_text_layers.clear();
         surface.retained_text_cursor = 0;
         surface.retained_text_rendered = false;
@@ -2725,14 +2788,6 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_resize(
         surface.stamped_text_pending = None;
         surface.stamped_text_pending_ocean = false;
         surface.stamped_text_rendered = false;
-        superseded
-    };
-
-    if let Some(superseded) = superseded
-        && let Err(error) = destroy_frame(superseded)
-        && error == FramePoolError::Busy
-    {
-        RETIRED_FRAMES.lock().push(superseded);
     }
     crate::log_info!(
         target: "ui4/blueprint-frame";
@@ -2748,7 +2803,7 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_resize(
         } else {
             "direct-plane-2x"
         },
-        previous_frame.raw(),
+        current_frame.raw(),
         replacement.raw(),
     );
     0
@@ -4652,18 +4707,58 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_publish(
         return ERROR_UI4;
     }
     if let Some(pending) = surface.pending_resize {
-        if lease.frame != surface.frame
-            || commit_window_frame_replacement(
-                owner,
-                surface.window,
-                surface.frame,
-                pending.placement,
-                damage,
-            )
-            .is_err()
-        {
+        if lease.frame != surface.frame {
+            if let Err(error) = destroy_frame(lease.frame)
+                && error == FramePoolError::Busy
+            {
+                RETIRED_FRAMES.lock().push(lease.frame);
+            }
             crate::log_warn!(target: "ui4/blueprint-frame"; "frame resize commit failed owner={:?} window={} old_frame={} replacement_frame={} action=retain-old-surflive-front\n", owner, window_id, pending.previous_frame.raw(), surface.frame.raw());
             return ERROR_UI4;
+        }
+        match commit_window_frame_replacement(
+            owner,
+            surface.window,
+            surface.frame,
+            pending.placement,
+            pending.resize_epoch,
+            damage,
+        ) {
+            Ok(_) => {}
+            Err(WindowBrokerError::StaleResize) => {
+                // A newer dock/restore target won while this frame rendered.
+                // Keep the broker's exact old front and let the producer take
+                // the coalesced final resize request instead of faulting the
+                // application for an ordinary interaction race.
+                if let Ok(live) = window_placement(owner, surface.window)
+                    && (live.width, live.height)
+                        == (pending.previous_placement.width, pending.previous_placement.height)
+                {
+                    let superseded = surface.frame;
+                    surface.frame = pending.previous_frame;
+                    surface.width = pending.previous_width;
+                    surface.height = pending.previous_height;
+                    surface.placement = WindowPlacement {
+                        width: pending.previous_placement.width,
+                        height: pending.previous_placement.height,
+                        ..live
+                    };
+                    surface.pending_resize = None;
+                    if let Err(error) = destroy_frame(superseded)
+                        && error == FramePoolError::Busy
+                    {
+                        RETIRED_FRAMES.lock().push(superseded);
+                    }
+                    crate::log_info!(target: "ui4/blueprint-frame"; "frame resize superseded and reverted owner={:?} window={} old_frame={} replacement_frame={} live_extent={}x{} action=reuse-committed-front\n", owner, window_id, pending.previous_frame.raw(), superseded.raw(), live.width, live.height);
+                    return 0;
+                }
+                crate::log_info!(target: "ui4/blueprint-frame"; "frame resize commit superseded owner={:?} window={} old_frame={} replacement_frame={} staged_extent={}x{} action=retain-old-surflive-front-await-final-resize\n", owner, window_id, pending.previous_frame.raw(), surface.frame.raw(), pending.placement.width, pending.placement.height);
+                return 0;
+            }
+            Err(error) => {
+                crate::log_warn!(target: "ui4/blueprint-frame"; "frame resize commit failed owner={:?} window={} old_frame={} replacement_frame={} error={:?} action=retain-old-surflive-front\n", owner, window_id, pending.previous_frame.raw(), surface.frame.raw(), error);
+                return ERROR_UI4;
+            }
         }
         surface.pending_resize = None;
         if let Err(error) = destroy_frame(pending.previous_frame)
@@ -4675,22 +4770,15 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_publish(
     } else {
         let immutable_replacement =
             (lease.frame != surface.frame).then_some((surface.frame, lease.frame));
-        if let Some((previous, replacement)) = immutable_replacement
-            && replace_window_frame(owner, surface.window, replacement).is_err()
-        {
-            let _ = destroy_frame(replacement);
-            crate::log_warn!(target: "ui4/blueprint-frame"; "immutable refresh broker swap failed owner={:?} window={} old_frame={} replacement_frame={} action=retain-surflive-front\n", owner, window_id, previous.raw(), replacement.raw());
-            return ERROR_UI4;
-        }
-        if damage.width == 0
-            || damage.height == 0
-            || publish_window_frame(owner, surface.window, damage).is_err()
-        {
+        let publish = if let Some((_, replacement)) = immutable_replacement {
+            commit_window_frame_refresh(owner, surface.window, replacement, damage)
+        } else {
+            publish_window_frame(owner, surface.window, damage)
+        };
+        if damage.width == 0 || damage.height == 0 || publish.is_err() {
             if let Some((previous, replacement)) = immutable_replacement {
-                let _ = replace_window_frame(owner, surface.window, previous);
-                let _ = publish_window_frame(owner, surface.window, DamageRect::FULL);
                 let _ = destroy_frame(replacement);
-                crate::log_warn!(target: "ui4/blueprint-frame"; "immutable refresh publish failed owner={:?} window={} old_frame={} replacement_frame={} action=old-front-restored\n", owner, window_id, previous.raw(), replacement.raw());
+                crate::log_warn!(target: "ui4/blueprint-frame"; "immutable refresh publish failed owner={:?} window={} old_frame={} replacement_frame={} action=retain-old-front\n", owner, window_id, previous.raw(), replacement.raw());
             }
             return ERROR_UI4;
         }

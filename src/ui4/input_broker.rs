@@ -21,6 +21,7 @@ use super::{
 const MAX_CURSOR_ROUTES: usize = 32;
 const MAX_OWNER_QUEUES: usize = 64;
 const MAX_OWNER_EVENTS: usize = 256;
+const _: () = assert!(MAX_OWNER_EVENTS >= super::window_broker::MAX_WINDOWS);
 const CURSOR_BATCH: usize = 64;
 const KEYBOARD_BATCH: usize = 64;
 const PRIMARY_BUTTON_MASK: u32 = 1 << 0;
@@ -166,6 +167,7 @@ pub(crate) struct Ui4PanEvent {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Ui4ResizeEvent {
     pub(crate) window: WindowId,
+    pub(crate) resize_epoch: u64,
     pub(crate) old_width: u32,
     pub(crate) old_height: u32,
     pub(crate) width: u32,
@@ -292,7 +294,9 @@ struct CursorRoute {
     secondary_anchor: Option<(u32, u32)>,
     secondary_start_placement: Option<WindowPlacement>,
     secondary_dragged: bool,
-    secondary_restored_from_dock: bool,
+    /// Suppress only the field a docked drag just restored from. Leaving it
+    /// or jumping directly into a different field re-arms docking.
+    secondary_restore_origin: Option<super::WindowDockTarget>,
     dock_fields_visible: bool,
     dock_preview: Option<Ui4DockPreview>,
     context_menu: Option<(u32, u32)>,
@@ -319,7 +323,7 @@ impl CursorRoute {
             secondary_anchor: None,
             secondary_start_placement: None,
             secondary_dragged: false,
-            secondary_restored_from_dock: false,
+            secondary_restore_origin: None,
             dock_fields_visible: false,
             dock_preview: None,
             context_menu: None,
@@ -338,7 +342,7 @@ impl CursorRoute {
         self.secondary_anchor = None;
         self.secondary_start_placement = None;
         self.secondary_dragged = false;
-        self.secondary_restored_from_dock = false;
+        self.secondary_restore_origin = None;
         self.dock_fields_visible = false;
         self.dock_preview = None;
         self.selection_anchor = None;
@@ -380,6 +384,12 @@ impl CursorRoute {
 struct OwnerQueue {
     owner: WindowOwner,
     events: Vec<Ui4InputEvent, MAX_OWNER_EVENTS>,
+}
+
+#[derive(Copy, Clone)]
+struct OwnerResizeEvent {
+    owner: WindowOwner,
+    event: Ui4ResizeEvent,
 }
 
 struct InputBroker {
@@ -654,7 +664,7 @@ impl InputBroker {
             self.cursors[index].secondary_anchor = Some((x, y));
             self.cursors[index].secondary_start_placement = hit.map(|window| window.placement);
             self.cursors[index].secondary_dragged = false;
-            self.cursors[index].secondary_restored_from_dock = false;
+            self.cursors[index].secondary_restore_origin = None;
             self.cursors[index].context_menu = None;
             self.cursors[index].context_menu_pressed_action = None;
         }
@@ -717,17 +727,25 @@ impl InputBroker {
             });
         if let Some(mut target) = target {
             let mut restored_this_event = false;
+            let mut frame_geometry_changed = false;
             if target.dock_target.is_some()
                 && buttons_down & SECONDARY_BUTTON_MASK != 0
                 && self.cursors[index].secondary_dragged
             {
+                let restore_origin = target.dock_target;
                 match super::restore_docked_window(target.owner, target.id, width, height, (x, y)) {
                     Ok(transition) => {
                         target.placement = transition.placement;
                         target.dock_target = transition.dock_target;
                         target.maximized = false;
-                        self.cursors[index].secondary_restored_from_dock = true;
+                        // If this same gesture later docks elsewhere, that new
+                        // dock must restore to the normal geometry we just
+                        // recovered, not to the old dock rectangle captured on
+                        // button-down.
+                        self.cursors[index].secondary_start_placement = Some(transition.placement);
+                        self.cursors[index].secondary_restore_origin = restore_origin;
                         restored_this_event = true;
+                        frame_geometry_changed = true;
                         crate::log_info!(target: "ui4";
                             "ui4/input: frame-dock owner={:?} window={} plane={} state=restored old={}x{}@{},{} new={}x{}@{},{} cursor={}:{}:{} trigger=secondary-drag-begin\n",
                             target.owner,
@@ -770,6 +788,7 @@ impl InputBroker {
                     match super::move_window(target.owner, target.id, next) {
                         Ok(()) => {
                             target.placement = next;
+                            frame_geometry_changed = true;
                             // Keep the lease alive for the whole gesture. The
                             // idle grace is shorter than a long drag, so
                             // without this refresh a continuously dragged
@@ -797,9 +816,17 @@ impl InputBroker {
                     }
                 }
             }
+            // Restoring a docked frame must not immediately relatch the field
+            // it came from. Leaving that field, including a direct absolute
+            // jump into another one, re-arms docking for the same gesture.
+            if let Some(origin) = self.cursors[index].secondary_restore_origin
+                && dock_target_at(x, y, width, height) != Some(origin)
+            {
+                self.cursors[index].secondary_restore_origin = None;
+            }
             let docking_gesture = target.interaction.maximizable
                 && target.dock_target.is_none()
-                && !self.cursors[index].secondary_restored_from_dock
+                && self.cursors[index].secondary_restore_origin.is_none()
                 && (self.cursors[index].secondary_dragged || secondary_drop);
             let dock_target = docking_gesture
                 .then(|| dock_target_at(x, y, width, height))
@@ -839,6 +866,7 @@ impl InputBroker {
                         target.dock_target = transition.dock_target;
                         target.maximized =
                             transition.dock_target == Some(super::WindowDockTarget::Maximize);
+                        frame_geometry_changed = true;
                         crate::log_info!(target: "ui4";
                             "ui4/input: frame-dock owner={:?} window={} plane={} target={} old={}x{}@{},{} new={}x{}@{},{} cursor={}:{}:{} trigger=secondary-drag-drop\n",
                             target.owner,
@@ -870,8 +898,18 @@ impl InputBroker {
                 }
             }
             if target.interaction.receives_input {
-                let local_x = signed_local(x, target.placement.x);
-                let local_y = signed_local(y, target.placement.y);
+                // While a dock resize is waiting for a producer replacement,
+                // input follows the exact 1:1 pixels currently on screen rather
+                // than the newer logical destination hidden behind them.
+                let input_placement = if frame_geometry_changed {
+                    window_snapshot_for_target(WindowTarget::from(target))
+                        .map(|snapshot| snapshot.presentation_placement)
+                        .unwrap_or(target.presentation_placement)
+                } else {
+                    target.presentation_placement
+                };
+                let local_x = signed_local(x, input_placement.x);
+                let local_y = signed_local(y, input_placement.y);
                 enqueue_owner_event(
                     target.owner,
                     Ui4InputEvent::Pointer(Ui4PointerEvent {
@@ -980,7 +1018,7 @@ impl InputBroker {
         self.cursors[index].buttons_down = event.buttons_down;
         if secondary_released {
             self.cursors[index].secondary_start_placement = None;
-            self.cursors[index].secondary_restored_from_dock = false;
+            self.cursors[index].secondary_restore_origin = None;
             self.cursors[index].dock_fields_visible = false;
             self.cursors[index].dock_preview = None;
         }
@@ -1378,6 +1416,10 @@ impl InputBroker {
 
 static INPUT_BROKER: Mutex<InputBroker> = Mutex::new(InputBroker::new());
 static OWNER_QUEUES: Mutex<Vec<OwnerQueue, MAX_OWNER_QUEUES>> = Mutex::new(Vec::new());
+/// Resize is final broker state, not a lossy input sample. The global capacity
+/// covers every broker window while avoiding one registry-sized inline array
+/// per owner queue.
+static OWNER_RESIZE_EVENTS: Mutex<Vec<OwnerResizeEvent, MAX_OWNER_EVENTS>> = Mutex::new(Vec::new());
 static SLOT4_VISUAL_CHANGE: Signal<crate::wait::EmbassySpinRawMutex, ()> = Signal::new();
 
 fn capture_gt_power_mode_hotkey(
@@ -1615,12 +1657,35 @@ pub(super) fn notify_slot4_visual_change() {
 }
 
 pub(crate) fn take_owner_input_events(owner: WindowOwner) -> Vec<Ui4InputEvent, MAX_OWNER_EVENTS> {
+    let mut out = Vec::new();
+    // Deliver final resize state first. Ordinary transitions remain queued if
+    // every output slot is needed for distinct window resizes and are drained
+    // on the next owner poll without loss.
+    {
+        let mut resizes = OWNER_RESIZE_EVENTS.lock();
+        let mut index = 0;
+        while index < resizes.len() && !out.is_full() {
+            if resizes[index].owner == owner {
+                let resize = resizes.remove(index);
+                let _ = out.push(Ui4InputEvent::Resize(resize.event));
+            } else {
+                index += 1;
+            }
+        }
+    }
     let mut queues = OWNER_QUEUES.lock();
     let Some(queue) = queues.iter_mut().find(|queue| queue.owner == owner) else {
-        return Vec::new();
+        return out;
     };
-    let mut out = Vec::new();
-    core::mem::swap(&mut out, &mut queue.events);
+    let mut events = Vec::new();
+    core::mem::swap(&mut events, &mut queue.events);
+    for event in events {
+        if out.is_full() {
+            let _ = queue.events.push(event);
+        } else {
+            let _ = out.push(event);
+        }
+    }
     out
 }
 
@@ -1675,7 +1740,7 @@ pub(crate) fn show_context_menu(
 
 pub(super) fn release_owner(owner: WindowOwner) -> (usize, usize) {
     let routes = INPUT_BROKER.lock().release_owner(owner);
-    let queued_events = {
+    let mut queued_events = {
         let mut queues = OWNER_QUEUES.lock();
         if let Some(index) = queues.iter().position(|queue| queue.owner == owner) {
             let queued_events = queues[index].events.len();
@@ -1685,6 +1750,16 @@ pub(super) fn release_owner(owner: WindowOwner) -> (usize, usize) {
             0
         }
     };
+    let mut resize_events = OWNER_RESIZE_EVENTS.lock();
+    let mut index = 0;
+    while index < resize_events.len() {
+        if resize_events[index].owner == owner {
+            resize_events.remove(index);
+            queued_events = queued_events.saturating_add(1);
+        } else {
+            index += 1;
+        }
+    }
     if routes != 0 || queued_events != 0 {
         SLOT4_VISUAL_CHANGE.signal(());
     }
@@ -1792,6 +1867,7 @@ pub(super) fn select_window_for_cursor_at(
 pub(super) fn enqueue_window_resize(
     owner: WindowOwner,
     window: WindowId,
+    resize_epoch: u64,
     old_width: u32,
     old_height: u32,
     width: u32,
@@ -1801,6 +1877,7 @@ pub(super) fn enqueue_window_resize(
         owner,
         Ui4InputEvent::Resize(Ui4ResizeEvent {
             window,
+            resize_epoch,
             old_width,
             old_height,
             width,
@@ -1842,6 +1919,10 @@ fn enqueue_pan_event(
 }
 
 fn enqueue_owner_event(owner: WindowOwner, event: Ui4InputEvent) {
+    if let Ui4InputEvent::Resize(incoming) = event {
+        enqueue_owner_resize(owner, incoming);
+        return;
+    }
     let mut queues = OWNER_QUEUES.lock();
     let queue_index = if let Some(index) = queues.iter().position(|queue| queue.owner == owner) {
         index
@@ -1884,6 +1965,55 @@ fn enqueue_owner_event(owner: WindowOwner, event: Ui4InputEvent) {
         }
     }
     note_owner_queue_drop(owner, event, "queue-full-reject-newest");
+}
+
+fn enqueue_owner_resize(owner: WindowOwner, incoming: Ui4ResizeEvent) {
+    let mut resize_events = OWNER_RESIZE_EVENTS.lock();
+    if let Some(index) = resize_events
+        .iter()
+        .position(|current| current.owner == owner && current.event.window == incoming.window)
+    {
+        resize_events[index].event = incoming;
+        return;
+    }
+    if resize_events
+        .push(OwnerResizeEvent {
+            owner,
+            event: incoming,
+        })
+        .is_err()
+    {
+        // Capacity equals the complete live broker registry. Generation churn
+        // can leave closed-window notifications behind, so prove staleness and
+        // purge those entries rather than ever evicting a live final target.
+        let mut index = 0;
+        while index < resize_events.len() {
+            let queued = resize_events[index];
+            if window_snapshot_for_target(WindowTarget {
+                owner: queued.owner,
+                window: queued.event.window,
+            })
+            .is_none()
+            {
+                resize_events.remove(index);
+            } else {
+                index += 1;
+            }
+        }
+        if resize_events
+            .push(OwnerResizeEvent {
+                owner,
+                event: incoming,
+            })
+            .is_err()
+        {
+            note_owner_queue_drop(
+                owner,
+                Ui4InputEvent::Resize(incoming),
+                "resize-capacity-live-invariant",
+            );
+        }
+    }
 }
 
 fn owner_event_is_state_sample(event: &Ui4InputEvent) -> bool {
@@ -2205,7 +2335,7 @@ fn dock_target_at_in_zones(
     zones: &[Ui4DockZone],
 ) -> Option<super::WindowDockTarget> {
     zones
-        .into_iter()
+        .iter()
         .find(|zone| visual_rect_contains(zone.rect, x, y))
         .map(|zone| zone.target)
 }
@@ -2265,7 +2395,7 @@ fn topmost_window_at(x: u32, y: u32) -> Option<WindowSnapshot> {
         .into_iter()
         .filter(|window| window.state == WindowState::Ready)
         .filter(|window| window.interaction.hit_testable)
-        .filter(|window| placement_contains(window.placement, x, y))
+        .filter(|window| placement_contains(window.presentation_placement, x, y))
         // Plane slot is the hardware pipe-local stacking boundary. Only z
         // order windows against peers in the same slot; a later slot remains
         // above an earlier slot regardless of its local z value.
