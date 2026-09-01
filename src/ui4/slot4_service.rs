@@ -1,10 +1,10 @@
 //! Independent UI4 interaction-plane service.
 //!
 //! Slot 4 contains the kernel color picker, fixed-shape colored crosshairs,
-//! one-pixel selection and dock outlines, translucent dock fields, selected-frame strips, and
-//! context menus. It deliberately does not participate in application-plane
-//! composition or its atomic SURF batch. Cursor input is coalesced to the
-//! display cadence.
+//! one-pixel selection and dock outlines, translucent elliptic dock fields,
+//! selected-frame strips, and context menus. It deliberately does not
+//! participate in application-plane composition or its atomic SURF batch.
+//! Cursor input is coalesced to the display cadence.
 
 use alloc::vec::Vec;
 
@@ -57,7 +57,7 @@ impl Slot4State {
 #[trueos_executor::task(pool_size = 1)]
 pub(crate) async fn ui4_slot4_service_task() {
     crate::log_info!(target: "ui4/slot4";
-        "ui4/slot4: service online carrier=ap1-ui-core plane=slot4 content=start-button+color-picker-rgba8+static-color-crosshairs+selected-frame-strips+selection-outline-1px+dpi-dock-fields-33pct+dock-destination-outline+context-menu hardware-cursor=preferred-physical-source/concurrent cadence_hz={} cadence_clock=absolute-fractional wake=input-or-frame-state-change coalesce=display-cadence damage=ordered-linear-diff+window-old-new gpu_submits=0 synthetic-motion=off\n",
+        "ui4/slot4: service online carrier=ap1-ui-core plane=slot4 content=start-button+color-picker-rgba8+static-color-crosshairs+selected-frame-strips+selection-outline-1px+dpi-elliptic-dock-fields-33pct+dock-destination-outline+context-menu hardware-cursor=preferred-physical-source/concurrent cadence_hz={} cadence_clock=absolute-fractional wake=input-or-frame-state-change coalesce=display-cadence damage=ordered-linear-diff+window-old-new gpu_submits=0 synthetic-motion=off\n",
         super::INTERACTION_CADENCE_HZ,
     );
 
@@ -403,14 +403,7 @@ fn software_cursor_rects() -> Slot4Rects {
             } else {
                 Rgba8::new(118, 124, 136, DOCK_FIELD_ALPHA)
             };
-            push_overlay_rect(
-                &mut rects,
-                zone.rect.x,
-                zone.rect.y,
-                zone.rect.width,
-                zone.rect.height,
-                color,
-            );
+            push_dock_zone_mask(&mut rects, zone, color);
         }
     }
 
@@ -761,6 +754,70 @@ fn push_selection_outline(
     color: crate::graphics::primitives::Rgba8,
 ) {
     push_rect_border(rects, rect, 1, color);
+}
+
+fn push_dock_zone_mask(
+    rects: &mut Slot4Rects,
+    zone: super::input_broker::Ui4DockZone,
+    color: crate::graphics::primitives::Rgba8,
+) {
+    if zone.rect.height <= zone.rect.width {
+        let mut band: Option<super::Ui4VisualRect> = None;
+        for row in 0..zone.rect.height {
+            let Some(span) = super::input_broker::dock_zone_row_span(zone, row) else {
+                if let Some(finished) = band.take() {
+                    push_visual_rect(rects, finished, color);
+                }
+                continue;
+            };
+            if let Some(current) = band.as_mut()
+                && current.x == span.x
+                && current.width == span.width
+                && current.y.saturating_add(current.height) == span.y
+            {
+                current.height = current.height.saturating_add(span.height);
+                continue;
+            }
+            if let Some(finished) = band.replace(span) {
+                push_visual_rect(rects, finished, color);
+            }
+        }
+        if let Some(finished) = band {
+            push_visual_rect(rects, finished, color);
+        }
+    } else {
+        let mut band: Option<super::Ui4VisualRect> = None;
+        for column in 0..zone.rect.width {
+            let Some(span) = super::input_broker::dock_zone_column_span(zone, column) else {
+                if let Some(finished) = band.take() {
+                    push_visual_rect(rects, finished, color);
+                }
+                continue;
+            };
+            if let Some(current) = band.as_mut()
+                && current.y == span.y
+                && current.height == span.height
+                && current.x.saturating_add(current.width) == span.x
+            {
+                current.width = current.width.saturating_add(span.width);
+                continue;
+            }
+            if let Some(finished) = band.replace(span) {
+                push_visual_rect(rects, finished, color);
+            }
+        }
+        if let Some(finished) = band {
+            push_visual_rect(rects, finished, color);
+        }
+    }
+}
+
+fn push_visual_rect(
+    rects: &mut Slot4Rects,
+    rect: super::Ui4VisualRect,
+    color: crate::graphics::primitives::Rgba8,
+) {
+    push_overlay_rect(rects, rect.x, rect.y, rect.width, rect.height, color);
 }
 
 fn push_rect_border(

@@ -129,9 +129,10 @@ pub(crate) use window_broker::{
     finish_window_session_with_request,
     live_application_window_count, move_window, owner_has_first_presentation, publish_window_frame,
     publish_window_frames, replace_window_frame, restore_docked_window, retire_frame_when_released,
-    set_window_escape_key_action, set_window_hit_testable, set_window_placement,
-    set_windows_visible, take_window_first_presentation, ui4_window_broker_snapshot_service_task,
-    visible_windows_for_output, wait_for_window_composition_change,
+    set_window_escape_key_action, set_window_hit_testable, set_window_opacity,
+    set_window_placement, set_window_position, set_windows_visible, take_window_first_presentation,
+    ui4_window_broker_snapshot_service_task, visible_windows_for_output,
+    wait_for_window_composition_change,
     wait_for_window_first_presentation, window_composition_revision, window_escape_key_action,
     window_frame_was_presented, window_placement, window_resize_state, window_transitions_active,
 };

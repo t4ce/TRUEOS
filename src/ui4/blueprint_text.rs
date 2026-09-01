@@ -47,9 +47,8 @@ use super::{
     gpgpu_rgba_surface, mark_frame_buffer_cpu_authored, mark_frame_buffer_fully_opaque,
     publish_frame_buffer, publish_gpgpu_scene_frame_buffer, publish_resident_scene_frame_buffer,
     publish_window_frame, set_window_cursor_icon, set_window_custom_cursor, set_window_hit_testable,
-    set_window_placement, take_owner_input_events,
-    take_window_first_presentation, window_input_routes, window_placement, window_resize_state,
-    writable_rgba_view,
+    set_window_opacity, set_window_position, take_owner_input_events,
+    take_window_first_presentation, window_input_routes, window_resize_state, writable_rgba_view,
 };
 
 const MAX_SURFACES: usize = 32;
@@ -2109,6 +2108,15 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_resize_event_take(
     let Some(event) = surface.pending_resize_events.pop_front() else {
         return 1;
     };
+    if let Some(pending) = surface.pending_resize.as_mut()
+        && (pending.placement.width, pending.placement.height)
+            == (event.abi.width, event.abi.height)
+    {
+        // An ABA dock sequence may return to the staged pixel extent with a
+        // newer broker epoch. The allocation is still an exact fit; promote
+        // its acknowledgement instead of making the app allocate it again.
+        pending.resize_epoch = event.resize_epoch;
+    }
     surface.taken_resize_event = Some(event);
     // SAFETY: the non-null output points to one writable ABI event.
     unsafe { out.write(event.abi) };
@@ -2412,14 +2420,10 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_set_position(window_id: u32, x: i3
     let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
         return ERROR_NOT_FOUND;
     };
-    let live = match window_placement(owner, surface.window) {
+    let placement = match set_window_position(owner, surface.window, x, y) {
         Ok(placement) => placement,
         Err(_) => return ERROR_UI4,
     };
-    let placement = WindowPlacement { x, y, ..live };
-    if set_window_placement(owner, surface.window, placement).is_err() {
-        return ERROR_UI4;
-    }
     surface.placement = placement;
     0
 }
@@ -2444,17 +2448,10 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_set_opacity(window_id: u32, opacit
     let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
         return ERROR_NOT_FOUND;
     };
-    let live = match window_placement(owner, surface.window) {
+    let placement = match set_window_opacity(owner, surface.window, opacity as u8) {
         Ok(placement) => placement,
         Err(_) => return ERROR_UI4,
     };
-    let placement = WindowPlacement {
-        opacity: opacity as u8,
-        ..live
-    };
-    if set_window_placement(owner, surface.window, placement).is_err() {
-        return ERROR_UI4;
-    }
     surface.placement = placement;
     0
 }
@@ -2658,14 +2655,7 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_resize(
         if surface.write_lease.is_some() {
             return ERROR_STATE;
         }
-        let superseded = surface.pending_resize.take().map(|pending| {
-            let superseded = surface.frame;
-            surface.frame = pending.previous_frame;
-            surface.width = pending.previous_width;
-            surface.height = pending.previous_height;
-            surface.placement = pending.previous_placement;
-            superseded
-        });
+        let superseded = revert_blueprint_pending_resize(surface, None);
         let requested_resize_epoch = surface.taken_resize_event.and_then(|event| {
             ((event.abi.width, event.abi.height) == (width, height)).then_some(event.resize_epoch)
         });
@@ -4727,32 +4717,26 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_publish(
             Ok(_) => {}
             Err(WindowBrokerError::StaleResize) => {
                 // A newer dock/restore target won while this frame rendered.
-                // Keep the broker's exact old front and let the producer take
-                // the coalesced final resize request instead of faulting the
-                // application for an ordinary interaction race.
-                if let Ok(live) = window_placement(owner, surface.window)
-                    && (live.width, live.height)
-                        == (pending.previous_placement.width, pending.previous_placement.height)
+                // Revert the producer to the exact frame the broker still
+                // presents, then let its coalesced final resize notification
+                // stage the current target. Keeping an uncommittable published
+                // allocation here can otherwise pin the bounded frame pool.
+                let snapshot = super::window_broker::window_snapshot(owner, surface.window);
+                let live_presentation = snapshot.map(|window| window.presentation_placement);
+                let live_extent = snapshot
+                    .map(|window| (window.placement.width, window.placement.height))
+                    .unwrap_or((
+                        pending.previous_placement.width,
+                        pending.previous_placement.height,
+                    ));
+                let superseded = revert_blueprint_pending_resize(surface, live_presentation)
+                    .expect("pending resize exists while handling stale commit");
+                if let Err(error) = destroy_frame(superseded)
+                    && error == FramePoolError::Busy
                 {
-                    let superseded = surface.frame;
-                    surface.frame = pending.previous_frame;
-                    surface.width = pending.previous_width;
-                    surface.height = pending.previous_height;
-                    surface.placement = WindowPlacement {
-                        width: pending.previous_placement.width,
-                        height: pending.previous_placement.height,
-                        ..live
-                    };
-                    surface.pending_resize = None;
-                    if let Err(error) = destroy_frame(superseded)
-                        && error == FramePoolError::Busy
-                    {
-                        RETIRED_FRAMES.lock().push(superseded);
-                    }
-                    crate::log_info!(target: "ui4/blueprint-frame"; "frame resize superseded and reverted owner={:?} window={} old_frame={} replacement_frame={} live_extent={}x{} action=reuse-committed-front\n", owner, window_id, pending.previous_frame.raw(), superseded.raw(), live.width, live.height);
-                    return 0;
+                    RETIRED_FRAMES.lock().push(superseded);
                 }
-                crate::log_info!(target: "ui4/blueprint-frame"; "frame resize commit superseded owner={:?} window={} old_frame={} replacement_frame={} staged_extent={}x{} action=retain-old-surflive-front-await-final-resize\n", owner, window_id, pending.previous_frame.raw(), surface.frame.raw(), pending.placement.width, pending.placement.height);
+                crate::log_info!(target: "ui4/blueprint-frame"; "frame resize superseded and reverted owner={:?} window={} old_frame={} replacement_frame={} staged_extent={}x{} live_extent={}x{} action=reuse-committed-front-await-final-resize\n", owner, window_id, pending.previous_frame.raw(), superseded.raw(), pending.placement.width, pending.placement.height, live_extent.0, live_extent.1);
                 return 0;
             }
             Err(error) => {
@@ -7052,6 +7036,25 @@ fn surface_mut(
     surfaces
         .iter_mut()
         .find(|surface| surface.owner == owner && surface.window.raw() == window_id)
+}
+
+fn revert_blueprint_pending_resize(
+    surface: &mut BlueprintSceneSurface,
+    live_presentation: Option<WindowPlacement>,
+) -> Option<FrameHandle> {
+    let pending = surface.pending_resize.take()?;
+    let superseded = surface.frame;
+    surface.frame = pending.previous_frame;
+    surface.width = pending.previous_width;
+    surface.height = pending.previous_height;
+    surface.placement = live_presentation.map_or(pending.previous_placement, |presentation| {
+        WindowPlacement {
+            width: pending.previous_placement.width,
+            height: pending.previous_placement.height,
+            ..presentation
+        }
+    });
+    Some(superseded)
 }
 
 fn blueprint_surface_close_request(

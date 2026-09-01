@@ -487,7 +487,7 @@ struct WindowRecord {
     pending_resize_extent: Option<(u32, u32)>,
     /// Logical extent represented by the broker's currently attached frame.
     committed_resize_extent: (u32, u32),
-    /// Changes whenever broker-owned logical extent changes, allowing a late
+    /// Changes whenever the logical extent target changes, allowing a late
     /// producer replacement to be rejected even after a rapid restore has
     /// returned to the already-committed extent and cleared the visual hold.
     resize_epoch: u64,
@@ -1768,7 +1768,14 @@ pub(crate) fn commit_window_frame_replacement(
         WindowState::Pending | WindowState::Ready => {}
     }
     let previous_placement = current.placement;
-    if current.resize_epoch != resize_epoch {
+    let staged_extent = (placement.width, placement.height);
+    let current_extent = (previous_placement.width, previous_placement.height);
+    let current_resize_epoch = current.resize_epoch;
+    // Epochs reject a replacement rendered for an obsolete extent. An ABA
+    // dock sequence can legitimately return to the same pixel extent before
+    // that replacement publishes; in that case the pixels are still an exact
+    // fit and the broker's current position remains authoritative below.
+    if current_resize_epoch != resize_epoch && staged_extent != current_extent {
         return Err(WindowBrokerError::StaleResize);
     }
     // A broker-requested dock/restore may have changed again while the producer
@@ -1778,8 +1785,7 @@ pub(crate) fn commit_window_frame_replacement(
     // current broker position remains authoritative for the matching extent.
     let broker_resize_pending = current.pending_resize_extent;
     if let Some(expected_extent) = broker_resize_pending
-        && (expected_extent != (placement.width, placement.height)
-            || expected_extent != (previous_placement.width, previous_placement.height))
+        && (expected_extent != staged_extent || expected_extent != current_extent)
     {
         return Err(WindowBrokerError::StaleResize);
     }
@@ -1796,6 +1802,11 @@ pub(crate) fn commit_window_frame_replacement(
     window.frame = frame;
     window.buffering = plan.buffering;
     window.placement = placement;
+    if broker_resize_pending.is_none() && staged_extent != current_extent {
+        // A producer-initiated logical resize is itself a newer geometry
+        // state, even though it does not need an echo notification.
+        window.resize_epoch = next_serial(current_resize_epoch);
+    }
     window.pending_resize_extent = None;
     window.committed_resize_extent = (placement.width, placement.height);
     window.replacement_presentation = None;
@@ -1806,22 +1817,10 @@ pub(crate) fn commit_window_frame_replacement(
     let pending = window.damage.get_or_insert(DamageRegion::EMPTY);
     pending.add(damage);
     let publish_serial = window.publish_serial;
-    let notify_resize = producer_resize_required(window.interaction, previous_placement, placement);
     broker.mark_composition_changed();
     drop(broker);
     if stack_changed {
         super::cursor_frame_inout::selection_strip_stack_changed();
-    }
-    if notify_resize {
-        super::input_broker::enqueue_window_resize(
-            owner,
-            id,
-            resize_epoch,
-            previous_placement.width,
-            previous_placement.height,
-            placement.width,
-            placement.height,
-        );
     }
     super::cursor_frame_inout::frame_visual_changed(owner, id);
     Ok(publish_serial)
@@ -1915,9 +1914,49 @@ pub(crate) fn set_window_placement(
     if !placement.valid() {
         return Err(WindowBrokerError::EmptyExtent);
     }
+    update_window_placement(owner, id, |_| placement).map(|_| ())
+}
+
+/// Update only application-owned position fields under the broker lock. This
+/// cannot replay a stale extent across a concurrent dock/restore transaction.
+pub(crate) fn set_window_position(
+    owner: WindowOwner,
+    id: WindowId,
+    x: i32,
+    y: i32,
+) -> Result<WindowPlacement, WindowBrokerError> {
+    update_window_placement(owner, id, |placement| WindowPlacement {
+        x,
+        y,
+        ..placement
+    })
+}
+
+/// Update only application-owned opacity under the broker lock, preserving a
+/// concurrent dock target, resize epoch, and 1:1 replacement hold.
+pub(crate) fn set_window_opacity(
+    owner: WindowOwner,
+    id: WindowId,
+    opacity: u8,
+) -> Result<WindowPlacement, WindowBrokerError> {
+    update_window_placement(owner, id, |placement| WindowPlacement {
+        opacity,
+        ..placement
+    })
+}
+
+fn update_window_placement(
+    owner: WindowOwner,
+    id: WindowId,
+    update: impl FnOnce(WindowPlacement) -> WindowPlacement,
+) -> Result<WindowPlacement, WindowBrokerError> {
     let mut broker = WINDOW_BROKER.lock();
     let window = broker.checked_window_mut(owner, id)?;
     let previous = window.placement;
+    let placement = update(previous);
+    if !placement.valid() {
+        return Err(WindowBrokerError::EmptyExtent);
+    }
     // A dock request during the opening reveal must hold the real producer
     // geometry, not freeze the transient shrunken/faded projection.
     let previous_presentation = window.replacement_presentation.unwrap_or(previous);
@@ -1984,7 +2023,7 @@ pub(crate) fn set_window_placement(
     if changed {
         super::cursor_frame_inout::selection_strip_stack_changed();
     }
-    Ok(())
+    Ok(placement)
 }
 
 /// Include or exclude a window from cursor selection without changing its

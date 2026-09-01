@@ -387,9 +387,11 @@ struct OwnerQueue {
 }
 
 #[derive(Copy, Clone)]
-struct OwnerResizeEvent {
+struct OwnerResizeState {
     owner: WindowOwner,
-    event: Ui4ResizeEvent,
+    window: WindowId,
+    latest_epoch: u64,
+    pending: Option<Ui4ResizeEvent>,
 }
 
 struct InputBroker {
@@ -1419,7 +1421,7 @@ static OWNER_QUEUES: Mutex<Vec<OwnerQueue, MAX_OWNER_QUEUES>> = Mutex::new(Vec::
 /// Resize is final broker state, not a lossy input sample. The global capacity
 /// covers every broker window while avoiding one registry-sized inline array
 /// per owner queue.
-static OWNER_RESIZE_EVENTS: Mutex<Vec<OwnerResizeEvent, MAX_OWNER_EVENTS>> = Mutex::new(Vec::new());
+static OWNER_RESIZE_STATES: Mutex<Vec<OwnerResizeState, MAX_OWNER_EVENTS>> = Mutex::new(Vec::new());
 static SLOT4_VISUAL_CHANGE: Signal<crate::wait::EmbassySpinRawMutex, ()> = Signal::new();
 
 fn capture_gt_power_mode_hotkey(
@@ -1662,14 +1664,15 @@ pub(crate) fn take_owner_input_events(owner: WindowOwner) -> Vec<Ui4InputEvent, 
     // every output slot is needed for distinct window resizes and are drained
     // on the next owner poll without loss.
     {
-        let mut resizes = OWNER_RESIZE_EVENTS.lock();
-        let mut index = 0;
-        while index < resizes.len() && !out.is_full() {
-            if resizes[index].owner == owner {
-                let resize = resizes.remove(index);
-                let _ = out.push(Ui4InputEvent::Resize(resize.event));
-            } else {
-                index += 1;
+        let mut resizes = OWNER_RESIZE_STATES.lock();
+        for resize in resizes.iter_mut() {
+            if out.is_full() {
+                break;
+            }
+            if resize.owner == owner
+                && let Some(event) = resize.pending.take()
+            {
+                let _ = out.push(Ui4InputEvent::Resize(event));
             }
         }
     }
@@ -1750,12 +1753,12 @@ pub(super) fn release_owner(owner: WindowOwner) -> (usize, usize) {
             0
         }
     };
-    let mut resize_events = OWNER_RESIZE_EVENTS.lock();
+    let mut resize_events = OWNER_RESIZE_STATES.lock();
     let mut index = 0;
     while index < resize_events.len() {
         if resize_events[index].owner == owner {
-            resize_events.remove(index);
-            queued_events = queued_events.saturating_add(1);
+            let removed = resize_events.remove(index);
+            queued_events = queued_events.saturating_add(usize::from(removed.pending.is_some()));
         } else {
             index += 1;
         }
@@ -1968,18 +1971,33 @@ fn enqueue_owner_event(owner: WindowOwner, event: Ui4InputEvent) {
 }
 
 fn enqueue_owner_resize(owner: WindowOwner, incoming: Ui4ResizeEvent) {
-    let mut resize_events = OWNER_RESIZE_EVENTS.lock();
+    let mut resize_events = OWNER_RESIZE_STATES.lock();
     if let Some(index) = resize_events
         .iter()
-        .position(|current| current.owner == owner && current.event.window == incoming.window)
+        .position(|current| current.owner == owner && current.window == incoming.window)
     {
-        resize_events[index].event = incoming;
+        let latest_epoch = resize_events[index].latest_epoch;
+        // Geometry mutations release the window-broker lock before entering
+        // this queue. Preserve broker order even if two callers enqueue in
+        // the opposite scheduler order after those serialized mutations. The
+        // watermark survives delivery, so a delayed older caller cannot enter
+        // an empty pending slot after the final event was already consumed.
+        if resize_epoch_is_newer(incoming.resize_epoch, latest_epoch) {
+            resize_events[index].latest_epoch = incoming.resize_epoch;
+            resize_events[index].pending = Some(incoming);
+        } else if incoming.resize_epoch == latest_epoch
+            && resize_events[index].pending.is_some()
+        {
+            resize_events[index].pending = Some(incoming);
+        }
         return;
     }
     if resize_events
-        .push(OwnerResizeEvent {
+        .push(OwnerResizeState {
             owner,
-            event: incoming,
+            window: incoming.window,
+            latest_epoch: incoming.resize_epoch,
+            pending: Some(incoming),
         })
         .is_err()
     {
@@ -1989,21 +2007,22 @@ fn enqueue_owner_resize(owner: WindowOwner, incoming: Ui4ResizeEvent) {
         let mut index = 0;
         while index < resize_events.len() {
             let queued = resize_events[index];
-            if window_snapshot_for_target(WindowTarget {
-                owner: queued.owner,
-                window: queued.event.window,
-            })
-            .is_none()
-            {
+            let live = super::window_broker::window_snapshot(queued.owner, queued.window)
+                .is_some_and(|snapshot| {
+                    matches!(snapshot.state, WindowState::Pending | WindowState::Ready)
+                });
+            if !live {
                 resize_events.remove(index);
             } else {
                 index += 1;
             }
         }
         if resize_events
-            .push(OwnerResizeEvent {
+            .push(OwnerResizeState {
                 owner,
-                event: incoming,
+                window: incoming.window,
+                latest_epoch: incoming.resize_epoch,
+                pending: Some(incoming),
             })
             .is_err()
         {
@@ -2014,6 +2033,10 @@ fn enqueue_owner_resize(owner: WindowOwner, incoming: Ui4ResizeEvent) {
             );
         }
     }
+}
+
+const fn resize_epoch_is_newer(candidate: u64, current: u64) -> bool {
+    candidate != current && candidate.wrapping_sub(current) < (1_u64 << 63)
 }
 
 fn owner_event_is_state_sample(event: &Ui4InputEvent) -> bool {
@@ -2336,8 +2359,170 @@ fn dock_target_at_in_zones(
 ) -> Option<super::WindowDockTarget> {
     zones
         .iter()
-        .find(|zone| visual_rect_contains(zone.rect, x, y))
+        .find(|zone| dock_zone_contains(**zone, x, y))
         .map(|zone| zone.target)
+}
+
+pub(super) fn dock_zone_contains(zone: Ui4DockZone, x: u32, y: u32) -> bool {
+    if !visual_rect_contains(zone.rect, x, y) {
+        return false;
+    }
+    dock_zone_local_contains(
+        zone.target,
+        zone.rect.width,
+        zone.rect.height,
+        x.saturating_sub(zone.rect.x),
+        y.saturating_sub(zone.rect.y),
+    )
+}
+
+/// Return the exact horizontal coverage of one row of a dock field. Slot 4
+/// builds its translucent mask from the same predicate used by hit-testing so
+/// the visible curved field and the active pixels cannot drift apart.
+pub(super) fn dock_zone_row_span(zone: Ui4DockZone, row: u32) -> Option<Ui4VisualRect> {
+    if row >= zone.rect.height {
+        return None;
+    }
+
+    let mut first = None;
+    let mut last = 0;
+    for column in 0..zone.rect.width {
+        if dock_zone_local_contains(
+            zone.target,
+            zone.rect.width,
+            zone.rect.height,
+            column,
+            row,
+        ) {
+            first.get_or_insert(column);
+            last = column;
+        }
+    }
+    first.map(|first| Ui4VisualRect {
+        x: zone.rect.x.saturating_add(first),
+        y: zone.rect.y.saturating_add(row),
+        width: last.saturating_sub(first).saturating_add(1),
+        height: 1,
+    })
+}
+
+/// Column equivalent of [`dock_zone_row_span`]. Tall side fields are emitted
+/// column-wise to keep Slot 4's fixed rectangle budget independent of their
+/// much longer vertical diameter.
+pub(super) fn dock_zone_column_span(zone: Ui4DockZone, column: u32) -> Option<Ui4VisualRect> {
+    if column >= zone.rect.width {
+        return None;
+    }
+
+    let mut first = None;
+    let mut last = 0;
+    for row in 0..zone.rect.height {
+        if dock_zone_local_contains(
+            zone.target,
+            zone.rect.width,
+            zone.rect.height,
+            column,
+            row,
+        ) {
+            first.get_or_insert(row);
+            last = row;
+        }
+    }
+    first.map(|first| Ui4VisualRect {
+        x: zone.rect.x.saturating_add(column),
+        y: zone.rect.y.saturating_add(first),
+        width: 1,
+        height: last.saturating_sub(first).saturating_add(1),
+    })
+}
+
+fn dock_zone_local_contains(
+    target: super::WindowDockTarget,
+    width: u32,
+    height: u32,
+    x: u32,
+    y: u32,
+) -> bool {
+    use super::WindowDockTarget;
+
+    if width == 0 || height == 0 || x >= width || y >= height {
+        return false;
+    }
+
+    let width = u64::from(width);
+    let height = u64::from(height);
+    let x = u64::from(x);
+    let y = u64::from(y);
+    match target {
+        WindowDockTarget::TopLeft
+        | WindowDockTarget::TopRight
+        | WindowDockTarget::BottomLeft
+        | WindowDockTarget::BottomRight => {
+            let corner_x = if matches!(
+                target,
+                WindowDockTarget::TopRight | WindowDockTarget::BottomRight
+            ) {
+                width.saturating_sub(1).saturating_sub(x)
+            } else {
+                x
+            };
+            let corner_y = if matches!(
+                target,
+                WindowDockTarget::BottomLeft | WindowDockTarget::BottomRight
+            ) {
+                height.saturating_sub(1).saturating_sub(y)
+            } else {
+                y
+            };
+            normalized_ellipse_contains(
+                corner_x.saturating_mul(2).saturating_add(1),
+                width.saturating_mul(2),
+                corner_y.saturating_mul(2).saturating_add(1),
+                height.saturating_mul(2),
+            )
+        }
+        WindowDockTarget::LeftHalf | WindowDockTarget::RightHalf => {
+            let inward_x = if target == WindowDockTarget::RightHalf {
+                width.saturating_sub(1).saturating_sub(x)
+            } else {
+                x
+            };
+            normalized_ellipse_contains(
+                inward_x.saturating_mul(2).saturating_add(1),
+                width.saturating_mul(2),
+                y.saturating_mul(2).saturating_add(1).abs_diff(height),
+                height,
+            )
+        }
+        WindowDockTarget::Maximize => normalized_ellipse_contains(
+            x.saturating_mul(2).saturating_add(1).abs_diff(width),
+            width,
+            y.saturating_mul(2).saturating_add(1),
+            height.saturating_mul(2),
+        ),
+    }
+}
+
+/// Pixel centers are expressed in doubled coordinates, then compared against
+/// the ellipse equation using integer cross-products. This keeps the mask
+/// deterministic at every DPI and avoids a floating-point boundary mismatch.
+fn normalized_ellipse_contains(nx: u64, dx: u64, ny: u64, dy: u64) -> bool {
+    if dx == 0 || dy == 0 {
+        return false;
+    }
+
+    let nx = u128::from(nx);
+    let dx = u128::from(dx);
+    let ny = u128::from(ny);
+    let dy = u128::from(dy);
+    let nx_squared = nx.saturating_mul(nx);
+    let dx_squared = dx.saturating_mul(dx);
+    let ny_squared = ny.saturating_mul(ny);
+    let dy_squared = dy.saturating_mul(dy);
+    nx_squared
+        .saturating_mul(dy_squared)
+        .saturating_add(ny_squared.saturating_mul(dx_squared))
+        <= dx_squared.saturating_mul(dy_squared)
 }
 
 const fn dock_target_label(target: super::WindowDockTarget) -> &'static str {
@@ -2509,8 +2694,9 @@ fn keyboard_hut_metadata(event: &crate::r::keyboard::TrueosKeyboardOutputEvent) 
 mod tests {
     use super::{
         Ui4CursorSource, Ui4InputEvent, Ui4PointerEvent, WindowId, coalesce_owner_state_sample,
-        dock_target_at_in_zones, dock_zone_metrics, dock_zones_with_reference,
-        owner_event_is_state_sample,
+        dock_target_at_in_zones, dock_zone_column_span, dock_zone_contains, dock_zone_metrics,
+        dock_zone_row_span, dock_zones_with_reference, owner_event_is_state_sample,
+        resize_epoch_is_newer,
     };
     use crate::ui4::WindowDockTarget;
 
@@ -2558,6 +2744,15 @@ mod tests {
             panic!("pointer was replaced with another event kind");
         };
         assert_eq!(event.wheel, i16::MAX);
+    }
+
+    #[test]
+    fn resize_epoch_order_survives_delivery_and_wrap() {
+        assert!(resize_epoch_is_newer(3, 2));
+        assert!(!resize_epoch_is_newer(2, 3));
+        assert!(!resize_epoch_is_newer(3, 3));
+        assert!(resize_epoch_is_newer(1, u64::MAX));
+        assert!(!resize_epoch_is_newer(u64::MAX, 1));
     }
 
     #[test]
@@ -2613,6 +2808,38 @@ mod tests {
         );
         assert_eq!(dock_target_at_in_zones(500, 0, &zones), None);
         assert_eq!(dock_target_at_in_zones(960, 200, &zones), None);
+        assert_eq!(dock_target_at_in_zones(95, 95, &zones), None);
+        assert_eq!(dock_target_at_in_zones(47, 460, &zones), None);
+        assert_eq!(dock_target_at_in_zones(832, 47, &zones), None);
+    }
+
+    #[test]
+    fn dock_field_spans_cover_exactly_the_curved_hitbox() {
+        let zones = dock_zones_with_reference(1_920, 1_080, Some((256, 160)));
+        for zone in zones {
+            for row in 0..zone.rect.height {
+                let span = dock_zone_row_span(zone, row);
+                for column in 0..zone.rect.width {
+                    let x = zone.rect.x.saturating_add(column);
+                    let y = zone.rect.y.saturating_add(row);
+                    let painted = span.is_some_and(|span| {
+                        x >= span.x && x < span.x.saturating_add(span.width)
+                    });
+                    assert_eq!(painted, dock_zone_contains(zone, x, y));
+                }
+            }
+            for column in 0..zone.rect.width {
+                let span = dock_zone_column_span(zone, column);
+                for row in 0..zone.rect.height {
+                    let x = zone.rect.x.saturating_add(column);
+                    let y = zone.rect.y.saturating_add(row);
+                    let painted = span.is_some_and(|span| {
+                        y >= span.y && y < span.y.saturating_add(span.height)
+                    });
+                    assert_eq!(painted, dock_zone_contains(zone, x, y));
+                }
+            }
+        }
     }
 
     #[test]

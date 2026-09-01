@@ -3177,37 +3177,27 @@ fn publish_preview_window_frame(
     ) {
         Ok(_) => {}
         Err(WindowBrokerError::StaleResize) => {
-            if (current_placement.width, current_placement.height)
-                == preview.committed_logical_extent
-            {
-                let superseded = preview.frame;
-                preview.frame = previous;
-                (preview.width, preview.height) = preview_backing_extent(
-                    preview.config.preset,
-                    preview.committed_logical_extent.0,
-                    preview.committed_logical_extent.1,
-                );
-                preview.pending_resize_previous_frame = None;
-                preview.pending_resize_logical_extent = None;
-                preview.pending_resize_epoch = None;
-                retire_frame_when_released(superseded);
-                crate::log_info!(
-                    target: "ui4";
-                    "ui4 gpgpu-preview resize front superseded request={} window={} frame={} live_extent={}x{} action=reuse-committed-front\n",
-                    preview.request_serial,
-                    preview.window.raw(),
-                    superseded.raw(),
-                    current_placement.width,
-                    current_placement.height,
-                );
-                return Ok(false);
-            }
+            // The broker rejected this exact extent, so retain its current
+            // SURFLIVE front and let authoritative extent reconciliation stage
+            // a successor. Holding this published-but-unattached allocation
+            // would needlessly consume a bounded frame-pool slot.
+            let superseded = preview.frame;
+            preview.frame = previous;
+            (preview.width, preview.height) = preview_backing_extent(
+                preview.config.preset,
+                preview.committed_logical_extent.0,
+                preview.committed_logical_extent.1,
+            );
+            preview.pending_resize_previous_frame = None;
+            preview.pending_resize_logical_extent = None;
+            preview.pending_resize_epoch = None;
+            retire_frame_when_released(superseded);
             crate::log_info!(
                 target: "ui4";
-                "ui4 gpgpu-preview resize front superseded request={} window={} frame={} staged_extent={}x{} current_extent={}x{} action=retain-old-front-and-restage\n",
+                "ui4 gpgpu-preview resize front superseded request={} window={} frame={} staged_extent={}x{} current_extent={}x{} action=reuse-committed-front-and-restage\n",
                 preview.request_serial,
                 preview.window.raw(),
-                preview.frame.raw(),
+                superseded.raw(),
                 staged_placement.width,
                 staged_placement.height,
                 current_placement.width,
