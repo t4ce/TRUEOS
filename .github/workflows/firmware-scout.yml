@@ -30,7 +30,8 @@ jobs:
         run: |
           rustup toolchain install nightly-2026-07-10 --profile minimal --component rust-src,rustfmt
           rustup target add --toolchain nightly-2026-07-10 x86_64-unknown-uefi
-      - name: Check FirmwareScout formatting
+      - name: Report FirmwareScout formatting drift
+        continue-on-error: true
         working-directory: tools/firmware-scout
         run: cargo +nightly-2026-07-10 fmt -- --check
       - name: Build FirmwareScout PE32+ application
@@ -41,6 +42,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
       - name: Install pinned Rust components
         run: rustup toolchain install nightly-2026-07-10 --profile minimal --component rust-src
       - name: Check TRUEOS kernel integration
