@@ -2,7 +2,7 @@ use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 use core::arch::x86_64::__cpuid;
 use core::fmt::Write;
-use core::sync::atomic::{Ordering, compiler_fence};
+use core::sync::atomic::{compiler_fence, Ordering};
 
 use spin::Mutex;
 use x86_64::registers::model_specific::Msr;
@@ -21,6 +21,7 @@ const HFI_PAGE_BYTES: usize = 4096;
 const HFI_MAX_TABLE_PAGES: usize = 16;
 const HFI_TIMESTAMP_BYTES: usize = core::mem::size_of::<u64>();
 const HFI_STABLE_CAPTURE_ATTEMPTS: usize = 32;
+const HFI_INITIAL_READY_POLLS: usize = 200_000;
 const HFI_INITIAL_READY_CAPTURE_ROUNDS: usize = 64;
 
 const MSR_IA32_HW_FEEDBACK_PTR: u32 = 0x17D0;
@@ -45,6 +46,7 @@ struct HfiTableState {
     row_stride: usize,
     row_count: usize,
     enabled: bool,
+    initial_ready: bool,
     initial_columns_seen: u8,
 }
 
@@ -318,6 +320,43 @@ fn capture_stable(state: HfiTableState) -> Option<HfiTableCapture> {
     previous
 }
 
+fn advertised_columns_ready(mask: u8, image: &[u8]) -> bool {
+    let column_count = mask.count_ones() as usize;
+    if column_count == 0 || image.len() < HFI_TIMESTAMP_BYTES + column_count {
+        return false;
+    }
+    image[HFI_TIMESTAMP_BYTES..HFI_TIMESTAMP_BYTES + column_count]
+        .iter()
+        .all(|value| *value != 0)
+}
+
+fn capture_completes_initial_population(state: HfiTableState, capture: &HfiTableCapture) -> bool {
+    state.enabled
+        && capture.stable
+        && capture.timestamp != 0
+        && advertised_columns_ready(state.capability_mask, &capture.image)
+}
+
+fn wait_for_initial_population(state: &mut HfiTableState) {
+    if state.initial_ready || !state.enabled {
+        return;
+    }
+
+    let column_count = state.capability_mask.count_ones() as usize;
+    for _ in 0..HFI_INITIAL_READY_POLLS {
+        let before = read_u64(state.virt, 0);
+        let mut columns_ready = before != 0;
+        for column in 0..column_count {
+            columns_ready &= read_u8(state.virt, HFI_TIMESTAMP_BYTES + column) != 0;
+        }
+        let after = read_u64(state.virt, 0);
+        if columns_ready
+            && before == after
+            && let Some(capture) = capture_stable(*state)
+            && capture_completes_initial_population(*state, &capture)
+        {
+            state.initial_ready = true;
+            return;
 fn updated_columns_mask(capability_mask: u8, image: &[u8]) -> u8 {
     let column_count = capability_mask.count_ones() as usize;
     if column_count == 0 || image.len() < HFI_TIMESTAMP_BYTES + column_count {
@@ -464,6 +503,7 @@ pub(crate) fn enable_table_explicit() -> Result<(), &'static str> {
         row_stride,
         row_count,
         enabled: true,
+        initial_ready: false,
         initial_columns_seen: 0,
     });
     if let Some(existing) = state.as_mut() {
@@ -504,6 +544,13 @@ pub(crate) fn table_snapshot_text() -> String {
         };
 
         let capture = capture_stable(*state);
+        if !state.initial_ready
+            && let Some(capture) = capture.as_ref()
+            && capture_completes_initial_population(*state, capture)
+        {
+            state.initial_ready = true;
+        }
+        (*state, capture, state.initial_ready)
         if let Some(capture) = capture.as_ref() {
             observe_stable_capture(state, capture);
         }
@@ -570,6 +617,7 @@ pub(crate) fn table_snapshot_text() -> String {
     .unwrap();
     writeln!(
         out,
+        "HFI header: performance_updated={} efficiency_updated={} initial_population={} update_interrupt=not-configured scheduler_consumer=none",
         "HFI header: performance_updated={} efficiency_updated={} initial_population={} initial_columns_seen=0x{:02X}/0x{:02X} update_interrupt=not-configured scheduler_consumer=none",
         perf_updated
             .map(|value| value.to_string())
@@ -719,6 +767,12 @@ mod tests {
     }
 
     #[test]
+    fn initial_population_requires_every_advertised_column() {
+        let mut image = [0u8; 16];
+        image[HFI_TIMESTAMP_BYTES] = 1;
+        assert!(!advertised_columns_ready(0x03, &image));
+        image[HFI_TIMESTAMP_BYTES + 1] = 1;
+        assert!(advertised_columns_ready(0x03, &image));
     fn update_indications_map_back_to_advertised_capability_bits() {
         let mut image = [0u8; 16];
         image[HFI_TIMESTAMP_BYTES] = 1;
@@ -774,6 +828,7 @@ mod tests {
         let mut image = [0u8; 24];
         image[HFI_TIMESTAMP_BYTES] = 1;
         image[HFI_TIMESTAMP_BYTES + 1] = 1;
+        assert!(advertised_columns_ready(0x03, &image));
         assert_eq!(updated_columns_mask(0x03, &image), 0x03);
     }
 }
