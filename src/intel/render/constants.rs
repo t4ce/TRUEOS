@@ -377,15 +377,15 @@ const fn device_supports_churn_retained_transform(device_id: u16, revision_id: u
     device_id == 0x4680 && revision_id == 0x0C
 }
 
-/// The checked-in adjacency geometry-shader binaries were captured for this
-/// exact UHD 770 target. Native VF adjacency assembly is not sufficient on
-/// its own: the resident path also installs the matching GS program and URB
-/// contract, so unvalidated devices must reject the draw before submission.
+/// The checked-in adjacency geometry-shader binaries target gfx120 Xe-LP.
+/// Admit the two known GT1 UHD 770 steppings explicitly: the captured RPL-S
+/// device and the physical ADL-S rig. Keep this as an allow-list rather than
+/// matching every Intel `??80` device.
 pub(crate) const fn device_supports_adjacency_geometry_shader(
     device_id: u16,
     revision_id: u8,
 ) -> bool {
-    device_id == 0xA780 && revision_id == 0x04
+    matches!((device_id, revision_id), (0xA780, 0x04) | (0x4680, 0x0C))
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -450,10 +450,12 @@ mod churn_forward_device_admission_tests {
     }
 
     #[test]
-    fn adjacency_geometry_shader_requires_its_exact_capture_target() {
+    fn adjacency_geometry_shader_admits_the_known_gfx120_uhd770_family() {
         assert!(device_supports_adjacency_geometry_shader(0xA780, 0x04));
+        assert!(device_supports_adjacency_geometry_shader(0x4680, 0x0C));
         assert!(!device_supports_adjacency_geometry_shader(0xA780, 0x03));
-        assert!(!device_supports_adjacency_geometry_shader(0x4680, 0x0C));
+        assert!(!device_supports_adjacency_geometry_shader(0x4680, 0x0B));
+        assert!(!device_supports_adjacency_geometry_shader(0xA680, 0x04));
     }
 
     #[test]
