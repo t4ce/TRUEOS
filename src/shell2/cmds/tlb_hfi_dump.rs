@@ -25,6 +25,11 @@ async fn dump_task(target: MatrixTarget) {
     }
     out.push_str("\n=== Intel HFI Hardware Feedback Table ===\n");
     out.push_str(&crate::power::hfi::table_snapshot_text());
+    if !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push('\n');
+    super::bios_tlb_dump::append_dump(&mut out);
 
     print_matrix_target_line(
         &target,
