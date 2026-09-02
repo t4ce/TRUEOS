@@ -1,0 +1,161 @@
+name: Validate read-only BIOS Blueprint app
+
+on:
+  push:
+    branches:
+      - bios-blueprint-surface-staging
+    paths:
+      - .github/workflows/validate-bios-blueprint-app.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TRUEOS_BLUEPRINTS_BASE: 2c5ba75889839857941afcd8603a8e11b4e5f2d2
+  BIOS_PAYLOAD_SHA256: 30188e8d033e382a2011fabf4c3092466ed4534a8d6a0d0ea80cab551a550c83
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out TRUEOS ABI provider and staged app payload
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: false
+
+      - name: Install pinned Rust components
+        run: rustup toolchain install nightly-2026-07-10 --profile minimal --component rust-src,rustfmt
+
+      - name: Materialize the companion TRUEOS-Blueprints patch
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat \
+            .pr-staging/bios-app-payload.part00 \
+            .pr-staging/bios-app-payload.part01 \
+            .pr-staging/bios-app-payload.part02 \
+            .pr-staging/bios-app-payload.part03 \
+            .pr-staging/bios-app-payload.part04 \
+            > /tmp/bios-app-payload.tar.xz.b64
+          base64 --decode /tmp/bios-app-payload.tar.xz.b64 \
+            > /tmp/bios-app-payload.tar.xz
+          printf '%s  %s\n' "$BIOS_PAYLOAD_SHA256" /tmp/bios-app-payload.tar.xz \
+            | sha256sum --check --strict -
+
+          BP_ROOT="$GITHUB_WORKSPACE/../TRUEOS-Blueprints"
+          git init "$BP_ROOT"
+          git -C "$BP_ROOT" remote add origin \
+            https://github.com/t4ce/TRUEOS-Blueprints.git
+          git -C "$BP_ROOT" fetch --depth 1 origin "$TRUEOS_BLUEPRINTS_BASE"
+          git -C "$BP_ROOT" checkout --detach FETCH_HEAD
+          tar -xJf /tmp/bios-app-payload.tar.xz -C "$BP_ROOT"
+
+          cd "$BP_ROOT"
+          python3 apply_blueprints_bios.py
+          rm apply_blueprints_bios.py
+
+          rustfmt +nightly-2026-07-10 --edition 2024 \
+            crates/trueos-v/src/vbios.rs \
+            apps/bios/server.rs
+          node --check apps/bios/app.js
+          python3 tools/check-bios-blueprint-boundary.py
+          git diff --check
+
+          cargo +nightly-2026-07-10 check -p bios
+          git diff --check
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+
+          allowed = {
+              'Cargo.lock',
+              'Cargo.toml',
+              'api/src/lib.rs',
+              'apps.json',
+              'apps/bios/Cargo.toml',
+              'apps/bios/README.md',
+              'apps/bios/app.js',
+              'apps/bios/index.html',
+              'apps/bios/server.rs',
+              'apps/bios/tailwind.css',
+              'crates/trueos-v/src/lib.rs',
+              'crates/trueos-v/src/vbios.rs',
+              'tools/check-bios-blueprint-boundary.py',
+          }
+          tracked = set(subprocess.check_output(
+              ['git', 'diff', '--name-only'], text=True
+          ).splitlines())
+          untracked = set(subprocess.check_output(
+              ['git', 'ls-files', '--others', '--exclude-standard'], text=True
+          ).splitlines())
+          changed = tracked | untracked
+          unexpected = sorted(changed - allowed)
+          missing = sorted(allowed - changed)
+          if unexpected:
+              raise SystemExit(f'unexpected changed paths: {unexpected}')
+          if missing:
+              raise SystemExit(f'missing expected changed paths: {missing}')
+
+          server = Path('apps/bios/server.rs').read_text(encoding='utf-8').casefold()
+          client = Path('apps/bios/app.js').read_text(encoding='utf-8').casefold()
+          abi = Path('crates/trueos-v/src/vbios.rs').read_text(encoding='utf-8').casefold()
+          forbidden = (
+              '.post(', '.put(', '.patch(', '.delete(',
+              'set_variable(', 'get_variable(', 'route_config(',
+              'form_browser', 'reset_system(', 'update_capsule(',
+          )
+          for token in forbidden:
+              if token in server or token in client or token in abi:
+                  raise SystemExit(f'forbidden BIOS app token: {token}')
+          print('bios-app-boundary: GET-only and mutation-free source verified')
+          PY
+
+          git config user.name "TRUEOS BIOS App Builder"
+          git config user.email "actions@users.noreply.github.com"
+
+          git add \
+            api/src/lib.rs \
+            crates/trueos-v/src/lib.rs \
+            crates/trueos-v/src/vbios.rs
+          git diff --cached --check
+          git commit -m "api/bios: Re-export the read-only schema surface"
+          ABI_COMMIT="$(git rev-parse HEAD)"
+
+          git add \
+            Cargo.lock \
+            Cargo.toml \
+            apps.json \
+            apps/bios \
+            tools/check-bios-blueprint-boundary.py
+          git diff --cached --check
+          git commit -m "apps/bios: Add the Axum BIOS explorer"
+          APP_COMMIT="$(git rev-parse HEAD)"
+
+          test "$(git rev-list --count "${TRUEOS_BLUEPRINTS_BASE}..HEAD")" = 2
+          git diff --check "${TRUEOS_BLUEPRINTS_BASE}..HEAD"
+
+          mkdir -p /tmp/bios-app-artifacts
+          git format-patch --stdout "${TRUEOS_BLUEPRINTS_BASE}..HEAD" \
+            > /tmp/bios-app-artifacts/trueos-blueprints-bios.patch
+          tar -cJf /tmp/bios-app-artifacts/trueos-blueprints-bios-source.tar.xz \
+            Cargo.lock Cargo.toml api/src/lib.rs apps.json apps/bios \
+            crates/trueos-v/src/lib.rs crates/trueos-v/src/vbios.rs \
+            tools/check-bios-blueprint-boundary.py
+          sha256sum /tmp/bios-app-artifacts/* \
+            | tee /tmp/bios-app-artifacts/SHA256SUMS
+
+          printf 'base=%s\nabi_commit=%s\napp_commit=%s\n' \
+            "$TRUEOS_BLUEPRINTS_BASE" "$ABI_COMMIT" "$APP_COMMIT" \
+            | tee /tmp/bios-app-artifacts/COMMITS.txt
+
+      - name: Upload mergeable Blueprint patch artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: trueos-blueprints-bios-readonly-explorer
+          path: /tmp/bios-app-artifacts
+          if-no-files-found: error
+          retention-days: 30
