@@ -21,6 +21,9 @@ on:
 permissions:
   contents: read
 
+env:
+  TRUEOS_BLUEPRINTS_REV: 973d1fbf1fde47e535b2b3d90f4ada6491eb1e6b
+
 jobs:
   firmware-scout:
     runs-on: ubuntu-24.04
@@ -46,5 +49,19 @@ jobs:
           submodules: recursive
       - name: Install pinned Rust components
         run: rustup toolchain install nightly-2026-07-10 --profile minimal --component rust-src
+      - name: Checkout Blueprint path dependencies
+        run: |
+          set -euo pipefail
+          mkdir -p bld
+          git init bld/TRUEOS-Blueprints
+          git -C bld/TRUEOS-Blueprints remote add origin \
+            https://github.com/t4ce/TRUEOS-Blueprints.git
+          git -C bld/TRUEOS-Blueprints fetch --depth 1 origin \
+            "${TRUEOS_BLUEPRINTS_REV}"
+          git -C bld/TRUEOS-Blueprints checkout --detach FETCH_HEAD
+          ln -s "${GITHUB_WORKSPACE}/bld/TRUEOS-Blueprints" \
+            "${GITHUB_WORKSPACE}/../TRUEOS-Blueprints"
+          test -f \
+            "${GITHUB_WORKSPACE}/../TRUEOS-Blueprints/crates/log-os/Cargo.toml"
       - name: Check TRUEOS kernel integration
         run: cargo +nightly-2026-07-10 check -p TRUEOS
