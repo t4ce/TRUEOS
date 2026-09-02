@@ -45,7 +45,7 @@ jobs:
           }
 
           decode bios_blueprint.rs 3e75629c3ef24cf96b0c4191c0e0b7bc96ed952a98a89fabf3c0bdf4361d3f95
-          decode apply_kernel_bios_blueprint.py 8f5c6d4a63488b9fe65ce7cd35adee9ee59a6dbede277eb20ff4ee783b343a12
+          decode apply_kernel_bios_blueprint.py 0d0517e1a1a4c811c809d245219bfa9630d4a2a1c320f962e8c5b97dc64a612e
 
           git config user.name "TRUEOS BIOS PR Builder"
           git config user.email "actions@users.noreply.github.com"
