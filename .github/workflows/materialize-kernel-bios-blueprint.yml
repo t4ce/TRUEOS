@@ -1,0 +1,133 @@
+name: Materialize read-only BIOS Blueprint surface
+
+on:
+  push:
+    branches:
+      - bios-blueprint-surface-staging
+    paths:
+      - .github/workflows/materialize-kernel-bios-blueprint.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  BASE_SHA: 5cf133a54a387083647a41243370a0d429f44a79
+  TARGET_BRANCH: blueprint/bios-readonly-surface
+  TRUEOS_BLUEPRINTS_REV: 973d1fbf1fde47e535b2b3d90f4ada6491eb1e6b
+
+jobs:
+  materialize:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out staging payloads
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Install pinned Rust components
+        run: rustup toolchain install nightly-2026-07-10 --profile minimal --component rust-src,rustfmt
+
+      - name: Materialize and validate kernel surface
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p /tmp/materialized
+          decode() {
+            local name="$1"
+            local expected="$2"
+            base64 --decode ".pr-staging/${name}.xz.b64" \
+              | xz --decompress --stdout > "/tmp/materialized/${name}"
+            printf '%s  %s\n' "$expected" "/tmp/materialized/${name}" \
+              | sha256sum --check --strict -
+          }
+
+          decode bios_blueprint.rs 3e75629c3ef24cf96b0c4191c0e0b7bc96ed952a98a89fabf3c0bdf4361d3f95
+          decode apply_kernel_bios_blueprint.py 8f5c6d4a63488b9fe65ce7cd35adee9ee59a6dbede277eb20ff4ee783b343a12
+
+          git config user.name "TRUEOS BIOS PR Builder"
+          git config user.email "actions@users.noreply.github.com"
+          git checkout -B "$TARGET_BRANCH" "$BASE_SHA"
+
+          cp /tmp/materialized/bios_blueprint.rs src/shell2/cmds/bios_blueprint.rs
+          python3 /tmp/materialized/apply_kernel_bios_blueprint.py
+          cargo +nightly-2026-07-10 fmt --all
+          python3 tools/check-bios-schema-boundary.py
+          git diff --check
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import subprocess
+
+          allowed = {
+              'crates/trueos-vm/src/vmcall.rs',
+              'src/hv/blueprint/blueprint.rs',
+              'src/hv/vmcall.rs',
+              'src/r/net/vlayer.rs',
+              'src/shell2/cmds/bios_blueprint.rs',
+              'src/shell2/cmds/mod.rs',
+              'tools/check-bios-schema-boundary.py',
+          }
+          changed = set(subprocess.check_output(
+              ['git', 'diff', '--name-only'], text=True
+          ).splitlines())
+          unexpected = sorted(changed - allowed)
+          missing = sorted(allowed - changed)
+          if unexpected:
+              raise SystemExit(f'unexpected changed paths: {unexpected}')
+          if missing:
+              raise SystemExit(f'missing expected changed paths: {missing}')
+          text = Path('src/shell2/cmds/bios_blueprint.rs').read_text(encoding='utf-8').casefold()
+          forbidden = (
+              'get_variable(',
+              'set_variable(',
+              'route_config(',
+              'form_browser',
+              'reset_system(',
+              'update_capsule(',
+          )
+          for token in forbidden:
+              if token in text:
+                  raise SystemExit(f'forbidden BIOS Blueprint token: {token}')
+          required = (
+              'activewritepath',
+              'captured-redacted-not-decoded-in-this-cycle',
+              'firmwarewrites',
+              'questioncallbacks',
+          )
+          for token in required:
+              if token not in text:
+                  raise SystemExit(f'missing read-only BIOS Blueprint guard: {token}')
+          print('bios-blueprint-boundary: read-only JSON surface verified')
+          PY
+
+          mkdir -p bld
+          git init bld/TRUEOS-Blueprints
+          git -C bld/TRUEOS-Blueprints remote add origin \
+            https://github.com/t4ce/TRUEOS-Blueprints.git
+          git -C bld/TRUEOS-Blueprints fetch --depth 1 origin \
+            "$TRUEOS_BLUEPRINTS_REV"
+          git -C bld/TRUEOS-Blueprints checkout --detach FETCH_HEAD
+          ln -s "$GITHUB_WORKSPACE/bld/TRUEOS-Blueprints" \
+            "$GITHUB_WORKSPACE/../TRUEOS-Blueprints"
+          test -f "$GITHUB_WORKSPACE/../TRUEOS-Blueprints/crates/log-os/Cargo.toml"
+
+          cargo +nightly-2026-07-10 check -p TRUEOS
+
+          git add \
+            crates/trueos-vm/src/vmcall.rs \
+            src/hv/blueprint/blueprint.rs \
+            src/hv/vmcall.rs \
+            src/r/net/vlayer.rs \
+            src/shell2/cmds/bios_blueprint.rs \
+            src/shell2/cmds/mod.rs \
+            tools/check-bios-schema-boundary.py
+          git diff --cached --check
+          git commit -m "blueprint/bios: Export the cached read-only schema"
+          echo "MATERIALIZED_HEAD=$(git rev-parse HEAD)"
+
+          git push \
+            --force-with-lease="refs/heads/${TARGET_BRANCH}:${BASE_SHA}" \
+            origin "HEAD:refs/heads/${TARGET_BRANCH}"
