@@ -12,6 +12,52 @@ pub type EfiSystemTableRequest = request::EfiRequest;
 pub type SmbiosResponse = request::SmbiosResponse;
 pub type SmbiosRequest = request::SmbiosRequest;
 
+/// Experimental, TRUEOS-only Limine boot-protocol extension: an opt-in,
+/// read-only capture of the firmware's HII package lists and current HII
+/// configuration, performed by a patched Limine right before it calls
+/// ExitBootServices(). Not part of the upstream limine-protocol spec, so it
+/// isn't in the `limine` crate; the raw ABI layout is reproduced here to
+/// match `common/protos/limine_trueos_hii.h` in the `t4ce/Limine` fork.
+#[repr(C)]
+pub struct TrueosHiiCaptureResponse {
+    pub revision: u64,
+    pub address: u64,
+    pub size: u64,
+}
+
+#[repr(C)]
+pub struct TrueosHiiCaptureRequest {
+    id: [u64; 4],
+    revision: u64,
+    response: core::cell::UnsafeCell<*const TrueosHiiCaptureResponse>,
+}
+
+// Limine writes `response` from a single thread before the kernel's own code
+// ever runs; TRUEOS only reads it afterward, so sharing this static is sound.
+unsafe impl Sync for TrueosHiiCaptureRequest {}
+
+impl TrueosHiiCaptureRequest {
+    const LIMINE_COMMON_MAGIC: [u64; 2] = [0xc7b1dd30df4c8b88, 0x0a82e883a194f07b];
+
+    pub const fn new() -> Self {
+        Self {
+            id: [
+                Self::LIMINE_COMMON_MAGIC[0],
+                Self::LIMINE_COMMON_MAGIC[1],
+                0x1e2f9b6a7c4d5e81,
+                0x9a0b3c7d2e6f5148,
+            ],
+            revision: 0,
+            response: core::cell::UnsafeCell::new(core::ptr::null()),
+        }
+    }
+
+    pub fn response(&self) -> Option<&'static TrueosHiiCaptureResponse> {
+        let ptr = unsafe { *self.response.get() };
+        if ptr.is_null() { None } else { Some(unsafe { &*ptr }) }
+    }
+}
+
 const UNSET_U64: u64 = u64::MAX;
 
 static BOOT_TIMESTAMP_SECS_CACHE: AtomicU64 = AtomicU64::new(UNSET_U64);
@@ -79,6 +125,10 @@ pub static EFI_SYSTEM_TABLE_REQUEST: EfiSystemTableRequest = EfiSystemTableReque
 #[used]
 #[unsafe(link_section = ".limine_requests")]
 pub static SMBIOS_REQUEST: SmbiosRequest = SmbiosRequest::new();
+
+#[used]
+#[unsafe(link_section = ".limine_requests")]
+pub static TRUEOS_HII_CAPTURE_REQUEST: TrueosHiiCaptureRequest = TrueosHiiCaptureRequest::new();
 
 pub fn hhdm_offset() -> Option<u64> {
     if let Some(offset) = crate::live_update::warm_hhdm_offset() {
@@ -245,6 +295,10 @@ pub fn rsdp_address() -> Option<u64> {
 pub fn efi_system_table_address() -> Option<u64> {
     let resp = efi_system_table_response()?;
     Some(resp.address as u64)
+}
+
+pub fn trueos_hii_capture_response() -> Option<&'static TrueosHiiCaptureResponse> {
+    TRUEOS_HII_CAPTURE_REQUEST.response()
 }
 
 pub fn smbios_response() -> Option<&'static SmbiosResponse> {

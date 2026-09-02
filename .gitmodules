@@ -1,6 +1,6 @@
 [submodule "vendor/limine"]
 	path = vendor/limine
-	url = https://github.com/limine-bootloader/limine.git
+	url = https://github.com/t4ce/Limine.git
 	branch = v12.x
 	ignore = untracked
 [submodule "vendor/infer"]

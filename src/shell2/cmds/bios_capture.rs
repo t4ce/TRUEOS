@@ -155,7 +155,33 @@ fn build_report() -> String {
     out
 }
 
+/// TRPAY1 payload handed off directly by a patched Limine (see
+/// `t4ce/Limine`'s `common/lib/trueos_hii.c`), if the kernel's request was
+/// answered. Bounded and mapped the same way as the FirmwareScout/TRBIOS1
+/// payload below, just without an outer catalog wrapper to unwrap first.
+fn trueos_hii_payload() -> Option<&'static [u8]> {
+    let response = crate::limine::trueos_hii_capture_response()?;
+    let len = usize::try_from(response.size).ok()?;
+    if len == 0 || len > MAX_PAYLOAD_BYTES {
+        return None;
+    }
+    let phys = crate::limine::try_as_phys_addr(response.address)?;
+    require_range(phys, len, "limine hii capture payload").ok()?;
+    let mapping = crate::pci::mmio::map_mmio_region_exact(phys, len).ok()?;
+    Some(unsafe { core::slice::from_raw_parts(mapping.as_ptr(), len) })
+}
+
 fn append_catalog(out: &mut String) -> Result<(), String> {
+    if let Some(payload) = trueos_hii_payload() {
+        writeln!(
+            out,
+            "fallback_preboot_catalog=valid source=limine-experimental-hii-capture payload_bytes={}",
+            payload.len()
+        )
+        .unwrap();
+        return append_payload_sections(out, payload, None);
+    }
+
     let tables = crate::efi::configuration_tables()
         .map_err(|error| alloc::format!("configuration tables: {error:?}"))?;
     let entry = tables
@@ -203,7 +229,7 @@ fn append_catalog(out: &mut String) -> Result<(), String> {
 
     writeln!(
         out,
-        "fallback_preboot_catalog=valid table_phys=0x{:016X} payload_phys=0x{:016X} payload_bytes={} crc_valid=yes",
+        "fallback_preboot_catalog=valid source=firmware-scout-trbios1 table_phys=0x{:016X} payload_phys=0x{:016X} payload_bytes={} crc_valid=yes",
         catalog_phys,
         payload_phys,
         payload_len
@@ -220,6 +246,18 @@ fn append_catalog(out: &mut String) -> Result<(), String> {
     )
     .unwrap();
 
+    append_payload_sections(out, payload, Some(catalog.package_list_count))
+}
+
+/// Shared TRPAY1 section decoder for both payload sources: the Limine
+/// experimental HII-capture handoff and the FirmwareScout TRBIOS1 catalog.
+/// `expected_package_list_count` is only available from the TRBIOS1 outer
+/// header; the Limine source has no separate outer header to cross-check.
+fn append_payload_sections(
+    out: &mut String,
+    payload: &[u8],
+    expected_package_list_count: Option<u32>,
+) -> Result<(), String> {
     let header = read_struct::<PayloadHeader>(payload, 0)?;
     if header.magic != PAYLOAD_MAGIC || header.version != VERSION {
         return Err(alloc::format!(
@@ -320,6 +358,10 @@ fn append_catalog(out: &mut String) -> Result<(), String> {
             SEC_STATUS => receipt_valid = append_receipt(out, bytes)?,
             SEC_HII => match summarize_hii(bytes) {
                 Ok(summary) => {
+                    let catalog_count_match = match expected_package_list_count {
+                        Some(expected) => yes_no(summary.lists == expected),
+                        None => "n/a",
+                    };
                     writeln!(
                         out,
                         "  hii lists={} packages={} forms={} form_bytes={} strings={} string_bytes={} catalog_count_match={}",
@@ -329,7 +371,7 @@ fn append_catalog(out: &mut String) -> Result<(), String> {
                         summary.form_bytes,
                         summary.strings,
                         summary.string_bytes,
-                        yes_no(summary.lists == catalog.package_list_count)
+                        catalog_count_match
                     )
                     .unwrap();
                     hii_ready = summary.forms != 0 && summary.strings != 0;
@@ -355,6 +397,204 @@ fn append_catalog(out: &mut String) -> Result<(), String> {
     )
     .unwrap();
     Ok(())
+}
+
+/// Aggregate fields for the single-line early-boot `bios-handoff` receipt.
+/// A trimmed-down parallel of [`append_catalog`] that skips the verbose
+/// per-section text the interactive `bios capture` command prints.
+pub(crate) struct HandoffSummary {
+    pub source: &'static str,
+    pub payload_bytes: u32,
+    pub status_receipt_valid: bool,
+    pub hii_packages: u32,
+    pub form_packages: u32,
+    pub string_packages: u32,
+    pub config_captured: bool,
+    pub ready_for_ifr_parser: bool,
+}
+
+/// Distinguishes "never handed off" from "handoff present but malformed" so
+/// the receipt line can tell the two failure modes apart.
+pub(crate) enum HandoffError {
+    Absent(String),
+    Invalid(String),
+}
+
+pub(crate) fn handoff_summary() -> Result<HandoffSummary, HandoffError> {
+    if let Some(payload) = trueos_hii_payload() {
+        return parse_handoff_summary(payload)
+            .map(|mut summary| {
+                summary.source = "limine-experimental-hii-capture";
+                summary
+            })
+            .map_err(HandoffError::Invalid);
+    }
+
+    let tables = crate::efi::configuration_tables()
+        .map_err(|error| HandoffError::Absent(alloc::format!("configuration tables: {error:?}")))?;
+    let entry = tables
+        .iter()
+        .find(|entry| guid_eq(&entry.vendor_guid, &TRUEOS_BIOS_CATALOG_GUID))
+        .ok_or_else(|| {
+            HandoffError::Absent(String::from("TRBIOS1 absent; boot through FirmwareScout first"))
+        })?;
+    if entry.vendor_table == 0 {
+        return Err(HandoffError::Absent(String::from("TRBIOS1 table pointer is zero")));
+    }
+
+    let catalog_phys = crate::limine::try_as_phys_addr(entry.vendor_table as u64)
+        .ok_or_else(|| HandoffError::Absent(String::from("TRBIOS1 table pointer is not mappable")))?;
+    require_range(catalog_phys, size_of::<CatalogHeader>(), "catalog header")
+        .map_err(HandoffError::Invalid)?;
+    let mapping = crate::pci::mmio::map_limine_struct::<CatalogHeader>(catalog_phys)
+        .map_err(|error| HandoffError::Invalid(alloc::format!("catalog map: {error:?}")))?;
+    let catalog = unsafe { core::ptr::read_unaligned(mapping.as_ptr()) };
+    if catalog.magic != CATALOG_MAGIC || catalog.version != VERSION {
+        return Err(HandoffError::Invalid(String::from("unsupported catalog magic/version")));
+    }
+    if usize::from(catalog.header_bytes) < size_of::<CatalogHeader>() {
+        return Err(HandoffError::Invalid(String::from("catalog header_bytes is too small")));
+    }
+    let payload_len = catalog.payload_bytes as usize;
+    if payload_len == 0 || payload_len > MAX_PAYLOAD_BYTES {
+        return Err(HandoffError::Invalid(alloc::format!(
+            "payload bytes={} outside bound",
+            payload_len
+        )));
+    }
+    let payload_phys = crate::limine::try_as_phys_addr(catalog.payload_phys)
+        .ok_or_else(|| HandoffError::Invalid(String::from("payload pointer is not mappable")))?;
+    require_range(payload_phys, payload_len, "catalog payload").map_err(HandoffError::Invalid)?;
+    let payload_mapping = crate::pci::mmio::map_mmio_region_exact(payload_phys, payload_len)
+        .map_err(|error| HandoffError::Invalid(alloc::format!("payload map: {error:?}")))?;
+    let payload = unsafe { core::slice::from_raw_parts(payload_mapping.as_ptr(), payload_len) };
+    if crc32fast::hash(payload) != catalog.payload_crc32 {
+        return Err(HandoffError::Invalid(String::from("payload CRC mismatch")));
+    }
+
+    parse_handoff_summary(payload)
+        .map(|mut summary| {
+            summary.source = "firmware-scout-trbios1";
+            summary
+        })
+        .map_err(HandoffError::Invalid)
+}
+
+/// Shared TRPAY1 parser for [`HandoffSummary`], used by both the Limine
+/// experimental HII-capture handoff and the FirmwareScout TRBIOS1 catalog.
+fn parse_handoff_summary(payload: &[u8]) -> Result<HandoffSummary, String> {
+    let header = read_struct::<PayloadHeader>(payload, 0)?;
+    if header.magic != PAYLOAD_MAGIC || header.version != VERSION {
+        return Err(String::from("unsupported payload magic/version"));
+    }
+    if usize::from(header.header_bytes) < size_of::<PayloadHeader>()
+        || usize::from(header.section_entry_bytes) < size_of::<SectionEntry>()
+    {
+        return Err(String::from("TRPAY1 header or entry size is too small"));
+    }
+    let count = header.section_count as usize;
+    if count == 0 || count > MAX_SECTIONS || header.total_bytes as usize != payload.len() {
+        return Err(String::from("TRPAY1 shape invalid"));
+    }
+    let entry_bytes = header.section_entry_bytes as usize;
+    let directory_end = usize::from(header.header_bytes)
+        .checked_add(
+            count
+                .checked_mul(entry_bytes)
+                .ok_or_else(|| String::from("section directory overflow"))?,
+        )
+        .ok_or_else(|| String::from("section directory overflow"))?;
+    if directory_end > payload.len() {
+        return Err(String::from("section directory is truncated"));
+    }
+
+    let mut summary = HandoffSummary {
+        source: "",
+        payload_bytes: payload.len() as u32,
+        status_receipt_valid: false,
+        hii_packages: 0,
+        form_packages: 0,
+        string_packages: 0,
+        config_captured: false,
+        ready_for_ifr_parser: false,
+    };
+    let mut ranges: Vec<(usize, usize)> = Vec::with_capacity(count);
+    for index in 0..count {
+        let offset = usize::from(header.header_bytes)
+            .checked_add(
+                index
+                    .checked_mul(entry_bytes)
+                    .ok_or_else(|| String::from("section entry overflow"))?,
+            )
+            .ok_or_else(|| String::from("section entry overflow"))?;
+        let section = read_struct::<SectionEntry>(payload, offset)?;
+        let start = section.offset as usize;
+        let end = start
+            .checked_add(section.length as usize)
+            .ok_or_else(|| String::from("section range overflow"))?;
+        if section.length == 0 || start < directory_end || end > payload.len() {
+            return Err(alloc::format!("section {} range invalid", index));
+        }
+        if ranges.iter().any(|&(left, right)| start < right && end > left) {
+            return Err(alloc::format!("section {} overlaps another", index));
+        }
+        ranges.push((start, end));
+
+        let bytes = &payload[start..end];
+        if crc32fast::hash(bytes) != section.crc32 {
+            continue;
+        }
+        match section.kind {
+            SEC_STATUS => {
+                if let Ok(status) = read_struct::<CaptureStatus>(bytes, 0) {
+                    summary.status_receipt_valid = status.magic == STATUS_MAGIC
+                        && status.version == VERSION
+                        && usize::from(status.bytes) >= size_of::<CaptureStatus>()
+                        && usize::from(status.bytes) <= bytes.len();
+                }
+            }
+            SEC_HII => {
+                if let Ok(hii) = summarize_hii(bytes) {
+                    summary.hii_packages = hii.packages;
+                    summary.form_packages = hii.forms;
+                    summary.string_packages = hii.strings;
+                    summary.ready_for_ifr_parser = hii.forms != 0 && hii.strings != 0;
+                }
+            }
+            SEC_CONFIG => {
+                summary.config_captured = bytes.len() >= 2
+                    && bytes.len() % 2 == 0
+                    && read_u16(bytes, bytes.len() - 2).unwrap_or(1) == 0;
+            }
+            _ => {}
+        }
+    }
+    Ok(summary)
+}
+
+/// One-line high-salience `bios-handoff` receipt for the ordinary bare-metal
+/// boot log, so hardware acceptance no longer needs an interactive
+/// `bios capture` or a photo of the preboot screen.
+pub(crate) fn important_receipt_line() -> String {
+    match handoff_summary() {
+        Ok(summary) => alloc::format!(
+            "bios-handoff: source={} payload=TRPAY1 payload_bytes={} aggregate_crc=yes status_receipt={} hii_packages={} form_packages={} string_packages={} config_captured={} ready_for_ifr_parser={}",
+            summary.source,
+            summary.payload_bytes,
+            yes_no(summary.status_receipt_valid),
+            summary.hii_packages,
+            summary.form_packages,
+            summary.string_packages,
+            yes_no(summary.config_captured),
+            yes_no(summary.ready_for_ifr_parser)
+        ),
+        Err(HandoffError::Absent(_)) => String::from(
+            "bios-handoff: trbios1=absent booted_through_firmware_scout=not-evidenced",
+        ),
+        Err(HandoffError::Invalid(detail)) => {
+            alloc::format!("bios-handoff: trbios1=invalid detail=\"{}\"", detail)
+        }
+    }
 }
 
 fn append_receipt(out: &mut String, bytes: &[u8]) -> Result<bool, String> {

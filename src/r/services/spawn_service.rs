@@ -1917,6 +1917,14 @@ pub async fn spawn_service_task(spawner: Spawner) {
                                 "spawn-svc: started {} (mask=0x{:08X})\n",
                                 spec.name, spec.required
                             ));
+                            // Promote the FirmwareScout/TRBIOS1 handoff result into
+                            // the same first-visible window of the bare-metal log,
+                            // so hardware acceptance never depends on an
+                            // interactive `bios capture` or a screen photo.
+                            crate::log_important!(target: "boot";
+                                "[firmware] {}\n",
+                                crate::shell2::cmds::bios_capture::important_receipt_line()
+                            );
                         } else {
                             crate::log!(
                                 "spawn-svc: started {} (mask=0x{:08X})\n",

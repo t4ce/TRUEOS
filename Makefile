@@ -63,6 +63,15 @@ BUILDIN_BP_FILES := $(addprefix $(BLUEPRINTS_DIR)/dist/,$(addsuffix .bp,$(BUILDI
 BUILDIN_COMMON_INPUTS := $(shell if [ -d "$(BLUEPRINTS_DIR)" ]; then find "$(BLUEPRINTS_DIR)/src" "$(BLUEPRINTS_DIR)/api" "$(BLUEPRINTS_DIR)/.cargo" -type f 2>/dev/null; fi) $(wildcard $(BLUEPRINTS_DIR)/Cargo.toml $(BLUEPRINTS_DIR)/rust-toolchain.toml $(BLUEPRINTS_DIR)/apps.json)
 ENABLE_BLUEPRINTS ?= 0
 ENABLE_WEAVE_HELLO ?= 0
+# When enabled, install FirmwareScout.efi as BOOTX64.EFI (preserving the
+# original Limine loader as LIMINE.EFI) on both the TFTP boot tree and the
+# embedded EFI System Partition image, so the physical test rig actually
+# chainloads through FirmwareScout instead of Limine directly.
+ENABLE_FIRMWARE_SCOUT ?= 0
+FIRMWARE_SCOUT_BUILD_SCRIPT := tools/firmware-scout/build.sh
+FIRMWARE_SCOUT_STAGE_TREE_SCRIPT := tools/firmware-scout/stage-tree.sh
+FIRMWARE_SCOUT_STAGE_EFI_IMAGE_SCRIPT := tools/firmware-scout/stage-efi-image.sh
+FIRMWARE_SCOUT_EFI := bld/firmware-scout-target/x86_64-unknown-uefi/release/trueos-firmware-scout.efi
 QEMU_RUNNER := tools/qemu/run.sh
 QEMU_BIN ?= qemu-system-x86_64
 QEMU_MEMORY ?= 12000M
@@ -391,7 +400,7 @@ testrig-physical-reset-log:
 	done; \
 	runtime_sha=$$(sha256sum "$(ARTIFACT_RUNTIME_ELF)" | cut -d ' ' -f1); \
 	iso_sha=$$(sha256sum "$(ISO_PATH)" | cut -d ' ' -f1); \
-	bootfile_sha=$$(sha256sum "$(LIMINE_BOOTX64)" | cut -d ' ' -f1); \
+	bootfile_sha=$$(sha256sum "$(BAREMETAL_TFTP_BOOTFILE)" | cut -d ' ' -f1); \
 	TRUEOS_BAREMETAL_LOG_HOST="$(BAREMETAL_LOG_HOST)" \
 	TRUEOS_BAREMETAL_LOG_PORT="$(BAREMETAL_LOG_PORT)" \
 	TRUEOS_BAREMETAL_LOG_DELAY="$(BAREMETAL_LOG_DELAY)" \
@@ -457,6 +466,19 @@ iso: artifacts images limine
 	cp $(ARTIFACT_RUNTIME_ELF) $(ISO_BOOT_DIR)/TRUEOS.elf
 	mkdir -p $(ISO_DIR)/EFI/BOOT
 	cp $(LIMINE_BOOTX64) $(ISO_DIR)/EFI/BOOT/BOOTX64.EFI
+	@if [ "$(ENABLE_FIRMWARE_SCOUT)" = "1" ]; then \
+		"$(FIRMWARE_SCOUT_BUILD_SCRIPT)"; \
+		"$(FIRMWARE_SCOUT_STAGE_TREE_SCRIPT)" "$(ISO_DIR)/EFI/BOOT" "$(FIRMWARE_SCOUT_EFI)"; \
+		boot_sha=$$(sha256sum "$(ISO_DIR)/EFI/BOOT/BOOTX64.EFI" | cut -d' ' -f1); \
+		limine_sha=$$(sha256sum "$(ISO_DIR)/EFI/BOOT/LIMINE.EFI" | cut -d' ' -f1); \
+		if [ "$$boot_sha" = "$$limine_sha" ]; then \
+			echo "error: FirmwareScout staging left $(ISO_DIR)/EFI/BOOT/BOOTX64.EFI identical to LIMINE.EFI" >&2; \
+			exit 1; \
+		fi; \
+		echo "iso: FirmwareScout staged TFTP tree BOOTX64.EFI=$$boot_sha LIMINE.EFI=$$limine_sha"; \
+	else \
+		echo "iso: skipping FirmwareScout staging (ENABLE_FIRMWARE_SCOUT=0)"; \
+	fi
 	@if [ ! -f "$(GUC_FW_HOST_PATH)" ]; then \
 		echo "error: required GuC firmware not found at $(GUC_FW_HOST_PATH)"; \
 		exit 1; \
@@ -530,6 +552,11 @@ iso: artifacts images limine
 	mkfs.vfat -n TRUEOS_EFI $(ISO_BOOT_DIR)/$(ISO_EFI_IMG)
 	mmd -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) ::/EFI ::/EFI/BOOT
 	mcopy -i $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) $(LIMINE_BOOTX64) ::/EFI/BOOT/BOOTX64.EFI
+	@if [ "$(ENABLE_FIRMWARE_SCOUT)" = "1" ]; then \
+		"$(FIRMWARE_SCOUT_STAGE_EFI_IMAGE_SCRIPT)" "$(ISO_BOOT_DIR)/$(ISO_EFI_IMG)" "$(FIRMWARE_SCOUT_EFI)"; \
+	else \
+		echo "iso: skipping FirmwareScout staging of $(ISO_EFI_IMG) (ENABLE_FIRMWARE_SCOUT=0)"; \
+	fi
 	cp $(ISO_BOOT_DIR)/$(ISO_EFI_IMG) $(ISO_DIR)/$(ISO_EFI_IMG)
 	xorriso -as mkisofs \
 		-iso-level 3 -full-iso9660-filenames \
