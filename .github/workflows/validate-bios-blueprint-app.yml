@@ -52,6 +52,8 @@ jobs:
           git -C "$BP_ROOT" fetch --depth 1 origin "$TRUEOS_BLUEPRINTS_BASE"
           git -C "$BP_ROOT" checkout --detach FETCH_HEAD
           tar -xJf /tmp/bios-app-payload.tar.xz -C "$BP_ROOT"
+          cp "$GITHUB_WORKSPACE/.pr-staging/check-bios-blueprint-boundary.py" \
+            "$BP_ROOT/tools/check-bios-blueprint-boundary.py"
 
           cd "$BP_ROOT"
           python3 apply_blueprints_bios.py
@@ -103,14 +105,19 @@ jobs:
           server = Path('apps/bios/server.rs').read_text(encoding='utf-8').casefold()
           client = Path('apps/bios/app.js').read_text(encoding='utf-8').casefold()
           abi = Path('crates/trueos-v/src/vbios.rs').read_text(encoding='utf-8').casefold()
-          forbidden = (
-              '.post(', '.put(', '.patch(', '.delete(',
+          forbidden_common = (
               'set_variable(', 'get_variable(', 'route_config(',
               'form_browser', 'reset_system(', 'update_capsule(',
           )
-          for token in forbidden:
+          for token in forbidden_common:
               if token in server or token in client or token in abi:
                   raise SystemExit(f'forbidden BIOS app token: {token}')
+          for token in ('.post(', '.put(', '.patch(', '.delete('):
+              if token in server:
+                  raise SystemExit(f'forbidden BIOS server route: {token}')
+          for method in ('post', 'put', 'patch', 'delete'):
+              if f"method: '{method}'" in client or f'method: "{method}"' in client:
+                  raise SystemExit(f'forbidden BIOS client method: {method}')
           print('bios-app-boundary: GET-only and mutation-free source verified')
           PY
 
