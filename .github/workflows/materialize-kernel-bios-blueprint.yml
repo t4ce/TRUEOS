@@ -53,6 +53,18 @@ jobs:
 
           cp /tmp/materialized/bios_blueprint.rs src/shell2/cmds/bios_blueprint.rs
           python3 /tmp/materialized/apply_kernel_bios_blueprint.py
+
+          mkdir -p bld
+          git init bld/TRUEOS-Blueprints
+          git -C bld/TRUEOS-Blueprints remote add origin \
+            https://github.com/t4ce/TRUEOS-Blueprints.git
+          git -C bld/TRUEOS-Blueprints fetch --depth 1 origin \
+            "$TRUEOS_BLUEPRINTS_REV"
+          git -C bld/TRUEOS-Blueprints checkout --detach FETCH_HEAD
+          ln -s "$GITHUB_WORKSPACE/bld/TRUEOS-Blueprints" \
+            "$GITHUB_WORKSPACE/../TRUEOS-Blueprints"
+          test -f "$GITHUB_WORKSPACE/../TRUEOS-Blueprints/crates/log-os/Cargo.toml"
+
           cargo +nightly-2026-07-10 fmt --all
           python3 tools/check-bios-schema-boundary.py
           git diff --check
@@ -102,17 +114,6 @@ jobs:
                   raise SystemExit(f'missing read-only BIOS Blueprint guard: {token}')
           print('bios-blueprint-boundary: read-only JSON surface verified')
           PY
-
-          mkdir -p bld
-          git init bld/TRUEOS-Blueprints
-          git -C bld/TRUEOS-Blueprints remote add origin \
-            https://github.com/t4ce/TRUEOS-Blueprints.git
-          git -C bld/TRUEOS-Blueprints fetch --depth 1 origin \
-            "$TRUEOS_BLUEPRINTS_REV"
-          git -C bld/TRUEOS-Blueprints checkout --detach FETCH_HEAD
-          ln -s "$GITHUB_WORKSPACE/bld/TRUEOS-Blueprints" \
-            "$GITHUB_WORKSPACE/../TRUEOS-Blueprints"
-          test -f "$GITHUB_WORKSPACE/../TRUEOS-Blueprints/crates/log-os/Cargo.toml"
 
           cargo +nightly-2026-07-10 check -p TRUEOS
 
