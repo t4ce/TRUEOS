@@ -100,7 +100,8 @@ const CURSOR_C_OFFSET: usize = 0x72080;
 const CURSOR_D_OFFSET: usize = 0x73080;
 const WARM_RING_BYTES: usize = 4096;
 const WARM_CONTEXT_BYTES: usize = 22 * 4096;
-const WARM_BATCH_BYTES: usize = 512 * 4096;
+const WARM_BATCH_BYTES: usize = RESIDENT_SCENE_PRIMARY_BATCH_BYTES
+    + (RESIDENT_SCENE_MAX_DRAWS + 1) * RESIDENT_SCENE_SECONDARY_BATCH_BYTES;
 const WARM_DRAW_STATE_BYTES: usize = 16 * 4096;
 // Reusable transient geometry staging. This is intentionally a bounded warm
 // allocation rather than scene-owned storage. Keep the cap visible so a future
@@ -142,19 +143,23 @@ const RENDER_RING_ENTRY_BYTES: usize = RENDER_RING_ENTRY_DWORDS * core::mem::siz
 const LRC_STATE_OFFSET_DWORDS: usize = 4096 / core::mem::size_of::<u32>();
 const GPU_VA_RING_BASE: u64 = 0x0080_0000;
 const GPU_VA_CONTEXT_BASE: u64 = 0x0081_0000;
-const GPU_VA_BATCH_BASE: u64 = 0x0180_0000;
+const GPU_VA_BATCH_BASE: u64 = 0x0175_0000;
 const GPU_VA_RESULT_BASE: u64 = 0x0084_0000;
 const GPU_VA_DRAW_STATE_BASE: u64 = 0x0086_0000;
 // One bounded state slot per resident-scene draw plus the full-screen clear. The
 // resident renderer owns this mapping for its lifetime; probe state remains at the
 // historical warm-state VA above.
 const GPU_VA_RESIDENT_SCENE_STATE_BASE: u64 = 0x3000_0000;
-const RESIDENT_SCENE_MAX_DRAWS: usize = 100;
+const RESIDENT_SCENE_MAX_DRAWS: usize = 600;
 const RESIDENT_SCENE_STATE_SLOT_BYTES: usize = 2 * 4096;
 const RESIDENT_SCENE_STATE_BYTES: usize =
     (RESIDENT_SCENE_MAX_DRAWS + 1) * RESIDENT_SCENE_STATE_SLOT_BYTES;
-const RESIDENT_SCENE_PRIMARY_BATCH_BYTES: usize = 4096;
-const RESIDENT_SCENE_SECONDARY_BATCH_BYTES: usize = 4 * 4096;
+const RESIDENT_SCENE_PRIMARY_BATCH_BYTES: usize = 5 * 4096;
+const RESIDENT_SCENE_SECONDARY_BATCH_BYTES: usize = 4096;
+const _: () = {
+    assert!(GPU_VA_STREAMOUT_BASE + WARM_STREAMOUT_BYTES as u64 <= GPU_VA_BATCH_BASE);
+    assert!(GPU_VA_BATCH_BASE + WARM_BATCH_BYTES as u64 <= GPU_VA_RESIDENT_SCENE_DEPTH_BASE);
+};
 // Render0 PPGTT-only warm geometry staging. The original 64 KiB allocation
 // lived directly below STREAMOUT_BASE; the raised 512 KiB cap starts where the
 // persistent-resource arena ends. Its numeric overlap with display Slot 3's
@@ -195,7 +200,7 @@ const _: () = {
     );
 };
 // Keep the imported 64 KiB compute mesh outside the 14.0625 MiB 1440p scene
-// target at 0x0088_0000..0x0169_0000 and below the batch at 0x0180_0000.
+// target at 0x0088_0000..0x0169_0000 and below the batch at 0x0175_0000.
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const GPU_VA_GPGPU_TILE_ARENA_BASE: u64 = 0x0400_0000;
 // Long-lived render resources share one collision-free VA allocator. Fonts

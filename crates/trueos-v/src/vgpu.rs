@@ -191,8 +191,8 @@ pub struct IndexedDraw {
 
 pub const MAX_INDEXED_BATCH_DRAWS: usize = 16;
 /// The mixed-topology V2 batch maps directly to the resident renderer's
-/// 100-draw scene capacity. V1 remains at 16 for ABI compatibility.
-pub const MAX_INDEXED_BATCH_V2_DRAWS: usize = 100;
+/// 600-draw scene capacity. V1 remains at 16 for ABI compatibility.
+pub const MAX_INDEXED_BATCH_V2_DRAWS: usize = 600;
 pub const PRIMITIVE_TOPOLOGY_POINT_LIST: u32 = 1;
 pub const PRIMITIVE_TOPOLOGY_LINE_LIST: u32 = 2;
 pub const PRIMITIVE_TOPOLOGY_LINE_STRIP: u32 = 3;
@@ -1051,7 +1051,7 @@ mod tests {
         assert_eq!(core::mem::size_of::<IndexedBatchDraw>(), 16);
         assert_eq!(core::mem::size_of::<IndexedDrawBatch>(), 312);
         assert_eq!(core::mem::size_of::<IndexedBatchDrawV2>(), 24);
-        assert_eq!(core::mem::size_of::<IndexedDrawBatchV2>(), 2456);
+        assert_eq!(core::mem::size_of::<IndexedDrawBatchV2>(), 14456);
         assert_eq!(core::mem::size_of::<RetainedMeshDescriptor>(), 48);
         assert_eq!(core::mem::offset_of!(RetainedMeshDescriptor, topology), 44);
         assert_eq!(core::mem::size_of::<RetainedTransformSeed>(), 64);

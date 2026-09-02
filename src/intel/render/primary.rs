@@ -434,11 +434,11 @@ fn finish_resident_secondary_breadcrumbs(
 }
 
 // Retained secondaries intentionally share the same result slots. Encode the
-// current secondary in bits 8..15 so a CAT leaves an exact parser frontier
+// current secondary starting at bit 8 so a CAT leaves an exact parser frontier
 // instead of an ambiguous marker from the preceding empty draw.
 fn resident_secondary_marker(base: u32, secondary_index: usize) -> Result<u32, &'static str> {
     let index = u32::try_from(secondary_index).map_err(|_| "scene-frame-secondary-index")?;
-    if index > u8::MAX as u32 {
+    if secondary_index > RESIDENT_SCENE_MAX_DRAWS {
         return Err("scene-frame-secondary-index");
     }
     base.checked_add(index << 8)
