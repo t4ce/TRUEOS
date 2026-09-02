@@ -51,11 +51,15 @@ pub(crate) fn broker_device_info(
             memory_quota: info.memory_quota as u64,
             buffer_count: info.buffer_count as u32,
             queue_count: info.queue_count as u32,
-            flags: if info.lost {
+            flags: (if info.lost {
                 v::vgpu::DeviceInfo::FLAG_LOST
             } else {
                 0
-            },
+            }) | (if info.adjacency_topology_rendering {
+                v::vgpu::DeviceInfo::FLAG_ADJACENCY_TOPOLOGY_RENDERING
+            } else {
+                0
+            }),
             reserved: 0,
         })
         .map_err(|error| error.errno())

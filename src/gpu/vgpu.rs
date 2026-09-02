@@ -558,6 +558,7 @@ pub(crate) struct DeviceInfo {
     pub(crate) buffer_count: usize,
     pub(crate) queue_count: usize,
     pub(crate) lost: bool,
+    pub(crate) adjacency_topology_rendering: bool,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -1224,6 +1225,13 @@ pub(crate) fn device_info(
     principal: Principal,
     handle: DeviceHandle,
 ) -> Result<DeviceInfo, VgpuError> {
+    let adjacency_topology_rendering = physical_device().is_some_and(|physical| {
+        let adapter = physical.adapter_info();
+        crate::intel::render::device_supports_adjacency_geometry_shader(
+            adapter.device_id,
+            adapter.revision_id,
+        )
+    });
     let broker = BROKER.lock();
     let device = lookup_device(&broker, handle, principal)?;
     Ok(DeviceInfo {
@@ -1242,6 +1250,7 @@ pub(crate) fn device_info(
             .filter(|slot| slot.record.is_some())
             .count(),
         lost: device.lost,
+        adjacency_topology_rendering,
     })
 }
 
@@ -2878,6 +2887,19 @@ pub(crate) fn submit_ui4_indexed_batch(
         })
     {
         return Err(VgpuError::Unsupported);
+    }
+    if batch
+        .draws
+        .iter()
+        .any(|draw| draw.topology.requires_adjacency_geometry_shader())
+    {
+        let adapter = require_physical()?.adapter_info();
+        if !crate::intel::render::device_supports_adjacency_geometry_shader(
+            adapter.device_id,
+            adapter.revision_id,
+        ) {
+            return Err(VgpuError::Unsupported);
+        }
     }
     let (window_id, phys, producer_gpu, bytes, width, height, pitch, vertices, mut indexed) = {
         let mut broker = BROKER.lock();

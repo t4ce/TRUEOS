@@ -68,6 +68,12 @@ impl<K: Copy + Eq, V, const N: usize> FixedKeyMap<K, V, N> {
             .filter_map(|entry| entry.as_ref().map(|entry| &entry.value))
     }
 
+    pub fn values_mut(&mut self) -> impl Iterator<Item = &mut V> {
+        self.entries
+            .iter_mut()
+            .filter_map(|entry| entry.as_mut().map(|entry| &mut entry.value))
+    }
+
     pub fn clear(&mut self) {
         for entry in &mut self.entries {
             *entry = None;

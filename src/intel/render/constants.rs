@@ -260,9 +260,7 @@ const _: () = {
     assert!(MI_BATCH_BUFFER_START_GEN8 == 0x1880_0001);
     assert!(MI_BATCH_BUFFER_START_GEN8 | MI_BATCH_PPGTT == 0x1880_0101);
     assert!(MI_BATCH_BUFFER_START_GEN8 | MI_BATCH_2ND_LEVEL == 0x18C0_0001);
-    assert!(
-        MI_BATCH_BUFFER_START_GEN8 | MI_BATCH_PPGTT | MI_BATCH_2ND_LEVEL == 0x18C0_0101
-    );
+    assert!(MI_BATCH_BUFFER_START_GEN8 | MI_BATCH_PPGTT | MI_BATCH_2ND_LEVEL == 0x18C0_0101);
 };
 // Gen8+ four-DWORD PPGTT load. Helio's draw stream uses this to feed the
 // hardware auto-draw registers directly from its resident 20-byte
@@ -379,6 +377,17 @@ const fn device_supports_churn_retained_transform(device_id: u16, revision_id: u
     device_id == 0x4680 && revision_id == 0x0C
 }
 
+/// The checked-in adjacency geometry-shader binaries were captured for this
+/// exact UHD 770 target. Native VF adjacency assembly is not sufficient on
+/// its own: the resident path also installs the matching GS program and URB
+/// contract, so unvalidated devices must reject the draw before submission.
+pub(crate) const fn device_supports_adjacency_geometry_shader(
+    device_id: u16,
+    revision_id: u8,
+) -> bool {
+    device_id == 0xA780 && revision_id == 0x04
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum ChurnHardwareAdmission {
     ValidatedProduction,
@@ -419,8 +428,8 @@ const fn device_admits_churn_retained_transform(
 mod churn_forward_device_admission_tests {
     use super::{
         ChurnHardwareAdmission, device_admits_churn_forward_native,
-        device_admits_churn_retained_transform, device_supports_churn_forward_native,
-        device_supports_churn_retained_transform,
+        device_admits_churn_retained_transform, device_supports_adjacency_geometry_shader,
+        device_supports_churn_forward_native, device_supports_churn_retained_transform,
     };
 
     #[test]
@@ -438,6 +447,13 @@ mod churn_forward_device_admission_tests {
         assert!(device_supports_churn_retained_transform(0x4680, 0x0C));
         assert!(!device_supports_churn_retained_transform(0x4680, 0x0B));
         assert!(!device_supports_churn_retained_transform(0x4680, 0x0D));
+    }
+
+    #[test]
+    fn adjacency_geometry_shader_requires_its_exact_capture_target() {
+        assert!(device_supports_adjacency_geometry_shader(0xA780, 0x04));
+        assert!(!device_supports_adjacency_geometry_shader(0xA780, 0x03));
+        assert!(!device_supports_adjacency_geometry_shader(0x4680, 0x0C));
     }
 
     #[test]

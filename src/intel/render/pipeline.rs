@@ -1491,7 +1491,9 @@ fn encode_triangle_probe_batch(
         return Err("probe-msaa4-device");
     }
     let adjacency_gs = batch_mode.adjacency_geometry_shader();
-    if adjacency_gs.is_some() && (warm.device_id != 0xA780 || warm.revision_id != 0x04) {
+    if adjacency_gs.is_some()
+        && !device_supports_adjacency_geometry_shader(warm.device_id, warm.revision_id)
+    {
         return Err("adjacency-gs-device-mismatch");
     }
     let mesa_host_fixed_function = matches!(backend_probe_mode, BackendProbeMode::MesaLike);

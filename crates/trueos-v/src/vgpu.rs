@@ -127,9 +127,16 @@ impl DeviceDiagnostics {
 
 impl DeviceInfo {
     pub const FLAG_LOST: u32 = 1 << 0;
+    /// The resident renderer can execute the GS-backed `_ADJ` primitive
+    /// topologies on the current physical adapter.
+    pub const FLAG_ADJACENCY_TOPOLOGY_RENDERING: u32 = 1 << 1;
 
     pub const fn is_lost(self) -> bool {
         self.flags & Self::FLAG_LOST != 0
+    }
+
+    pub const fn supports_adjacency_topology_rendering(self) -> bool {
+        self.flags & Self::FLAG_ADJACENCY_TOPOLOGY_RENDERING != 0
     }
 }
 
@@ -1020,6 +1027,17 @@ mod tests {
         assert!(Capabilities::DEFAULT.contains(Capabilities::QUEUE));
         assert!(Capabilities::DEFAULT.contains(Capabilities::TIMELINE));
         assert!(!Capabilities::DEFAULT.contains(Capabilities::PRESENT));
+    }
+
+    #[test]
+    fn device_info_reports_adjacency_rendering_as_an_explicit_feature() {
+        assert!(!DeviceInfo::default().supports_adjacency_topology_rendering());
+        let info = DeviceInfo {
+            flags: DeviceInfo::FLAG_ADJACENCY_TOPOLOGY_RENDERING,
+            ..DeviceInfo::default()
+        };
+        assert!(info.supports_adjacency_topology_rendering());
+        assert!(!info.is_lost());
     }
 
     #[test]

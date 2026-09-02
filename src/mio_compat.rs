@@ -27,11 +27,10 @@ pub(crate) const READY_WRITABLE: u8 = 0b0000_0010;
 pub(crate) const READY_ERROR: u8 = 0b0000_0100;
 pub(crate) const READY_READ_CLOSED: u8 = 0b0000_1000;
 pub(crate) const READY_WRITE_CLOSED: u8 = 0b0001_0000;
+/// Registration-only flag used by Mio-managed `IoSource`s. It never appears
+/// in a returned readiness mask.
+pub(crate) const INTEREST_EDGE_MANAGED: u8 = 0b1000_0000;
 const TCP_LISTENER_PREPOST: usize = 32;
-
-const CONNECT_COMPAT_WAIT_NS: u64 = 2_000_000_000;
-const CONNECT_IO_FASTPATH_NS: u64 = 1_000_000_000;
-const SELECTOR_PARK_SLICE_NS: u64 = 10_000_000;
 
 static MIO_SELECTOR_WAIT: WaitQueue = WaitQueue::new();
 
@@ -277,6 +276,16 @@ pub(crate) fn notify_net_event() {
 }
 
 pub(crate) unsafe fn mio_selector_wake_host(_selector_id: usize) -> i32 {
+    let owner_vm = current_owner_vm();
+    with_compat(|compat| {
+        if !compat
+            .pending_selector_wakes
+            .iter()
+            .any(|pending| *pending == (owner_vm, _selector_id))
+        {
+            compat.pending_selector_wakes.push((owner_vm, _selector_id));
+        }
+    });
     MIO_SELECTOR_WAIT.notify_all();
     STATUS_OK
 }
@@ -325,6 +334,8 @@ struct SelectorRegistration {
     owner_vm: Option<u8>,
     token: usize,
     interests: u8,
+    edge_managed: bool,
+    delivered: u8,
 }
 
 struct MioCompat {
@@ -332,6 +343,7 @@ struct MioCompat {
     sockets: Vec<MioSocketState>,
     pending_opens: VecDeque<PendingOpen>,
     registrations: Vec<SelectorRegistration>,
+    pending_selector_wakes: Vec<(Option<u8>, usize)>,
     next_socket_id: u32,
     udp_next_ephemeral: u16,
     tcp_listen_next_ephemeral: u16,
@@ -578,6 +590,7 @@ impl MioCompat {
             sockets: Vec::new(),
             pending_opens: VecDeque::new(),
             registrations: Vec::new(),
+            pending_selector_wakes: Vec::new(),
             next_socket_id: 1,
             udp_next_ephemeral: 49_152,
             tcp_listen_next_ephemeral: 50_000,
@@ -828,43 +841,6 @@ impl MioCompat {
         }
 
         MIO_SELECTOR_WAIT.notify_all();
-    }
-
-    fn tcp_connect_status_for_owner(&self, socket_id: u32, owner_vm: Option<u8>) -> Option<i32> {
-        let socket = self.socket_for_owner(socket_id, owner_vm)?;
-        if socket.kind != MioSocketKind::TcpStream {
-            return Some(STATUS_INVALID_INPUT);
-        }
-        if socket.connected {
-            return Some(STATUS_OK);
-        }
-        if socket.error != STATUS_OK {
-            return Some(socket.error);
-        }
-        if socket.closed {
-            return Some(STATUS_IO);
-        }
-        None
-    }
-
-    fn drive_tcp_connect_until_status(
-        &mut self,
-        socket_id: u32,
-        owner_vm: Option<u8>,
-        timeout_ns: u64,
-    ) -> Option<i32> {
-        let deadline = crate::chronos::monotonic_nanos().saturating_add(timeout_ns);
-        loop {
-            self.kick_net();
-            self.pump();
-            if let Some(status) = self.tcp_connect_status_for_owner(socket_id, owner_vm) {
-                return Some(status);
-            }
-            if crate::chronos::monotonic_nanos() >= deadline {
-                return None;
-            }
-            crate::wait::spin_step();
-        }
     }
 
     fn handle_unattributed_error(&mut self, msg: &'static str) {
@@ -1268,31 +1244,51 @@ impl MioCompat {
 
         let mut written = 0usize;
         let mut inspected = 0usize;
-        for (index, reg) in self.registrations.iter().enumerate() {
+        for index in 0..self.registrations.len() {
             if written >= out_cap {
                 break;
             }
             inspected = index.saturating_add(1);
-            if !owner_matches(reg.owner_vm, owner_vm) || reg.selector_id != selector_id {
+            let (registration_owner, registration_selector, socket_id, token, interests) = {
+                let reg = &self.registrations[index];
+                (reg.owner_vm, reg.selector_id, reg.socket_id, reg.token, reg.interests)
+            };
+            if registration_owner != owner_vm || registration_selector != selector_id {
                 continue;
             }
 
-            let Some(socket) = self.socket(reg.socket_id) else {
+            let Some(socket) = self.socket(socket_id) else {
                 continue;
             };
-
-            let readiness = self.ready_mask(socket, reg.interests);
+            let current_readiness = self.ready_mask(socket, interests);
+            let readiness = {
+                let reg = &mut self.registrations[index];
+                if reg.edge_managed {
+                    // Preserve independent read/write edges. A writable edge
+                    // must not suppress a later readable edge, and a bit that
+                    // becomes cold is eligible again when it turns hot.
+                    reg.delivered &= current_readiness;
+                    let next = current_readiness & !reg.delivered;
+                    reg.delivered |= next;
+                    next
+                } else {
+                    current_readiness
+                }
+            };
             if readiness == 0 {
                 continue;
             }
 
+            let Some(socket) = self.socket(socket_id) else {
+                continue;
+            };
             if tcp_flow_logging_enabled(socket) && should_log_selector_probe(readiness) {
                 crate::log!(
                     "mio_compat: tcp selector-ready selector={} socket={} token={} interests=0x{:02x} readiness=0x{:02x} rx={} closed={}\n",
                     selector_id,
                     socket.id,
-                    reg.token,
-                    reg.interests,
+                    token,
+                    interests,
                     readiness,
                     socket.rx_stream.len(),
                     socket.closed as u8
@@ -1308,7 +1304,7 @@ impl MioCompat {
                         "mio_compat: udp selector-ready selector={} socket={} token={} readiness=0x{:02x}\n",
                         selector_id,
                         socket.id,
-                        reg.token,
+                        token,
                         readiness
                     );
                 }
@@ -1323,7 +1319,7 @@ impl MioCompat {
                         "mio_compat: tcp selector-ready selector={} socket={} token={} readiness=0x{:02x}\n",
                         selector_id,
                         socket.id,
-                        reg.token,
+                        token,
                         readiness
                     );
                 }
@@ -1331,7 +1327,7 @@ impl MioCompat {
 
             unsafe {
                 out_events.add(written).write(TrueosMioReadyEvent {
-                    token: reg.token,
+                    token,
                     readiness,
                     reserved: [0; 7],
                 });
@@ -1348,6 +1344,18 @@ impl MioCompat {
         }
 
         written
+    }
+
+    fn take_selector_wake(&mut self, owner_vm: Option<u8>, selector_id: usize) -> bool {
+        let Some(index) = self
+            .pending_selector_wakes
+            .iter()
+            .position(|pending| pending.0 == owner_vm && pending.1 == selector_id)
+        else {
+            return false;
+        };
+        self.pending_selector_wakes.swap_remove(index);
+        true
     }
 }
 
@@ -1582,13 +1590,9 @@ pub(crate) unsafe fn mio_tcp_stream_connect_host(
         };
 
         if status == STATUS_OK {
-            if let Some(connect_status) =
-                compat.drive_tcp_connect_until_status(socket_id, owner_vm, CONNECT_COMPAT_WAIT_NS)
-                && connect_status != STATUS_OK
-            {
-                compat.discard_socket(socket_id);
-                return connect_status;
-            }
+            // `connect` is a readiness operation. Submission success returns
+            // the native socket immediately; completion or failure is signaled
+            // through the selector instead of spinning in the syscall path.
             unsafe { *out_socket_id = socket_id };
         } else {
             compat.discard_socket(socket_id);
@@ -1916,15 +1920,6 @@ pub(crate) unsafe fn mio_socket_take_error_host(socket_id: u32) -> i32 {
     let owner_vm = current_owner_vm();
     with_compat(|compat| {
         compat.pump();
-        if let Some(socket) = compat.socket_for_owner(socket_id, owner_vm)
-            && socket.kind == MioSocketKind::TcpStream
-            && !socket.connected
-            && !socket.closed
-            && socket.error == STATUS_OK
-        {
-            let _ =
-                compat.drive_tcp_connect_until_status(socket_id, owner_vm, CONNECT_IO_FASTPATH_NS);
-        }
         let Some(socket) = compat.socket_mut_for_owner(socket_id, owner_vm) else {
             crate::log!(
                 "mio_compat: take_error not-found socket={} owner={}\n",
@@ -2012,48 +2007,6 @@ pub(crate) unsafe fn mio_tcp_stream_read_host(
                 len,
                 socket.rx_stream.len()
             );
-        }
-        len as isize
-    })
-}
-
-/// Read from a backend already authorized by the process descriptor table.
-///
-/// Unlike the public Mio ABI, this path must not infer ownership from the
-/// currently executing CPU lane. The std ABI has already resolved a process
-/// fd to this opaque socket id, and Tokio may perform the I/O from a different
-/// host-carried lane than the one that created the listener.
-pub(crate) unsafe fn mio_tcp_stream_read_resolved_host(
-    socket_id: u32,
-    out_ptr: *mut u8,
-    out_cap: usize,
-) -> isize {
-    if out_ptr.is_null() && out_cap != 0 {
-        return STATUS_INVALID_INPUT as isize;
-    }
-    with_compat(|compat| {
-        compat.pump();
-        let Some(socket) = compat.socket_mut(socket_id) else {
-            return STATUS_NOT_FOUND as isize;
-        };
-        if socket.kind != MioSocketKind::TcpStream {
-            return STATUS_INVALID_INPUT as isize;
-        }
-        if socket.rx_stream.is_empty() {
-            return if socket.closed {
-                0
-            } else {
-                STATUS_WOULD_BLOCK as isize
-            };
-        }
-
-        let len = out_cap.min(socket.rx_stream.len());
-        for index in 0..len {
-            unsafe {
-                out_ptr
-                    .add(index)
-                    .write(socket.rx_stream.pop_front().unwrap());
-            }
         }
         len as isize
     })
@@ -2150,15 +2103,6 @@ pub(crate) unsafe fn mio_tcp_stream_write_host(
     let owner_vm = current_owner_vm();
     with_compat(|compat| {
         compat.pump();
-        if let Some(socket) = compat.socket_for_owner(socket_id, owner_vm)
-            && socket.kind == MioSocketKind::TcpStream
-            && !socket.connected
-            && !socket.closed
-            && socket.error == STATUS_OK
-        {
-            let _ =
-                compat.drive_tcp_connect_until_status(socket_id, owner_vm, CONNECT_IO_FASTPATH_NS);
-        }
         let Some(socket) = compat.socket_for_owner(socket_id, owner_vm) else {
             return STATUS_NOT_FOUND as isize;
         };
@@ -2203,70 +2147,6 @@ pub(crate) unsafe fn mio_tcp_stream_write_host(
             Ok(()) => len as isize,
             Err(status) => {
                 if let Some(socket) = compat.socket_mut_for_owner(socket_id, owner_vm) {
-                    socket.tx_in_flight = socket.tx_in_flight.saturating_sub(len);
-                }
-                status as isize
-            }
-        }
-    })
-}
-
-/// Write to a backend already authorized by the process descriptor table.
-pub(crate) unsafe fn mio_tcp_stream_write_resolved_host(
-    socket_id: u32,
-    data_ptr: *const u8,
-    data_len: usize,
-) -> isize {
-    if data_ptr.is_null() && data_len != 0 {
-        return STATUS_INVALID_INPUT as isize;
-    }
-    with_compat(|compat| {
-        compat.pump();
-        let owner_vm = compat.socket(socket_id).and_then(|socket| socket.owner_vm);
-        if let Some(socket) = compat.socket(socket_id)
-            && socket.kind == MioSocketKind::TcpStream
-            && !socket.connected
-            && !socket.closed
-            && socket.error == STATUS_OK
-        {
-            let _ =
-                compat.drive_tcp_connect_until_status(socket_id, owner_vm, CONNECT_IO_FASTPATH_NS);
-        }
-        let Some(socket) = compat.socket(socket_id) else {
-            return STATUS_NOT_FOUND as isize;
-        };
-        if socket.kind != MioSocketKind::TcpStream {
-            return STATUS_INVALID_INPUT as isize;
-        }
-        if !socket.connected {
-            return if socket.error != STATUS_OK {
-                socket.error as isize
-            } else {
-                STATUS_WOULD_BLOCK as isize
-            };
-        }
-        let Some(handle) = socket.handle else {
-            return STATUS_NOT_CONNECTED as isize;
-        };
-
-        let available = MIO_TCP_TX_WINDOW_BYTES.saturating_sub(socket.tx_in_flight);
-        if available == 0 {
-            return STATUS_WOULD_BLOCK as isize;
-        }
-        let len = data_len.min(api::MAX_MSG).min(available);
-        let data = unsafe { core::slice::from_raw_parts(data_ptr, len) };
-        // Account before submit because submit may synchronously pump a
-        // matching TcpSent completion.
-        if let Some(socket) = compat.socket_mut(socket_id) {
-            socket.tx_in_flight = socket.tx_in_flight.saturating_add(len);
-        }
-        match compat.submit(api::Command::SendTcp {
-            handle,
-            data: api::ByteBuf::from_slice_trunc(data),
-        }) {
-            Ok(()) => len as isize,
-            Err(status) => {
-                if let Some(socket) = compat.socket_mut(socket_id) {
                     socket.tx_in_flight = socket.tx_in_flight.saturating_sub(len);
                 }
                 status as isize
@@ -2629,80 +2509,32 @@ pub(crate) unsafe fn mio_selector_register_socket_host(
     token: usize,
     interests: u8,
 ) -> i32 {
-    let owner_vm = current_owner_vm();
-    with_compat(|compat| {
-        let Some(socket_owner) = compat.socket(socket_id).and_then(|socket| socket.owner_vm) else {
-            if compat.socket_for_owner(socket_id, owner_vm).is_none() {
-                crate::log!(
-                    "mio_compat: selector-register not-found selector={} socket={} owner={} token={} interests=0x{:02x}\n",
-                    selector_id,
-                    socket_id,
-                    owner_vm.map(|id| id as i32).unwrap_or(-1),
-                    token,
-                    interests
-                );
-                return STATUS_NOT_FOUND;
-            }
-            let socket_owner = owner_vm;
-            if let Some(reg) = compat.registrations.iter_mut().find(|reg| {
-                owner_matches(reg.owner_vm, owner_vm)
-                    && reg.selector_id == selector_id
-                    && reg.socket_id == socket_id
-            }) {
-                reg.owner_vm = socket_owner;
-                reg.token = token;
-                reg.interests = interests;
-                return STATUS_OK;
-            }
+    let requested_owner = current_owner_vm();
+    let raw_interests = interests;
+    let edge_managed = raw_interests & INTEREST_EDGE_MANAGED != 0;
+    let interests = raw_interests & !INTEREST_EDGE_MANAGED;
+    if interests == 0 {
+        return STATUS_INVALID_INPUT;
+    }
 
-            let registration_count = compat
-                .registrations
-                .iter()
-                .filter(|reg| reg.owner_vm == socket_owner && reg.selector_id == selector_id)
-                .count();
-            if registration_count >= crate::allcaps::io::DESCRIPTOR_SOFT_CAP {
-                return STATUS_RESOURCE_EXHAUSTED;
-            }
-
-            compat.registrations.push(SelectorRegistration {
-                selector_id,
-                socket_id,
-                owner_vm: socket_owner,
-                token,
-                interests,
-            });
-            return STATUS_OK;
+    let status = with_compat(|compat| {
+        let Some(socket_owner) = compat.socket(socket_id).map(|socket| socket.owner_vm) else {
+            return STATUS_NOT_FOUND;
         };
-        if !owner_matches(Some(socket_owner), owner_vm) {
-            crate::log!(
-                "mio_compat: selector-register owner-mismatch selector={} socket={} socket_owner={} owner={} token={} interests=0x{:02x}\n",
-                selector_id,
-                socket_id,
-                socket_owner,
-                owner_vm.map(|id| id as i32).unwrap_or(-1),
-                token,
-                interests
-            );
+        if !owner_matches(socket_owner, requested_owner) {
             return STATUS_NOT_FOUND;
         }
-        let registration_owner = owner_vm.or(Some(socket_owner));
-        crate::log!(
-            "mio_compat: selector-register selector={} socket={} owner={} token={} interests=0x{:02x}\n",
-            selector_id,
-            socket_id,
-            registration_owner.map(|id| id as i32).unwrap_or(-1),
-            token,
-            interests
-        );
+        let registration_owner = requested_owner.or(socket_owner);
 
         if let Some(reg) = compat.registrations.iter_mut().find(|reg| {
-            owner_matches(reg.owner_vm, owner_vm)
+            reg.owner_vm == registration_owner
                 && reg.selector_id == selector_id
                 && reg.socket_id == socket_id
         }) {
-            reg.owner_vm = registration_owner;
             reg.token = token;
             reg.interests = interests;
+            reg.edge_managed = edge_managed;
+            reg.delivered = 0;
             return STATUS_OK;
         }
 
@@ -2721,9 +2553,17 @@ pub(crate) unsafe fn mio_selector_register_socket_host(
             owner_vm: registration_owner,
             token,
             interests,
+            edge_managed,
+            delivered: 0,
         });
         STATUS_OK
-    })
+    });
+    if status == STATUS_OK {
+        // Registration can race a sleeping selector after the socket already
+        // became hot, so changing the registry is itself a wake event.
+        MIO_SELECTOR_WAIT.notify_all();
+    }
+    status
 }
 
 #[unsafe(no_mangle)]
@@ -2762,7 +2602,7 @@ pub(crate) unsafe fn mio_selector_deregister_socket_host(
     let owner_vm = current_owner_vm();
     with_compat(|compat| {
         compat.registrations.retain(|reg| {
-            !(owner_matches(reg.owner_vm, owner_vm)
+            !(reg.owner_vm == owner_vm
                 && reg.selector_id == selector_id
                 && reg.socket_id == socket_id)
         });
@@ -2821,10 +2661,17 @@ pub(crate) unsafe fn mio_selector_poll_host(
     let deadline = crate::chronos::monotonic_nanos().saturating_add(timeout_nanos);
 
     loop {
-        let written = with_compat(|compat| {
-            compat.selector_poll_ready_once(owner_vm, selector_id, out_events, out_cap)
+        // Observe before checking readiness. A network completion or Waker
+        // racing the scan then changes the generation and prevents a lost
+        // wake without periodic 10 ms rescans.
+        let observed = MIO_SELECTOR_WAIT.observe();
+        let (written, explicitly_woken) = with_compat(|compat| {
+            let written =
+                compat.selector_poll_ready_once(owner_vm, selector_id, out_events, out_cap);
+            let explicitly_woken = compat.take_selector_wake(owner_vm, selector_id);
+            (written, explicitly_woken)
         });
-        if written != 0 || timeout_nanos == 0 {
+        if written != 0 || explicitly_woken || timeout_nanos == 0 {
             return written;
         }
         if !block_forever && crate::chronos::monotonic_nanos() >= deadline {
@@ -2838,9 +2685,7 @@ pub(crate) unsafe fn mio_selector_poll_host(
                     let regs = compat
                         .registrations
                         .iter()
-                        .filter(|reg| {
-                            owner_matches(reg.owner_vm, owner_vm) && reg.selector_id == selector_id
-                        })
+                        .filter(|reg| reg.owner_vm == owner_vm && reg.selector_id == selector_id)
                         .count();
                     let mut listeners = 0usize;
                     let mut accepts = 0usize;
@@ -2866,15 +2711,19 @@ pub(crate) unsafe fn mio_selector_poll_host(
             }
         }
 
-        let wait_ns = if block_forever {
-            SELECTOR_PARK_SLICE_NS
+        let wait_ms = if block_forever {
+            // WaitQueue uses zero as an unbounded wait.
+            0
         } else {
             deadline
                 .saturating_sub(crate::chronos::monotonic_nanos())
-                .min(SELECTOR_PARK_SLICE_NS)
+                .saturating_add(999_999)
+                / 1_000_000
         };
-        let wait_ms = wait_ns.saturating_add(999_999) / 1_000_000;
-        let _ = MIO_SELECTOR_WAIT.wait_for_event_blocking_parked(wait_ms.max(1));
+        let _ = MIO_SELECTOR_WAIT.wait_for_event_after_blocking_parked(
+            observed,
+            if block_forever { 0 } else { wait_ms.max(1) },
+        );
     }
 }
 
