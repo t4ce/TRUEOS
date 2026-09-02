@@ -65,7 +65,13 @@ jobs:
             "$GITHUB_WORKSPACE/../TRUEOS-Blueprints"
           test -f "$GITHUB_WORKSPACE/../TRUEOS-Blueprints/crates/log-os/Cargo.toml"
 
-          cargo +nightly-2026-07-10 fmt --all
+          rustfmt +nightly-2026-07-10 --edition 2024 \
+            crates/trueos-vm/src/vmcall.rs \
+            src/hv/blueprint/blueprint.rs \
+            src/hv/vmcall.rs \
+            src/r/net/vlayer.rs \
+            src/shell2/cmds/bios_blueprint.rs \
+            src/shell2/cmds/mod.rs
           python3 tools/check-bios-schema-boundary.py
           git diff --check
 
