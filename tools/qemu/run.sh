@@ -4,10 +4,44 @@ set -euo pipefail
 QEMU_BIN="${QEMU_BIN:-qemu-system-x86_64}"
 ISO_PATH="${ISO_PATH:-bld/trueos.iso}"
 QEMU_NVME_IMG="${QEMU_NVME_IMG:-tools/nvme.img}"
-QEMU_MEMORY="${QEMU_MEMORY:-12000M}"
+QEMU_MEMORY="${QEMU_MEMORY:-4000M}"
 QEMU_SMP="${QEMU_SMP:-14}"
 QEMU_NIC_DEVICE="${QEMU_NIC_DEVICE:-virtio-net-pci,disable-modern=off}"
 QEMU_SERIAL="${QEMU_SERIAL:-tcp:127.0.0.1:5555,server,nowait}"
+# Optional host PCI address to expose through VFIO, for example 06:00.0.
+# The host device must already be safely detached from its native driver and
+# bound to vfio-pci before QEMU is started.
+QEMU_VFIO_HOST="${QEMU_VFIO_HOST:-}"
+
+# VFIO must DMA-map guest RAM, which is limited by RLIMIT_MEMLOCK.  Ubuntu's
+# default interactive limit is often only a few MiB, so transparently retry
+# this opt-in passthrough launch with an unlimited root memlock allowance.
+# The normal non-VFIO launcher never enters this path.
+if [[ -n "${QEMU_VFIO_HOST}" && "${QEMU_VFIO_MEMLOCK_REEXEC:-0}" != "1" ]]; then
+    qemu_memlock_kib="$(ulimit -l)"
+    if [[ "${qemu_memlock_kib}" != "unlimited" && "${qemu_memlock_kib}" =~ ^[0-9]+$ && "${qemu_memlock_kib}" -lt 16777216 ]]; then
+        exec sudo env \
+            "HOME=${HOME:-}" \
+            "PATH=${PATH:-/usr/bin:/bin}" \
+            "TERM=${TERM:-xterm}" \
+            "LANG=${LANG:-C.UTF-8}" \
+            "DISPLAY=${DISPLAY:-}" \
+            "WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-}" \
+            "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-}" \
+            "XAUTHORITY=${XAUTHORITY:-}" \
+            "ISO_PATH=${ISO_PATH}" \
+            "QEMU_BIN=${QEMU_BIN}" \
+            "QEMU_NVME_IMG=${QEMU_NVME_IMG}" \
+            "QEMU_MEMORY=${QEMU_MEMORY}" \
+            "QEMU_SMP=${QEMU_SMP}" \
+            "QEMU_NIC_DEVICE=${QEMU_NIC_DEVICE}" \
+            "QEMU_SERIAL=${QEMU_SERIAL}" \
+            "QEMU_VFIO_HOST=${QEMU_VFIO_HOST}" \
+            "QEMU_UEFI_FIRMWARE=${QEMU_UEFI_FIRMWARE:?QEMU_UEFI_FIRMWARE is not set}" \
+            "QEMU_VFIO_MEMLOCK_REEXEC=1" \
+            bash -c 'ulimit -l unlimited && exec "$@"' -- "${BASH_SOURCE[0]}" "$@"
+    fi
+fi
 
 QEMU_MODE="${1:-iso}"
 if [[ "${QEMU_MODE}" == "iso" || "${QEMU_MODE}" == "iso-debug" ]]; then
@@ -17,6 +51,11 @@ fi
 QEMU_DEBUG_ARGS=()
 if [[ "${QEMU_MODE}" == "iso-debug" ]]; then
     QEMU_DEBUG_ARGS+=("-S" "-s" "-no-reboot")
+fi
+
+QEMU_VFIO_ARGS=()
+if [[ -n "${QEMU_VFIO_HOST}" ]]; then
+    QEMU_VFIO_ARGS+=("-device" "vfio-pci,host=${QEMU_VFIO_HOST}")
 fi
 
 QEMU_HOST_TCP_PORT_8081="${QEMU_HOST_TCP_PORT_8081:-18081}"
@@ -50,6 +89,7 @@ exec env -i \
     "XAUTHORITY=${XAUTHORITY:-}" \
     "${QEMU_BIN}" -no-shutdown \
     "${QEMU_DEBUG_ARGS[@]}" \
+    "${QEMU_VFIO_ARGS[@]}" \
     "$@" \
     -display sdl,gl=on \
     -vga none \

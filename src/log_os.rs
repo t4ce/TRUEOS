@@ -43,8 +43,10 @@ pub(crate) mod flags {
     pub(crate) const USB_UAS_DIAG_PROFILE_ENABLED: bool = false;
 
     /// Operational USB profile enabled with the full forensic profile for the
-    /// current CrabUSB controller/HID handoff capture.
-    pub(crate) const USB_RUNTIME_DIAG_PROFILE_ENABLED: bool = false;
+    /// current CrabUSB controller/HID handoff capture. Keep this enabled while
+    /// the passed-through ASMedia xHCI Heal experiment needs its Info-level
+    /// admission, capability, and quarantine records in host captures.
+    pub(crate) const USB_RUNTIME_DIAG_PROFILE_ENABLED: bool = true;
 
     /// Boot/network diagnostic profile for startup timing and first-net-process
     /// operability logs.

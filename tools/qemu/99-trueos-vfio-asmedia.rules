@@ -1,0 +1,4 @@
+# Temporary local passthrough rule for the isolated ASMedia ASM3241.
+# Remove this rule after the experiment, or replace OWNER with a dedicated
+# virtualization group for a persistent setup.
+SUBSYSTEM=="vfio", KERNEL=="21", OWNER="t4ce", MODE="0600"

@@ -50,6 +50,7 @@ static CAPTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static CAPTURE_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 static CAPTURE_REQUESTS: Mutex<VecDeque<CaptureRequest>> = Mutex::new(VecDeque::new());
 static CAPTURE_QUEUE: Mutex<VecDeque<CapturedComposition>> = Mutex::new(VecDeque::new());
+static SHOT_TARGETS: Mutex<VecDeque<crate::shell2::MatrixTarget>> = Mutex::new(VecDeque::new());
 
 pub(super) enum CaptureError {
     NoScanout,
@@ -197,6 +198,7 @@ struct CapturedComposition {
     scope: CaptureScope,
     path_override: Option<String>,
     release_interactive_gate: bool,
+    shot_target: Option<crate::shell2::MatrixTarget>,
 }
 
 /// Tight native premultiplied RGBA copied while holding one published-frame
@@ -212,8 +214,31 @@ struct CapturedWindowRgba {
 ///
 /// The screenshot worker consumes the next completed writeback frame, performs
 /// the diagnostic XYUV8888 -> RGBA conversion, and persists one PNG.
-pub(crate) fn request_wd_postblend_capture() -> Result<(), &'static str> {
-    crate::intel::media::wd_xyuv8888::request_screenshot().map_err(|_| "WD screenshot slot is busy")
+pub(crate) fn request_wd_postblend_capture(
+    target: crate::shell2::MatrixTarget,
+) -> Result<(), &'static str> {
+    crate::intel::media::wd_xyuv8888::request_screenshot()
+        .map_err(|_| "WD screenshot slot is busy")?;
+    SHOT_TARGETS.lock().push_back(target);
+    Ok(())
+}
+
+fn report_shot_result(
+    target: Option<&crate::shell2::MatrixTarget>,
+    stored: bool,
+    path: Option<&str>,
+) {
+    if let Some(target) = target {
+        let message = match (stored, path) {
+            (true, Some(path)) => alloc::format!("Image was STORED: trueosfs:/{path}"),
+            (true, None) => String::from("Image was STORED"),
+            (false, _) => String::from("Image was NOT STORED"),
+        };
+        crate::shell2::print_matrix_target_system_line(
+            target,
+            message.as_str(),
+        );
+    }
 }
 
 /// Drive Pipe C -> WD for exactly one frame when no RDP session owns it.
@@ -503,6 +528,7 @@ fn capture_window(window: WindowSnapshot) -> Result<CapturedComposition, Capture
         },
         path_override: None,
         release_interactive_gate: true,
+        shot_target: None,
     })
 }
 
@@ -510,6 +536,7 @@ fn capture_window(window: WindowSnapshot) -> Result<CapturedComposition, Capture
 /// packed XYUV8888 image to an ordinary RGBA PNG source. This is intentionally
 /// a one-shot background screenshot operation, never part of the stream.
 fn take_wd_postblend_capture() -> Option<CapturedComposition> {
+    let shot_target = SHOT_TARGETS.lock().pop_front();
     crate::intel::media::wd_xyuv8888::with_screenshot(|wd_sequence, xyuv| {
         let expected = crate::intel::media::wd_xyuv8888::WD_XYUV8888_BYTES;
         if xyuv.len() != expected {
@@ -519,6 +546,7 @@ fn take_wd_postblend_capture() -> Option<CapturedComposition> {
                 xyuv.len(),
                 expected,
             );
+            report_shot_result(shot_target.as_ref(), false, None);
             return None;
         }
         let mut rgba = alloc::vec![0u8; expected];
@@ -543,6 +571,7 @@ fn take_wd_postblend_capture() -> Option<CapturedComposition> {
             scope: CaptureScope::WdPostBlend { wd_sequence },
             path_override: None,
             release_interactive_gate: false,
+            shot_target,
         })
     })
     .flatten()
@@ -1096,6 +1125,7 @@ pub(crate) async fn ui4_screenshot_service_task() {
             if queue.len() < MAX_CAPTURE_QUEUE {
                 queue.push_front(capture);
             } else {
+                report_shot_result(capture.shot_target.as_ref(), false, None);
                 release_interactive_capture_gate(&capture);
                 crate::log_warn!(target: "ui4/screenshot";
                     "ui4/screenshot: capture dropped sequence={} reason=no-root-and-queue-full\n",
@@ -1119,6 +1149,7 @@ pub(crate) async fn ui4_screenshot_service_task() {
         ) {
             Ok(png) => png,
             Err(error) => {
+                report_shot_result(capture.shot_target.as_ref(), false, None);
                 release_interactive_capture_gate(&capture);
                 crate::log_warn!(target: "ui4/screenshot";
                     "ui4/screenshot: PNG encode failed sequence={} error={:?} size={}x{}\n",
@@ -1139,7 +1170,9 @@ pub(crate) async fn ui4_screenshot_service_task() {
         )
         .await
         {
-            Ok(true) => crate::log_info!(target: "ui4/screenshot";
+            Ok(true) => {
+                report_shot_result(capture.shot_target.as_ref(), true, Some(path.as_str()));
+                crate::log_info!(target: "ui4/screenshot";
                 "ui4/screenshot: saved path=trueosfs:/{} disk_id={} sequence={} format=png-rgba size={}x{} png_bytes={} encode_us={} write_us={}\n",
                 path,
                 disk_id,
@@ -1149,20 +1182,27 @@ pub(crate) async fn ui4_screenshot_service_task() {
                 png.len(),
                 encoded_ns.saturating_sub(encode_started_ns) / 1_000,
                 crate::chronos::monotonic_nanos().saturating_sub(encoded_ns) / 1_000,
-            ),
-            Ok(false) => crate::log_warn!(target: "ui4/screenshot";
+            );
+            }
+            Ok(false) => {
+                report_shot_result(capture.shot_target.as_ref(), false, None);
+                crate::log_warn!(target: "ui4/screenshot";
                 "ui4/screenshot: save failed path=trueosfs:/{} disk_id={} sequence={} reason=no-space-or-root-placement\n",
                 path,
                 disk_id,
                 capture.sequence,
-            ),
-            Err(error) => crate::log_warn!(target: "ui4/screenshot";
+            );
+            }
+            Err(error) => {
+                report_shot_result(capture.shot_target.as_ref(), false, None);
+                crate::log_warn!(target: "ui4/screenshot";
                 "ui4/screenshot: save failed path=trueosfs:/{} disk_id={} sequence={} error={:?}\n",
                 path,
                 disk_id,
                 capture.sequence,
                 error,
-            ),
+            );
+            }
         }
         release_interactive_capture_gate(&capture);
     }

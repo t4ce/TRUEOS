@@ -95,9 +95,12 @@ fn dispatch_shot(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) 
         super::print_shell_line(io, "shot: usage `shot`");
         return ParseOutcome::Handled;
     }
-    match crate::ui4::request_wd_postblend_capture() {
+    let target = super::matrix_target_for_backend(io);
+    match crate::ui4::request_wd_postblend_capture(target) {
         Ok(()) => {
-            crate::intel::begin_transient_global_gt_boost(spawner, "shell2-shot");
+            if crate::r::services::font_kernel_service::shot_should_request_transient_boost() {
+                crate::intel::begin_transient_global_gt_boost(spawner, "shell2-shot");
+            }
             super::print_shell_line(
                 io,
                 "shot: armed; next WD frame will be saved under trueosfs:/screenshots",

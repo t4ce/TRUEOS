@@ -47,6 +47,7 @@ pub(crate) const FONT_STAMP_MAX_GLYPHS: usize = 4096;
 const FONT_KERNEL_LANE_RETRY_MS: u64 = 2;
 const FONT_KERNEL_GPU_RETRY_MS: u64 = 2;
 const FONT_KERNEL_GPU_WAITERS: usize = 32;
+const SHOT_OCEAN_CACHE_STABLE_REQUESTS: u64 = 4;
 /// One registration owns exactly this much recipe-state budget.  The recipe
 /// is colorless outline/coverage state, not an RGBA sprite, so the final stamp
 /// can retain its independently changing foreground color.
@@ -60,9 +61,44 @@ static LAST_RETAIN_PARTITION_LOG_TICKET: AtomicU64 = AtomicU64::new(0);
 static LAST_STAMP_PARTITION_LOG_TICKET: AtomicU64 = AtomicU64::new(0);
 static WORK_AVAILABLE: Signal<crate::wait::EmbassySpinRawMutex, ()> = Signal::new();
 static REQUESTS: Mutex<VecDeque<QueuedFontRequest>> = Mutex::new(VecDeque::new());
+static SHOT_OCEAN_CACHE_WARMUP: Mutex<ShotOceanCacheWarmupState> =
+    Mutex::new(ShotOceanCacheWarmupState::new());
 static STATUS: Mutex<FontKernelServiceStatus> = Mutex::new(FontKernelServiceStatus::new());
 static GPU_LANE: FairSemaphore<crate::wait::EmbassySpinRawMutex, FONT_KERNEL_GPU_WAITERS> =
     FairSemaphore::new(1);
+
+#[derive(Clone, Copy)]
+struct ShotOceanCacheWarmupState {
+    requests: u64,
+    consecutive_hit_requests: u64,
+}
+
+impl ShotOceanCacheWarmupState {
+    const fn new() -> Self {
+        Self {
+            requests: 0,
+            consecutive_hit_requests: 0,
+        }
+    }
+}
+
+fn update_shot_ocean_cache_warmup(misses: u64, uncached: u64) {
+    let mut state = SHOT_OCEAN_CACHE_WARMUP.lock();
+    state.requests = state.requests.saturating_add(1);
+    if misses == 0 && uncached == 0 {
+        state.consecutive_hit_requests = state
+            .consecutive_hit_requests
+            .saturating_add(1)
+            .min(SHOT_OCEAN_CACHE_STABLE_REQUESTS);
+    } else {
+        state.consecutive_hit_requests = 0;
+    }
+}
+
+pub(crate) fn shot_should_request_transient_boost() -> bool {
+    let state = SHOT_OCEAN_CACHE_WARMUP.lock();
+    state.requests == 0 || state.consecutive_hit_requests < SHOT_OCEAN_CACHE_STABLE_REQUESTS
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct FontKernelTicket(u64);
@@ -2339,6 +2375,12 @@ fn prepare_producer_stamp_scenes(
     }
     let after = resources.glyph_cache.lock().diagnostics();
     let ocean_after = resources.ocean_cache.diagnostics();
+    let ocean_delta = (
+        ocean_after.2.saturating_sub(ocean_before.2),
+        ocean_after.3.saturating_sub(ocean_before.3),
+        ocean_after.4.saturating_sub(ocean_before.4),
+    );
+    update_shot_ocean_cache_warmup(ocean_delta.1, ocean_delta.2);
     Ok((
         stamps,
         glyphs,
@@ -2348,11 +2390,7 @@ fn prepare_producer_stamp_scenes(
                 after.3.saturating_sub(before.3),
                 after.4.saturating_sub(before.4),
             ),
-            (
-                ocean_after.2.saturating_sub(ocean_before.2),
-                ocean_after.3.saturating_sub(ocean_before.3),
-                ocean_after.4.saturating_sub(ocean_before.4),
-            ),
+            ocean_delta,
         ),
         true,
         tail_key_fingerprint,
