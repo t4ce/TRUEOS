@@ -70,8 +70,7 @@ jobs:
             src/hv/blueprint/blueprint.rs \
             src/hv/vmcall.rs \
             src/r/net/vlayer.rs \
-            src/shell2/cmds/bios_blueprint.rs \
-            src/shell2/cmds/mod.rs
+            src/shell2/cmds/bios_blueprint.rs
           python3 tools/check-bios-schema-boundary.py
           git diff --check
 
