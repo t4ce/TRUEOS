@@ -154,19 +154,19 @@ fn guest_start_many(op: u32, sources: &[String], archive: &str) -> i32 {
     if sources.is_empty() || sources.len() > PACK_MANY_SOURCE_CAP {
         return FS_ERR_BAD_PARAM;
     }
-    let source_bytes = match sources
-        .iter()
-        .enumerate()
-        .try_fold(0usize, |total, (index, source)| {
-            total
-                .checked_add(usize::from(index != 0))
-                .and_then(|total| total.checked_add(source.len()))
-                .ok_or(())
-        })
-    {
-        Ok(bytes) => bytes,
-        Err(()) => return FS_ERR_TOO_LARGE,
-    };
+    let source_bytes =
+        match sources
+            .iter()
+            .enumerate()
+            .try_fold(0usize, |total, (index, source)| {
+                total
+                    .checked_add(usize::from(index != 0))
+                    .and_then(|total| total.checked_add(source.len()))
+                    .ok_or(())
+            }) {
+            Ok(bytes) => bytes,
+            Err(()) => return FS_ERR_TOO_LARGE,
+        };
     let total = match source_bytes.checked_add(archive.len()) {
         Some(total) if total <= trueos_vm::vmcall::PAYLOAD_CAP => total,
         _ => return FS_ERR_TOO_LARGE,

@@ -42,8 +42,7 @@ pub async fn usb_controller_service_task() {
     let Some(selection) = heal_service::select_first_backend() else {
         return;
     };
-    let Some((mmio, mmio_len, kernel, _legacy_root_hub_policy)) =
-        lib::known_xhci_host_inputs()
+    let Some((mmio, mmio_len, kernel, _legacy_root_hub_policy)) = lib::known_xhci_host_inputs()
     else {
         return;
     };

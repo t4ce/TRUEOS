@@ -1925,11 +1925,7 @@ pub(crate) fn set_window_position(
     x: i32,
     y: i32,
 ) -> Result<WindowPlacement, WindowBrokerError> {
-    update_window_placement(owner, id, |placement| WindowPlacement {
-        x,
-        y,
-        ..placement
-    })
+    update_window_placement(owner, id, |placement| WindowPlacement { x, y, ..placement })
 }
 
 /// Update only application-owned opacity under the broker lock, preserving a
@@ -1961,8 +1957,7 @@ fn update_window_placement(
     // geometry, not freeze the transient shrunken/faded projection.
     let previous_presentation = window.replacement_presentation.unwrap_or(previous);
     let notify_resize = producer_resize_required(window.interaction, previous, placement);
-    let extent_changed =
-        (previous.width, previous.height) != (placement.width, placement.height);
+    let extent_changed = (previous.width, previous.height) != (placement.width, placement.height);
     let resize_pending = window.interaction.resize_on_maximize
         && window.committed_resize_extent != (placement.width, placement.height);
     let changed = window.placement != placement;
@@ -2287,8 +2282,7 @@ fn change_window_dock_record(
     };
     let notify_resize = window.interaction.resize_on_maximize
         && producer_resize_required(window.interaction, previous, placement);
-    let extent_changed =
-        (previous.width, previous.height) != (placement.width, placement.height);
+    let extent_changed = (previous.width, previous.height) != (placement.width, placement.height);
     let resize_pending = window.interaction.resize_on_maximize
         && window.committed_resize_extent != (placement.width, placement.height);
     let changed = previous != placement || previous_target != window.dock_target;
@@ -3170,12 +3164,7 @@ mod tests {
             1_081,
         );
         assert_eq!(
-            (
-                bottom_right.x,
-                bottom_right.y,
-                bottom_right.width,
-                bottom_right.height,
-            ),
+            (bottom_right.x, bottom_right.y, bottom_right.width, bottom_right.height,),
             (960, 540, 961, 541)
         );
 
@@ -3280,8 +3269,7 @@ mod tests {
         assert!(restored.notify_resize);
         assert_eq!(broker.windows[slot].placement, saved);
         assert_eq!(
-            broker.windows[slot].pending_resize_extent,
-            None,
+            broker.windows[slot].pending_resize_extent, None,
             "returning to the committed extent reuses the correct old frame immediately"
         );
         assert_eq!(

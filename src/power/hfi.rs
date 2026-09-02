@@ -197,18 +197,11 @@ fn capability_layout(mask: u8) -> Option<(usize, usize, Option<usize>, Option<us
         None
     };
     let efficiency_offset = if (mask & CPUID_HFI_ENERGY_EFFICIENCY as u8) != 0 {
-        Some(usize::from(
-            (mask & ((CPUID_HFI_ENERGY_EFFICIENCY as u8) - 1)).count_ones() as u8,
-        ))
+        Some(usize::from((mask & ((CPUID_HFI_ENERGY_EFFICIENCY as u8) - 1)).count_ones() as u8))
     } else {
         None
     };
-    Some((
-        header_size,
-        row_stride,
-        performance_offset,
-        efficiency_offset,
-    ))
+    Some((header_size, row_stride, performance_offset, efficiency_offset))
 }
 
 fn registered_row_count() -> Option<usize> {
@@ -425,8 +418,7 @@ pub(crate) fn enable_table_explicit() -> Result<(), &'static str> {
         }
         if !existing.enabled {
             unsafe {
-                Msr::new(MSR_IA32_HW_FEEDBACK_PTR)
-                    .write(existing.phys | HW_FEEDBACK_PTR_VALID);
+                Msr::new(MSR_IA32_HW_FEEDBACK_PTR).write(existing.phys | HW_FEEDBACK_PTR_VALID);
                 let mut config = Msr::new(MSR_IA32_HW_FEEDBACK_CONFIG);
                 let value = config.read();
                 config.write(value | HW_FEEDBACK_CONFIG_HFI_ENABLE);
@@ -595,10 +587,10 @@ pub(crate) fn table_snapshot_text() -> String {
     writeln!(out, "Row  Performance  Efficiency  Raw8").unwrap();
     for row in 0..state.row_count {
         let row_base = data_offset + row * state.row_stride;
-        let performance = performance_offset
-            .and_then(|offset| capture.image.get(row_base + offset).copied());
-        let efficiency = efficiency_offset
-            .and_then(|offset| capture.image.get(row_base + offset).copied());
+        let performance =
+            performance_offset.and_then(|offset| capture.image.get(row_base + offset).copied());
+        let efficiency =
+            efficiency_offset.and_then(|offset| capture.image.get(row_base + offset).copied());
         let mut raw = [0u8; 8];
         let raw_len = state.row_stride.min(raw.len());
         if let Some(bytes) = capture.image.get(row_base..row_base + raw_len) {

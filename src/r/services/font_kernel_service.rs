@@ -2190,13 +2190,7 @@ fn prepare_producer_stamp_scenes(
     request: &FontStampRequest,
     resources: &Arc<FontGpuProducerResources>,
 ) -> Result<
-    (
-        Vec<GpuFontRetainedIdentityStamp>,
-        usize,
-        ((u64, u64, u64), (u64, u64, u64)),
-        bool,
-        u64,
-    ),
+    (Vec<GpuFontRetainedIdentityStamp>, usize, ((u64, u64, u64), (u64, u64, u64)), bool, u64),
     FontKernelError,
 > {
     // Producer rows use a one-to-one viewport/raster contract, so ppem is the

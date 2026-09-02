@@ -2980,15 +2980,34 @@ fn encode_triangle_probe_batch(
     } else {
         0
     };
+    // GFX12 indexed triangle fans use primitive restart to delimit multiple
+    // independent fans in one draw.  The restart value is the DWORD index
+    // sentinel, programmed in the second dword of 3DSTATE_VF.
+    let vf_indexed_cut_enable = u32::from(
+        batch_mode == TriangleBatchMode::TriangleFanDraw && draw.index_buffer.is_some(),
+    ) << 8;
     push(
         batch_dwords,
         &mut cursor,
-        CMD_3DSTATE_VF | vf_geometry_distribution_enable | vf_component_packing_enable,
+        CMD_3DSTATE_VF
+            | vf_geometry_distribution_enable
+            | vf_component_packing_enable
+            | vf_indexed_cut_enable,
     )?;
     // Keep the disabled cut-index value identical to the verified gfx12 Mesa
     // draw.  It is architecturally ignored for this non-indexed triangle list,
     // but is part of the exact SVL state accompanying component packing.
-    push(batch_dwords, &mut cursor, if mesa_host_fixed_function { 0xFFFF } else { 0 })?;
+    push(
+        batch_dwords,
+        &mut cursor,
+        if vf_indexed_cut_enable != 0 {
+            u32::MAX
+        } else if mesa_host_fixed_function {
+            0xFFFF
+        } else {
+            0
+        },
+    )?;
     let host_point_tail_index_buffer = uses_host_point_tail_index_buffer(
         mesa_host_fixed_function,
         artifact_native_fixed_function,
@@ -3934,8 +3953,20 @@ fn encode_triangle_probe_batch(
         push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_CS_STALL)?;
 
         log_batch_offset(cursor, "3DSTATE_VF verified-host-tail");
-        push(batch_dwords, &mut cursor, CMD_3DSTATE_VF | (1 << 9))?;
-        push(batch_dwords, &mut cursor, 0xFFFF)?;
+        push(
+            batch_dwords,
+            &mut cursor,
+            CMD_3DSTATE_VF | (1 << 9) | vf_indexed_cut_enable,
+        )?;
+        push(
+            batch_dwords,
+            &mut cursor,
+            if vf_indexed_cut_enable != 0 {
+                u32::MAX
+            } else {
+                0xFFFF
+            },
+        )?;
 
         log_batch_offset(cursor, "3DSTATE_PRIMITIVE_REPLICATION verified-host-tail");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_PRIMITIVE_REPLICATION)?;

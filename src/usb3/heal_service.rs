@@ -273,10 +273,7 @@ pub(crate) async fn run_quarantined(
     ) {
         Ok(host) => host,
         Err(error) => {
-            fail(
-                &mut report,
-                format!("quarantined controller construction failed: {error:?}"),
-            );
+            fail(&mut report, format!("quarantined controller construction failed: {error:?}"));
             hold_quarantine().await
         }
     };
@@ -298,10 +295,7 @@ pub(crate) async fn run_quarantined(
     if initial.usbsts & USBSTS_CONTROLLER_NOT_READY != 0 {
         fail(
             &mut report,
-            format!(
-                "controller not ready before safe power step: USBSTS=0x{:08x}",
-                initial.usbsts
-            ),
+            format!("controller not ready before safe power step: USBSTS=0x{:08x}", initial.usbsts),
         );
         hold_quarantine_with_host(&mut host, &mut report).await
     }
@@ -331,7 +325,11 @@ pub(crate) async fn run_quarantined(
         report.max_ports.unwrap_or(0),
         report.port_power_control.unwrap_or(false) as u8,
         report.ports.iter().filter(|port| port.connected).count(),
-        report.ports.iter().filter(|port| port.powered_after).count(),
+        report
+            .ports
+            .iter()
+            .filter(|port| port.powered_after)
+            .count(),
     );
 
     hold_quarantine_with_host(&mut host, &mut report).await
@@ -387,9 +385,7 @@ async fn power_root_ports(
     Timer::after(Duration::from_millis(2)).await;
     let after = direct_snapshot(host).await?;
     refresh_ports(&mut reports, &after);
-    if power_control
-        && let Some(port) = reports.iter().find(|port| !port.powered_after)
-    {
+    if power_control && let Some(port) = reports.iter().find(|port| !port.powered_after) {
         return Err(format!(
             "power-on verification failed for root port {}: PORTSC=0x{:08x}",
             port.port_id, port.after_portsc
@@ -411,8 +407,7 @@ fn update_capabilities(report: &mut HealServiceReport, snapshot: &XhciController
     report.max_slots = Some((snapshot.hcsparams1 & 0xff) as u8);
     report.max_ports = Some(((snapshot.hcsparams1 >> 24) & 0xff) as u8);
     report.controller_not_ready = Some(snapshot.usbsts & USBSTS_CONTROLLER_NOT_READY != 0);
-    report.port_power_control =
-        Some(snapshot.hccparams1 & HCCPARAMS1_PORT_POWER_CONTROL != 0);
+    report.port_power_control = Some(snapshot.hccparams1 & HCCPARAMS1_PORT_POWER_CONTROL != 0);
 }
 
 fn refresh_ports(reports: &mut [HealPortReport], snapshot: &XhciControllerSnapshot) {

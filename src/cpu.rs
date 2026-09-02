@@ -56,7 +56,7 @@ pub enum SimdReason {
     MissingAvx = 3,
     MissingAvx2 = 4,
     MissingFma = 5,
-    Xcr0MissingYmm = 6
+    Xcr0MissingYmm = 6,
 }
 
 impl SimdReason {

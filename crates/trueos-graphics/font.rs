@@ -1754,9 +1754,11 @@ mod tests {
 
         assert_eq!(spec.file_name, "JuliaMono-Regular.ttf");
         assert_eq!(spec.path, "fonts/JuliaMono-Regular.ttf");
-        assert!(FONT_WARM_JOBS.iter().any(
-            |job| matches!(job, FontWarmJob::TrueosFs(index) if *index == 1)
-        ));
+        assert!(
+            FONT_WARM_JOBS
+                .iter()
+                .any(|job| matches!(job, FontWarmJob::TrueosFs(index) if *index == 1))
+        );
     }
 
     #[test]

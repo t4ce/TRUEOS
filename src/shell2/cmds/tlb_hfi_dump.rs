@@ -5,10 +5,8 @@ use super::super::{
     print_shell_line, set_matrix_target_active,
 };
 
-const CPUID_SECTION_STALE_SCOPE: &str =
-    "capture_policy=registration-time-cpuid-only msr_programming=no hardware_table=unconfigured scheduler_consumer=none";
-const CPUID_SECTION_EXPLICIT_SCOPE: &str =
-    "section_scope=cpuid-profile-metadata capture_policy=registration-time-cpuid-only section_msr_access=no live_table_state=reported-separately scheduler_consumer=none";
+const CPUID_SECTION_STALE_SCOPE: &str = "capture_policy=registration-time-cpuid-only msr_programming=no hardware_table=unconfigured scheduler_consumer=none";
+const CPUID_SECTION_EXPLICIT_SCOPE: &str = "section_scope=cpuid-profile-metadata capture_policy=registration-time-cpuid-only section_msr_access=no live_table_state=reported-separately scheduler_consumer=none";
 
 fn qualify_cpuid_section_scope(out: &mut alloc::string::String) {
     let Some(start) = out.find(CPUID_SECTION_STALE_SCOPE) else {

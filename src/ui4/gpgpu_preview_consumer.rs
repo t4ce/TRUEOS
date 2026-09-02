@@ -3157,9 +3157,7 @@ fn publish_preview_window_frame(
     let (logical_width, logical_height) = preview
         .pending_resize_logical_extent
         .ok_or("resize-logical-extent-missing")?;
-    let resize_epoch = preview
-        .pending_resize_epoch
-        .ok_or("resize-epoch-missing")?;
+    let resize_epoch = preview.pending_resize_epoch.ok_or("resize-epoch-missing")?;
     let current_placement = window_placement(PREVIEW_OWNER, preview.window)
         .map_err(|_| "resize-placement-unavailable")?;
     let staged_placement = WindowPlacement {
