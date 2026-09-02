@@ -31,5 +31,19 @@ pub(crate) fn try_parse(
     }
 
     let submitted = line.trim();
+    if let Some(bios_tail) = command_tail(submitted, "bios") {
+        if let Some(capture_tail) = command_tail(bios_tail, "capture") {
+            return super::cmds::bios_capture::try_parse(io, capture_tail);
+        }
+    }
     super::shell2_cmd_registry::try_dispatch(spawner, io, submitted)
+}
+
+fn command_tail<'a>(submitted: &'a str, expected: &str) -> Option<&'a str> {
+    let mut parts = submitted.splitn(2, char::is_whitespace);
+    let command = parts.next()?;
+    if !command.eq_ignore_ascii_case(expected) {
+        return None;
+    }
+    Some(parts.next().unwrap_or("").trim_start())
 }
