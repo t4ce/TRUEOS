@@ -35,6 +35,12 @@ pub(crate) fn try_parse(
         if let Some(capture_tail) = command_tail(bios_tail, "capture") {
             return super::cmds::bios_capture::try_parse(io, capture_tail);
         }
+        if let Some(outcome) = super::cmds::bios_hii::try_parse(io, bios_tail) {
+            return outcome;
+        }
+        if let Some(outcome) = super::cmds::bios_browser::try_parse(io, bios_tail) {
+            return outcome;
+        }
     }
     super::shell2_cmd_registry::try_dispatch(spawner, io, submitted)
 }
