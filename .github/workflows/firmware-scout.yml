@@ -4,7 +4,8 @@ on:
   pull_request:
     paths:
       - "tools/firmware-scout/**"
-      - "src/shell2/cmds/bios_capture.rs"
+      - "src/shell2/cmds/bios_*.rs"
+      - "src/shell2/cmds/bios_*/**"
       - "src/shell2/cmds/mod.rs"
       - "src/shell2/shell2_cmd.rs"
       - ".github/workflows/firmware-scout.yml"
@@ -13,7 +14,8 @@ on:
       - true
     paths:
       - "tools/firmware-scout/**"
-      - "src/shell2/cmds/bios_capture.rs"
+      - "src/shell2/cmds/bios_*.rs"
+      - "src/shell2/cmds/bios_*/**"
       - "src/shell2/cmds/mod.rs"
       - "src/shell2/shell2_cmd.rs"
       - ".github/workflows/firmware-scout.yml"
