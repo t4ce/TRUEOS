@@ -1,0 +1,17 @@
+[package]
+name = "trueos-firmware-scout"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+r-efi = "=5.3.0"
+
+[workspace]
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+strip = "symbols"

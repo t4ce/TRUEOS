@@ -1,0 +1,47 @@
+name: FirmwareScout HII capture
+
+on:
+  pull_request:
+    paths:
+      - "tools/firmware-scout/**"
+      - "src/shell2/cmds/bios_capture.rs"
+      - "src/shell2/cmds/mod.rs"
+      - "src/shell2/shell2_cmd.rs"
+      - ".github/workflows/firmware-scout.yml"
+  push:
+    branches:
+      - true
+    paths:
+      - "tools/firmware-scout/**"
+      - "src/shell2/cmds/bios_capture.rs"
+      - "src/shell2/cmds/mod.rs"
+      - "src/shell2/shell2_cmd.rs"
+      - ".github/workflows/firmware-scout.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  firmware-scout:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust components
+        run: |
+          rustup toolchain install nightly-2026-07-10 --profile minimal --component rust-src,rustfmt
+          rustup target add --toolchain nightly-2026-07-10 x86_64-unknown-uefi
+      - name: Check FirmwareScout formatting
+        working-directory: tools/firmware-scout
+        run: cargo +nightly-2026-07-10 fmt -- --check
+      - name: Build FirmwareScout PE32+ application
+        working-directory: tools/firmware-scout
+        run: cargo +nightly-2026-07-10 build --locked --release
+
+  kernel-integration:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust components
+        run: rustup toolchain install nightly-2026-07-10 --profile minimal --component rust-src
+      - name: Check TRUEOS kernel integration
+        run: cargo +nightly-2026-07-10 check -p TRUEOS
