@@ -5,8 +5,7 @@ pub(crate) mod aud;
 pub(crate) mod bios;
 pub(crate) mod bios_browser;
 pub(crate) mod bios_capture;
-pub(crate) mod bios_catalogue;
-#[allow(dead_code)]
+pub(crate) mod bios_hii;
 pub(crate) mod bios_ifr;
 pub(crate) mod cpp;
 pub(crate) mod cry;
