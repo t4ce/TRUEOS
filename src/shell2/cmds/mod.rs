@@ -4,6 +4,7 @@ pub(crate) mod acpi;
 pub(crate) mod aud;
 pub(crate) mod bios;
 pub(crate) mod bios_browser;
+pub(crate) mod bios_blueprint;
 pub(crate) mod bios_capture;
 pub(crate) mod bios_hii;
 pub(crate) mod bios_ifr;

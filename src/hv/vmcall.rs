@@ -66,6 +66,7 @@ pub const OP_BP_VGPU_VVIDEO_FLUSH: u32 = 0x96; // arg0 device,arg1 buffer,payloa
 pub const OP_BP_VGPU_VVIDEO_INVALIDATE: u32 = 0x97; // arg0 device,arg1 buffer,payload offset+bytes -> rc
 pub const OP_BP_VGPU_DEVICE_DIAGNOSTICS: u32 = 0x90; // arg0 device -> counters + mapping proof
 pub const OP_BP_SYSTEM_SERVICES_SNAPSHOT_READ: u32 = 0xA4; // arg0 offset, arg1 cap -> task registry snapshot
+pub const OP_BP_BIOS_SCHEMA_SNAPSHOT_READ: u32 = 0x178; // arg0 offset, arg1 cap -> cached read-only BIOS schema JSON
 pub const OP_BP_VGPU_OPEN: u32 = 0xA5; // arg0 requested caps -> opaque device/rc
 pub const OP_BP_VGPU_CLOSE: u32 = 0xA6; // arg0 device -> rc
 pub const OP_BP_VGPU_DEVICE_INFO: u32 = 0xA7; // arg0 device -> DeviceInfo payload
@@ -3347,6 +3348,17 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 arg1,
                 crate::r::net::vlayer::system_services_snapshot_len_host,
                 crate::r::net::vlayer::system_services_snapshot_read_host,
+            );
+            DispatchOutcome::Resume
+        }
+        OP_BP_BIOS_SCHEMA_SNAPSHOT_READ => {
+            handle_vlayer_text_read_vmcall(
+                vm_id,
+                seq,
+                arg0,
+                arg1,
+                crate::r::net::vlayer::bios_schema_snapshot_len_host,
+                crate::r::net::vlayer::bios_schema_snapshot_read_host,
             );
             DispatchOutcome::Resume
         }

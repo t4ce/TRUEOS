@@ -1427,6 +1427,9 @@ fn resolve_runtime_abi_import(name: &str) -> Option<usize> {
             crate::r::net::vlayer::trueos_vlayer_system_services_snapshot_read as *const ()
                 as usize,
         ),
+        "trueos_vlayer_bios_schema_snapshot_read" => Some(
+            crate::r::net::vlayer::trueos_vlayer_bios_schema_snapshot_read as *const () as usize,
+        ),
         "trueos_vlayer_printer_snapshot_read" => {
             Some(crate::r::net::vlayer::trueos_vlayer_printer_snapshot_read as *const () as usize)
         }
@@ -1437,8 +1440,8 @@ fn resolve_runtime_abi_import(name: &str) -> Option<usize> {
             Some(crate::r::net::vlayer::trueos_vlayer_print2d_status as *const () as usize)
         }
         "trueos_cabi_gridpaper_print_request_take" => Some(
-            crate::r::services::gridpaper_service::trueos_cabi_gridpaper_print_request_take as *const ()
-                as usize,
+            crate::r::services::gridpaper_service::trueos_cabi_gridpaper_print_request_take
+                as *const () as usize,
         ),
         "trueos_platform_monotonic_nanos" => {
             Some(crate::r::platform::trueos_platform_monotonic_nanos as *const () as usize)
@@ -1787,12 +1790,14 @@ pub(crate) fn build_process_env(
     // Filesystem scope is an explicit capability, either sealed into the
     // Blueprint header by package metadata or supplied by a host launch vFile.
     // Ordinary apps retain their app/common confinement.
-    if trueosfs_scope || launch_script.is_some_and(|script| {
-        script
-            .lines()
-            .map(str::trim)
-            .any(|line| line == "fs-scope trueosfs")
-    }) {
+    if trueosfs_scope
+        || launch_script.is_some_and(|script| {
+            script
+                .lines()
+                .map(str::trim)
+                .any(|line| line == "fs-scope trueosfs")
+        })
+    {
         vars.insert(String::from("TRUEOS_FS_SCOPE"), String::from("trueosfs"));
     }
     if let Some(root) = app_fs_root {
