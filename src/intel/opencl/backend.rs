@@ -129,11 +129,6 @@ pub(crate) enum BackendCommand<'a> {
         kernel_name: &'static str,
         nd_range: NdRange,
     },
-    FillRectWorklistRgba8Stub {
-        dst: gpgpu::GpgpuRgba8Surface,
-        rect: gpgpu::GpgpuRect,
-        color_rgba: u32,
-    },
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -232,16 +227,6 @@ impl IntelOpenClBackend {
     }
 
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-    pub(crate) fn upload_fill_rect_worklist_rgba8(&self) -> Option<UploadedKernelRef> {
-        gpgpu::upload_fill_rect_worklist_rgba8_kernel().map(UploadedKernelRef::from)
-    }
-
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-    pub(crate) fn fill_rect_worklist_upload_status(&self) -> Option<UploadedKernelRef> {
-        gpgpu::fill_rect_worklist_rgba8_upload_status().map(UploadedKernelRef::from)
-    }
-
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn upload_all_known_aot(
         &self,
         out: &mut [Option<UploadedKernelRef>],
@@ -274,19 +259,6 @@ impl IntelOpenClBackend {
     }
 
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-    pub(crate) fn execute_fill_rect_worklist_rgba8_stub(
-        &self,
-        _dst: gpgpu::GpgpuRgba8Surface,
-        _rect: gpgpu::GpgpuRect,
-        _color_rgba: u32,
-    ) -> BackendExecutionStub {
-        BackendExecutionStub::recognized(
-            gpgpu::FILL_RECT_WORKLIST_RGBA8_KERNEL_NAME,
-            self.fill_rect_worklist_upload_status(),
-        )
-    }
-
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) fn dispatch(&self, command: BackendCommand<'_>) -> BackendCommandResult {
         match command {
             BackendCommand::QueryUploadStatus { kernel_name } => {
@@ -307,13 +279,6 @@ impl IntelOpenClBackend {
                 nd_range,
             } => BackendCommandResult::ExecuteStub(
                 self.execute_known_kernel_stub(kernel_name, nd_range),
-            ),
-            BackendCommand::FillRectWorklistRgba8Stub {
-                dst,
-                rect,
-                color_rgba,
-            } => BackendCommandResult::ExecuteStub(
-                self.execute_fill_rect_worklist_rgba8_stub(dst, rect, color_rgba),
             ),
         }
     }

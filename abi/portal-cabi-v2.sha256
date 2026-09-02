@@ -206,7 +206,7 @@
 # TRUEOSFS v3 typed write, typed stat, and TDL2 listing calls are strictly
 # additive. They carry stable raw content IDs while the established untyped
 # filesystem calls retain their Blob/metadata-omitting compatibility behavior.
-# The UI4 AppOwned cursor-step call is strictly additive. It takes an optional
-# fixed-width, frame-local 1/1024-pixel grid record and changes neither raw
-# cursor motion nor existing selected-frame input or cursor declarations.
+# The UI4 cursor-step call is strictly additive. It takes an optional
+# fixed-width, frame-local 1/1024-pixel presentation grid and changes neither
+# raw cursor motion nor selected-frame input delivery.
 7daf8aecfe516b11c4a9deedc14a40d81fd444019689c3fd8eb8aa024653a06a

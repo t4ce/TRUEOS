@@ -7545,12 +7545,13 @@ fn map_smoke_buffers(dev: crate::intel::Dev, warm: RenderWarmState) -> bool {
     let ok_batch = super::map_ggtt(dev, warm.batch_phys, warm.batch_len, GPU_VA_BATCH_BASE);
     let ok_draw_state =
         super::map_ggtt(dev, warm.draw_state_phys, warm.draw_state_len, GPU_VA_DRAW_STATE_BASE);
-    let ok_vertex = super::map_ggtt(dev, warm.vertex_phys, warm.vertex_len, GPU_VA_VERTEX_BASE);
+    // Vertex fetch uses the Render0 PPGTT installed by init_warm_state_for_boot.
+    // A stale GGTT mirror here claimed Pipe-A/Slot-3/buffer-0's numeric VA;
+    // display later replaced it when that surface was mapped.
     let ok_result = super::map_ggtt(dev, warm.result_phys, warm.result_len, GPU_VA_RESULT_BASE);
     let ok_streamout =
         super::map_ggtt(dev, warm.streamout_phys, warm.streamout_len, GPU_VA_STREAMOUT_BASE);
-    if ok_ring && ok_context && ok_batch && ok_draw_state && ok_vertex && ok_result && ok_streamout
-    {
+    if ok_ring && ok_context && ok_batch && ok_draw_state && ok_result && ok_streamout {
         super::ggtt_invalidate(dev);
         true
     } else {
@@ -7629,7 +7630,7 @@ fn log_boot_render_memory_proof(warm: RenderWarmState) {
     let streamout_rb = read_first_dword(warm.streamout_virt, warm.streamout_len);
 
     intel_render_focus_log!(
-        "memory-proof accepted=1 map=1 ggtt_invalidated=1 flush=client-data-only ring_context_flush=0 phase=boot-before-render0-registration readback=cpu-first-dword ring[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] context[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] batch[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] state[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] vertex[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] result[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] streamout[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] does_not_prove=fragment_ps_rt_progress\n",
+        "memory-proof accepted=1 map=1 ggtt_invalidated=1 flush=client-data-only ring_context_flush=0 phase=boot-before-render0-registration readback=cpu-first-dword ring[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] context[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] batch[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] state[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] vertex[phys=0x{:X} ppgtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] result[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] streamout[phys=0x{:X} ggtt=0x{:X} bytes=0x{:X} rb=0x{:08X}] does_not_prove=fragment_ps_rt_progress\n",
         warm.ring_phys,
         GPU_VA_RING_BASE,
         warm.ring_len,

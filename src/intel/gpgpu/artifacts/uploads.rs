@@ -10,10 +10,6 @@ pub(crate) fn fill_rect_rgba8_upload_status() -> Option<UploadedKernelArtifact> 
     *FILL_RECT_RGBA8_UPLOAD.lock()
 }
 
-pub(crate) fn fill_rect_worklist_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
-    *FILL_RECT_WORKLIST_RGBA8_UPLOAD.lock()
-}
-
 pub(crate) fn gradient_rect_worklist_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
     *GRADIENT_RECT_WORKLIST_RGBA8_UPLOAD.lock()
 }
@@ -137,28 +133,6 @@ pub(crate) fn upload_fill_rect_rgba8_kernel() -> Option<UploadedKernelArtifact> 
 
     let upload = upload_artifact(dev, FILL_RECT_RGBA8_ADLS_ARTIFACT, FILL_RECT_RGBA8_ADLS_GPU)?;
     *FILL_RECT_RGBA8_UPLOAD.lock() = Some(upload);
-    Some(upload)
-}
-
-pub(crate) fn upload_fill_rect_worklist_rgba8_kernel() -> Option<UploadedKernelArtifact> {
-    if let Some(upload) = *FILL_RECT_WORKLIST_RGBA8_UPLOAD.lock() {
-        return Some(upload);
-    }
-
-    let Some(dev) = super::claimed_device() else {
-        crate::log_info!(
-            target: "gpgpu";
-            "intel/gpgpu: fill-rect-worklist-rgba8 upload skipped reason=no-claimed-device\n"
-        );
-        return None;
-    };
-
-    let upload = upload_artifact(
-        dev,
-        FILL_RECT_WORKLIST_RGBA8_ADLS_ARTIFACT,
-        FILL_RECT_WORKLIST_RGBA8_ADLS_GPU,
-    )?;
-    *FILL_RECT_WORKLIST_RGBA8_UPLOAD.lock() = Some(upload);
     Some(upload)
 }
 
@@ -627,7 +601,6 @@ struct GpgpuKnownArtifactSlot {
 const GPGPU_KNOWN_ARTIFACT_NAMES: &[&str] = &[
     COPY_RECT_RGBA8_KERNEL_NAME,
     FILL_RECT_RGBA8_KERNEL_NAME,
-    FILL_RECT_WORKLIST_RGBA8_KERNEL_NAME,
     GRADIENT_RECT_WORKLIST_RGBA8_KERNEL_NAME,
     ALPHA_BLEND_WORKLIST_RGBA8_KERNEL_NAME,
     GLYPH_MASK_RGBA8_KERNEL_NAME,
@@ -709,7 +682,6 @@ fn known_artifact_address_space(name: &str) -> GpgpuArtifactAddressSpace {
     match name {
         COPY_RECT_RGBA8_KERNEL_NAME
         | FILL_RECT_RGBA8_KERNEL_NAME
-        | FILL_RECT_WORKLIST_RGBA8_KERNEL_NAME
         | ALPHA_BLEND_WORKLIST_RGBA8_KERNEL_NAME
         | GLYPH_MASK_RGBA8_KERNEL_NAME
         | FONT_INSTANCE_RGBA8_KERNEL_NAME
@@ -762,11 +734,6 @@ fn known_artifact_slot(name: &str) -> Option<GpgpuKnownArtifactSlot> {
             artifact: FILL_RECT_RGBA8_ADLS_ARTIFACT,
             gpu: FILL_RECT_RGBA8_ADLS_GPU,
             upload: &FILL_RECT_RGBA8_UPLOAD,
-        }),
-        FILL_RECT_WORKLIST_RGBA8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
-            artifact: FILL_RECT_WORKLIST_RGBA8_ADLS_ARTIFACT,
-            gpu: FILL_RECT_WORKLIST_RGBA8_ADLS_GPU,
-            upload: &FILL_RECT_WORKLIST_RGBA8_UPLOAD,
         }),
         GRADIENT_RECT_WORKLIST_RGBA8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
             artifact: GRADIENT_RECT_WORKLIST_RGBA8_ADLS_ARTIFACT,

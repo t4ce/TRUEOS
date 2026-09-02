@@ -334,7 +334,7 @@ fn test_guc(io: &'static dyn ShellBackend2) -> bool {
 
 fn test_compute(io: &'static dyn ShellBackend2) -> bool {
     let before = vgpu::kernel_timeline(KernelClient::GpgpuSystem).unwrap_or_default();
-    let dispatch = crate::intel::gpgpu::submit_fill_rect_worklist_rgba8_probe_now();
+    let dispatch = crate::intel::gpgpu::submit_solid_composite_worklist_rgba8_probe_now();
     let after = vgpu::kernel_timeline(KernelClient::GpgpuSystem).unwrap_or_default();
     let timeline = after.submitted > before.submitted && after.completed == after.submitted;
     print_shell_line(

@@ -804,7 +804,6 @@ mod tests {
     use super::*;
 
     include!("../kernels/artifacts/adls/cpp/copy_rect_rgba8.contract.rs");
-    include!("../kernels/artifacts/adls/cpp/fill_rect_worklist_rgba8.contract.rs");
 
     const COPY_RECT_ZEBIN: &[u8] =
         include_bytes!("../kernels/artifacts/adls/cpp/copy_rect_rgba8.bin");
@@ -1046,17 +1045,6 @@ mod tests {
             !COPY_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT
                 .target
                 .supports(0xA780, 0x0C)
-        );
-    }
-
-    #[test]
-    fn generated_worklist_contract_without_enqueued_local_size_is_admissible() {
-        assert_eq!(FILL_RECT_WORKLIST_RGBA8_ADLS_CPP_ABI_CONTRACT.validate(), Ok(()));
-        assert_eq!(
-            FILL_RECT_WORKLIST_RGBA8_ADLS_CPP_ABI_CONTRACT
-                .implicit_payload_args
-                .len(),
-            2
         );
     }
 }

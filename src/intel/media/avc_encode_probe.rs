@@ -14,11 +14,16 @@ use trueos_time::{Duration, Timer};
 
 use super::engine as media;
 
-// Keep this fixed diagnostic window above render/UI producer allocations
-// (which end at 0x4000_0000) and below display's direct-scanout aliases.
-const RING_GPU: u64 = 0x4100_0000;
-const CONTEXT_GPU: u64 = 0x4101_0000;
-const ARENA_GPU: u64 = 0x4110_0000;
+// Keep these controls in the shared AVC GGTT reservation between display's
+// interaction surfaces and direct-scanout aliases. The old mappings replaced
+// slot-4 back-buffer bytes 0x00000..0x03FFF and 0x10000..0x25FFF. At pitch
+// 0x2800, the latter projects onto row 6 from x=1024, rows 7..14, and row 15
+// through x=511: the exact alternating-frame corruption fingerprint.
+const RING_GGTT: u64 = crate::intel::AVC_CONTROL_GGTT_BASE;
+const CONTEXT_GGTT: u64 = RING_GGTT + 0x0001_0000;
+// This arena is installed only in VDBOX PPGTT. Its numeric overlap with GGTT
+// reservations is intentional and does not alias their translations.
+const ARENA_PPGTT_BASE: u64 = 0x4110_0000;
 const RING_BYTES: usize = 16 * 1024;
 const CONTEXT_BYTES: usize = 22 * 4096;
 const ARENA_BYTES: usize = 32 * 1024 * 1024;
@@ -86,30 +91,30 @@ const ARENA_WORK_RANGES: [(usize, usize); 12] = [
     (MPR_ROWSTORE_OFFSET, SCRATCH_BYTES),
 ];
 
-const BATCH_GPU: u64 = ARENA_GPU + BATCH_OFFSET as u64;
+const BATCH_GPU: u64 = ARENA_PPGTT_BASE + BATCH_OFFSET as u64;
 const CODEC_BATCH_GPU: u64 = BATCH_GPU + CODEC_BATCH_OFFSET as u64;
-const RESULT_GPU: u64 = ARENA_GPU + RESULT_OFFSET as u64;
-const SOURCE_GPU: u64 = ARENA_GPU + SOURCE_OFFSET as u64;
+const RESULT_GPU: u64 = ARENA_PPGTT_BASE + RESULT_OFFSET as u64;
+const SOURCE_GPU: u64 = ARENA_PPGTT_BASE + SOURCE_OFFSET as u64;
 // Packed XYUV8888 is 14.06 MiB and cannot occupy SOURCE_GPU without overlapping
 // the resident reconstruction window. External WD frames therefore use a
 // separate sparse PPGTT aperture while keeping every codec-owned allocation
 // at its already-proven address.
 const XYUV8888_SOURCE_GPU: u64 = 0x5000_0000;
-const RECON_0_GPU: u64 = ARENA_GPU + RECON_0_OFFSET as u64;
-const RECON_1_GPU: u64 = ARENA_GPU + RECON_1_OFFSET as u64;
-const DS_0_GPU: u64 = ARENA_GPU + DS_0_OFFSET as u64;
-const DS_1_GPU: u64 = ARENA_GPU + DS_1_OFFSET as u64;
-const BITSTREAM_GPU: u64 = ARENA_GPU + BITSTREAM_OFFSET as u64;
-const MFX_STATS_GPU: u64 = ARENA_GPU + MFX_STATS_OFFSET as u64;
-const VDENC_STATS_GPU: u64 = ARENA_GPU + VDENC_STATS_OFFSET as u64;
-const SLICE_SIZE_GPU: u64 = ARENA_GPU + SLICE_SIZE_OFFSET as u64;
-const MV_OBJECT_GPU: u64 = ARENA_GPU + MV_OBJECT_OFFSET as u64;
-const DMV_0_GPU: u64 = ARENA_GPU + DMV_0_OFFSET as u64;
-const DMV_1_GPU: u64 = ARENA_GPU + DMV_1_OFFSET as u64;
-const MPR_ROWSTORE_GPU: u64 = ARENA_GPU + MPR_ROWSTORE_OFFSET as u64;
-const INTRA_ROWSTORE_GPU: u64 = ARENA_GPU + INTRA_ROWSTORE_OFFSET as u64;
-const DEBLOCK_ROWSTORE_GPU: u64 = ARENA_GPU + DEBLOCK_ROWSTORE_OFFSET as u64;
-const BSP_ROWSTORE_GPU: u64 = ARENA_GPU + BSP_ROWSTORE_OFFSET as u64;
+const RECON_0_GPU: u64 = ARENA_PPGTT_BASE + RECON_0_OFFSET as u64;
+const RECON_1_GPU: u64 = ARENA_PPGTT_BASE + RECON_1_OFFSET as u64;
+const DS_0_GPU: u64 = ARENA_PPGTT_BASE + DS_0_OFFSET as u64;
+const DS_1_GPU: u64 = ARENA_PPGTT_BASE + DS_1_OFFSET as u64;
+const BITSTREAM_GPU: u64 = ARENA_PPGTT_BASE + BITSTREAM_OFFSET as u64;
+const MFX_STATS_GPU: u64 = ARENA_PPGTT_BASE + MFX_STATS_OFFSET as u64;
+const VDENC_STATS_GPU: u64 = ARENA_PPGTT_BASE + VDENC_STATS_OFFSET as u64;
+const SLICE_SIZE_GPU: u64 = ARENA_PPGTT_BASE + SLICE_SIZE_OFFSET as u64;
+const MV_OBJECT_GPU: u64 = ARENA_PPGTT_BASE + MV_OBJECT_OFFSET as u64;
+const DMV_0_GPU: u64 = ARENA_PPGTT_BASE + DMV_0_OFFSET as u64;
+const DMV_1_GPU: u64 = ARENA_PPGTT_BASE + DMV_1_OFFSET as u64;
+const MPR_ROWSTORE_GPU: u64 = ARENA_PPGTT_BASE + MPR_ROWSTORE_OFFSET as u64;
+const INTRA_ROWSTORE_GPU: u64 = ARENA_PPGTT_BASE + INTRA_ROWSTORE_OFFSET as u64;
+const DEBLOCK_ROWSTORE_GPU: u64 = ARENA_PPGTT_BASE + DEBLOCK_ROWSTORE_OFFSET as u64;
+const BSP_ROWSTORE_GPU: u64 = ARENA_PPGTT_BASE + BSP_ROWSTORE_OFFSET as u64;
 
 const TIMEOUT_NS: u64 = 100_000_000;
 const POLL_LIMIT: u32 = 2_000_000;
@@ -121,9 +126,11 @@ const EXPECTED_PRIMARY_BATCH_BYTES: usize = 40;
 pub(crate) const GOP_PICTURES: u32 = 40;
 
 const _: () = {
-    assert!(RING_GPU % crate::intel::WARM_ALIGN as u64 == 0);
-    assert!(CONTEXT_GPU % crate::intel::WARM_ALIGN as u64 == 0);
-    assert!(ARENA_GPU % crate::intel::WARM_ALIGN as u64 == 0);
+    assert!(RING_GGTT % crate::intel::WARM_ALIGN as u64 == 0);
+    assert!(CONTEXT_GGTT % crate::intel::WARM_ALIGN as u64 == 0);
+    assert!(ARENA_PPGTT_BASE % crate::intel::WARM_ALIGN as u64 == 0);
+    assert!(RING_GGTT + RING_BYTES as u64 <= CONTEXT_GGTT);
+    assert!(CONTEXT_GGTT + CONTEXT_BYTES as u64 <= crate::intel::DISPLAY_DIRECT_SCANOUT_GGTT_BASE);
     assert!(CODEC_BATCH_OFFSET + CODEC_BATCH_BYTES == BATCH_BYTES);
     assert!(FRAME_WIDTH % 16 == 0);
     assert!(FRAME_HEIGHT % 16 == 0);
@@ -151,7 +158,7 @@ const _: () = {
     assert!(DMV_0_OFFSET + DMV_BYTES <= DMV_1_OFFSET);
     assert!(DMV_1_OFFSET + DMV_BYTES <= MPR_ROWSTORE_OFFSET);
     assert!(MPR_ROWSTORE_OFFSET + SCRATCH_BYTES <= ARENA_BYTES);
-    assert!(ARENA_GPU + ARENA_BYTES as u64 <= 0x5000_0000);
+    assert!(ARENA_PPGTT_BASE + ARENA_BYTES as u64 <= XYUV8888_SOURCE_GPU);
 };
 
 const KICKOFF_MARKER: u32 = 0x4156_4301;
@@ -1193,10 +1200,10 @@ async fn run_with_source(source_kind: AvcFrameSource, picture: AvcPicture) -> Av
         CONTEXT_BYTES,
         engine.ring_base,
         0,
-        RING_GPU as u32,
+        RING_GGTT as u32,
         ring_tail_bytes as u32,
         ring_ctl,
-        CONTEXT_GPU as u32,
+        CONTEXT_GGTT as u32,
         backing.ppgtt.pml4_phys(),
         false,
     ) {
@@ -1217,7 +1224,7 @@ async fn run_with_source(source_kind: AvcFrameSource, picture: AvcPicture) -> Av
     crate::intel::ggtt_invalidate(dev);
     core::sync::atomic::fence(Ordering::SeqCst);
 
-    let (hwlrca_lo, hwlrca_hi) = media::build_media_guc_context_descriptor(CONTEXT_GPU);
+    let (hwlrca_lo, hwlrca_hi) = media::build_media_guc_context_descriptor(CONTEXT_GGTT);
     report.hwlrca_lo = hwlrca_lo;
     report.hwlrca_hi = hwlrca_hi;
     let first_registration = backing.guc_token.is_none();
@@ -1394,15 +1401,15 @@ fn build_backing(dev: crate::intel::Dev) -> Option<ProbeBacking> {
     // zero plus a 7.7 MiB cache flush for every 40 Hz encode.
     initialize_arena_work_ranges(arena_virt);
 
-    if !crate::intel::map_ggtt(dev, ring_phys, RING_BYTES, RING_GPU)
-        || !crate::intel::map_ggtt(dev, context_phys, CONTEXT_BYTES, CONTEXT_GPU)
+    if !crate::intel::map_ggtt(dev, ring_phys, RING_BYTES, RING_GGTT)
+        || !crate::intel::map_ggtt(dev, context_phys, CONTEXT_BYTES, CONTEXT_GGTT)
     {
         return None;
     }
     crate::intel::ggtt_invalidate(dev);
     let ppgtt =
         crate::intel::ppgtt::build_sparse_ppgtt_for_ranges(&[crate::intel::ppgtt::PpgttRange {
-            gpu: ARENA_GPU,
+            gpu: ARENA_PPGTT_BASE,
             phys: arena_phys,
             bytes: ARENA_BYTES,
         }])?;
@@ -1999,7 +2006,10 @@ fn capture_timeout_diagnostics(
 }
 
 fn sampled_gpu_surface(backing: &ProbeBacking, gpu: u64, bytes: usize) -> u32 {
-    let Some(offset) = gpu.checked_sub(ARENA_GPU).map(|offset| offset as usize) else {
+    let Some(offset) = gpu
+        .checked_sub(ARENA_PPGTT_BASE)
+        .map(|offset| offset as usize)
+    else {
         return 0;
     };
     let Some(end) = offset.checked_add(bytes) else {
@@ -2023,7 +2033,7 @@ fn classify_acthd(acthd: u64, backing: &ProbeBacking) -> (&'static str, u32, u32
             return ("batch", offset as u32, dword);
         }
     }
-    if let Some(offset) = acthd.checked_sub(RING_GPU) {
+    if let Some(offset) = acthd.checked_sub(RING_GGTT) {
         if offset < RING_BYTES as u64 {
             let offset = offset as usize;
             let dword = unsafe { core::ptr::read_volatile(backing.ring_virt.add(offset).cast()) };

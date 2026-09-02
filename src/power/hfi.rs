@@ -22,6 +22,7 @@ const HFI_MAX_TABLE_PAGES: usize = 16;
 const HFI_TIMESTAMP_BYTES: usize = core::mem::size_of::<u64>();
 const HFI_STABLE_CAPTURE_ATTEMPTS: usize = 32;
 const HFI_INITIAL_READY_POLLS: usize = 200_000;
+const HFI_INITIAL_READY_CAPTURE_ROUNDS: usize = 64;
 
 const MSR_IA32_HW_FEEDBACK_PTR: u32 = 0x17D0;
 const MSR_IA32_HW_FEEDBACK_CONFIG: u32 = 0x17D1;
@@ -46,6 +47,7 @@ struct HfiTableState {
     row_count: usize,
     enabled: bool,
     initial_ready: bool,
+    initial_columns_seen: u8,
 }
 
 struct HfiTableCapture {
@@ -355,6 +357,54 @@ fn wait_for_initial_population(state: &mut HfiTableState) {
         {
             state.initial_ready = true;
             return;
+fn updated_columns_mask(capability_mask: u8, image: &[u8]) -> u8 {
+    let column_count = capability_mask.count_ones() as usize;
+    if column_count == 0 || image.len() < HFI_TIMESTAMP_BYTES + column_count {
+        return 0;
+    }
+
+    let mut ordinal = 0usize;
+    let mut updated = 0u8;
+    for bit in 0..u8::BITS {
+        let bit_mask = 1u8 << bit;
+        if (capability_mask & bit_mask) == 0 {
+            continue;
+        }
+        if image[HFI_TIMESTAMP_BYTES + ordinal] != 0 {
+            updated |= bit_mask;
+        }
+        ordinal += 1;
+    }
+    updated
+}
+
+fn initial_columns_complete(state: HfiTableState) -> bool {
+    state.capability_mask != 0
+        && (state.initial_columns_seen & state.capability_mask) == state.capability_mask
+}
+
+fn initial_population_ready(state: HfiTableState) -> bool {
+    initial_columns_complete(state)
+}
+
+fn observe_stable_capture(state: &mut HfiTableState, capture: &HfiTableCapture) {
+    if !state.enabled || !capture.stable || capture.timestamp == 0 {
+        return;
+    }
+    state.initial_columns_seen |= updated_columns_mask(state.capability_mask, &capture.image);
+}
+
+fn wait_for_initial_population(state: &mut HfiTableState) {
+    if initial_population_ready(*state) || !state.enabled {
+        return;
+    }
+
+    for _ in 0..HFI_INITIAL_READY_CAPTURE_ROUNDS {
+        if let Some(capture) = capture_stable(*state) {
+            observe_stable_capture(state, &capture);
+            if initial_population_ready(*state) {
+                return;
+            }
         }
         core::hint::spin_loop();
     }
@@ -454,6 +504,7 @@ pub(crate) fn enable_table_explicit() -> Result<(), &'static str> {
         row_count,
         enabled: true,
         initial_ready: false,
+        initial_columns_seen: 0,
     });
     if let Some(existing) = state.as_mut() {
         wait_for_initial_population(existing);
@@ -500,6 +551,11 @@ pub(crate) fn table_snapshot_text() -> String {
             state.initial_ready = true;
         }
         (*state, capture, state.initial_ready)
+        if let Some(capture) = capture.as_ref() {
+            observe_stable_capture(state, capture);
+        }
+        let initial_ready = initial_population_ready(*state);
+        (*state, capture, initial_ready)
     };
 
     let Some((_, _, performance_offset, efficiency_offset)) =
@@ -562,6 +618,7 @@ pub(crate) fn table_snapshot_text() -> String {
     writeln!(
         out,
         "HFI header: performance_updated={} efficiency_updated={} initial_population={} update_interrupt=not-configured scheduler_consumer=none",
+        "HFI header: performance_updated={} efficiency_updated={} initial_population={} initial_columns_seen=0x{:02X}/0x{:02X} update_interrupt=not-configured scheduler_consumer=none",
         perf_updated
             .map(|value| value.to_string())
             .unwrap_or_else(|| String::from("-")),
@@ -569,6 +626,8 @@ pub(crate) fn table_snapshot_text() -> String {
             .map(|value| value.to_string())
             .unwrap_or_else(|| String::from("-")),
         if initial_ready { "ready" } else { "incomplete" },
+        state.initial_columns_seen,
+        state.capability_mask,
     )
     .unwrap();
     if !initial_ready {
@@ -714,6 +773,54 @@ mod tests {
         assert!(!advertised_columns_ready(0x03, &image));
         image[HFI_TIMESTAMP_BYTES + 1] = 1;
         assert!(advertised_columns_ready(0x03, &image));
+    fn update_indications_map_back_to_advertised_capability_bits() {
+        let mut image = [0u8; 16];
+        image[HFI_TIMESTAMP_BYTES] = 1;
+        assert_eq!(updated_columns_mask(0x03, &image), 0x01);
+        image[HFI_TIMESTAMP_BYTES + 1] = 1;
+        assert_eq!(updated_columns_mask(0x03, &image), 0x03);
+    }
+
+    #[test]
+    fn initial_population_accumulates_separate_column_updates() {
+        let mut state = HfiTableState {
+            phys: 0,
+            virt: 0,
+            bytes: 4096,
+            capability_mask: 0x03,
+            header_size: 8,
+            row_stride: 8,
+            row_count: 8,
+            enabled: true,
+            initial_columns_seen: 0,
+        };
+        let mut perf_image = alloc::vec![0u8; 16];
+        perf_image[HFI_TIMESTAMP_BYTES] = 1;
+        observe_stable_capture(
+            &mut state,
+            &HfiTableCapture {
+                timestamp: 1,
+                image: perf_image,
+                attempts: 2,
+                stable: true,
+            },
+        );
+        assert_eq!(state.initial_columns_seen, 0x01);
+        assert!(!initial_population_ready(state));
+
+        let mut efficiency_image = alloc::vec![0u8; 16];
+        efficiency_image[HFI_TIMESTAMP_BYTES + 1] = 1;
+        observe_stable_capture(
+            &mut state,
+            &HfiTableCapture {
+                timestamp: 2,
+                image: efficiency_image,
+                attempts: 2,
+                stable: true,
+            },
+        );
+        assert_eq!(state.initial_columns_seen, 0x03);
+        assert!(initial_population_ready(state));
     }
 
     #[test]
@@ -722,5 +829,6 @@ mod tests {
         image[HFI_TIMESTAMP_BYTES] = 1;
         image[HFI_TIMESTAMP_BYTES + 1] = 1;
         assert!(advertised_columns_ready(0x03, &image));
+        assert_eq!(updated_columns_mask(0x03, &image), 0x03);
     }
 }

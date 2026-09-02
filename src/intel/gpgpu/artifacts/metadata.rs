@@ -112,14 +112,6 @@ pub(crate) const FILL_RECT_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
         &FILL_RECT_RGBA8_ADLS_CPP_ABI_CONTRACT,
     );
 
-pub(crate) const FILL_RECT_WORKLIST_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
-    GpgpuKernelArtifact::contracted(
-        FILL_RECT_WORKLIST_RGBA8_KERNEL_NAME,
-        FILL_RECT_WORKLIST_RGBA8_ADLS_BIN,
-        FILL_RECT_WORKLIST_RGBA8_ADLS_SPV,
-        &FILL_RECT_WORKLIST_RGBA8_ADLS_CPP_ABI_CONTRACT,
-    );
-
 pub(crate) const GRADIENT_RECT_WORKLIST_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
     GpgpuKernelArtifact::contracted(
         GRADIENT_RECT_WORKLIST_RGBA8_KERNEL_NAME,

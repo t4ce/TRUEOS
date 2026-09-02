@@ -19,6 +19,10 @@ use crate::shell2::backends::net_tcp::{
 const TERMINAL_SIZE_QUERY: &[u8] = b"\x1b[18t";
 const INITIAL_REPAINT_WAIT_MS: u64 = 80;
 const RESIZE_QUERY_INTERVAL_MS: u64 = 1_000;
+// `CSI 8;<rows>;<cols>t` is small even with maximum decimal values.  Keeping
+// an incomplete candidate bounded prevents an unrelated, unterminated CSI
+// sequence from retaining TCP input indefinitely.
+const TERMINAL_SIZE_REPORT_MAX_LEN: usize = 32;
 /// One command accepted by the adapter queue.  `TcpSent` reports byte counts,
 /// not command IDs, so this FIFO retains the explicit control token until the
 /// corresponding bytes are reported as flushed from the adapter/socket.
@@ -91,56 +95,143 @@ fn log_direct_control_probe(
     }
 }
 
-fn parse_terminal_size_report(data: &[u8]) -> Option<(usize, usize, usize, usize)> {
-    let start = data.windows(2).position(|w| w == b"\x1b[")?;
-    let mut params = [0usize; 3];
-    let mut idx = 0usize;
-    let mut saw_digit = false;
-
-    for (offset, &b) in data[start + 2..].iter().enumerate() {
-        match b {
-            b'0'..=b'9' => {
-                if idx >= params.len() {
-                    return None;
-                }
-                params[idx] = params[idx]
-                    .saturating_mul(10)
-                    .saturating_add(usize::from(b - b'0'));
-                saw_digit = true;
-            }
-            b';' => {
-                if !saw_digit || idx + 1 >= params.len() {
-                    return None;
-                }
-                idx += 1;
-                saw_digit = false;
-            }
-            b't' => {
-                if idx == 2 && saw_digit && params[0] == 8 && params[1] > 0 && params[2] > 0 {
-                    return Some((params[2], params[1], start, start + 2 + offset + 1));
-                }
-                return None;
-            }
-            _ => return None,
-        }
-    }
-
-    None
+enum TerminalSizeReport {
+    Complete {
+        cols: usize,
+        rows: usize,
+        len: usize,
+    },
+    Incomplete,
+    NotSizeReport,
 }
 
-fn looks_like_incomplete_terminal_size_report(data: &[u8]) -> bool {
-    let Some(start) = data.windows(2).position(|w| w == b"\x1b[") else {
-        return false;
-    };
-    let Some(&first) = data.get(start + 2) else {
-        return true;
-    };
-    if first != b'8' {
-        return false;
+/// Classify a possible `CSI 8;<rows>;<cols>t` at the start of `data`.
+///
+/// TCP is a byte stream, so a terminal can split one reply anywhere or batch
+/// many replies with normal key sequences.  The caller must retain only an
+/// incomplete *size-report* prefix; all other bytes remain application input.
+fn parse_terminal_size_report_prefix(data: &[u8]) -> TerminalSizeReport {
+    debug_assert_eq!(data.first(), Some(&0x1b));
+
+    if data.len() == 1 {
+        return TerminalSizeReport::Incomplete;
     }
-    data[start + 3..]
-        .iter()
-        .all(|&b| b.is_ascii_digit() || b == b';')
+    if data[1] != b'[' {
+        return TerminalSizeReport::NotSizeReport;
+    }
+    if data.len() == 2 {
+        return TerminalSizeReport::Incomplete;
+    }
+    if data[2] != b'8' || data.len() > TERMINAL_SIZE_REPORT_MAX_LEN {
+        return TerminalSizeReport::NotSizeReport;
+    }
+
+    let mut cursor = 3usize;
+    if cursor == data.len() {
+        return TerminalSizeReport::Incomplete;
+    }
+    if data[cursor] != b';' {
+        return TerminalSizeReport::NotSizeReport;
+    }
+    cursor += 1;
+
+    let mut values = [0usize; 2];
+    for (index, value) in values.iter_mut().enumerate() {
+        let begin = cursor;
+        while cursor < data.len() && data[cursor].is_ascii_digit() {
+            *value = value
+                .saturating_mul(10)
+                .saturating_add(usize::from(data[cursor] - b'0'));
+            cursor += 1;
+        }
+        if cursor == begin {
+            return if cursor == data.len() {
+                TerminalSizeReport::Incomplete
+            } else {
+                TerminalSizeReport::NotSizeReport
+            };
+        }
+        if cursor == data.len() {
+            return TerminalSizeReport::Incomplete;
+        }
+        let terminator = if index == 0 { b';' } else { b't' };
+        if data[cursor] != terminator {
+            return TerminalSizeReport::NotSizeReport;
+        }
+        cursor += 1;
+    }
+
+    if values[0] == 0 || values[1] == 0 {
+        return TerminalSizeReport::NotSizeReport;
+    }
+    TerminalSizeReport::Complete {
+        cols: values[1],
+        rows: values[0],
+        len: cursor,
+    }
+}
+
+#[derive(Default)]
+struct TerminalSizeReportFilter {
+    pending: Vec<u8>,
+}
+
+struct FilteredTerminalInput {
+    bytes: Vec<u8>,
+    latest_size: Option<(usize, usize)>,
+}
+
+impl TerminalSizeReportFilter {
+    fn clear(&mut self) {
+        self.pending.clear();
+    }
+
+    /// Remove every complete terminal-size reply while preserving ordinary
+    /// terminal input byte-for-byte.  A suffix that might be a split reply is
+    /// retained and completed by the next TCP receive event.
+    fn filter(&mut self, data: &[u8]) -> FilteredTerminalInput {
+        let mut stream = core::mem::take(&mut self.pending);
+        stream.extend_from_slice(data);
+
+        let mut bytes = Vec::with_capacity(stream.len());
+        let mut latest_size = None;
+        let mut cursor = 0usize;
+        while cursor < stream.len() {
+            if stream[cursor] != 0x1b {
+                bytes.push(stream[cursor]);
+                cursor += 1;
+                continue;
+            }
+
+            match parse_terminal_size_report_prefix(&stream[cursor..]) {
+                TerminalSizeReport::Complete { cols, rows, len } => {
+                    latest_size = Some((cols, rows));
+                    cursor += len;
+                }
+                TerminalSizeReport::Incomplete => {
+                    self.pending.extend_from_slice(&stream[cursor..]);
+                    break;
+                }
+                TerminalSizeReport::NotSizeReport => {
+                    bytes.push(stream[cursor]);
+                    cursor += 1;
+                }
+            }
+        }
+
+        FilteredTerminalInput { bytes, latest_size }
+    }
+}
+
+fn record_terminal_size(cols: usize, rows: usize, direct_mode: bool) -> bool {
+    let _ = update_net_shell_surface_size(cols, rows);
+    !crate::shell2::backends::net_tcp::net_shell_frontend_active()
+        && crate::shell2::apply_reported_terminal_size_for_backend(
+            &crate::shell2::NET_TCP_SHELL_BACKEND,
+            cols,
+            rows,
+        )
+        && !direct_mode
 }
 
 /// TCP-backed shell I/O bridge.
@@ -253,8 +344,8 @@ pub async fn net_shell_task() {
         let mut initial_rx_probe: Vec<u8> = Vec::new();
         let mut initial_rx_owner: Option<NetShellOwnershipSnapshot> = None;
         let mut next_resize_query: Option<Instant> = None;
-        let mut resize_rx_probe: Vec<u8> = Vec::new();
-        let mut resize_rx_owner: Option<NetShellOwnershipSnapshot> = None;
+        let mut terminal_size_filter = TerminalSizeReportFilter::default();
+        let mut terminal_size_filter_owner: Option<NetShellOwnershipSnapshot> = None;
 
         loop {
             for ev in events.drain(32) {
@@ -276,12 +367,16 @@ pub async fn net_shell_task() {
                             initial_repaint_deadline = None;
                             initial_rx_probe.clear();
                             initial_rx_owner = None;
-                            resize_rx_probe.clear();
-                            resize_rx_owner = None;
+                            terminal_size_filter.clear();
+                            terminal_size_filter_owner = None;
                             next_resize_query = None;
                             if ownership.direct_active() {
                                 let _ = net_shell_direct_reset_terminal();
-                                let _ = net_shell_terminal_size_query();
+                                // A stream owns its protocol byte-for-byte, so it
+                                // must never receive Shell2's geometry reply.
+                                if !ownership.direct_passthrough_active() {
+                                    let _ = net_shell_terminal_size_query();
+                                }
                                 initial_repaint_handle = None;
                             } else if net_shell_write_bytes(TERMINAL_SIZE_QUERY) {
                                 initial_repaint_handle = Some(handle);
@@ -293,7 +388,9 @@ pub async fn net_shell_task() {
                                 // A direct claim won after the locked snapshot;
                                 // its claim reset is authoritative, and this
                                 // narrowly scoped query refreshes its geometry.
-                                let _ = net_shell_terminal_size_query();
+                                if !crate::shell2::backends::net_tcp::net_shell_direct_passthrough_active() {
+                                    let _ = net_shell_terminal_size_query();
+                                }
                                 initial_repaint_handle = None;
                             }
                         }
@@ -328,7 +425,6 @@ pub async fn net_shell_task() {
                                 Instant::now().as_millis()
                             );
                         }
-                        let mut rx_data = data;
                         let ownership = net_shell_ownership_snapshot();
                         let direct_mode = ownership.direct_active();
                         let direct_passthrough = ownership.direct_passthrough_active();
@@ -336,115 +432,62 @@ pub async fn net_shell_task() {
                             initial_rx_probe.clear();
                             initial_rx_owner = None;
                         }
-                        if resize_rx_owner.is_some_and(|owner| owner != ownership) {
-                            resize_rx_probe.clear();
-                            resize_rx_owner = None;
+                        if terminal_size_filter_owner.is_some_and(|owner| owner != ownership) {
+                            terminal_size_filter.clear();
                         }
-                        if direct_passthrough {
+                        let rx_data = if direct_passthrough {
                             initial_repaint_handle = None;
                             initial_repaint_deadline = None;
                             initial_rx_probe.clear();
                             initial_rx_owner = None;
-                            resize_rx_probe.clear();
-                            resize_rx_owner = None;
-                        } else if initial_repaint_handle == Some(handle) && !direct_mode {
-                            if initial_rx_probe.is_empty() {
-                                initial_rx_owner = Some(ownership);
-                            }
-                            initial_rx_probe.extend_from_slice(&rx_data);
-                            if let Some((cols, rows, start, end)) =
-                                parse_terminal_size_report(&initial_rx_probe)
-                            {
-                                let _ = update_net_shell_surface_size(cols, rows);
-                                if !crate::shell2::backends::net_tcp::net_shell_frontend_active() {
-                                    crate::shell2::apply_reported_terminal_size_for_backend(
-                                        &crate::shell2::NET_TCP_SHELL_BACKEND,
-                                        cols,
-                                        rows,
-                                    );
-                                }
-                                crate::shell2::repaint_backend_screen(
-                                    &crate::shell2::NET_TCP_SHELL_BACKEND,
-                                );
-                                initial_repaint_handle = None;
-                                initial_repaint_deadline = None;
-                                let mut filtered = Vec::new();
-                                filtered.extend_from_slice(&initial_rx_probe[..start]);
-                                filtered.extend_from_slice(&initial_rx_probe[end..]);
-                                rx_data = filtered;
-                                initial_rx_probe.clear();
-                                initial_rx_owner = None;
-                            } else if initial_rx_probe.len() <= 32 {
-                                continue;
-                            } else {
-                                rx_data = core::mem::take(&mut initial_rx_probe);
-                                initial_rx_owner = None;
-                            }
+                            terminal_size_filter.clear();
+                            terminal_size_filter_owner = None;
+                            data
                         } else {
-                            if !resize_rx_probe.is_empty() {
-                                resize_rx_probe.extend_from_slice(&rx_data);
-                                if let Some((cols, rows, start, end)) =
-                                    parse_terminal_size_report(&resize_rx_probe)
-                                {
-                                    let _ = update_net_shell_surface_size(cols, rows);
-                                    if !crate::shell2::backends::net_tcp::net_shell_frontend_active(
-                                    ) && crate::shell2::apply_reported_terminal_size_for_backend(
+                            terminal_size_filter_owner = Some(ownership);
+                            let filtered = terminal_size_filter.filter(data.as_slice());
+
+                            if initial_repaint_handle == Some(handle) && !direct_mode {
+                                if initial_rx_probe.is_empty() {
+                                    initial_rx_owner = Some(ownership);
+                                }
+                                initial_rx_probe.extend_from_slice(&filtered.bytes);
+                                if let Some((cols, rows)) = filtered.latest_size {
+                                    let _ = record_terminal_size(cols, rows, direct_mode);
+                                    // A newly connected shell must paint even when the
+                                    // reported dimensions equal the previous surface.
+                                    crate::shell2::repaint_backend_screen(
                                         &crate::shell2::NET_TCP_SHELL_BACKEND,
-                                        cols,
-                                        rows,
-                                    ) && !direct_mode
-                                    {
-                                        crate::shell2::repaint_backend_screen(
-                                            &crate::shell2::NET_TCP_SHELL_BACKEND,
-                                        );
-                                    }
-                                    let mut filtered = Vec::new();
-                                    filtered.extend_from_slice(&resize_rx_probe[..start]);
-                                    filtered.extend_from_slice(&resize_rx_probe[end..]);
-                                    rx_data = filtered;
-                                    resize_rx_probe.clear();
-                                    resize_rx_owner = None;
-                                } else if resize_rx_probe.len() <= 32
-                                    && looks_like_incomplete_terminal_size_report(&resize_rx_probe)
-                                {
+                                    );
+                                    initial_repaint_handle = None;
+                                    initial_repaint_deadline = None;
+                                    initial_rx_owner = None;
+                                    core::mem::take(&mut initial_rx_probe)
+                                } else if initial_rx_probe.len() <= TERMINAL_SIZE_REPORT_MAX_LEN {
                                     continue;
                                 } else {
-                                    rx_data = core::mem::take(&mut resize_rx_probe);
-                                    resize_rx_owner = None;
+                                    initial_rx_owner = None;
+                                    core::mem::take(&mut initial_rx_probe)
                                 }
-                            } else if let Some((cols, rows, start, end)) =
-                                parse_terminal_size_report(&rx_data)
-                            {
-                                let _ = update_net_shell_surface_size(cols, rows);
-                                if !crate::shell2::backends::net_tcp::net_shell_frontend_active()
-                                    && crate::shell2::apply_reported_terminal_size_for_backend(
-                                        &crate::shell2::NET_TCP_SHELL_BACKEND,
-                                        cols,
-                                        rows,
-                                    )
-                                    && !direct_mode
+                            } else {
+                                if let Some((cols, rows)) = filtered.latest_size
+                                    && record_terminal_size(cols, rows, direct_mode)
                                 {
                                     crate::shell2::repaint_backend_screen(
                                         &crate::shell2::NET_TCP_SHELL_BACKEND,
                                     );
                                 }
-                                rx_data.drain(start..end);
-                            } else if rx_data.len() <= 32
-                                && looks_like_incomplete_terminal_size_report(&rx_data)
-                            {
-                                resize_rx_owner = Some(ownership);
-                                resize_rx_probe.extend_from_slice(&rx_data);
-                                continue;
+                                filtered.bytes
                             }
-                        }
+                        };
                         if !enqueue_net_shell_rx_if_unchanged(ownership, handle, &rx_data) {
                             // A claim/release occurred while this packet was
                             // being parsed. Never feed its bytes (or a partial
                             // terminal-size report) to the next owner.
                             initial_rx_probe.clear();
                             initial_rx_owner = None;
-                            resize_rx_probe.clear();
-                            resize_rx_owner = None;
+                            terminal_size_filter.clear();
+                            terminal_size_filter_owner = None;
                             continue;
                         }
 
@@ -515,8 +558,8 @@ pub async fn net_shell_task() {
                             next_resize_query = None;
                             initial_rx_probe.clear();
                             initial_rx_owner = None;
-                            resize_rx_probe.clear();
-                            resize_rx_owner = None;
+                            terminal_size_filter.clear();
+                            terminal_size_filter_owner = None;
                         }
 
                         if tcp_handle == Some(handle) {
@@ -622,8 +665,8 @@ pub async fn net_shell_task() {
                     initial_repaint_deadline = None;
                     initial_rx_probe.clear();
                     initial_rx_owner = None;
-                    resize_rx_probe.clear();
-                    resize_rx_owner = None;
+                    terminal_size_filter.clear();
+                    terminal_size_filter_owner = None;
                     let _ = handle;
                 } else if initial_repaint_deadline
                     .is_some_and(|deadline| Instant::now() >= deadline)
@@ -647,8 +690,8 @@ pub async fn net_shell_task() {
 
             if crate::shell2::backends::net_tcp::net_shell_direct_passthrough_active() {
                 next_resize_query = None;
-                resize_rx_probe.clear();
-                resize_rx_owner = None;
+                terminal_size_filter.clear();
+                terminal_size_filter_owner = None;
             } else if initial_repaint_handle.is_none() {
                 let active_handle = {
                     let st = NET_SHELL_STATE.lock();
@@ -692,4 +735,39 @@ pub async fn net_shell_task() {
         }
     }
     .await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TerminalSizeReportFilter;
+
+    #[test]
+    fn filters_every_coalesced_terminal_size_reply() {
+        let mut filter = TerminalSizeReportFilter::default();
+        let result = filter.filter(b"a\x1b[8;30;118t\x1b[8;31;120tb");
+
+        assert_eq!(result.bytes, b"ab");
+        assert_eq!(result.latest_size, Some((120, 31)));
+    }
+
+    #[test]
+    fn preserves_another_csi_sequence_before_the_size_reply() {
+        let mut filter = TerminalSizeReportFilter::default();
+        let result = filter.filter(b"\x1b[A\x1b[8;30;118t");
+
+        assert_eq!(result.bytes, b"\x1b[A");
+        assert_eq!(result.latest_size, Some((118, 30)));
+    }
+
+    #[test]
+    fn joins_a_size_reply_split_across_tcp_reads() {
+        let mut filter = TerminalSizeReportFilter::default();
+        let first = filter.filter(b"a\x1b[8;30;");
+        let second = filter.filter(b"118tb");
+
+        assert_eq!(first.bytes, b"a");
+        assert_eq!(first.latest_size, None);
+        assert_eq!(second.bytes, b"b");
+        assert_eq!(second.latest_size, Some((118, 30)));
+    }
 }

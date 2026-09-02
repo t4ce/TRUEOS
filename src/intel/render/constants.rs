@@ -155,9 +155,10 @@ const RESIDENT_SCENE_STATE_BYTES: usize =
     (RESIDENT_SCENE_MAX_DRAWS + 1) * RESIDENT_SCENE_STATE_SLOT_BYTES;
 const RESIDENT_SCENE_PRIMARY_BATCH_BYTES: usize = 4096;
 const RESIDENT_SCENE_SECONDARY_BATCH_BYTES: usize = 4 * 4096;
-// The original 64 KiB mapping lived directly below STREAMOUT_BASE. The raised
-// 512 KiB soft cap must live outside the full-resolution render target and the
-// persistent-font VA range.
+// Render0 PPGTT-only warm geometry staging. The original 64 KiB allocation
+// lived directly below STREAMOUT_BASE; the raised 512 KiB cap starts where the
+// persistent-resource arena ends. Its numeric overlap with display Slot 3's
+// GGTT reservation is intentional: never install this address in the GGTT.
 const GPU_VA_VERTEX_BASE: u64 = 0x2800_0000;
 const GPU_VA_STREAMOUT_BASE: u64 = 0x0088_0000;
 // The 14.0625 MiB D32 scene depth allocation lives above the warm batch and
@@ -202,6 +203,10 @@ const GPU_VA_GPGPU_TILE_ARENA_BASE: u64 = 0x0400_0000;
 // and mapping contract without borrowing a fixed address from another owner.
 const GPU_VA_PERSISTENT_RESOURCE_BASE: u64 = 0x2000_0000;
 const GPU_VA_PERSISTENT_RESOURCE_LIMIT: u64 = 0x2800_0000;
+const _: () = {
+    assert!(GPU_VA_PERSISTENT_RESOURCE_LIMIT == GPU_VA_VERTEX_BASE);
+    assert!(GPU_VA_VERTEX_BASE + WARM_VERTEX_BYTES as u64 <= GPU_VA_RESIDENT_SCENE_STATE_BASE);
+};
 static PERSISTENT_RESOURCE_GPU_VA_CURSOR: AtomicU64 =
     AtomicU64::new(GPU_VA_PERSISTENT_RESOURCE_BASE);
 static PERSISTENT_RESOURCE_GPU_VA_FREE: spin::Mutex<alloc::vec::Vec<(u64, u64)>> =

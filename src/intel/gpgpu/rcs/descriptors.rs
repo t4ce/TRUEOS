@@ -1,12 +1,3 @@
-fn direct_rcs_write_fill_rect_worklist_interface_descriptor(state: DirectRcsState) -> bool {
-    direct_rcs_write_rect_worklist_interface_descriptor(
-        state,
-        FILL_RECT_WORKLIST_RGBA8_TEXT_OFFSET_BYTES,
-        2,
-        FILL_RECT_WORKLIST_CROSS_THREAD_GRFS,
-    )
-}
-
 fn direct_rcs_write_mandel64_worklist_interface_descriptor(state: DirectRcsState) -> bool {
     direct_rcs_write_rect_worklist_interface_descriptor(
         state,
@@ -84,7 +75,7 @@ fn direct_rcs_write_rect_worklist_interface_descriptor_at(
     true
 }
 
-fn direct_rcs_write_fill_rect_worklist_surface_states(
+fn direct_rcs_write_destination_worklist_surface_states(
     state: DirectRcsState,
     dst_gpu: u64,
     dst_bytes: usize,
@@ -196,43 +187,6 @@ fn direct_rcs_write_alpha_blend_worklist_surface_states_at(
             desc_gpu,
             desc_bytes,
         )
-}
-
-fn direct_rcs_write_fill_rect_worklist_payload_at(
-    state: DirectRcsState,
-    payload_offset: usize,
-    params: FillRectWorklistRgba8Params,
-) -> bool {
-    if payload_offset + RECT_WORKLIST_INDIRECT_BYTES > DIRECT_RCS_BATCH_BYTES {
-        return false;
-    }
-
-    unsafe {
-        let payload = state.batch_virt.add(payload_offset);
-        core::ptr::write_bytes(payload, 0, RECT_WORKLIST_INDIRECT_BYTES);
-        let dwords = payload as *mut u32;
-        core::ptr::write_volatile(dwords.add(3), 16);
-        core::ptr::write_volatile(dwords.add(4), 1);
-        core::ptr::write_volatile(dwords.add(5), 1);
-        core::ptr::write_volatile(dwords.add(8), 16);
-        core::ptr::write_volatile(dwords.add(9), 1);
-        core::ptr::write_volatile(dwords.add(10), 1);
-        core::ptr::write_volatile(dwords.add(8), params.dst_gpu as u32);
-        core::ptr::write_volatile(dwords.add(9), (params.dst_gpu >> 32) as u32);
-        core::ptr::write_volatile(dwords.add(10), params.desc_gpu as u32);
-        core::ptr::write_volatile(dwords.add(11), (params.desc_gpu >> 32) as u32);
-        core::ptr::write_volatile(dwords.add(12), params.dst_pitch_bytes);
-        core::ptr::write_volatile(dwords.add(13), params.desc_base);
-        core::ptr::write_volatile(dwords.add(14), params.desc_count);
-
-        let local_ids = payload.add(FILL_RECT_WORKLIST_CROSS_THREAD_BYTES) as *mut u16;
-        for lane in 0..16usize {
-            core::ptr::write_volatile(local_ids.add(lane), lane as u16);
-            core::ptr::write_volatile(local_ids.add(16 + lane), 0);
-            core::ptr::write_volatile(local_ids.add(32 + lane), 0);
-        }
-    }
-    true
 }
 
 fn direct_rcs_write_alpha_blend_worklist_payload_at(

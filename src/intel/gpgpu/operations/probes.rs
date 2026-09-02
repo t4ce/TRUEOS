@@ -616,41 +616,22 @@ pub(crate) fn activity_snapshot() -> GpgpuActivitySnapshot {
     }
 }
 
-pub(crate) fn submit_fill_rect_worklist_rgba8_probe_now() -> bool {
-    submit_fill_rect_worklist_rgba8_probe(true)
-}
-
-fn submit_fill_rect_worklist_rgba8_probe(force: bool) -> bool {
+pub(crate) fn submit_solid_composite_worklist_rgba8_probe_now() -> bool {
     if !DIRECT_RCS_ENABLED {
-        if force {
-            FILL_RECT_WORKLIST_OK.store(false, Ordering::Release);
-        }
         return false;
     }
-    if !force && FILL_RECT_WORKLIST_RAN.swap(true, Ordering::AcqRel) {
-        return false;
-    }
-    FILL_RECT_WORKLIST_RAN.store(true, Ordering::Release);
-    FILL_RECT_WORKLIST_OK.store(false, Ordering::Release);
 
     let Some(dev) = super::claimed_device() else {
         crate::log_info!(
             target: "gpgpu";
-            "intel/gpgpu: fill-rect-worklist-rgba8 skipped reason=no-claimed-device\n"
+            "intel/gpgpu: solid-composite-worklist-rgba8 skipped reason=no-claimed-device\n"
         );
         return false;
     };
     let Some(state) = direct_rcs_state_once(dev) else {
         crate::log_info!(
             target: "gpgpu";
-            "intel/gpgpu: fill-rect-worklist-rgba8 failed rung=alloc\n"
-        );
-        return false;
-    };
-    let Some(desc) = rect_worklist_desc_buffer_once() else {
-        crate::log_info!(
-            target: "gpgpu";
-            "intel/gpgpu: fill-rect-worklist-rgba8 failed rung=desc-buffer\n"
+            "intel/gpgpu: solid-composite-worklist-rgba8 failed rung=alloc\n"
         );
         return false;
     };
@@ -664,76 +645,55 @@ fn submit_fill_rect_worklist_rgba8_probe(force: bool) -> bool {
     ) else {
         crate::log_info!(
             target: "gpgpu";
-            "intel/gpgpu: fill-rect-worklist-rgba8 failed rung=surface\n"
+            "intel/gpgpu: solid-composite-worklist-rgba8 failed rung=surface\n"
         );
         return false;
     };
 
-    let _desc_guard = RECT_WORKLIST_DESC_SUBMIT_LOCK.lock();
-    if direct_rcs_context_is_quarantined() {
-        return false;
-    }
     unsafe {
         core::ptr::write_bytes(state.clear_test_virt, 0, CLEAR_RECT_TEST_BYTES);
-        core::ptr::write_bytes(desc.virt, 0, desc.bytes);
-        let descs = desc.virt as *mut FillRectWorklistRgba8Desc;
-        core::ptr::write_volatile(
-            descs,
-            FillRectWorklistRgba8Desc {
-                dst_xy: pack_i16_pair_u32(0, 0),
-                size: pack_u16_pair_u32(4, 1),
-                color_rgba: 0xFFCC_8844,
-            },
-        );
-        core::ptr::write_volatile(
-            descs.add(1),
-            FillRectWorklistRgba8Desc {
-                dst_xy: pack_i16_pair_u32(8, 1),
-                size: pack_u16_pair_u32(4, 2),
-                color_rgba: 0xFF10_2030,
-            },
-        );
     }
     super::dma_flush(state.clear_test_virt, CLEAR_RECT_TEST_BYTES);
-    super::dma_flush(desc.virt, desc.bytes);
-
-    let params = FillRectWorklistRgba8Params {
-        dst_gpu: surface.gpu,
-        desc_gpu: desc.gpu,
-        dst_pitch_bytes: surface.pitch_bytes,
-        desc_base: 0,
-        desc_count: 2,
-    };
+    let rects = [
+        GpgpuSolidRect {
+            rect: GpgpuRect::new(0, 0, 4, 1),
+            color_rgba: 0xFFCC_8844,
+        },
+        GpgpuSolidRect {
+            rect: GpgpuRect::new(8, 1, 4, 2),
+            color_rgba: 0xFF10_2030,
+        },
+    ];
     let start_tick = direct_rcs_now_tick();
-    let submitted =
-        submit_fill_rect_worklist(surface, desc, params, false) == GpgpuSubmissionOutcome::Complete;
+    let submitted = fill_solid_rects_rgba8_result(surface, rects.as_slice());
     let submit_ms = direct_rcs_elapsed_ms_since(start_tick);
     let pre_marker = direct_rcs_read_result_slot(state, RECT_WORKLIST_PRE_MARKER_SLOT);
     let post_marker = direct_rcs_read_result_slot(state, RECT_WORKLIST_POST_MARKER_SLOT);
     let row0 = direct_rcs_read_worklist_probe_span(state, 0, 0);
     let row1 = direct_rcs_read_worklist_probe_span(state, 1, 8);
     let row2 = direct_rcs_read_worklist_probe_span(state, 2, 8);
-    let ok = submitted
-        && pre_marker == FILL_RECT_WORKLIST_PRE_MARKER
-        && post_marker == FILL_RECT_WORKLIST_POST_MARKER
+    let ok = submitted.outcome == GpgpuSubmissionOutcome::Complete
+        && submitted.stats.descs == rects.len()
+        && submitted.stats.submits == 1
+        && pre_marker == ALPHA_BLEND_WORKLIST_PRE_MARKER
+        && post_marker == ALPHA_BLEND_WORKLIST_POST_MARKER
         && row0 == [0xFFCC_8844; 4]
         && row1 == [0xFF10_2030; 4]
         && row2 == [0xFF10_2030; 4];
 
     crate::log_info!(
         target: "gpgpu";
-        "intel/gpgpu: fill-rect-worklist-rgba8 forcewake=1 ggtt=1 ppgtt=1 kernel_ppgtt=1 dst_ppgtt=1 desc_ppgtt=1 batch=1 submitted={} ok={} submit_ms={} descs=2 walkers={} pre_marker=0x{:08X} post_marker=0x{:08X} expected_post=0x{:08X} kernel_gpu=0x{:X} kernel_text_gpu=0x{:X} dst_gpu=0x{:X} desc_gpu=0x{:X} row0=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] row1=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] row2=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] artifact={}\n",
-        submitted as u8,
+        "intel/gpgpu: solid-composite-worklist-rgba8 forcewake=1 ggtt=1 ppgtt=1 kernel_ppgtt=1 dst_ppgtt=1 desc_ppgtt=1 batch=1 submitted={} ok={} submit_ms={} descs=2 walkers={} pre_marker=0x{:08X} post_marker=0x{:08X} expected_post=0x{:08X} kernel_gpu=0x{:X} kernel_text_gpu=0x{:X} dst_gpu=0x{:X} row0=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] row1=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] row2=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] artifact={} mode=source-free-solid\n",
+        (submitted.outcome == GpgpuSubmissionOutcome::Complete) as u8,
         ok as u8,
         submit_ms,
         rect_worklist_walker_count(2),
         pre_marker,
         post_marker,
-        FILL_RECT_WORKLIST_POST_MARKER,
-        FILL_RECT_WORKLIST_RGBA8_ADLS_GPU,
-        FILL_RECT_WORKLIST_RGBA8_ADLS_GPU + FILL_RECT_WORKLIST_RGBA8_TEXT_OFFSET_BYTES,
+        ALPHA_BLEND_WORKLIST_POST_MARKER,
+        ALPHA_BLEND_WORKLIST_RGBA8_ADLS_GPU,
+        ALPHA_BLEND_WORKLIST_RGBA8_ADLS_GPU + ALPHA_BLEND_WORKLIST_RGBA8_TEXT_OFFSET_BYTES,
         surface.gpu,
-        desc.gpu,
         row0[0],
         row0[1],
         row0[2],
@@ -746,10 +706,9 @@ fn submit_fill_rect_worklist_rgba8_probe(force: bool) -> bool {
         row2[1],
         row2[2],
         row2[3],
-        FILL_RECT_WORKLIST_RGBA8_KERNEL_NAME,
+        ALPHA_BLEND_WORKLIST_RGBA8_KERNEL_NAME,
     );
 
-    FILL_RECT_WORKLIST_OK.store(ok, Ordering::Release);
     ok
 }
 

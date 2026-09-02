@@ -121,9 +121,7 @@ pub(super) const DISPLAY_OUTPUT_COUNT: usize = crate::ui4::OUTPUT_COUNT;
 const _: () = assert!(DISPLAY_OUTPUT_COUNT == DISPLAY_PIPELINE_COUNT);
 // The first three display overlays retain their bootstrap addresses below the
 // legacy direct-RCS 1 GiB boundary. Slot 4 is CPU-authored UI interaction
-// chrome and therefore needs no direct-RCS alias; keep it above that boundary
-// so it cannot collide with resident-scene's fixed resident scene addresses.
-const DISPLAY_DIRECT_RCS_VA_LIMIT: u64 = 0x4000_0000;
+// chrome and owns the shared high-GGTT interaction reservation.
 // Scanout GGTT addresses are not render-engine addresses. Give every
 // compositor destination a stable private PPGTT VA for its entire lifetime.
 // Reusing one alias across alternating buffers or different planes requires a
@@ -146,7 +144,7 @@ const OVERLAY_PIPE_GPU_STRIDE: u64 = 0x0200_0000;
 const OVERLAY_PLANE_GPU_STRIDE: u64 = DISPLAY_PIPELINE_COUNT as u64 * OVERLAY_PIPE_GPU_STRIDE;
 const OVERLAY_UNIVERSAL_PLANE_COUNT: usize = crate::ui4::UNIVERSAL_PLANE_COUNT - 1;
 const DIRECT_RCS_OVERLAY_UNIVERSAL_PLANE_COUNT: usize = 3;
-const INTERACTION_OVERLAY_GPU_BASE: u64 = DISPLAY_DIRECT_RCS_VA_LIMIT;
+const INTERACTION_OVERLAY_GPU_BASE: u64 = crate::intel::DISPLAY_INTERACTION_GGTT_BASE;
 // Published UI4 buffers keep producer-owned PPGTT addresses. Direct scanout
 // imports each producer surface into a display-owned GGTT alias. Keep enough
 // aliases for the deepest UI4 buffering contract so a four-buffer video bridge
@@ -154,7 +152,7 @@ const INTERACTION_OVERLAY_GPU_BASE: u64 = DISPLAY_DIRECT_RCS_VA_LIMIT;
 // SURFLIVE still protect queued/live aliases; remapping is only a fallback for
 // a genuinely new allocation (for example after resize or frame teardown).
 const UI4_DIRECT_SCANOUT_ALIAS_COUNT: usize = crate::ui4::FrameBuffering::Quad.count();
-const UI4_DIRECT_SCANOUT_GPU_BASE: u64 = 0x5000_0000;
+const UI4_DIRECT_SCANOUT_GPU_BASE: u64 = crate::intel::DISPLAY_DIRECT_SCANOUT_GGTT_BASE;
 // Match the trusted UI-surface maximum so a 4K RGBA frame remains eligible.
 const UI4_DIRECT_SCANOUT_GPU_STRIDE: u64 = 0x0200_0000;
 const UI4_DIRECT_SCANOUT_PIPE_STRIDE: u64 =
@@ -193,11 +191,11 @@ const _: () = assert!(
 );
 const _: () = assert!(
     PRIMARY_SECONDARY_PIPE_GPU_BASE + (DISPLAY_PIPELINE_COUNT as u64 - 1) * PRIMARY_PIPE_GPU_STRIDE
-        <= DISPLAY_DIRECT_RCS_VA_LIMIT
+        <= INTERACTION_OVERLAY_GPU_BASE
 );
 const _: () = assert!(
     INTERACTION_OVERLAY_GPU_BASE + DISPLAY_PIPELINE_COUNT as u64 * OVERLAY_PIPE_GPU_STRIDE
-        <= UI4_DIRECT_SCANOUT_GPU_BASE
+        == crate::intel::DISPLAY_INTERACTION_GGTT_LIMIT
 );
 const _: () = assert!(
     UI4_DIRECT_SCANOUT_GPU_BASE

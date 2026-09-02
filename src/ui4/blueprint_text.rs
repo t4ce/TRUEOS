@@ -16,13 +16,14 @@ use crate::intel::gpgpu::{
     ALPHA_BLEND_WORKLIST_FLAG_TINT_ALPHA, ALPHA_BLEND_WORKLIST_FLAG_TINT_RGB,
     GpgpuAlphaBlendWorklistDesc, GpgpuGlyphMaskLayer, GpgpuOwnedParticleCraftState,
     GpgpuOwnedRgba8Surface, GpgpuPoint, GpgpuRect, GpgpuRgb565Surface, GpgpuRgba8ReleaseFence,
-    GpgpuRgba8Surface, GpgpuSpriteQuadWorklistDesc, GpgpuSpriteQuadWorklistRun,
-    ParticleCraftParamsV1, SHADERTOY_PARAMS_VERSION, SPRITE_QUAD_WORKLIST_FLAG_PREMUL_SRC,
-    SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER, ShaderToyFrameParams, SkyboxSampleRgb565Params,
-    Ui4CompositorCompletion, Ui4CompositorSubmission, Ui4CompositorSubmitError,
-    Ui4SpriteSceneCompletion, allocate_font_instance_rgba8_surface_cleared,
-    alpha_blend_worklist_max_descs, glyph_mask_layers_rgba8_2d_mode, particle_craft_rgba8_frame,
-    poll_ui4_blueprint_sprite_scene, poll_ui4_compositor_submission,
+    GpgpuRgba8Surface, GpgpuSolidRect, GpgpuSpriteQuadWorklistDesc, GpgpuSpriteQuadWorklistRun,
+    GpgpuSubmissionOutcome, ParticleCraftParamsV1, SHADERTOY_PARAMS_VERSION,
+    SPRITE_QUAD_WORKLIST_FLAG_PREMUL_SRC, SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER, ShaderToyFrameParams,
+    SkyboxSampleRgb565Params, Ui4CompositorCompletion, Ui4CompositorSubmission,
+    Ui4CompositorSubmitError, Ui4SpriteSceneCompletion,
+    allocate_font_instance_rgba8_surface_cleared, alpha_blend_worklist_max_descs,
+    fill_solid_rects_rgba8_scanout_result, glyph_mask_layers_rgba8_2d_mode,
+    particle_craft_rgba8_frame, poll_ui4_blueprint_sprite_scene, poll_ui4_compositor_submission,
     queue_ui4_blueprint_alpha_rects, queue_ui4_blueprint_sprite_scene,
     release_rgba8_surface_for_scanout, shadertoy_rgba8_surface_full, skybox_sample_rgb565_to_rgba8,
     sprite_quad_worklist_max_descs,
@@ -74,6 +75,9 @@ const MAX_PENDING_POINTER_EVENTS: usize = 256;
 const MAX_PENDING_PAN_EVENTS: usize = 256;
 const MAX_PENDING_KEYBOARD_EVENTS: usize = 256;
 const MAX_INPUT_ROUTES: usize = 32;
+/// Keep the flattened solid scene inside one proven compositor submission.
+/// Larger or noncanonical scenes retain the arbitrary-quad fallback.
+const UI4_SOLID_FAST_RECT_LIMIT: usize = 256;
 const IMAGE_SOURCE_READ_CHUNK_BYTES: usize = 16 * 1024;
 const IMAGE_SOURCE_FORMAT_JPEG: u32 = 1;
 const IMAGE_SOURCE_FORMAT_RGBA8: u32 = 2;
@@ -443,9 +447,8 @@ pub struct TrueosUi4CursorSource {
 
 const _: () = assert!(core::mem::size_of::<TrueosUi4CursorSource>() == 4 * 4);
 
-/// Static cell spacing for a frame which already owns its cursor pixels via
-/// `AppOwned`. The origin is in frame-local pixels and advances are 1/1024
-/// pixel units.
+/// Static frame-local spacing for presentation-only cursor stepping. Advances
+/// are 1/1024 pixel units; pointer input remains continuous and unmodified.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
 pub struct TrueosUi4CursorStep {
@@ -2637,9 +2640,9 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_set_cursor_icon(
     0
 }
 
-/// Configure cell stepping for a frame's already-`AppOwned` cursor. Passing
-/// null clears the request. This affects selected-frame pointer delivery only;
-/// it never changes physical cursor movement, keyboard routing, or selection.
+/// Configure presentation-only cell stepping for a frame's software cursor.
+/// Passing null clears it. Pointer input, keyboard routing, hit testing, and
+/// selection remain unchanged.
 pub unsafe extern "C" fn trueos_cabi_ui4_scene_set_cursor_step(
     window_id: u32,
     step: *const TrueosUi4CursorStep,
@@ -6195,6 +6198,187 @@ enum AlphaRectConversion {
     Unsupported,
 }
 
+#[derive(Copy, Clone)]
+enum SolidRectConversion {
+    Exact(GpgpuSolidRect),
+    Clipped,
+    Unsupported,
+}
+
+/// Match the arbitrary-quad kernel's pixel-center coverage rule for one
+/// canonical axis-aligned edge. The tolerance is the shader's normalized
+/// `s/t` tolerance projected back into destination pixels.
+fn solid_axis_pixel_span(start: f32, end: f32) -> Option<(i32, i32)> {
+    let extent = end - start;
+    if !start.is_finite() || !end.is_finite() || !extent.is_finite() || extent <= 0.0 {
+        return None;
+    }
+    let tolerance_px = extent * 0.0001;
+    let first = libm::ceilf(start - 0.5 - tolerance_px);
+    let last = libm::floorf(end - 0.5 + tolerance_px);
+    if !first.is_finite() || !last.is_finite() || first < i32::MIN as f32 || last > i32::MAX as f32
+    {
+        return None;
+    }
+    let first = first as i32;
+    let last = last as i32;
+    (first <= last).then_some((first, last))
+}
+
+/// Convert a frame-owned white-pixel copy into the exact integer pixels that
+/// the general sprite shader would overwrite. UVs are irrelevant because the
+/// source is uniform; blended or noncanonical geometry stays on the fallback.
+fn solid_copy_rect(
+    quad: TrueosUi4SpriteQuad,
+    destination: GpgpuRgba8Surface,
+) -> SolidRectConversion {
+    if quad.sprite_id != 0
+        || quad.flags != 0
+        || quad.c0_y != quad.c1_y
+        || quad.c1_x != quad.c2_x
+        || quad.c2_y != quad.c3_y
+        || quad.c3_x != quad.c0_x
+    {
+        return SolidRectConversion::Unsupported;
+    }
+    let Some((left, right_inclusive)) = solid_axis_pixel_span(quad.c0_x, quad.c1_x) else {
+        return SolidRectConversion::Unsupported;
+    };
+    let Some((top, bottom_inclusive)) = solid_axis_pixel_span(quad.c0_y, quad.c3_y) else {
+        return SolidRectConversion::Unsupported;
+    };
+    let left = i64::from(left).max(0);
+    let top = i64::from(top).max(0);
+    let right = i64::from(right_inclusive)
+        .saturating_add(1)
+        .min(i64::from(destination.width));
+    let bottom = i64::from(bottom_inclusive)
+        .saturating_add(1)
+        .min(i64::from(destination.height));
+    if left >= right || top >= bottom {
+        return SolidRectConversion::Clipped;
+    }
+    let Ok(x) = i32::try_from(left) else {
+        return SolidRectConversion::Unsupported;
+    };
+    let Ok(y) = i32::try_from(top) else {
+        return SolidRectConversion::Unsupported;
+    };
+    let Ok(width) = u32::try_from(right - left) else {
+        return SolidRectConversion::Unsupported;
+    };
+    let Ok(height) = u32::try_from(bottom - top) else {
+        return SolidRectConversion::Unsupported;
+    };
+    SolidRectConversion::Exact(GpgpuSolidRect {
+        rect: GpgpuRect::new(x, y, width, height),
+        color_rgba: quad.color_rgba,
+    })
+}
+
+fn push_disjoint_solid_piece(
+    rects: &mut Vec<GpgpuSolidRect>,
+    rect: GpgpuRect,
+    color_rgba: u32,
+) -> bool {
+    if rect.is_empty() {
+        return true;
+    }
+    if rects.len() >= UI4_SOLID_FAST_RECT_LIMIT {
+        return false;
+    }
+    rects.push(GpgpuSolidRect { rect, color_rgba });
+    true
+}
+
+/// Apply one overwrite to a disjoint rectangle set. Earlier rectangles are
+/// split around the new one, so the resulting worklist is pairwise disjoint
+/// and may execute its descriptors concurrently without changing painter
+/// order.
+fn overlay_disjoint_solid_rects(rects: &mut Vec<GpgpuSolidRect>, overlay: GpgpuSolidRect) -> bool {
+    let overlay_left = i64::from(overlay.rect.x);
+    let overlay_top = i64::from(overlay.rect.y);
+    let overlay_right = overlay_left + i64::from(overlay.rect.width);
+    let overlay_bottom = overlay_top + i64::from(overlay.rect.height);
+    let mut next = Vec::with_capacity(rects.len().saturating_add(4));
+    for existing in rects.iter().copied() {
+        let left = i64::from(existing.rect.x);
+        let top = i64::from(existing.rect.y);
+        let right = left + i64::from(existing.rect.width);
+        let bottom = top + i64::from(existing.rect.height);
+        let intersects = left < overlay_right
+            && overlay_left < right
+            && top < overlay_bottom
+            && overlay_top < bottom;
+        if !intersects {
+            if !push_disjoint_solid_piece(&mut next, existing.rect, existing.color_rgba) {
+                return false;
+            }
+            continue;
+        }
+        let middle_top = top.max(overlay_top);
+        let middle_bottom = bottom.min(overlay_bottom);
+        let pieces = [
+            (left, top, right, middle_top),
+            (left, middle_bottom, right, bottom),
+            (left, middle_top, overlay_left.min(right), middle_bottom),
+            (overlay_right.max(left), middle_top, right, middle_bottom),
+        ];
+        for (piece_left, piece_top, piece_right, piece_bottom) in pieces {
+            if piece_left >= piece_right || piece_top >= piece_bottom {
+                continue;
+            }
+            let Ok(x) = i32::try_from(piece_left) else {
+                return false;
+            };
+            let Ok(y) = i32::try_from(piece_top) else {
+                return false;
+            };
+            let Ok(width) = u32::try_from(piece_right - piece_left) else {
+                return false;
+            };
+            let Ok(height) = u32::try_from(piece_bottom - piece_top) else {
+                return false;
+            };
+            if !push_disjoint_solid_piece(
+                &mut next,
+                GpgpuRect::new(x, y, width, height),
+                existing.color_rgba,
+            ) {
+                return false;
+            }
+        }
+    }
+    if !push_disjoint_solid_piece(&mut next, overlay.rect, overlay.color_rgba) {
+        return false;
+    }
+    *rects = next;
+    true
+}
+
+fn solid_scene_fast_rects(
+    clear_rgba: u32,
+    quads: &[TrueosUi4SpriteQuad],
+    destination: GpgpuRgba8Surface,
+) -> Option<Vec<GpgpuSolidRect>> {
+    let mut rects = alloc::vec![GpgpuSolidRect {
+        rect: destination.bounds(),
+        color_rgba: clear_rgba,
+    }];
+    for quad in quads.iter().copied() {
+        match solid_copy_rect(quad, destination) {
+            SolidRectConversion::Exact(rect) => {
+                if !overlay_disjoint_solid_rects(&mut rects, rect) {
+                    return None;
+                }
+            }
+            SolidRectConversion::Clipped => {}
+            SolidRectConversion::Unsupported => return None,
+        }
+    }
+    Some(rects)
+}
+
 fn rounded_sprite_coordinate(value: f32) -> Option<i32> {
     const EPSILON: f32 = 0.01;
 
@@ -6481,16 +6665,83 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
     if surface.gpu_submission_unretired {
         return ERROR_BUSY;
     }
+    let Ok(destination) = gpgpu_rgba_surface(lease) else {
+        cancel_blueprint_sprite_frame_without_live_gpu(surface);
+        return ERROR_UI4;
+    };
+
+    // Shell2's immediate scene is a clear plus a handful of frame-owned solid
+    // rectangles (background runs, underlines/hover, and cursor). Flatten
+    // their overwrite order into disjoint rectangles and use the alpha
+    // compositor's source-free SOLID mode. The former path paid general UV,
+    // sampling, and arbitrary-quad setup for every decoration.
+    if let Some(rects) = solid_scene_fast_rects(clear_rgba, &upload.quads, destination) {
+        let composite_started_ns = crate::chronos::monotonic_nanos();
+        let composited = fill_solid_rects_rgba8_scanout_result(destination, rects.as_slice());
+        let composite_us =
+            crate::chronos::monotonic_nanos().saturating_sub(composite_started_ns) / 1_000;
+        match composited.outcome {
+            GpgpuSubmissionOutcome::Complete
+                if composited.stats.descs == rects.len() && composited.stats.submits == 1 => {}
+            GpgpuSubmissionOutcome::Unavailable => {
+                cancel_blueprint_sprite_frame_without_live_gpu(surface);
+                return ERROR_UI4;
+            }
+            GpgpuSubmissionOutcome::Complete | GpgpuSubmissionOutcome::SubmittedIncomplete => {
+                quarantine_blueprint_sprite_submission(
+                    surface,
+                    owner,
+                    window_id,
+                    lease,
+                    0,
+                    1,
+                    "solid-composite-retirement-incomplete",
+                );
+                return ERROR_UI4;
+            }
+        }
+        let release_started_ns = crate::chronos::monotonic_nanos();
+        let finalizer = release_rgba8_surface_for_scanout(destination);
+        let release_us =
+            crate::chronos::monotonic_nanos().saturating_sub(release_started_ns) / 1_000;
+        let Some(release) = finalizer.release.filter(|_| finalizer.ok) else {
+            quarantine_blueprint_sprite_submission(
+                surface,
+                owner,
+                window_id,
+                lease,
+                0,
+                1,
+                if finalizer.submitted {
+                    "solid-composite-release-incomplete"
+                } else {
+                    "solid-composite-release-unavailable"
+                },
+            );
+            return ERROR_UI4;
+        };
+        surface.pending_gpu_release = Some(release);
+        surface.sprite_clear_rgba = None;
+        crate::log_shell2_render_trace!(
+            "stage=solid-kernel owner={:?} window={} input_quads={} flattened_rects={} composite_us={} release_us={} submits={} walkers={} path=disjoint-alpha-solid\n",
+            owner,
+            window_id,
+            upload.quads.len(),
+            rects.len(),
+            composite_us,
+            release_us,
+            composited.stats.submits,
+            composited.stats.walkers,
+        );
+        return 0;
+    }
+
     let solid = match ensure_solid_source(surface) {
         Ok(source) => source,
         Err(code) => {
             cancel_blueprint_sprite_frame_without_live_gpu(surface);
             return code;
         }
-    };
-    let Ok(destination) = gpgpu_rgba_surface(lease) else {
-        cancel_blueprint_sprite_frame_without_live_gpu(surface);
-        return ERROR_UI4;
     };
 
     let full_frame_copy = match upload.quads.as_slice() {
@@ -7645,6 +7896,91 @@ mod tests {
             descriptor.flags,
             SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER | SPRITE_QUAD_WORKLIST_FLAG_PREMUL_SRC,
         );
+    }
+
+    fn test_rgba_surface(width: u32, height: u32) -> GpgpuRgba8Surface {
+        GpgpuRgba8Surface {
+            phys: 0x10_0000,
+            gpu: 0x20_0000,
+            bytes: width as usize * height as usize * 4,
+            width,
+            height,
+            pitch_bytes: width * 4,
+            storage_order: crate::intel::gpgpu::GpgpuRgba8StorageOrder::Rgba,
+        }
+    }
+
+    fn test_solid_quad(
+        left: f32,
+        top: f32,
+        right: f32,
+        bottom: f32,
+        color_rgba: u32,
+    ) -> TrueosUi4SpriteQuad {
+        TrueosUi4SpriteQuad {
+            sprite_id: 0,
+            c0_x: left,
+            c0_y: top,
+            c1_x: right,
+            c1_y: top,
+            c2_x: right,
+            c2_y: bottom,
+            c3_x: left,
+            c3_y: bottom,
+            color_rgba,
+            ..TrueosUi4SpriteQuad::default()
+        }
+    }
+
+    fn solid_color_at(rects: &[GpgpuSolidRect], x: i32, y: i32) -> Option<u32> {
+        rects.iter().find_map(|solid| {
+            let right = i64::from(solid.rect.x) + i64::from(solid.rect.width);
+            let bottom = i64::from(solid.rect.y) + i64::from(solid.rect.height);
+            (i64::from(x) >= i64::from(solid.rect.x)
+                && i64::from(x) < right
+                && i64::from(y) >= i64::from(solid.rect.y)
+                && i64::from(y) < bottom)
+                .then_some(solid.color_rgba)
+        })
+    }
+
+    fn solid_rects_overlap(left: GpgpuRect, right: GpgpuRect) -> bool {
+        let left_right = i64::from(left.x) + i64::from(left.width);
+        let left_bottom = i64::from(left.y) + i64::from(left.height);
+        let right_right = i64::from(right.x) + i64::from(right.width);
+        let right_bottom = i64::from(right.y) + i64::from(right.height);
+        i64::from(left.x) < right_right
+            && i64::from(right.x) < left_right
+            && i64::from(left.y) < right_bottom
+            && i64::from(right.y) < left_bottom
+    }
+
+    #[test]
+    fn solid_scene_fast_path_preserves_fractional_cell_overwrite_order() {
+        let destination = test_rgba_surface(120, 40);
+        let background = test_solid_quad(0.0, 0.0, 28.8, 26.0, 0xFF20_2020);
+        let cursor = test_solid_quad(14.4, 23.0, 28.8, 26.0, 0xFFFF_FFFF);
+
+        let rects = solid_scene_fast_rects(0xBF00_0000, &[background, cursor], destination)
+            .expect("canonical shell solids use the fill fast path");
+
+        for (index, left) in rects.iter().enumerate() {
+            for right in &rects[index + 1..] {
+                assert!(!solid_rects_overlap(left.rect, right.rect));
+            }
+        }
+        assert_eq!(solid_color_at(&rects, 5, 5), Some(0xFF20_2020));
+        assert_eq!(solid_color_at(&rects, 20, 24), Some(0xFFFF_FFFF));
+        assert_eq!(solid_color_at(&rects, 80, 20), Some(0xBF00_0000));
+    }
+
+    #[test]
+    fn solid_scene_fast_path_rejects_blended_rectangles() {
+        let destination = test_rgba_surface(120, 40);
+        let mut blended = test_solid_quad(0.0, 0.0, 20.0, 20.0, u32::MAX);
+        blended.flags = SPRITE_QUAD_FLAG_SRC_OVER;
+
+        assert!(solid_scene_fast_rects(0, &[blended], destination).is_none());
     }
 
     #[test]

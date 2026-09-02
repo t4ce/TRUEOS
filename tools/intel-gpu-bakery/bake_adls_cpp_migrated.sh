@@ -23,7 +23,6 @@ single_entry_kernels=(
   alpha_blend_worklist_rgba8
   chart_sine_rgba8
   fill_rect_rgba8
-  fill_rect_worklist_rgba8
   font_outline_coverage_r8
   glyph_mask_rgba8
   gradient_rect_worklist_rgba8

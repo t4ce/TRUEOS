@@ -22,7 +22,7 @@ include!("artifacts/metadata.rs");
 include!("artifacts/uploads.rs");
 include!("operations/primitives.rs");
 include!("operations/svg_outline.rs");
-include!("operations/fill_rect_worklist.rs");
+include!("operations/solid_rects.rs");
 include!("operations/sprite_quad_worklist.rs");
 include!("operations/ui4.rs");
 include!("operations/surfaces.rs");

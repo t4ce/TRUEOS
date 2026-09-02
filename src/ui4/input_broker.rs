@@ -209,9 +209,8 @@ pub(crate) struct Ui4SoftwareCursorVisual {
     pub(crate) x: u32,
     pub(crate) y: u32,
     pub(crate) color: crate::graphics::primitives::Rgba8,
-    /// Slot 4 must not paint a crosshair over a cursor the selected frame
-    /// renders into its own pixels.
-    pub(crate) app_owned: bool,
+    pub(crate) icon: super::Ui4CursorIcon,
+    pub(crate) stepped_cell: Option<Ui4VisualRect>,
     pub(crate) context_menu: Option<(u32, u32)>,
     pub(crate) selection: Option<Ui4VisualRect>,
     pub(crate) dock_fields_visible: bool,
@@ -288,10 +287,6 @@ struct CursorRoute {
     source: Ui4CursorSource,
     x: u32,
     y: u32,
-    /// Last cursor position delivered to an application frame. This is kept
-    /// separate from physical motion so AppOwned grid steps can report a
-    /// delta consistent with their snapped coordinates.
-    routed_pointer: Option<(WindowTarget, u32, u32)>,
     buttons_down: u32,
     capture: Option<WindowTarget>,
     keyboard_source: Option<KeyboardSource>,
@@ -321,7 +316,6 @@ impl CursorRoute {
             source,
             x,
             y,
-            routed_pointer: None,
             buttons_down,
             capture: None,
             keyboard_source: None,
@@ -346,7 +340,6 @@ impl CursorRoute {
 
     fn clear_frame_interaction(&mut self) {
         self.capture = None;
-        self.routed_pointer = None;
         self.keyboard_source = None;
         self.secondary_anchor = None;
         self.secondary_start_placement = None;
@@ -919,38 +912,19 @@ impl InputBroker {
                 } else {
                     target.presentation_placement
                 };
-                let stepped = super::app_owned_cursor_step_for_source(source).is_some()
-                    && placement_contains(input_placement, x, y);
-                let (routed_x, routed_y) =
-                    snapped_app_owned_cursor_position(source, input_placement, x, y);
-                let routed_target = WindowTarget::from(target);
-                let (routed_dx, routed_dy) = if stepped {
-                    let delta = self.cursors[index]
-                        .routed_pointer
-                        .filter(|(previous_target, _, _)| *previous_target == routed_target)
-                        .map(|(_, previous_x, previous_y)| {
-                            (signed_delta(routed_x, previous_x), signed_delta(routed_y, previous_y))
-                        })
-                        .unwrap_or((0, 0));
-                    self.cursors[index].routed_pointer = Some((routed_target, routed_x, routed_y));
-                    delta
-                } else {
-                    self.cursors[index].routed_pointer = None;
-                    (dx, dy)
-                };
-                let local_x = signed_local(routed_x, input_placement.x);
-                let local_y = signed_local(routed_y, input_placement.y);
+                let local_x = signed_local(x, input_placement.x);
+                let local_y = signed_local(y, input_placement.y);
                 enqueue_owner_event(
                     target.owner,
                     Ui4InputEvent::Pointer(Ui4PointerEvent {
                         source,
                         window: target.id,
-                        x: routed_x,
-                        y: routed_y,
+                        x,
+                        y,
                         local_x,
                         local_y,
-                        dx: routed_dx,
-                        dy: routed_dy,
+                        dx,
+                        dy,
                         wheel: event.wheel,
                         buttons_down,
                         buttons_pressed: pressed,
@@ -968,8 +942,8 @@ impl InputBroker {
                             phase: Ui4ButtonPhase::Down,
                             changed_buttons: pressed,
                             buttons_down,
-                            x: routed_x,
-                            y: routed_y,
+                            x,
+                            y,
                             local_x,
                             local_y,
                             combo_id,
@@ -986,8 +960,8 @@ impl InputBroker {
                             phase: Ui4ButtonPhase::Up,
                             changed_buttons: released,
                             buttons_down,
-                            x: routed_x,
-                            y: routed_y,
+                            x,
+                            y,
                             local_x,
                             local_y,
                             combo_id,
@@ -1000,8 +974,8 @@ impl InputBroker {
                         target,
                         source,
                         Ui4PanPhase::Begin,
-                        routed_x,
-                        routed_y,
+                        x,
+                        y,
                         local_x,
                         local_y,
                         0,
@@ -1010,17 +984,17 @@ impl InputBroker {
                         vcursor,
                     );
                 }
-                if buttons_down & MIDDLE_BUTTON_MASK != 0 && (routed_dx != 0 || routed_dy != 0) {
+                if buttons_down & MIDDLE_BUTTON_MASK != 0 && (dx != 0 || dy != 0) {
                     enqueue_pan_event(
                         target,
                         source,
                         Ui4PanPhase::Update,
-                        routed_x,
-                        routed_y,
+                        x,
+                        y,
                         local_x,
                         local_y,
-                        routed_dx,
-                        routed_dy,
+                        dx,
+                        dy,
                         combo_id,
                         vcursor,
                     );
@@ -1030,8 +1004,8 @@ impl InputBroker {
                         target,
                         source,
                         Ui4PanPhase::End,
-                        routed_x,
-                        routed_y,
+                        x,
+                        y,
                         local_x,
                         local_y,
                         0,
@@ -1041,8 +1015,6 @@ impl InputBroker {
                     );
                 }
             }
-        } else {
-            self.cursors[index].routed_pointer = None;
         }
 
         self.cursors[index].x = x;
@@ -1429,12 +1401,13 @@ impl InputBroker {
             if !route.visible_after_motion {
                 continue;
             }
-            let (x, y) = snapped_cursor_visual_position(route.source, route.x, route.y);
+            let (x, y, icon, stepped_cell) = cursor_visual_presentation(route);
             let _ = visuals.push(Ui4SoftwareCursorVisual {
                 x,
                 y,
                 color: route.color,
-                app_owned: super::app_owns_cursor_for_source(route.source),
+                icon,
+                stepped_cell,
                 context_menu: route.context_menu,
                 dock_fields_visible: route.dock_fields_visible,
                 dock_preview: route.dock_preview,
@@ -2017,9 +1990,7 @@ fn enqueue_owner_resize(owner: WindowOwner, incoming: Ui4ResizeEvent) {
         if resize_epoch_is_newer(incoming.resize_epoch, latest_epoch) {
             resize_events[index].latest_epoch = incoming.resize_epoch;
             resize_events[index].pending = Some(incoming);
-        } else if incoming.resize_epoch == latest_epoch
-            && resize_events[index].pending.is_some()
-        {
+        } else if incoming.resize_epoch == latest_epoch && resize_events[index].pending.is_some() {
             resize_events[index].pending = Some(incoming);
         }
         return;
@@ -2160,43 +2131,64 @@ fn signed_local(pixel: u32, origin: i32) -> i32 {
         .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
 }
 
-/// Keep physical cursor state and hit-testing continuous, but hand an
-/// `AppOwned` frame its cursor on the cell grid it explicitly requested.
-fn snapped_app_owned_cursor_position(
-    source: Ui4CursorSource,
-    placement: WindowPlacement,
-    x: u32,
-    y: u32,
-) -> (u32, u32) {
-    let Some(step) = super::app_owned_cursor_step_for_source(source) else {
-        return (x, y);
+/// Resolve only the slot-4 presentation. Raw cursor state, hit testing, and
+/// every application-delivered pointer coordinate stay untouched.
+fn cursor_visual_presentation(
+    route: &CursorRoute,
+) -> (u32, u32, super::Ui4CursorIcon, Option<Ui4VisualRect>) {
+    let Some((key, icon, step)) = super::cursor_presentation_for_source(route.source) else {
+        return (route.x, route.y, super::Ui4CursorIcon::Default, None);
     };
-    if !placement_contains(placement, x, y) {
-        return (x, y);
+    if icon != super::Ui4CursorIcon::CellOutline {
+        return (route.x, route.y, icon, None);
     }
-    let (Ok(local_x), Ok(local_y)) =
-        (u32::try_from(signed_local(x, placement.x)), u32::try_from(signed_local(y, placement.y)))
-    else {
-        return (x, y);
-    };
-    let (local_x, local_y) = step.snap_local(local_x, local_y);
-    let (Ok(x), Ok(y)) = (
-        u32::try_from(i64::from(placement.x).saturating_add(i64::from(local_x))),
-        u32::try_from(i64::from(placement.y).saturating_add(i64::from(local_y))),
-    ) else {
-        return (x, y);
-    };
-    (x, y)
-}
-
-fn snapped_cursor_visual_position(source: Ui4CursorSource, x: u32, y: u32) -> (u32, u32) {
-    let Some(key) = super::selected_frame_for_source(source) else {
-        return (x, y);
+    let Some(step) = step else {
+        return (route.x, route.y, icon, None);
     };
     let Some(window) = super::window_broker::window_snapshot(key.owner, key.window) else {
-        return (x, y);
+        return (route.x, route.y, icon, None);
     };
-    snapped_app_owned_cursor_position(source, window.presentation_placement, x, y)
+    let placement = window.presentation_placement;
+    if !placement_contains(placement, route.x, route.y) {
+        return (route.x, route.y, icon, None);
+    }
+    let (Ok(local_x), Ok(local_y)) = (
+        u32::try_from(signed_local(route.x, placement.x)),
+        u32::try_from(signed_local(route.y, placement.y)),
+    ) else {
+        return (route.x, route.y, icon, None);
+    };
+    let Some((left, top, width, height)) = step.cell_bounds_local(local_x, local_y) else {
+        return (route.x, route.y, icon, None);
+    };
+    let Some(cell) = stepped_cell_rect(placement, left, top, width, height) else {
+        return (route.x, route.y, icon, None);
+    };
+    (cell.x, cell.y, icon, Some(cell))
+}
+
+fn stepped_cell_rect(
+    placement: WindowPlacement,
+    local_x: u32,
+    local_y: u32,
+    width: u32,
+    height: u32,
+) -> Option<Ui4VisualRect> {
+    let left = i64::from(placement.x).saturating_add(i64::from(local_x));
+    let top = i64::from(placement.y).saturating_add(i64::from(local_y));
+    let right = left.saturating_add(i64::from(width));
+    let bottom = top.saturating_add(i64::from(height));
+    let max = i64::from(u32::MAX);
+    let clipped_left = left.clamp(0, max);
+    let clipped_top = top.clamp(0, max);
+    let clipped_right = right.clamp(0, max);
+    let clipped_bottom = bottom.clamp(0, max);
+    (clipped_right > clipped_left && clipped_bottom > clipped_top).then_some(Ui4VisualRect {
+        x: clipped_left as u32,
+        y: clipped_top as u32,
+        width: clipped_right.saturating_sub(clipped_left) as u32,
+        height: clipped_bottom.saturating_sub(clipped_top) as u32,
+    })
 }
 
 fn selection_rect_between(anchor: (u32, u32), point: (u32, u32)) -> Ui4VisualRect {
@@ -2872,21 +2864,11 @@ mod tests {
             "24 mm corners at four pixels per millimetre"
         );
         assert_eq!(
-            (
-                zones[4].rect.x,
-                zones[4].rect.y,
-                zones[4].rect.width,
-                zones[4].rect.height,
-            ),
+            (zones[4].rect.x, zones[4].rect.y, zones[4].rect.width, zones[4].rect.height,),
             (0, 460, 48, 160)
         );
         assert_eq!(
-            (
-                zones[6].rect.x,
-                zones[6].rect.y,
-                zones[6].rect.width,
-                zones[6].rect.height,
-            ),
+            (zones[6].rect.x, zones[6].rect.y, zones[6].rect.width, zones[6].rect.height,),
             (832, 0, 256, 48)
         );
     }
@@ -2894,26 +2876,14 @@ mod tests {
     #[test]
     fn dock_hitboxes_map_corners_sides_and_top_center_without_whole_edge_latches() {
         let zones = dock_zones_with_reference(1_920, 1_080, Some((256, 160)));
-        assert_eq!(
-            dock_target_at_in_zones(0, 0, &zones),
-            Some(WindowDockTarget::TopLeft)
-        );
+        assert_eq!(dock_target_at_in_zones(0, 0, &zones), Some(WindowDockTarget::TopLeft));
         assert_eq!(
             dock_target_at_in_zones(1_919, 1_079, &zones),
             Some(WindowDockTarget::BottomRight)
         );
-        assert_eq!(
-            dock_target_at_in_zones(0, 540, &zones),
-            Some(WindowDockTarget::LeftHalf)
-        );
-        assert_eq!(
-            dock_target_at_in_zones(1_919, 540, &zones),
-            Some(WindowDockTarget::RightHalf)
-        );
-        assert_eq!(
-            dock_target_at_in_zones(960, 0, &zones),
-            Some(WindowDockTarget::Maximize)
-        );
+        assert_eq!(dock_target_at_in_zones(0, 540, &zones), Some(WindowDockTarget::LeftHalf));
+        assert_eq!(dock_target_at_in_zones(1_919, 540, &zones), Some(WindowDockTarget::RightHalf));
+        assert_eq!(dock_target_at_in_zones(960, 0, &zones), Some(WindowDockTarget::Maximize));
         assert_eq!(dock_target_at_in_zones(500, 0, &zones), None);
         assert_eq!(dock_target_at_in_zones(960, 200, &zones), None);
         assert_eq!(dock_target_at_in_zones(95, 95, &zones), None);
