@@ -1,0 +1,454 @@
+use alloc::collections::BTreeMap;
+use alloc::format;
+use alloc::string::{String, ToString};
+use alloc::vec::Vec;
+
+use serde_json::{Value, json};
+use spin::Mutex;
+
+use super::bios_ifr::{
+    BiosSchema, DefaultStore, Form, FormSet, IfrValue, OpaqueOpcode, Question, QuestionDefault,
+    QuestionOption, StorageBinding, VarStore, VisibilityCondition,
+};
+
+const BIOS_SCHEMA_API: &str = "trueos-bios-schema/v1";
+const MAX_BIOS_SCHEMA_JSON_BYTES: usize = 16 * 1024 * 1024;
+const ERROR_DETAIL_CHARS: usize = 240;
+
+static BIOS_SCHEMA_JSON_CACHE: Mutex<Option<Vec<u8>>> = Mutex::new(None);
+
+/// Length of the immutable, read-only BIOS schema JSON exposed to Blueprints.
+///
+/// Building this snapshot consumes only the already captured and validated HII
+/// catalogue. It does not call a Runtime Service, invoke the firmware browser,
+/// or decode the redacted configuration payload.
+pub(crate) fn snapshot_len() -> usize {
+    with_snapshot(|bytes| bytes.len())
+}
+
+/// Copy a slice of the immutable BIOS schema JSON into `out`.
+pub(crate) fn snapshot_read(offset: usize, out: &mut [u8]) -> usize {
+    with_snapshot(|bytes| {
+        if out.is_empty() || offset >= bytes.len() {
+            return 0;
+        }
+        let count = core::cmp::min(out.len(), bytes.len() - offset);
+        out[..count].copy_from_slice(&bytes[offset..offset + count]);
+        count
+    })
+}
+
+fn with_snapshot<R>(f: impl FnOnce(&[u8]) -> R) -> R {
+    let mut cache = BIOS_SCHEMA_JSON_CACHE.lock();
+    if cache.is_none() {
+        *cache = Some(build_snapshot());
+    }
+    f(cache
+        .as_deref()
+        .expect("BIOS schema snapshot cache initialized"))
+}
+
+fn build_snapshot() -> Vec<u8> {
+    let result = super::bios_ifr::with_schema(serialize_schema);
+    match result {
+        Ok(Ok(bytes)) => bytes,
+        Ok(Err(error)) | Err(error) => error_snapshot(&error),
+    }
+}
+
+fn serialize_schema(schema: &BiosSchema) -> Result<Vec<u8>, String> {
+    preflight_size(schema)?;
+
+    let mut question_record = 0usize;
+    let formsets = schema
+        .formsets
+        .iter()
+        .enumerate()
+        .map(|(formset_index, formset)| formset_json(formset_index, formset, &mut question_record))
+        .collect::<Vec<_>>();
+
+    let mut unknown_counts = BTreeMap::<u8, usize>::new();
+    for opcode in &schema.unknown_opcodes {
+        *unknown_counts.entry(opcode.opcode).or_default() += 1;
+    }
+    let unknown_opcodes = unknown_counts
+        .into_iter()
+        .map(|(opcode, count)| json!({ "opcode": opcode, "count": count }))
+        .collect::<Vec<_>>();
+
+    let document = json!({
+        "api": BIOS_SCHEMA_API,
+        "state": schema.state(),
+        "source": schema.capture.source,
+        "readOnly": true,
+        "activeWritePath": "none",
+        "capture": {
+            "hiiBytes": schema.capture.hii_bytes,
+            "currentConfiguration": if schema.capture.config_captured {
+                "captured-redacted"
+            } else {
+                "not-captured"
+            },
+            "currentValues": "captured-redacted-not-decoded-in-this-cycle",
+            "bulkStrings": "hidden",
+            "rawPackageBytes": "hidden"
+        },
+        "capabilities": {
+            "getVariable": false,
+            "setVariable": false,
+            "routeConfig": false,
+            "formBrowser": false,
+            "firmwareWrites": false,
+            "questionCallbacks": false,
+            "currentValueDecode": false
+        },
+        "stats": {
+            "packageLists": schema.package_lists,
+            "packages": schema.packages,
+            "formsets": schema.formsets.len(),
+            "forms": schema.stats.forms,
+            "questions": schema.stats.questions,
+            "questionRecords": question_record,
+            "stringsResolved": schema.catalogue_strings_resolved,
+            "stringReferencesResolved": schema.stats.string_references_resolved,
+            "stringReferencesUnresolved": schema.stats.string_references_unresolved,
+            "malformedPackages": schema.stats.malformed_packages,
+            "varstores": schema.varstores.len(),
+            "defaultStores": schema.default_stores.len(),
+            "opaqueMetadata": schema.unknown_opcodes.len()
+        },
+        "unknownOpcodes": unknown_opcodes,
+        "varstores": schema.varstores.iter().map(varstore_json).collect::<Vec<_>>(),
+        "defaultStores": schema
+            .default_stores
+            .iter()
+            .map(default_store_json)
+            .collect::<Vec<_>>(),
+        "formsets": formsets
+    });
+
+    let bytes = serde_json::to_vec(&document)
+        .map_err(|error| format!("BIOS schema JSON serialization failed: {error}"))?;
+    if bytes.len() > MAX_BIOS_SCHEMA_JSON_BYTES {
+        return Err(format!(
+            "BIOS schema JSON bytes={} exceeds bound={}",
+            bytes.len(),
+            MAX_BIOS_SCHEMA_JSON_BYTES
+        ));
+    }
+    Ok(bytes)
+}
+
+fn formset_json(formset_index: usize, formset: &FormSet, question_record: &mut usize) -> Value {
+    json!({
+        "index": formset_index,
+        "packageList": formset.list_index,
+        "package": formset.package_index,
+        "guid": formset.guid.fmt_canonical(),
+        "titleId": formset.title_id,
+        "title": formset.title.as_deref(),
+        "helpId": formset.help_id,
+        "help": formset.help.as_deref(),
+        "flags": formset.flags,
+        "forms": formset
+            .forms
+            .iter()
+            .map(|form| form_json(formset_index, form, question_record))
+            .collect::<Vec<_>>()
+    })
+}
+
+fn form_json(formset_index: usize, form: &Form, question_record: &mut usize) -> Value {
+    json!({
+        "formId": form.id,
+        "titleId": form.title_id,
+        "title": form.title.as_deref(),
+        "sourceOffset": form.source_offset,
+        "questions": form
+            .questions
+            .iter()
+            .map(|question| {
+                *question_record = question_record.saturating_add(1);
+                question_json(formset_index, form.id, *question_record, question)
+            })
+            .collect::<Vec<_>>()
+    })
+}
+
+fn question_json(formset_index: usize, form_id: u16, record: usize, question: &Question) -> Value {
+    let numeric_range = question.numeric.map(|bounds| {
+        json!({
+            "minimum": bounds.minimum,
+            "maximum": bounds.maximum,
+            "step": bounds.step
+        })
+    });
+    let string_limits = question.string_limits.map(|limits| {
+        json!({
+            "minimumChars": limits.minimum_chars,
+            "maximumChars": limits.maximum_chars,
+            "multiline": limits.multiline
+        })
+    });
+
+    json!({
+        "record": record,
+        "recordKey": format!(
+            "fs{}-form{:04X}-q{:04X}-off{:X}",
+            formset_index,
+            form_id,
+            question.id,
+            question.source_offset
+        ),
+        "promptId": question.prompt_id,
+        "prompt": question.prompt.as_deref(),
+        "helpId": question.help_id,
+        "help": question.help.as_deref(),
+        "questionId": question.id,
+        "kind": question.kind.name(),
+        "varstoreId": question.varstore_id,
+        "varstoreInfo": question.varstore_info,
+        "width": question.width,
+        "questionFlags": question.question_flags,
+        "kindFlags": question.kind_flags,
+        "numericRange": numeric_range,
+        "stringLimits": string_limits,
+        "sourceOffset": question.source_offset,
+        "storage": storage_json(&question.storage),
+        "options": question.options.iter().map(option_json).collect::<Vec<_>>(),
+        "defaults": question.defaults.iter().map(default_json).collect::<Vec<_>>(),
+        "visibility": question
+            .conditions
+            .iter()
+            .map(condition_json)
+            .collect::<Vec<_>>(),
+        "policy": {
+            "requiresReset": question.requires_reset(),
+            "callback": question.callback(),
+            "firmwareReadOnly": question.read_only(),
+            "trueosWrite": "locked"
+        },
+        "currentValue": "captured-redacted-not-decoded-in-this-cycle"
+    })
+}
+
+fn storage_json(storage: &StorageBinding) -> Value {
+    json!({
+        "backend": storage.backend.name(),
+        "varstoreId": storage.varstore_id,
+        "variable": storage.variable.as_deref(),
+        "variableGuid": storage.variable_guid.as_ref().map(|guid| guid.fmt_canonical()),
+        "offset": storage.offset,
+        "width": storage.width,
+        "attributes": storage.attributes,
+        "validated": storage.valid,
+        "detail": storage.detail,
+        "configContent": "captured-redacted"
+    })
+}
+
+fn option_json(option: &QuestionOption) -> Value {
+    json!({
+        "textId": option.text_id,
+        "text": option.text.as_deref(),
+        "flags": option.flags,
+        "standardDefault": option.flags & 0x10 != 0,
+        "manufacturingDefault": option.flags & 0x20 != 0,
+        "value": ifr_value_json(&option.value),
+        "sourceOffset": option.source_offset
+    })
+}
+
+fn default_json(default: &QuestionDefault) -> Value {
+    json!({
+        "defaultId": default.default_id,
+        "label": default.label,
+        "value": default.value.as_ref().map(ifr_value_json),
+        "source": default.source,
+        "sourceOffset": default.source_offset
+    })
+}
+
+fn ifr_value_json(value: &IfrValue) -> Value {
+    json!({
+        "typeCode": value.type_code,
+        "display": ifr_value_display(value),
+        "unsigned": value.unsigned,
+        "boolean": value.boolean,
+        "stringId": value.string_id,
+        "rawBytes": value.raw.len(),
+        "raw": "hidden"
+    })
+}
+
+fn ifr_value_display(value: &IfrValue) -> String {
+    if let Some(boolean) = value.boolean {
+        return if boolean { "true" } else { "false" }.to_string();
+    }
+    if let Some(unsigned) = value.unsigned {
+        return unsigned.to_string();
+    }
+    if let Some(string_id) = value.string_id {
+        return format!("string-id:0x{string_id:04X}");
+    }
+    String::from("opaque")
+}
+
+fn condition_json(condition: &VisibilityCondition) -> Value {
+    json!({
+        "kind": condition.kind.name(),
+        "sourceOffset": condition.source_offset,
+        "opaqueExpressionOpcodes": condition.expression.len(),
+        "expression": condition
+            .expression
+            .iter()
+            .map(opcode_metadata_json)
+            .collect::<Vec<_>>()
+    })
+}
+
+fn opcode_metadata_json(opcode: &OpaqueOpcode) -> Value {
+    json!({
+        "packageList": opcode.list_index,
+        "package": opcode.package_index,
+        "sourceOffset": opcode.source_offset,
+        "opcode": opcode.opcode,
+        "length": opcode.length,
+        "scope": opcode.scope,
+        "rawBytes": opcode.raw.len(),
+        "raw": "hidden"
+    })
+}
+
+fn varstore_json(varstore: &VarStore) -> Value {
+    json!({
+        "formsetIndex": varstore.formset_index,
+        "packageList": varstore.list_index,
+        "package": varstore.package_index,
+        "varstoreId": varstore.id,
+        "backend": varstore.backend.name(),
+        "guid": varstore.guid.fmt_canonical(),
+        "name": varstore.name.as_deref(),
+        "size": varstore.size,
+        "attributes": varstore.attributes,
+        "sourceOffset": varstore.source_offset
+    })
+}
+
+fn default_store_json(default_store: &DefaultStore) -> Value {
+    json!({
+        "formsetIndex": default_store.formset_index,
+        "packageList": default_store.list_index,
+        "package": default_store.package_index,
+        "nameId": default_store.name_id,
+        "name": default_store.name.as_deref(),
+        "defaultId": default_store.id,
+        "sourceOffset": default_store.source_offset
+    })
+}
+
+fn preflight_size(schema: &BiosSchema) -> Result<(), String> {
+    let mut estimate = 16 * 1024usize;
+    add_estimate(&mut estimate, schema.varstores.len().saturating_mul(640))?;
+    add_estimate(&mut estimate, schema.default_stores.len().saturating_mul(384))?;
+    add_estimate(&mut estimate, schema.unknown_opcodes.len().saturating_mul(8))?;
+
+    for varstore in &schema.varstores {
+        add_text_estimate(&mut estimate, varstore.name.as_deref())?;
+    }
+    for default_store in &schema.default_stores {
+        add_text_estimate(&mut estimate, default_store.name.as_deref())?;
+    }
+    for formset in &schema.formsets {
+        add_estimate(&mut estimate, 768)?;
+        add_text_estimate(&mut estimate, formset.title.as_deref())?;
+        add_text_estimate(&mut estimate, formset.help.as_deref())?;
+        for form in &formset.forms {
+            add_estimate(&mut estimate, 512)?;
+            add_text_estimate(&mut estimate, form.title.as_deref())?;
+            for question in &form.questions {
+                add_estimate(&mut estimate, 1536)?;
+                add_text_estimate(&mut estimate, question.prompt.as_deref())?;
+                add_text_estimate(&mut estimate, question.help.as_deref())?;
+                add_text_estimate(&mut estimate, question.storage.variable.as_deref())?;
+                add_estimate(&mut estimate, question.options.len().saturating_mul(512))?;
+                for option in &question.options {
+                    add_text_estimate(&mut estimate, option.text.as_deref())?;
+                }
+                add_estimate(&mut estimate, question.defaults.len().saturating_mul(512))?;
+                for default in &question.defaults {
+                    add_text_estimate(&mut estimate, Some(default.label.as_str()))?;
+                }
+                for condition in &question.conditions {
+                    add_estimate(&mut estimate, 320)?;
+                    add_estimate(&mut estimate, condition.expression.len().saturating_mul(256))?;
+                }
+            }
+        }
+    }
+
+    if estimate > MAX_BIOS_SCHEMA_JSON_BYTES {
+        return Err(format!(
+            "BIOS schema JSON estimate={} exceeds bound={}",
+            estimate, MAX_BIOS_SCHEMA_JSON_BYTES
+        ));
+    }
+    Ok(())
+}
+
+fn add_text_estimate(total: &mut usize, text: Option<&str>) -> Result<(), String> {
+    let bytes = text
+        .map(str::len)
+        .unwrap_or(0)
+        .checked_mul(6)
+        .ok_or_else(|| String::from("BIOS schema JSON size estimate overflow"))?;
+    add_estimate(total, bytes)
+}
+
+fn add_estimate(total: &mut usize, amount: usize) -> Result<(), String> {
+    *total = total
+        .checked_add(amount)
+        .ok_or_else(|| String::from("BIOS schema JSON size estimate overflow"))?;
+    if *total > MAX_BIOS_SCHEMA_JSON_BYTES {
+        return Err(format!(
+            "BIOS schema JSON estimate={} exceeds bound={}",
+            *total, MAX_BIOS_SCHEMA_JSON_BYTES
+        ));
+    }
+    Ok(())
+}
+
+fn error_snapshot(error: &str) -> Vec<u8> {
+    let document = json!({
+        "api": BIOS_SCHEMA_API,
+        "state": "unavailable",
+        "readOnly": true,
+        "activeWritePath": "none",
+        "detail": bounded_detail(error),
+        "capture": {
+            "currentConfiguration": "redacted",
+            "currentValues": "not-decoded",
+            "bulkStrings": "hidden",
+            "rawPackageBytes": "hidden"
+        },
+        "capabilities": {
+            "getVariable": false,
+            "setVariable": false,
+            "routeConfig": false,
+            "formBrowser": false,
+            "firmwareWrites": false,
+            "questionCallbacks": false,
+            "currentValueDecode": false
+        },
+        "formsets": []
+    });
+    serde_json::to_vec(&document).unwrap_or_else(|_| {
+        Vec::from(
+            &b"{\"api\":\"trueos-bios-schema/v1\",\"state\":\"unavailable\",\"readOnly\":true,\"activeWritePath\":\"none\",\"formsets\":[]}"[..],
+        )
+    })
+}
+
+fn bounded_detail(text: &str) -> String {
+    text.chars().take(ERROR_DETAIL_CHARS).collect()
+}

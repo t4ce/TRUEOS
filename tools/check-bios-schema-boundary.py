@@ -10,6 +10,7 @@ SOURCES = [
     ROOT / "src/shell2/cmds/bios_ifr.rs",
     *sorted((ROOT / "src/shell2/cmds/bios_ifr").glob("*.rs")),
     ROOT / "src/shell2/cmds/bios_browser.rs",
+    ROOT / "src/shell2/cmds/bios_blueprint.rs",
     *sorted((ROOT / "src/shell2/cmds/bios_browser").glob("*.rs")),
 ]
 ROUTER = ROOT / "src/shell2/shell2_cmd.rs"

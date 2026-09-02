@@ -186,6 +186,14 @@ pub fn system_services_snapshot_read_host(offset: usize, out: &mut [u8]) -> usiz
     n
 }
 
+pub fn bios_schema_snapshot_len_host() -> usize {
+    crate::shell2::cmds::bios_blueprint::snapshot_len()
+}
+
+pub fn bios_schema_snapshot_read_host(offset: usize, out: &mut [u8]) -> usize {
+    crate::shell2::cmds::bios_blueprint::snapshot_read(offset, out)
+}
+
 pub fn printer_snapshot_len_host() -> usize {
     crate::r::net::printer::snapshot_text().len()
 }
@@ -655,6 +663,21 @@ pub unsafe extern "C" fn trueos_vlayer_system_services_snapshot_read(
         trueos_vm::vmcall::OP_BP_SYSTEM_SERVICES_SNAPSHOT_READ,
         system_services_snapshot_len_host,
         system_services_snapshot_read_host,
+        offset,
+        out_ptr,
+        out_cap,
+    )
+}
+
+pub unsafe extern "C" fn trueos_vlayer_bios_schema_snapshot_read(
+    offset: usize,
+    out_ptr: *mut u8,
+    out_cap: usize,
+) -> isize {
+    vlayer_read_runtime(
+        trueos_vm::vmcall::OP_BP_BIOS_SCHEMA_SNAPSHOT_READ,
+        bios_schema_snapshot_len_host,
+        bios_schema_snapshot_read_host,
         offset,
         out_ptr,
         out_cap,
