@@ -1,5 +1,5 @@
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
-use core::{cell::UnsafeCell, time::Duration};
+use core::{cell::UnsafeCell, future::Future, task::Poll, time::Duration};
 
 use ::xhci::{
     ExtendedCapability,
@@ -25,7 +25,7 @@ use super::{
     transfer::TransferResultHandler,
 };
 use crate::{
-    DeviceAddressInfo, KernelOp, Mmio, XhciRootHubInitPolicy,
+    DeviceAddressInfo, KernelOp, Mmio, XhciConstructionPolicy, XhciRootHubInitPolicy,
     backend::{
         kmod::{hub::HubOp, kcore::CoreOp, xhci::reg::SlotBell},
         ty::{DeviceOp, Event, EventHandlerOp},
@@ -35,14 +35,23 @@ use crate::{
         XhciProtocolSnapshot, XhciWrite64Result, XhciWriteResult,
     },
     err::Result,
-    osal::{Kernel, SpinWhile},
+    osal::Kernel,
     queue::Finished,
+    recover::{
+        XhciDmaPolicy, XhciNoopProof, XhciRecoveryEvent, XhciRecoveryEventProof,
+        XhciRecoveryInspection, XhciRecoveryRequest, XhciRecoveryResponse, XhciRecoveryStage,
+        XhciTransportProof,
+    },
 };
 
 static TRANSFER_EVENT_TRACE: TraceSampler = TraceSampler::new();
 static EVENT_DRAIN_TRACE: TraceSampler = TraceSampler::new();
 const USB_LEGACY_OWNERSHIP_POLL_INTERVAL_MS: u64 = 100;
 const USB_LEGACY_OWNERSHIP_SLICE_BUDGET_MS: u64 = 5;
+const USB_LEGACY_OWNERSHIP_MAX_WAIT_MS: u64 = 2_000;
+const RECOVERY_POLL_MS: u64 = 1;
+const RECOVERY_RESET_TIMEOUT_MS: u32 = 1_500;
+const RECOVERY_RUN_TIMEOUT_MS: u32 = 1_500;
 
 pub struct Xhci {
     pub(crate) reg: Arc<RwLock<XhciRegisters>>,
@@ -55,6 +64,9 @@ pub struct Xhci {
     scratchpad_buf_arr: Option<ScratchpadBufferArray>,
     pub(crate) transfer_result_handler: TransferResultHandler,
     root_hub: Option<XhciRootHub>,
+    recovery_stage: XhciRecoveryStage,
+    dma_bits: u8,
+    max_slots_enabled: u8,
 }
 
 unsafe impl Send for Xhci {}
@@ -98,6 +110,13 @@ impl CoreOp for Xhci {
     ) -> BoxFuture<'a, Result<XhciDirectResponse>> {
         async move { self._xhci_direct(request) }.boxed()
     }
+
+    fn xhci_recover<'a>(
+        &'a mut self,
+        request: XhciRecoveryRequest,
+    ) -> BoxFuture<'a, Result<XhciRecoveryResponse>> {
+        self._xhci_recover(request).boxed()
+    }
 }
 
 impl Xhci {
@@ -123,30 +142,36 @@ impl Xhci {
         kernel: &'static dyn KernelOp,
         root_hub_init_policy: XhciRootHubInitPolicy,
     ) -> Result<Self> {
+        Self::new_with_construction_policy_and_mmio_len(
+            mmio,
+            mmio_len,
+            kernel,
+            XhciConstructionPolicy::delivered(root_hub_init_policy),
+        )
+    }
+
+    pub fn new_with_construction_policy_and_mmio_len(
+        mmio: Mmio,
+        mmio_len: usize,
+        kernel: &'static dyn KernelOp,
+        construction_policy: XhciConstructionPolicy,
+    ) -> Result<Self> {
         let reg = XhciRegisters::new(mmio);
-
-        // 检查 xHCI 控制器的寻址能力（HCCPARAMS1 寄存器）
         let hccparams1 = reg.capability.hccparams1.read_volatile();
-        let ac64 = hccparams1.addressing_capability(); // Bit[0]: 64-bit Addressing Capability
-
-        info!(
-            "xHCI: Addressing Capability (AC64) = {} ({}-bit addressing)",
-            ac64,
-            if ac64 { "64" } else { "32" }
-        );
-
-        // 根据 AC64 位调整 DMA mask
-        let dma_mask = if ac64 {
-            u64::MAX as usize
-        } else {
-            // 控制器只支持 32 位地址，强制限制在 32 位
-            u32::MAX as usize
+        let ac64 = hccparams1.addressing_capability();
+        let (dma_mask, dma_bits) = match construction_policy.dma {
+            XhciDmaPolicy::Force32Bit => (u64::from(u32::MAX), 32),
+            XhciDmaPolicy::FromCapability if ac64 => (u64::MAX, 64),
+            XhciDmaPolicy::FromCapability => (u64::from(u32::MAX), 32),
         };
 
-        let kernel = Kernel::new(dma_mask as _, kernel);
+        info!(
+            "xHCI: construction dma_policy={:?} AC64={} selected_dma_bits={}",
+            construction_policy.dma, ac64, dma_bits
+        );
 
+        let kernel = Kernel::new(dma_mask, kernel);
         let reg_shared = Arc::new(RwLock::new(reg.clone()));
-
         let cmd = CommandRing::new(DmaDirection::Bidirectional, &kernel, reg_shared.clone())?;
         let cmd_finished = cmd.finished_handle();
         let max_event_ring_segments = reg
@@ -156,9 +181,7 @@ impl Xhci {
             .event_ring_segment_table_max() as usize;
         let event_ring = EventRing::new(max_event_ring_segments, &kernel)?;
         let event_ring_info = event_ring.info();
-
-        let root_hub = XhciRootHub::new(reg.clone(), root_hub_init_policy)?;
-
+        let root_hub = XhciRootHub::new(reg.clone(), construction_policy.root_hub)?;
         let transfer_result_handler = TransferResultHandler::new(reg_shared.clone());
         let ports = root_hub.waker();
 
@@ -170,7 +193,7 @@ impl Xhci {
             dev_ctx: None,
             transfer_result_handler: transfer_result_handler.clone(),
             event_handler: Some(EventHandler::new(
-                reg_shared.clone(),
+                reg_shared,
                 cmd_finished,
                 event_ring,
                 transfer_result_handler,
@@ -179,6 +202,9 @@ impl Xhci {
             root_hub: Some(root_hub),
             event_ring_info,
             scratchpad_buf_arr: None,
+            recovery_stage: XhciRecoveryStage::Constructed,
+            dma_bits,
+            max_slots_enabled: 0,
         })
     }
 
@@ -400,54 +426,187 @@ impl Xhci {
         }
     }
 
+    async fn _xhci_recover(
+        &mut self,
+        request: XhciRecoveryRequest,
+    ) -> Result<XhciRecoveryResponse> {
+        match request {
+            XhciRecoveryRequest::Inspect => {
+                Ok(XhciRecoveryResponse::Inspection(self.recovery_inspection()?))
+            }
+            XhciRecoveryRequest::PrepareTransport { max_slots } => {
+                let proof = self.prepare_transport(Some(max_slots)).await?;
+                Ok(XhciRecoveryResponse::TransportPrepared(proof))
+            }
+            XhciRecoveryRequest::ProveNoop { timeout_ms } => {
+                let proof = self.prove_noop(timeout_ms).await?;
+                Ok(XhciRecoveryResponse::NoopProven(proof))
+            }
+            XhciRecoveryRequest::PollEvents => {
+                Ok(XhciRecoveryResponse::Events(self.poll_recovery_events()?))
+            }
+        }
+    }
+
+    fn recovery_inspection(&self) -> Result<XhciRecoveryInspection> {
+        Ok(XhciRecoveryInspection {
+            stage: self.recovery_stage,
+            dma_bits: self.dma_bits,
+            max_slots_enabled: self.max_slots_enabled,
+            snapshot: self.direct_snapshot()?,
+        })
+    }
+
+    async fn prepare_transport(
+        &mut self,
+        max_slots_limit: Option<u8>,
+    ) -> Result<XhciTransportProof> {
+        if self.recovery_stage == XhciRecoveryStage::Failed {
+            return Err(USBError::Other(anyhow::anyhow!(
+                "xHCI recovery transport is failed and must be reconstructed"
+            )));
+        }
+        if self.recovery_stage >= XhciRecoveryStage::TransportPrepared {
+            return Ok(XhciTransportProof {
+                stage: self.recovery_stage,
+                dma_bits: self.dma_bits,
+                max_slots_enabled: self.max_slots_enabled,
+                snapshot: self.direct_snapshot()?,
+            });
+        }
+
+        let result: Result<XhciTransportProof> = async {
+            self.disable_irq();
+            self.init_ext_caps().await?;
+            self.chip_hardware_reset(RECOVERY_RESET_TIMEOUT_MS).await?;
+            self.log_status("after-chip-reset");
+
+            self.disable_irq();
+            self.log_status("after-disable-irq");
+
+            let max_slots = self.setup_max_device_slots(max_slots_limit);
+            self.dev_ctx = Some(DeviceContextList::new(max_slots as _, self.kernel())?);
+            self.setup_dcbaap()?;
+            self.set_cmd_ring()?;
+            self.log_status("after-set-cmd-ring");
+            self.init_irq()?;
+            self.log_status("after-init-irq");
+            self.setup_scratchpads()?;
+            self.log_status("after-setup-scratchpads");
+            self.start();
+            mb();
+            self.log_status("after-start");
+            self.wait_for_running(RECOVERY_RUN_TIMEOUT_MS).await?;
+            self.log_status("after-wait-for-running");
+            self.enable_irq();
+            self.log_status("after-enable-irq");
+
+            self.max_slots_enabled = max_slots;
+            self.recovery_stage = XhciRecoveryStage::TransportPrepared;
+            Ok(XhciTransportProof {
+                stage: self.recovery_stage,
+                dma_bits: self.dma_bits,
+                max_slots_enabled: self.max_slots_enabled,
+                snapshot: self.direct_snapshot()?,
+            })
+        }
+        .await;
+
+        if result.is_err() {
+            self.recovery_stage = XhciRecoveryStage::Failed;
+        }
+        result
+    }
+
+    async fn prove_noop(&mut self, timeout_ms: u32) -> Result<XhciNoopProof> {
+        if self.recovery_stage < XhciRecoveryStage::TransportPrepared
+            || self.recovery_stage == XhciRecoveryStage::Failed
+        {
+            return Err(USBError::NotInitialized);
+        }
+        let timeout_ms = timeout_ms.clamp(1, 10_000);
+        let mut command_ring = self.cmd.clone();
+        let mut completion = core::pin::pin!(
+            command_ring.cmd_request(command::Allowed::Noop(command::Noop::default()),)
+        );
+        let mut waited_ms = 0u32;
+
+        loop {
+            let ready = core::future::poll_fn(|cx| match completion.as_mut().poll(cx) {
+                Poll::Ready(result) => Poll::Ready(Some(result)),
+                Poll::Pending => Poll::Ready(None),
+            })
+            .await;
+            if let Some(result) = ready {
+                let completion = result?;
+                self.recovery_stage = XhciRecoveryStage::TransportProven;
+                return Ok(XhciNoopProof {
+                    stage: self.recovery_stage,
+                    dma_bits: self.dma_bits,
+                    waited_ms,
+                    command_trb_pointer: completion.command_trb_pointer(),
+                    completion_slot_id: completion.slot_id(),
+                    snapshot: self.direct_snapshot()?,
+                });
+            }
+
+            let event = self
+                .event_handler
+                .as_ref()
+                .ok_or_else(|| {
+                    USBError::Other(anyhow::anyhow!(
+                        "xHCI recovery event handler was already transferred"
+                    ))
+                })?
+                .handle_event();
+            if matches!(event, Event::Stopped) {
+                self.recovery_stage = XhciRecoveryStage::Failed;
+                return Err(USBError::Other(anyhow::anyhow!(
+                    "xHCI event transport stopped during No-op proof"
+                )));
+            }
+            if waited_ms >= timeout_ms {
+                self.recovery_stage = XhciRecoveryStage::Failed;
+                return Err(USBError::Timeout);
+            }
+            self.kernel
+                .sleep(Duration::from_millis(RECOVERY_POLL_MS))
+                .await;
+            waited_ms = waited_ms.saturating_add(RECOVERY_POLL_MS as u32);
+        }
+    }
+
+    fn poll_recovery_events(&mut self) -> Result<XhciRecoveryEventProof> {
+        let event = self
+            .event_handler
+            .as_ref()
+            .ok_or_else(|| {
+                USBError::Other(anyhow::anyhow!(
+                    "xHCI recovery event handler was already transferred"
+                ))
+            })?
+            .handle_event();
+        let event = match event {
+            Event::Nothing => XhciRecoveryEvent::Nothing,
+            Event::PortChange { port } => XhciRecoveryEvent::PortChange { port },
+            Event::TransferActivity { count } => XhciRecoveryEvent::TransferActivity { count },
+            Event::Stopped => XhciRecoveryEvent::Stopped,
+        };
+        Ok(XhciRecoveryEventProof {
+            event,
+            snapshot: self.direct_snapshot()?,
+        })
+    }
+
     async fn _init(&mut self) -> Result {
-        self.disable_irq();
-        // 4.2 Host Controller Initialization
-        self.init_ext_caps().await?;
-        // After Chip Hardware Reset6 wait until the Controller Not Ready (CNR) flag
-        // in the USBSTS is ‘0’ before writing any xHC Operational or Runtime
-        // registers.
-        self.chip_hardware_reset().await?;
-        self.log_status("after-chip-reset");
-
-        self.disable_irq();
-        self.log_status("after-disable-irq");
-
-        // Program the Max Device Slots Enabled (MaxSlotsEn) field in the CONFIG
-        // register (5.4.7) to enable the device slots that system software is going to
-        // use.
-        let max_slots = self.setup_max_device_slots();
-        self.dev_ctx = Some(DeviceContextList::new(max_slots as _, self.kernel())?);
-
-        // Program the Device Context Base Address Array Pointer (DCBAAP)
-        // register (5.4.6) with a 64-bit address pointing to where the Device
-        // Context Base Address Array is located.
-        self.setup_dcbaap()?;
-
-        // Define the Command Ring Dequeue Pointer by programming the
-        // Command Ring Control Register (5.4.5) with a 64-bit address pointing to
-        // the starting address of the first TRB of the Command Ring.
-        self.set_cmd_ring()?;
-        self.log_status("after-set-cmd-ring");
-        self.init_irq()?;
-        self.log_status("after-init-irq");
-        self.setup_scratchpads()?;
-        self.log_status("after-setup-scratchpads");
-        // At this point, the host controller is up and running and the Root Hub ports
-        // (5.4.8) will begin reporting device connects, etc., and system software may begin
-        // enumerating devices. System software may follow the procedures described in
-        // section 4.3, to enumerate attached devices.
-        self.start();
-        mb();
-        self.log_status("after-start");
-
-        self.wait_for_running().await;
-        self.log_status("after-wait-for-running");
-
-        self.enable_irq();
-        self.log_status("after-enable-irq");
-        // self.reset_ports().await;
-
+        if self.recovery_stage == XhciRecoveryStage::Failed {
+            return Err(USBError::Other(anyhow::anyhow!(
+                "xHCI cannot enter normal init after a failed recovery transport"
+            )));
+        }
+        if self.recovery_stage < XhciRecoveryStage::TransportPrepared {
+            let _ = self.prepare_transport(None).await?;
+        }
         Ok(())
     }
 
@@ -471,13 +630,34 @@ impl Xhci {
         Ok(())
     }
 
-    async fn chip_hardware_reset(&mut self) -> Result {
+    async fn wait_while<F>(&self, stage: &'static str, timeout_ms: u32, mut condition: F) -> Result
+    where
+        F: FnMut() -> bool,
+    {
+        let mut waited_ms = 0u32;
+        while condition() {
+            if waited_ms >= timeout_ms {
+                return Err(USBError::Other(anyhow::anyhow!(
+                    "xHCI timed out at {} after {} ms",
+                    stage,
+                    waited_ms
+                )));
+            }
+            self.kernel
+                .sleep(Duration::from_millis(RECOVERY_POLL_MS))
+                .await;
+            waited_ms = waited_ms.saturating_add(RECOVERY_POLL_MS as u32);
+        }
+        Ok(())
+    }
+
+    async fn chip_hardware_reset(&mut self, timeout_ms: u32) -> Result {
         debug!("Reset begin ...");
         self.reg.write().operational.usbcmd.update_volatile(|c| {
             c.clear_run_stop();
         });
 
-        SpinWhile::new(|| {
+        self.wait_while("wait-halted", timeout_ms, || {
             !self
                 .reg
                 .read()
@@ -486,12 +666,10 @@ impl Xhci {
                 .read_volatile()
                 .hc_halted()
         })
-        .await;
+        .await?;
 
         debug!("Halted");
-        debug!("Wait for ready...");
-
-        SpinWhile::new(|| {
+        self.wait_while("wait-ready-before-reset", timeout_ms, || {
             self.reg
                 .read()
                 .operational
@@ -499,17 +677,13 @@ impl Xhci {
                 .read_volatile()
                 .controller_not_ready()
         })
-        .await;
-
-        debug!("Ready");
+        .await?;
 
         self.reg.write().operational.usbcmd.update_volatile(|f| {
             f.set_host_controller_reset();
         });
 
-        debug!("Reset HC");
-
-        SpinWhile::new(|| {
+        self.wait_while("wait-reset-complete", timeout_ms, || {
             self.reg
                 .read()
                 .operational
@@ -524,10 +698,9 @@ impl Xhci {
                     .read_volatile()
                     .controller_not_ready()
         })
-        .await;
+        .await?;
 
         debug!("Reset finish");
-
         Ok(())
     }
 
@@ -590,6 +763,11 @@ impl Xhci {
             if up.hc_os_owned_semaphore() && !up.hc_bios_owned_semaphore() {
                 break;
             }
+            if polls.saturating_mul(USB_LEGACY_OWNERSHIP_POLL_INTERVAL_MS)
+                >= USB_LEGACY_OWNERSHIP_MAX_WAIT_MS
+            {
+                return Err(USBError::Timeout);
+            }
 
             let slice_elapsed_ms = slice_started_ms
                 .zip(self.kernel.monotonic_millis())
@@ -621,20 +799,23 @@ impl Xhci {
         Ok(())
     }
 
-    fn setup_max_device_slots(&mut self) -> u8 {
+    fn setup_max_device_slots(&mut self, limit: Option<u8>) -> u8 {
         let mut regs = self.reg.write();
-        let max_slots = regs
+        let capability = regs
             .capability
             .hcsparams1
             .read_volatile()
             .number_of_device_slots();
+        let max_slots = match limit {
+            Some(0) | None => capability,
+            Some(limit) => capability.min(limit),
+        };
 
         regs.operational.config.update_volatile(|r| {
             r.set_max_device_slots_enabled(max_slots);
         });
 
-        debug!("Max device slots: {max_slots}");
-
+        debug!("Max device slots: capability={} enabled={}", capability, max_slots);
         max_slots
     }
 
@@ -777,19 +958,18 @@ impl Xhci {
         debug!("Start run");
     }
 
-    async fn wait_for_running(&mut self) {
-        SpinWhile::new(|| {
+    async fn wait_for_running(&mut self, timeout_ms: u32) -> Result {
+        self.wait_while("wait-running", timeout_ms, || {
             let sts = self.reg.read().operational.usbsts.read_volatile();
             sts.hc_halted() || sts.controller_not_ready()
         })
-        .await;
+        .await?;
 
         info!("Running");
         self.log_status("wait-for-running-ready");
-
-        // 必须等待至少200ms，否则 port enable = false
         self.kernel.sleep(Duration::from_millis(200)).await;
         self.log_status("wait-for-running-after-settle");
+        Ok(())
     }
 
     fn log_status(&self, stage: &'static str) {

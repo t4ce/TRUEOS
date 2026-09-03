@@ -16,6 +16,7 @@ use crate::{
         ty::{DeviceInfoOp, DeviceOp, EventHandlerOp, ProbedDeviceInfoOp},
     },
     diag::{XhciDirectRequest, XhciDirectResponse},
+    recover::{XhciRecoveryRequest, XhciRecoveryResponse},
 };
 
 pub trait CoreOp: Send + 'static {
@@ -37,6 +38,13 @@ pub trait CoreOp: Send + 'static {
         &'a mut self,
         request: XhciDirectRequest,
     ) -> BoxFuture<'a, Result<XhciDirectResponse, USBError>>;
+
+    fn xhci_recover<'a>(
+        &'a mut self,
+        _request: XhciRecoveryRequest,
+    ) -> BoxFuture<'a, Result<XhciRecoveryResponse, USBError>> {
+        async { Err(USBError::NotSupported) }.boxed()
+    }
 }
 
 pub struct Core {
@@ -216,6 +224,13 @@ impl BackendOp for Core {
         request: XhciDirectRequest,
     ) -> BoxFuture<'a, Result<XhciDirectResponse, USBError>> {
         self.backend.xhci_direct(request)
+    }
+
+    fn xhci_recover<'a>(
+        &'a mut self,
+        request: XhciRecoveryRequest,
+    ) -> BoxFuture<'a, Result<XhciRecoveryResponse, USBError>> {
+        self.backend.xhci_recover(request)
     }
 
     fn create_event_handler(&mut self) -> Box<dyn EventHandlerOp> {

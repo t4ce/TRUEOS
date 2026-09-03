@@ -2,6 +2,7 @@ mod api;
 pub mod class;
 mod descriptor;
 mod dev_gears;
+mod heal_protocol;
 mod heal_service;
 pub mod hid;
 pub(crate) mod lab;
@@ -11,10 +12,16 @@ mod pen;
 mod scsi;
 mod skhynix;
 
+pub use self::heal_protocol::{
+    HealApiDescription, HealErrorCode, HealPattern, HealPatternDescription, HealPortSelector,
+    HealRequest, HealResponse, HealResponseStatus, HealSubmitError, PendingHealRequest,
+    api_description_json as xhci_heal_api_json, latest_report_json as xhci_heal_report_json,
+    submit as submit_xhci_heal_request, submit_json as submit_xhci_heal_json,
+};
 pub use self::heal_service::{
-    HealPortReport, HealServiceReport, HealServiceStage, HealXhciSeed, IntelXhciProfile,
-    QemuXhciProfile, XhciBackendSelection, latest_report as xhci_heal_report,
-    latest_selection as xhci_backend_selection,
+    HealPortReport, HealProtocolReport, HealServiceReport, HealServiceStage, HealTransportProof,
+    HealXhciSeed, IntelXhciProfile, QemuXhciProfile, XhciBackendSelection,
+    latest_report as xhci_heal_report, latest_selection as xhci_backend_selection,
 };
 pub use self::hid::midi;
 pub use self::lib::*;
@@ -39,11 +46,10 @@ pub async fn usb_controller_service_task() {
         );
         return;
     }
-    let Some(selection) = heal_service::select_first_backend() else {
+    let Some((selection, xhci_device)) = heal_service::select_first_backend() else {
         return;
     };
-    let Some((mmio, mmio_len, kernel, _legacy_root_hub_policy)) = lib::known_xhci_host_inputs()
-    else {
+    let Some((mmio, mmio_len, kernel)) = lib::map_xhci_host_inputs(&xhci_device) else {
         return;
     };
     let root_hub_policy = match selection {

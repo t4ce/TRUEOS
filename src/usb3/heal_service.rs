@@ -7,12 +7,19 @@
 //! same PORTSC-neutral write discipline as the xHCI laboratory.
 
 use alloc::{format, string::String, vec::Vec};
+use core::sync::atomic::{AtomicU64, Ordering};
+
+use serde::Serialize;
 use spin::Mutex;
 use trueos_time::{Duration, Timer};
 
 use super::crabusb::{
     self,
-    diag::{XhciControllerSnapshot, XhciDirectRequest, XhciDirectResponse},
+    diag::XhciControllerSnapshot,
+    recover::{
+        XhciNoopProof, XhciRecoveryEvent, XhciRecoveryRequest, XhciRecoveryResponse,
+        XhciTransportProof,
+    },
 };
 
 const NORMAL_XHCI_CLAIM_OWNER: &str = "crabusb-xhci";
@@ -32,21 +39,21 @@ const PCI_SUBSYSTEM_DEVICE_ID: u16 = 0x2e;
 const USBSTS_CONTROLLER_NOT_READY: u32 = 1 << 11;
 const HCCPARAMS1_PORT_POWER_CONTROL: u32 = 1 << 3;
 const PORT_CCS: u32 = 1 << 0;
-const PORT_OCA: u32 = 1 << 3;
+const PORT_PED: u32 = 1 << 1;
+const PORT_PR: u32 = 1 << 4;
 const PORT_PLS_MASK: u32 = 0x0f << 5;
 const PORT_PP: u32 = 1 << 9;
 const PORT_SPEED_MASK: u32 = 0x0f << 10;
-const PORT_PIC_MASK: u32 = 0x03 << 14;
-const PORT_WAKE_MASK: u32 = 0x07 << 25;
-const PORT_DR: u32 = 1 << 30;
-const PORT_RO_MASK: u32 = PORT_CCS | PORT_OCA | PORT_SPEED_MASK | PORT_DR;
-const PORT_RWS_MASK: u32 = PORT_PLS_MASK | PORT_PP | PORT_PIC_MASK | PORT_WAKE_MASK;
-const REPORT_REFRESH_MS: u64 = 1_000;
+const PORT_WPR: u32 = 1 << 31;
+const HEAL_SERVICE_IDLE_MS: u64 = 10;
+const DEFAULT_MAX_SLOTS: u8 = 8;
+const DEFAULT_NOOP_TIMEOUT_MS: u32 = 1_000;
 
 static LATEST_SELECTION: Mutex<Option<XhciBackendSelection>> = Mutex::new(None);
 static LATEST_REPORT: Mutex<Option<HealServiceReport>> = Mutex::new(None);
+static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub enum IntelXhciProfile {
     Series700 { revision: u8 },
     CompatibleFamily { device_id: u16, revision: u8 },
@@ -61,7 +68,7 @@ impl IntelXhciProfile {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub enum QemuXhciProfile {
     PciXhci,
     NecEmulatedXhci,
@@ -76,7 +83,7 @@ impl QemuXhciProfile {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub struct HealXhciSeed {
     pub bus: u8,
     pub slot: u8,
@@ -88,7 +95,7 @@ pub struct HealXhciSeed {
     pub subsystem_device_id: u16,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 pub enum XhciBackendSelection {
     KnownIntel(IntelXhciProfile),
     KnownQemu(QemuXhciProfile),
@@ -104,13 +111,15 @@ impl XhciBackendSelection {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum HealServiceStage {
     Quarantined,
     ControllerConstructed,
     CapabilitiesReadable,
-    RootPortsPowered,
-    AwaitingRecipe,
+    TransportPrepared,
+    TransportProven,
+    AwaitingPortActivation,
     Failed,
 }
 
@@ -120,26 +129,55 @@ impl HealServiceStage {
             Self::Quarantined => "quarantined",
             Self::ControllerConstructed => "controller-constructed",
             Self::CapabilitiesReadable => "capabilities-readable",
-            Self::RootPortsPowered => "root-ports-powered",
-            Self::AwaitingRecipe => "awaiting-recipe",
+            Self::TransportPrepared => "transport-prepared",
+            Self::TransportProven => "transport-proven",
+            Self::AwaitingPortActivation => "awaiting-port-activation",
             Self::Failed => "failed",
         }
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
+pub struct HealProtocolReport {
+    pub major: u8,
+    pub minor: u8,
+    pub port_offset: u8,
+    pub port_count: u8,
+    pub slot_type: u8,
+    pub psi_count: u8,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct HealPortReport {
     pub port_id: u8,
+    pub protocol_major: Option<u8>,
+    pub protocol_minor: Option<u8>,
     pub connected: bool,
+    pub enabled: bool,
     pub power_attempted: bool,
     pub powered_before: bool,
     pub powered_after: bool,
+    pub reset_active: bool,
+    pub link_state: u8,
+    pub speed_id: u8,
     pub before_portsc: u32,
     pub after_portsc: u32,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
+pub struct HealTransportProof {
+    pub proof_id: String,
+    pub dma_bits: u8,
+    pub max_slots_enabled: u8,
+    pub noop_waited_ms: u32,
+    pub command_trb_pointer: u64,
+    pub completion_slot_id: u8,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct HealServiceReport {
+    pub session_id: u64,
+    pub revision: u64,
     pub seed: HealXhciSeed,
     pub stage: HealServiceStage,
     pub hciversion: Option<u16>,
@@ -147,13 +185,19 @@ pub struct HealServiceReport {
     pub max_ports: Option<u8>,
     pub controller_not_ready: Option<bool>,
     pub port_power_control: Option<bool>,
+    pub dma_bits: Option<u8>,
+    pub max_slots_enabled: Option<u8>,
+    pub protocols: Vec<HealProtocolReport>,
     pub ports: Vec<HealPortReport>,
+    pub transport: Option<HealTransportProof>,
     pub failure: Option<String>,
 }
 
 impl HealServiceReport {
-    fn new(seed: HealXhciSeed) -> Self {
+    fn new(session_id: u64, seed: HealXhciSeed) -> Self {
         Self {
+            session_id,
+            revision: 1,
             seed,
             stage: HealServiceStage::Quarantined,
             hciversion: None,
@@ -161,7 +205,11 @@ impl HealServiceReport {
             max_ports: None,
             controller_not_ready: None,
             port_power_control: None,
+            dma_bits: None,
+            max_slots_enabled: None,
+            protocols: Vec::new(),
             ports: Vec::new(),
+            transport: None,
             failure: None,
         }
     }
@@ -175,7 +223,7 @@ pub fn latest_report() -> Option<HealServiceReport> {
     LATEST_REPORT.lock().clone()
 }
 
-pub(crate) fn select_first_backend() -> Option<XhciBackendSelection> {
+pub(crate) fn select_first_backend() -> Option<(XhciBackendSelection, crate::pci::PciDevice)> {
     let dev = crate::pci::with_devices(|devices| {
         devices
             .iter()
@@ -197,7 +245,7 @@ pub(crate) fn select_first_backend() -> Option<XhciBackendSelection> {
         return None;
     }
     *LATEST_SELECTION.lock() = Some(selection);
-    Some(selection)
+    Some((selection, dev))
 }
 
 fn select_backend(dev: crate::pci::PciDevice) -> XhciBackendSelection {
@@ -247,10 +295,13 @@ pub(crate) async fn run_quarantined(
     kernel: &'static dyn crabusb::KernelOp,
     seed: HealXhciSeed,
 ) -> ! {
-    let mut report = HealServiceReport::new(seed);
+    let session_id = next_session_id();
+    let mut report = HealServiceReport::new(session_id, seed);
     publish(&report);
     crate::log!(
-        "xhci-heal: state=quarantined pci={:02x}:{:02x}.{} vid={:04x} pid={:04x} rev={:02x} sub={:04x}:{:04x} normal-init=blocked\n",
+        "xhci-heal: state=quarantined session={} pci={:02x}:{:02x}.{} vid={:04x} pid={:04x} rev={:02x} sub={:04x}:{:04x} normal-init=blocked
+",
+        session_id,
         seed.bus,
         seed.slot,
         seed.function,
@@ -261,210 +312,228 @@ pub(crate) async fn run_quarantined(
         seed.subsystem_device_id
     );
 
-    // Normal `USBHost::init()` is deliberately unreachable in this branch.
-    // The constructor needs a root-hub profile, but that profile cannot run
-    // while Heal owns the controller, so the least-mutating delivered profile
-    // is only an inert construction seed.
-    let mut host = match crabusb::USBHost::new_xhci_with_root_hub_init_policy_and_mmio_len(
+    let mut host = match crabusb::USBHost::new_xhci_with_construction_policy_and_mmio_len(
         mmio,
         mmio_len,
         kernel,
-        crabusb::XhciRootHubInitPolicy::SelectivePorts3And4Skip11,
+        crabusb::XhciConstructionPolicy::quarantined(),
     ) {
         Ok(host) => host,
         Err(error) => {
             fail(&mut report, format!("quarantined controller construction failed: {error:?}"));
-            hold_quarantine().await
+            return super::heal_protocol::service_without_controller(report).await;
         }
     };
 
     report.stage = HealServiceStage::ControllerConstructed;
-    publish(&report);
-
-    let initial = match direct_snapshot(&mut host).await {
-        Ok(snapshot) => snapshot,
-        Err(reason) => {
-            fail(&mut report, reason);
-            hold_quarantine().await
+    bump(&mut report);
+    match host.xhci_recover(XhciRecoveryRequest::Inspect).await {
+        Ok(XhciRecoveryResponse::Inspection(inspection)) => {
+            report.dma_bits = Some(inspection.dma_bits);
+            report.max_slots_enabled = Some(inspection.max_slots_enabled);
+            update_from_snapshot(&mut report, &inspection.snapshot);
+            report.stage = HealServiceStage::CapabilitiesReadable;
+            bump(&mut report);
         }
-    };
-    update_capabilities(&mut report, &initial);
-    report.stage = HealServiceStage::CapabilitiesReadable;
-    publish(&report);
-
-    if initial.usbsts & USBSTS_CONTROLLER_NOT_READY != 0 {
-        fail(
-            &mut report,
-            format!("controller not ready before safe power step: USBSTS=0x{:08x}", initial.usbsts),
-        );
-        hold_quarantine_with_host(&mut host, &mut report).await
-    }
-
-    match power_root_ports(&mut host, &initial).await {
-        Ok(ports) => {
-            report.ports = ports;
-            report.stage = HealServiceStage::RootPortsPowered;
-            publish(&report);
+        Ok(_) => {
+            fail(&mut report, String::from("CrabUSB returned an unexpected inspection response"))
         }
-        Err(reason) => {
-            fail(&mut report, reason);
-            hold_quarantine_with_host(&mut host, &mut report).await
+        Err(error) => {
+            fail(&mut report, format!("semantic controller inspection failed: {error:?}"))
         }
     }
 
-    report.stage = HealServiceStage::AwaitingRecipe;
-    publish(&report);
-    crate::log!(
-        "xhci-heal: state={} pci={:02x}:{:02x}.{} hciversion=0x{:04x} max_slots={} max_ports={} ppc={} connected={} powered={} normal-init=blocked\n",
-        report.stage.as_str(),
-        seed.bus,
-        seed.slot,
-        seed.function,
-        report.hciversion.unwrap_or(0),
-        report.max_slots.unwrap_or(0),
-        report.max_ports.unwrap_or(0),
-        report.port_power_control.unwrap_or(false) as u8,
-        report.ports.iter().filter(|port| port.connected).count(),
-        report
-            .ports
-            .iter()
-            .filter(|port| port.powered_after)
-            .count(),
-    );
+    if !matches!(report.stage, HealServiceStage::Failed) {
+        let _ = prove_transport(&mut host, &mut report, DEFAULT_MAX_SLOTS, DEFAULT_NOOP_TIMEOUT_MS)
+            .await;
+    }
 
-    hold_quarantine_with_host(&mut host, &mut report).await
-}
-
-async fn power_root_ports(
-    host: &mut crabusb::USBHost,
-    initial: &XhciControllerSnapshot,
-) -> Result<Vec<HealPortReport>, String> {
-    let power_control = initial.hccparams1 & HCCPARAMS1_PORT_POWER_CONTROL != 0;
-    let mut reports = initial
-        .ports
-        .iter()
-        .map(|port| HealPortReport {
-            port_id: port.port_id,
-            connected: port.portsc & PORT_CCS != 0,
-            power_attempted: false,
-            powered_before: port.portsc & PORT_PP != 0,
-            powered_after: port.portsc & PORT_PP != 0,
-            before_portsc: port.portsc,
-            after_portsc: port.portsc,
-        })
-        .collect::<Vec<_>>();
-
-    if power_control {
-        for port in reports.iter_mut().filter(|port| !port.powered_before) {
-            let offset = portsc_offset(initial, port.port_id)?;
-            let requested = neutral_portsc(port.before_portsc) | PORT_PP;
-            match host
-                .xhci_direct(XhciDirectRequest::Write32 {
-                    offset,
-                    value: requested,
-                })
-                .await
-            {
-                Ok(XhciDirectResponse::Write32(_)) => port.power_attempted = true,
-                Ok(_) => {
-                    return Err(format!(
-                        "power-on port {} returned an unexpected xHCI response",
-                        port.port_id
-                    ));
-                }
-                Err(error) => {
-                    return Err(format!(
-                        "power-on port {} failed at offset 0x{offset:x}: {error:?}",
-                        port.port_id
-                    ));
-                }
+    loop {
+        while super::heal_protocol::service_one(&mut host, &mut report).await {}
+        if let Ok(XhciRecoveryResponse::Events(events)) =
+            host.xhci_recover(XhciRecoveryRequest::PollEvents).await
+        {
+            update_from_snapshot(&mut report, &events.snapshot);
+            if matches!(events.event, XhciRecoveryEvent::Nothing) {
+                publish(&report);
+            } else {
+                bump(&mut report);
             }
         }
-    }
-
-    Timer::after(Duration::from_millis(2)).await;
-    let after = direct_snapshot(host).await?;
-    refresh_ports(&mut reports, &after);
-    if power_control && let Some(port) = reports.iter().find(|port| !port.powered_after) {
-        return Err(format!(
-            "power-on verification failed for root port {}: PORTSC=0x{:08x}",
-            port.port_id, port.after_portsc
-        ));
-    }
-    Ok(reports)
-}
-
-async fn direct_snapshot(host: &mut crabusb::USBHost) -> Result<XhciControllerSnapshot, String> {
-    match host.xhci_direct(XhciDirectRequest::Snapshot).await {
-        Ok(XhciDirectResponse::Snapshot(snapshot)) => Ok(snapshot),
-        Ok(_) => Err(String::from("xHCI snapshot returned an unexpected response")),
-        Err(error) => Err(format!("xHCI capability snapshot failed: {error:?}")),
+        Timer::after(Duration::from_millis(HEAL_SERVICE_IDLE_MS)).await;
     }
 }
 
-fn update_capabilities(report: &mut HealServiceReport, snapshot: &XhciControllerSnapshot) {
+pub(crate) async fn prove_transport(
+    host: &mut crabusb::USBHost,
+    report: &mut HealServiceReport,
+    max_slots: u8,
+    noop_timeout_ms: u32,
+) -> Result<(), String> {
+    if report.transport.is_some() {
+        return Ok(());
+    }
+
+    let prepared = match host
+        .xhci_recover(XhciRecoveryRequest::PrepareTransport { max_slots })
+        .await
+    {
+        Ok(XhciRecoveryResponse::TransportPrepared(proof)) => proof,
+        Ok(_) => {
+            let reason = String::from("CrabUSB returned an unexpected transport response");
+            fail(report, reason.clone());
+            return Err(reason);
+        }
+        Err(error) => {
+            let reason = format!("controller transport preparation failed: {error:?}");
+            fail(report, reason.clone());
+            return Err(reason);
+        }
+    };
+    apply_transport_prepared(report, &prepared);
+    report.stage = HealServiceStage::TransportPrepared;
+    bump(report);
+
+    let proof = match host
+        .xhci_recover(XhciRecoveryRequest::ProveNoop {
+            timeout_ms: noop_timeout_ms,
+        })
+        .await
+    {
+        Ok(XhciRecoveryResponse::NoopProven(proof)) => proof,
+        Ok(_) => {
+            let reason = String::from("CrabUSB returned an unexpected No-op response");
+            fail(report, reason.clone());
+            return Err(reason);
+        }
+        Err(error) => {
+            let reason = format!("xHCI No-op transport proof failed: {error:?}");
+            fail(report, reason.clone());
+            return Err(reason);
+        }
+    };
+    apply_noop_proof(report, &proof);
+    report.stage = HealServiceStage::TransportProven;
+    bump(report);
+    report.stage = HealServiceStage::AwaitingPortActivation;
+    report.failure = None;
+    bump(report);
+
+    crate::log!(
+        "xhci-heal: state={} session={} pci={:02x}:{:02x}.{} dma_bits={} max_slots={} noop_ms={} command=0x{:x} port-mutations=0 normal-init=blocked
+",
+        report.stage.as_str(),
+        report.session_id,
+        report.seed.bus,
+        report.seed.slot,
+        report.seed.function,
+        proof.dma_bits,
+        proof.snapshot.config & 0xff,
+        proof.waited_ms,
+        proof.command_trb_pointer,
+    );
+    Ok(())
+}
+
+fn apply_transport_prepared(report: &mut HealServiceReport, proof: &XhciTransportProof) {
+    report.dma_bits = Some(proof.dma_bits);
+    report.max_slots_enabled = Some(proof.max_slots_enabled);
+    update_from_snapshot(report, &proof.snapshot);
+}
+
+fn apply_noop_proof(report: &mut HealServiceReport, proof: &XhciNoopProof) {
+    report.dma_bits = Some(proof.dma_bits);
+    report.max_slots_enabled = Some((proof.snapshot.config & 0xff) as u8);
+    update_from_snapshot(report, &proof.snapshot);
+    report.transport = Some(HealTransportProof {
+        proof_id: format!(
+            "xhci-transport-{}-{}-{:x}",
+            report.session_id,
+            report.revision.saturating_add(1),
+            proof.command_trb_pointer
+        ),
+        dma_bits: proof.dma_bits,
+        max_slots_enabled: (proof.snapshot.config & 0xff) as u8,
+        noop_waited_ms: proof.waited_ms,
+        command_trb_pointer: proof.command_trb_pointer,
+        completion_slot_id: proof.completion_slot_id,
+    });
+}
+
+fn update_from_snapshot(report: &mut HealServiceReport, snapshot: &XhciControllerSnapshot) {
     report.hciversion = Some(snapshot.hciversion);
     report.max_slots = Some((snapshot.hcsparams1 & 0xff) as u8);
     report.max_ports = Some(((snapshot.hcsparams1 >> 24) & 0xff) as u8);
     report.controller_not_ready = Some(snapshot.usbsts & USBSTS_CONTROLLER_NOT_READY != 0);
     report.port_power_control = Some(snapshot.hccparams1 & HCCPARAMS1_PORT_POWER_CONTROL != 0);
-}
-
-fn refresh_ports(reports: &mut [HealPortReport], snapshot: &XhciControllerSnapshot) {
-    for report in reports {
-        let Some(current) = snapshot
-            .ports
-            .iter()
-            .find(|port| port.port_id == report.port_id)
-        else {
-            continue;
-        };
-        report.connected = current.portsc & PORT_CCS != 0;
-        report.powered_after = current.portsc & PORT_PP != 0;
-        report.after_portsc = current.portsc;
-    }
-}
-
-fn portsc_offset(snapshot: &XhciControllerSnapshot, port_id: u8) -> Result<usize, String> {
-    let index = usize::from(
-        port_id
-            .checked_sub(1)
-            .ok_or_else(|| String::from("xHCI root port zero is invalid"))?,
-    );
-    let offset = usize::from(snapshot.caplength)
-        .checked_add(0x400)
-        .and_then(|base| {
-            index
-                .checked_mul(0x10)
-                .and_then(|delta| base.checked_add(delta))
+    report.protocols = snapshot
+        .protocols
+        .iter()
+        .map(|protocol| HealProtocolReport {
+            major: protocol.major,
+            minor: protocol.minor,
+            port_offset: protocol.port_offset,
+            port_count: protocol.port_count,
+            slot_type: protocol.slot_type,
+            psi_count: protocol.psi_count,
         })
-        .ok_or_else(|| String::from("xHCI PORTSC offset overflow"))?;
-    let end = offset
-        .checked_add(core::mem::size_of::<u32>())
-        .ok_or_else(|| String::from("xHCI PORTSC end overflow"))?;
-    if end > snapshot.mmio_len {
-        return Err(format!(
-            "xHCI PORTSC port {} offset 0x{offset:x} exceeds aperture 0x{:x}",
-            port_id, snapshot.mmio_len
-        ));
+        .collect();
+    report.ports = snapshot
+        .ports
+        .iter()
+        .map(|port| {
+            let protocol = snapshot.protocols.iter().find(|protocol| {
+                let first = u16::from(protocol.port_offset);
+                let end = first.saturating_add(u16::from(protocol.port_count));
+                let id = u16::from(port.port_id);
+                id >= first && id < end
+            });
+            let powered = port.portsc & PORT_PP != 0;
+            HealPortReport {
+                port_id: port.port_id,
+                protocol_major: protocol.map(|protocol| protocol.major),
+                protocol_minor: protocol.map(|protocol| protocol.minor),
+                connected: port.portsc & PORT_CCS != 0,
+                enabled: port.portsc & PORT_PED != 0,
+                power_attempted: false,
+                powered_before: powered,
+                powered_after: powered,
+                reset_active: port.portsc & (PORT_PR | PORT_WPR) != 0,
+                link_state: ((port.portsc & PORT_PLS_MASK) >> 5) as u8,
+                speed_id: ((port.portsc & PORT_SPEED_MASK) >> 10) as u8,
+                before_portsc: port.portsc,
+                after_portsc: port.portsc,
+            }
+        })
+        .collect();
+}
+
+fn next_session_id() -> u64 {
+    loop {
+        let id = NEXT_SESSION_ID.fetch_add(1, Ordering::AcqRel);
+        if id != 0 {
+            return id;
+        }
     }
-    Ok(offset)
 }
 
-fn neutral_portsc(portsc: u32) -> u32 {
-    (portsc & PORT_RO_MASK) | (portsc & PORT_RWS_MASK)
+fn bump(report: &mut HealServiceReport) {
+    report.revision = report.revision.saturating_add(1);
+    publish(report);
 }
 
-fn publish(report: &HealServiceReport) {
+pub(crate) fn publish(report: &HealServiceReport) {
     *LATEST_REPORT.lock() = Some(report.clone());
 }
 
-fn fail(report: &mut HealServiceReport, reason: String) {
+pub(crate) fn fail(report: &mut HealServiceReport, reason: String) {
     report.stage = HealServiceStage::Failed;
     report.failure = Some(reason.clone());
-    publish(report);
+    bump(report);
     crate::log!(
-        "xhci-heal: state=failed pci={:02x}:{:02x}.{} vid={:04x} pid={:04x} reason={} normal-init=blocked\n",
+        "xhci-heal: state=failed session={} pci={:02x}:{:02x}.{} vid={:04x} pid={:04x} reason={} normal-init=blocked
+",
+        report.session_id,
         report.seed.bus,
         report.seed.slot,
         report.seed.function,
@@ -472,24 +541,4 @@ fn fail(report: &mut HealServiceReport, reason: String) {
         report.seed.device_id,
         reason
     );
-}
-
-async fn hold_quarantine() -> ! {
-    loop {
-        Timer::after(Duration::from_millis(REPORT_REFRESH_MS)).await;
-    }
-}
-
-async fn hold_quarantine_with_host(
-    host: &mut crabusb::USBHost,
-    report: &mut HealServiceReport,
-) -> ! {
-    loop {
-        Timer::after(Duration::from_millis(REPORT_REFRESH_MS)).await;
-        if let Ok(snapshot) = direct_snapshot(host).await {
-            update_capabilities(report, &snapshot);
-            refresh_ports(report.ports.as_mut_slice(), &snapshot);
-            publish(report);
-        }
-    }
 }
