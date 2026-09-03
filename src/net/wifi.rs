@@ -311,6 +311,12 @@ pub fn set_driver(driver: Box<dyn WifiDriver>) {
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub fn probe_pci(pci_dev: &PciDevice) -> bool {
+    // AX211 is an integrated Gen2 device. Keep it out of the legacy 4965
+    // probe and let the dedicated path perform the single PCI claim.
+    if pci_dev.vendor_id == 0x8086 && pci_dev.device_id == 0x7A70 {
+        return super::iwl_ax211::probe(pci_dev);
+    }
+
     // Debug: log every device we check
     crate::log!(
         "[WIFI-PROBE] Checking {:04X}:{:04X} class={:02X} sub={:02X} at {}.{}.{}",

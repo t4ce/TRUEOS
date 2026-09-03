@@ -66,7 +66,6 @@ const INTEL_VENDOR: u16 = 0x8086;
 pub const IWL4965_DEVICE_IDS: &[u16] = &[
     0x4229, // WiFi Link 4965AGN
     0x4230, // WiFi Link 4965AG_1
-    0x7A70, // Intel 700 Series chipset CNVi WiFi
 ];
 
 /// Also support later Intel WiFi cards that may appear on other ThinkPads
@@ -85,7 +84,6 @@ const IWL_SUPPORTED_IDS: &[u16] = &[
     0x2526, // Wireless-AC 9260
     0x2723, // WiFi 6 AX200
     0x2725, // WiFi 6E AX210
-    0x7A70, // WiFi 7 BE200
 ];
 
 // ============================================================================

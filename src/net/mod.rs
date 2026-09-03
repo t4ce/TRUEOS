@@ -6,6 +6,7 @@ pub mod dhcpv6;
 pub mod e1000;
 pub mod i226;
 pub mod iwl4965;
+pub mod iwl_ax211;
 pub mod r8125;
 pub mod r8139;
 pub mod r8169;
