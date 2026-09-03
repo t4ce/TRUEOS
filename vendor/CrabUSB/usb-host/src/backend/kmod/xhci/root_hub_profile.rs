@@ -4,6 +4,7 @@ use crate::backend::kmod::XhciRootHubInitPolicy;
 pub(crate) enum XhciRootHubPhysics {
     BaremetalSelective,
     EmulatedFullReset,
+    QuarantinedObserveOnly,
 }
 
 impl XhciRootHubPhysics {
@@ -13,10 +14,15 @@ impl XhciRootHubPhysics {
         match policy {
             XhciRootHubInitPolicy::SelectivePorts3And4Skip11 => Self::BaremetalSelective,
             XhciRootHubInitPolicy::FullAllPorts => Self::EmulatedFullReset,
+            XhciRootHubInitPolicy::QuarantinedObserveOnly => Self::QuarantinedObserveOnly,
         }
     }
 
     pub(crate) const fn ignores_root_port(self, port_id: u8) -> bool {
-        matches!(self, Self::BaremetalSelective) && port_id == Self::BAREMETAL_SKIPPED_ROOT_PORT
+        match self {
+            Self::BaremetalSelective => port_id == Self::BAREMETAL_SKIPPED_ROOT_PORT,
+            Self::EmulatedFullReset => false,
+            Self::QuarantinedObserveOnly => true,
+        }
     }
 }

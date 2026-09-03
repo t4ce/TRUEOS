@@ -18,6 +18,7 @@ pub mod device;
 pub mod diag;
 pub mod err;
 mod host;
+pub mod recover;
 
 pub use crate::backend::ty::Event;
 pub use crate::backend::ty::ep::Endpoint;

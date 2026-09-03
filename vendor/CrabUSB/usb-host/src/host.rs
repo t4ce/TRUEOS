@@ -6,6 +6,8 @@ use crate::backend::ty::*;
 #[cfg(kmod)]
 use crate::diag::{XhciDirectRequest, XhciDirectResponse};
 use crate::err::Result;
+#[cfg(kmod)]
+use crate::recover::{XhciRecoveryRequest, XhciRecoveryResponse};
 
 #[cfg(kmod)]
 pub use super::backend::kmod::*;
@@ -57,6 +59,16 @@ impl USBHost {
     #[cfg(kmod)]
     pub async fn xhci_direct(&mut self, request: XhciDirectRequest) -> Result<XhciDirectResponse> {
         self.backend.xhci_direct(request).await
+    }
+
+    /// Execute one bounded semantic recovery operation through the exclusive
+    /// xHCI backend owner.
+    #[cfg(kmod)]
+    pub async fn xhci_recover(
+        &mut self,
+        request: XhciRecoveryRequest,
+    ) -> Result<XhciRecoveryResponse> {
+        self.backend.xhci_recover(request).await
     }
 
     pub async fn open_device(&mut self, dev: &DeviceInfo) -> Result<Device> {

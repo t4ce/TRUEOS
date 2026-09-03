@@ -102,6 +102,9 @@ impl HubOp for XhciRootHub {
                 XhciRootHubPhysics::EmulatedFullReset => {
                     self.init_emulated_full_reset_ports()?;
                 }
+                XhciRootHubPhysics::QuarantinedObserveOnly => {
+                    self.init_quarantined_observe_only()?;
+                }
             }
 
             self.log_status_mut("root-hub-init-end");
@@ -152,10 +155,7 @@ impl XhciRootHub {
             return Err(USBError::Other(anyhow::anyhow!("invalid root port reset request port=0")));
         };
         if self.root_port_ignored_by_physics(port_id) {
-            info!(
-                "xhci: root port {} reset request ignored by baremetal selective physics",
-                port_id
-            );
+            info!("xhci: root port {} reset request ignored by active root-hub policy", port_id);
             return Ok(());
         }
         if idx >= self.reg.port_register_set.len() {
@@ -210,6 +210,21 @@ impl XhciRootHub {
         self.log_portsc("root-hub-selective-skip", 11);
         info!("xhci: root port 11 selective reset skipped reason=known-problematic-leds");
 
+        Ok(())
+    }
+
+    fn init_quarantined_observe_only(&mut self) -> Result<(), USBError> {
+        self.log_status_mut("root-hub-quarantined-observe-begin");
+        info!(
+            "xhci: root hub policy=quarantined-observe-only ports={} writes=0 resets=0",
+            self.reg.port_register_set.len()
+        );
+        for port_id in 1..=self.reg.port_register_set.len() {
+            self.log_portsc(
+                "root-hub-quarantined-observe-port",
+                port_id.try_into().unwrap_or(u8::MAX),
+            );
+        }
         Ok(())
     }
 
