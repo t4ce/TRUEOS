@@ -314,7 +314,11 @@ pub fn probe_pci(pci_dev: &PciDevice) -> bool {
     // AX211 is an integrated Gen2 device. Keep it out of the legacy 4965
     // probe and let the dedicated path perform the single PCI claim.
     if pci_dev.vendor_id == 0x8086 && pci_dev.device_id == 0x7A70 {
-        return super::iwl_ax211::probe(pci_dev);
+        if let Some(driver) = super::iwl_ax211::probe(pci_dev) {
+            set_driver(driver);
+            return true;
+        }
+        return false;
     }
 
     // Debug: log every device we check

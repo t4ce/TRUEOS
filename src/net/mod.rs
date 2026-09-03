@@ -336,6 +336,12 @@ pub fn init() {
                 dev.slot,
                 dev.function
             );
+            match wifi::start_scan() {
+                Ok(()) => crate::log_info!(target: "net"; "wifi-probe: initial AX211 scan started\n"),
+                Err(error) => crate::log_warn!(target: "net";
+                    "wifi-probe: initial AX211 scan failed reason={}\n", error
+                ),
+            }
         } else {
             crate::log_warn!(
                 target: "net";

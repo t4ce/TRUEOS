@@ -52,6 +52,10 @@ LIMINE_INSTALL_STAMP := $(LIMINE_BUILD_DIR)/.installed
 # and fail ISO creation if it is absent.
 GUC_FW_HOST_PATH ?= firmware/i915/tgl_guc_70.bin
 GUC_FW_ISO_REL_PATH ?= EFI/BOOT/tgl_guc_70.bin
+IWL_UCODE_HOST_PATH ?= firmware/iwlwifi/iwlwifi-so-a0-gf-a0-89.ucode
+IWL_UCODE_ISO_REL_PATH ?= EFI/BOOT/iwlwifi-so-a0-gf-a0-89.ucode
+IWL_PNVM_HOST_PATH ?= firmware/iwlwifi/iwlwifi-so-a0-gf-a0.pnvm
+IWL_PNVM_ISO_REL_PATH ?= EFI/BOOT/iwlwifi-so-a0-gf-a0.pnvm
 HORIZON_BP_HOST_PATH ?= ../TRUEOS-Blueprints/dist/horizon.bp
 HORIZON_BP_ISO_REL_PATH ?= EFI/BOOT/apps/horizon.bp
 WEAVE_HELLO_BP_HOST_PATH ?= ../TRUEOS-Blueprints/dist/weave_hello.bp
@@ -498,6 +502,20 @@ iso: artifacts images limine
 	esac
 	mkdir -p "$(ISO_BOOT_DIR)/$(dir $(GUC_FW_ISO_REL_PATH))"
 	cp "$(ISO_DIR)/$(GUC_FW_ISO_REL_PATH)" "$(ISO_BOOT_DIR)/$(GUC_FW_ISO_REL_PATH)"
+	@if [ ! -f "$(IWL_UCODE_HOST_PATH)" ]; then \
+		echo "error: required Intel Wi-Fi ucode not found at $(IWL_UCODE_HOST_PATH)"; \
+		exit 1; \
+	fi
+	@if [ ! -f "$(IWL_PNVM_HOST_PATH)" ]; then \
+		echo "error: required Intel Wi-Fi PNVM not found at $(IWL_PNVM_HOST_PATH)"; \
+		exit 1; \
+	fi
+	mkdir -p "$(ISO_DIR)/$(dir $(IWL_UCODE_ISO_REL_PATH))" "$(ISO_BOOT_DIR)/$(dir $(IWL_UCODE_ISO_REL_PATH))"
+	cp "$(IWL_UCODE_HOST_PATH)" "$(ISO_DIR)/$(IWL_UCODE_ISO_REL_PATH)"
+	cp "$(IWL_UCODE_HOST_PATH)" "$(ISO_BOOT_DIR)/$(IWL_UCODE_ISO_REL_PATH)"
+	mkdir -p "$(ISO_DIR)/$(dir $(IWL_PNVM_ISO_REL_PATH))" "$(ISO_BOOT_DIR)/$(dir $(IWL_PNVM_ISO_REL_PATH))"
+	cp "$(IWL_PNVM_HOST_PATH)" "$(ISO_DIR)/$(IWL_PNVM_ISO_REL_PATH)"
+	cp "$(IWL_PNVM_HOST_PATH)" "$(ISO_BOOT_DIR)/$(IWL_PNVM_ISO_REL_PATH)"
 	@if [ "$(ENABLE_BLUEPRINTS)" = "1" ]; then \
 		if [ ! -f "$(HORIZON_BP_HOST_PATH)" ]; then \
 			echo "error: Horizon blueprint not found at $(HORIZON_BP_HOST_PATH)"; \
@@ -528,6 +546,14 @@ iso: artifacts images limine
 	printf '%s\n%s\n' \
 		"module_path: boot():/$(ISO_EFI_IMG)" \
 		"module_string: trueos.install.efi_img" \
+		>> "$(LIMINE_CFG_GENERATED)"
+	printf '%s\n%s\n' \
+		"module_path: boot():/$(IWL_UCODE_ISO_REL_PATH)" \
+		"module_string: trueos.iwlwifi.ucode" \
+		>> "$(LIMINE_CFG_GENERATED)"
+	printf '%s\n%s\n' \
+		"module_path: boot():/$(IWL_PNVM_ISO_REL_PATH)" \
+		"module_string: trueos.iwlwifi.pnvm" \
 		>> "$(LIMINE_CFG_GENERATED)"
 	@if [ "$(ENABLE_BLUEPRINTS)" = "1" ]; then \
 		printf '%s\n%s\n' \
