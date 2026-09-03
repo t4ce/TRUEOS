@@ -32,6 +32,10 @@ pub(crate) fn try_parse(
 
     let submitted = line.trim();
     if let Some(bios_tail) = command_tail(submitted, "bios") {
+        if bios_tail.eq_ignore_ascii_case("dump") {
+            super::cmds::bios_dump::start(spawner, io);
+            return ParseOutcome::Handled;
+        }
         if let Some(capture_tail) = command_tail(bios_tail, "capture") {
             return super::cmds::bios_capture::try_parse(io, capture_tail);
         }

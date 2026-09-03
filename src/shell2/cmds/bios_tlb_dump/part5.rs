@@ -73,6 +73,31 @@ fn push_record(out: &mut String, value: serde_json::Value) {
 }
 
 fn finish_dump(out: &mut String) {
+    match super::bios_hii::with_catalogue(|catalogue| {
+        super::bios_observed::append_ordered_ifr_records(out, catalogue)
+    }) {
+        Ok(stats) => push_record(
+            out,
+            serde_json::json!({
+                "record": "ordered-ifr-summary",
+                "opcode_instances": stats.opcode_instances,
+                "decoded_instances": stats.decoded_instances,
+                "semantically_unresolved_opcodes": stats.unresolved_instances,
+                "tiano_extensions_decoded": stats.tiano_extensions,
+                "active_write_path": "none",
+            }),
+        ),
+        Err(error) => push_record(
+            out,
+            serde_json::json!({
+                "record": "error",
+                "stage": "ordered-ifr-decode",
+                "detail": error,
+                "active_write_path": "none",
+            }),
+        ),
+    }
+
     push_record(
         out,
         serde_json::json!({

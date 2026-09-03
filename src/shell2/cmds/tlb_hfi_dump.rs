@@ -28,8 +28,6 @@ async fn dump_task(target: MatrixTarget) {
     if !out.ends_with('\n') {
         out.push('\n');
     }
-    out.push('\n');
-    super::bios_tlb_dump::append_dump(&mut out);
 
     print_matrix_target_line(
         &target,
