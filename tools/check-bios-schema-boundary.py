@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[1]
 BIOS_DUMP = ROOT / "src/shell2/cmds/bios_tlb_dump.rs"
 BIOS_DUMP_PARTS = sorted((ROOT / "src/shell2/cmds/bios_tlb_dump").glob("*.rs"))
 OBSERVED = ROOT / "src/shell2/cmds/bios_observed.rs"
+BLUEPRINT = ROOT / "src/shell2/cmds/bios_blueprint.rs"
 DEDICATED_WRITER = ROOT / "src/shell2/cmds/bios_dump.rs"
 TLB_WRITER = ROOT / "src/shell2/cmds/tlb_hfi_dump.rs"
 if len(BIOS_DUMP_PARTS) != 5:
@@ -18,7 +19,7 @@ SOURCES = [
     ROOT / "src/shell2/cmds/bios_ifr.rs",
     *sorted((ROOT / "src/shell2/cmds/bios_ifr").glob("*.rs")),
     ROOT / "src/shell2/cmds/bios_browser.rs",
-    ROOT / "src/shell2/cmds/bios_blueprint.rs",
+    BLUEPRINT,
     *sorted((ROOT / "src/shell2/cmds/bios_browser").glob("*.rs")),
     BIOS_DUMP,
     *BIOS_DUMP_PARTS,
@@ -112,7 +113,25 @@ for opcode_name in (
     if opcode_name not in observed:
         raise SystemExit(f"observed IFR decoder missing: {opcode_name}")
 
+blueprint = BLUEPRINT.read_text(encoding="utf-8")
+for token in (
+    "trueos-bios-schema/v2",
+    "trueos-bios-presentation/v1",
+    '"presentation"',
+    '"completeForCapturedHii": true',
+    '"completeMotherboardSetupSurface": "not-claimed"',
+    '"semanticallyUnresolvedOpcodes"',
+    '"nodes": presentation_nodes',
+    'object.remove("raw_hex")',
+    'details.remove("payload_hex")',
+):
+    if token not in blueprint:
+        raise SystemExit(f"missing Blueprint BIOS presentation contract: {token}")
+
+if "append_ordered_ifr_records" not in blueprint:
+    raise SystemExit("Blueprint BIOS snapshot does not consume the ordered IFR presentation stream")
+
 if "bios_tlb_dump::append_dump" in TLB_WRITER.read_text(encoding="utf-8"):
     raise SystemExit("generic tlb dump still embeds the BIOS dump")
 
-print("bios-schema-boundary: read-only decoder and dedicated BIOS dump verified")
+print("bios-schema-boundary: read-only decoder, presentation ABI, and dedicated BIOS dump verified")

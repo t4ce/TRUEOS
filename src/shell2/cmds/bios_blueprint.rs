@@ -11,8 +11,10 @@ use super::bios_ifr::{
     QuestionOption, StorageBinding, VarStore, VisibilityCondition,
 };
 
-const BIOS_SCHEMA_API: &str = "trueos-bios-schema/v1";
+const BIOS_SCHEMA_API: &str = "trueos-bios-schema/v2";
+const BIOS_PRESENTATION_API: &str = "trueos-bios-presentation/v1";
 const MAX_BIOS_SCHEMA_JSON_BYTES: usize = 16 * 1024 * 1024;
+const MAX_PRESENTATION_NODES: usize = 4096;
 const ERROR_DETAIL_CHARS: usize = 240;
 
 static BIOS_SCHEMA_JSON_CACHE: Mutex<Option<Vec<u8>>> = Mutex::new(None);
@@ -76,6 +78,8 @@ fn serialize_schema(schema: &BiosSchema) -> Result<Vec<u8>, String> {
         .map(|(opcode, count)| json!({ "opcode": opcode, "count": count }))
         .collect::<Vec<_>>();
 
+    let (presentation_nodes, presentation_stats) = presentation_snapshot()?;
+
     let document = json!({
         "api": BIOS_SCHEMA_API,
         "state": schema.state(),
@@ -117,6 +121,21 @@ fn serialize_schema(schema: &BiosSchema) -> Result<Vec<u8>, String> {
             "defaultStores": schema.default_stores.len(),
             "opaqueMetadata": schema.unknown_opcodes.len()
         },
+        "presentation": {
+            "api": BIOS_PRESENTATION_API,
+            "ordered": true,
+            "completeForCapturedHii": true,
+            "completeMotherboardSetupSurface": "not-claimed",
+            "rawBytes": "hidden",
+            "stats": {
+                "opcodeInstances": presentation_stats.opcode_instances,
+                "decodedInstances": presentation_stats.decoded_instances,
+                "semanticallyUnresolvedOpcodes": presentation_stats.unresolved_instances,
+                "tianoExtensions": presentation_stats.tiano_extensions,
+                "nodes": presentation_nodes.len()
+            },
+            "nodes": presentation_nodes
+        },
         "unknownOpcodes": unknown_opcodes,
         "varstores": schema.varstores.iter().map(varstore_json).collect::<Vec<_>>(),
         "defaultStores": schema
@@ -137,6 +156,43 @@ fn serialize_schema(schema: &BiosSchema) -> Result<Vec<u8>, String> {
         ));
     }
     Ok(bytes)
+}
+
+fn presentation_snapshot() -> Result<(Vec<Value>, super::bios_observed::ObservedDecodeStats), String> {
+    super::bios_hii::with_catalogue(|catalogue| {
+        let mut ndjson = String::new();
+        let stats = super::bios_observed::append_ordered_ifr_records(&mut ndjson, catalogue);
+        let mut nodes = Vec::new();
+
+        for line in ndjson.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let mut node = serde_json::from_str::<Value>(line)
+                .map_err(|error| format!("BIOS presentation JSON decode failed: {error}"))?;
+            sanitize_presentation_node(&mut node);
+            nodes.push(node);
+            if nodes.len() > MAX_PRESENTATION_NODES {
+                return Err(format!(
+                    "BIOS presentation nodes={} exceeds bound={}",
+                    nodes.len(),
+                    MAX_PRESENTATION_NODES
+                ));
+            }
+        }
+
+        Ok((nodes, stats))
+    })?
+}
+
+fn sanitize_presentation_node(node: &mut Value) {
+    let Some(object) = node.as_object_mut() else {
+        return;
+    };
+    object.remove("raw_hex");
+    if let Some(details) = object.get_mut("details").and_then(Value::as_object_mut) {
+        details.remove("payload_hex");
+    }
 }
 
 fn formset_json(formset_index: usize, formset: &FormSet, question_record: &mut usize) -> Value {
@@ -352,6 +408,7 @@ fn preflight_size(schema: &BiosSchema) -> Result<(), String> {
     add_estimate(&mut estimate, schema.varstores.len().saturating_mul(640))?;
     add_estimate(&mut estimate, schema.default_stores.len().saturating_mul(384))?;
     add_estimate(&mut estimate, schema.unknown_opcodes.len().saturating_mul(8))?;
+    add_estimate(&mut estimate, MAX_PRESENTATION_NODES.saturating_mul(384))?;
 
     for varstore in &schema.varstores {
         add_text_estimate(&mut estimate, varstore.name.as_deref())?;
@@ -440,11 +497,19 @@ fn error_snapshot(error: &str) -> Vec<u8> {
             "questionCallbacks": false,
             "currentValueDecode": false
         },
+        "presentation": {
+            "api": BIOS_PRESENTATION_API,
+            "ordered": true,
+            "completeForCapturedHii": false,
+            "completeMotherboardSetupSurface": "not-claimed",
+            "rawBytes": "hidden",
+            "nodes": []
+        },
         "formsets": []
     });
     serde_json::to_vec(&document).unwrap_or_else(|_| {
         Vec::from(
-            &b"{\"api\":\"trueos-bios-schema/v1\",\"state\":\"unavailable\",\"readOnly\":true,\"activeWritePath\":\"none\",\"formsets\":[]}"[..],
+            &b"{\"api\":\"trueos-bios-schema/v2\",\"state\":\"unavailable\",\"readOnly\":true,\"activeWritePath\":\"none\",\"presentation\":{\"api\":\"trueos-bios-presentation/v1\",\"ordered\":true,\"nodes\":[]},\"formsets\":[]}"[..],
         )
     })
 }
