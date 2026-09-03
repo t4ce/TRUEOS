@@ -195,7 +195,16 @@ impl WaitQueue {
             }
 
             match timeout.as_mut().poll(cx) {
-                Poll::Ready(()) => Poll::Ready(false),
+                Poll::Ready(()) => {
+                    let mut wakers = self.wakers.lock();
+                    if let Some(index) = wakers
+                        .iter()
+                        .position(|registered| registered.will_wake(cx.waker()))
+                    {
+                        wakers.swap_remove(index);
+                    }
+                    Poll::Ready(false)
+                }
                 Poll::Pending => Poll::Pending,
             }
         })
@@ -423,6 +432,7 @@ type LocalJobFuture = Pin<Box<dyn Future<Output = ()> + 'static>>;
 static JOBS: Mutex<Vec<JobFuture>> = Mutex::new(Vec::new());
 static JOBS_WAIT: WaitQueue = WaitQueue::new();
 const PLATFORM_WAIT_HOST_SCOPE: u16 = 0;
+pub(crate) const BLUEPRINT_IO_WAIT_KEY: u64 = 0x4250_494f_0000_0001;
 
 static PLATFORM_WAIT_QUEUES: Mutex<BTreeMap<(u16, u64), &'static WaitQueue>> =
     Mutex::new(BTreeMap::new());
@@ -486,9 +496,13 @@ pub async fn platform_wait_after_for_vm_async(
     observed: u32,
     timeout_ms: u64,
 ) -> bool {
-    platform_wait_queue(platform_wait_vm_scope(vm_id), key)
-        .wait_after_timeout(observed, timeout_ms)
-        .await
+    let queue = platform_wait_queue(platform_wait_vm_scope(vm_id), key);
+    if timeout_ms == u64::MAX {
+        queue.wait_after(observed).await;
+        true
+    } else {
+        queue.wait_after_timeout(observed, timeout_ms).await
+    }
 }
 
 #[inline]
@@ -499,6 +513,49 @@ pub fn platform_wake_one_for_vm(vm_id: u8, key: u64) -> bool {
 #[inline]
 pub fn platform_wake_all_for_vm(vm_id: u8, key: u64) -> usize {
     platform_wait_queue(platform_wait_vm_scope(vm_id), key).notify_all()
+}
+
+/// Advance every keyed wait generation already owned by one Blueprint VM.
+/// Lifecycle control uses this when the Hull may be outside VMX in a platform wait.
+pub fn platform_wake_vm_scope(vm_id: u8) -> usize {
+    let scope = platform_wait_vm_scope(vm_id);
+    let queues = {
+        let queues = PLATFORM_WAIT_QUEUES.lock();
+        queues
+            .iter()
+            .filter_map(|(&(queue_scope, _), queue)| (queue_scope == scope).then_some(*queue))
+            .collect::<Vec<_>>()
+    };
+    let count = queues.len();
+    for queue in queues {
+        queue.notify_all();
+    }
+    count
+}
+
+/// Wake only existing Blueprint I/O queues. Network producers use this as a
+/// coarse readiness edge; userspace poll/Mio re-probes exact descriptors.
+pub fn platform_wake_all_blueprint_io_waiters() -> usize {
+    let queues = {
+        let queues = PLATFORM_WAIT_QUEUES.lock();
+        queues
+            .iter()
+            .filter_map(|(&(scope, key), queue)| {
+                (scope != PLATFORM_WAIT_HOST_SCOPE && key == BLUEPRINT_IO_WAIT_KEY)
+                    .then_some(*queue)
+            })
+            .collect::<Vec<_>>()
+    };
+    let mut woke = 0usize;
+    for queue in queues {
+        woke = woke.saturating_add(queue.notify_all());
+    }
+    woke
+}
+
+#[inline]
+pub fn platform_wake_blueprint_io_for_vm(vm_id: u8) -> usize {
+    platform_wake_all_for_vm(vm_id, BLUEPRINT_IO_WAIT_KEY)
 }
 
 struct LocalJobQueue {

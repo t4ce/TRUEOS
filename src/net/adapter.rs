@@ -872,9 +872,7 @@ fn pop_command_for_device(device_index: usize) -> Option<(&'static str, NetComma
 }
 
 fn push_event(target: &'static str, event: NetEvent) -> bool {
-    static DROP_COUNT: AtomicU64 = AtomicU64::new(0);
-
-    let wakes_mio = matches!(
+    let wakes_io = matches!(
         event,
         NetEvent::TcpData { .. }
             | NetEvent::TcpEstablished { .. }
@@ -890,14 +888,8 @@ fn push_event(target: &'static str, event: NetEvent) -> bool {
         if ok && target == "net-shell" {
             crate::shell2::backends::net_tcp::notify_net_shell_work();
         }
-        if ok && wakes_mio {
-            crate::mio_compat::notify_net_event();
-        }
-        if !ok && wakes_mio {
-            let n = DROP_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
-            if n <= 2 || n.is_power_of_two() {
-                crate::log_info!(target: "net"; "net: event drop owner={} (mio-signal) count={}\n", target, n);
-            }
+        if ok && wakes_io {
+            let _ = crate::wait::platform_wake_all_blueprint_io_waiters();
         }
         ok
     } else {

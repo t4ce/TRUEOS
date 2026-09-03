@@ -260,15 +260,29 @@ pub unsafe extern "C" fn poll(fds: *mut PollFd, nfds: usize, timeout: c_int) -> 
     };
     let pollfds = unsafe { slice::from_raw_parts_mut(pollfds.as_mut_ptr().cast::<PollFd>(), nfds) };
 
-    // Crossterm's TRUEOS source registers stdin beside Mio's internal wake
-    // pipe. No socket or regular-file readiness can be lost in this shape, so
-    // let the attached terminal producer wake the Hull vthread directly.
+    // Crossterm's legacy blocking source retains its typed terminal wake. All
+    // other Blueprint descriptor sets rendezvous on the VM-local I/O generation.
     let terminal_event_wait = terminal_event_wait_eligible(pollfds);
     if terminal_event_wait {
         crate::r::io::fs_cabi::claim_attached_console_for_terminal_io();
     }
-    let mut remaining_ms = (timeout >= 0).then_some(timeout as u64);
+    let blueprint_wait = !terminal_event_wait
+        && (crate::hv::current_hull_guest_context_vm_id().is_some()
+            || crate::hv::current_guest_execution_context_vm_id().is_some());
+    let deadline_ns = (timeout >= 0).then(|| {
+        crate::r::platform::trueos_platform_monotonic_nanos()
+            .saturating_add((timeout as u64).saturating_mul(1_000_000))
+    });
+    let mut woke_without_ready = false;
+
     loop {
+        // Observe before probing so a producer racing the scan cannot lose an edge.
+        let observed = blueprint_wait.then(|| {
+            crate::r::platform::trueos_tokio_platform_wait_observe(
+                crate::wait::BLUEPRINT_IO_WAIT_KEY,
+            )
+        });
+
         let ready = {
             let mut ready = 0;
             for pollfd in pollfds.iter_mut() {
@@ -316,29 +330,73 @@ pub unsafe extern "C" fn poll(fds: *mut PollFd, nfds: usize, timeout: c_int) -> 
         }
 
         if terminal_event_wait {
-            let wait_ms = remaining_ms.unwrap_or(10_000).max(1);
+            let wait_ms = match deadline_ns {
+                Some(deadline) => {
+                    let now = crate::r::platform::trueos_platform_monotonic_nanos();
+                    if now >= deadline {
+                        TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+                        return 0;
+                    }
+                    deadline.saturating_sub(now).div_ceil(1_000_000).max(1)
+                }
+                None => 10_000,
+            };
             let woke = crate::r::io::fs_cabi::wait_attached_console_readable(wait_ms);
             if woke && crate::r::io::fs_cabi::trueos_cabi_shell_attached_readable_len() != 0 {
                 continue;
             }
-            // A typed resize has no byte/token to report. Returning an empty
-            // event set lets Crossterm compare its terminal-surface snapshot.
             TRUEOS_ERRNO.store(0, Ordering::Relaxed);
             return 0;
         }
 
-        let sleep_ms = match remaining_ms {
-            Some(0) => {
+        if timeout == 0 || woke_without_ready {
+            // A readiness-generation wake with no fd event is intentionally a
+            // spurious poll return. Typed terminal/control state can then be
+            // observed by its userspace source without inventing a fake byte.
+            TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+            return 0;
+        }
+
+        if blueprint_wait {
+            let wait_ms = match deadline_ns {
+                Some(deadline) => {
+                    let now = crate::r::platform::trueos_platform_monotonic_nanos();
+                    if now >= deadline {
+                        TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+                        return 0;
+                    }
+                    deadline.saturating_sub(now).div_ceil(1_000_000).max(1)
+                }
+                None => u64::MAX,
+            };
+            woke_without_ready = crate::r::platform::trueos_tokio_platform_wait_after(
+                crate::wait::BLUEPRINT_IO_WAIT_KEY,
+                observed.unwrap_or_default(),
+                wait_ms,
+            );
+            if !woke_without_ready {
                 TRUEOS_ERRNO.store(0, Ordering::Relaxed);
                 return 0;
             }
-            Some(remaining) => remaining.min(10),
+            continue;
+        }
+
+        let sleep_ms = match deadline_ns {
+            Some(deadline) => {
+                let now = crate::r::platform::trueos_platform_monotonic_nanos();
+                if now >= deadline {
+                    TRUEOS_ERRNO.store(0, Ordering::Relaxed);
+                    return 0;
+                }
+                deadline
+                    .saturating_sub(now)
+                    .div_ceil(1_000_000)
+                    .min(10)
+                    .max(1)
+            }
             None => 10,
         };
         crate::r::io::fs_cabi::trueos_cabi_sleep_ms(sleep_ms);
-        if let Some(remaining) = &mut remaining_ms {
-            *remaining = remaining.saturating_sub(sleep_ms);
-        }
     }
 }
 

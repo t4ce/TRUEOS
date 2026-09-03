@@ -179,10 +179,7 @@ pub extern "Rust" fn trueos_tokio_platform_sleep_ms(ms: u64) {
 #[unsafe(no_mangle)]
 pub extern "Rust" fn trueos_tokio_platform_wait_observe(key: u64) -> u32 {
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        // Hull waits are cooperative sleeps below, so they do not consume a
-        // host wait-queue sequence. Hull wake operations still VM-call into
-        // the host so they can wake service-lane workers.
-        return 0;
+        return crate::hv::vmcall::guest_platform_wait_observe(key);
     }
     if let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() {
         return crate::wait::platform_wait_observe_for_vm(vm_id, key);
@@ -197,12 +194,7 @@ pub extern "Rust" fn trueos_tokio_platform_wait_after(
     timeout_ms: u64,
 ) -> bool {
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        if timeout_ms == 0 {
-            crate::hv::vmcall::guest_yield();
-        } else {
-            crate::hv::vmcall::guest_sleep_ms(timeout_ms);
-        }
-        return false;
+        return crate::hv::vmcall::guest_platform_wait_after(key, observed, timeout_ms);
     }
 
     if let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() {

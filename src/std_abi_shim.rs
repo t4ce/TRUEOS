@@ -30,7 +30,6 @@ static REGULAR_FILE_WORLDS: ProcessRegularFileWorlds = ProcessRegularFileWorlds;
 static FD_FLAGS: ProcessFdFlags = ProcessFdFlags;
 pub(crate) static STD_FD_FLAGS: ProcessStdFdFlags = ProcessStdFdFlags;
 static SOCKET_FDS: ProcessSocketFds = ProcessSocketFds;
-static MIO_LOCAL_REGISTRATIONS: ProcessMioLocalRegistrations = ProcessMioLocalRegistrations;
 static LOGGED_PTHREAD_SYNC: AtomicI32 = AtomicI32::new(0);
 static LOGGED_C_ALLOCATION_TRACK_OVERFLOW: AtomicI32 = AtomicI32::new(0);
 static LOGGED_C_REALLOC_TAG_FALLBACK: AtomicI32 = AtomicI32::new(0);
@@ -56,7 +55,6 @@ const PTHREAD_THREAD_SEQUENCE_MASK: usize = PTHREAD_THREAD_CARRIER_TAG - 1;
 const OPEN_FILE_CAPACITY: usize = crate::allcaps::io::DESCRIPTOR_SOFT_CAP;
 const FD_FLAG_CAPACITY: usize = crate::allcaps::io::DESCRIPTOR_SOFT_CAP;
 const SOCKET_FD_CAPACITY: usize = crate::allcaps::io::DESCRIPTOR_SOFT_CAP;
-const MIO_LOCAL_REGISTRATION_CAPACITY: usize = 64;
 
 pub(crate) const TRUEOS_EAGAIN: c_int = 11;
 const TRUEOS_EADDRINUSE: c_int = 98;
@@ -423,22 +421,6 @@ enum SocketFd {
     },
 }
 
-#[derive(Clone, Copy, Eq, PartialEq)]
-struct MioLocalRegistrationKey {
-    selector_id: usize,
-    fd: c_int,
-}
-
-#[derive(Clone, Copy)]
-struct MioLocalRegistration {
-    selector_id: usize,
-    fd: c_int,
-    token: usize,
-    interests: u8,
-    edge_managed: bool,
-    delivered: u8,
-}
-
 /// One process-wide Unix namespace shared by the Hull and all of its host
 /// service-lane pthread carriers. Each state is page isolated so the selected
 /// VM's pages can be mapped into its otherwise-private Hull RW image.
@@ -455,9 +437,6 @@ struct ProcessSharedState {
     fd_flags: Mutex<FixedKeyMap<c_int, c_int, FD_FLAG_CAPACITY>>,
     std_fd_flags: [AtomicI32; 3],
     socket_fds: Mutex<FixedKeyMap<c_int, SocketFd, SOCKET_FD_CAPACITY>>,
-    mio_local_registrations: Mutex<
-        FixedKeyMap<MioLocalRegistrationKey, MioLocalRegistration, MIO_LOCAL_REGISTRATION_CAPACITY>,
-    >,
     next_file_fd: AtomicI32,
 }
 
@@ -475,7 +454,6 @@ impl ProcessSharedState {
             fd_flags: Mutex::new(FixedKeyMap::new()),
             std_fd_flags: [AtomicI32::new(0), AtomicI32::new(0), AtomicI32::new(0)],
             socket_fds: Mutex::new(FixedKeyMap::new()),
-            mio_local_registrations: Mutex::new(FixedKeyMap::new()),
             next_file_fd: AtomicI32::new(3),
         }
     }
@@ -512,7 +490,6 @@ pub(crate) fn reset_blueprint_process_state(vm_id: u8) {
         flags.store(0, Ordering::Release);
     }
     state.socket_fds.lock().clear();
-    state.mio_local_registrations.lock().clear();
     state.next_file_fd.store(3, Ordering::Release);
 }
 
@@ -600,19 +577,6 @@ struct ProcessSocketFds;
 impl ProcessSocketFds {
     fn lock(&self) -> spin::MutexGuard<'static, FixedKeyMap<c_int, SocketFd, SOCKET_FD_CAPACITY>> {
         process_state().socket_fds.lock()
-    }
-}
-
-struct ProcessMioLocalRegistrations;
-
-impl ProcessMioLocalRegistrations {
-    fn lock(
-        &self,
-    ) -> spin::MutexGuard<
-        'static,
-        FixedKeyMap<MioLocalRegistrationKey, MioLocalRegistration, MIO_LOCAL_REGISTRATION_CAPACITY>,
-    > {
-        process_state().mio_local_registrations.lock()
     }
 }
 
@@ -1500,6 +1464,16 @@ fn dns_resolve_error_to_cabi_errno(err: crate::r::net::vlayer::DnsResolveError) 
 fn active_abi_guest_vm_id() -> Option<u8> {
     crate::hv::current_guest_execution_context_vm_id()
         .or_else(crate::hv::current_vm_id_by_lapic_low)
+}
+
+#[inline]
+fn wake_current_blueprint_io() {
+    if crate::hv::current_hull_guest_context_vm_id().is_some()
+        || crate::hv::current_guest_execution_context_vm_id().is_some()
+    {
+        let _ =
+            crate::r::platform::trueos_tokio_platform_wake_all(crate::wait::BLUEPRINT_IO_WAIT_KEY);
+    }
 }
 
 fn active_abi_alloc_guest_vm_id() -> Option<u8> {
@@ -2850,7 +2824,7 @@ pub unsafe extern "C" fn write(fd: c_int, buf: *const c_void, count: usize) -> i
     }
     drop(table);
     if notify_local {
-        notify_mio_local_fd_event();
+        wake_current_blueprint_io();
     }
     TRUEOS_ERRNO.store(0, Ordering::Relaxed);
     input.len() as isize
@@ -3066,7 +3040,7 @@ pub(crate) fn socket_poll_events(fd: c_int, events: i16) -> Option<i16> {
     if events & POLLOUT != 0 {
         interests |= crate::mio_compat::READY_WRITABLE;
     }
-    let ready = crate::mio_compat::mio_socket_poll_ready_host(backend, interests)?;
+    let ready = crate::mio_compat::mio_socket_poll_ready(backend, interests)?;
     let mut revents = 0i16;
     if ready & crate::mio_compat::READY_READABLE != 0 {
         revents |= POLLIN;
@@ -3081,233 +3055,6 @@ pub(crate) fn socket_poll_events(fd: c_int, events: i16) -> Option<i16> {
         revents |= POLLHUP;
     }
     Some(revents)
-}
-
-/// Mio's TRUEOS selector registers process descriptors, while the kernel
-/// readiness engine intentionally deals only in opaque native socket handles.
-/// Resolve that boundary once here instead of teaching Mio about the process
-/// descriptor table or sending readiness through `poll(2)`.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_mio_selector_register_fd(
-    selector_id: usize,
-    fd: c_int,
-    token: usize,
-    interests: u8,
-) -> i32 {
-    let backend = {
-        let sockets = SOCKET_FDS.lock();
-        match sockets.get(fd) {
-            Some(
-                SocketFd::MioListener { backend, .. }
-                | SocketFd::MioStream { backend }
-                | SocketFd::MioUdp { backend },
-            ) => Some(*backend),
-            Some(_) => return -1,
-            None => None,
-        }
-    };
-    if let Some(backend) = backend {
-        return unsafe {
-            crate::mio_compat::trueos_mio_selector_register_socket(
-                selector_id,
-                backend,
-                token,
-                interests,
-            )
-        };
-    }
-
-    if OPEN_FILES.lock().get(fd).is_none() {
-        return -5;
-    }
-    let edge_managed = interests & crate::mio_compat::INTEREST_EDGE_MANAGED != 0;
-    let interests = interests & !crate::mio_compat::INTEREST_EDGE_MANAGED;
-    if interests == 0 {
-        return -4;
-    }
-    let key = MioLocalRegistrationKey { selector_id, fd };
-    let mut registrations = MIO_LOCAL_REGISTRATIONS.lock();
-    if let Some(registration) = registrations.get_mut(key) {
-        registration.token = token;
-        registration.interests = interests;
-        registration.edge_managed = edge_managed;
-        registration.delivered = 0;
-    } else if registrations
-        .insert(
-            key,
-            MioLocalRegistration {
-                selector_id,
-                fd,
-                token,
-                interests,
-                edge_managed,
-                delivered: 0,
-            },
-        )
-        .is_err()
-    {
-        return -9;
-    }
-    drop(registrations);
-    unsafe { crate::mio_compat::trueos_mio_selector_wake(selector_id) }
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_mio_selector_deregister_fd(selector_id: usize, fd: c_int) -> i32 {
-    let backend = {
-        let sockets = SOCKET_FDS.lock();
-        match sockets.get(fd) {
-            Some(
-                SocketFd::MioListener { backend, .. }
-                | SocketFd::MioStream { backend }
-                | SocketFd::MioUdp { backend },
-            ) => Some(*backend),
-            Some(_) => return -1,
-            None => None,
-        }
-    };
-    if let Some(backend) = backend {
-        return unsafe {
-            crate::mio_compat::trueos_mio_selector_deregister_socket(selector_id, backend)
-        };
-    }
-
-    let removed = MIO_LOCAL_REGISTRATIONS
-        .lock()
-        .remove(MioLocalRegistrationKey { selector_id, fd })
-        .is_some();
-    if !removed {
-        return -5;
-    }
-    unsafe { crate::mio_compat::trueos_mio_selector_wake(selector_id) }
-}
-
-fn mio_local_readiness(file: &OpenFile, interests: u8) -> u8 {
-    const POLLIN: i16 = 0x0001;
-    const POLLOUT: i16 = 0x0004;
-    const POLLERR: i16 = 0x0008;
-    const POLLHUP: i16 = 0x0010;
-
-    let mut poll_interests = 0;
-    if interests & crate::mio_compat::READY_READABLE != 0 {
-        poll_interests |= POLLIN;
-    }
-    if interests & crate::mio_compat::READY_WRITABLE != 0 {
-        poll_interests |= POLLOUT;
-    }
-    let events = open_file_poll_events(file, poll_interests);
-    let mut readiness = 0;
-    if events & POLLIN != 0 {
-        readiness |= crate::mio_compat::READY_READABLE;
-    }
-    if events & POLLOUT != 0 {
-        readiness |= crate::mio_compat::READY_WRITABLE;
-    }
-    if events & POLLERR != 0 {
-        readiness |= crate::mio_compat::READY_ERROR;
-    }
-    if events & POLLHUP != 0 {
-        readiness |= crate::mio_compat::READY_READ_CLOSED | crate::mio_compat::READY_WRITE_CLOSED;
-    }
-    readiness
-}
-
-fn poll_mio_local_registrations(
-    selector_id: usize,
-    out_events: *mut crate::mio_compat::TrueosMioReadyEvent,
-    out_cap: usize,
-) -> usize {
-    if out_cap == 0 {
-        return 0;
-    }
-    let files = OPEN_FILES.lock();
-    let mut registrations = MIO_LOCAL_REGISTRATIONS.lock();
-    let mut ready = Vec::new();
-    for registration in registrations
-        .values_mut()
-        .filter(|registration| registration.selector_id == selector_id)
-    {
-        let current = files
-            .get(registration.fd)
-            .map(|file| mio_local_readiness(file, registration.interests))
-            .unwrap_or(crate::mio_compat::READY_ERROR);
-        let readiness = if registration.edge_managed {
-            registration.delivered &= current;
-            let next = current & !registration.delivered;
-            registration.delivered |= next;
-            next
-        } else {
-            current
-        };
-        if readiness != 0 {
-            ready.push(crate::mio_compat::TrueosMioReadyEvent {
-                token: registration.token,
-                readiness,
-                reserved: [0; 7],
-            });
-            if ready.len() == out_cap {
-                break;
-            }
-        }
-    }
-    drop(registrations);
-    drop(files);
-
-    let mut written = 0;
-    for event in ready {
-        let bytes = unsafe {
-            slice::from_raw_parts(
-                (&event as *const crate::mio_compat::TrueosMioReadyEvent).cast::<u8>(),
-                core::mem::size_of::<crate::mio_compat::TrueosMioReadyEvent>(),
-            )
-        };
-        if !copy_to_abi_out(unsafe { out_events.add(written) }.cast::<u8>(), bytes) {
-            break;
-        }
-        written += 1;
-    }
-    written
-}
-
-fn notify_mio_local_fd_event() {
-    let mut selectors = Vec::new();
-    {
-        let registrations = MIO_LOCAL_REGISTRATIONS.lock();
-        for registration in registrations.values() {
-            if !selectors.contains(&registration.selector_id) {
-                selectors.push(registration.selector_id);
-            }
-        }
-    }
-    for selector_id in selectors {
-        let _ = unsafe { crate::mio_compat::trueos_mio_selector_wake(selector_id) };
-    }
-}
-
-/// Merge event-notified process-local pipes with the native network selector.
-/// Local descriptors are checked only on registration or an actual wake; the
-/// old periodic `poll(2)` scan is not used.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_mio_selector_poll_fds(
-    selector_id: usize,
-    out_events: *mut crate::mio_compat::TrueosMioReadyEvent,
-    out_cap: usize,
-    timeout_nanos: u64,
-) -> usize {
-    if out_events.is_null() && out_cap != 0 {
-        return 0;
-    }
-    let local = poll_mio_local_registrations(selector_id, out_events, out_cap);
-    if local != 0 || timeout_nanos == 0 {
-        return local;
-    }
-    let native = unsafe {
-        crate::mio_compat::trueos_mio_selector_poll(selector_id, out_events, out_cap, timeout_nanos)
-    };
-    if native != 0 {
-        return native;
-    }
-    poll_mio_local_registrations(selector_id, out_events, out_cap)
 }
 
 #[unsafe(no_mangle)]
@@ -3944,10 +3691,11 @@ pub unsafe extern "C" fn send(
             return -1;
         }
         tx.bytes.extend_from_slice(input);
+        let written = input.len();
         drop(tx);
-        notify_mio_local_fd_event();
         TRUEOS_ERRNO.store(0, Ordering::Relaxed);
-        return input.len() as isize;
+        wake_current_blueprint_io();
+        return written as isize;
     }
 
     let (backend, is_mio) = {

@@ -1545,27 +1545,6 @@ fn resolve_runtime_abi_import(name: &str) -> Option<usize> {
         "trueos_mio_tcp_listener_accept" => {
             Some(crate::mio_compat::trueos_mio_tcp_listener_accept as *const () as usize)
         }
-        "trueos_mio_selector_register_socket" => {
-            Some(crate::mio_compat::trueos_mio_selector_register_socket as *const () as usize)
-        }
-        "trueos_mio_selector_register_fd" => {
-            Some(crate::std_abi_shim::trueos_mio_selector_register_fd as *const () as usize)
-        }
-        "trueos_mio_selector_deregister_socket" => {
-            Some(crate::mio_compat::trueos_mio_selector_deregister_socket as *const () as usize)
-        }
-        "trueos_mio_selector_deregister_fd" => {
-            Some(crate::std_abi_shim::trueos_mio_selector_deregister_fd as *const () as usize)
-        }
-        "trueos_mio_selector_poll" => {
-            Some(crate::mio_compat::trueos_mio_selector_poll as *const () as usize)
-        }
-        "trueos_mio_selector_poll_fds" => {
-            Some(crate::std_abi_shim::trueos_mio_selector_poll_fds as *const () as usize)
-        }
-        "trueos_mio_selector_wake" => {
-            Some(crate::mio_compat::trueos_mio_selector_wake as *const () as usize)
-        }
         _ => None,
     }
 }
