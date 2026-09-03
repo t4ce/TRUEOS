@@ -1,0 +1,35 @@
+﻿-------------------------------------------------
+MPG Z790I EDGE WIFI (MS-7E03) V1.I BIOS Release
+-------------------------------------------------
+
+1. This is AMI BIOS release 
+2. This BIOS fixes the following problem of the previous version: 
+–  Improved memory compatibility. 
+-  Updated ME firmware 16.1.42.2872 
+
+-  ME Firmware ver: ME_16.1.42.2872  (download) 
+   ME Firmware update SOP 
+
+3. 2026/08/28 
+
+[Below information is Traditional Chinese language] 
+A. AMI BIOS 正式發行 
+B. 此版本修正下列問題: 
+–  改善記憶體相容性。 
+-  更新 ME firmware 16.1.42.2872 
+
+-  ME Firmware ver: ME_16.1.42.2872  (下載) 
+   ME Firmware 更新步驟 
+
+C. 更新日期: 公元2026年8月28日 
+
+[Below information is Simplified Chinese language] 
+A. AMI BIOS 正式发行 
+B. 此版本修正下列问题: 
+–  改善记忆体相容性。 
+-  更新 ME firmware 16.1.42.2872 
+
+-  ME Firmware ver: ME_16.1.42.2872  (下载) 
+   ME Firmware 更新步骤 
+
+C. 更新日期: 公元2026年8月28号

@@ -1748,7 +1748,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &INTEL_HDA_AUDIO_DEMO_STARTED,
         spawn_intel_hda_audio_demo_task,
     ),
-    TaskSpec::enabled("raple-service", 0, &RAPLE_SERVICE_STARTED, spawn_raple_service),
+    TaskSpec::disabled("raple-service", 0, &RAPLE_SERVICE_STARTED, spawn_raple_service),
     TaskSpec::enabled("thermal-service", 0, &THERMAL_SERVICE_STARTED, spawn_thermal_service),
     TaskSpec::enabled_gated(
         "html_fetch_service",
