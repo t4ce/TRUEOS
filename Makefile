@@ -64,7 +64,10 @@ BLUEPRINTS_DIR ?= ../TRUEOS-Blueprints
 BUILDIN_MANIFEST := $(BLUEPRINTS_DIR)/buildins.json
 BUILDIN_APP_NAMES := $(shell if [ -f "$(BUILDIN_MANIFEST)" ]; then python3 -c 'import json, sys; print(*json.load(open(sys.argv[1]))["buildins"])' "$(BUILDIN_MANIFEST)" 2>/dev/null; fi)
 BUILDIN_BP_FILES := $(addprefix $(BLUEPRINTS_DIR)/dist/,$(addsuffix .bp,$(BUILDIN_APP_NAMES)))
-BUILDIN_COMMON_INPUTS := $(shell if [ -d "$(BLUEPRINTS_DIR)" ]; then find "$(BLUEPRINTS_DIR)/src" "$(BLUEPRINTS_DIR)/api" "$(BLUEPRINTS_DIR)/.cargo" -type f 2>/dev/null; fi) $(wildcard $(BLUEPRINTS_DIR)/Cargo.toml $(BLUEPRINTS_DIR)/rust-toolchain.toml $(BLUEPRINTS_DIR)/apps.json)
+# Build-ins are compiled against the vendored dependency tree. Include it in
+# the prerequisites so a Mio/crossterm (or other vendor) change cannot leave a
+# previously packed Blueprint looking up-to-date.
+BUILDIN_COMMON_INPUTS := $(shell if [ -d "$(BLUEPRINTS_DIR)" ]; then find "$(BLUEPRINTS_DIR)/src" "$(BLUEPRINTS_DIR)/api" "$(BLUEPRINTS_DIR)/.cargo" "$(BLUEPRINTS_DIR)/vendor" -type f 2>/dev/null; fi) $(wildcard $(BLUEPRINTS_DIR)/Cargo.toml $(BLUEPRINTS_DIR)/rust-toolchain.toml $(BLUEPRINTS_DIR)/apps.json)
 ENABLE_BLUEPRINTS ?= 0
 ENABLE_WEAVE_HELLO ?= 0
 # When enabled, install FirmwareScout.efi as BOOTX64.EFI (preserving the
