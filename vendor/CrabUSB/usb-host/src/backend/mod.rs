@@ -8,6 +8,8 @@ use usb_if::err::USBError;
 use crate::backend::ty::{DeviceInfoOp, DeviceOp, ProbedDeviceInfoOp};
 #[cfg(kmod)]
 use crate::diag::{XhciDirectRequest, XhciDirectResponse};
+#[cfg(kmod)]
+use crate::recover::{XhciRecoveryRequest, XhciRecoveryResponse};
 
 #[cfg(umod)]
 pub mod umod;
@@ -59,4 +61,10 @@ pub(crate) trait BackendOp: Send + Any + 'static {
         &'a mut self,
         request: XhciDirectRequest,
     ) -> BoxFuture<'a, Result<XhciDirectResponse, USBError>>;
+
+    #[cfg(kmod)]
+    fn xhci_recover<'a>(
+        &'a mut self,
+        request: XhciRecoveryRequest,
+    ) -> BoxFuture<'a, Result<XhciRecoveryResponse, USBError>>;
 }
