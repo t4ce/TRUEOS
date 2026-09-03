@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
-"""Mechanical guard for the read-only Shell2 BIOS schema and TLB dump."""
+"""Mechanical guard for the read-only Shell2 BIOS schema and dedicated dump."""
 
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-BIOS_TLB_DUMP = ROOT / "src/shell2/cmds/bios_tlb_dump.rs"
-BIOS_TLB_DUMP_PARTS = sorted(
-    (ROOT / "src/shell2/cmds/bios_tlb_dump").glob("*.rs")
-)
+BIOS_DUMP = ROOT / "src/shell2/cmds/bios_tlb_dump.rs"
+BIOS_DUMP_PARTS = sorted((ROOT / "src/shell2/cmds/bios_tlb_dump").glob("*.rs"))
+OBSERVED = ROOT / "src/shell2/cmds/bios_observed.rs"
+DEDICATED_WRITER = ROOT / "src/shell2/cmds/bios_dump.rs"
 TLB_WRITER = ROOT / "src/shell2/cmds/tlb_hfi_dump.rs"
-if len(BIOS_TLB_DUMP_PARTS) != 5:
-    raise SystemExit("expected five BIOS TLB dump source parts")
+if len(BIOS_DUMP_PARTS) != 5:
+    raise SystemExit("expected five BIOS dump source parts")
+
 SOURCES = [
     ROOT / "src/shell2/cmds/bios_hii.rs",
     *sorted((ROOT / "src/shell2/cmds/bios_hii").glob("*.rs")),
@@ -19,8 +20,10 @@ SOURCES = [
     ROOT / "src/shell2/cmds/bios_browser.rs",
     ROOT / "src/shell2/cmds/bios_blueprint.rs",
     *sorted((ROOT / "src/shell2/cmds/bios_browser").glob("*.rs")),
-    BIOS_TLB_DUMP,
-    *BIOS_TLB_DUMP_PARTS,
+    BIOS_DUMP,
+    *BIOS_DUMP_PARTS,
+    OBSERVED,
+    DEDICATED_WRITER,
 ]
 ROUTER = ROOT / "src/shell2/shell2_cmd.rs"
 
@@ -47,19 +50,18 @@ for token in forbidden_calls:
     if token in folded:
         raise SystemExit(f"read-only BIOS boundary violated by token: {token}")
 
-required_output_guards = (
+for token in (
     "active_write_path=none",
     "trueos_write    locked",
     "captured-redacted",
     "question_match=none",
     "validated-question-records-only",
-)
-for token in required_output_guards:
+):
     if token not in text:
         raise SystemExit(f"missing BIOS safety/output guard: {token}")
 
 router = ROUTER.read_text(encoding="utf-8")
-for module in ("bios_hii::try_parse", "bios_browser::try_parse"):
+for module in ("bios_hii::try_parse", "bios_browser::try_parse", "bios_dump::start"):
     if module not in router:
         raise SystemExit(f"Shell2 router does not expose {module}")
 
@@ -74,23 +76,43 @@ for command in ("schema", "forms", "find", "show", "options", "storage"):
     if f'"{command}"' not in browser:
         raise SystemExit(f"missing BIOS browser command: {command}")
 
-bios_tlb_dump = "\n".join(
+bios_dump = "\n".join(
     path.read_text(encoding="utf-8")
-    for path in [BIOS_TLB_DUMP, *BIOS_TLB_DUMP_PARTS]
+    for path in [BIOS_DUMP, *BIOS_DUMP_PARTS, OBSERVED, DEDICATED_WRITER]
 )
-required_tlb_dump_guards = (
-    "trueos.bios.tlb.ndjson.v1",
-    "bulk_strings=included-explicit-tlb-dump",
-    "all-hii-export-bytes",
+for token in (
+    "trueos.bios.dump.ndjson.v2",
+    "complete_for_captured_hii=true",
+    "complete_motherboard_setup_surface=not-claimed",
+    "all-ordered-ifr-nodes",
+    '"record": "ifr-node"',
+    '"record": "ordered-ifr-summary"',
+    "semantically_unresolved_opcodes",
     "redacted-not-included",
-    '"record": "raw-hii-bytes"',
-    '"unknown-opcode"',
-)
-for token in required_tlb_dump_guards:
-    if token not in bios_tlb_dump:
-        raise SystemExit(f"missing BIOS TLB dump contract: {token}")
+    "trueos/pci/bios.txt",
+):
+    if token not in bios_dump:
+        raise SystemExit(f"missing dedicated BIOS dump contract: {token}")
 
-if "bios_tlb_dump::append_dump" not in TLB_WRITER.read_text(encoding="utf-8"):
-    raise SystemExit("tlb dump does not append the complete read-only BIOS surface")
+observed = OBSERVED.read_text(encoding="utf-8")
+for opcode_name in (
+    "subtitle",
+    "text",
+    "password",
+    "ref",
+    "eq-id-val",
+    "or",
+    "set-expression",
+    "write-expression",
+    "uint64-expression",
+    "true-expression",
+    "this-expression",
+    "guid-extension",
+):
+    if opcode_name not in observed:
+        raise SystemExit(f"observed IFR decoder missing: {opcode_name}")
 
-print("bios-schema-boundary: read-only surface and complete TLB dump verified")
+if "bios_tlb_dump::append_dump" in TLB_WRITER.read_text(encoding="utf-8"):
+    raise SystemExit("generic tlb dump still embeds the BIOS dump")
+
+print("bios-schema-boundary: read-only decoder and dedicated BIOS dump verified")

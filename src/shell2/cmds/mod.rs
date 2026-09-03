@@ -6,6 +6,7 @@ pub(crate) mod bios;
 pub(crate) mod bios_browser;
 pub(crate) mod bios_blueprint;
 pub(crate) mod bios_capture;
+pub(crate) mod bios_dump;
 pub(crate) mod bios_hii;
 pub(crate) mod bios_ifr;
 pub(crate) mod bios_observed;

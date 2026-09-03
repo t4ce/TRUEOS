@@ -4,23 +4,26 @@ use core::fmt::Write;
 use super::bios_hii::{HiiCatalogue, StringSource};
 use super::bios_ifr::{BiosSchema, Form, FormSet, IfrValue, OpaqueOpcode, Question};
 
-const DUMP_FORMAT: &str = "trueos.bios.tlb.ndjson.v1";
+const DUMP_FORMAT: &str = "trueos.bios.dump.ndjson.v2";
 const RAW_ROW_BYTES: usize = 32;
 
-/// Append the complete cached, read-only BIOS surface to the ordinary TLB dump.
+/// Append the complete cached, read-only BIOS surface to a dedicated BIOS dump.
 ///
 /// The line-oriented JSON records include every indexed package, every decoded
-/// string, the full IFR schema, all retained opaque opcodes, and the exact validated
-/// bytes of the complete HII export. Captured configuration contents stay redacted.
+/// string, the validated IFR schema, every source-ordered IFR node, all retained
+/// opaque metadata, and the exact validated bytes of the captured HII export.
+/// Captured configuration contents stay redacted.
 pub(crate) fn append_dump(out: &mut String) {
-    writeln!(out, "=== BIOS HII Catalogue and IFR Object Model ===").unwrap();
+    writeln!(out, "=== BIOS HII Complete Read-Only Dump ===").unwrap();
     writeln!(out, "dump_format={DUMP_FORMAT}").unwrap();
     writeln!(
         out,
-        "coverage=all-indexed-packages,all-decoded-strings,all-schema-records,all-opaque-opcodes,all-hii-export-bytes"
+        "coverage=all-indexed-packages,all-decoded-strings,all-schema-records,all-ordered-ifr-nodes,all-hii-export-bytes"
     )
     .unwrap();
-    writeln!(out, "bulk_strings=included-explicit-tlb-dump").unwrap();
+    writeln!(out, "complete_for_captured_hii=true").unwrap();
+    writeln!(out, "complete_motherboard_setup_surface=not-claimed").unwrap();
+    writeln!(out, "bulk_strings=included-explicit-bios-dump").unwrap();
     writeln!(out, "configuration_content=captured-redacted-if-present").unwrap();
     writeln!(out, "active_write_path=none").unwrap();
 
@@ -90,12 +93,14 @@ fn append_catalogue_records(out: &mut String, catalogue: &HiiCatalogue) {
             "extension_blocks": catalogue.stats.extension_blocks,
             "truncated_strings": catalogue.stats.truncated_strings,
             "malformed_packages": catalogue.stats.malformed_packages,
+            "complete_for_captured_hii": true,
+            "complete_motherboard_setup_surface": "not-claimed",
             "current_configuration": if catalogue.capture.config_captured {
                 "captured-redacted"
             } else {
                 "not-captured"
             },
-            "bulk_strings": "included-explicit-tlb-dump",
+            "bulk_strings": "included-explicit-bios-dump",
             "active_write_path": "none",
         }),
     );
