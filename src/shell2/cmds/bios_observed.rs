@@ -79,7 +79,7 @@ fn append_package_nodes(
             context.form_id = None;
             *next_formset_index = next_formset_index.saturating_add(1);
         } else if opcode == 0x01 && bytes.len() >= 6 {
-            context.form_id = read_u16(bytes, 2);
+            context.form_id = Some(read_u16(bytes, 2));
         }
 
         let opcode_name = opcode_name(opcode);
