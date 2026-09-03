@@ -51,18 +51,28 @@ pub(crate) const CPP_DEMO_RGBA8_SOURCE_PATH: &str =
 pub(crate) const SHADERTOY_MANDELBROT_KERNEL_NAME: &str = "shadertoy_mandelbrot";
 pub(crate) const SHADERTOY_CUBE_FIELD_KERNEL_NAME: &str = "shadertoy_cube_field";
 pub(crate) const SHADERTOY_NGUYEN_KERNEL_NAME: &str = "shadertoy_nguyen";
+pub(crate) const SHADERTOY_PALETTE_GRID_KERNEL_NAME: &str = "shadertoy_palette_grid";
+pub(crate) const SHADERTOY_COSMIC_STRANDS_KERNEL_NAME: &str = "shadertoy_cosmic_strands";
 pub(crate) const SHADERTOY_MANDELBROT_OPENCL_SOURCE: &str =
     include_str!("../../../crates/trueos-shader/gpgpu/kernels/shadertoy_mandelbrot.clcpp");
 pub(crate) const SHADERTOY_CUBE_FIELD_OPENCL_SOURCE: &str =
     include_str!("../../../crates/trueos-shader/gpgpu/kernels/shadertoy_cube_field.clcpp");
 pub(crate) const SHADERTOY_NGUYEN_OPENCL_SOURCE: &str =
     include_str!("../../../crates/trueos-shader/gpgpu/kernels/shadertoy_nguyen.clcpp");
+pub(crate) const SHADERTOY_PALETTE_GRID_OPENCL_SOURCE: &str =
+    include_str!("../../../crates/trueos-shader/gpgpu/kernels/shadertoy_palette_grid.clcpp");
+pub(crate) const SHADERTOY_COSMIC_STRANDS_OPENCL_SOURCE: &str =
+    include_str!("../../../crates/trueos-shader/gpgpu/kernels/shadertoy_cosmic_strands.clcpp");
 pub(crate) const SHADERTOY_MANDELBROT_SOURCE_PATH: &str =
     "crates/trueos-shader/gpgpu/kernels/shadertoy_mandelbrot.clcpp";
 pub(crate) const SHADERTOY_CUBE_FIELD_SOURCE_PATH: &str =
     "crates/trueos-shader/gpgpu/kernels/shadertoy_cube_field.clcpp";
 pub(crate) const SHADERTOY_NGUYEN_SOURCE_PATH: &str =
     "crates/trueos-shader/gpgpu/kernels/shadertoy_nguyen.clcpp";
+pub(crate) const SHADERTOY_PALETTE_GRID_SOURCE_PATH: &str =
+    "crates/trueos-shader/gpgpu/kernels/shadertoy_palette_grid.clcpp";
+pub(crate) const SHADERTOY_COSMIC_STRANDS_SOURCE_PATH: &str =
+    "crates/trueos-shader/gpgpu/kernels/shadertoy_cosmic_strands.clcpp";
 pub(crate) const CPP_AUDIO_VISUALIZER_RGBA8_KERNEL_NAME: &str = "cpp_audio_visualizer_rgba8";
 pub(crate) const CPP_AUDIO_VISUALIZER_RGBA8_OPENCL_SOURCE: &str =
     include_str!("../../../crates/trueos-shader/gpgpu/kernels/cpp_audio_visualizer_rgba8.clcpp");
@@ -143,6 +153,8 @@ pub(crate) fn kernel_opencl_source(name: &str) -> Option<&'static str> {
         SHADERTOY_MANDELBROT_KERNEL_NAME => Some(SHADERTOY_MANDELBROT_OPENCL_SOURCE),
         SHADERTOY_CUBE_FIELD_KERNEL_NAME => Some(SHADERTOY_CUBE_FIELD_OPENCL_SOURCE),
         SHADERTOY_NGUYEN_KERNEL_NAME => Some(SHADERTOY_NGUYEN_OPENCL_SOURCE),
+        SHADERTOY_PALETTE_GRID_KERNEL_NAME => Some(SHADERTOY_PALETTE_GRID_OPENCL_SOURCE),
+        SHADERTOY_COSMIC_STRANDS_KERNEL_NAME => Some(SHADERTOY_COSMIC_STRANDS_OPENCL_SOURCE),
         CPP_AUDIO_VISUALIZER_RGBA8_KERNEL_NAME => Some(CPP_AUDIO_VISUALIZER_RGBA8_OPENCL_SOURCE),
         PARTICLE_CRAFT_KERNEL_NAME
         | PARTICLE_CRAFT_STEP_KERNEL_NAME
@@ -194,6 +206,8 @@ pub(crate) fn kernel_source_path(name: &str) -> Option<&'static str> {
         SHADERTOY_MANDELBROT_KERNEL_NAME => Some(SHADERTOY_MANDELBROT_SOURCE_PATH),
         SHADERTOY_CUBE_FIELD_KERNEL_NAME => Some(SHADERTOY_CUBE_FIELD_SOURCE_PATH),
         SHADERTOY_NGUYEN_KERNEL_NAME => Some(SHADERTOY_NGUYEN_SOURCE_PATH),
+        SHADERTOY_PALETTE_GRID_KERNEL_NAME => Some(SHADERTOY_PALETTE_GRID_SOURCE_PATH),
+        SHADERTOY_COSMIC_STRANDS_KERNEL_NAME => Some(SHADERTOY_COSMIC_STRANDS_SOURCE_PATH),
         CPP_AUDIO_VISUALIZER_RGBA8_KERNEL_NAME => Some(CPP_AUDIO_VISUALIZER_RGBA8_SOURCE_PATH),
         PARTICLE_CRAFT_KERNEL_NAME
         | PARTICLE_CRAFT_STEP_KERNEL_NAME
@@ -404,6 +418,12 @@ include!(
 include!(
     "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/shadertoy_nguyen.contract.rs"
 );
+include!(
+    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/shadertoy_palette_grid.contract.rs"
+);
+include!(
+    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/shadertoy_cosmic_strands.contract.rs"
+);
 pub(crate) const SHADERTOY_MANDELBROT_ADLS_BIN: &[u8] = include_bytes!(
     "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/shadertoy_mandelbrot.bin"
 );
@@ -422,11 +442,25 @@ pub(crate) const SHADERTOY_NGUYEN_ADLS_BIN: &[u8] = include_bytes!(
 pub(crate) const SHADERTOY_NGUYEN_ADLS_SPV: &[u8] = include_bytes!(
     "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/shadertoy_nguyen.spv"
 );
+pub(crate) const SHADERTOY_PALETTE_GRID_ADLS_BIN: &[u8] = include_bytes!(
+    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/shadertoy_palette_grid.bin"
+);
+pub(crate) const SHADERTOY_PALETTE_GRID_ADLS_SPV: &[u8] = include_bytes!(
+    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/shadertoy_palette_grid.spv"
+);
+pub(crate) const SHADERTOY_COSMIC_STRANDS_ADLS_BIN: &[u8] = include_bytes!(
+    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/shadertoy_cosmic_strands.bin"
+);
+pub(crate) const SHADERTOY_COSMIC_STRANDS_ADLS_SPV: &[u8] = include_bytes!(
+    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/shadertoy_cosmic_strands.spv"
+);
 const _: () = {
     let contracts = [
         SHADERTOY_MANDELBROT_ADLS_CPP_ABI_CONTRACT,
         SHADERTOY_CUBE_FIELD_ADLS_CPP_ABI_CONTRACT,
         SHADERTOY_NGUYEN_ADLS_CPP_ABI_CONTRACT,
+        SHADERTOY_PALETTE_GRID_ADLS_CPP_ABI_CONTRACT,
+        SHADERTOY_COSMIC_STRANDS_ADLS_CPP_ABI_CONTRACT,
     ];
     let mut index = 0;
     while index < contracts.len() {
@@ -448,6 +482,8 @@ const _: () = {
     assert!(SHADERTOY_MANDELBROT_ADLS_CPP_ABI_CONTRACT.bindings.len() == 1);
     assert!(SHADERTOY_CUBE_FIELD_ADLS_CPP_ABI_CONTRACT.bindings.len() == 2);
     assert!(SHADERTOY_NGUYEN_ADLS_CPP_ABI_CONTRACT.bindings.len() == 1);
+    assert!(SHADERTOY_PALETTE_GRID_ADLS_CPP_ABI_CONTRACT.bindings.len() == 1);
+    assert!(SHADERTOY_COSMIC_STRANDS_ADLS_CPP_ABI_CONTRACT.bindings.len() == 1);
 };
 include!(
     "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/cpp_audio_visualizer_rgba8.contract.rs"

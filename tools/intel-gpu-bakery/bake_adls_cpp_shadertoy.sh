@@ -15,7 +15,7 @@ publish_dir="${kernel_dir}/artifacts/adls/cpp"
 profile="${tool_dir}/profiles/adls-4680-r0c-cpp.json"
 toolchain_lock="${tool_dir}/toolchains/adls-shadertoy-cpp-proof.lock.json"
 
-shaders=(mandelbrot cube_field nguyen)
+shaders=(mandelbrot cube_field nguyen palette_grid cosmic_strands)
 for shader in "${shaders[@]}"; do
   kernel_name="shadertoy_${shader}"
   "${python_bin}" -B "${adapter_dir}/export_kernel.py" \

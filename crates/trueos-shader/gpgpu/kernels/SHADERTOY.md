@@ -11,7 +11,7 @@ Regenerate and reproducibly verify the complete catalog with:
 make intel-gpu-bake-shadertoy-cpp
 ```
 
-The Blueprint ABI admits only catalog IDs 1 through 3 and a pointer-free,
+The Blueprint ABI admits only catalog IDs 1 through 5 and a pointer-free,
 64-byte ShaderToy uniform block. Source text, SPIR-V, Zebin, arbitrary dispatch
 geometry, pointers, and GPU virtual addresses remain kernel-owned pending a
 broader security analysis.
@@ -38,7 +38,7 @@ AUTHORING (offline; changes what can be selected)
         |
         | compiled into the kernel catalog
         v
-  reviewed runtime catalog: IDs 1, 2, 3
+reviewed runtime catalog: IDs 1, 2, 3, 4, 5
 
 FRAME (runtime; writes one UI4 back buffer)
 
@@ -142,6 +142,8 @@ The current artifacts are:
 | 1 | `shadertoy_mandelbrot` | `79e566ad2db01a1a2467e0289bd97e9c77c67be7bd4a59d957dadd84e0ec32d1` |
 | 2 | `shadertoy_cube_field` | `0d48ef4d170eafe0cec5ae3952abdc6e57e865b195dbc3fc137ca7eb1b25d736` |
 | 3 | `shadertoy_nguyen` | `1dbc80b468dd896073dd17c3963a5c7cccf814365e21f040e05a3522fea4cd9c` |
+| 4 | `shadertoy_palette_grid` | `98a5a39154a9021e2e09407c5188644ac744eedae4031efdf395f6619b32fd40` |
+| 5 | `shadertoy_cosmic_strands` | `9a275f036deac274541a34256c09140ecd3f98e392c4963a27e6ac1db5b82500` |
 
 All three contracts are SIMD16 with 96 bytes of cross-thread data, 96 bytes of
 per-thread local IDs, and no scratch or SLM. The cube-field artifact exposes
