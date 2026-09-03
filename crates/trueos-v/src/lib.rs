@@ -40,6 +40,7 @@ pub mod legacy_fs_abi;
 pub mod sync;
 pub mod varchive;
 pub mod vaudio;
+pub mod vbios;
 pub mod vcabi;
 pub mod vclock;
 pub mod vfetch;
