@@ -350,6 +350,20 @@ pub fn probe_pci(pci_dev: &PciDevice) -> bool {
         pci_dev.function
     );
 
+    const PCI_CLAIM_OWNER: &str = "net/wifi";
+    if let Err(error) = crate::pci::claim_device(pci_dev, PCI_CLAIM_OWNER) {
+        crate::log!(
+            "wifi: PCI claim failed for {:04X}:{:04X} at {}.{}.{}: {:?}",
+            pci_dev.vendor_id,
+            pci_dev.device_id,
+            pci_dev.bus,
+            pci_dev.slot,
+            pci_dev.function,
+            error
+        );
+        return false;
+    }
+
     // Try Intel WiFi Link 4965AGN
     if pci_dev.vendor_id == 0x8086 {
         if let Some(driver) = super::iwl4965::probe(pci_dev) {
@@ -358,5 +372,11 @@ pub fn probe_pci(pci_dev: &PciDevice) -> bool {
         }
     }
 
+    let _ = crate::pci::release_device_claim(
+        pci_dev.bus,
+        pci_dev.slot,
+        pci_dev.function,
+        PCI_CLAIM_OWNER,
+    );
     false
 }

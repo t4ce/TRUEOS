@@ -52,6 +52,11 @@ pub(crate) mod flags {
     /// operability logs.
     pub(crate) const BOOT_DIAG_PROFILE_ENABLED: bool = false;
 
+    /// Focused Wi-Fi PCI bring-up profile. Keep this enabled while validating
+    /// the passed-through Intel CNVi function: its claim, BAR discovery, and
+    /// deferred driver-probe records are emitted at Net/Info.
+    pub(crate) const WIFI_PCI_DIAG_PROFILE_ENABLED: bool = true;
+
     /// Focused Lumen inference performance profile.
     ///
     /// Global/Info carries the cold model pack/seal, sampled RCS phases, sparse
@@ -111,6 +116,8 @@ pub(crate) mod flags {
     };
     pub(crate) const NET_LOG_LEVEL: LogLevelPolicy = if BOOT_DIAG_PROFILE_ENABLED {
         LogLevelPolicy::up(LogLevelFilter::Trace)
+    } else if WIFI_PCI_DIAG_PROFILE_ENABLED {
+        LogLevelPolicy::up(LogLevelFilter::Info)
     } else {
         LogLevelPolicy::up(LogLevelFilter::Warn)
     };

@@ -315,6 +315,39 @@ pub fn init() {
     let mut added: usize = 0;
     let mut dormant_detected: usize = 0;
 
+    // The Intel CNVi function is a real PCI network device, but it is not one
+    // of the Ethernet-style ActiveDevice variants below. Probe it separately
+    // so enumeration, ownership, and BAR mapping are still exercised.
+    let wifi_pci = crate::pci::with_devices(|devices| {
+        devices
+            .iter()
+            .copied()
+            .find(|dev| dev.vendor_id == 0x8086 && dev.device_id == 0x7A70)
+    });
+    if let Some(dev) = wifi_pci {
+        if wifi::probe_pci(&dev) {
+            crate::log_info!(
+                target: "net";
+                "net/wifi: claimed {:04x}:{:04x} at {:02x}:{:02x}.{} and mapped BAR0\n",
+                dev.vendor_id,
+                dev.device_id,
+                dev.bus,
+                dev.slot,
+                dev.function
+            );
+        } else {
+            crate::log_warn!(
+                target: "net";
+                "net/wifi: probe failed for {:04x}:{:04x} at {:02x}:{:02x}.{}\n",
+                dev.vendor_id,
+                dev.device_id,
+                dev.bus,
+                dev.slot,
+                dev.function
+            );
+        }
+    }
+
     // Ordering matters: most of the stack defaults to device 0 as the primary
     // interface (e.g. `mac_address()` and early boot probes). Prefer virtio in
     // virtualized environments so we get the best-performing/most-reliable NIC

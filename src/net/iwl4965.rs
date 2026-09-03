@@ -66,6 +66,7 @@ const INTEL_VENDOR: u16 = 0x8086;
 pub const IWL4965_DEVICE_IDS: &[u16] = &[
     0x4229, // WiFi Link 4965AGN
     0x4230, // WiFi Link 4965AG_1
+    0x7A70, // Intel 700 Series chipset CNVi WiFi
 ];
 
 /// Also support later Intel WiFi cards that may appear on other ThinkPads
@@ -676,8 +677,17 @@ impl Iwl4965 {
             return Err("BAR0 is zero");
         }
 
-        // The iwl4965 uses 8KB of MMIO space
-        self.mmio_size = 0x2000; // 8KB
+        let bar_size = crate::pci::bar_size_bytes(
+            pci_dev.bus,
+            pci_dev.slot,
+            pci_dev.function,
+            0,
+        )
+        .ok_or("BAR0 size unavailable")?;
+        if bar_size < 0x3500 {
+            return Err("BAR0 is too small for iwl registers");
+        }
+        self.mmio_size = usize::try_from(bar_size).map_err(|_| "BAR0 size is too large")?;
 
         // Map the MMIO region into virtual address space via HHDM
         let virt_addr =
