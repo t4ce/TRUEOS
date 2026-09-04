@@ -15,6 +15,7 @@ fn parse_hii_export(
         packages: Vec::new(),
         string_packages: Vec::new(),
         form_packages: Vec::new(),
+        device_path_packages: Vec::new(),
         stats: CatalogueStats::default(),
     };
     let mut list_offset = 0usize;
@@ -115,6 +116,16 @@ fn parse_hii_export(
                         return Err(String::from("HII form-package count exceeds bound"));
                     }
                     catalogue.form_packages.push(FormPackageRecord {
+                        list_index,
+                        package_index,
+                        bytes: package_bytes.to_vec(),
+                    });
+                }
+                HII_DEVICE_PATH => {
+                    if catalogue.device_path_packages.len() >= MAX_DEVICE_PATH_PACKAGES {
+                        return Err(String::from("HII device-path package count exceeds bound"));
+                    }
+                    catalogue.device_path_packages.push(DevicePathPackageRecord {
                         list_index,
                         package_index,
                         bytes: package_bytes.to_vec(),
