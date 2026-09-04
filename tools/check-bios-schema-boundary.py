@@ -115,8 +115,10 @@ for opcode_name in (
 
 blueprint = BLUEPRINT.read_text(encoding="utf-8")
 for token in (
-    "trueos-bios-schema/v2",
+    "trueos-bios-schema/v3",
     "trueos-bios-presentation/v1",
+    '"platform": platform',
+    '"runtime": runtime',
     '"presentation"',
     '"completeForCapturedHii": true',
     '"completeMotherboardSetupSurface": "not-claimed"',

@@ -11,7 +11,7 @@ use super::bios_ifr::{
     QuestionOption, StorageBinding, VarStore, VisibilityCondition,
 };
 
-const BIOS_SCHEMA_API: &str = "trueos-bios-schema/v2";
+const BIOS_SCHEMA_API: &str = "trueos-bios-schema/v3";
 const BIOS_PRESENTATION_API: &str = "trueos-bios-presentation/v1";
 const MAX_BIOS_SCHEMA_JSON_BYTES: usize = 16 * 1024 * 1024;
 const MAX_PRESENTATION_NODES: usize = 4096;
@@ -82,6 +82,8 @@ fn serialize_schema(schema: &BiosSchema) -> Result<Vec<u8>, String> {
 
     let (presentation_nodes, presentation_stats) = presentation_snapshot()?;
     let current = super::bios_current::snapshot_json(schema);
+    let platform = super::bios::platform_snapshot_json();
+    let runtime = super::bios::runtime_snapshot_json();
     let current_ready = current
         .get("state")
         .and_then(Value::as_str)
@@ -93,6 +95,8 @@ fn serialize_schema(schema: &BiosSchema) -> Result<Vec<u8>, String> {
         "source": schema.capture.source,
         "readOnly": true,
         "activeWritePath": "none",
+        "platform": platform,
+        "runtime": runtime,
         "capture": {
             "hiiBytes": schema.capture.hii_bytes,
             "currentConfiguration": if schema.capture.config_captured {
@@ -499,6 +503,8 @@ fn error_snapshot(error: &str) -> Vec<u8> {
         "readOnly": true,
         "activeWritePath": "none",
         "detail": bounded_detail(error),
+        "platform": super::bios::platform_snapshot_json(),
+        "runtime": super::bios::runtime_snapshot_json(),
         "capture": {
             "currentConfiguration": "redacted",
             "currentValues": "not-decoded",
@@ -534,7 +540,7 @@ fn error_snapshot(error: &str) -> Vec<u8> {
     });
     serde_json::to_vec(&document).unwrap_or_else(|_| {
         Vec::from(
-            &b"{\"api\":\"trueos-bios-schema/v2\",\"state\":\"unavailable\",\"readOnly\":true,\"activeWritePath\":\"none\",\"presentation\":{\"api\":\"trueos-bios-presentation/v1\",\"ordered\":true,\"nodes\":[]},\"current\":{\"state\":\"unavailable\",\"questions\":[]},\"formsets\":[]}"[..],
+            &b"{\"api\":\"trueos-bios-schema/v3\",\"state\":\"unavailable\",\"readOnly\":true,\"activeWritePath\":\"none\",\"platform\":{},\"runtime\":{\"state\":\"unavailable\"},\"presentation\":{\"api\":\"trueos-bios-presentation/v1\",\"ordered\":true,\"nodes\":[]},\"current\":{\"state\":\"unavailable\",\"questions\":[]},\"formsets\":[]}"[..],
         )
     })
 }

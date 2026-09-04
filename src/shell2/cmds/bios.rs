@@ -3,6 +3,7 @@ use core::fmt::Write;
 use alloc::collections::BTreeSet;
 use alloc::string::String;
 use alloc::vec::Vec;
+use serde_json::{Value, json};
 
 use crate::efi::{EfiGuid, EfiTableHeader};
 use crate::shell2::shell2_cmd::ParseOutcome;
@@ -136,6 +137,64 @@ struct FirmwareIdentity {
     board_vendor: Option<String>,
     board_product: Option<String>,
     board_version: Option<String>,
+}
+
+pub(crate) fn platform_snapshot_json() -> Value {
+    let (identity, smbios_state) = match collect_firmware_identity_and_hints() {
+        Ok((identity, _)) => (identity, "ready"),
+        Err(_) => (
+            FirmwareIdentity {
+                vendor: None,
+                version: None,
+                release_date: None,
+                board_vendor: None,
+                board_product: None,
+                board_version: None,
+            },
+            "unavailable",
+        ),
+    };
+
+    json!({
+        "firmware": {
+            "vendor": identity.vendor,
+            "version": identity.version,
+            "date": identity.release_date
+        },
+        "board": {
+            "vendor": identity.board_vendor,
+            "product": identity.board_product,
+            "version": identity.board_version
+        },
+        "controllers": platform_controller_snapshot(),
+        "sources": {
+            "smbios": smbios_state,
+            "pci": if crate::pci::with_devices(|devices| devices.is_empty()) {
+                "unavailable"
+            } else {
+                "ready"
+            }
+        }
+    })
+}
+
+pub(crate) fn runtime_snapshot_json() -> Value {
+    let Some(system_table) = crate::efi::system_table() else {
+        return json!({ "state": "unavailable" });
+    };
+    let boot_services = system_table.boot_services != 0;
+    let runtime_services = system_table.runtime_services != 0;
+    json!({
+        "state": "ready",
+        "uefiRevision": format_uefi_revision(system_table.hdr.revision),
+        "bootServices": boot_services,
+        "runtimeServices": runtime_services,
+        "handoffPhase": if boot_services {
+            "pre-ExitBootServices-or-unusual-handoff"
+        } else {
+            "post-ExitBootServices"
+        }
+    })
 }
 
 pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -791,6 +850,43 @@ fn append_live_controller_hints(out: &mut String) {
     if count == 0 {
         writeln!(out, "  none").unwrap();
     }
+}
+
+fn platform_controller_snapshot() -> Vec<Value> {
+    crate::pci::with_devices(|devices| {
+        devices
+            .iter()
+            .filter_map(|device| {
+                let role = match (device.class, device.subclass, device.prog_if) {
+                    (0x01, 0x06, _) => "SATA",
+                    (0x01, 0x08, _) => "NVMe",
+                    (0x01, 0x04, _) => "RAID",
+                    (0x0C, 0x03, 0x30) => "xHCI",
+                    (0x02, _, _) => "Network",
+                    _ => return None,
+                };
+                Some(json!({
+                    "role": role,
+                    "address": format!("{:02X}:{:02X}.{}", device.bus, device.slot, device.function),
+                    "vendorId": format!("{:04X}", device.vendor_id),
+                    "deviceId": format!("{:04X}", device.device_id),
+                    "name": pci_controller_name(device.vendor_id, device.device_id)
+                }))
+            })
+            .collect()
+    })
+}
+
+fn pci_controller_name(vendor_id: u16, device_id: u16) -> String {
+    if vendor_id == 0x8086 {
+        format!("Intel {device_id:04X}")
+    } else {
+        format!("PCI {vendor_id:04X}:{device_id:04X}")
+    }
+}
+
+fn format_uefi_revision(revision: u32) -> String {
+    format!("{}.{:02}", revision >> 16, revision & 0xFFFF)
 }
 
 fn structure_text(structure: &crate::efi::smbios::Structure<'_>, offset: usize) -> Option<String> {
