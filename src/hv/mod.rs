@@ -396,6 +396,9 @@ fn nudge_vm_control(
     let Some(vm) = vm_slot(vm_id) else {
         return false;
     };
+    // The Hull can be outside VMX in a platform wait. Make lifecycle control
+    // runnable before attempting the resident-guest interrupt path.
+    let _ = crate::wait::platform_wake_vm_scope(vm_id);
     let Some(cpu_slot) = vm_owner_cpu_slot(vm_id) else {
         hvlogf(format_args!(
             "hv: vm{} lifecycle: {} kick deferred owner=none timer_fallback=1",
@@ -5227,6 +5230,7 @@ pub(crate) fn notify_blueprint_console_input(vm_id: u8) {
     if let Some(signal) = BLUEPRINT_CONSOLE_INPUT_READY.get(vm_id as usize) {
         signal.signal(());
     }
+    let _ = crate::wait::platform_wake_blueprint_io_for_vm(vm_id);
 }
 
 pub(crate) async fn wait_blueprint_console_input(vm_id: u8, timeout_ms: u64) -> bool {
@@ -6448,6 +6452,32 @@ async fn vmx_launch_once_with_ept_vpid(
                             let woke = wait_blueprint_console_input(vm_id, timeout_ms).await;
                             set_current_vm_id(vm_id);
                             crate::hv::vmcall::complete_console_input_wait(vm_id, seq, woke);
+                            break 'vmcall;
+                        }
+                        crate::hv::vmcall::DispatchOutcome::PlatformWait {
+                            seq,
+                            key,
+                            observed,
+                            timeout_ms,
+                        } => {
+                            clear_current_vm_id();
+                            let notified = crate::wait::platform_wait_after_for_vm_async(
+                                vm_id, key, observed, timeout_ms,
+                            )
+                            .await;
+                            set_current_vm_id(vm_id);
+                            crate::smp::poll();
+                            if vm
+                                .map(|vm| vm.stop_req.load(Ordering::Acquire))
+                                .unwrap_or(false)
+                            {
+                                hvlogf(format_args!(
+                                    "hv: vm{} reporting: host stop request consumed during platform wait",
+                                    vm_id
+                                ));
+                                break 'vmexit;
+                            }
+                            crate::hv::vmcall::complete_platform_wait(vm_id, seq, notified);
                             break 'vmcall;
                         }
                         crate::hv::vmcall::DispatchOutcome::RetryAfterMs(ms) => {

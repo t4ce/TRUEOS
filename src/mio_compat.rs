@@ -5,7 +5,6 @@ use spin::Mutex;
 use v::vnet as api;
 
 use crate::blueprint_net_broker::VNetBridge;
-use crate::wait::WaitQueue;
 
 const STATUS_OK: i32 = 0;
 const STATUS_UNSUPPORTED: i32 = -1;
@@ -27,12 +26,7 @@ pub(crate) const READY_WRITABLE: u8 = 0b0000_0010;
 pub(crate) const READY_ERROR: u8 = 0b0000_0100;
 pub(crate) const READY_READ_CLOSED: u8 = 0b0000_1000;
 pub(crate) const READY_WRITE_CLOSED: u8 = 0b0001_0000;
-/// Registration-only flag used by Mio-managed `IoSource`s. It never appears
-/// in a returned readiness mask.
-pub(crate) const INTEREST_EDGE_MANAGED: u8 = 0b1000_0000;
 const TCP_LISTENER_PREPOST: usize = 32;
-
-static MIO_SELECTOR_WAIT: WaitQueue = WaitQueue::new();
 
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -43,16 +37,7 @@ pub struct TrueosMioSocketAddr {
     pub addr: [u8; 16],
 }
 
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-pub struct TrueosMioReadyEvent {
-    pub token: usize,
-    pub readiness: u8,
-    pub reserved: [u8; 7],
-}
-
 const _: () = assert!(core::mem::size_of::<TrueosMioSocketAddr>() == 20);
-const _: () = assert!(core::mem::size_of::<TrueosMioReadyEvent>() == 16);
 
 #[derive(Clone, Copy)]
 enum CompatAddr {
@@ -271,25 +256,6 @@ fn should_log_tcp_read_would_block() -> bool {
     once_per_second(&TCP_READ_WOULD_BLOCK_LAST_LOG_NS)
 }
 
-pub(crate) fn notify_net_event() {
-    MIO_SELECTOR_WAIT.notify_all();
-}
-
-pub(crate) unsafe fn mio_selector_wake_host(_selector_id: usize) -> i32 {
-    let owner_vm = current_owner_vm();
-    with_compat(|compat| {
-        if !compat
-            .pending_selector_wakes
-            .iter()
-            .any(|pending| *pending == (owner_vm, _selector_id))
-        {
-            compat.pending_selector_wakes.push((owner_vm, _selector_id));
-        }
-    });
-    MIO_SELECTOR_WAIT.notify_all();
-    STATUS_OK
-}
-
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum MioSocketKind {
     TcpStream,
@@ -328,22 +294,10 @@ struct PendingOpen {
     kind: api::SocketKind,
 }
 
-struct SelectorRegistration {
-    selector_id: usize,
-    socket_id: u32,
-    owner_vm: Option<u8>,
-    token: usize,
-    interests: u8,
-    edge_managed: bool,
-    delivered: u8,
-}
-
 struct MioCompat {
     net: Option<VNetBridge>,
     sockets: Vec<MioSocketState>,
     pending_opens: VecDeque<PendingOpen>,
-    registrations: Vec<SelectorRegistration>,
-    pending_selector_wakes: Vec<(Option<u8>, usize)>,
     next_socket_id: u32,
     udp_next_ephemeral: u16,
     tcp_listen_next_ephemeral: u16,
@@ -360,7 +314,6 @@ fn with_compat<R>(f: impl FnOnce(&mut MioCompat) -> R) -> R {
 }
 
 const MIO_ADDR_BYTES: usize = core::mem::size_of::<TrueosMioSocketAddr>();
-const MIO_READY_EVENT_BYTES: usize = core::mem::size_of::<TrueosMioReadyEvent>();
 
 #[inline]
 fn vm_guest_vmcall_active() -> bool {
@@ -589,8 +542,6 @@ impl MioCompat {
             net: None,
             sockets: Vec::new(),
             pending_opens: VecDeque::new(),
-            registrations: Vec::new(),
-            pending_selector_wakes: Vec::new(),
             next_socket_id: 1,
             udp_next_ephemeral: 49_152,
             tcp_listen_next_ephemeral: 50_000,
@@ -665,7 +616,6 @@ impl MioCompat {
 
     fn discard_socket(&mut self, socket_id: u32) {
         self.drop_pending_open(socket_id);
-        self.registrations.retain(|reg| reg.socket_id != socket_id);
         let Some(index) = self
             .sockets
             .iter()
@@ -839,8 +789,6 @@ impl MioCompat {
                 listener.accept_queue.len()
             );
         }
-
-        MIO_SELECTOR_WAIT.notify_all();
     }
 
     fn handle_unattributed_error(&mut self, msg: &'static str) {
@@ -873,7 +821,6 @@ impl MioCompat {
                 socket.error = STATUS_IO;
                 socket.closed = true;
             }
-            MIO_SELECTOR_WAIT.notify_all();
             return;
         }
 
@@ -1131,7 +1078,6 @@ impl MioCompat {
                     if socket.kind == MioSocketKind::TcpStream {
                         socket.connected = true;
                         socket.tx_in_flight = socket.tx_in_flight.saturating_sub(len as usize);
-                        MIO_SELECTOR_WAIT.notify_all();
                     }
                 }
             }
@@ -1182,7 +1128,6 @@ impl MioCompat {
                 if let Some(socket_id) = refill_listener {
                     self.ensure_tcp_listener_depth(socket_id);
                 }
-                MIO_SELECTOR_WAIT.notify_all();
             }
             api::Event::Error { msg } => {
                 self.handle_unattributed_error(msg);
@@ -1231,132 +1176,33 @@ impl MioCompat {
 
         ready
     }
+}
 
-    fn selector_poll_ready_once(
-        &mut self,
-        owner_vm: Option<u8>,
-        selector_id: usize,
-        out_events: *mut TrueosMioReadyEvent,
-        out_cap: usize,
-    ) -> usize {
-        self.kick_net();
-        self.pump();
-
-        let mut written = 0usize;
-        let mut inspected = 0usize;
-        for index in 0..self.registrations.len() {
-            if written >= out_cap {
-                break;
-            }
-            inspected = index.saturating_add(1);
-            let (registration_owner, registration_selector, socket_id, token, interests) = {
-                let reg = &self.registrations[index];
-                (reg.owner_vm, reg.selector_id, reg.socket_id, reg.token, reg.interests)
-            };
-            if registration_owner != owner_vm || registration_selector != selector_id {
-                continue;
-            }
-
-            let Some(socket) = self.socket(socket_id) else {
-                continue;
-            };
-            let current_readiness = self.ready_mask(socket, interests);
-            let readiness = {
-                let reg = &mut self.registrations[index];
-                if reg.edge_managed {
-                    // Preserve independent read/write edges. A writable edge
-                    // must not suppress a later readable edge, and a bit that
-                    // becomes cold is eligible again when it turns hot.
-                    reg.delivered &= current_readiness;
-                    let next = current_readiness & !reg.delivered;
-                    reg.delivered |= next;
-                    next
-                } else {
-                    current_readiness
-                }
-            };
-            if readiness == 0 {
-                continue;
-            }
-
-            let Some(socket) = self.socket(socket_id) else {
-                continue;
-            };
-            if tcp_flow_logging_enabled(socket) && should_log_selector_probe(readiness) {
-                crate::log!(
-                    "mio_compat: tcp selector-ready selector={} socket={} token={} interests=0x{:02x} readiness=0x{:02x} rx={} closed={}\n",
-                    selector_id,
-                    socket.id,
-                    token,
-                    interests,
-                    readiness,
-                    socket.rx_stream.len(),
-                    socket.closed as u8
-                );
-            }
-            if crate::log_os::flags::NET_LOG_TCP_FLOW
-                && socket.kind == MioSocketKind::Udp
-                && (readiness & READY_WRITABLE) != 0
-            {
-                static UDP_WRITABLE_FLOW_LAST_LOG_NS: AtomicU64 = AtomicU64::new(0);
-                if once_per_second(&UDP_WRITABLE_FLOW_LAST_LOG_NS) {
-                    crate::log!(
-                        "mio_compat: udp selector-ready selector={} socket={} token={} readiness=0x{:02x}\n",
-                        selector_id,
-                        socket.id,
-                        token,
-                        readiness
-                    );
-                }
-            }
-            if crate::log_os::flags::NET_LOG_TCP_FLOW
-                && socket.kind == MioSocketKind::TcpStream
-                && (readiness & READY_WRITABLE) != 0
-            {
-                static TCP_WRITABLE_FLOW_LAST_LOG_NS: AtomicU64 = AtomicU64::new(0);
-                if once_per_second(&TCP_WRITABLE_FLOW_LAST_LOG_NS) {
-                    crate::log!(
-                        "mio_compat: tcp selector-ready selector={} socket={} token={} readiness=0x{:02x}\n",
-                        selector_id,
-                        socket.id,
-                        token,
-                        readiness
-                    );
-                }
-            }
-
-            unsafe {
-                out_events.add(written).write(TrueosMioReadyEvent {
-                    token,
-                    readiness,
-                    reserved: [0; 7],
-                });
-            }
-            written += 1;
-        }
-
-        // Level-triggered writable sockets can stay ready indefinitely. Move
-        // the inspected prefix behind the remaining registrations so a small
-        // output buffer cannot starve later readable events forever.
-        if written != 0 && !self.registrations.is_empty() {
-            let advance = inspected.min(self.registrations.len());
-            self.registrations.rotate_left(advance);
-        }
-
-        written
+pub(crate) fn mio_socket_poll_ready(socket_id: u32, interests: u8) -> Option<u8> {
+    if vm_guest_vmcall_active() {
+        let (status, ready) = crate::hv::vmcall::guest_call(
+            crate::hv::vmcall::OP_BP_MIO_SOCKET_POLL_READY,
+            u64::from(socket_id),
+            u64::from(interests),
+        );
+        return (status == crate::hv::vmcall::STATUS_OK).then_some(ready as u8);
     }
+    mio_socket_poll_ready_host(socket_id, interests)
+}
 
-    fn take_selector_wake(&mut self, owner_vm: Option<u8>, selector_id: usize) -> bool {
-        let Some(index) = self
-            .pending_selector_wakes
-            .iter()
-            .position(|pending| pending.0 == owner_vm && pending.1 == selector_id)
-        else {
-            return false;
-        };
-        self.pending_selector_wakes.swap_remove(index);
-        true
-    }
+pub(crate) fn mio_socket_poll_ready_for_vm_host(
+    vm_id: u8,
+    socket_id: u32,
+    interests: u8,
+) -> Option<u8> {
+    with_compat(|compat| {
+        compat.kick_net();
+        let socket = compat.socket(socket_id)?;
+        if socket.owner_vm != Some(vm_id) {
+            return None;
+        }
+        Some(compat.ready_mask(socket, interests))
+    })
 }
 
 pub(crate) fn mio_socket_poll_ready_host(socket_id: u32, interests: u8) -> Option<u8> {
@@ -1765,9 +1611,6 @@ pub(crate) unsafe fn mio_socket_close_host(socket_id: u32) -> i32 {
         }
 
         compat.drop_pending_open(socket_id);
-        compat
-            .registrations
-            .retain(|reg| !(owner_matches(reg.owner_vm, owner_vm) && reg.socket_id == socket_id));
         for handle in handles {
             let _ = compat.submit(api::Command::Close { handle });
         }
@@ -1801,9 +1644,6 @@ pub(crate) fn close_sockets_for_vm(vm_id: u8) -> usize {
         for socket_id in socket_ids.iter().copied() {
             compat.drop_pending_open(socket_id);
         }
-        compat
-            .registrations
-            .retain(|reg| reg.owner_vm != Some(vm_id) && !socket_ids.contains(&reg.socket_id));
         for handle in handles {
             let _ = compat.submit(api::Command::Close { handle });
         }
@@ -2501,299 +2341,4 @@ pub unsafe extern "C" fn trueos_mio_tcp_listener_accept(
         return STATUS_OK;
     }
     mio_tcp_listener_accept_host(socket_id, out_socket_id, out_addr)
-}
-
-pub(crate) unsafe fn mio_selector_register_socket_host(
-    selector_id: usize,
-    socket_id: u32,
-    token: usize,
-    interests: u8,
-) -> i32 {
-    let requested_owner = current_owner_vm();
-    let raw_interests = interests;
-    let edge_managed = raw_interests & INTEREST_EDGE_MANAGED != 0;
-    let interests = raw_interests & !INTEREST_EDGE_MANAGED;
-    if interests == 0 {
-        return STATUS_INVALID_INPUT;
-    }
-
-    let status = with_compat(|compat| {
-        let Some(socket_owner) = compat.socket(socket_id).map(|socket| socket.owner_vm) else {
-            return STATUS_NOT_FOUND;
-        };
-        if !owner_matches(socket_owner, requested_owner) {
-            return STATUS_NOT_FOUND;
-        }
-        let registration_owner = requested_owner.or(socket_owner);
-
-        if let Some(reg) = compat.registrations.iter_mut().find(|reg| {
-            reg.owner_vm == registration_owner
-                && reg.selector_id == selector_id
-                && reg.socket_id == socket_id
-        }) {
-            reg.token = token;
-            reg.interests = interests;
-            reg.edge_managed = edge_managed;
-            reg.delivered = 0;
-            return STATUS_OK;
-        }
-
-        let registration_count = compat
-            .registrations
-            .iter()
-            .filter(|reg| reg.owner_vm == registration_owner && reg.selector_id == selector_id)
-            .count();
-        if registration_count >= crate::allcaps::io::DESCRIPTOR_SOFT_CAP {
-            return STATUS_RESOURCE_EXHAUSTED;
-        }
-
-        compat.registrations.push(SelectorRegistration {
-            selector_id,
-            socket_id,
-            owner_vm: registration_owner,
-            token,
-            interests,
-            edge_managed,
-            delivered: 0,
-        });
-        STATUS_OK
-    });
-    if status == STATUS_OK {
-        // Registration can race a sleeping selector after the socket already
-        // became hot, so changing the registry is itself a wake event.
-        MIO_SELECTOR_WAIT.notify_all();
-    }
-    status
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_mio_selector_register_socket(
-    selector_id: usize,
-    socket_id: u32,
-    token: usize,
-    interests: u8,
-) -> i32 {
-    if vm_guest_vmcall_active() {
-        let arg0 = selector_id as u64;
-        let arg1 = (socket_id as u64) | ((interests as u64) << 32);
-        let mut req = [0u8; 8];
-        req.copy_from_slice(&(token as u64).to_le_bytes());
-        let mut out = [0u8; 1];
-        let (status, data) = trueos_vm::vmcall::call_with_payload(
-            trueos_vm::vmcall::OP_BP_MIO_SELECTOR_REGISTER_SOCKET,
-            arg0,
-            arg1,
-            &req,
-            &mut out,
-        );
-        return if status == trueos_vm::vmcall::STATUS_OK {
-            vmcall_i32(data)
-        } else {
-            STATUS_INVALID_INPUT
-        };
-    }
-    mio_selector_register_socket_host(selector_id, socket_id, token, interests)
-}
-
-pub(crate) unsafe fn mio_selector_deregister_socket_host(
-    selector_id: usize,
-    socket_id: u32,
-) -> i32 {
-    let owner_vm = current_owner_vm();
-    with_compat(|compat| {
-        compat.registrations.retain(|reg| {
-            !(reg.owner_vm == owner_vm
-                && reg.selector_id == selector_id
-                && reg.socket_id == socket_id)
-        });
-        STATUS_OK
-    })
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_mio_selector_deregister_socket(
-    selector_id: usize,
-    socket_id: u32,
-) -> i32 {
-    if vm_guest_vmcall_active() {
-        let (status, data) = trueos_vm::vmcall::call(
-            trueos_vm::vmcall::OP_BP_MIO_SELECTOR_DEREGISTER_SOCKET,
-            selector_id as u64,
-            socket_id as u64,
-        );
-        return if status == trueos_vm::vmcall::STATUS_OK {
-            vmcall_i32(data)
-        } else {
-            STATUS_INVALID_INPUT
-        };
-    }
-    mio_selector_deregister_socket_host(selector_id, socket_id)
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_mio_selector_wake(selector_id: usize) -> i32 {
-    if vm_guest_vmcall_active() {
-        let (status, data) = trueos_vm::vmcall::call(
-            trueos_vm::vmcall::OP_BP_MIO_SELECTOR_WAKE,
-            selector_id as u64,
-            0,
-        );
-        return if status == trueos_vm::vmcall::STATUS_OK {
-            vmcall_i32(data)
-        } else {
-            STATUS_INVALID_INPUT
-        };
-    }
-    mio_selector_wake_host(selector_id)
-}
-
-pub(crate) unsafe fn mio_selector_poll_host(
-    selector_id: usize,
-    out_events: *mut TrueosMioReadyEvent,
-    out_cap: usize,
-    timeout_nanos: u64,
-) -> usize {
-    if out_events.is_null() && out_cap != 0 {
-        return 0;
-    }
-    let owner_vm = current_owner_vm();
-    let block_forever = timeout_nanos == u64::MAX;
-    let deadline = crate::chronos::monotonic_nanos().saturating_add(timeout_nanos);
-
-    loop {
-        // Observe before checking readiness. A network completion or Waker
-        // racing the scan then changes the generation and prevents a lost
-        // wake without periodic 10 ms rescans.
-        let observed = MIO_SELECTOR_WAIT.observe();
-        let (written, explicitly_woken) = with_compat(|compat| {
-            let written =
-                compat.selector_poll_ready_once(owner_vm, selector_id, out_events, out_cap);
-            let explicitly_woken = compat.take_selector_wake(owner_vm, selector_id);
-            (written, explicitly_woken)
-        });
-        if written != 0 || explicitly_woken || timeout_nanos == 0 {
-            return written;
-        }
-        if !block_forever && crate::chronos::monotonic_nanos() >= deadline {
-            return 0;
-        }
-
-        if crate::log_os::flags::NET_LOG_TCP_FLOW {
-            static MIO_SELECTOR_PARK_LAST_LOG_NS: AtomicU64 = AtomicU64::new(0);
-            if once_per_second(&MIO_SELECTOR_PARK_LAST_LOG_NS) {
-                let (regs, sockets, listeners, accepts, pending_opens) = with_compat(|compat| {
-                    let regs = compat
-                        .registrations
-                        .iter()
-                        .filter(|reg| reg.owner_vm == owner_vm && reg.selector_id == selector_id)
-                        .count();
-                    let mut listeners = 0usize;
-                    let mut accepts = 0usize;
-                    for socket in compat.sockets.iter() {
-                        if socket.kind == MioSocketKind::TcpListener {
-                            listeners += 1;
-                            accepts += socket.accept_queue.len();
-                        }
-                    }
-                    (regs, compat.sockets.len(), listeners, accepts, compat.pending_opens.len())
-                });
-                crate::log!(
-                    "mio_compat: selector-park selector={} owner={} timeout_ns={} regs={} sockets={} listeners={} accepts={} pending_opens={}\n",
-                    selector_id,
-                    owner_vm.map(|id| id as i32).unwrap_or(-1),
-                    timeout_nanos,
-                    regs,
-                    sockets,
-                    listeners,
-                    accepts,
-                    pending_opens
-                );
-            }
-        }
-
-        let wait_ms = if block_forever {
-            // WaitQueue uses zero as an unbounded wait.
-            0
-        } else {
-            deadline
-                .saturating_sub(crate::chronos::monotonic_nanos())
-                .saturating_add(999_999)
-                / 1_000_000
-        };
-        let _ = MIO_SELECTOR_WAIT.wait_for_event_after_blocking_parked(
-            observed,
-            if block_forever { 0 } else { wait_ms.max(1) },
-        );
-    }
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn trueos_mio_selector_poll(
-    selector_id: usize,
-    out_events: *mut TrueosMioReadyEvent,
-    out_cap: usize,
-    timeout_nanos: u64,
-) -> usize {
-    if vm_guest_vmcall_active() {
-        let Some(vm_id) = crate::hv::current_hull_guest_context_vm_id() else {
-            return 0;
-        };
-        if out_events.is_null() && out_cap != 0 {
-            return 0;
-        }
-        let max_events = (trueos_vm::vmcall::PAYLOAD_CAP / MIO_READY_EVENT_BYTES).min(out_cap);
-        if max_events == 0 {
-            return 0;
-        }
-        let mut bytes = [0u8; trueos_vm::vmcall::PAYLOAD_CAP];
-        let timeout = timeout_nanos.to_le_bytes();
-        let (status, count) = trueos_vm::vmcall::call_with_payload(
-            trueos_vm::vmcall::OP_BP_MIO_SELECTOR_POLL,
-            selector_id as u64,
-            max_events as u64,
-            &timeout,
-            &mut bytes,
-        );
-        if status != trueos_vm::vmcall::STATUS_OK {
-            return 0;
-        }
-        let count = (count as usize).min(max_events);
-        if count != 0 {
-            if !copy_to_active_guest(
-                vm_id,
-                out_events.cast::<u8>(),
-                &bytes[..count * MIO_READY_EVENT_BYTES],
-            ) {
-                return 0;
-            }
-        }
-        return count;
-    }
-    if let Some(vm_id) = current_owner_vm() {
-        if out_events.is_null() && out_cap != 0 {
-            return 0;
-        }
-        let max_events = (trueos_vm::vmcall::PAYLOAD_CAP / MIO_READY_EVENT_BYTES).min(out_cap);
-        if max_events == 0 {
-            return 0;
-        }
-        let mut events = Vec::new();
-        events.resize(max_events, TrueosMioReadyEvent::default());
-        let count =
-            mio_selector_poll_host(selector_id, events.as_mut_ptr(), max_events, timeout_nanos)
-                .min(max_events);
-        if count != 0 {
-            let bytes = unsafe {
-                core::slice::from_raw_parts(
-                    events.as_ptr().cast::<u8>(),
-                    count * MIO_READY_EVENT_BYTES,
-                )
-            };
-            if !copy_to_guest_stack(vm_id, out_events.cast::<u8>(), bytes) {
-                return 0;
-            }
-        }
-        return count;
-    }
-    mio_selector_poll_host(selector_id, out_events, out_cap, timeout_nanos)
 }

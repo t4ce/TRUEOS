@@ -118,6 +118,9 @@ pub const OP_BP_SHELL_ATTACHED_READ: u32 = 0xCB; // arg0 cap -> attached-shell i
 pub const OP_BP_INPUT_KEYBOARD_OUTPUT_POP: u32 = 0xCC; // response payload is one keyboard event
 pub const OP_BP_INPUT_KEYBOARD_OUTPUT_SINCE: u32 = 0xCD; // arg0 read seq,arg1 cap -> payload events
 pub const OP_BP_INPUT_MIDI_READ_V1: u32 = 0x200; // arg0 read seq,arg1 cap -> MIDI edge payload
+pub const OP_BP_MIO_SOCKET_POLL_READY: u32 = 0x201; // arg0 native socket,arg1 interests -> readiness/status
+pub const OP_BP_PLATFORM_WAIT_OBSERVE: u32 = 0x202; // arg0 VM-local key -> generation
+pub const OP_BP_PLATFORM_WAIT_AFTER: u32 = 0x203; // arg0 key,arg1 observed:timeout -> notified
 pub const OP_BP_ASYNC_FS_READ_START: u32 = 0xCE; // payload resolved path -> operation id/rc
 pub const OP_BP_ASYNC_FS_REMOVE_START: u32 = 0xCF; // payload resolved path -> operation id/rc
 pub const OP_BP_ASYNC_FS_STATUS: u32 = 0xD0; // arg0 operation id -> pending/ready/rc
@@ -339,10 +342,6 @@ pub const OP_BP_MIO_UDP_SOCKET_CONNECT: u32 = 0x59; // arg0 socket, payload addr
 pub const OP_BP_MIO_UDP_SOCKET_SEND_TO: u32 = 0x5A; // arg0 socket, payload addr+bytes -> rc
 pub const OP_BP_MIO_UDP_SOCKET_RECV_FROM: u32 = 0x5B; // arg0 socket, arg1 cap -> addr+bytes
 pub const OP_BP_MIO_TCP_LISTENER_ACCEPT: u32 = 0x5C; // arg0 socket -> child+addr/status
-pub const OP_BP_MIO_SELECTOR_REGISTER_SOCKET: u32 = 0x5D; // selector/socket/token/interests
-pub const OP_BP_MIO_SELECTOR_DEREGISTER_SOCKET: u32 = 0x5E; // selector/socket
-pub const OP_BP_MIO_SELECTOR_POLL: u32 = 0x5F; // selector/cap/timeout -> ready events
-pub const OP_BP_MIO_SELECTOR_WAKE: u32 = 0x80; // selector -> wake parked pollers
 
 // ── response status codes (u32, written by host) ────────────────────────────
 pub const STATUS_OK: u32 = 0;
@@ -396,6 +395,14 @@ pub enum DispatchOutcome {
     /// typed surface changes, or the supplied timeout expires.
     WaitConsoleInput {
         seq: u32,
+        timeout_ms: u64,
+    },
+    /// Park one synchronous Hull platform wait on a VM-local readiness generation.
+    /// This is an executor rendezvous, not a thread or descriptor registry.
+    PlatformWait {
+        seq: u32,
+        key: u64,
+        observed: u32,
         timeout_ms: u64,
     },
     /// Keep the current VMCALL pending, sleep in the host, then dispatch the
@@ -493,6 +500,10 @@ fn write_response(vm_id: u8, seq: u32, status: u32, data: u64, len: u32) {
 
 pub(crate) fn complete_console_input_wait(vm_id: u8, seq: u32, woke: bool) {
     write_response(vm_id, seq, STATUS_OK, u64::from(woke), 0);
+}
+
+pub(crate) fn complete_platform_wait(vm_id: u8, seq: u32, notified: bool) {
+    write_response(vm_id, seq, STATUS_OK, u64::from(notified), 0);
 }
 
 fn release_guest_comm_page(vm_id: u8) {
@@ -624,6 +635,27 @@ pub fn guest_sleep_ms(ms: u64) {
     let _ = guest_call(OP_SLEEP_MS, ms, 0);
 }
 
+pub fn guest_platform_wait_observe(key: u64) -> u32 {
+    let (status, generation) = guest_call(OP_BP_PLATFORM_WAIT_OBSERVE, key, 0);
+    if status == STATUS_OK {
+        generation as u32
+    } else {
+        0
+    }
+}
+
+pub fn guest_platform_wait_after(key: u64, observed: u32, timeout_ms: u64) -> bool {
+    // POSIX poll exposes an i32 millisecond timeout. Reserve u32::MAX for infinity.
+    let timeout = if timeout_ms == u64::MAX {
+        u32::MAX
+    } else {
+        timeout_ms.min(u64::from(u32::MAX - 1)) as u32
+    };
+    let packed = (u64::from(observed) << 32) | u64::from(timeout);
+    let (status, notified) = guest_call(OP_BP_PLATFORM_WAIT_AFTER, key, packed);
+    status == STATUS_OK && notified != 0
+}
+
 pub fn guest_cpu_count() -> Option<usize> {
     let (status, count) = guest_call(OP_BP_CPU_COUNT, 0, 0);
     if status == STATUS_OK {
@@ -666,7 +698,6 @@ fn unpack_u32_pair(raw: u64) -> (u32, u32) {
 }
 
 const MIO_ADDR_BYTES: usize = core::mem::size_of::<crate::mio_compat::TrueosMioSocketAddr>();
-const MIO_READY_EVENT_BYTES: usize = core::mem::size_of::<crate::mio_compat::TrueosMioReadyEvent>();
 
 fn read_mio_addr(bytes: &[u8]) -> Option<crate::mio_compat::TrueosMioSocketAddr> {
     if bytes.len() < MIO_ADDR_BYTES {
@@ -3010,6 +3041,54 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             };
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
+        }
+        OP_BP_MIO_SOCKET_POLL_READY => {
+            if arg0 > u64::from(u32::MAX) || arg1 > u64::from(u8::MAX) || req_len != 0 {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            }
+            let ready = crate::hv::with_guest_broker_context(vm_id, || {
+                crate::mio_compat::mio_socket_poll_ready_for_vm_host(vm_id, arg0 as u32, arg1 as u8)
+            });
+            match ready {
+                Some(ready) => write_response(vm_id, seq, STATUS_OK, u64::from(ready), 0),
+                None => write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0),
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_PLATFORM_WAIT_OBSERVE => {
+            if arg1 != 0 || req_len != 0 {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            }
+            let observed = crate::wait::platform_wait_observe_for_vm(vm_id, arg0);
+            write_response(vm_id, seq, STATUS_OK, u64::from(observed), 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_PLATFORM_WAIT_AFTER => {
+            if req_len != 0 {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            }
+            let observed = (arg1 >> 32) as u32;
+            let timeout_raw = arg1 as u32;
+            let timeout_ms = if timeout_raw == u32::MAX {
+                u64::MAX
+            } else {
+                u64::from(timeout_raw)
+            };
+            let current = crate::wait::platform_wait_observe_for_vm(vm_id, arg0);
+            if current != observed || timeout_ms == 0 {
+                write_response(vm_id, seq, STATUS_OK, u64::from(current != observed), 0);
+                DispatchOutcome::Resume
+            } else {
+                DispatchOutcome::PlatformWait {
+                    seq,
+                    key: arg0,
+                    observed,
+                    timeout_ms,
+                }
+            }
         }
         OP_BP_PLATFORM_WAKE_ONE => {
             let woke = crate::wait::platform_wake_one_for_vm(vm_id, arg0);
@@ -5444,88 +5523,6 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             } else {
                 write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             }
-            DispatchOutcome::Resume
-        }
-        OP_BP_MIO_SELECTOR_REGISTER_SOCKET => {
-            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
-            if n < 8 {
-                write_response(vm_id, seq, STATUS_OK, (-4i64) as u64, 0);
-                return DispatchOutcome::Resume;
-            }
-            let Some(p) = host_ptr(vm_id) else {
-                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
-                return DispatchOutcome::Resume;
-            };
-            let bytes = unsafe { &(&(*p).payload)[..n] };
-            let token = u64::from_le_bytes([
-                bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-            ]) as usize;
-            let socket_id = arg1 as u32;
-            let interests = ((arg1 >> 32) & 0xFF) as u8;
-            let rc = crate::hv::with_guest_broker_context(vm_id, || unsafe {
-                crate::mio_compat::mio_selector_register_socket_host(
-                    arg0 as usize,
-                    socket_id,
-                    token,
-                    interests,
-                )
-            });
-            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
-            DispatchOutcome::Resume
-        }
-        OP_BP_MIO_SELECTOR_DEREGISTER_SOCKET => {
-            let rc = crate::hv::with_guest_broker_context(vm_id, || unsafe {
-                crate::mio_compat::mio_selector_deregister_socket_host(arg0 as usize, arg1 as u32)
-            });
-            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
-            DispatchOutcome::Resume
-        }
-        OP_BP_MIO_SELECTOR_WAKE => {
-            let rc = crate::hv::with_guest_broker_context(vm_id, || unsafe {
-                crate::mio_compat::mio_selector_wake_host(arg0 as usize)
-            });
-            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
-            DispatchOutcome::Resume
-        }
-        OP_BP_MIO_SELECTOR_POLL => {
-            let max_events = core::cmp::min(
-                arg1 as usize,
-                PAYLOAD_CAP / core::cmp::max(MIO_READY_EVENT_BYTES, 1),
-            );
-            let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
-            let timeout_nanos = if n >= 8 {
-                let Some(p) = host_ptr(vm_id) else {
-                    write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
-                    return DispatchOutcome::Resume;
-                };
-                let bytes = unsafe { &(&(*p).payload)[..n] };
-                u64::from_le_bytes([
-                    bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5], bytes[6], bytes[7],
-                ])
-            } else {
-                u64::MAX
-            };
-            let Some(p) = host_ptr(vm_id) else {
-                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
-                return DispatchOutcome::Resume;
-            };
-            let out = unsafe { &mut (&mut (*p).payload)[..PAYLOAD_CAP] };
-            let count = crate::hv::with_guest_broker_context(vm_id, || unsafe {
-                crate::mio_compat::mio_selector_poll_host(
-                    arg0 as usize,
-                    out.as_mut_ptr() as *mut crate::mio_compat::TrueosMioReadyEvent,
-                    max_events,
-                    timeout_nanos,
-                )
-            });
-            let count = core::cmp::min(count, max_events);
-            write_response(
-                vm_id,
-                seq,
-                STATUS_OK,
-                count as u64,
-                (count * MIO_READY_EVENT_BYTES) as u32,
-            );
             DispatchOutcome::Resume
         }
         _ => {
