@@ -46,6 +46,7 @@ struct HfiTableState {
     row_count: usize,
     enabled: bool,
     initial_columns_seen: u8,
+    enable_epoch_baseline_timestamp: u64,
 }
 
 struct HfiTableCapture {
@@ -311,6 +312,19 @@ fn capture_stable(state: HfiTableState) -> Option<HfiTableCapture> {
     previous
 }
 
+fn capture_epoch_baseline(state: HfiTableState) -> Option<u64> {
+    for _ in 0..HFI_STABLE_CAPTURE_ATTEMPTS {
+        let before = read_u64(state.virt, 0);
+        compiler_fence(Ordering::SeqCst);
+        let after = read_u64(state.virt, 0);
+        if before == after {
+            return Some(before);
+        }
+        core::hint::spin_loop();
+    }
+    None
+}
+
 fn updated_columns_mask(capability_mask: u8, image: &[u8]) -> u8 {
     let column_count = capability_mask.count_ones() as usize;
     if column_count == 0 || image.len() < HFI_TIMESTAMP_BYTES + column_count {
@@ -341,8 +355,23 @@ fn initial_population_ready(state: HfiTableState) -> bool {
     initial_columns_complete(state)
 }
 
+fn capture_belongs_to_current_enable_epoch(
+    state: HfiTableState,
+    capture: &HfiTableCapture,
+) -> bool {
+    capture.timestamp != 0 && capture.timestamp != state.enable_epoch_baseline_timestamp
+}
+
+fn begin_enable_epoch(state: &mut HfiTableState, baseline_timestamp: u64) {
+    state.initial_columns_seen = 0;
+    state.enable_epoch_baseline_timestamp = baseline_timestamp;
+}
+
 fn observe_stable_capture(state: &mut HfiTableState, capture: &HfiTableCapture) {
-    if !state.enabled || !capture.stable || capture.timestamp == 0 {
+    if !state.enabled
+        || !capture.stable
+        || !capture_belongs_to_current_enable_epoch(*state, capture)
+    {
         return;
     }
     state.initial_columns_seen |= updated_columns_mask(state.capability_mask, &capture.image);
@@ -417,12 +446,16 @@ pub(crate) fn enable_table_explicit() -> Result<(), &'static str> {
             return Err("existing HFI allocation does not match current CPUID layout");
         }
         if !existing.enabled {
+            let baseline_timestamp = capture_epoch_baseline(*existing)
+                .ok_or("HFI retained timestamp is unstable; retry re-enable")?;
+            begin_enable_epoch(existing, baseline_timestamp);
             unsafe {
                 Msr::new(MSR_IA32_HW_FEEDBACK_PTR).write(existing.phys | HW_FEEDBACK_PTR_VALID);
                 let mut config = Msr::new(MSR_IA32_HW_FEEDBACK_CONFIG);
                 let value = config.read();
                 config.write(value | HW_FEEDBACK_CONFIG_HFI_ENABLE);
             }
+            compiler_fence(Ordering::SeqCst);
             existing.enabled = true;
         }
         wait_for_initial_population(existing);
@@ -457,6 +490,7 @@ pub(crate) fn enable_table_explicit() -> Result<(), &'static str> {
         row_count,
         enabled: true,
         initial_columns_seen: 0,
+        enable_epoch_baseline_timestamp: 0,
     });
     if let Some(existing) = state.as_mut() {
         wait_for_initial_population(existing);
@@ -529,6 +563,13 @@ pub(crate) fn table_snapshot_text() -> String {
         return out;
     };
 
+    let epoch_generation = if !state.enabled {
+        "retained-disabled"
+    } else if capture_belongs_to_current_enable_epoch(state, &capture) {
+        "current"
+    } else {
+        "baseline-retained"
+    };
     let capture_status = if !state.enabled {
         "disabled-retained"
     } else if !initial_ready {
@@ -562,7 +603,7 @@ pub(crate) fn table_snapshot_text() -> String {
     .unwrap();
     writeln!(
         out,
-        "HFI header: performance_updated={} efficiency_updated={} initial_population={} initial_columns_seen=0x{:02X}/0x{:02X} update_interrupt=not-configured scheduler_consumer=none",
+        "HFI header: performance_updated={} efficiency_updated={} initial_population={} initial_columns_seen=0x{:02X}/0x{:02X} enable_epoch_baseline=0x{:016X} epoch_generation={} update_interrupt=not-configured scheduler_consumer=none",
         perf_updated
             .map(|value| value.to_string())
             .unwrap_or_else(|| String::from("-")),
@@ -572,6 +613,8 @@ pub(crate) fn table_snapshot_text() -> String {
         if initial_ready { "ready" } else { "incomplete" },
         state.initial_columns_seen,
         state.capability_mask,
+        state.enable_epoch_baseline_timestamp,
+        epoch_generation,
     )
     .unwrap();
     if !initial_ready {
@@ -731,6 +774,7 @@ mod tests {
             row_count: 8,
             enabled: true,
             initial_columns_seen: 0,
+            enable_epoch_baseline_timestamp: 0,
         };
         let mut perf_image = alloc::vec![0u8; 16];
         perf_image[HFI_TIMESTAMP_BYTES] = 1;
@@ -753,6 +797,51 @@ mod tests {
             &HfiTableCapture {
                 timestamp: 2,
                 image: efficiency_image,
+                attempts: 2,
+                stable: true,
+            },
+        );
+        assert_eq!(state.initial_columns_seen, 0x03);
+        assert!(initial_population_ready(state));
+    }
+
+    #[test]
+    fn retained_snapshot_cannot_satisfy_a_new_enable_epoch() {
+        let mut state = HfiTableState {
+            phys: 0,
+            virt: 0,
+            bytes: 4096,
+            capability_mask: 0x03,
+            header_size: 8,
+            row_stride: 8,
+            row_count: 8,
+            enabled: true,
+            initial_columns_seen: 0x03,
+            enable_epoch_baseline_timestamp: 0,
+        };
+        begin_enable_epoch(&mut state, 42);
+        assert_eq!(state.initial_columns_seen, 0);
+
+        let mut image = alloc::vec![0u8; 16];
+        image[HFI_TIMESTAMP_BYTES] = 1;
+        image[HFI_TIMESTAMP_BYTES + 1] = 1;
+        observe_stable_capture(
+            &mut state,
+            &HfiTableCapture {
+                timestamp: 42,
+                image: image.clone(),
+                attempts: 2,
+                stable: true,
+            },
+        );
+        assert_eq!(state.initial_columns_seen, 0);
+        assert!(!initial_population_ready(state));
+
+        observe_stable_capture(
+            &mut state,
+            &HfiTableCapture {
+                timestamp: 43,
+                image,
                 attempts: 2,
                 stable: true,
             },
