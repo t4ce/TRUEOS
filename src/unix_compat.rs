@@ -18,19 +18,25 @@
 ///└── Hull B
 ///     └── QuickJS runtime
 
-/// Directory streams are deliberately not part of the supported POSIX
-/// compatibility surface yet.
+/// Compatibility imports that remain useful for diagnostics but are not TRUEOS
+/// execution primitives.
 ///
-/// `trueos_cabi_fs_list_dir` is a typed, whole-listing ABI.  It is not a
-/// substitute for POSIX `DIR *`: Rust's fallback Unix backend calls
-/// `readdir_r` with a caller-owned, target-libc-defined `dirent` object.  Until
-/// TRUEOS publishes and tests that object layout and the associated stream
-/// lifetime contract, resolving these symbols would turn a successful REL
-/// preflight into a later, misleading application failure.
+/// Directory streams are deliberately not part of the supported POSIX
+/// compatibility surface yet. `trueos_cabi_fs_list_dir` is a typed,
+/// whole-listing ABI; it is not a substitute for POSIX `DIR *`.
+///
+/// POSIX thread lifecycle is also deliberately not exposed. TRUEOS execution is
+/// Blueprint fore -> executor -> task, with workers/carriers providing explicit
+/// native execution capacity. Synchronization and TLS compatibility may still
+/// be useful without manufacturing a POSIX thread lifecycle on top of that
+/// model.
 pub(crate) fn unsupported_unix_import_reason(name: &str) -> Option<&'static str> {
     match name {
         "opendir" | "fdopendir" | "readdir" | "readdir_r" | "closedir" | "dirfd" => Some(
             "POSIX directory-stream ABI is unavailable; rebuild against the typed TRUEOS VFS directory API",
+        ),
+        "pthread_create" | "pthread_join" | "pthread_detach" | "pthread_kill" => Some(
+            "POSIX thread lifecycle is unavailable; TRUEOS execution uses tasks on executors and explicit worker/carrier capacity",
         ),
         _ => None,
     }
@@ -202,7 +208,8 @@ pub(crate) fn is_unix_import(name: &str) -> bool {
 
 pub(crate) fn resolve_import(name: &str) -> Option<usize> {
     // Keep the symbols classified as Unix-shaped imports for diagnostics, but
-    // never advertise the historical ENOSYS stubs as resolved functionality.
+    // never advertise unsupported compatibility shapes as resolved
+    // functionality.
     if unsupported_unix_import_reason(name).is_some() {
         return None;
     }
@@ -318,15 +325,11 @@ pub(crate) fn resolve_import(name: &str) -> Option<usize> {
         "pthread_condattr_setclock" => {
             Some(crate::std_abi_shim::pthread_condattr_setclock as *const () as usize)
         }
-        "pthread_create" => Some(crate::std_abi_shim::pthread_create as *const () as usize),
-        "pthread_detach" => Some(crate::std_abi_shim::pthread_detach as *const () as usize),
         "pthread_getspecific" => {
             Some(crate::std_abi_shim::pthread_getspecific as *const () as usize)
         }
-        "pthread_join" => Some(crate::std_abi_shim::pthread_join as *const () as usize),
         "pthread_key_create" => Some(crate::std_abi_shim::pthread_key_create as *const () as usize),
         "pthread_key_delete" => Some(crate::std_abi_shim::pthread_key_delete as *const () as usize),
-        "pthread_kill" => Some(crate::std_abi_shim::pthread_kill as *const () as usize),
         "pthread_mutex_destroy" => {
             Some(crate::std_abi_shim::pthread_mutex_destroy as *const () as usize)
         }
@@ -422,7 +425,6 @@ mod tests {
             "mmap",
             "mprotect",
             "openat",
-            "pthread_kill",
             "rename",
             "recvfrom",
             "sendto",
@@ -444,6 +446,15 @@ mod tests {
             "closedir",
             "dirfd",
         ] {
+            assert!(super::is_unix_import(name), "{name} lost Unix classification");
+            assert!(super::unsupported_unix_import_reason(name).is_some());
+            assert!(super::resolve_import(name).is_none());
+        }
+    }
+
+    #[test]
+    fn thread_lifecycle_imports_are_not_advertised_as_functional() {
+        for name in ["pthread_create", "pthread_join", "pthread_detach", "pthread_kill"] {
             assert!(super::is_unix_import(name), "{name} lost Unix classification");
             assert!(super::unsupported_unix_import_reason(name).is_some());
             assert!(super::resolve_import(name).is_none());
