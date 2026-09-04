@@ -140,8 +140,8 @@ struct FirmwareIdentity {
 }
 
 pub(crate) fn platform_snapshot_json() -> Value {
-    let (identity, smbios_state) = match collect_firmware_identity_and_hints() {
-        Ok((identity, _)) => (identity, "ready"),
+    let (identity, hints, smbios_state) = match collect_firmware_identity_and_hints() {
+        Ok((identity, hints)) => (identity, hints, "ready"),
         Err(_) => (
             FirmwareIdentity {
                 vendor: None,
@@ -151,8 +151,13 @@ pub(crate) fn platform_snapshot_json() -> Value {
                 board_product: None,
                 board_version: None,
             },
+            Vec::new(),
             "unavailable",
         ),
+    };
+    let (processor, memory, smbios_hardware_state) = match smbios_hardware_snapshot() {
+        Ok((processor, memory)) => (processor, memory, "ready"),
+        Err(_) => (Value::Null, Value::Null, "unavailable"),
     };
 
     json!({
@@ -166,9 +171,13 @@ pub(crate) fn platform_snapshot_json() -> Value {
             "product": identity.board_product,
             "version": identity.board_version
         },
+        "processor": processor,
+        "memory": memory,
         "controllers": platform_controller_snapshot(),
+        "setupEvidence": hints.iter().map(setup_hint_json).collect::<Vec<_>>(),
         "sources": {
             "smbios": smbios_state,
+            "smbiosHardware": smbios_hardware_state,
             "pci": if crate::pci::with_devices(|devices| devices.is_empty()) {
                 "unavailable"
             } else {
@@ -186,7 +195,10 @@ pub(crate) fn runtime_snapshot_json() -> Value {
     let runtime_services = system_table.runtime_services != 0;
     json!({
         "state": "ready",
+        "systemTableVendor": crate::efi::firmware_vendor_string(),
+        "firmwareRevision": format!("0x{:08X}", system_table.firmware_revision),
         "uefiRevision": format_uefi_revision(system_table.hdr.revision),
+        "configurationTables": system_table.number_of_table_entries,
         "bootServices": boot_services,
         "runtimeServices": runtime_services,
         "handoffPhase": if boot_services {
@@ -875,6 +887,135 @@ fn platform_controller_snapshot() -> Vec<Value> {
             })
             .collect()
     })
+}
+
+fn setup_hint_json(hint: &SetupHint) -> Value {
+    json!({
+        "keyword": hint.keyword,
+        "text": hint.text,
+        "source": "smbios-string-evidence",
+        "setting": false,
+        "smbiosType": hint.type_id,
+        "smbiosTypeName": hint.type_name,
+        "handle": format!("0x{:04X}", hint.handle),
+        "stringIndex": hint.string_index
+    })
+}
+
+fn smbios_hardware_snapshot() -> Result<(Value, Value), String> {
+    let table = crate::efi::smbios::discover()
+        .map_err(|error| alloc::format!("reason={} detail={error:?}", error.label()))?;
+    let mut structures = table.structures();
+    let mut processors = Vec::<Value>::new();
+    let mut modules = Vec::<Value>::new();
+    let mut slots = 0usize;
+    let mut installed_devices = 0usize;
+    let mut installed_bytes = 0u64;
+    let mut capacity_unknown = false;
+    let mut speed_min = u32::MAX;
+    let mut speed_max = 0u32;
+
+    loop {
+        let structure = match structures.next_structure() {
+            Ok(Some(structure)) => structure,
+            Ok(None) => break,
+            Err(error) => return Err(alloc::format!("SMBIOS parse stopped: {error:?}")),
+        };
+
+        if structure.type_id == 4 {
+            let status = structure.byte(0x18).unwrap_or(0);
+            processors.push(json!({
+                "socket": structure_text(&structure, 0x04),
+                "manufacturer": structure_text(&structure, 0x07),
+                "model": structure_text(&structure, 0x10),
+                "maxSpeedMHz": structure.u16(0x14).filter(|value| *value != 0),
+                "currentSpeedMHz": structure.u16(0x16).filter(|value| *value != 0),
+                "socketPopulated": status & 0x40 != 0,
+                "statusCode": status & 0x07,
+                "cores": processor_count_field(structure, 0x23, 0x2A),
+                "enabledCores": processor_count_field(structure, 0x24, 0x2C),
+                "threads": processor_count_field(structure, 0x25, 0x2E)
+            }));
+            continue;
+        }
+
+        let Some(device) = structure.memory_device() else {
+            continue;
+        };
+        slots = slots.saturating_add(1);
+        let (size_state, size_bytes) = match device.size {
+            crate::efi::smbios::MemoryDeviceSize::NotInstalled => ("empty", None),
+            crate::efi::smbios::MemoryDeviceSize::Unknown => {
+                installed_devices = installed_devices.saturating_add(1);
+                capacity_unknown = true;
+                ("unknown", None)
+            }
+            crate::efi::smbios::MemoryDeviceSize::Bytes(bytes) => {
+                installed_devices = installed_devices.saturating_add(1);
+                installed_bytes = installed_bytes.saturating_add(bytes);
+                ("installed", Some(bytes))
+            }
+        };
+        let speed = device.configured_speed_mt_s.or(device.speed_mt_s);
+        if size_state != "empty" {
+            if let Some(speed) = speed {
+                speed_min = speed_min.min(speed);
+                speed_max = speed_max.max(speed);
+            }
+        }
+        modules.push(json!({
+            "handle": format!("0x{:04X}", device.handle),
+            "locator": device.locator.map(firmware_text),
+            "bankLocator": device.bank_locator.map(firmware_text),
+            "sizeState": size_state,
+            "sizeBytes": size_bytes,
+            "speedMtS": device.speed_mt_s,
+            "configuredSpeedMtS": device.configured_speed_mt_s,
+            "manufacturer": structure_text(&structure, 0x17),
+            "partNumber": structure_text(&structure, 0x1A)
+        }));
+    }
+
+    let processor = processors
+        .iter()
+        .find(|processor| {
+            processor
+                .get("socketPopulated")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        })
+        .cloned()
+        .or_else(|| processors.first().cloned())
+        .unwrap_or(Value::Null);
+    let memory = if slots == 0 {
+        Value::Null
+    } else {
+        json!({
+            "installedBytes": installed_bytes,
+            "capacityComplete": !capacity_unknown,
+            "installedDevices": installed_devices,
+            "slots": slots,
+            "speedMinMtS": (speed_min != u32::MAX).then_some(speed_min),
+            "speedMaxMtS": (speed_max != 0).then_some(speed_max),
+            "devices": modules
+        })
+    };
+
+    Ok((processor, memory))
+}
+
+fn processor_count_field(
+    structure: crate::efi::smbios::Structure<'_>,
+    legacy_offset: usize,
+    extended_offset: usize,
+) -> Option<u16> {
+    match structure.byte(legacy_offset)? {
+        0 => None,
+        0xFF => structure
+            .u16(extended_offset)
+            .filter(|value| *value != 0 && *value != 0xFFFF),
+        value => Some(u16::from(value)),
+    }
 }
 
 fn pci_controller_name(vendor_id: u16, device_id: u16) -> String {
