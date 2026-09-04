@@ -22,8 +22,10 @@ static BIOS_SCHEMA_JSON_CACHE: Mutex<Option<Vec<u8>>> = Mutex::new(None);
 /// Length of the immutable, read-only BIOS schema JSON exposed to Blueprints.
 ///
 /// Building this snapshot consumes only the already captured and validated HII
-/// catalogue. It does not call a Runtime Service, invoke the firmware browser,
-/// or decode the redacted configuration payload.
+/// handoff. It does not call Runtime Services, invoke the firmware browser, or
+/// write firmware state. Current values, when available, are decoded from the
+/// pre-ExitBootServices `ExportConfig()` capture and are attached only to
+/// validated question storage bindings.
 pub(crate) fn snapshot_len() -> usize {
     with_snapshot(|bytes| bytes.len())
 }
@@ -79,6 +81,11 @@ fn serialize_schema(schema: &BiosSchema) -> Result<Vec<u8>, String> {
         .collect::<Vec<_>>();
 
     let (presentation_nodes, presentation_stats) = presentation_snapshot()?;
+    let current = super::bios_current::snapshot_json(schema);
+    let current_ready = current
+        .get("state")
+        .and_then(Value::as_str)
+        .is_some_and(|state| state == "ready");
 
     let document = json!({
         "api": BIOS_SCHEMA_API,
@@ -89,13 +96,20 @@ fn serialize_schema(schema: &BiosSchema) -> Result<Vec<u8>, String> {
         "capture": {
             "hiiBytes": schema.capture.hii_bytes,
             "currentConfiguration": if schema.capture.config_captured {
-                "captured-redacted"
+                "captured"
             } else {
                 "not-captured"
             },
-            "currentValues": "captured-redacted-not-decoded-in-this-cycle",
+            "currentValues": if current_ready {
+                "decoded-from-captured-export-config"
+            } else if schema.capture.config_captured {
+                "captured-not-decoded"
+            } else {
+                "not-captured"
+            },
             "bulkStrings": "hidden",
-            "rawPackageBytes": "hidden"
+            "rawPackageBytes": "hidden",
+            "rawConfig": "hidden"
         },
         "capabilities": {
             "getVariable": false,
@@ -104,7 +118,8 @@ fn serialize_schema(schema: &BiosSchema) -> Result<Vec<u8>, String> {
             "formBrowser": false,
             "firmwareWrites": false,
             "questionCallbacks": false,
-            "currentValueDecode": false
+            "capturedConfigDecode": current_ready,
+            "currentValueDecode": current_ready
         },
         "stats": {
             "packageLists": schema.package_lists,
@@ -136,6 +151,7 @@ fn serialize_schema(schema: &BiosSchema) -> Result<Vec<u8>, String> {
             },
             "nodes": presentation_nodes
         },
+        "current": current,
         "unknownOpcodes": unknown_opcodes,
         "varstores": schema.varstores.iter().map(varstore_json).collect::<Vec<_>>(),
         "defaultStores": schema
@@ -284,7 +300,7 @@ fn question_json(formset_index: usize, form_id: u16, record: usize, question: &Q
             "firmwareReadOnly": question.read_only(),
             "trueosWrite": "locked"
         },
-        "currentValue": "captured-redacted-not-decoded-in-this-cycle"
+        "currentValue": "see-current-record"
     })
 }
 
@@ -299,7 +315,7 @@ fn storage_json(storage: &StorageBinding) -> Value {
         "attributes": storage.attributes,
         "validated": storage.valid,
         "detail": storage.detail,
-        "configContent": "captured-redacted"
+        "configContent": "hidden"
     })
 }
 
@@ -409,6 +425,7 @@ fn preflight_size(schema: &BiosSchema) -> Result<(), String> {
     add_estimate(&mut estimate, schema.default_stores.len().saturating_mul(384))?;
     add_estimate(&mut estimate, schema.unknown_opcodes.len().saturating_mul(8))?;
     add_estimate(&mut estimate, MAX_PRESENTATION_NODES.saturating_mul(384))?;
+    add_estimate(&mut estimate, schema.stats.questions.saturating_mul(768))?;
 
     for varstore in &schema.varstores {
         add_text_estimate(&mut estimate, varstore.name.as_deref())?;
@@ -486,7 +503,8 @@ fn error_snapshot(error: &str) -> Vec<u8> {
             "currentConfiguration": "redacted",
             "currentValues": "not-decoded",
             "bulkStrings": "hidden",
-            "rawPackageBytes": "hidden"
+            "rawPackageBytes": "hidden",
+            "rawConfig": "hidden"
         },
         "capabilities": {
             "getVariable": false,
@@ -495,6 +513,7 @@ fn error_snapshot(error: &str) -> Vec<u8> {
             "formBrowser": false,
             "firmwareWrites": false,
             "questionCallbacks": false,
+            "capturedConfigDecode": false,
             "currentValueDecode": false
         },
         "presentation": {
@@ -505,11 +524,17 @@ fn error_snapshot(error: &str) -> Vec<u8> {
             "rawBytes": "hidden",
             "nodes": []
         },
+        "current": {
+            "state": "unavailable",
+            "source": "captured-hii-export-config",
+            "rawConfig": "hidden",
+            "questions": []
+        },
         "formsets": []
     });
     serde_json::to_vec(&document).unwrap_or_else(|_| {
         Vec::from(
-            &b"{\"api\":\"trueos-bios-schema/v2\",\"state\":\"unavailable\",\"readOnly\":true,\"activeWritePath\":\"none\",\"presentation\":{\"api\":\"trueos-bios-presentation/v1\",\"ordered\":true,\"nodes\":[]},\"formsets\":[]}"[..],
+            &b"{\"api\":\"trueos-bios-schema/v2\",\"state\":\"unavailable\",\"readOnly\":true,\"activeWritePath\":\"none\",\"presentation\":{\"api\":\"trueos-bios-presentation/v1\",\"ordered\":true,\"nodes\":[]},\"current\":{\"state\":\"unavailable\",\"questions\":[]},\"formsets\":[]}"[..],
         )
     })
 }
