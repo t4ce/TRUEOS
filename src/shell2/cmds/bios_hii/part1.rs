@@ -18,6 +18,7 @@ const MAX_PACKAGE_LISTS: usize = 4096;
 const MAX_PACKAGES: usize = 65_536;
 const MAX_STRING_PACKAGES: usize = 4096;
 const MAX_FORM_PACKAGES: usize = 4096;
+const MAX_DEVICE_PATH_PACKAGES: usize = 4096;
 const MAX_STORED_STRING_CHARS: usize = 2048;
 
 const CATALOG_MAGIC: [u8; 8] = *b"TRBIOS1\0";
@@ -28,6 +29,7 @@ const SEC_HII: u32 = 2;
 const SEC_CONFIG: u32 = 3;
 const HII_FORMS: u8 = 0x02;
 const HII_STRINGS: u8 = 0x04;
+const HII_DEVICE_PATH: u8 = 0x08;
 const HII_END: u8 = 0xdf;
 
 const SIBT_END: u8 = 0x00;
@@ -110,6 +112,7 @@ pub(crate) struct HiiCatalogue {
     pub packages: Vec<PackageRecord>,
     pub string_packages: Vec<StringPackageRecord>,
     pub form_packages: Vec<FormPackageRecord>,
+    pub device_path_packages: Vec<DevicePathPackageRecord>,
     pub stats: CatalogueStats,
 }
 
@@ -156,6 +159,12 @@ pub(crate) enum StringSource {
 }
 
 pub(crate) struct FormPackageRecord {
+    pub list_index: usize,
+    pub package_index: usize,
+    pub bytes: Vec<u8>,
+}
+
+pub(crate) struct DevicePathPackageRecord {
     pub list_index: usize,
     pub package_index: usize,
     pub bytes: Vec<u8>,

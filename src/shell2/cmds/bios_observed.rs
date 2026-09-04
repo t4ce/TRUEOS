@@ -1,7 +1,10 @@
 use alloc::string::String;
+use alloc::vec::Vec;
 use core::fmt::Write;
 
-use super::bios_hii::{FormPackageRecord, HiiCatalogue};
+use super::bios_hii::{
+    DevicePathPackageRecord, FormPackageRecord, HiiCatalogue, StringPackageRecord,
+};
 
 const TIANO_GUID: &str = "0F0B1735-87A0-4193-B266-538C38AF48CE";
 
@@ -19,12 +22,15 @@ struct ScopeContext {
     form_id: Option<u16>,
 }
 
-/// Emit a source-ordered IFR node stream for the complete captured forms payload.
+/// Emit the source-ordered IFR stream plus non-mutating presentation resources
+/// captured alongside it.
 ///
-/// This is deliberately presentation-oriented: every opcode is represented in order,
-/// standard opcodes observed on the acceptance board are decoded into typed fields,
-/// Tiano GUID extensions are decoded when recognized, and anything future remains a
-/// bounded raw node instead of disappearing from the UI model.
+/// Every IFR opcode is represented in order, standard opcodes observed on the
+/// acceptance board are decoded into typed fields, Tiano GUID extensions are
+/// decoded when recognized, and anything future remains a bounded raw node.
+/// Device-path identity and a narrowly selected firmware-browser chrome record
+/// are appended after the IFR stream so a UI can reproduce firmware grouping and
+/// help chrome without exposing the bulk string pool or inventing settings.
 pub(crate) fn append_ordered_ifr_records(
     out: &mut String,
     catalogue: &HiiCatalogue,
@@ -41,6 +47,9 @@ pub(crate) fn append_ordered_ifr_records(
             &mut stats,
         );
     }
+
+    append_device_path_records(out, catalogue);
+    append_browser_chrome_resource(out, catalogue);
 
     stats
 }
@@ -117,6 +126,187 @@ fn append_package_nodes(
         }
         cursor = end;
     }
+}
+
+fn append_device_path_records(out: &mut String, catalogue: &HiiCatalogue) {
+    for package in &catalogue.device_path_packages {
+        let (nodes, malformed) = decode_device_path(package);
+        push_record(
+            out,
+            serde_json::json!({
+                "record": "device-path",
+                "source": "captured-hii-device-path-package",
+                "list": package.list_index,
+                "package": package.package_index,
+                "malformed": malformed,
+                "raw_bytes": "hidden",
+                "nodes": nodes,
+            }),
+        );
+    }
+}
+
+fn decode_device_path(package: &DevicePathPackageRecord) -> (Vec<serde_json::Value>, bool) {
+    if package.bytes.len() < 4 {
+        return (Vec::new(), true);
+    }
+
+    let mut nodes = Vec::new();
+    let mut cursor = 4usize;
+    let mut malformed = false;
+    let mut ended = false;
+
+    while cursor.saturating_add(4) <= package.bytes.len() {
+        let device_type = package.bytes[cursor];
+        let subtype = package.bytes[cursor + 1];
+        let length = read_u16(&package.bytes, cursor + 2) as usize;
+        if length < 4 {
+            malformed = true;
+            break;
+        }
+        let Some(end) = cursor.checked_add(length) else {
+            malformed = true;
+            break;
+        };
+        if end > package.bytes.len() {
+            malformed = true;
+            break;
+        }
+        let bytes = &package.bytes[cursor..end];
+        let details = decode_device_path_node(device_type, subtype, bytes);
+        nodes.push(serde_json::json!({
+            "source_offset": cursor,
+            "type": device_type,
+            "subtype": subtype,
+            "length": length,
+            "details": details,
+        }));
+        cursor = end;
+        if device_type == 0x7f && subtype == 0xff {
+            ended = true;
+            break;
+        }
+    }
+
+    if !ended || cursor != package.bytes.len() {
+        malformed = true;
+    }
+    (nodes, malformed)
+}
+
+fn decode_device_path_node(device_type: u8, subtype: u8, bytes: &[u8]) -> serde_json::Value {
+    match (device_type, subtype) {
+        (0x01, 0x01) if bytes.len() >= 6 => serde_json::json!({
+            "kind": "pci",
+            "function": bytes[4],
+            "device": bytes[5],
+        }),
+        (0x01, 0x04) if bytes.len() >= 20 => serde_json::json!({
+            "kind": "vendor-hardware",
+            "guid": guid_at(bytes, 4),
+        }),
+        (0x02, 0x01) if bytes.len() >= 12 => {
+            let hid = read_u32(bytes, 4);
+            serde_json::json!({
+                "kind": "acpi",
+                "hid_raw": alloc::format!("0x{hid:08X}"),
+                "hid": decode_eisa_id(hid),
+                "uid": read_u32(bytes, 8),
+            })
+        }
+        (0x03, 0x0b) if bytes.len() >= 37 => serde_json::json!({
+            "kind": "mac",
+            "address": alloc::format!(
+                "{:02X}:{:02X}:{:02X}:{:02X}:{:02X}:{:02X}",
+                bytes[4], bytes[5], bytes[6], bytes[7], bytes[8], bytes[9]
+            ),
+            "if_type": bytes[36],
+        }),
+        (0x04, 0x03) if bytes.len() >= 20 => serde_json::json!({
+            "kind": "vendor-media",
+            "guid": guid_at(bytes, 4),
+        }),
+        (0x04, 0x06) if bytes.len() >= 20 => serde_json::json!({
+            "kind": "firmware-file",
+            "guid": guid_at(bytes, 4),
+        }),
+        (0x04, 0x07) if bytes.len() >= 20 => serde_json::json!({
+            "kind": "firmware-volume",
+            "guid": guid_at(bytes, 4),
+        }),
+        (0x7f, 0xff) => serde_json::json!({ "kind": "end" }),
+        _ => serde_json::json!({ "kind": "generic" }),
+    }
+}
+
+fn append_browser_chrome_resource(out: &mut String, catalogue: &HiiCatalogue) {
+    let package = catalogue.string_packages.iter().find(|package| {
+        package.language.eq_ignore_ascii_case("en-US")
+            && package_has_exact(package, "Aptio Setup - AMI")
+            && package_has_exact(package, "General Help")
+            && package_has_exact(package, "Item Help")
+    });
+    let Some(package) = package else {
+        return;
+    };
+
+    push_record(
+        out,
+        serde_json::json!({
+            "record": "firmware-resource",
+            "resource_kind": "browser-chrome",
+            "source": "captured-hii-string-package",
+            "setting": false,
+            "list": package.list_index,
+            "package": package.package_index,
+            "language": package.language,
+            "details": {
+                "setup_title": package_find_exact(package, "Aptio Setup - AMI"),
+                "setup_version": package_find_prefix(package, "Version "),
+                "item_help_label": package_find_exact(package, "Item Help"),
+                "general_help_label": package_find_exact(package, "General Help"),
+                "general_help_text": package_find_contains_all(
+                    package,
+                    &["F1", "General Help", "F10", "Save & Exit"]
+                ),
+                "boot_manager_label": package_find_exact(package, "Boot Manager"),
+                "boot_manager_help": package_find_exact(package, "Configure boot options"),
+                "language_label": package_find_exact(package, "Language"),
+                "language_help": package_find_exact(package, "Select the default system language"),
+                "save_exit_label": package_find_exact(package, "Save & Exit Setup"),
+                "enabled_label": package_find_exact(package, "Enabled"),
+                "disabled_label": package_find_exact(package, "Disabled"),
+            },
+        }),
+    );
+}
+
+fn package_has_exact(package: &StringPackageRecord, wanted: &str) -> bool {
+    package.strings.values().any(|entry| entry.text == wanted)
+}
+
+fn package_find_exact(package: &StringPackageRecord, wanted: &str) -> Option<String> {
+    package
+        .strings
+        .values()
+        .find(|entry| entry.text == wanted)
+        .map(|entry| entry.text.clone())
+}
+
+fn package_find_prefix(package: &StringPackageRecord, prefix: &str) -> Option<String> {
+    package
+        .strings
+        .values()
+        .find(|entry| entry.text.starts_with(prefix))
+        .map(|entry| entry.text.clone())
+}
+
+fn package_find_contains_all(package: &StringPackageRecord, needles: &[&str]) -> Option<String> {
+    package
+        .strings
+        .values()
+        .find(|entry| needles.iter().all(|needle| entry.text.contains(needle)))
+        .map(|entry| entry.text.clone())
 }
 
 fn decode_details(
@@ -328,11 +518,38 @@ fn guid_at(bytes: &[u8], offset: usize) -> Option<String> {
     ))
 }
 
+fn decode_eisa_id(value: u32) -> Option<String> {
+    let first = ((value >> 10) & 0x1f) as u8;
+    let second = ((value >> 5) & 0x1f) as u8;
+    let third = (value & 0x1f) as u8;
+    if !(1..=26).contains(&first)
+        || !(1..=26).contains(&second)
+        || !(1..=26).contains(&third)
+    {
+        return None;
+    }
+    Some(alloc::format!(
+        "{}{}{}{:04X}",
+        char::from(b'@' + first),
+        char::from(b'@' + second),
+        char::from(b'@' + third),
+        (value >> 16) & 0xffff
+    ))
+}
+
 fn read_u16(bytes: &[u8], offset: usize) -> u16 {
     bytes
         .get(offset..offset.saturating_add(2))
         .and_then(|raw| raw.try_into().ok())
         .map(u16::from_le_bytes)
+        .unwrap_or(0)
+}
+
+fn read_u32(bytes: &[u8], offset: usize) -> u32 {
+    bytes
+        .get(offset..offset.saturating_add(4))
+        .and_then(|raw| raw.try_into().ok())
+        .map(u32::from_le_bytes)
         .unwrap_or(0)
 }
 
