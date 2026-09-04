@@ -150,12 +150,14 @@ const GPU_VA_DRAW_STATE_BASE: u64 = 0x0086_0000;
 // resident renderer owns this mapping for its lifetime; probe state remains at the
 // historical warm-state VA above.
 const GPU_VA_RESIDENT_SCENE_STATE_BASE: u64 = 0x3000_0000;
-const RESIDENT_SCENE_MAX_DRAWS: usize = 600;
+// The retained transform secondary state blob occupies 8 KiB. Keep the
+// renderer's bounded batch reservation inside the fixed Render1 GGTT window.
+const RESIDENT_SCENE_MAX_DRAWS: usize = 340;
 const RESIDENT_SCENE_STATE_SLOT_BYTES: usize = 2 * 4096;
 const RESIDENT_SCENE_STATE_BYTES: usize =
     (RESIDENT_SCENE_MAX_DRAWS + 1) * RESIDENT_SCENE_STATE_SLOT_BYTES;
 const RESIDENT_SCENE_PRIMARY_BATCH_BYTES: usize = 5 * 4096;
-const RESIDENT_SCENE_SECONDARY_BATCH_BYTES: usize = 4096;
+const RESIDENT_SCENE_SECONDARY_BATCH_BYTES: usize = 2 * 4096;
 const _: () = {
     assert!(GPU_VA_STREAMOUT_BASE + WARM_STREAMOUT_BYTES as u64 <= GPU_VA_BATCH_BASE);
     assert!(GPU_VA_BATCH_BASE + WARM_BATCH_BYTES as u64 <= GPU_VA_RESIDENT_SCENE_DEPTH_BASE);
