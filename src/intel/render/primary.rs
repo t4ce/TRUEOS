@@ -1480,8 +1480,7 @@ fn stage_resident_scene_secondary(
     result_ggtt_gpu: u64,
 ) -> Result<usize, &'static str> {
     draw.state_gpu_addr = state_gpu;
-    if fragment_contract != ResidentSceneFragmentContract::ConstantRgba || sampled_texture.is_some()
-    {
+    if fragment_contract != ResidentSceneFragmentContract::ConstantRgba {
         return Err("scene-fragment-contract-texture-mismatch");
     }
     let pipeline = crate::intel::shader::triangle_pipeline_simd16();

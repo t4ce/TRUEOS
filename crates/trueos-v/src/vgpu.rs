@@ -187,6 +187,13 @@ pub struct IndexedDraw {
     pub base_vertex: i32,
     pub clear_rgba8_srgb: u32,
     pub reserved: u32,
+    /// Optional buffer-backed tightly packed RGBA8 sampled texture.
+    pub sampled_texture: u64,
+    pub texture_width: u32,
+    pub texture_height: u32,
+    pub texture_pitch: u32,
+    pub sampler_flags: u32,
+    pub texture_reserved: u32,
 }
 
 pub const MAX_INDEXED_BATCH_DRAWS: usize = 16;
@@ -1047,7 +1054,7 @@ mod tests {
         assert_eq!(core::mem::size_of::<BufferInfo>(), 16);
         assert_eq!(core::mem::size_of::<BufferSlice>(), 24);
         assert_eq!(core::mem::size_of::<SurfaceInfo>(), 32);
-        assert_eq!(core::mem::size_of::<IndexedDraw>(), 72);
+        assert_eq!(core::mem::size_of::<IndexedDraw>(), 104);
         assert_eq!(core::mem::size_of::<IndexedBatchDraw>(), 16);
         assert_eq!(core::mem::size_of::<IndexedDrawBatch>(), 312);
         assert_eq!(core::mem::size_of::<IndexedBatchDrawV2>(), 24);

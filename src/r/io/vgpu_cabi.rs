@@ -301,6 +301,11 @@ pub(crate) fn broker_ui4_indexed_submit(
             first_index: draw.first_index,
             base_vertex: draw.base_vertex,
             clear_rgba8_srgb: draw.clear_rgba8_srgb,
+            sampled_texture: BufferHandle::from_raw(draw.sampled_texture),
+            texture_width: draw.texture_width,
+            texture_height: draw.texture_height,
+            texture_pitch: draw.texture_pitch,
+            sampler_flags: draw.sampler_flags,
         },
     )
     .map_err(|error| error.errno())?;
