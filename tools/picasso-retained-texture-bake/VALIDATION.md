@@ -68,6 +68,36 @@ Opaque materials, TEXCOORD_0, repeat sampling and the base mip are the current
 admitted path. Alpha blend/mask, mip chains, skinning, animation and broader
 glTF scene conformance are not established by this result.
 
+## Multi-instance follow-up
+
+The next user experiment exposed a separate lifecycle failure: starting a
+second PBR Example closed the first. The preserved
+[dual-run log](../../bld/picasso-pbr-validation/dual-run-2026-09-05/dual-run.log)
+records `vm0: PicassoExample: retained animation failed: Ui4("frame-begin", Busy)`
+at line 1400, while vm1 decodes its first material image. VM0 then explicitly
+requests shutdown after a fatal scene error; both carrier claims succeeded.
+This identifies the termination path. It does not establish why display buffer
+ownership remained busy at that instant, or prove a GPU allocation shortage.
+
+UI4's streaming `begin_gpu_frame` is nonblocking. `Busy` is returned before a
+write lease is acquired or any frame state is changed, so the Example can defer
+that frame and retain the existing front buffer. The Example now distinguishes
+deferred frames from rendered frames, retries at its existing 16 ms cadence,
+and waits for a rendered startup frame before claiming submission success.
+Errors after acquisition remain fatal. Per-instance deferral/resume messages
+make recovery visible in the next run.
+
+Validation: all eight Example host tests passed, including three admission
+regressions. The normal Blueprint builder produced the release package with
+`TRUEOS_BLUEPRINT_SKIP_APPS_PUBLISH=1` and passed its CABI import guard; no
+publication or rig operation was performed. Package SHA-256:
+`3b2527bf587c251a7fdcbbcf35d321a4c80da9d6f5958c83b9fe8bf05541beff`.
+Build log: [picasso-dual-run-package-build.log](../../bld/picasso-dual-run-package-build.log).
+
+The register/geometry milestone above remains scoped to the successful single
+instance. Post-fix coexistence of two or more PBR instances is pending a new
+hardware run; seed tracking has not been extended to claim it.
+
 ## Consolidation on the current branch
 
 Batch absolute addressing is named separately from saved-context addressing;

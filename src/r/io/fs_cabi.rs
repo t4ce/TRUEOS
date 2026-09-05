@@ -347,8 +347,15 @@ pub extern "C" fn trueos_cabi_sleep_ms(mut ms: u64) {
         }
         return;
     }
-    if ms != 0 {
-        let _ = crate::wait::spin_until_timeout(ms, || false);
+    let native_guest = crate::hv::current_guest_execution_context_vm_id().is_some();
+    while ms != 0 {
+        let chunk = ms.min(crate::hv::vmcall::MAX_GUEST_SLEEP_MS);
+        if native_guest {
+            let _ = crate::wait::spin_until_timeout_no_exec(chunk, || false);
+        } else {
+            let _ = crate::wait::spin_until_timeout(chunk, || false);
+        }
+        ms -= chunk;
     }
 }
 
