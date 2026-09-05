@@ -1,0 +1,15 @@
+L0:
+/* [0000]  */ (W)     mov (8|M0)               r11.0<1>:f    r2.0<8;8,1>:f                    {Compacted}
+/* [0008]  */ (W)     mov (8|M0)               r12.0<1>:f    r4.0<8;8,1>:f                    {Compacted}
+/* [0010]  */ (W)     mov (8|M0)               r0.0<1>:f     r3.0<8;8,1>:f                    {Compacted}
+/* [0018]  */ (W)     mov (8|M0)               r1.0<1>:f     r5.0<8;8,1>:f                    {Compacted}
+/* [0020]  */ (W)     sync.nop                             null                             {@1}
+/* [0030]  */         mad (16|M0)              r2.0<1>:f     r6.3<0;0>:f       r6.1<0;0>:f       r0.0<1>:f       
+/* [0040]  */         mad (16|M0)              r7.0<1>:f     r6.7<0;0>:f       r6.5<0;0>:f       r0.0<1>:f       
+/* [0050]  */ (W)     sync.nop                             null                             {@2}
+/* [0060]  */         mad (16|M0)              r4.0<1>:f     r2.0<8;1>:f       r6.0<0;0>:f       r11.0<1>:f       {Compacted}
+/* [0068]  */         mad (16|M0)              r9.0<1>:f     r7.0<8;1>:f       r6.4<0;0>:f       r11.0<1>:f       {Compacted,@2}
+/* [0070]  */         send.smpl (16|M0)        r120     r4      r9      0x80            0x04840002           {@1,$0} // wr:2+2, rd:8; simd16 sample using sampler index 0
+/* [0080]  */ (W)     sync.nop                             null                             {$0.dst}
+/* [0090]  */         sendc.rc (16|M0)         null     r120    null    0x0            0x10031000           {EOT,@1} // wr:8+0, rd:0; full-precision render target write SIMD16; last render target to surface 0
+L160:

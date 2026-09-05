@@ -2517,6 +2517,11 @@ pub(crate) fn create_render_pipeline(
     if shader.epoch != device.epoch {
         return Err(VgpuError::InvalidHandle);
     }
+    if shader.package_digest == SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64
+        && position_offset.saturating_add(20) > vertex_stride
+    {
+        return Err(VgpuError::Unsupported);
+    }
     let record = RenderPipelineRecord {
         package_digest: shader.package_digest,
         vertex_stride,
@@ -2714,14 +2719,15 @@ pub(crate) fn submit_ui4_indexed_draw(
             let mut vertices = Vec::with_capacity(vertex_count);
             for vertex in 0..vertex_count {
                 let start = draw.vertex_offset + vertex * vertex_stride + position_offset;
-                let raw = unsafe { core::slice::from_raw_parts(vertex_virt.add(start), 20) };
-                vertices.push([
-                    f32::from_le_bytes(raw[0..4].try_into().unwrap()),
-                    f32::from_le_bytes(raw[4..8].try_into().unwrap()),
-                    f32::from_le_bytes(raw[8..12].try_into().unwrap()),
-                    f32::from_le_bytes(raw[12..16].try_into().unwrap()),
-                    f32::from_le_bytes(raw[16..20].try_into().unwrap()),
-                ]);
+                let attribute_bytes = if textured { 20 } else { 12 };
+                let raw = unsafe {
+                    core::slice::from_raw_parts(vertex_virt.add(start), attribute_bytes)
+                };
+                let mut attributes = [0.0; 5];
+                for (component, bytes) in attributes.iter_mut().zip(raw.chunks_exact(4)) {
+                    *component = f32::from_le_bytes(bytes.try_into().unwrap());
+                }
+                vertices.push(attributes);
             }
             let texture = if textured {
                 let texture_record = lookup_buffer(device, draw.sampled_texture)?;
@@ -2813,7 +2819,11 @@ pub(crate) fn submit_ui4_indexed_draw(
         mesh: &mesh,
         rgba: SHADER_PACKAGE_CLIP_POSITION3_RGBA_COLOR.to_le_bytes(),
         sampled_texture: sampled_texture.as_ref(),
-        fragment_contract: crate::intel::render::ResidentSceneFragmentContract::ConstantRgba,
+        fragment_contract: if sampled_texture.is_some() {
+            crate::intel::render::ResidentSceneFragmentContract::ClipPosition3UvTexture
+        } else {
+            crate::intel::render::ResidentSceneFragmentContract::ConstantRgba
+        },
         viewport_translation_px: [0.0, 0.0],
         topology: crate::intel::render::ResidentScenePrimitiveTopology::TriangleList,
     };
@@ -2906,7 +2916,11 @@ pub(crate) fn submit_ui4_indexed_draw(
     crate::log_info!(target: "vgpu";
         "vgpu: indexed UI4 draw retired principal={:?} shader_package=fnv1a64:{:016X} pipeline={} vertex_buffer={} index_buffer={} indices={} target={}x{} timeline={} render_release={} path=opaque-wgpu-objects->resident-render0->ui4\n",
         principal,
-        SHADER_PACKAGE_CLIP_POSITION3_RGBA_FNV1A64,
+        if sampled_texture.is_some() {
+            SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64
+        } else {
+            SHADER_PACKAGE_CLIP_POSITION3_RGBA_FNV1A64
+        },
         draw.pipeline.raw(),
         draw.vertex_buffer.raw(),
         draw.index_buffer.raw(),

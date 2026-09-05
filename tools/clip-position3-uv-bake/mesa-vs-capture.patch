@@ -1,0 +1,39 @@
+--- a/src/intel/vulkan/genX_shader.c
++++ b/src/intel/vulkan/genX_shader.c
+@@ -601,6 +601,36 @@
+ #endif
+    }
+ 
++   const char *trueos_vs_dump_dir = os_get_option("TRUEOS_EXECUTABLE_DUMP_DIR");
++   if (trueos_vs_dump_dir != NULL) {
++      char path[1024];
++      snprintf(path, sizeof(path), "%s/vertex_TRUEOS_VS_state_v1.txt", trueos_vs_dump_dir);
++      FILE *file = fopen(path, "w");
++      if (file != NULL) {
++         fprintf(file,
++                 "TRUEOS_VS_STATE_V1 ver=%u verx10=%u max_threads=%u "
++                 "dispatch_grf_start=%u urb_read_length=%u urb_entry_64b=%u "
++                 "vue_slots=%u position_slot=%d uv_slot=%d "
++                 "vf_packing0=0x%08x uses_vertexid=%u uses_instanceid=%u "
++                 "binding_table_entries=%u sampler_count=%u\n",
++                 devinfo->ver, devinfo->verx10, devinfo->max_vs_threads,
++                 vs_prog_data->base.base.dispatch_grf_start_reg,
++                 vs_prog_data->base.urb_read_length,
++                 vs_prog_data->base.urb_entry_size,
++                 vs_prog_data->base.vue_map.num_slots,
++                 vs_prog_data->base.vue_map.varying_to_slot[VARYING_SLOT_POS],
++                 vs_prog_data->base.vue_map.varying_to_slot[VARYING_SLOT_VAR0],
++                 vs_prog_data->vf_component_packing[0],
++                 vs_prog_data->uses_vertexid, vs_prog_data->uses_instanceid,
++                 get_surface_count(device, shader), get_sampler_count(device, shader));
++         fprintf(file, "3DSTATE_VS");
++         for (unsigned i = 0; i < GENX(3DSTATE_VS_length); i++)
++            fprintf(file, " %08x", vs_dwords[i]);
++         fputc('\n', file);
++         fclose(file);
++      }
++   }
++
+    anv_shader_emit_merge(batch, shader, vs.vs, vs_dwords, GENX(3DSTATE_VS), vs) {
+ #if GFX_VERx10 >= 125
+       vs.ScratchSpaceBuffer = get_scratch_surf(batch, device, shader, false);

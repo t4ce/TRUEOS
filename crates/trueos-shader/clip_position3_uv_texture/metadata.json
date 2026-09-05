@@ -1,0 +1,95 @@
+{
+  "backend": "mesa-anv-noop-drm-shim-compile-only",
+  "baremetal_verified": false,
+  "contract": "clip-position3-uv-texture",
+  "device": {
+    "device_id": 18048,
+    "name": "Intel(R) UHD Graphics 770 (ADL-S GT1)",
+    "vendor_id": 32902
+  },
+  "executables": [
+    {
+      "description": "SIMD8 vertex shader",
+      "name": "vertex",
+      "simd_width": 8,
+      "stage": "vertex",
+      "statistics": {
+        "Code size": 224,
+        "Cycles": 74,
+        "Fills": 0,
+        "GRF registers": 0,
+        "Instructions": 13,
+        "Loops": 0,
+        "Max dispatch width": 8,
+        "Max live registers": 15,
+        "Non SSA regs after NIR": 7,
+        "SENDs": 2,
+        "Scratch Memory Size": 0,
+        "Source hash": 551450303,
+        "Spills": 0,
+        "Workgroup Memory Size": 0
+      }
+    },
+    {
+      "description": "SIMD8 fragment shader",
+      "name": "SIMD8 fragment",
+      "simd_width": 8,
+      "stage": "fragment",
+      "statistics": {
+        "Code size": 96,
+        "Cycles": 786,
+        "Fills": 0,
+        "GRF registers": 0,
+        "Instructions": 7,
+        "Loops": 0,
+        "Max dispatch width": 16,
+        "Max live registers": 7,
+        "Non SSA regs after NIR": 5,
+        "SENDs": 2,
+        "Scratch Memory Size": 0,
+        "Source hash": 3416124565,
+        "Spills": 0,
+        "Workgroup Memory Size": 0
+      }
+    },
+    {
+      "description": "SIMD16 fragment shader",
+      "name": "SIMD16 fragment",
+      "simd_width": 16,
+      "stage": "fragment",
+      "statistics": {
+        "Code size": 160,
+        "Cycles": 812,
+        "Fills": 0,
+        "GRF registers": 0,
+        "Instructions": 11,
+        "Loops": 0,
+        "Max dispatch width": 16,
+        "Max live registers": 13,
+        "Non SSA regs after NIR": 5,
+        "SENDs": 2,
+        "Scratch Memory Size": 0,
+        "Source hash": 3416124565,
+        "Spills": 0,
+        "Workgroup Memory Size": 0
+      }
+    }
+  ],
+  "host_render_verified": false,
+  "iga_platform": "12p1",
+  "ps_bytes": 160,
+  "ps_sha256": "220dd52a7439b428f150f3e363ae253ec2c15cd5804a06c3092faacbfd46e7e2",
+  "reused_fragment": "picasso/picasso-retained-textured-forward/retained_textured_forward.ps.simd16.bin",
+  "schema": 1,
+  "vertex_attributes": [
+    "float32x3@0",
+    "float32x2@12"
+  ],
+  "vertex_input_components": "xyz,uv",
+  "vertex_stride_bytes": 20,
+  "vertex_varyings": [
+    "smooth-perspective-vec2-location0"
+  ],
+  "vs_bytes": 224,
+  "vs_sha256": "d664d8ea2c410d8b1cc87e6cb56b4e591ef023f63308d8617bc96c6114996668"
+}

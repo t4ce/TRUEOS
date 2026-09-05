@@ -6,6 +6,97 @@ static CHURN_NATIVE_BINDING_COMMAND_LOGGED: AtomicBool = AtomicBool::new(false);
 static PICASSO_NATIVE_TEXTURE_STATE_LOGGED: AtomicBool = AtomicBool::new(false);
 static PICASSO_NATIVE_PS_COMMAND_LOGGED: AtomicBool = AtomicBool::new(false);
 
+const SAMPLER_CACHE_LINE_DWORDS: usize = 16;
+// TGL PRM Vol 2d, SAMPLER_STATE: zero means enabled, nearest min/mag,
+// no mip filtering, LOD zero, normalized coordinates and WRAP in U/V/W.
+const NEAREST_REPEAT_SAMPLER_STATE: [u32; 4] = [0; 4];
+
+fn write_nearest_repeat_sampler_cache_line(samplers: &mut [u32]) {
+    // TGL PRM Vol 9 p558 requires every 16-byte sampler in a fetched
+    // 64-byte cache line to contain valid state, including unused slots.
+    assert_eq!(samplers.len(), SAMPLER_CACHE_LINE_DWORDS);
+    for sampler in samplers.chunks_exact_mut(4) {
+        sampler.copy_from_slice(&NEAREST_REPEAT_SAMPLER_STATE);
+    }
+}
+
+const fn ordinary_vf_vertex_element_count(vertex_format: TriangleVertexFormat) -> usize {
+    match vertex_format {
+        TriangleVertexFormat::Float2 | TriangleVertexFormat::Float3 => 1,
+        TriangleVertexFormat::PosUv => 2,
+        TriangleVertexFormat::PosNormal | TriangleVertexFormat::PosNormalUv => 3,
+    }
+}
+
+fn cmd_3dstate_vertex_elements(count: usize) -> Result<u32, &'static str> {
+    let body_dwords = count
+        .checked_mul(2)
+        .and_then(|n| n.checked_sub(1))
+        .ok_or("ve-count-overflow")?;
+    let body_dwords = u32::try_from(body_dwords).map_err(|_| "ve-count-convert")?;
+    Ok(body_dwords | (CMD_3DSTATE_VERTEX_ELEMENTS_1 & !0xFF))
+}
+
+const fn mesa_vf_component_packing(vertex_format: TriangleVertexFormat) -> [u32; 4] {
+    if matches!(vertex_format, TriangleVertexFormat::PosUv) {
+        // SIMD8 VS payload: xyz from element 0, then uv from element 1.
+        [0x0000_0037, 0, 0, 0]
+    } else {
+        [0x0000_0007, 0, 0, 0]
+    }
+}
+
+#[cfg(test)]
+mod ordinary_pos_uv_state_tests {
+    use super::{
+        SAMPLER_CACHE_LINE_DWORDS, TriangleVertexFormat, cmd_3dstate_vertex_elements,
+        mesa_vf_component_packing, ordinary_vf_vertex_element_count,
+        write_nearest_repeat_sampler_cache_line,
+    };
+
+    #[test]
+    fn vertex_element_packet_covers_uv_before_next_command() {
+        let count = ordinary_vf_vertex_element_count(TriangleVertexFormat::PosUv);
+        let header = cmd_3dstate_vertex_elements(count).unwrap();
+        // Header + xyz descriptor (two DWORDs) + uv descriptor (two DWORDs).
+        let packet = [header, 0x0240_0000, 0x1113_0000, 0x0285_000C, 0x1123_0000];
+        assert_eq!((header & 0xFF) as usize + 2, packet.len());
+        assert_eq!(header, 0x7809_0003);
+        assert_eq!(ordinary_vf_vertex_element_count(TriangleVertexFormat::Float3), 1);
+        assert_eq!(ordinary_vf_vertex_element_count(TriangleVertexFormat::PosNormal), 3);
+        assert_eq!(ordinary_vf_vertex_element_count(TriangleVertexFormat::PosNormalUv), 3);
+    }
+
+    #[test]
+    fn component_packing_preserves_authored_xyz_and_uv_in_shader_order() {
+        let mask = mesa_vf_component_packing(TriangleVertexFormat::PosUv)[0];
+        let fetched = [0.125f32, -0.75, 0.5, 1.0, 0.875, 0.25, 0.0, 1.0];
+        let mut packed = [0.0; 5];
+        let mut cursor = 0;
+        for (component, value) in fetched.into_iter().enumerate() {
+            if mask & (1 << component) != 0 {
+                packed[cursor] = value;
+                cursor += 1;
+            }
+        }
+        assert_eq!(cursor, 5);
+        assert_eq!(packed, [0.125, -0.75, 0.5, 0.875, 0.25]);
+        assert_eq!(mesa_vf_component_packing(TriangleVertexFormat::Float3), [7, 0, 0, 0]);
+    }
+
+    #[test]
+    fn sampler_rewrite_initializes_every_prefetched_slot() {
+        let mut state = [0xFFFF_FFFF; SAMPLER_CACHE_LINE_DWORDS + 2];
+        write_nearest_repeat_sampler_cache_line(&mut state[1..=SAMPLER_CACHE_LINE_DWORDS]);
+        assert_eq!(state[0], 0xFFFF_FFFF);
+        assert_eq!(state[SAMPLER_CACHE_LINE_DWORDS + 1], 0xFFFF_FFFF);
+        for sampler in state[1..=SAMPLER_CACHE_LINE_DWORDS].chunks_exact(4) {
+            // Enabled; normalized; nearest/no mip; WRAP in all axes.
+            assert_eq!(sampler, [0, 0, 0, 0]);
+        }
+    }
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct PixelShaderDispatchContract {
     dispatch_8: u32,
@@ -591,8 +682,10 @@ fn write_triangle_probe_state_with_flush(
         32,
     )
     .ok_or("probe-state-align")?;
-    let sampler_state_offset = cursor;
-    cursor = crate::intel::align_up(sampler_state_offset + 16, 64).ok_or("probe-state-align")?;
+    let sampler_state_offset = crate::intel::align_up(cursor, 64).ok_or("probe-state-align")?;
+    cursor = sampler_state_offset
+        .checked_add(SAMPLER_CACHE_LINE_DWORDS * core::mem::size_of::<u32>())
+        .ok_or("probe-state-overflow")?;
     let blend_state_offset = cursor;
     cursor = crate::intel::align_up(blend_state_offset + 64, 64).ok_or("probe-state-align")?;
     let color_calc_state_offset = cursor;
@@ -769,8 +862,9 @@ fn write_triangle_probe_state_with_flush(
         write_triangle_sampled_rgba8_surface_state(&mut dwords[start..start + 16], texture)?;
     }
 
-    let sampler = &mut dwords[sampler_state_offset / 4..sampler_state_offset / 4 + 4];
-    sampler.fill(0);
+    let samplers =
+        &mut dwords[sampler_state_offset / 4..sampler_state_offset / 4 + SAMPLER_CACHE_LINE_DWORDS];
+    write_nearest_repeat_sampler_cache_line(samplers);
     if let Some(texture) = draw.sampled_texture
         && texture.sampler_flags
             != (crate::gpu::vgpu::SAMPLER_ADDRESS_U_REPEAT
@@ -785,7 +879,7 @@ fn write_triangle_probe_state_with_flush(
     {
         return Err("probe-metallic-roughness-sampler-mode");
     }
-    let sampler_words = [sampler[0], sampler[1], sampler[2], sampler[3]];
+    let sampler_words = [samplers[0], samplers[1], samplers[2], samplers[3]];
     if native_sampled && !PICASSO_NATIVE_TEXTURE_STATE_LOGGED.swap(true, Ordering::AcqRel) {
         let ps_binding_table = &dwords
             [ps_binding_table_offset / 4..ps_binding_table_offset / 4 + ps_binding_table_entries];
@@ -1708,15 +1802,6 @@ fn encode_triangle_probe_batch(
             cursor,
             (component0 << 28) | (component1 << 24) | (component2 << 20) | (component3 << 16),
         )
-    }
-
-    fn cmd_3dstate_vertex_elements(count: usize) -> Result<u32, &'static str> {
-        let body_dwords = count
-            .checked_mul(2)
-            .and_then(|n| n.checked_sub(1))
-            .ok_or("ve-count-overflow")?;
-        let body_dwords = u32::try_from(body_dwords).map_err(|_| "ve-count-convert")?;
-        Ok(body_dwords | (9 << 16) | (3 << 27) | (3 << 29))
     }
 
     fn push_raster_wm_oa_config(
@@ -2691,17 +2776,17 @@ fn encode_triangle_probe_batch(
         native.vertex_element_count
     } else if mesa_simple_rect_stack && vf_synthesized_vue {
         2
-    } else {
+    } else if vf_synthesized_vue {
         streamout_experiment.vf_vertex_element_count()
+    } else {
+        ordinary_vf_vertex_element_count(draw.vertex_format)
     };
     push(
         batch_dwords,
         &mut cursor,
-        if artifact_native_fixed_function || vf_synthesized_vue {
-            cmd_3dstate_vertex_elements(vf_vertex_element_count)?
-        } else {
-            CMD_3DSTATE_VERTEX_ELEMENTS_1
-        },
+        // The header must cover every emitted element. A position-only
+        // length before PosUv makes the UV descriptor an invalid command.
+        cmd_3dstate_vertex_elements(vf_vertex_element_count)?,
     )?;
     if mesa_simple_rect_stack && vf_synthesized_vue {
         // Mesa's simple-shader / BLORP path deliberately builds a synthetic
@@ -3031,8 +3116,16 @@ fn encode_triangle_probe_batch(
     }
     log_batch_offset(cursor, "3DSTATE_VF_SGVS");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_VF_SGVS)?;
+    // This shader consumes only authored xyz + uv. Host position-only SGVS
+    // locations refer to element 1, which is now the UV element. Do not
+    // insert system values into the sampled shader's fetched attributes.
+    let ordinary_pos_uv = draw.native.is_none()
+        && !vf_synthesized_vue
+        && draw.vertex_format == TriangleVertexFormat::PosUv;
     let vf_sgvs_dw1 = if let Some(native) = draw.native {
         native.vf_sgvs_dw1
+    } else if ordinary_pos_uv {
+        0
     } else if mesa_host_fixed_function {
         0x6001_4001
     } else if mesa_simple_rect_stack && vf_synthesized_vue {
@@ -3048,7 +3141,7 @@ fn encode_triangle_probe_batch(
         &mut cursor,
         draw.native.map_or_else(
             || {
-                if mesa_host_fixed_function {
+                if mesa_host_fixed_function && !ordinary_pos_uv {
                     0x3001_0001
                 } else {
                     0
@@ -3061,7 +3154,13 @@ fn encode_triangle_probe_batch(
         batch_dwords,
         &mut cursor,
         draw.native.map_or_else(
-            || if mesa_host_fixed_function { 2 } else { 0 },
+            || {
+                if mesa_host_fixed_function && !ordinary_pos_uv {
+                    2
+                } else {
+                    0
+                }
+            },
             |native| native.vf_sgvs_2_dw2,
         ),
     )?;
@@ -3076,18 +3175,15 @@ fn encode_triangle_probe_batch(
             )?;
             push(batch_dwords, &mut cursor, instancing.step_rate)?;
         }
-    } else if mesa_simple_rect_stack && vf_synthesized_vue {
-        for element_index in 0..2 {
-            log_batch_offset(cursor, "3DSTATE_VF_INSTANCING mesa-simple");
+    } else {
+        // Instancing is sticky per element: reset UV as well as position
+        // when returning from a native/instanced draw to this VF-fed mesh.
+        for element_index in 0..vf_vertex_element_count {
+            log_batch_offset(cursor, "3DSTATE_VF_INSTANCING");
             push(batch_dwords, &mut cursor, CMD_3DSTATE_VF_INSTANCING)?;
-            push(batch_dwords, &mut cursor, element_index)?;
+            push(batch_dwords, &mut cursor, element_index as u32)?;
             push(batch_dwords, &mut cursor, 0)?;
         }
-    } else {
-        log_batch_offset(cursor, "3DSTATE_VF_INSTANCING");
-        push(batch_dwords, &mut cursor, CMD_3DSTATE_VF_INSTANCING)?;
-        push(batch_dwords, &mut cursor, 0)?;
-        push(batch_dwords, &mut cursor, 0)?;
     }
     log_batch_offset(cursor, "3DSTATE_VF_TOPOLOGY");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_VF_TOPOLOGY)?;
@@ -3157,9 +3253,10 @@ fn encode_triangle_probe_batch(
     if mesa_host_fixed_function || artifact_native_fixed_function {
         log_batch_offset(cursor, "3DSTATE_VF_COMPONENT_PACKING");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_VF_COMPONENT_PACKING)?;
-        let packing = draw
-            .native
-            .map_or([0x0000_0007, 0, 0, 0], |native| native.vf_component_packing);
+        let packing = draw.native.map_or_else(
+            || mesa_vf_component_packing(draw.vertex_format),
+            |native| native.vf_component_packing,
+        );
         for dword in packing {
             push(batch_dwords, &mut cursor, dword)?;
         }

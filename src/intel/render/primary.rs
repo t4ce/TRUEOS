@@ -353,6 +353,79 @@ impl ResidentScenePrimitiveTopology {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ResidentSceneFragmentContract {
     ConstantRgba,
+    ClipPosition3UvTexture,
+}
+
+fn resident_scene_shader_pipeline(
+    fragment_contract: ResidentSceneFragmentContract,
+    has_texture: bool,
+    vertex_format: TriangleVertexFormat,
+    vertex_stride: u32,
+) -> Result<&'static crate::intel::shader::TrianglePipeline, &'static str> {
+    match (fragment_contract, has_texture) {
+        (ResidentSceneFragmentContract::ConstantRgba, false) => {
+            Ok(crate::intel::shader::triangle_pipeline_simd16())
+        }
+        (ResidentSceneFragmentContract::ClipPosition3UvTexture, true)
+            if vertex_format == TriangleVertexFormat::PosUv && vertex_stride == 20 =>
+        {
+            Ok(crate::intel::shader::clip_position3_uv_texture_pipeline())
+        }
+        _ => Err("scene-fragment-contract-texture-mismatch"),
+    }
+}
+
+#[cfg(test)]
+mod resident_scene_shader_pipeline_tests {
+    use super::{
+        ResidentSceneFragmentContract as Fragment, TriangleVertexFormat as Vertex,
+        resident_scene_shader_pipeline,
+    };
+    use crate::intel::shader::DispatchMode;
+
+    #[test]
+    fn ordinary_scene_keeps_constant_simd16_shader() {
+        let pipeline =
+            resident_scene_shader_pipeline(Fragment::ConstantRgba, false, Vertex::Float3, 12)
+                .unwrap();
+        assert!(core::ptr::eq(pipeline, crate::intel::shader::triangle_pipeline_simd16()));
+        assert_eq!(pipeline.ps.meta.kernel.dispatch_mode, DispatchMode::Simd16);
+        assert_eq!(pipeline.ps.meta.num_varying_inputs, 0);
+    }
+
+    #[test]
+    fn textured_scene_selects_uv_vertex_and_sampler_pixel_shader() {
+        let pipeline = resident_scene_shader_pipeline(
+            Fragment::ClipPosition3UvTexture,
+            true,
+            Vertex::PosUv,
+            20,
+        )
+        .unwrap();
+        assert!(core::ptr::eq(
+            pipeline,
+            crate::intel::shader::clip_position3_uv_texture_pipeline()
+        ));
+        assert_eq!(pipeline.vs.meta.kernel.dispatch_mode, DispatchMode::Simd8);
+        assert_eq!(pipeline.ps.meta.kernel.dispatch_mode, DispatchMode::Simd16);
+        assert_eq!(pipeline.ps.meta.num_varying_inputs, 1);
+        assert_eq!(pipeline.ps.meta.kernel.sampler_count, 1);
+        assert_eq!(pipeline.ps.meta.kernel.binding_table_entry_count, 3);
+        assert_ne!(pipeline.ps.code, crate::intel::shader::triangle_pipeline_simd16().ps.code);
+    }
+
+    #[test]
+    fn mismatched_texture_and_vertex_contracts_are_rejected() {
+        for (fragment, texture, vertex, stride) in [
+            (Fragment::ConstantRgba, true, Vertex::PosUv, 20),
+            (Fragment::ClipPosition3UvTexture, false, Vertex::PosUv, 20),
+            (Fragment::ClipPosition3UvTexture, true, Vertex::Float3, 12),
+            (Fragment::ClipPosition3UvTexture, true, Vertex::PosUv, 12),
+            (Fragment::ClipPosition3UvTexture, true, Vertex::PosNormalUv, 32),
+        ] {
+            assert!(resident_scene_shader_pipeline(fragment, texture, vertex, stride).is_err());
+        }
+    }
 }
 
 #[derive(Copy, Clone)]
@@ -365,6 +438,7 @@ unsafe impl Send for ResidentSceneBatchState {}
 
 static RESIDENT_SCENE_BATCH_STATE: Mutex<Option<ResidentSceneBatchState>> = Mutex::new(None);
 static RESIDENT_SCENE_BATCH_PATH_LOGGED: AtomicBool = AtomicBool::new(false);
+static RESIDENT_SCENE_UV_TEXTURE_PATH_LOGGED: AtomicBool = AtomicBool::new(false);
 static RESIDENT_CHURN_FORWARD_GPU_NATIVE_PATH_LOGGED: AtomicBool = AtomicBool::new(false);
 static PICASSO_RETAINED_TEXTURED_SUBMIT_LOGGED: AtomicBool = AtomicBool::new(false);
 static PICASSO_RETAINED_TEXTURED_PATH_LOGGED: AtomicBool = AtomicBool::new(false);
@@ -1480,10 +1554,15 @@ fn stage_resident_scene_secondary(
     result_ggtt_gpu: u64,
 ) -> Result<usize, &'static str> {
     draw.state_gpu_addr = state_gpu;
-    if fragment_contract != ResidentSceneFragmentContract::ConstantRgba {
-        return Err("scene-fragment-contract-texture-mismatch");
+    if draw.native.is_some() {
+        return Err("scene-fragment-contract-native-mismatch");
     }
-    let pipeline = crate::intel::shader::triangle_pipeline_simd16();
+    let pipeline = resident_scene_shader_pipeline(
+        fragment_contract,
+        sampled_texture.is_some(),
+        draw.vertex_format,
+        draw.vertex_stride,
+    )?;
     draw.sampled_texture = sampled_texture.map(|texture| TriangleSampledTextureBinding {
         gpu_addr: texture.storage.gpu_base(),
         width: texture.width,
@@ -1578,6 +1657,18 @@ fn stage_resident_scene_secondary(
         result_ggtt_gpu,
     )?;
     crate::intel::dma_flush(unsafe { warm.batch_virt.add(batch_offset) }, bytes);
+    if sampled_texture.is_some()
+        && !RESIDENT_SCENE_UV_TEXTURE_PATH_LOGGED.swap(true, Ordering::AcqRel)
+    {
+        crate::log_important!(target: "render";
+            "resident-scene: proof=clip-position3-uv-texture-encoded stride={} vs_bytes={} vs_urb_entry_64b={} ps_bytes={} varying_inputs={} texture_bti=2 sampler=0 rt_bti=0 sbe_offset=1 sbe_length=1 does_not_prove=pixel-output\n",
+            draw.vertex_stride,
+            pipeline.vs.meta.kernel.code_size_bytes,
+            pipeline.vs.meta.urb_entry_output_length,
+            pipeline.ps.meta.kernel.code_size_bytes,
+            pipeline.ps.meta.num_varying_inputs,
+        );
+    }
     Ok(bytes)
 }
 
