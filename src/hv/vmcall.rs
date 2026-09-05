@@ -1652,7 +1652,9 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                     )
                 });
             let result = submit.ok_or(-22).and_then(|submit| {
-                crate::r::io::vgpu_cabi::broker_retained_frame_submit_v2(principal, arg0, arg1, submit)
+                crate::r::io::vgpu_cabi::broker_retained_frame_submit_v2(
+                    principal, arg0, arg1, submit,
+                )
             });
             match result {
                 Ok(point) => write_record_response(vm_id, seq, 0, &point),

@@ -900,7 +900,10 @@ impl Device {
         let mut point = TimelinePoint::default();
         rc_result(unsafe {
             vcabi::trueos_cabi_vgpu_retained_frame_submit_v2(
-                self.0, queue.handle, &submit, &mut point,
+                self.0,
+                queue.handle,
+                &submit,
+                &mut point,
             )
         })?;
         surface.live = false;

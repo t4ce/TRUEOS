@@ -20,6 +20,15 @@ fn write_nearest_repeat_sampler_cache_line(samplers: &mut [u32]) {
     }
 }
 
+fn write_pbr_sampler_cache_line(samplers: &mut [u32]) {
+    assert_eq!(samplers.len(), SAMPLER_CACHE_LINE_DWORDS);
+    // gfx12 SAMPLER_STATE: linear min/mag, normalized repeat, LOD0,
+    // sRGB decode enabled, and address rounding for linear filters.
+    for sampler in samplers.chunks_exact_mut(4) {
+        sampler.copy_from_slice(&[(1 << 14) | (1 << 17), 0, 0, 0x3F << 13]);
+    }
+}
+
 const fn ordinary_vf_vertex_element_count(vertex_format: TriangleVertexFormat) -> usize {
     match vertex_format {
         TriangleVertexFormat::Float2 | TriangleVertexFormat::Float3 => 1,
@@ -908,11 +917,7 @@ fn write_triangle_probe_state_with_flush(
         &mut dwords[sampler_state_offset / 4..sampler_state_offset / 4 + SAMPLER_CACHE_LINE_DWORDS];
     write_nearest_repeat_sampler_cache_line(samplers);
     if native_pbr {
-        // gfx12 SAMPLER_STATE: linear min/mag, normalized repeat, LOD0,
-        // sRGB decode enabled, and address rounding for linear filters.
-        for sampler in samplers.chunks_exact_mut(4) {
-            sampler.copy_from_slice(&[(1 << 14) | (1 << 17), 0, 0, 0x3F << 13]);
-        }
+        write_pbr_sampler_cache_line(samplers);
     }
     if let Some(texture) = draw.sampled_texture
         && texture.sampler_flags
@@ -1239,6 +1244,51 @@ mod sampled_rgba8_surface_tests {
         assert_eq!(surface[1], (RENDER_MOCS << 24) | (1 << 31));
         assert_eq!(surface[8], 0x1234_5000);
         assert_eq!(surface[9], 0);
+    }
+}
+
+#[cfg(test)]
+mod picasso_pbr_state_tests {
+    use super::*;
+
+    #[test]
+    fn tangent_vertex_packet_covers_all_five_elements() {
+        let count = ordinary_vf_vertex_element_count(TriangleVertexFormat::PosNormalUvTangent);
+        assert_eq!(cmd_3dstate_vertex_elements(count).unwrap(), 0x7809_0009);
+    }
+
+    #[test]
+    fn color_views_decode_srgb_without_changing_texture_storage() {
+        let texture = TriangleSampledTextureBinding {
+            gpu_addr: 0x1234_5678_9000, width: 2048, height: 1024,
+            pitch: 8192, sampler_flags: 3,
+        };
+        let mut data_view = [0; 16];
+        let mut color_view = [0; 16];
+        write_triangle_sampled_surface_state(&mut data_view, texture, false).unwrap();
+        write_triangle_sampled_surface_state(&mut color_view, texture, true).unwrap();
+        assert_eq!((data_view[0] >> 18) & 0x1FF, 199);
+        assert_eq!((color_view[0] >> 18) & 0x1FF, 200);
+        assert_eq!(&color_view[1..], &data_view[1..]);
+        assert_eq!(color_view[2], 2047 | (1023 << 16));
+        assert_eq!(color_view[3], 8191);
+        assert_eq!(color_view[8], 0x5678_9000);
+        assert_eq!(color_view[9], 0x1234);
+    }
+
+    #[test]
+    fn every_prefetched_pbr_sampler_filters_linearly_and_decodes_srgb() {
+        let mut cache = [u32::MAX; 16];
+        write_pbr_sampler_cache_line(&mut cache);
+        for sampler in cache.chunks_exact(4) {
+            assert_eq!((sampler[0] >> 14) & 7, 1);
+            assert_eq!((sampler[0] >> 17) & 7, 1);
+            assert_eq!(sampler[0] & (1 << 31), 0);
+            assert_eq!(sampler[1], 0); // Only the resident mip level 0.
+            assert_eq!(sampler[2] & 2, 0); // SRGB DECODE = DECODE_EXT.
+            assert_eq!(sampler[3] & 0x7FF, 0); // normalized repeat U/V/W.
+            assert_eq!((sampler[3] >> 13) & 0x3F, 0x3F);
+        }
     }
 }
 

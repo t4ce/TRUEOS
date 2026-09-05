@@ -809,8 +809,16 @@ fn pack_retained_material_parameters(
         || parameters.flags & !v::vgpu::RETAINED_MATERIAL_FLAG_DOUBLE_SIDED != 0
         || (parameters.flags & v::vgpu::RETAINED_MATERIAL_FLAG_DOUBLE_SIDED != 0) != double_sided
         || texture_presence & !0x1f != 0
-        || !parameters.base_color_factor.iter().copied().all(unit_interval)
-        || !parameters.emissive_factor.iter().copied().all(unit_interval)
+        || !parameters
+            .base_color_factor
+            .iter()
+            .copied()
+            .all(unit_interval)
+        || !parameters
+            .emissive_factor
+            .iter()
+            .copied()
+            .all(unit_interval)
         || !parameters.normal_scale.is_finite()
         || !unit_interval(parameters.metallic_factor)
         || !unit_interval(parameters.roughness_factor)
@@ -838,6 +846,137 @@ fn pack_retained_material_parameters(
         0,
         0,
     ])
+}
+
+fn retained_material_contract_accepts(
+    sampled: bool,
+    pbr: bool,
+    material_v2: bool,
+    texture_presence: u32,
+    legacy_emissive: [f32; 3],
+) -> bool {
+    if legacy_emissive != [0.0; 3] || texture_presence & !0x1f != 0 {
+        return false;
+    }
+    if pbr {
+        sampled && material_v2 && texture_presence & 1 != 0
+    } else if material_v2 {
+        false
+    } else if sampled {
+        texture_presence == 1
+    } else {
+        texture_presence == 0
+    }
+}
+
+#[cfg(test)]
+mod retained_material_parameters_tests {
+    use super::{pack_retained_material_parameters, retained_material_contract_accepts};
+    use v::vgpu::{RETAINED_MATERIAL_FLAG_DOUBLE_SIDED, RetainedMaterialParameters};
+
+    #[test]
+    fn packs_factors_and_authenticated_presence_in_shader_vec4_order() {
+        let parameters = RetainedMaterialParameters {
+            base_color_factor: [0.1, 0.2, 0.3, 0.4],
+            emissive_factor: [0.5, 0.6, 0.7],
+            normal_scale: -2.0,
+            metallic_factor: 0.8,
+            roughness_factor: 0.9,
+            occlusion_strength: 0.25,
+            alpha_cutoff: 0.75,
+            flags: RETAINED_MATERIAL_FLAG_DOUBLE_SIDED,
+            reserved: [0; 3],
+        };
+        let words = pack_retained_material_parameters(&parameters, 0x1f, true).unwrap();
+        assert_eq!(
+            words[..12],
+            [
+                0.1f32, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, -2.0, 0.8, 0.9, 0.25, 0.75
+            ]
+            .map(f32::to_bits)
+        );
+        assert_eq!(words[12..], [4, 0x1f, 0, 0]);
+        let defaults =
+            pack_retained_material_parameters(&RetainedMaterialParameters::default(), 1, false)
+                .unwrap();
+        assert_eq!(
+            defaults[..12],
+            [
+                1.0f32, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.5
+            ]
+            .map(f32::to_bits)
+        );
+        assert_eq!(defaults[12..], [0, 1, 0, 0]);
+    }
+
+    #[test]
+    fn rejects_unimplemented_flags_nonfinite_factors_and_culling_mismatch() {
+        let baseline = RetainedMaterialParameters::default();
+        for flags in [1, 2, 8, u32::MAX] {
+            assert!(
+                pack_retained_material_parameters(
+                    &RetainedMaterialParameters { flags, ..baseline },
+                    1,
+                    false
+                )
+                .is_none()
+            );
+        }
+        assert!(pack_retained_material_parameters(&baseline, 1, true).is_none());
+        assert!(pack_retained_material_parameters(&baseline, 0x20, false).is_none());
+        for parameters in [
+            RetainedMaterialParameters {
+                base_color_factor: [f32::NAN; 4],
+                ..baseline
+            },
+            RetainedMaterialParameters {
+                emissive_factor: [f32::INFINITY; 3],
+                ..baseline
+            },
+            RetainedMaterialParameters {
+                normal_scale: f32::NAN,
+                ..baseline
+            },
+            RetainedMaterialParameters {
+                metallic_factor: -0.1,
+                ..baseline
+            },
+            RetainedMaterialParameters {
+                roughness_factor: 1.1,
+                ..baseline
+            },
+            RetainedMaterialParameters {
+                occlusion_strength: f32::INFINITY,
+                ..baseline
+            },
+            RetainedMaterialParameters {
+                alpha_cutoff: -0.1,
+                ..baseline
+            },
+            RetainedMaterialParameters {
+                reserved: [1, 0, 0],
+                ..baseline
+            },
+        ] {
+            assert!(pack_retained_material_parameters(&parameters, 1, false).is_none());
+        }
+    }
+
+    #[test]
+    fn v1_keeps_its_contract_and_only_v2_pbr_accepts_optional_maps() {
+        assert!(retained_material_contract_accepts(false, false, false, 0, [0.0; 3]));
+        assert!(retained_material_contract_accepts(true, false, false, 1, [0.0; 3]));
+        assert!(!retained_material_contract_accepts(true, false, false, 0x1f, [0.0; 3]));
+        assert!(!retained_material_contract_accepts(true, false, true, 1, [0.0; 3]));
+        assert!(!retained_material_contract_accepts(true, true, false, 1, [0.0; 3]));
+        for presence in 0..32 {
+            assert_eq!(
+                retained_material_contract_accepts(true, true, true, presence, [0.0; 3]),
+                presence & 1 != 0
+            );
+        }
+        assert!(!retained_material_contract_accepts(true, true, true, 0x1f, [1.0; 3]));
+    }
 }
 
 struct QueueRecord {
@@ -2655,7 +2794,18 @@ pub(crate) fn submit_ui4_indexed_draw(
     if draw.index_count == 0 || draw.base_vertex != 0 {
         return Err(VgpuError::Unsupported);
     }
-    let (window_id, phys, producer_gpu, bytes, width, height, pitch, vertices, indices, sampled_texture) = {
+    let (
+        window_id,
+        phys,
+        producer_gpu,
+        bytes,
+        width,
+        height,
+        pitch,
+        vertices,
+        indices,
+        sampled_texture,
+    ) = {
         let mut broker = BROKER.lock();
         let device = lookup_device_mut(&mut broker, device_handle, principal)?;
         ensure_live(device)?;
@@ -2767,9 +2917,8 @@ pub(crate) fn submit_ui4_indexed_draw(
             for vertex in 0..vertex_count {
                 let start = draw.vertex_offset + vertex * vertex_stride + position_offset;
                 let attribute_bytes = if textured { 20 } else { 12 };
-                let raw = unsafe {
-                    core::slice::from_raw_parts(vertex_virt.add(start), attribute_bytes)
-                };
+                let raw =
+                    unsafe { core::slice::from_raw_parts(vertex_virt.add(start), attribute_bytes) };
                 let mut attributes = [0.0; 5];
                 for (component, bytes) in attributes.iter_mut().zip(raw.chunks_exact(4)) {
                     *component = f32::from_le_bytes(bytes.try_into().unwrap());
@@ -2778,10 +2927,9 @@ pub(crate) fn submit_ui4_indexed_draw(
             }
             let texture = if textured {
                 let texture_record = lookup_buffer(device, draw.sampled_texture)?;
-                let texture_bytes = usize::try_from(
-                    u64::from(draw.texture_pitch) * u64::from(draw.texture_height),
-                )
-                .map_err(|_| VgpuError::Unsupported)?;
+                let texture_bytes =
+                    usize::try_from(u64::from(draw.texture_pitch) * u64::from(draw.texture_height))
+                        .map_err(|_| VgpuError::Unsupported)?;
                 if texture_record.usage & BUFFER_USAGE_MAP_WRITE == 0
                     || draw.texture_width == 0
                     || draw.texture_height == 0
@@ -2796,9 +2944,8 @@ pub(crate) fn submit_ui4_indexed_draw(
                     BufferBacking::GuestPages { .. } => return Err(VgpuError::Unsupported),
                 };
                 crate::intel::dma_flush(unsafe { texture_virt.add(0) }, texture_bytes);
-                let texture_bytes = unsafe {
-                    core::slice::from_raw_parts(texture_virt, texture_bytes)
-                };
+                let texture_bytes =
+                    unsafe { core::slice::from_raw_parts(texture_virt, texture_bytes) };
                 Some(
                     crate::intel::render::create_resident_sampled_rgba8_texture(
                         draw.texture_width,
@@ -2835,7 +2982,18 @@ pub(crate) fn submit_ui4_indexed_draw(
                 triangle.swap(1, 2);
             }
         }
-        (window_id, phys, producer_gpu, bytes, width, height, pitch, vertices, indices, sampled_texture)
+        (
+            window_id,
+            phys,
+            producer_gpu,
+            bytes,
+            width,
+            height,
+            pitch,
+            vertices,
+            indices,
+            sampled_texture,
+        )
     };
 
     let destination = crate::intel::gpgpu::GpgpuRgba8Surface::new(
@@ -2874,20 +3032,19 @@ pub(crate) fn submit_ui4_indexed_draw(
         viewport_translation_px: [0.0, 0.0],
         topology: crate::intel::render::ResidentScenePrimitiveTopology::TriangleList,
     };
-    let diagnostic_logs = if sampled_texture.is_some()
-        && crate::log_os::flags::QUAD_TEXTURE_DIAG_PROFILE_ENABLED
-    {
-        static DIAGNOSTICS: crate::log_os::LogRateLimitState =
-            crate::log_os::LogRateLimitState::new();
-        DIAGNOSTICS
-            .observe(
-                crate::log_os::flags::QUAD_TEXTURE_DIAG_FIRST,
-                crate::log_os::flags::QUAD_TEXTURE_DIAG_EVERY,
-            )
-            .should_emit()
-    } else {
-        false
-    };
+    let diagnostic_logs =
+        if sampled_texture.is_some() && crate::log_os::flags::QUAD_TEXTURE_DIAG_PROFILE_ENABLED {
+            static DIAGNOSTICS: crate::log_os::LogRateLimitState =
+                crate::log_os::LogRateLimitState::new();
+            DIAGNOSTICS
+                .observe(
+                    crate::log_os::flags::QUAD_TEXTURE_DIAG_FIRST,
+                    crate::log_os::flags::QUAD_TEXTURE_DIAG_EVERY,
+                )
+                .should_emit()
+        } else {
+            false
+        };
     if diagnostic_logs {
         crate::log_info!(target: "render";
             "quad-texture: phase=prepared principal={:?} pipeline={} surface={} vertices={} indices={} first_xyzuv={:?} texture={}x{} pitch={} sampler_flags=0x{:X} target={}x{} depth=enabled\n",
@@ -3719,48 +3876,17 @@ pub(crate) fn submit_ui4_retained_frame(
             };
             material_textures[role] = Some(texture);
         }
-        let parameters = if let Some(parameters) = material_parameters {
-            let texture_presence = material_textures.iter().enumerate().fold(0, |mask, (role, texture)| {
-                mask | ((texture.is_some() as u32) << role)
-            });
-            let packed = pack_retained_material_parameters(&parameters, texture_presence, double_sided);
-            if !resident.pbr_material()
-                || material_textures[v::vgpu::RETAINED_MATERIAL_BASE_COLOR].is_none()
-                || submit.material.emissive_factor != [0.0; 3]
-                || packed.is_none()
-            {
-                return Err(reject_retained_submission(
-                    device, mesh_handle, surface_handle, queue_handle, VgpuError::Unsupported,
-                ));
-            }
-            packed.expect("validated retained material parameters")
-        } else if resident.pbr_material() {
-            return Err(reject_retained_submission(
-                device, mesh_handle, surface_handle, queue_handle, VgpuError::Unsupported,
-            ));
-        } else {
-            [0; 16]
-        };
-        if resident.sampled_material() && !resident.pbr_material() {
-            if material_textures[v::vgpu::RETAINED_MATERIAL_BASE_COLOR].is_none()
-                || material_textures[v::vgpu::RETAINED_MATERIAL_METALLIC_ROUGHNESS].is_some()
-                || material_textures[v::vgpu::RETAINED_MATERIAL_EMISSIVE].is_some()
-                || material_textures[v::vgpu::RETAINED_MATERIAL_OCCLUSION].is_some()
-                || material_textures[v::vgpu::RETAINED_MATERIAL_NORMAL].is_some()
-                // The base-color-only rung has no factor uniform.
-                || submit.material.emissive_factor != [0.0; 3]
-            {
-                return Err(reject_retained_submission(
-                    device,
-                    mesh_handle,
-                    surface_handle,
-                    queue_handle,
-                    VgpuError::Unsupported,
-                ));
-            }
-        } else if !resident.sampled_material() && (material_textures.iter().any(Option::is_some)
-            || submit.material.emissive_factor != [0.0; 3])
-        {
+        let texture_presence = material_textures
+            .iter()
+            .enumerate()
+            .fold(0, |mask, (role, texture)| mask | ((texture.is_some() as u32) << role));
+        if !retained_material_contract_accepts(
+            resident.sampled_material(),
+            resident.pbr_material(),
+            material_parameters.is_some(),
+            texture_presence,
+            submit.material.emissive_factor,
+        ) {
             return Err(reject_retained_submission(
                 device,
                 mesh_handle,
@@ -3769,6 +3895,22 @@ pub(crate) fn submit_ui4_retained_frame(
                 VgpuError::Unsupported,
             ));
         }
+        let parameters = if let Some(parameters) = material_parameters {
+            match pack_retained_material_parameters(&parameters, texture_presence, double_sided) {
+                Some(packed) => packed,
+                None => {
+                    return Err(reject_retained_submission(
+                        device,
+                        mesh_handle,
+                        surface_handle,
+                        queue_handle,
+                        VgpuError::Unsupported,
+                    ));
+                }
+            }
+        } else {
+            [0; 16]
+        };
         let retained_material = RetainedMaterialSubmission {
             textures: material_textures,
             parameters,
@@ -4058,7 +4200,9 @@ pub(crate) fn submit_ui4_retained_frame(
     let render_material = retained_material.base_color().map(|base_color| {
         crate::intel::render::ResidentRetainedMaterial {
             base_color,
-            metallic_roughness: retained_material.textures[v::vgpu::RETAINED_MATERIAL_METALLIC_ROUGHNESS].as_deref(),
+            metallic_roughness: retained_material.textures
+                [v::vgpu::RETAINED_MATERIAL_METALLIC_ROUGHNESS]
+                .as_deref(),
             emissive: retained_material.textures[v::vgpu::RETAINED_MATERIAL_EMISSIVE].as_deref(),
             occlusion: retained_material.textures[v::vgpu::RETAINED_MATERIAL_OCCLUSION].as_deref(),
             normal: retained_material.textures[v::vgpu::RETAINED_MATERIAL_NORMAL].as_deref(),
