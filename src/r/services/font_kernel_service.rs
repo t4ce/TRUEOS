@@ -374,18 +374,6 @@ enum FrameStampInput {
         glyph_cache: Arc<FontGpuProducerResources>,
     },
     Prepared(PreparedGlyphPlan),
-    FontRushClear {
-        color_rgba: u32,
-        raster_width: u32,
-        raster_height: u32,
-    },
-    FontRushRgba8Sprites {
-        source: Arc<FontStampedBuffer>,
-        descriptors: Vec<crate::intel::gpgpu::GpgpuSpriteQuadWorklistDesc>,
-        logical_glyphs: usize,
-        raster_width: u32,
-        raster_height: u32,
-    },
 }
 
 impl FrameStampInput {
@@ -394,7 +382,6 @@ impl FrameStampInput {
             Self::Request(request) => request.fit,
             Self::ProducerRequest { request, .. } => request.fit,
             Self::Prepared(plan) => plan.fit(),
-            Self::FontRushClear { .. } | Self::FontRushRgba8Sprites { .. } => FontStampFit::Canvas,
         }
     }
 
@@ -409,16 +396,6 @@ impl FrameStampInput {
                 .first()
                 .map(|layer| (layer.scene.raster_width, layer.scene.raster_height)),
             Self::Prepared(plan) => Some((plan.raster_width(), plan.raster_height())),
-            Self::FontRushClear {
-                raster_width,
-                raster_height,
-                ..
-            }
-            | Self::FontRushRgba8Sprites {
-                raster_width,
-                raster_height,
-                ..
-            } => Some((*raster_width, *raster_height)),
         }
     }
 }
@@ -1622,151 +1599,6 @@ pub(crate) fn submit_prepared_frame_stamp(
     )
 }
 
-/// Queue one Font-owned full-frame clear and return the exact scanout fence.
-///
-/// This is the blank transition between the title and the cache charge.  It
-/// deliberately carries no glyph plan: a visually empty frame must not pay
-/// Skrifa, tessellation, coverage, or shading work for a dummy character.
-pub(crate) fn submit_font_rush_frame_clear(
-    destination: crate::intel::gpgpu::GpgpuRgba8Surface,
-    color_rgba: u32,
-) -> Result<PendingFontFrameStamp, FontKernelError> {
-    queue_frame_stamp(
-        FrameStampInput::FontRushClear {
-            color_rgba,
-            raster_width: destination.width,
-            raster_height: destination.height,
-        },
-        destination,
-        None,
-        None,
-    )
-    .map_err(|rejection| rejection.error)
-}
-
-/// Clear one caller-owned frame, then scale/tint an immutable Font-owned RGBA8
-/// stamp into it through the proven Font sprite worklist.
-///
-/// The source allocation remains owned by the queued request until the exact
-/// destination release is proven. `clear_rgba == 0` gives the Font Rush
-/// showcase its transparent base without rebuilding Skrifa coverage for every
-/// presentation-size or color change.
-pub(crate) fn submit_font_rush_showcase_sprite_frame(
-    source: Arc<FontStampedBuffer>,
-    descriptors: Vec<crate::intel::gpgpu::GpgpuSpriteQuadWorklistDesc>,
-    glyphs: usize,
-    destination: crate::intel::gpgpu::GpgpuRgba8Surface,
-    clear_rgba: u32,
-) -> Result<PendingFontFrameStamp, FontKernelError> {
-    queue_frame_stamp(
-        FrameStampInput::FontRushRgba8Sprites {
-            source,
-            descriptors,
-            logical_glyphs: glyphs,
-            raster_width: destination.width,
-            raster_height: destination.height,
-        },
-        destination,
-        Some(clear_rgba),
-        None,
-    )
-    .map_err(|rejection| rejection.error)
-}
-
-fn font_frame_gpu_ranges_overlap(
-    left: u64,
-    left_bytes: usize,
-    right: u64,
-    right_bytes: usize,
-) -> bool {
-    let Some(left_end) = left.checked_add(left_bytes as u64) else {
-        return true;
-    };
-    let Some(right_end) = right.checked_add(right_bytes as u64) else {
-        return true;
-    };
-    left < right_end && right < left_end
-}
-
-fn font_rush_rgba8_sprite_descriptor_is_valid(
-    descriptor: crate::intel::gpgpu::GpgpuSpriteQuadWorklistDesc,
-) -> bool {
-    const VALID_FLAGS: u32 = crate::intel::gpgpu::SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER
-        | crate::intel::gpgpu::SPRITE_QUAD_WORKLIST_FLAG_PREMUL_SRC;
-    let coordinates = [
-        descriptor.c0_x,
-        descriptor.c0_y,
-        descriptor.c0_u,
-        descriptor.c0_v,
-        descriptor.c1_x,
-        descriptor.c1_y,
-        descriptor.c1_u,
-        descriptor.c1_v,
-        descriptor.c2_x,
-        descriptor.c2_y,
-        descriptor.c2_u,
-        descriptor.c2_v,
-        descriptor.c3_x,
-        descriptor.c3_y,
-        descriptor.c3_u,
-        descriptor.c3_v,
-    ];
-    if coordinates.iter().any(|coordinate| !coordinate.is_finite())
-        || descriptor.flags & !VALID_FLAGS != 0
-        || (descriptor.flags & crate::intel::gpgpu::SPRITE_QUAD_WORKLIST_FLAG_PREMUL_SRC != 0
-            && descriptor.flags & crate::intel::gpgpu::SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER == 0)
-    {
-        return false;
-    }
-
-    let edge_x = [
-        descriptor.c1_x - descriptor.c0_x,
-        descriptor.c1_y - descriptor.c0_y,
-    ];
-    let edge_y = [
-        descriptor.c3_x - descriptor.c0_x,
-        descriptor.c3_y - descriptor.c0_y,
-    ];
-    let determinant = edge_x[0] * edge_y[1] - edge_x[1] * edge_y[0];
-    determinant.is_finite() && determinant.abs() >= 0.00001
-}
-
-fn font_rush_rgba8_sprite_frame_is_valid(
-    source: &FontStampedBuffer,
-    descriptors: &[crate::intel::gpgpu::GpgpuSpriteQuadWorklistDesc],
-    logical_glyphs: usize,
-    destination: crate::intel::gpgpu::GpgpuRgba8Surface,
-) -> bool {
-    let source = source.surface();
-    if logical_glyphs == 0
-        || logical_glyphs > FONT_STAMP_MAX_GLYPHS
-        || descriptors.is_empty()
-        || descriptors.len() > crate::intel::gpgpu::sprite_quad_worklist_max_descs()
-        || !source.is_valid()
-        || source.storage_order != crate::intel::gpgpu::GpgpuRgba8StorageOrder::Rgba
-        || !destination.is_valid()
-        || destination.storage_order != crate::intel::gpgpu::GpgpuRgba8StorageOrder::Rgba
-        || font_frame_gpu_ranges_overlap(
-            source.gpu,
-            source.bytes,
-            destination.gpu,
-            destination.bytes,
-        )
-        || font_frame_gpu_ranges_overlap(
-            source.phys,
-            source.bytes,
-            destination.phys,
-            destination.bytes,
-        )
-    {
-        return false;
-    }
-    descriptors
-        .iter()
-        .copied()
-        .all(font_rush_rgba8_sprite_descriptor_is_valid)
-}
-
 fn queue_frame_stamp(
     input: FrameStampInput,
     destination: crate::intel::gpgpu::GpgpuRgba8Surface,
@@ -1774,27 +1606,9 @@ fn queue_frame_stamp(
     producer_row: Option<QueuedFontProducerRow>,
 ) -> Result<PendingFontFrameStamp, FrameStampQueueRejection> {
     let extent = input.raster_extent();
-    let input_is_valid = match &input {
-        FrameStampInput::FontRushRgba8Sprites {
-            source,
-            descriptors,
-            logical_glyphs,
-            ..
-        } => {
-            clear_rgba.is_some()
-                && font_rush_rgba8_sprite_frame_is_valid(
-                    source,
-                    descriptors.as_slice(),
-                    *logical_glyphs,
-                    destination,
-                )
-        }
-        _ => true,
-    };
     if input.fit() != FontStampFit::Canvas
         || !destination.is_valid()
         || extent != Some((destination.width, destination.height))
-        || !input_is_valid
     {
         return Err(FrameStampQueueRejection {
             error: FontKernelError::InvalidRequest("font-frame-stamp-destination"),
@@ -2506,192 +2320,6 @@ enum FontFrameCoverage {
     Retained(Vec<GpuFontRetainedIdentityStamp>),
 }
 
-fn process_font_rush_frame_clear(
-    ticket: FontKernelTicket,
-    color_rgba: u32,
-    destination: crate::intel::gpgpu::GpgpuRgba8Surface,
-    enqueued_ms: u64,
-) -> Result<FontFrameStamp, FontKernelError> {
-    let service_started_ms = Instant::now().as_millis();
-    ensure_font_rcs_lane_available()?;
-    if !destination.is_valid() {
-        return Err(FontKernelError::InvalidRequest("font-rush-clear-destination"));
-    }
-
-    set_active_stage(ticket, "font-rush-blank-clear");
-    let clear_started_ms = Instant::now().as_millis();
-    let cleared = crate::intel::gpgpu::font_fill_solid_rect_rgba8_scanout_result(
-        destination,
-        crate::intel::gpgpu::GpgpuSolidRect {
-            rect: destination.bounds(),
-            color_rgba,
-        },
-    );
-    validate_frame_clear_outcome(cleared.outcome)?;
-    let clear_ms = Instant::now().as_millis().saturating_sub(clear_started_ms);
-
-    // The clear has already changed the leased frame.  If the release packet
-    // cannot be proven, report an irreversible completion so UI4 retains the
-    // exact write lease rather than recycling a possibly live destination.
-    set_active_stage(ticket, "font-rush-blank-release");
-    let finalized = crate::intel::gpgpu::font_release_rgba8_surface_for_scanout(destination);
-    if !finalized.ok {
-        return Err(FontKernelError::SubmittedIncomplete("font-rush-clear-release-incomplete"));
-    }
-    let release = finalized
-        .release
-        .ok_or(FontKernelError::SubmittedIncomplete("font-rush-clear-release-missing"))?;
-    let completed_ms = Instant::now().as_millis();
-    crate::log_info!(
-        target: "render";
-        "font-kernel-service: font-rush blank complete ticket={} clear=0x{:08X} extent={}x{} clear_submits={} release_submits={} release={} pre_service_ms={} clear_ms={} service_ms={} planning=0 skrifa=0 tessellation=0 coverage=0 shading=0\n",
-        ticket.raw(),
-        color_rgba,
-        destination.width,
-        destination.height,
-        cleared.stats.submits,
-        usize::from(finalized.submitted),
-        release.sequence(),
-        service_started_ms.saturating_sub(enqueued_ms),
-        clear_ms,
-        completed_ms.saturating_sub(service_started_ms),
-    );
-    Ok(FontFrameStamp {
-        ticket,
-        glyphs: 0,
-        submits: usize::from(finalized.submitted),
-        clear_submits: cleared.stats.submits,
-        active_walkers: cleared.stats.walkers,
-        pre_service_ms: service_started_ms.saturating_sub(enqueued_ms),
-        clear_ms,
-        prepare_coverage_ms: 0,
-        coverage_build_ms: 0,
-        coverage_audit_ms: 0,
-        coverage_submits: 0,
-        instance_release_ms: completed_ms.saturating_sub(clear_started_ms),
-        total_service_ms: completed_ms.saturating_sub(service_started_ms),
-        release,
-    })
-}
-
-fn process_font_rush_rgba8_sprite_frame(
-    ticket: FontKernelTicket,
-    source: Arc<FontStampedBuffer>,
-    descriptors: Vec<crate::intel::gpgpu::GpgpuSpriteQuadWorklistDesc>,
-    logical_glyphs: usize,
-    destination: crate::intel::gpgpu::GpgpuRgba8Surface,
-    clear_rgba: u32,
-    enqueued_ms: u64,
-) -> Result<FontFrameStamp, FontKernelError> {
-    let service_started_ms = Instant::now().as_millis();
-    let pre_service_ms = service_started_ms.saturating_sub(enqueued_ms);
-    ensure_font_rcs_lane_available()?;
-    if !font_rush_rgba8_sprite_frame_is_valid(
-        &source,
-        descriptors.as_slice(),
-        logical_glyphs,
-        destination,
-    ) {
-        return Err(FontKernelError::InvalidRequest("font-rush-sprite-frame-contract"));
-    }
-
-    // Allocate, upload, and map the immutable sprite worklist resources while
-    // this request is still reversible.  A cold-path failure after the clear
-    // would leave the caller's exact frame allocation partially mutated.
-    set_active_stage(ticket, "font-rush-showcase-sprite-warm");
-    if !crate::intel::gpgpu::prepare_font_sprite_quad_worklist_rgba8() {
-        return Err(FontKernelError::Unavailable("font-rush-showcase-sprite-warm"));
-    }
-
-    set_active_stage(ticket, "font-rush-showcase-clear");
-    let clear_started_ms = Instant::now().as_millis();
-    let cleared = crate::intel::gpgpu::font_fill_solid_rect_rgba8_scanout_result(
-        destination,
-        crate::intel::gpgpu::GpgpuSolidRect {
-            rect: destination.bounds(),
-            color_rgba: clear_rgba,
-        },
-    );
-    validate_frame_clear_outcome(cleared.outcome)?;
-    let clear_ms = Instant::now().as_millis().saturating_sub(clear_started_ms);
-
-    set_active_stage(ticket, "font-rush-showcase-sprite");
-    let sprite_started_ms = Instant::now().as_millis();
-    let source_surface = source.surface();
-    let runs = [crate::intel::gpgpu::GpgpuSpriteQuadWorklistRun {
-        src: source_surface,
-        descs: descriptors.as_slice(),
-    }];
-    let rendered = crate::intel::gpgpu::font_sprite_quad_worklist_rgba8_runs_over_result(
-        destination,
-        runs.as_slice(),
-    );
-    match rendered.outcome {
-        crate::intel::gpgpu::GpgpuSubmissionOutcome::SubmittedIncomplete => {
-            // A late Font-context read may still address this exact source.
-            // Preserve its allocation just as UI4 preserves the mutated write
-            // lease after receiving SubmittedIncomplete.
-            core::mem::forget(source);
-            return Err(FontKernelError::SubmittedIncomplete(
-                "font-rush-sprite-frame-submit-incomplete",
-            ));
-        }
-        crate::intel::gpgpu::GpgpuSubmissionOutcome::Unavailable => {
-            // The successful clear already changed the caller's frame, so an
-            // otherwise reversible sprite admission failure is irreversible
-            // at the frame boundary.
-            return Err(FontKernelError::SubmittedIncomplete(
-                "font-rush-sprite-frame-after-clear-unavailable",
-            ));
-        }
-        crate::intel::gpgpu::GpgpuSubmissionOutcome::Complete => {}
-    }
-    if rendered.stats.descs != descriptors.len() {
-        return Err(FontKernelError::SubmittedIncomplete("font-rush-sprite-frame-count-mismatch"));
-    }
-    let release = rendered
-        .release
-        .ok_or(FontKernelError::SubmittedIncomplete("font-rush-sprite-frame-release-missing"))?;
-    let completed_ms = Instant::now().as_millis();
-    crate::log_info!(
-        target: "render";
-        "font-kernel-service: font-rush showcase sprite complete ticket={} source_ticket={} logical_glyphs={} sprites={} source={}x{} destination={}x{} clear=0x{:08X} clear_submits={} sprite_submits={} walkers={} release={} pre_service_ms={} clear_ms={} sprite_ms={} service_ms={} prewarm=1 path=resident-rgba8->scaled-tinted-font-sprite planning=0 skrifa=0 tessellation=0 coverage=0 shading=1\n",
-        ticket.raw(),
-        source.ticket().raw(),
-        logical_glyphs,
-        rendered.stats.descs,
-        source_surface.width,
-        source_surface.height,
-        destination.width,
-        destination.height,
-        clear_rgba,
-        cleared.stats.submits,
-        rendered.stats.submits,
-        rendered.stats.walkers,
-        release.sequence(),
-        pre_service_ms,
-        clear_ms,
-        completed_ms.saturating_sub(sprite_started_ms),
-        completed_ms.saturating_sub(service_started_ms),
-    );
-    Ok(FontFrameStamp {
-        ticket,
-        glyphs: logical_glyphs,
-        submits: rendered.stats.submits,
-        clear_submits: cleared.stats.submits,
-        active_walkers: rendered.stats.walkers,
-        pre_service_ms,
-        clear_ms,
-        prepare_coverage_ms: 0,
-        coverage_build_ms: 0,
-        coverage_audit_ms: 0,
-        coverage_submits: 0,
-        instance_release_ms: completed_ms.saturating_sub(sprite_started_ms),
-        total_service_ms: completed_ms.saturating_sub(service_started_ms),
-        release,
-    })
-}
-
 fn process_frame_stamp(
     ticket: FontKernelTicket,
     input: FrameStampInput,
@@ -2700,31 +2328,6 @@ fn process_frame_stamp(
     enqueued_ms: u64,
     enqueued_ns: u64,
 ) -> Result<FontFrameStamp, FontKernelError> {
-    let input = match input {
-        FrameStampInput::FontRushClear { color_rgba, .. } => {
-            return process_font_rush_frame_clear(ticket, color_rgba, destination, enqueued_ms);
-        }
-        FrameStampInput::FontRushRgba8Sprites {
-            source,
-            descriptors,
-            logical_glyphs,
-            ..
-        } => {
-            let clear_rgba = clear_rgba
-                .ok_or(FontKernelError::InvalidRequest("font-rush-sprite-frame-clear"))?;
-            return process_font_rush_rgba8_sprite_frame(
-                ticket,
-                source,
-                descriptors,
-                logical_glyphs,
-                destination,
-                clear_rgba,
-                enqueued_ms,
-            );
-        }
-        input => input,
-    };
-
     use crate::intel::gpgpu::GpgpuSolidRect;
 
     let service_started_ns = crate::chronos::monotonic_nanos();
@@ -2792,9 +2395,6 @@ fn process_frame_stamp(
                 diagnostics.map(|diagnostics| (diagnostics, delta, tail_key_fingerprint)),
             )
         }
-        FrameStampInput::FontRushClear { .. } | FrameStampInput::FontRushRgba8Sprites { .. } => {
-            unreachable!("font-rush special frame was dispatched before coverage preparation")
-        }
     };
     let prepare_coverage_ms = Instant::now()
         .as_millis()
@@ -2803,15 +2403,15 @@ fn process_frame_stamp(
         crate::chronos::monotonic_nanos().saturating_sub(prepare_started_ns) / 1_000;
     let (coverage_build_ms, coverage_audit_ms, coverage_submits, scene_count) = match &coverage {
         FontFrameCoverage::Retained(scenes) => (
-            scenes
-                .iter()
-                .fold(0u64, |total, stamp| total.saturating_add(stamp.coverage_build_ms())),
-            scenes
-                .iter()
-                .fold(0u64, |total, stamp| total.saturating_add(stamp.coverage_audit_ms())),
-            scenes
-                .iter()
-                .fold(0usize, |total, stamp| total.saturating_add(stamp.coverage_submits())),
+            scenes.iter().fold(0u64, |total, stamp| {
+                total.saturating_add(stamp.coverage_build_ms())
+            }),
+            scenes.iter().fold(0u64, |total, stamp| {
+                total.saturating_add(stamp.coverage_audit_ms())
+            }),
+            scenes.iter().fold(0usize, |total, stamp| {
+                total.saturating_add(stamp.coverage_submits())
+            }),
             scenes.len(),
         ),
     };
@@ -3179,7 +2779,7 @@ pub(crate) async fn font_kernel_service_task() {
     ONLINE.store(true, Ordering::Release);
     crate::log_info!(
         target: "render";
-        "font-kernel-service: online paths=retain-scene+async-stamp+async-frame-stamp+prepared-frame-stamp+registered-persistent-row+font-rush-clear-only+font-rush-showcase-rgba8-sprite controller=bsp worker=leased-blocking-service-lane font_lane=fair-fifo-font-only gpu_context=kernel-gpgpu-font queue_capacity={} producer_slots=32 producer_rows=persistent-generation-tagged-ack-credit retained_storage=gpu-vm-r8 prepared_storage=bounded-transient-move-once glyph_cache=per-producer-colorless-recipe-first-fill-no-evict cache_budget_bytes={} theoretical_32_cache_bytes={} ocean_cache=shared-registration-seal-face+pixels-glyph-local-r8-first-fill-no-evict ocean_budget_bytes={} ocean_worst_case_32_unique_seals_bytes={} stamp_output=owned-or-ui4-leased-gpu-vm-rgba8 completion=signal\n",
+        "font-kernel-service: online paths=retain-scene+async-stamp+async-frame-stamp+prepared-frame-stamp+registered-persistent-row controller=bsp worker=leased-blocking-service-lane font_lane=fair-fifo-font-only gpu_context=kernel-gpgpu-font queue_capacity={} producer_slots=32 producer_rows=persistent-generation-tagged-ack-credit retained_storage=gpu-vm-r8 prepared_storage=bounded-transient-move-once glyph_cache=per-producer-colorless-recipe-first-fill-no-evict cache_budget_bytes={} theoretical_32_cache_bytes={} ocean_cache=shared-registration-seal-face+pixels-glyph-local-r8-first-fill-no-evict ocean_budget_bytes={} ocean_worst_case_32_unique_seals_bytes={} stamp_output=owned-or-ui4-leased-gpu-vm-rgba8 completion=signal\n",
         FONT_KERNEL_QUEUE_CAPACITY,
         FONT_PRODUCER_GLYPH_CACHE_BYTES,
         FONT_PRODUCER_GLYPH_CACHE_THEORETICAL_32_BYTES,

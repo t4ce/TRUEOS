@@ -54,7 +54,11 @@ use super::{
 
 mod guest_transport;
 use guest_transport::{
-    guest_font_sizes, guest_shell2_font_scale_steps, guest_image_source_info, guest_image_source_read, guest_context_menu_register, guest_context_menu_event_take, guest_pointer_event_take, guest_keyboard_event_take, guest_pan_event_take, guest_resize_event_take, guest_keyboard_state, guest_input_routes, guest_text_scene, guest_font_canvas, guest_status, guest_font_sprite_request, guest_font_sprite_status,
+    guest_context_menu_event_take, guest_context_menu_register, guest_font_canvas,
+    guest_font_sizes, guest_font_sprite_request, guest_font_sprite_status, guest_image_source_info,
+    guest_image_source_read, guest_input_routes, guest_keyboard_event_take, guest_keyboard_state,
+    guest_pan_event_take, guest_pointer_event_take, guest_resize_event_take,
+    guest_shell2_font_scale_steps, guest_status, guest_text_scene,
 };
 
 const MAX_SURFACES: usize = 32;
@@ -87,10 +91,6 @@ const IMAGE_SOURCE_READ_CHUNK_BYTES: usize = 16 * 1024;
 const IMAGE_SOURCE_FORMAT_JPEG: u32 = 1;
 const IMAGE_SOURCE_FORMAT_RGBA8: u32 = 2;
 const RETAINED_TEXT_MASK_BATCH_CAPACITY: usize = 64;
-const TEXT_SCENE_WIRE_HEADER_BYTES: usize = 16;
-const TEXT_SCENE_ROW_WIRE_HEADER_BYTES: usize = 16;
-const FONT_CANVAS_WIRE_HEADER_BYTES: usize = 12;
-const FONT_CANVAS_ROW_WIRE_HEADER_BYTES: usize = 20;
 const UI4_SCENE_SOURCE_GPU: u64 = 0x3000_0000;
 const UI4_SCENE_SOURCE_MAX_BYTES: usize = 128 * 1024 * 1024;
 const UI4_SCENE_SPRITE_GPU: u64 = UI4_SCENE_SOURCE_GPU + UI4_SCENE_SOURCE_MAX_BYTES as u64;
@@ -294,7 +294,6 @@ const ERROR_STATE: i32 = -4;
 const ERROR_FONT: i32 = -5;
 const ERROR_UI4: i32 = -6;
 pub(crate) const ERROR_BUSY: i32 = -7;
-const GUEST_TEXT_SCENE_BUSY_POLL_MS: u64 = 2;
 const TEXT_SCENE_FONT_ID_STAMP_ONCE: u32 = 1 << 31;
 const TEXT_SCENE_FONT_ID_BACKBUFFER: u32 = 1 << 30;
 const TEXT_SCENE_FONT_ID_FLAGS: u32 = TEXT_SCENE_FONT_ID_STAMP_ONCE | TEXT_SCENE_FONT_ID_BACKBUFFER;

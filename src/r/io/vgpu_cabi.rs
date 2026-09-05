@@ -276,15 +276,44 @@ pub(crate) fn broker_render_pipeline_destroy(
     .unwrap_or_else(|error| error.errno())
 }
 
+fn broker_indexed_draw_topology(
+    topology: u32,
+) -> Result<crate::intel::render::ResidentScenePrimitiveTopology, i32> {
+    use crate::intel::render::ResidentScenePrimitiveTopology as Topology;
+    match topology {
+        0 | v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_LIST => Ok(Topology::TriangleList),
+        v::vgpu::PRIMITIVE_TOPOLOGY_QUAD_LIST => Ok(Topology::QuadList),
+        _ => Err(-22),
+    }
+}
+
+#[cfg(test)]
+mod indexed_draw_topology_tests {
+    use super::broker_indexed_draw_topology;
+    use crate::intel::render::ResidentScenePrimitiveTopology as Topology;
+
+    #[test]
+    fn legacy_zero_and_explicit_triangles_share_the_same_contract() {
+        assert_eq!(broker_indexed_draw_topology(0), Ok(Topology::TriangleList));
+        assert_eq!(broker_indexed_draw_topology(4), Ok(Topology::TriangleList));
+    }
+
+    #[test]
+    fn quad_is_native_and_unadmitted_topologies_fail_closed() {
+        assert_eq!(broker_indexed_draw_topology(7), Ok(Topology::QuadList));
+        for value in [1, 2, 3, 5, 6, 8, 9, 10, 11, 12, 15, 16, u32::MAX] {
+            assert_eq!(broker_indexed_draw_topology(value), Err(-22));
+        }
+    }
+}
+
 pub(crate) fn broker_ui4_indexed_submit(
     principal: Principal,
     device: u64,
     queue: u64,
     draw: v::vgpu::IndexedDraw,
 ) -> Result<v::vgpu::TimelinePoint, i32> {
-    if draw.reserved != 0 {
-        return Err(-22);
-    }
+    let topology = broker_indexed_draw_topology(draw.topology)?;
     let owner = ui4_owner(principal)?;
     let completed = vgpu::submit_ui4_indexed_draw(
         principal,
@@ -301,6 +330,7 @@ pub(crate) fn broker_ui4_indexed_submit(
             first_index: draw.first_index,
             base_vertex: draw.base_vertex,
             clear_rgba8_srgb: draw.clear_rgba8_srgb,
+            topology,
             sampled_texture: BufferHandle::from_raw(draw.sampled_texture),
             texture_width: draw.texture_width,
             texture_height: draw.texture_height,

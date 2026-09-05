@@ -38,7 +38,6 @@ fn usage(io: &'static dyn ShellBackend2) {
         io,
         "cpp font present \"text\" [size=36] [font=auto|1|2|3] [color=RRGGBBAA] [x=24] [y=24] [line=1.25] [slant=-1..1] [canvas=640x160] [-- \"overlay\" ...]",
     );
-    print_shell_line(io, "cpp font rush [start|stop]");
     print_shell_line(io, "cpp font rush2 [start|stop]");
     print_shell_line(io, "cpp font [status|release <ticket|all>]");
     print_shell_line(io, "cpp spirit [status|list|clean]");
@@ -199,7 +198,7 @@ const fn cpp_mode_label(preset: crate::ui4::GpgpuPreviewPreset) -> &'static str 
         crate::ui4::GpgpuPreviewPreset::CppAudio => "audio",
         crate::ui4::GpgpuPreviewPreset::CppParticle => "particle",
         crate::ui4::GpgpuPreviewPreset::CppFont => "font",
-        crate::ui4::GpgpuPreviewPreset::CppFontRush => "font-rush",
+
         crate::ui4::GpgpuPreviewPreset::Static30 => "static30",
         _ => "not-cpp",
     }
@@ -246,10 +245,6 @@ fn print_list(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
         "cpp demo: mode=static30 explores=font-kernel-service/30-retained-ui4-windows/three-plane-slots/immutable-single-publish path=skrifa->gpu-vm-r8->cpp-font-instance->ui4-frame",
-    );
-    print_shell_line(
-        io,
-        "cpp font rush: Lucida-only staged plane demo; recurring grids and the terminal no-clear storm use static-tier producer leases across up to four UI4 application planes",
     );
     print_shell_line(
         io,
@@ -318,60 +313,14 @@ fn particle_list_detail() -> String {
     )
 }
 
-fn font_rush_status_detail(
-    members: impl IntoIterator<
-        Item = (u8, bool, Option<u64>, Option<u32>, crate::ui4::GpgpuPreviewMetrics),
-    >,
-) -> String {
-    let mut detail = String::from(" rush_slots=");
-    let mut active = 0usize;
-    for (plane_slot, is_active, frame, window, metrics) in members {
-        let (Some(frame), Some(window)) = (frame, window) else {
-            continue;
-        };
-        if active != 0 {
-            detail.push(',');
-        }
-        let _ = write!(
-            detail,
-            "{}:active{}:frame{}:window{}:attempted{}:submitted{}:completed{}:published{}:scanout_live{}:scanout_superseded{}:drop_frame{}:drop_queue{}:drop_inflight{}:drop_cadence{}:late{}:font_wait_ms{}",
-            plane_slot,
-            is_active as u8,
-            frame,
-            window,
-            metrics.attempted,
-            metrics.submitted,
-            metrics.completed,
-            metrics.published,
-            metrics.scanout_live,
-            metrics.scanout_superseded,
-            metrics.dropped_frame_busy,
-            metrics.dropped_queue_full,
-            metrics.dropped_in_flight,
-            metrics.dropped_cadence,
-            metrics.late,
-            metrics.last_submit_ms,
-        );
-        active = active.saturating_add(usize::from(is_active));
-    }
-    if active == 0 {
-        detail.push_str("none");
-    }
-    let _ = write!(detail, " rush_active_planes={active}");
-    detail
-}
-
 fn print_status(io: &'static dyn ShellBackend2) {
     let status = crate::ui4::gpgpu_preview_status();
     let active_cpp = status.desired_running && is_cpp_preset(status.config.preset);
     let audio = status.config.preset == crate::ui4::GpgpuPreviewPreset::CppAudio;
     let particle = status.config.preset == crate::ui4::GpgpuPreviewPreset::CppParticle;
-    let font_rush = status.config.preset == crate::ui4::GpgpuPreviewPreset::CppFontRush;
     let font = matches!(
         status.config.preset,
-        crate::ui4::GpgpuPreviewPreset::CppFont
-            | crate::ui4::GpgpuPreviewPreset::CppFontRush
-            | crate::ui4::GpgpuPreviewPreset::Static30
+        crate::ui4::GpgpuPreviewPreset::CppFont | crate::ui4::GpgpuPreviewPreset::Static30
     );
     let upload = if font {
         crate::intel::gpgpu::font_instance_rgba8_upload_status()
@@ -395,30 +344,10 @@ fn print_status(io: &'static dyn ShellBackend2) {
             status.height
         };
         particle_work_detail(destination_width, destination_height)
-    } else if font_rush {
-        font_rush_status_detail(
-            status
-                .members
-                .iter()
-                .filter(|member| member.preset == crate::ui4::GpgpuPreviewPreset::CppFontRush)
-                .map(|member| {
-                    (
-                        member.plane_slot,
-                        member.active,
-                        member.frame.map(|frame| frame.raw()),
-                        member.window.map(|window| window.raw()),
-                        member.metrics,
-                    )
-                }),
-        )
     } else {
         String::new()
     };
-    let timing_label = if font_rush {
-        "font_wait_ms"
-    } else {
-        "submit_ms"
-    };
+    let timing_label = "submit_ms";
     print_shell_line(
         io,
         alloc::format!(
@@ -459,9 +388,7 @@ fn print_status(io: &'static dyn ShellBackend2) {
             upload.is_some_and(|artifact| artifact.verified) as u8,
             upload.map(|artifact| artifact.gpu).unwrap_or(0),
             artifact_hash(status.config.preset),
-            if font_rush {
-                "fullscreen-layered/capability-bounded"
-            } else if font {
+            if font {
                 "movable-fixed-canvas"
             } else {
                 "dynamic-frame/reconciled"
@@ -486,9 +413,7 @@ fn print_status(io: &'static dyn ShellBackend2) {
 fn artifact_name(preset: crate::ui4::GpgpuPreviewPreset) -> &'static str {
     if matches!(
         preset,
-        crate::ui4::GpgpuPreviewPreset::CppFont
-            | crate::ui4::GpgpuPreviewPreset::CppFontRush
-            | crate::ui4::GpgpuPreviewPreset::Static30
+        crate::ui4::GpgpuPreviewPreset::CppFont | crate::ui4::GpgpuPreviewPreset::Static30
     ) {
         crate::intel::gpgpu::FONT_INSTANCE_RGBA8_ADLS_ARTIFACT.name
     } else if preset == crate::ui4::GpgpuPreviewPreset::CppAudio {
@@ -511,9 +436,7 @@ fn kernel_name(preset: crate::ui4::GpgpuPreviewPreset) -> &'static str {
 fn artifact_hash(preset: crate::ui4::GpgpuPreviewPreset) -> String {
     if matches!(
         preset,
-        crate::ui4::GpgpuPreviewPreset::CppFont
-            | crate::ui4::GpgpuPreviewPreset::CppFontRush
-            | crate::ui4::GpgpuPreviewPreset::Static30
+        crate::ui4::GpgpuPreviewPreset::CppFont | crate::ui4::GpgpuPreviewPreset::Static30
     ) {
         format_hash(crate::intel::gpgpu::FONT_INSTANCE_RGBA8_ADLS_ARTIFACT.bin_sha256)
     } else if preset == crate::ui4::GpgpuPreviewPreset::CppAudio {
@@ -1128,48 +1051,6 @@ fn queue_font_service_present(io: &'static dyn ShellBackend2, input: &str) {
     }
 }
 
-fn queue_font_service_rush(io: &'static dyn ShellBackend2) {
-    match crate::ui4::request_cpp_font_rush_start() {
-        Ok(serial) => print_shell_line(
-            io,
-            alloc::format!(
-                    "cpp font rush: queued=1 request={} font=1 font_name=lucida-sans-unicode font_policy=pinned-warm-required base_cadence_ms=250 stage_ms=3000 stages=base-ranks-0..3+expanded-ranks-0..3-once+title-letters-T/R/U/E/O/S-150ms-each+TrueOS-tight-rgba-scaled-max-fit-hold-1000ms+transparent-clear-once+blank-min-2000ms+section-pulse-3x-100msx3000ms+raw-producer-storm showcase_sources=one-time-tight-white-rgba+release-after-last-use showcase_path=transparent-clear->guc-font-rcs-scaled-tinted-sprite recurring_producers=32-slot-cap/8-per-plane/adaptive-1..8-per-plane font_tiers=32,80,128,176 max_chars_per_row=8 producer_storm=all-active-canvases/lockstep-wave-mirror/up-to-32-producers/8x4/row=plane-rank/col=local/two-anchors-each buffer_history=deterministic-mirrored-double clear_policy=one-transparent-blank+transparent-section+transparent-storm-prime/no-clear-storm backdrop=pipe-a-bottom-color pixel_alpha=premultiplied planes=ui4-application-plane-capability-enumerated slot4=reserved consumer_pending_limit=1 service_model=producer-leases->font-fifo-32+one-font-context-in-flight ack=surflive+exact-buffer-reacquire final_path=static-tier-producer-row->font-r8-coverage-and-mask-batch->guc-font-rcs-ordered-source-over->ui4-rgba8->display-plane-direct gpu_submit_lanes=1 compositor_jobs=0 rgba_cpu_readback=0 coverage_audit_cpu_readback=none duration=until-stopped stop=\"cpp font rush stop\"",
-                serial,
-            )
-            .as_str(),
-        ),
-        Err(reason) => {
-            let usage = crate::ui4::ui4_live_resource_usage();
-            print_shell_line(
-                io,
-                alloc::format!(
-                    "cpp font rush: queued=0 reason={} active_frames={} active_sessions={} live_windows={} display_idle={} fully_retired={}",
-                    reason,
-                    usage.active_frames,
-                    usage.active_sessions,
-                    usage.live_windows,
-                    usage.is_display_idle() as u8,
-                    usage.is_fully_retired() as u8,
-                )
-                .as_str(),
-            )
-        }
-    }
-}
-
-fn stop_font_service_rush(io: &'static dyn ShellBackend2) {
-    match crate::ui4::request_cpp_font_rush_stop() {
-        Ok(serial) => print_shell_line(
-            io,
-            alloc::format!("cpp font rush stop: queued=1 request={serial}").as_str(),
-        ),
-        Err(reason) => print_shell_line(
-            io,
-            alloc::format!("cpp font rush stop: queued=0 reason={reason}").as_str(),
-        ),
-    }
-}
-
 fn queue_font_service_rush2(io: &'static dyn ShellBackend2) {
     match crate::ui4::request_cpp_font_rush2_start() {
         Ok(serial) => print_shell_line(
@@ -1275,26 +1156,9 @@ fn release_font_output(io: &'static dyn ShellBackend2, target: &str) {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum FontRushAction {
-    Start,
-    Stop,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum FontRush2Action {
     Start,
     Stop,
-}
-
-fn parse_font_rush_action(input: &str) -> Option<FontRushAction> {
-    let input = input.trim();
-    if input.is_empty() || input.eq_ignore_ascii_case("start") {
-        Some(FontRushAction::Start)
-    } else if input.eq_ignore_ascii_case("stop") {
-        Some(FontRushAction::Stop)
-    } else {
-        None
-    }
 }
 
 fn parse_font_rush2_action(input: &str) -> Option<FontRush2Action> {
@@ -1318,12 +1182,6 @@ fn font_service(spawner: &Spawner, io: &'static dyn ShellBackend2, input: &str) 
         queue_font_service_stamp(spawner, io, rest);
     } else if command.eq_ignore_ascii_case("present") {
         queue_font_service_present(io, rest);
-    } else if command.eq_ignore_ascii_case("rush") {
-        match parse_font_rush_action(rest) {
-            Some(FontRushAction::Start) => queue_font_service_rush(io),
-            Some(FontRushAction::Stop) => stop_font_service_rush(io),
-            None => usage(io),
-        }
     } else if command.eq_ignore_ascii_case("rush2") {
         match parse_font_rush2_action(rest) {
             Some(FontRush2Action::Start) => queue_font_service_rush2(io),
@@ -1397,8 +1255,8 @@ pub(crate) fn try_parse(
 #[cfg(test)]
 mod tests {
     use super::{
-        FontRush2Action, FontRushAction, FontStampFit, font_rush_status_detail,
-        parse_font_rush_action, parse_font_rush2_action, parse_font_stamp, parse_svg_demo,
+        FontRush2Action, FontStampFit,
+        parse_font_rush2_action, parse_font_stamp, parse_svg_demo,
         particle_naive_candidate_tests,
     };
 
@@ -1416,18 +1274,6 @@ mod tests {
     }
 
     #[test]
-    fn font_rush_accepts_only_start_and_targeted_stop() {
-        assert_eq!(parse_font_rush_action(""), Some(FontRushAction::Start));
-        assert_eq!(parse_font_rush_action("  "), Some(FontRushAction::Start));
-        assert_eq!(parse_font_rush_action("start"), Some(FontRushAction::Start));
-        assert_eq!(parse_font_rush_action("START"), Some(FontRushAction::Start));
-        assert_eq!(parse_font_rush_action("stop"), Some(FontRushAction::Stop));
-        assert_eq!(parse_font_rush_action("STOP"), Some(FontRushAction::Stop));
-        assert_eq!(parse_font_rush_action("go"), None);
-        assert_eq!(parse_font_rush_action("stop now"), None);
-    }
-
-    #[test]
     fn font_rush2_accepts_only_start_and_targeted_stop() {
         assert_eq!(parse_font_rush2_action(""), Some(FontRush2Action::Start));
         assert_eq!(parse_font_rush2_action("START"), Some(FontRush2Action::Start));
@@ -1435,29 +1281,6 @@ mod tests {
         assert_eq!(parse_font_rush2_action("STOP"), Some(FontRush2Action::Stop));
         assert_eq!(parse_font_rush2_action("go"), None);
         assert_eq!(parse_font_rush2_action("stop now"), None);
-    }
-
-    #[test]
-    fn font_rush_remains_a_cpp_preset() {
-        let preset = crate::ui4::GpgpuPreviewPreset::CppFontRush;
-        assert!(super::is_cpp_preset(preset));
-        assert_eq!(super::cpp_mode_label(preset), "font-rush");
-    }
-
-    #[test]
-    fn font_rush_status_reports_every_hardware_plane_consumer() {
-        let metrics = crate::ui4::GpgpuPreviewMetrics::default();
-        let members = [
-            (0, true, Some(10), Some(20), metrics),
-            (1, true, Some(11), Some(21), metrics),
-            (2, false, Some(12), Some(22), metrics),
-            (3, false, Some(13), Some(23), metrics),
-        ];
-
-        assert_eq!(
-            font_rush_status_detail(members),
-            " rush_slots=0:active1:frame10:window20:attempted0:submitted0:completed0:published0:scanout_live0:scanout_superseded0:drop_frame0:drop_queue0:drop_inflight0:drop_cadence0:late0:font_wait_ms0,1:active1:frame11:window21:attempted0:submitted0:completed0:published0:scanout_live0:scanout_superseded0:drop_frame0:drop_queue0:drop_inflight0:drop_cadence0:late0:font_wait_ms0,2:active0:frame12:window22:attempted0:submitted0:completed0:published0:scanout_live0:scanout_superseded0:drop_frame0:drop_queue0:drop_inflight0:drop_cadence0:late0:font_wait_ms0,3:active0:frame13:window23:attempted0:submitted0:completed0:published0:scanout_live0:scanout_superseded0:drop_frame0:drop_queue0:drop_inflight0:drop_cadence0:late0:font_wait_ms0 rush_active_planes=2",
-        );
     }
 
     #[test]

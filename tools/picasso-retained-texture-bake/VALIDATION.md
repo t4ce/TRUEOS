@@ -94,9 +94,11 @@ publication or rig operation was performed. Package SHA-256:
 `3b2527bf587c251a7fdcbbcf35d321a4c80da9d6f5958c83b9fe8bf05541beff`.
 Build log: [picasso-dual-run-package-build.log](../../bld/picasso-dual-run-package-build.log).
 
-The register/geometry milestone above remains scoped to the successful single
-instance. Post-fix coexistence of two or more PBR instances is pending a new
-hardware run; seed tracking has not been extended to claim it.
+The user subsequently confirmed three simultaneous PBR Example instances after
+the frame-admission fix. This establishes the requested coexistence milestone
+for that run. The user reports remaining trouble under some heavier video and
+window combinations and explicitly deferred that separate investigation.
+Seed tracking has not been broadened to claim arbitrary mixed workloads.
 
 ## Consolidation on the current branch
 

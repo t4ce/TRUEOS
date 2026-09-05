@@ -86,9 +86,9 @@ pub(crate) use frame_pool::{
     published_rgba_view, release_published_frame, retain_published_frame, writable_rgba_view,
 };
 pub(crate) use gpgpu_preview_consumer::{
-    GPGPU_PREVIEW_DEFAULT_CADENCE_MS, GPGPU_PREVIEW_DEFAULT_PUBLISH_EVERY, GpgpuPreviewMetrics,
+    GPGPU_PREVIEW_DEFAULT_CADENCE_MS, GPGPU_PREVIEW_DEFAULT_PUBLISH_EVERY,
     GpgpuPreviewPreset, gpgpu_preview_consumer_service_task, gpgpu_preview_status,
-    request_cpp_font_preview_start, request_cpp_font_rush_start, request_cpp_font_rush_stop,
+    request_cpp_font_preview_start,
     request_cpp_font_rush2_start, request_cpp_font_rush2_stop, request_cpp_gallery_start,
     request_gpgpu_preview_stop,
 };
@@ -131,7 +131,7 @@ pub(crate) use window_broker::{
     owner_has_first_presentation, publish_window_frame, publish_window_frames,
     replace_window_frame, restore_docked_window, retire_frame_when_released,
     set_window_escape_key_action, set_window_hit_testable, set_window_opacity,
-    set_window_placement, set_window_position, set_windows_visible, take_window_first_presentation,
+    set_window_placement, set_window_position, take_window_first_presentation,
     ui4_window_broker_snapshot_service_task, visible_windows_for_output,
     wait_for_window_composition_change, wait_for_window_first_presentation,
     window_composition_revision, window_escape_key_action, window_frame_was_presented,

@@ -67,3 +67,31 @@ Local evidence is preserved outside the rotating captures in
 `setup-grf6-success.log`, `setup-grf6-boot-receipt.json`, and
 `setup-grf6-verification.json`. The last file records source commit and
 artifact hashes. The generated bake metadata retains its compile-only scope.
+
+## Native textured quad integration, 2026-09-05
+
+QuadTexture now uses this same shader and Intel logo for its default/key **1**
+native quad (four indices) and key **3** triangle comparison (six indices).
+Key **1** also switches back. The kernel already encoded native QUADLIST;
+the missing link was carrying topology through the sampled indexed API and
+position/UV mesh upload. The quad perimeter is preserved through submission.
+No shader bytes or fixed-function shader state changed.
+
+`IndexedDraw.topology` occupies the former reserved word at byte 64. The wire
+record stays 104 bytes; zero preserves legacy triangle-list submissions,
+explicit triangle-list `4` and quad-list `7` are admitted, and other values
+are rejected. Old kernels reject explicit topology, so deploy both the kernel
+and the updated QuadTexture package for this experiment.
+
+Host validation passed: eight topology/ABI/mesh checks, eleven existing UV
+shader checks, and four QuadTexture mode/geometry checks. The compile-only
+kernel build and release Blueprint package build passed, including the CABI
+import guard. Publishing was disabled. Package SHA-256:
+`a0e42cb8bf6f435ade1507923a20f67dbb4b619096534cc52446660372a771d8`.
+Build logs: [kernel](../../bld/quadtexture-native-quad-kernel-build.log) and
+[QuadTexture](../../bld/quadtexture-native-quad-package-build.log).
+
+Hardware validation is pending: compare the complete logo and its orientation
+at default → **3** → **1**. The prepared render log now includes
+`topology=QuadList` with `indices=4`, or `topology=TriangleList` with `indices=6`.
+Retirement alone does not establish correct image output.

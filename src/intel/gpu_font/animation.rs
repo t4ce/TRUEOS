@@ -359,4 +359,3 @@ fn transition_component(from: u8, to: u8, progress: f32, selected: bool) -> u8 {
     let value = from as f32 + (to as f32 - from as f32) * progress.clamp(0.0, 1.0);
     libm::roundf(value).clamp(0.0, 255.0) as u8
 }
-

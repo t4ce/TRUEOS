@@ -913,13 +913,24 @@ pub(crate) fn create_resident_indexed_mesh(
 
 /// Upload the authenticated WGPU position+UV vertex contract without
 /// discarding the second attribute at the broker boundary.
+#[expect(dead_code, reason = "triangle-only convenience entry point retained for kernel callers")]
 pub(crate) fn create_resident_textured_triangle_mesh(
     draw_vertices: &[[f32; 5]],
     draw_indices: &[u32],
 ) -> Result<ResidentTriangleMesh, &'static str> {
-    if draw_vertices.len() < 3
-        || draw_indices.is_empty()
-        || !draw_indices.len().is_multiple_of(3)
+    create_resident_textured_indexed_mesh(
+        draw_vertices,
+        draw_indices,
+        ResidentScenePrimitiveTopology::TriangleList,
+    )
+}
+
+fn validate_resident_textured_mesh_shape(
+    draw_vertices: &[[f32; 5]],
+    draw_indices: &[u32],
+    topology: ResidentScenePrimitiveTopology,
+) -> Result<(), &'static str> {
+    if !topology.accepts_index_count(draw_indices.len())
         || draw_vertices
             .iter()
             .flatten()
@@ -928,14 +939,58 @@ pub(crate) fn create_resident_textured_triangle_mesh(
             .iter()
             .any(|index| *index as usize >= draw_vertices.len())
     {
-        return Err("resident-textured-triangle-shape");
+        return Err("resident-textured-indexed-shape");
     }
+    Ok(())
+}
+
+/// Upload position+UV vertices and the client's native primitive index plan.
+/// Shader attribute layout and primitive assembly are independent: QUADLIST
+/// uses the same sampled shader as triangles with four indices per polygon.
+pub(crate) fn create_resident_textured_indexed_mesh(
+    draw_vertices: &[[f32; 5]],
+    draw_indices: &[u32],
+    topology: ResidentScenePrimitiveTopology,
+) -> Result<ResidentTriangleMesh, &'static str> {
+    validate_resident_textured_mesh_shape(draw_vertices, draw_indices, topology)?;
     create_resident_triangle_mesh_typed(
         draw_vertices,
         draw_indices,
         TriangleVertexFormat::PosUv,
         None,
     )
+}
+
+#[cfg(test)]
+mod resident_textured_mesh_shape_tests {
+    use super::{ResidentScenePrimitiveTopology as Topology, validate_resident_textured_mesh_shape};
+
+    const VERTICES: [[f32; 5]; 4] = [
+        [-0.9, -0.9, 0.0, 0.0, 1.0],
+        [0.9, -0.9, 0.0, 1.0, 1.0],
+        [0.9, 0.9, 0.0, 1.0, 0.0],
+        [-0.9, 0.9, 0.0, 0.0, 0.0],
+    ];
+
+    #[test]
+    fn four_index_quad_and_six_index_triangles_share_uv_vertices() {
+        assert!(validate_resident_textured_mesh_shape(&VERTICES, &[0, 1, 2, 3], Topology::QuadList).is_ok());
+        assert!(validate_resident_textured_mesh_shape(&VERTICES, &[0, 1, 2, 3, 0, 2], Topology::TriangleList).is_ok());
+        assert!(validate_resident_textured_mesh_shape(&VERTICES, &[0, 1, 2, 3], Topology::TriangleList).is_err());
+        assert!(validate_resident_textured_mesh_shape(&VERTICES, &[0, 1, 2, 3, 0, 2], Topology::QuadList).is_err());
+    }
+
+    #[test]
+    fn textured_quad_rejects_invalid_attributes_and_out_of_bounds_indices() {
+        for component in 0..5 {
+            let mut vertices = VERTICES;
+            vertices[3][component] = f32::NAN;
+            assert!(validate_resident_textured_mesh_shape(&vertices, &[0, 1, 2, 3], Topology::QuadList).is_err());
+        }
+        assert!(validate_resident_textured_mesh_shape(&VERTICES, &[0, 1, 2, 4], Topology::QuadList).is_err());
+        assert!(validate_resident_textured_mesh_shape(&[], &[0, 1, 2, 3], Topology::QuadList).is_err());
+        assert!(validate_resident_textured_mesh_shape(&VERTICES, &[], Topology::QuadList).is_err());
+    }
 }
 
 pub(crate) fn create_picasso_resident_indexed_mesh(

@@ -808,7 +808,7 @@ fn claim_plan_work(worker_id: usize) -> Option<FontPlanClaimResult> {
             drop(batches);
             return Some(FontPlanClaimResult::Fail(
                 batch,
-                FontPlanError::BuildFailed("font-rush-visible-glyph-unavailable"),
+                FontPlanError::BuildFailed("font-plan-visible-glyph-unavailable"),
             ));
         };
         let request = cell.request;

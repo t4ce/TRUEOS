@@ -880,13 +880,13 @@ fn queue_async_plane(
     // Rush. Its admission owns UI4 exclusively and its lone full-screen font
     // frame must publish directly, because its scanout proof gates the next
     // staged consumer.
-    let direct_primary_font_rush = matches!(plan.target, CompositionTarget::Primary)
+    let direct_primary_font_preview = matches!(plan.target, CompositionTarget::Primary)
         && local_direct
-            .is_some_and(|(window, view)| cpp_font_rush_primary_direct_candidate(window, view));
-    let direct_font_required = direct_primary_font_rush
+            .is_some_and(|(window, view)| font_preview_primary_direct_candidate(window, view));
+    let direct_font_required = direct_primary_font_preview
         || (!matches!(plan.target, CompositionTarget::Primary)
             && local_direct.is_some_and(|(window, _)| dirty_double_font_scene(window)));
-    if (!matches!(plan.target, CompositionTarget::Primary) || direct_primary_font_rush)
+    if (!matches!(plan.target, CompositionTarget::Primary) || direct_primary_font_preview)
         && let Some((window, view)) = local_direct
     {
         let slot = target_plane_slot(plan.target);
@@ -949,11 +949,11 @@ fn queue_async_plane(
             );
             match queued {
                 Ok(composition) => {
-                    if direct_primary_font_rush
+                    if direct_primary_font_preview
                         && !FONT_RUSH_PRIMARY_DIRECT_LOGGED.swap(true, Ordering::AcqRel)
                     {
                         crate::log_info!(target: "ui4";
-                            "ui4/font-rush-primary-bypass: mode=exclusive-lone-fullscreen-primary buffering=dirty/double backend=display-ggtt-alias+surflive source_ownership=stable-front+producer-back compositor_jobs=0 cpu_frame_copy=0 stack_composition=disabled-for-font-rush log=once\n"
+                            "ui4/font-preview-primary-bypass: mode=exclusive-lone-fullscreen-primary buffering=dirty/double backend=display-ggtt-alias+surflive source_ownership=stable-front+producer-back compositor_jobs=0 cpu_frame_copy=0 stack_composition=disabled-for-font-preview log=once\n"
                         );
                     } else if direct_font_required
                         && !DIRTY_FONT_DIRECT_SCANOUT_LOGGED.swap(true, Ordering::AcqRel)
@@ -1388,7 +1388,7 @@ fn dirty_double_font_scene(window: WindowSnapshot) -> bool {
     })
 }
 
-fn cpp_font_rush_primary_direct_candidate(window: WindowSnapshot, view: FrameRgbaView) -> bool {
+fn font_preview_primary_direct_candidate(window: WindowSnapshot, view: FrameRgbaView) -> bool {
     if window.owner != WindowOwner::GPGPU_PREVIEW
         || window.plane != WindowPlane::Primary
         || !dirty_double_font_scene(window)

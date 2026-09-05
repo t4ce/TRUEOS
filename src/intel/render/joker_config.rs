@@ -2,7 +2,9 @@
 //! This module does not acquire submission guards or touch hardware.
 
 use super::{
-    BackendProbeMode, PostDrawSyncVariant, StreamoutProofExperiment, TriangleBlendProbeMode, TriangleFrontEndContract, VfPrimitiveGeometry, TRIANGLE_DEFAULT_FRONT_END_CONTRACT, VS_DRAW_FRONTIER_CONTRACTS, VS_DRAW_SBE_READ0_CONTRACT,
+    BackendProbeMode, PostDrawSyncVariant, StreamoutProofExperiment,
+    TRIANGLE_DEFAULT_FRONT_END_CONTRACT, TriangleBlendProbeMode, TriangleFrontEndContract,
+    VS_DRAW_FRONTIER_CONTRACTS, VS_DRAW_SBE_READ0_CONTRACT, VfPrimitiveGeometry,
 };
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
@@ -1815,7 +1817,9 @@ pub(super) fn parse_render_joker_spec(name: &str) -> Option<RenderJokerSpec> {
 }
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
-pub(super) fn render_joker_real_vs_front_end_contract(variant: &str) -> Option<TriangleFrontEndContract> {
+pub(super) fn render_joker_real_vs_front_end_contract(
+    variant: &str,
+) -> Option<TriangleFrontEndContract> {
     match variant {
         "reemit-vs-retire" => Some(TRIANGLE_DEFAULT_FRONT_END_CONTRACT),
         "reemit-vs-slot0-retire" => Some(VS_DRAW_FRONTIER_CONTRACTS[1]),
@@ -1860,4 +1864,3 @@ pub(super) fn render_joker_streamout_kind(variant: &str) -> Option<&'static str>
         _ => None,
     }
 }
-

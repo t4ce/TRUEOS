@@ -16,8 +16,15 @@ use crate::graphics::font::{FontTesselMesh, FontTesselSummary};
 pub(crate) use crate::graphics::primitives::Rgba8 as GpuFontRgba;
 
 mod animation;
+#[expect(
+    unused_imports,
+    reason = "preserve the producer-facing font animation API"
+)]
+pub(crate) use animation::GpuFontColorTransition;
 pub(crate) use animation::{
-    GPU_FONT_COLOR_KEYFRAME_CAPACITY, GpuFontColorChannels, GpuFontColorTiming, GpuFontColorIteration, GpuFontColorTransition, GpuFontColorKeyframe, GpuFontColorKeyframes, GpuFontColorProgram, GpuFontInstanceStyle, GpuFontInstanceMotion, GpuFontInstanceProgram,
+    GPU_FONT_COLOR_KEYFRAME_CAPACITY, GpuFontColorChannels, GpuFontColorIteration,
+    GpuFontColorKeyframe, GpuFontColorKeyframes, GpuFontColorProgram, GpuFontColorTiming,
+    GpuFontInstanceMotion, GpuFontInstanceProgram, GpuFontInstanceStyle,
 };
 
 pub(crate) const MAX_DYNAMIC_TEXT_CHARS: usize = 256;

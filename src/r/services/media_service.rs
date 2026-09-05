@@ -29,7 +29,9 @@ pub const ERR_UNSUPPORTED: i32 = -8;
 
 const OPERATION_CAP: usize = 32;
 const REQUEST_CAP: usize = 16;
-const MAX_ENCODED_BYTES: usize = 16 * 1024 * 1024;
+// Full-resolution material atlases can exceed 16 MiB even as PNGs. Bound
+// encoded input independently from the unchanged decoded image budget.
+const MAX_ENCODED_BYTES: usize = 64 * 1024 * 1024;
 // A full-resolution Nikon Z7 JPEG (6040x4032) expands to about 93 MiB in
 // the RGBA format returned by this service. Leave enough room for that
 // ordinary camera source while retaining a bounded per-image allocation.
@@ -133,6 +135,16 @@ fn valid_format(format: u32) -> bool {
     matches!(format, FORMAT_JPEG | FORMAT_PNG | FORMAT_BMP)
 }
 
+fn validate_encoded_length(total_len: usize) -> Result<(), i32> {
+    if total_len == 0 {
+        Err(ERR_INVALID)
+    } else if total_len > MAX_ENCODED_BYTES {
+        Err(ERR_TOO_LARGE)
+    } else {
+        Ok(())
+    }
+}
+
 pub fn begin(owner: u32, format: u32, total_len: usize) -> i32 {
     begin_for_output(owner, format, total_len, DecodeOutput::Readback)
 }
@@ -145,11 +157,11 @@ pub fn begin_retained(owner: u32, device: u64, format: u32, total_len: usize) ->
 }
 
 fn begin_for_output(owner: u32, format: u32, total_len: usize, output: DecodeOutput) -> i32 {
-    if !valid_format(format) || total_len == 0 {
+    if !valid_format(format) {
         return ERR_INVALID;
     }
-    if total_len > MAX_ENCODED_BYTES {
-        return ERR_TOO_LARGE;
+    if let Err(error) = validate_encoded_length(total_len) {
+        return error;
     }
     let mut operations = OPERATIONS.lock();
     if operations.len() >= OPERATION_CAP {
@@ -487,6 +499,44 @@ fn rgba_byte_len_within_limit(width: u32, height: u32) -> Option<usize> {
         .checked_mul(height as usize)
         .and_then(|pixels| pixels.checked_mul(4))
         .filter(|bytes| *bytes <= MAX_RGBA_BYTES)
+}
+
+#[cfg(test)]
+mod image_capacity_tests {
+    use super::*;
+
+    #[test]
+    fn atlas_encoded_images_fit_while_empty_and_oversized_inputs_are_rejected() {
+        assert_eq!(validate_encoded_length(0), Err(ERR_INVALID));
+        assert_eq!(validate_encoded_length(1), Ok(()));
+        assert_eq!(validate_encoded_length(35 * 1024 * 1024), Ok(()));
+        assert_eq!(validate_encoded_length(64 * 1024 * 1024), Ok(()));
+        assert_eq!(validate_encoded_length(64 * 1024 * 1024 + 1), Err(ERR_TOO_LARGE));
+        assert_eq!(validate_encoded_length(usize::MAX), Err(ERR_TOO_LARGE));
+    }
+
+    #[test]
+    fn full_resolution_gallery_atlas_fits_existing_rgba_budget() {
+        assert_eq!(rgba_byte_len_within_limit(6156, 4104), Some(101_056_896));
+        assert_eq!(rgba_byte_len_within_limit(8192, 4096), Some(128 * 1024 * 1024));
+        assert_eq!(rgba_byte_len_within_limit(8192, 4097), None);
+        assert_eq!(rgba_byte_len_within_limit(u32::MAX, u32::MAX), None);
+    }
+
+    #[test]
+    fn decoded_extent_and_payload_validation_remain_bounded() {
+        for (width, height) in [(0, 1), (1, 0), (8193, 1), (1, 8193), (8192, 4097)] {
+            assert!(matches!(
+                validated_image(FORMAT_PNG, BACKEND_PNG, width, height, Vec::new()),
+                Err(ERR_TOO_LARGE)
+            ));
+        }
+        assert!(matches!(
+            validated_image(FORMAT_PNG, BACKEND_PNG, 1, 1, vec![0; 3]),
+            Err(ERR_TOO_LARGE)
+        ));
+        assert!(validated_image(FORMAT_PNG, BACKEND_PNG, 1, 1, vec![0; 4]).is_ok());
+    }
 }
 
 async fn decode(request: &DecodeRequest) -> Result<DecodedImage, i32> {

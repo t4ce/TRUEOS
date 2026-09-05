@@ -181,6 +181,7 @@ macro_rules! intel_render_batch_log {
 }
 
 mod joker_config;
+#[expect(unused_imports, reason = "preserve the render diagnostic API")]
 pub(crate) use joker_config::render_joker_variant_names;
 use joker_config::{
     RenderJokerSpec, RenderJokerTarget, parse_render_joker_spec,

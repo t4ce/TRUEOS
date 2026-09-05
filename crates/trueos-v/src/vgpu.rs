@@ -186,7 +186,10 @@ pub struct IndexedDraw {
     pub first_index: u32,
     pub base_vertex: i32,
     pub clear_rgba8_srgb: u32,
-    pub reserved: u32,
+    /// Zero preserves the legacy triangle list. Explicit triangle lists and
+    /// native quad lists are supported; all other values are rejected.
+    /// This occupies the former zero-reserved word without changing layout.
+    pub topology: u32,
     /// Optional buffer-backed tightly packed RGBA8 sampled texture.
     pub sampled_texture: u64,
     pub texture_width: u32,
@@ -759,7 +762,6 @@ impl Device {
         draw.pipeline = pipeline.0;
         draw.vertex_buffer = vertex_buffer.0;
         draw.index_buffer = index_buffer.0;
-        draw.reserved = 0;
         let mut point = TimelinePoint::default();
         rc_result(unsafe {
             vcabi::trueos_cabi_vgpu_ui4_indexed_submit(self.0, queue.handle, &draw, &mut point)

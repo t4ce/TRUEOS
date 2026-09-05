@@ -4,8 +4,25 @@
 use alloc::vec::Vec;
 
 use super::{
-    BlueprintImageSourceInfo, CONTEXT_MENU_ENTRY_WIRE_HEADER_BYTES, CONTEXT_MENU_WIRE_HEADER_BYTES, ERROR_BUSY, ERROR_INVALID, ERROR_UI4, FONT_CANVAS_ROW_WIRE_HEADER_BYTES, FONT_CANVAS_WIRE_HEADER_BYTES, GUEST_TEXT_SCENE_BUSY_POLL_MS, IMAGE_SOURCE_READ_CHUNK_BYTES, MAX_CONTEXT_MENU_LABEL_BYTES, MAX_FONT_CANVAS_ROWS, MAX_INPUT_ROUTES, MAX_NATIVE_FONT_SIZES, MAX_TEXT_ROWS, MAX_TEXT_ROW_BYTES, SHELL2_FONT_SCALE_STEP_COUNT, TEXT_SCENE_ROW_WIRE_HEADER_BYTES, TEXT_SCENE_WIRE_HEADER_BYTES, TrueosUi4ContextMenuEntry, TrueosUi4ContextMenuEvent, TrueosUi4FontCanvasRow, TrueosUi4FontSpriteStatusV1, TrueosUi4InputRouteState, TrueosUi4KeyboardState, TrueosUi4PanEvent, TrueosUi4PointerEvent, TrueosUi4ResizeEvent, TrueosUi4Shell2FontScaleStep, TrueosUi4SolaraFontSize, TrueosUi4SolaraSceneTextRow, fn,
+    BlueprintImageSourceInfo, CONTEXT_MENU_ENTRY_WIRE_HEADER_BYTES, CONTEXT_MENU_WIRE_HEADER_BYTES,
+    ERROR_BUSY, ERROR_INVALID, ERROR_UI4, IMAGE_SOURCE_READ_CHUNK_BYTES,
+    MAX_CONTEXT_MENU_LABEL_BYTES, MAX_FONT_CANVAS_ROWS, MAX_INPUT_ROUTES, MAX_NATIVE_FONT_SIZES,
+    MAX_TEXT_ROW_BYTES, MAX_TEXT_ROWS, SHELL2_FONT_SCALE_STEP_COUNT, TrueosUi4ContextMenuEntry,
+    TrueosUi4ContextMenuEvent, TrueosUi4FontCanvasRow, TrueosUi4FontSpriteStatusV1,
+    TrueosUi4InputRouteState, TrueosUi4KeyboardState, TrueosUi4PanEvent, TrueosUi4PointerEvent,
+    TrueosUi4ResizeEvent, TrueosUi4Shell2FontScaleStep, TrueosUi4SolaraFontSize,
+    TrueosUi4SolaraSceneTextRow,
 };
+
+const TEXT_SCENE_WIRE_HEADER_BYTES: usize = 16;
+
+const TEXT_SCENE_ROW_WIRE_HEADER_BYTES: usize = 16;
+
+const FONT_CANVAS_WIRE_HEADER_BYTES: usize = 12;
+
+const FONT_CANVAS_ROW_WIRE_HEADER_BYTES: usize = 20;
+
+const GUEST_TEXT_SCENE_BUSY_POLL_MS: u64 = 2;
 
 pub(super) unsafe fn guest_font_sizes(out: *mut TrueosUi4SolaraFontSize, out_cap: usize) -> isize {
     let response_cap = out_cap.min(MAX_NATIVE_FONT_SIZES);
@@ -195,7 +212,10 @@ pub(super) unsafe fn guest_context_menu_event_take(
     0
 }
 
-pub(super) unsafe fn guest_pointer_event_take(window_id: u32, out: *mut TrueosUi4PointerEvent) -> i32 {
+pub(super) unsafe fn guest_pointer_event_take(
+    window_id: u32,
+    out: *mut TrueosUi4PointerEvent,
+) -> i32 {
     let mut response = [0u8; core::mem::size_of::<TrueosUi4PointerEvent>()];
     let (status, data) = trueos_vm::vmcall::call_with_payload(
         trueos_vm::vmcall::OP_BP_UI4_SCENE_POINTER_EVENT_TAKE,
@@ -261,7 +281,10 @@ pub(super) unsafe fn guest_pan_event_take(window_id: u32, out: *mut TrueosUi4Pan
     0
 }
 
-pub(super) unsafe fn guest_resize_event_take(window_id: u32, out: *mut TrueosUi4ResizeEvent) -> i32 {
+pub(super) unsafe fn guest_resize_event_take(
+    window_id: u32,
+    out: *mut TrueosUi4ResizeEvent,
+) -> i32 {
     let mut response = [0u8; core::mem::size_of::<TrueosUi4ResizeEvent>()];
     let (status, data) = trueos_vm::vmcall::call_with_payload(
         trueos_vm::vmcall::OP_BP_UI4_SCENE_RESIZE_EVENT_TAKE,
@@ -519,4 +542,3 @@ pub(super) unsafe fn guest_font_sprite_status(
     }
     rc
 }
-

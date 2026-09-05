@@ -2747,6 +2747,7 @@ pub(crate) struct Ui4IndexedDrawDescriptor {
     pub(crate) index_count: u32,
     pub(crate) first_index: u32,
     pub(crate) base_vertex: i32,
+    pub(crate) topology: crate::intel::render::ResidentScenePrimitiveTopology,
     pub(crate) clear_rgba8_srgb: u32,
     pub(crate) sampled_texture: BufferHandle,
     pub(crate) texture_width: u32,
@@ -2782,6 +2783,87 @@ pub(crate) struct Ui4SurfaceIndexedCompletion {
     pub(crate) point: TimelinePoint,
 }
 
+fn ui4_single_indexed_topology_valid(
+    topology: crate::intel::render::ResidentScenePrimitiveTopology,
+    index_count: u32,
+) -> bool {
+    use crate::intel::render::ResidentScenePrimitiveTopology;
+
+    // The sampled single-draw contract currently admits the two paths with
+    // explicit client coverage. In particular, a quad remains four indices
+    // through VF assembly; it is never lowered to a triangle list here.
+    matches!(
+        topology,
+        ResidentScenePrimitiveTopology::TriangleList | ResidentScenePrimitiveTopology::QuadList
+    ) && topology.accepts_index_count(index_count as usize)
+}
+
+fn canonicalize_ui4_single_indexed_winding(
+    vertices: &[[f32; 5]],
+    indices: &mut [u32],
+    topology: crate::intel::render::ResidentScenePrimitiveTopology,
+) {
+    // The authenticated package exposes cull-none WebGPU semantics while
+    // the current resident fixed-function packet accepts one canonical
+    // triangle winding. Preserve a native quad's complete four-index
+    // perimeter for hardware assembly.
+    if topology != crate::intel::render::ResidentScenePrimitiveTopology::TriangleList {
+        return;
+    }
+    for triangle in indices.chunks_exact_mut(3) {
+        let a = vertices[triangle[0] as usize];
+        let b = vertices[triangle[1] as usize];
+        let c = vertices[triangle[2] as usize];
+        let area = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+        if area < 0.0 {
+            triangle.swap(1, 2);
+        }
+    }
+}
+
+#[cfg(test)]
+mod ui4_single_indexed_topology_tests {
+    use super::{canonicalize_ui4_single_indexed_winding, ui4_single_indexed_topology_valid};
+    use crate::intel::render::ResidentScenePrimitiveTopology as Topology;
+
+    #[test]
+    fn admits_complete_triangle_and_quad_lists_only() {
+        assert!(ui4_single_indexed_topology_valid(Topology::TriangleList, 3));
+        assert!(ui4_single_indexed_topology_valid(Topology::TriangleList, 6));
+        assert!(ui4_single_indexed_topology_valid(Topology::QuadList, 4));
+        assert!(ui4_single_indexed_topology_valid(Topology::QuadList, 8));
+        for (topology, count) in [
+            (Topology::TriangleList, 0),
+            (Topology::TriangleList, 4),
+            (Topology::QuadList, 0),
+            (Topology::QuadList, 6),
+            (Topology::QuadStrip, 4),
+            (Topology::TriangleFan, 4),
+            (Topology::TriangleListAdj, 6),
+        ] {
+            assert!(!ui4_single_indexed_topology_valid(topology, count));
+        }
+    }
+
+    #[test]
+    fn native_quad_perimeters_are_preserved_while_triangle_winding_is_canonicalized() {
+        let vertices = [
+            [-1.0, -1.0, 0.0, 0.0, 1.0],
+            [1.0, -1.0, 0.0, 1.0, 1.0],
+            [1.0, 1.0, 0.0, 1.0, 0.0],
+            [-1.0, 1.0, 0.0, 0.0, 0.0],
+        ];
+        for original in [[0, 1, 2, 3], [3, 2, 1, 0]] {
+            let mut quad = original;
+            canonicalize_ui4_single_indexed_winding(&vertices, &mut quad, Topology::QuadList);
+            assert_eq!(quad, original);
+        }
+        let mut triangles = [0, 2, 1, 0, 3, 2];
+        canonicalize_ui4_single_indexed_winding(&vertices, &mut triangles, Topology::TriangleList);
+        assert_eq!(triangles, [0, 1, 2, 0, 2, 3]);
+    }
+}
+
 /// Resolve one bounded WGPU indexed draw into the existing authenticated
 /// Render frontier. The broker understands only byte layouts, opaque handles,
 /// and the admitted shader-package interface.
@@ -2791,7 +2873,9 @@ pub(crate) fn submit_ui4_indexed_draw(
     queue_handle: QueueHandle,
     draw: Ui4IndexedDrawDescriptor,
 ) -> Result<Ui4SurfaceIndexedCompletion, VgpuError> {
-    if draw.index_count == 0 || draw.base_vertex != 0 {
+    if !ui4_single_indexed_topology_valid(draw.topology, draw.index_count)
+        || draw.base_vertex != 0
+    {
         return Err(VgpuError::Unsupported);
     }
     let (
@@ -2969,19 +3053,7 @@ pub(crate) fn submit_ui4_indexed_draw(
                 return Err(error);
             }
         };
-        // The authenticated package exposes cull-none WebGPU semantics while
-        // the current resident fixed-function packet accepts one canonical
-        // winding. Canonicalize each projected triangle without changing its
-        // topology; depth still resolves the visible faces.
-        for triangle in indices.chunks_exact_mut(3) {
-            let a = vertices[triangle[0] as usize];
-            let b = vertices[triangle[1] as usize];
-            let c = vertices[triangle[2] as usize];
-            let area = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
-            if area < 0.0 {
-                triangle.swap(1, 2);
-            }
-        }
+        canonicalize_ui4_single_indexed_winding(&vertices, &mut indices, draw.topology);
         (
             window_id,
             phys,
@@ -3006,13 +3078,13 @@ pub(crate) fn submit_ui4_indexed_draw(
     )
     .ok_or(VgpuError::Unsupported)?;
     let mesh = match if sampled_texture.is_some() {
-        crate::intel::render::create_resident_textured_triangle_mesh(&vertices, &indices)
+        crate::intel::render::create_resident_textured_indexed_mesh(&vertices, &indices, draw.topology)
     } else {
         let positions = vertices
             .iter()
             .map(|vertex| [vertex[0], vertex[1], vertex[2]])
             .collect::<Vec<_>>();
-        crate::intel::render::create_resident_triangle_mesh(&positions, &indices)
+        crate::intel::render::create_resident_indexed_mesh(&positions, &indices, draw.topology)
     } {
         Ok(mesh) => mesh,
         Err(_) => {
@@ -3030,7 +3102,7 @@ pub(crate) fn submit_ui4_indexed_draw(
             crate::intel::render::ResidentSceneFragmentContract::ConstantRgba
         },
         viewport_translation_px: [0.0, 0.0],
-        topology: crate::intel::render::ResidentScenePrimitiveTopology::TriangleList,
+        topology: draw.topology,
     };
     let diagnostic_logs =
         if sampled_texture.is_some() && crate::log_os::flags::QUAD_TEXTURE_DIAG_PROFILE_ENABLED {
@@ -3047,8 +3119,8 @@ pub(crate) fn submit_ui4_indexed_draw(
         };
     if diagnostic_logs {
         crate::log_info!(target: "render";
-            "quad-texture: phase=prepared principal={:?} pipeline={} surface={} vertices={} indices={} first_xyzuv={:?} texture={}x{} pitch={} sampler_flags=0x{:X} target={}x{} depth=enabled\n",
-            principal, draw.pipeline.raw(), draw.surface.raw(), vertices.len(), indices.len(),
+            "quad-texture: phase=prepared principal={:?} pipeline={} surface={} topology={:?} vertices={} indices={} first_xyzuv={:?} texture={}x{} pitch={} sampler_flags=0x{:X} target={}x{} depth=enabled\n",
+            principal, draw.pipeline.raw(), draw.surface.raw(), draw.topology, vertices.len(), indices.len(),
             vertices.first(), draw.texture_width, draw.texture_height, draw.texture_pitch,
             draw.sampler_flags, width, height,
         );
@@ -3170,7 +3242,7 @@ pub(crate) fn submit_ui4_indexed_draw(
         physical_publish_sequence: release.sequence(),
     };
     crate::log_info!(target: "vgpu";
-        "vgpu: indexed UI4 draw retired principal={:?} shader_package=fnv1a64:{:016X} pipeline={} vertex_buffer={} index_buffer={} indices={} target={}x{} timeline={} render_release={} path=opaque-wgpu-objects->resident-render0->ui4\n",
+        "vgpu: indexed UI4 draw retired principal={:?} shader_package=fnv1a64:{:016X} pipeline={} vertex_buffer={} index_buffer={} topology={:?} indices={} target={}x{} timeline={} render_release={} path=opaque-wgpu-objects->resident-render0->ui4\n",
         principal,
         if sampled_texture.is_some() {
             SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64
@@ -3180,6 +3252,7 @@ pub(crate) fn submit_ui4_indexed_draw(
         draw.pipeline.raw(),
         draw.vertex_buffer.raw(),
         draw.index_buffer.raw(),
+        draw.topology,
         draw.index_count,
         width,
         height,
