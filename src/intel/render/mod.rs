@@ -35,6 +35,31 @@ use spin::Mutex;
 
 static SUMMARY_ONLY_SUBMIT_DEPTH: AtomicU32 = AtomicU32::new(0);
 
+// Host diagnostic only: keep the public material ABI and its reserved fields
+// unchanged. Every view uses the same retained VS and full PBR PS contract.
+static PICASSO_MATERIAL_VIEW: AtomicU32 = AtomicU32::new(0);
+
+pub(crate) fn set_picasso_material_view(view: &str) -> bool {
+    let mode = match view {
+        "pbr" => 0,
+        "base" => 1,
+        "normal" => 2,
+        "uv" => 3,
+        "solid" => 4,
+        _ => return false,
+    };
+    PICASSO_MATERIAL_VIEW.store(mode, Ordering::Release);
+    crate::log_important!(target: "render";
+        "picasso-material-view: mode={} name={} applies=next-encoded-pbr-draw\n",
+        mode, view,
+    );
+    true
+}
+
+pub(crate) fn picasso_material_view() -> u32 {
+    PICASSO_MATERIAL_VIEW.load(Ordering::Acquire)
+}
+
 struct RenderSummaryOnlyGuard;
 
 impl RenderSummaryOnlyGuard {

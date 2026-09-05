@@ -7,12 +7,20 @@ use crate::shell2::shell2_cmd::ParseOutcome;
 fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(io, "vgpu status");
     print_shell_line(io, "vgpu test broker|abi|guc|compute|blit|all");
+    print_shell_line(io, "vgpu material pbr|base|normal|uv|solid");
 }
 
 pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let mut args = rest.split_whitespace();
     match (args.next(), args.next(), args.next()) {
         (Some(cmd), None, None) if cmd.eq_ignore_ascii_case("status") => print_status(io),
+        (Some(cmd), Some(view), None) if cmd.eq_ignore_ascii_case("material") => {
+            if crate::intel::render::set_picasso_material_view(view) {
+                print_shell_line(io, format!("vgpu: Picasso material view={view}; applies to the next frame").as_str());
+            } else {
+                usage(io);
+            }
+        }
         (Some(cmd), Some(test), None) if cmd.eq_ignore_ascii_case("test") => {
             let passed = match test {
                 test if test.eq_ignore_ascii_case("broker") => test_broker(io),
@@ -41,6 +49,7 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
 }
 
 fn print_status(io: &'static dyn ShellBackend2) {
+    print_shell_line(io, format!("vgpu: Picasso material view={} (0=pbr 1=base 2=normal 3=uv 4=solid)", crate::intel::render::picasso_material_view()).as_str());
     let status = vgpu::broker_status();
     let executor = crate::gpu::executor::status();
     print_shell_line(

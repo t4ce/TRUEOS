@@ -903,6 +903,10 @@ fn write_triangle_probe_state_with_flush(
             }
             dwords[material_parameters_offset / 4..material_parameters_offset / 4 + 16]
                 .copy_from_slice(&material.parameters);
+            // The host owns this diagnostic word; callers still must supply
+            // zero reserved ABI fields. Select at encoding time so switching
+            // views never edits storage already submitted to the GPU.
+            dwords[material_parameters_offset / 4 + 14] = picasso_material_view();
             let start = surface_state_offset / 4 + 9 * 16;
             write_triangle_raw_buffer_surface_state(
                 &mut dwords[start..start + 16],
