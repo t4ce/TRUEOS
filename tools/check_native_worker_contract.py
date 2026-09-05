@@ -55,6 +55,9 @@ def check(kernel: Path, sdk: Path) -> None:
         raise ValueError(f"native capacity VMCALL collision: {collisions}")
     if "OP_BP_SERVICE_LANE_CAPACITY =>" not in vmcall:
         raise ValueError("native capacity VMCALL dispatch missing")
+    guest = (kernel / "crates/trueos-vm/src/vmcall.rs").read_text()
+    if f"OP_BP_SERVICE_LANE_CAPACITY: u32 = {code:#x};" not in guest:
+        raise ValueError("native capacity VMCALL guest constant differs")
     print("native-worker-contract: declarations=match implementations=match exports=present vmcall=unique")
 
 

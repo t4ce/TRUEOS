@@ -63,11 +63,13 @@ pub(super) struct GuestJobOwner {
 
 pub(super) fn reserve(vm_id: u8) -> Option<GuestJobOwner> {
     let generation = crate::hv::vm_run_generation(vm_id)?;
-    STATES
-        .get(vm_id as usize)?
-        .lock()
-        .reserve(generation)
-        .then_some(GuestJobOwner { vm_id, generation })
+    let reserved = STATES.get(vm_id as usize)?.lock().reserve(generation);
+    if !reserved {
+        return None;
+    }
+    // Construct the RAII token only after reserving and releasing the lock.
+    // Eager then_some(token) would drop a non-reservation on the failure path.
+    Some(GuestJobOwner { vm_id, generation })
 }
 
 impl Drop for GuestJobOwner {
