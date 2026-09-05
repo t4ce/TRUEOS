@@ -48,7 +48,7 @@ def decode(binary: Path) -> str:
     return result.stdout
 
 
-def emit_rust(vs: bytes, ps: bytes, state: dict[str, int]) -> None:
+def emit_rust(vs: bytes, ps: bytes, state: dict[str, int], ps_state: dict[str, int]) -> None:
     def words(name: str, binary: bytes) -> str:
         values = struct.unpack(f"<{len(binary) // 4}I", binary)
         rows = ["    " + ", ".join(f"0x{word:08X}" for word in values[index:index + 8]) + ","
@@ -60,6 +60,7 @@ def emit_rust(vs: bytes, ps: bytes, state: dict[str, int]) -> None:
 // VUE: 16-byte header, position at slot 1, UV at slot 2; one 64-byte allocation.
 // SBE: read offset 1/read length 1 (32-byte units), one perspective attribute.
 // Fragment code is byte-identical to the existing Picasso sampled SIMD16 PS.
+// SIMD16 barycentrics occupy g2..g5; the captured constant/setup start is g6.
 use super::{
     DispatchMode, ShaderKernelMetadata, TrianglePipeline, TrianglePixelShader,
     TrianglePixelShaderMetadata, TriangleVertexShader, TriangleVertexShaderMetadata,
@@ -97,14 +98,14 @@ use super::{
                 code_alignment_bytes: 64,
                 ksp_offset_bytes: 0,
                 dispatch_mode: DispatchMode::Simd16,
-                grf_start_register: 2,
+                grf_start_register: {ps_state["grf_start16"]},
                 grf_used: 128,
                 push_constant_bytes: 0,
-                binding_table_entry_count: 3,
-                sampler_count: 1,
+                binding_table_entry_count: {ps_state["binding_table_entries"]},
+                sampler_count: {ps_state["sampler_count"]},
             }},
-            num_varying_inputs: 1,
-            uses_vmask: true,
+            num_varying_inputs: {ps_state["num_varying_inputs"]},
+            uses_vmask: {str(bool(ps_state["uses_vmask"])).lower()},
             computed_stencil: false,
             persample_dispatch: false,
             computed_depth_mode: 0,
@@ -115,6 +116,20 @@ use super::{
 
 pub(crate) fn clip_position3_uv_texture_pipeline() -> &'static TrianglePipeline {{
     &CLIP_POSITION3_UV_TEXTURE_PIPELINE
+}}
+
+#[cfg(test)]
+mod tests {{
+    #[test]
+    fn sampled_ps_setup_data_follows_simd16_barycentric_payload() {{
+        let capture = include_str!("clip_position3_uv_texture/fragment_TRUEOS_PS_state_v1.txt");
+        assert!(capture.contains("grf_start8=4 grf_start16=6 "));
+        let pipeline = super::clip_position3_uv_texture_pipeline();
+        // Setup coefficients must start after four SIMD16 barycentric GRFs.
+        // Loading them at g2 overwrites barycentrics and leaves g6 undefined.
+        assert_eq!(pipeline.ps.meta.kernel.grf_start_register, 6);
+        assert_eq!(pipeline.vs.meta.kernel.grf_start_register, 2);
+    }}
 }}
 '''
     GENERATED.write_text(generated)
@@ -163,6 +178,8 @@ def main() -> None:
     icd.write_text(json.dumps({"file_format_version": "1.0.1", "ICD": {"api_version": "1.4.346", "library_path": str(driver)}}))
     executable_dir = work / "intel"
     executable_dir.mkdir(exist_ok=True)
+    for filename in ("vertex_TRUEOS_VS_state_v1.txt", "fragment_TRUEOS_PS_state_v1.txt"):
+        (executable_dir / filename).unlink(missing_ok=True)
     env = os.environ.copy()
     env.update({
         "LD_PRELOAD": str(shim), "VK_DRIVER_FILES": str(icd),
@@ -193,6 +210,22 @@ def main() -> None:
     }
     if any(state.get(key) != value for key, value in expected_state.items()):
         raise SystemExit(f"VS payload contract drift: {state}")
+    ps_state_path = executable_dir / "fragment_TRUEOS_PS_state_v1.txt"
+    if not ps_state_path.is_file():
+        raise SystemExit("Mesa lacks PS metadata capture; apply mesa-ps-capture.patch and rebuild ANV")
+    ps_state = {key: int(value, 0) for key, value in re.findall(r"(\w+)=(0x[0-9a-fA-F]+|\d+)", ps_state_path.read_text())}
+    expected_ps_state = {
+        "ver": 12, "verx10": 120, "dispatch8": 1, "dispatch16": 1, "dispatch32": 0,
+        "grf_start8": 4, "grf_start16": 6, "grf_start32": 0,
+        "num_varying_inputs": 1, "barycentric_interp_modes": 1, "uses_vmask": 1,
+        "uses_src_depth": 0, "uses_src_w": 0, "uses_depth_w_coefficients": 0,
+        "uses_pc_bary_coefficients": 0, "uses_npc_bary_coefficients": 0,
+        "computed_depth_mode": 0, "computed_stencil": 0, "flat_inputs": 0,
+        "binding_table_entries": 3, "sampler_count": 1, "push_bytes": 0,
+        "scratch_bytes": 0,
+    }
+    if any(ps_state.get(key) != value for key, value in expected_ps_state.items()):
+        raise SystemExit(f"PS payload contract drift: {ps_state}")
     vs_path = work / "clip_position3_uv.vs.simd8.bin"
     vs_path.write_bytes(vs)
     vs_isa, ps_isa = decode(vs_path), decode(REUSED_PS)
@@ -211,6 +244,7 @@ def main() -> None:
     (OUT / "reused_picasso.ps.simd16.iga.txt").write_text(ps_isa)
     shutil.copy2(vertex_assembly, OUT / "clip_position3_uv.vs.mesa.txt")
     shutil.copy2(state_path, OUT / state_path.name)
+    shutil.copy2(ps_state_path, OUT / ps_state_path.name)
     shutil.copy2(log, OUT / "compile.log")
     metadata = {
         "schema": 1, "contract": "clip-position3-uv-texture", "device": device,
@@ -219,13 +253,14 @@ def main() -> None:
         "vertex_stride_bytes": 20, "vertex_attributes": ["float32x3@0", "float32x2@12"],
         "vertex_input_components": "xyz,uv", "vertex_varyings": ["smooth-perspective-vec2-location0"],
         "vertex_compiler_state": state,
+        "fragment_compiler_state": ps_state,
         "sbe": {"read_offset_32b": 1, "read_length_32b": 1, "attributes": 1},
         "reused_fragment": str(REUSED_PS.relative_to(ROOT)),
         "vs_sha256": hashlib.sha256(vs).hexdigest(), "ps_sha256": hashlib.sha256(ps).hexdigest(),
         "vs_bytes": len(vs), "ps_bytes": len(ps), "executables": list(executables.values()),
     }
     (OUT / "metadata.json").write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n")
-    emit_rust(vs, ps, state)
+    emit_rust(vs, ps, state, ps_state)
     print(json.dumps(metadata, indent=2, sort_keys=True))
 
 

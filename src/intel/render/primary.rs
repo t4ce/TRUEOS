@@ -1576,7 +1576,12 @@ fn stage_resident_scene_secondary(
         sampled_texture.is_none().then_some(rgba),
         state_gpu,
         false,
-    )?;
+    ).inspect_err(|reason| {
+        crate::log_warn!(target: "render";
+            "resident-scene: phase=shader-upload-rejected secondary={} textured={} reason={}\n",
+            secondary_index, sampled_texture.is_some(), reason,
+        );
+    })?;
     let probe_state = write_triangle_probe_state_unflushed(
         state_warm,
         draw,
@@ -1584,7 +1589,12 @@ fn stage_resident_scene_secondary(
         blend_mode,
         BackendProbeMode::MesaLike,
         viewport_translation_px,
-    )?;
+    ).inspect_err(|reason| {
+        crate::log_warn!(target: "render";
+            "resident-scene: phase=state-write-rejected secondary={} textured={} reason={}\n",
+            secondary_index, sampled_texture.is_some(), reason,
+        );
+    })?;
     // Shader bytes and all fixed-function structures occupy one compact
     // prefix. Publish it once, after every CPU write, instead of three
     // independent CLFLUSH+MFENCE passes over partly overlapping state.
@@ -1649,7 +1659,12 @@ fn stage_resident_scene_secondary(
         // need command-stream ordering here; the primary emits the single
         // full render/depth/L3 release fence after the final secondary.
         PostDrawSyncVariant::LightCsNoPostSync,
-    )?;
+    ).inspect_err(|reason| {
+        crate::log_warn!(target: "render";
+            "resident-scene: phase=batch-encode-rejected secondary={} textured={} reason={}\n",
+            secondary_index, sampled_texture.is_some(), reason,
+        );
+    })?;
     let bytes = finish_resident_secondary_breadcrumbs(
         batch,
         encoded_payload_bytes,
@@ -1661,11 +1676,12 @@ fn stage_resident_scene_secondary(
         && !RESIDENT_SCENE_UV_TEXTURE_PATH_LOGGED.swap(true, Ordering::AcqRel)
     {
         crate::log_important!(target: "render";
-            "resident-scene: proof=clip-position3-uv-texture-encoded stride={} vs_bytes={} vs_urb_entry_64b={} ps_bytes={} varying_inputs={} texture_bti=2 sampler=0 rt_bti=0 sbe_offset=1 sbe_length=1 does_not_prove=pixel-output\n",
+            "resident-scene: proof=clip-position3-uv-texture-encoded stride={} vs_bytes={} vs_urb_entry_64b={} ps_bytes={} ps_setup_grf={} varying_inputs={} texture_bti=2 sampler=0 rt_bti=0 sbe_offset=1 sbe_length=1 does_not_prove=pixel-output\n",
             draw.vertex_stride,
             pipeline.vs.meta.kernel.code_size_bytes,
             pipeline.vs.meta.urb_entry_output_length,
             pipeline.ps.meta.kernel.code_size_bytes,
+            pipeline.ps.meta.kernel.grf_start_register,
             pipeline.ps.meta.num_varying_inputs,
         );
     }
@@ -2536,6 +2552,7 @@ fn submit_resident_scene_capture_inner_for_carrier(
     // but do not repeat it for every mesh in ordinary scene updates.
     let _summary_only = (!diagnostic_logs).then(RenderSummaryOnlyGuard::enter);
 
+    let mut diagnostic_stage = "device-ready";
     let result = (|| {
         let Some(dev) = crate::intel::claimed_device() else {
             return Err("no-device");
@@ -2544,9 +2561,11 @@ fn submit_resident_scene_capture_inner_for_carrier(
             Some(lease) => picasso_render1_warm_state(lease).ok_or("picasso-carrier-not-ready")?,
             None => warm_state().ok_or("render-boot-not-ready")?,
         };
+        diagnostic_stage = "forcewake";
         if !forcewake_render_acquire(warm) {
             return Err("forcewake");
         }
+        diagnostic_stage = "warm-mappings";
         if carrier.is_none() && !ensure_smoke_buffers_mapped(dev, warm) {
             return Err("render-map");
         }
@@ -2570,6 +2589,7 @@ fn submit_resident_scene_capture_inner_for_carrier(
         } else {
             raster_quality
         };
+        diagnostic_stage = "msaa-color";
         let msaa_color = if carrier.is_none()
             && raster_quality == ResidentSceneRasterQuality::Multisample4x
         {
@@ -2593,6 +2613,7 @@ fn submit_resident_scene_capture_inner_for_carrier(
         } else {
             SURFACE_FORMAT_R8G8B8A8_UNORM
         };
+        diagnostic_stage = "render-target";
         let (render_target_gpu, render_target_pitch) = if let Some(target) = msaa_color {
             (target.surface.gpu, target.surface.pitch_bytes as usize)
         } else if let Some(destination) = direct_output {
@@ -2622,6 +2643,14 @@ fn submit_resident_scene_capture_inner_for_carrier(
                 if opaque_depth_enabled { "d32-float/tile64-ims" } else { "none" },
                 target_width,
                 target_height,
+            );
+        }
+        diagnostic_stage = "depth-prepare";
+        if diagnostic_logs {
+            crate::log_info!(target: "render";
+                "resident-scene: phase=depth-prepare enabled={} device=0x{:04X} target={}x{} depth_reservation_bytes={}\n",
+                opaque_depth_enabled, warm.device_id, target_width, target_height,
+                RESIDENT_SCENE_DEPTH_BYTES,
             );
         }
         let depth_config = if opaque_depth_enabled {
@@ -2686,6 +2715,7 @@ fn submit_resident_scene_capture_inner_for_carrier(
         // Clear and every resident draw are second-level batches beneath one
         // frame-level primary. GuC sees one ordered scene submission and the
         // CPU waits only for the final scene fence.
+        diagnostic_stage = "geometry-prepare-submit";
         let geometry = if let Some(resident) = native_churn {
             submit_resident_churn_forward_geometry_batched(
                 dev,
@@ -2718,6 +2748,7 @@ fn submit_resident_scene_capture_inner_for_carrier(
                 carrier,
             )?
         };
+        diagnostic_stage = "output-completion";
         let geometry_complete = geometry.completed;
         let mut completed_draws = if geometry_complete {
             geometry_draw_count
@@ -2940,6 +2971,16 @@ fn submit_resident_scene_capture_inner_for_carrier(
             release_fence,
         })
     })();
+    if let Err(reason) = &result
+        && !matches!(*reason, "render-busy" | "render-storage-busy")
+    {
+        crate::log_warn!(target: "render";
+            "resident-scene: phase={} result=rejected reason={} draws={} textured={} depth={} target={}x{}\n",
+            diagnostic_stage, reason, geometry_draw_count,
+            draws.iter().any(|draw| draw.sampled_texture.is_some()),
+            opaque_depth_enabled, target_width, target_height,
+        );
+    }
     match carrier {
         Some(lease) => finish_picasso_render1_frame(lease),
         None => PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release),

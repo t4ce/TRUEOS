@@ -3,6 +3,7 @@
 // VUE: 16-byte header, position at slot 1, UV at slot 2; one 64-byte allocation.
 // SBE: read offset 1/read length 1 (32-byte units), one perspective attribute.
 // Fragment code is byte-identical to the existing Picasso sampled SIMD16 PS.
+// SIMD16 barycentrics occupy g2..g5; the captured constant/setup start is g6.
 use super::{
     DispatchMode, ShaderKernelMetadata, TrianglePipeline, TrianglePixelShader,
     TrianglePixelShaderMetadata, TriangleVertexShader, TriangleVertexShaderMetadata,
@@ -55,7 +56,7 @@ static CLIP_POSITION3_UV_TEXTURE_PIPELINE: TrianglePipeline = TrianglePipeline {
                 code_alignment_bytes: 64,
                 ksp_offset_bytes: 0,
                 dispatch_mode: DispatchMode::Simd16,
-                grf_start_register: 2,
+                grf_start_register: 6,
                 grf_used: 128,
                 push_constant_bytes: 0,
                 binding_table_entry_count: 3,
@@ -73,4 +74,18 @@ static CLIP_POSITION3_UV_TEXTURE_PIPELINE: TrianglePipeline = TrianglePipeline {
 
 pub(crate) fn clip_position3_uv_texture_pipeline() -> &'static TrianglePipeline {
     &CLIP_POSITION3_UV_TEXTURE_PIPELINE
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn sampled_ps_setup_data_follows_simd16_barycentric_payload() {
+        let capture = include_str!("clip_position3_uv_texture/fragment_TRUEOS_PS_state_v1.txt");
+        assert!(capture.contains("grf_start8=4 grf_start16=6 "));
+        let pipeline = super::clip_position3_uv_texture_pipeline();
+        // Setup coefficients must start after four SIMD16 barycentric GRFs.
+        // Loading them at g2 overwrites barycentrics and leaves g6 undefined.
+        assert_eq!(pipeline.ps.meta.kernel.grf_start_register, 6);
+        assert_eq!(pipeline.vs.meta.kernel.grf_start_register, 2);
+    }
 }

@@ -1,0 +1,42 @@
+--- a/src/intel/vulkan/genX_shader.c
++++ b/src/intel/vulkan/genX_shader.c
+@@ -1121,6 +1121,39 @@
+    const struct brw_fs_prog_data *fs_prog_data =
+       get_shader_fs_prog_data(shader);
+ 
++   const char *trueos_ps_dump_dir = os_get_option("TRUEOS_EXECUTABLE_DUMP_DIR");
++   if (trueos_ps_dump_dir != NULL) {
++      char path[1024];
++      snprintf(path, sizeof(path), "%s/fragment_TRUEOS_PS_state_v1.txt", trueos_ps_dump_dir);
++      FILE *file = fopen(path, "w");
++      if (file != NULL) {
++         fprintf(file,
++                 "TRUEOS_PS_STATE_V1 ver=%u verx10=%u dispatch8=%u dispatch16=%u dispatch32=%u "
++                 "grf_start8=%u grf_start16=%u grf_start32=%u offset16=%u "
++                 "num_varying_inputs=%u barycentric_interp_modes=0x%x uses_vmask=%u "
++                 "uses_src_depth=%u uses_src_w=%u uses_depth_w_coefficients=%u "
++                 "uses_pc_bary_coefficients=%u uses_npc_bary_coefficients=%u "
++                 "computed_depth_mode=%u computed_stencil=%u flat_inputs=0x%x "
++                 "binding_table_entries=%u sampler_prefetch_count=%u sampler_count=%u push_bytes=%u scratch_bytes=%u\n",
++                 devinfo->ver, devinfo->verx10,
++                 fs_prog_data->dispatch_8, fs_prog_data->dispatch_16, fs_prog_data->dispatch_32,
++                 fs_prog_data->base.dispatch_grf_start_reg,
++                 fs_prog_data->dispatch_grf_start_reg_16,
++                 fs_prog_data->dispatch_grf_start_reg_32,
++                 fs_prog_data->prog_offset_16,
++                 fs_prog_data->num_varying_inputs, fs_prog_data->barycentric_interp_modes,
++                 fs_prog_data->uses_vmask, fs_prog_data->uses_src_depth,
++                 fs_prog_data->uses_src_w, fs_prog_data->uses_depth_w_coefficients,
++                 fs_prog_data->uses_pc_bary_coefficients,
++                 fs_prog_data->uses_npc_bary_coefficients,
++                 fs_prog_data->computed_depth_mode, fs_prog_data->computed_stencil,
++                 fs_prog_data->flat_inputs,
++                 get_surface_count(device, shader), get_sampler_count(device, shader),
++                 shader->bind_map.sampler_count, fs_prog_data->base.push_sizes[0], fs_prog_data->base.total_scratch);
++         fclose(file);
++      }
++   }
++
+    uint32_t ps_dwords[GENX(3DSTATE_PS_length)];
+    anv_shader_emit_tmp(batch, ps_dwords, GENX(3DSTATE_PS), ps) {
+ #if GFX_VER == 12

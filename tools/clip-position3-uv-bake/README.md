@@ -7,8 +7,9 @@ linked fragment stage must compile byte-identically to Picasso's existing
 SIMD16 sampled fragment executable, which is reused at runtime.
 
 The baker requires `glslc`, `iga64`, a C compiler, and a Mesa build containing
-ANV plus `libintel_noop_drm_shim.so`. Apply `mesa-vs-capture.patch` to that
-Mesa source and rebuild ANV to expose compiler-selected VS state. The default
+ANV plus `libintel_noop_drm_shim.so`. Apply `mesa-vs-capture.patch` and
+`mesa-ps-capture.patch` to that Mesa source and rebuild ANV to expose
+compiler-selected stage state. The default
 build location is the existing instrumented Mesa under `.codex_tmp`:
 
 ```sh
@@ -29,8 +30,13 @@ in 32-byte units, or the independent `3DSTATE_VS` output-length field, which
 the captured gfx12 packet leaves zero. VS input read length is 1 at GRF 2.
 
 The reused PS has one perspective varying, consumes perspective pixel
-barycentrics beginning at g2, samples texture BTI2 through sampler 0, and
-writes RT0. It has no push constants or scratch. Its full shader body is
+barycentrics in g2..g5, and requires its constant/setup coefficients at g6.
+The captured SIMD8 setup start is g4; the SIMD16 setup start is g6. This
+field selects where coefficients are delivered, not where barycentrics begin.
+Programming g2 for SIMD16 overwrites barycentric data and leaves the g6 UV
+coefficients undefined, producing invalid texture coordinates. The shader
+samples texture BTI2 through sampler 0 and writes RT0. It has no push
+constants or scratch. Its full shader body is
 independently decoded with IGA's `12p1` platform, as is the new 224-byte VS.
 
 This proves compilation, extraction, ISA validity, payload layout, and the

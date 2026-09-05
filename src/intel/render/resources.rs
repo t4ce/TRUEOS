@@ -1433,7 +1433,9 @@ fn picasso_retained_textured_pipeline()
                     code_alignment_bytes: 64,
                     ksp_offset_bytes: 0,
                     dispatch_mode: DispatchMode::Simd16,
-                    grf_start_register: 2,
+                    // Same sampled executable as clip_position3_uv_texture:
+                    // SIMD16 barycentrics occupy g2..g5; setup starts at g6.
+                    grf_start_register: 6,
                     grf_used: 128,
                     push_constant_bytes: 0,
                     binding_table_entry_count: 3,

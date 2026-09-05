@@ -2827,13 +2827,54 @@ pub(crate) fn submit_ui4_indexed_draw(
         viewport_translation_px: [0.0, 0.0],
         topology: crate::intel::render::ResidentScenePrimitiveTopology::TriangleList,
     };
+    let diagnostic_logs = if sampled_texture.is_some()
+        && crate::log_os::flags::QUAD_TEXTURE_DIAG_PROFILE_ENABLED
+    {
+        static DIAGNOSTICS: crate::log_os::LogRateLimitState =
+            crate::log_os::LogRateLimitState::new();
+        DIAGNOSTICS
+            .observe(
+                crate::log_os::flags::QUAD_TEXTURE_DIAG_FIRST,
+                crate::log_os::flags::QUAD_TEXTURE_DIAG_EVERY,
+            )
+            .should_emit()
+    } else {
+        false
+    };
+    if diagnostic_logs {
+        crate::log_info!(target: "render";
+            "quad-texture: phase=prepared principal={:?} pipeline={} surface={} vertices={} indices={} first_xyzuv={:?} texture={}x{} pitch={} sampler_flags=0x{:X} target={}x{} depth=enabled\n",
+            principal, draw.pipeline.raw(), draw.surface.raw(), vertices.len(), indices.len(),
+            vertices.first(), draw.texture_width, draw.texture_height, draw.texture_pitch,
+            draw.sampler_flags, width, height,
+        );
+    }
     let rendered = crate::intel::render::render_resident_triangle_scene_frame_premultiplied_with_opaque_depth_direct_to_surface(
         core::slice::from_ref(&scene_draw),
         Some(draw.clear_rgba8_srgb.to_le_bytes()),
         destination,
-        false,
+        diagnostic_logs,
     );
-    let released_mesh = if rendered.is_ok() || matches!(rendered, Err("render-busy")) {
+    let render_error = rendered.as_ref().err().copied();
+    let transient_busy = matches!(render_error, Some("render-busy" | "render-storage-busy"));
+    if let Some(reason) = render_error {
+        if !transient_busy || diagnostic_logs {
+            crate::log_warn!(target: "render";
+                "vgpu-indexed: phase=renderer-return reason={} transient={} textured={} principal={:?} pipeline={} surface={} indices={} target={}x{}\n",
+                reason, transient_busy, sampled_texture.is_some(), principal,
+                draw.pipeline.raw(), draw.surface.raw(), draw.index_count, width, height,
+            );
+        }
+    } else if diagnostic_logs && let Ok(result) = &rendered {
+        crate::log_info!(target: "render";
+            "quad-texture: phase=renderer-return complete={} completed_draws={} requested_draws={} completion_error={:?} release_present={} release_matches={} present_copy={} gpu_poll_us={} gpu_poll_iters={}\n",
+            result.frame_complete, result.completed_draws, result.requested_draws,
+            result.completion_error(), result.release_fence.is_some(),
+            result.release_fence.is_some_and(|release| release.matches(phys, bytes)),
+            result.present_copy_performed, result.gpu_poll_us, result.gpu_poll_iters,
+        );
+    }
+    let released_mesh = if rendered.is_ok() || transient_busy {
         crate::intel::render::release_resident_triangle_mesh(&mesh)
     } else {
         // Physical completion is ambiguous. Keep the resident geometry pinned
@@ -2841,18 +2882,19 @@ pub(crate) fn submit_ui4_indexed_draw(
         // Render0.
         false
     };
-    let released_texture = if rendered.is_ok() || matches!(rendered, Err("render-busy")) {
+    let released_texture = if rendered.is_ok() || transient_busy {
         sampled_texture
             .as_ref()
             .is_none_or(crate::intel::render::release_resident_sampled_texture)
     } else {
         false
     };
-    if matches!(rendered, Err("render-busy")) && released_mesh {
+    if transient_busy && released_mesh && released_texture {
         rollback_indexed_submission_lease(principal, device_handle, queue_handle, draw.surface);
         return Err(VgpuError::Busy);
     }
     let release = rendered
+        .as_ref()
         .ok()
         .and_then(|result| {
             (result.completed_draws == 1
@@ -2863,6 +2905,16 @@ pub(crate) fn submit_ui4_indexed_draw(
         })
         .filter(|release| release.matches(phys, bytes));
     let Some(release) = release.filter(|_| released_mesh && released_texture) else {
+        crate::log_warn!(target: "render";
+            "vgpu-indexed: phase=release-rejected renderer_error={:?} completion_error={:?} completed_draws={} requested_draws={} release_present={} release_matches={} present_copy={} mesh_released={} texture_released={} action=device-lost+retain-unretired-storage\n",
+            render_error, rendered.as_ref().ok().and_then(|result| result.completion_error()),
+            rendered.as_ref().map_or(0, |result| result.completed_draws),
+            rendered.as_ref().map_or(0, |result| result.requested_draws),
+            rendered.as_ref().is_ok_and(|result| result.release_fence.is_some()),
+            rendered.as_ref().is_ok_and(|result| result.release_fence.is_some_and(|release| release.matches(phys, bytes))),
+            rendered.as_ref().is_ok_and(|result| result.present_copy_performed),
+            released_mesh, released_texture,
+        );
         let mut broker = BROKER.lock();
         if let Ok(device) = lookup_device_mut(&mut broker, device_handle, principal) {
             device.lost = true;

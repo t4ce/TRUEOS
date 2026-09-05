@@ -89,6 +89,19 @@ pub(crate) mod flags {
     pub(crate) const SHELL2_RENDER_DIAG_FIRST: u64 = 16;
     pub(crate) const SHELL2_RENDER_DIAG_EVERY: u64 = 128;
 
+    /// Focused QuadTexture sampled indexed-draw preparation/submission probe.
+    ///
+    /// Gate sites on both this flag and the clip-position3/UV texture package.
+    /// Emit preparation, admission, and retirement through Render/Info, which
+    /// is already accepted. The `vgpu` target resolves to Global and its Info
+    /// records are filtered in ordinary boots. Keep failures at Render/Warn
+    /// with their original backend reason before mapping to DeviceLost (-32).
+    /// Sample repeated successful stages; never suppress failure records.
+    /// This flag does not widen any area policy or enable per-frame Trace.
+    pub(crate) const QUAD_TEXTURE_DIAG_PROFILE_ENABLED: bool = true;
+    pub(crate) const QUAD_TEXTURE_DIAG_FIRST: u64 = 8;
+    pub(crate) const QUAD_TEXTURE_DIAG_EVERY: u64 = 128;
+
     /// Focused Helio/Intel graphics bring-up profile.
     ///
     /// This admits the iGPU device, display, render and direct-RCS readiness
