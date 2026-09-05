@@ -180,6 +180,14 @@ macro_rules! intel_render_batch_log {
     };
 }
 
+mod joker_config;
+pub(crate) use joker_config::render_joker_variant_names;
+use joker_config::{
+    RenderJokerSpec, RenderJokerTarget, parse_render_joker_spec,
+    render_joker_real_vs_front_end_contract, render_joker_streamout_kind,
+    render_joker_vf_experiment, retired_render_joker_variant_reason,
+};
+
 include!("constants.rs");
 include!("picasso_carrier.rs");
 include!("state.rs");
