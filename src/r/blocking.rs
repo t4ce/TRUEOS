@@ -155,25 +155,27 @@ fn run_blocking_job_entry(slot: u32, entry: BlockingJobEntry) {
                 id, vm_id, purpose
             ),
         );
-        crate::r::kernel_task_domain::with(
+        let mut pending_call = Some(call);
+        let ran = crate::r::kernel_task_domain::with(
             crate::r::kernel_task_domain::KernelTaskDomain::TokioCarrier,
             Some(vm_id),
             || {
-                if crate::allocators::with_hv_guest_alloc_domain(vm_id, || {
-                    run_blocking_job_call(call)
-                })
-                .is_none()
-                {
-                    crate::log_error!(
-                        target: "service";
-                        "blocking-job: guest allocation domain unavailable id={} vm={} purpose={}\n",
-                        id,
-                        vm_id,
-                        purpose
-                    );
-                }
+                crate::allocators::with_hv_guest_alloc_domain(vm_id, || {
+                    run_blocking_job_call(pending_call.take().expect("native job consumed once"))
+                }).is_some()
             },
         );
+        if !ran {
+            // Do not invoke a guest destructor in the host allocation realm,
+            // or publish its executable memory as reusable after losing the
+            // realm. Retain the reservation for diagnosis/recovery.
+            core::mem::forget(pending_call);
+            core::mem::forget(owner);
+            crate::log_error!(target: "service";
+                "blocking-job: guest allocation domain unavailable id={} vm={} resources=retained\n", id, vm_id);
+            service_lane_activity_finish(slot);
+            return;
+        }
         crate::log_os::log_with_area_purpose(
             crate::log_os::flags::LogArea::Blueprint,
             log_os_core::LogLevel::Info,

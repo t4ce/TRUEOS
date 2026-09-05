@@ -37,6 +37,8 @@ def rust_root(path: Path) -> Path:
 
 def replace_once(source: str, before: str, after: str, path: Path) -> str:
     if source.count(after) == 1:
+        if before in source.replace(after, "", 1):
+            raise SystemExit(f"{path}: duplicate source anchor: {before!r}")
         return source
     if source.count(before) != 1:
         raise SystemExit(f"{path}: expected exactly one source anchor: {before!r}")
@@ -58,6 +60,8 @@ def installation(root: Path) -> dict[Path, str]:
                 f"{backend_path}: existing TRUEOS thread backend differs from the canonical reference"
             )
     selector = selector_path.read_text(encoding="utf-8")
+    if selector.count(UNIX_SELECTOR) != 1:
+        raise SystemExit(f"{selector_path}: expected exactly one Unix thread selector anchor")
     if 'target_os = "trueos" => {' in selector and TRUEOS_SELECTOR not in selector:
         raise SystemExit(f"{selector_path}: conflicting TRUEOS thread selector")
     if TRUEOS_SELECTOR not in selector:

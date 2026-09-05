@@ -14,7 +14,11 @@ struct State {
 
 impl State {
     const fn new() -> Self {
-        Self { generation: 0, accepting: false, in_flight: 0 }
+        Self {
+            generation: 0,
+            accepting: false,
+            in_flight: 0,
+        }
     }
 
     fn open(&mut self, generation: u64) -> bool {
@@ -30,7 +34,9 @@ impl State {
         if !self.accepting || self.generation != generation {
             return false;
         }
-        let Some(count) = self.in_flight.checked_add(1) else { return false };
+        let Some(count) = self.in_flight.checked_add(1) else {
+            return false;
+        };
         self.in_flight = count;
         true
     }
@@ -57,7 +63,10 @@ pub(super) struct GuestJobOwner {
 
 pub(super) fn reserve(vm_id: u8) -> Option<GuestJobOwner> {
     let generation = crate::hv::vm_run_generation(vm_id)?;
-    STATES.get(vm_id as usize)?.lock().reserve(generation)
+    STATES
+        .get(vm_id as usize)?
+        .lock()
+        .reserve(generation)
         .then_some(GuestJobOwner { vm_id, generation })
 }
 
@@ -68,20 +77,28 @@ impl Drop for GuestJobOwner {
 }
 
 pub(crate) fn open_guest_jobs(vm_id: u8, generation: u64) -> bool {
-    STATES.get(vm_id as usize).is_some_and(|state| state.lock().open(generation))
+    STATES
+        .get(vm_id as usize)
+        .is_some_and(|state| state.lock().open(generation))
 }
 
 /// Stop accepting work and return the number of outstanding reservations.
 pub(crate) fn close_guest_jobs(vm_id: u8) -> usize {
-    STATES.get(vm_id as usize).map_or(0, |state| state.lock().close())
+    STATES
+        .get(vm_id as usize)
+        .map_or(0, |state| state.lock().close())
 }
 
 pub(crate) fn guest_jobs_in_flight(vm_id: u8) -> usize {
-    STATES.get(vm_id as usize).map_or(0, |state| state.lock().in_flight)
+    STATES
+        .get(vm_id as usize)
+        .map_or(0, |state| state.lock().in_flight)
 }
 
 pub(super) fn accepts_guest_jobs(vm_id: u8) -> bool {
-    STATES.get(vm_id as usize).is_some_and(|state| state.lock().accepting)
+    STATES
+        .get(vm_id as usize)
+        .is_some_and(|state| state.lock().accepting)
 }
 
 /// Never free executable pages, heap, or process resources on a timeout. Jobs

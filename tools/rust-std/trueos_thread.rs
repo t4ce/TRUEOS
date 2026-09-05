@@ -72,6 +72,10 @@ pub fn yield_now() {
 /// unsupported. Round up to milliseconds so the call never returns earlier
 /// solely because the TRUEOS CABI has millisecond granularity.
 pub fn sleep(dur: Duration) {
+    sleep_with(dur, |chunk| unsafe { trueos_cabi_sleep_ms(chunk) });
+}
+
+fn sleep_with(dur: Duration, mut sleep_ms: impl FnMut(u64)) {
     let mut millis = dur.as_millis();
     if dur.subsec_nanos() % 1_000_000 != 0 {
         millis += 1;
@@ -79,7 +83,43 @@ pub fn sleep(dur: Duration) {
 
     while millis != 0 {
         let chunk = crate::cmp::min(millis, u64::MAX as u128) as u64;
-        unsafe { trueos_cabi_sleep_ms(chunk) };
+        sleep_ms(chunk);
         millis -= chunk as u128;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sleep_rounds_up_without_sleeping_for_zero() {
+        for (duration, expected) in [
+            (Duration::ZERO, 0),
+            (Duration::from_nanos(1), 1),
+            (Duration::from_millis(1), 1),
+            (Duration::from_nanos(1_000_001), 2),
+            (Duration::from_secs(11), 11_000),
+        ] {
+            let mut total = 0u64;
+            let mut calls = 0;
+            sleep_with(duration, |ms| {
+                total += ms;
+                calls += 1;
+            });
+            assert_eq!(total, expected);
+            assert_eq!(calls, if expected == 0 { 0 } else { 1 });
+        }
+    }
+
+    #[test]
+    fn large_duration_preserves_every_millisecond() {
+        let duration = Duration::MAX;
+        let mut total = 0u128;
+        sleep_with(duration, |ms| {
+            assert_ne!(ms, 0);
+            total += ms as u128;
+        });
+        assert_eq!(total, duration.as_millis() + 1);
     }
 }

@@ -477,6 +477,47 @@ fn platform_wait_after_parked(queue: &WaitQueue, observed: u32, timeout_ms: u64)
     queue.wait_for_event_after_blocking_parked(observed, if timeout_ms == u64::MAX { 0 } else { timeout_ms })
 }
 
+#[cfg(test)]
+mod native_completion_tests {
+    use super::*;
+
+    #[test]
+    fn completion_before_join_is_visible_without_parking() {
+        let cell = CompletionCell::new();
+        assert!(cell.complete(7).is_ok());
+        assert_eq!(cell.join_blocking_parked(), 7);
+    }
+
+    #[test]
+    fn completion_between_predicate_and_park_changes_observed_generation() {
+        let cell = CompletionCell::new();
+        let observed = cell.wait.observe();
+        assert_eq!(cell.try_take(), None);
+        assert!(cell.complete(9).is_ok());
+        assert!(cell.wait.wait_for_event_after_blocking_parked(observed, 0));
+        assert_eq!(cell.try_take(), Some(9));
+    }
+
+    #[test]
+    fn exported_zero_timeout_probes_and_max_timeout_observes_a_prior_wake() {
+        let queue = WaitQueue::new();
+        let observed = queue.observe();
+        assert!(!platform_wait_after_parked(&queue, observed, 0));
+        queue.notify_all();
+        assert!(platform_wait_after_parked(&queue, observed, 0));
+        assert!(platform_wait_after_parked(&queue, observed, u64::MAX));
+    }
+
+    #[test]
+    fn completion_after_async_registration_is_observed() {
+        let cell = CompletionCell::new();
+        let mut cx = Context::from_waker(Waker::noop());
+        assert!(cell.poll_take(&mut cx).is_pending());
+        assert!(cell.complete(11).is_ok());
+        assert_eq!(cell.poll_take(&mut cx), Poll::Ready(11));
+    }
+}
+
 #[inline]
 pub fn platform_wake_one(key: u64) -> bool {
     platform_wait_queue(PLATFORM_WAIT_HOST_SCOPE, key).notify_one()

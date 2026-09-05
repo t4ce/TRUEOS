@@ -2436,10 +2436,10 @@ pub(crate) fn prepare_preserve_mode(vm_id: u8, mode: PreserveMode) -> Result<boo
             return Ok(false);
         }
         vm.pause_latched.store(true, Ordering::Release);
-        suspend_blueprint_process_context(vm_id);
-        crate::r::services::gridpaper_service::pause_owner_lifecycle(vm_id);
     }
-
+    // Admission closes at the lifecycle boundary; resource suspension happens
+    // only after the VM exits and all native guest jobs have drained.
+    crate::r::blocking::close_guest_jobs(vm_id);
     Ok(true)
 }
 
@@ -5891,6 +5891,10 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
     crate::log!("app-vm-run-queue: vm launch returned vm={} mode={:?}\n", vm_id, boot_mode);
     clear_current_vm_id();
     crate::r::blocking::drain_guest_jobs(vm_id).await;
+    if vm.pause_latched.load(Ordering::Acquire) {
+        suspend_blueprint_process_context(vm_id);
+        crate::r::services::gridpaper_service::pause_owner_lifecycle(vm_id);
+    }
     let mut pending_crash = None;
     let clean_exit = vm.clean_exit.swap(false, Ordering::AcqRel);
     crate::allocators::with_host_alloc_domain_strong(|| match launch_result {

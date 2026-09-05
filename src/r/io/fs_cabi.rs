@@ -334,28 +334,54 @@ pub extern "C" fn trueos_cabi_poll_once() {
         crate::hv::vmcall::guest_yield();
         return;
     }
+    if crate::hv::current_guest_execution_context_vm_id().is_some() {
+        crate::wait::spin_step_no_exec();
+        return;
+    }
     crate::wait::spin_step();
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_sleep_ms(mut ms: u64) {
+pub extern "C" fn trueos_cabi_sleep_ms(ms: u64) {
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        while ms != 0 {
-            let chunk = ms.min(crate::hv::vmcall::MAX_GUEST_SLEEP_MS);
+        for chunk in sleep_chunks(ms) {
             trueos_vm::vmcall::sleep_ms(chunk);
-            ms -= chunk;
         }
         return;
     }
     let native_guest = crate::hv::current_guest_execution_context_vm_id().is_some();
-    while ms != 0 {
-        let chunk = ms.min(crate::hv::vmcall::MAX_GUEST_SLEEP_MS);
+    for chunk in sleep_chunks(ms) {
         if native_guest {
             let _ = crate::wait::spin_until_timeout_no_exec(chunk, || false);
         } else {
             let _ = crate::wait::spin_until_timeout(chunk, || false);
         }
-        ms -= chunk;
+    }
+}
+
+fn sleep_chunks(mut remaining: u64) -> impl Iterator<Item = u64> {
+    core::iter::from_fn(move || {
+        if remaining == 0 { return None; }
+        let chunk = remaining.min(crate::hv::vmcall::MAX_GUEST_SLEEP_MS);
+        remaining -= chunk;
+        Some(chunk)
+    })
+}
+
+#[cfg(test)]
+mod native_sleep_tests {
+    use super::sleep_chunks;
+
+    #[test]
+    fn sleep_keeps_the_remainder_after_the_hull_request_limit() {
+        assert_eq!(sleep_chunks(0).next(), None);
+        assert_eq!(sleep_chunks(1).next(), Some(1));
+        let mut chunks = sleep_chunks(11_001);
+        assert_eq!(chunks.next(), Some(10_000));
+        assert_eq!(chunks.next(), Some(1_001));
+        assert_eq!(chunks.next(), None);
+        assert_eq!(sleep_chunks(20_000).sum::<u64>(), 20_000);
+        assert!(sleep_chunks(u64::MAX).take(3).all(|chunk| chunk == 10_000));
     }
 }
 
