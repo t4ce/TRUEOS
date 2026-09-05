@@ -238,7 +238,7 @@ def main() -> None:
     for stage, code in (("vs.simd8", vs), ("ps.simd16", ps)):
         binary = work / f"retained_pbr_forward.{stage}.bin"
         binary.write_bytes(code)
-        isa = decoder.decode(binary)
+        isa = "\n".join(line.rstrip() for line in decoder.decode(binary).splitlines()) + "\n"
         if "EOT" not in isa:
             raise SystemExit(f"no EOT in {stage}")
         if stage.startswith("ps") and len(re.findall(r"send\.smpl\s+\(16\|", isa)) != 5:
@@ -255,6 +255,13 @@ def main() -> None:
     shutil.copy2(SOURCE, OUT / SOURCE.name)
     shutil.copy2(log, OUT / log.name)
     metadata = {"schema": 1, "contract": "retained-gltf-metallic-roughness-five-map-tangent48", "device": device, "backend": "instrumented-mesa-anv-noop-drm-shim", "vertex_stride": 48, "vertex_attributes": ["float32x3@0", "float32x3@12", "float32x2@24", "float32x4@32"], "varyings": ["world_position", "world_normal", "uv", "world_tangent"], "vs_state": vs_state, "ps_state": ps_state, "vs_bytes": len(vs), "ps_bytes": len(ps), "vs_sha256": hashlib.sha256(vs).hexdigest(), "ps_sha256": hashlib.sha256(ps).hexdigest(), "executables": list(executables.values()), "material_bytes": 64, "color_surface_formats": {"base_color": "R8G8B8A8_UNORM_SRGB", "emissive": "R8G8B8A8_UNORM_SRGB", "metallic_roughness": "R8G8B8A8_UNORM", "normal": "R8G8B8A8_UNORM", "occlusion": "R8G8B8A8_UNORM"}, "host_render_verified": False, "baremetal_verified": False}
+    metadata["diagnostic_output"] = {
+        "material_byte_offset": 56,
+        "field": "flags.z",
+        "modes": {"0": "full_pbr", "1": "base_color_srgb", "2": "geometric_world_normal", "3": "fract_uv", "4": "solid_magenta"},
+        "default": "full_pbr",
+        "alpha": 1,
+    }
     (OUT / "metadata.json").write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n")
     emit_pipeline(vs, ps, vs_state, ps_state)
     print(json.dumps(metadata, indent=2, sort_keys=True))

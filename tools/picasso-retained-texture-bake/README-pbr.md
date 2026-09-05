@@ -56,10 +56,25 @@ The material buffer has four 16-byte records:
 | 0 | Base-color factor RGBA, four floats |
 | 16 | Emissive factor RGB and normal scale, four floats |
 | 32 | Metallic factor, roughness factor, AO strength, alpha cutoff, four floats |
-| 48 | Four u32 flags: X double-sided bit 2; Y texture presence; Z/W zero |
+| 48 | Four u32 flags: X double-sided bit 2; Y texture presence; Z diagnostic output; W zero |
 
 Presence bits are base `1`, MR `2`, emissive `4`, AO `8`, normal `16`.
 Alpha cutoff is carried for ABI completeness but unused by this opaque shader.
+
+The runtime can set flags Z at byte offset 56 to select the final display:
+`0` full PBR, `1` base color with sRGB display encoding, `2` normalized world
+normal mapped to `[0, 1]`, `3` `(fract(U), fract(V), 0)`, or `4` solid magenta.
+The normal view uses the interpolated geometric normal before normal mapping.
+Other values retain the full PBR display. Every mode writes alpha one. This
+uniform selector preserves the complete shader and four varying inputs; it
+does not replace the pipeline with a smaller shader that has a different
+payload. Modes one through four bypass tone mapping. The ordinary display
+uses the same PBR and tone-mapping expressions as before the selector was added.
+
+Shell2 exposes this host diagnostic as `vgpu material pbr|base|normal|uv|solid`.
+It takes effect on the next encoded PBR draw; `vgpu status` reports the mode.
+The default is `pbr`. The public material ABI still requires zero reserved
+fields, and changing the view never mutates an in-flight draw's storage.
 
 ## Bake and verification
 

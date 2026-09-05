@@ -14,6 +14,19 @@
     "name": "Intel(R) UHD Graphics 770 (ADL-S GT1)",
     "vendor_id": 32902
   },
+  "diagnostic_output": {
+    "alpha": 1,
+    "default": "full_pbr",
+    "field": "flags.z",
+    "material_byte_offset": 56,
+    "modes": {
+      "0": "full_pbr",
+      "1": "base_color_srgb",
+      "2": "geometric_world_normal",
+      "3": "fract_uv",
+      "4": "solid_magenta"
+    }
+  },
   "executables": [
     {
       "description": "SIMD8 vertex shader",
@@ -43,18 +56,18 @@
       "simd_width": 8,
       "stage": "fragment",
       "statistics": {
-        "Code size": 6176,
-        "Cycles": 2258,
+        "Code size": 6928,
+        "Cycles": 2462,
         "Fills": 0,
         "GRF registers": 0,
-        "Instructions": 512,
+        "Instructions": 560,
         "Loops": 0,
         "Max dispatch width": 16,
-        "Max live registers": 44,
-        "Non SSA regs after NIR": 20,
+        "Max live registers": 48,
+        "Non SSA regs after NIR": 22,
         "SENDs": 8,
         "Scratch Memory Size": 0,
-        "Source hash": 3876878215,
+        "Source hash": 945232519,
         "Spills": 0,
         "Workgroup Memory Size": 0
       }
@@ -65,18 +78,18 @@
       "simd_width": 16,
       "stage": "fragment",
       "statistics": {
-        "Code size": 6320,
-        "Cycles": 3237,
+        "Code size": 7056,
+        "Cycles": 3526,
         "Fills": 0,
         "GRF registers": 0,
-        "Instructions": 520,
+        "Instructions": 571,
         "Loops": 0,
         "Max dispatch width": 16,
-        "Max live registers": 82,
-        "Non SSA regs after NIR": 26,
+        "Max live registers": 91,
+        "Non SSA regs after NIR": 28,
         "SENDs": 8,
         "Scratch Memory Size": 0,
-        "Source hash": 3876878215,
+        "Source hash": 945232519,
         "Spills": 0,
         "Workgroup Memory Size": 0
       }
@@ -84,8 +97,8 @@
   ],
   "host_render_verified": false,
   "material_bytes": 64,
-  "ps_bytes": 6312,
-  "ps_sha256": "64194af0470447bb9b7abbb013c3e7bf3fc90ebca343803f47d03cf16d87fe95",
+  "ps_bytes": 7048,
+  "ps_sha256": "041d32b17d78ed0abef69c67da4b11f7d4bf10991d2ee277c962e043f4cd2268",
   "ps_state": {
     "barycentric_interp_modes": 1,
     "binding_table_entries": 9,
@@ -103,7 +116,7 @@
     "location2_attribute": 2,
     "location3_attribute": 3,
     "num_varying_inputs": 4,
-    "offset16": 6208,
+    "offset16": 6976,
     "push_bytes": 0,
     "sampler_count": 1,
     "sampler_prefetch_count": 0,

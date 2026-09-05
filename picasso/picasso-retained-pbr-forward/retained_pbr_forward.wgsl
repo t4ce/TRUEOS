@@ -2,6 +2,7 @@
 // Color textures use sRGB surface formats; all lighting arithmetic is linear.
 // Material64B: baseFactor; emissive.xyz/normalScale; metallic/roughness/AO/cutoff;
 // flags.x = doubleSided(bit2), flags.y = base1/MR2/emissive4/AO8/normal16.
+// flags.z = output: 0 PBR, 1 base color, 2 world normal, 3 UV, 4 magenta.
 struct Camera {
     view:           mat4x4<f32>,
     proj:           mat4x4<f32>,
@@ -152,6 +153,16 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> @l
     color += direct_light(n, v, normalize(vec3<f32>(-0.75, 0.3, 0.55)), vec3<f32>(0.8, 1.05, 1.45), base.rgb, metallic, roughness);
     color += direct_light(n, v, normalize(vec3<f32>(0.15, 0.55, -0.85)), vec3<f32>(1.2, 1.55, 2.0), base.rgb, metallic, roughness);
     color += emission;
-    // This package admits opaque glTF materials; alpha is not a blend contract.
-    return vec4<f32>(linear_to_srgb(tone_map(color)), 1.0);
+    // A uniform final selector preserves the full shader and its four-varying
+    // ABI, so diagnostics do not change the VF/VUE/SBE payload being tested.
+    var display = linear_to_srgb(tone_map(color));
+    switch material.flags.z {
+        case 1u: { display = linear_to_srgb(base.rgb); }
+        case 2u: { display = geometric_n * 0.5 + 0.5; }
+        case 3u: { display = vec3<f32>(fract(input.uv), 0.0); }
+        case 4u: { display = vec3<f32>(1.0, 0.0, 1.0); }
+        default: {}
+    }
+    // Every output is opaque; diagnostic color cannot hide a missing write.
+    return vec4<f32>(display, 1.0);
 }
