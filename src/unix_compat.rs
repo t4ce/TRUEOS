@@ -159,6 +159,7 @@ pub(crate) fn is_unix_import(name: &str) -> bool {
             | "pwrite"
             | "pwrite64"
             | "qsort"
+            | "raise"
             | "read"
             | "readdir"
             | "readdir_r"
@@ -358,6 +359,7 @@ pub(crate) fn resolve_import(name: &str) -> Option<usize> {
         "pwrite" => Some(crate::std_abi_shim::pwrite as *const () as usize),
         "pwrite64" => Some(crate::std_abi_shim::pwrite64 as *const () as usize),
         "qsort" => Some(crate::std_abi_shim::qsort as *const () as usize),
+        "raise" => Some(crate::std_abi_shim::raise as *const () as usize),
         "read" => Some(crate::std_abi_shim::read as *const () as usize),
         "readdir" => Some(crate::std_abi_shim::readdir as *const () as usize),
         "readdir_r" => Some(crate::std_abi_shim::readdir_r as *const () as usize),

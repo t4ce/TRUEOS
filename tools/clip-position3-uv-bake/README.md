@@ -70,7 +70,7 @@ artifact hashes. The generated bake metadata retains its compile-only scope.
 
 ## Native textured quad integration, 2026-09-05
 
-QuadTexture now uses this same shader and Intel logo for its default/key **1**
+This initial comparison build used this shader and Intel logo for its default/key **1**
 native quad (four indices) and key **3** triangle comparison (six indices).
 Key **1** also switches back. The kernel already encoded native QUADLIST;
 the missing link was carrying topology through the sampled indexed API and
@@ -95,3 +95,13 @@ Hardware validation is pending: compare the complete logo and its orientation
 at default → **3** → **1**. The prepared render log now includes
 `topology=QuadList` with `indices=4`, or `topology=TriangleList` with `indices=6`.
 Retirement alone does not establish correct image output.
+
+## Triangle gallery follow-up, 2026-09-06
+
+QuadTexture now starts in key **3**'s retained PBR triangle gallery, containing
+all 24 tilepack GLBs and their 604 authored triangles. Key **1** retains the
+native quad logo probe described above. The two-triangle logo comparison is
+superseded by the gallery; its build receipt above remains historical.
+See the sibling QuadTexture README for the database preparation, texture
+atlases, camera controls, and pending hardware checks. This follow-up does
+not change the clip-position/UV shader or expand the native quad capability.

@@ -5520,6 +5520,17 @@ fn write_signal_action(out: *mut c_void, action: TrueosSigAction) -> bool {
     true
 }
 
+/// Deliver a catchable notification to the current Blueprint owner's signal
+/// action table. This does not address a pthread or create thread lifecycle.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn raise(signum: c_int) -> c_int {
+    if !valid_catchable_signal(signum) {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    }
+    deliver_registered_signal(signum)
+}
+
 fn deliver_registered_signal(signum: c_int) -> c_int {
     let action = SIGNAL_ACTIONS
         .lock()
@@ -5601,25 +5612,30 @@ mod signal_tests {
     }
 
     #[test]
-    fn pthread_kill_delivers_basic_registered_action() {
+    fn raise_delivers_basic_registered_action() {
         const TEST_SIGNAL: c_int = 10;
         BASIC_DELIVERY.store(0, Ordering::Release);
         install_for_test(TEST_SIGNAL, basic_handler as usize, 0);
-        let thread = unsafe { pthread_self() };
-        assert_eq!(unsafe { pthread_kill(thread, TEST_SIGNAL) }, 0);
+        assert_eq!(unsafe { raise(TEST_SIGNAL) }, 0);
         assert_eq!(BASIC_DELIVERY.load(Ordering::Acquire), TEST_SIGNAL);
         restore_default(TEST_SIGNAL);
     }
 
     #[test]
-    fn pthread_kill_delivers_siginfo_action_with_non_null_info() {
+    fn raise_delivers_siginfo_action_with_non_null_info() {
         const TEST_SIGNAL: c_int = 12;
         SIGINFO_DELIVERY.store(0, Ordering::Release);
         install_for_test(TEST_SIGNAL, siginfo_handler as usize, TRUEOS_SA_SIGINFO);
-        let thread = unsafe { pthread_self() };
-        assert_eq!(unsafe { pthread_kill(thread, TEST_SIGNAL) }, 0);
+        assert_eq!(unsafe { raise(TEST_SIGNAL) }, 0);
         assert_eq!(SIGINFO_DELIVERY.load(Ordering::Acquire), TEST_SIGNAL);
         restore_default(TEST_SIGNAL);
+    }
+
+    #[test]
+    fn raise_rejects_invalid_and_uncatchable_signals() {
+        for signum in [0, -1, TRUEOS_SIGNAL_MAX + 1, TRUEOS_SIGKILL, TRUEOS_SIGSTOP] {
+            assert_eq!(unsafe { raise(signum) }, -1);
+        }
     }
 }
 

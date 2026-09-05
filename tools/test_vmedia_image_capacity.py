@@ -2,11 +2,13 @@
 """Check vmedia admission and a full-size RGBA atlas with the kernel PNG decoder."""
 
 from pathlib import Path
+import json
 import os
 import struct
 import subprocess
 import tempfile
 import tomllib
+import sys
 import zlib
 
 from test_clip_position3_uv_texture import ROOT, constant, item
@@ -17,7 +19,7 @@ def png_chunk(kind: bytes, data: bytes) -> bytes:
 
 
 def gallery_fixture() -> bytes:
-    width, height = 6156, 4104
+    width, height = 6168, 4112
     compressor = zlib.compressobj(1)
     compressed = bytearray()
     row = b"\0" + bytes([23, 91, 157, 255]) * width
@@ -70,10 +72,34 @@ fn vendored_png_decoder_accepts_full_size_rgba_atlas_with_default_limits() {
     rgba.truncate(frame.buffer_size());
     let image = validated_image(FORMAT_PNG, BACKEND_PNG, frame.width, frame.height, rgba)
         .unwrap_or_else(|error| panic!("decoded atlas rejected: {error}"));
-    assert_eq!((image.info.width, image.info.height), (6156, 4104));
-    assert_eq!(image.info.stride_bytes, 24_624);
-    assert_eq!(image.info.byte_len, 101_056_896);
+    assert_eq!((image.info.width, image.info.height), (6168, 4112));
+    assert_eq!(image.info.stride_bytes, 24_672);
+    assert_eq!(image.info.byte_len, 101_451_264);
     assert!(image.rgba.chunks_exact(4).all(|pixel| pixel == [23, 91, 157, 255]));
+}
+'''
+        if sys.argv[1:]:
+            atlas_paths = ", ".join(json.dumps(str(Path(path).resolve())) for path in sys.argv[1:])
+            source += '''
+#[test]
+fn prepared_atlas_files_pass_service_and_vendored_decoder() {
+    for path in [''' + atlas_paths + '''] {
+        let encoded = std::fs::read(path).expect("read production atlas");
+        assert!(validate_encoded_length(encoded.len()).is_ok(), "encoded atlas rejected: {path}");
+        let mut decoder = png::Decoder::new(core3::io::Cursor::new(encoded.as_slice()));
+        decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
+        let mut reader = decoder.read_info().expect("production atlas PNG header");
+        let mut rgba = vec![0; reader.output_buffer_size().expect("atlas output size")];
+        let frame = reader.next_frame(&mut rgba).expect("production atlas PNG decode");
+        assert_eq!(frame.color_type, png::ColorType::Rgba);
+        assert_eq!(frame.bit_depth, png::BitDepth::Eight);
+        rgba.truncate(frame.buffer_size());
+        let image = validated_image(FORMAT_PNG, BACKEND_PNG, frame.width, frame.height, rgba)
+            .unwrap_or_else(|error| panic!("decoded atlas rejected: {path}: {error}"));
+        assert_eq!((image.info.width, image.info.height), (6168, 4112));
+        assert_eq!(image.info.byte_len, 101_451_264);
+        println!("atlas admitted: {path} encoded={} rgba={}", encoded.len(), image.info.byte_len);
+    }
 }
 '''
         (directory / "src/lib.rs").write_text(source)
@@ -83,6 +109,7 @@ fn vendored_png_decoder_accepts_full_size_rgba_atlas_with_default_limits() {
         subprocess.run([
             "cargo", "test", "--offline", "--quiet", "--target", "x86_64-unknown-linux-gnu",
             "--manifest-path", str(directory / "Cargo.toml"),
+            "--", "--nocapture",
         ], cwd=directory, env=env, check=True)
 
 

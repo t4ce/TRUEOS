@@ -517,7 +517,7 @@ mod image_capacity_tests {
 
     #[test]
     fn full_resolution_gallery_atlas_fits_existing_rgba_budget() {
-        assert_eq!(rgba_byte_len_within_limit(6156, 4104), Some(101_056_896));
+        assert_eq!(rgba_byte_len_within_limit(6168, 4112), Some(101_451_264));
         assert_eq!(rgba_byte_len_within_limit(8192, 4096), Some(128 * 1024 * 1024));
         assert_eq!(rgba_byte_len_within_limit(8192, 4097), None);
         assert_eq!(rgba_byte_len_within_limit(u32::MAX, u32::MAX), None);

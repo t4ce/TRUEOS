@@ -7,27 +7,12 @@ use super::{
     MatrixTarget, ShellBackend2, matrix_target_for_backend, print_matrix_target_system_line,
     print_shell_line, submit_online_launch_script_to_target,
 };
-use crate::surfer::html_shack::{self, HtmlRoad, HtmlShackFileError};
+use crate::surfer::html_shack::{self, HtmlRoad};
 
 const SOLARA_APP: &str = "solara";
 const SOLARA_ARCHIVE: &str = "solara.bp";
-const SOLARA_SURF_LAUNCH_HEADER: &str = "solara-surf-v1";
 const SURF_HANDOFF_DIR: &str = "apps/common/solara/surf";
 static SURF_HANDOFF_SEQUENCE: AtomicU32 = AtomicU32::new(1);
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum SurfPromptPrefix {
-    Http,
-    Https,
-    File,
-    Html,
-}
-
-pub(crate) enum SurfSubmit {
-    Url(String),
-    File(String),
-    Html(String),
-}
 
 async fn persist_solara_handoff(html: &html_shack::Html) -> Result<String, String> {
     let disk = crate::r::fs::trueosfs::primary_root_handle()
@@ -69,17 +54,16 @@ async fn persist_solara_handoff(html: &html_shack::Html) -> Result<String, Strin
         html.html.len(),
         html.url
     );
-    Ok(tag)
+    Ok(path)
 }
 
-async fn remove_solara_handoff(tag: &str) {
-    let path = alloc::format!("{SURF_HANDOFF_DIR}/{tag}.html");
+async fn remove_solara_handoff(path: &str) {
     if let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() {
-        let _ = crate::r::fs::trueosfs::file_delete_async(disk, path.as_str()).await;
+        let _ = crate::r::fs::trueosfs::file_delete_async(disk, path).await;
     }
 }
 
-fn solara_surf_launch_script(tag: &str, source_url: &str) -> Result<String, &'static str> {
+fn solara_surf_launch_script(path: &str, source_url: &str) -> Result<String, &'static str> {
     if source_url.is_empty() {
         return Err("source URL is empty");
     }
@@ -89,13 +73,13 @@ fn solara_surf_launch_script(tag: &str, source_url: &str) -> Result<String, &'st
     {
         return Err("source URL contains a control character");
     }
-    Ok(alloc::format!("{SOLARA_SURF_LAUNCH_HEADER}\n{tag}\n{source_url}"))
+    Ok(alloc::format!("fs-scope trueosfs\nopen {source_url}\nsource {path}\n"))
 }
 
 #[trueos_executor::task(pool_size = 4)]
 async fn launch_solara_task(target: MatrixTarget, html: html_shack::Html) {
-    let tag = match persist_solara_handoff(&html).await {
-        Ok(tag) => tag,
+    let path = match persist_solara_handoff(&html).await {
+        Ok(path) => path,
         Err(error) => {
             print_matrix_target_system_line(
                 &target,
@@ -104,10 +88,10 @@ async fn launch_solara_task(target: MatrixTarget, html: html_shack::Html) {
             return;
         }
     };
-    let launch_script = match solara_surf_launch_script(tag.as_str(), html.url.as_str()) {
+    let launch_script = match solara_surf_launch_script(path.as_str(), html.url.as_str()) {
         Ok(script) => script,
         Err(error) => {
-            remove_solara_handoff(tag.as_str()).await;
+            remove_solara_handoff(path.as_str()).await;
             print_matrix_target_system_line(
                 &target,
                 alloc::format!("surf: Solara runtime handoff failed: {error}").as_str(),
@@ -126,7 +110,8 @@ async fn launch_solara_task(target: MatrixTarget, html: html_shack::Html) {
         Ok(source) => {
             print_matrix_target_system_line(
                 &target,
-                alloc::format!("surf: Solara render queued tag={tag} source={source}").as_str(),
+                alloc::format!("surf: Solara open queued url={} source={source}", html.url)
+                    .as_str(),
             );
         }
         Err(error) if error == "archive not found" => {
@@ -139,7 +124,7 @@ async fn launch_solara_task(target: MatrixTarget, html: html_shack::Html) {
             )
             .is_err()
             {
-                remove_solara_handoff(tag.as_str()).await;
+                remove_solara_handoff(path.as_str()).await;
                 print_matrix_target_system_line(
                     &target,
                     "surf: Solara online launch task unavailable",
@@ -147,7 +132,7 @@ async fn launch_solara_task(target: MatrixTarget, html: html_shack::Html) {
             }
         }
         Err(error) => {
-            remove_solara_handoff(tag.as_str()).await;
+            remove_solara_handoff(path.as_str()).await;
             print_matrix_target_system_line(
                 &target,
                 alloc::format!("surf: could not launch {SOLARA_ARCHIVE}: {error}").as_str(),
@@ -170,98 +155,29 @@ fn spawn_solara_handoff(
     }
 }
 
-pub(crate) fn try_inline_html(line: &str) -> Option<String> {
-    let candidate = strip_wrapping_quotes(line.trim());
-    if !looks_like_inline_html(candidate) {
-        return None;
-    }
-    Some(String::from(candidate))
-}
-
-pub(crate) fn try_parse_with_prefix(line: &str, prefix: SurfPromptPrefix) -> Option<SurfSubmit> {
-    if let Some(html) = try_inline_html(line) {
-        return Some(SurfSubmit::Html(html));
-    }
-    if let Some(file_ref) = try_file_reference(line) {
-        return Some(SurfSubmit::File(file_ref));
-    }
-
-    let candidate = strip_wrapping_quotes(line.trim());
-    if candidate.is_empty() {
-        return None;
-    }
-
-    match prefix {
-        SurfPromptPrefix::Html => Some(SurfSubmit::Html(String::from(candidate))),
-        SurfPromptPrefix::File => Some(SurfSubmit::File(String::from(candidate))),
-        SurfPromptPrefix::Http | SurfPromptPrefix::Https => {
-            if candidate.split_whitespace().nth(1).is_some() || !is_url_token(candidate) {
-                return None;
-            }
-            Some(SurfSubmit::Url(prepare_url_with_prefix(candidate, prefix)))
-        }
-    }
-}
-
-pub(crate) fn try_file_reference(line: &str) -> Option<String> {
-    let candidate = strip_wrapping_quotes(line.trim());
-    let path = candidate.strip_prefix("file://")?;
-    if path.trim().is_empty() {
-        return None;
-    }
-    Some(String::from(path))
-}
-
-pub(crate) fn load_inline_html(spawner: &Spawner, io: &'static dyn ShellBackend2, html: String) {
-    let html = html_shack::prepare_ready_inline_html(html);
-    enqueue_and_launch_html(spawner, io, html);
-}
-
-pub(crate) fn load_file_reference(
-    spawner: &Spawner,
-    io: &'static dyn ShellBackend2,
-    file_ref: &str,
-) {
-    match html_shack::prepare_ready_file_html(file_ref) {
-        Ok(html) => enqueue_and_launch_html(spawner, io, html),
-        Err(HtmlShackFileError::NoRoot) => {
-            print_shell_line(io, "surf: no TRUEOSFS root mounted");
-        }
-        Err(HtmlShackFileError::NotFound) => {
-            print_shell_line(io, "surf: file not found");
-        }
-        Err(HtmlShackFileError::ReadFailed) => {
-            print_shell_line(io, "surf: file read failed");
-        }
-    }
-}
-
-fn enqueue_and_launch_html(
-    spawner: &Spawner,
-    io: &'static dyn ShellBackend2,
-    html: html_shack::Html,
-) {
-    let _ = html_shack::with_html_shack(|shack| shack.put_ready_html(html.clone()));
-    let target = matrix_target_for_backend(io);
-    if spawn_solara_handoff(spawner.make_send(), target, html) {
-        print_shell_line(io, "surf: Solara handoff queued");
-    } else {
-        print_shell_line(io, "surf: Solara launch busy");
-    }
-}
-
 pub(crate) fn prepare_call_with_url(spawner: &Spawner, io: &'static dyn ShellBackend2, url: &str) {
-    let trimmed = url.trim();
-    if trimmed.is_empty() {
-        return;
-    }
+    let trimmed = strip_wrapping_quotes(url.trim());
 
     if trimmed.len() > 256 {
         print_shell_line(io, "surf: url too long (max 256 chars)");
         return;
     }
 
-    let road = if trimmed
+    if trimmed.is_empty() || trimmed.chars().any(char::is_whitespace) {
+        print_shell_line(io, "surf: expected one URL");
+        return;
+    }
+
+    let url = if has_http_scheme(trimmed) {
+        String::from(trimmed)
+    } else if trimmed.contains("://") {
+        print_shell_line(io, "surf: only http and https URLs are supported");
+        return;
+    } else {
+        alloc::format!("https://{trimmed}")
+    };
+
+    let road = if url
         .get(..8)
         .map(|p| p.eq_ignore_ascii_case("https://"))
         .unwrap_or(false)
@@ -278,23 +194,8 @@ pub(crate) fn prepare_call_with_url(spawner: &Spawner, io: &'static dyn ShellBac
             print_matrix_target_system_line(&target, "surf: Solara launch busy");
         }
     });
-    let _ = html_shack::with_html_shack(|shack| shack.get_ready(trimmed, road, Some(callback)));
-    print_shell_line(io, "shack enque");
-}
-
-fn prepare_url_with_prefix(host: &str, prefix: SurfPromptPrefix) -> String {
-    if has_known_scheme(host) {
-        return String::from(host);
-    }
-
-    let mut url = String::from(match prefix {
-        SurfPromptPrefix::Http => "http://",
-        SurfPromptPrefix::Https => "https://",
-        SurfPromptPrefix::File => "file://",
-        SurfPromptPrefix::Html => "html://",
-    });
-    url.push_str(host);
-    url
+    let _ = html_shack::with_html_shack(|shack| shack.get_ready(&url, road, Some(callback)));
+    print_shell_line(io, "surf: fetch queued");
 }
 
 fn strip_wrapping_quotes(s: &str) -> &str {
@@ -318,27 +219,19 @@ fn has_http_scheme(s: &str) -> bool {
             .unwrap_or(false)
 }
 
-fn has_known_scheme(s: &str) -> bool {
-    has_http_scheme(s)
-        || s.get(..7)
-            .map(|p| p.eq_ignore_ascii_case("file://"))
-            .unwrap_or(false)
-        || s.get(..7)
-            .map(|p| p.eq_ignore_ascii_case("html://"))
-            .unwrap_or(false)
-}
+#[cfg(test)]
+mod tests {
+    use super::solara_surf_launch_script;
 
-fn is_url_token(s: &str) -> bool {
-    !s.is_empty() && !s.chars().any(char::is_whitespace)
-}
-
-fn looks_like_inline_html(s: &str) -> bool {
-    let lower = s.trim().to_ascii_lowercase();
-    if lower.is_empty() {
-        return false;
+    #[test]
+    fn launch_script_grants_scope_and_names_url_and_source() {
+        assert_eq!(
+            solara_surf_launch_script(
+                "apps/common/solara/surf/surf-1.html",
+                "https://example.com/"
+            )
+            .unwrap(),
+            "fs-scope trueosfs\nopen https://example.com/\nsource apps/common/solara/surf/surf-1.html\n"
+        );
     }
-
-    (lower.starts_with("<html") && lower.ends_with("</html>"))
-        || lower.starts_with("<!doctype html")
-        || (lower.starts_with('<') && lower.ends_with('>') && lower.contains("</"))
 }
