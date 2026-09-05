@@ -50,6 +50,7 @@ members = [
 # TRUEOS workspace preserves their own workspace metadata and lockfile policy.
 exclude = [
     "vendor/*",
+    "vendor/crossbeam-0.8.4",
     # Cargo matches workspace exclusions against package directories, so this
     # nested package needs its own entry.
     "vendor/CrabUSB/usb-host",

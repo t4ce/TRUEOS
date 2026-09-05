@@ -1,0 +1,98 @@
+L0:
+/* [0000]  */         add (8|M0)               r45.0<1>:d    r15.0<8;8,1>:d    r14.0<8;8,1>:d   {Compacted}
+/* [0008]  */ (W)     mov (8|M0)               r109.0<1>:ud  0x0:ud                             
+/* [0018]  */         mov (8|M0)               r16.0<1>:ud   0x0:ud                             
+/* [0028]  */         mov (8|M0)               r17.0<1>:ud   0x0:ud                             
+/* [0038]  */         mov (8|M0)               r15.0<1>:ud   0x0:ud                             
+/* [0048]  */         mov (8|M0)               r14.0<1>:ud   0x0:ud                             
+/* [0058]  */         shl (8|M0)               r46.0<1>:d    r45.0<8;8,1>:d    0x2:ud              {@6}
+/* [0068]  */ (W)     mov (1|M0)               r109.2<1>:ud  128:d                               {@6}
+/* [0078]  */         send.dc1 (8|M0)          r47      r46     null    0x0            0x02106E03           {@2,$0} // wr:1+0, rd:1; untyped surface read with x
+/* [0088]  */ (W)     send.dc0 (16|M0)         r30      r109    null    0x0            0x02284301           {@1,$1} // wr:1h+0, rd:2; oword aligned block read x4
+/* [0098]  */         mul (8|M0)               r48.0<1>:d    r47.0<8;8,1>:d    208:w               {Compacted,$0.dst}
+/* [00A0]  */         add (8|M0)               r49.0<1>:d    r48.0<8;8,1>:d    48:d               {Compacted,@1}
+/* [00A8]  */         add (8|M0)               r54.0<1>:d    r48.0<8;8,1>:d    32:d               {Compacted}
+/* [00B0]  */         add (8|M0)               r63.0<1>:d    r48.0<8;8,1>:d    16:d               {Compacted}
+/* [00B8]  */         send.dc1 (8|M0)          r55      r48     null    0x0            0x02406002           {$2} // wr:1+0, rd:4; untyped surface read with xyzw
+/* [00C8]  */         add (8|M0)               r94.0<1>:d    r48.0<8;8,1>:d    96:d               {Compacted,$2.src}
+/* [00D0]  */         add (8|M0)               r98.0<1>:d    r48.0<8;8,1>:d    80:d               {Compacted}
+/* [00D8]  */         add (8|M0)               r102.0<1>:d   r48.0<8;8,1>:d    64:d               {Compacted}
+/* [00E0]  */         send.dc1 (8|M0)          r50      r49     null    0x0            0x02406002           {@6,$3} // wr:1+0, rd:4; untyped surface read with xyzw
+/* [00F0]  */         send.dc1 (8|M0)          r26      r54     null    0x0            0x02406002           {@5,$4} // wr:1+0, rd:4; untyped surface read with xyzw
+/* [0100]  */         send.dc1 (8|M0)          r22      r63     null    0x0            0x02406002           {@4,$5} // wr:1+0, rd:4; untyped surface read with xyzw
+/* [0110]  */         send.dc1 (8|M0)          r32      r94     null    0x0            0x02406002           {@3,$6} // wr:1+0, rd:4; untyped surface read with xyzw
+/* [0120]  */         send.dc1 (8|M0)          r36      r98     null    0x0            0x02406002           {@2,$7} // wr:1+0, rd:4; untyped surface read with xyzw
+/* [0130]  */         send.dc1 (8|M0)          r40      r102    null    0x0            0x02406002           {@1,$8} // wr:1+0, rd:4; untyped surface read with xyzw
+/* [0140]  */ (W)     sync.nop                             null                             {$4.dst}
+/* [0150]  */         mad (8|M0)               r59.0<1>:f    r50.0<8;1>:f      r4.0<8;1>:f       r26.0<1>:f       {Compacted,$3.dst}
+/* [0158]  */         mad (8|M0)               r60.0<1>:f    r51.0<8;1>:f      r4.0<8;1>:f       r27.0<1>:f       {Compacted}
+/* [0160]  */         mad (8|M0)               r61.0<1>:f    r52.0<8;1>:f      r4.0<8;1>:f       r28.0<1>:f       {Compacted}
+/* [0168]  */         mad (8|M0)               r62.0<1>:f    r53.0<8;1>:f      r4.0<8;1>:f       r29.0<1>:f       {Compacted}
+/* [0170]  */         mul (8|M0)               r103.0<1>:f   r26.0<8;8,1>:f    r12.0<8;8,1>:f   {Compacted}
+/* [0178]  */         mul (8|M0)               r104.0<1>:f   r27.0<8;8,1>:f    r12.0<8;8,1>:f   {Compacted}
+/* [0180]  */         mul (8|M0)               r105.0<1>:f   r28.0<8;8,1>:f    r12.0<8;8,1>:f   {Compacted}
+/* [0188]  */         mul (8|M0)               r69.0<1>:f    r23.0<8;8,1>:f    r28.0<8;8,1>:f   {Compacted,$5.dst}
+/* [0190]  */         mul (8|M0)               r70.0<1>:f    -r24.0<8;8,1>:f   r27.0<8;8,1>:f   {Compacted}
+/* [0198]  */         mul (8|M0)               r72.0<1>:f    r22.0<8;8,1>:f    r28.0<8;8,1>:f   {Compacted}
+/* [01A0]  */         mul (8|M0)               r73.0<1>:f    -r24.0<8;8,1>:f   r26.0<8;8,1>:f   {Compacted}
+/* [01A8]  */         mul (8|M0)               r75.0<1>:f    r22.0<8;8,1>:f    r27.0<8;8,1>:f   {Compacted}
+/* [01B0]  */         mul (8|M0)               r76.0<1>:f    -r23.0<8;8,1>:f   r26.0<8;8,1>:f   {Compacted}
+/* [01B8]  */         mul (8|M0)               r95.0<1>:f    r32.0<8;8,1>:f    r7.0<8;8,1>:f    {Compacted,$6.dst}
+/* [01C0]  */         mul (8|M0)               r96.0<1>:f    r33.0<8;8,1>:f    r7.0<8;8,1>:f    {Compacted}
+/* [01C8]  */         mul (8|M0)               r97.0<1>:f    r34.0<8;8,1>:f    r7.0<8;8,1>:f    {Compacted}
+/* [01D0]  */         mad (8|M0)               r64.0<1>:f    r59.0<8;1>:f      r3.0<8;1>:f       r22.0<1>:f       {Compacted}
+/* [01D8]  */         mad (8|M0)               r65.0<1>:f    r60.0<8;1>:f      r3.0<8;1>:f       r23.0<1>:f       {Compacted}
+/* [01E0]  */         mad (8|M0)               r106.0<1>:f   r103.0<8;1>:f     r11.0<8;1>:f      r22.0<1>:f       {Compacted}
+/* [01E8]  */         mad (8|M0)               r66.0<1>:f    r61.0<8;1>:f      r3.0<8;1>:f       r24.0<1>:f       {Compacted}
+/* [01F0]  */         mad (8|M0)               r107.0<1>:f   r104.0<8;1>:f     r11.0<8;1>:f      r23.0<1>:f       {Compacted}
+/* [01F8]  */         mad (8|M0)               r67.0<1>:f    r62.0<8;1>:f      r3.0<8;1>:f       r25.0<1>:f       {Compacted}
+/* [0200]  */         mad (8|M0)               r108.0<1>:f   r105.0<8;1>:f     r11.0<8;1>:f      r24.0<1>:f       {Compacted}
+/* [0208]  */         add (8|M0)               r71.0<1>:f    r69.0<8;8,1>:f    r70.0<8;8,1>:f   {Compacted}
+/* [0210]  */         add (8|M0)               r74.0<1>:f    r72.0<8;8,1>:f    r73.0<8;8,1>:f   {Compacted}
+/* [0218]  */         add (8|M0)               r77.0<1>:f    r75.0<8;8,1>:f    r76.0<8;8,1>:f   {Compacted}
+/* [0220]  */         mad (8|M0)               r99.0<1>:f    r95.0<8;1>:f      r6.0<8;1>:f       r36.0<1>:f       {Compacted,$7.dst}
+/* [0228]  */         mad (8|M0)               r100.0<1>:f   r96.0<8;1>:f      r6.0<8;1>:f       r37.0<1>:f       {Compacted}
+/* [0230]  */         mad (8|M0)               r101.0<1>:f   r97.0<8;1>:f      r6.0<8;1>:f       r38.0<1>:f       {Compacted}
+/* [0238]  */         mad (8|M0)               r44.0<1>:f    r64.0<8;1>:f      r2.0<8;1>:f       r55.0<1>:f       {Compacted,$2.dst}
+/* [0240]  */         mad (8|M0)               r45.0<1>:f    r65.0<8;1>:f      r2.0<8;1>:f       r56.0<1>:f       {Compacted}
+/* [0248]  */         mad (8|M0)               r123.0<1>:f   r106.0<8;1>:f     r10.0<8;1>:f      r55.0<1>:f       {Compacted}
+/* [0250]  */         mad (8|M0)               r46.0<1>:f    r66.0<8;1>:f      r2.0<8;1>:f       r57.0<1>:f       {Compacted}
+/* [0258]  */         mad (8|M0)               r124.0<1>:f   r107.0<8;1>:f     r10.0<8;1>:f      r56.0<1>:f       {Compacted}
+/* [0260]  */         mul (8|M0)               r78.0<1>:f    r55.0<8;8,1>:f    r71.0<8;8,1>:f   {Compacted}
+/* [0268]  */         mad (8|M0)               r68.0<1>:f    r67.0<8;1>:f      r2.0<8;1>:f       r58.0<1>:f       {Compacted}
+/* [0270]  */         mul (8|M0)               r79.0<1>:f    -r56.0<8;8,1>:f   r74.0<8;8,1>:f   {Compacted}
+/* [0278]  */         mad (8|M0)               r125.0<1>:f   r108.0<8;1>:f     r10.0<8;1>:f      r57.0<1>:f       {Compacted}
+/* [0280]  */         mul (8|M0)               r80.0<1>:f    -r57.0<8;8,1>:f   r77.0<8;8,1>:f   {Compacted}
+/* [0288]  */         mad (8|M0)               r48.0<1>:f    r99.0<8;1>:f      r5.0<8;1>:f       r40.0<1>:f       {Compacted,$8.dst}
+/* [0290]  */         mad (8|M0)               r49.0<1>:f    r100.0<8;1>:f     r5.0<8;1>:f       r41.0<1>:f       {Compacted}
+/* [0298]  */         mad (8|M0)               r50.0<1>:f    r101.0<8;1>:f     r5.0<8;1>:f       r42.0<1>:f       {Compacted}
+/* [02A0]  */         add (8|M0)               r81.0<1>:f    r78.0<8;8,1>:f    r79.0<8;8,1>:f   {Compacted,@6}
+/* [02A8]  */ (W)     sync.nop                             null                             {$1.dst}
+/* [02B8]  */         mul (8|M0)               r82.0<1>:f    r31.4<0;1,0>:f    r68.0<8;8,1>:f   {Compacted,@7}
+/* [02C0]  */         mul (8|M0)               r83.0<1>:f    -r31.5<0;1,0>:f   r68.0<8;8,1>:f   {Compacted}
+/* [02C8]  */         mul (8|M0)               r84.0<1>:f    r31.6<0;1,0>:f    r68.0<8;8,1>:f   {Compacted}
+/* [02D0]  */         mul (8|M0)               r85.0<1>:f    r31.7<0;1,0>:f    r68.0<8;8,1>:f   {Compacted}
+/* [02D8]  */         cmp (8|M0)    (ge)f0.0   null<1>:f     r81.0<8;8,1>:f    r80.0<8;8,1>:f   {Compacted,@5}
+/* [02E0]  */         mad (8|M0)               r86.0<1>:f    r82.0<8;1>:f      r46.0<8;1>:f      r31.0<0>:f       {Compacted,@5}
+/* [02E8]  */         mad (8|M0)               r87.0<1>:f    r83.0<8;1>:f      r46.0<8;1>:f      -r31.1<0>:f      {Compacted,@5}
+/* [02F0]  */         mad (8|M0)               r88.0<1>:f    r84.0<8;1>:f      r46.0<8;1>:f      r31.2<0>:f       {Compacted,@5}
+/* [02F8]  */         mad (8|M0)               r89.0<1>:f    r85.0<8;1>:f      r46.0<8;1>:f      r31.3<0>:f       {Compacted,@5}
+/* [0300]  */ (f0.0)  sel (8|M0)               r126.0<1>:f   r13.0<8;8,1>:f    -r13.0<8;8,1>:f 
+/* [0310]  */ (W)     sync.nop                             null                             {$1.dst}
+/* [0320]  */         mad (8|M0)               r90.0<1>:f    r86.0<8;1>:f      r45.0<8;1>:f      r30.4<0>:f       {Compacted,@5}
+/* [0328]  */         mad (8|M0)               r91.0<1>:f    r87.0<8;1>:f      r45.0<8;1>:f      -r30.5<0>:f      {Compacted,@5}
+/* [0330]  */         mad (8|M0)               r92.0<1>:f    r88.0<8;1>:f      r45.0<8;1>:f      r30.6<0>:f       {Compacted,@5}
+/* [0338]  */         mad (8|M0)               r93.0<1>:f    r89.0<8;1>:f      r45.0<8;1>:f      r30.7<0>:f       {Compacted,@5}
+/* [0340]  */         mad (8|M0)               r18.0<1>:f    r90.0<8;1>:f      r44.0<8;1>:f      r30.0<0>:f       {Compacted,@4}
+/* [0348]  */         mad (8|M0)               r19.0<1>:f    r91.0<8;1>:f      r44.0<8;1>:f      -r30.1<0>:f      {Compacted,@4}
+/* [0350]  */         mad (8|M0)               r20.0<1>:f    r92.0<8;1>:f      r44.0<8;1>:f      r30.2<0>:f       {Compacted,@4}
+/* [0358]  */         mad (8|M0)               r21.0<1>:f    r93.0<8;1>:f      r44.0<8;1>:f      r30.3<0>:f       {Compacted,@4}
+/* [0360]  */         send.urb (8|M0)          null     r1      r14     0x200            0x02080007           {@1,$9} // wr:1h+8, rd:0; urb dword write
+/* [0370]  */ (W)     sync.nop                             null                             {$9.src}
+/* [0380]  */         send.urb (8|M0)          null     r1      r44     0x200            0x02080027           {$10} // wr:1h+8, rd:0; urb dword write
+/* [0390]  */         mov (8|M0)               r119.0<1>:ud  r8.0<8;8,1>:ud                  
+/* [03A0]  */         mov (8|M0)               r120.0<1>:ud  r9.0<8;8,1>:ud                  
+/* [03B0]  */ (W)     mov (8|M0)               r127.0<1>:ud  r1.0<8;8,1>:ud                   {$10.src}
+/* [03C0]  */ (W)     sync.nop                             null                             {@1}
+/* [03D0]  */         send.urb (8|M0)          null     r127    r119    0x200            0x02080047           {EOT,@1} // wr:1h+8, rd:0; urb dword write
+L992:

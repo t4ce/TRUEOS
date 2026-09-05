@@ -254,6 +254,8 @@ TOPICS: dict[str, dict[str, Any]] = {
             {"method": "GET", "path": "/dl/<root-id>/<url-encoded-path>", "effect": "Download one file from the selected mounted root.", "mutation": False},
             {"method": "GET", "path": "/dl?path=<url-encoded-path>", "effect": "Compatibility download from the current primary root.", "mutation": False},
             {"method": "POST", "path": "/up/<root-id>[/<directory>]?name=<filename>", "effect": "Write the request body as one file.", "mutation": True},
+            {"method": "POST", "path": "/up-confirm?token=<blob-offer-token>", "effect": "Commit a rejected upload retained by the server as an explicit Blob without retransmitting its body.", "mutation": True},
+            {"method": "POST", "path": "/up-discard?token=<blob-offer-token>", "effect": "Discard a rejected upload retained for the Blob choice.", "mutation": True},
             {"method": "POST", "path": "/mkdir/<root-id>[/<directory>]?name=<folder>", "effect": "Create a directory hierarchy.", "mutation": True},
             {"method": "POST", "path": "/mv/<root-id>/<source>?to=<destination>", "effect": "Move or rename a file or directory.", "mutation": True},
             {"method": "POST", "path": "/rm/<root-id>/<path>", "effect": "Recursively remove a file or directory.", "mutation": True},

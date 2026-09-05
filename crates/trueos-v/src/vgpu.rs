@@ -316,6 +316,9 @@ pub const RETAINED_MATERIAL_OCCLUSION: usize = 3;
 pub const RETAINED_MATERIAL_NORMAL: usize = 4;
 pub const RETAINED_VERTEX_LAYOUT_POS_NORMAL: u32 = 0;
 pub const RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV: u32 = 1;
+/// Position3, normal3, UV2, and tangent4 (including handedness), 48 bytes.
+pub const RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV_TANGENT: u32 = 2;
+pub const RETAINED_MATERIAL_FLAG_DOUBLE_SIDED: u32 = 1 << 2;
 /// Retained mesh topology field flag: honor glTF material `doubleSided` by
 /// disabling fixed-function face culling for this mesh. The topology remains
 /// in the low bits, keeping this cross-process descriptor ABI at 48 bytes.
@@ -410,6 +413,49 @@ pub struct RetainedFrameSubmit {
     pub camera: RetainedCamera,
     pub seeds: [RetainedTransformSeed; MAX_RETAINED_TRANSFORM_SEEDS],
     pub static_draws: [IndexedBatchDrawV2; MAX_RETAINED_STATIC_DRAWS],
+}
+
+/// Scalar inputs for the retained opaque metallic-roughness material shader.
+/// Texture IDs remain in the nested frame's owner-scoped material bundle.
+/// Only DOUBLE_SIDED is currently accepted in flags; reserved must be zero.
+#[derive(Copy, Clone, Debug, PartialEq)]
+#[repr(C)]
+pub struct RetainedMaterialParameters {
+    pub base_color_factor: [f32; 4],
+    pub emissive_factor: [f32; 3],
+    pub normal_scale: f32,
+    pub metallic_factor: f32,
+    pub roughness_factor: f32,
+    pub occlusion_strength: f32,
+    pub alpha_cutoff: f32,
+    pub flags: u32,
+    pub reserved: [u32; 3],
+}
+
+impl Default for RetainedMaterialParameters {
+    fn default() -> Self {
+        Self {
+            base_color_factor: [1.0; 4],
+            emissive_factor: [0.0; 3],
+            normal_scale: 1.0,
+            metallic_factor: 1.0,
+            roughness_factor: 1.0,
+            occlusion_strength: 1.0,
+            alpha_cutoff: 0.5,
+            flags: 0,
+            reserved: [0; 3],
+        }
+    }
+}
+
+/// Versioned extension of the stable V1 retained frame. V2 requires a
+/// POS_NORMAL_UV_TANGENT mesh and supplies all factors through this extension;
+/// the legacy frame.material.emissive_factor must remain zero.
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+#[repr(C)]
+pub struct RetainedFrameSubmitV2 {
+    pub frame: RetainedFrameSubmit,
+    pub material_parameters: RetainedMaterialParameters,
 }
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
@@ -834,6 +880,33 @@ impl Device {
         Ok(point)
     }
 
+    pub fn submit_retained_frame_v2(
+        self,
+        queue: Queue,
+        surface: Ui4Surface,
+        mesh: RetainedMesh,
+        static_vertex_buffer: Buffer,
+        static_index_buffer: Buffer,
+        mut submit: RetainedFrameSubmitV2,
+    ) -> Result<TimelinePoint, i32> {
+        if queue.device != self || surface.device != self {
+            return Err(ERR_BAD_HANDLE);
+        }
+        let mut surface = surface;
+        submit.frame.surface = surface.surface.0;
+        submit.frame.mesh = mesh.0;
+        submit.frame.static_vertex_buffer = static_vertex_buffer.0;
+        submit.frame.static_index_buffer = static_index_buffer.0;
+        let mut point = TimelinePoint::default();
+        rc_result(unsafe {
+            vcabi::trueos_cabi_vgpu_retained_frame_submit_v2(
+                self.0, queue.handle, &submit, &mut point,
+            )
+        })?;
+        surface.live = false;
+        Ok(point)
+    }
+
     pub fn timeline(self, queue: Queue) -> Result<TimelineStatus, i32> {
         if queue.device != self {
             return Err(ERR_BAD_HANDLE);
@@ -1070,6 +1143,12 @@ mod tests {
         assert_eq!(core::mem::offset_of!(RetainedFrameSubmit, static_vertex_revision), 116);
         assert_eq!(core::mem::offset_of!(RetainedFrameSubmit, camera), 120);
         assert_eq!(core::mem::offset_of!(RetainedFrameSubmit, seeds), 488);
+        assert_eq!(core::mem::size_of::<RetainedMaterialParameters>(), 64);
+        assert_eq!(core::mem::offset_of!(RetainedMaterialParameters, normal_scale), 28);
+        assert_eq!(core::mem::offset_of!(RetainedMaterialParameters, flags), 48);
+        assert_eq!(core::mem::size_of::<RetainedFrameSubmitV2>(), 880);
+        assert_eq!(core::mem::offset_of!(RetainedFrameSubmitV2, frame), 0);
+        assert_eq!(core::mem::offset_of!(RetainedFrameSubmitV2, material_parameters), 816);
         assert_eq!(core::mem::size_of::<TimelinePoint>(), 16);
         assert_eq!(core::mem::size_of::<TimelineStatus>(), 32);
     }

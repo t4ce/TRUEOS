@@ -741,6 +741,7 @@ struct RetainedMeshRecord {
     static_geometry: Option<RetainedStaticGeometry>,
     vertex_buffer: BufferHandle,
     index_buffer: BufferHandle,
+    double_sided: bool,
     epoch: u64,
     in_flight: u32,
 }
@@ -787,12 +788,56 @@ struct RetainedTextureSlot {
 struct RetainedMaterialSubmission {
     textures: [Option<Arc<crate::intel::render::ResidentSampledTexture>>;
         v::vgpu::RETAINED_MATERIAL_TEXTURE_COUNT],
+    parameters: [u32; 16],
 }
 
 impl RetainedMaterialSubmission {
     fn base_color(&self) -> Option<&crate::intel::render::ResidentSampledTexture> {
         self.textures[v::vgpu::RETAINED_MATERIAL_BASE_COLOR].as_deref()
     }
+}
+
+/// Validate the public material extension and pack the shader's four vec4s.
+/// Presence is derived from authenticated texture handles, never caller flags.
+fn pack_retained_material_parameters(
+    parameters: &v::vgpu::RetainedMaterialParameters,
+    texture_presence: u32,
+    double_sided: bool,
+) -> Option<[u32; 16]> {
+    let unit_interval = |value: f32| value.is_finite() && (0.0..=1.0).contains(&value);
+    if parameters.reserved != [0; 3]
+        || parameters.flags & !v::vgpu::RETAINED_MATERIAL_FLAG_DOUBLE_SIDED != 0
+        || (parameters.flags & v::vgpu::RETAINED_MATERIAL_FLAG_DOUBLE_SIDED != 0) != double_sided
+        || texture_presence & !0x1f != 0
+        || !parameters.base_color_factor.iter().copied().all(unit_interval)
+        || !parameters.emissive_factor.iter().copied().all(unit_interval)
+        || !parameters.normal_scale.is_finite()
+        || !unit_interval(parameters.metallic_factor)
+        || !unit_interval(parameters.roughness_factor)
+        || !unit_interval(parameters.occlusion_strength)
+        || !parameters.alpha_cutoff.is_finite()
+        || parameters.alpha_cutoff < 0.0
+    {
+        return None;
+    }
+    Some([
+        parameters.base_color_factor[0].to_bits(),
+        parameters.base_color_factor[1].to_bits(),
+        parameters.base_color_factor[2].to_bits(),
+        parameters.base_color_factor[3].to_bits(),
+        parameters.emissive_factor[0].to_bits(),
+        parameters.emissive_factor[1].to_bits(),
+        parameters.emissive_factor[2].to_bits(),
+        parameters.normal_scale.to_bits(),
+        parameters.metallic_factor.to_bits(),
+        parameters.roughness_factor.to_bits(),
+        parameters.occlusion_strength.to_bits(),
+        parameters.alpha_cutoff.to_bits(),
+        parameters.flags,
+        texture_presence,
+        0,
+        0,
+    ])
 }
 
 struct QueueRecord {
@@ -1820,7 +1865,9 @@ pub(crate) fn create_retained_mesh(
             .ok_or(VgpuError::Unsupported)?;
     if !matches!(
         descriptor.vertex_layout,
-        v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL | v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV
+        v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL
+            | v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV
+            | v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV_TANGENT
     ) || descriptor.vertex_count == 0
         || !topology.accepts_index_count(descriptor.index_count as usize)
     {
@@ -1828,11 +1875,10 @@ pub(crate) fn create_retained_mesh(
     }
     let vertex_buffer = BufferHandle::from_raw(descriptor.vertex_buffer);
     let index_buffer = BufferHandle::from_raw(descriptor.index_buffer);
-    let vertex_stride = if descriptor.vertex_layout == v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV
-    {
-        32
-    } else {
-        24
+    let vertex_stride: usize = match descriptor.vertex_layout {
+        v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV_TANGENT => 48,
+        v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV => 32,
+        _ => 24,
     };
     let vertex_bytes = (descriptor.vertex_count as usize)
         .checked_mul(vertex_stride)
@@ -1964,7 +2010,7 @@ pub(crate) fn create_retained_mesh(
         &vertices,
         &indices,
         v::vgpu::MAX_RETAINED_TRANSFORM_SEEDS,
-        descriptor.vertex_layout == v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV,
+        vertex_stride as u32,
         double_sided,
         topology,
     ) {
@@ -2012,6 +2058,7 @@ pub(crate) fn create_retained_mesh(
                 static_geometry: None,
                 vertex_buffer,
                 index_buffer,
+                double_sided,
                 epoch,
                 in_flight: 0,
             },
@@ -3515,6 +3562,7 @@ pub(crate) fn submit_ui4_retained_frame(
     device_handle: DeviceHandle,
     queue_handle: QueueHandle,
     submit: v::vgpu::RetainedFrameSubmit,
+    material_parameters: Option<v::vgpu::RetainedMaterialParameters>,
 ) -> Result<Ui4SurfaceIndexedCompletion, VgpuError> {
     let seed_count = usize::try_from(submit.seed_count).map_err(|_| VgpuError::Unsupported)?;
     let static_draw_count =
@@ -3608,7 +3656,7 @@ pub(crate) fn submit_ui4_retained_frame(
                 surface.pitch,
             )
         };
-        let (resident, carrier) = {
+        let (resident, carrier, double_sided) = {
             let record = match lookup_retained_mesh_mut(device, mesh_handle) {
                 Ok(record) => record,
                 Err(error) => {
@@ -3623,7 +3671,7 @@ pub(crate) fn submit_ui4_retained_frame(
                 return Err(VgpuError::Busy);
             }
             record.in_flight = 1;
-            (Arc::clone(&record.resident), record.carrier)
+            (Arc::clone(&record.resident), record.carrier, record.double_sided)
         };
         if submit.material.reserved != 0
             || submit
@@ -3671,7 +3719,29 @@ pub(crate) fn submit_ui4_retained_frame(
             };
             material_textures[role] = Some(texture);
         }
-        if resident.sampled_material() {
+        let parameters = if let Some(parameters) = material_parameters {
+            let texture_presence = material_textures.iter().enumerate().fold(0, |mask, (role, texture)| {
+                mask | ((texture.is_some() as u32) << role)
+            });
+            let packed = pack_retained_material_parameters(&parameters, texture_presence, double_sided);
+            if !resident.pbr_material()
+                || material_textures[v::vgpu::RETAINED_MATERIAL_BASE_COLOR].is_none()
+                || submit.material.emissive_factor != [0.0; 3]
+                || packed.is_none()
+            {
+                return Err(reject_retained_submission(
+                    device, mesh_handle, surface_handle, queue_handle, VgpuError::Unsupported,
+                ));
+            }
+            packed.expect("validated retained material parameters")
+        } else if resident.pbr_material() {
+            return Err(reject_retained_submission(
+                device, mesh_handle, surface_handle, queue_handle, VgpuError::Unsupported,
+            ));
+        } else {
+            [0; 16]
+        };
+        if resident.sampled_material() && !resident.pbr_material() {
             if material_textures[v::vgpu::RETAINED_MATERIAL_BASE_COLOR].is_none()
                 || material_textures[v::vgpu::RETAINED_MATERIAL_METALLIC_ROUGHNESS].is_some()
                 || material_textures[v::vgpu::RETAINED_MATERIAL_EMISSIVE].is_some()
@@ -3688,8 +3758,8 @@ pub(crate) fn submit_ui4_retained_frame(
                     VgpuError::Unsupported,
                 ));
             }
-        } else if material_textures.iter().any(Option::is_some)
-            || submit.material.emissive_factor != [0.0; 3]
+        } else if !resident.sampled_material() && (material_textures.iter().any(Option::is_some)
+            || submit.material.emissive_factor != [0.0; 3])
         {
             return Err(reject_retained_submission(
                 device,
@@ -3701,6 +3771,7 @@ pub(crate) fn submit_ui4_retained_frame(
         }
         let retained_material = RetainedMaterialSubmission {
             textures: material_textures,
+            parameters,
         };
         let cached = match lookup_retained_mesh(device, mesh_handle)?
             .static_geometry
@@ -3987,7 +4058,11 @@ pub(crate) fn submit_ui4_retained_frame(
     let render_material = retained_material.base_color().map(|base_color| {
         crate::intel::render::ResidentRetainedMaterial {
             base_color,
-            metallic_roughness: None,
+            metallic_roughness: retained_material.textures[v::vgpu::RETAINED_MATERIAL_METALLIC_ROUGHNESS].as_deref(),
+            emissive: retained_material.textures[v::vgpu::RETAINED_MATERIAL_EMISSIVE].as_deref(),
+            occlusion: retained_material.textures[v::vgpu::RETAINED_MATERIAL_OCCLUSION].as_deref(),
+            normal: retained_material.textures[v::vgpu::RETAINED_MATERIAL_NORMAL].as_deref(),
+            parameters: retained_material.parameters,
         }
     });
     let rendered =

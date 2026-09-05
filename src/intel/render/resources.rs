@@ -22,10 +22,10 @@ fn upload_triangle_shader_pipeline_at(
     let vs = stage_range("vs", pipeline.vs.meta.kernel, pipeline.vs.code)?;
     let ps = stage_range("ps", pipeline.ps.meta.kernel, pipeline.ps.code)?;
     let line_gs_shader = crate::intel::shader::line_adjacency_geometry_shader();
-    let line_gs =
+    let mut line_gs =
         stage_range("line-adjacency-gs", line_gs_shader.meta.kernel, line_gs_shader.code)?;
     let triangle_gs_shader = crate::intel::shader::triangle_adjacency_geometry_shader();
-    let triangle_gs = stage_range(
+    let mut triangle_gs = stage_range(
         "triangle-adjacency-gs",
         triangle_gs_shader.meta.kernel,
         triangle_gs_shader.code,
@@ -42,6 +42,27 @@ fn upload_triangle_shader_pipeline_at(
     } else {
         None
     };
+
+    // Larger material programs must not overlap the optional adjacency
+    // kernels' historical offsets. Their packet KSPs use this returned
+    // layout, so moving both after the VS/PS preserves every draw contract.
+    let mut graphics_end = stage_end(vs.code_offset_bytes, vs.code_size_bytes)
+        .ok_or("shader-code-overflow")?
+        .max(stage_end(ps.code_offset_bytes, ps.code_size_bytes).ok_or("shader-code-overflow")?);
+    if let Some(host) = host_simd16 {
+        graphics_end = graphics_end.max(
+            stage_end(host.code_offset_bytes, host.code_size_bytes).ok_or("shader-code-overflow")?,
+        );
+    }
+    if graphics_end > line_gs.code_offset_bytes.min(triangle_gs.code_offset_bytes) {
+        line_gs.code_offset_bytes = crate::intel::align_up(graphics_end, 64)
+            .ok_or("shader-code-overflow")?;
+        triangle_gs.code_offset_bytes = crate::intel::align_up(
+            stage_end(line_gs.code_offset_bytes, line_gs.code_size_bytes)
+                .ok_or("shader-code-overflow")?,
+            64,
+        ).ok_or("shader-code-overflow")?;
+    }
 
     if pipeline.vs.meta.kernel.grf_used == 0 {
         return Err("vs-shader-grf-used-zero");
@@ -578,6 +599,7 @@ fn prepare_triangle_draw_resources_for_geometry(
         native: None,
         sampled_texture: None,
         metallic_roughness_texture: None,
+        pbr_material: None,
         emissive_factor: [0.0; 3],
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
@@ -697,6 +719,7 @@ fn prepare_triangle_draw_resources_for_vertex_slice_with_state_clear(
         native: None,
         sampled_texture: None,
         metallic_roughness_texture: None,
+        pbr_material: None,
         emissive_factor: [0.0; 3],
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
@@ -783,6 +806,7 @@ fn prepare_triangle_draw_resources_for_indexed_vertex_slice(
         native: None,
         sampled_texture: None,
         metallic_roughness_texture: None,
+        pbr_material: None,
         emissive_factor: [0.0; 3],
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
@@ -2252,6 +2276,7 @@ fn create_resident_churn_forward_with_admission(
         front_end_contract: TriangleFrontEndContract {
             label: "helio-churn-forward-v1",
             vs_urb_output_length_override: Some(1),
+            vs_urb_read_length: 1,
             sbe_read_offset: fixed.sbe_read_offset,
             sbe_read_length: fixed.sbe_read_length,
             force_sbe_read_offset: true,
@@ -2370,15 +2395,16 @@ pub(crate) fn create_resident_picasso_retained_mesh(
     vertices: &[u8],
     indices: &[u32],
     max_instances: usize,
-    sampled_material: bool,
+    vertex_stride: u32,
     double_sided: bool,
     topology: ResidentScenePrimitiveTopology,
 ) -> Result<ResidentChurnForward, &'static str> {
-    let vertex_stride = if sampled_material {
-        32usize
-    } else {
-        trueos_helio_artifact::churn_forward::VERTEX_STRIDE as usize
-    };
+    if !matches!(vertex_stride, 24 | 32 | 48) {
+        return Err("picasso-retained-vertex-layout");
+    }
+    let sampled_material = vertex_stride != 24;
+    let pbr_material = vertex_stride == 48;
+    let vertex_stride = vertex_stride as usize;
     if vertices.is_empty()
         || !vertices.len().is_multiple_of(vertex_stride)
         || !topology.accepts_index_count(indices.len())
@@ -2414,6 +2440,7 @@ pub(crate) fn create_resident_picasso_retained_mesh(
         resident.front_end_contract = TriangleFrontEndContract {
             label: "picasso-retained-authored-uv-texture-v1",
             vs_urb_output_length_override: Some(2),
+            vs_urb_read_length: 1,
             sbe_read_offset: 1,
             sbe_read_length: 1,
             force_sbe_read_offset: true,
@@ -2422,6 +2449,26 @@ pub(crate) fn create_resident_picasso_retained_mesh(
         };
         resident.vertex_stride = 32;
         resident.vertex_format = TriangleVertexFormat::PosNormalUv;
+    }
+    if pbr_material {
+        use crate::intel::shader::picasso_retained_pbr as captured;
+        resident.pipeline = *crate::intel::shader::picasso_retained_pbr_pipeline();
+        resident.native_vf.vf_sgvs_dw1 = captured::VF_SGVS_DW1;
+        resident.native_vf.vf_sgvs_2_dw1 = captured::VF_SGVS_2_DW1;
+        resident.native_vf.vertex_element_count = 5;
+        resident.native_vf.vf_component_packing = [captured::VF_COMPONENT_PACKING, 0, 0, 0];
+        resident.front_end_contract = TriangleFrontEndContract {
+            label: "picasso-retained-gltf-pbr-v1",
+            vs_urb_output_length_override: Some(2),
+            vs_urb_read_length: captured::VS_URB_READ_LENGTH,
+            sbe_read_offset: captured::SBE_READ_OFFSET,
+            sbe_read_length: captured::SBE_READ_LENGTH,
+            force_sbe_read_offset: true,
+            force_sbe_read_length: true,
+            force_vs_with_vf_synthesized_vue: false,
+        };
+        resident.vertex_stride = 48;
+        resident.vertex_format = TriangleVertexFormat::PosNormalUvTangent;
     }
     // Install a valid fallback for bootstrap. Every retained frame replaces
     // this with its live world-to-clip camera before the transform/draw pass;
@@ -2809,6 +2856,19 @@ fn prepare_resident_churn_forward_draw(
                     sampler_flags: texture.sampler_flags,
                 })
         }),
+        pbr_material: sampled_material
+            .filter(|_| resident.vertex_format == TriangleVertexFormat::PosNormalUvTangent)
+            .map(|material| TrianglePbrMaterial {
+                textures: [material.metallic_roughness, material.emissive, material.occlusion, material.normal]
+                    .map(|texture| texture.map(|texture| TriangleSampledTextureBinding {
+                        gpu_addr: texture.storage.gpu_base(),
+                        width: texture.width,
+                        height: texture.height,
+                        pitch: texture.pitch,
+                        sampler_flags: texture.sampler_flags,
+                    })),
+                parameters: material.parameters,
+            }),
         emissive_factor: [0.0; 3],
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
@@ -2858,6 +2918,7 @@ fn prepare_resident_churn_expanded_draw(
         native: None,
         sampled_texture: None,
         metallic_roughness_texture: None,
+        pbr_material: None,
         emissive_factor: [0.0; 3],
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
@@ -3335,6 +3396,7 @@ fn prepare_triangle_draw_resources_for_resident_font_mesh_with_state_clear(
         native: None,
         sampled_texture: None,
         metallic_roughness_texture: None,
+        pbr_material: None,
         emissive_factor: [0.0; 3],
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
@@ -3386,6 +3448,7 @@ fn prepare_triangle_draw_resources_for_vf_vue_vertex_slice(
         native: None,
         sampled_texture: None,
         metallic_roughness_texture: None,
+        pbr_material: None,
         emissive_factor: [0.0; 3],
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,
@@ -3812,6 +3875,7 @@ fn prepare_vf_streamout_proof_resources(
         native: None,
         sampled_texture: None,
         metallic_roughness_texture: None,
+        pbr_material: None,
         emissive_factor: [0.0; 3],
         state_gpu_addr: GPU_VA_DRAW_STATE_BASE,
         rt_gpu_addr: dst_gpu_addr,

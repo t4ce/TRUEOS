@@ -490,6 +490,57 @@ struct HttpResponsePlan {
     body: HttpBodyPlan,
 }
 
+struct PendingBlobUpload {
+    token: u64,
+    disk: DeviceHandle,
+    path: String,
+    request: vhttp_srv::HttpRequest,
+}
+
+impl PendingBlobUpload {
+    fn body_bytes(&self) -> &[u8] {
+        self.request.body_bytes()
+    }
+}
+
+fn http_next_blob_token(next: &mut u64) -> u64 {
+    let token = (*next).max(1);
+    *next = token.wrapping_add(1).max(1);
+    token
+}
+
+fn http_stage_blob_upload(pending: &mut Vec<PendingBlobUpload>, upload: PendingBlobUpload) {
+    let upload_bytes = upload.body_bytes().len();
+    let mut retained_bytes = pending
+        .iter()
+        .fold(0usize, |total, item| total.saturating_add(item.body_bytes().len()));
+
+    // Never retain more rejected bodies than one maximum-sized HTTP request.
+    // Old offers are discarded first, keeping memory bounded even if a browser
+    // is closed while its confirmation dialog is open.
+    while !pending.is_empty()
+        && (pending.len() >= 8
+            || retained_bytes.saturating_add(upload_bytes) > HTTP_TRUEOSFS_MAX_REQUEST_BYTES)
+    {
+        let evicted = pending.remove(0);
+        retained_bytes = retained_bytes.saturating_sub(evicted.body_bytes().len());
+        crate::log!(
+            "http-trueosfs: discarded pending blob token={} path={} bytes={} reason=capacity\n",
+            evicted.token,
+            evicted.path,
+            evicted.body_bytes().len(),
+        );
+    }
+    pending.push(upload);
+}
+
+fn http_blob_offer_response(mut response: HttpResponsePlan, token: u64) -> HttpResponsePlan {
+    response
+        .extra_headers
+        .push_str(format!("X-TRUEOSFS-Blob-Token: {}\r\n", token).as_str());
+    response
+}
+
 fn http_plain_response(status: &'static str, msg: &'static str) -> HttpResponsePlan {
     let body = msg.as_bytes().to_vec();
     HttpResponsePlan {
@@ -854,10 +905,12 @@ function pathFor(li){var parts=[];var cur=li;while(cur){var label=trimmedPathPar
 function encodePath(path){if(!path){return "";}return path.split("/").filter(Boolean).map(function(seg){return encodeURIComponent(seg);}).join("/");}
 function dlHref(root,path){var enc=encodePath(path);return enc?"/dl/"+root+"/"+enc:"#";}
 function rmHref(root,path){var enc=encodePath(path);return enc?"/rm/"+root+"/"+enc:"#";}
-function upHref(root,dir,name,asBlob){var base="/up/"+root;var enc=encodePath(dir);if(enc){base+="/"+enc;}base+="?name="+encodeURIComponent(name);if(asBlob){base+="&content=blob";}return base;}
+function upHref(root,dir,name){var base="/up/"+root;var enc=encodePath(dir);if(enc){base+="/"+enc;}return base+="?name="+encodeURIComponent(name);}
+function blobDecisionHref(action,token){return "/up-"+action+"?token="+encodeURIComponent(token);}
 function mkdirHref(root,dir,name){var base="/mkdir/"+root;var enc=encodePath(dir);if(enc){base+="/"+enc;}return base+"?name="+encodeURIComponent(name);}
 function setStatus(target,msg){if(target){target.textContent=msg;}}
-function uploadFile(root,dir,file,status,asBlob){if(!file){return;}var started=Date.now();var xhr=new XMLHttpRequest();xhr.open("POST",upHref(root,dir,file.name,!!asBlob));xhr.setRequestHeader("Content-Type","application/octet-stream");xhr.upload.onprogress=function(ev){if(!ev.lengthComputable){setStatus(status,"uploading "+file.name+" ...");return;}var elapsed=Math.max((Date.now()-started)/1000,0.001);var rate=ev.loaded/elapsed;setStatus(status,"uploading "+file.name+" "+ev.loaded+"/"+ev.total+" bytes @ "+Math.round(rate/1024)+" KiB/s");};xhr.onload=function(){if(xhr.status>=200&&xhr.status<300){setStatus(status,"uploaded "+file.name+(asBlob?" as Blob":""));window.setTimeout(function(){window.location.reload();},250);}else if(!asBlob&&(xhr.status===409||xhr.status===415)&&window.confirm("TRUEOS could not prove the named type. Store this file explicitly as Blob?")){uploadFile(root,dir,file,status,true);}else{setStatus(status,"upload failed: HTTP "+xhr.status+" "+(xhr.responseText||""));}};xhr.onerror=function(){setStatus(status,"upload failed");};xhr.send(file);}
+function decideBlobUpload(token,file,status,accept){var action=accept?"confirm":"discard";setStatus(status,accept?"storing "+file.name+" as Blob ...":"upload cancelled");fetch(blobDecisionHref(action,token),{method:"POST"}).then(function(resp){if(!resp.ok){throw new Error(String(resp.status));}if(accept){setStatus(status,"uploaded "+file.name+" as Blob");window.setTimeout(function(){window.location.reload();},250);}}).catch(function(err){setStatus(status,(accept?"blob commit failed: ":"discard failed: ")+err.message);});}
+function uploadFile(root,dir,file,status){if(!file){return;}var started=Date.now();var xhr=new XMLHttpRequest();xhr.open("POST",upHref(root,dir,file.name));xhr.setRequestHeader("Content-Type","application/octet-stream");xhr.upload.onprogress=function(ev){if(!ev.lengthComputable){setStatus(status,"uploading "+file.name+" ...");return;}var elapsed=Math.max((Date.now()-started)/1000,0.001);var rate=ev.loaded/elapsed;setStatus(status,"uploading "+file.name+" "+ev.loaded+"/"+ev.total+" bytes @ "+Math.round(rate/1024)+" KiB/s");};xhr.onload=function(){if(xhr.status>=200&&xhr.status<300){setStatus(status,"uploaded "+file.name);window.setTimeout(function(){window.location.reload();},250);}else if(xhr.status===409||xhr.status===415){var token=xhr.getResponseHeader("X-TRUEOSFS-Blob-Token");if(token){decideBlobUpload(token,file,status,window.confirm("TRUEOS could not prove the named type. Store this file explicitly as Blob?"));}else{setStatus(status,"upload failed: server did not retain the rejected upload");}}else{setStatus(status,"upload failed: HTTP "+xhr.status+" "+(xhr.responseText||""));}};xhr.onerror=function(){setStatus(status,"upload failed");};xhr.send(file);}
 function deleteFile(root,path,label,status){if(!window.confirm("Delete "+label+"?")){return;}setStatus(status,"deleting "+label+" ...");fetch(rmHref(root,path),{method:"POST"}).then(function(resp){if(!resp.ok){throw new Error(String(resp.status));}setStatus(status,"deleted "+label);window.setTimeout(function(){window.location.reload();},250);}).catch(function(err){setStatus(status,"delete failed: "+err.message);});}
 function wireFile(root,li,path,label){var text=firstTextNode(li);if(text){text.textContent="";}var del=document.createElement("button");del.type="button";del.textContent="x";var a=document.createElement("a");a.href=dlHref(root,path);a.textContent=label;a.setAttribute("download","");var status=document.createElement("small");li.insertBefore(del,li.firstChild);li.insertBefore(document.createTextNode(" "),del.nextSibling);li.insertBefore(a,del.nextSibling.nextSibling);li.appendChild(document.createTextNode(" "));li.appendChild(status);del.addEventListener("click",function(){deleteFile(root,path,label,status);});}
 function wireRoot(root,tree){var details=tree.parentElement;if(!details||details.getAttribute("data-trueosfs-root")==="1"){return;}details.setAttribute("data-trueosfs-root","1");var summary=details.querySelector("summary");if(!summary){return;}var host=document.createElement("span");var uploadBtn=document.createElement("button");uploadBtn.type="button";uploadBtn.textContent="upload";var createBtn=document.createElement("button");createBtn.type="button";createBtn.textContent="+";var picker=document.createElement("input");picker.type="file";picker.hidden=true;var status=document.createElement("small");host.appendChild(document.createTextNode(" "));host.appendChild(uploadBtn);host.appendChild(document.createTextNode(" "));host.appendChild(createBtn);host.appendChild(document.createTextNode(" "));host.appendChild(status);summary.appendChild(host);details.appendChild(picker);uploadBtn.addEventListener("click",function(ev){ev.preventDefault();ev.stopPropagation();picker.click();});picker.addEventListener("change",function(){if(picker.files&&picker.files[0]){uploadFile(root,"",picker.files[0],status);}picker.value="";});createBtn.addEventListener("click",function(ev){ev.preventDefault();ev.stopPropagation();var name=window.prompt("Folder name");if(!name){return;}setStatus(status,"creating "+name+" ...");fetch(mkdirHref(root,"",name),{method:"POST"}).then(function(resp){if(!resp.ok){throw new Error(String(resp.status));}setStatus(status,"created "+name);window.setTimeout(function(){window.location.reload();},250);}).catch(function(err){setStatus(status,"create failed: "+err.message);});});}
@@ -909,6 +962,8 @@ fn http_mount_page(roots_html: &str, has_roots: bool) -> HttpResponsePlan {
 pub async fn http_trueosfs_task() {
     async move {
         let mut endpoints: Vec<HttpTrueosfsEndpoint> = Vec::new();
+        let mut pending_blob_uploads: Vec<PendingBlobUpload> = Vec::new();
+        let mut next_blob_token = 1u64;
         loop {
             http_trueosfs_add_endpoints(&mut endpoints);
             if !endpoints.is_empty() {
@@ -986,7 +1041,9 @@ pub async fn http_trueosfs_task() {
                         let target = request.target().to_string();
                         let req = request.raw_bytes();
                         let body_bytes = request.body_bytes();
+                        let keep_alive = request.keep_alive();
                         let roots = crate::r::fs::trueosfs::list_roots();
+                        let mut staged_blob_upload: Option<(u64, DeviceHandle, String)> = None;
 
                         let path_only = vhttp_srv::path_only(target.as_str());
                         let response: HttpResponsePlan = if method == "GET"
@@ -1065,7 +1122,123 @@ pub async fn http_trueosfs_task() {
                                     },
                                 },
                             }
-                        } else if method == "POST" && vhttp_srv::path_only(target.as_str()).starts_with("/up/") {
+                        } else if method == "POST" && path_only == "/up-confirm" {
+                            'resp: {
+                                if !body_bytes.is_empty() {
+                                    break 'resp http_plain_response(
+                                        "HTTP/1.1 400 Bad Request\r\n",
+                                        "blob confirmation must not include a body\n",
+                                    );
+                                }
+                                let token = match vhttp_srv::query_param(target.as_str(), "token")
+                                    .and_then(|raw| raw.parse::<u64>().ok())
+                                {
+                                    Some(token) => token,
+                                    None => {
+                                        break 'resp http_plain_response(
+                                            "HTTP/1.1 400 Bad Request\r\n",
+                                            "missing blob token\n",
+                                        );
+                                    }
+                                };
+                                let Some(pos) = pending_blob_uploads
+                                    .iter()
+                                    .position(|upload| upload.token == token)
+                                else {
+                                    break 'resp http_plain_response(
+                                        "HTTP/1.1 410 Gone\r\n",
+                                        "blob upload offer expired\n",
+                                    );
+                                };
+                                let upload = pending_blob_uploads.remove(pos);
+                                match crate::r::fs::trueosfs::file_in_typed_async(
+                                    upload.disk,
+                                    upload.path.as_str(),
+                                    upload.body_bytes(),
+                                    infer::ContentTypeId::BLOB,
+                                )
+                                .await
+                                {
+                                    Ok(true) => {
+                                        crate::r::fs::trueosfs::record_explicit_blob_import();
+                                        crate::log_important!(
+                                            target: "storage";
+                                            "http-trueosfs: content-admission decision=confirmed-blob token={} path={} bytes={} type={}\n",
+                                            upload.token,
+                                            upload.path,
+                                            upload.body_bytes().len(),
+                                            infer::ContentTypeId::BLOB.raw(),
+                                        );
+                                        if http_is_runnable_root_artifact(upload.path.as_str()) {
+                                            let stamp_path =
+                                                http_root_artifact_timestamp_path(upload.path.as_str());
+                                            let mut stamp = http_current_timestamp_label();
+                                            stamp.push('\n');
+                                            let _ = crate::r::fs::trueosfs::file_in_typed_async(
+                                                upload.disk,
+                                                stamp_path.as_str(),
+                                                stamp.as_bytes(),
+                                                infer::ContentTypeId::UTF8_TEXT,
+                                            )
+                                            .await;
+                                        }
+                                        http_plain_response("HTTP/1.1 200 OK\r\n", "upload ok\n")
+                                    }
+                                    Ok(false) => {
+                                        pending_blob_uploads.push(upload);
+                                        http_plain_response(
+                                            "HTTP/1.1 507 Insufficient Storage\r\n",
+                                            "upload failed; blob offer retained\n",
+                                        )
+                                    }
+                                    Err(_) => {
+                                        pending_blob_uploads.push(upload);
+                                        http_plain_response(
+                                            "HTTP/1.1 500 Internal Server Error\r\n",
+                                            "upload error; blob offer retained\n",
+                                        )
+                                    }
+                                }
+                            }
+                        } else if method == "POST" && path_only == "/up-discard" {
+                            'resp: {
+                                if !body_bytes.is_empty() {
+                                    break 'resp http_plain_response(
+                                        "HTTP/1.1 400 Bad Request\r\n",
+                                        "blob discard must not include a body\n",
+                                    );
+                                }
+                                let token = match vhttp_srv::query_param(target.as_str(), "token")
+                                    .and_then(|raw| raw.parse::<u64>().ok())
+                                {
+                                    Some(token) => token,
+                                    None => {
+                                        break 'resp http_plain_response(
+                                            "HTTP/1.1 400 Bad Request\r\n",
+                                            "missing blob token\n",
+                                        );
+                                    }
+                                };
+                                if let Some(pos) = pending_blob_uploads
+                                    .iter()
+                                    .position(|upload| upload.token == token)
+                                {
+                                    let upload = pending_blob_uploads.remove(pos);
+                                    crate::log!(
+                                        "http-trueosfs: discarded pending blob token={} path={} bytes={} reason=user\n",
+                                        upload.token,
+                                        upload.path,
+                                        upload.body_bytes().len(),
+                                    );
+                                    http_plain_response("HTTP/1.1 200 OK\r\n", "upload discarded\n")
+                                } else {
+                                    http_plain_response(
+                                        "HTTP/1.1 410 Gone\r\n",
+                                        "blob upload offer expired\n",
+                                    )
+                                }
+                            }
+                        } else if method == "POST" && path_only.starts_with("/up/") {
                             'resp: {
                                 let (root_raw, dir) = match http_parse_root_and_dir(target.as_str(), "/up/") {
                                     Some(v) => v,
@@ -1104,12 +1277,19 @@ pub async fn http_trueosfs_task() {
                                         );
                                     }
                                 };
+                                let full_path = http_join_rel_path(dir.as_str(), name.as_str());
                                 let (content_type, explicit_blob) =
                                     match http_upload_content_type(target.as_str(), name.as_str(), body_bytes) {
                                         Ok(value) => value,
-                                        Err(response) => break 'resp response,
+                                        Err(response) => {
+                                            if vhttp_srv::query_param(target.as_str(), "content").is_none() {
+                                                let token = http_next_blob_token(&mut next_blob_token);
+                                                staged_blob_upload = Some((token, disk, full_path));
+                                                break 'resp http_blob_offer_response(response, token);
+                                            }
+                                            break 'resp response;
+                                        }
                                     };
-                                let full_path = http_join_rel_path(dir.as_str(), name.as_str());
                                 match crate::r::fs::trueosfs::file_in_typed_async(
                                     disk,
                                     full_path.as_str(),
@@ -1356,6 +1536,18 @@ pub async fn http_trueosfs_task() {
                             http_mount_page(trees_html.as_str(), !roots.is_empty())
                         };
 
+                        if let Some((token, disk, path)) = staged_blob_upload {
+                            http_stage_blob_upload(
+                                &mut pending_blob_uploads,
+                                PendingBlobUpload {
+                                    token,
+                                    disk,
+                                    path,
+                                    request,
+                                },
+                            );
+                        }
+
                         let HttpResponsePlan {
                             status,
                             content_type,
@@ -1371,9 +1563,9 @@ pub async fn http_trueosfs_task() {
                             content_type,
                             extra_headers.as_str(),
                             body_len,
-                            request.keep_alive(),
+                            keep_alive,
                         );
-                        endpoint.server.mark_response(handle, pending, request.keep_alive());
+                        endpoint.server.mark_response(handle, pending, keep_alive);
                         http_submit_commands(&endpoint.vnet, cmds);
 
                         let mut perf = HttpPerf::default();

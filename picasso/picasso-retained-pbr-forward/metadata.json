@@ -1,0 +1,148 @@
+{
+  "backend": "instrumented-mesa-anv-noop-drm-shim",
+  "baremetal_verified": false,
+  "color_surface_formats": {
+    "base_color": "R8G8B8A8_UNORM_SRGB",
+    "emissive": "R8G8B8A8_UNORM_SRGB",
+    "metallic_roughness": "R8G8B8A8_UNORM",
+    "normal": "R8G8B8A8_UNORM",
+    "occlusion": "R8G8B8A8_UNORM"
+  },
+  "contract": "retained-gltf-metallic-roughness-five-map-tangent48",
+  "device": {
+    "device_id": 18048,
+    "name": "Intel(R) UHD Graphics 770 (ADL-S GT1)",
+    "vendor_id": 32902
+  },
+  "executables": [
+    {
+      "description": "SIMD8 vertex shader",
+      "name": "vertex",
+      "simd_width": 8,
+      "stage": "vertex",
+      "statistics": {
+        "Code size": 992,
+        "Cycles": 543,
+        "Fills": 0,
+        "GRF registers": 0,
+        "Instructions": 91,
+        "Loops": 0,
+        "Max dispatch width": 8,
+        "Max live registers": 49,
+        "Non SSA regs after NIR": 15,
+        "SENDs": 12,
+        "Scratch Memory Size": 0,
+        "Source hash": 4254176082,
+        "Spills": 0,
+        "Workgroup Memory Size": 0
+      }
+    },
+    {
+      "description": "SIMD8 fragment shader",
+      "name": "SIMD8 fragment",
+      "simd_width": 8,
+      "stage": "fragment",
+      "statistics": {
+        "Code size": 6176,
+        "Cycles": 2258,
+        "Fills": 0,
+        "GRF registers": 0,
+        "Instructions": 512,
+        "Loops": 0,
+        "Max dispatch width": 16,
+        "Max live registers": 44,
+        "Non SSA regs after NIR": 20,
+        "SENDs": 8,
+        "Scratch Memory Size": 0,
+        "Source hash": 3876878215,
+        "Spills": 0,
+        "Workgroup Memory Size": 0
+      }
+    },
+    {
+      "description": "SIMD16 fragment shader",
+      "name": "SIMD16 fragment",
+      "simd_width": 16,
+      "stage": "fragment",
+      "statistics": {
+        "Code size": 6320,
+        "Cycles": 3237,
+        "Fills": 0,
+        "GRF registers": 0,
+        "Instructions": 520,
+        "Loops": 0,
+        "Max dispatch width": 16,
+        "Max live registers": 82,
+        "Non SSA regs after NIR": 26,
+        "SENDs": 8,
+        "Scratch Memory Size": 0,
+        "Source hash": 3876878215,
+        "Spills": 0,
+        "Workgroup Memory Size": 0
+      }
+    }
+  ],
+  "host_render_verified": false,
+  "material_bytes": 64,
+  "ps_bytes": 6312,
+  "ps_sha256": "64194af0470447bb9b7abbb013c3e7bf3fc90ebca343803f47d03cf16d87fe95",
+  "ps_state": {
+    "barycentric_interp_modes": 1,
+    "binding_table_entries": 9,
+    "computed_depth_mode": 0,
+    "computed_stencil": 0,
+    "dispatch16": 1,
+    "dispatch32": 0,
+    "dispatch8": 1,
+    "flat_inputs": 0,
+    "grf_start16": 6,
+    "grf_start32": 0,
+    "grf_start8": 4,
+    "num_varying_inputs": 4,
+    "offset16": 6208,
+    "push_bytes": 0,
+    "sampler_count": 1,
+    "sampler_prefetch_count": 0,
+    "scratch_bytes": 0,
+    "uses_depth_w_coefficients": 0,
+    "uses_npc_bary_coefficients": 0,
+    "uses_pc_bary_coefficients": 0,
+    "uses_src_depth": 0,
+    "uses_src_w": 0,
+    "uses_vmask": 1,
+    "ver": 12,
+    "verx10": 120
+  },
+  "schema": 1,
+  "varyings": [
+    "world_position",
+    "world_normal",
+    "uv",
+    "world_tangent"
+  ],
+  "vertex_attributes": [
+    "float32x3@0",
+    "float32x3@12",
+    "float32x2@24",
+    "float32x4@32"
+  ],
+  "vertex_stride": 48,
+  "vs_bytes": 992,
+  "vs_sha256": "23cbb162cd8c17d7f1e7c18d5589760473279b30bd0c618fc8536cb55752490c",
+  "vs_state": {
+    "binding_table_entries": 4,
+    "dispatch_grf_start": 2,
+    "max_threads": 546,
+    "position_slot": 1,
+    "sampler_count": 0,
+    "urb_entry_64b": 2,
+    "urb_read_length": 2,
+    "uses_instanceid": 1,
+    "uses_vertexid": 0,
+    "uv_slot": 2,
+    "ver": 12,
+    "verx10": 120,
+    "vf_packing0": 717687,
+    "vue_slots": 6
+  }
+}

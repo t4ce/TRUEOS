@@ -2341,7 +2341,14 @@ fn submit_resident_churn_forward_geometry_batched(
         && !PICASSO_RETAINED_TEXTURED_SUBMIT_LOGGED.swap(true, Ordering::AcqRel)
     {
         crate::log_important!(target: "render";
-            "picasso-material: proof=retained-texture-submit-armed accepted=1 contract=pos-normal-uv+texture-id graphics_handoff=native-matrices vertex_shader=gpu-instance-transform+authored-uv vertex_fetch=pos3+uv2+sgvs3 component_packing=0xA37 pixel_shader=filtered-base-color-simd16 interpolation=perspective-authored-uv lighting=none ps_binding_table_alignment=32 ps_bti=2 sampler=0 texture={}x{} stride={} cpu_texture_sampling=0 cpu_vertex_projection=0 render_submits=1\n",
+            "picasso-material: proof=retained-texture-submit-armed accepted=1 contract={} graphics_handoff=native-matrices vertex_stride={} vs_bytes={} ps_bytes={} ps_setup_grf={} varying_inputs={} material_mask=0x{:X} interpolation=perspective-authored-uv texture={}x{} stride={} cpu_texture_sampling=0 cpu_vertex_projection=0 render_submits=1 does_not_prove=pixel-output\n",
+            if resident.pbr_material() { "gltf-pbr-tangent" } else { "base-color" },
+            resident.vertex_stride,
+            resident.pipeline.vs.meta.kernel.code_size_bytes,
+            resident.pipeline.ps.meta.kernel.code_size_bytes,
+            resident.pipeline.ps.meta.kernel.grf_start_register,
+            resident.pipeline.ps.meta.num_varying_inputs,
+            material.parameters[13],
             material.base_color.width,
             material.base_color.height,
             material.base_color.pitch,
@@ -2369,7 +2376,8 @@ fn submit_resident_churn_forward_geometry_batched(
         && !PICASSO_RETAINED_TEXTURED_PATH_LOGGED.swap(true, Ordering::AcqRel)
     {
         crate::log_important!(target: "render";
-            "picasso-material: proof=retained-texture-sampled-and-retired accepted=1 coordinates=authored-uv contract=pos-normal-uv+texture-id graphics_handoff=native-matrices vertex_shader=gpu-instance-transform+authored-uv pixel_shader=filtered-base-color-simd16 interpolation=perspective-authored-uv lighting=none texture={}x{} stride={} cpu_texture_sampling=0 cpu_vertex_projection=0 render_submits=1\n",
+            "picasso-material: proof=retained-texture-sampled-and-retired accepted=1 coordinates=authored-uv contract={} graphics_handoff=native-matrices texture={}x{} stride={} cpu_texture_sampling=0 cpu_vertex_projection=0 render_submits=1 does_not_prove=pixel-output\n",
+            if resident.pbr_material() { "gltf-pbr-tangent" } else { "base-color" },
             material.base_color.width,
             material.base_color.height,
             material.base_color.pitch,

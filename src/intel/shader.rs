@@ -83,6 +83,8 @@ mod generated_adjacency_gs;
 mod generated_clip_position3_uv_texture;
 #[path = "../../crates/trueos-shader/generated_triangle.rs"]
 mod generated_triangle;
+#[path = "../../picasso/picasso-retained-pbr-forward/pipeline.rs"]
+pub(crate) mod picasso_retained_pbr;
 
 pub(crate) fn line_adjacency_geometry_shader() -> &'static AdjacencyGeometryShader {
     generated_adjacency_gs::line_adjacency_geometry_shader()
@@ -114,6 +116,10 @@ pub(crate) fn triangle_pipeline_simd16() -> &'static TrianglePipeline {
 
 pub(crate) fn clip_position3_uv_texture_pipeline() -> &'static TrianglePipeline {
     generated_clip_position3_uv_texture::clip_position3_uv_texture_pipeline()
+}
+
+pub(crate) fn picasso_retained_pbr_pipeline() -> &'static TrianglePipeline {
+    picasso_retained_pbr::pipeline()
 }
 
 pub(crate) fn triangle_pipeline_ps_eot() -> &'static TrianglePipeline {

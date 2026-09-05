@@ -96,6 +96,9 @@ enum TriangleVertexFormat {
     /// Picasso retained material storage: Float32x3 position, a retained but
     /// currently unfetched Float32x3 normal, then Float32x2 base-color UV.
     PosNormalUv,
+    /// glTF material vertices with a build-prepared MikkTSpace tangent.
+    /// Position, normal, UV, tangent occupy 48 bytes; all reach the VS.
+    PosNormalUvTangent,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -142,7 +145,15 @@ struct TriangleNativeDrawContract {
     vf_sgvs_2_dw2: u32,
     vertex_element_count: usize,
     vf_component_packing: [u32; 4],
-    vf_instancing: [TriangleVfInstancingState; 4],
+    vf_instancing: [TriangleVfInstancingState; 5],
+}
+
+#[derive(Copy, Clone)]
+struct TrianglePbrMaterial {
+    /// Metallic/roughness, emissive, occlusion, normal, in ABI role order.
+    textures: [Option<TriangleSampledTextureBinding>; 4],
+    /// Four vec4 records, matching the baked material storage-buffer ABI.
+    parameters: [u32; 16],
 }
 
 #[derive(Copy, Clone)]
@@ -161,6 +172,7 @@ struct TriangleDrawPrep {
     /// Reserved second sampled image for a later material rung. It is
     /// meaningful only with `sampled_texture`, which is base color.
     metallic_roughness_texture: Option<TriangleSampledTextureBinding>,
+    pbr_material: Option<TrianglePbrMaterial>,
     emissive_factor: [f32; 3],
     state_gpu_addr: u64,
     rt_gpu_addr: u64,
@@ -321,6 +333,10 @@ unsafe impl Sync for ResidentSampledTexture {}
 pub(crate) struct ResidentRetainedMaterial<'a> {
     pub(crate) base_color: &'a ResidentSampledTexture,
     pub(crate) metallic_roughness: Option<&'a ResidentSampledTexture>,
+    pub(crate) emissive: Option<&'a ResidentSampledTexture>,
+    pub(crate) occlusion: Option<&'a ResidentSampledTexture>,
+    pub(crate) normal: Option<&'a ResidentSampledTexture>,
+    pub(crate) parameters: [u32; 16],
 }
 
 // The authenticated instruction allocation is process-lifetime resident in
@@ -507,6 +523,10 @@ impl ResidentChurnForward {
 
     pub(crate) const fn sampled_material(&self) -> bool {
         self.sampled_material
+    }
+
+    pub(crate) const fn pbr_material(&self) -> bool {
+        matches!(self.vertex_format, TriangleVertexFormat::PosNormalUvTangent)
     }
 
     pub(crate) const fn topology(&self) -> ResidentScenePrimitiveTopology {
@@ -722,6 +742,7 @@ struct TriangleProbeStateLayout {
 struct TriangleFrontEndContract {
     label: &'static str,
     vs_urb_output_length_override: Option<u8>,
+    vs_urb_read_length: u8,
     sbe_read_offset: u8,
     sbe_read_length: u8,
     force_sbe_read_offset: bool,

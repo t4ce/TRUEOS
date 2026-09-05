@@ -1,0 +1,26 @@
+--- a/src/intel/vulkan/genX_shader.c
++++ b/src/intel/vulkan/genX_shader.c
+@@ -623,6 +623,11 @@
+                  vs_prog_data->vf_component_packing[0],
+                  vs_prog_data->uses_vertexid, vs_prog_data->uses_instanceid,
+                  get_surface_count(device, shader), get_sampler_count(device, shader));
++         fprintf(file, "VUE_MAP");
++         for (unsigned i = 0; i < 4; i++)
++            fprintf(file, " location%u_slot=%d", i,
++                    vs_prog_data->base.vue_map.varying_to_slot[VARYING_SLOT_VAR0 + i]);
++         fputc('\n', file);
+          fprintf(file, "3DSTATE_VS");
+          for (unsigned i = 0; i < GENX(3DSTATE_VS_length); i++)
+             fprintf(file, " %08x", vs_dwords[i]);
+@@ -1150,6 +1155,11 @@
+                  fs_prog_data->flat_inputs,
+                  get_surface_count(device, shader), get_sampler_count(device, shader),
+                  shader->bind_map.sampler_count, fs_prog_data->base.push_sizes[0], fs_prog_data->base.total_scratch);
++         fprintf(file, "URB_SETUP");
++         for (unsigned i = 0; i < 4; i++)
++            fprintf(file, " location%u_attribute=%d", i,
++                    fs_prog_data->urb_setup[VARYING_SLOT_VAR0 + i]);
++         fputc('\n', file);
+          fclose(file);
+       }
+    }

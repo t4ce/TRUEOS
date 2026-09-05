@@ -43,3 +43,27 @@ This proves compilation, extraction, ISA validity, payload layout, and the
 existing PS's exact binary equivalence. The metadata deliberately records
 that neither host image rendering nor bare-metal rendering was verified by
 this bake.
+
+## Hardware verification, 2026-09-05
+
+The separate end-to-end run on ADL-S UHD 770 (`8086:4680`, revision `0C`)
+successfully rendered QuadTexture's complete Intel Graphics logo using its
+authored UVs and indexed two-triangle path. The user confirmed the live camera
+image. The previous flat purple output was resolved by changing the sampled
+SIMD16 PS setup start from g2 to the compiler-selected g6; the shader machine
+code stayed unchanged. All ten host regression tests passed before deployment.
+
+The verified runtime ELF SHA-256 was
+`86ed951bcba465a62d6d70188190a571f9f7807c9a0d7f8f7d15dbcdbbfcbb05`
+and the ISO SHA-256 was
+`c9434412efdd641ba897c46fe4774ef86f70f8ec4980acadffcfebdbb83726fa`.
+The preserved log records `ps_setup_grf=6` and 51 sampled renderer returns,
+all complete with matching release tokens and no textured-submit error.
+This run did not reproduce the earlier `-32` failure.
+
+Local evidence is preserved outside the rotating captures in
+[`bld/quadtexture-uv-validation`](../../bld/quadtexture-uv-validation/):
+`setup-grf6-logo-camera.jpg`, `setup-grf6-logo-film.jpg`,
+`setup-grf6-success.log`, `setup-grf6-boot-receipt.json`, and
+`setup-grf6-verification.json`. The last file records source commit and
+artifact hashes. The generated bake metadata retains its compile-only scope.

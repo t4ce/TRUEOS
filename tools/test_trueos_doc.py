@@ -134,6 +134,8 @@ class TrueosDocTests(unittest.TestCase):
         self.assertEqual(data["discovery"]["path"], "/")
         download = next(route for route in data["routes"] if route["path"].startswith("/dl/<root-id>"))
         self.assertFalse(download["mutation"])
+        blob_confirm = next(route for route in data["routes"] if route["path"].startswith("/up-confirm"))
+        self.assertIn("without retransmitting", blob_confirm["effect"])
         self.assertIn("do not silently substitute an old file", data["screenshot_pull"][-1])
 
 

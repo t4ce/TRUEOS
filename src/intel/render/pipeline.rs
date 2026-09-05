@@ -25,6 +25,7 @@ const fn ordinary_vf_vertex_element_count(vertex_format: TriangleVertexFormat) -
         TriangleVertexFormat::Float2 | TriangleVertexFormat::Float3 => 1,
         TriangleVertexFormat::PosUv => 2,
         TriangleVertexFormat::PosNormal | TriangleVertexFormat::PosNormalUv => 3,
+        TriangleVertexFormat::PosNormalUvTangent => 5,
     }
 }
 
@@ -619,6 +620,7 @@ fn write_triangle_probe_state_with_flush(
         return Err("probe-viewport-translation");
     }
     let native_sampled = draw.native.is_some() && draw.sampled_texture.is_some();
+    let native_pbr = native_sampled && draw.pbr_material.is_some();
     let native_metallic_roughness = native_sampled && draw.metallic_roughness_texture.is_some();
     let binding_table_entries = if draw.native.is_some() {
         4usize
@@ -627,14 +629,18 @@ fn write_triangle_probe_state_with_flush(
     } else {
         1usize
     };
-    let ps_binding_table_entries = if native_metallic_roughness {
+    let ps_binding_table_entries = if native_pbr {
+        9usize
+    } else if native_metallic_roughness {
         4usize
     } else if native_sampled {
         3usize
     } else {
         0usize
     };
-    let surface_state_count = if native_metallic_roughness {
+    let surface_state_count = if native_pbr {
+        10usize
+    } else if native_metallic_roughness {
         6usize
     } else if native_sampled {
         5usize
@@ -686,6 +692,10 @@ fn write_triangle_probe_state_with_flush(
     cursor = sampler_state_offset
         .checked_add(SAMPLER_CACHE_LINE_DWORDS * core::mem::size_of::<u32>())
         .ok_or("probe-state-overflow")?;
+    let material_parameters_offset = cursor;
+    if native_pbr {
+        cursor = cursor.checked_add(64).ok_or("probe-state-overflow")?;
+    }
     let blend_state_offset = cursor;
     cursor = crate::intel::align_up(blend_state_offset + 64, 64).ok_or("probe-state-align")?;
     let color_calc_state_offset = cursor;
@@ -741,7 +751,11 @@ fn write_triangle_probe_state_with_flush(
         // The separately compiled PS consumes RT at BTI0 and the sampled
         // image at BTI2; stage-specific binding-table pointers make those
         // layouts coexist without aliasing the VS instance surface.
-        let ps_surface_indices: &[usize] = if native_metallic_roughness {
+        let ps_surface_indices: &[usize] = if native_pbr {
+            // Captured ADL PS: RT, reserved, camera, base, MR, normal,
+            // AO, emissive, material constants. BTI1 is not the camera.
+            &[0, 0, 1, 4, 5, 8, 7, 6, 9]
+        } else if native_metallic_roughness {
             &[0, 0, 4, 5]
         } else {
             &[0, 0, 4]
@@ -857,6 +871,34 @@ fn write_triangle_probe_state_with_flush(
             let start = surface_state_offset / 4 + 5 * 16;
             write_triangle_sampled_rgba8_surface_state(&mut dwords[start..start + 16], texture)?;
         }
+        if let Some(material) = draw.pbr_material {
+            let base = draw.sampled_texture.ok_or("probe-pbr-base-color")?;
+            let start = surface_state_offset / 4 + 4 * 16;
+            write_triangle_sampled_surface_state(&mut dwords[start..start + 16], base, true)?;
+            for (role, texture) in material.textures.into_iter().enumerate() {
+                // Missing optional maps still get valid descriptors. The
+                // shader uses the admitted presence mask for glTF defaults.
+                let texture = texture.unwrap_or(base);
+                if texture.sampler_flags != (crate::gpu::vgpu::SAMPLER_ADDRESS_U_REPEAT
+                    | crate::gpu::vgpu::SAMPLER_ADDRESS_V_REPEAT) {
+                    return Err("probe-pbr-sampler-mode");
+                }
+                let start = surface_state_offset / 4 + (5 + role) * 16;
+                write_triangle_sampled_surface_state(
+                    &mut dwords[start..start + 16], texture, role == 1,
+                )?;
+            }
+            dwords[material_parameters_offset / 4..material_parameters_offset / 4 + 16]
+                .copy_from_slice(&material.parameters);
+            let start = surface_state_offset / 4 + 9 * 16;
+            write_triangle_raw_buffer_surface_state(
+                &mut dwords[start..start + 16],
+                TriangleStorageBufferBinding {
+                    gpu_addr: draw.state_gpu_addr + material_parameters_offset as u64,
+                    byte_len: 64,
+                },
+            )?;
+        }
     } else if let Some(texture) = draw.sampled_texture {
         let start = surface_state_offset / 4 + 2 * 16;
         write_triangle_sampled_rgba8_surface_state(&mut dwords[start..start + 16], texture)?;
@@ -865,6 +907,13 @@ fn write_triangle_probe_state_with_flush(
     let samplers =
         &mut dwords[sampler_state_offset / 4..sampler_state_offset / 4 + SAMPLER_CACHE_LINE_DWORDS];
     write_nearest_repeat_sampler_cache_line(samplers);
+    if native_pbr {
+        // gfx12 SAMPLER_STATE: linear min/mag, normalized repeat, LOD0,
+        // sRGB decode enabled, and address rounding for linear filters.
+        for sampler in samplers.chunks_exact_mut(4) {
+            sampler.copy_from_slice(&[(1 << 14) | (1 << 17), 0, 0, 0x3F << 13]);
+        }
+    }
     if let Some(texture) = draw.sampled_texture
         && texture.sampler_flags
             != (crate::gpu::vgpu::SAMPLER_ADDRESS_U_REPEAT
@@ -1067,6 +1116,14 @@ fn write_triangle_sampled_rgba8_surface_state(
     surface: &mut [u32],
     texture: TriangleSampledTextureBinding,
 ) -> Result<(), &'static str> {
+    write_triangle_sampled_surface_state(surface, texture, false)
+}
+
+fn write_triangle_sampled_surface_state(
+    surface: &mut [u32],
+    texture: TriangleSampledTextureBinding,
+    srgb: bool,
+) -> Result<(), &'static str> {
     if surface.len() != 16
         || texture.width == 0
         || texture.height == 0
@@ -1076,7 +1133,7 @@ fn write_triangle_sampled_rgba8_surface_state(
     }
     surface.fill(0);
     surface[0] = (SURFTYPE_2D << 29)
-        | (SURFACE_FORMAT_R8G8B8A8_UNORM << 18)
+        | (if srgb { SURFACE_FORMAT_R8G8B8A8_UNORM_SRGB } else { SURFACE_FORMAT_R8G8B8A8_UNORM } << 18)
         | (SURFACE_HALIGN_4 << 14)
         | (SURFACE_VALIGN_4 << 16);
     surface[1] = (RENDER_MOCS << 24)
@@ -1332,6 +1389,11 @@ fn validate_triangle_native_draw_contract(
             enabled: false,
             step_rate: 0,
         },
+        TriangleVfInstancingState {
+            element_index: 4,
+            enabled: false,
+            step_rate: 0,
+        },
     ];
     let pos_normal = draw.vertex_format == TriangleVertexFormat::PosNormal
         && draw.vertex_stride == trueos_helio_artifact::churn_forward::VERTEX_STRIDE
@@ -1354,7 +1416,16 @@ fn validate_triangle_native_draw_contract(
         && native.vf_sgvs_dw1 == 0xE002_4002
         && native.vf_sgvs_2_dw1 == 0xB002_0002
         && native.vf_component_packing == [0x0000_0A77, 0, 0, 0];
-    if !(pos_normal || pos_normal_uv || pos_normal_sampled)
+    let pbr = draw.vertex_format == TriangleVertexFormat::PosNormalUvTangent
+        && draw.vertex_stride == 48
+        && draw.sampled_texture.is_some()
+        && draw.pbr_material.is_some()
+        && native.vertex_element_count == 5
+        && native.vf_sgvs_dw1 == 0xE004_4004
+        && native.vf_sgvs_2_dw1 == 0xB004_0004
+        && native.vf_component_packing == [0x000A_F377, 0, 0, 0];
+    if !(pos_normal || pos_normal_uv || pos_normal_sampled || pbr)
+        || (draw.pbr_material.is_some() && !pbr)
         || (draw.metallic_roughness_texture.is_some() && draw.sampled_texture.is_none())
         || draw.emissive_factor.iter().any(|value| !value.is_finite())
         || draw.index_buffer.is_none()
@@ -1455,6 +1526,7 @@ mod retained_native_matrix_draw_contract_tests {
             native: Some(native),
             sampled_texture: None,
             metallic_roughness_texture: None,
+        pbr_material: None,
             emissive_factor: [0.0; 3],
             state_gpu_addr: 0x2600_0000,
             rt_gpu_addr: 0x2700_0000,
@@ -3034,6 +3106,26 @@ fn encode_triangle_probe_batch(
                     VFCOMP_STORE_0,
                 )?;
             }
+            TriangleVertexFormat::PosNormalUvTangent => {
+                for (offset, format, components) in [
+                    (0, SURFACE_FORMAT_R32G32B32_FLOAT, 3),
+                    (12, SURFACE_FORMAT_R32G32B32_FLOAT, 3),
+                    (24, SURFACE_FORMAT_R32G32_FLOAT, 2),
+                    (32, SURFACE_FORMAT_R32G32B32A32_FLOAT, 4),
+                ] {
+                    push_vertex_element_state(
+                        batch_dwords, &mut cursor, 0, offset, format,
+                        VFCOMP_STORE_SRC, VFCOMP_STORE_SRC,
+                        if components >= 3 { VFCOMP_STORE_SRC } else { VFCOMP_STORE_0 },
+                        if components == 4 { VFCOMP_STORE_SRC } else { VFCOMP_STORE_1_FP },
+                    )?;
+                }
+                // Fifth element carries the compiler-selected instance IDs.
+                push_vertex_element_state(
+                    batch_dwords, &mut cursor, 31, 0, SURFACE_FORMAT_R32G32_UINT,
+                    VFCOMP_STORE_0, VFCOMP_STORE_0, VFCOMP_STORE_0, VFCOMP_STORE_0,
+                )?;
+            }
         }
     }
 
@@ -3285,7 +3377,8 @@ fn encode_triangle_probe_batch(
             | (sampler_count_encoding(pipeline.vs.meta.kernel.sampler_count) << 27);
         let applied_vs_grf_start =
             triangle_vs_dispatch_grf_start_register(pipeline.vs.meta.kernel.grf_start_register);
-        let vs_dw6 = (1 << 11) | (applied_vs_grf_start << 20);
+        let vs_dw6 = (u32::from(front_end_contract.vs_urb_read_length) << 11)
+            | (applied_vs_grf_start << 20);
         let vs_dw7 = 1
             | (1 << 2)
             | (1 << 10)

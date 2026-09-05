@@ -153,7 +153,9 @@ const GPU_VA_RESIDENT_SCENE_STATE_BASE: u64 = 0x3000_0000;
 // The retained transform secondary state blob occupies 8 KiB. Keep the
 // renderer's bounded batch reservation inside the fixed Render1 GGTT window.
 const RESIDENT_SCENE_MAX_DRAWS: usize = 340;
-const RESIDENT_SCENE_STATE_SLOT_BYTES: usize = 2 * 4096;
+// The full material VS/PS plus relocated optional GS code and aligned
+// descriptors exceed 8 KiB. Every draw keeps its own complete 16 KiB slot.
+const RESIDENT_SCENE_STATE_SLOT_BYTES: usize = 4 * 4096;
 const RESIDENT_SCENE_STATE_BYTES: usize =
     (RESIDENT_SCENE_MAX_DRAWS + 1) * RESIDENT_SCENE_STATE_SLOT_BYTES;
 const RESIDENT_SCENE_PRIMARY_BATCH_BYTES: usize = 5 * 4096;
@@ -357,6 +359,8 @@ const SURFTYPE_NULL: u32 = 7;
 const SURFACE_FORMAT_RAW: u32 = 0x1FF;
 const SURFACE_FORMAT_B8G8R8A8_UNORM: u32 = 192;
 const SURFACE_FORMAT_R8G8B8A8_UNORM: u32 = 199;
+// Mesa ISL / gfx12 SURFACE_FORMAT: decode RGB before sampler filtering.
+const SURFACE_FORMAT_R8G8B8A8_UNORM_SRGB: u32 = 200;
 const SURFACE_FORMAT_R32G32B32A32_FLOAT: u32 = 0;
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const SURFACE_FORMAT_R32G32B32A32_UINT: u32 = 2;
@@ -785,6 +789,7 @@ const TRIANGLE_VS_URB_OUTPUT_LENGTH_OVERRIDE: Option<u8> = None;
 const TRIANGLE_DEFAULT_FRONT_END_CONTRACT: TriangleFrontEndContract = TriangleFrontEndContract {
     label: "mesa-like",
     vs_urb_output_length_override: TRIANGLE_VS_URB_OUTPUT_LENGTH_OVERRIDE,
+            vs_urb_read_length: 1,
     sbe_read_offset: 1,
     sbe_read_length: 1,
     force_sbe_read_offset: true,
@@ -797,6 +802,7 @@ const VS_DRAW_FRONTIER_CONTRACTS: [TriangleFrontEndContract; 4] = [
     TriangleFrontEndContract {
         label: "slot0-read",
         vs_urb_output_length_override: TRIANGLE_VS_URB_OUTPUT_LENGTH_OVERRIDE,
+            vs_urb_read_length: 1,
         sbe_read_offset: 0,
         sbe_read_length: 1,
         force_sbe_read_offset: true,
@@ -806,6 +812,7 @@ const VS_DRAW_FRONTIER_CONTRACTS: [TriangleFrontEndContract; 4] = [
     TriangleFrontEndContract {
         label: "urb2",
         vs_urb_output_length_override: Some(2),
+            vs_urb_read_length: 1,
         sbe_read_offset: 1,
         sbe_read_length: 1,
         force_sbe_read_offset: true,
@@ -815,6 +822,7 @@ const VS_DRAW_FRONTIER_CONTRACTS: [TriangleFrontEndContract; 4] = [
     TriangleFrontEndContract {
         label: "urb2-slot0-read",
         vs_urb_output_length_override: Some(2),
+            vs_urb_read_length: 1,
         sbe_read_offset: 0,
         sbe_read_length: 1,
         force_sbe_read_offset: true,
@@ -826,6 +834,7 @@ const VS_DRAW_FRONTIER_CONTRACTS: [TriangleFrontEndContract; 4] = [
 const VS_DRAW_SBE_READ0_CONTRACT: TriangleFrontEndContract = TriangleFrontEndContract {
     label: "sbe-read0",
     vs_urb_output_length_override: TRIANGLE_VS_URB_OUTPUT_LENGTH_OVERRIDE,
+            vs_urb_read_length: 1,
     sbe_read_offset: 0,
     sbe_read_length: 0,
     force_sbe_read_offset: true,
@@ -836,6 +845,7 @@ const VS_DRAW_SBE_READ0_CONTRACT: TriangleFrontEndContract = TriangleFrontEndCon
 const VF_VUE_REAL_VS_FRONT_END_CONTRACT: TriangleFrontEndContract = TriangleFrontEndContract {
     label: "vf-vue-clip",
     vs_urb_output_length_override: TRIANGLE_VS_URB_OUTPUT_LENGTH_OVERRIDE,
+            vs_urb_read_length: 1,
     sbe_read_offset: 1,
     sbe_read_length: 1,
     force_sbe_read_offset: true,
