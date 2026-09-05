@@ -79,6 +79,8 @@ pub(crate) struct TrianglePipeline {
 
 #[path = "../../crates/trueos-shader/generated_adjacency_gs.rs"]
 mod generated_adjacency_gs;
+#[path = "../../crates/trueos-shader/generated_clip_position3_uv_texture.rs"]
+mod generated_clip_position3_uv_texture;
 #[path = "../../crates/trueos-shader/generated_triangle.rs"]
 mod generated_triangle;
 
@@ -108,6 +110,10 @@ pub(crate) fn triangle_pipeline() -> &'static TrianglePipeline {
 
 pub(crate) fn triangle_pipeline_simd16() -> &'static TrianglePipeline {
     generated_triangle::triangle_pipeline_simd16()
+}
+
+pub(crate) fn clip_position3_uv_texture_pipeline() -> &'static TrianglePipeline {
+    generated_clip_position3_uv_texture::clip_position3_uv_texture_pipeline()
 }
 
 pub(crate) fn triangle_pipeline_ps_eot() -> &'static TrianglePipeline {

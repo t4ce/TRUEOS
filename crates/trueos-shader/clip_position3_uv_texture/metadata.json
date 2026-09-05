@@ -80,11 +80,32 @@
   "ps_bytes": 160,
   "ps_sha256": "220dd52a7439b428f150f3e363ae253ec2c15cd5804a06c3092faacbfd46e7e2",
   "reused_fragment": "picasso/picasso-retained-textured-forward/retained_textured_forward.ps.simd16.bin",
+  "sbe": {
+    "attributes": 1,
+    "read_length_32b": 1,
+    "read_offset_32b": 1
+  },
   "schema": 1,
   "vertex_attributes": [
     "float32x3@0",
     "float32x2@12"
   ],
+  "vertex_compiler_state": {
+    "binding_table_entries": 0,
+    "dispatch_grf_start": 2,
+    "max_threads": 546,
+    "position_slot": 1,
+    "sampler_count": 0,
+    "urb_entry_64b": 1,
+    "urb_read_length": 1,
+    "uses_instanceid": 0,
+    "uses_vertexid": 0,
+    "uv_slot": 2,
+    "ver": 12,
+    "verx10": 120,
+    "vf_packing0": 55,
+    "vue_slots": 3
+  },
   "vertex_input_components": "xyz,uv",
   "vertex_stride_bytes": 20,
   "vertex_varyings": [
