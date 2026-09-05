@@ -54,6 +54,7 @@ exclude = [
     # nested package needs its own entry.
     "vendor/CrabUSB/usb-host",
     "vendor/tinyaudio",
+    "tools/helio-churn-forward-capture",
 ]
 
 [[bin]]

@@ -1,0 +1,1233 @@
+add(16)         g111<1>UW       g1.4<1,4,0>UW   0x11001010V     { align1 WE_all 1H };
+mov(1)          f1<1>UW         g1.14<0,1,0>UW                  { align1 WE_all 1N };
+mad(8)          g114<1>F        g7.3<0,1,0>F    g7.1<0,1,0>F    g3<1,1,1>F { align1 1Q };
+mad(8)          g116<1>F        g7.7<0,1,0>F    g7.5<0,1,0>F    g3<1,1,1>F { align1 1Q };
+mad(8)          g118<1>F        g8.3<0,1,0>F    g8.1<0,1,0>F    g3<1,1,1>F { align1 1Q };
+mad(8)          g120<1>F        g9.3<0,1,0>F    g9.1<0,1,0>F    g3<1,1,1>F { align1 1Q };
+mad(8)          g121<1>F        g9.7<0,1,0>F    g9.5<0,1,0>F    g3<1,1,1>F { align1 1Q };
+mad(8)          g122<1>F        g11.3<0,1,0>F   g11.1<0,1,0>F   g3<1,1,1>F { align1 1Q };
+mad(8)          g123<1>F        g11.7<0,1,0>F   g11.5<0,1,0>F   g3<1,1,1>F { align1 1Q };
+mad(8)          g124<1>F        g12.3<0,1,0>F   g12.1<0,1,0>F   g3<1,1,1>F { align1 1Q };
+mad(8)          g125<1>F        g13.3<0,1,0>F   g13.1<0,1,0>F   g3<1,1,1>F { align1 1Q };
+mad(8)          g126<1>F        g17.3<0,1,0>F   g17.1<0,1,0>F   g3<1,1,1>F { align1 1Q };
+mad(8)          g127<1>F        g17.7<0,1,0>F   g17.5<0,1,0>F   g3<1,1,1>F { align1 1Q };
+mad(8)          g0<1>F          g19.3<0,1,0>F   g19.1<0,1,0>F   g3<1,1,1>F { align1 1Q };
+mad(8)          g4<1>F          g20.7<0,1,0>F   g20.5<0,1,0>F   g3<1,1,1>F { align1 1Q };
+cmp.z.f0.0(8)   g10<1>D         g6.4<0,1,0>D    1D              { align1 WE_all 1Q };
+mad(8)          g1<1>F          g19.7<0,1,0>F   g19.5<0,1,0>F   g3<1,1,1>F { align1 1Q };
+mov(8)          g109<1>UW       g111<8,4,1>UW                   { align1 1Q };
+mov(8)          g110<1>UW       g111.4<8,4,1>UW                 { align1 1Q };
+mad(8)          g115<1>F        g114<8,8,1>F    g7.0<0,1,0>F    g2<1,1,1>F { align1 1Q compacted };
+mad(8)          g117<1>F        g116<8,8,1>F    g7.4<0,1,0>F    g2<1,1,1>F { align1 1Q compacted };
+mad(8)          g119<1>F        g118<8,8,1>F    g8.0<0,1,0>F    g2<1,1,1>F { align1 1Q compacted };
+mad(8)          g21<1>F         g120<8,8,1>F    g9.0<0,1,0>F    g2<1,1,1>F { align1 1Q compacted };
+mad(8)          g22<1>F         g121<8,8,1>F    g9.4<0,1,0>F    g2<1,1,1>F { align1 1Q compacted };
+mad(8)          g103<1>F        g122<8,8,1>F    g11.0<0,1,0>F   g2<1,1,1>F { align1 1Q compacted };
+mad(8)          g104<1>F        g123<8,8,1>F    g11.4<0,1,0>F   g2<1,1,1>F { align1 1Q compacted };
+mad(8)          g105<1>F        g124<8,8,1>F    g12.0<0,1,0>F   g2<1,1,1>F { align1 1Q compacted };
+mad(8)          g106<1>F        g125<8,8,1>F    g13.0<0,1,0>F   g2<1,1,1>F { align1 1Q compacted };
+mad(8)          g37<1>F         g126<8,8,1>F    g17.0<0,1,0>F   g2<1,1,1>F { align1 1Q compacted };
+mad(8)          g38<1>F         g127<8,8,1>F    g17.4<0,1,0>F   g2<1,1,1>F { align1 1Q compacted };
+mov.nz.f0.0(8)  null<1>D        g10<0,1,0>D                     { align1 1Q };
+mad(8)          g107<1>F        g0<8,8,1>F      g19.0<0,1,0>F   g2<1,1,1>F { align1 1Q compacted };
+mad(8)          g5<1>F          g4<8,8,1>F      g20.4<0,1,0>F   g2<1,1,1>F { align1 1Q compacted };
+mov(8)          g112<1>F        g109<8,8,1>UW                   { align1 1Q compacted };
+mov(8)          g113<1>F        g110<8,8,1>UW                   { align1 1Q compacted };
+mad(8)          g108<1>F        g1<8,8,1>F      g19.4<0,1,0>F   g2<1,1,1>F { align1 1Q compacted };
+add(8)          g101<1>F        g112<8,8,1>F    0x3f000000F  /* 0.5F */ { align1 1Q @3 compacted };
+add(8)          g102<1>F        g113<8,8,1>F    0x3f000000F  /* 0.5F */ { align1 1Q @3 compacted };
+math inv(8)     g109<1>F        g5<8,8,1>F      null<8,8,1>F    { align1 1Q @5 $0 };
+(+f0.0) if(8)   JIP:  LABEL1          UIP:  LABEL0              { align1 1Q };
+mul(8)          g11<1>F         -g107<8,8,1>F   0x3f000000F  /* 0.5F */ { align1 1Q @7 compacted };
+mul(8)          g13<1>F         g108<8,8,1>F    0x3f000000F  /* 0.5F */ { align1 1Q @5 compacted };
+mov(8)          g24<1>UD        0x3f800000UD                    { align1 1Q };
+mov(8)          g23<1>UD        0x00000000UD                    { align1 1Q };
+mov(8)          g28<1>UD        0x00000000UD                    { align1 1Q };
+mov(8)          g27<1>UD        0x3f800000UD                    { align1 1Q };
+mov(8)          g26<1>UD        0x00000000UD                    { align1 1Q };
+mov(8)          g25<1>UD        0x00000000UD                    { align1 1Q };
+mov(8)          g32<1>UD        0x00000000UD                    { align1 1Q };
+mov(8)          g31<1>UD        0x00000000UD                    { align1 1Q };
+mov(8)          g30<1>UD        0x00000000UD                    { align1 1Q };
+mov(8)          g29<1>UD        0x00000000UD                    { align1 1Q };
+mov(8)          g36<1>UD        0x00000000UD                    { align1 1Q };
+mov(8)          g35<1>UD        0x00000000UD                    { align1 1Q };
+mov(8)          g34<1>UD        0x00000000UD                    { align1 1Q };
+mov(8)          g33<1>UD        0x00000000UD                    { align1 1Q };
+mov(8)          g38<1>UD        0x00000000UD                    { align1 1Q };
+mov(8)          g37<1>UD        0x00000000UD                    { align1 1Q };
+mad(8)          g12<1>F         0xb800HF        g109<8,8,1>F    g11<1,1,1>F { align1 1Q $0.dst };
+mad(8)          g14<1>F         0xb800HF        g109<8,8,1>F    g13<1,1,1>F { align1 1Q };
+mad(8)          g124<1>F        g101<8,8,1>F    g6.5<0,1,0>F    g12<1,1,1>F { align1 1Q @2 compacted };
+mad(8)          g125<1>F        g102<8,8,1>F    g6.6<0,1,0>F    g14<1,1,1>F { align1 1Q @2 compacted };
+else(8)         JIP:  LABEL0          UIP:  LABEL0              { align1 1Q };
+
+LABEL1:
+mul(8)          g110<1>D        g15.3<0,1,0>D   352W            { align1 1Q compacted };
+cmp.z.f0.0(8)   g18<1>D         g6.4<0,1,0>D    2D              { align1 WE_all 1Q };
+send(8)         g41UD           g110UD          nullUD          0x02206c0c                0x00000000
+                hdc1 MsgDesc: (untyped surface read, Surface = 12, SIMD8, Mask = 0xc)  mlen 1 ex_mlen 0 rlen 2 { align1 1Q @2 $0 };
+add(8)          g16<1>D         g110<8,8,1>D    16D             { align1 1Q $0.src compacted };
+add(8)          g17<1>D         g110<8,8,1>D    32D             { align1 1Q compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @3 };
+mov.nz.f0.0(8)  null<1>D        g18<0,1,0>D                     { align1 1Q };
+send(8)         g43UD           g16UD           nullUD          0x0240600c                0x00000000
+                hdc1 MsgDesc: (untyped surface read, Surface = 12, SIMD8, Mask = 0x0)  mlen 1 ex_mlen 0 rlen 4 { align1 1Q @3 $0 };
+send(8)         g47UD           g17UD           nullUD          0x02206c0c                0x00000000
+                hdc1 MsgDesc: (untyped surface read, Surface = 12, SIMD8, Mask = 0xc)  mlen 1 ex_mlen 0 rlen 2 { align1 1Q @2 $0 };
+(+f0.0) if(8)   JIP:  LABEL3          UIP:  LABEL2              { align1 1Q };
+cmp.z.f0.0(8)   null<1>D        g41<8,8,1>D     -1D             { align1 1Q $0.dst };
+(+f0.0) if(8)   JIP:  LABEL5          UIP:  LABEL4              { align1 1Q };
+mov(8)          g23<1>UD        0x3f800000UD                    { align1 1Q };
+mov(8)          g98<1>UD        0x3f800000UD                    { align1 1Q };
+mov(8)          g99<1>UD        0x3f800000UD                    { align1 1Q };
+else(8)         JIP:  LABEL4          UIP:  LABEL4              { align1 1Q };
+
+LABEL5:
+frc(8)          g19<1>F         g21<8,8,1>F                     { align1 1Q compacted };
+cmp.l.f0.0(8)   null<1>D        g42<8,8,1>D     0D              { align1 1Q $0.dst };
+frc(8)          g49<1>F         g22<8,8,1>F                     { align1 1Q compacted };
+shl(8)          g60<1>D         g41<8,8,1>D     0x00000003UD    { align1 1Q };
+(+f0.0) sel(8)  g20<1>UD        g19<8,8,1>UD    g21<8,8,1>UD    { align1 1Q @4 };
+(+f0.0) sel(8)  g50<1>UD        g49<8,8,1>UD    g22<8,8,1>UD    { align1 1Q @3 };
+add(8)          g61<1>D         g60<8,8,1>D     32D             { align1 1Q @3 compacted };
+add(8)          g62<1>D         g60<8,8,1>D     2080D           { align1 1Q };
+mul(8)          g53<1>F         g20<8,8,1>F     g45<8,8,1>F     { align1 1Q @4 $0.dst compacted };
+mul(8)          g57<1>F         g50<8,8,1>F     g46<8,8,1>F     { align1 1Q @4 $0.dst compacted };
+send(8)         g49UD           g61UD           nullUD          0x02406009                0x00000000
+                hdc1 MsgDesc: (untyped surface read, Surface = 9, SIMD8, Mask = 0x0)  mlen 1 ex_mlen 0 rlen 4 { align1 1Q @1 $0 };
+add(8)          g63<1>UD        g62<8,8,1>UD    0x00000004UD    { align1 1Q @3 compacted };
+mad(8)          g58<1>F         g43<8,8,1>F     g48<8,8,1>F     g53<1,1,1>F { align1 1Q @3 $0.dst compacted };
+mad(8)          g59<1>F         g44<8,8,1>F     g47<8,8,1>F     g53<1,1,1>F { align1 1Q $0.dst compacted };
+send(8)         g53UD           g63UD           nullUD          0x02406009                0x00000000
+                hdc1 MsgDesc: (untyped surface read, Surface = 9, SIMD8, Mask = 0x0)  mlen 1 ex_mlen 0 rlen 4 { align1 1Q @1 $0 };
+mad(8)          g74<1>F         g58<8,8,1>F     g47<8,8,1>F     -g57<1,1,1>F { align1 1Q @2 compacted };
+mad(8)          g75<1>F         g59<8,8,1>F     g48<8,8,1>F     g57<1,1,1>F { align1 1Q @2 compacted };
+
+LABEL8:
+mov(1)          g8<1>UD         mask0<0,1,0>UD                  { align1 WE_all 1N @1 compacted };
+and(1)          g8<1>UD         g8<0,1,0>UD     0xffffffffUD    { align1 WE_all 1N @1 };
+fbl(1)          g89<1>UD        g8<0,1,0>UD                     { align1 WE_all 1N @1 };
+shl(1)          a0<1>UD         g89<0,1,0>UD    0x00000002UD    { align1 WE_all 1N @1 $0.dst };
+add(1)          a0<1>UD         a0<0,1,0>UD     0x00000600UD    { align1 WE_all 1N @1 };
+mov(1)          g94<1>UD        g[a0 32]<0,1,0>UD               { align1 WE_all 1N @1 };
+shl(1)          a0<1>UD         g89<0,1,0>UD    0x00000002UD    { align1 WE_all 1N $0.dst };
+add(1)          a0<1>UD         a0<0,1,0>UD     0x00000600UD    { align1 WE_all 1N @1 };
+mov(1)          g95<1>UD        g[a0 160]<0,1,0>UD              { align1 WE_all 1N @1 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @2 };
+mov(8)          g64<1>D         g94<0,1,0>D                     { align1 1Q };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @2 };
+mov(8)          g65<1>D         g95<0,1,0>D                     { align1 1Q };
+cmp.z.f0.0(8)   g66<1>D         g95<0,1,0>D     g53<8,8,1>D     { align1 1Q compacted };
+cmp.z.f0.0(8)   g67<1>D         g94<0,1,0>D     g49<8,8,1>D     { align1 1Q compacted };
+and.nz.f0.0(8)  null<1>UD       g67<8,8,1>UD    g66<8,8,1>UD    { align1 1Q @1 };
+(+f0.0) if(8)   JIP:  LABEL6          UIP:  LABEL6              { align1 1Q };
+mov(1)          g9<1>UD         mask0<0,1,0>UD                  { align1 WE_all 1N @1 compacted };
+and(1)          g9<1>UD         g9<0,1,0>UD     0xffffffffUD    { align1 WE_all 1N @1 };
+mov(8)          g73<1>UD        0x00000000UD                    { align1 WE_all 1Q $0.src };
+fbl(1)          g68<1>UD        g9<0,1,0>UD                     { align1 WE_all 1N @2 };
+shl(1)          a0<1>UD         g68<0,1,0>UD    0x00000002UD    { align1 WE_all 1N @1 };
+add(1)          a0<1>UD         a0<0,1,0>UD     0x00000800UD    { align1 WE_all 1N @1 };
+mov(1)          g69<1>UD        g[a0]<0,1,0>UD                  { align1 WE_all 1N @1 };
+shl(1)          a0<1>UD         g68<0,1,0>UD    0x00000002UD    { align1 WE_all 1N @7 };
+add(1)          a0<1>UD         a0<0,1,0>UD     0x00000800UD    { align1 WE_all 1N @1 };
+mov(1)          g70<1>UD        g[a0 32]<0,1,0>UD               { align1 WE_all 1N @1 };
+mov(1)          g73.3<1>UD      g70<0,1,0>D                     { align1 WE_all 1N @1 };
+or(1)           a0.1<1>UD       g69<0,1,0>UD    0x00000082UD    { align1 WE_all 1N @3 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @2 };
+send(8)         g90UD           g73UD           g74UD           0x024a00fc                a0.1<0>UD
+                sampler MsgDesc: sample SIMD8 Surface = 252 Sampler = 0  mlen 1 rlen 4 { align1 1Q $0 AccWrEnable FusionCtrl };
+break(8)        JIP:  LABEL6          UIP:  LABEL7              { align1 1Q };
+
+LABEL6:
+endif(8)        JIP:  LABEL7                                    { align1 1Q };
+
+LABEL7:
+while(8)        JIP:  LABEL8                                    { align1 1Q };
+mov(8)          g23<1>UD        g92<8,8,1>UD                    { align1 1Q $0.dst };
+mov(8)          g99<1>UD        g90<8,8,1>UD                    { align1 1Q $0.dst };
+mov(8)          g98<1>UD        g91<8,8,1>UD                    { align1 1Q $0.dst };
+
+LABEL4:
+endif(8)        JIP:  LABEL9                                    { align1 1Q };
+mul(8)          g71<1>F         -g107<8,8,1>F   0x3f000000F  /* 0.5F */ { align1 1Q compacted };
+mul(8)          g73<1>F         g108<8,8,1>F    0x3f000000F  /* 0.5F */ { align1 1Q $0.src compacted };
+mov(8)          g24<1>UD        0x3f800000UD                    { align1 1Q };
+mov(8)          g28<1>UD        0x00000000UD                    { align1 1Q };
+mov(8)          g27<1>UD        0x3f800000UD                    { align1 1Q };
+mov(8)          g26<1>UD        0x00000000UD                    { align1 1Q };
+mov(8)          g25<1>UD        0x00000000UD                    { align1 1Q };
+mov(8)          g32<1>UD        0x00000000UD                    { align1 1Q };
+mov(8)          g31<1>UD        0x00000000UD                    { align1 1Q };
+mov(8)          g30<1>UD        0x00000000UD                    { align1 1Q };
+mov(8)          g29<1>UD        0x00000000UD                    { align1 1Q };
+mov(8)          g36<1>UD        0x00000000UD                    { align1 1Q };
+mov(8)          g35<1>UD        0x00000000UD                    { align1 1Q };
+mov(8)          g34<1>UD        0x00000000UD                    { align1 1Q };
+mov(8)          g33<1>UD        0x00000000UD                    { align1 1Q };
+mov(8)          g38<1>UD        0x00000000UD                    { align1 1Q };
+mov(8)          g37<1>UD        0x00000000UD                    { align1 1Q };
+mad(8)          g72<1>F         0xb800HF        g109<8,8,1>F    g71<1,1,1>F { align1 1Q $0.dst };
+mad(8)          g74<1>F         0xb800HF        g109<8,8,1>F    g73<1,1,1>F { align1 1Q $0.src };
+mad(8)          g124<1>F        g101<8,8,1>F    g6.5<0,1,0>F    g72<1,1,1>F { align1 1Q @2 compacted };
+mad(8)          g125<1>F        g102<8,8,1>F    g6.6<0,1,0>F    g74<1,1,1>F { align1 1Q @2 compacted };
+
+LABEL9:
+else(8)         JIP:  LABEL2          UIP:  LABEL2              { align1 1Q };
+
+LABEL3:
+mul(8)          g75<1>F         g119<8,8,1>F    g119<8,8,1>F    { align1 1Q $0.src compacted };
+mul(8)          g111<1>D        g15.3<0,1,0>D   96W             { align1 1Q compacted };
+add(8)          g80<1>D         g110<8,8,1>D    96D             { align1 1Q compacted };
+add(8)          g81<1>D         g110<8,8,1>D    112D            { align1 1Q compacted };
+add(8)          g82<1>D         g110<8,8,1>D    128D            { align1 1Q compacted };
+cmp.z.f0.0(8)   g83<1>D         g6.4<0,1,0>D    3D              { align1 WE_all 1Q };
+mad(8)          g76<1>F         g75<8,8,1>F     g117<8,8,1>F    g117<1,1,1>F { align1 1Q @6 compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+send(8)         g54UD           g111UD          nullUD          0x0240600b                0x00000000
+                hdc1 MsgDesc: (untyped surface read, Surface = 11, SIMD8, Mask = 0x0)  mlen 1 ex_mlen 0 rlen 4 { align1 1Q @6 $1 };
+add(8)          g79<1>D         g111<8,8,1>D    32D             { align1 1Q $1.src compacted };
+send(8)         g62UD           g80UD           nullUD          0x02206c0c                0x00000000
+                hdc1 MsgDesc: (untyped surface read, Surface = 12, SIMD8, Mask = 0xc)  mlen 1 ex_mlen 0 rlen 2 { align1 1Q @6 $0 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @5 };
+send(8)         g64UD           g81UD           nullUD          0x0240600c                0x00000000
+                hdc1 MsgDesc: (untyped surface read, Surface = 12, SIMD8, Mask = 0x0)  mlen 1 ex_mlen 0 rlen 4 { align1 1Q $0 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @4 };
+send(8)         g68UD           g82UD           nullUD          0x02206c0c                0x00000000
+                hdc1 MsgDesc: (untyped surface read, Surface = 12, SIMD8, Mask = 0xc)  mlen 1 ex_mlen 0 rlen 2 { align1 1Q $0 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @3 };
+mov.nz.f0.0(8)  null<1>D        g83<0,1,0>D                     { align1 1Q };
+send(8)         g58UD           g79UD           nullUD          0x0240600b                0x00000000
+                hdc1 MsgDesc: (untyped surface read, Surface = 11, SIMD8, Mask = 0x0)  mlen 1 ex_mlen 0 rlen 4 { align1 1Q @2 $0 };
+mad(8)          g77<1>F         g76<8,8,1>F     g115<8,8,1>F    g115<1,1,1>F { align1 1Q @3 compacted };
+math rsq(8)     g78<1>F         g77<8,8,1>F     null<8,8,1>F    { align1 1Q @1 $0 };
+mul(8)          g25<1>F         g115<8,8,1>F    g78<8,8,1>F     { align1 1Q $0.dst compacted };
+mul(8)          g26<1>F         g117<8,8,1>F    g78<8,8,1>F     { align1 1Q compacted };
+mul(8)          g27<1>F         g119<8,8,1>F    g78<8,8,1>F     { align1 1Q compacted };
+(+f0.0) if(8)   JIP:  LABEL11         UIP:  LABEL10             { align1 1Q };
+cmp.z.f0.0(8)   null<1>D        g41<8,8,1>D     -1D             { align1 1Q $0.dst };
+(+f0.0) if(8)   JIP:  LABEL13         UIP:  LABEL12             { align1 1Q };
+mov(8)          g119<1>UD       0x3f800000UD                    { align1 1Q };
+mov(8)          g118<1>UD       0x3f800000UD                    { align1 1Q };
+mov(8)          g117<1>UD       0x3f800000UD                    { align1 1Q };
+mov(8)          g116<1>UD       0x3f800000UD                    { align1 1Q };
+else(8)         JIP:  LABEL12         UIP:  LABEL12             { align1 1Q };
+
+LABEL13:
+frc(8)          g84<1>F         g21<8,8,1>F                     { align1 1Q compacted };
+cmp.l.f0.0(8)   null<1>D        g42<8,8,1>D     0D              { align1 1Q $0.dst };
+frc(8)          g86<1>F         g22<8,8,1>F                     { align1 1Q compacted };
+shl(8)          g92<1>D         g41<8,8,1>D     0x00000003UD    { align1 1Q };
+(+f0.0) sel(8)  g85<1>UD        g84<8,8,1>UD    g21<8,8,1>UD    { align1 1Q @4 };
+(+f0.0) sel(8)  g87<1>UD        g86<8,8,1>UD    g22<8,8,1>UD    { align1 1Q @3 };
+add(8)          g93<1>D         g92<8,8,1>D     32D             { align1 1Q @3 $0.dst compacted };
+add(8)          g94<1>D         g92<8,8,1>D     2080D           { align1 1Q };
+mul(8)          g88<1>F         g85<8,8,1>F     g45<8,8,1>F     { align1 1Q @4 $0.dst compacted };
+mul(8)          g89<1>F         g87<8,8,1>F     g46<8,8,1>F     { align1 1Q @4 $0.dst compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @4 };
+send(8)         g70UD           g93UD           nullUD          0x02406009                0x00000000
+                hdc1 MsgDesc: (untyped surface read, Surface = 9, SIMD8, Mask = 0x0)  mlen 1 ex_mlen 0 rlen 4 { align1 1Q $0 };
+add(8)          g95<1>UD        g94<8,8,1>UD    0x00000004UD    { align1 1Q @3 compacted };
+mad(8)          g90<1>F         g43<8,8,1>F     g48<8,8,1>F     g88<1,1,1>F { align1 1Q @3 $0.dst compacted };
+mad(8)          g91<1>F         g44<8,8,1>F     g47<8,8,1>F     g88<1,1,1>F { align1 1Q $0.dst compacted };
+send(8)         g74UD           g95UD           nullUD          0x02406009                0x00000000
+                hdc1 MsgDesc: (untyped surface read, Surface = 9, SIMD8, Mask = 0x0)  mlen 1 ex_mlen 0 rlen 4 { align1 1Q @3 $0 };
+mad(8)          g84<1>F         g90<8,8,1>F     g47<8,8,1>F     -g89<1,1,1>F { align1 1Q @2 compacted };
+mad(8)          g85<1>F         g91<8,8,1>F     g48<8,8,1>F     g89<1,1,1>F { align1 1Q @2 compacted };
+
+LABEL16:
+mov(1)          g10<1>UD        mask0<0,1,0>UD                  { align1 WE_all 1N @1 compacted };
+and(1)          g10<1>UD        g10<0,1,0>UD    0xffffffffUD    { align1 WE_all 1N @1 };
+fbl(1)          g96<1>UD        g10<0,1,0>UD                    { align1 WE_all 1N @1 };
+shl(1)          a0<1>UD         g96<0,1,0>UD    0x00000002UD    { align1 WE_all 1N @1 $0.dst };
+add(1)          a0<1>UD         a0<0,1,0>UD     0x00000800UD    { align1 WE_all 1N @1 };
+mov(1)          g112<1>UD       g[a0 192]<0,1,0>UD              { align1 WE_all 1N @1 };
+shl(1)          a0<1>UD         g96<0,1,0>UD    0x00000002UD    { align1 WE_all 1N $0.dst };
+add(1)          a0<1>UD         a0<0,1,0>UD     0x00000800UD    { align1 WE_all 1N @1 };
+mov(1)          g113<1>UD       g[a0 320]<0,1,0>UD              { align1 WE_all 1N @1 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @2 };
+mov(8)          g96<1>D         g112<0,1,0>D                    { align1 1Q };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @2 };
+mov(8)          g97<1>D         g113<0,1,0>D                    { align1 1Q };
+cmp.z.f0.0(8)   g100<1>D        g113<0,1,0>D    g74<8,8,1>D     { align1 1Q compacted };
+cmp.z.f0.0(8)   g112<1>D        g112<0,1,0>D    g70<8,8,1>D     { align1 1Q compacted };
+and.nz.f0.0(8)  null<1>UD       g112<8,8,1>UD   g100<8,8,1>UD   { align1 1Q @1 };
+(+f0.0) if(8)   JIP:  LABEL14         UIP:  LABEL14             { align1 1Q };
+mov(1)          g11<1>UD        mask0<0,1,0>UD                  { align1 WE_all 1N @1 compacted };
+and(1)          g11<1>UD        g11<0,1,0>UD    0xffffffffUD    { align1 WE_all 1N @1 };
+mov(8)          g78<1>UD        0x00000000UD                    { align1 WE_all 1Q $0.src };
+fbl(1)          g113<1>UD       g11<0,1,0>UD                    { align1 WE_all 1N @2 };
+shl(1)          a0<1>UD         g113<0,1,0>UD   0x00000002UD    { align1 WE_all 1N @1 };
+add(1)          a0<1>UD         a0<0,1,0>UD     0x00000c00UD    { align1 WE_all 1N @1 };
+mov(1)          g114<1>UD       g[a0]<0,1,0>UD                  { align1 WE_all 1N @1 };
+shl(1)          a0<1>UD         g113<0,1,0>UD   0x00000002UD    { align1 WE_all 1N @7 };
+add(1)          a0<1>UD         a0<0,1,0>UD     0x00000c00UD    { align1 WE_all 1N @1 };
+mov(1)          g115<1>UD       g[a0 32]<0,1,0>UD               { align1 WE_all 1N @1 };
+mov(1)          g78.3<1>UD      g115<0,1,0>D                    { align1 WE_all 1N @1 };
+or(1)           a0.1<1>UD       g114<0,1,0>UD   0x00000082UD    { align1 WE_all 1N @3 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @2 };
+send(8)         g91UD           g78UD           g84UD           0x024a00fc                a0.1<0>UD
+                sampler MsgDesc: sample SIMD8 Surface = 252 Sampler = 0  mlen 1 rlen 4 { align1 1Q $0 AccWrEnable FusionCtrl };
+break(8)        JIP:  LABEL14         UIP:  LABEL15             { align1 1Q };
+
+LABEL14:
+endif(8)        JIP:  LABEL15                                   { align1 1Q };
+
+LABEL15:
+while(8)        JIP:  LABEL16                                   { align1 1Q };
+mov(8)          g119<1>UD       g94<8,8,1>UD                    { align1 1Q $0.dst };
+mov(8)          g116<1>UD       g91<8,8,1>UD                    { align1 1Q $0.dst };
+mov(8)          g117<1>UD       g92<8,8,1>UD                    { align1 1Q $0.dst };
+mov(8)          g118<1>UD       g93<8,8,1>UD                    { align1 1Q $0.dst };
+
+LABEL12:
+endif(8)        JIP:  LABEL17                                   { align1 1Q };
+mul(8)          g99<1>F         g54<8,8,1>F     g116<8,8,1>F    { align1 1Q @3 $1.dst compacted };
+mul(8)          g98<1>F         g55<8,8,1>F     g117<8,8,1>F    { align1 1Q @4 $1.dst compacted };
+mul(8)          g23<1>F         g56<8,8,1>F     g118<8,8,1>F    { align1 1Q @4 $1.dst compacted };
+mul(8)          g24<1>F         g57<8,8,1>F     g119<8,8,1>F    { align1 1Q @7 $1.dst compacted };
+cmp.z.f0.0(8)   null<1>D        g62<8,8,1>D     -1D             { align1 1Q $0.dst };
+(+f0.0) if(8)   JIP:  LABEL19         UIP:  LABEL18             { align1 1Q };
+mov(8)          g13<1>UD        0x3f800000UD                    { align1 1Q };
+mov(8)          g12<1>UD        0x3f800000UD                    { align1 1Q };
+else(8)         JIP:  LABEL18         UIP:  LABEL18             { align1 1Q };
+
+LABEL19:
+frc(8)          g116<1>F        g21<8,8,1>F                     { align1 1Q compacted };
+cmp.l.f0.0(8)   null<1>D        g63<8,8,1>D     0D              { align1 1Q $0.dst };
+frc(8)          g118<1>F        g22<8,8,1>F                     { align1 1Q compacted };
+shl(8)          g0<1>D          g62<8,8,1>D     0x00000003UD    { align1 1Q };
+(+f0.0) sel(8)  g117<1>UD       g116<8,8,1>UD   g21<8,8,1>UD    { align1 1Q @4 };
+(+f0.0) sel(8)  g119<1>UD       g118<8,8,1>UD   g22<8,8,1>UD    { align1 1Q @3 };
+add(8)          g1<1>D          g0<8,8,1>D      32D             { align1 1Q @3 compacted };
+add(8)          g2<1>D          g0<8,8,1>D      2080D           { align1 1Q };
+mul(8)          g120<1>F        g117<8,8,1>F    g66<8,8,1>F     { align1 1Q @4 $0.dst compacted };
+mul(8)          g121<1>F        g119<8,8,1>F    g67<8,8,1>F     { align1 1Q @4 $0.dst compacted };
+send(8)         g75UD           g1UD            nullUD          0x02406009                0x00000000
+                hdc1 MsgDesc: (untyped surface read, Surface = 9, SIMD8, Mask = 0x0)  mlen 1 ex_mlen 0 rlen 4 { align1 1Q @4 $0 };
+add(8)          g3<1>UD         g2<8,8,1>UD     0x00000004UD    { align1 1Q @3 compacted };
+mad(8)          g122<1>F        g64<8,8,1>F     g69<8,8,1>F     g120<1,1,1>F { align1 1Q @3 $0.dst compacted };
+mad(8)          g123<1>F        g65<8,8,1>F     g68<8,8,1>F     g120<1,1,1>F { align1 1Q $0.dst compacted };
+send(8)         g79UD           g3UD            nullUD          0x02406009                0x00000000
+                hdc1 MsgDesc: (untyped surface read, Surface = 9, SIMD8, Mask = 0x0)  mlen 1 ex_mlen 0 rlen 4 { align1 1Q @3 $0 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.src };
+mad(8)          g85<1>F         g122<8,8,1>F    g68<8,8,1>F     -g121<1,1,1>F { align1 1Q @2 compacted };
+mad(8)          g86<1>F         g123<8,8,1>F    g69<8,8,1>F     g121<1,1,1>F { align1 1Q @2 compacted };
+
+LABEL22:
+mov(1)          g14<1>UD        mask0<0,1,0>UD                  { align1 WE_all 1N @1 compacted };
+and(1)          g14<1>UD        g14<0,1,0>UD    0xffffffffUD    { align1 WE_all 1N @1 };
+fbl(1)          g114<1>UD       g14<0,1,0>UD                    { align1 WE_all 1N @1 };
+shl(1)          a0<1>UD         g114<0,1,0>UD   0x00000002UD    { align1 WE_all 1N @1 $0.dst };
+add(1)          a0<1>UD         a0<0,1,0>UD     0x00000800UD    { align1 WE_all 1N @1 };
+mov(1)          g115<1>UD       g[a0 352]<0,1,0>UD              { align1 WE_all 1N @1 };
+shl(1)          a0<1>UD         g114<0,1,0>UD   0x00000002UD    { align1 WE_all 1N $0.dst };
+add(1)          a0<1>UD         a0<0,1,0>UD     0x00000800UD    { align1 WE_all 1N @1 };
+mov(1)          g116<1>UD       g[a0 480]<0,1,0>UD              { align1 WE_all 1N @1 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @2 };
+mov(8)          g4<1>D          g115<0,1,0>D                    { align1 1Q };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.src };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @2 };
+mov(8)          g5<1>D          g116<0,1,0>D                    { align1 1Q };
+cmp.z.f0.0(8)   g7<1>D          g116<0,1,0>D    g79<8,8,1>D     { align1 1Q compacted };
+cmp.z.f0.0(8)   g8<1>D          g115<0,1,0>D    g75<8,8,1>D     { align1 1Q compacted };
+and.nz.f0.0(8)  null<1>UD       g8<8,8,1>UD     g7<8,8,1>UD     { align1 1Q @1 };
+(+f0.0) if(8)   JIP:  LABEL20         UIP:  LABEL20             { align1 1Q };
+mov(1)          g15<1>UD        mask0<0,1,0>UD                  { align1 WE_all 1N @1 compacted };
+and(1)          g15<1>UD        g15<0,1,0>UD    0xffffffffUD    { align1 WE_all 1N @1 };
+mov(8)          g83<1>UD        0x00000000UD                    { align1 WE_all 1Q $0.src };
+fbl(1)          g9<1>UD         g15<0,1,0>UD                    { align1 WE_all 1N @2 };
+shl(1)          a0<1>UD         g9<0,1,0>UD     0x00000002UD    { align1 WE_all 1N @1 };
+mov(1)          g10<1>UD        g[a0 128]<0,1,0>UD              { align1 WE_all 1N @1 };
+shl(1)          a0<1>UD         g9<0,1,0>UD     0x00000002UD    { align1 WE_all 1N @7 };
+mov(1)          g11<1>UD        g[a0 160]<0,1,0>UD              { align1 WE_all 1N @1 };
+mov(1)          g83.3<1>UD      g11<0,1,0>D                     { align1 WE_all 1N @1 };
+or(1)           a0.1<1>UD       g10<0,1,0>UD    0x00000082UD    { align1 WE_all 1N @3 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @2 };
+send(8)         g92UD           g83UD           g85UD           0x024a00fc                a0.1<0>UD
+                sampler MsgDesc: sample SIMD8 Surface = 252 Sampler = 0  mlen 1 rlen 4 { align1 1Q $0 AccWrEnable FusionCtrl };
+break(8)        JIP:  LABEL20         UIP:  LABEL21             { align1 1Q };
+
+LABEL20:
+endif(8)        JIP:  LABEL21                                   { align1 1Q };
+
+LABEL21:
+while(8)        JIP:  LABEL22                                   { align1 1Q };
+mov(8)          g13<1>UD        g94<8,8,1>UD                    { align1 1Q $0.dst };
+mov(8)          g12<1>UD        g93<8,8,1>UD                    { align1 1Q $0.dst };
+
+LABEL18:
+endif(8)        JIP:  LABEL17                                   { align1 1Q };
+mul(8)          g12<1>F         g58<8,8,1>F     g12<8,8,1>F     { align1 1Q @2 $0.dst compacted };
+mul.sat(8)      g31<1>F         g59<8,8,1>F     g13<8,8,1>F     { align1 1Q @4 $0.dst compacted };
+mul(8)          g15<1>F         g108<8,8,1>F    0x3f000000F  /* 0.5F */ { align1 1Q compacted };
+mov(8)          g28<1>UD        0x00000000UD                    { align1 1Q };
+mov(8)          g32<1>UD        0x00000000UD                    { align1 1Q };
+mov(8)          g29<1>UD        0x3f800000UD                    { align1 1Q };
+mov(8)          g36<1>UD        0x00000000UD                    { align1 1Q };
+mov(8)          g35<1>UD        0x00000000UD                    { align1 1Q };
+mov(8)          g34<1>UD        0x00000000UD                    { align1 1Q };
+mov(8)          g33<1>UD        0x00000000UD                    { align1 1Q };
+mov(8)          g38<1>UD        0x00000000UD                    { align1 1Q };
+mov(8)          g37<1>UD        0x00000000UD                    { align1 1Q };
+mul(8)          g13<1>F         -g107<8,8,1>F   0x3f000000F  /* 0.5F */ { align1 1Q compacted };
+sel.sat.ge(8)   g30<1>F         g12<8,8,1>F     0x3d3851ecF  /* 0.045F */ { align1 1Q };
+mad(8)          g16<1>F         0xb800HF        g109<8,8,1>F    g15<1,1,1>F { align1 1Q $0.dst };
+mad(8)          g14<1>F         0xb800HF        g109<8,8,1>F    g13<1,1,1>F { align1 1Q @3 };
+mad(8)          g125<1>F        g102<8,8,1>F    g6.6<0,1,0>F    g16<1,1,1>F { align1 1Q @2 compacted };
+mad(8)          g124<1>F        g101<8,8,1>F    g6.5<0,1,0>F    g14<1,1,1>F { align1 1Q @2 compacted };
+
+LABEL17:
+else(8)         JIP:  LABEL10         UIP:  LABEL10             { align1 1Q };
+
+LABEL11:
+cmp.z.f0.0(8)   null<1>D        g41<8,8,1>D     -1D             { align1 1Q $0.dst };
+(+f0.0) if(8)   JIP:  LABEL24         UIP:  LABEL23             { align1 1Q };
+mov(8)          g78<1>UD        0x3f800000UD                    { align1 1Q $0.dst };
+mov(8)          g16<1>UD        0x3f800000UD                    { align1 1Q $0.src };
+mov(8)          g15<1>UD        0x3f800000UD                    { align1 1Q };
+mov(8)          g14<1>UD        0x3f800000UD                    { align1 1Q };
+else(8)         JIP:  LABEL23         UIP:  LABEL23             { align1 1Q };
+
+LABEL24:
+frc(8)          g17<1>F         g21<8,8,1>F                     { align1 1Q $0.src compacted };
+cmp.l.f0.0(8)   null<1>D        g42<8,8,1>D     0D              { align1 1Q $0.dst };
+frc(8)          g19<1>F         g22<8,8,1>F                     { align1 1Q compacted };
+shl(8)          g51<1>D         g41<8,8,1>D     0x00000003UD    { align1 1Q $0.dst };
+(+f0.0) sel(8)  g18<1>UD        g17<8,8,1>UD    g21<8,8,1>UD    { align1 1Q @4 };
+(+f0.0) sel(8)  g20<1>UD        g19<8,8,1>UD    g22<8,8,1>UD    { align1 1Q @3 };
+add(8)          g52<1>D         g51<8,8,1>D     32D             { align1 1Q @3 $0.dst compacted };
+add(8)          g53<1>D         g51<8,8,1>D     2080D           { align1 1Q $0.dst };
+mul(8)          g41<1>F         g18<8,8,1>F     g45<8,8,1>F     { align1 1Q @4 $0.dst compacted };
+mul(8)          g42<1>F         g20<8,8,1>F     g46<8,8,1>F     { align1 1Q @4 $0.dst compacted };
+send(8)         g80UD           g52UD           nullUD          0x02406009                0x00000000
+                hdc1 MsgDesc: (untyped surface read, Surface = 9, SIMD8, Mask = 0x0)  mlen 1 ex_mlen 0 rlen 4 { align1 1Q @4 $0 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+add(8)          g70<1>UD        g53<8,8,1>UD    0x00000004UD    { align1 1Q @3 compacted };
+mad(8)          g49<1>F         g43<8,8,1>F     g48<8,8,1>F     g41<1,1,1>F { align1 1Q @3 $0.dst compacted };
+mad(8)          g50<1>F         g44<8,8,1>F     g47<8,8,1>F     g41<1,1,1>F { align1 1Q $0.dst compacted };
+send(8)         g84UD           g70UD           nullUD          0x02406009                0x00000000
+                hdc1 MsgDesc: (untyped surface read, Surface = 9, SIMD8, Mask = 0x0)  mlen 1 ex_mlen 0 rlen 4 { align1 1Q @3 $0 };
+mad(8)          g88<1>F         g49<8,8,1>F     g47<8,8,1>F     -g42<1,1,1>F { align1 1Q @2 compacted };
+mad(8)          g89<1>F         g50<8,8,1>F     g48<8,8,1>F     g42<1,1,1>F { align1 1Q @2 compacted };
+
+LABEL27:
+mov(1)          g17<1>UD        mask0<0,1,0>UD                  { align1 WE_all 1N @1 compacted };
+and(1)          g17<1>UD        g17<0,1,0>UD    0xffffffffUD    { align1 WE_all 1N @1 };
+fbl(1)          g117<1>UD       g17<0,1,0>UD                    { align1 WE_all 1N @1 };
+shl(1)          a0<1>UD         g117<0,1,0>UD   0x00000002UD    { align1 WE_all 1N @1 $0.dst };
+add(1)          a0<1>UD         a0<0,1,0>UD     0x00000a00UD    { align1 WE_all 1N @1 };
+mov(1)          g118<1>UD       g[a0]<0,1,0>UD                  { align1 WE_all 1N @1 };
+shl(1)          a0<1>UD         g117<0,1,0>UD   0x00000002UD    { align1 WE_all 1N $0.dst };
+add(1)          a0<1>UD         a0<0,1,0>UD     0x00000a00UD    { align1 WE_all 1N @1 };
+mov(1)          g119<1>UD       g[a0 128]<0,1,0>UD              { align1 WE_all 1N @1 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @2 };
+mov(8)          g71<1>D         g118<0,1,0>D                    { align1 1Q };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @2 };
+mov(8)          g72<1>D         g119<0,1,0>D                    { align1 1Q };
+cmp.z.f0.0(8)   g73<1>D         g119<0,1,0>D    g84<8,8,1>D     { align1 1Q $0.dst compacted };
+cmp.z.f0.0(8)   g74<1>D         g118<0,1,0>D    g80<8,8,1>D     { align1 1Q $0.dst compacted };
+and.nz.f0.0(8)  null<1>UD       g74<8,8,1>UD    g73<8,8,1>UD    { align1 1Q @1 };
+(+f0.0) if(8)   JIP:  LABEL25         UIP:  LABEL25             { align1 1Q };
+mov(1)          g18<1>UD        mask0<0,1,0>UD                  { align1 WE_all 1N @1 compacted };
+and(1)          g18<1>UD        g18<0,1,0>UD    0xffffffffUD    { align1 WE_all 1N @1 };
+mov(8)          g90<1>UD        0x00000000UD                    { align1 WE_all 1Q $0.src };
+fbl(1)          g75<1>UD        g18<0,1,0>UD                    { align1 WE_all 1N @2 $0.dst };
+shl(1)          a0<1>UD         g75<0,1,0>UD    0x00000002UD    { align1 WE_all 1N @1 $0.dst };
+add(1)          a0<1>UD         a0<0,1,0>UD     0x00000800UD    { align1 WE_all 1N @1 };
+mov(1)          g76<1>UD        g[a0 224]<0,1,0>UD              { align1 WE_all 1N @1 };
+shl(1)          a0<1>UD         g75<0,1,0>UD    0x00000002UD    { align1 WE_all 1N @7 $0.dst };
+add(1)          a0<1>UD         a0<0,1,0>UD     0x00000800UD    { align1 WE_all 1N @1 };
+mov(1)          g77<1>UD        g[a0 256]<0,1,0>UD              { align1 WE_all 1N @1 };
+mov(1)          g90.3<1>UD      g77<0,1,0>D                     { align1 WE_all 1N @1 };
+or(1)           a0.1<1>UD       g76<0,1,0>UD    0x00000082UD    { align1 WE_all 1N @3 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @2 };
+send(8)         g93UD           g90UD           g88UD           0x024a00fc                a0.1<0>UD
+                sampler MsgDesc: sample SIMD8 Surface = 252 Sampler = 0  mlen 1 rlen 4 { align1 1Q $0 AccWrEnable FusionCtrl };
+break(8)        JIP:  LABEL25         UIP:  LABEL26             { align1 1Q };
+
+LABEL25:
+endif(8)        JIP:  LABEL26                                   { align1 1Q };
+
+LABEL26:
+while(8)        JIP:  LABEL27                                   { align1 1Q };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+mov(8)          g78<1>UD        g96<8,8,1>UD                    { align1 1Q };
+mov(8)          g14<1>UD        g93<8,8,1>UD                    { align1 1Q $0.dst };
+mov(8)          g15<1>UD        g94<8,8,1>UD                    { align1 1Q $0.dst };
+mov(8)          g16<1>UD        g95<8,8,1>UD                    { align1 1Q $0.dst };
+
+LABEL23:
+endif(8)        JIP:  LABEL10                                   { align1 1Q };
+mul(8)          g99<1>F         g54<8,8,1>F     g14<8,8,1>F     { align1 1Q @3 $1.dst compacted };
+mul(8)          g98<1>F         g55<8,8,1>F     g15<8,8,1>F     { align1 1Q @4 $1.dst compacted };
+mul(8)          g23<1>F         g56<8,8,1>F     g16<8,8,1>F     { align1 1Q @4 $1.dst compacted };
+mul(8)          g24<1>F         g57<8,8,1>F     g78<8,8,1>F     { align1 1Q @7 $1.dst compacted };
+add(8)          g82<1>D         g111<8,8,1>D    68D             { align1 1Q $0.dst compacted };
+add(8)          g85<1>D         g110<8,8,1>D    336D            { align1 1Q $0.dst compacted };
+add(8)          g78<1>D         g110<8,8,1>D    48D             { align1 1Q compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @3 };
+send(8)         g112UD          g82UD           nullUD          0x02206c0b                0x00000000
+                hdc1 MsgDesc: (untyped surface read, Surface = 11, SIMD8, Mask = 0xc)  mlen 1 ex_mlen 0 rlen 2 { align1 1Q $2 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @2 };
+send(8)         g114UD          g85UD           nullUD          0x0230680c                0x00000000
+                hdc1 MsgDesc: (untyped surface read, Surface = 12, SIMD8, Mask = 0x8)  mlen 1 ex_mlen 0 rlen 3 { align1 1Q $0 };
+send(8)         g79UD           g78UD           nullUD          0x02206c0c                0x00000000
+                hdc1 MsgDesc: (untyped surface read, Surface = 12, SIMD8, Mask = 0xc)  mlen 1 ex_mlen 0 rlen 2 { align1 1Q @1 $0 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+and(8)          g83<1>UD        g113<8,8,1>UD   0x00000008UD    { align1 1Q $2.dst compacted };
+cmp.nz.f0.0(8)  g81<1>D         g79<8,8,1>D     -1D             { align1 1Q $0.dst };
+cmp.nz.f0.0(8)  g84<1>D         g83<8,8,1>D     0D              { align1 1Q @2 $0.dst };
+and.nz.f0.0(8)  null<1>UD       g84<8,8,1>UD    g81<8,8,1>UD    { align1 1Q @1 };
+(+f0.0) if(8)   JIP:  LABEL28         UIP:  LABEL28             { align1 1Q };
+mul(8)          g86<1>F         g105<8,8,1>F    g27<8,8,1>F     { align1 1Q $0.dst compacted };
+cmp.z.f0.0(8)   null<1>D        g79<8,8,1>D     -1D             { align1 1Q };
+mad(8)          g87<1>F         g86<8,8,1>F     g26<8,8,1>F     g104<1,1,1>F { align1 1Q @2 $0.dst compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.src };
+mad(8)          g88<1>F         g87<8,8,1>F     g25<8,8,1>F     g103<1,1,1>F { align1 1Q @1 compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.src };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @1 };
+mad(8)          g89<1>F         g103<8,8,1>F    g88<8,8,1>F     -g25<1,1,1>F { align1 1Q compacted };
+mad(8)          g90<1>F         g104<8,8,1>F    g88<8,8,1>F     -g26<1,1,1>F { align1 1Q $0.src compacted };
+mad(8)          g91<1>F         g105<8,8,1>F    g88<8,8,1>F     -g27<1,1,1>F { align1 1Q compacted };
+mul(8)          g92<1>F         g91<8,8,1>F     g91<8,8,1>F     { align1 1Q @1 $0.dst compacted };
+mad(8)          g93<1>F         g92<8,8,1>F     g90<8,8,1>F     g90<1,1,1>F { align1 1Q @1 $0.dst compacted };
+mad(8)          g94<1>F         g93<8,8,1>F     g89<8,8,1>F     g89<1,1,1>F { align1 1Q @1 compacted };
+math rsq(8)     g95<1>F         g94<8,8,1>F     null<8,8,1>F    { align1 1Q @1 $0 };
+mul(8)          g105<1>F        g89<8,8,1>F     g95<8,8,1>F     { align1 1Q $0.dst compacted };
+mul(8)          g121<1>F        g90<8,8,1>F     g95<8,8,1>F     { align1 1Q compacted };
+mul(8)          g122<1>F        g91<8,8,1>F     g95<8,8,1>F     { align1 1Q compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.src };
+mul(8)          g1<1>F          -g26<8,8,1>F    g105<8,8,1>F    { align1 1Q @3 compacted };
+mul(8)          g123<1>F        -g27<8,8,1>F    g121<8,8,1>F    { align1 1Q @3 compacted };
+mul(8)          g0<1>F          -g25<8,8,1>F    g122<8,8,1>F    { align1 1Q @3 compacted };
+mad(8)          g4<1>F          g1<8,8,1>F      g121<8,8,1>F    g25<1,1,1>F { align1 1Q @3 compacted };
+mad(8)          g2<1>F          g123<8,8,1>F    g122<8,8,1>F    g26<1,1,1>F { align1 1Q @3 compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.src };
+mad(8)          g3<1>F          g0<8,8,1>F      g105<8,8,1>F    g27<1,1,1>F { align1 1Q @3 compacted };
+mul(8)          g8<1>F          g4<8,8,1>F      g106<8,8,1>F    { align1 1Q @3 compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.src };
+mul(8)          g5<1>F          g2<8,8,1>F      g106<8,8,1>F    { align1 1Q @3 compacted };
+mul(8)          g7<1>F          g3<8,8,1>F      g106<8,8,1>F    { align1 1Q @3 compacted };
+(+f0.0) if(8)   JIP:  LABEL30         UIP:  LABEL29             { align1 1Q };
+mov(8)          g83<1>UD        0x3f800000UD                    { align1 1Q };
+mov(8)          g82<1>UD        0x3f000000UD                    { align1 1Q $2.src };
+mov(8)          g81<1>UD        0x3f000000UD                    { align1 1Q };
+else(8)         JIP:  LABEL29         UIP:  LABEL29             { align1 1Q };
+
+LABEL30:
+frc(8)          g9<1>F          g21<8,8,1>F                     { align1 1Q compacted };
+cmp.l.f0.0(8)   null<1>D        g80<8,8,1>D     0D              { align1 1Q $0.dst };
+frc(8)          g11<1>F         g22<8,8,1>F                     { align1 1Q compacted };
+add(8)          g13<1>D         g110<8,8,1>D    64D             { align1 1Q compacted };
+add(8)          g16<1>D         g110<8,8,1>D    80D             { align1 1Q compacted };
+shl(8)          g41<1>D         g79<8,8,1>D     0x00000003UD    { align1 1Q };
+(+f0.0) sel(8)  g10<1>UD        g9<8,8,1>UD     g21<8,8,1>UD    { align1 1Q @6 };
+(+f0.0) sel(8)  g12<1>UD        g11<8,8,1>UD    g22<8,8,1>UD    { align1 1Q @5 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @5 };
+send(8)         g117UD          g13UD           nullUD          0x0240600c                0x00000000
+                hdc1 MsgDesc: (untyped surface read, Surface = 12, SIMD8, Mask = 0x0)  mlen 1 ex_mlen 0 rlen 4 { align1 1Q $0 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.src };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @4 };
+send(8)         g17UD           g16UD           nullUD          0x02206c0c                0x00000000
+                hdc1 MsgDesc: (untyped surface read, Surface = 12, SIMD8, Mask = 0xc)  mlen 1 ex_mlen 0 rlen 2 { align1 1Q $0 };
+add(8)          g42<1>D         g41<8,8,1>D     32D             { align1 1Q @3 $0.dst compacted };
+add(8)          g43<1>D         g41<8,8,1>D     2080D           { align1 1Q $0.dst };
+send(8)         g85UD           g42UD           nullUD          0x02406009                0x00000000
+                hdc1 MsgDesc: (untyped surface read, Surface = 9, SIMD8, Mask = 0x0)  mlen 1 ex_mlen 0 rlen 4 { align1 1Q @2 $0 };
+add(8)          g44<1>UD        g43<8,8,1>UD    0x00000004UD    { align1 1Q @1 $0.dst compacted };
+send(8)         g89UD           g44UD           nullUD          0x02406009                0x00000000
+                hdc1 MsgDesc: (untyped surface read, Surface = 9, SIMD8, Mask = 0x0)  mlen 1 ex_mlen 0 rlen 4 { align1 1Q @1 $0 };
+mul(8)          g14<1>F         g10<8,8,1>F     g119<8,8,1>F    { align1 1Q @5 $0.dst compacted };
+mul(8)          g15<1>F         g12<8,8,1>F     g120<8,8,1>F    { align1 1Q @5 $0.dst compacted };
+mad(8)          g19<1>F         g117<8,8,1>F    g18<8,8,1>F     g14<1,1,1>F { align1 1Q @2 $0.dst compacted };
+mad(8)          g20<1>F         g118<8,8,1>F    g17<8,8,1>F     g14<1,1,1>F { align1 1Q $0.dst compacted };
+mad(8)          g103<1>F        g19<8,8,1>F     g17<8,8,1>F     -g15<1,1,1>F { align1 1Q @2 compacted };
+mad(8)          g104<1>F        g20<8,8,1>F     g18<8,8,1>F     g15<1,1,1>F { align1 1Q @2 compacted };
+
+LABEL33:
+mov(1)          g19<1>UD        mask0<0,1,0>UD                  { align1 WE_all 1N @1 compacted };
+and(1)          g19<1>UD        g19<0,1,0>UD    0xffffffffUD    { align1 WE_all 1N @1 };
+fbl(1)          g120<1>UD       g19<0,1,0>UD                    { align1 WE_all 1N @1 };
+shl(1)          a0<1>UD         g120<0,1,0>UD   0x00000002UD    { align1 WE_all 1N @1 $0.dst };
+add(1)          a0<1>UD         a0<0,1,0>UD     0x00000a00UD    { align1 WE_all 1N @1 };
+mov(1)          g123<1>UD       g[a0 160]<0,1,0>UD              { align1 WE_all 1N @1 };
+shl(1)          a0<1>UD         g120<0,1,0>UD   0x00000002UD    { align1 WE_all 1N $0.dst };
+add(1)          a0<1>UD         a0<0,1,0>UD     0x00000a00UD    { align1 WE_all 1N @1 };
+mov(1)          g0<1>UD         g[a0 288]<0,1,0>UD              { align1 WE_all 1N @1 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @2 };
+mov(8)          g45<1>D         g123<0,1,0>D                    { align1 1Q };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @2 };
+mov(8)          g46<1>D         g0<0,1,0>D                      { align1 1Q };
+cmp.z.f0.0(8)   g47<1>D         g0<0,1,0>D      g89<8,8,1>D     { align1 1Q $0.dst compacted };
+cmp.z.f0.0(8)   g48<1>D         g123<0,1,0>D    g85<8,8,1>D     { align1 1Q $0.dst compacted };
+and.nz.f0.0(8)  null<1>UD       g48<8,8,1>UD    g47<8,8,1>UD    { align1 1Q @1 };
+(+f0.0) if(8)   JIP:  LABEL31         UIP:  LABEL31             { align1 1Q };
+mov(1)          g20<1>UD        mask0<0,1,0>UD                  { align1 WE_all 1N @1 compacted };
+and(1)          g20<1>UD        g20<0,1,0>UD    0xffffffffUD    { align1 WE_all 1N @1 };
+mov(8)          g93<1>UD        0x00000000UD                    { align1 WE_all 1Q $0.src };
+fbl(1)          g49<1>UD        g20<0,1,0>UD                    { align1 WE_all 1N @2 $0.dst };
+shl(1)          a0<1>UD         g49<0,1,0>UD    0x00000002UD    { align1 WE_all 1N @1 $0.dst };
+add(1)          a0<1>UD         a0<0,1,0>UD     0x00000400UD    { align1 WE_all 1N @1 };
+mov(1)          g50<1>UD        g[a0 416]<0,1,0>UD              { align1 WE_all 1N @1 };
+shl(1)          a0<1>UD         g49<0,1,0>UD    0x00000002UD    { align1 WE_all 1N @7 $0.dst };
+add(1)          a0<1>UD         a0<0,1,0>UD     0x00000400UD    { align1 WE_all 1N @1 };
+mov(1)          g51<1>UD        g[a0 448]<0,1,0>UD              { align1 WE_all 1N @1 };
+mov(1)          g93.3<1>UD      g51<0,1,0>D                     { align1 WE_all 1N @1 };
+or(1)           a0.1<1>UD       g50<0,1,0>UD    0x00000082UD    { align1 WE_all 1N @3 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @2 };
+send(8)         g94UD           g93UD           g103UD          0x024a00fc                a0.1<0>UD
+                sampler MsgDesc: sample SIMD8 Surface = 252 Sampler = 0  mlen 1 rlen 4 { align1 1Q $0 AccWrEnable FusionCtrl };
+break(8)        JIP:  LABEL31         UIP:  LABEL32             { align1 1Q };
+
+LABEL31:
+endif(8)        JIP:  LABEL32                                   { align1 1Q };
+
+LABEL32:
+while(8)        JIP:  LABEL33                                   { align1 1Q };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+mov(8)          g83<1>UD        g96<8,8,1>UD                    { align1 1Q };
+mov(8)          g81<1>UD        g94<8,8,1>UD                    { align1 1Q $0.dst };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $2.src };
+mov(8)          g82<1>UD        g95<8,8,1>UD                    { align1 1Q $0.dst };
+
+LABEL29:
+endif(8)        JIP:  LABEL28                                   { align1 1Q };
+mov(1)          g100<1>D        1073741824D                     { align1 WE_all 1N };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @1 };
+mad(8)          g52<1>F         0xbc00HF        g81<8,8,1>F     g100.0<0,1,0>F { align1 1Q $0.dst };
+mad(8)          g54<1>F         0xbc00HF        g82<8,8,1>F     g100.0<0,1,0>F { align1 1Q @4 };
+mad(8)          g74<1>F         0xbc00HF        g83<8,8,1>F     g100.0<0,1,0>F { align1 1Q @7 $0.dst };
+mul(8)          g53<1>F         g52<8,8,1>F     g114<8,8,1>F    { align1 1Q @3 $0.dst compacted };
+mul(8)          g55<1>F         g54<8,8,1>F     g114<8,8,1>F    { align1 1Q @3 compacted };
+mul(8)          g56<1>F         g5<8,8,1>F      g55<8,8,1>F     { align1 1Q @1 compacted };
+mul(8)          g57<1>F         g7<8,8,1>F      g55<8,8,1>F     { align1 1Q compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+mul(8)          g70<1>F         g8<8,8,1>F      g55<8,8,1>F     { align1 1Q compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+mad(8)          g71<1>F         g56<8,8,1>F     g53<8,8,1>F     g105<1,1,1>F { align1 1Q @3 compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+mad(8)          g72<1>F         g57<8,8,1>F     g53<8,8,1>F     g121<1,1,1>F { align1 1Q @3 compacted };
+mad(8)          g73<1>F         g70<8,8,1>F     g53<8,8,1>F     g122<1,1,1>F { align1 1Q @3 $0.dst compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+mad(8)          g75<1>F         g71<8,8,1>F     g74<8,8,1>F     g25<1,1,1>F { align1 1Q @3 compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+mad(8)          g76<1>F         g72<8,8,1>F     g74<8,8,1>F     g26<1,1,1>F { align1 1Q @3 compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+mad(8)          g77<1>F         g73<8,8,1>F     g74<8,8,1>F     g27<1,1,1>F { align1 1Q @3 compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.src };
+mul(8)          g78<1>F         g77<8,8,1>F     g77<8,8,1>F     { align1 1Q @1 compacted };
+mad(8)          g79<1>F         g78<8,8,1>F     g76<8,8,1>F     g76<1,1,1>F { align1 1Q @1 compacted };
+mad(8)          g80<1>F         g79<8,8,1>F     g75<8,8,1>F     g75<1,1,1>F { align1 1Q @1 $0.dst compacted };
+math rsq(8)     g81<1>F         g80<8,8,1>F     null<8,8,1>F    { align1 1Q @1 $0 };
+mul(8)          g25<1>F         g75<8,8,1>F     g81<8,8,1>F     { align1 1Q $0.dst compacted };
+mul(8)          g26<1>F         g76<8,8,1>F     g81<8,8,1>F     { align1 1Q compacted };
+mul(8)          g27<1>F         g77<8,8,1>F     g81<8,8,1>F     { align1 1Q compacted };
+
+LABEL28:
+endif(8)        JIP:  LABEL10                                   { align1 1Q };
+cmp.z.f0.0(8)   null<1>D        g62<8,8,1>D     -1D             { align1 1Q $0.dst };
+(+f0.0) if(8)   JIP:  LABEL35         UIP:  LABEL34             { align1 1Q };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+mov(8)          g75<1>UD        0x3f800000UD                    { align1 1Q };
+mov(8)          g74<1>UD        0x3f800000UD                    { align1 1Q $0.dst };
+else(8)         JIP:  LABEL34         UIP:  LABEL34             { align1 1Q };
+
+LABEL35:
+frc(8)          g82<1>F         g21<8,8,1>F                     { align1 1Q $2.src compacted };
+cmp.l.f0.0(8)   null<1>D        g63<8,8,1>D     0D              { align1 1Q $0.dst };
+frc(8)          g84<1>F         g22<8,8,1>F                     { align1 1Q compacted };
+shl(8)          g90<1>D         g62<8,8,1>D     0x00000003UD    { align1 1Q $0.dst };
+(+f0.0) sel(8)  g83<1>UD        g82<8,8,1>UD    g21<8,8,1>UD    { align1 1Q @4 };
+(+f0.0) sel(8)  g85<1>UD        g84<8,8,1>UD    g22<8,8,1>UD    { align1 1Q @3 $0.dst };
+add(8)          g91<1>D         g90<8,8,1>D     32D             { align1 1Q @3 $0.dst compacted };
+add(8)          g92<1>D         g90<8,8,1>D     2080D           { align1 1Q $0.dst };
+mul(8)          g86<1>F         g83<8,8,1>F     g66<8,8,1>F     { align1 1Q @4 $0.dst compacted };
+mul(8)          g87<1>F         g85<8,8,1>F     g67<8,8,1>F     { align1 1Q @4 $0.dst compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @4 };
+send(8)         g118UD          g91UD           nullUD          0x02406009                0x00000000
+                hdc1 MsgDesc: (untyped surface read, Surface = 9, SIMD8, Mask = 0x0)  mlen 1 ex_mlen 0 rlen 4 { align1 1Q $0 };
+add(8)          g93<1>UD        g92<8,8,1>UD    0x00000004UD    { align1 1Q @3 $0.dst compacted };
+mad(8)          g88<1>F         g64<8,8,1>F     g69<8,8,1>F     g86<1,1,1>F { align1 1Q @3 $0.dst compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+mad(8)          g89<1>F         g65<8,8,1>F     g68<8,8,1>F     g86<1,1,1>F { align1 1Q compacted };
+send(8)         g0UD            g93UD           nullUD          0x02406009                0x00000000
+                hdc1 MsgDesc: (untyped surface read, Surface = 9, SIMD8, Mask = 0x0)  mlen 1 ex_mlen 0 rlen 4 { align1 1Q @3 $0 };
+mad(8)          g122<1>F        g88<8,8,1>F     g68<8,8,1>F     -g87<1,1,1>F { align1 1Q @2 compacted };
+mad(8)          g123<1>F        g89<8,8,1>F     g69<8,8,1>F     g87<1,1,1>F { align1 1Q @2 compacted };
+
+LABEL38:
+mov(1)          g41<1>UD        mask0<0,1,0>UD                  { align1 WE_all 1N @1 compacted };
+and(1)          g41<1>UD        g41<0,1,0>UD    0xffffffffUD    { align1 WE_all 1N @1 };
+fbl(1)          g4<1>UD         g41<0,1,0>UD                    { align1 WE_all 1N @1 };
+shl(1)          a0<1>UD         g4<0,1,0>UD     0x00000002UD    { align1 WE_all 1N @1 $0.dst };
+add(1)          a0<1>UD         a0<0,1,0>UD     0x00000e00UD    { align1 WE_all 1N @1 };
+mov(1)          g5<1>UD         g[a0 192]<0,1,0>UD              { align1 WE_all 1N @1 };
+shl(1)          a0<1>UD         g4<0,1,0>UD     0x00000002UD    { align1 WE_all 1N $0.dst };
+mov(1)          g7<1>UD         g[a0]<0,1,0>UD                  { align1 WE_all 1N @1 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.src };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @2 };
+mov(8)          g94<1>D         g5<0,1,0>D                      { align1 1Q };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @2 };
+mov(8)          g95<1>D         g7<0,1,0>D                      { align1 1Q };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.src };
+cmp.z.f0.0(8)   g96<1>D         g7<0,1,0>D      g0<8,8,1>D      { align1 1Q compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+cmp.z.f0.0(8)   g97<1>D         g5<0,1,0>D      g118<8,8,1>D    { align1 1Q compacted };
+and.nz.f0.0(8)  null<1>UD       g97<8,8,1>UD    g96<8,8,1>UD    { align1 1Q @1 };
+(+f0.0) if(8)   JIP:  LABEL36         UIP:  LABEL36             { align1 1Q };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+mov(1)          g42<1>UD        mask0<0,1,0>UD                  { align1 WE_all 1N @1 compacted };
+and(1)          g42<1>UD        g42<0,1,0>UD    0xffffffffUD    { align1 WE_all 1N @1 };
+mov(8)          g96<1>UD        0x00000000UD                    { align1 WE_all 1Q };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.src };
+fbl(1)          g103<1>UD       g42<0,1,0>UD                    { align1 WE_all 1N @2 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.src };
+shl(1)          a0<1>UD         g103<0,1,0>UD   0x00000002UD    { align1 WE_all 1N @1 };
+add(1)          a0<1>UD         a0<0,1,0>UD     0x00000a00UD    { align1 WE_all 1N @1 };
+mov(1)          g104<1>UD       g[a0 448]<0,1,0>UD              { align1 WE_all 1N @1 };
+shl(1)          a0<1>UD         g103<0,1,0>UD   0x00000002UD    { align1 WE_all 1N @7 };
+add(1)          a0<1>UD         a0<0,1,0>UD     0x00000a00UD    { align1 WE_all 1N @1 };
+mov(1)          g105<1>UD       g[a0 480]<0,1,0>UD              { align1 WE_all 1N @1 };
+mov(1)          g96.3<1>UD      g105<0,1,0>D                    { align1 WE_all 1N @1 };
+or(1)           a0.1<1>UD       g104<0,1,0>UD   0x00000082UD    { align1 WE_all 1N @3 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @2 };
+send(8)         g67UD           g96UD           g122UD          0x024a00fc                a0.1<0>UD
+                sampler MsgDesc: sample SIMD8 Surface = 252 Sampler = 0  mlen 1 rlen 4 { align1 1Q $0 AccWrEnable FusionCtrl };
+break(8)        JIP:  LABEL36         UIP:  LABEL37             { align1 1Q };
+
+LABEL36:
+endif(8)        JIP:  LABEL37                                   { align1 1Q };
+
+LABEL37:
+while(8)        JIP:  LABEL38                                   { align1 1Q };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+mov(8)          g75<1>UD        g69<8,8,1>UD                    { align1 1Q };
+mov(8)          g74<1>UD        g68<8,8,1>UD                    { align1 1Q $0.dst };
+
+LABEL34:
+endif(8)        JIP:  LABEL10                                   { align1 1Q };
+add(8)          g106<1>D        g110<8,8,1>D    192D            { align1 1Q compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @1 };
+send(8)         g117UD          g106UD          nullUD          0x02206c0c                0x00000000
+                hdc1 MsgDesc: (untyped surface read, Surface = 12, SIMD8, Mask = 0xc)  mlen 1 ex_mlen 0 rlen 2 { align1 1Q $3 };
+cmp.z.f0.0(8)   null<1>D        g117<8,8,1>D    -1D             { align1 1Q $3.dst };
+(+f0.0) if(8)   JIP:  LABEL40         UIP:  LABEL39             { align1 1Q };
+mov(8)          g73<1>UD        0x3f800000UD                    { align1 1Q $0.dst };
+else(8)         JIP:  LABEL39         UIP:  LABEL39             { align1 1Q };
+
+LABEL40:
+frc(8)          g119<1>F        g21<8,8,1>F                     { align1 1Q $0.dst compacted };
+cmp.l.f0.0(8)   null<1>D        g118<8,8,1>D    0D              { align1 1Q $3.dst };
+frc(8)          g121<1>F        g22<8,8,1>F                     { align1 1Q $0.dst compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.src };
+add(8)          g123<1>D        g110<8,8,1>D    208D            { align1 1Q @7 compacted };
+add(8)          g7<1>D          g110<8,8,1>D    224D            { align1 1Q compacted };
+shl(8)          g19<1>D         g117<8,8,1>D    0x00000003UD    { align1 1Q };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+(+f0.0) sel(8)  g120<1>UD       g119<8,8,1>UD   g21<8,8,1>UD    { align1 1Q @6 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.src };
+(+f0.0) sel(8)  g122<1>UD       g121<8,8,1>UD   g22<8,8,1>UD    { align1 1Q @5 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @5 };
+send(8)         g1UD            g123UD          nullUD          0x0240600c                0x00000000
+                hdc1 MsgDesc: (untyped surface read, Surface = 12, SIMD8, Mask = 0x0)  mlen 1 ex_mlen 0 rlen 4 { align1 1Q $0 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.src };
+send(8)         g15UD           g7UD            nullUD          0x02206c0c                0x00000000
+                hdc1 MsgDesc: (untyped surface read, Surface = 12, SIMD8, Mask = 0xc)  mlen 1 ex_mlen 0 rlen 2 { align1 1Q @4 $4 };
+add(8)          g20<1>D         g19<8,8,1>D     32D             { align1 1Q @3 compacted };
+add(8)          g41<1>D         g19<8,8,1>D     2080D           { align1 1Q };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $4.src };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @2 };
+send(8)         g7UD            g20UD           nullUD          0x02406009                0x00000000
+                hdc1 MsgDesc: (untyped surface read, Surface = 9, SIMD8, Mask = 0x0)  mlen 1 ex_mlen 0 rlen 4 { align1 1Q $0 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+add(8)          g42<1>UD        g41<8,8,1>UD    0x00000004UD    { align1 1Q @1 compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @1 };
+send(8)         g11UD           g42UD           nullUD          0x02406009                0x00000000
+                hdc1 MsgDesc: (untyped surface read, Surface = 9, SIMD8, Mask = 0x0)  mlen 1 ex_mlen 0 rlen 4 { align1 1Q $0 };
+mul(8)          g0<1>F          g120<8,8,1>F    g3<8,8,1>F      { align1 1Q @5 $0.dst compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+mul(8)          g5<1>F          g122<8,8,1>F    g4<8,8,1>F      { align1 1Q @5 compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+mad(8)          g17<1>F         g1<8,8,1>F      g16<8,8,1>F     g0<1,1,1>F { align1 1Q @2 $4.dst compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $4.dst };
+mad(8)          g18<1>F         g2<8,8,1>F      g15<8,8,1>F     g0<1,1,1>F { align1 1Q $0.dst compacted };
+mad(8)          g0<1>F          g17<8,8,1>F     g15<8,8,1>F     -g5<1,1,1>F { align1 1Q @2 compacted };
+mad(8)          g1<1>F          g18<8,8,1>F     g16<8,8,1>F     g5<1,1,1>F { align1 1Q @2 compacted };
+
+LABEL43:
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @5 $0.dst };
+mov(1)          g43<1>UD        mask0<0,1,0>UD                  { align1 WE_all 1N @1 compacted };
+and(1)          g43<1>UD        g43<0,1,0>UD    0xffffffffUD    { align1 WE_all 1N @1 };
+fbl(1)          g15<1>UD        g43<0,1,0>UD                    { align1 WE_all 1N @1 };
+shl(1)          a0<1>UD         g15<0,1,0>UD    0x00000002UD    { align1 WE_all 1N @1 $0.dst };
+mov(1)          g16<1>UD        g[a0 224]<0,1,0>UD              { align1 WE_all 1N @1 };
+shl(1)          a0<1>UD         g15<0,1,0>UD    0x00000002UD    { align1 WE_all 1N $0.dst };
+mov(1)          g17<1>UD        g[a0 352]<0,1,0>UD              { align1 WE_all 1N @1 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @2 };
+mov(8)          g43<1>D         g16<0,1,0>D                     { align1 1Q };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @2 };
+mov(8)          g44<1>D         g17<0,1,0>D                     { align1 1Q };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+cmp.z.f0.0(8)   g45<1>D         g17<0,1,0>D     g11<8,8,1>D     { align1 1Q compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+cmp.z.f0.0(8)   g46<1>D         g16<0,1,0>D     g7<8,8,1>D      { align1 1Q compacted };
+and.nz.f0.0(8)  null<1>UD       g46<8,8,1>UD    g45<8,8,1>UD    { align1 1Q @1 };
+(+f0.0) if(8)   JIP:  LABEL41         UIP:  LABEL41             { align1 1Q };
+mov(1)          g45<1>UD        mask0<0,1,0>UD                  { align1 WE_all 1N @1 compacted };
+and(1)          g45<1>UD        g45<0,1,0>UD    0xffffffffUD    { align1 WE_all 1N @1 };
+mov(8)          g123<1>UD       0x00000000UD                    { align1 WE_all 1Q $0.src };
+fbl(1)          g47<1>UD        g45<0,1,0>UD                    { align1 WE_all 1N @2 $0.dst };
+shl(1)          a0<1>UD         g47<0,1,0>UD    0x00000002UD    { align1 WE_all 1N @1 $0.dst };
+add(1)          a0<1>UD         a0<0,1,0>UD     0x00000400UD    { align1 WE_all 1N @1 };
+mov(1)          g48<1>UD        g[a0 352]<0,1,0>UD              { align1 WE_all 1N @1 };
+shl(1)          a0<1>UD         g47<0,1,0>UD    0x00000002UD    { align1 WE_all 1N @7 $0.dst };
+add(1)          a0<1>UD         a0<0,1,0>UD     0x00000400UD    { align1 WE_all 1N @1 };
+mov(1)          g49<1>UD        g[a0 384]<0,1,0>UD              { align1 WE_all 1N @1 };
+mov(1)          g123.3<1>UD     g49<0,1,0>D                     { align1 WE_all 1N @1 };
+or(1)           a0.1<1>UD       g48<0,1,0>UD    0x00000082UD    { align1 WE_all 1N @3 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @2 };
+send(8)         g68UD           g123UD          g0UD            0x024a00fc                a0.1<0>UD
+                sampler MsgDesc: sample SIMD8 Surface = 252 Sampler = 0  mlen 1 rlen 4 { align1 1Q $0 AccWrEnable FusionCtrl };
+break(8)        JIP:  LABEL41         UIP:  LABEL42             { align1 1Q };
+
+LABEL41:
+endif(8)        JIP:  LABEL42                                   { align1 1Q };
+
+LABEL42:
+while(8)        JIP:  LABEL43                                   { align1 1Q };
+mov(8)          g73<1>UD        g68<8,8,1>UD                    { align1 1Q $0.dst };
+
+LABEL39:
+endif(8)        JIP:  LABEL10                                   { align1 1Q };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+add(8)          g50<1>D         g110<8,8,1>D    144D            { align1 1Q compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @1 };
+send(8)         g51UD           g50UD           nullUD          0x02206c0c                0x00000000
+                hdc1 MsgDesc: (untyped surface read, Surface = 12, SIMD8, Mask = 0xc)  mlen 1 ex_mlen 0 rlen 2 { align1 1Q $0 };
+cmp.z.f0.0(8)   null<1>D        g51<8,8,1>D     -1D             { align1 1Q $0.dst };
+(+f0.0) if(8)   JIP:  LABEL45         UIP:  LABEL44             { align1 1Q };
+mov(8)          g83<1>UD        0x3f800000UD                    { align1 1Q };
+mov(8)          g82<1>UD        0x3f800000UD                    { align1 1Q $2.src };
+mov(8)          g81<1>UD        0x3f800000UD                    { align1 1Q };
+else(8)         JIP:  LABEL44         UIP:  LABEL44             { align1 1Q };
+
+LABEL45:
+frc(8)          g53<1>F         g21<8,8,1>F                     { align1 1Q $0.dst compacted };
+cmp.l.f0.0(8)   null<1>D        g52<8,8,1>D     0D              { align1 1Q $0.dst };
+frc(8)          g55<1>F         g22<8,8,1>F                     { align1 1Q compacted };
+add(8)          g57<1>D         g110<8,8,1>D    160D            { align1 1Q compacted };
+add(8)          g64<1>D         g110<8,8,1>D    176D            { align1 1Q $0.dst compacted };
+shl(8)          g69<1>D         g51<8,8,1>D     0x00000003UD    { align1 1Q $0.dst };
+(+f0.0) sel(8)  g54<1>UD        g53<8,8,1>UD    g21<8,8,1>UD    { align1 1Q @6 };
+(+f0.0) sel(8)  g56<1>UD        g55<8,8,1>UD    g22<8,8,1>UD    { align1 1Q @5 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @5 };
+send(8)         g12UD           g57UD           nullUD          0x0240600c                0x00000000
+                hdc1 MsgDesc: (untyped surface read, Surface = 12, SIMD8, Mask = 0x0)  mlen 1 ex_mlen 0 rlen 4 { align1 1Q $5 };
+send(8)         g65UD           g64UD           nullUD          0x02206c0c                0x00000000
+                hdc1 MsgDesc: (untyped surface read, Surface = 12, SIMD8, Mask = 0xc)  mlen 1 ex_mlen 0 rlen 2 { align1 1Q @4 $0 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+add(8)          g70<1>D         g69<8,8,1>D     32D             { align1 1Q @3 compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+add(8)          g71<1>D         g69<8,8,1>D     2080D           { align1 1Q };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.src };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @2 };
+send(8)         g16UD           g70UD           nullUD          0x02406009                0x00000000
+                hdc1 MsgDesc: (untyped surface read, Surface = 9, SIMD8, Mask = 0x0)  mlen 1 ex_mlen 0 rlen 4 { align1 1Q $0 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+add(8)          g72<1>UD        g71<8,8,1>UD    0x00000004UD    { align1 1Q @1 compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @1 };
+send(8)         g41UD           g72UD           nullUD          0x02406009                0x00000000
+                hdc1 MsgDesc: (untyped surface read, Surface = 9, SIMD8, Mask = 0x0)  mlen 1 ex_mlen 0 rlen 4 { align1 1Q $0 };
+mul(8)          g62<1>F         g54<8,8,1>F     g14<8,8,1>F     { align1 1Q @5 $5.dst compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+mul(8)          g63<1>F         g56<8,8,1>F     g15<8,8,1>F     { align1 1Q @5 $5.dst compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+mad(8)          g67<1>F         g12<8,8,1>F     g66<8,8,1>F     g62<1,1,1>F { align1 1Q @2 $5.dst compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+mad(8)          g68<1>F         g13<8,8,1>F     g65<8,8,1>F     g62<1,1,1>F { align1 1Q $5.dst compacted };
+mad(8)          g2<1>F          g67<8,8,1>F     g65<8,8,1>F     -g63<1,1,1>F { align1 1Q @2 $0.dst compacted };
+mad(8)          g3<1>F          g68<8,8,1>F     g66<8,8,1>F     g63<1,1,1>F { align1 1Q @2 $0.dst compacted };
+
+LABEL48:
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+mov(1)          g46<1>UD        mask0<0,1,0>UD                  { align1 WE_all 1N @1 compacted };
+and(1)          g46<1>UD        g46<0,1,0>UD    0xffffffffUD    { align1 WE_all 1N @1 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.src };
+fbl(1)          g20<1>UD        g46<0,1,0>UD                    { align1 WE_all 1N @1 };
+shl(1)          a0<1>UD         g20<0,1,0>UD    0x00000002UD    { align1 WE_all 1N @1 $0.dst };
+add(1)          a0<1>UD         a0<0,1,0>UD     0x00000200UD    { align1 WE_all 1N @1 };
+mov(1)          g45<1>UD        g[a0]<0,1,0>UD                  { align1 WE_all 1N @1 };
+shl(1)          a0<1>UD         g20<0,1,0>UD    0x00000002UD    { align1 WE_all 1N $0.dst };
+add(1)          a0<1>UD         a0<0,1,0>UD     0x00000400UD    { align1 WE_all 1N @1 };
+mov(1)          g46<1>UD        g[a0 288]<0,1,0>UD              { align1 WE_all 1N @1 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @2 };
+mov(8)          g76<1>D         g45<0,1,0>D                     { align1 1Q };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @2 };
+mov(8)          g77<1>D         g46<0,1,0>D                     { align1 1Q };
+cmp.z.f0.0(8)   g78<1>D         g46<0,1,0>D     g41<8,8,1>D     { align1 1Q $0.src compacted };
+cmp.z.f0.0(8)   g79<1>D         g45<0,1,0>D     g16<8,8,1>D     { align1 1Q compacted };
+and.nz.f0.0(8)  null<1>UD       g79<8,8,1>UD    g78<8,8,1>UD    { align1 1Q @1 };
+(+f0.0) if(8)   JIP:  LABEL46         UIP:  LABEL46             { align1 1Q };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+mov(1)          g47<1>UD        mask0<0,1,0>UD                  { align1 WE_all 1N @1 compacted };
+and(1)          g47<1>UD        g47<0,1,0>UD    0xffffffffUD    { align1 WE_all 1N @1 };
+mov(8)          g1<1>UD         0x00000000UD                    { align1 WE_all 1Q $0.dst };
+fbl(1)          g80<1>UD        g47<0,1,0>UD                    { align1 WE_all 1N @2 $0.dst };
+shl(1)          a0<1>UD         g80<0,1,0>UD    0x00000002UD    { align1 WE_all 1N @1 };
+add(1)          a0<1>UD         a0<0,1,0>UD     0x00000800UD    { align1 WE_all 1N @1 };
+mov(1)          g84<1>UD        g[a0 384]<0,1,0>UD              { align1 WE_all 1N @1 };
+shl(1)          a0<1>UD         g80<0,1,0>UD    0x00000002UD    { align1 WE_all 1N @7 $0.dst };
+add(1)          a0<1>UD         a0<0,1,0>UD     0x00000800UD    { align1 WE_all 1N @1 };
+mov(1)          g85<1>UD        g[a0 416]<0,1,0>UD              { align1 WE_all 1N @1 };
+mov(1)          g1.3<1>UD       g85<0,1,0>D                     { align1 WE_all 1N @1 };
+or(1)           a0.1<1>UD       g84<0,1,0>UD    0x00000082UD    { align1 WE_all 1N @3 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @2 };
+send(8)         g69UD           g1UD            g2UD            0x024a00fc                a0.1<0>UD
+                sampler MsgDesc: sample SIMD8 Surface = 252 Sampler = 0  mlen 1 rlen 4 { align1 1Q $0 AccWrEnable FusionCtrl };
+break(8)        JIP:  LABEL46         UIP:  LABEL47             { align1 1Q };
+
+LABEL46:
+endif(8)        JIP:  LABEL47                                   { align1 1Q };
+
+LABEL47:
+while(8)        JIP:  LABEL48                                   { align1 1Q };
+mov(8)          g83<1>UD        g71<8,8,1>UD                    { align1 1Q $0.dst };
+mov(8)          g81<1>UD        g69<8,8,1>UD                    { align1 1Q $0.dst };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $2.src };
+mov(8)          g82<1>UD        g70<8,8,1>UD                    { align1 1Q $0.dst };
+
+LABEL44:
+endif(8)        JIP:  LABEL10                                   { align1 1Q };
+add(8)          g86<1>F         g73<8,8,1>F     0xbf800000F  /* -1F */ { align1 1Q @7 $0.dst compacted };
+mul(8)          g87<1>F         g58<8,8,1>F     g74<8,8,1>F     { align1 1Q $0.dst compacted };
+mul.sat(8)      g31<1>F         g59<8,8,1>F     g75<8,8,1>F     { align1 1Q $0.dst compacted };
+cmp.z.f0.0(8)   null<1>D        g112<8,8,1>D    1D              { align1 1Q $2.dst };
+mad(8)          g29<1>F         0x3c00HF        g115<8,8,1>F    g86<1,1,1>F { align1 1Q @4 $0.dst };
+(+f0.0) if(8)   JIP:  LABEL50         UIP:  LABEL49             { align1 1Q };
+add(8)          g88<1>D         g110<8,8,1>D    240D            { align1 1Q $0.dst compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @1 };
+send(8)         g89UD           g88UD           nullUD          0x02206c0c                0x00000000
+                hdc1 MsgDesc: (untyped surface read, Surface = 12, SIMD8, Mask = 0xc)  mlen 1 ex_mlen 0 rlen 2 { align1 1Q $0 };
+cmp.nz.f0.0(8)  null<1>D        g89<8,8,1>D     -1D             { align1 1Q $0.dst };
+(+f0.0) if(8)   JIP:  LABEL52         UIP:  LABEL51             { align1 1Q };
+frc(8)          g91<1>F         g21<8,8,1>F                     { align1 1Q $0.dst compacted };
+cmp.l.f0.0(8)   null<1>D        g90<8,8,1>D     0D              { align1 1Q $0.dst };
+frc(8)          g93<1>F         g22<8,8,1>F                     { align1 1Q $0.dst compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+add(8)          g95<1>D         g110<8,8,1>D    256D            { align1 1Q compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.src };
+add(8)          g103<1>D        g110<8,8,1>D    272D            { align1 1Q compacted };
+shl(8)          g113<1>D        g89<8,8,1>D     0x00000003UD    { align1 1Q };
+(+f0.0) sel(8)  g92<1>UD        g91<8,8,1>UD    g21<8,8,1>UD    { align1 1Q @6 $0.dst };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.src };
+(+f0.0) sel(8)  g94<1>UD        g93<8,8,1>UD    g22<8,8,1>UD    { align1 1Q @5 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @5 };
+send(8)         g42UD           g95UD           nullUD          0x0240600c                0x00000000
+                hdc1 MsgDesc: (untyped surface read, Surface = 12, SIMD8, Mask = 0x0)  mlen 1 ex_mlen 0 rlen 4 { align1 1Q $0 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.src };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @4 };
+send(8)         g104UD          g103UD          nullUD          0x02206c0c                0x00000000
+                hdc1 MsgDesc: (untyped surface read, Surface = 12, SIMD8, Mask = 0xc)  mlen 1 ex_mlen 0 rlen 2 { align1 1Q $0 };
+add(8)          g117<1>D        g113<8,8,1>D    32D             { align1 1Q @3 compacted };
+add(8)          g118<1>D        g113<8,8,1>D    2080D           { align1 1Q $3.dst };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @2 };
+send(8)         g46UD           g117UD          nullUD          0x02406009                0x00000000
+                hdc1 MsgDesc: (untyped surface read, Surface = 9, SIMD8, Mask = 0x0)  mlen 1 ex_mlen 0 rlen 4 { align1 1Q $0 };
+add(8)          g119<1>UD       g118<8,8,1>UD   0x00000004UD    { align1 1Q @1 $0.dst compacted };
+send(8)         g50UD           g119UD          nullUD          0x02406009                0x00000000
+                hdc1 MsgDesc: (untyped surface read, Surface = 9, SIMD8, Mask = 0x0)  mlen 1 ex_mlen 0 rlen 4 { align1 1Q @1 $0 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+mul(8)          g96<1>F         g92<8,8,1>F     g44<8,8,1>F     { align1 1Q @5 compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+mul(8)          g97<1>F         g94<8,8,1>F     g45<8,8,1>F     { align1 1Q @5 compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $3.src };
+mad(8)          g106<1>F        g42<8,8,1>F     g105<8,8,1>F    g96<1,1,1>F { align1 1Q @2 $0.dst compacted };
+mad(8)          g112<1>F        g43<8,8,1>F     g104<8,8,1>F    g96<1,1,1>F { align1 1Q $0.dst compacted };
+mad(8)          g4<1>F          g106<8,8,1>F    g104<8,8,1>F    -g97<1,1,1>F { align1 1Q @2 compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.src };
+mad(8)          g5<1>F          g112<8,8,1>F    g105<8,8,1>F    g97<1,1,1>F { align1 1Q @2 compacted };
+
+LABEL55:
+mov(1)          g55<1>UD        mask0<0,1,0>UD                  { align1 WE_all 1N @1 compacted };
+and(1)          g55<1>UD        g55<0,1,0>UD    0xffffffffUD    { align1 WE_all 1N @1 };
+fbl(1)          g54<1>UD        g55<0,1,0>UD                    { align1 WE_all 1N @1 };
+shl(1)          a0<1>UD         g54<0,1,0>UD    0x00000002UD    { align1 WE_all 1N @1 $0.dst };
+add(1)          a0<1>UD         a0<0,1,0>UD     0x00000400UD    { align1 WE_all 1N @1 };
+mov(1)          g55<1>UD        g[a0 448]<0,1,0>UD              { align1 WE_all 1N @1 };
+shl(1)          a0<1>UD         g54<0,1,0>UD    0x00000002UD    { align1 WE_all 1N $0.dst };
+add(1)          a0<1>UD         a0<0,1,0>UD     0x00000600UD    { align1 WE_all 1N @1 };
+mov(1)          g56<1>UD        g[a0 64]<0,1,0>UD               { align1 WE_all 1N @1 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @2 };
+mov(8)          g120<1>D        g55<0,1,0>D                     { align1 1Q };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @2 };
+mov(8)          g121<1>D        g56<0,1,0>D                     { align1 1Q };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.src };
+cmp.z.f0.0(8)   g122<1>D        g56<0,1,0>D     g50<8,8,1>D     { align1 1Q @7 compacted };
+cmp.z.f0.0(8)   g123<1>D        g55<0,1,0>D     g46<8,8,1>D     { align1 1Q $0.src compacted };
+and.nz.f0.0(8)  null<1>UD       g123<8,8,1>UD   g122<8,8,1>UD   { align1 1Q @1 };
+(+f0.0) if(8)   JIP:  LABEL53         UIP:  LABEL53             { align1 1Q };
+mov(1)          g56<1>UD        mask0<0,1,0>UD                  { align1 WE_all 1N @1 compacted };
+and(1)          g56<1>UD        g56<0,1,0>UD    0xffffffffUD    { align1 WE_all 1N @1 };
+mov(8)          g3<1>UD         0x00000000UD                    { align1 WE_all 1Q $0.dst };
+fbl(1)          g0<1>UD         g56<0,1,0>UD                    { align1 WE_all 1N @2 $0.dst };
+shl(1)          a0<1>UD         g0<0,1,0>UD     0x00000002UD    { align1 WE_all 1N @1 $0.dst };
+add(1)          a0<1>UD         a0<0,1,0>UD     0x00000e00UD    { align1 WE_all 1N @1 };
+mov(1)          g1<1>UD         g[a0 256]<0,1,0>UD              { align1 WE_all 1N @1 };
+shl(1)          a0<1>UD         g0<0,1,0>UD     0x00000002UD    { align1 WE_all 1N @7 $0.dst };
+add(1)          a0<1>UD         a0<0,1,0>UD     0x00000e00UD    { align1 WE_all 1N @1 };
+mov(1)          g2<1>UD         g[a0 288]<0,1,0>UD              { align1 WE_all 1N @1 };
+mov(1)          g3.3<1>UD       g2<0,1,0>D                      { align1 WE_all 1N @1 };
+or(1)           a0.1<1>UD       g1<0,1,0>UD     0x00000082UD    { align1 WE_all 1N @3 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @2 };
+send(8)         g76UD           g3UD            g4UD            0x024a00fc                a0.1<0>UD
+                sampler MsgDesc: sample SIMD8 Surface = 252 Sampler = 0  mlen 1 rlen 4 { align1 1Q $0 AccWrEnable FusionCtrl };
+break(8)        JIP:  LABEL53         UIP:  LABEL54             { align1 1Q };
+
+LABEL53:
+endif(8)        JIP:  LABEL54                                   { align1 1Q };
+
+LABEL54:
+while(8)        JIP:  LABEL55                                   { align1 1Q };
+mov(8)          g88<1>UD        g78<8,8,1>UD                    { align1 1Q $0.dst };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+mov(8)          g85<1>UD        g76<8,8,1>UD                    { align1 1Q };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+mov(8)          g86<1>UD        g77<8,8,1>UD                    { align1 1Q };
+else(8)         JIP:  LABEL51         UIP:  LABEL51             { align1 1Q };
+
+LABEL52:
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.src };
+mov(8)          g88<1>UD        0x3f800000UD                    { align1 1Q @4 };
+mov(8)          g86<1>UD        0x3f800000UD                    { align1 1Q @3 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @5 };
+mov(8)          g85<1>UD        0x3f800000UD                    { align1 1Q };
+
+LABEL51:
+endif(8)        JIP:  LABEL56                                   { align1 1Q };
+add(8)          g3<1>D          g110<8,8,1>D    288D            { align1 1Q $0.dst compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.src };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @1 };
+send(8)         g4UD            g3UD            nullUD          0x02206c0c                0x00000000
+                hdc1 MsgDesc: (untyped surface read, Surface = 12, SIMD8, Mask = 0xc)  mlen 1 ex_mlen 0 rlen 2 { align1 1Q $0 };
+cmp.nz.f0.0(8)  null<1>D        g4<8,8,1>D      -1D             { align1 1Q $0.dst };
+(+f0.0) if(8)   JIP:  LABEL58         UIP:  LABEL57             { align1 1Q };
+frc(8)          g7<1>F          g21<8,8,1>F                     { align1 1Q $0.dst compacted };
+cmp.l.f0.0(8)   null<1>D        g5<8,8,1>D      0D              { align1 1Q $0.dst };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+frc(8)          g9<1>F          g22<8,8,1>F                     { align1 1Q compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+add(8)          g11<1>D         g110<8,8,1>D    304D            { align1 1Q compacted };
+add(8)          g14<1>D         g110<8,8,1>D    320D            { align1 1Q $0.dst compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+shl(8)          g19<1>D         g4<8,8,1>D      0x00000003UD    { align1 1Q };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+(+f0.0) sel(8)  g8<1>UD         g7<8,8,1>UD     g21<8,8,1>UD    { align1 1Q @6 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+(+f0.0) sel(8)  g10<1>UD        g9<8,8,1>UD     g22<8,8,1>UD    { align1 1Q @5 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @5 };
+send(8)         g51UD           g11UD           nullUD          0x0240600c                0x00000000
+                hdc1 MsgDesc: (untyped surface read, Surface = 12, SIMD8, Mask = 0x0)  mlen 1 ex_mlen 0 rlen 4 { align1 1Q $0 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @4 };
+send(8)         g15UD           g14UD           nullUD          0x02206c0c                0x00000000
+                hdc1 MsgDesc: (untyped surface read, Surface = 12, SIMD8, Mask = 0xc)  mlen 1 ex_mlen 0 rlen 2 { align1 1Q $0 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.src };
+add(8)          g20<1>D         g19<8,8,1>D     32D             { align1 1Q @3 compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+add(8)          g41<1>D         g19<8,8,1>D     2080D           { align1 1Q };
+send(8)         g62UD           g20UD           nullUD          0x02406009                0x00000000
+                hdc1 MsgDesc: (untyped surface read, Surface = 9, SIMD8, Mask = 0x0)  mlen 1 ex_mlen 0 rlen 4 { align1 1Q @2 $0 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+add(8)          g42<1>UD        g41<8,8,1>UD    0x00000004UD    { align1 1Q @1 compacted };
+send(8)         g66UD           g42UD           nullUD          0x02406009                0x00000000
+                hdc1 MsgDesc: (untyped surface read, Surface = 9, SIMD8, Mask = 0x0)  mlen 1 ex_mlen 0 rlen 4 { align1 1Q @1 $0 };
+mul(8)          g12<1>F         g8<8,8,1>F      g53<8,8,1>F     { align1 1Q @5 $0.dst compacted };
+mul(8)          g13<1>F         g10<8,8,1>F     g54<8,8,1>F     { align1 1Q @5 $0.dst compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+mad(8)          g17<1>F         g51<8,8,1>F     g16<8,8,1>F     g12<1,1,1>F { align1 1Q @2 compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+mad(8)          g18<1>F         g52<8,8,1>F     g15<8,8,1>F     g12<1,1,1>F { align1 1Q compacted };
+mad(8)          g7<1>F          g17<8,8,1>F     g15<8,8,1>F     -g13<1,1,1>F { align1 1Q @2 compacted };
+mad(8)          g8<1>F          g18<8,8,1>F     g16<8,8,1>F     g13<1,1,1>F { align1 1Q @2 compacted };
+
+LABEL61:
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+mov(1)          g70<1>UD        mask0<0,1,0>UD                  { align1 WE_all 1N @1 compacted };
+and(1)          g70<1>UD        g70<0,1,0>UD    0xffffffffUD    { align1 WE_all 1N @1 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $5.src };
+fbl(1)          g57<1>UD        g70<0,1,0>UD                    { align1 WE_all 1N @1 };
+shl(1)          a0<1>UD         g57<0,1,0>UD    0x00000002UD    { align1 WE_all 1N @1 $0.dst };
+add(1)          a0<1>UD         a0<0,1,0>UD     0x00000600UD    { align1 WE_all 1N @1 };
+mov(1)          g70<1>UD        g[a0 448]<0,1,0>UD              { align1 WE_all 1N @1 };
+shl(1)          a0<1>UD         g57<0,1,0>UD    0x00000002UD    { align1 WE_all 1N $0.dst };
+add(1)          a0<1>UD         a0<0,1,0>UD     0x00000800UD    { align1 WE_all 1N @1 };
+mov(1)          g71<1>UD        g[a0 64]<0,1,0>UD               { align1 WE_all 1N @1 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @2 };
+mov(8)          g43<1>D         g70<0,1,0>D                     { align1 1Q };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @2 };
+mov(8)          g44<1>D         g71<0,1,0>D                     { align1 1Q };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+cmp.z.f0.0(8)   g45<1>D         g71<0,1,0>D     g66<8,8,1>D     { align1 1Q compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+cmp.z.f0.0(8)   g46<1>D         g70<0,1,0>D     g62<8,8,1>D     { align1 1Q compacted };
+and.nz.f0.0(8)  null<1>UD       g46<8,8,1>UD    g45<8,8,1>UD    { align1 1Q @1 };
+(+f0.0) if(8)   JIP:  LABEL59         UIP:  LABEL59             { align1 1Q };
+mov(1)          g71<1>UD        mask0<0,1,0>UD                  { align1 WE_all 1N @1 compacted };
+and(1)          g71<1>UD        g71<0,1,0>UD    0xffffffffUD    { align1 WE_all 1N @1 };
+mov(8)          g5<1>UD         0x00000000UD                    { align1 WE_all 1Q $0.src };
+fbl(1)          g47<1>UD        g71<0,1,0>UD                    { align1 WE_all 1N @2 $0.dst };
+shl(1)          a0<1>UD         g47<0,1,0>UD    0x00000002UD    { align1 WE_all 1N @1 $0.dst };
+add(1)          a0<1>UD         a0<0,1,0>UD     0x00000400UD    { align1 WE_all 1N @1 };
+mov(1)          g48<1>UD        g[a0 352]<0,1,0>UD              { align1 WE_all 1N @1 };
+shl(1)          a0<1>UD         g47<0,1,0>UD    0x00000002UD    { align1 WE_all 1N @7 $0.dst };
+add(1)          a0<1>UD         a0<0,1,0>UD     0x00000400UD    { align1 WE_all 1N @1 };
+mov(1)          g49<1>UD        g[a0 384]<0,1,0>UD              { align1 WE_all 1N @1 };
+mov(1)          g5.3<1>UD       g49<0,1,0>D                     { align1 WE_all 1N @1 };
+or(1)           a0.1<1>UD       g48<0,1,0>UD    0x00000082UD    { align1 WE_all 1N @3 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @2 };
+send(8)         g77UD           g5UD            g7UD            0x024a00fc                a0.1<0>UD
+                sampler MsgDesc: sample SIMD8 Surface = 252 Sampler = 0  mlen 1 rlen 4 { align1 1Q $0 AccWrEnable FusionCtrl };
+break(8)        JIP:  LABEL59         UIP:  LABEL60             { align1 1Q };
+
+LABEL59:
+endif(8)        JIP:  LABEL60                                   { align1 1Q };
+
+LABEL60:
+while(8)        JIP:  LABEL61                                   { align1 1Q };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+mov(8)          g84<1>UD        g80<8,8,1>UD                    { align1 1Q };
+else(8)         JIP:  LABEL57         UIP:  LABEL57             { align1 1Q };
+
+LABEL58:
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @2 };
+mov(8)          g84<1>UD        0x3f800000UD                    { align1 1Q };
+
+LABEL57:
+endif(8)        JIP:  LABEL56                                   { align1 1Q };
+sel.ge(8)       g50<1>F         g60<8,8,1>F     0x3f800000F  /* 1F */ { align1 1Q $0.dst compacted };
+mul(8)          g55<1>F         g61<8,8,1>F     g84<8,8,1>F     { align1 1Q @3 $0.dst compacted };
+add(8)          g51<1>F         g50<8,8,1>F     0x3f800000F  /* 1F */ { align1 1Q @2 $0.dst compacted };
+add(8)          g53<1>F         g50<8,8,1>F     0xbf800000F  /* -1F */ { align1 1Q $0.dst compacted };
+mul(8)          g56<1>F         g85<8,8,1>F     g55<8,8,1>F     { align1 1Q @3 compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $5.src };
+mul(8)          g57<1>F         g86<8,8,1>F     g55<8,8,1>F     { align1 1Q compacted };
+mul(8)          g58<1>F         g88<8,8,1>F     g55<8,8,1>F     { align1 1Q compacted };
+math inv(8)     g52<1>F         g51<8,8,1>F     null<8,8,1>F    { align1 1Q @5 $0 };
+mul(8)          g54<1>F         g53<8,8,1>F     g52<8,8,1>F     { align1 1Q @4 $0.dst compacted };
+mul(8)          g59<1>F         g54<8,8,1>F     g54<8,8,1>F     { align1 1Q @1 compacted };
+mul(8)          g28<1>F         g56<8,8,1>F     g59<8,8,1>F     { align1 1Q @1 compacted };
+mul(8)          g32<1>F         g57<8,8,1>F     g59<8,8,1>F     { align1 1Q @5 compacted };
+mul(8)          g36<1>F         g58<8,8,1>F     g59<8,8,1>F     { align1 1Q @5 compacted };
+
+LABEL56:
+else(8)         JIP:  LABEL49         UIP:  LABEL49             { align1 1Q };
+
+LABEL50:
+add(8)          g60<1>F         g99<8,8,1>F     0xbd23d70aF  /* -0.04F */ { align1 1Q $0.dst };
+mov(1)          g100<1>D        1025758986D                     { align1 WE_all 1N };
+add(8)          g62<1>F         g98<8,8,1>F     0xbd23d70aF  /* -0.04F */ { align1 1Q $0.dst };
+add(8)          g64<1>F         g23<8,8,1>F     0xbd23d70aF  /* -0.04F */ { align1 1Q $0.dst };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @3 };
+mad(8)          g61<1>F         g100.0<0,1,0>F  g60<8,8,1>F     g31<1,1,1>F { align1 1Q $0.dst compacted };
+mad(8)          g63<1>F         g100.0<0,1,0>F  g62<8,8,1>F     g31<1,1,1>F { align1 1Q @3 $0.dst compacted };
+mad(8)          g65<1>F         g100.0<0,1,0>F  g64<8,8,1>F     g31<1,1,1>F { align1 1Q @3 $0.dst compacted };
+sel.ge(8)       g67<1>F         g61<8,8,1>F     0x0F  /* 0F */  { align1 1Q @3 $0.dst compacted };
+sel.ge(8)       g68<1>F         g63<8,8,1>F     0x0F  /* 0F */  { align1 1Q @3 $0.dst compacted };
+sel.ge(8)       g66<1>F         g65<8,8,1>F     0x0F  /* 0F */  { align1 1Q @3 $0.dst compacted };
+sel.l(8)        g28<1>F         g67<8,8,1>F     0x3f7fbe77F  /* 0.999F */ { align1 1Q @3 };
+sel.l(8)        g32<1>F         g68<8,8,1>F     0x3f7fbe77F  /* 0.999F */ { align1 1Q @3 };
+sel.l(8)        g36<1>F         g66<8,8,1>F     0x3f7fbe77F  /* 0.999F */ { align1 1Q @3 };
+
+LABEL49:
+endif(8)        JIP:  LABEL10                                   { align1 1Q };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+cmp.le.f0.0(8)  g77<1>F         g24<8,8,1>F     0x3a83126fF  /* 0.001F */ { align1 1Q };
+(+f1.0) cmp.z.f1.0(8) null<1>D  g77<8,8,1>D     0D              { align1 1Q @1 };
+(-f1.0.any4h) halt(8) JIP:  LABEL10   UIP:  LABEL62             { align1 1Q };
+cmp.l.f0.0(8)   g78<1>F         g24<8,8,1>F     g116<8,8,1>F    { align1 1Q $0.dst compacted };
+(+f1.0) cmp.z.f1.0(8) null<1>D  g78<8,8,1>D     0D              { align1 1Q @1 };
+(-f1.0.any4h) halt(8) JIP:  LABEL10   UIP:  LABEL62             { align1 1Q };
+add(8)          g69<1>D         g111<8,8,1>D    16D             { align1 1Q $0.dst compacted };
+mul(8)          g79<1>F         -g107<8,8,1>F   0x3f000000F  /* 0.5F */ { align1 1Q $0.dst compacted };
+mul(8)          g84<1>F         g108<8,8,1>F    0x3f000000F  /* 0.5F */ { align1 1Q compacted };
+sel.sat.ge(8)   g30<1>F         g87<8,8,1>F     0x3d3851ecF  /* 0.045F */ { align1 1Q };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N @4 };
+send(8)         g70UD           g69UD           nullUD          0x0240600b                0x00000000
+                hdc1 MsgDesc: (untyped surface read, Surface = 11, SIMD8, Mask = 0x0)  mlen 1 ex_mlen 0 rlen 4 { align1 1Q $0 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+mad(8)          g80<1>F         0xb800HF        g109<8,8,1>F    g79<1,1,1>F { align1 1Q @3 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+mad(8)          g85<1>F         0xb800HF        g109<8,8,1>F    g84<1,1,1>F { align1 1Q @3 };
+mad(8)          g124<1>F        g101<8,8,1>F    g6.5<0,1,0>F    g80<1,1,1>F { align1 1Q @2 compacted };
+mad(8)          g125<1>F        g102<8,8,1>F    g6.6<0,1,0>F    g85<1,1,1>F { align1 1Q @2 compacted };
+mul(8)          g74<1>F         g70<8,8,1>F     g73<8,8,1>F     { align1 1Q $0.dst compacted };
+mul(8)          g75<1>F         g71<8,8,1>F     g73<8,8,1>F     { align1 1Q $0.dst compacted };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $0.dst };
+mul(8)          g76<1>F         g72<8,8,1>F     g73<8,8,1>F     { align1 1Q compacted };
+mul(8)          g33<1>F         g74<8,8,1>F     g81<8,8,1>F     { align1 1Q @3 compacted };
+mul(8)          g34<1>F         g75<8,8,1>F     g82<8,8,1>F     { align1 1Q @3 compacted };
+mul(8)          g35<1>F         g76<8,8,1>F     g83<8,8,1>F     { align1 1Q @3 compacted };
+
+LABEL10:
+endif(8)        JIP:  LABEL2                                    { align1 1Q };
+
+LABEL2:
+endif(8)        JIP:  LABEL0                                    { align1 1Q };
+mov(8)          g22<1>UD        g98<8,8,1>UD                    { align1 1Q };
+mov(8)          g21<1>UD        g99<8,8,1>UD                    { align1 1Q };
+
+LABEL0:
+endif(8)        JIP:  LABEL62                                   { align1 1Q };
+halt(8)         JIP:  LABEL62         UIP:  LABEL62             { align1 1Q };
+
+LABEL62:
+sync allwr(8)                   null<0,1,0>UB                   { align1 1Q };
+(+f1.0) sendc(8) nullUD         g21UD           nullUD          0x08030400                0x00000000
+                render MsgDesc: RT write SIMD8 Surface = 0  mlen 4 ex_mlen 0 rlen 0 { align1 1Q @2 $6 };
+(+f1.0) sendc(8) nullUD         g25UD           nullUD          0x08030401                0x00001000
+                render MsgDesc: RT write SIMD8 Surface = 1  mlen 4 ex_mlen 0 rlen 0 { align1 1Q $7 };
+(+f1.0) sendc(8) nullUD         g29UD           nullUD          0x08030402                0x00002000
+                render MsgDesc: RT write SIMD8 Surface = 2  mlen 4 ex_mlen 0 rlen 0 { align1 1Q $8 };
+(+f1.0) sendc(8) nullUD         g33UD           nullUD          0x08030403                0x00003000
+                render MsgDesc: RT write SIMD8 Surface = 3  mlen 4 ex_mlen 0 rlen 0 { align1 1Q @6 $9 };
+(+f1.0) sendc(8) nullUD         g37UD           nullUD          0x08030404                0x00004000
+                render MsgDesc: RT write SIMD8 Surface = 4  mlen 4 ex_mlen 0 rlen 0 { align1 1Q @7 $10 };
+mov(8)          g72<1>F         0x0F             /* 0F */       { align1 1Q $0.dst compacted };
+mov(8)          g73<1>F         0x0F             /* 0F */       { align1 1Q $0.dst compacted };
+mov(8)          g74<1>F         0x0F             /* 0F */       { align1 1Q $0.dst compacted };
+mov(8)          g75<1>F         0x0F             /* 0F */       { align1 1Q @7 $0.dst compacted };
+(+f1.0) sendc(8) nullUD         g72UD           nullUD          0x08030405                0x00005000
+                render MsgDesc: RT write SIMD8 Surface = 5  mlen 4 ex_mlen 0 rlen 0 { align1 1Q @1 $11 };
+sync nop(1)                     null<0,1,0>UB                   { align1 WE_all 1N $11.src };
+(+f1.0) sendc(8) nullUD         g72UD           nullUD          0x08030406                0x00006000
+                render MsgDesc: RT write SIMD8 Surface = 6  mlen 4 ex_mlen 0 rlen 0 { align1 1Q $12 };
+(+f1.0) sendc(8) nullUD         g124UD          nullUD          0x08031407                0x00007000
+                render MsgDesc: RT write SIMD8 LastRT Surface = 7  mlen 4 ex_mlen 0 rlen 0 { align1 1Q @1 EOT };
+ 

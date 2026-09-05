@@ -114,7 +114,7 @@
         "Non SSA regs after NIR": 33,
         "SEND Count": 32,
         "Scratch Memory Size": 0,
-        "Source hash": 3138456263,
+        "Source hash": 1017454227,
         "Spill Count": 0,
         "Workgroup Memory Size": 0
       }
@@ -125,17 +125,17 @@
       "simd_width": 8,
       "stage": "fragment",
       "statistics": {
-        "Cycle Count": 48869,
+        "Cycle Count": 48012,
         "Fill Count": 0,
         "GRF registers": 0,
-        "Instruction Count": 819,
+        "Instruction Count": 871,
         "Loop Count": 10,
         "Max dispatch width": 8,
-        "Max live registers": 84,
+        "Max live registers": 86,
         "Non SSA regs after NIR": 92,
         "SEND Count": 64,
         "Scratch Memory Size": 0,
-        "Source hash": 535557302,
+        "Source hash": 147527137,
         "Spill Count": 0,
         "Workgroup Memory Size": 0
       }
@@ -147,24 +147,24 @@
   },
   "files": {
     "gbuffer.fs.simd8.bin": {
-      "bytes": 13888,
-      "sha256": "aeecf8fc264203532d1f485f8a645b935beb337e28ce18d30548b1823b9e2d51"
+      "bytes": 14384,
+      "sha256": "37849323f312214fb61bf058aa12de3028dfb922e3780dfb66ad271fb91311ee"
     },
     "gbuffer.fs.spv": {
-      "bytes": 21216,
-      "sha256": "0cd270b6c047417fafe4a37b3b8bad38a8c1fbcd05e90a3cc45ecce89d2b75f1"
+      "bytes": 21496,
+      "sha256": "2d38933955f8dd9eab960c79d1f43c9ee636ec34b04a1c01887a550528f951da"
     },
     "gbuffer.vs.simd8.bin": {
-      "bytes": 4080,
-      "sha256": "f58e54e5e75df3068ba6b2ff010918bfcf1d736ac51027b027171461385f010e"
+      "bytes": 3544,
+      "sha256": "6d93cbdcdc6a808098d2a92691152fa23f5320c6281394047992b078cbb9dfe6"
     },
     "gbuffer.vs.spv": {
-      "bytes": 13676,
-      "sha256": "ef928cef3cd203a8cf63d1ca3db68e8f012774ecf9b711213bd3abaf312570f0"
+      "bytes": 13956,
+      "sha256": "412e80db1202d1dc0ef630a3ddc783b96d9dc119f601ef924f6408ebf2711526"
     },
     "gbuffer.wgsl": {
-      "bytes": 21595,
-      "sha256": "683a8a891cb505b46eed726fa25d03ce8503f4ce966e5c10b12512a3fb73473e"
+      "bytes": 22193,
+      "sha256": "34d1cec7a47353e724464b3408c27aabf862121a1acc97b68ec9b590a56fd91b"
     }
   },
   "frontend": "Helio vendored Naga WGSL-to-SPIR-V",

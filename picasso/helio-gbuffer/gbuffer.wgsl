@@ -303,10 +303,22 @@ const NO_TEXTURE: u32 = 0xffffffffu;
 const MATERIAL_WORKFLOW_METALLIC: u32 = 0u;
 const MATERIAL_WORKFLOW_SPECULAR: u32 = 1u;
 
+/// High-bit opt-in for atlas regions whose source UVs intentionally tile beyond
+/// 0..1.  The lower bits remain available for a real UV-channel selector when
+/// meshes expose more than UV0.
+const UV_WRAP_BEFORE_TRANSFORM: u32 = 0x80000000u;
+
 /// Select UV channel and apply texture transform
 fn select_uv(slot: MaterialTextureSlot, base_uv: vec2<f32>) -> vec2<f32> {
     // TODO: support uv_channel when we have tex_coords1
-    let scaled = base_uv * slot.offset_scale.zw;
+    // An atlas transform must operate on a single tiled source cell. Without
+    // this opt-in wrap, a greedy voxel quad with UVs 0..N walks into adjacent
+    // atlas tiles instead of repeating its own block texture.
+    var source_uv = base_uv;
+    if (slot.uv_channel & UV_WRAP_BEFORE_TRANSFORM) != 0u {
+        source_uv = fract(base_uv);
+    }
+    let scaled = source_uv * slot.offset_scale.zw;
     let s = slot.rotation.x;
     let c = slot.rotation.y;
     let rotated = vec2<f32>(
