@@ -21,13 +21,15 @@ def main() -> None:
         "PICASSO_VUE_OFFSET_DWORD", "PICASSO_VUE_CS_CHICKEN1_DWORD",
         "PICASSO_VUE_FF_SLICE_CS_CHICKEN1_DWORD",
         "PICASSO_VUE_SELECTOR_SRM_SENTINEL",
+        "PICASSO_VUE_L3ALLOC_DWORD", "PICASSO_VUE_L3ALLOC_SRM_SENTINEL",
         "PICASSO_VUE_RESULT_LIMIT_DWORD", "PICASSO_VUE_PREEMPTION_DELAY_DWORDS",
+        "PICASSO_VUE_POSITION_RECORD_DWORDS", "PICASSO_VUE_PBR_RECORD_DWORDS",
     )]
     declarations += [item(pipeline, name) for name in (
-        "picasso_vue_streamout_packets", "picasso_vue_counter_packets",
+        "picasso_vue_record_dwords", "picasso_vue_streamout_packets", "picasso_vue_counter_packets",
     )]
     declarations += [item(primary, name) for name in (
-        "picasso_vue_capture_capacity", "picasso_vue_target_disjoint", "PicassoVueSummary",
+        "picasso_vue_capture_capacity", "picasso_vue_capture_complete", "picasso_vue_target_disjoint", "PicassoVueSummary",
         "summarize_picasso_vue_records", "picasso_vue_capture_tests",
         "PicassoVueSelectorReadback", "picasso_vue_selector_readback",
     )]

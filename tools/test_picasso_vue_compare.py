@@ -4,13 +4,19 @@ from pathlib import Path
 import subprocess
 import tempfile
 
-from test_clip_position3_uv_texture import ROOT, item
+from test_clip_position3_uv_texture import ROOT, constant, item
 
 
 def main() -> None:
     source_path = "src/intel/render/picasso_vue_compare.rs"
-    declarations = [item(source_path, name) for name in (
+    pipeline = "src/intel/render/pipeline.rs"
+    declarations = [constant(pipeline, name) for name in (
+        "PICASSO_VUE_POSITION_RECORD_DWORDS", "PICASSO_VUE_PBR_RECORD_DWORDS",
+    )]
+    declarations += [item(pipeline, "picasso_vue_record_dwords")]
+    declarations += [item(source_path, name) for name in (
         "PicassoVueCompareInputs", "PicassoVueCompareError", "PicassoVueMismatch",
+        "PicassoVueVaryingComparison", "PicassoVueVaryingMismatch",
         "PicassoVueComparison", "picasso_vue_compare_error", "picasso_vue_byte_range",
         "picasso_vue_read_u32", "picasso_vue_read_matrix", "picasso_vue_gpu_range",
         "compare_picasso_vue_records", "picasso_vue_compare_tests",

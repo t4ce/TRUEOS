@@ -18,20 +18,84 @@ const PICASSO_VUE_OFFSET_DWORD: usize = 200;
 const PICASSO_VUE_CS_CHICKEN1_DWORD: usize = 201;
 const PICASSO_VUE_FF_SLICE_CS_CHICKEN1_DWORD: usize = 202;
 const PICASSO_VUE_SELECTOR_SRM_SENTINEL: u32 = 0xD15C_A11E;
-const PICASSO_VUE_RESULT_LIMIT_DWORD: usize = 203;
+const PICASSO_VUE_L3ALLOC_DWORD: usize = 203;
+const PICASSO_VUE_L3ALLOC_SRM_SENTINEL: u32 = 0xD15C_A113;
+const PICASSO_VUE_RESULT_LIMIT_DWORD: usize = 204;
 const PICASSO_VUE_PREEMPTION_DELAY_DWORDS: usize = 250;
+const PICASSO_VUE_POSITION_RECORD_DWORDS: usize = 8;
+const PICASSO_VUE_PBR_RECORD_DWORDS: usize = 16;
 const _: () = {
     assert!(PICASSO_VUE_COUNTER_BEGIN_DWORD >= RESULT_OA_END_DWORD + RESULT_OA_REPORT_DWORDS);
     assert!(PICASSO_VUE_RESULT_LIMIT_DWORD * 4 <= WARM_RESULT_BYTES);
 };
 
+fn render_batch_lri_packet(reg: usize, value: u32) -> Result<[u32; 3], &'static str> {
+    if reg & 3 != 0 || reg > 0x7F_FFFC {
+        return Err("render-batch-register-address");
+    }
+    // These RCS batch callers pass absolute MMIO addresses. Do not use the
+    // context-image mi_lri_cmd helper: its AddCSMMIOStartOffset bit would add
+    // 0x2000 again (L3ALLOC 0xB134 becomes 0xD134). Gen12 PRM Vol2a p1003
+    // explicitly distinguishes batch addressing from context restore, where
+    // only the low offset bits are used. Keep the restore-image helper intact.
+    Ok([MI_LOAD_REGISTER_IMM | MI_LRI_FORCE_POSTED | 1, reg as u32, value])
+}
+
+#[cfg(test)]
+mod render_batch_lri_tests {
+    use super::*;
+
+    fn rcs_destination(packet: [u32; 3]) -> u32 {
+        // Gen12 batch LRI DW0[19]: add RCS base to the full DW1[22:2].
+        (packet[1] & 0x7F_FFFC) + if packet[0] & (1 << 19) != 0 { 0x2000 } else { 0 }
+    }
+
+    #[test]
+    fn l3_partition_write_reaches_b134_without_adding_rcs_base() {
+        let packet = render_batch_lri_packet(GEN12_L3ALLOC, GEN12_L3ALLOC_ADL_DEFAULT).unwrap();
+        assert_eq!(packet, [0x1100_1001, 0xB134, 0xB000_0040]);
+        assert_eq!(rcs_destination(packet), 0xB134);
+        // The previous context-image opcode silently targeted another register.
+        let old = [packet[0] | (1 << 19), packet[1], packet[2]];
+        assert_eq!(rcs_destination(old), 0xD134);
+    }
+
+    #[test]
+    fn absolute_batch_registers_keep_their_address_across_engine_ranges() {
+        for reg in [0x1FFC, 0x2000, 0x2360, 0x3FFC, 0x4000, 0xB134, 0xDA00, 0x7F_FFFC] {
+            let packet = render_batch_lri_packet(reg, 0x1234_ABCD).unwrap();
+            assert_eq!(packet[0] & 0xFF, 1, "one register occupies three DWORDs");
+            assert_eq!(packet[0] & (1 << 19), 0);
+            assert_eq!(rcs_destination(packet), reg as u32);
+            assert_eq!(packet[2], 0x1234_ABCD);
+        }
+    }
+
+    #[test]
+    fn register_address_validation_rejects_truncation_and_unaligned_writes() {
+        for reg in [0xB135, 0x80_0000, usize::MAX] {
+            assert!(render_batch_lri_packet(reg, 0).is_err());
+        }
+    }
+}
+
+fn picasso_vue_record_dwords(pbr: bool) -> usize {
+    if pbr {
+        PICASSO_VUE_PBR_RECORD_DWORDS
+    } else {
+        PICASSO_VUE_POSITION_RECORD_DWORDS
+    }
+}
+
 fn picasso_vue_streamout_packets(
     gpu: u64,
     bytes: usize,
     mocs: u32,
-) -> Result<[u32; 32 + PICASSO_VUE_PREEMPTION_DELAY_DWORDS], &'static str> {
+    pbr: bool,
+) -> Result<([u32; 36 + PICASSO_VUE_PREEMPTION_DELAY_DWORDS], usize), &'static str> {
+    let record_bytes = picasso_vue_record_dwords(pbr) * 4;
     if gpu & 3 != 0
-        || bytes < 96
+        || bytes < 3 * record_bytes
         || bytes % 4 != 0
         || bytes / 4 > 1 << 30
         || gpu.checked_add(bytes as u64).is_none()
@@ -39,11 +103,15 @@ fn picasso_vue_streamout_packets(
     {
         return Err("picasso-vue-streamout-range");
     }
-    // Gen12 PRM Vol2d pp99,109–112: read slot0+slot1 (32B), write32B,
-    // and leave API Rendering Disable clear so the same native draw renders.
+    // Gen12 PRM Vol2d pp99,109–112: leave API Rendering Disable clear so
+    // the same native draw renders. Both layouts capture slot0+slot1 (32B).
+    // PBR additionally packs slot2 (world XYZ) and slot4 (UV XY) into 64B:
+    // the checked-in VS VUE_MAP maps location0->2 and location2->4. Reading
+    // through slot4 needs three 32B units, encoded as read length2. Slot3
+    // is skipped in the source, without inserting a hole in the output.
     // Offset write-enable21 + address-enable20=0 loads immediate zero without
     // making the old proof's automatic offset write to an unmapped VA0.
-    let mut words = [0; 32 + PICASSO_VUE_PREEMPTION_DELAY_DWORDS];
+    let mut words = [0; 36 + PICASSO_VUE_PREEMPTION_DELAY_DWORDS];
     words[..6].copy_from_slice(&[
         PIPE_CONTROL_CMD,
         PIPE_CONTROL_CS_STALL | PIPE_CONTROL_STALL_AT_SCOREBOARD,
@@ -56,11 +124,12 @@ fn picasso_vue_streamout_packets(
     // disabling 3DPRIMITIVE object preemption and enabling streamout. Our
     // post-context-restore batch supplies CS_CHICKEN1; do not rewrite it here,
     // so the end-of-capture SRM observes the restored value itself.
-    words[6 + PICASSO_VUE_PREEMPTION_DELAY_DWORDS..].copy_from_slice(&[
+    let setup = 6 + PICASSO_VUE_PREEMPTION_DELAY_DWORDS;
+    words[setup..setup + 13].copy_from_slice(&[
         CMD_3DSTATE_STREAMOUT,
         0x8200_0000,
-        0,
-        32,
+        if pbr { 2 } else { 0 },
+        record_bytes as u32,
         0,
         CMD_3DSTATE_SO_BUFFER_INDEX_0,
         (mocs << 22) | (1 << 31) | (1 << 21),
@@ -70,13 +139,19 @@ fn picasso_vue_streamout_packets(
         0,
         0,
         0,
-        0x7917_0005,
+    ]);
+    let entries = if pbr { 4 } else { 2 };
+    let declarations = setup + 13;
+    words[declarations..declarations + 3].copy_from_slice(&[
+        0x7917_0000 | (1 + entries * 2) as u32,
         1,
-        2,
-        0xF,
-        0,
-        0x1F,
-        0,
+        entries as u32,
+    ]);
+    for (index, slot) in [0, 1, 2, 4][..entries].iter().enumerate() {
+        words[declarations + 3 + index * 2] = (slot << 4) | 0xF;
+    }
+    let stall = declarations + 3 + entries * 2;
+    words[stall..stall + 6].copy_from_slice(&[
         PIPE_CONTROL_CMD,
         PIPE_CONTROL_CS_STALL | PIPE_CONTROL_STALL_AT_SCOREBOARD,
         0,
@@ -84,13 +159,13 @@ fn picasso_vue_streamout_packets(
         0,
         0,
     ]);
-    Ok(words)
+    Ok((words, stall + 6))
 }
 fn picasso_vue_counter_packets(
     result_gpu: u64,
     result_bytes: usize,
     end: bool,
-) -> Result<([u32; 34], usize), &'static str> {
+) -> Result<([u32; 38], usize), &'static str> {
     if result_gpu & 7 != 0
         || result_bytes < PICASSO_VUE_RESULT_LIMIT_DWORD * 4
         || result_gpu
@@ -99,7 +174,7 @@ fn picasso_vue_counter_packets(
     {
         return Err("picasso-vue-counter-range");
     }
-    let mut words = [0u32; 34];
+    let mut words = [0u32; 38];
     words[0] = PIPE_CONTROL_CMD;
     words[1] = PIPE_CONTROL_CS_STALL | PIPE_CONTROL_STALL_AT_SCOREBOARD;
     let base = if end {
@@ -110,8 +185,8 @@ fn picasso_vue_counter_packets(
     // CS_CHICKEN1 supplies the requested control, while the engine-global
     // FF_SLICE_CS_CHICKEN1[14] selects whether that per-context control applies.
     // Observe both without changing either register for this capture.
-    let registers = [0x5200, 0x5204, 0x5240, 0x5244, 0x5280, 0x2580, 0x20E0];
-    let count = if end { 7 } else { 4 };
+    let registers = [0x5200, 0x5204, 0x5240, 0x5244, 0x5280, 0x2580, 0x20E0, 0xB134];
+    let count = if end { 8 } else { 4 };
     for (index, register) in registers[..count].iter().enumerate() {
         let destination = result_gpu + ((base + index) * 4) as u64;
         words[6 + index * 4..10 + index * 4].copy_from_slice(&[
@@ -2130,9 +2205,10 @@ fn encode_triangle_probe_batch(
         reg: usize,
         value: u32,
     ) -> Result<(), &'static str> {
-        push(batch_dwords, cursor, mi_lri_cmd(1, MI_LRI_FORCE_POSTED))?;
-        push(batch_dwords, cursor, reg as u32)?;
-        push(batch_dwords, cursor, value)
+        for word in render_batch_lri_packet(reg, value)? {
+            push(batch_dwords, cursor, word)?;
+        }
+        Ok(())
     }
 
     fn push_mi_report_perf_count(
@@ -3781,10 +3857,11 @@ fn encode_triangle_probe_batch(
         push(batch_dwords, &mut cursor, 0)?;
     }
     if draw.vue_capture {
-        for word in
-            picasso_vue_streamout_packets(GPU_VA_STREAMOUT_BASE, warm.streamout_len, RENDER_MOCS)?
-        {
-            push(batch_dwords, &mut cursor, word)?;
+        let (words, count) = picasso_vue_streamout_packets(
+            GPU_VA_STREAMOUT_BASE, warm.streamout_len, RENDER_MOCS, draw.pbr_material.is_some(),
+        )?;
+        for word in &words[..count] {
+            push(batch_dwords, &mut cursor, *word)?;
         }
     } else {
         log_batch_offset(cursor, "3DSTATE_STREAMOUT");
@@ -5350,9 +5427,10 @@ fn encode_minimal_streamout_proof_batch(
         reg: usize,
         value: u32,
     ) -> Result<(), &'static str> {
-        push(batch_dwords, cursor, mi_lri_cmd(1, MI_LRI_FORCE_POSTED))?;
-        push(batch_dwords, cursor, reg as u32)?;
-        push(batch_dwords, cursor, value)
+        for word in render_batch_lri_packet(reg, value)? {
+            push(batch_dwords, cursor, word)?;
+        }
+        Ok(())
     }
 
     fn push_sba_address(

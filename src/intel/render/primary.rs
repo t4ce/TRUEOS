@@ -1695,6 +1695,7 @@ fn stage_resident_churn_forward_secondary(
     mut draw: TriangleDrawPrep,
     depth_config: TriangleDepthConfig,
     resident: &ResidentChurnForward,
+    uv_pipeline: bool,
     secondary_index: usize,
     result_ggtt_gpu: u64,
 ) -> Result<usize, &'static str> {
@@ -1703,9 +1704,7 @@ fn stage_resident_churn_forward_secondary(
     // only for PBR meshes; culling, geometry, and shader selection stay intact.
     let draw_depth = (draw.pbr_material.is_none() || picasso_depth_test_enabled())
         .then_some(depth_config);
-    let (pipeline, front_end_contract) = if draw.pbr_material.is_some()
-        && picasso_uv_pipeline_enabled()
-    {
+    let (pipeline, front_end_contract) = if draw.pbr_material.is_some() && uv_pipeline {
         prepare_picasso_retained_uv_diagnostic(&mut draw)?
     } else {
         (resident.pipeline, resident.front_end_contract)
@@ -1840,14 +1839,29 @@ fn stage_resident_churn_transform_secondary(
     Ok(encoded.command_dwords * core::mem::size_of::<u32>())
 }
 
-fn picasso_vue_capture_capacity(indices: u32, rows: u32, capacity: usize) -> Option<usize> {
+fn picasso_vue_capture_capacity(indices: u32, rows: u32, pbr: bool, capacity: usize) -> Option<usize> {
     if indices == 0 || indices % 3 != 0 || rows == 0 {
         return None;
     }
     let bytes = (indices as usize)
         .checked_mul(rows as usize)?
-        .checked_mul(32)?;
+        .checked_mul(picasso_vue_record_dwords(pbr) * 4)?;
     (bytes <= capacity).then_some(bytes)
+}
+
+fn picasso_vue_capture_complete(
+    indices: u32,
+    instances: u32,
+    pbr: bool,
+    capacity: usize,
+    written: u64,
+    needed: u64,
+    offset: usize,
+) -> bool {
+    let triangle_bytes = (3 * picasso_vue_record_dwords(pbr) * 4) as u64;
+    picasso_vue_capture_capacity(indices, instances, pbr, capacity) == Some(offset)
+        && written == needed
+        && written.checked_mul(triangle_bytes) == Some(offset as u64)
 }
 fn picasso_vue_target_disjoint(
     scratch: u64,
@@ -1879,12 +1893,14 @@ struct PicassoVueSummary {
     first_noninside: Option<usize>,
     first_positions: [[u32; 4]; 3],
 }
-fn summarize_picasso_vue_records(words: &[u32]) -> Option<PicassoVueSummary> {
-    if words.len() % 24 != 0 {
+fn summarize_picasso_vue_records(words: &[u32], pbr: bool) -> Option<PicassoVueSummary> {
+    let record_dwords = picasso_vue_record_dwords(pbr);
+    let triangle_dwords = 3 * record_dwords;
+    if words.len() % triangle_dwords != 0 {
         return None;
     }
     let mut summary = PicassoVueSummary {
-        records: words.len() / 8,
+        records: words.len() / record_dwords,
         header_nonzero: [0; 4],
         nan_vertices: 0,
         inf_vertices: 0,
@@ -1905,12 +1921,12 @@ fn summarize_picasso_vue_records(words: &[u32]) -> Option<PicassoVueSummary> {
         first_noninside: None,
         first_positions: [[0; 4]; 3],
     };
-    for (triangle_index, triangle) in words.chunks_exact(24).enumerate() {
+    for (triangle_index, triangle) in words.chunks_exact(triangle_dwords).enumerate() {
         let mut and_code = 0x3Fu8;
         let mut or_code = 0u8;
         let mut nonfinite = false;
         let mut nonpositive_w = false;
-        for vertex in triangle.chunks_exact(8) {
+        for vertex in triangle.chunks_exact(record_dwords) {
             for (count, word) in summary.header_nonzero.iter_mut().zip(&vertex[..4]) {
                 *count += usize::from(*word != 0);
             }
@@ -1952,7 +1968,7 @@ fn summarize_picasso_vue_records(words: &[u32]) -> Option<PicassoVueSummary> {
         }
         if summary.first_noninside.is_none() && (nonfinite || nonpositive_w || or_code != 0) {
             summary.first_noninside = Some(triangle_index);
-            for (index, vertex) in triangle.chunks_exact(8).enumerate() {
+            for (index, vertex) in triangle.chunks_exact(record_dwords).enumerate() {
                 summary.first_positions[index].copy_from_slice(&vertex[4..8]);
             }
         }
@@ -2001,8 +2017,9 @@ fn log_picasso_vue_capture_after_retire(
     warm: RenderWarmState,
     resident: &ResidentChurnForward,
     capacity: usize,
-    cpu_before: [u32; 2],
-    cpu_after: [u32; 2],
+    pbr_varyings: bool,
+    cpu_before: [u32; 3],
+    cpu_after: [u32; 3],
 ) {
     let mut counters = [0u32; PICASSO_VUE_RESULT_LIMIT_DWORD - PICASSO_VUE_COUNTER_BEGIN_DWORD];
     let pointer = unsafe { warm.result_virt.add(PICASSO_VUE_COUNTER_BEGIN_DWORD * 4) };
@@ -2017,6 +2034,7 @@ fn log_picasso_vue_capture_after_retire(
     let cs_chicken1 = counters[PICASSO_VUE_CS_CHICKEN1_DWORD - PICASSO_VUE_COUNTER_BEGIN_DWORD];
     let ff_slice_cs_chicken1 =
         counters[PICASSO_VUE_FF_SLICE_CS_CHICKEN1_DWORD - PICASSO_VUE_COUNTER_BEGIN_DWORD];
+    let l3alloc = counters[PICASSO_VUE_L3ALLOC_DWORD - PICASSO_VUE_COUNTER_BEGIN_DWORD];
     // PPGTT SRM may be subject to MMIO read privilege checks (GFX_MODE[1]).
     // Cross-check the engine-global selector through CPU MMIO; a zero SRM
     // alone does not establish that the boot-programmed selector was lost.
@@ -2033,19 +2051,15 @@ fn log_picasso_vue_capture_after_retire(
     let index_count = unsafe { core::ptr::read_volatile(args.storage_virt.cast::<u32>()) };
     let instance_count =
         unsafe { core::ptr::read_volatile(args.storage_virt.cast::<u32>().add(1)) };
-    let expected = (index_count as usize)
-        .checked_mul(instance_count as usize)
-        .and_then(|records| records.checked_mul(32))
-        .filter(|bytes| index_count % 3 == 0 && *bytes <= capacity);
-    let complete = index_count != 0
-        && instance_count != 0
-        && expected == Some(offset)
-        && written == needed
-        && written.checked_mul(96) == Some(offset as u64);
+    let record_bytes = picasso_vue_record_dwords(pbr_varyings) * 4;
+    let complete = picasso_vue_capture_complete(
+        index_count, instance_count, pbr_varyings, capacity, written, needed, offset,
+    );
     crate::log_info!(target: "render";
-        "picasso-vue-capture: retired=1 complete={} pipeline={} stride={} source=preclip-so-header-xyzw indices={} instances={} records={} so_written={} so_needed={} overflow={} offset_bytes={} capacity_bytes={} cs_chicken1=0x{:08X} register_phase=end-of-capture/no-capture-lri proof=bounded-preclip-stream-not-raster-output\n",
-        complete, picasso_pipeline_name(), resident.vertex_stride,
-        index_count, instance_count, offset / 32, written, needed, written != needed, offset, capacity, cs_chicken1,
+        "picasso-vue-capture: retired=1 complete={} pipeline={} stride={} record_bytes={} pbr_varyings={} source={} indices={} instances={} records={} so_written={} so_needed={} overflow={} offset_bytes={} capacity_bytes={} cs_chicken1=0x{:08X} register_phase=end-of-capture/no-capture-lri proof=bounded-preclip-stream-not-raster-output\n",
+        complete, picasso_pipeline_name(), resident.vertex_stride, record_bytes, pbr_varyings,
+        if pbr_varyings { "preclip-so-header-xyzw-world-uv" } else { "preclip-so-header-xyzw" },
+        index_count, instance_count, offset / record_bytes, written, needed, written != needed, offset, capacity, cs_chicken1,
     );
     crate::log_info!(target: "render";
         "picasso-vue-preemption: cs_chicken1_srm=0x{:08X} ff_slice_cs_chicken1_srm=0x{:08X} selector_srm_sentinel=0x{:08X} srm_sentinel_unchanged={} ff_slice_cpu_pre=0x{:08X} ff_slice_cpu_post=0x{:08X} gfx_mode_cpu_pre=0x{:08X} gfx_mode_cpu_post=0x{:08X} cpu_pre_selected={} cpu_post_selected={} srm_matches_cpu_post={:?} mmio_read_check_disabled_pre={} mmio_read_check_disabled_post={} replay_object_level_srm={} primitive_preemption_disable_srm={} requested_3d_control_srm={} observation={} cpu_phase=immediately-before-submit/after-retire srm_phase=end-of-capture/no-capture-lri evidence=register-snapshots-not-preemption-behavior\n",
@@ -2056,14 +2070,28 @@ fn log_picasso_vue_capture_after_retire(
         cs_chicken1 & 1 != 0, cs_chicken1 & (1 << 10) != 0,
         requested_3d_control, selector.observation,
     );
-    if offset > capacity || offset % 96 != 0 {
+    let l3_srm_written = l3alloc != PICASSO_VUE_L3ALLOC_SRM_SENTINEL;
+    let requested_l3alloc = if device_is_gfx125(warm.device_id) {
+        GFX125_L3ALLOC_FULL_WAYS
+    } else {
+        GEN12_L3ALLOC_ADL_DEFAULT
+    };
+    crate::log_info!(target: "render";
+        "picasso-vue-l3alloc: register=0xB134 requested=0x{:08X} srm=0x{:08X} srm_written={} srm_requested_configuration={:?} cpu_pre=0x{:08X} cpu_post=0x{:08X} cpu_post_requested_configuration={} urb_ways_srm={} allocation_error_srm={} vs_entries={} vs_start_8k={} phase=srm-after-draw/cpu-before-submit-after-retire evidence=register-snapshots-not-physical-urb-contents\n",
+        requested_l3alloc, l3alloc, l3_srm_written,
+        l3_srm_written.then_some(l3alloc == requested_l3alloc),
+        cpu_before[2], cpu_after[2], cpu_after[2] == requested_l3alloc,
+        (l3alloc >> 1) & 0x7F, l3alloc & 1 != 0,
+        TRIANGLE_VS_URB_ENTRIES, TRIANGLE_VS_URB_START,
+    );
+    if offset > capacity || offset % (3 * record_bytes) != 0 {
         crate::log_warn!(target: "render"; "picasso-vue-capture: summary=skipped reason=offset-range-or-partial-triangle\n");
         return;
     }
     crate::intel::dma_flush(warm.streamout_virt, offset);
     let records =
         unsafe { core::slice::from_raw_parts(warm.streamout_virt.cast::<u32>(), offset / 4) };
-    let Some(summary) = summarize_picasso_vue_records(records) else {
+    let Some(summary) = summarize_picasso_vue_records(records, pbr_varyings) else {
         return;
     };
     crate::log_info!(target: "render";
@@ -2073,7 +2101,7 @@ fn log_picasso_vue_capture_after_retire(
         summary.ndc_bounds, summary.first_noninside, summary.first_positions,
     );
     if complete {
-        log_picasso_vue_comparison_after_retire(resident, records);
+        log_picasso_vue_comparison_after_retire(resident, records, pbr_varyings);
     }
 }
 #[cfg(test)]
@@ -2110,53 +2138,76 @@ mod picasso_vue_capture_tests {
     #[test]
     fn streamout_preserves_rendering_and_uses_no_offset_memory_address() {
         let gpu = 0x2_0088_0000;
-        let words = picasso_vue_streamout_packets(gpu, 5_933_568, 4).unwrap();
-        assert_eq!(&words[..6], &[0x7A00_0004, 0x0010_0002, 0, 0, 0, 0]);
-        assert_eq!(PICASSO_VUE_PREEMPTION_DELAY_DWORDS, 250);
-        assert!(words[6..256].iter().all(|word| *word == 0));
-        let mut cursor = 0;
-        let mut packet_headers = std::vec::Vec::new();
-        let mut noops = 0;
-        while cursor < words.len() {
-            let header = words[cursor];
-            if header == 0 {
-                noops += 1;
-                cursor += 1;
-            } else {
-                packet_headers.push(header);
-                cursor += (header & 0xFF) as usize + 2;
+        for pbr in [false, true] {
+            let record_bytes = picasso_vue_record_dwords(pbr) * 4;
+            let bytes = 185_424 * record_bytes;
+            let (storage, count) = picasso_vue_streamout_packets(gpu, bytes, 4, pbr).unwrap();
+            let words = &storage[..count];
+            assert_eq!(&words[..6], &[0x7A00_0004, 0x0010_0002, 0, 0, 0, 0]);
+            assert_eq!(PICASSO_VUE_PREEMPTION_DELAY_DWORDS, 250);
+            assert!(words[6..256].iter().all(|word| *word == 0));
+            let mut cursor = 0;
+            let mut packet_headers = std::vec::Vec::new();
+            let mut noops = 0;
+            while cursor < words.len() {
+                let header = words[cursor];
+                if header == 0 {
+                    noops += 1;
+                    cursor += 1;
+                } else {
+                    packet_headers.push(header);
+                    cursor += (header & 0xFF) as usize + 2;
+                }
             }
-        }
-        assert_eq!(cursor, 282, "packet lengths must consume the exact buffer");
-        assert_eq!(noops, 250);
-        assert_eq!(packet_headers, [0x7A00_0004, 0x781E_0003, 0x7860_0006, 0x7917_0005, 0x7A00_0004]);
-        let setup = &words[256..];
-        assert_eq!(&setup[..5], &[0x781E_0003, 0x8200_0000, 0, 32, 0]);
-        assert_eq!(setup[1] & (1 << 30), 0, "rendering must stay enabled");
-        assert_eq!(
-            &setup[5..13],
-            &[
-                0x7860_0006,
-                0x8120_0000,
-                gpu as u32,
-                2,
-                5_933_568 / 4 - 1,
-                0,
-                0,
-                0
-            ]
-        );
-        assert_eq!(setup[6] & (1 << 20), 0, "VA0 offset address must stay disabled");
-        assert_eq!(&setup[13..20], &[0x7917_0005, 1, 2, 0xF, 0, 0x1F, 0]);
-        assert_eq!(&setup[20..], &words[..6]);
-        for (gpu, bytes, mocs) in [
-            (gpu + 1, 96, 4),
-            (gpu, 95, 4),
-            (gpu, 97, 4),
-            (u64::MAX - 3, 96, 4),
-            (gpu, 96, 128),
-        ] {
-            assert!(picasso_vue_streamout_packets(gpu, bytes, mocs).is_err());
+            assert_eq!(cursor, if pbr { 286 } else { 282 }, "packet lengths must consume the exact buffer");
+            assert_eq!(noops, 250);
+            assert_eq!(packet_headers, [0x7A00_0004, 0x781E_0003, 0x7860_0006, if pbr { 0x7917_0009 } else { 0x7917_0005 }, 0x7A00_0004]);
+            let setup = &words[256..];
+            assert_eq!(&setup[..5], &[0x781E_0003, 0x8200_0000, if pbr { 2 } else { 0 }, record_bytes as u32, 0]);
+            assert_eq!(setup[1] & (1 << 30), 0, "rendering must stay enabled");
+            assert_eq!(
+                &setup[5..13],
+                &[
+                    0x7860_0006,
+                    0x8120_0000,
+                    gpu as u32,
+                    2,
+                    (bytes / 4 - 1) as u32,
+                    0,
+                    0,
+                    0
+                ]
+            );
+            assert_eq!(setup[6] & (1 << 20), 0, "VA0 offset address must stay disabled");
+            let declarations: &[u32] = if pbr {
+                &[0x7917_0009, 1, 4, 0xF, 0, 0x1F, 0, 0x2F, 0, 0x4F, 0]
+            } else {
+                &[0x7917_0005, 1, 2, 0xF, 0, 0x1F, 0]
+            };
+            assert_eq!(&setup[13..13 + declarations.len()], declarations);
+            let mut packed_bytes = 0;
+            for entry in declarations[3..].chunks_exact(2) {
+                assert_eq!(entry[0] & (1 << 11), 0, "no output holes for skipped source slots");
+                assert_eq!(entry[0] & 0x3000, 0, "all declarations write buffer0");
+                assert_eq!(entry[1], 0, "other streams remain empty");
+                let source_slot = (entry[0] >> 4) & 0x3F;
+                assert!((source_slot + 1) * 16 <= (setup[2] + 1) * 32);
+                packed_bytes += (entry[0] & 0xF).count_ones() * 4;
+            }
+            assert_eq!(packed_bytes as usize, record_bytes);
+            assert_eq!(&setup[13 + declarations.len()..], &words[..6]);
+            let triangle_bytes = 3 * record_bytes;
+            for (gpu, bytes, mocs) in [
+                (gpu + 1, triangle_bytes, 4),
+                (gpu, triangle_bytes - 1, 4),
+                (gpu, triangle_bytes + 1, 4),
+                (u64::MAX - 3, triangle_bytes, 4),
+                (gpu, triangle_bytes, 128),
+                (gpu, (1usize << 32) + 4, 4),
+            ] {
+                assert!(picasso_vue_streamout_packets(gpu, bytes, mocs, pbr).is_err());
+            }
+            assert!(picasso_vue_streamout_packets(gpu, triangle_bytes, 127, pbr).is_ok());
         }
     }
 
@@ -2165,9 +2216,9 @@ mod picasso_vue_capture_tests {
         let gpu = 0x3_0084_0000;
         for (end, base, expected_registers) in [
             (false, 192, &[0x5200u32, 0x5204, 0x5240, 0x5244][..]),
-            (true, 196, &[0x5200u32, 0x5204, 0x5240, 0x5244, 0x5280, 0x2580, 0x20E0][..]),
+            (true, 196, &[0x5200u32, 0x5204, 0x5240, 0x5244, 0x5280, 0x2580, 0x20E0, 0xB134][..]),
         ] {
-            let (words, count) = picasso_vue_counter_packets(gpu, 812, end).unwrap();
+            let (words, count) = picasso_vue_counter_packets(gpu, 816, end).unwrap();
             assert_eq!(&words[..6], &[0x7A00_0004, 0x0010_0002, 0, 0, 0, 0]);
             assert_eq!(count, 6 + expected_registers.len() * 4);
             for (index, packet) in words[6..count].chunks_exact(4).enumerate() {
@@ -2180,23 +2231,43 @@ mod picasso_vue_capture_tests {
             }
         }
         assert!(PICASSO_VUE_COUNTER_BEGIN_DWORD >= RESULT_OA_END_DWORD + RESULT_OA_REPORT_DWORDS);
-        assert_eq!(PICASSO_VUE_FF_SLICE_CS_CHICKEN1_DWORD + 1, PICASSO_VUE_RESULT_LIMIT_DWORD);
-        assert!(picasso_vue_counter_packets(gpu, 811, true).is_err());
+        assert_eq!(PICASSO_VUE_L3ALLOC_DWORD + 1, PICASSO_VUE_RESULT_LIMIT_DWORD);
+        assert!(picasso_vue_counter_packets(gpu, 815, true).is_err());
         assert!(picasso_vue_counter_packets(gpu + 4, 4096, true).is_err());
         assert!(picasso_vue_counter_packets(u64::MAX - 7, 4096, true).is_err());
     }
 
     #[test]
     fn capacity_and_physical_disjointness_reject_unsafe_capture() {
-        assert_eq!(picasso_vue_capture_capacity(46356, 4, 14_745_600), Some(5_933_568));
-        assert_eq!(picasso_vue_capture_capacity(46356, 4, 5_933_567), None);
-        assert_eq!(picasso_vue_capture_capacity(4, 4, 4096), None);
-        assert_eq!(picasso_vue_capture_capacity(3, 0, 4096), None);
+        for (pbr, expected) in [(false, 5_933_568), (true, 11_867_136)] {
+            assert_eq!(picasso_vue_capture_capacity(46356, 4, pbr, 14_745_600), Some(expected));
+            assert_eq!(picasso_vue_capture_capacity(46356, 4, pbr, expected - 1), None);
+            assert_eq!(picasso_vue_capture_capacity(4, 4, pbr, 4096), None);
+            assert_eq!(picasso_vue_capture_capacity(3, 0, pbr, 4096), None);
+            assert_eq!(picasso_vue_capture_capacity(0, 4, pbr, 4096), None);
+            assert_eq!(picasso_vue_capture_capacity(u32::MAX, u32::MAX, pbr, usize::MAX), None);
+        }
         assert!(picasso_vue_target_disjoint(0x1000, 4096, 0x2000, 4096));
         assert!(!picasso_vue_target_disjoint(0x1000, 4096, 0x1FFF, 4096));
         assert!(!picasso_vue_target_disjoint(0x1000, 4096, 0x800, 4096));
         assert!(!picasso_vue_target_disjoint(0, 4096, 0x8000, 4096));
         assert!(!picasso_vue_target_disjoint(u64::MAX - 1023, 4096, 0x8000, 4096));
+    }
+
+    #[test]
+    fn capture_completion_requires_full_triangle_coverage_and_layout_correct_offset() {
+        for pbr in [false, true] {
+            let bytes = 185_424 * picasso_vue_record_dwords(pbr) * 4;
+            assert!(picasso_vue_capture_complete(46_356, 4, pbr, bytes, 61_808, 61_808, bytes));
+            assert!(!picasso_vue_capture_complete(46_356, 4, pbr, bytes - 1, 61_808, 61_808, bytes));
+            assert!(!picasso_vue_capture_complete(46_356, 4, pbr, bytes, 61_807, 61_808, bytes));
+            assert!(!picasso_vue_capture_complete(46_356, 4, pbr, bytes, 61_807, 61_807, bytes));
+            assert!(!picasso_vue_capture_complete(46_356, 4, pbr, bytes, 61_808, 61_808, bytes - 4));
+            assert!(!picasso_vue_capture_complete(46_356, 4, pbr, bytes, u64::MAX, u64::MAX, bytes));
+            assert!(!picasso_vue_capture_complete(46_356, 4, !pbr, bytes, 61_808, 61_808, bytes));
+            assert!(!picasso_vue_capture_complete(0, 4, pbr, bytes, 0, 0, 0));
+            assert!(!picasso_vue_capture_complete(3, 0, pbr, bytes, 0, 0, 0));
+        }
     }
 
     #[test]
@@ -2215,37 +2286,43 @@ mod picasso_vue_capture_tests {
         cases[4][1][1] = f32::INFINITY;
         cases[5][2][3] = 0.0;
         cases[6][2][3] = -1.0;
-        let mut words = [0u32; 7 * 24];
-        for (triangle, positions) in words.chunks_exact_mut(24).zip(cases) {
-            for (vertex, position) in triangle.chunks_exact_mut(8).zip(positions) {
-                for (destination, value) in vertex[4..].iter_mut().zip(position) {
-                    *destination = value.to_bits();
+        for pbr in [false, true] {
+            let record_dwords = picasso_vue_record_dwords(pbr);
+            let triangle_dwords = 3 * record_dwords;
+            let mut words = std::vec![0u32; 7 * triangle_dwords];
+            for (triangle, positions) in words.chunks_exact_mut(triangle_dwords).zip(cases) {
+                for (vertex, position) in triangle.chunks_exact_mut(record_dwords).zip(positions) {
+                    for (destination, value) in vertex[4..8].iter_mut().zip(position) {
+                        *destination = value.to_bits();
+                    }
+                    // PBR varyings and their undefined padding are not clip positions.
+                    vertex[8..].fill(f32::NAN.to_bits());
                 }
             }
+            words[0] = 1;
+            let summary = summarize_picasso_vue_records(&words, pbr).unwrap();
+            assert_eq!(summary.records, 21);
+            assert_eq!(summary.header_nonzero, [1, 0, 0, 0]);
+            assert_eq!((summary.inside, summary.rejected, summary.crossing), (1, 1, 1));
+            assert_eq!(
+                (summary.nan_vertices, summary.inf_vertices, summary.nonpositive_w_vertices),
+                (1, 1, 2)
+            );
+            assert_eq!((summary.nonfinite_triangles, summary.nonpositive_w_triangles), (2, 2));
+            assert_eq!(summary.first_noninside, Some(1));
+            assert_eq!(summary.first_positions[0][0], 2.5f32.to_bits());
+            // D3D Z<0 rejects even though it would be inside an OpenGL [-W,W] volume.
+            for vertex in words[..triangle_dwords].chunks_exact_mut(record_dwords) {
+                vertex[6] = (-0.1f32).to_bits();
+            }
+            assert_eq!(
+                summarize_picasso_vue_records(&words[..triangle_dwords], pbr)
+                    .unwrap()
+                    .rejected,
+                1
+            );
+            assert!(summarize_picasso_vue_records(&words[..triangle_dwords - 1], pbr).is_none());
         }
-        words[0] = 1;
-        let summary = summarize_picasso_vue_records(&words).unwrap();
-        assert_eq!(summary.records, 21);
-        assert_eq!(summary.header_nonzero, [1, 0, 0, 0]);
-        assert_eq!((summary.inside, summary.rejected, summary.crossing), (1, 1, 1));
-        assert_eq!(
-            (summary.nan_vertices, summary.inf_vertices, summary.nonpositive_w_vertices),
-            (1, 1, 2)
-        );
-        assert_eq!((summary.nonfinite_triangles, summary.nonpositive_w_triangles), (2, 2));
-        assert_eq!(summary.first_noninside, Some(1));
-        assert_eq!(summary.first_positions[0][0], 2.5f32.to_bits());
-        // D3D Z<0 rejects even though it would be inside an OpenGL [-W,W] volume.
-        for vertex in words[..24].chunks_exact_mut(8) {
-            vertex[6] = (-0.1f32).to_bits();
-        }
-        assert_eq!(
-            summarize_picasso_vue_records(&words[..24])
-                .unwrap()
-                .rejected,
-            1
-        );
-        assert!(summarize_picasso_vue_records(&words[..23]).is_none());
     }
 }
 // Six 64-bit counters at two boundaries. Preserve the depth-state workaround
@@ -2873,10 +2950,16 @@ fn submit_resident_churn_forward_geometry_batched(
     let transform_handoff = transform_dispatch.map(|dispatch| dispatch.output.into());
     let transform_secondary_count = usize::from(transform_dispatch.is_some());
     let resident_draw_count = resident.draw_group_count();
+    // Keep the capture's record layout and the encoded VS selection consistent
+    // if the shell changes pipeline mode while this frame is being prepared.
+    let uv_pipeline = picasso_uv_pipeline_enabled();
+    let vue_pbr_varyings = resident.pbr_material() && sampled_material.is_some() && !uv_pipeline;
     let vue_capture_bytes = if capture_vue {
         let bytes = transform_dispatch
             .filter(|_| transform_handoff == Some(RetainedGraphicsHandoff::NativeMatrices))
-            .and_then(|dispatch| picasso_vue_capture_capacity(resident.index_count, dispatch.row_count, warm.streamout_len));
+            .and_then(|dispatch| picasso_vue_capture_capacity(
+                resident.index_count, dispatch.row_count, vue_pbr_varyings, warm.streamout_len,
+            ));
         if bytes.is_none() || warm.streamout_virt.is_null() || warm.result_len < PICASSO_VUE_RESULT_LIMIT_DWORD * 4 {
             crate::log_warn!(target: "render"; "picasso-vue-capture: rejected=1 reason=capacity-or-native-transform\n");
             None
@@ -2912,12 +2995,16 @@ fn submit_resident_churn_forward_geometry_batched(
     }
     seed_result_debug_slots(warm);
     if vue_capture_bytes.is_some() {
-        // Leave every other result slot at its existing initial value. This
-        // selector-only poison distinguishes an unwritten SRM from zero.
+        // Distinguish an unwritten register result from a returned zero.
+        // Neither poison overlaps completion cookies or pipeline counters.
         unsafe {
             core::ptr::write_volatile(
                 warm.result_virt.cast::<u32>().add(PICASSO_VUE_FF_SLICE_CS_CHICKEN1_DWORD),
                 PICASSO_VUE_SELECTOR_SRM_SENTINEL,
+            );
+            core::ptr::write_volatile(
+                warm.result_virt.cast::<u32>().add(PICASSO_VUE_L3ALLOC_DWORD),
+                PICASSO_VUE_L3ALLOC_SRM_SENTINEL,
             );
         }
     }
@@ -2995,6 +3082,7 @@ fn submit_resident_churn_forward_geometry_batched(
                     draw,
                     draw_depth,
                     resident,
+                    uv_pipeline,
                     secondary_index,
                     result_ggtt_gpu,
                 )?;
@@ -3126,6 +3214,7 @@ fn submit_resident_churn_forward_geometry_batched(
     let vue_cpu_before = vue_capture_bytes.map(|_| [
         crate::intel::mmio_read(dev, RCS_FF_SLICE_CS_CHICKEN1),
         crate::intel::mmio_read(dev, GFX_MODE),
+        crate::intel::mmio_read(dev, GEN12_L3ALLOC),
     ]);
     let (completed, gpu_poll_us, gpu_poll_iters) = match carrier {
         Some(lease) => match submit_picasso_render1_batch(
@@ -3153,6 +3242,7 @@ fn submit_resident_churn_forward_geometry_batched(
     let vue_cpu_after = vue_capture_bytes.filter(|_| completed).map(|_| [
         crate::intel::mmio_read(dev, RCS_FF_SLICE_CS_CHICKEN1),
         crate::intel::mmio_read(dev, GFX_MODE),
+        crate::intel::mmio_read(dev, GEN12_L3ALLOC),
     ]);
     if completed
         && let Some(material) = sampled_material
@@ -3179,7 +3269,9 @@ fn submit_resident_churn_forward_geometry_batched(
     if let (Some(bytes), Some(cpu_before), Some(cpu_after)) =
         (vue_capture_bytes, vue_cpu_before, vue_cpu_after)
     {
-        log_picasso_vue_capture_after_retire(warm, resident, bytes, cpu_before, cpu_after);
+        log_picasso_vue_capture_after_retire(
+            warm, resident, bytes, vue_pbr_varyings, cpu_before, cpu_after,
+        );
     } else if vue_capture_bytes.is_some() && !completed {
         crate::log_warn!(target: "render"; "picasso-vue-capture: retired=0 readback=skipped\n");
     }
