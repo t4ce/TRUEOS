@@ -3807,6 +3807,7 @@ fn retained_scene_descriptor_valid(scene: &v::vgpu::RetainedFrameSubmitV3) -> bo
             .iter()
             .all(|draw| *draw == v::vgpu::RetainedDrawRange::default())
 }
+
 fn decode_retained_scene_seeds(bytes: &[u8]) -> Option<Vec<v::vgpu::RetainedTransformSeed>> {
     if bytes.is_empty()
         || bytes.len() % 64 != 0
@@ -3819,7 +3820,15 @@ fn decode_retained_scene_seeds(bytes: &[u8]) -> Option<Vec<v::vgpu::RetainedTran
         .map(|row| {
             let word = |offset| u32::from_le_bytes(row[offset..offset + 4].try_into().unwrap());
             let fields: [f32; 14] = core::array::from_fn(|i| f32::from_bits(word(i * 4)));
-            if fields.iter().any(|v| !v.is_finite()) || fields[10] < 0.0 {
+            let quaternion_length_squared: f32 = fields[6..10].iter().map(|v| v * v).sum();
+            // Match the flat GPU materializer's admission. A skipped row
+            // would otherwise leave a stale compacted slot in a live draw.
+            if fields.iter().any(|v| !v.is_finite())
+                || fields[3..6].iter().any(|v| *v < 0.0)
+                || fields[10] < 0.0
+                || !quaternion_length_squared.is_finite()
+                || quaternion_length_squared <= 1.0e-12
+            {
                 return None;
             }
             Some(v::vgpu::RetainedTransformSeed {
@@ -3834,6 +3843,7 @@ fn decode_retained_scene_seeds(bytes: &[u8]) -> Option<Vec<v::vgpu::RetainedTran
         })
         .collect()
 }
+
 /// Execute Picasso's retained mesh and its untransformed static primitives in
 /// one Render submission. Dynamic input is compact TRS seeds plus any
 /// explicitly revised static positions; matrices, compaction, indirect draw

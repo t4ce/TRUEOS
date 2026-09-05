@@ -106,6 +106,24 @@ fn seed_decoder_checks_every_float_and_exact_row_boundaries() {
     assert!(decode_retained_scene_seeds(&row).is_none());
 }
 
+#[test]
+fn seed_decoder_rejects_rows_the_gpu_would_skip_but_allows_collapsed_scales() {
+    let mut row = [0u8; 64];
+    // The GPU accepts a zero scale and normalizes a non-unit quaternion.
+    row[36..40].copy_from_slice(&2.0f32.to_le_bytes());
+    assert!(decode_retained_scene_seeds(&row).is_some());
+    for scale in 3..6 {
+        let mut bad = row;
+        bad[scale * 4..scale * 4 + 4].copy_from_slice(&(-0.01f32).to_le_bytes());
+        assert!(decode_retained_scene_seeds(&bad).is_none());
+    }
+    for quaternion_w in [0.0f32, 0.000_000_1, f32::MAX] {
+        let mut bad = row;
+        bad[36..40].copy_from_slice(&quaternion_w.to_le_bytes());
+        assert!(decode_retained_scene_seeds(&bad).is_none());
+    }
+}
+
 fn slot(group: u32, index: u32) -> RetainedTransformSeed {
     RetainedTransformSeed { draw_group: group, flags: index << 16, ..RetainedTransformSeed::default() }
 }

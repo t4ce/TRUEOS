@@ -179,6 +179,40 @@ class AdapterTests(unittest.TestCase):
         """)
         self.assertNotIn("ShaderToyInvocation", generated)
 
+    def test_initialized_writable_scalar_uses_private_state(self) -> None:
+        generated = adapt("""
+            float phase = 0.;
+            void mainImage(out vec4 c, vec2 p) {
+                phase = iTime;
+                c = vec4(phase + p.x);
+            }
+        """)
+        self.assertIn("struct ShaderToyInvocation", generated)
+        self.assertIn("float phase = 0.f;", generated)
+        self.assertNotIn("#define phase", generated)
+
+    def test_initialized_writable_scalar_increment_uses_private_state(self) -> None:
+        for operation in ["phase += 1.;", "++phase;", "phase++;"]:
+            with self.subTest(operation=operation):
+                generated = adapt("float phase = 0.; void mainImage(out vec4 c, vec2 p) {"
+                                  + operation + " c=vec4(phase+p.x); }")
+                self.assertIn("struct ShaderToyInvocation", generated)
+
+    def test_scaled_matrix_global_keeps_matrix_type(self) -> None:
+        for expression in ["mat3(1.) * 1.93", "1.93 * mat3(1.)"]:
+            with self.subTest(expression=expression):
+                generated = adapt("const mat3 basis = " + expression + ";"
+                                  "void mainImage(out vec4 c, vec2 p) { c=vec4(vec3(p,1.)*basis,1.); }")
+                self.assertIn("struct ShaderToyInvocation", generated)
+                self.assertIn("inline mat3 operator*(mat3 m, float s)", generated)
+                self.assertIn("inline mat3 operator*(float s, mat3 m)", generated)
+                self.assertIn("const mat3 basis =", generated)
+
+    def test_rgba_aliases_keep_member_names(self) -> None:
+        generated = adapt("void mainImage(out vec4 c, vec2 p) { c=vec4(p,0.,1.); c.rgb=c.bgr; }")
+        self.assertIn('ignored "-Wopencl-unsupported-rgba"', generated)
+        self.assertIn("c.rgb=c.bgr", generated)
+
     def test_export_can_assign_a_catalog_kernel_name(self) -> None:
         generated = adapt(
             "void mainImage(out vec4 color, vec2 coord) { color = vec4(coord, 0., 1.); }",

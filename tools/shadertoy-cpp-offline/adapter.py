@@ -206,14 +206,33 @@ def _float_suffix(text: str) -> str:
     return text
 
 
-def _has_uninitialized_globals(source: str) -> bool:
-    """Select invocation storage for ordinary scalar/vector globals.
+def _needs_invocation_state(source: str) -> bool:
+    """Select invocation storage for writable or aggregate globals.
 
     Function parameters are not globals. Keep the established constant-only
     translation unchanged for sources that need no writable invocation state.
     """
     tokens = _tokenize(_strip_glsl_declarations(source))
     significant = _significant(tokens)
+    # A conservative write scan is enough to preserve initialized scalar
+    # globals that the Image pass updates. A shadowed local may also select
+    # the aggregate path; C++ member/local scope then preserves its meaning.
+    written_names: set[str] = set()
+    depth = 0
+    for pos, index in enumerate(significant):
+        value = tokens[index].text
+        if value == "{":
+            depth += 1
+        elif value == "}":
+            depth -= 1
+        elif depth > 0 and tokens[index].kind == "ident":
+            following = [tokens[i].text for i in significant[pos + 1:pos + 3]]
+            previous = [tokens[i].text for i in significant[max(0, pos - 2):pos]]
+            if ((following[:1] == ["="] and following != ["=", "="])
+                    or following in [[op, "="] for op in "+-*/%&|^"]
+                    or following in [["+", "+"], ["-", "-"]]
+                    or previous in [["+", "+"], ["-", "-"]]):
+                written_names.add(value)
     depth = 0
     paren_depth = 0
     types = {"bool", "int", "uint", "float", "mat2", "mat3", *_TYPE_NAMES}
@@ -233,6 +252,27 @@ def _has_uninitialized_globals(source: str) -> bool:
                 following = tokens[significant[pos + 2]].text
                 if name.kind == "ident" and following in {";", ",", "["}:
                     return True
+                if (name.kind == "ident" and following == "="
+                        and (value not in {"bool", "int", "uint", "float"}
+                             or name.text in written_names)):
+                    return True
+    return False
+
+
+def _uses_scaled_matrix_constructor(source: str) -> bool:
+    tokens = _tokenize(source)
+    significant = _significant(tokens)
+    parens = _matching_parens(tokens, significant)
+    for pos, index in enumerate(significant[:-1]):
+        if tokens[index].text not in {"mat2", "mat3"}:
+            continue
+        if tokens[significant[pos + 1]].text != "(":
+            continue
+        closing = parens[pos + 1]
+        if ((closing + 1 < len(significant)
+             and tokens[significant[closing + 1]].text == "*")
+                or (pos > 0 and tokens[significant[pos - 1]].text == "*")):
+            return True
     return False
 
 
@@ -695,14 +735,31 @@ kernel TRUEOS_REQD_SUB_GROUP_SIZE_16 void shadertoy_image(
 '''
 
 
+_MATRIX_SCALAR_HELPERS = r'''
+// GLSL matrix constructors may be scaled without splatting the scalar into
+// the vector overload. Keep each column in the matrix result.
+inline mat2 operator*(mat2 m, float s) { return mat2(m.c0 * s, m.c1 * s); }
+inline mat2 operator*(float s, mat2 m) { return m * s; }
+inline mat3 operator*(mat3 m, float s) { return mat3(m.c0 * s, m.c1 * s, m.c2 * s); }
+inline mat3 operator*(float s, mat3 m) { return m * s; }
+
+'''
+
+
 def adapt(source: str, kernel_name: str = "shadertoy_image") -> str:
     if "\x00" in source:
         raise AdapterError("shader source contains a NUL byte")
     if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", kernel_name) is None:
         raise AdapterError(f"invalid generated kernel name: {kernel_name!r}")
     epilogue = _EPILOGUE.replace("shadertoy_image", kernel_name)
-    private_globals = _has_uninitialized_globals(source)
+    private_globals = _needs_invocation_state(source)
     body = translate_body(source, private_globals=private_globals)
+    helpers = _MATRIX_SCALAR_HELPERS if _uses_scaled_matrix_constructor(source) else ""
+    if re.search(r"\.\s*[rgba]{1,4}\b", body):
+        # The pinned Clang supports these GLSL/OpenCL vector aliases but warns
+        # for the CLC++ language version. Their lowering is identical to xyzw;
+        # retaining the spelling also avoids renaming user struct members.
+        helpers += '#pragma clang diagnostic ignored "-Wopencl-unsupported-rgba"\n'
     if private_globals:
         # GLSL globals belong to one fragment invocation. A private aggregate
         # keeps member/helper access and local shadowing in C++ scope, without
@@ -713,4 +770,4 @@ def adapt(source: str, kernel_name: str = "shadertoy_image") -> str:
             "    ShaderToyInvocation invocation = {};\n"
             "    invocation.mainImage(frag_color, frag_coord, uniforms);",
         )
-    return _PRELUDE + body + epilogue
+    return _PRELUDE + helpers + body + epilogue

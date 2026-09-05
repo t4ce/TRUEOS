@@ -476,6 +476,8 @@ pub struct RetainedDrawRange {
 /// packed 64-byte RetainedTransformSeed rows and requires MAP_READ usage.
 /// Each seed's draw_group selects a range; flags[31:16] selects its contiguous
 /// group-local slot. Remaining range entries and reserved must be zero.
+/// Floats must be finite, scale/radius nonnegative, and the quaternion must
+/// have finite squared length greater than 1e-12 (the GPU normalizes it).
 #[derive(Copy, Clone, Debug, Default, PartialEq)]
 #[repr(C)]
 pub struct RetainedFrameSubmitV3 {

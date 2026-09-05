@@ -74,6 +74,26 @@ The first slice accepts a single, texture-free `mainImage` pass and supplies:
 - `mat2`/`mat3` construction and vector/matrix multiplication
 - GLSL `reflect`, `refract`, and `faceforward` geometric helpers
 - deterministic zero initialization for omitted local scalar initializers
+- matrix compound multiplication on simple variable swizzles (`q.xz *= rot(a)`)
+- invocation-private uninitialized globals, initialized writable scalars, and
+  vector/matrix globals; helpers share that pixel's state and local parameters
+  can shadow its fields
+- scalar scaling directly on `mat2`/`mat3` constructors
+- GLSL RGBA component aliases with the pinned Clang frontend
+
+Shaders with such globals are adapted into a private C++ aggregate created
+for each pixel. Sources using only the established constant-global subset keep
+their existing generated form. Complex swizzle lvalues such as
+`items[index++].xy *= matrix` still need an explicit temporary in the source.
+
+[Hex Array Pulse](HEX_ARRAY_PULSE.md) exercises both additions. It renders
+through the local Intel OpenCL runtime, but its scratch requirement still
+prevents admission to the Blueprint catalog.
+
+[Protean Clouds and the Aiekick sphere](CANDIDATE_CHECKS.md) exercise the next
+compatibility boundaries. The reconstructed Protean source passes the locked
+zero-scratch bake and host rendering; the sphere needs channel resources,
+cubemap sampling and nonzero mip levels.
 
 The adapter rejects `iChannel*`, samplers/texture calls, sound passes, and
 screen-space derivatives with a direct diagnostic. Picasso and QuadTexture
