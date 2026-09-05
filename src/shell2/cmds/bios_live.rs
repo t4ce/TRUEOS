@@ -18,6 +18,11 @@ const MAX_RETAINED_RANGES: usize = 512;
 const MAX_RETAINED_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const CAPTURE_FLAG_BOOT_SERVICES_RETAINED: u32 = 1u32 << 31;
 const BOOT_SERVICES_RANGE_EXECUTABLE: u32 = 1u32 << 0;
+const BOOT_SERVICES_RANGE_ENTRYPOINT: u32 = 1u32 << 1;
+const BOOT_SERVICES_RANGE_TABLE: u32 = 1u32 << 2;
+const BOOT_SERVICES_SET_COMPLETE: u32 = 1u32 << 0;
+const BOOT_SERVICES_SET_WATCHDOG_DISABLED: u32 = 1u32 << 1;
+const BOOT_SERVICES_SET_EXIT_GROUP_SENT: u32 = 1u32 << 2;
 const EFI_BOOT_SERVICES_CODE: u32 = 3;
 const EFI_BOOT_SERVICES_DATA: u32 = 4;
 const EFI_BOOT_SERVICES_SIGNATURE: u64 = 0x5652_4553_544F_4F42; // "BOOTSERV"
@@ -132,11 +137,15 @@ struct RetainedRange {
     physical_start: u64,
     length: u64,
     executable: bool,
+    entrypoint: bool,
+    table: bool,
     memory_type: u32,
+    flags: u32,
 }
 
 struct RetainedCapture {
     capture_flags: u32,
+    range_set_flags: u32,
     ranges: Vec<RetainedRange>,
 }
 
@@ -144,11 +153,14 @@ struct IdentityMapStats {
     ranges: usize,
     code_ranges: usize,
     data_ranges: usize,
+    entrypoint_ranges: usize,
+    table_ranges: usize,
     bytes: u64,
 }
 
 struct ProbeResult {
     capture_flags: u32,
+    range_set_flags: u32,
     boot_services_raw: u64,
     boot_services_phys: u64,
     calculate_crc32_raw: u64,
@@ -164,7 +176,7 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2) -> ParseOutcome {
     print_shell_line(io, "=== TRUEOS Live UEFI Boot Services CRC32 Probe ===");
     print_shell_line(
         io,
-        "policy=experimental single-call probe; retained BootServicesCode/Data identity map + CalculateCrc32 only; no firmware allocation, protocol mutation, device I/O, variable write, reset, or firmware write",
+        "policy=experimental quiesced-firmware probe; firmware ExitBootServices event group notified, retained call-surface identity map + CalculateCrc32 only; no firmware allocation, protocol mutation, device I/O, variable write, reset, or firmware write",
     );
     print_shell_line(
         io,
@@ -190,10 +202,30 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2) -> ParseOutcome {
             print_shell_line(
                 io,
                 alloc::format!(
-                    "firmware_identity_map ranges={} code={} data={} bytes={} active_cr3=yes",
+                    "firmware_quiesce exit_boot_services_event_group={} watchdog={} range_flags=0x{:08X}",
+                    if result.range_set_flags & BOOT_SERVICES_SET_EXIT_GROUP_SENT != 0 {
+                        "signaled"
+                    } else {
+                        "not-proven"
+                    },
+                    if result.range_set_flags & BOOT_SERVICES_SET_WATCHDOG_DISABLED != 0 {
+                        "disabled"
+                    } else {
+                        "not-proven"
+                    },
+                    result.range_set_flags
+                )
+                .as_str(),
+            );
+            print_shell_line(
+                io,
+                alloc::format!(
+                    "firmware_identity_map ranges={} code={} data={} entrypoint={} table={} bytes={} active_cr3=yes",
                     result.identity.ranges,
                     result.identity.code_ranges,
                     result.identity.data_ranges,
+                    result.identity.entrypoint_ranges,
+                    result.identity.table_ranges,
                     result.identity.bytes
                 )
                 .as_str(),
@@ -212,7 +244,7 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2) -> ParseOutcome {
             print_shell_line(
                 io,
                 alloc::format!(
-                    "CalculateCrc32 raw=0x{:016X} phys=0x{:016X} identity_mapped=yes",
+                    "CalculateCrc32 raw=0x{:016X} phys=0x{:016X} retained_entrypoint=yes identity_mapped=yes",
                     result.calculate_crc32_raw,
                     result.calculate_crc32_phys
                 )
@@ -303,12 +335,22 @@ fn run_probe() -> Result<ProbeResult, String> {
         return Err(String::from("CalculateCrc32 code address is outside the Limine memory map"));
     }
 
-    // The paired Limine handoff publishes every final EfiBootServicesCode/Data
-    // descriptor before converting those pages to reserved ownership. Map the
-    // exact set at its original physical addresses, then independently walk the
-    // active CR3 before crossing back into firmware.
+    let retained_target = capture.ranges.iter().find(|range| {
+        range.entrypoint && range_contains(range, calculate_crc32_phys)
+    });
+    let Some(_target_range) = retained_target else {
+        return Err(alloc::format!(
+            "CalculateCrc32 phys=0x{calculate_crc32_phys:X} was not captured as a retained Boot Services entrypoint"
+        ));
+    };
+
+    // The paired Limine handoff publishes every final BootServicesCode/Data
+    // descriptor plus the descriptors containing the Boot Services table and
+    // direct function entrypoints. Map the exact set at its original physical
+    // addresses, then independently walk the active CR3 before crossing back
+    // into firmware.
     let identity_phys = active_mapping_phys(calculate_crc32_raw)
-        .ok_or_else(|| String::from("CalculateCrc32 original address is still not mapped after retained-range install"))?;
+        .ok_or_else(|| String::from("CalculateCrc32 original address is still not mapped after retained call-surface install"))?;
     if identity_phys != calculate_crc32_phys {
         return Err(alloc::format!(
             "CalculateCrc32 is not identity-mapped: va=0x{calculate_crc32_raw:X} maps_to=0x{identity_phys:X} expected=0x{calculate_crc32_phys:X}"
@@ -330,6 +372,7 @@ fn run_probe() -> Result<ProbeResult, String> {
 
     Ok(ProbeResult {
         capture_flags: capture.capture_flags,
+        range_set_flags: capture.range_set_flags,
         boot_services_raw,
         boot_services_phys,
         calculate_crc32_raw,
@@ -351,6 +394,8 @@ fn install_retained_identity_map(ranges: &[RetainedRange]) -> Result<IdentityMap
         ranges: 0,
         code_ranges: 0,
         data_ranges: 0,
+        entrypoint_ranges: 0,
+        table_ranges: 0,
         bytes: 0,
     };
 
@@ -360,10 +405,11 @@ fn install_retained_identity_map(ranges: &[RetainedRange]) -> Result<IdentityMap
         crate::pci::mmio::map_identity_ram_region(range.physical_start, size, range.executable)
             .map_err(|error| {
                 alloc::format!(
-                    "retained identity map failed base=0x{:X} bytes=0x{:X} type={} exec={} error={error:?}",
+                    "retained identity map failed base=0x{:X} bytes=0x{:X} type={} flags=0x{:X} exec={} error={error:?}",
                     range.physical_start,
                     range.length,
                     range.memory_type,
+                    range.flags,
                     range.executable
                 )
             })?;
@@ -374,6 +420,12 @@ fn install_retained_identity_map(ranges: &[RetainedRange]) -> Result<IdentityMap
             stats.code_ranges += 1;
         } else {
             stats.data_ranges += 1;
+        }
+        if range.entrypoint {
+            stats.entrypoint_ranges += 1;
+        }
+        if range.table {
+            stats.table_ranges += 1;
         }
     }
 
@@ -501,7 +553,7 @@ fn retained_capture() -> Result<RetainedCapture, String> {
             range_version
         ));
     }
-    if range_flags & 1 == 0
+    if range_flags & BOOT_SERVICES_SET_COMPLETE == 0
         || range_header_bytes < size_of::<Trbsr1Header>()
         || range_entry_bytes < size_of::<Trbsr1Entry>()
         || range_count == 0
@@ -533,18 +585,34 @@ fn retained_capture() -> Result<RetainedCapture, String> {
         let memory_type = entry.memory_type;
         let flags = entry.flags;
         let executable = flags & BOOT_SERVICES_RANGE_EXECUTABLE != 0;
+        let entrypoint = flags & BOOT_SERVICES_RANGE_ENTRYPOINT != 0;
+        let table = flags & BOOT_SERVICES_RANGE_TABLE != 0;
+        let known_flags = BOOT_SERVICES_RANGE_EXECUTABLE
+            | BOOT_SERVICES_RANGE_ENTRYPOINT
+            | BOOT_SERVICES_RANGE_TABLE;
 
+        if flags & !known_flags != 0 {
+            return Err(alloc::format!(
+                "retained range {index} has unknown flags=0x{flags:08X}"
+            ));
+        }
         if physical_start % PAGE_4K != 0 || length == 0 || length % PAGE_4K != 0 {
             return Err(alloc::format!(
                 "retained range {index} is not page-shaped base=0x{physical_start:X} bytes=0x{length:X}"
             ));
         }
+        if entrypoint && !executable {
+            return Err(alloc::format!(
+                "retained range {index} marks an entrypoint non-executable type={memory_type} flags=0x{flags:08X}"
+            ));
+        }
         match memory_type {
             EFI_BOOT_SERVICES_CODE if executable => {}
-            EFI_BOOT_SERVICES_DATA if !executable => {}
+            EFI_BOOT_SERVICES_DATA if !executable || entrypoint => {}
+            _ if entrypoint || table => {}
             _ => {
                 return Err(alloc::format!(
-                    "retained range {index} type/exec mismatch type={memory_type} exec={executable}"
+                    "retained range {index} unsupported type/flags type={memory_type} flags=0x{flags:08X}"
                 ));
             }
         }
@@ -566,14 +634,25 @@ fn retained_capture() -> Result<RetainedCapture, String> {
             physical_start,
             length,
             executable,
+            entrypoint,
+            table,
             memory_type,
+            flags,
         });
     }
 
     Ok(RetainedCapture {
         capture_flags,
+        range_set_flags: range_flags,
         ranges,
     })
+}
+
+fn range_contains(range: &RetainedRange, address: u64) -> bool {
+    range
+        .physical_start
+        .checked_add(range.length)
+        .is_some_and(|end| address >= range.physical_start && address < end)
 }
 
 fn read_unaligned<T: Copy>(bytes: &[u8], offset: usize) -> Option<T> {
