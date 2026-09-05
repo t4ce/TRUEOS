@@ -2,6 +2,8 @@ bld/
 .limine/
 tgt/
 target/
+__pycache__/
+*.py[cod]
 target-*-host*/
 *.img
 virglrenderer-1.0.0/

@@ -89,7 +89,7 @@ pub(crate) fn init_gen12_lrc_context_image(
     state[0] = MI_NOOP;
     let mut idx = 1usize;
 
-    state[idx] = mi_lri_cmd(13, MI_LRI_FORCE_POSTED);
+    state[idx] = mi_lri_context_cmd(13, MI_LRI_FORCE_POSTED);
     idx += 1;
     state[idx] = 0x2244;
     state[idx + 1] = rcs_ctx_control_value(false);
@@ -125,7 +125,7 @@ pub(crate) fn init_gen12_lrc_context_image(
 
     push_mi_nops(state, &mut idx, 5);
 
-    state[idx] = mi_lri_cmd(9, MI_LRI_FORCE_POSTED);
+    state[idx] = mi_lri_context_cmd(9, MI_LRI_FORCE_POSTED);
     idx += 1;
     state[idx] = 0x23A8;
     state[idx + 1] = 0;
@@ -147,7 +147,7 @@ pub(crate) fn init_gen12_lrc_context_image(
     state[idx + 17] = pml4_phys as u32;
     idx += 18;
 
-    state[idx] = mi_lri_cmd(3, MI_LRI_FORCE_POSTED);
+    state[idx] = mi_lri_context_cmd(3, MI_LRI_FORCE_POSTED);
     idx += 1;
     state[idx] = 0x21B0;
     state[idx + 1] = 0;
@@ -159,7 +159,7 @@ pub(crate) fn init_gen12_lrc_context_image(
 
     push_mi_nops(state, &mut idx, 6);
 
-    state[idx] = mi_lri_cmd(1, 0);
+    state[idx] = mi_lri_context_cmd(1, 0);
     idx += 1;
     state[idx] = 0x20C8;
     state[idx + 1] = 0x7FFF_FFFF;
@@ -167,7 +167,7 @@ pub(crate) fn init_gen12_lrc_context_image(
 
     push_mi_nops(state, &mut idx, 13);
 
-    state[idx] = mi_lri_cmd(51, MI_LRI_FORCE_POSTED);
+    state[idx] = mi_lri_context_cmd(51, MI_LRI_FORCE_POSTED);
     idx += 1;
     state[idx] = 0x2588;
     state[idx + 1] = 0;

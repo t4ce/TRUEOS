@@ -2402,7 +2402,10 @@ fn mi_lri_num_regs(num_regs: u32) -> u32 {
     num_regs.saturating_mul(2).saturating_sub(1)
 }
 
-fn mi_lri_cmd(num_regs: u32, flags: u32) -> u32 {
+// Only for register lists in a saved context image. Gen12 restore consumes
+// low offset bits; executing this opcode with full addresses in a batch adds
+// the RCS base again. Batch writes must use render_batch_lri_packet instead.
+fn mi_lri_context_cmd(num_regs: u32, flags: u32) -> u32 {
     MI_LOAD_REGISTER_IMM | MI_LRI_CS_MMIO | flags | mi_lri_num_regs(num_regs)
 }
 

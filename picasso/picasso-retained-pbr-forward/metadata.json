@@ -1,6 +1,18 @@
 {
   "backend": "instrumented-mesa-anv-noop-drm-shim",
-  "baremetal_verified": false,
+  "baremetal_validation": {
+    "date": "2026-09-05",
+    "evidence": "../../tools/picasso-retained-texture-bake/VALIDATION.md",
+    "limitations": [
+      "Individual metallic/roughness, normal, occlusion and emissive contributions not isolated",
+      "No claim of environment-map IBL, alpha modes, mip filtering or general glTF conformance",
+      "No post-fix VUE capture in the successful run"
+    ],
+    "runtime_elf_sha256": "cc854128a3612450e32c668218c72421883bb82e6aeed465685bc96b7e62cf91",
+    "scope": "User-confirmed complete opaque DamagedHelmet geometry with authored-UV textures in the combined five-map PBR draw",
+    "screenshot_sha256": "f4be5ffefd3b42747e412086e577b9a28927c29cfb2fdcfd6a0608e0e805397c"
+  },
+  "baremetal_verified": true,
   "color_surface_formats": {
     "base_color": "R8G8B8A8_UNORM_SRGB",
     "emissive": "R8G8B8A8_UNORM_SRGB",

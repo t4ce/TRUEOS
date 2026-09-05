@@ -5,6 +5,11 @@
 and QuadTexture's reused fragment binary unchanged. The runtime entry is the
 generated `pipeline.rs` module.
 
+The recovered complete-mesh/authored-UV path was visually validated on ADL-S
+on 2026-09-05 after fixing the L3 register address. See [validation evidence and
+scope](VALIDATION.md). All five supplied maps are consumed; individual material
+contributions and full lighting conformance remain separate validation work.
+
 The shader follows glTF's texture channel and color conventions: base color
 and emissive use sRGB surfaces, metallic comes from B, roughness from G,
 occlusion from R, and tangent normals from linear RGB. Normal scale affects
@@ -103,10 +108,11 @@ the captured compiler offset and ends after its decoded RT EOT instruction;
 Mesa's following alignment padding is excluded. Both instruction counts must
 match the compiler assembly, and IGA must decode all five sampler sends.
 
-The checked-in evidence records compiler-selected payloads, descriptor maps,
-ISA, sizes and hashes. It proves compilation and the runtime data contract,
-not host image rendering or bare-metal image correctness. Hardware admission
-and visual validation remain separate steps.
+The bake records compiler-selected payloads, descriptor maps, ISA, sizes and
+hashes. A new bake starts with `baremetal_verified=false`; compiler success
+does not provide visual proof. The current checked-in artifact has a scoped
+`baremetal_validation` entry tied to its unchanged shader hashes and the
+successful screenshot. A changed artifact requires new hardware validation.
 
 `vgpu cull off` disables face culling for PBR draw diagnosis; `vgpu cull on`
 restores each material’s culling. `vgpu pipeline uv` selects the prior native
@@ -119,8 +125,10 @@ current PBR shader’s output. These controls apply to newly encoded draws.
 96-byte SIMD8 PS (setup GRF4). `vgpu pipeline uv` uses the160-byte SIMD16 PS
 (setup GRF6). Mesh storage and the UV interpolation contract remain identical.
 
-`vgpu capture vue` arms one eligible Picasso draw for native streamout of
-its VUE header and homogeneous position before clipping. Rendering remains
-enabled. The render log reports completion, finite-position and clip-plane
-classification checks after retirement. This diagnostic adds GPU writes and
-CPU readback on that single draw. Ordinary draws keep readback disabled.
+`vgpu capture vue` arms one eligible Picasso draw for native streamout before
+clipping. PBR captures 64-byte records containing header, clip position, world
+position and UV; the older UV shader keeps its 32-byte header/position layout.
+Rendering remains enabled. After retirement the log compares defined output
+components with same-frame inputs and reports L3 allocation/preemption register
+snapshots. Undefined varying padding is ignored. This diagnostic adds GPU
+writes and CPU readback to that single draw; ordinary draws keep it disabled.

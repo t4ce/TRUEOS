@@ -34,7 +34,7 @@ fn render_batch_lri_packet(reg: usize, value: u32) -> Result<[u32; 3], &'static 
         return Err("render-batch-register-address");
     }
     // These RCS batch callers pass absolute MMIO addresses. Do not use the
-    // context-image mi_lri_cmd helper: its AddCSMMIOStartOffset bit would add
+    // context-image mi_lri_context_cmd helper: its AddCSMMIOStartOffset bit would add
     // 0x2000 again (L3ALLOC 0xB134 becomes 0xD134). Gen12 PRM Vol2a p1003
     // explicitly distinguishes batch addressing from context restore, where
     // only the low offset bits are used. Keep the restore-image helper intact.
@@ -1604,7 +1604,7 @@ fn encode_draw_indexed_indirect_register_loads(
     // implicit StartInstanceLocation, while XP0 and XP2 must be initialized
     // explicitly.  Churn is one logical draw per packet, so its DrawID is 0.
     // Match ANV's exact CS-MMIO LRI form (no ForcePosted bit).
-    batch_dwords[*cursor] = mi_lri_cmd(1, 0);
+    batch_dwords[*cursor] = MI_LOAD_REGISTER_IMM | MI_LRI_CS_MMIO | 1;
     batch_dwords[*cursor + 1] = RCS_3DPRIM_XP_DRAW_ID - RCS_RING_BASE as u32;
     batch_dwords[*cursor + 2] = 0;
     *cursor += 3;
@@ -1617,7 +1617,7 @@ mod draw_indexed_indirect_encoder_tests {
         MI_LOAD_REGISTER_MEM, MI_LRI_CS_MMIO, RCS_3DPRIM_BASE_VERTEX, RCS_3DPRIM_INSTANCE_COUNT,
         RCS_3DPRIM_START_INSTANCE, RCS_3DPRIM_START_VERTEX, RCS_3DPRIM_VERTEX_COUNT,
         RCS_3DPRIM_XP_BASE_VERTEX, RCS_3DPRIM_XP_DRAW_ID, RCS_RING_BASE,
-        encode_draw_indexed_indirect_register_loads, mi_lri_cmd,
+        encode_draw_indexed_indirect_register_loads,
     };
 
     #[test]
@@ -1646,7 +1646,7 @@ mod draw_indexed_indirect_encoder_tests {
         assert_eq!(
             &batch[24..],
             &[
-                mi_lri_cmd(1, 0),
+                0x1108_0001,
                 RCS_3DPRIM_XP_DRAW_ID - RCS_RING_BASE as u32,
                 0,
             ]

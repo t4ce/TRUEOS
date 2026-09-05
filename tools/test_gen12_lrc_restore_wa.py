@@ -98,7 +98,7 @@ def main() -> None:
         for name in (
             "device_is_gfx12", "device_is_gfx125", "masked_bit_enable",
             "masked_bit_disable", "masked_bits_update", "rcs_ctx_control_value",
-            "mi_lri_num_regs", "mi_lri_cmd", "push_mi_nops",
+            "mi_lri_num_regs", "mi_lri_context_cmd", "push_mi_nops",
         )
     )
     source += "\n" + item("src/intel/render/lrc.rs", "init_gen12_rcs_restore_wa")

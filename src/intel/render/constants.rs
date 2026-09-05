@@ -786,9 +786,15 @@ const TRIANGLE_PS_MAX_THREADS: u32 = 63;
 const TRIANGLE_VS_URB_START: u32 = 4;
 // ADL GT1 with the programmed 32-way URB L3 allocation has 512 KiB of URB.
 // Mesa reserves the first 32 KiB (four 8-KiB chunks) for push constants and,
-// for a single 64-byte VS entry with no tessellation or GS, allocates the
-// hardware maximum of 3576 VS entries.
+// allocates the hardware maximum of 3576 VS entries without tessellation/GS.
+// PBR needs 128 bytes per entry; that also fits this 512-KiB partition, but
+// exceeds the reset 16-way/256-KiB partition. See test_render_batch_lri.py.
 const TRIANGLE_VS_URB_ENTRIES: u32 = 3576;
+const _: () = {
+    let adls_urb_bytes = ((GEN12_L3ALLOC_ADL_DEFAULT >> 1) & 0x7F) * 4 * 4096;
+    let pbr_required_bytes = TRIANGLE_VS_URB_START * 8192 + TRIANGLE_VS_URB_ENTRIES * 128;
+    assert!(pbr_required_bytes <= adls_urb_bytes);
+};
 const TRIANGLE_VS_URB_OUTPUT_LENGTH_OVERRIDE: Option<u8> = None;
 const TRIANGLE_DEFAULT_FRONT_END_CONTRACT: TriangleFrontEndContract = TriangleFrontEndContract {
     label: "mesa-like",
