@@ -471,7 +471,6 @@ pub struct RetainedDrawRange {
     pub first_index: u32,
     pub index_count: u32,
 }
-
 /// PBR scene with up to 512 buffer-backed TRS seeds and four index ranges.
 /// Inline frame seeds/count must be zero. The seed buffer contains tightly
 /// packed 64-byte RetainedTransformSeed rows and requires MAP_READ usage.
@@ -488,8 +487,6 @@ pub struct RetainedFrameSubmitV3 {
     pub draws: [RetainedDrawRange; MAX_RETAINED_SCENE_DRAWS],
     pub reserved: [u32; 2],
 }
-
-
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 #[repr(C)]
 pub struct TimelinePoint {

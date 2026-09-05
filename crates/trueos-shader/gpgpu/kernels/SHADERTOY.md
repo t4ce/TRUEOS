@@ -145,7 +145,7 @@ The current artifacts are:
 | 4 | `shadertoy_palette_grid` | `98a5a39154a9021e2e09407c5188644ac744eedae4031efdf395f6619b32fd40` |
 | 5 | `shadertoy_cosmic_strands` | `9a275f036deac274541a34256c09140ecd3f98e392c4963a27e6ac1db5b82500` |
 
-All three contracts are SIMD16 with 96 bytes of cross-thread data, 96 bytes of
+All five contracts are SIMD16 with 96 bytes of cross-thread data, 96 bytes of
 per-thread local IDs, and no scratch or SLM. The cube-field artifact exposes
 its read-only uniform argument as both a stateless pointer and BTI 1; direct RCS
 dispatch binds the same kernel-owned block through both representations.

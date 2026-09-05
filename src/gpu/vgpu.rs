@@ -3789,33 +3789,51 @@ fn retained_scene_descriptor_valid(scene: &v::vgpu::RetainedFrameSubmitV3) -> bo
         && scene.seed_count != 0
         && scene.seed_count as usize <= v::vgpu::MAX_RETAINED_SCENE_INSTANCES
         && scene.seed_offset % 4 == 0
-        && scene.seed_offset.checked_add(u64::from(scene.seed_count) * 64).is_some()
+        && scene
+            .seed_offset
+            .checked_add(u64::from(scene.seed_count) * 64)
+            .is_some()
         && scene.draw_count != 0
         && scene.draw_count as usize <= v::vgpu::MAX_RETAINED_SCENE_DRAWS
         && scene.reserved == [0; 2]
         && scene.frame.frame.seed_count == 0
-        && scene.frame.frame.seeds.iter().all(|seed| *seed == v::vgpu::RetainedTransformSeed::default())
-        && scene.draws[scene.draw_count as usize..].iter().all(|draw| *draw == v::vgpu::RetainedDrawRange::default())
+        && scene
+            .frame
+            .frame
+            .seeds
+            .iter()
+            .all(|seed| *seed == v::vgpu::RetainedTransformSeed::default())
+        && scene.draws[scene.draw_count as usize..]
+            .iter()
+            .all(|draw| *draw == v::vgpu::RetainedDrawRange::default())
 }
-
 fn decode_retained_scene_seeds(bytes: &[u8]) -> Option<Vec<v::vgpu::RetainedTransformSeed>> {
-    if bytes.is_empty() || bytes.len() % 64 != 0 || bytes.len() / 64 > v::vgpu::MAX_RETAINED_SCENE_INSTANCES {
+    if bytes.is_empty()
+        || bytes.len() % 64 != 0
+        || bytes.len() / 64 > v::vgpu::MAX_RETAINED_SCENE_INSTANCES
+    {
         return None;
     }
-    bytes.chunks_exact(64).map(|row| {
-        let word = |offset| u32::from_le_bytes(row[offset..offset + 4].try_into().unwrap());
-        let fields: [f32; 14] = core::array::from_fn(|i| f32::from_bits(word(i * 4)));
-        if fields.iter().any(|v| !v.is_finite()) || fields[10] < 0.0 {
-            return None;
-        }
-        Some(v::vgpu::RetainedTransformSeed {
-            translation: fields[0..3].try_into().unwrap(), scale: fields[3..6].try_into().unwrap(),
-            rotation: fields[6..10].try_into().unwrap(), local_radius: fields[10],
-            previous_translation: fields[11..14].try_into().unwrap(), draw_group: word(56), flags: word(60),
+    bytes
+        .chunks_exact(64)
+        .map(|row| {
+            let word = |offset| u32::from_le_bytes(row[offset..offset + 4].try_into().unwrap());
+            let fields: [f32; 14] = core::array::from_fn(|i| f32::from_bits(word(i * 4)));
+            if fields.iter().any(|v| !v.is_finite()) || fields[10] < 0.0 {
+                return None;
+            }
+            Some(v::vgpu::RetainedTransformSeed {
+                translation: fields[0..3].try_into().unwrap(),
+                scale: fields[3..6].try_into().unwrap(),
+                rotation: fields[6..10].try_into().unwrap(),
+                local_radius: fields[10],
+                previous_translation: fields[11..14].try_into().unwrap(),
+                draw_group: word(56),
+                flags: word(60),
+            })
         })
-    }).collect()
+        .collect()
 }
-
 /// Execute Picasso's retained mesh and its untransformed static primitives in
 /// one Render submission. Dynamic input is compact TRS seeds plus any
 /// explicitly revised static positions; matrices, compaction, indirect draw

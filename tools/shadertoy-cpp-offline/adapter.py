@@ -206,7 +206,77 @@ def _float_suffix(text: str) -> str:
     return text
 
 
-def translate_body(source: str) -> str:
+def _has_uninitialized_globals(source: str) -> bool:
+    """Select invocation storage for ordinary scalar/vector globals.
+
+    Function parameters are not globals. Keep the established constant-only
+    translation unchanged for sources that need no writable invocation state.
+    """
+    tokens = _tokenize(_strip_glsl_declarations(source))
+    significant = _significant(tokens)
+    depth = 0
+    paren_depth = 0
+    types = {"bool", "int", "uint", "float", "mat2", "mat3", *_TYPE_NAMES}
+    for pos, index in enumerate(significant):
+        value = tokens[index].text
+        if value == "{":
+            depth += 1
+        elif value == "}":
+            depth -= 1
+        elif value == "(":
+            paren_depth += 1
+        elif value == ")":
+            paren_depth -= 1
+        elif depth == 0 and paren_depth == 0 and value in types:
+            if pos + 2 < len(significant):
+                name = tokens[significant[pos + 1]]
+                following = tokens[significant[pos + 2]].text
+                if name.kind == "ident" and following in {";", ",", "["}:
+                    return True
+    return False
+
+
+def _lower_swizzle_multiply(source: str) -> str:
+    """C++ cannot bind a swizzle to our matrix operator*= reference.
+
+    Rewrite simple variable swizzles as ordinary assignments, preserving RHS
+    precedence. Do not duplicate an indexed or otherwise evaluated lvalue.
+    """
+    tokens = _tokenize(source)
+    significant = _significant(tokens)
+    before: dict[int, str] = {}
+    for pos in range(len(significant) - 4):
+        indices = significant[pos:pos + 5]
+        base, dot, swizzle, multiply, equals = (tokens[i] for i in indices)
+        if (base.kind != "ident" or dot.text != "."
+                or multiply.text != "*" or equals.text != "="
+                or not any(re.fullmatch(f"[{alphabet}]{{2,4}}", swizzle.text)
+                           for alphabet in ("xyzw", "rgba", "stpq"))
+                or (pos > 0 and tokens[significant[pos - 1]].text == ".")):
+            continue
+        nested = 0
+        end = pos + 5
+        while end < len(significant):
+            value = tokens[significant[end]].text
+            if nested == 0 and value in {";", ",", ")", "]", "}"}:
+                break
+            if value in {"(", "["}:
+                nested += 1
+            elif value in {")", "]"}:
+                nested -= 1
+            end += 1
+        if end == len(significant):
+            raise AdapterError("unterminated swizzle compound assignment")
+        multiply.text = f"= {base.text}.{swizzle.text} * ("
+        equals.text = ""
+        index = significant[end]
+        before[index] = before.get(index, "") + ")"
+    return "".join(before.get(index, "") + token.text
+                   for index, token in enumerate(tokens))
+
+
+def translate_body(source: str, *, private_globals: bool = False) -> str:
+    source = _lower_swizzle_multiply(source)
     source = _strip_glsl_declarations(source)
     if not re.search(r"\bvoid\s+mainImage\s*\(", source):
         raise AdapterError("paste an Image pass containing 'void mainImage(...)'")
@@ -255,7 +325,7 @@ def translate_body(source: str) -> str:
         if text == "}":
             brace_depth -= 1
             continue
-        if brace_depth != 0 or text not in {"bool", "int", "uint", "float"}:
+        if private_globals or brace_depth != 0 or text not in {"bool", "int", "uint", "float"}:
             continue
         if pos + 1 >= len(significant):
             continue
@@ -631,4 +701,16 @@ def adapt(source: str, kernel_name: str = "shadertoy_image") -> str:
     if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", kernel_name) is None:
         raise AdapterError(f"invalid generated kernel name: {kernel_name!r}")
     epilogue = _EPILOGUE.replace("shadertoy_image", kernel_name)
-    return _PRELUDE + translate_body(source) + epilogue
+    private_globals = _has_uninitialized_globals(source)
+    body = translate_body(source, private_globals=private_globals)
+    if private_globals:
+        # GLSL globals belong to one fragment invocation. A private aggregate
+        # keeps member/helper access and local shadowing in C++ scope, without
+        # introducing shared device globals or another kernel argument.
+        body = "struct ShaderToyInvocation {\n" + body + "\n};\n"
+        epilogue = epilogue.replace(
+            "    mainImage(frag_color, frag_coord, uniforms);",
+            "    ShaderToyInvocation invocation = {};\n"
+            "    invocation.mainImage(frag_color, frag_coord, uniforms);",
+        )
+    return _PRELUDE + body + epilogue

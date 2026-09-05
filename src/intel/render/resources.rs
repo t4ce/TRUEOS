@@ -2687,8 +2687,8 @@ pub(crate) fn create_resident_picasso_retained_mesh(
     let index_byte_len =
         u32::try_from(index_bytes).map_err(|_| "picasso-retained-geometry-size")?;
     let old_geometry = core::mem::replace(&mut resident.geometry, geometry);
-    // Picasso compacts all retained instances into one indexed-indirect draw.
-    // The seed flag's upper bits carry the group-local slot.
+    // V1/V2 start with one full-mesh indexed-indirect draw. V3 publishes its
+    // submesh groups with the seeds; upper flag bits carry group-local slots.
     resident.draw_group_count.store(1, Ordering::Release);
     resident.vertex_gpu_addr = resident.geometry.gpu_base();
     resident.vertex_count = vertex_count;
@@ -2710,11 +2710,20 @@ fn picasso_retained_draw_templates(
     seeds: &[v::vgpu::RetainedTransformSeed],
     ranges: &[v::vgpu::RetainedDrawRange],
 ) -> Result<Vec<[u32; 6]>, &'static str> {
-    if seeds.is_empty() || seeds.len() > v::vgpu::MAX_RETAINED_SCENE_INSTANCES
-        || ranges.is_empty() || ranges.len() > v::vgpu::MAX_RETAINED_SCENE_DRAWS
-        || ranges.iter().any(|range| range.index_count == 0
-            || range.first_index.checked_add(range.index_count).is_none_or(|end| end > index_count))
-    { return Err("picasso-retained-draw-ranges"); }
+    if seeds.is_empty()
+        || seeds.len() > v::vgpu::MAX_RETAINED_SCENE_INSTANCES
+        || ranges.is_empty()
+        || ranges.len() > v::vgpu::MAX_RETAINED_SCENE_DRAWS
+        || ranges.iter().any(|range| {
+            range.index_count == 0
+                || range
+                    .first_index
+                    .checked_add(range.index_count)
+                    .is_none_or(|end| end > index_count)
+        })
+    {
+        return Err("picasso-retained-draw-ranges");
+    }
     let mut capacities = [0u32; v::vgpu::MAX_RETAINED_SCENE_DRAWS];
     for seed in seeds {
         let group = seed.draw_group as usize;
@@ -2726,14 +2735,22 @@ fn picasso_retained_draw_templates(
     let mut first_instance = 0;
     let mut templates = Vec::with_capacity(ranges.len());
     for (range, capacity) in ranges.iter().zip(capacities) {
-        if capacity == 0 { return Err("picasso-retained-empty-group"); }
+        if capacity == 0 {
+            return Err("picasso-retained-empty-group");
+        }
         // A single atlas/material bundle is shared by all submesh ranges.
-        templates.push([range.index_count, range.first_index, 0, first_instance, capacity, 0]);
+        templates.push([
+            range.index_count,
+            range.first_index,
+            0,
+            first_instance,
+            capacity,
+            0,
+        ]);
         first_instance += capacity;
     }
     Ok(templates)
 }
-
 /// Publish compact TRS rows and submesh ranges for Picasso. The artifact writes
 /// the 208-byte matrices, compaction indices, and indexed-indirect command;
 /// the CPU never writes transformed vertex positions.
@@ -2800,17 +2817,26 @@ pub(crate) fn update_resident_picasso_retained_transform_seeds(
             .unwrap_or("picasso-retained-transform-unavailable"),
     )?;
     let camera_bytes = encode_camera(camera)?;
-    let default_draw = [v::vgpu::RetainedDrawRange { first_index: 0, index_count: resident.index_count }];
+    let default_draw = [v::vgpu::RetainedDrawRange {
+        first_index: 0,
+        index_count: resident.index_count,
+    }];
     let ranges = draw_ranges.unwrap_or(&default_draw);
     if seeds.len() > resident.max_instances
-        || ranges.iter().any(|range| !resident.topology.accepts_index_count(range.index_count as usize))
+        || ranges.iter().any(|range| {
+            !resident
+                .topology
+                .accepts_index_count(range.index_count as usize)
+        })
     {
         return Err("picasso-retained-transform-seeds");
     }
     let templates = picasso_retained_draw_templates(resident.index_count, seeds, ranges)?;
     let row_count = seeds.len() as u32;
     let mut seed_bytes = Vec::with_capacity(seeds.len() * SEED_BYTES);
-    for seed in seeds { seed_bytes.extend_from_slice(&encode_seed(*seed)); }
+    for seed in seeds {
+        seed_bytes.extend_from_slice(&encode_seed(*seed));
+    }
     let mut template_bytes = alloc::vec![0u8; CHURN_FORWARD_DRAW_COUNT * TEMPLATE_BYTES];
     for (group, template) in templates.iter().enumerate() {
         for (word, value) in template.iter().enumerate() {
@@ -2823,8 +2849,8 @@ pub(crate) fn update_resident_picasso_retained_transform_seeds(
         .transform_dispatch_for_rows(row_count)
         .ok_or("picasso-retained-transform-dispatch")?;
     // Helio's full-scene validator additionally requires its historical
-    // 36-index cube in every draw group. Picasso deliberately supplies one
-    // arbitrary triangle-list mesh and leaves the other groups empty, so only
+    // 36-index cube in every draw group. Picasso supplies admitted submesh
+    // ranges and leaves unused groups empty, so only
     // validate the geometry-independent dispatch ranges here. The template
     // above is constructed from this resident mesh and the exact row count.
     dispatch
@@ -2836,11 +2862,12 @@ pub(crate) fn update_resident_picasso_retained_transform_seeds(
     {
         return Err("picasso-retained-transform-upload");
     }
-    resident.draw_group_count.store(ranges.len() as u32, Ordering::Release);
+    resident
+        .draw_group_count
+        .store(ranges.len() as u32, Ordering::Release);
     transform.row_count.store(row_count, Ordering::Release);
     Ok(())
 }
-
 /// Publish one compact retained-transform frame. Instances, compacted indices,
 /// and WGPU indexed-indirect records remain GPU-owned outputs; the following
 /// Render submission consumes them directly through the native artifact VS or

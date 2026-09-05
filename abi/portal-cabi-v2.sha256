@@ -213,4 +213,9 @@
 # 880-byte frame with an unchanged 816-byte V1 prefix plus 64 bytes of opaque
 # glTF material factors. Existing retained-frame symbols and layouts remain
 # unchanged; older v2 artifacts continue to use their original submission.
-bbfb035059b71eee29c90fd254cd6415213b25f98c17f70166d8d1bd51504c77
+# The retained-frame-submit v3 call is strictly additive. Its 944-byte
+# record retains the exact V1/V2 prefixes and adds owner-scoped buffer-backed
+# TRS seeds (up to 512) and four submesh ranges sharing one PBR material.
+# All 306 pre-existing CABI declarations and retained V1/V2 records were
+# compared unchanged against 90b09e29f^ before updating this lock.
+fb30d47347f61ecb81e7dc0099767ed96eabbae47d3c151244da6c7268ffa127

@@ -23,6 +23,8 @@ def harness_source() -> str:
             "RETAINED_MATERIAL_TEXTURE_COUNT",
             "MAX_RETAINED_TRANSFORM_SEEDS",
             "MAX_RETAINED_STATIC_DRAWS",
+            "MAX_RETAINED_SCENE_INSTANCES",
+            "MAX_RETAINED_SCENE_DRAWS",
         )
     ]
     declarations.extend(
@@ -35,6 +37,8 @@ def harness_source() -> str:
             "IndexedBatchDrawV2",
             "RetainedFrameSubmit",
             "RetainedFrameSubmitV2",
+            "RetainedDrawRange",
+            "RetainedFrameSubmitV3",
         )
     )
     defaults = re.findall(
@@ -75,6 +79,26 @@ fn v2_keeps_the_v1_frame_prefix_and_exact_extension_size() {
     assert_eq!(align_of::<RetainedFrameSubmitV2>(), 8);
     assert_eq!(offset_of!(RetainedFrameSubmitV2, frame), 0);
     assert_eq!(offset_of!(RetainedFrameSubmitV2, material_parameters), 816);
+}
+
+#[test]
+fn v3_keeps_both_older_prefixes_and_fits_the_vm_payload() {
+    use vgpu::*;
+    use core::mem::{align_of, offset_of, size_of};
+    assert_eq!(MAX_RETAINED_TRANSFORM_SEEDS, 4);
+    assert_eq!(size_of::<RetainedTransformSeed>(), 64);
+    assert_eq!(offset_of!(RetainedTransformSeed, draw_group), 56);
+    assert_eq!(offset_of!(RetainedTransformSeed, flags), 60);
+    assert_eq!(size_of::<RetainedDrawRange>(), 8);
+    assert_eq!(size_of::<RetainedFrameSubmitV3>(), 944);
+    assert_eq!(align_of::<RetainedFrameSubmitV3>(), 8);
+    assert_eq!(offset_of!(RetainedFrameSubmitV3, frame), 0);
+    assert_eq!(offset_of!(RetainedFrameSubmitV3, seed_buffer), 880);
+    assert_eq!(offset_of!(RetainedFrameSubmitV3, seed_offset), 888);
+    assert_eq!(offset_of!(RetainedFrameSubmitV3, seed_count), 896);
+    assert_eq!(offset_of!(RetainedFrameSubmitV3, draw_count), 900);
+    assert_eq!(offset_of!(RetainedFrameSubmitV3, draws), 904);
+    assert_eq!(offset_of!(RetainedFrameSubmitV3, reserved), 936);
 }
 """
     )

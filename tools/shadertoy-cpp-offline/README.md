@@ -76,9 +76,12 @@ The first slice accepts a single, texture-free `mainImage` pass and supplies:
 - deterministic zero initialization for omitted local scalar initializers
 
 The adapter rejects `iChannel*`, samplers/texture calls, sound passes, and
-screen-space derivatives with a direct diagnostic. Those features require
-new, audited TRUEOS resource, multipass, or quad-derivative ABIs; silently
-running them through WebGL would no longer test the custom stack. `mat4` is not
+screen-space derivatives with a direct diagnostic. Picasso and QuadTexture
+now provide working graphics texture infrastructure, but this compute path
+still needs channel resources, image/sampler artifact contracts and dispatch
+bindings. Multipass and derivatives require further contracts. See the
+[local compatibility audit](COMPATIBILITY.md) for the verified baseline,
+compiler probe results and the proposed static 2D channel extension. `mat4` is not
 part of this initial adapter. If a source uses a GLSL form
 outside the adapter subset, the exact generated `.clcpp` and compiler error
 remain in `bld/shadertoy-cpp-offline/session/` for a focused compatibility

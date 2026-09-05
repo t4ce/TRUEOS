@@ -594,11 +594,14 @@ pub(crate) fn broker_retained_frame_submit_v3(
     submit: v::vgpu::RetainedFrameSubmitV3,
 ) -> Result<v::vgpu::TimelinePoint, i32> {
     broker_retained_frame_submit_inner(
-        principal, device, queue, submit.frame.frame,
-        Some(submit.frame.material_parameters), Some(submit),
+        principal,
+        device,
+        queue,
+        submit.frame.frame,
+        Some(submit.frame.material_parameters),
+        Some(submit),
     )
 }
-
 fn broker_retained_frame_submit_inner(
     principal: Principal,
     device: u64,

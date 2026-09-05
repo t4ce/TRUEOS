@@ -123,6 +123,62 @@ class AdapterTests(unittest.TestCase):
         )
         self.assertIn("clock = (st->resolution_time.w), index = 0;", body)
 
+    def test_swizzle_matrix_multiply_preserves_rhs_precedence(self) -> None:
+        body = translate_body("""
+            mat2 rotation(float a) { return mat2(cos(a)); }
+            void mainImage(out vec4 c, vec2 p) {
+                vec3 q = vec3(p, 1.);
+                q.xz *= rotation(iTime) * mat2(2.);
+                c = vec4(q, 1.);
+            }
+        """)
+        self.assertIn("q.xz = q.xz * ( rotation((st->resolution_time.w), st) * mat2(2.f))", body)
+        self.assertNotIn("q.xz *=", body)
+
+    def test_swizzle_multiply_inside_expression(self) -> None:
+        body = translate_body("""
+            void mainImage(out vec4 c, vec2 p) {
+                c = vec4((p.xy *= mat2(2.)), 0., 1.);
+            }
+        """)
+        self.assertIn("(p.xy = p.xy * ( mat2(2.f)))", body)
+
+    def test_complex_swizzle_lvalue_is_not_duplicated(self) -> None:
+        body = translate_body("""
+            void mainImage(out vec4 c, vec2 p) {
+                vec3 q[2]; int i = 0;
+                q[i++].xy *= mat2(2.);
+                c = vec4(q[0], 1.);
+            }
+        """)
+        self.assertEqual(body.count("i++"), 1)
+
+    def test_globals_are_private_to_each_invocation(self) -> None:
+        generated = adapt("""
+            float phase;
+            vec3 tint;
+            float gain = 2.;
+            float shade() { phase += 1.; return phase * gain; }
+            void mainImage(out vec4 c, vec2 p) {
+                phase = iTime;
+                tint = vec3(shade());
+                c = vec4(tint, 1.);
+            }
+        """)
+        self.assertIn("struct ShaderToyInvocation {", generated)
+        self.assertIn("float phase;", generated)
+        self.assertIn("float3 tint;", generated)
+        self.assertIn("float gain = 2.f;", generated)
+        self.assertIn("ShaderToyInvocation invocation = {};", generated)
+        self.assertIn("invocation.mainImage(frag_color, frag_coord, uniforms);", generated)
+
+    def test_local_and_parameter_declarations_do_not_require_global_state(self) -> None:
+        generated = adapt("""
+            float shade(float x, float y) { float z; return x + y + z; }
+            void mainImage(out vec4 c, vec2 p) { c = vec4(shade(p.x, p.y)); }
+        """)
+        self.assertNotIn("ShaderToyInvocation", generated)
+
     def test_export_can_assign_a_catalog_kernel_name(self) -> None:
         generated = adapt(
             "void mainImage(out vec4 color, vec2 coord) { color = vec4(coord, 0., 1.); }",
