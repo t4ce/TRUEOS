@@ -10,6 +10,9 @@ use trueos_time::{Duration as EmbassyDuration, Timer};
 
 pub type BlockingJobFn = Box<dyn FnOnce() + Send + 'static>;
 
+mod lifetime;
+pub(crate) use lifetime::{close_guest_jobs, drain_guest_jobs, guest_jobs_in_flight, open_guest_jobs};
+
 const BLOCKING_JOB_QUEUE_WARN_DEPTH: usize = 100;
 const BLOCKING_JOB_QUEUE_CAP: usize = 4094;
 const SERVICE_LANE_IDLE_POLL_MS: u64 = 10;
@@ -72,6 +75,8 @@ pub struct BlockingJobEntry {
     pub purpose: &'static str,
     pub policy_tag: &'static str,
     pub call: BlockingJobCall,
+    // Dropped only after the closure has finished (or enqueue was rejected).
+    owner: Option<lifetime::GuestJobOwner>,
 }
 
 struct ServiceLaneRequest {
@@ -128,6 +133,7 @@ fn run_blocking_job_entry(slot: u32, entry: BlockingJobEntry) {
         purpose,
         policy_tag,
         call,
+        owner,
     } = entry;
     let started_ms = now_ms();
     service_lane_activity_begin(slot, id, vm_id, purpose);
@@ -191,6 +197,7 @@ fn run_blocking_job_entry(slot: u32, entry: BlockingJobEntry) {
         now_ms().saturating_sub(started_ms)
     );
     service_lane_activity_finish(slot);
+    drop(owner);
 }
 
 #[trueos_executor::task(pool_size = SERVICE_LANE_TASK_POOL)]
@@ -584,6 +591,12 @@ fn enqueue_blocking_job_with_rejection_policy(
     call: BlockingJobCall,
     log_rejection: bool,
 ) -> Result<u64, BlockingJobCall> {
+    let owner = if let Some(vm_id) = vm_id {
+        let Some(owner) = lifetime::reserve(vm_id) else { return Err(call) };
+        Some(owner)
+    } else {
+        None
+    };
     let id = NEXT_BLOCKING_JOB_ID.fetch_add(1, Ordering::AcqRel);
     let policy_tag = if vm_id.is_some() {
         BLOCKING_JOB_TAG_VMX
@@ -596,6 +609,7 @@ fn enqueue_blocking_job_with_rejection_policy(
         purpose,
         policy_tag,
         call,
+        owner,
     };
     submit_service_lane_request(entry, log_rejection).map_err(|entry| entry.call)
 }
@@ -696,4 +710,28 @@ pub extern "Rust" fn trueos_service_lane_submit_job(job: BlockingJobFn) -> i32 {
 #[unsafe(no_mangle)]
 pub extern "Rust" fn trueos_tokio_spawn_blocking_job(job: BlockingJobFn) -> i32 {
     trueos_service_lane_submit_job(job)
+}
+
+/// Advisory native capacity, independent of std thread counts and archive names.
+#[unsafe(no_mangle)]
+pub extern "Rust" fn trueos_service_lane_available_capacity() -> usize {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let (status, count) = crate::hv::vmcall::guest_call(
+            crate::hv::vmcall::OP_BP_SERVICE_LANE_CAPACITY, 0, 0);
+        return if status == crate::hv::vmcall::STATUS_OK { count as usize } else { 0 };
+    }
+    service_lane_available_capacity_for_vm(crate::hv::current_guest_execution_context_vm_id())
+}
+
+pub(crate) fn service_lane_available_capacity_for_vm(vm_id: Option<u8>) -> usize {
+    if vm_id.is_some_and(|id| !lifetime::accepts_guest_jobs(id)) {
+        return 0;
+    }
+    crate::workers::background_worker_slots().into_iter()
+        .filter(|slot| crate::workers::is_general_background_worker_slot(*slot)
+            && crate::workers::spawner_for_slot(*slot).is_some()
+            && service_lane_started_for_slot(*slot as usize)
+            && crate::hv::lane::is_carrier_lane_free(*slot))
+        .count()
+        .min(crate::wls::available_worker_identities())
 }

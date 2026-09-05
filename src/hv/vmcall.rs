@@ -288,6 +288,7 @@ pub const OP_BP_FS_REMOVE: u32 = 0x34; // payload path -> rc
 pub const OP_BP_FS_STAT: u32 = 0x60; // payload path -> rc + kind in response_data[63:32], optional payload kind:u32 len:u64
 pub const OP_BP_THREAD_CURRENT_ID: u32 = 0x61; // response is current TRUEOS vthread id
 pub const OP_BP_SERVICE_LANE_SUBMIT: u32 = 0x62; // arg0/arg1 boxed service-lane job raw parts
+pub const OP_BP_SERVICE_LANE_CAPACITY: u32 = 0x160; // no args -> advisory available native workers
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub const OP_BP_TOKIO_BLOCKING_SPAWN: u32 = OP_BP_SERVICE_LANE_SUBMIT; // compatibility alias
 pub const OP_BP_PLATFORM_WAKE_ONE: u32 = 0x63; // arg0 VM-local wait key -> woke bool
@@ -350,7 +351,7 @@ pub const OP_BP_MIO_TCP_LISTENER_ACCEPT: u32 = 0x5C; // arg0 socket -> child+add
 pub const STATUS_OK: u32 = 0;
 pub const STATUS_UNKNOWN_OP: u32 = 1;
 pub const STATUS_BAD_ARG: u32 = 2;
-const MAX_GUEST_SLEEP_MS: u64 = 10_000;
+pub(crate) const MAX_GUEST_SLEEP_MS: u64 = 10_000;
 pub const COMM_PAGE_VM_ID_MAGIC: u32 = 0x4856_0000;
 
 // ── shared page ─────────────────────────────────────────────────────────────
@@ -3053,6 +3054,15 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         OP_BP_THREAD_CURRENT_ID => {
             let vtid = 0x8000u32.saturating_add(vm_id as u32);
             write_response(vm_id, seq, STATUS_OK, vtid as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_SERVICE_LANE_CAPACITY => {
+            if arg0 != 0 || arg1 != 0 || req_len != 0 {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+            } else {
+                let count = crate::r::blocking::service_lane_available_capacity_for_vm(Some(vm_id));
+                write_response(vm_id, seq, STATUS_OK, count as u64, 0);
+            }
             DispatchOutcome::Resume
         }
         OP_BP_SERVICE_LANE_SUBMIT => {

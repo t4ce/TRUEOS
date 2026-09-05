@@ -2017,7 +2017,7 @@ fn start_with_mode(
         return Err(StartError::UnsupportedVmId);
     };
 
-    if vm.running.load(Ordering::Acquire) {
+    if vm.running.load(Ordering::Acquire) || crate::r::blocking::guest_jobs_in_flight(vm_id) != 0 {
         return Err(StartError::AlreadyRunning);
     }
     if !crate::gpu::vgpu::hull_guest_storage_reusable(vm_id) {
@@ -2243,6 +2243,7 @@ pub fn stop(vm_id: u8) -> Result<bool, StopError> {
     };
 
     if vm.running.load(Ordering::Acquire) || vm.starting.load(Ordering::Acquire) {
+        crate::r::blocking::close_guest_jobs(vm_id);
         clear_blueprint_lifecycle_capability(vm_id);
         vm.stop_req.store(true, Ordering::Release);
         hvlogf(format_args!("hv: vm{} lifecycle: stop requested", vm_id));
@@ -2264,6 +2265,9 @@ pub fn eject(vm_id: u8) -> Result<bool, EjectError> {
         || vm.starting.load(Ordering::Acquire)
         || vm.restore_inflight.load(Ordering::Acquire)
     {
+        return Err(EjectError::VmBusy);
+    }
+    if crate::r::blocking::close_guest_jobs(vm_id) != 0 {
         return Err(EjectError::VmBusy);
     }
     let (_, vgpu_quarantined, _) = crate::gpu::vgpu::release_hull_guest(vm_id);
@@ -5867,6 +5871,14 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
         boot_mode,
         memory::active_guest_stack_mb_for_vm(vm_id)
     );
+    // No guest code can execute before admission is tied to this run. An
+    // outstanding reservation here is an invariant failure, never permission
+    // to replace live executable/heap state with a new generation.
+    assert!(crate::r::blocking::open_guest_jobs(
+        vm_id, vm.run_generation.load(Ordering::Acquire)));
+    if vm.stop_req.load(Ordering::Acquire) {
+        crate::r::blocking::close_guest_jobs(vm_id);
+    }
     let launch_result = vmx_launch_once_with_ept(
         lineage_record,
         lane_lease.slot() as usize,
@@ -5878,6 +5890,7 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
     }
     crate::log!("app-vm-run-queue: vm launch returned vm={} mode={:?}\n", vm_id, boot_mode);
     clear_current_vm_id();
+    crate::r::blocking::drain_guest_jobs(vm_id).await;
     let mut pending_crash = None;
     let clean_exit = vm.clean_exit.swap(false, Ordering::AcqRel);
     crate::allocators::with_host_alloc_domain_strong(|| match launch_result {

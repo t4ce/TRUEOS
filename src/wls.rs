@@ -117,6 +117,11 @@ pub(crate) fn try_lease_worker_identity(cpu_slot: u32) -> Option<WorkerIdentityL
     None
 }
 
+/// Advisory only: the lease CAS remains authoritative under concurrent admission.
+pub(crate) fn available_worker_identities() -> usize {
+    WORKER_LEASED.iter().filter(|leased| !leased.load(Ordering::Acquire)).count()
+}
+
 impl WorkerIdentityLease {
     pub(crate) fn enter(&self) -> WorkerIdentityGuard {
         let cpu_slot = self.cpu_slot as usize;

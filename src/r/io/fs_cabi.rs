@@ -338,13 +338,18 @@ pub extern "C" fn trueos_cabi_poll_once() {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn trueos_cabi_sleep_ms(ms: u64) {
+pub extern "C" fn trueos_cabi_sleep_ms(mut ms: u64) {
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        trueos_vm::vmcall::sleep_ms(ms);
+        while ms != 0 {
+            let chunk = ms.min(crate::hv::vmcall::MAX_GUEST_SLEEP_MS);
+            trueos_vm::vmcall::sleep_ms(chunk);
+            ms -= chunk;
+        }
         return;
     }
-    let timeout = ms.max(1);
-    let _ = crate::wait::spin_until_timeout(timeout, || false);
+    if ms != 0 {
+        let _ = crate::wait::spin_until_timeout(ms, || false);
+    }
 }
 
 #[inline]
