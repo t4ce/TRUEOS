@@ -123,15 +123,18 @@ struct PixelShaderDispatchContract {
 /// inputs, so identity routing is source 0 in the low half and source 1 in
 /// the high half. Compatibility probes retain their historical all-zero
 /// payload.
-const fn sbe_swiz_payload(artifact_native_fixed_function: bool, native_sampled: bool) -> [u32; 2] {
-    if artifact_native_fixed_function && native_sampled {
-        // The first retained texture rung exports only UV at attribute 0.
-        [0, 0]
-    } else if artifact_native_fixed_function {
-        [0x0001_0000, 0]
-    } else {
-        [0, 0]
+const fn sbe_swiz_payload(artifact_native_fixed_function: bool, varying_inputs: u8) -> [u32; 2] {
+    if !artifact_native_fixed_function {
+        return [0, 0];
     }
+    // Each half DWORD routes one attribute. PBR exports four distinct
+    // attributes; leaving the upper entries zero would repeat world position
+    // into the normal, UV and tangent interpolation coefficients.
+    [
+        if varying_inputs >= 2 { 0x0001_0000 } else { 0 },
+        (if varying_inputs >= 3 { 2 } else { 0 })
+            | (if varying_inputs >= 4 { 3 << 16 } else { 0 }),
+    ]
 }
 
 /// 3DSTATE_WM barycentric interpolation payload required by a fragment
@@ -216,9 +219,10 @@ mod churn_sbe_swiz_tests {
 
     #[test]
     fn native_churn_routes_normal_and_material_identity() {
-        assert_eq!(sbe_swiz_payload(true, false), [0x0001_0000, 0]);
-        assert_eq!(sbe_swiz_payload(true, true), [0, 0]);
-        assert_eq!(sbe_swiz_payload(false, false), [0, 0]);
+        assert_eq!(sbe_swiz_payload(true, 2), [0x0001_0000, 0]);
+        assert_eq!(sbe_swiz_payload(true, 1), [0, 0]);
+        assert_eq!(sbe_swiz_payload(true, 4), [0x0001_0000, 0x0003_0002]);
+        assert_eq!(sbe_swiz_payload(false, 0), [0, 0]);
     }
 
     #[test]
@@ -948,14 +952,13 @@ fn write_triangle_probe_state_with_flush(
             .sampled_texture
             .ok_or("probe-sampled-texture-surface")?;
         crate::log_important!(target: "render";
-            "picasso-material: proof=retained-material-state-encoded accepted=1 state_base=0x{:X} ps_bt_ptr=0x{:X} ps_bt_count={} ps_bt=[0x{:X},0x{:X},0x{:X},0x{:X}] base_surface=[dw0:0x{:08X},dw1:0x{:08X},dw2:0x{:08X},dw3:0x{:08X},dw7:0x{:08X},dw8:0x{:08X},dw9:0x{:08X}] metallic_roughness_surface_present={} sampler=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] base_gpu=0x{:X} base={}x{} stride={}\n",
+            "picasso-material: proof=retained-material-state-encoded accepted=1 state_base=0x{:X} ps_bt_ptr=0x{:X} ps_bt_count={} ps_bt={:X?} pbr={} material_mask=0x{:X} base_surface=[dw0:0x{:08X},dw1:0x{:08X},dw2:0x{:08X},dw3:0x{:08X},dw7:0x{:08X},dw8:0x{:08X},dw9:0x{:08X}] metallic_roughness_surface_present={} sampler=[0x{:08X},0x{:08X},0x{:08X},0x{:08X}] base_gpu=0x{:X} base={}x{} stride={}\n",
             shader_layout.state_region_gpu_addr,
             ps_pointer,
             ps_binding_table_entries,
-            ps_binding_table[0],
-            ps_binding_table[1],
-            ps_binding_table[2],
-            ps_binding_table.get(3).copied().unwrap_or(0),
+            ps_binding_table,
+            native_pbr,
+            draw.pbr_material.map_or(0, |material| material.parameters[13]),
             texture_surface[0],
             texture_surface[1],
             texture_surface[2],
@@ -1576,7 +1579,7 @@ mod retained_native_matrix_draw_contract_tests {
             native: Some(native),
             sampled_texture: None,
             metallic_roughness_texture: None,
-        pbr_material: None,
+            pbr_material: None,
             emissive_factor: [0.0; 3],
             state_gpu_addr: 0x2600_0000,
             rt_gpu_addr: 0x2700_0000,
@@ -2143,7 +2146,7 @@ fn encode_triangle_probe_batch(
     // id (source attribute 1).  Xe-LP's enabled SBE swizzle packet must spell
     // that identity routing out; an all-zero payload aliases both inputs to
     // attribute 0.
-    let sbe_swiz = sbe_swiz_payload(artifact_native_fixed_function, draw.sampled_texture.is_some());
+    let sbe_swiz = sbe_swiz_payload(artifact_native_fixed_function, pipeline.ps.meta.num_varying_inputs);
     let sbe_dw1 = (sbe_vertex_read_offset << 5)
         | (u32::from(sbe_attr_swizzle_enable) << 21)
         | ((sbe_num_sf_attrs as u32) << 22)

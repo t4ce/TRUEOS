@@ -789,7 +789,7 @@ const TRIANGLE_VS_URB_OUTPUT_LENGTH_OVERRIDE: Option<u8> = None;
 const TRIANGLE_DEFAULT_FRONT_END_CONTRACT: TriangleFrontEndContract = TriangleFrontEndContract {
     label: "mesa-like",
     vs_urb_output_length_override: TRIANGLE_VS_URB_OUTPUT_LENGTH_OVERRIDE,
-            vs_urb_read_length: 1,
+    vs_urb_read_length: 1,
     sbe_read_offset: 1,
     sbe_read_length: 1,
     force_sbe_read_offset: true,
@@ -802,7 +802,7 @@ const VS_DRAW_FRONTIER_CONTRACTS: [TriangleFrontEndContract; 4] = [
     TriangleFrontEndContract {
         label: "slot0-read",
         vs_urb_output_length_override: TRIANGLE_VS_URB_OUTPUT_LENGTH_OVERRIDE,
-            vs_urb_read_length: 1,
+        vs_urb_read_length: 1,
         sbe_read_offset: 0,
         sbe_read_length: 1,
         force_sbe_read_offset: true,
@@ -812,7 +812,7 @@ const VS_DRAW_FRONTIER_CONTRACTS: [TriangleFrontEndContract; 4] = [
     TriangleFrontEndContract {
         label: "urb2",
         vs_urb_output_length_override: Some(2),
-            vs_urb_read_length: 1,
+        vs_urb_read_length: 1,
         sbe_read_offset: 1,
         sbe_read_length: 1,
         force_sbe_read_offset: true,
@@ -822,7 +822,7 @@ const VS_DRAW_FRONTIER_CONTRACTS: [TriangleFrontEndContract; 4] = [
     TriangleFrontEndContract {
         label: "urb2-slot0-read",
         vs_urb_output_length_override: Some(2),
-            vs_urb_read_length: 1,
+        vs_urb_read_length: 1,
         sbe_read_offset: 0,
         sbe_read_length: 1,
         force_sbe_read_offset: true,
@@ -834,7 +834,7 @@ const VS_DRAW_FRONTIER_CONTRACTS: [TriangleFrontEndContract; 4] = [
 const VS_DRAW_SBE_READ0_CONTRACT: TriangleFrontEndContract = TriangleFrontEndContract {
     label: "sbe-read0",
     vs_urb_output_length_override: TRIANGLE_VS_URB_OUTPUT_LENGTH_OVERRIDE,
-            vs_urb_read_length: 1,
+    vs_urb_read_length: 1,
     sbe_read_offset: 0,
     sbe_read_length: 0,
     force_sbe_read_offset: true,
@@ -845,7 +845,7 @@ const VS_DRAW_SBE_READ0_CONTRACT: TriangleFrontEndContract = TriangleFrontEndCon
 const VF_VUE_REAL_VS_FRONT_END_CONTRACT: TriangleFrontEndContract = TriangleFrontEndContract {
     label: "vf-vue-clip",
     vs_urb_output_length_override: TRIANGLE_VS_URB_OUTPUT_LENGTH_OVERRIDE,
-            vs_urb_read_length: 1,
+    vs_urb_read_length: 1,
     sbe_read_offset: 1,
     sbe_read_length: 1,
     force_sbe_read_offset: true,

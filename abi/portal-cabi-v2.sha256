@@ -209,4 +209,8 @@
 # The UI4 cursor-step call is strictly additive. It takes an optional
 # fixed-width, frame-local 1/1024-pixel presentation grid and changes neither
 # raw cursor motion nor selected-frame input delivery.
-7daf8aecfe516b11c4a9deedc14a40d81fd444019689c3fd8eb8aa024653a06a
+# The retained-frame-submit v2 call is strictly additive. It carries an
+# 880-byte frame with an unchanged 816-byte V1 prefix plus 64 bytes of opaque
+# glTF material factors. Existing retained-frame symbols and layouts remain
+# unchanged; older v2 artifacts continue to use their original submission.
+bbfb035059b71eee29c90fd254cd6415213b25f98c17f70166d8d1bd51504c77

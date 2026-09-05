@@ -65,6 +65,9 @@ use super::{
 '''
     output += f'''pub(crate) const VS_URB_READ_LENGTH: u8 = {vertex["urb_read_length"]};
 pub(crate) const VF_COMPONENT_PACKING: u32 = 0x{vertex["vf_packing0"]:08X};
+// Retained SGVS routing is unchanged; its synthetic element moves from2 to4.
+pub(crate) const VF_SGVS_DW1: u32 = 0xE004_4004;
+pub(crate) const VF_SGVS_2_DW1: u32 = 0xB004_0004;
 pub(crate) const SBE_READ_OFFSET: u8 = 1;
 pub(crate) const SBE_READ_LENGTH: u8 = 2;
 
@@ -141,6 +144,7 @@ mod tests {{
 }}
 '''
     (OUT / "pipeline.rs").write_text(output)
+    subprocess.run(["rustfmt", "--edition", "2024", str(OUT / "pipeline.rs")], check=True)
 
 
 def main() -> None:
