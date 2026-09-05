@@ -92,6 +92,11 @@ struct Trfwc1Context {
     bridge_stack_base_virtual: u64,
     bridge_stack_bytes: u32,
     page_table_pages: u32,
+    quiesce_create_status: u64,
+    quiesce_signal_status: u64,
+    quiesce_close_status: u64,
+    quiesce_service_flags: u32,
+    quiesce_result_flags: u32,
 }
 
 #[repr(C)]
@@ -300,14 +305,24 @@ fn run_probe() -> Result<ProbeResult, String> {
     let context = capture.context;
     let context_flags = context.flags;
     let failure_stage = context.failure_stage;
+    let quiesce_create_status = context.quiesce_create_status;
+    let quiesce_signal_status = context.quiesce_signal_status;
+    let quiesce_close_status = context.quiesce_close_status;
+    let quiesce_service_flags = context.quiesce_service_flags;
+    let quiesce_result_flags = context.quiesce_result_flags;
 
     if capture.capture_flags & CAPTURE_FLAG_BOOT_SERVICES_RETAINED == 0 {
         return Err(alloc::format!(
-            "Limine quiesced but did not retain firmware context capture_flags=0x{:08X} context_flags=0x{:08X} failure_stage={}({}) section_status=0x{:016X}; fallback real ExitBootServices was used",
+            "retention=no capture=0x{:08X} context=0x{:08X} stage={}({}) qsvc=0x{:08X} qresult=0x{:08X} create=0x{:016X} signal=0x{:016X} close=0x{:016X} section=0x{:016X} fallback=real-EBS",
             capture.capture_flags,
             context_flags,
             failure_stage,
             failure_stage_name(failure_stage),
+            quiesce_service_flags,
+            quiesce_result_flags,
+            quiesce_create_status,
+            quiesce_signal_status,
+            quiesce_close_status,
             capture.section_status
         ));
     }
