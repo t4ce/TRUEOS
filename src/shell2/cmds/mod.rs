@@ -4,6 +4,7 @@ pub(crate) mod acpi;
 pub(crate) mod aud;
 #[path = "bios.rs"]
 pub(crate) mod bios_impl;
+pub(crate) mod bios_bridge;
 pub(crate) mod bios_live;
 pub(crate) mod bios {
     pub(crate) use super::bios_impl::{platform_snapshot_json, runtime_snapshot_json};
@@ -13,7 +14,7 @@ pub(crate) mod bios {
         rest: &str,
     ) -> super::super::shell2_cmd::ParseOutcome {
         if rest.trim() == "crc32" {
-            return super::bios_live::try_parse(io);
+            return super::bios_bridge::try_parse(io);
         }
         super::bios_impl::try_parse(io, rest)
     }
