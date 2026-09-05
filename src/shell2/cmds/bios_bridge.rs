@@ -437,7 +437,11 @@ fn run_probe() -> Result<ProbeResult, String> {
         (*control).firmware_stack_top = bridge_stack_top;
         (*control).target = calculate_crc32_virtual;
         (*control).payload_len = PROBE_PAYLOAD.len() as u32;
-        (*control).payload[..PROBE_PAYLOAD.len()].copy_from_slice(PROBE_PAYLOAD);
+        core::ptr::copy_nonoverlapping(
+            PROBE_PAYLOAD.as_ptr(),
+            core::ptr::addr_of_mut!((*control).payload).cast::<u8>(),
+            PROBE_PAYLOAD.len(),
+        );
         (*control).arg0 = bridge_control_virtual + BRIDGE_PAYLOAD_OFFSET;
         (*control).arg1 = PROBE_PAYLOAD.len() as u64;
         (*control).arg2 = bridge_control_virtual + BRIDGE_CRC_OUTPUT_OFFSET;
