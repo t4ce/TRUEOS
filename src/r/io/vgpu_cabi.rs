@@ -568,7 +568,7 @@ pub(crate) fn broker_retained_frame_submit(
     queue: u64,
     submit: v::vgpu::RetainedFrameSubmit,
 ) -> Result<v::vgpu::TimelinePoint, i32> {
-    broker_retained_frame_submit_inner(principal, device, queue, submit, None)
+    broker_retained_frame_submit_inner(principal, device, queue, submit, None, None)
 }
 
 pub(crate) fn broker_retained_frame_submit_v2(
@@ -583,6 +583,19 @@ pub(crate) fn broker_retained_frame_submit_v2(
         queue,
         submit.frame,
         Some(submit.material_parameters),
+        None,
+    )
+}
+
+pub(crate) fn broker_retained_frame_submit_v3(
+    principal: Principal,
+    device: u64,
+    queue: u64,
+    submit: v::vgpu::RetainedFrameSubmitV3,
+) -> Result<v::vgpu::TimelinePoint, i32> {
+    broker_retained_frame_submit_inner(
+        principal, device, queue, submit.frame.frame,
+        Some(submit.frame.material_parameters), Some(submit),
     )
 }
 
@@ -592,6 +605,7 @@ fn broker_retained_frame_submit_inner(
     queue: u64,
     submit: v::vgpu::RetainedFrameSubmit,
     material_parameters: Option<v::vgpu::RetainedMaterialParameters>,
+    scene: Option<v::vgpu::RetainedFrameSubmitV3>,
 ) -> Result<v::vgpu::TimelinePoint, i32> {
     let owner = ui4_owner(principal)?;
     let completed = vgpu::submit_ui4_retained_frame(
@@ -600,6 +614,7 @@ fn broker_retained_frame_submit_inner(
         QueueHandle::from_raw(queue),
         submit,
         material_parameters,
+        scene,
     )
     .map_err(|error| error.errno())?;
     crate::ui4::blueprint_text::complete_vgpu_resident_surface_submission(
@@ -1261,6 +1276,37 @@ pub unsafe extern "C" fn trueos_cabi_vgpu_retained_frame_submit_v2(
         guest_record(trueos_vm::vmcall::OP_BP_VGPU_RETAINED_FRAME_SUBMIT_V2, device, queue, payload)
     } else {
         broker_retained_frame_submit_v2(direct_principal(), device, queue, submit)
+    };
+    match result {
+        Ok(point) => {
+            unsafe { out_point.write(point) };
+            0
+        }
+        Err(rc) => rc,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_vgpu_retained_frame_submit_v3(
+    device: u64,
+    queue: u64,
+    submit: *const v::vgpu::RetainedFrameSubmitV3,
+    out_point: *mut v::vgpu::TimelinePoint,
+) -> i32 {
+    if submit.is_null() || out_point.is_null() {
+        return -14;
+    }
+    let submit = unsafe { submit.read() };
+    let payload = unsafe {
+        core::slice::from_raw_parts(
+            (&submit as *const v::vgpu::RetainedFrameSubmitV3).cast::<u8>(),
+            core::mem::size_of::<v::vgpu::RetainedFrameSubmitV3>(),
+        )
+    };
+    let result = if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        guest_record(trueos_vm::vmcall::OP_BP_VGPU_RETAINED_FRAME_SUBMIT_V3, device, queue, payload)
+    } else {
+        broker_retained_frame_submit_v3(direct_principal(), device, queue, submit)
     };
     match result {
         Ok(point) => {

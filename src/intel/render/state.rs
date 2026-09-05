@@ -463,9 +463,9 @@ impl From<crate::intel::gpgpu::GpgpuHelioRetainedTransformOutput> for RetainedGr
 
 pub(crate) struct ResidentChurnForward {
     /// Number of indexed-indirect graphics groups owned by this resident.
-    /// Helio uses its full twelve-group scene; Picasso owns one mesh and must
-    /// not inherit eleven empty Helio graphics secondaries.
-    draw_group_count: usize,
+    /// Helio uses its full twelve-group scene; Picasso publishes only its
+    /// active submesh ranges while holding the retained submission lease.
+    draw_group_count: AtomicU32,
     geometry: ResidentRenderBuffer,
     /// GPU-authored clip/NDC-space Float32x3 positions.  The retained
     /// transformer writes 24 unique face vertices into each compacted object
@@ -515,8 +515,8 @@ impl ResidentChurnForward {
         self.geometry.carrier()
     }
 
-    pub(crate) const fn draw_group_count(&self) -> usize {
-        self.draw_group_count
+    pub(crate) fn draw_group_count(&self) -> usize {
+        self.draw_group_count.load(Ordering::Acquire) as usize
     }
 
     pub(crate) const fn max_instances(&self) -> usize {

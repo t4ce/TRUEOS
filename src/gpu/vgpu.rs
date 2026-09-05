@@ -2148,7 +2148,7 @@ pub(crate) fn create_retained_mesh(
         carrier,
         &vertices,
         &indices,
-        v::vgpu::MAX_RETAINED_TRANSFORM_SEEDS,
+        v::vgpu::MAX_RETAINED_SCENE_INSTANCES,
         vertex_stride as u32,
         double_sided,
         topology,
@@ -3783,8 +3783,41 @@ fn copy_retained_static_parts(
     Ok(vertices.into_iter().zip(indices).collect())
 }
 
+/// Validate the V3 extension before reading an owner-scoped seed buffer.
+fn retained_scene_descriptor_valid(scene: &v::vgpu::RetainedFrameSubmitV3) -> bool {
+    scene.seed_buffer != 0
+        && scene.seed_count != 0
+        && scene.seed_count as usize <= v::vgpu::MAX_RETAINED_SCENE_INSTANCES
+        && scene.seed_offset % 4 == 0
+        && scene.seed_offset.checked_add(u64::from(scene.seed_count) * 64).is_some()
+        && scene.draw_count != 0
+        && scene.draw_count as usize <= v::vgpu::MAX_RETAINED_SCENE_DRAWS
+        && scene.reserved == [0; 2]
+        && scene.frame.frame.seed_count == 0
+        && scene.frame.frame.seeds.iter().all(|seed| *seed == v::vgpu::RetainedTransformSeed::default())
+        && scene.draws[scene.draw_count as usize..].iter().all(|draw| *draw == v::vgpu::RetainedDrawRange::default())
+}
+
+fn decode_retained_scene_seeds(bytes: &[u8]) -> Option<Vec<v::vgpu::RetainedTransformSeed>> {
+    if bytes.is_empty() || bytes.len() % 64 != 0 || bytes.len() / 64 > v::vgpu::MAX_RETAINED_SCENE_INSTANCES {
+        return None;
+    }
+    bytes.chunks_exact(64).map(|row| {
+        let word = |offset| u32::from_le_bytes(row[offset..offset + 4].try_into().unwrap());
+        let fields: [f32; 14] = core::array::from_fn(|i| f32::from_bits(word(i * 4)));
+        if fields.iter().any(|v| !v.is_finite()) || fields[10] < 0.0 {
+            return None;
+        }
+        Some(v::vgpu::RetainedTransformSeed {
+            translation: fields[0..3].try_into().unwrap(), scale: fields[3..6].try_into().unwrap(),
+            rotation: fields[6..10].try_into().unwrap(), local_radius: fields[10],
+            previous_translation: fields[11..14].try_into().unwrap(), draw_group: word(56), flags: word(60),
+        })
+    }).collect()
+}
+
 /// Execute Picasso's retained mesh and its untransformed static primitives in
-/// one Render submission. Dynamic input is four compact TRS seeds plus any
+/// one Render submission. Dynamic input is compact TRS seeds plus any
 /// explicitly revised static positions; matrices, compaction, indirect draw
 /// records, topology, and resident mappings remain GPU/kernel owned.
 pub(crate) fn submit_ui4_retained_frame(
@@ -3793,19 +3826,30 @@ pub(crate) fn submit_ui4_retained_frame(
     queue_handle: QueueHandle,
     submit: v::vgpu::RetainedFrameSubmit,
     material_parameters: Option<v::vgpu::RetainedMaterialParameters>,
+    scene: Option<v::vgpu::RetainedFrameSubmitV3>,
 ) -> Result<Ui4SurfaceIndexedCompletion, VgpuError> {
-    let seed_count = usize::try_from(submit.seed_count).map_err(|_| VgpuError::Unsupported)?;
-    let static_draw_count =
-        usize::try_from(submit.static_draw_count).map_err(|_| VgpuError::Unsupported)?;
-    if seed_count == 0
-        || seed_count > v::vgpu::MAX_RETAINED_TRANSFORM_SEEDS
-        || static_draw_count > v::vgpu::MAX_RETAINED_STATIC_DRAWS
-        || submit.seeds[seed_count..]
-            .iter()
-            .any(|seed| *seed != v::vgpu::RetainedTransformSeed::default())
-        || submit.static_draws[static_draw_count..]
-            .iter()
-            .any(|draw| *draw != v::vgpu::IndexedBatchDrawV2::default())
+    let (seeds, draw_ranges) = if let Some(scene) = scene {
+        if !retained_scene_descriptor_valid(&scene) {
+            return Err(VgpuError::Unsupported);
+        }
+        let bytes_len = scene.seed_count as usize * 64;
+        let offset = usize::try_from(scene.seed_offset).map_err(|_| VgpuError::Unsupported)?;
+        let mut bytes = alloc::vec![0u8; bytes_len];
+        read_buffer(principal, device_handle, BufferHandle::from_raw(scene.seed_buffer), offset, &mut bytes)?;
+        let seeds = decode_retained_scene_seeds(&bytes).ok_or(VgpuError::Unsupported)?;
+        (seeds, Some(scene.draws[..scene.draw_count as usize].to_vec()))
+    } else {
+        let count = submit.seed_count as usize;
+        if count == 0 || count > v::vgpu::MAX_RETAINED_TRANSFORM_SEEDS
+            || submit.seeds[count..].iter().any(|seed| *seed != v::vgpu::RetainedTransformSeed::default())
+        {
+            return Err(VgpuError::Unsupported);
+        }
+        (submit.seeds[..count].to_vec(), None)
+    };
+    let static_draw_count = submit.static_draw_count as usize;
+    if static_draw_count > v::vgpu::MAX_RETAINED_STATIC_DRAWS
+        || submit.static_draws[static_draw_count..].iter().any(|draw| *draw != v::vgpu::IndexedBatchDrawV2::default())
     {
         return Err(VgpuError::Unsupported);
     }
@@ -4225,7 +4269,8 @@ pub(crate) fn submit_ui4_retained_frame(
     if crate::intel::render::update_resident_picasso_retained_transform_seeds(
         &resident,
         &submit.camera,
-        &submit.seeds[..seed_count],
+        &seeds,
+        draw_ranges.as_deref(),
     )
     .is_err()
     {

@@ -1216,6 +1216,12 @@ unsafe extern "C" {
         submit: *const crate::vgpu::RetainedFrameSubmitV2,
         out_point: *mut crate::vgpu::TimelinePoint,
     ) -> i32;
+    pub fn trueos_cabi_vgpu_retained_frame_submit_v3(
+        device: u64,
+        queue: u64,
+        submit: *const crate::vgpu::RetainedFrameSubmitV3,
+        out_point: *mut crate::vgpu::TimelinePoint,
+    ) -> i32;
     pub fn trueos_cabi_vgpu_vvideo_create(
         device: u64,
         guest_va: u64,

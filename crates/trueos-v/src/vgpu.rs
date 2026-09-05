@@ -307,6 +307,9 @@ impl Default for IndexedDrawBatchV2 {
 }
 
 pub const MAX_RETAINED_TRANSFORM_SEEDS: usize = 4;
+/// Buffer-backed V3 scenes keep the four-inline-seed V1/V2 ABI unchanged.
+pub const MAX_RETAINED_SCENE_INSTANCES: usize = 512;
+pub const MAX_RETAINED_SCENE_DRAWS: usize = 4;
 pub const MAX_RETAINED_STATIC_DRAWS: usize = 3;
 /// Fixed role order in the retained material descriptor. A zero texture ID is
 /// an absent optional glTF map; every nonzero ID is validated as part of the
@@ -460,6 +463,32 @@ pub struct RetainedFrameSubmitV2 {
     pub frame: RetainedFrameSubmit,
     pub material_parameters: RetainedMaterialParameters,
 }
+
+/// Index range within one resident mesh. All ranges share its PBR material.
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+#[repr(C)]
+pub struct RetainedDrawRange {
+    pub first_index: u32,
+    pub index_count: u32,
+}
+
+/// PBR scene with up to 512 buffer-backed TRS seeds and four index ranges.
+/// Inline frame seeds/count must be zero. The seed buffer contains tightly
+/// packed 64-byte RetainedTransformSeed rows and requires MAP_READ usage.
+/// Each seed's draw_group selects a range; flags[31:16] selects its contiguous
+/// group-local slot. Remaining range entries and reserved must be zero.
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+#[repr(C)]
+pub struct RetainedFrameSubmitV3 {
+    pub frame: RetainedFrameSubmitV2,
+    pub seed_buffer: u64,
+    pub seed_offset: u64,
+    pub seed_count: u32,
+    pub draw_count: u32,
+    pub draws: [RetainedDrawRange; MAX_RETAINED_SCENE_DRAWS],
+    pub reserved: [u32; 2],
+}
+
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 #[repr(C)]
@@ -902,6 +931,36 @@ impl Device {
         let mut point = TimelinePoint::default();
         rc_result(unsafe {
             vcabi::trueos_cabi_vgpu_retained_frame_submit_v2(
+                self.0,
+                queue.handle,
+                &submit,
+                &mut point,
+            )
+        })?;
+        surface.live = false;
+        Ok(point)
+    }
+
+    pub fn submit_retained_frame_v3(
+        self,
+        queue: Queue,
+        surface: Ui4Surface,
+        mesh: RetainedMesh,
+        static_vertex_buffer: Buffer,
+        static_index_buffer: Buffer,
+        mut submit: RetainedFrameSubmitV3,
+    ) -> Result<TimelinePoint, i32> {
+        if queue.device != self || surface.device != self {
+            return Err(ERR_BAD_HANDLE);
+        }
+        let mut surface = surface;
+        submit.frame.frame.surface = surface.surface.0;
+        submit.frame.frame.mesh = mesh.0;
+        submit.frame.frame.static_vertex_buffer = static_vertex_buffer.0;
+        submit.frame.frame.static_index_buffer = static_index_buffer.0;
+        let mut point = TimelinePoint::default();
+        rc_result(unsafe {
+            vcabi::trueos_cabi_vgpu_retained_frame_submit_v3(
                 self.0,
                 queue.handle,
                 &submit,
