@@ -589,6 +589,7 @@ fn prepare_triangle_draw_resources_for_geometry(
     crate::intel::dma_flush(warm.draw_state_virt, warm.draw_state_len);
 
     Some(TriangleDrawPrep {
+        vue_capture: false,
         vertex_count: vertex_proof.vertex_count,
         vertex_stride: vertex_proof.vertex_stride,
         vertex_buffer_bytes: u32::try_from(vertex_proof.byte_len).ok()?,
@@ -709,6 +710,7 @@ fn prepare_triangle_draw_resources_for_vertex_slice_with_state_clear(
     }
 
     Some(TriangleDrawPrep {
+        vue_capture: false,
         vertex_count: vertex_proof.vertex_count,
         vertex_stride: vertex_proof.vertex_stride,
         vertex_buffer_bytes: u32::try_from(vertex_proof.byte_len).ok()?,
@@ -792,6 +794,7 @@ fn prepare_triangle_draw_resources_for_indexed_vertex_slice(
     crate::intel::dma_flush(warm.draw_state_virt, warm.draw_state_len);
 
     Some(TriangleDrawPrep {
+        vue_capture: false,
         vertex_count: u32::try_from(indices.len()).ok()?,
         vertex_stride: vertex_proof.vertex_stride,
         vertex_buffer_bytes: u32::try_from(vertex_proof.byte_len).ok()?,
@@ -1276,6 +1279,25 @@ const PICASSO_RETAINED_TEXTURED_VS: &[u8] = include_bytes!(
 const PICASSO_RETAINED_TEXTURED_PS: &[u8] = include_bytes!(
     "../../../picasso/picasso-retained-textured-forward/retained_textured_forward.ps.simd16.bin"
 );
+const PICASSO_RETAINED_TEXTURED_PS8: &[u8] = include_bytes!(
+    "../../../picasso/picasso-retained-textured-forward/retained_textured_forward.ps.simd8.bin"
+);
+const PICASSO_RETAINED_TEXTURED_PS8_WORDS: [u32; 24] = picasso_retained_uv_simd8_words();
+
+const fn picasso_retained_uv_simd8_words() -> [u32; 24] {
+    assert!(PICASSO_RETAINED_TEXTURED_PS8.len() == 96);
+    let mut words = [0; 24];
+    let mut index = 0;
+    while index < words.len() {
+        let offset = index * 4;
+        words[index] = u32::from_le_bytes([
+            PICASSO_RETAINED_TEXTURED_PS8[offset], PICASSO_RETAINED_TEXTURED_PS8[offset + 1],
+            PICASSO_RETAINED_TEXTURED_PS8[offset + 2], PICASSO_RETAINED_TEXTURED_PS8[offset + 3],
+        ]);
+        index += 1;
+    }
+    words
+}
 
 fn bootstrap_churn_meshes()
 -> [trueos_helio_runtime::churn::MeshDescriptor; CHURN_FORWARD_MESH_COUNT] {
@@ -1476,6 +1498,99 @@ fn picasso_retained_textured_pipeline()
     };
     *cached = Some(pipeline);
     Ok(pipeline)
+}
+
+/// Replay the working authored-UV shader contract over the current PBR mesh.
+/// The draw is an encoding-time copy: its 48-byte pitch, geometry, transforms,
+/// indices, render target and retained resources are never repacked or edited.
+fn prepare_picasso_retained_uv_diagnostic(
+    draw: &mut TriangleDrawPrep,
+) -> Result<(crate::intel::shader::TrianglePipeline, TriangleFrontEndContract), &'static str> {
+    let mut pipeline = picasso_retained_textured_pipeline()?;
+    let mut front_end = configure_picasso_retained_uv_diagnostic(draw, picasso_cull_enabled())?;
+    if picasso_uv_pipeline_simd8() {
+        pipeline = picasso_retained_uv_with_simd8_ps(pipeline);
+        front_end.label = "picasso-retained-authored-uv-simd8-diagnostic-tangent48";
+    }
+    Ok((pipeline, front_end))
+}
+
+fn picasso_retained_uv_with_simd8_ps(
+    mut pipeline: crate::intel::shader::TrianglePipeline,
+) -> crate::intel::shader::TrianglePipeline {
+    // Original companion executable: barycentrics g2/g3, UV setup g4,
+    // SIMD8 sampler0/BTI2 and a SIMD8 RT0 EOT (checked with IGA12p1).
+    // Preserve the old VS and its aligned PS offset704; no per-frame copy
+    // or allocation is needed for this compile-time aligned code array.
+    pipeline.ps.code = &PICASSO_RETAINED_TEXTURED_PS8_WORDS;
+    pipeline.ps.meta.kernel.code_size_bytes = 96;
+    pipeline.ps.meta.kernel.dispatch_mode = crate::intel::shader::DispatchMode::Simd8;
+    pipeline.ps.meta.kernel.grf_start_register = 4;
+    pipeline
+}
+
+#[cfg(test)]
+mod picasso_uv_simd8_tests {
+    use super::*;
+
+    #[test]
+    fn uv_diagnostic_simd8_keeps_the_vertex_and_fragment_binding_contract() {
+        let original = picasso_retained_textured_pipeline().unwrap();
+        let changed = picasso_retained_uv_with_simd8_ps(original);
+        assert_eq!(changed.vs.code, original.vs.code);
+        assert_eq!(format!("{:?}", changed.vs.meta), format!("{:?}", original.vs.meta));
+        assert_eq!(changed.ps.meta.kernel.code_offset_bytes, 704);
+        assert_eq!(changed.ps.meta.kernel.code_alignment_bytes, 64);
+        assert_eq!(changed.ps.meta.kernel.ksp_offset_bytes, 0);
+        assert_eq!(changed.ps.meta.kernel.code_size_bytes, 96);
+        assert_eq!(changed.ps.meta.kernel.dispatch_mode, crate::intel::shader::DispatchMode::Simd8);
+        assert_eq!(changed.ps.meta.kernel.grf_start_register, 4);
+        assert_eq!(changed.ps.meta.kernel.binding_table_entry_count, 3);
+        assert_eq!(changed.ps.meta.kernel.sampler_count, 1);
+        assert_eq!(changed.ps.meta.num_varying_inputs, 1);
+        assert!(changed.ps.meta.uses_vmask);
+        let bytes: Vec<u8> = changed.ps.code.iter().flat_map(|word| word.to_le_bytes()).collect();
+        assert_eq!(bytes, PICASSO_RETAINED_TEXTURED_PS8);
+        // The cached ordinary UV mode remains the original SIMD16 pipeline.
+        let ordinary = picasso_retained_textured_pipeline().unwrap();
+        assert_eq!(ordinary.ps.code, original.ps.code);
+        assert_eq!(ordinary.ps.meta.kernel.dispatch_mode, crate::intel::shader::DispatchMode::Simd16);
+        assert_eq!(ordinary.ps.meta.kernel.grf_start_register, 6);
+    }
+}
+
+fn configure_picasso_retained_uv_diagnostic(
+    draw: &mut TriangleDrawPrep,
+    cull_enabled: bool,
+) -> Result<TriangleFrontEndContract, &'static str> {
+    if draw.vertex_format != TriangleVertexFormat::PosNormalUvTangent
+        || draw.vertex_stride != 48
+        || draw.pbr_material.is_none()
+        || draw.sampled_texture.is_none()
+    {
+        return Err("picasso-uv-diagnostic-requires-pbr-mesh");
+    }
+    let mut native = draw.native.ok_or("picasso-uv-diagnostic-requires-native")?;
+    native.vf_sgvs_dw1 = 0xE002_4002;
+    native.vf_sgvs_2_dw1 = 0xB002_0002;
+    native.vertex_element_count = 3;
+    native.vf_component_packing = [0x0000_0A37, 0, 0, 0];
+    // Preserve the current host culling override after removing the PBR tag.
+    native.double_sided |= !cull_enabled;
+    draw.native = Some(native);
+    draw.vertex_format = TriangleVertexFormat::PosNormalUv;
+    draw.pbr_material = None;
+    draw.metallic_roughness_texture = None;
+    Ok(TriangleFrontEndContract {
+        label: "picasso-retained-authored-uv-diagnostic-tangent48",
+        vs_urb_output_length_override: Some(2),
+        vs_urb_read_length: 1,
+        sbe_read_offset: 1,
+        sbe_read_length: 1,
+        force_sbe_read_offset: true,
+        force_sbe_read_length: true,
+        force_vs_with_vf_synthesized_vue: false,
+    })
 }
 
 fn build_churn_forward_geometry(
@@ -2823,6 +2938,7 @@ fn prepare_resident_churn_forward_draw(
         return None;
     }
     Some(TriangleDrawPrep {
+        vue_capture: false,
         vertex_count: resident.vertex_count,
         vertex_stride: resident.vertex_stride,
         vertex_buffer_bytes: resident.vertex_bytes,
@@ -2901,6 +3017,7 @@ fn prepare_resident_churn_expanded_draw(
         return None;
     }
     Some(TriangleDrawPrep {
+        vue_capture: false,
         vertex_count: resident.expanded_index_count,
         vertex_stride: core::mem::size_of::<[f32; 3]>() as u32,
         vertex_buffer_bytes: resident.expanded_vertex_bytes,
@@ -3382,6 +3499,7 @@ fn prepare_triangle_draw_resources_for_resident_font_mesh_with_state_clear(
         crate::intel::dma_flush(warm.draw_state_virt, warm.draw_state_len);
     }
     Some(TriangleDrawPrep {
+        vue_capture: false,
         vertex_count: mesh.index_count,
         vertex_stride: mesh.vertex_stride,
         vertex_buffer_bytes: mesh.vertex_bytes,
@@ -3438,6 +3556,7 @@ fn prepare_triangle_draw_resources_for_vf_vue_vertex_slice(
     crate::intel::dma_flush(warm.draw_state_virt, warm.draw_state_len);
 
     Some(TriangleDrawPrep {
+        vue_capture: false,
         vertex_count: vertex_proof.vertex_count,
         vertex_stride: vertex_proof.vertex_stride,
         vertex_buffer_bytes: u32::try_from(vertex_proof.byte_len).ok()?,
@@ -3865,6 +3984,7 @@ fn prepare_vf_streamout_proof_resources(
     crate::intel::dma_flush(warm.vertex_virt, TRIANGLE_DRAW_VERTICES * vertex_stride);
 
     Some(TriangleDrawPrep {
+        vue_capture: false,
         vertex_count: TRIANGLE_DRAW_VERTICES as u32,
         vertex_stride: vertex_stride as u32,
         vertex_buffer_bytes: u32::try_from(TRIANGLE_DRAW_VERTICES * vertex_stride).ok()?,

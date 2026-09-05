@@ -46,6 +46,56 @@ def serialized_code(path: Path, stage: int) -> bytes:
     return raw[8:8 + count]
 
 
+def verify_solid_fast_path(isa: str) -> dict[str, object]:
+    """Reject compiler motion that defeats the mode-4 coverage diagnostic."""
+    instructions = [(int(offset, 16), body) for offset, body in re.findall(
+        r"^/\* \[([0-9A-Fa-f]+)\]\s*\*/\s*(.*)$", isa, re.MULTILINE)]
+    branch_index = next((i for i, (_, body) in enumerate(instructions)
+                         if re.search(r"\bif \(16\|M0\)", body)), None)
+    if branch_index is None:
+        raise SystemExit("solid diagnostic has no SIMD16 branch")
+    branch_offset, branch = instructions[branch_index]
+    labels = re.findall(r"\bL(\d+)\b", branch)
+    if len(labels) != 2:
+        raise SystemExit("solid diagnostic branch targets unavailable")
+    solid_offset, merge_offset = map(int, labels)
+    for target in (solid_offset, merge_offset):
+        boundary = re.search(rf"^L{target}:\n/\* \[([0-9A-Fa-f]+)\]", isa, re.MULTILINE)
+        if boundary is None or int(boundary[1], 16) != target:
+            raise SystemExit("solid diagnostic label does not match its instruction boundary")
+    prefix = instructions[:branch_index]
+    loads = [(offset, body) for offset, body in prefix if "send." in body]
+    if len(loads) != 1 or "0x02184208" not in loads[0][1]:
+        raise SystemExit("solid diagnostic must load only material flags before branching")
+    response = re.search(r"send\.dc0\s+\(8\|M0\)\s+(r\d+)\s", loads[0][1])
+    if response is None or not any(
+        re.search(rf"\bcmp .*\(ne\)f0\.1.*\b{response[1]}\.2<.*\s4:d", body)
+        for _, body in prefix
+    ):
+        raise SystemExit("solid branch must test material flags.z against mode 4")
+    # Mesa may hoist the VUE interpolation MADs and payload moves. It must
+    # leave normal normalization, camera loads, BRDF math, and samples inside
+    # the non-solid branch.
+    if any(re.search(r"\b(?:math\.\w+|mul|add|sel|frc|and)\s+\(", body)
+           for _, body in prefix):
+        raise SystemExit("PBR arithmetic moved ahead of the solid branch")
+    samples = [offset for offset, body in instructions if "send.smpl" in body]
+    if len(samples) != 5 or not all(branch_offset < offset < solid_offset for offset in samples):
+        raise SystemExit("solid branch must skip all five sampler sends")
+    suffix = [(offset, body) for offset, body in instructions if offset >= solid_offset]
+    if not suffix or suffix[0][0] != solid_offset or merge_offset <= solid_offset:
+        raise SystemExit("solid diagnostic target is not an instruction boundary")
+    for _, body in suffix:
+        if not re.search(r"\b(?:mov|endif|sync\.nop|sendc\.rc)\s", body):
+            raise SystemExit("solid path contains instructions beyond constants and RT output")
+    if sum("EOT" in body and "sendc.rc" in body for _, body in suffix) != 1:
+        raise SystemExit("solid diagnostic requires one direct render-target EOT")
+    return {"verified": True, "branch_byte_offset": branch_offset,
+            "solid_byte_offset": solid_offset, "merge_byte_offset": merge_offset,
+            "skipped_sampler_byte_offsets": samples,
+            "shared_prologue": "VUE interpolation and material flags load"}
+
+
 def emit_pipeline(vs: bytes, ps: bytes, vertex: dict[str, int], fragment: dict[str, int]) -> None:
     def words(name: str, code: bytes) -> str:
         values = struct.unpack(f"<{len(code) // 4}I", code)
@@ -235,6 +285,7 @@ def main() -> None:
     if ps_state["scratch_bytes"] != 0:
         raise SystemExit(f"PBR PS requires unimplemented scratch: {ps_state['scratch_bytes']}")
     OUT.mkdir(parents=True, exist_ok=True)
+    solid_fast_path = None
     for stage, code in (("vs.simd8", vs), ("ps.simd16", ps)):
         binary = work / f"retained_pbr_forward.{stage}.bin"
         binary.write_bytes(code)
@@ -243,6 +294,8 @@ def main() -> None:
             raise SystemExit(f"no EOT in {stage}")
         if stage.startswith("ps") and len(re.findall(r"send\.smpl\s+\(16\|", isa)) != 5:
             raise SystemExit("PBR fragment shader must have five independently decoded sampler sends")
+        if stage.startswith("ps"):
+            solid_fast_path = verify_solid_fast_path(isa)
         assembly = ps16_assembly if stage.startswith("ps") else next(capture.glob("*_vertex_*_GEN_Assembly.txt"))
         rows = len(re.findall(r"^/\* \[[0-9A-Fa-f]+\]", isa, re.MULTILINE))
         if rows != baker.assembly_instruction_count(assembly):
@@ -261,6 +314,7 @@ def main() -> None:
         "modes": {"0": "full_pbr", "1": "base_color_srgb", "2": "geometric_world_normal", "3": "fract_uv", "4": "solid_magenta"},
         "default": "full_pbr",
         "alpha": 1,
+        "solid_fast_path": solid_fast_path,
     }
     (OUT / "metadata.json").write_text(json.dumps(metadata, indent=2, sort_keys=True) + "\n")
     emit_pipeline(vs, ps, vs_state, ps_state)

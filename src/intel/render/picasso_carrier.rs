@@ -558,6 +558,7 @@ pub(crate) fn prepare_picasso_render1_context(
             state.published_tail as u32,
             ring_ctl,
             lease.root_phys(),
+            control.context,
         ) {
             return None;
         }
@@ -921,6 +922,13 @@ fn log_picasso_carrier_timeout_frontier(
     );
 }
 
+#[derive(Copy, Clone)]
+pub(crate) struct PicassoCarrierPollProfile {
+    /// Successful release-cookie and saved-HEAD polling, excluding submit setup.
+    elapsed_us: u64,
+    iterations: u64,
+}
+
 /// Publish one already-flushed primary batch through the carrier's own HWLRCA and
 /// physical mediated GuC context.  Success requires both the release cookie
 /// and the exact context-saved HEAD equality; anything ambiguous quarantines
@@ -930,7 +938,7 @@ pub(crate) fn submit_picasso_render1_batch(
     batch_gpu: u64,
     expected_result: u32,
     expected_result_slot_dword: usize,
-) -> Result<(), &'static str> {
+) -> Result<PicassoCarrierPollProfile, &'static str> {
     let _carrier_submit = PICASSO_CARRIER_SUBMIT_LOCK.lock();
     if PICASSO_CARRIER_ENGINE_QUARANTINED.load(Ordering::Acquire) {
         quarantine_picasso_render1(lease, "shared-rcs-carrier-quarantined");
@@ -1058,12 +1066,16 @@ pub(crate) fn submit_picasso_render1_batch(
             && hi == RCS_EXEC_RESULT_SCENE_RCS_RELEASE_DONE_HI
             && head == tail as u32
         {
+            let profile = PicassoCarrierPollProfile {
+                elapsed_us: crate::chronos::monotonic_nanos().saturating_sub(started) / 1_000,
+                iterations: spins,
+            };
             crate::log_trace!(target: "render";
                 "picasso-carrier retire carrier={} device=0x{:X} epoch={} context={} saved_head={} published_tail={} release=1 wait_us={} wait_iters={}\n",
                 lease.carrier().label(), lease.device_raw(), lease.epoch(), submission.context.raw(), head, tail,
-                crate::chronos::monotonic_nanos().saturating_sub(started) / 1_000, spins,
+                profile.elapsed_us, profile.iterations,
             );
-            return Ok(());
+            return Ok(profile);
         }
         if spins >= 5_000_000
             || (spins.is_multiple_of(256)

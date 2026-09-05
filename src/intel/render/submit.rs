@@ -212,6 +212,7 @@ fn submit_warm_render_batch(
             ring_tail_bytes as u32,
             ring_ctl,
             pml4_phys,
+            GPU_VA_CONTEXT_BASE,
         ) {
             return false;
         }
@@ -2294,7 +2295,6 @@ fn ring_ctl_value(size: usize) -> Option<u32> {
     Some(size.checked_sub(4096)? | RING_VALID)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn masked_bit_enable(bit: u32) -> u32 {
     bit | (bit << 16)
 }

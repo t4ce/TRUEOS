@@ -8,12 +8,48 @@ fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(io, "vgpu status");
     print_shell_line(io, "vgpu test broker|abi|guc|compute|blit|all");
     print_shell_line(io, "vgpu material pbr|base|normal|uv|solid");
+    print_shell_line(io, "vgpu depth on|off (Picasso diagnostic)");
+    print_shell_line(io, "vgpu cull on|off (Picasso diagnostic)");
+    print_shell_line(io, "vgpu pipeline pbr|uv|uv8 (Picasso diagnostic)");
+    print_shell_line(io, "vgpu capture vue (one Picasso draw)");
 }
 
 pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let mut args = rest.split_whitespace();
     match (args.next(), args.next(), args.next()) {
         (Some(cmd), None, None) if cmd.eq_ignore_ascii_case("status") => print_status(io),
+        (Some(cmd), Some("vue"), None) if cmd.eq_ignore_ascii_case("capture") => {
+            crate::intel::render::request_picasso_vue_capture();
+            print_shell_line(io, "vgpu: one Picasso pre-clip vertex capture armed; summary goes to the render log");
+        }
+        (Some(cmd), Some("uv8"), None) if cmd.eq_ignore_ascii_case("pipeline") => {
+            crate::intel::render::set_picasso_uv_simd8_pipeline();
+            print_shell_line(io, "vgpu: Picasso authored-UV SIMD8 PS selected with current mesh buffers");
+        }
+        (Some(cmd), Some("pbr"), None) if cmd.eq_ignore_ascii_case("pipeline") => {
+            crate::intel::render::set_picasso_uv_pipeline_enabled(false);
+            print_shell_line(io, "vgpu: Picasso PBR shader pipeline restored");
+        }
+        (Some(cmd), Some("uv"), None) if cmd.eq_ignore_ascii_case("pipeline") => {
+            crate::intel::render::set_picasso_uv_pipeline_enabled(true);
+            print_shell_line(io, "vgpu: Picasso authored-UV shaders selected with current mesh buffers");
+        }
+        (Some(cmd), Some("on"), None) if cmd.eq_ignore_ascii_case("cull") => {
+            crate::intel::render::set_picasso_cull_enabled(true);
+            print_shell_line(io, "vgpu: Picasso material culling restored");
+        }
+        (Some(cmd), Some("off"), None) if cmd.eq_ignore_ascii_case("cull") => {
+            crate::intel::render::set_picasso_cull_enabled(false);
+            print_shell_line(io, "vgpu: Picasso face culling disabled for diagnosis");
+        }
+        (Some(cmd), Some("on"), None) if cmd.eq_ignore_ascii_case("depth") => {
+            crate::intel::render::set_picasso_depth_test_enabled(true);
+            print_shell_line(io, "vgpu: Picasso depth test/write enabled");
+        }
+        (Some(cmd), Some("off"), None) if cmd.eq_ignore_ascii_case("depth") => {
+            crate::intel::render::set_picasso_depth_test_enabled(false);
+            print_shell_line(io, "vgpu: Picasso depth test/write disabled for diagnosis");
+        }
         (Some(cmd), Some(view), None) if cmd.eq_ignore_ascii_case("material") => {
             if crate::intel::render::set_picasso_material_view(view) {
                 print_shell_line(io, format!("vgpu: Picasso material view={view}; applies to the next frame").as_str());
@@ -49,6 +85,9 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
 }
 
 fn print_status(io: &'static dyn ShellBackend2) {
+    print_shell_line(io, format!("vgpu: Picasso shader pipeline={}", crate::intel::render::picasso_pipeline_name()).as_str());
+    print_shell_line(io, format!("vgpu: Picasso material culling={}", crate::intel::render::picasso_cull_enabled()).as_str());
+    print_shell_line(io, format!("vgpu: Picasso depth test/write={}", crate::intel::render::picasso_depth_test_enabled()).as_str());
     print_shell_line(io, format!("vgpu: Picasso material view={} (0=pbr 1=base 2=normal 3=uv 4=solid)", crate::intel::render::picasso_material_view()).as_str());
     let status = vgpu::broker_status();
     let executor = crate::gpu::executor::status();

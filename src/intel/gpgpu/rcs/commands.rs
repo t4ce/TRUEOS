@@ -803,6 +803,7 @@ fn direct_rcs_submit_batch_with_runtime_inner(
     if !runtime.context_initialized {
         if !direct_rcs_init_lrc_context_image(
             state,
+            dev.device_id,
             state.gpu_va.ring as u32,
             ring_tail_bytes as u32,
             ring_ctl,

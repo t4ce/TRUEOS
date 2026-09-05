@@ -38,6 +38,74 @@ static SUMMARY_ONLY_SUBMIT_DEPTH: AtomicU32 = AtomicU32::new(0);
 // Host diagnostic only: keep the public material ABI and its reserved fields
 // unchanged. Every view uses the same retained VS and full PBR PS contract.
 static PICASSO_MATERIAL_VIEW: AtomicU32 = AtomicU32::new(0);
+static PICASSO_DEPTH_TEST_ENABLED: AtomicBool = AtomicBool::new(true);
+static PICASSO_CULL_ENABLED: AtomicBool = AtomicBool::new(true);
+static PICASSO_SHADER_PIPELINE: AtomicU32 = AtomicU32::new(0);
+static PICASSO_VUE_CAPTURE_PENDING: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn request_picasso_vue_capture() {
+    PICASSO_VUE_CAPTURE_PENDING.store(true, Ordering::Release);
+    crate::log_important!(target: "render";
+        "picasso-vue-capture: armed=1 scope=next-eligible-retained-draw\n",
+    );
+}
+
+pub(crate) fn take_picasso_vue_capture() -> bool {
+    PICASSO_VUE_CAPTURE_PENDING.swap(false, Ordering::AcqRel)
+}
+
+pub(crate) fn set_picasso_uv_pipeline_enabled(enabled: bool) {
+    PICASSO_SHADER_PIPELINE.store(u32::from(enabled), Ordering::Release);
+    crate::log_important!(target: "render";
+        "picasso-pipeline-view: pipeline={} applies=next-encoded-pbr-draw\n",
+        if enabled { "authored-uv" } else { "pbr" },
+    );
+}
+
+pub(crate) fn picasso_uv_pipeline_enabled() -> bool {
+    PICASSO_SHADER_PIPELINE.load(Ordering::Acquire) != 0
+}
+
+pub(crate) fn set_picasso_uv_simd8_pipeline() {
+    PICASSO_SHADER_PIPELINE.store(2, Ordering::Release);
+    crate::log_important!(target: "render";
+        "picasso-pipeline-view: pipeline=authored-uv-simd8 applies=next-encoded-pbr-draw\n",
+    );
+}
+
+pub(crate) fn picasso_uv_pipeline_simd8() -> bool {
+    PICASSO_SHADER_PIPELINE.load(Ordering::Acquire) == 2
+}
+
+pub(crate) fn picasso_pipeline_name() -> &'static str {
+    match PICASSO_SHADER_PIPELINE.load(Ordering::Acquire) {
+        1 => "authored-uv",
+        2 => "authored-uv-simd8",
+        _ => "pbr",
+    }
+}
+
+pub(crate) fn set_picasso_cull_enabled(enabled: bool) {
+    PICASSO_CULL_ENABLED.store(enabled, Ordering::Release);
+    crate::log_important!(target: "render";
+        "picasso-cull-view: enabled={} applies=next-encoded-pbr-draw\n", enabled,
+    );
+}
+
+pub(crate) fn picasso_cull_enabled() -> bool {
+    PICASSO_CULL_ENABLED.load(Ordering::Acquire)
+}
+
+pub(crate) fn set_picasso_depth_test_enabled(enabled: bool) {
+    PICASSO_DEPTH_TEST_ENABLED.store(enabled, Ordering::Release);
+    crate::log_important!(target: "render";
+        "picasso-depth-view: enabled={} applies=next-encoded-pbr-draw\n", enabled,
+    );
+}
+
+pub(crate) fn picasso_depth_test_enabled() -> bool {
+    PICASSO_DEPTH_TEST_ENABLED.load(Ordering::Acquire)
+}
 
 pub(crate) fn set_picasso_material_view(view: &str) -> bool {
     let mode = match view {
@@ -117,6 +185,7 @@ include!("picasso_carrier.rs");
 include!("state.rs");
 include!("warmup.rs");
 include!("primary.rs");
+include!("picasso_vue_compare.rs");
 include!("pipeline.rs");
 include!("resources.rs");
 include!("submit.rs");

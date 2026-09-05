@@ -158,6 +158,8 @@ struct TrianglePbrMaterial {
 
 #[derive(Copy, Clone)]
 struct TriangleDrawPrep {
+    /// Internal one-shot pre-clip VUE observation; never part of the client ABI.
+    vue_capture: bool,
     vertex_count: u32,
     vertex_stride: u32,
     vertex_buffer_bytes: u32,

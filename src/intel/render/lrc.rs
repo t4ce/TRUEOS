@@ -1,9 +1,71 @@
+/// Install the GGTT-resident Gen12 RCS restore workarounds.
+///
+/// Gen12.0--12.10 requires instruction/state-cache invalidation on RCS context
+/// restore. i915's gen12_emit_indirect_ctx_rcs() emits this masked register write
+/// at the default 13-cacheline restore offset. The Gen12 hardware context image
+/// occupies 14 pages (including HWSP); our 22-page allocations leave page 14
+/// available for this immutable batch, outside the hardware save area. Page 15
+/// holds a separate, explicitly terminated batch for post-restore programming.
+/// Return (indirect pointer/length, indirect offset, post-restore pointer).
+pub(crate) fn init_gen12_rcs_restore_wa(
+    context: &mut [u32],
+    context_ggtt: u64,
+    device_id: u16,
+) -> Option<(u32, u32, u32)> {
+    if !device_is_gfx12(device_id) || device_is_gfx125(device_id) {
+        return Some((0, 0, 0));
+    }
+    const WA_BYTE_OFFSET: usize = 14 * 4096;
+    const WA_DWORD_OFFSET: usize = WA_BYTE_OFFSET / core::mem::size_of::<u32>();
+    const POST_RESTORE_BYTE_OFFSET: usize = 15 * 4096;
+    const POST_RESTORE_DWORD_OFFSET: usize =
+        POST_RESTORE_BYTE_OFFSET / core::mem::size_of::<u32>();
+    const WA_CACHELINE_DWORDS: usize = 64 / core::mem::size_of::<u32>();
+    if context_ggtt & 4095 != 0 || context.len() < 16 * 4096 / core::mem::size_of::<u32>() {
+        return None;
+    }
+    let batch_ggtt = u32::try_from(context_ggtt.checked_add(WA_BYTE_OFFSET as u64)?).ok()?;
+    let post_restore_ggtt =
+        u32::try_from(context_ggtt.checked_add(POST_RESTORE_BYTE_OFFSET as u64)?).ok()?;
+    let batch = context.get_mut(WA_DWORD_OFFSET..WA_DWORD_OFFSET + WA_CACHELINE_DWORDS)?;
+    batch.fill(MI_NOOP);
+    // Absolute MMIO address: unlike the context-register-list LRIs, do not set
+    // MI_LRI_CS_MMIO here. Size is one cacheline, not a minus-one encoding, and
+    // INDIRECT_CTX must not contain MI_BATCH_BUFFER_END (PRM Vol2c, p1247).
+    batch[0] = MI_LOAD_REGISTER_IMM | 1;
+    batch[1] = RCS_CS_DEBUG_MODE2 as u32;
+    batch[2] = masked_bit_enable(1 << 6);
+
+    // Mesa genX_init_state.c restricts Gfx12.0 3D preemption to prevent VS
+    // push-constant corruption; gen120.xml defines CS_CHICKEN1 at 0x2580.
+    // Clear object-level Replay Mode (bit 0), set 3DPRIMITIVE preemption/high
+    // priority pausing disable (bit 10), and preserve compute granularity.
+    // i915 gen12_ctx_workarounds_init identifies this register as context saved.
+    // PRM Vol2c pp122--124/1244 requires BB_PER_CTX_PTR for programming after
+    // engine restore; the midpoint INDIRECT_CTX batch could be overwritten.
+    // This matches ANV initialization, which requires no dynamic SO-toggle
+    // delay. PIPE_CONTROL is forbidden in this post-context batch by the PRM.
+    let post_restore = context
+        .get_mut(POST_RESTORE_DWORD_OFFSET..POST_RESTORE_DWORD_OFFSET + WA_CACHELINE_DWORDS)?;
+    post_restore.fill(MI_NOOP);
+    post_restore[0] = MI_LOAD_REGISTER_IMM | 1;
+    post_restore[1] = 0x2580;
+    post_restore[2] = masked_bits_update(1 << 10, 1);
+    post_restore[3] = MI_BATCH_BUFFER_END;
+    Some((
+        batch_ggtt | 1,
+        GEN12_CTX_RCS_INDIRECT_CTX_OFFSET_DEFAULT << 6,
+        post_restore_ggtt | 1,
+    ))
+}
+
 pub(crate) fn init_gen12_lrc_context_image(
     warm: RenderWarmState,
     ring_start: u32,
     ring_tail: u32,
     ring_ctl: u32,
     pml4_phys: u64,
+    context_ggtt: u64,
 ) -> bool {
     let total_dwords = warm.context_len / core::mem::size_of::<u32>();
     if total_dwords <= LRC_STATE_OFFSET_DWORDS {
@@ -13,6 +75,11 @@ pub(crate) fn init_gen12_lrc_context_image(
     let dwords =
         unsafe { core::slice::from_raw_parts_mut(warm.context_virt as *mut u32, total_dwords) };
     dwords.fill(0);
+    let Some((indirect_ptr, indirect_offset, post_restore_ptr)) =
+        init_gen12_rcs_restore_wa(dwords, context_ggtt, warm.device_id)
+    else {
+        return false;
+    };
 
     let state = &mut dwords[LRC_STATE_OFFSET_DWORDS..];
     if state.len() < 192 {
@@ -41,11 +108,15 @@ pub(crate) fn init_gen12_lrc_context_image(
     state[idx + 14] = 0x2110;
     state[idx + 15] = 0;
     state[idx + 16] = 0x21C0;
-    state[idx + 17] = 0;
+    state[idx + 17] = post_restore_ptr;
     state[idx + 18] = 0x21C4;
-    state[idx + 19] = 0;
+    state[idx + 19] = indirect_ptr;
     state[idx + 20] = 0x21C8;
-    state[idx + 21] = GEN12_CTX_RCS_INDIRECT_CTX_OFFSET_DEFAULT;
+    state[idx + 21] = if indirect_ptr != 0 {
+        indirect_offset
+    } else {
+        GEN12_CTX_RCS_INDIRECT_CTX_OFFSET_DEFAULT
+    };
     state[idx + 22] = 0x2180;
     state[idx + 23] = 0;
     state[idx + 24] = 0x22B4;

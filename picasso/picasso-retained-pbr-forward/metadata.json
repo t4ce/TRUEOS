@@ -25,6 +25,20 @@
       "2": "geometric_world_normal",
       "3": "fract_uv",
       "4": "solid_magenta"
+    },
+    "solid_fast_path": {
+      "branch_byte_offset": 464,
+      "merge_byte_offset": 7144,
+      "shared_prologue": "VUE interpolation and material flags load",
+      "skipped_sampler_byte_offsets": [
+        496,
+        544,
+        576,
+        608,
+        640
+      ],
+      "solid_byte_offset": 7096,
+      "verified": true
     }
   },
   "executables": [
@@ -56,18 +70,18 @@
       "simd_width": 8,
       "stage": "fragment",
       "statistics": {
-        "Code size": 6928,
-        "Cycles": 2462,
+        "Code size": 7072,
+        "Cycles": 2616,
         "Fills": 0,
         "GRF registers": 0,
-        "Instructions": 560,
+        "Instructions": 566,
         "Loops": 0,
         "Max dispatch width": 16,
-        "Max live registers": 48,
-        "Non SSA regs after NIR": 22,
-        "SENDs": 8,
+        "Max live registers": 49,
+        "Non SSA regs after NIR": 30,
+        "SENDs": 9,
         "Scratch Memory Size": 0,
-        "Source hash": 945232519,
+        "Source hash": 4227610153,
         "Spills": 0,
         "Workgroup Memory Size": 0
       }
@@ -78,18 +92,18 @@
       "simd_width": 16,
       "stage": "fragment",
       "statistics": {
-        "Code size": 7056,
-        "Cycles": 3526,
+        "Code size": 7200,
+        "Cycles": 3636,
         "Fills": 0,
         "GRF registers": 0,
-        "Instructions": 571,
+        "Instructions": 577,
         "Loops": 0,
         "Max dispatch width": 16,
-        "Max live registers": 91,
-        "Non SSA regs after NIR": 28,
-        "SENDs": 8,
+        "Max live registers": 92,
+        "Non SSA regs after NIR": 36,
+        "SENDs": 9,
         "Scratch Memory Size": 0,
-        "Source hash": 945232519,
+        "Source hash": 4227610153,
         "Spills": 0,
         "Workgroup Memory Size": 0
       }
@@ -97,8 +111,8 @@
   ],
   "host_render_verified": false,
   "material_bytes": 64,
-  "ps_bytes": 7048,
-  "ps_sha256": "041d32b17d78ed0abef69c67da4b11f7d4bf10991d2ee277c962e043f4cd2268",
+  "ps_bytes": 7192,
+  "ps_sha256": "369df53463a4c78c936f40d30f51fabbdf24e6d0e6aa719d845080a327d882f3",
   "ps_state": {
     "barycentric_interp_modes": 1,
     "binding_table_entries": 9,
@@ -116,7 +130,7 @@
     "location2_attribute": 2,
     "location3_attribute": 3,
     "num_varying_inputs": 4,
-    "offset16": 6976,
+    "offset16": 7104,
     "push_bytes": 0,
     "sampler_count": 1,
     "sampler_prefetch_count": 0,

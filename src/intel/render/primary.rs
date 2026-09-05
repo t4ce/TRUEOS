@@ -1699,8 +1699,19 @@ fn stage_resident_churn_forward_secondary(
     result_ggtt_gpu: u64,
 ) -> Result<usize, &'static str> {
     draw.state_gpu_addr = state_gpu;
+    // The next-frame diagnostic removes the complete depth read/write path
+    // only for PBR meshes; culling, geometry, and shader selection stay intact.
+    let draw_depth = (draw.pbr_material.is_none() || picasso_depth_test_enabled())
+        .then_some(depth_config);
+    let (pipeline, front_end_contract) = if draw.pbr_material.is_some()
+        && picasso_uv_pipeline_enabled()
+    {
+        prepare_picasso_retained_uv_diagnostic(&mut draw)?
+    } else {
+        (resident.pipeline, resident.front_end_contract)
+    };
     let shader_layout =
-        upload_triangle_shader_pipeline_at(state_warm, &resident.pipeline, None, state_gpu, false)?;
+        upload_triangle_shader_pipeline_at(state_warm, &pipeline, None, state_gpu, false)?;
     let probe_state = write_triangle_probe_state_unflushed(
         state_warm,
         draw,
@@ -1736,8 +1747,8 @@ fn stage_resident_churn_forward_secondary(
         state_warm,
         draw,
         TriangleBlendProbeMode::MesaZeroedState,
-        Some(depth_config),
-        &resident.pipeline,
+        draw_depth,
+        &pipeline,
         shader_layout,
         probe_state,
         result_ggtt_gpu,
@@ -1763,7 +1774,7 @@ fn stage_resident_churn_forward_secondary(
             ResidentScenePrimitiveTopology::RectList => TriangleBatchMode::RectListDraw,
         },
         StreamoutProofExperiment::HeaderAndPositionSlots01,
-        resident.front_end_contract,
+        front_end_contract,
         [0.0, 0.0],
         BackendProbeMode::MesaLike,
         PostDrawSyncVariant::LightCsNoPostSync,
@@ -1829,12 +1840,506 @@ fn stage_resident_churn_transform_secondary(
     Ok(encoded.command_dwords * core::mem::size_of::<u32>())
 }
 
+fn picasso_vue_capture_capacity(indices: u32, rows: u32, capacity: usize) -> Option<usize> {
+    if indices == 0 || indices % 3 != 0 || rows == 0 {
+        return None;
+    }
+    let bytes = (indices as usize)
+        .checked_mul(rows as usize)?
+        .checked_mul(32)?;
+    (bytes <= capacity).then_some(bytes)
+}
+fn picasso_vue_target_disjoint(
+    scratch: u64,
+    scratch_bytes: usize,
+    target: u64,
+    target_bytes: usize,
+) -> bool {
+    if scratch == 0 || target == 0 || scratch_bytes == 0 || target_bytes == 0 {
+        return false;
+    }
+    match (scratch.checked_add(scratch_bytes as u64), target.checked_add(target_bytes as u64)) {
+        (Some(scratch_end), Some(target_end)) => scratch_end <= target || target_end <= scratch,
+        _ => false,
+    }
+}
+#[derive(Debug)]
+struct PicassoVueSummary {
+    records: usize,
+    header_nonzero: [usize; 4],
+    nan_vertices: usize,
+    inf_vertices: usize,
+    nonpositive_w_vertices: usize,
+    inside: usize,
+    rejected: usize,
+    crossing: usize,
+    nonfinite_triangles: usize,
+    nonpositive_w_triangles: usize,
+    ndc_bounds: [f32; 6],
+    first_noninside: Option<usize>,
+    first_positions: [[u32; 4]; 3],
+}
+fn summarize_picasso_vue_records(words: &[u32]) -> Option<PicassoVueSummary> {
+    if words.len() % 24 != 0 {
+        return None;
+    }
+    let mut summary = PicassoVueSummary {
+        records: words.len() / 8,
+        header_nonzero: [0; 4],
+        nan_vertices: 0,
+        inf_vertices: 0,
+        nonpositive_w_vertices: 0,
+        inside: 0,
+        rejected: 0,
+        crossing: 0,
+        nonfinite_triangles: 0,
+        nonpositive_w_triangles: 0,
+        ndc_bounds: [
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+        ],
+        first_noninside: None,
+        first_positions: [[0; 4]; 3],
+    };
+    for (triangle_index, triangle) in words.chunks_exact(24).enumerate() {
+        let mut and_code = 0x3Fu8;
+        let mut or_code = 0u8;
+        let mut nonfinite = false;
+        let mut nonpositive_w = false;
+        for vertex in triangle.chunks_exact(8) {
+            for (count, word) in summary.header_nonzero.iter_mut().zip(&vertex[..4]) {
+                *count += usize::from(*word != 0);
+            }
+            let position: [f32; 4] =
+                core::array::from_fn(|index| f32::from_bits(vertex[4 + index]));
+            summary.nan_vertices += usize::from(position.iter().any(|value| value.is_nan()));
+            summary.inf_vertices += usize::from(position.iter().any(|value| value.is_infinite()));
+            let [x, y, z, w] = position;
+            nonfinite |= position.iter().any(|value| !value.is_finite());
+            summary.nonpositive_w_vertices += usize::from(w <= 0.0);
+            nonpositive_w |= w <= 0.0;
+            if position.iter().all(|value| value.is_finite()) && w > 0.0 {
+                for (axis, value) in [x / w, y / w, z / w].into_iter().enumerate() {
+                    summary.ndc_bounds[axis * 2] = summary.ndc_bounds[axis * 2].min(value);
+                    summary.ndc_bounds[axis * 2 + 1] = summary.ndc_bounds[axis * 2 + 1].max(value);
+                }
+                // Canonical Vulkan/D3D clip planes. The actual hardware also
+                // uses guardband and early-cull rules: do not call these its outcodes.
+                let code = u8::from(x < -w)
+                    | (u8::from(x > w) << 1)
+                    | (u8::from(y < -w) << 2)
+                    | (u8::from(y > w) << 3)
+                    | (u8::from(z < 0.0) << 4)
+                    | (u8::from(z > w) << 5);
+                and_code &= code;
+                or_code |= code;
+            }
+        }
+        if nonfinite {
+            summary.nonfinite_triangles += 1;
+        } else if nonpositive_w {
+            summary.nonpositive_w_triangles += 1;
+        } else if and_code != 0 {
+            summary.rejected += 1;
+        } else if or_code != 0 {
+            summary.crossing += 1;
+        } else {
+            summary.inside += 1;
+        }
+        if summary.first_noninside.is_none() && (nonfinite || nonpositive_w || or_code != 0) {
+            summary.first_noninside = Some(triangle_index);
+            for (index, vertex) in triangle.chunks_exact(8).enumerate() {
+                summary.first_positions[index].copy_from_slice(&vertex[4..8]);
+            }
+        }
+    }
+    Some(summary)
+}
+#[derive(Debug)]
+struct PicassoVueSelectorReadback {
+    cpu_before_selected: bool,
+    cpu_after_selected: bool,
+    srm_sentinel_unchanged: bool,
+    srm_matches_cpu_post: Option<bool>,
+    observation: &'static str,
+}
+
+fn picasso_vue_selector_readback(
+    srm: u32,
+    cpu_before: u32,
+    cpu_after: u32,
+) -> PicassoVueSelectorReadback {
+    let cpu_before_selected = cpu_before & (1 << 14) != 0;
+    let cpu_after_selected = cpu_after & (1 << 14) != 0;
+    let srm_sentinel_unchanged = srm == PICASSO_VUE_SELECTOR_SRM_SENTINEL;
+    let srm_matches_cpu_post = (!srm_sentinel_unchanged).then_some(srm == cpu_after);
+    let observation = if srm_sentinel_unchanged {
+        "srm-unwritten-or-sentinel-returned"
+    } else if cpu_before_selected && !cpu_after_selected {
+        "cpu-selector-cleared-between-snapshots"
+    } else if !cpu_before_selected && cpu_after_selected {
+        "cpu-selector-set-between-snapshots"
+    } else if srm != cpu_after {
+        "cpu-post-srm-disagree"
+    } else {
+        "cpu-post-srm-agree"
+    };
+    PicassoVueSelectorReadback {
+        cpu_before_selected,
+        cpu_after_selected,
+        srm_sentinel_unchanged,
+        srm_matches_cpu_post,
+        observation,
+    }
+}
+
+fn log_picasso_vue_capture_after_retire(
+    warm: RenderWarmState,
+    resident: &ResidentChurnForward,
+    capacity: usize,
+    cpu_before: [u32; 2],
+    cpu_after: [u32; 2],
+) {
+    let mut counters = [0u32; PICASSO_VUE_RESULT_LIMIT_DWORD - PICASSO_VUE_COUNTER_BEGIN_DWORD];
+    let pointer = unsafe { warm.result_virt.add(PICASSO_VUE_COUNTER_BEGIN_DWORD * 4) };
+    crate::intel::dma_flush(pointer, core::mem::size_of_val(&counters));
+    for (index, word) in counters.iter_mut().enumerate() {
+        *word = unsafe { core::ptr::read_volatile(pointer.cast::<u32>().add(index)) };
+    }
+    let qword = |index: usize| u64::from(counters[index]) | (u64::from(counters[index + 1]) << 32);
+    let written = qword(4).wrapping_sub(qword(0));
+    let needed = qword(6).wrapping_sub(qword(2));
+    let offset = counters[PICASSO_VUE_OFFSET_DWORD - PICASSO_VUE_COUNTER_BEGIN_DWORD] as usize;
+    let cs_chicken1 = counters[PICASSO_VUE_CS_CHICKEN1_DWORD - PICASSO_VUE_COUNTER_BEGIN_DWORD];
+    let ff_slice_cs_chicken1 =
+        counters[PICASSO_VUE_FF_SLICE_CS_CHICKEN1_DWORD - PICASSO_VUE_COUNTER_BEGIN_DWORD];
+    // PPGTT SRM may be subject to MMIO read privilege checks (GFX_MODE[1]).
+    // Cross-check the engine-global selector through CPU MMIO; a zero SRM
+    // alone does not establish that the boot-programmed selector was lost.
+    let selector = picasso_vue_selector_readback(
+        ff_slice_cs_chicken1, cpu_before[0], cpu_after[0],
+    );
+    let requested_3d_control = cs_chicken1 & 0x401 == 0x400;
+    let args = &resident.indirect_args;
+    if args.storage_virt.is_null() || args.storage_bytes < 20 {
+        crate::log_warn!(target: "render"; "picasso-vue-capture: retired=1 complete=0 reason=indirect-readback-range\n");
+        return;
+    }
+    crate::intel::dma_flush(args.storage_virt, 20);
+    let index_count = unsafe { core::ptr::read_volatile(args.storage_virt.cast::<u32>()) };
+    let instance_count =
+        unsafe { core::ptr::read_volatile(args.storage_virt.cast::<u32>().add(1)) };
+    let expected = (index_count as usize)
+        .checked_mul(instance_count as usize)
+        .and_then(|records| records.checked_mul(32))
+        .filter(|bytes| index_count % 3 == 0 && *bytes <= capacity);
+    let complete = index_count != 0
+        && instance_count != 0
+        && expected == Some(offset)
+        && written == needed
+        && written.checked_mul(96) == Some(offset as u64);
+    crate::log_info!(target: "render";
+        "picasso-vue-capture: retired=1 complete={} pipeline={} stride={} source=preclip-so-header-xyzw indices={} instances={} records={} so_written={} so_needed={} overflow={} offset_bytes={} capacity_bytes={} cs_chicken1=0x{:08X} register_phase=end-of-capture/no-capture-lri proof=bounded-preclip-stream-not-raster-output\n",
+        complete, picasso_pipeline_name(), resident.vertex_stride,
+        index_count, instance_count, offset / 32, written, needed, written != needed, offset, capacity, cs_chicken1,
+    );
+    crate::log_info!(target: "render";
+        "picasso-vue-preemption: cs_chicken1_srm=0x{:08X} ff_slice_cs_chicken1_srm=0x{:08X} selector_srm_sentinel=0x{:08X} srm_sentinel_unchanged={} ff_slice_cpu_pre=0x{:08X} ff_slice_cpu_post=0x{:08X} gfx_mode_cpu_pre=0x{:08X} gfx_mode_cpu_post=0x{:08X} cpu_pre_selected={} cpu_post_selected={} srm_matches_cpu_post={:?} mmio_read_check_disabled_pre={} mmio_read_check_disabled_post={} replay_object_level_srm={} primitive_preemption_disable_srm={} requested_3d_control_srm={} observation={} cpu_phase=immediately-before-submit/after-retire srm_phase=end-of-capture/no-capture-lri evidence=register-snapshots-not-preemption-behavior\n",
+        cs_chicken1, ff_slice_cs_chicken1, PICASSO_VUE_SELECTOR_SRM_SENTINEL,
+        selector.srm_sentinel_unchanged, cpu_before[0], cpu_after[0], cpu_before[1], cpu_after[1],
+        selector.cpu_before_selected, selector.cpu_after_selected, selector.srm_matches_cpu_post,
+        cpu_before[1] & 2 != 0, cpu_after[1] & 2 != 0,
+        cs_chicken1 & 1 != 0, cs_chicken1 & (1 << 10) != 0,
+        requested_3d_control, selector.observation,
+    );
+    if offset > capacity || offset % 96 != 0 {
+        crate::log_warn!(target: "render"; "picasso-vue-capture: summary=skipped reason=offset-range-or-partial-triangle\n");
+        return;
+    }
+    crate::intel::dma_flush(warm.streamout_virt, offset);
+    let records =
+        unsafe { core::slice::from_raw_parts(warm.streamout_virt.cast::<u32>(), offset / 4) };
+    let Some(summary) = summarize_picasso_vue_records(records) else {
+        return;
+    };
+    crate::log_info!(target: "render";
+        "picasso-vue-summary: records={} header_nonzero_reserved_rta_vp_width={:?} nan_vertices={} inf_vertices={} w_nonpositive_vertices={} triangles_inside={} triangles_common_plane_reject={} triangles_crossing={} triangles_nonfinite={} triangles_nonpositive_w={} ndc_bounds_xyz={:?} api=d3d clip=normal-enabled planes=minusW-toW-xy-zero-toW-z classification=cpu-canonical-planes-not-hardware-clip-outcodes-or-backface first_noninside_triangle={:?} first_xyzws_hex={:08X?}\n",
+        summary.records, summary.header_nonzero, summary.nan_vertices, summary.inf_vertices, summary.nonpositive_w_vertices,
+        summary.inside, summary.rejected, summary.crossing, summary.nonfinite_triangles, summary.nonpositive_w_triangles,
+        summary.ndc_bounds, summary.first_noninside, summary.first_positions,
+    );
+    if complete {
+        log_picasso_vue_comparison_after_retire(resident, records);
+    }
+}
+#[cfg(test)]
+mod picasso_vue_capture_tests {
+    use super::*;
+
+    #[test]
+    fn selector_readback_distinguishes_srm_disagreement_loss_and_unwritten_results() {
+        let disagreement = picasso_vue_selector_readback(0, 0x4000, 0x4000);
+        assert!(disagreement.cpu_before_selected && disagreement.cpu_after_selected);
+        assert!(!disagreement.srm_sentinel_unchanged);
+        assert_eq!(disagreement.srm_matches_cpu_post, Some(false));
+        assert_eq!(disagreement.observation, "cpu-post-srm-disagree");
+
+        let lost = picasso_vue_selector_readback(0, 0x4000, 0);
+        assert!(lost.cpu_before_selected && !lost.cpu_after_selected);
+        assert_eq!(lost.srm_matches_cpu_post, Some(true));
+        assert_eq!(lost.observation, "cpu-selector-cleared-between-snapshots");
+
+        let unwritten = picasso_vue_selector_readback(PICASSO_VUE_SELECTOR_SRM_SENTINEL, 0x4000, 0x4000);
+        assert!(unwritten.srm_sentinel_unchanged);
+        assert_eq!(unwritten.srm_matches_cpu_post, None);
+        assert_eq!(unwritten.observation, "srm-unwritten-or-sentinel-returned");
+
+        for raw in [0, 0x4000, 0x4001] {
+            let agrees = picasso_vue_selector_readback(raw, raw, raw);
+            assert_eq!(agrees.srm_matches_cpu_post, Some(true));
+            assert_eq!(agrees.observation, "cpu-post-srm-agree");
+        }
+        assert_eq!(picasso_vue_selector_readback(0x4000, 0, 0x4000).observation,
+            "cpu-selector-set-between-snapshots");
+    }
+
+    #[test]
+    fn streamout_preserves_rendering_and_uses_no_offset_memory_address() {
+        let gpu = 0x2_0088_0000;
+        let words = picasso_vue_streamout_packets(gpu, 5_933_568, 4).unwrap();
+        assert_eq!(&words[..6], &[0x7A00_0004, 0x0010_0002, 0, 0, 0, 0]);
+        assert_eq!(PICASSO_VUE_PREEMPTION_DELAY_DWORDS, 250);
+        assert!(words[6..256].iter().all(|word| *word == 0));
+        let mut cursor = 0;
+        let mut packet_headers = std::vec::Vec::new();
+        let mut noops = 0;
+        while cursor < words.len() {
+            let header = words[cursor];
+            if header == 0 {
+                noops += 1;
+                cursor += 1;
+            } else {
+                packet_headers.push(header);
+                cursor += (header & 0xFF) as usize + 2;
+            }
+        }
+        assert_eq!(cursor, 282, "packet lengths must consume the exact buffer");
+        assert_eq!(noops, 250);
+        assert_eq!(packet_headers, [0x7A00_0004, 0x781E_0003, 0x7860_0006, 0x7917_0005, 0x7A00_0004]);
+        let setup = &words[256..];
+        assert_eq!(&setup[..5], &[0x781E_0003, 0x8200_0000, 0, 32, 0]);
+        assert_eq!(setup[1] & (1 << 30), 0, "rendering must stay enabled");
+        assert_eq!(
+            &setup[5..13],
+            &[
+                0x7860_0006,
+                0x8120_0000,
+                gpu as u32,
+                2,
+                5_933_568 / 4 - 1,
+                0,
+                0,
+                0
+            ]
+        );
+        assert_eq!(setup[6] & (1 << 20), 0, "VA0 offset address must stay disabled");
+        assert_eq!(&setup[13..20], &[0x7917_0005, 1, 2, 0xF, 0, 0x1F, 0]);
+        assert_eq!(&setup[20..], &words[..6]);
+        for (gpu, bytes, mocs) in [
+            (gpu + 1, 96, 4),
+            (gpu, 95, 4),
+            (gpu, 97, 4),
+            (u64::MAX - 3, 96, 4),
+            (gpu, 96, 128),
+        ] {
+            assert!(picasso_vue_streamout_packets(gpu, bytes, mocs).is_err());
+        }
+    }
+
+    #[test]
+    fn gpu_counter_packets_stall_and_stay_after_oa_in_ppgtt() {
+        let gpu = 0x3_0084_0000;
+        for (end, base, expected_registers) in [
+            (false, 192, &[0x5200u32, 0x5204, 0x5240, 0x5244][..]),
+            (true, 196, &[0x5200u32, 0x5204, 0x5240, 0x5244, 0x5280, 0x2580, 0x20E0][..]),
+        ] {
+            let (words, count) = picasso_vue_counter_packets(gpu, 812, end).unwrap();
+            assert_eq!(&words[..6], &[0x7A00_0004, 0x0010_0002, 0, 0, 0, 0]);
+            assert_eq!(count, 6 + expected_registers.len() * 4);
+            for (index, packet) in words[6..count].chunks_exact(4).enumerate() {
+                assert_eq!(packet[0], 0x1200_0002);
+                assert_eq!(packet[1], expected_registers[index]);
+                assert_eq!(
+                    u64::from(packet[2]) | (u64::from(packet[3]) << 32),
+                    gpu + (base + index as u64) * 4
+                );
+            }
+        }
+        assert!(PICASSO_VUE_COUNTER_BEGIN_DWORD >= RESULT_OA_END_DWORD + RESULT_OA_REPORT_DWORDS);
+        assert_eq!(PICASSO_VUE_FF_SLICE_CS_CHICKEN1_DWORD + 1, PICASSO_VUE_RESULT_LIMIT_DWORD);
+        assert!(picasso_vue_counter_packets(gpu, 811, true).is_err());
+        assert!(picasso_vue_counter_packets(gpu + 4, 4096, true).is_err());
+        assert!(picasso_vue_counter_packets(u64::MAX - 7, 4096, true).is_err());
+    }
+
+    #[test]
+    fn capacity_and_physical_disjointness_reject_unsafe_capture() {
+        assert_eq!(picasso_vue_capture_capacity(46356, 4, 14_745_600), Some(5_933_568));
+        assert_eq!(picasso_vue_capture_capacity(46356, 4, 5_933_567), None);
+        assert_eq!(picasso_vue_capture_capacity(4, 4, 4096), None);
+        assert_eq!(picasso_vue_capture_capacity(3, 0, 4096), None);
+        assert!(picasso_vue_target_disjoint(0x1000, 4096, 0x2000, 4096));
+        assert!(!picasso_vue_target_disjoint(0x1000, 4096, 0x1FFF, 4096));
+        assert!(!picasso_vue_target_disjoint(0x1000, 4096, 0x800, 4096));
+        assert!(!picasso_vue_target_disjoint(0, 4096, 0x8000, 4096));
+        assert!(!picasso_vue_target_disjoint(u64::MAX - 1023, 4096, 0x8000, 4096));
+    }
+
+    #[test]
+    fn classifier_keeps_crossing_nonfinite_and_nonpositive_w_distinct() {
+        let inside = [
+            [-0.5f32, -0.5, 0.5, 1.0],
+            [0.5, -0.5, 0.5, 1.0],
+            [0.0, 0.5, 0.5, 1.0],
+        ];
+        let mut cases = [inside; 7];
+        for vertex in &mut cases[1] {
+            vertex[0] += 3.0;
+        }
+        cases[2][0][0] = 2.0;
+        cases[3][1][0] = f32::NAN;
+        cases[4][1][1] = f32::INFINITY;
+        cases[5][2][3] = 0.0;
+        cases[6][2][3] = -1.0;
+        let mut words = [0u32; 7 * 24];
+        for (triangle, positions) in words.chunks_exact_mut(24).zip(cases) {
+            for (vertex, position) in triangle.chunks_exact_mut(8).zip(positions) {
+                for (destination, value) in vertex[4..].iter_mut().zip(position) {
+                    *destination = value.to_bits();
+                }
+            }
+        }
+        words[0] = 1;
+        let summary = summarize_picasso_vue_records(&words).unwrap();
+        assert_eq!(summary.records, 21);
+        assert_eq!(summary.header_nonzero, [1, 0, 0, 0]);
+        assert_eq!((summary.inside, summary.rejected, summary.crossing), (1, 1, 1));
+        assert_eq!(
+            (summary.nan_vertices, summary.inf_vertices, summary.nonpositive_w_vertices),
+            (1, 1, 2)
+        );
+        assert_eq!((summary.nonfinite_triangles, summary.nonpositive_w_triangles), (2, 2));
+        assert_eq!(summary.first_noninside, Some(1));
+        assert_eq!(summary.first_positions[0][0], 2.5f32.to_bits());
+        // D3D Z<0 rejects even though it would be inside an OpenGL [-W,W] volume.
+        for vertex in words[..24].chunks_exact_mut(8) {
+            vertex[6] = (-0.1f32).to_bits();
+        }
+        assert_eq!(
+            summarize_picasso_vue_records(&words[..24])
+                .unwrap()
+                .rejected,
+            1
+        );
+        assert!(summarize_picasso_vue_records(&words[..23]).is_none());
+    }
+}
+// Six 64-bit counters at two boundaries. Preserve the depth-state workaround
+// at DWORDs 32..33 and both OA reports beginning at DWORD 64.
+const PICASSO_PIPELINE_STATS_BEGIN_DWORD: usize = 34;
+const PICASSO_PIPELINE_STATS_END_DWORD: usize = 46;
+const PICASSO_PIPELINE_STATS_LIMIT_DWORD: usize = 58;
+const PICASSO_PIPELINE_STAT_REGISTERS: [crate::intel::stats::RenderStat; 6] = [
+    crate::intel::stats::RenderStat::IaVerticesCount,
+    crate::intel::stats::RenderStat::IaPrimitivesCount,
+    crate::intel::stats::RenderStat::VsInvocationCount,
+    crate::intel::stats::RenderStat::ClInvocationCount,
+    crate::intel::stats::RenderStat::ClPrimitivesCount,
+    crate::intel::stats::RenderStat::PsInvocationCount,
+];
+const _: () = {
+    assert!(PICASSO_PIPELINE_STATS_BEGIN_DWORD >= RESULT_SLOT_DEPTH_STATE_WA_DWORD + 2);
+    assert!(PICASSO_PIPELINE_STATS_BEGIN_DWORD.is_multiple_of(2));
+    assert!(PICASSO_PIPELINE_STATS_END_DWORD == PICASSO_PIPELINE_STATS_BEGIN_DWORD + 12);
+    assert!(PICASSO_PIPELINE_STATS_LIMIT_DWORD == PICASSO_PIPELINE_STATS_END_DWORD + 12);
+    assert!(PICASSO_PIPELINE_STATS_LIMIT_DWORD <= RESULT_OA_BEGIN_DWORD);
+};
+
+fn emit_picasso_pipeline_stat_snapshot(
+    push: &mut impl FnMut(u32) -> Result<(), &'static str>,
+    result_ppgtt_gpu: u64,
+    base_dword: usize,
+) -> Result<(), &'static str> {
+    // ANV genX_query.c / Iris iris_query.c use CS stall + scoreboard stall
+    // before reading these context-saved, continuously accumulating counters.
+    // PS counts dispatched pixels including helper lanes, not committed RT writes.
+    for word in [
+        PIPE_CONTROL_CMD,
+        PIPE_CONTROL_CS_STALL | PIPE_CONTROL_STALL_AT_SCOREBOARD,
+        0,
+        0,
+        0,
+        0,
+    ] {
+        push(word)?;
+    }
+    for (index, stat) in PICASSO_PIPELINE_STAT_REGISTERS.iter().enumerate() {
+        let register = stat.mmio_offset().ok_or("picasso-stat-register")? as u32;
+        let destination = result_ppgtt_gpu + ((base_dword + index * 2) * 4) as u64;
+        // Gfx8+ MI_STORE_REGISTER_MEM stores one DWORD. Bit22 (Use GGTT)
+        // stays clear; the destination is this carrier's result PPGTT mapping.
+        for half in 0..2u32 {
+            let address = destination + u64::from(half) * 4;
+            for word in [
+                (0x24 << 23) | 2,
+                register + half * 4,
+                address as u32,
+                (address >> 32) as u32,
+            ] {
+                push(word)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn picasso_pipeline_stats_delta(words: &[u32]) -> Option<[u64; 6]> {
+    if words.len() != PICASSO_PIPELINE_STATS_LIMIT_DWORD - PICASSO_PIPELINE_STATS_BEGIN_DWORD {
+        return None;
+    }
+    let mut delta = [0u64; 6];
+    for (index, value) in delta.iter_mut().enumerate() {
+        let before = u64::from(words[index * 2]) | (u64::from(words[index * 2 + 1]) << 32);
+        let after = u64::from(words[12 + index * 2]) | (u64::from(words[13 + index * 2]) << 32);
+        *value = after.wrapping_sub(before);
+    }
+    Some(delta)
+}
+
+fn read_picasso_pipeline_stats_after_retire(warm: RenderWarmState) -> Option<[u64; 6]> {
+    if warm.result_virt.is_null() || warm.result_len < PICASSO_PIPELINE_STATS_LIMIT_DWORD * 4 {
+        return None;
+    }
+    let pointer = unsafe { warm.result_virt.add(PICASSO_PIPELINE_STATS_BEGIN_DWORD * 4) };
+    let mut words = [0u32; 24];
+    crate::intel::dma_flush(pointer, core::mem::size_of_val(&words));
+    for (index, word) in words.iter_mut().enumerate() {
+        *word = unsafe { core::ptr::read_volatile(pointer.cast::<u32>().add(index)) };
+    }
+    picasso_pipeline_stats_delta(&words)
+}
+
 fn encode_resident_scene_primary_batch(
     warm: RenderWarmState,
     secondary_count: usize,
     result_ggtt_gpu: u64,
     result_ppgtt_gpu: u64,
     secondary_ppgtt: bool,
+    stats_first_secondary: Option<usize>,
 ) -> Result<usize, &'static str> {
     let batch = unsafe {
         core::slice::from_raw_parts_mut(
@@ -1842,6 +2347,39 @@ fn encode_resident_scene_primary_batch(
             RESIDENT_SCENE_PRIMARY_BATCH_BYTES / core::mem::size_of::<u32>(),
         )
     };
+    encode_resident_scene_primary_commands(
+        batch,
+        secondary_count,
+        result_ggtt_gpu,
+        result_ppgtt_gpu,
+        secondary_ppgtt,
+        stats_first_secondary,
+        warm.result_len,
+    )
+}
+
+fn encode_resident_scene_primary_commands(
+    batch: &mut [u32],
+    secondary_count: usize,
+    result_ggtt_gpu: u64,
+    result_ppgtt_gpu: u64,
+    secondary_ppgtt: bool,
+    stats_first_secondary: Option<usize>,
+    result_bytes: usize,
+) -> Result<usize, &'static str> {
+    if let Some(first) = stats_first_secondary {
+        if first > secondary_count || !secondary_ppgtt {
+            return Err("picasso-stat-scope");
+        }
+        if result_bytes < PICASSO_PIPELINE_STATS_LIMIT_DWORD * 4
+            || result_ppgtt_gpu & 7 != 0
+            || result_ppgtt_gpu
+                .checked_add((PICASSO_PIPELINE_STATS_LIMIT_DWORD * 4) as u64)
+                .is_none()
+        {
+            return Err("picasso-stat-result-range");
+        }
+    }
     let mut cursor = 0usize;
     let mut push = |value: u32| -> Result<(), &'static str> {
         let Some(slot) = batch.get_mut(cursor) else {
@@ -1853,7 +2391,17 @@ fn encode_resident_scene_primary_batch(
     };
     let secondary_return_gpu =
         result_ggtt_gpu + (RESULT_SLOT_SECONDARY_RETURN_DWORD * core::mem::size_of::<u32>()) as u64;
-    for secondary_index in 0..secondary_count {
+    for secondary_index in 0..=secondary_count {
+        if stats_first_secondary == Some(secondary_index) {
+            emit_picasso_pipeline_stat_snapshot(
+                &mut push,
+                result_ppgtt_gpu,
+                PICASSO_PIPELINE_STATS_BEGIN_DWORD,
+            )?;
+        }
+        if secondary_index == secondary_count {
+            break;
+        }
         let offset = RESIDENT_SCENE_PRIMARY_BATCH_BYTES
             .checked_add(
                 secondary_index
@@ -1883,6 +2431,13 @@ fn encode_resident_scene_primary_batch(
                 .ok_or("scene-frame-secondary-count")?,
         )?;
     }
+    if stats_first_secondary.is_some() {
+        emit_picasso_pipeline_stat_snapshot(
+            &mut push,
+            result_ppgtt_gpu,
+            PICASSO_PIPELINE_STATS_END_DWORD,
+        )?;
+    }
     // Secondary breadcrumbs use MI_STORE_DATA_IMM with its GGTT bit set, but
     // this PIPE_CONTROL post-sync write deliberately has DEST_GGTT clear.
     // Render0 happens to use the same numeric VA in both domains; Render1
@@ -1902,8 +2457,9 @@ fn encode_resident_scene_primary_batch(
     push(0)?;
     push(0)?;
 
-    // Retire the release with a second, ordered PIPE_CONTROL. The unique
-    // QWord cookie proves that the preceding RT/tile flush and CS stall ran;
+    // Retire the release with a second, ordered PIPE_CONTROL. The QWord
+    // cookie is cleared before each submission; together with the saved HEAD
+    // check it proves that the preceding RT/tile flush and CS stall ran;
     // it does not by itself prove the display GGTT alias is cache-compatible.
     // DEST_GGTT remains clear because the result allocation is in the render
     // PPGTT.
@@ -1918,12 +2474,183 @@ fn encode_resident_scene_primary_batch(
     Ok(cursor * core::mem::size_of::<u32>())
 }
 
+#[cfg(test)]
+mod picasso_pipeline_stats_tests {
+    use super::*;
+
+    #[test]
+    fn primary_packet_walk_brackets_geometry_and_preserves_release() {
+        let mut batch = [0u32; 512];
+        let ppgtt = 0x2_0084_0000u64;
+        let ggtt = 0x3_0094_0000u64;
+        let bytes =
+            encode_resident_scene_primary_commands(&mut batch, 4, ggtt, ppgtt, true, Some(2), 4096)
+                .unwrap();
+        let expected_registers = [0x2310, 0x2318, 0x2320, 0x2338, 0x2340, 0x2348];
+        let mut cursor = 0;
+        let mut secondaries = 0;
+        let mut snapshots = 0;
+        let mut register_stores = 0;
+        while cursor < bytes / 4 {
+            let packet = &batch[cursor..];
+            match packet[0] {
+                word if word
+                    == MI_BATCH_BUFFER_START_GEN8 | MI_BATCH_2ND_LEVEL | MI_BATCH_PPGTT =>
+                {
+                    let address = u64::from(packet[1]) | (u64::from(packet[2]) << 32);
+                    assert_eq!(
+                        address,
+                        GPU_VA_BATCH_BASE
+                            + (RESIDENT_SCENE_PRIMARY_BATCH_BYTES
+                                + secondaries * RESIDENT_SCENE_SECONDARY_BATCH_BYTES)
+                                as u64
+                    );
+                    secondaries += 1;
+                    cursor += 3;
+                }
+                MI_STORE_DATA_IMM_GGTT_DW1 => {
+                    let address = u64::from(packet[1]) | (u64::from(packet[2]) << 32);
+                    assert_eq!(address, ggtt + RESULT_SLOT_SECONDARY_RETURN_DWORD as u64 * 4);
+                    assert_eq!(
+                        packet[3],
+                        RCS_EXEC_RESULT_SECONDARY_RETURN_BASE + secondaries as u32
+                    );
+                    cursor += 4;
+                }
+                0x1200_0002 => {
+                    let snapshot = register_stores / 12;
+                    let index = (register_stores % 12) / 2;
+                    let half = register_stores % 2;
+                    assert_eq!(snapshots, snapshot + 1);
+                    assert_eq!(packet[1], expected_registers[index] + half as u32 * 4);
+                    let address = u64::from(packet[2]) | (u64::from(packet[3]) << 32);
+                    assert_eq!(address, ppgtt + (34 + snapshot * 12 + index * 2 + half) as u64 * 4);
+                    register_stores += 1;
+                    cursor += 4;
+                }
+                word if word & 0xFFFF_0000 == 0x7A00_0000 => {
+                    if packet[1] == 0x0010_0002 {
+                        assert_eq!(secondaries, if snapshots == 0 { 2 } else { 4 });
+                        assert_eq!(packet[..6], [0x7A00_0004, 0x0010_0002, 0, 0, 0, 0]);
+                        snapshots += 1;
+                    } else {
+                        assert_eq!(snapshots, 2);
+                        assert_eq!(register_stores, 24);
+                    }
+                    cursor += 6;
+                }
+                MI_BATCH_BUFFER_END | MI_NOOP => cursor += 1,
+                unknown => panic!("unexpected primary packet {unknown:#x} at {cursor}"),
+            }
+        }
+        assert_eq!((secondaries, snapshots, register_stores, bytes), (4, 2, 24, 600));
+        let tail = &batch[bytes / 4 - 14..bytes / 4];
+        assert_eq!(
+            tail,
+            [
+                0x7A00_0204,
+                0x5010_30A1,
+                0,
+                0,
+                0,
+                0,
+                0x7A00_0004,
+                0x0010_4080,
+                (ppgtt + 24 * 4) as u32,
+                (ppgtt >> 32) as u32,
+                RCS_EXEC_RESULT_SCENE_RCS_RELEASE_DONE_LO,
+                RCS_EXEC_RESULT_SCENE_RCS_RELEASE_DONE_HI,
+                MI_BATCH_BUFFER_END,
+                MI_NOOP,
+            ]
+        );
+        assert!(PICASSO_PIPELINE_STATS_BEGIN_DWORD >= RESULT_SLOT_DEPTH_STATE_WA_DWORD + 2);
+        assert!(PICASSO_PIPELINE_STATS_LIMIT_DWORD <= RESULT_OA_BEGIN_DWORD);
+    }
+
+    #[test]
+    fn capture_range_validation_precedes_all_packet_writes() {
+        for (first, ppgtt, bytes, use_ppgtt) in [
+            (Some(5), 0x840000, 4096, true),
+            (Some(2), 0x840000, 231, true),
+            (Some(2), 0x840004, 4096, true),
+            (Some(2), u64::MAX - 7, 4096, true),
+            (Some(2), 0x840000, 4096, false),
+        ] {
+            let mut batch = [0xA5A5_A5A5; 512];
+            assert!(
+                encode_resident_scene_primary_commands(
+                    &mut batch, 4, 0x940000, ppgtt, use_ppgtt, first, bytes
+                )
+                .is_err()
+            );
+            assert!(batch.iter().all(|word| *word == 0xA5A5_A5A5));
+        }
+        let mut batch = [0u32; 512];
+        assert_eq!(
+            encode_resident_scene_primary_commands(
+                &mut batch,
+                4,
+                0x940000,
+                0x840000,
+                true,
+                Some(2),
+                232
+            ),
+            Ok(600)
+        );
+        let bytes = encode_resident_scene_primary_commands(
+            &mut batch, 4, 0x940000, 0x840000, true, None, 0,
+        )
+        .unwrap();
+        assert_eq!(bytes, 168);
+        assert!(!batch[..bytes / 4].contains(&0x1200_0002));
+        assert!(
+            encode_resident_scene_primary_commands(
+                &mut batch[..149],
+                4,
+                0x940000,
+                0x840000,
+                true,
+                Some(2),
+                232
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn counter_deltas_preserve_high_bits_and_wrap_unsigned_64_bits() {
+        let before = [
+            0u64,
+            u32::MAX as u64,
+            u64::MAX - 5,
+            1 << 63,
+            0x1234_5678_9ABC_DEF0,
+            7,
+        ];
+        let expected = [19u64, 9, 13, 1 << 40, 0x1234_5678, 0];
+        let mut words = [0u32; 24];
+        for i in 0..6 {
+            let after = before[i].wrapping_add(expected[i]);
+            words[i * 2] = before[i] as u32;
+            words[i * 2 + 1] = (before[i] >> 32) as u32;
+            words[12 + i * 2] = after as u32;
+            words[13 + i * 2] = (after >> 32) as u32;
+        }
+        assert_eq!(picasso_pipeline_stats_delta(&words), Some(expected));
+        assert_eq!(picasso_pipeline_stats_delta(&words[..23]), None);
+    }
+}
+
 #[derive(Copy, Clone)]
 struct ResidentSceneGeometryResult {
     completed: bool,
     prepare_us: u64,
     gpu_poll_us: u64,
     gpu_poll_iters: u64,
+    pipeline_stats: Option<[u64; 6]>,
+    vue_capture: bool,
 }
 
 fn submit_resident_scene_geometry_batched(
@@ -2063,6 +2790,7 @@ fn submit_resident_scene_geometry_batched(
         result_ggtt_gpu,
         GPU_VA_RESULT_BASE,
         carrier.is_some(),
+        None,
     )?;
     crate::intel::dma_flush(warm.batch_virt, primary_bytes);
     if !RESIDENT_SCENE_BATCH_PATH_LOGGED.swap(true, Ordering::AcqRel) {
@@ -2080,32 +2808,39 @@ fn submit_resident_scene_geometry_batched(
     }
     let prepare_us = crate::chronos::monotonic_nanos().saturating_sub(prepare_started_ns) / 1_000;
     let submit_name = "resident-scene";
-    let completed = match carrier {
-        Some(lease) => submit_picasso_render1_batch(
+    let (completed, gpu_poll_us, gpu_poll_iters) = match carrier {
+        Some(lease) => match submit_picasso_render1_batch(
             lease,
             GPU_VA_BATCH_BASE,
             RCS_EXEC_RESULT_SCENE_RCS_RELEASE_DONE_LO,
             RESULT_SLOT_SCENE_FRAME_DWORD,
-        )
-        .is_ok(),
-        None => submit_warm_render_batch(
-            render_lease.as_ref().expect("render0 storage lease"),
-            dev,
-            warm,
-            RCS_EXEC_RESULT_SCENE_RCS_RELEASE_DONE_LO,
-            RESULT_SLOT_SCENE_FRAME_DWORD,
-            submit_name,
-        ),
+        ) {
+            Ok(profile) => (true, profile.elapsed_us, profile.iterations),
+            Err(_) => (false, 0, 0),
+        },
+        None => {
+            let completed = submit_warm_render_batch(
+                render_lease.as_ref().expect("render0 storage lease"),
+                dev,
+                warm,
+                RCS_EXEC_RESULT_SCENE_RCS_RELEASE_DONE_LO,
+                RESULT_SLOT_SCENE_FRAME_DWORD,
+                submit_name,
+            );
+            let (gpu_poll_us, gpu_poll_iters) = resident_scene_last_gpu_poll_profile();
+            (completed, gpu_poll_us, gpu_poll_iters)
+        }
     };
     if !completed && carrier.is_none() {
         record_render_engine_after_nonretired_submit(dev, submit_name);
     }
-    let (gpu_poll_us, gpu_poll_iters) = resident_scene_last_gpu_poll_profile();
     Ok(ResidentSceneGeometryResult {
         completed,
         prepare_us,
         gpu_poll_us,
         gpu_poll_iters,
+        pipeline_stats: None,
+        vue_capture: false,
     })
 }
 
@@ -2123,6 +2858,8 @@ fn submit_resident_churn_forward_geometry_batched(
     target_width: usize,
     target_height: usize,
     carrier: Option<PicassoCarrierLease>,
+    capture_pipeline_stats: bool,
+    capture_vue: bool,
 ) -> Result<ResidentSceneGeometryResult, &'static str> {
     let render_lease = if carrier.is_none() {
         Some(reserve_warm_render_storage("helio-churn-forward").ok_or("render-storage-busy")?)
@@ -2136,6 +2873,20 @@ fn submit_resident_churn_forward_geometry_batched(
     let transform_handoff = transform_dispatch.map(|dispatch| dispatch.output.into());
     let transform_secondary_count = usize::from(transform_dispatch.is_some());
     let resident_draw_count = resident.draw_group_count();
+    let vue_capture_bytes = if capture_vue {
+        let bytes = transform_dispatch
+            .filter(|_| transform_handoff == Some(RetainedGraphicsHandoff::NativeMatrices))
+            .and_then(|dispatch| picasso_vue_capture_capacity(resident.index_count, dispatch.row_count, warm.streamout_len));
+        if bytes.is_none() || warm.streamout_virt.is_null() || warm.result_len < PICASSO_VUE_RESULT_LIMIT_DWORD * 4 {
+            crate::log_warn!(target: "render"; "picasso-vue-capture: rejected=1 reason=capacity-or-native-transform\n");
+            None
+        } else {
+            bytes
+        }
+    } else {
+        None
+    };
+    let capture_pipeline_stats = capture_pipeline_stats || vue_capture_bytes.is_some();
     let secondary_count = resident_draw_count
         .checked_add(static_draws.len())
         .and_then(|count| count.checked_add(1 + transform_secondary_count))
@@ -2160,7 +2911,23 @@ fn submit_resident_churn_forward_geometry_batched(
         core::ptr::write_bytes(warm.result_virt, 0, warm.result_len);
     }
     seed_result_debug_slots(warm);
+    if vue_capture_bytes.is_some() {
+        // Leave every other result slot at its existing initial value. This
+        // selector-only poison distinguishes an unwritten SRM from zero.
+        unsafe {
+            core::ptr::write_volatile(
+                warm.result_virt.cast::<u32>().add(PICASSO_VUE_FF_SLICE_CS_CHICKEN1_DWORD),
+                PICASSO_VUE_SELECTOR_SRM_SENTINEL,
+            );
+        }
+    }
     crate::intel::dma_flush(warm.result_virt, warm.result_len);
+    if let Some(bytes) = vue_capture_bytes {
+        // An unmistakable poison makes unwritten VUE records visible in the
+        // one-shot summary, including stale tails from prior scratch users.
+        unsafe { core::ptr::write_bytes(warm.streamout_virt, 0xFF, bytes) };
+        crate::intel::dma_flush(warm.streamout_virt, bytes);
+    }
     let state = resident_scene_batch_state_for_carrier(warm, carrier)?;
 
     if let Some(dispatch) = transform_dispatch {
@@ -2208,7 +2975,7 @@ fn submit_resident_churn_forward_geometry_batched(
         let (state_warm, state_gpu) = resident_scene_state_warm(state, warm, secondary_index)?;
         match transform_handoff {
             Some(RetainedGraphicsHandoff::NativeMatrices) | None => {
-                let draw = prepare_resident_churn_forward_draw(
+                let mut draw = prepare_resident_churn_forward_draw(
                     state_warm,
                     resident,
                     sampled_material,
@@ -2220,6 +2987,7 @@ fn submit_resident_churn_forward_geometry_batched(
                 )
                 .ok_or("churn-native-draw-resources")?
                 .with_rt_surface_format(render_target_surface_format);
+                draw.vue_capture = vue_capture_bytes.is_some() && group == 0;
                 stage_resident_churn_forward_secondary(
                     warm,
                     state_warm,
@@ -2300,6 +3068,7 @@ fn submit_resident_churn_forward_geometry_batched(
         result_ggtt_gpu,
         GPU_VA_RESULT_BASE,
         carrier.is_some(),
+        capture_pipeline_stats.then_some(1 + transform_secondary_count),
     )?;
     crate::intel::dma_flush(warm.batch_virt, primary_bytes);
     if transform_handoff.is_some_and(RetainedGraphicsHandoff::uses_native_matrices) {
@@ -2354,23 +3123,37 @@ fn submit_resident_churn_forward_geometry_batched(
             material.base_color.pitch,
         );
     }
-    let completed = match carrier {
-        Some(lease) => submit_picasso_render1_batch(
+    let vue_cpu_before = vue_capture_bytes.map(|_| [
+        crate::intel::mmio_read(dev, RCS_FF_SLICE_CS_CHICKEN1),
+        crate::intel::mmio_read(dev, GFX_MODE),
+    ]);
+    let (completed, gpu_poll_us, gpu_poll_iters) = match carrier {
+        Some(lease) => match submit_picasso_render1_batch(
             lease,
             GPU_VA_BATCH_BASE,
             RCS_EXEC_RESULT_SCENE_RCS_RELEASE_DONE_LO,
             RESULT_SLOT_SCENE_FRAME_DWORD,
-        )
-        .is_ok(),
-        None => submit_warm_render_batch(
-            render_lease.as_ref().expect("render0 storage lease"),
-            dev,
-            warm,
-            RCS_EXEC_RESULT_SCENE_RCS_RELEASE_DONE_LO,
-            RESULT_SLOT_SCENE_FRAME_DWORD,
-            "helio-churn-forward",
-        ),
+        ) {
+            Ok(profile) => (true, profile.elapsed_us, profile.iterations),
+            Err(_) => (false, 0, 0),
+        },
+        None => {
+            let completed = submit_warm_render_batch(
+                render_lease.as_ref().expect("render0 storage lease"),
+                dev,
+                warm,
+                RCS_EXEC_RESULT_SCENE_RCS_RELEASE_DONE_LO,
+                RESULT_SLOT_SCENE_FRAME_DWORD,
+                "helio-churn-forward",
+            );
+            let (gpu_poll_us, gpu_poll_iters) = resident_scene_last_gpu_poll_profile();
+            (completed, gpu_poll_us, gpu_poll_iters)
+        }
     };
+    let vue_cpu_after = vue_capture_bytes.filter(|_| completed).map(|_| [
+        crate::intel::mmio_read(dev, RCS_FF_SLICE_CS_CHICKEN1),
+        crate::intel::mmio_read(dev, GFX_MODE),
+    ]);
     if completed
         && let Some(material) = sampled_material
         && !PICASSO_RETAINED_TEXTURED_PATH_LOGGED.swap(true, Ordering::AcqRel)
@@ -2386,12 +3169,27 @@ fn submit_resident_churn_forward_geometry_batched(
     if !completed && carrier.is_none() {
         record_render_engine_after_nonretired_submit(dev, "helio-churn-forward");
     }
-    let (gpu_poll_us, gpu_poll_iters) = resident_scene_last_gpu_poll_profile();
+    // Only read after this carrier's release cookie and saved HEAD retired.
+    // Read before any following coverage/resolve batch can reuse result storage.
+    let pipeline_stats = if completed && capture_pipeline_stats {
+        read_picasso_pipeline_stats_after_retire(warm)
+    } else {
+        None
+    };
+    if let (Some(bytes), Some(cpu_before), Some(cpu_after)) =
+        (vue_capture_bytes, vue_cpu_before, vue_cpu_after)
+    {
+        log_picasso_vue_capture_after_retire(warm, resident, bytes, cpu_before, cpu_after);
+    } else if vue_capture_bytes.is_some() && !completed {
+        crate::log_warn!(target: "render"; "picasso-vue-capture: retired=0 readback=skipped\n");
+    }
     Ok(ResidentSceneGeometryResult {
         completed,
         prepare_us,
         gpu_poll_us,
         gpu_poll_iters,
+        pipeline_stats,
+        vue_capture: vue_capture_bytes.is_some(),
     })
 }
 
@@ -2724,6 +3522,18 @@ fn submit_resident_scene_capture_inner_for_carrier(
         // frame-level primary. GuC sees one ordered scene submission and the
         // CPU waits only for the final scene fence.
         diagnostic_stage = "geometry-prepare-submit";
+        let perf_sequence = RESIDENT_SCENE_PERF_SEQUENCE
+            .fetch_add(1, Ordering::AcqRel)
+            .saturating_add(1);
+        let capture_perf = perf_sequence == 1 || perf_sequence.is_multiple_of(256);
+        let capture_vue = carrier.is_some()
+            && native_churn.is_some_and(|resident| resident.pbr_material()
+                && resident.draw_group_count() == 1
+                && resident.topology() == ResidentScenePrimitiveTopology::TriangleList)
+            && draws.is_empty()
+            && direct_output.is_some_and(|target| picasso_vue_target_disjoint(
+                warm.streamout_phys, warm.streamout_len, target.phys, target.bytes))
+            && take_picasso_vue_capture();
         let geometry = if let Some(resident) = native_churn {
             submit_resident_churn_forward_geometry_batched(
                 dev,
@@ -2739,6 +3549,8 @@ fn submit_resident_scene_capture_inner_for_carrier(
                 target_width,
                 target_height,
                 carrier,
+                carrier.is_some() && capture_perf,
+                capture_vue,
             )?
         } else {
             submit_resident_scene_geometry_batched(
@@ -2937,10 +3749,7 @@ fn submit_resident_scene_capture_inner_for_carrier(
         };
         let frame_us = crate::chronos::monotonic_nanos().saturating_sub(frame_started_ns) / 1_000;
         let geometry_us = geometry_finished_ns.saturating_sub(frame_started_ns) / 1_000;
-        let perf_sequence = RESIDENT_SCENE_PERF_SEQUENCE
-            .fetch_add(1, Ordering::AcqRel)
-            .saturating_add(1);
-        if perf_sequence == 1 || perf_sequence.is_multiple_of(256) {
+        if capture_perf || geometry.vue_capture {
             crate::log_info!(
                 target: "render";
                 "resident-scene-perf: seq={} draws={} frame_us={} geometry_us={} prepare_us={} gpu_poll_us={} gpu_poll_iters={} geometry_other_us={} note=geometry_other_includes_lock-forcewake-lrc-guc-submit-result-handoff\n",
@@ -2953,6 +3762,22 @@ fn submit_resident_scene_capture_inner_for_carrier(
                 geometry.gpu_poll_iters,
                 geometry_us.saturating_sub(geometry.prepare_us).saturating_sub(geometry.gpu_poll_us),
             );
+            if let Some(stats) = geometry.pipeline_stats {
+                crate::log_info!(target: "render";
+                    "picasso-pipeline-stats: seq={} pipeline={} view={} depth={} cull={} scope=retained-and-static-excludes-transform-clear ia_vertices={} ia_primitives={} vs_invocations={} cl_input={} cl_output={} ps_pixels_with_helpers={} capture=gpu-srm64-ppgtt-after-cs-scoreboard-stall retired=1 does_not_prove=rt-writes\n",
+                    perf_sequence, picasso_pipeline_name(), picasso_material_view(), picasso_depth_test_enabled(), picasso_cull_enabled(),
+                    stats[0], stats[1], stats[2], stats[3], stats[4], stats[5],
+                );
+            }
+            if native_sampled_material.is_some() {
+                if let Some(gt) = crate::intel::gen12_gt_state_snapshot() {
+                    crate::log_info!(target: "render";
+                        "picasso-frame-state: seq={} pipeline={} view={} depth={} cull={} clock_available={} actual_mhz={} requested_mhz={} throttle_reasons=0x{:08X} clock_sample=after-retire\n",
+                        perf_sequence, picasso_pipeline_name(), picasso_material_view(), picasso_depth_test_enabled(), picasso_cull_enabled(),
+                        gt.available, gt.actual_mhz, gt.requested_mhz, gt.throttle_reasons,
+                    );
+                }
+            }
         }
         Ok(ResidentSceneFrameResult {
             completed_draws,

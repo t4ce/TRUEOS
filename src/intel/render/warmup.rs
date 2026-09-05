@@ -557,6 +557,60 @@ pub(crate) fn init_global_rcs_workarounds_for_boot(dev: crate::intel::Dev) -> bo
         crate::intel::mask_en(FF_DOP_CLOCK_GATE_DISABLE),
     );
 
+    if adls_ff_thread_mode_workaround(dev.device_id, 0).is_some() {
+        // i915 rcs_engine_wa_init() selects per-context preemption with
+        // GEN7_FF_SLICE_CS_CHICKEN1[14] for Gen9+. CS_CHICKEN1[10] is inert
+        // without it. Limit this correction to the admitted ADL-S IDs: the
+        // 0x4680 capture read back CS_CHICKEN1=0x400 but this selector=0.
+        // Use a masked write, preserving every unrelated engine-control bit.
+        // Boot retains Render/GT forcewake; GuC/VCS-only resets preserve RCS.
+        // GuC ADS omits this register and disables autonomous engine reset.
+        // Future RCS/GT reset recovery must reapply these engine workarounds
+        // before client admission; individual draws never repair the selector.
+        let before = crate::intel::mmio_read(dev, RCS_FF_SLICE_CS_CHICKEN1);
+        let programmed = crate::intel::mask_en(GEN9_FFSC_PERCTX_PREEMPT_CTRL);
+        crate::intel::mmio_write(dev, RCS_FF_SLICE_CS_CHICKEN1, programmed);
+        let after = crate::intel::mmio_read(dev, RCS_FF_SLICE_CS_CHICKEN1);
+        crate::log_important!(target: "render";
+            "intel/gt-global-init: control=per-context-preemption ownership=boot-only scope=adls device=0x{:04X} register=0x{:X} before=0x{:08X} programmed_masked=0x{:08X} after=0x{:08X} required_mask=0x{:08X} accepted={} runtime_writes=0\n",
+            dev.device_id, RCS_FF_SLICE_CS_CHICKEN1, before, programmed, after,
+            GEN9_FFSC_PERCTX_PREEMPT_CTRL,
+            u8::from(after & GEN9_FFSC_PERCTX_PREEMPT_CTRL != 0),
+        );
+        // Read-only physical topology evidence, separate from the static
+        // device model used by the offline compiler's URB sizing calculation.
+        crate::log_important!(target: "render";
+            "intel/render-topology-fuses: device=0x{:04X} fuse3_9118=0x{:08X} eu_disable_9134=0x{:08X} slice_enable_9138=0x{:08X} geometry_dss_enable_913c=0x{:08X} l3alloc_b134=0x{:08X} phase=boot-before-client-draw interpretation=raw-registers\n",
+            dev.device_id,
+            crate::intel::mmio_read(dev, 0x9118),
+            crate::intel::mmio_read(dev, 0x9134),
+            crate::intel::mmio_read(dev, 0x9138),
+            crate::intel::mmio_read(dev, 0x913C),
+            crate::intel::mmio_read(dev, GEN12_L3ALLOC),
+        );
+        // Wa_14010919138 is an engine workaround, separate from 0x20EC[1].
+        // Linux explicitly applies it to ADL-S with an unmasked read/OR/write:
+        // ../bak/reference/linux/drivers/gpu/drm/i915/gt/intel_workarounds.c,
+        // rcs_engine_wa_init(), and i915_reg.h: GEN7_FF_THREAD_MODE (0x20A0).
+        // TGL PRM Vol14 p53 describes 0x20A0[19] as the workaround for clock
+        // gating rendering corruption and triangular corruption.
+        // This initializer runs with boot-retained Render/GT forcewake.
+        // GuC-only and VCS-only resets do not reset this RCS register;
+        // autonomous engine reset is disabled. A future RCS/GT reset recovery
+        // must reapply engine workarounds here before admitting any clients.
+        let before = crate::intel::mmio_read(dev, RCS_FF_THREAD_MODE);
+        let programmed = adls_ff_thread_mode_workaround(dev.device_id, before)
+            .expect("ADL-S workaround device checked");
+        crate::intel::mmio_write(dev, RCS_FF_THREAD_MODE, programmed);
+        let after = crate::intel::mmio_read(dev, RCS_FF_THREAD_MODE);
+        crate::log_important!(target: "render";
+            "intel/gt-global-init: workaround=Wa_14010919138 ownership=boot-only device=0x{:04X} register=0x{:X} before=0x{:08X} programmed=0x{:08X} after=0x{:08X} required_mask=0x{:08X} accepted={} runtime_writes=0\n",
+            dev.device_id, RCS_FF_THREAD_MODE, before, programmed, after,
+            GEN12_FF_TESSELLATION_DOP_GATE_DISABLE,
+            u8::from(after & GEN12_FF_TESSELLATION_DOP_GATE_DISABLE != 0),
+        );
+    }
+
     if device_is_gfx125(dev.device_id) {
         // Mesa's gfx125 init path enables these TBIMR-related raster controls
         // before any client context is admitted.  This is a physical-RCS
@@ -593,7 +647,52 @@ fn global_rcs_workarounds_ready(dev: crate::intel::Dev) -> bool {
         || crate::intel::mmio_read(dev, CHICKEN_RASTER_2)
             & (TBIMR_BATCH_SIZE_OVERRIDE | TBIMR_OPEN_BATCH_ENABLE | TBIMR_FAST_CLIP)
             == (TBIMR_BATCH_SIZE_OVERRIDE | TBIMR_OPEN_BATCH_ENABLE | TBIMR_FAST_CLIP);
-    cs_debug_ready && raster_ready
+    let tessellation_gate_ready = adls_ff_thread_mode_workaround(dev.device_id, 0).is_none()
+        || crate::intel::mmio_read(dev, RCS_FF_THREAD_MODE)
+            & GEN12_FF_TESSELLATION_DOP_GATE_DISABLE
+            != 0;
+    let preemption_selector_ready = adls_ff_thread_mode_workaround(dev.device_id, 0).is_none()
+        || crate::intel::mmio_read(dev, RCS_FF_SLICE_CS_CHICKEN1)
+            & GEN9_FFSC_PERCTX_PREEMPT_CTRL
+            != 0;
+    cs_debug_ready && raster_ready && tessellation_gate_ready && preemption_selector_ready
+}
+
+/// Preserve the entire unmasked register while disabling the ADL-S TE gate.
+/// Scope matches the ADL-S PCI IDs already admitted by this driver.
+const fn adls_ff_thread_mode_workaround(device_id: u16, before: u32) -> Option<u32> {
+    if matches!(device_id, 0x4680 | 0x4682 | 0x4688 | 0x468A | 0x468B | 0x4690 | 0x4692 | 0x4693) {
+        Some(before | GEN12_FF_TESSELLATION_DOP_GATE_DISABLE)
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod adls_ff_thread_mode_workaround_tests {
+    use super::{GEN12_FF_TESSELLATION_DOP_GATE_DISABLE, adls_ff_thread_mode_workaround};
+
+    #[test]
+    fn only_adls_devices_require_the_unmasked_clock_gate_update() {
+        for device in [
+            0x4680, 0x4682, 0x4688, 0x468A, 0x468B, 0x4690, 0x4692, 0x4693,
+        ] {
+            assert_eq!(adls_ff_thread_mode_workaround(device, 0), Some(1 << 19));
+        }
+        for device in [0, 0x9A49, 0x46D1, 0xA780, 0x56A0, 0x7D55, 0xFFFF] {
+            assert_eq!(adls_ff_thread_mode_workaround(device, u32::MAX), None);
+        }
+    }
+
+    #[test]
+    fn preserves_every_other_bit_and_is_safe_to_reapply_after_reset() {
+        for before in [0, 0x1234_5678, 0xF0F0_A5A5, 1 << 19, u32::MAX] {
+            let after = adls_ff_thread_mode_workaround(0x4680, before).unwrap();
+            assert_eq!(after & GEN12_FF_TESSELLATION_DOP_GATE_DISABLE, 1 << 19);
+            assert_eq!(after & !(1 << 19), before & !(1 << 19));
+            assert_eq!(adls_ff_thread_mode_workaround(0x4680, after), Some(after));
+        }
+    }
 }
 
 pub fn forcewake_render_acquire(warm: RenderWarmState) -> bool {

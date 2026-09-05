@@ -1,11 +1,13 @@
 fn direct_rcs_init_lrc_context_image(
     state: DirectRcsState,
+    device_id: u16,
     ring_start: u32,
     ring_tail: u32,
     ring_ctl: u32,
 ) -> bool {
     direct_rcs_init_lrc_context_image_with_root(
         state,
+        device_id,
         ring_start,
         ring_tail,
         ring_ctl,
@@ -15,6 +17,7 @@ fn direct_rcs_init_lrc_context_image(
 
 fn direct_rcs_init_lrc_context_image_with_root(
     state: DirectRcsState,
+    device_id: u16,
     ring_start: u32,
     ring_tail: u32,
     ring_ctl: u32,
@@ -24,6 +27,16 @@ fn direct_rcs_init_lrc_context_image_with_root(
     let dwords =
         unsafe { core::slice::from_raw_parts_mut(state.context_virt as *mut u32, total_dwords) };
     dwords.fill(0);
+
+    // These compute carriers execute on RCS, so their context restores need
+    // the same restore workarounds as the graphics carriers. The post-restore
+    // 3D preemption setting preserves compute preemption granularity. Both
+    // batches use the carrier's GGTT mapping, independent of its PPGTT root.
+    let Some((indirect_context, indirect_offset, post_restore_context)) =
+        crate::intel::render::init_gen12_rcs_restore_wa(dwords, state.gpu_va.context, device_id)
+    else {
+        return false;
+    };
 
     let lrc = &mut dwords[DIRECT_RCS_LRC_STATE_OFFSET_DWORDS..];
     if lrc.len() < 192 {
@@ -52,11 +65,11 @@ fn direct_rcs_init_lrc_context_image_with_root(
     lrc[idx + 14] = 0x2110;
     lrc[idx + 15] = 0;
     lrc[idx + 16] = 0x21C0;
-    lrc[idx + 17] = 0;
+    lrc[idx + 17] = post_restore_context;
     lrc[idx + 18] = 0x21C4;
-    lrc[idx + 19] = 0;
+    lrc[idx + 19] = indirect_context;
     lrc[idx + 20] = 0x21C8;
-    lrc[idx + 21] = 0;
+    lrc[idx + 21] = indirect_offset;
     lrc[idx + 22] = 0x2180;
     lrc[idx + 23] = 0;
     lrc[idx + 24] = 0x22B4;

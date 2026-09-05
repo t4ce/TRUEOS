@@ -119,6 +119,11 @@ fn tone_map(c: vec3<f32>) -> vec3<f32> {
 }
 @fragment
 fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> @location(0) vec4<f32> {
+    // Keep the full pipeline ABI, but isolate coverage from every sampler
+    // transaction and PBR calculation when the draw selects solid output.
+    if material.flags.z == 4u {
+        return vec4<f32>(1.0, 0.0, 1.0, 1.0);
+    }
     // Bind every slot to a valid surface, even when its presence bit is absent.
     let sampled_base = textureSample(base_color_texture, material_sampler, input.uv);
     let sampled_mr = textureSample(metallic_roughness_texture, material_sampler, input.uv);
@@ -160,7 +165,6 @@ fn fs_main(input: VertexOutput, @builtin(front_facing) front_facing: bool) -> @l
         case 1u: { display = linear_to_srgb(base.rgb); }
         case 2u: { display = geometric_n * 0.5 + 0.5; }
         case 3u: { display = vec3<f32>(fract(input.uv), 0.0); }
-        case 4u: { display = vec3<f32>(1.0, 0.0, 1.0); }
         default: {}
     }
     // Every output is opaque; diagnostic color cannot hide a missing write.

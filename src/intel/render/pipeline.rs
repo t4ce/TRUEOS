@@ -6,6 +6,186 @@ static CHURN_NATIVE_BINDING_COMMAND_LOGGED: AtomicBool = AtomicBool::new(false);
 static PICASSO_NATIVE_TEXTURE_STATE_LOGGED: AtomicBool = AtomicBool::new(false);
 static PICASSO_NATIVE_PS_COMMAND_LOGGED: AtomicBool = AtomicBool::new(false);
 
+// A post-sync immediate writes a full, aligned QWord. Keep the depth-state
+// workaround separate from the scene's release cookie, transform markers,
+// secondary breadcrumbs, and OA reports.
+const RESULT_SLOT_DEPTH_STATE_WA_DWORD: usize = 32;
+// OA occupies DWORDs64..191. This one-shot evidence is isolated from both
+// existing pipeline-stat snapshots and all completion/workaround cookies.
+const PICASSO_VUE_COUNTER_BEGIN_DWORD: usize = 192;
+const PICASSO_VUE_COUNTER_END_DWORD: usize = 196;
+const PICASSO_VUE_OFFSET_DWORD: usize = 200;
+const PICASSO_VUE_CS_CHICKEN1_DWORD: usize = 201;
+const PICASSO_VUE_FF_SLICE_CS_CHICKEN1_DWORD: usize = 202;
+const PICASSO_VUE_SELECTOR_SRM_SENTINEL: u32 = 0xD15C_A11E;
+const PICASSO_VUE_RESULT_LIMIT_DWORD: usize = 203;
+const PICASSO_VUE_PREEMPTION_DELAY_DWORDS: usize = 250;
+const _: () = {
+    assert!(PICASSO_VUE_COUNTER_BEGIN_DWORD >= RESULT_OA_END_DWORD + RESULT_OA_REPORT_DWORDS);
+    assert!(PICASSO_VUE_RESULT_LIMIT_DWORD * 4 <= WARM_RESULT_BYTES);
+};
+
+fn picasso_vue_streamout_packets(
+    gpu: u64,
+    bytes: usize,
+    mocs: u32,
+) -> Result<[u32; 32 + PICASSO_VUE_PREEMPTION_DELAY_DWORDS], &'static str> {
+    if gpu & 3 != 0
+        || bytes < 96
+        || bytes % 4 != 0
+        || bytes / 4 > 1 << 30
+        || gpu.checked_add(bytes as u64).is_none()
+        || mocs > 0x7F
+    {
+        return Err("picasso-vue-streamout-range");
+    }
+    // Gen12 PRM Vol2d pp99,109–112: read slot0+slot1 (32B), write32B,
+    // and leave API Rendering Disable clear so the same native draw renders.
+    // Offset write-enable21 + address-enable20=0 loads immediate zero without
+    // making the old proof's automatic offset write to an unmapped VA0.
+    let mut words = [0; 32 + PICASSO_VUE_PREEMPTION_DELAY_DWORDS];
+    words[..6].copy_from_slice(&[
+        PIPE_CONTROL_CMD,
+        PIPE_CONTROL_CS_STALL | PIPE_CONTROL_STALL_AT_SCOREBOARD,
+        0,
+        0,
+        0,
+        0,
+    ]);
+    // Wa_16013994831: Iris waits for a CS stall and 250 MI_NOOPs between
+    // disabling 3DPRIMITIVE object preemption and enabling streamout. Our
+    // post-context-restore batch supplies CS_CHICKEN1; do not rewrite it here,
+    // so the end-of-capture SRM observes the restored value itself.
+    words[6 + PICASSO_VUE_PREEMPTION_DELAY_DWORDS..].copy_from_slice(&[
+        CMD_3DSTATE_STREAMOUT,
+        0x8200_0000,
+        0,
+        32,
+        0,
+        CMD_3DSTATE_SO_BUFFER_INDEX_0,
+        (mocs << 22) | (1 << 31) | (1 << 21),
+        gpu as u32,
+        (gpu >> 32) as u32,
+        (bytes / 4 - 1) as u32,
+        0,
+        0,
+        0,
+        0x7917_0005,
+        1,
+        2,
+        0xF,
+        0,
+        0x1F,
+        0,
+        PIPE_CONTROL_CMD,
+        PIPE_CONTROL_CS_STALL | PIPE_CONTROL_STALL_AT_SCOREBOARD,
+        0,
+        0,
+        0,
+        0,
+    ]);
+    Ok(words)
+}
+fn picasso_vue_counter_packets(
+    result_gpu: u64,
+    result_bytes: usize,
+    end: bool,
+) -> Result<([u32; 34], usize), &'static str> {
+    if result_gpu & 7 != 0
+        || result_bytes < PICASSO_VUE_RESULT_LIMIT_DWORD * 4
+        || result_gpu
+            .checked_add((PICASSO_VUE_RESULT_LIMIT_DWORD * 4) as u64)
+            .is_none()
+    {
+        return Err("picasso-vue-counter-range");
+    }
+    let mut words = [0u32; 34];
+    words[0] = PIPE_CONTROL_CMD;
+    words[1] = PIPE_CONTROL_CS_STALL | PIPE_CONTROL_STALL_AT_SCOREBOARD;
+    let base = if end {
+        PICASSO_VUE_COUNTER_END_DWORD
+    } else {
+        PICASSO_VUE_COUNTER_BEGIN_DWORD
+    };
+    // CS_CHICKEN1 supplies the requested control, while the engine-global
+    // FF_SLICE_CS_CHICKEN1[14] selects whether that per-context control applies.
+    // Observe both without changing either register for this capture.
+    let registers = [0x5200, 0x5204, 0x5240, 0x5244, 0x5280, 0x2580, 0x20E0];
+    let count = if end { 7 } else { 4 };
+    for (index, register) in registers[..count].iter().enumerate() {
+        let destination = result_gpu + ((base + index) * 4) as u64;
+        words[6 + index * 4..10 + index * 4].copy_from_slice(&[
+            0x1200_0002,
+            *register,
+            destination as u32,
+            (destination >> 32) as u32,
+        ]);
+    }
+    Ok((words, 6 + count * 4))
+}
+const _: () = {
+    assert!(RESULT_SLOT_DEPTH_STATE_WA_DWORD.is_multiple_of(2));
+    assert!(RESULT_SLOT_DEPTH_STATE_WA_DWORD >= RESULT_DEBUG_DWORD_COUNT);
+    assert!(RESULT_SLOT_DEPTH_STATE_WA_DWORD + 2 <= RESULT_OA_BEGIN_DWORD);
+};
+
+fn adls_depth_state_post_sync_packet(
+    device_id: u16,
+    result_ppgtt_gpu: u64,
+    result_bytes: usize,
+) -> Result<Option<[u32; 6]>, &'static str> {
+    if adls_ff_thread_mode_workaround(device_id, 0).is_none() {
+        return Ok(None);
+    }
+    let offset = RESULT_SLOT_DEPTH_STATE_WA_DWORD * core::mem::size_of::<u32>();
+    if offset + core::mem::size_of::<u64>() > result_bytes {
+        return Err("depth-state-wa-result-range");
+    }
+    let address = result_ppgtt_gpu
+        .checked_add(offset as u64)
+        .filter(|address| address.is_multiple_of(8))
+        .ok_or("depth-state-wa-result-address")?;
+    // Mesa ANV/Iris Wa_1408224581 / Wa_14014097488: an immediate-write
+    // PIPE_CONTROL after depth/stencil state. This executes in 3D mode, so
+    // the GPGPU-only pre-post-sync CS-stall workaround does not apply.
+    // DEST_GGTT remains clear: each carrier maps its own result at this VA.
+    Ok(Some([
+        PIPE_CONTROL_CMD,
+        PIPE_CONTROL_POST_SYNC_WRITE_IMMEDIATE,
+        address as u32,
+        (address >> 32) as u32,
+        0,
+        0,
+    ]))
+}
+
+#[cfg(test)]
+mod adls_depth_state_post_sync_tests {
+    use super::*;
+
+    #[test]
+    fn post_sync_uses_owned_aligned_scratch_without_release_cookie_alias() {
+        let packet = adls_depth_state_post_sync_packet(0x4680, 0x0084_0000, 4096)
+            .unwrap()
+            .unwrap();
+        assert_eq!(packet, [0x7A00_0004, 0x0000_4000, 0x0084_0080, 0, 0, 0]);
+        assert!(RESULT_SLOT_DEPTH_STATE_WA_DWORD >= RESULT_DEBUG_DWORD_COUNT);
+        assert!(RESULT_SLOT_DEPTH_STATE_WA_DWORD + 2 <= RESULT_OA_BEGIN_DWORD);
+        let packet = adls_depth_state_post_sync_packet(0x4680, 0x1_0084_0000, 4096)
+            .unwrap()
+            .unwrap();
+        assert_eq!(&packet[2..4], &[0x0084_0080, 1]);
+    }
+
+    #[test]
+    fn validates_scratch_bounds_and_keeps_other_device_families_unchanged() {
+        assert!(adls_depth_state_post_sync_packet(0x4680, 0x0084_0000, 135).is_err());
+        assert!(adls_depth_state_post_sync_packet(0x4680, 0x0084_0004, 4096).is_err());
+        assert!(adls_depth_state_post_sync_packet(0x4680, u64::MAX - 64, 4096).is_err());
+        assert_eq!(adls_depth_state_post_sync_packet(0xA780, 0, 0), Ok(None));
+    }
+}
+
 const SAMPLER_CACHE_LINE_DWORDS: usize = 16;
 // TGL PRM Vol 2d, SAMPLER_STATE: zero means enabled, nearest min/mag,
 // no mip filtering, LOD zero, normalized coordinates and WRAP in U/V/W.
@@ -1417,6 +1597,9 @@ mod draw_indexed_indirect_encoder_tests {
     }
 }
 
+const RETAINED_UV_POSITION_BYTE_OFFSET: u32 = 0;
+const RETAINED_UV_TEXCOORD_BYTE_OFFSET: u32 = 24;
+
 fn validate_triangle_native_draw_contract(
     draw: TriangleDrawPrep,
     native: TriangleNativeDrawContract,
@@ -1460,7 +1643,9 @@ fn validate_triangle_native_draw_contract(
         && native.vf_sgvs_2_dw1 == 0xB002_0002
         && native.vf_component_packing == [0x0000_0A77, 0, 0, 0];
     let pos_normal_uv = draw.vertex_format == TriangleVertexFormat::PosNormalUv
-        && draw.vertex_stride == 32
+        // The host UV diagnostic fetches the same position/UV offsets from
+        // an admitted 48-byte tangent mesh without changing its storage.
+        && matches!(draw.vertex_stride, 32 | 48)
         && draw.sampled_texture.is_some()
         && native.vertex_element_count == 3
         && native.vf_sgvs_dw1 == 0xE002_4002
@@ -1569,6 +1754,7 @@ mod retained_native_matrix_draw_contract_tests {
 
     fn native_draw(native: TriangleNativeDrawContract) -> TriangleDrawPrep {
         TriangleDrawPrep {
+            vue_capture: false,
             vertex_count: 108,
             vertex_stride: trueos_helio_artifact::churn_forward::VERTEX_STRIDE,
             vertex_buffer_bytes: 108 * trueos_helio_artifact::churn_forward::VERTEX_STRIDE,
@@ -1675,6 +1861,77 @@ mod retained_native_matrix_draw_contract_tests {
             Err("probe-native-vf-contract")
         );
     }
+
+    #[test]
+    fn uv_diagnostic_preserves_the_current_mesh_and_native_draw() {
+        let mut native = native_contract();
+        native.front_face_clockwise = true;
+        native.vf_sgvs_dw1 = 0xE004_4004;
+        native.vf_sgvs_2_dw1 = 0xB004_0004;
+        native.vertex_element_count = 5;
+        native.vf_component_packing = [0xAF377, 0, 0, 0];
+        let mut draw = native_draw(native);
+        draw.vertex_format = TriangleVertexFormat::PosNormalUvTangent;
+        draw.vertex_stride = 48;
+        draw.vertex_buffer_bytes = draw.vertex_count * 48;
+        draw.sampled_texture = Some(TriangleSampledTextureBinding {
+            gpu_addr: 0x2800_0000, width: 16, height: 16, pitch: 64, sampler_flags: 3,
+        });
+        draw.pbr_material = Some(super::TrianglePbrMaterial {
+            textures: [None; 4], parameters: [0; 16],
+        });
+        let original = draw;
+        let front_end = super::configure_picasso_retained_uv_diagnostic(&mut draw, true).unwrap();
+        assert_eq!(draw.vertex_stride, 48);
+        assert_eq!(draw.vertex_buffer_bytes, original.vertex_buffer_bytes);
+        assert_eq!(draw.vertex_gpu_addr, original.vertex_gpu_addr);
+        assert_eq!(draw.vertex_count, original.vertex_count);
+        let index = draw.index_buffer.unwrap();
+        let old_index = original.index_buffer.unwrap();
+        assert_eq!((index.gpu_addr, index.byte_len, index.index_count),
+            (old_index.gpu_addr, old_index.byte_len, old_index.index_count));
+        assert_eq!(draw.indirect_args_gpu_addr, original.indirect_args_gpu_addr);
+        assert_eq!(draw.sampled_texture, original.sampled_texture);
+        assert_eq!((draw.rt_gpu_addr, draw.rt_pitch, draw.target_w, draw.target_h),
+            (original.rt_gpu_addr, original.rt_pitch, original.target_w, original.target_h));
+        let changed = draw.native.unwrap();
+        assert_eq!(changed.vs_storage_bindings, native.vs_storage_bindings);
+        assert_eq!(changed.vf_instancing, native.vf_instancing);
+        assert_eq!(changed.vf_sgvs_2_dw2, native.vf_sgvs_2_dw2);
+        assert_eq!(changed.front_face_clockwise, native.front_face_clockwise);
+        assert_eq!(changed.double_sided, native.double_sided);
+        assert!(draw.pbr_material.is_none());
+        assert_eq!((front_end.vs_urb_read_length, front_end.sbe_read_offset,
+            front_end.sbe_read_length), (1, 1, 1));
+        assert_eq!(validate_triangle_native_draw_contract(draw, changed), Ok(()));
+
+        // These are the actual byte offsets used by the PosNormalUv packet.
+        // Reading vertex 1 must skip all twelve floats of vertex 0.
+        let vertices: [f32; 24] = [
+            1., 2., 3., 90., 91., 92., 0.25, 1.25, 80., 81., 82., 83.,
+            4., 5., 6., 93., 94., 95., 0.75, 1.75, 84., 85., 86., 87.,
+        ];
+        let start = draw.vertex_stride as usize / 4;
+        let position = start + super::RETAINED_UV_POSITION_BYTE_OFFSET as usize / 4;
+        let uv = start + super::RETAINED_UV_TEXCOORD_BYTE_OFFSET as usize / 4;
+        assert_eq!(&vertices[position..position + 3], &[4., 5., 6.]);
+        assert_eq!(&vertices[uv..uv + 2], &[0.75, 1.75]);
+
+        let mut no_cull = original;
+        super::configure_picasso_retained_uv_diagnostic(&mut no_cull, false).unwrap();
+        assert!(no_cull.native.unwrap().double_sided);
+        assert!(no_cull.native.unwrap().front_face_clockwise);
+    }
+
+    #[test]
+    fn uv_diagnostic_rejects_non_pbr_draws_without_mutation() {
+        let mut draw = native_draw(native_contract());
+        let original = draw;
+        assert!(super::configure_picasso_retained_uv_diagnostic(&mut draw, true).is_err());
+        assert_eq!(draw.native, original.native);
+        assert_eq!(draw.vertex_format, original.vertex_format);
+        assert_eq!(draw.vertex_stride, original.vertex_stride);
+    }
 }
 
 fn encode_triangle_probe_batch(
@@ -1699,6 +1956,14 @@ fn encode_triangle_probe_batch(
     post_draw_sync_variant: PostDrawSyncVariant,
 ) -> Result<usize, &'static str> {
     let mut cursor = 0usize;
+    if draw.vue_capture && (draw.native.is_none()
+        || draw.indirect_args_gpu_addr.is_none()
+        || !matches!(batch_mode, TriangleBatchMode::Draw)
+        || !matches!(backend_probe_mode, BackendProbeMode::MesaLike)
+        || mesa_clip_dw2(false) & ((1 << 31) | (1 << 30)) != ((1 << 31) | (1 << 30)))
+    {
+        return Err("picasso-vue-requires-native-trilist-d3d-clip");
+    }
     if let Some(native) = draw.native {
         validate_triangle_native_draw_contract(draw, native)?;
         if !device_admits_churn_forward_native(
@@ -2178,7 +2443,10 @@ fn encode_triangle_probe_batch(
             || viewport_translation_px
                 .iter()
                 .any(|component| *component != 0.0));
-    let clip_dw1 = if viewport_or_rectlist_clip_bypass {
+    let diagnostic_cull_off = draw.native.is_some()
+        && draw.sampled_texture.is_some()
+        && !picasso_cull_enabled();
+    let mut clip_dw1 = if viewport_or_rectlist_clip_bypass {
         0
     } else if mesa_host_fixed_function {
         0x0004_0400
@@ -2192,6 +2460,11 @@ fn encode_triangle_probe_batch(
                 0
             }
     };
+    if diagnostic_cull_off {
+        // CLIP.DW1[18] performs early backface rejection. Disable it along
+        // with RASTER culling so CL output counters exclude that optimization.
+        clip_dw1 &= !(1 << 18);
+    }
     let clip_dw2 = if viewport_or_rectlist_clip_bypass {
         CLIP_PERSPECTIVE_DIVIDE_DISABLE
     } else if mesa_host_fixed_function {
@@ -2294,7 +2567,8 @@ fn encode_triangle_probe_batch(
     // proof that a more opinionated packet is required.
     let raster_dw1 = if artifact_native_fixed_function {
         native_raster_dw1(
-            draw.native.is_some_and(|native| native.double_sided),
+            draw.native.is_some_and(|native| native.double_sided)
+                || diagnostic_cull_off,
             draw.native
                 .is_some_and(|native| native.front_face_clockwise),
         )
@@ -3133,7 +3407,7 @@ fn encode_triangle_probe_batch(
                     batch_dwords,
                     &mut cursor,
                     0,
-                    0,
+                    RETAINED_UV_POSITION_BYTE_OFFSET,
                     SURFACE_FORMAT_R32G32B32_FLOAT,
                     VFCOMP_STORE_SRC,
                     VFCOMP_STORE_SRC,
@@ -3144,7 +3418,7 @@ fn encode_triangle_probe_batch(
                     batch_dwords,
                     &mut cursor,
                     0,
-                    24,
+                    RETAINED_UV_TEXCOORD_BYTE_OFFSET,
                     SURFACE_FORMAT_R32G32_FLOAT,
                     VFCOMP_STORE_SRC,
                     VFCOMP_STORE_SRC,
@@ -3506,93 +3780,101 @@ fn encode_triangle_probe_batch(
     for _ in 0..10 {
         push(batch_dwords, &mut cursor, 0)?;
     }
-    log_batch_offset(cursor, "3DSTATE_STREAMOUT");
-    push(batch_dwords, &mut cursor, CMD_3DSTATE_STREAMOUT)?;
-    if batch_mode.streamout_enabled() {
-        push(batch_dwords, &mut cursor, streamout_dw1)?;
-        push(batch_dwords, &mut cursor, streamout_dw2)?;
-        push(batch_dwords, &mut cursor, streamout_dw3)?;
-        push(batch_dwords, &mut cursor, streamout_dw4)?;
-
-        log_batch_offset(cursor, "PIPE_CONTROL pre-so-buffer");
-        push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_CS_STALL)?;
-        log_batch_offset(cursor, "3DSTATE_SO_BUFFER_INDEX_0");
-        push(batch_dwords, &mut cursor, CMD_3DSTATE_SO_BUFFER_INDEX_0)?;
-        push(batch_dwords, &mut cursor, so_buffer_index_dw1)?;
-        push_addr(batch_dwords, &mut cursor, GPU_VA_STREAMOUT_BASE)?;
-        push(batch_dwords, &mut cursor, streamout_surface_size_dwords)?;
-        push_addr(batch_dwords, &mut cursor, 0)?;
-        push(batch_dwords, &mut cursor, so_buffer_stream_offset_dw)?;
-        log_batch_offset(cursor, "PIPE_CONTROL post-so-buffer");
-        push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_CS_STALL)?;
-
-        log_batch_offset(cursor, "3DSTATE_SO_DECL_LIST");
-        let streamout_decl_dword0 = streamout_experiment.so_decl_buffer_selects();
-        let streamout_decl_dword1 = streamout_experiment.so_decl_num_entries();
-        let [
-            streamout_decl_dword2,
-            streamout_decl_dword3,
-            streamout_decl_dword4,
-            streamout_decl_dword5,
-        ] = streamout_experiment.so_decl_entry_dwords();
-        push(batch_dwords, &mut cursor, streamout_experiment.so_decl_header())?;
-        push(batch_dwords, &mut cursor, streamout_decl_dword0)?;
-        push(batch_dwords, &mut cursor, streamout_decl_dword1)?;
-        push(batch_dwords, &mut cursor, streamout_decl_dword2)?;
-        push(batch_dwords, &mut cursor, streamout_decl_dword3)?;
-        if matches!(
-            streamout_experiment,
-            StreamoutProofExperiment::PrmVueHeaderPositionSlots01
-                | StreamoutProofExperiment::PrmVueHeaderPositionXywzSlots01
-                | StreamoutProofExperiment::HeaderAndPositionSlots01
-        ) {
-            push(batch_dwords, &mut cursor, streamout_decl_dword4)?;
-            push(batch_dwords, &mut cursor, streamout_decl_dword5)?;
+    if draw.vue_capture {
+        for word in
+            picasso_vue_streamout_packets(GPU_VA_STREAMOUT_BASE, warm.streamout_len, RENDER_MOCS)?
+        {
+            push(batch_dwords, &mut cursor, word)?;
         }
-        crate::log!(
-            "probe-streamout-decl experiment={} read_len={} so_pitch={} decl=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] vs_position_only={} ps_varyings={} generic_attrs=0 compatible={}\n",
-            streamout_experiment.label(),
-            streamout_experiment.vertex_read_length(),
-            streamout_experiment.vertex_bytes(),
-            streamout_decl_dword0,
-            streamout_decl_dword1,
-            streamout_decl_dword2,
-            streamout_decl_dword3,
-            streamout_decl_dword4,
-            streamout_decl_dword5,
-            (pipeline.ps.meta.num_varying_inputs == 0) as u8,
-            pipeline.ps.meta.num_varying_inputs,
-            streamout_experiment.compatible() as u8,
-        );
-        crate::log!(
-            "probe-streamout-config experiment={} so[function_enable={} statistics_enable={} rendering_disable={} render_stream={} reorder={} read_offset={} read_length_field={} buffer0_pitch={}] sobuf0[enable={} write_enable={} offset_addr_enable={} offset_mode={} mocs=0x{:X} surface=0x{:X} size_dwords=0x{:X} stream_offset=0x{:08X}] slot_contract={}\n",
-            streamout_experiment.label(),
-            (streamout_dw1 >> 31) & 0x1,
-            (streamout_dw1 >> 25) & 0x1,
-            (streamout_dw1 >> 30) & 0x1,
-            (streamout_dw1 >> 27) & 0x3,
-            (streamout_dw1 >> 26) & 0x1,
-            (streamout_dw2 >> 5) & 0x1,
-            streamout_dw2 & 0x1F,
-            streamout_dw3 & 0xFFF,
-            (so_buffer_index_dw1 >> 31) & 0x1,
-            (so_buffer_index_dw1 >> 21) & 0x1,
-            (so_buffer_index_dw1 >> 20) & 0x1,
-            decode_streamout_offset_mode_name(
+    } else {
+        log_batch_offset(cursor, "3DSTATE_STREAMOUT");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_STREAMOUT)?;
+        if batch_mode.streamout_enabled() {
+            push(batch_dwords, &mut cursor, streamout_dw1)?;
+            push(batch_dwords, &mut cursor, streamout_dw2)?;
+            push(batch_dwords, &mut cursor, streamout_dw3)?;
+            push(batch_dwords, &mut cursor, streamout_dw4)?;
+
+            log_batch_offset(cursor, "PIPE_CONTROL pre-so-buffer");
+            push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_CS_STALL)?;
+            log_batch_offset(cursor, "3DSTATE_SO_BUFFER_INDEX_0");
+            push(batch_dwords, &mut cursor, CMD_3DSTATE_SO_BUFFER_INDEX_0)?;
+            push(batch_dwords, &mut cursor, so_buffer_index_dw1)?;
+            push_addr(batch_dwords, &mut cursor, GPU_VA_STREAMOUT_BASE)?;
+            push(batch_dwords, &mut cursor, streamout_surface_size_dwords)?;
+            push_addr(batch_dwords, &mut cursor, 0)?;
+            push(batch_dwords, &mut cursor, so_buffer_stream_offset_dw)?;
+            log_batch_offset(cursor, "PIPE_CONTROL post-so-buffer");
+            push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_CS_STALL)?;
+
+            log_batch_offset(cursor, "3DSTATE_SO_DECL_LIST");
+            let streamout_decl_dword0 = streamout_experiment.so_decl_buffer_selects();
+            let streamout_decl_dword1 = streamout_experiment.so_decl_num_entries();
+            let [
+                streamout_decl_dword2,
+                streamout_decl_dword3,
+                streamout_decl_dword4,
+                streamout_decl_dword5,
+            ] = streamout_experiment.so_decl_entry_dwords();
+            push(batch_dwords, &mut cursor, streamout_experiment.so_decl_header())?;
+            push(batch_dwords, &mut cursor, streamout_decl_dword0)?;
+            push(batch_dwords, &mut cursor, streamout_decl_dword1)?;
+            push(batch_dwords, &mut cursor, streamout_decl_dword2)?;
+            push(batch_dwords, &mut cursor, streamout_decl_dword3)?;
+            if matches!(
+                streamout_experiment,
+                StreamoutProofExperiment::PrmVueHeaderPositionSlots01
+                    | StreamoutProofExperiment::PrmVueHeaderPositionXywzSlots01
+                    | StreamoutProofExperiment::HeaderAndPositionSlots01
+            ) {
+                push(batch_dwords, &mut cursor, streamout_decl_dword4)?;
+                push(batch_dwords, &mut cursor, streamout_decl_dword5)?;
+            }
+            crate::log!(
+                "probe-streamout-decl experiment={} read_len={} so_pitch={} decl=[0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X},0x{:08X}] vs_position_only={} ps_varyings={} generic_attrs=0 compatible={}\n",
+                streamout_experiment.label(),
+                streamout_experiment.vertex_read_length(),
+                streamout_experiment.vertex_bytes(),
+                streamout_decl_dword0,
+                streamout_decl_dword1,
+                streamout_decl_dword2,
+                streamout_decl_dword3,
+                streamout_decl_dword4,
+                streamout_decl_dword5,
+                (pipeline.ps.meta.num_varying_inputs == 0) as u8,
+                pipeline.ps.meta.num_varying_inputs,
+                streamout_experiment.compatible() as u8,
+            );
+            crate::log!(
+                "probe-streamout-config experiment={} so[function_enable={} statistics_enable={} rendering_disable={} render_stream={} reorder={} read_offset={} read_length_field={} buffer0_pitch={}] sobuf0[enable={} write_enable={} offset_addr_enable={} offset_mode={} mocs=0x{:X} surface=0x{:X} size_dwords=0x{:X} stream_offset=0x{:08X}] slot_contract={}\n",
+                streamout_experiment.label(),
+                (streamout_dw1 >> 31) & 0x1,
+                (streamout_dw1 >> 25) & 0x1,
+                (streamout_dw1 >> 30) & 0x1,
+                (streamout_dw1 >> 27) & 0x3,
+                (streamout_dw1 >> 26) & 0x1,
+                (streamout_dw2 >> 5) & 0x1,
+                streamout_dw2 & 0x1F,
+                streamout_dw3 & 0xFFF,
+                (so_buffer_index_dw1 >> 31) & 0x1,
                 (so_buffer_index_dw1 >> 21) & 0x1,
                 (so_buffer_index_dw1 >> 20) & 0x1,
-            ),
-            (so_buffer_index_dw1 >> 22) & 0x7F,
-            GPU_VA_STREAMOUT_BASE,
-            streamout_surface_size_dwords,
-            so_buffer_stream_offset_dw,
-            streamout_experiment.vf_slot_contract(),
-        );
-        log_batch_offset(cursor, "PIPE_CONTROL post-so-decl");
-        push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_CS_STALL)?;
-    } else {
-        for _ in 0..4 {
-            push(batch_dwords, &mut cursor, 0)?;
+                decode_streamout_offset_mode_name(
+                    (so_buffer_index_dw1 >> 21) & 0x1,
+                    (so_buffer_index_dw1 >> 20) & 0x1,
+                ),
+                (so_buffer_index_dw1 >> 22) & 0x7F,
+                GPU_VA_STREAMOUT_BASE,
+                streamout_surface_size_dwords,
+                so_buffer_stream_offset_dw,
+                streamout_experiment.vf_slot_contract(),
+            );
+            log_batch_offset(cursor, "PIPE_CONTROL post-so-decl");
+            push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_CS_STALL)?;
+        } else {
+            for _ in 0..4 {
+                push(batch_dwords, &mut cursor, 0)?;
+            }
         }
     }
     log_batch_offset(cursor, "3DSTATE_GS");
@@ -3738,6 +4020,17 @@ fn encode_triangle_probe_batch(
     push(batch_dwords, &mut cursor, RENDER_MOCS << 25)?;
     push_addr(batch_dwords, &mut cursor, 0)?;
     push(batch_dwords, &mut cursor, 0)?;
+
+    if let Some(packet) = adls_depth_state_post_sync_packet(
+        warm.device_id,
+        GPU_VA_RESULT_BASE,
+        warm.result_len,
+    )? {
+        log_batch_offset(cursor, "PIPE_CONTROL depth-state workaround");
+        for dword in packet {
+            push(batch_dwords, &mut cursor, dword)?;
+        }
+    }
 
     if backend_probe_mode.sample_mask_before_clip() {
         log_batch_offset(cursor, "3DSTATE_MULTISAMPLE early-raster-gate");
@@ -4278,6 +4571,12 @@ fn encode_triangle_probe_batch(
         push(batch_dwords, &mut cursor, ps_binding_table_pointer_offset)?;
     }
 
+    if draw.vue_capture {
+        let (words, count) = picasso_vue_counter_packets(GPU_VA_RESULT_BASE, warm.result_len, false)?;
+        for word in &words[..count] {
+            push(batch_dwords, &mut cursor, *word)?;
+        }
+    }
     if let Some(args_gpu_addr) = draw.indirect_args_gpu_addr {
         log_batch_offset(cursor, "Helio DrawIndexedIndirectArgs -> 3DPRIM registers");
         encode_draw_indexed_indirect_register_loads(batch_dwords, &mut cursor, args_gpu_addr)?;
@@ -4345,6 +4644,12 @@ fn encode_triangle_probe_batch(
         push(batch_dwords, &mut cursor, 0)?;
     }
 
+    if draw.vue_capture {
+        let (words, count) = picasso_vue_counter_packets(GPU_VA_RESULT_BASE, warm.result_len, true)?;
+        for word in &words[..count] {
+            push(batch_dwords, &mut cursor, *word)?;
+        }
+    }
     if backend_probe_mode.uses_raster_wm_oa() {
         log_batch_offset(cursor, "MI_REPORT_PERF_COUNT raster-wm end");
         push_mi_report_perf_count(
