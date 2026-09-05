@@ -66,6 +66,12 @@ The canonical reference backend is
 `tools/apply_trueos_rust_std_thread_backend.py` installs this selector and source and gates the Unix pthread-handle
 extensions against a Rust source checkout.
 
+Installation upgrades an earlier canonical backend only when its exact SHA-256
+is listed in the installer's reviewed revision table. Unknown local changes are
+preserved and reported with their digest. Updating the reference must also add
+the previous canonical digest to that table. All source anchors are checked
+before writing; `--check` reports a pending upgrade without applying it.
+
 ## Expected Tokio/Axum consequence
 
 A Tokio current-thread runtime may structurally contain blocking-pool state, but

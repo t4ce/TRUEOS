@@ -9,6 +9,7 @@ TRUEOS-specific thread backend before the generic Unix/pthread backend.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 from pathlib import Path
 import tempfile
@@ -22,6 +23,14 @@ TRUEOS_SELECTOR = '''    target_os = "trueos" => {
         };
     }
 '''
+
+# Exact canonical revisions previously installed by this integration. When the
+# reference changes, retain the reviewed previous digest here so packing can
+# upgrade it without treating an arbitrary locally edited backend as ours.
+KNOWN_BACKEND_SHA256 = frozenset({
+    # Initial PR #37 integration, before extracting/testing sleep_with.
+    "ba0041a1e49ecbc166c6ba02abd769eb1f47632a7acd5112c5ee2fdbf6bdcdba",
+})
 
 
 def rust_root(path: Path) -> Path:
@@ -55,9 +64,11 @@ def installation(root: Path) -> dict[Path, str]:
     reference = reference_path.read_text(encoding="utf-8")
     if backend_path.exists():
         existing = backend_path.read_text(encoding="utf-8")
-        if existing != reference:
+        existing_digest = hashlib.sha256(backend_path.read_bytes()).hexdigest()
+        if existing != reference and existing_digest not in KNOWN_BACKEND_SHA256:
             raise SystemExit(
-                f"{backend_path}: existing TRUEOS thread backend differs from the canonical reference"
+                f"{backend_path}: unrecognized TRUEOS thread backend "
+                f"(sha256={existing_digest}); refusing to overwrite local changes"
             )
     selector = selector_path.read_text(encoding="utf-8")
     if selector.count(UNIX_SELECTOR) != 1:
