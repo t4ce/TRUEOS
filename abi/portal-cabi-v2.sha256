@@ -221,4 +221,4 @@
 # ShaderToy package upload v1 adds one bounded, owner-scoped transfer symbol.
 # All pre-existing function signatures are unchanged. ShaderToy render now
 # requires package registration; rebuild the Shadertoy Blueprint with this kernel.
-03cfe20f6292f3d87fd1b4190fe888d9b57e83e9685df8ded601d3ea93e448ea
+fbfae388918f477e25f28ddbd89cc772a6771d8dc820780f348f05a084d9f6ec

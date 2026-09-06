@@ -6,11 +6,13 @@
 //! producer was the first consumer; shaded scene producers share the same
 //! coherent UI4 frame lifecycle.
 
+use crate::intel::gpgpu::shadertoy_package::{
+    ShaderToyPackageUpload, program_id as shadertoy_program_id,
+};
 use alloc::{collections::VecDeque, string::String, vec::Vec};
 use core::sync::atomic::{AtomicU32, Ordering};
 use spin::Mutex;
 use trueos_time::Instant;
-use crate::intel::gpgpu::shadertoy_package::{ShaderToyPackageUpload, program_id as shadertoy_program_id};
 
 use crate::intel::gpgpu::{
     ALPHA_BLEND_WORKLIST_FLAG_COPY, ALPHA_BLEND_WORKLIST_FLAG_SRC_OVER,
@@ -18,10 +20,10 @@ use crate::intel::gpgpu::{
     GpgpuAlphaBlendWorklistDesc, GpgpuGlyphMaskLayer, GpgpuOwnedParticleCraftState,
     GpgpuOwnedRgba8Surface, GpgpuPoint, GpgpuRect, GpgpuRgb565Surface, GpgpuRgba8ReleaseFence,
     GpgpuRgba8Surface, GpgpuSolidRect, GpgpuSpriteQuadWorklistDesc, GpgpuSpriteQuadWorklistRun,
-    GpgpuSubmissionOutcome, ParticleCraftParamsV1, SHADERTOY_PARAMS_VERSION, ShaderToyRuntimeState,
+    GpgpuSubmissionOutcome, ParticleCraftParamsV1, SHADERTOY_PARAMS_VERSION,
     SPRITE_QUAD_WORKLIST_FLAG_PREMUL_SRC, SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER, ShaderToyFrameParams,
-    SkyboxSampleRgb565Params, Ui4CompositorCompletion, Ui4CompositorSubmission,
-    Ui4CompositorSubmitError, Ui4SpriteSceneCompletion,
+    ShaderToyRuntimeState, SkyboxSampleRgb565Params, Ui4CompositorCompletion,
+    Ui4CompositorSubmission, Ui4CompositorSubmitError, Ui4SpriteSceneCompletion,
     allocate_font_instance_rgba8_surface_cleared, alpha_blend_worklist_max_descs,
     fill_solid_rects_rgba8_scanout_result, glyph_mask_layers_rgba8_2d_mode,
     particle_craft_rgba8_frame, poll_ui4_blueprint_sprite_scene, poll_ui4_compositor_submission,
@@ -2444,24 +2446,50 @@ fn enqueue_window_keyboard_event(
 
 /// Query the live broker position, including drags performed outside the app.
 /// `out_xy` must point to two writable i32 values.
-pub unsafe extern "C" fn trueos_cabi_ui4_scene_frame_get_position(window_id: u32, out_xy: *mut i32) -> i32 {
-    if out_xy.is_null() { return ERROR_INVALID; }
+pub unsafe extern "C" fn trueos_cabi_ui4_scene_frame_get_position(
+    window_id: u32,
+    out_xy: *mut i32,
+) -> i32 {
+    if out_xy.is_null() {
+        return ERROR_INVALID;
+    }
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
         let mut bytes = [0u8; 8];
         let (status, rc) = trueos_vm::vmcall::call_with_payload(
             trueos_vm::vmcall::OP_BP_UI4_SCENE_FRAME_GET_POSITION,
-            window_id as u64, 0, &[], &mut bytes,
+            window_id as u64,
+            0,
+            &[],
+            &mut bytes,
         );
-        if status != trueos_vm::vmcall::STATUS_OK { return ERROR_UI4; }
-        if rc as i64 != 0 { return rc as i32; }
-        unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), out_xy.cast::<u8>(), 8); }
+        if status != trueos_vm::vmcall::STATUS_OK {
+            return ERROR_UI4;
+        }
+        if rc as i64 != 0 {
+            return rc as i32;
+        }
+        unsafe {
+            core::ptr::copy_nonoverlapping(bytes.as_ptr(), out_xy.cast::<u8>(), 8);
+        }
         return 0;
     }
-    let Some(owner) = blueprint_owner() else { return ERROR_CONTEXT; };
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT;
+    };
     let surfaces = SURFACES.lock();
-    let Some(surface) = surfaces.iter().find(|s| s.owner == owner && s.window.raw() == window_id) else { return ERROR_NOT_FOUND; };
-    let Ok((placement, _)) = window_resize_state(owner, surface.window) else { return ERROR_UI4; };
-    unsafe { out_xy.write(placement.x); out_xy.add(1).write(placement.y); }
+    let Some(surface) = surfaces
+        .iter()
+        .find(|s| s.owner == owner && s.window.raw() == window_id)
+    else {
+        return ERROR_NOT_FOUND;
+    };
+    let Ok((placement, _)) = window_resize_state(owner, surface.window) else {
+        return ERROR_UI4;
+    };
+    unsafe {
+        out_xy.write(placement.x);
+        out_xy.add(1).write(placement.y);
+    }
     0
 }
 
@@ -2487,6 +2515,14 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_set_position(window_id: u32, x: i3
         Err(_) => return ERROR_UI4,
     };
     surface.placement = placement;
+    if let Some(pending) = &mut surface.pending_resize {
+        // A resize commits its placement with its first published frame. Keep
+        // moves made before that publish instead of snapping to the old origin.
+        pending.placement.x = placement.x;
+        pending.placement.y = placement.y;
+        pending.previous_placement.x = placement.x;
+        pending.previous_placement.y = placement.y;
+    }
     0
 }
 
@@ -2516,6 +2552,38 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_set_opacity(window_id: u32, opacit
     };
     surface.placement = placement;
     0
+}
+
+/// Allow primary selection clicks through to this frame while it is a compact control.
+pub extern "C" fn trueos_cabi_ui4_scene_frame_primary_activation(
+    window_id: u32,
+    enabled: u32,
+) -> i32 {
+    if enabled > 1 {
+        return ERROR_INVALID;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_status(
+            trueos_vm::vmcall::OP_BP_UI4_SCENE_FRAME_PRIMARY_ACTIVATION,
+            window_id as u64,
+            enabled as u64,
+            &[],
+        );
+    }
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT;
+    };
+    let window = {
+        let mut surfaces = SURFACES.lock();
+        let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+            return ERROR_NOT_FOUND;
+        };
+        surface.window
+    };
+    match super::window_broker::set_window_primary_activation(owner, window, enabled != 0) {
+        Ok(()) => 0,
+        Err(_) => ERROR_UI4,
+    }
 }
 
 /// Include or exclude this Blueprint frame from UI4 cursor hit testing.
@@ -3619,7 +3687,9 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_shadertoy_render(
         if surface.visual_cadence.is_none() {
             return ERROR_INVALID;
         }
-        if surface.shadertoy_registered & (1u32 << shadertoy_program_id(params.shader_id).unwrap()) == 0 {
+        if surface.shadertoy_registered & (1u32 << shadertoy_program_id(params.shader_id).unwrap())
+            == 0
+        {
             return ERROR_STATE;
         }
         if surface.gpu_submission_unretired {

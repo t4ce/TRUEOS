@@ -934,7 +934,7 @@ struct HttpsTarget {
 enum HttpFetchError {
     BadUrl,
     UnsupportedScheme,
-    Https,
+    Https(String),
     NoDns,
     Dns,
     Connect,
@@ -945,11 +945,11 @@ enum HttpFetchError {
 }
 
 impl HttpFetchError {
-    fn reason(&self) -> &'static str {
+    fn reason(&self) -> &str {
         match self {
             Self::BadUrl => "bad-url",
             Self::UnsupportedScheme => "unsupported-scheme",
-            Self::Https => "https",
+            Self::Https(reason) => reason,
             Self::NoDns => "no-dns",
             Self::Dns => "dns",
             Self::Connect => "connect",
@@ -1471,8 +1471,11 @@ async fn fetch_http_body_once(
             return Err(HttpFetchError::Body);
         }
 
-        let encoding = response.headers().get(hyper::header::CONTENT_ENCODING)
-            .and_then(|value| value.to_str().ok()).map(String::from);
+        let encoding = response
+            .headers()
+            .get(hyper::header::CONTENT_ENCODING)
+            .and_then(|value| value.to_str().ok())
+            .map(String::from);
         let mut out = Vec::new();
         let body = response.body_mut();
         loop {
@@ -1564,7 +1567,7 @@ async fn fetch_http_body_hyper(
                             https_url,
                             err
                         );
-                        HttpFetchError::Https
+                        HttpFetchError::Https(err)
                     })?;
             return Ok((https_url, bytes));
         }
@@ -1685,11 +1688,11 @@ async fn fetch_https_body_once(
                         target.host,
                         msg
                     );
-                    return Err(HttpFetchError::Https);
+                    return Err(HttpFetchError::Https(String::from("tls socket failed")));
                 }
                 TlsEvent::TlsError { err } => {
                     crate::log!("html_shack: https tls error host={} err={:?}\n", target.host, err);
-                    return Err(HttpFetchError::Https);
+                    return Err(HttpFetchError::Https(String::from("tls socket failed")));
                 }
             }
         }

@@ -214,6 +214,7 @@ fn initialize_start_button() -> Result<ActiveStartButton, &'static str> {
             movable: true,
             maximizable: false,
             receives_input: true,
+            primary_activation: false,
             hit_testable: true,
             resize_on_maximize: false,
         },

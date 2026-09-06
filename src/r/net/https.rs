@@ -794,22 +794,34 @@ fn decode_chunked(body: &[u8], max_bytes: usize) -> Result<Option<Vec<u8>>, Stri
     let mut out = Vec::new();
     let mut offset = 0usize;
     loop {
-        let Some(line_rel) = body[offset..].windows(2).position(|w| w == b"\r\n") else { return Ok(None); };
+        let Some(line_rel) = body[offset..].windows(2).position(|w| w == b"\r\n") else {
+            return Ok(None);
+        };
         let line = &body[offset..offset + line_rel];
         let text = core::str::from_utf8(line.split(|b| *b == b';').next().unwrap_or(&[]))
             .map_err(|_| String::from("bad chunk size"))?;
-        let size = usize::from_str_radix(text.trim(), 16).map_err(|_| String::from("bad chunk size"))?;
+        let size =
+            usize::from_str_radix(text.trim(), 16).map_err(|_| String::from("bad chunk size"))?;
         offset += line_rel + 2;
         if size == 0 {
             // A zero chunk is followed by trailers and their final empty line.
             let tail = &body[offset..];
-            return Ok((tail.starts_with(b"\r\n") || tail.windows(4).any(|w| w == b"\r\n\r\n")).then_some(out));
+            return Ok((tail.starts_with(b"\r\n") || tail.windows(4).any(|w| w == b"\r\n\r\n"))
+                .then_some(out));
         }
-        if size > max_bytes.saturating_sub(out.len()) { return Err(String::from("too large chunked body")); }
-        let end = offset.checked_add(size).and_then(|end| end.checked_add(2))
+        if size > max_bytes.saturating_sub(out.len()) {
+            return Err(String::from("too large chunked body"));
+        }
+        let end = offset
+            .checked_add(size)
+            .and_then(|end| end.checked_add(2))
             .ok_or_else(|| String::from("bad chunk size"))?;
-        if end > body.len() { return Ok(None); }
-        if &body[end - 2..end] != b"\r\n" { return Err(String::from("bad chunk delimiter")); }
+        if end > body.len() {
+            return Ok(None);
+        }
+        if &body[end - 2..end] != b"\r\n" {
+            return Err(String::from("bad chunk delimiter"));
+        }
         out.extend_from_slice(&body[offset..end - 2]);
         offset = end;
     }
@@ -818,8 +830,12 @@ fn decode_chunked(body: &[u8], max_bytes: usize) -> Result<Option<Vec<u8>>, Stri
 fn final_response_bytes(mut response: &[u8]) -> Result<&[u8], String> {
     while let Some(end) = find_http_header_end(response) {
         let status = parse_http_status(response).ok_or_else(|| String::from("bad status"))?;
-        if status == 101 { return Err(String::from("unsupported protocol upgrade")); }
-        if !(100..200).contains(&status) { break; }
+        if status == 101 {
+            return Err(String::from("unsupported protocol upgrade"));
+        }
+        if !(100..200).contains(&status) {
+            break;
+        }
         response = &response[end..];
     }
     Ok(response)
@@ -864,7 +880,12 @@ fn complete_http_response(
     if let Some(te) = header_value(headers, b"transfer-encoding")
         && header_value_has_token(te, b"chunked")
     {
-        return Ok(decode_chunked(body, max_bytes)?.map(|body| HttpsJsonResponse { status, body, location, content_encoding }));
+        return Ok(decode_chunked(body, max_bytes)?.map(|body| HttpsJsonResponse {
+            status,
+            body,
+            location,
+            content_encoding,
+        }));
     }
 
     if let Some(len_text) = header_value(headers, b"content-length")
@@ -914,7 +935,12 @@ fn http_response_from_bytes(
     {
         let body =
             decode_chunked(body, max_bytes)?.ok_or_else(|| String::from("bad chunked body"))?;
-        return Ok(HttpsJsonResponse { status, body, location, content_encoding });
+        return Ok(HttpsJsonResponse {
+            status,
+            body,
+            location,
+            content_encoding,
+        });
     }
 
     if let Some(len_text) = header_value(headers, b"content-length")
@@ -947,8 +973,15 @@ fn http_response_from_bytes(
     })
 }
 
-fn decode_response_content(mut response: HttpsJsonResponse, max_bytes: usize) -> Result<HttpsJsonResponse, String> {
-    response.body = crate::r::net::http_content::decode(response.content_encoding.as_deref(), response.body, max_bytes)?;
+fn decode_response_content(
+    mut response: HttpsJsonResponse,
+    max_bytes: usize,
+) -> Result<HttpsJsonResponse, String> {
+    response.body = crate::r::net::http_content::decode(
+        response.content_encoding.as_deref(),
+        response.body,
+        max_bytes,
+    )?;
     Ok(response)
 }
 
@@ -979,19 +1012,38 @@ async fn fetch_https_bytes(
             return Err(String::from("redirect loop"));
         }
         let target = parse_fetch_url(&current).map_err(String::from)?;
-        let remaining = deadline.saturating_duration_since(Instant::now()).as_millis();
+        let remaining = deadline
+            .saturating_duration_since(Instant::now())
+            .as_millis();
         if remaining == 0 {
             return Err(String::from("timeout"));
         }
         if target.scheme != "https" {
             return Err(String::from("https redirect to insecure scheme"));
         }
-        let response = match request_https_response_once(&target, &request, remaining.min(u32::MAX as u64) as u32, max_bytes).await {
+        let response = match request_https_response_once(
+            &target,
+            &request,
+            remaining.min(u32::MAX as u64) as u32,
+            max_bytes,
+        )
+        .await
+        {
             Err(err) if err.starts_with("bad response len=0 ") => {
-                let remaining = deadline.saturating_duration_since(Instant::now()).as_millis();
-                if remaining == 0 { return Err(String::from("timeout")); }
+                let remaining = deadline
+                    .saturating_duration_since(Instant::now())
+                    .as_millis();
+                if remaining == 0 {
+                    return Err(String::from("timeout"));
+                }
                 crate::log_info!(target: "net"; "https-fetch: retry empty connection host={}\n", target.host);
-                request_https_response_once(&target, &request, remaining.min(u32::MAX as u64) as u32, max_bytes).await?
+                request_https_response_once(
+                    &target,
+                    &request,
+                    remaining.min(u32::MAX as u64) as u32,
+                    max_bytes,
+                )
+                .await?
             }
             result => result?,
         };
@@ -999,8 +1051,12 @@ async fn fetch_https_bytes(
             crate::log_info!(target: "net"; "https-fetch: response host={} status={} bytes={} hop={}\n", target.host, response.status, response.body.len(), hop);
         }
         if matches!(response.status, 301 | 302 | 303 | 307 | 308) {
-            if hop == 10 { return Err(String::from("too many redirects")); }
-            let location = response.location.ok_or_else(|| String::from("redirect missing location"))?;
+            if hop == 10 {
+                return Err(String::from("too many redirects"));
+            }
+            let location = response
+                .location
+                .ok_or_else(|| String::from("redirect missing location"))?;
             current = resolve_fetch_redirect(&target, &location)?;
         } else {
             return success_body(response);
@@ -1044,18 +1100,28 @@ fn resolve_fetch_redirect(target: &FetchTarget, location: &str) -> Result<String
         let directory = base_path.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("");
         format!("{}/{}", directory, location)
     };
-    let (path, query) = path.split_once('?').map(|(p, q)| (p, Some(q))).unwrap_or((&path, None));
+    let (path, query) = path
+        .split_once('?')
+        .map(|(p, q)| (p, Some(q)))
+        .unwrap_or((&path, None));
     let mut segments = Vec::new();
     for segment in path.split('/').skip(1) {
         match segment {
-            "." => {},
-            ".." => { segments.pop(); },
+            "." => {}
+            ".." => {
+                segments.pop();
+            }
             _ => segments.push(segment),
         }
     }
     let mut normalized = format!("/{}", segments.join("/"));
-    if (path.ends_with("/.") || path.ends_with("/..")) && !normalized.ends_with('/') { normalized.push('/'); }
-    if let Some(query) = query { normalized.push('?'); normalized.push_str(query); }
+    if (path.ends_with("/.") || path.ends_with("/..")) && !normalized.ends_with('/') {
+        normalized.push('/');
+    }
+    if let Some(query) = query {
+        normalized.push('?');
+        normalized.push_str(query);
+    }
     Ok(format!("{}://{}:{}{}", target.scheme, target.host, target.port, normalized))
 }
 
@@ -1093,18 +1159,18 @@ async fn request_https_response_once(
     let roots = TlsRoots::mozilla();
 
     let result = request_https_response(
-            target,
-            ip,
-            cmds,
-            events,
-            request,
-            &tls_config,
-            &roots,
-            timeout_ms,
-            max_bytes,
-            None,
-        )
-        .await;
+        target,
+        ip,
+        cmds,
+        events,
+        request,
+        &tls_config,
+        &roots,
+        timeout_ms,
+        max_bytes,
+        None,
+    )
+    .await;
     let _ = fence_https_owner(cmds).await;
     if let Err(err) = &result {
         crate::log_warn!(target: "net"; "https-fetch: failed host={} reason={}\n", target.host, err);
@@ -1120,7 +1186,8 @@ async fn resolve_https_host(
     crate::r::net::dns::resolve_ipv4_for_device(
         device_index,
         host,
-        crate::r::net::dns::DnsConfig::for_device(device_index).with_timeout_ms((timeout_ms as u64).min(5_000)),
+        crate::r::net::dns::DnsConfig::for_device(device_index)
+            .with_timeout_ms((timeout_ms as u64).min(5_000)),
     )
     .await
     .map_err(|err| format!("dns {:?}", err))
@@ -1254,7 +1321,10 @@ async fn request_https_response(
                 }
                 TlsEvent::Closed { handle } => {
                     if tls_handle == Some(handle) {
-                        return decode_response_content(http_response_from_bytes(response.as_slice(), max_bytes)?, max_bytes);
+                        return decode_response_content(
+                            http_response_from_bytes(response.as_slice(), max_bytes)?,
+                            max_bytes,
+                        );
                     }
                 }
                 TlsEvent::Error { msg } => {
@@ -1276,7 +1346,15 @@ async fn request_https_response(
             if let Some(handle) = tls_handle {
                 let _ = cmds.push(TlsCommand::Close { handle });
             }
-            return Err(format!("timeout phase={} received={}", if sent_request { "response" } else { "handshake" }, response.len()));
+            return Err(format!(
+                "timeout phase={} received={}",
+                if sent_request {
+                    "response"
+                } else {
+                    "handshake"
+                },
+                response.len()
+            ));
         }
         let sleep = if drained_any {
             Timer::after(EmbassyDuration::from_micros(0))
@@ -1438,7 +1516,11 @@ pub async fn post_protobuf_shared(
 async fn fetch_bytes(url: String, timeout_ms: u32, max_bytes: usize) -> Result<Vec<u8>, i32> {
     get_bytes_shared(url.as_str(), timeout_ms, max_bytes)
         .await
-        .map_err(|err| fetch_error_to_code(err.as_str()))
+        .map_err(|err| {
+            let host = parse_fetch_url(&url).map(|target| target.host).unwrap_or_default();
+            crate::log_warn!(target: "net"; "asset-fetch: failed host={} reason={}\n", host, err);
+            fetch_error_to_code(err.as_str())
+        })
 }
 
 async fn post_json_bytes(
@@ -1521,10 +1603,18 @@ fn spawn_fetch_file(op_id: u32, url: String, path: String, timeout_ms: u32, max_
 
 fn spawn_fetch_bytes(op_id: u32, url: String, timeout_ms: u32, max_bytes: usize) {
     crate::wait::spawn_local_detached(async move {
+        let started = Instant::now();
+        if crate::log_os::flags::HTTP_FETCH_DIAG_PROFILE_ENABLED {
+            let host = parse_fetch_url(&url).map(|target| target.host).unwrap_or_default();
+            crate::log_info!(target: "net"; "asset-fetch: begin id={} host={} timeout_ms={} max_bytes={}\n", op_id, host, timeout_ms, max_bytes);
+        }
         let (rc, body) = match fetch_bytes(url, timeout_ms, max_bytes).await {
             Ok(bytes) => (0, bytes),
             Err(rc) => (rc, Vec::new()),
         };
+        if crate::log_os::flags::HTTP_FETCH_DIAG_PROFILE_ENABLED {
+            crate::log_info!(target: "net"; "asset-fetch: complete id={} rc={} bytes={} elapsed_ms={}\n", op_id, rc, body.len(), Instant::now().saturating_duration_since(started).as_millis());
+        }
         if let Some(slot) = CABI_NET_FETCH_BYTES_RESULTS.lock().get_mut(&op_id) {
             slot.rc = Some(rc);
             slot.body = body;
@@ -2323,7 +2413,26 @@ mod http_fetch_tests {
     }
 
     #[test]
+    fn informational_headers_and_chunk_trailers_are_framed() {
+        let response = complete_http_response(b"HTTP/1.1 103 Early Hints\r\nLink: </style.css>\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok", 10).unwrap().unwrap();
+        assert_eq!(response.status, 200);
+        assert_eq!(response.body, b"ok");
+        assert!(decode_chunked(b"2\r\nok\r\n0\r\n", 2).unwrap().is_none());
+        assert_eq!(
+            decode_chunked(b"2;ext=yes\r\nok\r\n0\r\nX-Trailer: yes\r\n\r\n", 2)
+                .unwrap()
+                .unwrap(),
+            b"ok"
+        );
+        assert!(decode_chunked(b"2\r\nokXX0\r\n\r\n", 2).is_err());
+        assert!(decode_chunked(b"ffff\r\n", 8).is_err());
+    }
+
+    #[test]
     fn truncated_length_delimited_response_is_not_success() {
-        assert!(http_response_from_bytes(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhey", 16).is_err());
+        assert!(
+            http_response_from_bytes(b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nhey", 16)
+                .is_err()
+        );
     }
 }

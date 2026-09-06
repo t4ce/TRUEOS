@@ -12,7 +12,6 @@ import re
 import socket
 import subprocess
 import time
-import urllib.request
 
 SITES = ['https://' + host + '/' for host in (
     'www.wikipedia.org', 'wikipedia.com', 'en.wikipedia.org', 'www.wikimedia.org',
@@ -38,7 +37,6 @@ def main():
     ap.add_argument('--url', action='append')
     ap.add_argument('--output', type=Path, required=True)
     args = ap.parse_args()
-    urllib.request.install_opener(urllib.request.build_opener(urllib.request.ProxyHandler({})))
     args.output.mkdir(parents=True, exist_ok=True)
     run = str(time.time_ns())
     s = socket.create_connection((args.host, 4245), 10)
@@ -77,6 +75,8 @@ def main():
         plain = ANSI.sub(b'', raw).decode('utf-8', 'replace')
         result = dict(url=url, file=name, elapsed_s=round(time.monotonic()-start, 2), valid_html=False)
         saved = re.search(r'hyper: saved (\d+) bytes -> '+re.escape(name), plain)
+        if saved:
+            result['saved_bytes'] = int(saved.group(1))
         try:
             if not saved:
                 failure = re.search(r'hyper: (?:download|write) failed: ([^\r\n]+)', plain)
@@ -101,7 +101,7 @@ def main():
             if not result['valid_html']:
                 result['error'] = 'saved response lacks an HTML document signature'
         except Exception as exc:
-            result['error'] = str(exc)
+            result['verification_error' if saved else 'error'] = str(exc)
         results.append(result)
         (args.output / 'results.json').write_text(json.dumps(results, indent=2)+'\n')
         print(json.dumps(result), flush=True)

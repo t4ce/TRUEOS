@@ -192,6 +192,8 @@ pub(crate) struct WindowInteraction {
     /// Enables top-center maximize plus half-screen and quadrant docking.
     pub(crate) maximizable: bool,
     pub(crate) receives_input: bool,
+    /// Deliver a primary selection gesture to compact app-owned controls.
+    pub(crate) primary_activation: bool,
     /// Whether the window participates in cursor selection and pointer hit tests.
     pub(crate) hit_testable: bool,
     /// The producer can replace its complete frame allocation after a
@@ -221,6 +223,7 @@ impl WindowInteraction {
         movable: true,
         maximizable: true,
         receives_input: false,
+        primary_activation: false,
         hit_testable: true,
         resize_on_maximize: false,
     };
@@ -231,6 +234,7 @@ impl WindowInteraction {
         movable: true,
         maximizable: true,
         receives_input: true,
+        primary_activation: false,
         hit_testable: true,
         resize_on_maximize: false,
     };
@@ -241,6 +245,7 @@ impl WindowInteraction {
         movable: true,
         maximizable: true,
         receives_input: true,
+        primary_activation: false,
         hit_testable: true,
         resize_on_maximize: true,
     };
@@ -2038,6 +2043,19 @@ pub(crate) fn set_window_hit_testable(
     broker.mark_composition_changed();
     drop(broker);
     super::cursor_frame_inout::frame_visual_changed(owner, id);
+    Ok(())
+}
+
+pub(crate) fn set_window_primary_activation(
+    owner: WindowOwner,
+    id: WindowId,
+    enabled: bool,
+) -> Result<(), WindowBrokerError> {
+    let mut broker = WINDOW_BROKER.lock();
+    broker
+        .checked_window_mut(owner, id)?
+        .interaction
+        .primary_activation = enabled;
     Ok(())
 }
 

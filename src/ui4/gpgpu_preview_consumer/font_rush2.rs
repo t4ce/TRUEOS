@@ -233,6 +233,7 @@ pub(super) fn initialize_cpp_font_rush2_set(
                 movable: false,
                 maximizable: false,
                 receives_input: false,
+                primary_activation: false,
                 hit_testable: false,
                 // The normal UI4 open transition projects the stable full-size
                 // source through a plane scaler before settling to 1:1.

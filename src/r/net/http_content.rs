@@ -2,7 +2,11 @@
 extern crate alloc;
 use alloc::{string::String, vec::Vec};
 
-pub(crate) fn decode(encoding: Option<&str>, body: Vec<u8>, limit: usize) -> Result<Vec<u8>, String> {
+pub(crate) fn decode(
+    encoding: Option<&str>,
+    body: Vec<u8>,
+    limit: usize,
+) -> Result<Vec<u8>, String> {
     let encoding = encoding.unwrap_or("identity").trim();
     if encoding.is_empty() || encoding.eq_ignore_ascii_case("identity") {
         return Ok(body);

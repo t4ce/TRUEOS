@@ -629,7 +629,12 @@ impl InputBroker {
 
         if previous_routed_buttons == 0 && pressed != 0 {
             let next = hit.map(WindowTarget::from);
-            if self.select_frame(index, next, combo_id, vcursor) {
+            let changed = self.select_frame(index, next, combo_id, vcursor);
+            if absorb_selection_gesture(
+                changed,
+                pressed,
+                hit.is_some_and(|window| window.interaction.primary_activation),
+            ) {
                 self.cursors[index].absorb_select = true;
             } else {
                 let selected = super::selected_frame_for_source(source);
@@ -2932,5 +2937,22 @@ mod tests {
             ),
             (96, 98, 48, 154, 240, 45)
         );
+    }
+}
+
+fn absorb_selection_gesture(changed: bool, pressed: u32, primary_activation: bool) -> bool {
+    changed && !(primary_activation && pressed == PRIMARY_BUTTON_MASK)
+}
+
+#[cfg(test)]
+mod primary_activation_tests {
+    use super::*;
+    #[test]
+    fn only_opted_in_primary_selection_is_delivered() {
+        assert!(absorb_selection_gesture(true, PRIMARY_BUTTON_MASK, false));
+        assert!(!absorb_selection_gesture(true, PRIMARY_BUTTON_MASK, true));
+        assert!(absorb_selection_gesture(true, SECONDARY_BUTTON_MASK, true));
+        assert!(absorb_selection_gesture(true, PRIMARY_BUTTON_MASK | SECONDARY_BUTTON_MASK, true));
+        assert!(!absorb_selection_gesture(false, SECONDARY_BUTTON_MASK, true));
     }
 }
