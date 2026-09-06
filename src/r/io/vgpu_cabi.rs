@@ -314,6 +314,9 @@ pub(crate) fn broker_ui4_indexed_submit(
     draw: v::vgpu::IndexedDraw,
 ) -> Result<v::vgpu::TimelinePoint, i32> {
     let topology = broker_indexed_draw_topology(draw.topology)?;
+    if draw.texture_reserved & !v::vgpu::INDEXED_DRAW_LOAD_COLOR != 0 {
+        return Err(-22);
+    }
     let owner = ui4_owner(principal)?;
     let completed = vgpu::submit_ui4_indexed_draw(
         principal,
@@ -336,6 +339,7 @@ pub(crate) fn broker_ui4_indexed_submit(
             texture_height: draw.texture_height,
             texture_pitch: draw.texture_pitch,
             sampler_flags: draw.sampler_flags,
+            load_color: draw.texture_reserved & v::vgpu::INDEXED_DRAW_LOAD_COLOR != 0,
         },
     )
     .map_err(|error| error.errno())?;

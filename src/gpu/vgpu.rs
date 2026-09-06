@@ -2754,6 +2754,7 @@ pub(crate) struct Ui4IndexedDrawDescriptor {
     pub(crate) texture_height: u32,
     pub(crate) texture_pitch: u32,
     pub(crate) sampler_flags: u32,
+    pub(crate) load_color: bool,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -3125,12 +3126,16 @@ pub(crate) fn submit_ui4_indexed_draw(
             draw.sampler_flags, width, height,
         );
     }
-    let rendered = crate::intel::render::render_resident_triangle_scene_frame_premultiplied_with_opaque_depth_direct_to_surface(
+    let rendered = if draw.load_color {
+        crate::intel::render::render_resident_indexed_scene_frame_premultiplied_direct_to_surface(
+            core::slice::from_ref(&scene_draw), None, destination, diagnostic_logs,
+        )
+    } else { crate::intel::render::render_resident_triangle_scene_frame_premultiplied_with_opaque_depth_direct_to_surface(
         core::slice::from_ref(&scene_draw),
         Some(draw.clear_rgba8_srgb.to_le_bytes()),
         destination,
         diagnostic_logs,
-    );
+    ) };
     let render_error = rendered.as_ref().err().copied();
     let transient_busy = matches!(render_error, Some("render-busy" | "render-storage-busy"));
     if let Some(reason) = render_error {
