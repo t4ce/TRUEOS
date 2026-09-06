@@ -153,7 +153,7 @@ trueos-helio-runtime = { path = "crates/trueos-helio-runtime" }
 serde = { version = "1.0", default-features = false, features = ["alloc", "derive"] }
 serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
 mio = { version = "1.2.0", default-features = false, features = ["os-poll", "net"] }
-hyper = { version = "1.9.0", default-features = false, features = ["client", "http1", "server"] }
+hyper = { version = "1.10.0", default-features = false, features = ["client", "http1", "server"] }
 rdrand = { version = "0.8", default-features = false }
 redb = { version = "4.2.0", default-features = false, features = ["experimental-api-5"] }
 
@@ -176,7 +176,7 @@ aml = { path = "vendor/aml-0.16.4" }
 png = { path = "vendor/png-0.18.1" }
 fdeflate = { path = "vendor/fdeflate-0.3.7" }
 simd-adler32 = { path = "vendor/simd-adler32-0.3.8" }
-hyper = { path = "vendor/hyper-1.9.0" }
+hyper = { path = "vendor/hyper-1.10.0" }
 http = { path = "vendor/http-1.4.0" }
 http-body = { path = "vendor/http-body-1.0.1" }
 httpdate = { path = "vendor/httpdate-1.0.3" }
