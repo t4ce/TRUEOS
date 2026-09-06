@@ -396,6 +396,10 @@ fn shadertoy_artifact_slot(
             SHADERTOY_PROTEAN_CLOUDS_ADLS_GPU,
             &SHADERTOY_PROTEAN_CLOUDS_UPLOAD,
         ),
+        7 => (CPP_AUDIO_VISUALIZER_RGBA8_ADLS_ARTIFACT, CPP_AUDIO_VISUALIZER_RGBA8_ADLS_GPU,
+              &CPP_AUDIO_VISUALIZER_RGBA8_UPLOAD),
+        8 => (CPP_DEMO_RGBA8_ADLS_ARTIFACT, CPP_DEMO_RGBA8_ADLS_GPU, &CPP_DEMO_RGBA8_UPLOAD),
+        15 => (PARTICLE_CRAFT_ADLS_ARTIFACT, PARTICLE_CRAFT_ADLS_GPU, &PARTICLE_CRAFT_UPLOAD),
         _ => return None,
     })
 }
@@ -422,6 +426,20 @@ pub(crate) fn register_shadertoy_package(shader_id: u32, package: &[u8]) -> bool
         return false;
     };
     // Serialize first upload and reuse; resident immutable code is never replaced.
+    if shader_id == 15 {
+        // ParticleCraft has three entry points in one ELF. Its legacy upload
+        // descriptor has no single ABI; check every generated entry explicitly.
+        for abi in [&PARTICLE_CRAFT_STEP_ADLS_CPP_ABI_CONTRACT,
+                    &PARTICLE_CRAFT_BIN_TILES_ADLS_CPP_ABI_CONTRACT,
+                    &PARTICLE_CRAFT_RENDER_RGBA8_ADLS_CPP_ABI_CONTRACT] {
+            if admit_kernel_artifact_payloads(
+                GpgpuKernelArtifact::contracted(abi.kernel_name, &[], &[], abi),
+                dev.device_id, dev.revision_id, bin, spv,
+            ).is_err() {
+                return false;
+            }
+        }
+    }
     let mut resident = slot.lock();
     let Some(upload) = upload_artifact_bytes(
         dev,

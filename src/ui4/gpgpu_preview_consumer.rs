@@ -48,19 +48,6 @@ const STATIC30_ROWS: u32 = 5;
 const STATIC30_MAX_WIDTH: u32 = 320;
 const STATIC30_MAX_HEIGHT: u32 = 180;
 
-const CPP_GALLERY_PRESETS: [GpgpuPreviewPreset; 10] = [
-    GpgpuPreviewPreset::CppGallery,
-    GpgpuPreviewPreset::CppCloudHighWisps,
-    GpgpuPreviewPreset::CppAurora,
-    GpgpuPreviewPreset::CppJulia,
-    GpgpuPreviewPreset::CppSdf,
-    GpgpuPreviewPreset::CppVoronoi,
-    GpgpuPreviewPreset::CppRetroSun,
-    GpgpuPreviewPreset::CppAudio,
-    GpgpuPreviewPreset::CppParticle,
-    GpgpuPreviewPreset::Static30,
-];
-
 pub(crate) const GPGPU_PREVIEW_DEFAULT_DURATION_MS: u64 = 5_000;
 pub(crate) const GPGPU_PREVIEW_DEFAULT_CADENCE_MS: u64 = 33;
 pub(crate) const GPGPU_PREVIEW_DEFAULT_PUBLISH_EVERY: u32 = 1;
@@ -372,7 +359,7 @@ struct DesiredPreview {
 struct PreviewRunPolicy {
     frame_limit: u64,
     target_hz: u64,
-    interactive_cpp_gallery: bool,
+    interactive_win_demo: bool,
     refocus_source: Option<Ui4CursorSource>,
 }
 
@@ -380,14 +367,14 @@ impl PreviewRunPolicy {
     const SHELL: Self = Self {
         frame_limit: 0,
         target_hz: 0,
-        interactive_cpp_gallery: false,
+        interactive_win_demo: false,
         refocus_source: None,
     };
 
-    const CPP_GALLERY: Self = Self {
+    const WIN_DEMO: Self = Self {
         frame_limit: 0,
         target_hz: 0,
-        interactive_cpp_gallery: true,
+        interactive_win_demo: true,
         refocus_source: None,
     };
 }
@@ -417,57 +404,13 @@ static CPP_FONT_REQUEST: Mutex<
 > = Mutex::new(None);
 
 struct CloudBrushState {
-    points: [u32; crate::intel::gpgpu::CPP_CLOUD_BRUSH_POINT_CAPACITY],
-    count: usize,
-    next: usize,
+    brush: crate::intel::gpgpu::CppCloudBrush,
     dragging: Option<Ui4CursorSource>,
-    last: Option<(i32, i32)>,
 }
 
 impl CloudBrushState {
     const fn new() -> Self {
-        Self {
-            points: [0; crate::intel::gpgpu::CPP_CLOUD_BRUSH_POINT_CAPACITY],
-            count: 0,
-            next: 0,
-            dragging: None,
-            last: None,
-        }
-    }
-
-    fn push(&mut self, local_x: i32, local_y: i32, width: u32, height: u32) {
-        if width == 0 || height == 0 {
-            return;
-        }
-        let x = local_x.clamp(0, width.saturating_sub(1) as i32) as u32;
-        let y = local_y.clamp(0, height.saturating_sub(1) as i32) as u32;
-        let packed_x = x.saturating_mul(u16::MAX as u32) / width.saturating_sub(1).max(1);
-        let packed_y = y.saturating_mul(u16::MAX as u32) / height.saturating_sub(1).max(1);
-        self.points[self.next] = packed_x | (packed_y << 16);
-        self.next = (self.next + 1) % self.points.len();
-        self.count = self.count.saturating_add(1).min(self.points.len());
-    }
-
-    fn drag_to(&mut self, local_x: i32, local_y: i32, width: u32, height: u32) {
-        let Some((from_x, from_y)) = self.last else {
-            self.push(local_x, local_y, width, height);
-            self.last = Some((local_x, local_y));
-            return;
-        };
-        let dx = local_x.saturating_sub(from_x);
-        let dy = local_y.saturating_sub(from_y);
-        let distance = dx.unsigned_abs().max(dy.unsigned_abs());
-        let spacing = width.min(height).saturating_div(24).max(1);
-        let steps = distance
-            .div_ceil(spacing)
-            .max(1)
-            .min(self.points.len() as u32);
-        for step in 1..=steps {
-            let x = i64::from(from_x) + i64::from(dx) * i64::from(step) / i64::from(steps);
-            let y = i64::from(from_y) + i64::from(dy) * i64::from(step) / i64::from(steps);
-            self.push(x as i32, y as i32, width, height);
-        }
-        self.last = Some((local_x, local_y));
+        Self { brush: crate::intel::gpgpu::CppCloudBrush::new(), dragging: None }
     }
 }
 
@@ -508,15 +451,15 @@ struct StaticPreviewSurface {
     scheme: u8,
 }
 
-pub(crate) fn request_cpp_gallery_start() -> Result<u64, &'static str> {
+pub(crate) fn request_win_demo_start() -> Result<u64, &'static str> {
     request_gpgpu_preview_start_with_policy(
         GpgpuPreviewConfig {
-            preset: GpgpuPreviewPreset::CppGallery,
+            preset: GpgpuPreviewPreset::Static30,
             duration_ms: 0,
             cadence_ms: GPGPU_PREVIEW_DEFAULT_CADENCE_MS,
             publish_every: GPGPU_PREVIEW_DEFAULT_PUBLISH_EVERY,
         },
-        PreviewRunPolicy::CPP_GALLERY,
+        PreviewRunPolicy::WIN_DEMO,
     )
 }
 
@@ -619,7 +562,7 @@ pub(crate) fn request_gpgpu_lab256_startup(
         PreviewRunPolicy {
             frame_limit,
             target_hz,
-            interactive_cpp_gallery: false,
+            interactive_win_demo: false,
             refocus_source: None,
         },
     )
@@ -805,7 +748,7 @@ pub(crate) async fn gpgpu_preview_consumer_service_task(worker_slot: u32) {
                 }
             }
         }
-        restore_interactive_cpp_focus(&mut active);
+        restore_interactive_win_focus(&mut active);
         if !active.is_empty() && render_fault.is_none() && !duration_expired {
             publish_active_status(&active, GpgpuPreviewPhase::Running, "none");
         }
@@ -1192,7 +1135,7 @@ fn initialize_static30_preview(desired: DesiredPreview) -> Result<ActivePreview,
                 opacity: u8::MAX,
                 visible: true,
             },
-            interaction: if desired.policy.interactive_cpp_gallery {
+            interaction: if desired.policy.interactive_win_demo {
                 super::WindowInteraction::APPLICATION_FIXED_FRAME
             } else {
                 super::WindowInteraction::MOVABLE_FRAME
@@ -2054,7 +1997,7 @@ fn dispatch_preview_kernel(
                 seconds,
                 mode,
                 seed,
-                &preview.cloud_brush.points[..preview.cloud_brush.count],
+                &preview.cloud_brush.brush.points[..preview.cloud_brush.brush.count],
             );
             PreviewDispatchResult {
                 ok: result.ok,
@@ -2317,12 +2260,12 @@ fn drain_preview_input(active: &mut [ActivePreview], retired_frames: &mut Vec<Fr
                 };
                 if event.buttons_pressed & PRIMARY_BUTTON_MASK != 0 {
                     preview.cloud_brush.dragging = Some(event.source);
-                    preview.cloud_brush.last = None;
+                    preview.cloud_brush.brush.last = None;
                 }
                 if preview.cloud_brush.dragging == Some(event.source)
                     && event.buttons_down & PRIMARY_BUTTON_MASK != 0
                 {
-                    preview.cloud_brush.drag_to(
+                    preview.cloud_brush.brush.drag_to(
                         event.local_x,
                         event.local_y,
                         preview.width,
@@ -2333,7 +2276,7 @@ fn drain_preview_input(active: &mut [ActivePreview], retired_frames: &mut Vec<Fr
                     && event.buttons_released & PRIMARY_BUTTON_MASK != 0
                 {
                     preview.cloud_brush.dragging = None;
-                    preview.cloud_brush.last = None;
+                    preview.cloud_brush.brush.last = None;
                 }
             }
             Ui4InputEvent::Keyboard(event) => {
@@ -2346,20 +2289,14 @@ fn drain_preview_input(active: &mut [ActivePreview], retired_frames: &mut Vec<Fr
                 }) else {
                     continue;
                 };
-                if !preview.policy.interactive_cpp_gallery
+                if !preview.policy.interactive_win_demo
                     || event.event.kind != crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY
                 {
                     continue;
                 }
                 match event.event.key_code {
-                    crate::r::keyboard::KEYBOARD_KEY_ARROW_LEFT => {
-                        queue_interactive_cpp_cycle(-1, event.source);
-                    }
-                    crate::r::keyboard::KEYBOARD_KEY_ARROW_RIGHT => {
-                        queue_interactive_cpp_cycle(1, event.source);
-                    }
                     crate::r::keyboard::KEYBOARD_KEY_ESCAPE => {
-                        queue_interactive_cpp_stop();
+                        queue_interactive_win_stop();
                     }
                     _ => {}
                 }
@@ -2369,56 +2306,10 @@ fn drain_preview_input(active: &mut [ActivePreview], retired_frames: &mut Vec<Fr
     }
 }
 
-fn cycled_cpp_gallery_preset(preset: GpgpuPreviewPreset, direction: i8) -> GpgpuPreviewPreset {
-    let index = CPP_GALLERY_PRESETS
-        .iter()
-        .position(|candidate| *candidate == preset)
-        .unwrap_or(0);
-    let next = if direction < 0 {
-        index
-            .checked_sub(1)
-            .unwrap_or(CPP_GALLERY_PRESETS.len() - 1)
-    } else {
-        (index + 1) % CPP_GALLERY_PRESETS.len()
-    };
-    CPP_GALLERY_PRESETS[next]
-}
-
-fn queue_interactive_cpp_cycle(direction: i8, source: Ui4CursorSource) {
-    let (serial, previous, next) = {
-        let mut control = PREVIEW_CONTROL.lock();
-        if !control.desired.running || !control.desired.policy.interactive_cpp_gallery {
-            return;
-        }
-        let previous = control.desired.config.preset;
-        let next = cycled_cpp_gallery_preset(previous, direction);
-        let serial = next_serial(control.desired.serial);
-        control.desired.serial = serial;
-        control.desired.config.preset = next;
-        control.desired.policy.refocus_source = Some(source);
-        control.status.desired_running = true;
-        control.status.phase = GpgpuPreviewPhase::Starting;
-        control.status.request_serial = serial;
-        control.status.config = control.desired.config;
-        control.status.last_error = "none";
-        (serial, previous, next)
-    };
-    crate::log_info!(target: "ui4";
-        "ui4 cpp-gallery cycle request={} previous={} next={} direction={} input=keyboard-arrow refocus={}:{}:{}\n",
-        serial,
-        previous.label(),
-        next.label(),
-        if direction < 0 { "left" } else { "right" },
-        source.controller_id,
-        source.slot_id,
-        source.ep_target,
-    );
-}
-
-fn queue_interactive_cpp_stop() {
+fn queue_interactive_win_stop() {
     let serial = {
         let mut control = PREVIEW_CONTROL.lock();
-        if !control.desired.running || !control.desired.policy.interactive_cpp_gallery {
+        if !control.desired.running || !control.desired.policy.interactive_win_demo {
             return;
         }
         let serial = next_serial(control.desired.serial);
@@ -2431,15 +2322,15 @@ fn queue_interactive_cpp_stop() {
         serial
     };
     crate::log_info!(target: "ui4";
-        "ui4 cpp-gallery stop request={} input=keyboard-escape\n",
+        "ui4 win stop request={} input=keyboard-escape\n",
         serial,
     );
 }
 
-fn restore_interactive_cpp_focus(active: &mut [ActivePreview]) {
+fn restore_interactive_win_focus(active: &mut [ActivePreview]) {
     let Some(source) = active
         .first()
-        .filter(|preview| preview.policy.interactive_cpp_gallery)
+        .filter(|preview| preview.policy.interactive_win_demo)
         .and_then(|preview| preview.policy.refocus_source)
     else {
         return;
@@ -3065,7 +2956,7 @@ const fn next_serial(serial: u64) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{CPP_GALLERY_PRESETS, FramePlanError, FramePoolError, GPGPU_PREVIEW_MAX_CADENCE_MS, GpgpuPreviewConfig, GpgpuPreviewPreset, LAB256_PREVIEW_SIZE, PREVIEW_HEIGHT, PREVIEW_WIDTH, cycled_cpp_gallery_preset, preview_extent, preview_frame_create_error_label, preview_plane_slot, static30_font_stamp_request};
+    use super::{FramePlanError, FramePoolError, GPGPU_PREVIEW_MAX_CADENCE_MS, GpgpuPreviewConfig, GpgpuPreviewPreset, LAB256_PREVIEW_SIZE, PREVIEW_HEIGHT, PREVIEW_WIDTH, preview_extent, preview_frame_create_error_label, preview_plane_slot, static30_font_stamp_request};
 
     #[test]
     fn lab256_preview_keeps_artifact_extent() {
@@ -3118,25 +3009,8 @@ mod tests {
     }
 
     #[test]
-    fn interactive_cpp_gallery_cycles_both_directions_and_wraps() {
-        assert_eq!(
-            cycled_cpp_gallery_preset(GpgpuPreviewPreset::CppGallery, 1),
-            GpgpuPreviewPreset::CppCloudHighWisps,
-        );
-        assert_eq!(
-            cycled_cpp_gallery_preset(GpgpuPreviewPreset::CppGallery, -1),
-            GpgpuPreviewPreset::Static30,
-        );
-        assert_eq!(
-            cycled_cpp_gallery_preset(GpgpuPreviewPreset::Static30, 1),
-            GpgpuPreviewPreset::CppGallery,
-        );
-        assert_eq!(CPP_GALLERY_PRESETS.len(), 10);
-    }
-
-    #[test]
     fn cloud_brush_uses_frame_local_normalized_points_and_bounds_its_ring() {
-        let mut brush = CloudBrushState::new();
+        let mut brush = crate::intel::gpgpu::CppCloudBrush::new();
         brush.push(0, 0, 101, 51);
         brush.push(100, 50, 101, 51);
         assert_eq!(brush.points[0], 0);

@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Host-test the actual kernel staging/admission code against Blueprint packages."""
+import json
 import os
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 
-from package_blueprint import ROOT, NAMES
+from package_blueprint import ROOT, PROGRAMS
 
 
 def main():
@@ -24,11 +25,13 @@ def main():
     code = "#![allow(dead_code)]\nextern crate alloc;\nuse sha2::{Digest, Sha256};\nuse core::fmt::Write;\n"
     code += contract + metadata + runtime
     code += f'\n#[path = "{gpu}/artifacts/shadertoy_package.rs"] mod package;\n'
-    for name in NAMES:
+    for _, name in PROGRAMS:
         code += f'include!("{bp}/apps/shadertoy/assets/{name}/kernel.contract.rs");\n'
     code += 'fn fixtures() -> Vec<(u32, &\'static [u8], &\'static GpgpuKernelAbiContract)> { vec![\n'
-    for index, name in enumerate(NAMES, 1):
-        code += f'({index}, include_bytes!("{bp}/apps/shadertoy/assets/{name}.stpkg"), &SHADERTOY_{name.upper()}_ADLS_CPP_ABI_CONTRACT),\n'
+    for index, name in PROGRAMS:
+        manifest = json.loads((bp / f"apps/shadertoy/assets/{name}/kernel.manifest.json").read_text())
+        for symbol in manifest["rust_symbols"].values():
+            code += f'({index}, include_bytes!("{bp}/apps/shadertoy/assets/{name}.stpkg"), &{symbol}),\n'
     code += '] }\n' + TESTS
     with tempfile.TemporaryDirectory(prefix="trueos-shadertoy-packages-") as temporary:
         project = Path(temporary)
@@ -43,7 +46,12 @@ def main():
         source.write_bytes(source.read_bytes() + b"\n// unbundled edit\n")
         rejected = subprocess.run([str(guard)], env=environment, capture_output=True, text=True)
         assert rejected.returncode != 0 and "stale package" in rejected.stderr
-        print("Blueprint stale-source build guard: passed")
+        source.write_bytes(source.read_bytes().removesuffix(b"\n// unbundled edit\n"))
+        native_source = project / "assets/cpp_gallery/input.sources.json"
+        native_source.write_bytes(native_source.read_bytes() + b"\n ")
+        rejected = subprocess.run([str(guard)], env=environment, capture_output=True, text=True)
+        assert rejected.returncode != 0 and "stale package" in rejected.stderr
+        print("Blueprint stale-source build guards (GLSL and native archive): passed")
         (project / "Cargo.toml").write_text('[package]\nname="shadertoy-package-tests"\nversion="0.1.0"\nedition="2024"\n[dependencies]\nsha2="0.10"\n[workspace]\n')
         (project / "src").mkdir()
         (project / "src/lib.rs").write_text(code)
@@ -53,6 +61,16 @@ def main():
 
 
 TESTS = r'''
+#[test]
+fn gallery_selectors_require_their_canonical_program() {
+    for id in 1..=15 {
+        let program = package::program_id(id).unwrap();
+        assert_eq!(program, if (8..=14).contains(&id) { 8 } else { id });
+        assert!(package::contract(program).is_some());
+    }
+    for id in [0, 16, 31, 32, u32::MAX] { assert!(package::program_id(id).is_none()); }
+}
+
 #[test]
 fn real_packages_pass_all_existing_admission_checks() {
     for (id, bytes, abi) in fixtures() {
@@ -111,7 +129,7 @@ fn staging_requires_complete_contiguous_correct_shader_bytes() {
         assert_eq!(upload.bytes, bytes);
         assert!(upload.contract.payloads(&upload.bytes).is_some());
     }
-    for id in [0, 7, 31, 32, u32::MAX] {
+    for id in [0, 9, 14, 16, 31, 32, u32::MAX] {
         assert!(package::ShaderToyPackageUpload::new(id).is_none());
     }
 }

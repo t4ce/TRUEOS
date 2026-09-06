@@ -4,7 +4,7 @@
 TRUEOS application surface. It is one offline-compiled kernel, one stable
 output ABI, one resident upload, and seven scalar-selected workloads:
 
-| Shell2 mode | Kernel mode | Foundation exercised |
+| ShaderToy view | Kernel mode | Foundation exercised |
 | --- | ---: | --- |
 | `gallery` | 0 | four live workloads, shared ABI, runtime mode dispatch |
 | `aurora` | 1 | vector math, native transcendentals, octave loops |
@@ -14,12 +14,14 @@ output ABI, one resident upload, and seven scalar-selected workloads:
 | `retro-sun` | 5 | layered synthwave scene, animated cutout bands, reflection, CRT post |
 | `cloud-high-wisps` | 6 | authored cloud preset, analytic high-wisp formation, artistic moon/sky treatment |
 
-Plain `cpp` opens `gallery`, which divides one UI4 surface into four panels.
-With that UI4 frame focused, Left and Right cycle through every C++ mode and
-Escape closes the gallery. Retro Sun remains a standalone view rather than a
-gallery panel. The audio view uses its own single audiovisual artifact and the
-same resize lifecycle; see
-[`CPP_AUDIO_VISUALIZER.md`](CPP_AUDIO_VISUALIZER.md).
+Open the ShaderToy Blueprint: F8 selects the four-panel gallery; F9–F12
+select Aurora, Julia, SDF and Voronoi. Left/Right reaches Retro Sun and High
+Wisps (IDs 13 and 14), as well as live audio (F7) and ParticleCraft (ID 15).
+The seven gallery views reuse this one artifact with its original mode values.
+See [`CPP_AUDIO_VISUALIZER.md`](CPP_AUDIO_VISUALIZER.md) for the real audio input.
+
+Shell2 `cpp` has been removed. `win` now owns the separate 30-window retained
+UI4 demo; `win status`, `win stop` and focused Escape manage that demo.
 
 `cloud-high-wisps` is the fixed Linux/TRUEOS migration of
 [`presets/cloud-high-wisps.json`](presets/cloud-high-wisps.json). Its source
@@ -50,25 +52,16 @@ production cloud move to persistent A/B volumes first, then replace eight
 software voxel reads with an Intel sampler message without changing the scene
 ABI or renderer math.
 
-```text
-cpp
-cpp list
-cpp status
-cpp stop
-```
-
-The interactive session runs until focused Escape or `cpp stop`. Switching a
-mode replaces the current Shell-controlled GPGPU preview through the service's
-existing window/session lifecycle and restores focus to the replacement frame.
-
 ## Runtime boundary
 
 Clang, `llvm-spirv`, `ocloc`, IGC, and the C++ frontend are build-time tools
-only. The ISO carries the audited SPIR-V, Zebin, and generated Rust contract.
+only. The ShaderToy Blueprint carries the audited SPIR-V, Zebin, all raw C++ inputs,
+and generated Rust contract in an authenticated package. Internal diagnostic
+consumers retain their existing artifact copies in the kernel.
 At runtime TRUEOS:
 
 1. admits the artifact only for PCI device `0x4680`, revision `0x0c`;
-2. verifies the embedded Zebin hash and generated ABI contract;
+2. authenticates the per-window package and verifies Zebin/SPIR-V hashes and ABI;
 3. uploads it once at fixed non-overlapping GPU VA `0x0d600000`;
 4. writes the scalar launch payload for the selected mode;
 5. submits SIMD16 work through the serialized direct-RCS/GuC service lane;
@@ -142,16 +135,8 @@ make intel-gpu-verify-cpp-artifacts
 `make iso` extracts `/TRUEOS.elf` from `bld/trueos.iso`, requires byte identity
 with the staged runtime ELF, and repeats the demo-presence proof.
 
-On the physical i5-14500T TestRig (`00:02.0`, `8086:4680`, revision `0x0c`),
-boot `bld/trueos.iso` and run:
-
-```text
-cpp
-cpp status
-Left / Right
-Escape
-cpp stop
-```
-
-`cpp status` reports the resident/verified artifact state, GPU address, request
-and window handles, submit/retire/publication counts, marker, and last error.
+For runtime verification, open ShaderToy and cycle all seven gallery views,
+including primary-button drawing in High Wisps. Check the app's per-view timing
+logs, resizing and Escape cleanup. `win` should independently create exactly 30
+retained windows and expose no shader cycling. Local build/host tests do not
+substitute for this bare-metal interaction check.

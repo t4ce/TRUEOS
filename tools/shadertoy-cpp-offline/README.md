@@ -22,10 +22,14 @@ The tool does not download or check in the linked shader.
 
 ## Runtime Blueprint packages
 
-The six admitted shaders and their raw GLSL now live under
+The six admitted GLSL ports and three imported native programs (15 selectable
+views) with their raw sources live under
 `TRUEOS-Blueprints/apps/shadertoy/assets/`. The kernel retains trusted hashes and
 ABI contracts; the Blueprint transfers complete authenticated packages at startup.
 See [the runtime path](../../crates/trueos-shader/gpgpu/kernels/SHADERTOY.md).
+`import_native.py` copies the unchanged audio, gallery and ParticleCraft artifacts
+and all hashed C++ inputs into the Blueprint. Shell2 `cpp` is retired; `win`
+opens the separate 30-window retained UI4 demo.
 Candidate preview sessions remain under `bld/` and are not automatically admitted.
 
 The native preview and four reviewed visual effects now use a separate

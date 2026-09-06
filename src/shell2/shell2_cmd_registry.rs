@@ -33,7 +33,7 @@ const STATUS_RAINBOW_COLORS: [u8; 8] = [199, 208, 227, 121, 51, 39, 99, 201];
 const TOOL_JSON_ACPI: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["reboot","S1","S2","S3","S4","S5"],"description":"ACPI action to run."}},"required":["action"],"additionalProperties":false}"#;
 const TOOL_JSON_AUD: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
 const TOOL_JSON_BIOS: &str = r#"{"type":"object","properties":{"view":{"type":"string","enum":["all","status","services","setup","handoff","hints"],"description":"BIOS/UEFI control-plane view to print."}},"required":[],"additionalProperties":false}"#;
-const TOOL_JSON_CPP: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["list","status","stop","font","spirit","svg"],"description":"Inspect or stop the interactive C++/IGC gallery, stamp/present/rush2 font RGBA, select Spirit's C++ repass, or control the SVG experiment. Omit action to launch the gallery."},"font_action":{"type":"string","enum":["stamp","present","rush2","status","release"],"description":"Create an owned async RGBA stamp, present it through UI4, or control the UI4-native 8-worker rush2 within the 32-slot producer pool."},"rush2_action":{"type":"string","enum":["start","stop"],"description":"Start or stop the UI4-native semi-persistent 8-worker font rush2 within the 32-slot producer pool when action=font and font_action=rush2; start is the default."},"text":{"type":"string","maxLength":4096,"description":"UTF-8 text for action=font; newlines create rows."},"font":{"type":"integer","minimum":1,"maximum":3,"description":"Optional GPU font face for action=font."},"size":{"type":"number","minimum":4,"maximum":2048,"description":"Font pixel size for action=font."},"color":{"type":"string","description":"Font RGBA color encoded as RRGGBBAA."},"canvas":{"type":"string","description":"Optional WIDTHxHEIGHT RGBA8 canvas at or below the UHD/4K soft cap."},"background_id":{"type":"integer","enum":[0,2,3,4,5,6,7,8,9,10,11],"description":"Spirit background ID when action is spirit; 11 is the UTC MagicTimeCircle."},"shader_id":{"type":"integer","minimum":0,"maximum":15,"description":"Spirit sprite shader ID when action is spirit."},"svg_action":{"type":"string","enum":["start","status","stop"],"description":"SVG-experiment lifecycle action when action=svg."},"svg_demo":{"type":"string","enum":["basic","curves","holes"],"description":"Byte-embedded SVG outline experiment selected when action=svg."}},"required":[],"additionalProperties":false}"#;
+const TOOL_JSON_WIN: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["start","status","stop"],"description":"Open, inspect or close the 30 retained UI4 windows. Omit action to open."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_DISC: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["list","format","ramdisc"],"description":"disc action to run."},"disk_id":{"type":"string","description":"Disk id string for action=format."},"size":{"type":"string","description":"Optional ramdisc size like 512MB or 1GiB for action=ramdisc."}},"required":["action"],"additionalProperties":false}"#;
 const TOOL_JSON_GRID: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
 const TOOL_JSON_VGPU: &str = r#"{"type":"object","properties":{"command":{"type":"string","enum":["status","test","material","depth","cull","pipeline","capture"],"description":"Inspect the vGPU broker, run a runtime test, or select a Picasso material diagnostic view."},"test":{"type":"string","enum":["broker","abi","guc","compute","blit","all"],"description":"Runtime test selected when command=test."},"view":{"type":"string","enum":["pbr","base","normal","uv","solid"],"description":"Next-frame Picasso output selected when command=material; pbr restores ordinary shading."},"depth":{"type":"string","enum":["on","off"],"description":"Picasso depth test/write diagnostic selected when command=depth; on restores ordinary depth testing."},"cull":{"type":"string","enum":["on","off"],"description":"Picasso face culling diagnostic selected when command=cull; on restores material culling."},"pipeline":{"type":"string","enum":["pbr","uv","uv8"],"description":"Picasso shader pipeline diagnostic selected when command=pipeline; uv uses authored-UV shaders with current mesh buffers, pbr restores full materials. uv8 keeps the authored-UV VS and selects the baked SIMD8 PS."},"capture":{"type":"string","enum":["vue"],"description":"One-shot Picasso pre-clip vertex capture selected when command=capture; keeps rendering enabled and reports bounded diagnostic summaries."}},"required":["command"],"additionalProperties":false}"#;
@@ -132,8 +132,8 @@ fn dispatch_os(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) ->
     super::cmds::os::try_parse(spawner, io, rest)
 }
 
-fn dispatch_cpp(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    super::cmds::cpp::try_parse(spawner, io, rest)
+fn dispatch_win(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::win::try_parse(spawner, io, rest)
 }
 
 fn dispatch_cry(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -228,15 +228,15 @@ const SHELL2_COMMAND_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         tool_parameters_json: Some(TOOL_JSON_BIOS),
     },
     BuiltinShell2CmdEntry {
-        name: "cpp",
+        name: "win",
         mode: "cmd",
         color: Some(STATUS_ORANGE_RGB),
         advertised: true,
-        handler: dispatch_cpp,
+        handler: dispatch_win,
         tool_description: Some(
-            "Launch the keyboard-driven C++/IGC gallery, run the SVG experiment, request retained asynchronous RGBA8 font stamps, or select Spirit's 9x16 visual suite.",
+            "Open the 30 retained UI4 windows demo; artistic compute shaders live in the ShaderToy Blueprint.",
         ),
-        tool_parameters_json: Some(TOOL_JSON_CPP),
+        tool_parameters_json: Some(TOOL_JSON_WIN),
     },
     BuiltinShell2CmdEntry {
         name: "cry",
@@ -495,25 +495,25 @@ fn starts_with_command<'a>(submitted: &'a str, name: &str) -> Option<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::{
-        TOOL_JSON_CPP, command_registry_json, starts_with_command, titlebar_right_alias_names_text,
+        TOOL_JSON_WIN, command_registry_json, starts_with_command, titlebar_right_alias_names_text,
         titlebar_right_command_names_text,
     };
 
     #[test]
     fn unrelated_command_length_may_land_inside_utf8() {
-        let submitted = "cpp font stamp \"中国 § العربية 🦀\"";
+        let submitted = "win invalid \"中国 § العربية 🦀\"";
 
         assert_eq!(starts_with_command(submitted, "os"), None);
         assert_eq!(
-            starts_with_command(submitted, "cpp"),
-            Some(" font stamp \"中国 § العربية 🦀\"")
+            starts_with_command(submitted, "win"),
+            Some(" invalid \"中国 § العربية 🦀\"")
         );
     }
 
     #[test]
     fn command_match_still_requires_a_token_boundary() {
-        assert_eq!(starts_with_command("cppish", "cpp"), None);
-        assert_eq!(starts_with_command("CPP\tfont status", "cpp"), Some("\tfont status"));
+        assert_eq!(starts_with_command("window", "win"), None);
+        assert_eq!(starts_with_command("WIN\tstatus", "win"), Some("\tstatus"));
     }
 
     #[test]
@@ -541,7 +541,7 @@ mod tests {
     fn titlebar_and_registry_omit_retired_commands() {
         let status = titlebar_right_command_names_text();
         let registry = command_registry_json();
-        for label in ["gridp", "helio", "set"] {
+        for label in ["gridp", "helio", "set", "cpp"] {
             assert!(!status.contains(label), "titlebar contains retired {label}");
             assert!(
                 !registry.contains(alloc::format!("\"name\":\"{label}\"").as_str()),
@@ -583,21 +583,13 @@ mod tests {
     }
 
     #[test]
-    fn cpp_tool_schema_keeps_gallery_launch_plain_and_only_font_rush2() {
-        assert!(!TOOL_JSON_CPP.contains("\"mode\":"));
-        assert!(!TOOL_JSON_CPP.contains("\"duration_ms\":"));
-        assert!(!TOOL_JSON_CPP.contains("\"action\":{\"type\":\"string\",\"enum\":[\"start\""));
-        assert!(TOOL_JSON_CPP.contains(
-            "\"font_action\":{\"type\":\"string\",\"enum\":[\"stamp\",\"present\",\"rush2\",\"status\",\"release\"]"
-        ));
-        assert!(!TOOL_JSON_CPP.contains("\"rush_action\":"));
-        assert!(!TOOL_JSON_CPP.contains("\"rush\""));
-        assert!(
-            TOOL_JSON_CPP
-                .contains("\"rush2_action\":{\"type\":\"string\",\"enum\":[\"start\",\"stop\"]")
-        );
-        assert!(command_registry_json().contains("UI4-native 8-worker rush2"));
+    fn win_tool_schema_has_only_window_lifecycle_actions() {
+        assert!(TOOL_JSON_WIN.contains("\"enum\":[\"start\",\"status\",\"stop\"]"));
+        assert!(!TOOL_JSON_WIN.contains("font_action"));
+        assert!(command_registry_json().contains("\"name\":\"win\""));
+        assert!(!command_registry_json().contains("\"name\":\"cpp\""));
     }
+
 }
 
 pub(crate) fn try_dispatch(
@@ -614,7 +606,7 @@ pub(crate) fn try_dispatch(
     ParseOutcome::NotCommand
 }
 
-const TITLEBAR_MISC_COMMANDS: &[&str] = &["cpp", "hyper", "shot", "lum", "tts", "stt", "vid"];
+const TITLEBAR_MISC_COMMANDS: &[&str] = &["win", "hyper", "shot", "lum", "tts", "stt", "vid"];
 const TITLEBAR_ADMIN_COMMANDS: &[&str] = &[
     "cry", "os", "backup", "disc", "tlb", "xhci", "ram", "smp", "net", "bios", "acpi", "vgpu",
 ];
@@ -731,7 +723,7 @@ fn push_registry_titlebar_entry(out: &mut AllocString, name: &str) {
     };
     let label = status_command_label(entry);
 
-    if matches!(entry.name, "cpp" | "vgpu" | "aud" | "vid") {
+    if matches!(entry.name, "win" | "vgpu" | "aud" | "vid") {
         push_static_rainbow_token(out, label);
     } else if let Some(color) = entry.color {
         push_colored_status_token(out, label, color);

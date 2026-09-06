@@ -89,7 +89,7 @@ pub(crate) use gpgpu_preview_consumer::{
     GPGPU_PREVIEW_DEFAULT_CADENCE_MS, GPGPU_PREVIEW_DEFAULT_PUBLISH_EVERY,
     GpgpuPreviewPreset, gpgpu_preview_consumer_service_task, gpgpu_preview_status,
     request_cpp_font_preview_start,
-    request_cpp_font_rush2_start, request_cpp_font_rush2_stop, request_cpp_gallery_start,
+    request_cpp_font_rush2_start, request_cpp_font_rush2_stop, request_win_demo_start,
     request_gpgpu_preview_stop,
 };
 pub(crate) use gpgpu_svg_probe_consumer::{

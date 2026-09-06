@@ -1,4 +1,4 @@
-//! Bounded live-audio analysis for the single C++ audiovisual shader.
+//! Bounded live-audio analysis shared by audiovisual shader windows.
 //!
 //! Analysis is deliberately outside the HDA callback. The speaker-side tee is
 //! atomic and allocation-free; this module snapshots 2048 stereo frames,
@@ -306,13 +306,7 @@ fn average(values: &[f32]) -> f32 {
 
 static ANALYZER: Mutex<Option<AudioAnalyzer>> = Mutex::new(None);
 
-pub(crate) fn set_enabled(enabled: bool) {
-    audio_visualizer_tap::set_enabled(enabled);
-    let mut analyzer = ANALYZER.lock();
-    if enabled && analyzer.is_none() {
-        *analyzer = Some(AudioAnalyzer::new());
-    }
-}
+include!("audio_visualizer_subscriptions.rs");
 
 pub(crate) fn snapshot() -> AudioVisualizerFrame {
     let mut analyzer = ANALYZER.lock();

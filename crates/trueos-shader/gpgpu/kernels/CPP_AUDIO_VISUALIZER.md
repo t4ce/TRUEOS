@@ -11,20 +11,13 @@ instrument from the final stereo stream accepted by the HDA output path:
 - bass bloom, onset rings, and high-frequency particles;
 - restrained scan texture, peak light, and audio-driven palette motion.
 
-The view is reached from the interactive Shell2 gallery:
+Open the ShaderToy Blueprint and select **F7 — Live audio visualizer**.
+Left/Right cycles views and Escape closes the app. The Shell2 `cpp` entry point
+has been retired; `win` is exclusively the separate 30-window UI4 demo.
 
-```text
-cpp
-Left / Right until audio
-cpp status
-cpp stop
-```
-
-The UI4 window starts at the ordinary C++ demo extent. All C++ demo windows
-now use application interaction, so a UI4 maximize/restore notification
-replaces the backing double-buffered frame at the actual requested extent.
-On the 2560x1440 TestRig, maximizing therefore dispatches a native 1440p
-surface without a hard-coded monitor assumption in the kernel.
+The visualizer uses ShaderToy's resizable UI4 frame and 30 Hz target cadence.
+Maximizing dispatches at the requested surface extent. Its existing single
+kernel and audio snapshot ABI are reused without changing the executable.
 
 ## PCM and analysis boundary
 
@@ -42,7 +35,7 @@ active playback sources
 
 The HDA producer performs no allocation, lock acquisition, FFT, or wait. When
 the visualizer is stopped, one atomic flag check is the complete tap cost.
-The UI4 producer snapshots 2048 frames into preallocated storage and performs
+The ShaderToy producer snapshots 2048 frames into preallocated storage and performs
 ordinary Symphonia radix-2 mid/side FFTs outside the callback. It derives:
 
 - 128 interpolated samples for each waveform;
@@ -59,7 +52,12 @@ free after initialization, and keeps the audio callback untouched.
 
 ## Snapshot ABI
 
-One 4096-byte DMA page is rewritten and flushed before dispatch:
+One 4096-byte DMA page is rewritten and flushed before dispatch. The submission
+lock is held from snapshot upload through GPU retirement. Each audio view owns
+a subscription to the shared tap; closing one does not disable other views.
+An unretired dispatch quarantines the context before any subsequent buffer write.
+
+Snapshot layout:
 
 | Words | Contents |
 | --- | --- |
@@ -85,8 +83,8 @@ ratio       = 0.5000
 ```
 
 This is the requested estimated 50% walker envelope, not a claim that every
-lane costs the same as a minimal pixel shader. The default 50 ms cadence adds
-temporal headroom and avoids turning the demo into a stress test. The kernel
+lane costs the same as a minimal pixel shader. The ShaderToy target is 30 Hz; actual throughput depends on window size and
+GPU cost and is logged by the app. The kernel
 uses one dispatch, SIMD16, 128 GRFs, and no scratch or SLM.
 
 ## Artifact and publication

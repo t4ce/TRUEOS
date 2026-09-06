@@ -1,11 +1,19 @@
-# ShaderToy reviewed Image catalog
+# ShaderToy reviewed visual catalog
 
 The six reviewed shaders are owned by `TRUEOS-Blueprints/apps/shadertoy/assets/`.
 Each directory contains `input.glsl`, generated `kernel.clcpp`, `kernel.bin`,
 `kernel.spv`, `kernel.manifest.json`, and `kernel.contract.rs`. Each `.stpkg`
 bundles those six files. The kernel retains the six `.contract.rs` files here
 and the small generated package hash/length catalog in
-`src/intel/gpgpu/artifacts/shadertoy_packages.rs`; it embeds no ShaderToy payload.
+`src/intel/gpgpu/artifacts/shadertoy_packages.rs`; these six payloads are Blueprint-owned.
+
+The catalog also admits three unchanged native programs: live audio (7), the
+C++ gallery (8, shared by selectors 8–14), and ParticleCraft (15). Their packages
+use `input.sources.json` instead of GLSL, preserving every baked C++ source/header.
+The kernel retains their existing internal diagnostic renderers and artifact
+copies. Each ShaderToy window must still register the matching program package.
+ParticleCraft admission checks all three entry-point contracts in its single ELF.
+Shell2 `cpp` is retired; `win` runs only the retained 30-window demo.
 
 Regenerate and reproducibly verify the catalog with:
 
@@ -53,7 +61,7 @@ Blueprint has no package registration step and rendering fails closed.
 
 The package wire format is eight bytes `STPKG01\0`, followed by six little-endian
 u32 lengths, then the six files in the order listed above **with Zebin first,
-SPIR-V second, GLSL third, C++ fourth, manifest fifth and contract sixth**.
+SPIR-V second, GLSL (or native source archive) third, C++ fourth, manifest fifth and contract sixth**.
 Kernel slicing uses trusted lengths only after whole-package authentication.
 The packed blueprint compresses these files; compressed size is not resident
 payload size.
@@ -70,7 +78,8 @@ date_year, date_month, date_day, date_seconds
 ```
 
 `version` must be `1`. `flags` is zero, or bit 0 for F6 to request native
-resolution instead of automatic radial sampling. `shader_id` is one of the
+resolution instead of automatic radial sampling, or bit 1 for the primary
+button held in High Wisps (14). Other flag combinations are rejected. `shader_id` is one of the
 catalog IDs below.  All scalar inputs must be finite; time and delta are
 non-negative and frame rate is positive.  `window_id` is a separate argument.
 Blueprint supplies authenticated package bytes during registration. It cannot
@@ -151,3 +160,16 @@ buffer. Native mode and small windows keep the original full-resolution shader
 path. The scratch cache is owned across both passes and retained after an
 unretired submission. See the Blueprint's `FOVEATED_RENDERING.md` for the map,
 measurements and quality tradeoffs.
+
+## Native catalog migration
+
+`operations/shadertoy_catalog.rs` routes selectors 7–15 to the existing gallery,
+audio and ParticleCraft dispatchers. UI4 takes window-owned runtime state for
+the duration of rendering, then restores it after retirement. Audio subscriptions,
+paint history and persistent particle storage do not cross window ownership.
+The original six Image passes continue through their existing row/focus path.
+
+`tools/shadertoy-cpp-offline/import_native.py` copies reviewed native artifacts
+and checks every raw input against their manifests; `package_blueprint.py`
+then checks packaging and refreshes trust only with `--update-trust`.
+The Blueprint README has the full key map and migration validation commands.

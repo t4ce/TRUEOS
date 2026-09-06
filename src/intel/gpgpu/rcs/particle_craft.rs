@@ -57,6 +57,7 @@ fn direct_rcs_encode_particle_craft_batch(
     craft: &GpgpuOwnedParticleCraftState,
     dst: GpgpuRgba8Surface,
     active_count: u32,
+    plan: ParticleCraftRenderPlan,
 ) -> bool {
     if upload.bin_sha256 != PARTICLE_CRAFT_ADLS_BIN_SHA256
         || upload.gpu != PARTICLE_CRAFT_ADLS_GPU
@@ -209,8 +210,8 @@ fn direct_rcs_encode_particle_craft_batch(
     } else {
         (1u32 << step_lanes) - 1
     };
-    let (sample_width, sample_height) = particle_craft_sample_extent(dst.width, dst.height);
-    let (tile_columns, tile_rows) = particle_craft_tile_extent(dst.width, dst.height);
+    let (sample_width, sample_height) = (plan.sample_width, plan.sample_height);
+    let (tile_columns, tile_rows) = (plan.tile_columns, plan.tile_rows);
     let bin_groups_x = tile_columns.div_ceil(16);
     let bin_lanes = ((tile_columns - 1) % 16) + 1;
     let bin_right_mask = if bin_lanes == 16 {
@@ -339,6 +340,7 @@ fn submit_particle_craft_rgba8(
     craft: &GpgpuOwnedParticleCraftState,
     dst: GpgpuRgba8Surface,
     active_count: u32,
+    plan: ParticleCraftRenderPlan,
 ) -> DirectRcsDispatchOutcome {
     let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
     let Some(dev) = super::claimed_device() else {
@@ -360,7 +362,7 @@ fn submit_particle_craft_rgba8(
         && direct_rcs_map_ppgtt_kernel(state, craft.state_gpu(), craft.state_phys(), craft.bytes());
     let dst_ok = craft_ok && direct_rcs_map_ppgtt_scanout(state, dst.gpu, dst.phys, dst.bytes);
     let batch_ok =
-        dst_ok && direct_rcs_encode_particle_craft_batch(state, upload, craft, dst, active_count);
+        dst_ok && direct_rcs_encode_particle_craft_batch(state, upload, craft, dst, active_count, plan);
     let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
     let observed = if submitted {
         direct_rcs_poll_result_slot_timeout_ms(
@@ -376,9 +378,9 @@ fn submit_particle_craft_rgba8(
         quarantine_direct_rcs_context("particle-craft-marker-timeout");
     }
     if observed != PARTICLE_CRAFT_POST_MARKER {
-        let (sample_width, sample_height) = particle_craft_sample_extent(dst.width, dst.height);
-        let (tile_columns, tile_rows) = particle_craft_tile_extent(dst.width, dst.height);
-        let render_divisor = particle_craft_render_divisor(dst.width, dst.height);
+        let (sample_width, sample_height) = (plan.sample_width, plan.sample_height);
+        let (tile_columns, tile_rows) = (plan.tile_columns, plan.tile_rows);
+        let render_divisor = plan.divisor;
         crate::log_error!(
             target: "gpgpu";
             "intel/gpgpu: ParticleCraft failed forcewake={} mapped={} ppgtt={} kernel={} craft={} dst={} batch={} submitted={} observed=0x{:08X} want=0x{:08X} particles={} samples={}x{} tiles={}x{} tile={}x{} bin_tests={} render_divisor={} artifact={} state_gpu=0x{:X} dst_gpu=0x{:X}\n",
@@ -399,7 +401,7 @@ fn submit_particle_craft_rgba8(
             tile_rows,
             PARTICLE_CRAFT_TILE_SAMPLE_WIDTH,
             PARTICLE_CRAFT_TILE_SAMPLE_HEIGHT,
-            particle_craft_bin_candidate_tests(dst.width, dst.height, active_count),
+            u64::from(tile_columns) * u64::from(tile_rows) * u64::from(active_count),
             render_divisor,
             PARTICLE_CRAFT_ADLS_ARTIFACT.name,
             craft.state_gpu(),

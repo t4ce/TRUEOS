@@ -40,6 +40,8 @@ include!("operations/effects.rs");
 include!("operations/cpp_demo.rs");
 include!("operations/shadertoy_focus.rs");
 include!("operations/shadertoy.rs");
+include!("operations/cloud_brush.rs");
+include!("operations/shadertoy_catalog.rs");
 include!("operations/cpp_audio_visualizer.rs");
 include!("operations/particle_craft.rs");
 include!("operations/lfm25_q8.rs");

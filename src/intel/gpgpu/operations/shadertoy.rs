@@ -33,18 +33,11 @@ pub(crate) struct ShaderToyFrameParams {
 impl ShaderToyFrameParams {
     pub(crate) fn is_valid(self) -> bool {
         self.version == SHADERTOY_PARAMS_VERSION
-            && matches!(
-                self.shader_id,
-                SHADERTOY_SHADER_MANDELBROT
-                    | SHADERTOY_SHADER_CUBE_FIELD
-                    | SHADERTOY_SHADER_NGUYEN
-                    | SHADERTOY_SHADER_PALETTE_GRID
-                    | SHADERTOY_SHADER_COSMIC_STRANDS
-                    | SHADERTOY_SHADER_PROTEAN_CLOUDS
-            )
+            && (1..=15).contains(&self.shader_id)
             && (self.flags == 0
                 || (self.shader_id == SHADERTOY_SHADER_PROTEAN_CLOUDS
-                    && self.flags == SHADERTOY_FLAG_NATIVE_RESOLUTION))
+                    && self.flags == SHADERTOY_FLAG_NATIVE_RESOLUTION)
+                || (self.shader_id == 14 && self.flags == 2))
             && self.time_seconds.is_finite()
             && self.time_seconds >= 0.0
             && self.delta_seconds.is_finite()

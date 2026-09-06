@@ -110,7 +110,6 @@ fn submit_cpp_audio_visualizer_rgba8(
         return DirectRcsDispatchOutcome::default();
     }
 
-    let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
     let Some(dev) = super::claimed_device() else {
         crate::log_warn!(
             target: "gpgpu";
@@ -201,6 +200,12 @@ pub(crate) fn cpp_audio_visualizer_rgba8_surface_full(
     snapshot: &crate::aud::audio_visualizer::AudioVisualizerFrame,
 ) -> GpgpuRgba8KernelResult {
     let start_tick = direct_rcs_now_tick();
+    // The snapshot allocation is shared across windows. Serialize the upload
+    // through GPU retirement, not just the submission that consumes it.
+    let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
+    if !dst.is_valid() || direct_rcs_context_is_quarantined() {
+        return GpgpuRgba8KernelResult::default();
+    }
     let Some(audio) = cpp_audio_visualizer_buffer_once() else {
         return GpgpuRgba8KernelResult::default();
     };

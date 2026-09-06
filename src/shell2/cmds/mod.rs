@@ -28,7 +28,7 @@ pub(crate) mod bios_hii;
 pub(crate) mod bios_ifr;
 pub(crate) mod bios_observed;
 pub(crate) mod bios_tlb_dump;
-pub(crate) mod cpp;
+pub(crate) mod win;
 pub(crate) mod cry;
 pub(crate) mod disc;
 pub(crate) mod edit;

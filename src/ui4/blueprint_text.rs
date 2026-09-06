@@ -10,7 +10,7 @@ use alloc::{collections::VecDeque, string::String, vec::Vec};
 use core::sync::atomic::{AtomicU32, Ordering};
 use spin::Mutex;
 use trueos_time::Instant;
-use crate::intel::gpgpu::shadertoy_package::ShaderToyPackageUpload;
+use crate::intel::gpgpu::shadertoy_package::{ShaderToyPackageUpload, program_id as shadertoy_program_id};
 
 use crate::intel::gpgpu::{
     ALPHA_BLEND_WORKLIST_FLAG_COPY, ALPHA_BLEND_WORKLIST_FLAG_SRC_OVER,
@@ -18,7 +18,7 @@ use crate::intel::gpgpu::{
     GpgpuAlphaBlendWorklistDesc, GpgpuGlyphMaskLayer, GpgpuOwnedParticleCraftState,
     GpgpuOwnedRgba8Surface, GpgpuPoint, GpgpuRect, GpgpuRgb565Surface, GpgpuRgba8ReleaseFence,
     GpgpuRgba8Surface, GpgpuSolidRect, GpgpuSpriteQuadWorklistDesc, GpgpuSpriteQuadWorklistRun,
-    GpgpuSubmissionOutcome, ParticleCraftParamsV1, SHADERTOY_PARAMS_VERSION,
+    GpgpuSubmissionOutcome, ParticleCraftParamsV1, SHADERTOY_PARAMS_VERSION, ShaderToyRuntimeState,
     SPRITE_QUAD_WORKLIST_FLAG_PREMUL_SRC, SPRITE_QUAD_WORKLIST_FLAG_SRC_OVER, ShaderToyFrameParams,
     SkyboxSampleRgb565Params, Ui4CompositorCompletion, Ui4CompositorSubmission,
     Ui4CompositorSubmitError, Ui4SpriteSceneCompletion,
@@ -26,7 +26,7 @@ use crate::intel::gpgpu::{
     fill_solid_rects_rgba8_scanout_result, glyph_mask_layers_rgba8_2d_mode,
     particle_craft_rgba8_frame, poll_ui4_blueprint_sprite_scene, poll_ui4_compositor_submission,
     queue_ui4_blueprint_alpha_rects, queue_ui4_blueprint_sprite_scene,
-    release_rgba8_surface_for_scanout, shadertoy_rgba8_surface_full, skybox_sample_rgb565_to_rgba8,
+    release_rgba8_surface_for_scanout, skybox_sample_rgb565_to_rgba8,
     sprite_quad_worklist_max_descs,
 };
 use crate::intel::gpu_font::{GpuFontFace, GpuFontRgba, MAX_DYNAMIC_TEXT_CHARS};
@@ -683,6 +683,7 @@ struct BlueprintSceneSurface {
     particle_craft: Option<GpgpuOwnedParticleCraftState>,
     shadertoy_upload: Option<ShaderToyPackageUpload>,
     shadertoy_registered: u32,
+    shadertoy_state: Option<ShaderToyRuntimeState>,
     placement: WindowPlacement,
     launch_selection: Option<(Ui4CursorSource, u32, u32)>,
     skybox: Option<OwnedRgb565Surface>,
@@ -1358,6 +1359,7 @@ fn open_blueprint_frame(
                 particle_craft: None,
                 shadertoy_upload: None,
                 shadertoy_registered: 0,
+        shadertoy_state: Some(ShaderToyRuntimeState::new(window.raw())),
                 placement,
                 launch_selection: desktop_shell_launch
                     .map(|launch| (launch.source, launch.x, launch.y)),
@@ -1412,6 +1414,7 @@ fn open_blueprint_frame(
         particle_craft: None,
         shadertoy_upload: None,
         shadertoy_registered: 0,
+        shadertoy_state: Some(ShaderToyRuntimeState::new(window.raw())),
         placement,
         launch_selection: desktop_shell_launch.map(|launch| (launch.source, launch.x, launch.y)),
         skybox: None,
@@ -3585,7 +3588,7 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_shadertoy_render(
     let Some(owner) = blueprint_owner() else {
         return ERROR_CONTEXT;
     };
-    let lease = {
+    let (lease, destination, mut state) = {
         let mut surfaces = SURFACES.lock();
         let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
             return ERROR_NOT_FOUND;
@@ -3593,7 +3596,7 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_shadertoy_render(
         if surface.visual_cadence.is_none() {
             return ERROR_INVALID;
         }
-        if surface.shadertoy_registered & (1u32 << params.shader_id) == 0 {
+        if surface.shadertoy_registered & (1u32 << shadertoy_program_id(params.shader_id).unwrap()) == 0 {
             return ERROR_STATE;
         }
         if surface.gpu_submission_unretired {
@@ -3602,16 +3605,20 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_shadertoy_render(
         let Some(lease) = surface.write_lease else {
             return ERROR_STATE;
         };
-        lease
+        let Ok(destination) = gpgpu_rgba_surface(lease) else {
+            return ERROR_UI4;
+        };
+        let Some(state) = surface.shadertoy_state.take() else {
+            return ERROR_BUSY;
+        };
+        (lease, destination, state)
     };
-    let Ok(destination) = gpgpu_rgba_surface(lease) else {
-        return ERROR_UI4;
-    };
-    let rendered = shadertoy_rgba8_surface_full(destination, params);
+    let rendered = state.render(destination, params);
     let mut surfaces = SURFACES.lock();
     let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
         return ERROR_NOT_FOUND;
     };
+    surface.shadertoy_state = Some(state);
     if surface.write_lease != Some(lease) {
         return ERROR_STATE;
     }
@@ -7072,6 +7079,10 @@ fn blueprint_surface_close_request(
 }
 
 fn release_surface(mut surface: BlueprintSceneSurface, release: BlueprintSurfaceRelease) {
+    if let Some(state) = surface.shadertoy_state.as_mut() {
+        // A retained GPU allocation after failure does not need a live PCM tap.
+        state.stop_audio();
+    }
     if surface.gpu_submission_unretired {
         let _ = finish_window_session(surface.owner, surface.session);
         crate::log_error!(target: "ui4/blueprint-frame";

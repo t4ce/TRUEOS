@@ -126,6 +126,38 @@ pub(crate) const fn particle_craft_render_divisor(
     }
 }
 
+// The catalog has one full-size surface shared with other effects. Reuse the
+// particle kernel's existing 1/2/4 pixel-block output to preserve the old preview
+// sample budget, without resizing that surface or adding an upscale pass.
+fn particle_craft_catalog_divisor(width: u32, height: u32) -> u32 {
+    let backing = particle_craft_backing_extent(width, height);
+    let presentation_scale = if backing == (width, height) { 1 } else { 2 };
+    presentation_scale * particle_craft_render_divisor(backing.0, backing.1)
+}
+
+#[derive(Copy, Clone, Debug)]
+struct ParticleCraftRenderPlan {
+    divisor: u32,
+    sample_width: u32,
+    sample_height: u32,
+    tile_columns: u32,
+    tile_rows: u32,
+}
+
+impl ParticleCraftRenderPlan {
+    fn new(width: u32, height: u32, divisor: u32) -> Option<Self> {
+        if width == 0 || height == 0 || !matches!(divisor, 1 | 2 | 4) { return None; }
+        let sample_width = width.div_ceil(divisor);
+        let sample_height = height.div_ceil(divisor);
+        let tile_columns = sample_width.div_ceil(PARTICLE_CRAFT_TILE_SAMPLE_WIDTH);
+        let tile_rows = sample_height.div_ceil(PARTICLE_CRAFT_TILE_SAMPLE_HEIGHT);
+        if tile_columns > PARTICLE_CRAFT_MAX_TILE_COLUMNS || tile_rows > PARTICLE_CRAFT_MAX_TILE_ROWS {
+            return None;
+        }
+        Some(Self { divisor, sample_width, sample_height, tile_columns, tile_rows })
+    }
+}
+
 /// Stable host-side form of the public 64-byte ParticleCraft v1 control block.
 #[derive(Copy, Clone, Debug)]
 #[repr(C)]
@@ -329,7 +361,7 @@ impl GpgpuOwnedParticleCraftState {
         self.quarantined = true;
     }
 
-    fn write_params(&mut self, params: ParticleCraftParamsV1, dst: GpgpuRgba8Surface) {
+    fn write_params(&mut self, params: ParticleCraftParamsV1, dst: GpgpuRgba8Surface, divisor: u32) {
         unsafe {
             core::ptr::copy_nonoverlapping(
                 &params as *const ParticleCraftParamsV1 as *const u8,
@@ -340,7 +372,7 @@ impl GpgpuOwnedParticleCraftState {
                 dst.width,
                 dst.height,
                 dst.pitch_bytes / core::mem::size_of::<u32>() as u32,
-                particle_craft_render_divisor(dst.width, dst.height),
+                divisor,
             ];
             core::ptr::copy_nonoverlapping(
                 render_controls.as_ptr().cast::<u8>(),
@@ -418,9 +450,21 @@ pub(crate) fn particle_craft_rgba8_frame(
     dst: GpgpuRgba8Surface,
     params: ParticleCraftParamsV1,
 ) -> GpgpuRgba8KernelResult {
+    particle_craft_rgba8_frame_scaled(state, dst, params,
+        particle_craft_render_divisor(dst.width, dst.height))
+}
+
+fn particle_craft_rgba8_frame_scaled(
+    state: &mut GpgpuOwnedParticleCraftState,
+    dst: GpgpuRgba8Surface,
+    params: ParticleCraftParamsV1,
+    divisor: u32,
+) -> GpgpuRgba8KernelResult {
+    let Some(plan) = ParticleCraftRenderPlan::new(dst.width, dst.height, divisor) else {
+        return GpgpuRgba8KernelResult::default();
+    };
     if !params.is_valid()
         || !dst.is_valid()
-        || !particle_craft_tile_mask_fits(dst.width, dst.height)
         || !dst
             .pitch_bytes
             .is_multiple_of(core::mem::size_of::<u32>() as u32)
@@ -429,9 +473,9 @@ pub(crate) fn particle_craft_rgba8_frame(
         return GpgpuRgba8KernelResult::default();
     }
 
-    state.write_params(params, dst);
+    state.write_params(params, dst, plan.divisor);
     let start_tick = direct_rcs_now_tick();
-    let outcome = submit_particle_craft_rgba8(state, dst, params.active_count);
+    let outcome = submit_particle_craft_rgba8(state, dst, params.active_count, plan);
     let ok = outcome.observed == PARTICLE_CRAFT_POST_MARKER;
     if outcome.submitted && !ok {
         state.quarantine();
