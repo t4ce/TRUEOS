@@ -13,10 +13,6 @@ path = "src/lib.rs"
 
 [features]
 default = []
-opt-simd = []
-opt-simd-avx = []
-opt-simd-neon = []
-opt-simd-sse = []
 
 [dependencies]
 bytemuck = { version = "1.7", default-features = false }

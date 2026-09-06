@@ -77,7 +77,8 @@ default-features = false
 [dependencies.p256]
 version = "0.13.2"
 features = [
-    "pem",
+    "alloc",
+    "pkcs8",
     "ecdsa",
     "ecdh",
 ]
@@ -86,7 +87,8 @@ default-features = false
 [dependencies.p384]
 version = "0.13.0"
 features = [
-    "pem",
+    "alloc",
+    "pkcs8",
     "ecdsa",
     "ecdh",
 ]
@@ -98,10 +100,7 @@ default-features = false
 
 [dependencies.pkcs8]
 version = "0.10.2"
-features = [
-    "pem",
-    "pkcs5",
-]
+features = ["alloc"]
 default-features = false
 
 [dependencies.pki-types]
@@ -126,8 +125,8 @@ default-features = false
 [dependencies.sec1]
 version = "0.7.3"
 features = [
+    "alloc",
     "pkcs8",
-    "pem",
 ]
 default-features = false
 

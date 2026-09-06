@@ -35,6 +35,7 @@ mod efi;
 mod efi_img;
 mod exceptions;
 mod executor_cache;
+#[cfg(feature = "trueos_task_profile")]
 mod executor_task_profile;
 mod gpu;
 #[path = "../crates/trueos-graphics/mod.rs"]
@@ -284,6 +285,7 @@ fn boot_secondary_processors(resp: Option<&'static crate::limine::MpResponse>) {
 }
 
 fn spawn_bsp_services(spawner: Spawner) {
+    #[cfg(feature = "trueos_task_profile")]
     if crate::allcaps::executor::BSP_TASK_PROFILE_ENABLED {
         match crate::executor_task_profile::bsp_task_profile_reporter_task(spawner) {
             Ok(token) => spawner.spawn(token),

@@ -19,9 +19,7 @@ hound = "3.5.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 log = "0.4.28"
-env_logger = "0.10.0"
 thiserror = "2.0.16"
-derive_builder = { version = "0.20.2" }
 
 # Kokoro (ONNX-based)
 ort = { version = "2.0.0-rc.10", optional = true }
@@ -33,6 +31,9 @@ zip = { version = "2", optional = true, default-features = false, features = ["d
 # unsupported operator is bridged deterministically by tools/prepare_kokoro_rten.py.
 rten = { git = "https://github.com/robertknight/rten.git", rev = "7be5539edf37012eea7b79f582652fe536d7d087", optional = true, default-features = false, features = ["contrib", "fft", "onnx_format"] }
 rten-tensor = { git = "https://github.com/robertknight/rten.git", rev = "7be5539edf37012eea7b79f582652fe536d7d087", optional = true }
+
+[dev-dependencies]
+env_logger = "0.10.0"
 
 [[example]]
 name = "kokoro"

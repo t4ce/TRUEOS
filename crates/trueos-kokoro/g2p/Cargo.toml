@@ -13,4 +13,4 @@ path = "src/lib.rs"
 default = []
 
 [dependencies]
-sha2 = { version = "0.10.9", default-features = false }
+sha2 = { workspace = true }

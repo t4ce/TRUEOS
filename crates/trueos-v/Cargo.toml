@@ -8,8 +8,8 @@ license = "MIT OR Apache-2.0"
 hashbrown = { version = "0.17", default-features = false, features = ["default-hasher", "serde"] }
 infer = { path = "../../vendor/infer", default-features = false }
 spin = "0.10"
-serde = { version = "1.0", default-features = false, features = ["alloc", "derive"] }
-serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
+serde = { workspace = true, features = ["alloc", "derive"] }
+serde_json = { workspace = true, features = ["alloc"] }
 trueos-math = { path = "../trueos-math", default-features = false }
 trueos-fs = { path = "../trueos-fs" }
 trueos-crypto = { path = "../trueos-crypto" }

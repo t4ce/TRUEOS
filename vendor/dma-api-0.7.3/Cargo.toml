@@ -52,7 +52,16 @@ version = "1.0"
 
 [dependencies.derive_more]
 version = "2.1"
-features = ["full"]
+features = [
+    "add",
+    "add_assign",
+    "debug",
+    "display",
+    "from",
+    "into",
+    "mul",
+    "mul_assign",
+]
 default-features = false
 
 [dependencies.mbarrier]

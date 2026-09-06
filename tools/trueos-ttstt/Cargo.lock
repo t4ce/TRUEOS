@@ -1423,7 +1423,6 @@ dependencies = [
 name = "tts-rs"
 version = "2026.2.3"
 dependencies = [
- "derive_builder",
  "env_logger",
  "hound",
  "log",

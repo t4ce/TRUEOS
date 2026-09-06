@@ -12,4 +12,4 @@ path = "src/lib.rs"
 default = []
 
 [dependencies]
-libm = { version = "0.2", default-features = false }
+libm = { workspace = true }

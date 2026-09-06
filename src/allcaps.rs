@@ -9,7 +9,7 @@ pub mod boot {
 }
 
 pub mod executor {
-    pub const BSP_TASK_PROFILE_ENABLED: bool = true;
+    pub const BSP_TASK_PROFILE_ENABLED: bool = cfg!(feature = "trueos_task_profile");
     pub const BSP_TASK_PROFILE_REPORT_MS: u64 = 1_000;
     pub const BSP_TASK_PROFILE_SLOW_POLL_US: u64 = 2_000;
     pub const BSP_TASK_PROFILE_SLOTS: usize = 128;

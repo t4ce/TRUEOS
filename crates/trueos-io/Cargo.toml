@@ -4,4 +4,4 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-core3 = { version = "0.1.2", default-features = false, features = ["alloc"] }
+core3 = { workspace = true, features = ["alloc"] }

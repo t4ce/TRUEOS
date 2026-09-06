@@ -5,9 +5,9 @@ edition = "2024"
 license-file = "../../LICENSE"
 
 [dependencies]
-half = { version = "2.7.1", default-features = false }
-libm = { version = "0.2", default-features = false }
-sha2 = { version = "0.10.9", default-features = false }
+half = { workspace = true }
+libm = { workspace = true }
+sha2 = { workspace = true }
 trueos-lfm25-model = { path = "../trueos-lfm25-model" }
 
 [[bin]]

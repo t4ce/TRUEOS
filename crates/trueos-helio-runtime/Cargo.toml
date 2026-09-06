@@ -5,6 +5,5 @@ edition = "2024"
 publish = false
 
 [dependencies]
-libm = { version = "0.2", default-features = false }
+libm = { workspace = true }
 trueos-helio-artifact = { path = "../trueos-helio-artifact" }
-

@@ -1846,6 +1846,7 @@ fn format_system_service_snapshot() -> String {
             readiness_names(spec.required),
         );
     }
+    #[cfg(feature = "trueos_task_profile")]
     crate::executor_task_profile::append_snapshot_history_text(&mut out);
     out
 }

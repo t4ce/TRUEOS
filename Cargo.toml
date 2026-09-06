@@ -49,12 +49,27 @@ members = [
 # These are patched or directly used upstream projects.  Keeping them out of the
 # TRUEOS workspace preserves their own workspace metadata and lockfile policy.
 exclude = [
+    # Standalone host tools own their manifests, lockfiles, and patch policy.
+    "tools/helio-sprite-atlas-bake",
+    "tools/kokoro-native-oracle",
+    "tools/remoteai",
+    "tools/wgpu-video-mesh",
     "vendor/*",
     # Cargo matches workspace exclusions against package directories, so this
     # nested package needs its own entry.
     "vendor/CrabUSB/usb-host",
     "vendor/tinyaudio",
 ]
+
+# Keep the common no_std dependency policy in one place.  Features stay at
+# individual use sites because Cargo unifies them across workspace consumers.
+[workspace.dependencies]
+core3 = { version = "0.1.2", default-features = false }
+half = { version = "2.7.1", default-features = false }
+libm = { version = "0.2", default-features = false }
+serde = { version = "1.0", default-features = false }
+serde_json = { version = "1.0", default-features = false }
+sha2 = { version = "=0.10.9", default-features = false }
 
 [[bin]]
 name = "TRUEOS"
@@ -63,17 +78,18 @@ test = false
 bench = false
 
 [features]
-default = ["trueos_lumen", "trueos_h264_encode_stream"]
+default = ["trueos_lumen", "trueos_h264_encode_stream", "trueos_task_profile"]
 trueos_lumen = []
 trueos_h264_encode_stream = []
 trueos_h264_encode_probe = ["trueos_h264_encode_stream"]
+trueos_task_profile = ["trueos-executor/trueos-task-profile"]
 
 [dependencies]
 x86_64 = { version = "0.15.5", features = ["memory_encryption"] }
-core3 = { version = "0.1.2", default-features = false, features = ["alloc", "utils"] }
+core3 = { workspace = true, features = ["alloc", "utils"] }
 spin = "0.10"
 atomic-waker = { version = "1.1.2", default-features = false }
-trueos-executor = { path = "crates/trueos-executor", default-features = false, features = ["executor-thread", "platform-spin", "trueos-task-profile"] }
+trueos-executor = { path = "crates/trueos-executor", default-features = false, features = ["executor-thread", "platform-spin"] }
 embassy-sync = { version = "0.8.0", default-features = false }
 trueos-time = { path = "crates/trueos-executor/embassy-time", default-features = false, features = ["tick-hz-1_000"] }
 embassy-time-driver = { version = "0.2.2", default-features = false }
@@ -92,8 +108,8 @@ raw-cpuid = { version = "11", default-features = false }
 rand_core = { version = "0.6", default-features = false }
 rand_chacha = { version = "0.3", default-features = false }
 zeroize = { version = "1", default-features = false, features = ["alloc"] }
-libm = { version = "0.2", default-features = false }
-half = { version = "2.7.1", default-features = false }
+libm = { workspace = true }
+half = { workspace = true }
 skrifa = { version = "0.44.0", default-features = false, features = ["libm"] }
 hashbrown = { version = "0.17.0", default-features = false }
 memchr = { version = "2.8.0", default-features = false }
@@ -115,7 +131,7 @@ png = { version = "0.18.1", default-features = false }
 zune-core = { version = "0.5.1", default-features = false }
 zune-jpeg = { version = "0.5.15", default-features = false, features = ["x86", "portable_simd"] }
 crc32fast = { version = "1.5.0", default-features = false }
-sha2 = { version = "0.10.9", default-features = false }
+sha2 = { workspace = true }
 embedded-websocket = { version = "0.9.4", default-features = false }
 symphonia-core = { version = "0.5.5", default-features = false }
 symphonia-codec-aac = { version = "0.5.5", default-features = false }
@@ -150,8 +166,8 @@ trueos-vm = { path = "crates/trueos-vm" }
 trueos-locale = { path = "crates/trueos-locale", default-features = false }
 trueos-helio-artifact = { path = "crates/trueos-helio-artifact" }
 trueos-helio-runtime = { path = "crates/trueos-helio-runtime" }
-serde = { version = "1.0", default-features = false, features = ["alloc", "derive"] }
-serde_json = { version = "1.0", default-features = false, features = ["alloc"] }
+serde = { workspace = true, features = ["alloc", "derive"] }
+serde_json = { workspace = true, features = ["alloc"] }
 mio = { version = "1.2.0", default-features = false, features = ["os-poll", "net"] }
 hyper = { version = "1.10.0", default-features = false, features = ["client", "http1", "server"] }
 rdrand = { version = "0.8", default-features = false }
@@ -196,4 +212,4 @@ symphonia-core = { path = "vendor/symphonia-core-0.5.5-trueos" }
 symphonia-codec-aac = { path = "vendor/symphonia-codec-aac-0.5.5-trueos" }
 
 [build-dependencies]
-sha2 = "=0.10.9"
+sha2 = { workspace = true, features = ["std"] }

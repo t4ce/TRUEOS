@@ -9,19 +9,9 @@
 //!
 //! The MDCT in this module is implemented in-terms of a forward FFT.
 
-#[cfg(any(feature = "opt-simd-sse", feature = "opt-simd-avx", feature = "opt-simd-neon"))]
-mod simd;
-
-#[cfg(any(feature = "opt-simd-sse", feature = "opt-simd-avx", feature = "opt-simd-neon"))]
-pub use simd::*;
-
-#[cfg(not(any(feature = "opt-simd-sse", feature = "opt-simd-avx", feature = "opt-simd-neon")))]
+// This minimized source bundle contains only the scalar MDCT implementation.
+// Do not expose SIMD feature flags until their corresponding module is vendored.
 mod no_simd;
-#[cfg(not(any(
-    feature = "opt-simd-sse",
-    feature = "opt-simd-avx",
-    feature = "opt-simd-neon"
-)))]
 pub use no_simd::*;
 
 #[cfg(test)]
