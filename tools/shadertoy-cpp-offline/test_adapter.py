@@ -6,6 +6,17 @@ from adapter import AdapterError, adapt, translate_body
 
 
 class AdapterTests(unittest.TestCase):
+    def test_focus_opt_in_preserves_default_abi_and_invocation_state(self):
+        source = "float phase=0.; void mainImage(out vec4 c, vec2 p) { phase=iTime; c=vec4(p,phase,1.); }"
+        original = adapt(source)
+        focused = adapt(source, foveated=True)
+        self.assertNotIn("render_control", original)
+        self.assertNotIn("__global const uint *source", original)
+        self.assertIn("uint4 render_control", focused)
+        self.assertIn("__global const uint *source", focused)
+        self.assertLess(focused.index("st_focus_bilinear(source"), focused.index("ShaderToyInvocation invocation = {}"))
+        self.assertIn("invocation.mainImage(frag_color, frag_coord, uniforms)", focused)
+
     def test_threads_uniforms_through_helpers_and_main(self) -> None:
         body = translate_body(
             """

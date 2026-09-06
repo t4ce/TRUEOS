@@ -26,6 +26,7 @@ fn direct_rcs_write_shadertoy_payload(
     state: DirectRcsState,
     dst: GpgpuRgba8Surface,
     params: ShaderToyFrameParams,
+    pass: ShaderToyPass,
     first_row: u32,
 ) -> bool {
     let Some(contract) = shadertoy_contract(params.shader_id) else {
@@ -39,6 +40,10 @@ fn direct_rcs_write_shadertoy_payload(
         return false;
     }
 
+    let focused_abi = params.shader_id == SHADERTOY_SHADER_PROTEAN_CLOUDS;
+    if !shadertoy_payload_layout_matches(contract, focused_abi) {
+        return false;
+    }
     let uniforms_gpu = DIRECT_RCS_GPU_VA_BATCH_BASE + SHADERTOY_UNIFORMS_OFFSET_BYTES as u64;
     unsafe {
         let payload = state.batch_virt.add(SHADERTOY_PAYLOAD_OFFSET_BYTES);
@@ -58,9 +63,18 @@ fn direct_rcs_write_shadertoy_payload(
         core::ptr::write_volatile(dwords.add(13), (dst.gpu >> 32) as u32);
         core::ptr::write_volatile(dwords.add(14), uniforms_gpu as u32);
         core::ptr::write_volatile(dwords.add(15), (uniforms_gpu >> 32) as u32);
-        core::ptr::write_volatile(dwords.add(16), dst.width);
-        core::ptr::write_volatile(dwords.add(17), dst.height);
-        core::ptr::write_volatile(dwords.add(18), dst.pitch_bytes);
+        // The third pointer moves width/height/pitch from bytes 64/68/72
+        // to 72/76/80. Check this against the authenticated generated contract.
+        let dimensions = if focused_abi {
+            core::ptr::write_volatile(dwords.add(16), pass.source.gpu as u32);
+            core::ptr::write_volatile(dwords.add(17), (pass.source.gpu >> 32) as u32);
+            18
+        } else {
+            16
+        };
+        core::ptr::write_volatile(dwords.add(dimensions), dst.width);
+        core::ptr::write_volatile(dwords.add(dimensions + 1), dst.height);
+        core::ptr::write_volatile(dwords.add(dimensions + 2), dst.pitch_bytes);
 
         let local_ids = payload.add(SHADERTOY_CROSS_THREAD_BYTES) as *mut u16;
         for lane in 0..16usize {
@@ -70,8 +84,8 @@ fn direct_rcs_write_shadertoy_payload(
         }
 
         let values = [
-            dst.width as f32,
-            dst.height as f32,
+            pass.width as f32,
+            pass.height as f32,
             1.0,
             params.time_seconds,
             params.mouse_x,
@@ -88,8 +102,23 @@ fn direct_rcs_write_shadertoy_payload(
             params.frame as f32,
         ];
         let uniforms = state.batch_virt.add(SHADERTOY_UNIFORMS_OFFSET_BYTES) as *mut u32;
+        core::ptr::write_bytes(uniforms, 0, SHADERTOY_UNIFORMS_BYTES / 4);
         for (index, value) in values.into_iter().enumerate() {
             core::ptr::write_volatile(uniforms.add(index), value.to_bits());
+        }
+        for (i, value) in [
+            pass.phase,
+            pass.source.width,
+            pass.source.height,
+            pass.source.pitch_bytes,
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            core::ptr::write_volatile(uniforms.add(16 + i), value);
+        }
+        for (i, value) in pass.focus.into_iter().enumerate() {
+            core::ptr::write_volatile(uniforms.add(20 + i), value.to_bits());
         }
     }
     true
@@ -100,10 +129,13 @@ fn direct_rcs_encode_shadertoy_batch(
     upload: UploadedKernelArtifact,
     dst: GpgpuRgba8Surface,
     params: ShaderToyFrameParams,
+    pass: ShaderToyPass,
     first_row: u32,
     rows: u32,
 ) -> bool {
-    if shadertoy_dispatch_rows(params.shader_id, dst.width, dst.height, first_row) != Some(rows) {
+    if shadertoy_dispatch_rows(params.shader_id, pass.phase, dst.width, dst.height, first_row)
+        != Some(rows)
+    {
         return false;
     }
     let Some(contract) = shadertoy_contract(params.shader_id) else {
@@ -127,7 +159,16 @@ fn direct_rcs_encode_shadertoy_batch(
     if upload.bin_sha256 != expected_artifact.bin_sha256
         || upload.bytes != package.bin_bytes
         || contract.bindings.is_empty()
-        || contract.bindings.len() > 2
+        || !shadertoy_payload_layout_matches(
+            contract,
+            params.shader_id == SHADERTOY_SHADER_PROTEAN_CLOUDS,
+        )
+        || contract.bindings.len()
+            > if params.shader_id == SHADERTOY_SHADER_PROTEAN_CLOUDS {
+                3
+            } else {
+                2
+            }
         || contract.bindings[0].arg_index != 0
         || contract.bindings[0].bti != 0
     {
@@ -153,7 +194,7 @@ fn direct_rcs_encode_shadertoy_batch(
     unsafe {
         let binding = state.batch_virt.add(SHADERTOY_BINDING_TABLE_OFFSET_BYTES) as *mut u32;
         core::ptr::write_volatile(binding, SHADERTOY_DST_SURFACE_STATE_OFFSET_BYTES as u32);
-        if binding_count == 2 {
+        if binding_count >= 2 {
             if contract.bindings[1].arg_index != 1 || contract.bindings[1].bti != 1 {
                 return false;
             }
@@ -163,20 +204,40 @@ fn direct_rcs_encode_shadertoy_batch(
             );
         }
     }
+    if binding_count == 3 {
+        if contract.bindings[2].arg_index != 5 || contract.bindings[2].bti != 2 {
+            return false;
+        }
+        unsafe {
+            let binding = state.batch_virt.add(SHADERTOY_BINDING_TABLE_OFFSET_BYTES) as *mut u32;
+            core::ptr::write_volatile(
+                binding.add(2),
+                SHADERTOY_SOURCE_SURFACE_STATE_OFFSET_BYTES as u32,
+            );
+        }
+        if !direct_rcs_write_buffer_surface_state(
+            state,
+            SHADERTOY_SOURCE_SURFACE_STATE_OFFSET_BYTES,
+            pass.source.gpu,
+            pass.source.bytes,
+        ) {
+            return false;
+        }
+    }
     let uniforms_gpu = DIRECT_RCS_GPU_VA_BATCH_BASE + SHADERTOY_UNIFORMS_OFFSET_BYTES as u64;
     if !direct_rcs_write_buffer_surface_state(
         state,
         SHADERTOY_DST_SURFACE_STATE_OFFSET_BYTES,
         dst.gpu,
         dst.bytes,
-    ) || (binding_count == 2
+    ) || (binding_count >= 2
         && !direct_rcs_write_buffer_surface_state(
             state,
             SHADERTOY_UNIFORMS_SURFACE_STATE_OFFSET_BYTES,
             uniforms_gpu,
             SHADERTOY_UNIFORMS_BYTES,
         ))
-        || !direct_rcs_write_shadertoy_payload(state, dst, params, first_row)
+        || !direct_rcs_write_shadertoy_payload(state, dst, params, pass, first_row)
     {
         return false;
     }
@@ -263,5 +324,32 @@ fn direct_rcs_encode_shadertoy_batch(
 
     super::dma_flush(state.batch_virt, DIRECT_RCS_BATCH_BYTES);
     super::dma_flush(state.result_virt, DIRECT_RCS_RESULT_BYTES);
+    true
+}
+
+// Host payload writers are deliberately narrower than the general artifact
+// loader. Reject a newly baked ABI drift instead of launching shifted pointers.
+fn shadertoy_payload_layout_matches(contract: &GpgpuKernelAbiContract, focused: bool) -> bool {
+    let dimensions = if focused { 72 } else { 64 };
+    let offsets = [48, 56, dimensions, dimensions + 4, dimensions + 8, 64];
+    let count = if focused { 6 } else { 5 };
+    if contract.payload_args.len() != count || (focused && contract.bindings.len() != 3) {
+        return false;
+    }
+    for (i, arg) in contract.payload_args.iter().enumerate() {
+        let pointer = i < 2 || i == 5;
+        if arg.arg_index as usize != i
+            || arg.offset_bytes != offsets[i]
+            || arg.size_bytes != if pointer { 8 } else { 4 }
+            || arg.kind
+                != if pointer {
+                    GpgpuArtifactArgKind::ByPointer
+                } else {
+                    GpgpuArtifactArgKind::ByValue
+                }
+        {
+            return false;
+        }
+    }
     true
 }

@@ -1,0 +1,26 @@
+
+// Output pixels -> sample-space pixels. The mapping and its first derivative
+// meet identity at the focus disk's boundary; center magnification is boost.
+inline float2 st_focus_to_sample(float2 p, float4 focus) {
+    float2 d = p - focus.xy;
+    float radius = length(d);
+    float t = clamp(1.0f - radius / focus.z, 0.0f, 1.0f);
+    return focus.xy + d * (1.0f + (focus.w - 1.0f) * t * t);
+}
+// Invert the monotone radius map only for the expensive samples. The cheap
+// full-resolution resolve uses the direct polynomial above, not this solve.
+inline float2 st_focus_to_output(float2 p, float4 focus) {
+    float2 d = p - focus.xy;
+    float radius = length(d);
+    if (radius >= focus.z || radius < 1e-5f) return p;
+    float y = radius / focus.z;
+    float a = focus.w - 1.0f;
+    float x = y / focus.w;
+    for (int i=0; i<5; ++i) {
+        float u = 1.0f - x;
+        float f = x * (1.0f + a*u*u) - y;
+        float derivative = 1.0f + a*u*(1.0f - 3.0f*x);
+        x = clamp(x - f / derivative, 0.0f, 1.0f);
+    }
+    return focus.xy + d * (x / y);
+}

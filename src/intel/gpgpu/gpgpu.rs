@@ -38,6 +38,7 @@ include!("operations/entropy_stream.rs");
 include!("operations/submission_2d.rs");
 include!("operations/effects.rs");
 include!("operations/cpp_demo.rs");
+include!("operations/shadertoy_focus.rs");
 include!("operations/shadertoy.rs");
 include!("operations/cpp_audio_visualizer.rs");
 include!("operations/particle_craft.rs");

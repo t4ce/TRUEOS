@@ -245,7 +245,7 @@ pub(crate) fn allocate_font_instance_rgba8_surface_cleared(
         recycle_font_coverage_gpu_va(gpu, bytes);
         return None;
     };
-    Some(GpgpuOwnedRgba8Surface { surface, virt })
+    Some(GpgpuOwnedRgba8Surface { surface, virt, system_service: false })
 }
 
 pub(crate) fn allocate_font_instance_state(capacity: usize) -> Option<GpgpuOwnedFontInstanceState> {

@@ -9,6 +9,7 @@ This is a source adapter, not a second rendering backend.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 import re
 
 
@@ -746,12 +747,44 @@ inline mat3 operator*(float s, mat3 m) { return m * s; }
 '''
 
 
-def adapt(source: str, kernel_name: str = "shadertoy_image") -> str:
+_FOVEATED_COORDINATES = r'''
+    float2 output_pixel = convert_float2((uint2)(x,y)) + (float2)(0.5f);
+    if (uniforms->render_control.x == 2u) {
+        float2 sample_pixel = st_focus_to_sample(output_pixel, uniforms->focus_control);
+        sample_pixel *= convert_float2(uniforms->render_control.yz) / uniforms->resolution_time.xy;
+        float4 color = st_focus_bilinear(source, sample_pixel - (float2)(0.5f), uniforms->render_control);
+        output[(size_t)y * (pitch_bytes/4u) + x] = st_pack_rgba8(color);
+        return;
+    }
+    if (uniforms->render_control.x == 1u) {
+        output_pixel *= uniforms->resolution_time.xy / convert_float2((uint2)(width,height));
+        output_pixel = st_focus_to_output(output_pixel, uniforms->focus_control);
+    }
+    float2 frag_coord = (float2)(output_pixel.x, uniforms->resolution_time.y-output_pixel.y);
+'''
+
+
+def adapt(source: str, kernel_name: str = "shadertoy_image", *, foveated: bool = False) -> str:
     if "\x00" in source:
         raise AdapterError("shader source contains a NUL byte")
     if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", kernel_name) is None:
         raise AdapterError(f"invalid generated kernel name: {kernel_name!r}")
     epilogue = _EPILOGUE.replace("shadertoy_image", kernel_name)
+    prelude = _PRELUDE
+    if foveated:
+        # Opt-in ABI: first 64 uniform bytes are unchanged; a third buffer is
+        # read only by the resolve branch. Inline helpers into the authenticated
+        # generated source so there is no untracked runtime include dependency.
+        prelude = prelude.replace("    float4 timing;", "    float4 timing;\n"
+                                  "    uint4 render_control;\n    float4 focus_control;")
+        helpers = "".join(Path(__file__).with_name(name).read_text(encoding="utf-8")
+                          for name in ("foveated_coordinates.clcpp", "foveated.clcpp"))
+        epilogue = epilogue.replace("kernel TRUEOS_REQD", helpers + "\nkernel TRUEOS_REQD")
+        epilogue = epilogue.replace("    uint pitch_bytes)",
+                                   "    uint pitch_bytes,\n    __global const uint *source)")
+        epilogue = epilogue.replace(
+            "    float2 frag_coord = (float2)((float)x + 0.5f, (float)(height - y) - 0.5f);",
+            _FOVEATED_COORDINATES)
     private_globals = _needs_invocation_state(source)
     body = translate_body(source, private_globals=private_globals)
     helpers = _MATRIX_SCALAR_HELPERS if _uses_scaled_matrix_constructor(source) else ""
@@ -770,4 +803,4 @@ def adapt(source: str, kernel_name: str = "shadertoy_image") -> str:
             "    ShaderToyInvocation invocation = {};\n"
             "    invocation.mainImage(frag_color, frag_coord, uniforms);",
         )
-    return _PRELUDE + helpers + body + epilogue
+    return prelude + helpers + body + epilogue

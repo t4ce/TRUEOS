@@ -1,5 +1,9 @@
 # Protean Clouds lighting update
 
+This records the lighting-only update. The subsequent
+[compiler and fullscreen dispatch update](RUNTIME_PERFORMANCE.md) supersedes
+the artifact hash and current timings below, with the same GLSL lighting code.
+
 Local check: 2026-09-06. F6 uses the optimized
 `TRUEOS-Blueprints/apps/shadertoy/assets/protean_clouds/input.glsl`.
 `original.glsl` beside it preserves the previously admitted source.

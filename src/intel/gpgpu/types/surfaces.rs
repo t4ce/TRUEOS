@@ -131,6 +131,7 @@ impl GpgpuRgba8Surface {
 pub(crate) struct GpgpuOwnedRgba8Surface {
     surface: GpgpuRgba8Surface,
     virt: *mut u8,
+    system_service: bool,
 }
 
 unsafe impl Send for GpgpuOwnedRgba8Surface {}
@@ -173,7 +174,12 @@ impl GpgpuOwnedRgba8Surface {
 
 impl Drop for GpgpuOwnedRgba8Surface {
     fn drop(&mut self) {
-        if !retire_font_rcs_ppgtt_range(self.surface.gpu, self.surface.phys, self.surface.bytes) {
+        let retired = if self.system_service {
+            retire_shadertoy_scratch_range(self.surface)
+        } else {
+            retire_font_rcs_ppgtt_range(self.surface.gpu, self.surface.phys, self.surface.bytes)
+        };
+        if !retired {
             crate::log_error!(
                 target: "gpgpu";
                 "intel/gpgpu: persistent RGBA8 backing retirement refused phys=0x{:X} gpu=0x{:X} bytes={} action=no-unmap-no-free\n",

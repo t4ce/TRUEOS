@@ -25,12 +25,14 @@ for shader in "${shaders[@]}"; do
       toolchain_lock="${tool_dir}/toolchains/adls-shadertoy-relaxed.lock.json"
       ;;
   esac
+  adapter_flags=()
+  if [[ "${shader}" == protean_clouds ]]; then adapter_flags+=(--foveated); fi
   kernel_name="shadertoy_${shader}"
   shader_dir="${assets_dir}/${shader}"
   "${python_bin}" -B "${adapter_dir}/export_kernel.py" \
     "${shader_dir}/input.glsl" \
     "${shader_dir}/kernel.clcpp" \
-    --kernel-name "${kernel_name}"
+    --kernel-name "${kernel_name}" "${adapter_flags[@]}"
 
   # Compile an exact staging copy under TRUEOS so provenance paths are relative
   # and package hashes do not depend on the Blueprint checkout's absolute path.

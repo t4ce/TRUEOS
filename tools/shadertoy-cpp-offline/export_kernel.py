@@ -14,11 +14,12 @@ def main() -> int:
     parser.add_argument("source", type=Path)
     parser.add_argument("output", type=Path)
     parser.add_argument("--kernel-name", required=True)
+    parser.add_argument("--foveated", action="store_true", help="emit the reviewed two-pass focus ABI")
     args = parser.parse_args()
 
     try:
         source = args.source.read_text(encoding="utf-8")
-        generated = adapt(source, kernel_name=args.kernel_name)
+        generated = adapt(source, kernel_name=args.kernel_name, foveated=args.foveated)
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(generated, encoding="utf-8")
     except (OSError, UnicodeError, AdapterError) as error:

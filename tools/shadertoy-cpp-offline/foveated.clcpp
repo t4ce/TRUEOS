@@ -1,0 +1,16 @@
+// Bilinear RGBA8 reconstruction; coordinate helpers are prepended by adapter.py.
+inline float4 st_focus_unpack(uint c) {
+    return convert_float4((uint4)(c&255u, (c>>8)&255u, (c>>16)&255u, 255u)) * (1.0f/255.0f);
+}
+inline float4 st_focus_bilinear(__global const uint *source, float2 p, uint4 controls) {
+    p = clamp(p, (float2)(0.0f), convert_float2(controls.yz)-(float2)(1.0f));
+    uint2 lo = convert_uint2(p);
+    uint2 hi = min(lo + (uint2)(1u), controls.yz - (uint2)(1u));
+    float2 w = p - convert_float2(lo);
+    uint pitch = controls.w / 4u;
+    float4 a = st_focus_unpack(source[(size_t)lo.y*pitch+lo.x]);
+    float4 b = st_focus_unpack(source[(size_t)lo.y*pitch+hi.x]);
+    float4 c = st_focus_unpack(source[(size_t)hi.y*pitch+lo.x]);
+    float4 d = st_focus_unpack(source[(size_t)hi.y*pitch+hi.x]);
+    return mix(mix(a,b,w.x),mix(c,d,w.x),w.y);
+}

@@ -28,6 +28,12 @@ ABI contracts; the Blueprint transfers complete authenticated packages at startu
 See [the runtime path](../../crates/trueos-shader/gpgpu/kernels/SHADERTOY.md).
 Candidate preview sessions remain under `bld/` and are not automatically admitted.
 
+The native preview and four reviewed visual effects now use a separate
+`-cl-fast-relaxed-math` backend profile. Large runtime frames use bounded row
+batches, preserving every pixel and the existing retirement checks. See
+[runtime performance](RUNTIME_PERFORMANCE.md) for the fullscreen timeout finding,
+1440p timings, explicit native-intrinsic tests and precision tradeoffs.
+
 ## Ubuntu setup
 
 The host UI follows the existing Spirit tools and uses X11/Xwayland. Install
@@ -107,6 +113,7 @@ F6 now interpolates its expensive lighting probes between four-step anchors,
 while retaining the original density, ray steps and resolution. See
 [Protean Clouds performance](PROTEAN_CLOUDS_PERFORMANCE.md) for the measured
 roughly 1.6× host speedup, image comparisons and reproducible benchmark.
+The later backend-math update above provides an additional measured improvement.
 
 The adapter rejects `iChannel*`, samplers/texture calls, sound passes, and
 screen-space derivatives with a direct diagnostic. Picasso and QuadTexture
@@ -129,3 +136,17 @@ submit that artifact with the same ABI.
 ```sh
 make -C tools/shadertoy-cpp-offline test
 ```
+
+## Radial focus rendering
+
+The production Protean package now supports an optional smaller, radially warped
+sample image followed by a four-tap GPU reconstruction. The Blueprint defaults
+to that mode above 720p and exposes Space for native-resolution comparison.
+`TRUEOS-Blueprints/apps/shadertoy/FOVEATED_RENDERING.md` documents the mapping,
+local performance/quality results, ownership and reuse in a future Picasso
+material. `benchmark_protean_clouds` accepts `FOVEATED_MODE=full|uniform|radial`;
+older five-argument artifacts remain usable as full-resolution references.
+
+The adapter's `--foveated` export is opt-in and changes its GPU ABI. Only Protean
+is admitted with that layout. Run `python3 test_foveated_mapping.py` to test the
+actual coordinate functions on CPU using Clang vectors.

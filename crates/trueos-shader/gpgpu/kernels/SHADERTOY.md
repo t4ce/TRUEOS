@@ -69,13 +69,14 @@ mouse_x, mouse_y, click_x, click_y,
 date_year, date_month, date_day, date_seconds
 ```
 
-`version` must be `1`, `flags` must be zero, and `shader_id` is one of the
+`version` must be `1`. `flags` is zero, or bit 0 for F6 to request native
+resolution instead of automatic radial sampling. `shader_id` is one of the
 catalog IDs below.  All scalar inputs must be finite; time and delta are
 non-negative and frame rate is positive.  `window_id` is a separate argument.
 Blueprint supplies authenticated package bytes during registration. It cannot
 choose an unreviewed kernel, target, workgroup geometry, surface or GPU address.
 
-The host translates the time-related values into the shader's 64-byte
+The host translates the time-related values into the shader's first 64-byte
 `ShaderToyUniforms` block:
 
 ```text
@@ -84,6 +85,14 @@ mouse           = (mouse_x, mouse_y, click_x, click_y)
 date            = (date_year, date_month, date_day, date_seconds)
 timing          = (delta_seconds, frame_rate, sample_rate, float(frame))
 ```
+
+Protean adds 32 host-owned uniform bytes: `uint4 render_control` holds phase
+(0 native, 1 sample image, 2 reconstruction), source width/height/pitch;
+`float4 focus_control` holds focus x/y, radius, and boost. Resolution and mouse
+remain in full-image coordinates in both passes. Only the kernel chooses these
+controls and the scratch address. The third pointer argument (index 5) occupies
+cross-thread bytes 64–71; width/height/pitch move to 72/76/80 for F6. F1–F5 retain
+64/68/72. The encoder checks these offsets against each generated contract.
 
 ## The compute launch, unpacked
 
@@ -95,18 +104,18 @@ allocation:
 | Item | Contents |
 |---|---|
 | Interface descriptor | Kernel text offset, binding-table offset, and cross-thread length. |
-| Binding table | UI4 RGBA8 output at BTI 0; cube-field additionally exposes uniforms at BTI 1. |
+| Binding table | UI4 RGBA8 output at BTI 0; cube-field and Protean also expose uniforms at BTI 1; Protean reads samples at BTI 2. |
 | Cross-thread payload | Global-offset/local-size values, output and uniform pointers, width, height, and pitch. |
 | Per-thread payload | Local IDs for the 16 SIMD lanes. |
-| Uniform block | The four `float4` values above. |
+| Uniform block | The four `float4` values above, plus F6 host controls. |
 
 The encoder emits the necessary cache stalls/flushes, selects the GPGPU
 pipeline, loads the interface descriptor, stores a pre-marker, and emits one
-2D walker.  Its geometry is fixed by the leased surface:
+2D walker.  Its geometry is fixed by the host-owned pass output and bounded row count:
 
 ```text
 local size  = (16, 1, 1)       // required SIMD16 subgroup
-groups      = (ceil(width / 16), height, 1)
+groups      = (ceil(width / 16), rows_in_this_batch, 1)
 right mask  = active lanes in the final partial 16-pixel group
 ```
 
@@ -127,9 +136,18 @@ The current artifacts are:
 | 3 | `shadertoy_nguyen` | `7140703571a20d5640876caddbe5948aa84f8828ff1d621b6eae1ef7d67af54d` |
 | 4 | `shadertoy_palette_grid` | `2174c3002ff5e0c489de3ea4aff8da5b922b995e6075967a326eeb656e280124` |
 | 5 | `shadertoy_cosmic_strands` | `bf7e5b8a590526a36fa9684a4055d9dd255e36cba8b5ab75813ca3b59b4569d4` |
-| 6 | `shadertoy_protean_clouds` | `19119f60ffe6a9207bd24d40aecde2b672a27aa253e228f048f36a9c81782696` |
+| 6 | `shadertoy_protean_clouds` | `aad75d1acb31ae065420ee907d5c2bcbe9bb73b71f29c27943a0ec1504956e56` |
 
 All six contracts are SIMD16 with 96 bytes of cross-thread data, 96 bytes of
 per-thread local IDs, and no scratch or SLM. The cube-field and Protean Clouds artifacts expose
 its read-only uniform argument as both a stateless pointer and BTI 1; direct RCS
 dispatch binds the same kernel-owned block through both representations.
+
+
+Protean above 720p uses a radially warped sample image (up to 2× smaller on each
+axis), then four-tap GPU reconstruction. At 1440p this is eight cloud row batches
+and four cheap resolve batches. Only the completed resolve publishes the UI4
+buffer. Native mode and small windows keep the original full-resolution shader
+path. The scratch cache is owned across both passes and retained after an
+unretired submission. See the Blueprint's `FOVEATED_RENDERING.md` for the map,
+measurements and quality tradeoffs.
