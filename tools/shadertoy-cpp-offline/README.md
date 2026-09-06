@@ -20,6 +20,14 @@ pasted ShaderToy GLSL
 The pasted source and all generated session files stay under ignored `bld/`.
 The tool does not download or check in the linked shader.
 
+## Runtime Blueprint packages
+
+The five admitted shaders and their raw GLSL now live under
+`TRUEOS-Blueprints/apps/shadertoy/assets/`. The kernel retains trusted hashes and
+ABI contracts; the Blueprint transfers complete authenticated packages at startup.
+See [the runtime path](../../crates/trueos-shader/gpgpu/kernels/SHADERTOY.md).
+Candidate preview sessions remain under `bld/` and are not automatically admitted.
+
 ## Ubuntu setup
 
 The host UI follows the existing Spirit tools and uses X11/Xwayland. Install

@@ -364,8 +364,10 @@ pub(crate) fn upload_cpp_demo_rgba8_kernel() -> Option<UploadedKernelArtifact> {
     Some(upload)
 }
 
-pub(crate) fn upload_shadertoy_kernel(shader_id: u32) -> Option<UploadedKernelArtifact> {
-    let (artifact, gpu, slot) = match shader_id {
+fn shadertoy_artifact_slot(
+    shader_id: u32,
+) -> Option<(GpgpuKernelArtifact, u64, &'static Mutex<Option<UploadedKernelArtifact>>)> {
+    Some(match shader_id {
         SHADERTOY_SHADER_MANDELBROT => (
             SHADERTOY_MANDELBROT_ADLS_ARTIFACT,
             SHADERTOY_MANDELBROT_ADLS_GPU,
@@ -390,14 +392,48 @@ pub(crate) fn upload_shadertoy_kernel(shader_id: u32) -> Option<UploadedKernelAr
             &SHADERTOY_COSMIC_STRANDS_UPLOAD,
         ),
         _ => return None,
+    })
+}
+
+/// Dispatch only already-authenticated resident code. No filesystem/embedded fallback.
+pub(crate) fn upload_shadertoy_kernel(shader_id: u32) -> Option<UploadedKernelArtifact> {
+    let (_, _, slot) = shadertoy_artifact_slot(shader_id)?;
+    *slot.lock()
+}
+
+/// `package` is a complete kernel-owned copy, never a borrowed guest buffer.
+pub(crate) fn register_shadertoy_package(shader_id: u32, package: &[u8]) -> bool {
+    let Some(contract) = shadertoy_package::contract(shader_id) else {
+        return false;
     };
-    if let Some(upload) = *slot.lock() {
-        return Some(upload);
-    }
-    let dev = super::claimed_device()?;
-    let upload = upload_ppgtt_resident_artifact(dev, artifact, gpu)?;
-    *slot.lock() = Some(upload);
-    Some(upload)
+    let Some((bin, spv)) = contract.payloads(package) else {
+        crate::log_error!(target: "gpgpu"; "intel/gpgpu: shadertoy package rejected shader={} reason=package-sha256-or-layout\n", shader_id);
+        return false;
+    };
+    let Some((artifact, gpu, slot)) = shadertoy_artifact_slot(shader_id) else {
+        return false;
+    };
+    let Some(dev) = super::claimed_device() else {
+        return false;
+    };
+    // Serialize first upload and reuse; resident immutable code is never replaced.
+    let mut resident = slot.lock();
+    let Some(upload) = upload_artifact_bytes(
+        dev,
+        artifact,
+        gpu,
+        bin,
+        spv,
+        "blueprint",
+        artifact.name,
+        spv.len(),
+        GpgpuArtifactAddressSpace::CallerPpgtt,
+        *resident,
+    ) else {
+        return false;
+    };
+    *resident = Some(upload);
+    true
 }
 
 pub(crate) fn upload_cpp_audio_visualizer_rgba8_kernel() -> Option<UploadedKernelArtifact> {
@@ -823,31 +859,6 @@ fn known_artifact_slot(name: &str) -> Option<GpgpuKnownArtifactSlot> {
             artifact: CPP_DEMO_RGBA8_ADLS_ARTIFACT,
             gpu: CPP_DEMO_RGBA8_ADLS_GPU,
             upload: &CPP_DEMO_RGBA8_UPLOAD,
-        }),
-        SHADERTOY_MANDELBROT_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
-            artifact: SHADERTOY_MANDELBROT_ADLS_ARTIFACT,
-            gpu: SHADERTOY_MANDELBROT_ADLS_GPU,
-            upload: &SHADERTOY_MANDELBROT_UPLOAD,
-        }),
-        SHADERTOY_CUBE_FIELD_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
-            artifact: SHADERTOY_CUBE_FIELD_ADLS_ARTIFACT,
-            gpu: SHADERTOY_CUBE_FIELD_ADLS_GPU,
-            upload: &SHADERTOY_CUBE_FIELD_UPLOAD,
-        }),
-        SHADERTOY_NGUYEN_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
-            artifact: SHADERTOY_NGUYEN_ADLS_ARTIFACT,
-            gpu: SHADERTOY_NGUYEN_ADLS_GPU,
-            upload: &SHADERTOY_NGUYEN_UPLOAD,
-        }),
-        SHADERTOY_PALETTE_GRID_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
-            artifact: SHADERTOY_PALETTE_GRID_ADLS_ARTIFACT,
-            gpu: SHADERTOY_PALETTE_GRID_ADLS_GPU,
-            upload: &SHADERTOY_PALETTE_GRID_UPLOAD,
-        }),
-        SHADERTOY_COSMIC_STRANDS_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
-            artifact: SHADERTOY_COSMIC_STRANDS_ADLS_ARTIFACT,
-            gpu: SHADERTOY_COSMIC_STRANDS_ADLS_GPU,
-            upload: &SHADERTOY_COSMIC_STRANDS_UPLOAD,
         }),
         CPP_AUDIO_VISUALIZER_RGBA8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
             artifact: CPP_AUDIO_VISUALIZER_RGBA8_ADLS_ARTIFACT,

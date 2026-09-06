@@ -2,29 +2,30 @@
 set -euo pipefail
 
 # Regenerate and reproducibly bake the reviewed, single-pass ShaderToy catalog.
-# Runtime Blueprint code can select these exact-target artifacts; it never
-# submits source text or arbitrary GPU addresses to the kernel.
+# Blueprint-owned packages carry the payloads; the kernel keeps the trust records.
 
 tool_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 trueos_root="$(cd "${tool_dir}/../.." && pwd)"
 python_bin="${PYTHON:-python3}"
 adapter_dir="${trueos_root}/tools/shadertoy-cpp-offline"
-source_dir="${trueos_root}/crates/trueos-shader/gpgpu/kernels/shadertoy"
+blueprints_root="${TRUEOS_BLUEPRINTS_ROOT:-${trueos_root}/../TRUEOS-Blueprints}"
+assets_dir="${blueprints_root}/apps/shadertoy/assets"
 kernel_dir="${trueos_root}/crates/trueos-shader/gpgpu/kernels"
-publish_dir="${kernel_dir}/artifacts/adls/cpp"
+publish_dir="${trueos_root}/bld/shadertoy-blueprint-bake/published"
 profile="${tool_dir}/profiles/adls-4680-r0c-cpp.json"
 toolchain_lock="${tool_dir}/toolchains/adls-shadertoy-cpp-proof.lock.json"
 
 shaders=(mandelbrot cube_field nguyen palette_grid cosmic_strands)
 for shader in "${shaders[@]}"; do
   kernel_name="shadertoy_${shader}"
+  shader_dir="${assets_dir}/${shader}"
   "${python_bin}" -B "${adapter_dir}/export_kernel.py" \
-    "${source_dir}/${shader}.glsl" \
-    "${kernel_dir}/${kernel_name}.clcpp" \
+    "${shader_dir}/input.glsl" \
+    "${shader_dir}/kernel.clcpp" \
     --kernel-name "${kernel_name}"
 
   "${python_bin}" -B "${tool_dir}/bake.py" \
-    --source "${kernel_dir}/${kernel_name}.clcpp" \
+    --source "${shader_dir}/kernel.clcpp" \
     --artifact-name "${kernel_name}" \
     --profile "${profile}" \
     --variant cpp-native \
@@ -34,4 +35,12 @@ for shader in "${shaders[@]}"; do
     --repro-check \
     --toolchain-lock "${toolchain_lock}" \
     "$@"
+  for extension in bin spv manifest.json contract.rs; do
+    cp "${publish_dir}/${kernel_name}.${extension}" "${shader_dir}/kernel.${extension}"
+  done
+  # Only the ABI/hash contract remains a compiled kernel input.
+  cp "${shader_dir}/kernel.contract.rs" "${kernel_dir}/artifacts/adls/cpp/${kernel_name}.contract.rs"
 done
+
+"${python_bin}" -B "${adapter_dir}/package_blueprint.py" \
+  --blueprints-root "${blueprints_root}" --update-trust

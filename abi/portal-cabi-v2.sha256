@@ -218,4 +218,7 @@
 # TRS seeds (up to 512) and four submesh ranges sharing one PBR material.
 # All 306 pre-existing CABI declarations and retained V1/V2 records were
 # compared unchanged against 90b09e29f^ before updating this lock.
-fb30d47347f61ecb81e7dc0099767ed96eabbae47d3c151244da6c7268ffa127
+# ShaderToy package upload v1 adds one bounded, owner-scoped transfer symbol.
+# All pre-existing function signatures are unchanged. ShaderToy render now
+# requires package registration; rebuild the Shadertoy Blueprint with this kernel.
+e0278e133c9a72eb5738a2a5ee4ebbcae2e0205292ad5e5022e06238d4d79f01

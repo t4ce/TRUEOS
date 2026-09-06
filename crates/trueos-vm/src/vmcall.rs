@@ -244,6 +244,7 @@ pub const OP_BP_DOBBY_UI4_POINTER: u32 = 0x119;
 pub const OP_BP_DOBBY_UI4_TYPE: u32 = 0x11A;
 pub const OP_BP_DOBBY_UI4_KEY: u32 = 0x11B;
 pub const OP_BP_UI4_SCENE_FRAME_OPEN_VISUAL: u32 = 0x11C;
+pub const OP_BP_UI4_SCENE_SHADERTOY_UPLOAD_V1: u32 = 0x12F; // packed size/window, offset/id, package chunk
 pub const OP_BP_UI4_SCENE_SHADERTOY_RENDER: u32 = 0x11D;
 pub const OP_BP_UI4_SCENE_VISUAL_FRAME_BEGIN: u32 = 0x11E;
 pub const OP_BP_UI4_CONTEXT_MENU_REGISTER: u32 = 0x11F;

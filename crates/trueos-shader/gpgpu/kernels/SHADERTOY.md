@@ -1,79 +1,59 @@
 # ShaderToy reviewed Image catalog
 
-This directory carries a deliberately narrow first ShaderToy integration. The
-review inputs are in `shadertoy/*.glsl`; the generated C++ for OpenCL kernels
-are `shadertoy_*.clcpp`; and the exact ADL-S artifacts and ABI contracts are in
-`artifacts/adls/cpp/`.
+The five reviewed shaders are owned by `TRUEOS-Blueprints/apps/shadertoy/assets/`.
+Each directory contains `input.glsl`, generated `kernel.clcpp`, `kernel.bin`,
+`kernel.spv`, `kernel.manifest.json`, and `kernel.contract.rs`. Each `.stpkg`
+bundles those six files. The kernel retains the five `.contract.rs` files here
+and the small generated package hash/length catalog in
+`src/intel/gpgpu/artifacts/shadertoy_packages.rs`; it embeds no ShaderToy payload.
 
-Regenerate and reproducibly verify the complete catalog with:
+Regenerate and reproducibly verify the catalog with:
 
-```text
+```sh
 make intel-gpu-bake-shadertoy-cpp
+python3 tools/shadertoy-cpp-offline/test_blueprint_packages.py
 ```
 
-The Blueprint ABI admits only catalog IDs 1 through 5 and a pointer-free,
-64-byte ShaderToy uniform block. Source text, SPIR-V, Zebin, arbitrary dispatch
-geometry, pointers, and GPU virtual addresses remain kernel-owned pending a
-broader security analysis.
+The bake script uses the existing compiler lock and writes the payloads to the
+Blueprint checkout (`TRUEOS_BLUEPRINTS_ROOT` overrides the sibling default).
+Package generation includes raw source and provenance in the authenticated hash.
+`package_blueprint.py --check` verifies the result without updating trust.
 
-## One clean map: from Blueprint to pixels
+## From Blueprint to pixels
 
-There are deliberately two separate paths.  The **authoring path** creates a
-reviewed, immutable artifact; the **frame path** selects one of those artifacts
-and dispatches it.  The important boundary is that the Blueprint crosses only
-the frame path.
+1. Offline, GLSL is adapted to C++ for OpenCL, compiled to SPIR-V, and baked to
+   an exact-target Intel Zebin and ABI contract. The package includes every input
+   and output listed above; LLVM bitcode remains a transient build intermediate.
+2. At startup, `Frame::register_shadertoy` transfers each package in chunks of at
+   most 2048 bytes through `trueos_cabi_ui4_scene_shadertoy_upload_v1` / guest
+   opcode `0x12F`. The kernel derives the Blueprint owner and checks its visual
+   window. The total size must equal the kernel's trusted catalog size. Offset
+   zero resets staging; subsequent offsets must be contiguous and shader IDs
+   must agree. One bounded staging buffer belongs to each window and is released
+   on completion, invalid ordering, replacement, or window teardown.
+3. On the final chunk, the kernel authenticates its complete, immutable copy.
+   The package SHA-256 covers the header, binary, SPIR-V, raw GLSL, generated
+   C++, manifest and contract copy. Existing Zebin/SPIR-V hashes, target policy,
+   ABI constraints, and ELF entry-range validation are then applied before DMA
+   allocation. This remains an exact-byte allowlist, not public-key signing.
+4. Approved executable bytes are copied and flushed into kernel-owned DMA
+   pages; equal resident artifacts are reused without replacing live code. The
+   window gains permission to render that registered catalog ID. Rendering has
+   no kernel-embedded or filesystem fallback.
+5. Each frame sends the unchanged pointer-free 64-byte uniform block via
+   `0x11D`. UI4 checks registration and ownership, takes the leased back buffer,
+   maps the executable into PPGTT and dispatches the existing SIMD16 walker.
+   Completion fencing and timeout quarantine are unchanged.
 
-```text
-AUTHORING (offline; changes what can be selected)
+Rebuild both the kernel and Shadertoy Blueprint for this transition: an old
+Blueprint has no package registration step and rendering fails closed.
 
-  shadertoy/<name>.glsl
-        |
-        | adapter.py / export_kernel.py: GLSL Image pass -> C++ for OpenCL
-        v
-  shadertoy_<name>.clcpp
-        |
-        | Clang (spir64) -> LLVM bitcode -> llvm-spirv -> IGC/ocloc
-        v
-  <name>.spv + <name>.bin (Zebin) + <name>.contract.rs
-        |
-        | compiled into the kernel catalog
-        v
-reviewed runtime catalog: IDs 1, 2, 3, 4, 5
-
-FRAME (runtime; writes one UI4 back buffer)
-
-  Blueprint: window_id + TrueosUi4ShadertoyParamsV1 (64 bytes)
-        |
-        | guest: OP_BP_UI4_SCENE_SHADERTOY_RENDER (0x11D)
-        | host: C ABI directly
-        v
-  UI4 validates the catalog ID and takes the current write lease
-        |
-        v
-  GPGPU uploads/selects the matching checked Zebin and maps it into PPGTT
-        |
-        v
-  RCS encoder builds interface state, payload, and a GPGPU_WALKER command
-        |
-        v
-  SIMD16 compute kernel writes opaque RGBA8 pixels to the leased back buffer
-        |
-        v
-  post-dispatch marker is polled -> producer release -> compositor may scan out
-```
-
-The source files to read in that order are:
-
-| Concern | Starting point | What it answers |
-|---|---|---|
-| Author a catalog entry | `shadertoy/<name>.glsl` | The ordinary ShaderToy `mainImage` source. |
-| Adapt and bake it | `tools/shadertoy-cpp-offline/adapter.py`, `tools/intel-gpu-bakery/bake_adls_cpp_shadertoy.sh` | How an Image pass becomes a target-specific artifact and ABI contract. |
-| Blueprint contract | `crates/trueos-v/src/bp_abi.rs` | The exact 16-word / 64-byte request struct. |
-| Guest crossing | `src/hv/vmcall.rs` | How the 64-byte payload reaches the host through opcode `0x11D`. |
-| UI4 ownership | `src/ui4/blueprint_text.rs` | Validation, back-buffer lease, and release to the compositor. |
-| Submission orchestration | `src/intel/gpgpu/operations/shadertoy.rs` | Upload, PPGTT mapping, submit, poll, and quarantine behavior. |
-| Actual GPU launch | `src/intel/gpgpu/rcs/shadertoy.rs` | Interface descriptor, bindings, cross-thread payload, and walker geometry. |
-| What executes | `shadertoy_<name>.clcpp` and `artifacts/adls/cpp/shadertoy_<name>.contract.rs` | The kernel entry point and the generated ABI it requires. |
+The package wire format is eight bytes `STPKG01\0`, followed by six little-endian
+u32 lengths, then the six files in the order listed above **with Zebin first,
+SPIR-V second, GLSL third, C++ fourth, manifest fifth and contract sixth**.
+Kernel slicing uses trusted lengths only after whole-package authentication.
+The packed blueprint compresses these files; compressed size is not resident
+payload size.
 
 ## What Blueprint actually controls
 
@@ -89,8 +69,8 @@ date_year, date_month, date_day, date_seconds
 `version` must be `1`, `flags` must be zero, and `shader_id` is one of the
 catalog IDs below.  All scalar inputs must be finite; time and delta are
 non-negative and frame rate is positive.  `window_id` is a separate argument.
-Blueprint cannot choose a kernel name, target, workgroup geometry, surface,
-address, source, SPIR-V, or Zebin.
+Blueprint supplies authenticated package bytes during registration. It cannot
+choose an unreviewed kernel, target, workgroup geometry, surface or GPU address.
 
 The host translates the time-related values into the shader's 64-byte
 `ShaderToyUniforms` block:

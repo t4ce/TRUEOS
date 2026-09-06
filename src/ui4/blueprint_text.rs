@@ -10,6 +10,7 @@ use alloc::{collections::VecDeque, string::String, vec::Vec};
 use core::sync::atomic::{AtomicU32, Ordering};
 use spin::Mutex;
 use trueos_time::Instant;
+use crate::intel::gpgpu::shadertoy_package::ShaderToyPackageUpload;
 
 use crate::intel::gpgpu::{
     ALPHA_BLEND_WORKLIST_FLAG_COPY, ALPHA_BLEND_WORKLIST_FLAG_SRC_OVER,
@@ -680,6 +681,8 @@ struct BlueprintSceneSurface {
     gpu_submission_unretired: bool,
     vgpu_surface: Option<u64>,
     particle_craft: Option<GpgpuOwnedParticleCraftState>,
+    shadertoy_upload: Option<ShaderToyPackageUpload>,
+    shadertoy_registered: u32,
     placement: WindowPlacement,
     launch_selection: Option<(Ui4CursorSource, u32, u32)>,
     skybox: Option<OwnedRgb565Surface>,
@@ -1353,6 +1356,8 @@ fn open_blueprint_frame(
                 gpu_submission_unretired: false,
                 vgpu_surface: None,
                 particle_craft: None,
+                shadertoy_upload: None,
+                shadertoy_registered: 0,
                 placement,
                 launch_selection: desktop_shell_launch
                     .map(|launch| (launch.source, launch.x, launch.y)),
@@ -1405,6 +1410,8 @@ fn open_blueprint_frame(
         gpu_submission_unretired: false,
         vgpu_surface: None,
         particle_craft: None,
+        shadertoy_upload: None,
+        shadertoy_registered: 0,
         placement,
         launch_selection: desktop_shell_launch.map(|launch| (launch.source, launch.x, launch.y)),
         skybox: None,
@@ -3438,9 +3445,100 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_particle_craft_render(
     }
 }
 
-/// Execute one reviewed ShaderToy artifact over the complete visual-mode UI4
-/// back buffer. This provisional boundary intentionally accepts no source,
-/// SPIR-V, Zebin, pointers, or GPU virtual addresses from the Blueprint.
+/// Copy one bounded package chunk into the calling Blueprint's window.
+/// Offset zero starts/restarts a transfer. Contiguous final bytes trigger admission.
+/// The render call retains its pointer-free uniform ABI and never accepts GPU VAs.
+pub unsafe extern "C" fn trueos_cabi_ui4_scene_shadertoy_upload_v1(
+    window_id: u32,
+    shader_id: u32,
+    offset: u32,
+    package_len: u32,
+    bytes: *const u8,
+    len: usize,
+) -> i32 {
+    if bytes.is_null() || len == 0 || len > 2048 {
+        return ERROR_INVALID;
+    }
+    let bytes = unsafe { core::slice::from_raw_parts(bytes, len) };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_status(
+            trueos_vm::vmcall::OP_BP_UI4_SCENE_SHADERTOY_UPLOAD_V1,
+            (u64::from(package_len) << 32) | u64::from(window_id),
+            (u64::from(offset) << 32) | u64::from(shader_id),
+            bytes,
+        );
+    }
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT;
+    };
+    write_shadertoy_package_chunk(
+        owner,
+        window_id,
+        shader_id,
+        offset as usize,
+        package_len as usize,
+        bytes,
+    )
+}
+
+pub(crate) fn write_shadertoy_package_chunk(
+    owner: WindowOwner,
+    window_id: u32,
+    shader_id: u32,
+    offset: usize,
+    package_len: usize,
+    bytes: &[u8],
+) -> i32 {
+    if bytes.is_empty()
+        || bytes.len() > 2048
+        || crate::intel::gpgpu::shadertoy_package::contract(shader_id)
+            .is_none_or(|contract| contract.bytes != package_len)
+    {
+        return ERROR_INVALID;
+    }
+    let package = {
+        let mut surfaces = SURFACES.lock();
+        let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+            return ERROR_NOT_FOUND;
+        };
+        if surface.visual_cadence.is_none() {
+            return ERROR_INVALID;
+        }
+        if offset == 0 {
+            // Drop the previous bounded staging allocation before starting another.
+            surface.shadertoy_upload = None;
+            let Some(upload) = ShaderToyPackageUpload::new(shader_id) else {
+                return ERROR_INVALID;
+            };
+            surface.shadertoy_upload = Some(upload);
+        }
+        let Some(upload) = surface.shadertoy_upload.as_mut() else {
+            return ERROR_STATE;
+        };
+        if !upload.append(shader_id, offset, bytes) {
+            surface.shadertoy_upload = None;
+            return ERROR_INVALID;
+        }
+        if !upload.complete() {
+            return 0;
+        }
+        surface.shadertoy_upload.take().unwrap()
+    };
+    // The guest can no longer modify this allocation while it is authenticated
+    // and copied into DMA pages. Staging is freed on both success and failure.
+    if !crate::intel::gpgpu::register_shadertoy_package(shader_id, &package.bytes) {
+        return ERROR_INVALID;
+    }
+    let mut surfaces = SURFACES.lock();
+    let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+        return ERROR_NOT_FOUND;
+    };
+    surface.shadertoy_registered |= 1u32 << shader_id;
+    0
+}
+
+/// Execute one registered, authenticated ShaderToy artifact over the complete
+/// visual-mode UI4 back buffer. Uniforms remain a pointer-free control block.
 pub unsafe extern "C" fn trueos_cabi_ui4_scene_shadertoy_render(
     window_id: u32,
     params: *const TrueosUi4ShadertoyParamsV1,
@@ -3494,6 +3592,9 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_shadertoy_render(
         };
         if surface.visual_cadence.is_none() {
             return ERROR_INVALID;
+        }
+        if surface.shadertoy_registered & (1u32 << params.shader_id) == 0 {
+            return ERROR_STATE;
         }
         if surface.gpu_submission_unretired {
             return ERROR_BUSY;

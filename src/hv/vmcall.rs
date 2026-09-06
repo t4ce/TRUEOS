@@ -238,6 +238,7 @@ pub const OP_BP_DOBBY_UI4_POINTER: u32 = 0x119; // arg0 x:u16|y:u16,arg1 action 
 pub const OP_BP_DOBBY_UI4_TYPE: u32 = 0x11A; // payload UTF-8 -> rc
 pub const OP_BP_DOBBY_UI4_KEY: u32 = 0x11B; // arg0 named key -> rc
 pub const OP_BP_UI4_SCENE_FRAME_OPEN_VISUAL: u32 = 0x11C; // arg0 x/y,arg1 width/height,payload target_hz -> window
+pub const OP_BP_UI4_SCENE_SHADERTOY_UPLOAD_V1: u32 = 0x12F; // packed size/window, offset/id, package chunk
 pub const OP_BP_UI4_SCENE_SHADERTOY_RENDER: u32 = 0x11D; // arg0 window,payload ShadertoyParamsV1 -> rc
 pub const OP_BP_UI4_SCENE_VISUAL_FRAME_BEGIN: u32 = 0x11E; // arg0 window -> kernel-deadline wait + acquired back buffer
 pub const OP_BP_UI4_CONTEXT_MENU_REGISTER: u32 = 0x11F; // arg0 window,payload labelled entries -> rc
@@ -2296,6 +2297,22 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                     &params,
                 )
             };
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_SCENE_SHADERTOY_UPLOAD_V1 => {
+            let Some(payload) = request_payload(vm_id, req_len) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let rc = crate::ui4::blueprint_text::write_shadertoy_package_chunk(
+                crate::ui4::WindowOwner::Vm(vm_id),
+                arg0 as u32,
+                arg1 as u32,
+                (arg1 >> 32) as usize,
+                (arg0 >> 32) as usize,
+                payload,
+            );
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }

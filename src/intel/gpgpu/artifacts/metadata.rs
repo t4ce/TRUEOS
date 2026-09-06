@@ -204,40 +204,40 @@ pub(crate) const CPP_DEMO_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernel
 pub(crate) const SHADERTOY_MANDELBROT_ADLS_ARTIFACT: GpgpuKernelArtifact =
     GpgpuKernelArtifact::contracted(
         SHADERTOY_MANDELBROT_KERNEL_NAME,
-        SHADERTOY_MANDELBROT_ADLS_BIN,
-        SHADERTOY_MANDELBROT_ADLS_SPV,
+        &[], // Payload supplied by the Blueprint after package authentication.
+        &[], // Payload supplied by the Blueprint after package authentication.
         &SHADERTOY_MANDELBROT_ADLS_CPP_ABI_CONTRACT,
     );
 
 pub(crate) const SHADERTOY_CUBE_FIELD_ADLS_ARTIFACT: GpgpuKernelArtifact =
     GpgpuKernelArtifact::contracted(
         SHADERTOY_CUBE_FIELD_KERNEL_NAME,
-        SHADERTOY_CUBE_FIELD_ADLS_BIN,
-        SHADERTOY_CUBE_FIELD_ADLS_SPV,
+        &[], // Payload supplied by the Blueprint after package authentication.
+        &[], // Payload supplied by the Blueprint after package authentication.
         &SHADERTOY_CUBE_FIELD_ADLS_CPP_ABI_CONTRACT,
     );
 
 pub(crate) const SHADERTOY_NGUYEN_ADLS_ARTIFACT: GpgpuKernelArtifact =
     GpgpuKernelArtifact::contracted(
         SHADERTOY_NGUYEN_KERNEL_NAME,
-        SHADERTOY_NGUYEN_ADLS_BIN,
-        SHADERTOY_NGUYEN_ADLS_SPV,
+        &[], // Payload supplied by the Blueprint after package authentication.
+        &[], // Payload supplied by the Blueprint after package authentication.
         &SHADERTOY_NGUYEN_ADLS_CPP_ABI_CONTRACT,
     );
 
 pub(crate) const SHADERTOY_PALETTE_GRID_ADLS_ARTIFACT: GpgpuKernelArtifact =
     GpgpuKernelArtifact::contracted(
         SHADERTOY_PALETTE_GRID_KERNEL_NAME,
-        SHADERTOY_PALETTE_GRID_ADLS_BIN,
-        SHADERTOY_PALETTE_GRID_ADLS_SPV,
+        &[], // Payload supplied by the Blueprint after package authentication.
+        &[], // Payload supplied by the Blueprint after package authentication.
         &SHADERTOY_PALETTE_GRID_ADLS_CPP_ABI_CONTRACT,
     );
 
 pub(crate) const SHADERTOY_COSMIC_STRANDS_ADLS_ARTIFACT: GpgpuKernelArtifact =
     GpgpuKernelArtifact::contracted(
         SHADERTOY_COSMIC_STRANDS_KERNEL_NAME,
-        SHADERTOY_COSMIC_STRANDS_ADLS_BIN,
-        SHADERTOY_COSMIC_STRANDS_ADLS_SPV,
+        &[], // Payload supplied by the Blueprint after package authentication.
+        &[], // Payload supplied by the Blueprint after package authentication.
         &SHADERTOY_COSMIC_STRANDS_ADLS_CPP_ABI_CONTRACT,
     );
 

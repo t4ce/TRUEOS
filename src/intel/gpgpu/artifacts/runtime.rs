@@ -65,6 +65,7 @@ fn upload_artifact_from_sources(
                     artifact,
                     gpu,
                     bytes.as_slice(),
+                    artifact.spv,
                     "fs",
                     path.as_str(),
                     spv_bytes,
@@ -142,6 +143,7 @@ fn upload_artifact_from_sources(
         artifact,
         gpu,
         artifact.bin,
+        artifact.spv,
         "embedded",
         source_path,
         artifact.spv.len(),
@@ -155,17 +157,19 @@ fn upload_artifact_bytes(
     artifact: GpgpuKernelArtifact,
     gpu: u64,
     bin: &[u8],
+    spv: &[u8],
     source: &'static str,
     source_path: &str,
     spv_bytes: usize,
     address_space: GpgpuArtifactAddressSpace,
     reusable_upload: Option<UploadedKernelArtifact>,
 ) -> Option<UploadedKernelArtifact> {
-    let actual_sha256 = match admit_kernel_artifact_bytes(
+    let actual_sha256 = match admit_kernel_artifact_payloads(
         artifact,
         dev.device_id,
         dev.revision_id,
         bin,
+        spv,
     ) {
         Ok(digest) => digest,
         Err(error) => {
@@ -454,6 +458,17 @@ pub(crate) fn admit_kernel_artifact_bytes(
     revision_id: u8,
     bin: &[u8],
 ) -> Result<[u8; 32], GpgpuArtifactAdmissionError> {
+    admit_kernel_artifact_payloads(artifact, device_id, revision_id, bin, artifact.spv)
+}
+
+/// Apply the same target, hash, ABI and ELF checks to externally supplied payloads.
+fn admit_kernel_artifact_payloads(
+    artifact: GpgpuKernelArtifact,
+    device_id: u16,
+    revision_id: u8,
+    bin: &[u8],
+    spv: &[u8],
+) -> Result<[u8; 32], GpgpuArtifactAdmissionError> {
     artifact
         .target_policy
         .validate()
@@ -490,7 +505,7 @@ pub(crate) fn admit_kernel_artifact_bytes(
         if contract.zebin_sha256 != artifact.bin_sha256 {
             return Err(GpgpuArtifactAdmissionError::ContractZebinHashMismatch);
         }
-        if sha256_digest(artifact.spv) != contract.spv_sha256 {
+        if sha256_digest(spv) != contract.spv_sha256 {
             return Err(GpgpuArtifactAdmissionError::ContractSpirvHashMismatch);
         }
         validate_kernel_contract_elf(bin, contract)

@@ -108,8 +108,11 @@ fn direct_rcs_encode_shadertoy_batch(
         SHADERTOY_SHADER_COSMIC_STRANDS => SHADERTOY_COSMIC_STRANDS_ADLS_ARTIFACT,
         _ => return false,
     };
+    let Some(package) = shadertoy_package::contract(params.shader_id) else {
+        return false;
+    };
     if upload.bin_sha256 != expected_artifact.bin_sha256
-        || upload.bytes != expected_artifact.bin.len()
+        || upload.bytes != package.bin_bytes
         || contract.bindings.is_empty()
         || contract.bindings.len() > 2
         || contract.bindings[0].arg_index != 0

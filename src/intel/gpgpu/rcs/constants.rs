@@ -77,16 +77,16 @@ const _: () = {
     );
     assert!(
         SHADERTOY_MANDELBROT_ADLS_GPU
-            + ((SHADERTOY_MANDELBROT_ADLS_BIN.len() as u64 + 4095) & !4095)
+            + ((SHADERTOY_MANDELBROT_PACKAGE.bin_bytes as u64 + 4095) & !4095)
             <= SHADERTOY_CUBE_FIELD_ADLS_GPU
     );
     assert!(
         SHADERTOY_CUBE_FIELD_ADLS_GPU
-            + ((SHADERTOY_CUBE_FIELD_ADLS_BIN.len() as u64 + 4095) & !4095)
+            + ((SHADERTOY_CUBE_FIELD_PACKAGE.bin_bytes as u64 + 4095) & !4095)
             <= SHADERTOY_NGUYEN_ADLS_GPU
     );
     assert!(
-        SHADERTOY_NGUYEN_ADLS_GPU + ((SHADERTOY_NGUYEN_ADLS_BIN.len() as u64 + 4095) & !4095)
+        SHADERTOY_NGUYEN_ADLS_GPU + ((SHADERTOY_NGUYEN_PACKAGE.bin_bytes as u64 + 4095) & !4095)
             <= SUBSET_SUM_COLLAPSE5_MERGE10_ADLS_GPU
     );
     assert!(
@@ -96,17 +96,17 @@ const _: () = {
     );
     assert!(
         SHADERTOY_PALETTE_GRID_ADLS_GPU
-            + ((SHADERTOY_PALETTE_GRID_ADLS_BIN.len() as u64 + 4095) & !4095)
+            + ((SHADERTOY_PALETTE_GRID_PACKAGE.bin_bytes as u64 + 4095) & !4095)
             <= DIRECT_RCS_GPU_VA_FONT_COVERAGE_SECONDARY_BASE
     );
     assert!(
         SHADERTOY_PALETTE_GRID_ADLS_GPU
-            + ((SHADERTOY_PALETTE_GRID_ADLS_BIN.len() as u64 + 4095) & !4095)
+            + ((SHADERTOY_PALETTE_GRID_PACKAGE.bin_bytes as u64 + 4095) & !4095)
             <= SHADERTOY_COSMIC_STRANDS_ADLS_GPU
     );
     assert!(
         SHADERTOY_COSMIC_STRANDS_ADLS_GPU
-            + ((SHADERTOY_COSMIC_STRANDS_ADLS_BIN.len() as u64 + 4095) & !4095)
+            + ((SHADERTOY_COSMIC_STRANDS_PACKAGE.bin_bytes as u64 + 4095) & !4095)
             <= DIRECT_RCS_GPU_VA_FONT_COVERAGE_SECONDARY_BASE
     );
 };

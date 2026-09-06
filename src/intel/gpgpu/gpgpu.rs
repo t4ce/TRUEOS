@@ -5,6 +5,10 @@ use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use sha2::{Digest, Sha256};
 use spin::Mutex;
 
+#[path = "artifacts/shadertoy_package.rs"]
+pub(crate) mod shadertoy_package;
+use shadertoy_package::*;
+
 // These fragments intentionally share this module namespace. Keeping the
 // implementation in one namespace preserves all existing crate-visible paths,
 // private helper access, static initialization, and kernel ABI types while

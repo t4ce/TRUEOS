@@ -781,6 +781,15 @@ unsafe extern "C" {
         window_id: u32,
         params: *const TrueosUi4ParticleCraftParamsV1,
     ) -> i32;
+    /// Bounded (1..=2048 bytes), ordered package upload; final chunk authenticates.
+    pub fn trueos_cabi_ui4_scene_shadertoy_upload_v1(
+        window_id: u32,
+        shader_id: u32,
+        offset: u32,
+        package_len: u32,
+        bytes: *const u8,
+        len: usize,
+    ) -> i32;
     pub fn trueos_cabi_ui4_scene_shadertoy_render(
         window_id: u32,
         params: *const TrueosUi4ShadertoyParamsV1,
