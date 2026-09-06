@@ -47,7 +47,7 @@ const TOOL_JSON_SHOT: &str = r#"{"type":"object","properties":{},"additionalProp
 const TOOL_JSON_SMP: &str = r#"{"type":"object","properties":{"slot":{"type":"integer","minimum":0,"description":"Optional SMP slot. Omit to list all slots."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_IMG: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"Optional image path to open as the first UI4 frame. Omit for img's resident interactive viewer."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_SSH: &str = r#"{"type":"object","properties":{"endpoint":{"type":"string","description":"Optional SSH target in [user@]host[:port] form. Omit for SSH's resident interactive prompt."}},"required":[],"additionalProperties":false}"#;
-const TOOL_JSON_SURF: &str = r#"{"type":"object","properties":{"url":{"type":"string","description":"HTTP or HTTPS URL. Bare hosts default to HTTPS."}},"required":["url"],"additionalProperties":false}"#;
+const TOOL_JSON_SURF: &str = r#"{"type":"object","properties":{"url":{"type":"string","description":"Optional HTTP or HTTPS URL. Bare hosts default to HTTPS; omit for the Solara homepage."}},"additionalProperties":false}"#;
 const TOOL_JSON_TLB: &str = r#"{"type":"object","properties":{"target":{"type":"string","enum":["pci","pcibar","mem","cpu","hfi","turbo","ucode","pmu","rapl","acpi","aml","facp","madt","hpet","mcfg","ssdt","uefi","smbios","x2apic","usb","usb_probe","dump"],"description":"Table or view to print."},"action":{"type":"string","enum":["store"],"description":"Optional RAPL action when target=rapl."},"signature":{"type":"string","minLength":4,"maxLength":4,"description":"Optional ACPI signature when target=acpi, for example SSDT or FACP."},"index":{"type":"integer","minimum":1,"description":"Optional 1-based instance index when target=acpi and the signature repeats."},"subcommand":{"type":"string","enum":["ec","symbol","prefix"],"description":"Optional AML subcommand when target=aml."},"path":{"type":"string","description":"Optional AML path or prefix when target=aml and subcommand is symbol or prefix."}},"required":["target"],"additionalProperties":false}"#;
 const TOOL_JSON_TTS: &str = r#"{"type":"object","properties":{"text":{"type":"string","maxLength":8192,"description":"Text to synthesize asynchronously. The native backend performs G2P and splits it into ordered model chunks of at most 510 phonemes."},"voice":{"type":"string","description":"Kokoro voice name; defaults to af_heart."},"speed":{"type":"number","minimum":0.5,"maximum":2.0,"description":"Kokoro speech speed multiplier."}},"required":["text"],"additionalProperties":false}"#;
 const TOOL_JSON_STT: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS path to a mono/stereo signed-16-bit PCM WAV file."},"language":{"type":"string","description":"Whisper language code or auto."},"translate":{"type":"boolean","description":"Translate recognized speech to English."}},"required":["path"],"additionalProperties":false}"#;
@@ -331,7 +331,7 @@ const SHELL2_COMMAND_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         color: Some(STATUS_NETWORK_RGB),
         advertised: true,
         handler: dispatch_surf,
-        tool_description: Some("Open an HTTP or HTTPS URL in Solara."),
+        tool_description: Some("Open Solara with its terminal navigator and optional HTTP/HTTPS URL."),
         tool_parameters_json: Some(TOOL_JSON_SURF),
     },
     BuiltinShell2CmdEntry {

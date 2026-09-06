@@ -5,7 +5,7 @@ use super::super::shell2_surf;
 use super::super::{ShellBackend2, print_shell_line};
 
 fn print_usage(io: &'static dyn ShellBackend2) {
-    print_shell_line(io, "usage: surf <url>");
+    print_shell_line(io, "usage: surf [url]");
 }
 
 pub(crate) fn try_parse(
@@ -14,10 +14,7 @@ pub(crate) fn try_parse(
     rest: &str,
 ) -> ParseOutcome {
     let trimmed = rest.trim();
-    if trimmed.is_empty()
-        || matches!(trimmed, "help" | "-h" | "--help")
-        || trimmed.eq_ignore_ascii_case("help")
-    {
+    if matches!(trimmed, "help" | "-h" | "--help") || trimmed.eq_ignore_ascii_case("help") {
         print_usage(io);
         return ParseOutcome::Handled;
     }
