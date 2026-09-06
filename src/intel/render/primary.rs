@@ -1437,14 +1437,17 @@ pub(crate) fn render_resident_triangle_scene_frame_premultiplied_with_coverage_a
 /// Render an ordered immediate indexed scene directly into one UI4 surface.
 /// The public immediate pipeline has no depth-state descriptor, so draw order
 /// is authoritative and this path must not allocate or silently enable depth.
+/// `None` loads the existing target color for continuation draws.
 pub(crate) fn render_resident_indexed_scene_frame_premultiplied_direct_to_surface(
     draws: &[ResidentSceneDraw<'_>],
     clear_rgba: Option<[u8; 4]>,
     destination: crate::intel::gpgpu::GpgpuRgba8Surface,
     diagnostic_logs: bool,
 ) -> Result<ResidentSceneFrameResult, &'static str> {
-    submit_resident_triangle_scene_capture(
+    submit_resident_scene_capture_inner_for_carrier(
         draws,
+        None,
+        None,
         &[],
         clear_rgba,
         diagnostic_logs,
@@ -1454,6 +1457,8 @@ pub(crate) fn render_resident_indexed_scene_frame_premultiplied_direct_to_surfac
         destination.width as usize,
         destination.height as usize,
         ResidentSceneFrameOutput::DirectGpuSurface(destination),
+        None,
+        clear_rgba.is_none(),
     )
 }
 
@@ -1535,6 +1540,7 @@ pub(crate) fn render_resident_retained_with_static_draws_direct_to_surface(
         destination.height as usize,
         ResidentSceneFrameOutput::DirectGpuSurface(destination),
         Some(carrier),
+        false,
     )
 }
 
@@ -2734,7 +2740,7 @@ fn submit_resident_scene_geometry_batched(
     dev: crate::intel::Dev,
     warm: RenderWarmState,
     draws: &[ResidentSceneDraw<'_>],
-    clear: [u8; 4],
+    clear: Option<[u8; 4]>,
     opaque_depth_enabled: bool,
     depth_config: Option<TriangleDepthConfig>,
     render_target_gpu: u64,
@@ -2761,7 +2767,7 @@ fn submit_resident_scene_geometry_batched(
     ) {
         return Err("scene-frame-target-format");
     }
-    let max_secondary_count = draws.len().saturating_add(1);
+    let max_secondary_count = draws.len().saturating_add(usize::from(clear.is_some()));
     let used_batch_bytes = RESIDENT_SCENE_PRIMARY_BATCH_BYTES
         .checked_add(
             max_secondary_count
@@ -2779,40 +2785,42 @@ fn submit_resident_scene_geometry_batched(
     crate::intel::dma_flush(warm.result_virt, warm.result_len);
     let state = resident_scene_batch_state_for_carrier(warm, carrier)?;
 
-    let mut clear_depth = depth_config;
-    if let Some(depth) = clear_depth.as_mut() {
-        depth.write_enabled = true;
-        depth.compare_function = COMPARE_FUNCTION_ALWAYS;
+    let mut secondary_count = 0usize;
+    if let Some(clear) = clear {
+        let mut clear_depth = depth_config;
+        if let Some(depth) = clear_depth.as_mut() {
+            depth.write_enabled = true;
+            depth.compare_function = COMPARE_FUNCTION_ALWAYS;
+        }
+        let (clear_warm, clear_state_gpu) = resident_scene_state_warm(state, warm, 0)?;
+        let clear_draw = prepare_triangle_draw_resources_for_scene_vertex_slice(
+            clear_warm,
+            render_target_gpu,
+            render_target_pitch,
+            target_width,
+            target_height,
+            "resident-scene-fullscreen-clear",
+            &CLEAR_TRIANGLE,
+        )
+        .ok_or("target-clear-resources")?
+        .with_rt_surface_format(render_target_surface_format);
+        stage_resident_scene_secondary(
+            warm,
+            clear_warm,
+            clear_state_gpu,
+            clear_draw,
+            TriangleBlendProbeMode::MesaZeroedState,
+            clear_depth,
+            clear,
+            None,
+            ResidentSceneFragmentContract::ConstantRgba,
+            [0.0, 0.0],
+            ResidentScenePrimitiveTopology::TriangleList,
+            0,
+            result_ggtt_gpu,
+        )?;
+        secondary_count = 1;
     }
-    let (clear_warm, clear_state_gpu) = resident_scene_state_warm(state, warm, 0)?;
-    let clear_draw = prepare_triangle_draw_resources_for_scene_vertex_slice(
-        clear_warm,
-        render_target_gpu,
-        render_target_pitch,
-        target_width,
-        target_height,
-        "resident-scene-fullscreen-clear",
-        &CLEAR_TRIANGLE,
-    )
-    .ok_or("target-clear-resources")?
-    .with_rt_surface_format(render_target_surface_format);
-    stage_resident_scene_secondary(
-        warm,
-        clear_warm,
-        clear_state_gpu,
-        clear_draw,
-        TriangleBlendProbeMode::MesaZeroedState,
-        clear_depth,
-        clear,
-        None,
-        ResidentSceneFragmentContract::ConstantRgba,
-        [0.0, 0.0],
-        ResidentScenePrimitiveTopology::TriangleList,
-        0,
-        result_ggtt_gpu,
-    )?;
-
-    let mut secondary_count = 1usize;
     for scene_draw in draws {
         if opaque_depth_enabled && scene_draw.rgba[3] == 0 {
             continue;
@@ -3341,6 +3349,7 @@ fn submit_resident_scene_capture_inner(
         target_height,
         frame_output,
         None,
+        false,
     )
 }
 
@@ -3358,6 +3367,7 @@ fn submit_resident_scene_capture_inner_for_carrier(
     target_height: usize,
     frame_output: ResidentSceneFrameOutput,
     carrier: Option<PicassoCarrierLease>,
+    load_color: bool,
 ) -> Result<ResidentSceneFrameResult, &'static str> {
     let geometry_draw_count =
         native_churn.map_or(draws.len(), |resident| resident.draw_group_count() + draws.len());
@@ -3649,7 +3659,7 @@ fn submit_resident_scene_capture_inner_for_carrier(
                 dev,
                 warm,
                 draws,
-                clear,
+                if load_color { None } else { Some(clear) },
                 opaque_depth_enabled,
                 depth_config,
                 render_target_gpu,

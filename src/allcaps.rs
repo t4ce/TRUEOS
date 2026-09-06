@@ -9,11 +9,17 @@ pub mod boot {
 }
 
 pub mod executor {
-    pub const BSP_TASK_PROFILE_ENABLED: bool = cfg!(feature = "trueos_task_profile");
+    #[cfg(feature = "trueos_task_profile")]
+    pub const BSP_TASK_PROFILE_ENABLED: bool = true;
+    #[cfg(feature = "trueos_task_profile")]
     pub const BSP_TASK_PROFILE_REPORT_MS: u64 = 1_000;
+    #[cfg(feature = "trueos_task_profile")]
     pub const BSP_TASK_PROFILE_SLOW_POLL_US: u64 = 2_000;
+    #[cfg(feature = "trueos_task_profile")]
     pub const BSP_TASK_PROFILE_SLOTS: usize = 128;
+    #[cfg(feature = "trueos_task_profile")]
     pub const BSP_TASK_PROFILE_HISTORY_SLOTS: usize = 1_024;
+    #[cfg(feature = "trueos_task_profile")]
     pub const BSP_TASK_PROFILE_WATCHERS: usize = 8;
 }
 
