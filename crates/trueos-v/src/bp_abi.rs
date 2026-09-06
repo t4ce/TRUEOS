@@ -701,6 +701,7 @@ unsafe extern "C" {
     ) -> i32;
     pub fn trueos_cabi_ui4_solara_frame_close(window_id: u32) -> i32;
     pub fn trueos_cabi_ui4_solara_frame_close_requested(window_id: u32, flags: u32) -> i32;
+    pub fn trueos_cabi_ui4_scene_frame_get_position(window_id: u32, out_xy: *mut i32) -> i32;
     pub fn trueos_cabi_ui4_scene_frame_set_position(window_id: u32, x: i32, y: i32) -> i32;
     pub fn trueos_cabi_ui4_scene_frame_set_opacity(window_id: u32, opacity: u32) -> i32;
     pub fn trueos_cabi_ui4_scene_frame_set_hit_testable(window_id: u32, enabled: u32) -> i32;

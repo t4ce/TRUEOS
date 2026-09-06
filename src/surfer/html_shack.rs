@@ -28,7 +28,7 @@ const HTML_FETCH_VNET_FENCE_TIMEOUT_MS: u64 = 10_000;
 const HTML_FETCH_DNS_TIMEOUT_MS: u64 = 5_000;
 const HTML_FETCH_BODY_TIMEOUT_MS: u64 = 35_000;
 const HTML_FETCH_MAX_BYTES: usize = 4 * 1024 * 1024;
-const HTML_FETCH_MAX_REDIRECTS: usize = 3;
+const HTML_FETCH_MAX_REDIRECTS: usize = 10;
 const HTML_PREVIEW_FRONT_LINES: usize = 5;
 const HTML_PREVIEW_LINE_CHARS: usize = 160;
 const HTML_SHACK_PREVIEW_ENABLE: bool = false;
@@ -1471,6 +1471,8 @@ async fn fetch_http_body_once(
             return Err(HttpFetchError::Body);
         }
 
+        let encoding = response.headers().get(hyper::header::CONTENT_ENCODING)
+            .and_then(|value| value.to_str().ok()).map(String::from);
         let mut out = Vec::new();
         let body = response.body_mut();
         loop {
@@ -1488,7 +1490,8 @@ async fn fetch_http_body_once(
                 None => break,
             }
         }
-        Ok(out)
+        crate::r::net::http_content::decode(encoding.as_deref(), out, max_bytes)
+            .map_err(|_| HttpFetchError::Body)
     };
 
     let mut exchange = core::pin::pin!(exchange);
@@ -1525,25 +1528,8 @@ async fn fetch_http_body_once(
 }
 
 fn resolve_redirect(current: &HttpTarget, location: &str) -> Result<String, HttpFetchError> {
-    let location = location.trim();
-    if location.starts_with("http://") || location.starts_with("https://") {
-        return Ok(String::from(location));
-    }
-    if location.starts_with('/') {
-        return Ok(alloc::format!("http://{}:{}{}", current.host, current.port, location));
-    }
-    let base = current
-        .path_and_query
-        .rsplit_once('/')
-        .map(|(dir, _)| dir)
-        .unwrap_or("");
-    Ok(alloc::format!(
-        "http://{}:{}/{}{}",
-        current.host,
-        current.port,
-        base.trim_start_matches('/'),
-        location
-    ))
+    crate::r::net::https::resolve_http_location(&current.url, location)
+        .map_err(|_| HttpFetchError::Body)
 }
 
 async fn fetch_http_body_hyper(
@@ -1573,7 +1559,7 @@ async fn fetch_http_body_hyper(
                 crate::r::net::https::get_bytes_shared(https_url.as_str(), timeout_ms, max_bytes)
                     .await
                     .map_err(|err| {
-                        crate::log!(
+                        crate::log_warn!(target: "net";
                             "html_shack: https fetch failed url={} err={}\n",
                             https_url,
                             err

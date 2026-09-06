@@ -488,3 +488,5 @@ fn from_kernel_event(ev: NetEvent) -> Option<api::Event> {
         },
     })
 }
+
+pub(crate) mod http_content;

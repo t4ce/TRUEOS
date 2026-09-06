@@ -4033,7 +4033,11 @@ impl NetService {
                 }
             },
             NetCommand::OpenTcpConnect { remote } => {
-                if is_ipv4_loopback(remote.addr) {
+                // Connections to this interface itself must not depend on NIC
+                // hairpin forwarding. Use the same in-kernel path as localhost.
+                if is_ipv4_loopback(remote.addr)
+                    || self.local_ipv4.is_some_and(|addr| addr.octets() == remote.addr)
+                {
                     match self.open_loopback_tcp_connect(owner, remote) {
                         Ok((client_handle, server_handle, server_owner)) => {
                             let _ = push_event(

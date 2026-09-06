@@ -252,7 +252,7 @@ struct KernelTime;
 
 impl TlsTime for KernelTime {
     fn unix_time_seconds(&self) -> Option<u64> {
-        crate::time::unix_time_seconds()
+        crate::r::net::ntp::current_unix_seconds().or_else(crate::time::unix_time_seconds)
     }
 }
 

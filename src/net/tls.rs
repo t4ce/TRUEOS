@@ -165,7 +165,10 @@ fn pump(
         let status = conn.process_tls_records(incoming_tls.as_mut_slice());
         let mut discard = status.discard;
 
-        let state = status.state.map_err(|_| TlsError::HandshakeFailed)?;
+        let state = status.state.map_err(|err| {
+            crate::log_warn!(target: "net"; "tls: record processing failed reason={:?}\n", err);
+            TlsError::HandshakeFailed
+        })?;
         match state {
             ConnectionState::EncodeTlsData(mut enc) => {
                 let mut out = [0u8; 4096];
