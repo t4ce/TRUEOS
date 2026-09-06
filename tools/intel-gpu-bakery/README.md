@@ -67,6 +67,13 @@ the Rust contract in memory, and asserts a one-to-one mapping between `.clcpp`
 sources and publications. It also asserts that the parent ADL-S artifact
 directory contains no alternate `.bin`, `.spv`, manifest, or contract files.
 
+Linked and ISO-packaged image checks require the active runtime artifacts.
+`Makefile` lists `font_instance_rgba8.bin` under `INTEL_GPU_CPP_DORMANT_BINS`:
+its GridPaper affine path is disabled and its Shell2 demo is retired, so the
+linker may discard its payloads. Its source, bake and ABI contract still pass
+the offline checks above; active glyph-mask and font-outline artifacts remain
+mandatory. Revisit the dormant list when enabling the affine renderer.
+
 The physical ADL-S copy-rectangle transcript remains a strict hardware gate:
 
 ```sh

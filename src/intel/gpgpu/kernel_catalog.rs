@@ -547,16 +547,6 @@ pub(crate) const FONT_INSTANCE_RGBA8_ADLS_BIN: &[u8] = include_bytes!(
 pub(crate) const FONT_INSTANCE_RGBA8_ADLS_SPV: &[u8] = include_bytes!(
     "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/font_instance_rgba8.spv"
 );
-// The font-instance service remains available after retiring its Shell2 demo.
-// Its currently unused affine path must not make the linker discard these
-// reviewed payloads: Make's linked/packaged artifact gates still require them.
-// The retained section roots both blobs without adding a runtime dispatch.
-#[used]
-#[unsafe(link_section = ".gpgpu_artifacts")]
-static FONT_INSTANCE_RGBA8_ADLS_PAYLOADS: [&[u8]; 2] = [
-    FONT_INSTANCE_RGBA8_ADLS_BIN,
-    FONT_INSTANCE_RGBA8_ADLS_SPV,
-];
 pub(crate) const FONT_INSTANCE_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
     FONT_INSTANCE_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
 const _: () = assert!(matches!(FONT_INSTANCE_RGBA8_ADLS_CPP_ABI_CONTRACT.validate(), Ok(())));

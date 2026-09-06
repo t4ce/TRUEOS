@@ -11,15 +11,17 @@ HELIOA captured WGSL
   -> native VS/PS ISA sections in a new HELIOA file
 ```
 
-Run it after `bake_simple_cube`:
+This archived conversion utility is not part of the TRUEOS build or release
+graph. It requires an explicit Helio capture and is retained only for
+historical artifact inspection:
 
 ```sh
 cd /home/t4ce/REPOS/TRUEOS
 python3 tools/helio-intel-bake/bake.py \
-  /home/t4ce/REPOS/Helio/target/helio-artifacts/simple-cube.trueos.helio
+  /path/to/historical-capture.helio
 ```
 
-The output defaults to `simple-cube.trueos.intel.helio` and adds:
+The output derives its name from the supplied capture and adds:
 
 - `intel-xe-lp/vs.simd8.bin`
 - `intel-xe-lp/ps.simd8.bin`
@@ -31,14 +33,10 @@ The tool validates the input/output HELIOA tables and CRCs, requires the
 expected captured SimpleCube entry points and layouts, rejects empty or
 unaligned ISA, and verifies every packaged SHA-256.
 
-Both the SimpleCube and Churn-only bake lanes emit the same canonical
-`SectionKind::Other` retained-transform template. It contains no pointers or
-GPU addresses: two authored constant identity operations are multiplied at
-build time into one row-major 3x4 identity root, followed at runtime by one
-dynamic child per render row (up to 4096 rows and a traversal depth of two).
-The 128-byte little-endian payload is an 80-byte header followed by the one
-48-byte affine; the exact header offsets are documented in
-`tools/helio-build/README.md`.
+Historical captures used a pointer-free retained-transform template: two
+authored constant identity operations folded at build time into one row-major
+3x4 root, followed at runtime by a dynamic child per render row. This format
+is not a maintained TRUEOS renderer contract.
 
 This reaches genuine target-specific Intel ISA, but it is not yet directly launchable
 by TRUEOS. The EU assembly makes the resource ABI concrete: VS reads the
