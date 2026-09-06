@@ -497,7 +497,7 @@ fn prepare_async_frame(runtime: &mut Runtime) -> Result<Option<PendingFrame>, Ui
     // every pipe's MMIO state four times on every unchanged compositor scan.
     let (output_width, output_height) = crate::intel::active_scanout_dimensions().unwrap_or((0, 0));
     if resolve_close_scaler_conflicts(&mut windows, &views, output_width, output_height) != 0 {
-        crate::log_once!(target: "ui4";
+        crate::log_once!(target: "render";
             "ui4 close-transition scaler contention resolved scope=output slots=1+3 shared_scaler=0 fallback=fade-at-source-size retirement=zero-alpha-surflive log=once\n");
     }
     let plans = [
