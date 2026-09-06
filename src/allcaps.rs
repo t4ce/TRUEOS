@@ -49,6 +49,12 @@ pub mod probes {
 
 pub mod blueprint {
     pub const PORTAL_IMAGE_CAP_BYTES: usize = 128 * 1024 * 1024;
+    // Retained-scene Blueprints keep their relocated REL image alongside
+    // Picasso's runtime asset database. A large embedded GLB therefore needs
+    // substantially more guest heap than the image itself. Keep this ceiling
+    // above the 2 GiB recommendation that the heavy-graphics profile can
+    // derive, rather than silently clamping it to 512 MiB.
+    pub const HEAVY_GRAPHICS_HEAP_UPPER_MIB: usize = 2048;
     pub const ASSET_ARCHIVE_CAP_BYTES: usize = 1024 * 1024 * 1024;
     pub const ASSET_DECODE_CAP_BYTES: usize = 2 * 1024 * 1024 * 1024;
     pub const ASSET_7Z_DICTIONARY_CAP_BYTES: usize = 256 * 1024 * 1024;

@@ -509,6 +509,13 @@ fn estimate_blueprint_memory_profile(
     let stats = crate::hv::blueprint::elf_alloc_stats(unpacked).unwrap_or_default();
     let class = classify_blueprint_memory(archive, module.raw_payload_len, stats, imports);
     let base_live_mib = ceil_mib(module.raw_payload_len).max(ceil_mib(stats.alloc_bytes));
+    // Keep Shell2's preflight estimate identical to the launch-time profile:
+    // large retained scenes own the archive, relocated REL image, and runtime
+    // Picasso asset database concurrently.
+    let heavy_graphics_lower_mib =
+        round_pow2_mib(base_live_mib.saturating_mul(4).saturating_add(128))
+            .max(128)
+            .min(1024);
 
     let (heap_lower, heap_recommended, heap_upper, stack_lower, stack_recommended, stack_upper) =
         match class {
@@ -553,9 +560,9 @@ fn estimate_blueprint_memory_profile(
                 128,
             ),
             BlueprintMemoryClass::HeavyGraphics => (
-                128,
+                heavy_graphics_lower_mib,
                 round_pow2_mib(base_live_mib.saturating_mul(16).saturating_add(128)).max(256),
-                512,
+                crate::allcaps::blueprint::HEAVY_GRAPHICS_HEAP_UPPER_MIB,
                 16,
                 32,
                 128,
