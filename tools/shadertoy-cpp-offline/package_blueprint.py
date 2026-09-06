@@ -11,7 +11,7 @@ import struct
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-NAMES = ("mandelbrot", "cube_field", "nguyen", "palette_grid", "cosmic_strands")
+NAMES = ("mandelbrot", "cube_field", "nguyen", "palette_grid", "cosmic_strands", "protean_clouds")
 FILES = ("kernel.bin", "kernel.spv", "input.glsl", "kernel.clcpp",
          "kernel.manifest.json", "kernel.contract.rs")
 MAGIC = b"STPKG01\0"

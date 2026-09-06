@@ -391,6 +391,11 @@ fn shadertoy_artifact_slot(
             SHADERTOY_COSMIC_STRANDS_ADLS_GPU,
             &SHADERTOY_COSMIC_STRANDS_UPLOAD,
         ),
+        SHADERTOY_SHADER_PROTEAN_CLOUDS => (
+            SHADERTOY_PROTEAN_CLOUDS_ADLS_ARTIFACT,
+            SHADERTOY_PROTEAN_CLOUDS_ADLS_GPU,
+            &SHADERTOY_PROTEAN_CLOUDS_UPLOAD,
+        ),
         _ => return None,
     })
 }

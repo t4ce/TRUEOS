@@ -20,6 +20,7 @@ pub(crate) fn contract(shader_id: u32) -> Option<ShaderToyPackageContract> {
         3 => SHADERTOY_NGUYEN_PACKAGE,
         4 => SHADERTOY_PALETTE_GRID_PACKAGE,
         5 => SHADERTOY_COSMIC_STRANDS_PACKAGE,
+        6 => SHADERTOY_PROTEAN_CLOUDS_PACKAGE,
         _ => return None,
     })
 }

@@ -839,3 +839,8 @@ const _: () = {
 };
 pub(crate) const LAB256_MULTIPHASE_ADLS_BIN_SHA256: [u8; 32] =
     LAB256_STEP_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
+
+pub(crate) const SHADERTOY_PROTEAN_CLOUDS_KERNEL_NAME: &str = "shadertoy_protean_clouds";
+include!(
+    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/shadertoy_protean_clouds.contract.rs"
+);

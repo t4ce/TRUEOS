@@ -241,6 +241,14 @@ pub(crate) const SHADERTOY_COSMIC_STRANDS_ADLS_ARTIFACT: GpgpuKernelArtifact =
         &SHADERTOY_COSMIC_STRANDS_ADLS_CPP_ABI_CONTRACT,
     );
 
+pub(crate) const SHADERTOY_PROTEAN_CLOUDS_ADLS_ARTIFACT: GpgpuKernelArtifact =
+    GpgpuKernelArtifact::contracted(
+        SHADERTOY_PROTEAN_CLOUDS_KERNEL_NAME,
+        &[], // Blueprint package supplies the authenticated binary and SPIR-V.
+        &[],
+        &SHADERTOY_PROTEAN_CLOUDS_ADLS_CPP_ABI_CONTRACT,
+    );
+
 pub(crate) const CPP_AUDIO_VISUALIZER_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
     GpgpuKernelArtifact::new(
         CPP_AUDIO_VISUALIZER_RGBA8_KERNEL_NAME,

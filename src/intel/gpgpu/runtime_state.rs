@@ -21,6 +21,7 @@ static SHADERTOY_CUBE_FIELD_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mute
 static SHADERTOY_NGUYEN_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static SHADERTOY_PALETTE_GRID_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static SHADERTOY_COSMIC_STRANDS_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
+static SHADERTOY_PROTEAN_CLOUDS_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static CPP_AUDIO_VISUALIZER_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static PARTICLE_CRAFT_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static FONT_INSTANCE_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);

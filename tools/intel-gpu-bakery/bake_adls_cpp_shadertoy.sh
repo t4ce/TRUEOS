@@ -15,7 +15,7 @@ publish_dir="${trueos_root}/bld/shadertoy-blueprint-bake/published"
 profile="${tool_dir}/profiles/adls-4680-r0c-cpp.json"
 toolchain_lock="${tool_dir}/toolchains/adls-shadertoy-cpp-proof.lock.json"
 
-shaders=(mandelbrot cube_field nguyen palette_grid cosmic_strands)
+shaders=(mandelbrot cube_field nguyen palette_grid cosmic_strands protean_clouds)
 for shader in "${shaders[@]}"; do
   kernel_name="shadertoy_${shader}"
   shader_dir="${assets_dir}/${shader}"

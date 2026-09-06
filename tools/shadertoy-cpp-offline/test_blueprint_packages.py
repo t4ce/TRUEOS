@@ -89,7 +89,7 @@ fn every_package_component_is_authenticated_including_raw_source() {
         assert!(contract.payloads(&bytes[..bytes.len()-1]).is_none());
         let mut oversized = bytes.to_vec(); oversized.push(0);
         assert!(contract.payloads(&oversized).is_none());
-        let wrong = package::contract(id % 5 + 1).unwrap();
+        let wrong = package::contract(id % 6 + 1).unwrap();
         assert!(wrong.payloads(bytes).is_none());
     }
 }
@@ -100,7 +100,7 @@ fn staging_requires_complete_contiguous_correct_shader_bytes() {
         let mut upload = package::ShaderToyPackageUpload::new(id).unwrap();
         assert!(!upload.append(id, usize::MAX, &[0]));
         assert!(!upload.append(id, 0, &[]));
-        assert!(!upload.append(id % 5 + 1, 0, &[0]));
+        assert!(!upload.append(id % 6 + 1, 0, &[0]));
         for (index, chunk) in bytes.chunks(2048).enumerate() {
             assert!(!upload.complete());
             assert!(upload.append(id, index * 2048, chunk));
@@ -111,7 +111,7 @@ fn staging_requires_complete_contiguous_correct_shader_bytes() {
         assert_eq!(upload.bytes, bytes);
         assert!(upload.contract.payloads(&upload.bytes).is_some());
     }
-    for id in [0, 6, 31, 32, u32::MAX] {
+    for id in [0, 7, 31, 32, u32::MAX] {
         assert!(package::ShaderToyPackageUpload::new(id).is_none());
     }
 }
