@@ -678,6 +678,12 @@ enum BufferBacking {
     },
 }
 
+struct SampledBufferCache {
+    shape: [u32; 4], // width, height, pitch, sampler flags
+    bytes: usize,
+    resident: Arc<crate::intel::render::ResidentSampledTexture>,
+}
+
 struct BufferRecord {
     backing: BufferBacking,
     bytes: usize,
@@ -686,6 +692,7 @@ struct BufferRecord {
     epoch: u64,
     in_flight: u32,
     mapping_digest: u64,
+    sampled: Option<SampledBufferCache>,
 }
 
 unsafe impl Send for BufferRecord {}
@@ -1545,6 +1552,7 @@ pub(crate) fn create_buffer(
             epoch: device.epoch,
             in_flight: 0,
             mapping_digest: 0,
+            sampled: None,
         },
     ))
 }
@@ -1683,6 +1691,7 @@ pub(crate) fn create_vvideo_mem(
             epoch: device.epoch,
             in_flight: 0,
             mapping_digest,
+            sampled: None,
         },
     ))
 }
@@ -1797,7 +1806,7 @@ pub(crate) fn write_buffer(
     let device = lookup_device_mut(&mut broker, device_handle, principal)?;
     ensure_live(device)?;
     {
-        let record = lookup_buffer(device, buffer_handle)?;
+        let record = lookup_buffer_mut(device, buffer_handle)?;
         if record.usage & BUFFER_USAGE_MAP_WRITE == 0 {
             return Err(VgpuError::PermissionDenied);
         }
@@ -1811,12 +1820,14 @@ pub(crate) fn write_buffer(
             BufferBacking::Dma { virt, .. } => *virt,
             BufferBacking::GuestPages { .. } => return Err(VgpuError::Unsupported),
         };
+        let released = if bytes.is_empty() { 0 } else { release_sampled_buffer(record)? };
         if !bytes.is_empty() {
             unsafe {
                 core::ptr::copy_nonoverlapping(bytes.as_ptr(), virt.add(offset), bytes.len());
             }
             crate::intel::dma_flush(unsafe { virt.add(offset) }, bytes.len());
         }
+        device.memory_used = device.memory_used.saturating_sub(released);
     }
     device.copied_upload_bytes = device
         .copied_upload_bytes
@@ -1891,7 +1902,11 @@ pub(crate) fn destroy_buffer(
         GpuVmBinding::Owned(vm) => vm,
         GpuVmBinding::Borrowed { .. } => return Err(VgpuError::Unsupported),
     };
-    physical.unmap_gpuvm(vm, record.gpu, record.bytes)?;
+    let gpu = record.gpu;
+    let bytes = record.bytes;
+    let released = release_sampled_buffer(buffer_slot.record.as_mut().expect("validated buffer"))?;
+    device.memory_used = device.memory_used.saturating_sub(released);
+    physical.unmap_gpuvm(vm, gpu, bytes)?;
     let mut record = buffer_slot.record.take().expect("validated vgpu buffer");
     device.memory_used = device.memory_used.saturating_sub(record.bytes);
     release_buffer_backing(&mut record);
@@ -3011,6 +3026,12 @@ pub(crate) fn submit_ui4_indexed_draw(
                 vertices.push(attributes);
             }
             let texture = if textured {
+                let shape = [draw.texture_width, draw.texture_height, draw.texture_pitch, draw.sampler_flags];
+                let cached = lookup_buffer(device, draw.sampled_texture)?.sampled.as_ref()
+                    .filter(|cache| cache.shape == shape).map(|cache| Arc::clone(&cache.resident));
+                if let Some(cached) = cached { Some(cached) } else {
+                let released = release_sampled_buffer(lookup_buffer_mut(device, draw.sampled_texture)?)?;
+                device.memory_used = device.memory_used.saturating_sub(released);
                 let texture_record = lookup_buffer(device, draw.sampled_texture)?;
                 let texture_bytes =
                     usize::try_from(u64::from(draw.texture_pitch) * u64::from(draw.texture_height))
@@ -3024,6 +3045,9 @@ pub(crate) fn submit_ui4_indexed_draw(
                 {
                     return Err(VgpuError::Unsupported);
                 }
+                if device.memory_used.saturating_add(texture_bytes) > device.quota.memory_bytes {
+                    return Err(VgpuError::QuotaExceeded);
+                }
                 let texture_virt = match texture_record.backing {
                     BufferBacking::Dma { virt, .. } => virt,
                     BufferBacking::GuestPages { .. } => return Err(VgpuError::Unsupported),
@@ -3031,16 +3055,20 @@ pub(crate) fn submit_ui4_indexed_draw(
                 crate::intel::dma_flush(unsafe { texture_virt.add(0) }, texture_bytes);
                 let texture_bytes =
                     unsafe { core::slice::from_raw_parts(texture_virt, texture_bytes) };
-                Some(
-                    crate::intel::render::create_resident_sampled_rgba8_texture(
+                let resident = Arc::new(crate::intel::render::create_resident_sampled_rgba8_texture(
                         draw.texture_width,
                         draw.texture_height,
                         draw.texture_pitch,
                         draw.sampler_flags,
                         texture_bytes,
                     )
-                    .map_err(|_| VgpuError::OutOfMemory)?,
-                )
+                    .map_err(|_| VgpuError::OutOfMemory)?);
+                lookup_buffer_mut(device, draw.sampled_texture)?.sampled = Some(SampledBufferCache {
+                    shape, bytes: texture_bytes.len(), resident: Arc::clone(&resident),
+                });
+                device.memory_used = device.memory_used.saturating_add(texture_bytes.len());
+                Some(resident)
+                }
             } else {
                 None
             };
@@ -3096,7 +3124,7 @@ pub(crate) fn submit_ui4_indexed_draw(
     let scene_draw = crate::intel::render::ResidentSceneDraw {
         mesh: &mesh,
         rgba: SHADER_PACKAGE_CLIP_POSITION3_RGBA_COLOR.to_le_bytes(),
-        sampled_texture: sampled_texture.as_ref(),
+        sampled_texture: sampled_texture.as_deref(),
         fragment_contract: if sampled_texture.is_some() {
             crate::intel::render::ResidentSceneFragmentContract::ClipPosition3UvTexture
         } else {
@@ -3163,13 +3191,9 @@ pub(crate) fn submit_ui4_indexed_draw(
         // Render0.
         false
     };
-    let released_texture = if rendered.is_ok() || transient_busy {
-        sampled_texture
-            .as_ref()
-            .is_none_or(crate::intel::render::release_resident_sampled_texture)
-    } else {
-        false
-    };
+    // The buffer owns the immutable resident texture. The staged Arc pins it
+    // through completion; writes and destruction invalidate only after retirement.
+    let released_texture = rendered.is_ok() || transient_busy;
     if transient_busy && released_mesh && released_texture {
         rollback_indexed_submission_lease(principal, device_handle, queue_handle, draw.surface);
         return Err(VgpuError::Busy);
@@ -6400,6 +6424,9 @@ fn destroy_device_resources(
     device.render_pipelines.clear();
     device.shader_modules.clear();
     for slot in &mut device.buffers {
+        if let Some(record) = slot.record.as_mut() {
+            release_sampled_buffer(record)?;
+        }
         if let Some(record) = slot.record.as_ref() {
             let vm = vm.ok_or(VgpuError::Unsupported)?;
             physical.unmap_gpuvm(vm, record.gpu, record.bytes)?;
@@ -6442,6 +6469,17 @@ fn device_has_operation_leases(device: &VirtualDevice) -> bool {
             .iter()
             .filter_map(|slot| slot.record.as_ref())
             .any(|record| record.in_flight != 0)
+}
+
+fn release_sampled_buffer(record: &mut BufferRecord) -> Result<usize, VgpuError> {
+    let Some(cache) = record.sampled.as_ref() else { return Ok(0); };
+    if Arc::strong_count(&cache.resident) != 1 { return Err(VgpuError::Busy); }
+    if !crate::intel::render::release_resident_sampled_texture(&cache.resident) {
+        return Err(VgpuError::DeviceLost);
+    }
+    let bytes = cache.bytes;
+    record.sampled = None;
+    Ok(bytes)
 }
 
 fn release_buffer_backing(record: &mut BufferRecord) {
