@@ -149,7 +149,6 @@ AARCH64_KERNEL_PYTHON ?= python3
 AARCH64_KERNEL_CLANG ?= clang
 INTEL_GPU_ARTIFACT_FRONTEND := cpp-for-opencl
 INTEL_GPU_SELECTED_COPY_BIN := $(INTEL_GPU_CPP_COPY_BIN)
-PICASSO_ARTIFACT_DIR := picasso
 # Picasso owns its checked-in shaders. The former Helio capture examples are
 # intentionally not rebuilt as part of an OS image or release.
 INTEL_GPU_PREBUILD_VERIFY := intel-gpu-verify-cpp-artifacts
