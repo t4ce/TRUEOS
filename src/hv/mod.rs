@@ -2087,9 +2087,27 @@ fn start_with_mode(
         return Err(StartError::AlreadyRunning);
     }
     if is_blueprint_start {
-        memory::clear_restore_meta_for_vm(vm_id);
+        // `starting` is the fresh-incarnation latch: no other launcher can
+        // claim this VM id after it is set.  Retain an offline incarnation's
+        // resources for recovery until this point, then destroy them before
+        // applying the new Blueprint's memory profile.  In particular, an
+        // initialized guest heap cannot be resized in place and would
+        // otherwise make launch success depend on the previous occupant's
+        // profile.
+        if let Err(error) = eject_offline_vm(vm_id, true) {
+            hvwarnf(format_args!(
+                "hv: vm{} lifecycle: fresh blueprint resource reset failed ({:?})",
+                vm_id, error
+            ));
+            vm.starting.store(false, Ordering::Release);
+            return Err(match error {
+                EjectError::UnsupportedVmId => StartError::UnsupportedVmId,
+                EjectError::VmBusy => StartError::AlreadyRunning,
+                EjectError::VgpuQuarantined => StartError::VgpuQuarantined,
+            });
+        }
         hvlogf(format_args!(
-            "hv: vm{} lifecycle: fresh blueprint start disarmed restore metadata",
+            "hv: vm{} lifecycle: fresh blueprint start reset offline resources",
             vm_id
         ));
     }
@@ -2258,11 +2276,18 @@ pub fn stop(vm_id: u8) -> Result<bool, StopError> {
 /// Destroy an offline retained VM and its warm checkpoint. Named persistent
 /// images are independent and remain on TRUEOSFS.
 pub fn eject(vm_id: u8) -> Result<bool, EjectError> {
+    eject_offline_vm(vm_id, false)
+}
+
+/// Destroy one offline VM incarnation. A fresh Blueprint start calls this
+/// after atomically claiming the slot with `starting`; interactive ejects must
+/// still reject every starting VM.
+fn eject_offline_vm(vm_id: u8, allow_starting: bool) -> Result<bool, EjectError> {
     let Some(vm) = vm_slot(vm_id) else {
         return Err(EjectError::UnsupportedVmId);
     };
     if vm.running.load(Ordering::Acquire)
-        || vm.starting.load(Ordering::Acquire)
+        || (!allow_starting && vm.starting.load(Ordering::Acquire))
         || vm.restore_inflight.load(Ordering::Acquire)
     {
         return Err(EjectError::VmBusy);

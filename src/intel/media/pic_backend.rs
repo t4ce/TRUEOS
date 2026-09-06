@@ -1283,6 +1283,44 @@ fn clear_output_surface_to_tiled_nv12_black(
     true
 }
 
+// MFX_IND_OBJ_BASE_ADDR_STATE stores the access upper bound in bits 47:12.
+// Intel media-driver rounds the byte size UP before adding it to the base.
+// A raw byte end truncates the final page (e.g. a 6664-byte JPEG stops at 4096).
+fn jpeg_bitstream_upper_bound(base: u64, bytes: usize) -> Option<u64> {
+    const PAGE: u64 = 4096;
+    if base & (PAGE - 1) != 0 || bytes == 0 {
+        return None;
+    }
+    let rounded = u64::try_from(bytes).ok()?.checked_add(PAGE - 1)? & !(PAGE - 1);
+    base.checked_add(rounded)
+}
+
+#[cfg(test)]
+mod jpeg_bitstream_bound_tests {
+    use super::jpeg_bitstream_upper_bound;
+
+    #[test]
+    fn last_partial_page_stays_in_the_decoder_access_window() {
+        let base = 0x0D20_0000;
+        for bytes in [1, 4095, 4096, 4097, 6664, 8192, 8 * 1024 * 1024] {
+            let end = jpeg_bitstream_upper_bound(base, bytes).unwrap();
+            assert_eq!(end & 0xFFF, 0, "reserved address bits must be zero");
+            assert!(base + bytes as u64 - 1 < end);
+            assert!(end - (base + bytes as u64) < 4096);
+        }
+        assert_eq!(jpeg_bitstream_upper_bound(base, 6664), Some(base + 8192));
+        assert_eq!(jpeg_bitstream_upper_bound(base, 8192), Some(base + 8192));
+    }
+
+    #[test]
+    fn rejects_unaligned_empty_or_wrapping_windows() {
+        assert_eq!(jpeg_bitstream_upper_bound(1, 4096), None);
+        assert_eq!(jpeg_bitstream_upper_bound(4096, 0), None);
+        assert_eq!(jpeg_bitstream_upper_bound(u64::MAX & !4095, 4096), None);
+        assert_eq!(jpeg_bitstream_upper_bound(0, usize::MAX), None);
+    }
+}
+
 fn build_jpeg_decode_batch(
     batch_virt: *mut u8,
     batch_bytes: usize,
@@ -1477,7 +1515,9 @@ fn build_jpeg_decode_batch(
     )?;
     media::packet_write_addr64(batch, ind_obj, 1, bitstream_gpu_addr);
     batch[ind_obj + 3] = media::MFX_MOCS_UC;
-    media::packet_write_addr64(batch, ind_obj, 4, bitstream_gpu_addr + bitstream_bytes as u64);
+    media::packet_write_addr64(
+        batch, ind_obj, 4, jpeg_bitstream_upper_bound(bitstream_gpu_addr, bitstream_bytes)?,
+    );
     batch[ind_obj + 8] = media::MFX_MOCS_UC;
     batch[ind_obj + 13] = media::MFX_MOCS_UC;
     batch[ind_obj + 18] = media::MFX_MOCS_UC;
