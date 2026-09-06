@@ -16,10 +16,6 @@ libusb = ["libusb1-sys"]
 
 [dependencies]
 bitflags = "2.8"
-crossbeam = {path = "../../crossbeam-0.8.4", version = "0.8", features = ["alloc"], default-features = false}
-crossbeam-skiplist = {path = "../../crossbeam-skiplist-0.1.3", version = "0.1", features = [
-  "alloc",
-], default-features = false}
 dma-api = {version = "0.7"}
 
 anyhow = {version = "1", default-features = false}
