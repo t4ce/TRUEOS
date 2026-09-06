@@ -13,6 +13,65 @@ use core::sync::atomic::{AtomicBool, Ordering};
 
 const AVC_COMPLETION_POLL_DELAY_MS: u64 = 1;
 const AVC_COMPLETION_POLL_TIMEOUT_MS: u64 = 100;
+const AVC_CONTEXT_TEARDOWN_TIMEOUT_US: u64 = 100_000;
+
+/// GuC lifecycle completion is asynchronous. Keep the media lane and all
+/// backing owned by the caller until DEREGISTER_CONTEXT_DONE, including when
+/// another UI4 context delays the first bounded scheduler poll.
+async fn destroy_avc_context(
+    dev: crate::intel::Dev,
+    token: crate::intel::guc_submission::GucContextToken,
+) -> Result<(), crate::intel::guc_submission::GucSubmissionError> {
+    use crate::intel::guc_submission::{GucSubmissionError, INTEL_GUC_SCHEDULER};
+
+    let started = media_backend_now_ticks();
+    loop {
+        match INTEL_GUC_SCHEDULER.destroy(dev, token) {
+            Ok(()) => return Ok(()),
+            Err(error @ (GucSubmissionError::DisablePending
+                | GucSubmissionError::DeregisterPending)) => {
+                if media_backend_elapsed_us(started) >= AVC_CONTEXT_TEARDOWN_TIMEOUT_US {
+                    return Err(error);
+                }
+                trueos_time::Timer::after_millis(1).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+fn log_avc_submission_failure(
+    dev: crate::intel::Dev,
+    engine: MediaEngineDescriptor,
+    windows: MediaGpuWindowLayout,
+    backing: MediaBitstreamBacking,
+) {
+    // Capture before quarantine, without resetting or repairing mappings.
+    // These markers locate the stall even when verbose media probes are off.
+    super::dma_flush(backing.result_virt, backing.result_bytes);
+    crate::log_error!(target: "intel-media";
+        "intel/hw_pic-submit: failure-state engine={} ppgtt_root=0x{:X} ring_gpu=0x{:X} ring_phys=0x{:X} ring_pte=0x{:X} context_gpu=0x{:X} context_phys=0x{:X} context_pte=0x{:X} head=0x{:X} tail=0x{:X} acthd=0x{:X}:0x{:08X} ipeir=0x{:X} ipehr=0x{:X} fault=0x{:X} markers=0x{:X}/0x{:X}/0x{:X}/0x{:X} action=observe-only\n",
+        engine.name,
+        backing.ppgtt_pml4_phys,
+        windows.ring_gpu_addr,
+        backing.ring_phys,
+        crate::intel::read_ggtt_pte(dev, windows.ring_gpu_addr).unwrap_or(0),
+        windows.context_gpu_addr,
+        backing.context_phys,
+        crate::intel::read_ggtt_pte(dev, windows.context_gpu_addr).unwrap_or(0),
+        super::mmio_read(dev, engine.ring_base + media::RING_HEAD),
+        super::mmio_read(dev, engine.ring_base + media::RING_TAIL),
+        super::mmio_read(dev, engine.ring_base + media::RING_ACTHD_UDW),
+        super::mmio_read(dev, engine.ring_base + media::RING_ACTHD),
+        super::mmio_read(dev, engine.ring_base + media::RING_IPEIR),
+        super::mmio_read(dev, engine.ring_base + media::RING_IPEHR),
+        super::mmio_read(dev, media::GEN12_RING_FAULT_REG),
+        media::read_result_dword(backing.result_virt, media::MEDIA_RESULT_KICKOFF_SLOT),
+        media::read_result_dword(backing.result_virt, media::MEDIA_RESULT_PRESUBMIT_SLOT),
+        media::read_result_dword(backing.result_virt, media::MEDIA_RESULT_POSTSUBMIT_SLOT),
+        media::read_result_dword(backing.result_virt, media::MEDIA_RESULT_COMPLETE_SLOT),
+    );
+}
 
 static AVC_NORESET_LITE_ENABLED: AtomicBool = AtomicBool::new(false);
 static AVC_NORESET_LITE_RESET_DONE: AtomicBool = AtomicBool::new(false);
@@ -1874,16 +1933,17 @@ pub(super) async fn submit_avc_single_idr_batch(
     {
         Ok(submission) => submission,
         Err(error) => {
-            let destroyed = crate::intel::guc_submission::INTEL_GUC_SCHEDULER
-                .destroy(dev, guc_token)
-                .is_ok();
+            let teardown = destroy_avc_context(dev, guc_token).await;
+            let destroyed = teardown.is_ok();
             crate::log_error!(target: "intel-media";
-                "intel/hw_pic-submit: accepted=0 codec=h264 engine={} submission_owner=guc direct_execlist_submit=0 stage=submit reason={} context_destroyed={}\n",
+                "intel/hw_pic-submit: accepted=0 codec=h264 engine={} submission_owner=guc direct_execlist_submit=0 stage=submit reason={} context_destroyed={} teardown_reason={}\n",
                 engine.name,
                 error.name(),
                 destroyed as u8,
+                teardown.err().map(|error| error.name()).unwrap_or("complete"),
             );
             if !destroyed {
+                log_avc_submission_failure(dev, engine, windows, backing);
                 media_lane.quarantine();
             }
             return None;
@@ -1921,6 +1981,7 @@ pub(super) async fn submit_avc_single_idr_batch(
     };
     let poll_us = media_backend_elapsed_us(poll_start);
     if !retired {
+        log_avc_submission_failure(dev, engine, windows, backing);
         crate::log_error!(target: "intel-media";
             "intel/hw_pic-submit: accepted=0 codec=h264 engine={} submission_owner=guc direct_execlist_submit=0 stage=completion reason=timeout guc_serial={} action=quarantine-engine-context\n",
             engine.name,
@@ -1929,13 +1990,12 @@ pub(super) async fn submit_avc_single_idr_batch(
         media_lane.quarantine();
         return None;
     }
-    let guc_context_destroyed = crate::intel::guc_submission::INTEL_GUC_SCHEDULER
-        .destroy(dev, guc_token)
-        .is_ok();
-    if !guc_context_destroyed {
+    if let Err(error) = destroy_avc_context(dev, guc_token).await {
+        log_avc_submission_failure(dev, engine, windows, backing);
         crate::log_error!(target: "intel-media";
-            "intel/hw_pic-submit: accepted=0 codec=h264 engine={} submission_owner=guc direct_execlist_submit=0 stage=teardown reason=context-destroy-rejected guc_serial={} action=quarantine-engine-context\n",
+            "intel/hw_pic-submit: accepted=0 codec=h264 engine={} submission_owner=guc direct_execlist_submit=0 stage=teardown reason={} guc_serial={} action=quarantine-engine-context\n",
             engine.name,
+            error.name(),
             guc_submission.serial,
         );
         media_lane.quarantine();
@@ -2071,7 +2131,7 @@ pub(super) async fn submit_avc_single_idr_batch(
         submission_owner: "guc",
         direct_execlist_submit: false,
         guc_serial: guc_submission.serial,
-        guc_context_destroyed,
+        guc_context_destroyed: true,
         batch_gpu_addr: windows.batch_gpu_addr,
         result_gpu_addr: windows.result_gpu_addr,
         bitstream_gpu_addr: windows.bitstream_gpu_addr,
