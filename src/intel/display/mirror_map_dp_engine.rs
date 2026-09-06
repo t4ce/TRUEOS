@@ -733,6 +733,17 @@ pub(crate) fn poll_ui4_wd_xyuv8888_capture() -> WdCapturePoll {
     WdCapturePoll::Complete(state.frame())
 }
 
+fn disable_mirror_planes(dev: crate::intel::Dev) {
+    for slot in 0..UNIVERSAL_PLANE_SLOTS {
+        let plane = PIPES[MIRROR_PIPE_SLOT].plane(slot);
+        crate::intel::mmio_write(dev, plane.ctl(), 0);
+        crate::intel::mmio_write(dev, plane.surf(), 0);
+    }
+    let cursor = CURSOR_A_BASE + MIRROR_PIPE_SLOT * CURSOR_PIPE_STRIDE;
+    crate::intel::mmio_write(dev, cursor + CURSOR_CTL_OFF, 0);
+    crate::intel::mmio_write(dev, cursor + CURSOR_BASE_OFF, 0);
+}
+
 pub(crate) fn stop_ui4_wd_xyuv8888_capture() -> Result<(), WdCaptureError> {
     let dev = crate::intel::claimed_device().ok_or(WdCaptureError::DeviceUnavailable)?;
     let mut state = STATE.lock();
@@ -743,7 +754,18 @@ pub(crate) fn stop_ui4_wd_xyuv8888_capture() -> Result<(), WdCaptureError> {
         let ctl = crate::intel::mmio_read(dev, WD0_FUNC_CTL);
         crate::intel::mmio_write(dev, WD0_FUNC_CTL, ctl | WD_STOP_TRIGGER_FRAME);
         CAPTURE_TIMEOUTS.fetch_add(1, Ordering::Relaxed);
+        // Intel Display PRM, Sequences for WD: triggered capture must be
+        // complete before disabling planes/transcoder. A stop request is not
+        // itself retirement proof. Preserve all backing if it remains busy.
+        if !wait_for_mask(dev, WD0_FRAME_STATUS, WD_FRAME_COMPLETE, true, PIPE_WAIT_ITERS) {
+            state.quarantined = true;
+            return Err(WdCaptureError::WdDisableTimeout);
+        }
+        state.pending = false;
     }
+    // Disable only Pipe C's mirrored fetchers before the WD transcoder.
+    // Pipe A remains independently owned by UI4 throughout teardown.
+    disable_mirror_planes(dev);
     crate::intel::mmio_write(dev, WD0_TRANS_CONF, 0);
     if !wait_for_mask(dev, WD0_TRANS_CONF, WD_TRANS_STATE, false, PIPE_WAIT_ITERS) {
         state.quarantined = true;
@@ -753,14 +775,6 @@ pub(crate) fn stop_ui4_wd_xyuv8888_capture() -> Result<(), WdCaptureError> {
         return Err(WdCaptureError::WdDisableTimeout);
     }
     crate::intel::mmio_write(dev, WD0_FUNC_CTL, 0);
-    for slot in 0..UNIVERSAL_PLANE_SLOTS {
-        let plane = PIPES[MIRROR_PIPE_SLOT].plane(slot);
-        crate::intel::mmio_write(dev, plane.ctl(), 0);
-        crate::intel::mmio_write(dev, plane.surf(), 0);
-    }
-    let cursor = CURSOR_A_BASE + MIRROR_PIPE_SLOT * CURSOR_PIPE_STRIDE;
-    crate::intel::mmio_write(dev, cursor + CURSOR_CTL_OFF, 0);
-    crate::intel::mmio_write(dev, cursor + CURSOR_BASE_OFF, 0);
     restore_pipe_c_output_color(dev, state.saved_output_color);
     crate::intel::mmio_write(dev, DBUF_CTL_S2, state.saved_dbuf_ctl_s2);
     crate::intel::mmio_write(dev, HSW_PWR_WELL_CTL2, state.saved_power_well_ctl2);

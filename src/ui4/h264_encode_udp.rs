@@ -42,7 +42,6 @@ const UDP_SUBSCRIBER_POLL_MS: u64 = 10;
 const PREPARED_FRAME_POLL_MS: u64 = 1;
 const UDP_SUBMIT_RETRY_LIMIT: usize = 64;
 const ENCODED_ACCESS_UNIT_QUEUE_CAP: usize = 4;
-const EGRESS_QUEUE_POLL_MS: u64 = 1;
 // The adapter's UDP socket allocates eight TX packet-metadata entries. Match
 // that exact capacity: one eight-fragment window occupies at most 9,600 bytes
 // of the 64 KiB byte ring and can be admitted in one network-service turn.
@@ -167,6 +166,10 @@ impl EgressPipeline {
 }
 
 static EGRESS_PIPELINE: Mutex<EgressPipeline> = Mutex::new(EgressPipeline::new());
+static EGRESS_WAKE: embassy_sync::signal::Signal<crate::wait::EmbassySpinRawMutex, ()> =
+    embassy_sync::signal::Signal::new();
+static PRODUCER_WAKE: embassy_sync::signal::Signal<crate::wait::EmbassySpinRawMutex, ()> =
+    embassy_sync::signal::Signal::new();
 static EGRESS_WORKER_SLOT: AtomicU32 = AtomicU32::new(u32::MAX);
 
 struct PendingDatagram {
@@ -258,6 +261,8 @@ fn request_egress_session(request: EgressSessionRequest) -> bool {
         return false;
     }
     pipeline.reset_for_request(request);
+    drop(pipeline);
+    EGRESS_WAKE.signal(());
     true
 }
 
@@ -278,6 +283,8 @@ fn mark_egress_session_ready(session_id: u32) -> bool {
         return false;
     }
     pipeline.phase = EgressSessionPhase::Ready;
+    drop(pipeline);
+    PRODUCER_WAKE.signal(());
     true
 }
 
@@ -319,6 +326,8 @@ fn enqueue_access_unit(session_id: u32, access_unit: EncodedAccessUnit) -> bool 
     pipeline.queued_access_units = pipeline.queued_access_units.saturating_add(1);
     pipeline.high_water_access_units = pipeline.high_water_access_units.max(pipeline.queue.len());
     pipeline.high_water_bytes = pipeline.high_water_bytes.max(pipeline.queued_bytes);
+    drop(pipeline);
+    EGRESS_WAKE.signal(());
     true
 }
 
@@ -337,6 +346,8 @@ fn finish_egress_producer(session_id: u32, dropped_access_units: usize, dropped_
     if pipeline.phase == EgressSessionPhase::Ready {
         pipeline.phase = EgressSessionPhase::ProducerDone;
     }
+    drop(pipeline);
+    EGRESS_WAKE.signal(());
 }
 
 fn mark_egress_cadence_started(session_id: u32, started_ns: u64) {
@@ -390,6 +401,8 @@ fn abort_egress_session(session_id: u32) {
     }
     pipeline.queued_bytes = 0;
     pipeline.phase = EgressSessionPhase::Aborted;
+    drop(pipeline);
+    EGRESS_WAKE.signal(());
 }
 
 fn complete_egress_session(session_id: u32, mut report: MediaUdpStreamReport) {
@@ -411,6 +424,8 @@ fn complete_egress_session(session_id: u32, mut report: MediaUdpStreamReport) {
     pipeline.queue.clear();
     pipeline.report = Some(report);
     pipeline.phase = EgressSessionPhase::Complete;
+    drop(pipeline);
+    PRODUCER_WAKE.signal(());
 }
 
 fn take_egress_report(session_id: u32) -> Option<MediaUdpStreamReport> {
@@ -453,7 +468,7 @@ where
         target_hz,
     };
     while !request_egress_session(request) {
-        Timer::after(Duration::from_millis(EGRESS_QUEUE_POLL_MS)).await;
+        PRODUCER_WAKE.wait().await;
     }
     loop {
         if egress_session_ready(session_id) {
@@ -462,7 +477,7 @@ where
         if let Some(report) = take_egress_report(session_id) {
             return report;
         }
-        Timer::after(Duration::from_millis(EGRESS_QUEUE_POLL_MS)).await;
+        PRODUCER_WAKE.wait().await;
     }
 
     let prefill_started_ns = crate::chronos::monotonic_nanos();
@@ -537,7 +552,7 @@ where
         if let Some(report) = take_egress_report(session_id) {
             break report;
         }
-        Timer::after(Duration::from_millis(EGRESS_QUEUE_POLL_MS)).await;
+        PRODUCER_WAKE.wait().await;
     };
     if report.elapsed_us == 0 {
         report.elapsed_us = crate::chronos::monotonic_nanos().saturating_sub(started_ns) / 1_000;
@@ -568,7 +583,7 @@ pub(crate) async fn ui4_h264_encode_udp_egress_task() {
             if let Some(request) = take_egress_session_request() {
                 break request;
             }
-            Timer::after(Duration::from_millis(EGRESS_QUEUE_POLL_MS)).await;
+            EGRESS_WAKE.wait().await;
         };
         let report = run_egress_session(&mut transport, request).await;
         complete_egress_session(request.session_id, report);
@@ -662,7 +677,7 @@ async fn run_egress_session(
     let mut datagram_sequence = 0u32;
     loop {
         let Some(next) = take_next_egress_access_unit(request.session_id) else {
-            Timer::after(Duration::from_millis(EGRESS_QUEUE_POLL_MS)).await;
+            EGRESS_WAKE.wait().await;
             continue;
         };
         let Some(access_unit) = next else {
@@ -688,7 +703,7 @@ async fn run_egress_session(
     }
 
     while !egress_producer_finished(request.session_id) {
-        Timer::after(Duration::from_millis(EGRESS_QUEUE_POLL_MS)).await;
+        EGRESS_WAKE.wait().await;
     }
     report.elapsed_us = egress_elapsed_us(request.session_id);
     Timer::after(Duration::from_millis(UDP_CLOSE_LINGER_MS)).await;

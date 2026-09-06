@@ -21,7 +21,6 @@ const ENCODE_HEIGHT: usize = TEST_RIG_SCANOUT_HEIGHT as usize;
 const ACTIVE_HEIGHT: usize = ENCODE_HEIGHT;
 const ACTIVE_TOP: usize = (ENCODE_HEIGHT - ACTIVE_HEIGHT) / 2;
 const CADENCE_TOLERANCE_PERCENT: u64 = 5;
-const PREPARE_IDLE_POLL_MS: u64 = 1;
 // WD0 currently owns one resident capture surface. Keep capture and VDEnc
 // strictly serialized so the next writeback cannot overwrite a frame that
 // VCS0 is still reading.
@@ -37,6 +36,8 @@ static ENCODE_US: AtomicU64 = AtomicU64::new(0);
 static SOURCE_BYTES: AtomicUsize = AtomicUsize::new(0);
 static ENCODED_BYTES: AtomicUsize = AtomicUsize::new(0);
 static PREPARE_WORKER_SLOT: AtomicU32 = AtomicU32::new(u32::MAX);
+static PREPARE_WAKE: embassy_sync::signal::Signal<crate::wait::EmbassySpinRawMutex, ()> =
+    embassy_sync::signal::Signal::new();
 static PREPARE_PIPELINE: Mutex<PreparePipeline> = Mutex::new(PreparePipeline::new());
 
 const _: () = {
@@ -230,7 +231,7 @@ pub(crate) async fn ui4_h264_encode_prepare_task() {
 
     loop {
         let Some(job) = take_prepare_job() else {
-            Timer::after(Duration::from_millis(PREPARE_IDLE_POLL_MS)).await;
+            PREPARE_WAKE.wait().await;
             continue;
         };
         prepare_scanout(job).await;
@@ -269,6 +270,16 @@ async fn prepare_scanout(job: PrepareJob) {
     // frame. Do not race its trigger or backing teardown; resume the stream as
     // soon as that bounded manual capture releases the display path.
     while !crate::intel::media::wd_xyuv8888::try_claim_stream_capture() {
+        {
+            let mut pipeline = PREPARE_PIPELINE.lock();
+            if !pipeline.active || pipeline.generation != job.generation {
+                let slot = &mut pipeline.slots[job.slot_index];
+                if slot.generation == job.generation && slot.state == PrepareSlotState::Filling {
+                    slot.state = PrepareSlotState::Empty;
+                }
+                return;
+            }
+        }
         Timer::after(Duration::from_millis(1)).await;
     }
     let mut source_width = 0;
@@ -410,6 +421,8 @@ fn begin_preparation_session(session_id: u32, access_unit_count: usize) {
         slot.sequence = 0;
         slot.reset_metadata();
     }
+    drop(pipeline);
+    PREPARE_WAKE.signal(());
 }
 
 async fn end_preparation_session(session_id: u32) -> bool {
@@ -496,6 +509,8 @@ fn release_prepared_scanout(prepared: &mut PreparedScanout) {
         slot.state = PrepareSlotState::Empty;
         slot.reset_metadata();
     }
+    drop(pipeline);
+    PREPARE_WAKE.signal(());
 }
 
 #[trueos_executor::task(pool_size = 1)]
