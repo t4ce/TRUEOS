@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Host-test the actual kernel staging/admission code against Blueprint packages."""
 import os
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -31,6 +32,18 @@ def main():
     code += '] }\n' + TESTS
     with tempfile.TemporaryDirectory(prefix="trueos-shadertoy-packages-") as temporary:
         project = Path(temporary)
+        # The Blueprint's build guard must reject edited source beside a stale bundle.
+        guard = project / "check-assets"
+        subprocess.run(["rustc", "--edition=2024", str(bp / "apps/shadertoy/build.rs"),
+                        "-o", str(guard)], check=True)
+        shutil.copytree(bp / "apps/shadertoy/assets", project / "assets")
+        environment = dict(os.environ, CARGO_MANIFEST_DIR=str(project))
+        subprocess.run([str(guard)], env=environment, check=True, stdout=subprocess.DEVNULL)
+        source = project / "assets/mandelbrot/input.glsl"
+        source.write_bytes(source.read_bytes() + b"\n// unbundled edit\n")
+        rejected = subprocess.run([str(guard)], env=environment, capture_output=True, text=True)
+        assert rejected.returncode != 0 and "stale package" in rejected.stderr
+        print("Blueprint stale-source build guard: passed")
         (project / "Cargo.toml").write_text('[package]\nname="shadertoy-package-tests"\nversion="0.1.0"\nedition="2024"\n[dependencies]\nsha2="0.10"\n[workspace]\n')
         (project / "src").mkdir()
         (project / "src/lib.rs").write_text(code)

@@ -16,6 +16,9 @@ python3 tools/shadertoy-cpp-offline/test_blueprint_packages.py
 
 The bake script uses the existing compiler lock and writes the payloads to the
 Blueprint checkout (`TRUEOS_BLUEPRINTS_ROOT` overrides the sibling default).
+It compiles an exact C++ staging copy under ignored `bld/shadertoy-blueprint-bake/`
+so provenance uses stable relative paths across checkout locations. Packaging
+checks that this baked source hash equals the Blueprint's generated C++ hash.
 Package generation includes raw source and provenance in the authenticated hash.
 `package_blueprint.py --check` verifies the result without updating trust.
 
