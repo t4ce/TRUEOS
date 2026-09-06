@@ -201,6 +201,8 @@ pub struct IndexedDraw {
 }
 
 /// Continue an existing UI4 frame in painter order, without clearing or depth.
+/// Sampled pixels are cached until write_buffer or destruction; the pixel
+/// buffer must have MAP_WRITE-only usage.
 pub const INDEXED_DRAW_LOAD_COLOR: u32 = 1;
 
 pub const MAX_INDEXED_BATCH_DRAWS: usize = 16;

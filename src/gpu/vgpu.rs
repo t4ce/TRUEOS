@@ -2770,6 +2770,7 @@ pub(crate) struct Ui4IndexedDrawDescriptor {
     pub(crate) texture_pitch: u32,
     pub(crate) sampler_flags: u32,
     pub(crate) load_color: bool,
+    pub(crate) retain_texture: bool,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -2925,6 +2926,12 @@ pub(crate) fn submit_ui4_indexed_draw(
             return Err(VgpuError::InvalidHandle);
         }
         let textured = pipeline.package_digest == SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64;
+        if draw.retain_texture && textured && lookup_buffer(device, draw.sampled_texture)?.usage != BUFFER_USAGE_MAP_WRITE {
+            return Err(VgpuError::Unsupported);
+        }
+        if textured && draw.sampler_flags != (SAMPLER_ADDRESS_U_REPEAT | SAMPLER_ADDRESS_V_REPEAT) {
+            return Err(VgpuError::Unsupported);
+        }
         let vertex_stride = pipeline.vertex_stride as usize;
         let position_offset = pipeline.position_offset as usize;
         {
@@ -3028,7 +3035,7 @@ pub(crate) fn submit_ui4_indexed_draw(
             let texture = if textured {
                 let shape = [draw.texture_width, draw.texture_height, draw.texture_pitch, draw.sampler_flags];
                 let cached = lookup_buffer(device, draw.sampled_texture)?.sampled.as_ref()
-                    .filter(|cache| cache.shape == shape).map(|cache| Arc::clone(&cache.resident));
+                    .filter(|cache| draw.retain_texture && cache.shape == shape).map(|cache| Arc::clone(&cache.resident));
                 if let Some(cached) = cached { Some(cached) } else {
                 let released = release_sampled_buffer(lookup_buffer_mut(device, draw.sampled_texture)?)?;
                 device.memory_used = device.memory_used.saturating_sub(released);
@@ -3063,10 +3070,12 @@ pub(crate) fn submit_ui4_indexed_draw(
                         texture_bytes,
                     )
                     .map_err(|_| VgpuError::OutOfMemory)?);
+                if draw.retain_texture {
                 lookup_buffer_mut(device, draw.sampled_texture)?.sampled = Some(SampledBufferCache {
                     shape, bytes: texture_bytes.len(), resident: Arc::clone(&resident),
                 });
                 device.memory_used = device.memory_used.saturating_add(texture_bytes.len());
+                }
                 Some(resident)
                 }
             } else {
@@ -3193,7 +3202,8 @@ pub(crate) fn submit_ui4_indexed_draw(
     };
     // The buffer owns the immutable resident texture. The staged Arc pins it
     // through completion; writes and destruction invalidate only after retirement.
-    let released_texture = rendered.is_ok() || transient_busy;
+    let released_texture = (rendered.is_ok() || transient_busy) && (draw.retain_texture ||
+        sampled_texture.as_deref().is_none_or(crate::intel::render::release_resident_sampled_texture));
     if transient_busy && released_mesh && released_texture {
         rollback_indexed_submission_lease(principal, device_handle, queue_handle, draw.surface);
         return Err(VgpuError::Busy);

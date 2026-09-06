@@ -20,12 +20,7 @@ pub struct State {
 impl State {
     #[cfg(not(feature = "std"))]
     pub fn new(state: u32) -> Option<Self> {
-        if cfg!(target_feature = "pclmulqdq")
-            && cfg!(target_feature = "sse2")
-            && cfg!(target_feature = "sse4.1")
-        {
-            // SAFETY: The conditions above ensure that all
-            //         required instructions are supported by the CPU.
+        if current_cpu_supports_pclmulqdq() {
             Some(Self { state })
         } else {
             None
@@ -47,8 +42,18 @@ impl State {
     }
 
     pub fn update(&mut self, buf: &[u8]) {
-        // SAFETY: The `State::new` constructor ensures that all
-        //         required instructions are supported by the CPU.
+        #[cfg(not(feature = "std"))]
+        if !current_cpu_supports_pclmulqdq() {
+            // The scheduler may eventually run a hasher on a different CPU
+            // than the one that created it. Keep the no-std path safe on a
+            // lane without PCLMULQDQ/SSE4.1 instead of executing an illegal
+            // instruction there.
+            self.state = crate::baseline::update_fast_16(self.state, buf);
+            return;
+        }
+
+        // SAFETY: The no-std path verifies the current CPU immediately above;
+        // the std path uses its existing runtime feature detection in `new`.
         self.state = unsafe { calculate(self.state, buf) }
     }
 
@@ -63,6 +68,31 @@ impl State {
     pub fn combine(&mut self, other: u32, amount: u64) {
         self.state = crate::combine::combine(self.state, other, amount);
     }
+}
+
+#[cfg(not(feature = "std"))]
+fn current_cpu_supports_pclmulqdq() -> bool {
+    // CPUID is architectural on x86_64 and is the least-privileged feature
+    // query available to the kernel. Query leaf 0 first so the x86 build also
+    // fails closed when leaf 1 is not advertised.
+    let maximum_leaf = arch::__cpuid(0).eax;
+    let leaf_1 = if maximum_leaf >= 1 {
+        arch::__cpuid(1)
+    } else {
+        return false;
+    };
+    pclmulqdq_supported(maximum_leaf, leaf_1.edx, leaf_1.ecx)
+}
+
+#[cfg(not(feature = "std"))]
+const fn pclmulqdq_supported(maximum_leaf: u32, leaf_1_edx: u32, leaf_1_ecx: u32) -> bool {
+    const PCLMULQDQ: u32 = 1 << 1;
+    const SSE2: u32 = 1 << 26;
+    const SSE4_1: u32 = 1 << 19;
+
+    maximum_leaf >= 1
+        && leaf_1_edx & SSE2 != 0
+        && leaf_1_ecx & (PCLMULQDQ | SSE4_1) == PCLMULQDQ | SSE4_1
 }
 
 const K1: i64 = 0x154442bd4;
@@ -183,3 +213,39 @@ unsafe fn get(a: &mut &[u8]) -> arch::__m128i { unsafe {
     *a = &a[16..];
     r
 }}
+
+#[cfg(all(test, not(feature = "std")))]
+mod tests {
+    use super::{State, pclmulqdq_supported};
+
+    const SSE2: u32 = 1 << 26;
+    const PCLMULQDQ: u32 = 1 << 1;
+    const SSE4_1: u32 = 1 << 19;
+
+    #[test]
+    fn cpuid_gate_requires_leaf_one_and_all_instruction_features() {
+        assert!(!pclmulqdq_supported(0, SSE2, PCLMULQDQ | SSE4_1));
+        assert!(!pclmulqdq_supported(1, 0, PCLMULQDQ | SSE4_1));
+        assert!(!pclmulqdq_supported(1, SSE2, PCLMULQDQ));
+        assert!(!pclmulqdq_supported(1, SSE2, SSE4_1));
+        assert!(pclmulqdq_supported(1, SSE2, PCLMULQDQ | SSE4_1));
+    }
+
+    #[test]
+    fn accelerated_updates_match_the_baseline_when_available() {
+        let mut input = [0u8; 1024];
+        for (index, byte) in input.iter_mut().enumerate() {
+            *byte = (index as u8).wrapping_mul(29).wrapping_add(17);
+        }
+
+        let Some(mut accelerated) = State::new(0) else {
+            return;
+        };
+        let mut baseline = crate::baseline::State::new(0);
+        for chunk in input.chunks(256) {
+            accelerated.update(chunk);
+            baseline.update(chunk);
+        }
+        assert_eq!(accelerated.finalize(), baseline.finalize());
+    }
+}
