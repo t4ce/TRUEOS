@@ -63,7 +63,9 @@ The first kernel/GPU slice is now present:
   acknowledgement abandons and pins the generation instead of manufacturing
   a reusable row.
 
-`cpp font rush` and `cpp font rush2` are the UI4 consumers. Rush stages up to
+Rush and Rush2 remain internal UI4 consumers; their former `cpp font` Shell2
+entry points were retired when artistic views moved to ShaderToy. `win` exposes
+only the separate 30-window retained demo. Rush stages up to
 32 producer leases (eight per active plane) while retaining its original
 showcase sequence. Its terminal producer storm reactivates every available
 canvas in lockstep, mapping each plane rank to one row of the shared 8x4

@@ -6,6 +6,7 @@ pub(crate) struct ShaderToyRuntimeState {
     extent: (u32, u32),
     audio: Option<crate::aud::audio_visualizer::AudioVisualizerSubscription>,
     particles: Option<GpgpuOwnedParticleCraftState>,
+    particles_need_reset: bool,
     brush: CppCloudBrush,
 }
 
@@ -21,6 +22,7 @@ impl ShaderToyRuntimeState {
             extent: (0, 0),
             audio: None,
             particles: None,
+            particles_need_reset: true,
             brush: CppCloudBrush::new(),
         }
     }
@@ -44,6 +46,7 @@ impl ShaderToyRuntimeState {
         if self.selected != params.shader_id {
             self.audio = None;
             self.particles = None;
+            self.particles_need_reset = true;
             self.brush = CppCloudBrush::new();
             self.selected = params.shader_id;
         }
@@ -90,8 +93,7 @@ impl ShaderToyRuntimeState {
                 )
             }
             15 => {
-                let reset = self.particles.is_none();
-                if reset {
+                if self.particles.is_none() {
                     self.particles = GpgpuOwnedParticleCraftState::allocate();
                 }
                 let Some(state) = self.particles.as_mut() else {
@@ -102,15 +104,21 @@ impl ShaderToyRuntimeState {
                     params.delta_seconds.clamp(0.001, 0.05),
                     self.seed.rotate_left(11).wrapping_add(0xC0FF_EE51),
                 );
-                if reset {
+                if self.particles_need_reset {
                     craft.flags |= PARTICLE_CRAFT_FLAG_RESET;
                 }
-                particle_craft_rgba8_frame_scaled(
+                let result = particle_craft_rgba8_frame_scaled(
                     state,
                     dst,
                     craft,
                     particle_craft_catalog_divisor(dst.width, dst.height),
-                )
+                );
+                // A rejected first submission never initialized the storage.
+                // Keep RESET pending if the caller retries the same selection.
+                if result.ok {
+                    self.particles_need_reset = false;
+                }
+                result
             }
             _ => GpgpuRgba8KernelResult::default(),
         }

@@ -131,19 +131,12 @@ PNG and never presents that fallback as GPU or performance evidence.
 Boot `bld/trueos.iso` on the i5-14500T TestRig at `00:02.0`,
 `8086:4680`, revision `0x0c`, leave the normal audio playback active, then:
 
-Run `cpp`, focus its UI4 frame, and cycle with Left or Right until the audio
-view is active. Then use `cpp status` for promotion evidence.
-
-Maximize and restore the UI4 window. Promotion evidence should include:
-
-- continuous unchanged speaker playback;
-- `pcm_tap=1`, an advancing PCM sequence, and non-zero feature values;
-- `resident=1 verified=1`;
-- advancing attempted/submitted/completed/published counts;
-- post-marker `0xC0DEA902` and no late/failure growth;
-- applied resize logs for both maximize and restore;
-- visual response to channel width, bass onset, vocal/mid energy, and hats;
-- submit time that remains below the configured 50 ms cadence at 2560x1440.
+Open ShaderToy and select F7. Play audio through TRUEOS, maximize and restore
+the window, then switch away and back. Collect the ShaderToy throughput logs and
+observe continued speaker playback and a visual response to stereo width, bass
+onsets, midrange energy and high frequencies. Open a second audio view and close
+one: the surviving view should continue to react. Check producer failures and
+resize logs; the app targets 30 Hz and reports actual render-and-publish time.
 
 The linked artifact, ABI, and composition are host-validated. Those physical
 audio, display, and timing observations remain the final hardware gate.

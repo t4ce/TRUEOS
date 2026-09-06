@@ -19,7 +19,7 @@ allocating full scanout-sized rings.
 Particles have soft cores, velocity-aligned tails, bloom, and bounded
 attractor/swirl physics over a procedural dark field. The Blueprint particle
 app follows live UI4 pointer input for two seconds after each event, then
-returns to the scripted orbit used by the interactive `cpp` particle view.
+returns to the scripted orbit used by the ShaderToy ParticleCraft view.
 The broad-phase particle bounds affect work rejection only. Separate smooth
 round masks drive the head sphere and tail capsule to zero before those bounds,
 preventing rectangular glow cutoffs during spawn and fade.
@@ -60,7 +60,7 @@ C++ are bake-time dependencies only.
 The checked artifact targets `8086:4680`, revision `0x0c`, and has SHA-256:
 
 ```text
-cc9cd45afedc335be1ae6086f29d6276795113bae899f915162e53ad522b256a
+8b3d026f2129593c9344c01c5f6cd89ecf213dcaa5adf8cd3c843d990783e113
 ```
 
 Bake and verify:
@@ -70,11 +70,13 @@ make intel-gpu-bake-particle-craft-cpp
 make intel-gpu-verify-cpp-artifacts
 ```
 
-Run on the TestRig:
+Open the ShaderToy Blueprint and use Left/Right to select ParticleCraft (ID 15).
+Escape closes the app. Shell2 `cpp` is retired; `win` runs only the 30-window UI4
+demo. The native program and its raw C++ inputs are packaged in ShaderToy, with
+all three entry-point contracts checked before registration.
 
-```text
-cpp
-Left / Right until particle
-cpp status
-cpp stop
-```
+The catalog keeps particle state per window and resets it on re-entry. It uses
+the kernel's existing 1/2/4 pixel-block writer to reproduce the old preview's
+sample count on a full-size shared ShaderToy surface. At 1440p this is 1280×720
+samples. The legacy half-size backing/plane-scaler policy remains available to
+other internal consumers; this migration adds no upscale dispatch.

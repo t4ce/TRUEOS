@@ -54,9 +54,9 @@ mod shadertoy_package {
 }
 #[derive(Default)]
 struct Trace { modes:Vec<u32>, brushes:Vec<Vec<u32>>, particle_flags:Vec<u32>, particle_allocations:usize,
-    particle_drops:usize, resident:bool, quarantine:bool, uploads:usize, submits:usize }
+    particle_drops:usize, reject_particle:bool, resident:bool, quarantine:bool, uploads:usize, submits:usize }
 static TRACE: Mutex<Trace> = Mutex::new(Trace { modes:Vec::new(),brushes:Vec::new(),particle_flags:Vec::new(),
-    particle_allocations:0,particle_drops:0,resident:true,quarantine:false,uploads:0,submits:0 });
+    particle_allocations:0,particle_drops:0,reject_particle:false,resident:true,quarantine:false,uploads:0,submits:0 });
 fn direct_rcs_context_is_quarantined()->bool { TRACE.lock().quarantine }
 fn upload_shadertoy_kernel(_:u32)->Option<()> { TRACE.lock().resident.then_some(()) }
 #[derive(Copy,Clone)]
@@ -77,7 +77,8 @@ struct ParticleCraftParamsV1 { flags:u32, dt:f32 }
 impl ParticleCraftParamsV1 { fn arc_forge(_:f32,dt:f32,_:u32)->Self { Self {flags:8,dt} } }
 fn particle_craft_rgba8_frame_scaled(_: &mut GpgpuOwnedParticleCraftState,s:GpgpuRgba8Surface,p:ParticleCraftParamsV1,divisor:u32)->GpgpuRgba8KernelResult {
     assert!(ParticleCraftRenderPlan::new(s.width,s.height,divisor).is_some());
-    assert!((0.001..=0.05).contains(&p.dt)); TRACE.lock().particle_flags.push(p.flags);ok()
+    assert!((0.001..=0.05).contains(&p.dt)); TRACE.lock().particle_flags.push(p.flags);
+    if TRACE.lock().reject_particle { GpgpuRgba8KernelResult::default() } else { ok() }
 }
 static DIRECT_RCS_SUBMIT_LOCK: Mutex<()> = Mutex::new(());
 const CPP_AUDIO_VISUALIZER_POST_MARKER:u32=42;
@@ -105,6 +106,18 @@ fn reset() { *TRACE.lock()=Trace{resident:true,..Default::default()}; }
 '''
 
 TESTS = r'''
+#[test]
+fn rejected_first_particle_submission_keeps_reset_pending_for_retry() {
+    reset();let mut a=ShaderToyRuntimeState::new(1);
+    TRACE.lock().reject_particle=true;
+    assert!(!a.render(surface(),params(15)).ok);
+    TRACE.lock().reject_particle=false;
+    assert!(a.render(surface(),params(15)).ok);
+    assert!(a.render(surface(),params(15)).ok);
+    assert_eq!(TRACE.lock().particle_flags,vec![9,9,8]);
+    assert_eq!(TRACE.lock().particle_allocations,1);
+}
+
 #[test]
 fn particles_reuse_the_existing_sample_budget_through_all_resize_shapes() {
     for (w,h) in [(640,360),(640,400),(1280,800),(2560,1440),(2561,1441),(1441,2561),(800,640)] {

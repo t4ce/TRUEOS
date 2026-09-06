@@ -105,15 +105,10 @@ and the literal text `hello`. Expected:
 rendered=1 timeline=1 submitted=<n>-><n+1> completed=<n+1> error=none
 ```
 
-For a direct behavior check of the production buffer path, run:
-
-```text
-cpp font stamp "hello"
-```
-
-Its asynchronous result should contain `cpp font stamp complete`, `ok=1`, and
-an owned RGBA8 `handle`. Release it after inspection with
-`cpp font release <handle>`.
+The former `cpp font stamp` / `cpp font release` Shell2 helpers are retired.
+The font-kernel service and its owned-buffer path remain; validate them through
+the existing service tests and consumers. `win` is exclusively the 30-window
+retained UI4 demo, while artistic compute views belong to the ShaderToy Blueprint.
 
 ## What `vgpu status` proves
 
