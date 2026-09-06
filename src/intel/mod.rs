@@ -980,8 +980,8 @@ pub(crate) fn media_encode_readiness() -> self::xelp_media2_ngin::MediaEncodeRea
     self::xelp_media2_ngin::encode_readiness()
 }
 
-pub(crate) fn run_media_guc_vcs0_probe_once() -> self::media::guc_probe::GucVcs0ProbeReport {
-    self::media::guc_probe::run_once()
+pub(crate) async fn run_media_guc_vcs0_probe_once() -> self::media::guc_probe::GucVcs0ProbeReport {
+    self::media::guc_probe::run_once().await
 }
 
 #[cfg(feature = "trueos_h264_encode_stream")]

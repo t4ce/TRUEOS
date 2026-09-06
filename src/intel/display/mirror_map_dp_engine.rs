@@ -100,6 +100,8 @@ pub(crate) enum WdCaptureError {
     PowerWellTimeout,
     DbufTimeout,
     WdEnableTimeout,
+    WdDisableTimeout,
+    Quarantined,
     AlreadyCapturing,
     NotRunning,
 }
@@ -178,6 +180,7 @@ impl MirrorMapMode {
 #[derive(Copy, Clone)]
 struct WdCaptureState {
     running: bool,
+    quarantined: bool,
     pending: bool,
     width: u32,
     height: u32,
@@ -219,6 +222,7 @@ impl WdCaptureState {
     const fn new() -> Self {
         Self {
             running: false,
+            quarantined: false,
             pending: false,
             width: 0,
             height: 0,
@@ -550,6 +554,9 @@ pub(crate) fn start_ui4_wd_xyuv8888_capture() -> Result<WdXyuv8888Frame, WdCaptu
         return Err(WdCaptureError::UnsupportedDevice);
     }
     let mut state = STATE.lock();
+    if state.quarantined {
+        return Err(WdCaptureError::Quarantined);
+    }
     if state.running {
         return Ok(state.frame());
     }
@@ -641,24 +648,9 @@ pub(crate) fn start_ui4_wd_xyuv8888_capture() -> Result<WdXyuv8888Frame, WdCaptu
             | WD_INPUT_PIPE_C,
     );
 
-    // Do not enable conventional Transcoder C (PIPECONF_C). WD0 is Pipe C's
-    // sole transcoder/sink; enabling both would violate the one-transcoder-per-
-    // pipe topology and turn this headless route into an invalid dual output.
-    crate::intel::mmio_write(dev, WD0_TRANS_CONF, WD_TRANS_ENABLE);
-    let _ = crate::intel::mmio_read(dev, WD0_TRANS_CONF);
-    if !wait_for_mask(dev, WD0_TRANS_CONF, WD_TRANS_STATE, true, PIPE_WAIT_ITERS) {
-        crate::intel::mmio_write(dev, WD0_TRANS_CONF, 0);
-        crate::intel::mmio_write(dev, WD0_FUNC_CTL, 0);
-        restore_pipe_c_output_color(dev, saved_output_color);
-        crate::intel::mmio_write(dev, DBUF_CTL_S2, saved_dbuf_ctl_s2);
-        crate::intel::mmio_write(dev, HSW_PWR_WELL_CTL2, saved_power_well_ctl2);
-        let _ = crate::intel::unmap_display_scanout_ggtt(dev, byte_len, CAPTURE_GPU);
-        crate::dma::dealloc(virt, byte_len);
-        return Err(WdCaptureError::WdEnableTimeout);
-    }
-
     *state = WdCaptureState {
         running: true,
+        quarantined: false,
         pending: false,
         width,
         height,
@@ -672,6 +664,18 @@ pub(crate) fn start_ui4_wd_xyuv8888_capture() -> Result<WdXyuv8888Frame, WdCaptu
         saved_dbuf_ctl_s2,
         saved_output_color,
     };
+
+    // Do not enable conventional Transcoder C (PIPECONF_C). WD0 is Pipe C's
+    // sole transcoder/sink; enabling both would violate the one-transcoder-per-
+    // pipe topology and turn this headless route into an invalid dual output.
+    crate::intel::mmio_write(dev, WD0_TRANS_CONF, WD_TRANS_ENABLE);
+    let _ = crate::intel::mmio_read(dev, WD0_TRANS_CONF);
+    if !wait_for_mask(dev, WD0_TRANS_CONF, WD_TRANS_STATE, true, PIPE_WAIT_ITERS) {
+        drop(state);
+        let _ = stop_ui4_wd_xyuv8888_capture();
+        return Err(WdCaptureError::WdEnableTimeout);
+    }
+
     let (pipe_misc, csc_mode, _, _, _) = pipe_c_output_color_registers();
     crate::log_info!(target: "intel/display";
         "intel/display: wd0 online=1 source=pipe-c mirror_of=pipe-a map={:?} slots=0-4+cursor5 postblend=opaque-rgb output_csc=bt709-limited-ycbcr pipe_misc=0x{:08X} pipe_csc_mode=0x{:08X} sink=ggtt-xyuv8888 size={}x{} pitch={} bytes=0x{:X} gpu=0x{:X} dbuf=s2:1024-2031 cursor=pipe-c:2040-2047 transcoder-c=disabled ddi=none cpu_compositor=0 gpu_compositor=0\n",
@@ -685,6 +689,9 @@ pub(crate) fn begin_ui4_wd_xyuv8888_capture() -> Result<u64, WdCaptureError> {
     let mut state = STATE.lock();
     if !state.running {
         return Err(WdCaptureError::NotRunning);
+    }
+    if state.quarantined {
+        return Err(WdCaptureError::Quarantined);
     }
     if state.pending {
         return Err(WdCaptureError::AlreadyCapturing);
@@ -738,7 +745,13 @@ pub(crate) fn stop_ui4_wd_xyuv8888_capture() -> Result<(), WdCaptureError> {
         CAPTURE_TIMEOUTS.fetch_add(1, Ordering::Relaxed);
     }
     crate::intel::mmio_write(dev, WD0_TRANS_CONF, 0);
-    let _ = wait_for_mask(dev, WD0_TRANS_CONF, WD_TRANS_STATE, false, PIPE_WAIT_ITERS);
+    if !wait_for_mask(dev, WD0_TRANS_CONF, WD_TRANS_STATE, false, PIPE_WAIT_ITERS) {
+        state.quarantined = true;
+        crate::log_error!(target: "intel/display";
+            "intel/display: wd0 disable pending=1 action=retain-target-and-mapping capture_reusable=0\n"
+        );
+        return Err(WdCaptureError::WdDisableTimeout);
+    }
     crate::intel::mmio_write(dev, WD0_FUNC_CTL, 0);
     for slot in 0..UNIVERSAL_PLANE_SLOTS {
         let plane = PIPES[MIRROR_PIPE_SLOT].plane(slot);

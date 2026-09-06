@@ -165,7 +165,7 @@ pub(crate) fn snapshot() -> GucVcs0ProbeReport {
 
 /// Run the first real GuC-owned VCS0 workload. Deferred results are retryable;
 /// once preparation starts, every outcome is terminal for this boot.
-pub(crate) fn run_once() -> GucVcs0ProbeReport {
+pub(crate) async fn run_once() -> GucVcs0ProbeReport {
     let current = GucVcs0ProbeState::from_raw(STATE.load(Ordering::Acquire));
     if current != GucVcs0ProbeState::NotRun {
         return snapshot();
@@ -327,7 +327,7 @@ pub(crate) fn run_once() -> GucVcs0ProbeReport {
         if crate::chronos::monotonic_nanos() >= deadline {
             break;
         }
-        core::hint::spin_loop();
+        trueos_time::Timer::after_millis(1).await;
     }
 
     crate::intel::dma_flush(backing.result_virt, 4 * 8);

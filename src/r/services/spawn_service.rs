@@ -737,12 +737,9 @@ fn spawn_ui4_screenshot_service_task(spawner: Spawner) -> SpawnAttempt {
 
 #[cfg(feature = "trueos_h264_encode_stream")]
 fn spawn_ui4_h264_encode_stream_task(spawner: Spawner) -> SpawnAttempt {
-    let Some((lastap_slot, lastap_kind, lastap_spawner)) = crate::workers::last_ap_service_worker()
-    else {
-        return SpawnAttempt::Skipped;
-    };
-
-    let prepare_token = match crate::ui4::ui4_h264_encode_prepare_task(lastap_slot) {
+    // The spawn service runs on BSP. Capture and encode are cooperative
+    // tasks with a one-slot hardware ownership boundary, not private threads.
+    let prepare_token = match crate::ui4::ui4_h264_encode_prepare_task() {
         Ok(token) => token,
         Err(error) => return SpawnAttempt::Failed(error),
     };
@@ -754,15 +751,11 @@ fn spawn_ui4_h264_encode_stream_task(spawner: Spawner) -> SpawnAttempt {
         Ok(token) => token,
         Err(error) => return SpawnAttempt::Failed(error),
     };
-    lastap_spawner.spawn(prepare_token);
-    lastap_spawner.spawn(encode_token);
+    spawner.spawn(prepare_token);
+    spawner.spawn(encode_token);
     spawner.spawn(egress_token);
     crate::log_info!(target: "service";
-        "ui4 h264 stream pipeline assigned carrier=lastap slot={} core_kind={} private_tasks=2 prepare_slot={} encode_slot={} udp_egress_executor=spawn-service-local handoff=one-way-bounded-au-queue exclusive_from=vm-hull+blocking-lanes+background-round-robin preparation_buffering=serialized future_home=ap1-ui\n",
-        lastap_slot,
-        lastap_kind,
-        lastap_slot,
-        lastap_slot,
+        "ui4 h264 stream pipeline assigned carrier=bsp-cooperative tasks=3 capture_encode_buffering=serialized handoff=bounded-au-queue overflow=abort-session-next-idr last_ap_reserved=0\n"
     );
     SpawnAttempt::Spawned
 }
@@ -900,8 +893,8 @@ fn intel_media_engine_gate() -> bool {
 
 #[cfg(feature = "trueos_h264_encode_stream")]
 #[inline]
-fn h264_lastap_service_gate() -> bool {
-    intel_media_engine_gate() && crate::workers::last_ap_service_worker().is_some()
+fn h264_stream_service_gate() -> bool {
+    intel_media_engine_gate()
 }
 
 #[inline]
@@ -1666,7 +1659,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled_gated(
         "ui4-h264-encode-stream",
         crate::r::readiness::BACKGROUND_AP_WORKER_READY,
-        h264_lastap_service_gate,
+        h264_stream_service_gate,
         &UI4_H264_ENCODE_STREAM_STARTED,
         spawn_ui4_h264_encode_stream_task,
     ),

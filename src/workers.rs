@@ -18,12 +18,8 @@ const WORKER_SLOT_LIMIT: usize = crate::allcaps::hv::VM_CPU_SLOT_LIMIT;
 const REGISTERED_SLOT_WORD_BITS: usize = u64::BITS as usize;
 const REGISTERED_SLOT_WORDS: usize =
     (WORKER_SLOT_LIMIT + REGISTERED_SLOT_WORD_BITS - 1) / REGISTERED_SLOT_WORD_BITS;
-// Live scanout capture and H.264 encode still share a synchronous, single-frame
-// ownership boundary which makes sharing a cooperative executor unsafe. Keep
-// that media-side exception on the topology's final AP. Complete encoded access
-// units cross a bounded, one-way handoff into ordinary asynchronous UDP egress;
-// network ownership is not part of the private-carrier contract.
-const LAST_AP_SERVICE_RESERVED: bool = cfg!(feature = "trueos_h264_encode_stream");
+// Media capture/encode now use the ordinary BSP executor. Every background
+// topology slot remains available to VM hulls and general worker lanes.
 
 static CORE_SPAWNER_BY_SLOT: [Mutex<Option<SendSpawner>>; WORKER_SLOT_LIMIT] =
     [const { Mutex::new(None) }; WORKER_SLOT_LIMIT];
@@ -237,7 +233,7 @@ fn maybe_log_worker_summary(registered: usize) {
     }
 
     crate::log!(
-        "workers: registration summary slots=0..{} registered={}/{} kinds(perf/eff/unknown)={}/{}/{} app_visible={} lastap_service_slot={:?}\n",
+        "workers: registration summary slots=0..{} registered={}/{} kinds(perf/eff/unknown)={}/{}/{} app_visible={}\n",
         topology_slots - 1,
         registered,
         topology_slots,
@@ -245,7 +241,6 @@ fn maybe_log_worker_summary(registered: usize) {
         eff,
         unknown,
         app_visible_parallelism(),
-        last_ap_service_slot(),
     );
 }
 
@@ -268,12 +263,6 @@ pub fn register_core_spawner(cpu_slot: u32, core_kind: u8, spawner: Spawner) {
     maybe_log_worker_summary(registered);
     if is_general_background_worker_slot(cpu_slot) {
         crate::r::blocking::start_service_lane_for_slot(cpu_slot);
-    } else if is_last_ap_service_slot(cpu_slot) {
-        crate::log_info!(target: "service";
-            "lastap: reserved slot={} core_kind={} owner=ui4-scanout-h264 excluded_from=vm-hull+blocking-lanes+background-round-robin network_egress=one-way-ordinary-executor lifecycle=temporary-until-ap1-media-integration\n",
-            cpu_slot,
-            core_kind,
-        );
     }
 }
 
@@ -298,33 +287,8 @@ pub fn ap1_ui_core_spawner() -> Option<WorkerSpawner> {
     spawner_for_slot(AP1_UI_SERVICE_SLOT)
 }
 
-/// Temporary exclusive service carrier at the final topology slot.
-///
-/// The identity is derived from topology rather than registration order, so
-/// early AP registration cannot make the reservation migrate between cores.
-pub fn last_ap_service_slot() -> Option<u32> {
-    if !LAST_AP_SERVICE_RESERVED {
-        return None;
-    }
-    let slot = topology_core_slot_count().checked_sub(1)?;
-    if slot < FIRST_BACKGROUND_SLOT as usize || slot >= WORKER_SLOT_LIMIT {
-        return None;
-    }
-    Some(slot as u32)
-}
-
-pub fn is_last_ap_service_slot(cpu_slot: u32) -> bool {
-    last_ap_service_slot() == Some(cpu_slot)
-}
-
 pub fn is_general_background_worker_slot(cpu_slot: u32) -> bool {
-    is_background_worker_slot(cpu_slot) && !is_last_ap_service_slot(cpu_slot)
-}
-
-pub fn last_ap_service_worker() -> Option<(u32, u8, WorkerSpawner)> {
-    let slot = last_ap_service_slot()?;
-    let spawner = spawner_for_slot(slot)?;
-    Some((slot, core_kind_for_slot(slot), spawner))
+    is_background_worker_slot(cpu_slot)
 }
 
 pub fn background_slot_range() -> core::ops::Range<u32> {
@@ -372,14 +336,11 @@ pub fn app_visible_parallelism() -> usize {
     let topology_slots = topology_core_slot_count();
     if topology_slots != 0 {
         let background = topology_slots.saturating_sub(first_app_slot as usize);
-        let reserved = usize::from(
-            last_ap_service_slot().is_some_and(|slot| slot as usize >= first_app_slot as usize),
-        );
-        return background.saturating_sub(reserved).max(1);
+        return background.max(1);
     }
 
     (first_app_slot..registered_slot_end().max(first_app_slot))
-        .filter(|slot| is_slot_registered(*slot) && !is_last_ap_service_slot(*slot))
+        .filter(|slot| is_slot_registered(*slot))
         .count()
         .max(1)
 }

@@ -1025,15 +1025,16 @@ async fn run_with_source(source_kind: AvcFrameSource, picture: AvcPicture) -> Av
     }
 
     let live_frame = !matches!(source_kind, AvcFrameSource::BootProof);
-    let lane_result = if live_frame {
-        media::acquire_media_lane_bounded(
-            engine,
-            media::MediaJobMode::AVC_ENCODE_GUC,
-            None,
-            media::MEDIA_INTERLEAVE_WAIT_NS,
-        )
-    } else {
-        media::try_acquire_media_lane(engine, media::MediaJobMode::AVC_ENCODE_GUC, None)
+    let lane_deadline = crate::chronos::monotonic_nanos()
+        .saturating_add(media::MEDIA_INTERLEAVE_WAIT_NS);
+    let lane_result = loop {
+        let result = media::try_acquire_media_lane(engine, media::MediaJobMode::AVC_ENCODE_GUC, None);
+        if !live_frame || !matches!(result, Err(media::MediaLaneAcquireError::Busy))
+            || crate::chronos::monotonic_nanos() >= lane_deadline
+        {
+            break result;
+        }
+        Timer::after(Duration::from_millis(1)).await;
     };
     let mut lane = match lane_result {
         Ok(lane) => lane,
@@ -1287,11 +1288,10 @@ async fn run_with_source(source_kind: AvcFrameSource, picture: AvcPicture) -> Av
         if crate::chronos::monotonic_nanos() >= deadline {
             break;
         }
-        // VDBOX owns the expensive part of this interval. Yield the private
-        // LastAP executor so scanout preparation and UDP egress can advance
-        // while the media fence is pending instead of serializing all three
-        // cooperative tasks behind a CPU spin loop.
-        Timer::after(Duration::from_micros(0)).await;
+        // Poll at most once per timer tick while VDBOX owns this frame.
+        // A zero-duration yield immediately requeues the task and keeps an
+        // otherwise idle executor busy for the whole hardware interval.
+        Timer::after(Duration::from_millis(1)).await;
     }
 
     crate::intel::dma_flush(result_virt, RESULT_BYTES);
@@ -1319,7 +1319,7 @@ async fn run_with_source(source_kind: AvcFrameSource, picture: AvcPicture) -> Av
         if crate::chronos::monotonic_nanos() >= context_save_deadline {
             return quarantine(lane, report, AvcEncodeProbeFailure::ContextTeardown, started_ns);
         }
-        Timer::after(Duration::from_micros(0)).await;
+        Timer::after(Duration::from_millis(1)).await;
     }
     // False now means deliberately retained rather than teardown failure.
     report.context_destroyed = false;

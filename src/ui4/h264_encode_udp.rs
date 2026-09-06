@@ -286,51 +286,40 @@ fn egress_session_ready(session_id: u32) -> bool {
     pipeline.session_id == session_id && pipeline.phase == EgressSessionPhase::Ready
 }
 
-async fn enqueue_access_unit(session_id: u32, access_unit: EncodedAccessUnit) -> bool {
-    let mut access_unit = Some(access_unit);
-    let wait_started_ns = crate::chronos::monotonic_nanos();
-    let mut waited = false;
-    loop {
-        {
-            let mut pipeline = EGRESS_PIPELINE.lock();
-            if pipeline.session_id != session_id || pipeline.phase != EgressSessionPhase::Ready {
-                let dropped_bytes = access_unit
-                    .as_ref()
-                    .map(|unit| unit.bytes.len())
-                    .unwrap_or(0);
-                pipeline.producer_dropped_access_units =
-                    pipeline.producer_dropped_access_units.saturating_add(1);
-                pipeline.producer_dropped_bytes = pipeline
-                    .producer_dropped_bytes
-                    .saturating_add(dropped_bytes);
-                return false;
-            }
-            if pipeline.phase == EgressSessionPhase::Ready
-                && pipeline.queue.len() < ENCODED_ACCESS_UNIT_QUEUE_CAP
-            {
-                let access_unit = access_unit.take().expect("egress access unit retained");
-                let access_unit_bytes = access_unit.bytes.len();
-                pipeline.queue.push_back(access_unit);
-                pipeline.queued_bytes = pipeline.queued_bytes.saturating_add(access_unit_bytes);
-                pipeline.queued_access_units = pipeline.queued_access_units.saturating_add(1);
-                pipeline.high_water_access_units =
-                    pipeline.high_water_access_units.max(pipeline.queue.len());
-                pipeline.high_water_bytes = pipeline.high_water_bytes.max(pipeline.queued_bytes);
-                if waited {
-                    pipeline.producer_queue_wait_events =
-                        pipeline.producer_queue_wait_events.saturating_add(1);
-                    pipeline.producer_queue_wait_us =
-                        pipeline.producer_queue_wait_us.saturating_add(
-                            crate::chronos::monotonic_nanos().saturating_sub(wait_started_ns)
-                                / 1_000,
-                        );
-                }
-                return true;
-            }
-        }
-        waited = true;
-        Timer::after(Duration::from_millis(EGRESS_QUEUE_POLL_MS)).await;
+fn enqueue_access_unit(session_id: u32, access_unit: EncodedAccessUnit) -> bool {
+    let mut pipeline = EGRESS_PIPELINE.lock();
+    if pipeline.session_id != session_id {
+        return false;
     }
+    if pipeline.phase != EgressSessionPhase::Ready
+        || pipeline.queue.len() >= ENCODED_ACCESS_UNIT_QUEUE_CAP
+    {
+        pipeline.producer_dropped_access_units =
+            pipeline.producer_dropped_access_units.saturating_add(1);
+        pipeline.producer_dropped_bytes = pipeline.producer_dropped_bytes
+            .saturating_add(access_unit.bytes.len());
+        let full = pipeline.phase == EgressSessionPhase::Ready;
+        drop(pipeline);
+        if full {
+            // P pictures depend on preceding pictures. End this session on
+            // overload; never drop an arbitrary AU then send its dependants.
+            // The next subscription starts a fresh IDR. Network delay cannot
+            // keep this producer waiting with a prepared hardware frame.
+            abort_egress_session(session_id);
+            crate::log_warn!(target: "intel/media-encode";
+                "intel/media-encode: udp queue full session={} cap={} action=abort-session-next-idr producer_wait=0 ui4_wait=none\n",
+                session_id, ENCODED_ACCESS_UNIT_QUEUE_CAP,
+            );
+        }
+        return false;
+    }
+    let bytes = access_unit.bytes.len();
+    pipeline.queue.push_back(access_unit);
+    pipeline.queued_bytes = pipeline.queued_bytes.saturating_add(bytes);
+    pipeline.queued_access_units = pipeline.queued_access_units.saturating_add(1);
+    pipeline.high_water_access_units = pipeline.high_water_access_units.max(pipeline.queue.len());
+    pipeline.high_water_bytes = pipeline.high_water_bytes.max(pipeline.queued_bytes);
+    true
 }
 
 fn finish_egress_producer(session_id: u32, dropped_access_units: usize, dropped_bytes: usize) {
@@ -483,7 +472,7 @@ where
     }
     let prefill_us = crate::chronos::monotonic_nanos().saturating_sub(prefill_started_ns) / 1_000;
     crate::log_info!(target: "intel/media-encode";
-        "intel/media-encode: udp-live preparation=prefilled session={} sequence=0 prefill_us={} buffering=double action=start-cadence\n",
+        "intel/media-encode: udp-live preparation=prefilled session={} sequence=0 prefill_us={} buffering=single action=start-cadence\n",
         session_id,
         prefill_us,
     );
@@ -539,7 +528,7 @@ where
             keyframe,
             bytes,
         };
-        if !enqueue_access_unit(session_id, access_unit).await {
+        if !enqueue_access_unit(session_id, access_unit) {
             break;
         }
     }
@@ -567,7 +556,7 @@ pub(crate) async fn ui4_h264_encode_udp_egress_task() {
         .unwrap_or("unknown");
     EGRESS_WORKER_SLOT.store(worker_slot, Ordering::Release);
     crate::log_info!(target: "intel/media-encode";
-        "intel/media-encode: udp-egress service online carrier=ordinary-cooperative worker_slot={} worker_kind={} queue_cap={} ingress=one-way-bounded-au-handoff ownership=fragment+checked-send-receipts ordering=session-sequence backpressure=bounded-wait-no-drop\n",
+        "intel/media-encode: udp-egress service online carrier=ordinary-cooperative worker_slot={} worker_kind={} queue_cap={} ingress=one-way-bounded-au-handoff ownership=fragment+checked-send-receipts ordering=session-sequence backpressure=abort-session-next-idr-no-producer-wait\n",
         worker_slot,
         worker_kind,
         ENCODED_ACCESS_UNIT_QUEUE_CAP,

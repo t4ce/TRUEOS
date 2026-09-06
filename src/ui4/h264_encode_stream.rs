@@ -77,6 +77,7 @@ enum PrepareSlotState {
     Filling,
     Ready,
     Consuming,
+    Quarantined,
 }
 
 struct PrepareSlot {
@@ -211,7 +212,7 @@ pub(crate) fn h264_encode_stream_snapshot() -> H264EncodeStreamSnapshot {
 }
 
 #[trueos_executor::task(pool_size = 1)]
-pub(crate) async fn ui4_h264_encode_prepare_task(assigned_slot: u32) {
+pub(crate) async fn ui4_h264_encode_prepare_task() {
     let worker = crate::cpu::CpuProfile::current();
     let worker_slot = worker.map(|profile| profile.slot()).unwrap_or(u32::MAX);
     let worker_kind = worker
@@ -219,22 +220,13 @@ pub(crate) async fn ui4_h264_encode_prepare_task(assigned_slot: u32) {
         .unwrap_or("unknown");
     PREPARE_WORKER_SLOT.store(worker_slot, Ordering::Release);
     crate::log_info!(target: "intel/media-encode";
-        "intel/media-encode: preparation service online carrier=lastap assigned_slot={} worker_slot={} worker_kind={} pipeline=pipe-c-wd0-xyuv8888-to-vdenc cpu_pixel_math=0 gpu_shader=0 source_scope=mirror-map-slots0-5 dma_buffers=wd-xyuv8888-resident producer_buffering=serialized slots={} encode_size={}x{} mapping=one-to-one synchronization=wd-frame-complete-before-vdbox\n",
-        assigned_slot,
+        "intel/media-encode: preparation service online carrier=bsp-cooperative worker_slot={} worker_kind={} pipeline=pipe-c-wd0-xyuv8888-to-vdenc cpu_pixel_math=0 gpu_shader=0 source_scope=mirror-map-slots0-5 dma_buffers=wd-xyuv8888-resident producer_buffering=serialized slots={} encode_size={}x{} mapping=one-to-one synchronization=wd-frame-complete-before-vdbox\n",
         worker_slot,
         worker_kind,
         PREPARE_SLOT_COUNT,
         ENCODE_WIDTH,
         ENCODE_HEIGHT,
     );
-    if worker_slot != assigned_slot {
-        crate::log_error!(target: "intel/media-encode";
-            "intel/media-encode: preparation service rejected assigned_slot={} actual_slot={} reason=executor-residency-mismatch action=park\n",
-            assigned_slot,
-            worker_slot,
-        );
-        park().await;
-    }
 
     loop {
         let Some(job) = take_prepare_job() else {
@@ -394,6 +386,11 @@ async fn prepare_scanout(job: PrepareJob) {
         slot.valid = valid;
         slot.xyuv8888 = xyuv8888;
         slot.state = PrepareSlotState::Ready;
+    } else if slot.state == PrepareSlotState::Filling && slot.generation == job.generation {
+        // Session shutdown waits for the in-flight WD operation to leave
+        // Filling before disabling or freeing the capture target.
+        slot.state = PrepareSlotState::Empty;
+        slot.reset_metadata();
     }
 }
 
@@ -415,26 +412,39 @@ fn begin_preparation_session(session_id: u32, access_unit_count: usize) {
     }
 }
 
-fn end_preparation_session(session_id: u32) {
-    let mut pipeline = PREPARE_PIPELINE.lock();
-    if !pipeline.active || pipeline.session_id != session_id {
-        return;
+async fn end_preparation_session(session_id: u32) -> bool {
+    {
+        let mut pipeline = PREPARE_PIPELINE.lock();
+        if pipeline.session_id != session_id {
+            return false;
+        }
+        pipeline.active = false;
     }
-    pipeline.active = false;
-    pipeline.generation = pipeline.generation.wrapping_add(1);
-    pipeline.access_unit_count = 0;
-    pipeline.next_sequence = 0;
-    let generation = pipeline.generation;
-    for slot in &mut pipeline.slots {
-        slot.state = PrepareSlotState::Empty;
-        slot.generation = generation;
-        slot.reset_metadata();
+    loop {
+        let (filling, retained) = {
+            let pipeline = PREPARE_PIPELINE.lock();
+            (
+                pipeline.slots.iter().any(|slot| slot.state == PrepareSlotState::Filling),
+                pipeline.slots.iter().any(|slot| matches!(slot.state,
+                    PrepareSlotState::Consuming | PrepareSlotState::Quarantined)),
+            )
+        };
+        if retained {
+            // An ambiguous VDBOX submission may still read the WD target.
+            // Retain the target and capture ownership; no new shot or stream
+            // can overwrite it before a real hardware reset.
+            return false;
+        }
+        if !filling {
+            break;
+        }
+        Timer::after(Duration::from_millis(1)).await;
     }
-    drop(pipeline);
-    // No subscriber owns subsequent frames. Tear down the headless mirror so
-    // an on-demand screenshot has an unambiguous one-frame lifecycle.
-    let _ = crate::intel::stop_ui4_wd_xyuv8888_capture();
+    if crate::intel::stop_ui4_wd_xyuv8888_capture().is_err() {
+        return false;
+    }
     crate::intel::media::wd_xyuv8888::release_stream_capture();
+    true
 }
 
 fn prepared_scanout_ready(session_id: u32, sequence: u32) -> bool {
@@ -496,7 +506,7 @@ pub(crate) async fn ui4_h264_encode_stream_task() {
         .map(|profile| profile.core_kind_name())
         .unwrap_or("unknown");
     crate::log_info!(target: "intel/media-encode";
-        "intel/media-encode: service online carrier=lastap worker_slot={} worker_kind={} exclusive_carrier=1 feature=trueos_h264_encode_stream boot_proof=procedural-nv12-hardware-only live_source=pipe-c-wd0-xyuv8888-mirror-map-slots0-5 encode_size={}x{} target_fps={} backend=gen12-vdenc-mfx vcs0_context=retained-hwlrca+persistent-ring completion_wait=cooperative-fence-yield output=udp-only live_high_water_cap={} pipeline=wd-capture+encode-producer->one-way-bounded-au-handoff udp_egress=ordinary-executor preparation=cooperative-lastap-serialized slots={} encoder_arena_cpu_maintenance=one-time-output-init+per-frame-command-result-only filesystem_writes=0 software_fallback=0 embedded_probe_asset_bytes=0 udp_protocol=tme1 udp_port={} start_delay_ms={}\n",
+        "intel/media-encode: service online carrier=bsp-cooperative worker_slot={} worker_kind={} exclusive_carrier=0 feature=trueos_h264_encode_stream boot_proof=procedural-nv12-hardware-only live_source=pipe-c-wd0-xyuv8888-mirror-map-slots0-5 encode_size={}x{} target_fps={} backend=gen12-vdenc-mfx vcs0_context=retained-hwlrca+persistent-ring completion_wait=timer-tick-poll output=udp-only live_high_water_cap={} pipeline=wd-capture+encode-producer->one-way-bounded-au-handoff udp_egress=ordinary-executor preparation=cooperative-bsp-serialized slots={} encoder_arena_cpu_maintenance=one-time-output-init+per-frame-command-result-only filesystem_writes=0 software_fallback=0 embedded_probe_asset_bytes=0 udp_protocol=tme1 udp_port={} start_delay_ms={}\n",
         worker_slot,
         worker_kind,
         ENCODE_WIDTH,
@@ -510,7 +520,7 @@ pub(crate) async fn ui4_h264_encode_stream_task() {
 
     Timer::after(Duration::from_millis(PROBE_START_DELAY_MS)).await;
 
-    let mut vcs0_probe = crate::intel::run_media_guc_vcs0_probe_once();
+    let mut vcs0_probe = crate::intel::run_media_guc_vcs0_probe_once().await;
     let mut vcs0_probe_attempts = 1usize;
     while vcs0_probe.state == crate::intel::media::guc_probe::GucVcs0ProbeState::Deferred {
         if vcs0_probe_attempts % VCS0_PROBE_WAIT_LOG_INTERVAL == 0 {
@@ -522,7 +532,7 @@ pub(crate) async fn ui4_h264_encode_stream_task() {
             );
         }
         Timer::after(Duration::from_millis(VCS0_PROBE_RETRY_MS)).await;
-        vcs0_probe = crate::intel::run_media_guc_vcs0_probe_once();
+        vcs0_probe = crate::intel::run_media_guc_vcs0_probe_once().await;
         vcs0_probe_attempts += 1;
     }
     if vcs0_probe.state == crate::intel::media::guc_probe::GucVcs0ProbeState::Passed {
@@ -822,7 +832,14 @@ pub(crate) async fn ui4_h264_encode_stream_task() {
             async |sequence| encode_prepared_scanout(stream_session_id, sequence, &mut stats).await,
         )
         .await;
-        end_preparation_session(stream_session_id);
+        if !end_preparation_session(stream_session_id).await {
+            STATE.store(H264EncodeStreamState::Failed as u8, Ordering::Release);
+            crate::log_error!(target: "intel/media-encode";
+                "intel/media-encode: capture retained session={} reason=hardware-retirement-unproven action=park-stream wd_target_reusable=0 ui4_wait=none\n",
+                stream_session_id,
+            );
+            park().await;
+        }
         let expected_units = crate::allcaps::media_encode::VALIDATION_SESSION_ACCESS_UNITS;
         let interval_millifps = if udp_report.sent_access_units > 1 && udp_report.elapsed_us != 0 {
             (udp_report.sent_access_units.saturating_sub(1) as u64).saturating_mul(1_000_000_000)
@@ -960,7 +977,15 @@ async fn encode_prepared_scanout(
     let encode =
         crate::intel::media::avc_encode_probe::run_xyuv8888_dma_frame(surface, sequence).await;
     STATE.store(H264EncodeStreamState::Streaming as u8, Ordering::Release);
-    release_prepared_scanout(&mut prepared);
+    if encode.state == crate::intel::media::avc_encode_probe::AvcEncodeProbeState::Quarantined {
+        let mut pipeline = PREPARE_PIPELINE.lock();
+        pipeline.active = false;
+        let slot = &mut pipeline.slots[prepared.slot_index];
+        slot.xyuv8888 = prepared.xyuv8888.take();
+        slot.state = PrepareSlotState::Quarantined;
+    } else {
+        release_prepared_scanout(&mut prepared);
+    }
     if encode.state != crate::intel::media::avc_encode_probe::AvcEncodeProbeState::Passed
         || !encode.coded_output_validated
     {
