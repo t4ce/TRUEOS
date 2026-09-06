@@ -456,7 +456,7 @@ fn prepare_async_frame(runtime: &mut Runtime) -> Result<Option<PendingFrame>, Ui
     }
 
     let phase_started_ns = crate::chronos::monotonic_nanos();
-    let (broker_revision, windows) = application_windows_for_output_with_revision(output);
+    let (broker_revision, mut windows) = application_windows_for_output_with_revision(output);
     validate_window_snapshot(output, &windows)?;
     runtime.profile.snapshot_ns = runtime
         .profile
@@ -496,6 +496,10 @@ fn prepare_async_frame(runtime: &mut Runtime) -> Result<Option<PendingFrame>, Ui
     // compatibility resolver independently for all four plane plans rereads
     // every pipe's MMIO state four times on every unchanged compositor scan.
     let (output_width, output_height) = crate::intel::active_scanout_dimensions().unwrap_or((0, 0));
+    if resolve_close_scaler_conflicts(&mut windows, &views, output_width, output_height) != 0 {
+        crate::log_once!(target: "ui4";
+            "ui4 close-transition scaler contention resolved scope=output slots=1+3 shared_scaler=0 fallback=fade-at-source-size retirement=zero-alpha-surflive log=once\n");
+    }
     let plans = [
         build_plane_plan(
             &runtime.composition.primary,
@@ -1440,6 +1444,55 @@ pub(super) fn presentation_placement(
     _backing_height: u32,
 ) -> WindowPlacement {
     window.presentation_placement
+}
+
+/// Slots 1 and 3 share scaler 0. Session-local animation waves cannot
+/// arbitrate independent sessions (including a VM with one session per frame).
+/// Preserve a live peer's geometry; when two closes contend, slot 1 wins.
+/// The other close still fades to zero and retires at the normal SURFLIVE
+/// boundary, but uses its source size so it does not rebind the peer's scaler.
+fn resolve_close_scaler_conflicts(
+    windows: &mut [WindowSnapshot],
+    views: &[FrameRgbaView],
+    output_width: u32,
+    output_height: u32,
+) -> usize {
+    let mut resolved = 0;
+    for index in 0..windows.len() {
+        let window = windows[index];
+        let slot = window.plane.slot();
+        let view = views[index];
+        let placement = window.presentation_placement;
+        if window.state != super::WindowState::Closing
+            || !matches!(slot, 1 | 3)
+            || (placement.width == view.width && placement.height == view.height)
+        {
+            continue;
+        }
+        let peer_slot = if slot == 1 { 3 } else { 1 };
+        let contested = windows.iter().zip(views).any(|(peer, peer_view)| {
+            peer.plane.slot() == peer_slot
+                && (peer.presentation_placement.width != peer_view.width
+                    || peer.presentation_placement.height != peer_view.height)
+                && (peer.state != super::WindowState::Closing || slot == 3)
+        });
+        if !contested {
+            continue;
+        }
+        let centered = |position: i32, old: u32, new: u32, extent: u32| {
+            (i64::from(position) + (i64::from(old) - i64::from(new)) / 2)
+                .clamp(0, i64::from(extent.saturating_sub(new))) as i32
+        };
+        windows[index].presentation_placement = WindowPlacement {
+            x: centered(placement.x, placement.width, view.width, output_width),
+            y: centered(placement.y, placement.height, view.height, output_height),
+            width: view.width,
+            height: view.height,
+            ..placement
+        };
+        resolved += 1;
+    }
+    resolved
 }
 
 fn bounded_direct_plane_scale(source: u32, destination: u32) -> bool {

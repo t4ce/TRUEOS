@@ -2748,6 +2748,14 @@ fn prepare_plane_scaler_flips(
     dev: crate::intel::Dev,
     entries: &[Option<PlaneSurfaceFlip>],
 ) -> bool {
+    // Validate the whole transaction before disabling or rebinding anything.
+    // Programming one scaler twice leaves an impossible readback contract for
+    // the first plane and stalls every plane in the shared UI4 flip batch.
+    if !plane_scaler_flips_have_unique_bindings(entries) {
+        crate::log_error!(target: "intel/display";
+            "intel/display: rejected conflicting UI4 scaler bindings action=preserve-live-planes\n");
+        return false;
+    }
     for scaler in entries.iter().flatten().filter_map(|entry| entry.scaler) {
         let wanted_scaler = match scaler.mode {
             PlaneScalerMode::Detached => None,
@@ -2771,6 +2779,24 @@ fn prepare_plane_scaler_flips(
             if (bound_to_plane && wanted_scaler != Some(scaler_id)) || target_rebound {
                 disable_pipe_scaler(dev, regs);
             }
+        }
+    }
+    true
+}
+
+fn plane_scaler_flips_have_unique_bindings(entries: &[Option<PlaneSurfaceFlip>]) -> bool {
+    for (index, entry) in entries.iter().enumerate() {
+        let Some(scaler) = entry.and_then(|entry| entry.scaler) else {
+            continue;
+        };
+        let PlaneScalerMode::Scaled { scaler_id, .. } = scaler.mode else {
+            continue;
+        };
+        if entries[..index].iter().flatten().filter_map(|entry| entry.scaler).any(|peer| {
+            peer.pipe_slot == scaler.pipe_slot
+                && matches!(peer.mode, PlaneScalerMode::Scaled { scaler_id: peer_id, .. } if peer_id == scaler_id)
+        }) {
+            return false;
         }
     }
     true
