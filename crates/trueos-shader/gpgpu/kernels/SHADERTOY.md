@@ -1,9 +1,9 @@
 # ShaderToy reviewed Image catalog
 
-The five reviewed shaders are owned by `TRUEOS-Blueprints/apps/shadertoy/assets/`.
+The six reviewed shaders are owned by `TRUEOS-Blueprints/apps/shadertoy/assets/`.
 Each directory contains `input.glsl`, generated `kernel.clcpp`, `kernel.bin`,
 `kernel.spv`, `kernel.manifest.json`, and `kernel.contract.rs`. Each `.stpkg`
-bundles those six files. The kernel retains the five `.contract.rs` files here
+bundles those six files. The kernel retains the six `.contract.rs` files here
 and the small generated package hash/length catalog in
 `src/intel/gpgpu/artifacts/shadertoy_packages.rs`; it embeds no ShaderToy payload.
 
@@ -123,12 +123,13 @@ The current artifacts are:
 | ID | Entry point | Zebin SHA-256 |
 |---:|---|---|
 | 1 | `shadertoy_mandelbrot` | `79e566ad2db01a1a2467e0289bd97e9c77c67be7bd4a59d957dadd84e0ec32d1` |
-| 2 | `shadertoy_cube_field` | `0d48ef4d170eafe0cec5ae3952abdc6e57e865b195dbc3fc137ca7eb1b25d736` |
+| 2 | `shadertoy_cube_field` | `04f940ae84746975d6c11033ce7899ccc8307badcaf3091f53a654ca10256f10` |
 | 3 | `shadertoy_nguyen` | `1dbc80b468dd896073dd17c3963a5c7cccf814365e21f040e05a3522fea4cd9c` |
 | 4 | `shadertoy_palette_grid` | `98a5a39154a9021e2e09407c5188644ac744eedae4031efdf395f6619b32fd40` |
 | 5 | `shadertoy_cosmic_strands` | `9a275f036deac274541a34256c09140ecd3f98e392c4963a27e6ac1db5b82500` |
+| 6 | `shadertoy_protean_clouds` | `42708149dff28c43df0cc2bdd4147169aec93ecabbc003122c1e76a5b00b7cbc` |
 
-All five contracts are SIMD16 with 96 bytes of cross-thread data, 96 bytes of
-per-thread local IDs, and no scratch or SLM. The cube-field artifact exposes
+All six contracts are SIMD16 with 96 bytes of cross-thread data, 96 bytes of
+per-thread local IDs, and no scratch or SLM. The cube-field and Protean Clouds artifacts expose
 its read-only uniform argument as both a stateless pointer and BTI 1; direct RCS
 dispatch binds the same kernel-owned block through both representations.

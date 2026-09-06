@@ -22,7 +22,7 @@ The tool does not download or check in the linked shader.
 
 ## Runtime Blueprint packages
 
-The five admitted shaders and their raw GLSL now live under
+The six admitted shaders and their raw GLSL now live under
 `TRUEOS-Blueprints/apps/shadertoy/assets/`. The kernel retains trusted hashes and
 ABI contracts; the Blueprint transfers complete authenticated packages at startup.
 See [the runtime path](../../crates/trueos-shader/gpgpu/kernels/SHADERTOY.md).

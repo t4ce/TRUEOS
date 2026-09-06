@@ -27,3 +27,10 @@ toolchain:
 
 clean:
 	rm -f $(PROGRAM)
+
+.PHONY: benchmark-cube-field
+benchmark-cube-field: $(BUILD_DIR)/benchmark_cube_field
+
+$(BUILD_DIR)/benchmark_cube_field: benchmark_cube_field.c main.c
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@ $(LDLIBS)

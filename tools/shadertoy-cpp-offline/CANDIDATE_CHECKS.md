@@ -118,3 +118,18 @@ reproducible zero-scratch bake and seven host GPU frames. Every pixel matched
 the expected values, checking per-pixel and per-frame initialization, matrix
 column scaling/orientation, RGBA aliases, and uniform-dependent changes.
 Fixture evidence is under `bld/shadertoy-candidates/adapter-semantics/`.
+
+## Runtime catalog follow-up
+
+Protean Clouds is now ID 6 / F6 in the Shadertoy Blueprint. Its raw source,
+generated C++, binary, SPIR-V and provenance live in
+`TRUEOS-Blueprints/apps/shadertoy/assets/protean_clouds/` and are bundled with
+kernel-authenticated package metadata. The ABI remains SIMD16, zero scratch/SLM,
+with 96-byte cross-thread and per-thread payloads. Bare-metal visual confirmation
+of this new entry remains distinct from the recorded host preview.
+
+Hex Array Pulse and the Aiekick sphere sources have moved into the Blueprint's
+`assets/candidates/` tree, with status files explaining their missing runtime
+support. The user accepts representative textures for the sphere; exact original
+asset selection is no longer a prerequisite. Scratch and compute channel support
+remain unimplemented, so these two are not selectable runtime entries.
