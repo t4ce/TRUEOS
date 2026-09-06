@@ -12,11 +12,19 @@ blueprints_root="${TRUEOS_BLUEPRINTS_ROOT:-${trueos_root}/../TRUEOS-Blueprints}"
 assets_dir="${blueprints_root}/apps/shadertoy/assets"
 kernel_dir="${trueos_root}/crates/trueos-shader/gpgpu/kernels"
 publish_dir="${trueos_root}/bld/shadertoy-blueprint-bake/published"
-profile="${tool_dir}/profiles/adls-4680-r0c-cpp.json"
-toolchain_lock="${tool_dir}/toolchains/adls-shadertoy-cpp-proof.lock.json"
 
 shaders=(mandelbrot cube_field nguyen palette_grid cosmic_strands protean_clouds)
 for shader in "${shaders[@]}"; do
+  profile="${tool_dir}/profiles/adls-4680-r0c-cpp.json"
+  toolchain_lock="${tool_dir}/toolchains/adls-shadertoy-cpp-proof.lock.json"
+  # Keep the fractal and sine-hashed geometry byte-stable. The four visual
+  # effects below have separate fast-math image comparisons and admission.
+  case "${shader}" in
+    nguyen|palette_grid|cosmic_strands|protean_clouds)
+      profile="${tool_dir}/profiles/adls-4680-r0c-shadertoy.json"
+      toolchain_lock="${tool_dir}/toolchains/adls-shadertoy-relaxed.lock.json"
+      ;;
+  esac
   kernel_name="shadertoy_${shader}"
   shader_dir="${assets_dir}/${shader}"
   "${python_bin}" -B "${adapter_dir}/export_kernel.py" \

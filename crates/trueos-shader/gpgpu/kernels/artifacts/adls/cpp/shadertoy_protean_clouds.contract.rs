@@ -2,7 +2,7 @@
 // source: bld/shadertoy-blueprint-bake/sources/protean_clouds/kernel.clcpp
 // frontend: Clang C++ for OpenCL -> LLVM bitcode -> llvm-spirv
 // backend: Intel IGC through ocloc -spirv_input
-// normalized commands: [["$CLANG","--target=spir64","-x","clcpp","-cl-std=CLC++","-Wall","-Wextra","-Werror","-Wdate-time","-cl-kernel-arg-info","-fno-discard-value-names","-fno-exceptions","-fno-rtti","-MMD","-MF","$OUT_DIR/shadertoy_protean_clouds.d","-MT","shadertoy_protean_clouds.bc","-emit-llvm","-c","kernel.clcpp","-o","$OUT_DIR/shadertoy_protean_clouds.bc"],["$LLVM_SPIRV","--preserve-ocl-kernel-arg-type-metadata-through-string","$OUT_DIR/shadertoy_protean_clouds.bc","-o","$OUT_DIR/shadertoy_protean_clouds.spv"],["$OCLOC","compile","-file","$OUT_DIR/shadertoy_protean_clouds.spv","-spirv_input","-device","0x4680","-64","-output","shadertoy_protean_clouds","-out_dir","$OUT_DIR","-output_no_suffix","-gen_file"],["$OCLOC","validate","-file","$OUT_DIR/shadertoy_protean_clouds.bin"]]
+// normalized commands: [["$CLANG","--target=spir64","-x","clcpp","-cl-std=CLC++","-Wall","-Wextra","-Werror","-Wdate-time","-cl-kernel-arg-info","-fno-discard-value-names","-fno-exceptions","-fno-rtti","-MMD","-MF","$OUT_DIR/shadertoy_protean_clouds.d","-MT","shadertoy_protean_clouds.bc","-emit-llvm","-c","kernel.clcpp","-o","$OUT_DIR/shadertoy_protean_clouds.bc"],["$LLVM_SPIRV","--preserve-ocl-kernel-arg-type-metadata-through-string","$OUT_DIR/shadertoy_protean_clouds.bc","-o","$OUT_DIR/shadertoy_protean_clouds.spv"],["$OCLOC","compile","-file","$OUT_DIR/shadertoy_protean_clouds.spv","-spirv_input","-device","0x4680","-64","-output","shadertoy_protean_clouds","-out_dir","$OUT_DIR","-output_no_suffix","-gen_file","-options","-cl-fast-relaxed-math"],["$OCLOC","validate","-file","$OUT_DIR/shadertoy_protean_clouds.bin"]]
 
 pub(crate) const SHADERTOY_PROTEAN_CLOUDS_ADLS_CPP_ABI_CONTRACT: GpgpuKernelAbiContract = GpgpuKernelAbiContract {
     schema_version: GPGPU_KERNEL_ABI_SCHEMA_VERSION,
@@ -16,10 +16,10 @@ pub(crate) const SHADERTOY_PROTEAN_CLOUDS_ADLS_CPP_ABI_CONTRACT: GpgpuKernelAbiC
     ze_info_major: 1,
     ze_info_minor: 62,
     zebin_sha256: [
-        0x43, 0x80, 0x31, 0xad, 0x8a, 0x14, 0xec, 0x64,
-        0x6a, 0x38, 0xff, 0x4b, 0xcc, 0x53, 0x53, 0xf3,
-        0x95, 0x95, 0x4c, 0xfc, 0x0a, 0x71, 0x5c, 0x36,
-        0xc9, 0xde, 0xe4, 0x92, 0x54, 0xd8, 0xb7, 0x04,
+        0x19, 0x11, 0x9f, 0x60, 0xff, 0xe6, 0xa9, 0x20,
+        0x7b, 0xd2, 0x4d, 0x40, 0xae, 0xcd, 0xe2, 0xb6,
+        0x72, 0xa2, 0x7a, 0xa2, 0x53, 0xe2, 0x28, 0xf0,
+        0x48, 0xf3, 0x6a, 0x9c, 0x81, 0x78, 0x26, 0x96,
     ],
     spv_sha256: [
         0x3c, 0x76, 0xcc, 0xcf, 0xe7, 0x2d, 0xad, 0xc3,
@@ -29,9 +29,9 @@ pub(crate) const SHADERTOY_PROTEAN_CLOUDS_ADLS_CPP_ABI_CONTRACT: GpgpuKernelAbiC
     ],
     text_section_name: ".text.shadertoy_protean_clouds",
     text_section_offset: 64,
-    text_section_size: 221696,
+    text_section_size: 17152,
     entry_offset: 64,
-    entry_size: 221528,
+    entry_size: 17008,
     simd_width: 16,
     grf_count: 128,
     scratch_bytes: 0,

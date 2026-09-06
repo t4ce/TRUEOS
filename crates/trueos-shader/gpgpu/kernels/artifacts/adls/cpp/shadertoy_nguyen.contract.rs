@@ -2,7 +2,7 @@
 // source: bld/shadertoy-blueprint-bake/sources/nguyen/kernel.clcpp
 // frontend: Clang C++ for OpenCL -> LLVM bitcode -> llvm-spirv
 // backend: Intel IGC through ocloc -spirv_input
-// normalized commands: [["$CLANG","--target=spir64","-x","clcpp","-cl-std=CLC++","-Wall","-Wextra","-Werror","-Wdate-time","-cl-kernel-arg-info","-fno-discard-value-names","-fno-exceptions","-fno-rtti","-MMD","-MF","$OUT_DIR/shadertoy_nguyen.d","-MT","shadertoy_nguyen.bc","-emit-llvm","-c","kernel.clcpp","-o","$OUT_DIR/shadertoy_nguyen.bc"],["$LLVM_SPIRV","--preserve-ocl-kernel-arg-type-metadata-through-string","$OUT_DIR/shadertoy_nguyen.bc","-o","$OUT_DIR/shadertoy_nguyen.spv"],["$OCLOC","compile","-file","$OUT_DIR/shadertoy_nguyen.spv","-spirv_input","-device","0x4680","-64","-output","shadertoy_nguyen","-out_dir","$OUT_DIR","-output_no_suffix","-gen_file"],["$OCLOC","validate","-file","$OUT_DIR/shadertoy_nguyen.bin"]]
+// normalized commands: [["$CLANG","--target=spir64","-x","clcpp","-cl-std=CLC++","-Wall","-Wextra","-Werror","-Wdate-time","-cl-kernel-arg-info","-fno-discard-value-names","-fno-exceptions","-fno-rtti","-MMD","-MF","$OUT_DIR/shadertoy_nguyen.d","-MT","shadertoy_nguyen.bc","-emit-llvm","-c","kernel.clcpp","-o","$OUT_DIR/shadertoy_nguyen.bc"],["$LLVM_SPIRV","--preserve-ocl-kernel-arg-type-metadata-through-string","$OUT_DIR/shadertoy_nguyen.bc","-o","$OUT_DIR/shadertoy_nguyen.spv"],["$OCLOC","compile","-file","$OUT_DIR/shadertoy_nguyen.spv","-spirv_input","-device","0x4680","-64","-output","shadertoy_nguyen","-out_dir","$OUT_DIR","-output_no_suffix","-gen_file","-options","-cl-fast-relaxed-math"],["$OCLOC","validate","-file","$OUT_DIR/shadertoy_nguyen.bin"]]
 
 pub(crate) const SHADERTOY_NGUYEN_ADLS_CPP_ABI_CONTRACT: GpgpuKernelAbiContract = GpgpuKernelAbiContract {
     schema_version: GPGPU_KERNEL_ABI_SCHEMA_VERSION,
@@ -16,10 +16,10 @@ pub(crate) const SHADERTOY_NGUYEN_ADLS_CPP_ABI_CONTRACT: GpgpuKernelAbiContract 
     ze_info_major: 1,
     ze_info_minor: 62,
     zebin_sha256: [
-        0x1d, 0xbc, 0x80, 0xb4, 0x68, 0xdd, 0x89, 0x60,
-        0x73, 0xdd, 0x17, 0xc3, 0x96, 0x3a, 0x5c, 0x7c,
-        0xcc, 0xf8, 0x14, 0x36, 0x5e, 0x21, 0xf0, 0x40,
-        0xe0, 0x5a, 0x35, 0x22, 0xfe, 0xa4, 0xcd, 0x9c,
+        0x71, 0x40, 0x70, 0x35, 0x71, 0xa2, 0x0d, 0x56,
+        0x40, 0x87, 0x6c, 0xad, 0xdb, 0xe5, 0x94, 0x8a,
+        0xa8, 0x4f, 0x88, 0x28, 0xff, 0x1d, 0x62, 0x1b,
+        0x6e, 0xae, 0x1e, 0xf7, 0xd6, 0x7a, 0xf5, 0x4d,
     ],
     spv_sha256: [
         0x73, 0x4d, 0xba, 0x8e, 0x6b, 0xb9, 0x2b, 0x28,
@@ -29,9 +29,9 @@ pub(crate) const SHADERTOY_NGUYEN_ADLS_CPP_ABI_CONTRACT: GpgpuKernelAbiContract 
     ],
     text_section_name: ".text.shadertoy_nguyen",
     text_section_offset: 64,
-    text_section_size: 78528,
+    text_section_size: 9344,
     entry_offset: 64,
-    entry_size: 78360,
+    entry_size: 9216,
     simd_width: 16,
     grf_count: 128,
     scratch_bytes: 0,

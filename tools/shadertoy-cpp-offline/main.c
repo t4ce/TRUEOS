@@ -568,7 +568,10 @@ static int load_program(App *app) {
         snprintf(app->status, sizeof(app->status), "OpenCL: clCreateProgramWithIL failed (%d)", error);
         return 0;
     }
-    error = clBuildProgram(runtime->program, 1, &runtime->device, NULL, NULL, NULL);
+    // Match compile_shader.py's visual-shader backend profile. SPIR-V alone
+    // does not carry the ocloc math-library build option.
+    error = clBuildProgram(runtime->program, 1, &runtime->device,
+                           "-cl-fast-relaxed-math", NULL, NULL);
     if (error != CL_SUCCESS) {
         char log[2048] = {0};
         clGetProgramBuildInfo(runtime->program, runtime->device, CL_PROGRAM_BUILD_LOG,

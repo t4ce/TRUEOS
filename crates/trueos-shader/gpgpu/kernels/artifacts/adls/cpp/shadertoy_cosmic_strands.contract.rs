@@ -2,7 +2,7 @@
 // source: bld/shadertoy-blueprint-bake/sources/cosmic_strands/kernel.clcpp
 // frontend: Clang C++ for OpenCL -> LLVM bitcode -> llvm-spirv
 // backend: Intel IGC through ocloc -spirv_input
-// normalized commands: [["$CLANG","--target=spir64","-x","clcpp","-cl-std=CLC++","-Wall","-Wextra","-Werror","-Wdate-time","-cl-kernel-arg-info","-fno-discard-value-names","-fno-exceptions","-fno-rtti","-MMD","-MF","$OUT_DIR/shadertoy_cosmic_strands.d","-MT","shadertoy_cosmic_strands.bc","-emit-llvm","-c","kernel.clcpp","-o","$OUT_DIR/shadertoy_cosmic_strands.bc"],["$LLVM_SPIRV","--preserve-ocl-kernel-arg-type-metadata-through-string","$OUT_DIR/shadertoy_cosmic_strands.bc","-o","$OUT_DIR/shadertoy_cosmic_strands.spv"],["$OCLOC","compile","-file","$OUT_DIR/shadertoy_cosmic_strands.spv","-spirv_input","-device","0x4680","-64","-output","shadertoy_cosmic_strands","-out_dir","$OUT_DIR","-output_no_suffix","-gen_file"],["$OCLOC","validate","-file","$OUT_DIR/shadertoy_cosmic_strands.bin"]]
+// normalized commands: [["$CLANG","--target=spir64","-x","clcpp","-cl-std=CLC++","-Wall","-Wextra","-Werror","-Wdate-time","-cl-kernel-arg-info","-fno-discard-value-names","-fno-exceptions","-fno-rtti","-MMD","-MF","$OUT_DIR/shadertoy_cosmic_strands.d","-MT","shadertoy_cosmic_strands.bc","-emit-llvm","-c","kernel.clcpp","-o","$OUT_DIR/shadertoy_cosmic_strands.bc"],["$LLVM_SPIRV","--preserve-ocl-kernel-arg-type-metadata-through-string","$OUT_DIR/shadertoy_cosmic_strands.bc","-o","$OUT_DIR/shadertoy_cosmic_strands.spv"],["$OCLOC","compile","-file","$OUT_DIR/shadertoy_cosmic_strands.spv","-spirv_input","-device","0x4680","-64","-output","shadertoy_cosmic_strands","-out_dir","$OUT_DIR","-output_no_suffix","-gen_file","-options","-cl-fast-relaxed-math"],["$OCLOC","validate","-file","$OUT_DIR/shadertoy_cosmic_strands.bin"]]
 
 pub(crate) const SHADERTOY_COSMIC_STRANDS_ADLS_CPP_ABI_CONTRACT: GpgpuKernelAbiContract = GpgpuKernelAbiContract {
     schema_version: GPGPU_KERNEL_ABI_SCHEMA_VERSION,
@@ -16,10 +16,10 @@ pub(crate) const SHADERTOY_COSMIC_STRANDS_ADLS_CPP_ABI_CONTRACT: GpgpuKernelAbiC
     ze_info_major: 1,
     ze_info_minor: 62,
     zebin_sha256: [
-        0x9a, 0x27, 0x5f, 0x03, 0x6d, 0xea, 0xc2, 0x74,
-        0x54, 0x1a, 0x34, 0x25, 0x6c, 0x09, 0x14, 0x0e,
-        0xcd, 0x3f, 0x98, 0xe3, 0x92, 0xc4, 0x96, 0x3a,
-        0x27, 0xe6, 0xac, 0x1d, 0xb5, 0xb8, 0x25, 0x00,
+        0xbf, 0x7e, 0x5b, 0x8a, 0x59, 0x05, 0x26, 0xa3,
+        0x6f, 0xa9, 0x68, 0x4a, 0x40, 0x55, 0xd9, 0xdd,
+        0x25, 0x5e, 0x36, 0xcb, 0xa8, 0xb5, 0xab, 0x75,
+        0x81, 0x3c, 0xa3, 0xb5, 0x9b, 0x45, 0x69, 0xd4,
     ],
     spv_sha256: [
         0x76, 0x00, 0x79, 0xe1, 0x19, 0xdf, 0x2b, 0x46,
@@ -29,9 +29,9 @@ pub(crate) const SHADERTOY_COSMIC_STRANDS_ADLS_CPP_ABI_CONTRACT: GpgpuKernelAbiC
     ],
     text_section_name: ".text.shadertoy_cosmic_strands",
     text_section_offset: 64,
-    text_section_size: 27200,
+    text_section_size: 5184,
     entry_offset: 64,
-    entry_size: 27064,
+    entry_size: 5056,
     simd_width: 16,
     grf_count: 128,
     scratch_bytes: 0,

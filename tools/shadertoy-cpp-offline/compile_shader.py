@@ -37,6 +37,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--clang")
     parser.add_argument("--llvm-spirv")
     parser.add_argument("--ocloc")
+    parser.add_argument("--math-mode", choices=("strict", "relaxed"), default="relaxed")
     args = parser.parse_args(argv)
 
     try:
@@ -89,7 +90,9 @@ def main(argv: list[str] | None = None) -> int:
         str(REPO_ROOT / "tools/intel-gpu-bakery/bake.py"),
         "--source", str(generated_path),
         "--artifact-name", "shadertoy_image",
-        "--profile", str(REPO_ROOT / "tools/intel-gpu-bakery/profiles/adls-4680-r0c-cpp.json"),
+        "--profile", str(REPO_ROOT / "tools/intel-gpu-bakery/profiles" /
+                         ("adls-4680-r0c-shadertoy.json" if args.math_mode == "relaxed"
+                          else "adls-4680-r0c-cpp.json")),
         "--variant", "cpp-native",
         "--build-root", str(REPO_ROOT / "bld/shadertoy-cpp-offline/bakery"),
         "--expect-kernel", "shadertoy_image",
@@ -114,4 +117,3 @@ def main(argv: list[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

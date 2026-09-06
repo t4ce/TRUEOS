@@ -26,6 +26,7 @@ fn direct_rcs_write_shadertoy_payload(
     state: DirectRcsState,
     dst: GpgpuRgba8Surface,
     params: ShaderToyFrameParams,
+    first_row: u32,
 ) -> bool {
     let Some(contract) = shadertoy_contract(params.shader_id) else {
         return false;
@@ -43,6 +44,10 @@ fn direct_rcs_write_shadertoy_payload(
         let payload = state.batch_virt.add(SHADERTOY_PAYLOAD_OFFSET_BYTES);
         core::ptr::write_bytes(payload, 0, SHADERTOY_INDIRECT_BYTES);
         let dwords = payload as *mut u32;
+        // The admitted global_id_offset payload is uint3 at byte zero.
+        // Keep resolution, destination base, pitch and mouse in full-image
+        // coordinates while the walker executes only this batch's row count.
+        core::ptr::write_volatile(dwords.add(1), first_row);
         core::ptr::write_volatile(dwords.add(3), 16);
         core::ptr::write_volatile(dwords.add(4), 1);
         core::ptr::write_volatile(dwords.add(5), 1);
@@ -95,7 +100,12 @@ fn direct_rcs_encode_shadertoy_batch(
     upload: UploadedKernelArtifact,
     dst: GpgpuRgba8Surface,
     params: ShaderToyFrameParams,
+    first_row: u32,
+    rows: u32,
 ) -> bool {
+    if shadertoy_dispatch_rows(params.shader_id, dst.width, dst.height, first_row) != Some(rows) {
+        return false;
+    }
     let Some(contract) = shadertoy_contract(params.shader_id) else {
         return false;
     };
@@ -166,13 +176,13 @@ fn direct_rcs_encode_shadertoy_batch(
             uniforms_gpu,
             SHADERTOY_UNIFORMS_BYTES,
         ))
-        || !direct_rcs_write_shadertoy_payload(state, dst, params)
+        || !direct_rcs_write_shadertoy_payload(state, dst, params, first_row)
     {
         return false;
     }
 
     let group_x = dst.width.div_ceil(16).max(1);
-    let group_y = dst.height.max(1);
+    let group_y = rows;
     let last_group_pixels = ((dst.width - 1) % 16) + 1;
     let right_mask = if last_group_pixels == 16 {
         GPGPU_WALKER_SIMD16_MASK

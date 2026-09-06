@@ -2,7 +2,7 @@
 // source: bld/shadertoy-blueprint-bake/sources/palette_grid/kernel.clcpp
 // frontend: Clang C++ for OpenCL -> LLVM bitcode -> llvm-spirv
 // backend: Intel IGC through ocloc -spirv_input
-// normalized commands: [["$CLANG","--target=spir64","-x","clcpp","-cl-std=CLC++","-Wall","-Wextra","-Werror","-Wdate-time","-cl-kernel-arg-info","-fno-discard-value-names","-fno-exceptions","-fno-rtti","-MMD","-MF","$OUT_DIR/shadertoy_palette_grid.d","-MT","shadertoy_palette_grid.bc","-emit-llvm","-c","kernel.clcpp","-o","$OUT_DIR/shadertoy_palette_grid.bc"],["$LLVM_SPIRV","--preserve-ocl-kernel-arg-type-metadata-through-string","$OUT_DIR/shadertoy_palette_grid.bc","-o","$OUT_DIR/shadertoy_palette_grid.spv"],["$OCLOC","compile","-file","$OUT_DIR/shadertoy_palette_grid.spv","-spirv_input","-device","0x4680","-64","-output","shadertoy_palette_grid","-out_dir","$OUT_DIR","-output_no_suffix","-gen_file"],["$OCLOC","validate","-file","$OUT_DIR/shadertoy_palette_grid.bin"]]
+// normalized commands: [["$CLANG","--target=spir64","-x","clcpp","-cl-std=CLC++","-Wall","-Wextra","-Werror","-Wdate-time","-cl-kernel-arg-info","-fno-discard-value-names","-fno-exceptions","-fno-rtti","-MMD","-MF","$OUT_DIR/shadertoy_palette_grid.d","-MT","shadertoy_palette_grid.bc","-emit-llvm","-c","kernel.clcpp","-o","$OUT_DIR/shadertoy_palette_grid.bc"],["$LLVM_SPIRV","--preserve-ocl-kernel-arg-type-metadata-through-string","$OUT_DIR/shadertoy_palette_grid.bc","-o","$OUT_DIR/shadertoy_palette_grid.spv"],["$OCLOC","compile","-file","$OUT_DIR/shadertoy_palette_grid.spv","-spirv_input","-device","0x4680","-64","-output","shadertoy_palette_grid","-out_dir","$OUT_DIR","-output_no_suffix","-gen_file","-options","-cl-fast-relaxed-math"],["$OCLOC","validate","-file","$OUT_DIR/shadertoy_palette_grid.bin"]]
 
 pub(crate) const SHADERTOY_PALETTE_GRID_ADLS_CPP_ABI_CONTRACT: GpgpuKernelAbiContract = GpgpuKernelAbiContract {
     schema_version: GPGPU_KERNEL_ABI_SCHEMA_VERSION,
@@ -16,10 +16,10 @@ pub(crate) const SHADERTOY_PALETTE_GRID_ADLS_CPP_ABI_CONTRACT: GpgpuKernelAbiCon
     ze_info_major: 1,
     ze_info_minor: 62,
     zebin_sha256: [
-        0x98, 0xa5, 0xa3, 0x91, 0x54, 0xa9, 0x02, 0x1e,
-        0x2e, 0x09, 0x40, 0x7c, 0x51, 0x88, 0x64, 0x4a,
-        0xc7, 0x44, 0xee, 0xda, 0xe4, 0x03, 0x1e, 0xfd,
-        0xf3, 0x95, 0xf6, 0x61, 0x9b, 0x32, 0xfd, 0x40,
+        0x21, 0x74, 0xc3, 0x00, 0x2f, 0xf5, 0xe0, 0xc4,
+        0x89, 0xde, 0x3e, 0xa4, 0xaf, 0xf8, 0xda, 0x5b,
+        0x92, 0x2b, 0x99, 0x5e, 0x60, 0x75, 0x96, 0x7a,
+        0x32, 0x6e, 0xeb, 0x65, 0x6e, 0x28, 0x01, 0x24,
     ],
     spv_sha256: [
         0xf6, 0xfd, 0xb5, 0x48, 0xea, 0xb6, 0x33, 0xd5,
@@ -29,9 +29,9 @@ pub(crate) const SHADERTOY_PALETTE_GRID_ADLS_CPP_ABI_CONTRACT: GpgpuKernelAbiCon
     ],
     text_section_name: ".text.shadertoy_palette_grid",
     text_section_offset: 64,
-    text_section_size: 35200,
+    text_section_size: 2496,
     entry_offset: 64,
-    entry_size: 35048,
+    entry_size: 2336,
     simd_width: 16,
     grf_count: 128,
     scratch_bytes: 0,

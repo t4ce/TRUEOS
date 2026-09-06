@@ -97,6 +97,8 @@ def _load_profile(path: Path) -> dict[str, Any]:
         raise ContractError(f"profile {path} misses keys: {', '.join(missing)}")
     if profile.get("schema_version") != 1:
         raise ContractError(f"profile {path}: unsupported schema")
+    if profile["cpp"].get("math_mode", "strict") not in ("strict", "relaxed"):
+        raise ContractError(f"profile {path}: unsupported C++ math_mode")
     return profile
 
 
@@ -565,6 +567,11 @@ def _cpp_commands(
         "-output_no_suffix",
         "-gen_file",
     ]
+    # OpenCL library precision is a backend choice. A Clang fast-math flag
+    # alone does not select IGC's fast math-library implementations for SPIR-V.
+    # Keep this explicit, profile-hashed and separate from numerical kernels.
+    if cpp.get("math_mode", "strict") == "relaxed":
+        ocloc_command.extend(["-options", "-cl-fast-relaxed-math"])
     return (
         clang_command,
         translator_command,

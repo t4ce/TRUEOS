@@ -31,14 +31,19 @@ int main(int argc, char **argv) {
     runtime->program = clCreateProgramWithIL(runtime->context, spirv, spirv_size, &error);
     free(spirv);
     require_cl(error, "IL program");
-    error = clBuildProgram(runtime->program, 1, &runtime->device, NULL, NULL, NULL);
+    // Set SHADERTOY_BUILD_OPTIONS to match the artifact manifest; unset keeps
+    // the strict baseline. The option is backend metadata, not part of SPIR-V.
+    error = clBuildProgram(runtime->program, 1, &runtime->device,
+                           getenv("SHADERTOY_BUILD_OPTIONS"), NULL, NULL);
     if (error != CL_SUCCESS) {
         char log[16384] = {0};
         clGetProgramBuildInfo(runtime->program, runtime->device, CL_PROGRAM_BUILD_LOG, sizeof(log), log, NULL);
         fprintf(stderr, "%s\n", log);
         require_cl(error, "build");
     }
-    runtime->kernel = clCreateKernel(runtime->program, "shadertoy_protean_clouds", &error);
+    const char *kernel_name = getenv("SHADERTOY_KERNEL");
+    runtime->kernel = clCreateKernel(runtime->program,
+        kernel_name ? kernel_name : "shadertoy_protean_clouds", &error);
     require_cl(error, "kernel");
     const cl_uint width = argc == 5 ? (cl_uint)atoi(argv[3]) : 640;
     const cl_uint height = argc == 5 ? (cl_uint)atoi(argv[4]) : 360, pitch = width * 4;
@@ -56,6 +61,10 @@ int main(int argc, char **argv) {
     require_cl(clSetKernelArg(runtime->kernel, 3, sizeof(height), &height), "height arg");
     require_cl(clSetKernelArg(runtime->kernel, 4, sizeof(pitch), &pitch), "pitch arg");
     const size_t global[2] = {(width + 15u) & ~15u, height}, local[2] = {16, 1};
+    const char *batch_limit = getenv("SHADERTOY_MAX_BATCH_PIXELS");
+    const size_t max_pixels = batch_limit ? strtoul(batch_limit, NULL, 10) : 0;
+    const size_t batch_rows = max_pixels ? max_pixels / global[0] : height;
+    if (!batch_rows) return 2;
     int animation_changed = 0, repeat_equal = 0;
     const float times[] = {0,0,0,2,4,6,8,12,20,35,60,120,0,4,8,0};
     for (int frame = 0; frame < 16; ++frame) {
@@ -68,8 +77,18 @@ int main(int argc, char **argv) {
         uniforms[12] = 1.f / 60.f; uniforms[13] = 60.f;
         require_cl(clEnqueueWriteBuffer(runtime->queue, runtime->uniform_buffer, CL_TRUE, 0, sizeof(uniforms), uniforms, 0, NULL, NULL), "write uniforms");
         uint64_t start = monotonic_nanoseconds();
-        require_cl(clEnqueueNDRangeKernel(runtime->queue, runtime->kernel, 2, NULL, global, local, 0, NULL, NULL), "dispatch");
-        require_cl(clFinish(runtime->queue), "finish dispatch");
+        double max_batch_ms = 0.0;
+        for (size_t row = 0; row < height; row += batch_rows) {
+            const size_t offset[2] = {0, row};
+            const size_t extent[2] = {global[0],
+                batch_rows < height - row ? batch_rows : height - row};
+            const uint64_t batch_start = monotonic_nanoseconds();
+            require_cl(clEnqueueNDRangeKernel(runtime->queue, runtime->kernel, 2,
+                offset, extent, local, 0, NULL, NULL), "dispatch");
+            require_cl(clFinish(runtime->queue), "finish dispatch");
+            const double batch_ms = (monotonic_nanoseconds() - batch_start) / 1000000.0;
+            if (batch_ms > max_batch_ms) max_batch_ms = batch_ms;
+        }
         double elapsed_ms = (monotonic_nanoseconds() - start) / 1000000.0;
         require_cl(clEnqueueReadBuffer(runtime->queue, runtime->output_buffer, CL_TRUE, 0, bytes, pixels, 0, NULL, NULL), "read frame");
         if (frame == 0) memcpy(first, pixels, bytes);
@@ -85,7 +104,7 @@ int main(int argc, char **argv) {
             if (fwrite(rgb, 1, 3, output) != 3) return 2;
         }
         if (fclose(output) != 0) return 2;
-        printf("frame=%d time=%.1f mouse=%d dispatch_finish_ms=%.3f output=%s\n", frame, uniforms[3], frame >= 12 && frame <= 14, elapsed_ms, path);
+        printf("frame=%d time=%.1f mouse=%d dispatch_finish_ms=%.3f max_batch_ms=%.3f output=%s\n", frame, uniforms[3], frame >= 12 && frame <= 14, elapsed_ms, max_batch_ms, path);
         fflush(stdout);
     }
     printf("animation_changes_frame=%d repeat_t0_bit_identical=%d\n", animation_changed, repeat_equal);

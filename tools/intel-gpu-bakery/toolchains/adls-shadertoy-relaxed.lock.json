@@ -1,0 +1,110 @@
+{
+  "compiler_libraries": [
+    {
+      "aliases": [
+        "libiga64.so.2",
+        "libiga64.so.2.28.4+0"
+      ],
+      "name": "libiga64.so.2",
+      "resolved_name": "libiga64.so.2.28.4+0",
+      "sha256": "e7e369909ee38c51d8c92b4dc4f31cf57661c54dd6bc6fa7761324c53228a3c8",
+      "size_bytes": 3622928
+    },
+    {
+      "aliases": [
+        "libigc.so.2",
+        "libigc.so.2.28.4+0"
+      ],
+      "name": "libigc.so.2",
+      "resolved_name": "libigc.so.2.28.4+0",
+      "sha256": "7034ccb0013c7a52c087d6ac7cbb1c83579d8bcdb1659ba6fd7aa014bd903fec",
+      "size_bytes": 98574944
+    },
+    {
+      "aliases": [
+        "libigdfcl.so.2",
+        "libigdfcl.so.2.28.4+0"
+      ],
+      "name": "libigdfcl.so.2",
+      "resolved_name": "libigdfcl.so.2.28.4+0",
+      "sha256": "c9403ea70f968adde3f211d4f9eec956e8e542832a00394d051a73bb8ecb6450",
+      "size_bytes": 2395160
+    },
+    {
+      "aliases": [
+        "libocloc.so"
+      ],
+      "name": "libocloc.so",
+      "resolved_name": "libocloc.so",
+      "sha256": "a266ec3b7e84e703583be917adb8d7dfe1679277596ecd5c11c72f8704d25450",
+      "size_bytes": 2001344
+    },
+    {
+      "aliases": [
+        "libopencl-clang.so.16"
+      ],
+      "name": "libopencl-clang.so.16",
+      "resolved_name": "libopencl-clang.so.16",
+      "sha256": "b2352ba42d29e2cb87ca75a74721aff6a3f719d818a26576efcbf8b759994479",
+      "size_bytes": 127154912
+    }
+  ],
+  "frontend": "clang-clcpp",
+  "profile_sha256": "548db118bee677b46a45d43fe57bb574bfc724f789b2fb58b79c5ba94fe37b57",
+  "schema_version": 1,
+  "tools": {
+    "clang": {
+      "dynamic_compiler_libraries": [
+        {
+          "resolved_name": "libLLVM.so.21.1",
+          "sha256": "12dca1fc2d9f5d4ff35315fc2aa3a97b615b41ec6a71d3ce545efb62c075d902",
+          "size_bytes": 138567144,
+          "soname": "libLLVM.so.21.1"
+        },
+        {
+          "resolved_name": "libclang-cpp.so.21.1",
+          "sha256": "ff79833fd7e7707f3c715e9518f9edcec7371800ec22062c81d155fec3ad0daa",
+          "size_bytes": 60307904,
+          "soname": "libclang-cpp.so.21.1"
+        }
+      ],
+      "executable_sha256": "412bbe8c60571a1eb06f48fde89635033621caeb01a9b4ee76d46711bae8e932",
+      "resource_tree": {
+        "file_count": 405,
+        "size_bytes": 65550014,
+        "tree_sha256": "79459e49c99a7dff653b1d1c3a3b331afc282aac5d5ce62668f6e964973d6b91"
+      },
+      "version": "Ubuntu clang version 21.1.8 (6ubuntu1)\nTarget: x86_64-pc-linux-gnu\nThread model: posix"
+    },
+    "llvm_spirv": {
+      "dynamic_compiler_libraries": [
+        {
+          "resolved_name": "libLLVM.so.21.1",
+          "sha256": "12dca1fc2d9f5d4ff35315fc2aa3a97b615b41ec6a71d3ce545efb62c075d902",
+          "size_bytes": 138567144,
+          "soname": "libLLVM.so.21.1"
+        },
+        {
+          "resolved_name": "libLLVMSPIRVLib.so.21.1",
+          "sha256": "886522626cf769d94bf834dda08ee66615570b332a8b33c01cae53eb891deb2c",
+          "size_bytes": 4054864,
+          "soname": "libLLVMSPIRVLib.so.21.1"
+        }
+      ],
+      "executable_sha256": "c517b89fbeb3d58eb2d18c46dd006cd22660ff907a74987149156ad4e2af0b1b",
+      "version": "Ubuntu LLVM version 21.1.8\n  Optimized build."
+    },
+    "ocloc": {
+      "dynamic_compiler_libraries": [
+        {
+          "resolved_name": "libocloc.so",
+          "sha256": "a266ec3b7e84e703583be917adb8d7dfe1679277596ecd5c11c72f8704d25450",
+          "size_bytes": 2001344,
+          "soname": "libocloc.so"
+        }
+      ],
+      "executable_sha256": "c7e3d9430b7ae2cab247029f72b22033fd7af5987fe5aab3996cf196602ef328",
+      "version": "26.05.037020"
+    }
+  }
+}

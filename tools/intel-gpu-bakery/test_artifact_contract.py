@@ -19,7 +19,7 @@ from artifact_contract import (
     validate_constraints,
     verify_manifest,
 )
-from bake import _environment
+from bake import _environment, _cpp_commands, _load_profile
 
 
 TOOL_DIR = Path(__file__).resolve().parent
@@ -37,6 +37,37 @@ KERNEL_ROOT = ARTIFACT_ROOT.parent.parent
 
 
 class ArtifactContractTests(unittest.TestCase):
+    def test_visual_math_mode_reaches_backend_and_keeps_strict_default(self) -> None:
+        profiles = TOOL_DIR / "profiles"
+        for filename, relaxed in (("adls-4680-r0c-cpp.json", False),
+                                  ("adls-4680-r0c-shadertoy.json", True)):
+            profile = _load_profile(profiles / filename)
+            commands = _cpp_commands(
+                source=Path("kernel.clcpp"), artifact_name="shader",
+                out_dir=Path("output"), profile=profile,
+                clang=Path("clang"), llvm_spirv=Path("llvm-spirv"), ocloc=Path("ocloc"),
+            )
+            self.assertNotIn("-cl-fast-relaxed-math", commands[0])
+            self.assertEqual("-options" in commands[2], relaxed)
+            if relaxed:
+                self.assertEqual(commands[2][-2:], ["-options", "-cl-fast-relaxed-math"])
+            self.assertEqual(profile["constraints"],
+                             {"simd_width": 16, "max_scratch_bytes": 0, "max_slm_bytes": 0})
+
+        original = json.loads((TOOL_DIR / "toolchains/adls-shadertoy-cpp-proof.lock.json").read_text())
+        visual = json.loads((TOOL_DIR / "toolchains/adls-shadertoy-relaxed.lock.json").read_text())
+        self.assertNotEqual(original.pop("profile_sha256"), visual.pop("profile_sha256"))
+        self.assertEqual(original, visual)  # Same pinned tools and libraries.
+
+    def test_unknown_math_mode_is_rejected(self) -> None:
+        profile = _load_profile(TOOL_DIR / "profiles/adls-4680-r0c-cpp.json")
+        profile["cpp"]["math_mode"] = "unknown"
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "profile.json"
+            path.write_text(json.dumps(profile))
+            with self.assertRaises(ContractError):
+                _load_profile(path)
+
     def test_bake_environment_drops_unmodeled_compiler_inputs(self) -> None:
         hostile = {
             "CCC_OVERRIDE_OPTIONS": "+-DTRUEOS_ENV_OVERRIDE=1",
