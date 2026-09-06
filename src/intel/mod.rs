@@ -1325,6 +1325,12 @@ pub(crate) fn map_ggtt(dev: Dev, phys: u64, len: usize, gpu: u64) -> bool {
     map_ggtt_pages(dev, phys, len, gpu)
 }
 
+/// GGTT translates GPU addresses to system memory; its backing need not fit
+/// below 4 GiB. Bound the entire allocation to the address bits our PTE emits.
+pub(crate) fn alloc_ggtt_backing(bytes: usize, align: usize) -> Option<(u64, *mut u8)> {
+    crate::dma::alloc_with_max(bytes, align, Some(GEN12_GGTT_PTE_ADDR_MASK + 0x1000))
+}
+
 pub(crate) fn map_display_scanout_ggtt(dev: Dev, phys: u64, len: usize, gpu: u64) -> bool {
     if !gen12_integrated_pat_ready()
         || !device_uses_gen12_integrated_pat(dev.device_id)

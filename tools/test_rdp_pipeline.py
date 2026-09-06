@@ -211,5 +211,106 @@ fn source_slot_reuse_requires_explicit_encoder_release() {
         subprocess.run([str(binary), '--test-threads=1'], cwd=ROOT, check=True)
 
 
+def test_wd_teardown():
+    path = 'src/intel/display/mirror_map_dp_engine.rs'
+    source = r'''
+#![allow(dead_code)]
+use std::sync::atomic::{AtomicU64, Ordering};
+struct Mutex<T>(std::sync::Mutex<T>);
+impl<T> Mutex<T> {
+    const fn new(value: T) -> Self { Self(std::sync::Mutex::new(value)) }
+    fn lock(&self) -> std::sync::MutexGuard<'_, T> { self.0.lock().unwrap() }
+}
+#[macro_export] macro_rules! log_error { ($($tokens:tt)*) => {}; }
+#[macro_export] macro_rules! log_info { ($($tokens:tt)*) => {}; }
+static EVENTS: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
+static POLLS: Mutex<std::collections::VecDeque<bool>> = Mutex::new(std::collections::VecDeque::new());
+static CAPTURE_TIMEOUTS: AtomicU64 = AtomicU64::new(0);
+struct WdCaptureState {
+    running: bool, pending: bool, quarantined: bool, byte_len: usize, virt: usize,
+    saved_output_color: u32, saved_dbuf_ctl_s2: u32, saved_power_well_ctl2: u32,
+}
+impl WdCaptureState {
+    const fn new() -> Self { Self { running: false, pending: false, quarantined: false,
+        byte_len: 4096, virt: 0, saved_output_color: 0, saved_dbuf_ctl_s2: 0,
+        saved_power_well_ctl2: 0 } }
+}
+static STATE: Mutex<WdCaptureState> = Mutex::new(WdCaptureState::new());
+mod intel {
+    #[derive(Clone, Copy)] pub struct Dev;
+    pub fn claimed_device() -> Option<Dev> { Some(Dev) }
+    pub fn mmio_read(_: Dev, _: usize) -> u32 { 0 }
+    pub fn mmio_write(_: Dev, reg: usize, value: u32) {
+        super::EVENTS.lock().push(match (reg, value) {
+            (super::WD0_FUNC_CTL, super::WD_STOP_TRIGGER_FRAME) => "stop-trigger",
+            (super::WD0_TRANS_CONF, 0) => "disable-transcoder",
+            (super::WD0_FUNC_CTL, 0) => "disable-function",
+            _ => "restore-power",
+        });
+    }
+    pub fn unmap_display_scanout_ggtt(_: Dev, _: usize, _: u64) -> bool {
+        super::EVENTS.lock().push("unmap"); true
+    }
+}
+mod dma { pub fn dealloc(_: usize, _: usize) { super::EVENTS.lock().push("free"); } }
+fn wait_for_mask(_: intel::Dev, reg: usize, _: u32, _: bool, _: usize) -> bool {
+    EVENTS.lock().push(if reg == WD0_FRAME_STATUS { "wait-frame" } else { "wait-idle" });
+    POLLS.lock().pop_front().expect("unexpected hardware wait")
+}
+fn disable_mirror_planes(_: intel::Dev) { EVENTS.lock().push("disable-planes"); }
+fn restore_pipe_c_output_color(_: intel::Dev, _: u32) { EVENTS.lock().push("restore-color"); }
+'''
+    for name in ['WD0_FUNC_CTL', 'WD_STOP_TRIGGER_FRAME', 'WD0_TRANS_CONF', 'WD_TRANS_STATE',
+                 'WD0_FRAME_STATUS', 'WD_FRAME_COMPLETE', 'PIPE_WAIT_ITERS',
+                 'DBUF_CTL_S2', 'CAPTURE_GPU']:
+        source += constant(path, name) + '\n'
+    source += constant('src/intel/display/regs.rs', 'HSW_PWR_WELL_CTL2').replace('pub(in crate::intel) ', '') + '\n'
+    source += item(path, 'WdCaptureError') + '\n'
+    source += item(path, 'stop_ui4_wd_xyuv8888_capture') + r'''
+fn setup(pending: bool, polls: &[bool]) {
+    *STATE.lock() = WdCaptureState { running: true, pending, ..WdCaptureState::new() };
+    EVENTS.lock().clear();
+    *POLLS.lock() = polls.iter().copied().collect();
+}
+#[test]
+fn completed_capture_disables_planes_before_transcoder_and_frees_only_after_idle() {
+    setup(false, &[true]);
+    assert!(stop_ui4_wd_xyuv8888_capture().is_ok());
+    let events = EVENTS.lock();
+    assert_eq!(&events[..4], ["disable-planes", "disable-transcoder", "wait-idle", "disable-function"]);
+    assert_eq!(&events[events.len()-2..], ["unmap", "free"]);
+    assert!(!STATE.lock().running);
+}
+#[test]
+fn stuck_frame_cannot_disable_fetch_or_release_backing() {
+    setup(true, &[false]);
+    assert_eq!(stop_ui4_wd_xyuv8888_capture(), Err(WdCaptureError::WdDisableTimeout));
+    assert_eq!(*EVENTS.lock(), ["stop-trigger", "wait-frame"]);
+    assert!(STATE.lock().quarantined);
+    assert!(STATE.lock().running);
+}
+#[test]
+fn stuck_transcoder_keeps_target_mapped() {
+    setup(false, &[false]);
+    assert_eq!(stop_ui4_wd_xyuv8888_capture(), Err(WdCaptureError::WdDisableTimeout));
+    assert_eq!(*EVENTS.lock(), ["disable-planes", "disable-transcoder", "wait-idle"]);
+    assert!(STATE.lock().quarantined);
+}
+#[test]
+fn stopped_capture_must_retire_before_planes_are_disabled() {
+    setup(true, &[true, true]);
+    assert!(stop_ui4_wd_xyuv8888_capture().is_ok());
+    assert_eq!(&EVENTS.lock()[..3], ["stop-trigger", "wait-frame", "disable-planes"]);
+}
+'''
+    with tempfile.TemporaryDirectory(prefix='trueos-wd-teardown-') as temp:
+        rust, binary = Path(temp) / 'test.rs', Path(temp) / 'tests'
+        rust.write_text(source)
+        subprocess.run(['rustc', '--edition=2024', '--test', str(rust), '-o', str(binary)],
+                       cwd=ROOT, check=True)
+        subprocess.run([str(binary), '--test-threads=1'], cwd=ROOT, check=True)
+
+
 if __name__ == '__main__':
     main()
+    test_wd_teardown()

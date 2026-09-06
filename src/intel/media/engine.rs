@@ -3241,55 +3241,120 @@ pub(super) fn seed_media_ring_live_state(
     super::mmio_write(dev, ring_base + RING_HWSTAM, !0u32);
 }
 
+// These buffers have no submitted GPU owner until the complete backing is
+// published. Roll back every earlier allocation (and GGTT alias) on any
+// allocation, mapping, or page-table failure. Playback may retry every frame.
+struct UnsubmittedDecodeBuffer {
+    dev: crate::intel::Dev,
+    phys: u64,
+    virt: *mut u8,
+    bytes: usize,
+    gpu: u64,
+    mapping_attempted: bool,
+}
+
+static DECODE_BACKING_FAILURE_LOGGED: AtomicBool = AtomicBool::new(false);
+
+fn report_decode_backing_failure(stage: &str, bytes: usize) {
+    if !DECODE_BACKING_FAILURE_LOGGED.swap(true, Ordering::AcqRel) {
+        crate::log_error!(target: "intel-media";
+            "intel/hw_pic: decode-backing failed stage={} bytes={} pmm={:?} rollback=unsubmitted-buffers-only\n",
+            stage, bytes, crate::phys::pmm_stats());
+    }
+}
+
+impl UnsubmittedDecodeBuffer {
+    fn new(dev: crate::intel::Dev, bytes: usize, gpu: u64) -> Option<Self> {
+        let Some((phys, virt)) = crate::intel::alloc_ggtt_backing(bytes, crate::intel::WARM_ALIGN)
+        else {
+            report_decode_backing_failure("allocation", bytes);
+            return None;
+        };
+        Some(Self {
+            dev,
+            phys,
+            virt,
+            bytes,
+            gpu,
+            mapping_attempted: false,
+        })
+    }
+
+    fn map(&mut self) -> bool {
+        // map_ggtt may fail after writing part of a range. Clear that range too.
+        self.mapping_attempted = true;
+        let mapped = super::map_ggtt(self.dev, self.phys, self.bytes, self.gpu);
+        if !mapped {
+            report_decode_backing_failure("ggtt", self.bytes);
+        }
+        mapped
+    }
+
+    fn retain(self) {
+        core::mem::forget(self);
+    }
+}
+
+impl Drop for UnsubmittedDecodeBuffer {
+    fn drop(&mut self) {
+        if self.mapping_attempted
+            && !crate::intel::unmap_display_scanout_ggtt(self.dev, self.bytes, self.gpu)
+        {
+            // Never free memory while an alias may remain installed.
+            report_decode_backing_failure("ggtt-rollback-retained", self.bytes);
+            return;
+        }
+        crate::dma::dealloc(self.virt, self.bytes);
+    }
+}
+
 pub(super) fn ensure_decode_backing(
     dev: crate::intel::Dev,
     windows: MediaGpuWindowLayout,
 ) -> Option<MediaBitstreamBacking> {
-    if let Some(backing) = *MEDIA_BACKING.lock() {
+    // Serialize first-use construction as well as publication.
+    let mut cached = MEDIA_BACKING.lock();
+    if let Some(backing) = *cached {
         return Some(backing);
     }
-    let (ring_phys, ring_virt) =
-        crate::dma::alloc(MEDIA_DEFAULT_RING_BYTES, crate::intel::WARM_ALIGN)?;
-    let (context_phys, context_virt) =
-        crate::dma::alloc(MEDIA_DEFAULT_CONTEXT_BYTES, crate::intel::WARM_ALIGN)?;
-    let (batch_phys, batch_virt) =
-        crate::dma::alloc(MEDIA_DEFAULT_BATCH_BYTES, crate::intel::WARM_ALIGN)?;
-    let (result_phys, result_virt) =
-        crate::dma::alloc(MEDIA_DEFAULT_RESULT_BYTES, crate::intel::WARM_ALIGN)?;
-    let (bitstream_phys, bitstream_virt) =
-        crate::dma::alloc(MEDIA_DEFAULT_BITSTREAM_BYTES, crate::intel::WARM_ALIGN)?;
-    let (output_surface_phys, output_surface_virt) =
-        crate::dma::alloc(MEDIA_DEFAULT_OUTPUT_SURFACE_BYTES, crate::intel::WARM_ALIGN)?;
-    let (avc_scratch_phys, avc_scratch_virt) =
-        crate::dma::alloc(MEDIA_DEFAULT_AVC_SCRATCH_BYTES, crate::intel::WARM_ALIGN)?;
-    let mapped = super::map_ggtt(dev, ring_phys, MEDIA_DEFAULT_RING_BYTES, windows.ring_gpu_addr)
-        && super::map_ggtt(
-            dev,
-            context_phys,
-            MEDIA_DEFAULT_CONTEXT_BYTES,
-            windows.context_gpu_addr,
-        )
-        && super::map_ggtt(dev, batch_phys, MEDIA_DEFAULT_BATCH_BYTES, windows.batch_gpu_addr)
-        && super::map_ggtt(dev, result_phys, MEDIA_DEFAULT_RESULT_BYTES, windows.result_gpu_addr)
-        && super::map_ggtt(
-            dev,
-            bitstream_phys,
-            MEDIA_DEFAULT_BITSTREAM_BYTES,
-            windows.bitstream_gpu_addr,
-        )
-        && super::map_ggtt(
-            dev,
-            output_surface_phys,
-            MEDIA_DEFAULT_OUTPUT_SURFACE_BYTES,
-            windows.output_surface_gpu_addr,
-        )
-        && super::map_ggtt(
-            dev,
-            avc_scratch_phys,
-            MEDIA_DEFAULT_AVC_SCRATCH_BYTES,
-            windows.avc_scratch_gpu_addr,
-        );
-    if !mapped {
+    let mut ring =
+        UnsubmittedDecodeBuffer::new(dev, MEDIA_DEFAULT_RING_BYTES, windows.ring_gpu_addr)?;
+    let mut context =
+        UnsubmittedDecodeBuffer::new(dev, MEDIA_DEFAULT_CONTEXT_BYTES, windows.context_gpu_addr)?;
+    let mut batch =
+        UnsubmittedDecodeBuffer::new(dev, MEDIA_DEFAULT_BATCH_BYTES, windows.batch_gpu_addr)?;
+    let mut result =
+        UnsubmittedDecodeBuffer::new(dev, MEDIA_DEFAULT_RESULT_BYTES, windows.result_gpu_addr)?;
+    let mut bitstream = UnsubmittedDecodeBuffer::new(
+        dev,
+        MEDIA_DEFAULT_BITSTREAM_BYTES,
+        windows.bitstream_gpu_addr,
+    )?;
+    let mut output_surface = UnsubmittedDecodeBuffer::new(
+        dev,
+        MEDIA_DEFAULT_OUTPUT_SURFACE_BYTES,
+        windows.output_surface_gpu_addr,
+    )?;
+    let mut avc_scratch = UnsubmittedDecodeBuffer::new(
+        dev,
+        MEDIA_DEFAULT_AVC_SCRATCH_BYTES,
+        windows.avc_scratch_gpu_addr,
+    )?;
+    let (ring_phys, ring_virt) = (ring.phys, ring.virt);
+    let (context_phys, context_virt) = (context.phys, context.virt);
+    let (batch_phys, batch_virt) = (batch.phys, batch.virt);
+    let (result_phys, result_virt) = (result.phys, result.virt);
+    let (bitstream_phys, bitstream_virt) = (bitstream.phys, bitstream.virt);
+    let (output_surface_phys, output_surface_virt) = (output_surface.phys, output_surface.virt);
+    let (avc_scratch_phys, avc_scratch_virt) = (avc_scratch.phys, avc_scratch.virt);
+    if !(ring.map()
+        && context.map()
+        && batch.map()
+        && result.map()
+        && bitstream.map()
+        && output_surface.map()
+        && avc_scratch.map())
+    {
         return None;
     }
     super::ggtt_invalidate(dev);
@@ -3319,7 +3384,11 @@ pub(super) fn ensure_decode_backing(
             phys: result_phys,
             bytes: MEDIA_DEFAULT_RESULT_BYTES,
         },
-    ])?;
+    ])
+    .or_else(|| {
+        report_decode_backing_failure("ppgtt", 0);
+        None
+    })?;
     let backing = MediaBitstreamBacking {
         ring_phys,
         ring_virt,
@@ -3344,7 +3413,15 @@ pub(super) fn ensure_decode_backing(
         avc_scratch_bytes: MEDIA_DEFAULT_AVC_SCRATCH_BYTES,
         ppgtt_pml4_phys,
     };
-    *MEDIA_BACKING.lock() = Some(backing);
+    ring.retain();
+    context.retain();
+    batch.retain();
+    result.retain();
+    bitstream.retain();
+    output_surface.retain();
+    avc_scratch.retain();
+    DECODE_BACKING_FAILURE_LOGGED.store(false, Ordering::Release);
+    *cached = Some(backing);
     Some(backing)
 }
 

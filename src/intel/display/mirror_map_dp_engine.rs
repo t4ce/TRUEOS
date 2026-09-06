@@ -582,7 +582,8 @@ pub(crate) fn start_ui4_wd_xyuv8888_capture() -> Result<WdXyuv8888Frame, WdCaptu
     let (pitch_bytes, byte_len) =
         aligned_capture_layout(width, height).ok_or(WdCaptureError::DimensionsInvalid)?;
     let (phys, virt) =
-        crate::dma::alloc(byte_len, CAPTURE_ALIGNMENT).ok_or(WdCaptureError::AllocationFailed)?;
+        crate::intel::alloc_ggtt_backing(byte_len, CAPTURE_ALIGNMENT)
+            .ok_or(WdCaptureError::AllocationFailed)?;
     unsafe { core::ptr::write_bytes(virt, 0, byte_len) };
     crate::intel::dma_flush(virt, byte_len);
     if !crate::intel::map_display_scanout_ggtt(dev, phys, byte_len, CAPTURE_GPU) {
