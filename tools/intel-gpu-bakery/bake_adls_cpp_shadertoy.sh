@@ -24,8 +24,14 @@ for shader in "${shaders[@]}"; do
     "${shader_dir}/kernel.clcpp" \
     --kernel-name "${kernel_name}"
 
+  # Compile an exact staging copy under TRUEOS so provenance paths are relative
+  # and package hashes do not depend on the Blueprint checkout's absolute path.
+  staged_source_dir="${trueos_root}/bld/shadertoy-blueprint-bake/sources/${shader}"
+  mkdir -p "${staged_source_dir}"
+  cp "${shader_dir}/kernel.clcpp" "${staged_source_dir}/kernel.clcpp"
+
   "${python_bin}" -B "${tool_dir}/bake.py" \
-    --source "${shader_dir}/kernel.clcpp" \
+    --source "${staged_source_dir}/kernel.clcpp" \
     --artifact-name "${kernel_name}" \
     --profile "${profile}" \
     --variant cpp-native \

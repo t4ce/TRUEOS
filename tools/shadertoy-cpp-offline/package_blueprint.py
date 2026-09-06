@@ -6,6 +6,7 @@ The package hash covers the raw GLSL, generated C++, SPIR-V, Zebin and provenanc
 """
 import argparse
 import hashlib
+import json
 import struct
 from pathlib import Path
 
@@ -33,6 +34,11 @@ def main():
     generated += "// Trusted metadata only: no shader payload is linked into the kernel.\n"
     for shader_id, name in enumerate(NAMES, 1):
         data, parts = package(assets / name)
+        manifest = json.loads(parts[4])
+        source = manifest["source"]
+        inputs = {entry["path"]: entry for entry in source["inputs"]}
+        if inputs[source["path"]]["sha256"] != hashlib.sha256(parts[3]).hexdigest():
+            raise SystemExit(f"{name}: generated C++ differs from baked source provenance")
         contract = ROOT / f"crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/shadertoy_{name}.contract.rs"
         if contract.read_bytes() != parts[5]:
             raise SystemExit(f"{name}: Blueprint contract differs from kernel trust contract")
