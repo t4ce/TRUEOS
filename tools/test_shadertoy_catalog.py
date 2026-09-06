@@ -3,7 +3,7 @@
 from pathlib import Path
 import subprocess
 import tempfile
-from test_clip_position3_uv_texture import ROOT, item
+from test_clip_position3_uv_texture import ROOT, item, constant
 
 
 def main():
@@ -15,7 +15,13 @@ def main():
     code += item('src/intel/gpgpu/operations/cpp_audio_visualizer.rs', 'cpp_audio_visualizer_rgba8_surface_full')
     particle = 'src/intel/gpgpu/operations/particle_craft.rs'
     code += '\n'.join(item(particle, name) for name in ('particle_craft_catalog_divisor', 'particle_craft_render_divisor', 'particle_craft_backing_extent', 'particle_craft_sample_extent'))
-    code += (ROOT / particle).read_text().split('#[derive(Copy, Clone, Debug)]\nstruct ParticleCraftRenderPlan')[1].split('/// Stable host-side')[0].join(['#[derive(Copy, Clone, Debug)]\nstruct ParticleCraftRenderPlan', ''])
+    source = (ROOT / particle).read_text()
+    code += source[source.index('#[derive(Copy, Clone, Debug)]\nstruct ParticleCraftRenderPlan'):source.index('/// Stable host-side')]
+    code += '\n'.join(constant(particle, name) for name in (
+        'PARTICLE_CRAFT_FRAME_WIDTH', 'PARTICLE_CRAFT_FRAME_HEIGHT', 'PARTICLE_CRAFT_RENDER_DIVISOR',
+        'PARTICLE_CRAFT_TILE_SAMPLE_WIDTH', 'PARTICLE_CRAFT_TILE_SAMPLE_HEIGHT',
+        'PARTICLE_CRAFT_MAX_SAMPLE_WIDTH', 'PARTICLE_CRAFT_MAX_SAMPLE_HEIGHT',
+        'PARTICLE_CRAFT_MAX_TILE_COLUMNS', 'PARTICLE_CRAFT_MAX_TILE_ROWS'))
     code += TESTS
     with tempfile.TemporaryDirectory(prefix='trueos-shadertoy-catalog-') as temp:
         path = Path(temp) / 'tests.rs'
@@ -67,13 +73,6 @@ struct GpgpuOwnedParticleCraftState;
 impl GpgpuOwnedParticleCraftState { fn allocate()->Option<Self> { TRACE.lock().particle_allocations+=1;Some(Self) } }
 impl Drop for GpgpuOwnedParticleCraftState { fn drop(&mut self) { TRACE.lock().particle_drops+=1; } }
 const PARTICLE_CRAFT_FLAG_RESET:u32=1;
-const PARTICLE_CRAFT_FRAME_WIDTH:u32=640;
-const PARTICLE_CRAFT_FRAME_HEIGHT:u32=400;
-const PARTICLE_CRAFT_RENDER_DIVISOR:u32=2;
-const PARTICLE_CRAFT_TILE_SAMPLE_WIDTH:u32=32;
-const PARTICLE_CRAFT_TILE_SAMPLE_HEIGHT:u32=32;
-const PARTICLE_CRAFT_MAX_TILE_COLUMNS:u32=128;
-const PARTICLE_CRAFT_MAX_TILE_ROWS:u32=128;
 struct ParticleCraftParamsV1 { flags:u32, dt:f32 }
 impl ParticleCraftParamsV1 { fn arc_forge(_:f32,dt:f32,_:u32)->Self { Self {flags:8,dt} } }
 fn particle_craft_rgba8_frame_scaled(_: &mut GpgpuOwnedParticleCraftState,s:GpgpuRgba8Surface,p:ParticleCraftParamsV1,divisor:u32)->GpgpuRgba8KernelResult {

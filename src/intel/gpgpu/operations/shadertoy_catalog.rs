@@ -105,8 +105,12 @@ impl ShaderToyRuntimeState {
                 if reset {
                     craft.flags |= PARTICLE_CRAFT_FLAG_RESET;
                 }
-                particle_craft_rgba8_frame_scaled(state, dst, craft,
-                    particle_craft_catalog_divisor(dst.width, dst.height))
+                particle_craft_rgba8_frame_scaled(
+                    state,
+                    dst,
+                    craft,
+                    particle_craft_catalog_divisor(dst.width, dst.height),
+                )
             }
             _ => GpgpuRgba8KernelResult::default(),
         }

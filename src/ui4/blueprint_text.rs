@@ -1359,7 +1359,7 @@ fn open_blueprint_frame(
                 particle_craft: None,
                 shadertoy_upload: None,
                 shadertoy_registered: 0,
-        shadertoy_state: Some(ShaderToyRuntimeState::new(window.raw())),
+                shadertoy_state: Some(ShaderToyRuntimeState::new(window.raw())),
                 placement,
                 launch_selection: desktop_shell_launch
                     .map(|launch| (launch.source, launch.x, launch.y)),

@@ -16,8 +16,7 @@ def main():
     assert retired.returncode != 0
     registry = (ROOT / 'src/shell2/shell2_cmd_registry.rs').read_text()
     assert 'cmds::cpp' not in registry and 'name: "cpp"' not in registry
-    command = (ROOT / 'src/shell2/cmds/win.rs').read_text()
-    code = '#![allow(dead_code)]\n' + item('src/shell2/cmds/win.rs', 'WinAction')
+    code = '#![allow(dead_code, non_camel_case_types)]\n' + item('src/shell2/cmds/win.rs', 'WinAction')
     code += item('src/shell2/cmds/win.rs', 'parse_action')
     code += item('src/shell2/cmds/win.rs', 'tests')
     code += item('src/ui4/gpgpu_preview_consumer.rs', 'request_win_demo_start')

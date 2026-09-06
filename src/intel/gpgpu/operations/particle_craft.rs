@@ -146,15 +146,25 @@ struct ParticleCraftRenderPlan {
 
 impl ParticleCraftRenderPlan {
     fn new(width: u32, height: u32, divisor: u32) -> Option<Self> {
-        if width == 0 || height == 0 || !matches!(divisor, 1 | 2 | 4) { return None; }
+        if width == 0 || height == 0 || !matches!(divisor, 1 | 2 | 4) {
+            return None;
+        }
         let sample_width = width.div_ceil(divisor);
         let sample_height = height.div_ceil(divisor);
         let tile_columns = sample_width.div_ceil(PARTICLE_CRAFT_TILE_SAMPLE_WIDTH);
         let tile_rows = sample_height.div_ceil(PARTICLE_CRAFT_TILE_SAMPLE_HEIGHT);
-        if tile_columns > PARTICLE_CRAFT_MAX_TILE_COLUMNS || tile_rows > PARTICLE_CRAFT_MAX_TILE_ROWS {
+        if tile_columns > PARTICLE_CRAFT_MAX_TILE_COLUMNS
+            || tile_rows > PARTICLE_CRAFT_MAX_TILE_ROWS
+        {
             return None;
         }
-        Some(Self { divisor, sample_width, sample_height, tile_columns, tile_rows })
+        Some(Self {
+            divisor,
+            sample_width,
+            sample_height,
+            tile_columns,
+            tile_rows,
+        })
     }
 }
 
@@ -361,7 +371,12 @@ impl GpgpuOwnedParticleCraftState {
         self.quarantined = true;
     }
 
-    fn write_params(&mut self, params: ParticleCraftParamsV1, dst: GpgpuRgba8Surface, divisor: u32) {
+    fn write_params(
+        &mut self,
+        params: ParticleCraftParamsV1,
+        dst: GpgpuRgba8Surface,
+        divisor: u32,
+    ) {
         unsafe {
             core::ptr::copy_nonoverlapping(
                 &params as *const ParticleCraftParamsV1 as *const u8,
@@ -450,8 +465,12 @@ pub(crate) fn particle_craft_rgba8_frame(
     dst: GpgpuRgba8Surface,
     params: ParticleCraftParamsV1,
 ) -> GpgpuRgba8KernelResult {
-    particle_craft_rgba8_frame_scaled(state, dst, params,
-        particle_craft_render_divisor(dst.width, dst.height))
+    particle_craft_rgba8_frame_scaled(
+        state,
+        dst,
+        params,
+        particle_craft_render_divisor(dst.width, dst.height),
+    )
 }
 
 fn particle_craft_rgba8_frame_scaled(

@@ -361,8 +361,8 @@ fn submit_particle_craft_rgba8(
     let craft_ok = kernel_ok
         && direct_rcs_map_ppgtt_kernel(state, craft.state_gpu(), craft.state_phys(), craft.bytes());
     let dst_ok = craft_ok && direct_rcs_map_ppgtt_scanout(state, dst.gpu, dst.phys, dst.bytes);
-    let batch_ok =
-        dst_ok && direct_rcs_encode_particle_craft_batch(state, upload, craft, dst, active_count, plan);
+    let batch_ok = dst_ok
+        && direct_rcs_encode_particle_craft_batch(state, upload, craft, dst, active_count, plan);
     let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
     let observed = if submitted {
         direct_rcs_poll_result_slot_timeout_ms(
