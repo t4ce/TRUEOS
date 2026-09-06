@@ -5,10 +5,12 @@ use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::alloc::Layout;
+use core::cell::UnsafeCell;
 use core::ffi::{c_char, c_double, c_int, c_long, c_void};
+use core::mem::MaybeUninit;
 use core::ptr;
 use core::slice;
-use core::sync::atomic::{AtomicI32, AtomicU64, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicI32, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use spin::Mutex;
 
 use crate::r::static_map::FixedKeyMap;
@@ -36,8 +38,6 @@ static LOGGED_C_REALLOC_TAG_FALLBACK: AtomicI32 = AtomicI32::new(0);
 static PTHREAD_SYNC_TRACE_COUNT: AtomicUsize = AtomicUsize::new(0);
 static PTHREAD_CREATE_TRACE_COUNT: AtomicUsize = AtomicUsize::new(0);
 static HOST_PROCESS_STATE: ProcessSharedState = ProcessSharedState::new();
-static BLUEPRINT_PROCESS_STATES: [ProcessSharedState; crate::allcaps::hv::VM_ID_LIMIT] =
-    [const { ProcessSharedState::new() }; crate::allcaps::hv::VM_ID_LIMIT];
 
 const PTHREAD_SYNC_TRACE_LIMIT: usize = 48;
 const PTHREAD_CREATE_TRACE_LIMIT: usize = 16;
@@ -447,14 +447,18 @@ impl ProcessSharedState {
             pthread_tls_values: Mutex::new(FixedKeyMap::new()),
             pthread_threads: Mutex::new(FixedKeyMap::new()),
             signal_actions: Mutex::new(FixedKeyMap::new()),
-            next_pthread_key: AtomicUsize::new(1),
-            next_thread_id: AtomicUsize::new(1),
+            // Keep the complete fixed-capacity state bitwise-zero so the 64
+            // per-Blueprint instances remain NOBITS instead of inflating the
+            // runtime ELF's file-backed .data.  The public sequences still
+            // begin at their POSIX values through the lazy accessors below.
+            next_pthread_key: AtomicUsize::new(0),
+            next_thread_id: AtomicUsize::new(0),
             open_files: Mutex::new(FixedKeyMap::new()),
             regular_file_worlds: Mutex::new(RegularFileWorldRegistry::new()),
             fd_flags: Mutex::new(FixedKeyMap::new()),
             std_fd_flags: [AtomicI32::new(0), AtomicI32::new(0), AtomicI32::new(0)],
             socket_fds: Mutex::new(FixedKeyMap::new()),
-            next_file_fd: AtomicI32::new(3),
+            next_file_fd: AtomicI32::new(0),
         }
     }
 }
@@ -462,27 +466,130 @@ impl ProcessSharedState {
 const _: () = assert!(core::mem::size_of::<ProcessSharedState>().is_multiple_of(4096));
 const _: () = assert!(core::mem::align_of::<ProcessSharedState>() == 4096);
 
+const PROCESS_STATE_UNINITIALIZED: u8 = 0;
+const PROCESS_STATE_INITIALIZING: u8 = 1;
+const PROCESS_STATE_READY: u8 = 2;
+
+/// The empty fixed maps contain non-zero enum discriminants, so spelling out
+/// 64 initialized instances makes all 34 MiB file-backed `.data`. Keep one
+/// canonical empty image and materialize only an admitted VM's stable slot.
+static BLUEPRINT_PROCESS_STATE_TEMPLATE: ProcessSharedState = ProcessSharedState::new();
+
+#[repr(C, align(4096))]
+struct BlueprintProcessStateStorage {
+    slots: [UnsafeCell<MaybeUninit<ProcessSharedState>>; crate::allcaps::hv::VM_ID_LIMIT],
+}
+
+impl BlueprintProcessStateStorage {
+    const fn new() -> Self {
+        Self {
+            slots: [const { UnsafeCell::new(MaybeUninit::uninit()) };
+                crate::allcaps::hv::VM_ID_LIMIT],
+        }
+    }
+
+    fn slot_ptr(&self, index: usize) -> Option<*mut ProcessSharedState> {
+        self.slots
+            .get(index)
+            .map(|slot| slot.get().cast::<ProcessSharedState>())
+    }
+}
+
+// Each slot has its own one-time state machine. Published ProcessSharedState
+// access is synchronized by its inner locks and atomics.
+unsafe impl Sync for BlueprintProcessStateStorage {}
+
+#[unsafe(link_section = ".bss.blueprint_process_states")]
+static BLUEPRINT_PROCESS_STATES: BlueprintProcessStateStorage = BlueprintProcessStateStorage::new();
+static BLUEPRINT_PROCESS_STATE_INIT: [AtomicU8; crate::allcaps::hv::VM_ID_LIMIT] =
+    [const { AtomicU8::new(PROCESS_STATE_UNINITIALIZED) }; crate::allcaps::hv::VM_ID_LIMIT];
+
+const _: () = assert!(
+    core::mem::size_of::<BlueprintProcessStateStorage>()
+        == core::mem::size_of::<ProcessSharedState>() * crate::allcaps::hv::VM_ID_LIMIT
+);
+
+fn blueprint_process_state(vm_id: u8) -> Option<&'static ProcessSharedState> {
+    let index = vm_id as usize;
+    let slot = BLUEPRINT_PROCESS_STATES.slot_ptr(index)?;
+    let init = BLUEPRINT_PROCESS_STATE_INIT.get(index)?;
+    loop {
+        match init.load(Ordering::Acquire) {
+            PROCESS_STATE_READY => return Some(unsafe { &*slot }),
+            PROCESS_STATE_UNINITIALIZED => {
+                if init
+                    .compare_exchange(
+                        PROCESS_STATE_UNINITIALIZED,
+                        PROCESS_STATE_INITIALIZING,
+                        Ordering::AcqRel,
+                        Ordering::Acquire,
+                    )
+                    .is_ok()
+                {
+                    unsafe {
+                        core::ptr::copy_nonoverlapping(
+                            core::ptr::addr_of!(BLUEPRINT_PROCESS_STATE_TEMPLATE).cast::<u8>(),
+                            slot.cast::<u8>(),
+                            core::mem::size_of::<ProcessSharedState>(),
+                        );
+                    }
+                    init.store(PROCESS_STATE_READY, Ordering::Release);
+                    return Some(unsafe { &*slot });
+                }
+            }
+            PROCESS_STATE_INITIALIZING => core::hint::spin_loop(),
+            invalid => {
+                crate::log_important!(target: "hv";
+                    "std-abi-shim: blueprint process-state init invalid vm={} state={} action=noop\n",
+                    vm_id,
+                    invalid,
+                );
+                return None;
+            }
+        }
+    }
+}
+
 fn process_state() -> &'static ProcessSharedState {
     crate::hv::current_guest_execution_context_vm_id()
-        .and_then(|vm_id| BLUEPRINT_PROCESS_STATES.get(vm_id as usize))
+        .and_then(blueprint_process_state)
         .unwrap_or(&HOST_PROCESS_STATE)
 }
 
 pub(crate) fn blueprint_process_state_span(vm_id: u8) -> Option<(u64, usize)> {
-    let state = BLUEPRINT_PROCESS_STATES.get(vm_id as usize)?;
+    let Some(state) = blueprint_process_state(vm_id) else {
+        crate::log_important!(target: "hv";
+            "std-abi-shim: blueprint process-state scope unavailable vm={} limit={} action=noop\n",
+            vm_id,
+            crate::allcaps::hv::VM_ID_LIMIT,
+        );
+        return None;
+    };
     Some(((state as *const _) as u64, core::mem::size_of_val(state)))
 }
 
 pub(crate) fn reset_blueprint_process_state(vm_id: u8) {
-    let Some(state) = BLUEPRINT_PROCESS_STATES.get(vm_id as usize) else {
+    let Some(init) = BLUEPRINT_PROCESS_STATE_INIT.get(vm_id as usize) else {
+        crate::log_important!(target: "hv";
+            "std-abi-shim: blueprint process-state reset scope unavailable vm={} limit={} action=noop\n",
+            vm_id,
+            crate::allcaps::hv::VM_ID_LIMIT,
+        );
         return;
     };
+    if init.load(Ordering::Acquire) != PROCESS_STATE_READY {
+        return;
+    }
+    let Some(slot) = BLUEPRINT_PROCESS_STATES.slot_ptr(vm_id as usize) else {
+        return;
+    };
+    let state = unsafe { &*slot };
     state.pthread_keys.lock().clear();
     state.pthread_tls_values.lock().clear();
     state.pthread_threads.lock().clear();
     state.signal_actions.lock().clear();
-    state.next_pthread_key.store(1, Ordering::Release);
-    state.next_thread_id.store(1, Ordering::Release);
+    state.next_pthread_key.store(0, Ordering::Release);
+    state.next_thread_id.store(0, Ordering::Release);
     state.open_files.lock().clear();
     *state.regular_file_worlds.lock() = RegularFileWorldRegistry::new();
     state.fd_flags.lock().clear();
@@ -490,7 +597,15 @@ pub(crate) fn reset_blueprint_process_state(vm_id: u8) {
         flags.store(0, Ordering::Release);
     }
     state.socket_fds.lock().clear();
-    state.next_file_fd.store(3, Ordering::Release);
+    state.next_file_fd.store(0, Ordering::Release);
+}
+
+fn initialize_usize_sequence(counter: &AtomicUsize, first: usize) {
+    let _ = counter.compare_exchange(0, first, Ordering::AcqRel, Ordering::Acquire);
+}
+
+fn initialize_i32_sequence(counter: &AtomicI32, first: i32) {
+    let _ = counter.compare_exchange(0, first, Ordering::AcqRel, Ordering::Acquire);
 }
 
 struct ProcessPthreadKeys;
@@ -947,10 +1062,9 @@ fn pthread_create_trace(thread_id: usize, rc: c_int) {
 }
 
 fn pthread_next_thread_id() -> usize {
-    let sequence = process_state()
-        .next_thread_id
-        .fetch_add(1, Ordering::AcqRel)
-        & PTHREAD_THREAD_SEQUENCE_MASK;
+    let next_thread_id = &process_state().next_thread_id;
+    initialize_usize_sequence(next_thread_id, 1);
+    let sequence = next_thread_id.fetch_add(1, Ordering::AcqRel) & PTHREAD_THREAD_SEQUENCE_MASK;
     let sequence = sequence.max(1);
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
         sequence
@@ -1941,7 +2055,9 @@ async fn write_file_to_trueosfs_async(path: &str, bytes: &[u8]) -> Result<(), c_
 }
 
 pub(crate) fn next_file_fd() -> c_int {
-    process_state().next_file_fd.fetch_add(1, Ordering::AcqRel)
+    let next_file_fd = &process_state().next_file_fd;
+    initialize_i32_sequence(next_file_fd, 3);
+    next_file_fd.fetch_add(1, Ordering::AcqRel)
 }
 
 fn next_file_fd_at_least(minimum: c_int) -> Option<c_int> {
@@ -5750,9 +5866,9 @@ pub unsafe extern "C" fn pthread_key_create(key: *mut u32, _destructor: *const c
     if key.is_null() {
         return TRUEOS_EINVAL;
     }
-    let next = process_state()
-        .next_pthread_key
-        .fetch_add(1, Ordering::AcqRel);
+    let next_pthread_key = &process_state().next_pthread_key;
+    initialize_usize_sequence(next_pthread_key, 1);
+    let next = next_pthread_key.fetch_add(1, Ordering::AcqRel);
     if next > u32::MAX as usize {
         return TRUEOS_EAGAIN;
     }

@@ -53,7 +53,7 @@ version = "1.5.0"
 default-features = false
 
 [dependencies.log-os]
-path = "../log-os"
+path = "../../../TRUEOS-Blueprints/crates/log-os"
 package = "log-os"
 
 [dependencies.pci_types]

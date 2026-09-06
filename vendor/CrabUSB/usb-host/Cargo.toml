@@ -22,7 +22,7 @@ anyhow = {version = "1", default-features = false}
 enum_dispatch = "0.3"
 futures = {workspace = true, features = ["alloc"]}
 id-arena = {version = "2", default-features = false}
-log-os = { path = "../../log-os", package = "log-os" }
+log-os = { path = "../../../../TRUEOS-Blueprints/crates/log-os", package = "log-os" }
 mbarrier = "0.1"
 nb = "1.1"
 num_enum = {version = "0.7", default-features = false}

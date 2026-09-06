@@ -9,7 +9,7 @@ version = "0.7.0"
 [dependencies]
 anyhow = { version = "1", default-features = false}
 futures = {workspace = true, features = ["alloc"]}
-log-os = {path = "../../log-os", package = "log-os"}
+log-os = {path = "../../../../TRUEOS-Blueprints/crates/log-os", package = "log-os"}
 num_enum = {version = "0.7", default-features = false}
 spin = "0.10"
 thiserror = {workspace = true}

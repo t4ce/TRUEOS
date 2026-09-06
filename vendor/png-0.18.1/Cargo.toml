@@ -78,7 +78,7 @@ optional = true
 default-features = false
 
 [dependencies.log-os]
-path = "../log-os"
+path = "../../../TRUEOS-Blueprints/crates/log-os"
 package = "log-os"
 
 [dependencies.core3]
