@@ -16,6 +16,7 @@ use super::{
 enum AppsCommand {
     Start,
     Online,
+    Probe,
     Dl,
     Peer,
     Pause,
@@ -35,6 +36,7 @@ impl AppsCommand {
         match self {
             Self::Start => "start",
             Self::Online => "online",
+            Self::Probe => "probe",
             Self::Dl => "dl",
             Self::Peer => "peer",
             Self::Pause => "pause",
@@ -51,9 +53,10 @@ impl AppsCommand {
     }
 }
 
-const APP_COMMANDS: [AppsCommand; 14] = [
+const APP_COMMANDS: [AppsCommand; 15] = [
     AppsCommand::Start,
     AppsCommand::Online,
+    AppsCommand::Probe,
     AppsCommand::Dl,
     AppsCommand::Peer,
     AppsCommand::Pause,
@@ -1102,6 +1105,7 @@ pub(crate) fn submit(spawner: &Spawner, io: &'static dyn ShellBackend2, submitte
     let action = match tokens.next().as_deref() {
         Some("start") => AppsCommand::Start,
         Some("online") => AppsCommand::Online,
+        Some("probe") => AppsCommand::Probe,
         Some("dl") => AppsCommand::Dl,
         Some("peer") => AppsCommand::Peer,
         Some("pause" | "unpause") => AppsCommand::Pause,
@@ -1117,7 +1121,7 @@ pub(crate) fn submit(spawner: &Spawner, io: &'static dyn ShellBackend2, submitte
         Some(_) | None => {
             line(
                 io,
-                "apps: expected start, online, dl, peer, pause, snapshot, store, preserve, load, eject, delete, stop, kick, or status",
+                "apps: expected start, online, probe, dl, peer, pause, snapshot, store, preserve, load, eject, delete, stop, kick, or status",
             );
             return;
         }
@@ -1127,6 +1131,7 @@ pub(crate) fn submit(spawner: &Spawner, io: &'static dyn ShellBackend2, submitte
     match action {
         AppsCommand::Start => start_app(spawner, io, rest),
         AppsCommand::Online => online_app(spawner, io, rest),
+        AppsCommand::Probe => super::shell2_dl::submit_probe(spawner, io, rest),
         AppsCommand::Dl => {
             if rest.first().is_some_and(|arg| arg == "new") {
                 line(io, "apps: `dl` installs only; use `dl <app>`, then `start <app>`");

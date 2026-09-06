@@ -22,13 +22,46 @@ struct OnlineApp {
     url: String,
 }
 
-const ONLINE_APPS_URL: &str = "https://trueos.eu/apps";
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OnlineCatalog {
+    Apps,
+    Probes,
+}
+
+impl OnlineCatalog {
+    const fn url(self) -> &'static str {
+        match self {
+            Self::Apps => "https://trueos.eu/apps",
+            Self::Probes => "https://trueos.eu/probes",
+        }
+    }
+
+    const fn prefix(self) -> &'static str {
+        match self {
+            Self::Apps => "apps",
+            Self::Probes => "probe",
+        }
+    }
+
+    const fn item(self) -> &'static str {
+        match self {
+            Self::Apps => "app",
+            Self::Probes => "probe",
+        }
+    }
+
+    const fn headers(self) -> &'static [&'static str; 6] {
+        match self {
+            Self::Apps => &["id", "app", "sha", "id", "app", "sha"],
+            Self::Probes => &["id", "probe", "sha", "id", "probe", "sha"],
+        }
+    }
+}
 const ONLINE_LIST_MAX_BYTES: usize = 1024 * 1024;
 const ONLINE_APP_MAX_BYTES: usize = 512 * 1024 * 1024;
 const ONLINE_FETCH_TIMEOUT_MS: u32 = 45_000;
 const ONLINE_APP_HASH_SEPARATOR: &str = "§§";
 const SHA256_HEX_LEN: usize = 64;
-const ONLINE_HEADERS: &[&str; 6] = &["id", "app", "sha", "id", "app", "sha"];
 
 async fn fetch_url_bytes(url: String, max_bytes: usize) -> Result<Vec<u8>, String> {
     crate::surfer::html_shack::fetch_bytes_via_pool(url, ONLINE_FETCH_TIMEOUT_MS as u64, max_bytes)
@@ -36,17 +69,17 @@ async fn fetch_url_bytes(url: String, max_bytes: usize) -> Result<Vec<u8>, Strin
         .map(|fetch| fetch.bytes)
 }
 
-async fn fetch_online_apps_html() -> Result<Vec<u8>, String> {
-    fetch_url_bytes(String::from(ONLINE_APPS_URL), ONLINE_LIST_MAX_BYTES).await
+async fn fetch_online_apps_html(catalog: OnlineCatalog) -> Result<Vec<u8>, String> {
+    fetch_url_bytes(String::from(catalog.url()), ONLINE_LIST_MAX_BYTES).await
 }
 
-fn absolutize_online_url(href: &str) -> String {
+fn absolutize_online_url(href: &str, catalog: OnlineCatalog) -> String {
     if href.contains("://") {
         String::from(href)
     } else if href.starts_with('/') {
         alloc::format!("https://trueos.eu{}", href)
     } else {
-        alloc::format!("https://trueos.eu/apps/{}", href)
+        alloc::format!("{}/{}", catalog.url(), href)
     }
 }
 
@@ -141,7 +174,7 @@ fn clean_archive_name(value: &str) -> Option<&str> {
     Some(name)
 }
 
-fn parse_online_apps(html: &str) -> Vec<OnlineApp> {
+fn parse_online_apps(html: &str, catalog: OnlineCatalog) -> Vec<OnlineApp> {
     let mut out = Vec::new();
     let mut rest = html;
     while let Some(li_start) = rest.find("<li") {
@@ -176,7 +209,7 @@ fn parse_online_apps(html: &str) -> Vec<OnlineApp> {
             rest = &rest[li_end..];
             continue;
         };
-        let url = absolutize_online_url(href);
+        let url = absolutize_online_url(href, catalog);
         out.push(OnlineApp {
             name: trim_bp_suffix(archive_name).to_string(),
             archive_name: archive_name.to_string(),
@@ -188,11 +221,11 @@ fn parse_online_apps(html: &str) -> Vec<OnlineApp> {
     out
 }
 
-async fn online_apps() -> Result<Vec<OnlineApp>, String> {
-    let html = fetch_online_apps_html().await?;
+async fn online_apps(catalog: OnlineCatalog) -> Result<Vec<OnlineApp>, String> {
+    let html = fetch_online_apps_html(catalog).await?;
     let text = core::str::from_utf8(html.as_slice())
-        .map_err(|_| String::from("online apps list is not UTF-8"))?;
-    Ok(parse_online_apps(text))
+        .map_err(|_| alloc::format!("online {} list is not UTF-8", catalog.item()))?;
+    Ok(parse_online_apps(text, catalog))
 }
 
 fn short_sha256(value: &str) -> String {
@@ -203,7 +236,13 @@ fn short_sha256(value: &str) -> String {
     alloc::format!("{}…{}", &value[..4], &value[value.len() - 4..])
 }
 
-fn print_online_apps_target(target: &MatrixTarget, width: usize, apps: &[OnlineApp], prefix: &str) {
+fn print_online_apps_target(
+    target: &MatrixTarget,
+    width: usize,
+    apps: &[OnlineApp],
+    prefix: &str,
+    catalog: OnlineCatalog,
+) {
     if apps.is_empty() {
         print_matrix_target_line(
             target,
@@ -216,9 +255,9 @@ fn print_online_apps_target(target: &MatrixTarget, width: usize, apps: &[OnlineA
         .saturating_sub(1)
         .to_string()
         .len()
-        .max(ONLINE_HEADERS[0].len());
+        .max(catalog.headers()[0].len());
     let sha_width = 9;
-    let table = TlbTable::with_width(ONLINE_HEADERS, width.saturating_sub(2))
+    let table = TlbTable::with_width(catalog.headers(), width.saturating_sub(2))
         .with_max_col_widths(&[id_width, 0, sha_width, id_width, 0, sha_width]);
     table.emit_header(|text| print_matrix_target_line(target, text));
     for left_idx in (0..apps.len()).step_by(2) {
@@ -321,19 +360,27 @@ async fn online_run_task(
     width: usize,
     mut args: Vec<String>,
     launch_script: Option<String>,
+    catalog: OnlineCatalog,
 ) {
-    let log = |text: &str| print_matrix_target_line(&target, text);
+    let log = |text: &str| {
+        print_matrix_target_line(
+            &target,
+            alloc::format!("{}: {}", catalog.prefix(), text).as_str(),
+        );
+    };
     if !wait_for_online_ready().await {
-        log("apps: online network unavailable");
+        log("online network unavailable");
         set_matrix_target_active(&target, false);
         return;
     }
 
     if args.is_empty() {
-        log("apps: fetching online app list");
-        match online_apps().await {
-            Ok(apps) => print_online_apps_target(&target, width, apps.as_slice(), "apps"),
-            Err(err) => log(alloc::format!("apps: online list failed: {}", err).as_str()),
+        log(alloc::format!("fetching online {} list", catalog.item()).as_str());
+        match online_apps(catalog).await {
+            Ok(apps) => {
+                print_online_apps_target(&target, width, apps.as_slice(), catalog.prefix(), catalog)
+            }
+            Err(err) => log(alloc::format!("online list failed: {}", err).as_str()),
         }
         set_matrix_target_active(&target, false);
         return;
@@ -345,9 +392,7 @@ async fn online_run_task(
     let instance = if args.first().is_some_and(|arg| arg == "new") {
         args.remove(0);
         if args.len() < 2 {
-            log(
-                "apps: launch arguments are not supported; start the app, then configure it in VMX",
-            );
+            log("launch arguments are not supported; start the app, then configure it in VMX");
             set_matrix_target_active(&target, false);
             return;
         }
@@ -357,9 +402,7 @@ async fn online_run_task(
     } else {
         let selector = args.remove(0);
         if !args.is_empty() {
-            log(
-                "apps: launch arguments are not supported; start the app, then configure it in VMX",
-            );
+            log("launch arguments are not supported; start the app, then configure it in VMX");
             set_matrix_target_active(&target, false);
             return;
         }
@@ -368,25 +411,25 @@ async fn online_run_task(
     };
     let (selector, instance) = instance;
     let app_args = args;
-    let apps = match online_apps().await {
+    let apps = match online_apps(catalog).await {
         Ok(apps) => apps,
         Err(err) => {
-            log(alloc::format!("apps: online list failed: {}", err).as_str());
+            log(alloc::format!("online list failed: {}", err).as_str());
             set_matrix_target_active(&target, false);
             return;
         }
     };
     let Some(app) = resolve_online_app(apps.as_slice(), selector.as_str()) else {
-        log(alloc::format!("apps: no app with that id or name `{}`", selector).as_str());
-        print_online_apps_target(&target, width, apps.as_slice(), "apps");
+        log(alloc::format!("no {} with that id or name `{}`", catalog.item(), selector).as_str());
+        print_online_apps_target(&target, width, apps.as_slice(), catalog.prefix(), catalog);
         set_matrix_target_active(&target, false);
         return;
     };
-    log(alloc::format!("apps: fetching {} from {}", app.name, app.url).as_str());
+    log(alloc::format!("fetching {} from {}", app.name, app.url).as_str());
     match fetch_url_bytes(app.url.clone(), ONLINE_APP_MAX_BYTES).await {
         Ok(module_bytes) => {
             if !online_app_sha256_matches(app, module_bytes.as_slice()) {
-                log("apps: online app SHA-256 mismatch");
+                log("online Blueprint SHA-256 mismatch");
                 set_matrix_target_active(&target, false);
                 return;
             }
@@ -399,7 +442,7 @@ async fn online_run_task(
                 launch_script,
             );
         }
-        Err(err) => log(alloc::format!("apps: online fetch failed: {}", err).as_str()),
+        Err(err) => log(alloc::format!("online fetch failed: {}", err).as_str()),
     }
     set_matrix_target_active(&target, false);
 }
@@ -414,7 +457,7 @@ async fn download_task(target: MatrixTarget, width: usize, selector: Option<Stri
     }
 
     log("dl: fetching online app list");
-    let apps = match online_apps().await {
+    let apps = match online_apps(OnlineCatalog::Apps).await {
         Ok(apps) => apps,
         Err(err) => {
             log(alloc::format!("dl: online list failed: {}", err).as_str());
@@ -423,13 +466,13 @@ async fn download_task(target: MatrixTarget, width: usize, selector: Option<Stri
         }
     };
     let Some(selector) = selector else {
-        print_online_apps_target(&target, width, apps.as_slice(), "dl");
+        print_online_apps_target(&target, width, apps.as_slice(), "dl", OnlineCatalog::Apps);
         set_matrix_target_active(&target, false);
         return;
     };
     let Some(app) = resolve_online_app(apps.as_slice(), selector.as_str()) else {
         log(alloc::format!("dl: no app with that id or name `{}`", selector).as_str());
-        print_online_apps_target(&target, width, apps.as_slice(), "dl");
+        print_online_apps_target(&target, width, apps.as_slice(), "dl", OnlineCatalog::Apps);
         set_matrix_target_active(&target, false);
         return;
     };
@@ -459,8 +502,30 @@ pub(crate) fn submit_online_to_target(
     width: usize,
     args: Vec<String>,
 ) -> Result<(), SpawnError> {
+    submit_catalog_to_target(spawner, target, width, args, OnlineCatalog::Apps)
+}
+
+pub(crate) fn submit_probe(spawner: &Spawner, io: &'static dyn ShellBackend2, args: Vec<String>) {
+    if args.len() > 1 || args.first().is_some_and(|arg| arg == "new") {
+        print_shell_line(io, "probe: usage: probe [selector]");
+        return;
+    }
+    let target = matrix_target_for_backend(io);
+    let width = line_width_for_backend(io);
+    if submit_catalog_to_target(spawner, target, width, args, OnlineCatalog::Probes).is_err() {
+        print_shell_line(io, "probe: task unavailable");
+    }
+}
+
+fn submit_catalog_to_target(
+    spawner: &Spawner,
+    target: MatrixTarget,
+    width: usize,
+    args: Vec<String>,
+    catalog: OnlineCatalog,
+) -> Result<(), SpawnError> {
     set_matrix_target_active(&target, true);
-    match online_run_task(target.clone(), width, args, None) {
+    match online_run_task(target.clone(), width, args, None, catalog) {
         Ok(token) => {
             spawner.spawn(token);
             Ok(())
@@ -496,7 +561,7 @@ pub(crate) fn submit_online_args_with_launch_script_to_target(
     launch_script: String,
 ) -> Result<(), SpawnError> {
     set_matrix_target_active(&target, true);
-    match online_run_task(target.clone(), width, args, Some(launch_script)) {
+    match online_run_task(target.clone(), width, args, Some(launch_script), OnlineCatalog::Apps) {
         Ok(token) => {
             spawner.spawn(token);
             Ok(())
@@ -537,5 +602,62 @@ pub(crate) fn submit_download_args(
             set_matrix_target_active(&target, false);
             print_shell_line(io, "dl: task unavailable");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn relative_links_use_the_selected_catalog() {
+        for (catalog, directory) in [
+            (OnlineCatalog::Apps, "apps"),
+            (OnlineCatalog::Probes, "probes"),
+        ] {
+            let html = "<li><a href=\"tokio_mrt.bp\">tokio_mrt.bp</a></li>";
+            let apps = parse_online_apps(html, catalog);
+            assert_eq!(apps.len(), 1);
+            assert_eq!(apps[0].url, alloc::format!("https://trueos.eu/{directory}/tokio_mrt.bp"));
+        }
+    }
+
+    #[test]
+    fn probe_list_resolves_ids_names_and_encoded_hashes() {
+        let hash = "a".repeat(SHA256_HEX_LEN);
+        let html =
+            alloc::format!("<li><a href=\"tokio_mrt.bp%C2%A7%C2%A7{hash}\">tokio_mrt.bp</a></li>");
+        let probes = parse_online_apps(&html, OnlineCatalog::Probes);
+        for selector in ["0", "tokio_mrt", "TOKIO_MRT.BP"] {
+            let probe = resolve_online_app(&probes, selector).unwrap();
+            assert_eq!(probe.archive_name, "tokio_mrt.bp");
+            assert_eq!(probe.sha256, hash);
+            assert!(probe.url.starts_with("https://trueos.eu/probes/"));
+        }
+        assert!(resolve_online_app(&probes, "1").is_none());
+        assert!(resolve_online_app(&probes, "missing").is_none());
+    }
+
+    #[test]
+    fn rooted_and_absolute_probe_links_keep_their_destination() {
+        assert_eq!(
+            absolutize_online_url("/probes/tokio_mrt.bp", OnlineCatalog::Probes),
+            "https://trueos.eu/probes/tokio_mrt.bp"
+        );
+        assert_eq!(
+            absolutize_online_url("https://trueos.eu/probes/tokio_mrt.bp", OnlineCatalog::Probes),
+            "https://trueos.eu/probes/tokio_mrt.bp"
+        );
+    }
+
+    #[test]
+    fn probe_hash_rejects_changed_payload() {
+        // SHA-256 of the empty payload, carried in the same filename format
+        // emitted by the Blueprint publisher.
+        let hash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        let html = alloc::format!("<li><a href=\"probe.bp§§{hash}\">probe.bp</a></li>");
+        let probes = parse_online_apps(&html, OnlineCatalog::Probes);
+        assert!(online_app_sha256_matches(&probes[0], b""));
+        assert!(!online_app_sha256_matches(&probes[0], b"changed"));
     }
 }

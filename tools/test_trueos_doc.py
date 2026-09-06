@@ -40,6 +40,15 @@ class TrueosDocTests(unittest.TestCase):
         self.assertEqual(data["parameters"]["type"], "object")
         self.assertIn("command", data["parameters"]["properties"])
 
+    def test_probe_command_matches_apps_registry_and_separate_catalog(self) -> None:
+        data = run("command", "probe")["data"]
+        self.assertEqual(data["usage"], "probe [selector]")
+        self.assertIn("https://trueos.eu/probes", data["effect"])
+        self.assertIn("probe", run()["data"]["shell2"]["apps_commands"])
+        registry = (ROOT / "src/shell2/shell2_apps.rs").read_text()
+        self.assertIn('Some("probe") => AppsCommand::Probe', registry)
+        self.assertIn('Self::Probe => "probe"', registry)
+
     def test_tlb_schema_exposes_hfi_target(self) -> None:
         data = run("command", "tlb")["data"]
         targets = data["parameters"]["properties"]["target"]["enum"]

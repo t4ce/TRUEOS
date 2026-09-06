@@ -34,3 +34,10 @@ benchmark-cube-field: $(BUILD_DIR)/benchmark_cube_field
 $(BUILD_DIR)/benchmark_cube_field: benchmark_cube_field.c main.c
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@ $(LDLIBS)
+
+.PHONY: benchmark-protean-clouds
+benchmark-protean-clouds: $(BUILD_DIR)/benchmark_protean_clouds
+
+$(BUILD_DIR)/benchmark_protean_clouds: benchmark_protean_clouds.c main.c
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $< -o $@ $(LDLIBS)

@@ -127,7 +127,7 @@ The current artifacts are:
 | 3 | `shadertoy_nguyen` | `1dbc80b468dd896073dd17c3963a5c7cccf814365e21f040e05a3522fea4cd9c` |
 | 4 | `shadertoy_palette_grid` | `98a5a39154a9021e2e09407c5188644ac744eedae4031efdf395f6619b32fd40` |
 | 5 | `shadertoy_cosmic_strands` | `9a275f036deac274541a34256c09140ecd3f98e392c4963a27e6ac1db5b82500` |
-| 6 | `shadertoy_protean_clouds` | `42708149dff28c43df0cc2bdd4147169aec93ecabbc003122c1e76a5b00b7cbc` |
+| 6 | `shadertoy_protean_clouds` | `438031ad8a14ec646a38ff4bcc5353f395954cfc0a715c36c9dee49254d8b704` |
 
 All six contracts are SIMD16 with 96 bytes of cross-thread data, 96 bytes of
 per-thread local IDs, and no scratch or SLM. The cube-field and Protean Clouds artifacts expose

@@ -16,6 +16,7 @@ API = "trueos-doc/v1"
 APP_COMMANDS = [
     {"name": "start", "usage": "start [selector]", "effect": "List app.db or launch one installed Blueprint. Launch arguments are intentionally unsupported."},
     {"name": "online", "usage": "online [selector]", "effect": "List or fetch, verify, and immediately launch a Blueprint from https://trueos.eu/apps."},
+    {"name": "probe", "usage": "probe [selector]", "effect": "List or fetch, verify, and immediately launch a Blueprint from https://trueos.eu/probes. Select by probe-list ID or name; IDs are separate from online. The website must serve the probe catalog and its linked files."},
     {"name": "dl", "usage": "dl [selector]", "effect": "List or install an online Blueprint into app.db without launching it."},
     {"name": "peer", "usage": "peer [peer-id [remote-vmid [local-vmid]]]", "effect": "List peers/offers or request a peer snapshot transfer; cross-principal restore may be safety-gated."},
     {"name": "pause", "aliases": ["unpause"], "usage": "pause [vmid]", "effect": "List replicatable VMs, or toggle one between running and its lifecycle pause latch."},
@@ -204,6 +205,7 @@ TOPICS: dict[str, dict[str, Any]] = {
         "publication": {
             "default_mount": "smb://t4ce@pdjb/home-share",
             "default_apps_uri": "smb://t4ce@pdjb/home-share/TRUEOS_SITE/apps",
+            "default_probes_uri": "smb://t4ce@pdjb/home-share/TRUEOS_SITE/probes",
             "artifact_name": "<appname>.bp§§<sha256>",
             "test_rig_use": "Once published through the internal apps path, the artifact is available to the configured TRUEOS test-rig/app delivery workflow; launching it is a separate action.",
         },

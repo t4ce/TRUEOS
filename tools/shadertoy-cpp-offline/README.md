@@ -103,6 +103,11 @@ compatibility boundaries. The reconstructed Protean source passes the locked
 zero-scratch bake and host rendering; the sphere needs channel resources,
 cubemap sampling and nonzero mip levels.
 
+F6 now interpolates its expensive lighting probes between four-step anchors,
+while retaining the original density, ray steps and resolution. See
+[Protean Clouds performance](PROTEAN_CLOUDS_PERFORMANCE.md) for the measured
+roughly 1.6× host speedup, image comparisons and reproducible benchmark.
+
 The adapter rejects `iChannel*`, samplers/texture calls, sound passes, and
 screen-space derivatives with a direct diagnostic. Picasso and QuadTexture
 now provide working graphics texture infrastructure, but this compute path
