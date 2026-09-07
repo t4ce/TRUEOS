@@ -40,6 +40,7 @@ fn packet_stage_contract() {
     assert_eq!(DS_PACKET[0], 0x781d0009);
     assert_eq!(DS_PACKET[1], 0);
     assert_ne!(DS_PACKET[7] & (1 << 2), 0); // triangle W coordinate
+    assert_eq!((DS_PACKET[3] >> 18) & 0xff, 3); // reserved, camera, instances
     assert_eq!(TE_PACKET[0], 0x781c0003);
     assert_eq!(TE_PACKET[1] & 1, 1);
     assert_eq!((TE_PACKET[1] >> 4) & 3, 1); // triangle
@@ -68,6 +69,7 @@ fn pipeline_owns_matching_code_and_metadata() {
     assert_eq!(PIPELINE.vs.meta.kernel.code_size_bytes as usize, VERTEX.len() * 4);
     assert_eq!(PIPELINE.ps.meta.kernel.code_size_bytes as usize, FRAGMENT.len() * 4);
     assert_eq!(PIPELINE.vs.meta.kernel.binding_table_entry_count, 4);
+    assert_eq!(PIPELINE.vs.meta.urb_entry_output_length, 1); // three VUE slots fit 64 bytes
     assert_eq!(CONTRACT_VERSION, 4);
     assert_eq!(PIPELINE.ps.meta.num_varying_inputs, 1);
     assert!(TESS_CONTROL.len() > 0 && TESS_EVAL.len() > 0);
