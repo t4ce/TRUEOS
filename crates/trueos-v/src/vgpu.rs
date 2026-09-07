@@ -344,9 +344,10 @@ pub const RETAINED_VERTEX_LAYOUT_POS_NORMAL: u32 = 0;
 /// Experimental baked beveled cube: one Float3 origin, 44 zero indices.
 /// Only valid with RETAINED_TOPOLOGY_CUBE_PATCHLIST_1. HS expands each patch
 /// to three control points; this is not arbitrary PATCHLIST shader admission.
-/// Version 2 (layout 4) accepts translated, uniformly scaled instances via V3
-/// with default material parameters; layout 3 was the single-object contract.
-pub const RETAINED_VERTEX_LAYOUT_CUBE_PATCH_SEED: u32 = 4;
+/// Version 4 (layout 5) adds orientation and original-cubie palette flag 0x100.
+/// V3 requires positive uniform scale and default material parameters. Layout 4
+/// was the translation-only contract; older kernels must reject layout 5.
+pub const RETAINED_VERTEX_LAYOUT_CUBE_PATCH_SEED: u32 = 5;
 pub const RETAINED_TOPOLOGY_CUBE_PATCHLIST_1: u32 = 0x20;
 pub const RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV: u32 = 1;
 /// Position3, normal3, UV2, and tangent4 (including handedness), 48 bytes.

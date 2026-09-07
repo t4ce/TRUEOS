@@ -2642,7 +2642,7 @@ pub(crate) fn create_resident_picasso_retained_mesh(
         resident.vertex_stride = 12;
         resident.vertex_format = TriangleVertexFormat::Float3;
         resident.front_end_contract = TriangleFrontEndContract {
-            label: "cube-patchlist1-hs3-tri-ds-instanced-v2", vs_urb_output_length_override: Some(1),
+            label: "cube-patchlist1-hs3-tri-ds-palette-v4", vs_urb_output_length_override: Some(1),
             vs_urb_read_length: 1, sbe_read_offset: 1, sbe_read_length: 1,
             force_sbe_read_offset: true, force_sbe_read_length: true,
             force_vs_with_vf_synthesized_vue: false,
@@ -2808,14 +2808,13 @@ pub(crate) fn update_resident_picasso_retained_transform_seeds(
     seeds: &[v::vgpu::RetainedTransformSeed],
     draw_ranges: Option<&[v::vgpu::RetainedDrawRange]>,
 ) -> Result<(), &'static str> {
-    // VS reads translated, uniformly scaled retained instances. HS needs the
+    // DS applies oriented, uniformly scaled retained instances. HS needs the
     // complete 44-patch range so primitive IDs retain their baked meaning.
     if resident.topology() == ResidentScenePrimitiveTopology::CubePatchList1
         && (seeds.is_empty()
             || draw_ranges.is_some_and(|ranges| ranges.len() != 1
                 || ranges[0].first_index != 0 || ranges[0].index_count != 44)
-            || seeds.iter().any(|seed| seed.rotation != [0.0, 0.0, 0.0, 1.0]
-                || seed.scale[0] != seed.scale[1] || seed.scale[1] != seed.scale[2]
+            || seeds.iter().any(|seed| seed.scale[0] != seed.scale[1] || seed.scale[1] != seed.scale[2]
                 || seed.scale[0] <= 0.0 || seed.draw_group != 0))
     {
         return Err("cube-patch-uniform-instance-contract");
