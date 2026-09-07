@@ -137,7 +137,9 @@ const WARM_STREAMOUT_BYTES: usize =
 // 4 KiB tile. The maximum target is already 128-byte pitch and 32-row aligned.
 const RESIDENT_SCENE_DEPTH_TILE_WIDTH_BYTES: usize = 128;
 const RESIDENT_SCENE_DEPTH_TILE_HEIGHT_ROWS: usize = 32;
-const RESIDENT_SCENE_DEPTH_BYTES: usize = WARM_STREAMOUT_BYTES;
+const RESIDENT_SCENE_DEPTH_MAIN_BYTES: usize = WARM_STREAMOUT_BYTES;
+// One backing/mapping transaction and lifetime for depth plus its HiZ tail.
+const RESIDENT_SCENE_DEPTH_BYTES: usize = RESIDENT_SCENE_DEPTH_MAIN_BYTES + hiz::MAX_BYTES;
 const RESIDENT_SCENE_MSAA_COLOR_TILE_WIDTH_PIXELS: usize = 64;
 const RESIDENT_SCENE_MSAA_COLOR_TILE_HEIGHT_PIXELS: usize = 64;
 const RESIDENT_SCENE_MSAA_DEPTH_TILE_WIDTH_BYTES: usize = 512;
@@ -180,6 +182,11 @@ const GPU_VA_STREAMOUT_BASE: u64 = 0x0088_0000;
 // The 14.0625 MiB D32 scene depth allocation lives above the warm batch and
 // below the GPGPU arena. It never aliases the color target or resident meshes.
 const GPU_VA_RESIDENT_SCENE_DEPTH_BASE: u64 = 0x0200_0000;
+const GPU_VA_RESIDENT_SCENE_HIZ_BASE: u64 = GPU_VA_RESIDENT_SCENE_DEPTH_BASE + RESIDENT_SCENE_DEPTH_MAIN_BYTES as u64;
+const _: () = {
+    assert!(GPU_VA_RESIDENT_SCENE_HIZ_BASE % 4096 == 0);
+    assert!(GPU_VA_RESIDENT_SCENE_DEPTH_BASE + RESIDENT_SCENE_DEPTH_BYTES as u64 <= 0x0400_0000);
+};
 // gfx12.5 Tile64 4x-MSAA surfaces. Each range has 64 MiB of VA headroom;
 // physical storage is allocated lazily at the consumer's actual extent.
 const GPU_VA_RESIDENT_SCENE_MSAA_COLOR_BASE: u64 = 0x1000_0000;

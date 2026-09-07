@@ -778,6 +778,8 @@ enum TriangleBlendProbeMode {
 /// and retain the proven null-depth pipeline.
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct TriangleDepthConfig {
+    hiz: Option<hiz::Layout>,
+    hiz_clear: bool,
     gpu_addr: u64,
     pitch_bytes: u32,
     width: u32,

@@ -1163,6 +1163,8 @@ fn prepare_resident_scene_msaa_depth(
     )?;
     Ok(TriangleDepthConfig {
         gpu_addr: GPU_VA_RESIDENT_SCENE_MSAA_DEPTH_BASE,
+        hiz: None,
+        hiz_clear: false,
         pitch_bytes: u32::try_from(pitch_bytes).map_err(|_| "resident-scene-msaa-depth-shape")?,
         width: u32::try_from(target_width).map_err(|_| "resident-scene-msaa-depth-shape")?,
         height: u32::try_from(target_height).map_err(|_| "resident-scene-msaa-depth-shape")?,
@@ -1224,7 +1226,7 @@ fn prepare_resident_scene_depth(
         .ok_or("resident-scene-depth-shape")?;
     if target_width == 0
         || target_height == 0
-        || clear_bytes > RESIDENT_SCENE_DEPTH_BYTES
+        || clear_bytes > RESIDENT_SCENE_DEPTH_MAIN_BYTES
         || !clear_bytes.is_multiple_of(core::mem::size_of::<u32>())
     {
         return Err("resident-scene-depth-shape");
@@ -1279,6 +1281,8 @@ fn prepare_resident_scene_depth(
 
     Ok(TriangleDepthConfig {
         gpu_addr: GPU_VA_RESIDENT_SCENE_DEPTH_BASE,
+        hiz: hiz::layout(device_id, target_width, target_height),
+        hiz_clear: false,
         pitch_bytes: u32::try_from(pitch_bytes).map_err(|_| "resident-scene-depth-shape")?,
         width: u32::try_from(target_width).map_err(|_| "resident-scene-depth-shape")?,
         height: u32::try_from(target_height).map_err(|_| "resident-scene-depth-shape")?,
@@ -1311,7 +1315,7 @@ fn prepare_picasso_resident_scene_depth(
         .ok_or("picasso-scene-depth-shape")?;
     if target_width == 0
         || target_height == 0
-        || clear_bytes > RESIDENT_SCENE_DEPTH_BYTES
+        || clear_bytes > RESIDENT_SCENE_DEPTH_MAIN_BYTES
         || !clear_bytes.is_multiple_of(core::mem::size_of::<u32>())
     {
         return Err("picasso-scene-depth-shape");
@@ -1319,11 +1323,13 @@ fn prepare_picasso_resident_scene_depth(
     let physical = crate::gpu::physical::physical_device().ok_or("picasso-physical-gpu")?;
     let storage =
         prepare_picasso_render1_scene_storage(lease, physical).ok_or("picasso-scene-storage")?;
-    if storage.depth_virt.is_null() || storage.depth_bytes < clear_bytes {
+    if storage.depth_virt.is_null() || storage.depth_bytes < RESIDENT_SCENE_DEPTH_BYTES {
         return Err("picasso-scene-depth-allocation");
     }
     Ok(TriangleDepthConfig {
         gpu_addr: GPU_VA_RESIDENT_SCENE_DEPTH_BASE,
+        hiz: hiz::layout(device_id, target_width, target_height),
+        hiz_clear: false,
         pitch_bytes: u32::try_from(pitch_bytes).map_err(|_| "picasso-scene-depth-shape")?,
         width: u32::try_from(target_width).map_err(|_| "picasso-scene-depth-shape")?,
         height: u32::try_from(target_height).map_err(|_| "picasso-scene-depth-shape")?,
@@ -2783,6 +2789,11 @@ fn submit_resident_scene_geometry_batched(
     ) {
         return Err("scene-frame-target-format");
     }
+    // No persistent depth-load API exists here. Never use fresh/stale aux data
+    // without the mandatory initialization pass, even for color-load consumers.
+    if clear.is_none() && depth_config.is_some_and(|depth| depth.hiz.is_some()) {
+        return Err("resident-scene-hiz-requires-depth-clear");
+    }
     let max_secondary_count = draws.len().saturating_add(usize::from(clear.is_some()));
     let used_batch_bytes = RESIDENT_SCENE_PRIMARY_BATCH_BYTES
         .checked_add(
@@ -2805,7 +2816,8 @@ fn submit_resident_scene_geometry_batched(
     if let Some(clear) = clear {
         let mut clear_depth = depth_config;
         if let Some(depth) = clear_depth.as_mut() {
-            depth.write_enabled = true;
+            depth.hiz_clear = depth.hiz.is_some();
+            depth.write_enabled = !depth.hiz_clear; // HiZ fast clear replaces the D32 raster clear.
             depth.compare_function = COMPARE_FUNCTION_ALWAYS;
         }
         let (clear_warm, clear_state_gpu) = resident_scene_state_warm(state, warm, 0)?;
@@ -3054,7 +3066,8 @@ fn submit_resident_churn_forward_geometry_batched(
 
     let clear_secondary_index = transform_secondary_count;
     let mut clear_depth = depth_config;
-    clear_depth.write_enabled = true;
+    clear_depth.hiz_clear = clear_depth.hiz.is_some();
+    clear_depth.write_enabled = !clear_depth.hiz_clear;
     clear_depth.compare_function = COMPARE_FUNCTION_ALWAYS;
     let (clear_warm, clear_state_gpu) =
         resident_scene_state_warm(state, warm, clear_secondary_index)?;
@@ -3628,11 +3641,18 @@ fn submit_resident_scene_capture_inner_for_carrier(
                 .map_or_else(|| draws.iter().filter(|draw| draw.rgba[3] == 0).count(), |_| 0);
             crate::log_info!(
                 target: "render";
-                "resident-scene-depth: contract enabled opaque={} blended={} skipped={} clear=fullscreen-color+depth opaque_order=front-to-back opaque_state=depth-test+write+blend-off transparent_order=back-to-front transparent_state=depth-test+write-off+straight-alpha compare=lequal hiz=off\n",
+                "resident-scene-depth: contract enabled opaque={} blended={} skipped={} clear={} opaque_order=front-to-back opaque_state=depth-test+write+blend-off transparent_order=back-to-front transparent_state=depth-test+write-off+straight-alpha compare=lequal hiz={}\n",
                 opaque,
                 blended,
                 skipped,
+                if depth_config.is_some_and(|d| d.hiz.is_some()) { "fullscreen-color+hiz-fast-depth" } else { "fullscreen-color+depth" },
+                if depth_config.is_some_and(|d| d.hiz.is_some()) { "on" } else { "off" },
             );
+        }
+        if diagnostic_logs && let Some(aux) = depth_config.and_then(|d| d.hiz) {
+            crate::log_info!(target: "render";
+                "resident-scene-hiz: enabled=1 gpu=0x{:X} pitch={} qpitch={} bytes={} clear={}x{} value=1.0 init=wm-hz-op-full-clear shaders=unchanged sampling=none owner=depth-allocation\n",
+                GPU_VA_RESIDENT_SCENE_HIZ_BASE, aux.pitch, aux.qpitch, aux.bytes, aux.width, aux.height);
         }
 
         // Resident-scene uses straight-alpha blending.  The GPU must see the real
@@ -3893,12 +3913,13 @@ fn submit_resident_scene_capture_inner_for_carrier(
             );
             if let Some(stats) = geometry.pipeline_stats {
                 crate::log_info!(target: "render";
-                    "picasso-pipeline-stats: seq={} pipeline={} view={} depth={} cull={} scope=retained-and-static-excludes-transform-clear ia_vertices={} ia_primitives={} vs_invocations={} cl_input={} cl_output={} ps_pixels_with_helpers={} capture=gpu-srm64-ppgtt-after-cs-scoreboard-stall retired=1 does_not_prove=rt-writes\n",
+                    "picasso-pipeline-stats: seq={} pipeline={} view={} depth={} cull={} hiz={} scope=retained-and-static-excludes-transform-clear ia_vertices={} ia_primitives={} vs_invocations={} cl_input={} cl_output={} ps_pixels_with_helpers={} capture=gpu-srm64-ppgtt-after-cs-scoreboard-stall retired=1 does_not_prove=rt-writes\n",
                     perf_sequence,
                     if native_churn.is_some_and(|resident| resident.topology() == ResidentScenePrimitiveTopology::CubePatchList1) {
                         "cube-patchlist1-hs-te-ds"
                     } else { picasso_pipeline_name() },
                     picasso_material_view(), picasso_depth_test_enabled(), picasso_cull_enabled(),
+                    depth_config.is_some_and(|d| d.hiz.is_some()),
                     stats[0], stats[1], stats[2], stats[3], stats[4], stats[5],
                 );
             }

@@ -2121,6 +2121,16 @@ fn encode_triangle_probe_batch(
         return Err("probe-depth-shape");
     }
     let vf_synthesized_vue = batch_mode.vf_synthesized_vue();
+    if let Some(depth) = depth_config {
+        if depth.hiz_clear && depth.hiz.is_none() {
+            return Err("hiz-clear-without-aux");
+        }
+        if let Some(aux) = depth.hiz {
+            if resident_msaa4 || depth.gpu_addr != GPU_VA_RESIDENT_SCENE_DEPTH_BASE
+                || hiz::layout(warm.device_id, depth.width as usize, depth.height as usize) != Some(aux)
+            { return Err("hiz-depth-contract"); }
+        }
+    }
     let force_vs_with_vf_synthesized_vue =
         vf_synthesized_vue && front_end_contract.force_vs_with_vf_synthesized_vue;
     if draw.indirect_args_gpu_addr.is_some() && draw.index_buffer.is_none() {
@@ -4070,6 +4080,14 @@ fn encode_triangle_probe_batch(
         );
     }
 
+    let hiz_layout = depth_config.and_then(|depth| depth.hiz);
+    if hiz_layout.is_some() {
+        // Required ordering before changing depth/aux bindings, including a
+        // new extent reusing the same carrier-owned auxiliary allocation.
+        push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_DEPTH_STALL)?;
+        push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_DEPTH_CACHE_FLUSH)?;
+        push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_DEPTH_STALL)?;
+    }
     // Bind a real tiled D32 surface only for the Resident-scene visibility contract.
     // Every other consumer retains the explicit null state proven during the
     // render bring-up. SurfacePitch, Width and Height are encoded minus one;
@@ -4085,10 +4103,12 @@ fn encode_triangle_probe_batch(
         (
             (depth.pitch_bytes - 1)
                 | (DEPTH_SURFACE_FORMAT_D32_FLOAT << 24)
+                | if depth.hiz.is_some() { 1 << 22 } else { 0 }
                 | (1 << 28)
                 | (SURFTYPE_2D << 29),
             depth.gpu_addr,
-            ((depth.width - 1) << 1) | ((depth.height - 1) << 17),
+            ((hiz_layout.map_or(depth.width, |h| h.width) - 1) << 1)
+                | ((hiz_layout.map_or(depth.height, |h| h.height) - 1) << 17),
             RENDER_MOCS,
             if device_is_gfx125(warm.device_id) {
                 if resident_msaa4 { 1 << 30 } else { 3 << 30 }
@@ -4111,7 +4131,7 @@ fn encode_triangle_probe_batch(
             0.0f32.to_bits()
         },
     )?;
-    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, u32::from(hiz_layout.is_some()))?;
 
     log_batch_offset(cursor, "3DSTATE_DEPTH_BUFFER");
     let depth_buffer_cmd = if device_is_gfx125(warm.device_id) {
@@ -4142,9 +4162,9 @@ fn encode_triangle_probe_batch(
 
     log_batch_offset(cursor, "3DSTATE_HIER_DEPTH_BUFFER");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_HIER_DEPTH_BUFFER)?;
-    push(batch_dwords, &mut cursor, RENDER_MOCS << 25)?;
-    push_addr(batch_dwords, &mut cursor, 0)?;
-    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, (RENDER_MOCS << 25) | hiz_layout.map_or(0, |h| h.pitch - 1))?;
+    push_addr(batch_dwords, &mut cursor, if hiz_layout.is_some() { GPU_VA_RESIDENT_SCENE_HIZ_BASE } else { 0 })?;
+    push(batch_dwords, &mut cursor, hiz_layout.map_or(0, |h| h.qpitch))?;
 
     if let Some(packet) = adls_depth_state_post_sync_packet(
         warm.device_id,
@@ -4155,6 +4175,32 @@ fn encode_triangle_probe_batch(
         for dword in packet {
             push(batch_dwords, &mut cursor, dword)?;
         }
+    }
+
+    if let Some(depth) = depth_config.filter(|depth| depth.hiz_clear) {
+        let aux = depth.hiz.ok_or("hiz-clear-without-aux")?;
+        // BLORP gfx8+ sequence: single-sample state + valid CC viewport,
+        // disable PS/PS_EXTRA/WM, execute HZ_OP, immediate-write-only PC,
+        // then reset HZ_OP. Ordinary WM/PS state is emitted below afterwards.
+        log_batch_offset(cursor, "HiZ full depth clear (no shader dispatch)");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_MULTISAMPLE)?;
+        push(batch_dwords, &mut cursor, 0)?;
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_PS)?;
+        for _ in 0..11 { push(batch_dwords, &mut cursor, 0)?; }
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_PS_EXTRA)?;
+        push(batch_dwords, &mut cursor, 0)?;
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_WM)?;
+        push(batch_dwords, &mut cursor, 0)?;
+        for word in hiz::clear_packet(aux) { push(batch_dwords, &mut cursor, word)?; }
+        let offset = RESULT_SLOT_DEPTH_STATE_WA_DWORD * 4;
+        if offset + 8 > warm.result_len { return Err("hiz-clear-scratch-range"); }
+        push_pipe_control_post_sync_imm(batch_dwords, &mut cursor, 0,
+            PIPE_CONTROL_POST_SYNC_WRITE_IMMEDIATE,
+            GPU_VA_RESULT_BASE + offset as u64, 0)?;
+        push_wm_hz_op(batch_dwords, &mut cursor, warm.device_id, 0, 0, 0, 0)?;
+        push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_DEPTH_STALL)?;
+        push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_DEPTH_CACHE_FLUSH)?;
+        push_pipe_control(batch_dwords, &mut cursor, PIPE_CONTROL_DEPTH_STALL)?;
     }
 
     if backend_probe_mode.sample_mask_before_clip() {
