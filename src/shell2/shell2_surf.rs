@@ -7,9 +7,6 @@ use super::{
 use alloc::string::String;
 use trueos_executor::Spawner;
 
-const SOLARA_APP: &str = "solara";
-const SOLARA_ARCHIVE: &str = "solara.bp";
-
 fn launch_script(input: &str) -> Result<String, &'static str> {
     let input = input.trim();
     let input = if input.len() >= 2
@@ -45,9 +42,14 @@ fn launch_script(input: &str) -> Result<String, &'static str> {
 
 #[trueos_executor::task(pool_size = 4)]
 async fn launch_solara_task(target: MatrixTarget, script: String) {
+    let Some(archive) = crate::r::restart::startup_alias_blueprint("surf") else {
+        print_matrix_target_system_line(&target, "surf: startup alias is not configured");
+        return;
+    };
+    let app = archive.strip_suffix(".bp").unwrap_or(archive.as_str());
     match super::cmds::run::submit_archive_name_to_target_from_app_db_with_launch_script_async(
         target.clone(),
-        SOLARA_ARCHIVE,
+        archive.as_str(),
         script.clone(),
     )
     .await
@@ -55,7 +57,7 @@ async fn launch_solara_task(target: MatrixTarget, script: String) {
         Ok(_) => {}
         Err(error) if error == "archive not found" => {
             let spawner = unsafe { Spawner::for_current_executor().await };
-            if submit_online_launch_script_to_target(&spawner, target.clone(), SOLARA_APP, &script)
+            if submit_online_launch_script_to_target(&spawner, target.clone(), app, &script)
                 .is_err()
             {
                 print_matrix_target_system_line(&target, "surf: Solara launch task unavailable");
@@ -63,7 +65,7 @@ async fn launch_solara_task(target: MatrixTarget, script: String) {
         }
         Err(error) => print_matrix_target_system_line(
             &target,
-            alloc::format!("surf: could not launch {SOLARA_ARCHIVE}: {error}").as_str(),
+            alloc::format!("surf: could not launch {archive}: {error}").as_str(),
         ),
     }
 }

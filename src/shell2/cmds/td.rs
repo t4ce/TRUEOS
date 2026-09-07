@@ -8,22 +8,25 @@ use super::super::{
     print_shell_line,
 };
 
-const TD_ARCHIVE: &str = "termdir.bp";
 const TD_LAUNCH_SCRIPT: &str = "fs-scope trueosfs\nbrowse /\ndepth 2\n";
 
 #[task(pool_size = 2)]
 async fn launch_td(target: MatrixTarget) {
+    let Some(archive) = crate::r::restart::startup_alias_blueprint("td") else {
+        print_matrix_target_system_line(&target, "td: startup alias is not configured");
+        return;
+    };
     if let Err(error) =
         super::run::submit_archive_name_to_target_from_app_db_with_launch_script_async(
             target.clone(),
-            TD_ARCHIVE,
+            archive.as_str(),
             String::from(TD_LAUNCH_SCRIPT),
         )
         .await
     {
         print_matrix_target_system_line(
             &target,
-            alloc::format!("td: could not launch {TD_ARCHIVE} from app.db: {error}").as_str(),
+            alloc::format!("td: could not launch {archive} from app.db: {error}").as_str(),
         );
     }
 }

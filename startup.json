@@ -1,4 +1,15 @@
 {
+  "aliases": [
+    { "name": "td", "blueprint": "termdir.bp" },
+    { "name": "edit", "blueprint": "edit.bp" },
+    { "name": "img", "blueprint": "img.bp" },
+    { "name": "shell", "blueprint": "shell.bp" },
+    { "name": "surf", "blueprint": "solara.bp" },
+    { "name": "qjs", "blueprint": "qjs.bp" },
+    { "name": "aud", "blueprint": "Player.bp" },
+    { "name": "ssh", "blueprint": "ssh.bp" },
+    { "name": "grid", "blueprint": "gridpaper" }
+  ],
   "blueprints": [
     { "action": "skip", "archive": "swarm.bp", "online_selector": "swarm", "slot": "swm", "settle_ms": 250 },
     { "action": "skip", "archive": "img.bp", "online_selector": "img", "slot": "img", "settle_ms": 250, "launch_script": "show kernel:logo center nohit\nshow kernel:intel-graphics bottom-left\nshow kernel:bgrt bottom-right" },

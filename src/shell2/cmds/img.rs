@@ -17,15 +17,18 @@ use super::super::{
     submit_online_to_target,
 };
 
-const IMG_APP: &str = "img";
-const IMG_ARCHIVE: &str = "img.bp";
 const LIVE_UPDATE_LAUNCH_TIMEOUT_MS: u64 = 30_000;
 
 #[task(pool_size = 2)]
 async fn launch_img(spawner: Spawner, target: MatrixTarget, app_args: Vec<String>) {
+    let Some(archive) = crate::r::restart::startup_alias_blueprint("img") else {
+        print_matrix_target_system_line(&target, "img: startup alias is not configured");
+        return;
+    };
+    let app = archive.strip_suffix(".bp").unwrap_or(archive.as_str());
     match super::run::submit_archive_name_to_target_from_app_db_async(
         target.clone(),
-        IMG_ARCHIVE,
+        archive.as_str(),
         app_args.clone(),
     )
     .await
@@ -33,7 +36,7 @@ async fn launch_img(spawner: Spawner, target: MatrixTarget, app_args: Vec<String
         Ok(_) => {}
         Err(error) if error == "archive not found" => {
             let mut online_args = Vec::with_capacity(app_args.len().saturating_add(1));
-            online_args.push(String::from(IMG_APP));
+            online_args.push(String::from(app));
             online_args.extend(app_args);
             if submit_online_to_target(&spawner, target.clone(), online_args).is_err() {
                 print_matrix_target_system_line(&target, "img: online launch task unavailable");
@@ -41,7 +44,7 @@ async fn launch_img(spawner: Spawner, target: MatrixTarget, app_args: Vec<String
         }
         Err(error) => print_matrix_target_system_line(
             &target,
-            alloc::format!("img: could not launch {IMG_ARCHIVE}: {error}").as_str(),
+            alloc::format!("img: could not launch {archive}: {error}").as_str(),
         ),
     }
 }

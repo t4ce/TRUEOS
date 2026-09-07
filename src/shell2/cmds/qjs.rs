@@ -9,21 +9,23 @@ use super::super::{
     print_shell_line, submit_online_to_target,
 };
 
-const QJS_APP: &str = "qjs";
-const QJS_ARCHIVE: &str = "qjs.bp";
-
 #[task(pool_size = 2)]
 async fn launch_qjs(spawner: Spawner, target: MatrixTarget, app_args: Vec<String>) {
+    let Some(archive) = crate::r::restart::startup_alias_blueprint("qjs") else {
+        print_matrix_target_system_line(&target, "qjs: startup alias is not configured");
+        return;
+    };
+    let app = archive.strip_suffix(".bp").unwrap_or(archive.as_str());
     match super::run::submit_archive_name_to_target_from_app_db_async(
         target.clone(),
-        QJS_ARCHIVE,
+        archive.as_str(),
         app_args,
     )
     .await
     {
         Ok(_) => {}
         Err(error) if error == "archive not found" => {
-            if submit_online_to_target(&spawner, target.clone(), alloc::vec![QJS_APP.into()])
+            if submit_online_to_target(&spawner, target.clone(), alloc::vec![app.into()])
                 .is_err()
             {
                 print_matrix_target_system_line(&target, "qjs: online launch task unavailable");
@@ -31,7 +33,7 @@ async fn launch_qjs(spawner: Spawner, target: MatrixTarget, app_args: Vec<String
         }
         Err(error) => print_matrix_target_system_line(
             &target,
-            alloc::format!("qjs: could not launch {QJS_ARCHIVE}: {error}").as_str(),
+            alloc::format!("qjs: could not launch {archive}: {error}").as_str(),
         ),
     }
 }

@@ -11,20 +11,22 @@ use super::super::{
     print_shell_line,
 };
 
-const EDIT_ARCHIVE: &str = "edit.bp";
-
 #[task(pool_size = 2)]
 async fn launch_edit(target: MatrixTarget, app_args: Vec<String>) {
+    let Some(archive) = crate::r::restart::startup_alias_blueprint("edit") else {
+        print_matrix_target_system_line(&target, "edit: startup alias is not configured");
+        return;
+    };
     if let Err(error) = super::run::submit_archive_name_to_target_from_app_db_async(
         target.clone(),
-        EDIT_ARCHIVE,
+        archive.as_str(),
         app_args,
     )
     .await
     {
         print_matrix_target_system_line(
             &target,
-            alloc::format!("edit: could not launch {EDIT_ARCHIVE} from app.db: {error}").as_str(),
+            alloc::format!("edit: could not launch {archive} from app.db: {error}").as_str(),
         );
     }
 }

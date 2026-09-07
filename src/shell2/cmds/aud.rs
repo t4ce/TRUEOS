@@ -6,28 +6,30 @@ use super::super::{
     print_shell_line, submit_online_to_target,
 };
 
-const AUD_APP: &str = "Player";
-const AUD_ARCHIVE: &str = "Player.bp";
-
 #[task(pool_size = 2)]
 async fn launch_aud(spawner: Spawner, target: MatrixTarget) {
+    let Some(archive) = crate::r::restart::startup_alias_blueprint("aud") else {
+        print_matrix_target_system_line(&target, "aud: startup alias is not configured");
+        return;
+    };
+    let app = archive.strip_suffix(".bp").unwrap_or(archive.as_str());
     match super::run::submit_archive_name_to_target_from_app_db_async(
         target.clone(),
-        AUD_ARCHIVE,
+        archive.as_str(),
         alloc::vec::Vec::new(),
     )
     .await
     {
         Ok(_) => {}
         Err(error) if error == "archive not found" => {
-            let online_args = alloc::vec![alloc::string::String::from(AUD_APP)];
+            let online_args = alloc::vec![alloc::string::String::from(app)];
             if submit_online_to_target(&spawner, target.clone(), online_args).is_err() {
                 print_matrix_target_system_line(&target, "aud: online launch task unavailable");
             }
         }
         Err(error) => print_matrix_target_system_line(
             &target,
-            alloc::format!("aud: could not launch {AUD_ARCHIVE}: {error}").as_str(),
+            alloc::format!("aud: could not launch {archive}: {error}").as_str(),
         ),
     }
 }

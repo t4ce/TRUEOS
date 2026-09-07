@@ -8,20 +8,22 @@ use super::super::{
     print_shell_line,
 };
 
-const SHELL_ARCHIVE: &str = "shell.bp";
-
 #[task(pool_size = 2)]
 async fn launch_shell(target: MatrixTarget) {
+    let Some(archive) = crate::r::restart::startup_alias_blueprint("shell") else {
+        print_matrix_target_system_line(&target, "shell: startup alias is not configured");
+        return;
+    };
     if let Err(error) = super::run::submit_archive_name_to_target_from_app_db_async(
         target.clone(),
-        SHELL_ARCHIVE,
+        archive.as_str(),
         alloc::vec::Vec::new(),
     )
     .await
     {
         print_matrix_target_system_line(
             &target,
-            alloc::format!("shell: could not launch {SHELL_ARCHIVE} from app.db: {error}").as_str(),
+            alloc::format!("shell: could not launch {archive} from app.db: {error}").as_str(),
         );
     }
 }

@@ -16,14 +16,16 @@ use super::super::{
     print_shell_line, submit_online_to_target,
 };
 
-const SSH_APP: &str = "ssh";
-const SSH_ARCHIVE: &str = "ssh.bp";
-
 #[task(pool_size = 2)]
 async fn launch_ssh(spawner: Spawner, target: MatrixTarget, app_args: Vec<String>) {
+    let Some(archive) = crate::r::restart::startup_alias_blueprint("ssh") else {
+        print_matrix_target_system_line(&target, "ssh: startup alias is not configured");
+        return;
+    };
+    let app = archive.strip_suffix(".bp").unwrap_or(archive.as_str());
     match super::run::submit_archive_name_to_target_from_app_db_async(
         target.clone(),
-        SSH_ARCHIVE,
+        archive.as_str(),
         app_args.clone(),
     )
     .await
@@ -31,7 +33,7 @@ async fn launch_ssh(spawner: Spawner, target: MatrixTarget, app_args: Vec<String
         Ok(_) => {}
         Err(error) if error == "archive not found" => {
             let mut online_args = Vec::with_capacity(app_args.len().saturating_add(1));
-            online_args.push(String::from(SSH_APP));
+            online_args.push(String::from(app));
             online_args.extend(app_args);
             if submit_online_to_target(&spawner, target.clone(), online_args).is_err() {
                 print_matrix_target_system_line(&target, "ssh: online launch task unavailable");
@@ -39,7 +41,7 @@ async fn launch_ssh(spawner: Spawner, target: MatrixTarget, app_args: Vec<String
         }
         Err(error) => print_matrix_target_system_line(
             &target,
-            alloc::format!("ssh: could not launch {SSH_ARCHIVE}: {error}").as_str(),
+            alloc::format!("ssh: could not launch {archive}: {error}").as_str(),
         ),
     }
 }

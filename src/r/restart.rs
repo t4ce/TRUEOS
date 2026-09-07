@@ -75,8 +75,37 @@ impl ColdStartBlueprint {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct StartupAlias {
+    name: String,
+    blueprint: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ColdStartConfiguration {
+    #[serde(default)]
+    aliases: Vec<StartupAlias>,
     blueprints: Vec<ColdStartBlueprint>,
+}
+
+/// Resolve a Shell2 alias from the same embedded startup manifest used by
+/// cold-start Blueprint launch. Returning owned data keeps the JSON parser's
+/// allocation independent from the caller's task lifetime.
+pub(crate) fn startup_alias_blueprint(alias: &str) -> Option<String> {
+    let config: ColdStartConfiguration = serde_json::from_slice(COLD_START_BLUEPRINTS_JSON).ok()?;
+    config
+        .aliases
+        .into_iter()
+        .find(|entry| entry.name == alias)
+        .map(|entry| entry.blueprint)
+}
+
+pub(crate) fn startup_alias_names() -> Vec<String> {
+    let Ok(config) = serde_json::from_slice::<ColdStartConfiguration>(COLD_START_BLUEPRINTS_JSON)
+    else {
+        return Vec::new();
+    };
+    config.aliases.into_iter().map(|entry| entry.name).collect()
 }
 
 #[trueos_executor::task]
