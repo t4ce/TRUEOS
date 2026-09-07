@@ -328,7 +328,7 @@ impl Default for IndexedDrawBatchV2 {
 
 pub const MAX_RETAINED_TRANSFORM_SEEDS: usize = 4;
 /// Buffer-backed V3 scenes keep the four-inline-seed V1/V2 ABI unchanged.
-pub const MAX_RETAINED_SCENE_INSTANCES: usize = 512;
+pub const MAX_RETAINED_SCENE_INSTANCES: usize = 1024;
 pub const MAX_RETAINED_SCENE_DRAWS: usize = 4;
 pub const MAX_RETAINED_STATIC_DRAWS: usize = 3;
 /// Fixed role order in the retained material descriptor. A zero texture ID is
@@ -344,10 +344,11 @@ pub const RETAINED_VERTEX_LAYOUT_POS_NORMAL: u32 = 0;
 /// Experimental baked beveled cube: one Float3 origin, 44 zero indices.
 /// Only valid with RETAINED_TOPOLOGY_CUBE_PATCHLIST_1. HS expands each patch
 /// to three control points; this is not arbitrary PATCHLIST shader admission.
-/// Version 4 (layout 5) adds orientation and original-cubie palette flag 0x100.
-/// V3 requires positive uniform scale and default material parameters. Layout 4
-/// was the translation-only contract; older kernels must reject layout 5.
-pub const RETAINED_VERTEX_LAYOUT_CUBE_PATCH_SEED: u32 = 5;
+/// Version/layout 6 adds separate opaque and sorted palette draw groups.
+/// Flags: cubie ID in bits 0..4, palette 0x100, transparent 0x200,
+/// selected face in bits 10..12. V3 requires positive uniform scale and
+/// default materials. Older kernels must reject layout 6.
+pub const RETAINED_VERTEX_LAYOUT_CUBE_PATCH_SEED: u32 = 6;
 pub const RETAINED_TOPOLOGY_CUBE_PATCHLIST_1: u32 = 0x20;
 pub const RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV: u32 = 1;
 /// Position3, normal3, UV2, and tangent4 (including handedness), 48 bytes.
@@ -500,7 +501,7 @@ pub struct RetainedDrawRange {
     pub first_index: u32,
     pub index_count: u32,
 }
-/// Scene with up to 512 buffer-backed TRS seeds and four index ranges.
+/// Scene with up to 1024 buffer-backed TRS seeds and four index ranges.
 /// Supports PBR, or the dedicated cube-patch v2 contract with default material
 /// parameters and exactly one full 44-index range.
 /// Inline frame seeds/count must be zero. The seed buffer contains tightly

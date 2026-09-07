@@ -1729,17 +1729,10 @@ fn stage_resident_churn_forward_secondary(
     // The next-frame diagnostic removes the complete depth read/write path
     // only for PBR meshes; culling, geometry, and shader selection stay intact.
     let cube_patch = resident.topology() == ResidentScenePrimitiveTopology::CubePatchList1;
-    let mut draw_depth = (draw.pbr_material.is_none() || picasso_depth_test_enabled())
+    let draw_depth = (draw.pbr_material.is_none() || picasso_depth_test_enabled())
         .then_some(depth_config);
-    // Mode 2's palette shader emits straight 35% alpha. Keep depth testing so
-    // it remains correctly occluded by the scene, but do not let its first
-    // fragment hide the later translucent cubie faces.
-    if cube_patch {
-        if let Some(depth) = draw_depth.as_mut() {
-            depth.write_enabled = false;
-        }
-    }
-    let blend_mode = if cube_patch {
+    // Caller selects opaque depth-write or sorted palette depth-read-only pass.
+    let blend_mode = if cube_patch && !depth_config.write_enabled {
         TriangleBlendProbeMode::StraightAlpha
     } else {
         TriangleBlendProbeMode::MesaZeroedState
@@ -3007,6 +3000,8 @@ fn submit_resident_churn_forward_geometry_batched(
     }
     let transform_secondary_count = usize::from(transform_dispatch.is_some());
     let resident_draw_count = resident.draw_group_count();
+    let cube_two_pass = resident.topology() == ResidentScenePrimitiveTopology::CubePatchList1
+        && resident_draw_count == 2;
     // Keep the capture's record layout and the encoded VS selection consistent
     // if the shell changes pipeline mode while this frame is being prepared.
     let uv_pipeline = picasso_uv_pipeline_enabled();
@@ -3117,7 +3112,10 @@ fn submit_resident_churn_forward_geometry_batched(
     draw_depth.write_enabled = true;
     draw_depth.compare_function = COMPARE_FUNCTION_LESS;
     for group in 0..resident_draw_count {
-        let secondary_index = group + 1 + transform_secondary_count;
+        let secondary_index = group + 1 + transform_secondary_count
+            + if cube_two_pass && group == 1 { static_draws.len() } else { 0 };
+        let mut group_depth = draw_depth;
+        if cube_two_pass && group == 1 { group_depth.write_enabled = false; }
         let (state_warm, state_gpu) = resident_scene_state_warm(state, warm, secondary_index)?;
         match transform_handoff {
             Some(RetainedGraphicsHandoff::NativeMatrices) | None => {
@@ -3139,7 +3137,7 @@ fn submit_resident_churn_forward_geometry_batched(
                     state_warm,
                     state_gpu,
                     draw,
-                    draw_depth,
+                    group_depth,
                     resident,
                     uv_pipeline,
                     secondary_index,
@@ -3181,7 +3179,8 @@ fn submit_resident_churn_forward_geometry_batched(
         }
     }
     for (static_index, scene) in static_draws.iter().enumerate() {
-        let secondary_index = resident_draw_count + static_index + 1 + transform_secondary_count;
+        let secondary_index = resident_draw_count + static_index + 1 + transform_secondary_count
+            - usize::from(cube_two_pass);
         let (state_warm, state_gpu) = resident_scene_state_warm(state, warm, secondary_index)?;
         let draw = prepare_triangle_draw_resources_for_scene_resident_mesh(
             state_warm,

@@ -2812,10 +2812,11 @@ pub(crate) fn update_resident_picasso_retained_transform_seeds(
     // complete 44-patch range so primitive IDs retain their baked meaning.
     if resident.topology() == ResidentScenePrimitiveTopology::CubePatchList1
         && (seeds.is_empty()
-            || draw_ranges.is_some_and(|ranges| ranges.len() != 1
-                || ranges[0].first_index != 0 || ranges[0].index_count != 44)
+            || draw_ranges.is_some_and(|ranges| ranges.is_empty() || ranges.len() > 2
+                || ranges.iter().any(|r| r.first_index != 0 || r.index_count != 44))
             || seeds.iter().any(|seed| seed.scale[0] != seed.scale[1] || seed.scale[1] != seed.scale[2]
-                || seed.scale[0] <= 0.0 || seed.draw_group != 0))
+                || seed.scale[0] <= 0.0 || seed.draw_group > 1
+                || ((seed.flags & 512 != 0) != (seed.draw_group == 1))))
     {
         return Err("cube-patch-uniform-instance-contract");
     }

@@ -56,7 +56,7 @@ fn descriptor() -> RetainedFrameSubmitV3 {
 fn descriptor_rejects_overflow_oversize_and_ambiguous_inline_inputs() {
     let good = descriptor();
     assert!(retained_scene_descriptor_valid(&good));
-    for seed_count in [1, MAX_RETAINED_SCENE_INSTANCES as u32] {
+    for seed_count in [1, 601, MAX_RETAINED_SCENE_INSTANCES as u32] {
         assert!(retained_scene_descriptor_valid(&RetainedFrameSubmitV3 { seed_count, ..good }));
     }
     for seed_count in [0, MAX_RETAINED_SCENE_INSTANCES as u32 + 1, u32::MAX] {
@@ -99,7 +99,8 @@ fn seed_decoder_checks_every_float_and_exact_row_boundaries() {
     };
     assert_eq!(decode_retained_scene_seeds(&row), Some(vec![expected]));
     assert_eq!(decode_retained_scene_seeds(&row.repeat(512)).unwrap().len(), 512);
-    for bytes in [vec![], row[..63].to_vec(), row.repeat(513), [row.clone(), vec![0]].concat()] {
+    assert_eq!(decode_retained_scene_seeds(&row.repeat(601)).unwrap().len(), 601);
+    for bytes in [vec![], row[..63].to_vec(), row.repeat(MAX_RETAINED_SCENE_INSTANCES + 1), [row.clone(), vec![0]].concat()] {
         assert!(decode_retained_scene_seeds(&bytes).is_none());
     }
     for field in 0..14 {
@@ -152,6 +153,18 @@ fn interleaved_floor_rows_have_disjoint_compaction_ranges() {
 }
 
 #[test]
+fn cube_room_and_palette_have_stable_two_group_ranges() {
+    let draws = [RetainedDrawRange { first_index: 0, index_count: 44 }; 2];
+    for (opaque, transparent) in [(27u32, 54u32), (600, 1)] {
+        let seeds: Vec<_> = (0..opaque).map(|s| slot(0, s))
+            .chain((0..transparent).map(|s| slot(1, s))).collect();
+        assert_eq!(picasso_retained_draw_templates(44, &seeds, &draws).unwrap(), [
+            [44, 0, 0, 0, opaque, 0], [44, 0, 0, opaque, transparent, 0],
+        ]);
+    }
+}
+
+#[test]
 fn old_four_helmet_instances_keep_one_full_mesh_draw() {
     let seeds: Vec<_> = (0..4).map(|s| slot(0, s)).collect();
     let draws = [RetainedDrawRange { first_index: 0, index_count: 185424 }];
@@ -166,7 +179,7 @@ fn draw_templates_reject_out_of_mesh_ranges_duplicate_slots_and_empty_groups() {
         assert!(picasso_retained_draw_templates(3, &[slot(0, 0)], &[bad]).is_err());
     }
     for seeds in [vec![], vec![slot(1, 0)], vec![slot(0, 1)], vec![slot(0, 0), slot(0, 0)],
-                  vec![slot(0, 0), slot(0, 2)], (0..513).map(|s| slot(0, s)).collect()] {
+                  vec![slot(0, 0), slot(0, 2)], (0..MAX_RETAINED_SCENE_INSTANCES as u32 + 1).map(|s| slot(0, s)).collect()] {
         assert!(picasso_retained_draw_templates(3, &seeds, &[good]).is_err());
     }
     assert!(picasso_retained_draw_templates(3, &[slot(0, 0)], &[]).is_err());
