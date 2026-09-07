@@ -2780,6 +2780,9 @@ pub(crate) struct Ui4IndexedBatchDrawDescriptor {
     pub(crate) base_vertex: i32,
     pub(crate) rgba8_srgb: u32,
     pub(crate) topology: crate::intel::render::ResidentScenePrimitiveTopology,
+    /// Zero selects the resident renderer default. Nonzero is valid only for
+    /// PointList and is already bounded by the C-ABI broker.
+    pub(crate) point_width_px: u32,
 }
 
 pub(crate) struct Ui4IndexedBatchDescriptor {
@@ -2838,9 +2841,24 @@ fn canonicalize_ui4_single_indexed_winding(
     }
 }
 
+/// Gen12 has no LINE_LOOP VF value. Preserve the API topology through broker
+/// validation, then make its sole implied edge explicit in the renderer-owned
+/// index copy before the draw is encoded as a native line strip.
+fn materialize_ui4_line_loop(
+    indices: &mut Vec<u32>,
+    topology: crate::intel::render::ResidentScenePrimitiveTopology,
+) {
+    if topology == crate::intel::render::ResidentScenePrimitiveTopology::LineLoop {
+        indices.push(indices[0]);
+    }
+}
+
 #[cfg(test)]
 mod ui4_single_indexed_topology_tests {
-    use super::{canonicalize_ui4_single_indexed_winding, ui4_single_indexed_topology_valid};
+    use super::{
+        canonicalize_ui4_single_indexed_winding, materialize_ui4_line_loop,
+        ui4_single_indexed_topology_valid,
+    };
     use crate::intel::render::ResidentScenePrimitiveTopology as Topology;
 
     #[test]
@@ -2878,6 +2896,17 @@ mod ui4_single_indexed_topology_tests {
         let mut triangles = [0, 2, 1, 0, 3, 2];
         canonicalize_ui4_single_indexed_winding(&vertices, &mut triangles, Topology::TriangleList);
         assert_eq!(triangles, [0, 1, 2, 0, 2, 3]);
+    }
+
+    #[test]
+    fn line_loop_materializes_only_the_implied_closing_edge() {
+        let mut line_loop = alloc::vec![3, 7, 11, 15];
+        materialize_ui4_line_loop(&mut line_loop, Topology::LineLoop);
+        assert_eq!(line_loop, [3, 7, 11, 15, 3]);
+
+        let mut line_strip = alloc::vec![3, 7, 11, 15];
+        materialize_ui4_line_loop(&mut line_strip, Topology::LineStrip);
+        assert_eq!(line_strip, [3, 7, 11, 15]);
     }
 }
 
@@ -3141,6 +3170,7 @@ pub(crate) fn submit_ui4_indexed_draw(
         },
         viewport_translation_px: [0.0, 0.0],
         topology: draw.topology,
+        point_width_px: 0,
     };
     let diagnostic_logs =
         if sampled_texture.is_some() && crate::log_os::flags::QUAD_TEXTURE_DIAG_PROFILE_ENABLED {
@@ -3328,6 +3358,10 @@ pub(crate) fn submit_ui4_indexed_batch(
             draw.index_count == 0
                 || draw.base_vertex < 0
                 || !draw.topology.accepts_index_count(draw.index_count as usize)
+                || draw.point_width_px > v::vgpu::MAX_INDEXED_DRAW_POINT_WIDTH_PX
+                || (draw.point_width_px != 0
+                    && draw.topology
+                        != crate::intel::render::ResidentScenePrimitiveTopology::PointList)
         })
     {
         return Err(VgpuError::Unsupported);
@@ -3434,7 +3468,13 @@ pub(crate) fn submit_ui4_indexed_batch(
                     );
                     indices.push(index);
                 }
-                indexed.push((indices, draw.rgba8_srgb, base_vertex, draw.topology));
+                indexed.push((
+                    indices,
+                    draw.rgba8_srgb,
+                    base_vertex,
+                    draw.topology,
+                    draw.point_width_px,
+                ));
             }
             if vertex_count == 0 {
                 return Err(VgpuError::Unsupported);
@@ -3485,7 +3525,8 @@ pub(crate) fn submit_ui4_indexed_batch(
         (window_id, phys, producer_gpu, bytes, width, height, pitch, vertices, indexed)
     };
 
-    for (indices, _, base_vertex, topology) in &mut indexed {
+    for (indices, _, base_vertex, topology, _) in &mut indexed {
+        materialize_ui4_line_loop(indices, *topology);
         if *topology != crate::intel::render::ResidentScenePrimitiveTopology::TriangleList {
             continue;
         }
@@ -3519,7 +3560,7 @@ pub(crate) fn submit_ui4_indexed_batch(
         }
     };
     let mut meshes = Vec::with_capacity(indexed.len());
-    for (indices, _, base_vertex, topology) in &indexed {
+    for (indices, _, base_vertex, topology, _) in &indexed {
         let local_vertex_count = indices
             .iter()
             .copied()
@@ -3564,13 +3605,14 @@ pub(crate) fn submit_ui4_indexed_batch(
     let scene_draws: Vec<_> = meshes
         .iter()
         .zip(indexed.iter())
-        .map(|(mesh, (_, rgba, _, topology))| crate::intel::render::ResidentSceneDraw {
+        .map(|(mesh, (_, rgba, _, topology, point_width_px))| crate::intel::render::ResidentSceneDraw {
             mesh,
             rgba: rgba.to_le_bytes(),
             sampled_texture: None,
             fragment_contract: crate::intel::render::ResidentSceneFragmentContract::ConstantRgba,
             viewport_translation_px: [0.0, 0.0],
             topology: *topology,
+            point_width_px: *point_width_px,
         })
         .collect();
     let rendered =
@@ -4380,6 +4422,7 @@ pub(crate) fn submit_ui4_retained_frame(
             fragment_contract: crate::intel::render::ResidentSceneFragmentContract::ConstantRgba,
             viewport_translation_px: [0.0, 0.0],
             topology: crate::intel::render::ResidentScenePrimitiveTopology::LineList,
+            point_width_px: 0,
         })
         .collect::<Vec<_>>();
     let render_material = retained_material.base_color().map(|base_color| {

@@ -411,7 +411,7 @@ const fn wm_barycentric_mode(num_varying_inputs: u8, force_barycentric_planes: b
 // a visible default while retaining every other captured Mesa field.
 const SF_POINT_WIDTH_MASK: u32 = 0x7ff;
 const MESA_SF_DW3: u32 = 0x0200_4808;
-const RESIDENT_POINT_WIDTH_U8_3: u32 = 6 << 3;
+const RESIDENT_POINT_WIDTH_U8_3: u32 = 4 << 3;
 const MESA_CLIP_DW2: u32 = 0xD400_0001;
 // The UHD 770 point-list oracle emits the normal D3D clip contract but leaves
 // ViewportXYClipTest disabled. Point lists retain that captured state; triangle
@@ -423,6 +423,14 @@ const MESA_POINT_CLIP_DW2: u32 = 0xC400_0001;
 // previous draw's sample/depth-stencil state.
 const MESA_POINT_SAMPLE_MASK_DW: u32 = 0x0000_FFFF;
 const MESA_POINT_WM_DEPTH_STENCIL_DW1: u32 = 1 << 4;
+
+const fn resident_point_width_raw(point_width_px: u32) -> u32 {
+    if point_width_px == 0 {
+        RESIDENT_POINT_WIDTH_U8_3
+    } else {
+        point_width_px << 3
+    }
+}
 
 const fn mesa_sf_dw3(point_raster: bool) -> u32 {
     if point_raster {
@@ -494,16 +502,27 @@ mod point_raster_state_tests {
         MESA_CLIP_DW2, MESA_POINT_CLIP_DW2, MESA_POINT_SAMPLE_MASK_DW,
         MESA_POINT_WM_DEPTH_STENCIL_DW1, MESA_SF_DW3, RESIDENT_POINT_WIDTH_U8_3,
         SF_POINT_WIDTH_MASK, mesa_clip_dw2, mesa_sample_mask_dw, mesa_sf_dw3,
-        mesa_wm_depth_stencil_dw1, uses_host_point_tail_index_buffer,
+        mesa_wm_depth_stencil_dw1, resident_point_width_raw,
+        uses_host_point_tail_index_buffer,
     };
 
     #[test]
-    fn mesa_point_list_overrides_only_the_width_with_six_pixels() {
+    fn mesa_point_list_overrides_only_the_width_with_four_pixels() {
         let point_state = mesa_sf_dw3(true);
+        assert_eq!(RESIDENT_POINT_WIDTH_U8_3, 4 << 3);
         assert_eq!(point_state & SF_POINT_WIDTH_MASK, RESIDENT_POINT_WIDTH_U8_3);
         assert_eq!(point_state & !SF_POINT_WIDTH_MASK, MESA_SF_DW3 & !SF_POINT_WIDTH_MASK);
         assert_ne!(point_state & (1 << 11), 0, "point width must come from SF state");
         assert_eq!(mesa_sf_dw3(false), MESA_SF_DW3);
+    }
+
+    #[test]
+    fn explicit_point_widths_are_encoded_as_u8_3() {
+        assert_eq!(resident_point_width_raw(0), 4 << 3);
+        assert_eq!(resident_point_width_raw(4), 4 << 3);
+        assert_eq!(resident_point_width_raw(8), 8 << 3);
+        assert_eq!(resident_point_width_raw(12), 12 << 3);
+        assert_eq!(resident_point_width_raw(16), 16 << 3);
     }
 
     #[test]
@@ -2024,6 +2043,7 @@ fn encode_triangle_probe_batch(
     post3d_value: u32,
     done_value: u32,
     batch_mode: TriangleBatchMode,
+    point_width_px: u32,
     streamout_experiment: StreamoutProofExperiment,
     front_end_contract: TriangleFrontEndContract,
     viewport_translation_px: [f32; 2],
@@ -2573,7 +2593,7 @@ fn encode_triangle_probe_batch(
     let point_width_raw = if batch_mode.point_raster() {
         backend_probe_mode
             .point_width_raw_override()
-            .unwrap_or(RESIDENT_POINT_WIDTH_U8_3)
+            .unwrap_or_else(|| resident_point_width_raw(point_width_px))
     } else {
         0
     };
@@ -2620,7 +2640,8 @@ fn encode_triangle_probe_batch(
         1 << 29
     };
     // SF.DW3[10:0] is PointWidth, and DW3[11] selects state-sourced width.
-    // Use a visible six-pixel default for native point lists.
+    // Use a compact four-pixel default for native point lists. This keeps
+    // diagnostic point overlays visible without obscuring their geometry.
     let sf_dw3 = if mesa_host_fixed_function {
         mesa_sf_dw3(batch_mode.point_raster())
     } else if batch_mode.point_raster() {

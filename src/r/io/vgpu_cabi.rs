@@ -380,6 +380,7 @@ pub(crate) fn broker_ui4_indexed_batch_submit(
             base_vertex: draw.base_vertex,
             rgba8_srgb: draw.rgba8_srgb,
             topology: crate::intel::render::ResidentScenePrimitiveTopology::TriangleList,
+            point_width_px: 0,
         })
         .collect();
     let completed = vgpu::submit_ui4_indexed_batch(
@@ -422,6 +423,9 @@ fn broker_primitive_topology(
         }
         v::vgpu::PRIMITIVE_TOPOLOGY_LINE_LIST_ADJ => {
             Ok(crate::intel::render::ResidentScenePrimitiveTopology::LineListAdj)
+        }
+        v::vgpu::PRIMITIVE_TOPOLOGY_LINE_LOOP => {
+            Ok(crate::intel::render::ResidentScenePrimitiveTopology::LineLoop)
         }
         v::vgpu::PRIMITIVE_TOPOLOGY_LINE_STRIP => {
             Ok(crate::intel::render::ResidentScenePrimitiveTopology::LineStrip)
@@ -468,6 +472,7 @@ mod primitive_topology_tests {
             (v::vgpu::PRIMITIVE_TOPOLOGY_POINT_LIST, Topology::PointList),
             (v::vgpu::PRIMITIVE_TOPOLOGY_LINE_LIST, Topology::LineList),
             (v::vgpu::PRIMITIVE_TOPOLOGY_LINE_LIST_ADJ, Topology::LineListAdj),
+            (v::vgpu::PRIMITIVE_TOPOLOGY_LINE_LOOP, Topology::LineLoop),
             (v::vgpu::PRIMITIVE_TOPOLOGY_LINE_STRIP, Topology::LineStrip),
             (v::vgpu::PRIMITIVE_TOPOLOGY_LINE_STRIP_ADJ, Topology::LineStripAdj),
             (v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, Topology::TriangleList),
@@ -497,9 +502,11 @@ pub(crate) fn broker_ui4_indexed_batch_submit_v2(
     let draw_count = usize::try_from(batch.draw_count).map_err(|_| -22)?;
     if draw_count == 0
         || draw_count > v::vgpu::MAX_INDEXED_BATCH_V2_DRAWS
-        || batch.draws[..draw_count]
-            .iter()
-            .any(|draw| draw.reserved != 0)
+        || batch.draws[..draw_count].iter().any(|draw| {
+            draw.reserved > v::vgpu::MAX_INDEXED_DRAW_POINT_WIDTH_PX
+                || (draw.reserved != 0
+                    && draw.topology != v::vgpu::PRIMITIVE_TOPOLOGY_POINT_LIST)
+        })
         || batch.draws[draw_count..]
             .iter()
             .any(|draw| *draw != v::vgpu::IndexedBatchDrawV2::default())
@@ -516,6 +523,7 @@ pub(crate) fn broker_ui4_indexed_batch_submit_v2(
                 base_vertex: draw.base_vertex,
                 rgba8_srgb: draw.rgba8_srgb,
                 topology: broker_primitive_topology(draw.topology)?,
+                point_width_px: draw.reserved,
             })
         })
         .collect::<Result<_, i32>>()?;

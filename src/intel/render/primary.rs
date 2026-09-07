@@ -289,6 +289,9 @@ pub(crate) struct ResidentSceneDraw<'a> {
     /// Resident vertex and index storage is not rewritten or re-uploaded.
     pub(crate) viewport_translation_px: [f32; 2],
     pub(crate) topology: ResidentScenePrimitiveTopology,
+    /// Integer POINT_LIST raster width. Zero retains the renderer default and
+    /// is required for every non-point topology.
+    pub(crate) point_width_px: u32,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -1556,9 +1559,15 @@ fn stage_resident_scene_secondary(
     fragment_contract: ResidentSceneFragmentContract,
     viewport_translation_px: [f32; 2],
     topology: ResidentScenePrimitiveTopology,
+    point_width_px: u32,
     secondary_index: usize,
     result_ggtt_gpu: u64,
 ) -> Result<usize, &'static str> {
+    if point_width_px > v::vgpu::MAX_INDEXED_DRAW_POINT_WIDTH_PX
+        || (point_width_px != 0 && topology != ResidentScenePrimitiveTopology::PointList)
+    {
+        return Err("scene-point-width");
+    }
     draw.state_gpu_addr = state_gpu;
     if draw.native.is_some() {
         return Err("scene-fragment-contract-native-mismatch");
@@ -1657,6 +1666,7 @@ fn stage_resident_scene_secondary(
             ResidentScenePrimitiveTopology::QuadStrip => TriangleBatchMode::QuadStripDraw,
             ResidentScenePrimitiveTopology::RectList => TriangleBatchMode::RectListDraw,
         },
+        point_width_px,
         StreamoutProofExperiment::HeaderAndPositionSlots01,
         TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
         viewport_translation_px,
@@ -1778,6 +1788,7 @@ fn stage_resident_churn_forward_secondary(
             ResidentScenePrimitiveTopology::QuadStrip => TriangleBatchMode::QuadStripDraw,
             ResidentScenePrimitiveTopology::RectList => TriangleBatchMode::RectListDraw,
         },
+        0,
         StreamoutProofExperiment::HeaderAndPositionSlots01,
         front_end_contract,
         [0.0, 0.0],
@@ -2817,6 +2828,7 @@ fn submit_resident_scene_geometry_batched(
             [0.0, 0.0],
             ResidentScenePrimitiveTopology::TriangleList,
             0,
+            0,
             result_ggtt_gpu,
         )?;
         secondary_count = 1;
@@ -2863,6 +2875,7 @@ fn submit_resident_scene_geometry_batched(
             scene_draw.fragment_contract,
             scene_draw.viewport_translation_px,
             scene_draw.topology,
+            scene_draw.point_width_px,
             secondary_count,
             result_ggtt_gpu,
         )?;
@@ -3058,6 +3071,7 @@ fn submit_resident_churn_forward_geometry_batched(
         ResidentSceneFragmentContract::ConstantRgba,
         [0.0, 0.0],
         ResidentScenePrimitiveTopology::TriangleList,
+        0,
         clear_secondary_index,
         result_ggtt_gpu,
     )?;
@@ -3122,6 +3136,7 @@ fn submit_resident_churn_forward_geometry_batched(
                     ResidentSceneFragmentContract::ConstantRgba,
                     [0.0, 0.0],
                     resident.topology(),
+                    0,
                     secondary_index,
                     result_ggtt_gpu,
                 )?;
@@ -3153,6 +3168,7 @@ fn submit_resident_churn_forward_geometry_batched(
             scene.fragment_contract,
             scene.viewport_translation_px,
             scene.topology,
+            scene.point_width_px,
             secondary_index,
             result_ggtt_gpu,
         )?;
@@ -6005,6 +6021,7 @@ fn submit_triangle_vf_draw_to_surface_ext(
         RCS_EXEC_RESULT_DRAW_POST3D,
         RCS_EXEC_RESULT_DONE,
         batch_mode,
+        0,
         vf_experiment,
         TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
         [0.0, 0.0],
@@ -6581,6 +6598,7 @@ fn submit_triangle_streamout_proof(
         RCS_EXEC_RESULT_DRAW_POST3D,
         RCS_EXEC_RESULT_DONE,
         TriangleBatchMode::StreamoutProof,
+        0,
         experiment,
         TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
         [0.0, 0.0],
@@ -7189,6 +7207,7 @@ fn submit_triangle_real_vs_draw_probe_to_surface_ext(
         RCS_EXEC_RESULT_DRAW_POST3D,
         RCS_EXEC_RESULT_DONE,
         batch_mode,
+        0,
         StreamoutProofExperiment::PositionSlot1,
         front_end_contract,
         [0.0, 0.0],
@@ -7636,6 +7655,7 @@ fn submit_triangle_real_vs_draw_probe_vertices_to_surface_ext(
         RCS_EXEC_RESULT_DRAW_POST3D,
         RCS_EXEC_RESULT_DONE,
         batch_mode,
+        0,
         streamout_experiment,
         front_end_contract,
         viewport_translation_px,
