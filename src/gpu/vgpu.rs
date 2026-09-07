@@ -3819,6 +3819,10 @@ fn copy_retained_static_vertices(
     Ok(parts)
 }
 
+fn retained_static_line_index_count_valid(count: u32) -> bool {
+    count > 0 && count <= 128 && count % 2 == 0
+}
+
 fn copy_retained_static_parts(
     device: &VirtualDevice,
     vertex_buffer: BufferHandle,
@@ -3839,6 +3843,7 @@ fn copy_retained_static_parts(
     let mut indices = Vec::with_capacity(draws.len());
     let mut vertex_counts = Vec::with_capacity(draws.len());
     for draw in draws {
+        if !retained_static_line_index_count_valid(draw.index_count) { return Err(VgpuError::Unsupported); }
         let index_start = index_offset
             .checked_add(
                 usize::try_from(draw.first_index)
@@ -3982,7 +3987,7 @@ pub(crate) fn submit_ui4_retained_frame(
     if submit.static_draws[..static_draw_count].iter().any(|draw| {
         draw.reserved != 0
             || draw.topology != v::vgpu::PRIMITIVE_TOPOLOGY_LINE_LIST
-            || draw.index_count == 0 || draw.index_count > 128 || draw.index_count % 2 != 0
+            || !retained_static_line_index_count_valid(draw.index_count)
             || draw.base_vertex < 0
     }) {
         return Err(VgpuError::Unsupported);

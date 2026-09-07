@@ -439,6 +439,7 @@ pub struct RetainedFrameSubmit {
     pub clear_rgba8_srgb: u32,
     pub seed_count: u32,
     pub static_draw_count: u32,
+    // Static LINE_LIST draws accept 2..=128 indices (even counts only).
     /// Caller-owned content token for `static_vertex_buffer`. Advance it
     /// after rewriting any static vertex payload so a retained mesh refreshes
     /// its resident copy in place. Indices and draw identity remain immutable.

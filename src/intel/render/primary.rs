@@ -1728,8 +1728,22 @@ fn stage_resident_churn_forward_secondary(
     draw.state_gpu_addr = state_gpu;
     // The next-frame diagnostic removes the complete depth read/write path
     // only for PBR meshes; culling, geometry, and shader selection stay intact.
-    let draw_depth = (draw.pbr_material.is_none() || picasso_depth_test_enabled())
+    let cube_patch = resident.topology() == ResidentScenePrimitiveTopology::CubePatchList1;
+    let mut draw_depth = (draw.pbr_material.is_none() || picasso_depth_test_enabled())
         .then_some(depth_config);
+    // Mode 2's palette shader emits straight 35% alpha. Keep depth testing so
+    // it remains correctly occluded by the scene, but do not let its first
+    // fragment hide the later translucent cubie faces.
+    if cube_patch {
+        if let Some(depth) = draw_depth.as_mut() {
+            depth.write_enabled = false;
+        }
+    }
+    let blend_mode = if cube_patch {
+        TriangleBlendProbeMode::StraightAlpha
+    } else {
+        TriangleBlendProbeMode::MesaZeroedState
+    };
     let (pipeline, front_end_contract) = if draw.pbr_material.is_some() && uv_pipeline {
         prepare_picasso_retained_uv_diagnostic(&mut draw)?
     } else {
@@ -1741,7 +1755,7 @@ fn stage_resident_churn_forward_secondary(
         state_warm,
         draw,
         shader_layout,
-        TriangleBlendProbeMode::MesaZeroedState,
+        blend_mode,
         BackendProbeMode::MesaLike,
         [0.0, 0.0],
     )?;
@@ -1771,7 +1785,7 @@ fn stage_resident_churn_forward_secondary(
         &mut batch[RESIDENT_SECONDARY_ENTRY_PREFIX_DWORDS..],
         state_warm,
         draw,
-        TriangleBlendProbeMode::MesaZeroedState,
+        blend_mode,
         draw_depth,
         &pipeline,
         shader_layout,

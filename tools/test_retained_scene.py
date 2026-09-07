@@ -27,10 +27,17 @@ def source() -> str:
         assert re.search(r"OP_BP_VGPU_RETAINED_FRAME_SUBMIT_V3:\s*u32\s*=\s*0x17A;", (ROOT / path).read_text())
     return harness_source() + "\n" + "\n".join((
         item("src/gpu/vgpu.rs", "retained_scene_descriptor_valid"),
+        item("src/gpu/vgpu.rs", "retained_static_line_index_count_valid"),
         item("src/gpu/vgpu.rs", "decode_retained_scene_seeds"),
         item("src/intel/render/resources.rs", "picasso_retained_draw_templates"),
     )) + r'''
 use vgpu::*;
+
+#[test]
+fn static_line_lists_are_even_nonempty_and_bounded() {
+    for n in [2, 44, 128] { assert!(retained_static_line_index_count_valid(n)); }
+    for n in [0, 1, 43, 129, 130, u32::MAX] { assert!(!retained_static_line_index_count_valid(n)); }
+}
 
 fn descriptor() -> RetainedFrameSubmitV3 {
     RetainedFrameSubmitV3 {
