@@ -38,8 +38,9 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
       RUST_BACKTRACE: 1
-      # Includes crates/log-os and the staged futures-family lock update.
-      TRUEOS_BLUEPRINTS_REV: 973d1fbf1fde47e535b2b3d90f4ada6491eb1e6b
+      # Includes crates/log-os, the staged futures-family lock update, and
+      # the ShaderToy inputs rebuilt by the C++ artifact reproducibility gate.
+      TRUEOS_BLUEPRINTS_REV: 1b0844d508f8159102519aeae53cb92831a493b6
 
     steps:
       - name: Prepare checkout dependencies
