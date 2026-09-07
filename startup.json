@@ -13,8 +13,8 @@
   "autostart": [
     { "action": "skip", "archive": "swarm.bp", "online_selector": "swarm", "slot": "swm", "settle_ms": 250 },
     { "action": "skip", "archive": "img.bp", "online_selector": "img", "slot": "img", "settle_ms": 250, "launch_script": "show kernel:logo center nohit\nshow kernel:intel-graphics bottom-left\nshow kernel:bgrt bottom-right" },
-    { "action": "skip", "archive": "cubes.bp", "slot": "cub", "settle_ms": 750 },
-    { "action": "launch", "archive": "boat.bp", "slot": "boat", "settle_ms": 750 },
+    { "action": "launch", "archive": "cubes.bp", "slot": "cub", "settle_ms": 750 },
+    { "action": "skip", "archive": "boat.bp", "slot": "boat", "settle_ms": 750 },
     { "action": "skip", "archive": "horizon.bp", "slot": "hor", "settle_ms": 250 },
     { "action": "skip", "archive": "mandelbrot.bp", "slot": "man", "settle_ms": 750 },
     { "action": "skip", "archive": "flags.bp", "slot": "flg", "settle_ms": 750 },

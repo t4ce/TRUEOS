@@ -3826,7 +3826,7 @@ fn copy_retained_static_parts(
     vertex_offset: u64,
     index_offset: u64,
     draws: &[v::vgpu::IndexedBatchDrawV2],
-) -> Result<Vec<(Vec<[f32; 3]>, [u32; 2])>, VgpuError> {
+) -> Result<Vec<(Vec<[f32; 3]>, Vec<u32>)>, VgpuError> {
     let index_record = lookup_buffer(device, index_buffer)?;
     if index_record.usage & BUFFER_USAGE_INDEX == 0 {
         return Err(VgpuError::PermissionDenied);
@@ -3847,16 +3847,14 @@ fn copy_retained_static_parts(
                     .ok_or(VgpuError::Unsupported)?,
             )
             .ok_or(VgpuError::Unsupported)?;
-        let index_end = index_start.checked_add(8).ok_or(VgpuError::Unsupported)?;
+        let index_bytes = draw.index_count as usize * 4; // admission bounds this to 128 indices
+        let index_end = index_start.checked_add(index_bytes).ok_or(VgpuError::Unsupported)?;
         if index_end > index_record.bytes {
             return Err(VgpuError::Unsupported);
         }
-        crate::intel::dma_flush(unsafe { index_virt.add(index_start) }, 8);
-        let raw = unsafe { core::slice::from_raw_parts(index_virt.add(index_start), 8) };
-        let part = [
-            u32::from_le_bytes(raw[0..4].try_into().unwrap()),
-            u32::from_le_bytes(raw[4..8].try_into().unwrap()),
-        ];
+        crate::intel::dma_flush(unsafe { index_virt.add(index_start) }, index_bytes);
+        let raw = unsafe { core::slice::from_raw_parts(index_virt.add(index_start), index_bytes) };
+        let part: Vec<u32> = raw.chunks_exact(4).map(|v| u32::from_le_bytes(v.try_into().unwrap())).collect();
         vertex_counts.push(
             part.iter()
                 .copied()
@@ -3984,7 +3982,7 @@ pub(crate) fn submit_ui4_retained_frame(
     if submit.static_draws[..static_draw_count].iter().any(|draw| {
         draw.reserved != 0
             || draw.topology != v::vgpu::PRIMITIVE_TOPOLOGY_LINE_LIST
-            || draw.index_count != 2
+            || draw.index_count == 0 || draw.index_count > 128 || draw.index_count % 2 != 0
             || draw.base_vertex < 0
     }) {
         return Err(VgpuError::Unsupported);
