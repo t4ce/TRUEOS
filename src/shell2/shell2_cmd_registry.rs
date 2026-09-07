@@ -37,7 +37,6 @@ const TOOL_JSON_WIN: &str = r#"{"type":"object","properties":{"action":{"type":"
 const TOOL_JSON_DISC: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["list","format","ramdisc"],"description":"disc action to run."},"disk_id":{"type":"string","description":"Disk id string for action=format."},"size":{"type":"string","description":"Optional ramdisc size like 512MB or 1GiB for action=ramdisc."}},"required":["action"],"additionalProperties":false}"#;
 const TOOL_JSON_GRID: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
 const TOOL_JSON_VGPU: &str = r#"{"type":"object","properties":{"command":{"type":"string","enum":["status","test","material","depth","cull","pipeline","capture"],"description":"Inspect the vGPU broker, run a runtime test, or select a Picasso material diagnostic view."},"test":{"type":"string","enum":["broker","abi","guc","compute","blit","all"],"description":"Runtime test selected when command=test."},"view":{"type":"string","enum":["pbr","base","normal","uv","solid"],"description":"Next-frame Picasso output selected when command=material; pbr restores ordinary shading."},"depth":{"type":"string","enum":["on","off"],"description":"Picasso depth test/write diagnostic selected when command=depth; on restores ordinary depth testing."},"cull":{"type":"string","enum":["on","off"],"description":"Picasso face culling diagnostic selected when command=cull; on restores material culling."},"pipeline":{"type":"string","enum":["pbr","uv","uv8"],"description":"Picasso shader pipeline diagnostic selected when command=pipeline; uv uses authored-UV shaders with current mesh buffers, pbr restores full materials. uv8 keeps the authored-UV VS and selects the baked SIMD8 PS."},"capture":{"type":"string","enum":["vue"],"description":"One-shot Picasso pre-clip vertex capture selected when command=capture; keeps rendering enabled and reports bounded diagnostic summaries."}},"required":["command"],"additionalProperties":false}"#;
-const TOOL_JSON_HYPER: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["status","probe"],"description":"Hyper transport view to print."},"url":{"type":"string","description":"Optional URL to download into TRUEOSFS."},"path":{"type":"string","description":"Optional TRUEOSFS destination path."}},"required":[],"additionalProperties":false}"#;
 #[cfg(feature = "trueos_lumen")]
 const TOOL_JSON_LUM: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
 const TOOL_JSON_NET: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["icmp","irc","nic","hostname"],"description":"net subcommand to run."},"target":{"type":"string","description":"Target host for net icmp."},"selector":{"type":"string","description":"Optional NIC selector like index, vid:pid, or bb:dd.f."},"host":{"type":"string","description":"Host for net irc."},"channel":{"type":"string","description":"Optional channel like #trueos for net irc."},"name":{"type":"string","description":"Optional hostname for net hostname."}},"required":["subcommand"],"additionalProperties":false}"#;
@@ -70,11 +69,6 @@ fn dispatch_bios(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> Par
 
 fn dispatch_img(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     super::cmds::img::try_parse(spawner, io, rest)
-}
-
-fn dispatch_hyper(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    let mut args = rest.split_whitespace();
-    super::cmds::hyper::try_parse(spawner, io, &mut args)
 }
 
 #[cfg(feature = "trueos_lumen")]
@@ -315,15 +309,6 @@ const SHELL2_COMMAND_REGISTRY: &[BuiltinShell2CmdEntry] = &[
             "Open a UI4 Shell2 session and enter the same session through the invoking Matrix terminal.",
         ),
         tool_parameters_json: None,
-    },
-    BuiltinShell2CmdEntry {
-        name: "hyper",
-        mode: "cmd",
-        color: Some(STATUS_NETWORK_RGB),
-        advertised: true,
-        handler: dispatch_hyper,
-        tool_description: Some("Inspect the kernel Hyper HTTP/HTTPS transport surface."),
-        tool_parameters_json: Some(TOOL_JSON_HYPER),
     },
     BuiltinShell2CmdEntry {
         name: "surf",
@@ -606,7 +591,7 @@ pub(crate) fn try_dispatch(
     ParseOutcome::NotCommand
 }
 
-const TITLEBAR_MISC_COMMANDS: &[&str] = &["win", "hyper", "shot", "lum", "tts", "stt", "vid"];
+const TITLEBAR_MISC_COMMANDS: &[&str] = &["win", "shot", "lum", "tts", "stt", "vid"];
 const TITLEBAR_ADMIN_COMMANDS: &[&str] = &[
     "cry", "os", "backup", "disc", "tlb", "xhci", "ram", "smp", "net", "bios", "acpi", "vgpu",
 ];

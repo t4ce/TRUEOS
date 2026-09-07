@@ -36,7 +36,6 @@ pub(crate) mod format;
 #[cfg(test)]
 pub(crate) mod fslog;
 pub(crate) mod grid;
-pub(crate) mod hyper;
 pub(crate) mod img;
 pub(crate) mod install;
 #[cfg(feature = "trueos_lumen")]

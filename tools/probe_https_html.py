@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Download public pages through the rig's Shell2 hyper, then inspect saved bytes.
+"""Download public pages through the rig's Hyper Blueprint, then inspect saved bytes.
 
 Each run uses unique filenames and requires a matching save receipt and a newly
 listed TRUEOSFS artifact. This checks transport/HTML only, never Solara rendering.
@@ -63,18 +63,21 @@ def main():
     read_for(2)
     s.sendall('§httpq\r'.encode())
     read_for(1)
+    s.sendall(b'\tstart hyper\r')
+    launch = read_for(30)
+    if b'hyper> ' not in ANSI.sub(b'', launch):
+        raise RuntimeError('Hyper Blueprint did not reach its download prompt')
     results = []
     for index, url in enumerate(args.url or SITES):
         name = f'httpq-{run}-{index:02}.html'
-        s.sendall('§§\r'.encode())
-        read_for(1)
-        s.sendall(f'hyper {url} {name}\r'.encode())
+        path = f'common/dl/{name}'
+        s.sendall(f'{url} {name}\r'.encode())
         start = time.monotonic()
-        raw = read_for(100, name)
+        raw = read_for(100, path)
         (args.output / f'{index:02}.shell.raw').write_bytes(raw)
         plain = ANSI.sub(b'', raw).decode('utf-8', 'replace')
         result = dict(url=url, file=name, elapsed_s=round(time.monotonic()-start, 2), valid_html=False)
-        saved = re.search(r'hyper: saved (\d+) bytes -> '+re.escape(name), plain)
+        saved = re.search(r'hyper: saved (\d+) bytes -> '+re.escape(path), plain)
         if saved:
             result['saved_bytes'] = int(saved.group(1))
         try:
@@ -85,13 +88,13 @@ def main():
             (args.output / 'tree.html').write_text(tree)
             # The actual link both proves presence and supplies the mounted root.
             links = re.findall(r'(?:href|data-download)=["\']([^"\']+)["\']', tree)
-            link = next((v for v in links if '/dl/' in v and v.endswith('/'+name)), None)
+            link = next((v for v in links if '/dl/' in v and v.endswith('/'+path)), None)
             if link is None:
                 # Tree actions carry root/path attributes rather than direct links.
-                match = re.search(r'data-root=["\'](\d+)["\'][^>]*data-path=["\']'+re.escape(name)+r'["\']', tree)
+                match = re.search(r'data-root=["\'](\d+)["\'][^>]*data-path=["\']'+re.escape(path)+r'["\']', tree)
                 if not match:
                     raise RuntimeError('new artifact absent from discovered filesystem tree')
-                link = f'/dl/{match.group(1)}/{name}'
+                link = f'/dl/{match.group(1)}/{path}'
             body = download(f'http://{args.host}'+link)
             if len(body) != int(saved.group(1)):
                 raise RuntimeError('download size differs from save receipt')
@@ -105,6 +108,7 @@ def main():
         results.append(result)
         (args.output / 'results.json').write_text(json.dumps(results, indent=2)+'\n')
         print(json.dumps(result), flush=True)
+    s.sendall(b'exit\r')
     s.close()
 
 
