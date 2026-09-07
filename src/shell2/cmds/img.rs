@@ -70,6 +70,14 @@ pub(crate) fn launch_live_update_notice(spawner: Spawner, generation: u64) {
 
 #[task(pool_size = 1)]
 async fn live_update_notice_task(generation: u64) {
+    let Some(archive) = crate::r::restart::startup_alias_blueprint("img") else {
+        crate::log_warn!(
+            target: "global";
+            "live-update: notice launch rejected generation={} reason=img-startup-alias-missing\n",
+            generation,
+        );
+        return;
+    };
     while !crate::live_update::post_boot_uplift_complete(generation) {
         Timer::after(EmbassyDuration::from_millis(25)).await;
     }
@@ -84,7 +92,7 @@ async fn live_update_notice_task(generation: u64) {
     let target = matrix_target_for_slot_name(OUTPUT_SYSTEM_MASK, "");
     let submitted = super::run::submit_archive_name_to_target_from_app_db_with_instance_waiving_readiness_noninteractive_async(
             target,
-            IMG_ARCHIVE,
+            archive.as_str(),
             alloc::vec![String::from(source)],
             crate::hv::BlueprintInstanceRequest::named(instance_name.clone()),
             crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
@@ -104,7 +112,7 @@ async fn live_update_notice_task(generation: u64) {
         .as_millis()
         .saturating_add(LIVE_UPDATE_LAUNCH_TIMEOUT_MS);
     let vm_id = loop {
-        let found = crate::hv::named_app_instance_vms(IMG_ARCHIVE)
+        let found = crate::hv::named_app_instance_vms(archive.as_str())
             .into_iter()
             .find_map(|(vm_id, name)| (name == instance_name).then_some(vm_id));
         if let Some(vm_id) = found {

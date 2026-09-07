@@ -600,10 +600,6 @@ const TITLEBAR_MISC_COMMANDS: &[&str] = &["win", "shot", "lum", "tts", "stt", "v
 const TITLEBAR_ADMIN_COMMANDS: &[&str] = &[
     "cry", "os", "backup", "disc", "tlb", "xhci", "ram", "smp", "net", "bios", "acpi", "vgpu",
 ];
-const TITLEBAR_ALIAS_COMMANDS: &[&str] = &[
-    "td", "edit", "img", "shell", "surf", "qjs", "aud", "ssh", "grid",
-];
-
 /// Render the curated command-mode portion of Shell2's right-aligned titlebar.
 pub(crate) fn titlebar_right_command_names_text() -> AllocString {
     render_command_titlebar(usize::MAX)
@@ -655,7 +651,8 @@ fn render_command_titlebar(max_entries: usize) -> AllocString {
 
 fn render_alias_titlebar(max_entries: usize) -> AllocString {
     let mut out = AllocString::from("Alias[");
-    for (index, name) in TITLEBAR_ALIAS_COMMANDS.iter().enumerate() {
+    let names = crate::r::restart::startup_alias_names();
+    for (index, name) in names.iter().enumerate() {
         if index == max_entries {
             out.push_str("...]");
             return out;
@@ -663,7 +660,7 @@ fn render_alias_titlebar(max_entries: usize) -> AllocString {
         if index != 0 {
             out.push(' ');
         }
-        push_colored_status_token(&mut out, name, STATUS_GRAY_RGB);
+        push_colored_status_token(&mut out, name.as_str(), STATUS_GRAY_RGB);
     }
     out.push(']');
     out
@@ -692,7 +689,8 @@ pub(crate) fn titlebar_right_alias_names_text_fitting(max_width: usize) -> Alloc
     if super::ecma48::visible_width(full.as_str()) <= max_width {
         return full;
     }
-    for entry_count in (0..TITLEBAR_ALIAS_COMMANDS.len()).rev() {
+    let alias_count = crate::r::restart::startup_alias_names().len();
+    for entry_count in (0..alias_count).rev() {
         let candidate = render_alias_titlebar(entry_count);
         if super::ecma48::visible_width(candidate.as_str()) <= max_width {
             return candidate;
