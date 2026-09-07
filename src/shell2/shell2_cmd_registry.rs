@@ -48,7 +48,9 @@ const TOOL_JSON_IMG: &str = r#"{"type":"object","properties":{"path":{"type":"st
 const TOOL_JSON_SSH: &str = r#"{"type":"object","properties":{"endpoint":{"type":"string","description":"Optional SSH target in [user@]host[:port] form. Omit for SSH's resident interactive prompt."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_SURF: &str = r#"{"type":"object","properties":{"url":{"type":"string","description":"Optional HTTP or HTTPS URL. Bare hosts default to HTTPS; omit for the Solara homepage."}},"additionalProperties":false}"#;
 const TOOL_JSON_TLB: &str = r#"{"type":"object","properties":{"target":{"type":"string","enum":["pci","pcibar","mem","cpu","hfi","turbo","ucode","pmu","rapl","acpi","aml","facp","madt","hpet","mcfg","ssdt","uefi","smbios","x2apic","usb","usb_probe","dump"],"description":"Table or view to print."},"action":{"type":"string","enum":["store"],"description":"Optional RAPL action when target=rapl."},"signature":{"type":"string","minLength":4,"maxLength":4,"description":"Optional ACPI signature when target=acpi, for example SSDT or FACP."},"index":{"type":"integer","minimum":1,"description":"Optional 1-based instance index when target=acpi and the signature repeats."},"subcommand":{"type":"string","enum":["ec","symbol","prefix"],"description":"Optional AML subcommand when target=aml."},"path":{"type":"string","description":"Optional AML path or prefix when target=aml and subcommand is symbol or prefix."}},"required":["target"],"additionalProperties":false}"#;
+#[cfg(feature = "trueos_ttstt")]
 const TOOL_JSON_TTS: &str = r#"{"type":"object","properties":{"text":{"type":"string","maxLength":8192,"description":"Text to synthesize asynchronously. The native backend performs G2P and splits it into ordered model chunks of at most 510 phonemes."},"voice":{"type":"string","description":"Kokoro voice name; defaults to af_heart."},"speed":{"type":"number","minimum":0.5,"maximum":2.0,"description":"Kokoro speech speed multiplier."}},"required":["text"],"additionalProperties":false}"#;
+#[cfg(feature = "trueos_ttstt")]
 const TOOL_JSON_STT: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS path to a mono/stereo signed-16-bit PCM WAV file."},"language":{"type":"string","description":"Whisper language code or auto."},"translate":{"type":"boolean","description":"Translate recognized speech to English."}},"required":["path"],"additionalProperties":false}"#;
 const TOOL_JSON_TD: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
 const TOOL_JSON_VID: &str = r#"{"type":"object","properties":{"source":{"type":"string","enum":["fs","on","online"],"description":"Read an Annex-B asset from TRUEOSFS, or download the fixed online AVC1 MP4 asset."},"path":{"type":"string","description":"Optional TRUEOSFS Annex-B path when source=fs; defaults to x31_head_movie.annexb.h264."},"loop":{"type":"boolean","description":"Repeat playback while retaining the same UI4 Frame and window lifetime."}},"required":["source"],"additionalProperties":false}"#;
@@ -175,10 +177,12 @@ fn dispatch_tlb(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -
     super::cmds::tlb::try_parse(spawner, io, &mut args)
 }
 
+#[cfg(feature = "trueos_ttstt")]
 fn dispatch_tts(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     super::cmds::ttstt::try_parse_tts(spawner, io, rest)
 }
 
+#[cfg(feature = "trueos_ttstt")]
 fn dispatch_stt(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     super::cmds::ttstt::try_parse_stt(spawner, io, rest)
 }
@@ -391,6 +395,7 @@ const SHELL2_COMMAND_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         ),
         tool_parameters_json: Some(TOOL_JSON_XHCI),
     },
+    #[cfg(feature = "trueos_ttstt")]
     BuiltinShell2CmdEntry {
         name: "tts",
         mode: "cmd",
@@ -402,6 +407,7 @@ const SHELL2_COMMAND_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         ),
         tool_parameters_json: Some(TOOL_JSON_TTS),
     },
+    #[cfg(feature = "trueos_ttstt")]
     BuiltinShell2CmdEntry {
         name: "stt",
         mode: "cmd",
@@ -526,7 +532,7 @@ mod tests {
     fn titlebar_and_registry_omit_retired_commands() {
         let status = titlebar_right_command_names_text();
         let registry = command_registry_json();
-        for label in ["gridp", "helio", "set", "cpp"] {
+        for label in ["gridp", "helio", "set", "cpp", "hyper"] {
             assert!(!status.contains(label), "titlebar contains retired {label}");
             assert!(
                 !registry.contains(alloc::format!("\"name\":\"{label}\"").as_str()),
@@ -574,7 +580,6 @@ mod tests {
         assert!(command_registry_json().contains("\"name\":\"win\""));
         assert!(!command_registry_json().contains("\"name\":\"cpp\""));
     }
-
 }
 
 pub(crate) fn try_dispatch(

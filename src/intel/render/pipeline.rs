@@ -1732,9 +1732,9 @@ fn validate_triangle_native_draw_contract(
     let cube_seed = draw.vertex_format == TriangleVertexFormat::Float3
         && draw.vertex_stride == 12 && draw.vertex_buffer_bytes == 12
         && draw.sampled_texture.is_none() && draw.pbr_material.is_none()
-        && native.vertex_element_count == 1 && native.vf_sgvs_dw1 == 0
-        && native.vf_sgvs_2_dw1 == 0 && native.vf_sgvs_2_dw2 == 0
-        && native.vf_component_packing == [7, 0, 0, 0];
+        && native.vertex_element_count == 2 && native.vf_sgvs_dw1 == 0xE001_4001
+        && native.vf_sgvs_2_dw1 == 0xB001_0001 && native.vf_sgvs_2_dw2 == 2
+        && native.vf_component_packing == [0xa7, 0, 0, 0];
     let pos_normal = draw.vertex_format == TriangleVertexFormat::PosNormal
         && draw.vertex_stride == trueos_helio_artifact::churn_forward::VERTEX_STRIDE
         && draw.sampled_texture.is_none()
@@ -3438,7 +3438,7 @@ fn encode_triangle_probe_batch(
                 VFCOMP_STORE_0,
                 VFCOMP_STORE_1_FP,
             )?,
-            TriangleVertexFormat::Float3 => push_vertex_element_state(
+            TriangleVertexFormat::Float3 => { push_vertex_element_state(
                 batch_dwords,
                 &mut cursor,
                 0,
@@ -3448,7 +3448,13 @@ fn encode_triangle_probe_batch(
                 VFCOMP_STORE_SRC,
                 VFCOMP_STORE_SRC,
                 VFCOMP_STORE_1_FP,
-            )?,
+            )?;
+                if cube_patch {
+                    push_vertex_element_state(batch_dwords, &mut cursor, 31, 0,
+                        SURFACE_FORMAT_R32G32_UINT, VFCOMP_STORE_0, VFCOMP_STORE_0,
+                        VFCOMP_STORE_0, VFCOMP_STORE_0)?;
+                }
+            },
             TriangleVertexFormat::PosUv => {
                 push_vertex_element_state(
                     batch_dwords,

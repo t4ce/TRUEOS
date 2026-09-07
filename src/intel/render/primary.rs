@@ -3198,7 +3198,8 @@ fn submit_resident_churn_forward_geometry_batched(
             let graph = transform_dispatch.and_then(|dispatch| dispatch.hierarchy);
             crate::log_info!(
                 target: "render";
-                "resident-scene: native retained online path=helioa-churn-forward-v1->retained-transform-simd16(prep+matrix-rows+compaction)->gpu-208b-instance+u32-compacted+20b-indexed-indirect->artifact-native-vs+ps->indexed-indirect-secondaries->one-guc-scene-schedule graphics_groups={} gpu_transform=1 graphics_handoff=native-matrices transform_secondaries=1 retained_graph={} graph_nodes={} dirty_local={} dirty_world={} dirty_rows={} max_depth={} cpu_matrix_expansion=0 cpu_vertex_projection=0 cpu_readback=0 instance_index=starting_instance+instance_id render_submits=1 target={}x{}\n",
+                "resident-scene: native retained online path=helioa-churn-forward-v1->retained-transform-simd16(prep+matrix-rows+compaction)->gpu-208b-instance+u32-compacted+20b-indexed-indirect->{}->indexed-indirect-secondaries->one-guc-scene-schedule graphics_groups={} gpu_transform=1 graphics_handoff=native-matrices transform_secondaries=1 retained_graph={} graph_nodes={} dirty_local={} dirty_world={} dirty_rows={} max_depth={} cpu_matrix_expansion=0 cpu_vertex_projection=0 cpu_readback=0 instance_index=starting_instance+instance_id render_submits=1 target={}x{}\n",
+                if resident.topology() == ResidentScenePrimitiveTopology::CubePatchList1 { "seed-vs+hs+te+ds+ps" } else { "artifact-native-vs+ps" },
                 resident_draw_count,
                 graph.is_some() as u8,
                 graph.map_or(0, |graph| graph.node_count),
@@ -3893,7 +3894,11 @@ fn submit_resident_scene_capture_inner_for_carrier(
             if let Some(stats) = geometry.pipeline_stats {
                 crate::log_info!(target: "render";
                     "picasso-pipeline-stats: seq={} pipeline={} view={} depth={} cull={} scope=retained-and-static-excludes-transform-clear ia_vertices={} ia_primitives={} vs_invocations={} cl_input={} cl_output={} ps_pixels_with_helpers={} capture=gpu-srm64-ppgtt-after-cs-scoreboard-stall retired=1 does_not_prove=rt-writes\n",
-                    perf_sequence, picasso_pipeline_name(), picasso_material_view(), picasso_depth_test_enabled(), picasso_cull_enabled(),
+                    perf_sequence,
+                    if native_churn.is_some_and(|resident| resident.topology() == ResidentScenePrimitiveTopology::CubePatchList1) {
+                        "cube-patchlist1-hs-te-ds"
+                    } else { picasso_pipeline_name() },
+                    picasso_material_view(), picasso_depth_test_enabled(), picasso_cull_enabled(),
                     stats[0], stats[1], stats[2], stats[3], stats[4], stats[5],
                 );
             }

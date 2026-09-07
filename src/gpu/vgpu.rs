@@ -4114,6 +4114,16 @@ pub(crate) fn submit_ui4_retained_frame(
             .iter()
             .enumerate()
             .fold(0, |mask, (role, texture)| mask | ((texture.is_some() as u32) << role));
+        // V3 carries a V2 material envelope even for the dedicated baked cube.
+        // Only its untouched default is allowed; this shader has no material API.
+        let material_parameters = if scene.is_some()
+            && resident.topology() == crate::intel::render::ResidentScenePrimitiveTopology::CubePatchList1
+            && material_parameters == Some(v::vgpu::RetainedMaterialParameters::default())
+        {
+            None
+        } else {
+            material_parameters
+        };
         if !retained_material_contract_accepts(
             resident.sampled_material(),
             resident.pbr_material(),

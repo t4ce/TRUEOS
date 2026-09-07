@@ -63,6 +63,7 @@ pub(crate) mod tlb_nct_probe;
 pub(crate) mod tlb_platform;
 #[path = "tlb_smbios_wrapper.rs"]
 pub(crate) mod tlb_smbios;
+#[cfg(feature = "trueos_ttstt")]
 pub(crate) mod ttstt;
 pub(crate) mod update;
 pub(crate) mod vgpu;

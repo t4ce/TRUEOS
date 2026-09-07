@@ -452,6 +452,7 @@ pub(crate) fn spirit_response_present(owner: u8, turn: u64, text: &[u8]) -> i32 
     if !crate::spirit::enqueue_reasoning_response(turn, text) {
         return ERROR_UNAVAILABLE;
     }
+    #[cfg(feature = "trueos_ttstt")]
     match crate::shell2::cmds::ttstt::enqueue_lumen_tts(text) {
         Ok(request) => crate::log_info!(
             target: "r";
@@ -468,6 +469,11 @@ pub(crate) fn spirit_response_present(owner: u8, turn: u64, text: &[u8]) -> i32 
             reason,
         ),
     }
+    #[cfg(not(feature = "trueos_ttstt"))]
+    crate::log_info!(
+        target: "r";
+        "lumen-bp: voice unavailable reason=ttstt-feature-disabled text_presentation=retained\n"
+    );
     0
 }
 
@@ -492,6 +498,7 @@ pub(crate) fn spirit_text_present_silent(turn: u64, text: &[u8]) -> i32 {
     if !crate::spirit::enqueue_reasoning_response(turn, text) {
         return ERROR_UNAVAILABLE;
     }
+    #[cfg(feature = "trueos_ttstt")]
     match crate::shell2::cmds::ttstt::enqueue_lumen_tts(text) {
         Ok(request) => crate::log_info!(
             target: "r";
@@ -506,6 +513,11 @@ pub(crate) fn spirit_text_present_silent(turn: u64, text: &[u8]) -> i32 {
             reason,
         ),
     }
+    #[cfg(not(feature = "trueos_ttstt"))]
+    crate::log_info!(
+        target: "r";
+        "lumen-bp: voice unavailable reason=ttstt-feature-disabled text_presentation=retained\n"
+    );
     0
 }
 

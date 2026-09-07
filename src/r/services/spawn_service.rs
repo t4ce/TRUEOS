@@ -338,6 +338,7 @@ pub(crate) fn retry_font_warm_pool_autostart() {
     FONT_WARM_POOL_STARTED.store(false, Ordering::Release);
 }
 
+#[cfg(feature = "trueos_ttstt")]
 fn spawn_ttstt_cpu_service(spawner: Spawner) -> SpawnAttempt {
     match crate::ai::ttstt_service::ensure_service_started(spawner) {
         Ok(_) => SpawnAttempt::Spawned,
@@ -345,6 +346,7 @@ fn spawn_ttstt_cpu_service(spawner: Spawner) -> SpawnAttempt {
     }
 }
 
+#[cfg(feature = "trueos_ttstt")]
 fn spawn_ttstt_capture_writer(spawner: Spawner) -> SpawnAttempt {
     // TRUEOSFS futures are intentionally local to the BSP executor.
     spawn_local(spawner, |_spawner| crate::ai::ttstt_capture::writer_task())
@@ -915,6 +917,7 @@ fn html_shack_gate() -> bool {
 }
 
 #[inline]
+#[cfg(feature = "trueos_ttstt")]
 fn ttstt_cpu_service_gate() -> bool {
     crate::r::readiness::is_set(
         crate::r::readiness::TRUEOSFS_ROOT_MOUNTED | crate::r::readiness::TRUEOSFS_INDEX_READY,
@@ -1342,9 +1345,10 @@ const NET_ANY_CONFIGURED_AND_ROOT_READY: u32 =
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 74
+const TASK_COUNT: usize = 72
     + cfg!(feature = "trueos_h264_encode_stream") as usize
-    + cfg!(feature = "trueos_lumen") as usize;
+    + cfg!(feature = "trueos_lumen") as usize
+    + 2 * cfg!(feature = "trueos_ttstt") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
@@ -1397,6 +1401,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &FONT_KERNEL_SERVICE_STARTED,
         spawn_font_kernel_service,
     ),
+    #[cfg(feature = "trueos_ttstt")]
     TaskSpec::configured_gated(
         crate::allcaps::ttstt::BOOT_RESIDENT_WARM_ENABLED,
         "ttstt-cpu-service",
@@ -1405,6 +1410,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &TTSTT_CPU_SERVICE_STARTED,
         spawn_ttstt_cpu_service,
     ),
+    #[cfg(feature = "trueos_ttstt")]
     TaskSpec::enabled(
         "ttstt-capture-writer",
         crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,

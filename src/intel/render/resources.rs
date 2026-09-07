@@ -2634,15 +2634,15 @@ pub(crate) fn create_resident_picasso_retained_mesh(
     resident.native_vf.front_face_clockwise = true;
     if cube_patch {
         resident.pipeline = crate::intel::shader::patch_cube::PIPELINE;
-        resident.native_vf.vf_sgvs_dw1 = 0;
-        resident.native_vf.vf_sgvs_2_dw1 = 0;
-        resident.native_vf.vf_sgvs_2_dw2 = 0;
-        resident.native_vf.vertex_element_count = 1;
-        resident.native_vf.vf_component_packing = [7, 0, 0, 0];
+        resident.native_vf.vf_sgvs_dw1 = 0xE001_4001;
+        resident.native_vf.vf_sgvs_2_dw1 = 0xB001_0001;
+        resident.native_vf.vf_sgvs_2_dw2 = 2;
+        resident.native_vf.vertex_element_count = 2;
+        resident.native_vf.vf_component_packing = [0xa7, 0, 0, 0];
         resident.vertex_stride = 12;
         resident.vertex_format = TriangleVertexFormat::Float3;
         resident.front_end_contract = TriangleFrontEndContract {
-            label: "cube-patchlist1-hs3-tri-ds-v1", vs_urb_output_length_override: Some(1),
+            label: "cube-patchlist1-hs3-tri-ds-instanced-v2", vs_urb_output_length_override: Some(1),
             vs_urb_read_length: 1, sbe_read_offset: 1, sbe_read_length: 1,
             force_sbe_read_offset: true, force_sbe_read_length: true,
             force_vs_with_vf_synthesized_vue: false,
@@ -2808,15 +2808,17 @@ pub(crate) fn update_resident_picasso_retained_transform_seeds(
     seeds: &[v::vgpu::RetainedTransformSeed],
     draw_ranges: Option<&[v::vgpu::RetainedDrawRange]>,
 ) -> Result<(), &'static str> {
-    // The initial baked DS consumes only the camera. Do not silently ignore
-    // object transforms, multiple instances, or submesh patch-ID rebasing.
+    // VS reads translated, uniformly scaled retained instances. HS needs the
+    // complete 44-patch range so primitive IDs retain their baked meaning.
     if resident.topology() == ResidentScenePrimitiveTopology::CubePatchList1
-        && (seeds.len() != 1 || draw_ranges.is_some()
-            || seeds[0].translation != [0.0; 3] || seeds[0].scale != [1.0; 3]
-            || seeds[0].rotation != [0.0, 0.0, 0.0, 1.0]
-            || seeds[0].draw_group != 0 || seeds[0].flags != 0)
+        && (seeds.is_empty()
+            || draw_ranges.is_some_and(|ranges| ranges.len() != 1
+                || ranges[0].first_index != 0 || ranges[0].index_count != 44)
+            || seeds.iter().any(|seed| seed.rotation != [0.0, 0.0, 0.0, 1.0]
+                || seed.scale[0] != seed.scale[1] || seed.scale[1] != seed.scale[2]
+                || seed.scale[0] <= 0.0 || seed.draw_group != 0))
     {
-        return Err("cube-patch-identity-instance-only");
+        return Err("cube-patch-uniform-instance-contract");
     }
     const CAMERA_BYTES: usize = 368;
     const SEED_BYTES: usize = 64;

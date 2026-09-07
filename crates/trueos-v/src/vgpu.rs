@@ -344,7 +344,9 @@ pub const RETAINED_VERTEX_LAYOUT_POS_NORMAL: u32 = 0;
 /// Experimental baked beveled cube: one Float3 origin, 44 zero indices.
 /// Only valid with RETAINED_TOPOLOGY_CUBE_PATCHLIST_1. HS expands each patch
 /// to three control points; this is not arbitrary PATCHLIST shader admission.
-pub const RETAINED_VERTEX_LAYOUT_CUBE_PATCH_SEED: u32 = 3;
+/// Version 2 (layout 4) accepts translated, uniformly scaled instances via V3
+/// with default material parameters; layout 3 was the single-object contract.
+pub const RETAINED_VERTEX_LAYOUT_CUBE_PATCH_SEED: u32 = 4;
 pub const RETAINED_TOPOLOGY_CUBE_PATCHLIST_1: u32 = 0x20;
 pub const RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV: u32 = 1;
 /// Position3, normal3, UV2, and tangent4 (including handedness), 48 bytes.
@@ -489,14 +491,16 @@ pub struct RetainedFrameSubmitV2 {
     pub material_parameters: RetainedMaterialParameters,
 }
 
-/// Index range within one resident mesh. All ranges share its PBR material.
+/// Index range within one resident mesh. All ranges share its material contract.
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 #[repr(C)]
 pub struct RetainedDrawRange {
     pub first_index: u32,
     pub index_count: u32,
 }
-/// PBR scene with up to 512 buffer-backed TRS seeds and four index ranges.
+/// Scene with up to 512 buffer-backed TRS seeds and four index ranges.
+/// Supports PBR, or the dedicated cube-patch v2 contract with default material
+/// parameters and exactly one full 44-index range.
 /// Inline frame seeds/count must be zero. The seed buffer contains tightly
 /// packed 64-byte RetainedTransformSeed rows and requires MAP_READ usage.
 /// Each seed's draw_group selects a range; flags[31:16] selects its contiguous

@@ -83,6 +83,26 @@ trueos_lumen = []
 trueos_h264_encode_stream = []
 trueos_h264_encode_probe = ["trueos_h264_encode_stream"]
 trueos_task_profile = ["trueos-executor/trueos-task-profile"]
+trueos_ttstt = [
+    "dep:trueos-ttstt-cpu",
+    "dep:trueos-kokoro-aot",
+    "dep:trueos-kokoro-audio",
+    "dep:trueos-kokoro-conv",
+    "dep:trueos-kokoro-dispatch",
+    "dep:trueos-kokoro-duration",
+    "dep:trueos-kokoro-exec",
+    "dep:trueos-kokoro-f32",
+    "dep:trueos-kokoro-g2p",
+    "dep:trueos-kokoro-gemm",
+    "dep:trueos-kokoro-lexicon",
+    "dep:trueos-kokoro-layout",
+    "dep:trueos-kokoro-lstm",
+    "dep:trueos-kokoro-memory",
+    "dep:trueos-kokoro-resize",
+    "dep:trueos-kokoro-scalar",
+    "dep:trueos-kokoro-stft",
+    "dep:trueos-kokoro-voice",
+]
 
 [dependencies]
 x86_64 = { version = "0.15.5", features = ["memory_encryption"] }
@@ -141,24 +161,24 @@ crab-usb = { path = "vendor/CrabUSB/usb-host", default-features = false }
 trueos-math = { path = "crates/trueos-math", features = ["alloc"] }
 trueos-lfm25-model = { path = "crates/trueos-lfm25-model" }
 trueos-lfm25-cpu = { path = "crates/trueos-lfm25-cpu" }
-trueos-ttstt-cpu = { path = "crates/trueos-ttstt-cpu" }
-trueos-kokoro-aot = { path = "crates/trueos-kokoro/aot" }
-trueos-kokoro-audio = { path = "crates/trueos-kokoro/audio" }
-trueos-kokoro-conv = { path = "crates/trueos-kokoro/conv" }
-trueos-kokoro-exec = { path = "crates/trueos-kokoro/exec" }
-trueos-kokoro-f32 = { path = "crates/trueos-kokoro/f32" }
-trueos-kokoro-g2p = { path = "crates/trueos-kokoro/g2p" }
-trueos-kokoro-gemm = { path = "crates/trueos-kokoro/gemm" }
-trueos-kokoro-lexicon = { path = "crates/trueos-kokoro/lexicon" }
-trueos-kokoro-duration = { path = "crates/trueos-kokoro/duration" }
-trueos-kokoro-dispatch = { path = "crates/trueos-kokoro/dispatch" }
-trueos-kokoro-layout = { path = "crates/trueos-kokoro/layout" }
-trueos-kokoro-lstm = { path = "crates/trueos-kokoro/lstm" }
-trueos-kokoro-memory = { path = "crates/trueos-kokoro/memory" }
-trueos-kokoro-resize = { path = "crates/trueos-kokoro/resize" }
-trueos-kokoro-scalar = { path = "crates/trueos-kokoro/scalar" }
-trueos-kokoro-stft = { path = "crates/trueos-kokoro/stft" }
-trueos-kokoro-voice = { path = "crates/trueos-kokoro/voice" }
+trueos-ttstt-cpu = { path = "crates/trueos-ttstt-cpu", optional = true }
+trueos-kokoro-aot = { path = "crates/trueos-kokoro/aot", optional = true }
+trueos-kokoro-audio = { path = "crates/trueos-kokoro/audio", optional = true }
+trueos-kokoro-conv = { path = "crates/trueos-kokoro/conv", optional = true }
+trueos-kokoro-exec = { path = "crates/trueos-kokoro/exec", optional = true }
+trueos-kokoro-f32 = { path = "crates/trueos-kokoro/f32", optional = true }
+trueos-kokoro-g2p = { path = "crates/trueos-kokoro/g2p", optional = true }
+trueos-kokoro-gemm = { path = "crates/trueos-kokoro/gemm", optional = true }
+trueos-kokoro-lexicon = { path = "crates/trueos-kokoro/lexicon", optional = true }
+trueos-kokoro-duration = { path = "crates/trueos-kokoro/duration", optional = true }
+trueos-kokoro-dispatch = { path = "crates/trueos-kokoro/dispatch", optional = true }
+trueos-kokoro-layout = { path = "crates/trueos-kokoro/layout", optional = true }
+trueos-kokoro-lstm = { path = "crates/trueos-kokoro/lstm", optional = true }
+trueos-kokoro-memory = { path = "crates/trueos-kokoro/memory", optional = true }
+trueos-kokoro-resize = { path = "crates/trueos-kokoro/resize", optional = true }
+trueos-kokoro-scalar = { path = "crates/trueos-kokoro/scalar", optional = true }
+trueos-kokoro-stft = { path = "crates/trueos-kokoro/stft", optional = true }
+trueos-kokoro-voice = { path = "crates/trueos-kokoro/voice", optional = true }
 trueos-fs = { path = "crates/trueos-fs" }
 infer = { path = "vendor/infer", default-features = false }
 v = { path = "crates/trueos-v" }
