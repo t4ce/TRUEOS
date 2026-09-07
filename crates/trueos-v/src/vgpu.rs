@@ -341,6 +341,11 @@ pub const RETAINED_MATERIAL_EMISSIVE: usize = 2;
 pub const RETAINED_MATERIAL_OCCLUSION: usize = 3;
 pub const RETAINED_MATERIAL_NORMAL: usize = 4;
 pub const RETAINED_VERTEX_LAYOUT_POS_NORMAL: u32 = 0;
+/// Experimental baked beveled cube: one Float3 origin, 44 zero indices.
+/// Only valid with RETAINED_TOPOLOGY_CUBE_PATCHLIST_1. HS expands each patch
+/// to three control points; this is not arbitrary PATCHLIST shader admission.
+pub const RETAINED_VERTEX_LAYOUT_CUBE_PATCH_SEED: u32 = 3;
+pub const RETAINED_TOPOLOGY_CUBE_PATCHLIST_1: u32 = 0x20;
 pub const RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV: u32 = 1;
 /// Position3, normal3, UV2, and tangent4 (including handedness), 48 bytes.
 pub const RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV_TANGENT: u32 = 2;

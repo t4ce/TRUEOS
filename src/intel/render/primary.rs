@@ -296,6 +296,8 @@ pub(crate) struct ResidentSceneDraw<'a> {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum ResidentScenePrimitiveTopology {
+    /// Dedicated baked cube contract, not a generic tessellation shader API.
+    CubePatchList1,
     PointList,
     LineList,
     /// Intel's native `3DPRIM_LINELIST_ADJ`; four VF vertices form one line
@@ -337,6 +339,7 @@ impl ResidentScenePrimitiveTopology {
 
     pub(crate) const fn accepts_index_count(self, count: usize) -> bool {
         match self {
+            Self::CubePatchList1 => count == 44,
             Self::PointList => count >= 1,
             Self::LineList => count >= 2 && count.is_multiple_of(2),
             Self::LineListAdj => count >= 4 && count.is_multiple_of(4),
@@ -1649,6 +1652,7 @@ fn stage_resident_scene_secondary(
         resident_secondary_marker(RCS_EXEC_RESULT_DRAW_POST3D, secondary_index)?,
         resident_secondary_marker(RCS_EXEC_RESULT_DONE, secondary_index)?,
         match topology {
+            ResidentScenePrimitiveTopology::CubePatchList1 => return Err("cube-patch-requires-retained-contract"),
             ResidentScenePrimitiveTopology::PointList => TriangleBatchMode::PointDraw,
             ResidentScenePrimitiveTopology::LineList => TriangleBatchMode::LineDraw,
             ResidentScenePrimitiveTopology::LineListAdj => TriangleBatchMode::LineAdjDraw,
@@ -1771,6 +1775,7 @@ fn stage_resident_churn_forward_secondary(
         resident_secondary_marker(RCS_EXEC_RESULT_DRAW_POST3D, secondary_index)?,
         resident_secondary_marker(RCS_EXEC_RESULT_DONE, secondary_index)?,
         match resident.topology() {
+            ResidentScenePrimitiveTopology::CubePatchList1 => TriangleBatchMode::CubePatchDraw,
             ResidentScenePrimitiveTopology::PointList => TriangleBatchMode::PointDraw,
             ResidentScenePrimitiveTopology::LineList => TriangleBatchMode::LineDraw,
             ResidentScenePrimitiveTopology::LineListAdj => TriangleBatchMode::LineAdjDraw,
@@ -2969,6 +2974,11 @@ fn submit_resident_churn_forward_geometry_batched(
     const CLEAR_TRIANGLE: [[f32; 3]; 3] = [[-1.0, -1.0, 1.0], [3.0, -1.0, 1.0], [-1.0, 3.0, 1.0]];
     let transform_dispatch = resident.transform_dispatch();
     let transform_handoff = transform_dispatch.map(|dispatch| dispatch.output.into());
+    if resident.topology() == ResidentScenePrimitiveTopology::CubePatchList1
+        && transform_handoff != Some(RetainedGraphicsHandoff::NativeMatrices)
+    {
+        return Err("cube-patch-native-handoff-required");
+    }
     let transform_secondary_count = usize::from(transform_dispatch.is_some());
     let resident_draw_count = resident.draw_group_count();
     // Keep the capture's record layout and the encoded VS selection consistent

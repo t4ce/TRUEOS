@@ -1729,6 +1729,12 @@ fn validate_triangle_native_draw_contract(
             step_rate: 0,
         },
     ];
+    let cube_seed = draw.vertex_format == TriangleVertexFormat::Float3
+        && draw.vertex_stride == 12 && draw.vertex_buffer_bytes == 12
+        && draw.sampled_texture.is_none() && draw.pbr_material.is_none()
+        && native.vertex_element_count == 1 && native.vf_sgvs_dw1 == 0
+        && native.vf_sgvs_2_dw1 == 0 && native.vf_sgvs_2_dw2 == 0
+        && native.vf_component_packing == [7, 0, 0, 0];
     let pos_normal = draw.vertex_format == TriangleVertexFormat::PosNormal
         && draw.vertex_stride == trueos_helio_artifact::churn_forward::VERTEX_STRIDE
         && draw.sampled_texture.is_none()
@@ -1760,7 +1766,7 @@ fn validate_triangle_native_draw_contract(
         && native.vf_sgvs_dw1 == 0xE004_4004
         && native.vf_sgvs_2_dw1 == 0xB004_0004
         && native.vf_component_packing == [0x000A_F377, 0, 0, 0];
-    if !(pos_normal || pos_normal_uv || pos_normal_sampled || pbr)
+    if !(cube_seed || pos_normal || pos_normal_uv || pos_normal_sampled || pbr)
         || (draw.pbr_material.is_some() && !pbr)
         || (draw.metallic_roughness_texture.is_some() && draw.sampled_texture.is_none())
         || draw.emissive_factor.iter().any(|value| !value.is_finite())
@@ -1775,7 +1781,7 @@ fn validate_triangle_native_draw_contract(
         || compacted.byte_len == 0
         || compacted.byte_len % core::mem::size_of::<u32>() as u32 != 0
         || instance_count != compacted_count
-        || native.vf_sgvs_2_dw2 != 3
+        || (!cube_seed && native.vf_sgvs_2_dw2 != 3)
         || native.vf_instancing != expected_instancing
     {
         return Err("probe-native-vf-contract");
@@ -2051,6 +2057,14 @@ fn encode_triangle_probe_batch(
     post_draw_sync_variant: PostDrawSyncVariant,
 ) -> Result<usize, &'static str> {
     let mut cursor = 0usize;
+    let cube_patch = crate::intel::shader::patch_cube::matches(pipeline);
+    if cube_patch != matches!(batch_mode, TriangleBatchMode::CubePatchDraw)
+        || cube_patch != shader_layout.tessellation.is_some()
+        || (cube_patch && (!matches!(warm.device_id, 0xa780 | 0x4680)
+            || draw.native.is_none() || draw.vue_capture))
+    {
+        return Err("cube-patch-pipeline-contract");
+    }
     if draw.vue_capture && (draw.native.is_none()
         || draw.indirect_args_gpu_addr.is_none()
         || !matches!(batch_mode, TriangleBatchMode::Draw)
@@ -3199,7 +3213,7 @@ fn encode_triangle_probe_batch(
     push(batch_dwords, &mut cursor, 0)?;
     log_batch_offset(cursor, "3DSTATE_BINDING_TABLE_POINTERS_DS");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_BINDING_TABLE_POINTERS_DS)?;
-    push(batch_dwords, &mut cursor, 0)?;
+    push(batch_dwords, &mut cursor, if cube_patch { binding_table_pointer_offset } else { 0 })?;
     log_batch_offset(cursor, "3DSTATE_BINDING_TABLE_POINTERS_GS");
     push(batch_dwords, &mut cursor, CMD_3DSTATE_BINDING_TABLE_POINTERS_GS)?;
     push(batch_dwords, &mut cursor, 0)?;
@@ -3214,22 +3228,24 @@ fn encode_triangle_probe_batch(
         // these packets are the missing definition of that reserved region.
         log_batch_offset(cursor, "3DSTATE_PUSH_CONSTANT_ALLOC_VS");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_PUSH_CONSTANT_ALLOC_VS)?;
-        push(batch_dwords, &mut cursor, 16)?;
+        push(batch_dwords, &mut cursor, if cube_patch { 8 } else { 16 })?;
         log_batch_offset(cursor, "3DSTATE_PUSH_CONSTANT_ALLOC_HS");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_PUSH_CONSTANT_ALLOC_HS)?;
-        push(batch_dwords, &mut cursor, 0)?;
+        push(batch_dwords, &mut cursor, if cube_patch { (8 << 16) | 8 } else { 0 })?;
         log_batch_offset(cursor, "3DSTATE_PUSH_CONSTANT_ALLOC_DS");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_PUSH_CONSTANT_ALLOC_DS)?;
-        push(batch_dwords, &mut cursor, 0)?;
+        push(batch_dwords, &mut cursor, if cube_patch { (16 << 16) | 8 } else { 0 })?;
         log_batch_offset(cursor, "3DSTATE_PUSH_CONSTANT_ALLOC_GS");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_PUSH_CONSTANT_ALLOC_GS)?;
         push(batch_dwords, &mut cursor, 0)?;
         log_batch_offset(cursor, "3DSTATE_PUSH_CONSTANT_ALLOC_PS");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_PUSH_CONSTANT_ALLOC_PS)?;
-        push(batch_dwords, &mut cursor, (16 << 16) | 16)?;
+        push(batch_dwords, &mut cursor, if cube_patch { (24 << 16) | 8 } else { (16 << 16) | 16 })?;
         intel_render_focus_log!(
-            "probe-push-constant-urb-partition total_kb=32 vs[offset_kb=0 size_kb=16] hs=0 ds=0 gs=0 ps[offset_kb=16 size_kb=16] following_urb_start_8kb={} source=mesa-adl-gfx12\n",
-            TRIANGLE_VS_URB_START,
+            "probe-push-constant-urb-partition total_kb=32 tessellation={} vs_kb={} hs_kb={} ds_kb={} gs_kb=0 ps_kb={} following_urb_start_8kb={} source=mesa-adl-gfx12\n",
+            cube_patch as u8, if cube_patch { 8 } else { 16 },
+            if cube_patch { 8 } else { 0 }, if cube_patch { 8 } else { 0 },
+            if cube_patch { 8 } else { 16 }, TRIANGLE_VS_URB_START,
         );
 
         log_batch_offset(cursor, "3DSTATE_CONSTANT_ALL empty-all-stages pre-ps");
@@ -3722,45 +3738,55 @@ fn encode_triangle_probe_batch(
         .or(TRIANGLE_VS_URB_OUTPUT_LENGTH_OVERRIDE)
         .unwrap_or(baked_vs_urb_output_length);
 
-    log_batch_offset(cursor, "3DSTATE_URB_ALLOC_VS");
-    push(batch_dwords, &mut cursor, CMD_3DSTATE_URB_ALLOC_VS)?;
-    push(
-        batch_dwords,
-        &mut cursor,
-        // Gfx12 encodes URB allocation size as "size in 64B units minus 1".
-        // A position-only VUE is one 64B slot, so the programmed value must
-        // be 0 rather than 1 or clipper sees the wrong VS allocation contract.
-        (programmed_vs_urb_output_length.saturating_sub(1) as u32)
-            | (TRIANGLE_VS_URB_START << 10)
-            | (TRIANGLE_VS_URB_START << 21),
-    )?;
-    push(batch_dwords, &mut cursor, TRIANGLE_VS_URB_ENTRIES | (TRIANGLE_VS_URB_ENTRIES << 16))?;
-
-    // Match Mesa's gfx12 allocation sequence exactly.  Disabled stages still
-    // receive the first valid URB address; zero is outside this configuration's
-    // push-constant reservation and must not be used as an inherited default.
-    let disabled_urb_dw1 = (TRIANGLE_VS_URB_START << 10) | (TRIANGLE_VS_URB_START << 21);
-    log_batch_offset(cursor, "3DSTATE_URB_ALLOC_HS");
-    push(batch_dwords, &mut cursor, CMD_3DSTATE_URB_ALLOC_HS)?;
-    push(batch_dwords, &mut cursor, disabled_urb_dw1)?;
-    push(batch_dwords, &mut cursor, 0)?;
-    log_batch_offset(cursor, "3DSTATE_URB_ALLOC_DS");
-    push(batch_dwords, &mut cursor, CMD_3DSTATE_URB_ALLOC_DS)?;
-    push(batch_dwords, &mut cursor, disabled_urb_dw1)?;
-    push(batch_dwords, &mut cursor, 0)?;
-    log_batch_offset(cursor, "3DSTATE_URB_ALLOC_GS");
-    push(batch_dwords, &mut cursor, CMD_3DSTATE_URB_ALLOC_GS)?;
-    if let Some(gs) = adjacency_gs {
-        let gs_urb_dw1 = (u32::from(gs.meta.urb_entry_size).saturating_sub(1))
-            | (u32::from(gs.meta.urb_start) << 10)
-            | (u32::from(gs.meta.urb_start) << 21);
-        let gs_urb_entries = u32::from(gs.meta.urb_entries);
-        push(batch_dwords, &mut cursor, gs_urb_dw1)?;
-        push(batch_dwords, &mut cursor, gs_urb_entries | (gs_urb_entries << 16))?;
+    if cube_patch {
+        for (command, (size, start, entries)) in [CMD_3DSTATE_URB_ALLOC_VS,
+            CMD_3DSTATE_URB_ALLOC_HS, CMD_3DSTATE_URB_ALLOC_DS, CMD_3DSTATE_URB_ALLOC_GS]
+            .into_iter().zip(crate::intel::shader::patch_cube::URB) {
+            push(batch_dwords, &mut cursor, command)?;
+            push(batch_dwords, &mut cursor, (size - 1) | (start << 10) | (start << 21))?;
+            push(batch_dwords, &mut cursor, entries | (entries << 16))?;
+        }
     } else {
+        log_batch_offset(cursor, "3DSTATE_URB_ALLOC_VS");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_URB_ALLOC_VS)?;
+        push(
+            batch_dwords,
+            &mut cursor,
+            // Gfx12 encodes URB allocation size as "size in 64B units minus 1".
+            // A position-only VUE is one 64B slot, so the programmed value must
+            // be 0 rather than 1 or clipper sees the wrong VS allocation contract.
+            (programmed_vs_urb_output_length.saturating_sub(1) as u32)
+                | (TRIANGLE_VS_URB_START << 10)
+                | (TRIANGLE_VS_URB_START << 21),
+        )?;
+        push(batch_dwords, &mut cursor, TRIANGLE_VS_URB_ENTRIES | (TRIANGLE_VS_URB_ENTRIES << 16))?;
+
+        // Match Mesa's gfx12 allocation sequence exactly.  Disabled stages still
+        // receive the first valid URB address; zero is outside this configuration's
+        // push-constant reservation and must not be used as an inherited default.
+        let disabled_urb_dw1 = (TRIANGLE_VS_URB_START << 10) | (TRIANGLE_VS_URB_START << 21);
+        log_batch_offset(cursor, "3DSTATE_URB_ALLOC_HS");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_URB_ALLOC_HS)?;
         push(batch_dwords, &mut cursor, disabled_urb_dw1)?;
         push(batch_dwords, &mut cursor, 0)?;
-    }
+        log_batch_offset(cursor, "3DSTATE_URB_ALLOC_DS");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_URB_ALLOC_DS)?;
+        push(batch_dwords, &mut cursor, disabled_urb_dw1)?;
+        push(batch_dwords, &mut cursor, 0)?;
+        log_batch_offset(cursor, "3DSTATE_URB_ALLOC_GS");
+        push(batch_dwords, &mut cursor, CMD_3DSTATE_URB_ALLOC_GS)?;
+        if let Some(gs) = adjacency_gs {
+            let gs_urb_dw1 = (u32::from(gs.meta.urb_entry_size).saturating_sub(1))
+                | (u32::from(gs.meta.urb_start) << 10)
+                | (u32::from(gs.meta.urb_start) << 21);
+            let gs_urb_entries = u32::from(gs.meta.urb_entries);
+            push(batch_dwords, &mut cursor, gs_urb_dw1)?;
+            push(batch_dwords, &mut cursor, gs_urb_entries | (gs_urb_entries << 16))?;
+        } else {
+            push(batch_dwords, &mut cursor, disabled_urb_dw1)?;
+            push(batch_dwords, &mut cursor, 0)?;
+        }
+        }
     intel_render_verbose_log!(
         "probe-urb-config order=vs-hs-ds-gs vs_start={} vs_entries={} vs_entry_64b={} disabled_stage_start={} sf_deref={} source=mesa-adl-gt1\n",
         TRIANGLE_VS_URB_START,
@@ -3862,20 +3888,15 @@ fn encode_triangle_probe_batch(
         RCS_EXEC_RESULT_DRAW_POST_VS,
     )?;
 
-    log_batch_offset(cursor, "3DSTATE_HS");
-    push(batch_dwords, &mut cursor, CMD_3DSTATE_HS)?;
-    for _ in 0..8 {
-        push(batch_dwords, &mut cursor, 0)?;
+    let tessellation_ksp = shader_layout.tessellation
+        .map(|[hs, ds]| [hs.code_offset_bytes, ds.code_offset_bytes]);
+    log_batch_offset(cursor, "3DSTATE_HS/TE/DS");
+    for word in crate::intel::shader::tessellation_stage_packets(tessellation_ksp)? {
+        push(batch_dwords, &mut cursor, word)?;
     }
-    log_batch_offset(cursor, "3DSTATE_TE");
-    push(batch_dwords, &mut cursor, CMD_3DSTATE_TE)?;
-    for _ in 0..4 {
-        push(batch_dwords, &mut cursor, 0)?;
-    }
-    log_batch_offset(cursor, "3DSTATE_DS");
-    push(batch_dwords, &mut cursor, CMD_3DSTATE_DS)?;
-    for _ in 0..10 {
-        push(batch_dwords, &mut cursor, 0)?;
+    if let Some([hs, ds]) = shader_layout.tessellation {
+        intel_render_focus_log!("cube-tessellation enabled=1 topology=patchlist1 patches=44 hs_control_points=3 domain=tri factors=1 ds_camera_bti=1 hs_ksp=0x{:X} ds_ksp=0x{:X} source={}\n",
+            hs.code_offset_bytes, ds.code_offset_bytes, crate::intel::shader::patch_cube::SOURCE_SHA256);
     }
     if draw.vue_capture {
         let (words, count) = picasso_vue_streamout_packets(

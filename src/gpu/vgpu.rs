@@ -1919,6 +1919,7 @@ fn retained_mesh_topology(
     use crate::intel::render::ResidentScenePrimitiveTopology;
 
     match topology {
+        v::vgpu::RETAINED_TOPOLOGY_CUBE_PATCHLIST_1 => Some(ResidentScenePrimitiveTopology::CubePatchList1),
         // Zero was the reserved field in the original descriptor ABI, whose
         // only legal retained topology was a triangle list.
         0 | v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_LIST => {
@@ -2022,14 +2023,21 @@ pub(crate) fn create_retained_mesh(
         v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL
             | v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV
             | v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV_TANGENT
+            | v::vgpu::RETAINED_VERTEX_LAYOUT_CUBE_PATCH_SEED
     ) || descriptor.vertex_count == 0
         || !topology.accepts_index_count(descriptor.index_count as usize)
     {
         return Err(VgpuError::Unsupported);
     }
     let vertex_buffer = BufferHandle::from_raw(descriptor.vertex_buffer);
+    if (topology == crate::intel::render::ResidentScenePrimitiveTopology::CubePatchList1)
+        != (descriptor.vertex_layout == v::vgpu::RETAINED_VERTEX_LAYOUT_CUBE_PATCH_SEED)
+    {
+        return Err(VgpuError::Unsupported);
+    }
     let index_buffer = BufferHandle::from_raw(descriptor.index_buffer);
     let vertex_stride: usize = match descriptor.vertex_layout {
+        v::vgpu::RETAINED_VERTEX_LAYOUT_CUBE_PATCH_SEED => 12,
         v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV_TANGENT => 48,
         v::vgpu::RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV => 32,
         _ => 24,

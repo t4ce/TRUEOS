@@ -77,6 +77,52 @@ pub(crate) struct TrianglePipeline {
     pub(crate) ps: TrianglePixelShader,
 }
 
+#[path = "../../crates/trueos-shader/generated_patch_cube.rs"]
+pub(crate) mod patch_cube;
+
+pub(crate) fn patch_cube_upload_layout(
+    after: usize,
+    capacity: usize,
+) -> Result<([usize; 2], usize), &'static str> {
+    let hs = after.checked_add(63).ok_or("tess-code-align")? & !63;
+    let hs_end = hs
+        .checked_add(patch_cube::TESS_CONTROL.len() * 4)
+        .ok_or("tess-code-size")?;
+    let ds = hs_end.checked_add(63).ok_or("tess-code-align")? & !63;
+    let end = ds
+        .checked_add(patch_cube::TESS_EVAL.len() * 4)
+        .ok_or("tess-code-size")?;
+    // The state writer starts on a fresh page; reserve its descriptor page.
+    let state = end.checked_add(4095).ok_or("tess-state-align")? & !4095;
+    if state.checked_add(4096).is_none_or(|limit| limit > capacity) {
+        return Err("tess-code-and-state-capacity");
+    }
+    Ok(([hs, ds], end))
+}
+
+/// Complete stage state, including explicit disable packets on ordinary draws.
+pub(crate) fn tessellation_stage_packets(ksp: Option<[u32; 2]>) -> Result<[u32; 25], &'static str> {
+    let mut words = [0; 25];
+    words[0] = 0x781b0007;
+    words[9] = 0x781c0003;
+    words[14] = 0x781d0009;
+    if let Some([hs, ds]) = ksp {
+        if hs == 0 || ds == 0 || hs & 63 != 0 || ds & 63 != 0 {
+            return Err("tessellation-ksp-alignment");
+        }
+        words[..9].copy_from_slice(&patch_cube::HS_PACKET);
+        words[9..14].copy_from_slice(&patch_cube::TE_PACKET);
+        words[14..].copy_from_slice(&patch_cube::DS_PACKET);
+        words[3] = hs;
+        words[15] = ds;
+    }
+    Ok(words)
+}
+
+#[cfg(test)]
+#[path = "patch_cube_tests.rs"]
+mod patch_cube_tests;
+
 #[path = "../../crates/trueos-shader/generated_adjacency_gs.rs"]
 mod generated_adjacency_gs;
 #[path = "../../crates/trueos-shader/generated_clip_position3_uv_texture.rs"]

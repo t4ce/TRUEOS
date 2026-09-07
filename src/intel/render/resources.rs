@@ -142,6 +142,31 @@ fn upload_triangle_shader_pipeline_at(
                 .ok_or("host-ps-pair-code-overflow")?,
         );
     }
+    let tessellation = if crate::intel::shader::patch_cube::matches(pipeline) {
+        if !matches!(warm.device_id, 0xa780 | 0x4680) {
+            return Err("cube-tessellation-device");
+        }
+        let (offsets, tess_end) = crate::intel::shader::patch_cube_upload_layout(
+            used_end, warm.draw_state_len)?;
+        let mut stages = [TriangleShaderStageLayout {
+            code_offset_bytes: 0, code_gpu_addr: 0, ksp_offset_bytes: 0,
+            ksp_gpu_addr: 0, code_size_bytes: 0,
+        }; 2];
+        for (index, code) in [
+            &crate::intel::shader::patch_cube::TESS_CONTROL[..],
+            &crate::intel::shader::patch_cube::TESS_EVAL[..],
+        ].into_iter().enumerate() {
+            let offset = offsets[index];
+            upload_stage_code(warm.draw_state_virt, offset, code)?;
+            stages[index] = TriangleShaderStageLayout {
+                code_offset_bytes: offset as u32, code_gpu_addr: bo_gpu_base + offset as u64,
+                ksp_offset_bytes: 0, ksp_gpu_addr: bo_gpu_base + offset as u64,
+                code_size_bytes: (code.len() * 4) as u32,
+            };
+        }
+        used_end = tess_end;
+        Some(stages)
+    } else { None };
     if used_end > warm.draw_state_len {
         return Err("shader-code-exceeds-state-bo");
     }
@@ -198,6 +223,7 @@ fn upload_triangle_shader_pipeline_at(
     let triangle_gs_gpu = bo_gpu_base + triangle_gs.code_offset_bytes as u64;
 
     Ok(TriangleShaderLayout {
+        tessellation,
         vs: TriangleShaderStageLayout {
             code_offset_bytes: vs.code_offset_bytes as u32,
             code_gpu_addr: vs_gpu,
@@ -2569,10 +2595,16 @@ pub(crate) fn create_resident_picasso_retained_mesh(
     double_sided: bool,
     topology: ResidentScenePrimitiveTopology,
 ) -> Result<ResidentChurnForward, &'static str> {
-    if !matches!(vertex_stride, 24 | 32 | 48) {
+    let cube_patch = topology == ResidentScenePrimitiveTopology::CubePatchList1;
+    if cube_patch && (vertex_stride != 12 || vertices.len() != 12
+        || indices.len() != 44 || indices.iter().any(|&i| i != 0)
+        || vertices.iter().any(|&b| b != 0)) {
+        return Err("cube-patch-seed-contract");
+    }
+    if !matches!(vertex_stride, 24 | 32 | 48) && !(cube_patch && vertex_stride == 12) {
         return Err("picasso-retained-vertex-layout");
     }
-    let sampled_material = vertex_stride != 24;
+    let sampled_material = matches!(vertex_stride, 32 | 48);
     let pbr_material = vertex_stride == 48;
     let vertex_stride = vertex_stride as usize;
     if vertices.is_empty()
@@ -2600,6 +2632,22 @@ pub(crate) fn create_resident_picasso_retained_mesh(
     // screen-space winding. Keep culling back faces, but name that winding
     // front so the helmet shell—not its interior—survives rasterization.
     resident.native_vf.front_face_clockwise = true;
+    if cube_patch {
+        resident.pipeline = crate::intel::shader::patch_cube::PIPELINE;
+        resident.native_vf.vf_sgvs_dw1 = 0;
+        resident.native_vf.vf_sgvs_2_dw1 = 0;
+        resident.native_vf.vf_sgvs_2_dw2 = 0;
+        resident.native_vf.vertex_element_count = 1;
+        resident.native_vf.vf_component_packing = [7, 0, 0, 0];
+        resident.vertex_stride = 12;
+        resident.vertex_format = TriangleVertexFormat::Float3;
+        resident.front_end_contract = TriangleFrontEndContract {
+            label: "cube-patchlist1-hs3-tri-ds-v1", vs_urb_output_length_override: Some(1),
+            vs_urb_read_length: 1, sbe_read_offset: 1, sbe_read_length: 1,
+            force_sbe_read_offset: true, force_sbe_read_length: true,
+            force_vs_with_vf_synthesized_vue: false,
+        };
+    }
     if sampled_material {
         resident.pipeline = picasso_retained_textured_pipeline()?;
         resident.sampled_material = true;
@@ -2760,6 +2808,16 @@ pub(crate) fn update_resident_picasso_retained_transform_seeds(
     seeds: &[v::vgpu::RetainedTransformSeed],
     draw_ranges: Option<&[v::vgpu::RetainedDrawRange]>,
 ) -> Result<(), &'static str> {
+    // The initial baked DS consumes only the camera. Do not silently ignore
+    // object transforms, multiple instances, or submesh patch-ID rebasing.
+    if resident.topology() == ResidentScenePrimitiveTopology::CubePatchList1
+        && (seeds.len() != 1 || draw_ranges.is_some()
+            || seeds[0].translation != [0.0; 3] || seeds[0].scale != [1.0; 3]
+            || seeds[0].rotation != [0.0, 0.0, 0.0, 1.0]
+            || seeds[0].draw_group != 0 || seeds[0].flags != 0)
+    {
+        return Err("cube-patch-identity-instance-only");
+    }
     const CAMERA_BYTES: usize = 368;
     const SEED_BYTES: usize = 64;
     const TEMPLATE_BYTES: usize = 24;

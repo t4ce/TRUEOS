@@ -711,6 +711,7 @@ struct TriangleShaderStageLayout {
 
 #[derive(Copy, Clone)]
 struct TriangleShaderLayout {
+    tessellation: Option<[TriangleShaderStageLayout; 2]>,
     vs: TriangleShaderStageLayout,
     line_adjacency_gs: TriangleShaderStageLayout,
     triangle_adjacency_gs: TriangleShaderStageLayout,
@@ -816,6 +817,7 @@ impl TriangleBlendProbeMode {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 enum TriangleBatchMode {
+    CubePatchDraw,
     Draw,
     PointDraw,
     LineDraw,
@@ -2238,6 +2240,7 @@ impl TriangleBatchMode {
 
     fn topology(self) -> u32 {
         match self {
+            Self::CubePatchDraw => 0x20, // 3DPRIM_PATCHLIST_1
             Self::Draw | Self::DrawScreenSpace | Self::VfDraw | Self::VfScreenSpaceDraw => {
                 intel_topology_from_helio(
                     trueos_helio_artifact::render_ir::PrimitiveTopology::TriangleList,
@@ -2301,6 +2304,7 @@ impl TriangleBatchMode {
 
     fn label(self) -> &'static str {
         match self {
+            Self::CubePatchDraw => "cube-patchlist-1",
             Self::Draw => "draw",
             Self::PointDraw => "point-draw",
             Self::LineDraw => "line-draw",
