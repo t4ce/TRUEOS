@@ -85,7 +85,7 @@ struct StartupAlias {
 struct ColdStartConfiguration {
     #[serde(default)]
     aliases: Vec<StartupAlias>,
-    blueprints: Vec<ColdStartBlueprint>,
+    autostart: Vec<ColdStartBlueprint>,
 }
 
 /// Resolve a Shell2 alias from the same embedded startup manifest used by
@@ -130,7 +130,7 @@ async fn cold_start_blueprints(spawner: Spawner) {
         }
     };
 
-    for blueprint in &config.blueprints {
+    for blueprint in &config.autostart {
         if blueprint.action == ColdStartAction::Skip {
             crate::log!(
                 "restart: cold-start skipped archive={} slot={}\n",
