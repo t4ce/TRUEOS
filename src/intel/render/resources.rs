@@ -2642,7 +2642,7 @@ pub(crate) fn create_resident_picasso_retained_mesh(
         resident.vertex_stride = 12;
         resident.vertex_format = TriangleVertexFormat::Float3;
         resident.front_end_contract = TriangleFrontEndContract {
-            label: "cube-patchlist1-hs3-tri-ds-palette-alpha-v5", vs_urb_output_length_override: Some(1),
+            label: "cube-patchlist1-hs3-tri-ds-room-palette-v7", vs_urb_output_length_override: Some(1),
             vs_urb_read_length: 1, sbe_read_offset: 1, sbe_read_length: 1,
             force_sbe_read_offset: true, force_sbe_read_length: true,
             force_vs_with_vf_synthesized_vue: false,

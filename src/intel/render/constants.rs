@@ -162,9 +162,9 @@ const RESIDENT_SCENE_MAX_DRAWS: usize = 340;
 // The full material VS/PS plus relocated optional GS code and aligned
 // descriptors exceed 8 KiB. The canonical-position cube HS keeps its 132
 // corner-to-position map and 24 immediate position cases in code; it needs
-// 21 KiB of aligned HS/DS storage plus a descriptor page. Keep a complete
-// 28 KiB slot.
-const RESIDENT_SCENE_STATE_SLOT_BYTES: usize = 7 * 4096;
+// 22 KiB of aligned HS/DS storage plus a descriptor page. Keep a complete
+// 32 KiB slot for the room-palette shader variant.
+const RESIDENT_SCENE_STATE_SLOT_BYTES: usize = 8 * 4096;
 const RESIDENT_SCENE_STATE_BYTES: usize =
     (RESIDENT_SCENE_MAX_DRAWS + 1) * RESIDENT_SCENE_STATE_SLOT_BYTES;
 const RESIDENT_SCENE_PRIMARY_BATCH_BYTES: usize = 5 * 4096;
