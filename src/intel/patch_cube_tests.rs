@@ -6,10 +6,11 @@ fn upload_reserves_descriptor_page_after_native_code() {
     let gs = super::triangle_adjacency_geometry_shader();
     let after = gs.meta.kernel.code_offset_bytes as usize + gs.code.len() * 4;
     assert!(super::patch_cube_upload_layout(after, 16 * 1024).is_err());
-    let ([hs, ds], end) = super::patch_cube_upload_layout(after, 20 * 1024).unwrap();
+    assert!(super::patch_cube_upload_layout(after, 24 * 1024).is_err());
+    let ([hs, ds], end) = super::patch_cube_upload_layout(after, 28 * 1024).unwrap();
     assert!(hs >= after && ds >= hs + TESS_CONTROL.len() * 4);
     assert_eq!((hs | ds) & 63, 0);
-    assert!(end + 4096 <= 20 * 1024);
+    assert!(end + 4096 <= 28 * 1024);
     assert!(super::patch_cube_upload_layout(usize::MAX, usize::MAX).is_err());
 }
 
@@ -67,7 +68,7 @@ fn pipeline_owns_matching_code_and_metadata() {
     assert_eq!(PIPELINE.vs.meta.kernel.code_size_bytes as usize, VERTEX.len() * 4);
     assert_eq!(PIPELINE.ps.meta.kernel.code_size_bytes as usize, FRAGMENT.len() * 4);
     assert_eq!(PIPELINE.vs.meta.kernel.binding_table_entry_count, 4);
-    assert_eq!(CONTRACT_VERSION, 2);
+    assert_eq!(CONTRACT_VERSION, 3);
     assert_eq!(PIPELINE.ps.meta.num_varying_inputs, 1);
     assert!(TESS_CONTROL.len() > 0 && TESS_EVAL.len() > 0);
 }

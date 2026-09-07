@@ -158,9 +158,11 @@ const GPU_VA_RESIDENT_SCENE_STATE_BASE: u64 = 0x3000_0000;
 // renderer's bounded batch reservation inside the fixed Render1 GGTT window.
 const RESIDENT_SCENE_MAX_DRAWS: usize = 340;
 // The full material VS/PS plus relocated optional GS code and aligned
-// descriptors exceed 8 KiB. The baked cube HS/DS needs 16 KiB of aligned
-// instruction storage plus a descriptor page. Keep a complete 20 KiB slot.
-const RESIDENT_SCENE_STATE_SLOT_BYTES: usize = 5 * 4096;
+// descriptors exceed 8 KiB. The canonical-position cube HS keeps its 132
+// corner-to-position map and 24 immediate position cases in code; it needs
+// 21 KiB of aligned HS/DS storage plus a descriptor page. Keep a complete
+// 28 KiB slot.
+const RESIDENT_SCENE_STATE_SLOT_BYTES: usize = 7 * 4096;
 const RESIDENT_SCENE_STATE_BYTES: usize =
     (RESIDENT_SCENE_MAX_DRAWS + 1) * RESIDENT_SCENE_STATE_SLOT_BYTES;
 const RESIDENT_SCENE_PRIMARY_BATCH_BYTES: usize = 5 * 4096;
