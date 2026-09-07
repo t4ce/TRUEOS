@@ -74,7 +74,10 @@ def harness_source() -> str:
     # changing a kernel item name makes this harness fail at extraction time.
     declarations.extend(
         constant(pipeline, name)
-        for name in ("SAMPLER_CACHE_LINE_DWORDS", "NEAREST_REPEAT_SAMPLER_STATE")
+        for name in ("SAMPLER_CACHE_LINE_DWORDS", "NEAREST_REPEAT_SAMPLER_STATE",
+                     "SF_POINT_WIDTH_MASK", "MESA_SF_DW3", "RESIDENT_POINT_WIDTH_U8_3",
+                     "MESA_CLIP_DW2", "MESA_POINT_CLIP_DW2", "MESA_POINT_SAMPLE_MASK_DW",
+                     "MESA_POINT_WM_DEPTH_STENCIL_DW1")
     )
     declarations.extend(
         item(pipeline, name)
@@ -87,6 +90,13 @@ def harness_source() -> str:
             "wm_barycentric_mode",
             "ordinary_pos_uv_state_tests",
             "churn_sbe_swiz_tests",
+            "resident_point_width_raw",
+            "mesa_sf_dw3",
+            "mesa_clip_dw2",
+            "mesa_sample_mask_dw",
+            "mesa_wm_depth_stencil_dw1",
+            "uses_host_point_tail_index_buffer",
+            "point_raster_state_tests",
         )
     )
     shader_path = (ROOT / "src/intel/shader.rs").as_posix()

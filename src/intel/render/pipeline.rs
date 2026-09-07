@@ -432,9 +432,9 @@ const fn resident_point_width_raw(point_width_px: u32) -> u32 {
     }
 }
 
-const fn mesa_sf_dw3(point_raster: bool) -> u32 {
+const fn mesa_sf_dw3(point_raster: bool, point_width_raw: u32) -> u32 {
     if point_raster {
-        (MESA_SF_DW3 & !SF_POINT_WIDTH_MASK) | RESIDENT_POINT_WIDTH_U8_3
+        (MESA_SF_DW3 & !SF_POINT_WIDTH_MASK) | (point_width_raw & SF_POINT_WIDTH_MASK)
     } else {
         MESA_SF_DW3
     }
@@ -508,12 +508,18 @@ mod point_raster_state_tests {
 
     #[test]
     fn mesa_point_list_overrides_only_the_width_with_four_pixels() {
-        let point_state = mesa_sf_dw3(true);
+        let point_state = mesa_sf_dw3(true, resident_point_width_raw(0));
         assert_eq!(RESIDENT_POINT_WIDTH_U8_3, 4 << 3);
         assert_eq!(point_state & SF_POINT_WIDTH_MASK, RESIDENT_POINT_WIDTH_U8_3);
         assert_eq!(point_state & !SF_POINT_WIDTH_MASK, MESA_SF_DW3 & !SF_POINT_WIDTH_MASK);
         assert_ne!(point_state & (1 << 11), 0, "point width must come from SF state");
-        assert_eq!(mesa_sf_dw3(false), MESA_SF_DW3);
+        assert_eq!(mesa_sf_dw3(false, 0), MESA_SF_DW3);
+        for width in [4, 8, 12, 16] {
+            let state = mesa_sf_dw3(true, resident_point_width_raw(width));
+            assert_eq!(state & SF_POINT_WIDTH_MASK, width << 3);
+            assert_eq!(state & !SF_POINT_WIDTH_MASK, MESA_SF_DW3 & !SF_POINT_WIDTH_MASK);
+            assert_eq!(mesa_sf_dw3(false, resident_point_width_raw(width)), MESA_SF_DW3);
+        }
     }
 
     #[test]
@@ -2667,7 +2673,7 @@ fn encode_triangle_probe_batch(
     // Use a compact four-pixel default for native point lists. This keeps
     // diagnostic point overlays visible without obscuring their geometry.
     let sf_dw3 = if mesa_host_fixed_function {
-        mesa_sf_dw3(batch_mode.point_raster())
+        mesa_sf_dw3(batch_mode.point_raster(), point_width_raw)
     } else if batch_mode.point_raster() {
         let point_width_source_state = if backend_probe_mode.point_width_from_vertex() {
             0
