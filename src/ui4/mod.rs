@@ -17,6 +17,7 @@ mod h264_encode_stream;
 #[cfg(feature = "trueos_h264_encode_stream")]
 mod h264_encode_udp;
 mod input_broker;
+mod layer_contract;
 mod link_service;
 mod screenshot;
 mod slot4_service;

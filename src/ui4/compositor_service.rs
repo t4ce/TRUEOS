@@ -20,7 +20,7 @@ use super::{
 const CLOSE_TRANSITION_PERIOD_MS: u64 = 16;
 const PENDING_POLL_PERIOD_MS: u64 = 1;
 const STATIC_SINGLE_CPU_PAINTER_BASELINE_ENABLED: bool = true;
-const MAX_COMPOSITION_WINDOWS: usize = super::window_broker::MAX_WINDOWS;
+const MAX_COMPOSITION_WINDOWS: usize = super::window_broker::MAX_WINDOWS * 2;
 const PRESENT_FAILURE_LOG_INTERVAL: u64 = 1_000;
 const PROFILE_INITIAL_REPORT_TURNS: u64 = 16;
 const PROFILE_REPORT_INTERVAL_TURNS: u64 = 1_024;
@@ -1536,8 +1536,8 @@ fn commit_async_frame(runtime: &mut Runtime, pending: &mut PendingFrame) {
         state.windows = next_windows;
         let slot = target_plane_slot(target);
         if let Some(id) = pending.direct_windows[slot] {
-            if let Some(window) = pending.windows.iter().find(|window| window.id == id) {
-                let _ = acknowledge_window_frame(window.id, window.publish_serial);
+            if let Some(window) = pending.windows.iter().find(|window| window.id == id && window.plane.slot() == slot) {
+                let _ = super::window_broker::acknowledge_window_surface(*window);
             }
         } else {
             for window in pending
@@ -1545,7 +1545,7 @@ fn commit_async_frame(runtime: &mut Runtime, pending: &mut PendingFrame) {
                 .iter()
                 .filter(|window| window.plane.slot() == slot)
             {
-                let _ = acknowledge_window_frame(window.id, window.publish_serial);
+                let _ = super::window_broker::acknowledge_window_surface(*window);
             }
         }
     }
@@ -1616,7 +1616,7 @@ fn trace_video_surflive_transitions(
             continue;
         }
         let publish_serial = pending.direct_windows[slot]
-            .and_then(|id| pending.windows.iter().find(|window| window.id == id))
+            .and_then(|id| pending.windows.iter().find(|window| window.id == id && window.plane.slot() == slot))
             .map_or(0, |window| window.publish_serial);
         let previous = runtime.live_direct[slot];
         crate::log_trace!(target: "ui4";

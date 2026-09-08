@@ -112,6 +112,14 @@ fn sequence_is_fresh(
         .iter_mut()
         .find(|entry| entry.device_id == device_id && entry.kind == kind)
     {
+        // Every RDP process starts each per-kind sequence at one. Treat that
+        // first packet as an explicit new sender epoch; otherwise restarting
+        // the client leaves the device permanently stale until it happens to
+        // exceed the previous process's counter.
+        if seq == 1 && entry.last_seq != 1 {
+            entry.last_seq = seq;
+            return true;
+        }
         if seq <= entry.last_seq {
             return false;
         }
