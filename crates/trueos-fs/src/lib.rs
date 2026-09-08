@@ -2222,12 +2222,36 @@ pub async fn create_directory<D: BlockIo>(
     if let Some(existing) = lookup_node_record(dev, params, name).await? {
         return Ok(existing.kind == NodeKind::Directory);
     }
+    Ok(append_directory_prevalidated(dev, params, name)
+        .await?
+        .is_some())
+}
+
+/// Commit a directory whose absence and existing directory parent have already
+/// been checked against the mounted namespace index. The caller must coordinate
+/// namespace mutations just as for streamed file writes. This does no log replay
+/// and returns the committed record so the caller can update its index in place.
+pub async fn append_directory_prevalidated<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    name: &str,
+) -> Result<Option<NodeRecordRef>, FsError<D::Error>> {
+    if !is_normalized_nonempty_path(name) {
+        return Ok(None);
+    }
     let Some((sb, entry_lba, _)) = check_space_for_put(dev, params, name.len(), 0).await? else {
-        return Ok(false);
+        return Ok(None);
     };
     let blocks = write_empty_node_entry(dev, entry_lba, name, LogKind::Directory).await?;
     advance_log_head(dev, params, sb, blocks).await?;
-    Ok(true)
+    Ok(Some(NodeRecordRef {
+        entry_lba,
+        data_lba: entry_lba + blocks,
+        kind: NodeKind::Directory,
+        data_len: 0,
+        content_type: ContentTypeId::NONE,
+        record_key: RecordKey::Ffa,
+    }))
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3974,6 +3998,48 @@ mod tests {
                 .await,
                 Err(FsError::InvalidParam)
             );
+        });
+    }
+
+    #[test]
+    fn indexed_directory_commit_has_bounded_io_and_replays() {
+        block_on(async {
+            let disk = MemoryBlockIo::new();
+            let params = params();
+            assert_eq!(create_directory(&disk, &params, "Apps").await, Ok(true));
+            let mut cold_reads = None;
+            for count in [0, 128] {
+                // Grow unrelated append-only history, including superseded records.
+                for _ in 0..count {
+                    assert_eq!(write_file(&disk, &params, "unrelated", b"data").await, Ok(true));
+                }
+                let name = alloc::format!("Apps/container_{count}");
+                assert_eq!(lookup_node_record(&disk, &params, &name).await, Ok(None));
+                disk.reset_reads();
+                let record = append_directory_prevalidated(&disk, &params, &name)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let reads = disk.read_count();
+                assert!(reads <= 2, "directory commit read {reads} blocks");
+                if let Some(before) = cold_reads {
+                    assert_eq!(reads, before, "commit cost grew with log history");
+                }
+                cold_reads = Some(reads);
+                disk.reset_reads();
+                assert_eq!(
+                    get_node_record_by_lba(&disk, &params, record.entry_lba).await,
+                    Ok(Some(record))
+                );
+                assert_eq!(disk.read_count(), 1, "indexed metadata must read one header");
+                assert_eq!(lookup_node_record(&disk, &params, &name).await, Ok(Some(record)));
+                assert_eq!(create_directory(&disk, &params, &name).await, Ok(true));
+            }
+            for invalid in ["", "/Apps", "Apps/", "Apps/../bad"] {
+                disk.reset_reads();
+                assert_eq!(append_directory_prevalidated(&disk, &params, invalid).await, Ok(None));
+                assert_eq!(disk.read_count(), 0);
+            }
         });
     }
 

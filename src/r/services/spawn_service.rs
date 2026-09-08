@@ -87,6 +87,7 @@ define_started_flags!(
     UI4_H264_ENCODE_STREAM_STARTED,
     UI4_COMPOSITOR_STARTED,
     UI4_COLOR_PICKER_STARTED,
+    UI4_LINK_SERVICE_STARTED,
     UI4_WINDOW_BROKER_SNAPSHOT_STARTED,
     UI4_VIDEO_CONVERSION_STARTED,
     GPGPU_UI4_PREVIEW_CONSUMER_STARTED,
@@ -770,6 +771,12 @@ fn spawn_ui4_color_picker_service_task(spawner: Spawner) -> SpawnAttempt {
     spawn_on_ap1_ui_core(spawner, |_ap1_spawner| crate::ui4::ui4_color_picker_service_task())
 }
 
+/// LINK owns user configuration state and remains on BSP with the kernel HID
+/// combo registry. It deliberately does not claim a UI-core worker.
+fn spawn_ui4_link_service_task(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| crate::ui4::ui4_link_service_task())
+}
+
 fn spawn_ui4_window_broker_snapshot_service_task(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::ui4::ui4_window_broker_snapshot_service_task())
 }
@@ -1345,7 +1352,7 @@ const NET_ANY_CONFIGURED_AND_ROOT_READY: u32 =
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 72
+const TASK_COUNT: usize = 73
     + cfg!(feature = "trueos_h264_encode_stream") as usize
     + cfg!(feature = "trueos_lumen") as usize
     + 2 * cfg!(feature = "trueos_ttstt") as usize;
@@ -1681,6 +1688,12 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         crate::r::readiness::UI4_COMPOSITOR_READY,
         &UI4_COLOR_PICKER_STARTED,
         spawn_ui4_color_picker_service_task,
+    ),
+    TaskSpec::enabled(
+        "ui4-link-service",
+        crate::r::readiness::UI4_COMPOSITOR_READY,
+        &UI4_LINK_SERVICE_STARTED,
+        spawn_ui4_link_service_task,
     ),
     #[cfg(feature = "trueos_lumen")]
     TaskSpec::configured_gated(

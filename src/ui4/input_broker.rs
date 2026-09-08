@@ -42,7 +42,7 @@ pub(super) const CONTEXT_MENU_ROW_GAP_PX: u32 = 2;
 pub(super) const CONTEXT_MENU_ROW_HEIGHT_PX: u32 = (microfont::FHEIGHT as u32)
     .saturating_mul(2)
     .saturating_add(CONTEXT_MENU_ROW_GAP_PX);
-pub(super) const DESKTOP_CONTEXT_MENU_ENTRY_COUNT: u32 = 2;
+pub(super) const DESKTOP_CONTEXT_MENU_ENTRY_COUNT: u32 = 3;
 pub(super) const DESKTOP_CONTEXT_MENU_HORIZONTAL_INSET_PX: u32 = 12;
 pub(super) const DESKTOP_CONTEXT_MENU_VERTICAL_INSET_PX: u32 = 12;
 
@@ -81,6 +81,7 @@ static DESKTOP_SHELL_LAUNCH_SIGNAL: Signal<crate::wait::EmbassySpinRawMutex, ()>
 enum DesktopContextMenuAction {
     ColorPicker,
     Shell,
+    Link,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -638,6 +639,7 @@ impl InputBroker {
                         DesktopContextMenuAction::Shell => {
                             request_desktop_shell_launch(source, x, y)
                         }
+                        DesktopContextMenuAction::Link => super::request_link_open(source, anchor),
                     }
                 }
             }
@@ -2275,6 +2277,7 @@ fn desktop_context_menu_action_at(
     {
         0 => Some(DesktopContextMenuAction::ColorPicker),
         1 => Some(DesktopContextMenuAction::Shell),
+        2 => Some(DesktopContextMenuAction::Link),
         _ => None,
     }
 }
@@ -2828,10 +2831,10 @@ fn keyboard_hut_metadata(event: &crate::r::keyboard::TrueosKeyboardOutputEvent) 
 #[cfg(test)]
 mod tests {
     use super::{
-        Ui4CursorSource, Ui4InputEvent, Ui4PointerEvent, WindowId, coalesce_owner_state_sample,
-        dock_target_at_in_zones, dock_zone_column_span, dock_zone_contains, dock_zone_metrics,
-        dock_zone_row_span, dock_zones_with_reference, owner_event_is_state_sample,
-        resize_epoch_is_newer,
+        DesktopContextMenuAction, Ui4CursorSource, Ui4InputEvent, Ui4PointerEvent, WindowId,
+        coalesce_owner_state_sample, desktop_context_menu_action_at, dock_target_at_in_zones,
+        dock_zone_column_span, dock_zone_contains, dock_zone_metrics, dock_zone_row_span,
+        dock_zones_with_reference, owner_event_is_state_sample, resize_epoch_is_newer,
     };
     use crate::ui4::WindowDockTarget;
 
@@ -2879,6 +2882,23 @@ mod tests {
             panic!("pointer was replaced with another event kind");
         };
         assert_eq!(event.wheel, i16::MAX);
+    }
+
+    #[test]
+    fn desktop_context_menu_exposes_link_as_the_third_entry() {
+        let menu = super::Ui4VisualRect {
+            x: 0,
+            y: 0,
+            width: 256,
+            height: 256,
+        };
+        let y = super::DESKTOP_CONTEXT_MENU_VERTICAL_INSET_PX
+            + super::CONTEXT_MENU_ROW_HEIGHT_PX * 2
+            + 1;
+        assert_eq!(
+            desktop_context_menu_action_at(menu, 12, y),
+            Some(DesktopContextMenuAction::Link)
+        );
     }
 
     #[test]

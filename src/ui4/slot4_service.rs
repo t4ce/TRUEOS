@@ -460,7 +460,7 @@ fn software_cursor_rects() -> Slot4Rects {
                 Rgba8::new(180, 188, 204, 150),
             );
         }
-        for (row, label) in [(0u32, "COLOR PICKER"), (1u32, "SHELL")] {
+        for (row, label) in [(0u32, "COLOR PICKER"), (1u32, "SHELL"), (2u32, "LINK")] {
             let y = row_top
                 .saturating_add(row.saturating_mul(row_height))
                 .saturating_add(row_text_y);

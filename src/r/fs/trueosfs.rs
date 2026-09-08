@@ -1060,6 +1060,14 @@ fn update_root_index_put(
     path: &str,
     record: trueos_fs::FileRecordRef,
 ) -> bool {
+    update_root_index_node(disk_id, path, record.into())
+}
+
+fn update_root_index_node(
+    disk_id: block::DiscId,
+    path: &str,
+    record: trueos_fs::NodeRecordRef,
+) -> bool {
     let mut roots = ROOTS.lock();
     let Some(mount) = roots.iter_mut().find(|m| m.disk_id == disk_id) else {
         return false;
@@ -1071,7 +1079,10 @@ fn update_root_index_put(
     index.insert(
         path.as_bytes().to_vec(),
         IndexRef {
-            kind: trueos_fs::LogKind::Put,
+            kind: match record.kind {
+                NodeKind::File => trueos_fs::LogKind::Put,
+                NodeKind::Directory => trueos_fs::LogKind::Directory,
+            },
             entry_lba: record.entry_lba,
             content_type: record.content_type,
         },
@@ -1373,9 +1384,9 @@ pub async fn file_in_with_key_async(
     file_in_with_metadata_async(disk, name, bytes, ContentTypeId::BLOB, record_key, true).await
 }
 
-/// Asynchronously materialize every directory prefix using TRUEOSFS marker files.
+/// Asynchronously materialize every directory prefix using indexed directory records.
 ///
-/// Returns `Ok(false)` if the filesystem cannot allocate a required marker.
+/// Returns `Ok(false)` if the filesystem cannot allocate a required directory.
 pub async fn dir_create_all_async(
     disk: block::DeviceHandle,
     path: &str,
@@ -1646,25 +1657,25 @@ pub async fn file_write_all_async(
     Ok(true)
 }
 
-async fn lookup_via_index_async(
+async fn lookup_node_via_index_async(
     disk: block::DeviceHandle,
     placement: &TrueosFsPlacement,
     name: &str,
-) -> Result<Option<trueos_fs::FileRecordRef>, block::Error> {
+) -> Result<Option<trueos_fs::NodeRecordRef>, block::Error> {
     ensure_index_async(disk, placement).await?;
     let disk_id = disk.id();
 
     let entry_lba = {
         let roots = ROOTS.lock();
         let Some(mount) = roots.iter().find(|m| m.disk_id == disk_id) else {
-            return Ok(None);
+            return Err(block::Error::NotReady);
         };
         let Some(index) = &mount.index else {
-            return Ok(None);
+            return Err(block::Error::NotReady);
         };
         match index.get(name.as_bytes()) {
             Some(entry) => {
-                if entry.kind != trueos_fs::LogKind::Put {
+                if !matches!(entry.kind, trueos_fs::LogKind::Put | trueos_fs::LogKind::Directory) {
                     return Ok(None);
                 }
                 entry.entry_lba
@@ -1680,9 +1691,18 @@ async fn lookup_via_index_async(
     };
     let io = KernelBlockIo::new(disk);
 
-    Ok(trueos_fs::get_node_record_by_lba(&io, &params, entry_lba)
+    trueos_fs::get_node_record_by_lba(&io, &params, entry_lba)
         .await
-        .map_err(map_engine_err)?
+        .map_err(map_engine_err)
+}
+
+async fn lookup_via_index_async(
+    disk: block::DeviceHandle,
+    placement: &TrueosFsPlacement,
+    name: &str,
+) -> Result<Option<trueos_fs::FileRecordRef>, block::Error> {
+    Ok(lookup_node_via_index_async(disk, placement, name)
+        .await?
         .and_then(|record| {
             (record.kind == NodeKind::File).then_some(trueos_fs::FileRecordRef {
                 entry_lba: record.entry_lba,
@@ -1838,14 +1858,17 @@ pub async fn node_info_async(
     let Some(placement) = placement_for_io_async(disk).await? else {
         return Ok(None);
     };
-    let params = trueos_fs::FsParams {
-        super_lba: placement.super_lba,
-        data_lba: placement.data_lba,
-        data_end_lba_exclusive: placement.data_end_lba_exclusive,
-    };
-    trueos_fs::read_node_info(&KernelBlockIo::new(disk), &params, name)
-        .await
-        .map_err(map_engine_err)
+    // Metadata must share the mounted index with file reads and listings:
+    // replaying the whole append-only log for every directory prefix makes
+    // mkdir/stat latency depend on unrelated filesystem history.
+    Ok(lookup_node_via_index_async(disk, &placement, name)
+        .await?
+        .map(|record| NodeInfo {
+            kind: record.kind,
+            data_len: record.data_len,
+            content_type: record.content_type,
+            record_key: record.record_key,
+        }))
 }
 
 /// Primary metadata API carrying the stored raw content identity.
@@ -1891,14 +1914,18 @@ pub async fn create_directory_async(
         data_lba: placement.data_lba,
         data_end_lba_exclusive: placement.data_end_lba_exclusive,
     };
-    let ok = trueos_fs::create_directory(&KernelBlockIo::new(disk), &params, path)
-        .await
-        .map_err(map_engine_err)?;
-    if ok {
-        bump_root_cache_gen(disk.id());
+    let Some(record) =
+        trueos_fs::append_directory_prevalidated(&KernelBlockIo::new(disk), &params, path)
+            .await
+            .map_err(map_engine_err)?
+    else {
+        return Ok(false);
+    };
+    bump_root_cache_gen(disk.id());
+    if !update_root_index_node(disk.id(), path, record) {
         invalidate_root_index(disk.id());
     }
-    Ok(ok)
+    Ok(true)
 }
 
 async fn prepare_file_target_async(
