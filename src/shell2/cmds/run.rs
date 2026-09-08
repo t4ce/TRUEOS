@@ -23,7 +23,31 @@ const MIB: usize = 1024 * 1024;
 use alloc::collections::VecDeque;
 
 static APP_VM_RUN_QUEUE: Mutex<VecDeque<AppVmLaunchRequest>> = Mutex::new(VecDeque::new());
+static BLUEPRINT_IMG_OPEN_QUEUE: Mutex<VecDeque<BlueprintImgOpenRequest>> =
+    Mutex::new(VecDeque::new());
 static AUTO_CONTAINER_SEQUENCE: AtomicU32 = AtomicU32::new(0);
+
+const BLUEPRINT_IMG_OPEN_QUEUE_CAPACITY: usize = 16;
+
+struct BlueprintImgOpenRequest {
+    origin_vm: u8,
+    paths: Vec<String>,
+}
+
+pub(crate) fn enqueue_img_open_from_blueprint(
+    origin_vm: u8,
+    paths: Vec<String>,
+) -> Result<(), &'static str> {
+    if paths.is_empty() || paths.len() > 32 || paths.iter().any(|path| path.trim().is_empty()) {
+        return Err("img open requires 1..=32 non-empty paths");
+    }
+    let mut queue = BLUEPRINT_IMG_OPEN_QUEUE.lock();
+    if queue.len() >= BLUEPRINT_IMG_OPEN_QUEUE_CAPACITY {
+        return Err("img open queue is full");
+    }
+    queue.push_back(BlueprintImgOpenRequest { origin_vm, paths });
+    Ok(())
+}
 
 fn preferred_slot_for_archive(archive: &str) -> String {
     if archive == "hello_world" || archive == "hello_world.bp" {
@@ -882,6 +906,39 @@ fn readiness_friendly_label(flag: u32, fallback: &'static str) -> &'static str {
 #[trueos_executor::task(pool_size = 1)]
 pub(crate) async fn app_vm_run_queue_task(spawner: Spawner) {
     loop {
+        if let Some(request) = BLUEPRINT_IMG_OPEN_QUEUE.lock().pop_front() {
+            let Some(target) = crate::hv::blueprint_console_target(request.origin_vm) else {
+                crate::log_warn!(
+                    target: "global";
+                    "apps: img open request lost origin_vm={} reason=no-console-target\n",
+                    request.origin_vm,
+                );
+                continue;
+            };
+            let Some(archive) = crate::r::restart::startup_alias_blueprint("img") else {
+                crate::hv::blueprint_control_shell_line(
+                    request.origin_vm,
+                    "SHOW FAILED · img startup alias is not configured",
+                );
+                continue;
+            };
+            if let Err(error) =
+                submit_archive_name_to_target_from_app_db_with_instance_and_launch_script_async(
+                    target,
+                    archive.as_str(),
+                    request.paths,
+                    crate::hv::BlueprintInstanceRequest::default(),
+                    Some(String::from("fs-scope trueosfs\n")),
+                )
+                .await
+            {
+                crate::hv::blueprint_control_shell_line(
+                    request.origin_vm,
+                    alloc::format!("SHOW FAILED · {error}").as_str(),
+                );
+            }
+            continue;
+        }
         let Some(request) = dequeue_request() else {
             Timer::after(EmbassyDuration::from_millis(25)).await;
             continue;

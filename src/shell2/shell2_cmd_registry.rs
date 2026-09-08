@@ -44,7 +44,7 @@ const TOOL_JSON_QJS: &str = r#"{"type":"object","properties":{},"additionalPrope
 const TOOL_JSON_RAM: &str = r#"{"type":"object","properties":{"scope":{"type":"string","description":"Optional pmm, host, or numeric VM id. Omit to list all configured RAM scopes."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_SHOT: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
 const TOOL_JSON_SMP: &str = r#"{"type":"object","properties":{"slot":{"type":"integer","minimum":0,"description":"Optional SMP slot. Omit to list all slots."}},"required":[],"additionalProperties":false}"#;
-const TOOL_JSON_IMG: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"Optional PNG/JPEG file or folder (for example common/images). Omit for img's interactive viewer."}},"required":[],"additionalProperties":false}"#;
+const TOOL_JSON_IMG: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"Optional PNG/JPEG file or folder (for example apps/common/images). Omit to open the default shared gallery or a gray frame."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_SSH: &str = r#"{"type":"object","properties":{"endpoint":{"type":"string","description":"Optional SSH target in [user@]host[:port] form. Omit for SSH's resident interactive prompt."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_SURF: &str = r#"{"type":"object","properties":{"url":{"type":"string","description":"Optional HTTP or HTTPS URL. Bare hosts default to HTTPS; omit for the Solara homepage."}},"additionalProperties":false}"#;
 const TOOL_JSON_TLB: &str = r#"{"type":"object","properties":{"target":{"type":"string","enum":["pci","pcibar","mem","cpu","hfi","turbo","ucode","pmu","rapl","acpi","aml","facp","madt","hpet","mcfg","ssdt","uefi","smbios","x2apic","usb","usb_probe","dump"],"description":"Table or view to print."},"action":{"type":"string","enum":["store"],"description":"Optional RAPL action when target=rapl."},"signature":{"type":"string","minLength":4,"maxLength":4,"description":"Optional ACPI signature when target=acpi, for example SSDT or FACP."},"index":{"type":"integer","minimum":1,"description":"Optional 1-based instance index when target=acpi and the signature repeats."},"subcommand":{"type":"string","enum":["ec","symbol","prefix"],"description":"Optional AML subcommand when target=aml."},"path":{"type":"string","description":"Optional AML path or prefix when target=aml and subcommand is symbol or prefix."}},"required":["target"],"additionalProperties":false}"#;
@@ -256,12 +256,12 @@ const SHELL2_COMMAND_REGISTRY: &[BuiltinShell2CmdEntry] = &[
     },
     BuiltinShell2CmdEntry {
         name: "img",
-        mode: "tui",
+        mode: "cmd",
         color: Some(STATUS_BLUE_RGB),
         advertised: true,
         handler: dispatch_img,
         tool_description: Some(
-            "Open the resident UI4 PNG/JPEG viewer. A file opens a frame; a folder enables wrapping arrow-key navigation.",
+            "Open the resident prompt-row UI4 PNG/JPEG viewer. A file opens a fixed frame; a folder opens one wrapping arrow-key gallery.",
         ),
         tool_parameters_json: Some(TOOL_JSON_IMG),
     },
@@ -320,7 +320,9 @@ const SHELL2_COMMAND_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         color: Some(STATUS_NETWORK_RGB),
         advertised: true,
         handler: dispatch_surf,
-        tool_description: Some("Open Solara with its terminal navigator and optional HTTP/HTTPS URL."),
+        tool_description: Some(
+            "Open Solara with its terminal navigator and optional HTTP/HTTPS URL.",
+        ),
         tool_parameters_json: Some(TOOL_JSON_SURF),
     },
     BuiltinShell2CmdEntry {
@@ -495,10 +497,7 @@ mod tests {
         let submitted = "win invalid \"中国 § العربية 🦀\"";
 
         assert_eq!(starts_with_command(submitted, "os"), None);
-        assert_eq!(
-            starts_with_command(submitted, "win"),
-            Some(" invalid \"中国 § العربية 🦀\"")
-        );
+        assert_eq!(starts_with_command(submitted, "win"), Some(" invalid \"中国 § العربية 🦀\""));
     }
 
     #[test]

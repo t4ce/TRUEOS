@@ -1,8 +1,8 @@
 //! Resident UI4 image viewer Blueprint launcher.
 //!
-//! `img` without arguments opens its VMX-minishell.  Supplying a path makes
-//! that the first `show` command; the Blueprint remains alive afterwards so
-//! further media can be opened without another VM launch.
+//! `img` leaves Shell2's prompt row in place. Supplying paths opens them in
+//! one resident instance; later `list`/`show` commands arrive through the VMX
+//! minishell command channel.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -26,10 +26,12 @@ async fn launch_img(spawner: Spawner, target: MatrixTarget, app_args: Vec<String
         return;
     };
     let app = archive.strip_suffix(".bp").unwrap_or(archive.as_str());
-    match super::run::submit_archive_name_to_target_from_app_db_async(
+    match super::run::submit_archive_name_to_target_from_app_db_with_instance_and_launch_script_async(
         target.clone(),
         archive.as_str(),
         app_args.clone(),
+        crate::hv::BlueprintInstanceRequest::default(),
+        Some(String::from("fs-scope trueosfs\n")),
     )
     .await
     {

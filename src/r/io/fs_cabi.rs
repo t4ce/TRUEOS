@@ -2011,6 +2011,53 @@ pub extern "C" fn trueos_cabi_shell2_frontend_detach_v1() -> i32 {
     crate::shell2::backends::session_pool::detach(vm_id)
 }
 
+pub(crate) fn blueprint_img_open_payload(vm_id: u8, payload: &[u8]) -> i32 {
+    if payload.is_empty() || payload.last() == Some(&0) {
+        return -1;
+    }
+    let mut paths = Vec::new();
+    for raw in payload.split(|byte| *byte == 0) {
+        let Ok(path) = core::str::from_utf8(raw) else {
+            return -1;
+        };
+        if path.trim().is_empty() || paths.len() == 32 {
+            return -1;
+        }
+        paths.push(String::from(path));
+    }
+    crate::shell2::cmds::run::enqueue_img_open_from_blueprint(vm_id, paths)
+        .map(|()| 0)
+        .unwrap_or(-11)
+}
+
+/// Queue one new resident img Blueprint. The payload is a non-empty,
+/// NUL-separated list of at most 32 UTF-8 TRUEOSFS paths.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_img_open_v1(paths_ptr: *const u8, paths_len: usize) -> i32 {
+    if paths_ptr.is_null() || paths_len == 0 || paths_len > trueos_vm::vmcall::PAYLOAD_CAP {
+        return -1;
+    }
+    let payload = unsafe { core::slice::from_raw_parts(paths_ptr, paths_len) };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let (status, rc) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_IMG_OPEN_V1,
+            0,
+            0,
+            payload,
+            &mut [],
+        );
+        return if status == trueos_vm::vmcall::STATUS_OK {
+            vmcall_signed(rc) as i32
+        } else {
+            -3
+        };
+    }
+    let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() else {
+        return -3;
+    };
+    blueprint_img_open_payload(vm_id, payload)
+}
+
 /// Spawn this Blueprint archive in a hidden child Hull.  The child receives
 /// `--trueos-child-worker` in argv and `initial_*` as its first parent message.
 #[unsafe(no_mangle)]

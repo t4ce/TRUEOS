@@ -3669,6 +3669,11 @@ pub(crate) fn blueprint_process_arg(vm_id: u8, index: usize) -> Option<AllocStri
     context.as_ref()?.args.get(index).cloned()
 }
 
+pub(crate) fn blueprint_console_target(vm_id: u8) -> Option<crate::shell2::MatrixTarget> {
+    let context = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize)?.lock();
+    context.as_ref()?.console_target.clone()
+}
+
 pub(crate) fn blueprint_process_env_var(vm_id: u8, key: &str) -> Option<AllocString> {
     let context = BLUEPRINT_PROCESS_CONTEXTS.get(vm_id as usize)?.lock();
     context.as_ref()?.vars.get(key).cloned()
@@ -4792,7 +4797,7 @@ fn blueprint_console_text_lines(vm_id: u8, target: Option<&MatrixTarget>, data: 
     }
 }
 
-fn blueprint_control_shell_line(vm_id: u8, line: &str) {
+pub(crate) fn blueprint_control_shell_line(vm_id: u8, line: &str) {
     blueprint_console_print_line(vm_id, line);
 }
 
@@ -5121,7 +5126,7 @@ fn blueprint_control_shell_vmx_command(vm_id: u8, raw: &str) {
             if blueprint_app_command_passthrough_enabled(vm_id) {
                 blueprint_control_shell_line(
                     vm_id,
-                    "vmx-shell: terminal TUI disabled for this launch; use Player commands directly",
+                    "vmx-shell: terminal TUI disabled for this launch; use Blueprint commands directly",
                 );
             } else if argument == Some("demo") && !has_extra_arguments {
                 if !blueprint_console_start_tui_demo(vm_id) {

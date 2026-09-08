@@ -1,6 +1,7 @@
 extern crate alloc;
 
 use alloc::string::String;
+use alloc::vec::Vec;
 use core::fmt;
 
 use crate::vcabi;
@@ -593,6 +594,34 @@ pub fn attached_retarget_slot(slot: &str) -> bool {
         return false;
     }
     unsafe { vcabi::trueos_cabi_shell_attached_retarget_slot(slot.as_ptr(), slot.len()) == 0 }
+}
+
+/// Launch one new resident img instance for one or more TRUEOSFS paths.
+/// Every path is opened as its own fixed frame; passing one directory lets the
+/// viewer create a single navigable gallery frame.
+pub fn open_images(paths: &[String]) -> Result<(), i32> {
+    if paths.is_empty()
+        || paths.len() > 32
+        || paths
+            .iter()
+            .any(|path| path.is_empty() || path.as_bytes().contains(&0))
+    {
+        return Err(-1);
+    }
+    let payload_len = paths
+        .iter()
+        .map(String::len)
+        .sum::<usize>()
+        .saturating_add(paths.len().saturating_sub(1));
+    let mut payload = Vec::with_capacity(payload_len);
+    for (index, path) in paths.iter().enumerate() {
+        if index != 0 {
+            payload.push(0);
+        }
+        payload.extend_from_slice(path.as_bytes());
+    }
+    let rc = unsafe { vcabi::trueos_cabi_img_open_v1(payload.as_ptr(), payload.len()) };
+    if rc == 0 { Ok(()) } else { Err(rc) }
 }
 
 pub const KONSOLE_FRAME_TERMINAL_HANDOFF: u32 = 1 << 31;

@@ -12,15 +12,16 @@ independent kernel media workers remain unchanged.
 `img` routes filesystem and kernel-provided PNG/JPEG bytes through vmedia.
 It recognizes file signatures, reports read/decode/publish timings, composites
 PNG transparency onto black, and avoids an extra viewport copy for opaque
-images already matching the viewport. `img common/images` opens a sorted
-folder gallery: Left/Up goes backward, Right/Down forward, and both ends wrap.
+images already matching the viewport. `img apps/common/images` opens a sorted,
+typed folder gallery: Left/Up goes backward, Right/Down forward, and both ends wrap.
 A gallery reuses one window, fits each complete image, and retains only the
 current decoded image. The gallery list/index survive Blueprint pause/replay.
 `show FILE` retains the existing native pan/resize behavior.
 
-`img`'s `shell` command parks its terminal while leaving images visible;
-select its Matrix slot and use `vmx_tui` to return. UI4 window input remains
-serviced while the terminal is parked. `close all` and `exit` remain available.
+`img` does not claim a terminal TUI. Select its Matrix slot and enter `list`,
+`show`, `close all`, or `exit` directly on the persistent Shell2 prompt row.
+Launching without a source uses the first inferred PNG/JPEG in
+`apps/common/images`, or a neutral-gray frame when none exists.
 
 Solara admits `.png` alongside `.jpg` and `.jpeg` through both resource
 selection and native image painting. URL queries/fragments do not affect
@@ -83,8 +84,8 @@ screens, not a photographic benchmark. The mixed-format Solara page is
 `index.html` and adds the existing JPEG logo to the assets directory.
 
 Use `trueos-doc topic trueosfs-http` to discover current filesystem roots and
-upload the generated PNGs into physical `apps/common/images`, exposed to
-Blueprints as `common/images`. Verify all expected filenames after upload.
+upload the generated PNGs into physical `apps/common/images`. Verify all
+expected filenames after upload.
 The validated rig has all 20 PNGs there. The helper does not contact the rig.
 
 Serve the output parent for the Solara test page, then use `surf` with that

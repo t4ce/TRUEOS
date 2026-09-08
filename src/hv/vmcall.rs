@@ -153,6 +153,7 @@ pub const OP_BP_CHILD_SEND_V1: u32 = 0x13D; // arg0 handle, payload message -> b
 pub const OP_BP_CHILD_RECEIVE_V1: u32 = 0x13E; // arg0 handle -> one queued message
 pub const OP_BP_CHILD_STATUS_V1: u32 = 0x13F; // arg0 handle -> lifecycle state/rc
 pub const OP_BP_CHILD_TERMINATE_V1: u32 = 0x140; // arg0 child handle -> rc
+pub const OP_BP_IMG_OPEN_V1: u32 = 0x17B; // NUL-separated TRUEOSFS paths -> queued/rc
 pub const OP_BP_VGPU_UI4_INDEXED_BATCH_SUBMIT: u32 = 0x141; // arg0 device,arg1 queue,payload IndexedDrawBatch -> TimelinePoint
 pub const OP_BP_VGPU_UI4_INDEXED_BATCH_SUBMIT_V2: u32 = 0x14C; // arg0 device,arg1 queue,payload IndexedDrawBatchV2 -> TimelinePoint
 pub const OP_BP_VGPU_RETAINED_MESH_CREATE: u32 = 0x14D; // arg0 device,payload RetainedMeshDescriptor -> handle
@@ -2978,6 +2979,15 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 .map(|()| 0i64)
                 .unwrap_or_else(i64::from);
             write_response(vm_id, seq, STATUS_OK, result as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_IMG_OPEN_V1 => {
+            let Some(payload) = request_payload(vm_id, req_len) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let rc = crate::r::io::fs_cabi::blueprint_img_open_payload(vm_id, payload);
+            write_response(vm_id, seq, STATUS_OK, (i64::from(rc)) as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_GRIDPAPER_SNAPSHOT_SUBMIT => {
