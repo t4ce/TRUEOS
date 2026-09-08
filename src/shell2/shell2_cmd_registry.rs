@@ -53,7 +53,7 @@ const TOOL_JSON_TTS: &str = r#"{"type":"object","properties":{"text":{"type":"st
 #[cfg(feature = "trueos_ttstt")]
 const TOOL_JSON_STT: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS path to a mono/stereo signed-16-bit PCM WAV file."},"language":{"type":"string","description":"Whisper language code or auto."},"translate":{"type":"boolean","description":"Translate recognized speech to English."}},"required":["path"],"additionalProperties":false}"#;
 const TOOL_JSON_TD: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
-const TOOL_JSON_VID: &str = r#"{"type":"object","properties":{"source":{"type":"string","enum":["fs","on","online"],"description":"Read an Annex-B asset from TRUEOSFS, or download the fixed online AVC1 MP4 asset."},"path":{"type":"string","description":"Optional TRUEOSFS Annex-B path when source=fs; defaults to x31_head_movie.annexb.h264."},"loop":{"type":"boolean","description":"Repeat playback while retaining the same UI4 Frame and window lifetime."}},"required":["source"],"additionalProperties":false}"#;
+const TOOL_JSON_VID: &str = r#"{"type":"object","properties":{"source":{"type":"string","enum":["fs","on","online"],"description":"Read an AVC MP4 or H.264 Annex-B asset from TRUEOSFS, or download the fixed online AVC1 MP4 asset."},"path":{"type":"string","description":"Optional TRUEOSFS AVC MP4 or H.264 Annex-B path when source=fs; defaults to x31_head_movie.annexb.h264."},"loop":{"type":"boolean","description":"Repeat playback while retaining the same UI4 Frame and window lifetime."}},"required":["source"],"additionalProperties":false}"#;
 const TOOL_JSON_XHCI: &str = r#"{"type":"object","properties":{"command":{"type":"string","enum":["status","journal","stage","read","read64","write","write64","rmw"],"description":"xHCI laboratory operation."},"stage":{"type":"integer","minimum":1,"maximum":5,"description":"Cumulative diagnostic stage."},"port":{"type":"integer","minimum":1,"maximum":255,"description":"Physical root port for mutating stages."},"offset":{"type":"string","description":"BAR-relative register offset, decimal or 0x-prefixed."},"value":{"type":"string","description":"Raw register value, decimal or 0x-prefixed."},"clear_mask":{"type":"string","description":"Raw RMW clear mask."},"set_mask":{"type":"string","description":"Raw RMW set mask."},"arm":{"type":"boolean","description":"Explicitly arm a mutating operation."},"live":{"type":"boolean","description":"Acknowledge disruption of a physically connected target."},"fused":{"type":"boolean","description":"Explicitly permit targeting the fused LED port."},"depth":{"type":"integer","minimum":1,"maximum":3,"description":"Stage-five transition-tree depth."}},"required":["command"],"additionalProperties":false}"#;
 
 fn dispatch_acpi(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -426,7 +426,7 @@ const SHELL2_COMMAND_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         advertised: true,
         handler: dispatch_vid,
         tool_description: Some(
-            "Play a TRUEOSFS Annex-B asset or the fixed online H.264 asset through VDBOX and the UI4 double-Frame path.",
+            "Play a TRUEOSFS AVC MP4 or H.264 Annex-B asset, or the fixed online H.264 asset, through VDBOX and the UI4 double-Frame path.",
         ),
         tool_parameters_json: Some(TOOL_JSON_VID),
     },

@@ -37,7 +37,7 @@ impl VidSource {
 
     const fn next_stage(&self) -> &'static str {
         match self {
-            Self::TrueosFs(_) => "trueosfs-annexb-load-decode",
+            Self::TrueosFs(_) => "trueosfs-format-detect-demux-decode",
             Self::Online => "fixed-mp4-download-demux-decode",
         }
     }
