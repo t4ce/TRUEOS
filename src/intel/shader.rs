@@ -79,7 +79,7 @@ pub(crate) struct TrianglePipeline {
 
 #[path = "../../crates/trueos-shader/generated_patch_cube.rs"]
 pub(crate) mod patch_cube;
-const _: () = assert!(patch_cube::CONTRACT_VERSION == 7);
+const _: () = assert!(patch_cube::CONTRACT_VERSION == 8);
 
 pub(crate) fn patch_cube_upload_layout(
     after: usize,

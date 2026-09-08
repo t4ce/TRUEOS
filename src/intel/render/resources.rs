@@ -2816,7 +2816,8 @@ pub(crate) fn update_resident_picasso_retained_transform_seeds(
                 || ranges.iter().any(|r| r.first_index != 0 || r.index_count != 44))
             || seeds.iter().any(|seed| seed.scale[0] != seed.scale[1] || seed.scale[1] != seed.scale[2]
                 || seed.scale[0] <= 0.0 || seed.draw_group > 1
-                || ((seed.flags & 512 != 0) != (seed.draw_group == 1))))
+                || (if seed.flags & 32768 != 0 { seed.draw_group != 0 }
+                    else { (seed.flags & 512 != 0) != (seed.draw_group == 1) })))
     {
         return Err("cube-patch-uniform-instance-contract");
     }
