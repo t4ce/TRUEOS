@@ -6281,6 +6281,22 @@ fn retained_font_canvas_surface(surface: &BlueprintSceneSurface) -> Option<Gpgpu
         })
 }
 
+const fn sprite_scene_needs_clear(render_overlay: bool, full_frame_copy: bool) -> bool {
+    !render_overlay && !full_frame_copy
+}
+
+#[cfg(test)]
+mod sprite_overlay_tests {
+    use super::sprite_scene_needs_clear;
+    #[test]
+    fn only_fresh_partial_sprite_scenes_clear_the_background() {
+        assert!(sprite_scene_needs_clear(false, false));
+        assert!(!sprite_scene_needs_clear(false, true));
+        assert!(!sprite_scene_needs_clear(true, false));
+        assert!(!sprite_scene_needs_clear(true, true));
+    }
+}
+
 pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
     struct OwnedRun {
         sprite_id: u32,
@@ -6362,12 +6378,29 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
         return ERROR_UI4;
     };
 
+    // A retired retained render is the background of this sprite overlay,
+    // not a fresh sprite frame. Keep its pixels and replace its receipt only
+    // after the final overlay batch retires on this exact destination.
+    let render_overlay = surface.pending_render_release.is_some();
+    if let Some(release) = surface.pending_render_release {
+        if surface.pending_gpu_release.is_some()
+            || !release.matches(destination.phys, destination.bytes)
+        {
+            return ERROR_STATE;
+        }
+        if upload.quads.is_empty() {
+            surface.sprite_clear_rgba = None;
+            return 0;
+        }
+    }
+
     // Shell2's immediate scene is a clear plus a handful of frame-owned solid
     // rectangles (background runs, underlines/hover, and cursor). Flatten
     // their overwrite order into disjoint rectangles and use the alpha
     // compositor's source-free SOLID mode. The former path paid general UV,
     // sampling, and arbitrary-quad setup for every decoration.
-    if let Some(rects) = solid_scene_fast_rects(clear_rgba, &upload.quads, destination) {
+    if let Some(rects) = (!render_overlay)
+        .then(|| solid_scene_fast_rects(clear_rgba, &upload.quads, destination)).flatten() {
         let composite_started_ns = crate::chronos::monotonic_nanos();
         let composited = fill_solid_rects_rgba8_scanout_result(destination, rects.as_slice());
         let composite_us =
@@ -6467,7 +6500,7 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
         ..TrueosUi4SpriteQuad::default()
     };
     let mut prepared = Vec::with_capacity(upload.quads.len().saturating_add(1));
-    if !full_frame_copy {
+    if sprite_scene_needs_clear(render_overlay, full_frame_copy) {
         prepared.push(PreparedOp::Quad {
             sprite_id: 0,
             source: solid.surface,
@@ -6755,7 +6788,12 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
         cancel_blueprint_sprite_frame_without_live_gpu(surface);
         return ERROR_UI4;
     };
+    if !final_release.matches(destination.phys, destination.bytes) {
+        cancel_blueprint_sprite_frame_without_live_gpu(surface);
+        return ERROR_UI4;
+    }
     surface.pending_gpu_release = Some(final_release);
+    surface.pending_render_release = None;
     surface.sprite_clear_rgba = None;
     0
 }
