@@ -10,6 +10,19 @@
     { "name": "ssh", "blueprint": "ssh.bp" },
     { "name": "grid", "blueprint": "gridpaper" }
   ],
+  "solara": {
+    "bookmarks": [
+      { "label": "BIOS setup", "url": "http://192.168.178.94:8338/" },
+      { "label": "TRUEOS files", "url": "http://192.168.178.94/" },
+      { "label": "PeerTube browse", "url": "https://joinpeertube.org/browse-content" },
+      { "label": "Text and borders", "url": "demo1" },
+      { "label": "Divs and panels", "url": "demo2" },
+      { "label": "Flow and forms", "url": "demo3" },
+      { "label": "Example domain", "url": "https://example.com/" },
+      { "label": "First website", "url": "http://info.cern.ch/hypertext/WWW/TheProject.html" },
+      { "label": "PeerTube home", "url": "https://joinpeertube.org/" }
+    ]
+  },
   "autostart": [
     { "action": "skip", "archive": "swarm.bp", "online_selector": "swarm", "slot": "swm", "settle_ms": 250 },
     { "action": "skip", "archive": "img.bp", "online_selector": "img", "slot": "img", "settle_ms": 250, "launch_script": "show kernel:logo center nohit\nshow kernel:intel-graphics bottom-left\nshow kernel:bgrt bottom-right" },

@@ -93,6 +93,7 @@ TOPICS: dict[str, dict[str, Any]] = {
         "summary": "A launch script is a one-shot, per-VM UTF-8 control stream, separate from argv.",
         "guest_interface": "Read vFile:launch through TRUEOS async-fs. Legacy /.trueos/launch is accepted by the host.",
         "delivery": "The host stores the script on the pending Blueprint launch and consumes it on the guest's first virtual-file read.",
+        "startup_settings": "Read vFile:startup through async-fs for the public embedded startup.json. This read is repeatable and read-only; it does not consume vFile:launch. Solara reads solara.bookmarks and uses at most nine entries.",
         "host_entry_points": ["startup.json blueprint.launch_script", "Shell2 internal launch helpers used by td/surf and online launch", "run::enqueue_blueprint_bytes_with_instance_and_launch_script"],
         "directives_are_app_specific": True,
         "shared_directive": {"line": "fs-scope trueosfs", "effect": "Grants TRUEOSFS scope and sets TRUEOS_FS_SCOPE=trueosfs for that launch."},
