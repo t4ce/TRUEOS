@@ -432,7 +432,7 @@ fn spawn_vmedia_service(spawner: Spawner) -> SpawnAttempt {
     if !crate::workers::all_topology_spawners_registered() {
         return SpawnAttempt::Skipped;
     }
-    let worker_spawners = crate::workers::pick_background_spawners_with_slots(2);
+    let worker_spawners = crate::workers::pick_background_spawners_with_slots(4);
     if worker_spawners.is_empty() {
         return SpawnAttempt::Skipped;
     }

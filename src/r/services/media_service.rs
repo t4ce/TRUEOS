@@ -598,11 +598,11 @@ async fn decode(request: &DecodeRequest) -> Result<DecodedImage, i32> {
     }
 }
 
-#[trueos_executor::task(pool_size = 2)]
+#[trueos_executor::task(pool_size = 4)]
 pub async fn worker_task(worker_id: usize, worker_slot: u32, core_kind: u8) {
     crate::log_info!(
         target: "service";
-        "vmedia: worker={} online image=png,jpeg,bmp pool=2 worker_slot={} core_kind={} jpeg_backend=xelp-vdbox-owned-rgba+zune-fallback\n",
+        "vmedia: worker={} online image=png,jpeg,bmp pool=4 worker_slot={} core_kind={} jpeg_backend=xelp-vdbox-owned-rgba+zune-fallback\n",
         worker_id,
         worker_slot,
         core_kind,
