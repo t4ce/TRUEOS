@@ -100,9 +100,13 @@ fn centered_crop_origin(extent:u32, viewport:u32) -> u32 { extent.saturating_sub
 fn native_viewport_layout(_:u32,_:u32,_:u32,_:u32,_:u32,_:u32) -> Option<()> { Some(()) }
 #[derive(Default)] struct WindowSessionCloseRequest;
 impl WindowSessionCloseRequest { fn direct_plane_animate_and_retire_frames(self) -> Self { self } }
-fn finish_window_session_with_request(_: WindowOwner, session: u64, _: WindowSessionCloseRequest) -> Result<(), ()> { BROKER_WINDOWS.lock().retain(|(s,_)| *s != session); Ok(()) }
+fn finish_window_session_with_request(_: WindowOwner, session: u64, _: WindowSessionCloseRequest) -> Result<usize, ()> {
+    let mut windows = BROKER_WINDOWS.lock(); let before = windows.len();
+    windows.retain(|(s,_)| *s != session); Ok(before - windows.len())
+}
 fn finish_window_session(_: WindowOwner, _: u64) -> Result<(), ()> { Ok(()) }
-fn retire_video_frame(_: u64) {}
+static RETIRED: AtomicU64 = AtomicU64::new(0);
+fn retire_video_frame(_: u64) { RETIRED.fetch_add(1, Ordering::Relaxed); }
 #[derive(Copy, Clone)] struct DecodedNv12Source;
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)] struct DecodedVideoConversionProbeReport;
 struct DecodedVideoConversionProbeState;
@@ -150,10 +154,12 @@ fn queue(session: VideoPlaybackSession, count: usize) {
     let c1 = take_decoded_video_conversion_request().unwrap();
     assert_eq!([a1.session.slot, b1.session.slot, c1.session.slot], [0, 1, 2]);
     let closed_window = a.state().stream.lock().unwrap().window;
+    BROKER_WINDOWS.lock().retain(|(_, window)| *window != closed_window);
     decoded_video_window_closed(VIDEO_OWNER, closed_window);
     assert!(a.is_cancelled()); assert!(!b.is_cancelled()); assert!(!c.is_cancelled());
     a.finish("test-active");
     assert_eq!(BROKER_WINDOWS.lock().len(), 2);
+    assert_eq!(RETIRED.load(Ordering::Relaxed), 1, "Escape leaked the already-closed window frame");
     assert!(a.state().occupied.load(Ordering::Acquire));
     complete_decoded_video_conversion(a1, DecodedVideoConversionOutcome { published: false, probe: () }, 1);
     a.finish("test-queued");

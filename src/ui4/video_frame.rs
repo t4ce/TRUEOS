@@ -1642,13 +1642,16 @@ pub(crate) fn stop_decoded_nv12_stream(session: VideoPlaybackSession, reason: &s
     let reserved = !session.state().cancelled.swap(true, Ordering::AcqRel);
     let stream = session.state().stream.lock().take();
     if let Some(stream) = stream {
-        let animated = finish_window_session_with_request(
+        let close = finish_window_session_with_request(
             VIDEO_OWNER,
             stream.session,
             WindowSessionCloseRequest::default().direct_plane_animate_and_retire_frames(),
-        )
-        .is_ok();
-        if !animated {
+        );
+        // Escape already marks this window Closed. In that case the broker's
+        // session close succeeds with zero windows and transfers no frames.
+        // The producer must still retire its RGBA allocations after SURFLIVE.
+        let retirement_transferred = matches!(close, Ok(closed) if closed != 0);
+        if !retirement_transferred {
             let _ = finish_window_session(VIDEO_OWNER, stream.session);
             retire_video_frame(stream.frame);
         }
@@ -1658,7 +1661,7 @@ pub(crate) fn stop_decoded_nv12_stream(session: VideoPlaybackSession, reason: &s
             reason,
             stream.frame.raw(),
             stream.window.raw(),
-            if animated { "direct-plane-puff+fade" } else { "immediate-fallback" },
+            if retirement_transferred { "broker-owned-retirement" } else { "producer-retirement-after-close" },
         );
         true
     } else if reserved {

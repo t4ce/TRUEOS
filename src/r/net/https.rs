@@ -75,8 +75,12 @@ impl JsonPostCancellation {
 /// JSON requests. Dropping a future alone would leave its socket service live.
 pub(crate) struct MediaFetchCancellation(JsonPostCancellation);
 impl MediaFetchCancellation {
-    pub(crate) fn new() -> Self { Self(JsonPostCancellation::new()) }
-    pub(crate) fn cancel(&self) { self.0.cancel(); }
+    pub(crate) fn new() -> Self {
+        Self(JsonPostCancellation::new())
+    }
+    pub(crate) fn cancel(&self) {
+        self.0.cancel();
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1162,18 +1166,24 @@ async fn request_https_response_once_cancellable(
         crate::r::readiness::NET_ANY_CONFIGURED | crate::r::readiness::TLS_SOCKET_SERVICE_READY,
     );
     if let Some(cancellation) = cancellation {
-        await_json_post_or_cancel(readiness, cancellation).await
+        await_json_post_or_cancel(readiness, cancellation)
+            .await
             .map_err(|_| String::from(HTTPS_REQUEST_CANCELLED))?;
-    } else { readiness.await; }
+    } else {
+        readiness.await;
+    }
 
     let device_index = NetProfile::default()
         .resolve_device_index()
         .ok_or_else(|| String::from("no nic"))?;
     let resolve = resolve_https_host(device_index, target.host.as_str(), timeout_ms);
     let ip = if let Some(cancellation) = cancellation {
-        await_json_post_or_cancel(resolve, cancellation).await
+        await_json_post_or_cancel(resolve, cancellation)
+            .await
             .map_err(|_| String::from(HTTPS_REQUEST_CANCELLED))??
-    } else { resolve.await? };
+    } else {
+        resolve.await?
+    };
 
     let seq = HTTPS_FETCH_TLS_SEQ.fetch_add(1, Ordering::Relaxed);
     let owner = leak_str(format!("https-fetch-{}@{}", seq, device_index));
@@ -1511,9 +1521,16 @@ pub(crate) async fn get_media_bytes_profile_shared(
         headers,
         body: &[],
     };
-    success_body(request_https_response_once_cancellable(
-        &target, &request, timeout_ms.max(1), max_bytes, Some(&cancellation.0),
-    ).await?)
+    success_body(
+        request_https_response_once_cancellable(
+            &target,
+            &request,
+            timeout_ms.max(1),
+            max_bytes,
+            Some(&cancellation.0),
+        )
+        .await?,
+    )
 }
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
@@ -1545,7 +1562,9 @@ async fn fetch_bytes(url: String, timeout_ms: u32, max_bytes: usize) -> Result<V
     get_bytes_shared(url.as_str(), timeout_ms, max_bytes)
         .await
         .map_err(|err| {
-            let host = parse_fetch_url(&url).map(|target| target.host).unwrap_or_default();
+            let host = parse_fetch_url(&url)
+                .map(|target| target.host)
+                .unwrap_or_default();
             crate::log_warn!(target: "net"; "asset-fetch: failed host={} reason={}\n", host, err);
             fetch_error_to_code(err.as_str())
         })
@@ -1633,7 +1652,9 @@ fn spawn_fetch_bytes(op_id: u32, url: String, timeout_ms: u32, max_bytes: usize)
     crate::wait::spawn_local_detached(async move {
         let started = Instant::now();
         if crate::log_os::flags::HTTP_FETCH_DIAG_PROFILE_ENABLED {
-            let host = parse_fetch_url(&url).map(|target| target.host).unwrap_or_default();
+            let host = parse_fetch_url(&url)
+                .map(|target| target.host)
+                .unwrap_or_default();
             crate::log_info!(target: "net"; "asset-fetch: begin id={} host={} timeout_ms={} max_bytes={}\n", op_id, host, timeout_ms, max_bytes);
         }
         let (rc, body) = match fetch_bytes(url, timeout_ms, max_bytes).await {

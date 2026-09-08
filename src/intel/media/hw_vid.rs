@@ -332,6 +332,30 @@ async fn h264_reserve_decode_session(
     }
 }
 
+async fn h264_wait_for_fs_index(
+    session: crate::ui4::VideoPlaybackSession,
+    disk: crate::disc::block::DeviceHandle,
+) -> Result<(), &'static str> {
+    // Index replay is a root-service lifetime, not a video's lifetime. Waiting
+    // inside file_read_open_async would prevent cancellation until a cold
+    // root's entire log replay finished, even though this task owns no I/O.
+    crate::r::fs::trueosfs::request_warm_index(disk.id());
+    loop {
+        if session.is_cancelled() {
+            return Err("playback cancelled");
+        }
+        let roots = crate::r::fs::trueosfs::list_roots();
+        let root = roots
+            .iter()
+            .find(|root| root.disk_id == disk.id())
+            .ok_or("TRUEOSFS video root disappeared")?;
+        if root.index_ready {
+            return Ok(());
+        }
+        Timer::after_millis(5).await;
+    }
+}
+
 /// Load an H.264 asset from the published TRUEOSFS primary root and run it
 /// through the VDBOX decoder and native UI4 double-Frame path.
 ///
@@ -364,10 +388,14 @@ pub(crate) async fn run_trueosfs_ui4_framed_video_playback(
 
     let disk =
         crate::r::fs::trueosfs::primary_root_handle().ok_or("TRUEOSFS primary root unavailable")?;
+    h264_wait_for_fs_index(session, disk).await?;
     let file = crate::r::fs::trueosfs::file_read_open_async(disk, path)
         .await
         .map_err(|_| "TRUEOSFS video stream open failed")?
         .ok_or("video asset missing from TRUEOSFS root")?;
+    if session.is_cancelled() {
+        return Err("playback cancelled");
+    }
     let file_bytes = usize::try_from(file.data_len()).map_err(|_| "TRUEOSFS video too large")?;
     if file_bytes == 0 || file_bytes > H264_TRUEOSFS_VIDEO_SOFT_CAP_BYTES {
         return Err("TRUEOSFS video size outside playback limit");
@@ -447,7 +475,9 @@ pub(crate) async fn run_trueosfs_ui4_framed_video_playback(
         report.retired,
         report.presented,
     );
-    if report.presented == 0 {
+    if session.is_cancelled() && report.presented == 0 {
+        Err("playback cancelled")
+    } else if report.presented == 0 {
         Err("TRUEOSFS video produced no decodable frames")
     } else {
         Ok(report)
@@ -472,7 +502,9 @@ pub(crate) async fn run_online_ui4_framed_video_playback(
         "online-ui4-framed-video",
     )
     .await?;
-    if report.presented == 0 {
+    if session.is_cancelled() && report.presented == 0 {
+        Err("playback cancelled")
+    } else if report.presented == 0 {
         Err("online video produced no decodable frames")
     } else {
         Ok(report)
@@ -2014,7 +2046,7 @@ async fn h264_i_p_playback_probe_with_reader(
         for (unit, timing) in access_units.iter_mut().zip(sample_timing.iter().copied()) {
             unit.timing = Some(timing);
         }
-    } else if !sample_timing.is_empty() {
+    } else if !sample_timing.is_empty() && !session.is_cancelled() {
         crate::log_error!(
             "intel/hw_vid: mp4-timing rejected=1 reason=sample-access-unit-count-mismatch samples={} access_units={} action=reject-stream\n",
             sample_timing.len(),
@@ -2454,7 +2486,11 @@ async fn h264_i_p_playback_probe_with_reader(
         playback_report.avg_conversion_us,
         playback_report.max_conversion_us,
         playback_report.avg_poll_iters,
-        "eos"
+        if session.is_cancelled() {
+            "cancelled"
+        } else {
+            "eos"
+        }
     );
     playback_report
 }
