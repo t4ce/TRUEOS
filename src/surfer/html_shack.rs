@@ -1423,12 +1423,19 @@ async fn fetch_http_body_once(
         ),
     };
     let content_len_header = alloc::format!("{}", content_len);
+    let authority = if target.port == 80 {
+        target.host.clone()
+    } else {
+        alloc::format!("{}:{}", target.host, target.port)
+    };
+    // Keep HTTP/1.1 persistence until the complete body is consumed. Asking a
+    // guest Axum server to close can race its queued response bytes with TCP
+    // teardown. The exchange below drops this connection after body completion.
     let mut builder = hyper::Request::builder()
         .method(http_method)
         .uri(target.path_and_query.as_str())
-        .header(hyper::header::HOST, target.host.as_str())
-        .header(hyper::header::USER_AGENT, "TRUEOS/html_shack")
-        .header(hyper::header::CONNECTION, "close");
+        .header(hyper::header::HOST, authority.as_str())
+        .header(hyper::header::USER_AGENT, "TRUEOS/html_shack");
     if !extra_headers
         .iter()
         .any(|(name, _)| name.eq_ignore_ascii_case("Accept"))

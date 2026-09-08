@@ -2606,41 +2606,51 @@ impl NetService {
         owner: &'static str,
         remote: NetEndpoint,
     ) -> Result<(NetHandle, NetHandle, &'static str), &'static str> {
-        if self.records.len().saturating_add(2) > SOCKET_SOFT_CAP {
+        if self.records.len().saturating_add(1) > SOCKET_SOFT_CAP {
             return Err("no sockets available");
         }
 
-        let listener_owner = self
+        let listener_index = self
             .records
             .iter()
-            .find(|rec| {
+            .position(|rec| {
                 rec.kind == SocketKind::Tcp
                     && rec.tcp_loopback_peer.is_none()
                     && !rec.tcp_connect
                     && rec.tcp_local_port == Some(remote.port)
                     && rec.tcp_remote_v4.is_none()
                     && rec.tcp_remote_v6.is_none()
+                    && self.sockets.get::<tcp::Socket>(rec.socket).is_listening()
             })
-            .map(|rec| rec.owner)
             .ok_or("connect failed")?;
 
         let local_port = self.tcp_next_ephemeral;
         self.tcp_next_ephemeral = self.tcp_next_ephemeral.wrapping_add(1).max(49152);
 
         let client_handle = self.alloc_handle();
-        let server_handle = self.alloc_handle();
+        // Match a network accept: establish the known listening handle. A new,
+        // unrelated handle is invisible to the server's accept queue, especially
+        // when the client is a kernel HTTP worker or belongs to another VM.
+        let server_handle = self.records[listener_index].handle;
+        let listener_owner = self.records[listener_index].owner;
+        let listener_socket = self.records[listener_index].socket;
+        // Its byte stream now travels through the in-kernel peer route. Retire
+        // the smoltcp listener so it cannot also accept a NIC connection.
+        self.sockets.get_mut::<tcp::Socket>(listener_socket).abort();
+        let listener = &mut self.records[listener_index];
+        listener.tcp_loopback_peer = Some(client_handle);
+        listener.tcp_remote_v4 = Some(NetEndpoint {
+            addr: remote.addr,
+            port: local_port,
+        });
+        listener.established = true;
+        listener.last_tcp_state = None;
 
         let client_rx = tcp::SocketBuffer::new(vec![0; TCP_RX_BUF_BYTES]);
         let client_tx = tcp::SocketBuffer::new(vec![0; TCP_TX_BUF_BYTES]);
         let mut client_socket = tcp::Socket::new(client_rx, client_tx);
         client_socket.set_keep_alive(Some(SmolDuration::from_secs(30)));
         let client_socket = self.sockets.add(client_socket);
-
-        let server_rx = tcp::SocketBuffer::new(vec![0; TCP_RX_BUF_BYTES]);
-        let server_tx = tcp::SocketBuffer::new(vec![0; TCP_TX_BUF_BYTES]);
-        let mut server_socket = tcp::Socket::new(server_rx, server_tx);
-        server_socket.set_keep_alive(Some(SmolDuration::from_secs(30)));
-        let server_socket = self.sockets.add(server_socket);
 
         self.records.push(SocketRecord {
             owner,
@@ -2652,24 +2662,6 @@ impl NetService {
             tcp_connect: true,
             tcp_local_port: Some(local_port),
             tcp_remote_v4: Some(remote),
-            tcp_remote_v6: None,
-            established: true,
-            last_tcp_state: None,
-        });
-
-        self.records.push(SocketRecord {
-            owner: listener_owner,
-            handle: server_handle,
-            kind: SocketKind::Tcp,
-            socket: server_socket,
-            tcp_tx: TcpTxQueue::new(),
-            tcp_loopback_peer: Some(client_handle),
-            tcp_connect: false,
-            tcp_local_port: Some(remote.port),
-            tcp_remote_v4: Some(NetEndpoint {
-                addr: [127, 0, 0, 1],
-                port: local_port,
-            }),
             tcp_remote_v6: None,
             established: true,
             last_tcp_state: None,
@@ -4060,7 +4052,7 @@ impl NetService {
                                 NetEvent::TcpEstablished {
                                     handle: server_handle,
                                     peer: Some(NetEndpoint {
-                                        addr: [127, 0, 0, 1],
+                                        addr: remote.addr,
                                         port: self.tcp_next_ephemeral.wrapping_sub(1),
                                     }),
                                     peer6: None,

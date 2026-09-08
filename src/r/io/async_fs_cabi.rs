@@ -17,6 +17,11 @@ const DIR_LIST_HEADER_BYTES: usize = 12;
 /// Reserved async-FS identifier for a host-provided, one-shot VMX minishell
 /// input stream. `vFile:` is deliberately not a TrueOSFS pathname.
 const VMX_LAUNCH_SCRIPT_VFILE: &str = "vFile:launch";
+const STARTUP_MANIFEST_VFILE: &str = "vFile:startup";
+
+pub(crate) fn is_virtual_read(path: &str) -> bool {
+    matches!(path, VMX_LAUNCH_SCRIPT_VFILE | STARTUP_MANIFEST_VFILE)
+}
 const LEGACY_VMX_LAUNCH_SCRIPT_PATH: &str = "/.trueos/launch";
 
 #[derive(Debug)]
@@ -222,6 +227,9 @@ fn start(owner: u32, kind: RequestKind) -> i32 {
 }
 
 pub(crate) fn start_read(owner: u32, path: String) -> i32 {
+    if path == STARTUP_MANIFEST_VFILE {
+        return start_completed_read(owner, crate::r::restart::startup_manifest().to_vec());
+    }
     if path == VMX_LAUNCH_SCRIPT_VFILE
         || path == LEGACY_VMX_LAUNCH_SCRIPT_PATH
         || path == &LEGACY_VMX_LAUNCH_SCRIPT_PATH[1..]
@@ -946,14 +954,13 @@ pub unsafe extern "C" fn trueos_cabi_async_fs_read_start(
     // TrueOSFS root. Preserve the namespace before normal path resolution.
     if crate::hv::current_hull_guest_context_vm_id().is_some()
         && !path_ptr.is_null()
-        && path_len == VMX_LAUNCH_SCRIPT_VFILE.len()
+        && path_len <= 64
     {
         let raw_path = unsafe { core::slice::from_raw_parts(path_ptr, path_len) };
-        if raw_path == VMX_LAUNCH_SCRIPT_VFILE.as_bytes() {
-            return guest_start(
-                trueos_vm::vmcall::OP_BP_ASYNC_FS_READ_START,
-                VMX_LAUNCH_SCRIPT_VFILE,
-            );
+        if let Ok(path) = core::str::from_utf8(raw_path)
+            && is_virtual_read(path)
+        {
+            return guest_start(trueos_vm::vmcall::OP_BP_ASYNC_FS_READ_START, path);
         }
     }
     let path = match parse_path(path_ptr, path_len, false) {

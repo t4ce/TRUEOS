@@ -86,6 +86,9 @@ struct ColdStartConfiguration {
     #[serde(default)]
     aliases: Vec<StartupAlias>,
     autostart: Vec<ColdStartBlueprint>,
+    /// Application settings are consumed by guests through vFile:startup.
+    #[serde(default, rename = "solara")]
+    _solara: serde_json::Value,
 }
 
 /// Resolve a Shell2 alias from the same embedded startup manifest used by
@@ -497,4 +500,9 @@ pub(crate) async fn weave_hello_autostart_task() {
             error,
         ),
     }
+}
+
+/// Public, read-only startup configuration for Blueprint application settings.
+pub(crate) fn startup_manifest() -> &'static [u8] {
+    COLD_START_BLUEPRINTS_JSON
 }

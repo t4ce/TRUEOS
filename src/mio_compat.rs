@@ -197,23 +197,6 @@ fn socket_has_handle(socket: &MioSocketState, handle: api::NetHandle) -> bool {
     socket.handle == Some(handle) || socket.listen_handles.contains(&handle)
 }
 
-fn compat_addr_port(addr: Option<CompatAddr>) -> Option<u16> {
-    match addr {
-        Some(CompatAddr::V4 { port, .. }) | Some(CompatAddr::V6 { port, .. }) => Some(port),
-        None => None,
-    }
-}
-
-fn compat_addr_is_ipv4_loopback(addr: CompatAddr) -> bool {
-    matches!(
-        addr,
-        CompatAddr::V4 {
-            addr: [127, _, _, _],
-            ..
-        }
-    )
-}
-
 fn tcp_flow_logging_enabled(socket: &MioSocketState) -> bool {
     crate::log_os::flags::NET_LOG_TCP_FLOW && socket.kind == MioSocketKind::TcpStream
 }
@@ -709,88 +692,6 @@ impl MioCompat {
         }
     }
 
-    fn queue_loopback_accept_from_client(
-        &mut self,
-        client_socket_id: u32,
-        client_handle: api::NetHandle,
-    ) {
-        let Some(client) = self.socket(client_socket_id) else {
-            return;
-        };
-        let Some(target) = client.peer else {
-            return;
-        };
-        let client_owner_vm = client.owner_vm;
-        if !compat_addr_is_ipv4_loopback(target) {
-            return;
-        }
-        let Some(target_port) = compat_addr_port(Some(target)) else {
-            return;
-        };
-
-        let server_handle = api::NetHandle(client_handle.0.wrapping_add(1));
-        if self.socket_by_handle_mut(server_handle).is_some() {
-            return;
-        }
-
-        let Some(listener_id) = self
-            .sockets
-            .iter()
-            .find(|socket| {
-                socket.kind == MioSocketKind::TcpListener
-                    && !socket.closed
-                    && socket.owner_vm == client_owner_vm
-                    && socket.listen_port == Some(target_port)
-            })
-            .map(|socket| socket.id)
-        else {
-            return;
-        };
-
-        let child_id = self.alloc_socket_id();
-        let (owner_vm, local, fallback_peer) = {
-            let listener = self.socket(listener_id).unwrap();
-            (
-                listener.owner_vm,
-                listener.local,
-                listener.local.map(CompatAddr::unspecified_same_family),
-            )
-        };
-        if !self.socket_capacity_available(owner_vm) {
-            return;
-        }
-
-        self.sockets.push(MioSocketState {
-            id: child_id,
-            owner_vm,
-            kind: MioSocketKind::TcpStream,
-            handle: Some(server_handle),
-            listen_handles: Vec::new(),
-            local,
-            peer: fallback_peer,
-            listen_port: None,
-            connected: true,
-            closed: false,
-            error: STATUS_OK,
-            tx_in_flight: 0,
-            rx_stream: VecDeque::new(),
-            rx_dgrams: VecDeque::new(),
-            accept_queue: VecDeque::new(),
-        });
-
-        if let Some(listener) = self.socket_mut(listener_id) {
-            listener.accept_queue.push_back(child_id);
-            crate::log!(
-                "mio_compat: tcp loopback accept queued listener={} child={} client_handle={} server_handle={} pending={}\n",
-                listener_id,
-                child_id,
-                client_handle.0,
-                server_handle.0,
-                listener.accept_queue.len()
-            );
-        }
-    }
-
     fn handle_unattributed_error(&mut self, msg: &'static str) {
         let open_error = matches!(
             msg,
@@ -998,8 +899,6 @@ impl MioCompat {
                     {
                         log_tcp_endpoint("mio_compat: tcp established", socket.id, handle.0, peer);
                     }
-                    let socket_id = socket.id;
-                    self.queue_loopback_accept_from_client(socket_id, handle);
                 } else if crate::log_os::flags::NET_LOG_TCP_FLOW {
                     let mut listener_count = 0usize;
                     let mut first_listener_socket = 0u32;

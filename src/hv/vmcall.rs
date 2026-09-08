@@ -4681,7 +4681,9 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             // `vFile:` names kernel-provided virtual data, not TrueOSFS
             // paths. Preserve the identifier verbatim so the async-FS
             // provider can dispatch it before filesystem normalization.
-            let path = if op == OP_BP_ASYNC_FS_READ_START && path == "vFile:launch" {
+            let path = if op == OP_BP_ASYNC_FS_READ_START
+                && crate::r::io::async_fs_cabi::is_virtual_read(path)
+            {
                 path.into()
             } else {
                 let Ok(path) = crate::r::path::FsPath::parse(path, false) else {
