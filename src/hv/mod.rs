@@ -2822,7 +2822,11 @@ fn classify_blueprint_memory(
         return BlueprintMemoryClass::NetworkClient;
     }
 
-    let heavy_graphics_signal = archive_has(archive, "mandelbrot")
+    // `img.bp` has a tiny executable but expands compressed source images into
+    // RGBA8 guest allocations. Classify the viewer by role so its heap is not
+    // derived from the Blueprint artifact size alone.
+    let heavy_graphics_signal = archive_has(archive, "img.bp")
+        || archive_has(archive, "mandelbrot")
         || archive_has(archive, "skybox")
         || archive_has(archive, "particle")
         || archive_has(archive, "virgl")

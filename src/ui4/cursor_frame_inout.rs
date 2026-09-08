@@ -961,6 +961,24 @@ mod tests {
     }
 
     #[test]
+    fn center_snap_release_lasts_until_cursor_selects_again() {
+        let mut rig = CursorFrameRig::new();
+        let frame = CursorFrameKey::new(WindowOwner::KernelApp(1), WindowId::from_raw(1).unwrap());
+        let cursor = source(2);
+        rig.frame_opened(frame, WindowSessionId::from_raw(1).unwrap())
+            .unwrap();
+        rig.select(Some(frame), cursor, Rgba8::new(1, 2, 3, 255));
+        rig.set_center_snapped_cursor(frame, true).unwrap();
+
+        assert!(rig.suppress_center_snap(cursor));
+        assert_eq!(rig.center_snapped_frame_for_source(cursor), None);
+        assert!(!rig.suppress_center_snap(cursor));
+
+        rig.select(Some(frame), cursor, Rgba8::new(1, 2, 3, 255));
+        assert_eq!(rig.center_snapped_frame_for_source(cursor), Some(frame));
+    }
+
+    #[test]
     fn cursor_selections_survive_another_cursor_changing_focus() {
         let mut rig = CursorFrameRig::new();
         let first = CursorFrameKey::new(WindowOwner::KernelApp(1), WindowId::from_raw(1).unwrap());
