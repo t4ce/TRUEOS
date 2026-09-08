@@ -25,9 +25,9 @@ impl PngDecodeError {
     }
 }
 
-fn decode_indexed_png_rgba(bytes: &[u8]) -> Result<DecodedPng, PngDecodeError> {
-    let cursor = Cursor::new(bytes);
-    let mut decoder = png::Decoder::new(cursor);
+fn decode_indexed_png_rgba(
+    mut decoder: png::Decoder<Cursor<&[u8]>>,
+) -> Result<DecodedPng, PngDecodeError> {
     decoder.set_transformations(png::Transformations::STRIP_16);
 
     let mut reader = decoder.read_info().map_err(|_| PngDecodeError::Invalid)?;
@@ -61,18 +61,16 @@ fn decode_indexed_png_rgba(bytes: &[u8]) -> Result<DecodedPng, PngDecodeError> {
 }
 
 pub fn decode_png_rgba(bytes: &[u8]) -> Result<DecodedPng, PngDecodeError> {
-    let mut probe = png::Decoder::new(Cursor::new(bytes));
-    let is_indexed = probe
+    let mut decoder = png::Decoder::new(Cursor::new(bytes));
+    let is_indexed = decoder
         .read_header_info()
         .map_err(|_| PngDecodeError::Invalid)?
         .color_type
         == png::ColorType::Indexed;
     if is_indexed {
-        return decode_indexed_png_rgba(bytes);
+        return decode_indexed_png_rgba(decoder);
     }
 
-    let cursor = Cursor::new(bytes);
-    let mut decoder = png::Decoder::new(cursor);
     decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
 
     let mut reader = decoder.read_info().map_err(|_| PngDecodeError::Invalid)?;

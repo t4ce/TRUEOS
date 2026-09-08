@@ -199,19 +199,27 @@ fn expand_rgb_rows(
     rows: Range<usize>,
     pixels: &[u8],
 ) -> Result<Vec<u8>, PngDecodeError> {
-    let src_row_bytes = width.saturating_mul(3);
-    let expected = src_row_bytes.saturating_mul(rows.end);
-    if pixels.len() < expected {
-        return Err(PngDecodeError::DecodeFailed);
-    }
-
-    let mut out = Vec::with_capacity(rows.len().saturating_mul(width).saturating_mul(4));
-    for y in rows {
-        let row_start = y.saturating_mul(src_row_bytes);
-        let row = &pixels[row_start..row_start + src_row_bytes];
-        for chunk in row.chunks_exact(3) {
-            out.extend_from_slice(&[chunk[0], chunk[1], chunk[2], 0xFF]);
-        }
+    let row_bytes = width.checked_mul(3).ok_or(PngDecodeError::DecodeFailed)?;
+    let start = rows
+        .start
+        .checked_mul(row_bytes)
+        .ok_or(PngDecodeError::DecodeFailed)?;
+    let end = rows
+        .end
+        .checked_mul(row_bytes)
+        .ok_or(PngDecodeError::DecodeFailed)?;
+    let source = pixels.get(start..end).ok_or(PngDecodeError::DecodeFailed)?;
+    let output_len = (source.len() / 3)
+        .checked_mul(4)
+        .ok_or(PngDecodeError::DecodeFailed)?;
+    // Fixed output slots remove Vec growth checks from the per-pixel loop and
+    // let LLVM vectorize the channel expansion across adjacent pixels.
+    let mut out = vec![0u8; output_len];
+    for (rgba, pixel) in out.chunks_exact_mut(4).zip(source.chunks_exact(3)) {
+        rgba[0] = pixel[0];
+        rgba[1] = pixel[1];
+        rgba[2] = pixel[2];
+        rgba[3] = 255;
     }
     Ok(out)
 }
@@ -221,19 +229,28 @@ fn expand_gray_rows(
     rows: Range<usize>,
     pixels: &[u8],
 ) -> Result<Vec<u8>, PngDecodeError> {
-    let src_row_bytes = width;
-    let expected = src_row_bytes.saturating_mul(rows.end);
-    if pixels.len() < expected {
-        return Err(PngDecodeError::DecodeFailed);
-    }
-
-    let mut out = Vec::with_capacity(rows.len().saturating_mul(width).saturating_mul(4));
-    for y in rows {
-        let row_start = y.saturating_mul(src_row_bytes);
-        let row = &pixels[row_start..row_start + src_row_bytes];
-        for &value in row {
-            out.extend_from_slice(&[value, value, value, 0xFF]);
-        }
+    let row_bytes = width;
+    let start = rows
+        .start
+        .checked_mul(row_bytes)
+        .ok_or(PngDecodeError::DecodeFailed)?;
+    let end = rows
+        .end
+        .checked_mul(row_bytes)
+        .ok_or(PngDecodeError::DecodeFailed)?;
+    let source = pixels.get(start..end).ok_or(PngDecodeError::DecodeFailed)?;
+    let output_len = source
+        .len()
+        .checked_mul(4)
+        .ok_or(PngDecodeError::DecodeFailed)?;
+    // Fixed output slots remove Vec growth checks from the per-pixel loop and
+    // let LLVM vectorize the channel expansion across adjacent pixels.
+    let mut out = vec![0u8; output_len];
+    for (rgba, pixel) in out.chunks_exact_mut(4).zip(source.chunks_exact(1)) {
+        rgba[0] = pixel[0];
+        rgba[1] = pixel[0];
+        rgba[2] = pixel[0];
+        rgba[3] = 255;
     }
     Ok(out)
 }
@@ -243,19 +260,27 @@ fn expand_gray_alpha_rows(
     rows: Range<usize>,
     pixels: &[u8],
 ) -> Result<Vec<u8>, PngDecodeError> {
-    let src_row_bytes = width.saturating_mul(2);
-    let expected = src_row_bytes.saturating_mul(rows.end);
-    if pixels.len() < expected {
-        return Err(PngDecodeError::DecodeFailed);
-    }
-
-    let mut out = Vec::with_capacity(rows.len().saturating_mul(width).saturating_mul(4));
-    for y in rows {
-        let row_start = y.saturating_mul(src_row_bytes);
-        let row = &pixels[row_start..row_start + src_row_bytes];
-        for chunk in row.chunks_exact(2) {
-            out.extend_from_slice(&[chunk[0], chunk[0], chunk[0], chunk[1]]);
-        }
+    let row_bytes = width.checked_mul(2).ok_or(PngDecodeError::DecodeFailed)?;
+    let start = rows
+        .start
+        .checked_mul(row_bytes)
+        .ok_or(PngDecodeError::DecodeFailed)?;
+    let end = rows
+        .end
+        .checked_mul(row_bytes)
+        .ok_or(PngDecodeError::DecodeFailed)?;
+    let source = pixels.get(start..end).ok_or(PngDecodeError::DecodeFailed)?;
+    let output_len = (source.len() / 2)
+        .checked_mul(4)
+        .ok_or(PngDecodeError::DecodeFailed)?;
+    // Fixed output slots remove Vec growth checks from the per-pixel loop and
+    // let LLVM vectorize the channel expansion across adjacent pixels.
+    let mut out = vec![0u8; output_len];
+    for (rgba, pixel) in out.chunks_exact_mut(4).zip(source.chunks_exact(2)) {
+        rgba[0] = pixel[0];
+        rgba[1] = pixel[0];
+        rgba[2] = pixel[0];
+        rgba[3] = pixel[1];
     }
     Ok(out)
 }

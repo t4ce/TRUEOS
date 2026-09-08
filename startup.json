@@ -15,9 +15,9 @@
       { "label": "BIOS setup", "url": "http://192.168.178.94:8338/" },
       { "label": "TRUEOS files", "url": "http://192.168.178.94/" },
       { "label": "PeerTube browse", "url": "https://joinpeertube.org/browse-content" },
-      { "label": "Text and borders", "url": "demo1" },
-      { "label": "Divs and panels", "url": "demo2" },
-      { "label": "Flow and forms", "url": "demo3" },
+      { "label": "Text and borders", "url": "https://www.google.de" },
+      { "label": "Divs and panels", "url": "http://localhost" },
+      { "label": "Flow and forms", "url": "https://example.de/" },
       { "label": "Example domain", "url": "https://example.com/" },
       { "label": "First website", "url": "http://info.cern.ch/hypertext/WWW/TheProject.html" },
       { "label": "PeerTube home", "url": "https://joinpeertube.org/" }

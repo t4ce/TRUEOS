@@ -43,7 +43,9 @@ fn unfilter_up_chunked(previous: &[u8], current: &mut [u8]) {
 #[cfg(target_arch = "x86_64")]
 #[inline]
 fn unfilter_up(previous: &[u8], current: &mut [u8]) {
-    if !UP_FASTPATH_LOGGED.swap(true, Ordering::AcqRel) {
+    if !UP_FASTPATH_LOGGED.load(Ordering::Relaxed)
+        && !UP_FASTPATH_LOGGED.swap(true, Ordering::Relaxed)
+    {
         let len = current.len().min(previous.len());
         log_os::info!(
             "png: up fastpath lane=sse2 current_len={} previous_len={} min_len={} tail={} prove=vendor-fastpath-first-hit",
