@@ -717,6 +717,7 @@ unsafe extern "C" {
         window_id: u32,
         step: *const TrueosUi4CursorStep,
     ) -> i32;
+    pub fn trueos_cabi_ui4_scene_set_center_snapped_mouse(window_id: u32, enabled: u32) -> i32;
     pub fn trueos_cabi_ui4_scene_pointer_event_take(
         window_id: u32,
         out: *mut TrueosUi4PointerEvent,

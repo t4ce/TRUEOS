@@ -552,20 +552,37 @@ impl InputBroker {
         let Some((width, height)) = crate::intel::active_scanout_dimensions() else {
             return;
         };
-        let x = normalized_to_pixel(event.x, width);
-        let y = normalized_to_pixel(event.y, height);
+        let raw_x = normalized_to_pixel(event.x, width);
+        let raw_y = normalized_to_pixel(event.y, height);
         let source = Ui4CursorSource::from_event(event);
         let (combo_id, vcursor) = cursor_hut_metadata(source);
-        let index = self.cursor_index(source, x, y);
+        let index = self.cursor_index(source, raw_x, raw_y);
+        let snapped_window = super::center_snapped_frame_for_source(source)
+            .and_then(|key| super::window_broker::window_snapshot(key.owner, key.window));
+        let (x, y) = snapped_window.map_or((raw_x, raw_y), |window| {
+            let placement = window.presentation_placement;
+            let center_x = i64::from(placement.x) + i64::from(placement.width) / 2;
+            let center_y = i64::from(placement.y) + i64::from(placement.height) / 2;
+            (
+                center_x.clamp(0, i64::from(width.saturating_sub(1))) as u32,
+                center_y.clamp(0, i64::from(height.saturating_sub(1))) as u32,
+            )
+        });
         let previous_buttons = self.cursors[index].buttons_down;
         let routed_button_mask = u32::MAX;
         let buttons_down = event.buttons_down & routed_button_mask;
         let previous_routed_buttons = previous_buttons & routed_button_mask;
         let pressed = buttons_down & !previous_routed_buttons;
         let released = previous_routed_buttons & !buttons_down;
-        let dx = signed_delta(x, self.cursors[index].x);
-        let dy = signed_delta(y, self.cursors[index].y);
-        let hit = topmost_window_at(x, y);
+        let (dx, dy) = if snapped_window.is_some() && event.reserved0 & 1 != 0 {
+            (
+                i32::from(i16::from_ne_bytes(event.reserved1.to_ne_bytes())),
+                i32::from(i16::from_ne_bytes(event.reserved2.to_ne_bytes())),
+            )
+        } else {
+            (signed_delta(x, self.cursors[index].x), signed_delta(y, self.cursors[index].y))
+        };
+        let hit = snapped_window.or_else(|| topmost_window_at(x, y));
 
         super::context_menu::pointer_moved(source, x, y, width, height);
         if dx != 0 || dy != 0 {
@@ -2141,6 +2158,19 @@ fn signed_local(pixel: u32, origin: i32) -> i32 {
 fn cursor_visual_presentation(
     route: &CursorRoute,
 ) -> (u32, u32, super::Ui4CursorIcon, Option<Ui4VisualRect>) {
+    if let Some(key) = super::center_snapped_frame_for_source(route.source)
+        && let Some(window) = super::window_broker::window_snapshot(key.owner, key.window)
+    {
+        let placement = window.presentation_placement;
+        let x = (i64::from(placement.x) + i64::from(placement.width) / 2)
+            .clamp(0, i64::from(u32::MAX)) as u32;
+        let y = (i64::from(placement.y) + i64::from(placement.height) / 2)
+            .clamp(0, i64::from(u32::MAX)) as u32;
+        let icon = super::cursor_presentation_for_source(route.source)
+            .map(|(_, icon, _)| icon)
+            .unwrap_or_default();
+        return (x, y, icon, None);
+    }
     let Some((key, icon, step)) = super::cursor_presentation_for_source(route.source) else {
         return (route.x, route.y, super::Ui4CursorIcon::Default, None);
     };

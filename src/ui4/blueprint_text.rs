@@ -49,10 +49,10 @@ use super::{
     destroy_frame, finish_window_session, finish_window_session_with_request,
     focused_keyboard_state, gpgpu_rgba_surface, mark_frame_buffer_cpu_authored,
     mark_frame_buffer_fully_opaque, publish_frame_buffer, publish_gpgpu_scene_frame_buffer,
-    publish_resident_scene_frame_buffer, publish_window_frame, set_window_cursor_icon,
-    set_window_cursor_step, set_window_custom_cursor, set_window_hit_testable, set_window_opacity,
-    set_window_position, take_owner_input_events, take_window_first_presentation,
-    window_input_routes, window_resize_state, writable_rgba_view,
+    publish_resident_scene_frame_buffer, publish_window_frame, set_window_center_snapped_mouse,
+    set_window_cursor_icon, set_window_cursor_step, set_window_custom_cursor,
+    set_window_hit_testable, set_window_opacity, set_window_position, take_owner_input_events,
+    take_window_first_presentation, window_input_routes, window_resize_state, writable_rgba_view,
 };
 
 mod guest_transport;
@@ -2799,6 +2799,40 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_set_cursor_step(
         surface.window
     };
     if set_window_cursor_step(owner, window, step).is_err() {
+        return ERROR_UI4;
+    }
+    0
+}
+
+/// Keep each selected physical N-Mouse route at this frame's center while
+/// delivering its unbounded relative report as pointer dx/dy. Passing zero
+/// restores ordinary absolute desktop cursor behavior.
+pub extern "C" fn trueos_cabi_ui4_scene_set_center_snapped_mouse(
+    window_id: u32,
+    enabled: u32,
+) -> i32 {
+    if enabled > 1 {
+        return ERROR_INVALID;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_status(
+            trueos_vm::vmcall::OP_BP_UI4_SCENE_SET_CENTER_SNAPPED_MOUSE,
+            window_id as u64,
+            enabled as u64,
+            &[],
+        );
+    }
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT;
+    };
+    let window = {
+        let mut surfaces = SURFACES.lock();
+        let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+            return ERROR_NOT_FOUND;
+        };
+        surface.window
+    };
+    if set_window_center_snapped_mouse(owner, window, enabled != 0).is_err() {
         return ERROR_UI4;
     }
     0

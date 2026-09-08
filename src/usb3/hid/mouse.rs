@@ -163,11 +163,13 @@ pub(crate) fn handle_decoded_report(
         slot_id: runtime.slot_id,
         ep_target: runtime.ep_target,
         hid_kind: runtime.hid_kind,
-        reserved0: 0,
-        reserved1: 0,
+        // UI4 pointer-lock consumers need the unbounded relative report, not
+        // a delta reconstructed from the clamped desktop cursor position.
+        reserved0: 1,
+        reserved1: saturating_i16(dx) as u16,
         buttons_down: runtime.mouse_buttons_down,
         wheel: saturating_i16(wheel),
-        reserved2: 0,
+        reserved2: saturating_i16(dy) as u16,
         x: runtime.mouse_x,
         y: runtime.mouse_y,
         flags,

@@ -209,6 +209,9 @@
 # The UI4 cursor-step call is strictly additive. It takes an optional
 # fixed-width, frame-local 1/1024-pixel presentation grid and changes neither
 # raw cursor motion nor selected-frame input delivery.
+# The UI4 center-snapped-mouse call is strictly additive. It lets a frame opt
+# its selected physical N-Mouse routes into centered relative-motion delivery;
+# other cursor kinds and older Blueprints retain ordinary absolute behavior.
 # The retained-frame-submit v2 call is strictly additive. It carries an
 # 880-byte frame with an unchanged 816-byte V1 prefix plus 64 bytes of opaque
 # glTF material factors. Existing retained-frame symbols and layouts remain
@@ -223,4 +226,4 @@
 # requires package registration; rebuild the Shadertoy Blueprint with this kernel.
 # Image viewer open v1 adds one bounded launch-request symbol for typed paths.
 # All pre-existing function signatures are unchanged.
-71a6e6e07b0bc125bd0b570a93715bca03eec76ace22650eedfa17d8ad2b0f57
+9705f8b67f52d1cc915367af34e5dcd10f3f7f90800ba2c853f5532bbcfb95a9

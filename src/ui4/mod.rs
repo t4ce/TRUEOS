@@ -69,8 +69,9 @@ pub(crate) use context_menu::{
 };
 pub(crate) use cursor_frame_inout::{
     CursorFrameKey, GlobalKeyboardDisposition, GlobalKeyboardHookId, Ui4CursorIcon,
-    Ui4CursorSource, Ui4CursorStep, cursor_color, cursor_presentation_for_source,
-    register_global_keyboard_hook, selected_frame, selected_frame_for_source, selection_strips,
+    Ui4CursorSource, Ui4CursorStep, center_snapped_frame_for_source, cursor_color,
+    cursor_presentation_for_source, register_global_keyboard_hook, selected_frame,
+    selected_frame_for_source, selection_strips, set_window_center_snapped_mouse,
     set_window_cursor_icon, set_window_cursor_step, set_window_custom_cursor,
     unregister_global_keyboard_hook,
 };
@@ -86,11 +87,10 @@ pub(crate) use frame_pool::{
     published_rgba_view, release_published_frame, retain_published_frame, writable_rgba_view,
 };
 pub(crate) use gpgpu_preview_consumer::{
-    GPGPU_PREVIEW_DEFAULT_CADENCE_MS, GPGPU_PREVIEW_DEFAULT_PUBLISH_EVERY,
-    GpgpuPreviewPreset, gpgpu_preview_consumer_service_task, gpgpu_preview_status,
-    request_cpp_font_preview_start,
-    request_cpp_font_rush2_start, request_cpp_font_rush2_stop, request_win_demo_start,
-    request_gpgpu_preview_stop,
+    GPGPU_PREVIEW_DEFAULT_CADENCE_MS, GPGPU_PREVIEW_DEFAULT_PUBLISH_EVERY, GpgpuPreviewPreset,
+    gpgpu_preview_consumer_service_task, gpgpu_preview_status, request_cpp_font_preview_start,
+    request_cpp_font_rush2_start, request_cpp_font_rush2_stop, request_gpgpu_preview_stop,
+    request_win_demo_start,
 };
 pub(crate) use gpgpu_svg_probe_consumer::{
     GpgpuSvgProbeConfig, gpgpu_svg_probe_consumer_service_task, gpgpu_svg_probe_status,
@@ -114,9 +114,9 @@ pub(crate) use slot4_service::ui4_slot4_service_task;
 pub(crate) use start_button::{request_start_button_reveal, ui4_start_button_service_task};
 pub(crate) use video_frame::{
     DecodedNv12Source, DecodedVideoConversionProbeReport, DecodedVideoConversionReport,
-    VideoPlaybackSession, VIDEO_RGBA_BUFFER_COUNT, begin_decoded_nv12_conversion_batch,
-    begin_shell_decoded_video_player, request_video_playback_stop, video_playback_status,
-    enqueue_decoded_nv12_stream_frame, ui4_video_conversion_service_task,
+    VIDEO_RGBA_BUFFER_COUNT, VideoPlaybackSession, begin_decoded_nv12_conversion_batch,
+    begin_shell_decoded_video_player, enqueue_decoded_nv12_stream_frame,
+    request_video_playback_stop, ui4_video_conversion_service_task, video_playback_status,
     wait_decoded_nv12_conversion_idle,
 };
 
