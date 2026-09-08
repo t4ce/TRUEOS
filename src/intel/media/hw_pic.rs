@@ -109,6 +109,8 @@ pub(crate) struct HwPicOutput {
     pub height: u32,
     pub visible_width: u32,
     pub visible_height: u32,
+    pub video_full_range: bool,
+    pub matrix_coefficients: u8,
     pub pitch_bytes: usize,
     pub uv_offset: usize,
     pub byte_len: usize,
@@ -591,6 +593,8 @@ fn failed_output(job: &HwPicJob, code: i32) -> HwPicOutput {
         height: 0,
         visible_width: 0,
         visible_height: 0,
+        video_full_range: false,
+        matrix_coefficients: 2,
         pitch_bytes: 0,
         uv_offset: 0,
         byte_len: job.encoded.len(),
@@ -1657,6 +1661,8 @@ async fn process_h264_job(job: HwPicJob) -> HwPicOutput {
         codec: job.codec,
         status: output_status,
         format: HwPicPixelFormat::Nv12,
+        video_full_range: plan.picture.video_full_range,
+        matrix_coefficients: plan.picture.matrix_coefficients,
         width: if avc.retired { avc.coded_width } else { 0 },
         height: if avc.retired { avc.coded_height } else { 0 },
         visible_width: if avc.retired {
@@ -1994,6 +2000,8 @@ fn process_jpeg_job(job: HwPicJob) -> (HwPicOutput, Result<HwJpegImage, i32>) {
         height: if retired { smoke.coded_height } else { 0 },
         visible_width: if retired { smoke.coded_width } else { 0 },
         visible_height: if retired { smoke.coded_height } else { 0 },
+        video_full_range: true,
+        matrix_coefficients: 6,
         pitch_bytes: if retired {
             smoke.output_surface_pitch
         } else {

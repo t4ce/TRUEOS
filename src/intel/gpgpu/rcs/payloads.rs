@@ -187,6 +187,7 @@ fn direct_rcs_write_ui4_nv12_frame_payload_at(
         core::ptr::write_volatile(dwords.add(27), params.content_height);
         core::ptr::write_volatile(dwords.add(28), params.source_x);
         core::ptr::write_volatile(dwords.add(29), params.source_y);
+        core::ptr::write_volatile(dwords.add(30), params.colorimetry);
 
         let local_ids = payload.add(UI4_NV12_PRIMARY_CROSS_THREAD_BYTES) as *mut u16;
         for lane in 0..16usize {

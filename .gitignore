@@ -24,4 +24,7 @@ tinyllama/
 roms/
 *.gb
 *.gbc
+# Local video captures too large for the repository.
+/tools/vid/DSC_1879.MP4
+/tools/vid/screenrec.mp4
 *_pre_exec_handle_14_off_0x0_len_0x8000000.bin

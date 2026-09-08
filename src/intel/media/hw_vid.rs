@@ -616,6 +616,25 @@ struct Mp4Box {
     end: usize,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct H264ColourDescription {
+    matrix_coefficients: u8,
+    full_range: Option<bool>,
+}
+
+impl H264ColourDescription {
+    fn resolve(self, full_range: bool, matrix: u8) -> (bool, u8) {
+        (
+            self.full_range.unwrap_or(full_range),
+            if self.matrix_coefficients == 2 {
+                matrix
+            } else {
+                self.matrix_coefficients
+            },
+        )
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 struct Mp4StscEntry {
     first_chunk: u32,
@@ -636,6 +655,7 @@ struct Mp4AvcTrackInfo {
     track_id: u32,
     timescale: u32,
     length_size: usize,
+    colour: Option<H264ColourDescription>,
     sps: Vec<Vec<u8>>,
     pps: Vec<Vec<u8>>,
 }
@@ -644,6 +664,7 @@ struct Mp4AvcTrack {
     track_id: u32,
     timescale: u32,
     length_size: usize,
+    colour: Option<H264ColourDescription>,
     sps: Vec<Vec<u8>>,
     pps: Vec<Vec<u8>>,
     samples: Vec<Mp4SampleRef>,
@@ -671,6 +692,7 @@ struct H264SampleTiming {
     pts: i64,
     duration: u32,
     timescale: u32,
+    colour: Option<H264ColourDescription>,
 }
 
 struct H264DemuxedAvc {
@@ -810,10 +832,27 @@ fn mp4_parse_avcc(
     Ok((length_size, sps, pps))
 }
 
+fn mp4_parse_colour(data: &[u8]) -> Result<Option<H264ColourDescription>, &'static str> {
+    let kind = mp4_fourcc(data, 0).ok_or("mp4 colr missing type")?;
+    if kind != *b"nclx" && kind != *b"nclc" {
+        return Ok(None); // ICC profiles are outside the matrix conversion path.
+    }
+    let matrix = mp4_read_u16(data, 8).ok_or("mp4 colr truncated matrix")?;
+    let full_range = if kind == *b"nclx" {
+        Some(*data.get(10).ok_or("mp4 nclx missing range")? & 0x80 != 0)
+    } else {
+        None // QuickTime nclc has no range flag; retain the AVC VUI value.
+    };
+    Ok(Some(H264ColourDescription {
+        matrix_coefficients: u8::try_from(matrix)
+            .map_err(|_| "mp4 colour matrix outside H.264 range")?,
+        full_range,
+    }))
+}
 fn mp4_parse_stsd_avc1(
     data: &[u8],
     stsd: Mp4Box,
-) -> Result<(usize, Vec<Vec<u8>>, Vec<Vec<u8>>), &'static str> {
+) -> Result<(usize, Vec<Vec<u8>>, Vec<Vec<u8>>, Option<H264ColourDescription>), &'static str> {
     let entry_count =
         mp4_read_u32(data, stsd.payload_start + 4).ok_or("mp4 stsd missing entry count")? as usize;
     let mut cursor = stsd.payload_start + 8;
@@ -824,13 +863,17 @@ fn mp4_parse_stsd_avc1(
             let child_start = entry.payload_start.saturating_add(78);
             let avcc = mp4_find_child(data, child_start, entry.end, *b"avcC")
                 .ok_or("mp4 AVC sample entry missing avcC")?;
-            return mp4_parse_avcc(data, avcc.payload_start, avcc.end);
+            let (length_size, sps, pps) = mp4_parse_avcc(data, avcc.payload_start, avcc.end)?;
+            let colour = mp4_find_child(data, child_start, entry.end, *b"colr")
+                .map(|colr| mp4_parse_colour(&data[colr.payload_start..colr.end]))
+                .transpose()?
+                .flatten();
+            return Ok((length_size, sps, pps, colour));
         }
         cursor = entry.end;
     }
     Err("mp4 stsd has no avc1/avc3 entry")
 }
-
 fn mp4_parse_tkhd_track_id(data: &[u8], tkhd: Mp4Box) -> Result<u32, &'static str> {
     let version = *data.get(tkhd.payload_start).ok_or("mp4 tkhd too short")?;
     let track_id_offset = if version == 1 {
@@ -876,11 +919,12 @@ fn mp4_parse_avc_track_info(
         .ok_or("mp4 video track missing stbl")?;
     let stsd = mp4_find_child(data, stbl.payload_start, stbl.end, *b"stsd")
         .ok_or("mp4 video track missing stsd")?;
-    let (length_size, sps, pps) = mp4_parse_stsd_avc1(data, stsd)?;
+    let (length_size, sps, pps, colour) = mp4_parse_stsd_avc1(data, stsd)?;
     Ok(Some(Mp4AvcTrackInfo {
         track_id: mp4_parse_tkhd_track_id(data, tkhd)?,
         timescale,
         length_size,
+        colour,
         sps,
         pps,
     }))
@@ -1124,6 +1168,7 @@ fn mp4_parse_avc_track(data: &[u8], trak: Mp4Box) -> Result<Option<Mp4AvcTrack>,
         track_id: info.track_id,
         timescale: info.timescale,
         length_size: info.length_size,
+        colour: info.colour,
         sps: info.sps,
         pps: info.pps,
         samples,
@@ -1448,6 +1493,7 @@ fn mp4_emit_track_annexb(
                 .saturating_add(sample.composition_offset),
             duration: sample.duration,
             timescale: track.timescale,
+            colour: track.colour,
         });
     }
     if out.is_empty() || samples_emitted == 0 {
@@ -1498,6 +1544,7 @@ fn mp4_avc1_to_annexb(data: &[u8]) -> Result<H264DemuxedAvc, &'static str> {
                 track_id: info.track_id,
                 timescale: info.timescale,
                 length_size: info.length_size,
+                colour: info.colour,
                 sps: info.sps,
                 pps: info.pps,
                 samples,
@@ -2085,7 +2132,20 @@ async fn h264_i_p_playback_probe_with_reader(
             )
             .await
             {
-                Ok(output) => {
+                Ok(mut output) => {
+                    if let Some(colour) = unit.timing.and_then(|timing| timing.colour) {
+                        (output.video_full_range, output.matrix_coefficients) =
+                            colour.resolve(output.video_full_range, output.matrix_coefficients);
+                    }
+                    if retired == 0 {
+                        crate::log_info!(target: "intel-media";
+                            "intel/hw_vid: colour-selected matrix_coefficients={} full_range={} source={} conversion={}\n",
+                            output.matrix_coefficients,
+                            output.video_full_range as u8,
+                            if unit.timing.and_then(|timing| timing.colour).is_some() { "mp4-colr+avc-vui" } else { "avc-vui" },
+                            if output.matrix_coefficients == 1 { "bt709" } else { "bt601" },
+                        );
+                    }
                     retired = retired.saturating_add(1);
                     if crate::intel::hw_pic::hold_h264_output_surface(&output) {
                         H264PresentationSlot::Ready(H264PendingPresentation {
@@ -2583,6 +2643,8 @@ async fn h264_queue_probe_output(
             height: output.height,
             visible_width: output.visible_width,
             visible_height: output.visible_height,
+            video_full_range: output.video_full_range,
+            matrix_coefficients: output.matrix_coefficients,
             pitch_bytes: output.pitch_bytes,
             uv_offset: output.uv_offset,
         };

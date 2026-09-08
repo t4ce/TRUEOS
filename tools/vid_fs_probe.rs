@@ -33,6 +33,10 @@ fn main() {
         .concat();
         let mut plan = h264_cmd::parse_annexb_single_picture_plan(&frame)
             .unwrap_or_else(|err| panic!("frame {index}: parse {err:?}"));
+        if let Some(colour) = timing.get(index).and_then(|timing| timing.colour) {
+            (plan.picture.video_full_range, plan.picture.matrix_coefficients) =
+                colour.resolve(plan.picture.video_full_range, plan.picture.matrix_coefficients);
+        }
         if index == 0 {
             println!(
                 "coded={}x{} visible={}x{} entropy={} poc_type={}",
@@ -90,16 +94,19 @@ fn main() {
             pts: 0,
             duration: 0,
             timescale: 0,
+            colour: None,
         });
         writeln!(
             metadata,
-            "{} {} {} {} {} {}",
+            "{} {} {} {} {} {} {} {}",
             plan.picture.visible_width,
             plan.picture.visible_height,
             stamp.dts,
             stamp.pts,
             stamp.duration,
-            stamp.timescale
+            stamp.timescale,
+            plan.picture.video_full_range as u8,
+            plan.picture.matrix_coefficients
         )
         .unwrap();
     }

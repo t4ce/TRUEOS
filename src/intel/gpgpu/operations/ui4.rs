@@ -546,6 +546,8 @@ pub(crate) fn queue_ui4_video_frame_nv12_tile64_to_rgba8(
     content_height: u32,
     source_x: u32,
     source_y: u32,
+    video_full_range: bool,
+    matrix_coefficients: u8,
 ) -> Result<Ui4CompositorSubmission, Ui4CompositorSubmitError> {
     let queue_started_tick = direct_rcs_now_tick();
     let mut probe = GpgpuSubmissionProbe::default();
@@ -610,6 +612,7 @@ pub(crate) fn queue_ui4_video_frame_nv12_tile64_to_rgba8(
         content_height,
         source_x,
         source_y,
+        colorimetry: u32::from(matrix_coefficients) | (u32::from(video_full_range) << 8),
     };
     let dev = super::claimed_device().ok_or(Ui4CompositorSubmitError::Unavailable)?;
     let upload = upload_ui4_nv12_tile64_to_rgba8_frame_kernel()

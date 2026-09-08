@@ -54,6 +54,8 @@ pub(crate) struct Ui4Nv12Tile64ToRgba8FrameParams {
     pub(crate) content_height: u32,
     pub(crate) source_x: u32,
     pub(crate) source_y: u32,
+    /// H.264 matrix_coefficients in bits 0..7; video_full_range_flag in bit 8.
+    pub(crate) colorimetry: u32,
 }
 
 #[repr(C)]

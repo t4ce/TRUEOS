@@ -56,6 +56,8 @@ pub(crate) struct DecodedNv12Source {
     pub(crate) height: u32,
     pub(crate) visible_width: u32,
     pub(crate) visible_height: u32,
+    pub(crate) video_full_range: bool,
+    pub(crate) matrix_coefficients: u8,
     pub(crate) pitch_bytes: usize,
     pub(crate) uv_offset: usize,
 }
@@ -1336,6 +1338,8 @@ async fn convert_publish_decoded_nv12_stream_frame(
             layout.height,
             layout.source_x,
             layout.source_y,
+            source.video_full_range,
+            source.matrix_coefficients,
         ) {
             Ok(submission) => break submission,
             Err(crate::intel::gpgpu::Ui4CompositorSubmitError::Busy)

@@ -22,9 +22,29 @@ inline uint ui4_media_ytile_8bpp_offset(uint byte_x, uint row_y, uint tiles_per_
     return (tile_row * tiles_per_row + tile_col) * 4096u + within_tile;
 }
 
-inline uint ui4_clamped_bt601_channel(int value)
+inline uint ui4_clamped_yuv_channel(int value)
 {
     return (uint)clamp((value + 128) >> 8, 0, 255);
+}
+
+// Matrix 1 is BT.709; unspecified/legacy content retains BT.601. Bit 8
+// carries video_full_range_flag. Coefficients use eight fractional bits.
+inline uint ui4_yuv_to_rgba(uchar y, uchar u, uchar v, uint colorimetry)
+{
+    bool full_range = (colorimetry & 256u) != 0;
+    bool bt709 = (colorimetry & 255u) == 1u;
+    int c = full_range ? (int)y : max((int)y - 16, 0);
+    int d = (int)u - 128;
+    int e = (int)v - 128;
+    int cy = full_range ? 256 : 298;
+    int rv = bt709 ? (full_range ? 403 : 459) : (full_range ? 359 : 409);
+    int gu = bt709 ? (full_range ? 48 : 55) : (full_range ? 88 : 100);
+    int gv = bt709 ? (full_range ? 120 : 136) : (full_range ? 183 : 208);
+    int bu = bt709 ? (full_range ? 475 : 541) : (full_range ? 454 : 516);
+    uint r = ui4_clamped_yuv_channel(cy * c + rv * e);
+    uint g = ui4_clamped_yuv_channel(cy * c - gu * d - gv * e);
+    uint b = ui4_clamped_yuv_channel(cy * c + bu * d);
+    return 0xFF000000u | (b << 16) | (g << 8) | r;
 }
 
 __attribute__((intel_reqd_sub_group_size(16)))
@@ -43,7 +63,8 @@ __kernel void ui4_nv12_tile64_to_rgba8_frame(
     uint content_width,
     uint content_height,
     uint source_x,
-    uint source_y)
+    uint source_y,
+    uint colorimetry)
 {
     uint x = get_global_id(0);
     uint y = get_global_id(1);
@@ -76,11 +97,6 @@ __kernel void ui4_nv12_tile64_to_rgba8_frame(
         chroma_row + (sample_y >> 1),
         tiles_per_row);
 
-    int c = max((int)src_nv12[y_offset] - 16, 0);
-    int d = (int)src_nv12[uv_offset] - 128;
-    int e = (int)src_nv12[uv_offset + 1u] - 128;
-    uint r = ui4_clamped_bt601_channel(298 * c + 409 * e);
-    uint g = ui4_clamped_bt601_channel(298 * c - 100 * d - 208 * e);
-    uint b = ui4_clamped_bt601_channel(298 * c + 516 * d);
-    dst_rgba[dst_index] = 0xFF000000u | (b << 16) | (g << 8) | r;
+    dst_rgba[dst_index] = ui4_yuv_to_rgba(
+        src_nv12[y_offset], src_nv12[uv_offset], src_nv12[uv_offset + 1u], colorimetry);
 }

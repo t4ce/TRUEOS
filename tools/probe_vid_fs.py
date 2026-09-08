@@ -3,7 +3,8 @@
 
 Compile the production MP4 demuxer, access-unit collector, AVC parser, DPB,
 resource binding and command builder on the host. Compare sample count, visible
-extent and every MP4 timestamp against ffprobe. GPU addresses are synthetic;
+extent, colour metadata and MP4 timing against ffprobe. A constant edit-list
+origin shift is normalized, as playback also subtracts the first display PTS. GPU addresses are synthetic;
 this does NOT check decoded pixels, DMA, GPU completion or presentation pacing.
 
 Requires rustc and ffprobe. Example:
@@ -81,21 +82,31 @@ static AVC_PRESENTATION_HOLDS: AtomicU16 = AtomicU16::new(0);
 def check_ffprobe(asset, rows):
     reference = json.loads(subprocess.check_output([
         "ffprobe", "-v", "error", "-select_streams", "v:0", "-show_packets",
-        "-show_entries", "packet=dts,pts,duration:stream=width,height,time_base",
+        "-show_entries", "packet=dts,pts,duration:stream=width,height,time_base,color_range,color_space",
         "-of", "json", str(asset),
     ], text=True))
     stream, = reference["streams"]
     packets = reference["packets"]
     assert len(rows) == len(packets), (asset, "frame count", len(rows), len(packets))
     time_base = Fraction(stream["time_base"])
+    origin_shift = Fraction(0)
+    first = list(map(int, rows[0].split()))
+    if first[5]:
+        origin_shift = Fraction(first[2], first[5]) - int(packets[0]["dts"]) * time_base
     for index, (row, packet) in enumerate(zip(rows, packets)):
-        width, height, dts, pts, duration, timescale = map(int, row.split())
+        width, height, dts, pts, duration, timescale, full_range, matrix = map(int, row.split())
         assert (width, height) == (stream["width"], stream["height"]), (asset, index, "extent")
+        if "color_range" in stream:
+            assert bool(full_range) == (stream["color_range"] == "pc"), (asset, index, "range")
+        if stream.get("color_space") == "bt709":
+            assert matrix == 1, (asset, index, "BT.709 matrix", matrix)
         if timescale:
             for name, actual in [("dts", dts), ("pts", pts), ("duration", duration)]:
                 expected = int(packet[name]) * time_base
+                if name != "duration":
+                    expected += origin_shift
                 assert Fraction(actual, timescale) == expected, (asset, index, name, actual, expected)
-    print(f"ffprobe agreement: {len(rows)} frames, visible extent and MP4 timestamps", flush=True)
+    print(f"ffprobe agreement: {len(rows)} frames, visible extent, colour metadata and normalized MP4 timing", flush=True)
 
 
 def main():

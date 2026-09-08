@@ -291,6 +291,8 @@ pub(crate) struct AvcPictureParams {
     pub slice_group_change_rate_minus1: u16,
     pub visible_width: u32,
     pub visible_height: u32,
+    pub video_full_range: bool,
+    pub matrix_coefficients: u8,
 }
 
 impl AvcPictureParams {
@@ -1307,6 +1309,8 @@ pub(crate) fn parse_annexb_single_picture_plan(
         slice_group_change_rate_minus1: pps.slice_group_change_rate_minus1,
         visible_width: sps.visible_width,
         visible_height: sps.visible_height,
+        video_full_range: sps.video_full_range,
+        matrix_coefficients: sps.matrix_coefficients,
     };
     let resources = AvcDecodeResourcePlan {
         dest_surface: surface,
@@ -2801,6 +2805,8 @@ struct ParsedSps {
     coded_height: u32,
     visible_width: u32,
     visible_height: u32,
+    video_full_range: bool,
+    matrix_coefficients: u8,
     log2_max_frame_num_minus4: u8,
     max_num_ref_frames: u8,
     pic_order_cnt_type: u8,
@@ -2960,6 +2966,13 @@ fn parse_sps(payload: &[u8]) -> Result<ParsedSps, AvcAnnexBPlanError> {
     if crop_x >= coded_width || crop_y >= coded_height {
         return Err(AvcAnnexBPlanError::UnsupportedSps);
     }
+    // H.264 Annex E: only the VUI prefix through colour_description is
+    // needed for NV12 presentation. Remaining VUI fields do not affect decode.
+    let (video_full_range, matrix_coefficients) = if br.read_bool()? {
+        parse_vui_colour_description(&mut br)?
+    } else {
+        (false, 2) // Unspecified matrix; preserve the historical BT.601 default.
+    };
     Ok(ParsedSps {
         seq_parameter_set_id,
         pic_width_in_mbs_minus1,
@@ -2968,6 +2981,8 @@ fn parse_sps(payload: &[u8]) -> Result<ParsedSps, AvcAnnexBPlanError> {
         coded_height,
         visible_width: coded_width - crop_x,
         visible_height: coded_height - crop_y,
+        video_full_range,
+        matrix_coefficients,
         log2_max_frame_num_minus4,
         max_num_ref_frames,
         pic_order_cnt_type,
@@ -2979,6 +2994,37 @@ fn parse_sps(payload: &[u8]) -> Result<ParsedSps, AvcAnnexBPlanError> {
     })
 }
 
+fn parse_vui_colour_description(
+    br: &mut H264BitReader<'_>,
+) -> Result<(bool, u8), AvcAnnexBPlanError> {
+    if br.read_bool()? {
+        // aspect_ratio_info_present_flag
+        if br.read_bits(8)? == 255 {
+            // Extended_SAR
+            let _sar_width = br.read_bits(16)?;
+            let _sar_height = br.read_bits(16)?;
+        }
+    }
+    if br.read_bool()? {
+        // overscan_info_present_flag
+        let _overscan_appropriate = br.read_bool()?;
+    }
+    if !br.read_bool()? {
+        // video_signal_type_present_flag
+        return Ok((false, 2));
+    }
+    let _video_format = br.read_bits(3)?;
+    let full_range = br.read_bool()?;
+    let matrix = if br.read_bool()? {
+        // colour_description_present_flag
+        let _colour_primaries = br.read_bits(8)?;
+        let _transfer_characteristics = br.read_bits(8)?;
+        br.read_bits(8)? as u8
+    } else {
+        2
+    };
+    Ok((full_range, matrix))
+}
 fn parse_pps(payload: &[u8]) -> Result<ParsedPps, AvcAnnexBPlanError> {
     let rbsp = rbsp_from_ebsp(payload);
     let mut br = H264BitReader::new(&rbsp);
