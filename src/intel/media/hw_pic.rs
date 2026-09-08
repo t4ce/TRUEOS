@@ -18,8 +18,11 @@ static JPEG_OUTPUTS: Mutex<VecDeque<HwJpegCompletion>> = Mutex::new(VecDeque::ne
 static WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
 static OUTPUT_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
 static JPEG_OUTPUT_WAIT: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
-static AVC_DPB: Mutex<AvcDpbState> = Mutex::new(AvcDpbState::new());
-static AVC_PRESENTATION_HOLDS: AtomicU16 = AtomicU16::new(0);
+static AVC_DPB: [Mutex<AvcDpbState>; 3] = [const { Mutex::new(AvcDpbState::new()) }; 3];
+static AVC_PRESENTATION_HOLDS: [AtomicU16; 3] = [const { AtomicU16::new(0) }; 3];
+
+static AVC_DPB_GENERATIONS: [core::sync::atomic::AtomicU64; 3] =
+    [const { core::sync::atomic::AtomicU64::new(0) }; 3];
 
 const AVC_DPB_RETAINED_REFS: usize = 8;
 const AVC_INVALID_SURFACE_SLOT: u8 = u8::MAX;
@@ -118,6 +121,7 @@ pub(crate) struct HwPicOutput {
     pub phys_addr: u64,
     pub virt_addr: usize,
     pub surface_slot: u8,
+    pub decoder_session_slot: usize,
     pub error_code: i32,
     pub timing: HwPicTiming,
 }
@@ -602,6 +606,7 @@ fn failed_output(job: &HwPicJob, code: i32) -> HwPicOutput {
         phys_addr: 0,
         virt_addr: 0,
         surface_slot: AVC_INVALID_SURFACE_SLOT,
+        decoder_session_slot: 0,
         error_code: code,
         timing: HwPicTiming::default(),
     }
@@ -611,19 +616,21 @@ pub(crate) fn hold_h264_output_surface(output: &HwPicOutput) -> bool {
     if output.codec != HwPicCodec::H264 || output.surface_slot >= 16 {
         return false;
     }
-    AVC_PRESENTATION_HOLDS.fetch_or(1u16 << output.surface_slot, Ordering::AcqRel);
+    AVC_PRESENTATION_HOLDS[output.decoder_session_slot]
+        .fetch_or(1u16 << output.surface_slot, Ordering::AcqRel);
     true
 }
 
 pub(crate) fn release_h264_output_surface(output: &HwPicOutput) {
     if output.codec == HwPicCodec::H264 && output.surface_slot < 16 {
-        release_h264_output_surface_slot(output.surface_slot);
+        release_h264_output_surface_slot(output.decoder_session_slot, output.surface_slot);
     }
 }
 
-pub(crate) fn release_h264_output_surface_slot(surface_slot: u8) {
+pub(crate) fn release_h264_output_surface_slot(decoder_session_slot: usize, surface_slot: u8) {
     if surface_slot < 16 {
-        AVC_PRESENTATION_HOLDS.fetch_and(!(1u16 << surface_slot), Ordering::AcqRel);
+        AVC_PRESENTATION_HOLDS[decoder_session_slot]
+            .fetch_and(!(1u16 << surface_slot), Ordering::AcqRel);
     }
 }
 
@@ -677,6 +684,7 @@ fn avc_dpb_probe_layout(
 }
 
 fn avc_prepare_reference_state(
+    decoder_session_slot: usize,
     plan: &mut crate::intel::xelp_media_avc_decode_recipe::AvcLongFormatIdrPlan,
     layout: AvcDpbProbeLayout,
     output_gpu_addr: u64,
@@ -698,7 +706,7 @@ fn avc_prepare_reference_state(
         return Err(-29);
     }
 
-    let mut dpb = AVC_DPB.lock();
+    let mut dpb = AVC_DPB[decoder_session_slot].lock();
     if plan.picture.idr_pic {
         dpb.reset();
     }
@@ -722,7 +730,7 @@ fn avc_prepare_reference_state(
         return Err(-30);
     }
 
-    let presentation_holds = AVC_PRESENTATION_HOLDS.load(Ordering::Acquire);
+    let presentation_holds = AVC_PRESENTATION_HOLDS[decoder_session_slot].load(Ordering::Acquire);
     let current_slot = if plan.picture.idr_pic && presentation_holds == 0 {
         0
     } else {
@@ -848,13 +856,14 @@ fn avc_prepare_reference_state(
 }
 
 fn avc_commit_decoded_reference(
+    decoder_session_slot: usize,
     plan: crate::intel::xelp_media_avc_decode_recipe::AvcLongFormatIdrPlan,
     current_slot: usize,
 ) {
     if !plan.picture.reference_pic || plan.picture.max_num_ref_frames == 0 {
         return;
     }
-    let mut dpb = AVC_DPB.lock();
+    let mut dpb = AVC_DPB[decoder_session_slot].lock();
     let max_frame_num = 1u32
         .checked_shl(u32::from(plan.picture.log2_max_frame_num_minus4) + 4)
         .unwrap_or(0);
@@ -1080,6 +1089,20 @@ async fn process_h264_job(job: HwPicJob) -> HwPicOutput {
     };
     log_stage(job.id, "device", true, "claimed_device=ok", 0);
 
+    let Some(decoder_session_slot) =
+        super::engine::avc_decode_session_slot(job.media_session_generation)
+    else {
+        return failed_output(&job, -16);
+    };
+    let generation = job.media_session_generation.unwrap_or(0);
+    if AVC_DPB_GENERATIONS[decoder_session_slot].load(Ordering::Acquire) != generation {
+        // The reservation cannot be recycled until decode and RCS have drained.
+        if AVC_PRESENTATION_HOLDS[decoder_session_slot].load(Ordering::Acquire) != 0 {
+            return failed_output(&job, -16);
+        }
+        AVC_DPB[decoder_session_slot].lock().reset();
+        AVC_DPB_GENERATIONS[decoder_session_slot].store(generation, Ordering::Release);
+    }
     let (engine, windows) = super::xelp_media2_ngin_hw_pic::default_decode_engine_and_window();
     hw_pic_info!(
         "intel/hw_pic-stage: id={} stage=route accepted=1 codec=h264 engine={} bitstream_gpu=0x{:X} output_gpu=0x{:X} result_gpu=0x{:X}\n",
@@ -1090,7 +1113,9 @@ async fn process_h264_job(job: HwPicJob) -> HwPicOutput {
         windows.result_gpu_addr
     );
 
-    let Some(backing) = super::xelp_media2_ngin_hw_pic::ensure_decode_backing(dev, windows) else {
+    let Some(backing) =
+        super::engine::ensure_avc_session_backing(dev, windows, decoder_session_slot)
+    else {
         log_stage(job.id, "backing", false, "alloc-or-map-failed", -5);
         return failed_output(&job, -5);
     };
@@ -1128,6 +1153,7 @@ async fn process_h264_job(job: HwPicJob) -> HwPicOutput {
     );
     let (current_slot, references, reference_surfaces, live_refs) =
         match avc_prepare_reference_state(
+            decoder_session_slot,
             &mut plan,
             dpb_layout,
             windows.output_surface_gpu_addr,
@@ -1145,7 +1171,7 @@ async fn process_h264_job(job: HwPicJob) -> HwPicOutput {
                     plan.picture.bottom_field_order_cnt,
                     plan.slice.num_ref_idx_l0_active_minus1.saturating_add(1),
                     plan.slice.num_ref_idx_l1_active_minus1.saturating_add(1),
-                    AVC_DPB.lock().live_count()
+                    AVC_DPB[decoder_session_slot].lock().live_count()
                 );
                 return failed_output(&job, code);
             }
@@ -1634,7 +1660,7 @@ async fn process_h264_job(job: HwPicJob) -> HwPicOutput {
         output_error
     );
     if output_status == HwPicStatus::Ready {
-        avc_commit_decoded_reference(plan, current_slot);
+        avc_commit_decoded_reference(decoder_session_slot, plan, current_slot);
         hw_pic_info!(
             "intel/hw_pic-stage: id={} stage=avc-dpb-commit accepted=1 class={:?} frame_num={} poc={}/{} slot={} retained_refs={}\n",
             job.id,
@@ -1643,7 +1669,7 @@ async fn process_h264_job(job: HwPicJob) -> HwPicOutput {
             plan.picture.top_field_order_cnt,
             plan.picture.bottom_field_order_cnt,
             current_slot,
-            AVC_DPB.lock().live_count()
+            AVC_DPB[decoder_session_slot].lock().live_count()
         );
     } else {
         hw_pic_info!(
@@ -1694,6 +1720,7 @@ async fn process_h264_job(job: HwPicJob) -> HwPicOutput {
         phys_addr: output_phys_addr,
         virt_addr: output_virt_addr as usize,
         surface_slot: current_slot as u8,
+        decoder_session_slot,
         error_code: output_error,
         timing: HwPicTiming {
             backend_mode_transition: avc.mode_transition,
@@ -2017,6 +2044,7 @@ fn process_jpeg_job(job: HwPicJob) -> (HwPicOutput, Result<HwJpegImage, i32>) {
         phys_addr: backing.output_surface_phys,
         virt_addr: backing.output_surface_virt as usize,
         surface_slot: AVC_INVALID_SURFACE_SLOT,
+        decoder_session_slot: 0,
         error_code: if output_ready { 0 } else { -13 },
         timing: HwPicTiming::default(),
     };

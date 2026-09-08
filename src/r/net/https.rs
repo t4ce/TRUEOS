@@ -71,6 +71,14 @@ impl JsonPostCancellation {
     }
 }
 
+/// Cooperative media-download cancellation uses the same TLS-owner fence as
+/// JSON requests. Dropping a future alone would leave its socket service live.
+pub(crate) struct MediaFetchCancellation(JsonPostCancellation);
+impl MediaFetchCancellation {
+    pub(crate) fn new() -> Self { Self(JsonPostCancellation::new()) }
+    pub(crate) fn cancel(&self) { self.0.cancel(); }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct JsonPostCancelled;
 
@@ -1140,15 +1148,32 @@ async fn request_https_response_once(
     timeout_ms: u32,
     max_bytes: usize,
 ) -> Result<HttpsJsonResponse, String> {
-    crate::r::readiness::wait_for(
+    request_https_response_once_cancellable(target, request, timeout_ms, max_bytes, None).await
+}
+
+async fn request_https_response_once_cancellable(
+    target: &FetchTarget,
+    request: &HttpsRequest<'_>,
+    timeout_ms: u32,
+    max_bytes: usize,
+    cancellation: Option<&JsonPostCancellation>,
+) -> Result<HttpsJsonResponse, String> {
+    let readiness = crate::r::readiness::wait_for(
         crate::r::readiness::NET_ANY_CONFIGURED | crate::r::readiness::TLS_SOCKET_SERVICE_READY,
-    )
-    .await;
+    );
+    if let Some(cancellation) = cancellation {
+        await_json_post_or_cancel(readiness, cancellation).await
+            .map_err(|_| String::from(HTTPS_REQUEST_CANCELLED))?;
+    } else { readiness.await; }
 
     let device_index = NetProfile::default()
         .resolve_device_index()
         .ok_or_else(|| String::from("no nic"))?;
-    let ip = resolve_https_host(device_index, target.host.as_str(), timeout_ms).await?;
+    let resolve = resolve_https_host(device_index, target.host.as_str(), timeout_ms);
+    let ip = if let Some(cancellation) = cancellation {
+        await_json_post_or_cancel(resolve, cancellation).await
+            .map_err(|_| String::from(HTTPS_REQUEST_CANCELLED))??
+    } else { resolve.await? };
 
     let seq = HTTPS_FETCH_TLS_SEQ.fetch_add(1, Ordering::Relaxed);
     let owner = leak_str(format!("https-fetch-{}@{}", seq, device_index));
@@ -1168,7 +1193,7 @@ async fn request_https_response_once(
         &roots,
         timeout_ms,
         max_bytes,
-        None,
+        cancellation,
     )
     .await;
     let _ = fence_https_owner(cmds).await;
@@ -1450,6 +1475,7 @@ pub(crate) async fn get_media_bytes_profile_shared(
     profile: &str,
     timeout_ms: u32,
     max_bytes: usize,
+    cancellation: &MediaFetchCancellation,
 ) -> Result<Vec<u8>, String> {
     let target = parse_fetch_url(url).map_err(String::from)?;
     if target.scheme != "https" {
@@ -1485,7 +1511,9 @@ pub(crate) async fn get_media_bytes_profile_shared(
         headers,
         body: &[],
     };
-    request_https_bytes(&target, &request, timeout_ms.max(1), max_bytes).await
+    success_body(request_https_response_once_cancellable(
+        &target, &request, timeout_ms.max(1), max_bytes, Some(&cancellation.0),
+    ).await?)
 }
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]

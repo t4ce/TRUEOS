@@ -61,7 +61,7 @@ fn main() {
         assert!(surface_bytes * 16 <= 0x1000_0000, "probe surface window exhausted");
         let layout = avc_dpb_probe_layout(base, surface_bytes * 16, surface_bytes).unwrap();
         let (slot, refs, surfaces, _) =
-            avc_prepare_reference_state(&mut plan, layout, base, scratch)
+            avc_prepare_reference_state(0, &mut plan, layout, base, scratch)
                 .unwrap_or_else(|err| panic!("frame {index}: references {err}"));
         let bindings = avc_scratch_bindings(
             plan,
@@ -81,7 +81,17 @@ fn main() {
             h264_cmd::build_long_format_single_picture_command_stream(plan, bindings, refs)
                 .unwrap_or_else(|err| panic!("frame {index}: command build {err:?}"));
         assert!(h264_cmd::validate_long_format_single_picture_command_stream_shape(&commands));
-        avc_commit_decoded_reference(plan, slot);
+        avc_commit_decoded_reference(0, plan, slot);
+        for other in 1..3 {
+            let other_index = index / (other + 1);
+            if index % (other + 1) != 0 { continue; }
+            let other_unit = &access_units[other_index];
+            let other_frame = [other_unit.sps.as_slice(), other_unit.pps.as_slice(), other_unit.data.as_slice()].concat();
+            let mut other_plan = h264_cmd::parse_annexb_single_picture_plan(&other_frame).unwrap();
+            let (other_slot, _, _, _) = avc_prepare_reference_state(other, &mut other_plan, layout, base, scratch)
+                .unwrap_or_else(|err| panic!("session {other} frame {other_index}: refs {err}"));
+            avc_commit_decoded_reference(other, other_plan, other_slot);
+        }
         counts[match plan.slice.class {
             h264_cmd::AvcSliceClass::I => 0,
             h264_cmd::AvcSliceClass::P => 1,

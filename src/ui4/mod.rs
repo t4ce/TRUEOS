@@ -114,8 +114,9 @@ pub(crate) use slot4_service::ui4_slot4_service_task;
 pub(crate) use start_button::{request_start_button_reveal, ui4_start_button_service_task};
 pub(crate) use video_frame::{
     DecodedNv12Source, DecodedVideoConversionProbeReport, DecodedVideoConversionReport,
-    VIDEO_RGBA_BUFFER_COUNT, begin_decoded_nv12_conversion_batch, begin_shell_decoded_video_player,
-    enqueue_decoded_nv12_stream_frame, stop_decoded_nv12_stream, ui4_video_conversion_service_task,
+    VideoPlaybackSession, VIDEO_RGBA_BUFFER_COUNT, begin_decoded_nv12_conversion_batch,
+    begin_shell_decoded_video_player, request_video_playback_stop, video_playback_status,
+    enqueue_decoded_nv12_stream_frame, ui4_video_conversion_service_task,
     wait_decoded_nv12_conversion_idle,
 };
 

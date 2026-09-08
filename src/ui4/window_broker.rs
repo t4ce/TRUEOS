@@ -2550,6 +2550,7 @@ pub(crate) fn close_window(owner: WindowOwner, id: WindowId) -> Result<(), Windo
     broker.rebalance_application_planes(output, trueos_time::Instant::now().as_millis());
     broker.mark_composition_changed();
     drop(broker);
+    super::video_frame::decoded_video_window_closed(owner, id);
     super::cursor_frame_inout::frame_closed(owner, id);
     super::context_menu::dismiss_window(owner, id);
     Ok(())

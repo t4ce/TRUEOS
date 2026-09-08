@@ -12,7 +12,6 @@ const H264_TRUEOSFS_VIDEO_SOFT_CAP_BYTES: usize = 1024 * 1024 * 1024;
 const H264_TRUEOSFS_READ_CHUNK_BYTES: usize = 64 * 1024;
 const H264_MEDIA_SESSION_WAIT_MS: u64 = 5_000;
 const H264_MEDIA_SESSION_RETRY_MS: u64 = 1;
-const H264_FRAME_TIMEOUT_ERROR: i32 = -33;
 const H264_UI4_PRESENT_ERROR: i32 = -34;
 pub(crate) const UI4_FRAMED_VIDEO_FS_DEFAULT_PATH: &str = "x31_head_movie.annexb.h264";
 pub(crate) const UI4_FRAMED_VIDEO_FS_NATIVE_WIDTH: u32 = 1_920;
@@ -20,26 +19,32 @@ pub(crate) const UI4_FRAMED_VIDEO_FS_NATIVE_HEIGHT: u32 = 1_080;
 const UI4_FRAMED_VIDEO_FPS: u16 = 60;
 const H264_ONLINE_MEDIA_URL: &str = "https://docs.evostream.com/sample_content/assets/bun33s.mp4";
 
-static H264_PLAYBACK_ACTIVE: AtomicBool = AtomicBool::new(false);
 static H264_UI4_HANDOFF_CHECKPOINT_LOGGED: AtomicBool = AtomicBool::new(false);
 
+// Diagnostic switches are shared with still-picture probes. Only the first
+// playback changes them and only the final playback restores their old values.
+static PLAYBACK_DIAGNOSTICS: spin::Mutex<(usize, bool, bool)> = spin::Mutex::new((0, false, false));
 struct H264PlaybackGuard;
-
-impl Drop for H264PlaybackGuard {
-    fn drop(&mut self) {
-        H264_PLAYBACK_ACTIVE.store(false, Ordering::Release);
+impl H264PlaybackGuard {
+    fn begin() -> Self {
+        let mut state = PLAYBACK_DIAGNOSTICS.lock();
+        if state.0 == 0 {
+            state.1 = crate::intel::hw_pic::set_detailed_logging_enabled(false);
+            state.2 = crate::intel::xelp_media2_ngin::set_output_surface_probes_enabled(false);
+        }
+        state.0 += 1;
+        Self
     }
 }
-
-fn h264_try_begin_playback(scope: &str) -> Result<H264PlaybackGuard, &'static str> {
-    if H264_PLAYBACK_ACTIVE
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        crate::log!("intel/hw_vid: playback rejected scope={} reason=already-active\n", scope);
-        return Err("video playback already active");
+impl Drop for H264PlaybackGuard {
+    fn drop(&mut self) {
+        let mut state = PLAYBACK_DIAGNOSTICS.lock();
+        state.0 -= 1;
+        if state.0 == 0 {
+            crate::intel::hw_pic::set_detailed_logging_enabled(state.1);
+            crate::intel::xelp_media2_ngin::set_output_surface_probes_enabled(state.2);
+        }
     }
-    Ok(H264PlaybackGuard)
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -291,11 +296,15 @@ impl H264PlaybackTiming {
     }
 }
 
-async fn h264_reserve_decode_session()
--> Result<crate::intel::xelp_media2_ngin::MediaSessionGuard, &'static str> {
+async fn h264_reserve_decode_session(
+    session: crate::ui4::VideoPlaybackSession,
+) -> Result<crate::intel::xelp_media2_ngin::MediaSessionGuard, &'static str> {
     let started = EmbassyInstant::now();
     let mut attempts = 0usize;
     loop {
+        if session.is_cancelled() {
+            return Err("playback cancelled");
+        }
         attempts = attempts.saturating_add(1);
         match crate::intel::xelp_media2_ngin::try_reserve_avc_decode_session() {
             Ok(session) => {
@@ -329,6 +338,7 @@ async fn h264_reserve_decode_session()
 /// Raw Annex-B streams pass through unchanged. ISO BMFF/MP4 assets reuse the
 /// online path's avc1/avc3 demuxer and join the same Annex-B decoder ingress.
 pub(crate) async fn run_trueosfs_ui4_framed_video_playback(
+    session: crate::ui4::VideoPlaybackSession,
     path: &str,
 ) -> Result<H264PlaybackReport, &'static str> {
     crate::log_info!(target: "ui4";
@@ -338,7 +348,6 @@ pub(crate) async fn run_trueosfs_ui4_framed_video_playback(
     if !crate::intel::has_media_decode_engine() {
         return Err("media decode engine unavailable");
     }
-    let _playback_guard = h264_try_begin_playback("shell-trueosfs-ui4-framed-video")?;
 
     let heap_before_load = crate::allocators::host_heap_integrity_bounded();
     crate::log_info!(target: "ui4";
@@ -370,6 +379,9 @@ pub(crate) async fn run_trueosfs_ui4_framed_video_playback(
     asset.resize(file_bytes, 0);
     let mut done = 0usize;
     while done < file_bytes {
+        if session.is_cancelled() {
+            return Err("playback cancelled");
+        }
         let end = done
             .saturating_add(H264_TRUEOSFS_READ_CHUNK_BYTES)
             .min(file_bytes);
@@ -399,6 +411,9 @@ pub(crate) async fn run_trueosfs_ui4_framed_video_playback(
         return Err("host heap free list corrupt after TRUEOSFS video load");
     }
 
+    if session.is_cancelled() {
+        return Err("playback cancelled");
+    }
     let (annexb, sample_timing, decode_source, container) = h264_prepare_trueosfs_asset(asset)?;
     crate::log_info!(target: "ui4";
         "shell2/vid: stage=trueosfs-format-selected asset={} container={} codec=avc annexb_bytes={} decode_source={} next=vdbox-decode\n",
@@ -409,16 +424,12 @@ pub(crate) async fn run_trueosfs_ui4_framed_video_playback(
     );
 
     let options = H264PlaybackOptions::new(UI4_FRAMED_VIDEO_FPS, false, true);
-    let media_session = h264_reserve_decode_session().await?;
+    let media_session = h264_reserve_decode_session(session).await?;
     let media_session_generation = media_session.generation();
     let decode_engine_name = media_session.engine_name();
-    let old_hw_pic_logging =
-        crate::intel::hw_pic::set_detailed_logging_enabled(options.diagnostics());
-    let old_surface_probes =
-        crate::intel::xelp_media2_ngin::set_output_surface_probes_enabled(options.diagnostics());
-    let old_noreset_lite =
-        crate::intel::xelp_media2_ngin_hw_pic::set_avc_noreset_lite_enabled(options.noreset_lite());
+    let _diagnostics = H264PlaybackGuard::begin();
     let report = h264_i_p_playback_probe_annexb_bytes(
+        session,
         annexb,
         sample_timing,
         decode_source,
@@ -427,9 +438,6 @@ pub(crate) async fn run_trueosfs_ui4_framed_video_playback(
         media_session_generation,
     )
     .await;
-    crate::intel::xelp_media2_ngin_hw_pic::set_avc_noreset_lite_enabled(old_noreset_lite);
-    crate::intel::hw_pic::set_detailed_logging_enabled(old_hw_pic_logging);
-    crate::intel::xelp_media2_ngin::set_output_surface_probes_enabled(old_surface_probes);
     drop(media_session);
     crate::log_info!(target: "intel-media";
         "intel/hw_vid: media-session reserved=0 engine={} generation={} codec_mode=avc-decode submission_owner=guc direct_execlist_submit=0 scope=playback attempted={} retired={} presented={} release=stream-complete\n",
@@ -446,9 +454,9 @@ pub(crate) async fn run_trueosfs_ui4_framed_video_playback(
     }
 }
 
-pub(crate) async fn run_online_ui4_framed_video_playback()
--> Result<H264PlaybackReport, &'static str> {
-    let _playback_guard = h264_try_begin_playback("shell-online-ui4-framed-video")?;
+pub(crate) async fn run_online_ui4_framed_video_playback(
+    session: crate::ui4::VideoPlaybackSession,
+) -> Result<H264PlaybackReport, &'static str> {
     let options = H264PlaybackOptions::new(UI4_FRAMED_VIDEO_FPS, false, true);
     crate::log!(
         "intel/hw_vid: online-ui4-framed-video stage=download-begin url={} fps={} presentation=ui4-rgba-stream rgba_buffers={}\n",
@@ -457,6 +465,7 @@ pub(crate) async fn run_online_ui4_framed_video_playback()
         crate::ui4::VIDEO_RGBA_BUFFER_COUNT,
     );
     let report = run_media_url_playback(
+        session,
         H264_ONLINE_MEDIA_URL,
         options,
         "online-ui4-framed-video",
@@ -471,6 +480,7 @@ pub(crate) async fn run_online_ui4_framed_video_playback()
 }
 
 async fn run_media_url_playback(
+    session: crate::ui4::VideoPlaybackSession,
     url: &str,
     options: H264PlaybackOptions,
     log_scope: &'static str,
@@ -479,7 +489,10 @@ async fn run_media_url_playback(
     if !crate::intel::has_media_decode_engine() {
         return Err("media decode engine unavailable");
     }
-    let mp4_bytes = h264_fetch_media_url_bytes(url, log_scope).await?;
+    let mp4_bytes = h264_fetch_media_url_bytes(session, url, log_scope).await?;
+    if session.is_cancelled() {
+        return Err("playback cancelled");
+    }
     let demuxed = mp4_avc1_to_annexb(mp4_bytes.as_slice())?;
     crate::log!(
         "intel/hw_vid: {} demux accepted=1 container=mp4 codec=avc1 mp4_bytes={} annexb_bytes={} url={}\n",
@@ -489,16 +502,12 @@ async fn run_media_url_playback(
         url
     );
 
-    let media_session = h264_reserve_decode_session().await?;
+    let media_session = h264_reserve_decode_session(session).await?;
     let media_session_generation = media_session.generation();
     let decode_engine_name = media_session.engine_name();
-    let old_hw_pic_logging =
-        crate::intel::hw_pic::set_detailed_logging_enabled(options.diagnostics());
-    let old_surface_probes =
-        crate::intel::xelp_media2_ngin::set_output_surface_probes_enabled(options.diagnostics());
-    let old_noreset_lite =
-        crate::intel::xelp_media2_ngin_hw_pic::set_avc_noreset_lite_enabled(options.noreset_lite());
+    let _diagnostics = H264PlaybackGuard::begin();
     let report = h264_i_p_playback_probe_annexb_bytes(
+        session,
         demuxed.annexb,
         demuxed.timing,
         "media-url-mp4-avc1",
@@ -507,9 +516,6 @@ async fn run_media_url_playback(
         media_session_generation,
     )
     .await;
-    crate::intel::xelp_media2_ngin_hw_pic::set_avc_noreset_lite_enabled(old_noreset_lite);
-    crate::intel::hw_pic::set_detailed_logging_enabled(old_hw_pic_logging);
-    crate::intel::xelp_media2_ngin::set_output_surface_probes_enabled(old_surface_probes);
     drop(media_session);
     crate::log_info!(target: "intel-media";
         "intel/hw_vid: media-session reserved=0 engine={} generation={} codec_mode=avc-decode submission_owner=guc direct_execlist_submit=0 scope=playback attempted={} retired={} presented={} release=stream-complete\n",
@@ -544,6 +550,7 @@ fn hex_prefix(bytes: &[u8], max_len: usize) -> String {
 }
 
 async fn h264_fetch_media_url_bytes(
+    session: crate::ui4::VideoPlaybackSession,
     url: &str,
     log_scope: &'static str,
 ) -> Result<Vec<u8>, &'static str> {
@@ -554,6 +561,9 @@ async fn h264_fetch_media_url_bytes(
         "plain-norange",
     ];
     for profile in profiles {
+        if session.is_cancelled() {
+            return Err("playback cancelled");
+        }
         let started = EmbassyInstant::now();
         crate::log!(
             "intel/hw_vid: {} fetch begin profile={} timeout_ms={} max_bytes={} url={}\n",
@@ -563,14 +573,36 @@ async fn h264_fetch_media_url_bytes(
             H264_ONLINE_MEDIA_FETCH_MAX_BYTES,
             url
         );
-        match crate::r::net::https::get_media_bytes_profile_shared(
+        let cancellation = crate::r::net::https::MediaFetchCancellation::new();
+        let fetch = crate::r::net::https::get_media_bytes_profile_shared(
             url,
             profile,
             H264_ONLINE_MEDIA_FETCH_TIMEOUT_MS as u32,
             H264_ONLINE_MEDIA_FETCH_MAX_BYTES,
-        )
-        .await
-        {
+            &cancellation,
+        );
+        let watch = async {
+            while !session.is_cancelled() {
+                Timer::after_millis(5).await;
+            }
+            cancellation.cancel();
+        };
+        let mut fetch = core::pin::pin!(fetch);
+        let mut watch = core::pin::pin!(watch);
+        let mut cancellation_sent = false;
+        let result = core::future::poll_fn(|cx| {
+            use core::future::Future;
+            if !cancellation_sent && watch.as_mut().poll(cx).is_ready() {
+                cancellation_sent = true;
+            }
+            // Always await the fetch's TLS-owner fence after requesting stop.
+            fetch.as_mut().poll(cx)
+        })
+        .await;
+        if session.is_cancelled() {
+            return Err("playback cancelled");
+        }
+        match result {
             Ok(bytes) => {
                 crate::log!(
                     "intel/hw_vid: {} fetch done profile={} bytes={} waited_ms={} marker_ftyp={} marker_moov={} marker_mdat={} marker_avcc={} head_hex={} url={}\n",
@@ -1811,7 +1843,17 @@ fn h264_ticks_to_micros(ticks: u64) -> u64 {
     ((ticks as u128).saturating_mul(1_000_000) / hz as u128) as u64
 }
 
+async fn h264_wait_until_or_cancelled(
+    session: crate::ui4::VideoPlaybackSession,
+    deadline: EmbassyInstant,
+) {
+    while !session.is_cancelled() && EmbassyInstant::now() < deadline {
+        Timer::at(deadline.min(EmbassyInstant::now() + EmbassyDuration::from_millis(5))).await;
+    }
+}
+
 async fn h264_wait_until_next_frame(
+    session: crate::ui4::VideoPlaybackSession,
     next_deadline: &mut EmbassyInstant,
     frame_period: EmbassyDuration,
     timing: &mut H264PlaybackTiming,
@@ -1820,7 +1862,7 @@ async fn h264_wait_until_next_frame(
     let now = EmbassyInstant::now();
     if now < *next_deadline {
         let wait_start = now.as_ticks();
-        Timer::at(*next_deadline).await;
+        h264_wait_until_or_cancelled(session, *next_deadline).await;
         timing.waited_frames += 1;
         timing.total_wait_ticks = timing
             .total_wait_ticks
@@ -1833,6 +1875,7 @@ async fn h264_wait_until_next_frame(
 }
 
 async fn h264_i_p_playback_probe_annexb_bytes(
+    session: crate::ui4::VideoPlaybackSession,
     bytes: Vec<u8>,
     sample_timing: Vec<H264SampleTiming>,
     source: &'static str,
@@ -1848,6 +1891,7 @@ async fn h264_i_p_playback_probe_annexb_bytes(
         stream_bytes,
     );
     h264_i_p_playback_probe_with_reader(
+        session,
         reader,
         stream_bytes,
         sample_timing,
@@ -1860,6 +1904,7 @@ async fn h264_i_p_playback_probe_annexb_bytes(
 }
 
 async fn h264_i_p_playback_probe_with_reader(
+    session: crate::ui4::VideoPlaybackSession,
     mut reader: H264NalReader,
     stream_bytes: u64,
     sample_timing: Vec<H264SampleTiming>,
@@ -1909,6 +1954,12 @@ async fn h264_i_p_playback_probe_with_reader(
     );
 
     while let Some(nal) = reader.next_nal().await {
+        if nal_count % 64 == 0 {
+            Timer::after_millis(1).await;
+        }
+        if session.is_cancelled() {
+            break;
+        }
         stopped_at = nal.meta.stream_offset.saturating_add(nal.meta.bytes as u64);
         nal_count += 1;
         match nal.meta.nal_type {
@@ -1982,7 +2033,7 @@ async fn h264_i_p_playback_probe_with_reader(
         stopped_at
     );
 
-    if !crate::ui4::begin_decoded_nv12_conversion_batch() {
+    if !crate::ui4::begin_decoded_nv12_conversion_batch(session) {
         crate::log_error!(
             "intel/hw_vid: conversion-batch accepted=0 reason=prior-batch-not-idle action=ordered-wait-no-drop\n"
         );
@@ -2065,6 +2116,9 @@ async fn h264_i_p_playback_probe_with_reader(
     let mut next_presentation_rank = 0usize;
 
     for (decode_index, unit) in access_units.into_iter().enumerate() {
+        if session.is_cancelled() {
+            break;
+        }
         let rank = if presentation_reordering_required {
             presentation_rank[decode_index]
         } else {
@@ -2180,6 +2234,7 @@ async fn h264_i_p_playback_probe_with_reader(
 
         if !presentation_reordering_required {
             if let Some((failed_frame, error)) = h264_present_slot(
+                session,
                 presentation_slot,
                 playback_start,
                 base_pts,
@@ -2204,6 +2259,7 @@ async fn h264_i_p_playback_probe_with_reader(
                 break;
             }
             if let Some((failed_frame, error)) = h264_present_slot(
+                session,
                 slot,
                 playback_start,
                 base_pts,
@@ -2223,7 +2279,14 @@ async fn h264_i_p_playback_probe_with_reader(
         }
     }
 
-    let conversion_report = crate::ui4::wait_decoded_nv12_conversion_idle().await;
+    // B-frame reordering can retain future pictures which never reached RCS.
+    // Return those pins before draining requests already owned by the worker.
+    for slot in presentation_slots {
+        if let H264PresentationSlot::Ready(pending) = slot {
+            crate::intel::hw_pic::release_h264_output_surface(&pending.output);
+        }
+    }
+    let conversion_report = crate::ui4::wait_decoded_nv12_conversion_idle(session).await;
     let presented = conversion_report.published;
     if first_failure_frame == 0 && conversion_report.first_failure_frame != 0 {
         first_failure_frame = conversion_report.first_failure_frame;
@@ -2412,6 +2475,7 @@ enum H264PresentationSlot {
 }
 
 async fn h264_present_slot(
+    session: crate::ui4::VideoPlaybackSession,
     slot: H264PresentationSlot,
     playback_start: EmbassyInstant,
     base_pts: i64,
@@ -2425,6 +2489,7 @@ async fn h264_present_slot(
         H264PresentationSlot::Ready(pending) => pending.timing,
     };
     h264_wait_for_presentation_time(
+        session,
         playback_start,
         timing,
         base_pts,
@@ -2436,8 +2501,13 @@ async fn h264_present_slot(
     let H264PresentationSlot::Ready(pending) = slot else {
         return None;
     };
+    if session.is_cancelled() {
+        crate::intel::hw_pic::release_h264_output_surface(&pending.output);
+        return None;
+    }
     let present_start = EmbassyInstant::now();
     let queued = h264_queue_probe_output(
+        session,
         "pts",
         pending.playback_frame,
         pending.stream_idr_index,
@@ -2455,6 +2525,9 @@ async fn h264_present_slot(
         None
     } else {
         crate::intel::hw_pic::release_h264_output_surface(&pending.output);
+        if session.is_cancelled() {
+            return None;
+        }
         Some((
             pending.playback_frame,
             if pending.output.error_code != 0 {
@@ -2467,6 +2540,7 @@ async fn h264_present_slot(
 }
 
 async fn h264_wait_for_presentation_time(
+    session: crate::ui4::VideoPlaybackSession,
     playback_start: EmbassyInstant,
     timing: Option<H264SampleTiming>,
     base_pts: i64,
@@ -2475,7 +2549,8 @@ async fn h264_wait_for_presentation_time(
     playback_timing: &mut H264PlaybackTiming,
 ) {
     let Some(timing) = timing else {
-        h264_wait_until_next_frame(next_fixed_deadline, frame_period, playback_timing).await;
+        h264_wait_until_next_frame(session, next_fixed_deadline, frame_period, playback_timing)
+            .await;
         return;
     };
     let pts_from_start = timing.pts.saturating_sub(base_pts).max(0) as u64;
@@ -2486,7 +2561,7 @@ async fn h264_wait_for_presentation_time(
     let now = EmbassyInstant::now();
     if now < deadline {
         let wait_start = now.as_ticks();
-        Timer::at(deadline).await;
+        h264_wait_until_or_cancelled(session, deadline).await;
         playback_timing.waited_frames = playback_timing.waited_frames.saturating_add(1);
         playback_timing.total_wait_ticks = playback_timing
             .total_wait_ticks
@@ -2540,20 +2615,21 @@ async fn h264_decode_wait_frame(
         }
     };
 
-    let Some(output) = crate::intel::hw_pic_wait_output_for_id(id, H264_DECODE_TIMEOUT_MS).await
-    else {
-        let after = crate::intel::hw_pic_snapshot();
-        crate::log!(
-            "intel/hw_vid: h264-probe timeout phase={} playback_frame={} stream_idr={} id={} pending={} outputs={} service_started={}\n",
-            phase,
-            playback_frame,
-            stream_idr_index,
-            id,
-            after.pending,
-            after.outputs,
-            after.service_started as u8
-        );
-        return Err(H264_FRAME_TIMEOUT_ERROR);
+    // Once accepted, this job owns DMA/reference memory. Even cancellation
+    // cannot release its reservation before the service has retired the job.
+    let mut timeout_logged = false;
+    let output = loop {
+        if let Some(output) =
+            crate::intel::hw_pic_wait_output_for_id(id, H264_DECODE_TIMEOUT_MS).await
+        {
+            break output;
+        }
+        if !timeout_logged {
+            timeout_logged = true;
+            crate::log_error!(target: "intel-media";
+                "intel/hw_vid: decode delayed id={} generation={} action=retain-session-until-service-completion\n",
+                id, media_session_generation);
+        }
     };
 
     if let Some(timing) = timing.as_deref_mut() {
@@ -2597,6 +2673,7 @@ async fn h264_decode_wait_frame(
 }
 
 async fn h264_queue_probe_output(
+    session: crate::ui4::VideoPlaybackSession,
     phase: &str,
     playback_frame: usize,
     stream_idr_index: usize,
@@ -2635,6 +2712,7 @@ async fn h264_queue_probe_output(
         let source = crate::ui4::DecodedNv12Source {
             decode_sequence: u64::from(output.id),
             decoder_surface_slot: output.surface_slot,
+            decoder_session_slot: output.decoder_session_slot,
             gpu: output.gpu_addr,
             phys: output.phys_addr,
             virt: output.virt_addr,
@@ -2664,7 +2742,7 @@ async fn h264_queue_probe_output(
             );
         }
         let ui4_queued =
-            crate::ui4::enqueue_decoded_nv12_stream_frame(source, playback_frame).await;
+            crate::ui4::enqueue_decoded_nv12_stream_frame(session, source, playback_frame).await;
         if ui4_queued {
             return true;
         }

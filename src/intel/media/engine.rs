@@ -219,7 +219,7 @@ struct MediaSessionReservation {
 #[derive(Copy, Clone)]
 struct MediaExecutionState {
     active: Option<MediaActiveJob>,
-    reservation: Option<MediaSessionReservation>,
+    reservations: [Option<MediaSessionReservation>; 3],
     quarantined: Option<MediaJobMode>,
     last_completed: Option<MediaJobMode>,
     next_generation: u64,
@@ -228,7 +228,7 @@ struct MediaExecutionState {
 impl MediaExecutionState {
     const EMPTY: Self = Self {
         active: None,
-        reservation: None,
+        reservations: [None; 3],
         quarantined: None,
         last_completed: None,
         next_generation: 0,
@@ -327,8 +327,10 @@ impl Drop for MediaSessionGuard {
     fn drop(&mut self) {
         let mut states = MEDIA_ENGINE_EXECUTION.lock();
         let state = &mut states[self.engine.id.instance as usize];
-        if state.reservation == Some(self.reservation) {
-            state.reservation = None;
+        for reservation in &mut state.reservations {
+            if *reservation == Some(self.reservation) {
+                *reservation = None;
+            }
         }
     }
 }
@@ -342,18 +344,36 @@ pub(super) fn try_reserve_avc_decode_session() -> Result<MediaSessionGuard, Medi
     if state.quarantined.is_some() {
         return Err(MediaLaneAcquireError::Quarantined);
     }
-    if state.reservation.is_some() || state.active.is_some() {
-        return Err(MediaLaneAcquireError::Busy);
-    }
+    let slot = state
+        .reservations
+        .iter()
+        .position(Option::is_none)
+        .ok_or(MediaLaneAcquireError::Busy)?;
     let reservation = MediaSessionReservation {
         mode: MediaJobMode::AVC_DECODE_GUC,
         generation: state.allocate_generation(),
     };
-    state.reservation = Some(reservation);
+    state.reservations[slot] = Some(reservation);
     Ok(MediaSessionGuard {
         engine,
         reservation,
     })
+}
+
+/// Resolve a validated decode reservation to its bounded DPB storage slot.
+/// Legacy still-picture jobs use slot zero only outside live playback.
+pub(super) fn avc_decode_session_slot(generation: Option<u64>) -> Option<usize> {
+    let (engine, _) = default_decode_engine_and_window();
+    let states = MEDIA_ENGINE_EXECUTION.lock();
+    let state = states.get(engine.id.instance as usize)?;
+    match generation {
+        Some(generation) => state
+            .reservations
+            .iter()
+            .position(|entry| entry.is_some_and(|entry| entry.generation == generation)),
+        None if state.reservations.iter().all(Option::is_none) => Some(0),
+        None => None,
+    }
 }
 
 pub(super) fn try_acquire_media_lane(
@@ -369,16 +389,13 @@ pub(super) fn try_acquire_media_lane(
     if state.quarantined.is_some() {
         return Err(MediaLaneAcquireError::Quarantined);
     }
-    match (state.reservation, session_generation) {
-        (Some(reservation), Some(generation))
-            if reservation.mode == mode && reservation.generation == generation => {}
-        // On a one-VDBOX fallback SKU, live encode may take bounded frame turns
-        // inside the playback reservation. Two-VDBOX platforms never enter
-        // this branch because encode and decode own different state slots.
-        (Some(reservation), None)
-            if reservation.mode == MediaJobMode::AVC_DECODE_GUC
-                && mode == MediaJobMode::AVC_ENCODE_GUC => {}
-        (None, None) => {}
+    match session_generation {
+        Some(generation)
+            if state.reservations.iter().flatten().any(|reservation| {
+                reservation.mode == mode && reservation.generation == generation
+            }) => {}
+        None if state.reservations.iter().all(Option::is_none)
+            || mode == MediaJobMode::AVC_ENCODE_GUC => {}
         _ => return Err(MediaLaneAcquireError::Busy),
     }
     if state.active.is_some() {
@@ -3422,6 +3439,80 @@ pub(super) fn ensure_decode_backing(
     avc_scratch.retain();
     DECODE_BACKING_FAILURE_LOGGED.store(false, Ordering::Release);
     *cached = Some(backing);
+    Some(backing)
+}
+
+struct AvcSessionBacking {
+    backing: MediaBitstreamBacking,
+    _ppgtt: crate::intel::ppgtt::SparsePpgtt,
+}
+static AVC_SESSION_BACKINGS: [Mutex<Option<AvcSessionBacking>>; 2] =
+    [const { Mutex::new(None) }; 2];
+
+pub(super) fn ensure_avc_session_backing(
+    dev: crate::intel::Dev,
+    windows: MediaGpuWindowLayout,
+    slot: usize,
+) -> Option<MediaBitstreamBacking> {
+    let common = ensure_decode_backing(dev, windows)?;
+    if slot == 0 {
+        return Some(common);
+    }
+    let mut cached = AVC_SESSION_BACKINGS.get(slot.checked_sub(1)?)?.lock();
+    if let Some(session) = cached.as_ref() {
+        return Some(session.backing);
+    }
+    // These surfaces are PPGTT-only. RCS gives each conversion its own alias
+    // from the physical address; no live global/GGTT mapping is retargeted.
+    let output = UnsubmittedDecodeBuffer::new(
+        dev,
+        common.output_surface_bytes,
+        windows.output_surface_gpu_addr,
+    )?;
+    let scratch =
+        UnsubmittedDecodeBuffer::new(dev, common.avc_scratch_bytes, windows.avc_scratch_gpu_addr)?;
+    use crate::intel::ppgtt::PpgttRange;
+    let ppgtt = crate::intel::ppgtt::build_sparse_ppgtt_for_ranges(&[
+        PpgttRange {
+            gpu: windows.batch_gpu_addr,
+            phys: common.batch_phys,
+            bytes: common.batch_bytes,
+        },
+        PpgttRange {
+            gpu: windows.bitstream_gpu_addr,
+            phys: common.bitstream_phys,
+            bytes: common.bitstream_bytes,
+        },
+        PpgttRange {
+            gpu: windows.result_gpu_addr,
+            phys: common.result_phys,
+            bytes: common.result_bytes,
+        },
+        PpgttRange {
+            gpu: windows.output_surface_gpu_addr,
+            phys: output.phys,
+            bytes: output.bytes,
+        },
+        PpgttRange {
+            gpu: windows.avc_scratch_gpu_addr,
+            phys: scratch.phys,
+            bytes: scratch.bytes,
+        },
+    ])?;
+    let backing = MediaBitstreamBacking {
+        output_surface_phys: output.phys,
+        output_surface_virt: output.virt,
+        avc_scratch_phys: scratch.phys,
+        avc_scratch_virt: scratch.virt,
+        ppgtt_pml4_phys: ppgtt.pml4_phys(),
+        ..common
+    };
+    output.retain();
+    scratch.retain();
+    *cached = Some(AvcSessionBacking {
+        backing,
+        _ppgtt: ppgtt,
+    });
     Some(backing)
 }
 

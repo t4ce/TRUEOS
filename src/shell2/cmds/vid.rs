@@ -8,7 +8,7 @@ use super::super::{
 };
 use crate::shell2::shell2_cmd::ParseOutcome;
 
-const VID_SLOT: &str = "vid";
+const VID_SLOTS: [&str; 3] = ["vid", "vid2", "vid3"];
 
 struct VidCommand {
     source: VidSource,
@@ -61,16 +61,18 @@ impl VidSource {
 }
 
 struct VidUi4Session {
+    id: crate::ui4::VideoPlaybackSession,
     active: bool,
 }
 
 impl VidUi4Session {
     fn begin(width: u32, height: u32) -> Option<Self> {
-        crate::ui4::begin_shell_decoded_video_player(width, height).then_some(Self { active: true })
+        crate::ui4::begin_shell_decoded_video_player(width, height)
+            .map(|id| Self { id, active: true })
     }
 
     fn close(mut self) -> bool {
-        let stopped = crate::ui4::stop_decoded_nv12_stream("shell2-vid-done");
+        let stopped = self.id.finish("shell2-vid-done");
         self.active = false;
         stopped
     }
@@ -79,7 +81,7 @@ impl VidUi4Session {
 impl Drop for VidUi4Session {
     fn drop(&mut self) {
         if self.active {
-            let _ = crate::ui4::stop_decoded_nv12_stream("shell2-vid-task-drop");
+            let _ = self.id.finish("shell2-vid-task-drop");
             self.active = false;
         }
     }
@@ -189,6 +191,38 @@ pub(crate) fn try_parse(
     io: &'static dyn ShellBackend2,
     rest: &str,
 ) -> ParseOutcome {
+    if rest.trim().eq_ignore_ascii_case("status") {
+        for (slot, state) in crate::ui4::video_playback_status().iter().enumerate() {
+            print_shell_line(io, alloc::format!(
+                "vid: slot={} occupied={} cancelled={} queued={} completed={} active={} published={}",
+                slot + 1, state.occupied as u8, state.cancelled as u8,
+                state.queued, state.completed, state.active, state.published).as_str());
+        }
+        return ParseOutcome::Handled;
+    }
+    if let Ok(args) = parse_args(rest) {
+        if args
+            .first()
+            .is_some_and(|arg| arg.eq_ignore_ascii_case("stop"))
+        {
+            let slot = if args.len() == 2 {
+                args[1].parse::<usize>().ok()
+            } else {
+                None
+            };
+            if let Some(slot @ 1..=3) = slot {
+                let requested = crate::ui4::request_video_playback_stop(slot - 1);
+                print_shell_line(
+                    io,
+                    alloc::format!("vid: stop slot={} requested={}", slot, requested as u8)
+                        .as_str(),
+                );
+            } else {
+                print_shell_line(io, "vid: usage `vid stop <1|2|3>`");
+            }
+            return ParseOutcome::Handled;
+        }
+    }
     let command = match parse_command(rest) {
         Ok(command) => command,
         Err(err) => {
@@ -197,16 +231,25 @@ pub(crate) fn try_parse(
             return ParseOutcome::Handled;
         }
     };
+    let (width, height) = command.source.desired_frame_extent();
+    let Some(ui4_session) = VidUi4Session::begin(width, height) else {
+        print_shell_line(
+            io,
+            "vid: all 3 playback slots are occupied or draining, or UI4 allocation failed",
+        );
+        return ParseOutcome::Handled;
+    };
     let queued = alloc::format!(
-        "vid: queued source={} asset={} fps=60 loop={}",
+        "vid: queued slot={} source={} asset={} fps=60 loop={}",
+        ui4_session.id.slot + 1,
         command.source.name(),
         command.source.asset(),
         command.loop_playback as u8,
     );
     let active_target = matrix_target_for_backend(io);
-    let target = switch_matrix_target_slot(&active_target, VID_SLOT);
+    let target = switch_matrix_target_slot(&active_target, VID_SLOTS[ui4_session.id.slot]);
     set_matrix_target_active(&target, true);
-    match vid_task(target.clone(), command) {
+    match vid_task(target.clone(), command, ui4_session) {
         Ok(token) => {
             spawner.spawn(token);
             print_matrix_target_line(&target, queued.as_str());
@@ -222,12 +265,12 @@ pub(crate) fn try_parse(
 fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
-        "vid: usage `vid fs [path] [loop]` | `vid on [loop]`; fs accepts AVC MP4 or H.264 Annex-B",
+        "vid: usage `vid fs [path] [loop]` | `vid on [loop]` | `vid status` | `vid stop <1|2|3>`; up to 3 videos, ESC closes the selected window",
     );
 }
 
-#[trueos_executor::task(pool_size = 1)]
-async fn vid_task(target: MatrixTarget, command: VidCommand) {
+#[trueos_executor::task(pool_size = 3)]
+async fn vid_task(target: MatrixTarget, command: VidCommand, ui4_session: VidUi4Session) {
     let (frame_width, frame_height) = command.source.desired_frame_extent();
     print_matrix_target_line(
         &target,
@@ -241,14 +284,6 @@ async fn vid_task(target: MatrixTarget, command: VidCommand) {
         )
         .as_str(),
     );
-    let Some(ui4_session) = VidUi4Session::begin(frame_width, frame_height) else {
-        print_matrix_target_line(
-            &target,
-            "vid: UI4 video frame/window request rejected or already owned",
-        );
-        set_matrix_target_active(&target, false);
-        return;
-    };
     crate::log_info!(
         target: "ui4";
         "shell2/vid: stage=ui4-frame-window-ready source={} requested={}x{} pixel_budget={} softcap_pixels={} next={} frame-allocation=broker-init placeholder_present=0\n",
@@ -262,21 +297,29 @@ async fn vid_task(target: MatrixTarget, command: VidCommand) {
 
     let mut lap = 0usize;
     loop {
+        if ui4_session.id.is_cancelled() {
+            break;
+        }
         lap = lap.saturating_add(1);
         let result = match &command.source {
             VidSource::TrueosFs(path) => {
-                crate::intel::media::hw_vid::run_trueosfs_ui4_framed_video_playback(path.as_str())
-                    .await
+                crate::intel::media::hw_vid::run_trueosfs_ui4_framed_video_playback(
+                    ui4_session.id,
+                    path.as_str(),
+                )
+                .await
             }
             VidSource::Online => {
-                crate::intel::media::hw_vid::run_online_ui4_framed_video_playback().await
+                crate::intel::media::hw_vid::run_online_ui4_framed_video_playback(ui4_session.id)
+                    .await
             }
         };
         match result {
             Ok(report) => print_matrix_target_line(
                 &target,
                 alloc::format!(
-                    "vid: done lap={} attempted={} retired={} presented={} first_failure_frame={} first_failure_error={} skipped_unsupported={} target_fps={} elapsed_ms={} effective_fps={}.{:02} avg_decode_us={} avg_handoff_us={} avg_conversion_us={} handoff_wait_events={} rgba_buffer_wait_events={} rcs_submit_wait_events={} conversion_max_outstanding={} probe_avg_us=end_to_end:{},queue_wait:{},rcs_prepare:{},submit_to_marker:{},gpu_walker:{},publish:{} probe_p95_us=end_to_end:{},rcs_prepare:{},submit_to_marker:{},gpu_walker:{} gpu_timestamp_samples={} gpu_timestamp_hz={} gpu_phase_avg_us=pre_submit_to_batch:{},pre_submit_to_h2g_consumed_observe:{},h2g_consumed_observe_to_batch:{},batch_to_walker:{},walker_to_release:{},release_to_observe:{} gpu_phase_samples={} gpu_h2g_split_samples={} completion_polls_avg={} mode_transitions={} engine_resets={}",
+                    "vid: {} lap={} attempted={} retired={} presented={} first_failure_frame={} first_failure_error={} skipped_unsupported={} target_fps={} elapsed_ms={} effective_fps={}.{:02} avg_decode_us={} avg_handoff_us={} avg_conversion_us={} handoff_wait_events={} rgba_buffer_wait_events={} rcs_submit_wait_events={} conversion_max_outstanding={} probe_avg_us=end_to_end:{},queue_wait:{},rcs_prepare:{},submit_to_marker:{},gpu_walker:{},publish:{} probe_p95_us=end_to_end:{},rcs_prepare:{},submit_to_marker:{},gpu_walker:{} gpu_timestamp_samples={} gpu_timestamp_hz={} gpu_phase_avg_us=pre_submit_to_batch:{},pre_submit_to_h2g_consumed_observe:{},h2g_consumed_observe_to_batch:{},batch_to_walker:{},walker_to_release:{},release_to_observe:{} gpu_phase_samples={} gpu_h2g_split_samples={} completion_polls_avg={} mode_transitions={} engine_resets={}",
+                    if ui4_session.id.is_cancelled() { "cancelled" } else { "done" },
                     lap,
                     report.attempted,
                     report.retired,
@@ -328,7 +371,7 @@ async fn vid_task(target: MatrixTarget, command: VidCommand) {
                 break;
             }
         }
-        if !command.loop_playback {
+        if !command.loop_playback || ui4_session.id.is_cancelled() {
             break;
         }
     }

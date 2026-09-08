@@ -46,8 +46,8 @@ impl<T> Mutex<T> {
     fn lock(&self) -> std::sync::MutexGuard<'_, T> { self.0.lock().unwrap() }
 }
 mod intel { pub(crate) use crate::h264_cmd as xelp_media_avc_decode_recipe; }
-static AVC_DPB: Mutex<AvcDpbState> = Mutex::new(AvcDpbState::new());
-static AVC_PRESENTATION_HOLDS: AtomicU16 = AtomicU16::new(0);
+static AVC_DPB: [Mutex<AvcDpbState>; 3] = [const { Mutex::new(AvcDpbState::new()) }; 3];
+static AVC_PRESENTATION_HOLDS: [AtomicU16; 3] = [const { AtomicU16::new(0) }; 3];
 '''
     result += f'#[path = {json.dumps(str(ROOT / "src/intel/media/h264_cmd.rs"))}] mod h264_cmd;\n'
     result += constant(VID, "H264_TRUEOSFS_VIDEO_SOFT_CAP_BYTES") + "\n"
@@ -74,6 +74,10 @@ static AVC_PRESENTATION_HOLDS: AtomicU16 = AtomicU16::new(0);
     # Use the exact playback collector, substituting only the synchronous
     # entry point of the same in-memory reader. Keep its counters intact.
     collector = source[start:end].replace("reader.next_nal().await", "reader.try_take_nal()")
+    # Scheduling/cancellation belong to the live session harness, not the pure
+    # demux/parser probe; retain the production collector itself verbatim.
+    collector = collector.replace("        if nal_count % 64 == 0 {\n            Timer::after_millis(1).await;\n        }\n", "")
+    collector = collector.replace("        if session.is_cancelled() {\n            break;\n        }\n", "")
     assert probe.count("    // PRODUCTION_ACCESS_UNIT_COLLECTOR") == 1
     result += probe.replace("    // PRODUCTION_ACCESS_UNIT_COLLECTOR", collector)
     return result

@@ -17,10 +17,10 @@ use trueos_time::{Duration, Instant, Timer};
 use super::{
     DamageRect, FrameBuffering, FrameCadence, FrameContent, FrameHandle, FrameSpec, OutputId,
     ScanoutFormat, Ui4InputEvent, WindowCreate, WindowId, WindowOwner, WindowPlacement,
-    WindowSessionCloseRequest, WindowSessionId, acquire_frame_buffer, begin_window_session,
-    cancel_frame_buffer, create_frame, create_window, destroy_frame, finish_window_session,
-    finish_window_session_with_request, gpgpu_rgba_surface, publish_gpgpu_video_frame_buffer,
-    publish_window_frame, take_owner_input_events,
+    WindowSessionCloseRequest, WindowSessionId, acquire_frame_buffer,
+    begin_additional_window_session, cancel_frame_buffer, create_frame, create_window,
+    destroy_frame, finish_window_session, finish_window_session_with_request, gpgpu_rgba_surface,
+    publish_gpgpu_video_frame_buffer, publish_window_frame, take_owner_input_events,
 };
 
 // The decoded-video producer owns one ordinary broker window independently of
@@ -48,6 +48,7 @@ pub(crate) struct DecodedNv12Source {
     /// releases it only after the RCS read has retired (or before submission
     /// if preparation rejects the source).
     pub(crate) decoder_surface_slot: u8,
+    pub(crate) decoder_session_slot: usize,
     pub(crate) gpu: u64,
     pub(crate) phys: u64,
     pub(crate) virt: usize,
@@ -176,6 +177,7 @@ impl DecodedVideoConversionReport {
 
 #[derive(Copy, Clone)]
 struct DecodedVideoConversionRequest {
+    session: VideoPlaybackSession,
     generation: u64,
     order: usize,
     playback_frame: usize,
@@ -749,16 +751,112 @@ struct VideoStream {
     active_pan_source: Option<super::Ui4CursorSource>,
 }
 
-static VIDEO_STREAM: Mutex<Option<VideoStream>> = Mutex::new(None);
+/// A slot is reusable only after its producer and conversion requests drain.
+/// Generation checks prevent a late close from cancelling its replacement.
+pub(crate) const VIDEO_PLAYBACK_SESSIONS: usize = 3;
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct VideoPlaybackSession {
+    pub(crate) slot: usize,
+    generation: u64,
+}
+struct VideoPlaybackState {
+    occupied: AtomicBool,
+    generation: AtomicU64,
+    cancelled: AtomicBool,
+    stream: Mutex<Option<VideoStream>>,
+    conversion: Mutex<DecodedVideoConversionState>,
+}
+impl VideoPlaybackState {
+    const fn new() -> Self {
+        Self {
+            occupied: AtomicBool::new(false),
+            generation: AtomicU64::new(0),
+            cancelled: AtomicBool::new(false),
+            stream: Mutex::new(None),
+            conversion: Mutex::new(DecodedVideoConversionState::new()),
+        }
+    }
+}
+static VIDEO_SESSIONS: [VideoPlaybackState; VIDEO_PLAYBACK_SESSIONS] =
+    [const { VideoPlaybackState::new() }; VIDEO_PLAYBACK_SESSIONS];
 static VIDEO_RETIRED_FRAMES: Mutex<Vec<FrameHandle>> = Mutex::new(Vec::new());
 static VIDEO_PUBLISH_SEQ: AtomicU64 = AtomicU64::new(0);
-static VIDEO_LIFECYCLE_RESERVED: AtomicBool = AtomicBool::new(false);
-static VIDEO_CONVERSION_STATE: Mutex<DecodedVideoConversionState> =
-    Mutex::new(DecodedVideoConversionState::new());
 static VIDEO_CONVERSION_LAST_ERROR_LOG_TICK: AtomicU64 = AtomicU64::new(0);
+static VIDEO_CONVERSION_NEXT_SESSION: AtomicU64 = AtomicU64::new(0);
 
-fn decoded_video_conversion_idle() -> bool {
-    let state = VIDEO_CONVERSION_STATE.lock();
+impl VideoPlaybackSession {
+    fn state(self) -> &'static VideoPlaybackState {
+        &VIDEO_SESSIONS[self.slot]
+    }
+    pub(crate) fn is_cancelled(self) -> bool {
+        let state = self.state();
+        state.generation.load(Ordering::Acquire) != self.generation
+            || state.cancelled.load(Ordering::Acquire)
+            || !state.occupied.load(Ordering::Acquire)
+    }
+    pub(crate) fn finish(self, reason: &str) -> bool {
+        if self.state().generation.load(Ordering::Acquire) != self.generation {
+            return false;
+        }
+        let stopped = stop_decoded_nv12_stream(self, reason);
+        // Retain the slot on unexpected task abandonment with live GPU reads.
+        if decoded_video_conversion_idle(self) {
+            self.state().occupied.store(false, Ordering::Release);
+        }
+        stopped
+    }
+}
+
+pub(super) fn decoded_video_window_closed(owner: WindowOwner, window: WindowId) {
+    if owner != VIDEO_OWNER {
+        return;
+    }
+    for state in &VIDEO_SESSIONS {
+        let stream = state.stream.lock();
+        if stream
+            .as_ref()
+            .is_some_and(|stream| stream.window == window)
+        {
+            state.cancelled.store(true, Ordering::Release);
+        }
+    }
+}
+
+pub(crate) fn request_video_playback_stop(slot: usize) -> bool {
+    let Some(state) = VIDEO_SESSIONS.get(slot) else {
+        return false;
+    };
+    let stream = *state.stream.lock();
+    // Use the same broker close path as Escape, including its cancellation
+    // notification. The playback task remains the teardown owner.
+    stream.is_some_and(|stream| super::close_window(VIDEO_OWNER, stream.window).is_ok())
+}
+
+pub(crate) struct VideoPlaybackStatus {
+    pub(crate) occupied: bool,
+    pub(crate) cancelled: bool,
+    pub(crate) queued: usize,
+    pub(crate) completed: usize,
+    pub(crate) active: usize,
+    pub(crate) published: usize,
+}
+pub(crate) fn video_playback_status() -> [VideoPlaybackStatus; VIDEO_PLAYBACK_SESSIONS] {
+    core::array::from_fn(|slot| {
+        let session = &VIDEO_SESSIONS[slot];
+        let state = session.conversion.lock();
+        VideoPlaybackStatus {
+            occupied: session.occupied.load(Ordering::Acquire),
+            cancelled: session.cancelled.load(Ordering::Acquire),
+            queued: state.queued,
+            completed: state.completed,
+            active: state.active,
+            published: state.published,
+        }
+    })
+}
+
+fn decoded_video_conversion_idle(session: VideoPlaybackSession) -> bool {
+    let state = session.state().conversion.lock();
     state.active == 0 && state.queue.is_empty() && state.outstanding() == 0
 }
 
@@ -811,8 +909,8 @@ fn log_video_conversion_backpressure(
 
 /// Start a fresh accounting batch without changing the broker Frame/window.
 /// Loop playback calls this only after the prior batch drained completely.
-pub(crate) fn begin_decoded_nv12_conversion_batch() -> bool {
-    let mut state = VIDEO_CONVERSION_STATE.lock();
+pub(crate) fn begin_decoded_nv12_conversion_batch(session: VideoPlaybackSession) -> bool {
+    let mut state = session.state().conversion.lock();
     let reset = state.reset_batch();
     if reset {
         crate::log_info!(
@@ -830,22 +928,24 @@ pub(crate) fn begin_decoded_nv12_conversion_batch() -> bool {
 /// worker. Capacity is deliberately bounded; saturation waits and reports an
 /// error at most once per ten seconds, never discarding or replacing a frame.
 pub(crate) async fn enqueue_decoded_nv12_stream_frame(
+    session: VideoPlaybackSession,
     source: DecodedNv12Source,
     playback_frame: usize,
 ) -> bool {
-    if !valid_source(source) || !VIDEO_LIFECYCLE_RESERVED.load(Ordering::Acquire) {
+    if !valid_source(source) || session.is_cancelled() {
         return false;
     }
     let mut backpressure_counted = false;
     loop {
         let (enqueued, report, worker_online) = {
-            let mut state = VIDEO_CONVERSION_STATE.lock();
+            let mut state = session.state().conversion.lock();
             let outstanding = state.outstanding();
             if outstanding < VIDEO_CONVERSION_OUTSTANDING_CAP {
                 let generation = state.generation;
                 state.queued = state.queued.saturating_add(1);
                 let order = state.queued;
                 state.queue.push_back(DecodedVideoConversionRequest {
+                    session,
                     generation,
                     order,
                     playback_frame,
@@ -867,7 +967,7 @@ pub(crate) async fn enqueue_decoded_nv12_stream_frame(
         }
         log_video_conversion_backpressure("enqueue", playback_frame, report, worker_online);
         Timer::after(Duration::from_millis(1)).await;
-        if !VIDEO_LIFECYCLE_RESERVED.load(Ordering::Acquire) {
+        if session.is_cancelled() {
             return false;
         }
     }
@@ -875,10 +975,12 @@ pub(crate) async fn enqueue_decoded_nv12_stream_frame(
 
 /// Wait for all conversion requests in the current batch. This is used at IDR
 /// reuse boundaries and once at EOS; it does not reset cumulative accounting.
-pub(crate) async fn wait_decoded_nv12_conversion_idle() -> DecodedVideoConversionReport {
+pub(crate) async fn wait_decoded_nv12_conversion_idle(
+    session: VideoPlaybackSession,
+) -> DecodedVideoConversionReport {
     loop {
         let (idle, report, worker_online) = {
-            let state = VIDEO_CONVERSION_STATE.lock();
+            let state = session.state().conversion.lock();
             (
                 state.active == 0 && state.queue.is_empty() && state.outstanding() == 0,
                 state.report(),
@@ -896,10 +998,17 @@ pub(crate) async fn wait_decoded_nv12_conversion_idle() -> DecodedVideoConversio
 }
 
 fn take_decoded_video_conversion_request() -> Option<DecodedVideoConversionRequest> {
-    let mut state = VIDEO_CONVERSION_STATE.lock();
-    let request = state.queue.pop_front()?;
-    state.active = state.active.saturating_add(1);
-    Some(request)
+    let start = VIDEO_CONVERSION_NEXT_SESSION.fetch_add(1, Ordering::Relaxed) as usize;
+    for offset in 0..VIDEO_PLAYBACK_SESSIONS {
+        let mut state = VIDEO_SESSIONS[(start + offset) % VIDEO_PLAYBACK_SESSIONS]
+            .conversion
+            .lock();
+        if let Some(request) = state.queue.pop_front() {
+            state.active += 1;
+            return Some(request);
+        }
+    }
+    None
 }
 
 fn complete_decoded_video_conversion(
@@ -907,12 +1016,12 @@ fn complete_decoded_video_conversion(
     outcome: DecodedVideoConversionOutcome,
     elapsed_ticks: u64,
 ) {
-    let mut state = VIDEO_CONVERSION_STATE.lock();
+    let mut state = request.session.state().conversion.lock();
     if state.generation == request.generation {
         state.completed = state.completed.saturating_add(1);
         if outcome.published {
             state.published = state.published.saturating_add(1);
-        } else if state.first_failure_frame == 0 {
+        } else if state.first_failure_frame == 0 && !request.session.is_cancelled() {
             state.first_failure_frame = request.playback_frame;
             state.first_failure_error = VIDEO_CONVERSION_PRESENT_ERROR;
         }
@@ -924,9 +1033,10 @@ fn complete_decoded_video_conversion(
 }
 
 async fn wait_decoded_video_conversion_turn(request: DecodedVideoConversionRequest) -> bool {
+    let session = request.session;
     loop {
         let (same_generation, turn) = {
-            let state = VIDEO_CONVERSION_STATE.lock();
+            let state = session.state().conversion.lock();
             (
                 state.generation == request.generation,
                 state.completed.saturating_add(1) == request.order,
@@ -944,9 +1054,8 @@ async fn wait_decoded_video_conversion_turn(request: DecodedVideoConversionReque
 
 #[trueos_executor::task(pool_size = 2)]
 pub(crate) async fn ui4_video_conversion_service_task(worker_slot: u32, lane: u8) {
-    {
-        let mut state = VIDEO_CONVERSION_STATE.lock();
-        state.online = true;
+    for session in &VIDEO_SESSIONS {
+        session.conversion.lock().online = true;
     }
     crate::log_info!(
         target: "ui4";
@@ -959,6 +1068,7 @@ pub(crate) async fn ui4_video_conversion_service_task(worker_slot: u32, lane: u8
         crate::intel::gpgpu::UI4_COMPOSITOR_RCS_JOB_SLOTS,
     );
     loop {
+        poll_decoded_video_player_input();
         let Some(request) = take_decoded_video_conversion_request() else {
             // Both cooperative lanes poll the bounded queue. A single-waker
             // signal would let one lane replace the other's waiter.
@@ -971,7 +1081,10 @@ pub(crate) async fn ui4_video_conversion_service_task(worker_slot: u32, lane: u8
         // accepted RCS read has retired. Transfer the decoder-surface lifetime
         // to this worker so playback can overlap VDBOX with conversion without
         // permitting the DPB slot to be overwritten under an in-flight read.
-        crate::intel::hw_pic::release_h264_output_surface_slot(request.source.decoder_surface_slot);
+        crate::intel::hw_pic::release_h264_output_surface_slot(
+            request.source.decoder_session_slot,
+            request.source.decoder_surface_slot,
+        );
         let _ordered = wait_decoded_video_conversion_turn(request).await;
         let finished = Instant::now();
         let elapsed_ticks = finished.saturating_duration_since(started).as_ticks();
@@ -989,75 +1102,40 @@ pub(crate) async fn ui4_video_conversion_service_task(worker_slot: u32, lane: u8
 /// Frame/window before filesystem or decoder work begins. No placeholder is
 /// published: the first visible buffer remains a fully converted and
 /// GuC-released decoded picture.
-pub(crate) fn begin_shell_decoded_video_player(desired_width: u32, desired_height: u32) -> bool {
+pub(crate) fn begin_shell_decoded_video_player(
+    desired_width: u32,
+    desired_height: u32,
+) -> Option<VideoPlaybackSession> {
     if !super::video_frame_extent_admitted(desired_width, desired_height) {
-        crate::log_warn!(
-            target: "ui4";
-            "ui4 video-player frame request rejected requested={}x{} pixels={} softcap_pixels={} reason=decoded-video-pixel-softcap\n",
-            desired_width,
-            desired_height,
-            u64::from(desired_width) * u64::from(desired_height),
-            super::VIDEO_FRAME_MAX_PIXELS,
-        );
-        return false;
+        return None;
     }
-    if !decoded_video_conversion_idle() {
-        crate::log_warn!(
-            target: "ui4";
-            "ui4 video-player frame request rejected requested={}x{} reason=prior-conversion-batch-not-drained\n",
-            desired_width,
-            desired_height,
-        );
-        return false;
-    }
-    if VIDEO_LIFECYCLE_RESERVED
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
-        .is_err()
-    {
-        return false;
-    }
-    let requested_spec = DecodedVideoFrameSpec {
+    let slot = VIDEO_SESSIONS.iter().position(|state| {
+        state
+            .occupied
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    })?;
+    let state = &VIDEO_SESSIONS[slot];
+    let session = VideoPlaybackSession {
+        slot,
+        generation: state.generation.fetch_add(1, Ordering::AcqRel) + 1,
+    };
+    state.cancelled.store(false, Ordering::Release);
+    let spec = DecodedVideoFrameSpec {
         coded_width: desired_width,
         coded_height: desired_height,
         visible_width: desired_width,
         visible_height: desired_height,
     };
-    let Some(stream) = create_stream(requested_spec, desired_width, desired_height) else {
-        VIDEO_LIFECYCLE_RESERVED.store(false, Ordering::Release);
-        crate::log_warn!(
-            target: "ui4";
-            "ui4 video-player frame request rejected requested={}x{} pixels={} softcap_pixels={} reason=broker-frame-window-create-failed\n",
-            desired_width,
-            desired_height,
-            u64::from(desired_width) * u64::from(desired_height),
-            super::VIDEO_FRAME_MAX_PIXELS,
-        );
-        return false;
+    let Some(stream) = create_stream(spec, desired_width, desired_height, slot) else {
+        state.occupied.store(false, Ordering::Release);
+        return None;
     };
-    let mut slot = VIDEO_STREAM.lock();
-    if slot.is_some() {
-        drop(slot);
-        cleanup_uninstalled_stream(stream);
-        VIDEO_LIFECYCLE_RESERVED.store(false, Ordering::Release);
-        return false;
-    }
-    *slot = Some(stream);
-    drop(slot);
-    crate::log_info!(
-        target: "ui4";
-        "ui4 video-player initialized owner={:?} playback=playing control=broker-pan source=await-first-decoded-frame lifecycle_owner=shell2-vid-task frame={} window={} requested={}x{} admitted={}x{} pixels={} softcap_pixels={} rgba_buffers={} rgba_ownership=producer-write+broker-pending+display-live broker_state=frame-window-ready placeholder_present=0\n",
-        VIDEO_OWNER,
-        stream.frame.raw(),
-        stream.window.raw(),
-        desired_width,
-        desired_height,
-        stream.frame_width,
-        stream.frame_height,
-        u64::from(stream.frame_width) * u64::from(stream.frame_height),
-        super::VIDEO_FRAME_MAX_PIXELS,
-        VIDEO_RGBA_BUFFER_COUNT,
-    );
-    true
+    *state.stream.lock() = Some(stream);
+    crate::log_info!(target: "intel-media";
+        "ui4 video-player initialized slot={} generation={} window={} frame={} requested={}x{} sessions=3\n",
+        slot, session.generation, stream.window.raw(), stream.frame.raw(), desired_width, desired_height);
+    Some(session)
 }
 
 fn poll_decoded_video_player_input() {
@@ -1076,52 +1154,49 @@ fn poll_decoded_video_player_input() {
 }
 
 fn pan_video_viewport(event: super::Ui4PanEvent) {
-    let mut slot = VIDEO_STREAM.lock();
-    let Some(stream) = slot.as_mut() else {
-        return;
-    };
-    if event.window != stream.window {
-        return;
-    }
-    match event.phase {
-        super::Ui4PanPhase::Begin => stream.active_pan_source = Some(event.source),
-        super::Ui4PanPhase::Update if stream.active_pan_source == Some(event.source) => {
-            stream.pan_x = move_crop_origin(
-                stream.pan_x,
-                event.dx,
-                stream.visible_width.saturating_sub(stream.frame_width),
-            );
-            stream.pan_y = move_crop_origin(
-                stream.pan_y,
-                event.dy,
-                stream.visible_height.saturating_sub(stream.frame_height),
-            );
+    for state in &VIDEO_SESSIONS {
+        let mut slot = state.stream.lock();
+        let Some(stream) = slot.as_mut() else {
+            continue;
+        };
+        if event.window != stream.window {
+            continue;
         }
-        super::Ui4PanPhase::End if stream.active_pan_source == Some(event.source) => {
-            stream.active_pan_source = None;
-            crate::log_info!(
-                target: "ui4";
-                "ui4 video-player pan ended window={} native={}x{} viewport={}x{} crop_origin={},{} scaling=none-1to1\n",
-                stream.window.raw(),
-                stream.visible_width,
-                stream.visible_height,
-                stream.frame_width,
-                stream.frame_height,
-                stream.pan_x,
-                stream.pan_y,
-            );
+        match event.phase {
+            super::Ui4PanPhase::Begin => stream.active_pan_source = Some(event.source),
+            super::Ui4PanPhase::Update if stream.active_pan_source == Some(event.source) => {
+                stream.pan_x = move_crop_origin(
+                    stream.pan_x,
+                    event.dx,
+                    stream.visible_width.saturating_sub(stream.frame_width),
+                );
+                stream.pan_y = move_crop_origin(
+                    stream.pan_y,
+                    event.dy,
+                    stream.visible_height.saturating_sub(stream.frame_height),
+                );
+            }
+            super::Ui4PanPhase::End if stream.active_pan_source == Some(event.source) => {
+                stream.active_pan_source = None;
+                crate::log_info!(
+                    target: "ui4";
+                    "ui4 video-player pan ended window={} native={}x{} viewport={}x{} crop_origin={},{} scaling=none-1to1\n",
+                    stream.window.raw(),
+                    stream.visible_width,
+                    stream.visible_height,
+                    stream.frame_width,
+                    stream.frame_height,
+                    stream.pan_x,
+                    stream.pan_y,
+                );
+            }
+            _ => {}
         }
-        _ => {}
     }
 }
 
 fn move_crop_origin(origin: u32, drag_delta: i32, maximum: u32) -> u32 {
     (i64::from(origin) - i64::from(drag_delta)).clamp(0, i64::from(maximum)) as u32
-}
-
-fn cleanup_uninstalled_stream(stream: VideoStream) {
-    let _ = finish_window_session(VIDEO_OWNER, stream.session);
-    retire_video_frame(stream.frame);
 }
 
 fn retire_video_frame(frame: FrameHandle) {
@@ -1156,12 +1231,13 @@ fn reap_retired_video_frames() {
 async fn convert_publish_decoded_nv12_stream_frame(
     request: DecodedVideoConversionRequest,
 ) -> DecodedVideoConversionOutcome {
+    let session = request.session;
     let source = request.source;
     let playback_frame = request.playback_frame;
     let reason = "independent-rcs-worker";
     let mut probe = DecodedVideoConversionProbeSample::default();
     let bind_layout_started = Instant::now();
-    if !valid_source(source) {
+    if !valid_source(source) || session.is_cancelled() {
         probe.bind_layout_us =
             video_conversion_ticks_to_micros(bind_layout_started.elapsed().as_ticks());
         return probe.finish(false);
@@ -1170,9 +1246,11 @@ async fn convert_publish_decoded_nv12_stream_frame(
     // drain its broker queue at frame cadence so move/resize/pan never depends
     // on the boot-only pause gate.
     poll_decoded_video_player_input();
-    let Some(stream) =
-        bind_decoded_source_stream(DecodedVideoFrameSpec::from_nv12_source(source), reason)
-    else {
+    let Some(stream) = bind_decoded_source_stream(
+        session,
+        DecodedVideoFrameSpec::from_nv12_source(source),
+        reason,
+    ) else {
         probe.bind_layout_us =
             video_conversion_ticks_to_micros(bind_layout_started.elapsed().as_ticks());
         return probe.finish(false);
@@ -1196,6 +1274,9 @@ async fn convert_publish_decoded_nv12_stream_frame(
     let mut rgba_buffer_wait_counted = false;
     let mut ownership_at_first_busy = None;
     let write = loop {
+        if session.is_cancelled() {
+            return probe.finish(false);
+        }
         match acquire_frame_buffer(stream.frame) {
             Ok(write) => break write,
             Err(super::FramePoolError::Busy) => {
@@ -1207,7 +1288,7 @@ async fn convert_publish_decoded_nv12_stream_frame(
                         super::frame_buffer_ownership_probe(stream.frame).ok();
                 }
                 let (report, worker_online) = {
-                    let mut state = VIDEO_CONVERSION_STATE.lock();
+                    let mut state = session.state().conversion.lock();
                     if !rgba_buffer_wait_counted {
                         state.rgba_buffer_wait_events =
                             state.rgba_buffer_wait_events.saturating_add(1);
@@ -1329,6 +1410,10 @@ async fn convert_publish_decoded_nv12_stream_frame(
     let rcs_queue_started = Instant::now();
     let mut rcs_submit_wait_counted = false;
     let submission = loop {
+        if session.is_cancelled() {
+            let _ = cancel_frame_buffer(write);
+            return probe.finish(false);
+        }
         match crate::intel::gpgpu::queue_ui4_video_frame_nv12_tile64_to_rgba8(
             native_source,
             destination,
@@ -1349,7 +1434,7 @@ async fn convert_publish_decoded_nv12_stream_frame(
                 // admission rejection is transient just like a full local
                 // queue; other UI4 producers follow the same retry contract.
                 let (report, worker_online) = {
-                    let mut state = VIDEO_CONVERSION_STATE.lock();
+                    let mut state = session.state().conversion.lock();
                     if !rcs_submit_wait_counted {
                         state.rcs_submit_wait_events =
                             state.rcs_submit_wait_events.saturating_add(1);
@@ -1413,7 +1498,7 @@ async fn convert_publish_decoded_nv12_stream_frame(
     // queued GPU command. Publication still follows request order: the second
     // cooperative lane may finish preparation or observation first, but it
     // cannot supersede the preceding frame at the broker front-buffer handoff.
-    if !wait_decoded_video_conversion_turn(request).await {
+    if !wait_decoded_video_conversion_turn(request).await || session.is_cancelled() {
         let _ = cancel_frame_buffer(write);
         return probe.finish(false);
     }
@@ -1440,7 +1525,14 @@ async fn convert_publish_decoded_nv12_stream_frame(
                 "ui4 video-frame window publish failed frame={} window={} error={:?} reason={} action=close-stream source_already_released_at=guc-completion\n",
                 stream.frame.raw(), stream.window.raw(), error, reason,
             );
-            let _ = stop_decoded_nv12_stream("window-publish-failed");
+            if !session.is_cancelled() {
+                let mut state = session.state().conversion.lock();
+                if state.first_failure_frame == 0 {
+                    state.first_failure_frame = playback_frame;
+                    state.first_failure_error = VIDEO_CONVERSION_PRESENT_ERROR;
+                }
+            }
+            let _ = stop_decoded_nv12_stream(session, "window-publish-failed");
             probe.publish_us =
                 video_conversion_ticks_to_micros(publish_started.elapsed().as_ticks());
             return probe.finish(false);
@@ -1488,12 +1580,16 @@ async fn convert_publish_decoded_nv12_stream_frame(
     probe.finish(true)
 }
 
-fn bind_decoded_source_stream(spec: DecodedVideoFrameSpec, reason: &str) -> Option<VideoStream> {
-    if !spec.valid() || !VIDEO_LIFECYCLE_RESERVED.load(Ordering::Acquire) {
+fn bind_decoded_source_stream(
+    session: VideoPlaybackSession,
+    spec: DecodedVideoFrameSpec,
+    reason: &str,
+) -> Option<VideoStream> {
+    if !spec.valid() || session.is_cancelled() {
         return None;
     }
     {
-        let mut slot = VIDEO_STREAM.lock();
+        let mut slot = session.state().stream.lock();
         if let Some(stream) = slot.as_mut() {
             let source_changed = stream.source_width != spec.coded_width
                 || stream.source_height != spec.coded_height
@@ -1538,20 +1634,13 @@ fn bind_decoded_source_stream(spec: DecodedVideoFrameSpec, reason: &str) -> Opti
             return Some(*stream);
         }
     }
-    let stream = create_stream(spec, spec.visible_width, spec.visible_height)?;
-    let mut slot = VIDEO_STREAM.lock();
-    if let Some(existing) = *slot {
-        drop(slot);
-        cleanup_uninstalled_stream(stream);
-        return Some(existing);
-    }
-    *slot = Some(stream);
-    Some(stream)
+    // Closing a window never recreates a producer behind the user's back.
+    None
 }
 
-pub(crate) fn stop_decoded_nv12_stream(reason: &str) -> bool {
-    let reserved = VIDEO_LIFECYCLE_RESERVED.swap(false, Ordering::AcqRel);
-    let stream = VIDEO_STREAM.lock().take();
+pub(crate) fn stop_decoded_nv12_stream(session: VideoPlaybackSession, reason: &str) -> bool {
+    let reserved = !session.state().cancelled.swap(true, Ordering::AcqRel);
+    let stream = session.state().stream.lock().take();
     if let Some(stream) = stream {
         let animated = finish_window_session_with_request(
             VIDEO_OWNER,
@@ -1588,12 +1677,13 @@ fn create_stream(
     spec: DecodedVideoFrameSpec,
     frame_width: u32,
     frame_height: u32,
+    slot: usize,
 ) -> Option<VideoStream> {
     if !spec.valid() || !super::video_frame_extent_admitted(frame_width, frame_height) {
         return None;
     }
     let frame = create_video_frame(frame_width, frame_height).ok()?;
-    let session = match begin_window_session(VIDEO_OWNER) {
+    let session = match begin_additional_window_session(VIDEO_OWNER) {
         Ok(session) => session,
         Err(_) => {
             let _ = destroy_frame(frame);
@@ -1603,8 +1693,10 @@ fn create_stream(
     let (scanout_width, scanout_height) =
         crate::intel::active_scanout_dimensions().unwrap_or((frame_width, frame_height));
     let placement = WindowPlacement {
-        x: (scanout_width.saturating_sub(frame_width) / 2) as i32,
-        y: (scanout_height.saturating_sub(frame_height) / 2) as i32,
+        x: ((scanout_width.saturating_sub(frame_width) / 2) as i32 + slot as i32 * 56)
+            .min(scanout_width.saturating_sub(frame_width) as i32),
+        y: ((scanout_height.saturating_sub(frame_height) / 2) as i32 + slot as i32 * 40)
+            .min(scanout_height.saturating_sub(frame_height) as i32),
         width: frame_width,
         height: frame_height,
         z: 100,

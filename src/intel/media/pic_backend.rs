@@ -28,8 +28,10 @@ async fn destroy_avc_context(
     loop {
         match INTEL_GUC_SCHEDULER.destroy(dev, token) {
             Ok(()) => return Ok(()),
-            Err(error @ (GucSubmissionError::DisablePending
-                | GucSubmissionError::DeregisterPending)) => {
+            Err(
+                error
+                @ (GucSubmissionError::DisablePending | GucSubmissionError::DeregisterPending),
+            ) => {
                 if media_backend_elapsed_us(started) >= AVC_CONTEXT_TEARDOWN_TIMEOUT_US {
                     return Err(error);
                 }
@@ -72,6 +74,9 @@ fn log_avc_submission_failure(
         media::read_result_dword(backing.result_virt, media::MEDIA_RESULT_COMPLETE_SLOT),
     );
 }
+
+static AVC_SESSION_CLEAR_GENERATION: [core::sync::atomic::AtomicU64; 3] =
+    [const { core::sync::atomic::AtomicU64::new(0) }; 3];
 
 static AVC_NORESET_LITE_ENABLED: AtomicBool = AtomicBool::new(false);
 static AVC_NORESET_LITE_RESET_DONE: AtomicBool = AtomicBool::new(false);
@@ -1516,7 +1521,10 @@ fn build_jpeg_decode_batch(
     media::packet_write_addr64(batch, ind_obj, 1, bitstream_gpu_addr);
     batch[ind_obj + 3] = media::MFX_MOCS_UC;
     media::packet_write_addr64(
-        batch, ind_obj, 4, jpeg_bitstream_upper_bound(bitstream_gpu_addr, bitstream_bytes)?,
+        batch,
+        ind_obj,
+        4,
+        jpeg_bitstream_upper_bound(bitstream_gpu_addr, bitstream_bytes)?,
     );
     batch[ind_obj + 8] = media::MFX_MOCS_UC;
     batch[ind_obj + 13] = media::MFX_MOCS_UC;
@@ -1826,7 +1834,7 @@ pub(super) async fn submit_avc_single_idr_batch(
     let complete_marker = kickoff_marker + 3;
 
     let reset_start = media_backend_now_ticks();
-    let session_reset = avc_should_reset_media_engine();
+    let session_reset = media_session_generation.is_none() && avc_should_reset_media_engine();
     let engine_reset = mode_transition || session_reset;
     if engine_reset {
         media::reset_media_engine(dev, engine, context_virt);
@@ -1843,7 +1851,12 @@ pub(super) async fn submit_avc_single_idr_batch(
     }
     let zero_us = media_backend_elapsed_us(zero_start);
 
-    let clear_static_decode_surfaces = avc_should_clear_static_decode_surfaces();
+    let clear_static_decode_surfaces = if let Some(generation) = media_session_generation {
+        let slot = media::avc_decode_session_slot(Some(generation))?;
+        AVC_SESSION_CLEAR_GENERATION[slot].swap(generation, Ordering::AcqRel) != generation
+    } else {
+        avc_should_clear_static_decode_surfaces()
+    };
     let scratch_zero_start = media_backend_now_ticks();
     if clear_static_decode_surfaces {
         unsafe {
@@ -1852,7 +1865,8 @@ pub(super) async fn submit_avc_single_idr_batch(
     }
     let scratch_zero_us = media_backend_elapsed_us(scratch_zero_start);
 
-    let clear_current_output_surface = avc_should_clear_current_output_surface();
+    let clear_current_output_surface =
+        media_session_generation.is_none() && avc_should_clear_current_output_surface();
     let output_clear_start = media_backend_now_ticks();
     if clear_current_output_surface {
         if !clear_output_surface_to_tiled_nv12_black(
