@@ -74,7 +74,7 @@ pub(crate) use cursor_frame_inout::{
     cursor_presentation_for_source, register_global_keyboard_hook, selected_frame,
     selected_frame_for_source, selection_strips, set_window_center_snapped_mouse,
     set_window_cursor_icon, set_window_cursor_step, set_window_custom_cursor,
-    unregister_global_keyboard_hook,
+    suppress_center_snap_for_source, unregister_global_keyboard_hook,
 };
 pub(crate) use damage::{DamageRect, DamageRegion};
 pub(crate) use frame_pool::{

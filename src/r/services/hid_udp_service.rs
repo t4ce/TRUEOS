@@ -30,6 +30,9 @@ const HEADER_LEN: usize = 16;
 const KIND_MOUSE: u8 = 1;
 const KIND_KEYBOARD: u8 = 2;
 const KIND_TABLET: u8 = 3;
+const KIND_CONTROL: u8 = 4;
+const CONTROL_MAGIC: &[u8; 4] = b"THIC";
+const CONTROL_RELEASE_CENTER_SNAP: u16 = 1 << 0;
 const DEVICE_STATE_CAP: usize = crate::allcaps::input::HID_UDP_DEVICE_STATE_CAP;
 
 static RX_ACCEPTED: AtomicU32 = AtomicU32::new(0);
@@ -73,7 +76,7 @@ fn parse_frame(data: &[u8]) -> Option<HidUdpFrame<'_>> {
     }
 
     let kind = data[5];
-    if !matches!(kind, KIND_MOUSE | KIND_KEYBOARD | KIND_TABLET) {
+    if !matches!(kind, KIND_MOUSE | KIND_KEYBOARD | KIND_TABLET | KIND_CONTROL) {
         return None;
     }
 
@@ -129,7 +132,7 @@ fn accept_frame(frame: HidUdpFrame<'_>, seqs: &mut Vec<DeviceSeq, DEVICE_STATE_C
         {
             return false;
         }
-        KIND_MOUSE | KIND_KEYBOARD | KIND_TABLET => {}
+        KIND_MOUSE | KIND_KEYBOARD | KIND_TABLET | KIND_CONTROL => {}
         _ => return false,
     }
 
@@ -194,6 +197,12 @@ fn accept_frame(frame: HidUdpFrame<'_>, seqs: &mut Vec<DeviceSeq, DEVICE_STATE_C
                 frame.flags as u32,
             );
         }
+        KIND_CONTROL => {
+            let source = rdp_tablet_source(frame.device_id);
+            if frame.flags & CONTROL_RELEASE_CENTER_SNAP != 0 {
+                crate::ui4::suppress_center_snap_for_source(source);
+            }
+        }
         _ => return false,
     }
 
@@ -209,6 +218,26 @@ fn accept_frame(frame: HidUdpFrame<'_>, seqs: &mut Vec<DeviceSeq, DEVICE_STATE_C
         );
     }
     true
+}
+
+fn rdp_tablet_source(device_id: u16) -> crate::ui4::Ui4CursorSource {
+    crate::ui4::Ui4CursorSource {
+        controller_id: crate::usb2::hid::HID_UDP_CONTROLLER_ID,
+        slot_id: crate::usb2::hid::hid_udp_slot_id(device_id),
+        ep_target: 0,
+        hid_kind: crate::r::cursor::HID_KIND_TABLET,
+    }
+}
+
+fn control_reply(device_id: u16) -> [u8; 8] {
+    let mut reply = [0u8; 8];
+    reply[..4].copy_from_slice(CONTROL_MAGIC);
+    reply[4] = VERSION;
+    reply[5] = u8::from(
+        crate::ui4::center_snapped_frame_for_source(rdp_tablet_source(device_id)).is_some(),
+    );
+    reply[6..8].copy_from_slice(&device_id.to_le_bytes());
+    reply
 }
 
 fn handle_packet(data: &[u8], seqs: &mut Vec<DeviceSeq, DEVICE_STATE_CAP>) {
@@ -278,14 +307,32 @@ pub async fn hid_udp_srv_task() {
                         });
                     }
                     v::vnet::Event::UdpPacket {
-                        handle: h, data, ..
+                        handle: h, from, data
                     } if handle == Some(h) => {
+                        let device_id = parse_frame(data.as_slice()).map(|frame| frame.device_id);
                         handle_packet(data.as_slice(), &mut seqs);
+                        if let Some(device_id) = device_id {
+                            let reply = control_reply(device_id);
+                            let _ = vnet.submit(v::vnet::Command::SendUdp {
+                                handle: h,
+                                remote: from,
+                                data: v::vnet::ByteBuf::from_slice_trunc(&reply),
+                            });
+                        }
                     }
                     v::vnet::Event::UdpPacketV6 {
-                        handle: h, data, ..
+                        handle: h, from, data
                     } if handle == Some(h) => {
+                        let device_id = parse_frame(data.as_slice()).map(|frame| frame.device_id);
                         handle_packet(data.as_slice(), &mut seqs);
+                        if let Some(device_id) = device_id {
+                            let reply = control_reply(device_id);
+                            let _ = vnet.submit(v::vnet::Command::SendUdpV6 {
+                                handle: h,
+                                remote: from,
+                                data: v::vnet::ByteBuf::from_slice_trunc(&reply),
+                            });
+                        }
                     }
                     v::vnet::Event::Error { msg } => {
                         crate::log!("hid-udp: net error {}\n", msg);

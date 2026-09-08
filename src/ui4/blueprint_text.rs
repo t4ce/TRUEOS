@@ -2804,9 +2804,10 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_set_cursor_step(
     0
 }
 
-/// Keep each selected physical N-Mouse route at this frame's center while
-/// delivering its unbounded relative report as pointer dx/dy. Passing zero
-/// restores ordinary absolute desktop cursor behavior.
+/// Keep each independent cursor route which selected this frame at its center.
+/// Relative sources retain raw report dx/dy; absolute sources deliver motion
+/// derived from consecutive raw positions. Passing zero restores ordinary
+/// absolute desktop cursor behavior.
 pub extern "C" fn trueos_cabi_ui4_scene_set_center_snapped_mouse(
     window_id: u32,
     enabled: u32,
