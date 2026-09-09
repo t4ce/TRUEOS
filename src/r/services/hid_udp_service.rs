@@ -45,6 +45,7 @@ const CONTROL_POINTER_MODE_RELATIVE: u16 = 1 << 2;
 const INPUT_FLAG_RELATIVE: u16 = 1 << 15;
 const DEVICE_STATE_CAP: usize = crate::allcaps::input::HID_UDP_DEVICE_STATE_CAP;
 
+static RX_SEEN: AtomicU32 = AtomicU32::new(0);
 static RX_ACCEPTED: AtomicU32 = AtomicU32::new(0);
 static RX_STALE: AtomicU32 = AtomicU32::new(0);
 static RX_BAD: AtomicU32 = AtomicU32::new(0);
@@ -200,7 +201,7 @@ fn accept_frame(
     if !sequence_is_fresh(seqs, frame.device_id, frame.kind, frame.seq) {
         let n = RX_STALE.fetch_add(1, Ordering::Relaxed) + 1;
         if n <= 8 || n.is_power_of_two() {
-            crate::log!(
+            crate::log_important!(
                 "hid-udp: stale packet dev={} kind={} seq={} stale_count={}\n",
                 frame.device_id,
                 frame.kind,
@@ -306,7 +307,7 @@ fn accept_frame(
 
     let n = RX_ACCEPTED.fetch_add(1, Ordering::Relaxed) + 1;
     if n <= 8 {
-        crate::log!(
+        crate::log_important!(
             "hid-udp: accepted dev={} kind={} seq={} slot={} count={}\n",
             frame.device_id,
             frame.kind,
@@ -347,10 +348,14 @@ fn handle_packet(
     seqs: &mut Vec<DeviceSeq, DEVICE_STATE_CAP>,
     modes: &mut Vec<DevicePointerMode, DEVICE_STATE_CAP>,
 ) -> Option<u16> {
+    let received = RX_SEEN.fetch_add(1, Ordering::Relaxed) + 1;
+    if received <= 4 {
+        crate::log_important!("hid-udp: received bytes={} count={} at_ms={}\n", data.len(), received, Instant::now().as_millis());
+    }
     let Some(frame) = parse_frame(data) else {
         let n = RX_BAD.fetch_add(1, Ordering::Relaxed) + 1;
         if n <= 8 || n.is_power_of_two() {
-            crate::log!("hid-udp: ignored bad packet bytes={} bad_count={}\n", data.len(), n);
+            crate::log_important!("hid-udp: ignored bad packet bytes={} bad_count={}\n", data.len(), n);
         }
         return None;
     };
@@ -358,7 +363,7 @@ fn handle_packet(
     if !accept_frame(frame, seqs, modes) {
         let n = RX_BAD.fetch_add(1, Ordering::Relaxed) + 1;
         if n <= 8 || n.is_power_of_two() {
-            crate::log!(
+            crate::log_important!(
                 "hid-udp: ignored invalid packet dev={} kind={} seq={} bytes={} bad_count={}\n",
                 frame.device_id,
                 frame.kind,
@@ -374,6 +379,7 @@ fn handle_packet(
 
 #[task]
 pub async fn hid_udp_srv_task() {
+    crate::log_important!("hid-udp: task polling at_ms={} readiness=0x{:08x}\n", Instant::now().as_millis(), crate::r::readiness::mask());
     crate::r::readiness::wait_for(crate::r::readiness::NET_ANY_CONFIGURED).await;
 
     loop {
@@ -388,20 +394,32 @@ pub async fn hid_udp_srv_task() {
         let _ = vnet.submit(v::vnet::Command::OpenUdp {
             port: TRUEOS_HID_UDP_PORT,
         });
-        crate::log!(
-            "hid-udp: starting listener udp_port={} controller=0x{:08X}\n",
+        crate::log_important!(
+            "hid-udp: starting listener udp_port={} controller=0x{:08X} owner={} at_ms={}\n",
             TRUEOS_HID_UDP_PORT,
-            crate::usb2::hid::HID_UDP_CONTROLLER_ID
+            crate::usb2::hid::HID_UDP_CONTROLLER_ID,
+            vnet.owner(),
+            Instant::now().as_millis()
         );
 
+        let mut last_status_ms = Instant::now().as_millis();
+        let mut status_count = 0u32;
         loop {
+            let now_ms = Instant::now().as_millis();
+            if now_ms.saturating_sub(last_status_ms) >= 5_000 {
+                last_status_ms = now_ms;
+                status_count = status_count.saturating_add(1);
+                if status_count <= 3 || status_count.is_power_of_two() {
+                    crate::log_important!("hid-udp: status bound={:?} received={} accepted={} stale={} invalid={} at_ms={}\n", handle, RX_SEEN.load(Ordering::Relaxed), RX_ACCEPTED.load(Ordering::Relaxed), RX_STALE.load(Ordering::Relaxed), RX_BAD.load(Ordering::Relaxed), now_ms);
+                }
+            }
             if let Some(ev) = vnet.pop_event() {
                 match ev {
                     v::vnet::Event::Opened { handle: h, kind }
                         if kind == v::vnet::SocketKind::Udp =>
                     {
                         handle = Some(h);
-                        crate::log!(
+                        crate::log_important!(
                             "hid-udp: listener bound handle={} port={}\n",
                             h.0,
                             TRUEOS_HID_UDP_PORT
@@ -411,7 +429,7 @@ pub async fn hid_udp_srv_task() {
                         handle = None;
                         seqs.clear();
                         modes.clear();
-                        crate::log!("hid-udp: listener closed, reopening\n");
+                        crate::log_important!("hid-udp: listener closed, reopening\n");
                         let _ = vnet.submit(v::vnet::Command::OpenUdp {
                             port: TRUEOS_HID_UDP_PORT,
                         });
@@ -445,7 +463,7 @@ pub async fn hid_udp_srv_task() {
                         }
                     }
                     v::vnet::Event::Error { msg } => {
-                        crate::log!("hid-udp: net error {}\n", msg);
+                        crate::log_important!("hid-udp: net error {}\n", msg);
                         Timer::after(Duration::from_millis(500)).await;
                         if handle.is_none() {
                             let _ = vnet.submit(v::vnet::Command::OpenUdp {

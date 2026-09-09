@@ -1456,7 +1456,7 @@ pub(crate) fn set_pipe_a_bottom_color_rgb8(red: u8, green: u8, blue: u8) -> bool
     let raw = pipe_bottom_color_from_xrgb(xrgb);
     let programmed = program_pipe_bottom_color(dev, pipe, raw);
     crate::log_info!(target: "intel/display";
-        "intel/display: runtime bottom-color pipe={} rgb8={},{},{} raw=0x{:08X} programmed={} source=ui4-color-picker\n",
+        "intel/display: runtime bottom-color pipe={} rgb8={},{},{} raw=0x{:08X} programmed={}\n",
         pipe.name,
         red,
         green,

@@ -228,4 +228,6 @@
 # All pre-existing function signatures are unchanged.
 # Layered-frame open v1 and layer-target lookup v1 are strictly additive.
 # All pre-existing signatures compared unchanged against 685a1c020^.
-8810ac372840d5c58fc5c7e03159e901ecfba84bbb1665e7961c2f24e6cc78d8
+# Owned-frame display-bottom-color control is a strictly additive v2 extension.
+# All existing function signatures were compared unchanged before updating this lock.
+53a3ffa29427a1f5ff2a011c82b98a5be8cfc6c824b48f6553c58d16d0fcc201

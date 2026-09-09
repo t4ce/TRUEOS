@@ -2647,6 +2647,37 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_set_position(window_id: u32, x: i3
     0
 }
 
+/// One-shot primary display backdrop control, shared with UI4's color picker.
+/// Ownership is checked against a live frame. This changes Pipe A globally;
+/// closing the frame does not restore the previous color (last writer wins).
+pub extern "C" fn trueos_cabi_ui4_scene_set_display_bottom_color(window_id: u32, rgb: u32) -> i32 {
+    if rgb > 0x00ff_ffff {
+        return ERROR_INVALID;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_status(
+            trueos_vm::vmcall::OP_BP_UI4_SCENE_SET_DISPLAY_BOTTOM_COLOR,
+            window_id as u64,
+            rgb as u64,
+            &[],
+        );
+    }
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT;
+    };
+    {
+        let mut surfaces = SURFACES.lock();
+        if surface_mut(&mut surfaces, owner, window_id).is_none() {
+            return ERROR_NOT_FOUND;
+        }
+    }
+    if crate::intel::set_pipe_a_bottom_color_rgb8((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8) {
+        0
+    } else {
+        ERROR_UI4
+    }
+}
+
 /// Set window opacity, or only background opacity when given its layer target.
 pub extern "C" fn trueos_cabi_ui4_scene_frame_set_opacity(window_id: u32, opacity: u32) -> i32 {
     if opacity > u8::MAX as u32 {

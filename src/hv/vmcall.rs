@@ -2399,6 +2399,17 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
+        OP_BP_UI4_SCENE_SET_DISPLAY_BOTTOM_COLOR => {
+            let rc = if arg0 > u32::MAX as u64 || arg1 > 0x00ff_ffff {
+                -1 // Match the scene ABI's invalid-argument status; never truncate RGB.
+            } else {
+                crate::ui4::blueprint_text::trueos_cabi_ui4_scene_set_display_bottom_color(
+                    arg0 as u32, arg1 as u32,
+                )
+            };
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
         OP_BP_UI4_SCENE_FRAME_SET_OPACITY => {
             let rc = crate::ui4::blueprint_text::trueos_cabi_ui4_scene_frame_set_opacity(
                 arg0 as u32,
