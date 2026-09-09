@@ -68,9 +68,12 @@ there is no new renderer or unreviewed runtime shader compilation.
 Host checks:
 
 - `python3 tools/test_ui4_layer_contract.py`
+- `python3 tools/test_ui4_layered_resize.py`
+- `python3 tools/shadertoy-cpp-offline/test_blueprint_packages.py`
 - `cargo check --bin TRUEOS`
 - `cargo check --manifest-path api/Cargo.toml --features ui4-scene` in Blueprints
-- `cargo check` and `python3 tools/test_background.py` in Cubes
+- `cargo check --target x86_64-unknown-linux-gnu` and
+  `python3 tools/test_background.py` in Cubes
 - `python3 tools/bake_mandelbox.py` in Cubes performs a reproducible native bake
   and updates the Blueprint package and kernel's hash/ABI metadata together.
 

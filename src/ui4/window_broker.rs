@@ -721,19 +721,34 @@ impl WindowBroker {
             })
             .collect();
         ordered.sort_unstable_by_key(|(id, z, _)| (*z, *id));
-        if ordered.iter().any(|(_, _, slot)| self.windows[*slot].background.is_some()) {
+        if ordered
+            .iter()
+            .any(|(_, _, slot)| self.windows[*slot].background.is_some())
+        {
             // Only a complete top suffix can occupy hardware: skipping an
             // unfit pair would put a lower window above it in physical z.
             let mut top = Vec::new();
             let mut used = 0;
             for &(id, _, slot) in ordered.iter().rev() {
-                let slots = if self.windows[slot].background.is_some() { 2 } else { 1 };
-                if used + slots > LEASE_PLANE_COUNT { break; }
+                let slots = if self.windows[slot].background.is_some() {
+                    2
+                } else {
+                    1
+                };
+                if used + slots > LEASE_PLANE_COUNT {
+                    break;
+                }
                 used += slots;
-                top.push(super::layer_contract::LeaseGroup { window: id.raw(), slots: slots as u8, last_hot_ms: now_ms });
+                top.push(super::layer_contract::LeaseGroup {
+                    window: id.raw(),
+                    slots: slots as u8,
+                    last_hot_ms: now_ms,
+                });
             }
             let mut plan = [None; 3];
-            for (index, group) in top.into_iter().rev().enumerate() { plan[index] = Some(group); }
+            for (index, group) in top.into_iter().rev().enumerate() {
+                plan[index] = Some(group);
+            }
             self.apply_group_plan(output, plan);
             return;
         }
@@ -764,12 +779,29 @@ impl WindowBroker {
         let mut plan = [None; 3];
         let mut next = 0;
         for lease in self.leases.iter().flatten() {
-            if plan.iter().flatten().any(|group: &super::layer_contract::LeaseGroup| group.window == lease.window.raw()) { continue; }
-            let Ok((slot, generation)) = unpack_handle(lease.window.raw()) else { continue; };
-            let Some(window) = self.windows.get(slot) else { continue; };
-            if window.generation != generation || window.state == WindowState::Closed || window.output != output { continue; }
+            if plan
+                .iter()
+                .flatten()
+                .any(|group: &super::layer_contract::LeaseGroup| group.window == lease.window.raw())
+            {
+                continue;
+            }
+            let Ok((slot, generation)) = unpack_handle(lease.window.raw()) else {
+                continue;
+            };
+            let Some(window) = self.windows.get(slot) else {
+                continue;
+            };
+            if window.generation != generation
+                || window.state == WindowState::Closed
+                || window.output != output
+            {
+                continue;
+            }
             plan[next] = Some(super::layer_contract::LeaseGroup {
-                window: lease.window.raw(), slots: if window.background.is_some() { 2 } else { 1 }, last_hot_ms: lease.last_hot_ms,
+                window: lease.window.raw(),
+                slots: if window.background.is_some() { 2 } else { 1 },
+                last_hot_ms: lease.last_hot_ms,
             });
             next += 1;
         }
@@ -777,17 +809,32 @@ impl WindowBroker {
     }
 
     fn apply_group_plan(&mut self, output: OutputId, plan: super::layer_contract::GroupPlan) {
-        let demoted: Vec<_> = self.windows.iter().enumerate()
-            .filter(|(_, window)| window.output == output && window.state != WindowState::Closed && window.plane.is_application())
-            .filter_map(|(slot, window)| WindowId::from_raw(pack_handle(slot, window.generation).ok()?))
-            .filter(|id| !plan.iter().flatten().any(|group| group.window == id.raw())).collect();
-        for id in demoted { self.demote_to_stack(id); }
+        let demoted: Vec<_> = self
+            .windows
+            .iter()
+            .enumerate()
+            .filter(|(_, window)| {
+                window.output == output
+                    && window.state != WindowState::Closed
+                    && window.plane.is_application()
+            })
+            .filter_map(|(slot, window)| {
+                WindowId::from_raw(pack_handle(slot, window.generation).ok()?)
+            })
+            .filter(|id| !plan.iter().flatten().any(|group| group.window == id.raw()))
+            .collect();
+        for id in demoted {
+            self.demote_to_stack(id);
+        }
         self.leases = [None; LEASE_PLANE_COUNT];
         let mut plane_slot = super::layer_contract::first_slot(plan);
         for group in plan.into_iter().flatten() {
             let id = WindowId::from_raw(group.window).unwrap();
             for slot in plane_slot..plane_slot + usize::from(group.slots) {
-                self.leases[slot - FIRST_LEASE_PLANE_SLOT] = Some(PlaneLease { window: id, last_hot_ms: group.last_hot_ms });
+                self.leases[slot - FIRST_LEASE_PLANE_SLOT] = Some(PlaneLease {
+                    window: id,
+                    last_hot_ms: group.last_hot_ms,
+                });
             }
             plane_slot += usize::from(group.slots);
             // Foreground occupies the higher member of a two-slot grant.
@@ -1800,32 +1847,57 @@ pub(crate) fn create_window(request: WindowCreate) -> Result<WindowId, WindowBro
 
 /// Attach the second surface while the sole input window is still pending.
 /// Allocation, format and ownership are checked before the registry changes.
-pub(super) fn attach_window_background(owner: WindowOwner, id: WindowId, frame: FrameHandle) -> Result<(), WindowBrokerError> {
-    let plan = super::frame_snapshot(frame).map_err(|_| WindowBrokerError::InvalidHandle)?.plan;
-    let capabilities = super::ui4_output_capabilities(plan.output).ok_or(WindowBrokerError::InvalidPlane)?;
-    if capabilities.application_plane_mask & super::layer_contract::REQUIRED_PLANE_MASK != super::layer_contract::REQUIRED_PLANE_MASK {
+pub(super) fn attach_window_background(
+    owner: WindowOwner,
+    id: WindowId,
+    frame: FrameHandle,
+) -> Result<(), WindowBrokerError> {
+    let plan = super::frame_snapshot(frame)
+        .map_err(|_| WindowBrokerError::InvalidHandle)?
+        .plan;
+    let capabilities =
+        super::ui4_output_capabilities(plan.output).ok_or(WindowBrokerError::InvalidPlane)?;
+    if capabilities.application_plane_mask & super::layer_contract::REQUIRED_PLANE_MASK
+        != super::layer_contract::REQUIRED_PLANE_MASK
+    {
         return Err(WindowBrokerError::InvalidPlane);
     }
     let mut broker = WINDOW_BROKER.lock();
     let window = broker.checked_window_mut(owner, id)?;
-    if window.state != WindowState::Pending || window.background.is_some()
-        || window.output != plan.output || window.frame == frame
+    if window.state != WindowState::Pending
+        || window.background.is_some()
+        || window.output != plan.output
+        || window.frame == frame
         || (window.placement.width, window.placement.height) != (plan.width, plan.height)
-        || plan.format != super::ScanoutFormat::Rgba8888Premultiplied {
+        || plan.format != super::ScanoutFormat::Rgba8888Premultiplied
+    {
         return Err(WindowBrokerError::InvalidPlane);
     }
-    window.background = Some(WindowBackground { frame, buffering: plan.buffering, publish_serial: 0 });
+    window.background = Some(WindowBackground {
+        frame,
+        buffering: plan.buffering,
+        publish_serial: 0,
+    });
     let output = window.output;
     broker.rebalance_application_planes(output, trueos_time::Instant::now().as_millis());
     broker.mark_composition_changed();
     Ok(())
 }
 
-pub(super) fn publish_window_background(owner: WindowOwner, id: WindowId, damage: DamageRect) -> Result<u64, WindowBrokerError> {
-    if !damage.valid() { return Err(WindowBrokerError::EmptyDamage); }
+pub(super) fn publish_window_background(
+    owner: WindowOwner,
+    id: WindowId,
+    damage: DamageRect,
+) -> Result<u64, WindowBrokerError> {
+    if !damage.valid() {
+        return Err(WindowBrokerError::EmptyDamage);
+    }
     let mut broker = WINDOW_BROKER.lock();
     let window = broker.checked_window_mut(owner, id)?;
-    let background = window.background.as_mut().ok_or(WindowBrokerError::InvalidHandle)?;
+    let background = window
+        .background
+        .as_mut()
+        .ok_or(WindowBrokerError::InvalidHandle)?;
     background.publish_serial = next_serial(background.publish_serial);
     let serial = background.publish_serial;
     window.revision = next_serial(window.revision);
@@ -1865,14 +1937,28 @@ pub(crate) fn commit_window_frame_replacement(
 }
 
 pub(super) fn commit_window_layered_replacement(
-    owner: WindowOwner, id: WindowId, foreground: FrameHandle, background: FrameHandle,
-    placement: WindowPlacement, resize_epoch: u64,
+    owner: WindowOwner,
+    id: WindowId,
+    foreground: FrameHandle,
+    background: FrameHandle,
+    placement: WindowPlacement,
+    resize_epoch: u64,
 ) -> Result<u64, WindowBrokerError> {
-    let plan = super::frame_snapshot(background).map_err(|_| WindowBrokerError::InvalidHandle)?.plan;
+    let plan = super::frame_snapshot(background)
+        .map_err(|_| WindowBrokerError::InvalidHandle)?
+        .plan;
     if (plan.width, plan.height) != (placement.width, placement.height) {
         return Err(WindowBrokerError::EmptyExtent);
     }
-    commit_window_replacement(owner, id, foreground, Some(background), placement, resize_epoch, DamageRect::FULL)
+    commit_window_replacement(
+        owner,
+        id,
+        foreground,
+        Some(background),
+        placement,
+        resize_epoch,
+        DamageRect::FULL,
+    )
 }
 
 fn commit_window_replacement(
@@ -2736,14 +2822,34 @@ fn note_window_interaction(
         return Ok(current);
     }
     let output = broker.windows[slot].output;
-    if broker.windows.iter().any(|window| window.output == output && window.state != WindowState::Closed && window.background.is_some()) {
+    if broker.windows.iter().any(|window| {
+        window.output == output
+            && window.state != WindowState::Closed
+            && window.background.is_some()
+    }) {
         let requested = super::layer_contract::LeaseGroup {
-            window: id.raw(), slots: if broker.windows[slot].background.is_some() { 2 } else { 1 }, last_hot_ms: now_ms,
+            window: id.raw(),
+            slots: if broker.windows[slot].background.is_some() {
+                2
+            } else {
+                1
+            },
+            last_hot_ms: now_ms,
         };
-        let Some(plan) = super::layer_contract::claim_group(broker.group_plan(output), requested, now_ms, LEASE_IDLE_GRACE_MS, raise) else { return Ok(current); };
+        let Some(plan) = super::layer_contract::claim_group(
+            broker.group_plan(output),
+            requested,
+            now_ms,
+            LEASE_IDLE_GRACE_MS,
+            raise,
+        ) else {
+            return Ok(current);
+        };
         broker.apply_group_plan(output, plan);
         let plane = broker.windows[slot].plane;
-        if raise || plane != current { broker.mark_composition_changed(); }
+        if raise || plane != current {
+            broker.mark_composition_changed();
+        }
         drop(broker);
         if raise || plane != current {
             super::cursor_frame_inout::frame_visual_changed(owner, id);
@@ -2850,11 +2956,17 @@ pub(crate) fn application_windows_for_output_with_revision(
     let broker = WINDOW_BROKER.lock();
     let revision = broker.composition_revision;
     let mut windows = Vec::new();
-    for window in broker.snapshots(output).into_iter().filter(|w| w.plane.is_application()) {
+    for window in broker
+        .snapshots(output)
+        .into_iter()
+        .filter(|w| w.plane.is_application())
+    {
         if let Some(background) = window.background {
             // A pair first becomes visible only once both sources have a
             // published front. Input/diagnostic snapshots remain one window.
-            if background.publish_serial == 0 { continue; }
+            if background.publish_serial == 0 {
+                continue;
+            }
             windows.push(WindowSnapshot {
                 layer: 1,
                 frame: background.frame,
@@ -2933,13 +3045,21 @@ pub(crate) fn window_frame_was_presented(
 pub(super) fn acknowledge_window_surface(window: WindowSnapshot) -> bool {
     if window.layer == 1 {
         let broker = WINDOW_BROKER.lock();
-        let Ok((slot, generation)) = unpack_handle(window.id.raw()) else { return false; };
+        let Ok((slot, generation)) = unpack_handle(window.id.raw()) else {
+            return false;
+        };
         if let Some(record) = broker.windows.get(slot)
             && record.generation == generation
-            && record.background.is_some_and(|background| background.frame == window.frame)
+            && record.revision == window.revision
+            && record
+                .background
+                .is_some_and(|background| background.frame == window.frame)
         {
-            return record.background.is_some_and(|background| background.publish_serial == window.publish_serial);
+            return record
+                .background
+                .is_some_and(|background| background.publish_serial == window.publish_serial);
         }
+        return false;
     }
     acknowledge_window_frame_revision(window.id, window.publish_serial, window.revision)
 }

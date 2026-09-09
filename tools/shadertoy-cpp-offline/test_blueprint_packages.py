@@ -12,6 +12,7 @@ from package_blueprint import ROOT, PROGRAMS
 
 def main():
     bp = Path(os.environ.get("TRUEOS_BLUEPRINTS_ROOT", ROOT.parent / "TRUEOS-Blueprints"))
+    cubes = Path(os.environ.get("TRUEOS_CUBES_ROOT", ROOT.parent / "Cubes"))
     subprocess.run(["python3", str(Path(__file__).with_name("package_blueprint.py")),
                     "--blueprints-root", str(bp), "--check"], check=True)
     gpu = ROOT / "src/intel/gpgpu"
@@ -27,11 +28,16 @@ def main():
     code += f'\n#[path = "{gpu}/artifacts/shadertoy_package.rs"] mod package;\n'
     for _, name in PROGRAMS:
         code += f'include!("{bp}/apps/shadertoy/assets/{name}/kernel.contract.rs");\n'
+    mandelbox = cubes / "Cube/mandelbox"
+    code += f'include!("{mandelbox}/kernel.contract.rs");\n'
     code += 'fn fixtures() -> Vec<(u32, &\'static [u8], &\'static GpgpuKernelAbiContract)> { vec![\n'
     for index, name in PROGRAMS:
         manifest = json.loads((bp / f"apps/shadertoy/assets/{name}/kernel.manifest.json").read_text())
         for symbol in manifest["rust_symbols"].values():
             code += f'({index}, include_bytes!("{bp}/apps/shadertoy/assets/{name}.stpkg"), &{symbol}),\n'
+    manifest = json.loads((mandelbox / "kernel.manifest.json").read_text())
+    for symbol in manifest["rust_symbols"].values():
+        code += f'(16, include_bytes!("{mandelbox}/mandelbox.stpkg"), &{symbol}),\n'
     code += '] }\n' + TESTS
     with tempfile.TemporaryDirectory(prefix="trueos-shadertoy-packages-") as temporary:
         project = Path(temporary)
@@ -63,12 +69,12 @@ def main():
 TESTS = r'''
 #[test]
 fn gallery_selectors_require_their_canonical_program() {
-    for id in 1..=15 {
+    for id in 1..=16 {
         let program = package::program_id(id).unwrap();
         assert_eq!(program, if (8..=14).contains(&id) { 8 } else { id });
         assert!(package::contract(program).is_some());
     }
-    for id in [0, 16, 31, 32, u32::MAX] { assert!(package::program_id(id).is_none()); }
+    for id in [0, 17, 31, 32, u32::MAX] { assert!(package::program_id(id).is_none()); }
 }
 
 #[test]
@@ -129,7 +135,7 @@ fn staging_requires_complete_contiguous_correct_shader_bytes() {
         assert_eq!(upload.bytes, bytes);
         assert!(upload.contract.payloads(&upload.bytes).is_some());
     }
-    for id in [0, 9, 14, 16, 31, 32, u32::MAX] {
+    for id in [0, 9, 14, 17, 31, 32, u32::MAX] {
         assert!(package::ShaderToyPackageUpload::new(id).is_none());
     }
 }
