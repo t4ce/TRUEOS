@@ -1,4 +1,4 @@
-//! Kernel-internal UI4 picker for the hardware Pipe A bottom color.
+//! Kernel-internal UI4 picker for the primary display bottom color.
 //!
 //! The service owns no frame while closed. The ordinary default context menu
 //! queues an open request; Escape closes the session and transfers its frame
@@ -149,7 +149,9 @@ fn service_active_picker(picker: &mut ActiveColorPicker) {
 fn open_picker(request: ColorPickerOpenRequest) -> Result<ActiveColorPicker, &'static str> {
     let output = OutputId::from_slot(0).ok_or("output-unavailable")?;
     let (screen_width, screen_height) =
-        crate::intel::active_scanout_dimensions().ok_or("scanout-unavailable")?;
+        crate::intel::active_scanout_dimensions()
+            .or_else(crate::virtio_gpu_logo::output_dimensions)
+            .ok_or("scanout-unavailable")?;
     if screen_width == 0 || screen_height == 0 {
         return Err("scanout-empty");
     }
@@ -215,7 +217,7 @@ fn open_picker(request: ColorPickerOpenRequest) -> Result<ActiveColorPicker, &'s
         picker_dirty: true,
     };
     let initial = picker.color.rgb();
-    if !crate::intel::set_pipe_a_bottom_color_rgb8(initial[0], initial[1], initial[2]) {
+    if !set_bottom_color(initial) {
         let _ = close_picker(&picker, "initial-bottom-color-program-failed");
         return Err("initial-bottom-color-program");
     }
@@ -350,7 +352,7 @@ impl ActiveColorPicker {
         *SELECTED_COLOR.lock() = self.color;
         self.picker_dirty = true;
         let rgb = self.color.rgb();
-        let programmed = crate::intel::set_pipe_a_bottom_color_rgb8(rgb[0], rgb[1], rgb[2]);
+        let programmed = set_bottom_color(rgb);
         crate::log_info!(target: "ui4/color-picker";
             "ui4/color-picker: selected panel={:?} hsv={},{},{} rgb={},{},{} pipe_a_bottom_programmed={} picker_publish=pending\n",
             panel,
@@ -486,4 +488,9 @@ mod tests {
         assert_eq!(panel_at(0, (HUE_Y - 1) as i32), None);
         assert_eq!(panel_at(0, (HUE_Y + HUE_HEIGHT) as i32), None);
     }
+}
+
+fn set_bottom_color(rgb: [u8; 3]) -> bool {
+    crate::intel::set_pipe_a_bottom_color_rgb8(rgb[0], rgb[1], rgb[2])
+        || crate::virtio_gpu_logo::set_background_color(rgb[0], rgb[1], rgb[2])
 }

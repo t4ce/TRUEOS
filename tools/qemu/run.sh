@@ -9,7 +9,7 @@ QEMU_SMP="${QEMU_SMP:-14}"
 QEMU_NIC_DEVICE="${QEMU_NIC_DEVICE:-virtio-net-pci,disable-modern=off}"
 QEMU_SERIAL="${QEMU_SERIAL:-tcp:127.0.0.1:5555,server,nowait}"
 QEMU_DISPLAY="${QEMU_DISPLAY:-sdl,gl=on}"
-QEMU_GPU="${QEMU_GPU:-virtio-gpu-gl-pci,xres=2560,yres=1440}"
+QEMU_GPU="${QEMU_GPU:-virtio-gpu-gl-pci,xres=1920,yres=1080}"
 
 QEMU_MODE="${1:-iso}"
 if [[ "${QEMU_MODE}" == "iso" || "${QEMU_MODE}" == "iso-debug" ]]; then
