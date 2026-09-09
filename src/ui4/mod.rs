@@ -74,9 +74,9 @@ pub(crate) use cursor_frame_inout::{
     CursorFrameKey, GlobalKeyboardDisposition, GlobalKeyboardHookId, Ui4CursorIcon,
     Ui4CursorSource, Ui4CursorStep, center_snapped_frame_for_source, cursor_color,
     cursor_presentation_for_source, register_global_keyboard_hook, selected_frame,
-    selected_frame_for_source, selection_strips, set_relative_pointer_mode_for_source,
-    set_window_center_snapped_mouse, set_window_cursor_icon, set_window_cursor_step,
-    set_window_custom_cursor, suppress_center_snap_for_source, unregister_global_keyboard_hook,
+    selected_frame_for_source, selection_strips, set_window_center_snapped_mouse,
+    set_window_cursor_icon, set_window_cursor_step, set_window_custom_cursor,
+    suppress_center_snap_for_source, unregister_global_keyboard_hook,
 };
 pub(crate) use damage::{DamageRect, DamageRegion};
 pub(crate) use frame_pool::{

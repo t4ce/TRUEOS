@@ -14,8 +14,7 @@
 //! - keyboard: modifiers u8, reserved u8, six HID boot key bytes
 //! - tablet:   x_q16 u32, y_q16 u32, buttons u32, optional wheel i16
 //!             with INPUT_FLAG_RELATIVE: dx i32, dy i32, buttons u32, wheel i16
-//! - control:  no payload; bit 0 releases frame snap, bit 1 makes pointer mode
-//!             explicit, and bit 2 selects relative rather than absolute mode
+//! - control:  no payload; bit 0 requests release from center-snap mode
 
 use core::sync::atomic::{AtomicU32, Ordering};
 
@@ -40,8 +39,6 @@ const KIND_TABLET: u8 = 3;
 const KIND_CONTROL: u8 = 4;
 const CONTROL_MAGIC: &[u8; 4] = b"THIC";
 const CONTROL_RELEASE_CENTER_SNAP: u16 = 1 << 0;
-const CONTROL_POINTER_MODE_VALID: u16 = 1 << 1;
-const CONTROL_POINTER_MODE_RELATIVE: u16 = 1 << 2;
 const INPUT_FLAG_RELATIVE: u16 = 1 << 15;
 const DEVICE_STATE_CAP: usize = crate::allcaps::input::HID_UDP_DEVICE_STATE_CAP;
 
@@ -55,13 +52,6 @@ struct DeviceSeq {
     device_id: u16,
     kind: u8,
     window: SequenceWindow,
-}
-
-#[derive(Copy, Clone, Debug)]
-struct DevicePointerMode {
-    device_id: u16,
-    relative: bool,
-    explicit: bool,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -138,51 +128,7 @@ fn sequence_is_fresh(
     true
 }
 
-fn record_pointer_mode(
-    modes: &mut Vec<DevicePointerMode, DEVICE_STATE_CAP>,
-    device_id: u16,
-    relative: bool,
-    explicit: bool,
-) -> bool {
-    if let Some(mode) = modes.iter_mut().find(|mode| mode.device_id == device_id) {
-        mode.relative = relative;
-        mode.explicit |= explicit;
-        return true;
-    }
-    modes
-        .push(DevicePointerMode {
-            device_id,
-            relative,
-            explicit,
-        })
-        .is_ok()
-}
-
-fn pointer_mode_is_explicit(
-    modes: &Vec<DevicePointerMode, DEVICE_STATE_CAP>,
-    device_id: u16,
-) -> bool {
-    modes
-        .iter()
-        .find(|mode| mode.device_id == device_id)
-        .is_some_and(|mode| mode.explicit)
-}
-
-fn pointer_mode_is_relative(
-    modes: &Vec<DevicePointerMode, DEVICE_STATE_CAP>,
-    device_id: u16,
-) -> bool {
-    modes
-        .iter()
-        .find(|mode| mode.device_id == device_id)
-        .is_some_and(|mode| mode.relative)
-}
-
-fn accept_frame(
-    frame: HidUdpFrame<'_>,
-    seqs: &mut Vec<DeviceSeq, DEVICE_STATE_CAP>,
-    modes: &mut Vec<DevicePointerMode, DEVICE_STATE_CAP>,
-) -> bool {
+fn accept_frame(frame: HidUdpFrame<'_>, seqs: &mut Vec<DeviceSeq, DEVICE_STATE_CAP>) -> bool {
     match frame.kind {
         KIND_MOUSE if frame.payload.len() < 4 => return false,
         KIND_KEYBOARD if frame.payload.len() < 8 => return false,
@@ -239,15 +185,6 @@ fn accept_frame(
         }
         KIND_TABLET => {
             let relative = frame.flags & INPUT_FLAG_RELATIVE != 0;
-            if !record_pointer_mode(modes, frame.device_id, relative, false) {
-                return false;
-            }
-            if relative || pointer_mode_is_explicit(modes, frame.device_id) {
-                crate::ui4::set_relative_pointer_mode_for_source(
-                    rdp_tablet_source(frame.device_id),
-                    relative,
-                );
-            }
             if relative {
                 let Some(dx) = read_u32(frame.payload, 0).map(|value| value as i32) else {
                     return false;
@@ -292,13 +229,7 @@ fn accept_frame(
         }
         KIND_CONTROL => {
             let source = rdp_tablet_source(frame.device_id);
-            if frame.flags & CONTROL_POINTER_MODE_VALID != 0 {
-                let relative = frame.flags & CONTROL_POINTER_MODE_RELATIVE != 0;
-                if !record_pointer_mode(modes, frame.device_id, relative, true) {
-                    return false;
-                }
-                crate::ui4::set_relative_pointer_mode_for_source(source, relative);
-            } else if frame.flags & CONTROL_RELEASE_CENTER_SNAP != 0 {
+            if frame.flags & CONTROL_RELEASE_CENTER_SNAP != 0 {
                 crate::ui4::suppress_center_snap_for_source(source);
             }
         }
@@ -328,23 +259,18 @@ fn rdp_tablet_source(device_id: u16) -> crate::ui4::Ui4CursorSource {
     }
 }
 
-fn control_reply(device_id: u16, modes: &Vec<DevicePointerMode, DEVICE_STATE_CAP>) -> [u8; 8] {
+fn control_reply(device_id: u16) -> [u8; 8] {
     let mut reply = [0u8; 8];
     reply[..4].copy_from_slice(CONTROL_MAGIC);
     reply[4] = VERSION;
     reply[5] = u8::from(
         crate::ui4::center_snapped_frame_for_source(rdp_tablet_source(device_id)).is_some(),
     );
-    reply[5] |= u8::from(pointer_mode_is_relative(modes, device_id)) << 1;
     reply[6..8].copy_from_slice(&device_id.to_le_bytes());
     reply
 }
 
-fn handle_packet(
-    data: &[u8],
-    seqs: &mut Vec<DeviceSeq, DEVICE_STATE_CAP>,
-    modes: &mut Vec<DevicePointerMode, DEVICE_STATE_CAP>,
-) -> Option<u16> {
+fn handle_packet(data: &[u8], seqs: &mut Vec<DeviceSeq, DEVICE_STATE_CAP>) -> Option<u16> {
     let received = RX_SEEN.fetch_add(1, Ordering::Relaxed) + 1;
     if received <= 4 {
         crate::log_important!(
@@ -366,7 +292,7 @@ fn handle_packet(
         return None;
     };
 
-    if !accept_frame(frame, seqs, modes) {
+    if !accept_frame(frame, seqs) {
         let n = RX_BAD.fetch_add(1, Ordering::Relaxed) + 1;
         if n <= 8 || n.is_power_of_two() {
             crate::log_important!(
@@ -400,7 +326,6 @@ pub async fn hid_udp_srv_task() {
 
         let mut handle = None;
         let mut seqs: Vec<DeviceSeq, DEVICE_STATE_CAP> = Vec::new();
-        let mut modes: Vec<DevicePointerMode, DEVICE_STATE_CAP> = Vec::new();
         let _ = vnet.submit(v::vnet::Command::OpenUdp {
             port: TRUEOS_HID_UDP_PORT,
         });
@@ -446,7 +371,6 @@ pub async fn hid_udp_srv_task() {
                     v::vnet::Event::Closed { handle: h } if handle == Some(h) => {
                         handle = None;
                         seqs.clear();
-                        modes.clear();
                         crate::log_important!("hid-udp: listener closed, reopening\n");
                         let _ = vnet.submit(v::vnet::Command::OpenUdp {
                             port: TRUEOS_HID_UDP_PORT,
@@ -457,10 +381,8 @@ pub async fn hid_udp_srv_task() {
                         from,
                         data,
                     } if handle == Some(h) => {
-                        if let Some(device_id) =
-                            handle_packet(data.as_slice(), &mut seqs, &mut modes)
-                        {
-                            let reply = control_reply(device_id, &modes);
+                        if let Some(device_id) = handle_packet(data.as_slice(), &mut seqs) {
+                            let reply = control_reply(device_id);
                             let _ = vnet.submit(v::vnet::Command::SendUdp {
                                 handle: h,
                                 remote: from,
@@ -473,10 +395,8 @@ pub async fn hid_udp_srv_task() {
                         from,
                         data,
                     } if handle == Some(h) => {
-                        if let Some(device_id) =
-                            handle_packet(data.as_slice(), &mut seqs, &mut modes)
-                        {
-                            let reply = control_reply(device_id, &modes);
+                        if let Some(device_id) = handle_packet(data.as_slice(), &mut seqs) {
+                            let reply = control_reply(device_id);
                             let _ = vnet.submit(v::vnet::Command::SendUdpV6 {
                                 handle: h,
                                 remote: from,

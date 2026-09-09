@@ -104,7 +104,6 @@ static CURSOR_EVENT_READY: Signal<crate::wait::EmbassySpinRawMutex, ()> = Signal
 
 pub(crate) const HID_UDP_CONTROLLER_ID: u32 = 0x5544_5048; // "UDPH"
 const HID_UDP_SLOT_BASE: u32 = 0x5500_0000;
-const HID_UDP_HYBRID_COMBO_BASE: u32 = 0x5244_0000; // "RD"
 
 #[inline]
 fn clamp01(value: f64) -> f64 {
@@ -352,14 +351,6 @@ pub(crate) const fn hid_udp_slot_id(udp_device_id: u16) -> u32 {
     HID_UDP_SLOT_BASE | (udp_device_id as u32)
 }
 
-fn ensure_udp_hybrid_combo(udp_device_id: u16) {
-    let combo_id = HID_UDP_HYBRID_COMBO_BASE | u32::from(udp_device_id);
-    let slot_id = hid_udp_slot_id(udp_device_id);
-    let _ = self::hut::upsert_combo(combo_id, self::hut::HidSourceKind::Ai, "rdp-hybrid");
-    let _ = self::hut::bind_combo_keyboard(combo_id, HID_UDP_CONTROLLER_ID, slot_id, 0);
-    let _ = self::hut::bind_combo_tablet(combo_id, HID_UDP_CONTROLLER_ID, slot_id, 0);
-}
-
 pub(crate) fn inject_udp_mouse_boot_report(
     udp_device_id: u16,
     buttons: u8,
@@ -389,7 +380,6 @@ pub(crate) fn inject_udp_mouse_boot_report(
 }
 
 pub(crate) fn inject_udp_keyboard_boot_report(udp_device_id: u16, modifiers: u8, keys: [u8; 6]) {
-    ensure_udp_hybrid_combo(udp_device_id);
     let slot_id = hid_udp_slot_id(udp_device_id);
     let report = [
         modifiers, 0, keys[0], keys[1], keys[2], keys[3], keys[4], keys[5],
@@ -403,7 +393,7 @@ pub(crate) fn inject_udp_keyboard_boot_report(udp_device_id: u16, modifiers: u8,
         keys,
         self::keyboard::boot_ascii_for_keys(modifiers, keys),
         self::hut::HidSourceKind::Ai,
-        "rdp-hybrid",
+        "udp",
         true,
     );
 }
@@ -416,7 +406,6 @@ pub(crate) fn inject_udp_tablet_absolute_event(
     wheel: i16,
     flags: u32,
 ) {
-    ensure_udp_hybrid_combo(udp_device_id);
     let slot_id = hid_udp_slot_id(udp_device_id);
     let x = clamp01(x);
     let y = clamp01(y);
@@ -504,7 +493,7 @@ pub(crate) fn inject_udp_tablet_absolute_event(
         buttons_down,
         0,
         self::hut::HidSourceKind::Ai,
-        "rdp-hybrid",
+        "udp",
         true,
     );
     push_cursor_event(event);
@@ -526,7 +515,6 @@ pub(crate) fn inject_udp_tablet_relative_event(
     wheel: i16,
     flags: u32,
 ) {
-    ensure_udp_hybrid_combo(udp_device_id);
     let slot_id = hid_udp_slot_id(udp_device_id);
     let buttons = buttons_down.min(u8::MAX as u32) as u8;
     let dx_i16 = dx.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
@@ -601,7 +589,7 @@ pub(crate) fn inject_udp_tablet_relative_event(
         buttons_down,
         0,
         self::hut::HidSourceKind::Ai,
-        "rdp-hybrid",
+        "udp",
         true,
     );
     push_cursor_event(TrueosHidCursorEvent {

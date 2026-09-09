@@ -148,7 +148,6 @@ struct SelectingCursor {
     selected: CursorFrameKey,
     color: crate::graphics::primitives::Rgba8,
     center_snap_suppressed: bool,
-    relative_pointer_mode: bool,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -308,7 +307,6 @@ impl CursorFrameRig {
                             selected,
                             color,
                             center_snap_suppressed: false,
-                            relative_pointer_mode: false,
                         })
                         .is_ok();
                 }
@@ -410,14 +408,8 @@ impl CursorFrameRig {
         let cursor = self
             .selecting_cursors
             .iter()
-            .find(|cursor| cursor.source == source)?;
+            .find(|cursor| cursor.source == source && !cursor.center_snap_suppressed)?;
         let key = cursor.selected;
-        if cursor.relative_pointer_mode {
-            return Some(key);
-        }
-        if cursor.center_snap_suppressed {
-            return None;
-        }
         self.frames
             .iter()
             .find(|frame| frame.key == key && frame.center_snapped_cursor)
@@ -432,24 +424,8 @@ impl CursorFrameRig {
         else {
             return false;
         };
-        let changed = !cursor.center_snap_suppressed || cursor.relative_pointer_mode;
+        let changed = !cursor.center_snap_suppressed;
         cursor.center_snap_suppressed = true;
-        cursor.relative_pointer_mode = false;
-        changed
-    }
-
-    fn set_relative_pointer_mode(&mut self, source: Ui4CursorSource, enabled: bool) -> bool {
-        let Some(cursor) = self
-            .selecting_cursors
-            .iter_mut()
-            .find(|cursor| cursor.source == source)
-        else {
-            return false;
-        };
-        let changed =
-            cursor.relative_pointer_mode != enabled || cursor.center_snap_suppressed == enabled;
-        cursor.relative_pointer_mode = enabled;
-        cursor.center_snap_suppressed = !enabled;
         changed
     }
 
@@ -581,15 +557,6 @@ pub(crate) fn center_snapped_frame_for_source(source: Ui4CursorSource) -> Option
 
 pub(crate) fn suppress_center_snap_for_source(source: Ui4CursorSource) {
     if CURSOR_FRAME_RIG.lock().suppress_center_snap(source) {
-        signal_visual_change();
-    }
-}
-
-pub(crate) fn set_relative_pointer_mode_for_source(source: Ui4CursorSource, enabled: bool) {
-    if CURSOR_FRAME_RIG
-        .lock()
-        .set_relative_pointer_mode(source, enabled)
-    {
         signal_visual_change();
     }
 }
@@ -1009,22 +976,6 @@ mod tests {
 
         rig.select(Some(frame), cursor, Rgba8::new(1, 2, 3, 255));
         assert_eq!(rig.center_snapped_frame_for_source(cursor), Some(frame));
-    }
-
-    #[test]
-    fn virtual_pointer_relative_mode_forces_one_selected_cursor_to_center() {
-        let mut rig = CursorFrameRig::new();
-        let frame = CursorFrameKey::new(WindowOwner::KernelApp(1), WindowId::from_raw(1).unwrap());
-        let cursor = source(2);
-        rig.frame_opened(frame, WindowSessionId::from_raw(1).unwrap())
-            .unwrap();
-        rig.select(Some(frame), cursor, Rgba8::new(1, 2, 3, 255));
-
-        assert!(rig.set_relative_pointer_mode(cursor, true));
-        assert_eq!(rig.center_snapped_frame_for_source(cursor), Some(frame));
-        assert!(!rig.set_relative_pointer_mode(cursor, true));
-        assert!(rig.set_relative_pointer_mode(cursor, false));
-        assert_eq!(rig.center_snapped_frame_for_source(cursor), None);
     }
 
     #[test]
