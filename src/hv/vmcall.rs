@@ -299,6 +299,7 @@ pub const OP_BP_FS_STAT: u32 = 0x60; // payload path -> rc + kind in response_da
 pub const OP_BP_THREAD_CURRENT_ID: u32 = 0x61; // response is current TRUEOS vthread id
 pub const OP_BP_SERVICE_LANE_SUBMIT: u32 = 0x62; // arg0/arg1 boxed service-lane job raw parts
 pub const OP_BP_SERVICE_LANE_CAPACITY: u32 = 0x204; // no args -> advisory available native workers
+pub const OP_BP_SERVICE_LANE_CANCELLED: u32 = 0x207; // no args -> closed native-job admission
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub const OP_BP_TOKIO_BLOCKING_SPAWN: u32 = OP_BP_SERVICE_LANE_SUBMIT; // compatibility alias
 pub const OP_BP_PLATFORM_WAKE_ONE: u32 = 0x63; // arg0 VM-local wait key -> woke bool
@@ -3158,6 +3159,15 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             } else {
                 let count = crate::r::blocking::service_lane_available_capacity_for_vm(Some(vm_id));
                 write_response(vm_id, seq, STATUS_OK, count as u64, 0);
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_SERVICE_LANE_CANCELLED => {
+            if arg0 != 0 || arg1 != 0 || req_len != 0 {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+            } else {
+                let cancelled = crate::r::blocking::guest_job_cancellation_requested(vm_id);
+                write_response(vm_id, seq, STATUS_OK, cancelled as u64, 0);
             }
             DispatchOutcome::Resume
         }

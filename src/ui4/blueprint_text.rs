@@ -2269,16 +2269,10 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_resize_event_take(
     let Some(event) = surface.pending_resize_events.pop_front() else {
         return 1;
     };
-    if let Some(pending) = surface.pending_resize.as_mut()
-        && (pending.placement.width, pending.placement.height)
-            == (event.abi.width, event.abi.height)
-    {
-        // An ABA dock sequence may return to the staged pixel extent with a
-        // newer broker epoch. The allocation is still an exact fit; promote
-        // its acknowledgement instead of making the app allocate it again.
-        pending.resize_epoch = event.resize_epoch;
-    }
+    let window = surface.window;
     surface.taken_resize_event = Some(event);
+    refresh_pending_resize_epoch(&mut surfaces, owner, window,
+        (event.abi.width, event.abi.height), event.resize_epoch);
     // SAFETY: the non-null output points to one writable ABI event.
     unsafe { out.write(event.abi) };
     0
@@ -7371,6 +7365,24 @@ fn surface_mut(
 
 /// Prepare both allocations before changing either producer. Old fronts and
 /// their common presentation geometry stay live until both replacements finish.
+fn refresh_pending_resize_epoch(
+    surfaces: &mut [BlueprintSceneSurface],
+    owner: WindowOwner,
+    window: WindowId,
+    extent: (u32, u32),
+    epoch: u64,
+) {
+    // A -> B -> A reuses exact-sized allocations, but every member of a
+    // layered transaction must acknowledge the same newer resize epoch.
+    for surface in surfaces.iter_mut().filter(|s| s.owner == owner && s.window == window) {
+        if let Some(pending) = surface.pending_resize.as_mut()
+            && (pending.placement.width, pending.placement.height) == extent
+        {
+            pending.resize_epoch = epoch;
+        }
+    }
+}
+
 fn stage_layered_resize(
     surfaces: &mut [BlueprintSceneSurface],
     owner: WindowOwner,

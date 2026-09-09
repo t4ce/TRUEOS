@@ -10,7 +10,7 @@ import argparse
 from pathlib import Path
 import re
 
-SYMBOLS = ("trueos_service_lane_submit_job", "trueos_service_lane_available_capacity")
+SYMBOLS = ("trueos_service_lane_submit_job", "trueos_service_lane_available_capacity", "trueos_service_lane_cancellation_requested")
 
 
 def signature(source: str, symbol: str, definition: bool) -> str:
@@ -49,15 +49,16 @@ def check(kernel: Path, sdk: Path) -> None:
             raise ValueError(f"{symbol}: required loader export missing or points to another function")
     vmcall = (kernel / "src/hv/vmcall.rs").read_text()
     constants = dict(re.findall(r"pub const (OP_\w+): u32 = (0x[0-9a-fA-F]+)", vmcall))
-    code = int(constants["OP_BP_SERVICE_LANE_CAPACITY"], 16)
-    collisions = [name for name, value in constants.items() if int(value, 16) == code]
-    if collisions != ["OP_BP_SERVICE_LANE_CAPACITY"]:
-        raise ValueError(f"native capacity VMCALL collision: {collisions}")
-    if "OP_BP_SERVICE_LANE_CAPACITY =>" not in vmcall:
-        raise ValueError("native capacity VMCALL dispatch missing")
     guest = (kernel / "crates/trueos-vm/src/vmcall.rs").read_text()
-    if f"OP_BP_SERVICE_LANE_CAPACITY: u32 = {code:#x};" not in guest:
-        raise ValueError("native capacity VMCALL guest constant differs")
+    for operation in ("OP_BP_SERVICE_LANE_CAPACITY", "OP_BP_SERVICE_LANE_CANCELLED"):
+        code = int(constants[operation], 16)
+        collisions = [name for name, value in constants.items() if int(value, 16) == code]
+        if collisions != [operation]:
+            raise ValueError(f"{operation}: VMCALL collision: {collisions}")
+        if f"{operation} =>" not in vmcall:
+            raise ValueError(f"{operation}: VMCALL dispatch missing")
+        if f"{operation}: u32 = {code:#x};" not in guest:
+            raise ValueError(f"{operation}: guest constant differs")
     print("native-worker-contract: declarations=match implementations=match exports=present vmcall=unique")
 
 

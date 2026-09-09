@@ -611,6 +611,7 @@ pub(crate) const fn frame_plan_shares_compositor_plane(plan: FramePlan) -> bool 
         || matches!(
             (plan.content, plan.cadence, plan.buffering),
             (FrameContent::FontScene2d, FrameCadence::Dirty, FrameBuffering::Double)
+                | (FrameContent::BlueprintScene, FrameCadence::Dirty, FrameBuffering::Double)
                 | (FrameContent::BlueprintScene, FrameCadence::Streaming, FrameBuffering::Triple)
                 | (FrameContent::RenderScene3d, FrameCadence::Streaming, FrameBuffering::Triple)
         )

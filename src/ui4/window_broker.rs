@@ -2199,6 +2199,7 @@ fn update_window_placement(
     id: WindowId,
     update: impl FnOnce(WindowPlacement) -> WindowPlacement,
 ) -> Result<WindowPlacement, WindowBrokerError> {
+    let output_extent = crate::intel::active_scanout_dimensions();
     let mut broker = WINDOW_BROKER.lock();
     let window = broker.checked_window_mut(owner, id)?;
     let previous = window.placement;
@@ -2229,14 +2230,12 @@ fn update_window_placement(
         }
         if resize_pending {
             let mut presentation = previous_presentation;
-            presentation.x = i64::from(presentation.x)
-                .saturating_add(i64::from(placement.x) - i64::from(previous.x))
-                .clamp(i64::from(i32::MIN), i64::from(i32::MAX))
-                as i32;
-            presentation.y = i64::from(presentation.y)
-                .saturating_add(i64::from(placement.y) - i64::from(previous.y))
-                .clamp(i64::from(i32::MIN), i64::from(i32::MAX))
-                as i32;
+            presentation = translated_resize_presentation(
+                presentation,
+                i64::from(placement.x) - i64::from(previous.x),
+                i64::from(placement.y) - i64::from(previous.y),
+                output_extent,
+            );
             presentation.z = placement.z;
             presentation.opacity = placement.opacity;
             presentation.visible = placement.visible;
@@ -2401,6 +2400,7 @@ pub(crate) fn move_window(
     if !placement.valid() {
         return Err(WindowBrokerError::EmptyExtent);
     }
+    let output_extent = crate::intel::active_scanout_dimensions();
     let mut broker = WINDOW_BROKER.lock();
     let window = broker.checked_window_mut(owner, id)?;
     if !window.interaction.movable
@@ -2414,14 +2414,12 @@ pub(crate) fn move_window(
         let previous = window.placement;
         window.placement = placement;
         if let Some(mut presentation) = window.replacement_presentation {
-            presentation.x = i64::from(presentation.x)
-                .saturating_add(i64::from(placement.x) - i64::from(previous.x))
-                .clamp(i64::from(i32::MIN), i64::from(i32::MAX))
-                as i32;
-            presentation.y = i64::from(presentation.y)
-                .saturating_add(i64::from(placement.y) - i64::from(previous.y))
-                .clamp(i64::from(i32::MIN), i64::from(i32::MAX))
-                as i32;
+            presentation = translated_resize_presentation(
+                presentation,
+                i64::from(placement.x) - i64::from(previous.x),
+                i64::from(placement.y) - i64::from(previous.y),
+                output_extent,
+            );
             window.replacement_presentation = Some(presentation);
         }
         window.revision = next_serial(window.revision);
@@ -2662,6 +2660,23 @@ pub(crate) fn restore_docked_window(
     cursor: (u32, u32),
 ) -> Result<WindowPlacementTransition, WindowBrokerError> {
     change_window_dock(owner, id, None, output_width, output_height, None, Some(cursor))
+}
+
+/// The logical restored window may move before its smaller replacement is
+/// published. Keep the old (possibly fullscreen) pair inside the output until
+/// that commit, instead of translating fullscreen scanout beyond the pipe.
+fn translated_resize_presentation(
+    presentation: WindowPlacement,
+    dx: i64,
+    dy: i64,
+    output: Option<(u32, u32)>,
+) -> WindowPlacement {
+    let Some((width, height)) = output else { return presentation; };
+    WindowPlacement {
+        x: (i64::from(presentation.x) + dx).clamp(0, i64::from(width.saturating_sub(presentation.width))) as i32,
+        y: (i64::from(presentation.y) + dy).clamp(0, i64::from(height.saturating_sub(presentation.height))) as i32,
+        ..presentation
+    }
 }
 
 fn center_restored_window_on_cursor(

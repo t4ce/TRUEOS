@@ -53,6 +53,9 @@ pub(crate) fn ui4_compositor_presented_revision() -> u64 {
 enum Ui4CompositorError {
     Frame(FramePoolError),
     PresentFailed,
+    PresentStage(&'static str),
+    QueueFailed { slot: usize, error: crate::intel::Ui4AsyncCompositionError },
+    DirectOnlySource { window: u32, layer: u8, slot: usize, source: (u32, u32), placement: WindowPlacement },
 }
 
 impl From<FramePoolError> for Ui4CompositorError {
@@ -719,7 +722,7 @@ fn drive_async_frame(
                 commit_async_frame(runtime, pending);
                 Ok(DriveResult::Complete)
             }
-            crate::intel::Ui4PlaneSurfaceFlipPoll::Failed => Err(Ui4CompositorError::PresentFailed),
+            crate::intel::Ui4PlaneSurfaceFlipPoll::Failed => Err(Ui4CompositorError::PresentStage("surflive-poll")),
         };
     }
 
@@ -738,7 +741,7 @@ fn drive_async_frame(
                 pending.active = None;
             }
             crate::intel::Ui4AsyncCompositionPoll::Failed => {
-                return Err(Ui4CompositorError::PresentFailed);
+                return Err(Ui4CompositorError::PresentStage("composition-completion"));
             }
         }
     }
@@ -763,7 +766,7 @@ fn drive_async_frame(
 
     let submit_result =
         if pending.completed.is_empty() || !crate::intel::begin_ui4_plane_surface_flip_batch() {
-            Err(Ui4CompositorError::PresentFailed)
+            Err(Ui4CompositorError::PresentStage("flip-batch-begin"))
         } else {
             let mut staged = true;
             for composition in pending.completed.iter().copied() {
@@ -775,7 +778,7 @@ fn drive_async_frame(
             if staged && crate::intel::submit_ui4_plane_surface_flip_batch() {
                 Ok(())
             } else {
-                Err(Ui4CompositorError::PresentFailed)
+                Err(Ui4CompositorError::PresentStage("flip-batch-stage-or-submit"))
             }
         };
     runtime.profile.submit_steps = runtime.profile.submit_steps.saturating_add(1);
@@ -1009,7 +1012,11 @@ fn queue_async_plane(
     // Blueprint snapshots (including image-viewer) deliberately continue
     // through the domain-safe static compositor below.
     if selected.len() == 1 && !all_shared_composable {
-        return Err(Ui4CompositorError::PresentFailed);
+        let (window, view) = selected[0];
+        return Err(Ui4CompositorError::DirectOnlySource {
+            window: window.id.raw(), layer: window.layer, slot: window.plane.slot(),
+            source: (view.width, view.height), placement: window.placement,
+        });
     }
     if all_dirty_double_font && !DIRTY_FONT_SHARED_COMPOSITION_LOGGED.swap(true, Ordering::AcqRel) {
         crate::log_info!(target: "ui4";
@@ -1180,7 +1187,7 @@ fn queue_async_plane(
             reason,
         ),
     };
-    queued.map_err(|_| Ui4CompositorError::PresentFailed)
+    queued.map_err(|error| Ui4CompositorError::QueueFailed { slot, error })
 }
 
 /// The immutable Blueprint frame is composed by UI4 when it starts in Slot0.

@@ -45,6 +45,7 @@ mod window_broker {
 mod producer {
     use super::*;
     ITEMS
+    pub(super) fn refresh(s:&mut [BlueprintSceneSurface],extent:(u32,u32),epoch:u64) { refresh_pending_resize_epoch(s,1,WindowId(1),extent,epoch); }
     pub(super) fn commit(s:&mut [BlueprintSceneSurface])->i32 { commit_layered_resize_if_ready(s,1,WindowId(1)) }
 }
 fn pair()->Vec<BlueprintSceneSurface> {
@@ -96,11 +97,26 @@ fn pair()->Vec<BlueprintSceneSurface> {
     COMMITS.with(|c|assert!(c.borrow().is_empty()));
     RETIRED.with(|r|assert!(r.borrow().is_empty()));
 }
+#[test] fn aba_resize_refreshes_both_epochs_even_when_one_layer_already_published() {
+    for first in 0..2 {
+        COMMITS.with(|c|c.borrow_mut().clear());
+        let mut s=pair(); s[first].pending_resize_ready=true;
+        producer::refresh(&mut s,(200,150),11);
+        assert!(s.iter().all(|m|m.pending_resize.unwrap().resize_epoch==11));
+        s[1-first].pending_resize_ready=true;
+        assert_eq!(producer::commit(&mut s),0);
+        COMMITS.with(|c|assert_eq!(*c.borrow(),vec![(20,21)]));
+    }
+}
+#[test] fn different_extent_keeps_stale_epoch_until_new_allocations_are_staged() {
+    let mut s=pair(); producer::refresh(&mut s,(300,200),11);
+    assert!(s.iter().all(|m|m.pending_resize.unwrap().resize_epoch==9));
+}
 '''
 
 def main():
     functions = "\n".join(item(SOURCE, name) for name in (
-        "commit_layered_resize_if_ready", "revert_blueprint_pending_resize"))
+        "commit_layered_resize_if_ready", "revert_blueprint_pending_resize", "refresh_pending_resize_epoch"))
     with tempfile.TemporaryDirectory(prefix="ui4-layered-resize-") as directory:
         source = Path(directory) / "tests.rs"
         source.write_text(HARNESS.replace("ITEMS", functions))

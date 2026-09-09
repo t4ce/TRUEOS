@@ -725,6 +725,24 @@ pub extern "Rust" fn trueos_service_lane_available_capacity() -> usize {
     service_lane_available_capacity_for_vm(crate::hv::current_guest_execution_context_vm_id())
 }
 
+/// Cooperative cancellation for long-lived native jobs. VM exit cannot run
+/// the application's Rust destructors; jobs must observe closed admission and
+/// return before teardown can release their executable pages and heap.
+pub(crate) fn guest_job_cancellation_requested(vm_id: u8) -> bool {
+    !lifetime::accepts_guest_jobs(vm_id)
+}
+
+#[unsafe(no_mangle)]
+pub extern "Rust" fn trueos_service_lane_cancellation_requested() -> bool {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let (status, cancelled) = crate::hv::vmcall::guest_call(
+            crate::hv::vmcall::OP_BP_SERVICE_LANE_CANCELLED, 0, 0);
+        return status != crate::hv::vmcall::STATUS_OK || cancelled != 0;
+    }
+    crate::hv::current_guest_execution_context_vm_id()
+        .is_some_and(guest_job_cancellation_requested)
+}
+
 pub(crate) fn service_lane_available_capacity_for_vm(vm_id: Option<u8>) -> usize {
     if vm_id.is_some_and(|id| !lifetime::accepts_guest_jobs(id)) {
         return 0;
