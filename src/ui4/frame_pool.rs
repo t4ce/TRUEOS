@@ -355,6 +355,7 @@ pub(crate) fn destroy_frame(handle: FrameHandle) -> Result<(), FramePoolError> {
         frame.buffer_count = 0;
         core::mem::replace(&mut frame.surfaces, [None; FRAME_BUFFER_CAPACITY])
     };
+    super::emulator_paint::forget(handle);
     destroy_surfaces(surfaces);
     Ok(())
 }

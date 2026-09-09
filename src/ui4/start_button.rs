@@ -138,7 +138,7 @@ pub(crate) async fn ui4_start_button_service_task() {
 fn initialize_start_button() -> Result<ActiveStartButton, &'static str> {
     let output = OutputId::from_slot(0).ok_or("output-unavailable")?;
     let (screen_width, screen_height) =
-        crate::intel::active_scanout_dimensions().ok_or("scanout-unavailable")?;
+        crate::ui4::output_dimensions().ok_or("scanout-unavailable")?;
     let (width, height, extent_source) =
         crate::intel::physical_extent_pixels(BUTTON_WIDTH_MM, BUTTON_HEIGHT_MM)
             .map(|extent| (extent.0, extent.1, "edid-physical-mm"))
@@ -156,6 +156,9 @@ fn initialize_start_button() -> Result<ActiveStartButton, &'static str> {
         crate::intel::physical_extent_pixels(REVEAL_CAP_MM, REVEAL_CAP_MM)
             .unwrap_or((REVEAL_CAP_MM, REVEAL_CAP_MM));
 
+    let glyph_alpha = if crate::virtio_gpu_logo::output_dimensions().is_some() {
+        alloc::vec![0; width as usize * height as usize]
+    } else {
     let glyph = crate::intel::gpu_font::render_centered_text_sprite_readback(
         "§",
         crate::intel::gpu_font::GpuFontFace::Default,
@@ -176,6 +179,9 @@ fn initialize_start_button() -> Result<ActiveStartButton, &'static str> {
     {
         return Err("font-sprite-empty");
     }
+
+        glyph_alpha
+    };
 
     let session = begin_window_session(OWNER).map_err(|_| "session-create")?;
     let frame = match create_frame(FrameSpec {
@@ -410,6 +416,24 @@ fn render_button_sprite(button: &ActiveStartButton, state: ButtonVisualState) ->
                 blend(foreground[2], background[2]),
                 u8::MAX,
             ]);
+        }
+    }
+    if crate::virtio_gpu_logo::output_dimensions().is_some() {
+        use super::emulator_paint::{Paint, Vertex};
+        use alloc::sync::Arc;
+        super::emulator_paint::begin(lease);
+        let mesh = crate::graphics::font::tessellate_text_mesh("font", "§", button.height as f32 * 0.8);
+        let bounds = &mesh.summary;
+        let scale = ((button.width as f32 - 4.0) / (bounds.max_x - bounds.min_x)).min((button.height as f32 - 4.0) / (bounds.max_y - bounds.min_y));
+        let dx = button.width as f32 * 0.5 - (bounds.min_x + bounds.max_x) * scale * 0.5;
+        let dy = button.height as f32 * 0.5 - (bounds.min_y + bounds.max_y) * scale * 0.5;
+        let vertices = mesh.indices.iter().map(|i| {
+            let p = mesh.vertices[*i as usize];
+            Vertex { position:[p[0]*scale+dx,p[1]*scale+dy], uv:[0.5,0.5] }
+        }).collect();
+        if !super::emulator_paint::append(lease, alloc::vec![Paint { vertices:Arc::new(vertices), image:None, color:u32::from_le_bytes([foreground[0],foreground[1],foreground[2],255]), source_over:true }]) {
+            let _ = super::cancel_frame_buffer(lease);
+            return Err(());
         }
     }
     crate::intel::dma_flush(view.virt, view.byte_len);

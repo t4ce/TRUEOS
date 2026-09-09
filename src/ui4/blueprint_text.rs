@@ -1399,7 +1399,7 @@ fn open_blueprint_surface(
     let desktop_shell_launch = parent.is_none().then(|| super::input_broker::claim_desktop_shell_launch(owner)).flatten();
     let (x, y) = desktop_shell_launch.map_or((x, y), |launch| {
         let (screen_width, screen_height) =
-            crate::intel::active_scanout_dimensions().unwrap_or((width, height));
+            crate::ui4::output_dimensions().unwrap_or((width, height));
         (
             launch.x.min(screen_width.saturating_sub(width)) as i32,
             launch.y.min(screen_height.saturating_sub(height)) as i32,
@@ -1892,8 +1892,10 @@ pub(crate) fn begin_blueprint_frame(
     // A retained streaming skybox is required to shade the complete target,
     // so clearing and flushing every CPU-visible cache line first is redundant.
     // Dirty/text frames retain the ordinary clear contract.
-    let gpu_full_frame =
-        !cpu_clear || (surface.cadence == FrameCadence::Streaming && surface.skybox.is_some());
+    let emulator = crate::virtio_gpu_logo::output_dimensions().is_some();
+    if emulator { super::emulator_paint::begin(lease); }
+    let gpu_full_frame = !emulator &&
+        (!cpu_clear || (surface.cadence == FrameCadence::Streaming && surface.skybox.is_some()));
     if !gpu_full_frame {
         let [r, g, b, a] = clear_rgba.to_le_bytes();
         let pixel = PremultipliedRgba8::from_straight_rgba(r, g, b, a).to_native_bytes();
@@ -2671,7 +2673,8 @@ pub extern "C" fn trueos_cabi_ui4_scene_set_display_bottom_color(window_id: u32,
             return ERROR_NOT_FOUND;
         }
     }
-    if crate::intel::set_pipe_a_bottom_color_rgb8((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8) {
+    if crate::intel::set_pipe_a_bottom_color_rgb8((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8)
+        || crate::virtio_gpu_logo::set_background_color((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8) {
         0
     } else {
         ERROR_UI4
@@ -4049,6 +4052,14 @@ pub unsafe extern "C" fn trueos_cabi_ui4_solara_text_scene(
             font_pixels: row.font_pixels,
             slant: 0.0,
         });
+    }
+    if crate::virtio_gpu_logo::output_dimensions().is_some() {
+        if backbuffer { return ERROR_FONT; }
+        let Some(paints) = super::emulator_paint::text(font, &runs, rgba) else { return ERROR_FONT; };
+        let mut surfaces = SURFACES.lock();
+        let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else { return ERROR_NOT_FOUND; };
+        let Some(lease) = surface.write_lease else { return ERROR_STATE; };
+        return if super::emulator_paint::append(lease, paints) { 0 } else { ERROR_UI4 };
     }
     if stamp_once {
         stamp_scene_entries_for_surface(
@@ -6521,6 +6532,9 @@ mod sprite_overlay_tests {
 }
 
 pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
+    if crate::virtio_gpu_logo::output_dimensions().is_some() {
+        return finish_emulator_sprite_scene(owner, window_id);
+    }
     struct OwnedRun {
         sprite_id: u32,
         source: GpgpuRgba8Surface,
@@ -7024,6 +7038,45 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
 /// Cancel a sprite frame when no GPU submission can still own its target.
 /// This covers pre-admission rejection and completed batches whose retirement
 /// receipt was invalid. Uncertain accepted work must use quarantine instead.
+
+fn finish_emulator_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
+    use super::emulator_paint::{Image, Paint, Vertex};
+    use alloc::sync::Arc;
+    let mut surfaces = SURFACES.lock();
+    let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else { return ERROR_NOT_FOUND; };
+    if surface.gpu_submission_unretired { return ERROR_BUSY; }
+    let Some(lease) = surface.write_lease else { return ERROR_STATE; };
+    let Some(upload) = surface.sprite_scene_upload.take() else { return ERROR_STATE; };
+    if upload.quads.len() != upload.expected || surface.sprite_clear_rgba.is_none() { return ERROR_INVALID; }
+    let mut sources: Vec<(u32, Arc<Image>)> = Vec::new();
+    let mut paints = Vec::new();
+    for quad in upload.quads {
+        let image = if quad.sprite_id == 0 { None } else {
+            if sources.iter().all(|(id, _)| *id != quad.sprite_id) {
+                let Some((_, source)) = surface.sprites.iter().find(|(id, _)| *id == quad.sprite_id) else { return ERROR_NOT_FOUND; };
+                let BlueprintSpriteSource::Uploaded(owned) = source else { return ERROR_FONT; };
+                let view = source.surface();
+                let mut pixels = Vec::with_capacity(view.width as usize * view.height as usize * 4);
+                for y in 0..view.height as usize {
+                    pixels.extend_from_slice(unsafe { core::slice::from_raw_parts(owned.virt.add(y * view.pitch_bytes as usize), view.width as usize * 4) });
+                }
+                sources.push((quad.sprite_id, Arc::new(Image { width:view.width, height:view.height, pixels, premultiplied:source.is_premultiplied() })));
+            }
+            sources.iter().find(|(id, _)| *id == quad.sprite_id).map(|(_, image)| image.clone())
+        };
+        let corners = [
+            Vertex { position:[quad.c0_x,quad.c0_y], uv:[quad.c0_u,quad.c0_v] },
+            Vertex { position:[quad.c1_x,quad.c1_y], uv:[quad.c1_u,quad.c1_v] },
+            Vertex { position:[quad.c2_x,quad.c2_y], uv:[quad.c2_u,quad.c2_v] },
+            Vertex { position:[quad.c3_x,quad.c3_y], uv:[quad.c3_u,quad.c3_v] },
+        ];
+        paints.push(Paint { vertices:Arc::new(alloc::vec![corners[0],corners[1],corners[2],corners[0],corners[2],corners[3]]), image, color:quad.color_rgba, source_over:quad.flags & SPRITE_QUAD_FLAG_SRC_OVER != 0 });
+    }
+    if !super::emulator_paint::append(lease, paints) { return ERROR_UI4; }
+    surface.sprite_clear_rgba = None;
+    0
+}
+
 fn cancel_blueprint_sprite_frame_without_live_gpu(surface: &mut BlueprintSceneSurface) {
     surface.sprite_scene_upload = None;
     surface.sprite_clear_rgba = None;

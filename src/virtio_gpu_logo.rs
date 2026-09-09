@@ -5,6 +5,23 @@ use trueos_time::{Duration as EmbassyDuration, Timer};
 
 use crate::{pci, wait};
 
+mod virgl;
+
+static EMULATOR_OUTPUT: AtomicU64 = AtomicU64::new(0);
+static EMULATOR_BACKGROUND: AtomicU64 = AtomicU64::new(0);
+static QUARANTINE_GPU_DMA: AtomicU8 = AtomicU8::new(0);
+
+pub(crate) fn set_background_color(r: u8, g: u8, b: u8) -> bool {
+    if output_dimensions().is_none() { return false; }
+    EMULATOR_BACKGROUND.store((1u64 << 32) | (u64::from(r) << 16) | (u64::from(g) << 8) | u64::from(b), Ordering::Release);
+    true
+}
+
+pub(crate) fn output_dimensions() -> Option<(u32, u32)> {
+    let packed = EMULATOR_OUTPUT.load(Ordering::Acquire);
+    (packed != 0).then_some(((packed >> 32) as u32, packed as u32))
+}
+
 const LOGO_JPEG: &[u8] = include_bytes!("../logo.jpg");
 const LIVE_UPDATE_0WAY_PNG: &[u8] = include_bytes!("../tools/updlive/0way.png");
 const LIVE_UPDATE_NOWAY_PNG: &[u8] = include_bytes!("../tools/updlive/noway.png");
@@ -278,6 +295,7 @@ impl DmaRegion {
 
 impl Drop for DmaRegion {
     fn drop(&mut self) {
+        if QUARANTINE_GPU_DMA.load(Ordering::Acquire) != 0 { return; }
         if self.len == 0 || self.virt.is_null() {
             return;
         }
@@ -476,6 +494,9 @@ struct CmdUpdateCursor {
 }
 
 struct VirtioGpuLogo {
+    virgl: bool,
+    failed: bool,
+    common: core::ptr::NonNull<VirtioPciCommonCfg>,
     notify: core::ptr::NonNull<u8>,
     notify_mult: u32,
     ctrlq: VirtQueue,
@@ -485,6 +506,19 @@ struct VirtioGpuLogo {
 }
 
 unsafe impl Send for VirtioGpuLogo {}
+
+impl Drop for VirtioGpuLogo {
+    fn drop(&mut self) {
+        // Reset acknowledgement stops device DMA before queue/request storage
+        // is freed. An unresponsive device keeps its allocations quarantined.
+        unsafe { core::ptr::write_volatile(&mut (*self.common.as_ptr()).device_status, 0); }
+        if !wait::spin_until_timeout_no_exec(1000, || unsafe {
+            core::ptr::read_volatile(&(*self.common.as_ptr()).device_status) == 0
+        }) {
+            QUARANTINE_GPU_DMA.store(1, Ordering::Release);
+        }
+    }
+}
 
 impl VirtioGpuLogo {
     fn init_first() -> Option<Self> {
@@ -507,9 +541,7 @@ impl VirtioGpuLogo {
         let common = core::ptr::NonNull::new(common_map.as_ptr() as *mut VirtioPciCommonCfg)?;
         let notify = core::ptr::NonNull::new(notify_map.as_ptr())?;
 
-        if !negotiate_modern_2d(common) {
-            return None;
-        }
+        let virgl = negotiate_modern(common)?;
 
         let ctrlq = setup_queue_modern(common, QUEUE_CONTROL).ok()?;
         let cursorq = setup_queue_modern(common, QUEUE_CURSOR).ok()?;
@@ -521,10 +553,13 @@ impl VirtioGpuLogo {
             core::ptr::write_volatile(&mut (*c).device_status, status);
         }
 
-        let req = DmaRegion::alloc(4096, 16)?;
+        let req = DmaRegion::alloc(1024 * 1024, 16)?;
         let resp = DmaRegion::alloc(4096, 16)?;
 
         Some(Self {
+            virgl,
+            failed: false,
+            common,
             notify,
             notify_mult: caps.notify_mult,
             ctrlq,
@@ -688,7 +723,7 @@ impl VirtioGpuLogo {
     }
 
     fn ctrl_submit_bytes(&mut self, req_bytes: &[u8]) -> bool {
-        if req_bytes.is_empty() || req_bytes.len() > self.req.len() {
+        if self.failed || req_bytes.is_empty() || req_bytes.len() > self.req.len() {
             return false;
         }
         unsafe {
@@ -699,7 +734,7 @@ impl VirtioGpuLogo {
     }
 
     fn ctrl_submit_bytes_ret_type(&mut self, req_bytes: &[u8]) -> Option<u32> {
-        if req_bytes.is_empty() || req_bytes.len() > self.req.len() {
+        if self.failed || req_bytes.is_empty() || req_bytes.len() > self.req.len() {
             return None;
         }
         unsafe {
@@ -716,13 +751,15 @@ impl VirtioGpuLogo {
             "ctrlq",
             Some(&[VIRTIO_GPU_RESP_OK_DISPLAY_INFO]),
         ) {
+            self.failed = true;
             return None;
         }
         Some(unsafe { core::ptr::read_unaligned(self.resp.virt() as *const u32) })
     }
 
     fn ctrl_submit_desc_chain(&mut self, req_len: usize) -> bool {
-        Self::submit_desc_chain_on(
+        if self.failed { return false; }
+        let ok = Self::submit_desc_chain_on(
             self.notify,
             self.notify_mult,
             &mut self.ctrlq,
@@ -731,18 +768,20 @@ impl VirtioGpuLogo {
             req_len,
             "ctrlq",
             Some(&[VIRTIO_GPU_RESP_OK_NODATA]),
-        )
+        );
+        self.failed |= !ok;
+        ok
     }
 
     fn cursor_submit_bytes(&mut self, req_bytes: &[u8]) -> bool {
-        if req_bytes.is_empty() || req_bytes.len() > self.req.len() {
+        if self.failed || req_bytes.is_empty() || req_bytes.len() > self.req.len() {
             return false;
         }
         unsafe {
             core::ptr::copy_nonoverlapping(req_bytes.as_ptr(), self.req.virt(), req_bytes.len());
             core::ptr::write_bytes(self.resp.virt(), 0, self.resp.len());
         }
-        Self::submit_desc_chain_on(
+        let ok = Self::submit_desc_chain_on(
             self.notify,
             self.notify_mult,
             &mut self.cursorq,
@@ -751,7 +790,9 @@ impl VirtioGpuLogo {
             req_bytes.len(),
             "cursorq",
             None,
-        )
+        );
+        self.failed |= !ok;
+        ok
     }
 
     fn submit_desc_chain_on(
@@ -764,7 +805,7 @@ impl VirtioGpuLogo {
         queue_label: &str,
         expected_resp_types: Option<&[u32]>,
     ) -> bool {
-        req.flush();
+        crate::intel::dma_cache_flush_range(req.virt(), req_len);
         let wants_response = expected_resp_types.is_some();
         unsafe {
             let d0 = &mut *queue.desc.add(0);
@@ -804,6 +845,9 @@ impl VirtioGpuLogo {
         let Some(expected) = expected_resp_types else {
             return true;
         };
+        if used.len < core::mem::size_of::<CtrlHdr>() as u32 {
+            return false;
+        }
         let resp_type = unsafe { core::ptr::read_unaligned(resp.virt() as *const u32) };
         let ok = expected.contains(&resp_type);
         if !ok {
@@ -830,6 +874,7 @@ struct EmulatorUi {
     last_cursor: Option<(u32, u32, u32, u32)>,
     stamped_generation: u64,
     stamp_deadline_ms: Option<u64>,
+    compositor: Option<virgl::Compositor>,
 }
 
 unsafe impl Send for EmulatorUi {}
@@ -885,8 +930,16 @@ impl EmulatorUi {
             cursor_ok as u8
         );
 
+        let compositor = if gpu.virgl {
+            virgl::Compositor::new(&mut gpu, scanout_id, width, height, &scanout_backing)
+        } else { None };
+        if compositor.is_some() {
+            EMULATOR_OUTPUT.store((u64::from(width) << 32) | u64::from(height), Ordering::Release);
+            crate::r::readiness::set(crate::r::readiness::GFX_VIRGL_READY | crate::r::readiness::UI4_COMPOSITOR_READY);
+        }
         Some(Self {
             gpu,
+            compositor,
             scanout_id,
             width,
             height,
@@ -1206,7 +1259,21 @@ async fn fallback_logo_service_task() {
     if present() {
         if let Some(mut ui) = EmulatorUi::init() {
             loop {
+                if ui.gpu.failed {
+                    EMULATOR_OUTPUT.store(0, Ordering::Release);
+                    crate::log_error!(target: "gfx"; "virgl-ui4: device failed; DMA retained, submissions stopped\n");
+                    loop { Timer::after(EmbassyDuration::from_secs(60)).await; }
+                }
+                let old_stamp = (ui.stamped_generation, ui.stamp_deadline_ms);
                 ui.service_live_update_stamp();
+                if old_stamp != (ui.stamped_generation, ui.stamp_deadline_ms) {
+                    if let Some(compositor) = ui.compositor.as_mut() {
+                        compositor.update_background(&mut ui.gpu, &ui.scanout_backing);
+                    }
+                }
+                if let Some(compositor) = ui.compositor.as_mut() {
+                    compositor.tick(&mut ui.gpu);
+                }
                 ui.update_cursor();
                 Timer::after(EmbassyDuration::from_millis(CURSOR_UPDATE_MS)).await;
             }
@@ -1574,7 +1641,7 @@ fn notify_queue_modern(
     }
 }
 
-fn negotiate_modern_2d(common: core::ptr::NonNull<VirtioPciCommonCfg>) -> bool {
+fn negotiate_modern(common: core::ptr::NonNull<VirtioPciCommonCfg>) -> Option<bool> {
     unsafe {
         let c = common.as_ptr();
         core::ptr::write_volatile(&mut (*c).device_status, 0);
@@ -1589,7 +1656,8 @@ fn negotiate_modern_2d(common: core::ptr::NonNull<VirtioPciCommonCfg>) -> bool {
         let dev_hi = core::ptr::read_volatile(&(*c).device_feature) as u64;
         let dev_features = dev_lo | (dev_hi << 32);
 
-        let guest_features = dev_features & VIRTIO_F_VERSION_1;
+        if dev_features & VIRTIO_F_VERSION_1 == 0 { return None; }
+        let guest_features = dev_features & (VIRTIO_F_VERSION_1 | 1);
 
         core::ptr::write_volatile(&mut (*c).driver_feature_select, 0);
         core::ptr::write_volatile(&mut (*c).driver_feature, (guest_features & 0xFFFF_FFFF) as u32);
@@ -1603,10 +1671,10 @@ fn negotiate_modern_2d(common: core::ptr::NonNull<VirtioPciCommonCfg>) -> bool {
         let readback = core::ptr::read_volatile(&(*c).device_status);
         if (readback & VIRTIO_STATUS_FEATURES_OK) == 0 {
             core::ptr::write_volatile(&mut (*c).device_status, VIRTIO_STATUS_FAILED);
-            return false;
+            return None;
         }
+        return Some(guest_features & 1 != 0);
     }
-    true
 }
 
 fn find_device() -> Option<pci::PciDevice> {

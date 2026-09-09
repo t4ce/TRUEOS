@@ -8,6 +8,8 @@ QEMU_MEMORY="${QEMU_MEMORY:-4000M}"
 QEMU_SMP="${QEMU_SMP:-14}"
 QEMU_NIC_DEVICE="${QEMU_NIC_DEVICE:-virtio-net-pci,disable-modern=off}"
 QEMU_SERIAL="${QEMU_SERIAL:-tcp:127.0.0.1:5555,server,nowait}"
+QEMU_DISPLAY="${QEMU_DISPLAY:-sdl,gl=on}"
+QEMU_GPU="${QEMU_GPU:-virtio-gpu-gl-pci,xres=2560,yres=1440}"
 
 QEMU_MODE="${1:-iso}"
 if [[ "${QEMU_MODE}" == "iso" || "${QEMU_MODE}" == "iso-debug" ]]; then
@@ -51,9 +53,12 @@ exec env -i \
     "${QEMU_BIN}" -no-shutdown \
     "${QEMU_DEBUG_ARGS[@]}" \
     "$@" \
-    -display sdl,gl=on \
+    -display "${QEMU_DISPLAY}" \
     -vga none \
-    -device virtio-gpu-gl-pci,xres=2560,yres=1440 \
+    -device "${QEMU_GPU}" \
+    -device qemu-xhci,id=xhci,bus=pcie.0,addr=0x5 \
+    -device usb-kbd,bus=xhci.0 \
+    -device usb-mouse,bus=xhci.0 \
     -machine q35,accel=kvm:tcg \
     -bios "${QEMU_UEFI_FIRMWARE:?QEMU_UEFI_FIRMWARE is not set}" \
     -boot order=d \
@@ -74,4 +79,3 @@ exec env -i \
     -device hda-duplex,audiodev=snd0,bus=hda0.0 \
     -drive file="${QEMU_NVME_IMG}",format=raw,if=none,id=nvme \
     -device nvme,serial=deadbeef,drive=nvme 
-#last state had usb stack here, just revert 1

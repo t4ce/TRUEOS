@@ -1,0 +1,189 @@
+#!/usr/bin/env python3
+"""Boot the existing QEMU runner, verify UI4 virgl readiness, capture scanout.
+
+Uses a temporary disk snapshot and stops only the VM it started. Build first:
+  make iso START_BAREMETAL_LOG=0 PUBLISH_RELEASE_SMB=0 RELEASE_BUMP_CNT=0
+  python3 tools/qemu/verify-virgl.py --command 'img kernel:logo'
+"""
+import argparse
+import json
+import os
+from pathlib import Path
+import socket
+import subprocess
+import struct
+import time
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+
+def capture_vnc(path, destination, timeout):
+    """Read raw pixels from QEMU's local VNC display (also works with GL)."""
+    from PIL import Image
+    with socket.socket(socket.AF_UNIX) as sock:
+        sock.settimeout(timeout)
+        sock.connect(path)
+        def read(n):
+            data = bytearray()
+            while len(data) < n:
+                chunk = sock.recv(n - len(data))
+                if not chunk:
+                    raise EOFError('VNC closed during capture')
+                data.extend(chunk)
+            return bytes(data)
+        if read(12) != b'RFB 003.008\n':
+            raise RuntimeError('Expected QEMU RFB 3.8')
+        sock.sendall(b'RFB 003.008\n')
+        kinds = read(read(1)[0])
+        if 1 not in kinds:
+            raise RuntimeError('Local VNC requires unexpected authentication')
+        sock.sendall(b'\x01')
+        if read(4) != b'\0' * 4:
+            raise RuntimeError('VNC negotiation failed')
+        sock.sendall(b'\x01')
+        width, height = struct.unpack('!HH', read(4))
+        read(16)
+        read(struct.unpack('!I', read(4))[0])
+        sock.sendall(b'\0' * 4 + struct.pack('!BBBBHHHBBBxxx', 32, 24, 0, 1, 255, 255, 255, 0, 8, 16))
+        sock.sendall(struct.pack('!BBHi', 2, 0, 1, 0))  # raw rectangles
+        sock.sendall(struct.pack('!BBHHHH', 3, 0, 0, 0, width, height))
+        pixels = bytearray(width * height * 4)
+        while True:
+            kind = read(1)[0]
+            if kind == 2:  # bell
+                continue
+            if kind == 3:  # clipboard
+                read(3)
+                read(struct.unpack('!I', read(4))[0])
+                continue
+            if kind != 0:
+                raise RuntimeError(f'Unexpected VNC message {kind}')
+            read(1)
+            count = struct.unpack('!H', read(2))[0]
+            for _ in range(count):
+                x, y, w, h, encoding = struct.unpack('!HHHHi', read(12))
+                if encoding != 0 or x + w > width or y + h > height:
+                    raise RuntimeError('Invalid raw VNC rectangle')
+                data = read(w * h * 4)
+                for row in range(h):
+                    offset = ((y + row) * width + x) * 4
+                    pixels[offset:offset + w * 4] = data[row * w * 4:(row + 1) * w * 4]
+            if count:
+                break
+        Image.frombytes('RGB', (width, height), bytes(pixels), 'raw', 'RGBX').save(destination)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--command', action='append', default=[])
+    parser.add_argument('--timeout', type=float, default=30)
+    parser.add_argument('--settle', type=float, default=2)
+    parser.add_argument('--output', type=Path, default=ROOT / 'bld/emulator-logs/virgl-verify')
+    parser.add_argument('--keep-running', action='store_true')
+    args = parser.parse_args()
+    args.output = args.output.resolve()
+    args.output.mkdir(parents=True, exist_ok=True)
+    serial = args.output / 'serial.log'
+    serial.write_text('')
+    qmp_path = str(args.output / 'qmp.sock')
+    if Path(qmp_path).exists():
+        raise SystemExit(f'QMP socket already exists: {qmp_path}; use a fresh --output directory')
+    firmware = next((str(p) for p in [Path('/usr/share/ovmf/OVMF.fd'), ROOT / 'bld/trueos-release/ovmf-code-x86_64.fd'] if p.is_file()), None)
+    if not firmware:
+        raise SystemExit('Set QEMU_UEFI_FIRMWARE to a combined OVMF image for tools/qemu/run.sh')
+    env = dict(os.environ, QEMU_SERIAL=f'file:{serial}', QEMU_UEFI_FIRMWARE=os.environ.get('QEMU_UEFI_FIRMWARE', firmware))
+    env.setdefault('QEMU_DISPLAY', 'egl-headless')
+    vnc_path = str(args.output / 'vnc.sock')
+    qemu_log = (args.output / 'qemu.log').open('w')
+    process = subprocess.Popen([str(ROOT / 'tools/qemu/run.sh'), 'iso', '-snapshot', '-vnc', f'unix:{vnc_path}', '-qmp', f'unix:{qmp_path},server=on,wait=off'], cwd=ROOT, env=env, stdout=qemu_log, stderr=subprocess.STDOUT, start_new_session=True)
+    qmp = None
+    shell = None
+    success = False
+    started = time.monotonic()
+
+    def until(predicate):
+        deadline = time.monotonic() + args.timeout
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                raise RuntimeError(f'QEMU exited {process.returncode}; see {args.output / "qemu.log"}')
+            if predicate():
+                return
+            time.sleep(.05)
+        raise TimeoutError(f'Verification timed out; see {serial}')
+
+    try:
+        until(lambda: 'virgl-ui4: ready' in serial.read_text(errors='replace'))
+        print(f'virgl UI4 ready in {time.monotonic() - started:.2f}s', flush=True)
+        qmp = socket.socket(socket.AF_UNIX)
+        qmp.settimeout(args.timeout)
+        qmp.connect(qmp_path)
+        stream = qmp.makefile('rwb', buffering=0)
+        json.loads(stream.readline())
+
+        def command(name, arguments=None):
+            stream.write((json.dumps(dict(execute=name, **({'arguments': arguments} if arguments else {}))) + '\n').encode())
+            while True:
+                result = json.loads(stream.readline())
+                if 'error' in result:
+                    raise RuntimeError(result)
+                if 'return' in result:
+                    return result['return']
+
+        command('qmp_capabilities')
+        if args.command:
+            until(lambda: 'spawn-svc: started net-shell-listener' in serial.read_text(errors='replace'))
+            shell = socket.create_connection(('127.0.0.1', int(env.get('QEMU_HOST_TCP_PORT_NET_SHELL', 14245))), args.timeout)
+            shell.settimeout(.1)
+            shell_log = bytearray()
+            # The listener starts before this connection's terminal setup.
+            deadline = time.monotonic() + 1
+            while time.monotonic() < deadline:
+                try:
+                    shell_log.extend(shell.recv(65536))
+                except socket.timeout:
+                    pass
+            shell.sendall(b'\x1b[8;40;140t')
+            for text in args.command:
+                shell.sendall((text + '\r').encode())
+                deadline = time.monotonic() + args.settle
+                while time.monotonic() < deadline:
+                    try:
+                        data = shell.recv(65536)
+                        if not data:
+                            break
+                        shell_log.extend(data)
+                    except socket.timeout:
+                        pass
+            (args.output / 'shell.log').write_bytes(shell_log)
+        else:
+            time.sleep(args.settle)
+        screenshot = args.output / 'scanout.png'
+        capture_vnc(vnc_path, screenshot, args.timeout)
+        print(f'Scanout: {screenshot}\nSerial: {serial}', flush=True)
+        success = True
+        if args.keep_running:
+            (args.output / 'qemu.pid').write_text(str(process.pid) + '\n')
+            print(f'QEMU remains running (pid {process.pid}, QMP {qmp_path})', flush=True)
+        else:
+            command('quit')
+    finally:
+        if shell:
+            shell.close()
+        if qmp:
+            qmp.close()
+        if not (success and args.keep_running):
+            if process.poll() is None:
+                process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+            Path(qmp_path).unlink(missing_ok=True)
+            Path(vnc_path).unlink(missing_ok=True)
+        qemu_log.close()
+
+
+if __name__ == '__main__':
+    main()

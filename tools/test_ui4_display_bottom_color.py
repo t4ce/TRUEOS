@@ -44,12 +44,17 @@ impl<T> Mutex<T> {
 }
 static SURFACES:Mutex<Vec<BlueprintSceneSurface>> = Mutex::new(Vec::new());
 #[derive(Default)]
-struct Trace {owner:Option<u32>,guest:bool,programmed:bool,writes:Vec<[u8;3]>,forwarded:Vec<(u32,u64,u64)>,responses:Vec<u64>}
+struct Trace {owner:Option<u32>,guest:bool,programmed:bool,emulator:bool,emulator_writes:Vec<[u8;3]>,writes:Vec<[u8;3]>,forwarded:Vec<(u32,u64,u64)>,responses:Vec<u64>}
 thread_local! {static TRACE:RefCell<Trace> = RefCell::new(Trace::default());}
 mod hv {pub fn current_hull_guest_context_vm_id()->Option<u32> {super::TRACE.with_borrow(|t|t.guest.then_some(1))}}
 mod intel {
     pub fn set_pipe_a_bottom_color_rgb8(r:u8,g:u8,b:u8)->bool {
         super::TRACE.with_borrow_mut(|t| {t.writes.push([r,g,b]);t.programmed})
+    }
+}
+mod virtio_gpu_logo {
+    pub fn set_background_color(r:u8,g:u8,b:u8)->bool {
+        super::TRACE.with_borrow_mut(|t| {t.emulator_writes.push([r,g,b]);t.emulator})
     }
 }
 fn blueprint_owner()->Option<u32> {TRACE.with_borrow(|t|t.owner)}
@@ -85,6 +90,18 @@ fn valid_rgb_is_written_once_and_hardware_failure_is_reported() {
     }
     TRACE.with_borrow_mut(|t|t.programmed=false);
     assert_eq!(trueos_cabi_ui4_scene_set_display_bottom_color(7,0),ERROR_UI4);
+}
+#[test]
+fn emulator_fallback_keeps_ownership_checks_and_native_priority() {
+    reset();
+    TRACE.with_borrow_mut(|t|t.emulator=true);
+    assert_eq!(trueos_cabi_ui4_scene_set_display_bottom_color(7,0x123456),0);
+    TRACE.with_borrow(|t|assert!(t.emulator_writes.is_empty()));
+    TRACE.with_borrow_mut(|t|t.programmed=false);
+    assert_eq!(trueos_cabi_ui4_scene_set_display_bottom_color(8,0x123456),ERROR_NOT_FOUND);
+    TRACE.with_borrow(|t|assert!(t.emulator_writes.is_empty()));
+    assert_eq!(trueos_cabi_ui4_scene_set_display_bottom_color(7,0x123456),0);
+    TRACE.with_borrow(|t|assert_eq!(t.emulator_writes,[[0x12,0x34,0x56]]));
 }
 #[test]
 fn guest_forwards_exact_color_and_rejects_alpha_before_mediation() {

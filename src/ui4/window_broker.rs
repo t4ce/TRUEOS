@@ -1746,7 +1746,7 @@ pub(crate) fn finish_window_session_with_request(
 pub(crate) fn advance_window_close_transitions() {
     reap_transition_retired_frames();
     let now_ms = trueos_time::Instant::now().as_millis();
-    let output_extent = crate::intel::active_scanout_dimensions();
+    let output_extent = crate::ui4::output_dimensions();
     let retirements = WINDOW_BROKER
         .lock()
         .advance_close_transitions(now_ms, output_extent);
@@ -2199,7 +2199,7 @@ fn update_window_placement(
     id: WindowId,
     update: impl FnOnce(WindowPlacement) -> WindowPlacement,
 ) -> Result<WindowPlacement, WindowBrokerError> {
-    let output_extent = crate::intel::active_scanout_dimensions();
+    let output_extent = crate::ui4::output_dimensions();
     let mut broker = WINDOW_BROKER.lock();
     let window = broker.checked_window_mut(owner, id)?;
     let previous = window.placement;
@@ -2400,7 +2400,7 @@ pub(crate) fn move_window(
     if !placement.valid() {
         return Err(WindowBrokerError::EmptyExtent);
     }
-    let output_extent = crate::intel::active_scanout_dimensions();
+    let output_extent = crate::ui4::output_dimensions();
     let mut broker = WINDOW_BROKER.lock();
     let window = broker.checked_window_mut(owner, id)?;
     if !window.interaction.movable

@@ -184,7 +184,6 @@ pub(crate) struct FontTesselSummary {
     pub(crate) glyph_hits: usize,
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) glyph_misses: usize,
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) outline_glyphs: usize,
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) empty_glyphs: usize,
@@ -203,10 +202,8 @@ pub(crate) struct FontTesselSummary {
     pub(crate) index_bytes: usize,
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) geometry_bytes: usize,
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) min_x: f32,
     pub(crate) min_y: f32,
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     pub(crate) max_x: f32,
     pub(crate) max_y: f32,
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]

@@ -556,7 +556,7 @@ impl InputBroker {
             );
             return;
         }
-        let Some((width, height)) = crate::intel::active_scanout_dimensions() else {
+        let Some((width, height)) = crate::ui4::output_dimensions() else {
             return;
         };
         let raw_x = normalized_to_pixel(event.x, width);
@@ -1834,7 +1834,7 @@ pub(crate) fn select_window_for_cursor(
     if snapshot.state != WindowState::Ready || !snapshot.placement.visible {
         return Err(Ui4ProgrammaticSelectionError::NotReady);
     }
-    let (screen_width, screen_height) = crate::intel::active_scanout_dimensions()
+    let (screen_width, screen_height) = crate::ui4::output_dimensions()
         .ok_or(Ui4ProgrammaticSelectionError::OutputUnavailable)?;
     if screen_width == 0 || screen_height == 0 {
         return Err(Ui4ProgrammaticSelectionError::OutputUnavailable);
@@ -1890,7 +1890,7 @@ pub(super) fn select_window_for_cursor_at(
     if snapshot.state != WindowState::Ready || !snapshot.placement.visible {
         return Err(Ui4ProgrammaticSelectionError::NotReady);
     }
-    let (screen_width, screen_height) = crate::intel::active_scanout_dimensions()
+    let (screen_width, screen_height) = crate::ui4::output_dimensions()
         .ok_or(Ui4ProgrammaticSelectionError::OutputUnavailable)?;
     if screen_width == 0 || screen_height == 0 {
         return Err(Ui4ProgrammaticSelectionError::OutputUnavailable);

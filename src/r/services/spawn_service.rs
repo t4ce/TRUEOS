@@ -891,6 +891,12 @@ fn ui4_compositor_gate() -> bool {
 }
 
 #[inline]
+fn ui4_input_gate() -> bool {
+    ui4_compositor_gate() || (crate::virtio_gpu_logo::output_dimensions().is_some()
+        && crate::workers::ap1_ui_core_spawner().is_some())
+}
+
+#[inline]
 fn ap1_ui_core_ready_gate() -> bool {
     crate::workers::ap1_ui_core_spawner().is_some()
 }
@@ -1644,7 +1650,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled_gated(
         "ui4-input-service",
         0,
-        ui4_compositor_gate,
+        ui4_input_gate,
         &UI4_INPUT_SERVICE_STARTED,
         spawn_ui4_input_service_task,
     ),
@@ -1658,7 +1664,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled_gated(
         "ui4-start-button",
         0,
-        ui4_compositor_gate,
+        ui4_input_gate,
         &UI4_START_BUTTON_SERVICE_STARTED,
         spawn_ui4_start_button_service_task,
     ),
@@ -1710,7 +1716,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled_gated(
         "ui4-window-broker-snapshot",
         0,
-        ui4_compositor_gate,
+        ui4_input_gate,
         &UI4_WINDOW_BROKER_SNAPSHOT_STARTED,
         spawn_ui4_window_broker_snapshot_service_task,
     ),

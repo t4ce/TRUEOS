@@ -6,6 +6,7 @@
 pub(crate) mod blueprint_text;
 mod color_picker;
 mod compositor_service;
+pub(crate) mod emulator_paint;
 mod context_menu;
 mod cursor_frame_inout;
 mod damage;
@@ -831,4 +832,21 @@ mod live_resource_and_output_capability_tests {
             Err("ui4-output-capabilities-invalid-application-plane-mask")
         );
     }
+}
+
+/// Output geometry shared by UI and input across native and emulator displays.
+pub(crate) fn output_dimensions() -> Option<(u32, u32)> {
+    crate::intel::active_scanout_dimensions().or_else(crate::virtio_gpu_logo::output_dimensions)
+}
+
+pub(crate) fn emulator_windows() -> (u64, alloc::vec::Vec<WindowSnapshot>) {
+    let output = OutputId::from_slot(0).unwrap();
+    let (revision, mut windows) = application_windows_for_output_with_revision(output);
+    windows.extend(visible_windows_for_output(output).into_iter().filter(|w| !w.plane.is_application()));
+    windows.sort_by_key(|w| (w.presentation_placement.z, w.id.raw(), u8::MAX - w.layer));
+    (revision, windows)
+}
+
+pub(crate) fn emulator_acknowledge(window: WindowSnapshot) {
+    let _ = window_broker::acknowledge_window_surface(window);
 }

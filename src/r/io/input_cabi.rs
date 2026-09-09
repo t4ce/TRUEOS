@@ -464,7 +464,7 @@ unsafe fn input_read_keyboard_output_since(
 
 #[inline]
 fn cursor_viewport_dimensions() -> (usize, usize) {
-    crate::intel::active_scanout_dimensions()
+    crate::ui4::output_dimensions()
         .map(|(w, h)| (w as usize, h as usize))
         .or_else(|| {
             crate::limine::framebuffer_response()
