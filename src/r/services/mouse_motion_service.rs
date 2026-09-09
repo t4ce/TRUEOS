@@ -674,7 +674,7 @@ fn emit_cursor(slot_id: u32, x: i32, y: i32, buttons: u32, wheel: i16, flags: u3
 }
 
 fn viewport_dimensions() -> (u32, u32) {
-    crate::intel::active_scanout_dimensions()
+    crate::ui4::output_dimensions()
         .or_else(|| {
             crate::limine::framebuffer_response()
                 .and_then(|response| response.framebuffers().first().copied())

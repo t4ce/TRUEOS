@@ -843,7 +843,7 @@ pub(crate) fn emulator_windows() -> (u64, alloc::vec::Vec<WindowSnapshot>) {
     let output = OutputId::from_slot(0).unwrap();
     let (revision, mut windows) = application_windows_for_output_with_revision(output);
     windows.extend(visible_windows_for_output(output).into_iter().filter(|w| !w.plane.is_application()));
-    windows.sort_by_key(|w| (w.presentation_placement.z, w.id.raw(), u8::MAX - w.layer));
+    windows.sort_by_key(|w| (w.plane.slot(), w.presentation_placement.z, w.id.raw(), u8::MAX - w.layer));
     (revision, windows)
 }
 
