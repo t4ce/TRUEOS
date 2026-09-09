@@ -12,11 +12,12 @@ pub(crate) struct ShaderToyPackageContract {
 }
 
 include!("shadertoy_packages.rs");
+include!("shadertoy_mandelbox_package.rs");
 
 /// Several gallery selectors use one program with different mode uniforms.
 pub(crate) fn program_id(shader_id: u32) -> Option<u32> {
     match shader_id {
-        1..=7 | 15 => Some(shader_id),
+        1..=7 | 15 | 16 => Some(shader_id),
         8..=14 => Some(8),
         _ => None,
     }
@@ -27,6 +28,7 @@ pub(crate) fn contract(shader_id: u32) -> Option<ShaderToyPackageContract> {
         1 => SHADERTOY_MANDELBROT_PACKAGE,
         2 => SHADERTOY_CUBE_FIELD_PACKAGE,
         3 => SHADERTOY_NGUYEN_PACKAGE,
+        16 => SHADERTOY_MANDELBOX_PACKAGE,
         4 => SHADERTOY_PALETTE_GRID_PACKAGE,
         5 => SHADERTOY_COSMIC_STRANDS_PACKAGE,
         6 => SHADERTOY_PROTEAN_CLOUDS_PACKAGE,

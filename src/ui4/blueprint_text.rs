@@ -3820,6 +3820,9 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_shadertoy_render(
         let Some(state) = surface.shadertoy_state.take() else {
             return ERROR_BUSY;
         };
+        // Native layer producers can overlap foreground lifecycle calls.
+        // Pin this in-flight operation before releasing the surface lock.
+        surface.gpu_submission_unretired = true;
         (lease, destination, state)
     };
     let rendered = state.render(destination, params);
@@ -3831,6 +3834,7 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_shadertoy_render(
     if surface.write_lease != Some(lease) {
         return ERROR_STATE;
     }
+    if rendered.ok || !rendered.submitted { surface.gpu_submission_unretired = false; }
     if rendered.ok {
         let Some(release) = rendered.release else {
             return ERROR_UI4;

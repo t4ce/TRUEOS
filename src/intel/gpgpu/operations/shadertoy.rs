@@ -1,3 +1,4 @@
+pub(crate) const SHADERTOY_SHADER_MANDELBOX: u32 = 16;
 pub(crate) const SHADERTOY_SHADER_MANDELBROT: u32 = 1;
 pub(crate) const SHADERTOY_SHADER_CUBE_FIELD: u32 = 2;
 pub(crate) const SHADERTOY_SHADER_NGUYEN: u32 = 3;
@@ -33,7 +34,7 @@ pub(crate) struct ShaderToyFrameParams {
 impl ShaderToyFrameParams {
     pub(crate) fn is_valid(self) -> bool {
         self.version == SHADERTOY_PARAMS_VERSION
-            && (1..=15).contains(&self.shader_id)
+            && (1..=16).contains(&self.shader_id)
             && (self.flags == 0
                 || (self.shader_id == SHADERTOY_SHADER_PROTEAN_CLOUDS
                     && self.flags == SHADERTOY_FLAG_NATIVE_RESOLUTION)
@@ -78,6 +79,7 @@ fn shadertoy_dispatch_rows(
     // expensive procedural kernels in small batches; neither policy scales
     // a single walker with the entire window's pixel count.
     let max_pixels = match (shader_id, phase) {
+        (SHADERTOY_SHADER_MANDELBOX, _) => 16 * 1024,
         (_, 2) => SHADERTOY_LIGHT_DISPATCH_MAX_PIXELS,
         (SHADERTOY_SHADER_NGUYEN | SHADERTOY_SHADER_PROTEAN_CLOUDS, _) => {
             SHADERTOY_DISPATCH_MAX_PIXELS

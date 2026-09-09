@@ -16,6 +16,7 @@ use trueos_time::{Duration, Timer};
 use super::{DamageRect, DamageRegion, FrameBuffering, FrameHandle, OutputId};
 
 pub(super) const MAX_WINDOWS: usize = 256;
+const _: () = assert!(MAX_WINDOWS < super::layer_contract::BACKGROUND_TARGET_BIT as usize);
 // Temporary static30 composition probe: one trusted app session owns all 30
 // test windows. Plane assignment is independent of session ownership, while
 // MAX_WINDOWS remains only the broker registry's hard storage bound.

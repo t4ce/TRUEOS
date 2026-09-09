@@ -51,6 +51,7 @@ pub(crate) const CPP_DEMO_RGBA8_SOURCE_PATH: &str =
 pub(crate) const SHADERTOY_MANDELBROT_KERNEL_NAME: &str = "shadertoy_mandelbrot";
 pub(crate) const SHADERTOY_CUBE_FIELD_KERNEL_NAME: &str = "shadertoy_cube_field";
 pub(crate) const SHADERTOY_NGUYEN_KERNEL_NAME: &str = "shadertoy_nguyen";
+pub(crate) const SHADERTOY_MANDELBOX_KERNEL_NAME: &str = "shadertoy_mandelbox";
 pub(crate) const SHADERTOY_PALETTE_GRID_KERNEL_NAME: &str = "shadertoy_palette_grid";
 pub(crate) const SHADERTOY_COSMIC_STRANDS_KERNEL_NAME: &str = "shadertoy_cosmic_strands";
 pub(crate) const SHADERTOY_MANDELBROT_SOURCE_PATH: &str =
@@ -191,6 +192,7 @@ pub(crate) fn kernel_source_path(name: &str) -> Option<&'static str> {
         SHADERTOY_MANDELBROT_KERNEL_NAME => Some(SHADERTOY_MANDELBROT_SOURCE_PATH),
         SHADERTOY_CUBE_FIELD_KERNEL_NAME => Some(SHADERTOY_CUBE_FIELD_SOURCE_PATH),
         SHADERTOY_NGUYEN_KERNEL_NAME => Some(SHADERTOY_NGUYEN_SOURCE_PATH),
+        SHADERTOY_MANDELBOX_KERNEL_NAME => Some("Blueprint:Cubes/Cube/mandelbox/kernel.clcpp"),
         SHADERTOY_PALETTE_GRID_KERNEL_NAME => Some(SHADERTOY_PALETTE_GRID_SOURCE_PATH),
         SHADERTOY_COSMIC_STRANDS_KERNEL_NAME => Some(SHADERTOY_COSMIC_STRANDS_SOURCE_PATH),
         CPP_AUDIO_VISUALIZER_RGBA8_KERNEL_NAME => Some(CPP_AUDIO_VISUALIZER_RGBA8_SOURCE_PATH),
@@ -404,6 +406,9 @@ include!(
     "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/shadertoy_nguyen.contract.rs"
 );
 include!(
+    "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/shadertoy_mandelbox.contract.rs"
+);
+include!(
     "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/shadertoy_palette_grid.contract.rs"
 );
 include!(
@@ -414,6 +419,7 @@ const _: () = {
         SHADERTOY_MANDELBROT_ADLS_CPP_ABI_CONTRACT,
         SHADERTOY_CUBE_FIELD_ADLS_CPP_ABI_CONTRACT,
         SHADERTOY_NGUYEN_ADLS_CPP_ABI_CONTRACT,
+        SHADERTOY_MANDELBOX_ADLS_CPP_ABI_CONTRACT,
         SHADERTOY_PALETTE_GRID_ADLS_CPP_ABI_CONTRACT,
         SHADERTOY_COSMIC_STRANDS_ADLS_CPP_ABI_CONTRACT,
     ];

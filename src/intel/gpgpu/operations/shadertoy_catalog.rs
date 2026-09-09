@@ -55,7 +55,7 @@ impl ShaderToyRuntimeState {
             self.extent = (dst.width, dst.height);
         }
         match params.shader_id {
-            1..=6 => shadertoy_rgba8_surface_full(dst, params),
+            1..=6 | 16 => shadertoy_rgba8_surface_full(dst, params),
             7 => {
                 self.audio.get_or_insert_with(
                     crate::aud::audio_visualizer::AudioVisualizerSubscription::acquire,

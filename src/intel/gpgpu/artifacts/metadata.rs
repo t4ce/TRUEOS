@@ -225,6 +225,14 @@ pub(crate) const SHADERTOY_NGUYEN_ADLS_ARTIFACT: GpgpuKernelArtifact =
         &SHADERTOY_NGUYEN_ADLS_CPP_ABI_CONTRACT,
     );
 
+pub(crate) const SHADERTOY_MANDELBOX_ADLS_ARTIFACT: GpgpuKernelArtifact =
+    GpgpuKernelArtifact::contracted(
+        SHADERTOY_MANDELBOX_KERNEL_NAME,
+        &[], // Payload supplied by the Blueprint after package authentication.
+        &[], // Payload supplied by the Blueprint after package authentication.
+        &SHADERTOY_MANDELBOX_ADLS_CPP_ABI_CONTRACT,
+    );
+
 pub(crate) const SHADERTOY_PALETTE_GRID_ADLS_ARTIFACT: GpgpuKernelArtifact =
     GpgpuKernelArtifact::contracted(
         SHADERTOY_PALETTE_GRID_KERNEL_NAME,
