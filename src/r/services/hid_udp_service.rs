@@ -21,7 +21,11 @@ use core::sync::atomic::{AtomicU32, Ordering};
 
 use heapless::Vec;
 use trueos_executor::task;
-use trueos_time::{Duration, Timer};
+use trueos_time::{Duration, Instant, Timer};
+
+#[path = "hid_udp_sequence.rs"]
+mod sequence;
+use sequence::SequenceWindow;
 
 use crate::r::net::VNet;
 
@@ -49,7 +53,7 @@ static RX_BAD: AtomicU32 = AtomicU32::new(0);
 struct DeviceSeq {
     device_id: u16,
     kind: u8,
-    last_seq: u32,
+    window: SequenceWindow,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -108,30 +112,22 @@ fn sequence_is_fresh(
     kind: u8,
     seq: u32,
 ) -> bool {
+    let now_ms = Instant::now().as_millis();
     if let Some(entry) = seqs
         .iter_mut()
         .find(|entry| entry.device_id == device_id && entry.kind == kind)
     {
-        // Every RDP process starts each per-kind sequence at one. Treat that
-        // first packet as an explicit new sender epoch; otherwise restarting
-        // the client leaves the device permanently stale until it happens to
-        // exceed the previous process's counter.
-        if seq == 1 && entry.last_seq != 1 {
-            entry.last_seq = seq;
-            return true;
-        }
-        if seq <= entry.last_seq {
-            return false;
-        }
-        entry.last_seq = seq;
-        return true;
+        return entry.window.accept(seq, now_ms);
     }
+
+    // Let inactive sources free their small in-memory reorder slots.
+    seqs.retain(|entry| !entry.window.expired(now_ms));
 
     if seqs
         .push(DeviceSeq {
             device_id,
             kind,
-            last_seq: seq,
+            window: SequenceWindow::new(seq, now_ms),
         })
         .is_err()
     {

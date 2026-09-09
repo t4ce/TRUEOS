@@ -1816,7 +1816,10 @@ pub(crate) fn begin_blueprint_frame(
     if surface.gpu_submission_unretired {
         return ERROR_BUSY;
     }
-    if let Some(cadence) = surface.visual_cadence.as_ref()
+    // The first replacement publication must not wait behind a visual
+    // cadence deadline. Ownership and the paired commit barrier still apply.
+    if surface.pending_resize.is_none()
+        && let Some(cadence) = surface.visual_cadence.as_ref()
         && cadence.wait_ms() != 0
     {
         return ERROR_BUSY;
@@ -2645,7 +2648,7 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_set_position(window_id: u32, x: i3
     0
 }
 
-/// Set the opacity applied when UI4 composites this Blueprint frame.
+/// Set window opacity, or only background opacity when given its layer target.
 pub extern "C" fn trueos_cabi_ui4_scene_frame_set_opacity(window_id: u32, opacity: u32) -> i32 {
     if opacity > u8::MAX as u32 {
         return ERROR_INVALID;
@@ -2665,6 +2668,16 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_set_opacity(window_id: u32, opacit
     let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
         return ERROR_NOT_FOUND;
     };
+    if surface.render_target != surface.window.raw() {
+        return match super::window_broker::set_window_background_opacity(
+            owner,
+            surface.window,
+            opacity as u8,
+        ) {
+            Ok(()) => 0,
+            Err(_) => ERROR_UI4,
+        };
+    }
     let placement = match set_window_opacity(owner, surface.window, opacity as u8) {
         Ok(placement) => placement,
         Err(_) => return ERROR_UI4,

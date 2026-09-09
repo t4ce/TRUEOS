@@ -343,6 +343,7 @@ pub(crate) struct WindowBackground {
     pub(crate) frame: FrameHandle,
     pub(crate) buffering: FrameBuffering,
     pub(crate) publish_serial: u64,
+    pub(crate) opacity: u8,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -1877,6 +1878,7 @@ pub(super) fn attach_window_background(
         frame,
         buffering: plan.buffering,
         publish_serial: 0,
+        opacity: u8::MAX,
     });
     let output = window.output;
     broker.rebalance_application_planes(output, trueos_time::Instant::now().as_millis());
@@ -2026,7 +2028,7 @@ fn commit_window_replacement(
     let window = &mut broker.windows[slot];
     if let Some(frame) = background {
         let serial = next_serial(window.background.unwrap().publish_serial);
-        window.background = Some(WindowBackground { frame, buffering: window.background.unwrap().buffering, publish_serial: serial });
+        window.background = Some(WindowBackground { frame, publish_serial: serial, ..window.background.unwrap() });
     }
     window.frame = frame;
     window.buffering = plan.buffering;
@@ -2168,6 +2170,28 @@ pub(crate) fn set_window_opacity(
         opacity,
         ..placement
     })
+}
+
+/// A layer-local factor, multiplied by the owning window's opacity at snapshot
+/// time. Geometry and foreground opacity remain owned by the parent window.
+pub(super) fn set_window_background_opacity(
+    owner: WindowOwner,
+    id: WindowId,
+    opacity: u8,
+) -> Result<(), WindowBrokerError> {
+    let mut broker = WINDOW_BROKER.lock();
+    let window = broker.checked_window_mut(owner, id)?;
+    let background = window
+        .background
+        .as_mut()
+        .ok_or(WindowBrokerError::InvalidHandle)?;
+    if background.opacity != opacity {
+        background.opacity = opacity;
+        window.revision = next_serial(window.revision);
+        window.damage = Some(DamageRegion::FULL);
+        broker.mark_composition_changed();
+    }
+    Ok(())
 }
 
 fn update_window_placement(
@@ -2969,6 +2993,20 @@ pub(crate) fn application_windows_for_output_with_revision(
             }
             windows.push(WindowSnapshot {
                 layer: 1,
+                placement: WindowPlacement {
+                    opacity: super::layer_contract::layer_opacity(
+                        window.placement.opacity,
+                        background.opacity,
+                    ),
+                    ..window.placement
+                },
+                presentation_placement: WindowPlacement {
+                    opacity: super::layer_contract::layer_opacity(
+                        window.presentation_placement.opacity,
+                        background.opacity,
+                    ),
+                    ..window.presentation_placement
+                },
                 frame: background.frame,
                 buffering: background.buffering,
                 background: None,

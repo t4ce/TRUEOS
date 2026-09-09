@@ -14,6 +14,10 @@ there is only one WindowRecord and one input route. A background capability can
 be sent to a native worker. Closing its parent revokes it; it cannot close a
 second window. Existing ABI signatures remain unchanged.
 
+`BackgroundLayer::set_opacity` uses the existing opacity ABI with its producer
+target. Its factor multiplies parent opacity on both direct scanout and slot-0
+composition; it does not dim the foreground. The factor survives paired resize.
+
 ## Plane budget and interaction
 
 Slot 0 is shared composition; slots 1–3 are hardware leases; slot 4 remains
@@ -43,6 +47,8 @@ pair stays presented at its common old geometry until both replacements have
 published. Frame handles, geometry and the first new publications then commit
 under one broker lock. Superseded replacements roll back together. Old storage
 retires only after all display/compositor readers release it.
+The first replacement publication bypasses the normal visual cadence deadline,
+while retaining all write/read ownership checks and the two-layer commit barrier.
 
 Layered windows currently open and close atomically without the legacy
 single-plane scaler puff animation. This avoids splitting paired geometry or
@@ -56,13 +62,18 @@ Cubes uses one layered Frame. Its normal Picasso loop renders the foreground
 with transparent premultiplied clear pixels. A separate native worker owns the
 Mandelbox background, using authenticated ShaderToy program 16. It consumes a
 coherent latest camera/theme/extent command, renders only on change, and has a
-10 Hz maximum cadence. The worker drains before the parent Frame closes.
+10 Hz steady cadence. A new extent first receives a cheap shade publication so
+maximization need not await ray marching; detail follows independently. The
+worker drains before the parent Frame closes.
 
 Key 5's 27 worlds use the six palette colors authored in
 `Cubes/Cube/cube_tree_builder_world_ramps.html`, with 1–3-theme territories and
-magenta Void. Other modes publish a transparent background. The first port is a
-bounded Image pass with a fixed fractal origin, camera yaw/pitch and matching
-field of view. The reference HTML's cached cubemap optimization is not yet used;
+magenta Void. Background opacity is 128/255; other modes and below-horizon pixels
+receive a neutral slate shade. The +Y sky hemisphere is shaded with 7 folds,
+72 march steps and 2 occlusion samples. Fully below-sky views retain the shade
+without further dispatches for camera or theme changes. The port is a bounded
+Image pass with a fixed fractal origin, camera yaw/pitch and matching field of
+view. The reference HTML's cached cubemap optimization is not yet used;
 there is no new renderer or unreviewed runtime shader compilation.
 
 Host checks:

@@ -5,6 +5,10 @@
 //! slot 4 remains exclusively owned by interaction chrome.
 
 pub(super) const REQUIRED_PLANE_MASK: u8 = 0b1111;
+
+pub(super) const fn layer_opacity(window: u8, layer: u8) -> u8 {
+    ((window as u16 * layer as u16 + 127) / 255) as u8
+}
 const LEASE_SLOTS: u8 = 3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -91,6 +95,16 @@ pub(super) const fn background_target(window: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn background_opacity_multiplies_parent_without_changing_foreground() {
+        assert_eq!(layer_opacity(255, 128), 128);
+        assert_eq!(layer_opacity(128, 128), 64);
+        for window in 0..=255 {
+            assert_eq!(layer_opacity(window, 255), window);
+            assert_eq!(layer_opacity(window, 0), 0);
+            assert!(layer_opacity(window, 128) <= window);
+        }
+    }
     fn g(window: u32, slots: u8, hot: u64) -> LeaseGroup {
         LeaseGroup {
             window,
