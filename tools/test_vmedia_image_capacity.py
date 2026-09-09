@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Check vmedia admission and a full-size RGBA atlas with the kernel PNG decoder."""
+"""Check vmedia size boundaries, a full-size PNG atlas, and optional original JPEGs."""
 
 from pathlib import Path
+import argparse
 import json
 import os
 import struct
 import subprocess
 import tempfile
 import tomllib
-import sys
 import zlib
 
 from test_clip_position3_uv_texture import ROOT, constant, item
@@ -31,10 +31,18 @@ def gallery_fixture() -> bytes:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("atlases", nargs="*")
+    parser.add_argument(
+        "--jpeg", action="append", default=[],
+        help="Decode an original JPEG through the production codec and admission checks",
+    )
+    args = parser.parse_args()
     service = "src/r/services/media_service.rs"
     declarations = [constant(service, name) for name in (
         "MAX_ENCODED_BYTES", "MAX_RGBA_BYTES", "MAX_DIMENSION",
         "ERR_INVALID", "ERR_TOO_LARGE", "FORMAT_PNG", "BACKEND_PNG", "PIXEL_FORMAT_RGBA8",
+        "FORMAT_JPEG", "BACKEND_ZUNE_JPEG",
     )]
     declarations += [item(service, name) for name in (
         "ImageInfo", "DecodedImage", "validate_encoded_length", "validated_image",
@@ -52,7 +60,10 @@ edition = "2024"
 [dependencies]
 png = {{ path = "{ROOT / 'vendor/png-0.18.1'}", default-features = false }}
 core3 = {{ version = "0.1.2", default-features = false, features = ["alloc"] }}
+zune-core = {{ path = "{ROOT / 'vendor/zune-core-0.5.1'}", default-features = false }}
+zune-jpeg = {{ path = "{ROOT / 'vendor/zune-jpeg-0.5.15'}", default-features = false, features = ["x86", "portable_simd"] }}
 [patch.crates-io]
+zune-core = {{ path = "{ROOT / 'vendor/zune-core-0.5.1'}" }}
 fdeflate = {{ path = "{ROOT / 'vendor/fdeflate-0.3.7'}" }}
 simd-adler32 = {{ path = "{ROOT / 'vendor/simd-adler32-0.3.8'}" }}
 crc32fast = {{ path = "{ROOT / 'vendor/crc32fast-1.5.0'}" }}
@@ -78,8 +89,8 @@ fn vendored_png_decoder_accepts_full_size_rgba_atlas_with_default_limits() {
     assert!(image.rgba.chunks_exact(4).all(|pixel| pixel == [23, 91, 157, 255]));
 }
 '''
-        if sys.argv[1:]:
-            atlas_paths = ", ".join(json.dumps(str(Path(path).resolve())) for path in sys.argv[1:])
+        if args.atlases:
+            atlas_paths = ", ".join(json.dumps(str(Path(path).resolve())) for path in args.atlases)
             source += '''
 #[test]
 fn prepared_atlas_files_pass_service_and_vendored_decoder() {
@@ -101,6 +112,31 @@ fn prepared_atlas_files_pass_service_and_vendored_decoder() {
         println!("atlas admitted: {path} encoded={} rgba={}", encoded.len(), image.info.byte_len);
     }
 }
+'''
+        if args.jpeg:
+            jpeg_paths = ", ".join(json.dumps(str(Path(path).resolve())) for path in args.jpeg)
+            source += f'''
+extern crate alloc;
+#[macro_export]
+macro_rules! log {{ ($($arg:tt)*) => {{ println!($($arg)*); }} }}
+#[path = "{ROOT / 'crates/trueos-graphics/decoder/jpeg_layout.rs'}"]
+mod jpeg_layout;
+#[path = "{ROOT / 'crates/trueos-graphics/decoder/jpeg.rs'}"]
+mod jpeg;
+#[test]
+fn original_jpegs_pass_production_decoder_and_service() {{
+    for path in [{jpeg_paths}] {{
+        let encoded = std::fs::read(path).expect("read JPEG");
+        assert!(validate_encoded_length(encoded.len()).is_ok());
+        let image = jpeg::decode_jpeg_rgba(&encoded)
+            .unwrap_or_else(|error| panic!("JPEG decode failed: {{}}", error.code()));
+        let image = validated_image(FORMAT_JPEG, BACKEND_ZUNE_JPEG,
+            image.width, image.height, image.rgba)
+            .unwrap_or_else(|error| panic!("JPEG admission failed: {{error}}"));
+        println!("JPEG admitted: {{path}} encoded={{}} dimensions={{}}x{{}} rgba={{}}",
+            encoded.len(), image.info.width, image.info.height, image.info.byte_len);
+    }}
+}}
 '''
         (directory / "src/lib.rs").write_text(source)
         env = os.environ.copy()

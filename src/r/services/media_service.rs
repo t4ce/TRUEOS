@@ -30,12 +30,12 @@ pub const ERR_UNSUPPORTED: i32 = -8;
 const OPERATION_CAP: usize = 32;
 const REQUEST_CAP: usize = 16;
 // Full-resolution material atlases can exceed 16 MiB even as PNGs. Bound
-// encoded input independently from the unchanged decoded image budget.
+// encoded input independently from the decoded image budget.
 const MAX_ENCODED_BYTES: usize = 64 * 1024 * 1024;
-// A full-resolution Nikon Z7 JPEG (6040x4032) expands to about 93 MiB in
-// the RGBA format returned by this service. Leave enough room for that
-// ordinary camera source while retaining a bounded per-image allocation.
-const MAX_RGBA_BYTES: usize = 128 * 1024 * 1024;
+// Match img's 64-Mpixel source budget: a 5472x7102 JPEG needs 148.25 MiB
+// as RGBA despite a much smaller compressed file. Keep the allocation bounded
+// at 256 MiB per image and retain the independent dimension/input limits.
+const MAX_RGBA_BYTES: usize = 256 * 1024 * 1024;
 const MAX_DIMENSION: u32 = 8_192;
 const IDLE_MS: u64 = 10;
 const RETAINED_PUBLISH_RETRY_MS: u64 = 1;
@@ -516,16 +516,18 @@ mod image_capacity_tests {
     }
 
     #[test]
-    fn full_resolution_gallery_atlas_fits_existing_rgba_budget() {
+    fn full_resolution_gallery_images_fit_rgba_budget() {
         assert_eq!(rgba_byte_len_within_limit(6168, 4112), Some(101_451_264));
         assert_eq!(rgba_byte_len_within_limit(8192, 4096), Some(128 * 1024 * 1024));
-        assert_eq!(rgba_byte_len_within_limit(8192, 4097), None);
+        assert_eq!(rgba_byte_len_within_limit(5472, 7102), Some(155_448_576));
+        assert_eq!(rgba_byte_len_within_limit(8192, 8192), Some(256 * 1024 * 1024));
+        assert_eq!(rgba_byte_len_within_limit(8192, 8193), None);
         assert_eq!(rgba_byte_len_within_limit(u32::MAX, u32::MAX), None);
     }
 
     #[test]
     fn decoded_extent_and_payload_validation_remain_bounded() {
-        for (width, height) in [(0, 1), (1, 0), (8193, 1), (1, 8193), (8192, 4097)] {
+        for (width, height) in [(0, 1), (1, 0), (8193, 1), (1, 8193), (8192, 8193)] {
             assert!(matches!(
                 validated_image(FORMAT_PNG, BACKEND_PNG, width, height, Vec::new()),
                 Err(ERR_TOO_LARGE)
