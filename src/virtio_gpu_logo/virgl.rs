@@ -1,13 +1,11 @@
 //! Small virgl wire encoder recovered from the former gfx backend.
-//! Only fixed textured-quad composition is required by the UI4 presenter.
+//! UI4 composition plus triangles from the existing font and sprite APIs.
 use super::*;
 use alloc::vec::Vec;
 const PIPE_PRIM_TRIANGLES: u32 = 4;
 
 const PIPE_CLEAR_COLOR0: u32 = 1 << 2;
 const PIPE_MASK_RGBA: u32 = 0xF;
-
-// Gallium bind flag used for textures sampled by a shader.
 
 // Virgl format IDs (see virgl_hw.h):
 // virgl_hw.h: VIRGL_FORMAT_R8G8B8A8_UNORM = 67
@@ -629,7 +627,6 @@ pub(super) struct Compositor {
     background_color: u64,
     textures: Vec<Texture>,
     presents: u64,
-    attempted_revision: Option<u64>,
 }
 
 impl Compositor {
@@ -678,7 +675,6 @@ impl Compositor {
             background_color: 0,
             textures: Vec::new(),
             presents: 0,
-            attempted_revision: None,
         };
         let mut init = VirglCmdBuf::new();
         for id in TARGETS {
@@ -693,7 +689,7 @@ impl Compositor {
         encode_bind_shader(&mut init, 20, PIPE_SHADER_VERTEX);
         encode_bind_shader(&mut init, 21, PIPE_SHADER_FRAGMENT);
         encode_link_shader(&mut init, 20, 21);
-        encode_create_blend(&mut init, 30, true, 1, 0x15); // ONE, INV_SRC_ALPHA
+        encode_create_blend(&mut init, 30, true, 1, 0x13); // ONE, INV_SRC_ALPHA
         encode_bind_object(&mut init, VIRGL_OBJECT_BLEND, 30);
         encode_create_blend(&mut init, 33, false, 1, 0);
         encode_create_dsa(&mut init, 31);
@@ -795,6 +791,7 @@ impl Compositor {
         commands: &mut VirglCmdBuf,
         texture: u32,
         placement: crate::ui4::WindowPlacement,
+        vbo_offset: u32,
     ) {
         let x0 = placement.x as f32 * 2.0 / self.width as f32 - 1.0;
         let x1 = (placement.x as f32 + placement.width as f32) * 2.0 / self.width as f32 - 1.0;
@@ -820,7 +817,10 @@ impl Compositor {
                 core::mem::size_of_val(&vertices),
             )
         };
-        encode_inline_write_buffer_at(commands, VBO, 0, bytes);
+        // Inline writes are unsynchronized in virglrenderer. Each draw in
+        // this submission owns a disjoint VBO range until its fence retires.
+        encode_inline_write_buffer_at(commands, VBO, vbo_offset, bytes);
+        encode_set_vertex_buffer(commands, 48, vbo_offset, VBO);
         encode_set_sampler_views(commands, PIPE_SHADER_FRAGMENT, 0, &[texture]);
         encode_draw_vbo_count(commands, 6);
     }
@@ -837,13 +837,10 @@ impl Compositor {
         if self.revision == Some(revision) && self.background_color == background_color {
             return;
         }
-        let trace = self.attempted_revision != Some(revision);
-        self.attempted_revision = Some(revision);
         let mut draws = Vec::new();
         // Read leases protect each CPU upload. The host owns a copy after the
         // fenced upload; it never reads producer backing during later draws.
         for window in &windows {
-            if trace && windows.len() > 1 { crate::log_important!(target: "gfx"; "virgl-ui4: window={} frame={:?} serial={} placement={:?}\n", window.id.raw(), window.frame, window.publish_serial, window.presentation_placement); }
             let Ok(before) = frame_snapshot(window.frame) else {
                 return;
             };
@@ -858,7 +855,6 @@ impl Compositor {
                     return None;
                 }
                 let view = published_rgba_view(lease).ok()?;
-                if trace && windows.len() > 1 { crate::log_important!(target: "gfx"; "virgl-ui4: source serial={} gpu={}\n", snapshot.publish_serial, view.gpu_authored); }
                 if view.gpu_authored {
                     return None;
                 } // Intel resources are never CPU-imported here.
@@ -902,7 +898,6 @@ impl Compositor {
                         return None;
                     }
                     let paints = crate::ui4::emulator_paint::snapshot(lease);
-                    if trace && windows.len() > 1 { crate::log_important!(target: "gfx"; "virgl-ui4: paints={} vertices={}\n", paints.len(), paints.iter().map(|p| p.vertices.len()).sum::<usize>()); }
                     if !self.paint(gpu, id, view.width, view.height, &paints) {
                         return None;
                     }
@@ -944,10 +939,15 @@ impl Compositor {
                     opacity: 255,
                     visible: true,
                 },
+                0,
             );
         }
-        for (texture, placement) in draws {
-            self.quad(&mut commands, texture, placement);
+        for (index, (texture, placement)) in draws.into_iter().enumerate() {
+            let offset = (index + 1) * 6 * core::mem::size_of::<Vertex>();
+            if offset + 6 * core::mem::size_of::<Vertex>() > 240 * 1024 {
+                return;
+            }
+            self.quad(&mut commands, texture, placement, offset as u32);
         }
         if !self.submit(gpu, &commands)
             || !gpu.set_scanout(self.scanout, target, self.width, self.height)
@@ -1098,6 +1098,7 @@ impl Compositor {
                     )
                 };
                 encode_inline_write_buffer_at(&mut commands, VBO, 0, bytes);
+                encode_set_vertex_buffer(&mut commands, 48, 0, VBO);
                 encode_draw_vbo_count(&mut commands, vertices.len() as u32);
                 if !self.submit(gpu, &commands) {
                     return false;

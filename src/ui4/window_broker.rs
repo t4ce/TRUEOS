@@ -159,7 +159,6 @@ impl WindowPlane {
         }
     }
 
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     const fn from_slot(slot: usize) -> Option<Self> {
         match slot {
             super::PRIMARY_PLANE_SLOT => Some(Self::Primary),

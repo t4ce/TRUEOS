@@ -2,7 +2,7 @@
 //! exact UI4 backing buffer and are consumed under its ordinary read lease.
 //! The virgl presenter executes them into a host texture before composition.
 use super::{FrameHandle, FrameReadLease, FrameWriteLease};
-use alloc::{sync::Arc, vec::Vec};
+use alloc::{string::String, sync::Arc, vec::Vec};
 use spin::Mutex;
 
 #[derive(Clone, Copy)]
@@ -88,6 +88,54 @@ pub(crate) fn snapshot(lease: FrameReadLease) -> Vec<Paint> {
         .unwrap_or_default()
 }
 
+struct TextMesh {
+    font: &'static str,
+    pixels: u32,
+    text: String,
+    points: Arc<Vec<[f32; 2]>>,
+}
+static TEXT_MESHES: Mutex<Vec<TextMesh>> = Mutex::new(Vec::new());
+
+fn text_mesh(font: &'static str, pixels: f32, text: &str) -> Option<Arc<Vec<[f32; 2]>>> {
+    if let Some(points) = TEXT_MESHES
+        .lock()
+        .iter()
+        .find(|m| m.font == font && m.pixels == pixels.to_bits() && m.text == text)
+        .map(|m| m.points.clone())
+    {
+        return Some(points);
+    }
+    // Tessellate outside the cache lock. UI producers can run on other cores.
+    let mesh = crate::graphics::font::tessellate_text_mesh(font, text, pixels);
+    if mesh.summary.tessellate_failures != 0
+        || (mesh.summary.outline_glyphs != 0 && mesh.summary.status != "ok")
+    {
+        return None;
+    }
+    let mut points = Vec::with_capacity(mesh.indices.len());
+    for index in mesh.indices {
+        points.push(*mesh.vertices.get(index as usize)?);
+    }
+    let points = Arc::new(points);
+    // About 2 MiB of point data; changing clocks and typed lines cannot grow
+    // the cache indefinitely. Oversized runs still render without caching.
+    const MAX_POINTS: usize = 250_000;
+    if points.len() <= MAX_POINTS {
+        let mut cache = TEXT_MESHES.lock();
+        let mut total = cache.iter().map(|m| m.points.len()).sum::<usize>();
+        while !cache.is_empty() && (cache.len() >= 128 || total + points.len() > MAX_POINTS) {
+            total -= cache.remove(0).points.len();
+        }
+        cache.push(TextMesh {
+            font,
+            pixels: pixels.to_bits(),
+            text: String::from(text),
+            points: points.clone(),
+        });
+    }
+    Some(points)
+}
+
 pub(crate) fn text(
     font: crate::intel::gpu_font::GpuFontFace,
     runs: &[crate::r::services::font_kernel_service::RetainedFontRun],
@@ -97,19 +145,8 @@ pub(crate) fn text(
     crate::intel::gpu_font::ensure_font_face_available(font).ok()?;
     let mut vertices = Vec::new();
     for run in runs {
-        let mesh = crate::graphics::font::tessellate_text_mesh(
-            font.registry_name(),
-            &run.text,
-            run.font_pixels,
-        );
-        if mesh.summary.outline_glyphs == 0 && mesh.summary.tessellate_failures == 0 {
-            continue;
-        }
-        if mesh.summary.tessellate_failures != 0 || mesh.summary.status != "ok" {
-            return None;
-        }
-        for index in mesh.indices {
-            let p = *mesh.vertices.get(index as usize)?;
+        let points = text_mesh(font.registry_name(), run.font_pixels, &run.text)?;
+        for p in points.iter() {
             vertices.push(Vertex {
                 position: [p[0] + run.position[0], p[1] + run.position[1]],
                 uv: [0.5, 0.5],

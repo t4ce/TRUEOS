@@ -4054,7 +4054,8 @@ pub unsafe extern "C" fn trueos_cabi_ui4_solara_text_scene(
         });
     }
     if crate::virtio_gpu_logo::output_dimensions().is_some() {
-        if backbuffer { return ERROR_FONT; }
+        // Retained font scenes and font backbuffers still use the native backend.
+        if backbuffer || !stamp_once { return ERROR_FONT; }
         let Some(paints) = super::emulator_paint::text(font, &runs, rgba) else { return ERROR_FONT; };
         let mut surfaces = SURFACES.lock();
         let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else { return ERROR_NOT_FOUND; };
@@ -7035,48 +7036,102 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
     0
 }
 
-/// Cancel a sprite frame when no GPU submission can still own its target.
-/// This covers pre-admission rejection and completed batches whose retirement
-/// receipt was invalid. Uncertain accepted work must use quarantine instead.
-
 fn finish_emulator_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
     use super::emulator_paint::{Image, Paint, Vertex};
     use alloc::sync::Arc;
     let mut surfaces = SURFACES.lock();
-    let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else { return ERROR_NOT_FOUND; };
-    if surface.gpu_submission_unretired { return ERROR_BUSY; }
-    let Some(lease) = surface.write_lease else { return ERROR_STATE; };
-    let Some(upload) = surface.sprite_scene_upload.take() else { return ERROR_STATE; };
-    if upload.quads.len() != upload.expected || surface.sprite_clear_rgba.is_none() { return ERROR_INVALID; }
+    let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+        return ERROR_NOT_FOUND;
+    };
+    if surface.gpu_submission_unretired {
+        return ERROR_BUSY;
+    }
+    let Some(lease) = surface.write_lease else {
+        return ERROR_STATE;
+    };
+    let Some(upload) = surface.sprite_scene_upload.take() else {
+        return ERROR_STATE;
+    };
+    if upload.quads.len() != upload.expected || surface.sprite_clear_rgba.is_none() {
+        return ERROR_INVALID;
+    }
     let mut sources: Vec<(u32, Arc<Image>)> = Vec::new();
     let mut paints = Vec::new();
     for quad in upload.quads {
-        let image = if quad.sprite_id == 0 { None } else {
+        let image = if quad.sprite_id == 0 {
+            None
+        } else {
             if sources.iter().all(|(id, _)| *id != quad.sprite_id) {
-                let Some((_, source)) = surface.sprites.iter().find(|(id, _)| *id == quad.sprite_id) else { return ERROR_NOT_FOUND; };
-                let BlueprintSpriteSource::Uploaded(owned) = source else { return ERROR_FONT; };
+                let Some((_, source)) =
+                    surface.sprites.iter().find(|(id, _)| *id == quad.sprite_id)
+                else {
+                    return ERROR_NOT_FOUND;
+                };
+                let BlueprintSpriteSource::Uploaded(owned) = source else {
+                    return ERROR_FONT;
+                };
                 let view = source.surface();
                 let mut pixels = Vec::with_capacity(view.width as usize * view.height as usize * 4);
                 for y in 0..view.height as usize {
-                    pixels.extend_from_slice(unsafe { core::slice::from_raw_parts(owned.virt.add(y * view.pitch_bytes as usize), view.width as usize * 4) });
+                    pixels.extend_from_slice(unsafe {
+                        core::slice::from_raw_parts(
+                            owned.virt.add(y * view.pitch_bytes as usize),
+                            view.width as usize * 4,
+                        )
+                    });
                 }
-                sources.push((quad.sprite_id, Arc::new(Image { width:view.width, height:view.height, pixels, premultiplied:source.is_premultiplied() })));
+                sources.push((
+                    quad.sprite_id,
+                    Arc::new(Image {
+                        width: view.width,
+                        height: view.height,
+                        pixels,
+                        premultiplied: source.is_premultiplied(),
+                    }),
+                ));
             }
-            sources.iter().find(|(id, _)| *id == quad.sprite_id).map(|(_, image)| image.clone())
+            sources
+                .iter()
+                .find(|(id, _)| *id == quad.sprite_id)
+                .map(|(_, image)| image.clone())
         };
         let corners = [
-            Vertex { position:[quad.c0_x,quad.c0_y], uv:[quad.c0_u,quad.c0_v] },
-            Vertex { position:[quad.c1_x,quad.c1_y], uv:[quad.c1_u,quad.c1_v] },
-            Vertex { position:[quad.c2_x,quad.c2_y], uv:[quad.c2_u,quad.c2_v] },
-            Vertex { position:[quad.c3_x,quad.c3_y], uv:[quad.c3_u,quad.c3_v] },
+            Vertex {
+                position: [quad.c0_x, quad.c0_y],
+                uv: [quad.c0_u, quad.c0_v],
+            },
+            Vertex {
+                position: [quad.c1_x, quad.c1_y],
+                uv: [quad.c1_u, quad.c1_v],
+            },
+            Vertex {
+                position: [quad.c2_x, quad.c2_y],
+                uv: [quad.c2_u, quad.c2_v],
+            },
+            Vertex {
+                position: [quad.c3_x, quad.c3_y],
+                uv: [quad.c3_u, quad.c3_v],
+            },
         ];
-        paints.push(Paint { vertices:Arc::new(alloc::vec![corners[0],corners[1],corners[2],corners[0],corners[2],corners[3]]), image, color:quad.color_rgba, source_over:quad.flags & SPRITE_QUAD_FLAG_SRC_OVER != 0 });
+        paints.push(Paint {
+            vertices: Arc::new(alloc::vec![
+                corners[0], corners[1], corners[2], corners[0], corners[2], corners[3]
+            ]),
+            image,
+            color: quad.color_rgba,
+            source_over: quad.flags & SPRITE_QUAD_FLAG_SRC_OVER != 0,
+        });
     }
-    if !super::emulator_paint::append(lease, paints) { return ERROR_UI4; }
+    if !super::emulator_paint::append(lease, paints) {
+        return ERROR_UI4;
+    }
     surface.sprite_clear_rgba = None;
     0
 }
 
+/// Cancel a sprite frame when no GPU submission can still own its target.
+/// This covers pre-admission rejection and completed batches whose retirement
+/// receipt was invalid. Uncertain accepted work must use quarantine instead.
 fn cancel_blueprint_sprite_frame_without_live_gpu(surface: &mut BlueprintSceneSurface) {
     surface.sprite_scene_upload = None;
     surface.sprite_clear_rgba = None;

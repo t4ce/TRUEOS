@@ -17,7 +17,6 @@ import time
 ROOT = Path(__file__).resolve().parents[2]
 
 
-
 def capture_vnc(path, destination, timeout):
     """Read raw pixels from QEMU's local VNC display (also works with GL)."""
     from PIL import Image
@@ -77,6 +76,7 @@ def capture_vnc(path, destination, timeout):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--command', action='append', default=[])
+    parser.add_argument('--expect-log', action='append', default=[], help='Required text in serial or terminal output')
     parser.add_argument('--timeout', type=float, default=30)
     parser.add_argument('--settle', type=float, default=2)
     parser.add_argument('--output', type=Path, default=ROOT / 'bld/emulator-logs/virgl-verify')
@@ -85,11 +85,11 @@ def main():
     args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=True)
     serial = args.output / 'serial.log'
-    serial.write_text('')
     qmp_path = str(args.output / 'qmp.sock')
     if Path(qmp_path).exists():
         raise SystemExit(f'QMP socket already exists: {qmp_path}; use a fresh --output directory')
-    firmware = next((str(p) for p in [Path('/usr/share/ovmf/OVMF.fd'), ROOT / 'bld/trueos-release/ovmf-code-x86_64.fd'] if p.is_file()), None)
+    serial.write_text('')
+    firmware = os.environ.get('QEMU_UEFI_FIRMWARE') or next((str(p) for p in [Path('/usr/share/ovmf/OVMF.fd'), ROOT / 'bld/trueos-release/ovmf-code-x86_64.fd'] if p.is_file()), None)
     if not firmware:
         raise SystemExit('Set QEMU_UEFI_FIRMWARE to a combined OVMF image for tools/qemu/run.sh')
     env = dict(os.environ, QEMU_SERIAL=f'file:{serial}', QEMU_UEFI_FIRMWARE=os.environ.get('QEMU_UEFI_FIRMWARE', firmware))
@@ -136,31 +136,44 @@ def main():
             shell = socket.create_connection(('127.0.0.1', int(env.get('QEMU_HOST_TCP_PORT_NET_SHELL', 14245))), args.timeout)
             shell.settimeout(.1)
             shell_log = bytearray()
-            # The listener starts before this connection's terminal setup.
-            deadline = time.monotonic() + 1
-            while time.monotonic() < deadline:
-                try:
-                    shell_log.extend(shell.recv(65536))
-                except socket.timeout:
-                    pass
-            shell.sendall(b'\x1b[8;40;140t')
-            for text in args.command:
-                shell.sendall((text + '\r').encode())
-                deadline = time.monotonic() + args.settle
+            def drain_shell(seconds):
+                deadline = time.monotonic() + seconds
                 while time.monotonic() < deadline:
                     try:
                         data = shell.recv(65536)
                         if not data:
-                            break
+                            raise EOFError('TRUEOS terminal closed')
                         shell_log.extend(data)
+                        if b'\x1b[18t' in data:
+                            shell.sendall(b'\x1b[8;40;140t')
                     except socket.timeout:
                         pass
+
+            # Finish terminal geometry negotiation before submitting commands.
+            drain_shell(2)
+            for text in args.command:
+                shell.sendall((text + '\r').encode())
+                drain_shell(args.settle)
             (args.output / 'shell.log').write_bytes(shell_log)
         else:
             time.sleep(args.settle)
+        observed = serial.read_text(errors='replace')
+        if shell is not None:
+            observed += shell_log.decode(errors='replace')
+        for expected in args.expect_log:
+            if expected not in observed:
+                raise RuntimeError(f'Missing expected output: {expected!r}; see {args.output}')
         screenshot = args.output / 'scanout.png'
         capture_vnc(vnc_path, screenshot, args.timeout)
         print(f'Scanout: {screenshot}\nSerial: {serial}', flush=True)
+        from PIL import Image
+        if not any(high > low for low, high in Image.open(screenshot).getextrema()):
+            raise RuntimeError(f'Scanout is a uniform color; see {screenshot}')
+        host_errors = (args.output / 'qemu.log').read_text(errors='replace')
+        if any(marker in host_errors.lower() for marker in ['context error', 'illegal resource', 'failed to complete framebuffer']):
+            raise RuntimeError(f'Host renderer rejected work; see {args.output / "qemu.log"}')
+        if 'virgl-ui4: device failed' in serial.read_text(errors='replace'):
+            raise RuntimeError(f'Guest stopped the GPU; see {serial}')
         success = True
         if args.keep_running:
             (args.output / 'qemu.pid').write_text(str(process.pid) + '\n')

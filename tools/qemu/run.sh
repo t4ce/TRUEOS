@@ -59,7 +59,7 @@ exec env -i \
     -device qemu-xhci,id=xhci,bus=pcie.0,addr=0x5 \
     -device usb-kbd,bus=xhci.0 \
     -device usb-mouse,bus=xhci.0 \
-    -machine q35,accel=kvm:tcg \
+    -machine q35,accel=kvm:tcg,i8042=off \
     -bios "${QEMU_UEFI_FIRMWARE:?QEMU_UEFI_FIRMWARE is not set}" \
     -boot order=d \
     -cdrom "${ISO_PATH}" \

@@ -844,7 +844,12 @@ pub(crate) async fn maybe_start_hid_boot_streams(
                     );
                 }
             }
-        } else if matches!(target.kind, HidBootKind::Mouse) {
+        } else if matches!(target.kind, HidBootKind::Mouse)
+            && !should_skip_descriptor_logging(vendor_id, product_id, target.kind)
+        {
+            // Honor the same optional-descriptor quirk as descriptor logging:
+            // QEMU boot HID stalls this probe before the stream can start.
+            // Its fixed boot packet works without report-layout discovery.
             // Report protocol may prefix the mouse payload with a report ID,
             // unlike the boot packet we used before.  Discover that before
             // handing the interface to the stream task so button 4/5 do not
