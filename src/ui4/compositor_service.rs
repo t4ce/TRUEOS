@@ -12,7 +12,7 @@ use trueos_time::{Duration as EmbassyDuration, Timer};
 use super::{
     DamageRect, FrameContent, FrameGpuRelease, FrameHandle, FramePoolError, FrameReadLease,
     FrameRgbaView, OutputId, WindowId, WindowOwner, WindowPlacement, WindowPlane, WindowSnapshot,
-    acknowledge_window_frame, acquire_published_frame,
+    acquire_published_frame,
     application_windows_for_output_with_revision, frame_snapshot, published_rgba_view,
     release_published_frame, retain_published_frame, window_composition_revision,
 };
@@ -273,6 +273,7 @@ enum AdvanceResult {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct CompositionWindowStamp {
+    layer: u8,
     id: WindowId,
     frame: FrameHandle,
     publish_serial: u64,
@@ -618,6 +619,7 @@ fn build_plane_plan(
         let view = views[global_slot];
         let placement = presentation_placement(window, view.width, view.height);
         let current = CompositionWindowStamp {
+            layer: window.layer,
             id: window.id,
             frame: window.frame,
             publish_serial: window.publish_serial,
@@ -627,7 +629,7 @@ fn build_plane_plan(
         let previous = state
             .windows
             .iter()
-            .find(|previous| previous.id == current.id);
+            .find(|previous| previous.id == current.id && previous.layer == current.layer);
         let changed = !state.initialized || previous != Some(&current);
         composition_changed |= changed;
         match previous {
@@ -680,7 +682,7 @@ fn build_plane_plan(
         if !plan
             .next_windows
             .iter()
-            .any(|current| current.id == previous.id)
+            .any(|current| current.id == previous.id && current.layer == previous.layer)
         {
             composition_changed = true;
             add_placement_damage(&mut plan.damage, previous.placement, output_width, output_height);
@@ -921,7 +923,7 @@ fn queue_async_plane(
             let lease_index = pending
                 .windows
                 .iter()
-                .position(|candidate| candidate.id == window.id)
+                .position(|candidate| candidate.id == window.id && candidate.layer == window.layer)
                 .ok_or(Ui4CompositorError::PresentFailed)?;
             let display_lease = retain_published_frame(pending.leases[lease_index])?;
             // The display batch uses the canonical per-plane transaction

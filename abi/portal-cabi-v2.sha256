@@ -226,4 +226,6 @@
 # requires package registration; rebuild the Shadertoy Blueprint with this kernel.
 # Image viewer open v1 adds one bounded launch-request symbol for typed paths.
 # All pre-existing function signatures are unchanged.
-9705f8b67f52d1cc915367af34e5dcd10f3f7f90800ba2c853f5532bbcfb95a9
+# Layered-frame open v1 and layer-target lookup v1 are strictly additive.
+# All pre-existing signatures compared unchanged against 685a1c020^.
+8810ac372840d5c58fc5c7e03159e901ecfba84bbb1665e7961c2f24e6cc78d8

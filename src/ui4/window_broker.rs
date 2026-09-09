@@ -31,7 +31,10 @@ const MAX_SESSIONS: usize = 64;
 /// lower frame shares Slot0. Focus/hot interaction may then promote a stacked
 /// frame and demote a lease holder. No admission ever fails: a frame which wins
 /// no lease is still presented, composed, and movable. This policy does not
-/// consult content, cadence or buffering.
+/// consult content, cadence or buffering. A layered window costs two slots:
+/// both members hold adjacent leases or both compose on Slot0. Hot interaction
+/// revokes enough complete idle groups transactionally, retaining the grace
+/// interval for every actively dragged window.
 pub(super) const STACK_PLANE_SLOT: usize = super::PRIMARY_PLANE_SLOT;
 const FIRST_LEASE_PLANE_SLOT: usize = STACK_PLANE_SLOT + 1;
 pub(super) const LEASE_PLANE_COUNT: usize =
@@ -337,11 +340,13 @@ impl<'a> WindowSessionCloseRequest<'a> {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WindowBackground {
     pub(crate) frame: FrameHandle,
+    pub(crate) buffering: FrameBuffering,
     pub(crate) publish_serial: u64,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct WindowSnapshot {
+    pub(crate) layer: u8,
     pub(crate) id: WindowId,
     pub(crate) owner: WindowOwner,
     pub(crate) producer_name: &'static str,
@@ -715,21 +720,20 @@ impl WindowBroker {
             })
             .collect();
         ordered.sort_unstable_by_key(|(id, z, _)| (*z, *id));
-        if let Some(pair_rank) = ordered.iter().position(|(_, _, slot)| self.windows[*slot].background.is_some()) {
-            // Reserve an indivisible pair, with separate composition carriers
-            // on either side. No ordinary lease can displace either layer.
-            self.leases = [None; LEASE_PLANE_COUNT];
-            for (rank, (id, _, slot)) in ordered.into_iter().enumerate() {
-                let plane_slot = if rank == pair_rank {
-                    super::layer_contract::FOREGROUND_SLOT
-                } else {
-                    super::layer_contract::ordinary_slot(rank > pair_rank)
-                };
-                self.set_window_plane(id, WindowPlane::from_slot(plane_slot).unwrap());
-                if rank == pair_rank {
-                    self.windows[slot].open_transition = None;
-                }
+        if ordered.iter().any(|(_, _, slot)| self.windows[*slot].background.is_some()) {
+            // Only a complete top suffix can occupy hardware: skipping an
+            // unfit pair would put a lower window above it in physical z.
+            let mut top = Vec::new();
+            let mut used = 0;
+            for &(id, _, slot) in ordered.iter().rev() {
+                let slots = if self.windows[slot].background.is_some() { 2 } else { 1 };
+                if used + slots > LEASE_PLANE_COUNT { break; }
+                used += slots;
+                top.push(super::layer_contract::LeaseGroup { window: id.raw(), slots: slots as u8, last_hot_ms: now_ms });
             }
+            let mut plan = [None; 3];
+            for (index, group) in top.into_iter().rev().enumerate() { plan[index] = Some(group); }
+            self.apply_group_plan(output, plan);
             return;
         }
         let stack_count = ordered.len().saturating_sub(LEASE_PLANE_COUNT);
@@ -751,6 +755,45 @@ impl WindowBroker {
                     window: id,
                     last_hot_ms: now_ms,
                 });
+            }
+        }
+    }
+
+    fn group_plan(&self, output: OutputId) -> super::layer_contract::GroupPlan {
+        let mut plan = [None; 3];
+        let mut next = 0;
+        for lease in self.leases.iter().flatten() {
+            if plan.iter().flatten().any(|group: &super::layer_contract::LeaseGroup| group.window == lease.window.raw()) { continue; }
+            let Ok((slot, generation)) = unpack_handle(lease.window.raw()) else { continue; };
+            let Some(window) = self.windows.get(slot) else { continue; };
+            if window.generation != generation || window.state == WindowState::Closed || window.output != output { continue; }
+            plan[next] = Some(super::layer_contract::LeaseGroup {
+                window: lease.window.raw(), slots: if window.background.is_some() { 2 } else { 1 }, last_hot_ms: lease.last_hot_ms,
+            });
+            next += 1;
+        }
+        plan
+    }
+
+    fn apply_group_plan(&mut self, output: OutputId, plan: super::layer_contract::GroupPlan) {
+        let demoted: Vec<_> = self.windows.iter().enumerate()
+            .filter(|(_, window)| window.output == output && window.state != WindowState::Closed && window.plane.is_application())
+            .filter_map(|(slot, window)| WindowId::from_raw(pack_handle(slot, window.generation).ok()?))
+            .filter(|id| !plan.iter().flatten().any(|group| group.window == id.raw())).collect();
+        for id in demoted { self.demote_to_stack(id); }
+        self.leases = [None; LEASE_PLANE_COUNT];
+        let mut plane_slot = super::layer_contract::first_slot(plan);
+        for group in plan.into_iter().flatten() {
+            let id = WindowId::from_raw(group.window).unwrap();
+            for slot in plane_slot..plane_slot + usize::from(group.slots) {
+                self.leases[slot - FIRST_LEASE_PLANE_SLOT] = Some(PlaneLease { window: id, last_hot_ms: group.last_hot_ms });
+            }
+            plane_slot += usize::from(group.slots);
+            // Foreground occupies the higher member of a two-slot grant.
+            self.set_window_plane(id, WindowPlane::from_slot(plane_slot - 1).unwrap());
+            if group.slots == 2 {
+                let (slot, _) = unpack_handle(id.raw()).unwrap();
+                self.windows[slot].open_transition = None;
             }
         }
     }
@@ -1462,6 +1505,7 @@ impl WindowRecord {
 
     fn snapshot(self, slot: usize) -> Option<WindowSnapshot> {
         Some(WindowSnapshot {
+            layer: 0,
             id: WindowId(pack_handle(slot, self.generation).ok()?),
             owner: self.owner,
             producer_name: self.owner.name(),
@@ -1769,7 +1813,7 @@ pub(super) fn attach_window_background(owner: WindowOwner, id: WindowId, frame: 
         || plan.format != super::ScanoutFormat::Rgba8888Premultiplied {
         return Err(WindowBrokerError::InvalidPlane);
     }
-    window.background = Some(WindowBackground { frame, publish_serial: 0 });
+    window.background = Some(WindowBackground { frame, buffering: plan.buffering, publish_serial: 0 });
     let output = window.output;
     broker.rebalance_application_planes(output, trueos_time::Instant::now().as_millis());
     broker.mark_composition_changed();
@@ -1895,7 +1939,7 @@ fn commit_window_replacement(
     let window = &mut broker.windows[slot];
     if let Some(frame) = background {
         let serial = next_serial(window.background.unwrap().publish_serial);
-        window.background = Some(WindowBackground { frame, publish_serial: serial });
+        window.background = Some(WindowBackground { frame, buffering: window.background.unwrap().buffering, publish_serial: serial });
     }
     window.frame = frame;
     window.buffering = plan.buffering;
@@ -2692,23 +2736,18 @@ fn note_window_interaction(
     }
     let output = broker.windows[slot].output;
     if broker.windows.iter().any(|window| window.output == output && window.state != WindowState::Closed && window.background.is_some()) {
-        if raise {
-            // Re-rank rather than swapping one physical plane of the pair.
-            let mut ordered: Vec<_> = broker.windows.iter().enumerate()
-                .filter(|(_, w)| w.output == output && w.state != WindowState::Closed && w.plane.is_application())
-                .map(|(slot, w)| (slot, w.placement.z)).collect();
-            ordered.sort_unstable_by_key(|(slot, z)| (*z, *slot));
-            ordered.retain(|(other, _)| *other != slot);
-            ordered.push((slot, 0));
-            for (rank, (slot, _)) in ordered.into_iter().enumerate() {
-                broker.windows[slot].placement.z = rank as i32;
-            }
-            broker.rebalance_application_planes(output, now_ms);
-            broker.mark_composition_changed();
-        }
+        let requested = super::layer_contract::LeaseGroup {
+            window: id.raw(), slots: if broker.windows[slot].background.is_some() { 2 } else { 1 }, last_hot_ms: now_ms,
+        };
+        let Some(plan) = super::layer_contract::claim_group(broker.group_plan(output), requested, now_ms, LEASE_IDLE_GRACE_MS, raise) else { return Ok(current); };
+        broker.apply_group_plan(output, plan);
         let plane = broker.windows[slot].plane;
+        if raise || plane != current { broker.mark_composition_changed(); }
         drop(broker);
-        if raise { super::cursor_frame_inout::selection_strip_stack_changed(); }
+        if raise || plane != current {
+            super::cursor_frame_inout::frame_visual_changed(owner, id);
+            super::cursor_frame_inout::selection_strip_stack_changed();
+        }
         return Ok(plane);
     }
     if let Some(index) = WindowBroker::lease_index(current.slot())
@@ -2816,10 +2855,12 @@ pub(crate) fn application_windows_for_output_with_revision(
             // published front. Input/diagnostic snapshots remain one window.
             if background.publish_serial == 0 { continue; }
             windows.push(WindowSnapshot {
+                layer: 1,
                 frame: background.frame,
+                buffering: background.buffering,
                 background: None,
                 publish_serial: background.publish_serial,
-                plane: WindowPlane::Universal(super::layer_contract::BACKGROUND_SLOT as u8),
+                plane: WindowPlane::from_slot(window.plane.slot().saturating_sub(1)).unwrap(),
                 damage: Some(DamageRegion::FULL),
                 ..window
             });
@@ -2889,7 +2930,7 @@ pub(crate) fn window_frame_was_presented(
 /// If the producer published again meanwhile, the serial differs and its new
 /// damage remains pending.
 pub(super) fn acknowledge_window_surface(window: WindowSnapshot) -> bool {
-    if window.plane.slot() == super::layer_contract::BACKGROUND_SLOT {
+    if window.layer == 1 {
         let broker = WINDOW_BROKER.lock();
         let Ok((slot, generation)) = unpack_handle(window.id.raw()) else { return false; };
         if let Some(record) = broker.windows.get(slot)
