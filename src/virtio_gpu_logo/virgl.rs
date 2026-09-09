@@ -627,6 +627,7 @@ pub(super) struct Compositor {
     background_color: u64,
     textures: Vec<Texture>,
     presents: u64,
+    interaction_rects: Vec<crate::intel::LiveOverlayRect>,
 }
 
 impl Compositor {
@@ -675,6 +676,7 @@ impl Compositor {
             background_color: 0,
             textures: Vec::new(),
             presents: 0,
+            interaction_rects: Vec::new(),
         };
         let mut init = VirglCmdBuf::new();
         for id in TARGETS {
@@ -724,7 +726,7 @@ impl Compositor {
         if gpu.failed || this.presents == 0 {
             return None;
         }
-        crate::log_important!(target: "gfx"; "virgl-ui4: ready {}x{} backend=textured-quads completion=fenced buffers=2\n", width, height);
+        crate::log_important!(target: "gfx"; "virgl-ui4: ready {}x{} backend=textured-quads completion=fenced buffers=2 interaction=slot4-software hardware_cursor=disabled\n", width, height);
         Some(this)
     }
 
@@ -834,7 +836,19 @@ impl Compositor {
         advance_window_close_transitions();
         let (revision, windows) = crate::ui4::emulator_windows();
         let background_color = EMULATOR_BACKGROUND.load(Ordering::Acquire);
-        if self.revision == Some(revision) && self.background_color == background_color {
+        let interaction_rects = crate::ui4::interaction_overlay_rects();
+        let interaction_unchanged = self.interaction_rects.len() == interaction_rects.len()
+            && self
+                .interaction_rects
+                .iter()
+                .zip(&interaction_rects)
+                .all(|(a, b)| {
+                    (a.x, a.y, a.width, a.height, a.color) == (b.x, b.y, b.width, b.height, b.color)
+                });
+        if self.revision == Some(revision)
+            && self.background_color == background_color
+            && interaction_unchanged
+        {
             return;
         }
         let mut draws = Vec::new();
@@ -950,6 +964,7 @@ impl Compositor {
             self.quad(&mut commands, texture, placement, offset as u32);
         }
         if !self.submit(gpu, &commands)
+            || !self.draw_interaction_rects(gpu, &interaction_rects)
             || !gpu.set_scanout(self.scanout, target, self.width, self.height)
             || !gpu.resource_flush(target, self.width, self.height)
         {
@@ -958,6 +973,7 @@ impl Compositor {
         for window in &windows {
             crate::ui4::emulator_acknowledge(*window);
         }
+        self.interaction_rects = interaction_rects;
         self.revision = Some(revision);
         self.background_color = background_color;
         self.next_target ^= 1;
@@ -1125,6 +1141,61 @@ impl Compositor {
                 })) {
                     return false;
                 }
+            }
+        }
+        true
+    }
+}
+
+impl Compositor {
+    /// The native slot-4 builder supplies the same cursors, selection outlines,
+    /// dock fields and menus. Draw them last, above every broker window, into
+    /// the pending scanout; publish only after these batches have retired.
+    fn draw_interaction_rects(
+        &mut self,
+        gpu: &mut VirtioGpuLogo,
+        rects: &[crate::intel::LiveOverlayRect],
+    ) -> bool {
+        for batch in rects.chunks(682) {
+            let mut vertices = Vec::<Vertex>::with_capacity(batch.len() * 6);
+            for rect in batch {
+                let x0 = rect.x.min(self.width) as f32 * 2.0 / self.width as f32 - 1.0;
+                let x1 = rect.x.saturating_add(rect.width).min(self.width) as f32 * 2.0
+                    / self.width as f32
+                    - 1.0;
+                let y0 = rect.y.min(self.height) as f32 * 2.0 / self.height as f32 - 1.0;
+                let y1 = rect.y.saturating_add(rect.height).min(self.height) as f32 * 2.0
+                    / self.height as f32
+                    - 1.0;
+                let a = rect.color.a as f32 / 255.0;
+                let color = [
+                    rect.color.r as f32 / 255.0 * a,
+                    rect.color.g as f32 / 255.0 * a,
+                    rect.color.b as f32 / 255.0 * a,
+                    a,
+                ];
+                for (x, y) in [(x0, y0), (x0, y1), (x1, y1), (x0, y0), (x1, y1), (x1, y0)] {
+                    vertices.push(Vertex {
+                        pos: [x, y, 0., 1.],
+                        uv: [0.5, 0.5, 0., 0.],
+                        color,
+                    });
+                }
+            }
+            let mut commands = VirglCmdBuf::new();
+            let bytes = unsafe {
+                core::slice::from_raw_parts(
+                    vertices.as_ptr().cast::<u8>(),
+                    vertices.len() * core::mem::size_of::<Vertex>(),
+                )
+            };
+            // The preceding composition/batch fence protects reuse of offset 0.
+            encode_inline_write_buffer_at(&mut commands, VBO, 0, bytes);
+            encode_set_vertex_buffer(&mut commands, 48, 0, VBO);
+            encode_set_sampler_views(&mut commands, PIPE_SHADER_FRAGMENT, 0, &[WHITE]);
+            encode_draw_vbo_count(&mut commands, vertices.len() as u32);
+            if !self.submit(gpu, &commands) {
+                return false;
             }
         }
         true

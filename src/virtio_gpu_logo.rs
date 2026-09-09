@@ -184,11 +184,7 @@ const VIRTQ_DESC_F_NEXT: u16 = 1;
 const VIRTQ_DESC_F_WRITE: u16 = 2;
 
 const SCANOUT_RESOURCE_ID: u32 = 1;
-const CURSOR_RESOURCE_ID: u32 = 2;
-const CURSOR_DIM: u32 = 64;
-const CURSOR_HOTSPOT: u32 = 32;
-const CURSOR_ALPHA: u8 = 0x80;
-const CURSOR_UPDATE_MS: u64 = 16;
+const COMPOSITOR_POLL_MS: u64 = 16;
 
 static VIRTIO_GPU_PRESENT_CACHE: AtomicU8 = AtomicU8::new(0);
 static LIVE_UPDATE_STAMP_REQUEST: AtomicU64 = AtomicU64::new(0);
@@ -702,7 +698,7 @@ impl VirtioGpuLogo {
         self.ctrl_submit_bytes(as_bytes(&req))
     }
 
-    fn update_cursor(&mut self, scanout_id: u32, resource_id: u32, x: u32, y: u32) -> bool {
+    fn hide_cursor(&mut self, scanout_id: u32) -> bool {
         let req = CmdUpdateCursor {
             hdr: CtrlHdr {
                 type_: VIRTIO_GPU_CMD_UPDATE_CURSOR,
@@ -710,13 +706,14 @@ impl VirtioGpuLogo {
             },
             pos: CursorPos {
                 scanout_id,
-                x,
-                y,
+                x: 0,
+                y: 0,
                 padding: 0,
             },
-            resource_id,
-            hot_x: CURSOR_HOTSPOT,
-            hot_y: CURSOR_HOTSPOT,
+            // Virtio UPDATE_CURSOR with resource 0 disables the hardware cursor.
+            resource_id: 0,
+            hot_x: 0,
+            hot_y: 0,
             padding: 0,
         };
         self.cursor_submit_bytes(as_bytes(&req))
@@ -866,12 +863,9 @@ impl VirtioGpuLogo {
 
 struct EmulatorUi {
     gpu: VirtioGpuLogo,
-    scanout_id: u32,
     width: u32,
     height: u32,
     scanout_backing: DmaRegion,
-    _cursor_backing: DmaRegion,
-    last_cursor: Option<(u32, u32, u32, u32)>,
     stamped_generation: u64,
     stamp_deadline_ms: Option<u64>,
     compositor: Option<virgl::Compositor>,
@@ -906,16 +900,14 @@ impl EmulatorUi {
             return None;
         }
 
-        let cursor_bytes = bytes_for_surface(CURSOR_DIM, CURSOR_DIM)?;
-        let cursor_backing = DmaRegion::alloc(cursor_bytes, 4096)?;
-        fill_cursor_sprite(cursor_backing.virt());
-        cursor_backing.flush();
-        let cursor_ok = gpu.resource_create_2d(CURSOR_RESOURCE_ID, CURSOR_DIM, CURSOR_DIM)
-            && gpu.resource_attach_backing(CURSOR_RESOURCE_ID, &cursor_backing)
-            && gpu.transfer_to_host_2d(CURSOR_RESOURCE_ID, CURSOR_DIM, CURSOR_DIM);
+        // UI4 owns software cursors on its topmost interaction plane.
+        // Clear any inherited host cursor instead of installing a second sprite.
+        if !gpu.hide_cursor(scanout_id) {
+            return None;
+        }
 
         crate::log!(
-            "virtio-gpu-ui: logo presented scanout={} size={}x{} logo={}x{} copy={}x{} src={},{} dst={},{} cursor={}\n",
+            "virtio-gpu-ui: logo presented scanout={} size={}x{} logo={}x{} copy={}x{} src={},{} dst={},{} hardware_cursor=disabled\n",
             scanout_id,
             width,
             height,
@@ -926,8 +918,7 @@ impl EmulatorUi {
             copy.src_x,
             copy.src_y,
             copy.dst_x,
-            copy.dst_y,
-            cursor_ok as u8
+            copy.dst_y
         );
 
         let compositor = if gpu.virgl {
@@ -940,12 +931,9 @@ impl EmulatorUi {
         Some(Self {
             gpu,
             compositor,
-            scanout_id,
             width,
             height,
             scanout_backing,
-            _cursor_backing: cursor_backing,
-            last_cursor: None,
             stamped_generation: 0,
             stamp_deadline_ms: None,
         })
@@ -1031,24 +1019,7 @@ impl EmulatorUi {
         }
     }
 
-    fn update_cursor(&mut self) {
-        let (slot, x, y, buttons) = cursor_snapshot_to_pixels(self.width, self.height).unwrap_or((
-            0,
-            self.width / 2,
-            self.height / 2,
-            0,
-        ));
-        let state = (slot, x, y, buttons);
-        if self.last_cursor == Some(state) {
-            return;
-        }
-        if self
-            .gpu
-            .update_cursor(self.scanout_id, CURSOR_RESOURCE_ID, x, y)
-        {
-            self.last_cursor = Some(state);
-        }
-    }
+
 }
 
 #[derive(Clone, Copy)]
@@ -1274,8 +1245,7 @@ async fn fallback_logo_service_task() {
                 if let Some(compositor) = ui.compositor.as_mut() {
                     compositor.tick(&mut ui.gpu);
                 }
-                ui.update_cursor();
-                Timer::after(EmbassyDuration::from_millis(CURSOR_UPDATE_MS)).await;
+                Timer::after(EmbassyDuration::from_millis(COMPOSITOR_POLL_MS)).await;
             }
         }
         crate::log_warn!(target: "gfx";
@@ -1309,20 +1279,6 @@ pub(crate) fn present() -> bool {
             present
         }
     }
-}
-
-fn cursor_snapshot_to_pixels(width: u32, height: u32) -> Option<(u32, u32, u32, u32)> {
-    let (slot, nx, ny, buttons) =
-        crate::r::cursor::preferred_physical_cursor_snapshot_with_slot_buttons()?;
-    let x = normalized_cursor_to_px(nx, width);
-    let y = normalized_cursor_to_px(ny, height);
-    Some((slot, x, y, buttons))
-}
-
-fn normalized_cursor_to_px(norm: f64, extent: u32) -> u32 {
-    let limit = extent.saturating_sub(1) as f64;
-    let pixel = (norm.clamp(0.0, 1.0) * limit + 0.5) as i64 - i64::from(CURSOR_HOTSPOT);
-    pixel.clamp(0, i64::from(extent.saturating_sub(1))) as u32
 }
 
 #[derive(Clone, Copy)]
@@ -1420,22 +1376,6 @@ fn blend_centered_rgba(
         }
     }
     copy
-}
-
-fn fill_cursor_sprite(dst: *mut u8) {
-    let pitch = CURSOR_DIM as usize * 4;
-    for y in 0..CURSOR_DIM as usize {
-        for x in 0..CURSOR_DIM as usize {
-            let off = y * pitch + x * 4;
-            let v = if x < CURSOR_DIM as usize / 2 { 0 } else { 0xFF };
-            unsafe {
-                *dst.add(off) = v;
-                *dst.add(off + 1) = v;
-                *dst.add(off + 2) = v;
-                *dst.add(off + 3) = CURSOR_ALPHA;
-            }
-        }
-    }
 }
 
 fn bytes_for_surface(width: u32, height: u32) -> Option<usize> {

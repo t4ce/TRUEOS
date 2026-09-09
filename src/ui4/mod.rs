@@ -115,7 +115,7 @@ pub(crate) use screenshot::{
     COMPACT_WINDOW_GRID_EXTENT, COMPACT_WINDOW_OBSERVATION_MAX_PNG_BYTES,
     capture_compact_window_observation, request_wd_postblend_capture, ui4_screenshot_service_task,
 };
-pub(crate) use slot4_service::ui4_slot4_service_task;
+pub(crate) use slot4_service::{software_cursor_rects as interaction_overlay_rects, ui4_slot4_service_task};
 pub(crate) use start_button::{request_start_button_reveal, ui4_start_button_service_task};
 pub(crate) use video_frame::{
     DecodedNv12Source, DecodedVideoConversionProbeReport, DecodedVideoConversionReport,

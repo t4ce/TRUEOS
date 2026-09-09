@@ -73,6 +73,57 @@ def capture_vnc(path, destination, timeout):
         Image.frombytes('RGB', (width, height), bytes(pixels), 'raw', 'RGBX').save(destination)
 
 
+def verify_interaction(command, vnc_path, output, timeout):
+    """Exercise cursor-only damage and a held/released selection on the desktop."""
+    from PIL import Image, ImageChops
+
+    def capture(name):
+        path = output / name
+        capture_vnc(vnc_path, path, timeout)
+        return Image.open(path).convert('RGB')
+
+    def move(axis, value):
+        command('input-send-event', {'events': [
+            {'type': 'rel', 'data': {'axis': axis, 'value': value}}]})
+        time.sleep(.5)
+
+    def button(down):
+        command('input-send-event', {'events': [
+            {'type': 'btn', 'data': {'down': down, 'button': 'left'}}]})
+        time.sleep(.3)
+
+    before = capture('interaction-before.png')
+    # TRUEOS boot HID integrates each count as 1/1024 of the desktop extent.
+    for axis, value in [('x', -5000), ('y', -5000), ('x', 205), ('y', 307)]:
+        move(axis, value)
+    cursor = capture('cursor.png')
+    width, height = cursor.size
+    x, y = round(width * 205 / 1024), round(height * 307 / 1024)
+    region = (max(0, x - 40), max(0, y - 40), min(width, x + 40), min(height, y + 40))
+    if not ImageChops.difference(before, cursor).crop(region).getbbox():
+        raise RuntimeError('Software cursor did not appear after USB mouse motion')
+    button(True)
+    try:
+        move('x', 205)
+        move('y', 256)
+        held = capture('selection-held.png')
+    finally:
+        button(False)
+    released = capture('selection-released.png')
+    diff = ImageChops.difference(held, released)
+    bounds = diff.getbbox()
+    if bounds is None:
+        raise RuntimeError('Selection outline did not change on button release')
+    box_width, box_height = bounds[2] - bounds[0], bounds[3] - bounds[1]
+    # A large, thin border must disappear. Cursor-only damage or a filled
+    # rectangle cannot satisfy this check.
+    changed = sum(value != 0 for value in diff.convert('L').tobytes())
+    if not (box_width > width * .15 and box_height > height * .15
+            and box_width + box_height < changed < box_width * box_height * .1):
+        raise RuntimeError(f'Unexpected selection damage: bounds={bounds}, pixels={changed}')
+    print(f'Software cursor and selection passed: bounds={bounds}, erased_pixels={changed}', flush=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--command', action='append', default=[])
@@ -81,7 +132,10 @@ def main():
     parser.add_argument('--settle', type=float, default=2)
     parser.add_argument('--output', type=Path, default=ROOT / 'bld/emulator-logs/virgl-verify')
     parser.add_argument('--keep-running', action='store_true')
+    parser.add_argument('--interaction-smoke', action='store_true', help='Verify the software cursor and selection outline on the idle desktop')
     args = parser.parse_args()
+    if args.interaction_smoke and args.command:
+        parser.error("--interaction-smoke requires an idle desktop; omit --command")
     args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=True)
     serial = args.output / 'serial.log'
@@ -169,6 +223,11 @@ def main():
         from PIL import Image
         if not any(high > low for low, high in Image.open(screenshot).getextrema()):
             raise RuntimeError(f'Scanout is a uniform color; see {screenshot}')
+        if args.interaction_smoke:
+            until(lambda: 'hid mouse 0627:0001 ready' in serial.read_text(errors='replace'))
+            if 'interaction=slot4-software hardware_cursor=disabled' not in observed:
+                raise RuntimeError('Expected software interaction plane with hardware cursor disabled')
+            verify_interaction(command, vnc_path, args.output, args.timeout)
         host_errors = (args.output / 'qemu.log').read_text(errors='replace')
         if any(marker in host_errors.lower() for marker in ['context error', 'illegal resource', 'failed to complete framebuffer']):
             raise RuntimeError(f'Host renderer rejected work; see {args.output / "qemu.log"}')

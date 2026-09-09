@@ -4,7 +4,8 @@
 //! one-pixel selection and dock outlines, translucent elliptic dock fields,
 //! selected-frame strips, and context menus. It deliberately does not
 //! participate in application-plane composition or its atomic SURF batch.
-//! Cursor input is coalesced to the display cadence.
+//! Cursor input is coalesced to the display cadence. Virgl reuses the shape
+//! builder in its final composition pass instead of queuing an Intel flip.
 
 use alloc::vec::Vec;
 
@@ -351,7 +352,7 @@ fn add_window_stamp_damage(
     window: Slot4WindowStamp,
 ) {
     let (screen_width, screen_height) =
-        crate::intel::active_scanout_dimensions().unwrap_or((2560, 1440));
+        super::output_dimensions().unwrap_or((2560, 1440));
     let left = i64::from(window.placement.x).clamp(0, i64::from(screen_width));
     let top = i64::from(window.placement.y).clamp(0, i64::from(screen_height));
     let right = i64::from(window.placement.x)
@@ -377,12 +378,12 @@ fn release_window_leases(leases: &[super::FrameReadLease]) {
     }
 }
 
-fn software_cursor_rects() -> Slot4Rects {
+pub(crate) fn software_cursor_rects() -> Slot4Rects {
     use crate::graphics::primitives::Rgba8;
 
     let visuals = super::software_cursor_visuals();
     let mut rects = Slot4Rects::with_capacity(SLOT4_RECT_BASE_CAPACITY);
-    let (screen_w, screen_h) = crate::intel::active_scanout_dimensions().unwrap_or((2560, 1440));
+    let (screen_w, screen_h) = super::output_dimensions().unwrap_or((2560, 1440));
 
     if let Some(output) = super::OutputId::from_slot(0) {
         for strip in super::selection_strips(output, screen_w, screen_h) {
