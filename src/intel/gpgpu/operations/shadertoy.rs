@@ -79,7 +79,7 @@ fn shadertoy_dispatch_rows(
     // expensive procedural kernels in small batches; neither policy scales
     // a single walker with the entire window's pixel count.
     let max_pixels = match (shader_id, phase) {
-        (SHADERTOY_SHADER_MANDELBOX, _) => 16 * 1024,
+        (SHADERTOY_SHADER_MANDELBOX, 1) => 16 * 1024,
         (_, 2) => SHADERTOY_LIGHT_DISPATCH_MAX_PIXELS,
         (SHADERTOY_SHADER_NGUYEN | SHADERTOY_SHADER_PROTEAN_CLOUDS, _) => {
             SHADERTOY_DISPATCH_MAX_PIXELS

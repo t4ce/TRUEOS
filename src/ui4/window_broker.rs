@@ -2671,10 +2671,14 @@ fn translated_resize_presentation(
     dy: i64,
     output: Option<(u32, u32)>,
 ) -> WindowPlacement {
-    let Some((width, height)) = output else { return presentation; };
+    let Some((width, height)) = output else {
+        return presentation;
+    };
     WindowPlacement {
-        x: (i64::from(presentation.x) + dx).clamp(0, i64::from(width.saturating_sub(presentation.width))) as i32,
-        y: (i64::from(presentation.y) + dy).clamp(0, i64::from(height.saturating_sub(presentation.height))) as i32,
+        x: (i64::from(presentation.x) + dx)
+            .clamp(0, i64::from(width.saturating_sub(presentation.width))) as i32,
+        y: (i64::from(presentation.y) + dy)
+            .clamp(0, i64::from(height.saturating_sub(presentation.height))) as i32,
         ..presentation
     }
 }

@@ -8,6 +8,7 @@ pub(crate) struct ShaderToyRuntimeState {
     particles: Option<GpgpuOwnedParticleCraftState>,
     particles_need_reset: bool,
     brush: CppCloudBrush,
+    environment: ShaderToyEnvironment,
 }
 
 impl ShaderToyRuntimeState {
@@ -24,6 +25,7 @@ impl ShaderToyRuntimeState {
             particles: None,
             particles_need_reset: true,
             brush: CppCloudBrush::new(),
+            environment: ShaderToyEnvironment::new(),
         }
     }
 
@@ -48,6 +50,7 @@ impl ShaderToyRuntimeState {
             self.particles = None;
             self.particles_need_reset = true;
             self.brush = CppCloudBrush::new();
+            self.environment = ShaderToyEnvironment::new();
             self.selected = params.shader_id;
         }
         if self.extent != (dst.width, dst.height) {
@@ -55,7 +58,8 @@ impl ShaderToyRuntimeState {
             self.extent = (dst.width, dst.height);
         }
         match params.shader_id {
-            1..=6 | 16 => shadertoy_rgba8_surface_full(dst, params),
+            1..=6 => shadertoy_rgba8_surface_full(dst, params),
+            16 => self.environment.render(dst, params),
             7 => {
                 self.audio.get_or_insert_with(
                     crate::aud::audio_visualizer::AudioVisualizerSubscription::acquire,

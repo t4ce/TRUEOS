@@ -603,9 +603,9 @@ impl FramePlan {
 /// Frames which may intentionally share their requested broker plane. A lone
 /// member still takes the direct-scanout path when eligible; two or more
 /// members are composed together by UI4 instead of consuming one hardware
-/// plane each. Dirty FontScene frames retain double buffering, while streaming
-/// BlueprintScene and RenderScene frames retain triple buffering, so
-/// composition always reads a stable published front.
+/// plane each. Dirty FontScene frames and Blueprint backgrounds retain double
+/// buffering, while streaming BlueprintScene and RenderScene frames retain
+/// triple buffering, so composition always reads a stable published front.
 pub(crate) const fn frame_plan_shares_compositor_plane(plan: FramePlan) -> bool {
     matches!(plan.buffering, FrameBuffering::Single)
         || matches!(

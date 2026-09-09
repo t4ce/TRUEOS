@@ -42,7 +42,7 @@ fn direct_rcs_write_shadertoy_payload(
         return false;
     }
 
-    let focused_abi = params.shader_id == SHADERTOY_SHADER_PROTEAN_CLOUDS;
+    let focused_abi = matches!(params.shader_id, SHADERTOY_SHADER_PROTEAN_CLOUDS | SHADERTOY_SHADER_MANDELBOX);
     if !shadertoy_payload_layout_matches(contract, focused_abi) {
         return false;
     }
@@ -164,10 +164,10 @@ fn direct_rcs_encode_shadertoy_batch(
         || contract.bindings.is_empty()
         || !shadertoy_payload_layout_matches(
             contract,
-            params.shader_id == SHADERTOY_SHADER_PROTEAN_CLOUDS,
+            matches!(params.shader_id, SHADERTOY_SHADER_PROTEAN_CLOUDS | SHADERTOY_SHADER_MANDELBOX),
         )
         || contract.bindings.len()
-            > if params.shader_id == SHADERTOY_SHADER_PROTEAN_CLOUDS {
+            > if matches!(params.shader_id, SHADERTOY_SHADER_PROTEAN_CLOUDS | SHADERTOY_SHADER_MANDELBOX) {
                 3
             } else {
                 2

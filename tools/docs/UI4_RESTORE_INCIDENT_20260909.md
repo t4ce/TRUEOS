@@ -64,7 +64,13 @@ restore/stop state; a rebuilt rig run is needed to confirm the complete chain.
   ABA epoch refresh with either producer completing first.
 - Existing weighted lease and close-scaler checks.
 - `python3 tools/check_native_worker_contract.py --blueprints ../TRUEOS-Blueprints`.
-- Kernel check, Blueprint native worker tests, and actual `cargo bp cubes`.
+- `python3 tools/test_native_worker_lifetime.py`: isolated host tests of the
+  actual SDK worker module and kernel admission/drain state (five tests).
+- `cargo check --bin TRUEOS` and actual `cargo bp cubes` passed.
+
+The full Blueprint API host test binary cannot link because its unrelated
+shutdown/write CABI symbols require the kernel. The isolated worker harness
+avoids that linkage without adding production stubs.
 
 The running kernel has not been patched in place. Rebuild/deploy the kernel and
 use the newly packed Cubes for physical restore/drag/stop verification; the new

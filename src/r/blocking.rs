@@ -736,7 +736,10 @@ pub(crate) fn guest_job_cancellation_requested(vm_id: u8) -> bool {
 pub extern "Rust" fn trueos_service_lane_cancellation_requested() -> bool {
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
         let (status, cancelled) = crate::hv::vmcall::guest_call(
-            crate::hv::vmcall::OP_BP_SERVICE_LANE_CANCELLED, 0, 0);
+            crate::hv::vmcall::OP_BP_SERVICE_LANE_CANCELLED,
+            0,
+            0,
+        );
         return status != crate::hv::vmcall::STATUS_OK || cancelled != 0;
     }
     crate::hv::current_guest_execution_context_vm_id()

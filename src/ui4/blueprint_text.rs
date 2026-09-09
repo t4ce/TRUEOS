@@ -2271,8 +2271,13 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_resize_event_take(
     };
     let window = surface.window;
     surface.taken_resize_event = Some(event);
-    refresh_pending_resize_epoch(&mut surfaces, owner, window,
-        (event.abi.width, event.abi.height), event.resize_epoch);
+    refresh_pending_resize_epoch(
+        &mut surfaces,
+        owner,
+        window,
+        (event.abi.width, event.abi.height),
+        event.resize_epoch,
+    );
     // SAFETY: the non-null output points to one writable ABI event.
     unsafe { out.write(event.abi) };
     0
@@ -7363,8 +7368,7 @@ fn surface_mut(
         .find(|surface| surface.owner == owner && surface.render_target == window_id)
 }
 
-/// Prepare both allocations before changing either producer. Old fronts and
-/// their common presentation geometry stay live until both replacements finish.
+/// Keep reused allocations on the same acknowledged epoch across both layers.
 fn refresh_pending_resize_epoch(
     surfaces: &mut [BlueprintSceneSurface],
     owner: WindowOwner,
@@ -7374,7 +7378,10 @@ fn refresh_pending_resize_epoch(
 ) {
     // A -> B -> A reuses exact-sized allocations, but every member of a
     // layered transaction must acknowledge the same newer resize epoch.
-    for surface in surfaces.iter_mut().filter(|s| s.owner == owner && s.window == window) {
+    for surface in surfaces
+        .iter_mut()
+        .filter(|s| s.owner == owner && s.window == window)
+    {
         if let Some(pending) = surface.pending_resize.as_mut()
             && (pending.placement.width, pending.placement.height) == extent
         {
@@ -7383,6 +7390,8 @@ fn refresh_pending_resize_epoch(
     }
 }
 
+/// Prepare both allocations before changing either producer. Old fronts and
+/// their common presentation geometry stay live until both replacements finish.
 fn stage_layered_resize(
     surfaces: &mut [BlueprintSceneSurface],
     owner: WindowOwner,
