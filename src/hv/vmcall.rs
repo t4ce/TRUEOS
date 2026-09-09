@@ -255,6 +255,8 @@ pub const OP_BP_UI4_SCENE_FRAME_SET_HIT_TESTABLE: u32 = 0x123; // arg0 window,ar
 pub const OP_BP_LUMEN_TOOL_RESULT_SUBMIT: u32 = 0x151; // arg0 turn,payload tail then tool-role result -> rc
 pub const OP_BP_UI4_SCENE_FRAME_SET_ESCAPE_KEY_ACTION: u32 = 0x150; // arg0 window,arg1 Ui4FrameEscapeKeyAction -> rc
 pub const OP_BP_UI4_SCENE_FRAME_SET_OPACITY: u32 = 0x15D; // arg0 window,arg1 opacity:u8 -> rc
+pub const OP_BP_UI4_SCENE_SET_DISPLAY_BOTTOM_COLOR: u32 =
+    trueos_vm::vmcall::OP_BP_UI4_SCENE_SET_DISPLAY_BOTTOM_COLOR;
 pub const OP_BP_UI4_SCENE_FONT_SPRITE_REQUEST_V1: u32 = 0x15E; // arg0 window,arg1 scalar,payload font/px/color -> ticket
 pub const OP_BP_UI4_SCENE_FONT_SPRITE_STATUS_V1: u32 = 0x15F; // arg0 window,arg1 ticket -> FontSpriteStatusV1
 pub const OP_BP_VMEDIA_IMAGE_DECODE_BEGIN: u32 = 0x142; // arg0 format,arg1 encoded bytes -> operation id/rc
@@ -746,6 +748,9 @@ pub fn dispatch(vm_id: u8) -> DispatchOutcome {
     })
 }
 
+// An undeclared opcode in a match is a binding, not an unknown-constant error.
+// Never allow one to silently swallow the remaining hypercall handlers.
+#[deny(unreachable_patterns)]
 fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
     let Some((op, seq, arg0, arg1, req_len)) = read_request(vm_id) else {
         hvwarnf(format_args!("hv: vm{} reporting: vmcall bad vm id", vm_id));
