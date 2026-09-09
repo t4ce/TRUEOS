@@ -139,7 +139,7 @@ struct FrameCursorState {
     fallback: Ui4CursorIcon,
     overrides: Vec<CursorOverride, MAX_CURSOR_SOURCES>,
     cursor_step: Option<Ui4CursorStep>,
-    center_snapped_cursor: bool,
+    center_snapped_mouse: bool,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -147,7 +147,6 @@ struct SelectingCursor {
     source: Ui4CursorSource,
     selected: CursorFrameKey,
     color: crate::graphics::primitives::Rgba8,
-    center_snap_suppressed: bool,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -204,7 +203,7 @@ impl CursorFrameRig {
             frame.fallback = Ui4CursorIcon::Default;
             frame.overrides.clear();
             frame.cursor_step = None;
-            frame.center_snapped_cursor = false;
+            frame.center_snapped_mouse = false;
             return Ok(());
         }
         self.frames
@@ -214,7 +213,7 @@ impl CursorFrameRig {
                 fallback: Ui4CursorIcon::Default,
                 overrides: Vec::new(),
                 cursor_step: None,
-                center_snapped_cursor: false,
+                center_snapped_mouse: false,
             })
             .map_err(|_| CursorFrameError::Capacity)
     }
@@ -298,7 +297,6 @@ impl CursorFrameRig {
                     visual_changed |= cursor.color != color;
                     cursor.selected = selected;
                     cursor.color = color;
-                    cursor.center_snap_suppressed = false;
                 } else {
                     visual_changed |= self
                         .selecting_cursors
@@ -306,7 +304,6 @@ impl CursorFrameRig {
                             source,
                             selected,
                             color,
-                            center_snap_suppressed: false,
                         })
                         .is_ok();
                 }
@@ -385,7 +382,7 @@ impl CursorFrameRig {
                 .any(|cursor| cursor.selected == key))
     }
 
-    fn set_center_snapped_cursor(
+    fn set_center_snapped_mouse(
         &mut self,
         key: CursorFrameKey,
         enabled: bool,
@@ -395,38 +392,23 @@ impl CursorFrameRig {
             .iter_mut()
             .find(|frame| frame.key == key)
             .ok_or(CursorFrameError::NotFound)?;
-        let changed = frame.center_snapped_cursor != enabled;
-        frame.center_snapped_cursor = enabled;
+        let changed = frame.center_snapped_mouse != enabled;
+        frame.center_snapped_mouse = enabled;
         Ok(changed
-            && self
-                .selecting_cursors
-                .iter()
-                .any(|cursor| cursor.selected == key))
+            && self.selecting_cursors.iter().any(|cursor| {
+                cursor.selected == key && cursor.source.hid_kind == crate::r::cursor::HID_KIND_MOUSE
+            }))
     }
 
     fn center_snapped_frame_for_source(&self, source: Ui4CursorSource) -> Option<CursorFrameKey> {
-        let cursor = self
-            .selecting_cursors
-            .iter()
-            .find(|cursor| cursor.source == source && !cursor.center_snap_suppressed)?;
-        let key = cursor.selected;
+        if source.hid_kind != crate::r::cursor::HID_KIND_MOUSE {
+            return None;
+        }
+        let key = self.selected_frame_for_source(source)?;
         self.frames
             .iter()
-            .find(|frame| frame.key == key && frame.center_snapped_cursor)
+            .find(|frame| frame.key == key && frame.center_snapped_mouse)
             .map(|frame| frame.key)
-    }
-
-    fn suppress_center_snap(&mut self, source: Ui4CursorSource) -> bool {
-        let Some(cursor) = self
-            .selecting_cursors
-            .iter_mut()
-            .find(|cursor| cursor.source == source)
-        else {
-            return false;
-        };
-        let changed = !cursor.center_snap_suppressed;
-        cursor.center_snap_suppressed = true;
-        changed
     }
 
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
@@ -547,18 +529,12 @@ pub(crate) fn cursor_presentation_for_source(
         .cursor_presentation_for_source(source)
 }
 
-/// Return the selected frame when it has captured this independent cursor route
+/// Return the selected frame when it has captured this physical N-Mouse route
 /// into frame-centered relative-motion mode.
 pub(crate) fn center_snapped_frame_for_source(source: Ui4CursorSource) -> Option<CursorFrameKey> {
     CURSOR_FRAME_RIG
         .lock()
         .center_snapped_frame_for_source(source)
-}
-
-pub(crate) fn suppress_center_snap_for_source(source: Ui4CursorSource) {
-    if CURSOR_FRAME_RIG.lock().suppress_center_snap(source) {
-        signal_visual_change();
-    }
 }
 
 pub(super) fn cursor_retired(source: Ui4CursorSource) {
@@ -620,8 +596,9 @@ pub(crate) fn set_window_cursor_step(
     Ok(())
 }
 
-/// Enable or clear frame-centered relative motion for every independent cursor
-/// route which has this frame selected.
+/// Enable or clear frame-centered relative motion for every physical N-Mouse
+/// route which has this frame selected. Other independent cursor kinds keep
+/// their ordinary absolute behavior.
 pub(crate) fn set_window_center_snapped_mouse(
     owner: WindowOwner,
     window: WindowId,
@@ -629,7 +606,7 @@ pub(crate) fn set_window_center_snapped_mouse(
 ) -> Result<(), CursorFrameError> {
     let selected_visual_changed = CURSOR_FRAME_RIG
         .lock()
-        .set_center_snapped_cursor(CursorFrameKey::new(owner, window), enabled)?;
+        .set_center_snapped_mouse(CursorFrameKey::new(owner, window), enabled)?;
     if selected_visual_changed {
         signal_visual_change();
     }
@@ -944,7 +921,7 @@ mod tests {
     }
 
     #[test]
-    fn center_snap_is_frame_scoped_for_every_selected_cursor() {
+    fn center_snap_is_frame_scoped_and_mouse_only() {
         let mut rig = CursorFrameRig::new();
         let frame = CursorFrameKey::new(WindowOwner::KernelApp(1), WindowId::from_raw(1).unwrap());
         rig.frame_opened(frame, WindowSessionId::from_raw(1).unwrap())
@@ -953,29 +930,11 @@ mod tests {
         rig.select(Some(frame), source(2), Rgba8::new(4, 5, 6, 255));
 
         assert_eq!(rig.center_snapped_frame_for_source(mouse_source(1)), None);
-        assert!(rig.set_center_snapped_cursor(frame, true).unwrap());
+        assert!(rig.set_center_snapped_mouse(frame, true).unwrap());
         assert_eq!(rig.center_snapped_frame_for_source(mouse_source(1)), Some(frame));
-        assert_eq!(rig.center_snapped_frame_for_source(source(2)), Some(frame));
-        assert!(rig.set_center_snapped_cursor(frame, false).unwrap());
+        assert_eq!(rig.center_snapped_frame_for_source(source(2)), None);
+        assert!(rig.set_center_snapped_mouse(frame, false).unwrap());
         assert_eq!(rig.center_snapped_frame_for_source(mouse_source(1)), None);
-    }
-
-    #[test]
-    fn center_snap_release_lasts_until_cursor_selects_again() {
-        let mut rig = CursorFrameRig::new();
-        let frame = CursorFrameKey::new(WindowOwner::KernelApp(1), WindowId::from_raw(1).unwrap());
-        let cursor = source(2);
-        rig.frame_opened(frame, WindowSessionId::from_raw(1).unwrap())
-            .unwrap();
-        rig.select(Some(frame), cursor, Rgba8::new(1, 2, 3, 255));
-        rig.set_center_snapped_cursor(frame, true).unwrap();
-
-        assert!(rig.suppress_center_snap(cursor));
-        assert_eq!(rig.center_snapped_frame_for_source(cursor), None);
-        assert!(!rig.suppress_center_snap(cursor));
-
-        rig.select(Some(frame), cursor, Rgba8::new(1, 2, 3, 255));
-        assert_eq!(rig.center_snapped_frame_for_source(cursor), Some(frame));
     }
 
     #[test]

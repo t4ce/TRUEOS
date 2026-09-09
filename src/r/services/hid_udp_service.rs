@@ -3,7 +3,7 @@
 //! Wire format, little-endian:
 //! - bytes 0..4:  "THID"
 //! - byte 4:      version, currently 1
-//! - byte 5:      kind: 1 mouse, 2 keyboard, 3 tablet, 4 control
+//! - byte 5:      kind: 1 mouse, 2 keyboard, 3 tablet
 //! - bytes 6..8:  flags
 //! - bytes 8..12: sequence number, monotonic per udp device/kind
 //! - bytes 12..14: udp device id
@@ -13,8 +13,6 @@
 //! - mouse:    buttons u8, dx i8, dy i8, wheel i8
 //! - keyboard: modifiers u8, reserved u8, six HID boot key bytes
 //! - tablet:   x_q16 u32, y_q16 u32, buttons u32, optional wheel i16
-//!             with INPUT_FLAG_RELATIVE: dx i32, dy i32, buttons u32, wheel i16
-//! - control:  no payload; bit 0 requests release from center-snap mode
 
 use core::sync::atomic::{AtomicU32, Ordering};
 
@@ -36,10 +34,6 @@ const HEADER_LEN: usize = 16;
 const KIND_MOUSE: u8 = 1;
 const KIND_KEYBOARD: u8 = 2;
 const KIND_TABLET: u8 = 3;
-const KIND_CONTROL: u8 = 4;
-const CONTROL_MAGIC: &[u8; 4] = b"THIC";
-const CONTROL_RELEASE_CENTER_SNAP: u16 = 1 << 0;
-const INPUT_FLAG_RELATIVE: u16 = 1 << 15;
 const DEVICE_STATE_CAP: usize = crate::allcaps::input::HID_UDP_DEVICE_STATE_CAP;
 
 static RX_SEEN: AtomicU32 = AtomicU32::new(0);
@@ -84,7 +78,7 @@ fn parse_frame(data: &[u8]) -> Option<HidUdpFrame<'_>> {
     }
 
     let kind = data[5];
-    if !matches!(kind, KIND_MOUSE | KIND_KEYBOARD | KIND_TABLET | KIND_CONTROL) {
+    if !matches!(kind, KIND_MOUSE | KIND_KEYBOARD | KIND_TABLET) {
         return None;
     }
 
@@ -140,7 +134,7 @@ fn accept_frame(frame: HidUdpFrame<'_>, seqs: &mut Vec<DeviceSeq, DEVICE_STATE_C
         {
             return false;
         }
-        KIND_MOUSE | KIND_KEYBOARD | KIND_TABLET | KIND_CONTROL => {}
+        KIND_MOUSE | KIND_KEYBOARD | KIND_TABLET => {}
         _ => return false,
     }
 
@@ -184,54 +178,26 @@ fn accept_frame(frame: HidUdpFrame<'_>, seqs: &mut Vec<DeviceSeq, DEVICE_STATE_C
             );
         }
         KIND_TABLET => {
-            let relative = frame.flags & INPUT_FLAG_RELATIVE != 0;
-            if relative {
-                let Some(dx) = read_u32(frame.payload, 0).map(|value| value as i32) else {
-                    return false;
-                };
-                let Some(dy) = read_u32(frame.payload, 4).map(|value| value as i32) else {
-                    return false;
-                };
-                let Some(buttons) = read_u32(frame.payload, 8) else {
-                    return false;
-                };
-                let wheel = read_i16(frame.payload, 12).unwrap_or(0);
-                crate::usb2::hid::inject_udp_tablet_relative_event(
-                    frame.device_id,
-                    dx,
-                    dy,
-                    buttons,
-                    wheel,
-                    frame.flags as u32,
-                );
-            } else {
-                let Some(x_q16) = read_u32(frame.payload, 0) else {
-                    return false;
-                };
-                let Some(y_q16) = read_u32(frame.payload, 4) else {
-                    return false;
-                };
-                let Some(buttons) = read_u32(frame.payload, 8) else {
-                    return false;
-                };
-                let wheel = read_i16(frame.payload, 12).unwrap_or(0);
-                let x = f64::from(x_q16.min(65535)) / 65535.0;
-                let y = f64::from(y_q16.min(65535)) / 65535.0;
-                crate::usb2::hid::inject_udp_tablet_absolute_event(
-                    frame.device_id,
-                    x,
-                    y,
-                    buttons,
-                    wheel,
-                    frame.flags as u32,
-                );
-            }
-        }
-        KIND_CONTROL => {
-            let source = rdp_tablet_source(frame.device_id);
-            if frame.flags & CONTROL_RELEASE_CENTER_SNAP != 0 {
-                crate::ui4::suppress_center_snap_for_source(source);
-            }
+            let Some(x_q16) = read_u32(frame.payload, 0) else {
+                return false;
+            };
+            let Some(y_q16) = read_u32(frame.payload, 4) else {
+                return false;
+            };
+            let Some(buttons) = read_u32(frame.payload, 8) else {
+                return false;
+            };
+            let wheel = read_i16(frame.payload, 12).unwrap_or(0);
+            let x = f64::from(x_q16.min(65535)) / 65535.0;
+            let y = f64::from(y_q16.min(65535)) / 65535.0;
+            crate::usb2::hid::inject_udp_tablet_absolute_event(
+                frame.device_id,
+                x,
+                y,
+                buttons,
+                wheel,
+                frame.flags as u32,
+            );
         }
         _ => return false,
     }
@@ -250,27 +216,7 @@ fn accept_frame(frame: HidUdpFrame<'_>, seqs: &mut Vec<DeviceSeq, DEVICE_STATE_C
     true
 }
 
-fn rdp_tablet_source(device_id: u16) -> crate::ui4::Ui4CursorSource {
-    crate::ui4::Ui4CursorSource {
-        controller_id: crate::usb2::hid::HID_UDP_CONTROLLER_ID,
-        slot_id: crate::usb2::hid::hid_udp_slot_id(device_id),
-        ep_target: 0,
-        hid_kind: crate::r::cursor::HID_KIND_TABLET,
-    }
-}
-
-fn control_reply(device_id: u16) -> [u8; 8] {
-    let mut reply = [0u8; 8];
-    reply[..4].copy_from_slice(CONTROL_MAGIC);
-    reply[4] = VERSION;
-    reply[5] = u8::from(
-        crate::ui4::center_snapped_frame_for_source(rdp_tablet_source(device_id)).is_some(),
-    );
-    reply[6..8].copy_from_slice(&device_id.to_le_bytes());
-    reply
-}
-
-fn handle_packet(data: &[u8], seqs: &mut Vec<DeviceSeq, DEVICE_STATE_CAP>) -> Option<u16> {
+fn handle_packet(data: &[u8], seqs: &mut Vec<DeviceSeq, DEVICE_STATE_CAP>) {
     let received = RX_SEEN.fetch_add(1, Ordering::Relaxed) + 1;
     if received <= 4 {
         crate::log_important!(
@@ -289,7 +235,7 @@ fn handle_packet(data: &[u8], seqs: &mut Vec<DeviceSeq, DEVICE_STATE_CAP>) -> Op
                 n
             );
         }
-        return None;
+        return;
     };
 
     if !accept_frame(frame, seqs) {
@@ -304,9 +250,8 @@ fn handle_packet(data: &[u8], seqs: &mut Vec<DeviceSeq, DEVICE_STATE_CAP>) -> Op
                 n
             );
         }
-        return None;
+        return;
     }
-    (frame.kind == KIND_CONTROL).then_some(frame.device_id)
 }
 
 #[task]
@@ -377,32 +322,14 @@ pub async fn hid_udp_srv_task() {
                         });
                     }
                     v::vnet::Event::UdpPacket {
-                        handle: h,
-                        from,
-                        data,
+                        handle: h, data, ..
                     } if handle == Some(h) => {
-                        if let Some(device_id) = handle_packet(data.as_slice(), &mut seqs) {
-                            let reply = control_reply(device_id);
-                            let _ = vnet.submit(v::vnet::Command::SendUdp {
-                                handle: h,
-                                remote: from,
-                                data: v::vnet::ByteBuf::from_slice_trunc(&reply),
-                            });
-                        }
+                        handle_packet(data.as_slice(), &mut seqs);
                     }
                     v::vnet::Event::UdpPacketV6 {
-                        handle: h,
-                        from,
-                        data,
+                        handle: h, data, ..
                     } if handle == Some(h) => {
-                        if let Some(device_id) = handle_packet(data.as_slice(), &mut seqs) {
-                            let reply = control_reply(device_id);
-                            let _ = vnet.submit(v::vnet::Command::SendUdpV6 {
-                                handle: h,
-                                remote: from,
-                                data: v::vnet::ByteBuf::from_slice_trunc(&reply),
-                            });
-                        }
+                        handle_packet(data.as_slice(), &mut seqs);
                     }
                     v::vnet::Event::Error { msg } => {
                         crate::log_important!("hid-udp: net error {}\n", msg);

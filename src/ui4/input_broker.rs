@@ -286,10 +286,6 @@ impl From<crate::r::keyboard::TrueosKeyboardOutputEvent> for KeyboardSource {
 #[derive(Copy, Clone)]
 struct CursorRoute {
     source: Ui4CursorSource,
-    /// Last unmodified source position, retained separately because a snapped
-    /// route's delivered/presented coordinates remain at its frame center.
-    raw_x: u32,
-    raw_y: u32,
     x: u32,
     y: u32,
     buttons_down: u32,
@@ -319,8 +315,6 @@ impl CursorRoute {
     fn new(source: Ui4CursorSource, x: u32, y: u32, buttons_down: u32) -> Self {
         Self {
             source,
-            raw_x: x,
-            raw_y: y,
             x,
             y,
             buttons_down,
@@ -581,18 +575,8 @@ impl InputBroker {
         let previous_routed_buttons = previous_buttons & routed_button_mask;
         let pressed = buttons_down & !previous_routed_buttons;
         let released = previous_routed_buttons & !buttons_down;
-        let absolute_dx = signed_delta(raw_x, self.cursors[index].raw_x);
-        let absolute_dy = signed_delta(raw_y, self.cursors[index].raw_y);
-        self.cursors[index].raw_x = raw_x;
-        self.cursors[index].raw_y = raw_y;
-        let (dx, dy) = if snapped_window.is_some() && event.reserved0 & 1 != 0 {
-            (
-                i32::from(i16::from_ne_bytes(event.reserved1.to_ne_bytes())),
-                i32::from(i16::from_ne_bytes(event.reserved2.to_ne_bytes())),
-            )
-        } else {
-            (absolute_dx, absolute_dy)
-        };
+        let (dx, dy) =
+            (signed_delta(x, self.cursors[index].x), signed_delta(y, self.cursors[index].y));
         let hit = snapped_window.or_else(|| topmost_window_at(x, y));
 
         super::context_menu::pointer_moved(source, x, y, width, height);
