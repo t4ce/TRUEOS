@@ -234,10 +234,7 @@ fn report_shot_result(
             (true, None) => String::from("Image was STORED"),
             (false, _) => String::from("Image was NOT STORED"),
         };
-        crate::shell2::print_matrix_target_system_line(
-            target,
-            message.as_str(),
-        );
+        crate::shell2::print_matrix_target_system_line(target, message.as_str());
     }
 }
 
@@ -1173,35 +1170,35 @@ pub(crate) async fn ui4_screenshot_service_task() {
             Ok(true) => {
                 report_shot_result(capture.shot_target.as_ref(), true, Some(path.as_str()));
                 crate::log_info!(target: "ui4/screenshot";
-                "ui4/screenshot: saved path=trueosfs:/{} disk_id={} sequence={} format=png-rgba size={}x{} png_bytes={} encode_us={} write_us={}\n",
-                path,
-                disk_id,
-                capture.sequence,
-                capture.width,
-                capture.height,
-                png.len(),
-                encoded_ns.saturating_sub(encode_started_ns) / 1_000,
-                crate::chronos::monotonic_nanos().saturating_sub(encoded_ns) / 1_000,
-            );
+                    "ui4/screenshot: saved path=trueosfs:/{} disk_id={} sequence={} format=png-rgba size={}x{} png_bytes={} encode_us={} write_us={}\n",
+                    path,
+                    disk_id,
+                    capture.sequence,
+                    capture.width,
+                    capture.height,
+                    png.len(),
+                    encoded_ns.saturating_sub(encode_started_ns) / 1_000,
+                    crate::chronos::monotonic_nanos().saturating_sub(encoded_ns) / 1_000,
+                );
             }
             Ok(false) => {
                 report_shot_result(capture.shot_target.as_ref(), false, None);
                 crate::log_warn!(target: "ui4/screenshot";
-                "ui4/screenshot: save failed path=trueosfs:/{} disk_id={} sequence={} reason=no-space-or-root-placement\n",
-                path,
-                disk_id,
-                capture.sequence,
-            );
+                    "ui4/screenshot: save failed path=trueosfs:/{} disk_id={} sequence={} reason=no-space-or-root-placement\n",
+                    path,
+                    disk_id,
+                    capture.sequence,
+                );
             }
             Err(error) => {
                 report_shot_result(capture.shot_target.as_ref(), false, None);
                 crate::log_warn!(target: "ui4/screenshot";
-                "ui4/screenshot: save failed path=trueosfs:/{} disk_id={} sequence={} error={:?}\n",
-                path,
-                disk_id,
-                capture.sequence,
-                error,
-            );
+                    "ui4/screenshot: save failed path=trueosfs:/{} disk_id={} sequence={} error={:?}\n",
+                    path,
+                    disk_id,
+                    capture.sequence,
+                    error,
+                );
             }
         }
         release_interactive_capture_gate(&capture);

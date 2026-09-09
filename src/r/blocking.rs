@@ -11,7 +11,9 @@ use trueos_time::{Duration as EmbassyDuration, Timer};
 pub type BlockingJobFn = Box<dyn FnOnce() + Send + 'static>;
 
 mod lifetime;
-pub(crate) use lifetime::{close_guest_jobs, drain_guest_jobs, guest_jobs_in_flight, open_guest_jobs};
+pub(crate) use lifetime::{
+    close_guest_jobs, drain_guest_jobs, guest_jobs_in_flight, open_guest_jobs,
+};
 
 const BLOCKING_JOB_QUEUE_WARN_DEPTH: usize = 100;
 const BLOCKING_JOB_QUEUE_CAP: usize = 4094;
@@ -162,7 +164,8 @@ fn run_blocking_job_entry(slot: u32, entry: BlockingJobEntry) {
             || {
                 crate::allocators::with_hv_guest_alloc_domain(vm_id, || {
                     run_blocking_job_call(pending_call.take().expect("native job consumed once"))
-                }).is_some()
+                })
+                .is_some()
             },
         );
         if !ran {
@@ -594,7 +597,9 @@ fn enqueue_blocking_job_with_rejection_policy(
     log_rejection: bool,
 ) -> Result<u64, BlockingJobCall> {
     let owner = if let Some(vm_id) = vm_id {
-        let Some(owner) = lifetime::reserve(vm_id) else { return Err(call) };
+        let Some(owner) = lifetime::reserve(vm_id) else {
+            return Err(call);
+        };
         Some(owner)
     } else {
         None
@@ -718,9 +723,13 @@ pub extern "Rust" fn trueos_tokio_spawn_blocking_job(job: BlockingJobFn) -> i32 
 #[unsafe(no_mangle)]
 pub extern "Rust" fn trueos_service_lane_available_capacity() -> usize {
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let (status, count) = crate::hv::vmcall::guest_call(
-            crate::hv::vmcall::OP_BP_SERVICE_LANE_CAPACITY, 0, 0);
-        return if status == crate::hv::vmcall::STATUS_OK { count as usize } else { 0 };
+        let (status, count) =
+            crate::hv::vmcall::guest_call(crate::hv::vmcall::OP_BP_SERVICE_LANE_CAPACITY, 0, 0);
+        return if status == crate::hv::vmcall::STATUS_OK {
+            count as usize
+        } else {
+            0
+        };
     }
     service_lane_available_capacity_for_vm(crate::hv::current_guest_execution_context_vm_id())
 }
@@ -735,26 +744,25 @@ pub(crate) fn guest_job_cancellation_requested(vm_id: u8) -> bool {
 #[unsafe(no_mangle)]
 pub extern "Rust" fn trueos_service_lane_cancellation_requested() -> bool {
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let (status, cancelled) = crate::hv::vmcall::guest_call(
-            crate::hv::vmcall::OP_BP_SERVICE_LANE_CANCELLED,
-            0,
-            0,
-        );
+        let (status, cancelled) =
+            crate::hv::vmcall::guest_call(crate::hv::vmcall::OP_BP_SERVICE_LANE_CANCELLED, 0, 0);
         return status != crate::hv::vmcall::STATUS_OK || cancelled != 0;
     }
-    crate::hv::current_guest_execution_context_vm_id()
-        .is_some_and(guest_job_cancellation_requested)
+    crate::hv::current_guest_execution_context_vm_id().is_some_and(guest_job_cancellation_requested)
 }
 
 pub(crate) fn service_lane_available_capacity_for_vm(vm_id: Option<u8>) -> usize {
     if vm_id.is_some_and(|id| !lifetime::accepts_guest_jobs(id)) {
         return 0;
     }
-    crate::workers::background_worker_slots().into_iter()
-        .filter(|slot| crate::workers::is_general_background_worker_slot(*slot)
-            && crate::workers::spawner_for_slot(*slot).is_some()
-            && service_lane_started_for_slot(*slot as usize)
-            && crate::hv::lane::is_carrier_lane_free(*slot))
+    crate::workers::background_worker_slots()
+        .into_iter()
+        .filter(|slot| {
+            crate::workers::is_general_background_worker_slot(*slot)
+                && crate::workers::spawner_for_slot(*slot).is_some()
+                && service_lane_started_for_slot(*slot as usize)
+                && crate::hv::lane::is_carrier_lane_free(*slot)
+        })
         .count()
         .min(crate::wls::available_worker_identities())
 }

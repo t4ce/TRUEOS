@@ -504,8 +504,7 @@ pub(crate) fn broker_ui4_indexed_batch_submit_v2(
         || draw_count > v::vgpu::MAX_INDEXED_BATCH_V2_DRAWS
         || batch.draws[..draw_count].iter().any(|draw| {
             draw.reserved > v::vgpu::MAX_INDEXED_DRAW_POINT_WIDTH_PX
-                || (draw.reserved != 0
-                    && draw.topology != v::vgpu::PRIMITIVE_TOPOLOGY_POINT_LIST)
+                || (draw.reserved != 0 && draw.topology != v::vgpu::PRIMITIVE_TOPOLOGY_POINT_LIST)
         })
         || batch.draws[draw_count..]
             .iter()

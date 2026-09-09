@@ -25,9 +25,7 @@ async fn launch_qjs(spawner: Spawner, target: MatrixTarget, app_args: Vec<String
     {
         Ok(_) => {}
         Err(error) if error == "archive not found" => {
-            if submit_online_to_target(&spawner, target.clone(), alloc::vec![app.into()])
-                .is_err()
-            {
+            if submit_online_to_target(&spawner, target.clone(), alloc::vec![app.into()]).is_err() {
                 print_matrix_target_system_line(&target, "qjs: online launch task unavailable");
             }
         }

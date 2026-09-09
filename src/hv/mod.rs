@@ -5916,8 +5916,7 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
     // No guest code can execute before admission is tied to this run. An
     // outstanding reservation here is an invariant failure, never permission
     // to replace live executable/heap state with a new generation.
-    assert!(crate::r::blocking::open_guest_jobs(
-        vm_id, vm.run_generation.load(Ordering::Acquire)));
+    assert!(crate::r::blocking::open_guest_jobs(vm_id, vm.run_generation.load(Ordering::Acquire)));
     if vm.stop_req.load(Ordering::Acquire) || vm.preserve_req.load(Ordering::Acquire) {
         crate::r::blocking::close_guest_jobs(vm_id);
     }

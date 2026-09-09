@@ -892,8 +892,9 @@ fn ui4_compositor_gate() -> bool {
 
 #[inline]
 fn ui4_input_gate() -> bool {
-    ui4_compositor_gate() || (crate::virtio_gpu_logo::output_dimensions().is_some()
-        && crate::workers::ap1_ui_core_spawner().is_some())
+    ui4_compositor_gate()
+        || (crate::virtio_gpu_logo::output_dimensions().is_some()
+            && crate::workers::ap1_ui_core_spawner().is_some())
 }
 
 #[inline]

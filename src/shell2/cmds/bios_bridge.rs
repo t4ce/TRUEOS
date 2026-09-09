@@ -271,9 +271,15 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2) -> ParseOutcome {
                 )
                 .as_str(),
             );
-            let pass = result.firmware_status == 0
-                && result.firmware_crc32 == PROBE_EXPECTED_CRC32;
-            print_shell_line(io, if pass { "match=yes result=PASS" } else { "match=no result=FAIL" });
+            let pass = result.firmware_status == 0 && result.firmware_crc32 == PROBE_EXPECTED_CRC32;
+            print_shell_line(
+                io,
+                if pass {
+                    "match=yes result=PASS"
+                } else {
+                    "match=no result=FAIL"
+                },
+            );
         }
         Err(error) => {
             print_shell_line(
@@ -384,15 +390,19 @@ fn run_probe() -> Result<ProbeResult, String> {
         ));
     }
 
-    if !limine_range_covered(boot_services_physical, size_of::<EfiBootServicesThroughCrc32>() as u64)
-        || !limine_range_covered(bridge_entry_physical, bridge_entry_bytes as u64)
+    if !limine_range_covered(
+        boot_services_physical,
+        size_of::<EfiBootServicesThroughCrc32>() as u64,
+    ) || !limine_range_covered(bridge_entry_physical, bridge_entry_bytes as u64)
         || !limine_range_covered(bridge_control_physical, BRIDGE_CONTROL_BYTES as u64)
     {
-        return Err(String::from("retained firmware bridge physical range crosses a Limine memory-map hole"));
+        return Err(String::from(
+            "retained firmware bridge physical range crosses a Limine memory-map hole",
+        ));
     }
 
-    let system_table = crate::efi::system_table()
-        .ok_or_else(|| String::from("EFI system table unavailable"))?;
+    let system_table =
+        crate::efi::system_table().ok_or_else(|| String::from("EFI system table unavailable"))?;
     if system_table.boot_services as u64 != boot_services_virtual {
         return Err(alloc::format!(
             "BootServices virtual pointer changed system_table=0x{:016X} context=0x{:016X}",
@@ -401,10 +411,9 @@ fn run_probe() -> Result<ProbeResult, String> {
         ));
     }
 
-    let table_mapping = crate::pci::mmio::map_limine_struct::<EfiBootServicesThroughCrc32>(
-        boot_services_physical,
-    )
-    .map_err(|error| alloc::format!("BootServices inspection map failed: {error:?}"))?;
+    let table_mapping =
+        crate::pci::mmio::map_limine_struct::<EfiBootServicesThroughCrc32>(boot_services_physical)
+            .map_err(|error| alloc::format!("BootServices inspection map failed: {error:?}"))?;
     let boot_services = unsafe { core::ptr::read_unaligned(table_mapping.as_ptr()) };
     if boot_services.hdr.signature != EFI_BOOT_SERVICES_SIGNATURE {
         return Err(alloc::format!(
@@ -471,8 +480,10 @@ fn run_probe() -> Result<ProbeResult, String> {
     };
     unsafe { bridge(control) };
 
-    let firmware_status = unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*control).result)) };
-    let firmware_crc32 = unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*control).crc_output)) };
+    let firmware_status =
+        unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*control).result)) };
+    let firmware_crc32 =
+        unsafe { core::ptr::read_volatile(core::ptr::addr_of!((*control).crc_output)) };
 
     Ok(ProbeResult {
         capture_flags: capture.capture_flags,
@@ -550,8 +561,11 @@ fn firmware_context_capture() -> Result<BridgeCapture, String> {
     let mut found = None;
     for index in 0..section_count {
         let offset = header_bytes
-            .checked_add(index.checked_mul(section_entry_bytes)
-                .ok_or_else(|| String::from("Limine section index overflow"))?)
+            .checked_add(
+                index
+                    .checked_mul(section_entry_bytes)
+                    .ok_or_else(|| String::from("Limine section index overflow"))?,
+            )
             .ok_or_else(|| String::from("Limine section index overflow"))?;
         let section = read_unaligned::<Trpay1Section>(payload, offset)
             .ok_or_else(|| String::from("Limine section entry truncated"))?;
@@ -563,8 +577,11 @@ fn firmware_context_capture() -> Result<BridgeCapture, String> {
         }
     }
 
-    let section = found
-        .ok_or_else(|| String::from("retained firmware-context section absent; paired Limine bridge update required"))?;
+    let section = found.ok_or_else(|| {
+        String::from(
+            "retained firmware-context section absent; paired Limine bridge update required",
+        )
+    })?;
     let section_offset = section.offset as usize;
     let section_len = section.length as usize;
     let section_end = section_offset

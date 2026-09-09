@@ -1025,11 +1025,13 @@ async fn run_with_source(source_kind: AvcFrameSource, picture: AvcPicture) -> Av
     }
 
     let live_frame = !matches!(source_kind, AvcFrameSource::BootProof);
-    let lane_deadline = crate::chronos::monotonic_nanos()
-        .saturating_add(media::MEDIA_INTERLEAVE_WAIT_NS);
+    let lane_deadline =
+        crate::chronos::monotonic_nanos().saturating_add(media::MEDIA_INTERLEAVE_WAIT_NS);
     let lane_result = loop {
-        let result = media::try_acquire_media_lane(engine, media::MediaJobMode::AVC_ENCODE_GUC, None);
-        if !live_frame || !matches!(result, Err(media::MediaLaneAcquireError::Busy))
+        let result =
+            media::try_acquire_media_lane(engine, media::MediaJobMode::AVC_ENCODE_GUC, None);
+        if !live_frame
+            || !matches!(result, Err(media::MediaLaneAcquireError::Busy))
             || crate::chronos::monotonic_nanos() >= lane_deadline
         {
             break result;

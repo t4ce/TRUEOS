@@ -25,13 +25,7 @@ pub(crate) fn try_parse(
     }
 
     let target = matrix_target_for_backend(io);
-    if submit_online_to_target(
-        spawner,
-        target,
-        alloc::vec![app],
-    )
-    .is_err()
-    {
+    if submit_online_to_target(spawner, target, alloc::vec![app]).is_err() {
         print_shell_line(io, "grid: online Gridpaper launch task unavailable");
     }
     ParseOutcome::Handled

@@ -54,7 +54,11 @@ impl TrueosHiiCaptureRequest {
 
     pub fn response(&self) -> Option<&'static TrueosHiiCaptureResponse> {
         let ptr = unsafe { *self.response.get() };
-        if ptr.is_null() { None } else { Some(unsafe { &*ptr }) }
+        if ptr.is_null() {
+            None
+        } else {
+            Some(unsafe { &*ptr })
+        }
     }
 }
 

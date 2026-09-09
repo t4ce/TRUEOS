@@ -178,7 +178,8 @@ fn serialize_schema(schema: &BiosSchema) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-fn presentation_snapshot() -> Result<(Vec<Value>, super::bios_observed::ObservedDecodeStats), String> {
+fn presentation_snapshot() -> Result<(Vec<Value>, super::bios_observed::ObservedDecodeStats), String>
+{
     super::bios_hii::with_catalogue(|catalogue| {
         let mut ndjson = String::new();
         let stats = super::bios_observed::append_ordered_ifr_records(&mut ndjson, catalogue);

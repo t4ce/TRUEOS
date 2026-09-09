@@ -39,13 +39,7 @@ pub(crate) fn append_ordered_ifr_records(
     let mut next_formset_index = 0usize;
 
     for package in &catalogue.form_packages {
-        append_package_nodes(
-            out,
-            catalogue,
-            package,
-            &mut next_formset_index,
-            &mut stats,
-        );
+        append_package_nodes(out, catalogue, package, &mut next_formset_index, &mut stats);
     }
 
     append_device_path_records(out, catalogue);
@@ -367,10 +361,16 @@ fn decode_details(
             if let Some(object) = value.as_object_mut() {
                 object.insert("target_form_id".into(), serde_json::json!(read_u16(bytes, 13)));
                 if bytes.len() >= 17 {
-                    object.insert("target_question_id".into(), serde_json::json!(read_u16(bytes, 15)));
+                    object.insert(
+                        "target_question_id".into(),
+                        serde_json::json!(read_u16(bytes, 15)),
+                    );
                 }
                 if bytes.len() >= 33 {
-                    object.insert("target_formset_guid".into(), serde_json::json!(guid_at(bytes, 17)));
+                    object.insert(
+                        "target_formset_guid".into(),
+                        serde_json::json!(guid_at(bytes, 17)),
+                    );
                 }
                 if bytes.len() >= 35 {
                     let device_path_id = read_u16(bytes, 33);
@@ -514,7 +514,17 @@ fn guid_at(bytes: &[u8], offset: usize) -> Option<String> {
     let d3 = u16::from_le_bytes(raw[6..8].try_into().ok()?);
     Some(alloc::format!(
         "{:08X}-{:04X}-{:04X}-{:02X}{:02X}-{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}",
-        d1, d2, d3, raw[8], raw[9], raw[10], raw[11], raw[12], raw[13], raw[14], raw[15]
+        d1,
+        d2,
+        d3,
+        raw[8],
+        raw[9],
+        raw[10],
+        raw[11],
+        raw[12],
+        raw[13],
+        raw[14],
+        raw[15]
     ))
 }
 
@@ -522,10 +532,7 @@ fn decode_eisa_id(value: u32) -> Option<String> {
     let first = ((value >> 10) & 0x1f) as u8;
     let second = ((value >> 5) & 0x1f) as u8;
     let third = (value & 0x1f) as u8;
-    if !(1..=26).contains(&first)
-        || !(1..=26).contains(&second)
-        || !(1..=26).contains(&third)
-    {
+    if !(1..=26).contains(&first) || !(1..=26).contains(&second) || !(1..=26).contains(&third) {
         return None;
     }
     Some(alloc::format!(

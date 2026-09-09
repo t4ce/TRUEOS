@@ -586,7 +586,11 @@ unsafe extern "C" {
         height: u32,
     ) -> u32;
     pub fn trueos_cabi_ui4_scene_frame_open_layered_v1(
-        x: i32, y: i32, width: u32, height: u32, background_hz: u32,
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
+        background_hz: u32,
     ) -> u32;
     pub fn trueos_cabi_ui4_scene_frame_layer_v1(window_id: u32, layer: u32) -> u32;
     pub fn trueos_cabi_ui4_scene_frame_open_streaming(

@@ -115,7 +115,6 @@ impl GpgpuPreviewPreset {
                 | Self::CppAudio
                 | Self::CppParticle
                 | Self::CppFont
-
                 | Self::CppFontRush2
         )
     }
@@ -410,7 +409,10 @@ struct CloudBrushState {
 
 impl CloudBrushState {
     const fn new() -> Self {
-        Self { brush: crate::intel::gpgpu::CppCloudBrush::new(), dragging: None }
+        Self {
+            brush: crate::intel::gpgpu::CppCloudBrush::new(),
+            dragging: None,
+        }
     }
 }
 
@@ -1082,10 +1084,8 @@ fn initialize_cpp_font_preview(desired: DesiredPreview) -> Result<ActivePreview,
 
 fn initialize_static30_preview(desired: DesiredPreview) -> Result<ActivePreview, &'static str> {
     let output = OutputId::from_slot(0).ok_or("output-d01-unavailable")?;
-    let (output_width, output_height) = crate::intel::active_scanout_dimensions().unwrap_or((
-        PREVIEW_WIDTH.saturating_mul(2),
-        PREVIEW_HEIGHT.saturating_mul(2),
-    ));
+    let (output_width, output_height) = crate::intel::active_scanout_dimensions()
+        .unwrap_or((PREVIEW_WIDTH.saturating_mul(2), PREVIEW_HEIGHT.saturating_mul(2)));
     let cell_width = (output_width / STATIC30_COLUMNS).max(1);
     let cell_height = (output_height / STATIC30_ROWS).max(1);
     let mut frames = Vec::with_capacity(STATIC30_FRAME_COUNT);
@@ -1421,10 +1421,8 @@ async fn render_preview_frame(preview: &mut ActivePreview) -> Result<(), &'stati
             preview.metrics.published,
         );
     }
-    if !matches!(
-        preview.config.preset,
-        GpgpuPreviewPreset::Static | GpgpuPreviewPreset::Static30
-    ) && should_log_preview_checkpoint(preview.metrics.published)
+    if !matches!(preview.config.preset, GpgpuPreviewPreset::Static | GpgpuPreviewPreset::Static30)
+        && should_log_preview_checkpoint(preview.metrics.published)
     {
         crate::log_info!(
             target: "ui4";
@@ -2956,7 +2954,11 @@ const fn next_serial(serial: u64) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{FramePlanError, FramePoolError, GPGPU_PREVIEW_MAX_CADENCE_MS, GpgpuPreviewConfig, GpgpuPreviewPreset, LAB256_PREVIEW_SIZE, PREVIEW_HEIGHT, PREVIEW_WIDTH, preview_extent, preview_frame_create_error_label, preview_plane_slot, static30_font_stamp_request};
+    use super::{
+        FramePlanError, FramePoolError, GPGPU_PREVIEW_MAX_CADENCE_MS, GpgpuPreviewConfig,
+        GpgpuPreviewPreset, LAB256_PREVIEW_SIZE, PREVIEW_HEIGHT, PREVIEW_WIDTH, preview_extent,
+        preview_frame_create_error_label, preview_plane_slot, static30_font_stamp_request,
+    };
 
     #[test]
     fn lab256_preview_keeps_artifact_extent() {

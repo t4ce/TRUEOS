@@ -675,13 +675,8 @@ impl Iwl4965 {
             return Err("BAR0 is zero");
         }
 
-        let bar_size = crate::pci::bar_size_bytes(
-            pci_dev.bus,
-            pci_dev.slot,
-            pci_dev.function,
-            0,
-        )
-        .ok_or("BAR0 size unavailable")?;
+        let bar_size = crate::pci::bar_size_bytes(pci_dev.bus, pci_dev.slot, pci_dev.function, 0)
+            .ok_or("BAR0 size unavailable")?;
         if bar_size < 0x3500 {
             return Err("BAR0 is too small for iwl registers");
         }

@@ -2403,15 +2403,15 @@ fn process_frame_stamp(
         crate::chronos::monotonic_nanos().saturating_sub(prepare_started_ns) / 1_000;
     let (coverage_build_ms, coverage_audit_ms, coverage_submits, scene_count) = match &coverage {
         FontFrameCoverage::Retained(scenes) => (
-            scenes.iter().fold(0u64, |total, stamp| {
-                total.saturating_add(stamp.coverage_build_ms())
-            }),
-            scenes.iter().fold(0u64, |total, stamp| {
-                total.saturating_add(stamp.coverage_audit_ms())
-            }),
-            scenes.iter().fold(0usize, |total, stamp| {
-                total.saturating_add(stamp.coverage_submits())
-            }),
+            scenes
+                .iter()
+                .fold(0u64, |total, stamp| total.saturating_add(stamp.coverage_build_ms())),
+            scenes
+                .iter()
+                .fold(0u64, |total, stamp| total.saturating_add(stamp.coverage_audit_ms())),
+            scenes
+                .iter()
+                .fold(0usize, |total, stamp| total.saturating_add(stamp.coverage_submits())),
             scenes.len(),
         ),
     };

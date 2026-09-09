@@ -4,9 +4,9 @@
 //! read-only identity registers. AX211 is an integrated Gen2 device and must
 //! not be sent through the legacy iwl4965 firmware/bootstrap path.
 
-use crate::pci::PciDevice;
 use super::wifi::{WifiDriver, WifiNetwork, WifiState};
 use super::{Driver, DriverInfo, DriverStatus, NetworkDriver};
+use crate::pci::PciDevice;
 use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -61,42 +61,41 @@ pub fn probe(pci_dev: &PciDevice) -> Option<Box<dyn WifiDriver>> {
         return None;
     }
 
-    let subsystem_vendor = crate::pci::config_read_u16(
-        pci_dev.bus, pci_dev.slot, pci_dev.function, 0x2C,
-    );
-    let subsystem_device = crate::pci::config_read_u16(
-        pci_dev.bus, pci_dev.slot, pci_dev.function, 0x2E,
-    );
-    let revision = crate::pci::config_read_u8(
-        pci_dev.bus, pci_dev.slot, pci_dev.function, 0x08,
-    );
+    let subsystem_vendor =
+        crate::pci::config_read_u16(pci_dev.bus, pci_dev.slot, pci_dev.function, 0x2C);
+    let subsystem_device =
+        crate::pci::config_read_u16(pci_dev.bus, pci_dev.slot, pci_dev.function, 0x2E);
+    let revision = crate::pci::config_read_u8(pci_dev.bus, pci_dev.slot, pci_dev.function, 0x08);
 
     let Some(bar0_phys) = pci_dev.bar_address(0) else {
         crate::log_warn!(target: "net"; "iwl-ax211: BAR0 is unavailable\n");
         let _ = crate::pci::release_device_claim(
-            pci_dev.bus, pci_dev.slot, pci_dev.function, PCI_CLAIM_OWNER,
+            pci_dev.bus,
+            pci_dev.slot,
+            pci_dev.function,
+            PCI_CLAIM_OWNER,
         );
         return None;
     };
-    let Some(bar0_size) = crate::pci::bar_size_bytes(
-        pci_dev.bus, pci_dev.slot, pci_dev.function, 0,
-    ) else {
+    let Some(bar0_size) =
+        crate::pci::bar_size_bytes(pci_dev.bus, pci_dev.slot, pci_dev.function, 0)
+    else {
         crate::log_warn!(target: "net"; "iwl-ax211: BAR0 size is unavailable\n");
         let _ = crate::pci::release_device_claim(
-            pci_dev.bus, pci_dev.slot, pci_dev.function, PCI_CLAIM_OWNER,
+            pci_dev.bus,
+            pci_dev.slot,
+            pci_dev.function,
+            PCI_CLAIM_OWNER,
         );
         return None;
     };
 
-    crate::pci::enable_mem_and_bus_master(
-        pci_dev.bus, pci_dev.slot, pci_dev.function,
-    );
+    crate::pci::enable_mem_and_bus_master(pci_dev.bus, pci_dev.slot, pci_dev.function);
     let Ok(bar0_size_usize) = usize::try_from(bar0_size) else {
         crate::log_warn!(target: "net"; "iwl-ax211: BAR0 size is too large\n");
         return None;
     };
-    let Ok(mapped) = crate::pci::mmio::map_mmio_region_exact(bar0_phys, bar0_size_usize)
-    else {
+    let Ok(mapped) = crate::pci::mmio::map_mmio_region_exact(bar0_phys, bar0_size_usize) else {
         crate::log_warn!(target: "net"; "iwl-ax211: BAR0 mapping failed\n");
         return None;
     };

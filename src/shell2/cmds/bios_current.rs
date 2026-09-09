@@ -317,10 +317,7 @@ fn decode_question_current(
         current.detail = "storage-not-validated";
         return current;
     }
-    if !matches!(
-        question.storage.backend,
-        VarStoreBackend::Buffer | VarStoreBackend::Efi
-    ) {
+    if !matches!(question.storage.backend, VarStoreBackend::Buffer | VarStoreBackend::Efi) {
         current.detail = "storage-backend-not-block-config";
         return current;
     }
@@ -351,13 +348,17 @@ fn decode_question_current(
 
     match question.kind {
         QuestionKind::Checkbox => {
-            let value = bytes.iter().copied().enumerate().fold(0u64, |acc, (index, byte)| {
-                if index < 8 {
-                    acc | (u64::from(byte) << (index * 8))
-                } else {
-                    acc
-                }
-            });
+            let value = bytes
+                .iter()
+                .copied()
+                .enumerate()
+                .fold(0u64, |acc, (index, byte)| {
+                    if index < 8 {
+                        acc | (u64::from(byte) << (index * 8))
+                    } else {
+                        acc
+                    }
+                });
             let boolean = value != 0;
             current.unsigned = Some(value);
             current.boolean = Some(boolean);
@@ -643,7 +644,8 @@ fn parse_config_response(segment: &str) -> Result<ConfigResponse, String> {
                 if bytes.len() != width {
                     return Err(format!(
                         "ExportConfig VALUE bytes={} does not match WIDTH={}",
-                        bytes.len(), width
+                        bytes.len(),
+                        width
                     ));
                 }
                 blocks.push(ConfigBlock { offset, bytes });
@@ -771,9 +773,7 @@ fn limine_payload() -> Result<Option<&'static [u8]>, String> {
     require_range(phys, len, "limine HII payload")?;
     let mapping = crate::pci::mmio::map_mmio_region_exact(phys, len)
         .map_err(|error| format!("Limine HII payload map: {error:?}"))?;
-    Ok(Some(unsafe {
-        core::slice::from_raw_parts(mapping.as_ptr(), len)
-    }))
+    Ok(Some(unsafe { core::slice::from_raw_parts(mapping.as_ptr(), len) }))
 }
 
 fn config_section_from_payload(payload: &'static [u8]) -> Result<&'static [u8], String> {

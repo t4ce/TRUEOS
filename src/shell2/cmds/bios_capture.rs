@@ -294,9 +294,7 @@ fn append_payload_sections(
     writeln!(
         out,
         "payload_format=TRPAY1 version={} sections={} capture_flags=0x{:08X}",
-        header.version,
-        count,
-        header.capture_flags
+        header.version, count, header.capture_flags
     )
     .unwrap();
 
@@ -442,8 +440,10 @@ pub(crate) fn handoff_summary() -> Result<HandoffSummary, HandoffError> {
         return Err(HandoffError::Absent(String::from("TRBIOS1 table pointer is zero")));
     }
 
-    let catalog_phys = crate::limine::try_as_phys_addr(entry.vendor_table as u64)
-        .ok_or_else(|| HandoffError::Absent(String::from("TRBIOS1 table pointer is not mappable")))?;
+    let catalog_phys =
+        crate::limine::try_as_phys_addr(entry.vendor_table as u64).ok_or_else(|| {
+            HandoffError::Absent(String::from("TRBIOS1 table pointer is not mappable"))
+        })?;
     require_range(catalog_phys, size_of::<CatalogHeader>(), "catalog header")
         .map_err(HandoffError::Invalid)?;
     let mapping = crate::pci::mmio::map_limine_struct::<CatalogHeader>(catalog_phys)
@@ -535,7 +535,10 @@ fn parse_handoff_summary(payload: &[u8]) -> Result<HandoffSummary, String> {
         if section.length == 0 || start < directory_end || end > payload.len() {
             return Err(alloc::format!("section {} range invalid", index));
         }
-        if ranges.iter().any(|&(left, right)| start < right && end > left) {
+        if ranges
+            .iter()
+            .any(|&(left, right)| start < right && end > left)
+        {
             return Err(alloc::format!("section {} overlaps another", index));
         }
         ranges.push((start, end));
@@ -588,9 +591,9 @@ pub(crate) fn important_receipt_line() -> String {
             yes_no(summary.config_captured),
             yes_no(summary.ready_for_ifr_parser)
         ),
-        Err(HandoffError::Absent(_)) => String::from(
-            "bios-handoff: trbios1=absent booted_through_firmware_scout=not-evidenced",
-        ),
+        Err(HandoffError::Absent(_)) => {
+            String::from("bios-handoff: trbios1=absent booted_through_firmware_scout=not-evidenced")
+        }
         Err(HandoffError::Invalid(detail)) => {
             alloc::format!("bios-handoff: trbios1=invalid detail=\"{}\"", detail)
         }
@@ -765,12 +768,7 @@ fn require_range(phys: u64, bytes: usize, label: &str) -> Result<(), String> {
     if crate::limine::memmap_contains_phys_range(phys, bytes) {
         Ok(())
     } else {
-        Err(alloc::format!(
-            "{} outside one Limine range phys=0x{:X} bytes={}",
-            label,
-            phys,
-            bytes
-        ))
+        Err(alloc::format!("{} outside one Limine range phys=0x{:X} bytes={}", label, phys, bytes))
     }
 }
 

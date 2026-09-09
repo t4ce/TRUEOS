@@ -446,8 +446,8 @@ impl CursorFrameRig {
         else {
             return false;
         };
-        let changed = cursor.relative_pointer_mode != enabled
-            || cursor.center_snap_suppressed == enabled;
+        let changed =
+            cursor.relative_pointer_mode != enabled || cursor.center_snap_suppressed == enabled;
         cursor.relative_pointer_mode = enabled;
         cursor.center_snap_suppressed = !enabled;
         changed

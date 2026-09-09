@@ -437,9 +437,16 @@ async fn end_preparation_session(session_id: u32) -> bool {
         let (filling, retained) = {
             let pipeline = PREPARE_PIPELINE.lock();
             (
-                pipeline.slots.iter().any(|slot| slot.state == PrepareSlotState::Filling),
-                pipeline.slots.iter().any(|slot| matches!(slot.state,
-                    PrepareSlotState::Consuming | PrepareSlotState::Quarantined)),
+                pipeline
+                    .slots
+                    .iter()
+                    .any(|slot| slot.state == PrepareSlotState::Filling),
+                pipeline.slots.iter().any(|slot| {
+                    matches!(
+                        slot.state,
+                        PrepareSlotState::Consuming | PrepareSlotState::Quarantined
+                    )
+                }),
             )
         };
         if retained {

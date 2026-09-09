@@ -121,8 +121,7 @@ pub fn map_ram_region_at(
 
     // `VirtAddr::new` must never see a non-canonical value. TRUEOS currently
     // runs four-level paging, so accept the ordinary x86-64 canonical halves.
-    let canonical = virt_base <= 0x0000_7FFF_FFFF_FFFF
-        || virt_base >= 0xFFFF_8000_0000_0000;
+    let canonical = virt_base <= 0x0000_7FFF_FFFF_FFFF || virt_base >= 0xFFFF_8000_0000_0000;
     if !canonical {
         return Err(MapError::InvalidArgs);
     }

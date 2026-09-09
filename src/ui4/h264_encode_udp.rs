@@ -303,7 +303,8 @@ fn enqueue_access_unit(session_id: u32, access_unit: EncodedAccessUnit) -> bool 
     {
         pipeline.producer_dropped_access_units =
             pipeline.producer_dropped_access_units.saturating_add(1);
-        pipeline.producer_dropped_bytes = pipeline.producer_dropped_bytes
+        pipeline.producer_dropped_bytes = pipeline
+            .producer_dropped_bytes
             .saturating_add(access_unit.bytes.len());
         let full = pipeline.phase == EgressSessionPhase::Ready;
         drop(pipeline);

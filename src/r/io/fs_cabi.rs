@@ -361,7 +361,9 @@ pub extern "C" fn trueos_cabi_sleep_ms(ms: u64) {
 
 fn sleep_chunks(mut remaining: u64) -> impl Iterator<Item = u64> {
     core::iter::from_fn(move || {
-        if remaining == 0 { return None; }
+        if remaining == 0 {
+            return None;
+        }
         let chunk = remaining.min(crate::hv::vmcall::MAX_GUEST_SLEEP_MS);
         remaining -= chunk;
         Some(chunk)

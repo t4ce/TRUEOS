@@ -328,10 +328,7 @@ fn rdp_tablet_source(device_id: u16) -> crate::ui4::Ui4CursorSource {
     }
 }
 
-fn control_reply(
-    device_id: u16,
-    modes: &Vec<DevicePointerMode, DEVICE_STATE_CAP>,
-) -> [u8; 8] {
+fn control_reply(device_id: u16, modes: &Vec<DevicePointerMode, DEVICE_STATE_CAP>) -> [u8; 8] {
     let mut reply = [0u8; 8];
     reply[..4].copy_from_slice(CONTROL_MAGIC);
     reply[4] = VERSION;
@@ -350,12 +347,21 @@ fn handle_packet(
 ) -> Option<u16> {
     let received = RX_SEEN.fetch_add(1, Ordering::Relaxed) + 1;
     if received <= 4 {
-        crate::log_important!("hid-udp: received bytes={} count={} at_ms={}\n", data.len(), received, Instant::now().as_millis());
+        crate::log_important!(
+            "hid-udp: received bytes={} count={} at_ms={}\n",
+            data.len(),
+            received,
+            Instant::now().as_millis()
+        );
     }
     let Some(frame) = parse_frame(data) else {
         let n = RX_BAD.fetch_add(1, Ordering::Relaxed) + 1;
         if n <= 8 || n.is_power_of_two() {
-            crate::log_important!("hid-udp: ignored bad packet bytes={} bad_count={}\n", data.len(), n);
+            crate::log_important!(
+                "hid-udp: ignored bad packet bytes={} bad_count={}\n",
+                data.len(),
+                n
+            );
         }
         return None;
     };
@@ -379,7 +385,11 @@ fn handle_packet(
 
 #[task]
 pub async fn hid_udp_srv_task() {
-    crate::log_important!("hid-udp: task polling at_ms={} readiness=0x{:08x}\n", Instant::now().as_millis(), crate::r::readiness::mask());
+    crate::log_important!(
+        "hid-udp: task polling at_ms={} readiness=0x{:08x}\n",
+        Instant::now().as_millis(),
+        crate::r::readiness::mask()
+    );
     crate::r::readiness::wait_for(crate::r::readiness::NET_ANY_CONFIGURED).await;
 
     loop {
@@ -410,7 +420,15 @@ pub async fn hid_udp_srv_task() {
                 last_status_ms = now_ms;
                 status_count = status_count.saturating_add(1);
                 if status_count <= 3 || status_count.is_power_of_two() {
-                    crate::log_important!("hid-udp: status bound={:?} received={} accepted={} stale={} invalid={} at_ms={}\n", handle, RX_SEEN.load(Ordering::Relaxed), RX_ACCEPTED.load(Ordering::Relaxed), RX_STALE.load(Ordering::Relaxed), RX_BAD.load(Ordering::Relaxed), now_ms);
+                    crate::log_important!(
+                        "hid-udp: status bound={:?} received={} accepted={} stale={} invalid={} at_ms={}\n",
+                        handle,
+                        RX_SEEN.load(Ordering::Relaxed),
+                        RX_ACCEPTED.load(Ordering::Relaxed),
+                        RX_STALE.load(Ordering::Relaxed),
+                        RX_BAD.load(Ordering::Relaxed),
+                        now_ms
+                    );
                 }
             }
             if let Some(ev) = vnet.pop_event() {
@@ -435,7 +453,9 @@ pub async fn hid_udp_srv_task() {
                         });
                     }
                     v::vnet::Event::UdpPacket {
-                        handle: h, from, data
+                        handle: h,
+                        from,
+                        data,
                     } if handle == Some(h) => {
                         if let Some(device_id) =
                             handle_packet(data.as_slice(), &mut seqs, &mut modes)
@@ -449,7 +469,9 @@ pub async fn hid_udp_srv_task() {
                         }
                     }
                     v::vnet::Event::UdpPacketV6 {
-                        handle: h, from, data
+                        handle: h,
+                        from,
+                        data,
                     } if handle == Some(h) => {
                         if let Some(device_id) =
                             handle_packet(data.as_slice(), &mut seqs, &mut modes)

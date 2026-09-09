@@ -351,8 +351,7 @@ fn add_window_stamp_damage(
     damage: &mut crate::intel::CompositionDamageRegion,
     window: Slot4WindowStamp,
 ) {
-    let (screen_width, screen_height) =
-        super::output_dimensions().unwrap_or((2560, 1440));
+    let (screen_width, screen_height) = super::output_dimensions().unwrap_or((2560, 1440));
     let left = i64::from(window.placement.x).clamp(0, i64::from(screen_width));
     let top = i64::from(window.placement.y).clamp(0, i64::from(screen_height));
     let right = i64::from(window.placement.x)

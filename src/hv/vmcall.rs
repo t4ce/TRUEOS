@@ -2383,15 +2383,26 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_UI4_SCENE_FRAME_PRIMARY_ACTIVATION => {
-            let rc = crate::ui4::blueprint_text::trueos_cabi_ui4_scene_frame_primary_activation(arg0 as u32, arg1 as u32);
+            let rc = crate::ui4::blueprint_text::trueos_cabi_ui4_scene_frame_primary_activation(
+                arg0 as u32,
+                arg1 as u32,
+            );
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_UI4_SCENE_FRAME_GET_POSITION => {
             let mut xy = [0i32; 2];
-            let rc = unsafe { crate::ui4::blueprint_text::trueos_cabi_ui4_scene_frame_get_position(arg0 as u32, xy.as_mut_ptr()) };
-            if rc == 0 { write_record_response(vm_id, seq, 0, &xy); }
-            else { write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0); }
+            let rc = unsafe {
+                crate::ui4::blueprint_text::trueos_cabi_ui4_scene_frame_get_position(
+                    arg0 as u32,
+                    xy.as_mut_ptr(),
+                )
+            };
+            if rc == 0 {
+                write_record_response(vm_id, seq, 0, &xy);
+            } else {
+                write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            }
             DispatchOutcome::Resume
         }
         OP_BP_UI4_SCENE_FRAME_SET_POSITION => {
@@ -2409,7 +2420,8 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 -1 // Match the scene ABI's invalid-argument status; never truncate RGB.
             } else {
                 crate::ui4::blueprint_text::trueos_cabi_ui4_scene_set_display_bottom_color(
-                    arg0 as u32, arg1 as u32,
+                    arg0 as u32,
+                    arg1 as u32,
                 )
             };
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
@@ -2452,15 +2464,26 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         OP_BP_UI4_SCENE_FRAME_OPEN_LAYERED_V1 => {
             let (x, y) = unpack_i32_pair(arg0);
             let (width, height) = unpack_u32_pair(arg1);
-            let window = request_payload(vm_id, req_len).filter(|payload| payload.len() == 4)
-                .map(|payload| crate::ui4::blueprint_text::trueos_cabi_ui4_scene_frame_open_layered_v1(
-                    x, y, width, height, u32::from_le_bytes(payload.try_into().unwrap()),
-                )).unwrap_or(0);
+            let window = request_payload(vm_id, req_len)
+                .filter(|payload| payload.len() == 4)
+                .map(|payload| {
+                    crate::ui4::blueprint_text::trueos_cabi_ui4_scene_frame_open_layered_v1(
+                        x,
+                        y,
+                        width,
+                        height,
+                        u32::from_le_bytes(payload.try_into().unwrap()),
+                    )
+                })
+                .unwrap_or(0);
             write_response(vm_id, seq, STATUS_OK, window as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_UI4_SCENE_FRAME_LAYER_V1 => {
-            let target = crate::ui4::blueprint_text::trueos_cabi_ui4_scene_frame_layer_v1(arg0 as u32, arg1 as u32);
+            let target = crate::ui4::blueprint_text::trueos_cabi_ui4_scene_frame_layer_v1(
+                arg0 as u32,
+                arg1 as u32,
+            );
             write_response(vm_id, seq, STATUS_OK, target as u64, 0);
             DispatchOutcome::Resume
         }

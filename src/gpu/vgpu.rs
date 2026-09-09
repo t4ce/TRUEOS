@@ -1820,7 +1820,11 @@ pub(crate) fn write_buffer(
             BufferBacking::Dma { virt, .. } => *virt,
             BufferBacking::GuestPages { .. } => return Err(VgpuError::Unsupported),
         };
-        let released = if bytes.is_empty() { 0 } else { release_sampled_buffer(record)? };
+        let released = if bytes.is_empty() {
+            0
+        } else {
+            release_sampled_buffer(record)?
+        };
         if !bytes.is_empty() {
             unsafe {
                 core::ptr::copy_nonoverlapping(bytes.as_ptr(), virt.add(offset), bytes.len());
@@ -1919,7 +1923,9 @@ fn retained_mesh_topology(
     use crate::intel::render::ResidentScenePrimitiveTopology;
 
     match topology {
-        v::vgpu::RETAINED_TOPOLOGY_CUBE_PATCHLIST_1 => Some(ResidentScenePrimitiveTopology::CubePatchList1),
+        v::vgpu::RETAINED_TOPOLOGY_CUBE_PATCHLIST_1 => {
+            Some(ResidentScenePrimitiveTopology::CubePatchList1)
+        }
         // Zero was the reserved field in the original descriptor ABI, whose
         // only legal retained topology was a triangle list.
         0 | v::vgpu::PRIMITIVE_TOPOLOGY_TRIANGLE_LIST => {
@@ -2927,8 +2933,7 @@ pub(crate) fn submit_ui4_indexed_draw(
     queue_handle: QueueHandle,
     draw: Ui4IndexedDrawDescriptor,
 ) -> Result<Ui4SurfaceIndexedCompletion, VgpuError> {
-    if !ui4_single_indexed_topology_valid(draw.topology, draw.index_count)
-        || draw.base_vertex != 0
+    if !ui4_single_indexed_topology_valid(draw.topology, draw.index_count) || draw.base_vertex != 0
     {
         return Err(VgpuError::Unsupported);
     }
@@ -2963,7 +2968,10 @@ pub(crate) fn submit_ui4_indexed_draw(
             return Err(VgpuError::InvalidHandle);
         }
         let textured = pipeline.package_digest == SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64;
-        if draw.retain_texture && textured && lookup_buffer(device, draw.sampled_texture)?.usage != BUFFER_USAGE_MAP_WRITE {
+        if draw.retain_texture
+            && textured
+            && lookup_buffer(device, draw.sampled_texture)?.usage != BUFFER_USAGE_MAP_WRITE
+        {
             return Err(VgpuError::Unsupported);
         }
         if textured && draw.sampler_flags != (SAMPLER_ADDRESS_U_REPEAT | SAMPLER_ADDRESS_V_REPEAT) {
@@ -3070,50 +3078,68 @@ pub(crate) fn submit_ui4_indexed_draw(
                 vertices.push(attributes);
             }
             let texture = if textured {
-                let shape = [draw.texture_width, draw.texture_height, draw.texture_pitch, draw.sampler_flags];
-                let cached = lookup_buffer(device, draw.sampled_texture)?.sampled.as_ref()
-                    .filter(|cache| draw.retain_texture && cache.shape == shape).map(|cache| Arc::clone(&cache.resident));
-                if let Some(cached) = cached { Some(cached) } else {
-                let released = release_sampled_buffer(lookup_buffer_mut(device, draw.sampled_texture)?)?;
-                device.memory_used = device.memory_used.saturating_sub(released);
-                let texture_record = lookup_buffer(device, draw.sampled_texture)?;
-                let texture_bytes =
-                    usize::try_from(u64::from(draw.texture_pitch) * u64::from(draw.texture_height))
-                        .map_err(|_| VgpuError::Unsupported)?;
-                if texture_record.usage & BUFFER_USAGE_MAP_WRITE == 0
-                    || draw.texture_width == 0
-                    || draw.texture_height == 0
-                    || draw.texture_pitch < draw.texture_width.saturating_mul(4)
-                    || draw.texture_pitch % 4 != 0
-                    || texture_bytes > texture_record.bytes
-                {
-                    return Err(VgpuError::Unsupported);
-                }
-                if device.memory_used.saturating_add(texture_bytes) > device.quota.memory_bytes {
-                    return Err(VgpuError::QuotaExceeded);
-                }
-                let texture_virt = match texture_record.backing {
-                    BufferBacking::Dma { virt, .. } => virt,
-                    BufferBacking::GuestPages { .. } => return Err(VgpuError::Unsupported),
-                };
-                crate::intel::dma_flush(unsafe { texture_virt.add(0) }, texture_bytes);
-                let texture_bytes =
-                    unsafe { core::slice::from_raw_parts(texture_virt, texture_bytes) };
-                let resident = Arc::new(crate::intel::render::create_resident_sampled_rgba8_texture(
-                        draw.texture_width,
-                        draw.texture_height,
-                        draw.texture_pitch,
-                        draw.sampler_flags,
-                        texture_bytes,
+                let shape = [
+                    draw.texture_width,
+                    draw.texture_height,
+                    draw.texture_pitch,
+                    draw.sampler_flags,
+                ];
+                let cached = lookup_buffer(device, draw.sampled_texture)?
+                    .sampled
+                    .as_ref()
+                    .filter(|cache| draw.retain_texture && cache.shape == shape)
+                    .map(|cache| Arc::clone(&cache.resident));
+                if let Some(cached) = cached {
+                    Some(cached)
+                } else {
+                    let released =
+                        release_sampled_buffer(lookup_buffer_mut(device, draw.sampled_texture)?)?;
+                    device.memory_used = device.memory_used.saturating_sub(released);
+                    let texture_record = lookup_buffer(device, draw.sampled_texture)?;
+                    let texture_bytes = usize::try_from(
+                        u64::from(draw.texture_pitch) * u64::from(draw.texture_height),
                     )
-                    .map_err(|_| VgpuError::OutOfMemory)?);
-                if draw.retain_texture {
-                lookup_buffer_mut(device, draw.sampled_texture)?.sampled = Some(SampledBufferCache {
-                    shape, bytes: texture_bytes.len(), resident: Arc::clone(&resident),
-                });
-                device.memory_used = device.memory_used.saturating_add(texture_bytes.len());
-                }
-                Some(resident)
+                    .map_err(|_| VgpuError::Unsupported)?;
+                    if texture_record.usage & BUFFER_USAGE_MAP_WRITE == 0
+                        || draw.texture_width == 0
+                        || draw.texture_height == 0
+                        || draw.texture_pitch < draw.texture_width.saturating_mul(4)
+                        || draw.texture_pitch % 4 != 0
+                        || texture_bytes > texture_record.bytes
+                    {
+                        return Err(VgpuError::Unsupported);
+                    }
+                    if device.memory_used.saturating_add(texture_bytes) > device.quota.memory_bytes
+                    {
+                        return Err(VgpuError::QuotaExceeded);
+                    }
+                    let texture_virt = match texture_record.backing {
+                        BufferBacking::Dma { virt, .. } => virt,
+                        BufferBacking::GuestPages { .. } => return Err(VgpuError::Unsupported),
+                    };
+                    crate::intel::dma_flush(unsafe { texture_virt.add(0) }, texture_bytes);
+                    let texture_bytes =
+                        unsafe { core::slice::from_raw_parts(texture_virt, texture_bytes) };
+                    let resident = Arc::new(
+                        crate::intel::render::create_resident_sampled_rgba8_texture(
+                            draw.texture_width,
+                            draw.texture_height,
+                            draw.texture_pitch,
+                            draw.sampler_flags,
+                            texture_bytes,
+                        )
+                        .map_err(|_| VgpuError::OutOfMemory)?,
+                    );
+                    if draw.retain_texture {
+                        lookup_buffer_mut(device, draw.sampled_texture)?.sampled =
+                            Some(SampledBufferCache {
+                                shape,
+                                bytes: texture_bytes.len(),
+                                resident: Arc::clone(&resident),
+                            });
+                        device.memory_used = device.memory_used.saturating_add(texture_bytes.len());
+                    }
+                    Some(resident)
                 }
             } else {
                 None
@@ -3153,7 +3179,11 @@ pub(crate) fn submit_ui4_indexed_draw(
     )
     .ok_or(VgpuError::Unsupported)?;
     let mesh = match if sampled_texture.is_some() {
-        crate::intel::render::create_resident_textured_indexed_mesh(&vertices, &indices, draw.topology)
+        crate::intel::render::create_resident_textured_indexed_mesh(
+            &vertices,
+            &indices,
+            draw.topology,
+        )
     } else {
         let positions = vertices
             .iter()
@@ -3203,14 +3233,19 @@ pub(crate) fn submit_ui4_indexed_draw(
     }
     let rendered = if draw.load_color {
         crate::intel::render::render_resident_indexed_scene_frame_premultiplied_direct_to_surface(
-            core::slice::from_ref(&scene_draw), None, destination, diagnostic_logs,
+            core::slice::from_ref(&scene_draw),
+            None,
+            destination,
+            diagnostic_logs,
         )
-    } else { crate::intel::render::render_resident_triangle_scene_frame_premultiplied_with_opaque_depth_direct_to_surface(
+    } else {
+        crate::intel::render::render_resident_triangle_scene_frame_premultiplied_with_opaque_depth_direct_to_surface(
         core::slice::from_ref(&scene_draw),
         Some(draw.clear_rgba8_srgb.to_le_bytes()),
         destination,
         diagnostic_logs,
-    ) };
+    )
+    };
     let render_error = rendered.as_ref().err().copied();
     let transient_busy = matches!(render_error, Some("render-busy" | "render-storage-busy"));
     if let Some(reason) = render_error {
@@ -3240,8 +3275,11 @@ pub(crate) fn submit_ui4_indexed_draw(
     };
     // The buffer owns the immutable resident texture. The staged Arc pins it
     // through completion; writes and destruction invalidate only after retirement.
-    let released_texture = (rendered.is_ok() || transient_busy) && (draw.retain_texture ||
-        sampled_texture.as_deref().is_none_or(crate::intel::render::release_resident_sampled_texture));
+    let released_texture = (rendered.is_ok() || transient_busy)
+        && (draw.retain_texture
+            || sampled_texture
+                .as_deref()
+                .is_none_or(crate::intel::render::release_resident_sampled_texture));
     if transient_busy && released_mesh && released_texture {
         rollback_indexed_submission_lease(principal, device_handle, queue_handle, draw.surface);
         return Err(VgpuError::Busy);
@@ -3613,14 +3651,17 @@ pub(crate) fn submit_ui4_indexed_batch(
     let scene_draws: Vec<_> = meshes
         .iter()
         .zip(indexed.iter())
-        .map(|(mesh, (_, rgba, _, topology, point_width_px))| crate::intel::render::ResidentSceneDraw {
-            mesh,
-            rgba: rgba.to_le_bytes(),
-            sampled_texture: None,
-            fragment_contract: crate::intel::render::ResidentSceneFragmentContract::ConstantRgba,
-            viewport_translation_px: [0.0, 0.0],
-            topology: *topology,
-            point_width_px: *point_width_px,
+        .map(|(mesh, (_, rgba, _, topology, point_width_px))| {
+            crate::intel::render::ResidentSceneDraw {
+                mesh,
+                rgba: rgba.to_le_bytes(),
+                sampled_texture: None,
+                fragment_contract:
+                    crate::intel::render::ResidentSceneFragmentContract::ConstantRgba,
+                viewport_translation_px: [0.0, 0.0],
+                topology: *topology,
+                point_width_px: *point_width_px,
+            }
         })
         .collect();
     let rendered =
@@ -3843,7 +3884,9 @@ fn copy_retained_static_parts(
     let mut indices = Vec::with_capacity(draws.len());
     let mut vertex_counts = Vec::with_capacity(draws.len());
     for draw in draws {
-        if !retained_static_line_index_count_valid(draw.index_count) { return Err(VgpuError::Unsupported); }
+        if !retained_static_line_index_count_valid(draw.index_count) {
+            return Err(VgpuError::Unsupported);
+        }
         let index_start = index_offset
             .checked_add(
                 usize::try_from(draw.first_index)
@@ -3853,13 +3896,18 @@ fn copy_retained_static_parts(
             )
             .ok_or(VgpuError::Unsupported)?;
         let index_bytes = draw.index_count as usize * 4; // admission bounds this to 128 indices
-        let index_end = index_start.checked_add(index_bytes).ok_or(VgpuError::Unsupported)?;
+        let index_end = index_start
+            .checked_add(index_bytes)
+            .ok_or(VgpuError::Unsupported)?;
         if index_end > index_record.bytes {
             return Err(VgpuError::Unsupported);
         }
         crate::intel::dma_flush(unsafe { index_virt.add(index_start) }, index_bytes);
         let raw = unsafe { core::slice::from_raw_parts(index_virt.add(index_start), index_bytes) };
-        let part: Vec<u32> = raw.chunks_exact(4).map(|v| u32::from_le_bytes(v.try_into().unwrap())).collect();
+        let part: Vec<u32> = raw
+            .chunks_exact(4)
+            .map(|v| u32::from_le_bytes(v.try_into().unwrap()))
+            .collect();
         vertex_counts.push(
             part.iter()
                 .copied()
@@ -3955,13 +4003,22 @@ pub(crate) fn submit_ui4_retained_frame(
         let bytes_len = scene.seed_count as usize * 64;
         let offset = usize::try_from(scene.seed_offset).map_err(|_| VgpuError::Unsupported)?;
         let mut bytes = alloc::vec![0u8; bytes_len];
-        read_buffer(principal, device_handle, BufferHandle::from_raw(scene.seed_buffer), offset, &mut bytes)?;
+        read_buffer(
+            principal,
+            device_handle,
+            BufferHandle::from_raw(scene.seed_buffer),
+            offset,
+            &mut bytes,
+        )?;
         let seeds = decode_retained_scene_seeds(&bytes).ok_or(VgpuError::Unsupported)?;
         (seeds, Some(scene.draws[..scene.draw_count as usize].to_vec()))
     } else {
         let count = submit.seed_count as usize;
-        if count == 0 || count > v::vgpu::MAX_RETAINED_TRANSFORM_SEEDS
-            || submit.seeds[count..].iter().any(|seed| *seed != v::vgpu::RetainedTransformSeed::default())
+        if count == 0
+            || count > v::vgpu::MAX_RETAINED_TRANSFORM_SEEDS
+            || submit.seeds[count..]
+                .iter()
+                .any(|seed| *seed != v::vgpu::RetainedTransformSeed::default())
         {
             return Err(VgpuError::Unsupported);
         }
@@ -3969,7 +4026,9 @@ pub(crate) fn submit_ui4_retained_frame(
     };
     let static_draw_count = submit.static_draw_count as usize;
     if static_draw_count > v::vgpu::MAX_RETAINED_STATIC_DRAWS
-        || submit.static_draws[static_draw_count..].iter().any(|draw| *draw != v::vgpu::IndexedBatchDrawV2::default())
+        || submit.static_draws[static_draw_count..]
+            .iter()
+            .any(|draw| *draw != v::vgpu::IndexedBatchDrawV2::default())
     {
         return Err(VgpuError::Unsupported);
     }
@@ -4120,7 +4179,8 @@ pub(crate) fn submit_ui4_retained_frame(
         // V3 carries a V2 material envelope even for the dedicated baked cube.
         // Only its untouched default is allowed; this shader has no material API.
         let material_parameters = if scene.is_some()
-            && resident.topology() == crate::intel::render::ResidentScenePrimitiveTopology::CubePatchList1
+            && resident.topology()
+                == crate::intel::render::ResidentScenePrimitiveTopology::CubePatchList1
             && material_parameters == Some(v::vgpu::RetainedMaterialParameters::default())
         {
             None
@@ -6546,8 +6606,12 @@ fn device_has_operation_leases(device: &VirtualDevice) -> bool {
 }
 
 fn release_sampled_buffer(record: &mut BufferRecord) -> Result<usize, VgpuError> {
-    let Some(cache) = record.sampled.as_ref() else { return Ok(0); };
-    if Arc::strong_count(&cache.resident) != 1 { return Err(VgpuError::Busy); }
+    let Some(cache) = record.sampled.as_ref() else {
+        return Ok(0);
+    };
+    if Arc::strong_count(&cache.resident) != 1 {
+        return Err(VgpuError::Busy);
+    }
     if !crate::intel::render::release_resident_sampled_texture(&cache.resident) {
         return Err(VgpuError::DeviceLost);
     }

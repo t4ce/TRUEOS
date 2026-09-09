@@ -148,10 +148,9 @@ fn service_active_picker(picker: &mut ActiveColorPicker) {
 
 fn open_picker(request: ColorPickerOpenRequest) -> Result<ActiveColorPicker, &'static str> {
     let output = OutputId::from_slot(0).ok_or("output-unavailable")?;
-    let (screen_width, screen_height) =
-        crate::intel::active_scanout_dimensions()
-            .or_else(crate::virtio_gpu_logo::output_dimensions)
-            .ok_or("scanout-unavailable")?;
+    let (screen_width, screen_height) = crate::intel::active_scanout_dimensions()
+        .or_else(crate::virtio_gpu_logo::output_dimensions)
+        .ok_or("scanout-unavailable")?;
     if screen_width == 0 || screen_height == 0 {
         return Err("scanout-empty");
     }

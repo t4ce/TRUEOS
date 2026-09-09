@@ -32,8 +32,6 @@ pub mod vled {
 pub mod alsa_compat;
 pub mod borrow;
 pub mod bp_abi;
-#[doc(hidden)]
-pub mod worker_abi;
 pub mod calculator_base;
 pub mod env;
 pub mod ffi;
@@ -60,6 +58,8 @@ pub mod vnet;
 pub mod vnetfs;
 pub mod vshell;
 pub mod vsys;
+#[doc(hidden)]
+pub mod worker_abi;
 
 #[macro_export]
 macro_rules! shell_line {

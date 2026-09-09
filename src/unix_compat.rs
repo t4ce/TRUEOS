@@ -456,7 +456,12 @@ mod tests {
 
     #[test]
     fn thread_lifecycle_imports_are_not_advertised_as_functional() {
-        for name in ["pthread_create", "pthread_join", "pthread_detach", "pthread_kill"] {
+        for name in [
+            "pthread_create",
+            "pthread_join",
+            "pthread_detach",
+            "pthread_kill",
+        ] {
             assert!(super::is_unix_import(name), "{name} lost Unix classification");
             assert!(super::unsupported_unix_import_reason(name).is_some());
             assert!(super::resolve_import(name).is_none());

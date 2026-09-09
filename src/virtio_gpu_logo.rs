@@ -12,8 +12,13 @@ static EMULATOR_BACKGROUND: AtomicU64 = AtomicU64::new(0);
 static QUARANTINE_GPU_DMA: AtomicU8 = AtomicU8::new(0);
 
 pub(crate) fn set_background_color(r: u8, g: u8, b: u8) -> bool {
-    if output_dimensions().is_none() { return false; }
-    EMULATOR_BACKGROUND.store((1u64 << 32) | (u64::from(r) << 16) | (u64::from(g) << 8) | u64::from(b), Ordering::Release);
+    if output_dimensions().is_none() {
+        return false;
+    }
+    EMULATOR_BACKGROUND.store(
+        (1u64 << 32) | (u64::from(r) << 16) | (u64::from(g) << 8) | u64::from(b),
+        Ordering::Release,
+    );
     true
 }
 
@@ -291,7 +296,9 @@ impl DmaRegion {
 
 impl Drop for DmaRegion {
     fn drop(&mut self) {
-        if QUARANTINE_GPU_DMA.load(Ordering::Acquire) != 0 { return; }
+        if QUARANTINE_GPU_DMA.load(Ordering::Acquire) != 0 {
+            return;
+        }
         if self.len == 0 || self.virt.is_null() {
             return;
         }
@@ -507,7 +514,9 @@ impl Drop for VirtioGpuLogo {
     fn drop(&mut self) {
         // Reset acknowledgement stops device DMA before queue/request storage
         // is freed. An unresponsive device keeps its allocations quarantined.
-        unsafe { core::ptr::write_volatile(&mut (*self.common.as_ptr()).device_status, 0); }
+        unsafe {
+            core::ptr::write_volatile(&mut (*self.common.as_ptr()).device_status, 0);
+        }
         if !wait::spin_until_timeout_no_exec(1000, || unsafe {
             core::ptr::read_volatile(&(*self.common.as_ptr()).device_status) == 0
         }) {
@@ -755,7 +764,9 @@ impl VirtioGpuLogo {
     }
 
     fn ctrl_submit_desc_chain(&mut self, req_len: usize) -> bool {
-        if self.failed { return false; }
+        if self.failed {
+            return false;
+        }
         let ok = Self::submit_desc_chain_on(
             self.notify,
             self.notify_mult,
@@ -923,10 +934,14 @@ impl EmulatorUi {
 
         let compositor = if gpu.virgl {
             virgl::Compositor::new(&mut gpu, scanout_id, width, height, &scanout_backing)
-        } else { None };
+        } else {
+            None
+        };
         if compositor.is_some() {
             EMULATOR_OUTPUT.store((u64::from(width) << 32) | u64::from(height), Ordering::Release);
-            crate::r::readiness::set(crate::r::readiness::GFX_VIRGL_READY | crate::r::readiness::UI4_COMPOSITOR_READY);
+            crate::r::readiness::set(
+                crate::r::readiness::GFX_VIRGL_READY | crate::r::readiness::UI4_COMPOSITOR_READY,
+            );
         }
         Some(Self {
             gpu,
@@ -1018,8 +1033,6 @@ impl EmulatorUi {
             self.stamp_deadline_ms = None;
         }
     }
-
-
 }
 
 #[derive(Clone, Copy)]
@@ -1233,7 +1246,9 @@ async fn fallback_logo_service_task() {
                 if ui.gpu.failed {
                     EMULATOR_OUTPUT.store(0, Ordering::Release);
                     crate::log_error!(target: "gfx"; "virgl-ui4: device failed; DMA retained, submissions stopped\n");
-                    loop { Timer::after(EmbassyDuration::from_secs(60)).await; }
+                    loop {
+                        Timer::after(EmbassyDuration::from_secs(60)).await;
+                    }
                 }
                 let old_stamp = (ui.stamped_generation, ui.stamp_deadline_ms);
                 ui.service_live_update_stamp();
@@ -1596,7 +1611,9 @@ fn negotiate_modern(common: core::ptr::NonNull<VirtioPciCommonCfg>) -> Option<bo
         let dev_hi = core::ptr::read_volatile(&(*c).device_feature) as u64;
         let dev_features = dev_lo | (dev_hi << 32);
 
-        if dev_features & VIRTIO_F_VERSION_1 == 0 { return None; }
+        if dev_features & VIRTIO_F_VERSION_1 == 0 {
+            return None;
+        }
         let guest_features = dev_features & (VIRTIO_F_VERSION_1 | 1);
 
         core::ptr::write_volatile(&mut (*c).driver_feature_select, 0);

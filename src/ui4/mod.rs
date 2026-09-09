@@ -6,10 +6,10 @@
 pub(crate) mod blueprint_text;
 mod color_picker;
 mod compositor_service;
-pub(crate) mod emulator_paint;
 mod context_menu;
 mod cursor_frame_inout;
 mod damage;
+pub(crate) mod emulator_paint;
 mod frame_pool;
 mod gpgpu_preview_consumer;
 mod gpgpu_svg_probe_consumer;
@@ -74,10 +74,9 @@ pub(crate) use cursor_frame_inout::{
     CursorFrameKey, GlobalKeyboardDisposition, GlobalKeyboardHookId, Ui4CursorIcon,
     Ui4CursorSource, Ui4CursorStep, center_snapped_frame_for_source, cursor_color,
     cursor_presentation_for_source, register_global_keyboard_hook, selected_frame,
-    selected_frame_for_source, selection_strips, set_window_center_snapped_mouse,
-    set_relative_pointer_mode_for_source,
-    set_window_cursor_icon, set_window_cursor_step, set_window_custom_cursor,
-    suppress_center_snap_for_source, unregister_global_keyboard_hook,
+    selected_frame_for_source, selection_strips, set_relative_pointer_mode_for_source,
+    set_window_center_snapped_mouse, set_window_cursor_icon, set_window_cursor_step,
+    set_window_custom_cursor, suppress_center_snap_for_source, unregister_global_keyboard_hook,
 };
 pub(crate) use damage::{DamageRect, DamageRegion};
 pub(crate) use frame_pool::{
@@ -115,7 +114,9 @@ pub(crate) use screenshot::{
     COMPACT_WINDOW_GRID_EXTENT, COMPACT_WINDOW_OBSERVATION_MAX_PNG_BYTES,
     capture_compact_window_observation, request_wd_postblend_capture, ui4_screenshot_service_task,
 };
-pub(crate) use slot4_service::{software_cursor_rects as interaction_overlay_rects, ui4_slot4_service_task};
+pub(crate) use slot4_service::{
+    software_cursor_rects as interaction_overlay_rects, ui4_slot4_service_task,
+};
 pub(crate) use start_button::{request_start_button_reveal, ui4_start_button_service_task};
 pub(crate) use video_frame::{
     DecodedNv12Source, DecodedVideoConversionProbeReport, DecodedVideoConversionReport,
@@ -842,8 +843,14 @@ pub(crate) fn output_dimensions() -> Option<(u32, u32)> {
 pub(crate) fn emulator_windows() -> (u64, alloc::vec::Vec<WindowSnapshot>) {
     let output = OutputId::from_slot(0).unwrap();
     let (revision, mut windows) = application_windows_for_output_with_revision(output);
-    windows.extend(visible_windows_for_output(output).into_iter().filter(|w| !w.plane.is_application()));
-    windows.sort_by_key(|w| (w.plane.slot(), w.presentation_placement.z, w.id.raw(), u8::MAX - w.layer));
+    windows.extend(
+        visible_windows_for_output(output)
+            .into_iter()
+            .filter(|w| !w.plane.is_application()),
+    );
+    windows.sort_by_key(|w| {
+        (w.plane.slot(), w.presentation_placement.z, w.id.raw(), u8::MAX - w.layer)
+    });
     (revision, windows)
 }
 

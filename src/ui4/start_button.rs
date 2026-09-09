@@ -159,26 +159,26 @@ fn initialize_start_button() -> Result<ActiveStartButton, &'static str> {
     let glyph_alpha = if crate::virtio_gpu_logo::output_dimensions().is_some() {
         alloc::vec![0; width as usize * height as usize]
     } else {
-    let glyph = crate::intel::gpu_font::render_centered_text_sprite_readback(
-        "§",
-        crate::intel::gpu_font::GpuFontFace::Default,
-        width,
-        height,
-        glyph_padding,
-    )?;
-    if glyph.width != width || glyph.height != height {
-        return Err("font-sprite-extent-mismatch");
-    }
-    let glyph_alpha = glyph
-        .pixels
-        .chunks_exact(4)
-        .map(|pixel| pixel[3])
-        .collect::<Vec<_>>();
-    if glyph_alpha.len() != width as usize * height as usize
-        || !glyph_alpha.iter().any(|alpha| *alpha != 0)
-    {
-        return Err("font-sprite-empty");
-    }
+        let glyph = crate::intel::gpu_font::render_centered_text_sprite_readback(
+            "§",
+            crate::intel::gpu_font::GpuFontFace::Default,
+            width,
+            height,
+            glyph_padding,
+        )?;
+        if glyph.width != width || glyph.height != height {
+            return Err("font-sprite-extent-mismatch");
+        }
+        let glyph_alpha = glyph
+            .pixels
+            .chunks_exact(4)
+            .map(|pixel| pixel[3])
+            .collect::<Vec<_>>();
+        if glyph_alpha.len() != width as usize * height as usize
+            || !glyph_alpha.iter().any(|alpha| *alpha != 0)
+        {
+            return Err("font-sprite-empty");
+        }
 
         glyph_alpha
     };
@@ -422,16 +422,33 @@ fn render_button_sprite(button: &ActiveStartButton, state: ButtonVisualState) ->
         use super::emulator_paint::{Paint, Vertex};
         use alloc::sync::Arc;
         super::emulator_paint::begin(lease);
-        let mesh = crate::graphics::font::tessellate_text_mesh("font", "§", button.height as f32 * 0.8);
+        let mesh =
+            crate::graphics::font::tessellate_text_mesh("font", "§", button.height as f32 * 0.8);
         let bounds = &mesh.summary;
-        let scale = ((button.width as f32 - 4.0) / (bounds.max_x - bounds.min_x)).min((button.height as f32 - 4.0) / (bounds.max_y - bounds.min_y));
+        let scale = ((button.width as f32 - 4.0) / (bounds.max_x - bounds.min_x))
+            .min((button.height as f32 - 4.0) / (bounds.max_y - bounds.min_y));
         let dx = button.width as f32 * 0.5 - (bounds.min_x + bounds.max_x) * scale * 0.5;
         let dy = button.height as f32 * 0.5 - (bounds.min_y + bounds.max_y) * scale * 0.5;
-        let vertices = mesh.indices.iter().map(|i| {
-            let p = mesh.vertices[*i as usize];
-            Vertex { position:[p[0]*scale+dx,p[1]*scale+dy], uv:[0.5,0.5] }
-        }).collect();
-        if !super::emulator_paint::append(lease, alloc::vec![Paint { vertices:Arc::new(vertices), image:None, color:u32::from_le_bytes([foreground[0],foreground[1],foreground[2],255]), source_over:true }]) {
+        let vertices = mesh
+            .indices
+            .iter()
+            .map(|i| {
+                let p = mesh.vertices[*i as usize];
+                Vertex {
+                    position: [p[0] * scale + dx, p[1] * scale + dy],
+                    uv: [0.5, 0.5],
+                }
+            })
+            .collect();
+        if !super::emulator_paint::append(
+            lease,
+            alloc::vec![Paint {
+                vertices: Arc::new(vertices),
+                image: None,
+                color: u32::from_le_bytes([foreground[0], foreground[1], foreground[2], 255]),
+                source_over: true
+            }],
+        ) {
             let _ = super::cancel_frame_buffer(lease);
             return Err(());
         }

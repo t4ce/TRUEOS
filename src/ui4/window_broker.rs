@@ -1229,21 +1229,23 @@ impl WindowBroker {
                 window.pending_resize_extent = None;
                 window.replacement_presentation = None;
                 window.open_transition = None;
-                let transition = if animate && window.background.is_none() && window.state == WindowState::Ready {
-                    super::acquire_published_frame(window.frame)
-                        .ok()
-                        .map(|lease| WindowCloseTransition {
-                            lease,
-                            initial: presentation,
-                            started_ms,
-                            delay_ms,
-                            duration_ms,
-                            puff_per_mille,
-                            retire_frame: retire_frames,
-                        })
-                } else {
-                    None
-                };
+                let transition =
+                    if animate && window.background.is_none() && window.state == WindowState::Ready
+                    {
+                        super::acquire_published_frame(window.frame)
+                            .ok()
+                            .map(|lease| WindowCloseTransition {
+                                lease,
+                                initial: presentation,
+                                started_ms,
+                                delay_ms,
+                                duration_ms,
+                                puff_per_mille,
+                                retire_frame: retire_frames,
+                            })
+                    } else {
+                        None
+                    };
                 if let Some(transition) = transition {
                     window.state = WindowState::Closing;
                     window.placement = presentation;
@@ -1406,7 +1408,9 @@ impl WindowBroker {
             .filter(|(_, window)| {
                 matches!(window.state, WindowState::Ready | WindowState::Closing)
                     && window.placement.visible
-                    && window.background.is_none_or(|background| background.publish_serial != 0)
+                    && window
+                        .background
+                        .is_none_or(|background| background.publish_serial != 0)
                     && window.output == output
             })
             .filter_map(|(slot, window)| window.snapshot(slot))
@@ -1963,8 +1967,13 @@ pub(super) fn commit_window_layered_replacement(
 }
 
 fn commit_window_replacement(
-    owner: WindowOwner, id: WindowId, frame: FrameHandle, background: Option<FrameHandle>,
-    placement: WindowPlacement, resize_epoch: u64, damage: DamageRect,
+    owner: WindowOwner,
+    id: WindowId,
+    frame: FrameHandle,
+    background: Option<FrameHandle>,
+    placement: WindowPlacement,
+    resize_epoch: u64,
+    damage: DamageRect,
 ) -> Result<u64, WindowBrokerError> {
     if !placement.valid() {
         return Err(WindowBrokerError::EmptyExtent);
@@ -1992,7 +2001,9 @@ fn commit_window_replacement(
         WindowState::Closed => return Err(WindowBrokerError::Closed),
         WindowState::Pending | WindowState::Ready => {}
     }
-    if current.background.is_some() != background.is_some() { return Err(WindowBrokerError::InvalidPlane); }
+    if current.background.is_some() != background.is_some() {
+        return Err(WindowBrokerError::InvalidPlane);
+    }
     let previous_placement = current.placement;
     let staged_extent = (placement.width, placement.height);
     let current_extent = (previous_placement.width, previous_placement.height);
@@ -2027,7 +2038,11 @@ fn commit_window_replacement(
     let window = &mut broker.windows[slot];
     if let Some(frame) = background {
         let serial = next_serial(window.background.unwrap().publish_serial);
-        window.background = Some(WindowBackground { frame, publish_serial: serial, ..window.background.unwrap() });
+        window.background = Some(WindowBackground {
+            frame,
+            publish_serial: serial,
+            ..window.background.unwrap()
+        });
     }
     window.frame = frame;
     window.buffering = plan.buffering;
@@ -2710,7 +2725,10 @@ pub(crate) fn publish_window_frame(
     let became_ready = window.state == WindowState::Pending;
     if became_ready {
         if window.pending_resize_extent.is_none() {
-            if window.background.is_none() && !window.first_presentation_emitted && window.replacement_presentation.is_none() {
+            if window.background.is_none()
+                && !window.first_presentation_emitted
+                && window.replacement_presentation.is_none()
+            {
                 window.open_transition =
                     Some(open_transition(window.placement, window.plane, started_ms));
             }
@@ -2777,7 +2795,10 @@ pub(crate) fn publish_window_frames(
         let window = &mut broker.windows[slot];
         if window.state == WindowState::Pending {
             if window.pending_resize_extent.is_none() {
-                if window.background.is_none() && !window.first_presentation_emitted && window.replacement_presentation.is_none() {
+                if window.background.is_none()
+                    && !window.first_presentation_emitted
+                    && window.replacement_presentation.is_none()
+                {
                     window.open_transition =
                         Some(open_transition(window.placement, window.plane, started_ms));
                 }

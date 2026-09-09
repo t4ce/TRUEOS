@@ -260,9 +260,15 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2) -> ParseOutcome {
                 )
                 .as_str(),
             );
-            let pass = result.firmware_status == 0
-                && result.firmware_crc32 == PROBE_EXPECTED_CRC32;
-            print_shell_line(io, if pass { "match=yes result=PASS" } else { "match=no result=FAIL" });
+            let pass = result.firmware_status == 0 && result.firmware_crc32 == PROBE_EXPECTED_CRC32;
+            print_shell_line(
+                io,
+                if pass {
+                    "match=yes result=PASS"
+                } else {
+                    "match=no result=FAIL"
+                },
+            );
         }
         Err(error) => {
             print_shell_line(
@@ -279,22 +285,23 @@ fn run_probe() -> Result<ProbeResult, String> {
     let capture = retained_capture()?;
     let identity = install_retained_identity_map(&capture.ranges)?;
 
-    let system_table = crate::efi::system_table()
-        .ok_or_else(|| String::from("EFI system table unavailable"))?;
+    let system_table =
+        crate::efi::system_table().ok_or_else(|| String::from("EFI system table unavailable"))?;
     let boot_services_raw = system_table.boot_services as u64;
     if boot_services_raw == 0 {
         return Err(String::from("EFI system table BootServices pointer is zero"));
     }
 
-    let boot_services_phys = crate::limine::try_as_phys_addr(boot_services_raw)
-        .ok_or_else(|| alloc::format!("BootServices pointer is not mappable: 0x{boot_services_raw:X}"))?;
+    let boot_services_phys =
+        crate::limine::try_as_phys_addr(boot_services_raw).ok_or_else(|| {
+            alloc::format!("BootServices pointer is not mappable: 0x{boot_services_raw:X}")
+        })?;
     if !limine_range_covered(boot_services_phys, size_of::<EfiBootServicesThroughCrc32>() as u64) {
         return Err(String::from("BootServices table prefix crosses the Limine memory map"));
     }
-    let mapping = crate::pci::mmio::map_limine_struct::<EfiBootServicesThroughCrc32>(
-        boot_services_phys,
-    )
-    .map_err(|error| alloc::format!("BootServices map failed: {error:?}"))?;
+    let mapping =
+        crate::pci::mmio::map_limine_struct::<EfiBootServicesThroughCrc32>(boot_services_phys)
+            .map_err(|error| alloc::format!("BootServices map failed: {error:?}"))?;
     let boot_services = unsafe { core::ptr::read_unaligned(mapping.as_ptr()) };
 
     if boot_services.hdr.signature != EFI_BOOT_SERVICES_SIGNATURE {
@@ -335,9 +342,10 @@ fn run_probe() -> Result<ProbeResult, String> {
         return Err(String::from("CalculateCrc32 code address is outside the Limine memory map"));
     }
 
-    let retained_target = capture.ranges.iter().find(|range| {
-        range.entrypoint && range_contains(range, calculate_crc32_phys)
-    });
+    let retained_target = capture
+        .ranges
+        .iter()
+        .find(|range| range.entrypoint && range_contains(range, calculate_crc32_phys));
     let Some(_target_range) = retained_target else {
         return Err(alloc::format!(
             "CalculateCrc32 phys=0x{calculate_crc32_phys:X} was not captured as a retained Boot Services entrypoint"
@@ -358,17 +366,11 @@ fn run_probe() -> Result<ProbeResult, String> {
     }
 
     type CalculateCrc32 = unsafe extern "efiapi" fn(*const u8, usize, *mut u32) -> usize;
-    let calculate: CalculateCrc32 = unsafe {
-        core::mem::transmute::<usize, CalculateCrc32>(calculate_crc32_raw as usize)
-    };
+    let calculate: CalculateCrc32 =
+        unsafe { core::mem::transmute::<usize, CalculateCrc32>(calculate_crc32_raw as usize) };
     let mut firmware_crc32 = 0u32;
-    let firmware_status = unsafe {
-        calculate(
-            PROBE_PAYLOAD.as_ptr(),
-            PROBE_PAYLOAD.len(),
-            &mut firmware_crc32,
-        )
-    };
+    let firmware_status =
+        unsafe { calculate(PROBE_PAYLOAD.as_ptr(), PROBE_PAYLOAD.len(), &mut firmware_crc32) };
 
     Ok(ProbeResult {
         capture_flags: capture.capture_flags,
@@ -414,7 +416,9 @@ fn install_retained_identity_map(ranges: &[RetainedRange]) -> Result<IdentityMap
                 )
             })?;
         stats.ranges += 1;
-        stats.bytes = stats.bytes.checked_add(range.length)
+        stats.bytes = stats
+            .bytes
+            .checked_add(range.length)
             .ok_or_else(|| String::from("retained identity byte count overflow"))?;
         if range.executable {
             stats.code_ranges += 1;
@@ -438,9 +442,7 @@ fn retained_capture() -> Result<RetainedCapture, String> {
     let payload_len = usize::try_from(response.size)
         .map_err(|_| String::from("Limine capture size does not fit usize"))?;
     if payload_len < size_of::<Trpay1Header>() || payload_len > MAX_PAYLOAD_BYTES {
-        return Err(alloc::format!(
-            "Limine capture size outside bound: {payload_len}"
-        ));
+        return Err(alloc::format!("Limine capture size outside bound: {payload_len}"));
     }
     let payload_phys = crate::limine::try_as_phys_addr(response.address)
         .ok_or_else(|| String::from("Limine capture pointer is not mappable"))?;
@@ -468,8 +470,7 @@ fn retained_capture() -> Result<RetainedCapture, String> {
             version
         ));
     }
-    if header_bytes < size_of::<Trpay1Header>()
-        || section_entry_bytes < size_of::<Trpay1Section>()
+    if header_bytes < size_of::<Trpay1Header>() || section_entry_bytes < size_of::<Trpay1Section>()
     {
         return Err(String::from("Limine capture header or section-entry size is too small"));
     }
@@ -498,8 +499,11 @@ fn retained_capture() -> Result<RetainedCapture, String> {
     let mut retained_section = None;
     for index in 0..section_count {
         let offset = header_bytes
-            .checked_add(index.checked_mul(section_entry_bytes)
-                .ok_or_else(|| String::from("Limine section index overflow"))?)
+            .checked_add(
+                index
+                    .checked_mul(section_entry_bytes)
+                    .ok_or_else(|| String::from("Limine section index overflow"))?,
+            )
             .ok_or_else(|| String::from("Limine section index overflow"))?;
         let section = read_unaligned::<Trpay1Section>(payload, offset)
             .ok_or_else(|| String::from("Limine section entry truncated"))?;
@@ -512,8 +516,9 @@ fn retained_capture() -> Result<RetainedCapture, String> {
         }
     }
 
-    let section = retained_section
-        .ok_or_else(|| String::from("retained Boot Services range section absent; paired Limine update required"))?;
+    let section = retained_section.ok_or_else(|| {
+        String::from("retained Boot Services range section absent; paired Limine update required")
+    })?;
     let section_flags = section.flags;
     let section_status = section.status;
     let section_offset = section.offset as usize;
@@ -564,8 +569,11 @@ fn retained_capture() -> Result<RetainedCapture, String> {
         ));
     }
     let ranges_end = range_header_bytes
-        .checked_add(range_count.checked_mul(range_entry_bytes)
-            .ok_or_else(|| String::from("retained range table overflow"))?)
+        .checked_add(
+            range_count
+                .checked_mul(range_entry_bytes)
+                .ok_or_else(|| String::from("retained range table overflow"))?,
+        )
         .ok_or_else(|| String::from("retained range table overflow"))?;
     if ranges_end > section_bytes.len() {
         return Err(String::from("retained range table truncated"));
@@ -575,8 +583,11 @@ fn retained_capture() -> Result<RetainedCapture, String> {
     let mut total = 0u64;
     for index in 0..range_count {
         let offset = range_header_bytes
-            .checked_add(index.checked_mul(range_entry_bytes)
-                .ok_or_else(|| String::from("retained range index overflow"))?)
+            .checked_add(
+                index
+                    .checked_mul(range_entry_bytes)
+                    .ok_or_else(|| String::from("retained range index overflow"))?,
+            )
             .ok_or_else(|| String::from("retained range index overflow"))?;
         let entry = read_unaligned::<Trbsr1Entry>(section_bytes, offset)
             .ok_or_else(|| String::from("retained range entry truncated"))?;
@@ -592,9 +603,7 @@ fn retained_capture() -> Result<RetainedCapture, String> {
             | BOOT_SERVICES_RANGE_TABLE;
 
         if flags & !known_flags != 0 {
-            return Err(alloc::format!(
-                "retained range {index} has unknown flags=0x{flags:08X}"
-            ));
+            return Err(alloc::format!("retained range {index} has unknown flags=0x{flags:08X}"));
         }
         if physical_start % PAGE_4K != 0 || length == 0 || length % PAGE_4K != 0 {
             return Err(alloc::format!(
@@ -616,14 +625,16 @@ fn retained_capture() -> Result<RetainedCapture, String> {
                 ));
             }
         }
-        let _end = physical_start.checked_add(length)
+        let _end = physical_start
+            .checked_add(length)
             .ok_or_else(|| String::from("retained range address overflow"))?;
         if !limine_range_covered(physical_start, length) {
             return Err(alloc::format!(
                 "retained range {index} crosses a Limine memory-map hole base=0x{physical_start:X} bytes=0x{length:X}"
             ));
         }
-        total = total.checked_add(length)
+        total = total
+            .checked_add(length)
             .ok_or_else(|| String::from("retained range total overflow"))?;
         if total > MAX_RETAINED_TOTAL_BYTES {
             return Err(alloc::format!(

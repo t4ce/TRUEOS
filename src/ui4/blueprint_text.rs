@@ -1346,12 +1346,18 @@ fn open_blueprint_frame(
 }
 
 fn open_blueprint_surface(
-    x: i32, y: i32, width: u32, height: u32,
-    cadence: FrameCadence, visual_target_hz: Option<u32>,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    cadence: FrameCadence,
+    visual_target_hz: Option<u32>,
     parent: Option<(WindowId, WindowSessionId)>,
 ) -> u32 {
     reap_retired_frames();
-    let Some(owner) = blueprint_owner() else { return 0; };
+    let Some(owner) = blueprint_owner() else {
+        return 0;
+    };
     let output = OutputId::from_slot(0).expect("UI4 D01 must exist");
     // Visual compute is a synchronous full-frame producer. It needs one live
     // front and one producer back, not the generic streaming scene's third
@@ -1388,7 +1394,9 @@ fn open_blueprint_surface(
             return 0;
         }
     };
-    let session = match parent.map_or_else(|| begin_additional_window_session(owner), |(_, session)| Ok(session)) {
+    let session = match parent
+        .map_or_else(|| begin_additional_window_session(owner), |(_, session)| Ok(session))
+    {
         Ok(session) => session,
         Err(error) => {
             let _ = destroy_frame(frame);
@@ -1396,7 +1404,10 @@ fn open_blueprint_surface(
             return 0;
         }
     };
-    let desktop_shell_launch = parent.is_none().then(|| super::input_broker::claim_desktop_shell_launch(owner)).flatten();
+    let desktop_shell_launch = parent
+        .is_none()
+        .then(|| super::input_broker::claim_desktop_shell_launch(owner))
+        .flatten();
     let (x, y) = desktop_shell_launch.map_or((x, y), |launch| {
         let (screen_width, screen_height) =
             crate::ui4::output_dimensions().unwrap_or((width, height));
@@ -1419,15 +1430,20 @@ fn open_blueprint_surface(
     } else {
         super::RGB_OVERLAY_PLANE_SLOT_2
     };
-    let window = match parent.map_or_else(|| create_window(WindowCreate {
-        owner,
-        session,
-        frame,
-        output,
-        plane: WindowPlane::Universal(plane_slot as u8),
-        placement,
-        interaction: super::WindowInteraction::APPLICATION,
-    }), |(window, _)| Ok(window)) {
+    let window = match parent.map_or_else(
+        || {
+            create_window(WindowCreate {
+                owner,
+                session,
+                frame,
+                output,
+                plane: WindowPlane::Universal(plane_slot as u8),
+                placement,
+                interaction: super::WindowInteraction::APPLICATION,
+            })
+        },
+        |(window, _)| Ok(window),
+    ) {
         Ok(window) => window,
         Err(error) => {
             let _ = finish_window_session(owner, session);
@@ -1443,7 +1459,9 @@ fn open_blueprint_surface(
             return 0;
         }
         super::layer_contract::background_target(window.raw())
-    } else { window.raw() };
+    } else {
+        window.raw()
+    };
     let mut surfaces = SURFACES.lock();
     if surfaces.len() >= MAX_SURFACES {
         drop(surfaces);
@@ -1807,9 +1825,14 @@ pub(crate) fn begin_blueprint_frame(
     let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
         return ERROR_NOT_FOUND;
     };
-    if surface.pending_resize_ready { return ERROR_BUSY; }
-    if super::window_broker::window_snapshot(owner, surface.window)
-        .is_none_or(|window| matches!(window.state, super::WindowState::Closed | super::WindowState::Closing)) { return ERROR_STATE; }
+    if surface.pending_resize_ready {
+        return ERROR_BUSY;
+    }
+    if super::window_broker::window_snapshot(owner, surface.window).is_none_or(|window| {
+        matches!(window.state, super::WindowState::Closed | super::WindowState::Closing)
+    }) {
+        return ERROR_STATE;
+    }
     if surface.write_lease.is_some() {
         return ERROR_STATE;
     }
@@ -1893,9 +1916,11 @@ pub(crate) fn begin_blueprint_frame(
     // so clearing and flushing every CPU-visible cache line first is redundant.
     // Dirty/text frames retain the ordinary clear contract.
     let emulator = crate::virtio_gpu_logo::output_dimensions().is_some();
-    if emulator { super::emulator_paint::begin(lease); }
-    let gpu_full_frame = !emulator &&
-        (!cpu_clear || (surface.cadence == FrameCadence::Streaming && surface.skybox.is_some()));
+    if emulator {
+        super::emulator_paint::begin(lease);
+    }
+    let gpu_full_frame = !emulator
+        && (!cpu_clear || (surface.cadence == FrameCadence::Streaming && surface.skybox.is_some()));
     if !gpu_full_frame {
         let [r, g, b, a] = clear_rgba.to_le_bytes();
         let pixel = PremultipliedRgba8::from_straight_rgba(r, g, b, a).to_native_bytes();
@@ -2674,7 +2699,12 @@ pub extern "C" fn trueos_cabi_ui4_scene_set_display_bottom_color(window_id: u32,
         }
     }
     if crate::intel::set_pipe_a_bottom_color_rgb8((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8)
-        || crate::virtio_gpu_logo::set_background_color((rgb >> 16) as u8, (rgb >> 8) as u8, rgb as u8) {
+        || crate::virtio_gpu_logo::set_background_color(
+            (rgb >> 16) as u8,
+            (rgb >> 8) as u8,
+            rgb as u8,
+        )
+    {
         0
     } else {
         ERROR_UI4
@@ -3027,10 +3057,16 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_resize(
     };
     {
         let mut surfaces = SURFACES.lock();
-        let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else { return ERROR_NOT_FOUND; };
-        if surface.render_target != surface.window.raw() { return ERROR_INVALID; }
+        let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+            return ERROR_NOT_FOUND;
+        };
+        if surface.render_target != surface.window.raw() {
+            return ERROR_INVALID;
+        }
         let window = surface.window;
-        if surfaces.iter().any(|surface| surface.owner == owner && surface.window == window && surface.render_target != window_id) {
+        if surfaces.iter().any(|surface| {
+            surface.owner == owner && surface.window == window && surface.render_target != window_id
+        }) {
             return stage_layered_resize(&mut surfaces, owner, window, width, height);
         }
     }
@@ -3927,7 +3963,9 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_shadertoy_render(
     if surface.write_lease != Some(lease) {
         return ERROR_STATE;
     }
-    if rendered.ok || !rendered.submitted { surface.gpu_submission_unretired = false; }
+    if rendered.ok || !rendered.submitted {
+        surface.gpu_submission_unretired = false;
+    }
     if rendered.ok {
         let Some(release) = rendered.release else {
             return ERROR_UI4;
@@ -4055,12 +4093,24 @@ pub unsafe extern "C" fn trueos_cabi_ui4_solara_text_scene(
     }
     if crate::virtio_gpu_logo::output_dimensions().is_some() {
         // Retained font scenes and font backbuffers still use the native backend.
-        if backbuffer || !stamp_once { return ERROR_FONT; }
-        let Some(paints) = super::emulator_paint::text(font, &runs, rgba) else { return ERROR_FONT; };
+        if backbuffer || !stamp_once {
+            return ERROR_FONT;
+        }
+        let Some(paints) = super::emulator_paint::text(font, &runs, rgba) else {
+            return ERROR_FONT;
+        };
         let mut surfaces = SURFACES.lock();
-        let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else { return ERROR_NOT_FOUND; };
-        let Some(lease) = surface.write_lease else { return ERROR_STATE; };
-        return if super::emulator_paint::append(lease, paints) { 0 } else { ERROR_UI4 };
+        let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+            return ERROR_NOT_FOUND;
+        };
+        let Some(lease) = surface.write_lease else {
+            return ERROR_STATE;
+        };
+        return if super::emulator_paint::append(lease, paints) {
+            0
+        } else {
+            ERROR_UI4
+        };
     }
     if stamp_once {
         stamp_scene_entries_for_surface(
@@ -5282,7 +5332,9 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_publish(
         return ERROR_UI4;
     }
     if surface.pending_resize.is_some()
-        && super::window_broker::window_snapshot(owner, surface.window).is_some_and(|window| window.background.is_some()) {
+        && super::window_broker::window_snapshot(owner, surface.window)
+            .is_some_and(|window| window.background.is_some())
+    {
         surface.pending_resize_ready = true;
         let window = surface.window;
         return commit_layered_resize_if_ready(&mut surfaces, owner, window);
@@ -5520,11 +5572,19 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_close_requested(window_id: u32, f
     };
     let closed_surfaces = {
         let mut surfaces = SURFACES.lock();
-        let Some(base) = surfaces.iter().find(|surface| surface.owner == owner && surface.render_target == window_id && surface.window.raw() == window_id) else {
+        let Some(base) = surfaces.iter().find(|surface| {
+            surface.owner == owner
+                && surface.render_target == window_id
+                && surface.window.raw() == window_id
+        }) else {
             return ERROR_NOT_FOUND;
         };
         let window = base.window;
-        if surfaces.iter().any(|surface| surface.owner == owner && surface.window == window && (surface.gpu_submission_unretired || surface.vgpu_surface.is_some())) {
+        if surfaces.iter().any(|surface| {
+            surface.owner == owner
+                && surface.window == window
+                && (surface.gpu_submission_unretired || surface.vgpu_surface.is_some())
+        }) {
             return ERROR_BUSY;
         }
         let mut closed = Vec::new();
@@ -5532,7 +5592,9 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_close_requested(window_id: u32, f
         while index < surfaces.len() {
             if surfaces[index].owner == owner && surfaces[index].window == window {
                 closed.push(surfaces.remove(index));
-            } else { index += 1; }
+            } else {
+                index += 1;
+            }
         }
         closed
     };
@@ -5541,7 +5603,9 @@ pub extern "C" fn trueos_cabi_ui4_solara_frame_close_requested(window_id: u32, f
     } else {
         BlueprintSurfaceRelease::Animated
     };
-    for surface in closed_surfaces { release_surface(surface, release); }
+    for surface in closed_surfaces {
+        release_surface(surface, release);
+    }
     0
 }
 
@@ -6638,7 +6702,9 @@ pub(crate) fn finish_sprite_scene(owner: WindowOwner, window_id: u32) -> i32 {
     // compositor's source-free SOLID mode. The former path paid general UV,
     // sampling, and arbitrary-quad setup for every decoration.
     if let Some(rects) = (!render_overlay)
-        .then(|| solid_scene_fast_rects(clear_rgba, &upload.quads, destination)).flatten() {
+        .then(|| solid_scene_fast_rects(clear_rgba, &upload.quads, destination))
+        .flatten()
+    {
         let composite_started_ns = crate::chronos::monotonic_nanos();
         let composited = fill_solid_rects_rgba8_scanout_result(destination, rects.as_slice());
         let composite_us =

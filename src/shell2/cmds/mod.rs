@@ -2,9 +2,9 @@ use alloc::string::String as AllocString;
 
 pub(crate) mod acpi;
 pub(crate) mod aud;
+pub(crate) mod bios_bridge;
 #[path = "bios.rs"]
 pub(crate) mod bios_impl;
-pub(crate) mod bios_bridge;
 pub(crate) mod bios_live;
 pub(crate) mod bios {
     pub(crate) use super::bios_impl::{platform_snapshot_json, runtime_snapshot_json};
@@ -19,8 +19,8 @@ pub(crate) mod bios {
         super::bios_impl::try_parse(io, rest)
     }
 }
-pub(crate) mod bios_browser;
 pub(crate) mod bios_blueprint;
+pub(crate) mod bios_browser;
 pub(crate) mod bios_capture;
 pub(crate) mod bios_current;
 pub(crate) mod bios_dump;
@@ -28,7 +28,6 @@ pub(crate) mod bios_hii;
 pub(crate) mod bios_ifr;
 pub(crate) mod bios_observed;
 pub(crate) mod bios_tlb_dump;
-pub(crate) mod win;
 pub(crate) mod cry;
 pub(crate) mod disc;
 pub(crate) mod edit;
@@ -68,6 +67,7 @@ pub(crate) mod ttstt;
 pub(crate) mod update;
 pub(crate) mod vgpu;
 pub(crate) mod vid;
+pub(crate) mod win;
 pub(crate) mod xhci;
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]

@@ -465,7 +465,11 @@ pub fn platform_wait_observe(key: u64) -> u32 {
 
 #[inline]
 pub fn platform_wait_after(key: u64, observed: u32, timeout_ms: u64) -> bool {
-    platform_wait_after_parked(platform_wait_queue(PLATFORM_WAIT_HOST_SCOPE, key), observed, timeout_ms)
+    platform_wait_after_parked(
+        platform_wait_queue(PLATFORM_WAIT_HOST_SCOPE, key),
+        observed,
+        timeout_ms,
+    )
 }
 
 fn platform_wait_after_parked(queue: &WaitQueue, observed: u32, timeout_ms: u64) -> bool {
@@ -474,7 +478,14 @@ fn platform_wait_after_parked(queue: &WaitQueue, observed: u32, timeout_ms: u64)
     if timeout_ms == 0 {
         return queue.seq.load(Ordering::Acquire) != observed;
     }
-    queue.wait_for_event_after_blocking_parked(observed, if timeout_ms == u64::MAX { 0 } else { timeout_ms })
+    queue.wait_for_event_after_blocking_parked(
+        observed,
+        if timeout_ms == u64::MAX {
+            0
+        } else {
+            timeout_ms
+        },
+    )
 }
 
 #[cfg(test)]
@@ -537,7 +548,11 @@ pub fn platform_wait_observe_for_vm(vm_id: u8, key: u64) -> u32 {
 
 #[inline]
 pub fn platform_wait_after_for_vm(vm_id: u8, key: u64, observed: u32, timeout_ms: u64) -> bool {
-    platform_wait_after_parked(platform_wait_queue(platform_wait_vm_scope(vm_id), key), observed, timeout_ms)
+    platform_wait_after_parked(
+        platform_wait_queue(platform_wait_vm_scope(vm_id), key),
+        observed,
+        timeout_ms,
+    )
 }
 
 #[inline]

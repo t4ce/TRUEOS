@@ -12,9 +12,9 @@ use trueos_time::{Duration as EmbassyDuration, Timer};
 use super::{
     DamageRect, FrameContent, FrameGpuRelease, FrameHandle, FramePoolError, FrameReadLease,
     FrameRgbaView, OutputId, WindowId, WindowOwner, WindowPlacement, WindowPlane, WindowSnapshot,
-    acquire_published_frame,
-    application_windows_for_output_with_revision, frame_snapshot, published_rgba_view,
-    release_published_frame, retain_published_frame, window_composition_revision,
+    acquire_published_frame, application_windows_for_output_with_revision, frame_snapshot,
+    published_rgba_view, release_published_frame, retain_published_frame,
+    window_composition_revision,
 };
 
 const CLOSE_TRANSITION_PERIOD_MS: u64 = 16;
@@ -54,8 +54,17 @@ enum Ui4CompositorError {
     Frame(FramePoolError),
     PresentFailed,
     PresentStage(&'static str),
-    QueueFailed { slot: usize, error: crate::intel::Ui4AsyncCompositionError },
-    DirectOnlySource { window: u32, layer: u8, slot: usize, source: (u32, u32), placement: WindowPlacement },
+    QueueFailed {
+        slot: usize,
+        error: crate::intel::Ui4AsyncCompositionError,
+    },
+    DirectOnlySource {
+        window: u32,
+        layer: u8,
+        slot: usize,
+        source: (u32, u32),
+        placement: WindowPlacement,
+    },
 }
 
 impl From<FramePoolError> for Ui4CompositorError {
@@ -722,7 +731,9 @@ fn drive_async_frame(
                 commit_async_frame(runtime, pending);
                 Ok(DriveResult::Complete)
             }
-            crate::intel::Ui4PlaneSurfaceFlipPoll::Failed => Err(Ui4CompositorError::PresentStage("surflive-poll")),
+            crate::intel::Ui4PlaneSurfaceFlipPoll::Failed => {
+                Err(Ui4CompositorError::PresentStage("surflive-poll"))
+            }
         };
     }
 
@@ -1014,8 +1025,11 @@ fn queue_async_plane(
     if selected.len() == 1 && !all_shared_composable {
         let (window, view) = selected[0];
         return Err(Ui4CompositorError::DirectOnlySource {
-            window: window.id.raw(), layer: window.layer, slot: window.plane.slot(),
-            source: (view.width, view.height), placement: window.placement,
+            window: window.id.raw(),
+            layer: window.layer,
+            slot: window.plane.slot(),
+            source: (view.width, view.height),
+            placement: window.placement,
         });
     }
     if all_dirty_double_font && !DIRTY_FONT_SHARED_COMPOSITION_LOGGED.swap(true, Ordering::AcqRel) {
@@ -1545,7 +1559,11 @@ fn commit_async_frame(runtime: &mut Runtime, pending: &mut PendingFrame) {
         state.windows = next_windows;
         let slot = target_plane_slot(target);
         if let Some(id) = pending.direct_windows[slot] {
-            if let Some(window) = pending.windows.iter().find(|window| window.id == id && window.plane.slot() == slot) {
+            if let Some(window) = pending
+                .windows
+                .iter()
+                .find(|window| window.id == id && window.plane.slot() == slot)
+            {
                 let _ = super::window_broker::acknowledge_window_surface(*window);
             }
         } else {
@@ -1625,7 +1643,12 @@ fn trace_video_surflive_transitions(
             continue;
         }
         let publish_serial = pending.direct_windows[slot]
-            .and_then(|id| pending.windows.iter().find(|window| window.id == id && window.plane.slot() == slot))
+            .and_then(|id| {
+                pending
+                    .windows
+                    .iter()
+                    .find(|window| window.id == id && window.plane.slot() == slot)
+            })
             .map_or(0, |window| window.publish_serial);
         let previous = runtime.live_direct[slot];
         crate::log_trace!(target: "ui4";

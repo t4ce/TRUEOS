@@ -193,9 +193,16 @@ pub(crate) fn try_parse(
 ) -> ParseOutcome {
     if rest.trim().eq_ignore_ascii_case("status") {
         let usage = crate::ui4::ui4_live_resource_usage();
-        print_shell_line(io, alloc::format!(
-            "vid: ui4 global_active_frames={} global_active_sessions={} global_live_windows={}",
-            usage.active_frames, usage.active_sessions, usage.live_windows).as_str());
+        print_shell_line(
+            io,
+            alloc::format!(
+                "vid: ui4 global_active_frames={} global_active_sessions={} global_live_windows={}",
+                usage.active_frames,
+                usage.active_sessions,
+                usage.live_windows
+            )
+            .as_str(),
+        );
         for (slot, state) in crate::ui4::video_playback_status().iter().enumerate() {
             print_shell_line(io, alloc::format!(
                 "vid: slot={} occupied={} cancelled={} queued={} completed={} active={} published={}",
