@@ -245,14 +245,6 @@ fn direct_rcs_encode_shadertoy_batch(
         return false;
     }
 
-    let group_x = dst.width.div_ceil(16).max(1);
-    let group_y = rows;
-    let last_group_pixels = ((dst.width - 1) % 16) + 1;
-    let right_mask = if last_group_pixels == 16 {
-        GPGPU_WALKER_SIMD16_MASK
-    } else {
-        (1u32 << last_group_pixels) - 1
-    };
     let batch_len = DIRECT_RCS_BATCH_BYTES / core::mem::size_of::<u32>();
     let batch = unsafe { core::slice::from_raw_parts_mut(state.batch_virt as *mut u32, batch_len) };
     let mut cursor = 0usize;
@@ -301,14 +293,11 @@ fn direct_rcs_encode_shadertoy_batch(
         SHADERTOY_PRE_MARKER_SLOT,
         SHADERTOY_PRE_MARKER,
     );
-    ok &= direct_rcs_push_gpgpu_walker_2d(
+    ok &= direct_rcs_push_shadertoy_walker(
         batch,
         &mut cursor,
-        SHADERTOY_PAYLOAD_OFFSET_BYTES,
-        SHADERTOY_INDIRECT_BYTES,
-        group_x,
-        group_y,
-        right_mask,
+        dst.width,
+        rows,
     );
     ok &= direct_rcs_push(batch, &mut cursor, MEDIA_STATE_FLUSH_CMD);
     ok &= direct_rcs_push(batch, &mut cursor, 0);
@@ -328,6 +317,30 @@ fn direct_rcs_encode_shadertoy_batch(
     super::dma_flush(state.batch_virt, DIRECT_RCS_BATCH_BYTES);
     super::dma_flush(state.result_virt, DIRECT_RCS_RESULT_BYTES);
     true
+}
+
+fn direct_rcs_push_shadertoy_walker(
+    batch: &mut [u32],
+    cursor: &mut usize,
+    width: u32,
+    rows: u32,
+) -> bool {
+    if width == 0 || rows == 0 {
+        return false;
+    }
+    // One full SIMD16 local workgroup per horizontal block. RightExecutionMask
+    // applies to EVERY workgroup, not just the image's final block. Using the
+    // width remainder here left ten columns unwritten in every sixteen for
+    // the 3078-wide Chroma atlas. Each admitted shader guards x >= width.
+    direct_rcs_push_gpgpu_walker_2d(
+        batch,
+        cursor,
+        SHADERTOY_PAYLOAD_OFFSET_BYTES,
+        SHADERTOY_INDIRECT_BYTES,
+        width.div_ceil(16),
+        rows,
+        GPGPU_WALKER_SIMD16_MASK,
+    )
 }
 
 // Host payload writers are deliberately narrower than the general artifact

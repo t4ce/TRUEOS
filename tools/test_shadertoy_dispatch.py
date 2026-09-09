@@ -11,7 +11,7 @@ def main():
     operations = "src/intel/gpgpu/operations/shadertoy.rs"
     constants = "src/intel/gpgpu/rcs/constants.rs"
     # Compile the real frame orchestration/cache/planner, mocking only GPU and
-    # DMA calls. The actual six generated contracts drive payload assertions.
+    # DMA calls. The actual generated contracts drive payload assertions.
     declarations = [(ROOT / operations).read_text().split("\nfn submit_shadertoy_rgba8_rows")[0]]
     declarations += [(ROOT / "src/intel/gpgpu/operations/shadertoy_focus.rs").read_text()]
     declarations += [(ROOT / "src/intel/gpgpu/artifacts/contract.rs").read_text().split("#[cfg(test)]")[0]]
@@ -22,9 +22,14 @@ def main():
         "SHADERTOY_PER_THREAD_BYTES", "SHADERTOY_INDIRECT_BYTES",
         "SHADERTOY_PAYLOAD_OFFSET_BYTES", "SHADERTOY_UNIFORMS_OFFSET_BYTES",
         "SHADERTOY_UNIFORMS_BYTES", "DIRECT_RCS_BATCH_BYTES", "DIRECT_RCS_GPU_VA_BATCH_BASE",
+        "GPGPU_WALKER_CMD", "GPGPU_WALKER_SIMD16_SELECT", "GPGPU_WALKER_SIMD16_MASK",
+        "GPGPU_WALKER_GROUP_THREADS", "GPGPU_WALKER_GROUP_Z_DIM", "GPGPU_WALKER_BOTTOM_MASK",
     )]
     declarations += [item("src/intel/gpgpu/rcs/shadertoy.rs", name) for name in (
-        "shadertoy_contract", "shadertoy_payload_layout_matches", "direct_rcs_write_shadertoy_payload")]
+        "shadertoy_contract", "shadertoy_payload_layout_matches", "direct_rcs_write_shadertoy_payload",
+        "direct_rcs_push_shadertoy_walker")]
+    declarations += [item("src/intel/gpgpu/rcs/commands.rs", name) for name in (
+        "direct_rcs_push", "direct_rcs_push_gpgpu_walker_2d")]
     declarations += [(ROOT / "src/intel/gpgpu/operations/shadertoy_environment.rs").read_text()]
     source = "#![allow(dead_code)]\n" + "\n".join(declarations) + HARNESS
     with tempfile.TemporaryDirectory(prefix="trueos-shadertoy-dispatch-") as temporary:
@@ -38,6 +43,34 @@ def main():
 
 
 HARNESS = r'''
+#[test]
+fn encoded_walker_covers_every_pixel_for_guttered_atlases_and_odd_windows() {
+    // The execution mask applies inside EVERY workgroup. Replay the emitted
+    // walker and the shader's bounds guard against a sentinel-padded output.
+    for width in (1..65).chain([3078, 781, 1281, 2561]) {
+        let rows = 5;
+        let pitch = width + 32;
+        let mut output = vec![0u8; (pitch * rows) as usize];
+        let mut batch = [0u32; 15];
+        let mut cursor = 0;
+        assert!(direct_rcs_push_shadertoy_walker(&mut batch, &mut cursor, width, rows));
+        assert_eq!(cursor, 15);
+        for y in 0..batch[10] {
+            for group in 0..batch[7] {
+                for lane in 0..16 {
+                    let x = group * 16 + lane;
+                    if batch[13] & (1 << lane) != 0 && x < width && y < rows {
+                        output[(y * pitch + x) as usize] += 1;
+                    }
+                }
+            }
+        }
+        for y in 0..rows { for x in 0..pitch {
+            assert_eq!(output[(y * pitch + x) as usize], u8::from(x < width),
+                       "missing/overwritten texel at ({x},{y}), width={width}, mask={:#x}", batch[13]);
+        }}
+    }
+}
 #[macro_export]
 macro_rules! log_info { ($($args:tt)*) => {} }
 #[derive(Clone, Copy, Debug)]
