@@ -42,8 +42,8 @@ fn direct_rcs_write_shadertoy_payload(
         return false;
     }
 
-    let focused_abi = matches!(params.shader_id, SHADERTOY_SHADER_PROTEAN_CLOUDS | SHADERTOY_SHADER_MANDELBOX);
-    if !shadertoy_payload_layout_matches(contract, focused_abi) {
+    let source_abi = matches!(params.shader_id, SHADERTOY_SHADER_PROTEAN_CLOUDS | SHADERTOY_SHADER_MANDELBOX);
+    if !shadertoy_payload_layout_matches(contract, source_abi) {
         return false;
     }
     let uniforms_gpu = DIRECT_RCS_GPU_VA_BATCH_BASE + SHADERTOY_UNIFORMS_OFFSET_BYTES as u64;
@@ -67,7 +67,7 @@ fn direct_rcs_write_shadertoy_payload(
         core::ptr::write_volatile(dwords.add(15), (uniforms_gpu >> 32) as u32);
         // The third pointer moves width/height/pitch from bytes 64/68/72
         // to 72/76/80. Check this against the authenticated generated contract.
-        let dimensions = if focused_abi {
+        let dimensions = if source_abi {
             core::ptr::write_volatile(dwords.add(16), pass.source.gpu as u32);
             core::ptr::write_volatile(dwords.add(17), (pass.source.gpu >> 32) as u32);
             18

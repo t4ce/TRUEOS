@@ -15,7 +15,7 @@ def main():
     declarations = [(ROOT / operations).read_text().split("\nfn submit_shadertoy_rgba8_rows")[0]]
     declarations += [(ROOT / "src/intel/gpgpu/operations/shadertoy_focus.rs").read_text()]
     declarations += [(ROOT / "src/intel/gpgpu/artifacts/contract.rs").read_text().split("#[cfg(test)]")[0]]
-    for name in ("mandelbrot", "cube_field", "nguyen", "palette_grid", "cosmic_strands", "protean_clouds"):
+    for name in ("mandelbrot", "cube_field", "nguyen", "palette_grid", "cosmic_strands", "protean_clouds", "mandelbox"):
         declarations.append((ROOT / f"crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/shadertoy_{name}.contract.rs").read_text())
     declarations += [constant(constants, name) for name in (
         "SHADERTOY_POST_MARKER", "SHADERTOY_CROSS_THREAD_BYTES",
@@ -25,6 +25,7 @@ def main():
     )]
     declarations += [item("src/intel/gpgpu/rcs/shadertoy.rs", name) for name in (
         "shadertoy_contract", "shadertoy_payload_layout_matches", "direct_rcs_write_shadertoy_payload")]
+    declarations += [(ROOT / "src/intel/gpgpu/operations/shadertoy_environment.rs").read_text()]
     source = "#![allow(dead_code)]\n" + "\n".join(declarations) + HARNESS
     with tempfile.TemporaryDirectory(prefix="trueos-shadertoy-dispatch-") as temporary:
         directory = Path(temporary)
@@ -37,6 +38,8 @@ def main():
 
 
 HARNESS = r'''
+#[macro_export]
+macro_rules! log_info { ($($args:tt)*) => {} }
 #[derive(Clone, Copy, Debug)]
 struct GpgpuRgba8Surface { width: u32, height: u32, gpu: u64, pitch_bytes: u32, bytes: usize }
 impl GpgpuRgba8Surface {
@@ -185,19 +188,19 @@ fn invalid_extents_and_end_rows_never_dispatch() {
 #[derive(Clone,Copy)]
 struct DirectRcsState { batch_virt: *mut u8 }
 #[test]
-fn real_six_contracts_match_payload_offsets_including_source_pointer() {
-    for shader_id in 1..=6 {
+fn real_contracts_match_payload_offsets_including_resident_environment_source() {
+    for shader_id in [1,2,3,4,5,6,16] {
         let mut initial=vec![0u32;DIRECT_RCS_BATCH_BYTES/4]; let mut later=initial.clone();
         let dst=surface(1280,720); let p=ShaderToyFrameParams {shader_id,..params()};
-        let pass=ShaderToyPass { phase:if shader_id==6 {1}else{0},width:2560,height:1440,source:dst,focus:[1000.,700.,500.,2.] };
+        let pass=ShaderToyPass { phase:if matches!(shader_id,6|16) {1}else{0},width:2560,height:1440,source:dst,focus:[1000.,700.,500.,2.] };
         assert!(direct_rcs_write_shadertoy_payload(DirectRcsState {batch_virt:initial.as_mut_ptr().cast()},dst,p,pass,0));
         assert!(direct_rcs_write_shadertoy_payload(DirectRcsState {batch_virt:later.as_mut_ptr().cast()},dst,p,pass,51));
         let differences:Vec<_>=initial.iter().zip(&later).enumerate().filter(|(_, (a,b))|a!=b).map(|(i,_)|i).collect();
         let payload=SHADERTOY_PAYLOAD_OFFSET_BYTES/4; assert_eq!(differences,[payload+1]);
         assert_eq!(later[payload+1],51);
-        let d=if shader_id==6 {18}else{16};
+        let d=if matches!(shader_id,6|16) {18}else{16};
         assert_eq!(&later[payload+d..payload+d+3],&[1280,720,dst.pitch_bytes]);
-        if shader_id==6 {assert_eq!(later[payload+16],dst.gpu as u32);}
+        if matches!(shader_id,6|16) {assert_eq!(later[payload+16],dst.gpu as u32);}
         let u=SHADERTOY_UNIFORMS_OFFSET_BYTES/4;
         assert_eq!(later[u],2560f32.to_bits());assert_eq!(later[u+1],1440f32.to_bits());
         assert_eq!(later[u+4],200f32.to_bits()); assert_eq!(later[u+20],1000f32.to_bits());
@@ -206,6 +209,86 @@ fn real_six_contracts_match_payload_offsets_including_source_pointer() {
     bad.payload_args=SHADERTOY_MANDELBROT_ADLS_CPP_ABI_CONTRACT.payload_args;
     assert!(!shadertoy_payload_layout_matches(&bad,true));
 }
+fn environment_params() -> ShaderToyFrameParams {
+    ShaderToyFrameParams { shader_id:16, frame:1, time_seconds:1.0,
+        mouse_x:0.0, mouse_y:0.0, click_x:0.0, click_y:1.0,
+        delta_seconds:0.577, sample_rate:2.0, date_seconds:1.0,
+        date_year:0x63c7f2 as f32, date_month:0x25153d as f32, date_day:0x63c7f2 as f32,
+        ..params() }
+}
+#[test]
+fn environment_bakes_once_then_rotation_fov_and_resize_only_sample() {
+    reset(None);
+    let mut cache=ShaderToyEnvironment::new();
+    let p=environment_params();
+    assert!(cache.render(surface(784,441),p).ok);
+    TRACE.with_borrow(|t| {
+        assert_eq!(t.allocations,1); assert_eq!(t.releases,1);
+        let bake:Vec<_>=t.rows.iter().filter(|r|r.0==1).collect();
+        assert_eq!(bake.iter().map(|r|r.2).sum::<u32>(),2052);
+        assert!(bake.iter().all(|r| r.2 as u64 * 3088 <= 16*1024));
+        assert_eq!(t.rows.last().unwrap().0,2);
+    });
+    for (w,h) in [(1920,1080),(2560,1440),(784,441)] {
+        reset(None);
+        assert!(cache.render(surface(w,h),ShaderToyFrameParams {
+            mouse_y:0.5,click_y:0.8660254,delta_seconds:0.9,..p
+        }).ok);
+        TRACE.with_borrow(|t| {
+            assert_eq!(t.allocations,0); assert_eq!(t.releases,1);
+            assert!(t.rows.iter().all(|r|r.0==2));
+            assert_eq!(t.rows.iter().map(|r|r.2).sum::<u32>(),h);
+        });
+    }
+}
+#[test]
+fn every_world_selection_rebakes_but_reuses_the_same_allocation() {
+    reset(None);
+    let mut cache=ShaderToyEnvironment::new();
+    let p=environment_params();
+    assert!(cache.render(surface(784,441),p).ok);
+    for (generation,preset,count) in [(2,1.0,1.0),(3,1.0,3.0),(4,0.0,1.0)] {
+        reset(None);
+        assert!(cache.render(surface(784,441),ShaderToyFrameParams {
+            frame:generation,date_seconds:preset,sample_rate:count,..p
+        }).ok);
+        TRACE.with_borrow(|t| {
+            assert_eq!(t.allocations,0);
+            assert_eq!(t.rows.iter().filter(|r|r.0==1).map(|r|r.2).sum::<u32>(),2052);
+            assert!(t.rows.last().unwrap().0==2);
+        });
+    }
+    reset(None);
+    assert!(cache.render(surface(784,441),ShaderToyFrameParams {time_seconds:0.0,..p}).ok);
+    TRACE.with_borrow(|t|assert!(t.rows.iter().all(|r|r.0==0)));
+    assert!(cache.ready.is_some());
+}
+#[test]
+fn incomplete_cubemap_never_reaches_the_sampler_or_display_release() {
+    for accepted in [true,false] {
+        reset(Some((4,accepted)));
+        let mut cache=ShaderToyEnvironment::new();
+        let result=cache.render(surface(784,441),environment_params());
+        assert!(!result.ok && result.release.is_none());
+        assert_eq!(result.submitted,accepted);
+        assert!(cache.ready.is_none());
+        TRACE.with_borrow(|t|{
+            assert!(t.rows.iter().all(|r|r.0==1));assert_eq!(t.rows.len(),5);assert_eq!(t.releases,0);
+        });
+    }
+}
+#[test]
+fn invalid_environment_controls_cannot_allocate_or_launch() {
+    for p in [ShaderToyFrameParams {sample_rate:4.0,..environment_params()},
+              ShaderToyFrameParams {date_year:16777216.0,..environment_params()},
+              ShaderToyFrameParams {date_seconds:2.0,..environment_params()},
+              ShaderToyFrameParams {click_y:0.0,..environment_params()}] {
+        reset(None);
+        assert!(!ShaderToyEnvironment::new().render(surface(784,441),p).ok);
+        TRACE.with_borrow(|t|{assert_eq!(t.allocations,0);assert!(t.rows.is_empty());});
+    }
+}
+
 '''
 
 if __name__ == "__main__":

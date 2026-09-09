@@ -60,21 +60,20 @@ unlocking its surface record, including when called from a native worker.
 
 Cubes uses one layered Frame. Its normal Picasso loop renders the foreground
 with transparent premultiplied clear pixels. A separate native worker owns the
-Mandelbox background, using authenticated ShaderToy program 16. It consumes a
-coherent latest camera/theme/extent command, renders only on change, and has a
-10 Hz steady cadence. A new extent first receives a cheap shade publication so
-maximization need not await ray marching; detail follows independently. The
-worker drains before the parent Frame closes.
+Chroma background through authenticated ShaderToy program 16. Each Key 5 world
+selection bakes a complete six-face 1024px cubemap once, with the authored one,
+two or three theme colors. World 27 alone uses the Folded Core/void preset;
+the other 26 use Box Cathedral from `Cubes/Cube/the_one_cube_chroma.html`.
 
-Key 5's 27 worlds use the six palette colors authored in
-`Cubes/Cube/cube_tree_builder_world_ramps.html`, with 1–3-theme territories and
-magenta Void. Background opacity is 128/255; other modes and below-horizon pixels
-receive a neutral slate shade. The +Y sky hemisphere is shaded with 7 folds,
-72 march steps and 2 occlusion samples. Fully below-sky views retain the shade
-without further dispatches for camera or theme changes. The port is a bounded
-Image pass with a fixed fractal origin, camera yaw/pitch and matching field of
-view. The reference HTML's cached cubemap optimization is not yet used;
-there is no new renderer or unreviewed runtime shader compilation.
+The window-owned GPU map survives resize. Camera orientation, field of view
+and extent changes use only its bilinear sampler; a damped quaternion follower
+trails the foreground camera and stops requesting frames once settled. The
+background has a 60 Hz ceiling. The previous published front remains visible
+during a replacement bake, which uses bounded GPU batches and publishes only
+after all faces complete. Background opacity remains 128/255. Keys 1–4 retain
+a neutral slate; Key 5 shades both hemispheres. See
+[`Cubes/tools/LAYERED_BACKGROUND.md`](../../../Cubes/tools/LAYERED_BACKGROUND.md)
+for cache ownership, controls, reference provenance and current validation.
 
 Host checks:
 
@@ -88,6 +87,6 @@ Host checks:
 - `python3 tools/bake_mandelbox.py` in Cubes performs a reproducible native bake
   and updates the Blueprint package and kernel's hash/ABI metadata together.
 
-A host UHD 770 smoke render verifies the baked SPIR-V produces theme-dependent,
-repeatable pixels. TRUEOS multi-window drag, slot-0 promotion/demotion, paired
-resize and physical SURFLIVE still require a rebuilt kernel/Blueprint rig run.
+The current Chroma shader was compiled reproducibly and its host logic/admission
+checks passed. GPU runtime and TRUEOS multi-window drag, slot-0 promotion/demotion,
+paired resize and physical SURFLIVE still require a matching kernel/Blueprint run.

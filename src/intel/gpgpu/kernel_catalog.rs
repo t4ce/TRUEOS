@@ -416,16 +416,16 @@ include!(
 );
 const _: () = {
     let contracts = [
-        SHADERTOY_MANDELBROT_ADLS_CPP_ABI_CONTRACT,
-        SHADERTOY_CUBE_FIELD_ADLS_CPP_ABI_CONTRACT,
-        SHADERTOY_NGUYEN_ADLS_CPP_ABI_CONTRACT,
-        SHADERTOY_MANDELBOX_ADLS_CPP_ABI_CONTRACT,
-        SHADERTOY_PALETTE_GRID_ADLS_CPP_ABI_CONTRACT,
-        SHADERTOY_COSMIC_STRANDS_ADLS_CPP_ABI_CONTRACT,
+        (SHADERTOY_MANDELBROT_ADLS_CPP_ABI_CONTRACT, 5),
+        (SHADERTOY_CUBE_FIELD_ADLS_CPP_ABI_CONTRACT, 5),
+        (SHADERTOY_NGUYEN_ADLS_CPP_ABI_CONTRACT, 5),
+        (SHADERTOY_MANDELBOX_ADLS_CPP_ABI_CONTRACT, 6),
+        (SHADERTOY_PALETTE_GRID_ADLS_CPP_ABI_CONTRACT, 5),
+        (SHADERTOY_COSMIC_STRANDS_ADLS_CPP_ABI_CONTRACT, 5),
     ];
     let mut index = 0;
     while index < contracts.len() {
-        let contract = contracts[index];
+        let (contract, payload_args) = contracts[index];
         assert!(matches!(contract.validate(), Ok(())));
         assert!(contract.target.pci_device_ids.len() == 1);
         assert!(contract.target.pci_device_ids[0] == 0x4680);
@@ -437,12 +437,13 @@ const _: () = {
         assert!(contract.slm_bytes == 0);
         assert!(contract.cross_thread_data_bytes == 96);
         assert!(contract.per_thread_data_bytes == 96);
-        assert!(contract.payload_args.len() == 5);
+        assert!(contract.payload_args.len() == payload_args);
         index += 1;
     }
     assert!(SHADERTOY_MANDELBROT_ADLS_CPP_ABI_CONTRACT.bindings.len() == 1);
     assert!(SHADERTOY_CUBE_FIELD_ADLS_CPP_ABI_CONTRACT.bindings.len() == 2);
     assert!(SHADERTOY_NGUYEN_ADLS_CPP_ABI_CONTRACT.bindings.len() == 1);
+    assert!(SHADERTOY_MANDELBOX_ADLS_CPP_ABI_CONTRACT.bindings.len() == 3);
     assert!(SHADERTOY_PALETTE_GRID_ADLS_CPP_ABI_CONTRACT.bindings.len() == 1);
     assert!(SHADERTOY_COSMIC_STRANDS_ADLS_CPP_ABI_CONTRACT.bindings.len() == 1);
 };
