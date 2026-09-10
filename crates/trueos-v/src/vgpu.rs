@@ -328,7 +328,7 @@ impl Default for IndexedDrawBatchV2 {
 
 pub const MAX_RETAINED_TRANSFORM_SEEDS: usize = 4;
 /// Buffer-backed V3 scenes keep the four-inline-seed V1/V2 ABI unchanged.
-pub const MAX_RETAINED_SCENE_INSTANCES: usize = 2048;
+pub const MAX_RETAINED_SCENE_INSTANCES: usize = 8192;
 pub const MAX_RETAINED_SCENE_DRAWS: usize = 4;
 pub const MAX_RETAINED_STATIC_DRAWS: usize = 3;
 /// Fixed role order in the retained material descriptor. A zero texture ID is
@@ -504,7 +504,7 @@ pub struct RetainedDrawRange {
     pub first_index: u32,
     pub index_count: u32,
 }
-/// Scene with up to 2048 buffer-backed TRS seeds and four index ranges.
+/// Scene with up to 8192 buffer-backed TRS seeds and four index ranges.
 /// Supports PBR, or the dedicated cube-patch v2 contract with default material
 /// parameters and exactly one full 44-index range.
 /// Inline frame seeds/count must be zero. The seed buffer contains tightly
