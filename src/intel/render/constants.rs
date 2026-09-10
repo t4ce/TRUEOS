@@ -163,9 +163,9 @@ const RESIDENT_SCENE_MAX_DRAWS: usize = 340;
 // descriptors exceed 8 KiB. The canonical-position cube HS keeps its 132
 // corner-to-position map and 24 immediate position cases in code; it needs
 // 23 KiB of aligned HS/DS storage. The imported palette's sRGB material PS
-// plus optional GS kernels bring code above 28 KiB; reserve a ninth page
-// so the page-aligned descriptors fit after the complete shader bundle.
-const RESIDENT_SCENE_STATE_SLOT_BYTES: usize = 9 * 4096;
+// plus the carousel colour table and optional GS kernels exceed 32 KiB.
+// Reserve ten pages including the page-aligned descriptors.
+const RESIDENT_SCENE_STATE_SLOT_BYTES: usize = 10 * 4096;
 const RESIDENT_SCENE_STATE_BYTES: usize =
     (RESIDENT_SCENE_MAX_DRAWS + 1) * RESIDENT_SCENE_STATE_SLOT_BYTES;
 const RESIDENT_SCENE_PRIMARY_BATCH_BYTES: usize = 5 * 4096;
