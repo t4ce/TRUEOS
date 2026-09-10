@@ -31,7 +31,6 @@ def main():
     declarations += [item("src/intel/gpgpu/rcs/commands.rs", name) for name in (
         "direct_rcs_push", "direct_rcs_push_gpgpu_walker_2d")]
     declarations += [(ROOT / "src/intel/gpgpu/operations/shadertoy_environment.rs").read_text()]
-    declarations += [(ROOT / "src/intel/gpgpu/operations/shadertoy_cloud_loop.rs").read_text()]
     source = "#![allow(dead_code)]\nextern crate alloc;\n" + "\n".join(declarations) + HARNESS
     with tempfile.TemporaryDirectory(prefix="trueos-shadertoy-dispatch-") as temporary:
         directory = Path(temporary)
@@ -144,42 +143,6 @@ fn native_all_rows_once_and_release_only_after_last_retirement() {
             if width==2560 { assert_eq!(t.rows.len(),29); }
         });
     }
-}
-#[test]
-fn cached_clouds_bake_once_then_only_resolve_and_survive_mode_pauses() {
-    let mut cache=ShaderToyCloudLoop::new();
-    let p=ShaderToyFrameParams { flags:4,frame:12,..params() };
-    assert!(p.is_valid());
-    reset(None);
-    assert!(cache.render(surface(1920,1080),p).ok);
-    TRACE.with_borrow(|t| {
-        assert_eq!(t.allocations,1);
-        assert!(t.rows.iter().any(|r|r.0==0));
-        assert_eq!(t.rows.last().unwrap().0,2);
-    });
-    reset(None);
-    assert!(cache.render(surface(3840,2160),p).ok);
-    TRACE.with_borrow(|t| {
-        assert_eq!(t.allocations,0);
-        assert!(t.rows.iter().all(|r|r.0==2));
-    });
-    reset(None);
-    assert!(cache.render(surface(1080,1920),p).ok);
-    TRACE.with_borrow(|t| assert_eq!(t.allocations,1));
-    for f in 0..1000 { assert!(shadertoy_cloud_frame(f)<96); }
-    assert_eq!(shadertoy_cloud_frame(190),0);
-    assert_eq!(shadertoy_cloud_frame(95),95);
-}
-#[test]
-fn cached_clouds_keep_unretired_allocations_and_reject_reuse() {
-    reset(Some((0,true)));
-    let mut cache=ShaderToyCloudLoop::new();
-    assert!(!cache.render(surface(784,441),params()).ok);
-    assert!(cache.quarantined);
-    assert!(cache.frames[0].is_some());
-    reset(None);
-    assert!(!cache.render(surface(1000,600),params()).ok);
-    TRACE.with_borrow(|t| assert!(t.rows.is_empty()));
 }
 #[test]
 fn focused_passes_retire_in_order_and_release_full_output_once() {

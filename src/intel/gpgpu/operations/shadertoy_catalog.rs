@@ -9,7 +9,6 @@ pub(crate) struct ShaderToyRuntimeState {
     particles_need_reset: bool,
     brush: CppCloudBrush,
     environment: ShaderToyEnvironment,
-    cloud_loop: ShaderToyCloudLoop,
 }
 
 impl ShaderToyRuntimeState {
@@ -27,7 +26,6 @@ impl ShaderToyRuntimeState {
             particles_need_reset: true,
             brush: CppCloudBrush::new(),
             environment: ShaderToyEnvironment::new(),
-            cloud_loop: ShaderToyCloudLoop::new(),
         }
     }
 
@@ -60,9 +58,6 @@ impl ShaderToyRuntimeState {
             self.extent = (dst.width, dst.height);
         }
         match params.shader_id {
-            6 if params.flags == SHADERTOY_FLAG_CACHED_CLOUD_LOOP => {
-                self.cloud_loop.render(dst, params)
-            }
             1..=6 => shadertoy_rgba8_surface_full(dst, params),
             16 => self.environment.render(dst, params),
             7 => {

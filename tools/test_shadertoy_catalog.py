@@ -65,11 +65,8 @@ impl GpgpuRgba8Surface { fn is_valid(self)->bool { self.width>0 && self.height>0
 #[derive(Default)]
 struct GpgpuRgba8KernelResult { ok:bool,submitted:bool,marker:u32,submit_ms:u64,release:Option<()> }
 fn ok()->GpgpuRgba8KernelResult { GpgpuRgba8KernelResult { ok:true, ..Default::default() } }
-const SHADERTOY_FLAG_CACHED_CLOUD_LOOP:u32=4;
 struct ShaderToyEnvironment;
 impl ShaderToyEnvironment { const fn new()->Self {Self} fn render(&mut self,_:GpgpuRgba8Surface,_:ShaderToyFrameParams)->GpgpuRgba8KernelResult {ok()} }
-struct ShaderToyCloudLoop;
-impl ShaderToyCloudLoop { const fn new()->Self {Self} fn render(&mut self,_:GpgpuRgba8Surface,_:ShaderToyFrameParams)->GpgpuRgba8KernelResult {ok()} }
 fn shadertoy_rgba8_surface_full(_:GpgpuRgba8Surface,_:ShaderToyFrameParams)->GpgpuRgba8KernelResult { ok() }
 fn cpp_demo_rgba8_surface_full(_:GpgpuRgba8Surface,_:f32,mode:u32,_:u32,brush:&[u32])->GpgpuRgba8KernelResult {
     let mut t=TRACE.lock(); t.modes.push(mode);t.brushes.push(brush.to_vec());ok()
@@ -189,7 +186,7 @@ fn invalid_or_unregistered_programs_do_not_acquire_runtime_state() {
     for id in 1..=16 {
         assert!(params(id).is_valid());
         for flags in [1,2,3,4] { assert_eq!(ShaderToyFrameParams{flags,..params(id)}.is_valid(),
-            (id==6 && (flags==1 || flags==4))||(id==14 && flags==2)); }
+            (id==6 && flags==1)||(id==14 && flags==2)); }
     }
     for id in [0,17,31,32,u32::MAX] { assert!(!params(id).is_valid()); }
 }
