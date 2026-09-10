@@ -1,6 +1,5 @@
 use alloc::string::String as AllocString;
 
-pub(crate) mod acpi;
 pub(crate) mod aud;
 pub(crate) mod bios_bridge;
 #[path = "bios.rs"]

@@ -35,6 +35,13 @@ COMMAND_DETAILS: dict[str, dict[str, Any]] = {
     "os": {
         "invocation": "os",
         "tui_controls": "Up/Down or j/k select; Enter/Right/l choose; Left/h back; Esc/q quit.",
+        "power_actions": {
+            "selection": [
+                "Run os in cmd mode, then press Down twice for Shutdown TRUEOS or three times for Reboot TRUEOS.",
+                "Each action opens one confirmation screen with Return selected by default; press Down then Enter to proceed.",
+            ],
+            "effect": "Shutdown enters ACPI S5; reboot requests the firmware reset register.",
+        },
         "live_update": {
             "selection": [
                 "Run os in cmd mode; the administration TUI starts on Install TRUEOS to disk.",

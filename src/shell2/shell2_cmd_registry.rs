@@ -27,10 +27,8 @@ const STATUS_BLUE_RGB: (u8, u8, u8) = (120, 210, 255);
 const STATUS_NETWORK_RGB: (u8, u8, u8) = (70, 220, 210);
 const STATUS_ORANGE_RGB: (u8, u8, u8) = (255, 190, 90);
 const STATUS_GRAY_RGB: (u8, u8, u8) = (160, 168, 176);
-const STATUS_DARK_RED_RGB: (u8, u8, u8) = (139, 0, 0);
 const STATUS_RAINBOW_COLORS: [u8; 8] = [199, 208, 227, 121, 51, 39, 99, 201];
 
-const TOOL_JSON_ACPI: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["reboot","S1","S2","S3","S4","S5"],"description":"ACPI action to run."}},"required":["action"],"additionalProperties":false}"#;
 const TOOL_JSON_AUD: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
 const TOOL_JSON_BIOS: &str = r#"{"type":"object","properties":{"view":{"type":"string","enum":["all","status","services","setup","handoff","hints"],"description":"BIOS/UEFI control-plane view to print."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_WIN: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["start","status","stop"],"description":"Open, inspect or close the 30 retained UI4 windows. Omit action to open."}},"required":[],"additionalProperties":false}"#;
@@ -55,11 +53,6 @@ const TOOL_JSON_STT: &str = r#"{"type":"object","properties":{"path":{"type":"st
 const TOOL_JSON_TD: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
 const TOOL_JSON_VID: &str = r#"{"type":"object","properties":{"source":{"type":"string","enum":["fs","on","online","status","stop"],"description":"Read an AVC MP4 or H.264 Annex-B asset from TRUEOSFS, download the fixed online AVC1 MP4 asset, inspect status, or stop a playback slot."},"path":{"type":"string","description":"Optional TRUEOSFS AVC MP4 or H.264 Annex-B path when source=fs; defaults to x31_head_movie.annexb.h264. For source=stop, pass the playback slot: 1, 2 or 3."},"loop":{"type":"boolean","description":"Repeat playback while retaining the same UI4 Frame and window lifetime."}},"required":["source"],"additionalProperties":false}"#;
 const TOOL_JSON_XHCI: &str = r#"{"type":"object","properties":{"command":{"type":"string","enum":["status","journal","stage","read","read64","write","write64","rmw"],"description":"xHCI laboratory operation."},"stage":{"type":"integer","minimum":1,"maximum":5,"description":"Cumulative diagnostic stage."},"port":{"type":"integer","minimum":1,"maximum":255,"description":"Physical root port for mutating stages."},"offset":{"type":"string","description":"BAR-relative register offset, decimal or 0x-prefixed."},"value":{"type":"string","description":"Raw register value, decimal or 0x-prefixed."},"clear_mask":{"type":"string","description":"Raw RMW clear mask."},"set_mask":{"type":"string","description":"Raw RMW set mask."},"arm":{"type":"boolean","description":"Explicitly arm a mutating operation."},"live":{"type":"boolean","description":"Acknowledge disruption of a physically connected target."},"fused":{"type":"boolean","description":"Explicitly permit targeting the fused LED port."},"depth":{"type":"integer","minimum":1,"maximum":3,"description":"Stage-five transition-tree depth."}},"required":["command"],"additionalProperties":false}"#;
-
-fn dispatch_acpi(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
-    let mut args = rest.split_whitespace();
-    super::cmds::acpi::try_parse(io, &mut args)
-}
 
 fn dispatch_aud(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     super::cmds::aud::try_parse(spawner, io, rest)
@@ -199,15 +192,6 @@ fn dispatch_xhci(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) 
 /// the order of command names in the right-aligned Shell2 titlebar section.
 const SHELL2_COMMAND_REGISTRY: &[BuiltinShell2CmdEntry] = &[
     BuiltinShell2CmdEntry {
-        name: "acpi",
-        mode: "cmd",
-        color: Some(STATUS_DARK_RED_RGB),
-        advertised: true,
-        handler: dispatch_acpi,
-        tool_description: Some("Run ACPI power actions."),
-        tool_parameters_json: Some(TOOL_JSON_ACPI),
-    },
-    BuiltinShell2CmdEntry {
         name: "aud",
         mode: "cmd",
         color: Some(STATUS_ORANGE_RGB),
@@ -299,7 +283,7 @@ const SHELL2_COMMAND_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         advertised: true,
         handler: dispatch_os,
         tool_description: Some(
-            "Open the OS administration TUI for disk installation or a live kernel update.",
+            "Open the OS administration TUI for disk installation, a live kernel update, or power actions.",
         ),
         tool_parameters_json: None,
     },
@@ -597,7 +581,7 @@ pub(crate) fn try_dispatch(
 
 const TITLEBAR_MISC_COMMANDS: &[&str] = &["win", "shot", "lum", "tts", "stt", "vid"];
 const TITLEBAR_ADMIN_COMMANDS: &[&str] = &[
-    "cry", "os", "backup", "disc", "tlb", "xhci", "ram", "smp", "net", "bios", "acpi", "vgpu",
+    "cry", "os", "backup", "disc", "tlb", "xhci", "ram", "smp", "net", "bios", "vgpu",
 ];
 /// Render the curated command-mode portion of Shell2's right-aligned titlebar.
 pub(crate) fn titlebar_right_command_names_text() -> AllocString {

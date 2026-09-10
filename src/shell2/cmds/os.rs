@@ -197,6 +197,26 @@ fn dispatch_admin_action(spawner: &Spawner, target: &MatrixTarget, reason: &str)
     if matches!(reason, "os:quit" | "os:cancel") {
         return;
     }
+    if reason == "os:shutdown" {
+        match crate::efi::acpi::facp::enter_named_sleep_state(5) {
+            Ok(()) => {}
+            Err(error) => print_matrix_target_line(
+                target,
+                alloc::format!("os: shutdown failed ({error:?})").as_str(),
+            ),
+        }
+        return;
+    }
+    if reason == "os:reboot" {
+        match crate::efi::acpi::facp::reset_system() {
+            Ok(()) => {}
+            Err(error) => print_matrix_target_line(
+                target,
+                alloc::format!("os: reboot failed ({error:?})").as_str(),
+            ),
+        }
+        return;
+    }
     if reason == "os:update:live" {
         super::update::submit_live_update_to_target(spawner, target.clone());
         return;
