@@ -37,7 +37,10 @@ impl ShaderToyFrameParams {
             && (1..=16).contains(&self.shader_id)
             && (self.flags == 0
                 || (self.shader_id == SHADERTOY_SHADER_PROTEAN_CLOUDS
-                    && self.flags == SHADERTOY_FLAG_NATIVE_RESOLUTION)
+                    && matches!(
+                        self.flags,
+                        SHADERTOY_FLAG_NATIVE_RESOLUTION | SHADERTOY_FLAG_CACHED_CLOUD_LOOP
+                    ))
                 || (self.shader_id == 14 && self.flags == 2))
             && self.time_seconds.is_finite()
             && self.time_seconds >= 0.0

@@ -43,6 +43,7 @@ include!("operations/shadertoy.rs");
 include!("operations/cloud_brush.rs");
 include!("operations/shadertoy_catalog.rs");
 include!("operations/shadertoy_environment.rs");
+include!("operations/shadertoy_cloud_loop.rs");
 include!("operations/cpp_audio_visualizer.rs");
 include!("operations/particle_craft.rs");
 include!("operations/lfm25_q8.rs");
