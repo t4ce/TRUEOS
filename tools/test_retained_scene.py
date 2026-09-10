@@ -25,13 +25,46 @@ def source() -> str:
         assert constant(abi, name) == constant(sdk, name), f"SDK mirror drift: {name}"
     for path in ("crates/trueos-vm/src/vmcall.rs", "src/hv/vmcall.rs"):
         assert re.search(r"OP_BP_VGPU_RETAINED_FRAME_SUBMIT_V3:\s*u32\s*=\s*0x17A;", (ROOT / path).read_text())
-    return harness_source() + "\n" + "\n".join((
+    runtime_capacity = constant("crates/trueos-helio-runtime/src/churn.rs", "MAX_RETAINED_TRANSFORM_ROWS")
+    dispatch = "src/intel/gpgpu/operations/helio_retained_transform.rs"
+    # Use the allocator's production capacity helper, not only ABI admission:
+    # an oversized advertised capacity previously disabled even 81-seed frames.
+    capacities = ("mod trueos_helio_runtime { pub mod churn { " + runtime_capacity + " } }\n"
+        + "mod intel { pub mod gpgpu { use crate::trueos_helio_runtime; "
+        + constant(dispatch, "GPGPU_HELIO_MAX_ROWS")
+        + constant(dispatch, "GPGPU_HELIO_MAX_HIERARCHY_NODES") + " } }\n")
+    return harness_source() + "\n" + capacities + "\n".join((
         item("src/gpu/vgpu.rs", "retained_scene_descriptor_valid"),
         item("src/gpu/vgpu.rs", "retained_static_line_index_count_valid"),
         item("src/gpu/vgpu.rs", "decode_retained_scene_seeds"),
         item("src/intel/render/resources.rs", "picasso_retained_draw_templates"),
+        item("src/intel/render/resources.rs", "churn_hierarchy_node_capacity"),
     )) + r'''
 use vgpu::*;
+
+#[test]
+fn advertised_scene_capacity_can_allocate_gpu_transform_rows() {
+    assert_eq!(MAX_RETAINED_SCENE_INSTANCES, 8192);
+    assert!(MAX_RETAINED_SCENE_INSTANCES <= intel::gpgpu::GPGPU_HELIO_MAX_ROWS as usize);
+    assert_eq!(churn_hierarchy_node_capacity(MAX_RETAINED_SCENE_INSTANCES), Some(8193));
+    assert_eq!(churn_hierarchy_node_capacity(0), None);
+    assert_eq!(churn_hierarchy_node_capacity(intel::gpgpu::GPGPU_HELIO_MAX_ROWS as usize+1), None);
+}
+
+#[test]
+fn full_8192_seed_scene_keeps_the_last_slot_and_draw_capacity() {
+    let mut bytes=Vec::new();
+    for slot in 0..MAX_RETAINED_SCENE_INSTANCES {
+        let values:[f32;14]=[0.,0.,0.,1.,1.,1.,0.,0.,0.,1.,1.74,0.,0.,0.];
+        for value in values {bytes.extend_from_slice(&value.to_le_bytes());}
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&((slot as u32)<<16).to_le_bytes());
+    }
+    let seeds=decode_retained_scene_seeds(&bytes).unwrap();
+    assert_eq!(seeds.last().unwrap().flags>>16,8191);
+    let draws=picasso_retained_draw_templates(44,&seeds,&[RetainedDrawRange{first_index:0,index_count:44}]).unwrap();
+    assert_eq!(draws,[[44,0,0,0,8192,0]]);
+}
 
 #[test]
 fn static_line_lists_are_even_nonempty_and_bounded() {

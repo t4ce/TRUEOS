@@ -4456,14 +4456,17 @@ pub(crate) fn submit_ui4_retained_frame(
         meshes
     };
 
-    if crate::intel::render::update_resident_picasso_retained_transform_seeds(
+    if let Err(reason) = crate::intel::render::update_resident_picasso_retained_transform_seeds(
         &resident,
         &submit.camera,
         &seeds,
         draw_ranges.as_deref(),
-    )
-    .is_err()
-    {
+    ) {
+        crate::log_warn!(
+            target: "render";
+            "picasso-retained: transform-submit rejected reason={} seeds={} scene_capacity={}\n",
+            reason, seeds.len(), v::vgpu::MAX_RETAINED_SCENE_INSTANCES,
+        );
         rollback_retained_submission_lease(
             principal,
             device_handle,

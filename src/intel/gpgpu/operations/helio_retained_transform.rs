@@ -121,7 +121,8 @@ pub(crate) const GPGPU_HELIO_HIERARCHY_NODE_BYTES: usize = 16;
 pub(crate) const GPGPU_HELIO_HIERARCHY_DYNAMIC_BINDING_BYTES: usize = 4;
 pub(crate) const GPGPU_HELIO_AFFINE_BYTES: usize = 48;
 pub(crate) const GPGPU_HELIO_HIERARCHY_INDEX_BYTES: usize = 4;
-pub(crate) const GPGPU_HELIO_MAX_ROWS: u32 = 4_096;
+pub(crate) const GPGPU_HELIO_MAX_ROWS: u32 =
+    trueos_helio_runtime::churn::MAX_RETAINED_TRANSFORM_ROWS as u32;
 pub(crate) const GPGPU_HELIO_MAX_DRAWS: u32 = 64;
 pub(crate) const GPGPU_HELIO_MAX_HIERARCHY_NODES: u32 = GPGPU_HELIO_MAX_ROWS * 16;
 pub(crate) const GPGPU_HELIO_MAX_HIERARCHY_DEPTH: u32 = 64;
@@ -140,6 +141,10 @@ const _: () = {
         GPGPU_HELIO_MAX_ROWS as usize == trueos_helio_runtime::churn::MAX_RETAINED_TRANSFORM_ROWS
     );
     assert!(GPGPU_HELIO_MAX_ROWS <= GpgpuHelioRetainedTransform::MAX_COMPACT_SLOT);
+    // Picasso allocates its transform buffers for the advertised maximum when
+    // the mesh opens, even when the first submitted frame has very few seeds.
+    // Keep ABI admission within that capacity or every retained frame can fail.
+    assert!(v::vgpu::MAX_RETAINED_SCENE_INSTANCES <= GPGPU_HELIO_MAX_ROWS as usize);
     assert!(GPGPU_HELIO_CAMERA_BYTES == 368);
 };
 

@@ -10,7 +10,9 @@ pub const SHAPE_COUNT: usize = 3;
 pub const DRAW_GROUP_COUNT: usize = MATERIAL_COUNT * SHAPE_COUNT;
 pub const INSTANCE_FLAG_CASTS_SHADOW: u32 = 1 << 0;
 pub const INSTANCE_FLAG_RECEIVES_SHADOW: u32 = 1 << 1;
-pub const MAX_RETAINED_TRANSFORM_ROWS: usize = 4_096;
+/// GPU buffer-backed row capacity. Serialized affine-graph templates declare
+/// their own capacity separately; Picasso's flat V3 seeds do not use those.
+pub const MAX_RETAINED_TRANSFORM_ROWS: usize = 8_192;
 
 const _: () = assert!(MAX_RETAINED_TRANSFORM_ROWS <= u16::MAX as usize);
 
