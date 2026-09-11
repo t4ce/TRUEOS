@@ -575,8 +575,16 @@ impl InputBroker {
         let previous_routed_buttons = previous_buttons & routed_button_mask;
         let pressed = buttons_down & !previous_routed_buttons;
         let released = previous_routed_buttons & !buttons_down;
-        let (dx, dy) =
-            (signed_delta(x, self.cursors[index].x), signed_delta(y, self.cursors[index].y));
+        let (dx, dy) = pointer_motion_delta(
+            snapped_window.is_some(),
+            event.reserved0 & 1 != 0,
+            event.reserved1,
+            event.reserved2,
+            x,
+            y,
+            self.cursors[index].x,
+            self.cursors[index].y,
+        );
         let hit = snapped_window.or_else(|| topmost_window_at(x, y));
 
         super::context_menu::pointer_moved(source, x, y, width, height);
@@ -2147,6 +2155,49 @@ fn signed_local(pixel: u32, origin: i32) -> i32 {
     i64::from(pixel)
         .saturating_sub(i64::from(origin))
         .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
+}
+
+/// Preserve a physical mouse's relative HID report while UI4 presents and
+/// routes its cursor at the selected frame's center. Reconstructing motion
+/// from the pinned coordinates would otherwise produce zero after the first
+/// snapped event. Absolute pointer kinds continue to use coordinate deltas.
+fn pointer_motion_delta(
+    center_snapped: bool,
+    relative_report: bool,
+    relative_dx_bits: u16,
+    relative_dy_bits: u16,
+    x: u32,
+    y: u32,
+    previous_x: u32,
+    previous_y: u32,
+) -> (i32, i32) {
+    if center_snapped && relative_report {
+        return (i32::from(relative_dx_bits as i16), i32::from(relative_dy_bits as i16));
+    }
+    (signed_delta(x, previous_x), signed_delta(y, previous_y))
+}
+
+#[cfg(test)]
+mod pointer_motion_delta_tests {
+    use super::pointer_motion_delta;
+
+    #[test]
+    fn snapped_mouse_uses_relative_report_while_coordinates_stay_centered() {
+        assert_eq!(
+            pointer_motion_delta(true, true, 12, (-7i16) as u16, 960, 540, 960, 540),
+            (12, -7),
+        );
+    }
+
+    #[test]
+    fn ordinary_pointer_uses_absolute_coordinate_delta() {
+        assert_eq!(pointer_motion_delta(false, true, 99, 88, 113, 71, 100, 80), (13, -9),);
+    }
+
+    #[test]
+    fn snapped_source_without_relative_payload_keeps_absolute_fallback() {
+        assert_eq!(pointer_motion_delta(true, false, 0, 0, 210, 190, 200, 200), (10, -10),);
+    }
 }
 
 /// Resolve only the slot-4 presentation. Raw cursor state, hit testing, and
