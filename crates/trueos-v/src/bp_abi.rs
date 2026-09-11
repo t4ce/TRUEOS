@@ -270,6 +270,20 @@ pub struct TrueosUi4ContextMenuEvent {
     pub reason: u32,
 }
 
+/// Dynamic menu event: reason 5 requests entries; 0..=4 complete it.
+/// The serial and frame-local click coordinates are frozen for the invocation.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosUi4ContextMenuEventV2 {
+    pub serial: u64,
+    pub local_x: i32,
+    pub local_y: i32,
+    pub action_id: u32,
+    pub selected: u32,
+    pub reason: u32,
+    pub reserved: u32,
+}
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
 pub struct TrueosUi4CursorSource {
@@ -731,6 +745,16 @@ unsafe extern "C" {
     pub fn trueos_cabi_ui4_scene_pointer_event_take(
         window_id: u32,
         out: *mut TrueosUi4PointerEvent,
+    ) -> i32;
+    pub fn trueos_cabi_ui4_context_menu_dynamic_v2(
+        window_id: u32,
+        serial: u64,
+        entries: *const TrueosUi4ContextMenuEntry,
+        entry_count: usize,
+    ) -> i32;
+    pub fn trueos_cabi_ui4_context_menu_event_take_v2(
+        window_id: u32,
+        out: *mut TrueosUi4ContextMenuEventV2,
     ) -> i32;
     pub fn trueos_cabi_ui4_context_menu_register(
         window_id: u32,

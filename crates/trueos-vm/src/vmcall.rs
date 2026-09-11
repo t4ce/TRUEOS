@@ -256,7 +256,10 @@ pub const OP_BP_UI4_SCENE_FRAME_OPEN_VISUAL: u32 = 0x11C;
 pub const OP_BP_UI4_SCENE_SHADERTOY_UPLOAD_V1: u32 = 0x12F; // packed size/window, offset/id, package chunk
 pub const OP_BP_UI4_SCENE_SHADERTOY_RENDER: u32 = 0x11D;
 pub const OP_BP_UI4_SCENE_VISUAL_FRAME_BEGIN: u32 = 0x11E;
+// REGISTER: arg0 low32=window, high32=mode (0 fixed, 1 dynamic), arg1=serial
+// (dynamic zero registers, nonzero replies). Payload retains the v1 row encoding.
 pub const OP_BP_UI4_CONTEXT_MENU_REGISTER: u32 = 0x11F;
+// EVENT_TAKE: arg0=window, arg1=0 for v1 outcomes or 1 for v2 prepare/outcomes.
 pub const OP_BP_UI4_CONTEXT_MENU_EVENT_TAKE: u32 = 0x120;
 pub const OP_BP_IMAGE_SOURCE_INFO: u32 = 0x121;
 pub const OP_BP_IMAGE_SOURCE_READ: u32 = 0x122;

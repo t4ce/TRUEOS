@@ -2124,16 +2124,46 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 return DispatchOutcome::Resume;
             }
             let rc = unsafe {
-                crate::ui4::blueprint_text::trueos_cabi_ui4_context_menu_register(
-                    arg0 as u32,
-                    entries.as_ptr(),
-                    entries.len(),
-                )
+                if arg0 >> 32 == 1 {
+                    crate::ui4::blueprint_text::trueos_cabi_ui4_context_menu_dynamic_v2(
+                        arg0 as u32,
+                        arg1,
+                        entries.as_ptr(),
+                        entries.len(),
+                    )
+                } else if arg0 >> 32 == 0 && arg1 == 0 {
+                    crate::ui4::blueprint_text::trueos_cabi_ui4_context_menu_register(
+                        arg0 as u32,
+                        entries.as_ptr(),
+                        entries.len(),
+                    )
+                } else {
+                    -1
+                }
             };
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_UI4_CONTEXT_MENU_EVENT_TAKE => {
+            if arg1 == 1 {
+                let mut event = crate::ui4::blueprint_text::TrueosUi4ContextMenuEventV2::default();
+                let rc = unsafe {
+                    crate::ui4::blueprint_text::trueos_cabi_ui4_context_menu_event_take_v2(
+                        arg0 as u32,
+                        &mut event,
+                    )
+                };
+                if rc == 0 {
+                    write_record_response(vm_id, seq, 0, &event);
+                } else {
+                    write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+                }
+                return DispatchOutcome::Resume;
+            }
+            if arg1 != 0 {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            }
             let mut event = crate::ui4::blueprint_text::TrueosUi4ContextMenuEvent::default();
             let rc = unsafe {
                 crate::ui4::blueprint_text::trueos_cabi_ui4_context_menu_event_take(

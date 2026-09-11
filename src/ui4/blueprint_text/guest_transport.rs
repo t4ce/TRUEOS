@@ -147,6 +147,8 @@ pub(super) unsafe fn guest_image_source_read(
 pub(super) unsafe fn guest_context_menu_register(
     window_id: u32,
     entries: &[TrueosUi4ContextMenuEntry],
+    dynamic: bool,
+    serial: u64,
 ) -> i32 {
     let mut payload = Vec::with_capacity(
         CONTEXT_MENU_WIRE_HEADER_BYTES.saturating_add(
@@ -182,8 +184,8 @@ pub(super) unsafe fn guest_context_menu_register(
     }
     guest_status(
         trueos_vm::vmcall::OP_BP_UI4_CONTEXT_MENU_REGISTER,
-        window_id as u64,
-        0,
+        window_id as u64 | (u64::from(dynamic) << 32),
+        serial,
         payload.as_slice(),
     )
 }
@@ -209,6 +211,29 @@ pub(super) unsafe fn guest_context_menu_event_take(
     }
     let event = unsafe { core::ptr::read_unaligned(response.as_ptr().cast()) };
     unsafe { out.write(event) };
+    0
+}
+
+pub(super) unsafe fn guest_context_menu_event_take_v2(
+    window_id: u32,
+    out: *mut super::TrueosUi4ContextMenuEventV2,
+) -> i32 {
+    let mut response = [0u8; core::mem::size_of::<super::TrueosUi4ContextMenuEventV2>()];
+    let (status, data) = trueos_vm::vmcall::call_with_payload(
+        trueos_vm::vmcall::OP_BP_UI4_CONTEXT_MENU_EVENT_TAKE,
+        window_id as u64,
+        1,
+        &[],
+        &mut response,
+    );
+    if status != trueos_vm::vmcall::STATUS_OK {
+        return ERROR_UI4;
+    }
+    let result = data as i64 as i32;
+    if result != 0 {
+        return result;
+    }
+    unsafe { out.write(core::ptr::read_unaligned(response.as_ptr().cast())) };
     0
 }
 

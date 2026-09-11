@@ -5318,6 +5318,7 @@ fn show_gridpaper_printer_menu(runtime: &GridPaperRuntime, event: crate::ui4::Ui
         });
     }
     let request = crate::ui4::ContextMenuRequest {
+        dynamic: false,
         entries,
         context: context_id,
         callback: complete_gridpaper_printer_menu,

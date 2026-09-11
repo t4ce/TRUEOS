@@ -489,6 +489,20 @@ pub struct TrueosUi4ContextMenuEvent {
     pub reason: u32,
 }
 
+/// Dynamic menu event: reason 5 requests entries; 0..=4 complete it.
+/// The serial and frame-local click coordinates are frozen for the invocation.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosUi4ContextMenuEventV2 {
+    pub serial: u64,
+    pub local_x: i32,
+    pub local_y: i32,
+    pub action_id: u32,
+    pub selected: u32,
+    pub reason: u32,
+    pub reserved: u32,
+}
+
 /// One selected-frame pointer event after UI4 hit testing and capture.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default)]
@@ -2004,6 +2018,7 @@ fn blueprint_context_menu_complete(result: crate::ui4::ContextMenuResult) {
         crate::ui4::ContextMenuCloseReason::Replaced => 2,
         crate::ui4::ContextMenuCloseReason::OwnerReleased => 3,
         crate::ui4::ContextMenuCloseReason::WindowClosed => 4,
+        crate::ui4::ContextMenuCloseReason::Prepare => return,
     };
     let event = TrueosUi4ContextMenuEvent {
         context: result.context,
@@ -2020,6 +2035,94 @@ fn blueprint_context_menu_complete(result: crate::ui4::ContextMenuResult) {
     events.push_back((result.owner, result.window, event));
 }
 
+static DYNAMIC_CONTEXT_MENU_EVENTS: Mutex<
+    VecDeque<(WindowOwner, WindowId, TrueosUi4ContextMenuEventV2)>,
+> = Mutex::new(VecDeque::new());
+
+fn blueprint_dynamic_context_menu_complete(result: crate::ui4::ContextMenuResult) {
+    // Teardown may finish before a deferred callback runs. Never resurrect
+    // events for a closed frame or a reused VM principal.
+    let surfaces = SURFACES.lock();
+    if !surfaces
+        .iter()
+        .any(|surface| surface.owner == result.owner && surface.window == result.window)
+    {
+        return;
+    }
+    let reason = match result.reason {
+        crate::ui4::ContextMenuCloseReason::Selected => 0,
+        crate::ui4::ContextMenuCloseReason::Dismissed => 1,
+        crate::ui4::ContextMenuCloseReason::Replaced => 2,
+        crate::ui4::ContextMenuCloseReason::OwnerReleased => 3,
+        crate::ui4::ContextMenuCloseReason::WindowClosed => 4,
+        crate::ui4::ContextMenuCloseReason::Prepare => 5,
+    };
+    let mut events = DYNAMIC_CONTEXT_MENU_EVENTS.lock();
+    if events.len() >= MAX_PENDING_CONTEXT_MENU_EVENTS {
+        events.pop_front();
+    }
+    events.push_back((
+        result.owner,
+        result.window,
+        TrueosUi4ContextMenuEventV2 {
+            serial: result.serial,
+            local_x: result.local.0,
+            local_y: result.local.1,
+            action_id: result.selected_action.unwrap_or(0),
+            selected: u32::from(result.selected_action.is_some()),
+            reason,
+            reserved: 0,
+        },
+    ));
+}
+
+/// With serial zero, register an app-prepared menu (no entries). Otherwise
+/// supply the complete rows for that still-pending invocation. Ownership,
+/// dismissal, replacement and drawing remain kernel mechanics.
+pub unsafe extern "C" fn trueos_cabi_ui4_context_menu_dynamic_v2(
+    window_id: u32,
+    serial: u64,
+    entries: *const TrueosUi4ContextMenuEntry,
+    entry_count: usize,
+) -> i32 {
+    if (serial == 0) != (entry_count == 0) {
+        return ERROR_INVALID;
+    }
+    unsafe { context_menu_register(window_id, entries, entry_count, true, serial) }
+}
+
+pub unsafe extern "C" fn trueos_cabi_ui4_context_menu_event_take_v2(
+    window_id: u32,
+    out: *mut TrueosUi4ContextMenuEventV2,
+) -> i32 {
+    if out.is_null() {
+        return ERROR_INVALID;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return unsafe { guest_transport::guest_context_menu_event_take_v2(window_id, out) };
+    }
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT;
+    };
+    let window = {
+        let mut surfaces = SURFACES.lock();
+        let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+            return ERROR_NOT_FOUND;
+        };
+        surface.window
+    };
+    let mut events = DYNAMIC_CONTEXT_MENU_EVENTS.lock();
+    let Some(index) = events
+        .iter()
+        .position(|(o, w, _)| *o == owner && *w == window)
+    else {
+        return 1;
+    };
+    let (_, _, event) = events.remove(index).expect("located dynamic menu event");
+    unsafe { out.write(event) };
+    0
+}
+
 /// Give this frame a standing context menu, replacing any previous one.
 ///
 /// The frame owns the menu over its own pixels: UI4 raises it when a secondary
@@ -2031,6 +2134,16 @@ pub unsafe extern "C" fn trueos_cabi_ui4_context_menu_register(
     window_id: u32,
     entries: *const TrueosUi4ContextMenuEntry,
     entry_count: usize,
+) -> i32 {
+    unsafe { context_menu_register(window_id, entries, entry_count, false, 0) }
+}
+
+unsafe fn context_menu_register(
+    window_id: u32,
+    entries: *const TrueosUi4ContextMenuEntry,
+    entry_count: usize,
+    dynamic: bool,
+    serial: u64,
 ) -> i32 {
     if entry_count > crate::ui4::MAX_CONTEXT_MENU_ENTRIES || (entry_count != 0 && entries.is_null())
     {
@@ -2044,7 +2157,7 @@ pub unsafe extern "C" fn trueos_cabi_ui4_context_menu_register(
     };
 
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        return unsafe { guest_context_menu_register(window_id, raw_entries) };
+        return unsafe { guest_context_menu_register(window_id, raw_entries, dynamic, serial) };
     }
 
     let mut menu_entries = Vec::with_capacity(entry_count);
@@ -2077,7 +2190,26 @@ pub unsafe extern "C" fn trueos_cabi_ui4_context_menu_register(
         };
         surface.window
     };
+    if dynamic {
+        let result = if serial == 0 {
+            super::context_menu::register_dynamic_window_menu(
+                owner,
+                window,
+                blueprint_dynamic_context_menu_complete,
+            )
+        } else {
+            if menu_entries
+                .iter()
+                .any(|entry| entry.label.trim().is_empty())
+            {
+                return ERROR_INVALID;
+            }
+            super::context_menu::resolve_window_menu(owner, window, serial, menu_entries)
+        };
+        return result.map(|()| 0).unwrap_or(ERROR_NOT_FOUND);
+    }
     if menu_entries.is_empty() {
+        super::context_menu::cancel_window(owner, window);
         crate::ui4::clear_window_context_menu(owner, window);
         return 0;
     }
@@ -7778,6 +7910,9 @@ fn blueprint_surface_close_request(
 }
 
 fn release_surface(mut surface: BlueprintSceneSurface, release: BlueprintSurfaceRelease) {
+    DYNAMIC_CONTEXT_MENU_EVENTS
+        .lock()
+        .retain(|(owner, window, _)| *owner != surface.owner || *window != surface.window);
     if let Some(state) = surface.shadertoy_state.as_mut() {
         // A retained GPU allocation after failure does not need a live PCM tap.
         state.stop_audio();

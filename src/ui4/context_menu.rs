@@ -2,8 +2,8 @@
 //!
 //! A request contains the complete menu for one invocation. UI4 retains it
 //! only until selection, dismissal, replacement, or owner/window teardown.
-//! There is deliberately no persistent menu registry and no application-owned
-//! slot-4 surface.
+//! Standing registrations may provide fixed entries or request per-click entries.
+//! The kernel owns the cursor-plane surface and every invocation lifetime.
 
 use alloc::{
     collections::VecDeque,
@@ -56,6 +56,7 @@ impl ContextMenuEntry {
 pub(crate) type ContextMenuCallback = fn(ContextMenuResult);
 
 pub(crate) struct ContextMenuRequest {
+    pub(crate) dynamic: bool,
     pub(crate) entries: Vec<ContextMenuEntry>,
     pub(crate) context: u64,
     pub(crate) callback: ContextMenuCallback,
@@ -68,9 +69,12 @@ pub(crate) enum ContextMenuCloseReason {
     Replaced,
     OwnerReleased,
     WindowClosed,
+    Prepare,
 }
 
 pub(crate) struct ContextMenuResult {
+    pub(crate) serial: u64,
+    pub(crate) local: (i32, i32),
     pub(crate) owner: WindowOwner,
     pub(crate) window: WindowId,
     pub(crate) context: u64,
@@ -102,6 +106,8 @@ pub(super) struct ContextMenuVisual {
 
 struct ActiveContextMenu {
     serial: u64,
+    local: (i32, i32),
+    preparing: bool,
     source: Ui4CursorSource,
     owner: WindowOwner,
     window: WindowId,
@@ -144,6 +150,7 @@ pub(super) fn validate_request(request: &ContextMenuRequest) -> Result<(), Conte
 /// here answers that click; a window without one leaves the gesture to the
 /// kernel's desktop menu, which is what keeps the two cleanly split.
 struct RegisteredWindowMenu {
+    dynamic: bool,
     owner: WindowOwner,
     window: WindowId,
     context: u64,
@@ -161,6 +168,17 @@ pub(crate) fn register_window_menu(
     entries: Vec<ContextMenuEntry>,
     callback: ContextMenuCallback,
 ) -> Result<(), ContextMenuError> {
+    register_window_menu_inner(owner, window, context, entries, callback, false)
+}
+
+fn register_window_menu_inner(
+    owner: WindowOwner,
+    window: WindowId,
+    context: u64,
+    entries: Vec<ContextMenuEntry>,
+    callback: ContextMenuCallback,
+    dynamic: bool,
+) -> Result<(), ContextMenuError> {
     if entries.is_empty() {
         return Err(ContextMenuError::Empty);
     }
@@ -172,6 +190,7 @@ pub(crate) fn register_window_menu(
     }
     let mut menus = WINDOW_MENUS.lock();
     let registration = RegisteredWindowMenu {
+        dynamic,
         owner,
         window,
         context,
@@ -185,6 +204,44 @@ pub(crate) fn register_window_menu(
         Some(index) => menus[index] = registration,
         None => menus.push(registration),
     }
+    Ok(())
+}
+
+/// Opt in to per-invocation preparation without exposing the cursor plane.
+pub(super) fn register_dynamic_window_menu(
+    owner: WindowOwner,
+    window: WindowId,
+    callback: ContextMenuCallback,
+) -> Result<(), ContextMenuError> {
+    register_window_menu_inner(
+        owner,
+        window,
+        0,
+        alloc::vec![ContextMenuEntry::disabled("…")],
+        callback,
+        true,
+    )
+}
+
+/// Resolve only the still-pending invocation owned by this exact window.
+/// A delayed reply can never reopen a dismissed/replaced menu.
+pub(super) fn resolve_window_menu(
+    owner: WindowOwner,
+    window: WindowId,
+    serial: u64,
+    entries: Vec<ContextMenuEntry>,
+) -> Result<(), ContextMenuError> {
+    let mut active = ACTIVE_MENU.lock();
+    let Some(menu) = active
+        .as_mut()
+        .filter(|m| m.owner == owner && m.window == window && m.serial == serial && m.preparing)
+    else {
+        return Err(ContextMenuError::NotFocused);
+    };
+    menu.entries = entries;
+    menu.preparing = false;
+    drop(active);
+    super::input_broker::notify_slot4_visual_change();
     Ok(())
 }
 
@@ -216,6 +273,7 @@ pub(super) fn registered_request(
         .iter()
         .find(|menu| menu.owner == owner && menu.window == window)?;
     Some(ContextMenuRequest {
+        dynamic: menu.dynamic,
         entries: menu.entries.clone(),
         context: menu.context,
         callback: menu.callback,
@@ -246,9 +304,20 @@ pub(super) fn open(
 ) -> Result<(), ContextMenuError> {
     validate_request(&request)?;
     let serial = next_menu_serial();
+    let placement = super::window_broker::window_snapshot(owner, window)
+        .ok_or(ContextMenuError::NotFocused)?
+        .presentation_placement;
+    let local = (
+        (i64::from(anchor.0) - i64::from(placement.x)).clamp(i32::MIN as i64, i32::MAX as i64)
+            as i32,
+        (i64::from(anchor.1) - i64::from(placement.y)).clamp(i32::MIN as i64, i32::MAX as i64)
+            as i32,
+    );
     let entry_count = request.entries.len();
     let previous = ACTIVE_MENU.lock().replace(ActiveContextMenu {
         serial,
+        local,
+        preparing: request.dynamic,
         source,
         owner,
         window,
@@ -262,6 +331,20 @@ pub(super) fn open(
     });
     if let Some(previous) = previous {
         queue_close(previous, None, ContextMenuCloseReason::Replaced);
+    }
+    if request.dynamic {
+        PENDING_CALLBACKS.lock().push_back(PendingCallback {
+            callback: request.callback,
+            result: ContextMenuResult {
+                serial,
+                local,
+                owner,
+                window,
+                context: request.context,
+                selected_action: None,
+                reason: ContextMenuCloseReason::Prepare,
+            },
+        });
     }
     crate::log_info!(target: "ui4";
         "ui4/context-menu: opened owner={:?} window={} context={} entries={} cursor={}:{}:{} lifetime=one-shot\n",
@@ -319,7 +402,8 @@ pub(super) fn pointer_down(
         let Some(menu) = active.as_mut() else {
             return None;
         };
-        let inside = menu.source == source
+        let inside = !menu.preparing
+            && menu.source == source
             && visual_rect_contains(
                 menu_rect(menu.anchor, menu.entries.len(), screen_width, screen_height),
                 x,
@@ -378,7 +462,15 @@ pub(super) fn dismiss_for_source(source: Ui4CursorSource) -> bool {
     dismiss_matching(|menu| menu.source == source, ContextMenuCloseReason::Dismissed)
 }
 
+pub(super) fn cancel_window(owner: WindowOwner, window: WindowId) -> bool {
+    dismiss_matching(
+        |menu| menu.owner == owner && menu.window == window,
+        ContextMenuCloseReason::Dismissed,
+    )
+}
+
 pub(super) fn dismiss_window(owner: WindowOwner, window: WindowId) -> bool {
+    clear_window_menu(owner, window);
     dismiss_matching(
         |menu| menu.owner == owner && menu.window == window,
         ContextMenuCloseReason::WindowClosed,
@@ -416,7 +508,7 @@ fn dismiss_matching(
 
 pub(super) fn visual() -> Option<ContextMenuVisual> {
     let active = ACTIVE_MENU.lock();
-    let menu = active.as_ref()?;
+    let menu = active.as_ref().filter(|m| !m.preparing)?;
     Some(ContextMenuVisual {
         anchor: menu.anchor,
         color: menu.color,
@@ -488,6 +580,9 @@ fn entry_at(
     screen_width: u32,
     screen_height: u32,
 ) -> Option<usize> {
+    if menu.preparing {
+        return None;
+    }
     let rect = menu_rect(menu.anchor, menu.entries.len(), screen_width, screen_height);
     if !visual_rect_contains(rect, x, y) {
         return None;
@@ -512,6 +607,8 @@ fn queue_close(
     PENDING_CALLBACKS.lock().push_back(PendingCallback {
         callback: menu.callback,
         result: ContextMenuResult {
+            serial: menu.serial,
+            local: menu.local,
             owner: menu.owner,
             window: menu.window,
             context: menu.context,
@@ -538,6 +635,7 @@ mod tests {
 
     fn request(entries: Vec<ContextMenuEntry>) -> ContextMenuRequest {
         ContextMenuRequest {
+            dynamic: false,
             entries,
             context: 7,
             callback: ignore_result,

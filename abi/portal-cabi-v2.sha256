@@ -230,4 +230,6 @@
 # All pre-existing signatures compared unchanged against 685a1c020^.
 # Owned-frame display-bottom-color control is a strictly additive v2 extension.
 # All existing function signatures were compared unchanged before updating this lock.
-53a3ffa29427a1f5ff2a011c82b98a5be8cfc6c824b48f6553c58d16d0fcc201
+# Dynamic context-menu v2 registration/reply and event take are strictly additive.
+# All existing function signatures were compared unchanged before updating this lock.
+f28e24de5f1d46ead2ded7719e99fb8a27a1389defbd69463f63b1643296e4d8
