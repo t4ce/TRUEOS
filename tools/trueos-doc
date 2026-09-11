@@ -14,21 +14,20 @@ from typing import Any
 
 API = "trueos-doc/v1"
 APP_COMMANDS = [
-    {"name": "start", "usage": "start [selector]", "effect": "List app.db or launch one installed Blueprint. Launch arguments are intentionally unsupported."},
-    {"name": "online", "usage": "online [selector]", "effect": "List or fetch, verify, and immediately launch a Blueprint from https://trueos.eu/apps."},
-    {"name": "probe", "usage": "probe [selector]", "effect": "List or fetch, verify, and immediately launch a Blueprint from https://trueos.eu/probes. Select by probe-list ID or name; IDs are separate from online. The website must serve the probe catalog and its linked files."},
-    {"name": "dl", "usage": "dl [selector]", "effect": "List or install an online Blueprint into app.db without launching it."},
+    {"name": "online", "usage": "online [selector]", "effect": "In Once mode, list or fetch, verify, and immediately launch a Blueprint from https://trueos.eu/apps. A bare id or name has the same launch behavior."},
     {"name": "peer", "usage": "peer [peer-id [remote-vmid [local-vmid]]]", "effect": "List peers/offers or request a peer snapshot transfer; cross-principal restore may be safety-gated."},
+    {"name": "dl", "usage": "dl [selector]", "effect": "List or install an online Blueprint into app.db without launching it."},
+    {"name": "status", "usage": "status", "effect": "Print VM slots, shared memory, VMX capability, and stored-snapshot counts."},
     {"name": "pause", "aliases": ["unpause"], "usage": "pause [vmid]", "effect": "List replicatable VMs, or toggle one between running and its lifecycle pause latch."},
+    {"name": "stop", "usage": "stop [vmid]", "effect": "Stop one VM, or every active VM when vmid is omitted, without checkpointing."},
     {"name": "snapshot", "aliases": ["snap"], "usage": "snapshot <vmid>", "effect": "Request a warm Blueprint-Ready checkpoint; use store afterward for reboot persistence."},
-    {"name": "store", "usage": "store <vmid> <name>", "effect": "Persist a completed warm snapshot under a name."},
     {"name": "preserve", "aliases": ["save"], "usage": "preserve [vmid]", "effect": "Checkpoint then stop one VM, or every active VM when vmid is omitted."},
-    {"name": "load", "usage": "load [vmid | name [vmid] | URL [vmid]]", "effect": "Resume a warm snapshot, load a named persistent image, or request remote restore."},
     {"name": "eject", "aliases": ["drop"], "usage": "eject <vmid>", "effect": "Discard retained warm state; named persistent images remain."},
     {"name": "delete", "aliases": ["del"], "usage": "delete <name>", "effect": "Delete a named persistent image."},
-    {"name": "stop", "usage": "stop [vmid]", "effect": "Stop one VM, or every active VM when vmid is omitted, without checkpointing."},
     {"name": "kick", "usage": "kick <vmid>", "effect": "Send the VM owner's kick signal."},
-    {"name": "status", "usage": "status", "effect": "Print VM slots, shared memory, VMX capability, and stored-snapshot counts."},
+    {"name": "load", "usage": "load [vmid | name [vmid] | URL [vmid]]", "effect": "Resume a warm snapshot, load a named persistent image, or request remote restore."},
+    {"name": "store", "usage": "store <vmid> <name>", "effect": "Persist a completed warm snapshot under a name."},
+    {"name": "probe", "usage": "probe [selector]", "effect": "List or fetch, verify, and immediately launch a Blueprint from https://trueos.eu/probes. Select by probe-list ID or name; IDs are separate from online. The website must serve the probe catalog and its linked files."},
 ]
 
 COMMAND_DETAILS: dict[str, dict[str, Any]] = {
@@ -37,14 +36,14 @@ COMMAND_DETAILS: dict[str, dict[str, Any]] = {
         "tui_controls": "Up/Down or j/k select; Enter/Right/l choose; Left/h back; Esc/q quit.",
         "power_actions": {
             "selection": [
-                "Run os in cmd mode, then press Down twice for Shutdown TRUEOS or three times for Reboot TRUEOS.",
+                "Press TAB twice, run os in Twice mode, then press Down twice for Shutdown TRUEOS or three times for Reboot TRUEOS.",
                 "Each action opens one confirmation screen with Return selected by default; press Down then Enter to proceed.",
             ],
             "effect": "Shutdown enters ACPI S5; reboot requests the firmware reset register.",
         },
         "live_update": {
             "selection": [
-                "Run os in cmd mode; the administration TUI starts on Install TRUEOS to disk.",
+                "Press TAB twice and run os in Twice mode; the administration TUI starts on Install TRUEOS to disk.",
                 "Press Down then Enter to select Live update running TRUEOS.",
                 "On Confirm, press Down then Enter to select Proceed (or Discard apps and proceed when non-replicatable apps are listed).",
             ],
@@ -66,19 +65,19 @@ COMMAND_DETAILS: dict[str, dict[str, Any]] = {
 
 TOPICS: dict[str, dict[str, Any]] = {
     "shell2": {
-        "summary": "Shell2 is a three-mode command surface over per-transport Matrix slots.",
-        "default_mode": "cmd",
+        "summary": "Shell2 is a Default/Once/Twice command surface over per-transport Matrix slots.",
+        "default_mode": "default",
         "modes": {
-            "cmd": "Dispatches the kernel command registry.",
-            "alias": "Dispatches the kernel command registry while presenting the gray convenience-command legend.",
-            "apps": "Dispatches Blueprint lifecycle and catalog commands.",
+            "default": "Dispatches aliases and media commands, or launches a bare app.db id/name. Its AppDB legend is populated from the live built-in and downloaded catalog.",
+            "once": "Dispatches online/catalog and Blueprint lifecycle commands. A bare id/name performs an online lookup and launch.",
+            "twice": "Dispatches the kernel command registry while presenting the administrative-command legend.",
         },
-        "tab": "TAB cycles cmd -> apps -> alias -> cmd while editing, but is ignored whenever the active Matrix slot owns a VM.",
-        "routing_order_on_enter": ["§§ operator", "§ Matrix operator", "VM leave/control/app input", "interactive command session", "current cmd/apps/alias mode"],
+        "tab": "TAB cycles Default -> Once -> Twice -> Default while editing, but is ignored whenever the active Matrix slot owns a VM.",
+        "routing_order_on_enter": ["§§ operator", "§ Matrix operator", "VM leave/control/app input", "interactive command session", "current Default/Once/Twice mode"],
         "sources": ["src/shell2/mod.rs::ShellMode2", "src/shell2/mod.rs::handle_submit", "src/shell2/mod.rs::run_shell2_on_backend"],
     },
     "headjack": {
-        "summary": "The § headjack operator navigates and retires Matrix context slots independently of cmd/apps mode.",
+        "summary": "The § headjack operator navigates and retires Matrix context slots independently of tab mode.",
         "operators": [
             {"input": "§", "effect": "Select the default Matrix slot."},
             {"input": "§<slot>", "effect": "Select <slot>, creating an empty slot if absent. Slot ids are truncated to the Matrix id capacity."},
@@ -86,12 +85,12 @@ TOPICS: dict[str, dict[str, Any]] = {
             {"input": "§§", "effect": "Clear the active slot transcript. This is not a slot free."},
             {"input": "§§<selector>", "effect": "Online-fetch and launch a Blueprint selector from any mode."},
         ],
-        "invariants": ["Every § Matrix navigation forces Shell2 back to cmd mode.", "The paired §§ prefix is parsed before the single-§ operator.", "vmx_leave and local ESC from an active VM return to § (default)."],
+        "invariants": ["Every § Matrix navigation forces Shell2 back to Default mode.", "The paired §§ prefix is parsed before the single-§ operator.", "vmx_leave and local ESC from an active VM return to § (default)."],
         "sources": ["src/shell2/mod.rs::handle_matrix_operator", "src/shell2/mod.rs::parse_double_section_operator", "src/shell2/matrix.rs::switch_active_slot", "src/shell2/matrix.rs::free_slot"],
     },
     "tui": {
         "summary": "Blueprint terminal UIs lease Shell2 input/output; after release, the same VM remains addressable through its Matrix slot.",
-        "sequence": ["Connect to Shell2", "TAB only if apps mode is needed", "launch/select the Blueprint", "the Blueprint may acquire the terminal lease", "after it parks/releases, enter vmx_tui to request re-entry", "enter vmx_leave or § to return to the default slot"],
+        "sequence": ["Connect to Shell2", "launch an installed Blueprint by id/name in Default or press TAB once for online", "the Blueprint may acquire the terminal lease", "after it parks/releases, enter vmx_tui to request re-entry", "enter vmx_leave or § to return to the default slot"],
         "vm_controls": ["vmx_tui [demo]", "vmx_env", "vmx_smp", "vmx_help", "vmx_leave", "vmx_stop", "vmx_pause", "vmx_snapshot", "vmx_preserve"],
         "notes": ["While a VM is active, TAB is delivered/ignored as VM context requires; it does not switch Shell2 mode.", "Blueprint commands without vmx_ are passed to text-app input when that Blueprint enables command passthrough."],
         "sources": ["src/shell2/mod.rs::is_vmx_control_command", "src/shell2/mod.rs::is_vmx_tui_command", "src/hv/mod.rs::blueprint_control_shell_vmx_command", "crates/trueos-v/src/vshell.rs"],
@@ -273,7 +272,7 @@ TOPICS: dict[str, dict[str, Any]] = {
         "download_example": "curl --fail 'http://192.168.178.94/dl/1/screenshots/example.png' --output example.png",
         "path_rules": ["Root IDs are discovered at runtime; do not assume disc001 is always raw id 1.", "Encode each path component for URLs.", "Relative paths are normalized and bounded by the service."],
         "screenshot_pull": [
-            "Run shot in Shell2 cmd mode and treat its armed line only as admission.",
+            "Run shot in Shell2 Default mode and treat its armed line only as admission.",
             "GET / and inspect the selected root's screenshots directory for a newly created wd-postblend PNG.",
             "Verify the filename timestamp/sequence is newer than any previous artifact before downloading it.",
             "Download it through /dl/<root-id>/screenshots/<filename>.",
@@ -443,7 +442,7 @@ def compact_context(root: Path) -> dict[str, Any]:
     return {
         "purpose": "Minimum context needed to operate and reason about TRUEOS Shell2.",
         "shell2": {
-            "default_mode": "cmd",
+            "default_mode": "default",
             "tab": TOPICS["shell2"]["tab"],
             "cmd_commands": [entry["name"] for entry in commands],
             "apps_commands": [entry["name"] for entry in APP_COMMANDS],

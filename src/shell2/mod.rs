@@ -168,17 +168,17 @@ fn with_matrix_target_geometry<R>(
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ShellMode2 {
-    Apps,
-    Alias,
-    Cmd,
+    Default,
+    Once,
+    Twice,
 }
 
 impl ShellMode2 {
     const fn next(self) -> Self {
         match self {
-            Self::Cmd => Self::Apps,
-            Self::Apps => Self::Alias,
-            Self::Alias => Self::Cmd,
+            Self::Default => Self::Once,
+            Self::Once => Self::Twice,
+            Self::Twice => Self::Default,
         }
     }
 }
@@ -513,15 +513,15 @@ impl<'a> AlignedWriter<'a> {
             .saturating_sub(banner_left_visible_width(self.io.output_mask()))
             .saturating_sub(BANNER_GROUP_GAP_WIDTH);
         match mode {
-            ShellMode2::Apps => shell2_apps::command_names_text(),
-            ShellMode2::Alias if (self.io.output_mask() & OUTPUT_LOCAL_MASK) != 0 => {
-                shell2_cmd_registry::titlebar_right_alias_names_text_fitting(available_width)
+            ShellMode2::Default if (self.io.output_mask() & OUTPUT_LOCAL_MASK) != 0 => {
+                shell2_cmd_registry::titlebar_right_default_names_text_fitting(available_width)
             }
-            ShellMode2::Alias => shell2_cmd_registry::titlebar_right_alias_names_text(),
-            ShellMode2::Cmd if (self.io.output_mask() & OUTPUT_LOCAL_MASK) != 0 => {
-                shell2_cmd_registry::titlebar_right_command_names_text_fitting(available_width)
+            ShellMode2::Default => shell2_cmd_registry::titlebar_right_default_names_text(),
+            ShellMode2::Once => shell2_apps::command_names_text(),
+            ShellMode2::Twice if (self.io.output_mask() & OUTPUT_LOCAL_MASK) != 0 => {
+                shell2_cmd_registry::titlebar_right_admin_names_text_fitting(available_width)
             }
-            ShellMode2::Cmd => titlebar_right_command_names_text(),
+            ShellMode2::Twice => shell2_cmd_registry::titlebar_right_admin_names_text(),
         }
     }
 
@@ -929,11 +929,12 @@ fn banner_right_visible_width(output_mask: OutputMask) -> usize {
         return ecma48::visible_width("VMX tui env smp leave[ESC] stop pause snapshot preserve");
     }
 
-    let cmd_width = ecma48::visible_width(titlebar_right_command_names_text().as_str());
-    let alias_width =
-        ecma48::visible_width(shell2_cmd_registry::titlebar_right_alias_names_text().as_str());
-    let apps_width = ecma48::visible_width(shell2_apps::command_names_text().as_str());
-    cmd_width.max(alias_width).max(apps_width)
+    let default_width =
+        ecma48::visible_width(shell2_cmd_registry::titlebar_right_default_names_text().as_str());
+    let once_width = ecma48::visible_width(shell2_apps::command_names_text().as_str());
+    let twice_width =
+        ecma48::visible_width(shell2_cmd_registry::titlebar_right_admin_names_text().as_str());
+    default_width.max(once_width).max(twice_width)
 }
 
 pub(crate) fn output_target_for_backend(io: &'static dyn ShellBackend2) -> OutputMask {
@@ -1337,10 +1338,6 @@ pub(crate) fn command_registry_json() -> AllocString {
     cmds::command_registry_json()
 }
 
-fn titlebar_right_command_names_text() -> AllocString {
-    shell2_cmd_registry::titlebar_right_command_names_text()
-}
-
 fn output_mask_for_io(io: &dyn ShellIo2) -> OutputMask {
     let declared = io.output_mask();
     if declared != 0 {
@@ -1473,10 +1470,10 @@ mod tests {
     };
 
     #[test]
-    fn tab_mode_cycle_is_command_apps_alias() {
-        assert!(ShellMode2::Cmd.next() == ShellMode2::Apps);
-        assert!(ShellMode2::Apps.next() == ShellMode2::Alias);
-        assert!(ShellMode2::Alias.next() == ShellMode2::Cmd);
+    fn tab_mode_cycle_is_default_once_twice() {
+        assert!(ShellMode2::Default.next() == ShellMode2::Once);
+        assert!(ShellMode2::Once.next() == ShellMode2::Twice);
+        assert!(ShellMode2::Twice.next() == ShellMode2::Default);
     }
 
     #[test]
@@ -1592,7 +1589,7 @@ pub(crate) fn repaint_backend_screen(io: &'static dyn ShellBackend2) {
     out.reset_scroll_region();
 
     let (_, time_text) = clock_bucket_and_text();
-    let mode = ShellMode2::Cmd;
+    let mode = ShellMode2::Default;
 
     out.banner(output_mask, mode, time_text.as_str());
     out.mode_status(output_mask, 0);
@@ -1833,18 +1830,22 @@ fn handle_submit(
     submitted: &str,
 ) -> HandleSubmitResult {
     match mode {
-        ShellMode2::Cmd | ShellMode2::Alias => {
-            match shell2_cmd::try_parse(spawner, io, submitted) {
-                shell2_cmd::ParseOutcome::StartSession(kind) => {
-                    HandleSubmitResult::StartSession(kind)
-                }
-                _ => HandleSubmitResult::None,
+        ShellMode2::Default => match shell2_cmd::try_parse(spawner, io, submitted) {
+            shell2_cmd::ParseOutcome::StartSession(kind) => HandleSubmitResult::StartSession(kind),
+            shell2_cmd::ParseOutcome::NotCommand => {
+                shell2_apps::submit_local_selector(spawner, io, submitted);
+                HandleSubmitResult::None
             }
-        }
-        ShellMode2::Apps => {
-            shell2_apps::submit(spawner, io, submitted);
+            shell2_cmd::ParseOutcome::Handled => HandleSubmitResult::None,
+        },
+        ShellMode2::Once => {
+            shell2_apps::submit_once(spawner, io, submitted);
             HandleSubmitResult::None
         }
+        ShellMode2::Twice => match shell2_cmd::try_parse(spawner, io, submitted) {
+            shell2_cmd::ParseOutcome::StartSession(kind) => HandleSubmitResult::StartSession(kind),
+            _ => HandleSubmitResult::None,
+        },
     }
 }
 
@@ -1924,7 +1925,7 @@ fn apply_matrix_operator_and_refresh(
     submitted: &str,
 ) -> VecDeque<TranscriptEntry> {
     handle_matrix_operator(io, submitted);
-    *mode = ShellMode2::Cmd;
+    *mode = ShellMode2::Default;
     configure_output_view(out, output_mask);
     out.banner(output_mask, *mode, minute_text);
     out.mode_status(output_mask, running_go2_phase);
@@ -2114,7 +2115,7 @@ async fn run_shell2(
     out.clear_screen_home();
     out.reset_scroll_region();
     let (mut last_minute_bucket, time_text) = clock_bucket_and_text();
-    let mut mode = ShellMode2::Cmd;
+    let mut mode = ShellMode2::Default;
     out.banner(output_mask, mode, time_text.as_str());
     let mut command_sessions: alloc::vec::Vec<CommandSession> = alloc::vec::Vec::new();
     let running_go2_phase = 0usize;
@@ -2550,7 +2551,7 @@ async fn run_shell2(
                     } else if !submitted.is_empty() {
                         if is_matrix_operator(submitted) {
                             handle_matrix_operator(io, submitted);
-                            mode = ShellMode2::Cmd;
+                            mode = ShellMode2::Default;
                             configure_output_view(&out, output_mask);
                             out.banner(output_mask, mode, minute_text.as_str());
                             out.mode_status(output_mask, running_go2_phase);
@@ -2558,10 +2559,10 @@ async fn run_shell2(
                             render_active_slot_content(&out, output_mask, &transcript);
                             last_chrome_state = current_chrome_state(output_mask, mode);
                         } else {
-                            // Apps-mode `start` already remains visible through the terminal's
-                            // input echo. Do not add its second copy below the app.db table.
-                            let listing_command =
-                                mode == ShellMode2::Apps && submitted.eq_ignore_ascii_case("start");
+                            // Once-mode `online` already remains visible through the terminal's
+                            // input echo. Do not add its second copy below the online table.
+                            let listing_command = mode == ShellMode2::Once
+                                && submitted.eq_ignore_ascii_case("online");
                             if !submitted.is_empty() && !listing_command {
                                 record_user_line_for_active_slot(io, submitted);
                                 transcript = current_transcript_for_task(io);

@@ -205,8 +205,8 @@ pub(crate) fn try_parse(
         );
         for (slot, state) in crate::ui4::video_playback_status().iter().enumerate() {
             print_shell_line(io, alloc::format!(
-                "vid: slot={} occupied={} cancelled={} queued={} completed={} active={} published={}",
-                slot + 1, state.occupied as u8, state.cancelled as u8,
+                "vid: slot={} occupied={} cancelled={} paused={} queued={} completed={} active={} published={}",
+                slot + 1, state.occupied as u8, state.cancelled as u8, state.paused as u8,
                 state.queued, state.completed, state.active, state.published).as_str());
         }
         return ParseOutcome::Handled;
@@ -276,7 +276,7 @@ pub(crate) fn try_parse(
 fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(
         io,
-        "vid: usage `vid fs [path] [loop]` | `vid on [loop]` | `vid status` | `vid stop <1|2|3>`; up to 3 videos, ESC closes the selected window",
+        "vid: usage `vid fs [path] [loop]` | `vid on [loop]` | `vid status` | `vid stop <1|2|3>`; up to 3 videos, SPACE pauses/plays the selected window, ESC closes it",
     );
 }
 

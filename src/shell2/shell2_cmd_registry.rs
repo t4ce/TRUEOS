@@ -52,7 +52,7 @@ const TOOL_JSON_TTS: &str = r#"{"type":"object","properties":{"text":{"type":"st
 #[cfg(feature = "trueos_ttstt")]
 const TOOL_JSON_STT: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS path to a mono/stereo signed-16-bit PCM WAV file."},"language":{"type":"string","description":"Whisper language code or auto."},"translate":{"type":"boolean","description":"Translate recognized speech to English."}},"required":["path"],"additionalProperties":false}"#;
 const TOOL_JSON_TD: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
-const TOOL_JSON_VID: &str = r#"{"type":"object","properties":{"source":{"type":"string","enum":["fs","on","online","status","stop"],"description":"Read an AVC MP4 or H.264 Annex-B asset from TRUEOSFS, download the fixed online AVC1 MP4 asset, inspect status, or stop a playback slot."},"path":{"type":"string","description":"Optional TRUEOSFS AVC MP4 or H.264 Annex-B path when source=fs; defaults to x31_head_movie.annexb.h264. For source=stop, pass the playback slot: 1, 2 or 3."},"loop":{"type":"boolean","description":"Repeat playback while retaining the same UI4 Frame and window lifetime."}},"required":["source"],"additionalProperties":false}"#;
+const TOOL_JSON_VID: &str = r#"{"type":"object","properties":{"source":{"type":"string","enum":["fs","on","online","status","stop"],"description":"Read an AVC MP4 or H.264 Annex-B asset from TRUEOSFS, download the fixed online AVC1 MP4 asset, inspect status, or stop a playback slot."},"path":{"type":"string","description":"Optional TRUEOSFS AVC MP4 or H.264 Annex-B path when source=fs; defaults to x31_head_movie.annexb.h264. For source=stop, pass the playback slot: 1, 2 or 3."},"loop":{"type":"boolean","description":"Repeat playback while retaining the same UI4 Frame and window lifetime. Space pauses or resumes the selected UI4 video frame."}},"required":["source"],"additionalProperties":false}"#;
 const TOOL_JSON_XHCI: &str = r#"{"type":"object","properties":{"command":{"type":"string","enum":["status","journal","stage","read","read64","write","write64","rmw"],"description":"xHCI laboratory operation."},"stage":{"type":"integer","minimum":1,"maximum":5,"description":"Cumulative diagnostic stage."},"port":{"type":"integer","minimum":1,"maximum":255,"description":"Physical root port for mutating stages."},"offset":{"type":"string","description":"BAR-relative register offset, decimal or 0x-prefixed."},"value":{"type":"string","description":"Raw register value, decimal or 0x-prefixed."},"clear_mask":{"type":"string","description":"Raw RMW clear mask."},"set_mask":{"type":"string","description":"Raw RMW set mask."},"arm":{"type":"boolean","description":"Explicitly arm a mutating operation."},"live":{"type":"boolean","description":"Acknowledge disruption of a physically connected target."},"fused":{"type":"boolean","description":"Explicitly permit targeting the fused LED port."},"depth":{"type":"integer","minimum":1,"maximum":3,"description":"Stage-five transition-tree depth."}},"required":["command"],"additionalProperties":false}"#;
 
 fn dispatch_aud(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -454,7 +454,7 @@ const SHELL2_COMMAND_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         advertised: true,
         handler: dispatch_vid,
         tool_description: Some(
-            "Play up to three AVC MP4 or H.264 Annex-B videos through VDBOX and UI4. Escape stops the selected window; vid status inspects slots and vid stop <1|2|3> closes a slot.",
+            "Play up to three AVC MP4 or H.264 Annex-B videos through VDBOX and UI4. Space pauses or resumes the selected window; Escape stops it. vid status inspects slots and vid stop <1|2|3> closes a slot.",
         ),
         tool_parameters_json: Some(TOOL_JSON_VID),
     },
@@ -514,8 +514,8 @@ fn starts_with_command<'a>(submitted: &'a str, name: &str) -> Option<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::{
-        TOOL_JSON_WIN, command_registry_json, starts_with_command, titlebar_right_alias_names_text,
-        titlebar_right_command_names_text,
+        TOOL_JSON_WIN, command_registry_json, starts_with_command, titlebar_right_admin_names_text,
+        titlebar_right_default_names_text,
     };
 
     #[test]
@@ -533,17 +533,18 @@ mod tests {
     }
 
     #[test]
-    fn command_titlebar_uses_misc_and_admin_groups() {
-        let status = titlebar_right_command_names_text();
+    fn default_titlebar_uses_aka_media_and_appdb_groups() {
+        let status = titlebar_right_default_names_text();
 
-        assert!(status.starts_with("Misc["));
-        assert!(status.contains("] Admin["));
+        assert!(status.starts_with("Aka["));
+        assert!(status.contains("] Media["));
+        assert!(status.contains("] AppDB["));
         assert!(status.ends_with(']'));
     }
 
     #[test]
-    fn command_titlebar_paints_first_four_admin_entries_pink() {
-        let status = titlebar_right_command_names_text();
+    fn admin_titlebar_paints_first_four_entries_pink() {
+        let status = titlebar_right_admin_names_text();
         let positions = ["cry", "os", "backup", "disc"].map(|label| {
             let token = alloc::format!("\x1b[1;38;2;255;55;255m{label}\x1b[0m");
             status.find(token.as_str()).unwrap()
@@ -555,7 +556,7 @@ mod tests {
 
     #[test]
     fn titlebar_and_registry_omit_retired_commands() {
-        let status = titlebar_right_command_names_text();
+        let status = titlebar_right_admin_names_text();
         let registry = command_registry_json();
         for label in ["gridp", "helio", "set", "cpp", "hyper"] {
             assert!(!status.contains(label), "titlebar contains retired {label}");
@@ -565,15 +566,15 @@ mod tests {
             );
         }
         #[cfg(feature = "trueos_lumen")]
-        assert!(status.contains("lum"));
+        assert!(registry.contains("\"name\":\"lum\""));
         assert!(registry.contains("\"name\":\"bios\""));
     }
 
     #[test]
-    fn alias_titlebar_is_exactly_grouped_and_gray() {
-        let status = titlebar_right_alias_names_text();
-        assert!(status.starts_with("Alias["));
-        assert!(status.ends_with(']'));
+    fn aka_titlebar_contains_every_alias_in_gray() {
+        let status = titlebar_right_default_names_text();
+        let aka = status.split("] Media[").next().unwrap();
+        assert!(aka.starts_with("Aka["));
         assert_eq!(status.matches("\x1b[1;38;2;160;168;176m").count(), 9);
         let positions = [
             "td", "edit", "img", "shell", "surf", "qjs", "aud", "ssh", "grid",
@@ -584,10 +585,7 @@ mod tests {
         for label in [
             "td", "edit", "img", "shell", "surf", "qjs", "aud", "ssh", "grid",
         ] {
-            assert!(
-                !titlebar_right_command_names_text().contains(label),
-                "command titlebar still contains alias {label}"
-            );
+            assert!(aka.contains(label), "default Aka group is missing alias {label}");
         }
 
         let registry = command_registry_json();
@@ -621,27 +619,40 @@ pub(crate) fn try_dispatch(
     ParseOutcome::NotCommand
 }
 
-const TITLEBAR_MISC_COMMANDS: &[&str] = &["win", "shot", "film", "lum", "tts", "stt", "vid"];
+const TITLEBAR_MEDIA_COMMANDS: &[&str] = &["img", "shot", "vid", "film"];
 const TITLEBAR_ADMIN_COMMANDS: &[&str] = &[
     "cry", "os", "backup", "disc", "tlb", "xhci", "ram", "smp", "net", "bios", "vgpu",
 ];
-/// Render the curated command-mode portion of Shell2's right-aligned titlebar.
-pub(crate) fn titlebar_right_command_names_text() -> AllocString {
-    render_command_titlebar(usize::MAX)
+/// Render Shell2's default aliases, media controls, and live app.db names.
+pub(crate) fn titlebar_right_default_names_text() -> AllocString {
+    let app_names = app_db_names();
+    render_default_titlebar(usize::MAX, app_names.as_slice())
 }
 
-/// Render the commands moved into Shell2's gray Alias mode.
-pub(crate) fn titlebar_right_alias_names_text() -> AllocString {
-    render_alias_titlebar(usize::MAX)
+/// Render the twice-TAB administrative command group.
+pub(crate) fn titlebar_right_admin_names_text() -> AllocString {
+    render_admin_titlebar(usize::MAX)
 }
 
-fn render_command_titlebar(max_entries: usize) -> AllocString {
-    let mut out = AllocString::from("Misc[");
+fn app_db_names() -> alloc::vec::Vec<AllocString> {
+    crate::app_db::list()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|entry| {
+            entry
+                .archive
+                .strip_suffix(".bp")
+                .unwrap_or(entry.archive.as_str())
+                .into()
+        })
+        .collect()
+}
+
+fn render_default_titlebar(max_entries: usize, app_names: &[AllocString]) -> AllocString {
+    let aliases = crate::r::restart::startup_alias_names();
+    let mut out = AllocString::from("Aka[");
     let mut rendered = 0usize;
-    for name in TITLEBAR_MISC_COMMANDS {
-        if *name == "lum" && find_advertised_entry(name).is_none() {
-            continue;
-        }
+    for name in aliases {
         if rendered == max_entries {
             out.push_str("...]");
             return out;
@@ -649,17 +660,47 @@ fn render_command_titlebar(max_entries: usize) -> AllocString {
         if rendered != 0 {
             out.push(' ');
         }
-        push_registry_titlebar_entry(&mut out, name);
+        push_colored_status_token(&mut out, name.as_str(), STATUS_GRAY_RGB);
         rendered += 1;
     }
 
-    out.push_str("] Admin[");
-    for name in TITLEBAR_ADMIN_COMMANDS {
+    out.push_str("] Media[");
+    for name in TITLEBAR_MEDIA_COMMANDS {
         if rendered == max_entries {
             out.push_str("...]");
             return out;
         }
         if !out.ends_with('[') {
+            out.push(' ');
+        }
+        push_registry_titlebar_entry(&mut out, name);
+        rendered += 1;
+    }
+
+    out.push_str("] AppDB[");
+    for name in app_names {
+        if rendered == max_entries {
+            out.push_str("...]");
+            return out;
+        }
+        if !out.ends_with('[') {
+            out.push(' ');
+        }
+        out.push_str(name.as_str());
+        rendered += 1;
+    }
+    out.push(']');
+    out
+}
+
+fn render_admin_titlebar(max_entries: usize) -> AllocString {
+    let mut out = AllocString::from("Admin[");
+    for (index, name) in TITLEBAR_ADMIN_COMMANDS.iter().enumerate() {
+        if index == max_entries {
+            out.push_str("...]");
+            return out;
+        }
+        if index != 0 {
             out.push(' ');
         }
         let color = if matches!(*name, "cry" | "os" | "backup" | "disc") {
@@ -668,24 +709,6 @@ fn render_command_titlebar(max_entries: usize) -> AllocString {
             STATUS_GRAY_RGB
         };
         push_colored_status_token(&mut out, name, color);
-        rendered += 1;
-    }
-    out.push(']');
-    out
-}
-
-fn render_alias_titlebar(max_entries: usize) -> AllocString {
-    let mut out = AllocString::from("Alias[");
-    let names = crate::r::restart::startup_alias_names();
-    for (index, name) in names.iter().enumerate() {
-        if index == max_entries {
-            out.push_str("...]");
-            return out;
-        }
-        if index != 0 {
-            out.push(' ');
-        }
-        push_colored_status_token(&mut out, name.as_str(), STATUS_GRAY_RGB);
     }
     out.push(']');
     out
@@ -694,14 +717,19 @@ fn render_alias_titlebar(max_entries: usize) -> AllocString {
 /// Return complete, colorized command tokens that fit one titlebar segment.
 /// The local UI4 frontend has fewer columns than the desktop terminal, so a
 /// full legend must be shortened without splitting ANSI escape sequences.
-pub(crate) fn titlebar_right_command_names_text_fitting(max_width: usize) -> AllocString {
-    let full = titlebar_right_command_names_text();
+pub(crate) fn titlebar_right_default_names_text_fitting(max_width: usize) -> AllocString {
+    let app_names = app_db_names();
+    let full = render_default_titlebar(usize::MAX, app_names.as_slice());
     if super::ecma48::visible_width(full.as_str()) <= max_width {
         return full;
     }
 
-    for entry_count in (0..TITLEBAR_MISC_COMMANDS.len() + TITLEBAR_ADMIN_COMMANDS.len()).rev() {
-        let candidate = render_command_titlebar(entry_count);
+    let entry_count = crate::r::restart::startup_alias_names()
+        .len()
+        .saturating_add(TITLEBAR_MEDIA_COMMANDS.len())
+        .saturating_add(app_names.len());
+    for entry_count in (0..entry_count).rev() {
+        let candidate = render_default_titlebar(entry_count, app_names.as_slice());
         if super::ecma48::visible_width(candidate.as_str()) <= max_width {
             return candidate;
         }
@@ -709,14 +737,13 @@ pub(crate) fn titlebar_right_command_names_text_fitting(max_width: usize) -> All
     AllocString::from("...")
 }
 
-pub(crate) fn titlebar_right_alias_names_text_fitting(max_width: usize) -> AllocString {
-    let full = titlebar_right_alias_names_text();
+pub(crate) fn titlebar_right_admin_names_text_fitting(max_width: usize) -> AllocString {
+    let full = titlebar_right_admin_names_text();
     if super::ecma48::visible_width(full.as_str()) <= max_width {
         return full;
     }
-    let alias_count = crate::r::restart::startup_alias_names().len();
-    for entry_count in (0..alias_count).rev() {
-        let candidate = render_alias_titlebar(entry_count);
+    for entry_count in (0..TITLEBAR_ADMIN_COMMANDS.len()).rev() {
+        let candidate = render_admin_titlebar(entry_count);
         if super::ecma48::visible_width(candidate.as_str()) <= max_width {
             return candidate;
         }

@@ -1,6 +1,6 @@
 # Shell2 screen recording
 
-In cmd mode, `film 1` records for one minute; the only argument is an integer
+In Default mode, `film 1` records for one minute; the only argument is an integer
 from 1 through 10. It selects the exact Matrix slot `film`, marks it running
 for the slot-strip heartbeat, and reports elapsed time, frames, measured fps,
 saved/buffered bytes, and capture/encode timings every five seconds.

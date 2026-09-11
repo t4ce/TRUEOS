@@ -26,7 +26,7 @@ def run(*args: str, cwd: Path | None = None) -> dict:
 class TrueosDocTests(unittest.TestCase):
     def test_context_contains_high_value_navigation_and_rig_facts(self) -> None:
         data = run()["data"]
-        self.assertEqual(data["shell2"]["default_mode"], "cmd")
+        self.assertEqual(data["shell2"]["default_mode"], "default")
         self.assertEqual(data["rig"]["shell2_tcp_port"], 4245)
         self.assertIn("§<slot>§", [item["input"] for item in data["headjack"]])
         self.assertEqual(data["logs"]["baremetal_latest"], "bld/baremetal-logs/LatestOfThree.logs")
@@ -48,6 +48,14 @@ class TrueosDocTests(unittest.TestCase):
         registry = (ROOT / "src/shell2/shell2_apps.rs").read_text()
         self.assertIn('Some("probe") => AppsCommand::Probe', registry)
         self.assertIn('Self::Probe => "probe"', registry)
+        self.assertNotIn('Some("start")', registry)
+
+    def test_shell2_docs_describe_default_once_twice_redesign(self) -> None:
+        shell2 = run("topic", "shell2")["data"]
+        self.assertEqual(shell2["default_mode"], "default")
+        self.assertIn("Default -> Once -> Twice -> Default", shell2["tab"])
+        self.assertNotIn("start", run()["data"]["shell2"]["apps_commands"])
+        self.assertIn("bare id or name", run("command", "online")["data"]["effect"])
 
     def test_tlb_schema_exposes_hfi_target(self) -> None:
         data = run("command", "tlb")["data"]

@@ -2148,7 +2148,7 @@ async fn h264_i_p_playback_probe_with_reader(
     let mut next_presentation_rank = 0usize;
 
     for (decode_index, unit) in access_units.into_iter().enumerate() {
-        if session.is_cancelled() {
+        if !session.wait_until_playing().await {
             break;
         }
         let rank = if presentation_reordering_required {
@@ -2519,6 +2519,12 @@ async fn h264_present_slot(
     frame_period: EmbassyDuration,
     playback_timing: &mut H264PlaybackTiming,
 ) -> Option<(usize, i32)> {
+    if !session.wait_until_playing().await {
+        if let H264PresentationSlot::Ready(pending) = slot {
+            crate::intel::hw_pic::release_h264_output_surface(&pending.output);
+        }
+        return None;
+    }
     let timing = match slot {
         H264PresentationSlot::Waiting => return None,
         H264PresentationSlot::Skipped(timing) => timing,

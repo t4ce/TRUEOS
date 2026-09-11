@@ -14,7 +14,6 @@ use super::{
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum AppsCommand {
-    Start,
     Online,
     Probe,
     Dl,
@@ -34,13 +33,12 @@ enum AppsCommand {
 impl AppsCommand {
     const fn label(self) -> &'static str {
         match self {
-            Self::Start => "start",
             Self::Online => "online",
             Self::Probe => "probe",
             Self::Dl => "dl",
             Self::Peer => "peer",
             Self::Pause => "pause",
-            Self::Snapshot => "snapshot",
+            Self::Snapshot => "snap",
             Self::Store => "store",
             Self::Preserve => "preserve",
             Self::Load => "load",
@@ -53,32 +51,53 @@ impl AppsCommand {
     }
 }
 
-const APP_COMMANDS: [AppsCommand; 15] = [
-    AppsCommand::Start,
+const APP_COMMANDS: [AppsCommand; 14] = [
     AppsCommand::Online,
-    AppsCommand::Probe,
-    AppsCommand::Dl,
     AppsCommand::Peer,
+    AppsCommand::Dl,
+    AppsCommand::Status,
     AppsCommand::Pause,
+    AppsCommand::Stop,
     AppsCommand::Snapshot,
-    AppsCommand::Store,
     AppsCommand::Preserve,
-    AppsCommand::Load,
     AppsCommand::Eject,
     AppsCommand::Delete,
-    AppsCommand::Stop,
     AppsCommand::Kick,
-    AppsCommand::Status,
+    AppsCommand::Load,
+    AppsCommand::Store,
+    AppsCommand::Probe,
 ];
 
 pub(crate) fn command_names_text() -> String {
-    let mut out = String::new();
-    for command in APP_COMMANDS {
-        if !out.is_empty() {
+    const BLUE: (u8, u8, u8) = (120, 210, 255);
+    const GRAY: (u8, u8, u8) = (160, 168, 176);
+    let mut out = String::from("[");
+    for (index, command) in APP_COMMANDS.into_iter().enumerate() {
+        if matches!(index, 3 | 6) {
+            out.push_str("] [");
+        } else if index != 0 {
             out.push(' ');
         }
-        out.push_str(command.label());
+        let color = if index < 3 {
+            Some(BLUE)
+        } else if index < 6 {
+            Some(GRAY)
+        } else {
+            None
+        };
+        if let Some(color) = color {
+            let _ = write!(
+                out,
+                "{}",
+                super::term_style::paint(command.label())
+                    .bold()
+                    .color(color)
+            );
+        } else {
+            out.push_str(command.label());
+        }
     }
+    out.push(']');
     out
 }
 
@@ -1047,8 +1066,20 @@ fn start_app(spawner: &Spawner, io: &'static dyn ShellBackend2, mut args: Vec<St
         Ok(token) => spawner.spawn(token),
         Err(_) => {
             set_matrix_target_active(&target, false);
-            line(io, "apps: start task unavailable");
+            line(io, "apps: app.db launch task unavailable");
         }
+    }
+}
+
+pub(crate) fn submit_local_selector(
+    spawner: &Spawner,
+    io: &'static dyn ShellBackend2,
+    submitted: &str,
+) {
+    match tokenize_app_command(submitted) {
+        Ok(args) if args.len() == 1 => start_app(spawner, io, args),
+        Ok(_) => line(io, "apps: launch arguments are not supported; enter one app.db id or name"),
+        Err(error) => line(io, alloc::format!("apps: {}", error).as_str()),
     }
 }
 
@@ -1094,16 +1125,16 @@ fn tokenize_app_command(input: &str) -> Result<Vec<String>, &'static str> {
     Ok(tokens)
 }
 
-pub(crate) fn submit(spawner: &Spawner, io: &'static dyn ShellBackend2, submitted: &str) {
-    let mut tokens = match tokenize_app_command(submitted) {
+pub(crate) fn submit_once(spawner: &Spawner, io: &'static dyn ShellBackend2, submitted: &str) {
+    let tokens = match tokenize_app_command(submitted) {
         Ok(tokens) => tokens.into_iter(),
         Err(error) => {
             line(io, alloc::format!("apps: {}", error).as_str());
             return;
         }
     };
-    let action = match tokens.next().as_deref() {
-        Some("start") => AppsCommand::Start,
+    let mut tokens = tokens.peekable();
+    let action = match tokens.peek().map(String::as_str) {
         Some("online") => AppsCommand::Online,
         Some("probe") => AppsCommand::Probe,
         Some("dl") => AppsCommand::Dl,
@@ -1118,23 +1149,23 @@ pub(crate) fn submit(spawner: &Spawner, io: &'static dyn ShellBackend2, submitte
         Some("stop") => AppsCommand::Stop,
         Some("kick") => AppsCommand::Kick,
         Some("status") => AppsCommand::Status,
-        Some(_) | None => {
-            line(
-                io,
-                "apps: expected start, online, probe, dl, peer, pause, snapshot, store, preserve, load, eject, delete, stop, kick, or status",
-            );
-            return;
-        }
+        Some(_) => AppsCommand::Online,
+        None => return,
     };
+    if action != AppsCommand::Online || tokens.peek().is_some_and(|token| token == "online") {
+        let _ = tokens.next();
+    }
     let rest = tokens.collect::<Vec<_>>();
 
     match action {
-        AppsCommand::Start => start_app(spawner, io, rest),
         AppsCommand::Online => online_app(spawner, io, rest),
         AppsCommand::Probe => super::shell2_dl::submit_probe(spawner, io, rest),
         AppsCommand::Dl => {
             if rest.first().is_some_and(|arg| arg == "new") {
-                line(io, "apps: `dl` installs only; use `dl <app>`, then `start <app>`");
+                line(
+                    io,
+                    "apps: `dl` installs only; use `dl <app>`, then launch its name in Default",
+                );
             } else {
                 super::shell2_dl::submit_download_args(spawner, io, rest);
             }

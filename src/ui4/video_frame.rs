@@ -763,6 +763,7 @@ struct VideoPlaybackState {
     occupied: AtomicBool,
     generation: AtomicU64,
     cancelled: AtomicBool,
+    paused: AtomicBool,
     stream: Mutex<Option<VideoStream>>,
     conversion: Mutex<DecodedVideoConversionState>,
 }
@@ -772,6 +773,7 @@ impl VideoPlaybackState {
             occupied: AtomicBool::new(false),
             generation: AtomicU64::new(0),
             cancelled: AtomicBool::new(false),
+            paused: AtomicBool::new(false),
             stream: Mutex::new(None),
             conversion: Mutex::new(DecodedVideoConversionState::new()),
         }
@@ -793,6 +795,18 @@ impl VideoPlaybackSession {
         state.generation.load(Ordering::Acquire) != self.generation
             || state.cancelled.load(Ordering::Acquire)
             || !state.occupied.load(Ordering::Acquire)
+    }
+    pub(crate) async fn wait_until_playing(self) -> bool {
+        loop {
+            poll_decoded_video_player_input();
+            if self.is_cancelled() {
+                return false;
+            }
+            if !self.state().paused.load(Ordering::Acquire) {
+                return true;
+            }
+            Timer::after(Duration::from_millis(5)).await;
+        }
     }
     pub(crate) fn finish(self, reason: &str) -> bool {
         if self.state().generation.load(Ordering::Acquire) != self.generation {
@@ -835,6 +849,7 @@ pub(crate) fn request_video_playback_stop(slot: usize) -> bool {
 pub(crate) struct VideoPlaybackStatus {
     pub(crate) occupied: bool,
     pub(crate) cancelled: bool,
+    pub(crate) paused: bool,
     pub(crate) queued: usize,
     pub(crate) completed: usize,
     pub(crate) active: usize,
@@ -847,6 +862,7 @@ pub(crate) fn video_playback_status() -> [VideoPlaybackStatus; VIDEO_PLAYBACK_SE
         VideoPlaybackStatus {
             occupied: session.occupied.load(Ordering::Acquire),
             cancelled: session.cancelled.load(Ordering::Acquire),
+            paused: session.paused.load(Ordering::Acquire),
             queued: state.queued,
             completed: state.completed,
             active: state.active,
@@ -1121,6 +1137,7 @@ pub(crate) fn begin_shell_decoded_video_player(
         generation: state.generation.fetch_add(1, Ordering::AcqRel) + 1,
     };
     state.cancelled.store(false, Ordering::Release);
+    state.paused.store(false, Ordering::Release);
     let spec = DecodedVideoFrameSpec {
         coded_width: desired_width,
         coded_height: desired_height,
@@ -1143,6 +1160,13 @@ fn poll_decoded_video_player_input() {
     for event in take_owner_input_events(VIDEO_OWNER) {
         match event {
             Ui4InputEvent::Pan(event) => pan_video_viewport(event),
+            Ui4InputEvent::Keyboard(event)
+                if event.event.kind == crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY
+                    && event.event.key_code == crate::r::keyboard::KEYBOARD_KEY_SPACE
+                    && event.event.flags & crate::r::keyboard::KEYBOARD_OUTPUT_FLAG_PRESS != 0 =>
+            {
+                toggle_video_playback_pause(event.window);
+            }
             Ui4InputEvent::Resize(event) => crate::log_warn!(
                 target: "ui4";
                 "ui4 video-player resize ignored window={} extent={}x{} reason=fixed-shell-vid-frame no-placeholder-publish=1\n",
@@ -1150,6 +1174,23 @@ fn poll_decoded_video_player_input() {
             ),
             _ => {}
         }
+    }
+}
+
+fn toggle_video_playback_pause(window: WindowId) {
+    for (slot, state) in VIDEO_SESSIONS.iter().enumerate() {
+        let stream = *state.stream.lock();
+        if !stream.is_some_and(|stream| stream.window == window) {
+            continue;
+        }
+        let paused = !state.paused.fetch_xor(true, Ordering::AcqRel);
+        crate::log_info!(target: "ui4";
+            "ui4 video-player playback-toggle slot={} window={} state={} input=space selected-frame=1\n",
+            slot + 1,
+            window.raw(),
+            if paused { "paused" } else { "playing" },
+        );
+        return;
     }
 }
 

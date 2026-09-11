@@ -73,6 +73,11 @@ impl WindowInteraction { const APPLICATION_FIXED_FRAME: Self = Self; }
 mod intel { pub fn active_scanout_dimensions() -> Option<(u32, u32)> { Some((2560,1440)) } }
 mod video {
 use super::*;
+struct Duration;
+impl Duration { fn from_millis(_: u64) -> Self { Self } }
+struct Timer;
+impl Timer { fn after(_: Duration) -> core::future::Ready<()> { core::future::ready(()) } }
+fn poll_decoded_video_player_input() {}
 #[derive(Copy, Clone, PartialEq, Eq)] struct WindowOwner(u64);
 #[derive(Copy, Clone, PartialEq, Eq)] struct WindowId(u64);
 const VIDEO_OWNER: WindowOwner = WindowOwner(2);

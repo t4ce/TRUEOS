@@ -179,9 +179,9 @@ source nodes before quant-fusion overlap is removed. It uses the same rank-four
 broadcast rules, checks integer ranges and cumulative overflow, and performs a
 validation pass before any cast, range, or cumulative destination is changed.
 
-## F4 shell commands
+## Shell2 commands
 
-The first command consumer is shell2 F4 cmd mode:
+The first command consumer is Shell2 Default mode:
 
 ```text
 tts status

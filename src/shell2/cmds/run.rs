@@ -1339,8 +1339,7 @@ pub(crate) async fn submit_archive_selector(
     let archive = selector
         .parse::<usize>()
         .ok()
-        .and_then(|id| id.checked_sub(1))
-        .and_then(|idx| archives.get(idx))
+        .and_then(|id| archives.get(id))
         .or_else(|| {
             let requested = archive_match_key(selector);
             archives.iter().find(|entry| {
