@@ -71,7 +71,7 @@ fn pipeline_owns_matching_code_and_metadata() {
     assert_eq!(PIPELINE.ps.meta.kernel.code_size_bytes as usize, FRAGMENT.len() * 4);
     assert_eq!(PIPELINE.vs.meta.kernel.binding_table_entry_count, 4);
     assert_eq!(PIPELINE.vs.meta.urb_entry_output_length, 1); // three VS VUE slots fit 64 bytes
-    assert_eq!(CONTRACT_VERSION, 9);
-    assert_eq!(PIPELINE.ps.meta.num_varying_inputs, 3);
+    assert_eq!(CONTRACT_VERSION, 11);
+    assert_eq!(PIPELINE.ps.meta.num_varying_inputs, 4);
     assert!(TESS_CONTROL.len() > 0 && TESS_EVAL.len() > 0);
 }
