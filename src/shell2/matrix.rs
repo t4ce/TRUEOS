@@ -460,6 +460,31 @@ fn claim_app_slot(guard: &mut MatrixState, id: &MatrixSlotId, app_label: &str) -
     true
 }
 
+/// Claim an exact service name and snapshot its cancellation identity while
+/// still holding the Matrix lock. A concurrent free/recreate cannot turn this
+/// claim into a lease on the replacement page.
+pub(crate) fn claim_named_app_slot_selected(
+    output_mask: super::OutputMask,
+    requested: &str,
+    app_label: &str,
+) -> Option<(MatrixSlotLease, u64)> {
+    let id = normalize_slot_id(requested);
+    let mut guard = state().lock();
+    if id == default_slot_id() || !claim_app_slot(&mut guard, &id, app_label) {
+        return None;
+    }
+    *active_slot_id_mut(&mut guard, output_mask) = id.clone();
+    bump_slot_strip_revision(&mut guard);
+    let slot = guard.slots.iter().find(|slot| slot.id == id)?;
+    Some((
+        MatrixSlotLease {
+            id,
+            lifetime_generation: slot.lifetime_generation,
+        },
+        slot.interrupt_generation,
+    ))
+}
+
 /// Select one app-owned Matrix slot, reusing its prior claim or applying the
 /// same compact base-36 collision fallback used by VM-backed slots.
 pub(crate) fn claim_available_app_slot_selected(
@@ -1189,6 +1214,36 @@ mod tests {
     use alloc::vec::Vec;
 
     use super::*;
+
+    #[test]
+    fn named_service_slot_never_takes_an_occupied_page_or_uses_a_suffix() {
+        let id = switch_active_slot(1, "flmbz");
+        record_line_for_output(1, "unrelated transcript");
+        assert!(claim_named_app_slot_selected(1, "flmbz", "film").is_none());
+        assert_eq!(active_slot_id(1), id);
+        assert_eq!(slot_transcript_text(&id), "unrelated transcript");
+    }
+
+    #[test]
+    fn named_service_heartbeat_and_cancellation_follow_one_slot_lifetime() {
+        let (lease, interrupt) = claim_named_app_slot_selected(2, "flmt", "film-test").unwrap();
+        assert!(begin_live_slot_running(&lease.id, lease.lifetime_generation));
+        assert!(active_slot_activity(2) == MatrixSlotActivity::Running);
+        free_slot("flmt");
+        let (replacement, _) = claim_named_app_slot_selected(2, "flmt", "film-test").unwrap();
+        assert_ne!(lease.lifetime_generation, replacement.lifetime_generation);
+        assert_ne!(
+            live_slot_interrupt_generation(&lease.id, lease.lifetime_generation),
+            Some(interrupt)
+        );
+        assert!(!end_live_slot_running(&lease.id, lease.lifetime_generation));
+        assert!(!record_line_in_live_slot(
+            &lease.id,
+            lease.lifetime_generation,
+            "late film output"
+        ));
+        assert_eq!(slot_transcript_text(&replacement.id), "");
+    }
 
     #[test]
     fn slot_ids_accept_five_characters_and_truncate_at_the_soft_cap() {

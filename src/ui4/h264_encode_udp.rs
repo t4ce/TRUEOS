@@ -49,7 +49,7 @@ const UDP_RECEIPT_WINDOW_FRAGMENTS: usize = 8;
 
 /// Preserve an exact average cadence when the timer frequency is not evenly
 /// divisible by the requested frame rate (notably 60 Hz).
-struct FractionalCadenceTicks {
+pub(super) struct FractionalCadenceTicks {
     whole: u64,
     remainder: u64,
     divisor: u64,
@@ -57,7 +57,7 @@ struct FractionalCadenceTicks {
 }
 
 impl FractionalCadenceTicks {
-    fn new(timer_hz: u64, target_hz: usize) -> Self {
+    pub(super) fn new(timer_hz: u64, target_hz: usize) -> Self {
         let divisor = target_hz as u64;
         Self {
             whole: (timer_hz / divisor).max(1),
@@ -71,7 +71,7 @@ impl FractionalCadenceTicks {
         }
     }
 
-    fn next(&mut self) -> u64 {
+    pub(super) fn next(&mut self) -> u64 {
         let mut ticks = self.whole;
         self.phase += self.remainder;
         if self.phase >= self.divisor {
@@ -170,6 +170,10 @@ static EGRESS_WAKE: embassy_sync::signal::Signal<crate::wait::EmbassySpinRawMute
     embassy_sync::signal::Signal::new();
 static PRODUCER_WAKE: embassy_sync::signal::Signal<crate::wait::EmbassySpinRawMutex, ()> =
     embassy_sync::signal::Signal::new();
+
+pub(super) fn wake_producer() {
+    PRODUCER_WAKE.signal(());
+}
 static EGRESS_WORKER_SLOT: AtomicU32 = AtomicU32::new(u32::MAX);
 
 struct PendingDatagram {
@@ -472,6 +476,9 @@ where
         PRODUCER_WAKE.wait().await;
     }
     loop {
+        // The producer alone owns the hardware encoder. A film request wakes
+        // this subscriber wait and runs here, using the very same WD pipeline.
+        super::h264_encode_stream::film::run_pending().await;
         if egress_session_ready(session_id) {
             break;
         }
@@ -626,12 +633,14 @@ async fn run_egress_session(
         };
         break udp;
     };
-    let remote = loop {
+    let (remote, _view_lease) = loop {
         match udp.poll_event() {
             Some(VNetUdpEvent::Packet(VNetUdpPacket::V4 { from, data }))
                 if data.as_slice() == SUBSCRIBE =>
             {
-                break from;
+                if let Some(lease) = super::h264_encode_stream::film::claim_rdp_view() {
+                    break (from, lease);
+                }
             }
             Some(VNetUdpEvent::Closed) => {
                 report.network_waits = report.network_waits.saturating_add(1);

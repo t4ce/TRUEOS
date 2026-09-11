@@ -41,6 +41,7 @@ const TOOL_JSON_NET: &str = r#"{"type":"object","properties":{"subcommand":{"typ
 const TOOL_JSON_QJS: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
 const TOOL_JSON_RAM: &str = r#"{"type":"object","properties":{"scope":{"type":"string","description":"Optional pmm, host, or numeric VM id. Omit to list all configured RAM scopes."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_SHOT: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
+const TOOL_JSON_FILM: &str = r#"{"type":"object","properties":{"minutes":{"type":"integer","minimum":1,"maximum":10,"description":"Screen recording duration in minutes."}},"required":["minutes"],"additionalProperties":false}"#;
 const TOOL_JSON_SMP: &str = r#"{"type":"object","properties":{"slot":{"type":"integer","minimum":0,"description":"Optional SMP slot. Omit to list all slots."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_IMG: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"Optional PNG/JPEG file or folder (for example apps/common/images). Omit to open the default shared gallery or a gray frame."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_SSH: &str = r#"{"type":"object","properties":{"endpoint":{"type":"string","description":"Optional SSH target in [user@]host[:port] form. Omit for SSH's resident interactive prompt."}},"required":[],"additionalProperties":false}"#;
@@ -102,6 +103,36 @@ fn dispatch_shot(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) 
 
 fn dispatch_td(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     super::cmds::td::try_parse(spawner, io, rest)
+}
+
+fn film_minutes(rest: &str) -> Option<u8> {
+    let rest = rest.trim();
+    if rest.is_empty() || !rest.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    rest.parse::<u8>()
+        .ok()
+        .filter(|minutes| (1..=10).contains(minutes))
+}
+
+fn dispatch_film(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    let Some(minutes) = film_minutes(rest) else {
+        super::print_shell_line(
+            io,
+            "film: usage `film <1-10>` (minutes); saves to trueosfs:/screenfilms; stop and keep recording with §film§; requires RDP viewing disconnected (--no-view controls are allowed)",
+        );
+        return ParseOutcome::Handled;
+    };
+    #[cfg(feature = "trueos_h264_encode_stream")]
+    if let Err(reason) = crate::ui4::request_film(minutes, super::matrix_target_for_backend(io)) {
+        super::print_shell_line(io, alloc::format!("film: {reason}").as_str());
+    }
+    #[cfg(not(feature = "trueos_h264_encode_stream"))]
+    {
+        let _ = minutes;
+        super::print_shell_line(io, "film: hardware encoder support is disabled in this build");
+    }
+    ParseOutcome::Handled
 }
 
 fn dispatch_smp(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -319,6 +350,17 @@ const SHELL2_COMMAND_REGISTRY: &[BuiltinShell2CmdEntry] = &[
             "Capture one Pipe-C/WD post-blend frame and save a diagnostic PNG to TRUEOSFS.",
         ),
         tool_parameters_json: Some(TOOL_JSON_SHOT),
+    },
+    BuiltinShell2CmdEntry {
+        name: "film",
+        mode: "cmd",
+        color: Some(STATUS_GREEN_RGB),
+        advertised: true,
+        handler: dispatch_film,
+        tool_description: Some(
+            "Record the screen for 1-10 minutes using hardware H.264 to trueosfs:/screenfilms. Requires no RDP viewer; input-only RDP is allowed. The film Matrix slot reports progress; §film§ stops and preserves the recording.",
+        ),
+        tool_parameters_json: Some(TOOL_JSON_FILM),
     },
     BuiltinShell2CmdEntry {
         name: "td",
@@ -579,7 +621,7 @@ pub(crate) fn try_dispatch(
     ParseOutcome::NotCommand
 }
 
-const TITLEBAR_MISC_COMMANDS: &[&str] = &["win", "shot", "lum", "tts", "stt", "vid"];
+const TITLEBAR_MISC_COMMANDS: &[&str] = &["win", "shot", "film", "lum", "tts", "stt", "vid"];
 const TITLEBAR_ADMIN_COMMANDS: &[&str] = &[
     "cry", "os", "backup", "disc", "tlb", "xhci", "ram", "smp", "net", "bios", "vgpu",
 ];

@@ -1114,6 +1114,27 @@ pub(crate) fn claim_matrix_target_for_app_slot_selected(
     .unwrap_or_else(|| source.clone())
 }
 
+/// Claim an exact service slot; never silently redirect a named stop command
+/// to a collision fallback or to a stale frontend's current page.
+pub(crate) fn claim_matrix_target_for_named_app_slot(
+    source: &MatrixTarget,
+    requested: &str,
+    app_label: &str,
+) -> Option<MatrixTarget> {
+    with_matrix_target_lease(source, || {
+        matrix::claim_named_app_slot_selected(source.output_mask, requested, app_label).map(
+            |(lease, interrupt_generation)| MatrixTarget {
+                output_mask: source.output_mask,
+                local_session_generation: source.local_session_generation,
+                slot_id: matrix::slot_id_from_name(lease.name()),
+                slot_lifetime_generation: lease.lifetime_generation(),
+                interrupt_generation,
+            },
+        )
+    })
+    .flatten()
+}
+
 pub(crate) fn switch_matrix_target_slot(target: &MatrixTarget, requested: &str) -> MatrixTarget {
     with_matrix_target_lease(target, || {
         matrix_target_from_slot_id(

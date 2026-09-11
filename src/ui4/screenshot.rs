@@ -1061,7 +1061,7 @@ fn screenshot_path(capture: &CapturedComposition) -> String {
 
 /// Prefer the normal primary root, but do not let a later-mounted read-only
 /// image hide an earlier writable TRUEOSFS disk from screenshot persistence.
-fn writable_capture_root_handle() -> Option<crate::disc::block::DeviceHandle> {
+pub(super) fn writable_capture_root_handle() -> Option<crate::disc::block::DeviceHandle> {
     if let Some(disk) = crate::r::fs::trueosfs::primary_root_handle()
         && !disk.info().is_read_only()
     {

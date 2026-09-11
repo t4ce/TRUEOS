@@ -126,6 +126,19 @@ pub(crate) fn request_screenshot() -> Result<(), ScreenshotRequestError> {
     }
 }
 
+/// Admit a new stream only if WD was idle, including exclusion against a
+/// pending manual shot. The per-frame claim below also accepts the live owner.
+pub(crate) fn try_reserve_stream_capture() -> bool {
+    CAPTURE_DRIVER
+        .compare_exchange(
+            CAPTURE_DRIVER_IDLE,
+            CAPTURE_DRIVER_STREAM,
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        )
+        .is_ok()
+}
+
 /// Reserve WD for an RDP session. A manual one-frame capture already in
 /// progress wins briefly; the stream preparation worker retries cooperatively.
 pub(crate) fn try_claim_stream_capture() -> bool {

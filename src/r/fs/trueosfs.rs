@@ -204,12 +204,16 @@ static INDEX_REQUESTED: AtomicBool = AtomicBool::new(false);
 static INDEX_QUEUE: Mutex<heapless::Vec<block::DeviceHandle, 8>> = Mutex::new(heapless::Vec::new());
 
 struct FileWriteStream {
+    _write_lease: write_gate::RootWriteLease,
     disk: block::DeviceHandle,
     path: String,
     params: trueos_fs::FsParams,
     stream: trueos_fs::PutWriteStream,
     legacy_blob: bool,
 }
+
+#[path = "trueosfs_write_gate.rs"]
+mod write_gate;
 
 #[derive(Clone, Copy, Debug)]
 pub struct FileReadHandle {
@@ -1185,6 +1189,7 @@ async fn write_index_checkpoint_async(
     placement: &TrueosFsPlacement,
     replay_from_rel_blocks: u64,
 ) -> Result<bool, block::Error> {
+    let _write_lease = write_gate::RootWriteLease::acquire(disk.id()).await;
     let disk_id = disk.id();
     let Some(entries) = snapshot_index_for_checkpoint(disk_id) else {
         return Ok(false);
@@ -1340,6 +1345,7 @@ async fn file_in_with_metadata_async(
         data_end_lba_exclusive: placement.data_end_lba_exclusive,
     };
     let io = KernelBlockIo::new(disk);
+    let _write_lease = write_gate::RootWriteLease::acquire(disk.id()).await;
     let Some(mut stream) = trueos_fs::begin_write_file_stream_with_metadata(
         &io,
         &params,
@@ -1527,6 +1533,7 @@ async fn file_write_begin_with_metadata_async(
         data_end_lba_exclusive: placement.data_end_lba_exclusive,
     };
     let io = KernelBlockIo::new(disk);
+    let _write_lease = write_gate::RootWriteLease::acquire(disk.id()).await;
     let Some(stream) = trueos_fs::begin_write_file_stream_with_metadata(
         &io,
         &params,
@@ -1549,6 +1556,7 @@ async fn file_write_begin_with_metadata_async(
 
     let handle = FILE_WRITE_STREAM_SEQ.fetch_add(1, Ordering::Relaxed).max(1);
     let entry = FileWriteStream {
+        _write_lease,
         disk,
         path: name.into(),
         params,
@@ -1914,6 +1922,7 @@ pub async fn create_directory_async(
         data_lba: placement.data_lba,
         data_end_lba_exclusive: placement.data_end_lba_exclusive,
     };
+    let _write_lease = write_gate::RootWriteLease::acquire(disk.id()).await;
     let Some(record) =
         trueos_fs::append_directory_prevalidated(&KernelBlockIo::new(disk), &params, path)
             .await
@@ -2114,6 +2123,7 @@ pub async fn file_delete_async(
         return Ok(false);
     };
 
+    let _write_lease = write_gate::RootWriteLease::acquire(disk.id()).await;
     let ok = trueos_fs::delete_file_at_record(&io, &params, name, &record)
         .await
         .map_err(map_engine_err)?;
@@ -2158,6 +2168,7 @@ pub async fn remove_recursive_async(
         data_end_lba_exclusive: placement.data_end_lba_exclusive,
     };
     let io = KernelBlockIo::new(disk);
+    let _write_lease = write_gate::RootWriteLease::acquire(disk.id()).await;
     let ok = match record.kind {
         NodeKind::File => trueos_fs::delete_node_at_record(&io, &params, name, &record).await,
         NodeKind::Directory => trueos_fs::delete_tree(&io, &params, name).await,
@@ -2208,6 +2219,7 @@ pub async fn file_rename_async(
         data_end_lba_exclusive: placement.data_end_lba_exclusive,
     };
     let io = KernelBlockIo::new(disk);
+    let _write_lease = write_gate::RootWriteLease::acquire(disk.id()).await;
     let ok = trueos_fs::copy_file_from_record(&io, &params, src, &source_record, dst)
         .await
         .map_err(map_engine_err)?;
@@ -2232,6 +2244,7 @@ pub async fn file_rename_async(
         invalidate_root_index(disk.id());
     }
 
+    drop(_write_lease);
     // Best-effort cleanup; ignore failure.
     let _ = file_delete_async(disk, src).await;
     Ok(true)
@@ -2332,6 +2345,7 @@ pub async fn dir_rename_async(
     };
     ensure_index_async(disk, &placement).await?;
 
+    let _write_lease = write_gate::RootWriteLease::acquire(disk.id()).await;
     let disk_id = disk.id();
     let Some(moves) = collect_index_tree_moves(disk_id, src.as_str(), dst.as_str()) else {
         return Ok(false);
@@ -3018,6 +3032,7 @@ pub async fn file_append_async(
     };
     bytes.extend_from_slice(append_bytes);
 
+    let _write_lease = write_gate::RootWriteLease::acquire(disk.id()).await;
     let Some(mut stream) = trueos_fs::begin_write_file_stream_with_metadata(
         &io,
         &params,
@@ -3673,6 +3688,7 @@ pub(crate) async fn format_blank_at_async(
     handle: block::DeviceHandle,
     super_lba: u64,
 ) -> Result<(), block::Error> {
+    let _write_lease = write_gate::RootWriteLease::acquire(handle.id()).await;
     let (info, bs, max_blocks, align) =
         validate_blank_format_args(handle, super_lba, handle.parent().is_some())?;
     let blocks = core::cmp::min(8usize, max_blocks);
