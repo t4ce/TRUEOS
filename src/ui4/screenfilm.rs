@@ -264,6 +264,8 @@ async fn run_recording(request: FilmRequest) {
             }
             // Measure the next deadline from this frame's start, not from
             // encode completion (which would add encode time to every period).
+            // Rebase after disk delays without a burst or a dropped picture
+            // in the encoder reference chain.
             next_frame = next_frame.max(Instant::now());
             next_frame += Duration::from_ticks(cadence.next());
             let Some(bytes) =
@@ -278,8 +280,6 @@ async fn run_recording(request: FilmRequest) {
             }
             spool.pending.extend_from_slice(&bytes);
             sequence += 1;
-            // Preserve fractional cadence without a burst after a delayed disk
-            // write. No frame is dropped from the encoder reference chain.
         }
     }
 

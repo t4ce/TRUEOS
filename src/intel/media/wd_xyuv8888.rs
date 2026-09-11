@@ -127,7 +127,7 @@ pub(crate) fn request_screenshot() -> Result<(), ScreenshotRequestError> {
 }
 
 /// Admit a new stream only if WD was idle, including exclusion against a
-/// pending manual shot. The per-frame claim below also accepts the live owner.
+/// manual shot in flight. The per-frame claim below also accepts the live owner.
 pub(crate) fn try_reserve_stream_capture() -> bool {
     CAPTURE_DRIVER
         .compare_exchange(
