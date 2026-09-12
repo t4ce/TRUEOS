@@ -813,7 +813,7 @@ fn pack_retained_material_parameters(
 ) -> Option<[u32; 16]> {
     let unit_interval = |value: f32| value.is_finite() && (0.0..=1.0).contains(&value);
     if parameters.reserved != [0; 3]
-        || parameters.flags & !v::vgpu::RETAINED_MATERIAL_FLAG_DOUBLE_SIDED != 0
+        || parameters.flags & !(v::vgpu::RETAINED_MATERIAL_FLAG_DOUBLE_SIDED | v::vgpu::RETAINED_MATERIAL_FLAG_NEAREST) != 0
         || (parameters.flags & v::vgpu::RETAINED_MATERIAL_FLAG_DOUBLE_SIDED != 0) != double_sided
         || texture_presence & !0x1f != 0
         || !parameters
@@ -882,6 +882,15 @@ mod retained_material_parameters_tests {
     use v::vgpu::{RETAINED_MATERIAL_FLAG_DOUBLE_SIDED, RetainedMaterialParameters};
 
     #[test]
+    fn nearest_filter_is_admitted_without_changing_culling_or_map_presence() {
+        let p = RetainedMaterialParameters { flags: v::vgpu::RETAINED_MATERIAL_FLAG_NEAREST,
+            ..RetainedMaterialParameters::default() };
+        let words = pack_retained_material_parameters(&p, 1, false).unwrap();
+        assert_eq!(words[12..], [8, 1, 0, 0]);
+        assert!(pack_retained_material_parameters(&p, 1, true).is_none());
+    }
+
+    #[test]
     fn packs_factors_and_authenticated_presence_in_shader_vec4_order() {
         let parameters = RetainedMaterialParameters {
             base_color_factor: [0.1, 0.2, 0.3, 0.4],
@@ -919,7 +928,7 @@ mod retained_material_parameters_tests {
     #[test]
     fn rejects_unimplemented_flags_nonfinite_factors_and_culling_mismatch() {
         let baseline = RetainedMaterialParameters::default();
-        for flags in [1, 2, 8, u32::MAX] {
+        for flags in [1, 2, 16, u32::MAX] {
             assert!(
                 pack_retained_material_parameters(
                     &RetainedMaterialParameters { flags, ..baseline },

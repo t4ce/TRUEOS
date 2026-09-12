@@ -275,12 +275,12 @@ fn write_nearest_repeat_sampler_cache_line(samplers: &mut [u32]) {
     }
 }
 
-fn write_pbr_sampler_cache_line(samplers: &mut [u32]) {
+fn write_pbr_sampler_cache_line(samplers: &mut [u32], nearest: bool) {
     assert_eq!(samplers.len(), SAMPLER_CACHE_LINE_DWORDS);
     // gfx12 SAMPLER_STATE: linear min/mag, normalized repeat, LOD0,
     // sRGB decode enabled, and address rounding for linear filters.
     for sampler in samplers.chunks_exact_mut(4) {
-        sampler.copy_from_slice(&[(1 << 14) | (1 << 17), 0, 0, 0x3F << 13]);
+        sampler.copy_from_slice(&if nearest { [0; 4] } else { [(1 << 14) | (1 << 17), 0, 0, 0x3F << 13] });
     }
 }
 
@@ -1205,7 +1205,8 @@ fn write_triangle_probe_state_with_flush(
         &mut dwords[sampler_state_offset / 4..sampler_state_offset / 4 + SAMPLER_CACHE_LINE_DWORDS];
     write_nearest_repeat_sampler_cache_line(samplers);
     if native_pbr {
-        write_pbr_sampler_cache_line(samplers);
+        write_pbr_sampler_cache_line(samplers, draw.pbr_material.is_some_and(|m|
+            m.parameters[12] & v::vgpu::RETAINED_MATERIAL_FLAG_NEAREST != 0));
     }
     if let Some(texture) = draw.sampled_texture
         && texture.sampler_flags
@@ -1564,9 +1565,16 @@ mod picasso_pbr_state_tests {
     }
 
     #[test]
+    fn nearest_pbr_keeps_srgb_and_lod_zero_and_disables_linear_rounding() {
+        let mut cache = [u32::MAX; 16];
+        write_pbr_sampler_cache_line(&mut cache, true);
+        assert_eq!(cache, [0; 16]);
+    }
+
+    #[test]
     fn every_prefetched_pbr_sampler_filters_linearly_and_decodes_srgb() {
         let mut cache = [u32::MAX; 16];
-        write_pbr_sampler_cache_line(&mut cache);
+        write_pbr_sampler_cache_line(&mut cache, false);
         for sampler in cache.chunks_exact(4) {
             assert_eq!((sampler[0] >> 14) & 7, 1);
             assert_eq!((sampler[0] >> 17) & 7, 1);

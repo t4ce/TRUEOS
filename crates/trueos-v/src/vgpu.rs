@@ -357,6 +357,8 @@ pub const RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV: u32 = 1;
 /// Position3, normal3, UV2, and tangent4 (including handedness), 48 bytes.
 pub const RETAINED_VERTEX_LAYOUT_POS_NORMAL_UV_TANGENT: u32 = 2;
 pub const RETAINED_MATERIAL_FLAG_DOUBLE_SIDED: u32 = 1 << 2;
+/// Use nearest min/mag filtering for this PBR material (LOD0, sRGB unchanged).
+pub const RETAINED_MATERIAL_FLAG_NEAREST: u32 = 1 << 3;
 /// Retained mesh topology field flag: honor glTF material `doubleSided` by
 /// disabling fixed-function face culling for this mesh. The topology remains
 /// in the low bits, keeping this cross-process descriptor ABI at 48 bytes.
@@ -456,7 +458,7 @@ pub struct RetainedFrameSubmit {
 
 /// Scalar inputs for the retained opaque metallic-roughness material shader.
 /// Texture IDs remain in the nested frame's owner-scoped material bundle.
-/// Only DOUBLE_SIDED is currently accepted in flags; reserved must be zero.
+/// DOUBLE_SIDED and NEAREST are accepted in flags; reserved must be zero.
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[repr(C)]
 pub struct RetainedMaterialParameters {
