@@ -40,6 +40,8 @@ def harness_source() -> str:
             "RetainedFrameSubmitV2",
             "RetainedDrawRange",
             "RetainedFrameSubmitV3",
+            "RetainedCubeDraw",
+            "RetainedFrameSubmitV4",
         )
     )
     defaults = re.findall(

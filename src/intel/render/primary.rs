@@ -1471,6 +1471,7 @@ pub(crate) fn render_resident_indexed_scene_frame_premultiplied_direct_to_surfac
         ResidentSceneFrameOutput::DirectGpuSurface(destination),
         None,
         clear_rgba.is_none(),
+        None,
     )
 }
 
@@ -1529,6 +1530,7 @@ pub(crate) fn render_resident_churn_forward_frame_direct_to_surface(
 /// bindings.
 pub(crate) fn render_resident_retained_with_static_draws_direct_to_surface(
     resident: &ResidentChurnForward,
+    cube_companion: Option<&ResidentChurnForward>,
     sampled_material: Option<ResidentRetainedMaterial<'_>>,
     static_draws: &[ResidentSceneDraw<'_>],
     clear_rgba: Option<[u8; 4]>,
@@ -1553,6 +1555,7 @@ pub(crate) fn render_resident_retained_with_static_draws_direct_to_surface(
         ResidentSceneFrameOutput::DirectGpuSurface(destination),
         Some(carrier),
         false,
+        cube_companion,
     )
 }
 
@@ -2971,6 +2974,7 @@ fn submit_resident_churn_forward_geometry_batched(
     warm: RenderWarmState,
     resident: &ResidentChurnForward,
     sampled_material: Option<ResidentRetainedMaterial<'_>>,
+    cube_companion: Option<&ResidentChurnForward>,
     static_draws: &[ResidentSceneDraw<'_>],
     clear: [u8; 4],
     depth_config: TriangleDepthConfig,
@@ -2998,7 +3002,16 @@ fn submit_resident_churn_forward_geometry_batched(
     {
         return Err("cube-patch-native-handoff-required");
     }
-    let transform_secondary_count = usize::from(transform_dispatch.is_some());
+    let cube_dispatch = cube_companion.and_then(|cube| cube.transform_dispatch());
+    if let Some(cube) = cube_companion {
+        if cube.topology() != ResidentScenePrimitiveTopology::CubePatchList1
+            || cube.draw_group_count() != 1
+            || cube_dispatch.map(|dispatch| RetainedGraphicsHandoff::from(dispatch.output))
+                != Some(RetainedGraphicsHandoff::NativeMatrices)
+        { return Err("retained-companion-cube-contract"); }
+    }
+    let transform_secondary_count = usize::from(transform_dispatch.is_some())
+        + usize::from(cube_dispatch.is_some());
     let resident_draw_count = resident.draw_group_count();
     let cube_two_pass = resident.topology() == ResidentScenePrimitiveTopology::CubePatchList1
         && resident_draw_count == 2;
@@ -3023,7 +3036,7 @@ fn submit_resident_churn_forward_geometry_batched(
     };
     let capture_pipeline_stats = capture_pipeline_stats || vue_capture_bytes.is_some();
     let secondary_count = resident_draw_count
-        .checked_add(static_draws.len())
+        .checked_add(static_draws.len() + usize::from(cube_companion.is_some()))
         .and_then(|count| count.checked_add(1 + transform_secondary_count))
         .ok_or("scene-frame-batch-capacity")?;
     let used_batch_bytes = RESIDENT_SCENE_PRIMARY_BATCH_BYTES
@@ -3071,6 +3084,11 @@ fn submit_resident_churn_forward_geometry_batched(
 
     if let Some(dispatch) = transform_dispatch {
         stage_resident_churn_transform_secondary(warm, resident, 0, dispatch, result_ggtt_gpu)?;
+    }
+
+    if let (Some(cube), Some(dispatch)) = (cube_companion, cube_dispatch) {
+        stage_resident_churn_transform_secondary(warm, cube,
+            usize::from(transform_dispatch.is_some()), dispatch, result_ggtt_gpu)?;
     }
 
     let clear_secondary_index = transform_secondary_count;
@@ -3207,6 +3225,22 @@ fn submit_resident_churn_forward_geometry_batched(
             scene.point_width_px,
             secondary_index,
             result_ggtt_gpu,
+        )?;
+    }
+
+    // The gallery and baked cubes use independent transform buffers and shader
+    // bindings, but one target, depth allocation, clear, and retirement fence.
+    if let Some(cube) = cube_companion {
+        let secondary_index = secondary_count - 1;
+        let (state_warm, state_gpu) = resident_scene_state_warm(state, warm, secondary_index)?;
+        let draw = prepare_resident_churn_forward_draw(
+            state_warm, cube, None, 0, render_target_gpu, render_target_pitch,
+            target_width, target_height,
+        ).ok_or("retained-companion-draw-resources")?
+            .with_rt_surface_format(render_target_surface_format);
+        stage_resident_churn_forward_secondary(
+            warm, state_warm, state_gpu, draw, draw_depth, cube, uv_pipeline,
+            secondary_index, result_ggtt_gpu,
         )?;
     }
 
@@ -3403,6 +3437,7 @@ fn submit_resident_scene_capture_inner(
         frame_output,
         None,
         false,
+        None,
     )
 }
 
@@ -3421,9 +3456,11 @@ fn submit_resident_scene_capture_inner_for_carrier(
     frame_output: ResidentSceneFrameOutput,
     carrier: Option<PicassoCarrierLease>,
     load_color: bool,
+    cube_companion: Option<&ResidentChurnForward>,
 ) -> Result<ResidentSceneFrameResult, &'static str> {
     let geometry_draw_count =
-        native_churn.map_or(draws.len(), |resident| resident.draw_group_count() + draws.len());
+        native_churn.map_or(draws.len(), |resident| resident.draw_group_count() + draws.len())
+        + cube_companion.map_or(0, |resident| resident.draw_group_count());
     if target_width == 0
         || target_height == 0
         || target_width > RESIDENT_SCENE_TARGET_WIDTH
@@ -3688,7 +3725,7 @@ fn submit_resident_scene_capture_inner_for_carrier(
             .fetch_add(1, Ordering::AcqRel)
             .saturating_add(1);
         let capture_perf = perf_sequence == 1 || perf_sequence.is_multiple_of(256);
-        let capture_vue = carrier.is_some()
+        let capture_vue = cube_companion.is_none() && carrier.is_some()
             && native_churn.is_some_and(|resident| resident.pbr_material()
                 && resident.draw_group_count() == 1
                 && resident.topology() == ResidentScenePrimitiveTopology::TriangleList)
@@ -3702,6 +3739,7 @@ fn submit_resident_scene_capture_inner_for_carrier(
                 warm,
                 resident,
                 native_sampled_material,
+                cube_companion,
                 draws,
                 clear,
                 depth_config.ok_or("churn-native-depth")?,

@@ -526,6 +526,24 @@ pub struct RetainedFrameSubmitV3 {
     pub draws: [RetainedDrawRange; MAX_RETAINED_SCENE_DRAWS],
     pub reserved: [u32; 2],
 }
+/// A retained textured scene plus opaque baked cube instances in one depth pass.
+/// Cube seeds use the same RGB555 flags and uniform scale as V3 asset placement.
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+#[repr(C)]
+pub struct RetainedCubeDraw {
+    pub mesh: u64,
+    pub seed_buffer: u64,
+    pub seed_offset: u64,
+    pub seed_count: u32,
+    pub reserved: u32,
+}
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+#[repr(C)]
+pub struct RetainedFrameSubmitV4 {
+    pub frame: RetainedFrameSubmitV2,
+    pub cubes: RetainedCubeDraw,
+}
+
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 #[repr(C)]
 pub struct TimelinePoint {
@@ -1007,6 +1025,38 @@ impl Device {
         Ok(point)
     }
 
+    pub fn submit_retained_frame_v4(
+        self,
+        queue: Queue,
+        surface: Ui4Surface,
+        mesh: RetainedMesh,
+        cube_mesh: RetainedMesh,
+        static_vertex_buffer: Buffer,
+        static_index_buffer: Buffer,
+        mut submit: RetainedFrameSubmitV4,
+    ) -> Result<TimelinePoint, i32> {
+        if queue.device != self || surface.device != self {
+            return Err(ERR_BAD_HANDLE);
+        }
+        let mut surface = surface;
+        submit.frame.frame.surface = surface.surface.0;
+        submit.frame.frame.mesh = mesh.0;
+        submit.cubes.mesh = cube_mesh.0;
+        submit.frame.frame.static_vertex_buffer = static_vertex_buffer.0;
+        submit.frame.frame.static_index_buffer = static_index_buffer.0;
+        let mut point = TimelinePoint::default();
+        rc_result(unsafe {
+            vcabi::trueos_cabi_vgpu_retained_frame_submit_v4(
+                self.0,
+                queue.handle,
+                &submit,
+                &mut point,
+            )
+        })?;
+        surface.live = false;
+        Ok(point)
+    }
+
     pub fn timeline(self, queue: Queue) -> Result<TimelineStatus, i32> {
         if queue.device != self {
             return Err(ERR_BAD_HANDLE);
@@ -1249,6 +1299,9 @@ mod tests {
         assert_eq!(core::mem::size_of::<RetainedFrameSubmitV2>(), 880);
         assert_eq!(core::mem::offset_of!(RetainedFrameSubmitV2, frame), 0);
         assert_eq!(core::mem::offset_of!(RetainedFrameSubmitV2, material_parameters), 816);
+        assert_eq!(core::mem::size_of::<RetainedCubeDraw>(), 32);
+        assert_eq!(core::mem::size_of::<RetainedFrameSubmitV4>(), 912);
+        assert_eq!(core::mem::offset_of!(RetainedFrameSubmitV4, cubes), 880);
         assert_eq!(core::mem::size_of::<TimelinePoint>(), 16);
         assert_eq!(core::mem::size_of::<TimelineStatus>(), 32);
     }

@@ -232,4 +232,6 @@
 # All existing function signatures were compared unchanged before updating this lock.
 # Dynamic context-menu v2 registration/reply and event take are strictly additive.
 # All existing function signatures were compared unchanged before updating this lock.
-f28e24de5f1d46ead2ded7719e99fb8a27a1389defbd69463f63b1643296e4d8
+# Retained frame V4 additively combines textured geometry and opaque cube patches.
+# Existing function signatures are unchanged.
+760e1db6d9d1200857ba736d480b56a638bfbf02e41e6fc3562ed13a874391fb

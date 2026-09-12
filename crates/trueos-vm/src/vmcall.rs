@@ -135,6 +135,7 @@ pub const OP_BP_VGPU_RETAINED_MESH_DESTROY: u32 = 0x14E;
 pub const OP_BP_VGPU_RETAINED_FRAME_SUBMIT: u32 = 0x14F;
 pub const OP_BP_VGPU_RETAINED_FRAME_SUBMIT_V2: u32 = 0x179; // payload RetainedFrameSubmitV2 -> TimelinePoint
 pub const OP_BP_VGPU_RETAINED_FRAME_SUBMIT_V3: u32 = 0x17A; // payload RetainedFrameSubmitV3 -> TimelinePoint
+pub const OP_BP_VGPU_RETAINED_FRAME_SUBMIT_V4: u32 = 0x17D; // payload RetainedFrameSubmitV4 -> TimelinePoint
 const _: () = {
     assert!(OP_BP_VGPU_RETAINED_MESH_CREATE == 0x14D);
     assert!(OP_BP_VGPU_RETAINED_MESH_DESTROY == 0x14E);

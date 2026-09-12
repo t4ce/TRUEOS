@@ -3993,6 +3993,72 @@ fn decode_retained_scene_seeds(bytes: &[u8]) -> Option<Vec<v::vgpu::RetainedTran
         .collect()
 }
 
+/// Pins the companion mesh until the shared surface submission retires (or fails).
+struct RetainedCubeLease {
+    principal: Principal,
+    device: DeviceHandle,
+    mesh: RetainedMeshHandle,
+    resident: Arc<crate::intel::render::ResidentChurnForward>,
+}
+impl Drop for RetainedCubeLease {
+    fn drop(&mut self) {
+        let mut broker = BROKER.lock();
+        if let Ok(device) = lookup_device_mut(&mut broker, self.device, self.principal) {
+            if let Ok(mesh) = lookup_retained_mesh_mut(device, self.mesh) {
+                mesh.in_flight = 0;
+            }
+        }
+    }
+}
+fn retained_cube_descriptor_valid(primary: u64, draw: &v::vgpu::RetainedCubeDraw) -> bool {
+    draw.mesh != 0 && draw.mesh != primary && draw.seed_buffer != 0
+        && draw.reserved == 0 && draw.seed_count != 0
+        && draw.seed_count as usize <= v::vgpu::MAX_RETAINED_SCENE_INSTANCES
+        && draw.seed_offset % 4 == 0
+        && draw.seed_offset.checked_add(u64::from(draw.seed_count)*64).is_some()
+}
+fn acquire_retained_cube_draw(
+    principal: Principal, device_handle: DeviceHandle,
+    primary: RetainedMeshHandle, camera: &v::vgpu::RetainedCamera,
+    draw: v::vgpu::RetainedCubeDraw,
+) -> Result<RetainedCubeLease, VgpuError> {
+    if !retained_cube_descriptor_valid(primary.raw(), &draw) {
+        return Err(VgpuError::Unsupported);
+    }
+    let offset = usize::try_from(draw.seed_offset).map_err(|_| VgpuError::Unsupported)?;
+    let mut bytes = alloc::vec![0u8; draw.seed_count as usize*64];
+    read_buffer(principal, device_handle, BufferHandle::from_raw(draw.seed_buffer), offset, &mut bytes)?;
+    let seeds = decode_retained_scene_seeds(&bytes).ok_or(VgpuError::Unsupported)?;
+    if seeds.iter().any(|seed| seed.draw_group != 0) { return Err(VgpuError::Unsupported); }
+    let mesh = RetainedMeshHandle::from_raw(draw.mesh);
+    let resident = {
+        let mut broker = BROKER.lock();
+        let device = lookup_device_mut(&mut broker, device_handle, principal)?;
+        ensure_live(device)?;
+        let epoch = device.epoch;
+        let primary = lookup_retained_mesh_mut(device, primary)?;
+        if primary.epoch != epoch || primary.in_flight != 0
+            || !primary.resident.pbr_material()
+        { return Err(VgpuError::Unsupported); }
+        let carrier = primary.carrier;
+        let record = lookup_retained_mesh_mut(device, mesh)?;
+        if record.epoch != epoch || record.carrier != carrier || record.in_flight != 0 {
+            return Err(VgpuError::Busy);
+        }
+        if record.resident.topology() != crate::intel::render::ResidentScenePrimitiveTopology::CubePatchList1 {
+            return Err(VgpuError::Unsupported);
+        }
+        record.in_flight = 1;
+        Arc::clone(&record.resident)
+    };
+    let lease = RetainedCubeLease { principal, device: device_handle, mesh, resident };
+    crate::intel::render::update_resident_picasso_retained_transform_seeds(
+        &lease.resident, camera, &seeds,
+        Some(&[v::vgpu::RetainedDrawRange { first_index: 0, index_count: 44 }]),
+    ).map_err(|_| VgpuError::Unsupported)?;
+    Ok(lease)
+}
+
 /// Execute Picasso's retained mesh and its untransformed static primitives in
 /// one Render submission. Dynamic input is compact TRS seeds plus any
 /// explicitly revised static positions; matrices, compaction, indirect draw
@@ -4004,6 +4070,7 @@ pub(crate) fn submit_ui4_retained_frame(
     submit: v::vgpu::RetainedFrameSubmit,
     material_parameters: Option<v::vgpu::RetainedMaterialParameters>,
     scene: Option<v::vgpu::RetainedFrameSubmitV3>,
+    cubes: Option<v::vgpu::RetainedCubeDraw>,
 ) -> Result<Ui4SurfaceIndexedCompletion, VgpuError> {
     let (seeds, draw_ranges) = if let Some(scene) = scene {
         if !retained_scene_descriptor_valid(&scene) {
@@ -4042,6 +4109,9 @@ pub(crate) fn submit_ui4_retained_frame(
         return Err(VgpuError::Unsupported);
     }
     let mesh_handle = RetainedMeshHandle::from_raw(submit.mesh);
+    let cube_lease = cubes.map(|draw| acquire_retained_cube_draw(
+        principal, device_handle, mesh_handle, &submit.camera, draw,
+    )).transpose()?;
     let surface_handle = SurfaceHandle::from_raw(submit.surface);
     let static_vertex_buffer = BufferHandle::from_raw(submit.static_vertex_buffer);
     let static_index_buffer = BufferHandle::from_raw(submit.static_index_buffer);
@@ -4533,6 +4603,7 @@ pub(crate) fn submit_ui4_retained_frame(
     let rendered =
         crate::intel::render::render_resident_retained_with_static_draws_direct_to_surface(
             &resident,
+            cube_lease.as_ref().map(|lease| lease.resident.as_ref()),
             render_material,
             &line_draws,
             Some(submit.clear_rgba8_srgb.to_le_bytes()),
@@ -4555,7 +4626,8 @@ pub(crate) fn submit_ui4_retained_frame(
         );
         return Err(VgpuError::Busy);
     }
-    let expected_draws = resident.draw_group_count() + static_draw_count;
+    let expected_draws = resident.draw_group_count() + static_draw_count
+        + cube_lease.as_ref().map_or(0, |lease| lease.resident.draw_group_count());
     let release = rendered
         .ok()
         .and_then(|result| {

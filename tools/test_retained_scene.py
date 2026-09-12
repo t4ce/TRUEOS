@@ -19,7 +19,7 @@ from test_retained_material import harness_source
 def source() -> str:
     abi = "crates/trueos-v/src/vgpu.rs"
     sdk = "../TRUEOS-Blueprints/crates/trueos-v/src/vgpu.rs"
-    for name in ("RetainedDrawRange", "RetainedFrameSubmitV3", "RetainedTransformSeed"):
+    for name in ("RetainedDrawRange", "RetainedFrameSubmitV3", "RetainedTransformSeed", "RetainedCubeDraw", "RetainedFrameSubmitV4"):
         assert item(abi, name) == item(sdk, name), f"SDK mirror drift: {name}"
     for name in ("MAX_RETAINED_SCENE_INSTANCES", "MAX_RETAINED_SCENE_DRAWS"):
         assert constant(abi, name) == constant(sdk, name), f"SDK mirror drift: {name}"
@@ -35,12 +35,36 @@ def source() -> str:
         + constant(dispatch, "GPGPU_HELIO_MAX_HIERARCHY_NODES") + " } }\n")
     return harness_source() + "\n" + capacities + "\n".join((
         item("src/gpu/vgpu.rs", "retained_scene_descriptor_valid"),
+        item("src/gpu/vgpu.rs", "retained_cube_descriptor_valid"),
         item("src/gpu/vgpu.rs", "retained_static_line_index_count_valid"),
         item("src/gpu/vgpu.rs", "decode_retained_scene_seeds"),
         item("src/intel/render/resources.rs", "picasso_retained_draw_templates"),
         item("src/intel/render/resources.rs", "churn_hierarchy_node_capacity"),
     )) + r'''
 use vgpu::*;
+
+#[test]
+fn mixed_cube_descriptor_is_bounded_and_cannot_alias_the_primary() {
+    use core::mem::{size_of,offset_of};
+    assert_eq!(size_of::<RetainedCubeDraw>(),32);
+    assert_eq!(size_of::<RetainedFrameSubmitV4>(),912);
+    assert_eq!(offset_of!(RetainedFrameSubmitV4,cubes),880);
+    let good=RetainedCubeDraw{mesh:2,seed_buffer:3,seed_count:27,..Default::default()};
+    assert!(retained_cube_descriptor_valid(1,&good));
+    for mesh in [0,1] {
+        assert!(!retained_cube_descriptor_valid(1,&RetainedCubeDraw{mesh,..good}));
+    }
+    for seed_count in [0,8193,u32::MAX] {
+        assert!(!retained_cube_descriptor_valid(1,&RetainedCubeDraw{seed_count,..good}));
+    }
+    for seed_offset in [1,2,u64::MAX-3] {
+        assert!(!retained_cube_descriptor_valid(1,&RetainedCubeDraw{seed_offset,..good}));
+    }
+    assert!(!retained_cube_descriptor_valid(1,&RetainedCubeDraw{seed_buffer:0,..good}));
+    assert!(!retained_cube_descriptor_valid(1,&RetainedCubeDraw{reserved:1,..good}));
+    assert!(retained_cube_descriptor_valid(1,&RetainedCubeDraw{seed_count:8192,seed_offset:64,..good}));
+}
+
 
 #[test]
 fn advertised_scene_capacity_can_allocate_gpu_transform_rows() {
