@@ -18,17 +18,14 @@ use super::super::{
 };
 
 const LIVE_UPDATE_LAUNCH_TIMEOUT_MS: u64 = 30_000;
+pub(crate) const BLUEPRINT_ARCHIVE: &str = "img.bp";
 
 #[task(pool_size = 2)]
 async fn launch_img(spawner: Spawner, target: MatrixTarget, app_args: Vec<String>) {
-    let Some(archive) = crate::r::restart::startup_alias_blueprint("img") else {
-        print_matrix_target_system_line(&target, "img: startup alias is not configured");
-        return;
-    };
-    let app = archive.strip_suffix(".bp").unwrap_or(archive.as_str());
+    let archive = BLUEPRINT_ARCHIVE;
     match super::run::submit_archive_name_to_target_from_app_db_with_instance_and_launch_script_async(
         target.clone(),
-        archive.as_str(),
+        archive,
         app_args.clone(),
         crate::hv::BlueprintInstanceRequest::default(),
         Some(String::from("fs-scope trueosfs\n")),
@@ -38,7 +35,7 @@ async fn launch_img(spawner: Spawner, target: MatrixTarget, app_args: Vec<String
         Ok(_) => {}
         Err(error) if error == "archive not found" => {
             let mut online_args = Vec::with_capacity(app_args.len().saturating_add(1));
-            online_args.push(String::from(app));
+            online_args.push(String::from("img"));
             online_args.extend(app_args);
             if submit_online_to_target(&spawner, target.clone(), online_args).is_err() {
                 print_matrix_target_system_line(&target, "img: online launch task unavailable");
@@ -72,14 +69,7 @@ pub(crate) fn launch_live_update_notice(spawner: Spawner, generation: u64) {
 
 #[task(pool_size = 1)]
 async fn live_update_notice_task(generation: u64) {
-    let Some(archive) = crate::r::restart::startup_alias_blueprint("img") else {
-        crate::log_warn!(
-            target: "global";
-            "live-update: notice launch rejected generation={} reason=img-startup-alias-missing\n",
-            generation,
-        );
-        return;
-    };
+    let archive = BLUEPRINT_ARCHIVE;
     while !crate::live_update::post_boot_uplift_complete(generation) {
         Timer::after(EmbassyDuration::from_millis(25)).await;
     }
@@ -94,7 +84,7 @@ async fn live_update_notice_task(generation: u64) {
     let target = matrix_target_for_slot_name(OUTPUT_SYSTEM_MASK, "");
     let submitted = super::run::submit_archive_name_to_target_from_app_db_with_instance_waiving_readiness_noninteractive_async(
             target,
-            archive.as_str(),
+            archive,
             alloc::vec![String::from(source)],
             crate::hv::BlueprintInstanceRequest::named(instance_name.clone()),
             crate::r::readiness::TRUEOSFS_ROOT_MOUNTED,
@@ -114,7 +104,7 @@ async fn live_update_notice_task(generation: u64) {
         .as_millis()
         .saturating_add(LIVE_UPDATE_LAUNCH_TIMEOUT_MS);
     let vm_id = loop {
-        let found = crate::hv::named_app_instance_vms(archive.as_str())
+        let found = crate::hv::named_app_instance_vms(archive)
             .into_iter()
             .find_map(|(vm_id, name)| (name == instance_name).then_some(vm_id));
         if let Some(vm_id) = found {

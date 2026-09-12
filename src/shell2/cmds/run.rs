@@ -919,23 +919,33 @@ pub(crate) async fn app_vm_run_queue_task(spawner: Spawner) {
                 );
                 continue;
             };
-            let Some(archive) = crate::r::restart::startup_alias_blueprint("img") else {
-                crate::hv::blueprint_control_shell_line(
-                    request.origin_vm,
-                    "SHOW FAILED · img startup alias is not configured",
-                );
-                continue;
-            };
+            // The image-open API targets the built-in viewer, independently
+            // of user-configured Shell2 aliases.
+            let archive = super::img::BLUEPRINT_ARCHIVE;
+            crate::log_info!(
+                target: "apps";
+                "apps: img open origin_vm={} archive={} sources={}\n",
+                request.origin_vm,
+                archive,
+                request.paths.len(),
+            );
             if let Err(error) =
                 submit_archive_name_to_target_from_app_db_with_instance_and_launch_script_async(
                     target,
-                    archive.as_str(),
+                    archive,
                     request.paths,
                     crate::hv::BlueprintInstanceRequest::default(),
                     Some(String::from("fs-scope trueosfs\n")),
                 )
                 .await
             {
+                crate::log_warn!(
+                    target: "apps";
+                    "apps: img open failed origin_vm={} archive={} error={}\n",
+                    request.origin_vm,
+                    archive,
+                    error,
+                );
                 crate::hv::blueprint_control_shell_line(
                     request.origin_vm,
                     alloc::format!("SHOW FAILED · {error}").as_str(),

@@ -1,13 +1,6 @@
 {
   "aliases": [
-    { "name": "td", "blueprint": "termdir.bp" },
-    { "name": "edit", "blueprint": "edit.bp" },
-    { "name": "img", "blueprint": "img.bp" },
-    { "name": "shell", "blueprint": "shell.bp" },
-    { "name": "surf", "blueprint": "solara.bp" },
-    { "name": "qjs", "blueprint": "qjs.bp" },
-    { "name": "aud", "blueprint": "Player.bp" },
-    { "name": "ssh", "blueprint": "ssh.bp" },
+    { "name": "cub", "blueprint": "cubes.bp" },
     { "name": "grid", "blueprint": "gridpaper" }
   ],
   "solara": {
