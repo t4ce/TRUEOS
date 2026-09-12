@@ -20,6 +20,7 @@ def harness_source() -> str:
         constant(abi, name)
         for name in (
             "RETAINED_MATERIAL_FLAG_DOUBLE_SIDED",
+            "RETAINED_MATERIAL_FLAG_NEAREST",
             "RETAINED_MATERIAL_TEXTURE_COUNT",
             "MAX_RETAINED_TRANSFORM_SEEDS",
             "MAX_RETAINED_STATIC_DRAWS",
