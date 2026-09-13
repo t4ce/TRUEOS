@@ -208,3 +208,53 @@ source+=constant('../TRUEOS-Picasso-Example/src/main.rs','HEAD_PLANE_OFFSET')
 source+=constant('../TRUEOS-Picasso-Example/src/main.rs','HEAD_WORLD_TRANSLATIONS')
 source+='mod video_demo {use crate::vgpu::*;\n'+item('../TRUEOS-Picasso-Example/src/video_demo.rs','submission')+item('../TRUEOS-Picasso-Example/src/video_demo.rs','tests')+'}\n'
 run(source)
+
+# A textured-only frame has no static-line buffers. Exercise the production
+# cold-upload and cached-refresh helpers with those actual zero handles.
+static_source = r'''
+#![allow(dead_code)]
+extern crate self as v;
+mod vgpu {
+ #[derive(Clone,Copy,Default)]pub struct IndexedBatchDrawV2 {
+  pub index_count:u32,pub first_index:u32,pub base_vertex:i32,pub rgba8_srgb:u32,pub topology:u32,pub reserved:u32,
+ }
+}
+const BUFFER_USAGE_VERTEX:u32=1;
+const BUFFER_USAGE_INDEX:u32=2;
+#[derive(Clone,Copy)]struct BufferHandle(u64);
+#[derive(Clone,Copy)]enum BufferBacking{Dma{virt:*mut u8},GuestPages{}}
+struct BufferRecord{usage:u32,backing:BufferBacking,bytes:usize}
+struct VirtualDevice{buffers:Vec<BufferRecord>}
+#[derive(Debug,PartialEq)]enum VgpuError{InvalidHandle,DeviceLost,PermissionDenied,Unsupported}
+fn lookup_buffer(device:&VirtualDevice,handle:BufferHandle)->Result<&BufferRecord,VgpuError>{
+ let index=handle.0.checked_sub(1).ok_or(VgpuError::InvalidHandle)?;
+ device.buffers.get(index as usize).ok_or(VgpuError::InvalidHandle)
+}
+mod intel{pub fn dma_flush(_:*mut u8,_:usize){}}
+'''
+for name in ('copy_retained_static_vertices','retained_static_line_index_count_valid','copy_retained_static_parts'):
+    static_source += item('src/gpu/vgpu.rs',name)
+static_source += r'''
+#[test]fn textured_only_cold_frame_needs_no_static_buffers(){
+ let device=VirtualDevice{buffers:vec![]};
+ assert_eq!(copy_retained_static_parts(&device,BufferHandle(0),BufferHandle(0),0,0,&[]),Ok(vec![]));
+}
+#[test]fn empty_static_refresh_needs_no_vertex_buffer_but_rejects_mismatched_counts(){
+ let device=VirtualDevice{buffers:vec![]};
+ assert_eq!(copy_retained_static_vertices(&device,BufferHandle(0),0,&[],&[]),Ok(vec![]));
+ assert_eq!(copy_retained_static_vertices(&device,BufferHandle(0),0,&[],&[1]),Err(VgpuError::DeviceLost));
+}
+#[test]fn real_static_draws_still_validate_and_copy_buffers(){
+ let vertices:[f32;6]=[1.,2.,3.,4.,5.,6.];let indices=[0u32,1];
+ let device=VirtualDevice{buffers:vec![
+  BufferRecord{usage:BUFFER_USAGE_VERTEX,backing:BufferBacking::Dma{virt:vertices.as_ptr() as *mut u8},bytes:24},
+  BufferRecord{usage:BUFFER_USAGE_INDEX,backing:BufferBacking::Dma{virt:indices.as_ptr() as *mut u8},bytes:8},
+ ]};
+ let draws=[vgpu::IndexedBatchDrawV2{index_count:2,..Default::default()}];
+ assert_eq!(copy_retained_static_parts(&device,BufferHandle(1),BufferHandle(2),0,0,&draws),Ok(vec![(vec![[1.,2.,3.],[4.,5.,6.]],vec![0,1])]));
+ assert_eq!(copy_retained_static_parts(&device,BufferHandle(0),BufferHandle(2),0,0,&draws),Err(VgpuError::InvalidHandle));
+ assert_eq!(copy_retained_static_parts(&device,BufferHandle(1),BufferHandle(0),0,0,&draws),Err(VgpuError::InvalidHandle));
+ assert_eq!(copy_retained_static_parts(&device,BufferHandle(1),BufferHandle(1),0,0,&draws),Err(VgpuError::PermissionDenied));
+}
+'''
+run(static_source)

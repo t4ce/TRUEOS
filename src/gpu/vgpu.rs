@@ -3829,6 +3829,11 @@ fn copy_retained_static_vertices(
     if draws.len() != vertex_counts.len() {
         return Err(VgpuError::DeviceLost);
     }
+    // Textured-only retained frames have no static buffers, including when
+    // refreshing an empty cached static geometry after a revision change.
+    if draws.is_empty() {
+        return Ok(Vec::new());
+    }
     let vertex_record = lookup_buffer(device, vertex_buffer)?;
     if vertex_record.usage & BUFFER_USAGE_VERTEX == 0 {
         return Err(VgpuError::PermissionDenied);
@@ -3884,6 +3889,11 @@ fn copy_retained_static_parts(
     index_offset: u64,
     draws: &[v::vgpu::IndexedBatchDrawV2],
 ) -> Result<Vec<(Vec<[f32; 3]>, Vec<u32>)>, VgpuError> {
+    // No static draws means no index/vertex buffer contract to resolve. The
+    // independently textured frame API intentionally leaves both handles zero.
+    if draws.is_empty() {
+        return Ok(Vec::new());
+    }
     let index_record = lookup_buffer(device, index_buffer)?;
     if index_record.usage & BUFFER_USAGE_INDEX == 0 {
         return Err(VgpuError::PermissionDenied);
