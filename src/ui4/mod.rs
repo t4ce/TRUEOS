@@ -125,7 +125,7 @@ pub(crate) use start_button::{request_start_button_reveal, ui4_start_button_serv
 pub(crate) use video_frame::{
     DecodedNv12Source, DecodedVideoConversionProbeReport, DecodedVideoConversionReport,
     VIDEO_RGBA_BUFFER_COUNT, VideoPlaybackSession, begin_decoded_nv12_conversion_batch,
-    begin_shell_decoded_video_player, enqueue_decoded_nv12_stream_frame,
+    begin_shell_decoded_video_player, begin_texture_video_player, enqueue_decoded_nv12_stream_frame,
     request_video_playback_stop, ui4_video_conversion_service_task, video_playback_status,
     wait_decoded_nv12_conversion_idle,
 };

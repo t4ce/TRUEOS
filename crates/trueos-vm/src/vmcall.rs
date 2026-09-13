@@ -161,6 +161,8 @@ pub const OP_BP_VMEDIA_IMAGE_DECODE_READ: u32 = 0x147;
 pub const OP_BP_VMEDIA_IMAGE_DECODE_DISCARD: u32 = 0x148;
 pub const OP_BP_VMEDIA_TEXTURE_DECODE_BEGIN: u32 = 0x157;
 pub const OP_BP_VMEDIA_TEXTURE_DECODE_INFO: u32 = 0x158;
+pub const OP_BP_VGPU_RETAINED_TEXTURED_FRAME_V1: u32 = 0x162;
+pub const OP_BP_VMEDIA_VIDEO_COMMAND_V1: u32 = 0x161;
 pub const OP_BP_VMEDIA_TEXTURE_RELEASE: u32 = 0x159;
 /// Pack several regular TRUEOSFS files into one deterministic 7z archive.
 /// `arg0` is the byte length of the NUL-separated source-path list; the

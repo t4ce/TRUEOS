@@ -658,7 +658,12 @@ unsafe extern "C" {
         id: u32,
         out: *mut TrueosVmediaRetainedTextureInfo,
     ) -> i32;
+    pub fn trueos_cabi_vgpu_retained_textured_frame_v1(device: u64, queue: u64,
+        submit: *const crate::vgpu::RetainedTexturedFrameV1, point: *mut crate::vgpu::TimelinePoint) -> i32;
     pub fn trueos_cabi_vmedia_texture_release(device: u64, texture_id: u64) -> i32;
+    pub fn trueos_cabi_vmedia_video_command_v1(command: u32, a: u64, b: u64,
+        input: *const u8, input_len: usize, output: *mut u8, output_len: usize) -> i32;
+
     pub fn trueos_cabi_ui4_solara_frame_begin(window_id: u32, clear_rgba: u32) -> i32;
     pub fn trueos_cabi_ui4_scene_pan_event_take(window_id: u32, out: *mut TrueosUi4PanEvent)
     -> i32;

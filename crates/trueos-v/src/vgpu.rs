@@ -456,6 +456,17 @@ pub struct RetainedFrameSubmit {
     pub static_draws: [IndexedBatchDrawV2; MAX_RETAINED_STATIC_DRAWS],
 }
 
+/// Unlit, independently textured draw groups over one retained mesh. Each
+/// inline transform selects its matching range and texture; repeated IDs share
+/// a video frame without another decoder. Uses POS_NORMAL_UV (32-byte vertices).
+#[derive(Copy, Clone, Debug, Default, PartialEq)]
+#[repr(C)]
+pub struct RetainedTexturedFrameV1 {
+    pub frame: RetainedFrameSubmit,
+    pub ranges: [RetainedDrawRange; 4],
+    pub textures: [u64; 4],
+}
+
 /// Scalar inputs for the retained opaque metallic-roughness material shader.
 /// Texture IDs remain in the nested frame's owner-scoped material bundle.
 /// DOUBLE_SIDED and NEAREST are accepted in flags; reserved must be zero.
@@ -991,6 +1002,20 @@ impl Device {
                 &mut point,
             )
         })?;
+        surface.live = false;
+        Ok(point)
+    }
+
+    /// One render pass, up to four unlit textures, with persistent geometry.
+    pub fn submit_retained_textured_frame_v1(self, queue: Queue, surface: Ui4Surface,
+        mesh: RetainedMesh, mut submit: RetainedTexturedFrameV1) -> Result<TimelinePoint, i32> {
+        if queue.device != self || surface.device != self { return Err(ERR_BAD_HANDLE); }
+        let mut surface = surface;
+        submit.frame.surface = surface.surface.0;
+        submit.frame.mesh = mesh.0;
+        let mut point = TimelinePoint::default();
+        rc_result(unsafe { vcabi::trueos_cabi_vgpu_retained_textured_frame_v1(
+            self.0, queue.handle, &submit, &mut point) })?;
         surface.live = false;
         Ok(point)
     }

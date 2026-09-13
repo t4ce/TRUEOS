@@ -234,4 +234,5 @@
 # All existing function signatures were compared unchanged before updating this lock.
 # Retained frame V4 additively combines textured geometry and opaque cube patches.
 # Existing function signatures are unchanged.
-760e1db6d9d1200857ba736d480b56a638bfbf02e41e6fc3562ed13a874391fb
+3b049f5938858bebb810373a1025ecf2e11835e3d28e96b269aa832870b4aa4f
+# Video command v1 and retained textured frame v1 are additive. Existing declarations compared unchanged.

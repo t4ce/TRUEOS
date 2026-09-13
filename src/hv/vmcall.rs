@@ -270,6 +270,8 @@ pub const OP_BP_VMEDIA_IMAGE_DECODE_READ: u32 = 0x147; // arg0 operation,arg1 hi
 pub const OP_BP_VMEDIA_IMAGE_DECODE_DISCARD: u32 = 0x148; // arg0 operation -> rc
 pub const OP_BP_VMEDIA_TEXTURE_DECODE_BEGIN: u32 = 0x157; // arg0 device,arg1 format:u32|encoded_len:u32 -> retained operation id/rc
 pub const OP_BP_VMEDIA_TEXTURE_DECODE_INFO: u32 = 0x158; // arg0 operation -> opaque retained texture contract/rc
+pub const OP_BP_VGPU_RETAINED_TEXTURED_FRAME_V1: u32 = 0x162;
+pub const OP_BP_VMEDIA_VIDEO_COMMAND_V1: u32 = 0x161;
 pub const OP_BP_VMEDIA_TEXTURE_RELEASE: u32 = 0x159; // arg0 device,arg1 opaque texture id -> rc
 pub const OP_BP_ARCHIVE_PACK_MANY_START: u32 = 0x15A; // arg0 NUL-separated source-path bytes,payload sources+archive path -> operation id/rc
 pub const OP_BP_TERMINAL_LEASE_CURRENT_V1: u32 = 0x134; // arg0 ready epoch or 0 -> active epoch/error
@@ -1725,6 +1727,28 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             }
             DispatchOutcome::Resume
         }
+        OP_BP_VGPU_RETAINED_TEXTURED_FRAME_V1 => {
+            let principal = crate::gpu::vgpu::Principal::HullGuest(vm_id as u16);
+            let submit = request_payload(vm_id, req_len)
+                .filter(|payload| {
+                    payload.len() == core::mem::size_of::<v::vgpu::RetainedTexturedFrameV1>()
+                })
+                .map(|payload| unsafe {
+                    core::ptr::read_unaligned(
+                        payload.as_ptr().cast::<v::vgpu::RetainedTexturedFrameV1>(),
+                    )
+                });
+            let result = submit.ok_or(-22).and_then(|submit| {
+                crate::r::io::vgpu_cabi::broker_retained_textured_frame_v1(
+                    principal, arg0, arg1, submit,
+                )
+            });
+            match result {
+                Ok(point) => write_record_response(vm_id, seq, 0, &point),
+                Err(rc) => write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0),
+            }
+            DispatchOutcome::Resume
+        }
         OP_BP_VGPU_QUEUE_CREATE => {
             let principal = crate::gpu::vgpu::Principal::HullGuest(vm_id as u16);
             let data =
@@ -3045,6 +3069,25 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             let owner = crate::r::io::async_fs_cabi::owner_for_vm(vm_id);
             let rc = crate::r::services::media_service::discard(owner, arg0 as u32);
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_VMEDIA_VIDEO_COMMAND_V1 => {
+            let Some(payload) = request_payload(vm_id, req_len) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            if payload.len() < 8 || payload.len() > 3080 || arg0 > 5 {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            }
+            let owner = crate::r::io::async_fs_cabi::owner_for_vm(vm_id);
+            let b = u64::from_le_bytes(payload[..8].try_into().unwrap());
+            let mut output = [0u8; 24];
+            let rc = crate::r::services::video_service::command(owner, arg0 as u32, arg1, b,
+                &payload[8..], if arg0 == 3 { &mut output } else { &mut [] });
+            if arg0 == 3 && rc == 1 {
+                write_record_slice_response(vm_id, seq, 1, &output);
+            } else { write_response(vm_id, seq, STATUS_OK, rc as i64 as u64, 0); }
             DispatchOutcome::Resume
         }
         OP_BP_VMEDIA_TEXTURE_RELEASE => {

@@ -11,6 +11,7 @@ pub mod hda_capture_lane;
 pub mod hid_udp_service;
 pub mod keyboard_control_service;
 pub mod media_service;
+pub mod video_service;
 pub mod mouse_motion_service;
 pub(crate) mod oceancache;
 pub mod spawn_service;

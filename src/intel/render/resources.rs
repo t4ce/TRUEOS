@@ -3082,6 +3082,10 @@ fn prepare_resident_churn_forward_draw(
     {
         return None;
     }
+    let sampled_material = sampled_material.map(|mut material| {
+        if let Some(textures) = material.group_base_colors { material.base_color = textures[group]; }
+        material
+    });
     Some(TriangleDrawPrep {
         vue_capture: false,
         vertex_count: resident.vertex_count,

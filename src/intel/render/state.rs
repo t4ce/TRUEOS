@@ -333,6 +333,7 @@ unsafe impl Sync for ResidentSampledTexture {}
 /// are separately admitted.
 #[derive(Clone, Copy)]
 pub(crate) struct ResidentRetainedMaterial<'a> {
+    pub(crate) group_base_colors: Option<[&'a ResidentSampledTexture; 4]>,
     pub(crate) base_color: &'a ResidentSampledTexture,
     pub(crate) metallic_roughness: Option<&'a ResidentSampledTexture>,
     pub(crate) emissive: Option<&'a ResidentSampledTexture>,

@@ -765,6 +765,7 @@ struct VideoPlaybackState {
     cancelled: AtomicBool,
     paused: AtomicBool,
     stream: Mutex<Option<VideoStream>>,
+    texture_target: core::sync::atomic::AtomicU32,
     conversion: Mutex<DecodedVideoConversionState>,
 }
 impl VideoPlaybackState {
@@ -775,6 +776,7 @@ impl VideoPlaybackState {
             cancelled: AtomicBool::new(false),
             paused: AtomicBool::new(false),
             stream: Mutex::new(None),
+            texture_target: core::sync::atomic::AtomicU32::new(0),
             conversion: Mutex::new(DecodedVideoConversionState::new()),
         }
     }
@@ -815,6 +817,7 @@ impl VideoPlaybackSession {
         let stopped = stop_decoded_nv12_stream(self, reason);
         // Retain the slot on unexpected task abandonment with live GPU reads.
         if decoded_video_conversion_idle(self) {
+            self.state().texture_target.store(0, Ordering::Release);
             self.state().occupied.store(false, Ordering::Release);
         }
         stopped
@@ -840,6 +843,10 @@ pub(crate) fn request_video_playback_stop(slot: usize) -> bool {
     let Some(state) = VIDEO_SESSIONS.get(slot) else {
         return false;
     };
+    if state.occupied.load(Ordering::Acquire) && state.texture_target.load(Ordering::Acquire) != 0 {
+        state.cancelled.store(true, Ordering::Release);
+        return true;
+    }
     let stream = *state.stream.lock();
     // Use the same broker close path as Escape, including its cancellation
     // notification. The playback task remains the teardown owner.
@@ -847,6 +854,7 @@ pub(crate) fn request_video_playback_stop(slot: usize) -> bool {
 }
 
 pub(crate) struct VideoPlaybackStatus {
+    pub(crate) texture_sink: bool,
     pub(crate) occupied: bool,
     pub(crate) cancelled: bool,
     pub(crate) paused: bool,
@@ -860,6 +868,7 @@ pub(crate) fn video_playback_status() -> [VideoPlaybackStatus; VIDEO_PLAYBACK_SE
         let session = &VIDEO_SESSIONS[slot];
         let state = session.conversion.lock();
         VideoPlaybackStatus {
+            texture_sink: session.texture_target.load(Ordering::Acquire) != 0,
             occupied: session.occupied.load(Ordering::Acquire),
             cancelled: session.cancelled.load(Ordering::Acquire),
             paused: session.paused.load(Ordering::Acquire),
@@ -1019,6 +1028,13 @@ fn take_decoded_video_conversion_request() -> Option<DecodedVideoConversionReque
         let mut state = VIDEO_SESSIONS[(start + offset) % VIDEO_PLAYBACK_SESSIONS]
             .conversion
             .lock();
+        let target = VIDEO_SESSIONS[(start + offset) % VIDEO_PLAYBACK_SESSIONS]
+            .texture_target.load(Ordering::Acquire);
+        // A held texture must not occupy either shared conversion lane. Admit
+        // only one request per texture stream, and only with destination room.
+        if target != 0 && (state.active != 0 || !crate::r::services::video_service::conversion_ready(target)) {
+            continue;
+        }
         if let Some(request) = state.queue.pop_front() {
             state.active += 1;
             return Some(request);
@@ -1132,6 +1148,7 @@ pub(crate) fn begin_shell_decoded_video_player(
             .is_ok()
     })?;
     let state = &VIDEO_SESSIONS[slot];
+    state.texture_target.store(0, Ordering::Release);
     let session = VideoPlaybackSession {
         slot,
         generation: state.generation.fetch_add(1, Ordering::AcqRel) + 1,
@@ -1282,6 +1299,11 @@ async fn convert_publish_decoded_nv12_stream_frame(
         probe.bind_layout_us =
             video_conversion_ticks_to_micros(bind_layout_started.elapsed().as_ticks());
         return probe.finish(false);
+    }
+    let target = session.state().texture_target.load(Ordering::Acquire);
+    if target != 0 {
+        if !wait_decoded_video_conversion_turn(request).await { return probe.finish(false); }
+        return probe.finish(crate::r::services::video_service::convert(target, session, source).await);
     }
     // Shell-driven playback owns the same application window as boot playback;
     // drain its broker queue at frame cadence so move/resize/pan never depends
@@ -1878,4 +1900,25 @@ fn valid_source(source: DecodedNv12Source) -> bool {
         && source.pitch_bytes.is_multiple_of(128)
         && source.uv_offset < source.byte_len
         && source.uv_offset.is_multiple_of(source.pitch_bytes)
+}
+
+/// Reserve from the very same pool as `vid fs`, without creating a display window.
+pub(crate) fn begin_texture_video_player(target: u32) -> Option<VideoPlaybackSession> {
+    if target == 0 { return None; }
+    let slot = VIDEO_SESSIONS.iter().position(|state| state.occupied
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_ok())?;
+    let state = &VIDEO_SESSIONS[slot];
+    let session = VideoPlaybackSession { slot,
+        generation: state.generation.fetch_add(1, Ordering::AcqRel) + 1 };
+    state.cancelled.store(false, Ordering::Release);
+    state.paused.store(false, Ordering::Release);
+    state.texture_target.store(target, Ordering::Release);
+    Some(session)
+}
+impl VideoPlaybackSession {
+    pub(crate) fn cancel(self) {
+        if self.state().generation.load(Ordering::Acquire) == self.generation {
+            self.state().cancelled.store(true, Ordering::Release);
+        }
+    }
 }

@@ -438,6 +438,14 @@ fn spawn_vmedia_service(spawner: Spawner) -> SpawnAttempt {
         return SpawnAttempt::Skipped;
     }
 
+    // Three independent playback futures even on a one-worker topology.
+    // Each yields cooperatively; worker/core count must not reduce stream slots.
+    for (_, _, worker_spawner) in worker_spawners.iter().cycle().take(3) {
+        match crate::r::services::video_service::worker_task() {
+            Ok(token) => worker_spawner.spawn(token),
+            Err(error) => return SpawnAttempt::Failed(error),
+        }
+    }
     let mut spawned = 0usize;
     for (worker_id, (worker_slot, core_kind, worker_spawner)) in
         worker_spawners.into_iter().enumerate()

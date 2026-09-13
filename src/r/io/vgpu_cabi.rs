@@ -641,6 +641,7 @@ fn broker_retained_frame_submit_inner(
         material_parameters,
         scene,
         cubes,
+        None,
     )
     .map_err(|error| error.errno())?;
     crate::ui4::blueprint_text::complete_vgpu_resident_surface_submission(
@@ -1667,4 +1668,28 @@ pub extern "C" fn trueos_cabi_vgpu_wait(device: u64, queue: u64, value: u64) -> 
     } else {
         broker_wait(direct_principal(), device, queue, value)
     }
+}
+
+pub(crate) fn broker_retained_textured_frame_v1(principal: Principal, device: u64, queue: u64,
+    submit: v::vgpu::RetainedTexturedFrameV1) -> Result<v::vgpu::TimelinePoint, i32> {
+    let owner = ui4_owner(principal)?;
+    let completed = vgpu::submit_ui4_retained_frame(principal, DeviceHandle::from_raw(device),
+        QueueHandle::from_raw(queue), submit.frame, None, None, None, Some(submit))
+        .map_err(|e| e.errno())?;
+    crate::ui4::blueprint_text::complete_vgpu_resident_surface_submission(owner,
+        completed.window_id, completed.surface.handle.raw(), completed.release)?;
+    Ok(v::vgpu::TimelinePoint { value: completed.point.value,
+        physical_serial: completed.point.physical_serial })
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_vgpu_retained_textured_frame_v1(device: u64, queue: u64,
+    submit: *const v::vgpu::RetainedTexturedFrameV1, out_point: *mut v::vgpu::TimelinePoint) -> i32 {
+    if submit.is_null() || out_point.is_null() { return -14; }
+    let submit = unsafe { submit.read() };
+    let payload = unsafe { core::slice::from_raw_parts((&submit as *const v::vgpu::RetainedTexturedFrameV1).cast::<u8>(),
+        core::mem::size_of::<v::vgpu::RetainedTexturedFrameV1>()) };
+    let result = if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        guest_record(trueos_vm::vmcall::OP_BP_VGPU_RETAINED_TEXTURED_FRAME_V1, device, queue, payload)
+    } else { broker_retained_textured_frame_v1(direct_principal(), device, queue, submit) };
+    match result { Ok(point) => { unsafe { out_point.write(point) }; 0 }, Err(rc) => rc }
 }

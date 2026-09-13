@@ -403,6 +403,7 @@ pub fn discard(owner: u32, id: u32) -> i32 {
 /// principal. A request already executing may finish its private work, but its
 /// result can no longer be published after the operation entry is removed.
 pub fn release_owner(owner: u32) -> usize {
+    crate::r::services::video_service::release_owner(owner);
     let mut requests = REQUESTS.lock();
     let mut operations = OPERATIONS.lock();
     let before = operations.len();

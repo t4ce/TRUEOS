@@ -775,6 +775,7 @@ struct RetainedMeshSlot {
 }
 
 struct RetainedTextureRecord {
+    writing: bool,
     carrier: crate::intel::render::PicassoCarrierLease,
     resident: Arc<crate::intel::render::ResidentSampledTexture>,
     width: u32,
@@ -2477,6 +2478,7 @@ pub(crate) fn create_retained_texture(
         Ok(insert_retained_texture(
             device,
             RetainedTextureRecord {
+                writing: false,
                 carrier,
                 resident: Arc::new(resident.take().expect("unpublished retained texture")),
                 width,
@@ -2519,7 +2521,7 @@ pub(crate) fn destroy_retained_texture(
         || entry
             .record
             .as_ref()
-            .is_none_or(|record| record.in_flight != 0 || Arc::strong_count(&record.resident) != 1)
+            .is_none_or(|record| record.writing || record.in_flight != 0 || Arc::strong_count(&record.resident) != 1)
     {
         return Err(VgpuError::Busy);
     }
@@ -2556,6 +2558,7 @@ pub(crate) fn resolve_retained_texture(
     {
         return Err(VgpuError::DeviceLost);
     }
+    if record.writing { return Err(VgpuError::Busy); }
     Ok(Arc::clone(&record.resident))
 }
 
@@ -4061,6 +4064,18 @@ fn acquire_retained_cube_draw(
     Ok(lease)
 }
 
+fn retained_textured_descriptor_valid(textured: &v::vgpu::RetainedTexturedFrameV1) -> bool {
+    let frame = &textured.frame;
+    let count = frame.seed_count as usize;
+    count > 0 && count <= 4 && frame.static_draw_count == 0
+        && frame.material == v::vgpu::RetainedMaterial::default()
+        && textured.textures[..count].iter().all(|id| *id != 0)
+        && textured.textures[count..].iter().all(|id| *id == 0)
+        && textured.ranges[..count].iter().all(|r| r.index_count > 0 && r.index_count % 3 == 0
+            && r.first_index.checked_add(r.index_count).is_some())
+        && textured.ranges[count..].iter().all(|r| *r == v::vgpu::RetainedDrawRange::default())
+}
+
 /// Execute Picasso's retained mesh and its untransformed static primitives in
 /// one Render submission. Dynamic input is compact TRS seeds plus any
 /// explicitly revised static positions; matrices, compaction, indirect draw
@@ -4073,8 +4088,22 @@ pub(crate) fn submit_ui4_retained_frame(
     material_parameters: Option<v::vgpu::RetainedMaterialParameters>,
     scene: Option<v::vgpu::RetainedFrameSubmitV3>,
     cubes: Option<v::vgpu::RetainedCubeDraw>,
+    textured: Option<v::vgpu::RetainedTexturedFrameV1>,
 ) -> Result<Ui4SurfaceIndexedCompletion, VgpuError> {
-    let (seeds, draw_ranges) = if let Some(scene) = scene {
+    let mut submit = submit;
+    let mut group_textures = Vec::new();
+    if let Some(textured) = textured {
+        let count = submit.seed_count as usize;
+        if !retained_textured_descriptor_valid(&textured) || scene.is_some() || cubes.is_some()
+            || material_parameters.is_some() {
+            return Err(VgpuError::Unsupported);
+        }
+        for &id in &textured.textures[..count] {
+            group_textures.push(resolve_retained_texture(principal, device_handle, RetainedTextureHandle::from_raw(id))?);
+        }
+        submit.material.textures[0] = textured.textures[0];
+    }
+    let (mut seeds, mut draw_ranges) = if let Some(scene) = scene {
         if !retained_scene_descriptor_valid(&scene) {
             return Err(VgpuError::Unsupported);
         }
@@ -4102,6 +4131,13 @@ pub(crate) fn submit_ui4_retained_frame(
         }
         (submit.seeds[..count].to_vec(), None)
     };
+    if let Some(textured) = textured {
+        for (group, seed) in seeds.iter_mut().enumerate() {
+            if seed.draw_group != 0 || seed.flags != 0 { return Err(VgpuError::Unsupported); }
+            seed.draw_group = group as u32;
+        }
+        draw_ranges = Some(textured.ranges[..seeds.len()].to_vec());
+    }
     let static_draw_count = submit.static_draw_count as usize;
     if static_draw_count > v::vgpu::MAX_RETAINED_STATIC_DRAWS
         || submit.static_draws[static_draw_count..]
@@ -4229,6 +4265,9 @@ pub(crate) fn submit_ui4_retained_frame(
             }
             let texture_handle = RetainedTextureHandle::from_raw(texture_id);
             let texture = match lookup_retained_texture(device, texture_handle) {
+                Ok(texture) if texture.writing => {
+                    return Err(reject_retained_submission(device, mesh_handle, surface_handle, queue_handle, VgpuError::Busy));
+                }
                 Ok(texture) if texture.epoch == surface_epoch && texture.carrier == carrier => {
                     Arc::clone(&texture.resident)
                 }
@@ -4592,6 +4631,8 @@ pub(crate) fn submit_ui4_retained_frame(
         .collect::<Vec<_>>();
     let render_material = retained_material.base_color().map(|base_color| {
         crate::intel::render::ResidentRetainedMaterial {
+            group_base_colors: (!group_textures.is_empty()).then(|| core::array::from_fn(|i|
+                group_textures.get(i).unwrap_or(&group_textures[0]).as_ref())),
             base_color,
             metallic_roughness: retained_material.textures
                 [v::vgpu::RETAINED_MATERIAL_METALLIC_ROUGHNESS]
@@ -6688,7 +6729,8 @@ fn device_has_operation_leases(device: &VirtualDevice) -> bool {
             .retained_textures
             .iter()
             .filter_map(|slot| slot.record.as_ref())
-            .any(|record| record.in_flight != 0)
+            .any(|record| record.writing || record.in_flight != 0
+                || Arc::strong_count(&record.resident) != 1)
 }
 
 fn release_sampled_buffer(record: &mut BufferRecord) -> Result<usize, VgpuError> {
@@ -7142,4 +7184,53 @@ fn vvideo_mapping_digest(epoch: u64, guest_va: u64, gpu: u64, pages: usize) -> u
     digest = (digest ^ guest_va).wrapping_mul(0x0000_0100_0000_01B3);
     digest = (digest ^ gpu).wrapping_mul(0x0000_0100_0000_01B3);
     (digest ^ pages as u64).wrapping_mul(0x0000_0100_0000_01B3)
+}
+
+/// A GPU producer pins the mapping and excludes new render readers until its
+/// completion marker retires. Never drop this lease after an unproven GPU failure.
+pub(crate) struct RetainedTextureWrite {
+    principal: Principal,
+    device: DeviceHandle,
+    texture: RetainedTextureHandle,
+    resident: Arc<crate::intel::render::ResidentSampledTexture>,
+}
+impl RetainedTextureWrite {
+    pub(crate) fn surface(&self) -> crate::intel::gpgpu::GpgpuRgba8Surface {
+        let t = &self.resident;
+        crate::intel::gpgpu::GpgpuRgba8Surface::new(t.storage.storage_phys(),
+            t.storage.gpu_base(), t.storage.storage_bytes(), t.width, t.height, t.pitch)
+            .expect("validated resident texture")
+    }
+}
+impl Drop for RetainedTextureWrite {
+    fn drop(&mut self) {
+        let mut broker = BROKER.lock();
+        if let Ok(device) = lookup_device_mut(&mut broker, self.device, self.principal) {
+            if let Ok((slot, generation)) = decode_handle(self.texture.raw()) {
+                if let Some(entry) = device.retained_textures.get_mut(slot) {
+                    if entry.generation == generation {
+                        if let Some(record) = &mut entry.record { record.writing = false; }
+                    }
+                }
+            }
+        }
+    }
+}
+pub(crate) fn acquire_retained_texture_write(principal: Principal, device_handle: DeviceHandle,
+    texture: RetainedTextureHandle) -> Result<RetainedTextureWrite, VgpuError> {
+    let mut broker = BROKER.lock();
+    let device = lookup_device_mut(&mut broker, device_handle, principal)?;
+    ensure_live(device)?;
+    let (slot, generation) = decode_handle(texture.raw())?;
+    let entry = device.retained_textures.get_mut(slot).ok_or(VgpuError::InvalidHandle)?;
+    if entry.generation != generation { return Err(VgpuError::InvalidHandle); }
+    let record = entry.record.as_mut().ok_or(VgpuError::InvalidHandle)?;
+    if record.epoch != device.epoch || device.picasso_carrier != Some(record.carrier)
+        || device.picasso_carrier_quarantined { return Err(VgpuError::DeviceLost); }
+    if record.writing || record.in_flight != 0 || Arc::strong_count(&record.resident) != 1 {
+        return Err(VgpuError::Busy);
+    }
+    record.writing = true;
+    Ok(RetainedTextureWrite { principal, device: device_handle, texture,
+        resident: Arc::clone(&record.resident) })
 }

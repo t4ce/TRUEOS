@@ -389,3 +389,7 @@ mod tests {
         assert_eq!(validate_info_contract(2, 3, 8, 24, 2, 2, 1), Err(ERR_FAILED));
     }
 }
+
+#[path = "vmedia_video.rs"]
+mod video;
+pub use video::{Video, VideoFrame, VideoPoll};

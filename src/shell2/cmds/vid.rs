@@ -205,9 +205,10 @@ pub(crate) fn try_parse(
         );
         for (slot, state) in crate::ui4::video_playback_status().iter().enumerate() {
             print_shell_line(io, alloc::format!(
-                "vid: slot={} occupied={} cancelled={} paused={} queued={} completed={} active={} published={}",
+                "vid: slot={} occupied={} cancelled={} paused={} queued={} completed={} active={} published={} sink={}",
                 slot + 1, state.occupied as u8, state.cancelled as u8, state.paused as u8,
-                state.queued, state.completed, state.active, state.published).as_str());
+                state.queued, state.completed, state.active, state.published,
+                if state.texture_sink { "picasso-texture" } else { "ui4-window" }).as_str());
         }
         return ParseOutcome::Handled;
     }

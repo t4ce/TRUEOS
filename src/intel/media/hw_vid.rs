@@ -3019,3 +3019,19 @@ fn h264_ebsp_bit(payload: &[u8], bit_index: usize) -> Option<u8> {
     }
     None
 }
+
+/// Encoded Blueprint ingress. Shares MP4/Annex-B parsing, PTS ordering, decoder
+/// reservation, conversion workers and cancellation with shell playback.
+pub(crate) async fn run_memory_texture_video_playback(
+    session: crate::ui4::VideoPlaybackSession, asset: Vec<u8>,
+) -> Result<H264PlaybackReport, &'static str> {
+    if !crate::intel::has_media_decode_engine() { return Err("media decode engine unavailable"); }
+    let (annexb, timing, _, _) = h264_prepare_trueosfs_asset(asset)?;
+    let media_session = h264_reserve_decode_session(session).await?;
+    let report = h264_i_p_playback_probe_annexb_bytes(session, annexb, timing,
+        "blueprint-mp4-avc", "retained-video", H264PlaybackOptions::new(UI4_FRAMED_VIDEO_FPS, false, true),
+        media_session.generation()).await;
+    if report.first_failure_frame != 0 || report.presented == 0 || report.skipped_unsupported != 0 {
+        Err("video decode or texture publication failed")
+    } else { Ok(report) }
+}
