@@ -699,15 +699,13 @@ pub(crate) fn queue_ui4_video_frame_nv12_tile64_to_rgba8(
     }
     probe.gpu_host_pre_submit_timestamp = direct_rcs_read_render_timestamp(dev);
     let started_tick = direct_rcs_now_tick();
-    let Some(gpu) = direct_rcs_submit_batch_with_runtime(
+    let gpu = direct_rcs_try_submit_batch_with_runtime(
         dev,
         state,
         &mut runtime.submit,
         crate::gpu::vgpu::KernelClient::Ui4Compositor,
         true,
-    ) else {
-        return Err(Ui4CompositorSubmitError::SubmissionRejected);
-    };
+    )?;
     let admitted_tick = direct_rcs_now_tick();
     probe.admission_us = direct_rcs_elapsed_us_since(started_tick);
     probe.queue_total_us = direct_rcs_elapsed_us_since(queue_started_tick);

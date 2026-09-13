@@ -337,7 +337,12 @@ async fn convert_into(
         ) {
             Ok(submission) => break submission,
             Err(crate::intel::gpgpu::Ui4CompositorSubmitError::Busy) => pause().await,
-            Err(_) => return false,
+            Err(error) => {
+                crate::log_warn!(target: "service";
+                    "vmedia-video: conversion submit failed texture={} error={:?}\n",
+                    texture.raw(), error);
+                return false;
+            }
         }
     };
     let mut logged = false;

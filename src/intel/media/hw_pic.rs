@@ -346,8 +346,22 @@ fn avc_apply_ref_list_modifications(
                 avc_frame_num_wrap(*entry, current_frame_num, max_frame_num) == pic_num
             })
             .ok_or(-36)?;
-        let entry = list.remove(target);
-        list.insert(ref_idx.min(list.len()), entry);
+        // H.264 8.2.4.3: insert, then remove duplicates only from the
+        // unmodified suffix. Earlier entries may intentionally use this same
+        // picture again with different prediction weights.
+        let entry = list[target];
+        if ref_idx > list.len() {
+            return Err(-36);
+        }
+        list.insert(ref_idx, entry);
+        let mut index = ref_idx + 1;
+        while index < list.len() {
+            if list[index].frame_store_id == entry.frame_store_id {
+                list.remove(index);
+            } else {
+                index += 1;
+            }
+        }
         ref_idx = ref_idx.saturating_add(1);
     }
     Ok(())
@@ -723,8 +737,9 @@ fn avc_prepare_reference_state(
         0
     };
     let live_count = dpb.live_count();
-    if active_l0 > live_count
-        || active_l1 > live_count
+    // List entries may repeat a DPB picture (e.g. weighted prediction).
+    if active_l0 > 16
+        || active_l1 > 16
         || usize::from(plan.picture.max_num_ref_frames) > AVC_DPB_RETAINED_REFS
     {
         return Err(-30);
@@ -795,24 +810,10 @@ fn avc_prepare_reference_state(
             }
         });
     }
-    avc_apply_ref_list_modifications(
-        &mut ordered,
-        &plan.slice.ref_list_modifications_l0,
-        plan.slice.ref_list_modifications_l0_count,
-        plan.picture.frame_num,
-        max_frame_num,
-    )?;
-    let mut l0 = [0u8; 16];
-    let mut idx = 0usize;
-    while idx < active_l0 {
-        let entry = *ordered.get(idx).ok_or(-32)?;
-        l0[idx] = entry.frame_store_id;
-        idx += 1;
-    }
-    let mut l1 = [0u8; 16];
+    let mut ordered_l1 = ordered.clone();
     if plan.slice.class == AvcSliceClass::B {
         let current_poc = plan.picture.top_field_order_cnt;
-        ordered.sort_by(|lhs, rhs| {
+        ordered_l1.sort_by(|lhs, rhs| {
             let lhs_poc = lhs.top_field_order_cnt;
             let rhs_poc = rhs.top_field_order_cnt;
             match (lhs_poc > current_poc, rhs_poc > current_poc) {
@@ -822,20 +823,36 @@ fn avc_prepare_reference_state(
                 (false, true) => core::cmp::Ordering::Greater,
             }
         });
+        // The identical-default-list swap precedes slice modifications.
+        if ordered_l1.len() > 1
+            && ordered.iter().map(|e| e.frame_store_id)
+                .eq(ordered_l1.iter().map(|e| e.frame_store_id))
+        {
+            ordered_l1.swap(0, 1);
+        }
+    }
+    avc_apply_ref_list_modifications(
+        &mut ordered,
+        &plan.slice.ref_list_modifications_l0,
+        plan.slice.ref_list_modifications_l0_count,
+        plan.picture.frame_num,
+        max_frame_num,
+    )?;
+    let mut l0 = [0u8; 16];
+    for idx in 0..active_l0 {
+        l0[idx] = ordered.get(idx).ok_or(-32)?.frame_store_id;
+    }
+    let mut l1 = [0u8; 16];
+    if plan.slice.class == AvcSliceClass::B {
         avc_apply_ref_list_modifications(
-            &mut ordered,
+            &mut ordered_l1,
             &plan.slice.ref_list_modifications_l1,
             plan.slice.ref_list_modifications_l1_count,
             plan.picture.frame_num,
             max_frame_num,
         )?;
-        idx = 0;
-        while idx < active_l1 {
-            l1[idx] = ordered.get(idx).ok_or(-32)?.frame_store_id;
-            idx += 1;
-        }
-        if active_l1 > 1 && active_l0 == active_l1 && l0[..active_l0] == l1[..active_l1] {
-            l1.swap(0, 1);
+        for idx in 0..active_l1 {
+            l1[idx] = ordered_l1.get(idx).ok_or(-32)?.frame_store_id;
         }
     }
 

@@ -478,6 +478,8 @@ const fn direct_rcs_submit_failure_action(
 
 enum DirectRcsSubmitAttempt {
     Submitted(crate::gpu::executor::KernelSubmission),
+    // Proven not published; callers may retry after yielding.
+    Deferred,
     Rejected,
     Ambiguous {
         error: crate::gpu::vgpu::VgpuError,
@@ -580,7 +582,9 @@ fn direct_rcs_submit_batch_on_lane_state(
     };
     match attempt {
         DirectRcsSubmitAttempt::Submitted(_) => DirectRcsSubmissionState::Submitted,
-        DirectRcsSubmitAttempt::Rejected => DirectRcsSubmissionState::Rejected,
+        DirectRcsSubmitAttempt::Deferred | DirectRcsSubmitAttempt::Rejected => {
+            DirectRcsSubmissionState::Rejected
+        }
         DirectRcsSubmitAttempt::Ambiguous {
             error,
             old_tail_bytes,
@@ -700,13 +704,24 @@ fn direct_rcs_submit_batch_with_runtime(
     client: crate::gpu::vgpu::KernelClient,
     allow_queued: bool,
 ) -> Option<crate::gpu::executor::KernelSubmission> {
+    direct_rcs_try_submit_batch_with_runtime(dev, state, runtime, client, allow_queued).ok()
+}
+
+fn direct_rcs_try_submit_batch_with_runtime(
+    dev: super::Dev,
+    state: DirectRcsState,
+    runtime: &mut DirectRcsSubmitRuntime,
+    client: crate::gpu::vgpu::KernelClient,
+    allow_queued: bool,
+) -> Result<crate::gpu::executor::KernelSubmission, Ui4CompositorSubmitError> {
     debug_assert_eq!(client, crate::gpu::vgpu::KernelClient::Ui4Compositor);
     if ui4_compositor_rcs_context_is_quarantined() {
-        return None;
+        return Err(Ui4CompositorSubmitError::SubmissionRejected);
     }
     match direct_rcs_submit_batch_with_runtime_inner(dev, state, runtime, client, allow_queued) {
-        DirectRcsSubmitAttempt::Submitted(submission) => Some(submission),
-        DirectRcsSubmitAttempt::Rejected => None,
+        DirectRcsSubmitAttempt::Submitted(submission) => Ok(submission),
+        DirectRcsSubmitAttempt::Deferred => Err(Ui4CompositorSubmitError::Busy),
+        DirectRcsSubmitAttempt::Rejected => Err(Ui4CompositorSubmitError::SubmissionRejected),
         DirectRcsSubmitAttempt::Ambiguous {
             error,
             old_tail_bytes,
@@ -722,7 +737,7 @@ fn direct_rcs_submit_batch_with_runtime(
                 submission_sequence,
             );
             quarantine_ui4_compositor_rcs_context("submit-result-ambiguous-after-tail-publication");
-            None
+            Err(Ui4CompositorSubmitError::SubmissionRejected)
         }
     }
 }
@@ -738,7 +753,7 @@ fn direct_rcs_submit_batch_with_runtime_inner(
         return DirectRcsSubmitAttempt::Rejected;
     }
     if !allow_queued && runtime.pending.is_some() {
-        return DirectRcsSubmitAttempt::Rejected;
+        return DirectRcsSubmitAttempt::Deferred;
     }
     // The GuC owns one persistent logical context for the direct-RCS client.
     // Its ring must therefore be persistent as well: publishing the same tail
@@ -765,7 +780,7 @@ fn direct_rcs_submit_batch_with_runtime_inner(
                     runtime.retire_deferrals,
                 );
             }
-            return DirectRcsSubmitAttempt::Rejected;
+            return DirectRcsSubmitAttempt::Deferred;
         }
         if runtime.retire_deferrals != 0 {
             crate::log_info!(target: "gpgpu";
@@ -841,7 +856,7 @@ fn direct_rcs_submit_batch_with_runtime_inner(
                         "gpgpu/vgpu: submit failed error={:?} tail_action=rollback submission_owner=gpu-executor/vgpu/guc direct_elsp=0\n",
                         error
                     );
-                    DirectRcsSubmitAttempt::Rejected
+                    DirectRcsSubmitAttempt::Deferred
                 }
                 DirectRcsSubmitFailureAction::PreserveAndQuarantine => {
                     // Once submit crosses the executor/vGPU/GuC boundary, an
