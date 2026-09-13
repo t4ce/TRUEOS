@@ -12,7 +12,7 @@ pub const INSTANCE_FLAG_CASTS_SHADOW: u32 = 1 << 0;
 pub const INSTANCE_FLAG_RECEIVES_SHADOW: u32 = 1 << 1;
 /// GPU buffer-backed row capacity. Serialized affine-graph templates declare
 /// their own capacity separately; Picasso's flat V3 seeds do not use those.
-pub const MAX_RETAINED_TRANSFORM_ROWS: usize = 8_192;
+pub const MAX_RETAINED_TRANSFORM_ROWS: usize = 32_768;
 
 const _: () = assert!(MAX_RETAINED_TRANSFORM_ROWS <= u16::MAX as usize);
 
