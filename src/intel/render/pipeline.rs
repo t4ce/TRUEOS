@@ -874,6 +874,28 @@ fn write_triangle_probe_state(
     )
 }
 
+// Captured WGSL textured VS executables negate clip Y (Naga coordinate-space
+// adjustment); the native GLSL cube DS does not. Undo that difference here,
+// after clipping, so CPU culling and both draws retain one world camera.
+fn retained_viewport_y_scale(height: u32, native_sampled: bool) -> f32 {
+    height as f32 * if native_sampled { 0.5 } else { -0.5 }
+}
+
+#[cfg(test)]
+mod retained_viewport_tests {
+    use super::retained_viewport_y_scale;
+    #[test]
+    fn textured_and_cube_positions_agree_under_camera_pitch() {
+        // Different camera-space heights/depths, including points above/below
+        // the eye. The lowered textured VS negates the camera's final Y row.
+        for (y,w) in [(2.,5.),(-3.,7.),(0.25,0.5),(-9.,20.)] {
+            let cube = y/w*retained_viewport_y_scale(441,false)+220.5;
+            let image = -y/w*retained_viewport_y_scale(441,true)+220.5;
+            assert_eq!(cube,image);
+        }
+    }
+}
+
 fn write_triangle_probe_state_unflushed(
     warm: RenderWarmState,
     draw: TriangleDrawPrep,
@@ -1303,7 +1325,7 @@ fn write_triangle_probe_state_with_flush(
         &mut dwords[sf_clip_viewport_offset / 4..sf_clip_viewport_offset / 4 + 16];
     sf_clip_viewport.fill(0);
     sf_clip_viewport[0] = (draw.target_w as f32 * 0.5).to_bits();
-    sf_clip_viewport[1] = (-(draw.target_h as f32) * 0.5).to_bits();
+    sf_clip_viewport[1] = retained_viewport_y_scale(draw.target_h, native_sampled).to_bits();
     sf_clip_viewport[2] = 1.0f32.to_bits();
     sf_clip_viewport[3] = (draw.target_w as f32 * 0.5 + viewport_translation_px[0]).to_bits();
     sf_clip_viewport[4] = (draw.target_h as f32 * 0.5 + viewport_translation_px[1]).to_bits();
@@ -2705,7 +2727,8 @@ fn encode_triangle_probe_batch(
             draw.native.is_some_and(|native| native.double_sided)
                 || diagnostic_cull_off,
             draw.native
-                .is_some_and(|native| native.front_face_clockwise),
+                .is_some_and(|native| native.front_face_clockwise)
+                ^ (draw.native.is_some() && draw.sampled_texture.is_some()),
         )
     } else if mesa_host_fixed_function {
         if resident_msaa4 {

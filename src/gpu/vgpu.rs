@@ -4029,7 +4029,9 @@ fn acquire_retained_cube_draw(
     let mut bytes = alloc::vec![0u8; draw.seed_count as usize*64];
     read_buffer(principal, device_handle, BufferHandle::from_raw(draw.seed_buffer), offset, &mut bytes)?;
     let seeds = decode_retained_scene_seeds(&bytes).ok_or(VgpuError::Unsupported)?;
-    if seeds.iter().any(|seed| seed.draw_group != 0) { return Err(VgpuError::Unsupported); }
+    if seeds.iter().any(|seed| seed.draw_group > 1) { return Err(VgpuError::Unsupported); }
+    let groups = if seeds.iter().any(|seed| seed.draw_group == 1) { 2 } else { 1 };
+    let ranges = [v::vgpu::RetainedDrawRange { first_index: 0, index_count: 44 };2];
     let mesh = RetainedMeshHandle::from_raw(draw.mesh);
     let resident = {
         let mut broker = BROKER.lock();
@@ -4054,7 +4056,7 @@ fn acquire_retained_cube_draw(
     let lease = RetainedCubeLease { principal, device: device_handle, mesh, resident };
     crate::intel::render::update_resident_picasso_retained_transform_seeds(
         &lease.resident, camera, &seeds,
-        Some(&[v::vgpu::RetainedDrawRange { first_index: 0, index_count: 44 }]),
+        Some(&ranges[..groups]),
     ).map_err(|_| VgpuError::Unsupported)?;
     Ok(lease)
 }

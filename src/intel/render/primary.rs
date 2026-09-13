@@ -3005,7 +3005,7 @@ fn submit_resident_churn_forward_geometry_batched(
     let cube_dispatch = cube_companion.and_then(|cube| cube.transform_dispatch());
     if let Some(cube) = cube_companion {
         if cube.topology() != ResidentScenePrimitiveTopology::CubePatchList1
-            || cube.draw_group_count() != 1
+            || !(1..=2).contains(&cube.draw_group_count())
             || cube_dispatch.map(|dispatch| RetainedGraphicsHandoff::from(dispatch.output))
                 != Some(RetainedGraphicsHandoff::NativeMatrices)
         { return Err("retained-companion-cube-contract"); }
@@ -3036,7 +3036,7 @@ fn submit_resident_churn_forward_geometry_batched(
     };
     let capture_pipeline_stats = capture_pipeline_stats || vue_capture_bytes.is_some();
     let secondary_count = resident_draw_count
-        .checked_add(static_draws.len() + usize::from(cube_companion.is_some()))
+        .checked_add(static_draws.len() + cube_companion.map_or(0, |cube| cube.draw_group_count()))
         .and_then(|count| count.checked_add(1 + transform_secondary_count))
         .ok_or("scene-frame-batch-capacity")?;
     let used_batch_bytes = RESIDENT_SCENE_PRIMARY_BATCH_BYTES
@@ -3228,20 +3228,24 @@ fn submit_resident_churn_forward_geometry_batched(
         )?;
     }
 
-    // The gallery and baked cubes use independent transform buffers and shader
-    // bindings, but one target, depth allocation, clear, and retirement fence.
+    // Opaque terrain/Holy and sorted transparent navigation share the gallery's
+    // depth attachment. The overlay reads depth but never writes it.
     if let Some(cube) = cube_companion {
-        let secondary_index = secondary_count - 1;
-        let (state_warm, state_gpu) = resident_scene_state_warm(state, warm, secondary_index)?;
-        let draw = prepare_resident_churn_forward_draw(
-            state_warm, cube, None, 0, render_target_gpu, render_target_pitch,
-            target_width, target_height,
-        ).ok_or("retained-companion-draw-resources")?
-            .with_rt_surface_format(render_target_surface_format);
-        stage_resident_churn_forward_secondary(
-            warm, state_warm, state_gpu, draw, draw_depth, cube, uv_pipeline,
-            secondary_index, result_ggtt_gpu,
-        )?;
+        for group in 0..cube.draw_group_count() {
+            let secondary_index = secondary_count - cube.draw_group_count() + group;
+            let (state_warm, state_gpu) = resident_scene_state_warm(state, warm, secondary_index)?;
+            let draw = prepare_resident_churn_forward_draw(
+                state_warm, cube, None, group, render_target_gpu, render_target_pitch,
+                target_width, target_height,
+            ).ok_or("retained-companion-draw-resources")?
+                .with_rt_surface_format(render_target_surface_format);
+            let mut depth = draw_depth;
+            depth.write_enabled = group == 0;
+            stage_resident_churn_forward_secondary(
+                warm, state_warm, state_gpu, draw, depth, cube, uv_pipeline,
+                secondary_index, result_ggtt_gpu,
+            )?;
+        }
     }
 
     let primary_bytes = encode_resident_scene_primary_batch(

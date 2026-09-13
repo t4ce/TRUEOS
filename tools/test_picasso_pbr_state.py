@@ -20,6 +20,7 @@ def main():
     code += [constant(pipeline, "SAMPLER_CACHE_LINE_DWORDS")]
     code += [item(pipeline, name) for name in (
         "ordinary_vf_vertex_element_count", "cmd_3dstate_vertex_elements",
+        "retained_viewport_y_scale", "retained_viewport_tests",
         "write_pbr_sampler_cache_line", "write_triangle_sampled_surface_state",
         "write_triangle_sampled_rgba8_surface_state", "picasso_pbr_state_tests",
         "sampled_rgba8_surface_tests",
