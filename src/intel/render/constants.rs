@@ -164,8 +164,10 @@ const RESIDENT_SCENE_MAX_DRAWS: usize = 340;
 // corner-to-position map and 24 immediate position cases in code; it needs
 // 23 KiB of aligned HS/DS storage. The imported palette's sRGB material PS
 // plus the carousel colour table and optional GS kernels exceed 32 KiB.
-// Reserve ten pages including the page-aligned descriptors.
-const RESIDENT_SCENE_STATE_SLOT_BYTES: usize = 10 * 4096;
+// Reserve eleven pages including the page-aligned descriptors.
+// Collection's continuous-alpha cube shader crosses the previous code page;
+// retain a separate descriptor page after the complete VS/PS/GS/HS/DS bundle.
+const RESIDENT_SCENE_STATE_SLOT_BYTES: usize = 11 * 4096;
 const RESIDENT_SCENE_STATE_BYTES: usize =
     (RESIDENT_SCENE_MAX_DRAWS + 1) * RESIDENT_SCENE_STATE_SLOT_BYTES;
 const RESIDENT_SCENE_PRIMARY_BATCH_BYTES: usize = 5 * 4096;
