@@ -1029,10 +1029,13 @@ fn take_decoded_video_conversion_request() -> Option<DecodedVideoConversionReque
             .conversion
             .lock();
         let target = VIDEO_SESSIONS[(start + offset) % VIDEO_PLAYBACK_SESSIONS]
-            .texture_target.load(Ordering::Acquire);
+            .texture_target
+            .load(Ordering::Acquire);
         // A held texture must not occupy either shared conversion lane. Admit
         // only one request per texture stream, and only with destination room.
-        if target != 0 && (state.active != 0 || !crate::r::services::video_service::conversion_ready(target)) {
+        if target != 0
+            && (state.active != 0 || !crate::r::services::video_service::conversion_ready(target))
+        {
             continue;
         }
         if let Some(request) = state.queue.pop_front() {
@@ -1302,8 +1305,11 @@ async fn convert_publish_decoded_nv12_stream_frame(
     }
     let target = session.state().texture_target.load(Ordering::Acquire);
     if target != 0 {
-        if !wait_decoded_video_conversion_turn(request).await { return probe.finish(false); }
-        return probe.finish(crate::r::services::video_service::convert(target, session, source).await);
+        if !wait_decoded_video_conversion_turn(request).await {
+            return probe.finish(false);
+        }
+        return probe
+            .finish(crate::r::services::video_service::convert(target, session, source).await);
     }
     // Shell-driven playback owns the same application window as boot playback;
     // drain its broker queue at frame cadence so move/resize/pan never depends
@@ -1904,12 +1910,20 @@ fn valid_source(source: DecodedNv12Source) -> bool {
 
 /// Reserve from the very same pool as `vid fs`, without creating a display window.
 pub(crate) fn begin_texture_video_player(target: u32) -> Option<VideoPlaybackSession> {
-    if target == 0 { return None; }
-    let slot = VIDEO_SESSIONS.iter().position(|state| state.occupied
-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_ok())?;
+    if target == 0 {
+        return None;
+    }
+    let slot = VIDEO_SESSIONS.iter().position(|state| {
+        state
+            .occupied
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    })?;
     let state = &VIDEO_SESSIONS[slot];
-    let session = VideoPlaybackSession { slot,
-        generation: state.generation.fetch_add(1, Ordering::AcqRel) + 1 };
+    let session = VideoPlaybackSession {
+        slot,
+        generation: state.generation.fetch_add(1, Ordering::AcqRel) + 1,
+    };
     state.cancelled.store(false, Ordering::Release);
     state.paused.store(false, Ordering::Release);
     state.texture_target.store(target, Ordering::Release);

@@ -825,7 +825,9 @@ fn avc_prepare_reference_state(
         });
         // The identical-default-list swap precedes slice modifications.
         if ordered_l1.len() > 1
-            && ordered.iter().map(|e| e.frame_store_id)
+            && ordered
+                .iter()
+                .map(|e| e.frame_store_id)
                 .eq(ordered_l1.iter().map(|e| e.frame_store_id))
         {
             ordered_l1.swap(0, 1);

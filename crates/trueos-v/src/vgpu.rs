@@ -1007,15 +1007,28 @@ impl Device {
     }
 
     /// One render pass, up to four unlit textures, with persistent geometry.
-    pub fn submit_retained_textured_frame_v1(self, queue: Queue, surface: Ui4Surface,
-        mesh: RetainedMesh, mut submit: RetainedTexturedFrameV1) -> Result<TimelinePoint, i32> {
-        if queue.device != self || surface.device != self { return Err(ERR_BAD_HANDLE); }
+    pub fn submit_retained_textured_frame_v1(
+        self,
+        queue: Queue,
+        surface: Ui4Surface,
+        mesh: RetainedMesh,
+        mut submit: RetainedTexturedFrameV1,
+    ) -> Result<TimelinePoint, i32> {
+        if queue.device != self || surface.device != self {
+            return Err(ERR_BAD_HANDLE);
+        }
         let mut surface = surface;
         submit.frame.surface = surface.surface.0;
         submit.frame.mesh = mesh.0;
         let mut point = TimelinePoint::default();
-        rc_result(unsafe { vcabi::trueos_cabi_vgpu_retained_textured_frame_v1(
-            self.0, queue.handle, &submit, &mut point) })?;
+        rc_result(unsafe {
+            vcabi::trueos_cabi_vgpu_retained_textured_frame_v1(
+                self.0,
+                queue.handle,
+                &submit,
+                &mut point,
+            )
+        })?;
         surface.live = false;
         Ok(point)
     }

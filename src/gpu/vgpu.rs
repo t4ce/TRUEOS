@@ -814,7 +814,10 @@ fn pack_retained_material_parameters(
 ) -> Option<[u32; 16]> {
     let unit_interval = |value: f32| value.is_finite() && (0.0..=1.0).contains(&value);
     if parameters.reserved != [0; 3]
-        || parameters.flags & !(v::vgpu::RETAINED_MATERIAL_FLAG_DOUBLE_SIDED | v::vgpu::RETAINED_MATERIAL_FLAG_NEAREST) != 0
+        || parameters.flags
+            & !(v::vgpu::RETAINED_MATERIAL_FLAG_DOUBLE_SIDED
+                | v::vgpu::RETAINED_MATERIAL_FLAG_NEAREST)
+            != 0
         || (parameters.flags & v::vgpu::RETAINED_MATERIAL_FLAG_DOUBLE_SIDED != 0) != double_sided
         || texture_presence & !0x1f != 0
         || !parameters
@@ -884,8 +887,10 @@ mod retained_material_parameters_tests {
 
     #[test]
     fn nearest_filter_is_admitted_without_changing_culling_or_map_presence() {
-        let p = RetainedMaterialParameters { flags: v::vgpu::RETAINED_MATERIAL_FLAG_NEAREST,
-            ..RetainedMaterialParameters::default() };
+        let p = RetainedMaterialParameters {
+            flags: v::vgpu::RETAINED_MATERIAL_FLAG_NEAREST,
+            ..RetainedMaterialParameters::default()
+        };
         let words = pack_retained_material_parameters(&p, 1, false).unwrap();
         assert_eq!(words[12..], [8, 1, 0, 0]);
         assert!(pack_retained_material_parameters(&p, 1, true).is_none());
@@ -2518,10 +2523,9 @@ pub(crate) fn destroy_retained_texture(
         .get_mut(slot)
         .ok_or(VgpuError::InvalidHandle)?;
     if entry.generation != generation
-        || entry
-            .record
-            .as_ref()
-            .is_none_or(|record| record.writing || record.in_flight != 0 || Arc::strong_count(&record.resident) != 1)
+        || entry.record.as_ref().is_none_or(|record| {
+            record.writing || record.in_flight != 0 || Arc::strong_count(&record.resident) != 1
+        })
     {
         return Err(VgpuError::Busy);
     }
@@ -2558,7 +2562,9 @@ pub(crate) fn resolve_retained_texture(
     {
         return Err(VgpuError::DeviceLost);
     }
-    if record.writing { return Err(VgpuError::Busy); }
+    if record.writing {
+        return Err(VgpuError::Busy);
+    }
     Ok(Arc::clone(&record.resident))
 }
 
@@ -4024,15 +4030,23 @@ impl Drop for RetainedCubeLease {
     }
 }
 fn retained_cube_descriptor_valid(primary: u64, draw: &v::vgpu::RetainedCubeDraw) -> bool {
-    draw.mesh != 0 && draw.mesh != primary && draw.seed_buffer != 0
-        && draw.reserved == 0 && draw.seed_count != 0
+    draw.mesh != 0
+        && draw.mesh != primary
+        && draw.seed_buffer != 0
+        && draw.reserved == 0
+        && draw.seed_count != 0
         && draw.seed_count as usize <= v::vgpu::MAX_RETAINED_SCENE_INSTANCES
         && draw.seed_offset % 4 == 0
-        && draw.seed_offset.checked_add(u64::from(draw.seed_count)*64).is_some()
+        && draw
+            .seed_offset
+            .checked_add(u64::from(draw.seed_count) * 64)
+            .is_some()
 }
 fn acquire_retained_cube_draw(
-    principal: Principal, device_handle: DeviceHandle,
-    primary: RetainedMeshHandle, camera: &v::vgpu::RetainedCamera,
+    principal: Principal,
+    device_handle: DeviceHandle,
+    primary: RetainedMeshHandle,
+    camera: &v::vgpu::RetainedCamera,
     draw: v::vgpu::RetainedCubeDraw,
 ) -> Result<RetainedCubeLease, VgpuError> {
     if !retained_cube_descriptor_valid(primary.raw(), &draw) {
@@ -4040,11 +4054,26 @@ fn acquire_retained_cube_draw(
     }
     let offset = usize::try_from(draw.seed_offset).map_err(|_| VgpuError::Unsupported)?;
     let mut bytes = alloc::vec![0u8; draw.seed_count as usize*64];
-    read_buffer(principal, device_handle, BufferHandle::from_raw(draw.seed_buffer), offset, &mut bytes)?;
+    read_buffer(
+        principal,
+        device_handle,
+        BufferHandle::from_raw(draw.seed_buffer),
+        offset,
+        &mut bytes,
+    )?;
     let seeds = decode_retained_scene_seeds(&bytes).ok_or(VgpuError::Unsupported)?;
-    if seeds.iter().any(|seed| seed.draw_group > 1) { return Err(VgpuError::Unsupported); }
-    let groups = if seeds.iter().any(|seed| seed.draw_group == 1) { 2 } else { 1 };
-    let ranges = [v::vgpu::RetainedDrawRange { first_index: 0, index_count: 44 };2];
+    if seeds.iter().any(|seed| seed.draw_group > 1) {
+        return Err(VgpuError::Unsupported);
+    }
+    let groups = if seeds.iter().any(|seed| seed.draw_group == 1) {
+        2
+    } else {
+        1
+    };
+    let ranges = [v::vgpu::RetainedDrawRange {
+        first_index: 0,
+        index_count: 44,
+    }; 2];
     let mesh = RetainedMeshHandle::from_raw(draw.mesh);
     let resident = {
         let mut broker = BROKER.lock();
@@ -4052,38 +4081,55 @@ fn acquire_retained_cube_draw(
         ensure_live(device)?;
         let epoch = device.epoch;
         let primary = lookup_retained_mesh_mut(device, primary)?;
-        if primary.epoch != epoch || primary.in_flight != 0
-            || !primary.resident.pbr_material()
-        { return Err(VgpuError::Unsupported); }
+        if primary.epoch != epoch || primary.in_flight != 0 || !primary.resident.pbr_material() {
+            return Err(VgpuError::Unsupported);
+        }
         let carrier = primary.carrier;
         let record = lookup_retained_mesh_mut(device, mesh)?;
         if record.epoch != epoch || record.carrier != carrier || record.in_flight != 0 {
             return Err(VgpuError::Busy);
         }
-        if record.resident.topology() != crate::intel::render::ResidentScenePrimitiveTopology::CubePatchList1 {
+        if record.resident.topology()
+            != crate::intel::render::ResidentScenePrimitiveTopology::CubePatchList1
+        {
             return Err(VgpuError::Unsupported);
         }
         record.in_flight = 1;
         Arc::clone(&record.resident)
     };
-    let lease = RetainedCubeLease { principal, device: device_handle, mesh, resident };
+    let lease = RetainedCubeLease {
+        principal,
+        device: device_handle,
+        mesh,
+        resident,
+    };
     crate::intel::render::update_resident_picasso_retained_transform_seeds(
-        &lease.resident, camera, &seeds,
+        &lease.resident,
+        camera,
+        &seeds,
         Some(&ranges[..groups]),
-    ).map_err(|_| VgpuError::Unsupported)?;
+    )
+    .map_err(|_| VgpuError::Unsupported)?;
     Ok(lease)
 }
 
 fn retained_textured_descriptor_valid(textured: &v::vgpu::RetainedTexturedFrameV1) -> bool {
     let frame = &textured.frame;
     let count = frame.seed_count as usize;
-    count > 0 && count <= 4 && frame.static_draw_count == 0
+    count > 0
+        && count <= 4
+        && frame.static_draw_count == 0
         && frame.material == v::vgpu::RetainedMaterial::default()
         && textured.textures[..count].iter().all(|id| *id != 0)
         && textured.textures[count..].iter().all(|id| *id == 0)
-        && textured.ranges[..count].iter().all(|r| r.index_count > 0 && r.index_count % 3 == 0
-            && r.first_index.checked_add(r.index_count).is_some())
-        && textured.ranges[count..].iter().all(|r| *r == v::vgpu::RetainedDrawRange::default())
+        && textured.ranges[..count].iter().all(|r| {
+            r.index_count > 0
+                && r.index_count % 3 == 0
+                && r.first_index.checked_add(r.index_count).is_some()
+        })
+        && textured.ranges[count..]
+            .iter()
+            .all(|r| *r == v::vgpu::RetainedDrawRange::default())
 }
 
 /// Execute Picasso's retained mesh and its untransformed static primitives in
@@ -4104,12 +4150,19 @@ pub(crate) fn submit_ui4_retained_frame(
     let mut group_textures = Vec::new();
     if let Some(textured) = textured {
         let count = submit.seed_count as usize;
-        if !retained_textured_descriptor_valid(&textured) || scene.is_some() || cubes.is_some()
-            || material_parameters.is_some() {
+        if !retained_textured_descriptor_valid(&textured)
+            || scene.is_some()
+            || cubes.is_some()
+            || material_parameters.is_some()
+        {
             return Err(VgpuError::Unsupported);
         }
         for &id in &textured.textures[..count] {
-            group_textures.push(resolve_retained_texture(principal, device_handle, RetainedTextureHandle::from_raw(id))?);
+            group_textures.push(resolve_retained_texture(
+                principal,
+                device_handle,
+                RetainedTextureHandle::from_raw(id),
+            )?);
         }
         submit.material.textures[0] = textured.textures[0];
     }
@@ -4143,7 +4196,9 @@ pub(crate) fn submit_ui4_retained_frame(
     };
     if let Some(textured) = textured {
         for (group, seed) in seeds.iter_mut().enumerate() {
-            if seed.draw_group != 0 || seed.flags != 0 { return Err(VgpuError::Unsupported); }
+            if seed.draw_group != 0 || seed.flags != 0 {
+                return Err(VgpuError::Unsupported);
+            }
             seed.draw_group = group as u32;
         }
         draw_ranges = Some(textured.ranges[..seeds.len()].to_vec());
@@ -4157,9 +4212,11 @@ pub(crate) fn submit_ui4_retained_frame(
         return Err(VgpuError::Unsupported);
     }
     let mesh_handle = RetainedMeshHandle::from_raw(submit.mesh);
-    let cube_lease = cubes.map(|draw| acquire_retained_cube_draw(
-        principal, device_handle, mesh_handle, &submit.camera, draw,
-    )).transpose()?;
+    let cube_lease = cubes
+        .map(|draw| {
+            acquire_retained_cube_draw(principal, device_handle, mesh_handle, &submit.camera, draw)
+        })
+        .transpose()?;
     let surface_handle = SurfaceHandle::from_raw(submit.surface);
     let static_vertex_buffer = BufferHandle::from_raw(submit.static_vertex_buffer);
     let static_index_buffer = BufferHandle::from_raw(submit.static_index_buffer);
@@ -4276,7 +4333,13 @@ pub(crate) fn submit_ui4_retained_frame(
             let texture_handle = RetainedTextureHandle::from_raw(texture_id);
             let texture = match lookup_retained_texture(device, texture_handle) {
                 Ok(texture) if texture.writing => {
-                    return Err(reject_retained_submission(device, mesh_handle, surface_handle, queue_handle, VgpuError::Busy));
+                    return Err(reject_retained_submission(
+                        device,
+                        mesh_handle,
+                        surface_handle,
+                        queue_handle,
+                        VgpuError::Busy,
+                    ));
                 }
                 Ok(texture) if texture.epoch == surface_epoch && texture.carrier == carrier => {
                     Arc::clone(&texture.resident)
@@ -4641,8 +4704,11 @@ pub(crate) fn submit_ui4_retained_frame(
         .collect::<Vec<_>>();
     let render_material = retained_material.base_color().map(|base_color| {
         crate::intel::render::ResidentRetainedMaterial {
-            group_base_colors: (!group_textures.is_empty()).then(|| core::array::from_fn(|i|
-                group_textures.get(i).unwrap_or(&group_textures[0]).as_ref())),
+            group_base_colors: (!group_textures.is_empty()).then(|| {
+                core::array::from_fn(|i| {
+                    group_textures.get(i).unwrap_or(&group_textures[0]).as_ref()
+                })
+            }),
             base_color,
             metallic_roughness: retained_material.textures
                 [v::vgpu::RETAINED_MATERIAL_METALLIC_ROUGHNESS]
@@ -4679,8 +4745,11 @@ pub(crate) fn submit_ui4_retained_frame(
         );
         return Err(VgpuError::Busy);
     }
-    let expected_draws = resident.draw_group_count() + static_draw_count
-        + cube_lease.as_ref().map_or(0, |lease| lease.resident.draw_group_count());
+    let expected_draws = resident.draw_group_count()
+        + static_draw_count
+        + cube_lease
+            .as_ref()
+            .map_or(0, |lease| lease.resident.draw_group_count());
     let release = rendered
         .ok()
         .and_then(|result| {
@@ -6739,8 +6808,9 @@ fn device_has_operation_leases(device: &VirtualDevice) -> bool {
             .retained_textures
             .iter()
             .filter_map(|slot| slot.record.as_ref())
-            .any(|record| record.writing || record.in_flight != 0
-                || Arc::strong_count(&record.resident) != 1)
+            .any(|record| {
+                record.writing || record.in_flight != 0 || Arc::strong_count(&record.resident) != 1
+            })
 }
 
 fn release_sampled_buffer(record: &mut BufferRecord) -> Result<usize, VgpuError> {
@@ -7207,9 +7277,15 @@ pub(crate) struct RetainedTextureWrite {
 impl RetainedTextureWrite {
     pub(crate) fn surface(&self) -> crate::intel::gpgpu::GpgpuRgba8Surface {
         let t = &self.resident;
-        crate::intel::gpgpu::GpgpuRgba8Surface::new(t.storage.storage_phys(),
-            t.storage.gpu_base(), t.storage.storage_bytes(), t.width, t.height, t.pitch)
-            .expect("validated resident texture")
+        crate::intel::gpgpu::GpgpuRgba8Surface::new(
+            t.storage.storage_phys(),
+            t.storage.gpu_base(),
+            t.storage.storage_bytes(),
+            t.width,
+            t.height,
+            t.pitch,
+        )
+        .expect("validated resident texture")
     }
 }
 impl Drop for RetainedTextureWrite {
@@ -7219,28 +7295,46 @@ impl Drop for RetainedTextureWrite {
             if let Ok((slot, generation)) = decode_handle(self.texture.raw()) {
                 if let Some(entry) = device.retained_textures.get_mut(slot) {
                     if entry.generation == generation {
-                        if let Some(record) = &mut entry.record { record.writing = false; }
+                        if let Some(record) = &mut entry.record {
+                            record.writing = false;
+                        }
                     }
                 }
             }
         }
     }
 }
-pub(crate) fn acquire_retained_texture_write(principal: Principal, device_handle: DeviceHandle,
-    texture: RetainedTextureHandle) -> Result<RetainedTextureWrite, VgpuError> {
+pub(crate) fn acquire_retained_texture_write(
+    principal: Principal,
+    device_handle: DeviceHandle,
+    texture: RetainedTextureHandle,
+) -> Result<RetainedTextureWrite, VgpuError> {
     let mut broker = BROKER.lock();
     let device = lookup_device_mut(&mut broker, device_handle, principal)?;
     ensure_live(device)?;
     let (slot, generation) = decode_handle(texture.raw())?;
-    let entry = device.retained_textures.get_mut(slot).ok_or(VgpuError::InvalidHandle)?;
-    if entry.generation != generation { return Err(VgpuError::InvalidHandle); }
+    let entry = device
+        .retained_textures
+        .get_mut(slot)
+        .ok_or(VgpuError::InvalidHandle)?;
+    if entry.generation != generation {
+        return Err(VgpuError::InvalidHandle);
+    }
     let record = entry.record.as_mut().ok_or(VgpuError::InvalidHandle)?;
-    if record.epoch != device.epoch || device.picasso_carrier != Some(record.carrier)
-        || device.picasso_carrier_quarantined { return Err(VgpuError::DeviceLost); }
+    if record.epoch != device.epoch
+        || device.picasso_carrier != Some(record.carrier)
+        || device.picasso_carrier_quarantined
+    {
+        return Err(VgpuError::DeviceLost);
+    }
     if record.writing || record.in_flight != 0 || Arc::strong_count(&record.resident) != 1 {
         return Err(VgpuError::Busy);
     }
     record.writing = true;
-    Ok(RetainedTextureWrite { principal, device: device_handle, texture,
-        resident: Arc::clone(&record.resident) })
+    Ok(RetainedTextureWrite {
+        principal,
+        device: device_handle,
+        texture,
+        resident: Arc::clone(&record.resident),
+    })
 }

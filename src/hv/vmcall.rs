@@ -3083,11 +3083,19 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             let owner = crate::r::io::async_fs_cabi::owner_for_vm(vm_id);
             let b = u64::from_le_bytes(payload[..8].try_into().unwrap());
             let mut output = [0u8; 24];
-            let rc = crate::r::services::video_service::command(owner, arg0 as u32, arg1, b,
-                &payload[8..], if arg0 == 3 { &mut output } else { &mut [] });
+            let rc = crate::r::services::video_service::command(
+                owner,
+                arg0 as u32,
+                arg1,
+                b,
+                &payload[8..],
+                if arg0 == 3 { &mut output } else { &mut [] },
+            );
             if arg0 == 3 && rc == 1 {
                 write_record_slice_response(vm_id, seq, 1, &output);
-            } else { write_response(vm_id, seq, STATUS_OK, rc as i64 as u64, 0); }
+            } else {
+                write_response(vm_id, seq, STATUS_OK, rc as i64 as u64, 0);
+            }
             DispatchOutcome::Resume
         }
         OP_BP_VMEDIA_TEXTURE_RELEASE => {
