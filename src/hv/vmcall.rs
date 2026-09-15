@@ -234,6 +234,9 @@ pub const OP_BP_SHELL2_FRONTEND_ATTACH_V1: u32 = 0x10D;
 pub const OP_BP_SHELL2_FRONTEND_READ_V1: u32 = 0x10E;
 pub const OP_BP_SHELL2_FRONTEND_SUBMIT_INPUT_V1: u32 = 0x10F;
 pub const OP_BP_SHELL2_FRONTEND_DETACH_V1: u32 = 0x110;
+pub const OP_BP_UI4_WINDOW_STATE_V1: u32 = 0x20A;
+pub const OP_BP_UI4_WINDOW_TITLE_V1: u32 = 0x20B;
+pub const OP_BP_UI4_SCENE_KEYBOARD_EVENT_TAKE_V1: u32 = 0x209;
 pub const OP_BP_UI4_SCENE_KEYBOARD_EVENT_TAKE: u32 = 0x111; // arg0 window -> rc + routed KeyboardOutputEvent payload
 pub const OP_BP_SPIRIT_TEXT_PRESENT_SILENT: u32 = 0x112; // arg0 turn,payload display-safe UTF-8 -> rc
 pub const OP_BP_FETCH_POST_JSON_BYTES_START: u32 = 0x113; // arg0 timeout,arg1 hi32 bearer/lo32 URL,payload URL||bearer||JSON
@@ -2893,6 +2896,53 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             let mut event = crate::r::keyboard::TrueosKeyboardOutputEvent::default();
             let rc = unsafe {
                 crate::ui4::blueprint_text::trueos_cabi_ui4_scene_keyboard_event_take(
+                    arg0 as u32,
+                    &mut event,
+                )
+            };
+            if rc == 0 {
+                write_record_response(vm_id, seq, 0, &event);
+            } else {
+                write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_WINDOW_STATE_V1 => {
+            use crate::ui4::blueprint_text::{TrueosUi4WindowStateV1, trueos_cabi_ui4_scene_window_state_get_v1, trueos_cabi_ui4_scene_window_state_set_v1};
+            if arg0 > u32::MAX as u64 { write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0); return DispatchOutcome::Resume; }
+            if arg1 == 0 && req_len == 0 {
+                let mut state = TrueosUi4WindowStateV1::default();
+                let rc = unsafe { trueos_cabi_ui4_scene_window_state_get_v1(arg0 as u32, &mut state) };
+                if rc == 0 { write_record_response(vm_id, seq, 0, &state); }
+                else { write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0); }
+            } else if arg1 == 1 && req_len as usize == core::mem::size_of::<TrueosUi4WindowStateV1>() {
+                let Some(payload) = request_payload(vm_id, req_len) else { write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0); return DispatchOutcome::Resume; };
+                let state: TrueosUi4WindowStateV1 = unsafe { core::ptr::read_unaligned(payload.as_ptr().cast()) };
+                let rc = unsafe { trueos_cabi_ui4_scene_window_state_set_v1(arg0 as u32, &state) };
+                write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            } else { write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0); }
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_WINDOW_TITLE_V1 => {
+            use crate::ui4::blueprint_text::{trueos_cabi_ui4_scene_window_title_get_v1, trueos_cabi_ui4_scene_window_title_set_v1};
+            const MAX_TITLE: usize = crate::ui4::MAX_WINDOW_TITLE_BYTES;
+            if arg0 > u32::MAX as u64 { write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0); return DispatchOutcome::Resume; }
+            if arg1 == 0 && req_len == 0 {
+                let mut title = [0u8; MAX_TITLE];
+                let len = unsafe { trueos_cabi_ui4_scene_window_title_get_v1(arg0 as u32, title.as_mut_ptr(), title.len()) };
+                if len >= 0 { write_record_slice_response(vm_id, seq, len as u64, &title[..len as usize]); }
+                else { write_response(vm_id, seq, STATUS_OK, (len as i64) as u64, 0); }
+            } else if arg1 == 1 && req_len as usize <= MAX_TITLE {
+                let Some(payload) = request_payload(vm_id, req_len) else { write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0); return DispatchOutcome::Resume; };
+                let rc = unsafe { trueos_cabi_ui4_scene_window_title_set_v1(arg0 as u32, payload.as_ptr(), payload.len()) };
+                write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            } else { write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0); }
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_SCENE_KEYBOARD_EVENT_TAKE_V1 => {
+            let mut event = crate::r::keyboard::TrueosKeyboardOutputEvent::default();
+            let rc = unsafe {
+                crate::ui4::blueprint_text::trueos_cabi_ui4_scene_keyboard_event_take_v1(
                     arg0 as u32,
                     &mut event,
                 )

@@ -131,6 +131,7 @@ pub(crate) use video_frame::{
 };
 
 pub(crate) use window_broker::{
+    MAX_WINDOW_TITLE_BYTES, set_window_state, set_window_title, window_state, window_title,
     Ui4FrameEscapeKeyAction, WindowBrokerError, WindowCreate, WindowDockTarget, WindowId,
     WindowInteraction, WindowOwner, WindowPlacement, WindowPlane, WindowSessionCloseRequest,
     WindowSessionId, WindowSnapshot, WindowState, acknowledge_window_frame,

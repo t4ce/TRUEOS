@@ -400,6 +400,9 @@ struct OwnerResizeState {
 struct InputBroker {
     cursor_read_seq: u64,
     keyboard_read_seq: u64,
+    physical_read_seq: u64,
+    physical_keys: Vec<(WindowOwner, Ui4KeyboardEvent), MAX_OWNER_EVENTS>,
+    consumed_keys: Vec<crate::r::keyboard::TrueosKeyboardOutputEvent, MAX_OWNER_EVENTS>,
     selection_serial: u64,
     cursors: Vec<CursorRoute, MAX_CURSOR_ROUTES>,
 }
@@ -409,6 +412,9 @@ impl InputBroker {
         Self {
             cursor_read_seq: 0,
             keyboard_read_seq: 0,
+            physical_read_seq: 0,
+            physical_keys: Vec::new(),
+            consumed_keys: Vec::new(),
             selection_serial: 0,
             cursors: Vec::new(),
         }
@@ -1092,6 +1098,7 @@ impl InputBroker {
             return;
         }
         if !super::cursor_frame_inout::global_keyboard_passes(&event) {
+            let _ = self.consumed_keys.push(event);
             return;
         }
         let (combo_id, virtual_keyboard) = keyboard_hut_metadata(&event);
@@ -1141,6 +1148,7 @@ impl InputBroker {
             && event.key_code == crate::r::keyboard::KEYBOARD_KEY_START
         {
             if event.flags & crate::r::keyboard::KEYBOARD_OUTPUT_FLAG_PRESS != 0 {
+                let _ = self.consumed_keys.push(event);
                 super::request_start_button_reveal();
             }
             return;
@@ -1167,6 +1175,7 @@ impl InputBroker {
                 Ok(super::Ui4FrameEscapeKeyAction::Close)
             )
         {
+            let _ = self.consumed_keys.push(event);
             // Escape is scoped to this keyboard/cursor's selected frame.  A
             // Blueprint frame ends its VM; a kernel-owned frame simply closes
             // that one UI4 window.  Either way it is consumed here, before
@@ -1250,6 +1259,53 @@ impl InputBroker {
                 virtual_keyboard,
             }),
         );
+    }
+
+    fn process_physical_keyboard(&mut self, event: crate::r::keyboard::TrueosKeyboardOutputEvent) {
+        use crate::r::keyboard::{KEYBOARD_OUTPUT_FLAG_PRESS, KEYBOARD_OUTPUT_KIND_PHYSICAL};
+        if event.kind != KEYBOARD_OUTPUT_KIND_PHYSICAL {
+            return;
+        }
+        let source = KeyboardSource::from(event);
+        let existing = self.physical_keys.iter().position(|(_, held)| {
+            KeyboardSource::from(held.event) == source && held.event.key_code == event.key_code
+        });
+        if event.flags & KEYBOARD_OUTPUT_FLAG_PRESS == 0 {
+            if let Some(index) = existing {
+                let (owner, mut held) = self.physical_keys.remove(index);
+                held.event = event;
+                if window_snapshot_for_target(WindowTarget { owner, window: held.window }).is_some() {
+                    enqueue_owner_event(owner, Ui4InputEvent::Keyboard(held));
+                }
+            }
+            return;
+        }
+        if existing.is_some() {
+            return;
+        }
+        // Shortcut callbacks already ran on the legacy logical event. Reusing
+        // their disposition avoids executing global actions twice per key.
+        let named = u8::try_from(event.key_code).ok()
+            .and_then(crate::r::keyboard::hid_boot_keycode_to_named_key);
+        if self.consumed_keys.iter().any(|consumed| {
+            KeyboardSource::from(*consumed) == source && consumed.device_seq == event.device_seq
+                && (named == Some(consumed.key_code)
+                    || (event.codepoint != 0 && consumed.codepoint == event.codepoint))
+        }) {
+            return;
+        }
+        let (combo_id, virtual_keyboard) = keyboard_hut_metadata(&event);
+        let Some(index) = self.keyboard_route_index(&event, combo_id, true) else { return; };
+        let route_source = self.cursors[index].source;
+        let Some(key) = super::selected_frame_for_source(route_source) else { return; };
+        let Some(window) = window_snapshot_for_target(WindowTarget { owner: key.owner, window: key.window }) else { return; };
+        if !window.interaction.receives_input { return; }
+        let routed = Ui4KeyboardEvent { source: route_source, window: key.window, event, combo_id, virtual_keyboard };
+        // Retain the press destination: focus changes must never deliver its
+        // release to a different application or leave the old one holding it.
+        if self.physical_keys.push((key.owner, routed)).is_err() { return; }
+        self.cursors[index].keyboard_source = Some(source);
+        enqueue_owner_event(key.owner, Ui4InputEvent::Keyboard(routed));
     }
 
     fn keyboard_route_index(
@@ -1418,6 +1474,26 @@ impl InputBroker {
                 break;
             }
         }
+        loop {
+            let (next, dropped, wrote) = crate::r::keyboard::read_physical_events_since(
+                self.physical_read_seq, &mut keyboard_events,
+            );
+            self.physical_read_seq = next;
+            if dropped != 0 {
+                // Recover held state explicitly after a bounded-ring overrun.
+                for (owner, mut held) in self.physical_keys.drain(..) {
+                    held.event.flags = crate::r::keyboard::KEYBOARD_OUTPUT_FLAG_SYNTHETIC;
+                    held.event.codepoint = 0;
+                    held.event.utf8_len = 0;
+                    enqueue_owner_event(owner, Ui4InputEvent::Keyboard(held));
+                }
+            }
+            for event in keyboard_events.iter().take(wrote).copied() {
+                self.process_physical_keyboard(event);
+            }
+            if wrote < keyboard_events.len() { break; }
+        }
+        self.consumed_keys.clear();
         cursor_activity
     }
 

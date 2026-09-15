@@ -285,6 +285,30 @@ pub(super) unsafe fn guest_keyboard_event_take(
     0
 }
 
+pub(super) unsafe fn guest_keyboard_event_take_v1(
+    window_id: u32,
+    out: *mut crate::r::keyboard::TrueosKeyboardOutputEvent,
+) -> i32 {
+    let mut response = [0u8; core::mem::size_of::<crate::r::keyboard::TrueosKeyboardOutputEvent>()];
+    let (status, data) = trueos_vm::vmcall::call_with_payload(
+        trueos_vm::vmcall::OP_BP_UI4_SCENE_KEYBOARD_EVENT_TAKE_V1,
+        window_id as u64,
+        0,
+        &[],
+        &mut response,
+    );
+    if status != trueos_vm::vmcall::STATUS_OK {
+        return ERROR_UI4;
+    }
+    let result = data as i64 as i32;
+    if result != 0 {
+        return result;
+    }
+    let event = unsafe { core::ptr::read_unaligned(response.as_ptr().cast()) };
+    unsafe { out.write(event) };
+    0
+}
+
 pub(super) unsafe fn guest_pan_event_take(window_id: u32, out: *mut TrueosUi4PanEvent) -> i32 {
     let mut response = [0u8; core::mem::size_of::<TrueosUi4PanEvent>()];
     let (status, data) = trueos_vm::vmcall::call_with_payload(

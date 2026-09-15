@@ -48,6 +48,9 @@ const LEASE_IDLE_GRACE_MS: u64 = 500;
 pub(crate) const WINDOW_BROKER_SNAPSHOT_PERIOD_MS: u64 = 3_000;
 const WINDOW_BROKER_SNAPSHOT_RECEIVERS: usize = 8;
 const WINDOW_FIRST_PRESENTATION_QUEUE_CAP: usize = 32;
+/// Title metadata is broker-owned but not currently compositor-rendered.
+/// Keep it bounded and allocation-free because it is copied into snapshots.
+pub(crate) const MAX_WINDOW_TITLE_BYTES: usize = 120;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum WindowOwner {
@@ -474,6 +477,7 @@ pub(crate) enum WindowBrokerError {
     StaleResize,
     Capacity,
     Closed,
+    InvalidTitle,
 }
 
 #[derive(Copy, Clone)]
@@ -516,6 +520,8 @@ struct WindowRecord {
     replacement_presentation: Option<WindowPlacement>,
     open_transition: Option<WindowOpenTransition>,
     close_transition: Option<WindowCloseTransition>,
+    title: [u8; MAX_WINDOW_TITLE_BYTES],
+    title_len: u8,
 }
 
 #[derive(Copy, Clone)]
@@ -600,6 +606,53 @@ impl WindowBroker {
             leases: [None; LEASE_PLANE_COUNT],
             composition_revision: 0,
         }
+    }
+
+    fn apply_blueprint_window_state(
+        &mut self,
+        owner: WindowOwner,
+        id: WindowId,
+        visible: bool,
+        hit_testable: bool,
+        opacity: u8,
+    ) -> Result<bool, WindowBrokerError> {
+        let changed = {
+            let window = self.checked_window_mut(owner, id)?;
+            let changed = window.placement.visible != visible
+                || window.interaction.hit_testable != hit_testable
+                || window.placement.opacity != opacity;
+            if changed {
+                window.placement.visible = visible;
+                window.interaction.hit_testable = hit_testable;
+                window.placement.opacity = opacity;
+                window.revision = next_serial(window.revision);
+            }
+            changed
+        };
+        if changed {
+            self.mark_composition_changed();
+        }
+        Ok(changed)
+    }
+
+    fn set_blueprint_window_title(
+        &mut self,
+        owner: WindowOwner,
+        id: WindowId,
+        title: &str,
+    ) -> Result<bool, WindowBrokerError> {
+        if title.len() > MAX_WINDOW_TITLE_BYTES {
+            return Err(WindowBrokerError::InvalidTitle);
+        }
+        let window = self.checked_window_mut(owner, id)?;
+        if window.title[..window.title_len as usize] == title.as_bytes()[..] {
+            return Ok(false);
+        }
+        window.title.fill(0);
+        window.title[..title.len()].copy_from_slice(title.as_bytes());
+        window.title_len = title.len() as u8;
+        window.revision = next_serial(window.revision);
+        Ok(true)
     }
 
     const fn lease_index(slot: usize) -> Option<usize> {
@@ -1552,6 +1605,8 @@ impl WindowRecord {
             replacement_presentation: None,
             open_transition: None,
             close_transition: None,
+            title: [0; MAX_WINDOW_TITLE_BYTES],
+            title_len: 0,
         }
     }
 
@@ -2184,6 +2239,71 @@ pub(crate) fn set_window_opacity(
         opacity,
         ..placement
     })
+}
+
+/// Set one window's visibility. Visibility is a compositor and input-routing
+/// property: hidden windows are omitted from snapshots and cannot be selected.
+pub(crate) fn set_window_visible(
+    owner: WindowOwner,
+    id: WindowId,
+    visible: bool,
+) -> Result<(), WindowBrokerError> {
+    set_windows_visible(owner, &[id], visible).map(|_| ())
+}
+
+/// Read the authoritative state exposed by the narrow Blueprint window API.
+pub(crate) fn window_state(
+    owner: WindowOwner,
+    id: WindowId,
+) -> Result<(WindowPlacement, WindowInteraction), WindowBrokerError> {
+    let mut broker = WINDOW_BROKER.lock();
+    let window = broker.checked_window_mut(owner, id)?;
+    Ok((window.placement, window.interaction))
+}
+
+/// Atomically apply the Blueprint-visible state fields. Hidden windows remain
+/// non-composable and are excluded from input hit testing by the broker's
+/// normal visible-window snapshot filter.
+pub(crate) fn set_window_state(
+    owner: WindowOwner,
+    id: WindowId,
+    visible: bool,
+    hit_testable: bool,
+    opacity: u8,
+) -> Result<(), WindowBrokerError> {
+    let mut broker = WINDOW_BROKER.lock();
+    let changed = broker.apply_blueprint_window_state(owner, id, visible, hit_testable, opacity)?;
+    drop(broker);
+    if changed {
+        super::cursor_frame_inout::frame_visual_changed(owner, id);
+        super::cursor_frame_inout::selection_strip_stack_changed();
+    }
+    Ok(())
+}
+
+/// Store a bounded UTF-8 title for UI consumers which inspect the broker.
+/// UI4 does not yet render title bars, so this deliberately does not claim to
+/// decorate the frame itself.
+pub(crate) fn set_window_title(
+    owner: WindowOwner,
+    id: WindowId,
+    title: &str,
+) -> Result<(), WindowBrokerError> {
+    let mut broker = WINDOW_BROKER.lock();
+    broker.set_blueprint_window_title(owner, id, title)?;
+    Ok(())
+}
+
+pub(crate) fn window_title(
+    owner: WindowOwner,
+    id: WindowId,
+    out: &mut [u8; MAX_WINDOW_TITLE_BYTES],
+) -> Result<usize, WindowBrokerError> {
+    let mut broker = WINDOW_BROKER.lock();
+    let window = broker.checked_window_mut(owner, id)?;
+    let len = window.title_len as usize;
+    out[..len].copy_from_slice(&window.title[..len]);
+    Ok(len)
 }
 
 /// A layer-local factor, multiplied by the owning window's opacity at snapshot
@@ -3467,6 +3587,57 @@ mod tests {
             },
             interaction: WindowInteraction::MOVABLE_FRAME,
         }
+    }
+
+    #[test]
+    fn blueprint_window_state_and_title_are_broker_owned() {
+        let owner = WindowOwner::GPGPU_PREVIEW;
+        let mut broker = WindowBroker::new();
+        let session = broker.begin_additional_session(owner).unwrap();
+        let id = broker
+            .create(test_window(owner, session, 1, 0, 0, true), FrameBuffering::Single, 0)
+            .unwrap();
+        let (slot, _) = unpack_handle(id.raw()).unwrap();
+        let initial_revision = broker.windows[slot].revision;
+        let initial_composition_revision = broker.composition_revision;
+
+        assert!(
+            broker
+                .apply_blueprint_window_state(owner, id, false, false, 127)
+                .unwrap()
+        );
+        let window = &broker.windows[slot];
+        assert!(!window.placement.visible);
+        assert!(!window.interaction.hit_testable);
+        assert_eq!(window.placement.opacity, 127);
+        assert_eq!(window.revision, next_serial(initial_revision));
+        assert_eq!(broker.composition_revision, next_serial(initial_composition_revision));
+        assert!(
+            !broker
+                .apply_blueprint_window_state(owner, id, false, false, 127)
+                .unwrap()
+        );
+
+        assert!(
+            broker
+                .set_blueprint_window_title(owner, id, "Winit UI4")
+                .unwrap()
+        );
+        let window = &broker.windows[slot];
+        assert_eq!(&window.title[..window.title_len as usize], b"Winit UI4");
+        assert!(
+            !broker
+                .set_blueprint_window_title(owner, id, "Winit UI4")
+                .unwrap()
+        );
+        assert_eq!(
+            broker.set_blueprint_window_title(
+                owner,
+                id,
+                core::str::from_utf8(&[b'x'; MAX_WINDOW_TITLE_BYTES + 1]).unwrap(),
+            ),
+            Err(WindowBrokerError::InvalidTitle)
+        );
     }
 
     #[test]

@@ -11,10 +11,12 @@ pub const KEYBOARD_OUTPUT_FLAG_SYNTHETIC: u32 = 1 << 1;
 pub const KEYBOARD_OUTPUT_FLAG_TEXT_BURST_START: u32 = 1 << 2;
 pub const KEYBOARD_OUTPUT_FLAG_TEXT_BURST_END: u32 = 1 << 3;
 pub const KEYBOARD_OUTPUT_FLAG_TEXT_BURST: u32 = 1 << 4;
+pub const KEYBOARD_OUTPUT_FLAG_REPEAT: u32 = 1 << 5;
 pub const KEYBOARD_OUTPUT_FLAG_DEVICE_LOST: u32 = 1 << 31;
 pub const KEYBOARD_OUTPUT_KIND_TEXT: u8 = 1;
 pub const KEYBOARD_OUTPUT_KIND_KEY: u8 = 2;
 pub const KEYBOARD_OUTPUT_KIND_DEVICE_LOST: u8 = 3;
+pub const KEYBOARD_OUTPUT_KIND_PHYSICAL: u8 = 4;
 const KEYBOARD_CTRL_MOD_MASK: u8 = (1 << 0) | (1 << 4);
 
 pub const KEYBOARD_KEY_BACKSPACE: u16 = 1;
@@ -59,6 +61,8 @@ struct KeyboardSnapshot {
     reserved1: u16,
     keys: [u8; 6],
     ascii: [u8; 6],
+    physical_modifiers: u8,
+    physical_keys: [u8; 6],
 }
 
 #[repr(C)]
@@ -156,6 +160,8 @@ impl KeyboardOutputRing {
 }
 
 static KEYBOARD_OUTPUT_RING: Mutex<KeyboardOutputRing> = Mutex::new(KeyboardOutputRing::new());
+static KEYBOARD_PHYSICAL_OUTPUT_RING: Mutex<KeyboardOutputRing> =
+    Mutex::new(KeyboardOutputRing::new());
 static KEYBOARD_OUTPUT_POP_SEQ: Mutex<u64> = Mutex::new(0);
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 static NEXT_KEYBOARD_TEXT_BURST_ID: AtomicU32 = AtomicU32::new(1);
@@ -169,6 +175,18 @@ pub fn upsert_snapshot(
     ascii: [u8; 6],
 ) {
     let mut guard = KEYBOARD_SNAPSHOTS.lock();
+    upsert_snapshot_locked(&mut guard, controller_id, slot_id, ep_target, modifiers, keys, ascii);
+}
+
+fn upsert_snapshot_locked(
+    guard: &mut Vec<KeyboardSnapshot, MAX_KEYBOARD_SNAPSHOTS>,
+    controller_id: u32,
+    slot_id: u32,
+    ep_target: u32,
+    modifiers: u8,
+    keys: [u8; 6],
+    ascii: [u8; 6],
+) {
     if let Some(existing) = guard.iter_mut().find(|snapshot| {
         snapshot.controller_id == controller_id
             && snapshot.slot_id == slot_id
@@ -189,6 +207,8 @@ pub fn upsert_snapshot(
         reserved1: 0,
         keys,
         ascii,
+        physical_modifiers: 0,
+        physical_keys: [0; 6],
     };
     if guard.push(snapshot).is_ok() {
         return;
@@ -235,6 +255,11 @@ pub fn signal_device_lost(controller_id: u32, slot_id: u32) -> usize {
 
     let t_ms = uptime_ms_u32();
     for snapshot in removed.iter().copied() {
+        {
+            let mut ring = KEYBOARD_PHYSICAL_OUTPUT_RING.lock();
+            push_physical_releases_into(&mut ring, snapshot, t_ms, 0, true);
+            ring.push(device_lost_event(controller_id, slot_id, snapshot.ep_target, t_ms));
+        }
         push_output_event(TrueosKeyboardOutputEvent {
             t_ms,
             seq: 0,
@@ -242,15 +267,7 @@ pub fn signal_device_lost(controller_id: u32, slot_id: u32) -> usize {
             controller_id,
             slot_id,
             ep_target: snapshot.ep_target,
-            modifiers: 0,
-            kind: KEYBOARD_OUTPUT_KIND_DEVICE_LOST,
-            utf8_len: 0,
-            reserved0: 0,
-            key_code: 0,
-            reserved1: 0,
-            codepoint: 0,
-            utf8: [0; 4],
-            flags: KEYBOARD_OUTPUT_FLAG_DEVICE_LOST,
+            ..device_lost_event(controller_id, slot_id, snapshot.ep_target, t_ms)
         });
     }
     removed.len()
@@ -320,7 +337,7 @@ fn key_code_was_emitted(emitted: &[u16; 6], key_code: u16) -> bool {
 }
 
 #[inline]
-fn hid_boot_keycode_to_named_key(key: u8) -> Option<u16> {
+pub(crate) fn hid_boot_keycode_to_named_key(key: u8) -> Option<u16> {
     match key {
         0x28 => Some(KEYBOARD_KEY_ENTER),
         0x29 => Some(KEYBOARD_KEY_ESCAPE),
@@ -358,6 +375,206 @@ fn hid_boot_keycode_to_named_key(key: u8) -> Option<u16> {
 #[inline]
 fn push_output_event(evt: TrueosKeyboardOutputEvent) {
     KEYBOARD_OUTPUT_RING.lock().push(evt);
+}
+
+fn device_lost_event(
+    controller_id: u32,
+    slot_id: u32,
+    ep_target: u32,
+    t_ms: u32,
+) -> TrueosKeyboardOutputEvent {
+    TrueosKeyboardOutputEvent {
+        t_ms,
+        controller_id,
+        slot_id,
+        ep_target,
+        kind: KEYBOARD_OUTPUT_KIND_DEVICE_LOST,
+        flags: KEYBOARD_OUTPUT_FLAG_DEVICE_LOST,
+        ..TrueosKeyboardOutputEvent::default()
+    }
+}
+
+fn physical_key_event(
+    controller_id: u32,
+    slot_id: u32,
+    ep_target: u32,
+    t_ms: u32,
+    device_seq: u32,
+    modifiers: u8,
+    key_code: u16,
+    codepoint: u32,
+    flags: u32,
+) -> TrueosKeyboardOutputEvent {
+    let mut event = TrueosKeyboardOutputEvent {
+        t_ms,
+        device_seq,
+        controller_id,
+        slot_id,
+        ep_target,
+        modifiers,
+        kind: KEYBOARD_OUTPUT_KIND_PHYSICAL,
+        key_code,
+        codepoint,
+        flags,
+        ..TrueosKeyboardOutputEvent::default()
+    };
+    if codepoint != 0 {
+        if let Some(ch) = char::from_u32(codepoint) {
+            event.utf8_len = ch.encode_utf8(&mut event.utf8).len() as u8;
+        }
+    }
+    event
+}
+
+fn key_is_valid_boot_usage(key: u8) -> bool {
+    !(1..=3).contains(&key)
+}
+
+fn push_physical_report_into(
+    ring: &mut KeyboardOutputRing,
+    controller_id: u32,
+    slot_id: u32,
+    ep_target: u32,
+    t_ms: u32,
+    device_seq: u32,
+    prev_modifiers: u8,
+    prev_keys: [u8; 6],
+    modifiers: u8,
+    keys: [u8; 6],
+    ascii: [u8; 6],
+) -> bool {
+    if keys
+        .iter()
+        .copied()
+        .any(|key| !key_is_valid_boot_usage(key))
+    {
+        return false;
+    }
+
+    let metadata = (controller_id, slot_id, ep_target, t_ms, device_seq);
+    for key in unique_boot_keys(prev_keys) {
+        if key != 0 && !key_is_down(&keys, key) {
+            ring.push(physical_key_event(
+                metadata.0,
+                metadata.1,
+                metadata.2,
+                metadata.3,
+                metadata.4,
+                modifiers,
+                u16::from(key),
+                0,
+                0,
+            ));
+        }
+    }
+
+    for bit in 0..8 {
+        let mask = 1u8 << bit;
+        if (prev_modifiers & mask) != 0 && (modifiers & mask) == 0 {
+            ring.push(physical_key_event(
+                metadata.0,
+                metadata.1,
+                metadata.2,
+                metadata.3,
+                metadata.4,
+                modifiers,
+                0xE0 + bit as u16,
+                0,
+                0,
+            ));
+        }
+    }
+
+    for bit in 0..8 {
+        let mask = 1u8 << bit;
+        if (prev_modifiers & mask) == 0 && (modifiers & mask) != 0 {
+            ring.push(physical_key_event(
+                metadata.0,
+                metadata.1,
+                metadata.2,
+                metadata.3,
+                metadata.4,
+                modifiers,
+                0xE0 + bit as u16,
+                0,
+                KEYBOARD_OUTPUT_FLAG_PRESS,
+            ));
+        }
+    }
+
+    for index in 0..keys.len() {
+        let key = keys[index];
+        if key == 0 || key_is_down(&prev_keys, key) || keys[..index].contains(&key) {
+            continue;
+        }
+        let codepoint = u32::from(ascii[index]);
+        ring.push(physical_key_event(
+            metadata.0,
+            metadata.1,
+            metadata.2,
+            metadata.3,
+            metadata.4,
+            modifiers,
+            u16::from(key),
+            codepoint,
+            KEYBOARD_OUTPUT_FLAG_PRESS,
+        ));
+    }
+    true
+}
+
+fn unique_boot_keys(keys: [u8; 6]) -> impl Iterator<Item = u8> {
+    let mut unique = Vec::<u8, 6>::new();
+    for key in keys {
+        if !unique.contains(&key) {
+            let _ = unique.push(key);
+        }
+    }
+    unique.into_iter()
+}
+
+fn push_physical_releases_into(
+    ring: &mut KeyboardOutputRing,
+    snapshot: KeyboardSnapshot,
+    t_ms: u32,
+    device_seq: u32,
+    synthetic: bool,
+) {
+    let flags = if synthetic {
+        KEYBOARD_OUTPUT_FLAG_SYNTHETIC
+    } else {
+        0
+    };
+    for key in unique_boot_keys(snapshot.physical_keys) {
+        if key != 0 && key_is_valid_boot_usage(key) {
+            ring.push(physical_key_event(
+                snapshot.controller_id,
+                snapshot.slot_id,
+                snapshot.ep_target,
+                t_ms,
+                device_seq,
+                0,
+                u16::from(key),
+                0,
+                flags,
+            ));
+        }
+    }
+    for bit in 0..8 {
+        if snapshot.physical_modifiers & (1 << bit) != 0 {
+            ring.push(physical_key_event(
+                snapshot.controller_id,
+                snapshot.slot_id,
+                snapshot.ep_target,
+                t_ms,
+                device_seq,
+                0,
+                0xE0 + bit as u16,
+                0,
+                flags,
+            ));
+        }
+    }
 }
 
 #[inline]
@@ -483,20 +700,54 @@ pub fn apply_report(
     keys: [u8; 6],
     ascii: [u8; 6],
 ) {
-    let (prev_modifiers, prev_keys) = {
-        let guard = KEYBOARD_SNAPSHOTS.lock();
-        guard
-            .iter()
-            .find(|snapshot| {
-                snapshot.controller_id == controller_id
-                    && snapshot.slot_id == slot_id
-                    && snapshot.ep_target == ep_target
-            })
-            .map(|snapshot| (snapshot.modifiers, snapshot.keys))
-            .unwrap_or((0, [0; 6]))
-    };
+    let mut snapshots = KEYBOARD_SNAPSHOTS.lock();
+    let previous = snapshots.iter().find(|snapshot| {
+        snapshot.controller_id == controller_id
+            && snapshot.slot_id == slot_id
+            && snapshot.ep_target == ep_target
+    });
+    let (prev_modifiers, prev_keys, prev_physical_modifiers, prev_physical_keys) = previous
+        .map(|snapshot| {
+            (snapshot.modifiers, snapshot.keys, snapshot.physical_modifiers, snapshot.physical_keys)
+        })
+        .unwrap_or((0, [0; 6], 0, [0; 6]));
+    upsert_snapshot_locked(
+        &mut snapshots,
+        controller_id,
+        slot_id,
+        ep_target,
+        modifiers,
+        keys,
+        ascii,
+    );
 
-    upsert_snapshot(controller_id, slot_id, ep_target, modifiers, keys, ascii);
+    let physical_report_valid = {
+        let mut ring = KEYBOARD_PHYSICAL_OUTPUT_RING.lock();
+        push_physical_report_into(
+            &mut ring,
+            controller_id,
+            slot_id,
+            ep_target,
+            t_ms,
+            device_seq,
+            prev_physical_modifiers,
+            prev_physical_keys,
+            modifiers,
+            keys,
+            ascii,
+        )
+    };
+    if physical_report_valid {
+        if let Some(snapshot) = snapshots.iter_mut().find(|snapshot| {
+            snapshot.controller_id == controller_id
+                && snapshot.slot_id == slot_id
+                && snapshot.ep_target == ep_target
+        }) {
+            snapshot.physical_modifiers = modifiers;
+            snapshot.physical_keys = keys;
+        }
+    }
+    drop(snapshots);
 
     const GUI_MOD_MASK: u8 = (1 << 3) | (1 << 7);
     if (prev_modifiers & GUI_MOD_MASK) == 0 && (modifiers & GUI_MOD_MASK) != 0 {
@@ -579,7 +830,24 @@ pub fn read_output_events_since(
     read_seq: u64,
     out: &mut [TrueosKeyboardOutputEvent],
 ) -> (u64, u32, usize) {
-    let ring = KEYBOARD_OUTPUT_RING.lock();
+    read_events_from_ring(&KEYBOARD_OUTPUT_RING, read_seq, out)
+}
+
+/// Read the bounded stream of physical HID key transitions independently of
+/// the legacy named-key and text output stream.
+pub fn read_physical_events_since(
+    read_seq: u64,
+    out: &mut [TrueosKeyboardOutputEvent],
+) -> (u64, u32, usize) {
+    read_events_from_ring(&KEYBOARD_PHYSICAL_OUTPUT_RING, read_seq, out)
+}
+
+fn read_events_from_ring(
+    source: &Mutex<KeyboardOutputRing>,
+    read_seq: u64,
+    out: &mut [TrueosKeyboardOutputEvent],
+) -> (u64, u32, usize) {
+    let ring = source.lock();
     if ring.write_seq == 0 || out.is_empty() {
         return (read_seq, 0, 0);
     }
@@ -758,6 +1026,120 @@ mod tests {
     #[test]
     fn print_screen_boot_usage_maps_to_named_key() {
         assert_eq!(hid_boot_keycode_to_named_key(0x46), Some(KEYBOARD_KEY_PRINT_SCREEN));
+    }
+
+    fn physical_events(ring: &KeyboardOutputRing) -> alloc::vec::Vec<TrueosKeyboardOutputEvent> {
+        ring.buf
+            .iter()
+            .copied()
+            .filter(|event| event.seq != 0)
+            .collect()
+    }
+
+    fn push_report(
+        ring: &mut KeyboardOutputRing,
+        previous_modifiers: u8,
+        previous_keys: [u8; 6],
+        modifiers: u8,
+        keys: [u8; 6],
+        ascii: [u8; 6],
+    ) -> bool {
+        push_physical_report_into(
+            ring,
+            10,
+            2,
+            3,
+            42,
+            99,
+            previous_modifiers,
+            previous_keys,
+            modifiers,
+            keys,
+            ascii,
+        )
+    }
+
+    #[test]
+    fn physical_reports_emit_hid_down_with_ascii_and_release_without_text() {
+        let mut ring = KeyboardOutputRing::new();
+        assert!(
+            push_report(&mut ring, 0, [0; 6], 0, [0x04, 0, 0, 0, 0, 0], [b'a', 0, 0, 0, 0, 0],)
+        );
+        assert!(push_report(
+            &mut ring,
+            0,
+            [0x04, 0, 0, 0, 0, 0],
+            0,
+            [0x04, 0, 0, 0, 0, 0],
+            [b'a', 0, 0, 0, 0, 0],
+        ));
+        assert!(push_report(&mut ring, 0, [0x04, 0, 0, 0, 0, 0], 0, [0; 6], [0; 6],));
+
+        let events = physical_events(&ring);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].kind, KEYBOARD_OUTPUT_KIND_PHYSICAL);
+        assert_eq!(events[0].key_code, 0x04);
+        assert_ne!(events[0].flags & KEYBOARD_OUTPUT_FLAG_PRESS, 0);
+        assert_eq!(events[0].codepoint, u32::from(b'a'));
+        assert_eq!(&events[0].utf8[..events[0].utf8_len as usize], b"a");
+        assert_eq!(events[1].key_code, 0x04);
+        assert_eq!(events[1].flags & KEYBOARD_OUTPUT_FLAG_PRESS, 0);
+        assert_eq!(events[1].codepoint, 0);
+        assert_eq!(events[1].utf8_len, 0);
+    }
+
+    #[test]
+    fn physical_modifier_only_changes_use_usb_modifier_usages() {
+        let mut ring = KeyboardOutputRing::new();
+        assert!(push_report(&mut ring, 0, [0; 6], 1, [0; 6], [0; 6]));
+        assert!(push_report(&mut ring, 1, [0; 6], 0, [0; 6], [0; 6]));
+
+        let events = physical_events(&ring);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].key_code, 0xE0);
+        assert_ne!(events[0].flags & KEYBOARD_OUTPUT_FLAG_PRESS, 0);
+        assert_eq!(events[1].key_code, 0xE0);
+        assert_eq!(events[1].flags & KEYBOARD_OUTPUT_FLAG_PRESS, 0);
+    }
+
+    #[test]
+    fn physical_rollover_report_preserves_held_key_state() {
+        let mut ring = KeyboardOutputRing::new();
+        assert!(
+            push_report(&mut ring, 0, [0; 6], 0, [0x04, 0, 0, 0, 0, 0], [b'a', 0, 0, 0, 0, 0],)
+        );
+        assert!(!push_report(&mut ring, 0, [0x04, 0, 0, 0, 0, 0], 0, [1, 2, 3, 0, 0, 0], [0; 6],));
+        assert!(push_report(&mut ring, 0, [0x04, 0, 0, 0, 0, 0], 0, [0; 6], [0; 6],));
+
+        let events = physical_events(&ring);
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].flags & KEYBOARD_OUTPUT_FLAG_PRESS, KEYBOARD_OUTPUT_FLAG_PRESS);
+        assert_eq!(events[1].flags & KEYBOARD_OUTPUT_FLAG_PRESS, 0);
+        assert_eq!(events[1].key_code, 0x04);
+    }
+
+    #[test]
+    fn device_disconnect_releases_held_keys_before_loss_event() {
+        let mut ring = KeyboardOutputRing::new();
+        let snapshot = KeyboardSnapshot {
+            controller_id: 10,
+            slot_id: 2,
+            ep_target: 3,
+            physical_modifiers: 1,
+            physical_keys: [0x04, 0, 0, 0, 0, 0],
+            ..KeyboardSnapshot::default()
+        };
+        push_physical_releases_into(&mut ring, snapshot, 42, 99, true);
+        ring.push(device_lost_event(10, 2, 3, 42));
+
+        let events = physical_events(&ring);
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0].key_code, 0x04);
+        assert_eq!(events[0].flags, KEYBOARD_OUTPUT_FLAG_SYNTHETIC);
+        assert_eq!(events[1].key_code, 0xE0);
+        assert_eq!(events[1].flags, KEYBOARD_OUTPUT_FLAG_SYNTHETIC);
+        assert_eq!(events[2].kind, KEYBOARD_OUTPUT_KIND_DEVICE_LOST);
+        assert_eq!(events[2].flags, KEYBOARD_OUTPUT_FLAG_DEVICE_LOST);
     }
 
     #[test]

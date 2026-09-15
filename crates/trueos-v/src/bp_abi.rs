@@ -785,6 +785,14 @@ unsafe extern "C" {
         window_id: u32,
         out: *mut TrueosKeyboardOutputEvent,
     ) -> i32;
+    pub fn trueos_cabi_ui4_scene_window_state_get_v1(window_id: u32, out: *mut TrueosUi4WindowStateV1) -> i32;
+    pub fn trueos_cabi_ui4_scene_window_state_set_v1(window_id: u32, state: *const TrueosUi4WindowStateV1) -> i32;
+    pub fn trueos_cabi_ui4_scene_window_title_get_v1(window_id: u32, out: *mut u8, out_cap: usize) -> isize;
+    pub fn trueos_cabi_ui4_scene_window_title_set_v1(window_id: u32, bytes: *const u8, len: usize) -> i32;
+    pub fn trueos_cabi_ui4_scene_keyboard_event_take_v1(
+        window_id: u32,
+        out: *mut TrueosKeyboardOutputEvent,
+    ) -> i32;
     pub fn trueos_cabi_ui4_scene_frame_resize(window_id: u32, width: u32, height: u32) -> i32;
     pub fn trueos_cabi_ui4_scene_frame_write_opaque_rgba8(
         window_id: u32,
@@ -1859,3 +1867,15 @@ pub struct TrueosInputCombo {
 }
 
 const _: () = assert!(core::mem::size_of::<TrueosInputCombo>() == 88);
+
+/// Versioned UI4 state. Title is UTF-8 broker metadata, bounded to 120 bytes.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TrueosUi4WindowStateV1 {
+    pub version: u32,
+    pub visible: u32,
+    pub hit_testable: u32,
+    pub opacity: u32,
+    pub focused: u32,
+    pub reserved: [u32; 3],
+}
