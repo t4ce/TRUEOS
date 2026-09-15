@@ -63,6 +63,10 @@ fn dispatch_bios(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> Par
     super::cmds::bios::try_parse(io, rest)
 }
 
+fn dispatch_cam(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::cam::try_parse(spawner, io, rest)
+}
+
 fn dispatch_img(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     super::cmds::img::try_parse(spawner, io, rest)
 }
@@ -268,6 +272,12 @@ const SHELL2_COMMAND_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         handler: dispatch_disc,
         tool_description: Some("List top-level disk devices, format a disk, or create a ramdisc."),
         tool_parameters_json: Some(TOOL_JSON_DISC),
+    },
+    BuiltinShell2CmdEntry {
+        name: "cam", mode: "cmd", color: Some(STATUS_BLUE_RGB), advertised: true,
+        handler: dispatch_cam,
+        tool_description: Some("Inspect the Tang HDMI receiver or save and open its first frozen 64x64 camera tile. cam status reports input; cam shot captures."),
+        tool_parameters_json: Some(r#"{"type":"object","properties":{"action":{"type":"string","enum":["status","shot"]}},"additionalProperties":false}"#),
     },
     BuiltinShell2CmdEntry {
         name: "img",
@@ -619,7 +629,7 @@ pub(crate) fn try_dispatch(
     ParseOutcome::NotCommand
 }
 
-const TITLEBAR_MEDIA_COMMANDS: &[&str] = &["img", "shot", "vid", "film"];
+const TITLEBAR_MEDIA_COMMANDS: &[&str] = &["img", "shot", "vid", "film", "cam"];
 const TITLEBAR_ADMIN_COMMANDS: &[&str] = &[
     "cry", "os", "backup", "disc", "tlb", "xhci", "ram", "smp", "net", "bios", "vgpu",
 ];

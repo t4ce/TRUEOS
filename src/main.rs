@@ -73,6 +73,7 @@ mod smp;
 mod spirit;
 mod std_abi_shim;
 mod surfer;
+mod tga;
 mod turbo;
 #[allow(non_snake_case)]
 mod tyche;

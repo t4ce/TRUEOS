@@ -72,6 +72,9 @@ define_started_flags!(
     PRINTER_DISCOVERY_STARTED,
     PRINTER_SPOOLER_STARTED,
     FTP_SERVER_STARTED,
+    TGA_TASK_STARTED,
+    TGA_RPC_SERVICE_STARTED,
+    TGA_RPC_HEARTBEAT_STARTED,
     GPU_COMPLETION_REAPER_STARTED,
     GPU_FAULT_CONTAINMENT_STARTED,
     INTEL_SUBSET_SUM_BOOT_PROBE_STARTED,
@@ -636,6 +639,16 @@ fn spawn_midi_piano_udp(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_ftp_server(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::r::net::ftp::ftp_server_task())
+}
+
+fn spawn_tga_task(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_| crate::tga::tga_task())
+}
+fn spawn_tga_rpc_service(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_| crate::r::tga_rpc::service_task())
+}
+fn spawn_tga_rpc_heartbeat(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_| crate::r::tga_rpc::heartbeat_task())
 }
 
 fn spawn_gpu_completion_reaper(spawner: Spawner) -> SpawnAttempt {
@@ -1367,7 +1380,7 @@ const NET_ANY_CONFIGURED_AND_ROOT_READY: u32 =
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 73
+const TASK_COUNT: usize = 76
     + cfg!(feature = "trueos_h264_encode_stream") as usize
     + cfg!(feature = "trueos_lumen") as usize
     + 2 * cfg!(feature = "trueos_ttstt") as usize;
@@ -1590,6 +1603,9 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &FTP_SERVER_STARTED,
         spawn_ftp_server,
     ),
+    TaskSpec::enabled("tga", 0, &TGA_TASK_STARTED, spawn_tga_task),
+    TaskSpec::enabled("tga-rpc", 0, &TGA_RPC_SERVICE_STARTED, spawn_tga_rpc_service),
+    TaskSpec::enabled("tga-rpc-heartbeat", 0, &TGA_RPC_HEARTBEAT_STARTED, spawn_tga_rpc_heartbeat),
     TaskSpec::enabled_gated(
         "gpu-completion-reaper",
         0,

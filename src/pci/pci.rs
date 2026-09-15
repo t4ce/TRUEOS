@@ -1149,3 +1149,26 @@ unsafe fn inl(port: u16) -> u32 {
     asm!("in eax, dx", in("dx") port, out("eax") val, options(nomem, nostack, preserves_flags));
     val
 }
+
+/// Publish a freshly probed endpoint without replacing the rest of the inventory.
+pub(crate) fn publish_discovered_device(device: PciDevice) {
+    let mut devices = DEVICES.lock();
+    if let Some(old) = devices.iter_mut().find(|old| {
+        old.bus == device.bus && old.slot == device.slot && old.function == device.function
+    }) {
+        *old = device;
+    } else if devices.push(device).is_err() {
+        crate::log_warn!("pci: discovery inventory full\n");
+    }
+}
+
+/// Retire only the matching endpoint; unrelated inventory entries are preserved.
+pub(crate) fn forget_discovered_device(bus: u8, slot: u8, function: u8, vendor: u16, device: u16) {
+    DEVICES.lock().retain(|old| {
+        !(old.bus == bus
+            && old.slot == slot
+            && old.function == function
+            && old.vendor == vendor
+            && old.device == device)
+    });
+}

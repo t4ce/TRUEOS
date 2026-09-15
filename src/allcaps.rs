@@ -37,6 +37,7 @@ pub mod cpu_task_pool {
 }
 
 pub mod probes {
+    pub const TGA_PCI_CLAIM_ENABLED: bool = true;
     pub const MIO_BOOT_PROBE: bool = false;
     pub const UNIX_FD_PROBE: bool = false;
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]

@@ -1,3 +1,4 @@
+pub(crate) mod cam;
 use alloc::string::String as AllocString;
 
 pub(crate) mod aud;

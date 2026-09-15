@@ -21,6 +21,7 @@ pub mod static_map;
 pub mod static_slots;
 pub mod stream;
 pub mod sync;
+pub mod tga_rpc;
 pub mod time;
 pub mod ui_cursor;
 pub mod ui_surface;
