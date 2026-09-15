@@ -785,6 +785,13 @@ unsafe extern "C" {
         window_id: u32,
         out: *mut TrueosKeyboardOutputEvent,
     ) -> i32;
+    /// Open an owner-scoped UI4 connection; zero indicates failure.
+    pub fn trueos_cabi_ui4_display_open_v1() -> u64;
+    /// Retain/release a live connection. Return zero on success, negative on error.
+    pub fn trueos_cabi_ui4_display_retain_v1(connection: u64) -> i32;
+    pub fn trueos_cabi_ui4_display_close_v1(connection: u64) -> i32;
+    /// Validate that the live connection and scene window belong to the caller.
+    pub fn trueos_cabi_ui4_display_validate_window_v1(connection: u64, window: u32) -> i32;
     pub fn trueos_cabi_ui4_scene_window_state_get_v1(
         window_id: u32,
         out: *mut TrueosUi4WindowStateV1,

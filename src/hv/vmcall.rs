@@ -236,6 +236,11 @@ pub const OP_BP_SHELL2_FRONTEND_SUBMIT_INPUT_V1: u32 = 0x10F;
 pub const OP_BP_SHELL2_FRONTEND_DETACH_V1: u32 = 0x110;
 pub const OP_BP_UI4_WINDOW_STATE_V1: u32 = 0x20A;
 pub const OP_BP_UI4_WINDOW_TITLE_V1: u32 = 0x20B;
+pub const OP_BP_UI4_DISPLAY_OPEN_V1: u32 = 0x20C;
+pub const OP_BP_UI4_DISPLAY_RETAIN_V1: u32 = 0x20D;
+pub const OP_BP_UI4_DISPLAY_CLOSE_V1: u32 = 0x20E;
+pub const OP_BP_UI4_DISPLAY_VALIDATE_WINDOW_V1: u32 = 0x20F;
+
 pub const OP_BP_UI4_SCENE_KEYBOARD_EVENT_TAKE_V1: u32 = 0x209;
 pub const OP_BP_UI4_SCENE_KEYBOARD_EVENT_TAKE: u32 = 0x111; // arg0 window -> rc + routed KeyboardOutputEvent payload
 pub const OP_BP_SPIRIT_TEXT_PRESENT_SILENT: u32 = 0x112; // arg0 turn,payload display-safe UTF-8 -> rc
@@ -2939,6 +2944,30 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             } else {
                 write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
             }
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_DISPLAY_OPEN_V1
+        | OP_BP_UI4_DISPLAY_RETAIN_V1
+        | OP_BP_UI4_DISPLAY_CLOSE_V1
+        | OP_BP_UI4_DISPLAY_VALIDATE_WINDOW_V1 => {
+            use crate::ui4::blueprint_text::display_api::*;
+            if req_len != 0
+                || (op == OP_BP_UI4_DISPLAY_OPEN_V1 && (arg0 != 0 || arg1 != 0))
+                || (op != OP_BP_UI4_DISPLAY_VALIDATE_WINDOW_V1 && arg1 != 0)
+                || arg1 > u32::MAX as u64
+            {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            }
+            let result = match op {
+                OP_BP_UI4_DISPLAY_OPEN_V1 => trueos_cabi_ui4_display_open_v1(),
+                OP_BP_UI4_DISPLAY_RETAIN_V1 => {
+                    trueos_cabi_ui4_display_retain_v1(arg0) as i64 as u64
+                }
+                OP_BP_UI4_DISPLAY_CLOSE_V1 => trueos_cabi_ui4_display_close_v1(arg0) as i64 as u64,
+                _ => trueos_cabi_ui4_display_validate_window_v1(arg0, arg1 as u32) as i64 as u64,
+            };
+            write_response(vm_id, seq, STATUS_OK, result, 0);
             DispatchOutcome::Resume
         }
         OP_BP_UI4_WINDOW_TITLE_V1 => {

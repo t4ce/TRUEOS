@@ -18,7 +18,12 @@ pub(super) struct DisplayRegistry<O, const N: usize> {
 
 impl<O: Copy + Eq, const N: usize> DisplayRegistry<O, N> {
     pub(super) const fn new() -> Self {
-        Self { slots: [Slot { generation: 0, connection: None }; N] }
+        Self {
+            slots: [Slot {
+                generation: 0,
+                connection: None,
+            }; N],
+        }
     }
 
     pub(super) fn open(&mut self, owner: O) -> Option<u64> {
@@ -30,10 +35,16 @@ impl<O: Copy + Eq, const N: usize> DisplayRegistry<O, N> {
                 return Some((u64::from(slot.generation) << 32) | (index as u64 + 1));
             }
         }
-        let (index, slot) = self.slots.iter_mut().enumerate()
+        let (index, slot) = self
+            .slots
+            .iter_mut()
+            .enumerate()
             .find(|(_, slot)| slot.connection.is_none() && slot.generation != u32::MAX)?;
         slot.generation += 1;
-        slot.connection = Some(Connection { owner, references: 1 });
+        slot.connection = Some(Connection {
+            owner,
+            references: 1,
+        });
         Some((u64::from(slot.generation) << 32) | (index as u64 + 1))
     }
 
@@ -51,23 +62,37 @@ impl<O: Copy + Eq, const N: usize> DisplayRegistry<O, N> {
     }
 
     pub(super) fn retain(&mut self, owner: O, token: u64) -> bool {
-        let Some(connection) = self.slot_mut(owner, token).and_then(|slot| slot.connection.as_mut()) else { return false; };
-        let Some(references) = connection.references.checked_add(1) else { return false; };
+        let Some(connection) = self
+            .slot_mut(owner, token)
+            .and_then(|slot| slot.connection.as_mut())
+        else {
+            return false;
+        };
+        let Some(references) = connection.references.checked_add(1) else {
+            return false;
+        };
         connection.references = references;
         true
     }
 
     pub(super) fn close(&mut self, owner: O, token: u64) -> bool {
-        let Some(slot) = self.slot_mut(owner, token) else { return false; };
+        let Some(slot) = self.slot_mut(owner, token) else {
+            return false;
+        };
         let connection = slot.connection.as_mut().expect("validated connection");
         connection.references -= 1;
-        if connection.references == 0 { slot.connection = None; }
+        if connection.references == 0 {
+            slot.connection = None;
+        }
         true
     }
 
     pub(super) fn release_owner(&mut self, owner: O) {
         for slot in &mut self.slots {
-            if slot.connection.is_some_and(|connection| connection.owner == owner) {
+            if slot
+                .connection
+                .is_some_and(|connection| connection.owner == owner)
+            {
                 slot.connection = None;
             }
         }

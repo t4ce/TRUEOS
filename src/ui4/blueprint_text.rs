@@ -6,6 +6,8 @@
 //! producer was the first consumer; shaded scene producers share the same
 //! coherent UI4 frame lifecycle.
 
+pub(crate) mod display_api;
+mod display_registry;
 mod window_api;
 pub use window_api::TrueosUi4WindowStateV1;
 
@@ -1058,6 +1060,7 @@ static QUARANTINED_SURFACES: Mutex<Vec<BlueprintSceneSurface>> = Mutex::new(Vec:
 /// The caller owns the application lifecycle decision. UI4 only applies the
 /// owner-scoped resource revocation and does not inspect VM state.
 pub(crate) fn release_owner_resources(owner: WindowOwner) -> usize {
+    display_api::release_owner(owner);
     let owned = {
         let mut surfaces = SURFACES.lock();
         let mut owned = Vec::new();
