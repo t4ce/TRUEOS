@@ -504,6 +504,8 @@ impl InputBroker {
     }
 
     fn release_owner(&mut self, owner: WindowOwner) -> usize {
+        self.physical_keys
+            .retain(|(held_owner, _)| *held_owner != owner);
         let mut released = 0usize;
         for route in &mut self.cursors {
             let owned_capture = route.capture.is_some_and(|target| target.owner == owner);
@@ -1266,6 +1268,8 @@ impl InputBroker {
         if event.kind != KEYBOARD_OUTPUT_KIND_PHYSICAL {
             return;
         }
+        self.physical_keys
+            .retain(|(owner, held)| super::window_state(*owner, held.window).is_ok());
         let source = KeyboardSource::from(event);
         let existing = self.physical_keys.iter().position(|(_, held)| {
             KeyboardSource::from(held.event) == source && held.event.key_code == event.key_code
@@ -1274,8 +1278,8 @@ impl InputBroker {
             if let Some(index) = existing {
                 let (owner, mut held) = self.physical_keys.remove(index);
                 held.event = event;
-                if window_snapshot_for_target(WindowTarget { owner, window: held.window }).is_some() {
-                    enqueue_owner_event(owner, Ui4InputEvent::Keyboard(held));
+                if super::window_state(owner, held.window).is_ok() {
+                    enqueue_physical_owner_event(owner, held);
                 }
             }
             return;
@@ -1285,27 +1289,48 @@ impl InputBroker {
         }
         // Shortcut callbacks already ran on the legacy logical event. Reusing
         // their disposition avoids executing global actions twice per key.
-        let named = u8::try_from(event.key_code).ok()
+        let named = u8::try_from(event.key_code)
+            .ok()
             .and_then(crate::r::keyboard::hid_boot_keycode_to_named_key);
         if self.consumed_keys.iter().any(|consumed| {
-            KeyboardSource::from(*consumed) == source && consumed.device_seq == event.device_seq
+            KeyboardSource::from(*consumed) == source
+                && consumed.device_seq == event.device_seq
                 && (named == Some(consumed.key_code)
                     || (event.codepoint != 0 && consumed.codepoint == event.codepoint))
         }) {
             return;
         }
         let (combo_id, virtual_keyboard) = keyboard_hut_metadata(&event);
-        let Some(index) = self.keyboard_route_index(&event, combo_id, true) else { return; };
+        let Some(index) = self.keyboard_route_index(&event, combo_id, true) else {
+            return;
+        };
         let route_source = self.cursors[index].source;
-        let Some(key) = super::selected_frame_for_source(route_source) else { return; };
-        let Some(window) = window_snapshot_for_target(WindowTarget { owner: key.owner, window: key.window }) else { return; };
-        if !window.interaction.receives_input { return; }
-        let routed = Ui4KeyboardEvent { source: route_source, window: key.window, event, combo_id, virtual_keyboard };
+        let Some(key) = super::selected_frame_for_source(route_source) else {
+            return;
+        };
+        let Some(window) = window_snapshot_for_target(WindowTarget {
+            owner: key.owner,
+            window: key.window,
+        }) else {
+            return;
+        };
+        if !window.interaction.receives_input {
+            return;
+        }
+        let routed = Ui4KeyboardEvent {
+            source: route_source,
+            window: key.window,
+            event,
+            combo_id,
+            virtual_keyboard,
+        };
         // Retain the press destination: focus changes must never deliver its
         // release to a different application or leave the old one holding it.
-        if self.physical_keys.push((key.owner, routed)).is_err() { return; }
+        if self.physical_keys.push((key.owner, routed)).is_err() {
+            return;
+        }
         self.cursors[index].keyboard_source = Some(source);
-        enqueue_owner_event(key.owner, Ui4InputEvent::Keyboard(routed));
+        enqueue_physical_owner_event(key.owner, routed);
     }
 
     fn keyboard_route_index(
@@ -1476,7 +1501,8 @@ impl InputBroker {
         }
         loop {
             let (next, dropped, wrote) = crate::r::keyboard::read_physical_events_since(
-                self.physical_read_seq, &mut keyboard_events,
+                self.physical_read_seq,
+                &mut keyboard_events,
             );
             self.physical_read_seq = next;
             if dropped != 0 {
@@ -1485,13 +1511,16 @@ impl InputBroker {
                     held.event.flags = crate::r::keyboard::KEYBOARD_OUTPUT_FLAG_SYNTHETIC;
                     held.event.codepoint = 0;
                     held.event.utf8_len = 0;
-                    enqueue_owner_event(owner, Ui4InputEvent::Keyboard(held));
+                    held.event.modifiers = 0;
+                    enqueue_physical_owner_event(owner, held);
                 }
             }
             for event in keyboard_events.iter().take(wrote).copied() {
                 self.process_physical_keyboard(event);
             }
-            if wrote < keyboard_events.len() { break; }
+            if wrote < keyboard_events.len() {
+                break;
+            }
         }
         self.consumed_keys.clear();
         cursor_activity
@@ -1850,6 +1879,9 @@ pub(crate) fn show_context_menu(
 
 pub(super) fn release_owner(owner: WindowOwner) -> (usize, usize) {
     let routes = INPUT_BROKER.lock().release_owner(owner);
+    PHYSICAL_OWNER_QUEUES
+        .lock()
+        .retain(|queue| queue.owner != owner);
     let mut queued_events = {
         let mut queues = OWNER_QUEUES.lock();
         if let Some(index) = queues.iter().position(|queue| queue.owner == owner) {
@@ -2026,6 +2058,49 @@ fn enqueue_pan_event(
             vcursor,
         }),
     );
+}
+
+struct PhysicalOwnerQueue {
+    owner: WindowOwner,
+    events: Vec<Ui4KeyboardEvent, MAX_OWNER_EVENTS>,
+    reset: bool,
+}
+static PHYSICAL_OWNER_QUEUES: Mutex<Vec<PhysicalOwnerQueue, MAX_OWNER_QUEUES>> =
+    Mutex::new(Vec::new());
+
+fn enqueue_physical_owner_event(owner: WindowOwner, event: Ui4KeyboardEvent) {
+    let mut queues = PHYSICAL_OWNER_QUEUES.lock();
+    let index = if let Some(index) = queues.iter().position(|queue| queue.owner == owner) {
+        index
+    } else {
+        if queues
+            .push(PhysicalOwnerQueue {
+                owner,
+                events: Vec::new(),
+                reset: false,
+            })
+            .is_err()
+        {
+            return;
+        }
+        queues.len() - 1
+    };
+    let queue = &mut queues[index];
+    if queue.events.is_full() {
+        queue.events.clear();
+        queue.reset = true;
+    }
+    let _ = queue.events.push(event);
+}
+
+pub(super) fn take_physical_owner_events(
+    owner: WindowOwner,
+) -> (bool, Vec<Ui4KeyboardEvent, MAX_OWNER_EVENTS>) {
+    let mut queues = PHYSICAL_OWNER_QUEUES.lock();
+    let Some(queue) = queues.iter_mut().find(|queue| queue.owner == owner) else {
+        return (false, Vec::new());
+    };
+    (core::mem::take(&mut queue.reset), core::mem::take(&mut queue.events))
 }
 
 fn enqueue_owner_event(owner: WindowOwner, event: Ui4InputEvent) {

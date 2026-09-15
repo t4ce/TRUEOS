@@ -2908,35 +2908,79 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             DispatchOutcome::Resume
         }
         OP_BP_UI4_WINDOW_STATE_V1 => {
-            use crate::ui4::blueprint_text::{TrueosUi4WindowStateV1, trueos_cabi_ui4_scene_window_state_get_v1, trueos_cabi_ui4_scene_window_state_set_v1};
-            if arg0 > u32::MAX as u64 { write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0); return DispatchOutcome::Resume; }
+            use crate::ui4::blueprint_text::{
+                TrueosUi4WindowStateV1, trueos_cabi_ui4_scene_window_state_get_v1,
+                trueos_cabi_ui4_scene_window_state_set_v1,
+            };
+            if arg0 > u32::MAX as u64 {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            }
             if arg1 == 0 && req_len == 0 {
                 let mut state = TrueosUi4WindowStateV1::default();
-                let rc = unsafe { trueos_cabi_ui4_scene_window_state_get_v1(arg0 as u32, &mut state) };
-                if rc == 0 { write_record_response(vm_id, seq, 0, &state); }
-                else { write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0); }
-            } else if arg1 == 1 && req_len as usize == core::mem::size_of::<TrueosUi4WindowStateV1>() {
-                let Some(payload) = request_payload(vm_id, req_len) else { write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0); return DispatchOutcome::Resume; };
-                let state: TrueosUi4WindowStateV1 = unsafe { core::ptr::read_unaligned(payload.as_ptr().cast()) };
+                let rc =
+                    unsafe { trueos_cabi_ui4_scene_window_state_get_v1(arg0 as u32, &mut state) };
+                if rc == 0 {
+                    write_record_response(vm_id, seq, 0, &state);
+                } else {
+                    write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+                }
+            } else if arg1 == 1
+                && req_len as usize == core::mem::size_of::<TrueosUi4WindowStateV1>()
+            {
+                let Some(payload) = request_payload(vm_id, req_len) else {
+                    write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                    return DispatchOutcome::Resume;
+                };
+                let state: TrueosUi4WindowStateV1 =
+                    unsafe { core::ptr::read_unaligned(payload.as_ptr().cast()) };
                 let rc = unsafe { trueos_cabi_ui4_scene_window_state_set_v1(arg0 as u32, &state) };
                 write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
-            } else { write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0); }
+            } else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+            }
             DispatchOutcome::Resume
         }
         OP_BP_UI4_WINDOW_TITLE_V1 => {
-            use crate::ui4::blueprint_text::{trueos_cabi_ui4_scene_window_title_get_v1, trueos_cabi_ui4_scene_window_title_set_v1};
+            use crate::ui4::blueprint_text::{
+                trueos_cabi_ui4_scene_window_title_get_v1,
+                trueos_cabi_ui4_scene_window_title_set_v1,
+            };
             const MAX_TITLE: usize = crate::ui4::MAX_WINDOW_TITLE_BYTES;
-            if arg0 > u32::MAX as u64 { write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0); return DispatchOutcome::Resume; }
+            if arg0 > u32::MAX as u64 {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            }
             if arg1 == 0 && req_len == 0 {
                 let mut title = [0u8; MAX_TITLE];
-                let len = unsafe { trueos_cabi_ui4_scene_window_title_get_v1(arg0 as u32, title.as_mut_ptr(), title.len()) };
-                if len >= 0 { write_record_slice_response(vm_id, seq, len as u64, &title[..len as usize]); }
-                else { write_response(vm_id, seq, STATUS_OK, (len as i64) as u64, 0); }
+                let len = unsafe {
+                    trueos_cabi_ui4_scene_window_title_get_v1(
+                        arg0 as u32,
+                        title.as_mut_ptr(),
+                        title.len(),
+                    )
+                };
+                if len >= 0 {
+                    write_record_slice_response(vm_id, seq, len as u64, &title[..len as usize]);
+                } else {
+                    write_response(vm_id, seq, STATUS_OK, (len as i64) as u64, 0);
+                }
             } else if arg1 == 1 && req_len as usize <= MAX_TITLE {
-                let Some(payload) = request_payload(vm_id, req_len) else { write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0); return DispatchOutcome::Resume; };
-                let rc = unsafe { trueos_cabi_ui4_scene_window_title_set_v1(arg0 as u32, payload.as_ptr(), payload.len()) };
+                let Some(payload) = request_payload(vm_id, req_len) else {
+                    write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                    return DispatchOutcome::Resume;
+                };
+                let rc = unsafe {
+                    trueos_cabi_ui4_scene_window_title_set_v1(
+                        arg0 as u32,
+                        payload.as_ptr(),
+                        payload.len(),
+                    )
+                };
                 write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
-            } else { write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0); }
+            } else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+            }
             DispatchOutcome::Resume
         }
         OP_BP_UI4_SCENE_KEYBOARD_EVENT_TAKE_V1 => {

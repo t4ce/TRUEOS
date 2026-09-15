@@ -785,10 +785,24 @@ unsafe extern "C" {
         window_id: u32,
         out: *mut TrueosKeyboardOutputEvent,
     ) -> i32;
-    pub fn trueos_cabi_ui4_scene_window_state_get_v1(window_id: u32, out: *mut TrueosUi4WindowStateV1) -> i32;
-    pub fn trueos_cabi_ui4_scene_window_state_set_v1(window_id: u32, state: *const TrueosUi4WindowStateV1) -> i32;
-    pub fn trueos_cabi_ui4_scene_window_title_get_v1(window_id: u32, out: *mut u8, out_cap: usize) -> isize;
-    pub fn trueos_cabi_ui4_scene_window_title_set_v1(window_id: u32, bytes: *const u8, len: usize) -> i32;
+    pub fn trueos_cabi_ui4_scene_window_state_get_v1(
+        window_id: u32,
+        out: *mut TrueosUi4WindowStateV1,
+    ) -> i32;
+    pub fn trueos_cabi_ui4_scene_window_state_set_v1(
+        window_id: u32,
+        state: *const TrueosUi4WindowStateV1,
+    ) -> i32;
+    pub fn trueos_cabi_ui4_scene_window_title_get_v1(
+        window_id: u32,
+        out: *mut u8,
+        out_cap: usize,
+    ) -> isize;
+    pub fn trueos_cabi_ui4_scene_window_title_set_v1(
+        window_id: u32,
+        bytes: *const u8,
+        len: usize,
+    ) -> i32;
     pub fn trueos_cabi_ui4_scene_keyboard_event_take_v1(
         window_id: u32,
         out: *mut TrueosKeyboardOutputEvent,

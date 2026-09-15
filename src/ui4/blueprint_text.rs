@@ -1530,8 +1530,8 @@ fn open_blueprint_surface(
                 taken_resize_event: None,
                 pending_keyboard_events: VecDeque::new(),
                 pending_keyboard_burst: VecDeque::new(),
-        pending_physical_keyboard: VecDeque::new(),
-        pending_physical_burst: VecDeque::new(),
+                pending_physical_keyboard: VecDeque::new(),
+                pending_physical_burst: VecDeque::new(),
                 retained_text_layers: Vec::new(),
                 retained_text_cursor: 0,
                 retained_text_rendered: false,
@@ -2306,51 +2306,120 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_keyboard_event_take(
     0
 }
 
-pub unsafe extern "C" fn trueos_cabi_ui4_scene_window_state_get_v1(window_id: u32, out: *mut TrueosUi4WindowStateV1) -> i32 {
-    if out.is_null() { return ERROR_INVALID; }
+pub unsafe extern "C" fn trueos_cabi_ui4_scene_window_state_get_v1(
+    window_id: u32,
+    out: *mut TrueosUi4WindowStateV1,
+) -> i32 {
+    if out.is_null() {
+        return ERROR_INVALID;
+    }
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
         let mut bytes = [0u8; core::mem::size_of::<TrueosUi4WindowStateV1>()];
-        let (status, rc) = trueos_vm::vmcall::call_with_payload(trueos_vm::vmcall::OP_BP_UI4_WINDOW_STATE_V1, window_id as u64, 0, &[], &mut bytes);
-        if status != trueos_vm::vmcall::STATUS_OK { return ERROR_UI4; }
-        if rc != 0 { return rc as i64 as i32; }
+        let (status, rc) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_UI4_WINDOW_STATE_V1,
+            window_id as u64,
+            0,
+            &[],
+            &mut bytes,
+        );
+        if status != trueos_vm::vmcall::STATUS_OK {
+            return ERROR_UI4;
+        }
+        if rc != 0 {
+            return rc as i64 as i32;
+        }
         unsafe { out.write(core::ptr::read_unaligned(bytes.as_ptr().cast())) };
         return 0;
     }
     unsafe { window_api::get_state(window_id, out) }
 }
 
-pub unsafe extern "C" fn trueos_cabi_ui4_scene_window_state_set_v1(window_id: u32, state: *const TrueosUi4WindowStateV1) -> i32 {
-    if state.is_null() { return ERROR_INVALID; }
+pub unsafe extern "C" fn trueos_cabi_ui4_scene_window_state_set_v1(
+    window_id: u32,
+    state: *const TrueosUi4WindowStateV1,
+) -> i32 {
+    if state.is_null() {
+        return ERROR_INVALID;
+    }
     let state = unsafe { state.read() };
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
-        let bytes = unsafe { core::slice::from_raw_parts((&state as *const TrueosUi4WindowStateV1).cast::<u8>(), core::mem::size_of::<TrueosUi4WindowStateV1>()) };
-        let (status, rc) = trueos_vm::vmcall::call_with_payload(trueos_vm::vmcall::OP_BP_UI4_WINDOW_STATE_V1, window_id as u64, 1, bytes, &mut []);
-        return if status == trueos_vm::vmcall::STATUS_OK { rc as i64 as i32 } else { ERROR_UI4 };
+        let bytes = unsafe {
+            core::slice::from_raw_parts(
+                (&state as *const TrueosUi4WindowStateV1).cast::<u8>(),
+                core::mem::size_of::<TrueosUi4WindowStateV1>(),
+            )
+        };
+        let (status, rc) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_UI4_WINDOW_STATE_V1,
+            window_id as u64,
+            1,
+            bytes,
+            &mut [],
+        );
+        return if status == trueos_vm::vmcall::STATUS_OK {
+            rc as i64 as i32
+        } else {
+            ERROR_UI4
+        };
     }
     window_api::set_state(window_id, &state)
 }
 
-pub unsafe extern "C" fn trueos_cabi_ui4_scene_window_title_get_v1(window_id: u32, out: *mut u8, out_cap: usize) -> isize {
-    if out.is_null() || out_cap < super::MAX_WINDOW_TITLE_BYTES { return ERROR_INVALID as isize; }
+pub unsafe extern "C" fn trueos_cabi_ui4_scene_window_title_get_v1(
+    window_id: u32,
+    out: *mut u8,
+    out_cap: usize,
+) -> isize {
+    if out.is_null() || out_cap < super::MAX_WINDOW_TITLE_BYTES {
+        return ERROR_INVALID as isize;
+    }
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
         let mut bytes = [0u8; super::MAX_WINDOW_TITLE_BYTES];
-        let (status, rc) = trueos_vm::vmcall::call_with_payload(trueos_vm::vmcall::OP_BP_UI4_WINDOW_TITLE_V1, window_id as u64, 0, &[], &mut bytes);
-        if status != trueos_vm::vmcall::STATUS_OK { return ERROR_UI4 as isize; }
+        let (status, rc) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_UI4_WINDOW_TITLE_V1,
+            window_id as u64,
+            0,
+            &[],
+            &mut bytes,
+        );
+        if status != trueos_vm::vmcall::STATUS_OK {
+            return ERROR_UI4 as isize;
+        }
         let len = rc as i64 as isize;
-        if len < 0 { return len; }
-        if len as usize > bytes.len() { return ERROR_UI4 as isize; }
+        if len < 0 {
+            return len;
+        }
+        if len as usize > bytes.len() {
+            return ERROR_UI4 as isize;
+        }
         unsafe { core::ptr::copy_nonoverlapping(bytes.as_ptr(), out, len as usize) };
         return len;
     }
     unsafe { window_api::get_title(window_id, out, out_cap) }
 }
 
-pub unsafe extern "C" fn trueos_cabi_ui4_scene_window_title_set_v1(window_id: u32, bytes: *const u8, len: usize) -> i32 {
-    if bytes.is_null() || len > super::MAX_WINDOW_TITLE_BYTES { return ERROR_INVALID; }
+pub unsafe extern "C" fn trueos_cabi_ui4_scene_window_title_set_v1(
+    window_id: u32,
+    bytes: *const u8,
+    len: usize,
+) -> i32 {
+    if bytes.is_null() || len > super::MAX_WINDOW_TITLE_BYTES {
+        return ERROR_INVALID;
+    }
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
         let bytes = unsafe { core::slice::from_raw_parts(bytes, len) };
-        let (status, rc) = trueos_vm::vmcall::call_with_payload(trueos_vm::vmcall::OP_BP_UI4_WINDOW_TITLE_V1, window_id as u64, 1, bytes, &mut []);
-        return if status == trueos_vm::vmcall::STATUS_OK { rc as i64 as i32 } else { ERROR_UI4 };
+        let (status, rc) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_UI4_WINDOW_TITLE_V1,
+            window_id as u64,
+            1,
+            bytes,
+            &mut [],
+        );
+        return if status == trueos_vm::vmcall::STATUS_OK {
+            rc as i64 as i32
+        } else {
+            ERROR_UI4
+        };
     }
     unsafe { window_api::set_title(window_id, bytes, len) }
 }
@@ -2363,16 +2432,26 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_keyboard_event_take_v1(
     window_id: u32,
     out: *mut crate::r::keyboard::TrueosKeyboardOutputEvent,
 ) -> i32 {
-    if out.is_null() { return ERROR_INVALID; }
+    if out.is_null() {
+        return ERROR_INVALID;
+    }
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
         return unsafe { guest_transport::guest_keyboard_event_take_v1(window_id, out) };
     }
-    let Some(owner) = blueprint_owner() else { return ERROR_CONTEXT; };
-    if surface_mut(&mut SURFACES.lock(), owner, window_id).is_none() { return ERROR_NOT_FOUND; }
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT;
+    };
+    if surface_mut(&mut SURFACES.lock(), owner, window_id).is_none() {
+        return ERROR_NOT_FOUND;
+    }
     route_owner_input_events(owner);
     let mut surfaces = SURFACES.lock();
-    let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else { return ERROR_NOT_FOUND; };
-    let Some(event) = surface.pending_physical_keyboard.pop_front() else { return 1; };
+    let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+        return ERROR_NOT_FOUND;
+    };
+    let Some(event) = surface.pending_physical_keyboard.pop_front() else {
+        return 1;
+    };
     // SAFETY: the caller supplies one writable ABI record, checked non-null above.
     unsafe { out.write(event) };
     0
@@ -2647,11 +2726,28 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_input_routes(
 /// remains available separately through the input broker snapshot contract.
 fn route_owner_input_events(owner: WindowOwner) {
     let input_events = take_owner_input_events(owner);
-    if input_events.is_empty() {
+    let (reset, physical) = super::input_broker::take_physical_owner_events(owner);
+    if input_events.is_empty() && physical.is_empty() && !reset {
         return;
     }
     let mut surfaces = SURFACES.lock();
-    for input in input_events {
+    if reset {
+        for surface in surfaces.iter_mut().filter(|surface| surface.owner == owner) {
+            surface.pending_physical_keyboard.clear();
+            surface.pending_physical_burst.clear();
+            surface.pending_physical_keyboard.push_back(
+                crate::r::keyboard::TrueosKeyboardOutputEvent {
+                    kind: crate::r::keyboard::KEYBOARD_OUTPUT_KIND_DEVICE_LOST,
+                    flags: crate::r::keyboard::KEYBOARD_OUTPUT_FLAG_DEVICE_LOST,
+                    ..Default::default()
+                },
+            );
+        }
+    }
+    for input in input_events
+        .into_iter()
+        .chain(physical.into_iter().map(Ui4InputEvent::Keyboard))
+    {
         match input {
             Ui4InputEvent::Pointer(event) => {
                 let Some(surface) = surface_mut(&mut surfaces, owner, event.window.raw()) else {
@@ -2734,7 +2830,10 @@ fn route_owner_input_events(owner: WindowOwner) {
                     continue;
                 };
                 if event.event.kind == crate::r::keyboard::KEYBOARD_OUTPUT_KIND_PHYSICAL {
-                    enqueue_physical_keyboard_event(&mut surface.pending_physical_keyboard, event.event);
+                    enqueue_physical_keyboard_event(
+                        &mut surface.pending_physical_keyboard,
+                        event.event,
+                    );
                     continue;
                 }
                 if event.event.flags & crate::r::keyboard::KEYBOARD_OUTPUT_FLAG_SYNTHETIC != 0 {
