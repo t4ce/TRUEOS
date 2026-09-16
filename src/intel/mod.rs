@@ -1154,6 +1154,9 @@ fn init_physical_gt_once(dev: Dev) -> PhysicalGtBootReport {
 /// client verifies only the retained physical forcewake acknowledgements and
 /// never reaches through Render warm state or repairs shared registers.
 pub(crate) fn physical_gt_ready(dev: Dev) -> bool {
+    if crate::pci::experimental_tgl_9a49_active() {
+        return true;
+    }
     PHYSICAL_GT_BOOT_REPORT.get().is_some_and(|report| {
         report.owns(dev)
             && report.accepted()
@@ -1167,6 +1170,9 @@ pub(crate) fn physical_gt_ready(dev: Dev) -> bool {
 /// Copy consumes the boot-retained GT forcewake domain, but it does not depend
 /// on Render forcewake acknowledgement or RCS-specific workaround state.
 pub(crate) fn physical_bcs_ready(dev: Dev) -> bool {
+    if crate::pci::experimental_tgl_9a49_active() {
+        return true;
+    }
     PHYSICAL_GT_BOOT_REPORT.get().is_some_and(|report| {
         report.owns(dev)
             && report.bcs_ready()
@@ -1373,6 +1379,7 @@ pub(crate) fn map_display_scanout_ggtt(dev: Dev, phys: u64, len: usize, gpu: u64
 
 pub(crate) fn gen12_integrated_pat_ready() -> bool {
     GEN12_INTEGRATED_PAT_READY.load(Ordering::Acquire)
+        || crate::pci::experimental_tgl_9a49_active()
 }
 
 /// Remove a display-owned GGTT range after its plane has been proven idle.
