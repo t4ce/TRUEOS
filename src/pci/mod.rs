@@ -33,6 +33,18 @@ fn exp_tgl_9a49_at_bdf(bus: u8, slot: u8, function: u8) -> bool {
     (identity as u16) == EXP_TGL_VENDOR_ID && ((identity >> 16) as u16) == EXP_TGL_DEVICE_ID
 }
 
+/// True only while the physical Tiger Lake GT2 compatibility target is present.
+///
+/// The enumerated inventory is deliberately aliased to ADL-S below, so probe the
+/// raw config dword at each published BDF instead of trusting the exported ID.
+pub(crate) fn experimental_tgl_9a49_active() -> bool {
+    pci::with_devices(|devices| {
+        devices
+            .iter()
+            .any(|dev| exp_tgl_9a49_at_bdf(dev.bus, dev.slot, dev.function))
+    })
+}
+
 /// Enumerate the physical inventory, then alias only the Tiger Lake GT2 test
 /// GPU to the exact ADL-S identity consumed by the current Intel stack.
 ///
