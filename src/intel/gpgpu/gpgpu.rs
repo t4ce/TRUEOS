@@ -52,6 +52,7 @@ include!("operations/helio_retained_transform.rs");
 include!("operations/worklists.rs");
 include!("artifacts/runtime.rs");
 include!("rcs/runtime.rs");
+include!("rcs/font_tessellation.rs");
 include!("rcs/worklists.rs");
 include!("rcs/two_d.rs");
 include!("rcs/effects.rs");

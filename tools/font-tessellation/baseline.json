@@ -1,0 +1,25 @@
+{
+  "schema": "trueos.font-hardware-tessellation-baseline/v1",
+  "captured_at": "2026-09-17",
+  "source": {
+    "trueos_commit": "22c3edd72c44fea650518998f6cf5bed6291b104",
+    "attachment_trueos_anchor": "6a89c94b442341f2ee4618fdc0df33dd44156c1b",
+    "cubes_commit": "6bd23b4b27def0a1bbba08cd4fcf144d3e75cd80",
+    "picasso_commit": "2d2a33b99426b2cbeb72d4b35c10d4762ea02fae"
+  },
+  "rebase_notes": [
+    "TRUEOS now carries generated_patch_cube contract 11; the attachment observed contract 8.",
+    "The font ABI remains independent of every cube contract.",
+    "No matching native font artifact or bare-metal result exists in this baseline."
+  ],
+  "measurements": {
+    "cold_fills": null,
+    "warm_rows": null,
+    "policy_bounds": null
+  },
+  "evidence": {
+    "host_contract": "not-run",
+    "native_capture": "not-run",
+    "bare_metal_render": "not-run"
+  }
+}

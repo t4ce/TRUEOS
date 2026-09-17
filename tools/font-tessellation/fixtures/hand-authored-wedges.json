@@ -1,0 +1,39 @@
+{
+  "schema": "trueos.font-tessellation-fixture/v1",
+  "description": "Two identical opposite-oriented wedges cancel; a separate curved wedge remains covered.",
+  "target": { "width": 64, "height": 64 },
+  "patches": [
+    {
+      "p0": [8.0, 32.0],
+      "p1": [8.0, 8.0],
+      "p2": [40.0, 8.0],
+      "p3": [40.0, 32.0],
+      "anchor": [24.0, 44.0],
+      "contour_index": 0,
+      "flags": ["begin_contour", "end_contour"]
+    },
+    {
+      "p0": [40.0, 32.0],
+      "p1": [40.0, 8.0],
+      "p2": [8.0, 8.0],
+      "p3": [8.0, 32.0],
+      "anchor": [24.0, 44.0],
+      "contour_index": 1,
+      "flags": ["begin_contour", "end_contour", "reversed"]
+    },
+    {
+      "p0": [42.0, 48.0],
+      "p1": [45.0, 18.0],
+      "p2": [59.0, 18.0],
+      "p3": [60.0, 48.0],
+      "anchor": [51.0, 56.0],
+      "contour_index": 2,
+      "flags": ["begin_contour", "end_contour"]
+    }
+  ],
+  "expectations": {
+    "opposite_winding_pair_cancels": [0, 1],
+    "nonzero_coverage_patch": 2,
+    "adaptive_factor_order": [[2, 0]]
+  }
+}
