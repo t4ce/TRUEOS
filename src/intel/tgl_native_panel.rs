@@ -36,8 +36,8 @@ const FRAME_BYTES: usize = PITCH_BYTES as usize * HEIGHT as usize;
 // The desktop boot surface has only a 16 MiB slot. Do not enlarge its mapping
 // into a neighboring owner's range. This CPU-authored, never-GPU-written
 // probe uses a separate 64 MiB GGTT reservation and needs no EU edge guard.
-const SURFACE_GPU: u64 = 0xE000_0000;
-const SURFACE_GPU_CAPACITY: u64 = 0x0400_0000;
+pub(super) const SURFACE_GPU: u64 = 0xE000_0000;
+pub(super) const SURFACE_GPU_CAPACITY: u64 = 0x0400_0000;
 const GGTT_MMIO_END: usize = 0x0100_0000;
 const POLL_ITERS: usize = 2_000_000;
 const PIPE_SOURCE: u32 = ((WIDTH - 1) << 16) | (HEIGHT - 1);
@@ -88,6 +88,11 @@ pub(crate) fn is_target(dev: Dev) -> bool {
         && crate::pci::config_read_u32(dev.bus, dev.slot, dev.function, 0) == PHYSICAL_ID
         && crate::pci::config_read_u32(dev.bus, dev.slot, dev.function, 8) as u8
             == PHYSICAL_REVISION
+}
+
+/// Stable layout selection, published only after this native surface latches.
+pub(super) fn native_scanout_ready() -> bool {
+    SCANOUT_LATCHED.load(Ordering::Acquire)
 }
 
 pub(crate) fn spirit_resealed() -> bool {

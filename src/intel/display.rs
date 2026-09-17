@@ -17,6 +17,7 @@ use spin::Mutex;
 
 mod regs;
 pub(super) use self::regs::*;
+mod native_ui4;
 
 mod display_metrics;
 mod tgl_ui4_layout;
@@ -4628,7 +4629,7 @@ fn ensure_overlay_surface_for_pipe(
             height,
             pitch_bytes,
             byte_len,
-            OVERLAY_SWAP_GPU_STRIDE,
+            native_ui4::overlay_capacity(pipe),
         );
         return None;
     }
@@ -4790,7 +4791,7 @@ fn ensure_primary_swap_surface_for_pipe(
             height,
             pitch_bytes,
             byte_len,
-            PRIMARY_SWAP_GPU_STRIDE,
+            native_ui4::primary_swap_capacity(pipe),
         );
         return None;
     }
@@ -6118,7 +6119,7 @@ fn compose_premultiplied_rgba_tiles_into_primary_gpgpu(
     // Slot0 has exactly one legal compositor: the asynchronous layer kernel.
     // It builds a transparent premultiplied-RGBA stack in broker-z order; the
     // display plane then source-over blends that result with Pipe A.
-    if !asynchronous || surface.byte_len as u64 > COMPOSE_RCS_GPU_ALIAS_BYTES {
+    if !asynchronous || surface.byte_len as u64 > native_ui4::compose_capacity(surface.pipe, 0) {
         return GpgpuCompositionResult::Unavailable;
     }
     let Some(primary) = primary_surface_for_pipe(surface.pipe) else {
@@ -6145,7 +6146,7 @@ fn compose_premultiplied_rgba_tiles_into_primary_gpgpu(
     };
     let Some(base) = crate::intel::gpgpu::GpgpuRgba8Surface::new(
         primary.phys,
-        primary.gpu,
+        native_ui4::base_gpu(primary.pipe, primary.gpu),
         primary.byte_len,
         primary.width,
         primary.height,
@@ -6430,7 +6431,7 @@ fn compose_premultiplied_rgba_tiles_into_overlay_gpgpu(
     sparse_static_painter: bool,
     destination_fresh_transparent: bool,
 ) -> GpgpuCompositionResult {
-    if surface.byte_len as u64 > COMPOSE_RCS_GPU_ALIAS_BYTES
+    if surface.byte_len as u64 > native_ui4::compose_capacity(surface.pipe, surface.plane_slot)
         || (!asynchronous
             && (!UI4_GPGPU_MULTI_RUN_COMPOSITOR_ENABLED
                 || !crate::intel::gpgpu::sprite_quad_worklist_ready()))
