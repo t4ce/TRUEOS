@@ -81,6 +81,76 @@ pub(crate) struct TrianglePipeline {
 pub(crate) mod patch_cube;
 const _: () = assert!(patch_cube::CONTRACT_VERSION == 11);
 
+#[path = "../../crates/trueos-shader/generated_font_patch.rs"]
+pub(crate) mod font_patch;
+const _: () = assert!(font_patch::CONTRACT_VERSION == 1);
+const _: () = {
+    if font_patch::AVAILABLE {
+        assert!(font_patch::COMPILED_DEVICE_ID != 0);
+        assert!(!font_patch::VERTEX.is_empty());
+        assert!(!font_patch::TESS_CONTROL.is_empty());
+        assert!(!font_patch::TESS_EVAL.is_empty());
+        assert!(!font_patch::FRAGMENT.is_empty());
+        assert!(font_patch::HS_PACKET[0] == 0x781b0007);
+        assert!(font_patch::TE_PACKET[0] == 0x781c0003);
+        assert!(font_patch::DS_PACKET[0] == 0x781d0009);
+    }
+};
+
+pub(crate) fn font_patch_pipeline() -> Option<&'static TrianglePipeline> {
+    font_patch::AVAILABLE.then_some(&font_patch::PIPELINE)
+}
+
+pub(crate) fn font_patch_upload_layout(
+    after: usize,
+    capacity: usize,
+) -> Result<([usize; 2], usize), &'static str> {
+    if !font_patch::AVAILABLE {
+        return Err("font-tessellation-artifact-unavailable");
+    }
+    let hs = after.checked_add(63).ok_or("font-tess-code-align")? & !63;
+    let hs_bytes = font_patch::TESS_CONTROL
+        .len()
+        .checked_mul(4)
+        .ok_or("font-tess-code-size")?;
+    let hs_end = hs.checked_add(hs_bytes).ok_or("font-tess-code-size")?;
+    let ds = hs_end.checked_add(63).ok_or("font-tess-code-align")? & !63;
+    let ds_bytes = font_patch::TESS_EVAL
+        .len()
+        .checked_mul(4)
+        .ok_or("font-tess-code-size")?;
+    let end = ds.checked_add(ds_bytes).ok_or("font-tess-code-size")?;
+    let state = end.checked_add(4095).ok_or("font-tess-state-align")? & !4095;
+    if state.checked_add(4096).is_none_or(|limit| limit > capacity) {
+        return Err("font-tess-code-and-state-capacity");
+    }
+    Ok(([hs, ds], end))
+}
+
+/// Emit the font-specific quad-domain stages or a complete disable sequence.
+pub(crate) fn font_tessellation_stage_packets(
+    ksp: Option<[u32; 2]>,
+) -> Result<[u32; 25], &'static str> {
+    let mut words = [0; 25];
+    words[0] = 0x781b0007;
+    words[9] = 0x781c0003;
+    words[14] = 0x781d0009;
+    if let Some([hs, ds]) = ksp {
+        if !font_patch::AVAILABLE {
+            return Err("font-tessellation-artifact-unavailable");
+        }
+        if hs == 0 || ds == 0 || hs & 63 != 0 || ds & 63 != 0 {
+            return Err("font-tessellation-ksp-alignment");
+        }
+        words[..9].copy_from_slice(&font_patch::HS_PACKET);
+        words[9..14].copy_from_slice(&font_patch::TE_PACKET);
+        words[14..].copy_from_slice(&font_patch::DS_PACKET);
+        words[3] = hs;
+        words[15] = ds;
+    }
+    Ok(words)
+}
+
 pub(crate) fn patch_cube_upload_layout(
     after: usize,
     capacity: usize,
@@ -123,6 +193,10 @@ pub(crate) fn tessellation_stage_packets(ksp: Option<[u32; 2]>) -> Result<[u32; 
 #[cfg(test)]
 #[path = "patch_cube_tests.rs"]
 mod patch_cube_tests;
+
+#[cfg(test)]
+#[path = "font_patch_tests.rs"]
+mod font_patch_tests;
 
 #[path = "../../crates/trueos-shader/generated_adjacency_gs.rs"]
 mod generated_adjacency_gs;

@@ -7,11 +7,15 @@ fn upload_reserves_descriptor_page_after_native_code() {
     let after = gs.meta.kernel.code_offset_bytes as usize + gs.code.len() * 4;
     assert!(super::patch_cube_upload_layout(after, 16 * 1024).is_err());
     assert!(super::patch_cube_upload_layout(after, 24 * 1024).is_err());
-    assert!(super::patch_cube_upload_layout(after, 28 * 1024).is_err());
-    let ([hs, ds], end) = super::patch_cube_upload_layout(after, 32 * 1024).unwrap();
+    assert!(super::patch_cube_upload_layout(after, 32 * 1024).is_err());
+    // Contract 11 exactly fills the current eleven-page resident state slot.
+    let ([hs, ds], end) = super::patch_cube_upload_layout(after, 44 * 1024).unwrap();
     assert!(hs >= after && ds >= hs + TESS_CONTROL.len() * 4);
     assert_eq!((hs | ds) & 63, 0);
-    assert!(end + 4096 <= 32 * 1024);
+    let required = ((end + 4095) & !4095) + 4096;
+    assert!(required <= 44 * 1024);
+    assert!(super::patch_cube_upload_layout(after, required - 1).is_err());
+    assert!(super::patch_cube_upload_layout(after, required).is_ok());
     assert!(super::patch_cube_upload_layout(usize::MAX, usize::MAX).is_err());
 }
 
