@@ -1,0 +1,55 @@
+name: Prepare native TGL UI4 patch
+
+on:
+  push:
+    branches: ["exp/tgl-native-ui4"]
+    paths:
+      - ".github/workflows/tgl-native-ui4-prepare.yml"
+      - "tools/tgl_native_ui4_apply.py"
+      - "src/intel/display/tgl_ui4_layout.rs"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: tgl-native-ui4-prepare
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.repository == 't4ce/TRUEOS' && github.ref == 'refs/heads/exp/tgl-native-ui4'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: exp/tgl-native-ui4
+          fetch-depth: 1
+          sparse-checkout: |
+            src/intel/display.rs
+            src/intel/tgl_native_panel.rs
+            src/intel/display/tgl_ui4_layout.rs
+            src/r/ui_surface.rs
+            tools/tgl_native_ui4_apply.py
+          sparse-checkout-cone-mode: false
+      - name: Apply exact source edits
+        run: python3 tools/tgl_native_ui4_apply.py
+      - name: Check native address reservations
+        shell: bash
+        run: |
+          set -euo pipefail
+          printf '#[path = "%s/src/intel/display/tgl_ui4_layout.rs"]\nmod layout;\n' "$GITHUB_WORKSPACE" > /tmp/tgl-ui4-layout-tests.rs
+          rustc +stable --edition=2024 --test /tmp/tgl-ui4-layout-tests.rs -o /tmp/tgl-ui4-layout-tests
+          /tmp/tgl-ui4-layout-tests
+          git diff --check
+      - name: Commit only the two prepared Rust sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git branch --show-current)" = exp/tgl-native-ui4
+          git diff -- src/intel/display.rs src/intel/tgl_native_panel.rs
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/intel/display.rs src/intel/tgl_native_panel.rs
+          git commit -m 'intel: continue native TGL panel into UI4 with 4K-safe buffers'
+          git push origin HEAD:refs/heads/exp/tgl-native-ui4
