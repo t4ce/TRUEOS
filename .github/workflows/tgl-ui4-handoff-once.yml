@@ -1,0 +1,50 @@
+name: TGL UI4 handoff preparation (temporary)
+
+on:
+  push:
+    branches: ["exp/tgl-native-ui4-handoff"]
+    paths: ["tools/_apply_tgl_ui4_handoff.py"]
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    if: github.repository == 't4ce/TRUEOS' && github.ref == 'refs/heads/exp/tgl-native-ui4-handoff'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: exp/tgl-native-ui4-handoff
+          fetch-depth: 1
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /src/intel/mod.rs
+            /src/intel/tgl_native_panel.rs
+            /src/intel/display.rs
+            /src/intel/display/native_ui4.rs
+            /src/intel/gpgpu/rcs/constants.rs
+            /src/r/ui_surface.rs
+            /tools/test_tgl_ui4_handoff.py
+            /tools/_apply_tgl_ui4_handoff.py
+      - name: Apply exact-base edits and test the resulting source
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/_apply_tgl_ui4_handoff.py
+          python3 tools/test_tgl_ui4_handoff.py
+          for source in src/intel/mod.rs src/intel/tgl_native_panel.rs src/intel/display.rs src/intel/display/native_ui4.rs; do
+            rustfmt --edition 2024 --config skip_children=true --emit stdout "$source" >/dev/null
+          done
+          git diff --check
+      - name: Commit only the tested source changes to the experiment branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git branch --show-current)" = "exp/tgl-native-ui4-handoff"
+          git add src/intel/mod.rs src/intel/tgl_native_panel.rs src/intel/display.rs
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'Continue native Tiger Lake panel boot into UI4 and Spirit'
+          git push origin HEAD:refs/heads/exp/tgl-native-ui4-handoff
