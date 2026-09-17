@@ -262,7 +262,7 @@ unsafe fn active_mapper(offset: VirtAddr) -> Result<OffsetPageTable<'static>, Ma
     if table_ptr.is_null() {
         return Err(MapError::InvalidPointer);
     }
-    Ok(OffsetPageTable::new(&mut *table_ptr, offset))
+    Ok(unsafe { OffsetPageTable::from_phys_offset(&mut *table_ptr, offset) })
 }
 
 struct PageTableAllocator;
