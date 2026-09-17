@@ -21,6 +21,7 @@ pub(crate) mod ppgtt;
 pub(crate) mod render;
 pub(crate) mod shader;
 pub(crate) mod stats;
+mod tgl_native_panel;
 pub(crate) mod types;
 mod uc_fw;
 
@@ -289,11 +290,17 @@ pub fn init_once() {
         picasso_carrier_softcap,
         guc_ready as u8,
     );
-    self::display::log_bsp_display_metrics_probe(dev);
-    if DISPLAY_PLANE1_BOOT_DEMO_ENABLED {
-        self::display::init_primary_boot_surface(dev);
+    if self::tgl_native_panel::is_target(dev) {
+        // Native-panel-only cycle: no desktop DBUF/plane-stack takeover after
+        // this probe, even if firmware did not provide the expected route.
+        let _ = self::tgl_native_panel::init_once(dev);
     } else {
-        crate::log!("intel/display: plane1 boot demo disabled\n");
+        self::display::log_bsp_display_metrics_probe(dev);
+        if DISPLAY_PLANE1_BOOT_DEMO_ENABLED {
+            self::display::init_primary_boot_surface(dev);
+        } else {
+            crate::log!("intel/display: plane1 boot demo disabled\n");
+        }
     }
     crate::log!("intel/media: source warmup disabled trigger=trueosfs-root-mounted\n",);
 }
@@ -448,8 +455,8 @@ const TRANSIENT_GT_BOOST_MILLIS: u64 = 2_000;
 
 /// Ask for a short F12-equivalent boost for an interactive operation.
 ///
-/// This only enables the global mode when it was previously inactive.  A
-/// pre-existing manual F12 selection remains entirely untouched.  The timer
+/// This only enables the global mode when it was previously inactive. A
+/// pre-existing manual F12 selection remains entirely untouched. The timer
 /// carries the generation created by this call, so it cannot switch off a
 /// later manual selection or a later transient lease.
 pub(crate) fn begin_transient_global_gt_boost(spawner: &Spawner, origin: &'static str) {
@@ -690,6 +697,11 @@ pub fn active_scanout_dimensions() -> Option<(u32, u32)> {
 }
 
 pub(crate) fn complete_scanout_pipeline_slot() -> Option<usize> {
+    // Temporary Spirit startup reseal for the native-panel-only test. Do not
+    // confuse its latched primary surface with a complete UI4/cursor lease.
+    if self::tgl_native_panel::spirit_resealed() {
+        return None;
+    }
     self::display::complete_scanout_pipeline_slot()
 }
 
@@ -1182,7 +1194,7 @@ pub(crate) fn physical_bcs_ready(dev: Dev) -> bool {
 
 fn retain_forcewake_for_boot(dev: Dev) -> (bool, bool, bool) {
     // Establish TRUEOS's retained requests without first clearing firmware or
-    // another boot owner's request.  These writes are confined to boot; all
+    // another boot owner's request. These writes are confined to boot; all
     // GuC clients use `physical_gt_ready` as a read-only admission check.
     mmio_write(dev, FORCEWAKE_RENDER, mask_en(FORCEWAKE_KERNEL));
     let render_ready = wait_eq(
@@ -1581,7 +1593,7 @@ pub(crate) fn dma_flush_strided_row_spans(spans: &[DmaFlushRows]) -> bool {
         } else {
             for row in 0..span.rows {
                 // Validation of the final row proves every earlier offset.
-                let offset = span.row_stride * row;
+                let offset = row * span.row_stride;
                 dma_flush_cache_lines(unsafe { span.ptr.add(offset) }, span.row_bytes);
             }
         }
