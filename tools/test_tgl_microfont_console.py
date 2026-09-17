@@ -82,7 +82,7 @@ mod log_os { #[path = CONSOLE_PATH] pub mod microfont_console; }
         (work / "Cargo.toml").write_text(
             '[package]\nname="trueos-microfont-host-test"\nversion="0.0.0"\nedition="2024"\n'
             '[workspace]\n[lib]\npath="lib.rs"\n[dependencies]\n'
-            'microfont="=3.7.8"\nspin="=0.10.0"\n'
+            'microfont="=3.7.8"\nspin="0.10"\n'
             'log_os_core={package="log-os",path=' + json.dumps(str(core)) + ',default-features=false}\n'
         )
         env = dict(os.environ, RUSTUP_TOOLCHAIN="stable")
