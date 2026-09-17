@@ -1,0 +1,53 @@
+name: x86_64 next compatibility
+
+on:
+  pull_request:
+    paths:
+      - Cargo.toml
+      - rust-toolchain.toml
+      - '.cargo/**'
+      - src/pci/mmio.rs
+      - tools/check_x86_64_next.py
+      - tools/test_check_x86_64_next.py
+      - tools/x86_64_paging_probe.rs
+      - .github/workflows/x86_64-next.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  paging-probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /Cargo.toml
+            /rust-toolchain.toml
+            /.cargo/
+            /src/pci/mmio.rs
+            /tools/check_x86_64_next.py
+            /tools/test_check_x86_64_next.py
+            /tools/x86_64_paging_probe.rs
+      - name: Validate manifest and metadata guards
+        run: |
+          python3 tools/test_check_x86_64_next.py
+          python3 tools/check_x86_64_next.py --static-only
+      - name: Install the unchanged kernel toolchain
+        run: |
+          channel=$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')
+          rustup toolchain install "$channel" --profile minimal --component rust-src
+      - name: Host paging tests and TRUEOS custom-target compile probe
+        run: python3 tools/check_x86_64_next.py
+      - name: Preserve compiler, dependency and probe evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: x86_64-next-validation
+          path: tgt/x86_64-next-validation/
+          if-no-files-found: ignore
+          retention-days: 14

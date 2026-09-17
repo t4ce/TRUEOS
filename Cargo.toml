@@ -105,7 +105,9 @@ trueos_ttstt = [
 ]
 
 [dependencies]
-x86_64 = { version = "0.15.5", features = ["memory_encryption"] }
+# Experimental upstream paging API; see tools/docs/x86_64-next.md.
+# Keep the effective features explicit; do not follow changing upstream defaults.
+x86_64 = { version = "=0.15.5", default-features = false, features = ["instructions", "nightly", "memory_encryption"] }
 core3 = { workspace = true, features = ["alloc", "utils"] }
 spin = "0.10"
 atomic-waker = { version = "1.1.2", default-features = false }
@@ -206,6 +208,8 @@ debug = false
 opt-level = 2
 
 [patch.crates-io]
+# Unreleased next still calls itself 0.15.5. Pin the implementation, not the branch.
+x86_64 = { git = "https://github.com/rust-osdev/x86_64", rev = "78b81025d65a3e899f48a6fded8b27889a09d70b" }
 cordyceps = { path = "vendor/cordyceps-0.3.5" }
 acpi = { path = "vendor/acpi-6.1.1" }
 aml = { path = "vendor/aml-0.16.4" }
