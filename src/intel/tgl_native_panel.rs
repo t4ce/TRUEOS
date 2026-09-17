@@ -3,9 +3,9 @@
 //! The Linux capture describes Linux, not the firmware state on a later boot.
 //! Inspect the current Pipe A timing before writing anything. Keep its native
 //! eDP timing/link, DBUF allocation and watermarks, and replace only the primary
-//! surface, source geometry, and pipe/primary scaler bindings. On success the
-//! caller continues into the ordinary UI4 bootstrap; this probe itself does not
-//! publish plane-stack readiness.
+//! surface, source geometry, and pipe/primary scaler bindings. This deliberately
+//! hands the native mode to the ordinary UI4 plane bootstrap after the
+//! primary surface has latched; no synthetic UI4 readiness is published.
 
 use core::sync::atomic::{AtomicBool, Ordering};
 use spin::Once;
@@ -24,8 +24,8 @@ use super::display::{
 use super::{Dev, mmio_read, mmio_write};
 
 pub(crate) const ENABLED: bool = true;
-// The native-panel-only observation cycle is complete. Let normal Spirit
-// startup run; the PCI alias, GuC and genuine completion checks stay intact.
+// The panel-only experiment is over: normal Spirit startup may proceed.
+// The PCI alias, GuC checks, real allocation and plane-latch checks remain.
 pub(crate) const SPIRIT_RESEALED: bool = false;
 const PHYSICAL_ID: u32 = 0x9A49_8086;
 const PHYSICAL_REVISION: u8 = 0x01;
@@ -99,6 +99,13 @@ pub(crate) fn spirit_resealed() -> bool {
     SPIRIT_RESEALED && super::claimed_device().is_some_and(is_target)
 }
 
+/// Select the native surface reservations only for the successfully adopted
+/// physical panel. This is not a GuC, RCS, or UI4 execution-success flag.
+pub(crate) fn ui4_handoff_active() -> bool {
+    SCANOUT_LATCHED.load(Ordering::Acquire)
+        && super::claimed_device().is_some_and(is_target)
+}
+
 fn wait_frame(dev: Dev) -> bool {
     let before = mmio_read(dev, PIPE_FRMCOUNT_A);
     for _ in 0..POLL_ITERS {
@@ -170,8 +177,8 @@ fn prepare_frame(dev: Dev) -> Option<Frame> {
     Some(Frame { phys, virt: virt as usize })
 }
 
-/// Establish native Pipe A before ordinary UI4 plane initialization. Only a
-/// successful native handoff may continue; retain the old route on failure.
+/// Native Pipe A setup followed by the ordinary UI4 bootstrap on success.
+/// A failed native setup retains its surface and does not run the desktop path.
 /// No new link timing is synthesized: unsupported firmware handoff is left
 /// alone. Software polling is bounded; a bus-level stuck MMIO access cannot
 /// be made recoverable by a Rust loop bound.
@@ -263,5 +270,19 @@ pub(crate) fn init_once(dev: Dev) -> bool {
         SURFACE_GPU, frame.phys, frame.virt, live, readback_ok as u8,
         scalers_detached as u8, SPIRIT_RESEALED as u8,
     );
+    if readback_ok {
+        // PIPE_SRC now describes the actual native panel. Re-enter the same
+        // allocation, alpha/DBUF, plane-latch and capability-publication path
+        // as desktop UI4, with distinct 4K-safe scanout/compositor reservations.
+        // Do not retrain eDP or restore the old firmware scaler geometry.
+        super::display::log_bsp_display_metrics_probe(dev);
+        super::display::init_primary_boot_surface(dev);
+        crate::log!(
+            "intel/tgl-native-panel: ui4-handoff attempted=1 stack_ready={} spirit_resealed=0 native={}x{} link_timing=preserved\n",
+            super::display::ui4_rgba8_plane_stack_is_ready() as u8,
+            WIDTH,
+            HEIGHT,
+        );
+    }
     readback_ok
 }

@@ -20,6 +20,25 @@ pub(super) use self::regs::*;
 mod native_ui4;
 
 mod display_metrics;
+mod tgl_ui4_layout;
+
+fn native_ui4_for_pipe(pipe: PipeInfo) -> bool {
+    pipe.slot == 0 && crate::intel::tgl_native_panel::ui4_handoff_active()
+}
+
+fn ui4_surface_slot_capacity(pipe: PipeInfo, legacy_capacity: u64) -> u64 {
+    if native_ui4_for_pipe(pipe) {
+        tgl_ui4_layout::SURFACE_SLOT_BYTES
+    } else {
+        legacy_capacity
+    }
+}
+
+const _: () = {
+    assert!(UI4_DIRECT_SCANOUT_GPU_BASE
+        + UI4_DIRECT_SCANOUT_PLANE_COUNT as u64 * UI4_DIRECT_SCANOUT_PLANE_STRIDE
+        <= tgl_ui4_layout::GGTT_BASE);
+};
 mod mirror_map_dp_engine;
 pub(crate) use self::mirror_map_dp_engine::{
     MirrorMapMode, WdCaptureError, WdCapturePoll, WdCaptureStatus, WdXyuv8888Frame,
@@ -699,8 +718,8 @@ fn active_primary_surface() -> Option<PrimarySurface> {
 }
 
 fn primary_surface_gpu_for_pipe(pipe: PipeInfo) -> Option<u64> {
-    if native_ui4::active(pipe) {
-        return Some(native_ui4::PRIMARY_GPU);
+    if native_ui4_for_pipe(pipe) {
+        return Some(tgl_ui4_layout::primary_gpu());
     }
     if pipe.slot == 0 {
         return Some(crate::intel::GPU_VA_DISPLAY_PRIMARY_BASE);
@@ -710,8 +729,8 @@ fn primary_surface_gpu_for_pipe(pipe: PipeInfo) -> Option<u64> {
 }
 
 fn primary_surface_gpu_capacity(pipe: PipeInfo) -> u64 {
-    if native_ui4::active(pipe) {
-        return native_ui4::PRIMARY_BYTES;
+    if native_ui4_for_pipe(pipe) {
+        return tgl_ui4_layout::SURFACE_SLOT_BYTES;
     }
     if pipe.slot == 0 {
         PRIMARY_LEGACY_PIPE_GPU_CAPACITY
@@ -4047,8 +4066,8 @@ fn primary_swap_surface_pool(pipe: PipeInfo) -> &'static Mutex<PrimarySwapSurfac
 }
 
 fn overlay_surface_gpu_for_index(pipe: PipeInfo, plane_slot: usize, index: usize) -> Option<u64> {
-    if native_ui4::active(pipe) {
-        return native_ui4::overlay_gpu(plane_slot, index);
+    if native_ui4_for_pipe(pipe) {
+        return tgl_ui4_layout::overlay_gpu(plane_slot, index);
     }
     let plane_index = plane_slot.checked_sub(1)?;
     if plane_index >= OVERLAY_UNIVERSAL_PLANE_COUNT || index >= OVERLAY_SWAP_BUFFER_COUNT {
@@ -4069,8 +4088,8 @@ fn overlay_surface_gpu_for_index(pipe: PipeInfo, plane_slot: usize, index: usize
 }
 
 fn primary_swap_surface_gpu_for_index(pipe: PipeInfo, index: usize) -> Option<u64> {
-    if native_ui4::active(pipe) {
-        return native_ui4::primary_swap_gpu(index);
+    if native_ui4_for_pipe(pipe) {
+        return tgl_ui4_layout::primary_swap_gpu(index);
     }
     if index >= PRIMARY_SWAP_BUFFER_COUNT {
         return None;
@@ -4081,8 +4100,8 @@ fn primary_swap_surface_gpu_for_index(pipe: PipeInfo, index: usize) -> Option<u6
 }
 
 fn primary_compose_rcs_gpu_for_surface(surface: PrimarySwapSurface) -> Option<u64> {
-    if native_ui4::active(surface.pipe) {
-        return native_ui4::compose_gpu(0, surface.buffer_index);
+    if native_ui4_for_pipe(surface.pipe) {
+        return tgl_ui4_layout::compose_gpu(0, surface.buffer_index);
     }
     if surface.buffer_index >= PRIMARY_SWAP_BUFFER_COUNT {
         return None;
@@ -4092,8 +4111,8 @@ fn primary_compose_rcs_gpu_for_surface(surface: PrimarySwapSurface) -> Option<u6
 }
 
 fn overlay_compose_rcs_gpu_for_surface(surface: OverlaySurface) -> Option<u64> {
-    if native_ui4::active(surface.pipe) {
-        return native_ui4::compose_gpu(surface.plane_slot, surface.buffer_index);
+    if native_ui4_for_pipe(surface.pipe) {
+        return tgl_ui4_layout::compose_gpu(surface.plane_slot, surface.buffer_index);
     }
     if surface.plane_slot == crate::ui4::PRIMARY_PLANE_SLOT {
         if surface.buffer_index >= OVERLAY_SWAP_BUFFER_COUNT {
@@ -4601,7 +4620,7 @@ fn ensure_overlay_surface_for_pipe(
 
     let pitch_bytes = aligned_pitch_bytes(width, PRIMARY_BYTES_PER_PIXEL)?;
     let byte_len = usize::try_from(u64::from(pitch_bytes) * u64::from(height)).ok()?;
-    if byte_len as u64 > native_ui4::overlay_capacity(pipe) {
+    if byte_len as u64 > ui4_surface_slot_capacity(pipe, OVERLAY_SWAP_GPU_STRIDE) {
         crate::log_warn!(
             target: "intel/display";
             "intel/display: overlay-surface rejected pipeline={} size={}x{} pitch=0x{:X} bytes=0x{:X} reserved_slot_bytes=0x{:X} potential_reason=mode-exceeds-per-pipeline-gpu-address-slot\n",
@@ -4763,7 +4782,7 @@ fn ensure_primary_swap_surface_for_pipe(
         .map(|primary| primary.pitch_bytes)
         .unwrap_or(aligned_pitch_bytes(width, PRIMARY_BYTES_PER_PIXEL)?);
     let byte_len = usize::try_from(u64::from(pitch_bytes) * u64::from(height)).ok()?;
-    if byte_len as u64 > native_ui4::primary_swap_capacity(pipe) {
+    if byte_len as u64 > ui4_surface_slot_capacity(pipe, PRIMARY_SWAP_GPU_STRIDE) {
         crate::log_warn!(
             target: "intel/display";
             "intel/display: primary-swap-surface rejected pipeline={} size={}x{} pitch=0x{:X} bytes=0x{:X} reserved_slot_bytes=0x{:X} potential_reason=mode-exceeds-per-pipeline-gpu-address-slot\n",

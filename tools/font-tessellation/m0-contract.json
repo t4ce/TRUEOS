@@ -1,0 +1,47 @@
+{
+  "schema": "trueos.font-hardware-tessellation-m0/v1",
+  "status": "candidate-frozen-for-probe",
+  "source_commit": "22c3edd72c44fea650518998f6cf5bed6291b104",
+  "default_mode": "legacy-only",
+  "forced_mode": "force-hardware-probe-no-fallback",
+  "policy": {
+    "id": "hsds-wedge-quad-rgba8-ss4x4-zero-optical-v1",
+    "geometric_tolerance_native_px": 0.125,
+    "sample_grid": [4, 4],
+    "optical_bias": 0.0,
+    "fill_rule": "non-zero-winding",
+    "intermediate_format": "rgba8",
+    "output_format": "linear-r8"
+  },
+  "abi": {
+    "name": "FontCurvePatchV1",
+    "size_bytes": 64,
+    "alignment_bytes": 16,
+    "input_topology": "patchlist-1",
+    "output_control_points": 5,
+    "domain": "quad"
+  },
+  "limits": {
+    "max_native_width": 2048,
+    "max_native_height": 2048,
+    "max_patches": 4096,
+    "max_contours": 127,
+    "max_tessellation_factor": 64,
+    "max_transient_bytes": 33554432,
+    "fixed_transient_overhead_bytes": 262144,
+    "stencil_bits": 8,
+    "max_absolute_winding": 127
+  },
+  "quality_gates": {
+    "coverage_mean_absolute_error": 0.0156862745,
+    "coverage_p99_absolute_error": 0.062745098,
+    "max_relative_ink_area_change": 0.03,
+    "max_stem_weight_change_px": 0.5,
+    "requires_small_text_image_review": true
+  },
+  "performance_gates": {
+    "minimum_median_cold_fill_improvement": 0.2,
+    "maximum_warm_row_regression": 0.05,
+    "p95_must_not_regress_outside_uncertainty": true
+  }
+}

@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://trueos.dev/schema/font-hardware-tessellation-result-v1.json",
+  "title": "TRUEOS font hardware tessellation result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "source", "artifact", "device", "fixture", "evidence"],
+  "properties": {
+    "schema": { "const": "trueos.font-hardware-tessellation-result/v1" },
+    "source": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["trueos_commit", "cubes_commit", "picasso_commit"],
+      "properties": {
+        "trueos_commit": { "$ref": "#/$defs/sha256" },
+        "cubes_commit": { "$ref": "#/$defs/sha256" },
+        "picasso_commit": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["contract_version", "source_sha256", "compiler_identity"],
+      "properties": {
+        "contract_version": { "type": "integer", "minimum": 1 },
+        "source_sha256": { "$ref": "#/$defs/sha256" },
+        "compiler_identity": { "type": "string", "minLength": 1 }
+      }
+    },
+    "device": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pci_id", "revision", "stepping"],
+      "properties": {
+        "pci_id": { "type": "string", "pattern": "^0x[0-9a-fA-F]{4}$" },
+        "revision": { "type": "string", "minLength": 1 },
+        "stepping": { "type": "string", "minLength": 1 }
+      }
+    },
+    "fixture": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "sha256", "policy_id"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "policy_id": { "type": "string", "minLength": 1 }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["host_contract", "native_capture", "bare_metal_render"],
+      "properties": {
+        "host_contract": { "$ref": "#/$defs/evidence" },
+        "native_capture": { "$ref": "#/$defs/evidence" },
+        "bare_metal_render": { "$ref": "#/$defs/evidence" }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{40,64}$" },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "command", "notes"],
+      "properties": {
+        "status": { "enum": ["pass", "fail", "blocked", "not-run"] },
+        "command": { "type": ["string", "null"] },
+        "notes": { "type": "string" }
+      }
+    }
+  }
+}
