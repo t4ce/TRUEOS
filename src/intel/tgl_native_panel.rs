@@ -3,8 +3,9 @@
 //! The Linux capture describes Linux, not the firmware state on a later boot.
 //! Inspect the current Pipe A timing before writing anything. Keep its native
 //! eDP timing/link, DBUF allocation and watermarks, and replace only the primary
-//! surface, source geometry, and pipe/primary scaler bindings. This deliberately
-//! does not publish the desktop UI4 five-plane stack as ready.
+//! surface, source geometry, and pipe/primary scaler bindings. On success the
+//! caller continues into the ordinary UI4 bootstrap; this probe itself does not
+//! publish plane-stack readiness.
 
 use core::sync::atomic::{AtomicBool, Ordering};
 use spin::Once;
@@ -23,8 +24,9 @@ use super::display::{
 use super::{Dev, mmio_read, mmio_write};
 
 pub(crate) const ENABLED: bool = true;
-// A separate, temporary startup seal; the PCI alias and GuC bring-up stay intact.
-pub(crate) const SPIRIT_RESEALED: bool = true;
+// The native-panel-only observation cycle is complete. Let normal Spirit
+// startup run; the PCI alias, GuC and genuine completion checks stay intact.
+pub(crate) const SPIRIT_RESEALED: bool = false;
 const PHYSICAL_ID: u32 = 0x9A49_8086;
 const PHYSICAL_REVISION: u8 = 0x01;
 const WIDTH: u32 = 3840;
@@ -34,8 +36,8 @@ const FRAME_BYTES: usize = PITCH_BYTES as usize * HEIGHT as usize;
 // The desktop boot surface has only a 16 MiB slot. Do not enlarge its mapping
 // into a neighboring owner's range. This CPU-authored, never-GPU-written
 // probe uses a separate 64 MiB GGTT reservation and needs no EU edge guard.
-const SURFACE_GPU: u64 = 0xE000_0000;
-const SURFACE_GPU_CAPACITY: u64 = 0x0400_0000;
+pub(super) const SURFACE_GPU: u64 = 0xE000_0000;
+pub(super) const SURFACE_GPU_CAPACITY: u64 = 0x0400_0000;
 const GGTT_MMIO_END: usize = 0x0100_0000;
 const POLL_ITERS: usize = 2_000_000;
 const PIPE_SOURCE: u32 = ((WIDTH - 1) << 16) | (HEIGHT - 1);
@@ -86,6 +88,11 @@ pub(crate) fn is_target(dev: Dev) -> bool {
         && crate::pci::config_read_u32(dev.bus, dev.slot, dev.function, 0) == PHYSICAL_ID
         && crate::pci::config_read_u32(dev.bus, dev.slot, dev.function, 8) as u8
             == PHYSICAL_REVISION
+}
+
+/// Stable layout selection, published only after this native surface latches.
+pub(super) fn native_scanout_ready() -> bool {
+    SCANOUT_LATCHED.load(Ordering::Acquire)
 }
 
 pub(crate) fn spirit_resealed() -> bool {
@@ -163,8 +170,8 @@ fn prepare_frame(dev: Dev) -> Option<Frame> {
     Some(Frame { phys, virt: virt as usize })
 }
 
-/// Standalone native Pipe A proof. The caller must not subsequently run the
-/// desktop five-plane bootstrap on this target, including when this fails.
+/// Establish native Pipe A before ordinary UI4 plane initialization. Only a
+/// successful native handoff may continue; retain the old route on failure.
 /// No new link timing is synthesized: unsupported firmware handoff is left
 /// alone. Software polling is bounded; a bus-level stuck MMIO access cannot
 /// be made recoverable by a Rust loop bound.

@@ -17,6 +17,7 @@ use spin::Mutex;
 
 mod regs;
 pub(super) use self::regs::*;
+mod native_ui4;
 
 mod display_metrics;
 mod mirror_map_dp_engine;
@@ -698,6 +699,9 @@ fn active_primary_surface() -> Option<PrimarySurface> {
 }
 
 fn primary_surface_gpu_for_pipe(pipe: PipeInfo) -> Option<u64> {
+    if native_ui4::active(pipe) {
+        return Some(native_ui4::PRIMARY_GPU);
+    }
     if pipe.slot == 0 {
         return Some(crate::intel::GPU_VA_DISPLAY_PRIMARY_BASE);
     }
@@ -706,6 +710,9 @@ fn primary_surface_gpu_for_pipe(pipe: PipeInfo) -> Option<u64> {
 }
 
 fn primary_surface_gpu_capacity(pipe: PipeInfo) -> u64 {
+    if native_ui4::active(pipe) {
+        return native_ui4::PRIMARY_BYTES;
+    }
     if pipe.slot == 0 {
         PRIMARY_LEGACY_PIPE_GPU_CAPACITY
     } else {
@@ -4040,6 +4047,9 @@ fn primary_swap_surface_pool(pipe: PipeInfo) -> &'static Mutex<PrimarySwapSurfac
 }
 
 fn overlay_surface_gpu_for_index(pipe: PipeInfo, plane_slot: usize, index: usize) -> Option<u64> {
+    if native_ui4::active(pipe) {
+        return native_ui4::overlay_gpu(plane_slot, index);
+    }
     let plane_index = plane_slot.checked_sub(1)?;
     if plane_index >= OVERLAY_UNIVERSAL_PLANE_COUNT || index >= OVERLAY_SWAP_BUFFER_COUNT {
         return None;
@@ -4059,6 +4069,9 @@ fn overlay_surface_gpu_for_index(pipe: PipeInfo, plane_slot: usize, index: usize
 }
 
 fn primary_swap_surface_gpu_for_index(pipe: PipeInfo, index: usize) -> Option<u64> {
+    if native_ui4::active(pipe) {
+        return native_ui4::primary_swap_gpu(index);
+    }
     if index >= PRIMARY_SWAP_BUFFER_COUNT {
         return None;
     }
@@ -4068,6 +4081,9 @@ fn primary_swap_surface_gpu_for_index(pipe: PipeInfo, index: usize) -> Option<u6
 }
 
 fn primary_compose_rcs_gpu_for_surface(surface: PrimarySwapSurface) -> Option<u64> {
+    if native_ui4::active(surface.pipe) {
+        return native_ui4::compose_gpu(0, surface.buffer_index);
+    }
     if surface.buffer_index >= PRIMARY_SWAP_BUFFER_COUNT {
         return None;
     }
@@ -4076,6 +4092,9 @@ fn primary_compose_rcs_gpu_for_surface(surface: PrimarySwapSurface) -> Option<u6
 }
 
 fn overlay_compose_rcs_gpu_for_surface(surface: OverlaySurface) -> Option<u64> {
+    if native_ui4::active(surface.pipe) {
+        return native_ui4::compose_gpu(surface.plane_slot, surface.buffer_index);
+    }
     if surface.plane_slot == crate::ui4::PRIMARY_PLANE_SLOT {
         if surface.buffer_index >= OVERLAY_SWAP_BUFFER_COUNT {
             return None;
@@ -4582,7 +4601,7 @@ fn ensure_overlay_surface_for_pipe(
 
     let pitch_bytes = aligned_pitch_bytes(width, PRIMARY_BYTES_PER_PIXEL)?;
     let byte_len = usize::try_from(u64::from(pitch_bytes) * u64::from(height)).ok()?;
-    if byte_len as u64 > OVERLAY_SWAP_GPU_STRIDE {
+    if byte_len as u64 > native_ui4::overlay_capacity(pipe) {
         crate::log_warn!(
             target: "intel/display";
             "intel/display: overlay-surface rejected pipeline={} size={}x{} pitch=0x{:X} bytes=0x{:X} reserved_slot_bytes=0x{:X} potential_reason=mode-exceeds-per-pipeline-gpu-address-slot\n",
@@ -4591,7 +4610,7 @@ fn ensure_overlay_surface_for_pipe(
             height,
             pitch_bytes,
             byte_len,
-            OVERLAY_SWAP_GPU_STRIDE,
+            native_ui4::overlay_capacity(pipe),
         );
         return None;
     }
@@ -4744,7 +4763,7 @@ fn ensure_primary_swap_surface_for_pipe(
         .map(|primary| primary.pitch_bytes)
         .unwrap_or(aligned_pitch_bytes(width, PRIMARY_BYTES_PER_PIXEL)?);
     let byte_len = usize::try_from(u64::from(pitch_bytes) * u64::from(height)).ok()?;
-    if byte_len as u64 > PRIMARY_SWAP_GPU_STRIDE {
+    if byte_len as u64 > native_ui4::primary_swap_capacity(pipe) {
         crate::log_warn!(
             target: "intel/display";
             "intel/display: primary-swap-surface rejected pipeline={} size={}x{} pitch=0x{:X} bytes=0x{:X} reserved_slot_bytes=0x{:X} potential_reason=mode-exceeds-per-pipeline-gpu-address-slot\n",
@@ -4753,7 +4772,7 @@ fn ensure_primary_swap_surface_for_pipe(
             height,
             pitch_bytes,
             byte_len,
-            PRIMARY_SWAP_GPU_STRIDE,
+            native_ui4::primary_swap_capacity(pipe),
         );
         return None;
     }
@@ -6081,7 +6100,7 @@ fn compose_premultiplied_rgba_tiles_into_primary_gpgpu(
     // Slot0 has exactly one legal compositor: the asynchronous layer kernel.
     // It builds a transparent premultiplied-RGBA stack in broker-z order; the
     // display plane then source-over blends that result with Pipe A.
-    if !asynchronous || surface.byte_len as u64 > COMPOSE_RCS_GPU_ALIAS_BYTES {
+    if !asynchronous || surface.byte_len as u64 > native_ui4::compose_capacity(surface.pipe, 0) {
         return GpgpuCompositionResult::Unavailable;
     }
     let Some(primary) = primary_surface_for_pipe(surface.pipe) else {
@@ -6108,7 +6127,7 @@ fn compose_premultiplied_rgba_tiles_into_primary_gpgpu(
     };
     let Some(base) = crate::intel::gpgpu::GpgpuRgba8Surface::new(
         primary.phys,
-        primary.gpu,
+        native_ui4::base_gpu(primary.pipe, primary.gpu),
         primary.byte_len,
         primary.width,
         primary.height,
@@ -6393,7 +6412,7 @@ fn compose_premultiplied_rgba_tiles_into_overlay_gpgpu(
     sparse_static_painter: bool,
     destination_fresh_transparent: bool,
 ) -> GpgpuCompositionResult {
-    if surface.byte_len as u64 > COMPOSE_RCS_GPU_ALIAS_BYTES
+    if surface.byte_len as u64 > native_ui4::compose_capacity(surface.pipe, surface.plane_slot)
         || (!asynchronous
             && (!UI4_GPGPU_MULTI_RUN_COMPOSITOR_ENABLED
                 || !crate::intel::gpgpu::sprite_quad_worklist_ready()))

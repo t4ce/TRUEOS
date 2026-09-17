@@ -291,9 +291,12 @@ pub fn init_once() {
         guc_ready as u8,
     );
     if self::tgl_native_panel::is_target(dev) {
-        // Native-panel-only cycle: no desktop DBUF/plane-stack takeover after
-        // this probe, even if firmware did not provide the expected route.
-        let _ = self::tgl_native_panel::init_once(dev);
+        // Keep the proven native timing/source/scaler handoff, then enter
+        // the ordinary UI4 plane/bootstrap path with native-sized backing.
+        // An unsupported firmware route still does not get a desktop fallback.
+        if self::tgl_native_panel::init_once(dev) {
+            self::display::init_primary_boot_surface(dev);
+        }
     } else {
         self::display::log_bsp_display_metrics_probe(dev);
         if DISPLAY_PLANE1_BOOT_DEMO_ENABLED {
