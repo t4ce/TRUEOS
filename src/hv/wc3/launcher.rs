@@ -12,6 +12,9 @@ use super::{imports, pe32, thunk32};
 
 pub(crate) const ENTRY_VA: u32 = pe32::IMAGE_BASE + pe32::ENTRY_RVA;
 pub(crate) const TEB_VA: u32 = 0x0020_1000;
+pub(crate) const HEAP_VA: u32 = 0x0021_0000;
+pub(crate) const HEAP_BYTES: usize = PAGE_SIZE_4K;
+const HEAP_BACKING_OFFSET: usize = pe32::IMAGE_BYTES + PAGE_SIZE_4K * 2;
 const EXPECTED_SHA256: [u8; 32] = [
     0x5a, 0x8c, 0xca, 0x72, 0x7c, 0x71, 0x9a, 0xe0, 0x54, 0xad, 0xf8, 0xd1, 0x55, 0x23, 0xa8, 0xe3,
     0x09, 0x97, 0x45, 0x22, 0x5e, 0x2f, 0x4f, 0x98, 0x85, 0xf8, 0x87, 0x74, 0xaa, 0x6f, 0x36, 0xd9,
@@ -30,6 +33,9 @@ const CRITICAL_SECTION_CALLS: [(u32, u32); 4] = [
 ];
 const TLS_ALLOC_RETURN: u32 = 0x0040_3ED4;
 const TLS_SLOT_COUNT: usize = 64;
+const HEAP_ALLOC_RETURN: u32 = 0x0040_4132;
+const HEAP_ALLOC_FLAGS: u32 = 0x0000_0008;
+const HEAP_ALLOC_BYTES: u32 = 0x0000_0074;
 
 #[derive(Copy, Clone)]
 pub(crate) struct GuestMapping {
@@ -43,6 +49,14 @@ struct LauncherState {
     initialized_critical_sections: [u32; 4],
     initialized_critical_section_count: usize,
     tls_allocated: [bool; TLS_SLOT_COUNT],
+    heap_next: usize,
+    heap_allocations: Vec<HeapAllocation>,
+}
+
+struct HeapAllocation {
+    guest_ptr: u32,
+    bytes: u32,
+    flags: u32,
 }
 
 #[derive(Copy, Clone)]
@@ -70,7 +84,7 @@ pub(crate) fn prepare(vm_id: u8, bytes: &[u8]) -> Result<(), &'static str> {
     if thunk_bytes > PAGE_SIZE_4K {
         return Err("wc3 too many imports for thunk page");
     }
-    let arena = phys::reserve_heap_arena(pe32::IMAGE_BYTES + PAGE_SIZE_4K * 2, PAGE_SIZE_4K)
+    let arena = phys::reserve_heap_arena(pe32::IMAGE_BYTES + PAGE_SIZE_4K * 3, PAGE_SIZE_4K)
         .ok_or("wc3 launcher backing allocation")?;
     let mut thunks = alloc::vec![0; PAGE_SIZE_4K];
     imports::patch(&mut materialized.image, &materialized.imports, &mut thunks)?;
@@ -101,6 +115,8 @@ pub(crate) fn prepare(vm_id: u8, bytes: &[u8]) -> Result<(), &'static str> {
         initialized_critical_sections: [0; 4],
         initialized_critical_section_count: 0,
         tls_allocated: [false; TLS_SLOT_COUNT],
+        heap_next: 0,
+        heap_allocations: Vec::new(),
     });
     CALLS[usize::from(vm_id)].store(0, Ordering::Release);
     super::trace::info(format_args!(
@@ -307,6 +323,95 @@ fn tls_alloc(vm_id: u8) -> Result<(u32, u32), &'static str> {
     Ok((u32::try_from(index).map_err(|_| "TlsAlloc index overflow")?, return_address))
 }
 
+fn heap_alloc_words(vm_id: u8) -> Result<[u32; 4], &'static str> {
+    let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP)
+        .ok_or("guest ESP unavailable")? as u32;
+    let frame = guest_stack_range_mut(vm_id, esp, 16)?;
+    Ok([
+        u32::from_le_bytes(frame[0..4].try_into().map_err(|_| "HeapAlloc return address")?),
+        u32::from_le_bytes(frame[4..8].try_into().map_err(|_| "HeapAlloc heap handle")?),
+        u32::from_le_bytes(frame[8..12].try_into().map_err(|_| "HeapAlloc flags")?),
+        u32::from_le_bytes(frame[12..16].try_into().map_err(|_| "HeapAlloc bytes")?),
+    ])
+}
+
+fn launcher_heap_range_mut(
+    vm_id: u8,
+    guest_address: u32,
+    bytes: usize,
+) -> Result<&'static mut [u8], &'static str> {
+    let offset = usize::try_from(
+        u64::from(guest_address)
+            .checked_sub(u64::from(HEAP_VA))
+            .ok_or("guest heap address below heap")?,
+    )
+    .map_err(|_| "guest heap address range")?;
+    let end = offset.checked_add(bytes).ok_or("guest heap range overflow")?;
+    if end > HEAP_BYTES {
+        return Err("guest heap range outside private heap page");
+    }
+    let state = LAUNCHERS
+        .get(usize::from(vm_id))
+        .ok_or("unsupported wc3 launcher VM id")?
+        .lock();
+    let state = state.as_ref().ok_or("wc3 launcher state unavailable")?;
+    Ok(unsafe {
+        core::slice::from_raw_parts_mut(
+            (state.arena.virt_start + HEAP_BACKING_OFFSET + offset) as *mut u8,
+            bytes,
+        )
+    })
+}
+
+fn heap_alloc(vm_id: u8) -> Result<(u32, u32, u32, u32, u32), &'static str> {
+    let [return_address, heap_handle, flags, bytes] = heap_alloc_words(vm_id)?;
+    if return_address != HEAP_ALLOC_RETURN {
+        return Err("unexpected HeapAlloc return address");
+    }
+    if flags != HEAP_ALLOC_FLAGS || bytes != HEAP_ALLOC_BYTES {
+        return Err("unexpected HeapAlloc arguments");
+    }
+    let launcher = LAUNCHERS
+        .get(usize::from(vm_id))
+        .ok_or("unsupported wc3 launcher VM id")?;
+    let expected_heap = launcher
+        .lock()
+        .as_ref()
+        .and_then(|state| state.heap)
+        .ok_or("wc3 heap handle unavailable")?
+        .value;
+    if heap_handle != expected_heap {
+        return Err("unexpected HeapAlloc heap handle");
+    }
+    let state = launcher.lock();
+    let next = state
+        .as_ref()
+        .ok_or("wc3 launcher state unavailable")?
+        .heap_next;
+    let aligned = next.checked_add(15).ok_or("HeapAlloc alignment overflow")? & !15;
+    let end = aligned
+        .checked_add(usize::try_from(bytes).map_err(|_| "HeapAlloc size")?)
+        .ok_or("HeapAlloc size overflow")?;
+    if end > HEAP_BYTES {
+        return Err("HeapAlloc exceeds private heap page");
+    }
+    let guest_ptr = HEAP_VA
+        .checked_add(u32::try_from(aligned).map_err(|_| "HeapAlloc pointer overflow")?)
+        .ok_or("HeapAlloc pointer overflow")?;
+    drop(state);
+    let output = launcher_heap_range_mut(vm_id, guest_ptr, usize::try_from(bytes).map_err(|_| "HeapAlloc size")?)?;
+    output.fill(0);
+    let mut state = launcher.lock();
+    let state = state.as_mut().ok_or("wc3 launcher state unavailable")?;
+    state.heap_next = end;
+    state.heap_allocations.push(HeapAllocation {
+        guest_ptr,
+        bytes,
+        flags,
+    });
+    Ok((guest_ptr, return_address, heap_handle, flags, bytes))
+}
+
 pub(crate) fn is_initialized_critical_section(vm_id: u8, guest_address: u32) -> bool {
     LAUNCHERS
         .get(usize::from(vm_id))
@@ -433,9 +538,33 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
                 DispatchOutcome::Stop
             }
         }
-    } else if call == 9 {
+    } else if call == 9 && imports::is_heap_alloc(import) {
+        match heap_alloc(vm_id) {
+            Ok((guest_ptr, return_address, heap_handle, flags, bytes)) => {
+                let mut registers = crate::hv::vmx::guest_registers();
+                registers.rax = u64::from(guest_ptr);
+                crate::hv::vmx::set_guest_registers(registers);
+                super::trace::info(format_args!(
+                    "HeapAlloc heap=0x{:08X} flags=0x{:08X} bytes=0x{:08X} ret=0x{:08X}",
+                    heap_handle, flags, bytes, return_address
+                ));
+                super::trace::info(format_args!(
+                    "return #9 KERNEL32.dll!HeapAlloc ptr=0x{:08X} zeroed=1",
+                    guest_ptr
+                ));
+                DispatchOutcome::Resume
+            }
+            Err(reason) => {
+                super::trace::fail(format_args!(
+                    "gate-1g failed vm={} phase=HeapAlloc reason={}",
+                    vm_id, reason
+                ));
+                DispatchOutcome::Stop
+            }
+        }
+    } else if call == 10 {
         super::trace::info(format_args!(
-            "gate-1f complete vm={} next-import={}!{}",
+            "gate-1g complete vm={} next-import={}!{}",
             vm_id, import.module, import.symbol
         ));
         DispatchOutcome::Stop
