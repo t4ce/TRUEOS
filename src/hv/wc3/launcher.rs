@@ -83,11 +83,38 @@ const GET_STRING_TYPE_W_SECOND_RETURN: u32 = 0x0040_4D16;
 const MULTI_BYTE_TO_WIDE_CHAR_SIZING_RETURN: u32 = 0x0040_4CAE;
 const MULTI_BYTE_TO_WIDE_CHAR_CONVERT_RETURN: u32 = 0x0040_4D04;
 const MULTI_BYTE_TO_WIDE_CHAR_ANSI_WRAPPER_SIZING_RETURN: u32 = 0x0040_2AA5;
+const MULTI_BYTE_TO_WIDE_CHAR_ANSI_WRAPPER_CONVERT_RETURN: u32 = 0x0040_2AFD;
 const WIDE_CHAR_TO_MULTI_BYTE_RETURN: u32 = 0x0040_2BD3;
 const WIDE_CHAR_TO_MULTI_BYTE_FLAGS: u32 = 0x0000_0220;
 const MULTI_BYTE_TO_WIDE_CHAR_CODE_PAGE: u32 = GET_ACP_CODE_PAGE;
 const LC_MAP_STRING_W_LOWERCASE: u32 = 0x0000_0100;
 const LC_MAP_STRING_W_UPPERCASE: u32 = 0x0000_0200;
+const LC_MAP_STRING_W_PROBE_RETURN: u32 = 0x0040_2A08;
+const LC_MAP_STRING_W_ANSI_SIZING_RETURN: u32 = 0x0040_2B13;
+const LC_MAP_STRING_W_ANSI_OUTPUT_RETURN: u32 = 0x0040_2B46;
+const LC_MAP_STRING_W_WIDE_OUTPUT_RETURN: u32 = 0x0040_2BAE;
+
+#[derive(Copy, Clone)]
+enum MultiByteToWideCharSite {
+    LocaleSizing,
+    LocaleConversion,
+    AnsiMapSizing,
+    AnsiMapConversion,
+}
+
+fn multi_byte_to_wide_char_site(return_address: u32) -> Option<MultiByteToWideCharSite> {
+    Some(match return_address {
+        MULTI_BYTE_TO_WIDE_CHAR_SIZING_RETURN => MultiByteToWideCharSite::LocaleSizing,
+        MULTI_BYTE_TO_WIDE_CHAR_CONVERT_RETURN => MultiByteToWideCharSite::LocaleConversion,
+        MULTI_BYTE_TO_WIDE_CHAR_ANSI_WRAPPER_SIZING_RETURN => {
+            MultiByteToWideCharSite::AnsiMapSizing
+        }
+        MULTI_BYTE_TO_WIDE_CHAR_ANSI_WRAPPER_CONVERT_RETURN => {
+            MultiByteToWideCharSite::AnsiMapConversion
+        }
+        _ => return None,
+    })
+}
 
 #[derive(Copy, Clone)]
 pub(crate) struct GuestMapping {
@@ -568,9 +595,6 @@ fn enter_critical_section(
 fn leave_critical_section(vm_id: u8) -> Result<(u32, u32, u32), &'static str> {
     let (critical_section, return_address) =
         critical_section_frame(vm_id, LEAVE_CRITICAL_SECTION_RETURN)?;
-    if critical_section != STATIC_LOCK_17 {
-        return Err("unexpected LeaveCriticalSection pointer");
-    }
     let tid = LAUNCHERS
         .get(usize::from(vm_id))
         .ok_or("unsupported wc3 launcher VM id")?
@@ -582,8 +606,19 @@ fn leave_critical_section(vm_id: u8) -> Result<(u32, u32, u32), &'static str> {
     let lock_count = i32::from_le_bytes(output[4..8].try_into().map_err(|_| "LockCount")?);
     let recursion = u32::from_le_bytes(output[8..12].try_into().map_err(|_| "RecursionCount")?);
     let owner = u32::from_le_bytes(output[12..16].try_into().map_err(|_| "OwningThread")?);
-    if owner != tid || recursion == 0 {
+    super::trace::info(format_args!(
+        "LeaveCriticalSection frame ret=0x{:08X} ptr=0x{:08X} owner={} recursion={} lock_count={}",
+        return_address, critical_section, owner, recursion, lock_count
+    ));
+    if owner != tid || recursion == 0 || lock_count < 0 {
         return Err("invalid LeaveCriticalSection ownership");
+    }
+    let expected_lock_count = recursion
+        .checked_sub(1)
+        .and_then(|count| i32::try_from(count).ok())
+        .ok_or("invalid LeaveCriticalSection recursion")?;
+    if lock_count != expected_lock_count {
+        return Err("invalid LeaveCriticalSection lock count");
     }
     output[4..8].copy_from_slice(
         &lock_count
@@ -1069,12 +1104,9 @@ fn multi_byte_to_wide_char(vm_id: u8) -> Result<(u32, u32, u32, u32, u32), &'sta
         "MultiByteToWideChar frame ret=0x{:08X} cp={} flags=0x{:08X} src=0x{:08X} src_count={} dst=0x{:08X} dst_count={}",
         return_address, code_page, flags, source, source_count, destination, destination_count
     ));
-    if !matches!(
-        return_address,
-        MULTI_BYTE_TO_WIDE_CHAR_SIZING_RETURN
-            | MULTI_BYTE_TO_WIDE_CHAR_CONVERT_RETURN
-            | MULTI_BYTE_TO_WIDE_CHAR_ANSI_WRAPPER_SIZING_RETURN
-    ) || code_page != MULTI_BYTE_TO_WIDE_CHAR_CODE_PAGE
+    let site = multi_byte_to_wide_char_site(return_address)
+        .ok_or("unexpected MultiByteToWideChar return site")?;
+    if code_page != MULTI_BYTE_TO_WIDE_CHAR_CODE_PAGE
         || flags != 1
         || source_count == 0
         || destination_count < 0
@@ -1099,15 +1131,20 @@ fn multi_byte_to_wide_char(vm_id: u8) -> Result<(u32, u32, u32, u32, u32), &'sta
     let required = source_len;
     if destination == 0 || destination_count == 0 {
         if !matches!(
-            return_address,
-            MULTI_BYTE_TO_WIDE_CHAR_SIZING_RETURN
-                | MULTI_BYTE_TO_WIDE_CHAR_ANSI_WRAPPER_SIZING_RETURN
-        ) {
+            site,
+            MultiByteToWideCharSite::LocaleSizing | MultiByteToWideCharSite::AnsiMapSizing
+        ) || destination != 0
+            || destination_count != 0
+        {
             return Err("unexpected MultiByteToWideChar conversion destination");
         }
         return Ok((required as u32, return_address, source, destination, required as u32));
     }
-    if return_address != MULTI_BYTE_TO_WIDE_CHAR_CONVERT_RETURN
+    if !matches!(
+        site,
+        MultiByteToWideCharSite::LocaleConversion | MultiByteToWideCharSite::AnsiMapConversion
+    ) || destination == 0
+        || destination_count == 0
         || usize::try_from(destination_count)
             .map_err(|_| "MultiByteToWideChar destination count")?
             < required
@@ -1156,13 +1193,29 @@ fn lc_map_string_w(vm_id: u8) -> Result<(u32, u32, u32, u32, u32, u32, u16), &'s
         "LCMapStringW frame ret=0x{:08X} locale=0x{:08X} flags=0x{:08X} source=0x{:08X} source_count={} destination=0x{:08X} destination_count={}",
         return_address, locale, flags, source, source_count, destination, destination_count
     ));
-    if locale != 0
+    if !matches!(
+        return_address,
+        LC_MAP_STRING_W_PROBE_RETURN
+            | LC_MAP_STRING_W_ANSI_SIZING_RETURN
+            | LC_MAP_STRING_W_ANSI_OUTPUT_RETURN
+            | LC_MAP_STRING_W_WIDE_OUTPUT_RETURN
+    ) || locale != 0
         || !matches!(flags, LC_MAP_STRING_W_LOWERCASE | LC_MAP_STRING_W_UPPERCASE)
         || source == 0
         || source_count == 0
         || destination_count < 0
         || (destination == 0 && destination_count != 0)
         || (destination != 0 && destination_count == 0)
+        || (return_address == LC_MAP_STRING_W_PROBE_RETURN
+            && (source != GET_STRING_TYPE_W_SOURCE
+                || source_count != 1
+                || destination != 0
+                || destination_count != 0))
+        || (return_address == LC_MAP_STRING_W_ANSI_SIZING_RETURN && destination != 0)
+        || (matches!(
+            return_address,
+            LC_MAP_STRING_W_ANSI_OUTPUT_RETURN | LC_MAP_STRING_W_WIDE_OUTPUT_RETURN
+        ) && destination == 0)
     {
         return Err("unexpected LCMapStringW frame");
     }
@@ -1326,6 +1379,18 @@ fn wide_char_to_multi_byte(vm_id: u8) -> Result<(u32, u32, u32, u32), &'static s
             .try_into()
             .map_err(|_| "WideCharToMultiByte used default")?,
     );
+    super::trace::info(format_args!(
+        "WideCharToMultiByte frame ret=0x{:08X} cp={} flags=0x{:08X} src=0x{:08X} src_count={} dst=0x{:08X} dst_count={} default=0x{:08X} used_default=0x{:08X}",
+        return_address,
+        code_page,
+        flags,
+        source,
+        source_count,
+        destination,
+        destination_count,
+        default_char,
+        used_default
+    ));
     if return_address != WIDE_CHAR_TO_MULTI_BYTE_RETURN
         || code_page != MULTI_BYTE_TO_WIDE_CHAR_CODE_PAGE
         || flags != WIDE_CHAR_TO_MULTI_BYTE_FLAGS
@@ -1348,6 +1413,9 @@ fn wide_char_to_multi_byte(vm_id: u8) -> Result<(u32, u32, u32, u32), &'static s
     }
     let required = encoded.len();
     if destination == 0 || destination_count == 0 {
+        if destination != 0 || destination_count != 0 {
+            return Err("unexpected WideCharToMultiByte sizing destination");
+        }
         return Ok((required as u32, return_address, source, destination));
     }
     let capacity =
@@ -2137,7 +2205,7 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
                 DispatchOutcome::Stop
             }
         }
-    } else if call == 29 && imports::is_leave_critical_section(import) {
+    } else if imports::is_leave_critical_section(import) {
         match leave_critical_section(vm_id) {
             Ok((pointer, tid, return_address)) => {
                 super::trace::info(format_args!(
