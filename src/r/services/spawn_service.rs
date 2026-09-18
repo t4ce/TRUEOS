@@ -1663,10 +1663,9 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     // deployment starts one Embassy worker only after a complete scanout
     // route exists, then binds fence N directly to cursor bank N. No input,
     // UI composition, or universal-plane path writes CUR_* registers.
-    TaskSpec::enabled_gated(
+    TaskSpec::disabled(
         "trueos-spirit",
         0,
-        trueos_spirit_gate,
         &TRUEOS_SPIRIT_STARTED,
         spawn_trueos_spirit_workers,
     ),
