@@ -2595,8 +2595,7 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
         let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP).unwrap_or(0) as u32;
         match guest_stack_range_mut(vm_id, esp, 8) {
             Ok(frame) => {
-                let return_address =
-                    u32::from_le_bytes(frame[0..4].try_into().unwrap_or([0; 4]));
+                let return_address = u32::from_le_bytes(frame[0..4].try_into().unwrap_or([0; 4]));
                 let hwnd = u32::from_le_bytes(frame[4..8].try_into().unwrap_or([0; 4]));
                 let launcher = LAUNCHERS[usize::from(vm_id)].lock();
                 let Some(state) = launcher.as_ref() else {
@@ -2620,7 +2619,7 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
                 registers.rax = u64::from(paint_pending);
                 crate::hv::vmx::set_guest_registers(registers);
                 if paint_pending {
-                    let launcher = LAUNCHERS[usize::from(vm_id)].lock();
+                    let mut launcher = LAUNCHERS[usize::from(vm_id)].lock();
                     if let Some(state) = launcher.as_mut() {
                         if let Some(window) = state.window.as_mut() {
                             window.paint_pending = false;
