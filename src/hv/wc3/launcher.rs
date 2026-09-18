@@ -64,7 +64,7 @@ const GET_STD_HANDLE_RETURN: u32 = 0x0040_4A0D;
 const GET_FILE_TYPE_RETURN: u32 = 0x0040_4A1B;
 const SET_HANDLE_COUNT_RETURN: u32 = 0x0040_4A52;
 const STD_HANDLES: [u32; 3] = [0x5743_1001, 0x5743_1002, 0x5743_1003];
-const GET_COMMAND_LINE_A_RETURN: u32 = 0x0040_21D0;
+const GET_COMMAND_LINE_A_RETURNS: [u32; 2] = [0x0040_21D0, 0x0040_1181];
 const GET_ENVIRONMENT_STRINGS_W_RETURN: u32 = 0x0040_4786;
 const GET_ENVIRONMENT_STRINGS_A_RETURN: u32 = 0x0040_479E;
 const FREE_ENVIRONMENT_STRINGS_A_RETURN: u32 = 0x0040_488E;
@@ -845,7 +845,7 @@ fn no_argument_return_frame(vm_id: u8, error: &'static str) -> Result<u32, &'sta
 
 fn get_command_line_a(vm_id: u8) -> Result<(u32, u32), &'static str> {
     let return_address = no_argument_return_frame(vm_id, "GetCommandLineA return")?;
-    if return_address != GET_COMMAND_LINE_A_RETURN {
+    if !GET_COMMAND_LINE_A_RETURNS.contains(&return_address) {
         return Err("unexpected GetCommandLineA return address");
     }
     let output = launcher_process_data_range_mut(vm_id, PROCESS_DATA_VA, COMMAND_LINE.len())?;
@@ -3454,17 +3454,16 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
                 DispatchOutcome::Stop
             }
         }
-    } else if call == 21 && imports::is_get_command_line_a(import) {
+    } else if imports::is_get_command_line_a(import) {
         match get_command_line_a(vm_id) {
             Ok((pointer, return_address)) => {
                 let mut registers = crate::hv::vmx::guest_registers();
                 registers.rax = u64::from(pointer);
                 crate::hv::vmx::set_guest_registers(registers);
                 super::trace::info(format_args!(
-                    "return #21 KERNEL32.dll!GetCommandLineA ptr=0x{:08X} value=\"Warcraft III.exe\"",
-                    pointer
+                    "GetCommandLineA ptr=0x{:08X} ret=0x{:08X} call={}",
+                    pointer, return_address, call
                 ));
-                let _ = return_address;
                 DispatchOutcome::Resume
             }
             Err(reason) => {
@@ -3581,7 +3580,7 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
             Ok((pointer, tid, return_address)) => {
                 super::trace::info(format_args!(
                     "EnterCriticalSection ptr=0x{:08X} tid={} ret=0x{:08X}",
-                    pointer, return_address, tid,
+                    pointer, tid, return_address,
                 ));
                 DispatchOutcome::Resume
             }
