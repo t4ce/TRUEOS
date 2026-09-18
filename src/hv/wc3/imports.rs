@@ -65,6 +65,8 @@ pub(crate) fn patch(
             super::thunk32::Kind::GetDesktopWindow
         } else if is_get_client_rect(import) {
             super::thunk32::Kind::GetClientRect
+        } else if is_create_window_ex_a(import) {
+            super::thunk32::Kind::CreateWindowExA
         } else if is_get_std_handle(import) {
             super::thunk32::Kind::GetStdHandle
         } else if is_get_file_type(import) {
@@ -250,6 +252,10 @@ pub(crate) fn is_get_desktop_window(import: &LauncherImport) -> bool {
 
 pub(crate) fn is_get_client_rect(import: &LauncherImport) -> bool {
     import.module.eq_ignore_ascii_case("USER32.dll") && import.symbol == "GetClientRect"
+}
+
+pub(crate) fn is_create_window_ex_a(import: &LauncherImport) -> bool {
+    import.module.eq_ignore_ascii_case("USER32.dll") && import.symbol == "CreateWindowExA"
 }
 
 pub(crate) fn find_get_std_handle(imports: &[LauncherImport]) -> bool {

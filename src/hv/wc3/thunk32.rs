@@ -25,6 +25,7 @@ pub(crate) enum Kind {
     RegisterClassA,
     GetDesktopWindow,
     GetClientRect,
+    CreateWindowExA,
     GetStdHandle,
     GetFileType,
     SetHandleCount,
@@ -129,6 +130,11 @@ pub(crate) fn write(import_id: u32, kind: Kind, output: &mut [u8]) -> Result<(),
         Kind::GetClientRect => {
             output[8] = 0xC2;
             output[9] = 0x08;
+            output[10] = 0x00;
+        }
+        Kind::CreateWindowExA => {
+            output[8] = 0xC2;
+            output[9] = 0x30;
             output[10] = 0x00;
         }
         Kind::GetStdHandle | Kind::GetFileType | Kind::SetHandleCount => {

@@ -54,7 +54,7 @@ const GET_MODULE_FILE_NAME_A_RETURN: u32 = 0x0040_4545;
 const GET_MODULE_FILE_NAME_A_BUFFER: u32 = 0x0040_ABA8;
 const GET_MODULE_FILE_NAME_A_SIZE: u32 = 0x104;
 const GET_MODULE_HANDLE_A_RETURNS: [u32; 3] = [0x0040_221E, 0x0040_1A2B, 0x0040_1A84];
-const GET_DESKTOP_WINDOW_RETURNS: [u32; 1] = [0x0040_1A4F];
+const GET_DESKTOP_WINDOW_RETURNS: [u32; 2] = [0x0040_1A4F, 0x0040_1A89];
 const GET_CLIENT_RECT_RETURN: u32 = 0x0040_1A56;
 const DESKTOP_HWND: u32 = 0x5743_3000;
 const MODULE_IMAGE_BASE: u32 = pe32::IMAGE_BASE;
@@ -151,6 +151,7 @@ struct LauncherState {
     event_handles: Vec<EventHandle>,
     next_event_handle: u32,
     registered_class_names: Vec<String>,
+    window: Option<WinWindow>,
 }
 
 struct HeapAllocation {
@@ -172,6 +173,13 @@ struct EventHandle {
     value: u32,
     event_index: usize,
     open: bool,
+}
+
+struct WinWindow {
+    hwnd: u32,
+    session: crate::ui4::WindowSessionId,
+    frame: crate::ui4::FrameHandle,
+    window: crate::ui4::WindowId,
 }
 
 #[derive(Copy, Clone)]
@@ -289,6 +297,7 @@ pub(crate) fn prepare(vm_id: u8, bytes: &[u8]) -> Result<(), &'static str> {
         event_handles: Vec::new(),
         next_event_handle: EVENT_HANDLE_BASE,
         registered_class_names: Vec::new(),
+        window: None,
     });
     CALLS[usize::from(vm_id)].store(0, Ordering::Release);
     super::trace::info(format_args!(
@@ -2236,6 +2245,171 @@ fn get_client_rect(vm_id: u8) -> Result<(u32, u32, u32), &'static str> {
     Ok((rect, output.width, output.height))
 }
 
+fn trace_create_window_ex_a(vm_id: u8) -> Result<(), &'static str> {
+    let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP)
+        .ok_or("guest ESP unavailable")? as u32;
+    let frame = guest_stack_range_mut(vm_id, esp, 52)?;
+    let word =
+        |offset: usize| u32::from_le_bytes(frame[offset..offset + 4].try_into().unwrap_or([0; 4]));
+    let return_address = word(0);
+    let ex_style = word(4);
+    let class_pointer = word(8);
+    let title_pointer = word(12);
+    let style = word(16);
+    let x = word(20) as i32;
+    let y = word(24) as i32;
+    let width = word(28) as i32;
+    let height = word(32) as i32;
+    let parent = word(36);
+    let menu = word(40);
+    let instance = word(44);
+    let param = word(48);
+    let class_name = if class_pointer == 0 {
+        String::from("<null>")
+    } else {
+        read_guest_c_string(vm_id, class_pointer, 256)
+            .unwrap_or_else(|_| String::from("<non-string>"))
+    };
+    let title = if title_pointer == 0 {
+        String::from("<null>")
+    } else {
+        read_guest_c_string(vm_id, title_pointer, 256)
+            .unwrap_or_else(|_| String::from("<non-string>"))
+    };
+    super::trace::info(format_args!(
+        "CreateWindowExA frame ret=0x{:08X} ex_style=0x{:08X} class_ptr=0x{:08X} class=\"{}\" title_ptr=0x{:08X} title=\"{}\" style=0x{:08X} x={} y={} width={} height={} parent=0x{:08X} menu=0x{:08X} instance=0x{:08X} param=0x{:08X} esp=0x{:08X}",
+        return_address,
+        ex_style,
+        class_pointer,
+        class_name,
+        title_pointer,
+        title,
+        style,
+        x,
+        y,
+        width,
+        height,
+        parent,
+        menu,
+        instance,
+        param,
+        esp
+    ));
+    Ok(())
+}
+
+fn create_window_ex_a(vm_id: u8) -> Result<(u32, u32, String), &'static str> {
+    let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP)
+        .ok_or("guest ESP unavailable")? as u32;
+    let frame = guest_stack_range_mut(vm_id, esp, 52)?;
+    let word =
+        |offset: usize| u32::from_le_bytes(frame[offset..offset + 4].try_into().unwrap_or([0; 4]));
+    let return_address = word(0);
+    let ex_style = word(4);
+    let class_pointer = word(8);
+    let title_pointer = word(12);
+    let style = word(16);
+    let x = word(20) as i32;
+    let y = word(24) as i32;
+    let width = word(28) as i32;
+    let height = word(32) as i32;
+    let parent = word(36);
+    let menu = word(40);
+    let instance = word(44);
+    let param = word(48);
+    if return_address != 0x0040_1AA7
+        || ex_style != 0
+        || class_pointer != 0x0040_80A8
+        || title_pointer != 0x0040_8080
+        || style != 0x8000_0000
+        || x != 1264
+        || y != 704
+        || width != 16
+        || height != 16
+        || parent != DESKTOP_HWND
+        || menu != 0
+        || instance != crate::hv::wc3::pe32::IMAGE_BASE
+        || param != 0
+    {
+        return Err("unexpected CreateWindowExA frame");
+    }
+    let class_name = read_guest_c_string(vm_id, class_pointer, 256)?;
+    let title = read_guest_c_string(vm_id, title_pointer, 256)?;
+    let output = crate::ui4::OutputId::from_slot(0).ok_or("D01 output")?;
+    let owner = crate::ui4::WindowOwner::Vm(vm_id);
+    let session = crate::ui4::begin_window_session(owner).map_err(|_| "ui4 session")?;
+    let frame_handle = match crate::ui4::create_frame(crate::ui4::FrameSpec {
+        output,
+        content: crate::ui4::FrameContent::Image,
+        cadence: crate::ui4::FrameCadence::Dirty,
+        buffering: crate::ui4::FrameBuffering::Double,
+        format: crate::ui4::ScanoutFormat::Rgba8888Premultiplied,
+        width: width as u32,
+        height: height as u32,
+        base_color: Some(crate::ui4::PremultipliedRgba8::from_straight_rgba(0, 0, 0, 255)),
+    }) {
+        Ok(frame) => frame,
+        Err(_) => {
+            let _ = crate::ui4::finish_window_session(owner, session);
+            return Err("ui4 frame");
+        }
+    };
+    let window = match crate::ui4::create_window(crate::ui4::WindowCreate {
+        owner,
+        session,
+        frame: frame_handle,
+        output,
+        plane: crate::ui4::WindowPlane::Universal(1),
+        placement: crate::ui4::WindowPlacement {
+            x,
+            y,
+            width: width as u32,
+            height: height as u32,
+            z: 0,
+            opacity: u8::MAX,
+            visible: false,
+        },
+        interaction: crate::ui4::WindowInteraction {
+            movable: false,
+            maximizable: false,
+            receives_input: true,
+            primary_activation: false,
+            hit_testable: true,
+            resize_on_maximize: false,
+        },
+    }) {
+        Ok(window) => window,
+        Err(_) => {
+            let _ = crate::ui4::finish_window_session(owner, session);
+            let _ = crate::ui4::destroy_frame(frame_handle);
+            return Err("ui4 window");
+        }
+    };
+    let hwnd = 0x5743_4001;
+    let launcher = launcher_state_lock(vm_id)?;
+    let mut state = launcher.lock();
+    let state = state.as_mut().ok_or("wc3 launcher state unavailable")?;
+    state.window = Some(WinWindow {
+        hwnd,
+        session,
+        frame: frame_handle,
+        window,
+    });
+    super::trace::info(format_args!(
+        "wc3-window created hwnd=0x{:08X} ui4_window={} ui4_frame={} class=\"{}\" title=\"{}\" x={} y={} width={} height={} visible=0",
+        hwnd,
+        window.raw(),
+        frame_handle.raw(),
+        class_name,
+        title,
+        x,
+        y,
+        width,
+        height
+    ));
+    Ok((hwnd, return_address, class_name))
+}
+
 pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
     let id = crate::hv::vmx::guest_registers().rax as u32;
     let imports = match LAUNCHERS
@@ -2314,6 +2488,24 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
                 DispatchOutcome::Stop
             }
         }
+    } else if imports::is_create_window_ex_a(import) {
+        match create_window_ex_a(vm_id) {
+            Ok((hwnd, return_address, class_name)) => {
+                let mut registers = crate::hv::vmx::guest_registers();
+                registers.rax = u64::from(hwnd);
+                crate::hv::vmx::set_guest_registers(registers);
+                super::trace::info(format_args!(
+                    "CreateWindowExA success hwnd=0x{:08X} class=\"{}\" ret=0x{:08X}",
+                    hwnd, class_name, return_address
+                ));
+                return DispatchOutcome::Resume;
+            }
+            Err(reason) => super::trace::fail(format_args!(
+                "CreateWindowExA frame failed call={} reason={}",
+                call, reason
+            )),
+        }
+        return DispatchOutcome::Stop;
     } else if import.module.eq_ignore_ascii_case("USER32.dll") {
         let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP).unwrap_or(0) as u32;
         let frame = guest_stack_range_mut(vm_id, esp, 8);
