@@ -1,4 +1,5 @@
 use alloc::{collections::VecDeque, string::String, vec::Vec};
+use core::fmt::Write as FmtWrite;
 use core::sync::atomic::{AtomicU32, Ordering};
 use sha2::{Digest, Sha256};
 use spin::Mutex;
@@ -98,7 +99,7 @@ const LC_MAP_STRING_W_ANSI_OUTPUT_RETURN: u32 = 0x0040_2B46;
 const LC_MAP_STRING_W_WIDE_OUTPUT_RETURN: u32 = 0x0040_2BAE;
 const GET_TICK_COUNT_RETURN: u32 = 0x0040_1016;
 const GET_TICK_COUNT_HELPER_RETURN: u32 = 0x0040_1BB8;
-const CREATE_EVENT_RETURNS: [u32; 4] = [0x0040_1032, 0x0040_106C, 0x0040_1B5E, 0x0040_1B6D];
+const CREATE_EVENT_RETURNS: [u32; 4] = [0x0040_1032, 0x0040_106C, 0x0040_1B60, 0x0040_1B6F];
 const GET_LAST_ERROR_RETURNS: [u32; 4] = [0x0040_103E, 0x0040_1072, 0x0040_1100, 0x0040_2054];
 const CLOSE_HANDLE_RETURNS: [u32; 3] = [0x0040_1050, 0x0040_10E3, 0x0040_10C9];
 const EVENT_HANDLE_BASE: u32 = 0x5743_2001;
@@ -1130,6 +1131,17 @@ fn launcher_read_range(
     Err("guest range is outside launcher mappings")
 }
 
+fn format_hex_bytes(bytes: &[u8]) -> String {
+    let mut output = String::new();
+    for (index, byte) in bytes.iter().enumerate() {
+        if index != 0 {
+            output.push(' ');
+        }
+        let _ = write!(output, "{:02X}", byte);
+    }
+    output
+}
+
 fn launcher_writable_range_mut(
     vm_id: u8,
     guest_address: u32,
@@ -2008,6 +2020,10 @@ fn create_event_a(vm_id: u8) -> Result<(u32, u32, bool, bool, bool, Option<Strin
         };
         bytes.try_into().map_err(|_| "CreateEventA name bytes")?
     };
+    super::trace::info(format_args!(
+        "CreateEventA args ret=0x{:08X} attrs=0x{:08X} manual={} initial={} name_ptr=0x{:08X}",
+        return_address, attrs, manual_reset, initial_state, name_pointer
+    ));
     super::trace::info(format_args!(
         "CreateEventA name-frame ret=0x{:08X} name_ptr=0x{:08X} bytes={:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X}",
         return_address,
@@ -3491,6 +3507,65 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
                 DispatchOutcome::Stop
             }
         }
+    } else if import.module.eq_ignore_ascii_case("KERNEL32.dll") && import.symbol == "CreateThread"
+    {
+        let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP).unwrap_or(0) as u32;
+        match guest_stack_range_mut(vm_id, esp, 28) {
+            Ok(frame) => {
+                let word = |offset: usize| {
+                    u32::from_le_bytes(frame[offset..offset + 4].try_into().unwrap_or([0; 4]))
+                };
+                let return_address = word(0);
+                let thread_attributes = word(4);
+                let stack_size = word(8);
+                let start_address = word(12);
+                let parameter = word(16);
+                let creation_flags = word(20);
+                let thread_id = word(24);
+                let start_dump = launcher_read_range(vm_id, start_address, 32)
+                    .or_else(|_| launcher_read_range(vm_id, start_address, 16));
+                let parameter_dump = launcher_read_range(vm_id, parameter, 0x80);
+                super::trace::info(format_args!(
+                    "CreateThread probe ret=0x{:08X} attrs=0x{:08X} stack_size=0x{:08X} start=0x{:08X} parameter=0x{:08X} flags=0x{:08X} thread_id_ptr=0x{:08X}",
+                    return_address,
+                    thread_attributes,
+                    stack_size,
+                    start_address,
+                    parameter,
+                    creation_flags,
+                    thread_id
+                ));
+                match start_dump {
+                    Ok(bytes) => super::trace::info(format_args!(
+                        "CreateThread start-bytes address=0x{:08X} bytes={} length={}",
+                        start_address,
+                        format_hex_bytes(&bytes),
+                        bytes.len()
+                    )),
+                    Err(reason) => super::trace::info(format_args!(
+                        "CreateThread start-bytes address=0x{:08X} unmapped reason={}",
+                        start_address, reason
+                    )),
+                }
+                match parameter_dump {
+                    Ok(bytes) => super::trace::info(format_args!(
+                        "CreateThread parameter-bytes address=0x{:08X} bytes={} length={}",
+                        parameter,
+                        format_hex_bytes(&bytes),
+                        bytes.len()
+                    )),
+                    Err(reason) => super::trace::info(format_args!(
+                        "CreateThread parameter-bytes address=0x{:08X} unmapped reason={}",
+                        parameter, reason
+                    )),
+                }
+            }
+            Err(reason) => super::trace::fail(format_args!(
+                "CreateThread probe frame failed call={} reason={}",
+                call, reason
+            )),
+        }
+        DispatchOutcome::Stop
     } else {
         super::trace::fail(format_args!(
             "gate-1e failed vm={} phase=unexpected-{}-import {}!{}",
