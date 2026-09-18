@@ -79,8 +79,10 @@ const GET_CP_INFO_SECOND_RETURN: u32 = 0x0040_25A1;
 const CP_INFO_BYTES: usize = 0x14;
 const GET_STRING_TYPE_W_RETURN: u32 = 0x0040_4C28;
 const GET_STRING_TYPE_W_SOURCE: u32 = 0x0040_71E0;
-const LC_MAP_STRING_W_RETURN: u32 = 0x0040_2A08;
-const LC_MAP_STRING_W_SOURCE: u32 = 0x0040_71E0;
+const GET_STRING_TYPE_W_SECOND_RETURN: u32 = 0x0040_4D16;
+const MULTI_BYTE_TO_WIDE_CHAR_SIZING_RETURN: u32 = 0x0040_4CAE;
+const MULTI_BYTE_TO_WIDE_CHAR_CONVERT_RETURN: u32 = 0x0040_4D04;
+const MULTI_BYTE_TO_WIDE_CHAR_CODE_PAGE: u32 = GET_ACP_CODE_PAGE;
 
 #[derive(Copy, Clone)]
 pub(crate) struct GuestMapping {
@@ -918,6 +920,58 @@ fn get_cp_info(vm_id: u8, expected_return: u32) -> Result<(u32, u32), &'static s
     Ok((cp_info, return_address))
 }
 
+fn launcher_read_range(
+    vm_id: u8,
+    guest_address: u32,
+    bytes: usize,
+) -> Result<Vec<u8>, &'static str> {
+    if u64::from(guest_address) >= crate::hv::memory::GUEST_STACK_VA_BASE {
+        return Ok(guest_stack_range_mut(vm_id, guest_address, bytes)?.to_vec());
+    }
+    if u64::from(guest_address) >= u64::from(pe32::IMAGE_BASE)
+        && u64::from(guest_address) < u64::from(pe32::IMAGE_BASE) + pe32::IMAGE_BYTES as u64
+    {
+        return Ok(launcher_image_range_mut(vm_id, guest_address, bytes)?.to_vec());
+    }
+    if u64::from(guest_address) >= u64::from(HEAP_VA)
+        && u64::from(guest_address) < u64::from(HEAP_VA) + HEAP_BYTES as u64
+    {
+        return Ok(launcher_heap_range_mut(vm_id, guest_address, bytes)?.to_vec());
+    }
+    if u64::from(guest_address) >= u64::from(PROCESS_DATA_VA)
+        && u64::from(guest_address) < u64::from(PROCESS_DATA_VA) + PAGE_SIZE_4K as u64
+    {
+        return Ok(launcher_process_data_range_mut(vm_id, guest_address, bytes)?.to_vec());
+    }
+    Err("guest range is outside launcher mappings")
+}
+
+fn launcher_writable_range_mut(
+    vm_id: u8,
+    guest_address: u32,
+    bytes: usize,
+) -> Result<&'static mut [u8], &'static str> {
+    if u64::from(guest_address) >= crate::hv::memory::GUEST_STACK_VA_BASE {
+        return guest_stack_range_mut(vm_id, guest_address, bytes);
+    }
+    if u64::from(guest_address) >= u64::from(pe32::IMAGE_BASE)
+        && u64::from(guest_address) < u64::from(pe32::IMAGE_BASE) + pe32::IMAGE_BYTES as u64
+    {
+        return launcher_image_range_mut(vm_id, guest_address, bytes);
+    }
+    if u64::from(guest_address) >= u64::from(HEAP_VA)
+        && u64::from(guest_address) < u64::from(HEAP_VA) + HEAP_BYTES as u64
+    {
+        return launcher_heap_range_mut(vm_id, guest_address, bytes);
+    }
+    if u64::from(guest_address) >= u64::from(PROCESS_DATA_VA)
+        && u64::from(guest_address) < u64::from(PROCESS_DATA_VA) + PAGE_SIZE_4K as u64
+    {
+        return launcher_process_data_range_mut(vm_id, guest_address, bytes);
+    }
+    Err("guest destination is outside writable launcher mappings")
+}
+
 fn get_string_type_w(vm_id: u8) -> Result<(u32, u32), &'static str> {
     let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP)
         .ok_or("guest ESP unavailable")? as u32;
@@ -947,53 +1001,112 @@ fn get_string_type_w(vm_id: u8) -> Result<(u32, u32), &'static str> {
             .try_into()
             .map_err(|_| "GetStringTypeW output")?,
     );
-    if return_address != GET_STRING_TYPE_W_RETURN
+    if !matches!(return_address, GET_STRING_TYPE_W_RETURN | GET_STRING_TYPE_W_SECOND_RETURN)
         || info_type != 1
-        || source != GET_STRING_TYPE_W_SOURCE
-        || count != 1
+        || count == 0
+        || (return_address == GET_STRING_TYPE_W_RETURN && source != GET_STRING_TYPE_W_SOURCE)
     {
         return Err("unexpected GetStringTypeW frame");
     }
-    let output = guest_stack_range_mut(vm_id, output_pointer, 2)?;
-    output.copy_from_slice(&1u16.to_le_bytes());
+    let wide_bytes = usize::try_from(count)
+        .ok()
+        .and_then(|count| count.checked_mul(2))
+        .ok_or("GetStringTypeW size overflow")?;
+    let _source = launcher_read_range(vm_id, source, wide_bytes)?;
+    let output = guest_stack_range_mut(vm_id, output_pointer, wide_bytes)?;
+    output.fill(0);
+    for value in output.chunks_exact_mut(2) {
+        value.copy_from_slice(&1u16.to_le_bytes());
+    }
     Ok((output_pointer, return_address))
 }
 
-fn lc_map_string_w(vm_id: u8) -> Result<(u32, u32), &'static str> {
+fn multi_byte_to_wide_char(vm_id: u8) -> Result<(u32, u32, u32, u32, u32), &'static str> {
     let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP)
         .ok_or("guest ESP unavailable")? as u32;
     let frame = guest_stack_range_mut(vm_id, esp, 28)?;
-    let return_address =
-        u32::from_le_bytes(frame[0..4].try_into().map_err(|_| "LCMapStringW return")?);
-    let locale = u32::from_le_bytes(frame[4..8].try_into().map_err(|_| "LCMapStringW locale")?);
-    let flags = u32::from_le_bytes(frame[8..12].try_into().map_err(|_| "LCMapStringW flags")?);
+    let return_address = u32::from_le_bytes(
+        frame[0..4]
+            .try_into()
+            .map_err(|_| "MultiByteToWideChar return")?,
+    );
+    let code_page = u32::from_le_bytes(
+        frame[4..8]
+            .try_into()
+            .map_err(|_| "MultiByteToWideChar code page")?,
+    );
+    let flags = u32::from_le_bytes(
+        frame[8..12]
+            .try_into()
+            .map_err(|_| "MultiByteToWideChar flags")?,
+    );
     let source = u32::from_le_bytes(
         frame[12..16]
             .try_into()
-            .map_err(|_| "LCMapStringW source")?,
+            .map_err(|_| "MultiByteToWideChar source")?,
     );
-    let count = u32::from_le_bytes(frame[16..20].try_into().map_err(|_| "LCMapStringW count")?);
+    let source_count = i32::from_le_bytes(
+        frame[16..20]
+            .try_into()
+            .map_err(|_| "MultiByteToWideChar source count")?,
+    );
     let destination = u32::from_le_bytes(
         frame[20..24]
             .try_into()
-            .map_err(|_| "LCMapStringW destination")?,
+            .map_err(|_| "MultiByteToWideChar destination")?,
     );
-    let destination_count = u32::from_le_bytes(
+    let destination_count = i32::from_le_bytes(
         frame[24..28]
             .try_into()
-            .map_err(|_| "LCMapStringW destination count")?,
+            .map_err(|_| "MultiByteToWideChar destination count")?,
     );
-    if return_address != LC_MAP_STRING_W_RETURN
-        || locale != 0
-        || flags != 0x100
-        || source != LC_MAP_STRING_W_SOURCE
-        || count != 1
-        || destination != 0
-        || destination_count != 0
+    if !matches!(
+        return_address,
+        MULTI_BYTE_TO_WIDE_CHAR_SIZING_RETURN | MULTI_BYTE_TO_WIDE_CHAR_CONVERT_RETURN
+    ) || code_page != MULTI_BYTE_TO_WIDE_CHAR_CODE_PAGE
+        || flags != 1
+        || source_count == 0
+        || destination_count < 0
     {
-        return Err("unexpected LCMapStringW frame");
+        return Err("unexpected MultiByteToWideChar frame");
     }
-    Ok((1, return_address))
+    let source_limit = if source_count < 0 {
+        0x10000usize
+    } else {
+        usize::try_from(source_count).map_err(|_| "MultiByteToWideChar source count")?
+    };
+    let source_bytes = launcher_read_range(vm_id, source, source_limit)?;
+    let source_len = if source_count < 0 {
+        source_bytes
+            .iter()
+            .position(|byte| *byte == 0)
+            .map(|index| index + 1)
+            .ok_or("MultiByteToWideChar unterminated source")?
+    } else {
+        source_bytes.len()
+    };
+    let required = source_len;
+    if destination == 0 || destination_count == 0 {
+        if return_address != MULTI_BYTE_TO_WIDE_CHAR_SIZING_RETURN {
+            return Err("unexpected MultiByteToWideChar conversion destination");
+        }
+        return Ok((required as u32, return_address, source, destination, required as u32));
+    }
+    if return_address != MULTI_BYTE_TO_WIDE_CHAR_CONVERT_RETURN
+        || usize::try_from(destination_count)
+            .map_err(|_| "MultiByteToWideChar destination count")?
+            < required
+    {
+        return Err("unexpected MultiByteToWideChar conversion size");
+    }
+    let output_bytes = required
+        .checked_mul(2)
+        .ok_or("MultiByteToWideChar output overflow")?;
+    let output = launcher_writable_range_mut(vm_id, destination, output_bytes)?;
+    for (index, byte) in source_bytes[..source_len].iter().enumerate() {
+        output[index * 2..index * 2 + 2].copy_from_slice(&u16::from(*byte).to_le_bytes());
+    }
+    Ok((required as u32, return_address, source, destination, required as u32))
 }
 
 fn get_startup_info_a(vm_id: u8) -> Result<(u32, u32), &'static str> {
@@ -1745,7 +1858,7 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
                 DispatchOutcome::Stop
             }
         }
-    } else if call == 34 && imports::is_get_string_type_w(import) {
+    } else if imports::is_get_string_type_w(import) {
         match get_string_type_w(vm_id) {
             Ok((output_pointer, return_address)) => {
                 let mut registers = crate::hv::vmx::guest_registers();
@@ -1765,30 +1878,38 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
                 DispatchOutcome::Stop
             }
         }
-    } else if matches!(call, 35 | 36) && imports::is_lc_map_string_w(import) {
-        match lc_map_string_w(vm_id) {
-            Ok((mapped, return_address)) => {
+    } else if imports::is_multi_byte_to_wide_char(import) {
+        match multi_byte_to_wide_char(vm_id) {
+            Ok((converted, return_address, source, destination, required)) => {
                 let mut registers = crate::hv::vmx::guest_registers();
-                registers.rax = u64::from(mapped);
+                registers.rax = u64::from(converted);
                 crate::hv::vmx::set_guest_registers(registers);
                 super::trace::info(format_args!(
-                    "return #{} KERNEL32.dll!LCMapStringW mapped={} ret=0x{:08X}",
-                    call, mapped, return_address
+                    "MultiByteToWideChar codepage=1252 source=0x{:08X} destination=0x{:08X} count={} required={} ret=0x{:08X}",
+                    source, destination, converted, required, return_address
+                ));
+                super::trace::info(format_args!(
+                    "return #{} KERNEL32.dll!MultiByteToWideChar eax={}",
+                    call, converted
                 ));
                 DispatchOutcome::Resume
             }
             Err(reason) => {
                 super::trace::fail(format_args!(
-                    "gate-1o failed vm={} phase=LCMapStringW reason={}",
-                    vm_id, reason
+                    "locale failed vm={} phase=MultiByteToWideChar call={} reason={}",
+                    vm_id, call, reason
                 ));
                 DispatchOutcome::Stop
             }
         }
-    } else if call == 37 && imports::is_get_tick_count(import) {
+    } else if imports::is_get_tick_count(import) {
         super::trace::info(format_args!(
-            "gate-1o complete vm={} next-import={}!{}",
-            vm_id, import.module, import.symbol
+            "locale complete vm={} next-import={}!{} call={}",
+            vm_id, import.module, import.symbol, call
+        ));
+        super::trace::info(format_args!(
+            "get-tick-count frontier vm={} import={}!{} call={}",
+            vm_id, import.module, import.symbol, call
         ));
         DispatchOutcome::Stop
     } else {

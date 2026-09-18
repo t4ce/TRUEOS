@@ -25,7 +25,7 @@ pub(crate) enum Kind {
     GetACP,
     GetCPInfo,
     GetStringTypeW,
-    LCMapStringW,
+    MultiByteToWideChar,
 }
 
 pub(crate) fn write(import_id: u32, kind: Kind, output: &mut [u8]) -> Result<(), &'static str> {
@@ -101,9 +101,14 @@ pub(crate) fn write(import_id: u32, kind: Kind, output: &mut [u8]) -> Result<(),
             output[9] = 0x08;
             output[10] = 0x00;
         }
-        Kind::GetStringTypeW | Kind::LCMapStringW => {
+        Kind::GetStringTypeW => {
             output[8] = 0xC2;
             output[9] = 0x10;
+            output[10] = 0x00;
+        }
+        Kind::MultiByteToWideChar => {
+            output[8] = 0xC2;
+            output[9] = 0x18;
             output[10] = 0x00;
         }
         Kind::Stop => {
