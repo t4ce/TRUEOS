@@ -133,6 +133,39 @@ PEN_TESTS = r'''
     }
 }
 '''
+POLICY_HARNESS = r'''
+mod r { pub mod services { pub mod microfont_log_service {
+    pub fn enabled() -> bool { crate::policy::ACTIVE.load(core::sync::atomic::Ordering::Relaxed) }
+} } }
+mod policy {
+    use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    pub static ACTIVE: AtomicBool = AtomicBool::new(false);
+    static COUNT: AtomicUsize = AtomicUsize::new(8);
+    const FIRST_BACKGROUND_SLOT: u32 = 2;
+    const WORKER_SLOT_LIMIT: usize = 256;
+    fn topology_core_slot_count() -> usize { COUNT.load(Ordering::Relaxed) }
+    fn is_background_worker_slot(slot: u32) -> bool { slot >= FIRST_BACKGROUND_SLOT }
+    // Actual production functions follow. Only the input topology/profile are mocked.
+    __FUNCTIONS__
+    #[test] fn reservation_is_final_topology_slot_and_profile_only() {
+        assert_eq!(last_ap_service_slot(), None);
+        assert!(is_general_background_worker_slot(7));
+        ACTIVE.store(true, Ordering::Relaxed);
+        assert_eq!(last_ap_service_slot(), Some(7));
+        assert!(!is_general_background_worker_slot(7));
+        assert!(is_general_background_worker_slot(6));
+        assert!(!is_general_background_worker_slot(0));
+        assert!(!is_general_background_worker_slot(1));
+        COUNT.store(2, Ordering::Relaxed);
+        assert_eq!(last_ap_service_slot(), None);
+        COUNT.store(256, Ordering::Relaxed);
+        assert_eq!(last_ap_service_slot(), Some(255));
+        COUNT.store(257, Ordering::Relaxed);
+        assert_eq!(last_ap_service_slot(), None);
+        ACTIVE.store(false, Ordering::Relaxed);
+    }
+}
+'''
 
 def main():
     log = (ROOT / 'src/log_os.rs').read_text()
@@ -155,6 +188,12 @@ def main():
     start = log.index('pub mod logtotcp {') + len('pub mod logtotcp {')
     end = log.index('    #[trueos_executor::task]', start)
     ring = log[start:end]
+    functions = []
+    for name in ['last_ap_service_slot', 'is_last_ap_service_slot', 'is_general_background_worker_slot']:
+        start = workers.index('pub fn ' + name + '(')
+        end = workers.index('\n}', start) + 2
+        functions.append(workers[start:end])
+    policy = POLICY_HARNESS.replace('__FUNCTIONS__', '\n'.join(functions))
     # Exact production ring prefix; omit only the unrelated asynchronous TCP server.
     harness = '''extern crate alloc;
 mod intel {
@@ -162,7 +201,7 @@ mod intel {
     pub fn dma_flush_strided_rows(_: *mut u8, _: usize, _: usize, _: usize) -> bool { true }
 }
 #[path = "service.rs"] mod service;
-mod ring {\n''' + ring + RING_TESTS + '\n}\n'
+mod ring {\n''' + ring + RING_TESTS + '\n}\n' + policy
     with tempfile.TemporaryDirectory(prefix='trueos-screenlog-') as temp:
         work = Path(temp)
         (work / 'Cargo.toml').write_text('''[package]
@@ -179,8 +218,8 @@ microfont = "=3.7.8"
         (work / 'service.rs').write_text(service + PEN_TESTS)
         (work / 'lib.rs').write_text(harness)
         env = dict(os.environ, RUSTUP_TOOLCHAIN='stable', RUST_MIN_STACK=str(16*1024*1024))
-        subprocess.run(['cargo', 'test', '--manifest-path', str(work / 'Cargo.toml'), '--', '--test-threads=1'], cwd=work, env=env, check=True)
-    print('PASS: actual ring and CPU renderer compiled and tested (not a full kernel build)', flush=True)
+        subprocess.run(['cargo', 'test', '--lib', '--manifest-path', str(work / 'Cargo.toml'), '--', '--test-threads=1'], cwd=work, env=env, check=True)
+    print('PASS: actual ring, LastAP selector and CPU renderer tested (not a full kernel build)', flush=True)
 
 if __name__ == '__main__':
     main()
