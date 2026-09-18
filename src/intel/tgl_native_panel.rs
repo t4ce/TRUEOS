@@ -271,6 +271,18 @@ pub(crate) fn init_once(dev: Dev) -> bool {
         scalers_detached as u8, SPIRIT_RESEALED as u8,
     );
     if readback_ok {
+        // Reuse the proven allocation for a transparent CPU log layer. This
+        // publishes LastAP's reservation before secondary CPUs are started.
+        // Only the service writes these permanently retained pages afterwards.
+        let _ = unsafe {
+            crate::r::services::microfont_log_service::install(
+                crate::r::services::microfont_log_service::Surface {
+                    phys: frame.phys, gpu: SURFACE_GPU, virt: frame.virt,
+                    byte_len: FRAME_BYTES, width: WIDTH, height: HEIGHT,
+                    pitch_bytes: PITCH_BYTES,
+                },
+            )
+        };
         // PIPE_SRC now describes the actual native panel. Re-enter the same
         // allocation, alpha/DBUF, plane-latch and capability-publication path
         // as desktop UI4, with distinct 4K-safe scanout/compositor reservations.

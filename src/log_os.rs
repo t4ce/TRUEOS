@@ -703,6 +703,8 @@ pub mod logtotcp {
         buf: [u8; MAX_BYTES],
         head: usize,
         len: usize,
+        // Independent of TCP's unread length: the screen is a second reader.
+        written: u64,
     }
 
     impl TcpLogRing {
@@ -711,11 +713,13 @@ pub mod logtotcp {
                 buf: [0; MAX_BYTES],
                 head: 0,
                 len: 0,
+                written: 0,
             }
         }
 
         #[inline]
         fn write_bytes(&mut self, bytes: &[u8]) {
+            self.written = self.written.saturating_add(bytes.len() as u64);
             if bytes.is_empty() {
                 return;
             }
@@ -762,6 +766,21 @@ pub mod logtotcp {
             self.len -= take;
             out
         }
+        /// Copy retained bytes without advancing TCP's destructive drain.
+        /// Even TCP-drained bytes remain readable until the writer wraps.
+        fn copy_since(&self, cursor: &mut u64, out: &mut [u8]) -> (usize, u64) {
+            let oldest = self.written.saturating_sub(MAX_BYTES as u64);
+            let lost = oldest.saturating_sub(*cursor);
+            let start_seq = (*cursor).max(oldest).min(self.written);
+            let behind = (self.written - start_seq) as usize;
+            let take = out.len().min(behind);
+            let start = (self.head + MAX_BYTES - behind) % MAX_BYTES;
+            let first = take.min(MAX_BYTES - start);
+            out[..first].copy_from_slice(&self.buf[start..start + first]);
+            out[first..take].copy_from_slice(&self.buf[..take - first]);
+            *cursor = start_seq + take as u64;
+            (take, lost)
+        }
     }
 
     static RING: Mutex<TcpLogRing> = Mutex::new(TcpLogRing::new());
@@ -781,6 +800,13 @@ pub mod logtotcp {
 
     fn drain_bytes(max: usize) -> Vec<u8> {
         RING.lock().drain_bytes(max)
+    }
+
+    /// Short nonblocking snapshot for the last-AP screen service. Formatting,
+    /// acceptance and TCP draining are unchanged; drawing happens after unlock.
+    pub(crate) fn copy_for_screen(cursor: &mut u64, out: &mut [u8]) -> Option<(usize, u64)> {
+        let ring = RING.try_lock()?;
+        Some(ring.copy_since(cursor, out))
     }
 
     #[trueos_executor::task]

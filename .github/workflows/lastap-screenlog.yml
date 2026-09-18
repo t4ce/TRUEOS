@@ -1,12 +1,20 @@
-name: Last-AP screenlog preparation
+name: Last-AP screenlog tests
 on:
+  pull_request:
+    paths:
+      - 'src/log_os.rs'
+      - 'src/workers.rs'
+      - 'src/r/services/**'
+      - 'src/intel/tgl_native_panel.rs'
+      - 'src/intel/display.rs'
+      - 'tools/test_lastap_screenlog.py'
+      - '.github/workflows/lastap-screenlog.yml'
   push:
     branches: ['exp/tgl-lastap-screenlog']
-    paths: ['tools/_prepare_lastap_screenlog.py', 'tools/test_lastap_screenlog.py', 'src/r/services/microfont_log_service.rs', '.github/workflows/lastap-screenlog.yml']
 permissions:
-  contents: write
+  contents: read
 jobs:
-  check:
+  cpu-log:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -22,39 +30,11 @@ jobs:
             /src/r/services/microfont_log_service.rs
             /src/intel/tgl_native_panel.rs
             /src/intel/display.rs
-            /src/shell2/shell2_cmd_registry.rs
-            /tools/trueos-doc
             /tools/test_lastap_screenlog.py
-            /tools/_prepare_lastap_screenlog.py
-      - name: Apply scoped source wiring and validate
+      - name: Test production ring, LastAP selector and CPU font rasterizer
         run: |
           set -euo pipefail
-          python3 tools/trueos-doc topic logs
-          python3 tools/_prepare_lastap_screenlog.py
           python3 tools/test_lastap_screenlog.py
           for f in src/log_os.rs src/workers.rs src/r/services/mod.rs src/r/services/spawn_service.rs src/r/services/microfont_log_service.rs src/intel/tgl_native_panel.rs src/intel/display.rs; do
             rustfmt --edition 2024 --config skip_children=true --emit stdout "$f" >/dev/null
           done
-          git diff --check
-          git diff --stat
-          git diff -- src/log_os.rs src/workers.rs src/r/services/mod.rs src/r/services/spawn_service.rs src/intel/tgl_native_panel.rs src/intel/display.rs
-      - name: Store validated source blobs (no branch or settings mutations)
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          python3 - <<'PY'
-          import hashlib, json, os, urllib.request
-          from pathlib import Path
-          result = {}
-          for path in ['src/log_os.rs', 'src/workers.rs', 'src/r/services/mod.rs', 'src/r/services/spawn_service.rs', 'src/intel/tgl_native_panel.rs', 'src/intel/display.rs']:
-              data = Path(path).read_bytes()
-              expected = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
-              request = urllib.request.Request('https://api.github.com/repos/t4ce/TRUEOS/git/blobs',
-                  data=json.dumps({'content': data.decode(), 'encoding': 'utf-8'}).encode(), method='POST',
-                  headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json'})
-              with urllib.request.urlopen(request) as response:
-                  blob = json.load(response)
-              assert blob['sha'] == expected
-              result[path] = expected
-          print('TESTED_BLOBS=' + json.dumps(result, sort_keys=True))
-          PY
