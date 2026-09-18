@@ -176,5 +176,8 @@ pub(crate) fn materialize(bytes: &[u8]) -> Result<Materialized, &'static str> {
     if !imports::find_get_version(&imports) {
         return Err("pe expected KERNEL32.dll!GetVersion missing");
     }
+    if !imports::find_initialize_critical_section(&imports) {
+        return Err("pe expected unique KERNEL32.dll!InitializeCriticalSection missing");
+    }
     Ok(Materialized { image, imports })
 }

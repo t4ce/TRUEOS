@@ -136,12 +136,25 @@ def check() -> None:
     require(launcher_source, "OS_VERSION_INFO_A_BYTES: usize = 0x94", "OSVERSIONINFOA size")
     require(launcher_source, "get_version_ex_a", "GetVersionExA implementation")
     require(launcher_source, "gate-1d complete", "fourth-import completion trace")
+    require(launcher_source, "CRITICAL_SECTION_BYTES: usize = 0x18", "critical-section size")
+    for return_address, pointer in (
+        (0x004022A4, 0x0040AB08),
+        (0x004022AC, 0x0040AB38),
+        (0x004022B4, 0x0040AB20),
+        (0x004022BC, 0x0040AAF0),
+    ):
+        require(
+            launcher_source,
+            f"(0x{return_address:08X}, 0x{pointer:08X})",
+            "Gate-1E critical-section tuple",
+        )
     require(pe32, "IMAGE_BASE: u32 = 0x0040_0000", "fixed launcher image base")
     require(pe32, "ENTRY_RVA: u32 = 0x2144", "fixed launcher entry RVA")
     require(pe32, "pe ordinal import unsupported", "fail-closed ordinal import handling")
     require(imports, "find_get_version", "GetVersion import assertion")
     require(imports, "find_heap_create", "HeapCreate import assertion")
     require(imports, "find_get_version_ex_a", "GetVersionExA import assertion")
+    require(imports, "find_initialize_critical_section", "InitializeCriticalSection import assertion")
     if not re.search(r"count\(\)\s*==\s*1", imports):
         raise ValueError("missing unique GetVersion import assertion")
     require(thunks, "0x0F,\n        0x01,\n        0xC1", "32-bit VMCALL thunk opcode")
@@ -152,6 +165,7 @@ def check() -> None:
     require(thunks, "output[9] = 0x0C", "HeapCreate stack cleanup")
     require(thunks, "Kind::GetVersionExA", "GetVersionExA thunk kind")
     require(thunks, "output[9] = 0x04", "GetVersionExA stack cleanup")
+    require(thunks, "Kind::InitializeCriticalSection", "InitializeCriticalSection thunk kind")
     require(shell, "wc3_launcher: usage", "private launcher Shell2 command")
 
     emulate_probe(probe_bytes(guest32))

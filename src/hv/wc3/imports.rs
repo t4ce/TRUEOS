@@ -29,6 +29,8 @@ pub(crate) fn patch(
             super::thunk32::Kind::HeapCreate
         } else if is_get_version_ex_a(import) {
             super::thunk32::Kind::GetVersionExA
+        } else if is_initialize_critical_section(import) {
+            super::thunk32::Kind::InitializeCriticalSection
         } else {
             super::thunk32::Kind::Stop
         };
@@ -75,6 +77,19 @@ pub(crate) fn find_get_version_ex_a(imports: &[LauncherImport]) -> bool {
 
 pub(crate) fn is_get_version_ex_a(import: &LauncherImport) -> bool {
     import.module.eq_ignore_ascii_case("KERNEL32.dll") && import.symbol == "GetVersionExA"
+}
+
+pub(crate) fn find_initialize_critical_section(imports: &[LauncherImport]) -> bool {
+    imports
+        .iter()
+        .filter(|import| is_initialize_critical_section(import))
+        .count()
+        == 1
+}
+
+pub(crate) fn is_initialize_critical_section(import: &LauncherImport) -> bool {
+    import.module.eq_ignore_ascii_case("KERNEL32.dll")
+        && import.symbol == "InitializeCriticalSection"
 }
 
 pub(crate) fn new_table() -> Vec<LauncherImport> {

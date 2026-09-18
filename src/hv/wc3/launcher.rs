@@ -21,6 +21,13 @@ const HEAP_CREATE_RETURN: u32 = 0x0040_2D9B;
 const HEAP_CREATE_INITIAL: u32 = 0x1000;
 const GET_VERSION_EX_A_RETURN: u32 = 0x0040_2C61;
 const OS_VERSION_INFO_A_BYTES: usize = 0x94;
+const CRITICAL_SECTION_BYTES: usize = 0x18;
+const CRITICAL_SECTION_CALLS: [(u32, u32); 4] = [
+    (0x0040_22A4, 0x0040_AB08),
+    (0x0040_22AC, 0x0040_AB38),
+    (0x0040_22B4, 0x0040_AB20),
+    (0x0040_22BC, 0x0040_AAF0),
+];
 
 #[derive(Copy, Clone)]
 pub(crate) struct GuestMapping {
@@ -31,6 +38,8 @@ struct LauncherState {
     arena: HeapArena,
     imports: Vec<super::imports::LauncherImport>,
     heap: Option<HeapHandle>,
+    initialized_critical_sections: [u32; 4],
+    initialized_critical_section_count: usize,
 }
 
 #[derive(Copy, Clone)]
@@ -86,6 +95,8 @@ pub(crate) fn prepare(vm_id: u8, bytes: &[u8]) -> Result<(), &'static str> {
         arena,
         imports: materialized.imports,
         heap: None,
+        initialized_critical_sections: [0; 4],
+        initialized_critical_section_count: 0,
     });
     CALLS[usize::from(vm_id)].store(0, Ordering::Release);
     super::trace::info(format_args!(
@@ -208,6 +219,71 @@ fn get_version_ex_a(vm_id: u8) -> Result<(u32, u32), &'static str> {
     Ok((version_info, return_address))
 }
 
+fn launcher_image_range_mut(
+    vm_id: u8,
+    guest_address: u32,
+    bytes: usize,
+) -> Result<&'static mut [u8], &'static str> {
+    let state = LAUNCHERS
+        .get(usize::from(vm_id))
+        .ok_or("unsupported wc3 launcher VM id")?
+        .lock();
+    let state = state.as_ref().ok_or("wc3 launcher state unavailable")?;
+    let offset = u64::from(guest_address)
+        .checked_sub(u64::from(pe32::IMAGE_BASE))
+        .ok_or("guest image address below image")?;
+    let offset = usize::try_from(offset).map_err(|_| "guest image address range")?;
+    let end = offset.checked_add(bytes).ok_or("guest image range overflow")?;
+    if end > pe32::IMAGE_BYTES || end > state.arena.length {
+        return Err("guest image range outside writable image");
+    }
+    Ok(unsafe {
+        core::slice::from_raw_parts_mut((state.arena.virt_start + offset) as *mut u8, bytes)
+    })
+}
+
+fn initialize_critical_section(vm_id: u8, call: u32) -> Result<(u32, u32), &'static str> {
+    let expected = CRITICAL_SECTION_CALLS
+        .get(usize::try_from(call - 4).map_err(|_| "critical-section sequence")?)
+        .copied()
+        .ok_or("unexpected critical-section sequence")?;
+    let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP)
+        .ok_or("guest ESP unavailable")? as u32;
+    let frame = guest_stack_range_mut(vm_id, esp, 8)?;
+    let return_address = u32::from_le_bytes(
+        frame[0..4]
+            .try_into()
+            .map_err(|_| "critical-section return address")?,
+    );
+    let critical_section = u32::from_le_bytes(
+        frame[4..8]
+            .try_into()
+            .map_err(|_| "critical-section argument")?,
+    );
+    if (return_address, critical_section) != expected || critical_section == 0 {
+        return Err("unexpected critical-section frame");
+    }
+    let output = launcher_image_range_mut(vm_id, critical_section, CRITICAL_SECTION_BYTES)?;
+    output.fill(0);
+    output[4..8].copy_from_slice(&u32::MAX.to_le_bytes());
+    let state = LAUNCHERS
+        .get(usize::from(vm_id))
+        .ok_or("unsupported wc3 launcher VM id")?;
+    let mut state = state.lock();
+    let state = state.as_mut().ok_or("wc3 launcher state unavailable")?;
+    let slot = usize::try_from(call - 4).map_err(|_| "critical-section sequence")?;
+    state.initialized_critical_sections[slot] = critical_section;
+    state.initialized_critical_section_count = slot + 1;
+    Ok((critical_section, return_address))
+}
+
+pub(crate) fn is_initialized_critical_section(vm_id: u8, guest_address: u32) -> bool {
+    LAUNCHERS
+        .get(usize::from(vm_id))
+        .and_then(|slot| slot.lock().as_ref().map(|state| state.initialized_critical_sections))
+        .is_some_and(|addresses| addresses.contains(&guest_address))
+}
+
 pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
     let id = crate::hv::vmx::guest_registers().rax as u32;
     let imports = match LAUNCHERS
@@ -279,15 +355,36 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
                 DispatchOutcome::Stop
             }
         }
-    } else if call == 4 {
+    } else if (4..=7).contains(&call) && imports::is_initialize_critical_section(import) {
+        match initialize_critical_section(vm_id, call) {
+            Ok((critical_section, return_address)) => {
+                super::trace::info(format_args!(
+                    "InitializeCriticalSection ptr=0x{:08X} ret=0x{:08X}",
+                    critical_section, return_address
+                ));
+                super::trace::info(format_args!(
+                    "return #{} KERNEL32.dll!InitializeCriticalSection",
+                    call
+                ));
+                DispatchOutcome::Resume
+            }
+            Err(reason) => {
+                super::trace::fail(format_args!(
+                    "gate-1e failed vm={} phase=InitializeCriticalSection reason={}",
+                    vm_id, reason
+                ));
+                DispatchOutcome::Stop
+            }
+        }
+    } else if call == 8 && !imports::is_initialize_critical_section(import) {
         super::trace::info(format_args!(
-            "gate-1d complete vm={} next-import={}!{}",
+            "gate-1e complete vm={} next-import={}!{}",
             vm_id, import.module, import.symbol
         ));
         DispatchOutcome::Stop
     } else {
         super::trace::fail(format_args!(
-            "gate-1d failed vm={} phase=unexpected-{}-import {}!{}",
+            "gate-1e failed vm={} phase=unexpected-{}-import {}!{}",
             vm_id, call, import.module, import.symbol
         ));
         DispatchOutcome::Stop
