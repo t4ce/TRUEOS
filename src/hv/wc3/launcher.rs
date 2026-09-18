@@ -687,6 +687,17 @@ fn heap_alloc_words(vm_id: u8) -> Result<[u32; 4], &'static str> {
     ])
 }
 
+fn heap_alloc_next(vm_id: u8) -> Result<usize, &'static str> {
+    let launcher = LAUNCHERS
+        .get(usize::from(vm_id))
+        .ok_or("unsupported wc3 launcher VM id")?;
+    launcher
+        .lock()
+        .as_ref()
+        .ok_or("wc3 launcher state unavailable")
+        .map(|state| state.heap_next)
+}
+
 fn launcher_heap_range_mut(
     vm_id: u8,
     guest_address: u32,
@@ -1899,6 +1910,22 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
                 DispatchOutcome::Stop
             }
         }
+    } else if imports::is_heap_alloc(import) && !matches!(call, 9 | 12 | 24 | 26) {
+        match (heap_alloc_words(vm_id), heap_alloc_next(vm_id)) {
+            (Ok([return_address, heap_handle, flags, bytes]), Ok(heap_next)) => {
+                super::trace::fail(format_args!(
+                    "crt-startup failed vm={} phase=HeapAlloc probe call={} ret=0x{:08X} heap=0x{:08X} flags=0x{:08X} bytes=0x{:08X} heap_next=0x{:X} reason=unprofiled-site",
+                    vm_id, call, return_address, heap_handle, flags, bytes, heap_next
+                ));
+            }
+            (Err(reason), _) | (_, Err(reason)) => {
+                super::trace::fail(format_args!(
+                    "crt-startup failed vm={} phase=HeapAlloc probe call={} reason={}",
+                    vm_id, call, reason
+                ));
+            }
+        }
+        DispatchOutcome::Stop
     } else if call == 9 && imports::is_heap_alloc(import) {
         match heap_alloc(vm_id, HEAP_ALLOC_RETURN, HEAP_ALLOC_FLAGS, HEAP_ALLOC_BYTES) {
             Ok((guest_ptr, return_address, heap_handle, flags, bytes)) => {
