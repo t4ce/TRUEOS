@@ -1512,27 +1512,9 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
                 DispatchOutcome::Stop
             }
         }
-    } else if call == 21 {
-        super::trace::info(format_args!(
-            "gate-1m complete vm={} next-import={}!{}",
-            vm_id, import.module, import.symbol
-        ));
-        DispatchOutcome::Stop
-    } else if call == 26 {
-        super::trace::info(format_args!(
-            "gate-1n complete vm={} next-import={}!{}",
-            vm_id, import.module, import.symbol
-        ));
-        DispatchOutcome::Stop
     } else if call == 31 {
         super::trace::info(format_args!(
             "gate-1n complete vm={} next-import={}!{}",
-            vm_id, import.module, import.symbol
-        ));
-        DispatchOutcome::Stop
-    } else if call == 14 {
-        super::trace::info(format_args!(
-            "gate-1k complete vm={} next-import={}!{}",
             vm_id, import.module, import.symbol
         ));
         DispatchOutcome::Stop
