@@ -1,0 +1,49 @@
+name: TGL GPU log profile
+
+on:
+  push:
+    branches: ['diag/tgl-gpu-log-profile']
+  pull_request:
+    paths:
+      - 'src/log_os.rs'
+      - 'src/log_os.tgl_gpu_diag_profile.txt'
+      - 'tools/test_tgl_gpu_log_profile.py'
+      - '.github/workflows/tgl-gpu-log-profile.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  policy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          path: TRUEOS
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /src/log_os.rs
+            /src/log_os.tgl_gpu_diag_profile.txt
+            /src/shell2/shell2_cmd_registry.rs
+            /tools/trueos-doc
+            /tools/test_tgl_gpu_log_profile.py
+      - name: Read the pinned shared log-os dependency
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p TRUEOS-Blueprints
+          git init "$RUNNER_TEMP/tgl-log-os"
+          git -C "$RUNNER_TEMP/tgl-log-os" remote add origin https://github.com/t4ce/TRUEOS-Blueprints.git
+          git -C "$RUNNER_TEMP/tgl-log-os" -c protocol.version=2 fetch --filter=blob:none --depth=1 origin d4bedf7b3cbaa96c8bca51181e0e3a5509ad619c
+          git -C "$RUNNER_TEMP/tgl-log-os" archive FETCH_HEAD crates/log-os | tar -x -C TRUEOS-Blueprints
+      - name: Query documented semantics and test actual policy and sinks
+        working-directory: TRUEOS
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/trueos-doc topic logs
+          python3 tools/test_tgl_gpu_log_profile.py
+          rustfmt --edition 2024 --config skip_children=true --emit stdout src/log_os.rs >/dev/null
+          git diff --exit-code
