@@ -1,4 +1,4 @@
-use alloc::{string::String, vec::Vec};
+use alloc::{collections::VecDeque, string::String, vec::Vec};
 use core::sync::atomic::{AtomicU32, Ordering};
 use sha2::{Digest, Sha256};
 use spin::Mutex;
@@ -152,6 +152,18 @@ struct LauncherState {
     next_event_handle: u32,
     registered_class_names: Vec<String>,
     window: Option<WinWindow>,
+    messages: VecDeque<WinMsg>,
+}
+
+#[derive(Copy, Clone)]
+struct WinMsg {
+    hwnd: u32,
+    message: u32,
+    wparam: u32,
+    lparam: u32,
+    time: u32,
+    x: i32,
+    y: i32,
 }
 
 struct HeapAllocation {
@@ -312,6 +324,7 @@ pub(crate) fn prepare(vm_id: u8, bytes: &[u8]) -> Result<(), &'static str> {
         next_event_handle: EVENT_HANDLE_BASE,
         registered_class_names: Vec::new(),
         window: None,
+        messages: VecDeque::new(),
     });
     CALLS[usize::from(vm_id)].store(0, Ordering::Release);
     super::trace::info(format_args!(
@@ -2634,6 +2647,86 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
             }
             Err(reason) => super::trace::fail(format_args!(
                 "UpdateWindow frame failed call={} reason={}",
+                call, reason
+            )),
+        }
+        return DispatchOutcome::Stop;
+    } else if imports::is_peek_message_a(import) {
+        let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP).unwrap_or(0) as u32;
+        match guest_stack_range_mut(vm_id, esp, 24) {
+            Ok(frame) => {
+                let word = |offset: usize| {
+                    u32::from_le_bytes(frame[offset..offset + 4].try_into().unwrap_or([0; 4]))
+                };
+                let return_address = word(0);
+                let lp_msg = word(4);
+                let hwnd_filter = word(8);
+                let filter_min = word(12);
+                let filter_max = word(16);
+                let remove_flags = word(20);
+                let remove = remove_flags & 1 != 0;
+                let mut state = LAUNCHERS[usize::from(vm_id)].lock();
+                let Some(state) = state.as_mut() else {
+                    super::trace::fail(format_args!("PeekMessageA state unavailable"));
+                    return DispatchOutcome::Stop;
+                };
+                let position = state.messages.iter().position(|message| {
+                    (hwnd_filter == 0 || message.hwnd == hwnd_filter)
+                        && (filter_min == 0 && filter_max == 0
+                            || message.message >= filter_min && message.message <= filter_max)
+                });
+                let message = position.and_then(|position| {
+                    if remove {
+                        state.messages.remove(position)
+                    } else {
+                        state.messages.get(position).copied()
+                    }
+                });
+                let result = if let Some(message) = message {
+                    if lp_msg == 0 {
+                        super::trace::fail(format_args!("PeekMessageA null lpMsg"));
+                        return DispatchOutcome::Stop;
+                    }
+                    let destination = match launcher_writable_range_mut(vm_id, lp_msg, 28) {
+                        Ok(destination) => destination,
+                        Err(reason) => {
+                            super::trace::fail(format_args!(
+                                "PeekMessageA MSG write failed reason={}",
+                                reason
+                            ));
+                            return DispatchOutcome::Stop;
+                        }
+                    };
+                    destination[0..4].copy_from_slice(&message.hwnd.to_le_bytes());
+                    destination[4..8].copy_from_slice(&message.message.to_le_bytes());
+                    destination[8..12].copy_from_slice(&message.wparam.to_le_bytes());
+                    destination[12..16].copy_from_slice(&message.lparam.to_le_bytes());
+                    destination[16..20].copy_from_slice(&message.time.to_le_bytes());
+                    destination[20..24].copy_from_slice(&message.x.to_le_bytes());
+                    destination[24..28].copy_from_slice(&message.y.to_le_bytes());
+                    true
+                } else {
+                    false
+                };
+                drop(state);
+                let mut registers = crate::hv::vmx::guest_registers();
+                registers.rax = u64::from(result);
+                crate::hv::vmx::set_guest_registers(registers);
+                super::trace::info(format_args!(
+                    "PeekMessageA ret=0x{:08X} lpMsg=0x{:08X} hwnd=0x{:08X} min=0x{:08X} max=0x{:08X} remove=0x{:08X} result={} queue_empty={}",
+                    return_address,
+                    lp_msg,
+                    hwnd_filter,
+                    filter_min,
+                    filter_max,
+                    remove_flags,
+                    result as u8,
+                    !result
+                ));
+                return DispatchOutcome::Resume;
+            }
+            Err(reason) => super::trace::fail(format_args!(
+                "PeekMessageA frame failed call={} reason={}",
                 call, reason
             )),
         }
