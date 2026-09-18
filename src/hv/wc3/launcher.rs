@@ -694,6 +694,59 @@ fn enter_critical_section(
     Ok((critical_section, tid, return_address))
 }
 
+fn probe_enter_critical_section(
+    vm_id: u8,
+    call: u32,
+) -> Result<(u32, u32, u32, bool, bool, i32, u32, u32, Option<u32>), &'static str> {
+    let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP)
+        .ok_or("guest ESP unavailable")? as u32;
+    let frame = guest_stack_range_mut(vm_id, esp, 8)?;
+    let return_address = u32::from_le_bytes(
+        frame[0..4]
+            .try_into()
+            .map_err(|_| "EnterCriticalSection return")?,
+    );
+    let critical_section = u32::from_le_bytes(
+        frame[4..8]
+            .try_into()
+            .map_err(|_| "EnterCriticalSection pointer")?,
+    );
+    if critical_section == 0 {
+        return Err("null EnterCriticalSection pointer");
+    }
+    let state_guard = LAUNCHERS
+        .get(usize::from(vm_id))
+        .ok_or("unsupported wc3 launcher VM id")?
+        .lock();
+    let state = state_guard
+        .as_ref()
+        .ok_or("wc3 launcher state unavailable")?;
+    let static_registered = state
+        .initialized_critical_sections
+        .contains(&critical_section);
+    let dynamic_registered = state.dynamic_critical_sections.contains(&critical_section);
+    let execution_debt = state.execution_debt;
+    drop(state_guard);
+    if !static_registered && !dynamic_registered {
+        return Err("EnterCriticalSection pointer is not registered");
+    }
+    let output = registered_critical_section_range_mut(vm_id, critical_section)?;
+    let lock_count = i32::from_le_bytes(output[4..8].try_into().map_err(|_| "LockCount")?);
+    let recursion = u32::from_le_bytes(output[8..12].try_into().map_err(|_| "RecursionCount")?);
+    let owner = u32::from_le_bytes(output[12..16].try_into().map_err(|_| "OwningThread")?);
+    Ok((
+        call,
+        return_address,
+        critical_section,
+        static_registered,
+        dynamic_registered,
+        lock_count,
+        recursion,
+        owner,
+        execution_debt,
+    ))
+}
+
 fn leave_critical_section(vm_id: u8) -> Result<(u32, u32, u32), &'static str> {
     let (critical_section, return_address) =
         critical_section_frame(vm_id, LEAVE_CRITICAL_SECTION_RETURN)?;
@@ -1194,6 +1247,196 @@ fn launcher_writable_range_mut(
         return launcher_process_data_range_mut(vm_id, guest_address, bytes);
     }
     Err("guest destination is outside writable launcher mappings")
+}
+
+fn resource_u16(image: &[u8], offset: usize) -> Result<u16, &'static str> {
+    Ok(u16::from_le_bytes(
+        image
+            .get(offset..offset.checked_add(2).ok_or("resource offset overflow")?)
+            .ok_or("resource u16 outside image")?
+            .try_into()
+            .map_err(|_| "resource u16")?,
+    ))
+}
+
+fn resource_u32(image: &[u8], offset: usize) -> Result<u32, &'static str> {
+    Ok(u32::from_le_bytes(
+        image
+            .get(offset..offset.checked_add(4).ok_or("resource offset overflow")?)
+            .ok_or("resource u32 outside image")?
+            .try_into()
+            .map_err(|_| "resource u32")?,
+    ))
+}
+
+fn resource_directory_entry(
+    image: &[u8],
+    root: usize,
+    directory: usize,
+    wanted_id: u32,
+) -> Result<usize, &'static str> {
+    let named = usize::from(resource_u16(image, directory + 12)?);
+    let ids = usize::from(resource_u16(image, directory + 14)?);
+    let entries = directory
+        .checked_add(16)
+        .ok_or("resource entries overflow")?
+        .checked_add(named.checked_mul(8).ok_or("resource entries overflow")?)
+        .ok_or("resource entries overflow")?;
+    for index in 0..ids {
+        let entry = entries
+            .checked_add(index.checked_mul(8).ok_or("resource entry overflow")?)
+            .ok_or("resource entry overflow")?;
+        if resource_u32(image, entry)? != wanted_id {
+            continue;
+        }
+        let child = resource_u32(image, entry + 4)?;
+        if child & 0x8000_0000 == 0 {
+            return Err("resource entry is not a directory");
+        }
+        return root
+            .checked_add(usize::try_from(child & 0x7FFF_FFFF).map_err(|_| "resource offset")?)
+            .ok_or("resource directory overflow");
+    }
+    Err("resource id not found")
+}
+
+fn resource_first_language_data(
+    image: &[u8],
+    root: usize,
+    directory: usize,
+) -> Result<usize, &'static str> {
+    let named = usize::from(resource_u16(image, directory + 12)?);
+    let ids = usize::from(resource_u16(image, directory + 14)?);
+    let entries = directory
+        .checked_add(16)
+        .ok_or("resource entries overflow")?
+        .checked_add(named.checked_mul(8).ok_or("resource entries overflow")?)
+        .ok_or("resource entries overflow")?;
+    if ids == 0 {
+        return Err("resource language missing");
+    }
+    let child = resource_u32(image, entries + 4)?;
+    if child & 0x8000_0000 != 0 {
+        return Err("resource language is a directory");
+    }
+    root.checked_add(usize::try_from(child).map_err(|_| "resource data offset")?)
+        .ok_or("resource data overflow")
+}
+
+fn cp1252_byte(codepoint: u16) -> u8 {
+    match codepoint {
+        0x20AC => 0x80,
+        0x201A => 0x82,
+        0x0192 => 0x83,
+        0x201E => 0x84,
+        0x2026 => 0x85,
+        0x2020 => 0x86,
+        0x2021 => 0x87,
+        0x02C6 => 0x88,
+        0x2030 => 0x89,
+        0x0160 => 0x8A,
+        0x2039 => 0x8B,
+        0x0152 => 0x8C,
+        0x017D => 0x8E,
+        0x2018 => 0x91,
+        0x2019 => 0x92,
+        0x201C => 0x93,
+        0x201D => 0x94,
+        0x2022 => 0x95,
+        0x2013 => 0x96,
+        0x2014 => 0x97,
+        0x02DC => 0x98,
+        0x2122 => 0x99,
+        0x0161 => 0x9A,
+        0x203A => 0x9B,
+        0x0153 => 0x9C,
+        0x017E => 0x9E,
+        0x0178 => 0x9F,
+        codepoint if codepoint <= 0x00FF => codepoint as u8,
+        _ => b'?',
+    }
+}
+
+fn load_string_a(vm_id: u8) -> Result<(u32, u32, u32, u32, u32), &'static str> {
+    let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP)
+        .ok_or("guest ESP unavailable")? as u32;
+    let frame = guest_stack_range_mut(vm_id, esp, 20)?;
+    let read =
+        |offset: usize| u32::from_le_bytes(frame[offset..offset + 4].try_into().unwrap_or([0; 4]));
+    let return_address = read(0);
+    let instance = read(4);
+    let resource_id = read(8);
+    let buffer = read(12);
+    let max_chars = read(16);
+    if instance != pe32::IMAGE_BASE || max_chars == 0 {
+        return Err("unexpected LoadStringA frame");
+    }
+
+    let image = launcher_read_range(vm_id, pe32::IMAGE_BASE, pe32::IMAGE_BYTES)?;
+    let pe_offset =
+        usize::try_from(resource_u32(&image, 0x3C)?).map_err(|_| "resource PE offset")?;
+    let optional = pe_offset
+        .checked_add(24)
+        .ok_or("resource optional offset")?;
+    let resource_directory = optional + 96 + 2 * 8;
+    let resource_rva =
+        usize::try_from(resource_u32(&image, resource_directory)?).map_err(|_| "resource RVA")?;
+    let resource_size = usize::try_from(resource_u32(&image, resource_directory + 4)?)
+        .map_err(|_| "resource size")?;
+    if resource_rva == 0
+        || resource_size < 16
+        || resource_rva
+            .checked_add(resource_size)
+            .is_none_or(|end| end > image.len())
+    {
+        return Err("resource directory range");
+    }
+    let type_directory = resource_directory_entry(&image, resource_rva, resource_rva, 6)?;
+    let block_id = (resource_id >> 4)
+        .checked_add(1)
+        .ok_or("resource block id")?;
+    let block_directory = resource_directory_entry(&image, resource_rva, type_directory, block_id)?;
+    let data_entry = resource_first_language_data(&image, resource_rva, block_directory)?;
+    let data_rva =
+        usize::try_from(resource_u32(&image, data_entry)?).map_err(|_| "resource data RVA")?;
+    let data_size =
+        usize::try_from(resource_u32(&image, data_entry + 4)?).map_err(|_| "resource data size")?;
+    let data_end = data_rva
+        .checked_add(data_size)
+        .ok_or("resource data range")?;
+    if data_end > image.len() {
+        return Err("resource data outside image");
+    }
+
+    let slot = usize::try_from(resource_id & 0x0F).map_err(|_| "resource slot")?;
+    let mut cursor = data_rva;
+    let mut selected = None;
+    for index in 0..16 {
+        let length = usize::from(resource_u16(&image, cursor)?);
+        cursor = cursor.checked_add(2).ok_or("resource string overflow")?;
+        let text_end = cursor
+            .checked_add(length.checked_mul(2).ok_or("resource string overflow")?)
+            .ok_or("resource string overflow")?;
+        if text_end > data_end {
+            return Err("resource string outside block");
+        }
+        if index == slot {
+            selected = Some((cursor, length));
+            break;
+        }
+        cursor = text_end;
+    }
+    let (text, length) = selected.ok_or("resource string slot missing")?;
+    let capacity = usize::try_from(max_chars).map_err(|_| "LoadStringA capacity")?;
+    let copied = length.min(capacity.saturating_sub(1));
+    let mut output = Vec::with_capacity(copied);
+    for index in 0..copied {
+        output.push(cp1252_byte(resource_u16(&image, text + index * 2)?));
+    }
+    let destination = launcher_writable_range_mut(vm_id, buffer, capacity)?;
+    destination.fill(0);
+    destination[..copied].copy_from_slice(&output);
+    Ok((return_address, resource_id, buffer, max_chars, copied as u32))
 }
 
 fn get_string_type_w(vm_id: u8) -> Result<(u32, u32), &'static str> {
@@ -2843,9 +3086,31 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
                 DispatchOutcome::Stop
             }
         }
+    } else if imports::is_load_string_a(import) {
+        match load_string_a(vm_id) {
+            Ok((return_address, resource_id, buffer, max_chars, copied)) => {
+                let mut registers = crate::hv::vmx::guest_registers();
+                registers.rax = u64::from(copied);
+                crate::hv::vmx::set_guest_registers(registers);
+                super::trace::info(format_args!(
+                    "LoadStringA id={} buffer=0x{:08X} max={} copied={} ret=0x{:08X}",
+                    resource_id, buffer, max_chars, copied, return_address
+                ));
+                DispatchOutcome::Resume
+            }
+            Err(reason) => {
+                super::trace::fail(format_args!("LoadStringA failed reason={}", reason));
+                DispatchOutcome::Stop
+            }
+        }
     } else if import.module.eq_ignore_ascii_case("USER32.dll") {
         let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP).unwrap_or(0) as u32;
-        let frame = guest_stack_range_mut(vm_id, esp, 8);
+        let frame_bytes = if import.symbol == "LoadStringA" {
+            20
+        } else {
+            8
+        };
+        let frame = guest_stack_range_mut(vm_id, esp, frame_bytes);
         match frame {
             Ok(frame) => {
                 let return_address = u32::from_le_bytes(frame[0..4].try_into().unwrap_or([0; 4]));
@@ -2865,18 +3130,28 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
                         )
                     })
                     .unwrap_or((0, 0, 0));
-                super::trace::info(format_args!(
-                    "user32-frontier call={} import={}!{} ret=0x{:08X} esp=0x{:08X} arg0=0x{:08X} open_event_handles={} last_error={} tick_ms={}",
-                    call,
-                    import.module,
-                    import.symbol,
-                    return_address,
-                    esp,
-                    argument,
-                    open_handles,
-                    last_error,
-                    tick_ms
-                ));
+                if import.symbol == "LoadStringA" {
+                    let resource_id = u32::from_le_bytes(frame[8..12].try_into().unwrap_or([0; 4]));
+                    let buffer = u32::from_le_bytes(frame[12..16].try_into().unwrap_or([0; 4]));
+                    let max_chars = u32::from_le_bytes(frame[16..20].try_into().unwrap_or([0; 4]));
+                    super::trace::info(format_args!(
+                        "user32-frontier LoadStringA call={} ret=0x{:08X} esp=0x{:08X} hInstance=0x{:08X} id={} buffer=0x{:08X} max={}",
+                        call, return_address, esp, argument, resource_id, buffer, max_chars
+                    ));
+                } else {
+                    super::trace::info(format_args!(
+                        "user32-frontier call={} import={}!{} ret=0x{:08X} esp=0x{:08X} arg0=0x{:08X} open_event_handles={} last_error={} tick_ms={}",
+                        call,
+                        import.module,
+                        import.symbol,
+                        return_address,
+                        esp,
+                        argument,
+                        open_handles,
+                        last_error,
+                        tick_ms
+                    ));
+                }
             }
             Err(reason) => super::trace::fail(format_args!(
                 "user32-frontier frame failed call={} reason={}",
@@ -3395,6 +3670,41 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
                 super::trace::fail(format_args!(
                     "gate-1n failed vm={} phase=EnterCriticalSection reason={}",
                     vm_id, reason
+                ));
+                DispatchOutcome::Stop
+            }
+        }
+    } else if imports::is_enter_critical_section(import) {
+        match probe_enter_critical_section(vm_id, call) {
+            Ok((
+                call,
+                return_address,
+                critical_section,
+                static_registered,
+                dynamic_registered,
+                lock_count,
+                recursion,
+                owner,
+                execution_debt,
+            )) => {
+                super::trace::info(format_args!(
+                    "EnterCriticalSection probe call={} ret=0x{:08X} ptr=0x{:08X} is_static_registered={} is_dynamic_registered={} LockCount={} RecursionCount={} OwningThread={} execution_debt={}",
+                    call,
+                    return_address,
+                    critical_section,
+                    static_registered,
+                    dynamic_registered,
+                    lock_count,
+                    recursion,
+                    owner,
+                    execution_debt.unwrap_or(0),
+                ));
+                DispatchOutcome::Stop
+            }
+            Err(reason) => {
+                super::trace::fail(format_args!(
+                    "EnterCriticalSection probe failed call={} reason={}",
+                    call, reason
                 ));
                 DispatchOutcome::Stop
             }

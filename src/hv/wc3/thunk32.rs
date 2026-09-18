@@ -30,6 +30,7 @@ pub(crate) enum Kind {
     UpdateWindow,
     PeekMessageA,
     SetFocus,
+    LoadStringA,
     CreateThread,
     ResumeThread,
     GetStdHandle,
@@ -161,6 +162,11 @@ pub(crate) fn write(import_id: u32, kind: Kind, output: &mut [u8]) -> Result<(),
         Kind::SetFocus => {
             output[8] = 0xC2;
             output[9] = 0x04;
+            output[10] = 0x00;
+        }
+        Kind::LoadStringA => {
+            output[8] = 0xC2;
+            output[9] = 0x10;
             output[10] = 0x00;
         }
         Kind::CreateThread => {
