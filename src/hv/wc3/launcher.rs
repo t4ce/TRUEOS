@@ -95,7 +95,7 @@ const LC_MAP_STRING_W_ANSI_OUTPUT_RETURN: u32 = 0x0040_2B46;
 const LC_MAP_STRING_W_WIDE_OUTPUT_RETURN: u32 = 0x0040_2BAE;
 const GET_TICK_COUNT_RETURN: u32 = 0x0040_1016;
 const GET_TICK_COUNT_HELPER_RETURN: u32 = 0x0040_1BB8;
-const CREATE_EVENT_RETURNS: [u32; 4] = [0x0040_1032, 0x0040_106D, 0x0040_1B5E, 0x0040_1B6D];
+const CREATE_EVENT_RETURNS: [u32; 4] = [0x0040_1032, 0x0040_106C, 0x0040_1B5E, 0x0040_1B6D];
 const GET_LAST_ERROR_RETURNS: [u32; 4] = [0x0040_103E, 0x0040_1070, 0x0040_1100, 0x0040_2054];
 const CLOSE_HANDLE_RETURNS: [u32; 3] = [0x0040_1050, 0x0040_10E3, 0x0040_10C9];
 const EVENT_HANDLE_BASE: u32 = 0x5743_2001;
@@ -1884,13 +1884,16 @@ fn read_guest_c_string(
     }
     let mut bytes = Vec::new();
     for offset in 0..limit {
-        let byte = launcher_read_range(
-            vm_id,
-            guest_address
-                .checked_add(u32::try_from(offset).map_err(|_| "event name offset")?)
-                .ok_or("event name overflow")?,
-            1,
-        )?[0];
+        let address = guest_address
+            .checked_add(u32::try_from(offset).map_err(|_| "event name offset")?)
+            .ok_or("event name overflow")?;
+        let byte = if u64::from(address) >= u64::from(pe32::IMAGE_BASE)
+            && u64::from(address) < u64::from(pe32::IMAGE_BASE) + pe32::IMAGE_BYTES as u64
+        {
+            launcher_image_range_mut(vm_id, address, 1)?[0]
+        } else {
+            launcher_read_range(vm_id, address, 1)?[0]
+        };
         if byte == 0 {
             return String::from_utf8(bytes).map_err(|_| "event name is not ASCII");
         }
@@ -1921,10 +1924,6 @@ fn create_event_a(vm_id: u8) -> Result<(u32, u32, bool, bool, bool, Option<Strin
     );
     let name_pointer =
         u32::from_le_bytes(frame[16..20].try_into().map_err(|_| "CreateEventA name")?);
-    super::trace::info(format_args!(
-        "main: CreateEventA frame ret=0x{:08X} attrs=0x{:08X} manual={} initial={} name=0x{:08X}",
-        return_address, attrs, manual_reset, initial_state, name_pointer
-    ));
     if !CREATE_EVENT_RETURNS.contains(&return_address) || attrs != 0 {
         return Err("unexpected CreateEventA frame");
     }
@@ -1984,6 +1983,10 @@ fn get_last_error(vm_id: u8) -> Result<u32, &'static str> {
         .ok_or("guest ESP unavailable")? as u32;
     let frame = guest_stack_range_mut(vm_id, esp, 4)?;
     let return_address = u32::from_le_bytes(frame.try_into().map_err(|_| "GetLastError return")?);
+    super::trace::info(format_args!(
+        "GetLastError frame ret=0x{:08X}",
+        return_address
+    ));
     if !GET_LAST_ERROR_RETURNS.contains(&return_address) {
         return Err("unexpected GetLastError return address");
     }
