@@ -40,15 +40,7 @@ const TLS_SLOT_COUNT: usize = 64;
 const HEAP_ALLOC_RETURN: u32 = 0x0040_4132;
 const HEAP_ALLOC_FLAGS: u32 = 0x0000_0008;
 const HEAP_ALLOC_BYTES: u32 = 0x0000_0080;
-const HEAP_ALLOC_SECOND_RETURN: u32 = 0x0040_1FEC;
-const HEAP_ALLOC_SECOND_FLAGS: u32 = 0;
-const HEAP_ALLOC_SECOND_BYTES: u32 = 0x0000_0480;
-const HEAP_ALLOC_THIRD_RETURN: u32 = 0x0040_1FEC;
-const HEAP_ALLOC_THIRD_FLAGS: u32 = 0;
-const HEAP_ALLOC_THIRD_BYTES: u32 = 0x0000_0010;
-const HEAP_ALLOC_LOCK_RETURN: u32 = 0x0040_1FEC;
-const HEAP_ALLOC_LOCK_FLAGS: u32 = 0;
-const HEAP_ALLOC_LOCK_BYTES: u32 = 0x0000_0020;
+const HEAP_ALLOC_CRT_RETURN: u32 = 0x0040_1FEC;
 const TLS_SET_VALUE_RETURN: u32 = 0x0040_3EFC;
 const TLS_SET_VALUE_INDEX: u32 = 0;
 const TLS_SET_VALUE_VALUE: u32 = HEAP_VA;
@@ -868,15 +860,16 @@ fn heap_alloc(
 
 fn heap_alloc_profile(vm_id: u8) -> Result<(u32, u32, u32), &'static str> {
     let [return_address, _, flags, bytes] = heap_alloc_words(vm_id)?;
-    match (return_address, flags, bytes) {
-        (HEAP_ALLOC_RETURN, HEAP_ALLOC_FLAGS, HEAP_ALLOC_BYTES)
-        | (HEAP_ALLOC_SECOND_RETURN, HEAP_ALLOC_SECOND_FLAGS, HEAP_ALLOC_SECOND_BYTES)
-        | (HEAP_ALLOC_THIRD_RETURN, HEAP_ALLOC_THIRD_FLAGS, HEAP_ALLOC_THIRD_BYTES)
-        | (HEAP_ALLOC_LOCK_RETURN, HEAP_ALLOC_LOCK_FLAGS, HEAP_ALLOC_LOCK_BYTES) => {
-            Ok((return_address, flags, bytes))
+    if return_address == HEAP_ALLOC_RETURN {
+        if flags == HEAP_ALLOC_FLAGS && bytes == HEAP_ALLOC_BYTES {
+            return Ok((return_address, flags, bytes));
         }
-        _ => Err("unprofiled HeapAlloc site"),
+        return Err("unexpected bootstrap HeapAlloc arguments");
     }
+    if return_address == HEAP_ALLOC_CRT_RETURN && flags == 0 && bytes > 0 {
+        return Ok((return_address, flags, bytes));
+    }
+    Err("unexpected HeapAlloc site or arguments")
 }
 
 fn tls_set_value(vm_id: u8) -> Result<(u32, u32, u32), &'static str> {
@@ -1917,13 +1910,6 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
             heap_alloc(vm_id, return_address, flags, bytes)
         }) {
             Ok((guest_ptr, return_address, heap_handle, flags, bytes)) => {
-                if bytes == HEAP_ALLOC_LOCK_BYTES && guest_ptr != DYNAMIC_LOCK_25 {
-                    super::trace::fail(format_args!(
-                        "crt-startup failed vm={} phase=HeapAlloc reason=unexpected-lock-pointer",
-                        vm_id
-                    ));
-                    return DispatchOutcome::Stop;
-                }
                 let mut registers = crate::hv::vmx::guest_registers();
                 registers.rax = u64::from(guest_ptr);
                 crate::hv::vmx::set_guest_registers(registers);
