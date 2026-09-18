@@ -403,12 +403,14 @@ fn submit_font_outline_coverage_runs_r8_mapped_2d(
     runs: &[FontOutlineCoverageR8BatchRun],
 ) -> GpgpuDispatchRetirement {
     if runs.is_empty() || runs.len() > FONT_OUTLINE_COVERAGE_BATCH_MAX_RUNS {
+        crate::log_font_warm_diag!("phase=coverage-admission reject=run-count\n");
         return GpgpuDispatchRetirement::NotSubmitted;
     }
     let Some(mask_binding_offset) = mask_binding_gpu
         .checked_sub(mask_mapping.gpu)
         .and_then(|offset| usize::try_from(offset).ok())
     else {
+        crate::log_font_warm_diag!("phase=coverage-admission reject=mask-binding-offset\n");
         return GpgpuDispatchRetirement::NotSubmitted;
     };
     if mask_binding_bytes == 0
@@ -416,6 +418,7 @@ fn submit_font_outline_coverage_runs_r8_mapped_2d(
             .checked_add(mask_binding_bytes)
             .is_none_or(|end| end > mask_mapping.bytes)
     {
+        crate::log_font_warm_diag!("phase=coverage-admission reject=mask-binding-range\n");
         return GpgpuDispatchRetirement::NotSubmitted;
     }
     let mut total_ops = 0usize;
@@ -423,6 +426,7 @@ fn submit_font_outline_coverage_runs_r8_mapped_2d(
     for run in runs {
         let params = run.params;
         let Some(dispatch) = fill_rect_2d_dispatch(params.rect_width, params.rect_height) else {
+            crate::log_font_warm_diag!("phase=coverage-admission reject=dispatch-shape\n");
             return GpgpuDispatchRetirement::NotSubmitted;
         };
         let Some(offset) = params
@@ -430,6 +434,7 @@ fn submit_font_outline_coverage_runs_r8_mapped_2d(
             .checked_sub(ops_mapping_gpu)
             .and_then(|offset| usize::try_from(offset).ok())
         else {
+            crate::log_font_warm_diag!("phase=coverage-admission reject=ops-binding-offset\n");
             return GpgpuDispatchRetirement::NotSubmitted;
         };
         let Some(required_mask_bytes) = (params.mask_height as usize)
@@ -437,6 +442,7 @@ fn submit_font_outline_coverage_runs_r8_mapped_2d(
             .and_then(|rows| rows.checked_mul(params.mask_pitch_bytes as usize))
             .and_then(|bytes| bytes.checked_add(params.mask_width as usize))
         else {
+            crate::log_font_warm_diag!("phase=coverage-admission reject=mask-size-overflow\n");
             return GpgpuDispatchRetirement::NotSubmitted;
         };
         if params.mask_gpu != mask_binding_gpu
@@ -448,6 +454,7 @@ fn submit_font_outline_coverage_runs_r8_mapped_2d(
                 .checked_add(run.ops_bytes)
                 .is_none_or(|end| end > ops_bytes)
         {
+            crate::log_font_warm_diag!("phase=coverage-admission reject=run-binding-contract\n");
             return GpgpuDispatchRetirement::NotSubmitted;
         }
         total_ops = total_ops.saturating_add(params.op_count as usize);
@@ -459,17 +466,23 @@ fn submit_font_outline_coverage_runs_r8_mapped_2d(
     // spin a cooperative executor while another direct-RCS producer owns the
     // lane; the caller can preserve its resident fallback and retry later.
     let Some(_guard) = FONT_RCS_SUBMIT_LOCK.try_lock() else {
+        crate::log_font_warm_diag!("phase=coverage-admission reject=font-submit-lock-busy\n");
         return GpgpuDispatchRetirement::NotSubmitted;
     };
     let Some(dev) = super::claimed_device() else {
+        crate::log_font_warm_diag!("phase=coverage-admission reject=no-claimed-device\n");
         return GpgpuDispatchRetirement::NotSubmitted;
     };
     let Some(upload) = upload_font_outline_coverage_r8_kernel() else {
+        crate::log_font_warm_diag!("phase=coverage-admission reject=coverage-kernel-upload\n");
         return GpgpuDispatchRetirement::NotSubmitted;
     };
     let Some(state) = font_rcs_state_once(dev) else {
+        crate::log_font_warm_diag!("phase=coverage-admission reject=font-context quarantined={}\n", font_rcs_context_is_quarantined() as u8);
         return GpgpuDispatchRetirement::NotSubmitted;
     };
+    crate::log_font_warm_diag!("phase=coverage-ready device=0x{:04X} rev=0x{:02X} kernel_gpu=0x{:X} kernel_bytes={} ops_bytes={}\n",
+        dev.device_id, dev.revision_id, upload.gpu, upload.mapped_bytes, ops_bytes);
     let forcewake_ok = direct_rcs_forcewake(dev);
     let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
     let ppgtt_ok = mapped_ok && font_rcs_init_ppgtt_once(state);
@@ -491,11 +504,21 @@ fn submit_font_outline_coverage_runs_r8_mapped_2d(
             runs,
             mask_binding_bytes,
         );
+    if !batch_ok {
+        crate::log_font_warm_diag!("phase=coverage-prepare-failed fw={} control={} ppgtt={} kernel={} ops={} mask={} batch={}\n",
+            forcewake_ok as u8, mapped_ok as u8, ppgtt_ok as u8, kernel_ppgtt_ok as u8,
+            ops_ppgtt_ok as u8, mask_ppgtt_ok as u8, batch_ok as u8);
+    } else {
+        crate::log_font_warm_diag!("phase=coverage-prepared runs={} ops={} groups={} batch_gpu=0x{:X} result_gpu=0x{:X}\n",
+            runs.len(), total_ops, total_groups, state.gpu_va.batch, state.gpu_va.result);
+    }
     let submission = if batch_ok {
         font_rcs_submit_batch_state(dev, state)
     } else {
         DirectRcsSubmissionState::Rejected
     };
+    crate::log_font_warm_diag!("phase=coverage-submit state={:?} poll={} timeout_ms={}\n",
+        submission, submission.can_poll() as u8, FONT_OUTLINE_COVERAGE_R8_COMPLETION_TIMEOUT_MS);
     let submitted = submission.may_have_submitted();
     let observed = if submission.can_poll() {
         font_rcs_poll_result_slot_timeout_ms(
@@ -508,6 +531,14 @@ fn submit_font_outline_coverage_runs_r8_mapped_2d(
         0
     };
     let completed = observed == COPY_RECT_POST_MARKER;
+    if completed {
+        crate::log_font_warm_diag!("phase=coverage-marker retired_marker=0x{:08X} result=Complete\n", observed);
+    } else {
+        crate::log_font_warm_diag!("phase=coverage-marker state={:?} batch={} pre=0x{:08X}/0x{:08X} retired_marker=0x{:08X}/0x{:08X} quarantined={}\n",
+            submission, batch_ok as u8,
+            if batch_ok { direct_rcs_read_result_slot(state, COPY_RECT_PRE_MARKER_SLOT) } else { 0 },
+            COPY_RECT_PRE_MARKER, observed, COPY_RECT_POST_MARKER, font_rcs_context_is_quarantined() as u8);
+    }
     if !completed {
         let occurrence =
             FONT_OUTLINE_COVERAGE_R8_INCOMPLETE_SEQ.fetch_add(1, Ordering::Relaxed) + 1;

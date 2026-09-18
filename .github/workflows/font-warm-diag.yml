@@ -1,14 +1,18 @@
-name: Font warm diagnostic preparation
+name: Font warm diagnostics
 on:
-  push:
-    branches: ['diag/font-warm-dispatch']
+  pull_request:
     paths:
-      - 'tools/_prepare_font_warm_diag.py'
-      - 'tools/_prepare_font_retire_detail.py'
+      - 'src/log_os.rs'
+      - 'src/intel/gpu_font.rs'
+      - 'src/intel/gpgpu/operations/primitives.rs'
+      - 'src/intel/gpgpu/operations/submission_2d.rs'
+      - 'src/intel/gpgpu/rcs/commands.rs'
       - 'tools/test_font_warm_diag.py'
       - '.github/workflows/font-warm-diag.yml'
+  push:
+    branches: ['diag/font-warm-dispatch']
 permissions:
-  contents: write
+  contents: read
 jobs:
   check:
     runs-on: ubuntu-24.04
@@ -30,8 +34,6 @@ jobs:
             /tools/trueos-doc
             /tools/test_tgl_gpu_log_profile.py
             /tools/test_font_warm_diag.py
-            /tools/_prepare_font_warm_diag.py
-            /tools/_prepare_font_retire_detail.py
       - name: Read pinned shared log-os without unrelated app checkout
         run: |
           set -euo pipefail
@@ -40,39 +42,14 @@ jobs:
           git -C "$RUNNER_TEMP/font-diag-log-os" remote add origin https://github.com/t4ce/TRUEOS-Blueprints.git
           git -C "$RUNNER_TEMP/font-diag-log-os" -c protocol.version=2 fetch --filter=blob:none --depth=1 origin d4bedf7b3cbaa96c8bca51181e0e3a5509ad619c
           git -C "$RUNNER_TEMP/font-diag-log-os" archive FETCH_HEAD crates/log-os | tar -x -C TRUEOS-Blueprints
-      - name: Query policy, apply scoped edits and test
+      - name: Validate font diagnostics and log policy
         working-directory: TRUEOS
         run: |
           set -euo pipefail
           python3 tools/trueos-doc topic logs
-          python3 tools/_prepare_font_retire_detail.py
           python3 tools/test_tgl_gpu_log_profile.py
           python3 tools/test_font_warm_diag.py
           for f in src/log_os.rs src/intel/gpu_font.rs src/intel/gpgpu/operations/primitives.rs src/intel/gpgpu/operations/submission_2d.rs src/intel/gpgpu/rcs/commands.rs; do
             rustfmt --edition 2024 --config skip_children=true --emit stdout "$f" >/dev/null
           done
-          git diff --check
-          git diff --stat
-          git diff -- src/log_os.rs src/intel/gpu_font.rs src/intel/gpgpu/operations/primitives.rs src/intel/gpgpu/operations/submission_2d.rs src/intel/gpgpu/rcs/commands.rs
-      - name: Store validated immutable blobs only
-        working-directory: TRUEOS
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          python3 - <<'PY'
-          import hashlib, json, os, urllib.request
-          from pathlib import Path
-          result = {}
-          paths = ['src/log_os.rs', 'src/intel/gpu_font.rs', 'src/intel/gpgpu/operations/primitives.rs', 'src/intel/gpgpu/operations/submission_2d.rs', 'src/intel/gpgpu/rcs/commands.rs']
-          for path in paths:
-              data = Path(path).read_bytes()
-              expected = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
-              request = urllib.request.Request('https://api.github.com/repos/t4ce/TRUEOS/git/blobs',
-                  data=json.dumps({'content': data.decode(), 'encoding': 'utf-8'}).encode(), method='POST',
-                  headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json'})
-              with urllib.request.urlopen(request) as response:
-                  blob = json.load(response)
-              assert blob['sha'] == expected
-              result[path] = expected
-          print('TESTED_BLOBS=' + json.dumps(result, sort_keys=True))
-          PY
+          git diff --exit-code

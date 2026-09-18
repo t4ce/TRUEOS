@@ -47,6 +47,10 @@ pub(crate) mod flags {
     /// See log_os.tgl_gpu_diag_profile.txt for the exact matrix and limitations.
     pub(crate) const TGL_GPU_DIAG_PROFILE_ENABLED: bool = true;
 
+    /// Compact font warm/coverage breadcrumbs, using the existing Gpgpu/Info
+    /// policy and rate limiter. No Render/Info or screen-specific filter.
+    pub(crate) const FONT_WARM_DIAG_PROFILE_ENABLED: bool = TGL_GPU_DIAG_PROFILE_ENABLED;
+
     /// Full forensic USB profile. The exact switch settings are preserved in
     /// `log_os.usb_full_diag_profile.txt` beside this source file.
     pub(crate) const USB_UAS_DIAG_PROFILE_ENABLED: bool = false;
@@ -486,6 +490,22 @@ macro_rules! log_rate_limited {
     }};
 }
 
+/// Font warm-up breadcrumbs reach the ordinary TCP/UART policy first; the
+/// MicroFont service mirrors those accepted bytes. Sample per callsite so a
+/// busy/quarantined retry does not become another per-frame log stream.
+#[macro_export]
+macro_rules! log_font_warm_diag {
+    ($($tt:tt)*) => {{
+        if $crate::log_os::flags::FONT_WARM_DIAG_PROFILE_ENABLED {
+            $crate::log_rate_limited!(
+                target: "intel/gpgpu"; level: $crate::log_os::LogLevel::Info;
+                first: 2; every: 128;
+                "font-warm {}", format_args!($($tt)*)
+            );
+        }
+    }};
+}
+
 /// Rate-bounded record for the Shell2 -> UI4 -> FontKernel latency hunt.
 ///
 /// This is intentionally a semantic Render/Info lane even though the record
@@ -708,6 +728,7 @@ pub fn log_once_with_target(
 
 pub fn init_global_dispatch() {
     log_os_core::install_global_log_dispatch(&TRUEOS_LOG_ROUTER);
+    crate::log_font_warm_diag!("phase=profile version=1 first=2 every=128 clip_budget=320\n");
     if flags::TGL_GPU_DIAG_PROFILE_ENABLED {
         log_with_area_level(
             flags::LogArea::Boot,
