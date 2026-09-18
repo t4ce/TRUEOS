@@ -651,15 +651,9 @@ fn critical_section_frame(vm_id: u8, expected_return: u32) -> Result<(u32, u32),
     Ok((critical_section, return_address))
 }
 
-fn enter_critical_section(
-    vm_id: u8,
-    expected_pointer: u32,
-) -> Result<(u32, u32, u32), &'static str> {
+fn enter_critical_section(vm_id: u8) -> Result<(u32, u32, u32), &'static str> {
     let (critical_section, return_address) =
         critical_section_frame(vm_id, ENTER_CRITICAL_SECTION_RETURN)?;
-    if critical_section != expected_pointer {
-        return Err("unexpected EnterCriticalSection pointer");
-    }
     let tid = LAUNCHERS
         .get(usize::from(vm_id))
         .ok_or("unsupported wc3 launcher VM id")?
@@ -692,59 +686,6 @@ fn enter_critical_section(
         return Err("critical-section contention");
     }
     Ok((critical_section, tid, return_address))
-}
-
-fn probe_enter_critical_section(
-    vm_id: u8,
-    call: u32,
-) -> Result<(u32, u32, u32, bool, bool, i32, u32, u32, Option<u32>), &'static str> {
-    let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP)
-        .ok_or("guest ESP unavailable")? as u32;
-    let frame = guest_stack_range_mut(vm_id, esp, 8)?;
-    let return_address = u32::from_le_bytes(
-        frame[0..4]
-            .try_into()
-            .map_err(|_| "EnterCriticalSection return")?,
-    );
-    let critical_section = u32::from_le_bytes(
-        frame[4..8]
-            .try_into()
-            .map_err(|_| "EnterCriticalSection pointer")?,
-    );
-    if critical_section == 0 {
-        return Err("null EnterCriticalSection pointer");
-    }
-    let state_guard = LAUNCHERS
-        .get(usize::from(vm_id))
-        .ok_or("unsupported wc3 launcher VM id")?
-        .lock();
-    let state = state_guard
-        .as_ref()
-        .ok_or("wc3 launcher state unavailable")?;
-    let static_registered = state
-        .initialized_critical_sections
-        .contains(&critical_section);
-    let dynamic_registered = state.dynamic_critical_sections.contains(&critical_section);
-    let execution_debt = state.execution_debt;
-    drop(state_guard);
-    if !static_registered && !dynamic_registered {
-        return Err("EnterCriticalSection pointer is not registered");
-    }
-    let output = registered_critical_section_range_mut(vm_id, critical_section)?;
-    let lock_count = i32::from_le_bytes(output[4..8].try_into().map_err(|_| "LockCount")?);
-    let recursion = u32::from_le_bytes(output[8..12].try_into().map_err(|_| "RecursionCount")?);
-    let owner = u32::from_le_bytes(output[12..16].try_into().map_err(|_| "OwningThread")?);
-    Ok((
-        call,
-        return_address,
-        critical_section,
-        static_registered,
-        dynamic_registered,
-        lock_count,
-        recursion,
-        owner,
-        execution_debt,
-    ))
 }
 
 fn leave_critical_section(vm_id: u8) -> Result<(u32, u32, u32), &'static str> {
@@ -2108,11 +2049,8 @@ fn get_std_handle(vm_id: u8, call: u32) -> Result<(u32, u32, u32), &'static str>
     let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP)
         .ok_or("guest ESP unavailable")? as u32;
     let frame = guest_stack_range_mut(vm_id, esp, 8)?;
-    let return_address = u32::from_le_bytes(
-        frame[0..4]
-            .try_into()
-            .map_err(|_| "GetStdHandle return address")?,
-    );
+    let return_address =
+        u32::from_le_bytes(frame[0..4].try_into().map_err(|_| "GetStdHandle return")?);
     let which = u32::from_le_bytes(
         frame[4..8]
             .try_into()
@@ -2153,7 +2091,7 @@ fn get_file_type(vm_id: u8, call: u32) -> Result<(u32, u32, u32), &'static str> 
             .try_into()
             .map_err(|_| "GetFileType return address")?,
     );
-    let handle = u32::from_le_bytes(frame[4..8].try_into().map_err(|_| "GetFileType argument")?);
+    let handle = u32::from_le_bytes(frame[4..8].try_into().map_err(|_| "GetFileType handle")?);
     let stream = match call {
         15 => 0,
         17 => 1,
@@ -3600,24 +3538,6 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
                 DispatchOutcome::Stop
             }
         }
-    } else if call == 27 && imports::is_enter_critical_section(import) {
-        match enter_critical_section(vm_id, STATIC_LOCK_17) {
-            Ok((pointer, tid, return_address)) => {
-                super::trace::info(format_args!(
-                    "EnterCriticalSection ptr=0x{:08X} tid={} ret=0x{:08X}",
-                    pointer, tid, return_address
-                ));
-                super::trace::info(format_args!("return #27 KERNEL32.dll!EnterCriticalSection"));
-                DispatchOutcome::Resume
-            }
-            Err(reason) => {
-                super::trace::fail(format_args!(
-                    "gate-1n failed vm={} phase=EnterCriticalSection reason={}",
-                    vm_id, reason
-                ));
-                DispatchOutcome::Stop
-            }
-        }
     } else if call == 28 && imports::is_initialize_critical_section(import) {
         match initialize_dynamic_critical_section(vm_id) {
             Ok((pointer, return_address)) => {
@@ -3656,54 +3576,18 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
                 DispatchOutcome::Stop
             }
         }
-    } else if call == 30 && imports::is_enter_critical_section(import) {
-        match enter_critical_section(vm_id, DYNAMIC_LOCK_25) {
+    } else if imports::is_enter_critical_section(import) {
+        match enter_critical_section(vm_id) {
             Ok((pointer, tid, return_address)) => {
                 super::trace::info(format_args!(
                     "EnterCriticalSection ptr=0x{:08X} tid={} ret=0x{:08X}",
-                    pointer, tid, return_address
+                    pointer, return_address, tid,
                 ));
-                super::trace::info(format_args!("return #30 KERNEL32.dll!EnterCriticalSection"));
                 DispatchOutcome::Resume
             }
             Err(reason) => {
                 super::trace::fail(format_args!(
-                    "gate-1n failed vm={} phase=EnterCriticalSection reason={}",
-                    vm_id, reason
-                ));
-                DispatchOutcome::Stop
-            }
-        }
-    } else if imports::is_enter_critical_section(import) {
-        match probe_enter_critical_section(vm_id, call) {
-            Ok((
-                call,
-                return_address,
-                critical_section,
-                static_registered,
-                dynamic_registered,
-                lock_count,
-                recursion,
-                owner,
-                execution_debt,
-            )) => {
-                super::trace::info(format_args!(
-                    "EnterCriticalSection probe call={} ret=0x{:08X} ptr=0x{:08X} is_static_registered={} is_dynamic_registered={} LockCount={} RecursionCount={} OwningThread={} execution_debt={}",
-                    call,
-                    return_address,
-                    critical_section,
-                    static_registered,
-                    dynamic_registered,
-                    lock_count,
-                    recursion,
-                    owner,
-                    execution_debt.unwrap_or(0),
-                ));
-                DispatchOutcome::Stop
-            }
-            Err(reason) => {
-                super::trace::fail(format_args!(
-                    "EnterCriticalSection probe failed call={} reason={}",
+                    "EnterCriticalSection failed call={} reason={}",
                     call, reason
                 ));
                 DispatchOutcome::Stop
