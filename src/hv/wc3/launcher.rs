@@ -103,6 +103,7 @@ const CREATE_EVENT_RETURNS: [u32; 4] = [0x0040_1032, 0x0040_106C, 0x0040_1B60, 0
 const GET_LAST_ERROR_RETURNS: [u32; 4] = [0x0040_103E, 0x0040_1072, 0x0040_1100, 0x0040_2054];
 const CLOSE_HANDLE_RETURNS: [u32; 3] = [0x0040_1050, 0x0040_10E3, 0x0040_10C9];
 const EVENT_HANDLE_BASE: u32 = 0x5743_2001;
+const THREAD_HANDLE_BASE: u32 = 0x5743_5001;
 const ERROR_ALREADY_EXISTS: u32 = 183;
 
 #[derive(Copy, Clone)]
@@ -151,6 +152,10 @@ struct LauncherState {
     events: Vec<EventObject>,
     event_handles: Vec<EventHandle>,
     next_event_handle: u32,
+    threads: Vec<ThreadObject>,
+    next_thread_handle: u32,
+    next_thread_id: u32,
+    execution_debt: Option<u32>,
     registered_class_names: Vec<String>,
     window: Option<WinWindow>,
     messages: VecDeque<WinMsg>,
@@ -186,6 +191,17 @@ struct EventHandle {
     value: u32,
     event_index: usize,
     open: bool,
+}
+
+struct ThreadObject {
+    handle: u32,
+    tid: u32,
+    start_address: u32,
+    parameter: u32,
+    stack_size: u32,
+    suspend_count: u32,
+    open: bool,
+    runnable_deferred: bool,
 }
 
 struct WinWindow {
@@ -323,6 +339,10 @@ pub(crate) fn prepare(vm_id: u8, bytes: &[u8]) -> Result<(), &'static str> {
         events: Vec::new(),
         event_handles: Vec::new(),
         next_event_handle: EVENT_HANDLE_BASE,
+        threads: Vec::new(),
+        next_thread_handle: THREAD_HANDLE_BASE,
+        next_thread_id: 2,
+        execution_debt: None,
         registered_class_names: Vec::new(),
         window: None,
         messages: VecDeque::new(),
@@ -1110,9 +1130,6 @@ fn launcher_read_range(
     guest_address: u32,
     bytes: usize,
 ) -> Result<Vec<u8>, &'static str> {
-    if u64::from(guest_address) >= crate::hv::memory::GUEST_STACK_VA_BASE {
-        return Ok(guest_stack_range_mut(vm_id, guest_address, bytes)?.to_vec());
-    }
     if u64::from(guest_address) >= u64::from(pe32::IMAGE_BASE)
         && u64::from(guest_address) < u64::from(pe32::IMAGE_BASE) + pe32::IMAGE_BYTES as u64
     {
@@ -1127,6 +1144,9 @@ fn launcher_read_range(
         && u64::from(guest_address) < u64::from(PROCESS_DATA_VA) + PAGE_SIZE_4K as u64
     {
         return Ok(launcher_process_data_range_mut(vm_id, guest_address, bytes)?.to_vec());
+    }
+    if u64::from(guest_address) >= crate::hv::memory::GUEST_STACK_VA_BASE {
+        return Ok(guest_stack_range_mut(vm_id, guest_address, bytes)?.to_vec());
     }
     Err("guest range is outside launcher mappings")
 }
@@ -3522,50 +3542,69 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
                 let parameter = word(16);
                 let creation_flags = word(20);
                 let thread_id = word(24);
-                let start_dump = launcher_read_range(vm_id, start_address, 32)
-                    .or_else(|_| launcher_read_range(vm_id, start_address, 16));
-                let parameter_dump = launcher_read_range(vm_id, parameter, 0x80);
-                super::trace::info(format_args!(
-                    "CreateThread probe ret=0x{:08X} attrs=0x{:08X} stack_size=0x{:08X} start=0x{:08X} parameter=0x{:08X} flags=0x{:08X} thread_id_ptr=0x{:08X}",
-                    return_address,
-                    thread_attributes,
-                    stack_size,
-                    start_address,
-                    parameter,
-                    creation_flags,
-                    thread_id
-                ));
-                match start_dump {
-                    Ok(bytes) => super::trace::info(format_args!(
-                        "CreateThread start-bytes address=0x{:08X} bytes={} length={}",
+                if return_address != 0x0040_2039
+                    || thread_attributes != 0
+                    || stack_size != 0x2000
+                    || start_address != 0x0040_2072
+                    || parameter != 0x0021_0560
+                    || creation_flags != 0x0000_0004
+                    || thread_id != parameter
+                {
+                    super::trace::fail(format_args!("CreateThread unexpected frame"));
+                    return DispatchOutcome::Stop;
+                }
+                let tid = {
+                    let mut state = LAUNCHERS[usize::from(vm_id)].lock();
+                    let Some(state) = state.as_mut() else {
+                        super::trace::fail(format_args!("CreateThread state unavailable"));
+                        return DispatchOutcome::Stop;
+                    };
+                    let tid = state.next_thread_id;
+                    let handle = state.next_thread_handle;
+                    state.next_thread_id = state.next_thread_id.saturating_add(1);
+                    state.next_thread_handle = state.next_thread_handle.saturating_add(1);
+                    state.threads.push(ThreadObject {
+                        handle,
+                        tid,
                         start_address,
-                        format_hex_bytes(&bytes),
-                        bytes.len()
-                    )),
-                    Err(reason) => super::trace::info(format_args!(
-                        "CreateThread start-bytes address=0x{:08X} unmapped reason={}",
-                        start_address, reason
-                    )),
-                }
-                match parameter_dump {
-                    Ok(bytes) => super::trace::info(format_args!(
-                        "CreateThread parameter-bytes address=0x{:08X} bytes={} length={}",
                         parameter,
-                        format_hex_bytes(&bytes),
-                        bytes.len()
-                    )),
-                    Err(reason) => super::trace::info(format_args!(
-                        "CreateThread parameter-bytes address=0x{:08X} unmapped reason={}",
-                        parameter, reason
-                    )),
-                }
+                        stack_size,
+                        suspend_count: 1,
+                        open: true,
+                        runnable_deferred: false,
+                    });
+                    tid
+                };
+                let output = match launcher_writable_range_mut(vm_id, thread_id, 4) {
+                    Ok(output) => output,
+                    Err(reason) => {
+                        super::trace::fail(format_args!(
+                            "CreateThread thread-id write failed reason={}",
+                            reason
+                        ));
+                        return DispatchOutcome::Stop;
+                    }
+                };
+                output.copy_from_slice(&tid.to_le_bytes());
+                let handle = LAUNCHERS[usize::from(vm_id)]
+                    .lock()
+                    .as_ref()
+                    .and_then(|state| state.threads.last().map(|thread| thread.handle))
+                    .unwrap_or(0);
+                let mut registers = crate::hv::vmx::guest_registers();
+                registers.rax = u64::from(handle);
+                crate::hv::vmx::set_guest_registers(registers);
+                super::trace::info(format_args!(
+                    "CreateThread suspended handle=0x{:08X} tid={} start=0x{:08X} parameter=0x{:08X} stack_size=0x{:08X} suspend_count=1 thread_id_ptr=0x{:08X} ret=0x{:08X}",
+                    handle, tid, start_address, parameter, stack_size, thread_id, return_address
+                ));
             }
             Err(reason) => super::trace::fail(format_args!(
                 "CreateThread probe frame failed call={} reason={}",
                 call, reason
             )),
         }
-        DispatchOutcome::Stop
+        DispatchOutcome::Resume
     } else {
         super::trace::fail(format_args!(
             "gate-1e failed vm={} phase=unexpected-{}-import {}!{}",

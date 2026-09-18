@@ -29,6 +29,7 @@ pub(crate) enum Kind {
     ShowWindow,
     UpdateWindow,
     PeekMessageA,
+    CreateThread,
     GetStdHandle,
     GetFileType,
     SetHandleCount,
@@ -153,6 +154,11 @@ pub(crate) fn write(import_id: u32, kind: Kind, output: &mut [u8]) -> Result<(),
         Kind::PeekMessageA => {
             output[8] = 0xC2;
             output[9] = 0x14;
+            output[10] = 0x00;
+        }
+        Kind::CreateThread => {
+            output[8] = 0xC2;
+            output[9] = 0x18;
             output[10] = 0x00;
         }
         Kind::GetStdHandle | Kind::GetFileType | Kind::SetHandleCount => {
