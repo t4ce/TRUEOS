@@ -38,6 +38,15 @@ pub(crate) mod flags {
     use log_os_core::{LogLevel, LogLevelFilter};
     use spin::Once;
 
+    /// Finite-page GPU-first capture for the 9A49 laptop investigation.
+    /// This build-wide override wins over the other diagnostic profiles below;
+    /// set false to restore their existing policies without changing the sinks.
+    /// Gfx/Gpgpu Info keeps claim, PAT, GuC, panel and submission evidence.
+    /// Render Info is intentionally NOT enabled: font-tessel polling and retry
+    /// dumps exhausted the first capture. All areas retain Error/Important/Warn.
+    /// See log_os.tgl_gpu_diag_profile.txt for the exact matrix and limitations.
+    pub(crate) const TGL_GPU_DIAG_PROFILE_ENABLED: bool = true;
+
     /// Full forensic USB profile. The exact switch settings are preserved in
     /// `log_os.usb_full_diag_profile.txt` beside this source file.
     pub(crate) const USB_UAS_DIAG_PROFILE_ENABLED: bool = false;
@@ -211,6 +220,15 @@ pub(crate) mod flags {
     ///
     /// Keep all area/profile choices here: both sinks consult this same policy.
     pub(crate) const fn area_log_policy(area: LogArea) -> LogLevelPolicy {
+        if TGL_GPU_DIAG_PROFILE_ENABLED {
+            return match area {
+                LogArea::Gfx | LogArea::Gpgpu => LogLevelPolicy::up(LogLevelFilter::Info),
+                LogArea::Render | LogArea::Boot | LogArea::Service => {
+                    LogLevelPolicy::up(LogLevelFilter::Once)
+                }
+                _ => LogLevelPolicy::up(LogLevelFilter::Warn),
+            };
+        }
         match area {
             LogArea::Global => GLOBAL_LOG_LEVEL,
             LogArea::Boot => BOOT_LOG_LEVEL,
@@ -690,6 +708,13 @@ pub fn log_once_with_target(
 
 pub fn init_global_dispatch() {
     log_os_core::install_global_log_dispatch(&TRUEOS_LOG_ROUTER);
+    if flags::TGL_GPU_DIAG_PROFILE_ENABLED {
+        log_with_area_level(
+            flags::LogArea::Boot,
+            LogLevel::Important,
+            format_args!("log-profile=tgl-gpu-first-v1 gfx/gpgpu=Up(Info) render/boot/service=Up(Once) other=Up(Warn) screen=TCP-mirror\n"),
+        );
+    }
 }
 
 pub mod logtotcp {
