@@ -53,7 +53,10 @@ const STARTUP_INFO_A_BYTES: usize = 0x44;
 const GET_MODULE_FILE_NAME_A_RETURN: u32 = 0x0040_4545;
 const GET_MODULE_FILE_NAME_A_BUFFER: u32 = 0x0040_ABA8;
 const GET_MODULE_FILE_NAME_A_SIZE: u32 = 0x104;
-const GET_MODULE_HANDLE_A_RETURNS: [u32; 2] = [0x0040_221E, 0x0040_1A2B];
+const GET_MODULE_HANDLE_A_RETURNS: [u32; 3] = [0x0040_221E, 0x0040_1A2B, 0x0040_1A84];
+const GET_DESKTOP_WINDOW_RETURN: u32 = 0x0040_1A4F;
+const GET_CLIENT_RECT_RETURN: u32 = 0x0040_1A56;
+const DESKTOP_HWND: u32 = 0x5743_3000;
 const MODULE_IMAGE_BASE: u32 = pe32::IMAGE_BASE;
 const MODULE_FILENAME_A: &[u8] = b"C:\\Warcraft III\\Warcraft III.exe\0";
 const GET_STD_HANDLE_RETURN: u32 = 0x0040_4A0D;
@@ -2201,6 +2204,37 @@ fn register_class_a(vm_id: u8) -> Result<(u32, u32, String), &'static str> {
     Ok((1, return_address, class_name))
 }
 
+fn get_desktop_window(vm_id: u8) -> Result<u32, &'static str> {
+    let return_address = no_argument_return_frame(vm_id, "GetDesktopWindow return")?;
+    if return_address != GET_DESKTOP_WINDOW_RETURN {
+        return Err("unexpected GetDesktopWindow return address");
+    }
+    Ok(return_address)
+}
+
+fn get_client_rect(vm_id: u8) -> Result<(u32, u32, u32), &'static str> {
+    let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP)
+        .ok_or("guest ESP unavailable")? as u32;
+    let frame = guest_stack_range_mut(vm_id, esp, 12)?;
+    let return_address =
+        u32::from_le_bytes(frame[0..4].try_into().map_err(|_| "GetClientRect return")?);
+    let window = u32::from_le_bytes(frame[4..8].try_into().map_err(|_| "GetClientRect hwnd")?);
+    let rect = u32::from_le_bytes(frame[8..12].try_into().map_err(|_| "GetClientRect rect")?);
+    if return_address != GET_CLIENT_RECT_RETURN || window != DESKTOP_HWND || rect == 0 {
+        return Err("unexpected GetClientRect frame");
+    }
+    let output = crate::ui4::ui4_output_capabilities(
+        crate::ui4::OutputId::from_slot(0).ok_or("D01 output")?,
+    )
+    .ok_or("D01 output capabilities unavailable")?;
+    let destination = launcher_writable_range_mut(vm_id, rect, 16)?;
+    destination[0..4].copy_from_slice(&0i32.to_le_bytes());
+    destination[4..8].copy_from_slice(&0i32.to_le_bytes());
+    destination[8..12].copy_from_slice(&(output.width as i32).to_le_bytes());
+    destination[12..16].copy_from_slice(&(output.height as i32).to_le_bytes());
+    Ok((rect, output.width, output.height))
+}
+
 pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
     let id = crate::hv::vmx::guest_registers().rax as u32;
     let imports = match LAUNCHERS
@@ -2219,7 +2253,47 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
     };
     let call = CALLS[usize::from(vm_id)].fetch_add(1, Ordering::AcqRel) + 1;
     super::trace::info(format_args!("call #{} {}!{}", call, import.module, import.symbol));
-    if imports::is_register_class_a(import) {
+    if imports::is_get_desktop_window(import) {
+        match get_desktop_window(vm_id) {
+            Ok(return_address) => {
+                let mut registers = crate::hv::vmx::guest_registers();
+                registers.rax = u64::from(DESKTOP_HWND);
+                crate::hv::vmx::set_guest_registers(registers);
+                super::trace::info(format_args!(
+                    "GetDesktopWindow hwnd=0x{:08X} ret=0x{:08X}",
+                    DESKTOP_HWND, return_address
+                ));
+                DispatchOutcome::Resume
+            }
+            Err(reason) => {
+                super::trace::fail(format_args!(
+                    "GetDesktopWindow failed vm={} reason={}",
+                    vm_id, reason
+                ));
+                DispatchOutcome::Stop
+            }
+        }
+    } else if imports::is_get_client_rect(import) {
+        match get_client_rect(vm_id) {
+            Ok((rect, width, height)) => {
+                let mut registers = crate::hv::vmx::guest_registers();
+                registers.rax = 1;
+                crate::hv::vmx::set_guest_registers(registers);
+                super::trace::info(format_args!(
+                    "GetClientRect hwnd=0x{:08X} rect=0x{:08X} bounds=0,0,{},{} ret=0x{:08X}",
+                    DESKTOP_HWND, rect, width, height, GET_CLIENT_RECT_RETURN
+                ));
+                DispatchOutcome::Resume
+            }
+            Err(reason) => {
+                super::trace::fail(format_args!(
+                    "GetClientRect failed vm={} reason={}",
+                    vm_id, reason
+                ));
+                DispatchOutcome::Stop
+            }
+        }
+    } else if imports::is_register_class_a(import) {
         match register_class_a(vm_id) {
             Ok((atom, return_address, class_name)) => {
                 let mut registers = crate::hv::vmx::guest_registers();
