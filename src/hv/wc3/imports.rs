@@ -47,6 +47,14 @@ pub(crate) fn patch(
             super::thunk32::Kind::GetFileType
         } else if is_set_handle_count(import) {
             super::thunk32::Kind::SetHandleCount
+        } else if is_get_command_line_a(import) {
+            super::thunk32::Kind::GetCommandLineA
+        } else if is_get_environment_strings_w(import) {
+            super::thunk32::Kind::GetEnvironmentStringsW
+        } else if is_get_environment_strings_a(import) {
+            super::thunk32::Kind::GetEnvironmentStringsA
+        } else if is_free_environment_strings_a(import) {
+            super::thunk32::Kind::FreeEnvironmentStringsA
         } else {
             super::thunk32::Kind::Stop
         };
@@ -117,7 +125,11 @@ pub(crate) fn is_tls_alloc(import: &LauncherImport) -> bool {
 }
 
 pub(crate) fn find_heap_alloc(imports: &[LauncherImport]) -> bool {
-    imports.iter().filter(|import| is_heap_alloc(import)).count() == 1
+    imports
+        .iter()
+        .filter(|import| is_heap_alloc(import))
+        .count()
+        == 1
 }
 
 pub(crate) fn is_heap_alloc(import: &LauncherImport) -> bool {
@@ -145,8 +157,7 @@ pub(crate) fn find_get_current_thread_id(imports: &[LauncherImport]) -> bool {
 }
 
 pub(crate) fn is_get_current_thread_id(import: &LauncherImport) -> bool {
-    import.module.eq_ignore_ascii_case("KERNEL32.dll")
-        && import.symbol == "GetCurrentThreadId"
+    import.module.eq_ignore_ascii_case("KERNEL32.dll") && import.symbol == "GetCurrentThreadId"
 }
 
 pub(crate) fn find_get_startup_info_a(imports: &[LauncherImport]) -> bool {
@@ -162,7 +173,11 @@ pub(crate) fn is_get_startup_info_a(import: &LauncherImport) -> bool {
 }
 
 pub(crate) fn find_get_std_handle(imports: &[LauncherImport]) -> bool {
-    imports.iter().filter(|import| is_get_std_handle(import)).count() == 1
+    imports
+        .iter()
+        .filter(|import| is_get_std_handle(import))
+        .count()
+        == 1
 }
 
 pub(crate) fn is_get_std_handle(import: &LauncherImport) -> bool {
@@ -170,7 +185,11 @@ pub(crate) fn is_get_std_handle(import: &LauncherImport) -> bool {
 }
 
 pub(crate) fn find_get_file_type(imports: &[LauncherImport]) -> bool {
-    imports.iter().filter(|import| is_get_file_type(import)).count() == 1
+    imports
+        .iter()
+        .filter(|import| is_get_file_type(import))
+        .count()
+        == 1
 }
 
 pub(crate) fn is_get_file_type(import: &LauncherImport) -> bool {
@@ -187,6 +206,54 @@ pub(crate) fn find_set_handle_count(imports: &[LauncherImport]) -> bool {
 
 pub(crate) fn is_set_handle_count(import: &LauncherImport) -> bool {
     import.module.eq_ignore_ascii_case("KERNEL32.dll") && import.symbol == "SetHandleCount"
+}
+
+pub(crate) fn find_get_command_line_a(imports: &[LauncherImport]) -> bool {
+    imports
+        .iter()
+        .filter(|import| is_get_command_line_a(import))
+        .count()
+        == 1
+}
+
+pub(crate) fn is_get_command_line_a(import: &LauncherImport) -> bool {
+    import.module.eq_ignore_ascii_case("KERNEL32.dll") && import.symbol == "GetCommandLineA"
+}
+
+pub(crate) fn find_get_environment_strings_w(imports: &[LauncherImport]) -> bool {
+    imports
+        .iter()
+        .filter(|import| is_get_environment_strings_w(import))
+        .count()
+        == 1
+}
+
+pub(crate) fn is_get_environment_strings_w(import: &LauncherImport) -> bool {
+    import.module.eq_ignore_ascii_case("KERNEL32.dll") && import.symbol == "GetEnvironmentStringsW"
+}
+
+pub(crate) fn find_get_environment_strings_a(imports: &[LauncherImport]) -> bool {
+    imports
+        .iter()
+        .filter(|import| is_get_environment_strings_a(import))
+        .count()
+        == 1
+}
+
+pub(crate) fn is_get_environment_strings_a(import: &LauncherImport) -> bool {
+    import.module.eq_ignore_ascii_case("KERNEL32.dll") && import.symbol == "GetEnvironmentStrings"
+}
+
+pub(crate) fn find_free_environment_strings_a(imports: &[LauncherImport]) -> bool {
+    imports
+        .iter()
+        .filter(|import| is_free_environment_strings_a(import))
+        .count()
+        == 1
+}
+
+pub(crate) fn is_free_environment_strings_a(import: &LauncherImport) -> bool {
+    import.module.eq_ignore_ascii_case("KERNEL32.dll") && import.symbol == "FreeEnvironmentStringsA"
 }
 
 pub(crate) fn new_table() -> Vec<LauncherImport> {

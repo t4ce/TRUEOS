@@ -13,8 +13,10 @@ use super::{imports, pe32, thunk32};
 pub(crate) const ENTRY_VA: u32 = pe32::IMAGE_BASE + pe32::ENTRY_RVA;
 pub(crate) const TEB_VA: u32 = 0x0020_1000;
 pub(crate) const HEAP_VA: u32 = 0x0021_0000;
+pub(crate) const PROCESS_DATA_VA: u32 = 0x0021_1000;
 pub(crate) const HEAP_BYTES: usize = PAGE_SIZE_4K;
 const HEAP_BACKING_OFFSET: usize = pe32::IMAGE_BYTES + PAGE_SIZE_4K * 2;
+const PROCESS_DATA_BACKING_OFFSET: usize = pe32::IMAGE_BYTES + PAGE_SIZE_4K * 3;
 const EXPECTED_SHA256: [u8; 32] = [
     0x5a, 0x8c, 0xca, 0x72, 0x7c, 0x71, 0x9a, 0xe0, 0x54, 0xad, 0xf8, 0xd1, 0x55, 0x23, 0xa8, 0xe3,
     0x09, 0x97, 0x45, 0x22, 0x5e, 0x2f, 0x4f, 0x98, 0x85, 0xf8, 0x87, 0x74, 0xaa, 0x6f, 0x36, 0xd9,
@@ -39,6 +41,9 @@ const HEAP_ALLOC_BYTES: u32 = 0x0000_0080;
 const HEAP_ALLOC_SECOND_RETURN: u32 = 0x0040_1FEC;
 const HEAP_ALLOC_SECOND_FLAGS: u32 = 0;
 const HEAP_ALLOC_SECOND_BYTES: u32 = 0x0000_0480;
+const HEAP_ALLOC_THIRD_RETURN: u32 = 0x0040_1FEC;
+const HEAP_ALLOC_THIRD_FLAGS: u32 = 0;
+const HEAP_ALLOC_THIRD_BYTES: u32 = 0x0000_0010;
 const TLS_SET_VALUE_RETURN: u32 = 0x0040_3EFC;
 const TLS_SET_VALUE_INDEX: u32 = 0;
 const TLS_SET_VALUE_VALUE: u32 = HEAP_VA;
@@ -50,6 +55,12 @@ const GET_STD_HANDLE_RETURN: u32 = 0x0040_4A0D;
 const GET_FILE_TYPE_RETURN: u32 = 0x0040_4A1B;
 const SET_HANDLE_COUNT_RETURN: u32 = 0x0040_4A52;
 const STD_HANDLES: [u32; 3] = [0x5743_1001, 0x5743_1002, 0x5743_1003];
+const GET_COMMAND_LINE_A_RETURN: u32 = 0x0040_21D0;
+const GET_ENVIRONMENT_STRINGS_W_RETURN: u32 = 0x0040_4786;
+const GET_ENVIRONMENT_STRINGS_A_RETURN: u32 = 0x0040_479E;
+const FREE_ENVIRONMENT_STRINGS_A_RETURN: u32 = 0x0040_488E;
+const ENVIRONMENT_BLOCK_VA: u32 = PROCESS_DATA_VA + 0x100;
+const COMMAND_LINE: &[u8] = b"\"Warcraft III.exe\"\0";
 
 #[derive(Copy, Clone)]
 pub(crate) struct GuestMapping {
@@ -102,7 +113,7 @@ pub(crate) fn prepare(vm_id: u8, bytes: &[u8]) -> Result<(), &'static str> {
     if thunk_bytes > PAGE_SIZE_4K {
         return Err("wc3 too many imports for thunk page");
     }
-    let arena = phys::reserve_heap_arena(pe32::IMAGE_BYTES + PAGE_SIZE_4K * 3, PAGE_SIZE_4K)
+    let arena = phys::reserve_heap_arena(pe32::IMAGE_BYTES + PAGE_SIZE_4K * 4, PAGE_SIZE_4K)
         .ok_or("wc3 launcher backing allocation")?;
     let mut thunks = alloc::vec![0; PAGE_SIZE_4K];
     imports::patch(&mut materialized.image, &materialized.imports, &mut thunks)?;
@@ -121,6 +132,16 @@ pub(crate) fn prepare(vm_id: u8, bytes: &[u8]) -> Result<(), &'static str> {
         core::ptr::write_unaligned(
             (arena.virt_start + pe32::IMAGE_BYTES + PAGE_SIZE_4K) as *mut u32,
             u32::MAX,
+        );
+        core::ptr::copy_nonoverlapping(
+            COMMAND_LINE.as_ptr(),
+            (arena.virt_start + PROCESS_DATA_BACKING_OFFSET) as *mut u8,
+            COMMAND_LINE.len(),
+        );
+        core::ptr::write_bytes(
+            (arena.virt_start + PROCESS_DATA_BACKING_OFFSET + 0x100) as *mut u8,
+            0,
+            2,
         );
     }
     let slot = LAUNCHERS
@@ -226,14 +247,21 @@ fn heap_create(vm_id: u8) -> Result<(u32, u32), &'static str> {
     Ok((heap.value, return_address))
 }
 
-fn guest_stack_range_mut(vm_id: u8, guest_address: u32, bytes: usize) -> Result<&'static mut [u8], &'static str> {
+fn guest_stack_range_mut(
+    vm_id: u8,
+    guest_address: u32,
+    bytes: usize,
+) -> Result<&'static mut [u8], &'static str> {
     let offset = u64::from(guest_address)
         .checked_sub(crate::hv::memory::GUEST_STACK_VA_BASE)
         .ok_or("guest address below stack")?;
     let offset = usize::try_from(offset).map_err(|_| "guest address range")?;
-    let stack = crate::hv::memory::guest_stack_mut_ptr_for_vm(vm_id).ok_or("guest stack unavailable")?;
+    let stack =
+        crate::hv::memory::guest_stack_mut_ptr_for_vm(vm_id).ok_or("guest stack unavailable")?;
     let stack_bytes = crate::hv::memory::active_guest_stack_bytes_for_vm(vm_id);
-    let end = offset.checked_add(bytes).ok_or("guest structure overflow")?;
+    let end = offset
+        .checked_add(bytes)
+        .ok_or("guest structure overflow")?;
     if end > stack_bytes {
         return Err("guest structure outside writable stack");
     }
@@ -241,15 +269,23 @@ fn guest_stack_range_mut(vm_id: u8, guest_address: u32, bytes: usize) -> Result<
 }
 
 fn get_version_ex_a(vm_id: u8) -> Result<(u32, u32), &'static str> {
-    let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP).ok_or("guest ESP unavailable")?;
+    let esp =
+        crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP).ok_or("guest ESP unavailable")?;
     let frame = guest_stack_range_mut(vm_id, esp as u32, 8)?;
-    let return_address = u32::from_le_bytes(frame[0..4].try_into().map_err(|_| "GetVersionExA return")?);
-    let version_info = u32::from_le_bytes(frame[4..8].try_into().map_err(|_| "GetVersionExA argument")?);
+    let return_address =
+        u32::from_le_bytes(frame[0..4].try_into().map_err(|_| "GetVersionExA return")?);
+    let version_info = u32::from_le_bytes(
+        frame[4..8]
+            .try_into()
+            .map_err(|_| "GetVersionExA argument")?,
+    );
     if return_address != GET_VERSION_EX_A_RETURN {
         return Err("unexpected GetVersionExA return address");
     }
     let output = guest_stack_range_mut(vm_id, version_info, OS_VERSION_INFO_A_BYTES)?;
-    if u32::from_le_bytes(output[0..4].try_into().map_err(|_| "GetVersionExA size")?) != OS_VERSION_INFO_A_BYTES as u32 {
+    if u32::from_le_bytes(output[0..4].try_into().map_err(|_| "GetVersionExA size")?)
+        != OS_VERSION_INFO_A_BYTES as u32
+    {
         return Err("unexpected GetVersionExA structure size");
     }
     output.fill(0);
@@ -275,7 +311,9 @@ fn launcher_image_range_mut(
         .checked_sub(u64::from(pe32::IMAGE_BASE))
         .ok_or("guest image address below image")?;
     let offset = usize::try_from(offset).map_err(|_| "guest image address range")?;
-    let end = offset.checked_add(bytes).ok_or("guest image range overflow")?;
+    let end = offset
+        .checked_add(bytes)
+        .ok_or("guest image range overflow")?;
     if end > pe32::IMAGE_BYTES || end > state.arena.length {
         return Err("guest image range outside writable image");
     }
@@ -350,8 +388,16 @@ fn heap_alloc_words(vm_id: u8) -> Result<[u32; 4], &'static str> {
         .ok_or("guest ESP unavailable")? as u32;
     let frame = guest_stack_range_mut(vm_id, esp, 16)?;
     Ok([
-        u32::from_le_bytes(frame[0..4].try_into().map_err(|_| "HeapAlloc return address")?),
-        u32::from_le_bytes(frame[4..8].try_into().map_err(|_| "HeapAlloc heap handle")?),
+        u32::from_le_bytes(
+            frame[0..4]
+                .try_into()
+                .map_err(|_| "HeapAlloc return address")?,
+        ),
+        u32::from_le_bytes(
+            frame[4..8]
+                .try_into()
+                .map_err(|_| "HeapAlloc heap handle")?,
+        ),
         u32::from_le_bytes(frame[8..12].try_into().map_err(|_| "HeapAlloc flags")?),
         u32::from_le_bytes(frame[12..16].try_into().map_err(|_| "HeapAlloc bytes")?),
     ])
@@ -368,7 +414,9 @@ fn launcher_heap_range_mut(
             .ok_or("guest heap address below heap")?,
     )
     .map_err(|_| "guest heap address range")?;
-    let end = offset.checked_add(bytes).ok_or("guest heap range overflow")?;
+    let end = offset
+        .checked_add(bytes)
+        .ok_or("guest heap range overflow")?;
     if end > HEAP_BYTES {
         return Err("guest heap range outside private heap page");
     }
@@ -383,6 +431,95 @@ fn launcher_heap_range_mut(
             bytes,
         )
     })
+}
+
+fn launcher_process_data_range_mut(
+    vm_id: u8,
+    guest_address: u32,
+    bytes: usize,
+) -> Result<&'static mut [u8], &'static str> {
+    let offset = usize::try_from(
+        u64::from(guest_address)
+            .checked_sub(u64::from(PROCESS_DATA_VA))
+            .ok_or("guest process-data address below page")?,
+    )
+    .map_err(|_| "guest process-data address range")?;
+    let end = offset
+        .checked_add(bytes)
+        .ok_or("guest process-data range overflow")?;
+    if end > PAGE_SIZE_4K {
+        return Err("guest process-data range outside private page");
+    }
+    let state = LAUNCHERS
+        .get(usize::from(vm_id))
+        .ok_or("unsupported wc3 launcher VM id")?
+        .lock();
+    let state = state.as_ref().ok_or("wc3 launcher state unavailable")?;
+    Ok(unsafe {
+        core::slice::from_raw_parts_mut(
+            (state.arena.virt_start + PROCESS_DATA_BACKING_OFFSET + offset) as *mut u8,
+            bytes,
+        )
+    })
+}
+
+fn no_argument_return_frame(vm_id: u8, error: &'static str) -> Result<u32, &'static str> {
+    let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP)
+        .ok_or("guest ESP unavailable")? as u32;
+    let frame = guest_stack_range_mut(vm_id, esp, 4)?;
+    Ok(u32::from_le_bytes(frame[0..4].try_into().map_err(|_| error)?))
+}
+
+fn get_command_line_a(vm_id: u8) -> Result<(u32, u32), &'static str> {
+    let return_address = no_argument_return_frame(vm_id, "GetCommandLineA return")?;
+    if return_address != GET_COMMAND_LINE_A_RETURN {
+        return Err("unexpected GetCommandLineA return address");
+    }
+    let output = launcher_process_data_range_mut(vm_id, PROCESS_DATA_VA, COMMAND_LINE.len())?;
+    if output != COMMAND_LINE {
+        return Err("GetCommandLineA process data mismatch");
+    }
+    Ok((PROCESS_DATA_VA, return_address))
+}
+
+fn get_environment_strings_w(vm_id: u8) -> Result<u32, &'static str> {
+    let return_address = no_argument_return_frame(vm_id, "GetEnvironmentStringsW return")?;
+    if return_address != GET_ENVIRONMENT_STRINGS_W_RETURN {
+        return Err("unexpected GetEnvironmentStringsW return address");
+    }
+    Ok(return_address)
+}
+
+fn get_environment_strings_a(vm_id: u8) -> Result<(u32, u32), &'static str> {
+    let return_address = no_argument_return_frame(vm_id, "GetEnvironmentStrings return")?;
+    if return_address != GET_ENVIRONMENT_STRINGS_A_RETURN {
+        return Err("unexpected GetEnvironmentStrings return address");
+    }
+    let output = launcher_process_data_range_mut(vm_id, ENVIRONMENT_BLOCK_VA, 2)?;
+    if output != [0, 0] {
+        return Err("GetEnvironmentStrings process data mismatch");
+    }
+    Ok((ENVIRONMENT_BLOCK_VA, return_address))
+}
+
+fn free_environment_strings_a(vm_id: u8) -> Result<(u32, u32), &'static str> {
+    let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP)
+        .ok_or("guest ESP unavailable")? as u32;
+    let frame = guest_stack_range_mut(vm_id, esp, 8)?;
+    let return_address = u32::from_le_bytes(
+        frame[0..4]
+            .try_into()
+            .map_err(|_| "FreeEnvironmentStringsA return")?,
+    );
+    let environment = u32::from_le_bytes(
+        frame[4..8]
+            .try_into()
+            .map_err(|_| "FreeEnvironmentStringsA argument")?,
+    );
+    if return_address != FREE_ENVIRONMENT_STRINGS_A_RETURN || environment != ENVIRONMENT_BLOCK_VA {
+        return Err("unexpected FreeEnvironmentStringsA frame");
+    }
+    Ok((environment, return_address))
 }
 
 fn heap_alloc(
@@ -426,7 +563,11 @@ fn heap_alloc(
         .checked_add(u32::try_from(aligned).map_err(|_| "HeapAlloc pointer overflow")?)
         .ok_or("HeapAlloc pointer overflow")?;
     drop(state);
-    let output = launcher_heap_range_mut(vm_id, guest_ptr, usize::try_from(bytes).map_err(|_| "HeapAlloc size")?)?;
+    let output = launcher_heap_range_mut(
+        vm_id,
+        guest_ptr,
+        usize::try_from(bytes).map_err(|_| "HeapAlloc size")?,
+    )?;
     if flags & HEAP_ALLOC_FLAGS != 0 {
         output.fill(0);
     }
@@ -450,16 +591,8 @@ fn tls_set_value(vm_id: u8) -> Result<(u32, u32, u32), &'static str> {
             .try_into()
             .map_err(|_| "TlsSetValue return address")?,
     );
-    let index = u32::from_le_bytes(
-        frame[4..8]
-            .try_into()
-            .map_err(|_| "TlsSetValue index")?,
-    );
-    let value = u32::from_le_bytes(
-        frame[8..12]
-            .try_into()
-            .map_err(|_| "TlsSetValue value")?,
-    );
+    let index = u32::from_le_bytes(frame[4..8].try_into().map_err(|_| "TlsSetValue index")?);
+    let value = u32::from_le_bytes(frame[8..12].try_into().map_err(|_| "TlsSetValue value")?);
     if return_address != TLS_SET_VALUE_RETURN {
         return Err("unexpected TlsSetValue return address");
     }
@@ -535,9 +668,21 @@ fn get_startup_info_a(vm_id: u8) -> Result<(u32, u32), &'static str> {
     output[0..4].copy_from_slice(&(STARTUP_INFO_A_BYTES as u32).to_le_bytes());
     if u32::from_le_bytes(output[0..4].try_into().map_err(|_| "GetStartupInfoA cb")?)
         != STARTUP_INFO_A_BYTES as u32
-        || u32::from_le_bytes(output[0x2c..0x30].try_into().map_err(|_| "GetStartupInfoA flags")?) != 0
-        || u16::from_le_bytes(output[0x32..0x34].try_into().map_err(|_| "GetStartupInfoA reserved2 size")?) != 0
-        || u32::from_le_bytes(output[0x34..0x38].try_into().map_err(|_| "GetStartupInfoA reserved2 pointer")?) != 0
+        || u32::from_le_bytes(
+            output[0x2c..0x30]
+                .try_into()
+                .map_err(|_| "GetStartupInfoA flags")?,
+        ) != 0
+        || u16::from_le_bytes(
+            output[0x32..0x34]
+                .try_into()
+                .map_err(|_| "GetStartupInfoA reserved2 size")?,
+        ) != 0
+        || u32::from_le_bytes(
+            output[0x34..0x38]
+                .try_into()
+                .map_err(|_| "GetStartupInfoA reserved2 pointer")?,
+        ) != 0
     {
         return Err("GetStartupInfoA structure validation");
     }
@@ -565,8 +710,8 @@ fn get_std_handle(vm_id: u8, call: u32) -> Result<(u32, u32, u32), &'static str>
         _ => return Err("unexpected GetStdHandle sequence"),
     };
     let expected_which = 0xFFFF_FFF6u32
-        .checked_add(u32::try_from(stream).map_err(|_| "GetStdHandle stream")?)
-        .ok_or("GetStdHandle argument overflow")?;
+        .checked_sub(u32::try_from(stream).map_err(|_| "GetStdHandle stream")?)
+        .ok_or("GetStdHandle argument underflow")?;
     if return_address != GET_STD_HANDLE_RETURN || which != expected_which {
         return Err("unexpected GetStdHandle frame");
     }
@@ -593,11 +738,7 @@ fn get_file_type(vm_id: u8, call: u32) -> Result<(u32, u32, u32), &'static str> 
             .try_into()
             .map_err(|_| "GetFileType return address")?,
     );
-    let handle = u32::from_le_bytes(
-        frame[4..8]
-            .try_into()
-            .map_err(|_| "GetFileType argument")?,
-    );
+    let handle = u32::from_le_bytes(frame[4..8].try_into().map_err(|_| "GetFileType argument")?);
     let stream = match call {
         15 => 0,
         17 => 1,
@@ -640,7 +781,11 @@ fn set_handle_count(vm_id: u8) -> Result<(u32, u32), &'static str> {
 pub(crate) fn is_initialized_critical_section(vm_id: u8, guest_address: u32) -> bool {
     LAUNCHERS
         .get(usize::from(vm_id))
-        .and_then(|slot| slot.lock().as_ref().map(|state| state.initialized_critical_sections))
+        .and_then(|slot| {
+            slot.lock()
+                .as_ref()
+                .map(|state| state.initialized_critical_sections)
+        })
         .is_some_and(|addresses| addresses.contains(&guest_address))
 }
 
@@ -764,12 +909,7 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
             }
         }
     } else if call == 9 && imports::is_heap_alloc(import) {
-        match heap_alloc(
-            vm_id,
-            HEAP_ALLOC_RETURN,
-            HEAP_ALLOC_FLAGS,
-            HEAP_ALLOC_BYTES,
-        ) {
+        match heap_alloc(vm_id, HEAP_ALLOC_RETURN, HEAP_ALLOC_FLAGS, HEAP_ALLOC_BYTES) {
             Ok((guest_ptr, return_address, heap_handle, flags, bytes)) => {
                 let mut registers = crate::hv::vmx::guest_registers();
                 registers.rax = u64::from(guest_ptr);
@@ -802,9 +942,7 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
                     "TlsSetValue index={} value=0x{:08X} ret=0x{:08X}",
                     index, value, return_address
                 ));
-                super::trace::info(format_args!(
-                    "return #10 KERNEL32.dll!TlsSetValue eax=1"
-                ));
+                super::trace::info(format_args!("return #10 KERNEL32.dll!TlsSetValue eax=1"));
                 DispatchOutcome::Resume
             }
             Err(reason) => {
@@ -963,9 +1101,128 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
                 DispatchOutcome::Stop
             }
         }
+    } else if call == 21 && imports::is_get_command_line_a(import) {
+        match get_command_line_a(vm_id) {
+            Ok((pointer, return_address)) => {
+                let mut registers = crate::hv::vmx::guest_registers();
+                registers.rax = u64::from(pointer);
+                crate::hv::vmx::set_guest_registers(registers);
+                super::trace::info(format_args!(
+                    "return #21 KERNEL32.dll!GetCommandLineA ptr=0x{:08X} value=\"Warcraft III.exe\"",
+                    pointer
+                ));
+                let _ = return_address;
+                DispatchOutcome::Resume
+            }
+            Err(reason) => {
+                super::trace::fail(format_args!(
+                    "gate-1m failed vm={} phase=GetCommandLineA reason={}",
+                    vm_id, reason
+                ));
+                DispatchOutcome::Stop
+            }
+        }
+    } else if call == 22 && imports::is_get_environment_strings_w(import) {
+        match get_environment_strings_w(vm_id) {
+            Ok(return_address) => {
+                let mut registers = crate::hv::vmx::guest_registers();
+                registers.rax = 0;
+                crate::hv::vmx::set_guest_registers(registers);
+                super::trace::info(format_args!(
+                    "return #22 KERNEL32.dll!GetEnvironmentStringsW ptr=0x00000000 ret=0x{:08X}",
+                    return_address
+                ));
+                DispatchOutcome::Resume
+            }
+            Err(reason) => {
+                super::trace::fail(format_args!(
+                    "gate-1m failed vm={} phase=GetEnvironmentStringsW reason={}",
+                    vm_id, reason
+                ));
+                DispatchOutcome::Stop
+            }
+        }
+    } else if call == 23 && imports::is_get_environment_strings_a(import) {
+        match get_environment_strings_a(vm_id) {
+            Ok((pointer, return_address)) => {
+                let mut registers = crate::hv::vmx::guest_registers();
+                registers.rax = u64::from(pointer);
+                crate::hv::vmx::set_guest_registers(registers);
+                super::trace::info(format_args!(
+                    "return #23 KERNEL32.dll!GetEnvironmentStrings ptr=0x{:08X} empty=1 ret=0x{:08X}",
+                    pointer, return_address
+                ));
+                DispatchOutcome::Resume
+            }
+            Err(reason) => {
+                super::trace::fail(format_args!(
+                    "gate-1m failed vm={} phase=GetEnvironmentStrings reason={}",
+                    vm_id, reason
+                ));
+                DispatchOutcome::Stop
+            }
+        }
+    } else if call == 24 && imports::is_heap_alloc(import) {
+        match heap_alloc(
+            vm_id,
+            HEAP_ALLOC_THIRD_RETURN,
+            HEAP_ALLOC_THIRD_FLAGS,
+            HEAP_ALLOC_THIRD_BYTES,
+        ) {
+            Ok((guest_ptr, return_address, heap_handle, flags, bytes)) => {
+                let mut registers = crate::hv::vmx::guest_registers();
+                registers.rax = u64::from(guest_ptr);
+                crate::hv::vmx::set_guest_registers(registers);
+                super::trace::info(format_args!(
+                    "HeapAlloc heap=0x{:08X} flags=0x{:08X} bytes=0x{:08X} ret=0x{:08X}",
+                    heap_handle, flags, bytes, return_address
+                ));
+                super::trace::info(format_args!(
+                    "return #24 KERNEL32.dll!HeapAlloc ptr=0x{:08X}",
+                    guest_ptr
+                ));
+                DispatchOutcome::Resume
+            }
+            Err(reason) => {
+                super::trace::fail(format_args!(
+                    "gate-1m failed vm={} phase=HeapAlloc reason={}",
+                    vm_id, reason
+                ));
+                DispatchOutcome::Stop
+            }
+        }
+    } else if call == 25 && imports::is_free_environment_strings_a(import) {
+        match free_environment_strings_a(vm_id) {
+            Ok((pointer, return_address)) => {
+                let mut registers = crate::hv::vmx::guest_registers();
+                registers.rax = 1;
+                crate::hv::vmx::set_guest_registers(registers);
+                super::trace::info(format_args!(
+                    "FreeEnvironmentStringsA ptr=0x{:08X} ret=0x{:08X}",
+                    pointer, return_address
+                ));
+                super::trace::info(format_args!(
+                    "return #25 KERNEL32.dll!FreeEnvironmentStringsA eax=1"
+                ));
+                DispatchOutcome::Resume
+            }
+            Err(reason) => {
+                super::trace::fail(format_args!(
+                    "gate-1m failed vm={} phase=FreeEnvironmentStringsA reason={}",
+                    vm_id, reason
+                ));
+                DispatchOutcome::Stop
+            }
+        }
     } else if call == 21 {
         super::trace::info(format_args!(
-            "gate-1l complete vm={} next-import={}!{}",
+            "gate-1m complete vm={} next-import={}!{}",
+            vm_id, import.module, import.symbol
+        ));
+        DispatchOutcome::Stop
+    } else if call == 26 {
+        super::trace::info(format_args!(
+            "gate-1m complete vm={} next-import={}!{}",
             vm_id, import.module, import.symbol
         ));
         DispatchOutcome::Stop

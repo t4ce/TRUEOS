@@ -474,6 +474,15 @@ pub fn build_ept_identity_4g() -> Result<u64, &'static str> {
             PAGE_SIZE_4K as u64,
             "wc3-gate1g-heap",
         )?;
+        map_ept_identity_span(
+            pdpt,
+            &mut next_pd,
+            &mut next_pt,
+            &mut leaf_2m,
+            launcher.phys_start + 0x47_000,
+            PAGE_SIZE_4K as u64,
+            "wc3-gate1m-process-data",
+        )?;
     }
 
     if let Some(comm_pa) = crate::hv::vmcall::pa_for_vm(current_vm_id_for_log()) {
@@ -1525,6 +1534,11 @@ pub fn build_guest_cr3_for_vm_with_mode(
                         | PT_ENTRY_NO_EXECUTE;
                 (*guest_wc3_launcher_low_pt)[pt_index(crate::hv::wc3::HEAP_VA as u64)] =
                     ((launcher.phys_start + 0x46_000) & 0x000F_FFFF_FFFF_F000)
+                        | PT_ENTRY_PRESENT
+                        | PT_ENTRY_WRITABLE
+                        | PT_ENTRY_NO_EXECUTE;
+                (*guest_wc3_launcher_low_pt)[pt_index(crate::hv::wc3::PROCESS_DATA_VA as u64)] =
+                    ((launcher.phys_start + 0x47_000) & 0x000F_FFFF_FFFF_F000)
                         | PT_ENTRY_PRESENT
                         | PT_ENTRY_WRITABLE
                         | PT_ENTRY_NO_EXECUTE;

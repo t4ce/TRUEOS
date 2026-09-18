@@ -16,6 +16,10 @@ pub(crate) enum Kind {
     GetStdHandle,
     GetFileType,
     SetHandleCount,
+    GetCommandLineA,
+    GetEnvironmentStringsW,
+    GetEnvironmentStringsA,
+    FreeEnvironmentStringsA,
 }
 
 pub(crate) fn write(import_id: u32, kind: Kind, output: &mut [u8]) -> Result<(), &'static str> {
@@ -68,6 +72,14 @@ pub(crate) fn write(import_id: u32, kind: Kind, output: &mut [u8]) -> Result<(),
             output[10] = 0x00;
         }
         Kind::GetStdHandle | Kind::GetFileType | Kind::SetHandleCount => {
+            output[8] = 0xC2;
+            output[9] = 0x04;
+            output[10] = 0x00;
+        }
+        Kind::GetCommandLineA | Kind::GetEnvironmentStringsW | Kind::GetEnvironmentStringsA => {
+            output[8] = 0xC3;
+        }
+        Kind::FreeEnvironmentStringsA => {
             output[8] = 0xC2;
             output[9] = 0x04;
             output[10] = 0x00;

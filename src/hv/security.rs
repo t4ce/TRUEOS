@@ -61,6 +61,7 @@ pub fn ept_permissions_for_span(label: &str, default_perms: u64) -> u64 {
             | "hull-rw-private"
             | "wc3-gate0-teb"
             | "wc3-gate1g-heap"
+            | "wc3-gate1m-process-data"
     ) {
         // EPT execute is bit 2. Guest data/shared spans remain readable and
         // writable but cannot become executable through a guest PTE edit.

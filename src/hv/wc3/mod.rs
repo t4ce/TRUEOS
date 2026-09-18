@@ -14,8 +14,9 @@ mod trace;
 
 pub(crate) use guest32::{guest_mapping, handle_vmcall, prepare_gate0};
 pub(crate) use launcher::{
-    guest_mapping as launcher_guest_mapping, handle_vmcall as handle_launcher_vmcall,
-    prepare as prepare_launcher, release as release_launcher, HEAP_VA,
+    HEAP_VA, PROCESS_DATA_VA, guest_mapping as launcher_guest_mapping,
+    handle_vmcall as handle_launcher_vmcall, prepare as prepare_launcher,
+    release as release_launcher,
 };
 
 use super::VmBootMode;
