@@ -28,6 +28,8 @@ const CRITICAL_SECTION_CALLS: [(u32, u32); 4] = [
     (0x0040_22B4, 0x0040_AB20),
     (0x0040_22BC, 0x0040_AAF0),
 ];
+const TLS_ALLOC_RETURN: u32 = 0x0040_3ED4;
+const TLS_SLOT_COUNT: usize = 64;
 
 #[derive(Copy, Clone)]
 pub(crate) struct GuestMapping {
@@ -40,6 +42,7 @@ struct LauncherState {
     heap: Option<HeapHandle>,
     initialized_critical_sections: [u32; 4],
     initialized_critical_section_count: usize,
+    tls_allocated: [bool; TLS_SLOT_COUNT],
 }
 
 #[derive(Copy, Clone)]
@@ -97,6 +100,7 @@ pub(crate) fn prepare(vm_id: u8, bytes: &[u8]) -> Result<(), &'static str> {
         heap: None,
         initialized_critical_sections: [0; 4],
         initialized_critical_section_count: 0,
+        tls_allocated: [false; TLS_SLOT_COUNT],
     });
     CALLS[usize::from(vm_id)].store(0, Ordering::Release);
     super::trace::info(format_args!(
@@ -277,6 +281,32 @@ fn initialize_critical_section(vm_id: u8, call: u32) -> Result<(u32, u32), &'sta
     Ok((critical_section, return_address))
 }
 
+fn tls_alloc(vm_id: u8) -> Result<(u32, u32), &'static str> {
+    let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP)
+        .ok_or("guest ESP unavailable")? as u32;
+    let frame = guest_stack_range_mut(vm_id, esp, 4)?;
+    let return_address = u32::from_le_bytes(
+        frame[0..4]
+            .try_into()
+            .map_err(|_| "TlsAlloc return address")?,
+    );
+    if return_address != TLS_ALLOC_RETURN {
+        return Err("unexpected TlsAlloc return address");
+    }
+    let state = LAUNCHERS
+        .get(usize::from(vm_id))
+        .ok_or("unsupported wc3 launcher VM id")?;
+    let mut state = state.lock();
+    let state = state.as_mut().ok_or("wc3 launcher state unavailable")?;
+    let index = state
+        .tls_allocated
+        .iter()
+        .position(|allocated| !allocated)
+        .ok_or("TlsAlloc exhausted")?;
+    state.tls_allocated[index] = true;
+    Ok((u32::try_from(index).map_err(|_| "TlsAlloc index overflow")?, return_address))
+}
+
 pub(crate) fn is_initialized_critical_section(vm_id: u8, guest_address: u32) -> bool {
     LAUNCHERS
         .get(usize::from(vm_id))
@@ -376,9 +406,36 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
                 DispatchOutcome::Stop
             }
         }
-    } else if call == 8 && !imports::is_initialize_critical_section(import) {
+    } else if call == 8 && imports::is_tls_alloc(import) {
+        match tls_alloc(vm_id) {
+            Ok((index, return_address)) => {
+                if index == u32::MAX {
+                    super::trace::fail(format_args!(
+                        "gate-1f failed vm={} phase=TlsAlloc reason=invalid-index",
+                        vm_id
+                    ));
+                    return DispatchOutcome::Stop;
+                }
+                let mut registers = crate::hv::vmx::guest_registers();
+                registers.rax = u64::from(index);
+                crate::hv::vmx::set_guest_registers(registers);
+                super::trace::info(format_args!(
+                    "return #8 KERNEL32.dll!TlsAlloc index={} ret=0x{:08X}",
+                    index, return_address
+                ));
+                DispatchOutcome::Resume
+            }
+            Err(reason) => {
+                super::trace::fail(format_args!(
+                    "gate-1f failed vm={} phase=TlsAlloc reason={}",
+                    vm_id, reason
+                ));
+                DispatchOutcome::Stop
+            }
+        }
+    } else if call == 9 {
         super::trace::info(format_args!(
-            "gate-1e complete vm={} next-import={}!{}",
+            "gate-1f complete vm={} next-import={}!{}",
             vm_id, import.module, import.symbol
         ));
         DispatchOutcome::Stop

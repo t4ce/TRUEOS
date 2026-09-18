@@ -31,6 +31,8 @@ pub(crate) fn patch(
             super::thunk32::Kind::GetVersionExA
         } else if is_initialize_critical_section(import) {
             super::thunk32::Kind::InitializeCriticalSection
+        } else if is_tls_alloc(import) {
+            super::thunk32::Kind::TlsAlloc
         } else {
             super::thunk32::Kind::Stop
         };
@@ -90,6 +92,14 @@ pub(crate) fn find_initialize_critical_section(imports: &[LauncherImport]) -> bo
 pub(crate) fn is_initialize_critical_section(import: &LauncherImport) -> bool {
     import.module.eq_ignore_ascii_case("KERNEL32.dll")
         && import.symbol == "InitializeCriticalSection"
+}
+
+pub(crate) fn find_tls_alloc(imports: &[LauncherImport]) -> bool {
+    imports.iter().filter(|import| is_tls_alloc(import)).count() == 1
+}
+
+pub(crate) fn is_tls_alloc(import: &LauncherImport) -> bool {
+    import.module.eq_ignore_ascii_case("KERNEL32.dll") && import.symbol == "TlsAlloc"
 }
 
 pub(crate) fn new_table() -> Vec<LauncherImport> {
