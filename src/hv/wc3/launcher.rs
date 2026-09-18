@@ -77,6 +77,10 @@ const GET_ACP_CODE_PAGE: u32 = 1252;
 const GET_CP_INFO_FIRST_RETURN: u32 = 0x0040_238B;
 const GET_CP_INFO_SECOND_RETURN: u32 = 0x0040_25A1;
 const CP_INFO_BYTES: usize = 0x14;
+const GET_STRING_TYPE_W_RETURN: u32 = 0x0040_4C28;
+const GET_STRING_TYPE_W_SOURCE: u32 = 0x0040_71E0;
+const LC_MAP_STRING_W_RETURN: u32 = 0x0040_2A08;
+const LC_MAP_STRING_W_SOURCE: u32 = 0x0040_71E0;
 
 #[derive(Copy, Clone)]
 pub(crate) struct GuestMapping {
@@ -914,6 +918,84 @@ fn get_cp_info(vm_id: u8, expected_return: u32) -> Result<(u32, u32), &'static s
     Ok((cp_info, return_address))
 }
 
+fn get_string_type_w(vm_id: u8) -> Result<(u32, u32), &'static str> {
+    let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP)
+        .ok_or("guest ESP unavailable")? as u32;
+    let frame = guest_stack_range_mut(vm_id, esp, 20)?;
+    let return_address = u32::from_le_bytes(
+        frame[0..4]
+            .try_into()
+            .map_err(|_| "GetStringTypeW return")?,
+    );
+    let info_type = u32::from_le_bytes(
+        frame[4..8]
+            .try_into()
+            .map_err(|_| "GetStringTypeW info type")?,
+    );
+    let source = u32::from_le_bytes(
+        frame[8..12]
+            .try_into()
+            .map_err(|_| "GetStringTypeW source")?,
+    );
+    let count = u32::from_le_bytes(
+        frame[12..16]
+            .try_into()
+            .map_err(|_| "GetStringTypeW count")?,
+    );
+    let output_pointer = u32::from_le_bytes(
+        frame[16..20]
+            .try_into()
+            .map_err(|_| "GetStringTypeW output")?,
+    );
+    if return_address != GET_STRING_TYPE_W_RETURN
+        || info_type != 1
+        || source != GET_STRING_TYPE_W_SOURCE
+        || count != 1
+    {
+        return Err("unexpected GetStringTypeW frame");
+    }
+    let output = guest_stack_range_mut(vm_id, output_pointer, 2)?;
+    output.copy_from_slice(&1u16.to_le_bytes());
+    Ok((output_pointer, return_address))
+}
+
+fn lc_map_string_w(vm_id: u8) -> Result<(u32, u32), &'static str> {
+    let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP)
+        .ok_or("guest ESP unavailable")? as u32;
+    let frame = guest_stack_range_mut(vm_id, esp, 28)?;
+    let return_address =
+        u32::from_le_bytes(frame[0..4].try_into().map_err(|_| "LCMapStringW return")?);
+    let locale = u32::from_le_bytes(frame[4..8].try_into().map_err(|_| "LCMapStringW locale")?);
+    let flags = u32::from_le_bytes(frame[8..12].try_into().map_err(|_| "LCMapStringW flags")?);
+    let source = u32::from_le_bytes(
+        frame[12..16]
+            .try_into()
+            .map_err(|_| "LCMapStringW source")?,
+    );
+    let count = u32::from_le_bytes(frame[16..20].try_into().map_err(|_| "LCMapStringW count")?);
+    let destination = u32::from_le_bytes(
+        frame[20..24]
+            .try_into()
+            .map_err(|_| "LCMapStringW destination")?,
+    );
+    let destination_count = u32::from_le_bytes(
+        frame[24..28]
+            .try_into()
+            .map_err(|_| "LCMapStringW destination count")?,
+    );
+    if return_address != LC_MAP_STRING_W_RETURN
+        || locale != 0
+        || flags != 0x100
+        || source != LC_MAP_STRING_W_SOURCE
+        || count != 1
+        || destination != 0
+        || destination_count != 0
+    {
+        return Err("unexpected LCMapStringW frame");
+    }
+    Ok((1, return_address))
+}
+
 fn get_startup_info_a(vm_id: u8) -> Result<(u32, u32), &'static str> {
     let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP)
         .ok_or("guest ESP unavailable")? as u32;
@@ -1663,7 +1745,47 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
                 DispatchOutcome::Stop
             }
         }
-    } else if call == 34 {
+    } else if call == 34 && imports::is_get_string_type_w(import) {
+        match get_string_type_w(vm_id) {
+            Ok((output_pointer, return_address)) => {
+                let mut registers = crate::hv::vmx::guest_registers();
+                registers.rax = 1;
+                crate::hv::vmx::set_guest_registers(registers);
+                super::trace::info(format_args!(
+                    "return #34 KERNEL32.dll!GetStringTypeW eax=1 lp=0x{:08X} ret=0x{:08X}",
+                    output_pointer, return_address
+                ));
+                DispatchOutcome::Resume
+            }
+            Err(reason) => {
+                super::trace::fail(format_args!(
+                    "gate-1o failed vm={} phase=GetStringTypeW reason={}",
+                    vm_id, reason
+                ));
+                DispatchOutcome::Stop
+            }
+        }
+    } else if matches!(call, 35 | 36) && imports::is_lc_map_string_w(import) {
+        match lc_map_string_w(vm_id) {
+            Ok((mapped, return_address)) => {
+                let mut registers = crate::hv::vmx::guest_registers();
+                registers.rax = u64::from(mapped);
+                crate::hv::vmx::set_guest_registers(registers);
+                super::trace::info(format_args!(
+                    "return #{} KERNEL32.dll!LCMapStringW mapped={} ret=0x{:08X}",
+                    call, mapped, return_address
+                ));
+                DispatchOutcome::Resume
+            }
+            Err(reason) => {
+                super::trace::fail(format_args!(
+                    "gate-1o failed vm={} phase=LCMapStringW reason={}",
+                    vm_id, reason
+                ));
+                DispatchOutcome::Stop
+            }
+        }
+    } else if call == 37 && imports::is_get_tick_count(import) {
         super::trace::info(format_args!(
             "gate-1o complete vm={} next-import={}!{}",
             vm_id, import.module, import.symbol

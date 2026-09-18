@@ -63,6 +63,10 @@ pub(crate) fn patch(
             super::thunk32::Kind::GetACP
         } else if is_get_cp_info(import) {
             super::thunk32::Kind::GetCPInfo
+        } else if is_get_string_type_w(import) {
+            super::thunk32::Kind::GetStringTypeW
+        } else if is_lc_map_string_w(import) {
+            super::thunk32::Kind::LCMapStringW
         } else {
             super::thunk32::Kind::Stop
         };
@@ -290,6 +294,18 @@ pub(crate) fn find_get_cp_info(imports: &[LauncherImport]) -> bool {
 
 pub(crate) fn is_get_cp_info(import: &LauncherImport) -> bool {
     import.module.eq_ignore_ascii_case("KERNEL32.dll") && import.symbol == "GetCPInfo"
+}
+
+pub(crate) fn is_get_string_type_w(import: &LauncherImport) -> bool {
+    import.module.eq_ignore_ascii_case("KERNEL32.dll") && import.symbol == "GetStringTypeW"
+}
+
+pub(crate) fn is_lc_map_string_w(import: &LauncherImport) -> bool {
+    import.module.eq_ignore_ascii_case("KERNEL32.dll") && import.symbol == "LCMapStringW"
+}
+
+pub(crate) fn is_get_tick_count(import: &LauncherImport) -> bool {
+    import.module.eq_ignore_ascii_case("KERNEL32.dll") && import.symbol == "GetTickCount"
 }
 
 pub(crate) fn new_table() -> Vec<LauncherImport> {

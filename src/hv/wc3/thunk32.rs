@@ -24,6 +24,8 @@ pub(crate) enum Kind {
     FreeEnvironmentStringsA,
     GetACP,
     GetCPInfo,
+    GetStringTypeW,
+    LCMapStringW,
 }
 
 pub(crate) fn write(import_id: u32, kind: Kind, output: &mut [u8]) -> Result<(), &'static str> {
@@ -97,6 +99,11 @@ pub(crate) fn write(import_id: u32, kind: Kind, output: &mut [u8]) -> Result<(),
         Kind::GetCPInfo => {
             output[8] = 0xC2;
             output[9] = 0x08;
+            output[10] = 0x00;
+        }
+        Kind::GetStringTypeW | Kind::LCMapStringW => {
+            output[8] = 0xC2;
+            output[9] = 0x10;
             output[10] = 0x00;
         }
         Kind::Stop => {
