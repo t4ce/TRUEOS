@@ -15,6 +15,8 @@ pub(crate) enum Kind {
     TlsSetValue,
     GetCurrentThreadId,
     GetStartupInfoA,
+    GetModuleFileNameA,
+    GetModuleHandleA,
     GetStdHandle,
     GetFileType,
     SetHandleCount,
@@ -80,6 +82,16 @@ pub(crate) fn write(import_id: u32, kind: Kind, output: &mut [u8]) -> Result<(),
         }
         Kind::GetCurrentThreadId => output[8] = 0xC3,
         Kind::GetStartupInfoA => {
+            output[8] = 0xC2;
+            output[9] = 0x04;
+            output[10] = 0x00;
+        }
+        Kind::GetModuleFileNameA => {
+            output[8] = 0xC2;
+            output[9] = 0x0C;
+            output[10] = 0x00;
+        }
+        Kind::GetModuleHandleA => {
             output[8] = 0xC2;
             output[9] = 0x04;
             output[10] = 0x00;

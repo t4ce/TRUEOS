@@ -55,7 +55,14 @@ const TLS_SET_VALUE_VALUE: u32 = HEAP_VA;
 const GET_CURRENT_THREAD_ID_RETURN: u32 = 0x0040_3F0D;
 const GET_CURRENT_THREAD_ID_ESI: u32 = HEAP_VA;
 const GET_STARTUP_INFO_A_RETURN: u32 = 0x0040_48FF;
+const GET_STARTUP_INFO_A_SECOND_RETURN: u32 = 0x0040_21FB;
 const STARTUP_INFO_A_BYTES: usize = 0x44;
+const GET_MODULE_FILE_NAME_A_RETURN: u32 = 0x0040_4545;
+const GET_MODULE_FILE_NAME_A_BUFFER: u32 = 0x0040_ABA8;
+const GET_MODULE_FILE_NAME_A_SIZE: u32 = 0x104;
+const GET_MODULE_HANDLE_A_RETURN: u32 = 0x0040_221E;
+const MODULE_IMAGE_BASE: u32 = pe32::IMAGE_BASE;
+const MODULE_FILENAME_A: &[u8] = b"C:\\Warcraft III\\Warcraft III.exe\0";
 const GET_STD_HANDLE_RETURN: u32 = 0x0040_4A0D;
 const GET_FILE_TYPE_RETURN: u32 = 0x0040_4A1B;
 const SET_HANDLE_COUNT_RETURN: u32 = 0x0040_4A52;
@@ -1574,7 +1581,7 @@ fn get_startup_info_a(vm_id: u8) -> Result<(u32, u32), &'static str> {
             .try_into()
             .map_err(|_| "GetStartupInfoA argument")?,
     );
-    if return_address != GET_STARTUP_INFO_A_RETURN {
+    if !matches!(return_address, GET_STARTUP_INFO_A_RETURN | GET_STARTUP_INFO_A_SECOND_RETURN) {
         return Err("unexpected GetStartupInfoA return address");
     }
     if startup_info == 0 {
@@ -1604,6 +1611,73 @@ fn get_startup_info_a(vm_id: u8) -> Result<(u32, u32), &'static str> {
         return Err("GetStartupInfoA structure validation");
     }
     Ok((startup_info, return_address))
+}
+
+fn get_module_file_name_a(vm_id: u8) -> Result<(u32, u32, u32, u32), &'static str> {
+    let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP)
+        .ok_or("guest ESP unavailable")? as u32;
+    let frame = guest_stack_range_mut(vm_id, esp, 16)?;
+    let return_address = u32::from_le_bytes(
+        frame[0..4]
+            .try_into()
+            .map_err(|_| "GetModuleFileNameA return address")?,
+    );
+    let module = u32::from_le_bytes(
+        frame[4..8]
+            .try_into()
+            .map_err(|_| "GetModuleFileNameA module")?,
+    );
+    let filename = u32::from_le_bytes(
+        frame[8..12]
+            .try_into()
+            .map_err(|_| "GetModuleFileNameA filename")?,
+    );
+    let size = u32::from_le_bytes(
+        frame[12..16]
+            .try_into()
+            .map_err(|_| "GetModuleFileNameA size")?,
+    );
+    super::trace::info(format_args!(
+        "GetModuleFileNameA frame ret=0x{:08X} hModule=0x{:08X} lpFilename=0x{:08X} nSize={}",
+        return_address, module, filename, size
+    ));
+    if return_address != GET_MODULE_FILE_NAME_A_RETURN
+        || module != 0
+        || filename != GET_MODULE_FILE_NAME_A_BUFFER
+        || size != GET_MODULE_FILE_NAME_A_SIZE
+    {
+        return Err("unexpected GetModuleFileNameA frame");
+    }
+    let output = launcher_image_range_mut(
+        vm_id,
+        filename,
+        usize::try_from(size).map_err(|_| "GetModuleFileNameA size")?,
+    )?;
+    output.fill(0);
+    output[..MODULE_FILENAME_A.len()].copy_from_slice(MODULE_FILENAME_A);
+    let length =
+        u32::try_from(MODULE_FILENAME_A.len() - 1).map_err(|_| "GetModuleFileNameA length")?;
+    Ok((module, filename, size, length))
+}
+
+fn get_module_handle_a(vm_id: u8) -> Result<(u32, u32), &'static str> {
+    let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP)
+        .ok_or("guest ESP unavailable")? as u32;
+    let frame = guest_stack_range_mut(vm_id, esp, 8)?;
+    let return_address = u32::from_le_bytes(
+        frame[0..4]
+            .try_into()
+            .map_err(|_| "GetModuleHandleA return address")?,
+    );
+    let module_name = u32::from_le_bytes(
+        frame[4..8]
+            .try_into()
+            .map_err(|_| "GetModuleHandleA module name")?,
+    );
+    if return_address != GET_MODULE_HANDLE_A_RETURN || module_name != 0 {
+        return Err("unexpected GetModuleHandleA frame");
+    }
+    Ok((module_name, return_address))
 }
 
 fn get_std_handle(vm_id: u8, call: u32) -> Result<(u32, u32, u32), &'static str> {
@@ -1926,7 +2000,7 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
                 DispatchOutcome::Stop
             }
         }
-    } else if call == 13 && imports::is_get_startup_info_a(import) {
+    } else if imports::is_get_startup_info_a(import) {
         match get_startup_info_a(vm_id) {
             Ok((startup_info, return_address)) => {
                 super::trace::info(format_args!(
@@ -1934,7 +2008,8 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
                     startup_info, return_address
                 ));
                 super::trace::info(format_args!(
-                    "return #13 KERNEL32.dll!GetStartupInfoA cb=0x44 flags=0 reserved2=0"
+                    "return #{} KERNEL32.dll!GetStartupInfoA cb=0x44 flags=0 reserved2=0",
+                    call
                 ));
                 DispatchOutcome::Resume
             }
@@ -2401,9 +2476,54 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
                 DispatchOutcome::Stop
             }
         }
+    } else if imports::is_get_module_file_name_a(import) {
+        match get_module_file_name_a(vm_id) {
+            Ok((module, filename, size, length)) => {
+                let mut registers = crate::hv::vmx::guest_registers();
+                registers.rax = u64::from(length);
+                crate::hv::vmx::set_guest_registers(registers);
+                super::trace::info(format_args!(
+                    "return #{} KERNEL32.dll!GetModuleFileNameA length={} path=C:\\Warcraft III\\Warcraft III.exe",
+                    call, length
+                ));
+                DispatchOutcome::Resume
+            }
+            Err(reason) => {
+                super::trace::fail(format_args!(
+                    "crt-startup failed vm={} phase=GetModuleFileNameA reason={}",
+                    vm_id, reason
+                ));
+                DispatchOutcome::Stop
+            }
+        }
+    } else if imports::is_get_module_handle_a(import) {
+        match get_module_handle_a(vm_id) {
+            Ok((module_name, return_address)) => {
+                let mut registers = crate::hv::vmx::guest_registers();
+                registers.rax = u64::from(MODULE_IMAGE_BASE);
+                crate::hv::vmx::set_guest_registers(registers);
+                super::trace::info(format_args!(
+                    "GetModuleHandleA hModuleName=0x{:08X} image_base=0x{:08X} ret=0x{:08X}",
+                    module_name, MODULE_IMAGE_BASE, return_address
+                ));
+                super::trace::info(format_args!(
+                    "crt-startup complete vm={} main=0x00401000",
+                    vm_id
+                ));
+                DispatchOutcome::Resume
+            }
+            Err(reason) => {
+                super::trace::fail(format_args!(
+                    "crt-startup failed vm={} phase=GetModuleHandleA reason={}",
+                    vm_id, reason
+                ));
+                DispatchOutcome::Stop
+            }
+        }
     } else if imports::is_get_tick_count(import) {
+        super::trace::info(format_args!("main entered vm={} address=0x00401000", vm_id));
         super::trace::info(format_args!(
-            "locale complete vm={} next-import={}!{} call={}",
+            "crt-startup complete vm={} next-import={}!{} call={}",
             vm_id, import.module, import.symbol, call
         ));
         super::trace::info(format_args!(

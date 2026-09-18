@@ -45,6 +45,10 @@ pub(crate) fn patch(
             super::thunk32::Kind::GetCurrentThreadId
         } else if is_get_startup_info_a(import) {
             super::thunk32::Kind::GetStartupInfoA
+        } else if is_get_module_file_name_a(import) {
+            super::thunk32::Kind::GetModuleFileNameA
+        } else if is_get_module_handle_a(import) {
+            super::thunk32::Kind::GetModuleHandleA
         } else if is_get_std_handle(import) {
             super::thunk32::Kind::GetStdHandle
         } else if is_get_file_type(import) {
@@ -194,6 +198,14 @@ pub(crate) fn find_get_startup_info_a(imports: &[LauncherImport]) -> bool {
 
 pub(crate) fn is_get_startup_info_a(import: &LauncherImport) -> bool {
     import.module.eq_ignore_ascii_case("KERNEL32.dll") && import.symbol == "GetStartupInfoA"
+}
+
+pub(crate) fn is_get_module_file_name_a(import: &LauncherImport) -> bool {
+    import.module.eq_ignore_ascii_case("KERNEL32.dll") && import.symbol == "GetModuleFileNameA"
+}
+
+pub(crate) fn is_get_module_handle_a(import: &LauncherImport) -> bool {
+    import.module.eq_ignore_ascii_case("KERNEL32.dll") && import.symbol == "GetModuleHandleA"
 }
 
 pub(crate) fn find_get_std_handle(imports: &[LauncherImport]) -> bool {
