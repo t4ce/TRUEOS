@@ -2591,6 +2591,54 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
             )),
         }
         return DispatchOutcome::Stop;
+    } else if imports::is_update_window(import) {
+        let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP).unwrap_or(0) as u32;
+        match guest_stack_range_mut(vm_id, esp, 8) {
+            Ok(frame) => {
+                let return_address =
+                    u32::from_le_bytes(frame[0..4].try_into().unwrap_or([0; 4]));
+                let hwnd = u32::from_le_bytes(frame[4..8].try_into().unwrap_or([0; 4]));
+                let launcher = LAUNCHERS[usize::from(vm_id)].lock();
+                let Some(state) = launcher.as_ref() else {
+                    super::trace::fail(format_args!("UpdateWindow state unavailable"));
+                    return DispatchOutcome::Stop;
+                };
+                let Some(window) = state.window.as_ref() else {
+                    super::trace::fail(format_args!("UpdateWindow before CreateWindowExA"));
+                    return DispatchOutcome::Stop;
+                };
+                if hwnd != window.hwnd || window.wnd_proc != DEF_WINDOW_PROC_THUNK {
+                    super::trace::fail(format_args!(
+                        "UpdateWindow unexpected hwnd=0x{:08X} or wnd_proc=0x{:08X}",
+                        hwnd, window.wnd_proc
+                    ));
+                    return DispatchOutcome::Stop;
+                }
+                let paint_pending = window.paint_pending;
+                drop(launcher);
+                let mut registers = crate::hv::vmx::guest_registers();
+                registers.rax = u64::from(paint_pending);
+                crate::hv::vmx::set_guest_registers(registers);
+                if paint_pending {
+                    let launcher = LAUNCHERS[usize::from(vm_id)].lock();
+                    if let Some(state) = launcher.as_mut() {
+                        if let Some(window) = state.window.as_mut() {
+                            window.paint_pending = false;
+                        }
+                    }
+                }
+                super::trace::info(format_args!(
+                    "UpdateWindow hwnd=0x{:08X} paint_pending={} wnd_proc=0x{:08X} ret=0x{:08X}",
+                    hwnd, paint_pending as u8, DEF_WINDOW_PROC_THUNK, return_address
+                ));
+                return DispatchOutcome::Resume;
+            }
+            Err(reason) => super::trace::fail(format_args!(
+                "UpdateWindow frame failed call={} reason={}",
+                call, reason
+            )),
+        }
+        return DispatchOutcome::Stop;
     } else if import.module.eq_ignore_ascii_case("USER32.dll") {
         let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP).unwrap_or(0) as u32;
         let frame = guest_stack_range_mut(vm_id, esp, 8);
