@@ -27,6 +27,8 @@ pub(crate) fn patch(
             super::thunk32::Kind::Return
         } else if is_heap_create(import) {
             super::thunk32::Kind::HeapCreate
+        } else if is_get_version_ex_a(import) {
+            super::thunk32::Kind::GetVersionExA
         } else {
             super::thunk32::Kind::Stop
         };
@@ -61,6 +63,18 @@ pub(crate) fn find_heap_create(imports: &[LauncherImport]) -> bool {
 
 pub(crate) fn is_heap_create(import: &LauncherImport) -> bool {
     import.module.eq_ignore_ascii_case("KERNEL32.dll") && import.symbol == "HeapCreate"
+}
+
+pub(crate) fn find_get_version_ex_a(imports: &[LauncherImport]) -> bool {
+    imports
+        .iter()
+        .filter(|import| is_get_version_ex_a(import))
+        .count()
+        == 1
+}
+
+pub(crate) fn is_get_version_ex_a(import: &LauncherImport) -> bool {
+    import.module.eq_ignore_ascii_case("KERNEL32.dll") && import.symbol == "GetVersionExA"
 }
 
 pub(crate) fn new_table() -> Vec<LauncherImport> {

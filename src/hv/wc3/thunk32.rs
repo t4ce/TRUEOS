@@ -6,6 +6,7 @@ pub(crate) enum Kind {
     Stop,
     Return,
     HeapCreate,
+    GetVersionExA,
 }
 
 pub(crate) fn write(import_id: u32, kind: Kind, output: &mut [u8]) -> Result<(), &'static str> {
@@ -28,6 +29,11 @@ pub(crate) fn write(import_id: u32, kind: Kind, output: &mut [u8]) -> Result<(),
         Kind::HeapCreate => {
             output[8] = 0xC2;
             output[9] = 0x0C;
+            output[10] = 0x00;
+        }
+        Kind::GetVersionExA => {
+            output[8] = 0xC2;
+            output[9] = 0x04;
             output[10] = 0x00;
         }
         Kind::Stop => {

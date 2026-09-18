@@ -19,6 +19,8 @@ const EXPECTED_SHA256: [u8; 32] = [
 const WINDOWS_XP_GET_VERSION: u32 = 0x0A28_0105;
 const HEAP_CREATE_RETURN: u32 = 0x0040_2D9B;
 const HEAP_CREATE_INITIAL: u32 = 0x1000;
+const GET_VERSION_EX_A_RETURN: u32 = 0x0040_2C61;
+const OS_VERSION_INFO_A_BYTES: usize = 0x94;
 
 #[derive(Copy, Clone)]
 pub(crate) struct GuestMapping {
@@ -171,6 +173,41 @@ fn heap_create(vm_id: u8) -> Result<(u32, u32), &'static str> {
     Ok((heap.value, return_address))
 }
 
+fn guest_stack_range_mut(vm_id: u8, guest_address: u32, bytes: usize) -> Result<&'static mut [u8], &'static str> {
+    let offset = u64::from(guest_address)
+        .checked_sub(crate::hv::memory::GUEST_STACK_VA_BASE)
+        .ok_or("guest address below stack")?;
+    let offset = usize::try_from(offset).map_err(|_| "guest address range")?;
+    let stack = crate::hv::memory::guest_stack_mut_ptr_for_vm(vm_id).ok_or("guest stack unavailable")?;
+    let stack_bytes = crate::hv::memory::active_guest_stack_bytes_for_vm(vm_id);
+    let end = offset.checked_add(bytes).ok_or("guest structure overflow")?;
+    if end > stack_bytes {
+        return Err("guest structure outside writable stack");
+    }
+    Ok(unsafe { core::slice::from_raw_parts_mut(stack.add(offset), bytes) })
+}
+
+fn get_version_ex_a(vm_id: u8) -> Result<(u32, u32), &'static str> {
+    let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP).ok_or("guest ESP unavailable")?;
+    let frame = guest_stack_range_mut(vm_id, esp as u32, 8)?;
+    let return_address = u32::from_le_bytes(frame[0..4].try_into().map_err(|_| "GetVersionExA return")?);
+    let version_info = u32::from_le_bytes(frame[4..8].try_into().map_err(|_| "GetVersionExA argument")?);
+    if return_address != GET_VERSION_EX_A_RETURN {
+        return Err("unexpected GetVersionExA return address");
+    }
+    let output = guest_stack_range_mut(vm_id, version_info, OS_VERSION_INFO_A_BYTES)?;
+    if u32::from_le_bytes(output[0..4].try_into().map_err(|_| "GetVersionExA size")?) != OS_VERSION_INFO_A_BYTES as u32 {
+        return Err("unexpected GetVersionExA structure size");
+    }
+    output.fill(0);
+    output[0..4].copy_from_slice(&(OS_VERSION_INFO_A_BYTES as u32).to_le_bytes());
+    output[4..8].copy_from_slice(&5u32.to_le_bytes());
+    output[8..12].copy_from_slice(&1u32.to_le_bytes());
+    output[12..16].copy_from_slice(&2600u32.to_le_bytes());
+    output[16..20].copy_from_slice(&2u32.to_le_bytes());
+    Ok((version_info, return_address))
+}
+
 pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
     let id = crate::hv::vmx::guest_registers().rax as u32;
     let imports = match LAUNCHERS
@@ -218,15 +255,39 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
                 DispatchOutcome::Stop
             }
         }
-    } else if call == 3 {
+    } else if call == 3 && imports::is_get_version_ex_a(import) {
+        match get_version_ex_a(vm_id) {
+            Ok((version_info, return_address)) => {
+                super::trace::info(format_args!(
+                    "GetVersionExA arg=0x{:08X} size=0x00000094",
+                    version_info
+                ));
+                let mut registers = crate::hv::vmx::guest_registers();
+                registers.rax = 1;
+                crate::hv::vmx::set_guest_registers(registers);
+                super::trace::info(format_args!(
+                    "return #3 KERNEL32.dll!GetVersionExA eax=1 major=5 minor=1 build=2600 platform=2 ret=0x{:08X}",
+                    return_address
+                ));
+                DispatchOutcome::Resume
+            }
+            Err(reason) => {
+                super::trace::fail(format_args!(
+                    "gate-1d failed vm={} phase=GetVersionExA reason={}",
+                    vm_id, reason
+                ));
+                DispatchOutcome::Stop
+            }
+        }
+    } else if call == 4 {
         super::trace::info(format_args!(
-            "gate-1c complete vm={} next-import={}!{}",
+            "gate-1d complete vm={} next-import={}!{}",
             vm_id, import.module, import.symbol
         ));
         DispatchOutcome::Stop
     } else {
         super::trace::fail(format_args!(
-            "gate-1b failed vm={} phase=unexpected-{}-import {}!{}",
+            "gate-1d failed vm={} phase=unexpected-{}-import {}!{}",
             vm_id, call, import.module, import.symbol
         ));
         DispatchOutcome::Stop
