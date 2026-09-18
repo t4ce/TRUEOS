@@ -73,6 +73,8 @@ pub(crate) fn patch(
             super::thunk32::Kind::UpdateWindow
         } else if is_peek_message_a(import) {
             super::thunk32::Kind::PeekMessageA
+        } else if is_set_focus(import) {
+            super::thunk32::Kind::SetFocus
         } else if is_create_thread(import) {
             super::thunk32::Kind::CreateThread
         } else if is_resume_thread(import) {
@@ -278,6 +280,10 @@ pub(crate) fn is_update_window(import: &LauncherImport) -> bool {
 
 pub(crate) fn is_peek_message_a(import: &LauncherImport) -> bool {
     import.module.eq_ignore_ascii_case("USER32.dll") && import.symbol == "PeekMessageA"
+}
+
+pub(crate) fn is_set_focus(import: &LauncherImport) -> bool {
+    import.module.eq_ignore_ascii_case("USER32.dll") && import.symbol == "SetFocus"
 }
 
 pub(crate) fn is_create_thread(import: &LauncherImport) -> bool {

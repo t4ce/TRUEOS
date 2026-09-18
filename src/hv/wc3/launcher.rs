@@ -158,6 +158,7 @@ struct LauncherState {
     execution_debt: Option<u32>,
     registered_class_names: Vec<String>,
     window: Option<WinWindow>,
+    focused_window: Option<u32>,
     messages: VecDeque<WinMsg>,
 }
 
@@ -345,6 +346,7 @@ pub(crate) fn prepare(vm_id: u8, bytes: &[u8]) -> Result<(), &'static str> {
         execution_debt: None,
         registered_class_names: Vec::new(),
         window: None,
+        focused_window: None,
         messages: VecDeque::new(),
     });
     CALLS[usize::from(vm_id)].store(0, Ordering::Release);
@@ -2767,6 +2769,74 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
             )),
         }
         return DispatchOutcome::Stop;
+    } else if imports::is_set_focus(import) {
+        let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP).unwrap_or(0) as u32;
+        match guest_stack_range_mut(vm_id, esp, 8) {
+            Ok(frame) => {
+                let return_address = u32::from_le_bytes(frame[0..4].try_into().unwrap_or([0; 4]));
+                let hwnd = u32::from_le_bytes(frame[4..8].try_into().unwrap_or([0; 4]));
+                let launcher = match launcher_state_lock(vm_id) {
+                    Ok(launcher) => launcher,
+                    Err(reason) => {
+                        super::trace::fail(format_args!(
+                            "SetFocus state unavailable reason={}",
+                            reason
+                        ));
+                        return DispatchOutcome::Stop;
+                    }
+                };
+                let mut state = launcher.lock();
+                let Some(state) = state.as_mut() else {
+                    super::trace::fail(format_args!("SetFocus state unavailable"));
+                    return DispatchOutcome::Stop;
+                };
+                if state.window.as_ref().map(|window| window.hwnd) != Some(hwnd) {
+                    super::trace::fail(format_args!("SetFocus unknown hwnd=0x{:08X}", hwnd));
+                    return DispatchOutcome::Stop;
+                }
+                let ui4_plane = match state.window.as_ref().and_then(|window| window.ui4) {
+                    Some(backing) => match crate::ui4::note_window_focused(
+                        crate::ui4::WindowOwner::Vm(vm_id),
+                        backing.window,
+                    ) {
+                        Ok(plane) => Some(plane),
+                        Err(error) => {
+                            super::trace::fail(format_args!(
+                                "SetFocus UI4 focus failed hwnd=0x{:08X} window={} error={:?}",
+                                hwnd,
+                                backing.window.raw(),
+                                error
+                            ));
+                            return DispatchOutcome::Stop;
+                        }
+                    },
+                    None => None,
+                };
+                let previous_focus = state.focused_window.unwrap_or(0);
+                state.focused_window = Some(hwnd);
+                let execution_debt = state.execution_debt;
+                drop(state);
+                let mut registers = crate::hv::vmx::guest_registers();
+                registers.rax = u64::from(previous_focus);
+                crate::hv::vmx::set_guest_registers(registers);
+                super::trace::info(format_args!(
+                    "SetFocus hwnd=0x{:08X} previous=0x{:08X} ui4_plane={:?} execution_debt={} ret=0x{:08X}",
+                    hwnd,
+                    previous_focus,
+                    ui4_plane,
+                    execution_debt.unwrap_or(0),
+                    return_address
+                ));
+                DispatchOutcome::Resume
+            }
+            Err(reason) => {
+                super::trace::fail(format_args!(
+                    "SetFocus frame failed call={} reason={}",
+                    call, reason
+                ));
+                DispatchOutcome::Stop
+            }
+        }
     } else if import.module.eq_ignore_ascii_case("USER32.dll") {
         let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP).unwrap_or(0) as u32;
         let frame = guest_stack_range_mut(vm_id, esp, 8);
