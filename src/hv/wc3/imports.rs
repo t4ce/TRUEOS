@@ -75,6 +75,8 @@ pub(crate) fn patch(
             super::thunk32::Kind::PeekMessageA
         } else if is_create_thread(import) {
             super::thunk32::Kind::CreateThread
+        } else if is_resume_thread(import) {
+            super::thunk32::Kind::ResumeThread
         } else if is_get_std_handle(import) {
             super::thunk32::Kind::GetStdHandle
         } else if is_get_file_type(import) {
@@ -280,6 +282,10 @@ pub(crate) fn is_peek_message_a(import: &LauncherImport) -> bool {
 
 pub(crate) fn is_create_thread(import: &LauncherImport) -> bool {
     import.module.eq_ignore_ascii_case("KERNEL32.dll") && import.symbol == "CreateThread"
+}
+
+pub(crate) fn is_resume_thread(import: &LauncherImport) -> bool {
+    import.module.eq_ignore_ascii_case("KERNEL32.dll") && import.symbol == "ResumeThread"
 }
 
 pub(crate) fn find_get_std_handle(imports: &[LauncherImport]) -> bool {

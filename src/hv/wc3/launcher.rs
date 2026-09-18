@@ -3605,6 +3605,56 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
             )),
         }
         DispatchOutcome::Resume
+    } else if imports::is_resume_thread(import) {
+        let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP).unwrap_or(0) as u32;
+        match guest_stack_range_mut(vm_id, esp, 8) {
+            Ok(frame) => {
+                let return_address = u32::from_le_bytes(frame[0..4].try_into().unwrap_or([0; 4]));
+                let handle = u32::from_le_bytes(frame[4..8].try_into().unwrap_or([0; 4]));
+                let mut state = LAUNCHERS[usize::from(vm_id)].lock();
+                let Some(state) = state.as_mut() else {
+                    super::trace::fail(format_args!("ResumeThread state unavailable"));
+                    return DispatchOutcome::Stop;
+                };
+                let Some(thread) = state
+                    .threads
+                    .iter_mut()
+                    .find(|thread| thread.open && thread.handle == handle)
+                else {
+                    super::trace::fail(format_args!(
+                        "ResumeThread unknown handle=0x{:08X}",
+                        handle
+                    ));
+                    return DispatchOutcome::Stop;
+                };
+                let old_suspend_count = thread.suspend_count;
+                if old_suspend_count != 0 {
+                    thread.suspend_count -= 1;
+                }
+                if old_suspend_count == 1 {
+                    thread.runnable_deferred = true;
+                    state.execution_debt = Some(thread.tid);
+                }
+                let tid = thread.tid;
+                let new_suspend_count = thread.suspend_count;
+                drop(state);
+                let mut registers = crate::hv::vmx::guest_registers();
+                registers.rax = u64::from(old_suspend_count);
+                crate::hv::vmx::set_guest_registers(registers);
+                super::trace::info(format_args!(
+                    "ResumeThread handle=0x{:08X} tid={} old_suspend={} new_suspend={} execution_debt={} ret=0x{:08X}",
+                    handle, tid, old_suspend_count, new_suspend_count, tid, return_address
+                ));
+                DispatchOutcome::Resume
+            }
+            Err(reason) => {
+                super::trace::fail(format_args!(
+                    "ResumeThread frame failed call={} reason={}",
+                    call, reason
+                ));
+                DispatchOutcome::Stop
+            }
+        }
     } else {
         super::trace::fail(format_args!(
             "gate-1e failed vm={} phase=unexpected-{}-import {}!{}",
