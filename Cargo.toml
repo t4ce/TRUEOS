@@ -83,6 +83,9 @@ trueos_lumen = []
 trueos_h264_encode_stream = []
 trueos_h264_encode_probe = ["trueos_h264_encode_stream"]
 trueos_task_profile = ["trueos-executor/trueos-task-profile"]
+# Private Warcraft III bring-up path.  This is intentionally not part of the
+# default image and does not advertise a general Win32 compatibility layer.
+wc3 = []
 trueos_ttstt = [
     "dep:trueos-ttstt-cpu",
     "dep:trueos-kokoro-aot",

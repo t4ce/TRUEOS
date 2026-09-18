@@ -54,7 +54,7 @@ pub fn ept_permissions_for_span(label: &str, default_perms: u64) -> u64 {
     // Today callers pass the legacy RWX-style EPT permission bits. Future patch:
     // assign R/W/X per span so host data mappings are never executable and guest
     // code mappings are not writable unless explicitly staged.
-    if matches!(label, "guest-stack" | "comm-page" | "hull-rw-private") {
+    if matches!(label, "guest-stack" | "comm-page" | "hull-rw-private" | "wc3-gate0-teb") {
         // EPT execute is bit 2. Guest data/shared spans remain readable and
         // writable but cannot become executable through a guest PTE edit.
         default_perms & !(1 << 2)

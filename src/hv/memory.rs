@@ -81,6 +81,8 @@ struct GuestTables {
     heap_pds: [GuestPage; GUEST_HEAP_PD_COUNT],
     image_pts: [GuestPage; GUEST_HIGH_IMAGE_PT_COUNT],
     code_pt: GuestPage,
+    #[cfg(feature = "wc3")]
+    wc3_probe_pt: GuestPage,
 }
 
 static EPT_TABLES: StaticSlots<Option<usize>, { crate::allcaps::hv::VM_ID_LIMIT }> =
@@ -405,6 +407,28 @@ pub fn build_ept_identity_4g() -> Result<u64, &'static str> {
             stack.phys_start,
             stack.length as u64,
             "guest-stack",
+        )?;
+    }
+
+    #[cfg(feature = "wc3")]
+    if let Some(probe) = crate::hv::wc3::guest_mapping(current_vm_id_for_log()) {
+        map_ept_identity_span(
+            pdpt,
+            &mut next_pd,
+            &mut next_pt,
+            &mut leaf_2m,
+            probe.phys_start,
+            PAGE_SIZE_4K as u64,
+            "wc3-gate0-code",
+        )?;
+        map_ept_identity_span(
+            pdpt,
+            &mut next_pd,
+            &mut next_pt,
+            &mut leaf_2m,
+            probe.phys_start + PAGE_SIZE_4K as u64,
+            PAGE_SIZE_4K as u64,
+            "wc3-gate0-teb",
         )?;
     }
 
@@ -1271,6 +1295,8 @@ pub fn build_guest_cr3_for_vm_with_mode(
         let guest_high_pd = core::ptr::addr_of_mut!((*tables).high_pd.0);
         let guest_heap_pdpt = core::ptr::addr_of_mut!((*tables).heap_pdpt.0);
         let guest_code_pt = core::ptr::addr_of_mut!((*tables).code_pt.0);
+        #[cfg(feature = "wc3")]
+        let guest_wc3_probe_pt = core::ptr::addr_of_mut!((*tables).wc3_probe_pt.0);
 
         zero_guest_page(guest_pml4);
         zero_guest_page(guest_low_pdpt);
@@ -1282,6 +1308,8 @@ pub fn build_guest_cr3_for_vm_with_mode(
         zero_guest_page(guest_high_pd);
         zero_guest_page(guest_heap_pdpt);
         zero_guest_page(guest_code_pt);
+        #[cfg(feature = "wc3")]
+        zero_guest_page(guest_wc3_probe_pt);
         for i in 0..GUEST_HEAP_PD_COUNT {
             zero_guest_page(core::ptr::addr_of_mut!((*tables).heap_pds[i].0));
         }
@@ -1345,9 +1373,15 @@ pub fn build_guest_cr3_for_vm_with_mode(
 
         let code_base = page_align_down(guest_rip);
         let code_pt_base = page_align_down_2m(guest_rip);
-        map_table_entry(guest_pml4, pml4_index(code_base), high_pdpt_pa);
-        map_table_entry(guest_high_pdpt, pdpt_index(code_base), high_pd_pa);
-        map_table_entry(guest_high_pd, pd_index(code_base), code_pt_pa);
+        #[cfg(feature = "wc3")]
+        let wc3_probe = boot_mode == crate::hv::VmBootMode::Wc3Probe;
+        #[cfg(not(feature = "wc3"))]
+        let wc3_probe = false;
+        if !wc3_probe {
+            map_table_entry(guest_pml4, pml4_index(code_base), high_pdpt_pa);
+            map_table_entry(guest_high_pdpt, pdpt_index(code_base), high_pd_pa);
+            map_table_entry(guest_high_pd, pd_index(code_base), code_pt_pa);
+        }
         let mut pt_slot = 0usize;
         let (mapped_code_base, mapped_code_len) = match boot_mode {
             crate::hv::VmBootMode::Hull => {
@@ -1394,6 +1428,29 @@ pub fn build_guest_cr3_for_vm_with_mode(
                 let end = kernel_image_end_va();
                 let actual_len = end.saturating_sub(start);
                 (start, actual_len)
+            }
+            #[cfg(feature = "wc3")]
+            crate::hv::VmBootMode::Wc3Probe => {
+                let probe =
+                    crate::hv::wc3::guest_mapping(vm_id).ok_or("wc3 probe backing unavailable")?;
+                let probe_pt_pa =
+                    host_va_to_pa(guest_wc3_probe_pt as u64).ok_or("wc3 probe pt pa")?;
+                map_table_entry(guest_low_pd, pd_index(probe.code_va), probe_pt_pa);
+                (*guest_wc3_probe_pt)[pt_index(probe.code_va)] =
+                    (probe.phys_start & 0x000F_FFFF_FFFF_F000) | PT_ENTRY_PRESENT;
+                (*guest_wc3_probe_pt)[pt_index(probe.teb_va)] =
+                    ((probe.phys_start + PAGE_SIZE_4K as u64) & 0x000F_FFFF_FFFF_F000)
+                        | PT_ENTRY_PRESENT
+                        | PT_ENTRY_WRITABLE
+                        | PT_ENTRY_NO_EXECUTE;
+                hvlogf(format_args!(
+                    "wc3: gate-0 guest map code=0x{:08X}->0x{:016X} teb=0x{:08X}->0x{:016X}",
+                    probe.code_va,
+                    probe.phys_start,
+                    probe.teb_va,
+                    probe.phys_start + PAGE_SIZE_4K as u64
+                ));
+                (probe.code_va, probe.bytes as u64)
             }
         };
 
