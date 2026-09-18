@@ -44,6 +44,9 @@ const HEAP_ALLOC_SECOND_BYTES: u32 = 0x0000_0480;
 const HEAP_ALLOC_THIRD_RETURN: u32 = 0x0040_1FEC;
 const HEAP_ALLOC_THIRD_FLAGS: u32 = 0;
 const HEAP_ALLOC_THIRD_BYTES: u32 = 0x0000_0010;
+const HEAP_ALLOC_LOCK_RETURN: u32 = 0x0040_1FEC;
+const HEAP_ALLOC_LOCK_FLAGS: u32 = 0;
+const HEAP_ALLOC_LOCK_BYTES: u32 = 0x0000_0020;
 const TLS_SET_VALUE_RETURN: u32 = 0x0040_3EFC;
 const TLS_SET_VALUE_INDEX: u32 = 0;
 const TLS_SET_VALUE_VALUE: u32 = HEAP_VA;
@@ -61,6 +64,11 @@ const GET_ENVIRONMENT_STRINGS_A_RETURN: u32 = 0x0040_479E;
 const FREE_ENVIRONMENT_STRINGS_A_RETURN: u32 = 0x0040_488E;
 const ENVIRONMENT_BLOCK_VA: u32 = PROCESS_DATA_VA + 0x100;
 const COMMAND_LINE: &[u8] = b"\"Warcraft III.exe\"\0";
+const ENTER_CRITICAL_SECTION_RETURN: u32 = 0x0040_231C;
+const ENTER_CRITICAL_SECTION_POINTER: u32 = 0x0021_0510;
+const LEAVE_CRITICAL_SECTION_RETURN: u32 = 0x0040_2332;
+const STATIC_LOCK_17: u32 = 0x0040_AB08;
+const DYNAMIC_LOCK_25: u32 = 0x0021_0510;
 
 #[derive(Copy, Clone)]
 pub(crate) struct GuestMapping {
@@ -73,6 +81,7 @@ struct LauncherState {
     heap: Option<HeapHandle>,
     initialized_critical_sections: [u32; 4],
     initialized_critical_section_count: usize,
+    dynamic_critical_sections: Vec<u32>,
     tls_allocated: [bool; TLS_SLOT_COUNT],
     tls_values: [u32; TLS_SLOT_COUNT],
     tls_value_set: [bool; TLS_SLOT_COUNT],
@@ -153,6 +162,7 @@ pub(crate) fn prepare(vm_id: u8, bytes: &[u8]) -> Result<(), &'static str> {
         heap: None,
         initialized_critical_sections: [0; 4],
         initialized_critical_section_count: 0,
+        dynamic_critical_sections: Vec::new(),
         tls_allocated: [false; TLS_SLOT_COUNT],
         tls_values: [0; TLS_SLOT_COUNT],
         tls_value_set: [false; TLS_SLOT_COUNT],
@@ -355,6 +365,184 @@ fn initialize_critical_section(vm_id: u8, call: u32) -> Result<(u32, u32), &'sta
     state.initialized_critical_sections[slot] = critical_section;
     state.initialized_critical_section_count = slot + 1;
     Ok((critical_section, return_address))
+}
+
+fn dynamic_critical_section_range_mut(
+    vm_id: u8,
+    guest_address: u32,
+) -> Result<&'static mut [u8], &'static str> {
+    let state = LAUNCHERS
+        .get(usize::from(vm_id))
+        .ok_or("unsupported wc3 launcher VM id")?
+        .lock();
+    let state = state.as_ref().ok_or("wc3 launcher state unavailable")?;
+    if !state.dynamic_critical_sections.contains(&guest_address) {
+        return Err("critical section is not registered");
+    }
+    drop(state);
+    launcher_heap_range_mut(vm_id, guest_address, CRITICAL_SECTION_BYTES)
+}
+
+fn registered_critical_section_range_mut(
+    vm_id: u8,
+    guest_address: u32,
+) -> Result<&'static mut [u8], &'static str> {
+    let known = LAUNCHERS
+        .get(usize::from(vm_id))
+        .ok_or("unsupported wc3 launcher VM id")?
+        .lock();
+    let state = known.as_ref().ok_or("wc3 launcher state unavailable")?;
+    let static_known = state.initialized_critical_sections.contains(&guest_address);
+    let dynamic_known = state.dynamic_critical_sections.contains(&guest_address);
+    drop(known);
+    if static_known {
+        launcher_image_range_mut(vm_id, guest_address, CRITICAL_SECTION_BYTES)
+    } else if dynamic_known {
+        dynamic_critical_section_range_mut(vm_id, guest_address)
+    } else {
+        Err("critical section is not registered")
+    }
+}
+
+fn initialize_dynamic_critical_section(vm_id: u8) -> Result<(u32, u32), &'static str> {
+    let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP)
+        .ok_or("guest ESP unavailable")? as u32;
+    let frame = guest_stack_range_mut(vm_id, esp, 8)?;
+    let return_address = u32::from_le_bytes(
+        frame[0..4]
+            .try_into()
+            .map_err(|_| "InitializeCriticalSection return")?,
+    );
+    let critical_section = u32::from_le_bytes(
+        frame[4..8]
+            .try_into()
+            .map_err(|_| "InitializeCriticalSection argument")?,
+    );
+    if return_address != 0x0040_2301 || critical_section != DYNAMIC_LOCK_25 {
+        return Err("unexpected dynamic InitializeCriticalSection frame");
+    }
+    let allocation = LAUNCHERS
+        .get(usize::from(vm_id))
+        .ok_or("unsupported wc3 launcher VM id")?
+        .lock();
+    let state = allocation
+        .as_ref()
+        .ok_or("wc3 launcher state unavailable")?;
+    if !state
+        .heap_allocations
+        .iter()
+        .any(|allocation| allocation.guest_ptr == critical_section && allocation.bytes >= 0x18)
+    {
+        return Err("dynamic critical section is not a recorded allocation");
+    }
+    drop(allocation);
+    let output = launcher_heap_range_mut(vm_id, critical_section, CRITICAL_SECTION_BYTES)?;
+    output.fill(0);
+    output[4..8].copy_from_slice(&u32::MAX.to_le_bytes());
+    let mut state = LAUNCHERS
+        .get(usize::from(vm_id))
+        .ok_or("unsupported wc3 launcher VM id")?
+        .lock();
+    let state = state.as_mut().ok_or("wc3 launcher state unavailable")?;
+    state.dynamic_critical_sections.push(critical_section);
+    Ok((critical_section, return_address))
+}
+
+fn critical_section_frame(vm_id: u8, expected_return: u32) -> Result<(u32, u32), &'static str> {
+    let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP)
+        .ok_or("guest ESP unavailable")? as u32;
+    let frame = guest_stack_range_mut(vm_id, esp, 8)?;
+    let return_address = u32::from_le_bytes(
+        frame[0..4]
+            .try_into()
+            .map_err(|_| "critical-section return")?,
+    );
+    let critical_section = u32::from_le_bytes(
+        frame[4..8]
+            .try_into()
+            .map_err(|_| "critical-section argument")?,
+    );
+    if return_address != expected_return || critical_section == 0 {
+        return Err("unexpected critical-section frame");
+    }
+    Ok((critical_section, return_address))
+}
+
+fn enter_critical_section(
+    vm_id: u8,
+    expected_pointer: u32,
+) -> Result<(u32, u32, u32), &'static str> {
+    let (critical_section, return_address) =
+        critical_section_frame(vm_id, ENTER_CRITICAL_SECTION_RETURN)?;
+    if critical_section != expected_pointer {
+        return Err("unexpected EnterCriticalSection pointer");
+    }
+    let tid = LAUNCHERS
+        .get(usize::from(vm_id))
+        .ok_or("unsupported wc3 launcher VM id")?
+        .lock()
+        .as_ref()
+        .ok_or("wc3 launcher state unavailable")?
+        .primary_thread_id;
+    let output = registered_critical_section_range_mut(vm_id, critical_section)?;
+    let lock_count = i32::from_le_bytes(output[4..8].try_into().map_err(|_| "LockCount")?);
+    let recursion = u32::from_le_bytes(output[8..12].try_into().map_err(|_| "RecursionCount")?);
+    let owner = u32::from_le_bytes(output[12..16].try_into().map_err(|_| "OwningThread")?);
+    if owner == 0 && recursion == 0 && lock_count == -1 {
+        output[4..8].copy_from_slice(&0i32.to_le_bytes());
+        output[8..12].copy_from_slice(&1u32.to_le_bytes());
+        output[12..16].copy_from_slice(&tid.to_le_bytes());
+    } else if owner == tid && recursion > 0 {
+        output[4..8].copy_from_slice(
+            &lock_count
+                .checked_add(1)
+                .ok_or("LockCount overflow")?
+                .to_le_bytes(),
+        );
+        output[8..12].copy_from_slice(
+            &recursion
+                .checked_add(1)
+                .ok_or("RecursionCount overflow")?
+                .to_le_bytes(),
+        );
+    } else {
+        return Err("critical-section contention");
+    }
+    Ok((critical_section, tid, return_address))
+}
+
+fn leave_critical_section(vm_id: u8) -> Result<(u32, u32, u32), &'static str> {
+    let (critical_section, return_address) =
+        critical_section_frame(vm_id, LEAVE_CRITICAL_SECTION_RETURN)?;
+    if critical_section != STATIC_LOCK_17 {
+        return Err("unexpected LeaveCriticalSection pointer");
+    }
+    let tid = LAUNCHERS
+        .get(usize::from(vm_id))
+        .ok_or("unsupported wc3 launcher VM id")?
+        .lock()
+        .as_ref()
+        .ok_or("wc3 launcher state unavailable")?
+        .primary_thread_id;
+    let output = registered_critical_section_range_mut(vm_id, critical_section)?;
+    let lock_count = i32::from_le_bytes(output[4..8].try_into().map_err(|_| "LockCount")?);
+    let recursion = u32::from_le_bytes(output[8..12].try_into().map_err(|_| "RecursionCount")?);
+    let owner = u32::from_le_bytes(output[12..16].try_into().map_err(|_| "OwningThread")?);
+    if owner != tid || recursion == 0 {
+        return Err("invalid LeaveCriticalSection ownership");
+    }
+    output[4..8].copy_from_slice(
+        &lock_count
+            .checked_sub(1)
+            .ok_or("LockCount underflow")?
+            .to_le_bytes(),
+    );
+    let recursion = recursion - 1;
+    output[8..12].copy_from_slice(&recursion.to_le_bytes());
+    if recursion == 0 {
+        output[12..16].copy_from_slice(&0u32.to_le_bytes());
+    }
+    Ok((critical_section, tid, return_address))
 }
 
 fn tls_alloc(vm_id: u8) -> Result<(u32, u32), &'static str> {
@@ -1214,6 +1402,116 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
                 DispatchOutcome::Stop
             }
         }
+    } else if call == 26 && imports::is_heap_alloc(import) {
+        match heap_alloc(
+            vm_id,
+            HEAP_ALLOC_LOCK_RETURN,
+            HEAP_ALLOC_LOCK_FLAGS,
+            HEAP_ALLOC_LOCK_BYTES,
+        ) {
+            Ok((guest_ptr, return_address, heap_handle, flags, bytes)) => {
+                if guest_ptr != DYNAMIC_LOCK_25 {
+                    super::trace::fail(format_args!(
+                        "gate-1n failed vm={} phase=HeapAlloc reason=unexpected-pointer",
+                        vm_id
+                    ));
+                    return DispatchOutcome::Stop;
+                }
+                let mut registers = crate::hv::vmx::guest_registers();
+                registers.rax = u64::from(guest_ptr);
+                crate::hv::vmx::set_guest_registers(registers);
+                super::trace::info(format_args!(
+                    "HeapAlloc heap=0x{:08X} flags=0x{:08X} bytes=0x{:08X} ret=0x{:08X}",
+                    heap_handle, flags, bytes, return_address
+                ));
+                super::trace::info(format_args!(
+                    "return #26 KERNEL32.dll!HeapAlloc ptr=0x{:08X}",
+                    guest_ptr
+                ));
+                DispatchOutcome::Resume
+            }
+            Err(reason) => {
+                super::trace::fail(format_args!(
+                    "gate-1n failed vm={} phase=HeapAlloc reason={}",
+                    vm_id, reason
+                ));
+                DispatchOutcome::Stop
+            }
+        }
+    } else if call == 27 && imports::is_enter_critical_section(import) {
+        match enter_critical_section(vm_id, STATIC_LOCK_17) {
+            Ok((pointer, tid, return_address)) => {
+                super::trace::info(format_args!(
+                    "EnterCriticalSection ptr=0x{:08X} tid={} ret=0x{:08X}",
+                    pointer, tid, return_address
+                ));
+                super::trace::info(format_args!("return #27 KERNEL32.dll!EnterCriticalSection"));
+                DispatchOutcome::Resume
+            }
+            Err(reason) => {
+                super::trace::fail(format_args!(
+                    "gate-1n failed vm={} phase=EnterCriticalSection reason={}",
+                    vm_id, reason
+                ));
+                DispatchOutcome::Stop
+            }
+        }
+    } else if call == 28 && imports::is_initialize_critical_section(import) {
+        match initialize_dynamic_critical_section(vm_id) {
+            Ok((pointer, return_address)) => {
+                super::trace::info(format_args!(
+                    "InitializeCriticalSection ptr=0x{:08X} ret=0x{:08X}",
+                    pointer, return_address
+                ));
+                super::trace::info(format_args!(
+                    "return #28 KERNEL32.dll!InitializeCriticalSection"
+                ));
+                DispatchOutcome::Resume
+            }
+            Err(reason) => {
+                super::trace::fail(format_args!(
+                    "gate-1n failed vm={} phase=InitializeCriticalSection reason={}",
+                    vm_id, reason
+                ));
+                DispatchOutcome::Stop
+            }
+        }
+    } else if call == 29 && imports::is_leave_critical_section(import) {
+        match leave_critical_section(vm_id) {
+            Ok((pointer, tid, return_address)) => {
+                super::trace::info(format_args!(
+                    "LeaveCriticalSection ptr=0x{:08X} tid={} ret=0x{:08X}",
+                    pointer, tid, return_address
+                ));
+                super::trace::info(format_args!("return #29 KERNEL32.dll!LeaveCriticalSection"));
+                DispatchOutcome::Resume
+            }
+            Err(reason) => {
+                super::trace::fail(format_args!(
+                    "gate-1n failed vm={} phase=LeaveCriticalSection reason={}",
+                    vm_id, reason
+                ));
+                DispatchOutcome::Stop
+            }
+        }
+    } else if call == 30 && imports::is_enter_critical_section(import) {
+        match enter_critical_section(vm_id, DYNAMIC_LOCK_25) {
+            Ok((pointer, tid, return_address)) => {
+                super::trace::info(format_args!(
+                    "EnterCriticalSection ptr=0x{:08X} tid={} ret=0x{:08X}",
+                    pointer, tid, return_address
+                ));
+                super::trace::info(format_args!("return #30 KERNEL32.dll!EnterCriticalSection"));
+                DispatchOutcome::Resume
+            }
+            Err(reason) => {
+                super::trace::fail(format_args!(
+                    "gate-1n failed vm={} phase=EnterCriticalSection reason={}",
+                    vm_id, reason
+                ));
+                DispatchOutcome::Stop
+            }
+        }
     } else if call == 21 {
         super::trace::info(format_args!(
             "gate-1m complete vm={} next-import={}!{}",
@@ -1222,7 +1520,13 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
         DispatchOutcome::Stop
     } else if call == 26 {
         super::trace::info(format_args!(
-            "gate-1m complete vm={} next-import={}!{}",
+            "gate-1n complete vm={} next-import={}!{}",
+            vm_id, import.module, import.symbol
+        ));
+        DispatchOutcome::Stop
+    } else if call == 31 {
+        super::trace::info(format_args!(
+            "gate-1n complete vm={} next-import={}!{}",
             vm_id, import.module, import.symbol
         ));
         DispatchOutcome::Stop

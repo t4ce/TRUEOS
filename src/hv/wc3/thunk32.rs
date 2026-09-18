@@ -8,6 +8,8 @@ pub(crate) enum Kind {
     HeapCreate,
     GetVersionExA,
     InitializeCriticalSection,
+    EnterCriticalSection,
+    LeaveCriticalSection,
     TlsAlloc,
     HeapAlloc,
     TlsSetValue,
@@ -50,6 +52,11 @@ pub(crate) fn write(import_id: u32, kind: Kind, output: &mut [u8]) -> Result<(),
             output[10] = 0x00;
         }
         Kind::InitializeCriticalSection => {
+            output[8] = 0xC2;
+            output[9] = 0x04;
+            output[10] = 0x00;
+        }
+        Kind::EnterCriticalSection | Kind::LeaveCriticalSection => {
             output[8] = 0xC2;
             output[9] = 0x04;
             output[10] = 0x00;
