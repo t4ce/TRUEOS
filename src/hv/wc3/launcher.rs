@@ -177,6 +177,18 @@ struct EventHandle {
 
 struct WinWindow {
     hwnd: u32,
+    class_name: String,
+    title: String,
+    wnd_proc: u32,
+    x: i32,
+    y: i32,
+    width: u32,
+    height: u32,
+    ui4: Option<Ui4Backing>,
+    paint_pending: bool,
+}
+
+struct Ui4Backing {
     session: crate::ui4::WindowSessionId,
     frame: crate::ui4::FrameHandle,
     window: crate::ui4::WindowId,
@@ -193,6 +205,8 @@ static LAUNCHERS: [Mutex<Option<LauncherState>>; crate::allcaps::hv::VM_ID_LIMIT
     [const { Mutex::new(None) }; crate::allcaps::hv::VM_ID_LIMIT];
 static CALLS: [AtomicU32; crate::allcaps::hv::VM_ID_LIMIT] =
     [const { AtomicU32::new(0) }; crate::allcaps::hv::VM_ID_LIMIT];
+
+const DEF_WINDOW_PROC_THUNK: u32 = 0x0030_033C;
 static AUTOSTART_SCHEDULED: core::sync::atomic::AtomicBool =
     core::sync::atomic::AtomicBool::new(false);
 
@@ -2335,17 +2349,58 @@ fn create_window_ex_a(vm_id: u8) -> Result<(u32, u32, String), &'static str> {
     }
     let class_name = read_guest_c_string(vm_id, class_pointer, 256)?;
     let title = read_guest_c_string(vm_id, title_pointer, 256)?;
+    let hwnd = 0x5743_4001;
+    let launcher = launcher_state_lock(vm_id)?;
+    let mut state = launcher.lock();
+    let state = state.as_mut().ok_or("wc3 launcher state unavailable")?;
+    state.window = Some(WinWindow {
+        hwnd,
+        class_name: class_name.clone(),
+        title: title.clone(),
+        wnd_proc: DEF_WINDOW_PROC_THUNK,
+        x,
+        y,
+        width: width as u32,
+        height: height as u32,
+        ui4: None,
+        paint_pending: false,
+    });
+    super::trace::info(format_args!(
+        "wc3-window created hwnd=0x{:08X} class=\"{}\" title=\"{}\" x={} y={} width={} height={} ui4=none",
+        hwnd, class_name, title, x, y, width, height
+    ));
+    Ok((hwnd, return_address, class_name))
+}
+
+fn materialize_window(vm_id: u8, hwnd: u32, cmd_show: u32) -> Result<bool, &'static str> {
+    let launcher = launcher_state_lock(vm_id)?;
+    let (old_visible, x, y, width, height) = {
+        let state = launcher.lock();
+        let state = state.as_ref().ok_or("wc3 launcher state unavailable")?;
+        let window = state
+            .window
+            .as_ref()
+            .ok_or("ShowWindow before CreateWindowExA")?;
+        if hwnd != window.hwnd {
+            return Err("unexpected ShowWindow hwnd");
+        }
+        (window.ui4.is_some(), window.x, window.y, window.width, window.height)
+    };
+    if cmd_show == 0 || old_visible {
+        return Ok(old_visible);
+    }
+
     let output = crate::ui4::OutputId::from_slot(0).ok_or("D01 output")?;
     let owner = crate::ui4::WindowOwner::Vm(vm_id);
     let session = crate::ui4::begin_window_session(owner).map_err(|_| "ui4 session")?;
-    let frame_handle = match crate::ui4::create_frame(crate::ui4::FrameSpec {
+    let frame = match crate::ui4::create_frame(crate::ui4::FrameSpec {
         output,
         content: crate::ui4::FrameContent::Image,
         cadence: crate::ui4::FrameCadence::Dirty,
         buffering: crate::ui4::FrameBuffering::Double,
         format: crate::ui4::ScanoutFormat::Rgba8888Premultiplied,
-        width: width as u32,
-        height: height as u32,
+        width,
+        height,
         base_color: Some(crate::ui4::PremultipliedRgba8::from_straight_rgba(0, 0, 0, 255)),
     }) {
         Ok(frame) => frame,
@@ -2357,17 +2412,17 @@ fn create_window_ex_a(vm_id: u8) -> Result<(u32, u32, String), &'static str> {
     let window = match crate::ui4::create_window(crate::ui4::WindowCreate {
         owner,
         session,
-        frame: frame_handle,
+        frame,
         output,
         plane: crate::ui4::WindowPlane::Universal(1),
         placement: crate::ui4::WindowPlacement {
             x,
             y,
-            width: width as u32,
-            height: height as u32,
+            width,
+            height,
             z: 0,
             opacity: u8::MAX,
-            visible: false,
+            visible: true,
         },
         interaction: crate::ui4::WindowInteraction {
             movable: false,
@@ -2381,33 +2436,26 @@ fn create_window_ex_a(vm_id: u8) -> Result<(u32, u32, String), &'static str> {
         Ok(window) => window,
         Err(_) => {
             let _ = crate::ui4::finish_window_session(owner, session);
-            let _ = crate::ui4::destroy_frame(frame_handle);
+            let _ = crate::ui4::destroy_frame(frame);
             return Err("ui4 window");
         }
     };
-    let hwnd = 0x5743_4001;
-    let launcher = launcher_state_lock(vm_id)?;
     let mut state = launcher.lock();
     let state = state.as_mut().ok_or("wc3 launcher state unavailable")?;
-    state.window = Some(WinWindow {
-        hwnd,
+    let stored = state
+        .window
+        .as_mut()
+        .ok_or("ShowWindow before CreateWindowExA")?;
+    if stored.hwnd != hwnd {
+        return Err("ShowWindow hwnd changed");
+    }
+    stored.ui4 = Some(Ui4Backing {
         session,
-        frame: frame_handle,
+        frame,
         window,
     });
-    super::trace::info(format_args!(
-        "wc3-window created hwnd=0x{:08X} ui4_window={} ui4_frame={} class=\"{}\" title=\"{}\" x={} y={} width={} height={} visible=0",
-        hwnd,
-        window.raw(),
-        frame_handle.raw(),
-        class_name,
-        title,
-        x,
-        y,
-        width,
-        height
-    ));
-    Ok((hwnd, return_address, class_name))
+    stored.paint_pending = true;
+    Ok(false)
 }
 
 pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
@@ -2502,6 +2550,43 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
             }
             Err(reason) => super::trace::fail(format_args!(
                 "CreateWindowExA frame failed call={} reason={}",
+                call, reason
+            )),
+        }
+        return DispatchOutcome::Stop;
+    } else if imports::is_show_window(import) {
+        let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP).unwrap_or(0) as u32;
+        match guest_stack_range_mut(vm_id, esp, 12) {
+            Ok(frame) => {
+                let return_address = u32::from_le_bytes(frame[0..4].try_into().unwrap_or([0; 4]));
+                let hwnd = u32::from_le_bytes(frame[4..8].try_into().unwrap_or([0; 4]));
+                let cmd_show = u32::from_le_bytes(frame[8..12].try_into().unwrap_or([0; 4]));
+                let old_visible = match materialize_window(vm_id, hwnd, cmd_show) {
+                    Ok(old_visible) => old_visible,
+                    Err(reason) => {
+                        super::trace::fail(format_args!(
+                            "ShowWindow failed call={} reason={}",
+                            call, reason
+                        ));
+                        return DispatchOutcome::Stop;
+                    }
+                };
+                let mut registers = crate::hv::vmx::guest_registers();
+                registers.rax = u64::from(old_visible);
+                crate::hv::vmx::set_guest_registers(registers);
+                super::trace::info(format_args!(
+                    "ShowWindow hwnd=0x{:08X} nCmdShow={} (0x{:08X}) old_visible={} visible={} ret=0x{:08X}",
+                    hwnd,
+                    cmd_show,
+                    cmd_show,
+                    u8::from(old_visible),
+                    u8::from(cmd_show != 0),
+                    return_address
+                ));
+                return DispatchOutcome::Resume;
+            }
+            Err(reason) => super::trace::fail(format_args!(
+                "ShowWindow probe frame failed call={} reason={}",
                 call, reason
             )),
         }
