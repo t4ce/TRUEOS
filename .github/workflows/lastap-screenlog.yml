@@ -22,6 +22,7 @@ jobs:
             /src/r/services/microfont_log_service.rs
             /src/intel/tgl_native_panel.rs
             /src/intel/display.rs
+            /src/shell2/shell2_cmd_registry.rs
             /tools/trueos-doc
             /tools/test_lastap_screenlog.py
             /tools/_prepare_lastap_screenlog.py
