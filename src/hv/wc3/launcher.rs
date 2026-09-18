@@ -72,6 +72,11 @@ const ENTER_CRITICAL_SECTION_POINTER: u32 = 0x0021_0510;
 const LEAVE_CRITICAL_SECTION_RETURN: u32 = 0x0040_2332;
 const STATIC_LOCK_17: u32 = 0x0040_AB08;
 const DYNAMIC_LOCK_25: u32 = 0x0021_0510;
+const GET_ACP_RETURN: u32 = 0x0040_234C;
+const GET_ACP_CODE_PAGE: u32 = 1252;
+const GET_CP_INFO_FIRST_RETURN: u32 = 0x0040_238B;
+const GET_CP_INFO_SECOND_RETURN: u32 = 0x0040_25A1;
+const CP_INFO_BYTES: usize = 0x14;
 
 #[derive(Copy, Clone)]
 pub(crate) struct GuestMapping {
@@ -408,15 +413,16 @@ fn dynamic_critical_section_range_mut(
     vm_id: u8,
     guest_address: u32,
 ) -> Result<&'static mut [u8], &'static str> {
-    let state = LAUNCHERS
-        .get(usize::from(vm_id))
-        .ok_or("unsupported wc3 launcher VM id")?
-        .lock();
-    let state = state.as_ref().ok_or("wc3 launcher state unavailable")?;
-    if !state.dynamic_critical_sections.contains(&guest_address) {
-        return Err("critical section is not registered");
+    {
+        let guard = LAUNCHERS
+            .get(usize::from(vm_id))
+            .ok_or("unsupported wc3 launcher VM id")?
+            .lock();
+        let state = guard.as_ref().ok_or("wc3 launcher state unavailable")?;
+        if !state.dynamic_critical_sections.contains(&guest_address) {
+            return Err("critical section is not registered");
+        }
     }
-    drop(state);
     launcher_heap_range_mut(vm_id, guest_address, CRITICAL_SECTION_BYTES)
 }
 
@@ -866,6 +872,46 @@ fn get_current_thread_id(vm_id: u8) -> Result<(u32, u32), &'static str> {
         return Err("primary guest thread id is zero");
     }
     Ok((thread_id, return_address))
+}
+
+fn get_acp(vm_id: u8) -> Result<u32, &'static str> {
+    let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP)
+        .ok_or("guest ESP unavailable")? as u32;
+    let frame = guest_stack_range_mut(vm_id, esp, 4)?;
+    let return_address = u32::from_le_bytes(
+        frame[0..4]
+            .try_into()
+            .map_err(|_| "GetACP return address")?,
+    );
+    if return_address != GET_ACP_RETURN {
+        return Err("unexpected GetACP return address");
+    }
+    Ok(return_address)
+}
+
+fn get_cp_info(vm_id: u8, expected_return: u32) -> Result<(u32, u32), &'static str> {
+    let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP)
+        .ok_or("guest ESP unavailable")? as u32;
+    let frame = guest_stack_range_mut(vm_id, esp, 12)?;
+    let return_address = u32::from_le_bytes(
+        frame[0..4]
+            .try_into()
+            .map_err(|_| "GetCPInfo return address")?,
+    );
+    let code_page = u32::from_le_bytes(frame[4..8].try_into().map_err(|_| "GetCPInfo code page")?);
+    let cp_info = u32::from_le_bytes(
+        frame[8..12]
+            .try_into()
+            .map_err(|_| "GetCPInfo output pointer")?,
+    );
+    if return_address != expected_return || code_page != GET_ACP_CODE_PAGE {
+        return Err("unexpected GetCPInfo frame");
+    }
+    let output = guest_stack_range_mut(vm_id, cp_info, CP_INFO_BYTES)?;
+    output.fill(0);
+    output[0..4].copy_from_slice(&1u32.to_le_bytes());
+    output[4] = 0x3F;
+    Ok((cp_info, return_address))
 }
 
 fn get_startup_info_a(vm_id: u8) -> Result<(u32, u32), &'static str> {
@@ -1549,9 +1595,77 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
                 DispatchOutcome::Stop
             }
         }
-    } else if call == 31 {
+    } else if call == 31 && imports::is_get_acp(import) {
+        match get_acp(vm_id) {
+            Ok(return_address) => {
+                let mut registers = crate::hv::vmx::guest_registers();
+                registers.rax = u64::from(GET_ACP_CODE_PAGE);
+                crate::hv::vmx::set_guest_registers(registers);
+                super::trace::info(format_args!(
+                    "return #31 KERNEL32.dll!GetACP codepage=1252 ret=0x{:08X}",
+                    return_address
+                ));
+                DispatchOutcome::Resume
+            }
+            Err(reason) => {
+                super::trace::fail(format_args!(
+                    "gate-1o failed vm={} phase=GetACP reason={}",
+                    vm_id, reason
+                ));
+                DispatchOutcome::Stop
+            }
+        }
+    } else if call == 32 && imports::is_get_cp_info(import) {
+        match get_cp_info(vm_id, GET_CP_INFO_FIRST_RETURN) {
+            Ok((cp_info, return_address)) => {
+                let mut registers = crate::hv::vmx::guest_registers();
+                registers.rax = 1;
+                crate::hv::vmx::set_guest_registers(registers);
+                super::trace::info(format_args!(
+                    "GetCPInfo codepage=1252 max_char_size=1 default=0x3F ret=0x{:08X}",
+                    return_address
+                ));
+                super::trace::info(format_args!(
+                    "return #32 KERNEL32.dll!GetCPInfo eax=1 lp=0x{:08X}",
+                    cp_info
+                ));
+                DispatchOutcome::Resume
+            }
+            Err(reason) => {
+                super::trace::fail(format_args!(
+                    "gate-1o failed vm={} phase=GetCPInfo reason={}",
+                    vm_id, reason
+                ));
+                DispatchOutcome::Stop
+            }
+        }
+    } else if call == 33 && imports::is_get_cp_info(import) {
+        match get_cp_info(vm_id, GET_CP_INFO_SECOND_RETURN) {
+            Ok((cp_info, return_address)) => {
+                let mut registers = crate::hv::vmx::guest_registers();
+                registers.rax = 1;
+                crate::hv::vmx::set_guest_registers(registers);
+                super::trace::info(format_args!(
+                    "GetCPInfo codepage=1252 max_char_size=1 default=0x3F ret=0x{:08X}",
+                    return_address
+                ));
+                super::trace::info(format_args!(
+                    "return #33 KERNEL32.dll!GetCPInfo eax=1 lp=0x{:08X}",
+                    cp_info
+                ));
+                DispatchOutcome::Resume
+            }
+            Err(reason) => {
+                super::trace::fail(format_args!(
+                    "gate-1o failed vm={} phase=GetCPInfo reason={}",
+                    vm_id, reason
+                ));
+                DispatchOutcome::Stop
+            }
+        }
+    } else if call == 34 {
         super::trace::info(format_args!(
-            "gate-1n complete vm={} next-import={}!{}",
+            "gate-1o complete vm={} next-import={}!{}",
             vm_id, import.module, import.symbol
         ));
         DispatchOutcome::Stop

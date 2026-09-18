@@ -59,6 +59,10 @@ pub(crate) fn patch(
             super::thunk32::Kind::GetEnvironmentStringsA
         } else if is_free_environment_strings_a(import) {
             super::thunk32::Kind::FreeEnvironmentStringsA
+        } else if is_get_acp(import) {
+            super::thunk32::Kind::GetACP
+        } else if is_get_cp_info(import) {
+            super::thunk32::Kind::GetCPInfo
         } else {
             super::thunk32::Kind::Stop
         };
@@ -266,6 +270,26 @@ pub(crate) fn find_free_environment_strings_a(imports: &[LauncherImport]) -> boo
 
 pub(crate) fn is_free_environment_strings_a(import: &LauncherImport) -> bool {
     import.module.eq_ignore_ascii_case("KERNEL32.dll") && import.symbol == "FreeEnvironmentStringsA"
+}
+
+pub(crate) fn find_get_acp(imports: &[LauncherImport]) -> bool {
+    imports.iter().filter(|import| is_get_acp(import)).count() == 1
+}
+
+pub(crate) fn is_get_acp(import: &LauncherImport) -> bool {
+    import.module.eq_ignore_ascii_case("KERNEL32.dll") && import.symbol == "GetACP"
+}
+
+pub(crate) fn find_get_cp_info(imports: &[LauncherImport]) -> bool {
+    imports
+        .iter()
+        .filter(|import| is_get_cp_info(import))
+        .count()
+        == 1
+}
+
+pub(crate) fn is_get_cp_info(import: &LauncherImport) -> bool {
+    import.module.eq_ignore_ascii_case("KERNEL32.dll") && import.symbol == "GetCPInfo"
 }
 
 pub(crate) fn new_table() -> Vec<LauncherImport> {

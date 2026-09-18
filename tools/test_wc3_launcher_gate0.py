@@ -137,6 +137,13 @@ def check() -> None:
     require(launcher_source, "get_version_ex_a", "GetVersionExA implementation")
     require(launcher_source, "gate-1d complete", "fourth-import completion trace")
     require(launcher_source, "CRITICAL_SECTION_BYTES: usize = 0x18", "critical-section size")
+    dynamic_cs_start = launcher_source.index("fn dynamic_critical_section_range_mut(")
+    dynamic_cs_end = launcher_source.index("fn registered_critical_section_range_mut(", dynamic_cs_start)
+    dynamic_cs = launcher_source[dynamic_cs_start:dynamic_cs_end]
+    require(dynamic_cs, "let guard = LAUNCHERS", "dynamic critical-section scoped guard")
+    require(dynamic_cs, "launcher_heap_range_mut(vm_id, guest_address, CRITICAL_SECTION_BYTES)", "dynamic critical-section heap translation")
+    if "drop(state)" in dynamic_cs:
+        raise ValueError("dynamic critical-section helper shadows its mutex guard")
     for return_address, pointer in (
         (0x004022A4, 0x0040AB08),
         (0x004022AC, 0x0040AB38),
