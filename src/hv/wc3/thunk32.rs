@@ -12,6 +12,7 @@ pub(crate) enum Kind {
     LeaveCriticalSection,
     TlsAlloc,
     HeapAlloc,
+    HeapFree,
     TlsSetValue,
     GetCurrentThreadId,
     GetStartupInfoA,
@@ -71,6 +72,11 @@ pub(crate) fn write(import_id: u32, kind: Kind, output: &mut [u8]) -> Result<(),
         }
         Kind::TlsAlloc => output[8] = 0xC3,
         Kind::HeapAlloc => {
+            output[8] = 0xC2;
+            output[9] = 0x0C;
+            output[10] = 0x00;
+        }
+        Kind::HeapFree => {
             output[8] = 0xC2;
             output[9] = 0x0C;
             output[10] = 0x00;

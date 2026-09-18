@@ -39,6 +39,8 @@ pub(crate) fn patch(
             super::thunk32::Kind::TlsAlloc
         } else if is_heap_alloc(import) {
             super::thunk32::Kind::HeapAlloc
+        } else if is_heap_free(import) {
+            super::thunk32::Kind::HeapFree
         } else if is_tls_set_value(import) {
             super::thunk32::Kind::TlsSetValue
         } else if is_get_current_thread_id(import) {
@@ -162,6 +164,10 @@ pub(crate) fn find_heap_alloc(imports: &[LauncherImport]) -> bool {
 
 pub(crate) fn is_heap_alloc(import: &LauncherImport) -> bool {
     import.module.eq_ignore_ascii_case("KERNEL32.dll") && import.symbol == "HeapAlloc"
+}
+
+pub(crate) fn is_heap_free(import: &LauncherImport) -> bool {
+    import.module.eq_ignore_ascii_case("KERNEL32.dll") && import.symbol == "HeapFree"
 }
 
 pub(crate) fn find_tls_set_value(imports: &[LauncherImport]) -> bool {

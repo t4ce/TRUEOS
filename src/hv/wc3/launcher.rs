@@ -41,6 +41,7 @@ const HEAP_ALLOC_RETURN: u32 = 0x0040_4132;
 const HEAP_ALLOC_FLAGS: u32 = 0x0000_0008;
 const HEAP_ALLOC_BYTES: u32 = 0x0000_0080;
 const HEAP_ALLOC_CRT_RETURN: u32 = 0x0040_1FEC;
+const HEAP_FREE_FLAGS: u32 = 0;
 const TLS_SET_VALUE_RETURN: u32 = 0x0040_3EFC;
 const TLS_SET_VALUE_INDEX: u32 = 0;
 const TLS_SET_VALUE_VALUE: u32 = HEAP_VA;
@@ -140,6 +141,7 @@ struct HeapAllocation {
     guest_ptr: u32,
     bytes: u32,
     flags: u32,
+    live: bool,
 }
 
 #[derive(Copy, Clone)]
@@ -511,7 +513,11 @@ fn initialize_dynamic_critical_section(vm_id: u8) -> Result<(u32, u32), &'static
     if !state
         .heap_allocations
         .iter()
-        .any(|allocation| allocation.guest_ptr == critical_section && allocation.bytes >= 0x18)
+        .any(|allocation| {
+            allocation.live
+                && allocation.guest_ptr == critical_section
+                && allocation.bytes >= 0x18
+        })
     {
         return Err("dynamic critical section is not a recorded allocation");
     }
@@ -854,6 +860,7 @@ fn heap_alloc(
         guest_ptr,
         bytes,
         flags,
+        live: true,
     });
     Ok((guest_ptr, return_address, heap_handle, flags, bytes))
 }
@@ -870,6 +877,66 @@ fn heap_alloc_profile(vm_id: u8) -> Result<(u32, u32, u32), &'static str> {
         return Ok((return_address, flags, bytes));
     }
     Err("unexpected HeapAlloc site or arguments")
+}
+
+fn heap_free_words(vm_id: u8) -> Result<[u32; 4], &'static str> {
+    let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP)
+        .ok_or("guest ESP unavailable")? as u32;
+    let frame = guest_stack_range_mut(vm_id, esp, 16)?;
+    Ok([
+        u32::from_le_bytes(
+            frame[0..4]
+                .try_into()
+                .map_err(|_| "HeapFree return address")?,
+        ),
+        u32::from_le_bytes(
+            frame[4..8]
+                .try_into()
+                .map_err(|_| "HeapFree heap handle")?,
+        ),
+        u32::from_le_bytes(frame[8..12].try_into().map_err(|_| "HeapFree flags")?),
+        u32::from_le_bytes(frame[12..16].try_into().map_err(|_| "HeapFree pointer")?),
+    ])
+}
+
+fn heap_free(vm_id: u8) -> Result<(u32, u32, u32, u32), &'static str> {
+    let [return_address, heap_handle, flags, guest_ptr] = heap_free_words(vm_id)?;
+    super::trace::info(format_args!(
+        "HeapFree frame ret=0x{:08X} heap=0x{:08X} flags=0x{:08X} ptr=0x{:08X}",
+        return_address, heap_handle, flags, guest_ptr
+    ));
+    let launcher = LAUNCHERS
+        .get(usize::from(vm_id))
+        .ok_or("unsupported wc3 launcher VM id")?;
+    let state = launcher.lock();
+    let expected_heap = state
+        .as_ref()
+        .ok_or("wc3 launcher state unavailable")?
+        .heap
+        .ok_or("wc3 heap handle unavailable")?
+        .value;
+    drop(state);
+    if heap_handle != expected_heap {
+        return Err("unexpected HeapFree heap handle");
+    }
+    if flags != HEAP_FREE_FLAGS {
+        return Err("unexpected HeapFree flags");
+    }
+    if guest_ptr == 0 {
+        return Err("HeapFree pointer is null");
+    }
+    let mut state = launcher.lock();
+    let state = state.as_mut().ok_or("wc3 launcher state unavailable")?;
+    let allocation = state
+        .heap_allocations
+        .iter_mut()
+        .find(|allocation| allocation.guest_ptr == guest_ptr)
+        .ok_or("HeapFree pointer is not a recorded allocation")?;
+    if !allocation.live {
+        return Err("HeapFree pointer was already freed");
+    }
+    allocation.live = false;
+    Ok((guest_ptr, return_address, heap_handle, flags))
 }
 
 fn tls_set_value(vm_id: u8) -> Result<(u32, u32, u32), &'static str> {
@@ -1932,6 +1999,26 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
             Err(reason) => {
                 super::trace::fail(format_args!(
                     "crt-startup failed vm={} phase=HeapAlloc call={} reason={}",
+                    vm_id, call, reason
+                ));
+                DispatchOutcome::Stop
+            }
+        }
+    } else if imports::is_heap_free(import) {
+        match heap_free(vm_id) {
+            Ok((guest_ptr, return_address, heap_handle, flags)) => {
+                let mut registers = crate::hv::vmx::guest_registers();
+                registers.rax = 1;
+                crate::hv::vmx::set_guest_registers(registers);
+                super::trace::info(format_args!(
+                    "return #{} KERNEL32.dll!HeapFree eax=1 ptr=0x{:08X} heap=0x{:08X} flags=0x{:08X} ret=0x{:08X}",
+                    call, guest_ptr, heap_handle, flags, return_address
+                ));
+                DispatchOutcome::Resume
+            }
+            Err(reason) => {
+                super::trace::fail(format_args!(
+                    "crt-startup failed vm={} phase=HeapFree call={} reason={}",
                     vm_id, call, reason
                 ));
                 DispatchOutcome::Stop
