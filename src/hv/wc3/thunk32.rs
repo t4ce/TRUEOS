@@ -22,6 +22,7 @@ pub(crate) enum Kind {
     GetStartupInfoA,
     GetModuleFileNameA,
     GetModuleHandleA,
+    RegisterClassA,
     GetStdHandle,
     GetFileType,
     SetHandleCount,
@@ -113,6 +114,11 @@ pub(crate) fn write(import_id: u32, kind: Kind, output: &mut [u8]) -> Result<(),
             output[10] = 0x00;
         }
         Kind::GetModuleHandleA => {
+            output[8] = 0xC2;
+            output[9] = 0x04;
+            output[10] = 0x00;
+        }
+        Kind::RegisterClassA => {
             output[8] = 0xC2;
             output[9] = 0x04;
             output[10] = 0x00;

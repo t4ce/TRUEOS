@@ -53,7 +53,7 @@ const STARTUP_INFO_A_BYTES: usize = 0x44;
 const GET_MODULE_FILE_NAME_A_RETURN: u32 = 0x0040_4545;
 const GET_MODULE_FILE_NAME_A_BUFFER: u32 = 0x0040_ABA8;
 const GET_MODULE_FILE_NAME_A_SIZE: u32 = 0x104;
-const GET_MODULE_HANDLE_A_RETURN: u32 = 0x0040_221E;
+const GET_MODULE_HANDLE_A_RETURNS: [u32; 2] = [0x0040_221E, 0x0040_1A2B];
 const MODULE_IMAGE_BASE: u32 = pe32::IMAGE_BASE;
 const MODULE_FILENAME_A: &[u8] = b"C:\\Warcraft III\\Warcraft III.exe\0";
 const GET_STD_HANDLE_RETURN: u32 = 0x0040_4A0D;
@@ -147,6 +147,7 @@ struct LauncherState {
     events: Vec<EventObject>,
     event_handles: Vec<EventHandle>,
     next_event_handle: u32,
+    registered_class_names: Vec<String>,
 }
 
 struct HeapAllocation {
@@ -284,6 +285,7 @@ pub(crate) fn prepare(vm_id: u8, bytes: &[u8]) -> Result<(), &'static str> {
         events: Vec::new(),
         event_handles: Vec::new(),
         next_event_handle: EVENT_HANDLE_BASE,
+        registered_class_names: Vec::new(),
     });
     CALLS[usize::from(vm_id)].store(0, Ordering::Release);
     super::trace::info(format_args!(
@@ -1770,7 +1772,11 @@ fn get_module_handle_a(vm_id: u8) -> Result<(u32, u32), &'static str> {
             .try_into()
             .map_err(|_| "GetModuleHandleA module name")?,
     );
-    if return_address != GET_MODULE_HANDLE_A_RETURN || module_name != 0 {
+    super::trace::info(format_args!(
+        "GetModuleHandleA frame ret=0x{:08X} lpModuleName=0x{:08X}",
+        return_address, module_name
+    ));
+    if !GET_MODULE_HANDLE_A_RETURNS.contains(&return_address) || module_name != 0 {
         return Err("unexpected GetModuleHandleA frame");
     }
     Ok((module_name, return_address))
@@ -2128,6 +2134,73 @@ fn close_handle(vm_id: u8) -> Result<(u32, u32, String), &'static str> {
     Ok((handle, return_address, name))
 }
 
+fn register_class_a(vm_id: u8) -> Result<(u32, u32, String), &'static str> {
+    let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP)
+        .ok_or("guest ESP unavailable")? as u32;
+    let frame = guest_stack_range_mut(vm_id, esp, 8)?;
+    let return_address = u32::from_le_bytes(
+        frame[0..4]
+            .try_into()
+            .map_err(|_| "RegisterClassA return")?,
+    );
+    let wnd_class = u32::from_le_bytes(
+        frame[4..8]
+            .try_into()
+            .map_err(|_| "RegisterClassA WNDCLASSA")?,
+    );
+    if return_address != 0x0040_1A42 || wnd_class == 0 {
+        return Err("unexpected RegisterClassA frame");
+    }
+    let fields = launcher_read_range(vm_id, wnd_class, 40)?;
+    let read_u32 =
+        |offset: usize| u32::from_le_bytes(fields[offset..offset + 4].try_into().unwrap_or([0; 4]));
+    let style = read_u32(0);
+    let wnd_proc = read_u32(4);
+    let cb_class_extra = read_u32(8);
+    let cb_window_extra = read_u32(12);
+    let instance = read_u32(16);
+    let icon = read_u32(20);
+    let cursor = read_u32(24);
+    let background = read_u32(28);
+    let menu = read_u32(32);
+    let class_name_pointer = read_u32(36);
+    let class_name = read_guest_c_string(vm_id, class_name_pointer, 256)?;
+    let menu_name = if menu == 0 {
+        String::from("<null>")
+    } else {
+        read_guest_c_string(vm_id, menu, 256)?
+    };
+    super::trace::info(format_args!(
+        "RegisterClassA WNDCLASSA ptr=0x{:08X} style=0x{:08X} wnd_proc=0x{:08X} cbClsExtra={} cbWndExtra={} hInstance=0x{:08X} hIcon=0x{:08X} hCursor=0x{:08X} hbrBackground=0x{:08X} lpszMenuName=0x{:08X} lpszClassName=0x{:08X} class=\"{}\" menu=\"{}\" ret=0x{:08X}",
+        wnd_class,
+        style,
+        wnd_proc,
+        cb_class_extra,
+        cb_window_extra,
+        instance,
+        icon,
+        cursor,
+        background,
+        menu,
+        class_name_pointer,
+        class_name,
+        menu_name,
+        return_address
+    ));
+    let launcher = launcher_state_lock(vm_id)?;
+    let mut state = launcher.lock();
+    let state = state.as_mut().ok_or("wc3 launcher state unavailable")?;
+    if !state
+        .registered_class_names
+        .iter()
+        .any(|registered| registered == &class_name)
+    {
+        state.registered_class_names.push(class_name.clone());
+    }
+    state.last_error = 0;
+    Ok((1, return_address, class_name))
+}
+
 pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
     let id = crate::hv::vmx::guest_registers().rax as u32;
     let imports = match LAUNCHERS
@@ -2146,7 +2219,27 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
     };
     let call = CALLS[usize::from(vm_id)].fetch_add(1, Ordering::AcqRel) + 1;
     super::trace::info(format_args!("call #{} {}!{}", call, import.module, import.symbol));
-    if import.module.eq_ignore_ascii_case("USER32.dll") {
+    if imports::is_register_class_a(import) {
+        match register_class_a(vm_id) {
+            Ok((atom, return_address, class_name)) => {
+                let mut registers = crate::hv::vmx::guest_registers();
+                registers.rax = u64::from(atom);
+                crate::hv::vmx::set_guest_registers(registers);
+                super::trace::info(format_args!(
+                    "RegisterClassA class=\"{}\" atom={} ret=0x{:08X}",
+                    class_name, atom, return_address
+                ));
+                DispatchOutcome::Resume
+            }
+            Err(reason) => {
+                super::trace::fail(format_args!(
+                    "RegisterClassA failed vm={} reason={}",
+                    vm_id, reason
+                ));
+                DispatchOutcome::Stop
+            }
+        }
+    } else if import.module.eq_ignore_ascii_case("USER32.dll") {
         let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP).unwrap_or(0) as u32;
         let frame = guest_stack_range_mut(vm_id, esp, 8);
         match frame {
@@ -2900,7 +2993,7 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
             }
             Err(reason) => {
                 super::trace::fail(format_args!(
-                    "crt-startup failed vm={} phase=GetModuleHandleA reason={}",
+                    "GetModuleHandleA failed vm={} reason={}",
                     vm_id, reason
                 ));
                 DispatchOutcome::Stop
