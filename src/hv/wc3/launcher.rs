@@ -78,6 +78,15 @@ pub(crate) fn prepare(vm_id: u8, bytes: &[u8]) -> Result<(), &'static str> {
         vm_id,
         bytes.len()
     ));
+    super::trace::info(format_args!(
+        "gate-1a pe vm={} base=0x00400000 image=0x00044000 entry=0x00402144 imports={}",
+        vm_id,
+        LAUNCHERS[usize::from(vm_id)]
+            .lock()
+            .as_ref()
+            .map(|state| state.imports.len())
+            .unwrap_or(0)
+    ));
     Ok(())
 }
 

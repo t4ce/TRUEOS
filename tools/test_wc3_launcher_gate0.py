@@ -123,6 +123,7 @@ def check() -> None:
     require(memory, '"wc3-gate1a-thunks"', "private launcher thunk EPT backing")
     require(memory, '"wc3-gate1a-teb"', "private launcher TEB EPT backing")
     require(launcher_source, "Sha256::digest(bytes)", "launcher hash validation")
+    require(launcher_source, "gate-1a pe", "PE materialization trace")
     require(launcher_source, "gate-1a complete", "first-import completion trace")
     require(pe32, "IMAGE_BASE: u32 = 0x0040_0000", "fixed launcher image base")
     require(pe32, "ENTRY_RVA: u32 = 0x2144", "fixed launcher entry RVA")
