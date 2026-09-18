@@ -2794,7 +2794,7 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
                     super::trace::fail(format_args!("SetFocus unknown hwnd=0x{:08X}", hwnd));
                     return DispatchOutcome::Stop;
                 }
-                let ui4_plane = match state.window.as_ref().and_then(|window| window.ui4) {
+                let ui4_plane = match state.window.as_ref().and_then(|window| window.ui4.as_ref()) {
                     Some(backing) => match crate::ui4::note_window_focused(
                         crate::ui4::WindowOwner::Vm(vm_id),
                         backing.window,
