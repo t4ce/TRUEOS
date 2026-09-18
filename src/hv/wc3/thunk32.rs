@@ -1,14 +1,18 @@
 pub(crate) const THUNK_BASE: u32 = 0x0030_0000;
-pub(crate) const THUNK_BYTES: usize = 10;
+pub(crate) const THUNK_BYTES: usize = 12;
 
-pub(crate) fn write(
-    import_id: u32,
-    returns_to_caller: bool,
-    output: &mut [u8],
-) -> Result<(), &'static str> {
+#[derive(Copy, Clone, Eq, PartialEq)]
+pub(crate) enum Kind {
+    Stop,
+    Return,
+    HeapCreate,
+}
+
+pub(crate) fn write(import_id: u32, kind: Kind, output: &mut [u8]) -> Result<(), &'static str> {
     if output.len() < THUNK_BYTES {
         return Err("wc3 thunk buffer too small");
     }
+    output[..THUNK_BYTES].fill(0x90);
     output[..8].copy_from_slice(&[
         0xB8,
         import_id as u8,
@@ -19,12 +23,17 @@ pub(crate) fn write(
         0x01,
         0xC1,
     ]);
-    if returns_to_caller {
-        output[8] = 0xC3;
-        output[9] = 0x90;
-    } else {
-        output[8] = 0x0F;
-        output[9] = 0x0B;
+    match kind {
+        Kind::Return => output[8] = 0xC3,
+        Kind::HeapCreate => {
+            output[8] = 0xC2;
+            output[9] = 0x0C;
+            output[10] = 0x00;
+        }
+        Kind::Stop => {
+            output[8] = 0x0F;
+            output[9] = 0x0B;
+        }
     }
     Ok(())
 }

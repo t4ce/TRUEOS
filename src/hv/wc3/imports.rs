@@ -23,7 +23,14 @@ pub(crate) fn patch(
                     .saturating_mul(super::thunk32::THUNK_BYTES)..,
             )
             .ok_or("wc3 thunk output range")?;
-        super::thunk32::write(import.id, is_get_version(import), output)?;
+        let kind = if is_get_version(import) {
+            super::thunk32::Kind::Return
+        } else if is_heap_create(import) {
+            super::thunk32::Kind::HeapCreate
+        } else {
+            super::thunk32::Kind::Stop
+        };
+        super::thunk32::write(import.id, kind, output)?;
         let iat = image
             .get_mut(slot..slot.checked_add(4).ok_or("wc3 IAT overflow")?)
             .ok_or("wc3 IAT outside image")?;
@@ -42,6 +49,18 @@ pub(crate) fn find_get_version(imports: &[LauncherImport]) -> bool {
 
 pub(crate) fn is_get_version(import: &LauncherImport) -> bool {
     import.module.eq_ignore_ascii_case("KERNEL32.dll") && import.symbol == "GetVersion"
+}
+
+pub(crate) fn find_heap_create(imports: &[LauncherImport]) -> bool {
+    imports
+        .iter()
+        .filter(|import| is_heap_create(import))
+        .count()
+        == 1
+}
+
+pub(crate) fn is_heap_create(import: &LauncherImport) -> bool {
+    import.module.eq_ignore_ascii_case("KERNEL32.dll") && import.symbol == "HeapCreate"
 }
 
 pub(crate) fn new_table() -> Vec<LauncherImport> {

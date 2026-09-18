@@ -2403,6 +2403,8 @@ fn eject_offline_vm(vm_id: u8, allow_starting: bool) -> Result<bool, EjectError>
         || blueprint_launch_active(vm_id)
         || crate::hv::store::has_committed_vm(vm_id);
     clear_blueprint_pending_launch(vm_id);
+    #[cfg(feature = "wc3")]
+    wc3::release_launcher(vm_id);
     memory::release_guest_rel_exec_for_vm(vm_id);
     let launch = take_blueprint_launch(vm_id);
     drop(launch);

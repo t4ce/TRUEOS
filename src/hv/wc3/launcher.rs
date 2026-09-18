@@ -17,6 +17,8 @@ const EXPECTED_SHA256: [u8; 32] = [
     0x09, 0x97, 0x45, 0x22, 0x5e, 0x2f, 0x4f, 0x98, 0x85, 0xf8, 0x87, 0x74, 0xaa, 0x6f, 0x36, 0xd9,
 ];
 const WINDOWS_XP_GET_VERSION: u32 = 0x0A28_0105;
+const HEAP_CREATE_RETURN: u32 = 0x0040_2D9B;
+const HEAP_CREATE_INITIAL: u32 = 0x1000;
 
 #[derive(Copy, Clone)]
 pub(crate) struct GuestMapping {
@@ -26,6 +28,15 @@ pub(crate) struct GuestMapping {
 struct LauncherState {
     arena: HeapArena,
     imports: Vec<super::imports::LauncherImport>,
+    heap: Option<HeapHandle>,
+}
+
+#[derive(Copy, Clone)]
+struct HeapHandle {
+    value: u32,
+    flags: u32,
+    initial: u32,
+    maximum: u32,
 }
 static LAUNCHERS: [Mutex<Option<LauncherState>>; crate::allcaps::hv::VM_ID_LIMIT] =
     [const { Mutex::new(None) }; crate::allcaps::hv::VM_ID_LIMIT];
@@ -72,6 +83,7 @@ pub(crate) fn prepare(vm_id: u8, bytes: &[u8]) -> Result<(), &'static str> {
     *slot.lock() = Some(LauncherState {
         arena,
         imports: materialized.imports,
+        heap: None,
     });
     CALLS[usize::from(vm_id)].store(0, Ordering::Release);
     super::trace::info(format_args!(
@@ -99,6 +111,66 @@ pub(crate) fn guest_mapping(vm_id: u8) -> Option<GuestMapping> {
     })
 }
 
+pub(crate) fn release(vm_id: u8) {
+    let Some(slot) = LAUNCHERS.get(usize::from(vm_id)) else {
+        return;
+    };
+    let state = slot.lock().take();
+    if let Some(state) = state {
+        let _ = phys::free_phys_range(state.arena.phys_start, state.arena.length);
+    }
+    CALLS[usize::from(vm_id)].store(0, Ordering::Release);
+}
+
+fn stack_words(vm_id: u8) -> Result<[u32; 4], &'static str> {
+    let esp =
+        crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP).ok_or("guest ESP unavailable")?;
+    let offset = esp
+        .checked_sub(crate::hv::memory::GUEST_STACK_VA_BASE)
+        .ok_or("guest ESP below stack")?;
+    let offset = usize::try_from(offset).map_err(|_| "guest ESP range")?;
+    let bytes =
+        crate::hv::memory::guest_stack_slice_for_vm(vm_id).ok_or("guest stack unavailable")?;
+    let frame = bytes
+        .get(offset..offset.checked_add(16).ok_or("guest stack frame overflow")?)
+        .ok_or("guest stack frame unavailable")?;
+    Ok([
+        u32::from_le_bytes(frame[0..4].try_into().map_err(|_| "guest return address")?),
+        u32::from_le_bytes(frame[4..8].try_into().map_err(|_| "guest heap flags")?),
+        u32::from_le_bytes(frame[8..12].try_into().map_err(|_| "guest heap initial")?),
+        u32::from_le_bytes(frame[12..16].try_into().map_err(|_| "guest heap maximum")?),
+    ])
+}
+
+fn heap_create(vm_id: u8) -> Result<(u32, u32), &'static str> {
+    let [return_address, flags, initial, maximum] = stack_words(vm_id)?;
+    if return_address != HEAP_CREATE_RETURN
+        || flags != 0
+        || initial != HEAP_CREATE_INITIAL
+        || maximum != 0
+    {
+        return Err("unexpected HeapCreate frame");
+    }
+    let state = LAUNCHERS
+        .get(usize::from(vm_id))
+        .ok_or("unsupported wc3 launcher VM id")?;
+    let mut state = state.lock();
+    let state = state.as_mut().ok_or("wc3 launcher state unavailable")?;
+    let heap = state.heap.get_or_insert(HeapHandle {
+        value: 0x5743_0001u32
+            .checked_add(u32::from(vm_id))
+            .ok_or("heap handle overflow")?,
+        flags,
+        initial,
+        maximum,
+    });
+    if heap.value == 0 || heap.flags != flags || heap.initial != initial || heap.maximum != maximum
+    {
+        return Err("wc3 heap handle state");
+    }
+    Ok((heap.value, return_address))
+}
+
 pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
     let id = crate::hv::vmx::guest_registers().rax as u32;
     let imports = match LAUNCHERS
@@ -123,9 +195,32 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
         crate::hv::vmx::set_guest_registers(registers);
         super::trace::info(format_args!("return #1 KERNEL32.dll!GetVersion eax=0x0A280105"));
         DispatchOutcome::Resume
-    } else if call == 2 {
+    } else if call == 2 && imports::is_heap_create(import) {
+        match heap_create(vm_id) {
+            Ok((handle, return_address)) => {
+                super::trace::info(format_args!(
+                    "HeapCreate args flags=0x00000000 initial=0x00001000 maximum=0x00000000"
+                ));
+                let mut registers = crate::hv::vmx::guest_registers();
+                registers.rax = u64::from(handle);
+                crate::hv::vmx::set_guest_registers(registers);
+                super::trace::info(format_args!(
+                    "return #2 KERNEL32.dll!HeapCreate handle=0x{:08X} ret=0x{:08X}",
+                    handle, return_address
+                ));
+                DispatchOutcome::Resume
+            }
+            Err(reason) => {
+                super::trace::fail(format_args!(
+                    "gate-1c failed vm={} phase=HeapCreate reason={}",
+                    vm_id, reason
+                ));
+                DispatchOutcome::Stop
+            }
+        }
+    } else if call == 3 {
         super::trace::info(format_args!(
-            "gate-1b complete vm={} next-import={}!{}",
+            "gate-1c complete vm={} next-import={}!{}",
             vm_id, import.module, import.symbol
         ));
         DispatchOutcome::Stop
