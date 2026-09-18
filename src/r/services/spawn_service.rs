@@ -110,6 +110,7 @@ define_started_flags!(
     FACTORY_RAM_PROBE_STARTED,
     NET_TCP_SHELL_STARTED,
     LOGTOTCP_STARTED,
+    MICROFONT_LOG_STARTED,
     ATOMIC_BOMB_STARTED,
     TINYAUDIO_SERVICE_STARTED,
     TINYAUDIO_LIVE_HTTP_STARTED,
@@ -607,6 +608,29 @@ fn spawn_gridpaper_service(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_hid_udp_srv(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |_spawner| crate::r::services::hid_udp_service::hid_udp_srv_task())
+}
+
+fn microfont_log_gate() -> bool {
+    super::microfont_log_service::enabled()
+        && crate::workers::last_ap_service_worker().is_some()
+}
+
+fn spawn_microfont_log(_spawner: Spawner) -> SpawnAttempt {
+    let Some((slot, _kind, lastap_spawner)) = crate::workers::last_ap_service_worker() else {
+        return SpawnAttempt::Skipped;
+    };
+    match super::microfont_log_service::microfont_log_task(slot) {
+        Ok(token) => {
+            lastap_spawner.spawn(token);
+            SpawnAttempt::Spawned
+        }
+        Err(error) => SpawnAttempt::Failed(error),
+    }
+}
+
+fn ui4_slot4_service_gate() -> bool {
+    ui4_compositor_gate()
+        && !super::microfont_log_service::owns_plane(0, crate::ui4::INTERACTION_OVERLAY_PLANE_SLOT)
 }
 
 fn spawn_logtotcp(spawner: Spawner) -> SpawnAttempt {
@@ -1380,11 +1404,16 @@ const NET_ANY_CONFIGURED_AND_ROOT_READY: u32 =
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 76
+const TASK_COUNT: usize = 77
     + cfg!(feature = "trueos_h264_encode_stream") as usize
     + cfg!(feature = "trueos_lumen") as usize
     + 2 * cfg!(feature = "trueos_ttstt") as usize;
 static TASKS: [TaskSpec; TASK_COUNT] = [
+    // Only the retained surface and exact LastAP executor are required.
+    // In particular this has no NET, filesystem, GuC or UI4-ready dependency.
+    TaskSpec::enabled_gated(
+        "microfont-log", 0, microfont_log_gate, &MICROFONT_LOG_STARTED, spawn_microfont_log,
+    ),
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(
         "blueprint-async-fs-service",
@@ -1682,7 +1711,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     TaskSpec::enabled_gated(
         "ui4-slot4-service",
         0,
-        ui4_compositor_gate,
+        ui4_slot4_service_gate,
         &UI4_SLOT4_SERVICE_STARTED,
         spawn_ui4_slot4_service_task,
     ),

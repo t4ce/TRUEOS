@@ -1,0 +1,40 @@
+name: Last-AP screenlog tests
+on:
+  pull_request:
+    paths:
+      - 'src/log_os.rs'
+      - 'src/workers.rs'
+      - 'src/r/services/**'
+      - 'src/intel/tgl_native_panel.rs'
+      - 'src/intel/display.rs'
+      - 'tools/test_lastap_screenlog.py'
+      - '.github/workflows/lastap-screenlog.yml'
+  push:
+    branches: ['exp/tgl-lastap-screenlog']
+permissions:
+  contents: read
+jobs:
+  cpu-log:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /src/log_os.rs
+            /src/workers.rs
+            /src/r/services/mod.rs
+            /src/r/services/spawn_service.rs
+            /src/r/services/microfont_log_service.rs
+            /src/intel/tgl_native_panel.rs
+            /src/intel/display.rs
+            /tools/test_lastap_screenlog.py
+      - name: Test production ring, LastAP selector and CPU font rasterizer
+        run: |
+          set -euo pipefail
+          python3 tools/test_lastap_screenlog.py
+          for f in src/log_os.rs src/workers.rs src/r/services/mod.rs src/r/services/spawn_service.rs src/r/services/microfont_log_service.rs src/intel/tgl_native_panel.rs src/intel/display.rs; do
+            rustfmt --edition 2024 --config skip_children=true --emit stdout "$f" >/dev/null
+          done

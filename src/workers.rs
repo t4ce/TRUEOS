@@ -18,8 +18,8 @@ const WORKER_SLOT_LIMIT: usize = crate::allcaps::hv::VM_CPU_SLOT_LIMIT;
 const REGISTERED_SLOT_WORD_BITS: usize = u64::BITS as usize;
 const REGISTERED_SLOT_WORDS: usize =
     (WORKER_SLOT_LIMIT + REGISTERED_SLOT_WORD_BITS - 1) / REGISTERED_SLOT_WORD_BITS;
-// Media capture/encode now use the ordinary BSP executor. Every background
-// topology slot remains available to VM hulls and general worker lanes.
+// Media capture/encode stay on BSP. The laptop's CPU screen-log profile
+// reuses the former LastAP isolation policy, enabled before AP registration.
 
 static CORE_SPAWNER_BY_SLOT: [Mutex<Option<SendSpawner>>; WORKER_SLOT_LIMIT] =
     [const { Mutex::new(None) }; WORKER_SLOT_LIMIT];
@@ -51,7 +51,7 @@ pub struct WorkerSpawner {
 /// Placement policy for bounded CPU-intensive work.
 ///
 /// All policies exclude the BSP, AP1 UI/service carrier, and an enabled final
-/// AP media reservation. `PerformanceFirst` is the normal inference policy:
+/// AP diagnostic-service reservation. `PerformanceFirst` is the normal inference policy:
 /// it fills P cores before using E or unclassified cores, rather than assuming
 /// a desktop core count or a fixed Intel SKU layout.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -287,8 +287,29 @@ pub fn ap1_ui_core_spawner() -> Option<WorkerSpawner> {
     spawner_for_slot(AP1_UI_SERVICE_SLOT)
 }
 
+/// The former RDP encoder policy: topology identity, never registration order.
+pub fn last_ap_service_slot() -> Option<u32> {
+    if !crate::r::services::microfont_log_service::enabled() {
+        return None;
+    }
+    let slot = topology_core_slot_count().checked_sub(1)?;
+    if slot < FIRST_BACKGROUND_SLOT as usize || slot >= WORKER_SLOT_LIMIT {
+        return None;
+    }
+    Some(slot as u32)
+}
+
+pub fn is_last_ap_service_slot(cpu_slot: u32) -> bool {
+    last_ap_service_slot() == Some(cpu_slot)
+}
+
+pub fn last_ap_service_worker() -> Option<(u32, u8, WorkerSpawner)> {
+    let slot = last_ap_service_slot()?;
+    Some((slot, core_kind_for_slot(slot), spawner_for_slot(slot)?))
+}
+
 pub fn is_general_background_worker_slot(cpu_slot: u32) -> bool {
-    is_background_worker_slot(cpu_slot)
+    is_background_worker_slot(cpu_slot) && !is_last_ap_service_slot(cpu_slot)
 }
 
 pub fn background_slot_range() -> core::ops::Range<u32> {
@@ -336,11 +357,14 @@ pub fn app_visible_parallelism() -> usize {
     let topology_slots = topology_core_slot_count();
     if topology_slots != 0 {
         let background = topology_slots.saturating_sub(first_app_slot as usize);
-        return background.max(1);
+        let reserved = usize::from(
+            last_ap_service_slot().is_some_and(|slot| slot as usize >= first_app_slot as usize),
+        );
+        return background.saturating_sub(reserved).max(1);
     }
 
     (first_app_slot..registered_slot_end().max(first_app_slot))
-        .filter(|slot| is_slot_registered(*slot))
+        .filter(|slot| is_slot_registered(*slot) && !is_last_ap_service_slot(*slot))
         .count()
         .max(1)
 }
