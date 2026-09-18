@@ -158,11 +158,8 @@ pub(crate) async fn microfont_log_task(assigned_slot: u32) {
     let mut pen = Pen::new(surface);
     let _ = writeln!(pen, "TCP LOG MIRROR | last AP {} | microfont 1x | no scroll", assigned_slot);
     pen.flush();
-    crate::log_important!(target: "service";
-        "microfont-log: online lastap={} cadence_ms={} batch_bytes={} guc={} guc_submit={} ui4_stack={}\n",
-        assigned_slot, PERIOD_MS, BATCH_BYTES, crate::intel::guc_ready() as u8,
-        crate::intel::guc_submission_ready() as u8,
-        crate::intel::ui4_rgba8_plane_stack_is_ready() as u8);
+    // No log! calls or driver-status queries here: a stuck producer/driver
+    // must not prevent this independent reader from painting existing bytes.
     let mut cursor = 0u64;
     let mut batch = [0u8; BATCH_BYTES];
     loop {
