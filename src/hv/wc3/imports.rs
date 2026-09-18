@@ -39,6 +39,14 @@ pub(crate) fn patch(
             super::thunk32::Kind::TlsSetValue
         } else if is_get_current_thread_id(import) {
             super::thunk32::Kind::GetCurrentThreadId
+        } else if is_get_startup_info_a(import) {
+            super::thunk32::Kind::GetStartupInfoA
+        } else if is_get_std_handle(import) {
+            super::thunk32::Kind::GetStdHandle
+        } else if is_get_file_type(import) {
+            super::thunk32::Kind::GetFileType
+        } else if is_set_handle_count(import) {
+            super::thunk32::Kind::SetHandleCount
         } else {
             super::thunk32::Kind::Stop
         };
@@ -139,6 +147,46 @@ pub(crate) fn find_get_current_thread_id(imports: &[LauncherImport]) -> bool {
 pub(crate) fn is_get_current_thread_id(import: &LauncherImport) -> bool {
     import.module.eq_ignore_ascii_case("KERNEL32.dll")
         && import.symbol == "GetCurrentThreadId"
+}
+
+pub(crate) fn find_get_startup_info_a(imports: &[LauncherImport]) -> bool {
+    imports
+        .iter()
+        .filter(|import| is_get_startup_info_a(import))
+        .count()
+        == 1
+}
+
+pub(crate) fn is_get_startup_info_a(import: &LauncherImport) -> bool {
+    import.module.eq_ignore_ascii_case("KERNEL32.dll") && import.symbol == "GetStartupInfoA"
+}
+
+pub(crate) fn find_get_std_handle(imports: &[LauncherImport]) -> bool {
+    imports.iter().filter(|import| is_get_std_handle(import)).count() == 1
+}
+
+pub(crate) fn is_get_std_handle(import: &LauncherImport) -> bool {
+    import.module.eq_ignore_ascii_case("KERNEL32.dll") && import.symbol == "GetStdHandle"
+}
+
+pub(crate) fn find_get_file_type(imports: &[LauncherImport]) -> bool {
+    imports.iter().filter(|import| is_get_file_type(import)).count() == 1
+}
+
+pub(crate) fn is_get_file_type(import: &LauncherImport) -> bool {
+    import.module.eq_ignore_ascii_case("KERNEL32.dll") && import.symbol == "GetFileType"
+}
+
+pub(crate) fn find_set_handle_count(imports: &[LauncherImport]) -> bool {
+    imports
+        .iter()
+        .filter(|import| is_set_handle_count(import))
+        .count()
+        == 1
+}
+
+pub(crate) fn is_set_handle_count(import: &LauncherImport) -> bool {
+    import.module.eq_ignore_ascii_case("KERNEL32.dll") && import.symbol == "SetHandleCount"
 }
 
 pub(crate) fn new_table() -> Vec<LauncherImport> {

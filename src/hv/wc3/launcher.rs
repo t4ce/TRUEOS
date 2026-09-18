@@ -44,6 +44,12 @@ const TLS_SET_VALUE_INDEX: u32 = 0;
 const TLS_SET_VALUE_VALUE: u32 = HEAP_VA;
 const GET_CURRENT_THREAD_ID_RETURN: u32 = 0x0040_3F0D;
 const GET_CURRENT_THREAD_ID_ESI: u32 = HEAP_VA;
+const GET_STARTUP_INFO_A_RETURN: u32 = 0x0040_48FF;
+const STARTUP_INFO_A_BYTES: usize = 0x44;
+const GET_STD_HANDLE_RETURN: u32 = 0x0040_4A0D;
+const GET_FILE_TYPE_RETURN: u32 = 0x0040_4A1B;
+const SET_HANDLE_COUNT_RETURN: u32 = 0x0040_4A52;
+const STD_HANDLES: [u32; 3] = [0x5743_1001, 0x5743_1002, 0x5743_1003];
 
 #[derive(Copy, Clone)]
 pub(crate) struct GuestMapping {
@@ -60,6 +66,7 @@ struct LauncherState {
     tls_values: [u32; TLS_SLOT_COUNT],
     tls_value_set: [bool; TLS_SLOT_COUNT],
     primary_thread_id: u32,
+    std_handles: [u32; 3],
     heap_next: usize,
     heap_allocations: Vec<HeapAllocation>,
 }
@@ -129,6 +136,7 @@ pub(crate) fn prepare(vm_id: u8, bytes: &[u8]) -> Result<(), &'static str> {
         tls_values: [0; TLS_SLOT_COUNT],
         tls_value_set: [false; TLS_SLOT_COUNT],
         primary_thread_id: 1,
+        std_handles: STD_HANDLES,
         heap_next: 0,
         heap_allocations: Vec::new(),
     });
@@ -502,6 +510,133 @@ fn get_current_thread_id(vm_id: u8) -> Result<(u32, u32), &'static str> {
     Ok((thread_id, return_address))
 }
 
+fn get_startup_info_a(vm_id: u8) -> Result<(u32, u32), &'static str> {
+    let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP)
+        .ok_or("guest ESP unavailable")? as u32;
+    let frame = guest_stack_range_mut(vm_id, esp, 8)?;
+    let return_address = u32::from_le_bytes(
+        frame[0..4]
+            .try_into()
+            .map_err(|_| "GetStartupInfoA return address")?,
+    );
+    let startup_info = u32::from_le_bytes(
+        frame[4..8]
+            .try_into()
+            .map_err(|_| "GetStartupInfoA argument")?,
+    );
+    if return_address != GET_STARTUP_INFO_A_RETURN {
+        return Err("unexpected GetStartupInfoA return address");
+    }
+    if startup_info == 0 {
+        return Err("GetStartupInfoA null pointer");
+    }
+    let output = guest_stack_range_mut(vm_id, startup_info, STARTUP_INFO_A_BYTES)?;
+    output.fill(0);
+    output[0..4].copy_from_slice(&(STARTUP_INFO_A_BYTES as u32).to_le_bytes());
+    if u32::from_le_bytes(output[0..4].try_into().map_err(|_| "GetStartupInfoA cb")?)
+        != STARTUP_INFO_A_BYTES as u32
+        || u32::from_le_bytes(output[0x2c..0x30].try_into().map_err(|_| "GetStartupInfoA flags")?) != 0
+        || u16::from_le_bytes(output[0x32..0x34].try_into().map_err(|_| "GetStartupInfoA reserved2 size")?) != 0
+        || u32::from_le_bytes(output[0x34..0x38].try_into().map_err(|_| "GetStartupInfoA reserved2 pointer")?) != 0
+    {
+        return Err("GetStartupInfoA structure validation");
+    }
+    Ok((startup_info, return_address))
+}
+
+fn get_std_handle(vm_id: u8, call: u32) -> Result<(u32, u32, u32), &'static str> {
+    let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP)
+        .ok_or("guest ESP unavailable")? as u32;
+    let frame = guest_stack_range_mut(vm_id, esp, 8)?;
+    let return_address = u32::from_le_bytes(
+        frame[0..4]
+            .try_into()
+            .map_err(|_| "GetStdHandle return address")?,
+    );
+    let which = u32::from_le_bytes(
+        frame[4..8]
+            .try_into()
+            .map_err(|_| "GetStdHandle argument")?,
+    );
+    let stream = match call {
+        14 => 0,
+        16 => 1,
+        18 => 2,
+        _ => return Err("unexpected GetStdHandle sequence"),
+    };
+    let expected_which = 0xFFFF_FFF6u32
+        .checked_add(u32::try_from(stream).map_err(|_| "GetStdHandle stream")?)
+        .ok_or("GetStdHandle argument overflow")?;
+    if return_address != GET_STD_HANDLE_RETURN || which != expected_which {
+        return Err("unexpected GetStdHandle frame");
+    }
+    let state = LAUNCHERS
+        .get(usize::from(vm_id))
+        .ok_or("unsupported wc3 launcher VM id")?
+        .lock();
+    let handle = state
+        .as_ref()
+        .ok_or("wc3 launcher state unavailable")?
+        .std_handles[stream];
+    if handle == 0 || handle == u32::MAX {
+        return Err("invalid WC3 standard handle");
+    }
+    Ok((which, handle, return_address))
+}
+
+fn get_file_type(vm_id: u8, call: u32) -> Result<(u32, u32, u32), &'static str> {
+    let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP)
+        .ok_or("guest ESP unavailable")? as u32;
+    let frame = guest_stack_range_mut(vm_id, esp, 8)?;
+    let return_address = u32::from_le_bytes(
+        frame[0..4]
+            .try_into()
+            .map_err(|_| "GetFileType return address")?,
+    );
+    let handle = u32::from_le_bytes(
+        frame[4..8]
+            .try_into()
+            .map_err(|_| "GetFileType argument")?,
+    );
+    let stream = match call {
+        15 => 0,
+        17 => 1,
+        19 => 2,
+        _ => return Err("unexpected GetFileType sequence"),
+    };
+    let expected_handle = LAUNCHERS
+        .get(usize::from(vm_id))
+        .ok_or("unsupported wc3 launcher VM id")?
+        .lock()
+        .as_ref()
+        .ok_or("wc3 launcher state unavailable")?
+        .std_handles[stream];
+    if return_address != GET_FILE_TYPE_RETURN || handle != expected_handle {
+        return Err("unexpected GetFileType frame");
+    }
+    Ok((handle, 2, return_address))
+}
+
+fn set_handle_count(vm_id: u8) -> Result<(u32, u32), &'static str> {
+    let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP)
+        .ok_or("guest ESP unavailable")? as u32;
+    let frame = guest_stack_range_mut(vm_id, esp, 8)?;
+    let return_address = u32::from_le_bytes(
+        frame[0..4]
+            .try_into()
+            .map_err(|_| "SetHandleCount return address")?,
+    );
+    let count = u32::from_le_bytes(
+        frame[4..8]
+            .try_into()
+            .map_err(|_| "SetHandleCount argument")?,
+    );
+    if return_address != SET_HANDLE_COUNT_RETURN || count != 32 {
+        return Err("unexpected SetHandleCount frame");
+    }
+    Ok((count, return_address))
+}
+
 pub(crate) fn is_initialized_critical_section(vm_id: u8, guest_address: u32) -> bool {
     LAUNCHERS
         .get(usize::from(vm_id))
@@ -736,9 +871,107 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
                 DispatchOutcome::Stop
             }
         }
-    } else if call == 13 {
+    } else if call == 13 && imports::is_get_startup_info_a(import) {
+        match get_startup_info_a(vm_id) {
+            Ok((startup_info, return_address)) => {
+                super::trace::info(format_args!(
+                    "GetStartupInfoA arg=0x{:08X} bytes=0x44 ret=0x{:08X}",
+                    startup_info, return_address
+                ));
+                super::trace::info(format_args!(
+                    "return #13 KERNEL32.dll!GetStartupInfoA cb=0x44 flags=0 reserved2=0"
+                ));
+                DispatchOutcome::Resume
+            }
+            Err(reason) => {
+                super::trace::fail(format_args!(
+                    "gate-1k failed vm={} phase=GetStartupInfoA reason={}",
+                    vm_id, reason
+                ));
+                DispatchOutcome::Stop
+            }
+        }
+    } else if matches!(call, 14 | 16 | 18) && imports::is_get_std_handle(import) {
+        match get_std_handle(vm_id, call) {
+            Ok((which, handle, return_address)) => {
+                let mut registers = crate::hv::vmx::guest_registers();
+                registers.rax = u64::from(handle);
+                crate::hv::vmx::set_guest_registers(registers);
+                super::trace::info(format_args!(
+                    "GetStdHandle which={} handle=0x{:08X} ret=0x{:08X}",
+                    which as i32, handle, return_address
+                ));
+                super::trace::info(format_args!(
+                    "return #{} KERNEL32.dll!GetStdHandle handle=0x{:08X}",
+                    call, handle
+                ));
+                DispatchOutcome::Resume
+            }
+            Err(reason) => {
+                super::trace::fail(format_args!(
+                    "gate-1l failed vm={} phase=GetStdHandle reason={}",
+                    vm_id, reason
+                ));
+                DispatchOutcome::Stop
+            }
+        }
+    } else if matches!(call, 15 | 17 | 19) && imports::is_get_file_type(import) {
+        match get_file_type(vm_id, call) {
+            Ok((handle, file_type, return_address)) => {
+                let mut registers = crate::hv::vmx::guest_registers();
+                registers.rax = u64::from(file_type);
+                crate::hv::vmx::set_guest_registers(registers);
+                super::trace::info(format_args!(
+                    "GetFileType handle=0x{:08X} type={} ret=0x{:08X}",
+                    handle, file_type, return_address
+                ));
+                super::trace::info(format_args!(
+                    "return #{} KERNEL32.dll!GetFileType type={}",
+                    call, file_type
+                ));
+                DispatchOutcome::Resume
+            }
+            Err(reason) => {
+                super::trace::fail(format_args!(
+                    "gate-1l failed vm={} phase=GetFileType reason={}",
+                    vm_id, reason
+                ));
+                DispatchOutcome::Stop
+            }
+        }
+    } else if call == 20 && imports::is_set_handle_count(import) {
+        match set_handle_count(vm_id) {
+            Ok((count, return_address)) => {
+                let mut registers = crate::hv::vmx::guest_registers();
+                registers.rax = u64::from(count);
+                crate::hv::vmx::set_guest_registers(registers);
+                super::trace::info(format_args!(
+                    "SetHandleCount count={} ret=0x{:08X}",
+                    count, return_address
+                ));
+                super::trace::info(format_args!(
+                    "return #20 KERNEL32.dll!SetHandleCount eax={}",
+                    count
+                ));
+                DispatchOutcome::Resume
+            }
+            Err(reason) => {
+                super::trace::fail(format_args!(
+                    "gate-1l failed vm={} phase=SetHandleCount reason={}",
+                    vm_id, reason
+                ));
+                DispatchOutcome::Stop
+            }
+        }
+    } else if call == 21 {
         super::trace::info(format_args!(
-            "gate-1j complete vm={} next-import={}!{}",
+            "gate-1l complete vm={} next-import={}!{}",
+            vm_id, import.module, import.symbol
+        ));
+        DispatchOutcome::Stop
+    } else if call == 14 {
+        super::trace::info(format_args!(
+            "gate-1k complete vm={} next-import={}!{}",
             vm_id, import.module, import.symbol
         ));
         DispatchOutcome::Stop

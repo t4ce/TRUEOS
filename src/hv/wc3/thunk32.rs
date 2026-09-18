@@ -12,6 +12,10 @@ pub(crate) enum Kind {
     HeapAlloc,
     TlsSetValue,
     GetCurrentThreadId,
+    GetStartupInfoA,
+    GetStdHandle,
+    GetFileType,
+    SetHandleCount,
 }
 
 pub(crate) fn write(import_id: u32, kind: Kind, output: &mut [u8]) -> Result<(), &'static str> {
@@ -58,6 +62,16 @@ pub(crate) fn write(import_id: u32, kind: Kind, output: &mut [u8]) -> Result<(),
             output[10] = 0x00;
         }
         Kind::GetCurrentThreadId => output[8] = 0xC3,
+        Kind::GetStartupInfoA => {
+            output[8] = 0xC2;
+            output[9] = 0x04;
+            output[10] = 0x00;
+        }
+        Kind::GetStdHandle | Kind::GetFileType | Kind::SetHandleCount => {
+            output[8] = 0xC2;
+            output[9] = 0x04;
+            output[10] = 0x00;
+        }
         Kind::Stop => {
             output[8] = 0x0F;
             output[9] = 0x0B;
