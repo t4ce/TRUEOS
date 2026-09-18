@@ -497,6 +497,8 @@ pub enum VmBootMode {
     Full,
     #[cfg(feature = "wc3")]
     Wc3Probe,
+    #[cfg(feature = "wc3")]
+    Wc3Launcher,
 }
 
 #[derive(Copy, Clone)]
@@ -1537,10 +1539,10 @@ fn guest_fs_base_for_boot_mode(boot_mode: VmBootMode) -> u64 {
     }
 }
 
-fn boot_mode_is_wc3_probe(boot_mode: VmBootMode) -> bool {
+fn boot_mode_is_wc3_guest(boot_mode: VmBootMode) -> bool {
     #[cfg(feature = "wc3")]
     {
-        boot_mode == VmBootMode::Wc3Probe
+        matches!(boot_mode, VmBootMode::Wc3Probe | VmBootMode::Wc3Launcher)
     }
     #[cfg(not(feature = "wc3"))]
     {
@@ -2005,6 +2007,16 @@ pub fn start(vm_id: u8, spawner: &Spawner, stack_mb: Option<usize>) -> Result<()
 pub fn start_wc3_launcher_test(vm_id: u8, spawner: &Spawner) -> Result<(), StartError> {
     let _ = spawner;
     start_with_mode(vm_id, VmBootMode::Wc3Probe, None, None, false)
+}
+
+#[cfg(feature = "wc3")]
+#[allow(
+    dead_code,
+    reason = "private launcher entry; the external WC3 package supplies its artifact"
+)]
+pub fn start_wc3_launcher(vm_id: u8, spawner: &Spawner) -> Result<(), StartError> {
+    let _ = spawner;
+    start_with_mode(vm_id, VmBootMode::Wc3Launcher, None, None, false)
 }
 
 pub fn start_blueprint_app_vm(
@@ -5928,13 +5940,23 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
         }
         #[cfg(feature = "wc3")]
         VmBootMode::Wc3Probe => {
-            hvlogf(format_args!(
+            crate::log_important!(target: "hv";
                 "wc3: gate-0 VMX launch vm={} entry=0x{:08X} stack_top=0x{:08X} fs_base=0x{:08X}",
                 vm_id,
                 guest_entry_for_boot_mode(boot_mode),
                 guest_stack_top_for_vm(vm_id),
                 guest_fs_base_for_boot_mode(boot_mode)
-            ));
+            );
+        }
+        #[cfg(feature = "wc3")]
+        VmBootMode::Wc3Launcher => {
+            crate::log_important!(target: "hv";
+                "wc3: launcher VMX launch vm={} entry=0x{:08X} stack_top=0x{:08X} fs_base=0x{:08X}",
+                vm_id,
+                guest_entry_for_boot_mode(boot_mode),
+                guest_stack_top_for_vm(vm_id),
+                guest_fs_base_for_boot_mode(boot_mode)
+            );
         }
     }
     if let Some(pending) = pending_blueprint
@@ -7229,13 +7251,13 @@ fn setup_vmcs_for_launch(
             vmwrite(VMCS_GUEST_PENDING_DBG, 0)?;
             vmwrite(VMCS_GUEST_VMCS_PREEMPT_TIMER, 0)?;
 
-            let wc3_probe = boot_mode_is_wc3_probe(boot_mode);
-            let cs = if wc3_probe { 0x08 } else { host_cs };
-            let ss = if wc3_probe { 0x10 } else { host_ss };
-            let ds = if wc3_probe { 0x10 } else { host_ds };
-            let es = if wc3_probe { 0x10 } else { host_es };
-            let fs = if wc3_probe { 0x18 } else { host_fs };
-            let gs = if wc3_probe { 0 } else { host_gs };
+            let wc3_guest = boot_mode_is_wc3_guest(boot_mode);
+            let cs = if wc3_guest { 0x08 } else { host_cs };
+            let ss = if wc3_guest { 0x10 } else { host_ss };
+            let ds = if wc3_guest { 0x10 } else { host_ds };
+            let es = if wc3_guest { 0x10 } else { host_es };
+            let fs = if wc3_guest { 0x18 } else { host_fs };
+            let gs = if wc3_guest { 0 } else { host_gs };
             let tr = tr_sel as u64;
             vmwrite(VMCS_GUEST_CS_SELECTOR, cs)?;
             vmwrite(VMCS_GUEST_SS_SELECTOR, ss)?;
@@ -7268,11 +7290,11 @@ fn setup_vmcs_for_launch(
             vmwrite(VMCS_GUEST_GDTR_BASE, gdtr.base.as_u64())?;
             vmwrite(VMCS_GUEST_IDTR_BASE, idtr.base.as_u64())?;
 
-            vmwrite(VMCS_GUEST_CS_AR, if wc3_probe { 0xC09B } else { 0xA09B })?;
+            vmwrite(VMCS_GUEST_CS_AR, if wc3_guest { 0xC09B } else { 0xA09B })?;
             vmwrite(VMCS_GUEST_SS_AR, 0xC093)?;
             vmwrite(VMCS_GUEST_DS_AR, 0xC093)?;
             vmwrite(VMCS_GUEST_ES_AR, 0xC093)?;
-            vmwrite(VMCS_GUEST_FS_AR, if wc3_probe { 0xC093 } else { 0x10000 })?;
+            vmwrite(VMCS_GUEST_FS_AR, if wc3_guest { 0xC093 } else { 0x10000 })?;
             vmwrite(VMCS_GUEST_GS_AR, 0x10000)?;
             vmwrite(VMCS_GUEST_TR_AR, 0x008B)?;
             vmwrite(VMCS_GUEST_LDTR_AR, 0x10000)?;
@@ -7429,33 +7451,33 @@ fn setup_vmcs_for_launch(
     vmwrite(VMCS_GUEST_PENDING_DBG, 0)?;
     vmwrite(VMCS_GUEST_VMCS_PREEMPT_TIMER, 0)?;
 
-    let wc3_probe = boot_mode_is_wc3_probe(boot_mode);
-    let cs = if wc3_probe {
+    let wc3_guest = boot_mode_is_wc3_guest(boot_mode);
+    let cs = if wc3_guest {
         0x08
     } else {
         CS::get_reg().0 as u64
     };
-    let ss = if wc3_probe {
+    let ss = if wc3_guest {
         0x10
     } else {
         SS::get_reg().0 as u64
     };
-    let ds = if wc3_probe {
+    let ds = if wc3_guest {
         0x10
     } else {
         DS::get_reg().0 as u64
     };
-    let es = if wc3_probe {
+    let es = if wc3_guest {
         0x10
     } else {
         ES::get_reg().0 as u64
     };
-    let fs = if wc3_probe {
+    let fs = if wc3_guest {
         0x18
     } else {
         FS::get_reg().0 as u64
     };
-    let gs = if wc3_probe { 0 } else { GS::get_reg().0 as u64 };
+    let gs = if wc3_guest { 0 } else { GS::get_reg().0 as u64 };
     let tr = tr_sel as u64;
     vmwrite(VMCS_GUEST_CS_SELECTOR, cs)?;
     vmwrite(VMCS_GUEST_SS_SELECTOR, ss)?;
@@ -7488,7 +7510,7 @@ fn setup_vmcs_for_launch(
     vmwrite(VMCS_GUEST_GDTR_BASE, gdtr.base.as_u64())?;
     vmwrite(VMCS_GUEST_IDTR_BASE, idtr.base.as_u64())?;
 
-    vmwrite(VMCS_GUEST_CS_AR, if wc3_probe { 0xC09B } else { 0xA09B })?;
+    vmwrite(VMCS_GUEST_CS_AR, if wc3_guest { 0xC09B } else { 0xA09B })?;
     vmwrite(VMCS_GUEST_SS_AR, if ss == 0 { 0x10000 } else { 0xC093 })?;
     vmwrite(VMCS_GUEST_DS_AR, if ds == 0 { 0x10000 } else { 0xC093 })?;
     vmwrite(VMCS_GUEST_ES_AR, if es == 0 { 0x10000 } else { 0xC093 })?;

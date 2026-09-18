@@ -78,7 +78,7 @@ test = false
 bench = false
 
 [features]
-default = ["trueos_lumen", "trueos_h264_encode_stream", "trueos_task_profile"]
+default = ["trueos_lumen", "trueos_h264_encode_stream", "trueos_task_profile", "wc3"]
 trueos_lumen = []
 trueos_h264_encode_stream = []
 trueos_h264_encode_probe = ["trueos_h264_encode_stream"]

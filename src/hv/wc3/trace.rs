@@ -1,7 +1,7 @@
 use core::fmt;
 
 pub(super) fn info(args: fmt::Arguments<'_>) {
-    super::super::hvlogf(format_args!("wc3: {args}"));
+    crate::log_important!(target: "hv"; "wc3: {args}");
 }
 
 pub(super) fn fail(args: fmt::Arguments<'_>) {

@@ -1452,6 +1452,10 @@ pub fn build_guest_cr3_for_vm_with_mode(
                 ));
                 (probe.code_va, probe.bytes as u64)
             }
+            #[cfg(feature = "wc3")]
+            crate::hv::VmBootMode::Wc3Launcher => {
+                return Err("wc3 launcher memory mapping is not prepared");
+            }
         };
 
         hvlogf(format_args!(
