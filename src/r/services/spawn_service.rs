@@ -611,8 +611,7 @@ fn spawn_hid_udp_srv(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn microfont_log_gate() -> bool {
-    super::microfont_log_service::enabled()
-        && crate::workers::last_ap_service_worker().is_some()
+    super::microfont_log_service::enabled() && crate::workers::last_ap_service_worker().is_some()
 }
 
 fn spawn_microfont_log(_spawner: Spawner) -> SpawnAttempt {
@@ -1412,7 +1411,11 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
     // Only the retained surface and exact LastAP executor are required.
     // In particular this has no NET, filesystem, GuC or UI4-ready dependency.
     TaskSpec::enabled_gated(
-        "microfont-log", 0, microfont_log_gate, &MICROFONT_LOG_STARTED, spawn_microfont_log,
+        "microfont-log",
+        0,
+        microfont_log_gate,
+        &MICROFONT_LOG_STARTED,
+        spawn_microfont_log,
     ),
     TaskSpec::enabled("job-runner", 0, &JOB_RUNNER_STARTED, spawn_job_runner),
     TaskSpec::enabled(

@@ -136,7 +136,11 @@ pub(crate) fn ensure_font_face_available(font: GpuFontFace) -> Result<(), &'stat
         Ok(false) => Err("font-not-registered"),
         Err(_) => Err("font-warm-failed"),
     };
-    crate::log_font_warm_diag!("phase=raw-face-return face={} result={:?}\n", font.registry_name(), result);
+    crate::log_font_warm_diag!(
+        "phase=raw-face-return face={} result={:?}\n",
+        font.registry_name(),
+        result
+    );
     result
 }
 
@@ -4371,14 +4375,21 @@ fn create_gpu_font_coverage_mask_from_prepared(
         crate::log_font_warm_diag!("phase=coverage-request runs={}\n", runs.len());
         let mut retirement =
             crate::intel::gpgpu::font_outline_coverage_runs_r8(&storage, runs.as_slice());
-        crate::log_font_warm_diag!("phase=coverage-return result={:?} runs={}\n", retirement, runs.len());
+        crate::log_font_warm_diag!(
+            "phase=coverage-return result={:?} runs={}\n",
+            retirement,
+            runs.len()
+        );
         if retirement == crate::intel::gpgpu::GpgpuDispatchRetirement::NotSubmitted
             && runs.len() > 1
         {
             // Preserve the generic large-scene behavior if one packed chunk
             // exceeds the fixed 4 MiB ops window. No hardware submission was
             // crossed, so falling back to the proven one-run path is safe.
-            crate::log_font_warm_diag!("phase=coverage-single-run-fallback runs={} cause=NotSubmitted\n", runs.len());
+            crate::log_font_warm_diag!(
+                "phase=coverage-single-run-fallback runs={} cause=NotSubmitted\n",
+                runs.len()
+            );
             for run in &runs {
                 retirement = crate::intel::gpgpu::font_outline_coverage_r8(
                     &storage,

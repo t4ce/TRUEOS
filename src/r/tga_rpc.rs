@@ -503,7 +503,14 @@ pub async fn heartbeat_task() {
                     completed = completed.saturating_add(1);
                     if completed % 120 == 0 {
                         if let Ok(camera) = crate::tga::camera::status() {
-                            crate::log_important!("cam: receiver flags=0x{:x} input={}x{} frames={} edid_reads={}\n",camera.flags,camera.width,camera.height,camera.frames,camera.edid_reads);
+                            crate::log_important!(
+                                "cam: receiver flags=0x{:x} input={}x{} frames={} edid_reads={}\n",
+                                camera.flags,
+                                camera.width,
+                                camera.height,
+                                camera.frames,
+                                camera.edid_reads
+                            );
                         }
 
                         crate::log_important!(

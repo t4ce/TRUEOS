@@ -4,8 +4,8 @@
 //! heartbeat. Restored from the last pre-removal revision, 1cac3467e^. The firmware/toolchain/model experiment
 //! lives outside this repository.
 
-pub(crate) mod protocol;
 pub(crate) mod camera;
+pub(crate) mod protocol;
 
 use atomic_waker::AtomicWaker;
 use core::future::poll_fn;

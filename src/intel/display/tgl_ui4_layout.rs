@@ -29,7 +29,11 @@ pub(super) const fn overlay_gpu(plane_slot: usize, index: usize) -> Option<u64> 
     // Slots 0..2 hold primary + its two swap surfaces. Skip slot 4, the
     // still-retained E0000000 native-panel probe, rather than remapping it.
     let packed_slot = 3 + (plane_slot as u64 - 1) * 2 + index as u64;
-    let slot = if packed_slot >= 4 { packed_slot + 1 } else { packed_slot };
+    let slot = if packed_slot >= 4 {
+        packed_slot + 1
+    } else {
+        packed_slot
+    };
     Some(GGTT_BASE + slot * SURFACE_SLOT_BYTES)
 }
 
@@ -68,7 +72,11 @@ mod tests {
 
     #[test]
     fn all_scanout_reservations_are_disjoint_and_leave_probe_intact() {
-        let mut addresses = vec![primary_gpu(), primary_swap_gpu(0).unwrap(), primary_swap_gpu(1).unwrap()];
+        let mut addresses = vec![
+            primary_gpu(),
+            primary_swap_gpu(0).unwrap(),
+            primary_swap_gpu(1).unwrap(),
+        ];
         for plane in 1..=4 {
             for index in 0..2 {
                 addresses.push(overlay_gpu(plane, index).unwrap());

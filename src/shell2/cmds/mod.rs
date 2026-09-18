@@ -67,9 +67,9 @@ pub(crate) mod ttstt;
 pub(crate) mod update;
 pub(crate) mod vgpu;
 pub(crate) mod vid;
-pub(crate) mod win;
 #[cfg(feature = "wc3")]
 pub(crate) mod wc3;
+pub(crate) mod win;
 pub(crate) mod xhci;
 
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]

@@ -13,13 +13,12 @@ use spin::Once;
 use super::display::{
     PIPE_A_SRC, PIPE_FRMCOUNT_A, PIPE_SCALER_0_A_CTRL, PIPE_SCALER_1_A_CTRL,
     PIPE_SCALER_BINDING_MASK, PIPE_SCALER_ENABLE, PIPE_SCALER_WIN_POS_FROM_CTRL,
-    PIPE_SCALER_WIN_SIZE_FROM_CTRL, PIPECONF_A, PIPECONF_STATE,
-    PLANE_COLOR_PLANE_GAMMA_DISABLE, PLANE_CTL_ARB_SLOTS_4BPP, PLANE_CTL_ENABLE,
-    PLANE_CTL_FORMAT_XRGB_8888, TRANS_DDI_FUNC_CTL_A, TRANS_HTOTAL_A, TRANS_VTOTAL_A,
-    UNI_PLANE_AUX_DIST_OFF, UNI_PLANE_AUX_OFFSET_OFF, UNI_PLANE_BASE,
-    UNI_PLANE_COLOR_CTL_OFF, UNI_PLANE_CUS_CTL_OFF, UNI_PLANE_KEYMSK_OFF,
-    UNI_PLANE_OFFSET_OFF, UNI_PLANE_POS_OFF, UNI_PLANE_SIZE_OFF,
-    UNI_PLANE_STRIDE_OFF, UNI_PLANE_SURF_OFF, UNI_PLANE_SURFLIVE_OFF,
+    PIPE_SCALER_WIN_SIZE_FROM_CTRL, PIPECONF_A, PIPECONF_STATE, PLANE_COLOR_PLANE_GAMMA_DISABLE,
+    PLANE_CTL_ARB_SLOTS_4BPP, PLANE_CTL_ENABLE, PLANE_CTL_FORMAT_XRGB_8888, TRANS_DDI_FUNC_CTL_A,
+    TRANS_HTOTAL_A, TRANS_VTOTAL_A, UNI_PLANE_AUX_DIST_OFF, UNI_PLANE_AUX_OFFSET_OFF,
+    UNI_PLANE_BASE, UNI_PLANE_COLOR_CTL_OFF, UNI_PLANE_CUS_CTL_OFF, UNI_PLANE_KEYMSK_OFF,
+    UNI_PLANE_OFFSET_OFF, UNI_PLANE_POS_OFF, UNI_PLANE_SIZE_OFF, UNI_PLANE_STRIDE_OFF,
+    UNI_PLANE_SURF_OFF, UNI_PLANE_SURFLIVE_OFF,
 };
 use super::{Dev, mmio_read, mmio_write};
 
@@ -42,8 +41,7 @@ const GGTT_MMIO_END: usize = 0x0100_0000;
 const POLL_ITERS: usize = 2_000_000;
 const PIPE_SOURCE: u32 = ((WIDTH - 1) << 16) | (HEIGHT - 1);
 const PLANE_SIZE: u32 = ((HEIGHT - 1) << 16) | (WIDTH - 1);
-const PRIMARY_CTL: u32 =
-    PLANE_CTL_ENABLE | PLANE_CTL_ARB_SLOTS_4BPP | PLANE_CTL_FORMAT_XRGB_8888;
+const PRIMARY_CTL: u32 = PLANE_CTL_ENABLE | PLANE_CTL_ARB_SLOTS_4BPP | PLANE_CTL_FORMAT_XRGB_8888;
 
 const _: () = {
     assert!(PITCH_BYTES % 64 == 0);
@@ -102,8 +100,7 @@ pub(crate) fn spirit_resealed() -> bool {
 /// Select the native surface reservations only for the successfully adopted
 /// physical panel. This is not a GuC, RCS, or UI4 execution-success flag.
 pub(crate) fn ui4_handoff_active() -> bool {
-    SCANOUT_LATCHED.load(Ordering::Acquire)
-        && super::claimed_device().is_some_and(is_target)
+    SCANOUT_LATCHED.load(Ordering::Acquire) && super::claimed_device().is_some_and(is_target)
 }
 
 fn wait_frame(dev: Dev) -> bool {
@@ -151,8 +148,8 @@ fn prepare_frame(dev: Dev) -> Option<Frame> {
             // Outer border proves all four native edges; the inner cyan box
             // marks the old 2560x1440 extent. No font/GPU/USB/NIC is required.
             let border = x < 16 || y < 16 || x >= WIDTH as usize - 16 || y >= HEIGHT as usize - 16;
-            let old_extent = (x < 2560 && (1436..1440).contains(&y))
-                || (y < 1440 && (2556..2560).contains(&x));
+            let old_extent =
+                (x < 2560 && (1436..1440).contains(&y)) || (y < 1440 && (2556..2560).contains(&x));
             pixels[y * WIDTH as usize + x] = if border {
                 0x00FF_FFFF
             } else if old_extent {
@@ -174,7 +171,10 @@ fn prepare_frame(dev: Dev) -> Option<Frame> {
         return None;
     }
     super::ggtt_invalidate(dev);
-    Some(Frame { phys, virt: virt as usize })
+    Some(Frame {
+        phys,
+        virt: virt as usize,
+    })
 }
 
 /// Native Pipe A setup followed by the ordinary UI4 bootstrap on success.
@@ -206,7 +206,11 @@ pub(crate) fn init_once(dev: Dev) -> bool {
     {
         crate::log!(
             "intel/tgl-native-panel: skipped reason=firmware-not-native-active-pipe-a pipeconf=0x{:08X} ddi=0x{:08X} htotal=0x{:08X} vtotal=0x{:08X} source=0x{:08X} link_reprogrammed=0\n",
-            pipeconf, ddi, htotal, vtotal, source_before,
+            pipeconf,
+            ddi,
+            htotal,
+            vtotal,
+            source_before,
         );
         return false;
     }
@@ -227,7 +231,9 @@ pub(crate) fn init_once(dev: Dev) -> bool {
             // untouched old plane, retain the new allocation, and stop.
             mmio_write(dev, UNI_PLANE_BASE, ctl_before);
             mmio_write(dev, UNI_PLANE_BASE + UNI_PLANE_SURF_OFF, surf_before);
-            crate::log!("intel/tgl-native-panel: stopped reason=primary-disable-frame-timeout old-plane-rearmed=1 backing=retained\n");
+            crate::log!(
+                "intel/tgl-native-panel: stopped reason=primary-disable-frame-timeout old-plane-rearmed=1 backing=retained\n"
+            );
             return false;
         }
     }
@@ -266,9 +272,19 @@ pub(crate) fn init_once(dev: Dev) -> bool {
     SCANOUT_LATCHED.store(readback_ok, Ordering::Release);
     crate::log!(
         "intel/tgl-native-panel: source={}x{} source_before=0x{:08X} source_after=0x{:08X} pitch={} bytes={} gpu=0x{:X} phys=0x{:X} virt=0x{:X} surflive=0x{:08X} latched={} scaler_detached={} link_timing=preserved dbuf=preserved watermarks=preserved ui4_stack_ready=0 spirit_resealed={} proof=cpu-native-border-and-quadrants backing=retained\n",
-        WIDTH, HEIGHT, source_before, source_after, PITCH_BYTES, FRAME_BYTES,
-        SURFACE_GPU, frame.phys, frame.virt, live, readback_ok as u8,
-        scalers_detached as u8, SPIRIT_RESEALED as u8,
+        WIDTH,
+        HEIGHT,
+        source_before,
+        source_after,
+        PITCH_BYTES,
+        FRAME_BYTES,
+        SURFACE_GPU,
+        frame.phys,
+        frame.virt,
+        live,
+        readback_ok as u8,
+        scalers_detached as u8,
+        SPIRIT_RESEALED as u8,
     );
     if readback_ok {
         // Reuse the proven allocation for a transparent CPU log layer. This
@@ -277,8 +293,12 @@ pub(crate) fn init_once(dev: Dev) -> bool {
         let _ = unsafe {
             crate::r::services::microfont_log_service::install(
                 crate::r::services::microfont_log_service::Surface {
-                    phys: frame.phys, gpu: SURFACE_GPU, virt: frame.virt,
-                    byte_len: FRAME_BYTES, width: WIDTH, height: HEIGHT,
+                    phys: frame.phys,
+                    gpu: SURFACE_GPU,
+                    virt: frame.virt,
+                    byte_len: FRAME_BYTES,
+                    width: WIDTH,
+                    height: HEIGHT,
                     pitch_bytes: PITCH_BYTES,
                 },
             )

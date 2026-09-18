@@ -83,6 +83,10 @@ struct GuestTables {
     code_pt: GuestPage,
     #[cfg(feature = "wc3")]
     wc3_probe_pt: GuestPage,
+    #[cfg(feature = "wc3")]
+    wc3_launcher_low_pt: GuestPage,
+    #[cfg(feature = "wc3")]
+    wc3_launcher_image_pt: GuestPage,
 }
 
 static EPT_TABLES: StaticSlots<Option<usize>, { crate::allcaps::hv::VM_ID_LIMIT }> =
@@ -429,6 +433,37 @@ pub fn build_ept_identity_4g() -> Result<u64, &'static str> {
             probe.phys_start + PAGE_SIZE_4K as u64,
             PAGE_SIZE_4K as u64,
             "wc3-gate0-teb",
+        )?;
+    }
+
+    #[cfg(feature = "wc3")]
+    if let Some(launcher) = crate::hv::wc3::launcher_guest_mapping(current_vm_id_for_log()) {
+        map_ept_identity_span(
+            pdpt,
+            &mut next_pd,
+            &mut next_pt,
+            &mut leaf_2m,
+            launcher.phys_start,
+            0x44_000,
+            "wc3-gate1a-image",
+        )?;
+        map_ept_identity_span(
+            pdpt,
+            &mut next_pd,
+            &mut next_pt,
+            &mut leaf_2m,
+            launcher.phys_start + 0x44_000,
+            PAGE_SIZE_4K as u64,
+            "wc3-gate1a-thunks",
+        )?;
+        map_ept_identity_span(
+            pdpt,
+            &mut next_pd,
+            &mut next_pt,
+            &mut leaf_2m,
+            launcher.phys_start + 0x45_000,
+            PAGE_SIZE_4K as u64,
+            "wc3-gate1a-teb",
         )?;
     }
 
@@ -1297,6 +1332,11 @@ pub fn build_guest_cr3_for_vm_with_mode(
         let guest_code_pt = core::ptr::addr_of_mut!((*tables).code_pt.0);
         #[cfg(feature = "wc3")]
         let guest_wc3_probe_pt = core::ptr::addr_of_mut!((*tables).wc3_probe_pt.0);
+        #[cfg(feature = "wc3")]
+        let guest_wc3_launcher_low_pt = core::ptr::addr_of_mut!((*tables).wc3_launcher_low_pt.0);
+        #[cfg(feature = "wc3")]
+        let guest_wc3_launcher_image_pt =
+            core::ptr::addr_of_mut!((*tables).wc3_launcher_image_pt.0);
 
         zero_guest_page(guest_pml4);
         zero_guest_page(guest_low_pdpt);
@@ -1310,6 +1350,10 @@ pub fn build_guest_cr3_for_vm_with_mode(
         zero_guest_page(guest_code_pt);
         #[cfg(feature = "wc3")]
         zero_guest_page(guest_wc3_probe_pt);
+        #[cfg(feature = "wc3")]
+        zero_guest_page(guest_wc3_launcher_low_pt);
+        #[cfg(feature = "wc3")]
+        zero_guest_page(guest_wc3_launcher_image_pt);
         for i in 0..GUEST_HEAP_PD_COUNT {
             zero_guest_page(core::ptr::addr_of_mut!((*tables).heap_pds[i].0));
         }
@@ -1374,7 +1418,10 @@ pub fn build_guest_cr3_for_vm_with_mode(
         let code_base = page_align_down(guest_rip);
         let code_pt_base = page_align_down_2m(guest_rip);
         #[cfg(feature = "wc3")]
-        let wc3_probe = boot_mode == crate::hv::VmBootMode::Wc3Probe;
+        let wc3_probe = matches!(
+            boot_mode,
+            crate::hv::VmBootMode::Wc3Probe | crate::hv::VmBootMode::Wc3Launcher
+        );
         #[cfg(not(feature = "wc3"))]
         let wc3_probe = false;
         if !wc3_probe {
@@ -1454,7 +1501,30 @@ pub fn build_guest_cr3_for_vm_with_mode(
             }
             #[cfg(feature = "wc3")]
             crate::hv::VmBootMode::Wc3Launcher => {
-                return Err("wc3 launcher memory mapping is not prepared");
+                let launcher = crate::hv::wc3::launcher_guest_mapping(vm_id)
+                    .ok_or("wc3 launcher backing unavailable")?;
+                let low_pt_pa = host_va_to_pa(guest_wc3_launcher_low_pt as u64)
+                    .ok_or("wc3 launcher low pt pa")?;
+                let image_pt_pa = host_va_to_pa(guest_wc3_launcher_image_pt as u64)
+                    .ok_or("wc3 launcher image pt pa")?;
+                map_table_entry(guest_low_pd, pd_index(0x0020_0000), low_pt_pa);
+                map_table_entry(guest_low_pd, pd_index(0x0040_0000), image_pt_pa);
+                (*guest_wc3_launcher_low_pt)[pt_index(0x0020_1000)] =
+                    ((launcher.phys_start + 0x45_000) & 0x000F_FFFF_FFFF_F000)
+                        | PT_ENTRY_PRESENT
+                        | PT_ENTRY_WRITABLE
+                        | PT_ENTRY_NO_EXECUTE;
+                (*guest_wc3_launcher_low_pt)[pt_index(0x0030_0000)] =
+                    ((launcher.phys_start + 0x44_000) & 0x000F_FFFF_FFFF_F000) | PT_ENTRY_PRESENT;
+                for page in 0..0x44usize {
+                    (*guest_wc3_launcher_image_pt)[page] = ((launcher.phys_start
+                        + (page * PAGE_SIZE_4K) as u64)
+                        & 0x000F_FFFF_FFFF_F000)
+                        | PT_ENTRY_PRESENT
+                        | PT_ENTRY_WRITABLE;
+                }
+                crate::hv::wc3::log_launcher_armed(vm_id);
+                (0x0040_0000, 0x44_000)
             }
         };
 

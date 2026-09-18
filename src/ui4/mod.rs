@@ -131,11 +131,10 @@ pub(crate) use video_frame::{
 };
 
 pub(crate) use window_broker::{
-    MAX_WINDOW_TITLE_BYTES, set_window_state, set_window_title, window_state, window_title,
-    Ui4FrameEscapeKeyAction, WindowBrokerError, WindowCreate, WindowDockTarget, WindowId,
-    WindowInteraction, WindowOwner, WindowPlacement, WindowPlane, WindowSessionCloseRequest,
-    WindowSessionId, WindowSnapshot, WindowState, acknowledge_window_frame,
-    advance_window_close_transitions, advance_window_open_transitions,
+    MAX_WINDOW_TITLE_BYTES, Ui4FrameEscapeKeyAction, WindowBrokerError, WindowCreate,
+    WindowDockTarget, WindowId, WindowInteraction, WindowOwner, WindowPlacement, WindowPlane,
+    WindowSessionCloseRequest, WindowSessionId, WindowSnapshot, WindowState,
+    acknowledge_window_frame, advance_window_close_transitions, advance_window_open_transitions,
     application_windows_for_output_with_revision, begin_additional_window_session,
     begin_window_session, close_window, commit_window_frame_refresh,
     commit_window_frame_replacement, create_window, dock_window, finish_window_session,
@@ -143,11 +142,12 @@ pub(crate) use window_broker::{
     owner_has_first_presentation, publish_window_frame, publish_window_frames,
     replace_window_frame, restore_docked_window, retire_frame_when_released,
     set_window_escape_key_action, set_window_hit_testable, set_window_opacity,
-    set_window_placement, set_window_position, take_window_first_presentation,
-    ui4_window_broker_snapshot_service_task, visible_windows_for_output,
-    wait_for_window_composition_change, wait_for_window_first_presentation,
-    window_composition_revision, window_escape_key_action, window_frame_was_presented,
-    window_placement, window_resize_state, window_transitions_active,
+    set_window_placement, set_window_position, set_window_state, set_window_title,
+    take_window_first_presentation, ui4_window_broker_snapshot_service_task,
+    visible_windows_for_output, wait_for_window_composition_change,
+    wait_for_window_first_presentation, window_composition_revision, window_escape_key_action,
+    window_frame_was_presented, window_placement, window_resize_state, window_state, window_title,
+    window_transitions_active,
 };
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]

@@ -733,7 +733,9 @@ pub fn init_global_dispatch() {
         log_with_area_level(
             flags::LogArea::Boot,
             LogLevel::Important,
-            format_args!("log-profile=tgl-gpu-first-v1 gfx/gpgpu=Up(Info) render/boot/service=Up(Once) other=Up(Warn) screen=TCP-mirror\n"),
+            format_args!(
+                "log-profile=tgl-gpu-first-v1 gfx/gpgpu=Up(Info) render/boot/service=Up(Once) other=Up(Warn) screen=TCP-mirror\n"
+            ),
         );
     }
 }

@@ -232,6 +232,15 @@ fn dispatch_wc3_probe(
     super::cmds::wc3::try_parse(spawner, io, rest)
 }
 
+#[cfg(feature = "wc3")]
+fn dispatch_wc3_launcher(
+    spawner: &Spawner,
+    io: &'static dyn ShellBackend2,
+    rest: &str,
+) -> ParseOutcome {
+    super::cmds::wc3::try_parse_launcher(spawner, io, rest)
+}
+
 /// The authoritative Shell2 command registry. Its declaration order is also
 /// the order of command names in the right-aligned Shell2 titlebar section.
 const SHELL2_COMMAND_REGISTRY: &[BuiltinShell2CmdEntry] = &[
@@ -283,10 +292,17 @@ const SHELL2_COMMAND_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         tool_parameters_json: Some(TOOL_JSON_DISC),
     },
     BuiltinShell2CmdEntry {
-        name: "cam", mode: "cmd", color: Some(STATUS_BLUE_RGB), advertised: true,
+        name: "cam",
+        mode: "cmd",
+        color: Some(STATUS_BLUE_RGB),
+        advertised: true,
         handler: dispatch_cam,
-        tool_description: Some("Inspect the Tang HDMI receiver or save and open its first frozen 64x64 camera tile. cam status reports input; cam shot captures."),
-        tool_parameters_json: Some(r#"{"type":"object","properties":{"action":{"type":"string","enum":["status","shot"]}},"additionalProperties":false}"#),
+        tool_description: Some(
+            "Inspect the Tang HDMI receiver or save and open its first frozen 64x64 camera tile. cam status reports input; cam shot captures.",
+        ),
+        tool_parameters_json: Some(
+            r#"{"type":"object","properties":{"action":{"type":"string","enum":["status","shot"]}},"additionalProperties":false}"#,
+        ),
     },
     BuiltinShell2CmdEntry {
         name: "img",
@@ -515,6 +531,16 @@ const SHELL2_COMMAND_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         color: None,
         advertised: false,
         handler: dispatch_wc3_probe,
+        tool_description: None,
+        tool_parameters_json: None,
+    },
+    #[cfg(feature = "wc3")]
+    BuiltinShell2CmdEntry {
+        name: "wc3_launcher",
+        mode: "cmd",
+        color: None,
+        advertised: false,
+        handler: dispatch_wc3_launcher,
         tool_description: None,
         tool_parameters_json: None,
     },

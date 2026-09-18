@@ -2014,8 +2014,22 @@ pub fn start_wc3_launcher_test(vm_id: u8, spawner: &Spawner) -> Result<(), Start
     dead_code,
     reason = "private launcher entry; the external WC3 package supplies its artifact"
 )]
-pub fn start_wc3_launcher(vm_id: u8, spawner: &Spawner) -> Result<(), StartError> {
+pub fn start_wc3_launcher(
+    vm_id: u8,
+    spawner: &Spawner,
+    launcher_bytes: &[u8],
+) -> Result<(), StartError> {
     let _ = spawner;
+    let Some(vm) = vm_slot(vm_id) else {
+        return Err(StartError::UnsupportedVmId);
+    };
+    if vm.running.load(Ordering::Acquire)
+        || vm.starting.load(Ordering::Acquire)
+        || crate::r::blocking::guest_jobs_in_flight(vm_id) != 0
+    {
+        return Err(StartError::AlreadyRunning);
+    }
+    wc3::prepare_launcher(vm_id, launcher_bytes).map_err(|_| StartError::GuestMemoryUnavailable)?;
     start_with_mode(vm_id, VmBootMode::Wc3Launcher, None, None, false)
 }
 
@@ -5957,6 +5971,10 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
                 guest_stack_top_for_vm(vm_id),
                 guest_fs_base_for_boot_mode(boot_mode)
             );
+            crate::log_important!(target: "hv";
+                "wc3: launcher entered vm={} image_base=0x00400000 entry=0x00402144",
+                vm_id
+            );
         }
     }
     if let Some(pending) = pending_blueprint
@@ -6568,10 +6586,10 @@ async fn vmx_launch_once_with_ept_vpid(
                 let len = vmread(VMCS_VMEXIT_INSTRUCTION_LEN).ok_or("vmread instr len")?;
                 vmwrite(VMCS_GUEST_RIP, lr.guest_rip + len)?;
                 #[cfg(feature = "wc3")]
-                let mut outcome = if boot_mode_for_vm(vm_id) == VmBootMode::Wc3Probe {
-                    wc3::handle_vmcall(vm_id)
-                } else {
-                    crate::hv::vmcall::dispatch(vm_id)
+                let mut outcome = match boot_mode_for_vm(vm_id) {
+                    VmBootMode::Wc3Probe => wc3::handle_vmcall(vm_id),
+                    VmBootMode::Wc3Launcher => wc3::handle_launcher_vmcall(vm_id),
+                    _ => crate::hv::vmcall::dispatch(vm_id),
                 };
                 #[cfg(not(feature = "wc3"))]
                 let mut outcome = crate::hv::vmcall::dispatch(vm_id);

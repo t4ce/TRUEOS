@@ -1393,8 +1393,7 @@ pub(crate) fn map_display_scanout_ggtt(dev: Dev, phys: u64, len: usize, gpu: u64
 }
 
 pub(crate) fn gen12_integrated_pat_ready() -> bool {
-    GEN12_INTEGRATED_PAT_READY.load(Ordering::Acquire)
-        || crate::pci::experimental_tgl_9a49_active()
+    GEN12_INTEGRATED_PAT_READY.load(Ordering::Acquire) || crate::pci::experimental_tgl_9a49_active()
 }
 
 /// Remove a display-owned GGTT range after its plane has been proven idle.

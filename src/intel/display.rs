@@ -36,9 +36,11 @@ fn ui4_surface_slot_capacity(pipe: PipeInfo, legacy_capacity: u64) -> u64 {
 }
 
 const _: () = {
-    assert!(UI4_DIRECT_SCANOUT_GPU_BASE
-        + UI4_DIRECT_SCANOUT_PLANE_COUNT as u64 * UI4_DIRECT_SCANOUT_PLANE_STRIDE
-        <= tgl_ui4_layout::GGTT_BASE);
+    assert!(
+        UI4_DIRECT_SCANOUT_GPU_BASE
+            + UI4_DIRECT_SCANOUT_PLANE_COUNT as u64 * UI4_DIRECT_SCANOUT_PLANE_STRIDE
+            <= tgl_ui4_layout::GGTT_BASE
+    );
 };
 mod mirror_map_dp_engine;
 pub(crate) use self::mirror_map_dp_engine::{
@@ -2638,7 +2640,10 @@ fn queue_ui4_plane_surface_flip(
     reason: &str,
 ) -> PlaneSurfaceFlipQueueResult {
     if screenlog::owns_plane(0, crate::ui4::INTERACTION_OVERLAY_PLANE_SLOT)
-        && plane_base == PIPES[0].plane(crate::ui4::INTERACTION_OVERLAY_PLANE_SLOT).base()
+        && plane_base
+            == PIPES[0]
+                .plane(crate::ui4::INTERACTION_OVERLAY_PLANE_SLOT)
+                .base()
     {
         return PlaneSurfaceFlipQueueResult::Rejected;
     }
@@ -3452,14 +3457,30 @@ fn program_rgba8_plane_static_contract(
 /// owned by UI4 interaction. Bootstrap fixes the pixel format, blend mode and
 /// DBUF allocation. A direct-present transaction may still change geometry,
 /// constant plane alpha and PLANE_SURF, with SURFLIVE proving the new surface.
-fn microfont_log_boot_surface(pipe: PipeInfo, slot: usize, width: u32, height: u32) -> Option<OverlaySurface> {
-    if !screenlog::owns_plane(pipe.slot, slot) { return None; }
+fn microfont_log_boot_surface(
+    pipe: PipeInfo,
+    slot: usize,
+    width: u32,
+    height: u32,
+) -> Option<OverlaySurface> {
+    if !screenlog::owns_plane(pipe.slot, slot) {
+        return None;
+    }
     let s = screenlog::surface()?;
-    if s.width != width || s.height != height { return None; }
+    if s.width != width || s.height != height {
+        return None;
+    }
     Some(OverlaySurface {
-        width, height, pitch_bytes: s.pitch_bytes, byte_len: s.byte_len,
-        phys: s.phys, virt: s.virt as *mut u8, gpu: s.gpu,
-        pipe, plane_slot: slot, buffer_index: 0,
+        width,
+        height,
+        pitch_bytes: s.pitch_bytes,
+        byte_len: s.byte_len,
+        phys: s.phys,
+        virt: s.virt as *mut u8,
+        gpu: s.gpu,
+        pipe,
+        plane_slot: slot,
+        buffer_index: 0,
     })
 }
 
@@ -3488,9 +3509,10 @@ fn bootstrap_ui4_rgba8_plane_stack_once(dev: crate::intel::Dev, primary: Primary
     let pipe = primary.pipe;
     let mut overlay_surfaces = [None; UNIVERSAL_PLANE_SLOTS - 1];
     for slot in 1..UNIVERSAL_PLANE_SLOTS {
-        let Some(surface) =
-            microfont_log_boot_surface(pipe, slot, primary.width, primary.height)
-                .or_else(|| ensure_overlay_surface_for_pipe(dev, pipe, slot, primary.width, primary.height))
+        let Some(surface) = microfont_log_boot_surface(pipe, slot, primary.width, primary.height)
+            .or_else(|| {
+                ensure_overlay_surface_for_pipe(dev, pipe, slot, primary.width, primary.height)
+            })
         else {
             return fail("transparent-front-allocation");
         };
@@ -4590,7 +4612,9 @@ fn ensure_overlay_surface_for_pipe(
     height: u32,
 ) -> Option<OverlaySurface> {
     // The service front is not a UI4 pool allocation, even after it is full.
-    if screenlog::owns_plane(pipe.slot, plane_slot) { return None; }
+    if screenlog::owns_plane(pipe.slot, plane_slot) {
+        return None;
+    }
     let surface_pool = overlay_surface_pool(pipe, plane_slot)?;
     let (buffer_index, resize_guard, stale_back) = {
         let mut pool = surface_pool.lock();

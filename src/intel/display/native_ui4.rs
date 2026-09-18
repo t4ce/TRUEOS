@@ -27,8 +27,7 @@ const _: () = {
     // Preserve the CPU proof frame and every existing direct-scanout import.
     assert!(
         super::UI4_DIRECT_SCANOUT_GPU_BASE
-            + super::UI4_DIRECT_SCANOUT_PLANE_COUNT as u64
-                * super::UI4_DIRECT_SCANOUT_PLANE_STRIDE
+            + super::UI4_DIRECT_SCANOUT_PLANE_COUNT as u64 * super::UI4_DIRECT_SCANOUT_PLANE_STRIDE
             <= crate::intel::tgl_native_panel::SURFACE_GPU
     );
     assert!(
@@ -39,8 +38,7 @@ const _: () = {
     assert!(PRIMARY_GPU + PRIMARY_BYTES <= PRIMARY_SWAP_GPU);
     assert!(PRIMARY_SWAP_GPU + BUFFER_COUNT as u64 * PRIMARY_BYTES <= OVERLAY_GPU);
     assert!(
-        OVERLAY_GPU + OVERLAY_COUNT as u64 * BUFFER_COUNT as u64 * OVERLAY_BYTES
-            <= 0x1_0000_0000
+        OVERLAY_GPU + OVERLAY_COUNT as u64 * BUFFER_COUNT as u64 * OVERLAY_BYTES <= 0x1_0000_0000
     );
     // Only destinations/base use these aliases in the compositor's PPGTT.
     // Published UI-surface producers retain their addresses below this range.
@@ -89,11 +87,19 @@ pub(super) fn compose_gpu(slot: usize, index: usize) -> Option<u64> {
 }
 
 pub(super) fn primary_swap_capacity(pipe: PipeInfo) -> u64 {
-    if active(pipe) { PRIMARY_BYTES } else { super::PRIMARY_SWAP_GPU_STRIDE }
+    if active(pipe) {
+        PRIMARY_BYTES
+    } else {
+        super::PRIMARY_SWAP_GPU_STRIDE
+    }
 }
 
 pub(super) fn overlay_capacity(pipe: PipeInfo) -> u64 {
-    if active(pipe) { OVERLAY_BYTES } else { super::OVERLAY_SWAP_GPU_STRIDE }
+    if active(pipe) {
+        OVERLAY_BYTES
+    } else {
+        super::OVERLAY_SWAP_GPU_STRIDE
+    }
 }
 
 pub(super) fn compose_capacity(pipe: PipeInfo, slot: usize) -> u64 {
@@ -107,5 +113,9 @@ pub(super) fn compose_capacity(pipe: PipeInfo, slot: usize) -> u64 {
 }
 
 pub(super) fn base_gpu(pipe: PipeInfo, desktop_gpu: u64) -> u64 {
-    if active(pipe) { PRIMARY_SOURCE_GPU } else { desktop_gpu }
+    if active(pipe) {
+        PRIMARY_SOURCE_GPU
+    } else {
+        desktop_gpu
+    }
 }
