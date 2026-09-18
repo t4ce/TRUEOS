@@ -54,7 +54,7 @@ const GET_MODULE_FILE_NAME_A_RETURN: u32 = 0x0040_4545;
 const GET_MODULE_FILE_NAME_A_BUFFER: u32 = 0x0040_ABA8;
 const GET_MODULE_FILE_NAME_A_SIZE: u32 = 0x104;
 const GET_MODULE_HANDLE_A_RETURNS: [u32; 3] = [0x0040_221E, 0x0040_1A2B, 0x0040_1A84];
-const GET_DESKTOP_WINDOW_RETURN: u32 = 0x0040_1A4F;
+const GET_DESKTOP_WINDOW_RETURNS: [u32; 1] = [0x0040_1A4F];
 const GET_CLIENT_RECT_RETURN: u32 = 0x0040_1A56;
 const DESKTOP_HWND: u32 = 0x5743_3000;
 const MODULE_IMAGE_BASE: u32 = pe32::IMAGE_BASE;
@@ -2206,7 +2206,8 @@ fn register_class_a(vm_id: u8) -> Result<(u32, u32, String), &'static str> {
 
 fn get_desktop_window(vm_id: u8) -> Result<u32, &'static str> {
     let return_address = no_argument_return_frame(vm_id, "GetDesktopWindow return")?;
-    if return_address != GET_DESKTOP_WINDOW_RETURN {
+    super::trace::info(format_args!("GetDesktopWindow frame ret=0x{:08X}", return_address));
+    if !GET_DESKTOP_WINDOW_RETURNS.contains(&return_address) {
         return Err("unexpected GetDesktopWindow return address");
     }
     Ok(return_address)
