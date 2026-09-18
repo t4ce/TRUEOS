@@ -125,6 +125,9 @@ pub(crate) async fn autostart_task(spawner: Spawner) {
 async fn cold_start_blueprints(spawner: Spawner) {
     crate::r::readiness::wait_for(crate::r::readiness::TRUEOSFS_ROOT_MOUNTED).await;
 
+    #[cfg(feature = "wc3")]
+    crate::hv::schedule_wc3_launcher_autostart(&spawner);
+
     let config: ColdStartConfiguration = match serde_json::from_slice(COLD_START_BLUEPRINTS_JSON) {
         Ok(config) => config,
         Err(error) => {

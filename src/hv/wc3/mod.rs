@@ -16,7 +16,7 @@ pub(crate) use guest32::{guest_mapping, handle_vmcall, prepare_gate0};
 pub(crate) use launcher::{
     HEAP_VA, PROCESS_DATA_VA, guest_mapping as launcher_guest_mapping,
     handle_vmcall as handle_launcher_vmcall, prepare as prepare_launcher,
-    release as release_launcher,
+    release as release_launcher, schedule_autostart as schedule_launcher_autostart,
 };
 
 use super::VmBootMode;

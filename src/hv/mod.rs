@@ -2040,6 +2040,11 @@ pub fn start_wc3_launcher(
     start_with_mode(vm_id, VmBootMode::Wc3Launcher, None, None, false)
 }
 
+#[cfg(feature = "wc3")]
+pub(crate) fn schedule_wc3_launcher_autostart(spawner: &Spawner) {
+    wc3::schedule_launcher_autostart(spawner);
+}
+
 pub fn start_blueprint_app_vm(
     vm_id: u8,
     spawner: &Spawner,

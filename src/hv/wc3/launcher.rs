@@ -2,6 +2,8 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU32, Ordering};
 use sha2::{Digest, Sha256};
 use spin::Mutex;
+use trueos_executor::Spawner;
+use trueos_time::{Duration, Timer};
 
 use crate::{
     hv::{memory::PAGE_SIZE_4K, vmcall::DispatchOutcome},
@@ -64,6 +66,7 @@ const GET_ENVIRONMENT_STRINGS_A_RETURN: u32 = 0x0040_479E;
 const FREE_ENVIRONMENT_STRINGS_A_RETURN: u32 = 0x0040_488E;
 const ENVIRONMENT_BLOCK_VA: u32 = PROCESS_DATA_VA + 0x100;
 const COMMAND_LINE: &[u8] = b"\"Warcraft III.exe\"\0";
+const LAUNCHER_PATH: &str = "apps/common/Warcraft III/Warcraft III.exe";
 const ENTER_CRITICAL_SECTION_RETURN: u32 = 0x0040_231C;
 const ENTER_CRITICAL_SECTION_POINTER: u32 = 0x0021_0510;
 const LEAVE_CRITICAL_SECTION_RETURN: u32 = 0x0040_2332;
@@ -108,6 +111,40 @@ static LAUNCHERS: [Mutex<Option<LauncherState>>; crate::allcaps::hv::VM_ID_LIMIT
     [const { Mutex::new(None) }; crate::allcaps::hv::VM_ID_LIMIT];
 static CALLS: [AtomicU32; crate::allcaps::hv::VM_ID_LIMIT] =
     [const { AtomicU32::new(0) }; crate::allcaps::hv::VM_ID_LIMIT];
+static AUTOSTART_SCHEDULED: core::sync::atomic::AtomicBool =
+    core::sync::atomic::AtomicBool::new(false);
+
+pub(crate) fn schedule_autostart(spawner: &Spawner) {
+    if AUTOSTART_SCHEDULED
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+    {
+        if let Ok(token) = delayed_autostart(*spawner) {
+            spawner.spawn(token);
+        }
+    }
+}
+
+#[trueos_executor::task]
+async fn delayed_autostart(spawner: Spawner) {
+    Timer::after(Duration::from_secs(5)).await;
+    let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
+        crate::log!("wc3 autostart: no TRUEOSFS root\n");
+        return;
+    };
+    let Some(bytes) = crate::r::fs::trueosfs::file_out_async(disk, LAUNCHER_PATH)
+        .await
+        .ok()
+        .flatten()
+    else {
+        crate::log!("wc3 autostart: artifact not found\n");
+        return;
+    };
+    match crate::hv::start_wc3_launcher(0, &spawner, &bytes) {
+        Ok(()) => crate::log!("wc3 autostart: queued Gate-1A on vm0\n"),
+        Err(error) => crate::log!("wc3 autostart: start failed vm0 error={error:?}\n"),
+    }
+}
 
 pub(crate) fn prepare(vm_id: u8, bytes: &[u8]) -> Result<(), &'static str> {
     if Sha256::digest(bytes).as_slice() != EXPECTED_SHA256 {
