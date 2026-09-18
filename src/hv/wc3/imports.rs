@@ -35,6 +35,10 @@ pub(crate) fn patch(
             super::thunk32::Kind::TlsAlloc
         } else if is_heap_alloc(import) {
             super::thunk32::Kind::HeapAlloc
+        } else if is_tls_set_value(import) {
+            super::thunk32::Kind::TlsSetValue
+        } else if is_get_current_thread_id(import) {
+            super::thunk32::Kind::GetCurrentThreadId
         } else {
             super::thunk32::Kind::Stop
         };
@@ -110,6 +114,31 @@ pub(crate) fn find_heap_alloc(imports: &[LauncherImport]) -> bool {
 
 pub(crate) fn is_heap_alloc(import: &LauncherImport) -> bool {
     import.module.eq_ignore_ascii_case("KERNEL32.dll") && import.symbol == "HeapAlloc"
+}
+
+pub(crate) fn find_tls_set_value(imports: &[LauncherImport]) -> bool {
+    imports
+        .iter()
+        .filter(|import| is_tls_set_value(import))
+        .count()
+        == 1
+}
+
+pub(crate) fn is_tls_set_value(import: &LauncherImport) -> bool {
+    import.module.eq_ignore_ascii_case("KERNEL32.dll") && import.symbol == "TlsSetValue"
+}
+
+pub(crate) fn find_get_current_thread_id(imports: &[LauncherImport]) -> bool {
+    imports
+        .iter()
+        .filter(|import| is_get_current_thread_id(import))
+        .count()
+        == 1
+}
+
+pub(crate) fn is_get_current_thread_id(import: &LauncherImport) -> bool {
+    import.module.eq_ignore_ascii_case("KERNEL32.dll")
+        && import.symbol == "GetCurrentThreadId"
 }
 
 pub(crate) fn new_table() -> Vec<LauncherImport> {

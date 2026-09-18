@@ -10,6 +10,8 @@ pub(crate) enum Kind {
     InitializeCriticalSection,
     TlsAlloc,
     HeapAlloc,
+    TlsSetValue,
+    GetCurrentThreadId,
 }
 
 pub(crate) fn write(import_id: u32, kind: Kind, output: &mut [u8]) -> Result<(), &'static str> {
@@ -50,6 +52,12 @@ pub(crate) fn write(import_id: u32, kind: Kind, output: &mut [u8]) -> Result<(),
             output[9] = 0x0C;
             output[10] = 0x00;
         }
+        Kind::TlsSetValue => {
+            output[8] = 0xC2;
+            output[9] = 0x08;
+            output[10] = 0x00;
+        }
+        Kind::GetCurrentThreadId => output[8] = 0xC3,
         Kind::Stop => {
             output[8] = 0x0F;
             output[9] = 0x0B;

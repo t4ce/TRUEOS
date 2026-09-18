@@ -36,6 +36,14 @@ const TLS_SLOT_COUNT: usize = 64;
 const HEAP_ALLOC_RETURN: u32 = 0x0040_4132;
 const HEAP_ALLOC_FLAGS: u32 = 0x0000_0008;
 const HEAP_ALLOC_BYTES: u32 = 0x0000_0080;
+const HEAP_ALLOC_SECOND_RETURN: u32 = 0x0040_1FEC;
+const HEAP_ALLOC_SECOND_FLAGS: u32 = 0;
+const HEAP_ALLOC_SECOND_BYTES: u32 = 0x0000_0480;
+const TLS_SET_VALUE_RETURN: u32 = 0x0040_3EFC;
+const TLS_SET_VALUE_INDEX: u32 = 0;
+const TLS_SET_VALUE_VALUE: u32 = HEAP_VA;
+const GET_CURRENT_THREAD_ID_RETURN: u32 = 0x0040_3F0D;
+const GET_CURRENT_THREAD_ID_ESI: u32 = HEAP_VA;
 
 #[derive(Copy, Clone)]
 pub(crate) struct GuestMapping {
@@ -49,6 +57,9 @@ struct LauncherState {
     initialized_critical_sections: [u32; 4],
     initialized_critical_section_count: usize,
     tls_allocated: [bool; TLS_SLOT_COUNT],
+    tls_values: [u32; TLS_SLOT_COUNT],
+    tls_value_set: [bool; TLS_SLOT_COUNT],
+    primary_thread_id: u32,
     heap_next: usize,
     heap_allocations: Vec<HeapAllocation>,
 }
@@ -115,6 +126,9 @@ pub(crate) fn prepare(vm_id: u8, bytes: &[u8]) -> Result<(), &'static str> {
         initialized_critical_sections: [0; 4],
         initialized_critical_section_count: 0,
         tls_allocated: [false; TLS_SLOT_COUNT],
+        tls_values: [0; TLS_SLOT_COUNT],
+        tls_value_set: [false; TLS_SLOT_COUNT],
+        primary_thread_id: 1,
         heap_next: 0,
         heap_allocations: Vec::new(),
     });
@@ -363,12 +377,17 @@ fn launcher_heap_range_mut(
     })
 }
 
-fn heap_alloc(vm_id: u8) -> Result<(u32, u32, u32, u32, u32), &'static str> {
+fn heap_alloc(
+    vm_id: u8,
+    expected_return: u32,
+    expected_flags: u32,
+    expected_bytes: u32,
+) -> Result<(u32, u32, u32, u32, u32), &'static str> {
     let [return_address, heap_handle, flags, bytes] = heap_alloc_words(vm_id)?;
-    if return_address != HEAP_ALLOC_RETURN {
+    if return_address != expected_return {
         return Err("unexpected HeapAlloc return address");
     }
-    if flags != HEAP_ALLOC_FLAGS || bytes != HEAP_ALLOC_BYTES {
+    if flags != expected_flags || bytes != expected_bytes {
         return Err("unexpected HeapAlloc arguments");
     }
     let launcher = LAUNCHERS
@@ -400,7 +419,9 @@ fn heap_alloc(vm_id: u8) -> Result<(u32, u32, u32, u32, u32), &'static str> {
         .ok_or("HeapAlloc pointer overflow")?;
     drop(state);
     let output = launcher_heap_range_mut(vm_id, guest_ptr, usize::try_from(bytes).map_err(|_| "HeapAlloc size")?)?;
-    output.fill(0);
+    if flags & HEAP_ALLOC_FLAGS != 0 {
+        output.fill(0);
+    }
     let mut state = launcher.lock();
     let state = state.as_mut().ok_or("wc3 launcher state unavailable")?;
     state.heap_next = end;
@@ -410,6 +431,75 @@ fn heap_alloc(vm_id: u8) -> Result<(u32, u32, u32, u32, u32), &'static str> {
         flags,
     });
     Ok((guest_ptr, return_address, heap_handle, flags, bytes))
+}
+
+fn tls_set_value(vm_id: u8) -> Result<(u32, u32, u32), &'static str> {
+    let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP)
+        .ok_or("guest ESP unavailable")? as u32;
+    let frame = guest_stack_range_mut(vm_id, esp, 12)?;
+    let return_address = u32::from_le_bytes(
+        frame[0..4]
+            .try_into()
+            .map_err(|_| "TlsSetValue return address")?,
+    );
+    let index = u32::from_le_bytes(
+        frame[4..8]
+            .try_into()
+            .map_err(|_| "TlsSetValue index")?,
+    );
+    let value = u32::from_le_bytes(
+        frame[8..12]
+            .try_into()
+            .map_err(|_| "TlsSetValue value")?,
+    );
+    if return_address != TLS_SET_VALUE_RETURN {
+        return Err("unexpected TlsSetValue return address");
+    }
+    if index != TLS_SET_VALUE_INDEX || value != TLS_SET_VALUE_VALUE {
+        return Err("unexpected TlsSetValue arguments");
+    }
+    let slot = usize::try_from(index).map_err(|_| "TlsSetValue index range")?;
+    let launcher = LAUNCHERS
+        .get(usize::from(vm_id))
+        .ok_or("unsupported wc3 launcher VM id")?;
+    let mut state = launcher.lock();
+    let state = state.as_mut().ok_or("wc3 launcher state unavailable")?;
+    if !state.tls_allocated[slot] {
+        return Err("TlsSetValue index was not allocated");
+    }
+    state.tls_values[slot] = value;
+    state.tls_value_set[slot] = true;
+    Ok((index, value, return_address))
+}
+
+fn get_current_thread_id(vm_id: u8) -> Result<(u32, u32), &'static str> {
+    let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP)
+        .ok_or("guest ESP unavailable")? as u32;
+    let frame = guest_stack_range_mut(vm_id, esp, 4)?;
+    let return_address = u32::from_le_bytes(
+        frame[0..4]
+            .try_into()
+            .map_err(|_| "GetCurrentThreadId return address")?,
+    );
+    if return_address != GET_CURRENT_THREAD_ID_RETURN {
+        return Err("unexpected GetCurrentThreadId return address");
+    }
+    let registers = crate::hv::vmx::guest_registers();
+    if registers.rsi as u32 != GET_CURRENT_THREAD_ID_ESI {
+        return Err("unexpected GetCurrentThreadId ESI");
+    }
+    let state = LAUNCHERS
+        .get(usize::from(vm_id))
+        .ok_or("unsupported wc3 launcher VM id")?
+        .lock();
+    let thread_id = state
+        .as_ref()
+        .ok_or("wc3 launcher state unavailable")?
+        .primary_thread_id;
+    if thread_id == 0 {
+        return Err("primary guest thread id is zero");
+    }
+    Ok((thread_id, return_address))
 }
 
 pub(crate) fn is_initialized_critical_section(vm_id: u8, guest_address: u32) -> bool {
@@ -539,7 +629,12 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
             }
         }
     } else if call == 9 && imports::is_heap_alloc(import) {
-        match heap_alloc(vm_id) {
+        match heap_alloc(
+            vm_id,
+            HEAP_ALLOC_RETURN,
+            HEAP_ALLOC_FLAGS,
+            HEAP_ALLOC_BYTES,
+        ) {
             Ok((guest_ptr, return_address, heap_handle, flags, bytes)) => {
                 let mut registers = crate::hv::vmx::guest_registers();
                 registers.rax = u64::from(guest_ptr);
@@ -562,9 +657,88 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
                 DispatchOutcome::Stop
             }
         }
-    } else if call == 10 {
+    } else if call == 10 && imports::is_tls_set_value(import) {
+        match tls_set_value(vm_id) {
+            Ok((index, value, return_address)) => {
+                let mut registers = crate::hv::vmx::guest_registers();
+                registers.rax = 1;
+                crate::hv::vmx::set_guest_registers(registers);
+                super::trace::info(format_args!(
+                    "TlsSetValue index={} value=0x{:08X} ret=0x{:08X}",
+                    index, value, return_address
+                ));
+                super::trace::info(format_args!(
+                    "return #10 KERNEL32.dll!TlsSetValue eax=1"
+                ));
+                DispatchOutcome::Resume
+            }
+            Err(reason) => {
+                super::trace::fail(format_args!(
+                    "gate-1h failed vm={} phase=TlsSetValue reason={}",
+                    vm_id, reason
+                ));
+                DispatchOutcome::Stop
+            }
+        }
+    } else if call == 11 && imports::is_get_current_thread_id(import) {
+        match get_current_thread_id(vm_id) {
+            Ok((thread_id, return_address)) => {
+                let mut registers = crate::hv::vmx::guest_registers();
+                registers.rax = u64::from(thread_id);
+                crate::hv::vmx::set_guest_registers(registers);
+                super::trace::info(format_args!(
+                    "return #11 KERNEL32.dll!GetCurrentThreadId tid={} ret=0x{:08X}",
+                    thread_id, return_address
+                ));
+                DispatchOutcome::Resume
+            }
+            Err(reason) => {
+                super::trace::fail(format_args!(
+                    "gate-1i failed vm={} phase=GetCurrentThreadId reason={}",
+                    vm_id, reason
+                ));
+                DispatchOutcome::Stop
+            }
+        }
+    } else if call == 12 && imports::is_heap_alloc(import) {
+        match heap_alloc(
+            vm_id,
+            HEAP_ALLOC_SECOND_RETURN,
+            HEAP_ALLOC_SECOND_FLAGS,
+            HEAP_ALLOC_SECOND_BYTES,
+        ) {
+            Ok((guest_ptr, return_address, heap_handle, flags, bytes)) => {
+                if guest_ptr == 0 {
+                    super::trace::fail(format_args!(
+                        "gate-1j failed vm={} phase=HeapAlloc reason=null-pointer",
+                        vm_id
+                    ));
+                    return DispatchOutcome::Stop;
+                }
+                let mut registers = crate::hv::vmx::guest_registers();
+                registers.rax = u64::from(guest_ptr);
+                crate::hv::vmx::set_guest_registers(registers);
+                super::trace::info(format_args!(
+                    "HeapAlloc heap=0x{:08X} flags=0x{:08X} bytes=0x{:08X} ret=0x{:08X}",
+                    heap_handle, flags, bytes, return_address
+                ));
+                super::trace::info(format_args!(
+                    "return #12 KERNEL32.dll!HeapAlloc ptr=0x{:08X}",
+                    guest_ptr
+                ));
+                DispatchOutcome::Resume
+            }
+            Err(reason) => {
+                super::trace::fail(format_args!(
+                    "gate-1j failed vm={} phase=HeapAlloc reason={}",
+                    vm_id, reason
+                ));
+                DispatchOutcome::Stop
+            }
+        }
+    } else if call == 13 {
         super::trace::info(format_args!(
-            "gate-1g complete vm={} next-import={}!{}",
+            "gate-1j complete vm={} next-import={}!{}",
             vm_id, import.module, import.symbol
         ));
         DispatchOutcome::Stop
