@@ -1,11 +1,13 @@
 //! Laptop bring-up: the TCP log's bytes, painted once by the final AP.
 //! No independent sink policy, producer-side rasterization, scroll or GPU work.
 //! Reuse the retained native proof allocation as the CPU-only Slot4 front.
+//! Fill left top-to-bottom, then right; clip line tails until the next newline.
 
 use core::fmt::{self, Write};
 use spin::Once;
 
 pub(crate) const PLANE_SLOT: usize = 4;
+const TEXT_COLUMNS: usize = 2;
 const BATCH_BYTES: usize = 4096;
 const PERIOD_MS: u64 = 25;
 const FG: u32 = 0xFF00_0000;
@@ -32,7 +34,7 @@ impl Surface {
             && self.pitch_bytes % 4 == 0 && self.pitch_bytes as usize >= row_bytes
             && bytes <= self.byte_len && self.byte_len <= isize::MAX as usize
             && self.virt.checked_add(self.byte_len).is_some()
-            && self.width as usize >= microfont::FWIDTH
+            && self.width as usize >= TEXT_COLUMNS * microfont::FWIDTH
             && self.height as usize >= 2 * microfont::FHEIGHT
     }
 }
@@ -63,6 +65,7 @@ struct Pen {
     surface: Surface,
     columns: usize,
     rows: usize,
+    text_column: usize,
     row: usize,
     column: usize,
     dirty_start: usize,
@@ -71,17 +74,22 @@ struct Pen {
 
 impl Pen {
     fn new(surface: Surface) -> Self {
-        Self { surface, columns: surface.width as usize / microfont::FWIDTH,
+        Self { surface, columns: surface.width as usize / TEXT_COLUMNS / microfont::FWIDTH,
             rows: surface.height as usize / microfont::FHEIGHT - 1,
-            row: 0, column: 0, dirty_start: usize::MAX, dirty_end: 0 }
+            text_column: 0, row: 0, column: 0, dirty_start: usize::MAX, dirty_end: 0 }
     }
     fn full(&self) -> bool {
-        self.row >= self.rows || (self.row == self.rows - 1 && self.column == self.columns)
+        self.row >= self.rows || (self.text_column == TEXT_COLUMNS - 1
+            && self.row == self.rows - 1 && self.column == self.columns)
+    }
+    fn pixel_offset(&self, column: usize) -> usize {
+        self.row * microfont::FHEIGHT * self.surface.pitch_bytes as usize
+            + (self.text_column * (self.surface.width as usize / TEXT_COLUMNS)
+                + column * microfont::FWIDTH) * 4
     }
     fn flush(&mut self) {
         if self.dirty_start >= self.dirty_end { return; }
-        let offset = self.row * microfont::FHEIGHT * self.surface.pitch_bytes as usize
-            + self.dirty_start * microfont::FWIDTH * 4;
+        let offset = self.pixel_offset(self.dirty_start);
         let _ = crate::intel::dma_flush_strided_rows(
             (self.surface.virt + offset) as *mut u8,
             (self.dirty_end - self.dirty_start) * microfont::FWIDTH * 4,
@@ -93,6 +101,10 @@ impl Pen {
         self.flush();
         self.row += 1;
         self.column = 0;
+        if self.row == self.rows && self.text_column + 1 < TEXT_COLUMNS {
+            self.text_column += 1;
+            self.row = 0;
+        }
     }
     fn glyph(&mut self, byte: u8) {
         // The crate's packed font table is the cache. One 264-byte temporary
@@ -101,8 +113,7 @@ impl Pen {
         let _ = microfont::stamp_bytes(&mut glyph, microfont::FWIDTH,
             microfont::FHEIGHT, 0, 0, &[byte], FG);
         for y in 0..microfont::FHEIGHT {
-            let offset = (self.row * microfont::FHEIGHT + y) * self.surface.pitch_bytes as usize
-                + self.column * microfont::FWIDTH * 4;
+            let offset = self.pixel_offset(self.column) + y * self.surface.pitch_bytes as usize;
             for x in 0..microfont::FWIDTH {
                 unsafe { core::ptr::write_volatile((self.surface.virt + offset + x * 4) as *mut u32,
                     glyph[y * microfont::FWIDTH + x]); }
@@ -120,18 +131,22 @@ impl Pen {
             b'\t' => { for _ in 0..(4 - self.column % 4) { self.byte(b' '); } },
             0..=31 | 127 => {},
             byte => {
-                // Defer wrapping until the next printable byte, so a newline
-                // immediately after an exact-width line does not skip a row.
-                if self.column == self.columns { self.newline(); }
-                if !self.full() { self.glyph(if byte.is_ascii() { byte } else { b'?' }); }
+                // One input line owns one half-width row. Drop its tail, even
+                // across consumer batches; only a newline advances the pen.
+                if self.column < self.columns {
+                    self.glyph(if byte.is_ascii() { byte } else { b'?' });
+                }
             }
         }
     }
     fn finish(&mut self) {
         self.flush();
+        // The single status row still spans the screen, below both columns.
+        self.text_column = 0;
         self.row = self.rows;
         self.column = 0;
-        for &byte in b"SCREEN FULL - frozen; TCP logging and the kernel continue".iter().take(self.columns) {
+        for &byte in b"SCREEN FULL - frozen; TCP logging and the kernel continue".iter()
+            .take(self.surface.width as usize / microfont::FWIDTH) {
             self.glyph(byte);
         }
         self.flush();
@@ -156,7 +171,7 @@ pub(crate) async fn microfont_log_task(assigned_slot: u32) {
     }
     let Some(surface) = surface() else { return; };
     let mut pen = Pen::new(surface);
-    let _ = writeln!(pen, "TCP LOG MIRROR | last AP {} | microfont 1x | no scroll", assigned_slot);
+    let _ = writeln!(pen, "TCP LOG MIRROR | last AP {} | microfont 1x | 2 cols left->right | clip/no scroll", assigned_slot);
     pen.flush();
     // No log! calls or driver-status queries here: a stuck producer/driver
     // must not prevent this independent reader from painting existing bytes.

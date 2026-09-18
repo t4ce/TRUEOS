@@ -71,7 +71,8 @@ PEN_TESTS = r'''
 #[cfg(test)] mod tests {
     use super::*;
     fn fixture(columns: usize, rows: usize) -> (Vec<u32>, Surface) {
-        let width = columns * microfont::FWIDTH;
+        // `columns` is the number of glyphs in each of the two text columns.
+        let width = TEXT_COLUMNS * columns * microfont::FWIDTH;
         let height = (rows + 1) * microfont::FHEIGHT;
         let pitch = width + 8;
         let mut pixels = vec![0x1357_2468; pitch * height + 32];
@@ -82,19 +83,23 @@ PEN_TESTS = r'''
         assert!(surface.valid());
         (pixels, surface)
     }
+    fn assert_glyph(pixels: &[u32], surface: Surface, x: usize, y: usize, byte: u8) {
+        let mut glyph = [BG; microfont::FWIDTH * microfont::FHEIGHT];
+        microfont::stamp_bytes(&mut glyph, microfont::FWIDTH, microfont::FHEIGHT, 0, 0, &[byte], FG).unwrap();
+        let pitch = surface.pitch_bytes as usize / 4;
+        for gy in 0..microfont::FHEIGHT {
+            for gx in 0..microfont::FWIDTH {
+                assert_eq!(pixels[16 + (y+gy)*pitch + x+gx], glyph[gy*microfont::FWIDTH + gx]);
+            }
+        }
+    }
     #[test] fn glyph_matches_microfont_and_padding_is_untouched() {
         let (pixels, surface) = fixture(4, 2);
         let mut pen = Pen::new(surface);
         let _ = pen.write_str("q\nA");
         pen.flush();
-        let mut glyph = [BG; microfont::FWIDTH * microfont::FHEIGHT];
-        microfont::stamp_bytes(&mut glyph, microfont::FWIDTH, microfont::FHEIGHT, 0, 0, b"q", FG).unwrap();
+        assert_glyph(&pixels, surface, 0, 0, b'q');
         let pitch = surface.pitch_bytes as usize / 4;
-        for y in 0..microfont::FHEIGHT {
-            for x in 0..microfont::FWIDTH {
-                assert_eq!(pixels[16 + y*pitch + x], glyph[y*microfont::FWIDTH + x]);
-            }
-        }
         for y in 0..surface.height as usize {
             assert!(pixels[16+y*pitch+surface.width as usize..16+(y+1)*pitch].iter().all(|p| *p == 0x1357_2468));
         }
@@ -104,32 +109,111 @@ PEN_TESTS = r'''
     #[test] fn exact_width_newline_and_full_freeze() {
         let (pixels, surface) = fixture(4, 2);
         let mut pen = Pen::new(surface);
-        pen.write_str("abcd\nEFGH").unwrap();
+        pen.write_str("abcd\nEFGH\nIJKL\nMNOP").unwrap();
         assert!(pen.full());
-        assert_eq!((pen.row, pen.column), (1, 4));
+        assert_eq!((pen.text_column, pen.row, pen.column), (1, 1, 4));
         pen.finish();
+        // The footer uses the complete screen width, not just the left half.
+        assert_glyph(&pixels, surface, surface.width as usize / 2, 2 * microfont::FHEIGHT, b'E');
         let saved = pixels.clone();
         assert!(pen.write_str("overwrite!").is_err());
         pen.byte(b'X');
         pen.flush();
         assert_eq!(pixels, saved);
     }
-    #[test] fn wraps_and_tabs_without_overwrite() {
-        let (_pixels, surface) = fixture(8, 3);
+    #[test] fn clips_tail_and_tabs_across_batches_without_wrapping() {
+        let (pixels, surface) = fixture(8, 3);
         let mut pen = Pen::new(surface);
-        pen.write_str("A\rB\tC").unwrap();
-        assert_eq!((pen.row, pen.column), (0, 5));
-        pen.write_str("DEFZ").unwrap();
-        assert_eq!((pen.row, pen.column), (1, 1));
+        pen.write_str("A\rB\tCDEF").unwrap();
+        pen.flush();
+        assert_eq!((pen.text_column, pen.row, pen.column), (0, 0, 8));
+        let saved = pixels.clone();
+        // A clipped line stays clipped across successive asynchronous reads.
+        for _ in 0..3 {
+            for byte in [b'X'; BATCH_BYTES] { pen.byte(byte); }
+            pen.write_str("\t\r").unwrap();
+            pen.flush();
+        }
+        assert_eq!((pen.text_column, pen.row, pen.column), (0, 0, 8));
+        assert_eq!(pixels, saved);
+        pen.write_str("\nZ").unwrap();
+        assert_eq!((pen.text_column, pen.row, pen.column), (0, 1, 1));
+        assert_glyph(&pixels, surface, 0, microfont::FHEIGHT, b'Z');
+    }
+    #[test] fn fills_left_then_right_and_flushes_the_correct_half() {
+        let (pixels, surface) = fixture(4, 2);
+        let mut pen = Pen::new(surface);
+        pen.write_str("A\nB\n").unwrap();
+        assert_eq!((pen.text_column, pen.row, pen.column), (1, 0, 0));
+        assert!(!pen.full());
+        let saved = pixels.clone();
+        crate::intel::take_flushes();
+        pen.write_str("C\nD").unwrap();
+        pen.flush();
+        let right = surface.width as usize / 2;
+        assert_glyph(&pixels, surface, right, 0, b'C');
+        assert_glyph(&pixels, surface, right, microfont::FHEIGHT, b'D');
+        let pitch = surface.pitch_bytes as usize / 4;
+        for y in 0..surface.height as usize {
+            assert_eq!(&pixels[16+y*pitch..16+y*pitch+right], &saved[16+y*pitch..16+y*pitch+right]);
+        }
+        let start = surface.virt + right * 4;
+        let stride = surface.pitch_bytes as usize;
+        assert_eq!(crate::intel::take_flushes(), vec![
+            (start, microfont::FWIDTH * 4, stride, microfont::FHEIGHT),
+            (start + microfont::FHEIGHT * stride, microfont::FWIDTH * 4, stride, microfont::FHEIGHT),
+        ]);
+        pen.flush();
+        assert!(crate::intel::take_flushes().is_empty());
+    }
+    #[test] fn blank_lines_and_short_final_line_consume_exactly_one_row() {
+        let (_pixels, surface) = fixture(2, 2);
+        let mut pen = Pen::new(surface);
+        pen.write_str("ABdiscarded\n\n").unwrap();
+        assert_eq!((pen.text_column, pen.row, pen.column), (1, 0, 0));
+        pen.write_str("\r\n").unwrap();
+        assert_eq!((pen.text_column, pen.row, pen.column), (1, 1, 0));
+        assert!(!pen.full());
+        pen.write_str("C\n").unwrap();
+        assert!(pen.full());
+        assert_eq!((pen.text_column, pen.row), (1, 2));
     }
     #[test] fn surface_bounds_and_native_capacity() {
-        let (_pixels, surface) = fixture(640, 195);
+        let (_pixels, surface) = fixture(320, 195);
         let pen = Pen::new(surface);
-        assert_eq!((pen.columns, pen.rows), (640, 195));
+        assert_eq!(surface.width, 3840);
+        assert_eq!((pen.columns, pen.rows, pen.rows * TEXT_COLUMNS), (320, 195, 390));
         assert!(!Surface { byte_len: 4, ..surface }.valid());
         assert!(!Surface { virt: usize::MAX - 3, ..surface }.valid());
         assert!(!Surface { pitch_bytes: 1, ..surface }.valid());
         assert!(!Surface { height: 1, ..surface }.valid());
+        assert!(!Surface { width: (2 * microfont::FWIDTH - 1) as u32, ..surface }.valid());
+    }
+    #[test] fn odd_width_keeps_half_column_remainders_and_pitch_padding_untouched() {
+        let (pixels, original) = fixture(4, 2);
+        let surface = Surface { width: original.width + 5, ..original };
+        assert!(surface.valid());
+        let mut pen = Pen::new(surface);
+        assert_eq!(pen.columns, 4);
+        pen.write_str("abcdtail\nEFGHtail\nijklmore\nMNOP").unwrap();
+        assert!(pen.full());
+        pen.flush();
+        let right = surface.width as usize / 2;
+        assert_glyph(&pixels, surface, right, 0, b'i');
+        let pitch = surface.pitch_bytes as usize / 4;
+        for y in 0..2 * microfont::FHEIGHT {
+            for x in (4 * microfont::FWIDTH..right).chain(right + 4 * microfont::FWIDTH..pitch) {
+                assert_eq!(pixels[16 + y*pitch + x], 0x1357_2468);
+            }
+        }
+        pen.finish();
+        for y in 2 * microfont::FHEIGHT..surface.height as usize {
+            for x in (surface.width as usize / microfont::FWIDTH) * microfont::FWIDTH..pitch {
+                assert_eq!(pixels[16 + y*pitch + x], 0x1357_2468);
+            }
+        }
+        assert!(pixels[..16].iter().all(|p| *p == 0x1357_2468));
+        assert!(pixels[pixels.len()-16..].iter().all(|p| *p == 0x1357_2468));
     }
 }
 '''
@@ -197,8 +281,15 @@ def main():
     # Exact production ring prefix; omit only the unrelated asynchronous TCP server.
     harness = '''extern crate alloc;
 mod intel {
+    static FLUSHES: std::sync::Mutex<Vec<(usize, usize, usize, usize)>> = std::sync::Mutex::new(Vec::new());
     pub fn dma_cache_flush_range(_: *const u8, _: usize) {}
-    pub fn dma_flush_strided_rows(_: *mut u8, _: usize, _: usize, _: usize) -> bool { true }
+    pub fn dma_flush_strided_rows(ptr: *mut u8, bytes: usize, stride: usize, rows: usize) -> bool {
+        FLUSHES.lock().unwrap().push((ptr as usize, bytes, stride, rows));
+        true
+    }
+    pub fn take_flushes() -> Vec<(usize, usize, usize, usize)> {
+        std::mem::take(&mut *FLUSHES.lock().unwrap())
+    }
 }
 #[path = "service.rs"] mod service;
 mod ring {\n''' + ring + RING_TESTS + '\n}\n' + policy
