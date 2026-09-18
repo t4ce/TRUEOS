@@ -1,4 +1,3 @@
-use alloc::string::String;
 use trueos_executor::{Spawner, task};
 
 use super::super::{ShellBackend2, print_shell_line};
@@ -8,9 +7,8 @@ fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(io, "wc3_probe: usage `wc3_probe <vm-id>`");
 }
 
-fn launcher_usage(io: &'static dyn ShellBackend2) {
-    print_shell_line(io, "wc3_launcher: usage `wc3_launcher <vm-id> <trueosfs-path>`");
-}
+const LAUNCHER_VM_ID: u8 = 0;
+const LAUNCHER_PATH: &str = "apps/common/Warcraft III/Warcraft III.exe";
 
 pub(crate) fn try_parse(
     spawner: &Spawner,
@@ -51,20 +49,11 @@ pub(crate) fn try_parse_launcher(
     io: &'static dyn ShellBackend2,
     rest: &str,
 ) -> ParseOutcome {
-    let mut parts = rest.split_whitespace();
-    let Some(vm_id) = parts.next().and_then(|value| value.parse::<u8>().ok()) else {
-        launcher_usage(io);
-        return ParseOutcome::Handled;
-    };
-    let Some(path) = parts.next() else {
-        launcher_usage(io);
-        return ParseOutcome::Handled;
-    };
-    if parts.next().is_some() {
-        launcher_usage(io);
+    if !rest.trim().is_empty() {
+        print_shell_line(io, "wc3_launcher: usage `wc3_launcher`");
         return ParseOutcome::Handled;
     }
-    match load_launcher(*spawner, io, vm_id, String::from(path)) {
+    match load_launcher(*spawner, io) {
         Ok(token) => spawner.spawn(token),
         Err(_) => print_shell_line(io, "wc3_launcher: loader task already running"),
     }
@@ -72,12 +61,12 @@ pub(crate) fn try_parse_launcher(
 }
 
 #[task]
-async fn load_launcher(spawner: Spawner, io: &'static dyn ShellBackend2, vm_id: u8, path: String) {
+async fn load_launcher(spawner: Spawner, io: &'static dyn ShellBackend2) {
     let Some(disk) = crate::r::fs::trueosfs::primary_root_handle() else {
         print_shell_line(io, "wc3_launcher: no TRUEOSFS root");
         return;
     };
-    let bytes = match crate::r::fs::trueosfs::file_out_async(disk, &path).await {
+    let bytes = match crate::r::fs::trueosfs::file_out_async(disk, LAUNCHER_PATH).await {
         Ok(Some(bytes)) => bytes,
         Ok(None) => {
             print_shell_line(io, "wc3_launcher: artifact not found");
@@ -91,14 +80,14 @@ async fn load_launcher(spawner: Spawner, io: &'static dyn ShellBackend2, vm_id: 
             return;
         }
     };
-    match crate::hv::start_wc3_launcher(vm_id, &spawner, &bytes) {
+    match crate::hv::start_wc3_launcher(LAUNCHER_VM_ID, &spawner, &bytes) {
         Ok(()) => print_shell_line(
             io,
-            alloc::format!("wc3_launcher: queued Gate-1A on vm{}", vm_id).as_str(),
+            "wc3_launcher: queued Gate-1A on vm0",
         ),
         Err(error) => print_shell_line(
             io,
-            alloc::format!("wc3_launcher: start failed vm{} error={error:?}", vm_id).as_str(),
+            alloc::format!("wc3_launcher: start failed vm0 error={error:?}").as_str(),
         ),
     }
 }
