@@ -35,7 +35,7 @@ const TLS_ALLOC_RETURN: u32 = 0x0040_3ED4;
 const TLS_SLOT_COUNT: usize = 64;
 const HEAP_ALLOC_RETURN: u32 = 0x0040_4132;
 const HEAP_ALLOC_FLAGS: u32 = 0x0000_0008;
-const HEAP_ALLOC_BYTES: u32 = 0x0000_0074;
+const HEAP_ALLOC_BYTES: u32 = 0x0000_0080;
 
 #[derive(Copy, Clone)]
 pub(crate) struct GuestMapping {

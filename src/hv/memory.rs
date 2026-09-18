@@ -1523,7 +1523,7 @@ pub fn build_guest_cr3_for_vm_with_mode(
                         | PT_ENTRY_PRESENT
                         | PT_ENTRY_WRITABLE
                         | PT_ENTRY_NO_EXECUTE;
-                (*guest_wc3_launcher_low_pt)[pt_index(crate::hv::wc3::HEAP_VA)] =
+                (*guest_wc3_launcher_low_pt)[pt_index(crate::hv::wc3::HEAP_VA as u64)] =
                     ((launcher.phys_start + 0x46_000) & 0x000F_FFFF_FFFF_F000)
                         | PT_ENTRY_PRESENT
                         | PT_ENTRY_WRITABLE
