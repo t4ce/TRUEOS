@@ -96,7 +96,7 @@ const LC_MAP_STRING_W_WIDE_OUTPUT_RETURN: u32 = 0x0040_2BAE;
 const GET_TICK_COUNT_RETURN: u32 = 0x0040_1016;
 const GET_TICK_COUNT_HELPER_RETURN: u32 = 0x0040_1BB8;
 const CREATE_EVENT_RETURNS: [u32; 4] = [0x0040_1032, 0x0040_106C, 0x0040_1B5E, 0x0040_1B6D];
-const GET_LAST_ERROR_RETURNS: [u32; 4] = [0x0040_103E, 0x0040_1070, 0x0040_1100, 0x0040_2054];
+const GET_LAST_ERROR_RETURNS: [u32; 4] = [0x0040_103E, 0x0040_1072, 0x0040_1100, 0x0040_2054];
 const CLOSE_HANDLE_RETURNS: [u32; 3] = [0x0040_1050, 0x0040_10E3, 0x0040_10C9];
 const EVENT_HANDLE_BASE: u32 = 0x5743_2001;
 const ERROR_ALREADY_EXISTS: u32 = 183;
@@ -221,6 +221,7 @@ pub(crate) fn prepare(vm_id: u8, bytes: &[u8]) -> Result<(), &'static str> {
         return Err("wc3 launcher artifact hash");
     }
     let mut materialized = pe32::materialize(bytes)?;
+    trace_event_name_image_bytes("pre-patch", &materialized.image);
     let thunk_bytes = materialized
         .imports
         .len()
@@ -233,6 +234,7 @@ pub(crate) fn prepare(vm_id: u8, bytes: &[u8]) -> Result<(), &'static str> {
         .ok_or("wc3 launcher backing allocation")?;
     let mut thunks = alloc::vec![0; PAGE_SIZE_4K];
     imports::patch(&mut materialized.image, &materialized.imports, &mut thunks)?;
+    trace_event_name_image_bytes("post-patch", &materialized.image);
     unsafe {
         core::ptr::write_bytes(arena.virt_start as *mut u8, 0, arena.length);
         core::ptr::copy_nonoverlapping(
@@ -1902,6 +1904,31 @@ fn read_guest_c_string(
     Err("event name is not NUL terminated")
 }
 
+fn trace_event_name_image_bytes(label: &str, image: &[u8]) {
+    let read_word =
+        |offset: usize| u32::from_le_bytes(image[offset..offset + 4].try_into().unwrap_or([0; 4]));
+    super::trace::info(format_args!(
+        "CreateEventA image-bytes phase={} rva=0x8068 words={:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} rva=0x8048 words={:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X} {:08X}",
+        label,
+        read_word(0x8068),
+        read_word(0x806C),
+        read_word(0x8070),
+        read_word(0x8074),
+        read_word(0x8078),
+        read_word(0x807C),
+        read_word(0x8080),
+        read_word(0x8084),
+        read_word(0x8048),
+        read_word(0x804C),
+        read_word(0x8050),
+        read_word(0x8054),
+        read_word(0x8058),
+        read_word(0x805C),
+        read_word(0x8060),
+        read_word(0x8064),
+    ));
+}
+
 fn launcher_state_lock(vm_id: u8) -> Result<&'static Mutex<Option<LauncherState>>, &'static str> {
     LAUNCHERS
         .get(usize::from(vm_id))
@@ -1924,6 +1951,55 @@ fn create_event_a(vm_id: u8) -> Result<(u32, u32, bool, bool, bool, Option<Strin
     );
     let name_pointer =
         u32::from_le_bytes(frame[16..20].try_into().map_err(|_| "CreateEventA name")?);
+    let name_bytes = if name_pointer == 0 {
+        [0; 32]
+    } else {
+        let bytes = if u64::from(name_pointer) >= u64::from(pe32::IMAGE_BASE)
+            && u64::from(name_pointer) < u64::from(pe32::IMAGE_BASE) + pe32::IMAGE_BYTES as u64
+        {
+            launcher_image_range_mut(vm_id, name_pointer, 32)?.to_vec()
+        } else {
+            launcher_read_range(vm_id, name_pointer, 32)?
+        };
+        bytes.try_into().map_err(|_| "CreateEventA name bytes")?
+    };
+    super::trace::info(format_args!(
+        "CreateEventA name-frame ret=0x{:08X} name_ptr=0x{:08X} bytes={:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X} {:02X}",
+        return_address,
+        name_pointer,
+        name_bytes[0],
+        name_bytes[1],
+        name_bytes[2],
+        name_bytes[3],
+        name_bytes[4],
+        name_bytes[5],
+        name_bytes[6],
+        name_bytes[7],
+        name_bytes[8],
+        name_bytes[9],
+        name_bytes[10],
+        name_bytes[11],
+        name_bytes[12],
+        name_bytes[13],
+        name_bytes[14],
+        name_bytes[15],
+        name_bytes[16],
+        name_bytes[17],
+        name_bytes[18],
+        name_bytes[19],
+        name_bytes[20],
+        name_bytes[21],
+        name_bytes[22],
+        name_bytes[23],
+        name_bytes[24],
+        name_bytes[25],
+        name_bytes[26],
+        name_bytes[27],
+        name_bytes[28],
+        name_bytes[29],
+        name_bytes[30],
+        name_bytes[31],
+    ));
     if !CREATE_EVENT_RETURNS.contains(&return_address) || attrs != 0 {
         return Err("unexpected CreateEventA frame");
     }
@@ -1983,10 +2059,7 @@ fn get_last_error(vm_id: u8) -> Result<u32, &'static str> {
         .ok_or("guest ESP unavailable")? as u32;
     let frame = guest_stack_range_mut(vm_id, esp, 4)?;
     let return_address = u32::from_le_bytes(frame.try_into().map_err(|_| "GetLastError return")?);
-    super::trace::info(format_args!(
-        "GetLastError frame ret=0x{:08X}",
-        return_address
-    ));
+    super::trace::info(format_args!("GetLastError frame ret=0x{:08X}", return_address));
     if !GET_LAST_ERROR_RETURNS.contains(&return_address) {
         return Err("unexpected GetLastError return address");
     }
