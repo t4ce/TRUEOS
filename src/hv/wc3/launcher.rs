@@ -687,17 +687,6 @@ fn heap_alloc_words(vm_id: u8) -> Result<[u32; 4], &'static str> {
     ])
 }
 
-fn heap_alloc_next(vm_id: u8) -> Result<usize, &'static str> {
-    let launcher = LAUNCHERS
-        .get(usize::from(vm_id))
-        .ok_or("unsupported wc3 launcher VM id")?;
-    launcher
-        .lock()
-        .as_ref()
-        .ok_or("wc3 launcher state unavailable")
-        .map(|state| state.heap_next)
-}
-
 fn launcher_heap_range_mut(
     vm_id: u8,
     guest_address: u32,
@@ -875,6 +864,19 @@ fn heap_alloc(
         flags,
     });
     Ok((guest_ptr, return_address, heap_handle, flags, bytes))
+}
+
+fn heap_alloc_profile(vm_id: u8) -> Result<(u32, u32, u32), &'static str> {
+    let [return_address, _, flags, bytes] = heap_alloc_words(vm_id)?;
+    match (return_address, flags, bytes) {
+        (HEAP_ALLOC_RETURN, HEAP_ALLOC_FLAGS, HEAP_ALLOC_BYTES)
+        | (HEAP_ALLOC_SECOND_RETURN, HEAP_ALLOC_SECOND_FLAGS, HEAP_ALLOC_SECOND_BYTES)
+        | (HEAP_ALLOC_THIRD_RETURN, HEAP_ALLOC_THIRD_FLAGS, HEAP_ALLOC_THIRD_BYTES)
+        | (HEAP_ALLOC_LOCK_RETURN, HEAP_ALLOC_LOCK_FLAGS, HEAP_ALLOC_LOCK_BYTES) => {
+            Ok((return_address, flags, bytes))
+        }
+        _ => Err("unprofiled HeapAlloc site"),
+    }
 }
 
 fn tls_set_value(vm_id: u8) -> Result<(u32, u32, u32), &'static str> {
@@ -1910,25 +1912,18 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
                 DispatchOutcome::Stop
             }
         }
-    } else if imports::is_heap_alloc(import) && !matches!(call, 9 | 12 | 24 | 26) {
-        match (heap_alloc_words(vm_id), heap_alloc_next(vm_id)) {
-            (Ok([return_address, heap_handle, flags, bytes]), Ok(heap_next)) => {
-                super::trace::fail(format_args!(
-                    "crt-startup failed vm={} phase=HeapAlloc probe call={} ret=0x{:08X} heap=0x{:08X} flags=0x{:08X} bytes=0x{:08X} heap_next=0x{:X} reason=unprofiled-site",
-                    vm_id, call, return_address, heap_handle, flags, bytes, heap_next
-                ));
-            }
-            (Err(reason), _) | (_, Err(reason)) => {
-                super::trace::fail(format_args!(
-                    "crt-startup failed vm={} phase=HeapAlloc probe call={} reason={}",
-                    vm_id, call, reason
-                ));
-            }
-        }
-        DispatchOutcome::Stop
-    } else if call == 9 && imports::is_heap_alloc(import) {
-        match heap_alloc(vm_id, HEAP_ALLOC_RETURN, HEAP_ALLOC_FLAGS, HEAP_ALLOC_BYTES) {
+    } else if imports::is_heap_alloc(import) {
+        match heap_alloc_profile(vm_id).and_then(|(return_address, flags, bytes)| {
+            heap_alloc(vm_id, return_address, flags, bytes)
+        }) {
             Ok((guest_ptr, return_address, heap_handle, flags, bytes)) => {
+                if bytes == HEAP_ALLOC_LOCK_BYTES && guest_ptr != DYNAMIC_LOCK_25 {
+                    super::trace::fail(format_args!(
+                        "crt-startup failed vm={} phase=HeapAlloc reason=unexpected-lock-pointer",
+                        vm_id
+                    ));
+                    return DispatchOutcome::Stop;
+                }
                 let mut registers = crate::hv::vmx::guest_registers();
                 registers.rax = u64::from(guest_ptr);
                 crate::hv::vmx::set_guest_registers(registers);
@@ -1937,15 +1932,21 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
                     heap_handle, flags, bytes, return_address
                 ));
                 super::trace::info(format_args!(
-                    "return #9 KERNEL32.dll!HeapAlloc ptr=0x{:08X} zeroed=1",
-                    guest_ptr
+                    "return #{} KERNEL32.dll!HeapAlloc ptr=0x{:08X}{}",
+                    call,
+                    guest_ptr,
+                    if flags & HEAP_ALLOC_FLAGS != 0 {
+                        " zeroed=1"
+                    } else {
+                        ""
+                    }
                 ));
                 DispatchOutcome::Resume
             }
             Err(reason) => {
                 super::trace::fail(format_args!(
-                    "gate-1g failed vm={} phase=HeapAlloc reason={}",
-                    vm_id, reason
+                    "crt-startup failed vm={} phase=HeapAlloc call={} reason={}",
+                    vm_id, call, reason
                 ));
                 DispatchOutcome::Stop
             }
@@ -1986,42 +1987,6 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
             Err(reason) => {
                 super::trace::fail(format_args!(
                     "gate-1i failed vm={} phase=GetCurrentThreadId reason={}",
-                    vm_id, reason
-                ));
-                DispatchOutcome::Stop
-            }
-        }
-    } else if call == 12 && imports::is_heap_alloc(import) {
-        match heap_alloc(
-            vm_id,
-            HEAP_ALLOC_SECOND_RETURN,
-            HEAP_ALLOC_SECOND_FLAGS,
-            HEAP_ALLOC_SECOND_BYTES,
-        ) {
-            Ok((guest_ptr, return_address, heap_handle, flags, bytes)) => {
-                if guest_ptr == 0 {
-                    super::trace::fail(format_args!(
-                        "gate-1j failed vm={} phase=HeapAlloc reason=null-pointer",
-                        vm_id
-                    ));
-                    return DispatchOutcome::Stop;
-                }
-                let mut registers = crate::hv::vmx::guest_registers();
-                registers.rax = u64::from(guest_ptr);
-                crate::hv::vmx::set_guest_registers(registers);
-                super::trace::info(format_args!(
-                    "HeapAlloc heap=0x{:08X} flags=0x{:08X} bytes=0x{:08X} ret=0x{:08X}",
-                    heap_handle, flags, bytes, return_address
-                ));
-                super::trace::info(format_args!(
-                    "return #12 KERNEL32.dll!HeapAlloc ptr=0x{:08X}",
-                    guest_ptr
-                ));
-                DispatchOutcome::Resume
-            }
-            Err(reason) => {
-                super::trace::fail(format_args!(
-                    "gate-1j failed vm={} phase=HeapAlloc reason={}",
                     vm_id, reason
                 ));
                 DispatchOutcome::Stop
@@ -2181,35 +2146,6 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
                 DispatchOutcome::Stop
             }
         }
-    } else if call == 24 && imports::is_heap_alloc(import) {
-        match heap_alloc(
-            vm_id,
-            HEAP_ALLOC_THIRD_RETURN,
-            HEAP_ALLOC_THIRD_FLAGS,
-            HEAP_ALLOC_THIRD_BYTES,
-        ) {
-            Ok((guest_ptr, return_address, heap_handle, flags, bytes)) => {
-                let mut registers = crate::hv::vmx::guest_registers();
-                registers.rax = u64::from(guest_ptr);
-                crate::hv::vmx::set_guest_registers(registers);
-                super::trace::info(format_args!(
-                    "HeapAlloc heap=0x{:08X} flags=0x{:08X} bytes=0x{:08X} ret=0x{:08X}",
-                    heap_handle, flags, bytes, return_address
-                ));
-                super::trace::info(format_args!(
-                    "return #24 KERNEL32.dll!HeapAlloc ptr=0x{:08X}",
-                    guest_ptr
-                ));
-                DispatchOutcome::Resume
-            }
-            Err(reason) => {
-                super::trace::fail(format_args!(
-                    "gate-1m failed vm={} phase=HeapAlloc reason={}",
-                    vm_id, reason
-                ));
-                DispatchOutcome::Stop
-            }
-        }
     } else if call == 25 && imports::is_free_environment_strings_a(import) {
         match free_environment_strings_a(vm_id) {
             Ok((pointer, return_address)) => {
@@ -2228,42 +2164,6 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
             Err(reason) => {
                 super::trace::fail(format_args!(
                     "gate-1m failed vm={} phase=FreeEnvironmentStringsA reason={}",
-                    vm_id, reason
-                ));
-                DispatchOutcome::Stop
-            }
-        }
-    } else if call == 26 && imports::is_heap_alloc(import) {
-        match heap_alloc(
-            vm_id,
-            HEAP_ALLOC_LOCK_RETURN,
-            HEAP_ALLOC_LOCK_FLAGS,
-            HEAP_ALLOC_LOCK_BYTES,
-        ) {
-            Ok((guest_ptr, return_address, heap_handle, flags, bytes)) => {
-                if guest_ptr != DYNAMIC_LOCK_25 {
-                    super::trace::fail(format_args!(
-                        "gate-1n failed vm={} phase=HeapAlloc reason=unexpected-pointer",
-                        vm_id
-                    ));
-                    return DispatchOutcome::Stop;
-                }
-                let mut registers = crate::hv::vmx::guest_registers();
-                registers.rax = u64::from(guest_ptr);
-                crate::hv::vmx::set_guest_registers(registers);
-                super::trace::info(format_args!(
-                    "HeapAlloc heap=0x{:08X} flags=0x{:08X} bytes=0x{:08X} ret=0x{:08X}",
-                    heap_handle, flags, bytes, return_address
-                ));
-                super::trace::info(format_args!(
-                    "return #26 KERNEL32.dll!HeapAlloc ptr=0x{:08X}",
-                    guest_ptr
-                ));
-                DispatchOutcome::Resume
-            }
-            Err(reason) => {
-                super::trace::fail(format_args!(
-                    "gate-1n failed vm={} phase=HeapAlloc reason={}",
                     vm_id, reason
                 ));
                 DispatchOutcome::Stop
