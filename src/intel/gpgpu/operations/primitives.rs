@@ -325,7 +325,10 @@ pub(crate) fn font_outline_coverage_runs_r8(
     runs: &[GpgpuFontOutlineCoverageRun<'_>],
 ) -> GpgpuDispatchRetirement {
     let surface = mask.surface();
+    crate::log_font_warm_diag!("phase=coverage-input runs={} mask={}x{} pitch={} gpu=0x{:X} bytes={}\n",
+        runs.len(), surface.width, surface.height, surface.pitch_bytes, surface.gpu, surface.bytes);
     if runs.is_empty() || runs.len() > FONT_OUTLINE_COVERAGE_BATCH_MAX_RUNS {
+        crate::log_font_warm_diag!("phase=coverage-input reject=run-count\n");
         return GpgpuDispatchRetirement::NotSubmitted;
     }
 
@@ -341,6 +344,7 @@ pub(crate) fn font_outline_coverage_runs_r8(
             || !run.optical_bias_px.is_finite()
             || !(0.0..=0.35).contains(&run.optical_bias_px)
         {
+            crate::log_font_warm_diag!("phase=coverage-input reject=outline-or-rectangle-contract\n");
             return GpgpuDispatchRetirement::NotSubmitted;
         }
         let Some(input_bytes) = run
@@ -348,15 +352,19 @@ pub(crate) fn font_outline_coverage_runs_r8(
             .len()
             .checked_mul(core::mem::size_of::<[u32; 8]>())
         else {
+            crate::log_font_warm_diag!("phase=coverage-input reject=ops-size-overflow\n");
             return GpgpuDispatchRetirement::NotSubmitted;
         };
         let Some(slice_bytes) = align_up(input_bytes, super::WARM_ALIGN) else {
+            crate::log_font_warm_diag!("phase=coverage-input reject=ops-alignment-overflow\n");
             return GpgpuDispatchRetirement::NotSubmitted;
         };
         let Some(next_mapped_bytes) = mapped_bytes.checked_add(slice_bytes) else {
+            crate::log_font_warm_diag!("phase=coverage-input reject=packed-size-overflow\n");
             return GpgpuDispatchRetirement::NotSubmitted;
         };
         if next_mapped_bytes > DIRECT_RCS_FONT_COVERAGE_OPS_WINDOW_BYTES {
+            crate::log_font_warm_diag!("phase=coverage-input reject=ops-window-capacity\n");
             return GpgpuDispatchRetirement::NotSubmitted;
         }
         batch_runs.push(FontOutlineCoverageR8BatchRun {
@@ -380,6 +388,7 @@ pub(crate) fn font_outline_coverage_runs_r8(
     }
 
     let Some((ops_phys, ops_virt)) = crate::dma::alloc(mapped_bytes, super::WARM_ALIGN) else {
+        crate::log_font_warm_diag!("phase=coverage-input reject=ops-dma-allocation\n");
         return GpgpuDispatchRetirement::NotSubmitted;
     };
     unsafe {

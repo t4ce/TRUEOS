@@ -574,12 +574,29 @@ fn direct_rcs_submit_batch_on_lane_state(
         ),
     };
     if quarantined.load(Ordering::Acquire) {
+        if lane == DirectRcsLane::Font {
+            crate::log_font_warm_diag!("phase=font-rcs-submit reject=quarantined\n");
+        }
         return DirectRcsSubmissionState::Rejected;
     }
     let attempt = {
         let mut runtime = runtime.lock();
+        if lane == DirectRcsLane::Font {
+            crate::log_font_warm_diag!("phase=font-rcs-enter pending={} initialized={} seq={} tail={}\n",
+                runtime.pending.is_some() as u8, runtime.context_initialized as u8,
+                runtime.submissions, runtime.ring_tail_bytes);
+        }
         direct_rcs_submit_batch_with_runtime_inner(dev, state, &mut runtime, client, false)
     };
+    if lane == DirectRcsLane::Font {
+        let outcome = match &attempt {
+            DirectRcsSubmitAttempt::Submitted(_) => "Submitted",
+            DirectRcsSubmitAttempt::Deferred => "Deferred",
+            DirectRcsSubmitAttempt::Rejected => "Rejected",
+            DirectRcsSubmitAttempt::Ambiguous { .. } => "Ambiguous",
+        };
+        crate::log_font_warm_diag!("phase=font-rcs-attempt outcome={}\n", outcome);
+    }
     match attempt {
         DirectRcsSubmitAttempt::Submitted(_) => DirectRcsSubmissionState::Submitted,
         DirectRcsSubmitAttempt::Deferred | DirectRcsSubmitAttempt::Rejected => {
@@ -1181,6 +1198,18 @@ fn direct_rcs_poll_result_slot_timeout_ms_on_lane_with_timestamp(
         );
     }
     let completed = proof.complete();
+    // The public poll result is zero unless BOTH marker and saved-head proof
+    // pass. Report the existing raw observation before it is normalized.
+    if lane == DirectRcsLane::Font {
+        if completed {
+            crate::log_font_warm_diag!("phase=font-retire-complete slot={} raw=0x{:08X} saved_head={} tail={}\n",
+                slot, observed, proof.saved_head_bytes, proof.published_tail_bytes);
+        } else {
+            crate::log_font_warm_diag!("phase=font-retire-incomplete slot={} raw=0x{:08X}/0x{:08X} marker={} saved_head={} tail={}\n",
+                slot, observed, expected, proof.marker_observed as u8,
+                proof.saved_head_bytes, proof.published_tail_bytes);
+        }
+    }
     if !completed {
         let reason = if observed == expected {
             "completion-marker-observed-context-save-timeout-reboot-required"
