@@ -81,10 +81,7 @@ async fn load_launcher(spawner: Spawner, io: &'static dyn ShellBackend2) {
         }
     };
     match crate::hv::start_wc3_launcher(LAUNCHER_VM_ID, &spawner, &bytes) {
-        Ok(()) => print_shell_line(
-            io,
-            "wc3_launcher: queued Gate-1A on vm0",
-        ),
+        Ok(()) => print_shell_line(io, "wc3_launcher: queued Gate-1A on vm0"),
         Err(error) => print_shell_line(
             io,
             alloc::format!("wc3_launcher: start failed vm0 error={error:?}").as_str(),

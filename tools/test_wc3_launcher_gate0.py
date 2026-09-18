@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+import hashlib
 import re
 import struct
+import sys
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -133,6 +135,10 @@ def check() -> None:
     require(shell, "wc3_launcher: usage", "private launcher Shell2 command")
 
     emulate_probe(probe_bytes(guest32))
+    if len(sys.argv) == 2:
+        artifact = Path(sys.argv[1]).read_bytes()
+        if hashlib.sha256(artifact).hexdigest() != EXPECTED_SHA256:
+            raise ValueError("supplied launcher artifact hash differs")
     print(
         "wc3-launcher-gate0: target=fixed feature=private code=32bit "
         "stack=roundtrip fs=read-write vmcall=two-stage resume=verified"

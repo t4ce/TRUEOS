@@ -91,11 +91,11 @@ pub(crate) fn materialize(bytes: &[u8]) -> Result<Materialized, &'static str> {
             usize::try_from(read_u32(bytes, section + 16)?).map_err(|_| "pe section raw size")?;
         let raw_offset =
             usize::try_from(read_u32(bytes, section + 20)?).map_err(|_| "pe section raw offset")?;
-        if raw_size > virtual_size
-            || virtual_address
-                .checked_add(virtual_size)
-                .filter(|end| *end <= IMAGE_BYTES)
-                .is_none()
+        let section_bytes = virtual_size.max(raw_size);
+        if virtual_address
+            .checked_add(section_bytes)
+            .filter(|end| *end <= IMAGE_BYTES)
+            .is_none()
             || raw_offset
                 .checked_add(raw_size)
                 .filter(|end| *end <= bytes.len())

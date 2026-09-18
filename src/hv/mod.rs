@@ -2029,7 +2029,14 @@ pub fn start_wc3_launcher(
     {
         return Err(StartError::AlreadyRunning);
     }
-    wc3::prepare_launcher(vm_id, launcher_bytes).map_err(|_| StartError::GuestMemoryUnavailable)?;
+    if let Err(reason) = wc3::prepare_launcher(vm_id, launcher_bytes) {
+        crate::log_important!(target: "hv";
+            "wc3: gate-1a failed vm={} phase={}",
+            vm_id,
+            reason
+        );
+        return Err(StartError::GuestMemoryUnavailable);
+    }
     start_with_mode(vm_id, VmBootMode::Wc3Launcher, None, None, false)
 }
 
