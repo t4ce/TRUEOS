@@ -27,6 +27,7 @@ pub(crate) enum Kind {
     GetStringTypeW,
     LCMapStringW,
     MultiByteToWideChar,
+    WideCharToMultiByte,
 }
 
 pub(crate) fn write(import_id: u32, kind: Kind, output: &mut [u8]) -> Result<(), &'static str> {
@@ -117,6 +118,11 @@ pub(crate) fn write(import_id: u32, kind: Kind, output: &mut [u8]) -> Result<(),
             output[9] = 0x18;
             output[10] = 0x00;
         }
+        Kind::WideCharToMultiByte => {
+            output[8] = 0xC2;
+            output[9] = 0x20;
+            output[10] = 0x00;
+        }
         Kind::Stop => {
             output[8] = 0x0F;
             output[9] = 0x0B;
@@ -151,5 +157,6 @@ mod tests {
     fn six_argument_locale_thunks_clean_0x18() {
         assert_eq!(cleanup_bytes(Kind::MultiByteToWideChar), [0xC2, 0x18, 0x00]);
         assert_eq!(cleanup_bytes(Kind::LCMapStringW), [0xC2, 0x18, 0x00]);
+        assert_eq!(cleanup_bytes(Kind::WideCharToMultiByte), [0xC2, 0x20, 0x00]);
     }
 }

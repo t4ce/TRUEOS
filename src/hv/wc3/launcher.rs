@@ -82,6 +82,9 @@ const GET_STRING_TYPE_W_SOURCE: u32 = 0x0040_71E0;
 const GET_STRING_TYPE_W_SECOND_RETURN: u32 = 0x0040_4D16;
 const MULTI_BYTE_TO_WIDE_CHAR_SIZING_RETURN: u32 = 0x0040_4CAE;
 const MULTI_BYTE_TO_WIDE_CHAR_CONVERT_RETURN: u32 = 0x0040_4D04;
+const MULTI_BYTE_TO_WIDE_CHAR_ANSI_WRAPPER_SIZING_RETURN: u32 = 0x0040_2AA5;
+const WIDE_CHAR_TO_MULTI_BYTE_RETURN: u32 = 0x0040_2BD3;
+const WIDE_CHAR_TO_MULTI_BYTE_FLAGS: u32 = 0x0000_0220;
 const MULTI_BYTE_TO_WIDE_CHAR_CODE_PAGE: u32 = GET_ACP_CODE_PAGE;
 const LC_MAP_STRING_W_LOWERCASE: u32 = 0x0000_0100;
 const LC_MAP_STRING_W_UPPERCASE: u32 = 0x0000_0200;
@@ -1014,11 +1017,11 @@ fn get_string_type_w(vm_id: u8) -> Result<(u32, u32), &'static str> {
         .ok()
         .and_then(|count| count.checked_mul(2))
         .ok_or("GetStringTypeW size overflow")?;
-    let _source = launcher_read_range(vm_id, source, wide_bytes)?;
+    let source_bytes = launcher_read_range(vm_id, source, wide_bytes)?;
     let output = launcher_writable_range_mut(vm_id, output_pointer, wide_bytes)?;
-    output.fill(0);
-    for value in output.chunks_exact_mut(2) {
-        value.copy_from_slice(&1u16.to_le_bytes());
+    for (source_word, output_word) in source_bytes.chunks_exact(2).zip(output.chunks_exact_mut(2)) {
+        let value = u16::from_le_bytes([source_word[0], source_word[1]]);
+        output_word.copy_from_slice(&classify_cp1252(value).to_le_bytes());
     }
     Ok((output_pointer, return_address))
 }
@@ -1062,9 +1065,15 @@ fn multi_byte_to_wide_char(vm_id: u8) -> Result<(u32, u32, u32, u32, u32), &'sta
             .try_into()
             .map_err(|_| "MultiByteToWideChar destination count")?,
     );
+    super::trace::info(format_args!(
+        "MultiByteToWideChar frame ret=0x{:08X} cp={} flags=0x{:08X} src=0x{:08X} src_count={} dst=0x{:08X} dst_count={}",
+        return_address, code_page, flags, source, source_count, destination, destination_count
+    ));
     if !matches!(
         return_address,
-        MULTI_BYTE_TO_WIDE_CHAR_SIZING_RETURN | MULTI_BYTE_TO_WIDE_CHAR_CONVERT_RETURN
+        MULTI_BYTE_TO_WIDE_CHAR_SIZING_RETURN
+            | MULTI_BYTE_TO_WIDE_CHAR_CONVERT_RETURN
+            | MULTI_BYTE_TO_WIDE_CHAR_ANSI_WRAPPER_SIZING_RETURN
     ) || code_page != MULTI_BYTE_TO_WIDE_CHAR_CODE_PAGE
         || flags != 1
         || source_count == 0
@@ -1089,7 +1098,11 @@ fn multi_byte_to_wide_char(vm_id: u8) -> Result<(u32, u32, u32, u32, u32), &'sta
     };
     let required = source_len;
     if destination == 0 || destination_count == 0 {
-        if return_address != MULTI_BYTE_TO_WIDE_CHAR_SIZING_RETURN {
+        if !matches!(
+            return_address,
+            MULTI_BYTE_TO_WIDE_CHAR_SIZING_RETURN
+                | MULTI_BYTE_TO_WIDE_CHAR_ANSI_WRAPPER_SIZING_RETURN
+        ) {
             return Err("unexpected MultiByteToWideChar conversion destination");
         }
         return Ok((required as u32, return_address, source, destination, required as u32));
@@ -1106,7 +1119,7 @@ fn multi_byte_to_wide_char(vm_id: u8) -> Result<(u32, u32, u32, u32, u32), &'sta
         .ok_or("MultiByteToWideChar output overflow")?;
     let output = launcher_writable_range_mut(vm_id, destination, output_bytes)?;
     for (index, byte) in source_bytes[..source_len].iter().enumerate() {
-        output[index * 2..index * 2 + 2].copy_from_slice(&u16::from(*byte).to_le_bytes());
+        output[index * 2..index * 2 + 2].copy_from_slice(&decode_cp1252(*byte).to_le_bytes());
     }
     Ok((required as u32, return_address, source, destination, required as u32))
 }
@@ -1205,6 +1218,10 @@ fn map_cp1252_lowercase(value: u16) -> u16 {
     match value {
         0x0041..=0x005A => value + 0x20,
         0x00C0..=0x00D6 | 0x00D8..=0x00DE => value + 0x20,
+        0x0160 => 0x0161,
+        0x0152 => 0x0153,
+        0x017D => 0x017E,
+        0x0178 => 0x00FF,
         _ => value,
     }
 }
@@ -1213,7 +1230,265 @@ fn map_cp1252_uppercase(value: u16) -> u16 {
     match value {
         0x0061..=0x007A => value - 0x20,
         0x00E0..=0x00F6 | 0x00F8..=0x00FE => value - 0x20,
+        0x0161 => 0x0160,
+        0x0153 => 0x0152,
+        0x017E => 0x017D,
+        0x00FF => 0x0178,
         _ => value,
+    }
+}
+
+fn encode_cp1252(value: u16) -> Option<u8> {
+    Some(match value {
+        0x0000..=0x007F | 0x00A0..=0x00FF => value as u8,
+        0x0081 => 0x81,
+        0x008D => 0x8D,
+        0x008F => 0x8F,
+        0x0090 => 0x90,
+        0x009D => 0x9D,
+        0x20AC => 0x80,
+        0x201A => 0x82,
+        0x0192 => 0x83,
+        0x201E => 0x84,
+        0x2026 => 0x85,
+        0x2020 => 0x86,
+        0x2021 => 0x87,
+        0x02C6 => 0x88,
+        0x2030 => 0x89,
+        0x0160 => 0x8A,
+        0x2039 => 0x8B,
+        0x0152 => 0x8C,
+        0x017D => 0x8E,
+        0x2018 => 0x91,
+        0x2019 => 0x92,
+        0x201C => 0x93,
+        0x201D => 0x94,
+        0x2022 => 0x95,
+        0x2013 => 0x96,
+        0x2014 => 0x97,
+        0x02DC => 0x98,
+        0x2122 => 0x99,
+        0x0161 => 0x9A,
+        0x203A => 0x9B,
+        0x0153 => 0x9C,
+        0x017E => 0x9E,
+        0x0178 => 0x9F,
+        _ => return None,
+    })
+}
+
+fn wide_char_to_multi_byte(vm_id: u8) -> Result<(u32, u32, u32, u32), &'static str> {
+    let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP)
+        .ok_or("guest ESP unavailable")? as u32;
+    let frame = guest_stack_range_mut(vm_id, esp, 36)?;
+    let return_address = u32::from_le_bytes(
+        frame[0..4]
+            .try_into()
+            .map_err(|_| "WideCharToMultiByte return")?,
+    );
+    let code_page = u32::from_le_bytes(
+        frame[4..8]
+            .try_into()
+            .map_err(|_| "WideCharToMultiByte code page")?,
+    );
+    let flags = u32::from_le_bytes(
+        frame[8..12]
+            .try_into()
+            .map_err(|_| "WideCharToMultiByte flags")?,
+    );
+    let source = u32::from_le_bytes(
+        frame[12..16]
+            .try_into()
+            .map_err(|_| "WideCharToMultiByte source")?,
+    );
+    let source_count = i32::from_le_bytes(
+        frame[16..20]
+            .try_into()
+            .map_err(|_| "WideCharToMultiByte source count")?,
+    );
+    let destination = u32::from_le_bytes(
+        frame[20..24]
+            .try_into()
+            .map_err(|_| "WideCharToMultiByte destination")?,
+    );
+    let destination_count = i32::from_le_bytes(
+        frame[24..28]
+            .try_into()
+            .map_err(|_| "WideCharToMultiByte destination count")?,
+    );
+    let default_char = u32::from_le_bytes(
+        frame[28..32]
+            .try_into()
+            .map_err(|_| "WideCharToMultiByte default char")?,
+    );
+    let used_default = u32::from_le_bytes(
+        frame[32..36]
+            .try_into()
+            .map_err(|_| "WideCharToMultiByte used default")?,
+    );
+    if return_address != WIDE_CHAR_TO_MULTI_BYTE_RETURN
+        || code_page != MULTI_BYTE_TO_WIDE_CHAR_CODE_PAGE
+        || flags != WIDE_CHAR_TO_MULTI_BYTE_FLAGS
+        || source == 0
+        || source_count <= 0
+        || destination_count < 0
+        || default_char != 0
+        || used_default != 0
+    {
+        return Err("unexpected WideCharToMultiByte frame");
+    }
+    let source_words = usize::try_from(source_count)
+        .map_err(|_| "WideCharToMultiByte source count")?
+        .checked_mul(2)
+        .ok_or("WideCharToMultiByte source size overflow")?;
+    let source_bytes = launcher_read_range(vm_id, source, source_words)?;
+    let mut encoded = Vec::with_capacity(source_words / 2);
+    for word in source_bytes.chunks_exact(2) {
+        encoded.push(encode_cp1252(u16::from_le_bytes([word[0], word[1]])).unwrap_or(b'?'));
+    }
+    let required = encoded.len();
+    if destination == 0 || destination_count == 0 {
+        return Ok((required as u32, return_address, source, destination));
+    }
+    let capacity =
+        usize::try_from(destination_count).map_err(|_| "WideCharToMultiByte destination count")?;
+    if capacity < required {
+        return Err("WideCharToMultiByte destination too small");
+    }
+    let output = launcher_writable_range_mut(vm_id, destination, required)?;
+    output.copy_from_slice(&encoded);
+    Ok((required as u32, return_address, source, destination))
+}
+
+fn decode_cp1252(byte: u8) -> u16 {
+    match byte {
+        0x80 => 0x20AC,
+        0x82 => 0x201A,
+        0x83 => 0x0192,
+        0x84 => 0x201E,
+        0x85 => 0x2026,
+        0x86 => 0x2020,
+        0x87 => 0x2021,
+        0x88 => 0x02C6,
+        0x89 => 0x2030,
+        0x8A => 0x0160,
+        0x8B => 0x2039,
+        0x8C => 0x0152,
+        0x8E => 0x017D,
+        0x91 => 0x2018,
+        0x92 => 0x2019,
+        0x93 => 0x201C,
+        0x94 => 0x201D,
+        0x95 => 0x2022,
+        0x96 => 0x2013,
+        0x97 => 0x2014,
+        0x98 => 0x02DC,
+        0x99 => 0x2122,
+        0x9A => 0x0161,
+        0x9B => 0x203A,
+        0x9C => 0x0153,
+        0x9E => 0x017E,
+        0x9F => 0x0178,
+        _ => u16::from(byte),
+    }
+}
+
+const C1_UPPER: u16 = 0x0001;
+const C1_LOWER: u16 = 0x0002;
+const C1_DIGIT: u16 = 0x0004;
+const C1_SPACE: u16 = 0x0008;
+const C1_PUNCT: u16 = 0x0010;
+const C1_CNTRL: u16 = 0x0020;
+const C1_BLANK: u16 = 0x0040;
+const C1_XDIGIT: u16 = 0x0080;
+const C1_ALPHA: u16 = 0x0100;
+const C1_DEFINED: u16 = 0x0200;
+
+fn classify_cp1252(value: u16) -> u16 {
+    let mut result = C1_DEFINED;
+    if value < 0x20 || (0x7F..=0x9F).contains(&value) {
+        result |= C1_CNTRL;
+    }
+    if matches!(value, 0x09 | 0x0A | 0x0B | 0x0C | 0x0D | 0x20 | 0x00A0) {
+        result |= C1_SPACE;
+    }
+    if matches!(value, 0x09 | 0x20 | 0x00A0) {
+        result |= C1_BLANK;
+    }
+    if (0x30..=0x39).contains(&value) {
+        result |= C1_DIGIT;
+    }
+    if (0x30..=0x39).contains(&value)
+        || (0x41..=0x46).contains(&value)
+        || (0x61..=0x66).contains(&value)
+    {
+        result |= C1_XDIGIT;
+    }
+    if (0x41..=0x5A).contains(&value) {
+        result |= C1_UPPER | C1_ALPHA;
+    } else if (0x61..=0x7A).contains(&value) {
+        result |= C1_LOWER | C1_ALPHA;
+    } else if matches!(
+        value,
+        0x00C0..=0x00D6
+            | 0x00D8..=0x00DE
+            | 0x00E0..=0x00F6
+            | 0x00F8..=0x00FF
+            | 0x0152
+            | 0x0153
+            | 0x0160
+            | 0x0161
+            | 0x0178
+            | 0x017D
+            | 0x017E
+    ) {
+        result |= C1_ALPHA;
+        if map_cp1252_lowercase(value) != value {
+            result |= C1_UPPER;
+        }
+        if map_cp1252_uppercase(value) != value {
+            result |= C1_LOWER;
+        }
+    }
+    if result & (C1_ALPHA | C1_DIGIT | C1_SPACE | C1_CNTRL) == 0 {
+        result |= C1_PUNCT;
+    }
+    result
+}
+
+#[cfg(test)]
+mod locale_tests {
+    use super::{
+        C1_ALPHA, C1_BLANK, C1_CNTRL, C1_DIGIT, C1_LOWER, C1_PUNCT, C1_SPACE, C1_UPPER,
+        classify_cp1252, decode_cp1252,
+    };
+
+    #[test]
+    fn cp1252_decodes_extended_bytes() {
+        assert_eq!(decode_cp1252(0x80), 0x20AC);
+        assert_eq!(decode_cp1252(0x8C), 0x0152);
+        assert_eq!(decode_cp1252(0x8E), 0x017D);
+        assert_eq!(decode_cp1252(0x91), 0x2018);
+        assert_eq!(decode_cp1252(0x92), 0x2019);
+        assert_eq!(decode_cp1252(0x9C), 0x0153);
+        assert_eq!(decode_cp1252(0x9E), 0x017E);
+        assert_eq!(decode_cp1252(0x9F), 0x0178);
+        assert_eq!(super::encode_cp1252(0x0081), Some(0x81));
+        assert_eq!(super::encode_cp1252(0x0152), Some(0x8C));
+    }
+
+    #[test]
+    fn ctype1_distinguishes_launcher_characters() {
+        assert_ne!(classify_cp1252('A' as u16) & C1_UPPER, 0);
+        assert_ne!(classify_cp1252('A' as u16) & C1_ALPHA, 0);
+        assert_ne!(classify_cp1252('a' as u16) & C1_LOWER, 0);
+        assert_ne!(classify_cp1252('0' as u16) & C1_DIGIT, 0);
+        assert_ne!(classify_cp1252(' ' as u16) & C1_SPACE, 0);
+        assert_ne!(classify_cp1252(' ' as u16) & C1_BLANK, 0);
+        assert_ne!(classify_cp1252('\t' as u16) & C1_SPACE, 0);
+        assert_ne!(classify_cp1252('\n' as u16) & C1_CNTRL, 0);
+        assert_ne!(classify_cp1252('.' as u16) & C1_PUNCT, 0);
+        assert_ne!(classify_cp1252(0x0152) & C1_ALPHA, 0);
     }
 }
 
@@ -2029,6 +2304,30 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
             Err(reason) => {
                 super::trace::fail(format_args!(
                     "locale failed vm={} phase=MultiByteToWideChar call={} reason={}",
+                    vm_id, call, reason
+                ));
+                DispatchOutcome::Stop
+            }
+        }
+    } else if imports::is_wide_char_to_multi_byte(import) {
+        match wide_char_to_multi_byte(vm_id) {
+            Ok((converted, return_address, source, destination)) => {
+                let mut registers = crate::hv::vmx::guest_registers();
+                registers.rax = u64::from(converted);
+                crate::hv::vmx::set_guest_registers(registers);
+                super::trace::info(format_args!(
+                    "WideCharToMultiByte codepage=1252 source=0x{:08X} destination=0x{:08X} count={} ret=0x{:08X}",
+                    source, destination, converted, return_address
+                ));
+                super::trace::info(format_args!(
+                    "return #{} KERNEL32.dll!WideCharToMultiByte eax={}",
+                    call, converted
+                ));
+                DispatchOutcome::Resume
+            }
+            Err(reason) => {
+                super::trace::fail(format_args!(
+                    "locale failed vm={} phase=WideCharToMultiByte call={} reason={}",
                     vm_id, call, reason
                 ));
                 DispatchOutcome::Stop

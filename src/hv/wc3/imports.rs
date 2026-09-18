@@ -67,6 +67,8 @@ pub(crate) fn patch(
             super::thunk32::Kind::GetStringTypeW
         } else if is_lc_map_string_w(import) {
             super::thunk32::Kind::LCMapStringW
+        } else if is_wide_char_to_multi_byte(import) {
+            super::thunk32::Kind::WideCharToMultiByte
         } else if is_multi_byte_to_wide_char(import) {
             super::thunk32::Kind::MultiByteToWideChar
         } else {
@@ -308,6 +310,10 @@ pub(crate) fn is_multi_byte_to_wide_char(import: &LauncherImport) -> bool {
 
 pub(crate) fn is_lc_map_string_w(import: &LauncherImport) -> bool {
     import.module.eq_ignore_ascii_case("KERNEL32.dll") && import.symbol == "LCMapStringW"
+}
+
+pub(crate) fn is_wide_char_to_multi_byte(import: &LauncherImport) -> bool {
+    import.module.eq_ignore_ascii_case("KERNEL32.dll") && import.symbol == "WideCharToMultiByte"
 }
 
 pub(crate) fn is_get_tick_count(import: &LauncherImport) -> bool {
