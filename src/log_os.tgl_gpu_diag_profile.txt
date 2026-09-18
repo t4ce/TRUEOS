@@ -1,0 +1,52 @@
+Tiger Lake GPU-first diagnostic profile: tgl-gpu-first-v1
+========================================================
+
+Switch: src/log_os.rs::flags::TGL_GPU_DIAG_PROFILE_ENABLED = true
+Scope: compile-time, build-wide, highest precedence in area_log_policy().
+Set false to restore every pre-existing per-area/profile setting.
+No PCI probing or string filtering runs inside a log sink.
+
+Read `tools/trueos-doc topic logs` for level ordering and capture semantics.
+This focused override is authoritative while enabled; the older *_LOG_LEVEL
+constants below it describe the fallback profile, not the effective policy.
+
+Effective area policy:
+  Gfx, Gpgpu                  Up(Info)
+  Render, Boot, Service       Up(Once)
+  All other areas             Up(Warn)
+
+Every area retains Error, Important and Warn. No area admits Debug or Trace.
+Once is a level, not an automatic limiter: only log_once! deduplicates sites.
+
+Retained evidence:
+  Gfx/Info: Intel claim, forcewake/cache/PAT, GuC firmware/bootstrap/admission,
+            native-panel readback and UI4 plane-stack bootstrap.
+  Gpgpu/Info and Once: artifact/kernel setup, context/submission lifecycle,
+                      explicit silicon probes and execution admission.
+  Error/Warn: retirement timeouts, missing completion markers, quarantine,
+              DeviceLost and UI4 font/start-button failure consequences.
+  Render/Important and Once: explicit render boot proofs.
+
+Suppressed:
+  USB/Info controller status loops; network/discovery Info; VM VPID Info;
+  storage/audio/media/application Info; Render/Info font-tessel polling,
+  per-stage dumps, custom-triangle retries and Shell2 latency chatter.
+  Render/Info boot summaries are also filtered. Use the Gfx/Info GuC bootstrap
+  and admission records for GuC readiness; do not infer failure from an absent
+  Render/Info message. UI4 maps to Global: its Warn/Error remain admitted.
+
+The dispatcher emits `log-profile=tgl-gpu-first-v1` at Boot/Important so a
+photograph can identify the profile. This is not a unique ISO/build identity.
+Filtering remains before the TCP ring/UART. LastAP reads the same accepted
+TCP bytes with its existing independent cursor: no screen-only filter, new
+queue, scrolling, buffer resize, font changes, or executor changes.
+
+Finite-page limitation: warnings/errors are deliberately not rate-limited.
+A fault storm can still fill the page; this profile removes unrelated Info
+and the known Render/Info flood, not all possible output. Already-filtered
+callsites and explicit once/rate-limit suppression cannot be recovered later.
+No GPU readiness, artifact admission, execution or display state is changed.
+
+Host regression: python3 tools/test_tgl_gpu_log_profile.py
+Requires a Rust toolchain and ../TRUEOS-Blueprints/crates/log-os (as the kernel
+does). CI pins that dependency and tests the actual flags and sink adapters.
