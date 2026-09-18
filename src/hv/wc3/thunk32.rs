@@ -25,6 +25,7 @@ pub(crate) enum Kind {
     GetACP,
     GetCPInfo,
     GetStringTypeW,
+    LCMapStringW,
     MultiByteToWideChar,
 }
 
@@ -111,6 +112,11 @@ pub(crate) fn write(import_id: u32, kind: Kind, output: &mut [u8]) -> Result<(),
             output[9] = 0x18;
             output[10] = 0x00;
         }
+        Kind::LCMapStringW => {
+            output[8] = 0xC2;
+            output[9] = 0x18;
+            output[10] = 0x00;
+        }
         Kind::Stop => {
             output[8] = 0x0F;
             output[9] = 0x0B;
@@ -123,5 +129,27 @@ pub(crate) const fn address(import_id: u32) -> Option<u32> {
     match import_id.checked_mul(THUNK_BYTES as u32) {
         Some(offset) => THUNK_BASE.checked_add(offset),
         None => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Kind, THUNK_BYTES, write};
+
+    fn cleanup_bytes(kind: Kind) -> [u8; 3] {
+        let mut thunk = [0; THUNK_BYTES];
+        write(1, kind, &mut thunk).unwrap();
+        [thunk[8], thunk[9], thunk[10]]
+    }
+
+    #[test]
+    fn four_argument_thunks_clean_0x10() {
+        assert_eq!(cleanup_bytes(Kind::GetStringTypeW), [0xC2, 0x10, 0x00]);
+    }
+
+    #[test]
+    fn six_argument_locale_thunks_clean_0x18() {
+        assert_eq!(cleanup_bytes(Kind::MultiByteToWideChar), [0xC2, 0x18, 0x00]);
+        assert_eq!(cleanup_bytes(Kind::LCMapStringW), [0xC2, 0x18, 0x00]);
     }
 }

@@ -83,6 +83,8 @@ const GET_STRING_TYPE_W_SECOND_RETURN: u32 = 0x0040_4D16;
 const MULTI_BYTE_TO_WIDE_CHAR_SIZING_RETURN: u32 = 0x0040_4CAE;
 const MULTI_BYTE_TO_WIDE_CHAR_CONVERT_RETURN: u32 = 0x0040_4D04;
 const MULTI_BYTE_TO_WIDE_CHAR_CODE_PAGE: u32 = GET_ACP_CODE_PAGE;
+const LC_MAP_STRING_W_LOWERCASE: u32 = 0x0000_0100;
+const LC_MAP_STRING_W_UPPERCASE: u32 = 0x0000_0200;
 
 #[derive(Copy, Clone)]
 pub(crate) struct GuestMapping {
@@ -1013,7 +1015,7 @@ fn get_string_type_w(vm_id: u8) -> Result<(u32, u32), &'static str> {
         .and_then(|count| count.checked_mul(2))
         .ok_or("GetStringTypeW size overflow")?;
     let _source = launcher_read_range(vm_id, source, wide_bytes)?;
-    let output = guest_stack_range_mut(vm_id, output_pointer, wide_bytes)?;
+    let output = launcher_writable_range_mut(vm_id, output_pointer, wide_bytes)?;
     output.fill(0);
     for value in output.chunks_exact_mut(2) {
         value.copy_from_slice(&1u16.to_le_bytes());
@@ -1107,6 +1109,112 @@ fn multi_byte_to_wide_char(vm_id: u8) -> Result<(u32, u32, u32, u32, u32), &'sta
         output[index * 2..index * 2 + 2].copy_from_slice(&u16::from(*byte).to_le_bytes());
     }
     Ok((required as u32, return_address, source, destination, required as u32))
+}
+
+fn lc_map_string_w(vm_id: u8) -> Result<(u32, u32, u32, u32, u32, u32, u16), &'static str> {
+    let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP)
+        .ok_or("guest ESP unavailable")? as u32;
+    let frame = guest_stack_range_mut(vm_id, esp, 28)?;
+    let return_address =
+        u32::from_le_bytes(frame[0..4].try_into().map_err(|_| "LCMapStringW return")?);
+    let locale = u32::from_le_bytes(frame[4..8].try_into().map_err(|_| "LCMapStringW locale")?);
+    let flags = u32::from_le_bytes(frame[8..12].try_into().map_err(|_| "LCMapStringW flags")?);
+    let source = u32::from_le_bytes(
+        frame[12..16]
+            .try_into()
+            .map_err(|_| "LCMapStringW source")?,
+    );
+    let source_count = i32::from_le_bytes(
+        frame[16..20]
+            .try_into()
+            .map_err(|_| "LCMapStringW source count")?,
+    );
+    let destination = u32::from_le_bytes(
+        frame[20..24]
+            .try_into()
+            .map_err(|_| "LCMapStringW destination")?,
+    );
+    let destination_count = i32::from_le_bytes(
+        frame[24..28]
+            .try_into()
+            .map_err(|_| "LCMapStringW destination count")?,
+    );
+    super::trace::info(format_args!(
+        "LCMapStringW frame ret=0x{:08X} locale=0x{:08X} flags=0x{:08X} source=0x{:08X} source_count={} destination=0x{:08X} destination_count={}",
+        return_address, locale, flags, source, source_count, destination, destination_count
+    ));
+    if locale != 0
+        || !matches!(flags, LC_MAP_STRING_W_LOWERCASE | LC_MAP_STRING_W_UPPERCASE)
+        || source == 0
+        || source_count == 0
+        || destination_count < 0
+        || (destination == 0 && destination_count != 0)
+        || (destination != 0 && destination_count == 0)
+    {
+        return Err("unexpected LCMapStringW frame");
+    }
+    let source_bytes = if source_count < 0 {
+        let bytes = launcher_read_range(vm_id, source, PAGE_SIZE_4K)?;
+        let end = bytes
+            .chunks_exact(2)
+            .position(|word| word == [0, 0])
+            .map(|index| (index + 1) * 2)
+            .ok_or("LCMapStringW unterminated source")?;
+        bytes[..end].to_vec()
+    } else {
+        let bytes = usize::try_from(source_count)
+            .ok()
+            .and_then(|count| count.checked_mul(2))
+            .ok_or("LCMapStringW source size overflow")?;
+        launcher_read_range(vm_id, source, bytes)?
+    };
+    let required = source_bytes.len() / 2;
+    let first_source = u16::from_le_bytes([source_bytes[0], source_bytes[1]]);
+    if destination == 0 {
+        return Ok((
+            required as u32,
+            return_address,
+            flags,
+            source,
+            destination,
+            required as u32,
+            first_source,
+        ));
+    }
+    let capacity = usize::try_from(destination_count).map_err(|_| "LCMapStringW capacity")?;
+    if capacity < required {
+        return Err("LCMapStringW destination too small");
+    }
+    let output_bytes = required
+        .checked_mul(2)
+        .ok_or("LCMapStringW output overflow")?;
+    let output = launcher_writable_range_mut(vm_id, destination, output_bytes)?;
+    for (index, word) in source_bytes.chunks_exact(2).enumerate() {
+        let value = u16::from_le_bytes([word[0], word[1]]);
+        let mapped = if flags == LC_MAP_STRING_W_LOWERCASE {
+            map_cp1252_lowercase(value)
+        } else {
+            map_cp1252_uppercase(value)
+        };
+        output[index * 2..index * 2 + 2].copy_from_slice(&mapped.to_le_bytes());
+    }
+    Ok((required as u32, return_address, flags, source, destination, required as u32, first_source))
+}
+
+fn map_cp1252_lowercase(value: u16) -> u16 {
+    match value {
+        0x0041..=0x005A => value + 0x20,
+        0x00C0..=0x00D6 | 0x00D8..=0x00DE => value + 0x20,
+        _ => value,
+    }
+}
+
+fn map_cp1252_uppercase(value: u16) -> u16 {
+    match value {
+        0x0061..=0x007A => value - 0x20,
+        0x00E0..=0x00F6 | 0x00F8..=0x00FE => value - 0x20,
+        _ => value,
+    }
 }
 
 fn get_startup_info_a(vm_id: u8) -> Result<(u32, u32), &'static str> {
@@ -1865,8 +1973,8 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
                 registers.rax = 1;
                 crate::hv::vmx::set_guest_registers(registers);
                 super::trace::info(format_args!(
-                    "return #34 KERNEL32.dll!GetStringTypeW eax=1 lp=0x{:08X} ret=0x{:08X}",
-                    output_pointer, return_address
+                    "return #{} KERNEL32.dll!GetStringTypeW eax=1 lp=0x{:08X} ret=0x{:08X}",
+                    call, output_pointer, return_address
                 ));
                 DispatchOutcome::Resume
             }
@@ -1874,6 +1982,30 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
                 super::trace::fail(format_args!(
                     "gate-1o failed vm={} phase=GetStringTypeW reason={}",
                     vm_id, reason
+                ));
+                DispatchOutcome::Stop
+            }
+        }
+    } else if imports::is_lc_map_string_w(import) {
+        match lc_map_string_w(vm_id) {
+            Ok((mapped, return_address, flags, source, destination, required, first_source)) => {
+                let mut registers = crate::hv::vmx::guest_registers();
+                registers.rax = u64::from(mapped);
+                crate::hv::vmx::set_guest_registers(registers);
+                super::trace::info(format_args!(
+                    "LCMapStringW locale=0 flags=0x{:08X} source=0x{:08X} destination=0x{:08X} count={} required={} first=0x{:04X} ret=0x{:08X}",
+                    flags, source, destination, mapped, required, first_source, return_address
+                ));
+                super::trace::info(format_args!(
+                    "return #{} KERNEL32.dll!LCMapStringW eax={}",
+                    call, mapped
+                ));
+                DispatchOutcome::Resume
+            }
+            Err(reason) => {
+                super::trace::fail(format_args!(
+                    "locale failed vm={} phase=LCMapStringW call={} reason={}",
+                    vm_id, call, reason
                 ));
                 DispatchOutcome::Stop
             }
