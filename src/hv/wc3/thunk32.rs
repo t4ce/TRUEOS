@@ -13,6 +13,10 @@ pub(crate) enum Kind {
     TlsAlloc,
     HeapAlloc,
     HeapFree,
+    CreateEventA,
+    GetLastError,
+    CloseHandle,
+    GetTickCount,
     TlsSetValue,
     GetCurrentThreadId,
     GetStartupInfoA,
@@ -79,6 +83,17 @@ pub(crate) fn write(import_id: u32, kind: Kind, output: &mut [u8]) -> Result<(),
         Kind::HeapFree => {
             output[8] = 0xC2;
             output[9] = 0x0C;
+            output[10] = 0x00;
+        }
+        Kind::CreateEventA => {
+            output[8] = 0xC2;
+            output[9] = 0x10;
+            output[10] = 0x00;
+        }
+        Kind::GetLastError | Kind::GetTickCount => output[8] = 0xC3,
+        Kind::CloseHandle => {
+            output[8] = 0xC2;
+            output[9] = 0x04;
             output[10] = 0x00;
         }
         Kind::TlsSetValue => {
@@ -176,5 +191,13 @@ mod tests {
         assert_eq!(cleanup_bytes(Kind::MultiByteToWideChar), [0xC2, 0x18, 0x00]);
         assert_eq!(cleanup_bytes(Kind::LCMapStringW), [0xC2, 0x18, 0x00]);
         assert_eq!(cleanup_bytes(Kind::WideCharToMultiByte), [0xC2, 0x20, 0x00]);
+    }
+
+    #[test]
+    fn post_crt_thunks_clean_their_abi_widths() {
+        assert_eq!(cleanup_bytes(Kind::CreateEventA), [0xC2, 0x10, 0x00]);
+        assert_eq!(cleanup_bytes(Kind::CloseHandle), [0xC2, 0x04, 0x00]);
+        assert_eq!(cleanup_bytes(Kind::GetLastError), [0xC3, 0x00, 0x00]);
+        assert_eq!(cleanup_bytes(Kind::GetTickCount), [0xC3, 0x00, 0x00]);
     }
 }

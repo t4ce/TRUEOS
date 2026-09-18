@@ -1,4 +1,4 @@
-use alloc::vec::Vec;
+use alloc::{string::String, vec::Vec};
 use core::sync::atomic::{AtomicU32, Ordering};
 use sha2::{Digest, Sha256};
 use spin::Mutex;
@@ -93,6 +93,13 @@ const LC_MAP_STRING_W_PROBE_RETURN: u32 = 0x0040_2A08;
 const LC_MAP_STRING_W_ANSI_SIZING_RETURN: u32 = 0x0040_2B13;
 const LC_MAP_STRING_W_ANSI_OUTPUT_RETURN: u32 = 0x0040_2B46;
 const LC_MAP_STRING_W_WIDE_OUTPUT_RETURN: u32 = 0x0040_2BAE;
+const GET_TICK_COUNT_RETURN: u32 = 0x0040_1016;
+const GET_TICK_COUNT_HELPER_RETURN: u32 = 0x0040_1BB8;
+const CREATE_EVENT_RETURNS: [u32; 4] = [0x0040_1032, 0x0040_106D, 0x0040_1B5E, 0x0040_1B6D];
+const GET_LAST_ERROR_RETURNS: [u32; 4] = [0x0040_103E, 0x0040_1070, 0x0040_1100, 0x0040_2054];
+const CLOSE_HANDLE_RETURNS: [u32; 3] = [0x0040_1050, 0x0040_10E3, 0x0040_10C9];
+const EVENT_HANDLE_BASE: u32 = 0x5743_2001;
+const ERROR_ALREADY_EXISTS: u32 = 183;
 
 #[derive(Copy, Clone)]
 enum MultiByteToWideCharSite {
@@ -135,6 +142,11 @@ struct LauncherState {
     std_handles: [u32; 3],
     heap_next: usize,
     heap_allocations: Vec<HeapAllocation>,
+    tick_ms: u32,
+    last_error: u32,
+    events: Vec<EventObject>,
+    event_handles: Vec<EventHandle>,
+    next_event_handle: u32,
 }
 
 struct HeapAllocation {
@@ -142,6 +154,20 @@ struct HeapAllocation {
     bytes: u32,
     flags: u32,
     live: bool,
+}
+
+struct EventObject {
+    name: Option<String>,
+    manual_reset: bool,
+    signaled: bool,
+    open_references: u32,
+    live: bool,
+}
+
+struct EventHandle {
+    value: u32,
+    event_index: usize,
+    open: bool,
 }
 
 #[derive(Copy, Clone)]
@@ -251,6 +277,11 @@ pub(crate) fn prepare(vm_id: u8, bytes: &[u8]) -> Result<(), &'static str> {
         std_handles: STD_HANDLES,
         heap_next: 0,
         heap_allocations: Vec::new(),
+        tick_ms: 0,
+        last_error: 0,
+        events: Vec::new(),
+        event_handles: Vec::new(),
+        next_event_handle: EVENT_HANDLE_BASE,
     });
     CALLS[usize::from(vm_id)].store(0, Ordering::Release);
     super::trace::info(format_args!(
@@ -510,15 +541,9 @@ fn initialize_dynamic_critical_section(vm_id: u8) -> Result<(u32, u32), &'static
     let state = allocation
         .as_ref()
         .ok_or("wc3 launcher state unavailable")?;
-    if !state
-        .heap_allocations
-        .iter()
-        .any(|allocation| {
-            allocation.live
-                && allocation.guest_ptr == critical_section
-                && allocation.bytes >= 0x18
-        })
-    {
+    if !state.heap_allocations.iter().any(|allocation| {
+        allocation.live && allocation.guest_ptr == critical_section && allocation.bytes >= 0x18
+    }) {
         return Err("dynamic critical section is not a recorded allocation");
     }
     drop(allocation);
@@ -889,11 +914,7 @@ fn heap_free_words(vm_id: u8) -> Result<[u32; 4], &'static str> {
                 .try_into()
                 .map_err(|_| "HeapFree return address")?,
         ),
-        u32::from_le_bytes(
-            frame[4..8]
-                .try_into()
-                .map_err(|_| "HeapFree heap handle")?,
-        ),
+        u32::from_le_bytes(frame[4..8].try_into().map_err(|_| "HeapFree heap handle")?),
         u32::from_le_bytes(frame[8..12].try_into().map_err(|_| "HeapFree flags")?),
         u32::from_le_bytes(frame[12..16].try_into().map_err(|_| "HeapFree pointer")?),
     ])
@@ -1853,6 +1874,184 @@ pub(crate) fn is_initialized_critical_section(vm_id: u8, guest_address: u32) -> 
         .is_some_and(|addresses| addresses.contains(&guest_address))
 }
 
+fn read_guest_c_string(
+    vm_id: u8,
+    guest_address: u32,
+    limit: usize,
+) -> Result<String, &'static str> {
+    if guest_address == 0 {
+        return Err("null event name");
+    }
+    let mut bytes = Vec::new();
+    for offset in 0..limit {
+        let byte = launcher_read_range(
+            vm_id,
+            guest_address
+                .checked_add(u32::try_from(offset).map_err(|_| "event name offset")?)
+                .ok_or("event name overflow")?,
+            1,
+        )?[0];
+        if byte == 0 {
+            return String::from_utf8(bytes).map_err(|_| "event name is not ASCII");
+        }
+        bytes.push(byte);
+    }
+    Err("event name is not NUL terminated")
+}
+
+fn launcher_state_lock(vm_id: u8) -> Result<&'static Mutex<Option<LauncherState>>, &'static str> {
+    LAUNCHERS
+        .get(usize::from(vm_id))
+        .ok_or("unsupported wc3 launcher VM id")
+}
+
+fn create_event_a(vm_id: u8) -> Result<(u32, u32, bool, bool, bool, Option<String>), &'static str> {
+    let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP)
+        .ok_or("guest ESP unavailable")? as u32;
+    let frame = guest_stack_range_mut(vm_id, esp, 20)?;
+    let return_address =
+        u32::from_le_bytes(frame[0..4].try_into().map_err(|_| "CreateEventA return")?);
+    let attrs = u32::from_le_bytes(frame[4..8].try_into().map_err(|_| "CreateEventA attrs")?);
+    let manual_reset =
+        u32::from_le_bytes(frame[8..12].try_into().map_err(|_| "CreateEventA manual")?);
+    let initial_state = u32::from_le_bytes(
+        frame[12..16]
+            .try_into()
+            .map_err(|_| "CreateEventA initial")?,
+    );
+    let name_pointer =
+        u32::from_le_bytes(frame[16..20].try_into().map_err(|_| "CreateEventA name")?);
+    super::trace::info(format_args!(
+        "main: CreateEventA frame ret=0x{:08X} attrs=0x{:08X} manual={} initial={} name=0x{:08X}",
+        return_address, attrs, manual_reset, initial_state, name_pointer
+    ));
+    if !CREATE_EVENT_RETURNS.contains(&return_address) || attrs != 0 {
+        return Err("unexpected CreateEventA frame");
+    }
+    let name = if name_pointer == 0 {
+        None
+    } else {
+        Some(read_guest_c_string(vm_id, name_pointer, 260)?)
+    };
+    let launcher = launcher_state_lock(vm_id)?;
+    let mut guard = launcher.lock();
+    let state = guard.as_mut().ok_or("wc3 launcher state unavailable")?;
+    let existing = name.as_ref().and_then(|candidate| {
+        state.events.iter().position(|event| {
+            event.live
+                && event
+                    .name
+                    .as_ref()
+                    .is_some_and(|event_name| event_name == candidate)
+        })
+    });
+    let (event_index, already_exists) = if let Some(index) = existing {
+        (index, true)
+    } else {
+        state.events.push(EventObject {
+            name: name.clone(),
+            manual_reset: manual_reset != 0,
+            signaled: initial_state != 0,
+            open_references: 0,
+            live: true,
+        });
+        (state.events.len() - 1, false)
+    };
+    let handle = state.next_event_handle;
+    state.next_event_handle = state
+        .next_event_handle
+        .checked_add(1)
+        .ok_or("event handle overflow")?;
+    state.events[event_index].open_references = state.events[event_index]
+        .open_references
+        .checked_add(1)
+        .ok_or("event reference overflow")?;
+    state.event_handles.push(EventHandle {
+        value: handle,
+        event_index,
+        open: true,
+    });
+    state.last_error = if already_exists {
+        ERROR_ALREADY_EXISTS
+    } else {
+        0
+    };
+    Ok((handle, return_address, manual_reset != 0, initial_state != 0, already_exists, name))
+}
+
+fn get_last_error(vm_id: u8) -> Result<u32, &'static str> {
+    let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP)
+        .ok_or("guest ESP unavailable")? as u32;
+    let frame = guest_stack_range_mut(vm_id, esp, 4)?;
+    let return_address = u32::from_le_bytes(frame.try_into().map_err(|_| "GetLastError return")?);
+    if !GET_LAST_ERROR_RETURNS.contains(&return_address) {
+        return Err("unexpected GetLastError return address");
+    }
+    let state = launcher_state_lock(vm_id)?.lock();
+    Ok(state
+        .as_ref()
+        .ok_or("wc3 launcher state unavailable")?
+        .last_error)
+}
+
+fn get_tick_count(vm_id: u8) -> Result<(u32, u32), &'static str> {
+    let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP)
+        .ok_or("guest ESP unavailable")? as u32;
+    let frame = guest_stack_range_mut(vm_id, esp, 4)?;
+    let return_address = u32::from_le_bytes(frame.try_into().map_err(|_| "GetTickCount return")?);
+    if !matches!(return_address, GET_TICK_COUNT_RETURN | GET_TICK_COUNT_HELPER_RETURN) {
+        return Err("unexpected GetTickCount return address");
+    }
+    let state = launcher_state_lock(vm_id)?.lock();
+    Ok((
+        state
+            .as_ref()
+            .ok_or("wc3 launcher state unavailable")?
+            .tick_ms,
+        return_address,
+    ))
+}
+
+fn close_handle(vm_id: u8) -> Result<(u32, u32, String), &'static str> {
+    let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP)
+        .ok_or("guest ESP unavailable")? as u32;
+    let frame = guest_stack_range_mut(vm_id, esp, 8)?;
+    let return_address =
+        u32::from_le_bytes(frame[0..4].try_into().map_err(|_| "CloseHandle return")?);
+    let handle = u32::from_le_bytes(frame[4..8].try_into().map_err(|_| "CloseHandle handle")?);
+    if !CLOSE_HANDLE_RETURNS.contains(&return_address) || handle == 0 {
+        return Err("unexpected CloseHandle frame");
+    }
+    let launcher = launcher_state_lock(vm_id)?;
+    let mut guard = launcher.lock();
+    let state = guard.as_mut().ok_or("wc3 launcher state unavailable")?;
+    let entry = state
+        .event_handles
+        .iter_mut()
+        .find(|entry| entry.value == handle)
+        .ok_or("unknown CloseHandle handle")?;
+    if !entry.open {
+        return Err("CloseHandle handle is already closed");
+    }
+    entry.open = false;
+    let event = state
+        .events
+        .get_mut(entry.event_index)
+        .ok_or("event handle object missing")?;
+    event.open_references = event
+        .open_references
+        .checked_sub(1)
+        .ok_or("event reference underflow")?;
+    let name = event
+        .name
+        .clone()
+        .unwrap_or_else(|| String::from("<unnamed>"));
+    if event.open_references == 0 {
+        event.live = false;
+    }
+    Ok((handle, return_address, name))
+}
+
 pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
     let id = crate::hv::vmx::guest_registers().rax as u32;
     let imports = match LAUNCHERS
@@ -1871,7 +2070,118 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
     };
     let call = CALLS[usize::from(vm_id)].fetch_add(1, Ordering::AcqRel) + 1;
     super::trace::info(format_args!("call #{} {}!{}", call, import.module, import.symbol));
-    if call == 1 && imports::is_get_version(import) {
+    if import.module.eq_ignore_ascii_case("USER32.dll") {
+        let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP).unwrap_or(0) as u32;
+        let frame = guest_stack_range_mut(vm_id, esp, 8);
+        match frame {
+            Ok(frame) => {
+                let return_address = u32::from_le_bytes(frame[0..4].try_into().unwrap_or([0; 4]));
+                let argument = u32::from_le_bytes(frame[4..8].try_into().unwrap_or([0; 4]));
+                let state = LAUNCHERS[usize::from(vm_id)].lock();
+                let (open_handles, last_error, tick_ms) = state
+                    .as_ref()
+                    .map(|state| {
+                        (
+                            state
+                                .event_handles
+                                .iter()
+                                .filter(|handle| handle.open)
+                                .count(),
+                            state.last_error,
+                            state.tick_ms,
+                        )
+                    })
+                    .unwrap_or((0, 0, 0));
+                super::trace::info(format_args!(
+                    "user32-frontier call={} import={}!{} ret=0x{:08X} esp=0x{:08X} arg0=0x{:08X} open_event_handles={} last_error={} tick_ms={}",
+                    call,
+                    import.module,
+                    import.symbol,
+                    return_address,
+                    esp,
+                    argument,
+                    open_handles,
+                    last_error,
+                    tick_ms
+                ));
+            }
+            Err(reason) => super::trace::fail(format_args!(
+                "user32-frontier frame failed call={} reason={}",
+                call, reason
+            )),
+        }
+        return DispatchOutcome::Stop;
+    } else if imports::is_get_tick_count(import) {
+        match get_tick_count(vm_id) {
+            Ok((tick_ms, return_address)) => {
+                let mut registers = crate::hv::vmx::guest_registers();
+                registers.rax = u64::from(tick_ms);
+                crate::hv::vmx::set_guest_registers(registers);
+                super::trace::info(format_args!(
+                    "main: GetTickCount value={} ret=0x{:08X}",
+                    tick_ms, return_address
+                ));
+                DispatchOutcome::Resume
+            }
+            Err(reason) => {
+                super::trace::fail(format_args!("main: GetTickCount failed reason={}", reason));
+                DispatchOutcome::Stop
+            }
+        }
+    } else if imports::is_create_event_a(import) {
+        match create_event_a(vm_id) {
+            Ok((handle, return_address, manual_reset, initial_state, already_exists, name)) => {
+                let mut registers = crate::hv::vmx::guest_registers();
+                registers.rax = u64::from(handle);
+                crate::hv::vmx::set_guest_registers(registers);
+                super::trace::info(format_args!(
+                    "main: CreateEventA name=\"{}\" manual={} initial={} handle=0x{:08X} already_exists={} ret=0x{:08X}",
+                    name.as_deref().unwrap_or("<unnamed>"),
+                    manual_reset as u8,
+                    initial_state as u8,
+                    handle,
+                    already_exists as u8,
+                    return_address
+                ));
+                DispatchOutcome::Resume
+            }
+            Err(reason) => {
+                super::trace::fail(format_args!("main: CreateEventA failed reason={}", reason));
+                DispatchOutcome::Stop
+            }
+        }
+    } else if imports::is_get_last_error(import) {
+        match get_last_error(vm_id) {
+            Ok(value) => {
+                let mut registers = crate::hv::vmx::guest_registers();
+                registers.rax = u64::from(value);
+                crate::hv::vmx::set_guest_registers(registers);
+                super::trace::info(format_args!("main: GetLastError value={}", value));
+                DispatchOutcome::Resume
+            }
+            Err(reason) => {
+                super::trace::fail(format_args!("main: GetLastError failed reason={}", reason));
+                DispatchOutcome::Stop
+            }
+        }
+    } else if imports::is_close_handle(import) {
+        match close_handle(vm_id) {
+            Ok((handle, return_address, name)) => {
+                let mut registers = crate::hv::vmx::guest_registers();
+                registers.rax = 1;
+                crate::hv::vmx::set_guest_registers(registers);
+                super::trace::info(format_args!(
+                    "main: CloseHandle handle=0x{:08X} type=event name=\"{}\" ret=0x{:08X}",
+                    handle, name, return_address
+                ));
+                DispatchOutcome::Resume
+            }
+            Err(reason) => {
+                super::trace::fail(format_args!("main: CloseHandle failed reason={}", reason));
+                DispatchOutcome::Stop
+            }
+        }
+    } else if call == 1 && imports::is_get_version(import) {
         let mut registers = crate::hv::vmx::guest_registers();
         registers.rax = u64::from(WINDOWS_XP_GET_VERSION);
         crate::hv::vmx::set_guest_registers(registers);
@@ -2520,17 +2830,6 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
                 DispatchOutcome::Stop
             }
         }
-    } else if imports::is_get_tick_count(import) {
-        super::trace::info(format_args!("main entered vm={} address=0x00401000", vm_id));
-        super::trace::info(format_args!(
-            "crt-startup complete vm={} next-import={}!{} call={}",
-            vm_id, import.module, import.symbol, call
-        ));
-        super::trace::info(format_args!(
-            "get-tick-count frontier vm={} import={}!{} call={}",
-            vm_id, import.module, import.symbol, call
-        ));
-        DispatchOutcome::Stop
     } else {
         super::trace::fail(format_args!(
             "gate-1e failed vm={} phase=unexpected-{}-import {}!{}",

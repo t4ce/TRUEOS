@@ -41,6 +41,14 @@ pub(crate) fn patch(
             super::thunk32::Kind::HeapAlloc
         } else if is_heap_free(import) {
             super::thunk32::Kind::HeapFree
+        } else if is_create_event_a(import) {
+            super::thunk32::Kind::CreateEventA
+        } else if is_get_last_error(import) {
+            super::thunk32::Kind::GetLastError
+        } else if is_close_handle(import) {
+            super::thunk32::Kind::CloseHandle
+        } else if is_get_tick_count(import) {
+            super::thunk32::Kind::GetTickCount
         } else if is_tls_set_value(import) {
             super::thunk32::Kind::TlsSetValue
         } else if is_get_current_thread_id(import) {
@@ -168,6 +176,18 @@ pub(crate) fn is_heap_alloc(import: &LauncherImport) -> bool {
 
 pub(crate) fn is_heap_free(import: &LauncherImport) -> bool {
     import.module.eq_ignore_ascii_case("KERNEL32.dll") && import.symbol == "HeapFree"
+}
+
+pub(crate) fn is_create_event_a(import: &LauncherImport) -> bool {
+    import.module.eq_ignore_ascii_case("KERNEL32.dll") && import.symbol == "CreateEventA"
+}
+
+pub(crate) fn is_get_last_error(import: &LauncherImport) -> bool {
+    import.module.eq_ignore_ascii_case("KERNEL32.dll") && import.symbol == "GetLastError"
+}
+
+pub(crate) fn is_close_handle(import: &LauncherImport) -> bool {
+    import.module.eq_ignore_ascii_case("KERNEL32.dll") && import.symbol == "CloseHandle"
 }
 
 pub(crate) fn find_tls_set_value(imports: &[LauncherImport]) -> bool {
