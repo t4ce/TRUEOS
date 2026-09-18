@@ -23,7 +23,7 @@ pub(crate) fn patch(
                     .saturating_mul(super::thunk32::THUNK_BYTES)..,
             )
             .ok_or("wc3 thunk output range")?;
-        super::thunk32::write(import.id, output)?;
+        super::thunk32::write(import.id, is_get_version(import), output)?;
         let iat = image
             .get_mut(slot..slot.checked_add(4).ok_or("wc3 IAT overflow")?)
             .ok_or("wc3 IAT outside image")?;
@@ -33,9 +33,15 @@ pub(crate) fn patch(
 }
 
 pub(crate) fn find_get_version(imports: &[LauncherImport]) -> bool {
-    imports.iter().any(|import| {
-        import.module.eq_ignore_ascii_case("KERNEL32.dll") && import.symbol == "GetVersion"
-    })
+    imports
+        .iter()
+        .filter(|import| is_get_version(import))
+        .count()
+        == 1
+}
+
+pub(crate) fn is_get_version(import: &LauncherImport) -> bool {
+    import.module.eq_ignore_ascii_case("KERNEL32.dll") && import.symbol == "GetVersion"
 }
 
 pub(crate) fn new_table() -> Vec<LauncherImport> {

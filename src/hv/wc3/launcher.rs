@@ -16,6 +16,7 @@ const EXPECTED_SHA256: [u8; 32] = [
     0x5a, 0x8c, 0xca, 0x72, 0x7c, 0x71, 0x9a, 0xe0, 0x54, 0xad, 0xf8, 0xd1, 0x55, 0x23, 0xa8, 0xe3,
     0x09, 0x97, 0x45, 0x22, 0x5e, 0x2f, 0x4f, 0x98, 0x85, 0xf8, 0x87, 0x74, 0xaa, 0x6f, 0x36, 0xd9,
 ];
+const WINDOWS_XP_GET_VERSION: u32 = 0x0A28_0105;
 
 #[derive(Copy, Clone)]
 pub(crate) struct GuestMapping {
@@ -108,20 +109,31 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
         None => return DispatchOutcome::Stop,
     };
     let Some(import) = imports.get(id as usize) else {
+        super::trace::fail(format_args!(
+            "gate-1b failed vm={} phase=invalid-import-id id={}",
+            vm_id, id
+        ));
         return DispatchOutcome::Stop;
     };
     let call = CALLS[usize::from(vm_id)].fetch_add(1, Ordering::AcqRel) + 1;
     super::trace::info(format_args!("call #{} {}!{}", call, import.module, import.symbol));
-    if call == 1
-        && import.module.eq_ignore_ascii_case("KERNEL32.dll")
-        && import.symbol == "GetVersion"
-    {
+    if call == 1 && imports::is_get_version(import) {
+        let mut registers = crate::hv::vmx::guest_registers();
+        registers.rax = u64::from(WINDOWS_XP_GET_VERSION);
+        crate::hv::vmx::set_guest_registers(registers);
+        super::trace::info(format_args!("return #1 KERNEL32.dll!GetVersion eax=0x0A280105"));
+        DispatchOutcome::Resume
+    } else if call == 2 {
         super::trace::info(format_args!(
-            "gate-1a complete vm={} first-import=KERNEL32.dll!GetVersion",
-            vm_id
+            "gate-1b complete vm={} next-import={}!{}",
+            vm_id, import.module, import.symbol
         ));
+        DispatchOutcome::Stop
     } else {
-        super::trace::fail(format_args!("vm={} phase=unexpected-first-import", vm_id));
+        super::trace::fail(format_args!(
+            "gate-1b failed vm={} phase=unexpected-{}-import {}!{}",
+            vm_id, call, import.module, import.symbol
+        ));
+        DispatchOutcome::Stop
     }
-    DispatchOutcome::Stop
 }
