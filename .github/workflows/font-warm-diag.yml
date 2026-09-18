@@ -4,6 +4,7 @@ on:
     branches: ['diag/font-warm-dispatch']
     paths:
       - 'tools/_prepare_font_warm_diag.py'
+      - 'tools/_prepare_font_retire_detail.py'
       - 'tools/test_font_warm_diag.py'
       - '.github/workflows/font-warm-diag.yml'
 permissions:
@@ -30,6 +31,7 @@ jobs:
             /tools/test_tgl_gpu_log_profile.py
             /tools/test_font_warm_diag.py
             /tools/_prepare_font_warm_diag.py
+            /tools/_prepare_font_retire_detail.py
       - name: Read pinned shared log-os without unrelated app checkout
         run: |
           set -euo pipefail
@@ -43,7 +45,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 tools/trueos-doc topic logs
-          python3 tools/_prepare_font_warm_diag.py
+          python3 tools/_prepare_font_retire_detail.py
           python3 tools/test_tgl_gpu_log_profile.py
           python3 tools/test_font_warm_diag.py
           for f in src/log_os.rs src/intel/gpu_font.rs src/intel/gpgpu/operations/primitives.rs src/intel/gpgpu/operations/submission_2d.rs src/intel/gpgpu/rcs/commands.rs; do
