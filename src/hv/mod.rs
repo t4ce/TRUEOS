@@ -5607,6 +5607,9 @@ fn clear_blueprint_process_context(vm_id: u8) -> BlueprintTerminalCleanup {
     // close path clears the owner record, so reversing this order would turn a
     // real cleanup into an unobservable false failure and could drop its reset.
     let _ = crate::shell2::backends::session_pool::close_owner(vm_id);
+    // WC3 is a one-shot experiment. A non-retained end destroys every WC3
+    // capability and allocation before the per-VM guest heap can be released.
+    crate::hv::wc3::purge_one_shot_state(vm_id);
     crate::std_abi_shim::reset_blueprint_process_state(vm_id);
     if let Some(log_slot) = BLUEPRINT_CONSOLE_LOG_BUFFERS.get(vm_id as usize) {
         let _ = log_slot.lock().take();

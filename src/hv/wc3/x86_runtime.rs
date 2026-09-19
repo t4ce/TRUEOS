@@ -302,6 +302,45 @@ fn runtime_for(owner: u8) -> Result<&'static Mutex<Runtime>, i32> {
     RUNTIMES.get(owner as usize).map(RuntimeSlot::runtime).ok_or(ERR_DENIED)
 }
 
+pub(crate) fn purge_one_shot_state(vm_id: u8) {
+    let Some(slot) = RUNTIMES.get(vm_id as usize) else {
+        return;
+    };
+
+    let (spaces, contexts) = if slot.init.load(Ordering::Acquire) == RUNTIME_READY {
+        let retired = {
+            let runtime = unsafe { &*slot.runtime.get().cast::<Mutex<Runtime>>() };
+            let mut runtime = runtime.lock();
+            core::mem::replace(&mut *runtime, Runtime::new())
+        };
+        let counts = (retired.spaces.len(), retired.contexts.len());
+        // Mapping and carrier-page drops must run while this VM's guest heap
+        // is still installed. Their allocations belong to that heap.
+        drop(retired);
+        counts
+    } else {
+        (0, 0)
+    };
+
+    if let Some(in_use) = CARRIER_PDPT_IN_USE.get_u8(vm_id) {
+        *in_use.lock() = [0; 2];
+    }
+    let carrier_pdpt_released = CARRIER_PDPT_ARENAS
+        .get_u8(vm_id)
+        .and_then(|arena| arena.lock().take())
+        .is_some_and(|arena| crate::phys::free_phys_range(arena.phys_start, arena.length));
+
+    if spaces != 0 || contexts != 0 || carrier_pdpt_released {
+        crate::log!(target: "hv";
+            "wc3: one-shot purge vm={} address_spaces={} contexts={} carrier_pdpt_released={}\n",
+            vm_id,
+            spaces,
+            contexts,
+            carrier_pdpt_released as u8,
+        );
+    }
+}
+
 /// Kernel-backed metadata span for one Blueprint's carrier-visible x86
 /// runtime.  `memory` retains this page when it creates the Hull's private
 /// RW/BSS image, so a Tokio carrier and the Hull see the same capabilities.

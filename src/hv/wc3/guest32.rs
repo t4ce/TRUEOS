@@ -116,6 +116,20 @@ pub(crate) fn guest_mapping(vm_id: u8) -> Option<GuestMapping> {
     })
 }
 
+pub(crate) fn purge_one_shot_state(vm_id: u8) -> bool {
+    let Some(backing) = PROBE_BACKINGS.get(usize::from(vm_id)) else {
+        return false;
+    };
+    let released = backing
+        .lock()
+        .take()
+        .is_some_and(|arena| crate::phys::free_phys_range(arena.phys_start, arena.length));
+    if let Some(stage) = PROBE_STAGES.get(usize::from(vm_id)) {
+        stage.store(STAGE_IDLE, Ordering::Release);
+    }
+    released
+}
+
 pub(crate) const fn entry_for_mode(mode: VmBootMode, normal: u64) -> u64 {
     match mode {
         VmBootMode::Wc3Probe => PROBE_CODE_VA,

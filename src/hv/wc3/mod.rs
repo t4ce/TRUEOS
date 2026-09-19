@@ -40,3 +40,10 @@ pub(crate) fn shared_x86_runtime_state_span(vm_id: u8) -> Option<(u64, usize)> {
 pub(crate) fn carrier_pdpt_span(vm_id: u8) -> Result<(u64, usize), &'static str> {
     x86_runtime::carrier_pdpt_span(vm_id)
 }
+
+pub(crate) fn purge_one_shot_state(vm_id: u8) {
+    x86_runtime::purge_one_shot_state(vm_id);
+    if guest32::purge_one_shot_state(vm_id) {
+        crate::log!(target: "hv"; "wc3: one-shot purge vm={} probe_backing_released=1\n", vm_id);
+    }
+}
