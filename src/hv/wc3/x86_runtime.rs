@@ -6,6 +6,9 @@
 
 use alloc::vec::Vec;
 use core::alloc::Layout;
+use core::cell::UnsafeCell;
+use core::mem::MaybeUninit;
+use core::sync::atomic::{AtomicU8, Ordering};
 use spin::Mutex;
 
 use crate::hv::memory::PAGE_SIZE_4K;
@@ -126,7 +129,9 @@ struct Runtime {
 impl Runtime {
     const fn new() -> Self {
         Self {
-            next_handle: 1,
+            // Keep the carrier-visible slot entirely NOBITS. `fresh_handle`
+            // canonicalizes this first zero to the public handle value 1.
+            next_handle: 0,
             spaces: Vec::new(),
             contexts: Vec::new(),
         }
@@ -139,10 +144,78 @@ impl Runtime {
     }
 }
 
-static RUNTIME: Mutex<Runtime> = Mutex::new(Runtime::new());
+// The hull has private RW/BSS, while a Tokio carrier executes against the
+// host kernel mapping.  Keep each Blueprint's x86 capabilities in a page that
+// the hull deliberately retains as kernel-backed shared state.  The mapping
+// payloads themselves are already allocated from that Blueprint's guest heap.
+#[repr(C, align(4096))]
+struct RuntimeSlot {
+    init: AtomicU8,
+    runtime: UnsafeCell<MaybeUninit<Mutex<Runtime>>>,
+}
+
+unsafe impl Sync for RuntimeSlot {}
+
+const RUNTIME_UNINITIALIZED: u8 = 0;
+const RUNTIME_INITIALIZING: u8 = 1;
+const RUNTIME_READY: u8 = 2;
+
+impl RuntimeSlot {
+    const fn new() -> Self {
+        Self {
+            init: AtomicU8::new(RUNTIME_UNINITIALIZED),
+            runtime: UnsafeCell::new(MaybeUninit::uninit()),
+        }
+    }
+
+    fn runtime(&self) -> &'static Mutex<Runtime> {
+        loop {
+            match self.init.load(Ordering::Acquire) {
+                RUNTIME_READY => return unsafe { &*self.runtime.get().cast::<Mutex<Runtime>>() },
+                RUNTIME_UNINITIALIZED => {
+                    if self
+                        .init
+                        .compare_exchange(
+                            RUNTIME_UNINITIALIZED,
+                            RUNTIME_INITIALIZING,
+                            Ordering::AcqRel,
+                            Ordering::Acquire,
+                        )
+                        .is_ok()
+                    {
+                        unsafe { self.runtime.get().write(MaybeUninit::new(Mutex::new(Runtime::new()))) };
+                        self.init.store(RUNTIME_READY, Ordering::Release);
+                    }
+                }
+                RUNTIME_INITIALIZING => core::hint::spin_loop(),
+                _ => unreachable!("x86 runtime slot state"),
+            }
+        }
+    }
+}
+
+#[unsafe(link_section = ".bss.blueprint_x86_runtimes")]
+static RUNTIMES: [RuntimeSlot; crate::allcaps::hv::VM_ID_LIMIT] =
+    [const { RuntimeSlot::new() }; crate::allcaps::hv::VM_ID_LIMIT];
+
+fn runtime_for(owner: u8) -> Result<&'static Mutex<Runtime>, i32> {
+    RUNTIMES.get(owner as usize).map(RuntimeSlot::runtime).ok_or(ERR_DENIED)
+}
+
+/// Kernel-backed metadata span for one Blueprint's carrier-visible x86
+/// runtime.  `memory` retains this page when it creates the Hull's private
+/// RW/BSS image, so a Tokio carrier and the Hull see the same capabilities.
+pub(crate) fn shared_runtime_state_span(vm_id: u8) -> Option<(u64, usize)> {
+    RUNTIMES
+        .get(vm_id as usize)
+        .map(|slot| ((slot as *const RuntimeSlot) as u64, core::mem::size_of::<RuntimeSlot>()))
+}
 
 fn owner() -> Result<u8, i32> {
-    crate::hv::current_vm_id().ok_or(ERR_DENIED)
+    // A Blueprint may enter this ABI through its hull or through a Tokio
+    // carrier.  The execution owner is invariant across that handoff; the
+    // LAPIC-local VM marker is not.
+    crate::hv::current_guest_execution_context_vm_id().ok_or(ERR_DENIED)
 }
 
 fn checked_range(start: u32, len: u32) -> Result<u32, i32> {
@@ -174,7 +247,7 @@ fn mapping_index(
 
 pub(super) fn address_space_create(out: &mut u64) -> Result<(), i32> {
     let owner = owner()?;
-    let mut runtime = RUNTIME.lock();
+    let mut runtime = runtime_for(owner)?.lock();
     let handle = runtime.fresh_handle();
     runtime.spaces.push(AddressSpace {
         handle,
@@ -188,7 +261,7 @@ pub(super) fn address_space_create(out: &mut u64) -> Result<(), i32> {
 
 pub(super) fn address_space_destroy(handle: u64) -> Result<(), i32> {
     let owner = owner()?;
-    let mut runtime = RUNTIME.lock();
+    let mut runtime = runtime_for(owner)?.lock();
     let index = runtime
         .spaces
         .iter()
@@ -219,7 +292,7 @@ pub(super) fn address_space_map(
     if permissions == 0 || permissions & !PERMISSION_MASK != 0 {
         return Err(ERR_INVALID);
     }
-    let mut runtime = RUNTIME.lock();
+    let mut runtime = runtime_for(owner)?.lock();
     let space = runtime
         .spaces
         .iter_mut()
@@ -249,7 +322,7 @@ pub(super) fn address_space_map(
 pub(super) fn address_space_unmap(handle: u64, start: u32, len: u32) -> Result<(), i32> {
     let owner = owner()?;
     checked_range(start, len)?;
-    let mut runtime = RUNTIME.lock();
+    let mut runtime = runtime_for(owner)?.lock();
     let space = runtime
         .spaces
         .iter_mut()
@@ -270,7 +343,7 @@ pub(super) fn address_space_unmap(handle: u64, start: u32, len: u32) -> Result<(
 
 pub(super) fn address_space_read(handle: u64, address: u32, out: &mut [u8]) -> Result<usize, i32> {
     let owner = owner()?;
-    let runtime = RUNTIME.lock();
+    let runtime = runtime_for(owner)?.lock();
     let space = runtime
         .spaces
         .iter()
@@ -294,7 +367,7 @@ pub(super) fn address_space_read(handle: u64, address: u32, out: &mut [u8]) -> R
 
 pub(super) fn address_space_write(handle: u64, address: u32, data: &[u8]) -> Result<usize, i32> {
     let owner = owner()?;
-    let runtime = RUNTIME.lock();
+    let runtime = runtime_for(owner)?.lock();
     let space = runtime
         .spaces
         .iter()
@@ -322,7 +395,7 @@ pub(super) fn context_create(
     out: &mut u64,
 ) -> Result<(), i32> {
     let owner = owner()?;
-    let mut runtime = RUNTIME.lock();
+    let mut runtime = runtime_for(owner)?.lock();
     if !runtime
         .spaces
         .iter()
@@ -349,7 +422,7 @@ pub(super) fn context_create(
 
 pub(super) fn context_destroy(handle: u64) -> Result<(), i32> {
     let owner = owner()?;
-    let mut runtime = RUNTIME.lock();
+    let mut runtime = runtime_for(owner)?.lock();
     let index = runtime
         .contexts
         .iter()
@@ -379,7 +452,7 @@ pub(super) fn context_registers_get(
     out: &mut TrueosX86RegistersV1,
 ) -> Result<(), i32> {
     let owner = owner()?;
-    *out = context_mut(&mut RUNTIME.lock(), handle, owner)?.registers;
+    *out = context_mut(&mut runtime_for(owner)?.lock(), handle, owner)?.registers;
     Ok(())
 }
 
@@ -388,19 +461,19 @@ pub(super) fn context_registers_set(
     registers: TrueosX86RegistersV1,
 ) -> Result<(), i32> {
     let owner = owner()?;
-    context_mut(&mut RUNTIME.lock(), handle, owner)?.registers = registers;
+    context_mut(&mut runtime_for(owner)?.lock(), handle, owner)?.registers = registers;
     Ok(())
 }
 
 pub(super) fn context_park(handle: u64) -> Result<(), i32> {
     let owner = owner()?;
-    context_mut(&mut RUNTIME.lock(), handle, owner)?.parked = true;
+    context_mut(&mut runtime_for(owner)?.lock(), handle, owner)?.parked = true;
     Ok(())
 }
 
 pub(super) fn context_cancel(handle: u64) -> Result<(), i32> {
     let owner = owner()?;
-    context_mut(&mut RUNTIME.lock(), handle, owner)?.cancelled = true;
+    context_mut(&mut runtime_for(owner)?.lock(), handle, owner)?.cancelled = true;
     Ok(())
 }
 
@@ -411,7 +484,7 @@ pub(super) fn context_execute(
 ) -> Result<(), i32> {
     let owner = owner()?;
     let (registers, address_space, cancelled, admitted) = {
-        let runtime = RUNTIME.lock();
+        let runtime = runtime_for(owner)?.lock();
         let context = runtime
             .contexts
             .iter()
@@ -431,7 +504,7 @@ pub(super) fn context_execute(
         return Ok(());
     }
 
-    let mut runtime = RUNTIME.lock();
+    let mut runtime = runtime_for(owner)?.lock();
     let context_index = runtime
         .contexts
         .iter()
@@ -463,7 +536,7 @@ pub(super) fn context_execute(
     drop(runtime);
 
     let exit = unsafe { run_on_existing_vmx_carrier(cr3, registers)? };
-    let mut runtime = RUNTIME.lock();
+    let mut runtime = runtime_for(owner)?.lock();
     let context = context_mut(&mut runtime, handle, owner)?;
     context.registers = exit.registers;
     context.admitted = true;
@@ -527,11 +600,28 @@ fn write_entry(page: HeapArena, index: usize, value: u64) -> Result<(), i32> {
     Ok(())
 }
 
+fn carrier_vmread(field: u64, stage: &'static str) -> Result<u64, i32> {
+    crate::hv::vmx::vmread(field).ok_or_else(|| {
+        let owner = crate::hv::current_guest_execution_context_vm_id();
+        let domain = crate::r::kernel_task_domain::current();
+        crate::log_warn!(
+            target: "hv";
+            "x86 carrier denied stage={} field=0x{:04x} owner={:?} domain={:?} domain_vm={:?}\n",
+            stage,
+            field,
+            owner,
+            domain.domain,
+            domain.vm_id,
+        );
+        ERR_DENIED
+    })
+}
+
 unsafe fn run_on_existing_vmx_carrier(
     cr3: u64,
     registers: TrueosX86RegistersV1,
 ) -> Result<TrueosX86ExitV1, i32> {
-    let vm_id = crate::hv::current_vm_id().ok_or(ERR_DENIED)?;
+    let vm_id = crate::hv::current_guest_execution_context_vm_id().ok_or(ERR_DENIED)?;
     let segment_fields = [
         crate::hv::vmx::VMCS_GUEST_CS_SELECTOR, crate::hv::vmx::VMCS_GUEST_SS_SELECTOR,
         crate::hv::vmx::VMCS_GUEST_DS_SELECTOR, crate::hv::vmx::VMCS_GUEST_ES_SELECTOR,
@@ -546,18 +636,18 @@ unsafe fn run_on_existing_vmx_carrier(
     ];
     let outer_segments = segment_fields
         .iter()
-        .map(|field| crate::hv::vmx::vmread(*field).ok_or(ERR_DENIED))
+        .map(|field| carrier_vmread(*field, "save-segments"))
         .collect::<Result<Vec<_>, _>>()?;
     let outer = [
-        crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_CR0).ok_or(ERR_DENIED)?,
-        crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_CR3).ok_or(ERR_DENIED)?,
-        crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_CR4).ok_or(ERR_DENIED)?,
-        crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RIP).ok_or(ERR_DENIED)?,
-        crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP).ok_or(ERR_DENIED)?,
-        crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RFLAGS).ok_or(ERR_DENIED)?,
-        crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_FS_BASE).ok_or(ERR_DENIED)?,
-        crate::hv::vmx::vmread(crate::hv::vmx::VMCS_CTRL_ENTRY).ok_or(ERR_DENIED)?,
-        crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_IA32_EFER).ok_or(ERR_DENIED)?,
+        carrier_vmread(crate::hv::vmx::VMCS_GUEST_CR0, "save-cr0")?,
+        carrier_vmread(crate::hv::vmx::VMCS_GUEST_CR3, "save-cr3")?,
+        carrier_vmread(crate::hv::vmx::VMCS_GUEST_CR4, "save-cr4")?,
+        carrier_vmread(crate::hv::vmx::VMCS_GUEST_RIP, "save-rip")?,
+        carrier_vmread(crate::hv::vmx::VMCS_GUEST_RSP, "save-rsp")?,
+        carrier_vmread(crate::hv::vmx::VMCS_GUEST_RFLAGS, "save-rflags")?,
+        carrier_vmread(crate::hv::vmx::VMCS_GUEST_FS_BASE, "save-fs-base")?,
+        carrier_vmread(crate::hv::vmx::VMCS_CTRL_ENTRY, "save-entry-controls")?,
+        carrier_vmread(crate::hv::vmx::VMCS_GUEST_IA32_EFER, "save-efer")?,
     ];
     let outer_regs = crate::hv::vmx::guest_registers();
     let mut restore = || {
