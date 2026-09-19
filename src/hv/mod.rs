@@ -138,6 +138,11 @@ static CURRENT_GUEST_BROKER_VM_ID_BY_CPU: [AtomicU8; TRUEOS_VM_CPU_SLOT_LIMIT] =
     [const { AtomicU8::new(0) }; TRUEOS_VM_CPU_SLOT_LIMIT];
 static GUEST_KERNEL_GS_BASE_BY_VM: [AtomicU64; TRUEOS_VM_ID_LIMIT] =
     [const { AtomicU64::new(0) }; TRUEOS_VM_ID_LIMIT];
+// The Hull establishes the EPT trust boundary.  Transient execution contexts
+// owned by that Blueprint reuse this pointer; they never manufacture a second
+// application memory universe.
+static ACTIVE_EPTP_BY_VM: [AtomicU64; TRUEOS_VM_ID_LIMIT] =
+    [const { AtomicU64::new(0) }; TRUEOS_VM_ID_LIMIT];
 static VMX_ROOT_ACTIVE_BY_CPU: [AtomicBool; TRUEOS_VM_CPU_SLOT_LIMIT] =
     [const { AtomicBool::new(false) }; TRUEOS_VM_CPU_SLOT_LIMIT];
 static VMX_EXTERNAL_INTERRUPT_EXITING_BY_CPU: [AtomicBool; TRUEOS_VM_CPU_SLOT_LIMIT] =
@@ -236,6 +241,20 @@ fn current_vmcs_page() -> Result<*mut u8, &'static str> {
 fn current_vmx_root_active() -> Result<bool, &'static str> {
     let slot = current_vmx_slot()?;
     Ok(VMX_ROOT_ACTIVE_BY_CPU[slot].load(Ordering::Acquire))
+}
+
+pub(crate) fn active_eptp_for_vm(vm_id: u8) -> Result<u64, &'static str> {
+    let eptp = ACTIVE_EPTP_BY_VM
+        .get(vm_id as usize)
+        .ok_or("active eptp vm id")?
+        .load(Ordering::Acquire);
+    if eptp == 0 { Err("active eptp unavailable") } else { Ok(eptp) }
+}
+
+fn clear_active_eptp_for_vm(vm_id: u8) {
+    if let Some(eptp) = ACTIVE_EPTP_BY_VM.get(vm_id as usize) {
+        eptp.store(0, Ordering::Release);
+    }
 }
 
 fn prepare_vmx_control_registers() -> Result<u32, &'static str> {
@@ -2386,6 +2405,7 @@ fn eject_offline_vm(vm_id: u8, allow_starting: bool) -> Result<bool, EjectError>
     let _ = crate::r::services::media_service::release_vm(vm_id);
     let _ = crate::ui4::release_owner_resources(crate::ui4::WindowOwner::Vm(vm_id));
     memory::clear_snapshot_state_for_vm(vm_id);
+    clear_active_eptp_for_vm(vm_id);
     let _ = memory::release_guest_hull_rw_for_vm(vm_id);
     let _ = memory::release_guest_stack_for_vm(vm_id);
     let heap_configured = crate::allocators::hv_guest_heap_stats_if_configured(vm_id).is_some();
@@ -6161,6 +6181,7 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
         ));
         None
     } else {
+        clear_active_eptp_for_vm(vm_id);
         memory::release_guest_rel_exec_for_vm(vm_id);
         let _ = take_blueprint_launch(vm_id);
         clear_blueprint_launch_script(vm_id);
@@ -6307,13 +6328,14 @@ async fn vmx_launch_once_with_ept_vpid(
         Ok(v) => v,
         Err(e) => return Err(e),
     };
+    ACTIVE_EPTP_BY_VM[vm_id as usize].store(eptp, Ordering::Release);
     assignment.fence_ept(eptp)?;
     let reset_vmcall_transport = active_restore_meta(vm_id).is_none();
     if !crate::hv::vmcall::prepare_for_vm(vm_id, reset_vmcall_transport) {
         return Err("vmcall comm page");
     }
     let preemption_timer_enabled =
-        setup_vmcs_for_launch(vm_id, vpid, eptp, lineage_record, boot_mode_for_vm(vm_id))?;
+        setup_vmcs_for_launch(vm_id, Some(vpid), eptp, lineage_record, boot_mode_for_vm(vm_id))?;
     let preemption_timer_ticks = preemption_timer_enabled.then(|| {
         let (ticks, rate_shift) =
             vmx_preemption_timer_ticks(crate::allcaps::hv::VMX_LIFECYCLE_PREEMPTION_QUANTUM_MS);
@@ -6883,12 +6905,12 @@ fn handle_guest_wrmsr(vm_id: u8, guest_rip: u64) -> Result<bool, &'static str> {
 
 fn setup_vmcs_for_launch(
     vm_id: u8,
-    vpid: u16,
+    vpid: Option<u16>,
     eptp: u64,
     lineage_record: LineageRecord,
     boot_mode: VmBootMode,
 ) -> Result<bool, &'static str> {
-    if vpid == 0 {
+    if vpid == Some(0) {
         return Err("zero VPID is forbidden");
     }
     let current_cpu_slot = crate::percpu::current_slot();
@@ -6930,9 +6952,12 @@ fn setup_vmcs_for_launch(
             | PROC_BASED_ACTIVATE_SECONDARY
             | PROC_BASED_USE_TSC_OFFSETTING,
     );
+    let requested_proc2 = PROC2_BASED_ENABLE_EPT
+        | if vpid.is_some() { PROC2_BASED_ENABLE_VPID } else { 0 }
+        | PROC2_BASED_ENABLE_VMFUNC;
     let proc2 = crate::hv::vmx::adjust_vmx_ctrl(
         crate::hv::vmx::IA32_VMX_PROCBASED_CTLS2,
-        PROC2_BASED_ENABLE_EPT | PROC2_BASED_ENABLE_VPID | PROC2_BASED_ENABLE_VMFUNC,
+        requested_proc2,
     );
     let requested_exit = crate::hv::vmx::adjust_vmx_ctrl(
         exit_msr,
@@ -6964,7 +6989,7 @@ fn setup_vmcs_for_launch(
         proc2 as u32,
         exit as u32,
         entry as u32,
-        vpid,
+        vpid.unwrap_or(0),
     ));
 
     if (proc & PROC_BASED_ACTIVATE_SECONDARY) == 0 {
@@ -7005,7 +7030,7 @@ fn setup_vmcs_for_launch(
         ));
         return Err("ept unsupported");
     }
-    if (proc2 & PROC2_BASED_ENABLE_VPID) == 0 {
+    if vpid.is_some() && (proc2 & PROC2_BASED_ENABLE_VPID) == 0 {
         hvwarnf(format_args!(
             "hv: vm{}-{} reporting: vmcs ctrl unsupported: secondary bit ENABLE_VPID not available",
             current_vm_id_for_log(),
@@ -7013,9 +7038,14 @@ fn setup_vmcs_for_launch(
         ));
         return Err("vpid unsupported");
     }
+    if vpid.is_none() && (proc2 & PROC2_BASED_ENABLE_VPID) != 0 {
+        return Err("transient VPID cannot be disabled");
+    }
 
     vmwrite(VMCS_CTRL_PIN_BASED, pin)?;
-    vmwrite(VMCS_CTRL_VPID, u64::from(vpid))?;
+    if let Some(vpid) = vpid {
+        vmwrite(VMCS_CTRL_VPID, u64::from(vpid))?;
+    }
     vmwrite(VMCS_CTRL_CPU_BASED, proc)?;
     vmwrite(VMCS_CTRL_SECONDARY, proc2)?;
     vmwrite(VMCS_CTRL_EXCEPTION_BITMAP, EXCEPTION_BITMAP_ALL)?;
@@ -7498,6 +7528,103 @@ fn setup_vmcs_for_launch(
     vmwrite(VMCS_GUEST_LDTR_AR, 0x10000)?;
 
     Ok(preemption_timer_enabled)
+}
+
+/// Result captured from a fresh, lane-local VMCS.  A logical x86 context owns
+/// this state rather than borrowing the Hull's VMCS affinity.
+#[cfg(feature = "wc3")]
+pub(crate) struct TransientProtected32Exit {
+    pub launch: LaunchResult,
+    pub registers: crate::hv::vmx::GuestRegisters,
+    pub rsp: u64,
+    pub rflags: u64,
+    pub fs_base: u64,
+    pub cr3: u64,
+    pub guest_physical: u64,
+    pub guest_linear: u64,
+}
+
+/// Install the already-proven host/control and protected-32 guest VMCS state
+/// on this lane's scratch VMCS, then launch one logical x86 execution slice.
+/// A resume of the logical context deliberately creates another VMCS and uses
+/// VMLAUNCH: Tokio service lanes have no stable current-VMCS affinity.
+#[cfg(feature = "wc3")]
+pub(crate) fn run_transient_protected32(
+    owner: u8,
+    cr3: u64,
+    eip: u32,
+    esp: u32,
+    eflags: u32,
+    fs_base: u32,
+    registers: crate::hv::vmx::GuestRegisters,
+) -> Result<TransientProtected32Exit, &'static str> {
+    if !current_vmx_root_active()? {
+        return Err("vmx core contract inactive");
+    }
+    let eptp = active_eptp_for_vm(owner)?;
+    let basic = unsafe { Msr::new(crate::hv::vmx::IA32_VMX_BASIC).read() };
+    let revision = (basic & 0x7fff_ffff) as u32;
+    let vmcs_va = current_vmcs_page()?;
+    unsafe {
+        core::ptr::write_bytes(vmcs_va, 0, VMX_PAGE_SIZE);
+        *(vmcs_va as *mut u32) = revision;
+    }
+    let vmcs_pa = kernel_va_to_pa(vmcs_va as u64).ok_or("vmcs pa")?;
+    if !crate::hv::vmx::vmclear(vmcs_pa) {
+        return Err("vmclear");
+    }
+    if !crate::hv::vmx::vmptrld(vmcs_pa) {
+        return Err("vmptrld");
+    }
+
+    // Reuse the Hull's complete host/control setup and Gate-0's known-good
+    // 32-bit protected guest descriptor state.  VPID is intentionally absent
+    // because this VMCS is discarded after every slice.
+    if let Err(error) = setup_vmcs_for_launch(
+        owner,
+        None,
+        eptp,
+        LineageRecord::new(),
+        VmBootMode::Wc3Probe,
+    ) {
+        let _ = crate::hv::vmx::vmclear(vmcs_pa);
+        return Err(error);
+    }
+    setup_vmcs_guest_protected32(cr3, eip, esp, eflags, fs_base)?;
+    crate::hv::vmx::set_guest_registers(registers);
+
+    let mut launch = LaunchResult::default();
+    crate::hv::vmx::vmlaunch_once_wrapper(owner, &mut launch);
+    let exit = TransientProtected32Exit {
+        launch,
+        registers: crate::hv::vmx::guest_registers(),
+        rsp: vmread(VMCS_GUEST_RSP).unwrap_or(esp as u64),
+        rflags: vmread(VMCS_GUEST_RFLAGS).unwrap_or(eflags as u64),
+        fs_base: vmread(VMCS_GUEST_FS_BASE).unwrap_or(fs_base as u64),
+        cr3: vmread(VMCS_GUEST_CR3).unwrap_or(cr3),
+        guest_physical: vmread(VMCS_GUEST_PHYSICAL_ADDRESS).unwrap_or(0),
+        guest_linear: vmread(VMCS_GUEST_LINEAR_ADDRESS).unwrap_or(0),
+    };
+    if !crate::hv::vmx::vmclear(vmcs_pa) {
+        return Err("transient vmclear");
+    }
+    Ok(exit)
+}
+
+#[cfg(feature = "wc3")]
+fn setup_vmcs_guest_protected32(
+    cr3: u64,
+    eip: u32,
+    esp: u32,
+    eflags: u32,
+    fs_base: u32,
+) -> Result<(), &'static str> {
+    vmwrite(VMCS_GUEST_CR3, cr3)?;
+    vmwrite(VMCS_GUEST_RIP, eip as u64)?;
+    vmwrite(VMCS_GUEST_RSP, esp as u64)?;
+    vmwrite(VMCS_GUEST_RFLAGS, (eflags as u64 | RFLAGS_RESERVED_BIT1) & !RFLAGS_IF)?;
+    vmwrite(VMCS_GUEST_FS_BASE, fs_base as u64)?;
+    Ok(())
 }
 
 fn vmx_preemption_timer_ticks(quantum_ms: u64) -> (u32, u8) {
