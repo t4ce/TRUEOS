@@ -348,6 +348,10 @@ pub(crate) fn is_get_command_line_a(import: &LauncherImport) -> bool {
     import.module.eq_ignore_ascii_case("KERNEL32.dll") && import.symbol == "GetCommandLineA"
 }
 
+pub(crate) fn is_create_process_a(import: &LauncherImport) -> bool {
+    import.module.eq_ignore_ascii_case("KERNEL32.dll") && import.symbol == "CreateProcessA"
+}
+
 pub(crate) fn find_get_environment_strings_w(imports: &[LauncherImport]) -> bool {
     imports
         .iter()

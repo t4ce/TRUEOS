@@ -64,6 +64,7 @@ const GET_STD_HANDLE_RETURN: u32 = 0x0040_4A0D;
 const GET_FILE_TYPE_RETURN: u32 = 0x0040_4A1B;
 const SET_HANDLE_COUNT_RETURN: u32 = 0x0040_4A52;
 const STD_HANDLES: [u32; 3] = [0x5743_1001, 0x5743_1002, 0x5743_1003];
+const CREATE_PROCESS_A_RETURN: u32 = 0x0040_12E0;
 const GET_COMMAND_LINE_A_RETURNS: [u32; 2] = [0x0040_21D0, 0x0040_1181];
 const GET_ENVIRONMENT_STRINGS_W_RETURN: u32 = 0x0040_4786;
 const GET_ENVIRONMENT_STRINGS_A_RETURN: u32 = 0x0040_479E;
@@ -2550,6 +2551,149 @@ fn trace_create_window_ex_a(vm_id: u8) -> Result<(), &'static str> {
     Ok(())
 }
 
+fn probe_create_process_a(vm_id: u8, call: u32) -> Result<(), &'static str> {
+    let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP)
+        .ok_or("guest ESP unavailable")? as u32;
+    let frame = guest_stack_range_mut(vm_id, esp, 44)?;
+    let frame_bytes: [u8; 44] = frame.try_into().map_err(|_| "CreateProcessA frame")?;
+    let word = |offset: usize| {
+        u32::from_le_bytes(frame_bytes[offset..offset + 4].try_into().unwrap_or([0; 4]))
+    };
+    let return_address = word(0);
+    let application_name = word(4);
+    let command_line_pointer = word(8);
+    let process_attributes = word(12);
+    let thread_attributes = word(16);
+    let inherit_handles = word(20);
+    let creation_flags = word(24);
+    let environment = word(28);
+    let current_directory = word(32);
+    let startup_info = word(36);
+    let process_info = word(40);
+    let command_line = if command_line_pointer == 0 {
+        String::from("<null>")
+    } else {
+        read_guest_c_string(vm_id, command_line_pointer, 1024)
+            .unwrap_or_else(|_| String::from("<unreadable>"))
+    };
+    let startup_bytes = if startup_info == 0 {
+        Vec::new()
+    } else {
+        launcher_read_range(vm_id, startup_info, 0x44)?.to_vec()
+    };
+    let process_bytes = if process_info == 0 {
+        Vec::new()
+    } else {
+        launcher_read_range(vm_id, process_info, 16)?.to_vec()
+    };
+    let startup_word = |offset: usize| {
+        u32::from_le_bytes(
+            startup_bytes[offset..offset + 4]
+                .try_into()
+                .unwrap_or([0; 4]),
+        )
+    };
+    let startup_u16 = |offset: usize| {
+        u16::from_le_bytes(
+            startup_bytes[offset..offset + 2]
+                .try_into()
+                .unwrap_or([0; 2]),
+        )
+    };
+    let process_word = |offset: usize| {
+        u32::from_le_bytes(
+            process_bytes[offset..offset + 4]
+                .try_into()
+                .unwrap_or([0; 4]),
+        )
+    };
+    super::trace::info(format_args!(
+        "CreateProcessA probe ret=0x{:08X} esp=0x{:08X} frame={}",
+        return_address,
+        esp,
+        format_hex_bytes(&frame_bytes)
+    ));
+    super::trace::info(format_args!(
+        "CreateProcessA application=0x{:08X} command_line_ptr=0x{:08X} command_line=\"{}\" process_attrs=0x{:08X} thread_attrs=0x{:08X} inherit={} flags=0x{:08X} environment=0x{:08X} current_directory=0x{:08X} startup_info=0x{:08X} process_info=0x{:08X}",
+        application_name,
+        command_line_pointer,
+        command_line,
+        process_attributes,
+        thread_attributes,
+        inherit_handles,
+        creation_flags,
+        environment,
+        current_directory,
+        startup_info,
+        process_info
+    ));
+    super::trace::info(format_args!(
+        "CreateProcessA startup_info cb=0x{:08X} flags=0x{:08X} wShowWindow={} hStdInput=0x{:08X} hStdOutput=0x{:08X} hStdError=0x{:08X} bytes={}",
+        startup_word(0),
+        startup_word(0x2C),
+        startup_u16(0x30),
+        startup_word(0x38),
+        startup_word(0x3C),
+        startup_word(0x40),
+        format_hex_bytes(&startup_bytes)
+    ));
+    super::trace::info(format_args!(
+        "CreateProcessA process_info hProcess=0x{:08X} hThread=0x{:08X} process_id={} thread_id={} bytes={}",
+        process_word(0),
+        process_word(4),
+        process_word(8),
+        process_word(12),
+        format_hex_bytes(&process_bytes)
+    ));
+    let launcher = LAUNCHERS
+        .get(usize::from(vm_id))
+        .ok_or("unsupported wc3 launcher VM id")?;
+    let state = launcher.lock();
+    let state = state.as_ref().ok_or("wc3 launcher state unavailable")?;
+    let named_events = state
+        .events
+        .iter()
+        .filter(|event| event.live && event.open_references != 0 && event.name.is_some())
+        .count();
+    let unnamed_events = state
+        .events
+        .iter()
+        .filter(|event| event.live && event.open_references != 0 && event.name.is_none())
+        .count();
+    let thread = state
+        .threads
+        .iter()
+        .find(|thread| thread.handle == THREAD_HANDLE_BASE);
+    let mut thread_state = String::new();
+    match thread {
+        Some(thread) => {
+            let _ = write!(
+                thread_state,
+                "handle=0x{:08X} tid={} suspend_count={} open={} runnable_deferred={}",
+                thread.handle,
+                thread.tid,
+                thread.suspend_count,
+                u32::from(thread.open),
+                u32::from(thread.runnable_deferred)
+            );
+        }
+        None => {
+            let _ = write!(thread_state, "handle=0x{:08X} state=<missing>", THREAD_HANDLE_BASE);
+        }
+    }
+    super::trace::info(format_args!(
+        "CreateProcessA parent_state execution_debt={} named_events={} unnamed_events={} {} focused_hwnd=0x{:08X} call={} expected_ret=0x{:08X}",
+        state.execution_debt.unwrap_or(0),
+        named_events,
+        unnamed_events,
+        thread_state,
+        state.focused_window.unwrap_or(0),
+        call,
+        CREATE_PROCESS_A_RETURN
+    ));
+    Ok(())
+}
+
 fn create_window_ex_a(vm_id: u8) -> Result<(u32, u32, String), &'static str> {
     let esp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP)
         .ok_or("guest ESP unavailable")? as u32;
@@ -3920,6 +4064,17 @@ pub(crate) fn handle_vmcall(vm_id: u8) -> DispatchOutcome {
                 super::trace::fail(format_args!(
                     "ResumeThread frame failed call={} reason={}",
                     call, reason
+                ));
+                DispatchOutcome::Stop
+            }
+        }
+    } else if imports::is_create_process_a(import) {
+        match probe_create_process_a(vm_id, call) {
+            Ok(()) => DispatchOutcome::Stop,
+            Err(reason) => {
+                super::trace::fail(format_args!(
+                    "CreateProcessA probe failed vm={} call={} reason={}",
+                    vm_id, call, reason
                 ));
                 DispatchOutcome::Stop
             }
