@@ -45,7 +45,12 @@ pub(crate) mod flags {
     /// Render Info is intentionally NOT enabled: font-tessel polling and retry
     /// dumps exhausted the first capture. All areas retain Error/Important/Warn.
     /// See log_os.tgl_gpu_diag_profile.txt for the exact matrix and limitations.
-    pub(crate) const TGL_GPU_DIAG_PROFILE_ENABLED: bool = true;
+    pub(crate) const TGL_GPU_DIAG_PROFILE_ENABLED: bool = false;
+
+    /// Blueprint/hypervisor bring-up profile. Keep the semantic Blueprint and
+    /// HV lanes fully visible while suppressing display, render, and GPU
+    /// chatter that obscures Blueprint loading and VM lifecycle transitions.
+    pub(crate) const BLUEPRINT_HV_DEBUG_PROFILE_ENABLED: bool = true;
 
     /// Compact font warm/coverage breadcrumbs, using the existing Gpgpu/Info
     /// policy and rate limiter. No Render/Info or screen-specific filter.
@@ -101,7 +106,7 @@ pub(crate) mod flags {
     /// They deliberately emit through the already-admitted Render/Info lane
     /// instead of widening Render to Trace: enabling every Intel render trace
     /// would perturb the exact FontKernel/UI4 path this profile measures.
-    pub(crate) const SHELL2_RENDER_DIAG_PROFILE_ENABLED: bool = true;
+    pub(crate) const SHELL2_RENDER_DIAG_PROFILE_ENABLED: bool = false;
     pub(crate) const SHELL2_RENDER_DIAG_FIRST: u64 = 16;
     pub(crate) const SHELL2_RENDER_DIAG_EVERY: u64 = 128;
 
@@ -114,7 +119,7 @@ pub(crate) mod flags {
     /// with their original backend reason before mapping to DeviceLost (-32).
     /// Sample repeated successful stages; never suppress failure records.
     /// This flag does not widen any area policy or enable per-frame Trace.
-    pub(crate) const QUAD_TEXTURE_DIAG_PROFILE_ENABLED: bool = true;
+    pub(crate) const QUAD_TEXTURE_DIAG_PROFILE_ENABLED: bool = false;
     pub(crate) const QUAD_TEXTURE_DIAG_FIRST: u64 = 8;
     pub(crate) const QUAD_TEXTURE_DIAG_EVERY: u64 = 128;
 
@@ -210,9 +215,9 @@ pub(crate) mod flags {
     pub(crate) const HTML_SHACK_IDLE_LOGS: bool = false;
     // Stage1 suppresses the rate-limited present diagnostics when enabled.
     pub(crate) const INTEL_STAGE1_LOGS: bool = false;
-    pub(crate) const INTEL_RENDER_NGIN_LOGS: bool = true;
-    pub(crate) const INTEL_RENDER_NGIN_BATCH_LOGS: bool = true;
-    pub(crate) const INTEL_DISPLAY_NGIN_LOGS: bool = true;
+    pub(crate) const INTEL_RENDER_NGIN_LOGS: bool = false;
+    pub(crate) const INTEL_RENDER_NGIN_BATCH_LOGS: bool = false;
+    pub(crate) const INTEL_DISPLAY_NGIN_LOGS: bool = false;
     pub(crate) const HID_DEBUG_REPORT_LOGS: bool = false;
     pub(crate) const USB_MASS_UAS_TRACE_LOGS: bool = USB_UAS_DIAG_PROFILE_ENABLED;
     pub(crate) const STORAGE_TRACE_LOGS: bool = false;
@@ -224,6 +229,17 @@ pub(crate) mod flags {
     ///
     /// Keep all area/profile choices here: both sinks consult this same policy.
     pub(crate) const fn area_log_policy(area: LogArea) -> LogLevelPolicy {
+        if BLUEPRINT_HV_DEBUG_PROFILE_ENABLED {
+            return match area {
+                LogArea::Hv | LogArea::Blueprint => {
+                    LogLevelPolicy::up(LogLevelFilter::Trace)
+                }
+                LogArea::Gfx | LogArea::Gpgpu | LogArea::Render => {
+                    LogLevelPolicy::up(LogLevelFilter::Warn)
+                }
+                _ => LogLevelPolicy::up(LogLevelFilter::Warn),
+            };
+        }
         if TGL_GPU_DIAG_PROFILE_ENABLED {
             return match area {
                 LogArea::Gfx | LogArea::Gpgpu => LogLevelPolicy::up(LogLevelFilter::Info),

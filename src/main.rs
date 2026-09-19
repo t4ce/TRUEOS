@@ -149,7 +149,8 @@ pub extern "C" fn kmain() -> ! {
     live_update::log_boot_mode();
     crate::log_info!(
         target: "global";
-        "boot: stage=bsp-early log_config boot_level={:?} gfx_level={:?} gpgpu_level={:?} render_level={:?} helio_gfx_diag={} ui4_diag={} shell2_render_diag={}\n",
+        "boot: stage=bsp-early log_config profile=blueprint-hv-debug={} boot_level={:?} gfx_level={:?} gpgpu_level={:?} render_level={:?} helio_gfx_diag={} ui4_diag={} shell2_render_diag={}\n",
+        crate::log_os::flags::BLUEPRINT_HV_DEBUG_PROFILE_ENABLED as u8,
         crate::log_os::flags::BOOT_LOG_LEVEL,
         crate::log_os::flags::GFX_LOG_LEVEL,
         crate::log_os::flags::GPGPU_LOG_LEVEL,
