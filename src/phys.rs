@@ -190,6 +190,32 @@ pub fn reserve_heap_arena(size: usize, align: usize) -> Option<HeapArena> {
     })
 }
 
+/// Reserve an HHDM-backed arena whose physical end is below 4 GiB.
+///
+/// Legacy 32-bit PAE ignores CR3 bits 63:32, so its 32-byte PDPTE root must
+/// live in this range even though the paging structures it references may be
+/// above 4 GiB.
+pub fn reserve_legacy_pae_root_arena(size: usize, align: usize) -> Option<HeapArena> {
+    const LEGACY_PAE_PHYS_END: u64 = 1u64 << 32;
+    if size == 0 || HHDM_BASE.load(Ordering::Relaxed) == 0 {
+        return None;
+    }
+
+    let align = align.max(32);
+    let mut guard = PMM.lock();
+    let phys = guard.as_mut()?.allocate(
+        u64::try_from(size).ok()?,
+        u64::try_from(align).ok()?,
+        MIN_USABLE_BASE,
+        Some(LEGACY_PAE_PHYS_END),
+    )?;
+    Some(HeapArena {
+        phys_start: phys,
+        virt_start: phys_to_virt(phys as usize),
+        length: size,
+    })
+}
+
 /// Reserve an exact physical arena. Snapshot restoration uses this only for
 /// pointer-bearing guest heaps whose virtual addresses cannot be relocated.
 pub fn reserve_heap_arena_at(phys_start: u64, size: usize) -> Option<HeapArena> {

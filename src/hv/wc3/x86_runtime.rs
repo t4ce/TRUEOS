@@ -12,6 +12,8 @@ use core::sync::atomic::{AtomicU8, Ordering};
 use spin::Mutex;
 
 use crate::hv::memory::PAGE_SIZE_4K;
+use crate::phys::HeapArena;
+use crate::r::static_slots::StaticSlots;
 use v::bp_abi::{TrueosX86ExitV1, TrueosX86RegistersV1};
 
 pub(super) const ERR_INVALID: i32 = -22;
@@ -23,6 +25,10 @@ pub(super) const PERMISSION_READ: u32 = 1;
 pub(super) const PERMISSION_WRITE: u32 = 2;
 pub(super) const PERMISSION_EXECUTE: u32 = 4;
 const PERMISSION_MASK: u32 = PERMISSION_READ | PERMISSION_WRITE | PERMISSION_EXECUTE;
+const PAE_PRESENT: u64 = 1 << 0;
+const PAE_WRITABLE: u64 = 1 << 1;
+const PAE_PDPT_BYTES: usize = 32;
+const PAE_PDPT_SLOTS: usize = PAGE_SIZE_4K / PAE_PDPT_BYTES;
 
 struct Mapping {
     start: u32,
@@ -129,8 +135,17 @@ struct Context {
     cancelled: bool,
     carrier_cr3: Option<u64>,
     carrier_pages: Vec<CarrierPage>,
+    carrier_pdpt_slot: Option<u8>,
     carrier_generation: u64,
     admitted: bool,
+}
+
+impl Drop for Context {
+    fn drop(&mut self) {
+        if let Some(slot) = self.carrier_pdpt_slot.take() {
+            release_carrier_pdpt(self.owner, slot);
+        }
+    }
 }
 
 struct Runtime {
@@ -210,6 +225,78 @@ impl RuntimeSlot {
 #[unsafe(link_section = ".bss.blueprint_x86_runtimes")]
 static RUNTIMES: [RuntimeSlot; crate::allcaps::hv::VM_ID_LIMIT] =
     [const { RuntimeSlot::new() }; crate::allcaps::hv::VM_ID_LIMIT];
+
+static CARRIER_PDPT_ARENAS: StaticSlots<
+    Option<HeapArena>,
+    { crate::allcaps::hv::VM_ID_LIMIT },
+> = StaticSlots::from_slots(
+    [const { Mutex::new(None) }; crate::allcaps::hv::VM_ID_LIMIT],
+);
+static CARRIER_PDPT_IN_USE: StaticSlots<
+    [u64; 2],
+    { crate::allcaps::hv::VM_ID_LIMIT },
+> = StaticSlots::from_slots(
+    [const { Mutex::new([0; 2]) }; crate::allcaps::hv::VM_ID_LIMIT],
+);
+
+pub(super) fn carrier_pdpt_span(vm_id: u8) -> Result<(u64, usize), &'static str> {
+    let arena_lock = CARRIER_PDPT_ARENAS
+        .get_u8(vm_id)
+        .ok_or("wc3 carrier pdpt vm id")?;
+    let mut arena = arena_lock.lock();
+    if arena.is_none() {
+        let allocated = crate::phys::reserve_legacy_pae_root_arena(PAGE_SIZE_4K, PAGE_SIZE_4K)
+            .ok_or("wc3 carrier pdpt low arena")?;
+        if allocated.phys_start.saturating_add(allocated.length as u64) > (1u64 << 32) {
+            return Err("wc3 carrier pdpt above 4g");
+        }
+        unsafe { core::ptr::write_bytes(allocated.virt_start as *mut u8, 0, allocated.length) };
+        *arena = Some(allocated);
+    }
+    let arena = arena.ok_or("wc3 carrier pdpt arena")?;
+    Ok((arena.phys_start, arena.length))
+}
+
+fn reserve_carrier_pdpt(vm_id: u8) -> Result<(u8, CarrierPageRef), i32> {
+    let (phys_start, _) = carrier_pdpt_span(vm_id).map_err(|_| ERR_NO_MEMORY)?;
+    let arena = CARRIER_PDPT_ARENAS
+        .get_u8(vm_id)
+        .and_then(|slot| *slot.lock())
+        .ok_or(ERR_NO_MEMORY)?;
+    let in_use = CARRIER_PDPT_IN_USE.get_u8(vm_id).ok_or(ERR_DENIED)?;
+    let mut words = in_use.lock();
+    for slot in 0..PAE_PDPT_SLOTS {
+        let word = slot / 64;
+        let bit = 1u64 << (slot % 64);
+        if words[word] & bit != 0 {
+            continue;
+        }
+        words[word] |= bit;
+        let offset = slot * PAE_PDPT_BYTES;
+        let ptr = unsafe { (arena.virt_start as *mut u8).add(offset) };
+        unsafe { core::ptr::write_bytes(ptr, 0, PAE_PDPT_BYTES) };
+        return Ok((
+            u8::try_from(slot).map_err(|_| ERR_NO_MEMORY)?,
+            CarrierPageRef {
+                ptr: ptr as usize,
+                phys_start: phys_start + offset as u64,
+            },
+        ));
+    }
+    Err(ERR_NO_MEMORY)
+}
+
+fn release_carrier_pdpt(vm_id: u8, slot: u8) {
+    let Some(in_use) = CARRIER_PDPT_IN_USE.get_u8(vm_id) else {
+        return;
+    };
+    let slot = usize::from(slot);
+    if slot >= PAE_PDPT_SLOTS {
+        return;
+    }
+    let mut words = in_use.lock();
+    words[slot / 64] &= !(1u64 << (slot % 64));
+}
 
 fn runtime_for(owner: u8) -> Result<&'static Mutex<Runtime>, i32> {
     RUNTIMES.get(owner as usize).map(RuntimeSlot::runtime).ok_or(ERR_DENIED)
@@ -426,6 +513,7 @@ pub(super) fn context_create(
         cancelled: false,
         carrier_cr3: None,
         carrier_pages: Vec::new(),
+        carrier_pdpt_slot: None,
         carrier_generation: 0,
         admitted: false,
     });
@@ -540,7 +628,28 @@ pub(super) fn context_execute(
         context.carrier_pages = Vec::new();
     }
     if context.carrier_cr3.is_none() {
-        let (cr3, pages) = build_carrier_page_tables(owner, &mappings)?;
+        let pdpt = if let Some(slot) = context.carrier_pdpt_slot {
+            let (_, span_bytes) = carrier_pdpt_span(owner).map_err(|_| ERR_NO_MEMORY)?;
+            let arena = CARRIER_PDPT_ARENAS
+                .get_u8(owner)
+                .and_then(|arena| *arena.lock())
+                .ok_or(ERR_NO_MEMORY)?;
+            let offset = usize::from(slot) * PAE_PDPT_BYTES;
+            if offset + PAE_PDPT_BYTES > span_bytes {
+                return Err(ERR_INVALID);
+            }
+            let ptr = unsafe { (arena.virt_start as *mut u8).add(offset) };
+            unsafe { core::ptr::write_bytes(ptr, 0, PAE_PDPT_BYTES) };
+            CarrierPageRef {
+                ptr: ptr as usize,
+                phys_start: arena.phys_start + offset as u64,
+            }
+        } else {
+            let (slot, pdpt) = reserve_carrier_pdpt(owner)?;
+            context.carrier_pdpt_slot = Some(slot);
+            pdpt
+        };
+        let (cr3, pages) = build_carrier_page_tables(owner, pdpt, &mappings)?;
         context.carrier_cr3 = Some(cr3);
         context.carrier_pages = pages;
         context.carrier_generation = generation;
@@ -559,6 +668,7 @@ pub(super) fn context_execute(
 
 fn build_carrier_page_tables(
     owner: u8,
+    pdpt: CarrierPageRef,
     mappings: &[(u32, u32, u32, u64)],
 ) -> Result<(u64, Vec<CarrierPage>), i32> {
     let mut pages = Vec::new();
@@ -586,11 +696,12 @@ fn build_carrier_page_tables(
         pages.push(CarrierPage { ptr: ptr as usize, phys_start });
         Ok(pages.last().ok_or(ERR_NO_MEMORY)?.reference())
     };
-    let pdpt = alloc_page(&mut pages)?;
     let mut pds = [pdpt; 4];
     for (index, pd) in pds.iter_mut().enumerate() {
         *pd = alloc_page(&mut pages)?;
-        write_entry(pdpt, index, physical_address(*pd) | 0x7)?;
+        // In legacy 32-bit PAE paging, PDPTE bits 1 and 2 are reserved.  A
+        // value of 0x7 therefore raises #PF(RSVD) on the first page walk.
+        write_entry(pdpt, index, physical_address(*pd) | PAE_PRESENT)?;
     }
 
     let mut ptes: Vec<(u32, CarrierPageRef)> = Vec::new();
@@ -606,13 +717,20 @@ fn build_carrier_page_tables(
             } else {
                 let page = alloc_page(&mut pages)?;
                 ptes.push((pd_index as u32, page));
-                write_entry(*pd_page, pd_slot, physical_address(page) | 0x7)?;
+                // The carrier executes at CPL0, so keep its mappings
+                // supervisor-only.  In particular, do not inherit a U/S bit
+                // into a guest whose CR4 may retain host SMEP/SMAP policy.
+                write_entry(
+                    *pd_page,
+                    pd_slot,
+                    physical_address(page) | PAE_PRESENT | PAE_WRITABLE,
+                )?;
                 page
             };
             let page_offset = (va - start) as u64;
             let guest_physical = phys_start.checked_add(page_offset).ok_or(ERR_INVALID)?;
-            let mut flags = 1u64;
-            if permissions & PERMISSION_WRITE != 0 { flags |= 2; }
+            let mut flags = PAE_PRESENT;
+            if permissions & PERMISSION_WRITE != 0 { flags |= PAE_WRITABLE; }
             write_entry(pt, (va as usize >> 12) & 0x1ff, guest_physical | flags)?;
             va = va.checked_add(PAGE_SIZE_4K as u32).ok_or(ERR_INVALID)?;
         }
@@ -654,8 +772,33 @@ fn run_x86_context_on_carrier(
             exit.guest_linear, exit.launch.exit_qualification,
         );
     }
+    if exit.launch.exit_reason & 0xffff == 0 {
+        let interruption_info = exit.interruption_info;
+        let vector = (interruption_info & 0xff) as u8;
+        let error_code_valid = interruption_info & (1 << 11) != 0;
+        crate::log_important!(
+            target: "hv";
+            "x86 exception vm={} rip=0x{:08X} vector={} name={} error_valid={} error=0x{:X} intr_info=0x{:08X}\n",
+            owner,
+            exit.launch.guest_rip,
+            vector,
+            crate::hv::vmx::decode_exception_vector(vector),
+            error_code_valid as u8,
+            exit.interruption_error_code,
+            interruption_info,
+        );
+    }
+    let exit_reason = exit.launch.exit_reason & 0xffff;
+    let resumed_eip = if exit_reason == crate::hv::vmx::VMEXIT_REASON_VMCALL {
+        exit.launch
+            .guest_rip
+            .checked_add(exit.instruction_len)
+            .ok_or(ERR_INVALID)?
+    } else {
+        exit.launch.guest_rip
+    };
     Ok(TrueosX86ExitV1 {
-        kind: match exit.launch.exit_reason & 0xffff {
+        kind: match exit_reason {
             crate::hv::vmx::VMEXIT_REASON_VMCALL => 1, 0 => 2, 48 => 3, 0x0c => 4, _ => 255,
         },
         detail: exit.launch.exit_reason as u32,
@@ -665,7 +808,7 @@ fn run_x86_context_on_carrier(
             ecx: exit.registers.rcx as u32, edx: exit.registers.rdx as u32,
             esi: exit.registers.rsi as u32, edi: exit.registers.rdi as u32,
             ebp: exit.registers.rbp as u32, esp: exit.rsp as u32,
-            eip: exit.launch.guest_rip as u32, eflags: exit.rflags as u32,
+            eip: u32::try_from(resumed_eip).map_err(|_| ERR_INVALID)?, eflags: exit.rflags as u32,
             fs_base: exit.fs_base as u32,
         },
     })

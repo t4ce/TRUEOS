@@ -432,6 +432,21 @@ pub fn build_ept_identity_4g() -> Result<u64, &'static str> {
         )?;
     }
 
+    #[cfg(feature = "wc3")]
+    {
+        let (carrier_pdpt_pa, carrier_pdpt_bytes) =
+            crate::hv::wc3::carrier_pdpt_span(current_vm_id_for_log())?;
+        map_ept_identity_span(
+            pdpt,
+            &mut next_pd,
+            &mut next_pt,
+            &mut leaf_2m,
+            carrier_pdpt_pa,
+            carrier_pdpt_bytes as u64,
+            "wc3-carrier-pdpt",
+        )?;
+    }
+
 
     if let Some(comm_pa) = crate::hv::vmcall::pa_for_vm(current_vm_id_for_log()) {
         map_ept_identity_span(

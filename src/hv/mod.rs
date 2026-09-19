@@ -6992,7 +6992,16 @@ fn setup_vmcs_host_and_controls(
         }
         (fallback_pin, fallback_exit)
     };
-    let entry = crate::hv::vmx::adjust_vmx_ctrl(entry_msr, ENTRY_CTL_IA32E_MODE_GUEST);
+    // A transient protected-32 carrier supplies a legacy PAE root, not a
+    // four-level IA-32e root.  Leaving IA32E_MODE_GUEST set makes the CPU
+    // reinterpret that PDPT as a PML4 and fault on the first instruction
+    // fetch even though the intended PAE leaf is present.
+    let requested_entry = if protected32.is_some() {
+        0
+    } else {
+        ENTRY_CTL_IA32E_MODE_GUEST
+    };
+    let entry = crate::hv::vmx::adjust_vmx_ctrl(entry_msr, requested_entry);
     hvlogf(format_args!(
         "hv: vm{}-{} reporting: vmcs controls pin=0x{:08X} proc=0x{:08X} proc2=0x{:08X} exit=0x{:08X} entry=0x{:08X} vpid={}",
         current_vm_id_for_log(),
@@ -7579,9 +7588,14 @@ fn setup_vmcs_protected32_guest(
     sysenter_eip: u64,
     pat: u64,
 ) -> Result<(), &'static str> {
+    const CR4_PAE: u64 = 1 << 5;
+    const CR4_LA57: u64 = 1 << 12;
+    const CR4_PCIDE: u64 = 1 << 17;
+    let guest_cr4 = (host_cr4 | CR4_PAE) & !(CR4_LA57 | CR4_PCIDE);
+
     vmwrite(VMCS_GUEST_CR0, host_cr0)?;
     vmwrite(VMCS_GUEST_CR3, input.cr3)?;
-    vmwrite(VMCS_GUEST_CR4, host_cr4)?;
+    vmwrite(VMCS_GUEST_CR4, guest_cr4)?;
     vmwrite(VMCS_GUEST_RFLAGS, (input.eflags as u64 | RFLAGS_RESERVED_BIT1) & !RFLAGS_IF)?;
     vmwrite(VMCS_GUEST_RIP, input.eip as u64)?;
     vmwrite(VMCS_GUEST_RSP, input.esp as u64)?;
@@ -7635,6 +7649,7 @@ fn setup_vmcs_protected32_guest(
 #[cfg(feature = "wc3")]
 pub(crate) struct TransientProtected32Exit {
     pub launch: LaunchResult,
+    pub instruction_len: u64,
     pub registers: crate::hv::vmx::GuestRegisters,
     pub rsp: u64,
     pub rflags: u64,
@@ -7642,6 +7657,8 @@ pub(crate) struct TransientProtected32Exit {
     pub cr3: u64,
     pub guest_physical: u64,
     pub guest_linear: u64,
+    pub interruption_info: u64,
+    pub interruption_error_code: u64,
 }
 
 /// Install the already-proven host/control and protected-32 guest VMCS state
@@ -7662,6 +7679,23 @@ pub(crate) fn run_transient_protected32(
         return Err("vmx core contract inactive");
     }
     let eptp = active_eptp_for_vm(owner)?;
+    // With EPT enabled, VM entry loads a PAE guest's cached PDPTE registers
+    // from the VMCS guest-state fields rather than walking them from CR3.
+    // Every transient slice uses a fresh VMCS, so publish all four roots on
+    // every entry.
+    let pdpt_phys = cr3 & !0x1f;
+    if pdpt_phys >= (1u64 << 32) {
+        return Err("protected32 pdpt above 4g");
+    }
+    let pdpt = crate::phys::phys_to_virt(pdpt_phys as usize) as *const u64;
+    let pdptes = unsafe {
+        [
+            pdpt.read_volatile(),
+            pdpt.add(1).read_volatile(),
+            pdpt.add(2).read_volatile(),
+            pdpt.add(3).read_volatile(),
+        ]
+    };
     let basic = unsafe { Msr::new(crate::hv::vmx::IA32_VMX_BASIC).read() };
     let revision = (basic & 0x7fff_ffff) as u32;
     let vmcs_va = current_vmcs_page()?;
@@ -7694,6 +7728,17 @@ pub(crate) fn run_transient_protected32(
             return Err(error);
         }
     };
+    for (field, value) in [
+        VMCS_GUEST_PDPTE0,
+        VMCS_GUEST_PDPTE1,
+        VMCS_GUEST_PDPTE2,
+        VMCS_GUEST_PDPTE3,
+    ]
+    .into_iter()
+    .zip(pdptes)
+    {
+        vmwrite(field, value)?;
+    }
     if preemption_timer_enabled {
         let (ticks, _) = vmx_preemption_timer_ticks(
             crate::allcaps::hv::VMX_LIFECYCLE_PREEMPTION_QUANTUM_MS,
@@ -7720,6 +7765,7 @@ pub(crate) fn run_transient_protected32(
     crate::hv::vmx::vmlaunch_once_wrapper(owner, &mut launch);
     let exit = TransientProtected32Exit {
         launch,
+        instruction_len: vmread(VMCS_VMEXIT_INSTRUCTION_LEN).unwrap_or(0),
         registers: crate::hv::vmx::guest_registers(),
         rsp: vmread(VMCS_GUEST_RSP).unwrap_or(esp as u64),
         rflags: vmread(VMCS_GUEST_RFLAGS).unwrap_or(eflags as u64),
@@ -7727,6 +7773,8 @@ pub(crate) fn run_transient_protected32(
         cr3: vmread(VMCS_GUEST_CR3).unwrap_or(cr3),
         guest_physical: vmread(VMCS_GUEST_PHYSICAL_ADDRESS).unwrap_or(0),
         guest_linear: vmread(VMCS_GUEST_LINEAR_ADDRESS).unwrap_or(0),
+        interruption_info: vmread(VMCS_VMEXIT_INTERRUPTION_INFO).unwrap_or(0),
+        interruption_error_code: vmread(VMCS_VMEXIT_INTERRUPTION_ERROR_CODE).unwrap_or(0),
     };
     if !crate::hv::vmx::vmclear(vmcs_pa) {
         return Err("transient vmclear");

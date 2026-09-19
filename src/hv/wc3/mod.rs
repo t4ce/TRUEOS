@@ -36,3 +36,7 @@ pub(crate) fn wc3_x86_cabi_resolve(name: &str) -> Option<usize> {
 pub(crate) fn shared_x86_runtime_state_span(vm_id: u8) -> Option<(u64, usize)> {
     x86_runtime::shared_runtime_state_span(vm_id)
 }
+
+pub(crate) fn carrier_pdpt_span(vm_id: u8) -> Result<(u64, usize), &'static str> {
+    x86_runtime::carrier_pdpt_span(vm_id)
+}
