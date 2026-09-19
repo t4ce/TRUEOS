@@ -331,7 +331,7 @@ pub(crate) fn purge_one_shot_state(vm_id: u8) {
         .is_some_and(|arena| crate::phys::free_phys_range(arena.phys_start, arena.length));
 
     if spaces != 0 || contexts != 0 || carrier_pdpt_released {
-        crate::log!(target: "hv";
+        crate::log_info!(target: "hv";
             "wc3: one-shot purge vm={} address_spaces={} contexts={} carrier_pdpt_released={}\n",
             vm_id,
             spaces,
