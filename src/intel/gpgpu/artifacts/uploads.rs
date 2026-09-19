@@ -30,20 +30,8 @@ pub(crate) fn ui4_compose_layers_rgba8_upload_status() -> Option<UploadedKernelA
     *UI4_COMPOSE_LAYERS_RGBA8_UPLOAD.lock()
 }
 
-pub(crate) fn mandel64_worklist_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
-    *MANDEL64_WORKLIST_RGBA8_UPLOAD.lock()
-}
-
 pub(crate) fn skybox_sample_rgb565_upload_status() -> Option<UploadedKernelArtifact> {
     *SKYBOX_SAMPLE_RGB565_UPLOAD.lock()
-}
-
-pub(crate) fn chart_sine_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
-    *CHART_SINE_RGBA8_UPLOAD.lock()
-}
-
-pub(crate) fn pixel_plasma_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
-    *PIXEL_PLASMA_RGBA8_UPLOAD.lock()
 }
 
 pub(crate) fn cpp_demo_rgba8_upload_status() -> Option<UploadedKernelArtifact> {
@@ -268,28 +256,6 @@ pub(crate) fn upload_ui4_compose_layers_rgba8_kernel() -> Option<UploadedKernelA
     Some(upload)
 }
 
-pub(crate) fn upload_mandel64_worklist_rgba8_kernel() -> Option<UploadedKernelArtifact> {
-    if let Some(upload) = *MANDEL64_WORKLIST_RGBA8_UPLOAD.lock() {
-        return Some(upload);
-    }
-
-    let Some(dev) = super::claimed_device() else {
-        crate::log_info!(
-            target: "gpgpu";
-            "intel/gpgpu: mandel64-worklist-rgba8 upload skipped reason=no-claimed-device\n"
-        );
-        return None;
-    };
-
-    let upload = upload_artifact(
-        dev,
-        MANDEL64_WORKLIST_RGBA8_ADLS_ARTIFACT,
-        MANDEL64_WORKLIST_RGBA8_ADLS_GPU,
-    )?;
-    *MANDEL64_WORKLIST_RGBA8_UPLOAD.lock() = Some(upload);
-    Some(upload)
-}
-
 pub(crate) fn upload_skybox_sample_rgb565_kernel() -> Option<UploadedKernelArtifact> {
     *SKYBOX_SAMPLE_RGB565_UPLOAD.lock()
 }
@@ -321,43 +287,6 @@ pub(crate) fn register_skybox_package(package: &[u8]) -> bool {
     };
     *SKYBOX_SAMPLE_RGB565_UPLOAD.lock() = Some(upload);
     true
-}
-
-pub(crate) fn upload_chart_sine_rgba8_kernel() -> Option<UploadedKernelArtifact> {
-    if let Some(upload) = *CHART_SINE_RGBA8_UPLOAD.lock() {
-        return Some(upload);
-    }
-
-    let Some(dev) = super::claimed_device() else {
-        crate::log_warn!(
-            target: "gpgpu";
-            "intel/gpgpu: chart-sine-rgba8 upload skipped reason=no-claimed-device\n"
-        );
-        return None;
-    };
-
-    let upload = upload_artifact(dev, CHART_SINE_RGBA8_ADLS_ARTIFACT, CHART_SINE_RGBA8_ADLS_GPU)?;
-    *CHART_SINE_RGBA8_UPLOAD.lock() = Some(upload);
-    Some(upload)
-}
-
-pub(crate) fn upload_pixel_plasma_rgba8_kernel() -> Option<UploadedKernelArtifact> {
-    if let Some(upload) = *PIXEL_PLASMA_RGBA8_UPLOAD.lock() {
-        return Some(upload);
-    }
-
-    let Some(dev) = super::claimed_device() else {
-        crate::log_warn!(
-            target: "gpgpu";
-            "intel/gpgpu: pixel-plasma-rgba8 upload skipped reason=no-claimed-device\n"
-        );
-        return None;
-    };
-
-    let upload =
-        upload_artifact(dev, PIXEL_PLASMA_RGBA8_ADLS_ARTIFACT, PIXEL_PLASMA_RGBA8_ADLS_GPU)?;
-    *PIXEL_PLASMA_RGBA8_UPLOAD.lock() = Some(upload);
-    Some(upload)
 }
 
 pub(crate) fn upload_cpp_demo_rgba8_kernel() -> Option<UploadedKernelArtifact> {
@@ -692,10 +621,7 @@ const GPGPU_KNOWN_ARTIFACT_NAMES: &[&str] = &[
     GLYPH_MASK_RGBA8_KERNEL_NAME,
     SPRITE_QUAD_WORKLIST_RGBA8_KERNEL_NAME,
     UI4_COMPOSE_LAYERS_RGBA8_KERNEL_NAME,
-    MANDEL64_WORKLIST_RGBA8_KERNEL_NAME,
     SKYBOX_SAMPLE_RGB565_KERNEL_NAME,
-    CHART_SINE_RGBA8_KERNEL_NAME,
-    PIXEL_PLASMA_RGBA8_KERNEL_NAME,
     CPP_DEMO_RGBA8_KERNEL_NAME,
     SHADERTOY_MANDELBROT_KERNEL_NAME,
     SHADERTOY_CUBE_FIELD_KERNEL_NAME,
@@ -777,10 +703,7 @@ fn known_artifact_address_space(name: &str) -> GpgpuArtifactAddressSpace {
         | UI4_NV12_TILE64_TO_RGBA8_FRAME_KERNEL_NAME
         | SPRITE_QUAD_WORKLIST_RGBA8_KERNEL_NAME
         | UI4_COMPOSE_LAYERS_RGBA8_KERNEL_NAME
-        | MANDEL64_WORKLIST_RGBA8_KERNEL_NAME
         | SKYBOX_SAMPLE_RGB565_KERNEL_NAME
-        | CHART_SINE_RGBA8_KERNEL_NAME
-        | PIXEL_PLASMA_RGBA8_KERNEL_NAME
         | CPP_DEMO_RGBA8_KERNEL_NAME
         | SHADERTOY_MANDELBROT_KERNEL_NAME
         | SHADERTOY_CUBE_FIELD_KERNEL_NAME
@@ -877,25 +800,10 @@ fn known_artifact_slot(name: &str) -> Option<GpgpuKnownArtifactSlot> {
             gpu: UI4_COMPOSE_LAYERS_RGBA8_ADLS_GPU,
             upload: &UI4_COMPOSE_LAYERS_RGBA8_UPLOAD,
         }),
-        MANDEL64_WORKLIST_RGBA8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
-            artifact: MANDEL64_WORKLIST_RGBA8_ADLS_ARTIFACT,
-            gpu: MANDEL64_WORKLIST_RGBA8_ADLS_GPU,
-            upload: &MANDEL64_WORKLIST_RGBA8_UPLOAD,
-        }),
         SKYBOX_SAMPLE_RGB565_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
             artifact: SKYBOX_SAMPLE_RGB565_ADLS_ARTIFACT,
             gpu: SKYBOX_SAMPLE_RGB565_ADLS_GPU,
             upload: &SKYBOX_SAMPLE_RGB565_UPLOAD,
-        }),
-        CHART_SINE_RGBA8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
-            artifact: CHART_SINE_RGBA8_ADLS_ARTIFACT,
-            gpu: CHART_SINE_RGBA8_ADLS_GPU,
-            upload: &CHART_SINE_RGBA8_UPLOAD,
-        }),
-        PIXEL_PLASMA_RGBA8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
-            artifact: PIXEL_PLASMA_RGBA8_ADLS_ARTIFACT,
-            gpu: PIXEL_PLASMA_RGBA8_ADLS_GPU,
-            upload: &PIXEL_PLASMA_RGBA8_UPLOAD,
         }),
         CPP_DEMO_RGBA8_KERNEL_NAME => Some(GpgpuKnownArtifactSlot {
             artifact: CPP_DEMO_RGBA8_ADLS_ARTIFACT,

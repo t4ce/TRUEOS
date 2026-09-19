@@ -51,10 +51,7 @@ pub(crate) enum KnownKernelRole {
     Glyph,
     Present,
     Sprite,
-    Mandel,
     FluidX3d,
-    Chart,
-    Pixel,
     CppDemo,
     CppAudio,
     Lfm25Q8,
@@ -76,8 +73,6 @@ const SPRITE_QUAD_WORKLIST_PER_THREAD_BYTES: u32 = 96;
 const UI4_COMPOSE_LAYERS_CROSS_THREAD_BYTES: u32 = 128;
 const GLYPH_MASK_CROSS_THREAD_BYTES: u32 = 128;
 const SKYBOX_CROSS_THREAD_BYTES: u32 = 160;
-const CHART_CROSS_THREAD_BYTES: u32 = 128;
-const PIXEL_PLASMA_CROSS_THREAD_BYTES: u32 = 128;
 const CPP_DEMO_CROSS_THREAD_BYTES: u32 =
     gpgpu::CPP_DEMO_RGBA8_ADLS_CPP_ABI_CONTRACT.cross_thread_data_bytes;
 const CPP_AUDIO_VISUALIZER_CROSS_THREAD_BYTES: u32 =
@@ -145,14 +140,6 @@ const UI4_COMPOSE_LAYER_DESC_FIELDS: &[DescriptorField<'_>] = &[
 const UI4_COMPOSE_LAYER_DESC: DescriptorLayout<'_> =
     DescriptorLayout::new("Ui4ComposeLayerDesc", 12, Some(32), UI4_COMPOSE_LAYER_DESC_FIELDS);
 
-const MANDEL64_DESC_FIELDS: &[DescriptorField<'_>] = &[
-    DescriptorField::new("src_xy", 0, 1),
-    DescriptorField::new("dst_xy", 1, 1),
-    DescriptorField::new("flags", 2, 1),
-    DescriptorField::new("color_rgba", 3, 1),
-];
-const MANDEL64_DESC: DescriptorLayout<'_> =
-    DescriptorLayout::new("Mandel64Desc", 4, Some(512), MANDEL64_DESC_FIELDS);
 
 macro_rules! ro_buf {
     ($index:expr, $name:expr, $ty:expr, $binding:expr, $payload:expr) => {
@@ -183,7 +170,6 @@ const GRADIENT_RECT_DESCS: &[DescriptorLayout<'_>] = &[GRADIENT_RECT_DESC];
 const ALPHA_BLEND_DESCS: &[DescriptorLayout<'_>] = &[ALPHA_BLEND_DESC];
 const SPRITE_QUAD_DESCS: &[DescriptorLayout<'_>] = &[SPRITE_QUAD_DESC];
 const UI4_COMPOSE_LAYER_DESCS: &[DescriptorLayout<'_>] = &[UI4_COMPOSE_LAYER_DESC];
-const MANDEL64_DESCS: &[DescriptorLayout<'_>] = &[MANDEL64_DESC];
 
 const COPY_RECT_ARGS: &[KernelCallArg<'_>] = &[
     ro_buf!(0, "src_rgba", "__global const uint*", 0, 12),
@@ -369,26 +355,6 @@ const UI4_COMPOSE_LAYERS_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     consumers: &["ui4 persistent GuC compositor"],
 };
 
-const MANDEL64_ARGS: &[KernelCallArg<'_>] = DESTINATION_WORKLIST_ARGS;
-const MANDEL64_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
-    name: gpgpu::MANDEL64_WORKLIST_RGBA8_KERNEL_NAME,
-    source_path: "src/intel/gpgpu/kernels/mandel64_worklist_rgba8.clcpp",
-    producer: IGC,
-    target: ADLS,
-    entry_text_offset_bytes: TEXT_OFFSET,
-    cross_thread_bytes: RECT_WORKLIST_CROSS_THREAD_BYTES,
-    per_thread_bytes: RECT_WORKLIST_PER_THREAD_BYTES,
-    binding_count: 2,
-    args: MANDEL64_ARGS,
-    descriptor_layouts: MANDEL64_DESCS,
-    launch: KernelLaunchContract::descriptor_worklist(16),
-    consumers: &[
-        "intel::init_once upload",
-        "ui4::gpgpu_preview_consumer_service_task",
-        "gpgpu mandel64 probe",
-    ],
-};
-
 const SKYBOX_ARGS: &[KernelCallArg<'_>] = &[
     ro_buf!(0, "skybox_rgb565", "__global const ushort*", 0, 12),
     rw_buf!(1, "dst_rgba", "__global uint*", 1, 14),
@@ -427,74 +393,6 @@ const SKYBOX_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     descriptor_layouts: NO_DESCS,
     launch: KernelLaunchContract::nd_range_2d(None),
     consumers: &["explicit skybox renderer", "blueprint:skybox"],
-};
-
-const CHART_ARGS: &[KernelCallArg<'_>] = &[
-    rw_buf!(0, "dst_rgba", "__global uint*", 0, 12),
-    u32_arg!(1, "dst_pitch_bytes", 14),
-    u32_arg!(2, "dst_width", 15),
-    u32_arg!(3, "dst_height", 16),
-    u32_arg!(4, "rect_x", 17),
-    u32_arg!(5, "rect_y", 18),
-    u32_arg!(6, "rect_width", 19),
-    u32_arg!(7, "rect_height", 20),
-    f32_arg!(8, "phase", 21),
-    f32_arg!(9, "cycles", 22),
-    f32_arg!(10, "amplitude", 23),
-    f32_arg!(11, "line_width_px", 24),
-    u32_arg!(12, "background_rgba", 25),
-    u32_arg!(13, "minor_grid_rgba", 26),
-    u32_arg!(14, "major_grid_rgba", 27),
-    u32_arg!(15, "axis_rgba", 28),
-    u32_arg!(16, "line_rgba", 29),
-    u32_arg!(17, "glow_rgba", 30),
-    u32_arg!(18, "flags", 31),
-];
-const CHART_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
-    name: gpgpu::CHART_SINE_RGBA8_KERNEL_NAME,
-    source_path: "src/intel/gpgpu/kernels/chart_sine_rgba8.clcpp",
-    producer: IGC,
-    target: ADLS,
-    entry_text_offset_bytes: TEXT_OFFSET,
-    cross_thread_bytes: CHART_CROSS_THREAD_BYTES,
-    per_thread_bytes: GENERIC_PER_THREAD_BYTES,
-    binding_count: 1,
-    args: CHART_ARGS,
-    descriptor_layouts: NO_DESCS,
-    launch: KernelLaunchContract::nd_range_2d(None),
-    consumers: &["ui4::gpgpu_preview_consumer_service_task"],
-};
-
-const PIXEL_PLASMA_ARGS: &[KernelCallArg<'_>] = &[
-    rw_buf!(0, "dst_rgba", "__global uint*", 0, 12),
-    u32_arg!(1, "dst_pitch_bytes", 14),
-    u32_arg!(2, "dst_width", 15),
-    u32_arg!(3, "dst_height", 16),
-    u32_arg!(4, "rect_x", 17),
-    u32_arg!(5, "rect_y", 18),
-    u32_arg!(6, "rect_width", 19),
-    u32_arg!(7, "rect_height", 20),
-    f32_arg!(8, "time", 21),
-    f32_arg!(9, "spatial_scale", 22),
-    f32_arg!(10, "intensity", 23),
-    u32_arg!(11, "low_rgba", 24),
-    u32_arg!(12, "mid_rgba", 25),
-    u32_arg!(13, "high_rgba", 26),
-    u32_arg!(14, "flags", 27),
-];
-const PIXEL_PLASMA_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
-    name: gpgpu::PIXEL_PLASMA_RGBA8_KERNEL_NAME,
-    source_path: "src/intel/gpgpu/kernels/pixel_plasma_rgba8.clcpp",
-    producer: IGC,
-    target: ADLS,
-    entry_text_offset_bytes: TEXT_OFFSET,
-    cross_thread_bytes: PIXEL_PLASMA_CROSS_THREAD_BYTES,
-    per_thread_bytes: GENERIC_PER_THREAD_BYTES,
-    binding_count: 1,
-    args: PIXEL_PLASMA_ARGS,
-    descriptor_layouts: NO_DESCS,
-    launch: KernelLaunchContract::nd_range_2d(None),
-    consumers: &["ui4::gpgpu_preview_consumer_service_task"],
 };
 
 const CPP_DEMO_ARGS: &[KernelCallArg<'_>] = &[
@@ -773,36 +671,12 @@ pub(crate) const KNOWN_AOT_KERNELS: &[KnownAotKernel] = &[
         role: KnownKernelRole::Present,
     },
     KnownAotKernel {
-        name: gpgpu::MANDEL64_WORKLIST_RGBA8_KERNEL_NAME,
-        artifact: &gpgpu::MANDEL64_WORKLIST_RGBA8_ADLS_ARTIFACT,
-        contract: &MANDEL64_CONTRACT,
-        upload: gpgpu::upload_mandel64_worklist_rgba8_kernel,
-        status: gpgpu::mandel64_worklist_rgba8_upload_status,
-        role: KnownKernelRole::Mandel,
-    },
-    KnownAotKernel {
         name: gpgpu::SKYBOX_SAMPLE_RGB565_KERNEL_NAME,
         artifact: &gpgpu::SKYBOX_SAMPLE_RGB565_ADLS_ARTIFACT,
         contract: &SKYBOX_CONTRACT,
         upload: gpgpu::upload_skybox_sample_rgb565_kernel,
         status: gpgpu::skybox_sample_rgb565_upload_status,
         role: KnownKernelRole::FluidX3d,
-    },
-    KnownAotKernel {
-        name: gpgpu::CHART_SINE_RGBA8_KERNEL_NAME,
-        artifact: &gpgpu::CHART_SINE_RGBA8_ADLS_ARTIFACT,
-        contract: &CHART_CONTRACT,
-        upload: gpgpu::upload_chart_sine_rgba8_kernel,
-        status: gpgpu::chart_sine_rgba8_upload_status,
-        role: KnownKernelRole::Chart,
-    },
-    KnownAotKernel {
-        name: gpgpu::PIXEL_PLASMA_RGBA8_KERNEL_NAME,
-        artifact: &gpgpu::PIXEL_PLASMA_RGBA8_ADLS_ARTIFACT,
-        contract: &PIXEL_PLASMA_CONTRACT,
-        upload: gpgpu::upload_pixel_plasma_rgba8_kernel,
-        status: gpgpu::pixel_plasma_rgba8_upload_status,
-        role: KnownKernelRole::Pixel,
     },
     KnownAotKernel {
         name: gpgpu::CPP_DEMO_RGBA8_KERNEL_NAME,

@@ -12,7 +12,6 @@ use core::sync::atomic::{AtomicU8, Ordering};
 use spin::Mutex;
 
 use crate::hv::memory::PAGE_SIZE_4K;
-use crate::phys::{self, HeapArena};
 use v::bp_abi::{TrueosX86ExitV1, TrueosX86RegistersV1};
 
 pub(super) const ERR_INVALID: i32 = -22;
@@ -88,15 +87,29 @@ impl Drop for MappingBacking {
     }
 }
 
-/// Carrier table pages are still privileged PMM allocations.  Unlike the
-/// scaffold, their lifetime is now tied to their context.
+/// The carrier page tables live in their owner's already EPT-admitted guest
+/// heap, alongside the x86 mapping backing. Retain ownership here while the
+/// Copy reference below is used to wire the PAE tables.
 struct CarrierPage {
-    arena: HeapArena,
+    ptr: usize,
+    phys_start: u64,
+}
+
+#[derive(Copy, Clone)]
+struct CarrierPageRef {
+    ptr: usize,
+    phys_start: u64,
 }
 
 impl Drop for CarrierPage {
     fn drop(&mut self) {
-        let _ = phys::free_phys_range(self.arena.phys_start, self.arena.length);
+        unsafe { crate::allocators::dealloc_raw(self.ptr as *mut u8) };
+    }
+}
+
+impl CarrierPage {
+    fn reference(&self) -> CarrierPageRef {
+        CarrierPageRef { ptr: self.ptr, phys_start: self.phys_start }
     }
 }
 
@@ -527,7 +540,7 @@ pub(super) fn context_execute(
         context.carrier_pages = Vec::new();
     }
     if context.carrier_cr3.is_none() {
-        let (cr3, pages) = build_carrier_page_tables(&mappings)?;
+        let (cr3, pages) = build_carrier_page_tables(owner, &mappings)?;
         context.carrier_cr3 = Some(cr3);
         context.carrier_pages = pages;
         context.carrier_generation = generation;
@@ -545,14 +558,33 @@ pub(super) fn context_execute(
 }
 
 fn build_carrier_page_tables(
+    owner: u8,
     mappings: &[(u32, u32, u32, u64)],
 ) -> Result<(u64, Vec<CarrierPage>), i32> {
     let mut pages = Vec::new();
-    let alloc_page = |pages: &mut Vec<CarrierPage>| -> Result<HeapArena, i32> {
-        let page = phys::reserve_heap_arena(PAGE_SIZE_4K, PAGE_SIZE_4K).ok_or(ERR_BUSY)?;
-        unsafe { core::ptr::write_bytes(page.virt_start as *mut u8, 0, PAGE_SIZE_4K) };
-        pages.push(CarrierPage { arena: page });
-        Ok(page)
+    let alloc_page = |pages: &mut Vec<CarrierPage>| -> Result<CarrierPageRef, i32> {
+        let layout = Layout::from_size_align(PAGE_SIZE_4K, PAGE_SIZE_4K).map_err(|_| ERR_INVALID)?;
+        let ptr = unsafe { crate::allocators::alloc_raw_hv_guest(owner, layout) };
+        if ptr.is_null() {
+            return Err(ERR_NO_MEMORY);
+        }
+        let stats = crate::allocators::hv_guest_heap_stats(owner);
+        let heap_translation = || {
+            let start = stats.heap_start;
+            let address = ptr as usize;
+            let end = address.checked_add(PAGE_SIZE_4K)?;
+            if !stats.initialized || address < start || end > stats.heap_end {
+                return None;
+            }
+            (stats.phys_start as u64).checked_add((address - start) as u64)
+        };
+        let Some(phys_start) = crate::phys::virt_to_phys_checked(ptr).or_else(heap_translation) else {
+            unsafe { crate::allocators::dealloc_raw(ptr) };
+            return Err(ERR_INVALID);
+        };
+        unsafe { core::ptr::write_bytes(ptr, 0, PAGE_SIZE_4K) };
+        pages.push(CarrierPage { ptr: ptr as usize, phys_start });
+        Ok(pages.last().ok_or(ERR_NO_MEMORY)?.reference())
     };
     let pdpt = alloc_page(&mut pages)?;
     let mut pds = [pdpt; 4];
@@ -561,7 +593,7 @@ fn build_carrier_page_tables(
         write_entry(pdpt, index, physical_address(*pd) | 0x7)?;
     }
 
-    let mut ptes: Vec<(u32, HeapArena)> = Vec::new();
+    let mut ptes: Vec<(u32, CarrierPageRef)> = Vec::new();
     for &(start, len, permissions, phys_start) in mappings {
         let end = start.checked_add(len).ok_or(ERR_INVALID)?;
         let mut va = start;
@@ -590,13 +622,13 @@ fn build_carrier_page_tables(
     Ok((physical_address(pdpt), pages))
 }
 
-fn physical_address(page: HeapArena) -> u64 {
+fn physical_address(page: CarrierPageRef) -> u64 {
     page.phys_start
 }
 
-fn write_entry(page: HeapArena, index: usize, value: u64) -> Result<(), i32> {
+fn write_entry(page: CarrierPageRef, index: usize, value: u64) -> Result<(), i32> {
     if index >= 512 { return Err(ERR_INVALID); }
-    unsafe { (page.virt_start as *mut u64).add(index).write(value) };
+    unsafe { (page.ptr as *mut u64).add(index).write(value) };
     Ok(())
 }
 
@@ -699,6 +731,18 @@ unsafe fn run_on_existing_vmx_carrier(
     crate::hv::vmx::vmresume_once_wrapper(vm_id, &mut lr);
     let regs = crate::hv::vmx::guest_registers();
     let rsp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP).unwrap_or(registers.esp as u64);
+    if lr.exit_reason & 0xffff == 48 {
+        crate::log_important!(
+            target: "hv";
+            "x86 ept violation vm={} rip=0x{:08X} cr3=0x{:016X} gpa=0x{:016X} gla=0x{:016X} qualification=0x{:X}\n",
+            vm_id,
+            lr.guest_rip,
+            crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_CR3).unwrap_or(0),
+            crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_PHYSICAL_ADDRESS).unwrap_or(0),
+            crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_LINEAR_ADDRESS).unwrap_or(0),
+            lr.exit_qualification,
+        );
+    }
     let exit = TrueosX86ExitV1 { kind: match lr.exit_reason & 0xffff { crate::hv::vmx::VMEXIT_REASON_VMCALL => 1, 0 => 2, 48 => 3, 0x0c => 4, _ => 255 }, detail: lr.exit_reason as u32, qualification: lr.exit_qualification, registers: TrueosX86RegistersV1 { eax: regs.rax as u32, ebx: regs.rbx as u32, ecx: regs.rcx as u32, edx: regs.rdx as u32, esi: regs.rsi as u32, edi: regs.rdi as u32, ebp: regs.rbp as u32, esp: rsp as u32, eip: lr.guest_rip as u32, eflags: crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RFLAGS).unwrap_or(registers.eflags as u64) as u32, fs_base: crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_FS_BASE).unwrap_or(registers.fs_base as u64) as u32 } };
     restore();
     Ok(exit)

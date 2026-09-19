@@ -961,30 +961,6 @@ fn ui4_compositor_sprite_quad_desc_buffer_once() -> Option<GpgpuRectWorklistDesc
     *guard = Some(buffer);
     Some(buffer)
 }
-
-fn mandel64_worklist_desc_buffer_once() -> Option<GpgpuRectWorklistDescBuffer> {
-    let mut guard = GPGPU_MANDEL64_WORKLIST_DESC.lock();
-    if let Some(buffer) = *guard {
-        return Some(buffer);
-    }
-
-    let bytes = align_up(RECT_WORKLIST_DESC_BYTES, super::WARM_ALIGN)?;
-    let (phys, virt) = crate::dma::alloc(bytes, super::WARM_ALIGN)?;
-    unsafe {
-        core::ptr::write_bytes(virt, 0, bytes);
-    }
-    super::dma_flush(virt, bytes);
-
-    let buffer = GpgpuRectWorklistDescBuffer {
-        phys,
-        gpu: MANDEL64_WORKLIST_DESC_GPU,
-        virt,
-        bytes,
-    };
-    *guard = Some(buffer);
-    Some(buffer)
-}
-
 fn rect_is_inside_mask(surface: GpgpuMask8Surface, rect: GpgpuRect) -> bool {
     if rect.is_empty() || rect.x < 0 || rect.y < 0 {
         return false;
