@@ -779,6 +779,9 @@ fn map_engine_err(e: trueos_fs::FsError<block::Error>) -> block::Error {
         trueos_fs::FsError::Device(e) => e,
         trueos_fs::FsError::InvalidParam => block::Error::InvalidParam,
         trueos_fs::FsError::Corrupted => block::Error::Corrupted,
+        // Surface allocation failure through the existing I/O error channel
+        // instead of aborting the kernel during a whole-file read.
+        trueos_fs::FsError::OutOfMemory => block::Error::Io,
     }
 }
 

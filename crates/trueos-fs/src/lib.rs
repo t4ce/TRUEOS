@@ -201,6 +201,7 @@ pub enum FsError<E> {
     Device(E),
     InvalidParam,
     Corrupted,
+    OutOfMemory,
 }
 
 impl<E> From<E> for FsError<E> {
@@ -2406,7 +2407,10 @@ pub async fn read_file_at_record<D: BlockIo>(
         return Ok(None);
     }
 
-    let mut out = vec![0u8; record.data_len as usize];
+    let len = usize::try_from(record.data_len).map_err(|_| FsError::InvalidParam)?;
+    let mut out = Vec::new();
+    out.try_reserve_exact(len).map_err(|_| FsError::OutOfMemory)?;
+    out.resize(len, 0);
     read_exact_bytes(dev, record.data_lba, 0, &mut out).await?;
 
     Ok(Some(out))
