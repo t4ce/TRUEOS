@@ -6335,7 +6335,7 @@ async fn vmx_launch_once_with_ept_vpid(
         return Err("vmcall comm page");
     }
     let preemption_timer_enabled =
-        setup_vmcs_for_launch(vm_id, Some(vpid), eptp, lineage_record, boot_mode_for_vm(vm_id))?;
+        setup_vmcs_host_and_controls(vm_id, Some(vpid), eptp, lineage_record, boot_mode_for_vm(vm_id), None)?;
     let preemption_timer_ticks = preemption_timer_enabled.then(|| {
         let (ticks, rate_shift) =
             vmx_preemption_timer_ticks(crate::allcaps::hv::VMX_LIFECYCLE_PREEMPTION_QUANTUM_MS);
@@ -6903,12 +6903,25 @@ fn handle_guest_wrmsr(vm_id: u8, guest_rip: u64) -> Result<bool, &'static str> {
     Ok(true)
 }
 
-fn setup_vmcs_for_launch(
+#[derive(Copy, Clone)]
+struct Protected32GuestInput {
+    cr3: u64,
+    eip: u32,
+    esp: u32,
+    eflags: u32,
+    fs_base: u32,
+}
+
+/// Populate the complete host state and legal controls.  Hull guest state is
+/// selected only when `protected32` is absent; transient contexts return via
+/// `setup_vmcs_protected32_guest` before any Hull state is read or rebuilt.
+fn setup_vmcs_host_and_controls(
     vm_id: u8,
     vpid: Option<u16>,
     eptp: u64,
     lineage_record: LineageRecord,
     boot_mode: VmBootMode,
+    protected32: Option<Protected32GuestInput>,
 ) -> Result<bool, &'static str> {
     if vpid == Some(0) {
         return Err("zero VPID is forbidden");
@@ -7215,6 +7228,15 @@ fn setup_vmcs_for_launch(
             vmwrite(VMCS_HOST_IA32_EFER, efer)?;
             vmwrite(VMCS_HOST_IA32_PERF_GLOBAL_CTRL, perf_global)?;
 
+            if let Some(input) = protected32 {
+                setup_vmcs_protected32_guest(
+                    input, host_cr0, host_cr4, tr_sel, tr_base, gdtr.base.as_u64(), gdtr.limit,
+                    idtr.base.as_u64(), idtr.limit,
+                    gs_base, sysenter_cs, sysenter_esp, sysenter_eip, pat,
+                )?;
+                return Ok(preemption_timer_enabled);
+            }
+
             let restored = active_restore_meta(vm_id);
             let guest_rip = restored
                 .map(|m| m.guest_rip)
@@ -7416,6 +7438,15 @@ fn setup_vmcs_for_launch(
     vmwrite(VMCS_HOST_IA32_EFER, efer)?;
     vmwrite(VMCS_HOST_IA32_PERF_GLOBAL_CTRL, perf_global)?;
 
+    if let Some(input) = protected32 {
+        setup_vmcs_protected32_guest(
+            input, host_cr0, host_cr4, tr_sel, tr_base, gdtr.base.as_u64(), gdtr.limit,
+            idtr.base.as_u64(), idtr.limit, gs_base,
+            sysenter_cs, sysenter_esp, sysenter_eip, pat,
+        )?;
+        return Ok(preemption_timer_enabled);
+    }
+
     let restored = active_restore_meta(vm_id);
     let guest_rip = restored
         .map(|m| m.guest_rip)
@@ -7530,6 +7561,75 @@ fn setup_vmcs_for_launch(
     Ok(preemption_timer_enabled)
 }
 
+/// Complete Gate-0-compatible 32-bit protected guest state.  This deliberately
+/// accepts the x86 context's CR3 and registers, never Hull mappings or state.
+fn setup_vmcs_protected32_guest(
+    input: Protected32GuestInput,
+    host_cr0: u64,
+    host_cr4: u64,
+    tr_sel: u16,
+    tr_base: u64,
+    gdtr_base: u64,
+    gdtr_limit: u16,
+    idtr_base: u64,
+    idtr_limit: u16,
+    gs_base: u64,
+    sysenter_cs: u64,
+    sysenter_esp: u64,
+    sysenter_eip: u64,
+    pat: u64,
+) -> Result<(), &'static str> {
+    vmwrite(VMCS_GUEST_CR0, host_cr0)?;
+    vmwrite(VMCS_GUEST_CR3, input.cr3)?;
+    vmwrite(VMCS_GUEST_CR4, host_cr4)?;
+    vmwrite(VMCS_GUEST_RFLAGS, (input.eflags as u64 | RFLAGS_RESERVED_BIT1) & !RFLAGS_IF)?;
+    vmwrite(VMCS_GUEST_RIP, input.eip as u64)?;
+    vmwrite(VMCS_GUEST_RSP, input.esp as u64)?;
+    vmwrite(VMCS_GUEST_DR7, 0x400)?;
+    vmwrite(VMCS_GUEST_IA32_DEBUGCTL, 0)?;
+    vmwrite(VMCS_GUEST_SYSENTER_CS, sysenter_cs)?;
+    vmwrite(VMCS_GUEST_SYSENTER_ESP, sysenter_esp)?;
+    vmwrite(VMCS_GUEST_SYSENTER_EIP, sysenter_eip)?;
+    vmwrite(VMCS_GUEST_IA32_PAT, pat)?;
+    vmwrite(VMCS_GUEST_IA32_EFER, 0)?;
+    vmwrite(VMCS_GUEST_IA32_PERF_GLOBAL_CTRL, 0)?;
+    vmwrite(VMCS_GUEST_ACTIVITY_STATE, 0)?;
+    vmwrite(VMCS_GUEST_INTERRUPTIBILITY, 0)?;
+    vmwrite(VMCS_GUEST_PENDING_DBG, 0)?;
+    vmwrite(VMCS_GUEST_VMCS_PREEMPT_TIMER, 0)?;
+    for field in [VMCS_GUEST_CS_LIMIT, VMCS_GUEST_SS_LIMIT, VMCS_GUEST_DS_LIMIT,
+        VMCS_GUEST_ES_LIMIT, VMCS_GUEST_FS_LIMIT, VMCS_GUEST_GS_LIMIT] {
+        vmwrite(field, 0xffff_ffff)?;
+    }
+    vmwrite(VMCS_GUEST_TR_LIMIT, 0xffff)?;
+    vmwrite(VMCS_GUEST_LDTR_LIMIT, 0)?;
+    vmwrite(VMCS_GUEST_GDTR_LIMIT, gdtr_limit as u64)?;
+    vmwrite(VMCS_GUEST_IDTR_LIMIT, idtr_limit as u64)?;
+    vmwrite(VMCS_GUEST_CS_SELECTOR, 0x08)?;
+    for field in [VMCS_GUEST_SS_SELECTOR, VMCS_GUEST_DS_SELECTOR, VMCS_GUEST_ES_SELECTOR] {
+        vmwrite(field, 0x10)?;
+    }
+    vmwrite(VMCS_GUEST_FS_SELECTOR, 0x18)?;
+    vmwrite(VMCS_GUEST_GS_SELECTOR, 0)?;
+    vmwrite(VMCS_GUEST_TR_SELECTOR, tr_sel as u64)?;
+    vmwrite(VMCS_GUEST_LDTR_SELECTOR, 0)?;
+    for field in [VMCS_GUEST_CS_BASE, VMCS_GUEST_SS_BASE, VMCS_GUEST_DS_BASE,
+        VMCS_GUEST_ES_BASE, VMCS_GUEST_LDTR_BASE] { vmwrite(field, 0)?; }
+    vmwrite(VMCS_GUEST_FS_BASE, input.fs_base as u64)?;
+    vmwrite(VMCS_GUEST_GS_BASE, gs_base)?;
+    vmwrite(VMCS_GUEST_TR_BASE, tr_base)?;
+    vmwrite(VMCS_GUEST_GDTR_BASE, gdtr_base)?;
+    vmwrite(VMCS_GUEST_IDTR_BASE, idtr_base)?;
+    vmwrite(VMCS_GUEST_CS_AR, 0xC09B)?;
+    for field in [VMCS_GUEST_SS_AR, VMCS_GUEST_DS_AR, VMCS_GUEST_ES_AR, VMCS_GUEST_FS_AR] {
+        vmwrite(field, 0xC093)?;
+    }
+    vmwrite(VMCS_GUEST_GS_AR, 0x10000)?;
+    vmwrite(VMCS_GUEST_TR_AR, 0x008B)?;
+    vmwrite(VMCS_GUEST_LDTR_AR, 0x10000)?;
+    Ok(())
+}
+
 /// Result captured from a fresh, lane-local VMCS.  A logical x86 context owns
 /// this state rather than borrowing the Hull's VMCS affinity.
 #[cfg(feature = "wc3")]
@@ -7580,17 +7680,17 @@ pub(crate) fn run_transient_protected32(
     // Reuse the Hull's complete host/control setup and Gate-0's known-good
     // 32-bit protected guest descriptor state.  VPID is intentionally absent
     // because this VMCS is discarded after every slice.
-    if let Err(error) = setup_vmcs_for_launch(
+    if let Err(error) = setup_vmcs_host_and_controls(
         owner,
         None,
         eptp,
         LineageRecord::new(),
         VmBootMode::Wc3Probe,
+        Some(Protected32GuestInput { cr3, eip, esp, eflags, fs_base }),
     ) {
         let _ = crate::hv::vmx::vmclear(vmcs_pa);
         return Err(error);
     }
-    setup_vmcs_guest_protected32(cr3, eip, esp, eflags, fs_base)?;
     crate::hv::vmx::set_guest_registers(registers);
 
     let mut launch = LaunchResult::default();
@@ -7609,22 +7709,6 @@ pub(crate) fn run_transient_protected32(
         return Err("transient vmclear");
     }
     Ok(exit)
-}
-
-#[cfg(feature = "wc3")]
-fn setup_vmcs_guest_protected32(
-    cr3: u64,
-    eip: u32,
-    esp: u32,
-    eflags: u32,
-    fs_base: u32,
-) -> Result<(), &'static str> {
-    vmwrite(VMCS_GUEST_CR3, cr3)?;
-    vmwrite(VMCS_GUEST_RIP, eip as u64)?;
-    vmwrite(VMCS_GUEST_RSP, esp as u64)?;
-    vmwrite(VMCS_GUEST_RFLAGS, (eflags as u64 | RFLAGS_RESERVED_BIT1) & !RFLAGS_IF)?;
-    vmwrite(VMCS_GUEST_FS_BASE, fs_base as u64)?;
-    Ok(())
 }
 
 fn vmx_preemption_timer_ticks(quantum_ms: u64) -> (u32, u8) {
