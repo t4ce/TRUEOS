@@ -11,6 +11,8 @@ mod launcher;
 mod pe32;
 mod thunk32;
 mod trace;
+mod x86_cabi;
+mod x86_runtime;
 
 pub(crate) use guest32::{guest_mapping, handle_vmcall, prepare_gate0};
 pub(crate) use launcher::{
@@ -42,4 +44,9 @@ pub(crate) fn log_launcher_armed(vm_id: u8) {
         "gate-1a armed vm={} entry=0x00402144 fs_base=0x00201000 thunk_base=0x00300000",
         vm_id
     ));
+}
+
+/// The only loader hook for the WC3-private x86 bridge.
+pub(crate) fn wc3_x86_cabi_resolve(name: &str) -> Option<usize> {
+    x86_cabi::resolve(name)
 }

@@ -43,6 +43,36 @@ pub struct TrueosLifecycleIdentity {
     pub reserved: u32,
 }
 
+/// WC3-private generic 32-bit execution context register state.
+///
+/// The symbols using this layout are only resolved from the `wc3` kernel
+/// feature boundary; this declaration is kept byte-for-byte compatible with
+/// the Blueprint SDK so the pack guard can reject drift.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub struct TrueosX86RegistersV1 {
+    pub eax: u32,
+    pub ebx: u32,
+    pub ecx: u32,
+    pub edx: u32,
+    pub esi: u32,
+    pub edi: u32,
+    pub ebp: u32,
+    pub esp: u32,
+    pub eip: u32,
+    pub eflags: u32,
+    pub fs_base: u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+pub struct TrueosX86ExitV1 {
+    pub kind: u32,
+    pub detail: u32,
+    pub qualification: u64,
+    pub registers: TrueosX86RegistersV1,
+}
+
 pub const LUMEN_PHASE_IDLE: u32 = 0;
 pub const LUMEN_PHASE_OPENING: u32 = 1;
 pub const LUMEN_PHASE_READY: u32 = 2;
@@ -1566,6 +1596,49 @@ unsafe extern "C" {
     ) -> isize;
     pub fn trueos_cabi_blueprint_child_status_v1(handle: u64) -> i32;
     pub fn trueos_cabi_blueprint_child_terminate_v1(handle: u64) -> i32;
+    pub fn trueos_cabi_x86_address_space_create_v1(out: *mut u64) -> i32;
+    pub fn trueos_cabi_x86_address_space_destroy_v1(address_space: u64) -> i32;
+    pub fn trueos_cabi_x86_address_space_map_v1(
+        address_space: u64,
+        guest_va: u32,
+        len: u32,
+        permissions: u32,
+    ) -> i32;
+    pub fn trueos_cabi_x86_address_space_unmap_v1(
+        address_space: u64,
+        guest_va: u32,
+        len: u32,
+    ) -> i32;
+    pub fn trueos_cabi_x86_address_space_read_v1(
+        address_space: u64,
+        guest_va: u32,
+        out: *mut u8,
+        len: usize,
+    ) -> isize;
+    pub fn trueos_cabi_x86_address_space_write_v1(
+        address_space: u64,
+        guest_va: u32,
+        data: *const u8,
+        len: usize,
+    ) -> isize;
+    pub fn trueos_cabi_x86_context_create_v1(
+        address_space: u64,
+        registers: *const TrueosX86RegistersV1,
+        out: *mut u64,
+    ) -> i32;
+    pub fn trueos_cabi_x86_context_destroy_v1(context: u64) -> i32;
+    pub fn trueos_cabi_x86_context_registers_get_v1(
+        context: u64,
+        out: *mut TrueosX86RegistersV1,
+    ) -> i32;
+    pub fn trueos_cabi_x86_context_registers_set_v1(
+        context: u64,
+        registers: *const TrueosX86RegistersV1,
+    ) -> i32;
+    pub fn trueos_cabi_x86_context_run_v1(context: u64, out: *mut TrueosX86ExitV1) -> i32;
+    pub fn trueos_cabi_x86_context_resume_v1(context: u64, out: *mut TrueosX86ExitV1) -> i32;
+    pub fn trueos_cabi_x86_context_park_v1(context: u64) -> i32;
+    pub fn trueos_cabi_x86_context_cancel_v1(context: u64) -> i32;
     pub fn trueos_cabi_blueprint_exit_reason(data_ptr: *const u8, data_len: usize) -> i32;
     pub fn trueos_cabi_blueprint_shutdown(data_ptr: *const u8, data_len: usize) -> i32;
     pub fn trueos_cabi_blueprint_return_to_cli() -> i32;

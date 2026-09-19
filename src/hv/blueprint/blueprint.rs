@@ -1359,10 +1359,16 @@ fn resolve_known_import(name: &str) -> Option<usize> {
         | "_RNvCs2csqI13tepL_7___rustc19___rust_alloc_zeroed" => {
             Some(portal_rust_alloc_zeroed as *const () as usize)
         }
-        _ => resolve_ring_runtime_import(name)
-            .or_else(|| resolve_runtime_abi_import(name))
-            .or_else(|| resolve_cabi_import(name))
-            .or_else(|| crate::unix_compat::resolve_import(name)),
+        _ => {
+            #[cfg(feature = "wc3")]
+            if let Some(address) = crate::hv::wc3::wc3_x86_cabi_resolve(name) {
+                return Some(address);
+            }
+            resolve_ring_runtime_import(name)
+                .or_else(|| resolve_runtime_abi_import(name))
+                .or_else(|| resolve_cabi_import(name))
+                .or_else(|| crate::unix_compat::resolve_import(name))
+        }
     }
 }
 

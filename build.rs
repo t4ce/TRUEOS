@@ -97,6 +97,12 @@ fn generate_portal_imports(manifest_dir: &Path) -> Result<(), String> {
     let mut generated =
         String::from("fn resolve_cabi_import(name: &str) -> Option<usize> {\n    match name {\n");
     for name in import_names {
+        // WC3 x86 is intentionally not a global portal ABI.  Its resolver is
+        // compiled only with `feature = \"wc3\"` and is reached through the
+        // explicitly WC3-named hook in `hv::blueprint`.
+        if name.starts_with("trueos_cabi_x86_") {
+            continue;
+        }
         let Some(symbol_path) = defined_exports.get(&name) else {
             println!(
                 "cargo:warning=declared CABI symbol {name} has no kernel export and will stay unresolved"
