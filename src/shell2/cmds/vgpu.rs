@@ -12,11 +12,19 @@ fn usage(io: &'static dyn ShellBackend2) {
     print_shell_line(io, "vgpu cull on|off (Picasso diagnostic)");
     print_shell_line(io, "vgpu pipeline pbr|uv|uv8 (Picasso diagnostic)");
     print_shell_line(io, "vgpu capture vue (one Picasso draw)");
+    print_shell_line(io, "vgpu frush [start|stop|status] (Font Rush2)");
 }
 
 pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let mut args = rest.split_whitespace();
     match (args.next(), args.next(), args.next()) {
+        (Some(cmd), action, None) if cmd.eq_ignore_ascii_case("frush") => {
+            let action = action.unwrap_or("start");
+            return crate::shell2::cmds::font::try_parse(
+                io,
+                action.unwrap_or(""),
+            );
+        }
         (Some(cmd), None, None) if cmd.eq_ignore_ascii_case("status") => print_status(io),
         (Some(cmd), Some("vue"), None) if cmd.eq_ignore_ascii_case("capture") => {
             crate::intel::render::request_picasso_vue_capture();

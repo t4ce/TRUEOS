@@ -31,6 +31,7 @@ pub(crate) mod bios_tlb_dump;
 pub(crate) mod cry;
 pub(crate) mod disc;
 pub(crate) mod edit;
+pub(crate) mod font;
 pub(crate) mod format;
 #[cfg(test)]
 pub(crate) mod fslog;
