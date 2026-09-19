@@ -22,7 +22,7 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
             let action = action.unwrap_or("start");
             return crate::shell2::cmds::font::try_parse(
                 io,
-                action.unwrap_or(""),
+                action,
             );
         }
         (Some(cmd), None, None) if cmd.eq_ignore_ascii_case("status") => print_status(io),

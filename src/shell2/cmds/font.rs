@@ -42,13 +42,3 @@ pub(crate) fn try_parse(io: &'static dyn ShellBackend2, rest: &str) -> ParseOutc
     }
     ParseOutcome::Handled
 }
-
-#[cfg(test)]
-mod tests {
-    // Keep the command's accepted surface intentionally small: the demo owns
-    // its four canvases and has no material/pipeline subcommands.
-    #[test]
-    fn frush_shape_is_documented() {
-        assert_eq!("vgpu frush [start|stop|status]", "vgpu frush [start|stop|status]");
-    }
-}

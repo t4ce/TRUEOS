@@ -638,6 +638,7 @@ mod tests {
         assert!(!TOOL_JSON_WIN.contains("font_action"));
         assert!(command_registry_json().contains("\"name\":\"win\""));
         assert!(!command_registry_json().contains("\"name\":\"cpp\""));
+        assert!(command_registry_json().contains("Font Rush2"));
     }
 }
 
