@@ -180,6 +180,16 @@ and expected hashes into TRUEOS; the Blueprint carries the bytes. A missing,
 stale, wrong-target, or wrong-hash payload must fail closed exactly as it does
 for the existing Shadertoy package path.
 
+## Deliberately excluded from the embedded-runtime table
+
+| Item | Reason |
+|---|---|
+| `TRUEOS-Blueprints/apps/wgpu-hello-compute/src/shader.wgsl` | Already Blueprint-owned source; it is not included in the TRUEOS kernel image |
+| `tools/wgpu-video-mesh/src/shader.wgsl` | Host/tool source, not a Blueprint or kernel payload |
+| `crates/trueos-shader/intel_userland_oracle/**` dumps and sentinels | Capture/probe evidence and host utilities, not runtime-embedded application shaders |
+| `crates/trueos-shader/host_shader_validation/**` and bake outputs | Validation fixtures, not the runtime artifact graph |
+| `generated_font_patch.rs` | Explicit zero-byte unavailable placeholder; no executable GPU artifact is present |
+
 ## Scan evidence
 
 - Kernel embedding sites: `src/intel/gpgpu/kernel_catalog.rs`,

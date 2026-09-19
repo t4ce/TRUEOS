@@ -885,6 +885,13 @@ unsafe extern "C" {
         data_ptr: *const u8,
         data_len: usize,
     ) -> i32;
+    pub fn trueos_cabi_ui4_scene_skybox_register_kernel(
+        window_id: u32,
+        package_len: u32,
+        offset: u32,
+        bytes: *const u8,
+        len: usize,
+    ) -> i32;
     pub fn trueos_cabi_ui4_scene_skybox_render_rgb565(
         window_id: u32,
         params: *const TrueosUi4SkyboxRenderParams,

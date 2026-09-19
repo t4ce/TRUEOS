@@ -14,6 +14,19 @@ pub(crate) struct ShaderToyPackageContract {
 include!("shadertoy_packages.rs");
 include!("shadertoy_mandelbox_package.rs");
 
+pub(crate) const SKYBOX_SAMPLE_RGB565_PACKAGE: ShaderToyPackageContract = ShaderToyPackageContract {
+    shader_id: 17,
+    bytes: 99_748,
+    bin_bytes: 37_624,
+    spv_bytes: 21_292,
+    sha256: [
+        0x17, 0x0f, 0x02, 0x40, 0xc0, 0xb8, 0x43, 0x6f,
+        0x60, 0x3e, 0xf1, 0x6e, 0xd3, 0x3d, 0xff, 0x70,
+        0xa6, 0x7d, 0xbc, 0x2f, 0x95, 0xdc, 0xf7, 0x0b,
+        0x72, 0x8e, 0x35, 0x56, 0x8c, 0x5f, 0xf4, 0x04,
+    ],
+};
+
 /// Several gallery selectors use one program with different mode uniforms.
 pub(crate) fn program_id(shader_id: u32) -> Option<u32> {
     match shader_id {
@@ -25,6 +38,7 @@ pub(crate) fn program_id(shader_id: u32) -> Option<u32> {
 
 pub(crate) fn contract(shader_id: u32) -> Option<ShaderToyPackageContract> {
     Some(match shader_id {
+        17 => SKYBOX_SAMPLE_RGB565_PACKAGE,
         1 => SHADERTOY_MANDELBROT_PACKAGE,
         2 => SHADERTOY_CUBE_FIELD_PACKAGE,
         3 => SHADERTOY_NGUYEN_PACKAGE,

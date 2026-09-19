@@ -110,6 +110,7 @@ pub const OP_BP_UI4_SCENE_SKYBOX_UPLOAD_BEGIN: u32 = 0xC0; // arg0 window,arg1 w
 pub const OP_BP_UI4_SCENE_SKYBOX_UPLOAD_CHUNK: u32 = 0xC1; // arg0 window,arg1 byte offset,payload RGB565 -> rc
 pub const OP_BP_UI4_SCENE_SKYBOX_UPLOAD_FINISH: u32 = 0xC2; // arg0 window -> rc
 pub const OP_BP_UI4_SCENE_SKYBOX_RENDER: u32 = 0xC3; // arg0 window,payload render params -> rc
+pub const OP_BP_UI4_SCENE_SKYBOX_REGISTER_KERNEL: u32 = 0xC4; // arg0 window/package_len,arg1 offset,payload -> rc
 pub const OP_BP_UI4_SCENE_WRITE_OPAQUE_RGBA8: u32 = 0xC4; // arg0 window,arg1 byte offset,payload RGBA8 -> rc
 pub const OP_BP_UI4_SCENE_FRAME_PRIMARY_ACTIVATION: u32 = 0x206;
 pub const OP_BP_UI4_SCENE_FRAME_GET_POSITION: u32 = 0x205;
@@ -2294,6 +2295,23 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 width,
                 height,
             );
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_SCENE_SKYBOX_REGISTER_KERNEL => {
+            let Some(payload) = request_payload(vm_id, req_len) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let rc = unsafe {
+                crate::ui4::blueprint_text::trueos_cabi_ui4_scene_skybox_register_kernel(
+                    arg0 as u32,
+                    (arg0 >> 32) as u32,
+                    arg1 as u32,
+                    payload.as_ptr(),
+                    payload.len(),
+                )
+            };
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }

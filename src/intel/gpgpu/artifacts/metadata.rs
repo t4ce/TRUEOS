@@ -171,8 +171,8 @@ pub(crate) const MANDEL64_WORKLIST_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
 pub(crate) const SKYBOX_SAMPLE_RGB565_ADLS_ARTIFACT: GpgpuKernelArtifact =
     GpgpuKernelArtifact::contracted(
         SKYBOX_SAMPLE_RGB565_KERNEL_NAME,
-        SKYBOX_SAMPLE_RGB565_ADLS_BIN,
-        SKYBOX_SAMPLE_RGB565_ADLS_SPV,
+        &[],
+        &[],
         &SKYBOX_SAMPLE_RGB565_ADLS_CPP_ABI_CONTRACT,
     );
 

@@ -713,6 +713,8 @@ struct BlueprintSceneSurface {
     launch_selection: Option<(Ui4CursorSource, u32, u32)>,
     skybox: Option<OwnedRgb565Surface>,
     skybox_upload: Option<Rgb565Upload>,
+    skybox_kernel_upload: Option<ShaderToyPackageUpload>,
+    skybox_kernel_registered: bool,
     sprites: Vec<(u32, BlueprintSpriteSource)>,
     /// Request state only.  The Blueprint owns all glyph-key coalescing,
     /// fallback choice, and eviction policy; UI4 merely retains a scoped GPU
@@ -1521,6 +1523,8 @@ fn open_blueprint_surface(
                     .map(|launch| (launch.source, launch.x, launch.y)),
                 skybox: None,
                 skybox_upload: None,
+                skybox_kernel_upload: None,
+                skybox_kernel_registered: false,
                 sprites: Vec::new(),
                 font_sprite_requests: Vec::new(),
                 sprite_upload: None,
@@ -1579,6 +1583,8 @@ fn open_blueprint_surface(
         launch_selection: desktop_shell_launch.map(|launch| (launch.source, launch.x, launch.y)),
         skybox: None,
         skybox_upload: None,
+        skybox_kernel_upload: None,
+        skybox_kernel_registered: false,
         sprites: Vec::new(),
         font_sprite_requests: Vec::new(),
         sprite_upload: None,
@@ -3822,6 +3828,66 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_sprite_quads(
     finish_sprite_scene(owner, window_id)
 }
 
+/// Upload the authenticated Blueprint-owned skybox kernel package in bounded
+/// contiguous chunks. The final chunk admits and uploads the GPU payload.
+pub unsafe extern "C" fn trueos_cabi_ui4_scene_skybox_register_kernel(
+    window_id: u32,
+    package_len: u32,
+    offset: u32,
+    bytes_ptr: *const u8,
+    len: usize,
+) -> i32 {
+    if bytes_ptr.is_null() || len == 0 || len > 2048 {
+        return ERROR_INVALID;
+    }
+    let bytes = unsafe { core::slice::from_raw_parts(bytes_ptr, len) };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_status(
+            trueos_vm::vmcall::OP_BP_UI4_SCENE_SKYBOX_REGISTER_KERNEL,
+            (u64::from(package_len) << 32) | u64::from(window_id),
+            u64::from(offset),
+            bytes,
+        );
+    }
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT;
+    };
+    let package = {
+        let mut surfaces = SURFACES.lock();
+        let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+            return ERROR_NOT_FOUND;
+        };
+        if surface.visual_cadence.is_none() || offset == 0 && package_len == 0 {
+            return ERROR_INVALID;
+        }
+        if offset == 0 {
+            surface.skybox_kernel_upload = ShaderToyPackageUpload::new(17);
+        }
+        let Some(upload) = surface.skybox_kernel_upload.as_mut() else {
+            return ERROR_STATE;
+        };
+        if upload.contract.bytes != package_len as usize
+            || !upload.append(17, offset as usize, bytes)
+        {
+            surface.skybox_kernel_upload = None;
+            return ERROR_INVALID;
+        }
+        if !upload.complete() {
+            return 0;
+        }
+        surface.skybox_kernel_upload.take().unwrap()
+    };
+    if !crate::intel::gpgpu::register_skybox_package(&package.bytes) {
+        return ERROR_INVALID;
+    }
+    let mut surfaces = SURFACES.lock();
+    let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+        return ERROR_NOT_FOUND;
+    };
+    surface.skybox_kernel_registered = true;
+    0
+}
+
 /// Upload one tightly packed RGB565 equirectangular source owned by this UI4
 /// frame. The guest transport is chunked; the retained host allocation is
 /// released with the frame session.
@@ -3930,6 +3996,9 @@ pub unsafe extern "C" fn trueos_cabi_ui4_scene_skybox_render_rgb565(
         let Some(lease) = surface.write_lease else {
             return ERROR_STATE;
         };
+        if !surface.skybox_kernel_registered {
+            return ERROR_STATE;
+        }
         let Some(skybox) = surface.skybox else {
             return ERROR_STATE;
         };

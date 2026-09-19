@@ -35,8 +35,6 @@ pub(crate) const MANDEL64_WORKLIST_RGBA8_KERNEL_NAME: &str = "mandel64_worklist_
 pub(crate) const MANDEL64_WORKLIST_RGBA8_OPENCL_SOURCE: &str =
     include_str!("kernels/mandel64_worklist_rgba8.clcpp");
 pub(crate) const SKYBOX_SAMPLE_RGB565_KERNEL_NAME: &str = "skybox_sample_rgb565";
-pub(crate) const SKYBOX_SAMPLE_RGB565_OPENCL_SOURCE: &str =
-    include_str!("kernels/skybox_sample_rgb565.clcpp");
 pub(crate) const CHART_SINE_RGBA8_KERNEL_NAME: &str = "chart_sine_rgba8";
 pub(crate) const CHART_SINE_RGBA8_OPENCL_SOURCE: &str =
     include_str!("kernels/chart_sine_rgba8.clcpp");
@@ -137,7 +135,7 @@ pub(crate) fn kernel_opencl_source(name: &str) -> Option<&'static str> {
         SPRITE_QUAD_WORKLIST_RGBA8_KERNEL_NAME => Some(SPRITE_QUAD_WORKLIST_RGBA8_OPENCL_SOURCE),
         UI4_COMPOSE_LAYERS_RGBA8_KERNEL_NAME => Some(UI4_COMPOSE_LAYERS_RGBA8_OPENCL_SOURCE),
         MANDEL64_WORKLIST_RGBA8_KERNEL_NAME => Some(MANDEL64_WORKLIST_RGBA8_OPENCL_SOURCE),
-        SKYBOX_SAMPLE_RGB565_KERNEL_NAME => Some(SKYBOX_SAMPLE_RGB565_OPENCL_SOURCE),
+        SKYBOX_SAMPLE_RGB565_KERNEL_NAME => None,
         CHART_SINE_RGBA8_KERNEL_NAME => Some(CHART_SINE_RGBA8_OPENCL_SOURCE),
         PIXEL_PLASMA_RGBA8_KERNEL_NAME => Some(PIXEL_PLASMA_RGBA8_OPENCL_SOURCE),
         CPP_DEMO_RGBA8_KERNEL_NAME => Some(CPP_DEMO_RGBA8_OPENCL_SOURCE),
@@ -184,7 +182,7 @@ pub(crate) fn kernel_source_path(name: &str) -> Option<&'static str> {
             Some("src/intel/gpgpu/kernels/mandel64_worklist_rgba8.clcpp")
         }
         SKYBOX_SAMPLE_RGB565_KERNEL_NAME => {
-            Some("src/intel/gpgpu/kernels/skybox_sample_rgb565.clcpp")
+            Some("Blueprint:skybox/assets/skybox_sample_rgb565/kernel.clcpp")
         }
         CHART_SINE_RGBA8_KERNEL_NAME => Some("src/intel/gpgpu/kernels/chart_sine_rgba8.clcpp"),
         PIXEL_PLASMA_RGBA8_KERNEL_NAME => Some("src/intel/gpgpu/kernels/pixel_plasma_rgba8.clcpp"),
@@ -355,10 +353,6 @@ pub(crate) const MANDEL64_WORKLIST_RGBA8_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/cpp/mandel64_worklist_rgba8.bin");
 pub(crate) const MANDEL64_WORKLIST_RGBA8_ADLS_SPV: &[u8] =
     include_bytes!("kernels/artifacts/adls/cpp/mandel64_worklist_rgba8.spv");
-pub(crate) const SKYBOX_SAMPLE_RGB565_ADLS_BIN: &[u8] =
-    include_bytes!("kernels/artifacts/adls/cpp/skybox_sample_rgb565.bin");
-pub(crate) const SKYBOX_SAMPLE_RGB565_ADLS_SPV: &[u8] =
-    include_bytes!("kernels/artifacts/adls/cpp/skybox_sample_rgb565.spv");
 pub(crate) const CHART_SINE_RGBA8_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/cpp/chart_sine_rgba8.bin");
 pub(crate) const CHART_SINE_RGBA8_ADLS_SPV: &[u8] =

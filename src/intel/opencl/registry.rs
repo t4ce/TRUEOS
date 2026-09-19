@@ -416,7 +416,7 @@ const SKYBOX_ARGS: &[KernelCallArg<'_>] = &[
 ];
 const SKYBOX_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     name: gpgpu::SKYBOX_SAMPLE_RGB565_KERNEL_NAME,
-    source_path: "src/intel/gpgpu/kernels/skybox_sample_rgb565.clcpp",
+    source_path: "Blueprint:skybox/assets/skybox_sample_rgb565/kernel.clcpp",
     producer: IGC,
     target: ADLS,
     entry_text_offset_bytes: TEXT_OFFSET,

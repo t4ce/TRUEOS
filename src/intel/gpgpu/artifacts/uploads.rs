@@ -291,22 +291,36 @@ pub(crate) fn upload_mandel64_worklist_rgba8_kernel() -> Option<UploadedKernelAr
 }
 
 pub(crate) fn upload_skybox_sample_rgb565_kernel() -> Option<UploadedKernelArtifact> {
-    if let Some(upload) = *SKYBOX_SAMPLE_RGB565_UPLOAD.lock() {
-        return Some(upload);
-    }
+    *SKYBOX_SAMPLE_RGB565_UPLOAD.lock()
+}
 
-    let Some(dev) = super::claimed_device() else {
-        crate::log_info!(
-            target: "gpgpu";
-            "intel/gpgpu: skybox-sample-rgb565 upload skipped reason=no-claimed-device\n"
-        );
-        return None;
+pub(crate) fn register_skybox_package(package: &[u8]) -> bool {
+    let Some(contract) = shadertoy_package::contract(17) else {
+        return false;
     };
-
-    let upload =
-        upload_artifact(dev, SKYBOX_SAMPLE_RGB565_ADLS_ARTIFACT, SKYBOX_SAMPLE_RGB565_ADLS_GPU)?;
+    let Some((bin, spv)) = contract.payloads(package) else {
+        crate::log_error!(target: "gpgpu"; "intel/gpgpu: skybox package rejected reason=package-sha256-or-layout\n");
+        return false;
+    };
+    let Some(dev) = super::claimed_device() else {
+        return false;
+    };
+    let Some(upload) = upload_artifact_bytes(
+        dev,
+        SKYBOX_SAMPLE_RGB565_ADLS_ARTIFACT,
+        SKYBOX_SAMPLE_RGB565_ADLS_GPU,
+        bin,
+        spv,
+        "blueprint",
+        "Blueprint:skybox/assets/skybox_sample_rgb565/kernel.clcpp",
+        spv.len(),
+        GpgpuArtifactAddressSpace::CallerPpgtt,
+        *SKYBOX_SAMPLE_RGB565_UPLOAD.lock(),
+    ) else {
+        return false;
+    };
     *SKYBOX_SAMPLE_RGB565_UPLOAD.lock() = Some(upload);
-    Some(upload)
+    true
 }
 
 pub(crate) fn upload_chart_sine_rgba8_kernel() -> Option<UploadedKernelArtifact> {
