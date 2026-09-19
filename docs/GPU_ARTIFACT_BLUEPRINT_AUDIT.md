@@ -2,8 +2,8 @@
 
 Status: inventory and migration decision, 2026-09-19.
 
-This is a static repository scan. It does not bake, sign, launch, deploy, or
-contact the hardware rig.
+This is a static repository scan plus migration record. It does not bake, sign,
+launch, deploy, or contact the hardware rig.
 
 ## Decision in one page
 
@@ -21,8 +21,10 @@ UI, font, media, boot-probe, or model-service boundary, or that are currently
 shared by more than one independent Blueprint without a package-registration
 seam.
 
-The first clean migration target is `skybox_sample_rgb565`: it has one
-Blueprint consumer (`skybox`) and is already exposed through a dedicated API.
+The first clean migration target, `skybox_sample_rgb565`, is now migrated: it
+has one Blueprint consumer (`skybox`), a Blueprint-owned authenticated package,
+and a dedicated registration API. The next target remains Cubes' generated
+patch-cube pipeline, which needs its custom render-package registration seam.
 The second target is Cubes' generated patch-cube pipeline, but it needs a
 custom render-package registration seam before the bytes can leave the kernel.
 
@@ -30,7 +32,7 @@ custom render-package registration seam before the bytes can leave the kernel.
 
 | Class | Current location | Count / size | Interpretation |
 |---|---|---:|---|
-| AOT GPGPU payloads | `crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/*.bin` + `*.spv` | 25 pairs / 3,159,892 bytes | Actually embedded by `src/intel/gpgpu/kernel_catalog.rs` |
+| AOT GPGPU payloads | `crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/*.bin` + `*.spv` | 24 pairs / 3,100,976 bytes | Actually embedded by `src/intel/gpgpu/kernel_catalog.rs`; skybox is Blueprint-owned |
 | Contract-only shader slots | TRUEOS contract/trust files | 7 | Payload is already supplied by a Blueprint: Shadertoy IDs 1–6 and Cubes ID 16 |
 | Native render artifact | `picasso/churn-forward.trueos.intel.helio` | 44,742 bytes | Kernel render boundary; shared by retained-render consumers |
 | Small retained texture shader binaries | `picasso/picasso-retained-textured-forward/*.bin` | 3 / 904 bytes | Kernel vGPU retained-texture boundary |
@@ -61,7 +63,7 @@ so a migration can carry it unchanged.
 | `sprite_quad_worklist_rgba8` | `gpgpu/kernels/sprite_quad_worklist_rgba8.clcpp` | 54,152 + 33,628 | UI4, font, sprite worklists, display probes | Kernel/shared | Keep builtin-shader |
 | `ui4_compose_layers_rgba8` | `gpgpu/kernels/ui4_compose_layers_rgba8.clcpp` | 40,120 + 26,032 | UI4 compositor | Kernel/shared | Keep builtin-shader |
 | `mandel64_worklist_rgba8` | `gpgpu/kernels/mandel64_worklist_rgba8.clcpp` | 21,728 + 14,280 | TRUEOS worklist/effect preview | Kernel/internal | Keep builtin-shader for now |
-| `skybox_sample_rgb565` | `gpgpu/kernels/skybox_sample_rgb565.clcpp` | 37,624 + 21,292 | `Frame::render_skybox_rgb565`; `apps/skybox` | One Blueprint | Migrate to `skybox` Blueprint |
+| `skybox_sample_rgb565` | `TRUEOS-Blueprints/apps/skybox/assets/skybox_sample_rgb565/` | 37,624 + 21,292 | `Frame::render_skybox_rgb565`; `apps/skybox` | One Blueprint | Migrated; contract/hash retained in TRUEOS |
 | `chart_sine_rgba8` | `gpgpu/kernels/chart_sine_rgba8.clcpp` | 35,328 + 21,132 | TRUEOS effect preview/OpenCL registry | Kernel/internal | Keep builtin-shader for now |
 | `pixel_plasma_rgba8` | `gpgpu/kernels/pixel_plasma_rgba8.clcpp` | 36,544 + 23,632 | TRUEOS effect preview/OpenCL registry | Kernel/internal | Keep builtin-shader for now |
 | `cpp_demo_rgba8` | `gpgpu/kernels/cpp_demo_rgba8.clcpp` | 222,576 + 157,140 | Kernel preview plus Shadertoy IDs 8–14 | Mixed | Keep until kernel preview gets package registration |
@@ -113,7 +115,7 @@ Native binary hashes for the AOT rows, in table order, are:
 |---|---|---|---|
 | `shadertoy` | IDs 1–6, 7, 8–14, 15 | Complete `.stpkg` files in `TRUEOS-Blueprints/apps/shadertoy/assets`; kernel keeps trust contracts; IDs 7/8/15 also have kernel copies for internal preview | Correct reference model; preserve |
 | `Cubes` | ID 16 Mandelbox; ID 4 Palette Grid; generated patch-cube pipeline | `.stpkg` files and source live in `Cubes/Cube`; patch-cube native code is exported into TRUEOS `generated_patch_cube.rs` | Keep package ownership; migrate patch pipeline after API seam |
-| `skybox` | `skybox_sample_rgb565` | Shader is in kernel; skybox texture/data is already Blueprint-owned | One-app candidate; migrate shader payload to `skybox` |
+| `skybox` | `skybox_sample_rgb565` | Authenticated `.stpkg` and source/binaries are Blueprint-owned; TRUEOS retains contract/hash and admission | Migrated |
 | `particle` | `particle_craft` | Direct API dispatch currently finds the kernel artifact; Shadertoy separately carries a package for ID 15 | Shared/mixed; do not move until direct registration exists |
 | `trueos-picasso-example` | Retained render pipeline, `helio_retained_transform`, Picasso native artifact | Kernel render boundary | Shared render stack; keep builtin-shader |
 | `Cubes` / `PotatoStamps` indexed UI4 | Builtin vGPU package digests: color, immediate, textured | Kernel-generated code and fixed package allowlist | Multiple consumers; keep builtin-shader |
@@ -147,12 +149,10 @@ as a built-in artifact.
    service kernels, model kernels, Spirit, Helio transform, boot probes, or
    shared vGPU render packages. They have kernel-owned dispatch or multiple
    consumers.
-2. **Use `skybox` as the first non-Shadertoy migration.** Put its `.clcpp`,
-   `.bin`, `.spv`, manifest, generated contract, and package hash under the
-   Blueprint. Add the smallest registration field to the existing skybox
-   frame admission path. The bake/sign commands and validation rules remain
-   unchanged; only the source of the bytes changes from `include_bytes!` to an
-   authenticated Blueprint payload.
+2. **Skybox migration complete.** Its `.clcpp`, `.bin`, `.spv`, manifest,
+   generated contract, and package hash are under the Blueprint. The skybox
+   frame admission path registers the package before dispatch; bake/sign
+   validation and the contract/hash checks remain unchanged.
 3. **Migrate Cubes patch-cube next.** Keep the current source/bake/export
    process, but package the generated vertex/tessellation/fragment stages with
    Cubes and register the package before the retained draw. The current

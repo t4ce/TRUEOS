@@ -11,10 +11,7 @@ static UI4_NV12_TILE64_TO_RGBA8_FRAME_UPLOAD: Mutex<Option<UploadedKernelArtifac
     Mutex::new(None);
 static SPRITE_QUAD_WORKLIST_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static UI4_COMPOSE_LAYERS_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
-static MANDEL64_WORKLIST_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static SKYBOX_SAMPLE_RGB565_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
-static CHART_SINE_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
-static PIXEL_PLASMA_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static CPP_DEMO_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static SHADERTOY_MANDELBROT_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static SHADERTOY_CUBE_FIELD_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
@@ -61,7 +58,6 @@ static LFM25_RCS_GGTT_MAPPING: spin::Once<bool> = spin::Once::new();
 static UI4_COMPOSITOR_RCS_GGTT_MAPPING: spin::Once<bool> = spin::Once::new();
 
 static GPGPU_RECT_WORKLIST_DESC: Mutex<Option<GpgpuRectWorklistDescBuffer>> = Mutex::new(None);
-static GPGPU_MANDEL64_WORKLIST_DESC: Mutex<Option<GpgpuRectWorklistDescBuffer>> = Mutex::new(None);
 static GPGPU_SPRITE_QUAD_WORKLIST_DESC: Mutex<Option<GpgpuRectWorklistDescBuffer>> =
     Mutex::new(None);
 static HELIO_SPRITE_ATLAS_SURFACE: spin::Once<GpgpuRgba8Surface> = spin::Once::new();

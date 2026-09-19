@@ -160,36 +160,12 @@ pub(crate) const UI4_COMPOSE_LAYERS_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
         &UI4_COMPOSE_LAYERS_RGBA8_ADLS_CPP_ABI_CONTRACT,
     );
 
-pub(crate) const MANDEL64_WORKLIST_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
-    GpgpuKernelArtifact::contracted(
-        MANDEL64_WORKLIST_RGBA8_KERNEL_NAME,
-        MANDEL64_WORKLIST_RGBA8_ADLS_BIN,
-        MANDEL64_WORKLIST_RGBA8_ADLS_SPV,
-        &MANDEL64_WORKLIST_RGBA8_ADLS_CPP_ABI_CONTRACT,
-    );
-
 pub(crate) const SKYBOX_SAMPLE_RGB565_ADLS_ARTIFACT: GpgpuKernelArtifact =
     GpgpuKernelArtifact::contracted(
         SKYBOX_SAMPLE_RGB565_KERNEL_NAME,
         &[],
         &[],
         &SKYBOX_SAMPLE_RGB565_ADLS_CPP_ABI_CONTRACT,
-    );
-
-pub(crate) const CHART_SINE_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
-    GpgpuKernelArtifact::contracted(
-        CHART_SINE_RGBA8_KERNEL_NAME,
-        CHART_SINE_RGBA8_ADLS_BIN,
-        CHART_SINE_RGBA8_ADLS_SPV,
-        &CHART_SINE_RGBA8_ADLS_CPP_ABI_CONTRACT,
-    );
-
-pub(crate) const PIXEL_PLASMA_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact =
-    GpgpuKernelArtifact::contracted(
-        PIXEL_PLASMA_RGBA8_KERNEL_NAME,
-        PIXEL_PLASMA_RGBA8_ADLS_BIN,
-        PIXEL_PLASMA_RGBA8_ADLS_SPV,
-        &PIXEL_PLASMA_RGBA8_ADLS_CPP_ABI_CONTRACT,
     );
 
 pub(crate) const CPP_DEMO_RGBA8_ADLS_ARTIFACT: GpgpuKernelArtifact = GpgpuKernelArtifact::new(

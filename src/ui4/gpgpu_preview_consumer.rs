@@ -56,12 +56,8 @@ pub(crate) const GPGPU_PREVIEW_MAX_PUBLISH_EVERY: u32 = 1_024;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum GpgpuPreviewPreset {
-    All,
     Static,
     Static30,
-    Mandelbrot,
-    Chart,
-    Plasma,
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     Lab256,
     CppGallery,
@@ -80,12 +76,8 @@ pub(crate) enum GpgpuPreviewPreset {
 impl GpgpuPreviewPreset {
     pub(crate) const fn label(self) -> &'static str {
         match self {
-            Self::All => "compute-trio",
             Self::Static => "static",
             Self::Static30 => "static30",
-            Self::Mandelbrot => "mandelbrot",
-            Self::Chart => "chart",
-            Self::Plasma => "plasma",
             Self::Lab256 => "lab256",
             Self::CppGallery => "cpp-gallery",
             Self::CppCloudHighWisps => "cpp-cloud-high-wisps",
@@ -125,7 +117,6 @@ impl GpgpuPreviewPreset {
 
     pub(crate) const fn buffering_label(self) -> &'static str {
         match self {
-            Self::All => "double-per-frame",
             Self::Static30 | Self::CppFont => "single",
 
             Self::CppFontRush2 => "double-per-plane-canvas",
@@ -135,12 +126,8 @@ impl GpgpuPreviewPreset {
 
     pub(crate) const fn plane_layout_label(self) -> &'static str {
         match self {
-            Self::All => "slots1+2+3-direct",
             Self::Static => "slot1-direct",
             Self::Static30 => "slots1+2+3/10-each",
-            Self::Mandelbrot => "slot1-direct",
-            Self::Chart => "slot2-direct",
-            Self::Plasma => "slot3-direct",
             Self::Lab256 => "slot1-alpha-256x256",
             Self::CppGallery
             | Self::CppCloudHighWisps
@@ -179,7 +166,7 @@ pub(crate) struct GpgpuPreviewConfig {
 
 impl GpgpuPreviewConfig {
     pub(crate) const DEFAULT: Self = Self {
-        preset: GpgpuPreviewPreset::All,
+        preset: GpgpuPreviewPreset::Static,
         duration_ms: GPGPU_PREVIEW_DEFAULT_DURATION_MS,
         cadence_ms: GPGPU_PREVIEW_DEFAULT_CADENCE_MS,
         publish_every: GPGPU_PREVIEW_DEFAULT_PUBLISH_EVERY,
@@ -251,62 +238,8 @@ pub(crate) struct GpgpuPreviewStatus {
     pub(crate) width: u32,
     pub(crate) height: u32,
     pub(crate) metrics: GpgpuPreviewMetrics,
-    pub(crate) members: [GpgpuPreviewMemberStatus; 3],
     pub(crate) last_error: &'static str,
 }
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
-pub(crate) struct GpgpuPreviewMemberStatus {
-    pub(crate) preset: GpgpuPreviewPreset,
-    pub(crate) frame: Option<FrameHandle>,
-    pub(crate) window: Option<WindowId>,
-    pub(crate) plane_slot: u8,
-    pub(crate) active: bool,
-    pub(crate) metrics: GpgpuPreviewMetrics,
-}
-
-impl GpgpuPreviewMemberStatus {
-    const fn inactive(preset: GpgpuPreviewPreset, plane_slot: u8) -> Self {
-        Self {
-            preset,
-            frame: None,
-            window: None,
-            plane_slot,
-            active: false,
-            metrics: GpgpuPreviewMetrics {
-                attempted: 0,
-                submitted: 0,
-                completed: 0,
-                published: 0,
-                scanout_live: 0,
-                scanout_superseded: 0,
-                dropped_busy: 0,
-                dropped_frame_busy: 0,
-                dropped_queue_full: 0,
-                dropped_in_flight: 0,
-                dropped_cadence: 0,
-                failed: 0,
-                late: 0,
-                elapsed_ms: 0,
-                last_iterations: 0,
-                last_marker: 0,
-                last_submit_ms: 0,
-            },
-        }
-    }
-}
-
-const INACTIVE_PREVIEW_MEMBERS: [GpgpuPreviewMemberStatus; 3] = [
-    GpgpuPreviewMemberStatus::inactive(GpgpuPreviewPreset::Mandelbrot, 1),
-    GpgpuPreviewMemberStatus::inactive(GpgpuPreviewPreset::Chart, 2),
-    GpgpuPreviewMemberStatus::inactive(GpgpuPreviewPreset::Plasma, 3),
-];
-
-const COMPUTE_PREVIEW_PRESETS: [GpgpuPreviewPreset; 3] = [
-    GpgpuPreviewPreset::Mandelbrot,
-    GpgpuPreviewPreset::Chart,
-    GpgpuPreviewPreset::Plasma,
-];
 
 impl GpgpuPreviewStatus {
     const fn initial() -> Self {
@@ -340,7 +273,6 @@ impl GpgpuPreviewStatus {
                 last_marker: 0,
                 last_submit_ms: 0,
             },
-            members: INACTIVE_PREVIEW_MEMBERS,
             last_error: "none",
         }
     }
@@ -759,13 +691,12 @@ pub(crate) async fn gpgpu_preview_consumer_service_task(worker_slot: u32) {
             if !active.is_empty() {
                 let serial = active[0].request_serial;
                 let metrics = aggregate_preview_metrics(&active);
-                let members = preview_member_statuses(&active);
                 stop_active_previews(
                     core::mem::take(&mut active),
                     &mut retired_frames,
                     "render-fault",
                 );
-                mark_runtime_fault(serial, metrics, members, reason);
+                mark_runtime_fault(serial, metrics, reason);
                 crate::log_warn!(
                     target: "ui4";
                     "ui4 gpgpu-preview faulted request={} reason={} attempted={} submitted={} completed={} published={} failed={}\n",
@@ -784,13 +715,12 @@ pub(crate) async fn gpgpu_preview_consumer_service_task(worker_slot: u32) {
             if !active.is_empty() {
                 let serial = active[0].request_serial;
                 let metrics = aggregate_preview_metrics(&active);
-                let members = preview_member_statuses(&active);
                 stop_active_previews(
                     core::mem::take(&mut active),
                     &mut retired_frames,
                     "duration-complete",
                 );
-                mark_duration_complete(serial, metrics, members);
+                mark_duration_complete(serial, metrics);
             }
         }
 
@@ -800,112 +730,10 @@ pub(crate) async fn gpgpu_preview_consumer_service_task(worker_slot: u32) {
 }
 
 fn initialize_previews(desired: DesiredPreview) -> Result<Vec<ActivePreview>, &'static str> {
-    if desired.config.preset == GpgpuPreviewPreset::All {
-        initialize_compute_preview_set(desired)
-    } else if desired.config.preset == GpgpuPreviewPreset::CppFontRush2 {
+    if desired.config.preset == GpgpuPreviewPreset::CppFontRush2 {
         initialize_cpp_font_rush2_set(desired)
     } else {
         Ok(alloc::vec![initialize_preview(desired)?])
-    }
-}
-
-fn initialize_compute_preview_set(
-    desired: DesiredPreview,
-) -> Result<Vec<ActivePreview>, &'static str> {
-    let output = OutputId::from_slot(0).ok_or("output-d01-unavailable")?;
-    let session =
-        begin_window_session(PREVIEW_OWNER).map_err(|_| "compute-trio-session-create-failed")?;
-    let (output_width, output_height) =
-        crate::intel::active_scanout_dimensions().unwrap_or((2560, 1440));
-    let columns = ((output_width.saturating_sub(PREVIEW_GRID_GAP))
-        / PREVIEW_WIDTH.saturating_add(PREVIEW_GRID_GAP))
-    .clamp(1, COMPUTE_PREVIEW_PRESETS.len() as u32);
-    let mut previews = Vec::with_capacity(COMPUTE_PREVIEW_PRESETS.len());
-
-    for (index, preset) in COMPUTE_PREVIEW_PRESETS.iter().copied().enumerate() {
-        let frame = match create_preview_frame(output, PREVIEW_WIDTH, PREVIEW_HEIGHT) {
-            Ok(frame) => frame,
-            Err(_) => {
-                abandon_compute_preview_initialization(session, &previews);
-                return Err("compute-trio-frame-create-failed");
-            }
-        };
-        let column = index as u32 % columns;
-        let row = index as u32 / columns;
-        let x = PREVIEW_GRID_GAP
-            .saturating_add(column.saturating_mul(PREVIEW_WIDTH.saturating_add(PREVIEW_GRID_GAP)));
-        let y = PREVIEW_GRID_GAP
-            .saturating_add(row.saturating_mul(PREVIEW_HEIGHT.saturating_add(PREVIEW_GRID_GAP)));
-        if x.saturating_add(PREVIEW_WIDTH) > output_width
-            || y.saturating_add(PREVIEW_HEIGHT) > output_height
-        {
-            let _ = destroy_frame(frame);
-            abandon_compute_preview_initialization(session, &previews);
-            return Err("compute-trio-output-too-small");
-        }
-        let plane_slot = index + 1;
-        let window = match create_window(WindowCreate {
-            owner: PREVIEW_OWNER,
-            session,
-            frame,
-            output,
-            plane: WindowPlane::Universal(plane_slot as u8),
-            placement: WindowPlacement {
-                x: x as i32,
-                y: y as i32,
-                width: PREVIEW_WIDTH,
-                height: PREVIEW_HEIGHT,
-                z: PREVIEW_Z.saturating_add(index as i32),
-                opacity: u8::MAX,
-                visible: true,
-            },
-            interaction: super::WindowInteraction::MOVABLE_FRAME,
-        }) {
-            Ok(window) => window,
-            Err(_) => {
-                let _ = destroy_frame(frame);
-                abandon_compute_preview_initialization(session, &previews);
-                return Err("compute-trio-window-create-failed");
-            }
-        };
-        let mut config = desired.config;
-        config.preset = preset;
-        let now = Instant::now();
-        previews.push(ActivePreview {
-            request_serial: desired.serial,
-            config,
-            policy: desired.policy,
-            cadence_phase: 0,
-            session,
-            frame,
-            window,
-            width: PREVIEW_WIDTH,
-            height: PREVIEW_HEIGHT,
-            resize_retry_width: 0,
-            resize_retry_height: 0,
-            resize_retry_at: now,
-            pending_resize_previous_frame: None,
-            pending_resize_logical_extent: None,
-            pending_resize_epoch: None,
-            committed_logical_extent: (PREVIEW_WIDTH, PREVIEW_HEIGHT),
-            started: now,
-            next_render: now,
-            static_needs_publish: true,
-            extra_surfaces: Vec::new(),
-            particle_craft: None,
-            cloud_brush: CloudBrushState::new(),
-            font_stamp: None,
-            font_rush2: None,
-            metrics: GpgpuPreviewMetrics::default(),
-        });
-    }
-    Ok(previews)
-}
-
-fn abandon_compute_preview_initialization(session: WindowSessionId, previews: &[ActivePreview]) {
-    let _ = finish_window_session(PREVIEW_OWNER, session);
-    for preview in previews {
-        let _ = destroy_frame(preview.frame);
     }
 }
 
@@ -1374,11 +1202,7 @@ async fn render_preview_frame(preview: &mut ActivePreview) -> Result<(), &'stati
         return Ok(());
     }
     let publish_result = match preview.config.preset {
-        GpgpuPreviewPreset::All
-        | GpgpuPreviewPreset::Mandelbrot
-        | GpgpuPreviewPreset::Chart
-        | GpgpuPreviewPreset::Plasma
-        | GpgpuPreviewPreset::Lab256
+        GpgpuPreviewPreset::Lab256
         | GpgpuPreviewPreset::CppGallery
         | GpgpuPreviewPreset::CppCloudHighWisps
         | GpgpuPreviewPreset::CppAurora
@@ -1872,15 +1696,6 @@ fn dispatch_preview_kernel(
     surface: crate::intel::gpgpu::GpgpuRgba8Surface,
 ) -> PreviewDispatchResult {
     match preview.config.preset {
-        GpgpuPreviewPreset::All => PreviewDispatchResult {
-            ok: false,
-            submitted: false,
-            iterations: 0,
-            marker: 0,
-            submit_ms: 0,
-            release: None,
-            error: "compute-trio-entered-single-dispatch",
-        },
         GpgpuPreviewPreset::Static
         | GpgpuPreviewPreset::Static30
         | GpgpuPreviewPreset::CppFont
@@ -1893,68 +1708,6 @@ fn dispatch_preview_kernel(
             release: None,
             error: "static-preset-entered-gpu-dispatch",
         },
-        GpgpuPreviewPreset::Mandelbrot => {
-            let iterations = 32 + ((preview.metrics.attempted - 1) % 97) as u32;
-            match crate::intel::gpgpu::mandel64_worklist_surface_full(surface, iterations) {
-                Some(result) => PreviewDispatchResult {
-                    ok: result.ok,
-                    submitted: result.submitted,
-                    iterations,
-                    marker: result.marker,
-                    submit_ms: result.submit_ms,
-                    release: result.release,
-                    error: "mandelbrot-dispatch-failed",
-                },
-                None => PreviewDispatchResult {
-                    ok: false,
-                    submitted: false,
-                    iterations,
-                    marker: 0,
-                    submit_ms: 0,
-                    release: None,
-                    error: "mandelbrot-dispatch-unavailable",
-                },
-            }
-        }
-        GpgpuPreviewPreset::Chart => {
-            let seconds = preview.metrics.elapsed_ms as f32 / 1_000.0;
-            let flags = crate::intel::gpgpu::CHART_SINE_FLAG_GRID
-                | crate::intel::gpgpu::CHART_SINE_FLAG_AXES
-                | crate::intel::gpgpu::CHART_SINE_FLAG_GLOW
-                | crate::intel::gpgpu::CHART_SINE_FLAG_BORDER;
-            let result = crate::intel::gpgpu::chart_sine_rgba8_surface_full(
-                surface,
-                seconds * core::f32::consts::FRAC_PI_2,
-                flags,
-            );
-            PreviewDispatchResult {
-                ok: result.ok,
-                submitted: result.submitted,
-                iterations: 0,
-                marker: result.marker,
-                submit_ms: result.submit_ms,
-                release: result.release,
-                error: "chart-dispatch-failed",
-            }
-        }
-        GpgpuPreviewPreset::Plasma => {
-            let seconds = preview.metrics.elapsed_ms as f32 / 1_000.0;
-            let flags = crate::intel::gpgpu::PIXEL_PLASMA_FLAG_VIGNETTE
-                | crate::intel::gpgpu::PIXEL_PLASMA_FLAG_RINGS
-                | crate::intel::gpgpu::PIXEL_PLASMA_FLAG_SCANLINE
-                | crate::intel::gpgpu::PIXEL_PLASMA_FLAG_FIELD_PALETTE;
-            let result =
-                crate::intel::gpgpu::pixel_plasma_rgba8_surface_full(surface, seconds, flags);
-            PreviewDispatchResult {
-                ok: result.ok,
-                submitted: result.submitted,
-                iterations: 0,
-                marker: result.marker,
-                submit_ms: result.submit_ms,
-                release: result.release,
-                error: "plasma-dispatch-failed",
-            }
-        }
         GpgpuPreviewPreset::Lab256 => {
             let result = crate::intel::gpgpu::lab256_preview_frame(surface);
             PreviewDispatchResult {
@@ -2073,11 +1826,7 @@ fn dispatch_preview_kernel(
 
 const fn preview_release_label(preset: GpgpuPreviewPreset) -> &'static str {
     match preset {
-        GpgpuPreviewPreset::All
-        | GpgpuPreviewPreset::Mandelbrot
-        | GpgpuPreviewPreset::Chart
-        | GpgpuPreviewPreset::Plasma
-        | GpgpuPreviewPreset::CppGallery
+        GpgpuPreviewPreset::CppGallery
         | GpgpuPreviewPreset::CppCloudHighWisps
         | GpgpuPreviewPreset::CppAurora
         | GpgpuPreviewPreset::CppJulia
@@ -2097,13 +1846,9 @@ const fn preview_release_label(preset: GpgpuPreviewPreset) -> &'static str {
 
 const fn preview_producer_label(preset: GpgpuPreviewPreset) -> &'static str {
     match preset {
-        GpgpuPreviewPreset::All => "guc-compute-trio",
         GpgpuPreviewPreset::Lab256 => "guc-lab256-three-pass",
         GpgpuPreviewPreset::Static => "cpu-static",
         GpgpuPreviewPreset::Static30 => "font-kernel-service-cpp",
-        GpgpuPreviewPreset::Mandelbrot | GpgpuPreviewPreset::Chart | GpgpuPreviewPreset::Plasma => {
-            "guc-compute-single"
-        }
         GpgpuPreviewPreset::CppGallery
         | GpgpuPreviewPreset::CppCloudHighWisps
         | GpgpuPreviewPreset::CppAurora
@@ -2120,13 +1865,10 @@ const fn preview_producer_label(preset: GpgpuPreviewPreset) -> &'static str {
 
 const fn preview_plane(preset: GpgpuPreviewPreset) -> WindowPlane {
     match preset {
-        GpgpuPreviewPreset::All | GpgpuPreviewPreset::Static | GpgpuPreviewPreset::Static30 => {
+        GpgpuPreviewPreset::Static | GpgpuPreviewPreset::Static30 => {
             WindowPlane::Universal(super::ALPHA_OVERLAY_PLANE_SLOT as u8)
         }
-        GpgpuPreviewPreset::Mandelbrot
-        | GpgpuPreviewPreset::Chart
-        | GpgpuPreviewPreset::Plasma
-        | GpgpuPreviewPreset::CppGallery
+        GpgpuPreviewPreset::CppGallery
         | GpgpuPreviewPreset::CppCloudHighWisps
         | GpgpuPreviewPreset::CppAurora
         | GpgpuPreviewPreset::CppJulia
@@ -2143,10 +1885,6 @@ const fn preview_plane(preset: GpgpuPreviewPreset) -> WindowPlane {
 
 const fn preview_consumer_label(preset: GpgpuPreviewPreset) -> &'static str {
     match preset {
-        GpgpuPreviewPreset::All => "ui4-direct-slots1+2+3",
-        GpgpuPreviewPreset::Mandelbrot => "ui4-direct-slot1",
-        GpgpuPreviewPreset::Chart => "ui4-direct-slot2",
-        GpgpuPreviewPreset::Plasma => "ui4-direct-slot3",
         GpgpuPreviewPreset::Lab256 => "ui4-alpha-slot1-256x256",
         GpgpuPreviewPreset::CppGallery
         | GpgpuPreviewPreset::CppCloudHighWisps
@@ -2702,7 +2440,6 @@ fn mark_starting(desired: DesiredPreview) {
     control.status.width = 0;
     control.status.height = 0;
     control.status.metrics = GpgpuPreviewMetrics::default();
-    control.status.members = INACTIVE_PREVIEW_MEMBERS;
     control.status.last_error = "none";
 }
 
@@ -2714,7 +2451,6 @@ fn mark_faulted(desired: DesiredPreview, reason: &'static str) {
     control.status.window = None;
     control.status.width = 0;
     control.status.height = 0;
-    control.status.members = INACTIVE_PREVIEW_MEMBERS;
     control.status.last_error = reason;
 }
 
@@ -2726,16 +2462,13 @@ fn mark_idle(serial: u64, reason: &'static str) {
     control.status.window = None;
     control.status.width = 0;
     control.status.height = 0;
-    clear_preview_member_handles(&mut control.status.members);
     control.status.last_error = reason;
 }
 
 fn mark_duration_complete(
     serial: u64,
     metrics: GpgpuPreviewMetrics,
-    mut members: [GpgpuPreviewMemberStatus; 3],
 ) {
-    clear_preview_member_handles(&mut members);
     let mut control = PREVIEW_CONTROL.lock();
     if control.desired.serial == serial {
         control.desired.running = false;
@@ -2748,17 +2481,14 @@ fn mark_duration_complete(
     control.status.width = 0;
     control.status.height = 0;
     control.status.metrics = metrics;
-    control.status.members = members;
     control.status.last_error = "duration-complete";
 }
 
 fn mark_runtime_fault(
     serial: u64,
     metrics: GpgpuPreviewMetrics,
-    mut members: [GpgpuPreviewMemberStatus; 3],
     reason: &'static str,
 ) {
-    clear_preview_member_handles(&mut members);
     let mut control = PREVIEW_CONTROL.lock();
     if control.desired.serial == serial {
         control.desired.running = false;
@@ -2771,7 +2501,6 @@ fn mark_runtime_fault(
     control.status.width = 0;
     control.status.height = 0;
     control.status.metrics = metrics;
-    control.status.members = members;
     control.status.last_error = reason;
 }
 
@@ -2794,7 +2523,6 @@ fn publish_active_status(
     control.status.width = first.width;
     control.status.height = first.height;
     control.status.metrics = aggregate_preview_metrics(previews);
-    control.status.members = preview_member_statuses(previews);
     if control.status.last_error == "none" || last_error != "none" {
         control.status.last_error = last_error;
     }
@@ -2848,55 +2576,6 @@ fn aggregate_preview_metrics(previews: &[ActivePreview]) -> GpgpuPreviewMetrics 
     aggregate
 }
 
-fn preview_member_statuses(previews: &[ActivePreview]) -> [GpgpuPreviewMemberStatus; 3] {
-    let mut members = INACTIVE_PREVIEW_MEMBERS;
-    for preview in previews {
-        let Some(index) = compute_preview_index(preview.config.preset) else {
-            continue;
-        };
-        members[index] = GpgpuPreviewMemberStatus {
-            preset: preview.config.preset,
-            frame: Some(preview.frame),
-            window: Some(preview.window),
-            plane_slot: active_preview_plane_slot(preview) as u8,
-            active: true,
-            metrics: preview.metrics,
-        };
-    }
-    members
-}
-
-fn clear_preview_member_handles(members: &mut [GpgpuPreviewMemberStatus; 3]) {
-    for member in members {
-        member.frame = None;
-        member.window = None;
-        member.active = false;
-    }
-}
-
-const fn compute_preview_index(preset: GpgpuPreviewPreset) -> Option<usize> {
-    match preset {
-        GpgpuPreviewPreset::Mandelbrot => Some(0),
-        GpgpuPreviewPreset::Chart => Some(1),
-        GpgpuPreviewPreset::Plasma => Some(2),
-        GpgpuPreviewPreset::All
-        | GpgpuPreviewPreset::Static
-        | GpgpuPreviewPreset::Static30
-        | GpgpuPreviewPreset::Lab256
-        | GpgpuPreviewPreset::CppGallery
-        | GpgpuPreviewPreset::CppCloudHighWisps
-        | GpgpuPreviewPreset::CppAurora
-        | GpgpuPreviewPreset::CppJulia
-        | GpgpuPreviewPreset::CppSdf
-        | GpgpuPreviewPreset::CppVoronoi
-        | GpgpuPreviewPreset::CppRetroSun
-        | GpgpuPreviewPreset::CppAudio
-        | GpgpuPreviewPreset::CppParticle
-        | GpgpuPreviewPreset::CppFont
-        | GpgpuPreviewPreset::CppFontRush2 => None,
-    }
-}
-
 const fn preview_plane_slot(preset: GpgpuPreviewPreset) -> usize {
     if matches!(preset, GpgpuPreviewPreset::CppFontRush2) {
         return 0;
@@ -2914,10 +2593,7 @@ const fn preview_plane_slot(preset: GpgpuPreviewPreset) -> usize {
     ) {
         return 1;
     }
-    match compute_preview_index(preset) {
-        Some(index) => index + 1,
-        None => super::ALPHA_OVERLAY_PLANE_SLOT,
-    }
+    super::ALPHA_OVERLAY_PLANE_SLOT
 }
 
 fn active_preview_plane_slot(preview: &ActivePreview) -> usize {
@@ -3058,7 +2734,7 @@ mod tests {
     fn preview_config_accepts_continuous_duration() {
         assert!(
             GpgpuPreviewConfig {
-                preset: GpgpuPreviewPreset::Plasma,
+                preset: GpgpuPreviewPreset::Static,
                 duration_ms: 0,
                 cadence_ms: 16,
                 publish_every: 2,
@@ -3072,7 +2748,7 @@ mod tests {
     fn preview_config_rejects_invalid_scheduler_values() {
         assert!(
             GpgpuPreviewConfig {
-                preset: GpgpuPreviewPreset::Mandelbrot,
+                preset: GpgpuPreviewPreset::Static,
                 duration_ms: 1,
                 cadence_ms: 0,
                 publish_every: 1,
@@ -3082,7 +2758,7 @@ mod tests {
         );
         assert!(
             GpgpuPreviewConfig {
-                preset: GpgpuPreviewPreset::Chart,
+                preset: GpgpuPreviewPreset::Static,
                 duration_ms: 1,
                 cadence_ms: GPGPU_PREVIEW_MAX_CADENCE_MS + 1,
                 publish_every: 1,
@@ -3092,7 +2768,7 @@ mod tests {
         );
         assert!(
             GpgpuPreviewConfig {
-                preset: GpgpuPreviewPreset::Plasma,
+                preset: GpgpuPreviewPreset::Static,
                 duration_ms: 1,
                 cadence_ms: 1,
                 publish_every: 0,

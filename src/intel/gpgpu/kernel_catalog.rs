@@ -31,16 +31,7 @@ pub(crate) const SPRITE_QUAD_WORKLIST_RGBA8_OPENCL_SOURCE: &str =
 pub(crate) const UI4_COMPOSE_LAYERS_RGBA8_KERNEL_NAME: &str = "ui4_compose_layers_rgba8";
 pub(crate) const UI4_COMPOSE_LAYERS_RGBA8_OPENCL_SOURCE: &str =
     include_str!("kernels/ui4_compose_layers_rgba8.clcpp");
-pub(crate) const MANDEL64_WORKLIST_RGBA8_KERNEL_NAME: &str = "mandel64_worklist_rgba8";
-pub(crate) const MANDEL64_WORKLIST_RGBA8_OPENCL_SOURCE: &str =
-    include_str!("kernels/mandel64_worklist_rgba8.clcpp");
 pub(crate) const SKYBOX_SAMPLE_RGB565_KERNEL_NAME: &str = "skybox_sample_rgb565";
-pub(crate) const CHART_SINE_RGBA8_KERNEL_NAME: &str = "chart_sine_rgba8";
-pub(crate) const CHART_SINE_RGBA8_OPENCL_SOURCE: &str =
-    include_str!("kernels/chart_sine_rgba8.clcpp");
-pub(crate) const PIXEL_PLASMA_RGBA8_KERNEL_NAME: &str = "pixel_plasma_rgba8";
-pub(crate) const PIXEL_PLASMA_RGBA8_OPENCL_SOURCE: &str =
-    include_str!("kernels/pixel_plasma_rgba8.clcpp");
 pub(crate) const CPP_DEMO_RGBA8_KERNEL_NAME: &str = "cpp_demo_rgba8";
 pub(crate) const CPP_DEMO_RGBA8_OPENCL_SOURCE: &str =
     include_str!("../../../crates/trueos-shader/gpgpu/kernels/cpp_demo_rgba8.clcpp");
@@ -134,10 +125,7 @@ pub(crate) fn kernel_opencl_source(name: &str) -> Option<&'static str> {
         }
         SPRITE_QUAD_WORKLIST_RGBA8_KERNEL_NAME => Some(SPRITE_QUAD_WORKLIST_RGBA8_OPENCL_SOURCE),
         UI4_COMPOSE_LAYERS_RGBA8_KERNEL_NAME => Some(UI4_COMPOSE_LAYERS_RGBA8_OPENCL_SOURCE),
-        MANDEL64_WORKLIST_RGBA8_KERNEL_NAME => Some(MANDEL64_WORKLIST_RGBA8_OPENCL_SOURCE),
         SKYBOX_SAMPLE_RGB565_KERNEL_NAME => None,
-        CHART_SINE_RGBA8_KERNEL_NAME => Some(CHART_SINE_RGBA8_OPENCL_SOURCE),
-        PIXEL_PLASMA_RGBA8_KERNEL_NAME => Some(PIXEL_PLASMA_RGBA8_OPENCL_SOURCE),
         CPP_DEMO_RGBA8_KERNEL_NAME => Some(CPP_DEMO_RGBA8_OPENCL_SOURCE),
         CPP_AUDIO_VISUALIZER_RGBA8_KERNEL_NAME => Some(CPP_AUDIO_VISUALIZER_RGBA8_OPENCL_SOURCE),
         PARTICLE_CRAFT_KERNEL_NAME
@@ -178,14 +166,9 @@ pub(crate) fn kernel_source_path(name: &str) -> Option<&'static str> {
         UI4_COMPOSE_LAYERS_RGBA8_KERNEL_NAME => {
             Some("src/intel/gpgpu/kernels/ui4_compose_layers_rgba8.clcpp")
         }
-        MANDEL64_WORKLIST_RGBA8_KERNEL_NAME => {
-            Some("src/intel/gpgpu/kernels/mandel64_worklist_rgba8.clcpp")
-        }
         SKYBOX_SAMPLE_RGB565_KERNEL_NAME => {
             Some("Blueprint:skybox/assets/skybox_sample_rgb565/kernel.clcpp")
         }
-        CHART_SINE_RGBA8_KERNEL_NAME => Some("src/intel/gpgpu/kernels/chart_sine_rgba8.clcpp"),
-        PIXEL_PLASMA_RGBA8_KERNEL_NAME => Some("src/intel/gpgpu/kernels/pixel_plasma_rgba8.clcpp"),
         CPP_DEMO_RGBA8_KERNEL_NAME => Some(CPP_DEMO_RGBA8_SOURCE_PATH),
         SHADERTOY_MANDELBROT_KERNEL_NAME => Some(SHADERTOY_MANDELBROT_SOURCE_PATH),
         SHADERTOY_CUBE_FIELD_KERNEL_NAME => Some(SHADERTOY_CUBE_FIELD_SOURCE_PATH),
@@ -218,15 +201,12 @@ pub(crate) fn kernel_source_path(name: &str) -> Option<&'static str> {
 include!("kernels/artifacts/adls/cpp/copy_rect_rgba8.contract.rs");
 include!("kernels/artifacts/adls/cpp/subset_sum_collapse5_merge10.contract.rs");
 include!("kernels/artifacts/adls/cpp/alpha_blend_worklist_rgba8.contract.rs");
-include!("kernels/artifacts/adls/cpp/chart_sine_rgba8.contract.rs");
 include!("kernels/artifacts/adls/cpp/fill_rect_rgba8.contract.rs");
 include!("kernels/artifacts/adls/cpp/font_outline_coverage_r8.contract.rs");
 include!("kernels/artifacts/adls/cpp/glyph_mask_rgba8.contract.rs");
 include!("kernels/artifacts/adls/cpp/gradient_rect_worklist_rgba8.contract.rs");
 include!("kernels/artifacts/adls/cpp/helio_retained_transform.contract.rs");
 include!("kernels/artifacts/adls/cpp/lab256_multiphase.contract.rs");
-include!("kernels/artifacts/adls/cpp/mandel64_worklist_rgba8.contract.rs");
-include!("kernels/artifacts/adls/cpp/pixel_plasma_rgba8.contract.rs");
 include!("kernels/artifacts/adls/cpp/skybox_sample_rgb565.contract.rs");
 include!("kernels/artifacts/adls/cpp/sprite_quad_worklist_rgba8.contract.rs");
 include!("kernels/artifacts/adls/cpp/ui4_compose_layers_rgba8.contract.rs");
@@ -349,18 +329,6 @@ pub(crate) const UI4_COMPOSE_LAYERS_RGBA8_ADLS_BIN: &[u8] =
     include_bytes!("kernels/artifacts/adls/cpp/ui4_compose_layers_rgba8.bin");
 pub(crate) const UI4_COMPOSE_LAYERS_RGBA8_ADLS_SPV: &[u8] =
     include_bytes!("kernels/artifacts/adls/cpp/ui4_compose_layers_rgba8.spv");
-pub(crate) const MANDEL64_WORKLIST_RGBA8_ADLS_BIN: &[u8] =
-    include_bytes!("kernels/artifacts/adls/cpp/mandel64_worklist_rgba8.bin");
-pub(crate) const MANDEL64_WORKLIST_RGBA8_ADLS_SPV: &[u8] =
-    include_bytes!("kernels/artifacts/adls/cpp/mandel64_worklist_rgba8.spv");
-pub(crate) const CHART_SINE_RGBA8_ADLS_BIN: &[u8] =
-    include_bytes!("kernels/artifacts/adls/cpp/chart_sine_rgba8.bin");
-pub(crate) const CHART_SINE_RGBA8_ADLS_SPV: &[u8] =
-    include_bytes!("kernels/artifacts/adls/cpp/chart_sine_rgba8.spv");
-pub(crate) const PIXEL_PLASMA_RGBA8_ADLS_BIN: &[u8] =
-    include_bytes!("kernels/artifacts/adls/cpp/pixel_plasma_rgba8.bin");
-pub(crate) const PIXEL_PLASMA_RGBA8_ADLS_SPV: &[u8] =
-    include_bytes!("kernels/artifacts/adls/cpp/pixel_plasma_rgba8.spv");
 include!(
     "../../../crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/cpp_demo_rgba8.contract.rs"
 );
@@ -806,14 +774,8 @@ pub(crate) const SPRITE_QUAD_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
     SPRITE_QUAD_WORKLIST_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
 pub(crate) const UI4_COMPOSE_LAYERS_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
     UI4_COMPOSE_LAYERS_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
-pub(crate) const MANDEL64_WORKLIST_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
-    MANDEL64_WORKLIST_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
 pub(crate) const SKYBOX_SAMPLE_RGB565_ADLS_BIN_SHA256: [u8; 32] =
     SKYBOX_SAMPLE_RGB565_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
-pub(crate) const CHART_SINE_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
-    CHART_SINE_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
-pub(crate) const PIXEL_PLASMA_RGBA8_ADLS_BIN_SHA256: [u8; 32] =
-    PIXEL_PLASMA_RGBA8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
 pub(crate) const FONT_OUTLINE_COVERAGE_R8_ADLS_BIN_SHA256: [u8; 32] =
     FONT_OUTLINE_COVERAGE_R8_ADLS_CPP_ABI_CONTRACT.zebin_sha256;
 pub(crate) const HELIO_RETAINED_TRANSFORM_ADLS_BIN_SHA256: [u8; 32] =
