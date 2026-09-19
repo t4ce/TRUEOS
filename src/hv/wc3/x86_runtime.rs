@@ -5,6 +5,7 @@
 //! created them; a numeric handle from another VM is rejected.
 
 use alloc::vec::Vec;
+use core::alloc::Layout;
 use spin::Mutex;
 
 use crate::hv::memory::PAGE_SIZE_4K;
@@ -12,6 +13,7 @@ use crate::phys::{self, HeapArena};
 use v::bp_abi::{TrueosX86ExitV1, TrueosX86RegistersV1};
 
 pub(super) const ERR_INVALID: i32 = -22;
+pub(super) const ERR_NO_MEMORY: i32 = -12;
 pub(super) const ERR_DENIED: i32 = -13;
 pub(super) const ERR_NOT_FOUND: i32 = -2;
 pub(super) const ERR_BUSY: i32 = -16;
@@ -24,13 +26,82 @@ struct Mapping {
     start: u32,
     len: u32,
     permissions: u32,
+    backing: MappingBacking,
+}
+
+/// A mapping is application-owned memory, not a new global-PMM arena.  The
+/// Blueprint VM has already reserved this heap before it enters the carrier.
+struct MappingBacking {
+    // An integer keeps the global runtime Send; this pointer is owned by the
+    // VM guest heap and only dereferenced while its runtime lock is held.
+    ptr: usize,
+    phys_start: u64,
+}
+
+impl MappingBacking {
+    fn new(owner: u8, len: usize) -> Result<Self, i32> {
+        let layout = Layout::from_size_align(len, PAGE_SIZE_4K).map_err(|_| ERR_INVALID)?;
+        let ptr = unsafe { crate::allocators::alloc_raw_hv_guest(owner, layout) };
+        if ptr.is_null() {
+            let stats = crate::allocators::hv_guest_heap_stats(owner);
+            crate::log_warn!(
+                target: "hv";
+                "x86 backing OOM vm={} requested={} guest_heap_total={} free={} largest_free={} free_blocks={}\n",
+                owner,
+                len,
+                stats.usable_total,
+                stats.free_bytes,
+                stats.largest_free_block,
+                stats.free_blocks,
+            );
+            return Err(ERR_NO_MEMORY);
+        }
+        let stats = crate::allocators::hv_guest_heap_stats(owner);
+        let heap_translation = || {
+            let start = stats.heap_start;
+            let end = stats.heap_end;
+            let address = ptr as usize;
+            let allocation_end = address.checked_add(len)?;
+            if !stats.initialized || address < start || allocation_end > end {
+                return None;
+            }
+            (stats.phys_start as u64).checked_add((address - start) as u64)
+        };
+        // The normal HHDM translation is preferred.  A Blueprint carrier may
+        // run with a narrowed host mapping, so retain the VM heap's published
+        // virtual/physical bounds as the authoritative fallback.
+        let Some(phys_start) = crate::phys::virt_to_phys_checked(ptr).or_else(heap_translation) else {
+            unsafe { crate::allocators::dealloc_raw(ptr) };
+            return Err(ERR_INVALID);
+        };
+        unsafe { core::ptr::write_bytes(ptr, 0, len) };
+        Ok(Self { ptr: ptr as usize, phys_start })
+    }
+}
+
+impl Drop for MappingBacking {
+    fn drop(&mut self) {
+        unsafe { crate::allocators::dealloc_raw(self.ptr as *mut u8) };
+    }
+}
+
+/// Carrier table pages are still privileged PMM allocations.  Unlike the
+/// scaffold, their lifetime is now tied to their context.
+struct CarrierPage {
     arena: HeapArena,
+}
+
+impl Drop for CarrierPage {
+    fn drop(&mut self) {
+        let _ = phys::free_phys_range(self.arena.phys_start, self.arena.length);
+    }
 }
 
 struct AddressSpace {
     handle: u64,
     owner: u8,
     mappings: Vec<Mapping>,
+    generation: u64,
 }
 
 struct Context {
@@ -41,7 +112,8 @@ struct Context {
     parked: bool,
     cancelled: bool,
     carrier_cr3: Option<u64>,
-    carrier_pages: Vec<HeapArena>,
+    carrier_pages: Vec<CarrierPage>,
+    carrier_generation: u64,
     admitted: bool,
 }
 
@@ -108,6 +180,7 @@ pub(super) fn address_space_create(out: &mut u64) -> Result<(), i32> {
         handle,
         owner,
         mappings: Vec::new(),
+        generation: 1,
     });
     *out = handle;
     Ok(())
@@ -162,16 +235,14 @@ pub(super) fn address_space_map(
     {
         return Err(ERR_BUSY);
     }
-    let arena = phys::reserve_heap_arena(len as usize, PAGE_SIZE_4K).ok_or(ERR_BUSY)?;
-    unsafe {
-        core::ptr::write_bytes(arena.virt_start as *mut u8, 0, arena.length);
-    }
+    let backing = MappingBacking::new(owner, len as usize)?;
     space.mappings.push(Mapping {
         start,
         len,
         permissions,
-        arena,
+        backing,
     });
+    space.generation = space.generation.wrapping_add(1).max(1);
     Ok(())
 }
 
@@ -193,6 +264,7 @@ pub(super) fn address_space_unmap(handle: u64, start: u32, len: u32) -> Result<(
         .position(|mapping| mapping.start == start && mapping.len == len)
         .ok_or(ERR_NOT_FOUND)?;
     space.mappings.swap_remove(index);
+    space.generation = space.generation.wrapping_add(1).max(1);
     Ok(())
 }
 
@@ -212,7 +284,7 @@ pub(super) fn address_space_read(handle: u64, address: u32, out: &mut [u8]) -> R
     let offset = (address - mapping.start) as usize;
     unsafe {
         core::ptr::copy_nonoverlapping(
-            (mapping.arena.virt_start as *const u8).add(offset),
+            (mapping.backing.ptr as *const u8).add(offset),
             out.as_mut_ptr(),
             out.len(),
         );
@@ -237,7 +309,7 @@ pub(super) fn address_space_write(handle: u64, address: u32, data: &[u8]) -> Res
     unsafe {
         core::ptr::copy_nonoverlapping(
             data.as_ptr(),
-            (mapping.arena.virt_start as *mut u8).add(offset),
+            (mapping.backing.ptr as *mut u8).add(offset),
             data.len(),
         );
     }
@@ -268,6 +340,7 @@ pub(super) fn context_create(
         cancelled: false,
         carrier_cr3: None,
         carrier_pages: Vec::new(),
+        carrier_generation: 0,
         admitted: false,
     });
     *out = handle;
@@ -364,20 +437,27 @@ pub(super) fn context_execute(
         .iter()
         .position(|context| context.handle == handle && context.owner == owner)
         .ok_or(ERR_NOT_FOUND)?;
-    let mappings = runtime
+    let space = runtime
         .spaces
         .iter()
         .find(|space| space.handle == address_space && space.owner == owner)
-        .ok_or(ERR_DENIED)?
+        .ok_or(ERR_DENIED)?;
+    let generation = space.generation;
+    let mappings = space
         .mappings
         .iter()
-        .map(|mapping| (mapping.start, mapping.len, mapping.permissions, mapping.arena))
+        .map(|mapping| (mapping.start, mapping.len, mapping.permissions, mapping.backing.phys_start))
         .collect::<Vec<_>>();
     let context = &mut runtime.contexts[context_index];
+    if context.carrier_generation != generation {
+        context.carrier_cr3 = None;
+        context.carrier_pages = Vec::new();
+    }
     if context.carrier_cr3.is_none() {
         let (cr3, pages) = build_carrier_page_tables(&mappings)?;
         context.carrier_cr3 = Some(cr3);
         context.carrier_pages = pages;
+        context.carrier_generation = generation;
     }
     let cr3 = context.carrier_cr3.ok_or(ERR_NOT_FOUND)?;
     drop(runtime);
@@ -392,13 +472,13 @@ pub(super) fn context_execute(
 }
 
 fn build_carrier_page_tables(
-    mappings: &[(u32, u32, u32, HeapArena)],
-) -> Result<(u64, Vec<HeapArena>), i32> {
+    mappings: &[(u32, u32, u32, u64)],
+) -> Result<(u64, Vec<CarrierPage>), i32> {
     let mut pages = Vec::new();
-    let alloc_page = |pages: &mut Vec<HeapArena>| -> Result<HeapArena, i32> {
+    let alloc_page = |pages: &mut Vec<CarrierPage>| -> Result<HeapArena, i32> {
         let page = phys::reserve_heap_arena(PAGE_SIZE_4K, PAGE_SIZE_4K).ok_or(ERR_BUSY)?;
         unsafe { core::ptr::write_bytes(page.virt_start as *mut u8, 0, PAGE_SIZE_4K) };
-        pages.push(page);
+        pages.push(CarrierPage { arena: page });
         Ok(page)
     };
     let pdpt = alloc_page(&mut pages)?;
@@ -409,7 +489,7 @@ fn build_carrier_page_tables(
     }
 
     let mut ptes: Vec<(u32, HeapArena)> = Vec::new();
-    for &(start, len, permissions, arena) in mappings {
+    for &(start, len, permissions, phys_start) in mappings {
         let end = start.checked_add(len).ok_or(ERR_INVALID)?;
         let mut va = start;
         while va < end {
@@ -425,10 +505,10 @@ fn build_carrier_page_tables(
                 page
             };
             let page_offset = (va - start) as u64;
-            let guest_physical = arena.phys_start.checked_add(page_offset).ok_or(ERR_INVALID)?;
+            let guest_physical = phys_start.checked_add(page_offset).ok_or(ERR_INVALID)?;
             let mut flags = 1u64;
             if permissions & PERMISSION_WRITE != 0 { flags |= 2; }
-            write_entry(pt, ((va as usize >> 12) & 0x1ff), guest_physical | flags)?;
+            write_entry(pt, (va as usize >> 12) & 0x1ff, guest_physical | flags)?;
             va = va.checked_add(PAGE_SIZE_4K as u32).ok_or(ERR_INVALID)?;
         }
     }
