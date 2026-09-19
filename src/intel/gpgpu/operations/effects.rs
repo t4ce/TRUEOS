@@ -134,3 +134,15 @@ pub(crate) fn skybox_sample_rgb565_to_rgba8(
         release: ok.then(|| gpgpu_rgba8_release(dst)),
     }
 }
+
+fn gpgpu_rgba8_release(dst: GpgpuRgba8Surface) -> GpgpuRgba8ReleaseFence {
+    let sequence = GPGPU_RGBA8_RELEASE_SEQUENCE
+        .fetch_add(1, Ordering::Relaxed)
+        .wrapping_add(1)
+        .max(1);
+    GpgpuRgba8ReleaseFence {
+        phys: dst.phys,
+        byte_len: dst.bytes,
+        sequence,
+    }
+}

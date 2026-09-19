@@ -1,9 +1,8 @@
 //! Shell-controlled GPGPU live previews backed exclusively by UI4 frames.
 //!
 //! This is a trusted kernel app beside the permanent UI4 compositor. It
-//! owns frame/window lifetime and compute cadence. The compute trio is admitted
-//! through one broker session onto dedicated universal-plane slots; standalone
-//! C++/IGC demos reuse the same exact-surface publication lifecycle on slot 1.
+//! owns frame/window lifetime and compute cadence. Standalone C++/IGC demos
+//! reuse the same exact-surface publication lifecycle on slot 1.
 //! Display pipe programming remains exclusively compositor-owned.
 
 use alloc::{string::String, vec::Vec};
@@ -734,6 +733,13 @@ fn initialize_previews(desired: DesiredPreview) -> Result<Vec<ActivePreview>, &'
         initialize_cpp_font_rush2_set(desired)
     } else {
         Ok(alloc::vec![initialize_preview(desired)?])
+    }
+}
+
+fn abandon_preview_initialization(session: WindowSessionId, previews: &[ActivePreview]) {
+    let _ = finish_window_session(PREVIEW_OWNER, session);
+    for preview in previews {
+        let _ = destroy_frame(preview.frame);
     }
 }
 

@@ -3,7 +3,7 @@
 use super::{
     ActivePreview, CloudBrushState, DesiredPreview, GpgpuPreviewMetrics, GpgpuPreviewPreset,
     PREVIEW_HEIGHT, PREVIEW_OWNER, PREVIEW_WIDTH, PREVIEW_Z,
-    abandon_compute_preview_initialization,
+    abandon_preview_initialization,
 };
 use crate::ui4::{
     DamageRect, FrameCadence, FrameContent, FrameHandle, FramePoolError, FrameSpec,
@@ -206,7 +206,7 @@ pub(super) fn initialize_cpp_font_rush2_set(
                     pmm.map_or(0, |stats| stats.largest_free_region),
                     pmm.map_or(0, |stats| stats.free_regions),
                 );
-                abandon_compute_preview_initialization(session, &previews);
+                abandon_preview_initialization(session, &previews);
                 return Err("font-rush2-frame-create-failed");
             }
         };
@@ -243,7 +243,7 @@ pub(super) fn initialize_cpp_font_rush2_set(
             Ok(window) => window,
             Err(_) => {
                 let _ = destroy_frame(frame);
-                abandon_compute_preview_initialization(session, &previews);
+                abandon_preview_initialization(session, &previews);
                 return Err("font-rush2-window-create-failed");
             }
         };
@@ -322,7 +322,7 @@ pub(super) fn initialize_cpp_font_rush2_set(
                     registration.row_ring_depth,
                     error,
                 );
-                abandon_compute_preview_initialization(session, &previews);
+                abandon_preview_initialization(session, &previews);
                 return Err("font-rush2-producer-register-failed");
             }
         };
@@ -358,7 +358,7 @@ pub(super) fn initialize_cpp_font_rush2_set(
         Ok(())
     });
     if let Err(reason) = initial_publication {
-        abandon_compute_preview_initialization(session, &previews);
+        abandon_preview_initialization(session, &previews);
         return Err(reason);
     }
     Ok(previews)

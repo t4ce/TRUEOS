@@ -32,7 +32,7 @@ custom render-package registration seam before the bytes can leave the kernel.
 
 | Class | Current location | Count / size | Interpretation |
 |---|---|---:|---|
-| AOT GPGPU payloads | `crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/*.bin` + `*.spv` | 24 pairs / 3,100,976 bytes | Actually embedded by `src/intel/gpgpu/kernel_catalog.rs`; skybox is Blueprint-owned |
+| AOT GPGPU payloads | `crates/trueos-shader/gpgpu/kernels/artifacts/adls/cpp/*.bin` + `*.spv` | 21 pairs / 2,948,332 bytes | Actually embedded by `src/intel/gpgpu/kernel_catalog.rs`; skybox is Blueprint-owned; stale chart/plasma/Mandelbrot preview payloads retired |
 | Contract-only shader slots | TRUEOS contract/trust files | 7 | Payload is already supplied by a Blueprint: Shadertoy IDs 1–6 and Cubes ID 16 |
 | Native render artifact | `picasso/churn-forward.trueos.intel.helio` | 44,742 bytes | Kernel render boundary; shared by retained-render consumers |
 | Small retained texture shader binaries | `picasso/picasso-retained-textured-forward/*.bin` | 3 / 904 bytes | Kernel vGPU retained-texture boundary |
@@ -62,10 +62,10 @@ so a migration can carry it unchanged.
 | `ui4_nv12_tile64_to_rgba8_frame` | `gpgpu/kernels/ui4_nv12_tile64_to_rgba8_frame.clcpp` | 23,936 + 13,188 | TRUEOS video-frame conversion | Kernel/shared | Keep builtin-shader |
 | `sprite_quad_worklist_rgba8` | `gpgpu/kernels/sprite_quad_worklist_rgba8.clcpp` | 54,152 + 33,628 | UI4, font, sprite worklists, display probes | Kernel/shared | Keep builtin-shader |
 | `ui4_compose_layers_rgba8` | `gpgpu/kernels/ui4_compose_layers_rgba8.clcpp` | 40,120 + 26,032 | UI4 compositor | Kernel/shared | Keep builtin-shader |
-| `mandel64_worklist_rgba8` | `gpgpu/kernels/mandel64_worklist_rgba8.clcpp` | 21,728 + 14,280 | TRUEOS worklist/effect preview | Kernel/internal | Keep builtin-shader for now |
+| `mandel64_worklist_rgba8` | `gpgpu/kernels/mandel64_worklist_rgba8.clcpp` | 21,728 + 14,280 | Former TRUEOS effect preview/worklist path | Kernel/internal | Retired stale preview kernel; source and AOT removed |
 | `skybox_sample_rgb565` | `TRUEOS-Blueprints/apps/skybox/assets/skybox_sample_rgb565/` | 37,624 + 21,292 | `Frame::render_skybox_rgb565`; `apps/skybox` | One Blueprint | Migrated; contract/hash retained in TRUEOS |
-| `chart_sine_rgba8` | `gpgpu/kernels/chart_sine_rgba8.clcpp` | 35,328 + 21,132 | TRUEOS effect preview/OpenCL registry | Kernel/internal | Keep builtin-shader for now |
-| `pixel_plasma_rgba8` | `gpgpu/kernels/pixel_plasma_rgba8.clcpp` | 36,544 + 23,632 | TRUEOS effect preview/OpenCL registry | Kernel/internal | Keep builtin-shader for now |
+| `chart_sine_rgba8` | `gpgpu/kernels/chart_sine_rgba8.clcpp` | 35,328 + 21,132 | Former TRUEOS effect preview/OpenCL path | Kernel/internal | Retired stale preview kernel; source and AOT removed |
+| `pixel_plasma_rgba8` | `gpgpu/kernels/pixel_plasma_rgba8.clcpp` | 36,544 + 23,632 | Former TRUEOS effect preview/OpenCL path | Kernel/internal | Retired stale preview kernel; source and AOT removed |
 | `cpp_demo_rgba8` | `gpgpu/kernels/cpp_demo_rgba8.clcpp` | 222,576 + 157,140 | Kernel preview plus Shadertoy IDs 8–14 | Mixed | Keep until kernel preview gets package registration |
 | `cpp_audio_visualizer_rgba8` | `gpgpu/kernels/cpp_audio_visualizer_rgba8.clcpp` | 77,592 + 57,800 | Kernel audio preview plus Shadertoy ID 7 | Mixed | Keep until kernel preview gets package registration |
 | `particle_craft` | `gpgpu/kernels/particle_craft.clcpp` | 157,536 + 91,764 | `particle` Blueprint API plus Shadertoy ID 15 | Multiple Blueprints | Keep builtin-shader until direct `particle` registration is added |
@@ -92,10 +92,7 @@ Native binary hashes for the AOT rows, in table order, are:
 | `ui4_nv12_tile64_to_rgba8_frame` | `4e1bd61f292059592b4dc50e79d27c4f099f28c8d6823ab95fdead81c0a418e1` |
 | `sprite_quad_worklist_rgba8` | `d4e75acec4af2b707ec7085e4652f9cd4847fcc219fe4199baee86fe490e1fd8` |
 | `ui4_compose_layers_rgba8` | `3176d77c68d19c0dabe7f18a86ef48357b6bc7f0b43b2b3b0e4e6d1d055b6b63` |
-| `mandel64_worklist_rgba8` | `3cb44c1eb879903f3a05962425e5be4b78164f97e9f5e9a55d3dde7eff15ae02` |
 | `skybox_sample_rgb565` | `437228ca4c4df96b4d2357c5f08b36fe76e4d919f2f90e535177adc4d75c76e7` |
-| `chart_sine_rgba8` | `4c113a84bfd66fb6dee7cce598df8a712bfea965ed9fafbb39dfa6a15806e2dc` |
-| `pixel_plasma_rgba8` | `74aa383bde6cc592b553559ba647f5b72fc7dd35f3f2e2e998886f8899e14703` |
 | `cpp_demo_rgba8` | `6dd432e9666035c5d68b6c9fe71abaec72a4e09dfdf7f2c0e9e07043da4e7ab5` |
 | `cpp_audio_visualizer_rgba8` | `86cfdb6afdb08538d3d636130e8d4b9020adc499da28d0084efcb4854867ad9c` |
 | `particle_craft` | `8b3d026f2129593c9344c01c5f6cd89ecf213dcaa5adf8cd3c843d990783e113` |
