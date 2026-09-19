@@ -7680,7 +7680,7 @@ pub(crate) fn run_transient_protected32(
     // Reuse the Hull's complete host/control setup and Gate-0's known-good
     // 32-bit protected guest descriptor state.  VPID is intentionally absent
     // because this VMCS is discarded after every slice.
-    if let Err(error) = setup_vmcs_host_and_controls(
+    let preemption_timer_enabled = match setup_vmcs_host_and_controls(
         owner,
         None,
         eptp,
@@ -7688,9 +7688,32 @@ pub(crate) fn run_transient_protected32(
         VmBootMode::Wc3Probe,
         Some(Protected32GuestInput { cr3, eip, esp, eflags, fs_base }),
     ) {
-        let _ = crate::hv::vmx::vmclear(vmcs_pa);
-        return Err(error);
+        Ok(enabled) => enabled,
+        Err(error) => {
+            let _ = crate::hv::vmx::vmclear(vmcs_pa);
+            return Err(error);
+        }
+    };
+    if preemption_timer_enabled {
+        let (ticks, _) = vmx_preemption_timer_ticks(
+            crate::allcaps::hv::VMX_LIFECYCLE_PREEMPTION_QUANTUM_MS,
+        );
+        vmwrite(VMCS_GUEST_VMCS_PREEMPT_TIMER, ticks as u64)?;
     }
+    // The Hull needs external-interrupt exits for lifecycle control.  A
+    // transient x86 slice does not: an already-pending host interrupt would
+    // otherwise exit before its first instruction.  Its preemption timer is
+    // the bounded, carrier-local return path.
+    let pin = vmread(VMCS_CTRL_PIN_BASED).ok_or("transient pin controls")?;
+    vmwrite(
+        VMCS_CTRL_PIN_BASED,
+        pin & !PIN_BASED_EXTERNAL_INTERRUPT_EXITING,
+    )?;
+    let exit_controls = vmread(VMCS_CTRL_EXIT).ok_or("transient exit controls")?;
+    vmwrite(
+        VMCS_CTRL_EXIT,
+        exit_controls & !EXIT_CTL_ACKNOWLEDGE_INTERRUPT_ON_EXIT,
+    )?;
     crate::hv::vmx::set_guest_registers(registers);
 
     let mut launch = LaunchResult::default();
