@@ -15,7 +15,6 @@ pub(super) const ERR_INVALID: i32 = -22;
 pub(super) const ERR_DENIED: i32 = -13;
 pub(super) const ERR_NOT_FOUND: i32 = -2;
 pub(super) const ERR_BUSY: i32 = -16;
-pub(super) const ERR_UNSUPPORTED: i32 = -95;
 pub(super) const PERMISSION_READ: u32 = 1;
 pub(super) const PERMISSION_WRITE: u32 = 2;
 pub(super) const PERMISSION_EXECUTE: u32 = 4;
@@ -41,6 +40,9 @@ struct Context {
     registers: TrueosX86RegistersV1,
     parked: bool,
     cancelled: bool,
+    carrier_cr3: Option<u64>,
+    carrier_pages: Vec<HeapArena>,
+    admitted: bool,
 }
 
 struct Runtime {
@@ -264,6 +266,9 @@ pub(super) fn context_create(
         registers,
         parked: false,
         cancelled: false,
+        carrier_cr3: None,
+        carrier_pages: Vec::new(),
+        admitted: false,
     });
     *out = handle;
     Ok(())
@@ -326,18 +331,205 @@ pub(super) fn context_cancel(handle: u64) -> Result<(), i32> {
     Ok(())
 }
 
-pub(super) fn context_execute(handle: u64, out: &mut TrueosX86ExitV1) -> Result<(), i32> {
+pub(super) fn context_execute(
+    handle: u64,
+    out: &mut TrueosX86ExitV1,
+    resume: bool,
+) -> Result<(), i32> {
     let owner = owner()?;
+    let (registers, address_space, cancelled, admitted) = {
+        let runtime = RUNTIME.lock();
+        let context = runtime
+            .contexts
+            .iter()
+            .find(|context| context.handle == handle && context.owner == owner)
+            .ok_or(ERR_NOT_FOUND)?;
+        (context.registers, context.address_space, context.cancelled, context.admitted)
+    };
+    if resume != admitted {
+        return Err(if resume { ERR_BUSY } else { ERR_INVALID });
+    }
+    if cancelled {
+        *out = TrueosX86ExitV1 {
+            kind: 5,
+            registers,
+            ..TrueosX86ExitV1::default()
+        };
+        return Ok(());
+    }
+
+    let mut runtime = RUNTIME.lock();
+    let context_index = runtime
+        .contexts
+        .iter()
+        .position(|context| context.handle == handle && context.owner == owner)
+        .ok_or(ERR_NOT_FOUND)?;
+    let mappings = runtime
+        .spaces
+        .iter()
+        .find(|space| space.handle == address_space && space.owner == owner)
+        .ok_or(ERR_DENIED)?
+        .mappings
+        .iter()
+        .map(|mapping| (mapping.start, mapping.len, mapping.permissions, mapping.arena))
+        .collect::<Vec<_>>();
+    let context = &mut runtime.contexts[context_index];
+    if context.carrier_cr3.is_none() {
+        let (cr3, pages) = build_carrier_page_tables(&mappings)?;
+        context.carrier_cr3 = Some(cr3);
+        context.carrier_pages = pages;
+    }
+    let cr3 = context.carrier_cr3.ok_or(ERR_NOT_FOUND)?;
+    drop(runtime);
+
+    let exit = unsafe { run_on_existing_vmx_carrier(cr3, registers)? };
     let mut runtime = RUNTIME.lock();
     let context = context_mut(&mut runtime, handle, owner)?;
-    *out = TrueosX86ExitV1 {
-        kind: if context.cancelled { 5 } else { 255 },
-        detail: 0,
-        qualification: 0,
-        registers: context.registers,
+    context.registers = exit.registers;
+    context.admitted = true;
+    *out = exit;
+    Ok(())
+}
+
+fn build_carrier_page_tables(
+    mappings: &[(u32, u32, u32, HeapArena)],
+) -> Result<(u64, Vec<HeapArena>), i32> {
+    let mut pages = Vec::new();
+    let alloc_page = |pages: &mut Vec<HeapArena>| -> Result<HeapArena, i32> {
+        let page = phys::reserve_heap_arena(PAGE_SIZE_4K, PAGE_SIZE_4K).ok_or(ERR_BUSY)?;
+        unsafe { core::ptr::write_bytes(page.virt_start as *mut u8, 0, PAGE_SIZE_4K) };
+        pages.push(page);
+        Ok(page)
     };
-    // The carrier hand-off is deliberately not emulated here.  Returning a
-    // hard error prevents a package from mistaking host-memory bookkeeping for
-    // authentic x86 execution until the VMX context switch is wired.
-    Err(ERR_UNSUPPORTED)
+    let pdpt = alloc_page(&mut pages)?;
+    let mut pds = [pdpt; 4];
+    for (index, pd) in pds.iter_mut().enumerate() {
+        *pd = alloc_page(&mut pages)?;
+        write_entry(pdpt, index, physical_address(*pd) | 0x7)?;
+    }
+
+    let mut ptes: Vec<(u32, HeapArena)> = Vec::new();
+    for &(start, len, permissions, arena) in mappings {
+        let end = start.checked_add(len).ok_or(ERR_INVALID)?;
+        let mut va = start;
+        while va < end {
+            let pd_index = (va as usize >> 21) & 0x7ff;
+            let pd_slot = pd_index & 0x1ff;
+            let pd_page = &pds[pd_index >> 9];
+            let pt = if let Some((_, page)) = ptes.iter().find(|(index, _)| *index == pd_index as u32) {
+                *page
+            } else {
+                let page = alloc_page(&mut pages)?;
+                ptes.push((pd_index as u32, page));
+                write_entry(*pd_page, pd_slot, physical_address(page) | 0x7)?;
+                page
+            };
+            let page_offset = (va - start) as u64;
+            let guest_physical = arena.phys_start.checked_add(page_offset).ok_or(ERR_INVALID)?;
+            let mut flags = 1u64;
+            if permissions & PERMISSION_WRITE != 0 { flags |= 2; }
+            write_entry(pt, ((va as usize >> 12) & 0x1ff), guest_physical | flags)?;
+            va = va.checked_add(PAGE_SIZE_4K as u32).ok_or(ERR_INVALID)?;
+        }
+    }
+    // The carrier runs 32-bit protected mode with PAE enabled, so CR3 points
+    // directly at the four-entry PDPTE page (there is no long-mode PML4).
+    Ok((physical_address(pdpt), pages))
+}
+
+fn physical_address(page: HeapArena) -> u64 {
+    page.phys_start
+}
+
+fn write_entry(page: HeapArena, index: usize, value: u64) -> Result<(), i32> {
+    if index >= 512 { return Err(ERR_INVALID); }
+    unsafe { (page.virt_start as *mut u64).add(index).write(value) };
+    Ok(())
+}
+
+unsafe fn run_on_existing_vmx_carrier(
+    cr3: u64,
+    registers: TrueosX86RegistersV1,
+) -> Result<TrueosX86ExitV1, i32> {
+    let vm_id = crate::hv::current_vm_id().ok_or(ERR_DENIED)?;
+    let segment_fields = [
+        crate::hv::vmx::VMCS_GUEST_CS_SELECTOR, crate::hv::vmx::VMCS_GUEST_SS_SELECTOR,
+        crate::hv::vmx::VMCS_GUEST_DS_SELECTOR, crate::hv::vmx::VMCS_GUEST_ES_SELECTOR,
+        crate::hv::vmx::VMCS_GUEST_FS_SELECTOR, crate::hv::vmx::VMCS_GUEST_CS_BASE,
+        crate::hv::vmx::VMCS_GUEST_SS_BASE, crate::hv::vmx::VMCS_GUEST_DS_BASE,
+        crate::hv::vmx::VMCS_GUEST_ES_BASE, crate::hv::vmx::VMCS_GUEST_FS_BASE,
+        crate::hv::vmx::VMCS_GUEST_CS_LIMIT, crate::hv::vmx::VMCS_GUEST_SS_LIMIT,
+        crate::hv::vmx::VMCS_GUEST_DS_LIMIT, crate::hv::vmx::VMCS_GUEST_ES_LIMIT,
+        crate::hv::vmx::VMCS_GUEST_FS_LIMIT, crate::hv::vmx::VMCS_GUEST_CS_AR,
+        crate::hv::vmx::VMCS_GUEST_SS_AR, crate::hv::vmx::VMCS_GUEST_DS_AR,
+        crate::hv::vmx::VMCS_GUEST_ES_AR, crate::hv::vmx::VMCS_GUEST_FS_AR,
+    ];
+    let outer_segments = segment_fields
+        .iter()
+        .map(|field| crate::hv::vmx::vmread(*field).ok_or(ERR_DENIED))
+        .collect::<Result<Vec<_>, _>>()?;
+    let outer = [
+        crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_CR0).ok_or(ERR_DENIED)?,
+        crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_CR3).ok_or(ERR_DENIED)?,
+        crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_CR4).ok_or(ERR_DENIED)?,
+        crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RIP).ok_or(ERR_DENIED)?,
+        crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP).ok_or(ERR_DENIED)?,
+        crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RFLAGS).ok_or(ERR_DENIED)?,
+        crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_FS_BASE).ok_or(ERR_DENIED)?,
+        crate::hv::vmx::vmread(crate::hv::vmx::VMCS_CTRL_ENTRY).ok_or(ERR_DENIED)?,
+        crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_IA32_EFER).ok_or(ERR_DENIED)?,
+    ];
+    let outer_regs = crate::hv::vmx::guest_registers();
+    let mut restore = || {
+        let _ = crate::hv::vmx::vmwrite(crate::hv::vmx::VMCS_GUEST_CR0, outer[0]);
+        let _ = crate::hv::vmx::vmwrite(crate::hv::vmx::VMCS_GUEST_CR3, outer[1]);
+        let _ = crate::hv::vmx::vmwrite(crate::hv::vmx::VMCS_GUEST_CR4, outer[2]);
+        let _ = crate::hv::vmx::vmwrite(crate::hv::vmx::VMCS_GUEST_RIP, outer[3]);
+        let _ = crate::hv::vmx::vmwrite(crate::hv::vmx::VMCS_GUEST_RSP, outer[4]);
+        let _ = crate::hv::vmx::vmwrite(crate::hv::vmx::VMCS_GUEST_RFLAGS, outer[5]);
+        let _ = crate::hv::vmx::vmwrite(crate::hv::vmx::VMCS_GUEST_FS_BASE, outer[6]);
+        let _ = crate::hv::vmx::vmwrite(crate::hv::vmx::VMCS_CTRL_ENTRY, outer[7]);
+        let _ = crate::hv::vmx::vmwrite(crate::hv::vmx::VMCS_GUEST_IA32_EFER, outer[8]);
+        for (field, value) in segment_fields.iter().zip(outer_segments.iter()) {
+            let _ = crate::hv::vmx::vmwrite(*field, *value);
+        }
+        crate::hv::vmx::set_guest_registers(outer_regs);
+    };
+    crate::hv::vmx::vmwrite(crate::hv::vmx::VMCS_GUEST_CR3, cr3).map_err(|_| ERR_DENIED)?;
+    crate::hv::vmx::vmwrite(crate::hv::vmx::VMCS_GUEST_RIP, registers.eip as u64).map_err(|_| ERR_DENIED)?;
+    crate::hv::vmx::vmwrite(crate::hv::vmx::VMCS_GUEST_RSP, registers.esp as u64).map_err(|_| ERR_DENIED)?;
+    crate::hv::vmx::vmwrite(crate::hv::vmx::VMCS_GUEST_RFLAGS, (registers.eflags as u64 | 2) & !0x200).map_err(|_| ERR_DENIED)?;
+    crate::hv::vmx::vmwrite(crate::hv::vmx::VMCS_GUEST_FS_BASE, registers.fs_base as u64).map_err(|_| ERR_DENIED)?;
+    crate::hv::vmx::vmwrite(crate::hv::vmx::VMCS_CTRL_ENTRY, outer[7] & !crate::hv::vmx::ENTRY_CTL_IA32E_MODE_GUEST).map_err(|_| ERR_DENIED)?;
+    crate::hv::vmx::vmwrite(crate::hv::vmx::VMCS_GUEST_CS_SELECTOR, 0x08).map_err(|_| ERR_DENIED)?;
+    crate::hv::vmx::vmwrite(crate::hv::vmx::VMCS_GUEST_SS_SELECTOR, 0x10).map_err(|_| ERR_DENIED)?;
+    crate::hv::vmx::vmwrite(crate::hv::vmx::VMCS_GUEST_DS_SELECTOR, 0x10).map_err(|_| ERR_DENIED)?;
+    crate::hv::vmx::vmwrite(crate::hv::vmx::VMCS_GUEST_ES_SELECTOR, 0x10).map_err(|_| ERR_DENIED)?;
+    crate::hv::vmx::vmwrite(crate::hv::vmx::VMCS_GUEST_FS_SELECTOR, 0x18).map_err(|_| ERR_DENIED)?;
+    crate::hv::vmx::vmwrite(crate::hv::vmx::VMCS_GUEST_CS_BASE, 0).map_err(|_| ERR_DENIED)?;
+    crate::hv::vmx::vmwrite(crate::hv::vmx::VMCS_GUEST_SS_BASE, 0).map_err(|_| ERR_DENIED)?;
+    crate::hv::vmx::vmwrite(crate::hv::vmx::VMCS_GUEST_DS_BASE, 0).map_err(|_| ERR_DENIED)?;
+    crate::hv::vmx::vmwrite(crate::hv::vmx::VMCS_GUEST_ES_BASE, 0).map_err(|_| ERR_DENIED)?;
+    crate::hv::vmx::vmwrite(crate::hv::vmx::VMCS_GUEST_FS_BASE, registers.fs_base as u64).map_err(|_| ERR_DENIED)?;
+    crate::hv::vmx::vmwrite(crate::hv::vmx::VMCS_GUEST_CS_AR, 0xC09B).map_err(|_| ERR_DENIED)?;
+    crate::hv::vmx::vmwrite(crate::hv::vmx::VMCS_GUEST_SS_AR, 0xC093).map_err(|_| ERR_DENIED)?;
+    crate::hv::vmx::vmwrite(crate::hv::vmx::VMCS_GUEST_DS_AR, 0xC093).map_err(|_| ERR_DENIED)?;
+    crate::hv::vmx::vmwrite(crate::hv::vmx::VMCS_GUEST_ES_AR, 0xC093).map_err(|_| ERR_DENIED)?;
+    crate::hv::vmx::vmwrite(crate::hv::vmx::VMCS_GUEST_FS_AR, 0xC093).map_err(|_| ERR_DENIED)?;
+    for field in [
+        crate::hv::vmx::VMCS_GUEST_CS_LIMIT, crate::hv::vmx::VMCS_GUEST_SS_LIMIT,
+        crate::hv::vmx::VMCS_GUEST_DS_LIMIT, crate::hv::vmx::VMCS_GUEST_ES_LIMIT,
+        crate::hv::vmx::VMCS_GUEST_FS_LIMIT,
+    ] {
+        crate::hv::vmx::vmwrite(field, 0xffff_ffff).map_err(|_| ERR_DENIED)?;
+    }
+    crate::hv::vmx::vmwrite(crate::hv::vmx::VMCS_GUEST_IA32_EFER, 0).map_err(|_| ERR_DENIED)?;
+    crate::hv::vmx::set_guest_registers(crate::hv::vmx::GuestRegisters { rax: registers.eax as u64, rbx: registers.ebx as u64, rcx: registers.ecx as u64, rdx: registers.edx as u64, rsi: registers.esi as u64, rdi: registers.edi as u64, rbp: registers.ebp as u64, ..Default::default() });
+    let mut lr = crate::hv::vmx::LaunchResult::default();
+    crate::hv::vmx::vmresume_once_wrapper(vm_id, &mut lr);
+    let regs = crate::hv::vmx::guest_registers();
+    let rsp = crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RSP).unwrap_or(registers.esp as u64);
+    let exit = TrueosX86ExitV1 { kind: match lr.exit_reason & 0xffff { crate::hv::vmx::VMEXIT_REASON_VMCALL => 1, 0 => 2, 48 => 3, 0x0c => 4, _ => 255 }, detail: lr.exit_reason as u32, qualification: lr.exit_qualification, registers: TrueosX86RegistersV1 { eax: regs.rax as u32, ebx: regs.rbx as u32, ecx: regs.rcx as u32, edx: regs.rdx as u32, esi: regs.rsi as u32, edi: regs.rdi as u32, ebp: regs.rbp as u32, esp: rsp as u32, eip: lr.guest_rip as u32, eflags: crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_RFLAGS).unwrap_or(registers.eflags as u64) as u32, fs_base: crate::hv::vmx::vmread(crate::hv::vmx::VMCS_GUEST_FS_BASE).unwrap_or(registers.fs_base as u64) as u32 } };
+    restore();
+    Ok(exit)
 }

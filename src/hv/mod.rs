@@ -497,8 +497,6 @@ pub enum VmBootMode {
     Full,
     #[cfg(feature = "wc3")]
     Wc3Probe,
-    #[cfg(feature = "wc3")]
-    Wc3Launcher,
 }
 
 #[derive(Copy, Clone)]
@@ -1542,7 +1540,7 @@ fn guest_fs_base_for_boot_mode(boot_mode: VmBootMode) -> u64 {
 fn boot_mode_is_wc3_guest(boot_mode: VmBootMode) -> bool {
     #[cfg(feature = "wc3")]
     {
-        matches!(boot_mode, VmBootMode::Wc3Probe | VmBootMode::Wc3Launcher)
+        matches!(boot_mode, VmBootMode::Wc3Probe)
     }
     #[cfg(not(feature = "wc3"))]
     {
@@ -2004,46 +2002,11 @@ pub fn start(vm_id: u8, spawner: &Spawner, stack_mb: Option<usize>) -> Result<()
     dead_code,
     reason = "private hardware test entry; invoked only by WC3 bring-up images"
 )]
-pub fn start_wc3_launcher_test(vm_id: u8, spawner: &Spawner) -> Result<(), StartError> {
+pub fn start_wc3_probe(vm_id: u8, spawner: &Spawner) -> Result<(), StartError> {
     let _ = spawner;
     start_with_mode(vm_id, VmBootMode::Wc3Probe, None, None, false)
 }
 
-#[cfg(feature = "wc3")]
-#[allow(
-    dead_code,
-    reason = "private launcher entry; the external WC3 package supplies its artifact"
-)]
-pub fn start_wc3_launcher(
-    vm_id: u8,
-    spawner: &Spawner,
-    launcher_bytes: &[u8],
-) -> Result<(), StartError> {
-    let _ = spawner;
-    let Some(vm) = vm_slot(vm_id) else {
-        return Err(StartError::UnsupportedVmId);
-    };
-    if vm.running.load(Ordering::Acquire)
-        || vm.starting.load(Ordering::Acquire)
-        || crate::r::blocking::guest_jobs_in_flight(vm_id) != 0
-    {
-        return Err(StartError::AlreadyRunning);
-    }
-    if let Err(reason) = wc3::prepare_launcher(vm_id, launcher_bytes) {
-        crate::log_important!(target: "hv";
-            "wc3: gate-1a failed vm={} phase={}",
-            vm_id,
-            reason
-        );
-        return Err(StartError::GuestMemoryUnavailable);
-    }
-    start_with_mode(vm_id, VmBootMode::Wc3Launcher, None, None, false)
-}
-
-#[cfg(feature = "wc3")]
-pub(crate) fn schedule_wc3_launcher_autostart(spawner: &Spawner) {
-    wc3::schedule_launcher_autostart(spawner);
-}
 
 pub fn start_blueprint_app_vm(
     vm_id: u8,
@@ -2408,8 +2371,6 @@ fn eject_offline_vm(vm_id: u8, allow_starting: bool) -> Result<bool, EjectError>
         || blueprint_launch_active(vm_id)
         || crate::hv::store::has_committed_vm(vm_id);
     clear_blueprint_pending_launch(vm_id);
-    #[cfg(feature = "wc3")]
-    wc3::release_launcher(vm_id);
     memory::release_guest_rel_exec_for_vm(vm_id);
     let launch = take_blueprint_launch(vm_id);
     drop(launch);
@@ -5976,20 +5937,6 @@ async fn vm_task(vm_id: u8, mut lane_lease: crate::hv::lane::LaneLease) {
                 guest_fs_base_for_boot_mode(boot_mode)
             );
         }
-        #[cfg(feature = "wc3")]
-        VmBootMode::Wc3Launcher => {
-            crate::log_important!(target: "hv";
-                "wc3: launcher VMX launch vm={} entry=0x{:08X} stack_top=0x{:08X} fs_base=0x{:08X}",
-                vm_id,
-                guest_entry_for_boot_mode(boot_mode),
-                guest_stack_top_for_vm(vm_id),
-                guest_fs_base_for_boot_mode(boot_mode)
-            );
-            crate::log_important!(target: "hv";
-                "wc3: launcher entered vm={} image_base=0x00400000 entry=0x00402144",
-                vm_id
-            );
-        }
     }
     if let Some(pending) = pending_blueprint
         && let Err(err) = prepare_blueprint_launch_on_lane(vm_id, pending)
@@ -6602,7 +6549,6 @@ async fn vmx_launch_once_with_ept_vpid(
                 #[cfg(feature = "wc3")]
                 let mut outcome = match boot_mode_for_vm(vm_id) {
                     VmBootMode::Wc3Probe => wc3::handle_vmcall(vm_id),
-                    VmBootMode::Wc3Launcher => wc3::handle_launcher_vmcall(vm_id),
                     _ => crate::hv::vmcall::dispatch(vm_id),
                 };
                 #[cfg(not(feature = "wc3"))]

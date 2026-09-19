@@ -94,7 +94,7 @@ pub(super) unsafe extern "C" fn trueos_cabi_x86_context_run_v1(
     out: *mut TrueosX86ExitV1,
 ) -> i32 {
     match out.as_mut() {
-        Some(out) => status(runtime::context_execute(handle, out)),
+        Some(out) => status(runtime::context_execute(handle, out, false)),
         None => runtime::ERR_INVALID,
     }
 }
@@ -103,7 +103,7 @@ pub(super) unsafe extern "C" fn trueos_cabi_x86_context_resume_v1(
     out: *mut TrueosX86ExitV1,
 ) -> i32 {
     match out.as_mut() {
-        Some(out) => status(runtime::context_execute(handle, out)),
+        Some(out) => status(runtime::context_execute(handle, out, true)),
         None => runtime::ERR_INVALID,
     }
 }
