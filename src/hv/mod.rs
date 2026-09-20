@@ -520,6 +520,7 @@ pub enum VmBootMode {
 
 #[derive(Copy, Clone)]
 enum BlueprintMemoryClass {
+    X86Session,
     TokioRuntime,
     AudioPlayer,
     NetworkClient,
@@ -532,6 +533,7 @@ enum BlueprintMemoryClass {
 impl BlueprintMemoryClass {
     const fn label(self) -> &'static str {
         match self {
+            Self::X86Session => "x86-session",
             Self::TokioRuntime => "tokio-runtime",
             Self::AudioPlayer => "audio-player",
             Self::NetworkClient => "network-client",
@@ -2865,6 +2867,13 @@ fn classify_blueprint_memory(
     stats: crate::hv::blueprint::ElfAllocStats,
     imports: &[crate::hv::blueprint::ElfImport<'_>],
 ) -> BlueprintMemoryClass {
+    // An x86-session Blueprint owns immutable resident assets in its own heap,
+    // in addition to the small emulator/loader image. Do this before generic
+    // Tokio, graphics and network classification; image size misses the MPQ.
+    if import_name_has(imports, "trueos_cabi_x86_address_space_create_v1") {
+        return BlueprintMemoryClass::X86Session;
+    }
+
     let audio_player_signal = archive_has(archive, "scope-tui")
         || archive_has(archive, "scope_tui")
         || archive_has(archive, "aud-player-scope-tui")
@@ -2950,6 +2959,10 @@ fn estimate_blueprint_memory_profile(
 
     let (heap_lower, heap_recommended, heap_upper, stack_lower, stack_recommended, stack_upper) =
         match class {
+            // Admit the 1 GiB whole-file read ceiling plus runtime/loader
+            // headroom. Refuse a smaller arena instead of failing mid-preload.
+            // This is Blueprint backing RAM, not XP process virtual memory.
+            BlueprintMemoryClass::X86Session => (2048, 2048, 2048, 16, 32, 128),
             BlueprintMemoryClass::TokioRuntime => (
                 64,
                 round_pow2_mib(base_live_mib.saturating_mul(12).saturating_add(64)).max(128),
