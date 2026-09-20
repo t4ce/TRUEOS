@@ -855,7 +855,7 @@ fn run_x86_context_on_carrier(
         exit.launch.exit_qualification,
         exit.interruption_info,
         exit.interruption_error_code,
-        exit.guest_cr2,
+        exit.launch.exit_qualification,
     );
     Ok(TrueosX86ExitV1 {
         kind: match exit_reason {
@@ -887,14 +887,14 @@ fn pack_exit_metadata(
     exit_qualification: u64,
     interruption_info: u64,
     interruption_error_code: u64,
-    fault_linear: u64,
+    page_fault_linear: u64,
 ) -> (u32, u64) {
     if raw_exit_reason & 0xffff == 0 {
         let valid = interruption_info & (1 << 31) != 0;
         let error_valid = valid && interruption_info & (1 << 11) != 0;
         let page_fault = valid && interruption_info & 0xff == 14;
         let error = if error_valid { interruption_error_code as u32 } else { 0 };
-        let linear = if page_fault { fault_linear as u32 } else { 0 };
+        let linear = if page_fault { page_fault_linear as u32 } else { 0 };
         (interruption_info as u32, u64::from(error) | (u64::from(linear) << 32))
     } else {
         (raw_exit_reason as u32, exit_qualification)
@@ -906,9 +906,9 @@ mod tests {
     use super::pack_exit_metadata;
 
     #[test]
-    fn exception_exit_preserves_interruption_information_and_error_code() {
+    fn page_fault_uses_exit_qualification_not_captured_cr2() {
         let info = (1u64 << 31) | (3 << 8) | (1 << 11) | 14;
-        let (detail, qualification) = pack_exit_metadata(0, 0xdead, info, 2, 1);
+        let (detail, qualification) = pack_exit_metadata(0, 1, info, 2, 0);
         assert_eq!(detail & 0xff, 14);
         assert_ne!(detail & (1 << 11), 0);
         assert_eq!(qualification as u32, 2);
