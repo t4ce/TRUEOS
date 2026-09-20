@@ -7675,6 +7675,8 @@ pub(crate) struct TransientProtected32Exit {
     pub guest_linear: u64,
     pub interruption_info: u64,
     pub interruption_error_code: u64,
+    /// Captured by the VM-exit wrapper before the scratch VMCS is reused.
+    pub guest_cr2: u64,
 }
 
 /// Install the already-proven host/control and protected-32 guest VMCS state
@@ -7779,6 +7781,8 @@ pub(crate) fn run_transient_protected32(
 
     let mut launch = LaunchResult::default();
     crate::hv::vmx::vmlaunch_once_wrapper(owner, &mut launch);
+    let (interruption_info, interruption_error_code, guest_cr2) =
+        transient_exception_capture(&launch);
     let exit = TransientProtected32Exit {
         launch,
         instruction_len: vmread(VMCS_VMEXIT_INSTRUCTION_LEN).unwrap_or(0),
@@ -7789,13 +7793,42 @@ pub(crate) fn run_transient_protected32(
         cr3: vmread(VMCS_GUEST_CR3).unwrap_or(cr3),
         guest_physical: vmread(VMCS_GUEST_PHYSICAL_ADDRESS).unwrap_or(0),
         guest_linear: vmread(VMCS_GUEST_LINEAR_ADDRESS).unwrap_or(0),
-        interruption_info: vmread(VMCS_VMEXIT_INTERRUPTION_INFO).unwrap_or(0),
-        interruption_error_code: vmread(VMCS_VMEXIT_INTERRUPTION_ERROR_CODE).unwrap_or(0),
+        interruption_info,
+        interruption_error_code,
+        guest_cr2,
     };
     if !crate::hv::vmx::vmclear(vmcs_pa) {
         return Err("transient vmclear");
     }
     Ok(exit)
+}
+
+/// The transient exit consumes wrapper-captured exception facts rather than
+/// rereading a scratch VMCS after it may have been disturbed or recycled.
+#[cfg(feature = "wc3")]
+fn transient_exception_capture(launch: &LaunchResult) -> (u64, u64, u64) {
+    (
+        launch.interruption_info,
+        launch.interruption_error_code,
+        launch.guest_cr2,
+    )
+}
+
+#[cfg(all(test, feature = "wc3"))]
+mod transient_exception_capture_tests {
+    use super::transient_exception_capture;
+    use crate::hv::vmx::LaunchResult;
+
+    #[test]
+    fn transient_exception_uses_wrapper_captured_launch_fields() {
+        let launch = LaunchResult {
+            interruption_info: (1 << 31) | (3 << 8) | (1 << 11) | 14,
+            interruption_error_code: 2,
+            guest_cr2: 1,
+            ..LaunchResult::default()
+        };
+        assert_eq!(transient_exception_capture(&launch), (launch.interruption_info, 2, 1));
+    }
 }
 
 fn vmx_preemption_timer_ticks(quantum_ms: u64) -> (u32, u8) {

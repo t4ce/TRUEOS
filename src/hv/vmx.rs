@@ -232,6 +232,10 @@ pub struct LaunchResult {
     pub exit_qualification: u64,
     pub guest_rip: u64,
     pub instr_err: u64,
+    /// VM-exit architectural state captured in the wrapper before host work.
+    pub interruption_info: u64,
+    pub interruption_error_code: u64,
+    pub guest_cr2: u64,
 }
 
 #[derive(Copy, Clone, Default)]
@@ -280,6 +284,9 @@ const EMPTY_LAUNCH_RESULT: LaunchResult = LaunchResult {
     exit_qualification: 0,
     guest_rip: 0,
     instr_err: 0,
+    interruption_info: 0,
+    interruption_error_code: 0,
+    guest_cr2: 0,
 };
 
 const EMPTY_GUEST_REGISTERS: GuestRegisters = GuestRegisters {
@@ -886,6 +893,19 @@ pub fn vmlaunch_once_wrapper(vm_id: u8, out: &mut LaunchResult) {
             "mov [r10 + {guest_r14_off}], r14",
             "mov [r10 + {guest_r15_off}], r15",
 
+            // Capture architectural exception state while this transient VMCS
+            // is still authoritative, after every guest GPR is saved and
+            // before XSAVE/XRSTOR performs further host work.
+            "mov r11, [rsp + 40]",
+            "mov rcx, {intr_info_field}",
+            "vmread rax, rcx",
+            "mov [r11 + {intr_info_off}], rax",
+            "mov rcx, {intr_error_field}",
+            "vmread rax, rcx",
+            "mov [r11 + {intr_error_off}], rax",
+            "mov rax, cr2",
+            "mov [r11 + {guest_cr2_off}], rax",
+
             // This is the first stateful work after VM exit. Preserve the
             // guest before any compiler-generated host SIMD can run, then
             // restore the AP host state saved immediately before entry.
@@ -939,6 +959,8 @@ pub fn vmlaunch_once_wrapper(vm_id: u8, out: &mut LaunchResult) {
             exit_reason_field = const VMCS_EXIT_REASON,
             exit_qual_field = const VMCS_EXIT_QUALIFICATION,
             guest_rip_field = const VMCS_VMEXIT_GUEST_RIP,
+            intr_info_field = const VMCS_VMEXIT_INTERRUPTION_INFO,
+            intr_error_field = const VMCS_VMEXIT_INTERRUPTION_ERROR_CODE,
             guest_regs_base = in(reg) guest_regs_ptr,
             result_base = in(reg) result_ptr,
             host_extended_state_base = in(reg) host_extended_state_ptr,
@@ -950,6 +972,9 @@ pub fn vmlaunch_once_wrapper(vm_id: u8, out: &mut LaunchResult) {
             exit_qual_off = const core::mem::offset_of!(LaunchResult, exit_qualification),
             guest_rip_off = const core::mem::offset_of!(LaunchResult, guest_rip),
             instr_err_off = const core::mem::offset_of!(LaunchResult, instr_err),
+            intr_info_off = const core::mem::offset_of!(LaunchResult, interruption_info),
+            intr_error_off = const core::mem::offset_of!(LaunchResult, interruption_error_code),
+            guest_cr2_off = const core::mem::offset_of!(LaunchResult, guest_cr2),
             guest_rax_off = const core::mem::offset_of!(GuestRegisters, rax),
             guest_rbx_off = const core::mem::offset_of!(GuestRegisters, rbx),
             guest_rcx_off = const core::mem::offset_of!(GuestRegisters, rcx),
@@ -1092,6 +1117,18 @@ pub fn vmresume_once_wrapper(vm_id: u8, out: &mut LaunchResult) {
             "mov [r10 + {guest_r14_off}], r14",
             "mov [r10 + {guest_r15_off}], r15",
 
+            // Capture this VM-exit's architectural state before restoring
+            // host extended state or allowing any further host work.
+            "mov r11, [rsp + 40]",
+            "mov rcx, {intr_info_field}",
+            "vmread rax, rcx",
+            "mov [r11 + {intr_info_off}], rax",
+            "mov rcx, {intr_error_field}",
+            "vmread rax, rcx",
+            "mov [r11 + {intr_error_off}], rax",
+            "mov rax, cr2",
+            "mov [r11 + {guest_cr2_off}], rax",
+
             "mov r10, [rsp + 24]",
             "mov rax, [rsp + 16]",
             "test rax, rax",
@@ -1142,6 +1179,8 @@ pub fn vmresume_once_wrapper(vm_id: u8, out: &mut LaunchResult) {
             exit_reason_field = const VMCS_EXIT_REASON,
             exit_qual_field = const VMCS_EXIT_QUALIFICATION,
             guest_rip_field = const VMCS_VMEXIT_GUEST_RIP,
+            intr_info_field = const VMCS_VMEXIT_INTERRUPTION_INFO,
+            intr_error_field = const VMCS_VMEXIT_INTERRUPTION_ERROR_CODE,
             guest_regs_base = in(reg) guest_regs_ptr,
             result_base = in(reg) result_ptr,
             host_extended_state_base = in(reg) host_extended_state_ptr,
@@ -1153,6 +1192,9 @@ pub fn vmresume_once_wrapper(vm_id: u8, out: &mut LaunchResult) {
             exit_qual_off = const core::mem::offset_of!(LaunchResult, exit_qualification),
             guest_rip_off = const core::mem::offset_of!(LaunchResult, guest_rip),
             instr_err_off = const core::mem::offset_of!(LaunchResult, instr_err),
+            intr_info_off = const core::mem::offset_of!(LaunchResult, interruption_info),
+            intr_error_off = const core::mem::offset_of!(LaunchResult, interruption_error_code),
+            guest_cr2_off = const core::mem::offset_of!(LaunchResult, guest_cr2),
             guest_rax_off = const core::mem::offset_of!(GuestRegisters, rax),
             guest_rbx_off = const core::mem::offset_of!(GuestRegisters, rbx),
             guest_rcx_off = const core::mem::offset_of!(GuestRegisters, rcx),

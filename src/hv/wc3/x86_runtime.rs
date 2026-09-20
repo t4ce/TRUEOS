@@ -841,6 +841,7 @@ fn run_x86_context_on_carrier(
         exit.launch.exit_qualification,
         exit.interruption_info,
         exit.interruption_error_code,
+        exit.guest_cr2,
     );
     Ok(TrueosX86ExitV1 {
         kind: match exit_reason {
@@ -864,17 +865,23 @@ fn run_x86_context_on_carrier(
 /// For `kind=Exception`, `detail` is VM-exit interruption information: low
 /// eight bits are the vector, bits 8..10 the interruption type, bit 11 the
 /// error-code-valid flag, and bit 31 the valid flag. `qualification` is the
-/// exception error code only when bit 11 is set. For memory violations it
+/// exception error code only when bit 11 is set. Its high 32 bits are the
+/// fault linear address for a valid page fault. For memory violations it
 /// remains the EPT qualification; every other exit preserves its prior fields.
 fn pack_exit_metadata(
     raw_exit_reason: u64,
     exit_qualification: u64,
     interruption_info: u64,
     interruption_error_code: u64,
+    fault_linear: u64,
 ) -> (u32, u64) {
     if raw_exit_reason & 0xffff == 0 {
-        let error_valid = interruption_info & (1 << 11) != 0;
-        (interruption_info as u32, if error_valid { interruption_error_code } else { 0 })
+        let valid = interruption_info & (1 << 31) != 0;
+        let error_valid = valid && interruption_info & (1 << 11) != 0;
+        let page_fault = valid && interruption_info & 0xff == 14;
+        let error = if error_valid { interruption_error_code as u32 } else { 0 };
+        let linear = if page_fault { fault_linear as u32 } else { 0 };
+        (interruption_info as u32, u64::from(error) | (u64::from(linear) << 32))
     } else {
         (raw_exit_reason as u32, exit_qualification)
     }
@@ -886,22 +893,30 @@ mod tests {
 
     #[test]
     fn exception_exit_preserves_interruption_information_and_error_code() {
-        let info = (1u64 << 31) | (1 << 11) | 14;
-        let (detail, qualification) = pack_exit_metadata(0, 0xdead, info, 5);
+        let info = (1u64 << 31) | (3 << 8) | (1 << 11) | 14;
+        let (detail, qualification) = pack_exit_metadata(0, 0xdead, info, 2, 1);
         assert_eq!(detail & 0xff, 14);
         assert_ne!(detail & (1 << 11), 0);
-        assert_eq!(qualification, 5);
+        assert_eq!(qualification as u32, 2);
+        assert_eq!((qualification >> 32) as u32, 1);
     }
 
     #[test]
     fn exception_without_error_code_has_zero_qualification() {
-        let (detail, qualification) = pack_exit_metadata(0, 0xdead, (1u64 << 31) | 6, 0xbeef);
+        let (detail, qualification) = pack_exit_metadata(0, 0xdead, (1u64 << 31) | 6, 0xbeef, 1);
         assert_eq!(detail & 0xff, 6);
         assert_eq!(qualification, 0);
     }
 
     #[test]
     fn non_exception_exit_keeps_existing_metadata() {
-        assert_eq!(pack_exit_metadata(48, 0x1234, 0xffff, 0xbeef), (48, 0x1234));
+        assert_eq!(pack_exit_metadata(48, 0x1234, 0xffff, 0xbeef, 1), (48, 0x1234));
+    }
+
+    #[test]
+    fn invalid_interruption_information_stays_invalid() {
+        let (detail, qualification) = pack_exit_metadata(0, 0xdead, 0, 5, 1);
+        assert_eq!(detail & (1 << 31), 0);
+        assert_eq!(qualification, 0);
     }
 }
