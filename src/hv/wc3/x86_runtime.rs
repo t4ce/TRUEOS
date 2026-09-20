@@ -836,12 +836,18 @@ fn run_x86_context_on_carrier(
     } else {
         exit.launch.guest_rip
     };
+    let (detail, qualification) = pack_exit_metadata(
+        exit.launch.exit_reason,
+        exit.launch.exit_qualification,
+        exit.interruption_info,
+        exit.interruption_error_code,
+    );
     Ok(TrueosX86ExitV1 {
         kind: match exit_reason {
             crate::hv::vmx::VMEXIT_REASON_VMCALL => 1, 0 => 2, 48 => 3, 0x0c => 4, _ => 255,
         },
-        detail: exit.launch.exit_reason as u32,
-        qualification: exit.launch.exit_qualification,
+        detail,
+        qualification,
         registers: TrueosX86RegistersV1 {
             eax: exit.registers.rax as u32, ebx: exit.registers.rbx as u32,
             ecx: exit.registers.rcx as u32, edx: exit.registers.rdx as u32,
@@ -851,4 +857,51 @@ fn run_x86_context_on_carrier(
             fs_base: exit.fs_base as u32,
         },
     })
+}
+
+/// Pack generic VM-exit metadata without changing the C ABI layout.
+///
+/// For `kind=Exception`, `detail` is VM-exit interruption information: low
+/// eight bits are the vector, bits 8..10 the interruption type, bit 11 the
+/// error-code-valid flag, and bit 31 the valid flag. `qualification` is the
+/// exception error code only when bit 11 is set. For memory violations it
+/// remains the EPT qualification; every other exit preserves its prior fields.
+fn pack_exit_metadata(
+    raw_exit_reason: u64,
+    exit_qualification: u64,
+    interruption_info: u64,
+    interruption_error_code: u64,
+) -> (u32, u64) {
+    if raw_exit_reason & 0xffff == 0 {
+        let error_valid = interruption_info & (1 << 11) != 0;
+        (interruption_info as u32, if error_valid { interruption_error_code } else { 0 })
+    } else {
+        (raw_exit_reason as u32, exit_qualification)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pack_exit_metadata;
+
+    #[test]
+    fn exception_exit_preserves_interruption_information_and_error_code() {
+        let info = (1u64 << 31) | (1 << 11) | 14;
+        let (detail, qualification) = pack_exit_metadata(0, 0xdead, info, 5);
+        assert_eq!(detail & 0xff, 14);
+        assert_ne!(detail & (1 << 11), 0);
+        assert_eq!(qualification, 5);
+    }
+
+    #[test]
+    fn exception_without_error_code_has_zero_qualification() {
+        let (detail, qualification) = pack_exit_metadata(0, 0xdead, (1u64 << 31) | 6, 0xbeef);
+        assert_eq!(detail & 0xff, 6);
+        assert_eq!(qualification, 0);
+    }
+
+    #[test]
+    fn non_exception_exit_keeps_existing_metadata() {
+        assert_eq!(pack_exit_metadata(48, 0x1234, 0xffff, 0xbeef), (48, 0x1234));
+    }
 }
