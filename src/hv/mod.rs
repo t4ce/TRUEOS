@@ -7692,6 +7692,7 @@ pub(crate) fn run_transient_protected32(
     eflags: u32,
     fs_base: u32,
     registers: crate::hv::vmx::GuestRegisters,
+    extended_state: &mut crate::hv::vmx::VmxExtendedState,
 ) -> Result<TransientProtected32Exit, &'static str> {
     if !current_vmx_root_active()? {
         return Err("vmx core contract inactive");
@@ -7780,7 +7781,7 @@ pub(crate) fn run_transient_protected32(
     crate::hv::vmx::set_guest_registers(registers);
 
     let mut launch = LaunchResult::default();
-    crate::hv::vmx::vmlaunch_once_wrapper(owner, &mut launch);
+    crate::hv::vmx::vmlaunch_once_wrapper_with_extended_state(&mut launch, extended_state);
     let (interruption_info, interruption_error_code, guest_cr2) =
         transient_exception_capture(&launch);
     let exit = TransientProtected32Exit {

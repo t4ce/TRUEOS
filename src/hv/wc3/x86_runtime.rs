@@ -131,12 +131,15 @@ struct Context {
     owner: u8,
     address_space: u64,
     registers: TrueosX86RegistersV1,
+    extended_state: crate::hv::vmx::VmxExtendedState,
     parked: bool,
     cancelled: bool,
     carrier_cr3: Option<u64>,
     carrier_pages: Vec<CarrierPage>,
     carrier_pdpt_slot: Option<u8>,
     carrier_generation: u64,
+    last_carrier_slot: Option<usize>,
+    carrier_migration_observed: bool,
     admitted: bool,
 }
 
@@ -548,12 +551,15 @@ pub(super) fn context_create(
         owner,
         address_space,
         registers,
+        extended_state: crate::hv::vmx::clean_guest_extended_state(),
         parked: false,
         cancelled: false,
         carrier_cr3: None,
         carrier_pages: Vec::new(),
         carrier_pdpt_slot: None,
         carrier_generation: 0,
+        last_carrier_slot: None,
+        carrier_migration_observed: false,
         admitted: false,
     });
     *out = handle;
@@ -623,14 +629,20 @@ pub(super) fn context_execute(
     resume: bool,
 ) -> Result<(), i32> {
     let owner = owner()?;
-    let (registers, address_space, cancelled, admitted) = {
+    let (registers, address_space, cancelled, admitted, mut extended_state) = {
         let runtime = runtime_for(owner)?.lock();
         let context = runtime
             .contexts
             .iter()
             .find(|context| context.handle == handle && context.owner == owner)
             .ok_or(ERR_NOT_FOUND)?;
-        (context.registers, context.address_space, context.cancelled, context.admitted)
+        (
+            context.registers,
+            context.address_space,
+            context.cancelled,
+            context.admitted,
+            context.extended_state,
+        )
     };
     if resume != admitted {
         return Err(if resume { ERR_BUSY } else { ERR_INVALID });
@@ -696,10 +708,28 @@ pub(super) fn context_execute(
     let cr3 = context.carrier_cr3.ok_or(ERR_NOT_FOUND)?;
     drop(runtime);
 
-    let exit = run_x86_context_on_carrier(owner, cr3, registers)?;
+    let (exit, entered, carrier_slot) =
+        run_x86_context_on_carrier(owner, cr3, registers, &mut extended_state)?;
     let mut runtime = runtime_for(owner)?.lock();
     let context = context_mut(&mut runtime, handle, owner)?;
     context.registers = exit.registers;
+    if entered {
+        context.extended_state = extended_state;
+        if context.last_carrier_slot.is_some_and(|previous| previous != carrier_slot)
+            && !context.carrier_migration_observed
+        {
+            context.carrier_migration_observed = true;
+            crate::log_important!(
+                target: "hv";
+                "x86 context carrier migration vm={} context={} from_slot={} to_slot={} xstate=context-owned\n",
+                owner,
+                handle,
+                context.last_carrier_slot.unwrap_or(carrier_slot),
+                carrier_slot,
+            );
+        }
+        context.last_carrier_slot = Some(carrier_slot);
+    }
     context.admitted = true;
     *out = exit;
     Ok(())
@@ -793,7 +823,9 @@ fn run_x86_context_on_carrier(
     owner: u8,
     cr3: u64,
     registers: TrueosX86RegistersV1,
-) -> Result<TrueosX86ExitV1, i32> {
+    extended_state: &mut crate::hv::vmx::VmxExtendedState,
+) -> Result<(TrueosX86ExitV1, bool, usize), i32> {
+    let carrier_slot = crate::percpu::current_slot();
     let exit = crate::hv::run_transient_protected32(
         owner, cr3, registers.eip, registers.esp, registers.eflags, registers.fs_base,
         crate::hv::vmx::GuestRegisters {
@@ -802,7 +834,9 @@ fn run_x86_context_on_carrier(
             rsi: registers.esi as u64, rdi: registers.edi as u64,
             rbp: registers.ebp as u64, ..Default::default()
         },
+        extended_state,
     ).map_err(|_| ERR_DENIED)?;
+    let entered = exit.launch.entered != 0;
     // Keep raw hardware evidence even when interruption-info is invalid. The
     // public exception payload otherwise deliberately discards invalid fields.
     if !matches!(exit.launch.exit_reason & 0xffff, crate::hv::vmx::VMEXIT_REASON_VMCALL | 52) {
@@ -857,7 +891,7 @@ fn run_x86_context_on_carrier(
         exit.interruption_error_code,
         exit.launch.exit_qualification,
     );
-    Ok(TrueosX86ExitV1 {
+    Ok((TrueosX86ExitV1 {
         kind: match exit_reason {
             crate::hv::vmx::VMEXIT_REASON_VMCALL => 1, 0 => 2, 48 => 3, 0x0c => 4, _ => 255,
         },
@@ -871,7 +905,7 @@ fn run_x86_context_on_carrier(
             eip: u32::try_from(resumed_eip).map_err(|_| ERR_INVALID)?, eflags: exit.rflags as u32,
             fs_base: exit.fs_base as u32,
         },
-    })
+    }, entered, carrier_slot))
 }
 
 /// Pack generic VM-exit metadata without changing the C ABI layout.

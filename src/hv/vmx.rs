@@ -268,11 +268,11 @@ pub struct HvSyntheticHostState {
 
 const VMX_SCRATCH_SLOTS: usize = crate::allcaps::hv::VM_CPU_SLOT_LIMIT;
 const VMX_GUEST_SLOTS: usize = crate::allcaps::hv::VM_ID_LIMIT;
-pub const VMX_EXTENDED_STATE_BYTES: usize = 832;
+pub(crate) const VMX_EXTENDED_STATE_BYTES: usize = 832;
 
 #[derive(Copy, Clone)]
 #[repr(C, align(64))]
-struct VmxExtendedState([u8; VMX_EXTENDED_STATE_BYTES]);
+pub(crate) struct VmxExtendedState(pub(crate) [u8; VMX_EXTENDED_STATE_BYTES]);
 
 const EMPTY_EXTENDED_STATE: VmxExtendedState = VmxExtendedState([0; VMX_EXTENDED_STATE_BYTES]);
 
@@ -343,19 +343,23 @@ fn guest_extended_state_ptr(vm_id: u8) -> Option<*mut VmxExtendedState> {
     Some(unsafe { core::ptr::addr_of_mut!(VMX_GUEST_EXTENDED_STATE_BY_VM[index]) })
 }
 
+pub(crate) fn clean_guest_extended_state() -> VmxExtendedState {
+    let mut state = EMPTY_EXTENDED_STATE;
+    // Seed the architectural x87 control word and MXCSR defaults in the
+    // legacy region used by both FXSAVE and XSAVE. Standard XRSTOR loads
+    // MXCSR whenever SSE or AVX is requested even when XSTATE_BV is zero,
+    // so an all-zero XSAVE image would incorrectly unmask every SIMD
+    // floating-point exception. The remaining zero state and header
+    // describe clean x87/MMX/XMM/YMM state.
+    state.0[0..2].copy_from_slice(&0x037Fu16.to_le_bytes());
+    state.0[24..28].copy_from_slice(&0x1F80u32.to_le_bytes());
+    state
+}
+
 pub fn reset_guest_extended_state(vm_id: u8) -> Result<(), &'static str> {
     let state = guest_extended_state_ptr(vm_id).ok_or("unsupported VM extended-state owner")?;
     unsafe {
-        state.write(EMPTY_EXTENDED_STATE);
-        // Seed the architectural x87 control word and MXCSR defaults in the
-        // legacy region used by both FXSAVE and XSAVE. Standard XRSTOR loads
-        // MXCSR whenever SSE or AVX is requested even when XSTATE_BV is zero,
-        // so an all-zero XSAVE image would incorrectly unmask every SIMD
-        // floating-point exception. The remaining zero state and header
-        // describe clean x87/MMX/XMM/YMM state.
-        let bytes = &mut (*state).0;
-        bytes[0..2].copy_from_slice(&0x037Fu16.to_le_bytes());
-        bytes[24..28].copy_from_slice(&0x1F80u32.to_le_bytes());
+        state.write(clean_guest_extended_state());
     }
     Ok(())
 }
@@ -775,12 +779,26 @@ pub fn synthesize_host_gdt_tss() -> HvSyntheticHostState {
 }
 
 pub fn vmlaunch_once_wrapper(vm_id: u8, out: &mut LaunchResult) {
+    let guest_state = guest_extended_state_ptr(vm_id)
+        .expect("unsupported VM extended-state owner");
+    unsafe { vmlaunch_once_wrapper_impl(out, guest_state) }
+}
+
+pub(crate) fn vmlaunch_once_wrapper_with_extended_state(
+    out: &mut LaunchResult,
+    guest_state: &mut VmxExtendedState,
+) {
+    unsafe { vmlaunch_once_wrapper_impl(out, guest_state) }
+}
+
+unsafe fn vmlaunch_once_wrapper_impl(
+    out: &mut LaunchResult,
+    guest_extended_state_ptr: *mut VmxExtendedState,
+) {
     unsafe {
         let result_ptr = wrapper_result_ptr();
         let guest_regs_ptr = guest_regs_ptr();
         let host_extended_state_ptr = host_extended_state_ptr();
-        let guest_extended_state_ptr =
-            guest_extended_state_ptr(vm_id).expect("unsupported VM extended-state owner");
         let extended_state_mask = crate::cpu::vmx_xsave_mask();
         result_ptr.write(EMPTY_LAUNCH_RESULT);
         core::arch::asm!(
@@ -1217,5 +1235,30 @@ pub fn vmresume_once_wrapper(vm_id: u8, out: &mut LaunchResult) {
             clobber_abi("sysv64"),
         );
         *out = result_ptr.read();
+    }
+}
+
+#[cfg(test)]
+mod extended_state_tests {
+    use super::{clean_guest_extended_state, VmxExtendedState, VMX_EXTENDED_STATE_BYTES};
+
+    #[test]
+    fn extended_state_layout_and_clean_architectural_defaults_are_stable() {
+        assert_eq!(core::mem::size_of::<VmxExtendedState>(), VMX_EXTENDED_STATE_BYTES);
+        assert_eq!(core::mem::align_of::<VmxExtendedState>(), 64);
+
+        let state = clean_guest_extended_state();
+        assert_eq!(u16::from_le_bytes(state.0[0..2].try_into().unwrap()), 0x037f);
+        assert_eq!(u32::from_le_bytes(state.0[24..28].try_into().unwrap()), 0x1f80);
+        assert!(state.0[2..24].iter().all(|byte| *byte == 0));
+        assert!(state.0[28..].iter().all(|byte| *byte == 0));
+    }
+
+    #[test]
+    fn clean_extended_state_values_are_independent() {
+        let mut a = clean_guest_extended_state();
+        let b = clean_guest_extended_state();
+        a.0[32] = 0xa5;
+        assert_eq!(b.0[32], 0);
     }
 }
