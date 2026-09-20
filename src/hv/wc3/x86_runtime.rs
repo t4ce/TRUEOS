@@ -803,6 +803,19 @@ fn run_x86_context_on_carrier(
             rbp: registers.ebp as u64, ..Default::default()
         },
     ).map_err(|_| ERR_DENIED)?;
+    // Keep raw hardware evidence even when interruption-info is invalid. The
+    // public exception payload otherwise deliberately discards invalid fields.
+    if !matches!(exit.launch.exit_reason & 0xffff, crate::hv::vmx::VMEXIT_REASON_VMCALL | 52) {
+        crate::log_important!(
+            target: "hv";
+            "x86 raw exit vm={} entered={} launch_failed={} reason=0x{:08X} instr_err=0x{:X} qualification=0x{:016X} intr_info=0x{:08X} intr_error=0x{:08X} cr2=0x{:016X} cr3=0x{:016X} rip=0x{:08X} rsp=0x{:08X} instruction_len={}\n",
+            owner, exit.launch.entered, exit.launch.launch_failed,
+            exit.launch.exit_reason, exit.launch.instr_err,
+            exit.launch.exit_qualification, exit.interruption_info,
+            exit.interruption_error_code, exit.guest_cr2, exit.cr3,
+            exit.launch.guest_rip, exit.rsp, exit.instruction_len,
+        );
+    }
     if exit.launch.exit_reason & 0xffff == 48 {
         crate::log_important!(
             target: "hv";
@@ -814,14 +827,15 @@ fn run_x86_context_on_carrier(
     if exit.launch.exit_reason & 0xffff == 0 {
         let interruption_info = exit.interruption_info;
         let vector = (interruption_info & 0xff) as u8;
-        let error_code_valid = interruption_info & (1 << 11) != 0;
+        let valid = interruption_info & (1 << 31) != 0;
+        let error_code_valid = valid && interruption_info & (1 << 11) != 0;
         crate::log_important!(
             target: "hv";
             "x86 exception vm={} rip=0x{:08X} vector={} name={} error_valid={} error=0x{:X} intr_info=0x{:08X}\n",
             owner,
             exit.launch.guest_rip,
             vector,
-            crate::hv::vmx::decode_exception_vector(vector),
+            if valid { crate::hv::vmx::decode_exception_vector(vector) } else { "invalid-interruption-info" },
             error_code_valid as u8,
             exit.interruption_error_code,
             interruption_info,
