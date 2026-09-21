@@ -7867,6 +7867,7 @@ pub(crate) fn run_transient_protected32(
     CarrierDebugRegisters::install(carrier_debug_registers);
     let (interruption_info, interruption_error_code, guest_cr2) =
         transient_exception_capture(&launch);
+    merge_transient_debug_exception(&mut captured_debug_registers, &launch);
     let exit = TransientProtected32Exit {
         launch,
         instruction_len: vmread(VMCS_VMEXIT_INSTRUCTION_LEN).unwrap_or(0),
@@ -7899,10 +7900,30 @@ fn transient_exception_capture(launch: &LaunchResult) -> (u64, u64, u64) {
     )
 }
 
+/// A debug exception intercepted by VMX has not been delivered to the guest,
+/// so the carrier's live DR6 does not contain the condition bits yet.  The
+/// exit qualification supplies the architectural B0-B3/BD/BS/BT result that
+/// the logical context must observe when its exception is dispatched.
+#[cfg(feature = "wc3")]
+fn merge_transient_debug_exception(
+    debug_registers: &mut v::bp_abi::TrueosX86DebugRegistersV1,
+    launch: &LaunchResult,
+) {
+    const DR6_DEBUG_CONDITION_MASK: u32 = 0x0000_e00f;
+    let interruption_info = launch.interruption_info;
+    let valid = interruption_info & (1 << 31) != 0;
+    let vector = interruption_info & 0xff;
+    if valid && vector == 1 {
+        debug_registers.dr6 |=
+            (launch.exit_qualification as u32) & DR6_DEBUG_CONDITION_MASK;
+    }
+}
+
 #[cfg(all(test, feature = "wc3"))]
 mod transient_exception_capture_tests {
-    use super::transient_exception_capture;
+    use super::{merge_transient_debug_exception, transient_exception_capture};
     use crate::hv::vmx::LaunchResult;
+    use crate::v::bp_abi::TrueosX86DebugRegistersV1;
 
     #[test]
     fn transient_exception_uses_wrapper_captured_launch_fields() {
@@ -7913,6 +7934,35 @@ mod transient_exception_capture_tests {
             ..LaunchResult::default()
         };
         assert_eq!(transient_exception_capture(&launch), (launch.interruption_info, 2, 1));
+    }
+
+    #[test]
+    fn intercepted_debug_exception_merges_b0_into_context_dr6() {
+        let launch = LaunchResult {
+            interruption_info: (1 << 31) | (3 << 8) | 1,
+            exit_qualification: 1,
+            ..LaunchResult::default()
+        };
+        let mut debug_registers = TrueosX86DebugRegistersV1 {
+            dr0: 0x0010_0300,
+            dr6: 0xffff_0ff0,
+            dr7: 0x401,
+            ..TrueosX86DebugRegistersV1::default()
+        };
+        merge_transient_debug_exception(&mut debug_registers, &launch);
+        assert_eq!(debug_registers.dr6, 0xffff_0ff1);
+    }
+
+    #[test]
+    fn intercepted_single_step_merges_bs_into_context_dr6() {
+        let launch = LaunchResult {
+            interruption_info: (1 << 31) | (3 << 8) | 1,
+            exit_qualification: 0x4000,
+            ..LaunchResult::default()
+        };
+        let mut debug_registers = TrueosX86DebugRegistersV1::default();
+        merge_transient_debug_exception(&mut debug_registers, &launch);
+        assert_eq!(debug_registers.dr6, 0x4000);
     }
 }
 
