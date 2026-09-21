@@ -1,6 +1,7 @@
 use core::sync::atomic::{AtomicU8, Ordering};
 
 pub const DEFAULT_TIMEZONE_NAME: &str = "UTC";
+pub const DEFAULT_KEYBOARD_LAYOUT_NAME: &str = "us";
 
 const TIMEZONE_UNINITIALIZED: u8 = u8::MAX;
 const TIMEZONE_UTC: u8 = 0;
@@ -21,6 +22,22 @@ pub fn current_intl_locale_code() -> &'static str {
 #[inline]
 pub fn current_intl_profile() -> &'static trueos_locale::IntlLocaleProfile {
     trueos_locale::intl_locale_profile(trueos_locale::DEFAULT_INTL_LOCALE)
+}
+
+pub fn current_keyboard_layout_name() -> &'static str {
+    crate::limine::executable_cmdline()
+        .and_then(|cmdline| {
+            cmdline.split_ascii_whitespace().find_map(|arg| {
+                ["keyboard=", "keymap=", "TRUEOS_KEYBOARD_LAYOUT="]
+                    .iter()
+                    .find_map(|prefix| arg.strip_prefix(prefix))
+            })
+        })
+        .map(|layout| match layout {
+            "de" | "de-DE" | "de_DE" | "german" => "de",
+            _ => DEFAULT_KEYBOARD_LAYOUT_NAME,
+        })
+        .unwrap_or(DEFAULT_KEYBOARD_LAYOUT_NAME)
 }
 
 fn timezone_id(name: &str) -> Option<u8> {
@@ -171,6 +188,7 @@ pub fn env_var(key: &str) -> Option<&'static str> {
         "LC_ALL" | "LC_COLLATE" | "LC_CTYPE" | "LC_MESSAGES" | "LC_MONETARY" | "LC_NUMERIC"
         | "LC_TIME" | "TRUEOS_LOCALE" => Some(current_intl_locale_code()),
         "TZ" | "TRUEOS_TIMEZONE" => Some(current_timezone_name()),
+        "TRUEOS_KEYBOARD_LAYOUT" => Some(current_keyboard_layout_name()),
         _ => None,
     }
 }

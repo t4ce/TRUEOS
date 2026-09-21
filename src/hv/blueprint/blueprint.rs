@@ -1694,6 +1694,10 @@ pub(crate) fn build_process_env(
         String::from("TRUEOS_LANGUAGE"),
         String::from(crate::locale::current_language_code()),
     );
+    vars.insert(
+        String::from("TRUEOS_KEYBOARD_LAYOUT"),
+        String::from(crate::locale::current_keyboard_layout_name()),
+    );
     vars.insert(String::from("LC_ALL"), String::from(crate::locale::current_intl_locale_code()));
     vars.insert(
         String::from("LC_COLLATE"),

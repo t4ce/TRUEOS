@@ -267,6 +267,7 @@ pub mod env {
             "LANG",
             "LANGUAGE",
             "TRUEOS_LANGUAGE",
+            "TRUEOS_KEYBOARD_LAYOUT",
             "LC_ALL",
             "LC_COLLATE",
             "LC_CTYPE",

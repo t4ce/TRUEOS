@@ -507,7 +507,9 @@ fn push_physical_report_into(
         if key == 0 || key_is_down(&prev_keys, key) || keys[..index].contains(&key) {
             continue;
         }
-        let codepoint = u32::from(ascii[index]);
+        let codepoint = crate::usb2::hid::keyboard::hid_boot_keycode_to_char(key, modifiers)
+            .map(|ch| ch as u32)
+            .unwrap_or_else(|| u32::from(ascii[index]));
         ring.push(physical_key_event(
             metadata.0,
             metadata.1,
@@ -764,11 +766,11 @@ pub fn apply_report(
         );
     }
 
-    let mut emitted_ascii = [0u8; 6];
+    let mut emitted_codepoints = [0u32; 6];
     let mut emitted_key_codes = [0u16; 6];
     for idx in 0..keys.len() {
         let key = keys[idx];
-        let ch = ascii[idx];
+        let ch = crate::usb2::hid::keyboard::hid_boot_keycode_to_char(key, modifiers);
         if key != 0 && !key_is_down(&prev_keys, key) {
             if key == 0x2C && (modifiers & KEYBOARD_CTRL_MOD_MASK) != 0 {
                 continue;
@@ -806,13 +808,14 @@ pub fn apply_report(
             }
         }
         if key == 0
-            || ch == 0
+            || ch.is_none()
             || key_is_down(&prev_keys, key)
-            || ascii_was_emitted(&emitted_ascii, ch)
+            || ch.is_some_and(|ch| emitted_codepoints.contains(&(ch as u32)))
         {
             continue;
         }
-        emitted_ascii[idx] = ch;
+        let ch = ch.unwrap();
+        emitted_codepoints[idx] = ch as u32;
         push_output_char(
             controller_id,
             slot_id,
@@ -820,7 +823,7 @@ pub fn apply_report(
             t_ms,
             device_seq,
             modifiers,
-            ch as char,
+            ch,
             KEYBOARD_OUTPUT_FLAG_PRESS,
         );
     }

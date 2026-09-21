@@ -93,7 +93,7 @@ fn hid_kbd_shift(modifiers: u8) -> bool {
 }
 
 #[inline]
-fn hid_boot_keycode_to_ascii(key: u8, shift: bool) -> Option<char> {
+fn hid_boot_keycode_to_us_char(key: u8, shift: bool) -> Option<char> {
     match key {
         0x04..=0x1D => {
             let base = (key - 0x04) + b'a';
@@ -145,9 +145,84 @@ fn hid_boot_keycode_to_ascii(key: u8, shift: bool) -> Option<char> {
     }
 }
 
+fn hid_boot_keycode_to_de_char(key: u8, modifiers: u8) -> Option<char> {
+    let shift = hid_kbd_shift(modifiers);
+    let alt_gr = modifiers & (1 << 6) != 0;
+    if alt_gr {
+        return match key {
+            0x08 => Some('€'), // E
+            0x10 => Some('µ'), // M
+            0x14 => Some('@'),        // Q
+            0x24 => Some('{'),
+            0x25 => Some('['),
+            0x26 => Some(']'),
+            0x27 => Some('}'),
+            0x2d => Some('\\'),
+            0x30 => Some('~'),
+            0x64 => Some('|'),
+            _ => None,
+        };
+    }
+    match key {
+        0x04..=0x1d => {
+            let mut base = (key - 0x04) + b'a';
+            if key == 0x1c {
+                base = b'z';
+            } else if key == 0x1d {
+                base = b'y';
+            }
+            let ch = base as char;
+            Some(if shift { ch.to_ascii_uppercase() } else { ch })
+        }
+        0x1e => Some(if shift { '!' } else { '1' }),
+        0x1f => Some(if shift { '"' } else { '2' }),
+        0x20 => Some(if shift { '§' } else { '3' }),
+        0x21 => Some(if shift { '$' } else { '4' }),
+        0x22 => Some(if shift { '%' } else { '5' }),
+        0x23 => Some(if shift { '&' } else { '6' }),
+        0x24 => Some(if shift { '/' } else { '7' }),
+        0x25 => Some(if shift { '(' } else { '8' }),
+        0x26 => Some(if shift { ')' } else { '9' }),
+        0x27 => Some(if shift { '=' } else { '0' }),
+        0x2c => Some(' '),
+        0x2d => Some(if shift { '?' } else { 'ß' }),
+        0x2e => Some(if shift { '`' } else { '´' }),
+        0x2f => Some(if shift { 'Ü' } else { 'ü' }),
+        0x30 => Some(if shift { '*' } else { '+' }),
+        0x31 => Some(if shift { '\'' } else { '#' }),
+        0x33 => Some(if shift { 'Ö' } else { 'ö' }),
+        0x34 => Some(if shift { 'Ä' } else { 'ä' }),
+        0x35 => Some(if shift { '°' } else { '^' }),
+        0x36 => Some(if shift { ';' } else { ',' }),
+        0x37 => Some(if shift { ':' } else { '.' }),
+        0x38 => Some(if shift { '_' } else { '-' }),
+        0x64 => Some(if shift { '>' } else { '<' }),
+        0x54..=0x63 | 0x67 => hid_boot_keycode_to_us_char(key, shift),
+        _ => None,
+    }
+}
+
+pub(crate) fn hid_boot_keycode_to_char(key: u8, modifiers: u8) -> Option<char> {
+    if crate::locale::current_keyboard_layout_name() == "de" {
+        hid_boot_keycode_to_de_char(key, modifiers)
+    } else {
+        hid_boot_keycode_to_us_char(key, hid_kbd_shift(modifiers))
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::boot_ascii_for_keys;
+    use super::{boot_ascii_for_keys, hid_boot_keycode_to_de_char};
+
+    #[test]
+    fn german_layout_maps_non_ascii_and_alt_gr() {
+        assert_eq!(hid_boot_keycode_to_de_char(0x20, 1 << 1), Some('§'));
+        assert_eq!(hid_boot_keycode_to_de_char(0x2d, 0), Some('ß'));
+        assert_eq!(hid_boot_keycode_to_de_char(0x2f, 0), Some('ü'));
+        assert_eq!(hid_boot_keycode_to_de_char(0x14, 1 << 6), Some('@'));
+        assert_eq!(hid_boot_keycode_to_de_char(0x1c, 0), Some('z'));
+        assert_eq!(hid_boot_keycode_to_de_char(0x1d, 0), Some('y'));
+    }
 
     #[test]
     fn keypad_usages_project_to_text() {
@@ -160,13 +235,12 @@ mod tests {
 }
 
 pub(crate) fn boot_ascii_for_keys(modifiers: u8, keys: [u8; 6]) -> [u8; 6] {
-    let shift = hid_kbd_shift(modifiers);
     let mut ascii = [0u8; 6];
     for (dst, &key) in ascii.iter_mut().zip(keys.iter()) {
         if key == 0 {
             continue;
         }
-        *dst = hid_boot_keycode_to_ascii(key, shift)
+        *dst = hid_boot_keycode_to_char(key, modifiers)
             .and_then(|ch| if ch.is_ascii() { Some(ch as u8) } else { None })
             .unwrap_or(0);
     }
