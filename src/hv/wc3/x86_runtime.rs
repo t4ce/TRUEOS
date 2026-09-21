@@ -837,9 +837,14 @@ fn run_x86_context_on_carrier(
         extended_state,
     ).map_err(|_| ERR_DENIED)?;
     let entered = exit.launch.entered != 0;
+    let hot_war3_divide = exit.launch.guest_rip == 0x0045_ae47
+        && exit.launch.exit_reason & 0xffff == 0
+        && exit.interruption_info & 0xff == 0;
     // Keep raw hardware evidence even when interruption-info is invalid. The
     // public exception payload otherwise deliberately discards invalid fields.
-    if !matches!(exit.launch.exit_reason & 0xffff, crate::hv::vmx::VMEXIT_REASON_VMCALL | 52) {
+    if !hot_war3_divide
+        && !matches!(exit.launch.exit_reason & 0xffff, crate::hv::vmx::VMEXIT_REASON_VMCALL | 52)
+    {
         crate::log_important!(
             target: "hv";
             "x86 raw exit vm={} entered={} launch_failed={} reason=0x{:08X} instr_err=0x{:X} qualification=0x{:016X} intr_info=0x{:08X} intr_error=0x{:08X} cr2=0x{:016X} cr3=0x{:016X} rip=0x{:08X} rsp=0x{:08X} instruction_len={}\n",
@@ -858,7 +863,7 @@ fn run_x86_context_on_carrier(
             exit.guest_linear, exit.launch.exit_qualification,
         );
     }
-    if exit.launch.exit_reason & 0xffff == 0 {
+    if !hot_war3_divide && exit.launch.exit_reason & 0xffff == 0 {
         let interruption_info = exit.interruption_info;
         let vector = (interruption_info & 0xff) as u8;
         let valid = interruption_info & (1 << 31) != 0;

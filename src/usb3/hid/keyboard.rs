@@ -152,7 +152,7 @@ fn hid_boot_keycode_to_de_char(key: u8, modifiers: u8) -> Option<char> {
         return match key {
             0x08 => Some('€'), // E
             0x10 => Some('µ'), // M
-            0x14 => Some('@'),        // Q
+            0x14 => Some('@'), // Q
             0x24 => Some('{'),
             0x25 => Some('['),
             0x26 => Some(']'),
@@ -189,7 +189,7 @@ fn hid_boot_keycode_to_de_char(key: u8, modifiers: u8) -> Option<char> {
         0x2e => Some(if shift { '`' } else { '´' }),
         0x2f => Some(if shift { 'Ü' } else { 'ü' }),
         0x30 => Some(if shift { '*' } else { '+' }),
-        0x31 => Some(if shift { '\'' } else { '#' }),
+        0x31 | 0x32 => Some(if shift { '\'' } else { '#' }),
         0x33 => Some(if shift { 'Ö' } else { 'ö' }),
         0x34 => Some(if shift { 'Ä' } else { 'ä' }),
         0x35 => Some(if shift { '°' } else { '^' }),
