@@ -64,6 +64,34 @@ pub struct TrueosX86RegistersV1 {
     pub fs_base: u32,
 }
 
+/// Context-owned architectural debug-register state for a generic x86 guest.
+///
+/// This deliberately remains separate from `TrueosX86RegistersV1`: the latter
+/// is an existing C ABI layout and must stay byte-for-byte stable.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct TrueosX86DebugRegistersV1 {
+    pub dr0: u32,
+    pub dr1: u32,
+    pub dr2: u32,
+    pub dr3: u32,
+    pub dr6: u32,
+    pub dr7: u32,
+}
+
+impl Default for TrueosX86DebugRegistersV1 {
+    fn default() -> Self {
+        Self {
+            dr0: 0,
+            dr1: 0,
+            dr2: 0,
+            dr3: 0,
+            dr6: 0,
+            dr7: 0x400,
+        }
+    }
+}
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub struct TrueosX86ExitV1 {
@@ -1641,6 +1669,14 @@ unsafe extern "C" {
     pub fn trueos_cabi_x86_context_registers_set_v1(
         context: u64,
         registers: *const TrueosX86RegistersV1,
+    ) -> i32;
+    pub fn trueos_cabi_x86_context_debug_registers_get_v1(
+        context: u64,
+        out: *mut TrueosX86DebugRegistersV1,
+    ) -> i32;
+    pub fn trueos_cabi_x86_context_debug_registers_set_v1(
+        context: u64,
+        registers: *const TrueosX86DebugRegistersV1,
     ) -> i32;
     pub fn trueos_cabi_x86_context_run_v1(context: u64, out: *mut TrueosX86ExitV1) -> i32;
     pub fn trueos_cabi_x86_context_resume_v1(context: u64, out: *mut TrueosX86ExitV1) -> i32;

@@ -14,7 +14,11 @@ use spin::Mutex;
 use crate::hv::memory::PAGE_SIZE_4K;
 use crate::phys::HeapArena;
 use crate::r::static_slots::StaticSlots;
-use v::bp_abi::{TrueosX86ExitV1, TrueosX86RegistersV1};
+use v::bp_abi::{
+    TrueosX86DebugRegistersV1,
+    TrueosX86ExitV1,
+    TrueosX86RegistersV1,
+};
 
 pub(super) const ERR_INVALID: i32 = -22;
 pub(super) const ERR_NO_MEMORY: i32 = -12;
@@ -131,6 +135,7 @@ struct Context {
     owner: u8,
     address_space: u64,
     registers: TrueosX86RegistersV1,
+    debug_registers: TrueosX86DebugRegistersV1,
     extended_state: crate::hv::vmx::VmxExtendedState,
     parked: bool,
     cancelled: bool,
@@ -551,6 +556,7 @@ pub(super) fn context_create(
         owner,
         address_space,
         registers,
+        debug_registers: TrueosX86DebugRegistersV1::default(),
         extended_state: crate::hv::vmx::clean_guest_extended_state(),
         parked: false,
         cancelled: false,
@@ -611,6 +617,24 @@ pub(super) fn context_registers_set(
     Ok(())
 }
 
+pub(super) fn context_debug_registers_get(
+    handle: u64,
+    out: &mut TrueosX86DebugRegistersV1,
+) -> Result<(), i32> {
+    let owner = owner()?;
+    *out = context_mut(&mut runtime_for(owner)?.lock(), handle, owner)?.debug_registers;
+    Ok(())
+}
+
+pub(super) fn context_debug_registers_set(
+    handle: u64,
+    registers: TrueosX86DebugRegistersV1,
+) -> Result<(), i32> {
+    let owner = owner()?;
+    context_mut(&mut runtime_for(owner)?.lock(), handle, owner)?.debug_registers = registers;
+    Ok(())
+}
+
 pub(super) fn context_park(handle: u64) -> Result<(), i32> {
     let owner = owner()?;
     context_mut(&mut runtime_for(owner)?.lock(), handle, owner)?.parked = true;
@@ -629,7 +653,7 @@ pub(super) fn context_execute(
     resume: bool,
 ) -> Result<(), i32> {
     let owner = owner()?;
-    let (registers, address_space, cancelled, admitted, mut extended_state) = {
+    let (registers, debug_registers, address_space, cancelled, admitted, mut extended_state) = {
         let runtime = runtime_for(owner)?.lock();
         let context = runtime
             .contexts
@@ -638,6 +662,7 @@ pub(super) fn context_execute(
             .ok_or(ERR_NOT_FOUND)?;
         (
             context.registers,
+            context.debug_registers,
             context.address_space,
             context.cancelled,
             context.admitted,
@@ -708,12 +733,13 @@ pub(super) fn context_execute(
     let cr3 = context.carrier_cr3.ok_or(ERR_NOT_FOUND)?;
     drop(runtime);
 
-    let (exit, entered, carrier_slot) =
-        run_x86_context_on_carrier(owner, cr3, registers, &mut extended_state)?;
+    let (exit, returned_debug_registers, entered, carrier_slot) =
+        run_x86_context_on_carrier(owner, cr3, registers, debug_registers, &mut extended_state)?;
     let mut runtime = runtime_for(owner)?.lock();
     let context = context_mut(&mut runtime, handle, owner)?;
     context.registers = exit.registers;
     if entered {
+        context.debug_registers = returned_debug_registers;
         context.extended_state = extended_state;
         if context.last_carrier_slot.is_some_and(|previous| previous != carrier_slot)
             && !context.carrier_migration_observed
@@ -823,11 +849,13 @@ fn run_x86_context_on_carrier(
     owner: u8,
     cr3: u64,
     registers: TrueosX86RegistersV1,
+    debug_registers: TrueosX86DebugRegistersV1,
     extended_state: &mut crate::hv::vmx::VmxExtendedState,
-) -> Result<(TrueosX86ExitV1, bool, usize), i32> {
+) -> Result<(TrueosX86ExitV1, TrueosX86DebugRegistersV1, bool, usize), i32> {
     let carrier_slot = crate::percpu::current_slot();
     let exit = crate::hv::run_transient_protected32(
         owner, cr3, registers.eip, registers.esp, registers.eflags, registers.fs_base,
+        debug_registers,
         crate::hv::vmx::GuestRegisters {
             rax: registers.eax as u64, rbx: registers.ebx as u64,
             rcx: registers.ecx as u64, rdx: registers.edx as u64,
@@ -910,7 +938,7 @@ fn run_x86_context_on_carrier(
             eip: u32::try_from(resumed_eip).map_err(|_| ERR_INVALID)?, eflags: exit.rflags as u32,
             fs_base: exit.fs_base as u32,
         },
-    }, entered, carrier_slot))
+    }, exit.debug_registers, entered, carrier_slot))
 }
 
 /// Pack generic VM-exit metadata without changing the C ABI layout.

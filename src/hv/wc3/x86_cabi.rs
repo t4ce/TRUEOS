@@ -1,7 +1,11 @@
 //! WC3-private Blueprint ABI leaf functions and resolver.
 
 use super::x86_runtime as runtime;
-use v::bp_abi::{TrueosX86ExitV1, TrueosX86RegistersV1};
+use v::bp_abi::{
+    TrueosX86DebugRegistersV1,
+    TrueosX86ExitV1,
+    TrueosX86RegistersV1,
+};
 
 fn status(result: Result<(), i32>) -> i32 {
     result.map(|()| 0).unwrap_or_else(|error| error)
@@ -89,6 +93,24 @@ pub(super) unsafe extern "C" fn trueos_cabi_x86_context_registers_set_v1(
         None => runtime::ERR_INVALID,
     }
 }
+pub(super) unsafe extern "C" fn trueos_cabi_x86_context_debug_registers_get_v1(
+    handle: u64,
+    out: *mut TrueosX86DebugRegistersV1,
+) -> i32 {
+    match out.as_mut() {
+        Some(out) => status(runtime::context_debug_registers_get(handle, out)),
+        None => runtime::ERR_INVALID,
+    }
+}
+pub(super) unsafe extern "C" fn trueos_cabi_x86_context_debug_registers_set_v1(
+    handle: u64,
+    registers: *const TrueosX86DebugRegistersV1,
+) -> i32 {
+    match registers.as_ref() {
+        Some(registers) => status(runtime::context_debug_registers_set(handle, *registers)),
+        None => runtime::ERR_INVALID,
+    }
+}
 pub(super) unsafe extern "C" fn trueos_cabi_x86_context_run_v1(
     handle: u64,
     out: *mut TrueosX86ExitV1,
@@ -145,6 +167,12 @@ pub(super) fn resolve(name: &str) -> Option<usize> {
         }
         "trueos_cabi_x86_context_registers_set_v1" => {
             trueos_cabi_x86_context_registers_set_v1 as *const () as usize
+        }
+        "trueos_cabi_x86_context_debug_registers_get_v1" => {
+            trueos_cabi_x86_context_debug_registers_get_v1 as *const () as usize
+        }
+        "trueos_cabi_x86_context_debug_registers_set_v1" => {
+            trueos_cabi_x86_context_debug_registers_set_v1 as *const () as usize
         }
         "trueos_cabi_x86_context_run_v1" => trueos_cabi_x86_context_run_v1 as *const () as usize,
         "trueos_cabi_x86_context_resume_v1" => {

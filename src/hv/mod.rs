@@ -6926,6 +6926,7 @@ struct Protected32GuestInput {
     esp: u32,
     eflags: u32,
     fs_base: u32,
+    debug_registers: v::bp_abi::TrueosX86DebugRegistersV1,
 }
 
 /// Populate the complete host state and legal controls.  Hull guest state is
@@ -7615,7 +7616,9 @@ fn setup_vmcs_protected32_guest(
     vmwrite(VMCS_GUEST_RFLAGS, (input.eflags as u64 | RFLAGS_RESERVED_BIT1) & !RFLAGS_IF)?;
     vmwrite(VMCS_GUEST_RIP, input.eip as u64)?;
     vmwrite(VMCS_GUEST_RSP, input.esp as u64)?;
-    vmwrite(VMCS_GUEST_DR7, 0x400)?;
+    // DR7 bit 10 is architecturally fixed to one. Keep that VMX-boundary
+    // normalization here; the logical x86 context retains its supplied value.
+    vmwrite(VMCS_GUEST_DR7, u64::from(input.debug_registers.dr7 | 0x400))?;
     vmwrite(VMCS_GUEST_IA32_DEBUGCTL, 0)?;
     vmwrite(VMCS_GUEST_SYSENTER_CS, sysenter_cs)?;
     vmwrite(VMCS_GUEST_SYSENTER_ESP, sysenter_esp)?;
@@ -7670,6 +7673,7 @@ pub(crate) struct TransientProtected32Exit {
     pub rsp: u64,
     pub rflags: u64,
     pub fs_base: u64,
+    pub debug_registers: v::bp_abi::TrueosX86DebugRegistersV1,
     pub cr3: u64,
     pub guest_physical: u64,
     pub guest_linear: u64,
@@ -7677,6 +7681,68 @@ pub(crate) struct TransientProtected32Exit {
     pub interruption_error_code: u64,
     /// Captured by the VM-exit wrapper before the scratch VMCS is reused.
     pub guest_cr2: u64,
+}
+
+/// The host's live DR0–DR3/DR6 state is not virtualized by VMCS guest-state
+/// fields. Keep it in a small carrier snapshot while a logical x86 context is
+/// transiently running, so it cannot leak across Tokio carrier migration.
+#[cfg(feature = "wc3")]
+struct CarrierDebugRegisters;
+
+#[cfg(feature = "wc3")]
+impl CarrierDebugRegisters {
+    fn capture() -> v::bp_abi::TrueosX86DebugRegistersV1 {
+        let (dr0, dr1, dr2, dr3, dr6, dr7): (u64, u64, u64, u64, u64, u64);
+        unsafe {
+            core::arch::asm!(
+                "mov {dr0}, dr0",
+                "mov {dr1}, dr1",
+                "mov {dr2}, dr2",
+                "mov {dr3}, dr3",
+                "mov {dr6}, dr6",
+                "mov {dr7}, dr7",
+                dr0 = out(reg) dr0,
+                dr1 = out(reg) dr1,
+                dr2 = out(reg) dr2,
+                dr3 = out(reg) dr3,
+                dr6 = out(reg) dr6,
+                dr7 = out(reg) dr7,
+                options(nostack, preserves_flags),
+            );
+        }
+        v::bp_abi::TrueosX86DebugRegistersV1 {
+            dr0: dr0 as u32,
+            dr1: dr1 as u32,
+            dr2: dr2 as u32,
+            dr3: dr3 as u32,
+            dr6: dr6 as u32,
+            dr7: dr7 as u32,
+        }
+    }
+
+    fn install(registers: v::bp_abi::TrueosX86DebugRegistersV1) {
+        // Disable data/instruction breakpoints until all address/status state
+        // is coherent, then restore the intended DR7 as the final write.
+        unsafe {
+            core::arch::asm!(
+                "mov dr7, {disabled}",
+                "mov dr0, {dr0}",
+                "mov dr1, {dr1}",
+                "mov dr2, {dr2}",
+                "mov dr3, {dr3}",
+                "mov dr6, {dr6}",
+                "mov dr7, {dr7}",
+                disabled = in(reg) 0x400u64,
+                dr0 = in(reg) u64::from(registers.dr0),
+                dr1 = in(reg) u64::from(registers.dr1),
+                dr2 = in(reg) u64::from(registers.dr2),
+                dr3 = in(reg) u64::from(registers.dr3),
+                dr6 = in(reg) u64::from(registers.dr6),
+                dr7 = in(reg) u64::from(registers.dr7 | 0x400),
+                options(nostack, preserves_flags),
+            );
+        }
+    }
 }
 
 /// Install the already-proven host/control and protected-32 guest VMCS state
@@ -7691,6 +7757,7 @@ pub(crate) fn run_transient_protected32(
     esp: u32,
     eflags: u32,
     fs_base: u32,
+    debug_registers: v::bp_abi::TrueosX86DebugRegistersV1,
     registers: crate::hv::vmx::GuestRegisters,
     extended_state: &mut crate::hv::vmx::VmxExtendedState,
 ) -> Result<TransientProtected32Exit, &'static str> {
@@ -7739,7 +7806,14 @@ pub(crate) fn run_transient_protected32(
         eptp,
         LineageRecord::new(),
         VmBootMode::Wc3Probe,
-        Some(Protected32GuestInput { cr3, eip, esp, eflags, fs_base }),
+        Some(Protected32GuestInput {
+            cr3,
+            eip,
+            esp,
+            eflags,
+            fs_base,
+            debug_registers,
+        }),
     ) {
         Ok(enabled) => enabled,
         Err(error) => {
@@ -7779,9 +7853,18 @@ pub(crate) fn run_transient_protected32(
         exit_controls & !EXIT_CTL_ACKNOWLEDGE_INTERRUPT_ON_EXIT,
     )?;
     crate::hv::vmx::set_guest_registers(registers);
+    // VMX saves/restores only DR7 through the VMCS. DR0–DR3 and DR6 are live
+    // carrier state, so make the transient context own them explicitly.
+    let carrier_debug_registers = CarrierDebugRegisters::capture();
+    CarrierDebugRegisters::install(debug_registers);
 
     let mut launch = LaunchResult::default();
     crate::hv::vmx::vmlaunch_once_wrapper_with_extended_state(&mut launch, extended_state);
+    let mut captured_debug_registers = CarrierDebugRegisters::capture();
+    captured_debug_registers.dr7 = vmread(VMCS_GUEST_DR7)
+        .map(|value| value as u32)
+        .unwrap_or(debug_registers.dr7);
+    CarrierDebugRegisters::install(carrier_debug_registers);
     let (interruption_info, interruption_error_code, guest_cr2) =
         transient_exception_capture(&launch);
     let exit = TransientProtected32Exit {
@@ -7791,6 +7874,7 @@ pub(crate) fn run_transient_protected32(
         rsp: vmread(VMCS_GUEST_RSP).unwrap_or(esp as u64),
         rflags: vmread(VMCS_GUEST_RFLAGS).unwrap_or(eflags as u64),
         fs_base: vmread(VMCS_GUEST_FS_BASE).unwrap_or(fs_base as u64),
+        debug_registers: captured_debug_registers,
         cr3: vmread(VMCS_GUEST_CR3).unwrap_or(cr3),
         guest_physical: vmread(VMCS_GUEST_PHYSICAL_ADDRESS).unwrap_or(0),
         guest_linear: vmread(VMCS_GUEST_LINEAR_ADDRESS).unwrap_or(0),
