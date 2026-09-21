@@ -930,8 +930,15 @@ fn pack_exit_metadata(
 ) -> (u32, u64) {
     if raw_exit_reason & 0xffff == 0 {
         let valid = interruption_info & (1 << 31) != 0;
+        let vector = interruption_info & 0xff;
         let error_valid = valid && interruption_info & (1 << 11) != 0;
-        let page_fault = valid && interruption_info & 0xff == 14;
+
+        if valid && vector == 1 {
+            // #DB qualification carries the architectural debug-condition bits.
+            return (interruption_info as u32, exit_qualification & 0xffff_ffff);
+        }
+
+        let page_fault = valid && vector == 14;
         let error = if error_valid { interruption_error_code as u32 } else { 0 };
         let linear = if page_fault { page_fault_linear as u32 } else { 0 };
         (interruption_info as u32, u64::from(error) | (u64::from(linear) << 32))
@@ -959,6 +966,15 @@ mod tests {
         let (detail, qualification) = pack_exit_metadata(0, 0xdead, (1u64 << 31) | 6, 0xbeef, 1);
         assert_eq!(detail & 0xff, 6);
         assert_eq!(qualification, 0);
+    }
+
+    #[test]
+    fn debug_exception_preserves_qualification_as_debug_status() {
+        let debug_status = 0x0000_4000;
+        let (detail, qualification) =
+            pack_exit_metadata(0, debug_status.into(), (1u64 << 31) | (3 << 8) | 1, 0, 0);
+        assert_eq!(detail & 0xff, 1);
+        assert_eq!(qualification, u64::from(debug_status));
     }
 
     #[test]
