@@ -33,15 +33,15 @@ const PAE_PRESENT: u64 = 1 << 0;
 const PAE_WRITABLE: u64 = 1 << 1;
 const PAE_PDPT_BYTES: usize = 32;
 const PAE_PDPT_SLOTS: usize = PAGE_SIZE_4K / PAE_PDPT_BYTES;
-const WAR3_DWORD_SCAN_STEP_START: u64 = 0x0045_b0a2;
-const WAR3_DWORD_SCAN_STEP_END: u64 = 0x0045_b0df;
+const DR6_DEBUG_CONDITION_MASK: u64 = 0x0000_e00f;
 
-fn quiet_war3_dword_scan_debug_exit(exit: &crate::hv::TransientProtected32Exit) -> bool {
+fn quiet_pure_single_step_debug_exit(exit: &crate::hv::TransientProtected32Exit) -> bool {
     exit.launch.exit_reason & 0xffff == 0
         && exit.interruption_info & (1 << 31) != 0
         && exit.interruption_info & 0xff == 1
-        && (WAR3_DWORD_SCAN_STEP_START..=WAR3_DWORD_SCAN_STEP_END)
-            .contains(&exit.launch.guest_rip)
+        && (exit.launch.exit_qualification & DR6_DEBUG_CONDITION_MASK) == 0x4000
+        // A TF trap at NULL remains valuable evidence.
+        && exit.launch.guest_rip != 0
 }
 
 struct Mapping {
@@ -878,11 +878,11 @@ fn run_x86_context_on_carrier(
     let hot_war3_divide = exit.launch.guest_rip == 0x0045_ae47
         && exit.launch.exit_reason & 0xffff == 0
         && exit.interruption_info & 0xff == 0;
-    let quiet_war3_dword_scan = quiet_war3_dword_scan_debug_exit(&exit);
+    let quiet_single_step = quiet_pure_single_step_debug_exit(&exit);
     // Keep raw hardware evidence even when interruption-info is invalid. The
     // public exception payload otherwise deliberately discards invalid fields.
     if !hot_war3_divide
-        && !quiet_war3_dword_scan
+        && !quiet_single_step
         && !matches!(exit.launch.exit_reason & 0xffff, crate::hv::vmx::VMEXIT_REASON_VMCALL | 52)
     {
         crate::log_important!(
@@ -903,7 +903,7 @@ fn run_x86_context_on_carrier(
             exit.guest_linear, exit.launch.exit_qualification,
         );
     }
-    if !hot_war3_divide && !quiet_war3_dword_scan && exit.launch.exit_reason & 0xffff == 0 {
+    if !hot_war3_divide && !quiet_single_step && exit.launch.exit_reason & 0xffff == 0 {
         let interruption_info = exit.interruption_info;
         let vector = (interruption_info & 0xff) as u8;
         let valid = interruption_info & (1 << 31) != 0;

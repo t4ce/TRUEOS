@@ -7019,17 +7019,19 @@ fn setup_vmcs_host_and_controls(
         ENTRY_CTL_IA32E_MODE_GUEST
     };
     let entry = crate::hv::vmx::adjust_vmx_ctrl(entry_msr, requested_entry);
-    hvlogf(format_args!(
-        "hv: vm{}-{} reporting: vmcs controls pin=0x{:08X} proc=0x{:08X} proc2=0x{:08X} exit=0x{:08X} entry=0x{:08X} vpid={}",
-        current_vm_id_for_log(),
-        lineage_record.level,
-        pin as u32,
-        proc as u32,
-        proc2 as u32,
-        exit as u32,
-        entry as u32,
-        vpid.unwrap_or(0),
-    ));
+    if protected32.is_none() {
+        hvlogf(format_args!(
+            "hv: vm{}-{} reporting: vmcs controls pin=0x{:08X} proc=0x{:08X} proc2=0x{:08X} exit=0x{:08X} entry=0x{:08X} vpid={}",
+            current_vm_id_for_log(),
+            lineage_record.level,
+            pin as u32,
+            proc as u32,
+            proc2 as u32,
+            exit as u32,
+            entry as u32,
+            vpid.unwrap_or(0),
+        ));
+    }
 
     if (proc & PROC_BASED_ACTIVATE_SECONDARY) == 0 {
         hvwarnf(format_args!(
@@ -7222,15 +7224,17 @@ fn setup_vmcs_host_and_controls(
                 ));
                 return Err("host bases");
             }
-            hvlogf(format_args!(
-                "hv: vm{}-{} reporting: host-state cs=0x{:04X} ss=0x{:04X} tr=0x{:04X} tr_base=0x{:016X}",
-                current_vm_id_for_log(),
-                lineage_record.level,
-                host_cs as u16,
-                host_ss as u16,
-                host_tr as u16,
-                tr_base
-            ));
+            if protected32.is_none() {
+                hvlogf(format_args!(
+                    "hv: vm{}-{} reporting: host-state cs=0x{:04X} ss=0x{:04X} tr=0x{:04X} tr_base=0x{:016X}",
+                    current_vm_id_for_log(),
+                    lineage_record.level,
+                    host_cs as u16,
+                    host_ss as u16,
+                    host_tr as u16,
+                    tr_base
+                ));
+            }
 
             vmwrite(VMCS_HOST_CR0, host_cr0)?;
             vmwrite(VMCS_HOST_CR3, host_cr3.start_address().as_u64())?;
@@ -7431,15 +7435,17 @@ fn setup_vmcs_host_and_controls(
         ));
         return Err("host bases");
     }
-    hvlogf(format_args!(
-        "hv: vm{}-{} reporting: host-state cs=0x{:04X} ss=0x{:04X} tr=0x{:04X} tr_base=0x{:016X}",
-        current_vm_id_for_log(),
-        lineage_record.level,
-        host_cs as u16,
-        host_ss as u16,
-        host_tr as u16,
-        tr_base
-    ));
+    if protected32.is_none() {
+        hvlogf(format_args!(
+            "hv: vm{}-{} reporting: host-state cs=0x{:04X} ss=0x{:04X} tr=0x{:04X} tr_base=0x{:016X}",
+            current_vm_id_for_log(),
+            lineage_record.level,
+            host_cs as u16,
+            host_ss as u16,
+            host_tr as u16,
+            tr_base
+        ));
+    }
 
     let (host_cr3, _) = Cr3::read();
     vmwrite(VMCS_HOST_CR0, host_cr0)?;

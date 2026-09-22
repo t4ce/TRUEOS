@@ -138,25 +138,30 @@ fn run_blocking_job_entry(slot: u32, entry: BlockingJobEntry) {
         owner,
     } = entry;
     let started_ms = now_ms();
+    let trace_each_job = purpose != "vmx-service-lane";
     service_lane_activity_begin(slot, id, vm_id, purpose);
-    crate::log_info!(
-        target: "service";
-        "blocking-job: run begin id={} vm={:?} purpose={} tag={}\n",
-        id,
-        vm_id,
-        purpose,
-        policy_tag
-    );
-    if let Some(vm_id) = vm_id {
-        crate::log_os::log_with_area_purpose(
-            crate::log_os::flags::LogArea::Blueprint,
-            log_os_core::LogLevel::Info,
-            Some("multi-rt-alloc"),
-            format_args!(
-                "guest service job begin id={} vm={} purpose={} alloc_domain=hv-guest\n",
-                id, vm_id, purpose
-            ),
+    if trace_each_job {
+        crate::log_info!(
+            target: "service";
+            "blocking-job: run begin id={} vm={:?} purpose={} tag={}\n",
+            id,
+            vm_id,
+            purpose,
+            policy_tag
         );
+    }
+    if let Some(vm_id) = vm_id {
+        if trace_each_job {
+            crate::log_os::log_with_area_purpose(
+                crate::log_os::flags::LogArea::Blueprint,
+                log_os_core::LogLevel::Info,
+                Some("multi-rt-alloc"),
+                format_args!(
+                    "guest service job begin id={} vm={} purpose={} alloc_domain=hv-guest\n",
+                    id, vm_id, purpose
+                ),
+            );
+        }
         let mut pending_call = Some(call);
         let ran = crate::r::kernel_task_domain::with(
             crate::r::kernel_task_domain::KernelTaskDomain::TokioCarrier,
@@ -179,12 +184,14 @@ fn run_blocking_job_entry(slot: u32, entry: BlockingJobEntry) {
             service_lane_activity_finish(slot);
             return;
         }
-        crate::log_os::log_with_area_purpose(
-            crate::log_os::flags::LogArea::Blueprint,
-            log_os_core::LogLevel::Info,
-            Some("multi-rt-alloc"),
-            format_args!("guest service job done id={} vm={} purpose={}\n", id, vm_id, purpose),
-        );
+        if trace_each_job {
+            crate::log_os::log_with_area_purpose(
+                crate::log_os::flags::LogArea::Blueprint,
+                log_os_core::LogLevel::Info,
+                Some("multi-rt-alloc"),
+                format_args!("guest service job done id={} vm={} purpose={}\n", id, vm_id, purpose),
+            );
+        }
     } else {
         crate::r::kernel_task_domain::with(
             crate::r::kernel_task_domain::KernelTaskDomain::HostService,
@@ -192,15 +199,17 @@ fn run_blocking_job_entry(slot: u32, entry: BlockingJobEntry) {
             || run_blocking_job_call(call),
         );
     }
-    crate::log_info!(
-        target: "service";
-        "blocking-job: run done id={} vm={:?} purpose={} tag={} elapsed_ms={}\n",
-        id,
-        vm_id,
-        purpose,
-        policy_tag,
-        now_ms().saturating_sub(started_ms)
-    );
+    if trace_each_job {
+        crate::log_info!(
+            target: "service";
+            "blocking-job: run done id={} vm={:?} purpose={} tag={} elapsed_ms={}\n",
+            id,
+            vm_id,
+            purpose,
+            policy_tag,
+            now_ms().saturating_sub(started_ms)
+        );
+    }
     service_lane_activity_finish(slot);
     drop(owner);
 }
