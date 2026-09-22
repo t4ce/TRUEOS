@@ -92,6 +92,25 @@ impl Default for TrueosX86DebugRegistersV1 {
     }
 }
 
+/// Complete context-owned x87/SSE/AVX state for a generic x86 guest.
+pub const TRUEOS_X86_EXTENDED_STATE_BYTES: usize = 832;
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub struct TrueosX86ExtendedStateV1 {
+    pub mask: u64,
+    pub bytes: [u8; TRUEOS_X86_EXTENDED_STATE_BYTES],
+}
+
+impl Default for TrueosX86ExtendedStateV1 {
+    fn default() -> Self {
+        Self {
+            mask: 0,
+            bytes: [0; TRUEOS_X86_EXTENDED_STATE_BYTES],
+        }
+    }
+}
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 pub struct TrueosX86ExitV1 {
@@ -1677,6 +1696,14 @@ unsafe extern "C" {
     pub fn trueos_cabi_x86_context_debug_registers_set_v1(
         context: u64,
         registers: *const TrueosX86DebugRegistersV1,
+    ) -> i32;
+    pub fn trueos_cabi_x86_context_extended_state_get_v1(
+        context: u64,
+        out: *mut TrueosX86ExtendedStateV1,
+    ) -> i32;
+    pub fn trueos_cabi_x86_context_extended_state_set_v1(
+        context: u64,
+        state: *const TrueosX86ExtendedStateV1,
     ) -> i32;
     pub fn trueos_cabi_x86_context_run_v1(context: u64, out: *mut TrueosX86ExitV1) -> i32;
     pub fn trueos_cabi_x86_context_resume_v1(context: u64, out: *mut TrueosX86ExitV1) -> i32;

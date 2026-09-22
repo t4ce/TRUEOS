@@ -3,6 +3,7 @@
 use super::x86_runtime as runtime;
 use v::bp_abi::{
     TrueosX86DebugRegistersV1,
+    TrueosX86ExtendedStateV1,
     TrueosX86ExitV1,
     TrueosX86RegistersV1,
 };
@@ -111,6 +112,24 @@ pub(super) unsafe extern "C" fn trueos_cabi_x86_context_debug_registers_set_v1(
         None => runtime::ERR_INVALID,
     }
 }
+pub(super) unsafe extern "C" fn trueos_cabi_x86_context_extended_state_get_v1(
+    handle: u64,
+    out: *mut TrueosX86ExtendedStateV1,
+) -> i32 {
+    match out.as_mut() {
+        Some(out) => status(runtime::context_extended_state_get(handle, out)),
+        None => runtime::ERR_INVALID,
+    }
+}
+pub(super) unsafe extern "C" fn trueos_cabi_x86_context_extended_state_set_v1(
+    handle: u64,
+    state: *const TrueosX86ExtendedStateV1,
+) -> i32 {
+    match state.as_ref() {
+        Some(state) => status(runtime::context_extended_state_set(handle, *state)),
+        None => runtime::ERR_INVALID,
+    }
+}
 pub(super) unsafe extern "C" fn trueos_cabi_x86_context_run_v1(
     handle: u64,
     out: *mut TrueosX86ExitV1,
@@ -173,6 +192,12 @@ pub(super) fn resolve(name: &str) -> Option<usize> {
         }
         "trueos_cabi_x86_context_debug_registers_set_v1" => {
             trueos_cabi_x86_context_debug_registers_set_v1 as *const () as usize
+        }
+        "trueos_cabi_x86_context_extended_state_get_v1" => {
+            trueos_cabi_x86_context_extended_state_get_v1 as *const () as usize
+        }
+        "trueos_cabi_x86_context_extended_state_set_v1" => {
+            trueos_cabi_x86_context_extended_state_set_v1 as *const () as usize
         }
         "trueos_cabi_x86_context_run_v1" => trueos_cabi_x86_context_run_v1 as *const () as usize,
         "trueos_cabi_x86_context_resume_v1" => {

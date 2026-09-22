@@ -16,6 +16,7 @@ use crate::phys::HeapArena;
 use crate::r::static_slots::StaticSlots;
 use v::bp_abi::{
     TrueosX86DebugRegistersV1,
+    TrueosX86ExtendedStateV1,
     TrueosX86ExitV1,
     TrueosX86RegistersV1,
 };
@@ -642,6 +643,33 @@ pub(super) fn context_debug_registers_set(
 ) -> Result<(), i32> {
     let owner = owner()?;
     context_mut(&mut runtime_for(owner)?.lock(), handle, owner)?.debug_registers = registers;
+    Ok(())
+}
+
+pub(super) fn context_extended_state_get(
+    handle: u64,
+    out: &mut TrueosX86ExtendedStateV1,
+) -> Result<(), i32> {
+    let owner = owner()?;
+    let mut runtime = runtime_for(owner)?.lock();
+    let context = context_mut(&mut runtime, handle, owner)?;
+    *out = TrueosX86ExtendedStateV1 {
+        mask: crate::cpu::vmx_xsave_mask(),
+        bytes: context.extended_state.0,
+    };
+    Ok(())
+}
+
+pub(super) fn context_extended_state_set(
+    handle: u64,
+    state: TrueosX86ExtendedStateV1,
+) -> Result<(), i32> {
+    if state.mask != crate::cpu::vmx_xsave_mask() {
+        return Err(ERR_INVALID);
+    }
+    let owner = owner()?;
+    context_mut(&mut runtime_for(owner)?.lock(), handle, owner)?.extended_state =
+        crate::hv::vmx::VmxExtendedState(state.bytes);
     Ok(())
 }
 

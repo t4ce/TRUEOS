@@ -1,1 +1,3 @@
-ecb5a99464966e75699785e37d9d85e9c7c0bee7401902a3fdd35e11e979bb33
+# Additive WC3 x86 context accessors for the existing per-context 832-byte
+# x87/SSE/AVX sidecar. Existing C ABI symbols and layouts are unchanged.
+6127e50bf48d7d39e821b612a1ffccbf02f4aaf17a8bc67dc36a153422d9b9b8
