@@ -1,0 +1,69 @@
+name: TGL microfont console preparation
+on:
+  push:
+    branches: ["exp/tgl-microfont-log"]
+    paths: ["tools/_prepare_tgl_microfont.py", ".github/workflows/tgl-microfont-console.yml", "src/log_os/microfont_console.rs", "tools/test_tgl_microfont_console.py"]
+permissions:
+  contents: write
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: TRUEOS
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            /src/log_os.rs
+            /src/log_os/microfont_console.rs
+            /src/intel/mod.rs
+            /src/intel/tgl_native_panel.rs
+            /src/intel/display.rs
+            /src/intel/display/microfont_overlay.rs
+            /src/ui4/slot4_service.rs
+            /tools/test_tgl_microfont_console.py
+            /tools/_prepare_tgl_microfont.py
+      - name: Read pinned kernel log-os crate without unrelated app submodules
+        run: |
+          set -euo pipefail
+          mkdir -p TRUEOS-Blueprints
+          git init "$RUNNER_TEMP/log-os-source"
+          git -C "$RUNNER_TEMP/log-os-source" remote add origin https://github.com/t4ce/TRUEOS-Blueprints.git
+          git -C "$RUNNER_TEMP/log-os-source" -c protocol.version=2 fetch --filter=blob:none --depth=1 origin d4bedf7b3cbaa96c8bca51181e0e3a5509ad619c
+          git -C "$RUNNER_TEMP/log-os-source" archive FETCH_HEAD crates/log-os | tar -x -C TRUEOS-Blueprints
+      - name: Apply exact edits and test actual CPU log implementation
+        working-directory: TRUEOS
+        run: |
+          set -euo pipefail
+          python3 tools/_prepare_tgl_microfont.py
+          python3 tools/test_tgl_microfont_console.py
+          for f in src/log_os.rs src/log_os/microfont_console.rs src/intel/mod.rs src/intel/tgl_native_panel.rs src/intel/display.rs src/intel/display/microfont_overlay.rs src/ui4/slot4_service.rs; do
+            rustfmt --edition 2024 --config skip_children=true --emit stdout "$f" >/dev/null
+          done
+          git diff --check
+          git diff --stat
+          git diff -- src/log_os.rs src/intel/mod.rs src/intel/tgl_native_panel.rs src/intel/display.rs src/ui4/slot4_service.rs
+      - name: Store tested immutable blobs only (no refs, commits or settings changed)
+        working-directory: TRUEOS
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, urllib.request
+          from pathlib import Path
+          paths = ['src/log_os.rs', 'src/intel/mod.rs', 'src/intel/tgl_native_panel.rs', 'src/intel/display.rs', 'src/ui4/slot4_service.rs']
+          result = {}
+          for path in paths:
+              data = Path(path).read_bytes()
+              expected = hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()
+              request = urllib.request.Request('https://api.github.com/repos/t4ce/TRUEOS/git/blobs',
+                  data=json.dumps({'content': data.decode(), 'encoding': 'utf-8'}).encode(), method='POST',
+                  headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json', 'Content-Type': 'application/json'})
+              with urllib.request.urlopen(request) as response:
+                  blob = json.load(response)
+              assert blob['sha'] == expected
+              result[path] = expected
+          print('TESTED_BLOBS=' + json.dumps(result, sort_keys=True))
+          PY
