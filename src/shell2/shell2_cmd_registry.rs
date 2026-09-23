@@ -343,7 +343,7 @@ const SHELL2_COMMAND_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         color: Some(STATUS_PINK_RGB),
         advertised: true,
         handler: dispatch_backup,
-        tool_description: Some("Select a disk for an encrypted whole-disk backup; backup stop restores access."),
+        tool_description: Some("Open the backup Blueprint for network or local whole-disk backup and confirmed restore; backup stop cancels."),
         tool_parameters_json: None,
     },
     BuiltinShell2CmdEntry {

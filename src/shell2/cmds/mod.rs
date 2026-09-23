@@ -79,3 +79,4 @@ pub(crate) fn command_registry_json() -> AllocString {
 }
 
 pub(crate) mod backup;
+pub(crate) mod backup_ui;

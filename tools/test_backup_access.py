@@ -95,7 +95,7 @@ mod disc {
             for thread in threads { thread.join().unwrap(); }
         }
         #[test]
-        fn_error_scope_restores_admission() {
+        fn error_scope_restores_admission() {
             fn fail(disk: DeviceHandle) -> Result<()> {
                 let _lease = Exclusive::acquire(disk)?;
                 Err(Error::InvalidParam)
@@ -106,7 +106,7 @@ mod disc {
         }
     }
 }
-'''.replace("SOURCE", json.dumps(str(root / "src/disc/access.rs"))).replace("fn_error_scope", "fn error_scope")
+'''.replace("SOURCE", json.dumps(str(root / "src/disc/access.rs")))
     (project / "src/lib.rs").write_text(source)
     subprocess.run(["cargo", "test", "--offline", "--manifest-path", str(project / "Cargo.toml"),
                     "--target", "x86_64-unknown-linux-gnu"], cwd=project, check=True)

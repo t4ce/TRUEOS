@@ -867,7 +867,8 @@ impl RawRestoreLease {
         }
         self.disk
             .validate_lba_range(lba, blocks_in_buffer(bytes.len(), self.disk.block_size())?)?;
-        if self.disk.max_transfer_bytes() > 0 && bytes.len() as u64 > self.disk.max_transfer_bytes() {
+        if self.disk.max_transfer_bytes() > 0 && bytes.len() as u64 > self.disk.max_transfer_bytes()
+        {
             return Err(Error::InvalidParam);
         }
         let mut driver = self.disk.node.driver.lock().await;
@@ -881,7 +882,10 @@ impl RawRestoreLease {
 }
 impl BackupLease {
     pub(crate) fn try_acquire(disk: DeviceHandle) -> Result<Self> {
-        Ok(Self { disk, _exclusive: super::access::Exclusive::acquire(disk)? })
+        Ok(Self {
+            disk,
+            _exclusive: super::access::Exclusive::acquire(disk)?,
+        })
     }
     pub(crate) async fn flush(&self) -> Result<()> {
         let mut driver = self.disk.node.driver.lock().await;
@@ -889,9 +893,25 @@ impl BackupLease {
     }
     pub(crate) async fn read(&self, lba: u64, blocks: usize) -> Result<Vec<u8>> {
         self.disk.validate_lba_range(lba, blocks as u64)?;
-        let bytes = (blocks as u64).checked_mul(self.disk.block_size() as u64).ok_or(Error::InvalidParam)?;
-        if bytes > self.disk.max_transfer_bytes() { return Err(Error::InvalidParam); }
+        let bytes = (blocks as u64)
+            .checked_mul(self.disk.block_size() as u64)
+            .ok_or(Error::InvalidParam)?;
+        if bytes > self.disk.max_transfer_bytes() {
+            return Err(Error::InvalidParam);
+        }
         let mut driver = self.disk.node.driver.lock().await;
         (**driver).read_blocks(lba, blocks).await
+    }
+    pub(crate) fn block_size(&self) -> u32 {
+        self.disk.block_size()
+    }
+    pub(crate) fn block_count(&self) -> u64 {
+        self.disk.block_count()
+    }
+    pub(crate) fn max_transfer_bytes(&self) -> u64 {
+        self.disk.max_transfer_bytes()
+    }
+    pub(crate) fn disk_id(&self) -> DiscId {
+        self.disk.id()
     }
 }

@@ -88,8 +88,16 @@ def download(host, port, path, session, key, *, retry_delay=2):
         digest = prefix_digest(image, offset)
         if digest.hexdigest() != state["sha256"]:
             raise ProtocolError("saved image prefix failed SHA-256 verification")
+        if state.get("complete") is True:
+            geometry = state.get("geometry")
+            if (not isinstance(geometry, list) or len(geometry) != 3
+                    or geometry[0] != offset):
+                raise ProtocolError("completed checkpoint has invalid geometry")
+            print(f"Local image is already complete: {offset} bytes; SHA-256 {digest.hexdigest()}")
+            return state
         image.truncate(offset)  # Discard a chunk not committed to the sidecar.
         image.seek(offset)
+        completion_retries = 0
         while True:
             try:
                 with socket.create_connection((host, port), timeout=15) as sock:
@@ -123,17 +131,28 @@ def download(host, port, path, session, key, *, retry_delay=2):
                         if not data:
                             state["complete"] = True
                             checkpoint(state_path, state)
-                            sock.sendall(encrypt(struct.pack("<Q", (1 << 64) - 1), hello,
-                                                 nonce(hello, sequence), key))
-                            print(f"\nSuccess: {total} bytes saved; SHA-256 {digest.hexdigest()}")
+                            # The empty response is the server's bounded terminal
+                            # handshake. The local checkpoint is already complete,
+                            # so a lost final ACK must not make us reconnect forever
+                            # to a service that has correctly retired its snapshot.
+                            try:
+                                sock.sendall(encrypt(struct.pack("<Q", (1 << 64) - 1), hello,
+                                                     nonce(hello, sequence), key))
+                                suffix = "; final acknowledgement sent"
+                            except (ConnectionError, TimeoutError, OSError):
+                                suffix = "; final acknowledgement was interrupted"
+                            print(f"\nLocal image complete: {total} bytes saved; SHA-256 {digest.hexdigest()}{suffix}")
                             return state
-                        image.write(data)
-                        image.flush()
-                        os.fsync(image.fileno())
-                        digest.update(data)
-                        offset += len(data)
-                        state.update(offset=offset, sha256=digest.hexdigest(), geometry=geometry)
-                        checkpoint(state_path, state)
+                        try:
+                            image.write(data)
+                            image.flush()
+                            os.fsync(image.fileno())
+                            digest.update(data)
+                            offset += len(data)
+                            state.update(offset=offset, sha256=digest.hexdigest(), geometry=geometry)
+                            checkpoint(state_path, state)
+                        except OSError as error:
+                            raise ProtocolError(f"could not save image/checkpoint: {error}") from error
                         # Only the next authenticated request acknowledges this
                         # fsynced data and checkpoint. Lost responses are replayed.
                         print(f"\r{offset * 100 // total}% saved — {total - offset} bytes left", end="", flush=True)
@@ -141,6 +160,15 @@ def download(host, port, path, session, key, *, retry_delay=2):
                 # Disk errors must not enter the network retry loop.
                 if isinstance(error, OSError) and not isinstance(error, (ConnectionError, TimeoutError)) and error.errno not in (101, 104, 110, 111, 113):
                     raise
+                if state.get("geometry", [None])[0] == offset:
+                    completion_retries += 1
+                    if completion_retries >= 3:
+                        # Every image byte is already authenticated and fsynced.
+                        # The peer may have retired after accepting EOF while its
+                        # empty response was lost; do not wait forever on it.
+                        print(f"\nImage complete locally: {offset} bytes; SHA-256 {digest.hexdigest()}. "
+                              "Service teardown could not be confirmed; use `backup stop` in Shell2.")
+                        return state
                 print(f"\nConnection interrupted ({error}); retrying from {offset} bytes…", flush=True)
                 time.sleep(retry_delay)
 

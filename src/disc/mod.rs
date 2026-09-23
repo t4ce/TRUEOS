@@ -1,5 +1,6 @@
 pub(crate) mod access;
 pub mod block;
+pub mod backup_local;
 pub mod install;
 pub mod layout;
 

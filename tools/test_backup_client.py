@@ -21,7 +21,7 @@ CHUNK = 1024
 
 
 class Server(threading.Thread):
-    def __init__(self, drop=False, tamper=False, wrong_session=False):
+    def __init__(self, drop=False, tamper=False, wrong_session=False, drop_eof=False):
         super().__init__(daemon=True)
         self.listener = socket.socket()
         self.listener.bind(("127.0.0.1", 0))
@@ -29,6 +29,7 @@ class Server(threading.Thread):
         self.listener.listen(1)
         self.listener.settimeout(5)
         self.drop, self.tamper, self.wrong_session = drop, tamper, wrong_session
+        self.drop_eof = drop_eof
         self.offsets = []
         self.error = None
         self.complete = False
@@ -51,6 +52,8 @@ class Server(threading.Thread):
                         self.offsets.append(offset)
                         if offset == (1 << 64) - 1:
                             self.complete = True
+                            return
+                        if self.drop_eof and offset == len(DATA):
                             return
                         data = DATA[offset:offset + CHUNK]
                         encrypted = client.encrypt(data, hello, client.nonce(hello, seq, True), KEY)
@@ -94,6 +97,15 @@ class BackupClientTests(unittest.TestCase):
             self.assertEqual(server.offsets[:3], [0, CHUNK, CHUNK])
             self.assertEqual(state["sha256"], client.hashlib.sha256(DATA).hexdigest())
 
+    def test_lost_terminal_response_does_not_retry_completed_image_forever(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "disk.img"
+            server = Server(drop_eof=True)
+            state = self.run_download(server, path)
+            self.assertEqual(path.read_bytes(), DATA)
+            self.assertEqual(state["offset"], len(DATA))
+            self.assertNotEqual(state.get("complete"), True)
+
     def test_tampered_chunk_never_reaches_image(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "disk.img"
@@ -122,6 +134,33 @@ class BackupClientTests(unittest.TestCase):
             self.run_download(server, path)
             self.assertEqual(server.offsets[0], CHUNK)
             self.assertEqual(path.read_bytes(), DATA)
+
+    def test_completed_checkpoint_returns_without_reconnecting(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "disk.img"
+            path.write_bytes(DATA)
+            client.checkpoint(path.with_name("disk.img.resume.json"), {
+                "session": SESSION.hex(), "offset": len(DATA), "complete": True,
+                "sha256": client.hashlib.sha256(DATA).hexdigest(),
+                "geometry": [len(DATA), 256, CHUNK],
+            })
+            # A retired server must not turn a durable completed image into an
+            # endless reconnect loop.
+            state = client.download("127.0.0.1", 1, path, SESSION, KEY, retry_delay=0)
+            self.assertTrue(state["complete"])
+            self.assertEqual(path.read_bytes(), DATA)
+
+    def test_completed_checkpoint_requires_matching_geometry(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "disk.img"
+            path.write_bytes(DATA)
+            client.checkpoint(path.with_name("disk.img.resume.json"), {
+                "session": SESSION.hex(), "offset": len(DATA), "complete": True,
+                "sha256": client.hashlib.sha256(DATA).hexdigest(),
+                "geometry": [len(DATA) + 1, 256, CHUNK],
+            })
+            with self.assertRaisesRegex(client.ProtocolError, "completed checkpoint"):
+                client.download("127.0.0.1", 1, path, SESSION, KEY)
 
     def test_corrupt_saved_prefix_and_existing_untracked_file_refused(self):
         with tempfile.TemporaryDirectory() as directory:

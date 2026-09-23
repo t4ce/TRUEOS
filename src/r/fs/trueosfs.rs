@@ -30,6 +30,9 @@ type TrueosFsIndex = BTreeMap<Vec<u8>, IndexRef>;
 const FILE_RECORD_CACHE_CAP: usize = 64;
 const TRUEOSFS_CHECKPOINT_MIN_TAIL_BLOCKS: u64 = 4096;
 pub const TRUEOSFS_LIST_SOFT_CAP: usize = 1024;
+// Worst-case small records for `backups/`, the streamed image header/name,
+// its final manifest, and room for a metadata/checkpoint append.
+const BACKUP_FREE_SPACE_RESERVE_BLOCKS: u64 = 16;
 
 struct BuiltIndex {
     tree: Box<TrueosFsIndex>,
@@ -221,6 +224,7 @@ pub struct FileReadHandle {
     disk: block::DeviceHandle,
     params: trueos_fs::FsParams,
     record: trueos_fs::FileRecordRef,
+    mount_seq: u32,
 }
 
 impl FileReadHandle {
@@ -772,6 +776,36 @@ impl trueos_fs::BlockIo for KernelBlockIo {
             trueosfs_trace_now_ms().saturating_sub(start_ms)
         );
         out
+    }
+}
+
+/// Read adapter used while a `BackupLease` has fenced ordinary filesystem I/O.
+/// It intentionally has no write path: the lease is for an immutable backup
+/// source, including the interval between digest verification and restore.
+struct BackupLeaseIo<'a> {
+    lease: &'a block::BackupLease,
+}
+
+impl trueos_fs::BlockIo for BackupLeaseIo<'_> {
+    type Error = block::Error;
+
+    fn block_size(&self) -> usize {
+        self.lease.block_size() as usize
+    }
+    fn block_count(&self) -> u64 {
+        self.lease.block_count()
+    }
+    fn max_transfer_bytes(&self) -> usize {
+        usize::try_from(self.lease.max_transfer_bytes()).unwrap_or(usize::MAX)
+    }
+    async fn read_blocks(&self, lba: u64, blocks: usize) -> Result<Vec<u8>, block::Error> {
+        self.lease.read(lba, blocks).await
+    }
+    async fn write_blocks(&self, _lba: u64, _buf: &[u8]) -> Result<(), block::Error> {
+        Err(block::Error::NotSupported)
+    }
+    async fn flush(&self) -> Result<(), block::Error> {
+        Ok(())
     }
 }
 
@@ -2061,6 +2095,12 @@ pub async fn file_read_open_async(
         disk,
         params,
         record,
+        mount_seq: ROOTS
+            .lock()
+            .iter()
+            .find(|mount| mount.disk_id == disk.id())
+            .map(|mount| mount.seq)
+            .unwrap_or(0),
     }))
 }
 
@@ -2070,7 +2110,40 @@ pub async fn file_read_handle_range_async(
     offset: u64,
     out: &mut [u8],
 ) -> Result<Option<usize>, block::Error> {
+    let _activity = crate::disc::access::Activity::begin(handle.disk)?;
+    if !file_read_handle_is_current(handle) {
+        return Err(block::Error::NotReady);
+    }
     let io = KernelBlockIo::new(handle.disk);
+    trueos_fs::read_file_range_at(&io, &handle.params, &handle.record, offset, out)
+        .await
+        .map_err(map_engine_err)
+}
+
+/// Whether a read handle still refers to the same mounted filesystem epoch.
+/// A raw restore removes that epoch before touching the disk, so callers never
+/// use a pre-restore record against newly restored sectors.
+pub(crate) fn file_read_handle_is_current(handle: FileReadHandle) -> bool {
+    handle.mount_seq != 0
+        && ROOTS
+            .lock()
+            .iter()
+            .any(|mount| mount.disk_id == handle.disk.id() && mount.seq == handle.mount_seq)
+}
+
+/// Read through a previously opened handle while its whole disk is held by a
+/// `BackupLease`. This keeps a local backup image stable without reopening the
+/// ordinary activity gate.
+pub(crate) async fn file_read_handle_range_backup_lease_async(
+    handle: FileReadHandle,
+    lease: &block::BackupLease,
+    offset: u64,
+    out: &mut [u8],
+) -> Result<Option<usize>, block::Error> {
+    if handle.disk.id() != lease.disk_id() {
+        return Err(block::Error::InvalidParam);
+    }
+    let io = BackupLeaseIo { lease };
     trueos_fs::read_file_range_at(&io, &handle.params, &handle.record, offset, out)
         .await
         .map_err(map_engine_err)
@@ -3801,10 +3874,16 @@ pub(crate) async fn format_blank_at_async(
 
 /// Preserve the exact mount and caches while a block backup owns the device.
 /// Admission must already be fenced by a BackupLease before taking this guard.
-pub(crate) struct BackupMount { mount: Option<RootMount>, primary: bool }
+pub(crate) struct BackupMount {
+    mount: Option<RootMount>,
+    primary: bool,
+}
 pub(crate) fn suspend_backup_mount(id: block::DiscId) -> BackupMount {
     let mut roots = ROOTS.lock();
-    let mount = roots.iter().position(|m| m.disk_id == id).map(|i| roots.remove(i));
+    let mount = roots
+        .iter()
+        .position(|m| m.disk_id == id)
+        .map(|i| roots.remove(i));
     let primary = PRIMARY_ROOT_RAW.load(Ordering::Acquire) == id.raw();
     if primary {
         PRIMARY_ROOT_RAW.store(0, Ordering::Release);
@@ -3842,8 +3921,8 @@ impl BackupMount {
 /// A conservative payload estimate for one additional backup image.
 ///
 /// The streaming writer remains the authoritative admission check; this is a
-/// cheap UI preflight based on the current TRUEOSFS log head and reserves four
-/// blocks for the image record and its final manifest.
+/// cheap UI preflight based on the current TRUEOSFS log head and reserves
+/// space for directory creation, image/manifest records, and metadata.
 pub async fn available_backup_bytes_async(
     disk: block::DeviceHandle,
 ) -> Result<Option<u64>, block::Error> {
@@ -3862,8 +3941,14 @@ pub async fn available_backup_bytes_async(
     let Some(superblock) = trueos_fs::parse_superblock(&superblock) else {
         return Err(block::Error::Corrupted);
     };
-    let end = placement.data_end_lba_exclusive.unwrap_or(disk.block_count());
-    let used_end = placement.data_lba.saturating_add(superblock.log_head_rel_blocks);
-    let available_blocks = end.saturating_sub(used_end).saturating_sub(4);
+    let end = placement
+        .data_end_lba_exclusive
+        .unwrap_or(disk.block_count());
+    let used_end = placement
+        .data_lba
+        .saturating_add(superblock.log_head_rel_blocks);
+    let available_blocks = end
+        .saturating_sub(used_end)
+        .saturating_sub(BACKUP_FREE_SPACE_RESERVE_BLOCKS);
     Ok(Some(available_blocks.saturating_mul(block_size)))
 }
