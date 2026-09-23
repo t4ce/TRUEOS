@@ -11,6 +11,8 @@
 use core::arch::x86 as arch;
 #[cfg(target_arch = "x86_64")]
 use core::arch::x86_64 as arch;
+#[cfg(feature = "std")]
+use std::is_x86_feature_detected;
 
 #[derive(Clone)]
 pub struct State {
