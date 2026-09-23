@@ -3826,3 +3826,44 @@ impl Drop for BackupMount {
         }
     }
 }
+
+impl BackupMount {
+    /// Do not reinstate an old mount after raw sectors were overwritten.
+    /// The caller must queue a fresh probe only after releasing the exclusive
+    /// block lease, because probing itself is ordinary disk activity.
+    pub(crate) fn discard_after_raw_overwrite(&mut self) {
+        if let Some(mount) = self.mount.take() {
+            file_record_cache_invalidate_disk(mount.disk_id);
+        }
+        self.primary = false;
+    }
+}
+
+/// A conservative payload estimate for one additional backup image.
+///
+/// The streaming writer remains the authoritative admission check; this is a
+/// cheap UI preflight based on the current TRUEOSFS log head and reserves four
+/// blocks for the image record and its final manifest.
+pub async fn available_backup_bytes_async(
+    disk: block::DeviceHandle,
+) -> Result<Option<u64>, block::Error> {
+    let _activity = crate::disc::access::Activity::begin(disk)?;
+    if disk.parent().is_some() {
+        return Err(block::Error::InvalidParam);
+    }
+    let Some(placement) = locate_async(disk).await? else {
+        return Ok(None);
+    };
+    let block_size = disk.block_size() as u64;
+    if block_size == 0 {
+        return Err(block::Error::InvalidParam);
+    }
+    let superblock = disk.read_blocks(placement.super_lba, 1).await?;
+    let Some(superblock) = trueos_fs::parse_superblock(&superblock) else {
+        return Err(block::Error::Corrupted);
+    };
+    let end = placement.data_end_lba_exclusive.unwrap_or(disk.block_count());
+    let used_end = placement.data_lba.saturating_add(superblock.log_head_rel_blocks);
+    let available_blocks = end.saturating_sub(used_end).saturating_sub(4);
+    Ok(Some(available_blocks.saturating_mul(block_size)))
+}

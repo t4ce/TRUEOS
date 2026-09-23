@@ -837,6 +837,48 @@ pub(crate) struct BackupLease {
     disk: DeviceHandle,
     _exclusive: super::access::Exclusive,
 }
+
+/// Exclusive whole-disk ownership for a destructive image restore.
+///
+/// This deliberately bypasses the ordinary activity gate while retaining its
+/// exclusion: callers can write raw blocks only after every filesystem and
+/// partition user has drained.  It is crate-private so interactive callers
+/// must go through the backup engine, which verifies an image first.
+pub(crate) struct RawRestoreLease {
+    disk: DeviceHandle,
+    _exclusive: super::access::Exclusive,
+}
+
+impl RawRestoreLease {
+    pub(crate) fn try_acquire(disk: DeviceHandle) -> Result<Self> {
+        if !disk.supports_write() {
+            return Err(Error::NotSupported);
+        }
+        Ok(Self {
+            disk,
+            _exclusive: super::access::Exclusive::acquire(disk)?,
+        })
+    }
+
+    pub(crate) async fn write(&self, lba: u64, bytes: &[u8]) -> Result<()> {
+        let block_size = self.disk.block_size() as usize;
+        if block_size == 0 || !bytes.len().is_multiple_of(block_size) {
+            return Err(Error::InvalidParam);
+        }
+        self.disk
+            .validate_lba_range(lba, blocks_in_buffer(bytes.len(), self.disk.block_size())?)?;
+        if self.disk.max_transfer_bytes() > 0 && bytes.len() as u64 > self.disk.max_transfer_bytes() {
+            return Err(Error::InvalidParam);
+        }
+        let mut driver = self.disk.node.driver.lock().await;
+        (**driver).write_blocks(lba, bytes).await
+    }
+
+    pub(crate) async fn flush(&self) -> Result<()> {
+        let mut driver = self.disk.node.driver.lock().await;
+        (**driver).flush().await
+    }
+}
 impl BackupLease {
     pub(crate) fn try_acquire(disk: DeviceHandle) -> Result<Self> {
         Ok(Self { disk, _exclusive: super::access::Exclusive::acquire(disk)? })
