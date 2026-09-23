@@ -556,6 +556,7 @@ impl DeviceHandle {
     }
 
     pub async fn read_blocks(&self, lba: u64, blocks: usize) -> Result<Vec<u8>> {
+        let _activity = super::access::Activity::begin(*self)?;
         let bs = self.block_size() as u64;
         let blocks_u64 = blocks as u64;
         if bs == 0 {
@@ -573,6 +574,7 @@ impl DeviceHandle {
     }
 
     pub async fn read_blocks_into(&self, lba: u64, blocks: usize, dst: &mut [u8]) -> Result<()> {
+        let _activity = super::access::Activity::begin(*self)?;
         let bs = self.block_size() as u64;
         let blocks_u64 = blocks as u64;
         if bs == 0 {
@@ -594,6 +596,7 @@ impl DeviceHandle {
     }
 
     pub async fn write_blocks(&self, lba: u64, buf: &[u8]) -> Result<()> {
+        let _activity = super::access::Activity::begin(*self)?;
         if !self.supports_write() {
             return Err(Error::NotSupported);
         }
@@ -620,6 +623,7 @@ impl DeviceHandle {
     }
 
     pub async fn flush(&self) -> Result<()> {
+        let _activity = super::access::Activity::begin(*self)?;
         let mut guard = self.node.driver.lock().await;
         (**guard).flush().await
     }
@@ -825,4 +829,27 @@ pub fn devices() -> Vec<DeviceInfo> {
 pub fn device_handle(id: DiscId) -> Option<DeviceHandle> {
     let registry = REGISTRY.lock();
     registry.find(id).map(|node| node.handle())
+}
+
+/// Read-only ownership of a quiet whole disk. Ordinary and partition handles
+/// are fenced until this value is dropped. There is deliberately no write API.
+pub(crate) struct BackupLease {
+    disk: DeviceHandle,
+    _exclusive: super::access::Exclusive,
+}
+impl BackupLease {
+    pub(crate) fn try_acquire(disk: DeviceHandle) -> Result<Self> {
+        Ok(Self { disk, _exclusive: super::access::Exclusive::acquire(disk)? })
+    }
+    pub(crate) async fn flush(&self) -> Result<()> {
+        let mut driver = self.disk.node.driver.lock().await;
+        (**driver).flush().await
+    }
+    pub(crate) async fn read(&self, lba: u64, blocks: usize) -> Result<Vec<u8>> {
+        self.disk.validate_lba_range(lba, blocks as u64)?;
+        let bytes = (blocks as u64).checked_mul(self.disk.block_size() as u64).ok_or(Error::InvalidParam)?;
+        if bytes > self.disk.max_transfer_bytes() { return Err(Error::InvalidParam); }
+        let mut driver = self.disk.node.driver.lock().await;
+        (**driver).read_blocks(lba, blocks).await
+    }
 }

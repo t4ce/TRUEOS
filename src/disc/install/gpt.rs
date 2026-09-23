@@ -194,6 +194,7 @@ pub async fn write_gpt_layout_with_log(
     parts: &[GptPartitionSpec<'_>],
     log: &mut dyn FnMut(&str),
 ) -> Result<Vec<BlockRange>> {
+    let _activity = crate::disc::access::Activity::begin(device)?;
     if device.parent().is_some() {
         return Err(Error::InvalidParam);
     }
@@ -385,6 +386,7 @@ pub async fn write_trueos_bootable_gpt_layout_with_log(
     esp_size_mib: u64,
     log: &mut dyn FnMut(&str),
 ) -> Result<TrueosBootLayout> {
+    let _activity = crate::disc::access::Activity::begin(device)?;
     if device.parent().is_some() {
         return Err(Error::InvalidParam);
     }

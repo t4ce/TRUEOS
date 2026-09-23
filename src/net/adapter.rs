@@ -617,6 +617,8 @@ impl fmt::Debug for SharedNetPayload {
 
 #[derive(Clone, Debug)]
 pub enum NetCommand {
+    /// Retire all sockets for the submitting owner, including pending opens.
+    CloseAll,
     OpenTun {
         ipv4: [u8; 4],
         ipv4_prefix_len: u8,
@@ -4323,6 +4325,15 @@ impl NetService {
             }
             NetCommand::IcmpEchoV6 { target, seq, data } => {
                 self.send_icmp_echo_v6(owner, target, seq, data);
+            }
+            NetCommand::CloseAll => {
+                let handles: Vec<_> = self.records.iter().filter(|r| r.owner == owner).map(|r| r.handle).collect();
+                for handle in handles {
+                    if !self.close_loopback_tcp(handle) {
+                        self.remove_record(handle);
+                        let _ = push_event(owner, NetEvent::Closed { handle });
+                    }
+                }
             }
             NetCommand::Close { handle } => {
                 if self.remove_tun_record(handle) {

@@ -77,3 +77,5 @@ pub(crate) mod xhci;
 pub(crate) fn command_registry_json() -> AllocString {
     super::shell2_cmd_registry::command_registry_json()
 }
+
+pub(crate) mod backup;

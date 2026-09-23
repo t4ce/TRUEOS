@@ -10,6 +10,7 @@ pub async fn install_bootable_uefi_gpt_with_log(
     kernel_elf: &[u8],
     log: &mut dyn FnMut(&str),
 ) -> Result<(), block::Error> {
+    let _activity = crate::disc::access::Activity::begin(disk)?;
     if disk.parent().is_some() {
         return Err(block::Error::InvalidParam);
     }

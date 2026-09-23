@@ -152,6 +152,10 @@ fn dispatch_surf(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) 
     super::cmds::surf::try_parse(spawner, io, rest)
 }
 
+fn dispatch_backup(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::backup::try_parse(spawner, io, rest)
+}
+
 fn dispatch_os(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     super::cmds::os::try_parse(spawner, io, rest)
 }
@@ -332,6 +336,15 @@ const SHELL2_COMMAND_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         handler: dispatch_vgpu,
         tool_description: Some("Inspect and validate the mediated virtual GPU boundary."),
         tool_parameters_json: Some(TOOL_JSON_VGPU),
+    },
+    BuiltinShell2CmdEntry {
+        name: "backup",
+        mode: "tui",
+        color: Some(STATUS_PINK_RGB),
+        advertised: true,
+        handler: dispatch_backup,
+        tool_description: Some("Select a disk for an encrypted whole-disk backup; backup stop restores access."),
+        tool_parameters_json: None,
     },
     BuiltinShell2CmdEntry {
         name: "os",
@@ -587,7 +600,7 @@ mod tests {
         });
 
         assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
-        assert!(!command_registry_json().contains("\"name\":\"backup\""));
+        assert!(command_registry_json().contains("\"name\":\"backup\""));
     }
 
     #[test]

@@ -299,6 +299,7 @@ pub async fn format_and_populate_esp_fat32_with_log(
     image: EspImage<'_>,
     log: &mut dyn FnMut(&str),
 ) -> Result<(), block::Error> {
+    let _activity = crate::disc::access::Activity::begin(esp)?;
     if esp.parent().is_none() {
         // Must be a partition device, not the whole disk.
         return Err(block::Error::InvalidParam);
@@ -704,5 +705,6 @@ pub async fn format_and_populate_esp_with_log(
     image: EspImage<'_>,
     log: &mut dyn FnMut(&str),
 ) -> Result<(), block::Error> {
+    let _activity = crate::disc::access::Activity::begin(esp)?;
     format_and_populate_esp_fat32_with_log(esp, image, log).await
 }

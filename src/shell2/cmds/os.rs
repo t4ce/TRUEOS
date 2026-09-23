@@ -89,7 +89,7 @@ pub(crate) fn try_parse(
         );
         return ParseOutcome::Handled;
     }
-    if !rest.is_empty() {
+    if !rest.is_empty() && rest != "backup" {
         print_shell_line(io, "os: no arguments expected; use `os`");
         return ParseOutcome::Handled;
     }
@@ -97,6 +97,7 @@ pub(crate) fn try_parse(
     let disks = super::tlb_helper::collect_top_level_disk_choices();
     let mut app_args: Vec<String> = disks.iter().map(disk_argument).collect();
     app_args.extend(non_replicatable_vm_arguments());
+    if rest == "backup" { app_args.push(String::from("mode=backup")); }
     let generation = OS_INSTANCE_SEQUENCE.fetch_add(1, Ordering::AcqRel) + 1;
     let instance_name = alloc::format!("os-admin-{generation}");
     let target = matrix_target_for_backend(io);
@@ -219,6 +220,15 @@ fn dispatch_admin_action(spawner: &Spawner, target: &MatrixTarget, reason: &str)
     }
     if reason == "os:update:live" {
         super::update::submit_live_update_to_target(spawner, target.clone());
+        return;
+    }
+
+    if let Some(raw) = reason.strip_prefix("os:backup:") {
+        if let Some(disk) = super::tlb_helper::parse_disc_id_raw(raw).and_then(super::tlb_helper::select_top_level_disk) {
+            super::backup::submit(spawner, target.clone(), disk);
+        } else {
+            print_matrix_target_line(target, "backup: selected disk is no longer available");
+        }
         return;
     }
 

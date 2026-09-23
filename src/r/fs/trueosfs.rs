@@ -204,6 +204,7 @@ static INDEX_REQUESTED: AtomicBool = AtomicBool::new(false);
 static INDEX_QUEUE: Mutex<heapless::Vec<block::DeviceHandle, 8>> = Mutex::new(heapless::Vec::new());
 
 struct FileWriteStream {
+    _activity: crate::disc::access::Activity,
     _write_lease: write_gate::RootWriteLease,
     disk: block::DeviceHandle,
     path: String,
@@ -369,6 +370,7 @@ pub async fn index_service_task() {
 /// This avoids `block_on` and is safe to call from async contexts.
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub async fn format_blank_async(handle: block::DeviceHandle) -> Result<(), block::Error> {
+    let _activity = crate::disc::access::Activity::begin(handle)?;
     if handle.parent().is_some() {
         return Err(block::Error::InvalidParam);
     }
@@ -797,6 +799,7 @@ fn map_engine_err(e: trueos_fs::FsError<block::Error>) -> block::Error {
 pub async fn mount_root_async(
     disk: block::DeviceHandle,
 ) -> Result<Option<block::DiscId>, block::Error> {
+    let _activity = crate::disc::access::Activity::begin(disk)?;
     if disk.parent().is_some() {
         return Err(block::Error::InvalidParam);
     }
@@ -853,6 +856,7 @@ pub async fn mount_root_async(
 pub async fn remount_root_async(
     disk: block::DeviceHandle,
 ) -> Result<Option<block::DiscId>, block::Error> {
+    let _activity = crate::disc::access::Activity::begin(disk)?;
     if disk.parent().is_some() {
         return Err(block::Error::InvalidParam);
     }
@@ -960,6 +964,7 @@ fn root_placement(disk_id: block::DiscId) -> Option<TrueosFsPlacement> {
 async fn placement_for_io_async(
     disk: block::DeviceHandle,
 ) -> Result<Option<TrueosFsPlacement>, block::Error> {
+    let _activity = crate::disc::access::Activity::begin(disk)?;
     if let Some(placement) = root_placement(disk.id()) {
         return Ok(Some(placement));
     }
@@ -1192,6 +1197,7 @@ async fn write_index_checkpoint_async(
     placement: &TrueosFsPlacement,
     replay_from_rel_blocks: u64,
 ) -> Result<bool, block::Error> {
+    let _activity = crate::disc::access::Activity::begin(disk)?;
     let _write_lease = write_gate::RootWriteLease::acquire(disk.id()).await;
     let disk_id = disk.id();
     let Some(entries) = snapshot_index_for_checkpoint(disk_id) else {
@@ -1273,6 +1279,7 @@ pub async fn file_in_async(
     name: &str,
     bytes: &[u8],
 ) -> Result<bool, block::Error> {
+    let _activity = crate::disc::access::Activity::begin(disk)?;
     let record_key = file_info_async(disk, name)
         .await?
         .map(|info| info.record_key)
@@ -1286,6 +1293,7 @@ pub async fn file_in_typed_async(
     bytes: &[u8],
     content_type: ContentTypeId,
 ) -> Result<bool, block::Error> {
+    let _activity = crate::disc::access::Activity::begin(disk)?;
     file_in_with_metadata_async(
         disk,
         name,
@@ -1307,6 +1315,7 @@ pub async fn write_file_typed_async(
     bytes: &[u8],
     content_type: ContentTypeId,
 ) -> Result<bool, block::Error> {
+    let _activity = crate::disc::access::Activity::begin(disk)?;
     file_in_typed_async(disk, name, bytes, content_type).await
 }
 
@@ -1318,6 +1327,7 @@ async fn file_in_with_metadata_async(
     record_key: RecordKey,
     legacy_blob: bool,
 ) -> Result<bool, block::Error> {
+    let _activity = crate::disc::access::Activity::begin(disk)?;
     if disk.parent().is_some() {
         return Err(block::Error::InvalidParam);
     }
@@ -1390,6 +1400,7 @@ pub async fn file_in_with_key_async(
     bytes: &[u8],
     record_key: RecordKey,
 ) -> Result<bool, block::Error> {
+    let _activity = crate::disc::access::Activity::begin(disk)?;
     file_in_with_metadata_async(disk, name, bytes, ContentTypeId::BLOB, record_key, true).await
 }
 
@@ -1400,6 +1411,7 @@ pub async fn dir_create_all_async(
     disk: block::DeviceHandle,
     path: &str,
 ) -> Result<bool, block::Error> {
+    let _activity = crate::disc::access::Activity::begin(disk)?;
     let mut prefix = String::new();
     for part in path.split('/').filter(|part| !part.is_empty()) {
         if !prefix.is_empty() {
@@ -1429,6 +1441,7 @@ pub async fn file_write_begin_async(
     name: &str,
     total_len: u64,
 ) -> Result<Option<u32>, block::Error> {
+    let _activity = crate::disc::access::Activity::begin(disk)?;
     let record_key = file_info_async(disk, name)
         .await?
         .map(|info| info.record_key)
@@ -1450,6 +1463,7 @@ pub async fn file_write_begin_typed_async(
     total_len: u64,
     content_type: ContentTypeId,
 ) -> Result<Option<u32>, block::Error> {
+    let _activity = crate::disc::access::Activity::begin(disk)?;
     let record_key = file_info_async(disk, name)
         .await?
         .map(|i| i.record_key)
@@ -1465,6 +1479,7 @@ pub async fn file_write_begin_with_key_async(
     total_len: u64,
     record_key: RecordKey,
 ) -> Result<Option<u32>, block::Error> {
+    let _activity = crate::disc::access::Activity::begin(disk)?;
     file_write_begin_with_metadata_async(
         disk,
         name,
@@ -1484,6 +1499,7 @@ async fn file_write_begin_with_metadata_async(
     record_key: RecordKey,
     legacy_blob: bool,
 ) -> Result<Option<u32>, block::Error> {
+    let _activity = crate::disc::access::Activity::begin(disk)?;
     crate::log!(
         "trueosfs: file-write-begin stage=start disk={} path={} bytes={}\n",
         disk.id().raw(),
@@ -1559,6 +1575,7 @@ async fn file_write_begin_with_metadata_async(
 
     let handle = FILE_WRITE_STREAM_SEQ.fetch_add(1, Ordering::Relaxed).max(1);
     let entry = FileWriteStream {
+        _activity: crate::disc::access::Activity::begin(disk)?,
         _write_lease,
         disk,
         path: name.into(),
@@ -1651,6 +1668,7 @@ pub async fn file_write_all_async(
     name: &str,
     bytes: &[u8],
 ) -> Result<bool, block::Error> {
+    let _activity = crate::disc::access::Activity::begin(disk)?;
     let Some(handle) = file_write_begin_async(disk, name, bytes.len() as u64).await? else {
         return Ok(false);
     };
@@ -1673,6 +1691,7 @@ async fn lookup_node_via_index_async(
     placement: &TrueosFsPlacement,
     name: &str,
 ) -> Result<Option<trueos_fs::NodeRecordRef>, block::Error> {
+    let _activity = crate::disc::access::Activity::begin(disk)?;
     ensure_index_async(disk, placement).await?;
     let disk_id = disk.id();
 
@@ -1712,6 +1731,7 @@ async fn lookup_via_index_async(
     placement: &TrueosFsPlacement,
     name: &str,
 ) -> Result<Option<trueos_fs::FileRecordRef>, block::Error> {
+    let _activity = crate::disc::access::Activity::begin(disk)?;
     Ok(lookup_node_via_index_async(disk, placement, name)
         .await?
         .and_then(|record| {
@@ -1732,6 +1752,7 @@ pub async fn file_out_async(
     disk: block::DeviceHandle,
     name: &str,
 ) -> Result<Option<Vec<u8>>, block::Error> {
+    let _activity = crate::disc::access::Activity::begin(disk)?;
     if disk.parent().is_some() {
         return Err(block::Error::InvalidParam);
     }
@@ -1779,6 +1800,7 @@ pub async fn file_out_if_index_ready_async(
     disk: block::DeviceHandle,
     name: &str,
 ) -> Result<Option<Vec<u8>>, block::Error> {
+    let _activity = crate::disc::access::Activity::begin(disk)?;
     if disk.parent().is_some() {
         return Err(block::Error::InvalidParam);
     }
@@ -1855,6 +1877,7 @@ pub async fn node_info_async(
     disk: block::DeviceHandle,
     name: &str,
 ) -> Result<Option<NodeInfo>, block::Error> {
+    let _activity = crate::disc::access::Activity::begin(disk)?;
     if disk.parent().is_some() {
         return Err(block::Error::InvalidParam);
     }
@@ -1887,10 +1910,12 @@ pub async fn typed_metadata_async(
     disk: block::DeviceHandle,
     name: &str,
 ) -> Result<Option<NodeInfo>, block::Error> {
+    let _activity = crate::disc::access::Activity::begin(disk)?;
     node_info_async(disk, name).await
 }
 
 pub async fn dir_exists_async(disk: block::DeviceHandle, path: &str) -> Result<bool, block::Error> {
+    let _activity = crate::disc::access::Activity::begin(disk)?;
     Ok(node_info_async(disk, path)
         .await?
         .is_some_and(|info| info.kind == NodeKind::Directory))
@@ -1900,6 +1925,7 @@ pub async fn create_directory_async(
     disk: block::DeviceHandle,
     path: &str,
 ) -> Result<bool, block::Error> {
+    let _activity = crate::disc::access::Activity::begin(disk)?;
     if path.is_empty() || path == "/" {
         return Ok(true);
     }
@@ -1944,6 +1970,7 @@ async fn prepare_file_target_async(
     disk: block::DeviceHandle,
     path: &str,
 ) -> Result<(), block::Error> {
+    let _activity = crate::disc::access::Activity::begin(disk)?;
     if let Some((parent, _)) = path.rsplit_once('/')
         && !parent.is_empty()
         && !dir_create_all_async(disk, parent).await?
@@ -1963,6 +1990,7 @@ pub async fn file_info_async(
     disk: block::DeviceHandle,
     name: &str,
 ) -> Result<Option<FileInfo>, block::Error> {
+    let _activity = crate::disc::access::Activity::begin(disk)?;
     if disk.parent().is_some() {
         return Err(block::Error::InvalidParam);
     }
@@ -2000,6 +2028,7 @@ pub async fn file_read_open_async(
     disk: block::DeviceHandle,
     name: &str,
 ) -> Result<Option<FileReadHandle>, block::Error> {
+    let _activity = crate::disc::access::Activity::begin(disk)?;
     if disk.parent().is_some() {
         return Err(block::Error::InvalidParam);
     }
@@ -2054,6 +2083,7 @@ pub async fn file_read_range_async(
     offset: u64,
     out: &mut [u8],
 ) -> Result<Option<usize>, block::Error> {
+    let _activity = crate::disc::access::Activity::begin(disk)?;
     if disk.parent().is_some() {
         return Err(block::Error::InvalidParam);
     }
@@ -2097,6 +2127,7 @@ pub async fn file_delete_async(
     disk: block::DeviceHandle,
     name: &str,
 ) -> Result<bool, block::Error> {
+    let _activity = crate::disc::access::Activity::begin(disk)?;
     if disk.parent().is_some() {
         return Err(block::Error::InvalidParam);
     }
@@ -2145,6 +2176,7 @@ pub async fn remove_recursive_async(
     disk: block::DeviceHandle,
     name: &str,
 ) -> Result<bool, block::Error> {
+    let _activity = crate::disc::access::Activity::begin(disk)?;
     if name.is_empty() || name == "/" || disk.parent().is_some() {
         return Err(block::Error::InvalidParam);
     }
@@ -2196,6 +2228,7 @@ pub async fn file_rename_async(
     src: &str,
     dst: &str,
 ) -> Result<bool, block::Error> {
+    let _activity = crate::disc::access::Activity::begin(disk)?;
     if src == dst {
         return Ok(true);
     }
@@ -2257,6 +2290,7 @@ async fn lookup_file_record_async(
     disk: block::DeviceHandle,
     name: &str,
 ) -> Result<Option<trueos_fs::FileRecordRef>, block::Error> {
+    let _activity = crate::disc::access::Activity::begin(disk)?;
     let Some(placement) = placement_for_io_async(disk).await? else {
         return Ok(None);
     };
@@ -2327,6 +2361,7 @@ pub async fn dir_rename_async(
     src_dir: &str,
     dst_dir: &str,
 ) -> Result<bool, block::Error> {
+    let _activity = crate::disc::access::Activity::begin(disk)?;
     if disk.parent().is_some() {
         return Err(block::Error::InvalidParam);
     }
@@ -2390,6 +2425,7 @@ pub async fn list_dir_async(
     disk: block::DeviceHandle,
     dir: &str,
 ) -> Result<Option<DirListing>, block::Error> {
+    let _activity = crate::disc::access::Activity::begin(disk)?;
     if disk.parent().is_some() {
         return Err(block::Error::InvalidParam);
     }
@@ -2499,6 +2535,7 @@ pub async fn list_dir_typed_async(
     disk: block::DeviceHandle,
     dir: &str,
 ) -> Result<Option<DirListing>, block::Error> {
+    let _activity = crate::disc::access::Activity::begin(disk)?;
     list_dir_async(disk, dir).await
 }
 
@@ -2523,6 +2560,7 @@ async fn ensure_index_async(
     disk: block::DeviceHandle,
     placement: &TrueosFsPlacement,
 ) -> Result<(), block::Error> {
+    let _activity = crate::disc::access::Activity::begin(disk)?;
     let disk_id = disk.id();
     let start_cache_gen;
     let build_started_ms = trueosfs_trace_now_ms();
@@ -2833,6 +2871,7 @@ pub async fn json_all_async(
     disk: block::DeviceHandle,
     max_entries: usize,
 ) -> Result<Option<String>, block::Error> {
+    let _activity = crate::disc::access::Activity::begin(disk)?;
     use alloc::collections::{BTreeMap, BTreeSet};
     use alloc::vec::Vec;
 
@@ -2995,6 +3034,7 @@ pub async fn file_append_async(
     name: &str,
     append_bytes: &[u8],
 ) -> Result<bool, block::Error> {
+    let _activity = crate::disc::access::Activity::begin(disk)?;
     if disk.parent().is_some() {
         return Err(block::Error::InvalidParam);
     }
@@ -3075,6 +3115,7 @@ pub async fn file_append_typed_async(
     append_bytes: &[u8],
     content_type: ContentTypeId,
 ) -> Result<bool, block::Error> {
+    let _activity = crate::disc::access::Activity::begin(disk)?;
     if content_type == ContentTypeId::NONE {
         record_type_reject(ContentIdentityRejectReason::TypeRequired);
         return Err(block::Error::InvalidParam);
@@ -3164,6 +3205,7 @@ pub(super) struct IndexNode {
 pub(super) async fn index_path_snapshot_async(
     disk: block::DeviceHandle,
 ) -> Result<Option<Vec<IndexNode>>, block::Error> {
+    let _activity = crate::disc::access::Activity::begin(disk)?;
     if disk.parent().is_some() {
         return Err(block::Error::InvalidParam);
     }
@@ -3206,6 +3248,7 @@ pub(crate) async fn raw_log_scan_async(
     disk: block::DeviceHandle,
     max_records: usize,
 ) -> Result<Option<trueos_fs::RawLogScan>, block::Error> {
+    let _activity = crate::disc::access::Activity::begin(disk)?;
     if disk.parent().is_some() {
         return Err(block::Error::InvalidParam);
     }
@@ -3383,6 +3426,7 @@ async fn read_blocks_aligned_async(
     lba: u64,
     blocks: usize,
 ) -> Result<Vec<u8>, block::Error> {
+    let _activity = crate::disc::access::Activity::begin(handle)?;
     handle.read_blocks(lba, blocks).await
 }
 
@@ -3392,6 +3436,7 @@ async fn read_blocks_aligned_retry_async(
     blocks: usize,
     attempts: u8,
 ) -> Result<Vec<u8>, block::Error> {
+    let _activity = crate::disc::access::Activity::begin(handle)?;
     let attempts = if is_nvme_handle(handle) {
         // On a wedged NVMe IO queue, repeated retries just enqueue more doomed
         // commands and amplify timeout storms. Fail fast for probe-time reads.
@@ -3434,6 +3479,7 @@ async fn read_blocks_aligned_retry_async(
 pub async fn locate_async(
     handle: block::DeviceHandle,
 ) -> Result<Option<TrueosFsPlacement>, block::Error> {
+    let _activity = crate::disc::access::Activity::begin(handle)?;
     if handle.parent().is_some() {
         let bs0 = read_blocks_aligned_retry_async(handle, 0, 1, 3).await?;
         return match probe_trueos_superblock(&bs0) {
@@ -3561,6 +3607,7 @@ pub async fn locate_async(
 /// This avoids `block_on` so it can be used from async contexts (e.g. the shell task)
 /// without starving other services.
 pub async fn format_blank_force_async(handle: block::DeviceHandle) -> Result<(), block::Error> {
+    let _activity = crate::disc::access::Activity::begin(handle)?;
     if handle.parent().is_some() {
         return Err(block::Error::InvalidParam);
     }
@@ -3639,6 +3686,7 @@ pub async fn validate_private_medium_async(
     handle: block::DeviceHandle,
     expect_super_lba: u64,
 ) -> Result<TrueosFsPlacement, block::Error> {
+    let _activity = crate::disc::access::Activity::begin(handle)?;
     let Some(placement) = locate_async(handle).await? else {
         return Err(block::Error::Corrupted);
     };
@@ -3655,6 +3703,7 @@ pub async fn validate_public_medium_async(
     handle: block::DeviceHandle,
     expect_super_lba: u64,
 ) -> Result<TrueosFsPlacement, block::Error> {
+    let _activity = crate::disc::access::Activity::begin(handle)?;
     let Some(placement) = locate_async(handle).await? else {
         return Err(block::Error::Corrupted);
     };
@@ -3691,6 +3740,7 @@ pub(crate) async fn format_blank_at_async(
     handle: block::DeviceHandle,
     super_lba: u64,
 ) -> Result<(), block::Error> {
+    let _activity = crate::disc::access::Activity::begin(handle)?;
     let _write_lease = write_gate::RootWriteLease::acquire(handle.id()).await;
     let (info, bs, max_blocks, align) =
         validate_blank_format_args(handle, super_lba, handle.parent().is_some())?;
@@ -3747,4 +3797,32 @@ pub(crate) async fn format_blank_at_async(
     }
 
     Ok(())
+}
+
+/// Preserve the exact mount and caches while a block backup owns the device.
+/// Admission must already be fenced by a BackupLease before taking this guard.
+pub(crate) struct BackupMount { mount: Option<RootMount>, primary: bool }
+pub(crate) fn suspend_backup_mount(id: block::DiscId) -> BackupMount {
+    let mut roots = ROOTS.lock();
+    let mount = roots.iter().position(|m| m.disk_id == id).map(|i| roots.remove(i));
+    let primary = PRIMARY_ROOT_RAW.load(Ordering::Acquire) == id.raw();
+    if primary {
+        PRIMARY_ROOT_RAW.store(0, Ordering::Release);
+        PRIMARY_ROOT_HANDLE_RAW.store(0, Ordering::Release);
+    }
+    BackupMount { mount, primary }
+}
+impl Drop for BackupMount {
+    fn drop(&mut self) {
+        if let Some(mount) = self.mount.take() {
+            let id = mount.disk_id;
+            ROOTS.lock().push(mount);
+            if self.primary {
+                PRIMARY_ROOT_RAW.store(id.raw(), Ordering::Release);
+                if let Some(disk) = block::device_handle(id) {
+                    PRIMARY_ROOT_HANDLE_RAW.store(disk.into_raw(), Ordering::Release);
+                }
+            }
+        }
+    }
 }
