@@ -34,30 +34,6 @@ impl VidSource {
             Self::Online => "fixed-online-avc1-mp4",
         }
     }
-
-    const fn next_stage(&self) -> &'static str {
-        match self {
-            Self::TrueosFs(_) => "trueosfs-format-detect-demux-decode",
-            Self::Online => "fixed-mp4-download-demux-decode",
-        }
-    }
-
-    fn desired_frame_extent(&self) -> (u32, u32) {
-        match self {
-            Self::TrueosFs(path)
-                if path.as_str()
-                    == crate::intel::media::hw_vid::UI4_FRAMED_VIDEO_FS_DEFAULT_PATH =>
-            {
-                (
-                    crate::intel::media::hw_vid::UI4_FRAMED_VIDEO_FS_NATIVE_WIDTH,
-                    crate::intel::media::hw_vid::UI4_FRAMED_VIDEO_FS_NATIVE_HEIGHT,
-                )
-            }
-            Self::TrueosFs(_) | Self::Online => {
-                (crate::ui4::DEFAULT_FRAME_WIDTH, crate::ui4::DEFAULT_FRAME_HEIGHT)
-            }
-        }
-    }
 }
 
 struct VidUi4Session {
@@ -66,9 +42,8 @@ struct VidUi4Session {
 }
 
 impl VidUi4Session {
-    fn begin(width: u32, height: u32) -> Option<Self> {
-        crate::ui4::begin_shell_decoded_video_player(width, height)
-            .map(|id| Self { id, active: true })
+    fn reserve() -> Option<Self> {
+        crate::ui4::reserve_shell_decoded_video_player().map(|id| Self { id, active: true })
     }
 
     fn close(mut self) -> bool {
@@ -243,12 +218,8 @@ pub(crate) fn try_parse(
             return ParseOutcome::Handled;
         }
     };
-    let (width, height) = command.source.desired_frame_extent();
-    let Some(ui4_session) = VidUi4Session::begin(width, height) else {
-        print_shell_line(
-            io,
-            "vid: all 3 playback slots are occupied or draining, or UI4 allocation failed",
-        );
+    let Some(ui4_session) = VidUi4Session::reserve() else {
+        print_shell_line(io, "vid: all 3 playback slots are occupied or draining");
         return ParseOutcome::Handled;
     };
     let queued = alloc::format!(
@@ -283,10 +254,41 @@ fn usage(io: &'static dyn ShellBackend2) {
 
 #[trueos_executor::task(pool_size = 3)]
 async fn vid_task(target: MatrixTarget, command: VidCommand, ui4_session: VidUi4Session) {
-    let (frame_width, frame_height) = ui4_session
-        .id
-        .frame_extent()
-        .unwrap_or_else(|| command.source.desired_frame_extent());
+    let mut prepared_fs = match &command.source {
+        VidSource::TrueosFs(path) => match crate::intel::media::hw_vid::prepare_trueosfs_ui4_video(
+            ui4_session.id,
+            path.as_str(),
+        )
+        .await
+        {
+            Ok(prepared) => Some(prepared),
+            Err(err) => {
+                print_matrix_target_line(&target, alloc::format!("vid: {err}").as_str());
+                let _ = ui4_session.close();
+                set_matrix_target_active(&target, false);
+                return;
+            }
+        },
+        VidSource::Online => None,
+    };
+    let (frame_width, frame_height) = prepared_fs
+        .as_ref()
+        .map(|prepared| prepared.visible_extent())
+        .unwrap_or((crate::ui4::DEFAULT_FRAME_WIDTH, crate::ui4::DEFAULT_FRAME_HEIGHT));
+    if !crate::ui4::open_shell_decoded_video_player(ui4_session.id, frame_width, frame_height) {
+        print_matrix_target_line(
+            &target,
+            alloc::format!(
+                "vid: UI4 frame allocation failed for media resolution {}x{}",
+                frame_width,
+                frame_height,
+            )
+            .as_str(),
+        );
+        let _ = ui4_session.close();
+        set_matrix_target_active(&target, false);
+        return;
+    }
     print_matrix_target_line(
         &target,
         alloc::format!(
@@ -301,13 +303,12 @@ async fn vid_task(target: MatrixTarget, command: VidCommand, ui4_session: VidUi4
     );
     crate::log_info!(
         target: "ui4";
-        "shell2/vid: stage=ui4-frame-window-ready source={} requested={}x{} pixel_budget={} softcap_pixels={} next={} frame-allocation=broker-init placeholder_present=0\n",
+        "shell2/vid: stage=ui4-frame-window-ready source={} media_visible={}x{} pixel_budget={} softcap_pixels={} next=vdbox-decode frame-allocation=broker-init placeholder_present=0\n",
         command.source.name(),
         frame_width,
         frame_height,
         u64::from(frame_width) * u64::from(frame_height),
         crate::ui4::VIDEO_FRAME_MAX_PIXELS,
-        command.source.next_stage(),
     );
 
     let mut lap = 0usize;
@@ -318,11 +319,28 @@ async fn vid_task(target: MatrixTarget, command: VidCommand, ui4_session: VidUi4
         lap = lap.saturating_add(1);
         let result = match &command.source {
             VidSource::TrueosFs(path) => {
-                crate::intel::media::hw_vid::run_trueosfs_ui4_framed_video_playback(
-                    ui4_session.id,
-                    path.as_str(),
-                )
-                .await
+                let prepared = match prepared_fs.take() {
+                    Some(prepared) => Ok(prepared),
+                    None => {
+                        crate::intel::media::hw_vid::prepare_trueosfs_ui4_video(
+                            ui4_session.id,
+                            path.as_str(),
+                        )
+                        .await
+                    }
+                };
+                match prepared {
+                    Ok(prepared) if prepared.visible_extent() == (frame_width, frame_height) => {
+                        crate::intel::media::hw_vid::run_prepared_trueosfs_ui4_video(
+                            ui4_session.id,
+                            path.as_str(),
+                            prepared,
+                        )
+                        .await
+                    }
+                    Ok(_) => Err("TRUEOSFS video resolution changed between loop laps"),
+                    Err(err) => Err(err),
+                }
             }
             VidSource::Online => {
                 crate::intel::media::hw_vid::run_online_ui4_framed_video_playback(ui4_session.id)

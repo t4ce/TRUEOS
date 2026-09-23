@@ -125,8 +125,8 @@ pub(crate) use start_button::{request_start_button_reveal, ui4_start_button_serv
 pub(crate) use video_frame::{
     DecodedNv12Source, DecodedVideoConversionProbeReport, DecodedVideoConversionReport,
     VIDEO_RGBA_BUFFER_COUNT, VideoPlaybackSession, begin_decoded_nv12_conversion_batch,
-    begin_shell_decoded_video_player, begin_texture_video_player,
-    enqueue_decoded_nv12_stream_frame, request_video_playback_stop,
+    begin_texture_video_player, enqueue_decoded_nv12_stream_frame, open_shell_decoded_video_player,
+    request_video_playback_stop, reserve_shell_decoded_video_player,
     ui4_video_conversion_service_task, video_playback_status, wait_decoded_nv12_conversion_idle,
 };
 
@@ -235,44 +235,6 @@ pub(crate) const RGB_OVERLAY_PLANE_SLOT_3: usize = 3;
 /// kernel color picker; neither participates in an application composition
 /// surface.
 pub(crate) const INTERACTION_OVERLAY_PLANE_SLOT: usize = 4;
-
-/// Keep a requested application frame inside the active display output. A
-/// video frame smaller than the output keeps its requested extent; only an
-/// output edge that is smaller than the request reduces that edge.
-pub(crate) const fn clamp_video_frame_extent(
-    requested_width: u32,
-    requested_height: u32,
-    output_width: u32,
-    output_height: u32,
-) -> (u32, u32) {
-    (
-        if requested_width < output_width {
-            requested_width
-        } else {
-            output_width
-        },
-        if requested_height < output_height {
-            requested_height
-        } else {
-            output_height
-        },
-    )
-}
-
-/// Resolve a shell video frame against the current UI4 output geometry.
-/// `output_dimensions` is the shared native/emulator display helper, so the
-/// frame contract does not assume a particular 1440p panel.
-pub(crate) fn video_frame_extent_for_output(
-    requested_width: u32,
-    requested_height: u32,
-) -> (u32, u32) {
-    match output_dimensions() {
-        Some((output_width, output_height)) if output_width != 0 && output_height != 0 => {
-            clamp_video_frame_extent(requested_width, requested_height, output_width, output_height)
-        }
-        _ => (requested_width, requested_height),
-    }
-}
 // Compatibility aliases for the parked linked-NV12 display-plane experiment.
 // Normal UI4 video is converted by the GuC into an ordinary streaming RGBA
 // Frame on slot 1; decoder planes are never assigned to either of these roles.
@@ -783,16 +745,6 @@ const _: () = {
 #[cfg(test)]
 mod live_resource_and_output_capability_tests {
     use super::*;
-
-    #[test]
-    fn video_frame_extent_keeps_requested_size_when_output_is_larger() {
-        assert_eq!(clamp_video_frame_extent(768, 512, 2_560, 1_440), (768, 512));
-    }
-
-    #[test]
-    fn video_frame_extent_clamps_each_edge_to_small_output() {
-        assert_eq!(clamp_video_frame_extent(768, 512, 640, 360), (640, 360));
-    }
 
     #[test]
     fn live_resource_usage_distinguishes_display_idle_from_fully_retired() {

@@ -14,8 +14,6 @@ const H264_MEDIA_SESSION_WAIT_MS: u64 = 5_000;
 const H264_MEDIA_SESSION_RETRY_MS: u64 = 1;
 const H264_UI4_PRESENT_ERROR: i32 = -34;
 pub(crate) const UI4_FRAMED_VIDEO_FS_DEFAULT_PATH: &str = "x31_head_movie.annexb.h264";
-pub(crate) const UI4_FRAMED_VIDEO_FS_NATIVE_WIDTH: u32 = 1_920;
-pub(crate) const UI4_FRAMED_VIDEO_FS_NATIVE_HEIGHT: u32 = 1_080;
 const UI4_FRAMED_VIDEO_FPS: u16 = 60;
 const H264_ONLINE_MEDIA_URL: &str = "https://docs.evostream.com/sample_content/assets/bun33s.mp4";
 
@@ -356,15 +354,27 @@ async fn h264_wait_for_fs_index(
     }
 }
 
-/// Load an H.264 asset from the published TRUEOSFS primary root and run it
-/// through the VDBOX decoder and native UI4 double-Frame path.
-///
-/// Raw Annex-B streams pass through unchanged. ISO BMFF/MP4 assets reuse the
-/// online path's avc1/avc3 demuxer and join the same Annex-B decoder ingress.
-pub(crate) async fn run_trueosfs_ui4_framed_video_playback(
+pub(crate) struct PreparedTrueosFsVideo {
+    annexb: Vec<u8>,
+    sample_timing: Vec<H264SampleTiming>,
+    decode_source: &'static str,
+    extent: crate::intel::media::h264_cmd::AvcStreamExtent,
+}
+
+impl PreparedTrueosFsVideo {
+    pub(crate) const fn visible_extent(&self) -> (u32, u32) {
+        (self.extent.visible_width, self.extent.visible_height)
+    }
+}
+
+/// Load and inspect an H.264 asset from the published TRUEOSFS primary root.
+/// Raw Annex-B streams pass through unchanged; MP4 assets are demuxed first.
+/// The returned visible extent comes from the same SPS parser used to build
+/// VDBOX commands.
+pub(crate) async fn prepare_trueosfs_ui4_video(
     session: crate::ui4::VideoPlaybackSession,
     path: &str,
-) -> Result<H264PlaybackReport, &'static str> {
+) -> Result<PreparedTrueosFsVideo, &'static str> {
     crate::log_info!(target: "ui4";
         "shell2/vid: stage=trueosfs-entry source=trueosfs-h264-auto asset={} next=media-engine-check\n",
         path,
@@ -443,14 +453,35 @@ pub(crate) async fn run_trueosfs_ui4_framed_video_playback(
         return Err("playback cancelled");
     }
     let (annexb, sample_timing, decode_source, container) = h264_prepare_trueosfs_asset(asset)?;
+    let extent = crate::intel::media::h264_cmd::parse_annexb_stream_extent(annexb.as_slice())
+        .map_err(|_| "TRUEOSFS H.264 SPS dimensions unavailable")?;
     crate::log_info!(target: "ui4";
-        "shell2/vid: stage=trueosfs-format-selected asset={} container={} codec=avc annexb_bytes={} decode_source={} next=vdbox-decode\n",
+        "shell2/vid: stage=trueosfs-format-selected asset={} container={} codec=avc annexb_bytes={} decode_source={} coded={}x{} visible={}x{} next=ui4-frame-open\n",
         path,
         container,
         annexb.len(),
         decode_source,
+        extent.coded_width,
+        extent.coded_height,
+        extent.visible_width,
+        extent.visible_height,
     );
 
+    Ok(PreparedTrueosFsVideo {
+        annexb,
+        sample_timing,
+        decode_source,
+        extent,
+    })
+}
+
+/// Run a prepared TRUEOSFS stream through VDBOX and its already-sized UI4
+/// Frame. Preparation is separate so the frame can use SPS-visible geometry.
+pub(crate) async fn run_prepared_trueosfs_ui4_video(
+    session: crate::ui4::VideoPlaybackSession,
+    path: &str,
+    prepared: PreparedTrueosFsVideo,
+) -> Result<H264PlaybackReport, &'static str> {
     let options = H264PlaybackOptions::new(UI4_FRAMED_VIDEO_FPS, false, true);
     let media_session = h264_reserve_decode_session(session).await?;
     let media_session_generation = media_session.generation();
@@ -458,9 +489,9 @@ pub(crate) async fn run_trueosfs_ui4_framed_video_playback(
     let _diagnostics = H264PlaybackGuard::begin();
     let report = h264_i_p_playback_probe_annexb_bytes(
         session,
-        annexb,
-        sample_timing,
-        decode_source,
+        prepared.annexb,
+        prepared.sample_timing,
+        prepared.decode_source,
         path,
         options,
         media_session_generation,

@@ -798,13 +798,6 @@ impl VideoPlaybackSession {
             || state.cancelled.load(Ordering::Acquire)
             || !state.occupied.load(Ordering::Acquire)
     }
-    pub(crate) fn frame_extent(self) -> Option<(u32, u32)> {
-        self.state()
-            .stream
-            .lock()
-            .as_ref()
-            .map(|stream| (stream.frame_width, stream.frame_height))
-    }
     pub(crate) async fn wait_until_playing(self) -> bool {
         loop {
             poll_decoded_video_player_input();
@@ -850,7 +843,9 @@ pub(crate) fn request_video_playback_stop(slot: usize) -> bool {
     let Some(state) = VIDEO_SESSIONS.get(slot) else {
         return false;
     };
-    if state.occupied.load(Ordering::Acquire) && state.texture_target.load(Ordering::Acquire) != 0 {
+    if state.occupied.load(Ordering::Acquire)
+        && (state.texture_target.load(Ordering::Acquire) != 0 || state.stream.lock().is_none())
+    {
         state.cancelled.store(true, Ordering::Release);
         return true;
     }
@@ -1140,19 +1135,10 @@ pub(crate) async fn ui4_video_conversion_service_task(worker_slot: u32, lane: u8
     }
 }
 
-/// Reserve the decoded-video lifetime and ask UI4 for its streaming RGBA
-/// Frame/window before filesystem or decoder work begins. No placeholder is
-/// published: the first visible buffer remains a fully converted and
-/// GuC-released decoded picture.
-pub(crate) fn begin_shell_decoded_video_player(
-    desired_width: u32,
-    desired_height: u32,
-) -> Option<VideoPlaybackSession> {
-    let (frame_width, frame_height) =
-        super::video_frame_extent_for_output(desired_width, desired_height);
-    if !super::video_frame_extent_admitted(frame_width, frame_height) {
-        return None;
-    }
+/// Reserve a decoded-video slot before asynchronous source discovery. The
+/// Frame/window is opened separately after the stream SPS supplies its visible
+/// dimensions.
+pub(crate) fn reserve_shell_decoded_video_player() -> Option<VideoPlaybackSession> {
     let slot = VIDEO_SESSIONS.iter().position(|state| {
         state
             .occupied
@@ -1167,30 +1153,38 @@ pub(crate) fn begin_shell_decoded_video_player(
     };
     state.cancelled.store(false, Ordering::Release);
     state.paused.store(false, Ordering::Release);
-    let spec = DecodedVideoFrameSpec {
-        coded_width: frame_width,
-        coded_height: frame_height,
-        visible_width: frame_width,
-        visible_height: frame_height,
-    };
-    let Some(stream) = create_stream(spec, frame_width, frame_height, slot) else {
-        state.occupied.store(false, Ordering::Release);
-        return None;
-    };
-    *state.stream.lock() = Some(stream);
-    crate::log_info!(target: "intel-media";
-        "ui4 video-player initialized slot={} generation={} window={} frame={} requested={}x{} granted={}x{} output={:?} sessions=3\n",
-        slot,
-        session.generation,
-        stream.window.raw(),
-        stream.frame.raw(),
-        desired_width,
-        desired_height,
-        frame_width,
-        frame_height,
-        super::output_dimensions(),
-    );
+    *state.stream.lock() = None;
     Some(session)
+}
+
+/// Open the reserved shell-video Frame/window at the media's visible extent.
+/// No placeholder is published: the first visible buffer remains a fully
+/// converted and GuC-released decoded picture.
+pub(crate) fn open_shell_decoded_video_player(
+    session: VideoPlaybackSession,
+    width: u32,
+    height: u32,
+) -> bool {
+    if session.is_cancelled()
+        || !super::video_frame_extent_admitted(width, height)
+        || session.state().stream.lock().is_some()
+    {
+        return false;
+    }
+    let spec = DecodedVideoFrameSpec {
+        coded_width: width,
+        coded_height: height,
+        visible_width: width,
+        visible_height: height,
+    };
+    let Some(stream) = create_stream(spec, width, height, session.slot) else {
+        return false;
+    };
+    *session.state().stream.lock() = Some(stream);
+    crate::log_info!(target: "intel-media";
+        "ui4 video-player initialized slot={} generation={} window={} frame={} media_visible={}x{} sessions=3\n",
+        session.slot, session.generation, stream.window.raw(), stream.frame.raw(), width, height);
+    true
 }
 
 fn poll_decoded_video_player_input() {
@@ -1781,7 +1775,7 @@ fn create_stream(
         }
     };
     let (scanout_width, scanout_height) =
-        super::output_dimensions().unwrap_or((frame_width, frame_height));
+        crate::intel::active_scanout_dimensions().unwrap_or((frame_width, frame_height));
     let placement = WindowPlacement {
         x: ((scanout_width.saturating_sub(frame_width) / 2) as i32 + slot as i32 * 56)
             .min(scanout_width.saturating_sub(frame_width) as i32),

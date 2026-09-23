@@ -295,6 +295,40 @@ pub(crate) struct AvcPictureParams {
     pub matrix_coefficients: u8,
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AvcStreamExtent {
+    pub(crate) coded_width: u32,
+    pub(crate) coded_height: u32,
+    pub(crate) visible_width: u32,
+    pub(crate) visible_height: u32,
+}
+
+/// Read the first sequence parameter set from an Annex-B stream. This uses the
+/// same SPS parser as VDBOX command construction, so UI4 frame geometry and
+/// decoder geometry cannot disagree about cropping.
+pub(crate) fn parse_annexb_stream_extent(
+    bytes: &[u8],
+) -> Result<AvcStreamExtent, AvcAnnexBPlanError> {
+    let mut scan = AnnexBNalScanner::new(bytes);
+    while let Some(nal) = scan.next() {
+        if nal.payload_start >= nal.payload_end {
+            continue;
+        }
+        let nal_header = bytes[nal.payload_start];
+        if nal_header & 0x1f != 7 {
+            continue;
+        }
+        let sps = parse_sps(&bytes[nal.payload_start + 1..nal.payload_end])?;
+        return Ok(AvcStreamExtent {
+            coded_width: sps.coded_width,
+            coded_height: sps.coded_height,
+            visible_width: sps.visible_width,
+            visible_height: sps.visible_height,
+        });
+    }
+    Err(AvcAnnexBPlanError::MissingSps)
+}
+
 impl AvcPictureParams {
     pub(crate) const fn pic_width_in_mbs(self) -> usize {
         self.pic_width_in_mbs_minus1 as usize + 1
