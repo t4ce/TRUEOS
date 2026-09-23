@@ -1590,6 +1590,22 @@ fn capture_gt_power_mode_hotkey(
     super::GlobalKeyboardDisposition::Consume
 }
 
+fn capture_spirit_scanrunmon_hotkey(
+    event: &crate::r::keyboard::TrueosKeyboardOutputEvent,
+) -> super::GlobalKeyboardDisposition {
+    if event.kind != crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY
+        || event.key_code != crate::r::keyboard::KEYBOARD_KEY_F10
+    {
+        return super::GlobalKeyboardDisposition::PassThrough;
+    }
+    if event.flags & crate::r::keyboard::KEYBOARD_OUTPUT_FLAG_PRESS != 0 {
+        if let Err(error) = crate::spirit::scanrunmon() {
+            crate::log_warn!(target: "ui4"; "ui4/input: F10 scanrunmon rejected error={:?}\n", error);
+        }
+    }
+    super::GlobalKeyboardDisposition::Consume
+}
+
 fn capture_software_cursor_size_hotkey(
     event: &crate::r::keyboard::TrueosKeyboardOutputEvent,
 ) -> super::GlobalKeyboardDisposition {
@@ -1615,6 +1631,14 @@ fn capture_software_cursor_size_hotkey(
 
 #[trueos_executor::task]
 pub(crate) async fn ui4_input_service_task(ap1_spawner: crate::workers::WorkerSpawner) {
+    match super::register_global_keyboard_hook(u8::MAX, capture_spirit_scanrunmon_hotkey) {
+        Ok(_) => {
+            crate::log_info!(target: "ui4"; "ui4/input: global hotkey online key=F10 action=spirit-scanrunmon duration_ms=250\n")
+        }
+        Err(error) => {
+            crate::log_warn!(target: "ui4"; "ui4/input: global hotkey unavailable key=F10 error={:?}\n", error)
+        }
+    }
     let cursor_size_hook =
         super::register_global_keyboard_hook(u8::MAX, capture_software_cursor_size_hotkey);
     match cursor_size_hook {

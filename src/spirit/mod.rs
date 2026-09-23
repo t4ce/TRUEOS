@@ -660,6 +660,78 @@ fn submit_gpu_logger_frame(
     })
 }
 
+// 0 = idle, 1 = requested, 2 = running. Repeated requests coalesce while busy.
+static SCANRUNMON_STATE: AtomicU8 = AtomicU8::new(0);
+static SCANRUNMON_WAKE: Signal<crate::wait::EmbassySpinRawMutex, ()> = Signal::new();
+const SCANRUNMON_DURATION_MS: u64 = 250;
+
+/// Signal one monitor scan. Spirit owns the path, timing and return position;
+/// callers neither submit intermediate positions nor drive a motion ring.
+pub(crate) fn scanrunmon() -> Result<(), SpiritSubmitError> {
+    active_spirit_fence().ok_or(SpiritSubmitError::InactiveFence)?;
+    if SCANRUNMON_STATE
+        .compare_exchange(0, 1, Ordering::AcqRel, Ordering::Acquire)
+        .is_ok()
+    {
+        SCANRUNMON_WAKE.signal(());
+    }
+    Ok(())
+}
+
+// Sample a serpentine raster path. The last row is clamped to keep the
+// complete cursor on-screen while covering a partial bottom strip.
+fn scanrunmon_position(width: u32, height: u32, elapsed_ms: u64) -> SpiritPosition {
+    let dim = intel_cursor::SPIRIT_CURSOR_DIM;
+    let max_y = height.saturating_sub(dim);
+    let rows = max_y.div_ceil(dim) + 1;
+    let progress =
+        elapsed_ms.min(SCANRUNMON_DURATION_MS) as f64 * rows as f64 / SCANRUNMON_DURATION_MS as f64;
+    let row = (progress as u32).min(rows - 1);
+    let across = (progress - row as f64).clamp(0.0, 1.0);
+    SpiritPosition {
+        x_normalized: if width <= dim {
+            0.0
+        } else if row % 2 == 0 {
+            across
+        } else {
+            1.0 - across
+        },
+        y_normalized: if max_y == 0 {
+            0.0
+        } else {
+            row.saturating_mul(dim).min(max_y) as f64 / max_y as f64
+        },
+    }
+}
+
+async fn run_scanrunmon(id: SpiritFenceId, origin: SpiritPosition) {
+    if let Some((width, height)) = crate::intel::complete_scanout_pipeline_dimensions(id.index()) {
+        let started = Instant::now();
+        loop {
+            let elapsed = Instant::now()
+                .saturating_duration_since(started)
+                .as_millis();
+            if elapsed >= SCANRUNMON_DURATION_MS {
+                break;
+            }
+            if let Err(error) = intel_cursor::spirit_cursor_move(
+                id.0,
+                scanrunmon_position(width, height, elapsed).cursor_frame(),
+            ) {
+                crate::log_warn!(target: "gfx"; "trueos-spirit: scanrunmon interrupted error={:?}\n", error);
+                break;
+            }
+            Timer::after(Duration::from_millis(1)).await;
+        }
+        // Restore even after an interrupted scan; never release or repurpose
+        // cursor backing just because movement failed.
+        if let Err(error) = intel_cursor::spirit_cursor_move(id.0, origin.cursor_frame()) {
+            crate::log_warn!(target: "gfx"; "trueos-spirit: scanrunmon restore failed error={:?}\n", error);
+        }
+    }
+    SCANRUNMON_STATE.store(0, Ordering::Release);
+}
+
 /// Queue an absolute Spirit movement without coupling it to either UI4's
 /// software cursors or the 60 Hz VFX producer. Repeated calls are latest-wins;
 /// the returned fence proves that the dedicated task programmed this request
@@ -869,6 +941,7 @@ pub(crate) async fn spirit_cursor_task(worker_index: u8) {
     let mut request = MOVE_SIGNALS[id.index()]
         .try_take()
         .unwrap_or_else(|| *MOVE_STATES[id.index()].lock());
+    let mut applied_position = SpiritPosition::CENTERED;
     let mut deferred = 0u32;
     let mut lilly_cursor_failures = 0u32;
     if let Err(error) = lilly_cursor::register_once() {
@@ -895,6 +968,14 @@ pub(crate) async fn spirit_cursor_task(worker_index: u8) {
             request = latest;
         }
 
+        if SCANRUNMON_STATE
+            .compare_exchange(1, 2, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            SCANRUNMON_WAKE.try_take();
+            run_scanrunmon(id, applied_position).await;
+        }
+
         // Sequence zero is the boot-time centered state, not a caller-issued
         // move. Every real request gets the fixed portal transition while
         // retaining the API's existing latest-wins destination semantics.
@@ -914,6 +995,7 @@ pub(crate) async fn spirit_cursor_task(worker_index: u8) {
             match intel_cursor::spirit_cursor_move(id.0, request.position.cursor_frame()) {
                 Ok((x, y)) => {
                     deferred = 0;
+                    applied_position = request.position;
                     MOVE_APPLIED[id.index()].store(request.sequence, Ordering::Release);
                     if request.sequence != 0
                         && let Some((screen_width, screen_height)) =
@@ -999,7 +1081,31 @@ pub(crate) async fn spirit_cursor_task(worker_index: u8) {
         if portal_transition {
             spirit_vfx::set_move_portal_transition(false);
         }
-        request = MOVE_SIGNALS[id.index()].wait().await;
+        if SCANRUNMON_STATE.load(Ordering::Acquire) == 1 {
+            request.portal_transition = false;
+            continue;
+        }
+        // Both signals are consumed by Spirit's single CUR_POS owner. A scan
+        // wake never overwrites the latest ordinary movement request.
+        let mut movement = core::pin::pin!(MOVE_SIGNALS[id.index()].wait());
+        let mut scan = core::pin::pin!(SCANRUNMON_WAKE.wait());
+        let next = core::future::poll_fn(|cx| {
+            use core::future::Future;
+            use core::task::Poll;
+            if let Poll::Ready(next) = movement.as_mut().poll(cx) {
+                return Poll::Ready(Some(next));
+            }
+            if scan.as_mut().poll(cx).is_ready() {
+                return Poll::Ready(None);
+            }
+            Poll::Pending
+        })
+        .await;
+        if let Some(next) = next {
+            request = next;
+        } else {
+            request.portal_transition = false;
+        }
     }
 }
 

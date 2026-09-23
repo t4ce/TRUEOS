@@ -283,7 +283,10 @@ fn usage(io: &'static dyn ShellBackend2) {
 
 #[trueos_executor::task(pool_size = 3)]
 async fn vid_task(target: MatrixTarget, command: VidCommand, ui4_session: VidUi4Session) {
-    let (frame_width, frame_height) = command.source.desired_frame_extent();
+    let (frame_width, frame_height) = ui4_session
+        .id
+        .frame_extent()
+        .unwrap_or_else(|| command.source.desired_frame_extent());
     print_matrix_target_line(
         &target,
         alloc::format!(

@@ -798,6 +798,13 @@ impl VideoPlaybackSession {
             || state.cancelled.load(Ordering::Acquire)
             || !state.occupied.load(Ordering::Acquire)
     }
+    pub(crate) fn frame_extent(self) -> Option<(u32, u32)> {
+        self.state()
+            .stream
+            .lock()
+            .as_ref()
+            .map(|stream| (stream.frame_width, stream.frame_height))
+    }
     pub(crate) async fn wait_until_playing(self) -> bool {
         loop {
             poll_decoded_video_player_input();
@@ -1141,7 +1148,9 @@ pub(crate) fn begin_shell_decoded_video_player(
     desired_width: u32,
     desired_height: u32,
 ) -> Option<VideoPlaybackSession> {
-    if !super::video_frame_extent_admitted(desired_width, desired_height) {
+    let (frame_width, frame_height) =
+        super::video_frame_extent_for_output(desired_width, desired_height);
+    if !super::video_frame_extent_admitted(frame_width, frame_height) {
         return None;
     }
     let slot = VIDEO_SESSIONS.iter().position(|state| {
@@ -1159,19 +1168,28 @@ pub(crate) fn begin_shell_decoded_video_player(
     state.cancelled.store(false, Ordering::Release);
     state.paused.store(false, Ordering::Release);
     let spec = DecodedVideoFrameSpec {
-        coded_width: desired_width,
-        coded_height: desired_height,
-        visible_width: desired_width,
-        visible_height: desired_height,
+        coded_width: frame_width,
+        coded_height: frame_height,
+        visible_width: frame_width,
+        visible_height: frame_height,
     };
-    let Some(stream) = create_stream(spec, desired_width, desired_height, slot) else {
+    let Some(stream) = create_stream(spec, frame_width, frame_height, slot) else {
         state.occupied.store(false, Ordering::Release);
         return None;
     };
     *state.stream.lock() = Some(stream);
     crate::log_info!(target: "intel-media";
-        "ui4 video-player initialized slot={} generation={} window={} frame={} requested={}x{} sessions=3\n",
-        slot, session.generation, stream.window.raw(), stream.frame.raw(), desired_width, desired_height);
+        "ui4 video-player initialized slot={} generation={} window={} frame={} requested={}x{} granted={}x{} output={:?} sessions=3\n",
+        slot,
+        session.generation,
+        stream.window.raw(),
+        stream.frame.raw(),
+        desired_width,
+        desired_height,
+        frame_width,
+        frame_height,
+        super::output_dimensions(),
+    );
     Some(session)
 }
 
@@ -1763,7 +1781,7 @@ fn create_stream(
         }
     };
     let (scanout_width, scanout_height) =
-        crate::intel::active_scanout_dimensions().unwrap_or((frame_width, frame_height));
+        super::output_dimensions().unwrap_or((frame_width, frame_height));
     let placement = WindowPlacement {
         x: ((scanout_width.saturating_sub(frame_width) / 2) as i32 + slot as i32 * 56)
             .min(scanout_width.saturating_sub(frame_width) as i32),
