@@ -6,6 +6,7 @@ from __future__ import annotations
 import copy
 import json
 import os
+import re
 import tempfile
 import unittest
 from unittest import mock
@@ -34,9 +35,22 @@ ARTIFACT_ROOT = (
     / "adls"
 )
 KERNEL_ROOT = ARTIFACT_ROOT.parent.parent
+MIGRATED_BAKE_SCRIPT = TOOL_DIR / "bake_adls_cpp_migrated.sh"
 
 
 class ArtifactContractTests(unittest.TestCase):
+    def test_migrated_bake_list_only_names_existing_sources(self) -> None:
+        script = MIGRATED_BAKE_SCRIPT.read_text(encoding="utf-8")
+        match = re.search(
+            r"single_entry_kernels=\(\n(?P<kernels>.*?)\n\)", script, re.DOTALL
+        )
+        self.assertIsNotNone(match)
+        kernels = [line.strip() for line in match.group("kernels").splitlines()]
+        self.assertTrue(kernels)
+        for kernel in kernels:
+            with self.subTest(kernel=kernel):
+                self.assertTrue((KERNEL_ROOT / f"{kernel}.clcpp").is_file())
+
     def test_visual_math_mode_reaches_backend_and_keeps_strict_default(self) -> None:
         profiles = TOOL_DIR / "profiles"
         for filename, relaxed in (("adls-4680-r0c-cpp.json", False),
