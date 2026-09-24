@@ -1,0 +1,105 @@
+// Archive-independent standard LZ4 blocks. Each SIMD lane owns one independent
+// block and one disjoint output region. Hash storage is caller-owned global
+// memory, interleaved across lanes for coalescing; no scratch/SLM or atomics.
+// Descriptors: src_offset, src_len, dst_offset, dst_capacity, dst_len, status.
+// status: 0 success, 1 invalid input, 2 output capacity. Mode: 0 encode, 1 decode.
+#include "include/trueos_clcpp.hpp"
+
+inline uint lz4_word(__global const uchar *p) {
+    return uint(p[0]) | (uint(p[1]) << 8) | (uint(p[2]) << 16) | (uint(p[3]) << 24);
+}
+
+TRUEOS_REQD_SUB_GROUP_SIZE_16
+__kernel void lz4_blocks(
+    __global const uchar *input,
+    __global uchar *output,
+    __global uint *descriptors,
+    __global uint *hashes,
+    uint block_count,
+    uint mode)
+{
+    const uint block = uint(get_global_id(0));
+    if (block >= block_count) return;
+    __global uint *d = descriptors + block * 6u;
+    __global const uchar *src = input + d[0];
+    __global uchar *dst = output + d[2];
+    const uint n = d[1], cap = d[3];
+    d[4] = 0; d[5] = 1;
+    if (n > 4u * 1024u * 1024u || cap > 4u * 1024u * 1024u + 16464u) return;
+    uint ip = 0, op = 0;
+    if (mode == 1u) {
+        while (ip < n) {
+            const uint token = src[ip++];
+            uint literals = token >> 4;
+            if (literals == 15u) {
+                uint extra;
+                do {
+                    if (ip == n) return;
+                    extra = src[ip++]; literals += extra;
+                    if (literals > cap) return;
+                } while (extra == 255u);
+            }
+            if (literals > n - ip || literals > cap - op) return;
+            for (uint i = 0; i < literals; ++i) dst[op++] = src[ip++];
+            if (ip == n) { d[4] = op; d[5] = 0; return; }
+            if (n - ip < 2u) return;
+            const uint offset = uint(src[ip]) | (uint(src[ip + 1]) << 8);
+            ip += 2;
+            if (offset == 0 || offset > op) return;
+            uint match = (token & 15u) + 4u;
+            if ((token & 15u) == 15u) {
+                uint extra;
+                do {
+                    if (ip == n) return;
+                    extra = src[ip++]; match += extra;
+                    if (match > cap) return;
+                } while (extra == 255u);
+            }
+            if (match > cap - op) return;
+            // Deliberately forward copy: LZ4 permits overlapping matches.
+            for (uint i = 0; i < match; ++i) { dst[op] = dst[op - offset]; ++op; }
+        }
+        return; // A block must end with a literal sequence, even when empty.
+    }
+    if (mode != 0u || n > 65536u) return;
+    if (cap < n + n / 255u + 16u) { d[5] = 2; return; }
+    const uint lane = block & 15u;
+    __global uint *table = hashes + (block / 16u) * 4096u + lane;
+    for (uint h = 0; h < 256u; ++h) table[h * 16u] = 0xffffffffu;
+    uint anchor = 0;
+    while (ip + 12u <= n) {
+        const uint word = lz4_word(src + ip);
+        const uint h = (word * 2654435761u) >> 24;
+        const uint prior = table[h * 16u];
+        table[h * 16u] = ip;
+        if (prior >= ip || ip - prior > 65535u || lz4_word(src + prior) != word) { ++ip; continue; }
+        uint length = 4;
+        while (ip + length < n - 5u && src[prior + length] == src[ip + length]) ++length;
+        const uint literals = ip - anchor;
+        const uint token_pos = op++;
+        dst[token_pos] = uchar((min(literals, 15u) << 4) | min(length - 4u, 15u));
+        if (literals >= 15u) {
+            uint rem = literals - 15u;
+            while (rem >= 255u) { dst[op++] = 255; rem -= 255u; }
+            dst[op++] = uchar(rem);
+        }
+        while (anchor < ip) dst[op++] = src[anchor++];
+        const uint offset = ip - prior;
+        dst[op++] = uchar(offset); dst[op++] = uchar(offset >> 8);
+        if (length >= 19u) {
+            uint rem = length - 19u;
+            while (rem >= 255u) { dst[op++] = 255; rem -= 255u; }
+            dst[op++] = uchar(rem);
+        }
+        ip += length; anchor = ip;
+    }
+    const uint literals = n - anchor;
+    dst[op++] = uchar(min(literals, 15u) << 4);
+    if (literals >= 15u) {
+        uint rem = literals - 15u;
+        while (rem >= 255u) { dst[op++] = 255; rem -= 255u; }
+        dst[op++] = uchar(rem);
+    }
+    while (anchor < n) dst[op++] = src[anchor++];
+    d[4] = op; d[5] = 0;
+}
