@@ -77,6 +77,10 @@ hardware—not a thin proof of concept around a boot screen.
 > maintainer utilities under [`tools/`](tools). The architecture and hardware
 > references linked below are the best starting point before changing a
 > platform subsystem.
+>
+> The root [`Cargo.toml`](Cargo.toml) defines the repository-owned workspace;
+> individual crate manifests describe their local feature and dependency
+> boundaries.
 
 ## Scale of the current system
 
