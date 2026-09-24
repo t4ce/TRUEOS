@@ -479,7 +479,7 @@ impl<'a> AlignedWriter<'a> {
         let mut text = AllocString::new();
         if active_matrix_slot_is_vmx(output_mask) {
             let styled =
-                alloc::format!("{}", term_style::paint("VMX").bold().color(VMX_STATUS_RGB));
+                alloc::format!("{}", term_style::paint("VME").bold().color(VMX_STATUS_RGB));
             self.push_plain(&mut text, styled.as_str());
             for (command, color) in [
                 ("tui", Some(VMX_TUI_RGB)),
@@ -926,7 +926,7 @@ fn titlebar_sha256(sha256: &[u8; 32]) -> AllocString {
 
 fn banner_right_visible_width(output_mask: OutputMask) -> usize {
     if active_matrix_slot_is_vmx(output_mask) {
-        return ecma48::visible_width("VMX tui env smp leave[ESC] stop pause snapshot preserve");
+        return ecma48::visible_width("VME tui env smp leave[ESC] stop pause snapshot preserve");
     }
 
     let default_width =
