@@ -112,6 +112,55 @@ impl CpuTaskPool {
         }
     }
 
+    /// Await finite owned compute without running it inside the calling service
+    /// future. Admission retries retain the closure and its inputs; completion
+    /// wakes the waiter directly. Dropping the waiter does not cancel admitted
+    /// work or release its worker lease before the closure returns.
+    pub async fn run<F, T>(
+        &'static self,
+        label: &'static str,
+        job: F,
+    ) -> Result<T, CpuTaskDispatchError>
+    where
+        F: FnOnce(CpuTaskContext) -> T + Send + 'static,
+        T: Send + 'static,
+    {
+        use alloc::sync::Arc;
+        use core::task::Poll;
+        use spin::Mutex;
+
+        let job = Arc::new(Mutex::new(Some(job)));
+        let result = Arc::new(Mutex::new(None));
+        let waker = Arc::new(atomic_waker::AtomicWaker::new());
+        loop {
+            let worker_job = job.clone();
+            let worker_result = result.clone();
+            let worker_waker = waker.clone();
+            match self.try_dispatch(label, Box::new(move |context| {
+                let job = worker_job.lock().take().expect("admitted compute job");
+                let output = job(context);
+                *worker_result.lock() = Some(output);
+                worker_waker.wake();
+            })) {
+                Ok(_) => break,
+                Err(CpuTaskDispatchError::NoWorkerAvailable)
+                    if self.snapshot().worker.eligible == 0 => {
+                    return Err(CpuTaskDispatchError::NoWorkerAvailable);
+                }
+                Err(_) => {
+                    trueos_time::Timer::after(trueos_time::Duration::from_millis(1)).await;
+                }
+            }
+        }
+        Ok(core::future::poll_fn(|cx| {
+            waker.register(cx.waker());
+            match result.lock().take() {
+                Some(output) => Poll::Ready(output),
+                None => Poll::Pending,
+            }
+        }).await)
+    }
+
     pub fn snapshot(&self) -> CpuTaskPoolSnapshot {
         let workers = crate::workers::compute_worker_snapshot(self.policy);
         let runtime_cap = self

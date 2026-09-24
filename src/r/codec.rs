@@ -9,6 +9,11 @@ use spin::Mutex;
 use trueos_time::{Duration as EmbassyDuration, Timer};
 
 const CODEC_IDLE_MS: u64 = 25;
+pub const CODEC_WORKER_CAP: usize = 4;
+static CODEC_COMPUTE: crate::cpu_task_pool::CpuTaskPool = crate::cpu_task_pool::CpuTaskPool::new(
+    crate::workers::ComputeWorkerPolicy::PerformanceFirst,
+    CODEC_WORKER_CAP,
+);
 const REQUEST_CAP: usize = 32;
 const OPERATION_CAP: usize = 64;
 
@@ -531,6 +536,17 @@ async fn collect_source_entries(
     Ok(entries)
 }
 
+async fn compress_entries(entries: Vec<OwnedSourceEntry>) -> Result<Vec<u8>, CodecError> {
+    CODEC_COMPUTE.run("archive/7z-pack", move |_| {
+        let sources: Vec<_> = entries.iter().map(|entry| crate::z7::SevenZSourceEntry {
+            name: entry.name.as_str(),
+            bytes: entry.bytes.as_slice(),
+            content_type_raw: Some(entry.content_type_raw),
+        }).collect();
+        crate::z7::compress_files_to_vec(&sources)
+    }).await.map_err(|_| CodecError::NotReady)?.map_err(CodecError::Archive)
+}
+
 async fn pack_path_job(source_path: &str, archive_path: &str) -> Result<CodecReport, CodecError> {
     let disk = crate::r::fs::trueosfs::primary_root_handle().ok_or(CodecError::NoRoot)?;
     let entries = collect_source_entries(disk, source_path, archive_path).await?;
@@ -539,15 +555,8 @@ async fn pack_path_job(source_path: &str, archive_path: &str) -> Result<CodecRep
             .checked_add(entry.bytes.len() as u64)
             .ok_or(CodecError::LimitExceeded)
     })?;
-    let sources: Vec<crate::z7::SevenZSourceEntry<'_>> = entries
-        .iter()
-        .map(|entry| crate::z7::SevenZSourceEntry {
-            name: entry.name.as_str(),
-            bytes: entry.bytes.as_slice(),
-            content_type_raw: Some(entry.content_type_raw),
-        })
-        .collect();
-    let archive = crate::z7::compress_files_to_vec(sources.as_slice())?;
+    let file_count = u32::try_from(entries.len()).map_err(|_| CodecError::LimitExceeded)?;
+    let archive = compress_entries(entries).await?;
     if archive.len() > MAX_ARCHIVE_BYTES {
         return Err(CodecError::LimitExceeded);
     }
@@ -569,7 +578,7 @@ async fn pack_path_job(source_path: &str, archive_path: &str) -> Result<CodecRep
     Ok(CodecReport {
         input_bytes: source_bytes,
         output_bytes: archive.len() as u64,
-        file_count: u32::try_from(entries.len()).map_err(|_| CodecError::LimitExceeded)?,
+        file_count,
     })
 }
 
@@ -597,15 +606,8 @@ async fn pack_paths_job(
             .checked_add(entry.bytes.len() as u64)
             .ok_or(CodecError::LimitExceeded)
     })?;
-    let sources: Vec<crate::z7::SevenZSourceEntry<'_>> = entries
-        .iter()
-        .map(|entry| crate::z7::SevenZSourceEntry {
-            name: entry.name.as_str(),
-            bytes: entry.bytes.as_slice(),
-            content_type_raw: Some(entry.content_type_raw),
-        })
-        .collect();
-    let archive = crate::z7::compress_files_to_vec(sources.as_slice())?;
+    let file_count = u32::try_from(entries.len()).map_err(|_| CodecError::LimitExceeded)?;
+    let archive = compress_entries(entries).await?;
     if archive.len() > MAX_ARCHIVE_BYTES {
         return Err(CodecError::LimitExceeded);
     }
@@ -627,7 +629,7 @@ async fn pack_paths_job(
     Ok(CodecReport {
         input_bytes: source_bytes,
         output_bytes: archive.len() as u64,
-        file_count: u32::try_from(entries.len()).map_err(|_| CodecError::LimitExceeded)?,
+        file_count,
     })
 }
 
@@ -673,13 +675,16 @@ async fn unpack_path_job(archive_path: &str, output_path: &str) -> Result<CodecR
     if archive.len() > MAX_ARCHIVE_BYTES {
         return Err(CodecError::LimitExceeded);
     }
-    let entries = crate::z7::extract_all_to_vec_bounded(
-        archive.as_slice(),
-        MAX_ARCHIVE_ENTRIES,
-        MAX_SOURCE_FILE_BYTES,
-        MAX_SOURCE_TOTAL_BYTES,
-        MAX_ARCHIVE_DICTIONARY_BYTES,
-    )?;
+    let input_bytes = archive.len() as u64;
+    let entries = CODEC_COMPUTE.run("archive/7z-unpack", move |_| {
+        crate::z7::extract_all_to_vec_bounded(
+            archive.as_slice(),
+            MAX_ARCHIVE_ENTRIES,
+            MAX_SOURCE_FILE_BYTES,
+            MAX_SOURCE_TOTAL_BYTES,
+            MAX_ARCHIVE_DICTIONARY_BYTES,
+        )
+    }).await.map_err(|_| CodecError::NotReady)??;
     let validated = validate_entry_set(entries.as_slice())?;
     let restore_dispositions = match restored_content_types(entries.as_slice()) {
         Ok(dispositions) => dispositions,
@@ -774,7 +779,7 @@ async fn unpack_path_job(archive_path: &str, output_path: &str) -> Result<CodecR
     }
 
     Ok(CodecReport {
-        input_bytes: archive.len() as u64,
+        input_bytes,
         output_bytes,
         file_count: u32::try_from(entries.len()).map_err(|_| CodecError::LimitExceeded)?,
     })
@@ -805,12 +810,13 @@ async fn execute_request(request: CodecRequest) {
     complete_operation(owner, id, result);
 }
 
-#[trueos_executor::task(pool_size = 3)]
+#[trueos_executor::task(pool_size = CODEC_WORKER_CAP)]
 pub async fn codec_worker_task(worker_id: usize, worker_slot: u32, core_kind: u8) {
     crate::log_info!(
         target: "service";
-        "codec: worker={} online archive=7z pool=3 worker_slot={} core_kind={}\n",
+        "codec: worker={} online archive=7z pool={} worker_slot={} core_kind={}\n",
         worker_id,
+        CODEC_WORKER_CAP,
         worker_slot,
         core_kind
     );

@@ -1393,7 +1393,11 @@ async fn file_in_with_metadata_async(
     };
     let io = KernelBlockIo::new(disk);
     let _write_lease = write_gate::RootWriteLease::acquire(disk.id()).await;
-    let Some(mut stream) = trueos_fs::begin_write_file_stream_with_metadata(
+    // Recheck the namespace under the write lease. Never rebuild an index here:
+    // rebuilding can checkpoint and would recursively acquire this same lease.
+    let indexed = validate_indexed_file_target(disk.id(), name, legacy_blob)?;
+    let begun = if indexed {
+        trueos_fs::begin_write_file_stream_prevalidated(
         &io,
         &params,
         name,
@@ -1402,8 +1406,20 @@ async fn file_in_with_metadata_async(
             content_type,
             record_key,
         },
-    )
-    .await
+        ).await
+    } else {
+        trueos_fs::begin_write_file_stream_with_metadata(
+        &io,
+        &params,
+        name,
+        bytes.len() as u64,
+        trueos_fs::FileWriteMetadata {
+            content_type,
+            record_key,
+        },
+        ).await
+    };
+    let Some(mut stream) = begun
     .map_err(map_engine_err)?
     else {
         return Ok(false);
@@ -1587,7 +1603,11 @@ async fn file_write_begin_with_metadata_async(
     };
     let io = KernelBlockIo::new(disk);
     let _write_lease = write_gate::RootWriteLease::acquire(disk.id()).await;
-    let Some(stream) = trueos_fs::begin_write_file_stream_with_metadata(
+    // Recheck the namespace under the write lease. Never rebuild an index here:
+    // rebuilding can checkpoint and would recursively acquire this same lease.
+    let indexed = validate_indexed_file_target(disk.id(), name, legacy_blob)?;
+    let begun = if indexed {
+        trueos_fs::begin_write_file_stream_prevalidated(
         &io,
         &params,
         name,
@@ -1596,8 +1616,20 @@ async fn file_write_begin_with_metadata_async(
             content_type,
             record_key,
         },
-    )
-    .await
+        ).await
+    } else {
+        trueos_fs::begin_write_file_stream_with_metadata(
+        &io,
+        &params,
+        name,
+        total_len,
+        trueos_fs::FileWriteMetadata {
+            content_type,
+            record_key,
+        },
+        ).await
+    };
+    let Some(stream) = begun
     .map_err(map_engine_err)?
     else {
         crate::log!(
@@ -1996,6 +2028,36 @@ pub async fn create_directory_async(
     bump_root_cache_gen(disk.id());
     if !update_root_index_node(disk.id(), path, record) {
         invalidate_root_index(disk.id());
+    }
+    Ok(true)
+}
+
+/// Called only while holding the root write lease. A missing index selects the
+/// engine's checked fallback, never an unchecked write against a stale namespace.
+fn validate_indexed_file_target(
+    disk_id: block::DiscId,
+    path: &str,
+    legacy_blob: bool,
+) -> Result<bool, block::Error> {
+    let roots = ROOTS.lock();
+    let Some(index) = roots.iter().find(|mount| mount.disk_id == disk_id)
+        .and_then(|mount| mount.index.as_ref()) else {
+        return Ok(false);
+    };
+    if let Some(entry) = index.get(path.as_bytes()) {
+        if entry.kind == trueos_fs::LogKind::Directory {
+            return Err(block::Error::InvalidParam);
+        }
+        if legacy_blob && entry.kind == trueos_fs::LogKind::Put
+            && entry.content_type != ContentTypeId::BLOB {
+            record_type_reject(ContentIdentityRejectReason::LegacyDowngrade);
+            return Err(block::Error::InvalidParam);
+        }
+    }
+    if let Some((parent, _)) = path.rsplit_once('/')
+        && !index.get(parent.as_bytes())
+            .is_some_and(|entry| entry.kind == trueos_fs::LogKind::Directory) {
+        return Err(block::Error::InvalidParam);
     }
     Ok(true)
 }

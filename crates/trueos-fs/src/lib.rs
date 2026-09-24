@@ -1347,7 +1347,22 @@ pub async fn begin_write_file_stream_with_metadata<D: BlockIo>(
     data_len: u64,
     metadata: FileWriteMetadata,
 ) -> Result<Option<PutWriteStream>, FsError<D::Error>> {
-    begin_write_file_stream_with_metadata_inner(dev, params, name, data_len, metadata, false).await
+    begin_write_file_stream_with_metadata_inner(dev, params, name, data_len, metadata, false, false).await
+}
+
+/// Begin a typed file write after the caller validated the destination (absent
+/// or a file) and its existing directory parent through a mounted namespace
+/// index. The caller must hold its namespace write lease from validation through
+/// commit and update that index before releasing it. Path syntax, content type,
+/// capacity, and commit ordering are still checked here; only log replay is skipped.
+pub async fn begin_write_file_stream_prevalidated<D: BlockIo>(
+    dev: &D,
+    params: &FsParams,
+    name: &str,
+    data_len: u64,
+    metadata: FileWriteMetadata,
+) -> Result<Option<PutWriteStream>, FsError<D::Error>> {
+    begin_write_file_stream_with_metadata_inner(dev, params, name, data_len, metadata, false, true).await
 }
 
 /// Internal restoration path.  A nonzero type unknown to this build is never
@@ -1360,6 +1375,7 @@ async fn begin_write_file_stream_with_metadata_inner<D: BlockIo>(
     data_len: u64,
     metadata: FileWriteMetadata,
     allow_unregistered_existing_type: bool,
+    namespace_prevalidated: bool,
 ) -> Result<Option<PutWriteStream>, FsError<D::Error>> {
     if !is_normalized_nonempty_path(name) || name.as_bytes().len() > (u16::MAX as usize) {
         return Ok(None);
@@ -1376,18 +1392,20 @@ async fn begin_write_file_stream_with_metadata_inner<D: BlockIo>(
     if matches!(record_key, RecordKey::Key(_)) && bs < RECORD_KEY_HEADER_MIN_BYTES {
         return Err(FsError::InvalidParam);
     }
-    if lookup_node_record(dev, params, name)
-        .await?
-        .is_some_and(|record| record.kind != NodeKind::File)
-    {
-        return Ok(None);
-    }
-    if let Some((parent, _)) = name.rsplit_once('/')
-        && lookup_node_record(dev, params, parent)
+    if !namespace_prevalidated {
+        if lookup_node_record(dev, params, name)
             .await?
-            .is_none_or(|record| record.kind != NodeKind::Directory)
-    {
-        return Ok(None);
+            .is_some_and(|record| record.kind != NodeKind::File)
+        {
+            return Ok(None);
+        }
+        if let Some((parent, _)) = name.rsplit_once('/')
+            && lookup_node_record(dev, params, parent)
+                .await?
+                .is_none_or(|record| record.kind != NodeKind::Directory)
+        {
+            return Ok(None);
+        }
     }
     let data_len_usize = usize::try_from(data_len).map_err(|_| FsError::InvalidParam)?;
 
@@ -2162,6 +2180,7 @@ async fn restore_file_with_metadata<D: BlockIo>(
         bytes.len() as u64,
         metadata,
         true,
+        false,
     )
     .await?
     else {
@@ -4002,6 +4021,59 @@ mod tests {
                 .await,
                 Err(FsError::InvalidParam)
             );
+        });
+    }
+
+    #[test]
+    fn indexed_file_commit_cost_is_independent_of_log_history() {
+        block_on(async {
+            let disk = MemoryBlockIo::new();
+            let params = params();
+            assert_eq!(create_directory(&disk, &params, "out").await, Ok(true));
+            let metadata = FileWriteMetadata {
+                content_type: ContentTypeId::BLOB,
+                record_key: RecordKey::Ffa,
+            };
+            let mut baseline = None;
+            for history in [0, 128] {
+                for _ in 0..history {
+                    assert_eq!(write_file(&disk, &params, "history", b"old").await, Ok(true));
+                }
+                // Model a 25-file extraction, with namespace checks supplied by
+                // the mounted index. Payload size is deliberately insignificant.
+                disk.reset_reads();
+                for member in 0..25 {
+                    let name = alloc::format!("out/file_{history}_{member}");
+                    let mut stream = begin_write_file_stream_prevalidated(
+                        &disk, &params, &name, 5, metadata,
+                    ).await.unwrap().unwrap();
+                    write_file_stream_chunk(&disk, &mut stream, b"hello").await.unwrap();
+                    finish_write_file_stream(&disk, &params, stream).await.unwrap();
+                }
+                let reads = disk.read_count();
+                assert!(reads <= 50, "25 writes read {reads} blocks");
+                if let Some(previous) = baseline {
+                    assert_eq!(reads, previous, "write cost grew with unrelated history");
+                }
+                baseline = Some(reads);
+                for member in 0..25 {
+                    let name = alloc::format!("out/file_{history}_{member}");
+                    assert_eq!(read_file(&disk, &params, &name).await.unwrap(), Some(b"hello".to_vec()));
+                }
+            }
+            for invalid in ["", "/out/file", "out/../file", "out//file"] {
+                disk.reset_reads();
+                assert!(begin_write_file_stream_prevalidated(
+                    &disk, &params, invalid, 0, metadata,
+                ).await.unwrap().is_none());
+                assert_eq!(disk.read_count(), 0);
+            }
+            assert_eq!(begin_write_file_stream_with_metadata(
+                &disk, &params, "missing/file", 0, metadata,
+            ).await.unwrap().is_none(), true);
+            assert_eq!(begin_write_file_stream_with_metadata(
+                &disk, &params, "out", 0, metadata,
+            ).await.unwrap().is_none(), true);
         });
     }
 
