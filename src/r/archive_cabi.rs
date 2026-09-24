@@ -32,7 +32,9 @@ pub(crate) fn map_error(error: &crate::r::codec::CodecError) -> i32 {
         CodecError::BadPath => FS_ERR_BAD_PATH,
         CodecError::NotFound | CodecError::NoRoot => FS_ERR_NOT_FOUND,
         CodecError::QueueFull => FS_ERR_NO_SPACE,
-        CodecError::LimitExceeded => FS_ERR_TOO_LARGE,
+        CodecError::LimitExceeded
+        | CodecError::Lz4(crate::r::lz4::Error::Limit)
+        | CodecError::Tar(crate::r::tar::Error::Limit) => FS_ERR_TOO_LARGE,
         CodecError::UnsupportedContentType(
             crate::r::fs::trueosfs::ContentIdentityRejectReason::TypeRequired
             | crate::r::fs::trueosfs::ContentIdentityRejectReason::LegacyDowngrade,
@@ -43,26 +45,28 @@ pub(crate) fn map_error(error: &crate::r::codec::CodecError) -> i32 {
         CodecError::ReadFailed
         | CodecError::WriteFailed
         | CodecError::Archive(_)
+        | CodecError::Lz4(_)
+        | CodecError::Tar(_)
         | CodecError::Fs(_) => FS_ERR_IO,
     }
 }
 
 pub(crate) fn start_pack(owner: u32, source: String, archive: String) -> i32 {
-    match crate::r::codec::enqueue_7z_pack(owner, source, archive) {
+    match crate::r::codec::enqueue_archive_pack(owner, source, archive) {
         Ok(id) => id as i32,
         Err(error) => map_error(&error),
     }
 }
 
 pub(crate) fn start_pack_many(owner: u32, sources: Vec<String>, archive: String) -> i32 {
-    match crate::r::codec::enqueue_7z_pack_many(owner, sources, archive) {
+    match crate::r::codec::enqueue_archive_pack_many(owner, sources, archive) {
         Ok(id) => id as i32,
         Err(error) => map_error(&error),
     }
 }
 
 pub(crate) fn start_unpack(owner: u32, archive: String, destination: String) -> i32 {
-    match crate::r::codec::enqueue_7z_unpack(owner, archive, destination) {
+    match crate::r::codec::enqueue_archive_unpack(owner, archive, destination) {
         Ok(id) => id as i32,
         Err(error) => map_error(&error),
     }
