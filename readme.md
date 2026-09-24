@@ -71,6 +71,13 @@ hardware—not a thin proof of concept around a boot screen.
 > it; platform implementation and maintainer deployment workflows are
 > intentionally out of scope here.
 
+> [!NOTE]
+> **Looking for the source tree?** The workspace is organized into Rust crates
+> under [`crates/`](crates), kernel and platform code under [`src/`](src), and
+> maintainer utilities under [`tools/`](tools). The architecture and hardware
+> references linked below are the best starting point before changing a
+> platform subsystem.
+
 ## Scale of the current system
 
 The repository changes quickly; these numbers are an August 2026 snapshot and
