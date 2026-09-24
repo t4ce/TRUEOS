@@ -448,6 +448,7 @@ enum DirectRcsLane {
     Font,
     Execution,
     Lfm25,
+    Codec,
 }
 
 impl DirectRcsLane {
@@ -457,6 +458,7 @@ impl DirectRcsLane {
             Self::Font => "font",
             Self::Execution => "execution",
             Self::Lfm25 => "lfm25",
+            Self::Codec => "codec",
         }
     }
 }
@@ -566,6 +568,11 @@ fn direct_rcs_submit_batch_on_lane_state(
             &EXECUTION_RCS_CONTEXT_QUARANTINED,
             &EXECUTION_RCS_SUBMIT_RUNTIME,
             crate::gpu::vgpu::KernelClient::GpgpuExecution,
+        ),
+        DirectRcsLane::Codec => (
+            &CODEC_RCS_CONTEXT_QUARANTINED,
+            &CODEC_RCS_SUBMIT_RUNTIME,
+            crate::gpu::vgpu::KernelClient::GpgpuCodec,
         ),
         DirectRcsLane::Lfm25 => (
             &LFM25_RCS_CONTEXT_QUARANTINED,
@@ -691,6 +698,9 @@ fn quarantine_direct_rcs_lane(lane: DirectRcsLane, reason: &'static str) {
         }
         DirectRcsLane::Execution => {
             (&EXECUTION_RCS_CONTEXT_QUARANTINED, crate::gpu::vgpu::KernelClient::GpgpuExecution)
+        }
+        DirectRcsLane::Codec => {
+            (&CODEC_RCS_CONTEXT_QUARANTINED, crate::gpu::vgpu::KernelClient::GpgpuCodec)
         }
         DirectRcsLane::Lfm25 => {
             (&LFM25_RCS_CONTEXT_QUARANTINED, crate::gpu::vgpu::KernelClient::Lfm25)
@@ -901,6 +911,7 @@ fn direct_rcs_submit_runtime(lane: DirectRcsLane) -> &'static Mutex<DirectRcsSub
         DirectRcsLane::Font => &FONT_RCS_SUBMIT_RUNTIME,
         DirectRcsLane::Execution => &EXECUTION_RCS_SUBMIT_RUNTIME,
         DirectRcsLane::Lfm25 => &LFM25_RCS_SUBMIT_RUNTIME,
+        DirectRcsLane::Codec => &CODEC_RCS_SUBMIT_RUNTIME,
     }
 }
 
@@ -1143,6 +1154,7 @@ fn direct_rcs_poll_result_slot_timeout_ms_on_lane_with_timestamp(
         DirectRcsLane::Font => &FONT_RCS_TIMEOUT_POLL_PROBE_LOGGED,
         DirectRcsLane::Execution => &EXECUTION_RCS_TIMEOUT_POLL_PROBE_LOGGED,
         DirectRcsLane::Lfm25 => &LFM25_RCS_TIMEOUT_POLL_PROBE_LOGGED,
+        DirectRcsLane::Codec => &CODEC_RCS_TIMEOUT_POLL_PROBE_LOGGED,
     };
     let log_probe = probe_logged
         .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)

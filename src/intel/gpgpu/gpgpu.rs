@@ -71,3 +71,6 @@ include!("rcs/context.rs");
 include!("rcs/helio_retained_transform.rs");
 include!("rcs/lab256.rs");
 include!("rcs/spirit_vfx.rs");
+
+include!("operations/lz4_blocks.rs");
+include!("rcs/lz4_blocks.rs");

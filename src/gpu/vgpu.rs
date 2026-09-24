@@ -103,6 +103,8 @@ pub(crate) enum KernelClient {
     /// Independent compute lane for continuously executing GPU programs. Its
     /// context may remain in flight without blocking system-service compute.
     GpgpuExecution,
+    /// Bounded reusable block codecs with independent backing and timeline.
+    GpgpuCodec,
     /// Fixed-model compute lane with its own persistent PPGTT and GuC context.
     Lfm25,
     /// Persistent UI4 composition queue.  This is deliberately a separate
@@ -147,6 +149,7 @@ impl KernelClient {
             Self::GpgpuSystem => "kernel-gpgpu-system",
             Self::GpgpuFont => "kernel-gpgpu-font",
             Self::GpgpuExecution => "kernel-gpgpu-execution",
+            Self::GpgpuCodec => "kernel-gpgpu-codec",
             Self::Lfm25 => "kernel-lfm25",
             Self::Ui4Compositor => "kernel-ui4-compositor",
             Self::Ui4Blitter => "kernel-ui4-blitter",
@@ -161,6 +164,7 @@ impl KernelClient {
             Self::GpgpuSystem => Principal::KernelGpgpuSystem,
             Self::GpgpuFont => Principal::KernelGpgpuFont,
             Self::GpgpuExecution => Principal::KernelGpgpuExecution,
+            Self::GpgpuCodec => Principal::KernelGpgpuCodec,
             Self::Lfm25 => Principal::KernelLfm25,
             Self::Ui4Compositor => Principal::KernelUi4Compositor,
             Self::Ui4Blitter => Principal::KernelUi4Blitter,
@@ -170,7 +174,7 @@ impl KernelClient {
     const fn queue_class(self) -> QueueClass {
         match self {
             Self::Render | Self::Render1 | Self::Render2 => QueueClass::Render,
-            Self::GpgpuSystem | Self::GpgpuFont | Self::GpgpuExecution | Self::Lfm25 => {
+            Self::GpgpuSystem | Self::GpgpuFont | Self::GpgpuExecution | Self::GpgpuCodec | Self::Lfm25 => {
                 QueueClass::Compute
             }
             Self::Ui4Compositor => QueueClass::Compute,
@@ -207,6 +211,7 @@ impl KernelClient {
             | Self::Render1
             | Self::Render2
             | Self::GpgpuExecution
+            | Self::GpgpuCodec
             | Self::Ui4Blitter => PhysicalContextPriority::KernelNormal,
         }
     }
@@ -224,6 +229,7 @@ impl KernelClient {
             | Self::GpgpuSystem
             | Self::GpgpuFont
             | Self::GpgpuExecution
+            | Self::GpgpuCodec
             | Self::Lfm25
             | Self::Ui4Compositor => {
                 matches!(engine.class, EngineClass::RenderCompute) && engine.instance == 0
@@ -314,6 +320,7 @@ pub(crate) enum Principal {
     KernelGpgpuSystem,
     KernelGpgpuFont,
     KernelGpgpuExecution,
+    KernelGpgpuCodec,
     KernelLfm25,
     KernelUi4Compositor,
     KernelUi4Blitter,
@@ -331,6 +338,7 @@ impl Principal {
             Self::KernelGpgpuSystem => "kernel-gpgpu-system",
             Self::KernelGpgpuFont => "kernel-gpgpu-font",
             Self::KernelGpgpuExecution => "kernel-gpgpu-execution",
+            Self::KernelGpgpuCodec => "kernel-gpgpu-codec",
             Self::KernelLfm25 => "kernel-lfm25",
             Self::KernelUi4Compositor => "kernel-ui4-compositor",
             Self::KernelUi4Blitter => "kernel-ui4-blitter",
@@ -5822,6 +5830,7 @@ const fn kernel_client_for_principal(principal: Principal) -> Option<KernelClien
         Principal::KernelGpgpuSystem => Some(KernelClient::GpgpuSystem),
         Principal::KernelGpgpuFont => Some(KernelClient::GpgpuFont),
         Principal::KernelGpgpuExecution => Some(KernelClient::GpgpuExecution),
+        Principal::KernelGpgpuCodec => Some(KernelClient::GpgpuCodec),
         Principal::KernelLfm25 => Some(KernelClient::Lfm25),
         Principal::KernelUi4Compositor => Some(KernelClient::Ui4Compositor),
         Principal::KernelUi4Blitter => Some(KernelClient::Ui4Blitter),
@@ -6499,6 +6508,7 @@ fn allowed_capabilities(
         | Principal::KernelGpgpuSystem
         | Principal::KernelGpgpuFont
         | Principal::KernelGpgpuExecution
+        | Principal::KernelGpgpuCodec
         | Principal::KernelLfm25
         | Principal::KernelUi4Compositor
         | Principal::KernelUi4Blitter => caps
@@ -6517,6 +6527,7 @@ const fn quota_for(principal: Principal) -> Quota {
         | Principal::KernelGpgpuSystem
         | Principal::KernelGpgpuFont
         | Principal::KernelGpgpuExecution
+        | Principal::KernelGpgpuCodec
         | Principal::KernelLfm25
         | Principal::KernelUi4Compositor
         | Principal::KernelUi4Blitter => Quota::KERNEL,

@@ -390,6 +390,7 @@ fn direct_rcs_ggtt_mapping(gpu_va: DirectRcsGpuVa) -> Option<&'static spin::Once
         FONT_RCS_GPU_VA => Some(&FONT_RCS_GGTT_MAPPING),
         EXECUTION_RCS_GPU_VA => Some(&EXECUTION_RCS_GGTT_MAPPING),
         LFM25_RCS_GPU_VA => Some(&LFM25_RCS_GGTT_MAPPING),
+        CODEC_RCS_GPU_VA => Some(&CODEC_RCS_GGTT_MAPPING),
         UI4_COMPOSITOR_RCS_GPU_VA => Some(&UI4_COMPOSITOR_RCS_GGTT_MAPPING),
         _ => None,
     }
@@ -401,6 +402,7 @@ fn direct_rcs_mapping_name(gpu_va: DirectRcsGpuVa) -> &'static str {
         FONT_RCS_GPU_VA => "font",
         EXECUTION_RCS_GPU_VA => "execution",
         LFM25_RCS_GPU_VA => "lfm25",
+        CODEC_RCS_GPU_VA => "codec",
         UI4_COMPOSITOR_RCS_GPU_VA => "ui4-compositor",
         _ => "invalid",
     }
@@ -414,6 +416,7 @@ fn direct_rcs_control_ggtt_ready(state: DirectRcsState) -> bool {
         FONT_RCS_GPU_VA_RING_BASE => &FONT_RCS_GGTT_MAPPING,
         EXECUTION_RCS_GPU_VA_RING_BASE => &EXECUTION_RCS_GGTT_MAPPING,
         LFM25_RCS_GPU_VA_RING_BASE => &LFM25_RCS_GGTT_MAPPING,
+        CODEC_RCS_GPU_VA_RING_BASE => &CODEC_RCS_GGTT_MAPPING,
         UI4_COMPOSITOR_RCS_GPU_VA_RING_BASE => &UI4_COMPOSITOR_RCS_GGTT_MAPPING,
         _ => return false,
     };
@@ -426,6 +429,7 @@ fn quarantine_direct_rcs_mapping_failure(gpu_va: DirectRcsGpuVa, reason: &'stati
         FONT_RCS_GPU_VA => quarantine_font_rcs_context(reason),
         EXECUTION_RCS_GPU_VA => quarantine_execution_rcs_context(reason),
         LFM25_RCS_GPU_VA => quarantine_lfm25_rcs_context(reason),
+        CODEC_RCS_GPU_VA => quarantine_direct_rcs_lane(DirectRcsLane::Codec, reason),
         UI4_COMPOSITOR_RCS_GPU_VA => quarantine_ui4_compositor_rcs_context(reason),
         _ => {}
     }
