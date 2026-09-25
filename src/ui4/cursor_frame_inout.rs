@@ -164,6 +164,7 @@ pub(crate) struct CursorSelectionStrip {
     pub(crate) x: u32,
     pub(crate) y: u32,
     pub(crate) width: u32,
+    pub(crate) height: u32,
     pub(crate) color: crate::graphics::primitives::Rgba8,
 }
 
@@ -650,8 +651,21 @@ pub(crate) fn selection_strips(
             || window.state != WindowState::Ready
             || !placement.visible
             || placement.opacity == 0
-            || placement.y <= 0
         {
+            continue;
+        }
+        if window.arc != 0 {
+            append_arc_selection_outline(
+                &mut output_strips,
+                *window,
+                &strip.colors,
+                &windows,
+                screen_width,
+                screen_height,
+            );
+            continue;
+        }
+        if placement.y <= 0 {
             continue;
         }
         let top = placement.y - 1;
@@ -711,12 +725,97 @@ pub(crate) fn selection_strips(
                     x: visible_left,
                     y: strip_y,
                     width: visible_right - visible_left,
+                    height: 1,
                     color,
                 });
             }
         }
     }
     output_strips
+}
+
+/// Trace the outside of a rounded frame clockwise. Color ownership is based
+/// on the complete perimeter, before screen clipping or higher windows hide it.
+fn append_arc_selection_outline(
+    output: &mut alloc::vec::Vec<CursorSelectionStrip>,
+    window: super::WindowSnapshot,
+    colors: &Vec<crate::graphics::primitives::Rgba8, MAX_CURSOR_SOURCES>,
+    windows: &[super::WindowSnapshot],
+    screen_width: u32,
+    screen_height: u32,
+) {
+    let p = window.presentation_placement;
+    if p.width == 0 || p.height == 0 || colors.is_empty() {
+        return;
+    }
+    let radius = super::window_arc::radius_twice(p.width, p.height, window.arc) as f32 * 0.5;
+    let outer_radius = radius + 1.0;
+    let x = p.x as f32;
+    let y = p.y as f32;
+    let w = p.width as f32;
+    let h = p.height as f32;
+    let mut points = alloc::vec::Vec::<(i64, i64)>::new();
+    // Pixel centers sit one pixel beyond the frame's content edges.
+    append_outline_line(&mut points, x + radius, y - 1.0, x + w - radius, y - 1.0);
+    append_outline_arc(&mut points, x + w - radius, y + radius, outer_radius, -core::f32::consts::FRAC_PI_2);
+    append_outline_line(&mut points, x + w, y + radius, x + w, y + h - radius);
+    append_outline_arc(&mut points, x + w - radius, y + h - radius, outer_radius, 0.0);
+    append_outline_line(&mut points, x + w - radius, y + h, x + radius, y + h);
+    append_outline_arc(&mut points, x + radius, y + h - radius, outer_radius, core::f32::consts::FRAC_PI_2);
+    append_outline_line(&mut points, x - 1.0, y + h - radius, x - 1.0, y + radius);
+    append_outline_arc(&mut points, x + radius, y + radius, outer_radius, core::f32::consts::PI);
+    if points.len() > 1 && points.first() == points.last() {
+        points.pop();
+    }
+    let target_stack = window_stack_key(window);
+    let total = points.len();
+    for (index, (px, py)) in points.into_iter().enumerate() {
+        if px < 0 || py < 0 || px >= i64::from(screen_width) || py >= i64::from(screen_height) {
+            continue;
+        }
+        let occluded = windows.iter().copied().any(|candidate| {
+            let c = candidate.presentation_placement;
+            if window_stack_key(candidate) <= target_stack || !c.visible || c.opacity == 0 {
+                return false;
+            }
+            let lx = px - i64::from(c.x);
+            let ly = py - i64::from(c.y);
+            lx >= 0 && ly >= 0 && lx < i64::from(c.width) && ly < i64::from(c.height)
+                && super::window_arc::contains(c.width, c.height, candidate.arc, lx as u32, ly as u32)
+        });
+        if !occluded {
+            output.push(CursorSelectionStrip {
+                x: px as u32,
+                y: py as u32,
+                width: 1,
+                height: 1,
+                color: colors[index * colors.len() / total],
+            });
+        }
+    }
+}
+
+fn append_outline_point(points: &mut alloc::vec::Vec<(i64, i64)>, x: f32, y: f32) {
+    let point = (libm::roundf(x) as i64, libm::roundf(y) as i64);
+    if points.last().copied() != Some(point) {
+        points.push(point);
+    }
+}
+
+fn append_outline_line(points: &mut alloc::vec::Vec<(i64, i64)>, ax: f32, ay: f32, bx: f32, by: f32) {
+    let steps = libm::ceilf(libm::hypotf(bx - ax, by - ay)) as u32;
+    for step in 0..=steps {
+        let t = if steps == 0 { 0.0 } else { step as f32 / steps as f32 };
+        append_outline_point(points, ax + (bx - ax) * t, ay + (by - ay) * t);
+    }
+}
+
+fn append_outline_arc(points: &mut alloc::vec::Vec<(i64, i64)>, cx: f32, cy: f32, radius: f32, start: f32) {
+    let steps = (libm::ceilf(radius * core::f32::consts::FRAC_PI_2) as u32).max(1);
+    for step in 0..=steps {
+        let theta = start + core::f32::consts::FRAC_PI_2 * step as f32 / steps as f32;
+        append_outline_point(points, cx + radius * libm::cosf(theta), cy + radius * libm::sinf(theta));
+    }
 }
 
 fn window_stack_key(window: super::WindowSnapshot) -> (usize, i32, WindowId) {

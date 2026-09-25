@@ -5,7 +5,7 @@ pub(crate) const ARC_MAX: u16 = 1000;
 
 /// Twice the corner radius, allowing exact half-pixel radii for odd extents.
 pub(crate) const fn radius_twice(width: u32, height: u32, arc: u16) -> u64 {
-    (width.min(height) as u64 * arc as u64) / ARC_MAX as u64
+    (if width < height { width } else { height }) as u64 * arc as u64 / ARC_MAX as u64
 }
 
 /// Test a destination pixel center against the rounded frame outline.

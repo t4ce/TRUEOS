@@ -387,7 +387,7 @@ pub(crate) fn software_cursor_rects() -> Slot4Rects {
 
     if let Some(output) = super::OutputId::from_slot(0) {
         for strip in super::selection_strips(output, screen_w, screen_h) {
-            push_overlay_rect(&mut rects, strip.x, strip.y, strip.width, 1, strip.color);
+            push_overlay_rect(&mut rects, strip.x, strip.y, strip.width, strip.height, strip.color);
         }
     }
 

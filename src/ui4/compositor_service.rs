@@ -1432,7 +1432,8 @@ fn dirty_double_font_scene(window: WindowSnapshot) -> bool {
 }
 
 fn font_preview_primary_direct_candidate(window: WindowSnapshot, view: FrameRgbaView) -> bool {
-    if window.owner != WindowOwner::GPGPU_PREVIEW
+    if window.arc != 0
+        || window.owner != WindowOwner::GPGPU_PREVIEW
         || window.plane != WindowPlane::Primary
         || !dirty_double_font_scene(window)
     {
