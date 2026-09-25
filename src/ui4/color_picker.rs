@@ -30,11 +30,14 @@ const GAMMA_HEIGHT: u32 = 48;
 pub(super) const PICKER_HEIGHT: u32 = GAMMA_Y + GAMMA_HEIGHT + PANEL_GAP;
 const PICKER_MARGIN: u32 = 24;
 const MAX_ACTIVE_GESTURES: usize = 32;
-// Tiger Lake PRM Vol 2c: Pipe A legacy palette and pipe gamma mode.
-const PIPE_A_LEGACY_PALETTE: usize = 0x4A000;
+// Tiger Lake PRM Vol 2c: Pipe A precision palette and pipe gamma mode.
+const PIPE_A_PREC_INDEX: usize = 0x4A400;
+const PIPE_A_PREC_DATA: usize = 0x4A404;
 const PIPE_A_GAMMA_MODE: usize = 0x4A480;
 const POST_CSC_GAMMA_ENABLE: u32 = 1 << 30;
 const GAMMA_MODE_MASK: u32 = 3;
+const GAMMA_MODE_10_BIT: u32 = 1;
+const PRECISION_PALETTE_ENTRIES: usize = 1024;
 
 static OPEN_REQUEST: Mutex<Option<ColorPickerOpenRequest>> = Mutex::new(None);
 static ESCAPE_REQUESTED: AtomicBool = AtomicBool::new(false);
@@ -54,7 +57,8 @@ enum PickerPanel {
 
 struct PipeGammaSnapshot {
     mode: u32,
-    legacy_palette: [u32; 256],
+    precision_index: u32,
+    precision_palette: [u32; PRECISION_PALETTE_ENTRIES],
 }
 
 #[derive(Copy, Clone)]
@@ -569,16 +573,21 @@ fn set_bottom_color(rgb: [u8; 3]) -> bool {
 }
 
 // Keep this first gamma experiment local to the UI4 picker. The saved MMIO
-// values are the getter's hardware snapshot; closing the picker restores it.
+// values are the precision-palette snapshot; closing the picker restores it.
 fn read_pipe_a_gamma() -> Option<PipeGammaSnapshot> {
     let dev = crate::intel::claimed_device()?;
-    let mut legacy_palette = [0; 256];
-    for (index, entry) in legacy_palette.iter_mut().enumerate() {
-        *entry = crate::intel::mmio_read(dev, PIPE_A_LEGACY_PALETTE + index * 4);
+    let mode = crate::intel::mmio_read(dev, PIPE_A_GAMMA_MODE);
+    let precision_index = crate::intel::mmio_read(dev, PIPE_A_PREC_INDEX);
+    let mut precision_palette = [0; PRECISION_PALETTE_ENTRIES];
+    for (index, entry) in precision_palette.iter_mut().enumerate() {
+        crate::intel::mmio_write(dev, PIPE_A_PREC_INDEX, index as u32);
+        *entry = crate::intel::mmio_read(dev, PIPE_A_PREC_DATA);
     }
+    crate::intel::mmio_write(dev, PIPE_A_PREC_INDEX, precision_index);
     Some(PipeGammaSnapshot {
-        mode: crate::intel::mmio_read(dev, PIPE_A_GAMMA_MODE),
-        legacy_palette,
+        mode,
+        precision_index,
+        precision_palette,
     })
 }
 
@@ -598,25 +607,40 @@ fn gamma_entry(input: u8, x: u8) -> u8 {
     (libm::powf(f32::from(input) / 255.0, exponent) * 255.0 + 0.5).clamp(0.0, 255.0) as u8
 }
 
+fn gamma_entry_10(input: u16, x: u8) -> u16 {
+    if x == 127 {
+        return input;
+    }
+    let exponent = gamma_exponent_milli(x) as f32 / 1000.0;
+    (libm::powf(f32::from(input) / 1023.0, exponent) * 1023.0 + 0.5).clamp(0.0, 1023.0) as u16
+}
+
 fn set_pipe_a_gamma(x: u8) -> bool {
     let Some(dev) = crate::intel::claimed_device() else {
         return false;
     };
     let old_mode = crate::intel::mmio_read(dev, PIPE_A_GAMMA_MODE);
+    let old_index = crate::intel::mmio_read(dev, PIPE_A_PREC_INDEX);
     // Stop the post-CSC lookup while replacing all entries, then switch to
-    // the PRM's 256-entry legacy gamma mode on the next vertical blank.
+    // the PRM's 1024-entry precision gamma mode on the next vertical blank.
     crate::intel::mmio_write(dev, PIPE_A_GAMMA_MODE, old_mode & !POST_CSC_GAMMA_ENABLE);
-    for input in 0..=u8::MAX {
-        let value = u32::from(gamma_entry(input, x));
-        let rgb = (value << 16) | (value << 8) | value;
-        crate::intel::mmio_write(dev, PIPE_A_LEGACY_PALETTE + usize::from(input) * 4, rgb);
+    for input in 0..PRECISION_PALETTE_ENTRIES {
+        let value = u32::from(gamma_entry_10(input as u16, x));
+        let rgb = (value << 20) | (value << 10) | value;
+        crate::intel::mmio_write(dev, PIPE_A_PREC_INDEX, input as u32);
+        crate::intel::mmio_write(dev, PIPE_A_PREC_DATA, rgb);
     }
-    let mode = (old_mode & !GAMMA_MODE_MASK) | POST_CSC_GAMMA_ENABLE;
+    let mode = (old_mode & !GAMMA_MODE_MASK) | GAMMA_MODE_10_BIT | POST_CSC_GAMMA_ENABLE;
     crate::intel::mmio_write(dev, PIPE_A_GAMMA_MODE, mode);
-    let midpoint = u32::from(gamma_entry(128, x));
-    let expected_midpoint = (midpoint << 16) | (midpoint << 8) | midpoint;
-    crate::intel::mmio_read(dev, PIPE_A_GAMMA_MODE) == mode
-        && crate::intel::mmio_read(dev, PIPE_A_LEGACY_PALETTE + 128 * 4) == expected_midpoint
+    let midpoint = u32::from(gamma_entry_10(512, x));
+    let expected_midpoint = (midpoint << 20) | (midpoint << 10) | midpoint;
+    crate::intel::mmio_write(dev, PIPE_A_PREC_INDEX, 512);
+    let readback = crate::intel::mmio_read(dev, PIPE_A_PREC_DATA);
+    let verified =
+        crate::intel::mmio_read(dev, PIPE_A_GAMMA_MODE) == mode && readback == expected_midpoint;
+    // Keep the indirect palette port exactly as another display user left it.
+    crate::intel::mmio_write(dev, PIPE_A_PREC_INDEX, old_index);
+    verified
 }
 
 fn restore_pipe_a_gamma(before: &PipeGammaSnapshot) {
@@ -625,9 +649,11 @@ fn restore_pipe_a_gamma(before: &PipeGammaSnapshot) {
     };
     let mode = crate::intel::mmio_read(dev, PIPE_A_GAMMA_MODE);
     crate::intel::mmio_write(dev, PIPE_A_GAMMA_MODE, mode & !POST_CSC_GAMMA_ENABLE);
-    for (index, &entry) in before.legacy_palette.iter().enumerate() {
-        crate::intel::mmio_write(dev, PIPE_A_LEGACY_PALETTE + index * 4, entry);
+    for (index, &entry) in before.precision_palette.iter().enumerate() {
+        crate::intel::mmio_write(dev, PIPE_A_PREC_INDEX, index as u32);
+        crate::intel::mmio_write(dev, PIPE_A_PREC_DATA, entry);
     }
+    crate::intel::mmio_write(dev, PIPE_A_PREC_INDEX, before.precision_index);
     crate::intel::mmio_write(dev, PIPE_A_GAMMA_MODE, before.mode);
     crate::log_info!(target: "ui4/color-picker";
         "ui4/color-picker: pipe-a-gamma restored mode=0x{:08X} readback=0x{:08X}\n",
