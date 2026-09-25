@@ -7840,7 +7840,7 @@ pub(crate) fn run_transient_protected32(
     }
     if preemption_timer_enabled {
         let (ticks, _) = vmx_preemption_timer_ticks(
-            crate::allcaps::hv::VMX_LIFECYCLE_PREEMPTION_QUANTUM_MS,
+            crate::allcaps::hv::VMX_WC3_TRANSIENT_PREEMPTION_QUANTUM_MS,
         );
         vmwrite(VMCS_GUEST_VMCS_PREEMPT_TIMER, ticks as u64)?;
     }

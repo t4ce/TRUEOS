@@ -108,6 +108,10 @@ pub mod hv {
     pub const VM_ID_LIMIT: usize = 64;
     pub const VM_CPU_SLOT_LIMIT: usize = 256;
     pub const VMX_LIFECYCLE_PREEMPTION_QUANTUM_MS: u64 = 125;
+    // Transient WC3 x86 contexts rebuild their VMCS after every timer exit.
+    // Give the guest a longer carrier slice without delaying Hull lifecycle
+    // stop checks, which retain the separate 125 ms quantum above.
+    pub const VMX_WC3_TRANSIENT_PREEMPTION_QUANTUM_MS: u64 = 500;
 
     pub const GUEST_STACK_MIN_MIB: usize = 8;
     pub const GUEST_STACK_DEFAULT_MIB: usize = 64;
