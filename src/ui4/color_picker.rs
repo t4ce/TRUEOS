@@ -57,7 +57,6 @@ enum PickerPanel {
 
 struct PipeGammaSnapshot {
     mode: u32,
-    precision_index: u32,
     precision_palette: [u32; PRECISION_PALETTE_ENTRIES],
 }
 
@@ -87,6 +86,7 @@ impl PickerColor {
 }
 
 static SELECTED_COLOR: Mutex<PickerColor> = Mutex::new(PickerColor::INITIAL);
+static SELECTED_GAMMA_X: Mutex<u8> = Mutex::new(127);
 
 struct ActiveColorPicker {
     session: WindowSessionId,
@@ -95,8 +95,7 @@ struct ActiveColorPicker {
     escape_hook: super::GlobalKeyboardHookId,
     color: PickerColor,
     gamma_x: u8,
-    gamma_before: Option<PipeGammaSnapshot>,
-    gamma_changed: bool,
+    gamma_at_open: Option<PipeGammaSnapshot>,
     gestures: [Option<PickerGesture>; MAX_ACTIVE_GESTURES],
     picker_dirty: bool,
 }
@@ -232,9 +231,8 @@ fn open_picker(request: ColorPickerOpenRequest) -> Result<ActiveColorPicker, &'s
         picker_window,
         escape_hook,
         color: *SELECTED_COLOR.lock(),
-        gamma_x: 127,
-        gamma_before: read_pipe_a_gamma(),
-        gamma_changed: false,
+        gamma_x: *SELECTED_GAMMA_X.lock(),
+        gamma_at_open: read_pipe_a_gamma(),
         gestures: [None; MAX_ACTIVE_GESTURES],
         picker_dirty: true,
     };
@@ -257,6 +255,13 @@ fn open_picker(request: ColorPickerOpenRequest) -> Result<ActiveColorPicker, &'s
     );
 
     let rgb = picker.color.rgb();
+    if let Some(gamma) = picker.gamma_at_open.as_ref() {
+        crate::log_info!(target: "ui4/color-picker";
+            "ui4/color-picker: pipe-a-gamma opened mode=0x{:08X} precision_midpoint=0x{:08X}\n",
+            gamma.mode,
+            gamma.precision_palette[512],
+        );
+    }
     crate::log_info!(target: "ui4/color-picker";
         "ui4/color-picker: opened session={} picker_frame={} picker_window={} plane=slot4-software-cursor/fixed picker={}x{}@{},{} rgb={},{},{} target=pipe-a-bottom-color commit=release fallback_application_plane=0\n",
         session.raw(),
@@ -299,11 +304,6 @@ fn close_picker(picker: &ActiveColorPicker, reason: &'static str) -> bool {
     let close = WindowSessionCloseRequest::default().animate_and_retire_frames();
     match finish_window_session_with_request(OWNER, picker.session, close) {
         Ok(closed) => {
-            if picker.gamma_changed {
-                if let Some(before) = picker.gamma_before.as_ref() {
-                    restore_pipe_a_gamma(before);
-                }
-            }
             let _ = super::unregister_global_keyboard_hook(picker.escape_hook);
             super::input_broker::notify_slot4_visual_change();
             crate::log_info!(target: "ui4/color-picker";
@@ -377,11 +377,8 @@ impl ActiveColorPicker {
             }
             PickerPanel::Gamma => {
                 let x = panel_axis(local_x, 0, PICKER_WIDTH);
-                if self.gamma_before.is_some() {
+                if self.gamma_at_open.is_some() {
                     let programmed = set_pipe_a_gamma(x);
-                    // Even an unsuccessful readback follows MMIO writes, so
-                    // restore the snapshot when this picker closes.
-                    self.gamma_changed = true;
                     if !programmed {
                         crate::log_warn!(target: "ui4/color-picker";
                             "ui4/color-picker: pipe-a-gamma readback mismatch x={}\n", x,
@@ -389,6 +386,7 @@ impl ActiveColorPicker {
                         return;
                     }
                     self.gamma_x = x;
+                    *SELECTED_GAMMA_X.lock() = x;
                     self.picker_dirty = true;
                     crate::log_info!(target: "ui4/color-picker";
                         "ui4/color-picker: selected panel=Gamma x={} exponent_x1000={} pipe_a_gamma_programmed=1\n",
@@ -467,7 +465,7 @@ fn render_picker(picker: &ActiveColorPicker) -> Result<(), ()> {
             for x in 0..PICKER_WIDTH {
                 let input = x as u8;
                 let level = gamma_entry(input, picker.gamma_x);
-                let rgb = if picker.gamma_before.is_some() {
+                let rgb = if picker.gamma_at_open.is_some() {
                     [level; 3]
                 } else {
                     [48; 3]
@@ -572,8 +570,8 @@ fn set_bottom_color(rgb: [u8; 3]) -> bool {
         || crate::virtio_gpu_logo::set_background_color(rgb[0], rgb[1], rgb[2])
 }
 
-// Keep this first gamma experiment local to the UI4 picker. The saved MMIO
-// values are the precision-palette snapshot; closing the picker restores it.
+// Keep this first gamma experiment local to the UI4 picker. Reading the
+// precision palette captures the hardware state before any UI interaction.
 fn read_pipe_a_gamma() -> Option<PipeGammaSnapshot> {
     let dev = crate::intel::claimed_device()?;
     let mode = crate::intel::mmio_read(dev, PIPE_A_GAMMA_MODE);
@@ -586,7 +584,6 @@ fn read_pipe_a_gamma() -> Option<PipeGammaSnapshot> {
     crate::intel::mmio_write(dev, PIPE_A_PREC_INDEX, precision_index);
     Some(PipeGammaSnapshot {
         mode,
-        precision_index,
         precision_palette,
     })
 }
@@ -641,23 +638,4 @@ fn set_pipe_a_gamma(x: u8) -> bool {
     // Keep the indirect palette port exactly as another display user left it.
     crate::intel::mmio_write(dev, PIPE_A_PREC_INDEX, old_index);
     verified
-}
-
-fn restore_pipe_a_gamma(before: &PipeGammaSnapshot) {
-    let Some(dev) = crate::intel::claimed_device() else {
-        return;
-    };
-    let mode = crate::intel::mmio_read(dev, PIPE_A_GAMMA_MODE);
-    crate::intel::mmio_write(dev, PIPE_A_GAMMA_MODE, mode & !POST_CSC_GAMMA_ENABLE);
-    for (index, &entry) in before.precision_palette.iter().enumerate() {
-        crate::intel::mmio_write(dev, PIPE_A_PREC_INDEX, index as u32);
-        crate::intel::mmio_write(dev, PIPE_A_PREC_DATA, entry);
-    }
-    crate::intel::mmio_write(dev, PIPE_A_PREC_INDEX, before.precision_index);
-    crate::intel::mmio_write(dev, PIPE_A_GAMMA_MODE, before.mode);
-    crate::log_info!(target: "ui4/color-picker";
-        "ui4/color-picker: pipe-a-gamma restored mode=0x{:08X} readback=0x{:08X}\n",
-        before.mode,
-        crate::intel::mmio_read(dev, PIPE_A_GAMMA_MODE),
-    );
 }
