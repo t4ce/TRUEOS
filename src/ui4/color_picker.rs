@@ -25,9 +25,16 @@ const SV_HEIGHT: u32 = 256;
 const PANEL_GAP: u32 = 8;
 const HUE_HEIGHT: u32 = 32;
 const HUE_Y: u32 = SV_HEIGHT + PANEL_GAP;
-pub(super) const PICKER_HEIGHT: u32 = HUE_Y + HUE_HEIGHT + PANEL_GAP;
+const GAMMA_Y: u32 = HUE_Y + HUE_HEIGHT + PANEL_GAP;
+const GAMMA_HEIGHT: u32 = 48;
+pub(super) const PICKER_HEIGHT: u32 = GAMMA_Y + GAMMA_HEIGHT + PANEL_GAP;
 const PICKER_MARGIN: u32 = 24;
 const MAX_ACTIVE_GESTURES: usize = 32;
+// Tiger Lake PRM Vol 2c: Pipe A legacy palette and pipe gamma mode.
+const PIPE_A_LEGACY_PALETTE: usize = 0x4A000;
+const PIPE_A_GAMMA_MODE: usize = 0x4A480;
+const POST_CSC_GAMMA_ENABLE: u32 = 1 << 30;
+const GAMMA_MODE_MASK: u32 = 3;
 
 static OPEN_REQUEST: Mutex<Option<ColorPickerOpenRequest>> = Mutex::new(None);
 static ESCAPE_REQUESTED: AtomicBool = AtomicBool::new(false);
@@ -42,6 +49,12 @@ struct ColorPickerOpenRequest {
 enum PickerPanel {
     SaturationValue,
     Hue,
+    Gamma,
+}
+
+struct PipeGammaSnapshot {
+    mode: u32,
+    legacy_palette: [u32; 256],
 }
 
 #[derive(Copy, Clone)]
@@ -77,6 +90,9 @@ struct ActiveColorPicker {
     picker_window: super::WindowId,
     escape_hook: super::GlobalKeyboardHookId,
     color: PickerColor,
+    gamma_x: u8,
+    gamma_before: Option<PipeGammaSnapshot>,
+    gamma_changed: bool,
     gestures: [Option<PickerGesture>; MAX_ACTIVE_GESTURES],
     picker_dirty: bool,
 }
@@ -101,7 +117,7 @@ fn capture_escape(
 #[trueos_executor::task]
 pub(crate) async fn ui4_color_picker_service_task() {
     crate::log_info!(target: "ui4/color-picker";
-        "ui4/color-picker: service online lifecycle=context-menu-open+escape-close owner=kernel-internal presentation=slot4-software-cursor-plane/fixed/no-application-plane-fallback controls=sv256+hue32 commit=button-release target=pipe-a-bottom-color color=rgb\n"
+        "ui4/color-picker: service online lifecycle=context-menu-open+escape-close owner=kernel-internal presentation=slot4-software-cursor-plane/fixed/no-application-plane-fallback controls=sv256+hue32+gamma48 commit=button-release target=pipe-a-bottom-color+pipe-a-gamma color=rgb\n"
     );
     let mut active = None;
     loop {
@@ -212,6 +228,9 @@ fn open_picker(request: ColorPickerOpenRequest) -> Result<ActiveColorPicker, &'s
         picker_window,
         escape_hook,
         color: *SELECTED_COLOR.lock(),
+        gamma_x: 127,
+        gamma_before: read_pipe_a_gamma(),
+        gamma_changed: false,
         gestures: [None; MAX_ACTIVE_GESTURES],
         picker_dirty: true,
     };
@@ -276,6 +295,11 @@ fn close_picker(picker: &ActiveColorPicker, reason: &'static str) -> bool {
     let close = WindowSessionCloseRequest::default().animate_and_retire_frames();
     match finish_window_session_with_request(OWNER, picker.session, close) {
         Ok(closed) => {
+            if picker.gamma_changed {
+                if let Some(before) = picker.gamma_before.as_ref() {
+                    restore_pipe_a_gamma(before);
+                }
+            }
             let _ = super::unregister_global_keyboard_hook(picker.escape_hook);
             super::input_broker::notify_slot4_visual_change();
             crate::log_info!(target: "ui4/color-picker";
@@ -347,6 +371,28 @@ impl ActiveColorPicker {
                 let x = u32::from(panel_axis(local_x, 0, PICKER_WIDTH));
                 self.color.hue = ((x * 1535 + 127) / 255) as u16;
             }
+            PickerPanel::Gamma => {
+                let x = panel_axis(local_x, 0, PICKER_WIDTH);
+                if self.gamma_before.is_some() {
+                    let programmed = set_pipe_a_gamma(x);
+                    // Even an unsuccessful readback follows MMIO writes, so
+                    // restore the snapshot when this picker closes.
+                    self.gamma_changed = true;
+                    if !programmed {
+                        crate::log_warn!(target: "ui4/color-picker";
+                            "ui4/color-picker: pipe-a-gamma readback mismatch x={}\n", x,
+                        );
+                        return;
+                    }
+                    self.gamma_x = x;
+                    self.picker_dirty = true;
+                    crate::log_info!(target: "ui4/color-picker";
+                        "ui4/color-picker: selected panel=Gamma x={} exponent_x1000={} pipe_a_gamma_programmed=1\n",
+                        x, gamma_exponent_milli(x),
+                    );
+                }
+                return;
+            }
         }
         *SELECTED_COLOR.lock() = self.color;
         self.picker_dirty = true;
@@ -375,6 +421,8 @@ fn panel_at(x: i32, y: i32) -> Option<PickerPanel> {
         Some(PickerPanel::SaturationValue)
     } else if (HUE_Y..HUE_Y + HUE_HEIGHT).contains(&y) {
         Some(PickerPanel::Hue)
+    } else if (GAMMA_Y..GAMMA_Y + GAMMA_HEIGHT).contains(&y) {
+        Some(PickerPanel::Gamma)
     } else {
         None
     }
@@ -411,6 +459,21 @@ fn render_picker(picker: &ActiveColorPicker) -> Result<(), ()> {
                 for y in HUE_Y..HUE_Y + HUE_HEIGHT {
                     write_opaque_pixel(pixels, pitch, x, y, rgb);
                 }
+            }
+            for x in 0..PICKER_WIDTH {
+                let input = x as u8;
+                let level = gamma_entry(input, picker.gamma_x);
+                let rgb = if picker.gamma_before.is_some() {
+                    [level; 3]
+                } else {
+                    [48; 3]
+                };
+                for y in GAMMA_Y..GAMMA_Y + GAMMA_HEIGHT {
+                    write_opaque_pixel(pixels, pitch, x, y, rgb);
+                }
+            }
+            for y in GAMMA_Y..GAMMA_Y + GAMMA_HEIGHT {
+                write_opaque_pixel(pixels, pitch, u32::from(picker.gamma_x), y, [255, 64, 0]);
             }
             let _ = width;
         },
@@ -486,10 +549,89 @@ mod tests {
         assert_eq!(panel_at(0, (HUE_Y + HUE_HEIGHT - 1) as i32), Some(PickerPanel::Hue));
         assert_eq!(panel_at(0, (HUE_Y - 1) as i32), None);
         assert_eq!(panel_at(0, (HUE_Y + HUE_HEIGHT) as i32), None);
+        assert_eq!(panel_at(0, GAMMA_Y as i32), Some(PickerPanel::Gamma));
+        assert_eq!(panel_at(255, (GAMMA_Y + GAMMA_HEIGHT - 1) as i32), Some(PickerPanel::Gamma));
+    }
+
+    #[test]
+    fn gamma_identity_and_endpoints() {
+        assert_eq!(gamma_entry(0, 127), 0);
+        assert_eq!(gamma_entry(255, 127), 255);
+        assert_eq!(gamma_exponent_milli(127), 1000);
+        assert!(gamma_entry(128, 0) > gamma_entry(128, 127));
+        assert!(gamma_entry(128, 255) < gamma_entry(128, 127));
     }
 }
 
 fn set_bottom_color(rgb: [u8; 3]) -> bool {
     crate::intel::set_pipe_a_bottom_color_rgb8(rgb[0], rgb[1], rgb[2])
         || crate::virtio_gpu_logo::set_background_color(rgb[0], rgb[1], rgb[2])
+}
+
+// Keep this first gamma experiment local to the UI4 picker. The saved MMIO
+// values are the getter's hardware snapshot; closing the picker restores it.
+fn read_pipe_a_gamma() -> Option<PipeGammaSnapshot> {
+    let dev = crate::intel::claimed_device()?;
+    let mut legacy_palette = [0; 256];
+    for (index, entry) in legacy_palette.iter_mut().enumerate() {
+        *entry = crate::intel::mmio_read(dev, PIPE_A_LEGACY_PALETTE + index * 4);
+    }
+    Some(PipeGammaSnapshot {
+        mode: crate::intel::mmio_read(dev, PIPE_A_GAMMA_MODE),
+        legacy_palette,
+    })
+}
+
+fn gamma_exponent_milli(x: u8) -> u32 {
+    if x <= 127 {
+        500 + u32::from(x) * 500 / 127
+    } else {
+        1000 + (u32::from(x) - 127) * 500 / 128
+    }
+}
+
+fn gamma_entry(input: u8, x: u8) -> u8 {
+    if x == 127 {
+        return input;
+    }
+    let exponent = gamma_exponent_milli(x) as f32 / 1000.0;
+    (libm::powf(f32::from(input) / 255.0, exponent) * 255.0 + 0.5).clamp(0.0, 255.0) as u8
+}
+
+fn set_pipe_a_gamma(x: u8) -> bool {
+    let Some(dev) = crate::intel::claimed_device() else {
+        return false;
+    };
+    let old_mode = crate::intel::mmio_read(dev, PIPE_A_GAMMA_MODE);
+    // Stop the post-CSC lookup while replacing all entries, then switch to
+    // the PRM's 256-entry legacy gamma mode on the next vertical blank.
+    crate::intel::mmio_write(dev, PIPE_A_GAMMA_MODE, old_mode & !POST_CSC_GAMMA_ENABLE);
+    for input in 0..=u8::MAX {
+        let value = u32::from(gamma_entry(input, x));
+        let rgb = (value << 16) | (value << 8) | value;
+        crate::intel::mmio_write(dev, PIPE_A_LEGACY_PALETTE + usize::from(input) * 4, rgb);
+    }
+    let mode = (old_mode & !GAMMA_MODE_MASK) | POST_CSC_GAMMA_ENABLE;
+    crate::intel::mmio_write(dev, PIPE_A_GAMMA_MODE, mode);
+    let midpoint = u32::from(gamma_entry(128, x));
+    let expected_midpoint = (midpoint << 16) | (midpoint << 8) | midpoint;
+    crate::intel::mmio_read(dev, PIPE_A_GAMMA_MODE) == mode
+        && crate::intel::mmio_read(dev, PIPE_A_LEGACY_PALETTE + 128 * 4) == expected_midpoint
+}
+
+fn restore_pipe_a_gamma(before: &PipeGammaSnapshot) {
+    let Some(dev) = crate::intel::claimed_device() else {
+        return;
+    };
+    let mode = crate::intel::mmio_read(dev, PIPE_A_GAMMA_MODE);
+    crate::intel::mmio_write(dev, PIPE_A_GAMMA_MODE, mode & !POST_CSC_GAMMA_ENABLE);
+    for (index, &entry) in before.legacy_palette.iter().enumerate() {
+        crate::intel::mmio_write(dev, PIPE_A_LEGACY_PALETTE + index * 4, entry);
+    }
+    crate::intel::mmio_write(dev, PIPE_A_GAMMA_MODE, before.mode);
+    crate::log_info!(target: "ui4/color-picker";
+        "ui4/color-picker: pipe-a-gamma restored mode=0x{:08X} readback=0x{:08X}\n",
+        before.mode,
+        crate::intel::mmio_read(dev, PIPE_A_GAMMA_MODE),
+    );
 }
