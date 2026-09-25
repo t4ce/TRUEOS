@@ -472,6 +472,8 @@ pub(crate) struct RgbaOverlayTile<'a> {
     pub(crate) gpgpu_scanout_cache: bool,
     /// Additional whole-tile opacity applied after source alpha.
     pub(crate) opacity: u8,
+    /// Rounded destination clip, as per-mille of a full half-short-side arc.
+    pub(crate) arc: u16,
     /// The producer contract guarantees alpha=255 for every published pixel.
     /// This permits an opaque primary tile to replace damaged pixels directly,
     /// without first sampling the immutable base in a second GPU run.
@@ -6241,6 +6243,7 @@ fn compose_premultiplied_rgba_tiles_into_primary_gpgpu(
                 dst_width: tile.width,
                 dst_height: tile.height,
                 opacity: tile.opacity,
+                arc: tile.arc,
             });
         }
         return match crate::intel::gpgpu::queue_ui4_compositor_layers(
@@ -6533,6 +6536,7 @@ fn compose_premultiplied_rgba_tiles_into_overlay_gpgpu(
                 dst_width: tile.width,
                 dst_height: tile.height,
                 opacity: tile.opacity,
+                arc: tile.arc,
             });
         }
         return match crate::intel::gpgpu::queue_ui4_compositor_layers(
@@ -6774,6 +6778,17 @@ fn copy_premultiplied_rgba_tile_into_overlay_clipped(
             .saturating_add(draw.x as usize * 4);
         let dst_row = unsafe { surface.virt.add(dst_row_off).cast::<u32>() };
         for col in 0..draw.width as usize {
+            let local_x = destination_x.saturating_add(col as u32);
+            let local_y = destination_y.saturating_add(row as u32);
+            if !crate::ui4::window_arc::contains(
+                tile.width,
+                tile.height,
+                tile.arc,
+                local_x,
+                local_y,
+            ) {
+                continue;
+            }
             let source_x = tile_source_coordinate(
                 u64::from(destination_x).saturating_add(col as u64),
                 tile.source_width,

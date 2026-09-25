@@ -74,7 +74,7 @@ pub(crate) fn queue_ui4_compositor_layers(
                     dst_height: layer.dst_height,
                     opacity: layer.opacity as u32,
                     flags: 0,
-                    reserved: 0,
+                    arc: layer.arc as u32,
                 },
             );
         }

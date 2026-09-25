@@ -2406,7 +2406,7 @@ fn cursor_visual_presentation(
         return (route.x, route.y, icon, None);
     };
     let placement = window.presentation_placement;
-    if !placement_contains(placement, route.x, route.y) {
+    if !placement_contains(placement, window.arc, route.x, route.y) {
         return (route.x, route.y, icon, None);
     }
     let (Ok(local_x), Ok(local_y)) = (
@@ -2918,7 +2918,7 @@ fn translated_frame_placement(
     Some(placement)
 }
 
-fn placement_contains(placement: WindowPlacement, x: u32, y: u32) -> bool {
+fn placement_contains(placement: WindowPlacement, arc: u16, x: u32, y: u32) -> bool {
     if !placement.visible {
         return false;
     }
@@ -2926,10 +2926,18 @@ fn placement_contains(placement: WindowPlacement, x: u32, y: u32) -> bool {
     let y = i64::from(y);
     let left = i64::from(placement.x);
     let top = i64::from(placement.y);
-    x >= left
+    let in_bounds = x >= left
         && y >= top
         && x < left.saturating_add(i64::from(placement.width))
-        && y < top.saturating_add(i64::from(placement.height))
+        && y < top.saturating_add(i64::from(placement.height));
+    in_bounds
+        && super::window_arc::contains(
+            placement.width,
+            placement.height,
+            arc,
+            (x - left) as u32,
+            (y - top) as u32,
+        )
 }
 
 fn topmost_window_at(x: u32, y: u32) -> Option<WindowSnapshot> {
@@ -2938,7 +2946,7 @@ fn topmost_window_at(x: u32, y: u32) -> Option<WindowSnapshot> {
         .into_iter()
         .filter(|window| window.state == WindowState::Ready)
         .filter(|window| window.interaction.hit_testable)
-        .filter(|window| placement_contains(window.presentation_placement, x, y))
+        .filter(|window| placement_contains(window.presentation_placement, window.arc, x, y))
         // Plane slot is the hardware pipe-local stacking boundary. Only z
         // order windows against peers in the same slot; a later slot remains
         // above an earlier slot regardless of its local z value.

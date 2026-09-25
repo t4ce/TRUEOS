@@ -8,6 +8,7 @@
 // - Every source GPU virtual address is carried by the immutable layer table.
 //   The host therefore never changes a bindful source between ordered walkers.
 // - Layers are axis-aligned, nearest sampled, and applied in table/z order.
+// - Each layer carries one rounded-rectangle arc, resolved in destination space.
 
 #define UI4_LAYER_DWORDS 12u
 #define UI4_COMPOSE_FLAG_BASE_XRGB (1u << 0)
@@ -64,6 +65,21 @@ static inline uint premul_src_over(uint src, uint dst)
     return (a << 24) | (b << 16) | (g << 8) | r;
 }
 
+static inline bool inside_arc(uint x, uint y, uint width, uint height, uint arc)
+{
+    if (arc == 0u) {
+        return true;
+    }
+    ulong radius = ((ulong)min(width, height) * (ulong)min(arc, 1000u)) / 1000ul;
+    ulong px = (ulong)x * 2ul + 1ul;
+    ulong py = (ulong)y * 2ul + 1ul;
+    ulong right = (ulong)width * 2ul - radius;
+    ulong bottom = (ulong)height * 2ul - radius;
+    ulong dx = px < radius ? radius - px : (px > right ? px - right : 0ul);
+    ulong dy = py < radius ? radius - py : (py > bottom ? py - bottom : 0ul);
+    return dx * dx + dy * dy <= radius * radius;
+}
+
 __attribute__((intel_reqd_sub_group_size(16)))
 __kernel void ui4_compose_layers_rgba8(
     __global const uint *base_xrgb,
@@ -113,12 +129,14 @@ __kernel void ui4_compose_layers_rgba8(
             int dst_y = as_int(layers[d + 6u]);
             uint layer_width = layers[d + 7u];
             uint layer_height = layers[d + 8u];
+            uint arc = layers[d + 11u];
 
             int rel_x = (int)x - dst_x;
             int rel_y = (int)y - dst_y;
             if (rel_x < 0 || rel_y < 0 || (uint)rel_x >= layer_width
                 || (uint)rel_y >= layer_height || src_width == 0u || src_height == 0u
-                || layer_width == 0u || layer_height == 0u) {
+                || layer_width == 0u || layer_height == 0u
+                || !inside_arc((uint)rel_x, (uint)rel_y, layer_width, layer_height, arc)) {
                 continue;
             }
 
@@ -141,12 +159,14 @@ __kernel void ui4_compose_layers_rgba8(
         uint layer_width = layers[d + 7u];
         uint layer_height = layers[d + 8u];
         uint opacity = min(layers[d + 9u], 255u);
+        uint arc = layers[d + 11u];
 
         int rel_x = (int)x - dst_x;
         int rel_y = (int)y - dst_y;
         if (rel_x < 0 || rel_y < 0 || (uint)rel_x >= layer_width
             || (uint)rel_y >= layer_height || src_width == 0u || src_height == 0u
-            || layer_width == 0u || layer_height == 0u) {
+            || layer_width == 0u || layer_height == 0u
+            || !inside_arc((uint)rel_x, (uint)rel_y, layer_width, layer_height, arc)) {
             continue;
         }
 

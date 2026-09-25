@@ -356,6 +356,8 @@ pub(crate) struct WindowSnapshot {
     pub(crate) producer_name: &'static str,
     pub(crate) session: WindowSessionId,
     pub(crate) frame: FrameHandle,
+    /// Rounded outline of this frame, 0=rectangle and 1000=full arc.
+    pub(crate) arc: u16,
     pub(crate) background: Option<WindowBackground>,
     pub(crate) buffering: FrameBuffering,
     pub(crate) output: OutputId,
@@ -486,6 +488,7 @@ struct WindowRecord {
     owner: WindowOwner,
     session: WindowSessionId,
     frame: FrameHandle,
+    arc: u16,
     background: Option<WindowBackground>,
     buffering: FrameBuffering,
     output: OutputId,
@@ -1582,6 +1585,7 @@ impl WindowRecord {
             owner: request.owner,
             session: request.session,
             frame: request.frame,
+            arc: 0,
             background: None,
             buffering,
             output: request.output,
@@ -1618,6 +1622,7 @@ impl WindowRecord {
             producer_name: self.owner.name(),
             session: self.session,
             frame: self.frame,
+            arc: self.arc,
             background: self.background,
             buffering: self.buffering,
             output: self.output,
@@ -2421,6 +2426,30 @@ pub(crate) fn set_window_hit_testable(
     }
     window.interaction.hit_testable = hit_testable;
     window.revision = next_serial(window.revision);
+    broker.mark_composition_changed();
+    drop(broker);
+    super::cursor_frame_inout::frame_visual_changed(owner, id);
+    Ok(())
+}
+
+/// Set one frame's rounded outline. Its extent may later resize; the arc
+/// fraction remains attached to this window and is resolved at presentation.
+pub(crate) fn set_window_arc(
+    owner: WindowOwner,
+    id: WindowId,
+    arc: u16,
+) -> Result<(), WindowBrokerError> {
+    if arc > super::window_arc::ARC_MAX {
+        return Err(WindowBrokerError::InvalidHandle);
+    }
+    let mut broker = WINDOW_BROKER.lock();
+    let window = broker.checked_window_mut(owner, id)?;
+    if window.arc == arc {
+        return Ok(());
+    }
+    window.arc = arc;
+    window.revision = next_serial(window.revision);
+    window.damage = Some(DamageRegion::FULL);
     broker.mark_composition_changed();
     drop(broker);
     super::cursor_frame_inout::frame_visual_changed(owner, id);

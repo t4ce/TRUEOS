@@ -290,6 +290,7 @@ struct CompositionWindowStamp {
     frame: FrameHandle,
     publish_serial: u64,
     placement: WindowPlacement,
+    arc: u16,
 }
 
 #[trueos_executor::task(pool_size = 1)]
@@ -636,6 +637,7 @@ fn build_plane_plan(
             frame: window.frame,
             publish_serial: window.publish_serial,
             placement,
+            arc: window.arc,
         };
         plan.next_windows.push(current);
         let previous = state
@@ -667,6 +669,14 @@ fn build_plane_plan(
                 );
             }
             Some(previous) if previous.frame != current.frame => {
+                add_placement_damage(
+                    &mut plan.damage,
+                    current.placement,
+                    output_width,
+                    output_height,
+                );
+            }
+            Some(previous) if previous.arc != current.arc => {
                 add_placement_damage(
                     &mut plan.damage,
                     current.placement,
@@ -870,7 +880,8 @@ fn queue_async_plane(
     // descriptors for each damaged pixel and performs premultiplied source-over.
     // Plan uniformity is irrelevant; stack membership alone selects the painter.
     let stack_plane = target_plane_slot(plan.target) == super::PRIMARY_PLANE_SLOT;
-    let sparse_static_painter = all_static_single || stack_plane;
+    let has_arc = selected.iter().any(|(window, _)| window.arc != 0);
+    let sparse_static_painter = (all_static_single || stack_plane) && !has_arc;
     // Overlap inside the stack is the contract, not an anomaly. Keep the probe
     // for the isolated single-plane painter, where it still reports an
     // unresolved z specialization.
@@ -1022,7 +1033,7 @@ fn queue_async_plane(
     // producer. Immutable single-buffer frames are shareable; released-compute
     // Blueprint snapshots (including image-viewer) deliberately continue
     // through the domain-safe static compositor below.
-    if selected.len() == 1 && !all_shared_composable {
+    if selected.len() == 1 && !all_shared_composable && !has_arc {
         let (window, view) = selected[0];
         return Err(Ui4CompositorError::DirectOnlySource {
             window: window.id.raw(),
@@ -1100,10 +1111,12 @@ fn queue_async_plane(
             ),
             gpgpu_scanout_cache: composition_source_uses_scanout_cache(window, *view),
             opacity: window.placement.opacity,
-            known_opaque: view.fully_opaque
-                || frame_snapshot(window.frame)
-                    .map(|snapshot| snapshot.plan.content == FrameContent::Video)
-                    .unwrap_or(false),
+            arc: window.arc,
+            known_opaque: window.arc == 0
+                && (view.fully_opaque
+                    || frame_snapshot(window.frame)
+                        .map(|snapshot| snapshot.plan.content == FrameContent::Video)
+                        .unwrap_or(false)),
             expected_rgba: None,
         })
         .collect();
@@ -1284,6 +1297,9 @@ fn placements_overlap(left: WindowPlacement, right: WindowPlacement) -> bool {
 }
 
 fn direct_overlay_eligible(window: WindowSnapshot, view: FrameRgbaView) -> bool {
+    if window.arc != 0 {
+        return false;
+    }
     if !direct_overlay_geometry_eligible(window, view) {
         return false;
     }

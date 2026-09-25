@@ -91,6 +91,7 @@ pub(crate) struct GpgpuUi4ComposeLayer {
     pub(crate) dst_width: u32,
     pub(crate) dst_height: u32,
     pub(crate) opacity: u8,
+    pub(crate) arc: u16,
 }
 
 #[repr(C)]
@@ -107,7 +108,7 @@ struct GpgpuUi4ComposeLayerDesc {
     dst_height: u32,
     opacity: u32,
     flags: u32,
-    reserved: u32,
+    arc: u32,
 }
 
 #[derive(Copy, Clone, Debug)]

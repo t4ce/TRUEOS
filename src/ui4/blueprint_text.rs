@@ -3161,6 +3161,38 @@ pub extern "C" fn trueos_cabi_ui4_scene_frame_set_hit_testable(
     0
 }
 
+/// Set one Blueprint frame's rounded outline; sibling frames retain theirs.
+pub extern "C" fn trueos_cabi_ui4_scene_frame_set_arc(window_id: u32, arc: u32) -> i32 {
+    if arc > u32::from(super::window_arc::ARC_MAX) {
+        return ERROR_INVALID;
+    }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_status(
+            trueos_vm::vmcall::OP_BP_UI4_SCENE_FRAME_SET_ARC,
+            window_id as u64,
+            arc as u64,
+            &[],
+        );
+    }
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT;
+    };
+    let window = {
+        let mut surfaces = SURFACES.lock();
+        let Some(surface) = surface_mut(&mut surfaces, owner, window_id) else {
+            return ERROR_NOT_FOUND;
+        };
+        if surface.render_target != surface.window.raw() {
+            return ERROR_INVALID;
+        }
+        surface.window
+    };
+    match super::window_broker::set_window_arc(owner, window, arc as u16) {
+        Ok(()) => 0,
+        Err(_) => ERROR_UI4,
+    }
+}
+
 /// Choose whether Escape closes this frame (the default) or is delivered to
 /// this Blueprint.  The setting applies to this frame only.
 pub extern "C" fn trueos_cabi_ui4_scene_frame_set_escape_key_action(

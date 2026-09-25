@@ -266,6 +266,8 @@ pub const OP_BP_UI4_SCENE_FRAME_SET_HIT_TESTABLE: u32 = 0x123; // arg0 window,ar
 pub const OP_BP_LUMEN_TOOL_RESULT_SUBMIT: u32 = 0x151; // arg0 turn,payload tail then tool-role result -> rc
 pub const OP_BP_UI4_SCENE_FRAME_SET_ESCAPE_KEY_ACTION: u32 = 0x150; // arg0 window,arg1 Ui4FrameEscapeKeyAction -> rc
 pub const OP_BP_UI4_SCENE_FRAME_SET_OPACITY: u32 = 0x15D; // arg0 window,arg1 opacity:u8 -> rc
+pub const OP_BP_UI4_SCENE_FRAME_SET_ARC: u32 =
+    trueos_vm::vmcall::OP_BP_UI4_SCENE_FRAME_SET_ARC; // arg0 window,arg1 arc-per-mille -> rc
 pub const OP_BP_UI4_SCENE_SET_DISPLAY_BOTTOM_COLOR: u32 =
     trueos_vm::vmcall::OP_BP_UI4_SCENE_SET_DISPLAY_BOTTOM_COLOR;
 pub const OP_BP_UI4_SCENE_FONT_SPRITE_REQUEST_V1: u32 = 0x15E; // arg0 window,arg1 scalar,payload font/px/color -> ticket
@@ -2536,6 +2538,18 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 arg0 as u32,
                 arg1 as u32,
             );
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_SCENE_FRAME_SET_ARC => {
+            let rc = if arg0 > u32::MAX as u64 || arg1 > u32::MAX as u64 {
+                -1
+            } else {
+                crate::ui4::blueprint_text::trueos_cabi_ui4_scene_frame_set_arc(
+                    arg0 as u32,
+                    arg1 as u32,
+                )
+            };
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }

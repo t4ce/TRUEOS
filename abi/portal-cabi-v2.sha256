@@ -1,3 +1,2 @@
-# Additive WC3 x86 context accessors for the existing per-context 832-byte
-# x87/SSE/AVX sidecar. Existing C ABI symbols and layouts are unchanged.
-6127e50bf48d7d39e821b612a1ffccbf02f4aaf17a8bc67dc36a153422d9b9b8
+# Additive UI4 per-frame arc setter. Existing C ABI symbols and layouts are unchanged.
+9eef6313bc254a60098ed361ffedc8db1fceee13059b76dbe655b99ad92ebbf4
