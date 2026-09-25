@@ -551,7 +551,7 @@
     "inputs": [
       {
         "path": "crates/trueos-shader/gpgpu/kernels/ui4_compose_layers_rgba8.clcpp",
-        "sha256": "789e85026ffaa2e2afd7b6ef5f311cd360ea1050da2b7a0f73587b76b8d6715b",
+        "sha256": "8b7a1f71a0151d67635129a4e116f06fa98a2a0ad223f2348d1cc13d1e3b4d6d",
         "size_bytes": 7160
       }
     ],

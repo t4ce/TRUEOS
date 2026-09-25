@@ -113,9 +113,9 @@ __kernel void ui4_compose_layers_rgba8(
         color = xrgb_to_rgba(base_xrgb[y * base_pitch_pixels + x]);
     }
 
-    // Slot0 is a rectangular visibility stack. Its frame surfaces may have
+    // Slot0 is an opaque frame visibility stack. Its frame surfaces may have
     // authored alpha internally, but frames are never source-over blended
-    // with each other: the topmost covering rectangle owns this output pixel.
+    // with each other: the topmost covering outline owns this output pixel.
     // Display hardware subsequently blends Slot0's final RGBA pixel over Pipe A.
     if ((flags & UI4_COMPOSE_FLAG_OPAQUE_RECTS) != 0u) {
         for (uint reverse_index = layer_count; reverse_index > 0u; --reverse_index) {

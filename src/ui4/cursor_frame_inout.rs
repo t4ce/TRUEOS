@@ -757,13 +757,70 @@ fn append_arc_selection_outline(
     let mut points = alloc::vec::Vec::<(i64, i64)>::new();
     // Pixel centers sit one pixel beyond the frame's content edges.
     append_outline_line(&mut points, x + radius, y - 1.0, x + w - radius, y - 1.0);
-    append_outline_arc(&mut points, x + w - radius, y + radius, outer_radius, -core::f32::consts::FRAC_PI_2);
+    append_outline_arc(
+        &mut points,
+        x + w - radius,
+        y + radius,
+        outer_radius,
+        -core::f32::consts::FRAC_PI_2,
+    );
     append_outline_line(&mut points, x + w, y + radius, x + w, y + h - radius);
     append_outline_arc(&mut points, x + w - radius, y + h - radius, outer_radius, 0.0);
     append_outline_line(&mut points, x + w - radius, y + h, x + radius, y + h);
-    append_outline_arc(&mut points, x + radius, y + h - radius, outer_radius, core::f32::consts::FRAC_PI_2);
+    append_outline_arc(
+        &mut points,
+        x + radius,
+        y + h - radius,
+        outer_radius,
+        core::f32::consts::FRAC_PI_2,
+    );
     append_outline_line(&mut points, x - 1.0, y + h - radius, x - 1.0, y + radius);
     append_outline_arc(&mut points, x + radius, y + radius, outer_radius, core::f32::consts::PI);
+    // Rounding the sampled curve can pull a few points into the content.
+    // Nudge those pixels outward so the selection never paints the frame.
+    for point in &mut points {
+        let local_x = point.0 - i64::from(p.x);
+        let local_y = point.1 - i64::from(p.y);
+        if local_x < 0
+            || local_y < 0
+            || local_x >= i64::from(p.width)
+            || local_y >= i64::from(p.height)
+            || !super::window_arc::contains(
+                p.width,
+                p.height,
+                window.arc,
+                local_x as u32,
+                local_y as u32,
+            )
+        {
+            continue;
+        }
+        let outward_x = if local_x * 2 < i64::from(p.width) {
+            -1
+        } else {
+            1
+        };
+        let outward_y = if local_y * 2 < i64::from(p.height) {
+            -1
+        } else {
+            1
+        };
+        for (dx, dy) in [(outward_x, 0), (0, outward_y), (outward_x, outward_y)] {
+            let nx = local_x + dx;
+            let ny = local_y + dy;
+            if nx < 0
+                || ny < 0
+                || nx >= i64::from(p.width)
+                || ny >= i64::from(p.height)
+                || !super::window_arc::contains(p.width, p.height, window.arc, nx as u32, ny as u32)
+            {
+                point.0 += dx;
+                point.1 += dy;
+                break;
+            }
+        }
+    }
+    points.dedup();
     if points.len() > 1 && points.first() == points.last() {
         points.pop();
     }
@@ -780,8 +837,17 @@ fn append_arc_selection_outline(
             }
             let lx = px - i64::from(c.x);
             let ly = py - i64::from(c.y);
-            lx >= 0 && ly >= 0 && lx < i64::from(c.width) && ly < i64::from(c.height)
-                && super::window_arc::contains(c.width, c.height, candidate.arc, lx as u32, ly as u32)
+            lx >= 0
+                && ly >= 0
+                && lx < i64::from(c.width)
+                && ly < i64::from(c.height)
+                && super::window_arc::contains(
+                    c.width,
+                    c.height,
+                    candidate.arc,
+                    lx as u32,
+                    ly as u32,
+                )
         });
         if !occluded {
             output.push(CursorSelectionStrip {
@@ -802,19 +868,39 @@ fn append_outline_point(points: &mut alloc::vec::Vec<(i64, i64)>, x: f32, y: f32
     }
 }
 
-fn append_outline_line(points: &mut alloc::vec::Vec<(i64, i64)>, ax: f32, ay: f32, bx: f32, by: f32) {
+fn append_outline_line(
+    points: &mut alloc::vec::Vec<(i64, i64)>,
+    ax: f32,
+    ay: f32,
+    bx: f32,
+    by: f32,
+) {
     let steps = libm::ceilf(libm::hypotf(bx - ax, by - ay)) as u32;
     for step in 0..=steps {
-        let t = if steps == 0 { 0.0 } else { step as f32 / steps as f32 };
+        let t = if steps == 0 {
+            0.0
+        } else {
+            step as f32 / steps as f32
+        };
         append_outline_point(points, ax + (bx - ax) * t, ay + (by - ay) * t);
     }
 }
 
-fn append_outline_arc(points: &mut alloc::vec::Vec<(i64, i64)>, cx: f32, cy: f32, radius: f32, start: f32) {
+fn append_outline_arc(
+    points: &mut alloc::vec::Vec<(i64, i64)>,
+    cx: f32,
+    cy: f32,
+    radius: f32,
+    start: f32,
+) {
     let steps = (libm::ceilf(radius * core::f32::consts::FRAC_PI_2) as u32).max(1);
     for step in 0..=steps {
         let theta = start + core::f32::consts::FRAC_PI_2 * step as f32 / steps as f32;
-        append_outline_point(points, cx + radius * libm::cosf(theta), cy + radius * libm::sinf(theta));
+        append_outline_point(
+            points,
+            cx + radius * libm::cosf(theta),
+            cy + radius * libm::sinf(theta),
+        );
     }
 }
 
