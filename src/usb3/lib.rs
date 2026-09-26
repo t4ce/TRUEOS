@@ -5,7 +5,8 @@ use core::{alloc::Layout, num::NonZeroUsize, ptr::NonNull, time::Duration};
 use crab_usb as crabusb;
 use spin::Mutex;
 
-static OBSERVED_USB_DEVICES: Mutex<Vec<TlbUsbDevice>> = Mutex::new(Vec::new());
+static OBSERVED_USB_DEVICES: [Mutex<Vec<TlbUsbDevice>>; super::MAX_CRABUSB_CONTROLLERS] =
+    [const { Mutex::new(Vec::new()) }; super::MAX_CRABUSB_CONTROLLERS];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct DmaRemapTrace {
@@ -353,26 +354,30 @@ pub fn tlb_usb_snapshot() -> TlbUsbSnapshot {
                 .collect()
         })
         .unwrap_or_default();
-    let devices = OBSERVED_USB_DEVICES.lock().clone();
-    topology.extend(devices.iter().map(|device| TlbUsbTopologyNode {
-        kind: if device.class == 0x09 {
-            TlbUsbTopologyNodeKind::Hub
-        } else {
-            TlbUsbTopologyNodeKind::Device
-        },
-        controller_index: 0,
-        root_port_id: device.root_port_id,
-        port_id: device.port_id,
-        depth: device.path.len().try_into().unwrap_or(u8::MAX),
-        slot_id: Some(device.slot_id),
-        parent_slot_id: device.parent_hub_slot_id,
-        speed: device.speed,
-        vendor_id: Some(device.vendor_id),
-        product_id: Some(device.product_id),
-        class: Some(device.class),
-        subclass: Some(device.subclass),
-        protocol: Some(device.protocol),
-    }));
+    let mut devices = Vec::new();
+    for (controller_index, observed) in OBSERVED_USB_DEVICES.iter().enumerate() {
+        let observed = observed.lock().clone();
+        topology.extend(observed.iter().map(|device| TlbUsbTopologyNode {
+            kind: if device.class == 0x09 {
+                TlbUsbTopologyNodeKind::Hub
+            } else {
+                TlbUsbTopologyNodeKind::Device
+            },
+            controller_index,
+            root_port_id: device.root_port_id,
+            port_id: device.port_id,
+            depth: device.path.len().try_into().unwrap_or(u8::MAX),
+            slot_id: Some(device.slot_id),
+            parent_slot_id: device.parent_hub_slot_id,
+            speed: device.speed,
+            vendor_id: Some(device.vendor_id),
+            product_id: Some(device.product_id),
+            class: Some(device.class),
+            subclass: Some(device.subclass),
+            protocol: Some(device.protocol),
+        }));
+        devices.extend(observed);
+    }
     TlbUsbSnapshot {
         controllers: pci_usb_controllers(),
         probe_device_count: Some(devices.len()),
@@ -382,23 +387,30 @@ pub fn tlb_usb_snapshot() -> TlbUsbSnapshot {
     }
 }
 
-pub fn observe_probed_devices(label: &str, devices: &[crabusb::ProbedDevice]) {
-    let inferred_root_port = super::lab::latest_snapshot().and_then(|snapshot| {
-        let mut connected = snapshot
-            .ports
-            .iter()
-            .filter(|port| (port.portsc & 1) != 0)
-            .map(|port| port.port_id);
-        let first = connected.next()?;
-        connected.next().is_none().then_some(first)
-    });
+pub fn observe_probed_devices(
+    controller_index: usize,
+    label: &str,
+    devices: &[crabusb::ProbedDevice],
+) {
+    let inferred_root_port = (controller_index == 0)
+        .then(super::lab::latest_snapshot)
+        .flatten()
+        .and_then(|snapshot| {
+            let mut connected = snapshot
+                .ports
+                .iter()
+                .filter(|port| (port.portsc & 1) != 0)
+                .map(|port| port.port_id);
+            let first = connected.next()?;
+            connected.next().is_none().then_some(first)
+        });
 
-    let mut observed = OBSERVED_USB_DEVICES.lock();
+    let mut observed = OBSERVED_USB_DEVICES[controller_index].lock();
     if label == "initial" {
         observed.clear();
     }
     for probed in devices {
-        let next = tlb_device_from_probed(probed, inferred_root_port);
+        let next = tlb_device_from_probed(controller_index, probed, inferred_root_port);
         if let Some(existing) = observed
             .iter_mut()
             .find(|device| device.stable_id == next.stable_id)
@@ -411,6 +423,7 @@ pub fn observe_probed_devices(label: &str, devices: &[crabusb::ProbedDevice]) {
 }
 
 fn tlb_device_from_probed(
+    controller_index: usize,
     probed: &crabusb::ProbedDevice,
     inferred_root_port: Option<u8>,
 ) -> TlbUsbDevice {
@@ -457,6 +470,7 @@ fn tlb_device_from_probed(
     let root_port_id = inferred_root_port.unwrap_or(0);
     TlbUsbDevice {
         stable_id: stable_usb_id(
+            controller_index,
             slot_id,
             descriptor.vendor_id,
             descriptor.product_id,
@@ -482,7 +496,13 @@ fn tlb_device_from_probed(
     }
 }
 
-fn stable_usb_id(slot_id: u8, vendor_id: u16, product_id: u16, device_version: u16) -> u32 {
+fn stable_usb_id(
+    controller_index: usize,
+    slot_id: u8,
+    vendor_id: u16,
+    product_id: u16,
+    device_version: u16,
+) -> u32 {
     let mut hash = 0x811c_9dc5u32;
     for byte in [
         slot_id,
@@ -495,7 +515,7 @@ fn stable_usb_id(slot_id: u8, vendor_id: u16, product_id: u16, device_version: u
     ] {
         hash = (hash ^ u32::from(byte)).wrapping_mul(0x0100_0193);
     }
-    hash
+    hash ^ ((controller_index as u32) << 24)
 }
 
 fn usb_device_kind(class: u8) -> &'static str {
@@ -530,10 +550,10 @@ fn xhci_port_speed_name(portsc: u32) -> &'static str {
 pub fn crabusb_observed_device_summaries(
     controller_index: usize,
 ) -> Result<Vec<UsbDeviceSummary>, &'static str> {
-    if controller_index != 0 {
+    let Some(observed) = OBSERVED_USB_DEVICES.get(controller_index) else {
         return Ok(Vec::new());
-    }
-    Ok(OBSERVED_USB_DEVICES
+    };
+    Ok(observed
         .lock()
         .iter()
         .map(|device| UsbDeviceSummary {
@@ -556,10 +576,10 @@ pub fn crabusb_observed_device_summaries(
 pub fn crabusb_observed_devices(
     controller_index: usize,
 ) -> Result<Vec<TlbUsbDevice>, &'static str> {
-    if controller_index != 0 {
+    let Some(observed) = OBSERVED_USB_DEVICES.get(controller_index) else {
         return Ok(Vec::new());
-    }
-    Ok(OBSERVED_USB_DEVICES.lock().clone())
+    };
+    Ok(observed.lock().clone())
 }
 
 #[derive(Clone, Debug, Default)]

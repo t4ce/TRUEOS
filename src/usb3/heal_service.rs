@@ -223,13 +223,10 @@ pub fn latest_report() -> Option<HealServiceReport> {
     LATEST_REPORT.lock().clone()
 }
 
-pub(crate) fn select_first_backend() -> Option<(XhciBackendSelection, crate::pci::PciDevice)> {
-    let dev = crate::pci::with_devices(|devices| {
-        devices
-            .iter()
-            .copied()
-            .find(|dev| dev.class == 0x0c && dev.subclass == 0x03 && dev.prog_if == 0x30)
-    })?;
+pub(crate) fn claim_backend(
+    dev: crate::pci::PciDevice,
+    publish_selection: bool,
+) -> Option<XhciBackendSelection> {
     let selection = select_backend(dev);
     if let Err(error) = crate::pci::claim_device(&dev, selection.claim_owner()) {
         crate::log!(
@@ -244,8 +241,10 @@ pub(crate) fn select_first_backend() -> Option<(XhciBackendSelection, crate::pci
         );
         return None;
     }
-    *LATEST_SELECTION.lock() = Some(selection);
-    Some((selection, dev))
+    if publish_selection {
+        *LATEST_SELECTION.lock() = Some(selection);
+    }
+    Some(selection)
 }
 
 fn select_backend(dev: crate::pci::PciDevice) -> XhciBackendSelection {
