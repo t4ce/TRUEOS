@@ -2533,6 +2533,25 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
+        trueos_vm::vmcall::OP_BP_UI4_SCENE_SET_DISPLAY_GAMMA_RAMP => {
+            const GAMMA_RAMP_BYTES: usize = 3 * 256 * 2;
+            let rc = if arg0 > u32::MAX as u64 || req_len as usize != GAMMA_RAMP_BYTES {
+                -1
+            } else if let Some(payload) = request_payload(vm_id, req_len) {
+                let mut ramp = [0u16; 3 * 256];
+                for (word, bytes) in ramp.iter_mut().zip(payload.chunks_exact(2)) {
+                    *word = u16::from_le_bytes([bytes[0], bytes[1]]);
+                }
+                crate::ui4::blueprint_text::trueos_cabi_ui4_scene_set_display_gamma_ramp(
+                    arg0 as u32,
+                    ramp.as_ptr(),
+                )
+            } else {
+                -1
+            };
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
         OP_BP_UI4_SCENE_FRAME_SET_OPACITY => {
             let rc = crate::ui4::blueprint_text::trueos_cabi_ui4_scene_frame_set_opacity(
                 arg0 as u32,

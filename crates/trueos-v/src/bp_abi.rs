@@ -824,6 +824,8 @@ unsafe extern "C" {
     pub fn trueos_cabi_ui4_scene_frame_set_arc(window_id: u32, arc: u32) -> i32;
     /// Set the shared primary display bottom color (packed 0xRRGGBB), using an owned frame.
     pub fn trueos_cabi_ui4_scene_set_display_bottom_color(window_id: u32, rgb: u32) -> i32;
+    /// Program the shared primary display gamma LUT from a 3×256 RGB u16 ramp.
+    pub fn trueos_cabi_ui4_scene_set_display_gamma_ramp(window_id: u32, ramp: *const u16) -> i32;
     pub fn trueos_cabi_ui4_scene_frame_set_hit_testable(window_id: u32, enabled: u32) -> i32;
     pub fn trueos_cabi_ui4_scene_frame_set_escape_key_action(window_id: u32, action: u32) -> i32;
     pub fn trueos_cabi_ui4_scene_set_custom_cursor(window_id: u32, enabled: u32) -> i32;

@@ -137,6 +137,7 @@ impl CarrierPage {
 struct AddressSpace {
     handle: u64,
     owner: u8,
+    // Sorted by start; mappings never overlap. Memory transfers use binary lookup.
     mappings: Vec<Mapping>,
     generation: u64,
 }
@@ -392,15 +393,18 @@ fn mapping_index(
     let end = address
         .checked_add(u32::try_from(len).map_err(|_| ERR_INVALID)?)
         .ok_or(ERR_INVALID)?;
-    space
-        .mappings
-        .iter()
-        .position(|mapping| {
-            mapping.permissions & required == required
-                && address >= mapping.start
-                && end <= mapping.start + mapping.len
-        })
-        .ok_or(ERR_NOT_FOUND)
+    let accepts = |mapping: &Mapping| {
+        mapping.permissions & required == required
+            && address >= mapping.start
+            && end <= mapping.start + mapping.len
+    };
+    // A zero-byte request at a boundary may be admitted by either neighbor.
+    if len == 0 {
+        return space.mappings.iter().position(accepts).ok_or(ERR_NOT_FOUND);
+    }
+    let index = space.mappings.partition_point(|mapping| mapping.start <= address)
+        .checked_sub(1).ok_or(ERR_NOT_FOUND)?;
+    accepts(&space.mappings[index]).then_some(index).ok_or(ERR_NOT_FOUND)
 }
 
 pub(super) fn address_space_create(out: &mut u64) -> Result<(), i32> {
@@ -467,7 +471,8 @@ pub(super) fn address_space_map(
         return Err(ERR_BUSY);
     }
     let backing = MappingBacking::new(owner, len as usize)?;
-    space.mappings.push(Mapping {
+    let index = space.mappings.partition_point(|mapping| mapping.start < start);
+    space.mappings.insert(index, Mapping {
         start,
         len,
         permissions,
@@ -494,7 +499,7 @@ pub(super) fn address_space_unmap(handle: u64, start: u32, len: u32) -> Result<(
         .iter()
         .position(|mapping| mapping.start == start && mapping.len == len)
         .ok_or(ERR_NOT_FOUND)?;
-    space.mappings.swap_remove(index);
+    space.mappings.remove(index);
     space.generation = space.generation.wrapping_add(1).max(1);
     Ok(())
 }
@@ -731,11 +736,17 @@ pub(super) fn context_execute(
         .find(|space| space.handle == address_space && space.owner == owner)
         .ok_or(ERR_DENIED)?;
     let generation = space.generation;
-    let mappings = space
-        .mappings
-        .iter()
-        .map(|mapping| (mapping.start, mapping.len, mapping.permissions, mapping.backing.phys_start))
-        .collect::<Vec<_>>();
+    // Most resumes follow a provider call with no address-space changes.
+    // Do not allocate and copy every mapping just to reuse the existing CR3.
+    let rebuild = runtime.contexts[context_index].carrier_generation != generation
+        || runtime.contexts[context_index].carrier_cr3.is_none();
+    let mappings = if rebuild {
+        space.mappings.iter()
+            .map(|mapping| (mapping.start, mapping.len, mapping.permissions, mapping.backing.phys_start))
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
     let context = &mut runtime.contexts[context_index];
     if context.carrier_generation != generation {
         context.carrier_cr3 = None;

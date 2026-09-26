@@ -613,6 +613,14 @@ fn gamma_entry_10(input: u16, x: u8) -> u16 {
 }
 
 fn set_pipe_a_gamma(x: u8) -> bool {
+    let entries = core::array::from_fn(|input| {
+        let value = u32::from(gamma_entry_10(input as u16, x));
+        (value << 20) | (value << 10) | value
+    });
+    program_pipe_a_precision_gamma(&entries)
+}
+
+pub(crate) fn program_pipe_a_precision_gamma(entries: &[u32; PRECISION_PALETTE_ENTRIES]) -> bool {
     let Some(dev) = crate::intel::claimed_device() else {
         return false;
     };
@@ -621,16 +629,13 @@ fn set_pipe_a_gamma(x: u8) -> bool {
     // Stop the post-CSC lookup while replacing all entries, then switch to
     // the PRM's 1024-entry precision gamma mode on the next vertical blank.
     crate::intel::mmio_write(dev, PIPE_A_GAMMA_MODE, old_mode & !POST_CSC_GAMMA_ENABLE);
-    for input in 0..PRECISION_PALETTE_ENTRIES {
-        let value = u32::from(gamma_entry_10(input as u16, x));
-        let rgb = (value << 20) | (value << 10) | value;
+    for (input, rgb) in entries.iter().copied().enumerate() {
         crate::intel::mmio_write(dev, PIPE_A_PREC_INDEX, input as u32);
         crate::intel::mmio_write(dev, PIPE_A_PREC_DATA, rgb);
     }
     let mode = (old_mode & !GAMMA_MODE_MASK) | GAMMA_MODE_10_BIT | POST_CSC_GAMMA_ENABLE;
     crate::intel::mmio_write(dev, PIPE_A_GAMMA_MODE, mode);
-    let midpoint = u32::from(gamma_entry_10(512, x));
-    let expected_midpoint = (midpoint << 20) | (midpoint << 10) | midpoint;
+    let expected_midpoint = entries[512];
     crate::intel::mmio_write(dev, PIPE_A_PREC_INDEX, 512);
     let readback = crate::intel::mmio_read(dev, PIPE_A_PREC_DATA);
     let verified =

@@ -3059,6 +3059,51 @@ pub extern "C" fn trueos_cabi_ui4_scene_set_display_bottom_color(window_id: u32,
     }
 }
 
+/// Program the shared Pipe A precision gamma LUT from a Windows GAMMARAMP.
+/// The caller must own a live frame; the 3×256 u16 ramp is copied over the
+/// Blueprint VMCALL payload rather than retaining a guest pointer.
+pub extern "C" fn trueos_cabi_ui4_scene_set_display_gamma_ramp(
+    window_id: u32,
+    ramp: *const u16,
+) -> i32 {
+    const RAMP_WORDS: usize = 3 * 256;
+    if ramp.is_null() {
+        return ERROR_INVALID;
+    }
+    let bytes = unsafe { core::slice::from_raw_parts(ramp.cast::<u8>(), RAMP_WORDS * 2) };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        return guest_status(
+            trueos_vm::vmcall::OP_BP_UI4_SCENE_SET_DISPLAY_GAMMA_RAMP,
+            window_id as u64,
+            0,
+            bytes,
+        );
+    }
+    let Some(owner) = blueprint_owner() else {
+        return ERROR_CONTEXT;
+    };
+    {
+        let mut surfaces = SURFACES.lock();
+        if surface_mut(&mut surfaces, owner, window_id).is_none() {
+            return ERROR_NOT_FOUND;
+        }
+    }
+    let words = unsafe { core::slice::from_raw_parts(ramp, RAMP_WORDS) };
+    let entries = core::array::from_fn(|index| {
+        let scaled = index * 255;
+        let lo = scaled / 1023;
+        let hi = core::cmp::min(lo + 1, 255);
+        let fraction = scaled % 1023;
+        let channel = |offset| {
+            let a = u32::from(words[offset + lo]);
+            let b = u32::from(words[offset + hi]);
+            ((a * (1023 - fraction) + b * fraction + 511) / 1023) >> 6
+        };
+        (channel(0) << 20) | (channel(256) << 10) | channel(512)
+    });
+    if super::color_picker::program_pipe_a_precision_gamma(&entries) { 0 } else { ERROR_UI4 }
+}
+
 /// Set window opacity, or only background opacity when given its layer target.
 pub extern "C" fn trueos_cabi_ui4_scene_frame_set_opacity(window_id: u32, opacity: u32) -> i32 {
     if opacity > u8::MAX as u32 {
