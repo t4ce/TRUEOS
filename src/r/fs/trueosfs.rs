@@ -2560,6 +2560,14 @@ pub async fn list_dir_async(
     disk: block::DeviceHandle,
     dir: &str,
 ) -> Result<Option<DirListing>, block::Error> {
+    list_dir_with_limit_async(disk, dir, TRUEOSFS_LIST_SOFT_CAP).await
+}
+
+// Content selection has its own explicit result budget and must not inherit
+// the small interactive directory-listing cap.
+async fn list_dir_with_limit_async(
+    disk: block::DeviceHandle, dir: &str, entry_cap: usize,
+) -> Result<Option<DirListing>, block::Error> {
     let _activity = crate::disc::access::Activity::begin(disk)?;
     if disk.parent().is_some() {
         return Err(block::Error::InvalidParam);
@@ -2583,9 +2591,9 @@ pub async fn list_dir_async(
         let out = trueos_fs::list_dir(&io, &params, dir)
             .await
             .map_err(map_engine_err)?;
-        let truncated = out.len() > TRUEOSFS_LIST_SOFT_CAP;
+        let truncated = out.len() > entry_cap;
         let mut entries = out;
-        entries.truncate(TRUEOSFS_LIST_SOFT_CAP);
+        entries.truncate(entry_cap);
         return Ok(Some(DirListing { entries, truncated }));
     };
 
@@ -2643,9 +2651,9 @@ pub async fn list_dir_async(
     }
 
     let mut entries = Vec::new();
-    let mut truncated = children.len() > TRUEOSFS_LIST_SOFT_CAP;
+    let mut truncated = children.len() > entry_cap;
     for (name, (kind, content_type)) in children {
-        if entries.len() >= TRUEOSFS_LIST_SOFT_CAP {
+        if entries.len() >= entry_cap {
             truncated = true;
             break;
         }
@@ -2658,7 +2666,7 @@ pub async fn list_dir_async(
     if truncated {
         crate::log_warn!(target: "filesystem";
             "trueosfs: file listing soft cap reached operation=list_dir cap={}\n",
-            TRUEOSFS_LIST_SOFT_CAP
+            entry_cap
         );
     }
 
@@ -4033,7 +4041,8 @@ pub async fn select_files_async(
         |relative| {
             let path = full_path(relative);
             async move {
-                let listing = list_dir_async(disk, &path).await?.ok_or(block::Error::InvalidParam)?;
+                let listing = list_dir_with_limit_async(disk, &path, trueos_fs::selection::ENTRY_CAP)
+                    .await?.ok_or(block::Error::InvalidParam)?;
                 Ok((listing.entries, listing.truncated))
             }
         },

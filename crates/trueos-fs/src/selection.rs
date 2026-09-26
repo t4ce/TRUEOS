@@ -5,7 +5,8 @@ use crate::{ContentTypeId, DirEntry, NodeKind};
 
 pub const DEFAULT_DEPTH: u8 = 8;
 pub const MAX_DEPTH: u8 = 64;
-pub const ENTRY_CAP: usize = 4096;
+pub const ENTRY_CAP: usize = 65_536;
+const DIRECTORY_CAP: usize = 4096;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct FileSelection {
@@ -58,7 +59,7 @@ where
             let path = if dir.is_empty() { entry.name } else { format!("{dir}/{}", entry.name) };
             if entry.kind == NodeKind::Directory {
                 if depth == max_depth { result.depth_limited = true; }
-                else if admitted_dirs == ENTRY_CAP { result.truncated = true; }
+                else if admitted_dirs == DIRECTORY_CAP { result.truncated = true; }
                 else { admitted_dirs += 1; pending.push((path, depth + 1)); }
                 continue;
             }
@@ -80,6 +81,10 @@ where
 /// then count repetitions of (UTF-8 relative-path length u16, path bytes).
 pub fn encode(selection: &FileSelection) -> Option<Vec<u8>> {
     if selection.files.len() > ENTRY_CAP { return None; }
+    let bytes = selection.files.iter().try_fold(12usize, |total, path| {
+        total.checked_add(2)?.checked_add(path.len())
+    })?;
+    if bytes > 16 * 1024 * 1024 { return None; }
     let mut out = b"TFS1".to_vec();
     out.extend_from_slice(&[u8::from(selection.depth_limited) | (u8::from(selection.truncated) << 1), 0, 0, 0]);
     out.extend_from_slice(&(selection.files.len() as u32).to_le_bytes());
@@ -187,6 +192,25 @@ mod tests {
             |_| core::future::ready(Ok(None)),
         )).unwrap();
         assert!(truncated.truncated);
+    }
+
+    #[test]
+    fn depth_eight_includes_eight_subfolders_but_not_nine() {
+        let map = ContentTypeId::WARCRAFT3_MAP;
+        let result = run(select_files(map, 8,
+            |path| {
+                let depth = if path.is_empty() { 0 } else { path.split('/').count() };
+                core::future::ready(Ok::<_, ()>((
+                    if depth < 10 { vec![file("map.w3m", map), dir("child")] }
+                    else { vec![file("map.w3m", map)] }, false,
+                )))
+            },
+            |_| core::future::ready(Ok(None)),
+        )).unwrap();
+        assert_eq!(result.files.len(), 9);
+        assert!(result.depth_limited);
+        assert!(!result.truncated);
+        assert_eq!(result.files.iter().map(|path| path.matches('/').count()).max(), Some(8));
     }
 
     #[test]
