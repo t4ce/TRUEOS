@@ -3,6 +3,8 @@
 
 extern crate alloc;
 
+pub mod selection;
+
 #[cfg(test)]
 extern crate std;
 

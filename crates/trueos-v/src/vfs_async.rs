@@ -729,3 +729,38 @@ pub async fn rename(source: &[u8], destination: &[u8]) -> Result<(), i32> {
     operation.discard();
     Ok(())
 }
+
+pub use trueos_fs::selection::{FileSelection, DEFAULT_DEPTH as DEFAULT_SELECTION_DEPTH};
+
+/// Select registered content types below a folder or mounted-root selector.
+/// Depth zero visits only that folder; eight permits eight nested folders.
+/// Returns sorted relative paths and explicit depth/truncation flags. Stored
+/// identities are used directly; legacy BLOBs may match a bounded content
+/// signature probe. Filenames never determine membership and files are not
+/// rewritten. This is a live traversal, not a filesystem snapshot.
+pub async fn select_files(
+    folder: &[u8], content_type: ContentTypeId, max_depth: u8,
+) -> Result<FileSelection, i32> {
+    if !trueos_fs::selection::valid_query(content_type, max_depth) { return Err(ERR_BAD_PARAM); }
+    let mut operation = Operation::from_start(unsafe {
+        vcabi::trueos_cabi_async_fs_select_files_start_v1(
+            folder.as_ptr(), folder.len(), content_type.raw(), u32::from(max_depth),
+        )
+    })?;
+    operation.ready().await?;
+    let len = unsafe { vcabi::trueos_cabi_async_fs_result_len(operation.id) };
+    if len < 0 { return Err(len as i32); }
+    if len as usize > 16 * 1024 * 1024 { return Err(ERR_IO); }
+    let mut bytes = vec![0u8; len as usize];
+    let mut offset = 0;
+    while offset < bytes.len() {
+        let end = (offset + READ_CHUNK_BYTES).min(bytes.len());
+        let got = unsafe { vcabi::trueos_cabi_async_fs_result_read(
+            operation.id, offset, bytes[offset..end].as_mut_ptr(), end - offset,
+        ) };
+        if got <= 0 || got as usize > end - offset { return Err(if got < 0 { got as i32 } else { ERR_IO }); }
+        offset += got as usize;
+    }
+    operation.discard();
+    trueos_fs::selection::decode(&bytes).ok_or(ERR_IO)
+}

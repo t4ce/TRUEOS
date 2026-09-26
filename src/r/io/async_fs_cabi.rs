@@ -57,6 +57,7 @@ enum RequestKind {
     TypedListDir {
         path: String,
     },
+    SelectFiles { path: String, content_type: infer::ContentTypeId, max_depth: u8 },
     ListMounts,
     Remove {
         path: String,
@@ -437,6 +438,13 @@ pub(crate) fn start_typed_list_dir(owner: u32, path: String) -> i32 {
     start(owner, RequestKind::TypedListDir { path })
 }
 
+pub(crate) fn start_select_files(owner: u32, path: String, content_type: u32, max_depth: u64) -> i32 {
+    let content_type = infer::ContentTypeId::from_raw(content_type);
+    let Ok(max_depth) = u8::try_from(max_depth) else { return FS_ERR_BAD_PARAM; };
+    if !trueos_fs::selection::valid_query(content_type, max_depth) { return FS_ERR_BAD_PARAM; }
+    start(owner, RequestKind::SelectFiles { path, content_type, max_depth })
+}
+
 pub(crate) fn start_list_mounts(owner: u32) -> i32 {
     start(owner, RequestKind::ListMounts)
 }
@@ -644,6 +652,7 @@ async fn process(request: &Request) -> OperationState {
         | RequestKind::RecordKey { path }
         | RequestKind::ListDir { path }
         | RequestKind::TypedListDir { path }
+        | RequestKind::SelectFiles { path, .. }
         | RequestKind::Remove { path } => path.as_str(),
         RequestKind::ListMounts | RequestKind::Rename { .. } => unreachable!(),
     };
@@ -822,6 +831,15 @@ async fn process(request: &Request) -> OperationState {
                     None => OperationState::Failed(FS_ERR_IO),
                 },
                 Ok(None) => OperationState::Failed(FS_ERR_NOT_FOUND),
+                Err(error) => OperationState::Failed(map_block_error(error)),
+            }
+        }
+        RequestKind::SelectFiles { content_type, max_depth, .. } => {
+            match crate::r::fs::trueosfs::select_files_async(disk, selected_path, *content_type, *max_depth).await {
+                Ok(selection) => match trueos_fs::selection::encode(&selection) {
+                    Some(bytes) if bytes.len() as u64 <= ASYNC_FS_MAX_RESULT_BYTES => OperationState::Read(bytes),
+                    _ => OperationState::Failed(FS_ERR_TOO_LARGE),
+                },
                 Err(error) => OperationState::Failed(map_block_error(error)),
             }
         }
@@ -1318,4 +1336,24 @@ pub extern "C" fn trueos_cabi_async_fs_discard(id: u32) -> i32 {
         };
     }
     discard(direct_owner(), id)
+}
+
+/// Versioned, read-only content selection. Results use the TFS1 wire format.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_async_fs_select_files_start_v1(
+    path_ptr: *const u8, path_len: usize, content_type: u32, max_depth: u32,
+) -> i32 {
+    let path = match parse_path(path_ptr, path_len, true) {
+        Ok(path) => path,
+        Err(code) => return code,
+    };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let (status, value) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_ASYNC_FS_SELECT_FILES_START_V1,
+            content_type as u64, max_depth as u64, path.as_bytes(), &mut [],
+        );
+        if status == trueos_vm::vmcall::STATUS_OK { (value as i64) as i32 } else { FS_ERR_BAD_PARAM }
+    } else {
+        start_select_files(direct_owner(), path, content_type, max_depth as u64)
+    }
 }

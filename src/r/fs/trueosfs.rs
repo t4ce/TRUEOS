@@ -4014,3 +4014,43 @@ pub async fn available_backup_bytes_async(
         .saturating_sub(BACKUP_FREE_SPACE_RESERVE_BLOCKS);
     Ok(Some(available_blocks.saturating_mul(block_size)))
 }
+
+/// Select content-typed descendants without loading their payloads. Legacy
+/// BLOB records are probed with at most 4096 bytes and never rewritten.
+pub async fn select_files_async(
+    disk: block::DeviceHandle,
+    folder: &str,
+    content_type: ContentTypeId,
+    max_depth: u8,
+) -> Result<trueos_fs::selection::FileSelection, block::Error> {
+    let base = folder.trim_matches('/');
+    let full_path = |relative: String| {
+        if relative.is_empty() { String::from(base) }
+        else if base.is_empty() { relative }
+        else { alloc::format!("{base}/{relative}") }
+    };
+    trueos_fs::selection::select_files(content_type, max_depth,
+        |relative| {
+            let path = full_path(relative);
+            async move {
+                let listing = list_dir_async(disk, &path).await?.ok_or(block::Error::InvalidParam)?;
+                Ok((listing.entries, listing.truncated))
+            }
+        },
+        |relative| {
+            let path = full_path(relative);
+            async move {
+                let mut prefix = [0u8; 4096];
+                let len = file_read_range_async(disk, &path, 0, &mut prefix).await?
+                    .ok_or(block::Error::InvalidParam)?;
+                // A prefix cannot prove whole-file UTF-8 validity. Only use
+                // explicit signature matchers here, never the UTF-8 fallback.
+                Ok(infer::get(&prefix[..len]).map(|kind| kind.content_type_id())
+                    .filter(|id| *id != ContentTypeId::NONE))
+            }
+        },
+    ).await.map_err(|error| match error {
+        trueos_fs::selection::SelectionError::Io(error) => error,
+        _ => block::Error::InvalidParam,
+    })
+}

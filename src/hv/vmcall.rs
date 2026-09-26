@@ -5200,6 +5200,7 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         | OP_BP_ASYNC_FS_LIST_DIR_START
         | OP_BP_ASYNC_FS_TYPED_STAT_START
         | OP_BP_ASYNC_FS_TYPED_LIST_DIR_START
+        | trueos_vm::vmcall::OP_BP_ASYNC_FS_SELECT_FILES_START_V1
         | OP_BP_ASYNC_FS_RECORD_KEY_START => {
             let n = core::cmp::min(req_len as usize, PAYLOAD_CAP);
             let Some(p) = host_ptr(vm_id) else {
@@ -5252,6 +5253,10 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 }
                 OP_BP_ASYNC_FS_TYPED_LIST_DIR_START => {
                     crate::r::io::async_fs_cabi::start_typed_list_dir(owner, path)
+                }
+                trueos_vm::vmcall::OP_BP_ASYNC_FS_SELECT_FILES_START_V1 => {
+                    if arg0 > u32::MAX as u64 { crate::r::io::cabi::FS_ERR_BAD_PARAM }
+                    else { crate::r::io::async_fs_cabi::start_select_files(owner, path, arg0 as u32, arg1) }
                 }
                 OP_BP_ASYNC_FS_RECORD_KEY_START => {
                     crate::r::io::async_fs_cabi::start_record_key(owner, path)
