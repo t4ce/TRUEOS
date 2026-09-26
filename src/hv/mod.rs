@@ -4004,6 +4004,11 @@ pub(crate) fn blueprint_console_write(vm_id: u8, data: &[u8]) -> usize {
     }
     if route.is_net_shell_direct() {
         return if crate::shell2::backends::net_tcp::net_shell_direct_write(vm_id, data) {
+            // Ordinary Blueprint text (including logl diagnostics) must reach
+            // LogOs on the direct network route too. No target here: Shell2
+            // already received these bytes. Mirror only accepted writes so a
+            // retry cannot duplicate records or partial lines in the capture.
+            blueprint_console_text_lines(vm_id, None, data);
             data.len()
         } else {
             0
