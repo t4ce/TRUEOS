@@ -343,7 +343,14 @@ pub(crate) fn broker_ui4_indexed_submit(
             retain_texture: draw.texture_reserved & v::vgpu::INDEXED_DRAW_LOAD_COLOR != 0,
         },
     )
-    .map_err(|error| error.errno())?;
+    .map_err(|error| {
+        crate::log_warn!(target: "vgpu";
+            "vgpu indexed submission rejected error={} errno={} device=0x{:X} surface=0x{:X} texture={}x{} pitch={}\n",
+            error.name(), error.errno(), device, draw.surface,
+            draw.texture_width, draw.texture_height, draw.texture_pitch,
+        );
+        error.errno()
+    })?;
     crate::ui4::blueprint_text::complete_vgpu_resident_surface_submission(
         owner,
         completed.window_id,
