@@ -3093,7 +3093,7 @@ pub extern "C" fn trueos_cabi_ui4_scene_set_display_gamma_ramp(
         let scaled = index * 255;
         let lo = scaled / 1023;
         let hi = core::cmp::min(lo + 1, 255);
-        let fraction = scaled % 1023;
+        let fraction = (scaled % 1023) as u32;
         let channel = |offset| {
             let a = u32::from(words[offset + lo]);
             let b = u32::from(words[offset + hi]);
