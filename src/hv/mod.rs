@@ -3,6 +3,7 @@ pub mod blueprint;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod blueprint_net;
 pub mod control_kick;
+mod execution_policy;
 pub mod guest_run;
 pub mod guest_work;
 pub mod hv_remote_restore_service;
@@ -6616,14 +6617,14 @@ async fn vmx_launch_once_with_ept_vpid(
                         }
                         crate::hv::vmcall::DispatchOutcome::Yield => {
                             clear_current_vm_id();
-                            Timer::after(EmbassyDuration::from_millis(1)).await;
+                            execution_policy::yield_executor_turn().await;
                             set_current_vm_id(vm_id);
                             break 'vmcall;
                         }
                         crate::hv::vmcall::DispatchOutcome::SleepMs(ms) => {
                             clear_current_vm_id();
                             if ms == 0 {
-                                Timer::after(EmbassyDuration::from_millis(1)).await;
+                                execution_policy::yield_executor_turn().await;
                             } else {
                                 Timer::after(EmbassyDuration::from_millis(ms)).await;
                             }
@@ -6703,6 +6704,11 @@ async fn vmx_launch_once_with_ept_vpid(
                 // Do not advance RIP. The timer exists to return control to
                 // this loop so host stop/preserve requests are observed even
                 // when guest code misses its cooperative yield point.
+                // Native PAUSE loops also need bounded fairness for other
+                // tasks on this AP, without imposing a sleep on every spin.
+                clear_current_vm_id();
+                execution_policy::yield_executor_turn().await;
+                set_current_vm_id(vm_id);
             }
             0xA => {
                 let mut regs = crate::hv::vmx::guest_registers();
@@ -6980,13 +6986,6 @@ fn setup_vmcs_host_and_controls(
         pin_msr,
         PIN_BASED_VMX_PREEMPTION_TIMER | PIN_BASED_EXTERNAL_INTERRUPT_EXITING,
     );
-    let proc = crate::hv::vmx::adjust_vmx_ctrl(
-        proc_msr,
-        PROC_BASED_HLT_EXITING
-            | PROC_BASED_PAUSE_EXITING
-            | PROC_BASED_ACTIVATE_SECONDARY
-            | PROC_BASED_USE_TSC_OFFSETTING,
-    );
     let requested_proc2 = PROC2_BASED_ENABLE_EPT
         | if vpid.is_some() { PROC2_BASED_ENABLE_VPID } else { 0 }
         | PROC2_BASED_ENABLE_VMFUNC;
@@ -7014,6 +7013,22 @@ fn setup_vmcs_host_and_controls(
         }
         (fallback_pin, fallback_exit)
     };
+    let preemption_timer_enabled = (pin & PIN_BASED_VMX_PREEMPTION_TIMER) != 0;
+    let pause_exiting_requested = execution_policy::intercept_pause(
+        preemption_timer_enabled,
+        crate::allcaps::hv::VMX_NATIVE_PAUSE_WITH_TIMER,
+    );
+    // PAUSE is emitted by Rust synchronization and completion waits as well
+    // as guest spin loops. With the hardware timer active, execute that hint
+    // natively instead of converting every spin into a VM exit + 1 ms sleep.
+    // Explicit OP_YIELD, positive sleeps, HLT and lifecycle exits remain live.
+    let proc = crate::hv::vmx::adjust_vmx_ctrl(
+        proc_msr,
+        PROC_BASED_HLT_EXITING
+            | if pause_exiting_requested { PROC_BASED_PAUSE_EXITING } else { 0 }
+            | PROC_BASED_ACTIVATE_SECONDARY
+            | PROC_BASED_USE_TSC_OFFSETTING,
+    );
     // A transient protected-32 carrier supplies a legacy PAE root, not a
     // four-level IA-32e root.  Leaving IA32E_MODE_GUEST set makes the CPU
     // reinterpret that PDPT as a PML4 and fault on the first instruction
@@ -7026,7 +7041,7 @@ fn setup_vmcs_host_and_controls(
     let entry = crate::hv::vmx::adjust_vmx_ctrl(entry_msr, requested_entry);
     if protected32.is_none() {
         hvlogf(format_args!(
-            "hv: vm{}-{} reporting: vmcs controls pin=0x{:08X} proc=0x{:08X} proc2=0x{:08X} exit=0x{:08X} entry=0x{:08X} vpid={}",
+            "hv: vm{}-{} reporting: vmcs controls pin=0x{:08X} proc=0x{:08X} proc2=0x{:08X} exit=0x{:08X} entry=0x{:08X} vpid={} pause_exit={} timer={}",
             current_vm_id_for_log(),
             lineage_record.level,
             pin as u32,
@@ -7035,6 +7050,8 @@ fn setup_vmcs_host_and_controls(
             exit as u32,
             entry as u32,
             vpid.unwrap_or(0),
+            u8::from(proc & PROC_BASED_PAUSE_EXITING != 0),
+            u8::from(preemption_timer_enabled),
         ));
     }
 
@@ -7046,14 +7063,13 @@ fn setup_vmcs_host_and_controls(
         ));
         return Err("secondary controls unsupported");
     }
-    if (proc & PROC_BASED_PAUSE_EXITING) == 0 {
+    if pause_exiting_requested && (proc & PROC_BASED_PAUSE_EXITING) == 0 {
         hvwarnf(format_args!(
             "hv: vm{}-{} reporting: vmcs ctrl unsupported: primary bit PAUSE_EXITING not available",
             current_vm_id_for_log(),
             lineage_record.level
         ));
     }
-    let preemption_timer_enabled = (pin & PIN_BASED_VMX_PREEMPTION_TIMER) != 0;
     if !preemption_timer_enabled {
         hvwarnf(format_args!(
             "hv: vm{}-{} reporting: vmcs ctrl unsupported: pin bit VMX_PREEMPTION_TIMER not available; lifecycle stop remains cooperative",

@@ -63,7 +63,8 @@ impl HttpPerf {
 
 const MIB: usize = 1024 * 1024;
 const HTTP_TRUEOSFS_MAX_ENTRIES: usize = 1024;
-const HTTP_TRUEOSFS_MAX_REQUEST_BYTES: usize = 500 * MIB;
+// Allow a 2 GiB upload plus room for the HTTP request line and headers.
+const HTTP_TRUEOSFS_MAX_REQUEST_BYTES: usize = 2 * 1024 * MIB + 64 * 1024;
 // Keep a streamed filesystem response below the r8125 hardware RX-ring burst
 // boundary. A 1 MiB window fills the TCP TX buffer in one turn and produces an
 // ACK burst that can exhaust the controller's 64 RX descriptors before its
