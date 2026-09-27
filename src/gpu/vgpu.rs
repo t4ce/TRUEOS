@@ -2964,10 +2964,18 @@ pub(crate) fn submit_ui4_indexed_draw(
     queue_handle: QueueHandle,
     draw: Ui4IndexedDrawDescriptor,
 ) -> Result<Ui4SurfaceIndexedCompletion, VgpuError> {
+    let unsupported = |reason: &'static str| {
+        crate::log_warn!(target: "vgpu";
+            "vgpu-indexed: rejected reason={} flags=0x{:X} indices={} vertex_offset={} texture={}x{} pitch={} sampler=0x{:X}\n",
+            reason, draw.depth_flags, draw.index_count, draw.vertex_offset,
+            draw.texture_width, draw.texture_height, draw.texture_pitch, draw.sampler_flags,
+        );
+        VgpuError::Unsupported
+    };
     if !v::vgpu::indexed_draw_flags_valid(draw.depth_flags | if draw.load_color { v::vgpu::INDEXED_DRAW_LOAD_COLOR } else { 0 })
         || !ui4_single_indexed_topology_valid(draw.topology, draw.index_count) || draw.base_vertex != 0
     {
-        return Err(VgpuError::Unsupported);
+        return Err(unsupported("draw-contract"));
     }
     let geometry_clear = draw.depth_flags & v::vgpu::INDEXED_DRAW_GEOMETRY_CLEAR != 0;
     let (
@@ -3004,16 +3012,16 @@ pub(crate) fn submit_ui4_indexed_draw(
             return Err(VgpuError::InvalidHandle);
         }
         let fixed = pipeline.package_digest == v::vgpu::SHADER_PACKAGE_WC3_FIXED_FNV1A64;
-        if fixed && (geometry_clear || draw.vertex_offset != v::vgpu::WC3_FIXED_STATE_BYTES) { return Err(VgpuError::Unsupported); }
+        if fixed && (geometry_clear || draw.vertex_offset != v::vgpu::WC3_FIXED_STATE_BYTES) { return Err(unsupported("fixed-layout")); }
         let textured = fixed || pipeline.package_digest == SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64;
         if draw.retain_texture
             && textured && !geometry_clear
             && lookup_buffer(device, draw.sampled_texture)?.usage != BUFFER_USAGE_MAP_WRITE
         {
-            return Err(VgpuError::Unsupported);
+            return Err(unsupported("retained-texture-usage"));
         }
         if textured && !geometry_clear && draw.sampler_flags != (SAMPLER_ADDRESS_U_REPEAT | SAMPLER_ADDRESS_V_REPEAT) {
-            return Err(VgpuError::Unsupported);
+            return Err(unsupported("sampler-contract"));
         }
         let vertex_stride = pipeline.vertex_stride as usize;
         let position_offset = pipeline.position_offset as usize;
@@ -3047,10 +3055,7 @@ pub(crate) fn submit_ui4_indexed_draw(
                 let existing = device.drawable_depths.iter().position(|(id, _)| *id == window_id);
                 if let Some(index) = existing {
                     if !device.drawable_depths[index].1.matches(width, height) {
-                        // A resize starts a new depth attachment only with an explicit clear.
-                        if draw.depth_flags & v::vgpu::INDEXED_DRAW_CLEAR_DEPTH == 0 {
-                            return Err(VgpuError::Unsupported);
-                        }
+                        // New/resized attachments are initialized by the GPU before use.
                         let old = &device.drawable_depths[index].1;
                         if Arc::strong_count(old) != 1 { return Err(VgpuError::Busy); }
                         if !crate::intel::render::release_drawable_depth(old) {
@@ -3063,17 +3068,17 @@ pub(crate) fn submit_ui4_indexed_draw(
                     }
                 }
                 if let Some((_, depth)) = device.drawable_depths.iter().find(|(id, _)| *id == window_id) {
-                    if !depth.initialized() && draw.depth_flags & v::vgpu::INDEXED_DRAW_CLEAR_DEPTH == 0 {
-                        return Err(VgpuError::Unsupported);
-                    }
                     Some(Arc::clone(depth))
                 } else {
-                    if draw.depth_flags & v::vgpu::INDEXED_DRAW_CLEAR_DEPTH == 0 { return Err(VgpuError::Unsupported); }
-                    let bytes = crate::intel::render::drawable_depth_bytes(width, height).ok_or(VgpuError::Unsupported)?;
+                    let bytes = crate::intel::render::drawable_depth_bytes(width, height).ok_or_else(|| unsupported("depth-extent"))?;
                     if device.drawable_depths.len() >= 16 || device.memory_used.saturating_add(bytes) > device.quota.memory_bytes {
                         return Err(VgpuError::QuotaExceeded);
                     }
                     let depth = Arc::new(crate::intel::render::create_drawable_depth(width, height).map_err(|_| VgpuError::OutOfMemory)?);
+                    crate::log_info!(target: "render";
+                        "vgpu-indexed: depth-created window={} target={}x{} flags=0x{:X} initialization=gpu-clear\n",
+                        window_id, width, height, draw.depth_flags,
+                    );
                     device.memory_used += depth.bytes();
                     device.drawable_depths.push((window_id, Arc::clone(&depth)));
                     Some(depth)
@@ -3086,23 +3091,23 @@ pub(crate) fn submit_ui4_indexed_draw(
             }
             let first_index_bytes = (draw.first_index as usize)
                 .checked_mul(4)
-                .ok_or(VgpuError::Unsupported)?;
+                .ok_or_else(|| unsupported("first-index-overflow"))?;
             let index_start = draw
                 .index_offset
                 .checked_add(first_index_bytes)
-                .ok_or(VgpuError::Unsupported)?;
+                .ok_or_else(|| unsupported("index-offset-overflow"))?;
             let index_bytes = (draw.index_count as usize)
                 .checked_mul(4)
-                .ok_or(VgpuError::Unsupported)?;
+                .ok_or_else(|| unsupported("index-count-overflow"))?;
             let index_end = index_start
                 .checked_add(index_bytes)
-                .ok_or(VgpuError::Unsupported)?;
+                .ok_or_else(|| unsupported("index-end-overflow"))?;
             if index_end > index_record.bytes {
-                return Err(VgpuError::Unsupported);
+                return Err(unsupported("index-bounds"));
             }
             let index_virt = match index_record.backing {
                 BufferBacking::Dma { virt, .. } => virt,
-                BufferBacking::GuestPages { .. } => return Err(VgpuError::Unsupported),
+                BufferBacking::GuestPages { .. } => return Err(unsupported("index-backing")),
             };
             crate::intel::dma_flush(unsafe { index_virt.add(index_start) }, index_bytes);
             let raw_indices =
@@ -3115,7 +3120,7 @@ pub(crate) fn submit_ui4_indexed_draw(
                 .iter()
                 .copied()
                 .max()
-                .ok_or(VgpuError::Unsupported)? as usize
+                .ok_or_else(|| unsupported("empty-indices"))? as usize
                 + 1;
             let vertex_record = lookup_buffer(device, draw.vertex_buffer)?;
             if vertex_record.usage & BUFFER_USAGE_VERTEX == 0 {
@@ -3126,15 +3131,15 @@ pub(crate) fn submit_ui4_indexed_draw(
                 .checked_add(
                     vertex_count
                         .checked_mul(vertex_stride)
-                        .ok_or(VgpuError::Unsupported)?,
+                        .ok_or_else(|| unsupported("vertex-count-overflow"))?,
                 )
-                .ok_or(VgpuError::Unsupported)?;
+                .ok_or_else(|| unsupported("vertex-end-overflow"))?;
             if vertex_end > vertex_record.bytes {
-                return Err(VgpuError::Unsupported);
+                return Err(unsupported("vertex-bounds"));
             }
             let vertex_virt = match vertex_record.backing {
                 BufferBacking::Dma { virt, .. } => virt,
-                BufferBacking::GuestPages { .. } => return Err(VgpuError::Unsupported),
+                BufferBacking::GuestPages { .. } => return Err(unsupported("vertex-backing")),
             };
             crate::intel::dma_flush(
                 unsafe { vertex_virt.add(draw.vertex_offset) },
@@ -3157,8 +3162,14 @@ pub(crate) fn submit_ui4_indexed_draw(
                 crate::intel::dma_flush(vertex_virt, raw.len());
                 let mut state = [0f32; 384];
                 for (out, bytes) in state.iter_mut().zip(raw.chunks_exact(4)) { *out = f32::from_le_bytes(bytes.try_into().unwrap()); }
-                if !fixed_gl_state_valid(&state, width, height)
-                    || !fixed_gl_texture_state_valid(&state, draw.texture_width, draw.texture_height) { return Err(VgpuError::Unsupported); }
+                if !fixed_gl_state_valid(&state, width, height) {
+                    crate::log_warn!(target: "vgpu"; "vgpu-indexed: fixed-state scissor={:?} target={}x{}\n", &state[116..120], width, height);
+                    return Err(unsupported("fixed-state"));
+                }
+                if !fixed_gl_texture_state_valid(&state, draw.texture_width, draw.texture_height) {
+                    crate::log_warn!(target: "vgpu"; "vgpu-indexed: fixed-texture env={} metadata={:?}\n", state[100], &state[120..125]);
+                    return Err(unsupported("fixed-texture"));
+                }
                 Some(state)
             } else { None };
             let texture = if textured && !geometry_clear {
@@ -3183,7 +3194,7 @@ pub(crate) fn submit_ui4_indexed_draw(
                     let texture_bytes = usize::try_from(
                         u64::from(draw.texture_pitch) * u64::from(draw.texture_height),
                     )
-                    .map_err(|_| VgpuError::Unsupported)?;
+                    .map_err(|_| unsupported("texture-size-overflow"))?;
                     if texture_record.usage & BUFFER_USAGE_MAP_WRITE == 0
                         || draw.texture_width == 0
                         || draw.texture_height == 0
@@ -3191,7 +3202,7 @@ pub(crate) fn submit_ui4_indexed_draw(
                         || draw.texture_pitch % 4 != 0
                         || texture_bytes > texture_record.bytes
                     {
-                        return Err(VgpuError::Unsupported);
+                        return Err(unsupported("texture-shape"));
                     }
                     if device.memory_used.saturating_add(texture_bytes) > device.quota.memory_bytes
                     {
@@ -3199,7 +3210,7 @@ pub(crate) fn submit_ui4_indexed_draw(
                     }
                     let texture_virt = match texture_record.backing {
                         BufferBacking::Dma { virt, .. } => virt,
-                        BufferBacking::GuestPages { .. } => return Err(VgpuError::Unsupported),
+                        BufferBacking::GuestPages { .. } => return Err(unsupported("texture-backing")),
                     };
                     crate::intel::dma_flush(unsafe { texture_virt.add(0) }, texture_bytes);
                     let texture_bytes =
@@ -3266,7 +3277,7 @@ pub(crate) fn submit_ui4_indexed_draw(
         height,
         pitch,
     )
-    .ok_or(VgpuError::Unsupported)?;
+    .ok_or_else(|| unsupported("surface-shape"))?;
     let mesh = match if let Some(state) = fixed_state.as_ref() {
         crate::intel::render::create_resident_fixed_gl_mesh(&vertices, &indices, state)
     } else if sampled_texture.is_some() && !geometry_clear {
@@ -3422,16 +3433,16 @@ pub(crate) fn submit_ui4_indexed_draw(
         return Err(VgpuError::DeviceLost);
     };
 
-    if draw.depth_flags & v::vgpu::INDEXED_DRAW_CLEAR_DEPTH != 0 {
-        if let Some(depth) = drawable_depth.as_deref() { depth.mark_initialized(); }
-    }
+    // The renderer initializes a fresh attachment on the GPU, including when
+    // the first operation is a draw. Publish initialization only after its fence.
+    if let Some(depth) = drawable_depth.as_deref() { depth.mark_initialized(); }
     let physical = require_physical()?;
     let mut broker = BROKER.lock();
     let device = lookup_device_mut(&mut broker, device_handle, principal)?;
     ensure_live(device)?;
     let vm = match device.gpuvm {
         GpuVmBinding::Owned(vm) => vm,
-        GpuVmBinding::Borrowed { .. } => return Err(VgpuError::Unsupported),
+        GpuVmBinding::Borrowed { .. } => return Err(unsupported("borrowed-gpuvm")),
     };
     let (slot, generation) = decode_handle(draw.surface.raw())?;
     let surface_slot = device
@@ -3497,6 +3508,7 @@ pub(crate) fn submit_ui4_indexed_draw(
 /// resident renderer's already-batched scene path. Material meaning remains in
 /// the client; the broker sees only authenticated immediate RGBA bytes and
 /// bounded index ranges sharing one ordinary vertex/index binding.
+
 pub(crate) fn submit_ui4_indexed_batch(
     principal: Principal,
     device_handle: DeviceHandle,

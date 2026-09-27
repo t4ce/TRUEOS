@@ -49,6 +49,12 @@ fn drawable_depth_compare(gl_ordinal: u32) -> u8 {
     [1, 2, 3, 4, 5, 6, 7, 0][(gl_ordinal & 7) as usize]
 }
 
+// The initial contents are established by a GPU clear before the first draw.
+// An initialized attachment survives subsequent draws and color-only clears.
+fn drawable_depth_needs_clear(initialized: bool, flags: u32) -> bool {
+    !initialized || flags & v::vgpu::INDEXED_DRAW_CLEAR_DEPTH != 0
+}
+
 #[derive(Clone, Copy)]
 struct DrawableDepthSubmission {
     config: Option<TriangleDepthConfig>,
@@ -65,10 +71,9 @@ pub(crate) fn render_drawable_depth_scene(
 ) -> Result<ResidentSceneFrameResult, &'static str> {
     use v::vgpu::*;
     let geometry_clear = flags & INDEXED_DRAW_GEOMETRY_CLEAR != 0;
-    let clear = flags & INDEXED_DRAW_CLEAR_DEPTH != 0;
+    let clear = drawable_depth_needs_clear(depth.is_none_or(|d| d.initialized()), flags);
     let config = if let Some(depth) = depth {
         if !depth.matches(target.width, target.height) { return Err("drawable-depth-extent"); }
-        if !clear && !depth.initialized() { return Err("drawable-depth-needs-clear"); }
         let mut config = depth.config;
         config.write_enabled = clear && geometry_clear || flags & INDEXED_DRAW_DEPTH_WRITE != 0;
         config.compare_function = if clear && geometry_clear { COMPARE_FUNCTION_ALWAYS }
@@ -96,6 +101,12 @@ pub(crate) fn render_drawable_depth_scene(
 #[cfg(test)]
 mod drawable_depth_tests {
     use super::*;
+    #[test]
+    fn first_draw_initializes_depth_but_later_draws_preserve_it() {
+        assert!(drawable_depth_needs_clear(false, 0));
+        assert!(!drawable_depth_needs_clear(true, 0));
+        assert!(drawable_depth_needs_clear(true, v::vgpu::INDEXED_DRAW_CLEAR_DEPTH));
+    }
     #[test]
     fn depth_layout_is_tiled_and_bounded() {
         assert_eq!(drawable_depth_bytes(2560, 1440), Some(14_745_600));

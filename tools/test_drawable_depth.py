@@ -12,9 +12,10 @@ source = '''extern crate alloc;
 mod intel { pub fn align_up(v: usize, a: usize) -> Option<usize> { v.checked_add(a - 1).map(|n| n & !(a - 1)) } }
 '''
 source += '\n'.join(constant('src/intel/render/constants.rs', n) for n in ['RESIDENT_SCENE_TARGET_WIDTH', 'RESIDENT_SCENE_TARGET_HEIGHT'])
-source += '\n'.join(item(depth, n) for n in ['drawable_depth_bytes', 'drawable_depth_compare', 'drawable_depth_tests'])
+source += '\n'.join(item(depth, n) for n in ['drawable_depth_bytes', 'drawable_depth_compare', 'drawable_depth_needs_clear', 'drawable_depth_tests'])
 source += '\n'.join(constant(api, n) for n in ['INDEXED_DRAW_LOAD_COLOR', 'INDEXED_DRAW_DRAWABLE_DEPTH', 'INDEXED_DRAW_DEPTH_TEST', 'INDEXED_DRAW_DEPTH_WRITE', 'INDEXED_DRAW_CLEAR_DEPTH', 'INDEXED_DRAW_GEOMETRY_CLEAR', 'INDEXED_DRAW_DEPTH_COMPARE_SHIFT', 'INDEXED_DRAW_DEPTH_COMPARE_MASK', 'INDEXED_DRAW_FLAGS_ALL'])
 source += item(api, 'indexed_draw_flags_valid')
+source += 'mod v { pub mod vgpu { pub use crate::INDEXED_DRAW_CLEAR_DEPTH; } }'
 source += '''
 #[test]
 fn legacy_and_owned_depth_flags_have_distinct_contracts() {
