@@ -212,18 +212,6 @@ pub fn try_lease_tokio_blocking_lane_for_slot(slot: u32) -> Option<LaneLease> {
     try_lease(slot, LaneRole::TokioBlocking)
 }
 
-pub(crate) fn try_lease_x86_last_ap() -> Option<(u32, LaneLease)> {
-    let slot = crate::workers::last_ap_execution_slot()?;
-    crate::workers::spawner_for_slot(slot)?;
-    Some((slot, try_lease(slot, LaneRole::TokioBlocking)?))
-}
-
-pub(crate) fn quarantine_x86_lane(slot: usize) {
-    if let Some(owner) = LANE_OWNER.get(slot) {
-        owner.store(LANE_QUARANTINED, Ordering::Release);
-    }
-}
-
 fn collect_candidates(profile: LaneProfile) -> Vec<LaneCandidate> {
     match profile.placement {
         SpawnPlacement::Worker | SpawnPlacement::ReservedVmLane => collect_ap2_candidates(),

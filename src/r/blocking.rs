@@ -168,9 +168,6 @@ fn run_blocking_job_entry(slot: u32, entry: BlockingJobEntry) {
             Some(vm_id),
             || {
                 crate::allocators::with_hv_guest_alloc_domain(vm_id, || {
-                    #[cfg(feature = "wc3")]
-                    let _x86_owner = (purpose == "x86-last-ap")
-                        .then(|| crate::hv::DedicatedX86Scope::enter(vm_id));
                     run_blocking_job_call(pending_call.take().expect("native job consumed once"))
                 })
                 .is_some()
@@ -287,8 +284,7 @@ pub async fn blocking_job_dispatcher_task() {
 }
 
 pub fn start_service_lane_for_slot(slot: u32) -> bool {
-    if !crate::workers::is_general_background_worker_slot(slot)
-        && !(cfg!(feature = "wc3") && crate::workers::last_ap_execution_slot() == Some(slot)) {
+    if !crate::workers::is_general_background_worker_slot(slot) {
         return false;
     }
     let Some(started) = SERVICE_LANE_STARTED.get(slot as usize) else {
@@ -511,13 +507,7 @@ fn submit_service_lane_request(
         return Err(entry);
     }
 
-    let selected = if entry.purpose == "x86-last-ap" {
-        if let Some(slot) = crate::workers::last_ap_execution_slot() {
-            start_service_lane_for_slot(slot);
-        }
-        crate::hv::lane::try_lease_x86_last_ap()
-    } else { pick_service_lane_slot() };
-    let Some((slot, lease)) = selected else {
+    let Some((slot, lease)) = pick_service_lane_slot() else {
         if log_rejection {
             crate::log_error!(
                 target: "service";
@@ -699,22 +689,11 @@ pub unsafe fn spawn_guest_blocking_job_from_raw(
 
 #[unsafe(no_mangle)]
 pub extern "Rust" fn trueos_service_lane_submit_job(job: BlockingJobFn) -> i32 {
-    submit_guest_worker(job, false)
-}
-
-#[unsafe(no_mangle)]
-pub extern "Rust" fn trueos_x86_last_ap_submit_job(job: BlockingJobFn) -> i32 {
-    if !cfg!(feature = "wc3") { return -2; }
-    submit_guest_worker(job, true)
-}
-
-fn submit_guest_worker(job: BlockingJobFn, dedicated_x86: bool) -> i32 {
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
         let raw = Box::into_raw(job);
         let (data, vtable): (usize, usize) = unsafe { core::mem::transmute(raw) };
         let (status, rc) = crate::hv::vmcall::guest_call(
-            if dedicated_x86 { crate::hv::vmcall::OP_BP_X86_LAST_AP_SUBMIT }
-                else { crate::hv::vmcall::OP_BP_SERVICE_LANE_SUBMIT },
+            crate::hv::vmcall::OP_BP_SERVICE_LANE_SUBMIT,
             data as u64,
             vtable as u64,
         );
@@ -733,14 +712,13 @@ fn submit_guest_worker(job: BlockingJobFn, dedicated_x86: bool) -> i32 {
     } else if let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() {
         match enqueue_blocking_job(
             Some(vm_id),
-            if dedicated_x86 { "x86-last-ap" } else { "guest-tokio-blocking-job" },
+            "guest-tokio-blocking-job",
             BlockingJobCall::Host(job),
         ) {
             Ok(_) => 0,
             Err(_) => -2,
         }
     } else {
-        if dedicated_x86 { return -2; }
         spawn_blocking_job_with_purpose(job, "tokio-blocking-job")
     }
 }

@@ -10,7 +10,7 @@ import argparse
 from pathlib import Path
 import re
 
-SYMBOLS = ("trueos_service_lane_submit_job", "trueos_service_lane_available_capacity", "trueos_service_lane_cancellation_requested", "trueos_x86_last_ap_submit_job")
+SYMBOLS = ("trueos_service_lane_submit_job", "trueos_service_lane_available_capacity", "trueos_service_lane_cancellation_requested")
 
 
 def signature(source: str, symbol: str, definition: bool) -> str:
@@ -50,10 +50,9 @@ def check(kernel: Path, sdk: Path) -> None:
     vmcall = (kernel / "src/hv/vmcall.rs").read_text()
     constants = dict(re.findall(r"pub const (OP_\w+): u32 = (0x[0-9a-fA-F]+)", vmcall))
     guest = (kernel / "crates/trueos-vm/src/vmcall.rs").read_text()
-    guest_constants = dict(re.findall(r"pub const (OP_\w+): u32 = (0x[0-9a-fA-F]+)", guest))
-    for operation in ("OP_BP_SERVICE_LANE_CAPACITY", "OP_BP_SERVICE_LANE_CANCELLED", "OP_BP_X86_LAST_AP_SUBMIT"):
+    for operation in ("OP_BP_SERVICE_LANE_CAPACITY", "OP_BP_SERVICE_LANE_CANCELLED"):
         code = int(constants[operation], 16)
-        collisions = [name for name, value in (guest_constants | constants).items() if int(value, 16) == code]
+        collisions = [name for name, value in constants.items() if int(value, 16) == code]
         if collisions != [operation]:
             raise ValueError(f"{operation}: VMCALL collision: {collisions}")
         if f"{operation} =>" not in vmcall:

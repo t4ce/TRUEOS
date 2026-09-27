@@ -7772,49 +7772,10 @@ impl CarrierDebugRegisters {
     }
 }
 
-#[cfg(feature = "wc3")]
-static DEDICATED_X86_OWNER: [core::sync::atomic::AtomicU16; TRUEOS_VM_CPU_SLOT_LIMIT] =
-    [const { core::sync::atomic::AtomicU16::new(0) }; TRUEOS_VM_CPU_SLOT_LIMIT];
-#[cfg(feature = "wc3")]
-static RESIDENT_X86_VMCS_READY: [AtomicBool; TRUEOS_VM_CPU_SLOT_LIMIT] =
-    [const { AtomicBool::new(false) }; TRUEOS_VM_CPU_SLOT_LIMIT];
-#[cfg(feature = "wc3")]
-static RESIDENT_X86_VMCS_LOADED: [AtomicBool; TRUEOS_VM_CPU_SLOT_LIMIT] =
-    [const { AtomicBool::new(false) }; TRUEOS_VM_CPU_SLOT_LIMIT];
-
-/// Owned by the synchronous LASTAP job, inside its native lane lease.
-#[cfg(feature = "wc3")]
-pub(crate) struct DedicatedX86Scope {
-    slot: usize,
-}
-#[cfg(feature = "wc3")]
-impl DedicatedX86Scope {
-    pub(crate) fn enter(owner: u8) -> Self {
-        let slot = crate::percpu::current_slot();
-        assert_eq!(crate::workers::last_ap_execution_slot(), Some(slot as u32));
-        assert_eq!(DEDICATED_X86_OWNER[slot].swap(u16::from(owner) + 1, Ordering::AcqRel), 0);
-        RESIDENT_X86_VMCS_READY[slot].store(false, Ordering::Release);
-        RESIDENT_X86_VMCS_LOADED[slot].store(false, Ordering::Release);
-        Self { slot }
-    }
-}
-#[cfg(feature = "wc3")]
-impl Drop for DedicatedX86Scope {
-    fn drop(&mut self) {
-        assert_eq!(crate::percpu::current_slot(), self.slot);
-        RESIDENT_X86_VMCS_READY[self.slot].store(false, Ordering::Release);
-        if RESIDENT_X86_VMCS_LOADED[self.slot].swap(false, Ordering::AcqRel) {
-            let cleared = current_vmcs_page().ok()
-                .and_then(|page| kernel_va_to_pa(page as u64))
-                .is_some_and(crate::hv::vmx::vmclear);
-            if !cleared { crate::hv::lane::quarantine_x86_lane(self.slot); }
-        }
-        DEDICATED_X86_OWNER[self.slot].store(0, Ordering::Release);
-    }
-}
-
-/// Ordinary service jobs use a fresh VMCS. A dedicated LASTAP owner retains
-/// its VMCS across exits and re-enters with VMRESUME until scope retirement.
+/// Install the already-proven host/control and protected-32 guest VMCS state
+/// on this lane's scratch VMCS, then launch one logical x86 execution slice.
+/// A resume of the logical context deliberately creates another VMCS and uses
+/// VMLAUNCH: Tokio service lanes have no stable current-VMCS affinity.
 #[cfg(feature = "wc3")]
 pub(crate) fn run_transient_protected32(
     owner: u8,
@@ -7848,71 +7809,45 @@ pub(crate) fn run_transient_protected32(
             pdpt.add(3).read_volatile(),
         ]
     };
+    let basic = unsafe { Msr::new(crate::hv::vmx::IA32_VMX_BASIC).read() };
+    let revision = (basic & 0x7fff_ffff) as u32;
     let vmcs_va = current_vmcs_page()?;
-    let slot = current_vmx_slot()?;
-    let resident_owner = DEDICATED_X86_OWNER[slot].load(Ordering::Acquire);
-    if resident_owner != 0 && resident_owner != u16::from(owner) + 1 {
-        return Err("dedicated x86 owner mismatch");
+    unsafe {
+        core::ptr::write_bytes(vmcs_va, 0, VMX_PAGE_SIZE);
+        *(vmcs_va as *mut u32) = revision;
     }
-    let dedicated = resident_owner != 0;
-    let reuse = dedicated && RESIDENT_X86_VMCS_READY[slot].load(Ordering::Acquire);
     let vmcs_pa = kernel_va_to_pa(vmcs_va as u64).ok_or("vmcs pa")?;
-    let preemption_timer_enabled;
-    if reuse {
-        // The job owns this AP and its current VMCS until scope retirement.
-        // The wrapper refreshes HOST_RSP/RIP; other host state is lane-local.
-        vmwrite(VMCS_CTRL_EPT_POINTER, eptp)?;
-        vmwrite(VMCS_GUEST_CR3, cr3)?;
-        vmwrite(VMCS_GUEST_RIP, u64::from(eip))?;
-        vmwrite(VMCS_GUEST_RSP, u64::from(esp))?;
-        vmwrite(VMCS_GUEST_RFLAGS, (u64::from(eflags) | RFLAGS_RESERVED_BIT1) & !RFLAGS_IF)?;
-        vmwrite(VMCS_GUEST_FS_BASE, u64::from(fs_base))?;
-        vmwrite(VMCS_GUEST_DR7, u64::from(debug_registers.dr7 | 0x400))?;
-        vmwrite(VMCS_GUEST_ACTIVITY_STATE, 0)?;
-        vmwrite(VMCS_GUEST_INTERRUPTIBILITY, 0)?;
-        vmwrite(VMCS_GUEST_PENDING_DBG, 0)?;
-        preemption_timer_enabled = true;
-    } else {
-        let basic = unsafe { Msr::new(crate::hv::vmx::IA32_VMX_BASIC).read() };
-        let revision = (basic & 0x7fff_ffff) as u32;
-        unsafe {
-            core::ptr::write_bytes(vmcs_va, 0, VMX_PAGE_SIZE);
-            *(vmcs_va as *mut u32) = revision;
-        }
-        if !crate::hv::vmx::vmclear(vmcs_pa) {
-            return Err("vmclear");
-        }
-        if !crate::hv::vmx::vmptrld(vmcs_pa) {
-            return Err("vmptrld");
-        }
-
-        if dedicated { RESIDENT_X86_VMCS_LOADED[slot].store(true, Ordering::Release); }
-
-        // Reuse the Hull's complete host/control setup and Gate-0's known-good
-        // 32-bit protected guest descriptor state. VPID remains disabled so
-        // switching logical contexts cannot inherit another address space's TLB.
-        preemption_timer_enabled = match setup_vmcs_host_and_controls(
-            owner,
-            None,
-            eptp,
-            LineageRecord::new(),
-            VmBootMode::Wc3Probe,
-            Some(Protected32GuestInput {
-                cr3,
-                eip,
-                esp,
-                eflags,
-                fs_base,
-                debug_registers,
-            }),
-        ) {
-            Ok(enabled) => enabled,
-            Err(error) => {
-                let _ = crate::hv::vmx::vmclear(vmcs_pa);
-                return Err(error);
-            }
-        };
+    if !crate::hv::vmx::vmclear(vmcs_pa) {
+        return Err("vmclear");
     }
+    if !crate::hv::vmx::vmptrld(vmcs_pa) {
+        return Err("vmptrld");
+    }
+
+    // Reuse the Hull's complete host/control setup and Gate-0's known-good
+    // 32-bit protected guest descriptor state.  VPID is intentionally absent
+    // because this VMCS is discarded after every slice.
+    let preemption_timer_enabled = match setup_vmcs_host_and_controls(
+        owner,
+        None,
+        eptp,
+        LineageRecord::new(),
+        VmBootMode::Wc3Probe,
+        Some(Protected32GuestInput {
+            cr3,
+            eip,
+            esp,
+            eflags,
+            fs_base,
+            debug_registers,
+        }),
+    ) {
+        Ok(enabled) => enabled,
+        Err(error) => {
+            let _ = crate::hv::vmx::vmclear(vmcs_pa);
+            return Err(error);
+        }
+    };
     for (field, value) in [
         VMCS_GUEST_PDPTE0,
         VMCS_GUEST_PDPTE1,
@@ -7951,11 +7886,7 @@ pub(crate) fn run_transient_protected32(
     CarrierDebugRegisters::install(debug_registers);
 
     let mut launch = LaunchResult::default();
-    if reuse {
-        crate::hv::vmx::vmresume_once_wrapper_with_extended_state(&mut launch, extended_state);
-    } else {
-        crate::hv::vmx::vmlaunch_once_wrapper_with_extended_state(&mut launch, extended_state);
-    }
+    crate::hv::vmx::vmlaunch_once_wrapper_with_extended_state(&mut launch, extended_state);
     let mut captured_debug_registers = CarrierDebugRegisters::capture();
     captured_debug_registers.dr7 = vmread(VMCS_GUEST_DR7)
         .map(|value| value as u32)
@@ -7979,13 +7910,8 @@ pub(crate) fn run_transient_protected32(
         interruption_error_code,
         guest_cr2,
     };
-    if dedicated && preemption_timer_enabled && exit.launch.entered != 0 {
-        RESIDENT_X86_VMCS_READY[slot].store(true, Ordering::Release);
-    } else {
-        RESIDENT_X86_VMCS_READY[slot].store(false, Ordering::Release);
-        if !crate::hv::vmx::vmclear(vmcs_pa) {
-            return Err("transient vmclear");
-        }
+    if !crate::hv::vmx::vmclear(vmcs_pa) {
+        return Err("transient vmclear");
     }
     Ok(exit)
 }

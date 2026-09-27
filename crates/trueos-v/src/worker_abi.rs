@@ -6,7 +6,6 @@
 use alloc::boxed::Box;
 
 unsafe extern "Rust" {
-    pub fn trueos_x86_last_ap_submit_job(job: Box<dyn FnOnce() + Send + 'static>) -> i32;
     pub fn trueos_service_lane_submit_job(job: Box<dyn FnOnce() + Send + 'static>) -> i32;
     pub fn trueos_service_lane_available_capacity() -> usize;
     pub fn trueos_service_lane_cancellation_requested() -> bool;

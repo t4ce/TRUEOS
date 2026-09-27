@@ -1019,21 +1019,12 @@ unsafe fn vmlaunch_once_wrapper_impl(
 }
 
 pub fn vmresume_once_wrapper(vm_id: u8, out: &mut LaunchResult) {
-    let state = guest_extended_state_ptr(vm_id).expect("unsupported VM extended-state owner");
-    unsafe { vmresume_once_wrapper_impl(out, state) }
-}
-
-pub(crate) fn vmresume_once_wrapper_with_extended_state(
-    out: &mut LaunchResult, state: &mut VmxExtendedState,
-) {
-    unsafe { vmresume_once_wrapper_impl(out, state) }
-}
-
-unsafe fn vmresume_once_wrapper_impl(out: &mut LaunchResult, guest_extended_state_ptr: *mut VmxExtendedState) {
     unsafe {
         let result_ptr = wrapper_result_ptr();
         let guest_regs_ptr = guest_regs_ptr();
         let host_extended_state_ptr = host_extended_state_ptr();
+        let guest_extended_state_ptr =
+            guest_extended_state_ptr(vm_id).expect("unsupported VM extended-state owner");
         let extended_state_mask = crate::cpu::vmx_xsave_mask();
         result_ptr.write(EMPTY_LAUNCH_RESULT);
         core::arch::asm!(

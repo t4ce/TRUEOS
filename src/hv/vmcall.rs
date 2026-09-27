@@ -317,7 +317,6 @@ pub const OP_BP_FS_REMOVE: u32 = 0x34; // payload path -> rc
 pub const OP_BP_FS_STAT: u32 = 0x60; // payload path -> rc + kind in response_data[63:32], optional payload kind:u32 len:u64
 pub const OP_BP_THREAD_CURRENT_ID: u32 = 0x61; // response is current TRUEOS vthread id
 pub const OP_BP_SERVICE_LANE_SUBMIT: u32 = 0x62; // arg0/arg1 boxed service-lane job raw parts
-pub const OP_BP_X86_LAST_AP_SUBMIT: u32 = 0x215;
 pub const OP_BP_SERVICE_LANE_CAPACITY: u32 = 0x204; // no args -> advisory available native workers
 pub const OP_BP_SERVICE_LANE_CANCELLED: u32 = 0x207; // no args -> closed native-job admission
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
@@ -3525,17 +3524,13 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             }
             DispatchOutcome::Resume
         }
-        OP_BP_SERVICE_LANE_SUBMIT | OP_BP_X86_LAST_AP_SUBMIT => {
-            if op == OP_BP_X86_LAST_AP_SUBMIT && !cfg!(feature = "wc3") {
-                write_response(vm_id, seq, STATUS_OK, (-2i64) as u64, 0);
-                return DispatchOutcome::Resume;
-            }
+        OP_BP_SERVICE_LANE_SUBMIT => {
             let rc = unsafe {
                 crate::r::blocking::submit_guest_service_lane_job_from_raw(
                     vm_id,
                     arg0 as usize,
                     arg1 as usize,
-                    if op == OP_BP_X86_LAST_AP_SUBMIT { "x86-last-ap" } else { "vmx-service-lane" },
+                    "vmx-service-lane",
                 )
             };
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
