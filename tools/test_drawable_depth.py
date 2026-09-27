@@ -13,7 +13,7 @@ mod intel { pub fn align_up(v: usize, a: usize) -> Option<usize> { v.checked_add
 '''
 source += '\n'.join(constant('src/intel/render/constants.rs', n) for n in ['RESIDENT_SCENE_TARGET_WIDTH', 'RESIDENT_SCENE_TARGET_HEIGHT'])
 source += '\n'.join(item(depth, n) for n in ['drawable_depth_bytes', 'drawable_depth_compare', 'drawable_depth_tests'])
-source += '\n'.join(constant(api, n) for n in ['INDEXED_DRAW_LOAD_COLOR', 'INDEXED_DRAW_DRAWABLE_DEPTH', 'INDEXED_DRAW_DEPTH_TEST', 'INDEXED_DRAW_DEPTH_WRITE', 'INDEXED_DRAW_CLEAR_DEPTH', 'INDEXED_DRAW_DEPTH_COMPARE_SHIFT', 'INDEXED_DRAW_DEPTH_COMPARE_MASK', 'INDEXED_DRAW_FLAGS_ALL'])
+source += '\n'.join(constant(api, n) for n in ['INDEXED_DRAW_LOAD_COLOR', 'INDEXED_DRAW_DRAWABLE_DEPTH', 'INDEXED_DRAW_DEPTH_TEST', 'INDEXED_DRAW_DEPTH_WRITE', 'INDEXED_DRAW_CLEAR_DEPTH', 'INDEXED_DRAW_GEOMETRY_CLEAR', 'INDEXED_DRAW_DEPTH_COMPARE_SHIFT', 'INDEXED_DRAW_DEPTH_COMPARE_MASK', 'INDEXED_DRAW_FLAGS_ALL'])
 source += item(api, 'indexed_draw_flags_valid')
 source += '''
 #[test]
@@ -29,7 +29,16 @@ fn legacy_and_owned_depth_flags_have_distinct_contracts() {
         assert!(indexed_draw_flags_valid(flags));
         assert!(indexed_draw_flags_valid(flags | INDEXED_DRAW_DEPTH_WRITE));
     }
-    for extra in [1 << 5, 1 << 7, 1 << 11, 1 << 31] {
+    assert!(indexed_draw_flags_valid(INDEXED_DRAW_GEOMETRY_CLEAR));
+    assert!(!indexed_draw_flags_valid(INDEXED_DRAW_GEOMETRY_CLEAR | INDEXED_DRAW_LOAD_COLOR));
+    assert!(!indexed_draw_flags_valid(INDEXED_DRAW_GEOMETRY_CLEAR | INDEXED_DRAW_DRAWABLE_DEPTH));
+    let clear = INDEXED_DRAW_GEOMETRY_CLEAR | INDEXED_DRAW_DRAWABLE_DEPTH | INDEXED_DRAW_CLEAR_DEPTH;
+    assert!(indexed_draw_flags_valid(clear));
+    assert!(indexed_draw_flags_valid(clear | INDEXED_DRAW_LOAD_COLOR));
+    assert!(!indexed_draw_flags_valid(clear | INDEXED_DRAW_DEPTH_TEST));
+    assert!(!indexed_draw_flags_valid(clear | INDEXED_DRAW_DEPTH_WRITE));
+    assert!(!indexed_draw_flags_valid(clear | INDEXED_DRAW_DEPTH_COMPARE_MASK));
+    for extra in [1 << 6, 1 << 7, 1 << 11, 1 << 31] {
         assert!(!indexed_draw_flags_valid(INDEXED_DRAW_DRAWABLE_DEPTH | extra));
     }
     assert!(indexed_draw_flags_valid(INDEXED_DRAW_DRAWABLE_DEPTH | INDEXED_DRAW_CLEAR_DEPTH));

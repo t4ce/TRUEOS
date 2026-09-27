@@ -2962,11 +2962,12 @@ pub(crate) fn submit_ui4_indexed_draw(
     queue_handle: QueueHandle,
     draw: Ui4IndexedDrawDescriptor,
 ) -> Result<Ui4SurfaceIndexedCompletion, VgpuError> {
-    if !v::vgpu::indexed_draw_flags_valid(draw.depth_flags)
+    if !v::vgpu::indexed_draw_flags_valid(draw.depth_flags | if draw.load_color { v::vgpu::INDEXED_DRAW_LOAD_COLOR } else { 0 })
         || !ui4_single_indexed_topology_valid(draw.topology, draw.index_count) || draw.base_vertex != 0
     {
         return Err(VgpuError::Unsupported);
     }
+    let geometry_clear = draw.depth_flags & v::vgpu::INDEXED_DRAW_GEOMETRY_CLEAR != 0;
     let (
         window_id,
         phys,
@@ -3000,12 +3001,12 @@ pub(crate) fn submit_ui4_indexed_draw(
         }
         let textured = pipeline.package_digest == SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64;
         if draw.retain_texture
-            && textured
+            && textured && !geometry_clear
             && lookup_buffer(device, draw.sampled_texture)?.usage != BUFFER_USAGE_MAP_WRITE
         {
             return Err(VgpuError::Unsupported);
         }
-        if textured && draw.sampler_flags != (SAMPLER_ADDRESS_U_REPEAT | SAMPLER_ADDRESS_V_REPEAT) {
+        if textured && !geometry_clear && draw.sampler_flags != (SAMPLER_ADDRESS_U_REPEAT | SAMPLER_ADDRESS_V_REPEAT) {
             return Err(VgpuError::Unsupported);
         }
         let vertex_stride = pipeline.vertex_stride as usize;
@@ -3145,7 +3146,7 @@ pub(crate) fn submit_ui4_indexed_draw(
                 }
                 vertices.push(attributes);
             }
-            let texture = if textured {
+            let texture = if textured && !geometry_clear {
                 let shape = [
                     draw.texture_width,
                     draw.texture_height,
@@ -3247,7 +3248,7 @@ pub(crate) fn submit_ui4_indexed_draw(
         pitch,
     )
     .ok_or(VgpuError::Unsupported)?;
-    let mesh = match if sampled_texture.is_some() {
+    let mesh = match if sampled_texture.is_some() && !geometry_clear {
         crate::intel::render::create_resident_textured_indexed_mesh(
             &vertices,
             &indices,
@@ -3268,9 +3269,11 @@ pub(crate) fn submit_ui4_indexed_draw(
     };
     let scene_draw = crate::intel::render::ResidentSceneDraw {
         mesh: &mesh,
-        rgba: SHADER_PACKAGE_CLIP_POSITION3_RGBA_COLOR.to_le_bytes(),
-        sampled_texture: sampled_texture.as_deref(),
-        fragment_contract: if sampled_texture.is_some() {
+        rgba: if geometry_clear {
+            if draw.load_color { [0; 4] } else { draw.clear_rgba8_srgb.to_le_bytes() }
+        } else { SHADER_PACKAGE_CLIP_POSITION3_RGBA_COLOR.to_le_bytes() },
+        sampled_texture: if geometry_clear { None } else { sampled_texture.as_deref() },
+        fragment_contract: if sampled_texture.is_some() && !geometry_clear {
             crate::intel::render::ResidentSceneFragmentContract::ClipPosition3UvTexture
         } else {
             crate::intel::render::ResidentSceneFragmentContract::ConstantRgba
@@ -3300,11 +3303,11 @@ pub(crate) fn submit_ui4_indexed_draw(
             draw.sampler_flags, width, height,
         );
     }
-    let rendered = if let Some(depth) = drawable_depth.as_deref() {
+    let rendered = if drawable_depth.is_some() || geometry_clear {
         crate::intel::render::render_drawable_depth_scene(
             core::slice::from_ref(&scene_draw),
             (!draw.load_color).then_some(draw.clear_rgba8_srgb.to_le_bytes()),
-            destination, depth, draw.depth_flags, diagnostic_logs,
+            destination, drawable_depth.as_deref(), draw.depth_flags, diagnostic_logs,
         )
     } else if draw.load_color {
         crate::intel::render::render_resident_indexed_scene_frame_premultiplied_direct_to_surface(

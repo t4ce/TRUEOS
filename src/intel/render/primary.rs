@@ -2830,7 +2830,7 @@ fn submit_resident_scene_geometry_batched(
     if clear.is_some() || depth_clear {
         let clear_color = clear.unwrap_or([0; 4]);
         let mut clear_depth = if drawable_depth.is_some() {
-            drawable_depth.filter(|d| d.clear).map(|d| d.config)
+            drawable_depth.filter(|d| d.clear).and_then(|d| d.config)
         } else { depth_config };
         if let Some(depth) = clear_depth.as_mut() {
             depth.hiz_clear = depth.hiz.is_some();
@@ -2872,7 +2872,10 @@ fn submit_resident_scene_geometry_batched(
             continue;
         }
         let (blend_mode, draw_depth) = if let Some(depth) = drawable_depth {
-            (TriangleBlendProbeMode::MesaZeroedState, depth.test.then_some(depth.config))
+            (if depth.geometry_clear && depth.preserve_color {
+                TriangleBlendProbeMode::StraightAlpha
+            } else { TriangleBlendProbeMode::MesaZeroedState },
+            if depth.test { depth.config } else { None })
         } else if opaque_depth_enabled {
             let write_enabled = scene_draw.rgba[3] == u8::MAX;
             let mut depth = depth_config.ok_or("scene-frame-depth")?;
@@ -3667,7 +3670,7 @@ fn submit_resident_scene_capture_inner_for_carrier(
             );
         }
         let depth_config = if let Some(depth) = drawable_depth {
-            Some(depth.config)
+            depth.config
         } else if opaque_depth_enabled {
             Some(if raster_quality == ResidentSceneRasterQuality::Multisample4x {
                 prepare_resident_scene_msaa_depth(warm.device_id, target_width, target_height)?

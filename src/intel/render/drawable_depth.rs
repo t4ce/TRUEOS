@@ -51,7 +51,9 @@ fn drawable_depth_compare(gl_ordinal: u32) -> u8 {
 
 #[derive(Clone, Copy)]
 struct DrawableDepthSubmission {
-    config: TriangleDepthConfig,
+    config: Option<TriangleDepthConfig>,
+    geometry_clear: bool,
+    preserve_color: bool,
     test: bool,
     clear: bool,
 }
@@ -59,16 +61,30 @@ struct DrawableDepthSubmission {
 pub(crate) fn render_drawable_depth_scene(
     draws: &[ResidentSceneDraw<'_>], clear_color: Option<[u8; 4]>,
     target: crate::intel::gpgpu::GpgpuRgba8Surface,
-    depth: &DrawableDepth, flags: u32, diagnostics: bool,
+    depth: Option<&DrawableDepth>, flags: u32, diagnostics: bool,
 ) -> Result<ResidentSceneFrameResult, &'static str> {
     use v::vgpu::*;
-    if !depth.matches(target.width, target.height) { return Err("drawable-depth-extent"); }
+    let geometry_clear = flags & INDEXED_DRAW_GEOMETRY_CLEAR != 0;
     let clear = flags & INDEXED_DRAW_CLEAR_DEPTH != 0;
-    if !clear && !depth.initialized() { return Err("drawable-depth-needs-clear"); }
-    let mut config = depth.config;
-    config.write_enabled = flags & INDEXED_DRAW_DEPTH_WRITE != 0;
-    config.compare_function = drawable_depth_compare(flags >> INDEXED_DRAW_DEPTH_COMPARE_SHIFT);
-    let submission = DrawableDepthSubmission { config, clear, test: flags & INDEXED_DRAW_DEPTH_TEST != 0 };
+    let config = if let Some(depth) = depth {
+        if !depth.matches(target.width, target.height) { return Err("drawable-depth-extent"); }
+        if !clear && !depth.initialized() { return Err("drawable-depth-needs-clear"); }
+        let mut config = depth.config;
+        config.write_enabled = clear && geometry_clear || flags & INDEXED_DRAW_DEPTH_WRITE != 0;
+        config.compare_function = if clear && geometry_clear { COMPARE_FUNCTION_ALWAYS }
+            else { drawable_depth_compare(flags >> INDEXED_DRAW_DEPTH_COMPARE_SHIFT) };
+        Some(config)
+    } else {
+        if !geometry_clear || clear { return Err("drawable-depth-missing"); }
+        None
+    };
+    let submission = DrawableDepthSubmission {
+        config, geometry_clear, preserve_color: clear_color.is_none(),
+        clear: clear && !geometry_clear,
+        test: clear && geometry_clear || flags & INDEXED_DRAW_DEPTH_TEST != 0,
+    };
+    // Geometry clears always load the target; only covered fragments are replaced.
+    let clear_color = if geometry_clear { None } else { clear_color };
     submit_resident_scene_capture_inner_for_carrier(
         draws, None, None, &[], clear_color, diagnostics, false, false,
         ResidentSceneRasterQuality::SingleSample, target.width as usize, target.height as usize,

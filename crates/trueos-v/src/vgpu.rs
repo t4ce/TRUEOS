@@ -208,20 +208,31 @@ pub const INDEXED_DRAW_LOAD_COLOR: u32 = 1;
 pub const INDEXED_DRAW_DRAWABLE_DEPTH: u32 = 1 << 1;
 pub const INDEXED_DRAW_DEPTH_TEST: u32 = 1 << 2;
 pub const INDEXED_DRAW_DEPTH_WRITE: u32 = 1 << 3;
-/// Clear the full drawable depth to 1 before this draw, independently of color.
+/// Clear drawable depth: fullscreen to 1 before a regular draw, or at
+/// submitted vertex Z within GEOMETRY_CLEAR coverage. Independent of color.
 pub const INDEXED_DRAW_CLEAR_DEPTH: u32 = 1 << 4;
+/// Clear only fragments covered by the submitted geometry, using constant
+/// clear_rgba8_srgb and vertex Z. No fullscreen prepass or sampled shading.
+/// LOAD_COLOR preserves color; CLEAR_DEPTH writes depth with ALWAYS comparison.
+/// Without CLEAR_DEPTH, depth is untouched. Ordinary draw depth flags are invalid.
+pub const INDEXED_DRAW_GEOMETRY_CLEAR: u32 = 1 << 5;
 /// GL comparison ordinal (NEVER through ALWAYS), not an Intel packet encoding.
 pub const INDEXED_DRAW_DEPTH_COMPARE_SHIFT: u32 = 8;
 pub const INDEXED_DRAW_DEPTH_COMPARE_MASK: u32 = 7 << INDEXED_DRAW_DEPTH_COMPARE_SHIFT;
 pub const INDEXED_DRAW_FLAGS_ALL: u32 = INDEXED_DRAW_LOAD_COLOR
     | INDEXED_DRAW_DRAWABLE_DEPTH | INDEXED_DRAW_DEPTH_TEST
-    | INDEXED_DRAW_DEPTH_WRITE | INDEXED_DRAW_CLEAR_DEPTH | INDEXED_DRAW_DEPTH_COMPARE_MASK;
+    | INDEXED_DRAW_DEPTH_WRITE | INDEXED_DRAW_CLEAR_DEPTH | INDEXED_DRAW_DEPTH_COMPARE_MASK
+    | INDEXED_DRAW_GEOMETRY_CLEAR;
 
 pub const fn indexed_draw_flags_valid(flags: u32) -> bool {
     flags & !INDEXED_DRAW_FLAGS_ALL == 0
-        && (flags & !(INDEXED_DRAW_LOAD_COLOR | INDEXED_DRAW_DRAWABLE_DEPTH) == 0
+        && (flags & !(INDEXED_DRAW_LOAD_COLOR | INDEXED_DRAW_DRAWABLE_DEPTH | INDEXED_DRAW_GEOMETRY_CLEAR) == 0
             || flags & INDEXED_DRAW_DRAWABLE_DEPTH != 0)
         && (flags & INDEXED_DRAW_DEPTH_WRITE == 0 || flags & INDEXED_DRAW_DEPTH_TEST != 0)
+        && (flags & INDEXED_DRAW_GEOMETRY_CLEAR == 0
+            || (flags & (INDEXED_DRAW_DEPTH_TEST | INDEXED_DRAW_DEPTH_WRITE | INDEXED_DRAW_DEPTH_COMPARE_MASK) == 0
+                && (flags & INDEXED_DRAW_DRAWABLE_DEPTH == 0 || flags & INDEXED_DRAW_CLEAR_DEPTH != 0)
+                && (flags & INDEXED_DRAW_LOAD_COLOR == 0 || flags & INDEXED_DRAW_CLEAR_DEPTH != 0)))
 }
 
 
