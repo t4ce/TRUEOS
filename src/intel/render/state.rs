@@ -90,6 +90,7 @@ enum TriangleVertexFormat {
     Float3,
     /// One Float32x3 clip-space position and one Float32x2 texture coordinate.
     PosUv,
+    FixedGl,
     /// Helio Churn's immutable `@location(0) position` plus
     /// `@location(1) normal` input, both Float32x3.
     PosNormal,
@@ -160,6 +161,7 @@ struct TrianglePbrMaterial {
 struct TriangleDrawPrep {
     /// Internal one-shot pre-clip VUE observation; never part of the client ABI.
     vue_capture: bool,
+    fixed_gl: Option<[u32; 5]>,
     vertex_count: u32,
     vertex_stride: u32,
     vertex_buffer_bytes: u32,

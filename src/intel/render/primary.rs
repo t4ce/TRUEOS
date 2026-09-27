@@ -360,6 +360,7 @@ impl ResidentScenePrimitiveTopology {
 pub(crate) enum ResidentSceneFragmentContract {
     ConstantRgba,
     ClipPosition3UvTexture,
+    FixedGl([u32; 5]),
 }
 
 fn resident_scene_shader_pipeline(
@@ -377,6 +378,9 @@ fn resident_scene_shader_pipeline(
         {
             Ok(crate::intel::shader::clip_position3_uv_texture_pipeline())
         }
+        (ResidentSceneFragmentContract::FixedGl(_), true)
+            if vertex_format == TriangleVertexFormat::FixedGl && vertex_stride == 64 =>
+            Ok(crate::intel::shader::wc3_fixed_pipeline()),
         _ => Err("scene-fragment-contract-texture-mismatch"),
     }
 }
@@ -1583,6 +1587,7 @@ fn stage_resident_scene_secondary(
         return Err("scene-point-width");
     }
     draw.state_gpu_addr = state_gpu;
+    if let ResidentSceneFragmentContract::FixedGl(state) = fragment_contract { draw.fixed_gl = Some(state); }
     if draw.native.is_some() {
         return Err("scene-fragment-contract-native-mismatch");
     }
@@ -1683,7 +1688,10 @@ fn stage_resident_scene_secondary(
         },
         point_width_px,
         StreamoutProofExperiment::HeaderAndPositionSlots01,
-        TRIANGLE_DEFAULT_FRONT_END_CONTRACT,
+        if draw.fixed_gl.is_some() { TriangleFrontEndContract {
+            vs_urb_read_length: 2, sbe_read_length: 2,
+            ..TRIANGLE_DEFAULT_FRONT_END_CONTRACT
+        } } else { TRIANGLE_DEFAULT_FRONT_END_CONTRACT },
         viewport_translation_px,
         BackendProbeMode::MesaLike,
         // All scene secondaries execute below one primary batch. They only

@@ -288,6 +288,7 @@ const fn ordinary_vf_vertex_element_count(vertex_format: TriangleVertexFormat) -
     match vertex_format {
         TriangleVertexFormat::Float2 | TriangleVertexFormat::Float3 => 1,
         TriangleVertexFormat::PosUv => 2,
+        TriangleVertexFormat::FixedGl => 4,
         TriangleVertexFormat::PosNormal | TriangleVertexFormat::PosNormalUv => 3,
         TriangleVertexFormat::PosNormalUvTangent => 5,
     }
@@ -303,7 +304,8 @@ fn cmd_3dstate_vertex_elements(count: usize) -> Result<u32, &'static str> {
 }
 
 const fn mesa_vf_component_packing(vertex_format: TriangleVertexFormat) -> [u32; 4] {
-    if matches!(vertex_format, TriangleVertexFormat::PosUv) {
+    if matches!(vertex_format, TriangleVertexFormat::FixedGl) { [0xffff, 0, 0, 0] }
+    else if matches!(vertex_format, TriangleVertexFormat::PosUv) {
         // SIMD8 VS payload: xyz from element 0, then uv from element 1.
         [0x0000_0037, 0, 0, 0]
     } else {
@@ -934,17 +936,18 @@ fn write_triangle_probe_state_with_flush(
     {
         return Err("probe-viewport-translation");
     }
+    let fixed_gl = draw.fixed_gl.is_some();
     let native_sampled = draw.native.is_some() && draw.sampled_texture.is_some();
     let native_pbr = native_sampled && draw.pbr_material.is_some();
     let native_metallic_roughness = native_sampled && draw.metallic_roughness_texture.is_some();
-    let binding_table_entries = if draw.native.is_some() {
+    let binding_table_entries = if fixed_gl { 2usize } else if draw.native.is_some() {
         4usize
     } else if draw.sampled_texture.is_some() {
         3usize
     } else {
         1usize
     };
-    let ps_binding_table_entries = if native_pbr {
+    let ps_binding_table_entries = if fixed_gl { 4usize } else if native_pbr {
         9usize
     } else if native_metallic_roughness {
         4usize
@@ -953,7 +956,7 @@ fn write_triangle_probe_state_with_flush(
     } else {
         0usize
     };
-    let surface_state_count = if native_pbr {
+    let surface_state_count = if fixed_gl { 3usize } else if native_pbr {
         10usize
     } else if native_metallic_roughness {
         6usize
@@ -964,7 +967,7 @@ fn write_triangle_probe_state_with_flush(
     };
     let mut cursor = shader_layout.state_region_offset_bytes as usize;
     let binding_table_offset = cursor;
-    let ps_binding_table_offset = if native_sampled {
+    let ps_binding_table_offset = if native_sampled || fixed_gl {
         crate::intel::align_up(
             binding_table_offset
                 .checked_add(binding_table_entries * core::mem::size_of::<u32>())
@@ -979,7 +982,7 @@ fn write_triangle_probe_state_with_flush(
         ps_binding_table_offset
             .checked_add(
                 ps_binding_table_entries
-                    .max(if native_sampled {
+                    .max(if native_sampled || fixed_gl {
                         0
                     } else {
                         binding_table_entries
@@ -1085,6 +1088,17 @@ fn write_triangle_probe_state_with_flush(
         }
     }
 
+    if fixed_gl {
+        for (entry, surface_index) in [0usize, 0, 1, 2].into_iter().enumerate() {
+            dwords[ps_binding_table_offset / 4 + entry] =
+                (surface_state_offset + surface_index * 64 - binding_table_entry_base_offset) as u32;
+        }
+        let start = surface_state_offset / 4 + 16;
+        write_triangle_raw_buffer_surface_state(&mut dwords[start..start + 16], TriangleStorageBufferBinding {
+            gpu_addr: draw.vertex_gpu_addr + u64::from(draw.vertex_count) * 64,
+            byte_len: v::vgpu::WC3_FIXED_STATE_BYTES as u32,
+        })?;
+    }
     let surface = &mut dwords[surface_state_offset / 4..surface_state_offset / 4 + 16];
     surface.fill(0);
     let resident_msaa4 = draw.uses_resident_scene_msaa4();
@@ -1891,6 +1905,7 @@ mod retained_native_matrix_draw_contract_tests {
     fn native_draw(native: TriangleNativeDrawContract) -> TriangleDrawPrep {
         TriangleDrawPrep {
             vue_capture: false,
+        fixed_gl: None,
             vertex_count: 108,
             vertex_stride: trueos_helio_artifact::churn_forward::VERTEX_STRIDE,
             vertex_buffer_bytes: 108 * trueos_helio_artifact::churn_forward::VERTEX_STRIDE,
@@ -2722,7 +2737,9 @@ fn encode_triangle_probe_batch(
     // Mirror Mesa's simple-shader path here as literally as possible: cull
     // none, and otherwise leave raster defaults boring until we have visual
     // proof that a more opinionated packet is required.
-    let raster_dw1 = if artifact_native_fixed_function {
+    let raster_dw1 = if let Some(state) = draw.fixed_gl {
+        native_raster_dw1(state[4] == 0, true) | (1 << 1)
+    } else if artifact_native_fixed_function {
         native_raster_dw1(
             draw.native.is_some_and(|native| native.double_sided)
                 || diagnostic_cull_off,
@@ -3502,6 +3519,13 @@ fn encode_triangle_probe_batch(
                         VFCOMP_STORE_0, VFCOMP_STORE_0)?;
                 }
             },
+            TriangleVertexFormat::FixedGl => {
+                for offset in [0, 16, 32, 48] {
+                    push_vertex_element_state(batch_dwords, &mut cursor, 0, offset,
+                        SURFACE_FORMAT_R32G32B32A32_FLOAT, VFCOMP_STORE_SRC, VFCOMP_STORE_SRC,
+                        VFCOMP_STORE_SRC, VFCOMP_STORE_SRC)?;
+                }
+            }
             TriangleVertexFormat::PosUv => {
                 push_vertex_element_state(
                     batch_dwords,
@@ -3710,7 +3734,7 @@ fn encode_triangle_probe_batch(
     // insert system values into the sampled shader's fetched attributes.
     let ordinary_pos_uv = draw.native.is_none()
         && !vf_synthesized_vue
-        && draw.vertex_format == TriangleVertexFormat::PosUv;
+        && matches!(draw.vertex_format, TriangleVertexFormat::PosUv | TriangleVertexFormat::FixedGl);
     let vf_sgvs_dw1 = if let Some(native) = draw.native {
         native.vf_sgvs_dw1
     } else if ordinary_pos_uv {

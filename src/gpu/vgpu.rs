@@ -2674,6 +2674,7 @@ pub(crate) fn create_shader_module(
 ) -> Result<ShaderModuleHandle, VgpuError> {
     if package_digest != SHADER_PACKAGE_CLIP_POSITION3_RGBA_FNV1A64
         && package_digest != SHADER_PACKAGE_CLIP_POSITION3_IMMEDIATE_RGBA_FNV1A64
+        && package_digest != v::vgpu::SHADER_PACKAGE_WC3_FIXED_FNV1A64
         && package_digest != SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64
     {
         return Err(VgpuError::Unsupported);
@@ -2760,6 +2761,7 @@ pub(crate) fn create_render_pipeline(
     if shader.epoch != device.epoch {
         return Err(VgpuError::InvalidHandle);
     }
+    if shader.package_digest == v::vgpu::SHADER_PACKAGE_WC3_FIXED_FNV1A64 && (vertex_stride != 64 || position_offset != 0) { return Err(VgpuError::Unsupported); }
     if shader.package_digest == SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64
         && position_offset.saturating_add(20) > vertex_stride
     {
@@ -2980,6 +2982,7 @@ pub(crate) fn submit_ui4_indexed_draw(
         indices,
         sampled_texture,
         drawable_depth,
+        fixed_state,
     ) = {
         let mut broker = BROKER.lock();
         let device = lookup_device_mut(&mut broker, device_handle, principal)?;
@@ -2995,11 +2998,14 @@ pub(crate) fn submit_ui4_indexed_draw(
         let pipeline = lookup_render_pipeline(device, draw.pipeline)?;
         if pipeline.epoch != device.epoch
             || (pipeline.package_digest != SHADER_PACKAGE_CLIP_POSITION3_RGBA_FNV1A64
-                && pipeline.package_digest != SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64)
+                && pipeline.package_digest != SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64
+                && pipeline.package_digest != v::vgpu::SHADER_PACKAGE_WC3_FIXED_FNV1A64)
         {
             return Err(VgpuError::InvalidHandle);
         }
-        let textured = pipeline.package_digest == SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64;
+        let fixed = pipeline.package_digest == v::vgpu::SHADER_PACKAGE_WC3_FIXED_FNV1A64;
+        if fixed && (geometry_clear || draw.vertex_offset != v::vgpu::WC3_FIXED_STATE_BYTES) { return Err(VgpuError::Unsupported); }
+        let textured = fixed || pipeline.package_digest == SHADER_PACKAGE_CLIP_POSITION3_UV_TEXTURE_FNV1A64;
         if draw.retain_texture
             && textured && !geometry_clear
             && lookup_buffer(device, draw.sampled_texture)?.usage != BUFFER_USAGE_MAP_WRITE
@@ -3137,15 +3143,27 @@ pub(crate) fn submit_ui4_indexed_draw(
             let mut vertices = Vec::with_capacity(vertex_count);
             for vertex in 0..vertex_count {
                 let start = draw.vertex_offset + vertex * vertex_stride + position_offset;
-                let attribute_bytes = if textured { 20 } else { 12 };
+                let attribute_bytes = if fixed { 64 } else if textured { 20 } else { 12 };
                 let raw =
                     unsafe { core::slice::from_raw_parts(vertex_virt.add(start), attribute_bytes) };
-                let mut attributes = [0.0; 5];
+                let mut attributes = [0.0; 16];
                 for (component, bytes) in attributes.iter_mut().zip(raw.chunks_exact(4)) {
                     *component = f32::from_le_bytes(bytes.try_into().unwrap());
                 }
                 vertices.push(attributes);
             }
+            let fixed_state = if fixed {
+                let raw = unsafe { core::slice::from_raw_parts(vertex_virt, v::vgpu::WC3_FIXED_STATE_BYTES) };
+                crate::intel::dma_flush(vertex_virt, raw.len());
+                let mut state = [0f32; 384];
+                for (out, bytes) in state.iter_mut().zip(raw.chunks_exact(4)) { *out = f32::from_le_bytes(bytes.try_into().unwrap()); }
+                if state.iter().any(|v| !v.is_finite()) { return Err(VgpuError::Unsupported); }
+                let rect = &state[29*4..30*4];
+                if rect.iter().any(|v| *v < 0.0 || v.fract() != 0.0)
+                    || rect[0] >= rect[2] || rect[1] >= rect[3]
+                    || rect[2] > width as f32 || rect[3] > height as f32 { return Err(VgpuError::Unsupported); }
+                Some(state)
+            } else { None };
             let texture = if textured && !geometry_clear {
                 let shape = [
                     draw.texture_width,
@@ -3213,9 +3231,9 @@ pub(crate) fn submit_ui4_indexed_draw(
             } else {
                 None
             };
-            Ok((vertices, indices, texture, depth))
+            Ok((vertices, indices, texture, depth, fixed_state))
         })();
-        let (vertices, mut indices, sampled_texture, drawable_depth) = match copied {
+        let (vertices, mut indices, sampled_texture, drawable_depth, fixed_state) = match copied {
             Ok(copied) => copied,
             Err(error) => {
                 lookup_surface_mut(device, draw.surface)?.in_flight = 1;
@@ -3223,7 +3241,10 @@ pub(crate) fn submit_ui4_indexed_draw(
                 return Err(error);
             }
         };
-        canonicalize_ui4_single_indexed_winding(&vertices, &mut indices, draw.topology);
+        if fixed_state.is_none() {
+            let legacy = vertices.iter().map(|v| [v[0],v[1],v[2],v[3],v[4]]).collect::<Vec<_>>();
+            canonicalize_ui4_single_indexed_winding(&legacy, &mut indices, draw.topology);
+        }
         (
             window_id,
             phys,
@@ -3236,6 +3257,7 @@ pub(crate) fn submit_ui4_indexed_draw(
             indices,
             sampled_texture,
             drawable_depth,
+            fixed_state,
         )
     };
 
@@ -3248,9 +3270,11 @@ pub(crate) fn submit_ui4_indexed_draw(
         pitch,
     )
     .ok_or(VgpuError::Unsupported)?;
-    let mesh = match if sampled_texture.is_some() && !geometry_clear {
+    let mesh = match if let Some(state) = fixed_state.as_ref() {
+        crate::intel::render::create_resident_fixed_gl_mesh(&vertices, &indices, state)
+    } else if sampled_texture.is_some() && !geometry_clear {
         crate::intel::render::create_resident_textured_indexed_mesh(
-            &vertices,
+            &vertices.iter().map(|v| [v[0],v[1],v[2],v[3],v[4]]).collect::<Vec<_>>(),
             &indices,
             draw.topology,
         )
@@ -3273,7 +3297,10 @@ pub(crate) fn submit_ui4_indexed_draw(
             if draw.load_color { [0; 4] } else { draw.clear_rgba8_srgb.to_le_bytes() }
         } else { SHADER_PACKAGE_CLIP_POSITION3_RGBA_COLOR.to_le_bytes() },
         sampled_texture: if geometry_clear { None } else { sampled_texture.as_deref() },
-        fragment_contract: if sampled_texture.is_some() && !geometry_clear {
+        fragment_contract: if let Some(state) = fixed_state.as_ref() {
+            crate::intel::render::ResidentSceneFragmentContract::FixedGl([
+                state[116] as u32, state[117] as u32, state[118] as u32, state[119] as u32, state[114] as u32])
+        } else if sampled_texture.is_some() && !geometry_clear {
             crate::intel::render::ResidentSceneFragmentContract::ClipPosition3UvTexture
         } else {
             crate::intel::render::ResidentSceneFragmentContract::ConstantRgba

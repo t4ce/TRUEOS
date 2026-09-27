@@ -1,0 +1,173 @@
+{
+  "backend": "mesa-anv-noop-drm-shim-compile-only",
+  "baremetal_verified": false,
+  "contract": "clip-position3-uv-texture",
+  "device": {
+    "device_id": 18048,
+    "name": "Intel(R) UHD Graphics 770 (ADL-S GT1)",
+    "vendor_id": 32902
+  },
+  "executables": [
+    {
+      "description": "SIMD8 vertex shader",
+      "name": "vertex",
+      "simd_width": 8,
+      "stage": "vertex",
+      "statistics": {
+        "Code size": 5344,
+        "Cycles": 22007,
+        "Fills": 0,
+        "GRF registers": 0,
+        "Instructions": 354,
+        "Loops": 1,
+        "Max dispatch width": 8,
+        "Max live registers": 55,
+        "Non SSA regs after NIR": 73,
+        "SENDs": 18,
+        "Scratch Memory Size": 0,
+        "Source hash": 3427904250,
+        "Spills": 0,
+        "Workgroup Memory Size": 0
+      }
+    },
+    {
+      "description": "SIMD8 fragment shader",
+      "name": "SIMD8 fragment",
+      "simd_width": 8,
+      "stage": "fragment",
+      "statistics": {
+        "Code size": 1856,
+        "Cycles": 1897,
+        "Fills": 0,
+        "GRF registers": 0,
+        "Instructions": 122,
+        "Loops": 0,
+        "Max dispatch width": 32,
+        "Max live registers": 27,
+        "Non SSA regs after NIR": 19,
+        "SENDs": 6,
+        "Scratch Memory Size": 0,
+        "Source hash": 885167342,
+        "Spills": 0,
+        "Workgroup Memory Size": 0
+      }
+    },
+    {
+      "description": "SIMD16 fragment shader",
+      "name": "SIMD16 fragment",
+      "simd_width": 16,
+      "stage": "fragment",
+      "statistics": {
+        "Code size": 1808,
+        "Cycles": 2084,
+        "Fills": 0,
+        "GRF registers": 0,
+        "Instructions": 126,
+        "Loops": 0,
+        "Max dispatch width": 32,
+        "Max live registers": 48,
+        "Non SSA regs after NIR": 19,
+        "SENDs": 6,
+        "Scratch Memory Size": 0,
+        "Source hash": 885167342,
+        "Spills": 0,
+        "Workgroup Memory Size": 0
+      }
+    },
+    {
+      "description": "SIMD32 fragment shader",
+      "name": "SIMD32 fragment",
+      "simd_width": 32,
+      "stage": "fragment",
+      "statistics": {
+        "Code size": 3008,
+        "Cycles": 3292,
+        "Fills": 0,
+        "GRF registers": 0,
+        "Instructions": 213,
+        "Loops": 0,
+        "Max dispatch width": 32,
+        "Max live registers": 88,
+        "Non SSA regs after NIR": 22,
+        "SENDs": 8,
+        "Scratch Memory Size": 0,
+        "Source hash": 885167342,
+        "Spills": 0,
+        "Workgroup Memory Size": 0
+      }
+    }
+  ],
+  "fragment_compiler_state": {
+    "barycentric_interp_modes": 1,
+    "binding_table_entries": 4,
+    "computed_depth_mode": 0,
+    "computed_stencil": 0,
+    "dispatch16": 1,
+    "dispatch32": 1,
+    "dispatch8": 1,
+    "flat_inputs": 0,
+    "grf_start16": 6,
+    "grf_start32": 11,
+    "grf_start8": 4,
+    "location0_attribute": 0,
+    "location1_attribute": 1,
+    "location2_attribute": 2,
+    "num_varying_inputs": 3,
+    "offset16": 1856,
+    "push_bytes": 0,
+    "sampler_count": 1,
+    "sampler_prefetch_count": 0,
+    "scratch_bytes": 0,
+    "uses_depth_w_coefficients": 0,
+    "uses_npc_bary_coefficients": 0,
+    "uses_pc_bary_coefficients": 0,
+    "uses_src_depth": 0,
+    "uses_src_w": 0,
+    "uses_vmask": 1,
+    "ver": 12,
+    "verx10": 120
+  },
+  "host_render_verified": false,
+  "iga_platform": "12p1",
+  "ps_bytes": 1808,
+  "ps_sha256": "c7fd896547dd1851167d046fefd7d5060ae24f17444a5202c3b8e01ee12293d6",
+  "sbe": {
+    "attributes": 1,
+    "read_length_32b": 1,
+    "read_offset_32b": 1
+  },
+  "schema": 1,
+  "state_vec4_count": 96,
+  "vertex_attributes": [
+    "float32x4@0",
+    "float32x4@16",
+    "float32x4@32",
+    "float32x4@48"
+  ],
+  "vertex_compiler_state": {
+    "binding_table_entries": 2,
+    "dispatch_grf_start": 2,
+    "location0_slot": 2,
+    "location1_slot": 3,
+    "location2_slot": 4,
+    "max_threads": 546,
+    "position_slot": 1,
+    "sampler_count": 0,
+    "urb_entry_64b": 2,
+    "urb_read_length": 2,
+    "uses_instanceid": 0,
+    "uses_vertexid": 0,
+    "uv_slot": 2,
+    "ver": 12,
+    "verx10": 120,
+    "vf_packing0": 65535,
+    "vue_slots": 5
+  },
+  "vertex_input_components": "xyz,uv",
+  "vertex_stride_bytes": 64,
+  "vertex_varyings": [
+    "smooth-perspective-vec2-location0"
+  ],
+  "vs_bytes": 5344,
+  "vs_sha256": "78688cdf3a9249b606dd1bbb1256ac8e8486c85d5708ac0e0d056cd04207450c"
+}
