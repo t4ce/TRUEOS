@@ -3157,7 +3157,8 @@ pub(crate) fn submit_ui4_indexed_draw(
                 crate::intel::dma_flush(vertex_virt, raw.len());
                 let mut state = [0f32; 384];
                 for (out, bytes) in state.iter_mut().zip(raw.chunks_exact(4)) { *out = f32::from_le_bytes(bytes.try_into().unwrap()); }
-                if !fixed_gl_state_valid(&state, width, height) { return Err(VgpuError::Unsupported); }
+                if !fixed_gl_state_valid(&state, width, height)
+                    || !fixed_gl_texture_state_valid(&state, draw.texture_width, draw.texture_height) { return Err(VgpuError::Unsupported); }
                 Some(state)
             } else { None };
             let texture = if textured && !geometry_clear {
@@ -7461,5 +7462,30 @@ mod fixed_gl_state_tests {
             assert!(!fixed_gl_state_valid(&bad,640,480));
         }
         assert!(!fixed_gl_state_valid(&state,0,0));
+    }
+}
+
+fn fixed_gl_texture_state_valid(state: &[f32; 384], width: u32, height: u32) -> bool {
+    if state[100] == 0.0 { return width == 1 && height == 1; }
+    let [w, h, mode, mag] = [state[120], state[121], state[122], state[123]];
+    if [w,h,mode,mag,state[124]].iter().any(|v| !v.is_finite() || *v < 0.0 || (*v as u32) as f32 != *v)
+        || w < 1.0 || h < 1.0 || w > 16384.0 || h > 16384.0 || mode > 5.0 || mag > 1.0 { return false; }
+    let (w,h)=(w as u32,h as u32);
+    let levels=if mode >= 2.0 {32-w.max(h).leading_zeros()} else {1};
+    state[124] == (levels-1) as f32 && width == w
+        && height == (0..levels).map(|i| (h>>i).max(1)).sum::<u32>()
+}
+#[cfg(test)]
+mod fixed_gl_texture_state_tests {
+    use super::fixed_gl_texture_state_valid;
+    #[test]
+    fn mip_shader_levels_are_bounded_by_real_uploaded_atlas() {
+        let mut s=[0.;384];s[100]=1.;s[120..125].copy_from_slice(&[8.,2.,3.,1.,3.]);
+        assert!(fixed_gl_texture_state_valid(&s,8,5));
+        assert!(!fixed_gl_texture_state_valid(&s,8,2));
+        for (i,v) in [(120,0.),(121,32768.),(122,6.),(123,2.),(124,100000.),(124,f32::NAN)] {
+            let mut bad=s;bad[i]=v;assert!(!fixed_gl_texture_state_valid(&bad,8,5));
+        }
+        s[122]=1.;s[124]=0.;assert!(fixed_gl_texture_state_valid(&s,8,2));
     }
 }

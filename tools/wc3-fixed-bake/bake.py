@@ -39,7 +39,7 @@ def decode(binary: Path) -> str:
     )
     if result.returncode or "illegal" in result.stdout.lower():
         raise SystemExit(f"invalid ADL-S EU ISA in {binary}:\n{result.stdout}")
-    return result.stdout
+    return "\n".join(line.rstrip() for line in result.stdout.splitlines()) + "\n"
 
 
 def emit_rust(vs: bytes, ps: bytes, state: dict[str, int], ps_state: dict[str, int]) -> None:
@@ -183,7 +183,7 @@ def main() -> None:
     expected_ps = dict(ver=12, verx10=120, dispatch16=1, grf_start16=6, num_varying_inputs=3,
         barycentric_interp_modes=1, uses_vmask=1, uses_src_depth=0, uses_src_w=0,
         computed_depth_mode=0, computed_stencil=0, flat_inputs=0, binding_table_entries=4,
-        sampler_count=1, push_bytes=0, scratch_bytes=0)
+        sampler_count=0, push_bytes=0, scratch_bytes=0)
     for captured, expected in [(state, expected_vs), (ps_state, expected_ps)]:
         if any(captured.get(k) != v for k,v in expected.items()):
             raise SystemExit(f"fixed GL compiler contract drift: {captured}")
@@ -201,7 +201,7 @@ def main() -> None:
         or len(re.findall(r"^/\* \[[0-9A-Fa-f]+\]", vs_isa, re.MULTILINE)) != baker.assembly_instruction_count(vertex_assembly)
         or re.search(r"send\.urb.*\{[^}\n]*EOT", vs_isa) is None):
         raise SystemExit("VS cache extraction did not match complete compiler assembly")
-    if (re.search(r"send\.smpl\s+\(16\|[^\n]*simd16 sample", ps_isa, re.IGNORECASE) is None
+    if (re.search(r"send\.smpl\s+\(16\|[^\n]*simd16 (?:sample|ld)", ps_isa, re.IGNORECASE) is None
         or re.search(r"sendc?\.rc\s+\(16\|[^\n]*\{[^}\n]*EOT[^\n]*render target write SIMD16", ps_isa, re.IGNORECASE) is None):
         raise SystemExit("fixed GL PS does not contain SIMD16 sampler and RT EOT messages")
 

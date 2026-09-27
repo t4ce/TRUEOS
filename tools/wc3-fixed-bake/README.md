@@ -40,6 +40,8 @@ State rows (all finite float32, matrices column-major):
 | 27 | XY viewport scale/offset (currently 1,1,0,0) |
 | 28 | Depth near/far (currently 0,1), back-face cull enable |
 | 29 | Top-left scissor: left, top, exclusive right, exclusive bottom |
+| 30 | Base texture width/height, minification mode (0 nearest, 1 linear, 2 nearest/mip-nearest, 3 linear/mip-nearest, 4 nearest/mip-linear, 5 linear/mip-linear), linear magnification flag |
+| 31 | Last mip level in x |
 | 32+7i | Light i eye-space position |
 | 33+7i–35+7i | Light ambient, diffuse, specular |
 | 36+7i | Spot direction xyz, cosine cutoff |
@@ -59,17 +61,37 @@ VF: four float4 elements, packing 0xffff, no SGVS, input GRF 2/read length 2.
 VUE: header/position at slots 0/1, primary/UV/fog at 2/3/4, two 64-byte entries.
 SBE: read offset 1, read length 2, explicit identity routing for three attributes.
 PS: perspective pixel barycentrics, setup GRF 6, SIMD16, no scratch or push data.
-VS BTI1 reads state. PS BTI2 reads state and BTI3 samples the texture. Separate
+VS BTI1 reads state. PS BTI2 reads state and BTI3 fetches texture texels. Separate
 stage binding tables share the state surface, texture surface and RT0.
 
 ## Scope and validation
 
 This addresses WC3's reported enabled mask 0x300f04f. Alpha testing, blending,
 two-sided lighting, texgen, polygon offset, nondefault viewport/depth range,
-and filtering beyond nearest/repeat still fail explicitly. This is not a full
+and texture addressing beyond repeat still fail explicitly. This is not a full
 OpenGL implementation or an FPS result.
 
 Run xpapp host tests, `python3 tools/test_wc3_fixed_shader.py`,
 `python3 tools/test_clip_position3_uv_texture.py`, and
 `python3 tools/test_drawable_depth.py`, then build the kernel and xpapp.
 Hardware image correctness and performance require a run of the matching pair.
+
+## Mipmapped filtering
+
+The upload contains the complete authored mip chain, stacked vertically at the
+base-level row pitch. Non-mip filters upload only level zero. Levels are checked
+for dimensions, format and byte length before submission; missing levels remain
+an explicit incomplete-texture frontier. The kernel validates atlas dimensions
+and level bounds against the state consumed by the shader.
+
+The GPU calculates LOD from UV derivatives in base-level texel units. It applies
+nearest/bilinear filtering within a level and nearest/linear selection between
+levels. Integer texel fetches wrap within each level, so bilinear taps cannot
+read atlas padding or another mip. The CPU only copies existing rows into the
+upload; it does not filter pixels or generate replacement mip levels.
+
+Magnification crossover and nearest-mip half-level ties follow OpenGL 1.1
+sections 3.8.1–3.8.2 of the
+[Khronos specification](https://registry.khronos.org/OpenGL/specs/gl/glspec11.pdf).
+The compiler now reports sampler_count=0 because texel-fetch messages do not
+consume sampler state; their BTI remains 3. This changes the package identifier.

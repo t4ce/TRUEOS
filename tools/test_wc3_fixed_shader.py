@@ -41,6 +41,6 @@ import tempfile
 from test_clip_position3_uv_texture import item
 with tempfile.TemporaryDirectory(prefix='wc3-state-tests-') as tmp:
     src = Path(tmp) / 'tests.rs'; exe = Path(tmp) / 'tests'
-    src.write_text(item('src/gpu/vgpu.rs','fixed_gl_state_valid') + item('src/gpu/vgpu.rs','fixed_gl_state_tests'))
+    src.write_text(''.join(item('src/gpu/vgpu.rs', name) for name in ('fixed_gl_state_valid','fixed_gl_state_tests','fixed_gl_texture_state_valid','fixed_gl_texture_state_tests')))
     subprocess.run(['rustc','--edition=2024','--test',str(src),'-o',str(exe)],check=True)
     subprocess.run([str(exe)],check=True)
