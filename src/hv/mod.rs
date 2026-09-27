@@ -7788,6 +7788,7 @@ pub(crate) fn run_transient_protected32(
     registers: crate::hv::vmx::GuestRegisters,
     extended_state: &mut crate::hv::vmx::VmxExtendedState,
 ) -> Result<TransientProtected32Exit, &'static str> {
+    let timing_start = wc3::exec_timing::cycles();
     if !current_vmx_root_active()? {
         return Err("vmx core contract inactive");
     }
@@ -7886,7 +7887,9 @@ pub(crate) fn run_transient_protected32(
     CarrierDebugRegisters::install(debug_registers);
 
     let mut launch = LaunchResult::default();
+    let timing_enter = wc3::exec_timing::cycles();
     crate::hv::vmx::vmlaunch_once_wrapper_with_extended_state(&mut launch, extended_state);
+    let timing_leave = wc3::exec_timing::cycles();
     let mut captured_debug_registers = CarrierDebugRegisters::capture();
     captured_debug_registers.dr7 = vmread(VMCS_GUEST_DR7)
         .map(|value| value as u32)
@@ -7913,6 +7916,8 @@ pub(crate) fn run_transient_protected32(
     if !crate::hv::vmx::vmclear(vmcs_pa) {
         return Err("transient vmclear");
     }
+    wc3::exec_timing::record(owner, timing_start, timing_enter, timing_leave,
+        wc3::exec_timing::cycles(), exit.launch.exit_reason as u64, exit.launch.guest_rip);
     Ok(exit)
 }
 

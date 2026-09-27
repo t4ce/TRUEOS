@@ -7,6 +7,7 @@
 
 mod guest32;
 mod trace;
+pub(super) mod exec_timing;
 mod x86_cabi;
 mod x86_runtime;
 
