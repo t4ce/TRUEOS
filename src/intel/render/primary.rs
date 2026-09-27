@@ -394,6 +394,20 @@ mod resident_scene_shader_pipeline_tests {
     use crate::intel::shader::DispatchMode;
 
     #[test]
+    fn fixed_gl_pipeline_matches_compiler_payload_and_rejects_legacy_vertices() {
+        let contract = Fragment::FixedGl([0, 0, 640, 480, 1]);
+        let shader = resident_scene_shader_pipeline(contract, true, Vertex::FixedGl, 64).unwrap();
+        assert_eq!(shader.vs.meta.kernel.grf_start_register, 2);
+        assert_eq!(shader.vs.meta.kernel.binding_table_entry_count, 2);
+        assert_eq!(shader.vs.meta.urb_entry_output_length, 2);
+        assert_eq!(shader.ps.meta.kernel.grf_start_register, 6);
+        assert_eq!(shader.ps.meta.kernel.binding_table_entry_count, 4);
+        assert_eq!(shader.ps.meta.num_varying_inputs, 3);
+        assert!(resident_scene_shader_pipeline(contract, true, Vertex::PosUv, 20).is_err());
+        assert!(resident_scene_shader_pipeline(contract, false, Vertex::FixedGl, 64).is_err());
+    }
+
+    #[test]
     fn ordinary_scene_keeps_constant_simd16_shader() {
         let pipeline =
             resident_scene_shader_pipeline(Fragment::ConstantRgba, false, Vertex::Float3, 12)

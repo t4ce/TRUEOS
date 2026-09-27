@@ -322,6 +322,14 @@ mod ordinary_pos_uv_state_tests {
     };
 
     #[test]
+    fn fixed_gl_fetches_all_sixteen_components_without_sgvs() {
+        assert_eq!(ordinary_vf_vertex_element_count(TriangleVertexFormat::FixedGl), 4);
+        assert_eq!(mesa_vf_component_packing(TriangleVertexFormat::FixedGl), [0xffff, 0, 0, 0]);
+        assert_eq!(cmd_3dstate_vertex_elements(4).unwrap() & 0xff, 7);
+        assert_eq!(super::sbe_swiz_payload(true, 3), [0x10000, 2]);
+    }
+
+    #[test]
     fn vertex_element_packet_covers_uv_before_next_command() {
         let count = ordinary_vf_vertex_element_count(TriangleVertexFormat::PosUv);
         let header = cmd_3dstate_vertex_elements(count).unwrap();

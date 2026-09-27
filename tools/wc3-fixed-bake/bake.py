@@ -203,7 +203,7 @@ def main() -> None:
         raise SystemExit("VS cache extraction did not match complete compiler assembly")
     if (re.search(r"send\.smpl\s+\(16\|[^\n]*simd16 sample", ps_isa, re.IGNORECASE) is None
         or re.search(r"sendc?\.rc\s+\(16\|[^\n]*\{[^}\n]*EOT[^\n]*render target write SIMD16", ps_isa, re.IGNORECASE) is None):
-        raise SystemExit("reused PS does not contain SIMD16 sampler and RT EOT messages")
+        raise SystemExit("fixed GL PS does not contain SIMD16 sampler and RT EOT messages")
 
     OUT.mkdir(parents=True, exist_ok=True)
     (OUT / vs_path.name).write_bytes(vs)
