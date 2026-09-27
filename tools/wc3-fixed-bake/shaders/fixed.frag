@@ -8,8 +8,12 @@ layout(set=0,binding=3) uniform texture2D image;
 layout(set=0,binding=4) uniform sampler image_sampler;
 // Mips are stored as unfiltered authored texels in vertical atlas rows.
 // Explicit fetches prevent filtering into a neighbouring mip or row padding.
-vec4 fetch_repeat(ivec2 p, ivec2 size, int row) {
-    p=(p%size+size)%size;
+vec4 fetch_wrapped(ivec2 p, ivec2 size, int row) {
+    ivec2 mode=ivec2(s[25].zw);
+    if((mode.x==1 && (p.x<0 || p.x>=size.x)) ||
+       (mode.y==1 && (p.y<0 || p.y>=size.y))) return vec4(0.0);
+    p=ivec2(mode.x==0 ? (p.x%size.x+size.x)%size.x : clamp(p.x,0,size.x-1),
+        mode.y==0 ? (p.y%size.y+size.y)%size.y : clamp(p.y,0,size.y-1));
     return texelFetch(sampler2D(image,image_sampler),ivec2(p.x,p.y+row),0);
 }
 vec4 sample_level(vec2 uv, int level, bool linear_filter) {
@@ -17,12 +21,15 @@ vec4 sample_level(vec2 uv, int level, bool linear_filter) {
     ivec2 base=ivec2(s[30].xy),size=max(base>>level,ivec2(1));
     int row=0;
     for(int i=0;i<level;i++) row+=max(base.y>>i,1);
-    vec2 p=fract(uv)*vec2(size);
-    if(!linear_filter) return fetch_repeat(ivec2(floor(p)),size,row);
+    ivec2 wrap=ivec2(s[25].zw);
+    uv=vec2(wrap.x==0 ? fract(uv.x) : clamp(uv.x,0.0,1.0),
+        wrap.y==0 ? fract(uv.y) : clamp(uv.y,0.0,1.0));
+    vec2 p=uv*vec2(size);
+    if(!linear_filter) return fetch_wrapped(ivec2(floor(p)),size,row);
     p-=0.5;
     ivec2 q=ivec2(floor(p)); vec2 f=fract(p);
-    return mix(mix(fetch_repeat(q,size,row),fetch_repeat(q+ivec2(1,0),size,row),f.x),
-        mix(fetch_repeat(q+ivec2(0,1),size,row),fetch_repeat(q+ivec2(1,1),size,row),f.x),f.y);
+    return mix(mix(fetch_wrapped(q,size,row),fetch_wrapped(q+ivec2(1,0),size,row),f.x),
+        mix(fetch_wrapped(q+ivec2(0,1),size,row),fetch_wrapped(q+ivec2(1,1),size,row),f.x),f.y);
 }
 vec4 sample_gl(vec2 uv) {
     vec2 dx=dFdx(uv)*s[30].xy,dy=dFdy(uv)*s[30].xy;

@@ -35,7 +35,7 @@ State rows (all finite float32, matrices column-major):
 | 22 | Color material: 0 off, 1 ambient, 2 diffuse, 3 specular, 4 emission, 5 ambient+diffuse |
 | 23 | Fog: mode (0 off, 1 linear, 2 exp, 3 exp2), density, start, end |
 | 24 | Fog color |
-| 25 | Texture environment (0 off, 1 modulate, 2 decal, 3 replace, 4 blend), RGB internal format flag |
+| 25 | Texture environment (0 off, 1 modulate, 2 decal, 3 replace, 4 blend), RGB internal format flag, S/T wrap (0 repeat, 1 legacy clamp, 2 clamp-to-edge) |
 | 26 | Texture environment color (currently GL default zero) |
 | 27 | XY viewport scale/offset (currently 1,1,0,0) |
 | 28 | Depth near/far (currently 0,1), back-face cull enable |
@@ -90,9 +90,11 @@ and level bounds against the state consumed by the shader.
 
 The GPU calculates LOD from UV derivatives in base-level texel units. It applies
 nearest/bilinear filtering within a level and nearest/linear selection between
-levels. Integer texel fetches wrap within each level, so bilinear taps cannot
-read atlas padding or another mip. The CPU only copies existing rows into the
-upload; it does not filter pixels or generate replacement mip levels.
+levels. Integer texel fetches apply repeat, legacy clamp with the default
+transparent border, or clamp-to-edge independently on each axis. Atlas row
+offsets are applied only after wrapping, so bilinear taps cannot read padding
+or another mip. The CPU only copies existing rows into the upload; it does not
+filter pixels or generate replacement mip levels.
 
 Magnification crossover and nearest-mip half-level ties follow OpenGL 1.1
 sections 3.8.1–3.8.2 of the

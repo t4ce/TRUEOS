@@ -7535,6 +7535,7 @@ mod fixed_gl_state_tests {
 }
 
 fn fixed_gl_texture_state_valid(state: &[f32; 384], width: u32, height: u32) -> bool {
+    if state[102..104].iter().any(|v| *v < 0.0 || *v > 2.0 || (*v as u32) as f32 != *v) { return false; }
     if state[100] == 0.0 { return width == 1 && height == 1; }
     let [w, h, mode, mag] = [state[120], state[121], state[122], state[123]];
     if [w,h,mode,mag,state[124]].iter().any(|v| !v.is_finite() || *v < 0.0 || (*v as u32) as f32 != *v)
@@ -7556,5 +7557,7 @@ mod fixed_gl_texture_state_tests {
             let mut bad=s;bad[i]=v;assert!(!fixed_gl_texture_state_valid(&bad,8,5));
         }
         s[122]=1.;s[124]=0.;assert!(fixed_gl_texture_state_valid(&s,8,2));
+        s[102]=1.;s[103]=2.;assert!(fixed_gl_texture_state_valid(&s,8,2));
+        s[103]=3.;assert!(!fixed_gl_texture_state_valid(&s,8,2));
     }
 }
