@@ -97,6 +97,7 @@ pub const OP_BP_PLATFORM_WAIT_OBSERVE: u32 = 0x202;
 pub const OP_BP_PLATFORM_WAIT_AFTER: u32 = 0x203;
 pub const OP_BP_SERVICE_LANE_CAPACITY: u32 = 0x204;
 pub const OP_BP_SERVICE_LANE_CANCELLED: u32 = 0x207;
+pub const OP_BP_X86_LAST_AP_SUBMIT: u32 = 0x215;
 /// `arg0=owned frame`, `arg1=0xRRGGBB`; primary display's shared opaque backdrop.
 pub const OP_BP_UI4_SCENE_SET_DISPLAY_BOTTOM_COLOR: u32 = 0x208;
 /// `arg0=owned frame`, payload=`red[256] + green[256] + blue[256]` u16 LE.

@@ -292,6 +292,10 @@ pub fn last_ap_service_slot() -> Option<u32> {
     if !crate::r::services::microfont_log_service::enabled() {
         return None;
     }
+    last_ap_execution_slot()
+}
+
+pub fn last_ap_execution_slot() -> Option<u32> {
     let slot = topology_core_slot_count().checked_sub(1)?;
     if slot < FIRST_BACKGROUND_SLOT as usize || slot >= WORKER_SLOT_LIMIT {
         return None;
@@ -309,7 +313,11 @@ pub fn last_ap_service_worker() -> Option<(u32, u8, WorkerSpawner)> {
 }
 
 pub fn is_general_background_worker_slot(cpu_slot: u32) -> bool {
-    is_background_worker_slot(cpu_slot) && !is_last_ap_service_slot(cpu_slot)
+    is_background_worker_slot(cpu_slot) && last_ap_reserved_slot() != Some(cpu_slot)
+}
+
+fn last_ap_reserved_slot() -> Option<u32> {
+    if cfg!(feature = "wc3") { last_ap_execution_slot() } else { last_ap_service_slot() }
 }
 
 pub fn background_slot_range() -> core::ops::Range<u32> {
@@ -358,13 +366,13 @@ pub fn app_visible_parallelism() -> usize {
     if topology_slots != 0 {
         let background = topology_slots.saturating_sub(first_app_slot as usize);
         let reserved = usize::from(
-            last_ap_service_slot().is_some_and(|slot| slot as usize >= first_app_slot as usize),
+            last_ap_reserved_slot().is_some_and(|slot| slot as usize >= first_app_slot as usize),
         );
         return background.saturating_sub(reserved).max(1);
     }
 
     (first_app_slot..registered_slot_end().max(first_app_slot))
-        .filter(|slot| is_slot_registered(*slot) && !is_last_ap_service_slot(*slot))
+        .filter(|slot| is_slot_registered(*slot) && last_ap_reserved_slot() != Some(*slot))
         .count()
         .max(1)
 }
