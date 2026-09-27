@@ -42,6 +42,36 @@ print('Fixed GL shader source, package ID, embedded binaries, ISA and captured p
 import tempfile
 from test_clip_position3_uv_texture import item
 
+# Execute the final packet emission block. Earlier correct state is ineffective
+# if a compatibility tail overwrites it immediately before the primitive.
+pipeline_source = (ROOT / 'src/intel/render/pipeline.rs').read_text()
+tail, = re.findall(r'(log_batch_offset\(cursor, "3DSTATE_PS_BLEND verified-host-tail"\);.*?)\s*log_batch_offset\(cursor, "3DSTATE_BLEND_STATE_POINTERS verified-host-tail"', pipeline_source, re.S)
+with tempfile.TemporaryDirectory(prefix='wc3-final-blend-tests-') as tmp:
+    src = Path(tmp) / 'tests.rs'; exe = Path(tmp) / 'tests'
+    src.write_text('''
+const CMD_3DSTATE_PS_BLEND: u32 = 0x784D0000;
+fn log_batch_offset(_: usize, _: &str) {}
+fn push(words: &mut [u32], cursor: &mut usize, value: u32) -> Result<(), ()> {
+    words[*cursor] = value; *cursor += 1; Ok(())
+}
+fn emit(batch_dwords: &mut [u32], ps_blend_dw1: u32) -> Result<(), ()> {
+    let mut cursor = 0;
+''' + tail + '''
+    Ok(())
+}
+#[test]
+fn final_packet_preserves_opaque_alpha_and_additive_draws() {
+    for state in [1 << 30, 0x60000080 | (3 << 14) | (19 << 9),
+                  0x60000080 | (1 << 14) | (1 << 9)] {
+        let mut words = [0;2];
+        emit(&mut words, state).unwrap();
+        assert_eq!(words, [CMD_3DSTATE_PS_BLEND, state]);
+    }
+}
+''')
+    subprocess.run(['rustc','--edition=2024','--test',str(src),'-o',str(exe)],check=True)
+    subprocess.run([str(exe)],check=True)
+
 # Read the binding indices from the shipped instructions, not the intended GLSL
 # layout: the compiler allocates texture and storage bindings independently.
 def message_bti(assembly, target):

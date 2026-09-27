@@ -4822,7 +4822,9 @@ fn encode_triangle_probe_batch(
         push(batch_dwords, &mut cursor, 0x8000_0040 | wm_barycentric_mode)?;
         log_batch_offset(cursor, "3DSTATE_PS_BLEND verified-host-tail");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_PS_BLEND)?;
-        push(batch_dwords, &mut cursor, 0x518C_6200)?;
+        // The last PS_BLEND packet is authoritative. Preserve the draw's
+        // blend enable and factors instead of restoring the opaque probe.
+        push(batch_dwords, &mut cursor, ps_blend_dw1)?;
         log_batch_offset(cursor, "3DSTATE_BLEND_STATE_POINTERS verified-host-tail");
         push(batch_dwords, &mut cursor, CMD_3DSTATE_BLEND_STATE_POINTERS)?;
         push(batch_dwords, &mut cursor, probe_state.blend_state_offset_bytes | 1)?;
