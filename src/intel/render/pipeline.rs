@@ -1363,8 +1363,9 @@ fn write_triangle_probe_state_with_flush(
     );
 
     let scissor_rect = &mut dwords[scissor_rect_offset / 4..scissor_rect_offset / 4 + 2];
-    scissor_rect[0] = 0;
-    scissor_rect[1] = draw.target_w.saturating_sub(1) | (draw.target_h.saturating_sub(1) << 16);
+    let bounds = draw.fixed_gl.unwrap_or([0, 0, draw.target_w, draw.target_h, 0]);
+    scissor_rect[0] = bounds[0] | (bounds[1] << 16);
+    scissor_rect[1] = (bounds[2] - 1) | ((bounds[3] - 1) << 16);
 
     let cps_state = &mut dwords[cps_state_offset / 4..cps_state_offset / 4 + CPS_STATE_DWORDS];
     cps_state.fill(0);
@@ -2586,7 +2587,7 @@ fn encode_triangle_probe_batch(
     // id (source attribute 1).  Xe-LP's enabled SBE swizzle packet must spell
     // that identity routing out; an all-zero payload aliases both inputs to
     // attribute 0.
-    let sbe_swiz = sbe_swiz_payload(artifact_native_fixed_function, pipeline.ps.meta.num_varying_inputs);
+    let sbe_swiz = sbe_swiz_payload(artifact_native_fixed_function || draw.fixed_gl.is_some(), pipeline.ps.meta.num_varying_inputs);
     let sbe_dw1 = (sbe_vertex_read_offset << 5)
         | (u32::from(sbe_attr_swizzle_enable) << 21)
         | ((sbe_num_sf_attrs as u32) << 22)

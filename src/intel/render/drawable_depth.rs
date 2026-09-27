@@ -75,7 +75,7 @@ pub(crate) fn render_drawable_depth_scene(
             else { drawable_depth_compare(flags >> INDEXED_DRAW_DEPTH_COMPARE_SHIFT) };
         Some(config)
     } else {
-        if !geometry_clear || clear { return Err("drawable-depth-missing"); }
+        if clear || flags & INDEXED_DRAW_DEPTH_TEST != 0 { return Err("drawable-depth-missing"); }
         None
     };
     let submission = DrawableDepthSubmission {

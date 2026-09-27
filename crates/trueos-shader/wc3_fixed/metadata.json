@@ -1,7 +1,7 @@
 {
   "backend": "mesa-anv-noop-drm-shim-compile-only",
   "baremetal_verified": false,
-  "contract": "clip-position3-uv-texture",
+  "contract": "wc3-fixed-v1",
   "device": {
     "device_id": 18048,
     "name": "Intel(R) UHD Graphics 770 (ADL-S GT1)",
@@ -14,18 +14,18 @@
       "simd_width": 8,
       "stage": "vertex",
       "statistics": {
-        "Code size": 5344,
-        "Cycles": 22007,
+        "Code size": 5600,
+        "Cycles": 22846,
         "Fills": 0,
         "GRF registers": 0,
-        "Instructions": 354,
+        "Instructions": 364,
         "Loops": 1,
         "Max dispatch width": 8,
         "Max live registers": 55,
         "Non SSA regs after NIR": 73,
         "SENDs": 18,
         "Scratch Memory Size": 0,
-        "Source hash": 3427904250,
+        "Source hash": 654970600,
         "Spills": 0,
         "Workgroup Memory Size": 0
       }
@@ -129,11 +129,12 @@
   },
   "host_render_verified": false,
   "iga_platform": "12p1",
+  "package_fnv1a64": "0x32135B1B0A6A2D14",
   "ps_bytes": 1808,
   "ps_sha256": "c7fd896547dd1851167d046fefd7d5060ae24f17444a5202c3b8e01ee12293d6",
   "sbe": {
-    "attributes": 1,
-    "read_length_32b": 1,
+    "attributes": 3,
+    "read_length_32b": 2,
     "read_offset_32b": 1
   },
   "schema": 1,
@@ -163,11 +164,13 @@
     "vf_packing0": 65535,
     "vue_slots": 5
   },
-  "vertex_input_components": "xyz,uv",
+  "vertex_input_components": "position4,normal4,color4,uv4",
   "vertex_stride_bytes": 64,
   "vertex_varyings": [
-    "smooth-perspective-vec2-location0"
+    "smooth-vec4-primary@0",
+    "smooth-vec4-uv@1",
+    "smooth-float-fog@2"
   ],
-  "vs_bytes": 5344,
-  "vs_sha256": "78688cdf3a9249b606dd1bbb1256ac8e8486c85d5708ac0e0d056cd04207450c"
+  "vs_bytes": 5600,
+  "vs_sha256": "e9c8bbc520501dc13a7bfb390581c90ddac5cbbced680e86e8dc941546f75f11"
 }

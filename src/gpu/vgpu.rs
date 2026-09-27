@@ -3159,7 +3159,7 @@ pub(crate) fn submit_ui4_indexed_draw(
                 for (out, bytes) in state.iter_mut().zip(raw.chunks_exact(4)) { *out = f32::from_le_bytes(bytes.try_into().unwrap()); }
                 if state.iter().any(|v| !v.is_finite()) { return Err(VgpuError::Unsupported); }
                 let rect = &state[29*4..30*4];
-                if rect.iter().any(|v| *v < 0.0 || v.fract() != 0.0)
+                if rect.iter().any(|v| *v < 0.0 || (*v as u32) as f32 != *v)
                     || rect[0] >= rect[2] || rect[1] >= rect[3]
                     || rect[2] > width as f32 || rect[3] > height as f32 { return Err(VgpuError::Unsupported); }
                 Some(state)
@@ -3330,7 +3330,7 @@ pub(crate) fn submit_ui4_indexed_draw(
             draw.sampler_flags, width, height,
         );
     }
-    let rendered = if drawable_depth.is_some() || geometry_clear {
+    let rendered = if drawable_depth.is_some() || geometry_clear || fixed_state.is_some() {
         crate::intel::render::render_drawable_depth_scene(
             core::slice::from_ref(&scene_draw),
             (!draw.load_color).then_some(draw.clear_rgba8_srgb.to_le_bytes()),

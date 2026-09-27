@@ -8,6 +8,7 @@ layout(location=0) out vec4 primary;
 layout(location=1) out vec4 texcoord;
 layout(location=2) out float fog_distance;
 vec3 safe_normalize(vec3 v) { float d=length(v); return d>0.0 ? v/d : vec3(0); }
+float safe_pow(float x, float exponent) { return exponent==0.0 ? 1.0 : (x<=0.0 ? 0.0 : pow(x,exponent)); }
 void main() {
     vec4 eye=mat4(s[0],s[1],s[2],s[3])*position;
     vec4 clip=mat4(s[4],s[5],s[6],s[7])*eye;
@@ -39,10 +40,10 @@ void main() {
             float spot=1.0;
             if(s[b+6].y==0.0) {
                 float sd=max(dot(-l,safe_normalize(s[b+4].xyz)),0.0);
-                spot=sd<s[b+4].w ? 0.0 : pow(sd,s[b+5].w);
+                spot=sd<s[b+4].w ? 0.0 : safe_pow(sd,s[b+5].w);
             }
             float diffuse=max(dot(n,l),0.0);
-            float specular=diffuse>0.0 ? pow(max(dot(n,safe_normalize(l+viewer)),0.0),s[21].x) : 0.0;
+            float specular=diffuse>0.0 ? safe_pow(max(dot(n,safe_normalize(l+viewer)),0.0),s[21].x) : 0.0;
             lit+=attenuation*spot*(a.rgb*s[b+1].rgb+diffuse*d.rgb*s[b+2].rgb+specular*p.rgb*s[b+3].rgb);
         }
         primary=clamp(vec4(lit,d.a),0.0,1.0);
