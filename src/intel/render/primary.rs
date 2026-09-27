@@ -1729,13 +1729,14 @@ fn stage_resident_scene_secondary(
         && !RESIDENT_SCENE_UV_TEXTURE_PATH_LOGGED.swap(true, Ordering::AcqRel)
     {
         crate::log_important!(target: "render";
-            "resident-scene: proof=clip-position3-uv-texture-encoded stride={} vs_bytes={} vs_urb_entry_64b={} ps_bytes={} ps_setup_grf={} varying_inputs={} texture_bti=2 sampler=0 rt_bti=0 sbe_offset=1 sbe_length=1 does_not_prove=pixel-output\n",
+            "resident-scene: proof=clip-position3-uv-texture-encoded stride={} vs_bytes={} vs_urb_entry_64b={} ps_bytes={} ps_setup_grf={} varying_inputs={} texture_bti=2 sampler=0 rt_bti=0 sbe_offset=1 sbe_length={} does_not_prove=pixel-output\n",
             draw.vertex_stride,
             pipeline.vs.meta.kernel.code_size_bytes,
             pipeline.vs.meta.urb_entry_output_length,
             pipeline.ps.meta.kernel.code_size_bytes,
             pipeline.ps.meta.kernel.grf_start_register,
             pipeline.ps.meta.num_varying_inputs,
+            if draw.fixed_gl.is_some() { 2 } else { 1 },
         );
     }
     Ok(bytes)

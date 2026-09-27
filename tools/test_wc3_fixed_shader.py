@@ -44,3 +44,19 @@ with tempfile.TemporaryDirectory(prefix='wc3-state-tests-') as tmp:
     src.write_text(''.join(item('src/gpu/vgpu.rs', name) for name in ('fixed_gl_state_valid','fixed_gl_state_tests','fixed_gl_texture_state_valid','fixed_gl_texture_state_tests')))
     subprocess.run(['rustc','--edition=2024','--test',str(src),'-o',str(exe)],check=True)
     subprocess.run([str(exe)],check=True)
+
+with tempfile.TemporaryDirectory(prefix='wc3-fixed-address-tests-') as tmp:
+    src = Path(tmp) / 'tests.rs'; exe = Path(tmp) / 'tests'
+    src.write_text(item('src/intel/render/pipeline.rs', 'fixed_gl_state_gpu_addr') + '''
+#[test]
+fn state_follows_unique_vertex_bytes_in_an_indexed_draw() {
+    let vertex_gpu = 0x2000_0000;
+    let unique_vertex_bytes = 4 * 64;
+    let reused_index_count = 600u64;
+    assert_eq!(fixed_gl_state_gpu_addr(vertex_gpu, unique_vertex_bytes), 0x2000_0100);
+    assert_ne!(fixed_gl_state_gpu_addr(vertex_gpu, unique_vertex_bytes),
+               vertex_gpu + reused_index_count * 64);
+}
+''')
+    subprocess.run(['rustc','--edition=2024','--test',str(src),'-o',str(exe)],check=True)
+    subprocess.run([str(exe)],check=True)

@@ -1103,7 +1103,10 @@ fn write_triangle_probe_state_with_flush(
         }
         let start = surface_state_offset / 4 + 16;
         write_triangle_raw_buffer_surface_state(&mut dwords[start..start + 16], TriangleStorageBufferBinding {
-            gpu_addr: draw.vertex_gpu_addr + u64::from(draw.vertex_count) * 64,
+            // Indexed resident draws carry the index count in `vertex_count`
+            // for the 3DPRIMITIVE contract.  The fixed GL state begins after
+            // the authored vertex bytes, independent of index reuse.
+            gpu_addr: fixed_gl_state_gpu_addr(draw.vertex_gpu_addr, draw.vertex_buffer_bytes),
             byte_len: v::vgpu::WC3_FIXED_STATE_BYTES as u32,
         })?;
     }
@@ -1412,6 +1415,10 @@ fn write_triangle_probe_state_with_flush(
         slice_hash_table_offset_bytes: slice_hash_table_offset as u32,
         used_bytes: end_offset as u32,
     })
+}
+
+const fn fixed_gl_state_gpu_addr(vertex_gpu_addr: u64, vertex_buffer_bytes: u32) -> u64 {
+    vertex_gpu_addr + vertex_buffer_bytes as u64
 }
 
 /// Encode the Gen12 RAW buffer surface used by Churn's read-only storage
