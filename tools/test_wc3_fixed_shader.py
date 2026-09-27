@@ -20,6 +20,7 @@ for base in (ROOT, ROOT.parent / 'TRUEOS-Blueprints'):
     value, = re.findall(r'SHADER_PACKAGE_WC3_FIXED_FNV1A64: u64 = (0x[0-9a-fA-F_]+);', api)
     assert int(value.replace('_',''),16) == digest
 rust = (ROOT / 'crates/trueos-shader/generated_wc3_fixed.rs').read_text()
+isa = {}
 for stage, name, array in [('vs','fixed.vs.simd8.bin','WC3_FIXED_VS_CODE'),
                            ('ps','fixed.ps.simd16.bin','WC3_FIXED_PS_SIMD16_CODE')]:
     code = (OUT / name).read_bytes()
@@ -31,6 +32,7 @@ for stage, name, array in [('vs','fixed.vs.simd8.bin','WC3_FIXED_VS_CODE'),
     decoded = subprocess.check_output(['iga64','-d','-p=12p1',str(OUT/name)], text=True)
     assert 'illegal' not in decoded.lower()
     assert 'EOT' in decoded
+    isa[stage] = decoded
 vs=meta['vertex_compiler_state'];ps=meta['fragment_compiler_state']
 assert [vs[k] for k in ('vf_packing0','urb_read_length','urb_entry_64b','binding_table_entries')] == [0xffff,2,2,2]
 assert [ps[k] for k in ('grf_start16','num_varying_inputs','binding_table_entries','scratch_bytes','push_bytes')] == [6,3,4,0,0]
@@ -39,6 +41,31 @@ print('Fixed GL shader source, package ID, embedded binaries, ISA and captured p
 
 import tempfile
 from test_clip_position3_uv_texture import item
+
+# Read the binding indices from the shipped instructions, not the intended GLSL
+# layout: the compiler allocates texture and storage bindings independently.
+def message_bti(assembly, target):
+    descriptors = re.findall(
+        rf'send\.{target}\s+[^\n]*?0x[0-9a-fA-F]+\s+0x([0-9a-fA-F]+)', assembly)
+    assert descriptors, f'No {target} messages found'
+    return {int(value, 16) & 0xff for value in descriptors}
+
+texture_bti, = message_bti(isa['ps'], 'smpl')
+state_bti, = message_bti(isa['ps'], 'dc0')
+assert message_bti(isa['vs'], 'dc0') == {1}
+with tempfile.TemporaryDirectory(prefix='wc3-fixed-binding-tests-') as tmp:
+    src = Path(tmp) / 'tests.rs'; exe = Path(tmp) / 'tests'
+    src.write_text(item('src/intel/render/pipeline.rs', 'fixed_gl_ps_surface_indices') + f'''
+#[test]
+fn compiled_fragment_messages_reach_their_surface_records() {{
+    let table = fixed_gl_ps_surface_indices();
+    assert_eq!(table[{texture_bti}], 2, "sampler must reach RGBA texture");
+    assert_eq!(table[{state_bti}], 1, "state reads must reach raw GL state");
+}}
+''')
+    subprocess.run(['rustc','--edition=2024','--test',str(src),'-o',str(exe)],check=True)
+    subprocess.run([str(exe)],check=True)
+
 with tempfile.TemporaryDirectory(prefix='wc3-state-tests-') as tmp:
     src = Path(tmp) / 'tests.rs'; exe = Path(tmp) / 'tests'
     src.write_text(''.join(item('src/gpu/vgpu.rs', name) for name in ('fixed_gl_state_valid','fixed_gl_state_tests','fixed_gl_texture_state_valid','fixed_gl_texture_state_tests')))

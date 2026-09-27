@@ -63,7 +63,7 @@ VF: four float4 elements, packing 0xffff, no SGVS, input GRF 2/read length 2.
 VUE: header/position at slots 0/1, primary/UV/fog at 2/3/4, two 64-byte entries.
 SBE: read offset 1, read length 2, explicit identity routing for three attributes.
 PS: perspective pixel barycentrics, setup GRF 6, SIMD16, no scratch or push data.
-VS BTI1 reads state. PS BTI2 reads state and BTI3 fetches texture texels. Separate
+VS BTI1 reads state. PS BTI2 fetches texture texels and BTI3 reads state. Separate
 stage binding tables share the state surface, texture surface and RT0.
 
 ## Scope and validation
@@ -100,4 +100,4 @@ Magnification crossover and nearest-mip half-level ties follow OpenGL 1.1
 sections 3.8.1–3.8.2 of the
 [Khronos specification](https://registry.khronos.org/OpenGL/specs/gl/glspec11.pdf).
 The compiler now reports sampler_count=0 because texel-fetch messages do not
-consume sampler state; their BTI remains 3. This changes the package identifier.
+consume sampler state; their BTI is 2. This changes the package identifier.

@@ -1097,7 +1097,7 @@ fn write_triangle_probe_state_with_flush(
     }
 
     if fixed_gl {
-        for (entry, surface_index) in [0usize, 0, 1, 2].into_iter().enumerate() {
+        for (entry, surface_index) in fixed_gl_ps_surface_indices().into_iter().enumerate() {
             dwords[ps_binding_table_offset / 4 + entry] =
                 (surface_state_offset + surface_index * 64 - binding_table_entry_base_offset) as u32;
         }
@@ -1433,6 +1433,12 @@ fn write_triangle_probe_state_with_flush(
         slice_hash_table_offset_bytes: slice_hash_table_offset as u32,
         used_bytes: end_offset as u32,
     })
+}
+
+// Captured EU messages: sampler loads use BTI2; state block reads use BTI3.
+// Surface records are RT0, raw GL state, sampled RGBA texture.
+const fn fixed_gl_ps_surface_indices() -> [usize; 4] {
+    [0, 0, 2, 1]
 }
 
 const fn fixed_gl_state_gpu_addr(vertex_gpu_addr: u64, vertex_buffer_bytes: u32) -> u64 {

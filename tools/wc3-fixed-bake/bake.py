@@ -196,6 +196,12 @@ def main() -> None:
     ps_path = work / "fixed.ps.simd16.bin"
     ps_path.write_bytes(ps)
     vs_isa, ps_isa = decode(vs_path), decode(ps_path)
+    for assembly, target, expected in ((vs_isa, 'dc0', 1),
+                                       (ps_isa, 'smpl', 2), (ps_isa, 'dc0', 3)):
+        descriptors = re.findall(
+            rf'send\.{target}\s+[^\n]*?0x[0-9a-fA-F]+\s+0x([0-9a-fA-F]+)', assembly)
+        if not descriptors or {int(value, 16) & 0xff for value in descriptors} != {expected}:
+            raise SystemExit(f"fixed GL {target} binding drift; expected BTI{expected}")
     vertex_assembly, = executable_dir.glob("*_vertex_*_GEN_Assembly.txt")
     if (len(vs) != baker.assembly_code_size(vertex_assembly)
         or len(re.findall(r"^/\* \[[0-9A-Fa-f]+\]", vs_isa, re.MULTILINE)) != baker.assembly_instruction_count(vertex_assembly)
