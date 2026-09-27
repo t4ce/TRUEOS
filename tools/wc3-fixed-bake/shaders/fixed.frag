@@ -56,5 +56,17 @@ void main() {
         else f=exp(-s[23].y*s[23].y*z*z);
         c.rgb=mix(s[24].rgb,c.rgb,clamp(f,0.0,1.0));
     }
+    if(s[31].y!=0.0) {
+        int func=int(s[31].z);
+        float ref=s[31].w;
+        bool pass=func==7 ||
+            (func==1 && c.a<ref) ||
+            (func==2 && c.a==ref) ||
+            (func==3 && c.a<=ref) ||
+            (func==4 && c.a>ref) ||
+            (func==5 && c.a!=ref) ||
+            (func==6 && c.a>=ref);
+        if(!pass) discard;
+    }
     color=c;
 }

@@ -161,7 +161,7 @@ struct TrianglePbrMaterial {
 struct TriangleDrawPrep {
     /// Internal one-shot pre-clip VUE observation; never part of the client ABI.
     vue_capture: bool,
-    fixed_gl: Option<[u32; 5]>,
+    fixed_gl: Option<[u32; 10]>,
     vertex_count: u32,
     vertex_stride: u32,
     vertex_buffer_bytes: u32,
@@ -768,6 +768,12 @@ enum TriangleBlendProbeMode {
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     ExplicitRt0,
     StraightAlpha,
+    FixedFunction {
+        source_color: u8,
+        destination_color: u8,
+        source_alpha: u8,
+        destination_alpha: u8,
+    },
     MesaZeroedState,
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     MesaZeroedNoBlendPointer,
@@ -807,6 +813,7 @@ impl TriangleBlendProbeMode {
         match self {
             Self::ExplicitRt0 => "explicit-rt0",
             Self::StraightAlpha => "straight-alpha",
+            Self::FixedFunction { .. } => "fixed-function",
             Self::MesaZeroedState => "mesa-zeroed",
             Self::MesaZeroedNoBlendPointer => "mesa-zeroed-no-blend-ptr",
         }

@@ -360,7 +360,8 @@ impl ResidentScenePrimitiveTopology {
 pub(crate) enum ResidentSceneFragmentContract {
     ConstantRgba,
     ClipPosition3UvTexture,
-    FixedGl([u32; 5]),
+    // scissor xyxy, cull enable, blend enable, then RGB/alpha source/dest factors.
+    FixedGl([u32; 10]),
 }
 
 fn resident_scene_shader_pipeline(
@@ -395,7 +396,7 @@ mod resident_scene_shader_pipeline_tests {
 
     #[test]
     fn fixed_gl_pipeline_matches_compiler_payload_and_rejects_legacy_vertices() {
-        let contract = Fragment::FixedGl([0, 0, 640, 480, 1]);
+        let contract = Fragment::FixedGl([0, 0, 640, 480, 1, 0, 1, 17, 1, 17]);
         let shader = resident_scene_shader_pipeline(contract, true, Vertex::FixedGl, 64).unwrap();
         assert_eq!(shader.vs.meta.kernel.grf_start_register, 2);
         assert_eq!(shader.vs.meta.kernel.binding_table_entry_count, 2);
@@ -2913,6 +2914,18 @@ fn submit_resident_scene_geometry_batched(
             )
         } else {
             (TriangleBlendProbeMode::StraightAlpha, None)
+        };
+        let blend_mode = match scene_draw.fragment_contract {
+            ResidentSceneFragmentContract::FixedGl(state) if state[5] != 0 => {
+                TriangleBlendProbeMode::FixedFunction {
+                    source_color: state[6] as u8,
+                    destination_color: state[7] as u8,
+                    source_alpha: state[8] as u8,
+                    destination_alpha: state[9] as u8,
+                }
+            }
+            ResidentSceneFragmentContract::FixedGl(_) => TriangleBlendProbeMode::MesaZeroedState,
+            _ => blend_mode,
         };
         let (state_warm, state_gpu) = resident_scene_state_warm(state, warm, secondary_count)?;
         let draw = prepare_triangle_draw_resources_for_scene_resident_mesh(

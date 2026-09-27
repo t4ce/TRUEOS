@@ -1333,6 +1333,22 @@ fn write_triangle_probe_state_with_flush(
                 | (BLEND_FUNCTION_ADD << 5);
             blend[2] = 0;
         }
+        TriangleBlendProbeMode::FixedFunction {
+            source_color,
+            destination_color,
+            source_alpha,
+            destination_alpha,
+        } => {
+            blend[0] = 1 << 30;
+            blend[1] = (1 << 31)
+                | (u32::from(source_color) << 26)
+                | (u32::from(destination_color) << 21)
+                | (BLEND_FUNCTION_ADD << 18)
+                | (u32::from(source_alpha) << 13)
+                | (u32::from(destination_alpha) << 8)
+                | (BLEND_FUNCTION_ADD << 5);
+            blend[2] = 0;
+        }
         // Mesa's trivial path mainly relies on PS_BLEND HasWriteableRT with a
         // boring zeroed blend-state payload.
         TriangleBlendProbeMode::MesaZeroedState
@@ -1374,7 +1390,9 @@ fn write_triangle_probe_state_with_flush(
     );
 
     let scissor_rect = &mut dwords[scissor_rect_offset / 4..scissor_rect_offset / 4 + 2];
-    let bounds = draw.fixed_gl.unwrap_or([0, 0, draw.target_w, draw.target_h, 0]);
+    let bounds = draw.fixed_gl.unwrap_or([
+        0, 0, draw.target_w, draw.target_h, 0, 0, 1, 17, 1, 17,
+    ]);
     scissor_rect[0] = bounds[0] | (bounds[1] << 16);
     scissor_rect[1] = (bounds[2] - 1) | ((bounds[3] - 1) << 16);
 
@@ -2872,6 +2890,20 @@ fn encode_triangle_probe_batch(
             | (BLEND_FACTOR_INV_SRC_ALPHA << 19)
             | (BLEND_FACTOR_SRC_ALPHA << 14)
             | (BLEND_FACTOR_INV_SRC_ALPHA << 9)
+            | (1 << 7)
+    } else if let TriangleBlendProbeMode::FixedFunction {
+        source_color,
+        destination_color,
+        source_alpha,
+        destination_alpha,
+    } = blend_mode
+    {
+        (1 << 30)
+            | (1 << 29)
+            | (u32::from(source_alpha) << 24)
+            | (u32::from(destination_alpha) << 19)
+            | (u32::from(source_color) << 14)
+            | (u32::from(destination_color) << 9)
             | (1 << 7)
     } else {
         1 << 30

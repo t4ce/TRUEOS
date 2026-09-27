@@ -3336,7 +3336,9 @@ pub(crate) fn submit_ui4_indexed_draw(
         sampled_texture: if geometry_clear { None } else { sampled_texture.as_deref() },
         fragment_contract: if let Some(state) = fixed_state.as_ref() {
             crate::intel::render::ResidentSceneFragmentContract::FixedGl([
-                state[116] as u32, state[117] as u32, state[118] as u32, state[119] as u32, state[114] as u32])
+                state[116] as u32, state[117] as u32, state[118] as u32, state[119] as u32,
+                state[114] as u32, state[352] as u32, state[353] as u32, state[354] as u32,
+                state[356] as u32, state[357] as u32])
         } else if sampled_texture.is_some() && !geometry_clear {
             crate::intel::render::ResidentSceneFragmentContract::ClipPosition3UvTexture
         } else {
@@ -7500,10 +7502,17 @@ pub(crate) fn acquire_retained_texture_write(
 
 fn fixed_gl_state_valid(state: &[f32; 384], width: u32, height: u32) -> bool {
     let rect = &state[29*4..30*4];
+    let discrete = |value: f32, limit: u32| value >= 0.0 && value <= limit as f32 && (value as u32) as f32 == value;
+    let blend_factor = |value: f32| discrete(value, 0x18) && matches!(value as u32, 0x01..=0x08 | 0x11..=0x15 | 0x17..=0x18);
     state.iter().all(|v| v.is_finite())
         && rect.iter().all(|v| *v >= 0.0 && (*v as u32) as f32 == *v)
         && rect[0] < rect[2] && rect[1] < rect[3]
         && rect[2] <= width as f32 && rect[3] <= height as f32
+        && discrete(state[125], 1) && discrete(state[126], 7)
+        && (0.0..=1.0).contains(&state[127])
+        && discrete(state[352], 1)
+        && blend_factor(state[353]) && blend_factor(state[354])
+        && blend_factor(state[356]) && blend_factor(state[357])
 }
 
 #[cfg(test)]
@@ -7512,10 +7521,14 @@ mod fixed_gl_state_tests {
     #[test]
     fn rejects_invalid_gpu_scissors_and_nonfinite_shader_state() {
         let mut state = [0f32;384]; state[116..120].copy_from_slice(&[10.,20.,640.,480.]);
+        state[353..355].copy_from_slice(&[1.,17.]); state[356..358].copy_from_slice(&[1.,17.]);
         assert!(fixed_gl_state_valid(&state,640,480));
         for (index,value) in [(116,-1.),(117,0.5),(118,641.),(119,481.),(116,640.),(0,f32::NAN),(320,f32::INFINITY)] {
             let mut bad=state; bad[index]=value;
             assert!(!fixed_gl_state_valid(&bad,640,480));
+        }
+        for (index,value) in [(125,2.),(126,8.),(127,-0.1),(127,1.1),(352,2.),(353,0.),(354,16.),(356,22.)] {
+            let mut bad=state;bad[index]=value;assert!(!fixed_gl_state_valid(&bad,640,480));
         }
         assert!(!fixed_gl_state_valid(&state,0,0));
     }

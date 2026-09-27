@@ -41,12 +41,14 @@ State rows (all finite float32, matrices column-major):
 | 28 | Depth near/far (currently 0,1), back-face cull enable |
 | 29 | Top-left scissor: left, top, exclusive right, exclusive bottom |
 | 30 | Base texture width/height, minification mode (0 nearest, 1 linear, 2 nearest/mip-nearest, 3 linear/mip-nearest, 4 nearest/mip-linear, 5 linear/mip-linear), linear magnification flag |
-| 31 | Last mip level in x |
+| 31 | Last mip level, alpha-test enable, compare function (never through always = 0–7), reference |
 | 32+7i | Light i eye-space position |
 | 33+7i–35+7i | Light ambient, diffuse, specular |
 | 36+7i | Spot direction xyz, cosine cutoff |
 | 37+7i | Constant/linear/quadratic attenuation, spot exponent |
 | 38+7i | Light enable, omnidirectional spotlight flag |
+| 88 | Blend enable, RGB source factor, RGB destination factor |
+| 89 | Alpha source factor, alpha destination factor |
 
 The GPU transforms vertices and normals, evaluates all eight lights, preserves
 clip W through clipping/perspective interpolation, combines texture and primary
@@ -66,10 +68,12 @@ stage binding tables share the state surface, texture surface and RT0.
 
 ## Scope and validation
 
-This addresses WC3's reported enabled mask 0x300f04f. Alpha testing, blending,
-two-sided lighting, texgen, polygon offset, nondefault viewport/depth range,
-and texture addressing beyond repeat still fail explicitly. This is not a full
-OpenGL implementation or an FPS result.
+This addresses WC3's reported enabled masks through alpha testing and blending.
+Alpha comparison executes in the fragment shader, and each draw's OpenGL blend
+factors program the Intel color-buffer state. Two-sided lighting, texgen,
+polygon offset, nondefault viewport/depth range, and texture addressing beyond
+repeat still fail explicitly. This is not a full OpenGL implementation or an
+FPS result.
 
 Run xpapp host tests, `python3 tools/test_wc3_fixed_shader.py`,
 `python3 tools/test_clip_position3_uv_texture.py`, and
