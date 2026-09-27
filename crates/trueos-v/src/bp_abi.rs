@@ -370,6 +370,19 @@ pub struct TrueosUi4CursorSource {
     pub hid_kind: u32,
 }
 
+/// Version 1 owned RGBA8 cursor registration. Pixels are straight-alpha, top-down.
+/// IDs are frame-local 1..=16; dimensions 1..=64; hotspot lies inside the image.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default)]
+pub struct TrueosUi4CursorImageV1 {
+    pub id: u32,
+    pub width: u32,
+    pub height: u32,
+    pub hotspot_x: u32,
+    pub hotspot_y: u32,
+}
+const _: () = assert!(core::mem::size_of::<TrueosUi4CursorImageV1>() == 20);
+
 /// Frame-local presentation spacing for a UI4 software cursor. Advances use
 /// 1/1024 pixel units so fractional glyph widths stay aligned.
 #[repr(C)]
@@ -828,6 +841,13 @@ unsafe extern "C" {
     pub fn trueos_cabi_ui4_scene_set_display_gamma_ramp(window_id: u32, ramp: *const u16) -> i32;
     pub fn trueos_cabi_ui4_scene_frame_set_hit_testable(window_id: u32, enabled: u32) -> i32;
     pub fn trueos_cabi_ui4_scene_frame_set_escape_key_action(window_id: u32, action: u32) -> i32;
+    pub fn trueos_cabi_ui4_scene_register_cursor_image_v1(
+        window_id: u32,
+        image: *const TrueosUi4CursorImageV1,
+        rgba: *const u8,
+        bytes: usize,
+    ) -> i32;
+    pub fn trueos_cabi_ui4_scene_select_cursor_image_v1(window_id: u32, id: u32) -> i32;
     pub fn trueos_cabi_ui4_scene_set_custom_cursor(window_id: u32, enabled: u32) -> i32;
     pub fn trueos_cabi_ui4_scene_set_cursor_icon(
         window_id: u32,

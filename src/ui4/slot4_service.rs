@@ -503,6 +503,12 @@ fn push_software_cursor_visual(
 ) {
     match visual.icon {
         super::Ui4CursorIcon::AppOwned => return,
+        super::Ui4CursorIcon::Custom => {
+            if let Some(image) = visual.custom_cursor.as_deref() {
+                push_custom_cursor_image(rects, visual.x, visual.y, image, screen_w, screen_h);
+                return;
+            }
+        }
         super::Ui4CursorIcon::CellOutline => {
             if let Some(cell) = visual
                 .stepped_cell
@@ -523,6 +529,34 @@ fn push_software_cursor_visual(
         visual.color,
         super::input_broker::software_cursor_scale(),
     );
+}
+
+/// Translate and clip registration-time RGBA8 row runs into the slot-4
+/// compositor's existing solid-rectangle stream. No pixel inspection or
+/// image-sized temporary occurs on cursor movement.
+fn push_custom_cursor_image(
+    rects: &mut Slot4Rects,
+    cursor_x: u32,
+    cursor_y: u32,
+    image: &super::Ui4CursorImage,
+    screen_w: u32,
+    screen_h: u32,
+) {
+    let origin_x = i64::from(cursor_x).saturating_sub(i64::from(image.hotspot_x));
+    let origin_y = i64::from(cursor_y).saturating_sub(i64::from(image.hotspot_y));
+    for run in image.row_runs.iter().copied() {
+        let y = origin_y.saturating_add(i64::from(run.row));
+        if y < 0 || y >= i64::from(screen_h) {
+            continue;
+        }
+        let left = origin_x.saturating_add(i64::from(run.column)).max(0);
+        let right = origin_x
+            .saturating_add(i64::from(run.column).saturating_add(i64::from(run.width)))
+            .min(i64::from(screen_w));
+        if right > left {
+            push_overlay_rect(rects, left as u32, y as u32, (right - left) as u32, 1, run.color);
+        }
+    }
 }
 
 fn push_requested_context_menu(
@@ -931,6 +965,7 @@ fn push_overlay_rect(
 mod tests {
     use super::*;
     use crate::graphics::primitives::Rgba8;
+    use alloc::sync::Arc;
 
     const TEST_SCREEN_W: u32 = 100;
     const TEST_SCREEN_H: u32 = 80;
@@ -1094,6 +1129,7 @@ mod tests {
             y: 20,
             color,
             icon: super::super::Ui4CursorIcon::CellOutline,
+            custom_cursor: None,
             stepped_cell: Some(super::super::Ui4VisualRect {
                 x: 10,
                 y: 20,
@@ -1112,6 +1148,68 @@ mod tests {
         assert!(rects.iter().all(|rect| rect.color == color));
         assert_eq!((rects[0].x, rects[0].y, rects[0].width, rects[0].height), (10, 20, 15, 3));
         assert_eq!((rects[1].x, rects[1].y, rects[1].width, rects[1].height), (10, 43, 15, 3));
+    }
+
+    #[test]
+    fn custom_cursor_uses_precomputed_runs_and_clips_its_hotspot_origin() {
+        let red = Rgba8::new(200, 10, 20, 255);
+        let green = Rgba8::new(10, 200, 20, 128);
+        let image = Arc::new(super::super::Ui4CursorImage {
+            width: 4,
+            height: 2,
+            hotspot_x: 1,
+            hotspot_y: 1,
+            rgba: Arc::from(
+                alloc::vec![
+                    200, 10, 20, 255, 200, 10, 20, 255, 0, 0, 0, 0, 1, 2, 3, 255, 0, 0, 0, 0, 10,
+                    200, 20, 128, 10, 200, 20, 128, 0, 0, 0, 0,
+                ]
+                .into_boxed_slice(),
+            ),
+            row_runs: Arc::from(
+                alloc::vec![
+                    super::super::Ui4CursorRowRun {
+                        row: 0,
+                        column: 0,
+                        width: 2,
+                        color: red,
+                    },
+                    super::super::Ui4CursorRowRun {
+                        row: 0,
+                        column: 3,
+                        width: 1,
+                        color: Rgba8::new(1, 2, 3, 255),
+                    },
+                    super::super::Ui4CursorRowRun {
+                        row: 1,
+                        column: 1,
+                        width: 2,
+                        color: green,
+                    },
+                ]
+                .into_boxed_slice(),
+            ),
+        });
+        let visual = super::super::input_broker::Ui4SoftwareCursorVisual {
+            x: 1,
+            y: 1,
+            color: Rgba8::new(0, 0, 0, 0),
+            icon: super::super::Ui4CursorIcon::Custom,
+            custom_cursor: Some(image),
+            stepped_cell: None,
+            context_menu: None,
+            selection: None,
+            dock_fields_visible: false,
+            dock_preview: None,
+        };
+        let mut rects = Slot4Rects::new();
+        push_software_cursor_visual(&mut rects, &visual, 3, 2);
+
+        assert_eq!(rects.len(), 2);
+        assert_eq!((rects[0].x, rects[0].y, rects[0].width, rects[0].height), (0, 0, 2, 1));
+        assert_eq!(rects[0].color, red);
+        assert_eq!((rects[1].x, rects[1].y, rects[1].width, rects[1].height), (1, 1, 2, 1));
+        assert_eq!(rects[1].color, green);
     }
 
     #[test]

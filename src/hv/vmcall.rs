@@ -191,6 +191,8 @@ pub const OP_BP_UI4_SCENE_SPRITE_DRAW_CHUNK: u32 = 0xE2; // arg0 window,arg1 qua
 pub const OP_BP_UI4_SCENE_SPRITE_DRAW_FINISH: u32 = 0xE3; // arg0 window -> rc
 pub const OP_BP_VRAM_SNAPSHOT_READ: u32 = 0xE4; // arg0 offset, arg1 cap -> cached vGPU memory snapshot text
 pub const OP_BP_UI4_SCENE_RESIZE_EVENT_TAKE: u32 = 0xE5; // arg0 window -> rc + ResizeEvent payload
+pub const OP_BP_UI4_SCENE_REGISTER_CURSOR_IMAGE_V1: u32 = 0x213;
+pub const OP_BP_UI4_SCENE_SELECT_CURSOR_IMAGE_V1: u32 = 0x214;
 pub const OP_BP_UI4_SCENE_SET_CUSTOM_CURSOR: u32 = 0xE6; // arg0 window,arg1 enabled -> rc
 pub const OP_BP_UI4_SCENE_SET_CURSOR_ICON: u32 = 0xE7; // arg0 window,arg1 icon,optional cursor-source payload -> rc
 pub const OP_BP_UI4_SCENE_POINTER_EVENT_TAKE: u32 = 0xE8; // arg0 window -> rc + PointerEvent payload
@@ -2842,6 +2844,39 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
         OP_BP_UI4_SCENE_OUTPUT_DIMENSIONS => {
             let dimensions = crate::ui4::blueprint_text::trueos_cabi_ui4_scene_output_dimensions();
             write_response(vm_id, seq, STATUS_OK, dimensions, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_SCENE_REGISTER_CURSOR_IMAGE_V1 => {
+            let Some(payload) = request_payload(vm_id, req_len) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            if payload.len() < 20 || payload.len() > 20 + 64 * 64 * 4 || arg1 != 0 {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            }
+            let word = |i: usize| u32::from_le_bytes(payload[i..i+4].try_into().unwrap());
+            let image = v::bp_abi::TrueosUi4CursorImageV1 {
+                id: word(0), width: word(4), height: word(8),
+                hotspot_x: word(12), hotspot_y: word(16),
+            };
+            let rc = unsafe {
+                crate::ui4::blueprint_text::trueos_cabi_ui4_scene_register_cursor_image_v1(
+                    arg0 as u32, &image, payload[20..].as_ptr(), payload.len() - 20,
+                )
+            };
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_SCENE_SELECT_CURSOR_IMAGE_V1 => {
+            if req_len != 0 || arg1 > 16 {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            }
+            let rc = crate::ui4::blueprint_text::trueos_cabi_ui4_scene_select_cursor_image_v1(
+                arg0 as u32, arg1 as u32,
+            );
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_UI4_SCENE_SET_CUSTOM_CURSOR => {

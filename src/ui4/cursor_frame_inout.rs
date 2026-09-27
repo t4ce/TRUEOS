@@ -15,6 +15,8 @@
 //! for individual sources, and every cursor/frame association remains present
 //! so slot 4 can paint colored ownership segments on several frames at once.
 
+use alloc::sync::Arc;
+use alloc::vec::Vec as AllocVec;
 use heapless::Vec;
 use spin::Mutex;
 
@@ -23,6 +25,8 @@ use super::{OutputId, WindowId, WindowOwner, WindowSessionId, WindowState};
 const MAX_TRACKED_FRAMES: usize = super::window_broker::MAX_WINDOWS;
 const MAX_CURSOR_SOURCES: usize = 32;
 const MAX_GLOBAL_KEYBOARD_HOOKS: usize = 16;
+pub(crate) const MAX_CURSOR_IMAGES_PER_FRAME: usize = 16;
+pub(crate) const MAX_CURSOR_IMAGE_DIMENSION: u32 = 64;
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Ui4CursorSource {
@@ -58,6 +62,8 @@ pub(crate) enum Ui4CursorIcon {
     AppOwned = 5,
     /// A cell-sized outline rendered by the slot-4 software-cursor plane.
     CellOutline = 6,
+    /// The selected immutable RGBA8 image registered by this frame.
+    Custom = 7,
 }
 
 impl Ui4CursorIcon {
@@ -70,9 +76,83 @@ impl Ui4CursorIcon {
             4 => Some(Self::ResizeDiagonal),
             5 => Some(Self::AppOwned),
             6 => Some(Self::CellOutline),
+            7 => Some(Self::Custom),
             _ => None,
         }
     }
+}
+
+/// Immutable, tightly-packed straight-alpha RGBA8 cursor pixels.  The Arc is
+/// cloned into the per-source slot-4 presentation, never copied per frame.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Ui4CursorImage {
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) hotspot_x: u32,
+    pub(crate) hotspot_y: u32,
+    /// Canonical immutable registration payload, retained for image identity
+    /// and future GPU cursor paths.
+    pub(crate) rgba: Arc<[u8]>,
+    /// Precomputed opaque-or-translucent horizontal spans.  Cursor movement
+    /// only translates and clips these runs; it never reinterprets pixels.
+    pub(crate) row_runs: Arc<[Ui4CursorRowRun]>,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub(crate) struct Ui4CursorRowRun {
+    pub(crate) row: u8,
+    pub(crate) column: u8,
+    pub(crate) width: u8,
+    pub(crate) color: crate::graphics::primitives::Rgba8,
+}
+
+fn cursor_image_from_rgba(
+    width: u32,
+    height: u32,
+    hotspot_x: u32,
+    hotspot_y: u32,
+    rgba: &[u8],
+) -> Ui4CursorImage {
+    let mut row_runs = AllocVec::new();
+    for row in 0..height as usize {
+        let scanline_start = row * width as usize * 4;
+        let scanline = &rgba[scanline_start..scanline_start + width as usize * 4];
+        let mut column = 0usize;
+        while column < width as usize {
+            let pixel = &scanline[column * 4..column * 4 + 4];
+            if pixel[3] == 0 {
+                column += 1;
+                continue;
+            }
+            let run_start = column;
+            column += 1;
+            while column < width as usize && &scanline[column * 4..column * 4 + 4] == pixel {
+                column += 1;
+            }
+            row_runs.push(Ui4CursorRowRun {
+                row: row as u8,
+                column: run_start as u8,
+                width: (column - run_start) as u8,
+                color: crate::graphics::primitives::Rgba8::new(
+                    pixel[0], pixel[1], pixel[2], pixel[3],
+                ),
+            });
+        }
+    }
+    Ui4CursorImage {
+        width,
+        height,
+        hotspot_x,
+        hotspot_y,
+        rgba: Arc::from(AllocVec::from(rgba).into_boxed_slice()),
+        row_runs: Arc::from(row_runs.into_boxed_slice()),
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct RegisteredCursorImage {
+    id: u8,
+    image: Arc<Ui4CursorImage>,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -137,6 +217,8 @@ struct FrameCursorState {
     key: CursorFrameKey,
     session: WindowSessionId,
     fallback: Ui4CursorIcon,
+    selected_image: Option<u8>,
+    images: Vec<RegisteredCursorImage, MAX_CURSOR_IMAGES_PER_FRAME>,
     overrides: Vec<CursorOverride, MAX_CURSOR_SOURCES>,
     cursor_step: Option<Ui4CursorStep>,
     center_snapped_mouse: bool,
@@ -177,6 +259,8 @@ struct GroupedCursorSelectionStrip {
 pub(crate) enum CursorFrameError {
     NotFound,
     Capacity,
+    InvalidImage,
+    ImageNotFound,
 }
 
 struct CursorFrameRig {
@@ -202,6 +286,8 @@ impl CursorFrameRig {
         if let Some(frame) = self.frames.iter_mut().find(|frame| frame.key == key) {
             frame.session = session;
             frame.fallback = Ui4CursorIcon::Default;
+            frame.selected_image = None;
+            frame.images.clear();
             frame.overrides.clear();
             frame.cursor_step = None;
             frame.center_snapped_mouse = false;
@@ -212,6 +298,8 @@ impl CursorFrameRig {
                 key,
                 session,
                 fallback: Ui4CursorIcon::Default,
+                selected_image: None,
+                images: Vec::new(),
                 overrides: Vec::new(),
                 cursor_step: None,
                 center_snapped_mouse: false,
@@ -331,11 +419,18 @@ impl CursorFrameRig {
         source: Option<Ui4CursorSource>,
         icon: Ui4CursorIcon,
     ) -> Result<bool, CursorFrameError> {
+        let selected = self
+            .selecting_cursors
+            .iter()
+            .any(|cursor| cursor.selected == key);
         let frame = self
             .frames
             .iter_mut()
             .find(|frame| frame.key == key)
             .ok_or(CursorFrameError::NotFound)?;
+        if icon == Ui4CursorIcon::Custom && frame.selected_image.is_none() {
+            return Err(CursorFrameError::ImageNotFound);
+        }
         let changed = if let Some(source) = source {
             if let Some(cursor) = frame
                 .overrides
@@ -357,11 +452,80 @@ impl CursorFrameRig {
             frame.fallback = icon;
             changed
         };
+        Ok(changed && selected)
+    }
+
+    fn register_cursor_image(
+        &mut self,
+        key: CursorFrameKey,
+        id: u8,
+        image: Arc<Ui4CursorImage>,
+    ) -> Result<bool, CursorFrameError> {
+        let selected = self
+            .selecting_cursors
+            .iter()
+            .any(|cursor| cursor.selected == key);
+        let frame = self
+            .frames
+            .iter_mut()
+            .find(|frame| frame.key == key)
+            .ok_or(CursorFrameError::NotFound)?;
+        let changed = if let Some(existing) = frame.images.iter_mut().find(|entry| entry.id == id) {
+            existing.image = image;
+            true
+        } else {
+            frame
+                .images
+                .push(RegisteredCursorImage { id, image })
+                .map_err(|_| CursorFrameError::Capacity)?;
+            true
+        };
         Ok(changed
-            && self
-                .selecting_cursors
-                .iter()
-                .any(|cursor| cursor.selected == key))
+            && frame.selected_image == Some(id)
+            && (frame.fallback == Ui4CursorIcon::Custom
+                || frame
+                    .overrides
+                    .iter()
+                    .any(|override_| override_.icon == Ui4CursorIcon::Custom))
+            && selected)
+    }
+
+    fn select_cursor_image(
+        &mut self,
+        key: CursorFrameKey,
+        id: u8,
+    ) -> Result<bool, CursorFrameError> {
+        let selected = self
+            .selecting_cursors
+            .iter()
+            .any(|cursor| cursor.selected == key);
+        let frame = self
+            .frames
+            .iter_mut()
+            .find(|frame| frame.key == key)
+            .ok_or(CursorFrameError::NotFound)?;
+        if id == 0 {
+            let cleared_custom_override = frame.overrides.iter_mut().any(|override_| {
+                if override_.icon == Ui4CursorIcon::Custom {
+                    override_.icon = Ui4CursorIcon::Default;
+                    true
+                } else {
+                    false
+                }
+            });
+            let changed = frame.selected_image.take().is_some()
+                || frame.fallback != Ui4CursorIcon::Default
+                || cleared_custom_override;
+            frame.fallback = Ui4CursorIcon::Default;
+            return Ok(changed && selected);
+        }
+        if frame.images.iter().all(|image| image.id != id) {
+            return Err(CursorFrameError::ImageNotFound);
+        }
+        let changed = frame.selected_image != Some(id) || frame.fallback != Ui4CursorIcon::Custom;
+        frame.selected_image = Some(id);
+        frame.fallback = Ui4CursorIcon::Custom;
+        Ok(changed && selected)
     }
 
     fn set_cursor_step(
@@ -455,6 +619,22 @@ impl CursorFrameRig {
         Some((key, icon, frame.cursor_step))
     }
 
+    fn cursor_image_for_source(&self, source: Ui4CursorSource) -> Option<Arc<Ui4CursorImage>> {
+        let key = self.selected_frame_for_source(source)?;
+        let frame = self.frames.iter().find(|frame| frame.key == key)?;
+        let icon = frame
+            .overrides
+            .iter()
+            .find(|cursor| cursor.source == source)
+            .map(|cursor| cursor.icon)
+            .unwrap_or(frame.fallback);
+        (icon == Ui4CursorIcon::Custom)
+            .then_some(frame.selected_image)
+            .flatten()
+            .and_then(|id| frame.images.iter().find(|entry| entry.id == id))
+            .map(|entry| Arc::clone(&entry.image))
+    }
+
     fn cursor_retired(&mut self, source: Ui4CursorSource) -> bool {
         let previous_len = self.selecting_cursors.len();
         self.selecting_cursors
@@ -530,6 +710,12 @@ pub(crate) fn cursor_presentation_for_source(
         .cursor_presentation_for_source(source)
 }
 
+/// Resolve a selected source's immutable custom cursor image, if its effective
+/// fallback/per-source override currently selects `Ui4CursorIcon::Custom`.
+pub(crate) fn cursor_image_for_source(source: Ui4CursorSource) -> Option<Arc<Ui4CursorImage>> {
+    CURSOR_FRAME_RIG.lock().cursor_image_for_source(source)
+}
+
 /// Return the selected frame when it has captured this physical N-Mouse route
 /// into frame-centered relative-motion mode.
 pub(crate) fn center_snapped_frame_for_source(source: Ui4CursorSource) -> Option<CursorFrameKey> {
@@ -577,6 +763,77 @@ pub(crate) fn set_window_cursor_icon(
             .lock()
             .set_cursor(CursorFrameKey::new(owner, window), source, icon)?;
     if selected_visual_changed {
+        signal_visual_change();
+    }
+    Ok(())
+}
+
+fn validate_cursor_image_input(
+    id: u8,
+    width: u32,
+    height: u32,
+    hotspot_x: u32,
+    hotspot_y: u32,
+    rgba_len: usize,
+) -> Result<(), CursorFrameError> {
+    let expected_len = width
+        .checked_mul(height)
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or(CursorFrameError::InvalidImage)?;
+    if id == 0
+        || id as usize > MAX_CURSOR_IMAGES_PER_FRAME
+        || width == 0
+        || height == 0
+        || width > MAX_CURSOR_IMAGE_DIMENSION
+        || height > MAX_CURSOR_IMAGE_DIMENSION
+        || hotspot_x >= width
+        || hotspot_y >= height
+        || rgba_len != expected_len as usize
+    {
+        return Err(CursorFrameError::InvalidImage);
+    }
+    Ok(())
+}
+
+/// Register or replace one immutable RGBA8 image for a frame. Registration
+/// does not affect that frame's selected cursor picture.
+pub(crate) fn register_window_cursor_image(
+    owner: WindowOwner,
+    window: WindowId,
+    id: u8,
+    width: u32,
+    height: u32,
+    hotspot_x: u32,
+    hotspot_y: u32,
+    rgba: &[u8],
+) -> Result<(), CursorFrameError> {
+    validate_cursor_image_input(id, width, height, hotspot_x, hotspot_y, rgba.len())?;
+    let image = Arc::new(cursor_image_from_rgba(width, height, hotspot_x, hotspot_y, rgba));
+    let changed = CURSOR_FRAME_RIG.lock().register_cursor_image(
+        CursorFrameKey::new(owner, window),
+        id,
+        image,
+    )?;
+    if changed {
+        signal_visual_change();
+    }
+    Ok(())
+}
+
+/// Select a previously registered frame-wide custom image.  ID zero clears
+/// the selection and restores the frame fallback to `Default`.
+pub(crate) fn select_window_cursor_image(
+    owner: WindowOwner,
+    window: WindowId,
+    id: u8,
+) -> Result<(), CursorFrameError> {
+    if id as usize > MAX_CURSOR_IMAGES_PER_FRAME {
+        return Err(CursorFrameError::InvalidImage);
+    }
+    let changed = CURSOR_FRAME_RIG
+        .lock()
+        .select_cursor_image(CursorFrameKey::new(owner, window), id)?;
+    if changed {
         signal_visual_change();
     }
     Ok(())
@@ -1163,6 +1420,144 @@ mod tests {
 
         assert_eq!(rig.cursor_icon(frame, source(1)), Ui4CursorIcon::Loading);
         assert_eq!(rig.cursor_icon(frame, source(2)), Ui4CursorIcon::ResizeHorizontal);
+    }
+
+    fn cursor_image(rgba: &[u8]) -> Arc<Ui4CursorImage> {
+        Arc::new(cursor_image_from_rgba(2, 2, 1, 1, rgba))
+    }
+
+    #[test]
+    fn registered_cursor_images_are_explicit_source_aware_and_replace_selected_image() {
+        let mut rig = CursorFrameRig::new();
+        let frame = CursorFrameKey::new(WindowOwner::KernelApp(1), WindowId::from_raw(1).unwrap());
+        rig.frame_opened(frame, WindowSessionId::from_raw(1).unwrap())
+            .unwrap();
+        rig.select(Some(frame), source(1), Rgba8::new(1, 2, 3, 255));
+        rig.select(Some(frame), source(2), Rgba8::new(4, 5, 6, 255));
+
+        let first = cursor_image(&[
+            10, 20, 30, 255, 10, 20, 30, 255, 0, 0, 0, 0, 40, 50, 60, 128,
+        ]);
+        assert!(
+            !rig.register_cursor_image(frame, 1, Arc::clone(&first))
+                .unwrap()
+        );
+        assert_eq!(
+            rig.cursor_presentation_for_source(source(1)),
+            Some((frame, Ui4CursorIcon::Default, None))
+        );
+        assert!(rig.cursor_image_for_source(source(1)).is_none());
+
+        assert!(rig.select_cursor_image(frame, 1).unwrap());
+        assert_eq!(
+            rig.cursor_presentation_for_source(source(1)),
+            Some((frame, Ui4CursorIcon::Custom, None))
+        );
+        assert_eq!(
+            rig.cursor_image_for_source(source(1))
+                .unwrap()
+                .row_runs
+                .len(),
+            2
+        );
+        assert_eq!(rig.select_cursor_image(frame, 2), Err(CursorFrameError::ImageNotFound));
+        assert!(Arc::ptr_eq(&rig.cursor_image_for_source(source(1)).unwrap(), &first));
+
+        rig.set_cursor(frame, Some(source(2)), Ui4CursorIcon::Loading)
+            .unwrap();
+        assert_eq!(
+            rig.cursor_presentation_for_source(source(2)),
+            Some((frame, Ui4CursorIcon::Loading, None))
+        );
+        assert!(rig.cursor_image_for_source(source(2)).is_none());
+
+        let replacement =
+            cursor_image(&[70, 80, 90, 255, 1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255]);
+        assert!(
+            rig.register_cursor_image(frame, 1, Arc::clone(&replacement))
+                .unwrap()
+        );
+        let active = rig.cursor_image_for_source(source(1)).unwrap();
+        assert!(Arc::ptr_eq(&active, &replacement));
+        assert_eq!(active.row_runs.len(), 4);
+
+        rig.set_cursor(frame, Some(source(1)), Ui4CursorIcon::Custom)
+            .unwrap();
+        assert!(rig.select_cursor_image(frame, 0).unwrap());
+        assert_eq!(
+            rig.cursor_presentation_for_source(source(1)),
+            Some((frame, Ui4CursorIcon::Default, None))
+        );
+        assert_eq!(
+            rig.cursor_presentation_for_source(source(2)),
+            Some((frame, Ui4CursorIcon::Loading, None))
+        );
+        assert!(rig.cursor_image_for_source(source(1)).is_none());
+
+        let second = CursorFrameKey::new(WindowOwner::KernelApp(2), WindowId::from_raw(2).unwrap());
+        rig.frame_opened(second, WindowSessionId::from_raw(1).unwrap())
+            .unwrap();
+        rig.select(Some(second), source(1), Rgba8::new(7, 8, 9, 255));
+        assert_eq!(
+            rig.cursor_presentation_for_source(source(1)),
+            Some((second, Ui4CursorIcon::Default, None))
+        );
+        assert!(rig.cursor_image_for_source(source(1)).is_none());
+    }
+
+    #[test]
+    fn cursor_image_validation_and_frame_lifetime_are_bounded() {
+        assert_eq!(
+            validate_cursor_image_input(0, 1, 1, 0, 0, 4),
+            Err(CursorFrameError::InvalidImage)
+        );
+        assert_eq!(
+            validate_cursor_image_input(1, 65, 1, 0, 0, 260),
+            Err(CursorFrameError::InvalidImage)
+        );
+        assert_eq!(
+            validate_cursor_image_input(1, 2, 2, 2, 0, 16),
+            Err(CursorFrameError::InvalidImage)
+        );
+        assert_eq!(
+            validate_cursor_image_input(1, 2, 2, 1, 2, 16),
+            Err(CursorFrameError::InvalidImage)
+        );
+        assert_eq!(
+            validate_cursor_image_input(1, 2, 2, 1, 1, 15),
+            Err(CursorFrameError::InvalidImage)
+        );
+        assert!(validate_cursor_image_input(16, 64, 64, 63, 63, 64 * 64 * 4).is_ok());
+
+        let mut rig = CursorFrameRig::new();
+        let frame = CursorFrameKey::new(WindowOwner::KernelApp(1), WindowId::from_raw(1).unwrap());
+        let session = WindowSessionId::from_raw(2).unwrap();
+        rig.frame_opened(frame, session).unwrap();
+        rig.select(Some(frame), source(1), Rgba8::new(1, 2, 3, 255));
+        rig.register_cursor_image(
+            frame,
+            1,
+            cursor_image(&[1, 2, 3, 255, 1, 2, 3, 255, 1, 2, 3, 255, 1, 2, 3, 255]),
+        )
+        .unwrap();
+        rig.select_cursor_image(frame, 1).unwrap();
+        assert!(rig.cursor_image_for_source(source(1)).is_some());
+
+        assert!(rig.session_closed(frame.owner, session));
+        assert!(rig.cursor_image_for_source(source(1)).is_none());
+        assert_eq!(rig.selected_frame_for_source(source(1)), None);
+
+        rig.frame_opened(frame, session).unwrap();
+        rig.select(Some(frame), source(1), Rgba8::new(1, 2, 3, 255));
+        rig.register_cursor_image(
+            frame,
+            1,
+            cursor_image(&[1, 2, 3, 255, 1, 2, 3, 255, 1, 2, 3, 255, 1, 2, 3, 255]),
+        )
+        .unwrap();
+        rig.select_cursor_image(frame, 1).unwrap();
+        assert!(rig.owner_closed(frame.owner));
+        assert!(rig.cursor_image_for_source(source(1)).is_none());
     }
 
     #[test]

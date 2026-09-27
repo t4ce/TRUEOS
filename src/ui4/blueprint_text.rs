@@ -6,7 +6,11 @@
 //! producer was the first consumer; shaded scene producers share the same
 //! coherent UI4 frame lifecycle.
 
+pub(crate) mod cursor_image_api;
 pub(crate) mod display_api;
+pub use cursor_image_api::{
+    trueos_cabi_ui4_scene_register_cursor_image_v1, trueos_cabi_ui4_scene_select_cursor_image_v1,
+};
 mod display_registry;
 mod window_api;
 pub use window_api::TrueosUi4WindowStateV1;
@@ -3101,7 +3105,11 @@ pub extern "C" fn trueos_cabi_ui4_scene_set_display_gamma_ramp(
         };
         (channel(0) << 20) | (channel(256) << 10) | channel(512)
     });
-    if super::color_picker::program_pipe_a_precision_gamma(&entries) { 0 } else { ERROR_UI4 }
+    if super::color_picker::program_pipe_a_precision_gamma(&entries) {
+        0
+    } else {
+        ERROR_UI4
+    }
 }
 
 /// Set window opacity, or only background opacity when given its layer target.

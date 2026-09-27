@@ -7,6 +7,7 @@
 //! queues callbacks for the trusted `WindowOwner`. Consumers never drain a
 //! global HID queue.
 
+use alloc::sync::Arc;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use embassy_sync::signal::Signal;
@@ -205,12 +206,13 @@ pub(super) struct Ui4DockZone {
     pub(super) rect: Ui4VisualRect,
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Ui4SoftwareCursorVisual {
     pub(crate) x: u32,
     pub(crate) y: u32,
     pub(crate) color: crate::graphics::primitives::Rgba8,
     pub(crate) icon: super::Ui4CursorIcon,
+    pub(crate) custom_cursor: Option<Arc<super::Ui4CursorImage>>,
     pub(crate) stepped_cell: Option<Ui4VisualRect>,
     pub(crate) context_menu: Option<(u32, u32)>,
     pub(crate) selection: Option<Ui4VisualRect>,
@@ -1532,12 +1534,13 @@ impl InputBroker {
             if !route.visible_after_motion {
                 continue;
             }
-            let (x, y, icon, stepped_cell) = cursor_visual_presentation(route);
+            let (x, y, icon, custom_cursor, stepped_cell) = cursor_visual_presentation(route);
             let _ = visuals.push(Ui4SoftwareCursorVisual {
                 x,
                 y,
                 color: route.color,
                 icon,
+                custom_cursor,
                 stepped_cell,
                 context_menu: route.context_menu,
                 dock_fields_visible: route.dock_fields_visible,
@@ -2379,7 +2382,7 @@ mod pointer_motion_delta_tests {
 /// every application-delivered pointer coordinate stay untouched.
 fn cursor_visual_presentation(
     route: &CursorRoute,
-) -> (u32, u32, super::Ui4CursorIcon, Option<Ui4VisualRect>) {
+) -> (u32, u32, super::Ui4CursorIcon, Option<Arc<super::Ui4CursorImage>>, Option<Ui4VisualRect>) {
     if let Some(key) = super::center_snapped_frame_for_source(route.source)
         && let Some(window) = super::window_broker::window_snapshot(key.owner, key.window)
     {
@@ -2391,37 +2394,38 @@ fn cursor_visual_presentation(
         let icon = super::cursor_presentation_for_source(route.source)
             .map(|(_, icon, _)| icon)
             .unwrap_or_default();
-        return (x, y, icon, None);
+        return (x, y, icon, super::cursor_image_for_source(route.source), None);
     }
     let Some((key, icon, step)) = super::cursor_presentation_for_source(route.source) else {
-        return (route.x, route.y, super::Ui4CursorIcon::Default, None);
+        return (route.x, route.y, super::Ui4CursorIcon::Default, None, None);
     };
+    let custom_cursor = super::cursor_image_for_source(route.source);
     if icon != super::Ui4CursorIcon::CellOutline {
-        return (route.x, route.y, icon, None);
+        return (route.x, route.y, icon, custom_cursor, None);
     }
     let Some(step) = step else {
-        return (route.x, route.y, icon, None);
+        return (route.x, route.y, icon, custom_cursor, None);
     };
     let Some(window) = super::window_broker::window_snapshot(key.owner, key.window) else {
-        return (route.x, route.y, icon, None);
+        return (route.x, route.y, icon, custom_cursor, None);
     };
     let placement = window.presentation_placement;
     if !placement_contains(placement, window.arc, route.x, route.y) {
-        return (route.x, route.y, icon, None);
+        return (route.x, route.y, icon, custom_cursor, None);
     }
     let (Ok(local_x), Ok(local_y)) = (
         u32::try_from(signed_local(route.x, placement.x)),
         u32::try_from(signed_local(route.y, placement.y)),
     ) else {
-        return (route.x, route.y, icon, None);
+        return (route.x, route.y, icon, custom_cursor, None);
     };
     let Some((left, top, width, height)) = step.cell_bounds_local(local_x, local_y) else {
-        return (route.x, route.y, icon, None);
+        return (route.x, route.y, icon, custom_cursor, None);
     };
     let Some(cell) = stepped_cell_rect(placement, left, top, width, height) else {
-        return (route.x, route.y, icon, None);
+        return (route.x, route.y, icon, custom_cursor, None);
     };
-    (cell.x, cell.y, icon, Some(cell))
+    (cell.x, cell.y, icon, custom_cursor, Some(cell))
 }
 
 fn stepped_cell_rect(
