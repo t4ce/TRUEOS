@@ -1055,6 +1055,7 @@ struct VirtualDevice {
     render_pipelines: Vec<RenderPipelineSlot>,
     retained_meshes: Vec<RetainedMeshSlot>,
     retained_textures: Vec<RetainedTextureSlot>,
+    drawable_depths: Vec<(u32, Arc<crate::intel::render::DrawableDepth>)>,
     /// Phase-1 Picasso carrier. A VMX device may bind one RendererN lane for
     /// its epoch; no retained route may silently select Render0.
     picasso_carrier: Option<crate::intel::render::PicassoCarrierLease>,
@@ -1263,6 +1264,7 @@ pub(crate) fn open(
         render_pipelines: Vec::new(),
         retained_meshes: Vec::new(),
         retained_textures: Vec::new(),
+        drawable_depths: Vec::new(),
         picasso_carrier: None,
         picasso_setup_in_flight: false,
         picasso_carrier_quarantined: false,
@@ -2811,6 +2813,7 @@ pub(crate) struct Ui4IndexedDrawDescriptor {
     pub(crate) sampler_flags: u32,
     pub(crate) load_color: bool,
     pub(crate) retain_texture: bool,
+    pub(crate) depth_flags: u32,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -2959,7 +2962,8 @@ pub(crate) fn submit_ui4_indexed_draw(
     queue_handle: QueueHandle,
     draw: Ui4IndexedDrawDescriptor,
 ) -> Result<Ui4SurfaceIndexedCompletion, VgpuError> {
-    if !ui4_single_indexed_topology_valid(draw.topology, draw.index_count) || draw.base_vertex != 0
+    if !v::vgpu::indexed_draw_flags_valid(draw.depth_flags)
+        || !ui4_single_indexed_topology_valid(draw.topology, draw.index_count) || draw.base_vertex != 0
     {
         return Err(VgpuError::Unsupported);
     }
@@ -2974,6 +2978,7 @@ pub(crate) fn submit_ui4_indexed_draw(
         vertices,
         indices,
         sampled_texture,
+        drawable_depth,
     ) = {
         let mut broker = BROKER.lock();
         let device = lookup_device_mut(&mut broker, device_handle, principal)?;
@@ -3031,6 +3036,43 @@ pub(crate) fn submit_ui4_indexed_draw(
             )
         };
         let copied = (|| {
+            let depth = if draw.depth_flags & v::vgpu::INDEXED_DRAW_DRAWABLE_DEPTH != 0 {
+                let existing = device.drawable_depths.iter().position(|(id, _)| *id == window_id);
+                if let Some(index) = existing {
+                    if !device.drawable_depths[index].1.matches(width, height) {
+                        // A resize starts a new depth attachment only with an explicit clear.
+                        if draw.depth_flags & v::vgpu::INDEXED_DRAW_CLEAR_DEPTH == 0 {
+                            return Err(VgpuError::Unsupported);
+                        }
+                        let old = &device.drawable_depths[index].1;
+                        if Arc::strong_count(old) != 1 { return Err(VgpuError::Busy); }
+                        if !crate::intel::render::release_drawable_depth(old) {
+                            device.lost = true;
+                            device.picasso_carrier_quarantined = true;
+                            return Err(VgpuError::DeviceLost);
+                        }
+                        device.memory_used = device.memory_used.saturating_sub(old.bytes());
+                        device.drawable_depths.swap_remove(index);
+                    }
+                }
+                if let Some((_, depth)) = device.drawable_depths.iter().find(|(id, _)| *id == window_id) {
+                    if !depth.initialized() && draw.depth_flags & v::vgpu::INDEXED_DRAW_CLEAR_DEPTH == 0 {
+                        return Err(VgpuError::Unsupported);
+                    }
+                    Some(Arc::clone(depth))
+                } else {
+                    if draw.depth_flags & v::vgpu::INDEXED_DRAW_CLEAR_DEPTH == 0 { return Err(VgpuError::Unsupported); }
+                    let bytes = crate::intel::render::drawable_depth_bytes(width, height).ok_or(VgpuError::Unsupported)?;
+                    if device.drawable_depths.len() >= 16 || device.memory_used.saturating_add(bytes) > device.quota.memory_bytes {
+                        return Err(VgpuError::QuotaExceeded);
+                    }
+                    let depth = Arc::new(crate::intel::render::create_drawable_depth(width, height).map_err(|_| VgpuError::OutOfMemory)?);
+                    device.memory_used += depth.bytes();
+                    device.drawable_depths.push((window_id, Arc::clone(&depth)));
+                    Some(depth)
+                }
+            } else { None };
+
             let index_record = lookup_buffer(device, draw.index_buffer)?;
             if index_record.usage & BUFFER_USAGE_INDEX == 0 {
                 return Err(VgpuError::PermissionDenied);
@@ -3170,9 +3212,9 @@ pub(crate) fn submit_ui4_indexed_draw(
             } else {
                 None
             };
-            Ok((vertices, indices, texture))
+            Ok((vertices, indices, texture, depth))
         })();
-        let (vertices, mut indices, sampled_texture) = match copied {
+        let (vertices, mut indices, sampled_texture, drawable_depth) = match copied {
             Ok(copied) => copied,
             Err(error) => {
                 lookup_surface_mut(device, draw.surface)?.in_flight = 1;
@@ -3192,6 +3234,7 @@ pub(crate) fn submit_ui4_indexed_draw(
             vertices,
             indices,
             sampled_texture,
+            drawable_depth,
         )
     };
 
@@ -3257,7 +3300,13 @@ pub(crate) fn submit_ui4_indexed_draw(
             draw.sampler_flags, width, height,
         );
     }
-    let rendered = if draw.load_color {
+    let rendered = if let Some(depth) = drawable_depth.as_deref() {
+        crate::intel::render::render_drawable_depth_scene(
+            core::slice::from_ref(&scene_draw),
+            (!draw.load_color).then_some(draw.clear_rgba8_srgb.to_le_bytes()),
+            destination, depth, draw.depth_flags, diagnostic_logs,
+        )
+    } else if draw.load_color {
         crate::intel::render::render_resident_indexed_scene_frame_premultiplied_direct_to_surface(
             core::slice::from_ref(&scene_draw),
             None,
@@ -3346,6 +3395,9 @@ pub(crate) fn submit_ui4_indexed_draw(
         return Err(VgpuError::DeviceLost);
     };
 
+    if draw.depth_flags & v::vgpu::INDEXED_DRAW_CLEAR_DEPTH != 0 {
+        if let Some(depth) = drawable_depth.as_deref() { depth.mark_initialized(); }
+    }
     let physical = require_physical()?;
     let mut broker = BROKER.lock();
     let device = lookup_device_mut(&mut broker, device_handle, principal)?;
@@ -6589,6 +6641,7 @@ fn ensure_kernel_device(
         render_pipelines: Vec::new(),
         retained_meshes: Vec::new(),
         retained_textures: Vec::new(),
+        drawable_depths: Vec::new(),
         picasso_carrier: None,
         picasso_setup_in_flight: false,
         picasso_carrier_quarantined: false,
@@ -6736,6 +6789,18 @@ fn destroy_device_resources(
         }
     }
     device.retained_textures.clear();
+    for (_, depth) in &device.drawable_depths {
+        if Arc::strong_count(depth) != 1 { return Err(VgpuError::Busy); }
+    }
+    while let Some((_, depth)) = device.drawable_depths.last() {
+        if !crate::intel::render::release_drawable_depth(depth) {
+            device.picasso_carrier_quarantined = true;
+            device.lost = true;
+            return Err(VgpuError::DeviceLost);
+        }
+        device.drawable_depths.pop();
+    }
+
     for slot in &mut device.retained_meshes {
         if let Some(record) = slot.record.take() {
             if let Some(static_geometry) = record.static_geometry {

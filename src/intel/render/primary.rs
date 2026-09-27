@@ -1472,6 +1472,7 @@ pub(crate) fn render_resident_indexed_scene_frame_premultiplied_direct_to_surfac
         None,
         clear_rgba.is_none(),
         None,
+        None,
     )
 }
 
@@ -1556,6 +1557,7 @@ pub(crate) fn render_resident_retained_with_static_draws_direct_to_surface(
         Some(carrier),
         false,
         cube_companion,
+        None,
     )
 }
 
@@ -2781,6 +2783,7 @@ fn submit_resident_scene_geometry_batched(
     target_width: usize,
     target_height: usize,
     carrier: Option<PicassoCarrierLease>,
+    drawable_depth: Option<DrawableDepthSubmission>,
 ) -> Result<ResidentSceneGeometryResult, &'static str> {
     let render_lease = if carrier.is_none() {
         Some(reserve_warm_render_storage("resident-scene").ok_or("render-storage-busy")?)
@@ -2799,12 +2802,13 @@ fn submit_resident_scene_geometry_batched(
     ) {
         return Err("scene-frame-target-format");
     }
-    // No persistent depth-load API exists here. Never use fresh/stale aux data
-    // without the mandatory initialization pass, even for color-load consumers.
+    // Legacy scene HiZ needs its initialization pass in the same submission.
+    // Drawable-owned persistent depth uses plain D32 without shared HiZ data.
     if clear.is_none() && depth_config.is_some_and(|depth| depth.hiz.is_some()) {
         return Err("resident-scene-hiz-requires-depth-clear");
     }
-    let max_secondary_count = draws.len().saturating_add(usize::from(clear.is_some()));
+    let depth_clear = drawable_depth.is_some_and(|d| d.clear);
+    let max_secondary_count = draws.len().saturating_add(usize::from(clear.is_some() || depth_clear));
     let used_batch_bytes = RESIDENT_SCENE_PRIMARY_BATCH_BYTES
         .checked_add(
             max_secondary_count
@@ -2823,8 +2827,11 @@ fn submit_resident_scene_geometry_batched(
     let state = resident_scene_batch_state_for_carrier(warm, carrier)?;
 
     let mut secondary_count = 0usize;
-    if let Some(clear) = clear {
-        let mut clear_depth = depth_config;
+    if clear.is_some() || depth_clear {
+        let clear_color = clear.unwrap_or([0; 4]);
+        let mut clear_depth = if drawable_depth.is_some() {
+            drawable_depth.filter(|d| d.clear).map(|d| d.config)
+        } else { depth_config };
         if let Some(depth) = clear_depth.as_mut() {
             depth.hiz_clear = depth.hiz.is_some();
             depth.write_enabled = !depth.hiz_clear; // HiZ fast clear replaces the D32 raster clear.
@@ -2847,9 +2854,9 @@ fn submit_resident_scene_geometry_batched(
             clear_warm,
             clear_state_gpu,
             clear_draw,
-            TriangleBlendProbeMode::MesaZeroedState,
+            if clear.is_some() { TriangleBlendProbeMode::MesaZeroedState } else { TriangleBlendProbeMode::StraightAlpha },
             clear_depth,
-            clear,
+            clear_color,
             None,
             ResidentSceneFragmentContract::ConstantRgba,
             [0.0, 0.0],
@@ -2864,7 +2871,9 @@ fn submit_resident_scene_geometry_batched(
         if opaque_depth_enabled && scene_draw.rgba[3] == 0 {
             continue;
         }
-        let (blend_mode, draw_depth) = if opaque_depth_enabled {
+        let (blend_mode, draw_depth) = if let Some(depth) = drawable_depth {
+            (TriangleBlendProbeMode::MesaZeroedState, depth.test.then_some(depth.config))
+        } else if opaque_depth_enabled {
             let write_enabled = scene_draw.rgba[3] == u8::MAX;
             let mut depth = depth_config.ok_or("scene-frame-depth")?;
             depth.write_enabled = write_enabled;
@@ -3442,6 +3451,7 @@ fn submit_resident_scene_capture_inner(
         None,
         false,
         None,
+        None,
     )
 }
 
@@ -3461,6 +3471,7 @@ fn submit_resident_scene_capture_inner_for_carrier(
     carrier: Option<PicassoCarrierLease>,
     load_color: bool,
     cube_companion: Option<&ResidentChurnForward>,
+    drawable_depth: Option<DrawableDepthSubmission>,
 ) -> Result<ResidentSceneFrameResult, &'static str> {
     let geometry_draw_count =
         native_churn.map_or(draws.len(), |resident| resident.draw_group_count() + draws.len())
@@ -3655,7 +3666,9 @@ fn submit_resident_scene_capture_inner_for_carrier(
                 RESIDENT_SCENE_DEPTH_BYTES,
             );
         }
-        let depth_config = if opaque_depth_enabled {
+        let depth_config = if let Some(depth) = drawable_depth {
+            Some(depth.config)
+        } else if opaque_depth_enabled {
             Some(if raster_quality == ResidentSceneRasterQuality::Multisample4x {
                 prepare_resident_scene_msaa_depth(warm.device_id, target_width, target_height)?
             } else {
@@ -3770,6 +3783,7 @@ fn submit_resident_scene_capture_inner_for_carrier(
                 target_width,
                 target_height,
                 carrier,
+                drawable_depth,
             )?
         };
         diagnostic_stage = "output-completion";

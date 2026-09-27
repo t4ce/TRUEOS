@@ -195,6 +195,7 @@ include!("picasso_carrier.rs");
 include!("state.rs");
 include!("warmup.rs");
 include!("primary.rs");
+include!("drawable_depth.rs");
 include!("picasso_vue_compare.rs");
 include!("pipeline.rs");
 include!("resources.rs");
