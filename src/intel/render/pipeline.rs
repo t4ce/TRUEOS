@@ -3137,6 +3137,9 @@ fn encode_triangle_probe_batch(
             * (PS_EXTRA_REQUIRES_NONPERSPECTIVE_BARY_PLANE
                 | PS_EXTRA_REQUIRES_PERSPECTIVE_BARY_PLANE))
         | ((pipeline.ps.meta.computed_depth_mode as u32) << 26)
+        // The fixed GL fragment program contains conditional alpha discard.
+        // Advertise kills even on draws where the alpha-test branch is off.
+        | (u32::from(draw.fixed_gl.is_some()) << 28)
         | PS_EXTRA_PIXEL_SHADER_VALID;
     let ps_extra_dw1 = if backend_probe_mode.disable_ps_contract() {
         ps_extra_dw1 & !PS_EXTRA_PIXEL_SHADER_VALID

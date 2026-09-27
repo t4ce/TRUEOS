@@ -4265,5 +4265,8 @@ pub(crate) fn create_resident_fixed_gl_mesh(
     for row in state.chunks_exact(16) { upload.push(row.try_into().unwrap()); }
     let mut mesh = create_resident_triangle_mesh_typed(&upload, indices, TriangleVertexFormat::FixedGl, None)?;
     mesh.vertex_count = vertices.len() as u32;
+    // The allocation also contains state, but VF and the state binding need
+    // the authored vertex extent. Otherwise BTI1/BTI2 point past the state.
+    mesh.vertex_bytes -= core::mem::size_of_val(state) as u32;
     Ok(mesh)
 }

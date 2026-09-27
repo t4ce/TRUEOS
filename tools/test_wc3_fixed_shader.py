@@ -45,6 +45,44 @@ with tempfile.TemporaryDirectory(prefix='wc3-state-tests-') as tmp:
     subprocess.run(['rustc','--edition=2024','--test',str(src),'-o',str(exe)],check=True)
     subprocess.run([str(exe)],check=True)
 
+# Exercise the production state-appending constructor with a recording allocator.
+# The allocation includes state; the VF extent must exclude it, while the index
+# offset must still remain after it. A helper-only address test cannot catch this.
+with tempfile.TemporaryDirectory(prefix='wc3-fixed-mesh-tests-') as tmp:
+    src = Path(tmp) / 'tests.rs'; exe = Path(tmp) / 'tests'
+    src.write_text('''
+enum TriangleVertexFormat { FixedGl }
+struct ResidentTriangleMesh {
+    vertex_count: u32, vertex_bytes: u32, index_offset: usize, upload: Vec<[f32;16]>,
+}
+fn create_resident_triangle_mesh_typed(
+    vertices: &[[f32;16]], _: &[u32], _: TriangleVertexFormat, _: Option<()>,
+) -> Result<ResidentTriangleMesh, &'static str> {
+    Ok(ResidentTriangleMesh {
+        vertex_count: vertices.len() as u32,
+        vertex_bytes: core::mem::size_of_val(vertices) as u32,
+        index_offset: core::mem::size_of_val(vertices), upload: vertices.to_vec(),
+    })
+}
+''' + item('src/intel/render/resources.rs', 'create_resident_fixed_gl_mesh')
+        + item('src/intel/render/pipeline.rs', 'fixed_gl_state_gpu_addr') + '''
+#[test]
+fn shader_binding_reaches_uploaded_state_after_unique_vertices() {
+    for count in [3, 4, 64] {
+        let vertices = vec![[1.;16];count];
+        let state = core::array::from_fn(|i| i as f32 + 100.);
+        let mesh = create_resident_fixed_gl_mesh(&vertices, &[0,1,2,2,1,0], &state).unwrap();
+        assert_eq!(mesh.vertex_count as usize, count);
+        assert_eq!(mesh.vertex_bytes as usize, count * 64);
+        let offset = (fixed_gl_state_gpu_addr(0x20000000, mesh.vertex_bytes)-0x20000000) as usize;
+        assert_eq!(mesh.upload[offset / 64..].iter().flatten().copied().collect::<Vec<_>>(), state);
+        assert_eq!(mesh.index_offset, offset + 1536);
+    }
+}
+''')
+    subprocess.run(['rustc','--edition=2024','--test',str(src),'-o',str(exe)],check=True)
+    subprocess.run([str(exe)],check=True)
+
 with tempfile.TemporaryDirectory(prefix='wc3-fixed-address-tests-') as tmp:
     src = Path(tmp) / 'tests.rs'; exe = Path(tmp) / 'tests'
     src.write_text(item('src/intel/render/pipeline.rs', 'fixed_gl_state_gpu_addr') + '''
