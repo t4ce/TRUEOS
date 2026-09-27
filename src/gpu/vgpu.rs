@@ -2965,6 +2965,24 @@ mod ui4_single_indexed_topology_tests {
     }
 }
 
+// Aggregate successful fixed-GL submissions. These phases are nested in the
+// Blueprint's submit wall time; GPU polling is nested in render time.
+static FIXED_DRAW_TIMES: spin::Mutex<(u64, [u64; 5], u64)> = spin::Mutex::new((0, [0; 5], 0));
+fn record_fixed_draw_times(phases: [u64; 5], total_ns: u64) {
+    let report = {
+        let mut totals = FIXED_DRAW_TIMES.lock();
+        totals.0 += 1;
+        for (sum, value) in totals.1.iter_mut().zip(phases) { *sum = sum.saturating_add(value); }
+        totals.2 = totals.2.max(total_ns);
+        if totals.0 >= 128 { Some(core::mem::replace(&mut *totals, (0, [0; 5], 0))) } else { None }
+    };
+    if let Some((samples, t, maximum)) = report {
+        crate::log_important!(target: "vgpu";
+            "XPAPP GPU TIME samples={} prepare_us={} mesh_us={} render_us={} retire_us={} gpu_poll_us={} max_total_us={} scope=successful-fixed-draws-poll-nested-in-render\n",
+            samples, t[0]/1000, t[1]/1000, t[2]/1000, t[3]/1000, t[4]/1000, maximum/1000);
+    }
+}
+
 /// Resolve one bounded WGPU indexed draw into the existing authenticated
 /// Render frontier. The broker understands only byte layouts, opaque handles,
 /// and the admitted shader-package interface.
@@ -2974,6 +2992,7 @@ pub(crate) fn submit_ui4_indexed_draw(
     queue_handle: QueueHandle,
     draw: Ui4IndexedDrawDescriptor,
 ) -> Result<Ui4SurfaceIndexedCompletion, VgpuError> {
+    let timing_start = crate::chronos::monotonic_nanos();
     let unsupported = |reason: &'static str| {
         crate::log_warn!(target: "vgpu";
             "vgpu-indexed: rejected reason={} flags=0x{:X} indices={} vertex_offset={} texture={}x{} pitch={} sampler=0x{:X}\n",
@@ -3295,6 +3314,7 @@ pub(crate) fn submit_ui4_indexed_draw(
         )
     };
 
+    let timing_prepared = crate::chronos::monotonic_nanos();
     let destination = crate::intel::gpgpu::GpgpuRgba8Surface::new(
         phys,
         producer_gpu,
@@ -3369,6 +3389,7 @@ pub(crate) fn submit_ui4_indexed_draw(
             draw.sampler_flags, width, height,
         );
     }
+    let timing_mesh = crate::chronos::monotonic_nanos();
     let rendered = if drawable_depth.is_some() || geometry_clear || fixed_state.is_some() {
         crate::intel::render::render_drawable_depth_scene(
             core::slice::from_ref(&scene_draw),
@@ -3390,6 +3411,7 @@ pub(crate) fn submit_ui4_indexed_draw(
         diagnostic_logs,
     )
     };
+    let timing_rendered = crate::chronos::monotonic_nanos();
     let render_error = rendered.as_ref().err().copied();
     let transient_busy = matches!(render_error, Some("render-busy" | "render-storage-busy"));
     if let Some(reason) = render_error {
@@ -3503,6 +3525,16 @@ pub(crate) fn submit_ui4_indexed_draw(
         physical_serial: release.sequence(),
         physical_publish_sequence: release.sequence(),
     };
+    if fixed_state.is_some() {
+        let end = crate::chronos::monotonic_nanos();
+        record_fixed_draw_times([
+            timing_prepared.saturating_sub(timing_start),
+            timing_mesh.saturating_sub(timing_prepared),
+            timing_rendered.saturating_sub(timing_mesh),
+            end.saturating_sub(timing_rendered),
+            rendered.as_ref().map_or(0, |r| r.gpu_poll_us.saturating_mul(1000)),
+        ], end.saturating_sub(timing_start));
+    }
     crate::log_info!(target: "vgpu";
         "vgpu: indexed UI4 draw retired principal={:?} shader_package=fnv1a64:{:016X} pipeline={} vertex_buffer={} index_buffer={} topology={:?} indices={} target={}x{} timeline={} render_release={} path=opaque-wgpu-objects->resident-render0->ui4\n",
         principal,
