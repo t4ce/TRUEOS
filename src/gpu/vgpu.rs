@@ -661,6 +661,16 @@ impl Quota {
         queues: 4,
         contexts: 2,
     };
+    // A present-capable guest owns a mapped 1440p UI4 target, a matching D32
+    // attachment, upload buffers, and Render0-resident texture copies.  Keep
+    // compute-only guests at the smaller isolation boundary while admitting
+    // those bounded graphics resources and 2048-class authored mip chains.
+    const GUEST_PRESENT: Self = Self {
+        memory_bytes: 128 * 1024 * 1024,
+        buffers: 256,
+        queues: 4,
+        contexts: 2,
+    };
     const TEST: Self = Self {
         memory_bytes: 4 * 1024 * 1024,
         buffers: 8,
@@ -1249,7 +1259,7 @@ pub(crate) fn open(
     let record = VirtualDevice {
         principal,
         capabilities,
-        quota: quota_for(principal),
+        quota: quota_for_device(principal, capabilities),
         epoch,
         lost: false,
         gpuvm: GpuVmBinding::Owned(gpuvm),
@@ -3072,6 +3082,9 @@ pub(crate) fn submit_ui4_indexed_draw(
                 } else {
                     let bytes = crate::intel::render::drawable_depth_bytes(width, height).ok_or_else(|| unsupported("depth-extent"))?;
                     if device.drawable_depths.len() >= 16 || device.memory_used.saturating_add(bytes) > device.quota.memory_bytes {
+                        crate::log_warn!(target: "vgpu";
+                            "vgpu-indexed: quota-exceeded resource=depth used={} request={} quota={} target={}x{}\n",
+                            device.memory_used, bytes, device.quota.memory_bytes, width, height);
                         return Err(VgpuError::QuotaExceeded);
                     }
                     let depth = Arc::new(crate::intel::render::create_drawable_depth(width, height).map_err(|reason| {
@@ -3210,6 +3223,10 @@ pub(crate) fn submit_ui4_indexed_draw(
                     }
                     if device.memory_used.saturating_add(texture_bytes) > device.quota.memory_bytes
                     {
+                        crate::log_warn!(target: "vgpu";
+                            "vgpu-indexed: quota-exceeded resource=resident-texture used={} request={} quota={} texture={}x{} pitch={}\n",
+                            device.memory_used, texture_bytes, device.quota.memory_bytes,
+                            draw.texture_width, draw.texture_height, draw.texture_pitch);
                         return Err(VgpuError::QuotaExceeded);
                     }
                     let texture_virt = match texture_record.backing {
@@ -6540,7 +6557,7 @@ pub(crate) fn run_broker_self_test() -> BrokerSelfTestReport {
             };
         report.cross_principal_rejected =
             buffer_info(b, dev_a, buffer) == Err(VgpuError::PermissionDenied);
-        let oversized = quota_for(a).memory_bytes.saturating_add(PAGE_BYTES);
+        let oversized = quota_for_device(a, requested).memory_bytes.saturating_add(PAGE_BYTES);
         report.quota_rejected =
             create_buffer(a, dev_a, oversized, 0x1) == Err(VgpuError::QuotaExceeded);
         let _ = destroy_buffer(a, dev_a, buffer);
@@ -6639,8 +6656,24 @@ const fn quota_for(principal: Principal) -> Quota {
     }
 }
 
+const fn quota_for_device(principal: Principal, capabilities: Capabilities) -> Quota {
+    if matches!(principal, Principal::HullGuest(_))
+        && capabilities.contains(Capabilities::PRESENT)
+    {
+        Quota::GUEST_PRESENT
+    } else {
+        quota_for(principal)
+    }
+}
+
 const _: () = {
     assert!(Quota::GUEST.memory_bytes == 32 * 1024 * 1024);
+    assert!(quota_for_device(Principal::HullGuest(0), Capabilities::CLIENT_BASE).memory_bytes
+        == 32 * 1024 * 1024);
+    assert!(quota_for_device(
+        Principal::HullGuest(0),
+        Capabilities::CLIENT_BASE.union(Capabilities::PRESENT),
+    ).memory_bytes == 128 * 1024 * 1024);
     assert!(Quota::GUEST.buffers == 256);
 };
 
