@@ -3074,7 +3074,11 @@ pub(crate) fn submit_ui4_indexed_draw(
                     if device.drawable_depths.len() >= 16 || device.memory_used.saturating_add(bytes) > device.quota.memory_bytes {
                         return Err(VgpuError::QuotaExceeded);
                     }
-                    let depth = Arc::new(crate::intel::render::create_drawable_depth(width, height).map_err(|_| VgpuError::OutOfMemory)?);
+                    let depth = Arc::new(crate::intel::render::create_drawable_depth(width, height).map_err(|reason| {
+                        crate::log_warn!(target: "vgpu";
+                            "vgpu-indexed: resource-failed resource=depth reason={} bytes={} target={}x{}\n", reason, bytes, width, height);
+                        VgpuError::OutOfMemory
+                    })?);
                     crate::log_info!(target: "render";
                         "vgpu-indexed: depth-created window={} target={}x{} flags=0x{:X} initialization=gpu-clear\n",
                         window_id, width, height, draw.depth_flags,
@@ -3223,7 +3227,12 @@ pub(crate) fn submit_ui4_indexed_draw(
                             draw.sampler_flags,
                             texture_bytes,
                         )
-                        .map_err(|_| VgpuError::OutOfMemory)?,
+                        .map_err(|reason| {
+                            crate::log_warn!(target: "vgpu";
+                                "vgpu-indexed: resource-failed resource=texture reason={} bytes={} shape={}x{}\n",
+                                reason, texture_bytes.len(), draw.texture_width, draw.texture_height);
+                            VgpuError::OutOfMemory
+                        })?,
                     );
                     if draw.retain_texture {
                         lookup_buffer_mut(device, draw.sampled_texture)?.sampled =
@@ -3294,7 +3303,10 @@ pub(crate) fn submit_ui4_indexed_draw(
         crate::intel::render::create_resident_indexed_mesh(&positions, &indices, draw.topology)
     } {
         Ok(mesh) => mesh,
-        Err(_) => {
+        Err(reason) => {
+            crate::log_warn!(target: "vgpu";
+                "vgpu-indexed: resource-failed resource=mesh reason={} vertices={} indices={} fixed={}\n",
+                reason, vertices.len(), indices.len(), fixed_state.is_some());
             rollback_indexed_submission_lease(principal, device_handle, queue_handle, draw.surface);
             return Err(VgpuError::OutOfMemory);
         }
@@ -3508,7 +3520,6 @@ pub(crate) fn submit_ui4_indexed_draw(
 /// resident renderer's already-batched scene path. Material meaning remains in
 /// the client; the broker sees only authenticated immediate RGBA bytes and
 /// bounded index ranges sharing one ordinary vertex/index binding.
-
 pub(crate) fn submit_ui4_indexed_batch(
     principal: Principal,
     device_handle: DeviceHandle,

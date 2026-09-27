@@ -1102,7 +1102,12 @@ fn create_resident_triangle_mesh_typed<T: Copy>(
     let indirect_args_gpu_addr = gpu_base
         .checked_add(indirect_args_offset as u64)
         .ok_or("resident-triangle-address")?;
-    let Some((storage_phys, storage_virt)) = crate::dma::alloc(storage_bytes, 4096) else {
+    // Resident resources are addressed through PPGTT (52-bit physical PTEs).
+    // Keep them out of the constrained below-4-GiB DMA aperture.
+    let Some((storage_phys, storage_virt)) = crate::dma::alloc_ppgtt(storage_bytes, 4096) else {
+        if carrier.is_none() {
+            recycle_persistent_render_gpu_va(gpu_base, storage_bytes);
+        }
         return Err("resident-triangle-alloc");
     };
 
@@ -3371,7 +3376,9 @@ pub(crate) fn allocate_resident_render_buffer(
     }
     let storage_bytes = crate::intel::align_up(bytes, 4096).ok_or("resident-resource-align")?;
     let gpu_base = reserve_persistent_render_gpu_va(storage_bytes).ok_or("resident-resource-va")?;
-    let Some((storage_phys, storage_virt)) = crate::dma::alloc(storage_bytes, 4096) else {
+    // Resident resources are addressed through PPGTT (52-bit physical PTEs).
+    // Keep them out of the constrained below-4-GiB DMA aperture.
+    let Some((storage_phys, storage_virt)) = crate::dma::alloc_ppgtt(storage_bytes, 4096) else {
         recycle_persistent_render_gpu_va(gpu_base, storage_bytes);
         return Err("resident-resource-alloc");
     };
