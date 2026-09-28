@@ -9,7 +9,7 @@ pub(super) const fn intercept_pause(preemption_timer_enabled: bool, native_pause
 
 /// Give other ready tasks a turn without imposing a minimum wall-clock delay.
 /// The caller must clear its current-VM identity before awaiting this future.
-pub(super) async fn yield_executor_turn() {
+pub(crate) async fn yield_executor_turn() {
     let mut yielded = false;
     core::future::poll_fn(|cx| {
         if yielded {

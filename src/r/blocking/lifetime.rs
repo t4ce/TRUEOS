@@ -56,12 +56,12 @@ impl State {
 static STATES: [Mutex<State>; crate::allcaps::hv::VM_ID_LIMIT] =
     [const { Mutex::new(State::new()) }; crate::allcaps::hv::VM_ID_LIMIT];
 
-pub(super) struct GuestJobOwner {
+pub(crate) struct GuestJobOwner {
     vm_id: u8,
     generation: u64,
 }
 
-pub(super) fn reserve(vm_id: u8) -> Option<GuestJobOwner> {
+pub(crate) fn reserve(vm_id: u8) -> Option<GuestJobOwner> {
     let generation = crate::hv::vm_run_generation(vm_id)?;
     let reserved = STATES.get(vm_id as usize)?.lock().reserve(generation);
     if !reserved {

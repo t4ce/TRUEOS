@@ -319,6 +319,8 @@ pub const OP_BP_THREAD_CURRENT_ID: u32 = 0x61; // response is current TRUEOS vth
 pub const OP_BP_SERVICE_LANE_SUBMIT: u32 = 0x62; // arg0/arg1 boxed service-lane job raw parts
 pub const OP_BP_SERVICE_LANE_CAPACITY: u32 = 0x204; // no args -> advisory available native workers
 pub const OP_BP_SERVICE_LANE_CANCELLED: u32 = 0x207; // no args -> closed native-job admission
+pub const OP_BP_GUEST_COMPUTE_SUBMIT: u32 = 0x215; // arg0/arg1 boxed strict-P compute job raw parts
+pub const OP_BP_GUEST_COMPUTE_CAPACITY: u32 = 0x216; // no args -> strict-P pool capacity
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub const OP_BP_TOKIO_BLOCKING_SPAWN: u32 = OP_BP_SERVICE_LANE_SUBMIT; // compatibility alias
 pub const OP_BP_PLATFORM_WAKE_ONE: u32 = 0x63; // arg0 VM-local wait key -> woke bool
@@ -3534,6 +3536,31 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 )
             };
             write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_GUEST_COMPUTE_SUBMIT => {
+            let rc = unsafe {
+                crate::r::blocking::submit_guest_compute_job_from_raw(
+                    vm_id,
+                    arg0 as usize,
+                    arg1 as usize,
+                )
+            };
+            write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_GUEST_COMPUTE_CAPACITY => {
+            if arg0 != 0 || arg1 != 0 || req_len != 0 {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+            } else {
+                write_response(
+                    vm_id,
+                    seq,
+                    STATUS_OK,
+                    crate::r::blocking::guest_compute_capacity() as u64,
+                    0,
+                );
+            }
             DispatchOutcome::Resume
         }
         OP_BP_MIO_SOCKET_POLL_READY => {

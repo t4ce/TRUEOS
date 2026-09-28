@@ -10,7 +10,7 @@ import argparse
 from pathlib import Path
 import re
 
-SYMBOLS = ("trueos_service_lane_submit_job", "trueos_service_lane_available_capacity", "trueos_service_lane_cancellation_requested")
+SYMBOLS = ("trueos_service_lane_submit_job", "trueos_service_lane_available_capacity", "trueos_service_lane_cancellation_requested", "trueos_guest_compute_submit_job", "trueos_guest_compute_capacity")
 
 
 def signature(source: str, symbol: str, definition: bool) -> str:
@@ -22,6 +22,7 @@ def signature(source: str, symbol: str, definition: bool) -> str:
     start = matches[0].end() - 1
     end = source.index("{" if definition else ";", start)
     result = source[start:end].strip().replace("BlockingJobFn", "Box<dyn FnOnce() + Send + 'static>")
+    result = result.replace("GuestComputeJob", "Box<dyn FnMut() -> bool + Send + 'static>")
     # Parameter names are not ABI; these two signatures only have one named
     # parameter. Keep Rust ABI, ownership type, bounds, and output exact.
     result = re.sub(r"\bjob\s*:\s*", "", result)
@@ -50,7 +51,12 @@ def check(kernel: Path, sdk: Path) -> None:
     vmcall = (kernel / "src/hv/vmcall.rs").read_text()
     constants = dict(re.findall(r"pub const (OP_\w+): u32 = (0x[0-9a-fA-F]+)", vmcall))
     guest = (kernel / "crates/trueos-vm/src/vmcall.rs").read_text()
-    for operation in ("OP_BP_SERVICE_LANE_CAPACITY", "OP_BP_SERVICE_LANE_CANCELLED"):
+    for operation in (
+        "OP_BP_SERVICE_LANE_CAPACITY",
+        "OP_BP_SERVICE_LANE_CANCELLED",
+        "OP_BP_GUEST_COMPUTE_SUBMIT",
+        "OP_BP_GUEST_COMPUTE_CAPACITY",
+    ):
         code = int(constants[operation], 16)
         collisions = [name for name, value in constants.items() if int(value, 16) == code]
         if collisions != [operation]:

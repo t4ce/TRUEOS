@@ -1,6 +1,7 @@
 pub mod archive_cabi;
 pub mod blocking;
 pub mod codec;
+pub(crate) mod compute_budget;
 pub mod lz4;
 mod tar;
 pub mod cursor;

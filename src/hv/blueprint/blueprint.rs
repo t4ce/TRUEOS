@@ -1464,6 +1464,12 @@ fn resolve_runtime_abi_import(name: &str) -> Option<usize> {
         "trueos_service_lane_submit_job" => {
             Some(crate::r::blocking::trueos_service_lane_submit_job as *const () as usize)
         }
+        "trueos_guest_compute_submit_job" => {
+            Some(crate::r::blocking::trueos_guest_compute_submit_job as *const () as usize)
+        }
+        "trueos_guest_compute_capacity" => {
+            Some(crate::r::blocking::trueos_guest_compute_capacity as *const () as usize)
+        }
         "trueos_service_lane_available_capacity" => {
             Some(crate::r::blocking::trueos_service_lane_available_capacity as *const () as usize)
         }

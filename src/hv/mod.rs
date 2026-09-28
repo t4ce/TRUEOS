@@ -3,7 +3,7 @@ pub mod blueprint;
 #[cfg(any(target_os = "trueos", target_os = "zkvm"))]
 pub mod blueprint_net;
 pub mod control_kick;
-mod execution_policy;
+pub(crate) mod execution_policy;
 pub mod guest_run;
 pub mod guest_work;
 pub mod hv_remote_restore_service;

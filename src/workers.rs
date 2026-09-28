@@ -455,6 +455,28 @@ pub fn try_claim_compute_worker(policy: ComputeWorkerPolicy) -> Option<ComputeWo
     None
 }
 
+/// Claim one already-selected compute worker.  A client-owned pool uses this
+/// to keep a stable physical placement across work submissions instead of
+/// re-running the round-robin picker for every small shard.
+pub fn try_claim_compute_worker_on_slot(
+    cpu_slot: u32,
+    policy: ComputeWorkerPolicy,
+) -> Option<ComputeWorkerLease> {
+    if !is_compute_eligible_slot(cpu_slot, policy) {
+        return None;
+    }
+    let spawner = spawner_for_slot(cpu_slot)?;
+    let claimed = COMPUTE_CLAIMED_BY_SLOT.get(cpu_slot as usize)?;
+    claimed
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .ok()?;
+    Some(ComputeWorkerLease {
+        cpu_slot,
+        core_kind: core_kind_for_slot(cpu_slot),
+        spawner,
+    })
+}
+
 #[inline]
 fn is_compute_eligible_slot(slot: u32, policy: ComputeWorkerPolicy) -> bool {
     is_slot_registered(slot)

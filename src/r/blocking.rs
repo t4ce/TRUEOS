@@ -2,17 +2,21 @@ extern crate alloc;
 
 use alloc::boxed::Box;
 use alloc::collections::VecDeque;
-use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
+use crate::r::compute_budget::{self, CooldownDebt};
+use crate::workers::ComputeWorkerPolicy;
 use heapless::String as HString;
 use spin::Mutex;
 use trueos_time::{Duration as EmbassyDuration, Timer};
 
 pub type BlockingJobFn = Box<dyn FnOnce() + Send + 'static>;
+type GuestComputeJob = Box<dyn FnMut() -> bool + Send + 'static>;
 
 mod lifetime;
+pub(crate) use lifetime::reserve as reserve_guest_job;
 pub(crate) use lifetime::{
-    close_guest_jobs, drain_guest_jobs, guest_jobs_in_flight, open_guest_jobs,
+    GuestJobOwner, close_guest_jobs, drain_guest_jobs, guest_jobs_in_flight, open_guest_jobs,
 };
 
 const BLOCKING_JOB_QUEUE_WARN_DEPTH: usize = 100;
@@ -37,6 +41,47 @@ static SERVICE_LANE_WAITS: [crate::wait::WaitQueue; crate::allcaps::hv::VM_CPU_S
     [const { crate::wait::WaitQueue::new() }; crate::allcaps::hv::VM_CPU_SLOT_LIMIT];
 static SERVICE_LANE_ACTIVITY: [Mutex<ServiceLaneActivity>; crate::allcaps::hv::VM_CPU_SLOT_LIMIT] =
     [const { Mutex::new(ServiceLaneActivity::new()) }; crate::allcaps::hv::VM_CPU_SLOT_LIMIT];
+
+const XPAPP_COMPUTE_WORKERS: usize = 2;
+const XPAPP_COMPUTE_QUEUE_CAP: usize = 64;
+const XPAPP_COMPUTE_IDLE_GRACE_MS: u64 = 250;
+const XPAPP_COMPUTE_NO_SLOT: u32 = u32::MAX;
+
+struct XpappComputeEntry {
+    vm_id: u8,
+    // This is `None` before the entry itself drops: guest code and its
+    // allocation must be destroyed while the VM allocation realm is live.
+    job: Option<GuestComputeJob>,
+    owner: GuestJobOwner,
+}
+
+struct XpappComputeQueue {
+    slot: AtomicU32,
+    started: AtomicBool,
+    in_flight: AtomicU32,
+    jobs: Mutex<VecDeque<XpappComputeEntry>>,
+    wait: crate::wait::WaitQueue,
+}
+
+impl XpappComputeQueue {
+    const fn new() -> Self {
+        Self {
+            slot: AtomicU32::new(XPAPP_COMPUTE_NO_SLOT),
+            started: AtomicBool::new(false),
+            in_flight: AtomicU32::new(0),
+            jobs: Mutex::new(VecDeque::new()),
+            wait: crate::wait::WaitQueue::new(),
+        }
+    }
+}
+
+// Serializes worker start/idle-retire with enqueue. It prevents a band from
+// being added just after the worker decides its queue is empty.
+static XPAPP_COMPUTE_CONTROL: Mutex<()> = Mutex::new(());
+static XPAPP_COMPUTE_QUEUE_RR: AtomicU32 = AtomicU32::new(0);
+static XPAPP_COMPUTE_UNAVAILABLE_LOGGED: AtomicBool = AtomicBool::new(false);
+static XPAPP_COMPUTE_QUEUES: [XpappComputeQueue; XPAPP_COMPUTE_WORKERS] =
+    [const { XpappComputeQueue::new() }; XPAPP_COMPUTE_WORKERS];
 
 struct ServiceLaneActivity {
     active_id: u64,
@@ -726,6 +771,342 @@ pub extern "Rust" fn trueos_service_lane_submit_job(job: BlockingJobFn) -> i32 {
 #[unsafe(no_mangle)]
 pub extern "Rust" fn trueos_tokio_spawn_blocking_job(job: BlockingJobFn) -> i32 {
     trueos_service_lane_submit_job(job)
+}
+
+fn xpapp_compute_claim_slot(
+    slot: u32,
+) -> Option<(
+    crate::workers::ComputeWorkerLease,
+    crate::hv::lane::LaneLease,
+    crate::wls::WorkerIdentityLease,
+)> {
+    let worker = crate::workers::try_claim_compute_worker_on_slot(
+        slot,
+        ComputeWorkerPolicy::PerformanceOnly,
+    )?;
+    let lane = crate::hv::lane::try_lease_guest_compute_lane_for_slot(slot)?;
+    let identity = crate::wls::try_lease_worker_identity(slot)?;
+    Some((worker, lane, identity))
+}
+
+fn xpapp_compute_start_worker(index: usize) -> bool {
+    let Some(queue) = XPAPP_COMPUTE_QUEUES.get(index) else {
+        return false;
+    };
+    if queue.started.load(Ordering::Acquire) {
+        return true;
+    }
+    let remembered = queue.slot.load(Ordering::Acquire);
+    // Preserve the previous slot when it is usable. If another persistent
+    // carrier owns it after idle retirement, scan the remaining P workers
+    // before declaring the pool unavailable.
+    let claimed = (remembered != XPAPP_COMPUTE_NO_SLOT)
+        .then(|| xpapp_compute_claim_slot(remembered))
+        .flatten()
+        .or_else(|| {
+            crate::workers::background_worker_slots()
+                .into_iter()
+                .filter(|slot| *slot != remembered)
+                .filter(|slot| {
+                    crate::workers::core_kind_for_slot(*slot) == crate::workers::CORE_KIND_PERF
+                })
+                .find_map(xpapp_compute_claim_slot)
+        });
+    let Some((worker, lane, identity)) = claimed else {
+        return false;
+    };
+    let slot = worker.cpu_slot();
+    let spawner = worker.spawner();
+    match xpapp_compute_worker(index, worker, lane, identity) {
+        Ok(task) => {
+            queue.slot.store(slot, Ordering::Release);
+            queue.started.store(true, Ordering::Release);
+            spawner.spawn(task);
+            crate::log_important!(target: "service";
+                "xpapp-compute: worker={} slot={} core_kind=perf duty_percent={} burst_ms={} idle_grace_ms={} policy=sticky-shared-executor\n",
+                index, slot, crate::allcaps::cpu_task_pool::GUEST_COMPUTE_DUTY_PERCENT,
+                crate::allcaps::cpu_task_pool::GUEST_COMPUTE_BURST_TICKS,
+                XPAPP_COMPUTE_IDLE_GRACE_MS);
+            true
+        }
+        Err(_) => false,
+    }
+}
+
+fn xpapp_compute_ensure_workers() -> usize {
+    (0..XPAPP_COMPUTE_WORKERS)
+        .filter(|index| xpapp_compute_start_worker(*index))
+        .count()
+}
+
+fn xpapp_compute_enqueue(vm_id: u8, job: GuestComputeJob) -> Result<(), GuestComputeJob> {
+    let _control = XPAPP_COMPUTE_CONTROL.lock();
+    if xpapp_compute_ensure_workers() == 0 {
+        if XPAPP_COMPUTE_UNAVAILABLE_LOGGED
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            crate::log_important!(target: "service";
+                "xpapp-compute: renderer_fallback=scalar reason=no-compatible-performance-worker requested_workers={}\n",
+                XPAPP_COMPUTE_WORKERS);
+        }
+        return Err(job);
+    }
+    let start =
+        XPAPP_COMPUTE_QUEUE_RR.fetch_add(1, Ordering::Relaxed) as usize % XPAPP_COMPUTE_WORKERS;
+    let mut target = None;
+    let mut best_cost = usize::MAX;
+    for offset in 0..XPAPP_COMPUTE_WORKERS {
+        let index = (start + offset) % XPAPP_COMPUTE_WORKERS;
+        let queue = &XPAPP_COMPUTE_QUEUES[index];
+        if !queue.started.load(Ordering::Acquire) {
+            continue;
+        }
+        let cost = compute_budget::queue_cost(
+            queue.jobs.lock().len(),
+            queue.in_flight.load(Ordering::Acquire) as usize,
+        );
+        if cost < best_cost {
+            best_cost = cost;
+            target = Some(index);
+        }
+    }
+    let Some(index) = target else {
+        return Err(job);
+    };
+    let Some(owner) = reserve_guest_job(vm_id) else {
+        return Err(job);
+    };
+    let queue = &XPAPP_COMPUTE_QUEUES[index];
+    let mut jobs = queue.jobs.lock();
+    if jobs.len() >= XPAPP_COMPUTE_QUEUE_CAP {
+        drop(owner);
+        return Err(job);
+    }
+    jobs.push_back(XpappComputeEntry {
+        vm_id,
+        job: Some(job),
+        owner,
+    });
+    drop(jobs);
+    queue.wait.notify_one();
+    crate::remote_work_wake::wake_cpu_for_remote_work(queue.slot.load(Ordering::Acquire));
+    Ok(())
+}
+
+#[inline]
+fn xpapp_compute_cycles() -> u64 {
+    unsafe {
+        core::arch::x86_64::_mm_lfence();
+        core::arch::x86_64::_rdtsc()
+    }
+}
+
+#[inline]
+fn xpapp_compute_burst_cycles() -> u64 {
+    compute_budget::burst_cycles(
+        crate::time::tsc_hz(),
+        crate::allcaps::cpu_task_pool::GUEST_COMPUTE_BURST_TICKS,
+    )
+}
+
+#[trueos_executor::task(pool_size = XPAPP_COMPUTE_WORKERS)]
+async fn xpapp_compute_worker(
+    index: usize,
+    _worker: crate::workers::ComputeWorkerLease,
+    mut lane: crate::hv::lane::LaneLease,
+    identity: crate::wls::WorkerIdentityLease,
+) {
+    let queue = &XPAPP_COMPUTE_QUEUES[index];
+    let mut burst_cycles = 0u64;
+    let mut cooldown_debt = CooldownDebt::default();
+    loop {
+        // Take the generation before examining the queue. A producer that
+        // races this empty check will then make `wait_after_timeout` return
+        // immediately rather than losing its wake for the idle grace period.
+        let observed = queue.wait.observe();
+        let entry = queue.jobs.lock().pop_front();
+        let Some(mut entry) = entry else {
+            queue
+                .wait
+                .wait_after_timeout(observed, XPAPP_COMPUTE_IDLE_GRACE_MS)
+                .await;
+            let _control = XPAPP_COMPUTE_CONTROL.lock();
+            if queue.jobs.lock().is_empty() {
+                queue.started.store(false, Ordering::Release);
+                return;
+            }
+            continue;
+        };
+        queue.in_flight.fetch_add(1, Ordering::AcqRel);
+        lane.set_vm_owner(entry.vm_id);
+        let started = xpapp_compute_cycles();
+        let slice_cycles = xpapp_compute_burst_cycles()
+            .saturating_sub(burst_cycles)
+            .max(1);
+        let result = {
+            let _wls = identity.enter();
+            crate::r::kernel_task_domain::with(
+                crate::r::kernel_task_domain::KernelTaskDomain::TokioCarrier,
+                Some(entry.vm_id),
+                || {
+                    crate::allocators::with_hv_guest_alloc_domain(entry.vm_id, || {
+                        // Keep the guest realm and WLS identity across a full
+                        // bounded slice. An eight-row raster step is only the
+                        // preemption granularity; rebuilding those identities
+                        // for every step would put the old call-chain overhead
+                        // straight back on the frame path.
+                        let cancelled = guest_job_cancellation_requested(entry.vm_id);
+                        let mut more = !cancelled;
+                        while more {
+                            more = (entry.job.as_mut().expect("queued compute job"))();
+                            if !more || xpapp_compute_cycles().wrapping_sub(started) >= slice_cycles
+                            {
+                                break;
+                            }
+                        }
+                        // A closed VM, or a completed job, must release the
+                        // closure in its guest realm so lifetime teardown can
+                        // observe the owner after this scope exits.
+                        if !more {
+                            drop(entry.job.take());
+                        }
+                        more
+                    })
+                },
+            )
+        };
+        lane.clear_vm_owner();
+        let Some(more) = result else {
+            let vm_id = entry.vm_id;
+            core::mem::forget(entry);
+            queue.in_flight.fetch_sub(1, Ordering::AcqRel);
+            crate::log_error!(target: "service";
+                "xpapp-compute: guest allocation domain unavailable vm={} resources=retained\n", vm_id);
+            return;
+        };
+        burst_cycles = burst_cycles.saturating_add(xpapp_compute_cycles().wrapping_sub(started));
+        queue.in_flight.fetch_sub(1, Ordering::AcqRel);
+        if more {
+            queue.jobs.lock().push_back(entry);
+        }
+        if burst_cycles >= xpapp_compute_burst_cycles() {
+            let cooldown = cooldown_debt.request_timer_ticks(
+                burst_cycles,
+                crate::allcaps::cpu_task_pool::GUEST_COMPUTE_DUTY_PERCENT,
+                crate::time::tsc_hz(),
+                embassy_time_driver::TICK_HZ,
+            );
+            burst_cycles = 0;
+            if cooldown != 0 {
+                let started = xpapp_compute_cycles();
+                Timer::after(EmbassyDuration::from_ticks(cooldown)).await;
+                cooldown_debt.settle_paid_cycles(xpapp_compute_cycles().wrapping_sub(started));
+                cooldown_debt.cap_credit_cycles(compute_budget::cooldown_cycles(
+                    xpapp_compute_burst_cycles(),
+                    crate::allcaps::cpu_task_pool::GUEST_COMPUTE_DUTY_PERCENT,
+                ));
+            }
+            // Credit can skip a timer wait, never this cooperative executor
+            // boundary. Other ready work gets a turn after every ~4 ms burst.
+            crate::hv::execution_policy::yield_executor_turn().await;
+        }
+    }
+}
+
+fn submit_guest_compute_job(vm_id: u8, job: GuestComputeJob) -> i32 {
+    // The persistent scheduler queue belongs to the kernel.  Its VecDeque,
+    // worker-start scan, and task storage must therefore be allocated in the
+    // host realm; only the submitted closure itself belongs to the guest.
+    let raw = Box::into_raw(job);
+    let rejected = crate::allocators::with_host_alloc_domain_strong(|| unsafe {
+        let job = Box::from_raw(raw);
+        match xpapp_compute_enqueue(vm_id, job) {
+            Ok(()) => None,
+            Err(job) => Some(Box::into_raw(job)),
+        }
+    });
+    let Some(raw) = rejected else {
+        return 0;
+    };
+    // A rejection must still run the guest closure's destructor in the guest
+    // realm. If that realm is already gone, retain it rather than corrupting
+    // the host allocator; it cannot be safely destroyed after this point.
+    match crate::allocators::with_hv_guest_alloc_domain(vm_id, || unsafe {
+        drop(Box::from_raw(raw));
+    }) {
+        Some(()) => -2,
+        None => {
+            crate::log_error!(target: "service";
+                "xpapp-compute: submission allocation domain unavailable vm={} resources=retained\n", vm_id);
+            -2
+        }
+    }
+}
+
+/// Host-side half of the Hull VMCALL path.  This function owns the raw closure
+/// on every result so a rejection drops it under the VM allocation domain;
+/// callers must never reconstruct it after this call returns.
+pub unsafe fn submit_guest_compute_job_from_raw(vm_id: u8, data: usize, vtable: usize) -> i32 {
+    if data == 0 || vtable == 0 {
+        return -5;
+    }
+    let raw: *mut (dyn FnMut() -> bool + Send + 'static) =
+        unsafe { core::mem::transmute((data, vtable)) };
+    let job: GuestComputeJob = unsafe { Box::from_raw(raw) };
+    submit_guest_compute_job(vm_id, job)
+}
+
+/// Submit one finite CPU band to XPAPP's two-worker strict-P-core pool.
+/// A rejection consumes and drops the closure; callers retain the serial
+/// fallback input separately and must not retry the same owned closure.
+#[unsafe(no_mangle)]
+pub extern "Rust" fn trueos_guest_compute_submit_job(job: GuestComputeJob) -> i32 {
+    if let Some(vm_id) = crate::hv::current_hull_guest_context_vm_id() {
+        let raw = Box::into_raw(job);
+        let (data, vtable): (usize, usize) = unsafe { core::mem::transmute(raw) };
+        let (status, rc) = crate::hv::vmcall::guest_call(
+            crate::hv::vmcall::OP_BP_GUEST_COMPUTE_SUBMIT,
+            data as u64,
+            vtable as u64,
+        );
+        if status == crate::hv::vmcall::STATUS_OK {
+            return rc as i32;
+        }
+        // The host did not receive ownership on a transport failure; this is
+        // still the Hull's guest allocation realm.
+        unsafe { drop(Box::from_raw(raw)) };
+        return -6;
+    }
+    let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() else {
+        return -2;
+    };
+    submit_guest_compute_job(vm_id, job)
+}
+
+#[unsafe(no_mangle)]
+pub extern "Rust" fn trueos_guest_compute_capacity() -> usize {
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let (status, count) =
+            crate::hv::vmcall::guest_call(crate::hv::vmcall::OP_BP_GUEST_COMPUTE_CAPACITY, 0, 0);
+        return if status == crate::hv::vmcall::STATUS_OK {
+            count as usize
+        } else {
+            0
+        };
+    }
+    guest_compute_capacity()
+}
+
+pub(crate) fn guest_compute_capacity() -> usize {
+    crate::allocators::with_host_alloc_domain_strong(|| {
+        let _control = XPAPP_COMPUTE_CONTROL.lock();
+        xpapp_compute_ensure_workers();
+        XPAPP_COMPUTE_QUEUES
+            .iter()
+            .filter(|queue| queue.started.load(Ordering::Acquire))
+            .count()
+    })
 }
 
 /// Advisory native capacity, independent of std thread counts and archive names.
