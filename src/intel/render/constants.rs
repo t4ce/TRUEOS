@@ -158,7 +158,7 @@ const GPU_VA_DRAW_STATE_BASE: u64 = 0x0086_0000;
 const GPU_VA_RESIDENT_SCENE_STATE_BASE: u64 = 0x3000_0000;
 // The retained transform secondary state blob occupies 8 KiB. Keep the
 // renderer's bounded batch reservation inside the fixed Render1 GGTT window.
-const RESIDENT_SCENE_MAX_DRAWS: usize = 340;
+pub(crate) const RESIDENT_SCENE_MAX_DRAWS: usize = 340;
 // The full material VS/PS plus relocated optional GS code and aligned
 // descriptors exceed 8 KiB. The canonical-position cube HS keeps its 132
 // corner-to-position map and 24 immediate position cases in code; it needs

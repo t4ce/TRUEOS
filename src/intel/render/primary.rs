@@ -630,7 +630,7 @@ fn resident_scene_batch_state(
         return Ok(state);
     }
     let Some((phys, virt)) =
-        crate::dma::alloc(RESIDENT_SCENE_STATE_BYTES, crate::intel::WARM_ALIGN)
+        crate::dma::alloc_ppgtt(RESIDENT_SCENE_STATE_BYTES, crate::intel::WARM_ALIGN)
     else {
         return Err("scene-frame-state-alloc");
     };
@@ -1070,7 +1070,7 @@ fn prepare_resident_scene_msaa_allocation(
     }
 
     let Some((storage_phys, storage_virt)) =
-        crate::dma::alloc(required_bytes, crate::intel::WARM_ALIGN)
+        crate::dma::alloc_ppgtt(required_bytes, crate::intel::WARM_ALIGN)
     else {
         return Err("resident-scene-msaa-alloc");
     };
@@ -1259,7 +1259,7 @@ fn prepare_resident_scene_depth(
             allocation
         } else {
             let Some((storage_phys, storage_virt)) =
-                crate::dma::alloc(RESIDENT_SCENE_DEPTH_BYTES, crate::intel::WARM_ALIGN)
+                crate::dma::alloc_ppgtt(RESIDENT_SCENE_DEPTH_BYTES, crate::intel::WARM_ALIGN)
             else {
                 return Err("resident-scene-depth-alloc");
             };

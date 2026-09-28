@@ -10,6 +10,11 @@ struct PreparedRasterDecoded {
     clear_rgba8: u32,
 }
 
+const _: () = assert!(
+    v::vgpu::MAX_PREPARED_RASTER_SUBMIT_DRAWS
+        <= crate::intel::render::RESIDENT_SCENE_MAX_DRAWS
+);
+
 fn prepared_raster_texture(
     device: &mut VirtualDevice,
     desc: &v::vgpu::PreparedRasterDrawV1,
@@ -132,7 +137,7 @@ pub(crate) fn submit_ui4_prepared_raster_batch_v1(
 ) -> Result<Ui4SurfaceIndexedCompletion, VgpuError> {
     let timing_start = crate::chronos::monotonic_nanos();
     let count = batch.draw_count as usize;
-    if count == 0 || count > v::vgpu::MAX_PREPARED_RASTER_DRAWS || batch.reserved != 0
+    if count == 0 || count > v::vgpu::MAX_PREPARED_RASTER_SUBMIT_DRAWS || batch.reserved != 0
         || batch.draws[count..].iter().any(|draw| *draw != v::vgpu::PreparedRasterDrawV1::default()) {
         return Err(VgpuError::Unsupported);
     }

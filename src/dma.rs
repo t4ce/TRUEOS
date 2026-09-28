@@ -1,10 +1,11 @@
 use core::alloc::Layout;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 const MIN_DMA_BASE: u64 = 64 * 1024;
 const DMA_MAX_PHYS: u64 = 0x1_0000_0000;
 
 static DMA_READY: AtomicBool = AtomicBool::new(false);
+static DMA_FAILURES: AtomicUsize = AtomicUsize::new(0);
 
 pub fn init_from_limine() {
     if crate::limine::hhdm_offset().is_none() {
@@ -28,7 +29,19 @@ pub fn alloc(size: usize, align: usize) -> Option<(u64, *mut u8)> {
 /// inherit the generic 32-bit DMA ceiling. Callers must still prove that their
 /// page-table format accepts the returned physical range.
 pub fn alloc_ppgtt(size: usize, align: usize) -> Option<(u64, *mut u8)> {
-    alloc_with_max(size, align, None)
+    if size == 0 || !ensure_ready() {
+        return None;
+    }
+    let layout = Layout::from_size_align(size, align.max(1)).ok()?;
+    // Preserve scarce low memory for devices that really require 32-bit DMA.
+    // The PMM otherwise uses ascending first-fit even for unrestricted callers.
+    let phys = alloc_ppgtt_phys(size, layout.align())?;
+    Some((phys, crate::phys::phys_to_virt(phys as usize) as *mut u8))
+}
+
+fn alloc_ppgtt_phys(size: usize, align: usize) -> Option<u64> {
+    crate::phys::alloc_phys_range(size, align, DMA_MAX_PHYS, None)
+        .or_else(|| crate::phys::alloc_phys_range(size, align, MIN_DMA_BASE, Some(DMA_MAX_PHYS)))
 }
 
 pub fn alloc_with_max(
@@ -74,7 +87,22 @@ fn alloc_from_pmm(
     align: usize,
     max_phys_exclusive: Option<u64>,
 ) -> Option<(u64, *mut u8)> {
-    let phys = crate::phys::alloc_phys_range(size, align.max(1), MIN_DMA_BASE, max_phys_exclusive)?;
+    let phys = crate::phys::alloc_phys_range(size, align.max(1), MIN_DMA_BASE, max_phys_exclusive);
+    let Some(phys) = phys else {
+        let failure = DMA_FAILURES.fetch_add(1, Ordering::Relaxed) + 1;
+        if failure <= 8 || failure.is_power_of_two() {
+            let eligible = crate::phys::pmm_range_stats(MIN_DMA_BASE, max_phys_exclusive);
+            let all = crate::phys::pmm_stats();
+            crate::log_warn!(target: "gfx";
+                "dma: allocation-failed seq={} bytes={} align={} max_phys={:?} eligible_free={} eligible_largest={} total_free={}\n",
+                failure, size, align, max_phys_exclusive,
+                eligible.map_or(0, |s| s.free_bytes),
+                eligible.map_or(0, |s| s.largest_free_region),
+                all.map_or(0, |s| s.free_bytes),
+            );
+        }
+        return None;
+    };
     let virt = crate::phys::phys_to_virt(phys as usize) as *mut u8;
     Some((phys, virt))
 }

@@ -337,18 +337,22 @@ pub fn free_phys_range(start: u64, size: usize) -> bool {
 /// `total_bytes` is the usable memory admitted when the PMM was initialized;
 /// `free_bytes` and the fragmentation fields reflect the current free list.
 pub fn pmm_stats() -> Option<PmmStats> {
+    pmm_range_stats(0, None)
+}
+
+/// Snapshot free memory eligible for an address-constrained allocation.
+pub fn pmm_range_stats(min_phys: u64, max_phys: Option<u64>) -> Option<PmmStats> {
     let guard = PMM.lock();
     let state = guard.as_ref()?;
+    let lengths = state.regions.iter().map(|region| {
+        region.end.min(max_phys.unwrap_or(u64::MAX))
+            .saturating_sub(region.start.max(min_phys))
+    });
     Some(PmmStats {
         total_bytes: state.initial_bytes,
-        free_bytes: state.total_bytes(),
-        largest_free_region: state
-            .regions
-            .iter()
-            .map(|region| region.end.saturating_sub(region.start))
-            .max()
-            .unwrap_or(0),
-        free_regions: state.region_count(),
+        free_bytes: lengths.clone().sum(),
+        largest_free_region: lengths.clone().max().unwrap_or(0),
+        free_regions: lengths.filter(|length| *length != 0).count(),
     })
 }
 

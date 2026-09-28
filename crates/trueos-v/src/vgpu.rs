@@ -242,6 +242,9 @@ pub const MAX_INDEXED_BATCH_DRAWS: usize = 16;
 pub const MAX_INDEXED_BATCH_V2_DRAWS: usize = 600;
 /// WC3 CPU geometry preparation feeds one ordered GPU raster frame.
 pub const MAX_PREPARED_RASTER_DRAWS: usize = 600;
+/// Active submission limit imposed by the resident renderer's state slots.
+/// The fixed 600-entry ABI array remains unchanged for wire compatibility.
+pub const MAX_PREPARED_RASTER_SUBMIT_DRAWS: usize = 340;
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
 #[repr(C)]
@@ -1015,7 +1018,7 @@ impl Device {
         mut batch: PreparedRasterBatchV1,
     ) -> Result<TimelinePoint, i32> {
         if queue.device != self || surface.device != self || batch.draw_count == 0
-            || batch.draw_count as usize > MAX_PREPARED_RASTER_DRAWS {
+            || batch.draw_count as usize > MAX_PREPARED_RASTER_SUBMIT_DRAWS {
             return Err(ERR_BAD_HANDLE);
         }
         let mut surface = surface;
