@@ -10,6 +10,20 @@ layout(location=2) out float fog_distance;
 vec3 safe_normalize(vec3 v) { float d=length(v); return d>0.0 ? v/d : vec3(0); }
 float safe_pow(float x, float exponent) { return exponent==0.0 ? 1.0 : (x<=0.0 ? 0.0 : pow(x,exponent)); }
 void main() {
+    // The XP bridge can finish transform, lighting and clipping on the CPU.
+    // normal.x then carries its eye-space fog distance; the other attributes
+    // are already in the shader's interpolation domain.
+    if(s[90].x != 0.0) {
+        float near_depth=s[90].z, far_depth=s[90].w;
+        float ranged_z=(far_depth-near_depth)*position.z+
+            (far_depth+near_depth+2.0*normal.y-1.0)*position.w;
+        gl_Position=vec4(position.xy*s[27].xy+position.w*s[27].zw,
+            (ranged_z+position.w)*0.5,position.w);
+        texcoord=uv;
+        fog_distance=normal.x;
+        primary=clamp(color,0.0,1.0);
+        return;
+    }
     vec4 eye=mat4(s[0],s[1],s[2],s[3])*position;
     vec4 clip=mat4(s[4],s[5],s[6],s[7])*eye;
     gl_Position=vec4(clip.xy*s[27].xy+clip.w*s[27].zw,

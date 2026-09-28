@@ -2483,6 +2483,7 @@ pub(crate) fn render_prepared_text_stamp_to_ui4(
                 prepared.built.bounds,
             )?;
             let draw = crate::intel::render::ResidentSceneDraw {
+                depth_flags: None,
                 mesh: &mesh,
                 rgba: color,
                 sampled_texture: None,
@@ -2776,6 +2777,7 @@ pub(crate) fn render_ui4_font_document_view(
         return Err("font-document-viewport");
     }
     let draw = crate::intel::render::ResidentSceneDraw {
+        depth_flags: None,
         mesh: &document.mesh,
         rgba: document.color,
         sampled_texture: None,

@@ -49,6 +49,16 @@ State rows (all finite float32, matrices column-major):
 | 38+7i | Light enable, omnidirectional spotlight flag |
 | 88 | Blend enable, RGB source factor, RGB destination factor |
 | 89 | Alpha source factor, alpha destination factor |
+| 90 | Prepared raster mode: x = 1 for CPU-clipped vertices, y = texture format ordinal (Alpha 0, Luminance 1, LuminanceAlpha 2, RGB 3, RGBA 4, Intensity 5), z/w = depth near/far |
+
+Prepared raster mode consumes position as clip coordinates, normal.x as the
+CPU-computed eye-space fog distance, normal.y as the triangle's polygon depth
+bias, color as the lit primary color, and UV as already transformed homogeneous
+texture coordinates. The vertex shader applies row 27's viewport mapping and
+row 90's depth range, then forwards color, UV and fog to the same fragment
+shader. The fragment shader applies the GL texture environment using row 90's
+original texture format. A batch can contain up to 600 ordered draws against
+one resident UI4 surface and one depth attachment.
 
 The GPU transforms vertices and normals, evaluates all eight lights, preserves
 clip W through clipping/perspective interpolation, combines texture and primary

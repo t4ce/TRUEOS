@@ -562,6 +562,25 @@ pub(crate) fn broker_ui4_indexed_batch_submit_v2(
     })
 }
 
+pub(crate) fn broker_ui4_prepared_raster_batch_v1(
+    principal: Principal,
+    device: u64,
+    queue: u64,
+    batch: v::vgpu::PreparedRasterBatchV1,
+) -> Result<v::vgpu::TimelinePoint, i32> {
+    let owner = ui4_owner(principal)?;
+    let completed = vgpu::submit_ui4_prepared_raster_batch_v1(
+        principal, DeviceHandle::from_raw(device), QueueHandle::from_raw(queue), batch,
+    ).map_err(|error| error.errno())?;
+    crate::ui4::blueprint_text::complete_vgpu_resident_surface_submission(
+        owner, completed.window_id, completed.surface.handle.raw(), completed.release,
+    )?;
+    Ok(v::vgpu::TimelinePoint {
+        value: completed.point.value,
+        physical_serial: completed.point.physical_serial,
+    })
+}
+
 pub(crate) fn broker_retained_mesh_create(
     principal: Principal,
     device: u64,
@@ -1225,6 +1244,35 @@ pub unsafe extern "C" fn trueos_cabi_vgpu_ui4_indexed_batch_submit_v2(
             unsafe { out_point.write(point) };
             0
         }
+        Err(rc) => rc,
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_vgpu_ui4_prepared_raster_batch_v1(
+    device: u64,
+    queue: u64,
+    batch: *const v::vgpu::PreparedRasterBatchV1,
+    out_point: *mut v::vgpu::TimelinePoint,
+) -> i32 {
+    if batch.is_null() || out_point.is_null() { return -14; }
+    let batch = unsafe { batch.read() };
+    let payload = unsafe {
+        core::slice::from_raw_parts(
+            (&batch as *const v::vgpu::PreparedRasterBatchV1).cast::<u8>(),
+            core::mem::size_of::<v::vgpu::PreparedRasterBatchV1>(),
+        )
+    };
+    let result = if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        guest_record(
+            trueos_vm::vmcall::OP_BP_VGPU_UI4_PREPARED_RASTER_BATCH_V1,
+            device, queue, payload,
+        )
+    } else {
+        broker_ui4_prepared_raster_batch_v1(direct_principal(), device, queue, batch)
+    };
+    match result {
+        Ok(point) => { unsafe { out_point.write(point) }; 0 }
         Err(rc) => rc,
     }
 }

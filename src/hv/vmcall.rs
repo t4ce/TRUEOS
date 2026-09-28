@@ -160,6 +160,7 @@ pub const OP_BP_CHILD_TERMINATE_V1: u32 = 0x140; // arg0 child handle -> rc
 pub const OP_BP_IMG_OPEN_V1: u32 = 0x17B; // NUL-separated TRUEOSFS paths -> queued/rc
 pub const OP_BP_VGPU_UI4_INDEXED_BATCH_SUBMIT: u32 = 0x141; // arg0 device,arg1 queue,payload IndexedDrawBatch -> TimelinePoint
 pub const OP_BP_VGPU_UI4_INDEXED_BATCH_SUBMIT_V2: u32 = 0x14C; // arg0 device,arg1 queue,payload IndexedDrawBatchV2 -> TimelinePoint
+pub const OP_BP_VGPU_UI4_PREPARED_RASTER_BATCH_V1: u32 = 0x218; // arg0 device,arg1 queue,payload PreparedRasterBatchV1 -> TimelinePoint
 pub const OP_BP_VGPU_RETAINED_MESH_CREATE: u32 = 0x14D; // arg0 device,payload RetainedMeshDescriptor -> handle
 pub const OP_BP_VGPU_RETAINED_MESH_DESTROY: u32 = 0x14E; // arg0 device,arg1 mesh -> rc
 pub const OP_BP_VGPU_RETAINED_FRAME_SUBMIT: u32 = 0x14F; // arg0 device,arg1 queue,payload RetainedFrameSubmit -> TimelinePoint
@@ -174,6 +175,7 @@ const _: () = {
     assert!(OP_BP_VGPU_RETAINED_FRAME_SUBMIT_V2 == 0x179);
     assert!(OP_BP_VGPU_RETAINED_FRAME_SUBMIT_V3 == 0x17A);
     assert!(core::mem::size_of::<v::vgpu::IndexedDrawBatchV2>() <= PAYLOAD_CAP);
+    assert!(core::mem::size_of::<v::vgpu::PreparedRasterBatchV1>() <= PAYLOAD_CAP);
     assert!(core::mem::size_of::<v::vgpu::RetainedMeshDescriptor>() <= PAYLOAD_CAP);
     assert!(core::mem::size_of::<v::vgpu::RetainedFrameSubmit>() <= PAYLOAD_CAP);
     assert!(core::mem::size_of::<v::vgpu::RetainedFrameSubmitV2>() <= PAYLOAD_CAP);
@@ -1623,6 +1625,23 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
                 crate::r::io::vgpu_cabi::broker_ui4_indexed_batch_submit_v2(
                     principal, arg0, arg1, batch,
                 )
+            });
+            match result {
+                Ok(point) => write_record_response(vm_id, seq, 0, &point),
+                Err(rc) => write_response(vm_id, seq, STATUS_OK, (rc as i64) as u64, 0),
+            }
+            DispatchOutcome::Resume
+        }
+        OP_BP_VGPU_UI4_PREPARED_RASTER_BATCH_V1 => {
+            let principal = crate::gpu::vgpu::Principal::HullGuest(vm_id as u16);
+            let batch = request_payload(vm_id, req_len)
+                .filter(|payload| payload.len() == core::mem::size_of::<v::vgpu::PreparedRasterBatchV1>())
+                .map(|payload| unsafe {
+                    core::ptr::read_unaligned(payload.as_ptr().cast::<v::vgpu::PreparedRasterBatchV1>())
+                });
+            let result = batch.ok_or(-22).and_then(|batch| {
+                crate::r::io::vgpu_cabi::broker_ui4_prepared_raster_batch_v1(
+                    principal, arg0, arg1, batch)
             });
             match result {
                 Ok(point) => write_record_response(vm_id, seq, 0, &point),

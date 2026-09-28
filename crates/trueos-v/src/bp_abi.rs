@@ -1398,6 +1398,12 @@ unsafe extern "C" {
         batch: *const crate::vgpu::IndexedDrawBatchV2,
         out_point: *mut crate::vgpu::TimelinePoint,
     ) -> i32;
+    pub fn trueos_cabi_vgpu_ui4_prepared_raster_batch_v1(
+        device: u64,
+        queue: u64,
+        batch: *const crate::vgpu::PreparedRasterBatchV1,
+        out_point: *mut crate::vgpu::TimelinePoint,
+    ) -> i32;
     pub fn trueos_cabi_vgpu_retained_mesh_create(
         device: u64,
         descriptor: *const crate::vgpu::RetainedMeshDescriptor,

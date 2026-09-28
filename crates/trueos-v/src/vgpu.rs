@@ -240,6 +240,46 @@ pub const MAX_INDEXED_BATCH_DRAWS: usize = 16;
 /// The mixed-topology V2 batch maps directly to the resident renderer's
 /// 600-draw scene capacity. V1 remains at 16 for ABI compatibility.
 pub const MAX_INDEXED_BATCH_V2_DRAWS: usize = 600;
+/// WC3 CPU geometry preparation feeds one ordered GPU raster frame.
+pub const MAX_PREPARED_RASTER_DRAWS: usize = 600;
+
+#[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]
+#[repr(C)]
+pub struct PreparedRasterDrawV1 {
+    /// Byte offsets into the batch's shared vertex and index buffers.
+    pub vertex_offset: u64,
+    pub state_offset: u64,
+    pub index_offset: u64,
+    pub texture: u64,
+    pub index_count: u32,
+    pub texture_width: u32,
+    pub texture_height: u32,
+    pub texture_pitch: u32,
+    pub sampler_flags: u32,
+    pub flags: u32,
+    pub clear_rgba8: u32,
+    pub reserved: u32,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[repr(C)]
+pub struct PreparedRasterBatchV1 {
+    pub surface: u64,
+    pub pipeline: u64,
+    pub vertex_buffer: u64,
+    pub index_buffer: u64,
+    pub draw_count: u32,
+    pub reserved: u32,
+    pub draws: [PreparedRasterDrawV1; MAX_PREPARED_RASTER_DRAWS],
+}
+
+impl Default for PreparedRasterBatchV1 {
+    fn default() -> Self {
+        Self { surface: 0, pipeline: 0, vertex_buffer: 0, index_buffer: 0,
+            draw_count: 0, reserved: 0,
+            draws: [PreparedRasterDrawV1::default(); MAX_PREPARED_RASTER_DRAWS] }
+    }
+}
 /// Largest integer point width accepted through `IndexedBatchDrawV2::reserved`.
 /// Zero selects the renderer default; nonzero values are valid only for
 /// `PRIMITIVE_TOPOLOGY_POINT_LIST`.
@@ -963,6 +1003,35 @@ impl Device {
         Ok(point)
     }
 
+    /// Rasterize an ordered frame of CPU-prepared WC3 triangles onto one UI4
+    /// surface. Vertex, state and index ranges share the two batch buffers.
+    pub fn submit_ui4_prepared_raster_batch_v1(
+        self,
+        queue: Queue,
+        surface: Ui4Surface,
+        pipeline: RenderPipeline,
+        vertex_buffer: Buffer,
+        index_buffer: Buffer,
+        mut batch: PreparedRasterBatchV1,
+    ) -> Result<TimelinePoint, i32> {
+        if queue.device != self || surface.device != self || batch.draw_count == 0
+            || batch.draw_count as usize > MAX_PREPARED_RASTER_DRAWS {
+            return Err(ERR_BAD_HANDLE);
+        }
+        let mut surface = surface;
+        batch.surface = surface.surface.0;
+        batch.pipeline = pipeline.0;
+        batch.vertex_buffer = vertex_buffer.0;
+        batch.index_buffer = index_buffer.0;
+        let mut point = TimelinePoint::default();
+        rc_result(unsafe {
+            vcabi::trueos_cabi_vgpu_ui4_prepared_raster_batch_v1(
+                self.0, queue.handle, &batch, &mut point)
+        })?;
+        surface.live = false;
+        Ok(point)
+    }
+
     pub fn create_retained_mesh(
         self,
         vertex_buffer: Buffer,
@@ -1384,6 +1453,6 @@ mod tests {
 
 /// Fixed GL draw package: 96 vec4 state prefix, followed by pos/normal/color/UV vec4 vertices.
 /// State layout is documented in tools/wc3-fixed-bake/README.md. Vertex offset is 1536.
-pub const SHADER_PACKAGE_WC3_FIXED_FNV1A64: u64 = 0xBE35A9A071EF89BC;
+pub const SHADER_PACKAGE_WC3_FIXED_FNV1A64: u64 = 0xB6F378E95F39BB1E;
 pub const WC3_FIXED_STATE_FLOATS: usize = 384;
 pub const WC3_FIXED_STATE_BYTES: usize = 1536;

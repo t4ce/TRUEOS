@@ -3349,6 +3349,7 @@ pub(crate) fn submit_ui4_indexed_draw(
         }
     };
     let scene_draw = crate::intel::render::ResidentSceneDraw {
+        depth_flags: None,
         mesh: &mesh,
         rgba: if geometry_clear {
             if draw.load_color { [0; 4] } else { draw.clear_rgba8_srgb.to_le_bytes() }
@@ -3832,6 +3833,7 @@ pub(crate) fn submit_ui4_indexed_batch(
         .zip(indexed.iter())
         .map(|(mesh, (_, rgba, _, topology, point_width_px))| {
             crate::intel::render::ResidentSceneDraw {
+                depth_flags: None,
                 mesh,
                 rgba: rgba.to_le_bytes(),
                 sampled_texture: None,
@@ -4854,6 +4856,7 @@ pub(crate) fn submit_ui4_retained_frame(
         .iter()
         .zip(&submit.static_draws[..static_draw_count])
         .map(|(mesh, draw)| crate::intel::render::ResidentSceneDraw {
+            depth_flags: None,
             mesh,
             rgba: draw.rgba8_srgb.to_le_bytes(),
             sampled_texture: None,
@@ -4968,6 +4971,8 @@ fn rollback_indexed_submission_lease(
         }
     }
 }
+
+include!("prepared_raster.rs");
 
 /// Undo the three in-broker reservations made before a retained frame's
 /// material descriptor is fully validated. This is deliberately local to the

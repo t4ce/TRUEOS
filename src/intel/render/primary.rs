@@ -282,6 +282,8 @@ pub(crate) fn submit_resident_font_mesh_once(
 
 pub(crate) struct ResidentSceneDraw<'a> {
     pub(crate) mesh: &'a ResidentTriangleMesh,
+    /// Per-draw WC3 depth/clear state; legacy scene callers use their frame state.
+    pub(crate) depth_flags: Option<u32>,
     pub(crate) rgba: [u8; 4],
     pub(crate) sampled_texture: Option<&'a ResidentSampledTexture>,
     pub(crate) fragment_contract: ResidentSceneFragmentContract,
@@ -2895,11 +2897,29 @@ fn submit_resident_scene_geometry_batched(
         if opaque_depth_enabled && scene_draw.rgba[3] == 0 {
             continue;
         }
+        let draw_flags = scene_draw.depth_flags;
         let (blend_mode, draw_depth) = if let Some(depth) = drawable_depth {
-            (if depth.geometry_clear && depth.preserve_color {
+            let geometry_clear = draw_flags.is_some_and(|flags| flags & v::vgpu::INDEXED_DRAW_GEOMETRY_CLEAR != 0)
+                || (draw_flags.is_none() && depth.geometry_clear);
+            let preserve_color = draw_flags.is_some_and(|flags| flags & v::vgpu::INDEXED_DRAW_LOAD_COLOR != 0)
+                || (draw_flags.is_none() && depth.preserve_color);
+            let mut config = depth.config;
+            if let Some(flags) = draw_flags {
+                if let Some(ref mut config) = config {
+                    config.write_enabled = geometry_clear && flags & v::vgpu::INDEXED_DRAW_CLEAR_DEPTH != 0
+                        || flags & v::vgpu::INDEXED_DRAW_DEPTH_WRITE != 0;
+                    config.compare_function = if geometry_clear {
+                        COMPARE_FUNCTION_ALWAYS
+                    } else {
+                        drawable_depth_compare(flags >> v::vgpu::INDEXED_DRAW_DEPTH_COMPARE_SHIFT)
+                    };
+                }
+            }
+            (if geometry_clear && preserve_color {
                 TriangleBlendProbeMode::StraightAlpha
             } else { TriangleBlendProbeMode::MesaZeroedState },
-            if depth.test { depth.config } else { None })
+            if draw_flags.is_some_and(|flags| flags & (v::vgpu::INDEXED_DRAW_DEPTH_TEST | v::vgpu::INDEXED_DRAW_CLEAR_DEPTH) != 0)
+                || (draw_flags.is_none() && depth.test) { config } else { None })
         } else if opaque_depth_enabled {
             let write_enabled = scene_draw.rgba[3] == u8::MAX;
             let mut depth = depth_config.ok_or("scene-frame-depth")?;
@@ -2915,7 +2935,12 @@ fn submit_resident_scene_geometry_batched(
         } else {
             (TriangleBlendProbeMode::StraightAlpha, None)
         };
+        let preserve_depth_clear_color = draw_flags.is_some_and(|flags|
+            flags & (v::vgpu::INDEXED_DRAW_GEOMETRY_CLEAR | v::vgpu::INDEXED_DRAW_LOAD_COLOR)
+                == (v::vgpu::INDEXED_DRAW_GEOMETRY_CLEAR | v::vgpu::INDEXED_DRAW_LOAD_COLOR));
         let blend_mode = match scene_draw.fragment_contract {
+            ResidentSceneFragmentContract::FixedGl(_) if preserve_depth_clear_color =>
+                TriangleBlendProbeMode::StraightAlpha,
             ResidentSceneFragmentContract::FixedGl(state) if state[5] != 0 => {
                 TriangleBlendProbeMode::FixedFunction {
                     source_color: state[6] as u8,

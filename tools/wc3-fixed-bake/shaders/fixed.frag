@@ -49,11 +49,38 @@ void main() {
     int env=int(s[25].x);
     if(env!=0) {
         vec4 t=sample_gl(texcoord.xy/texcoord.w);
+        if(s[90].x!=0.0) {
+            int fmt=int(s[90].y); // Alpha, Luminance, LA, RGB, RGBA, Intensity.
+            bool alpha=fmt==0||fmt==2||fmt==4||fmt==5;
+            bool luminance=fmt==1||fmt==2||fmt==5;
+            vec3 tc=luminance ? t.xxx : t.rgb;
+            if(env==1) { // MODULATE
+                if(fmt==0) c=vec4(primary.rgb,primary.a*t.a);
+                else c=vec4(primary.rgb*tc,primary.a*(alpha?t.a:1.0));
+            }
+            if(env==2) { // DECAL, only RGB/RGBA admitted by the CPU bridge.
+                c=fmt==3 ? vec4(t.rgb,primary.a) :
+                    vec4(mix(primary.rgb,t.rgb,t.a),primary.a);
+            }
+            if(env==3) { // REPLACE
+                if(fmt==0) c=vec4(primary.rgb,t.a);
+                else if(fmt==1) c=vec4(t.xxx,primary.a);
+                else if(fmt==2) c=vec4(t.xxx,t.a);
+                else if(fmt==3) c=vec4(t.rgb,primary.a);
+                else if(fmt==4) c=t;
+                else c=vec4(t.xxx,t.r);
+            }
+            if(env==4) { // BLEND
+                c=fmt==0 ? vec4(primary.rgb,primary.a*t.a) :
+                    vec4(mix(primary.rgb,s[26].rgb,tc),primary.a*(alpha?t.a:1.0));
+            }
+        } else {
         bool rgb=s[25].y!=0.0;
         if(env==1) c=vec4(primary.rgb*t.rgb,primary.a*(rgb?1.0:t.a));
         if(env==2) c=vec4(rgb?t.rgb:mix(primary.rgb,t.rgb,t.a),primary.a);
         if(env==3) c=vec4(t.rgb,rgb?primary.a:t.a);
         if(env==4) c=vec4(mix(primary.rgb,s[26].rgb,t.rgb),primary.a*(rgb?1.0:t.a));
+        }
     }
     int fog=int(s[23].x);
     if(fog!=0) {

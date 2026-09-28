@@ -23,7 +23,7 @@
     { "action": "skip", "archive": "cubesrv.bp", "slot": "crv", "settle_ms": 750 },
     { "action": "skip", "archive": "horizon.bp", "slot": "hor", "settle_ms": 250 },
     { "action": "skip", "archive": "mandelbrot.bp", "slot": "man", "settle_ms": 750 },
-    { "action": "launch", "archive": "xpapp.bp", "slot": "app", "settle_ms": 750 },
+    { "action": "skip", "archive": "xpapp.bp", "slot": "app", "settle_ms": 3000 },
     { "action": "skip", "archive": "weather.bp", "slot": "wth", "settle_ms": 750 },
     { "action": "skip", "archive": "chart.bp", "slot": "chr", "settle_ms": 750 },
     { "action": "skip", "archive": "hello_world.bp", "slot": "h_w", "settle_ms": 750 },
