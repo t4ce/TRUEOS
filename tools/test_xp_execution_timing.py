@@ -30,7 +30,7 @@ async fn native_time_is_separate_from_request_queue_time() {
         carrier_requests(receiver, |_, _| {
             std::thread::sleep(std::time::Duration::from_millis(10));
             Ok(v::vx86::Exit)
-        }).await;
+        }, tokio::time::Instant::now).await;
     });
     let carrier = ExecutionCarrier { requests };
     let (_, t) = carrier.execute_measured(1, false).await.unwrap();
@@ -43,12 +43,12 @@ async fn native_time_is_separate_from_request_queue_time() {
 async fn measurement_preserves_errors_and_abandoned_requests() {
     let (requests, receiver) = tokio::sync::mpsc::channel(1);
     let (reply, response) = tokio::sync::oneshot::channel();
-    requests.send(CarrierRequest { handle: 99, resume: false, reply }).await.unwrap();
+    requests.send(CarrierRequest { handle: 99, resume: false, measured: true, reply }).await.unwrap();
     drop(response);
     let task = tokio::spawn(carrier_requests(receiver, |handle, _| {
         assert_ne!(handle, 99);
         Err(-125)
-    }));
+    }, || panic!("unmeasured or abandoned request sampled the clock")));
     let carrier = ExecutionCarrier { requests };
     assert_eq!(carrier.execute(1, true).await.unwrap_err(), Error::Kernel(-125));
     drop(carrier);
