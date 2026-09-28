@@ -1,4 +1,5 @@
 pub mod archive_cabi;
+pub mod allocation_registry;
 pub mod blocking;
 pub mod codec;
 pub(crate) mod compute_budget;

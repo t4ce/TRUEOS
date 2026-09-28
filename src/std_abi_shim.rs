@@ -14,6 +14,7 @@ use core::sync::atomic::{AtomicI32, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use spin::Mutex;
 
 use crate::r::static_map::FixedKeyMap;
+use crate::r::allocation_registry::AllocationRegistry;
 
 pub(crate) static TRUEOS_ERRNO: AtomicI32 = AtomicI32::new(0);
 // `environ` is a data import, not a function. Keep an addressable `char **`
@@ -21,8 +22,8 @@ pub(crate) static TRUEOS_ERRNO: AtomicI32 = AtomicI32::new(0);
 static mut TRUEOS_EMPTY_ENVIRON: [*mut c_char; 1] = [ptr::null_mut()];
 pub(crate) static mut TRUEOS_ENVIRON: *mut *mut c_char =
     core::ptr::addr_of_mut!(TRUEOS_EMPTY_ENVIRON) as *mut *mut c_char;
-static C_ALLOCATIONS: Mutex<FixedKeyMap<usize, AllocationRecord, C_ALLOCATION_CAPACITY>> =
-    Mutex::new(FixedKeyMap::new());
+static C_ALLOCATIONS: Mutex<AllocationRegistry<AllocationRecord, C_ALLOCATION_CAPACITY>> =
+    Mutex::new(AllocationRegistry::new());
 static PTHREAD_KEYS: ProcessPthreadKeys = ProcessPthreadKeys;
 static PTHREAD_TLS_VALUES: ProcessPthreadTlsValues = ProcessPthreadTlsValues;
 static PTHREAD_THREADS: ProcessPthreadThreads = ProcessPthreadThreads;
