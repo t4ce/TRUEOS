@@ -35,7 +35,8 @@ for stage, name, array in [('vs','fixed.vs.simd8.bin','WC3_FIXED_VS_CODE'),
     isa[stage] = decoded
 vs=meta['vertex_compiler_state'];ps=meta['fragment_compiler_state']
 assert [vs[k] for k in ('vf_packing0','urb_read_length','urb_entry_64b','binding_table_entries')] == [0xffff,2,2,2]
-assert [ps[k] for k in ('grf_start16','num_varying_inputs','binding_table_entries','scratch_bytes','push_bytes')] == [6,3,4,0,0]
+assert [ps[k] for k in ('grf_start16','num_varying_inputs','binding_table_entries','scratch_bytes','push_bytes',
+                        'computed_depth_mode','uses_src_depth','uses_src_w')] == [10,3,4,0,0,1,1,1]
 assert meta['sbe'] == {'read_offset_32b':1,'read_length_32b':2,'attributes':3}
 print('Fixed GL shader source, package ID, embedded binaries, ISA and captured payloads agree.')
 

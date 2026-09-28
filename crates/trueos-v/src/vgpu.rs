@@ -1453,6 +1453,6 @@ mod tests {
 
 /// Fixed GL draw package: 96 vec4 state prefix, followed by pos/normal/color/UV vec4 vertices.
 /// State layout is documented in tools/wc3-fixed-bake/README.md. Vertex offset is 1536.
-pub const SHADER_PACKAGE_WC3_FIXED_FNV1A64: u64 = 0xB6F378E95F39BB1E;
+pub const SHADER_PACKAGE_WC3_FIXED_FNV1A64: u64 = 0x68A95DFFA50DBC0F;
 pub const WC3_FIXED_STATE_FLOATS: usize = 384;
 pub const WC3_FIXED_STATE_BYTES: usize = 1536;

@@ -14,12 +14,9 @@ void main() {
     // normal.x then carries its eye-space fog distance; the other attributes
     // are already in the shader's interpolation domain.
     if(s[90].x != 0.0) {
-        float near_depth=s[90].z, far_depth=s[90].w;
-        float ranged_z=(far_depth-near_depth)*position.z+
-            (far_depth+near_depth+2.0*normal.y-1.0)*position.w;
         gl_Position=vec4(position.xy*s[27].xy+position.w*s[27].zw,
-            (ranged_z+position.w)*0.5,position.w);
-        texcoord=uv;
+            (position.z+position.w)*0.5,position.w);
+        texcoord=vec4(uv.xy,normal.y,uv.w);
         fog_distance=normal.x;
         primary=clamp(color,0.0,1.0);
         return;

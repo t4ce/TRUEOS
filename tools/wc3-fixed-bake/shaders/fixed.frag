@@ -45,6 +45,9 @@ vec4 sample_gl(vec2 uv) {
     return mix(sample_level(uv,lo,min_linear),sample_level(uv,hi,min_linear),fract(lod));
 }
 void main() {
+    gl_FragDepth=s[90].x!=0.0 ?
+        clamp(s[90].z+gl_FragCoord.z*(s[90].w-s[90].z)+texcoord.z,0.0,1.0) :
+        gl_FragCoord.z;
     vec4 c=primary;
     int env=int(s[25].x);
     if(env!=0) {
@@ -54,9 +57,10 @@ void main() {
             bool alpha=fmt==0||fmt==2||fmt==4||fmt==5;
             bool luminance=fmt==1||fmt==2||fmt==5;
             vec3 tc=luminance ? t.xxx : t.rgb;
+            float sampled_alpha=fmt==5 ? t.r : t.a;
             if(env==1) { // MODULATE
                 if(fmt==0) c=vec4(primary.rgb,primary.a*t.a);
-                else c=vec4(primary.rgb*tc,primary.a*(alpha?t.a:1.0));
+                else c=vec4(primary.rgb*tc,primary.a*(alpha?sampled_alpha:1.0));
             }
             if(env==2) { // DECAL, only RGB/RGBA admitted by the CPU bridge.
                 c=fmt==3 ? vec4(t.rgb,primary.a) :
@@ -68,7 +72,7 @@ void main() {
                 else if(fmt==2) c=vec4(t.xxx,t.a);
                 else if(fmt==3) c=vec4(t.rgb,primary.a);
                 else if(fmt==4) c=t;
-                else c=vec4(t.xxx,t.r);
+                else c=vec4(t.xxx,sampled_alpha);
             }
             if(env==4) { // BLEND
                 c=fmt==0 ? vec4(primary.rgb,primary.a*t.a) :

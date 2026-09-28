@@ -3135,7 +3135,8 @@ fn encode_triangle_probe_batch(
             * PS_EXTRA_SIMPLE_PS_HINT)
         | (u32::from(backend_probe_mode.force_ps_dependency_on_cpsize_change())
             * PS_EXTRA_ENABLE_PS_DEPENDENCY_ON_CPSIZE_CHANGE)
-        | (u32::from(backend_probe_mode.force_ps_source_depth_w())
+        | (u32::from(backend_probe_mode.force_ps_source_depth_w()
+                || (draw.fixed_gl.is_some() && pipeline.ps.meta.computed_depth_mode != 0))
             * (PS_EXTRA_REQUIRES_SOURCE_DEPTH_W_PLANE
                 | PS_EXTRA_USES_SOURCE_W
                 | PS_EXTRA_USES_SOURCE_DEPTH))

@@ -91,7 +91,7 @@ def emit_rust(vs: bytes, ps: bytes, state: dict[str, int], ps_state: dict[str, i
             uses_vmask: {str(bool(ps_state["uses_vmask"])).lower()},
             computed_stencil: false,
             persample_dispatch: false,
-            computed_depth_mode: 0,
+            computed_depth_mode: {ps_state["computed_depth_mode"]},
             flat_inputs: 0,
         }},
     }},
@@ -180,9 +180,9 @@ def main() -> None:
     expected_vs = dict(ver=12, verx10=120, dispatch_grf_start=2, urb_read_length=2,
         urb_entry_64b=2, vue_slots=5, position_slot=1, uv_slot=2, vf_packing0=0xffff,
         uses_vertexid=0, uses_instanceid=0, binding_table_entries=2, sampler_count=0)
-    expected_ps = dict(ver=12, verx10=120, dispatch16=1, grf_start16=6, num_varying_inputs=3,
-        barycentric_interp_modes=1, uses_vmask=1, uses_src_depth=0, uses_src_w=0,
-        computed_depth_mode=0, computed_stencil=0, flat_inputs=0, binding_table_entries=4,
+    expected_ps = dict(ver=12, verx10=120, dispatch16=1, grf_start16=10, num_varying_inputs=3,
+        barycentric_interp_modes=1, uses_vmask=1, uses_src_depth=1, uses_src_w=1,
+        computed_depth_mode=1, computed_stencil=0, flat_inputs=0, binding_table_entries=4,
         sampler_count=0, push_bytes=0, scratch_bytes=0)
     for captured, expected in [(state, expected_vs), (ps_state, expected_ps)]:
         if any(captured.get(k) != v for k,v in expected.items()):

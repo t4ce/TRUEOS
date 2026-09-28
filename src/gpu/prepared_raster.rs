@@ -59,8 +59,7 @@ fn prepared_raster_decode(
     height: u32,
 ) -> Result<PreparedRasterDecoded, VgpuError> {
     if desc.reserved != 0 || desc.index_count == 0 || desc.index_count % 3 != 0
-        || desc.texture == 0 || !v::vgpu::indexed_draw_flags_valid(desc.flags)
-        || desc.flags & v::vgpu::INDEXED_DRAW_DRAWABLE_DEPTH == 0 {
+        || desc.texture == 0 || !v::vgpu::indexed_draw_flags_valid(desc.flags) {
         return Err(VgpuError::Unsupported);
     }
     let index_count = desc.index_count as usize;
@@ -131,6 +130,7 @@ pub(crate) fn submit_ui4_prepared_raster_batch_v1(
     queue_handle: QueueHandle,
     batch: v::vgpu::PreparedRasterBatchV1,
 ) -> Result<Ui4SurfaceIndexedCompletion, VgpuError> {
+    let timing_start = crate::chronos::monotonic_nanos();
     let count = batch.draw_count as usize;
     if count == 0 || count > v::vgpu::MAX_PREPARED_RASTER_DRAWS || batch.reserved != 0
         || batch.draws[count..].iter().any(|draw| *draw != v::vgpu::PreparedRasterDrawV1::default()) {
@@ -191,6 +191,10 @@ pub(crate) fn submit_ui4_prepared_raster_batch_v1(
         lookup_surface_mut(device, surface_handle)?.in_flight = 2;
         (window_id, phys, producer_gpu, bytes, width, height, pitch, decoded, depth)
     };
+    let timing_decoded = crate::chronos::monotonic_nanos();
+    let staged_bytes = decoded.iter().map(|draw|
+        draw.vertices.len() * 64 + draw.indices.len() * 4 + v::vgpu::WC3_FIXED_STATE_BYTES
+    ).sum::<usize>();
     let destination = crate::intel::gpgpu::GpgpuRgba8Surface::new(
         phys, producer_gpu, bytes, width, height, pitch,
     ).ok_or(VgpuError::Unsupported)?;
@@ -225,15 +229,25 @@ pub(crate) fn submit_ui4_prepared_raster_batch_v1(
             point_width_px: 0,
         }
     }).collect::<Vec<_>>();
+    let timing_mesh = crate::chronos::monotonic_nanos();
     let rendered = crate::intel::render::render_drawable_depth_scene(
         &draws, None, destination, Some(depth.as_ref()),
         v::vgpu::INDEXED_DRAW_DRAWABLE_DEPTH | v::vgpu::INDEXED_DRAW_LOAD_COLOR,
         false,
     );
-    let released_meshes = if rendered.is_ok() {
-        meshes.iter().all(crate::intel::render::release_resident_triangle_mesh)
-    } else { false };
-    if !released_meshes {
+    let timing_rendered = crate::chronos::monotonic_nanos();
+    let transient_busy = matches!(rendered.as_ref().err(), Some(&"render-busy" | &"render-storage-busy"));
+    let proven_release = rendered.as_ref().ok().and_then(|result| result.release_fence
+        .filter(|release| result.frame_complete && result.completed_draws == count
+            && result.requested_draws == count && !result.present_copy_performed
+            && release.matches(phys, bytes)));
+    if transient_busy {
+        if meshes.iter().all(crate::intel::render::release_resident_triangle_mesh) {
+            rollback_indexed_submission_lease(principal, device_handle, queue_handle, surface_handle);
+            return Err(VgpuError::Busy);
+        }
+    }
+    if proven_release.is_none() {
         // GPU completion was not established. Keep all referenced allocations
         // pinned and quarantine the owner rather than recycle them.
         core::mem::forget(meshes);
@@ -242,12 +256,15 @@ pub(crate) fn submit_ui4_prepared_raster_batch_v1(
         if let Ok(device) = lookup_device_mut(&mut broker, device_handle, principal) { device.lost = true; }
         return Err(VgpuError::DeviceLost);
     }
-    let rendered = rendered.map_err(|_| VgpuError::DeviceLost)?;
-    let release = rendered.release_fence
-        .filter(|release| rendered.frame_complete && rendered.completed_draws == count
-            && rendered.requested_draws == count && !rendered.present_copy_performed
-            && release.matches(phys, bytes))
-        .ok_or(VgpuError::DeviceLost)?;
+    let release = proven_release.unwrap();
+    if !meshes.iter().all(crate::intel::render::release_resident_triangle_mesh) {
+        core::mem::forget(meshes);
+        core::mem::forget(decoded);
+        let mut broker = BROKER.lock();
+        if let Ok(device) = lookup_device_mut(&mut broker, device_handle, principal) { device.lost = true; }
+        return Err(VgpuError::DeviceLost);
+    }
+    let rendered = rendered.unwrap();
     depth.mark_initialized();
     let physical = require_physical()?;
     let mut broker = BROKER.lock();
@@ -270,6 +287,22 @@ pub(crate) fn submit_ui4_prepared_raster_batch_v1(
     queue.timeline.last_physical_serial = release.sequence();
     let point = TimelinePoint { queue: queue_handle, value: queue.timeline.submitted,
         physical_serial: release.sequence(), physical_publish_sequence: release.sequence() };
+    drop(broker);
+    let timing_done = crate::chronos::monotonic_nanos();
+    static REPORTS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+    let report = REPORTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed) + 1;
+    if report <= 8 || report.is_multiple_of(16) {
+        crate::log_important!(target: "vgpu";
+            "XPAPP GPU RASTER BATCH seq={} draws={} staged_bytes={} decode_texture_us={} mesh_us={} render_us={} gpu_poll_us={} retire_us={} total_us={} target={}x{} release={}\n",
+            report, count, staged_bytes,
+            timing_decoded.saturating_sub(timing_start)/1000,
+            timing_mesh.saturating_sub(timing_decoded)/1000,
+            timing_rendered.saturating_sub(timing_mesh)/1000,
+            rendered.gpu_poll_us,
+            timing_done.saturating_sub(timing_rendered)/1000,
+            timing_done.saturating_sub(timing_start)/1000,
+            width, height, release.sequence());
+    }
     Ok(Ui4SurfaceIndexedCompletion {
         window_id,
         surface: SurfaceInfo { handle: surface_handle, bytes, width, height, pitch },
