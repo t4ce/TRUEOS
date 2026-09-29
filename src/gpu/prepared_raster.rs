@@ -253,6 +253,16 @@ pub(crate) fn submit_ui4_prepared_raster_batch_v1(
         }
     }
     if proven_release.is_none() {
+        crate::log_error!(target: "render";
+            "XPAPP GPU RASTER FAILED draws={} staged_bytes={} reason={:?} completed_draws={} requested_draws={} frame_complete={} release_present={} render_us={} action=device-lost+retain-unretired-storage\n",
+            count, staged_bytes,
+            rendered.as_ref().err().copied().or_else(|| rendered.as_ref().ok().and_then(|r| r.completion_error())),
+            rendered.as_ref().map_or(0, |r| r.completed_draws),
+            rendered.as_ref().map_or(0, |r| r.requested_draws),
+            rendered.as_ref().is_ok_and(|r| r.frame_complete),
+            rendered.as_ref().is_ok_and(|r| r.release_fence.is_some()),
+            timing_rendered.saturating_sub(timing_mesh) / 1000,
+        );
         // GPU completion was not established. Keep all referenced allocations
         // pinned and quarantine the owner rather than recycle them.
         core::mem::forget(meshes);

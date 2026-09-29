@@ -518,6 +518,23 @@ fn submit_warm_render_batch(
         runtime.last_saved_head = read_gen12_lrc_ring_head(warm) & (warm.ring_len as u32 - 1);
     }
 
+    if resident_scene_submit && !completed {
+        // Capture before disabling the context. Verbose probe logging is
+        // normally off; losing this snapshot leaves callers with only -32.
+        let (release_lo, release_hi) = read_result_qword_coherent(warm, RESULT_SLOT_SCENE_FRAME_DWORD);
+        crate::log_error!(target: "render";
+            "resident-scene retirement-failed submission={} saved_head={} published_tail={} poll_us={} release=0x{:08X}:0x{:08X} acthd=0x{:08X}:0x{:08X} bbaddr=0x{:08X}:0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} instdone=0x{:08X} geom=0x{:08X} sampler=0x{:08X} row=0x{:08X} fault=0x{:08X} action=retain-unretired-storage\n",
+            runtime.submissions, runtime.last_saved_head, ring_tail_bytes, poll_elapsed_us,
+            release_hi, release_lo,
+            crate::intel::mmio_read(dev, RCS_RING_ACTHD_UDW), crate::intel::mmio_read(dev, RCS_RING_ACTHD),
+            crate::intel::mmio_read(dev, RCS_RING_BBADDR_UDW), crate::intel::mmio_read(dev, RCS_RING_BBADDR),
+            crate::intel::mmio_read(dev, RCS_RING_IPEIR), crate::intel::mmio_read(dev, RCS_RING_IPEHR),
+            crate::intel::mmio_read(dev, RCS_RING_INSTDONE), crate::intel::mmio_read(dev, INSTDONE_GEOM),
+            crate::intel::mmio_read(dev, SAMPLER_INSTDONE), crate::intel::mmio_read(dev, ROW_INSTDONE),
+            crate::intel::mmio_read(dev, GEN12_RING_FAULT_REG),
+        );
+    }
+
     crate::intel::dma_flush(warm.result_virt, warm.result_len);
     let result0 = read_result_dword(warm, RESULT_SLOT_PRE3D_DWORD);
     let result1 = read_result_dword(warm, RESULT_SLOT_POST3D_DWORD);

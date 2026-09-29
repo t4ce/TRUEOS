@@ -204,6 +204,18 @@ const _: () = {
     assert!(RESULT_SLOT_DEPTH_STATE_WA_DWORD + 2 <= RESULT_OA_BEGIN_DWORD);
 };
 
+fn ps_source_depth_w_bits(probe_coefficients: bool, fixed_gl_depth: bool) -> u32 {
+    // WC3's captured Mesa payload has uses_src_depth=1, uses_src_w=1,
+    // uses_depth_w_coefficients=0. Coefficients are a separate shader input
+    // contract; writing gl_FragDepth does not request them.
+    let source = if probe_coefficients || fixed_gl_depth {
+        PS_EXTRA_USES_SOURCE_W | PS_EXTRA_USES_SOURCE_DEPTH
+    } else {
+        0
+    };
+    source | if probe_coefficients { PS_EXTRA_REQUIRES_SOURCE_DEPTH_W_PLANE } else { 0 }
+}
+
 fn adls_depth_state_post_sync_packet(
     device_id: u16,
     result_ppgtt_gpu: u64,
@@ -3135,11 +3147,10 @@ fn encode_triangle_probe_batch(
             * PS_EXTRA_SIMPLE_PS_HINT)
         | (u32::from(backend_probe_mode.force_ps_dependency_on_cpsize_change())
             * PS_EXTRA_ENABLE_PS_DEPENDENCY_ON_CPSIZE_CHANGE)
-        | (u32::from(backend_probe_mode.force_ps_source_depth_w()
-                || (draw.fixed_gl.is_some() && pipeline.ps.meta.computed_depth_mode != 0))
-            * (PS_EXTRA_REQUIRES_SOURCE_DEPTH_W_PLANE
-                | PS_EXTRA_USES_SOURCE_W
-                | PS_EXTRA_USES_SOURCE_DEPTH))
+        | ps_source_depth_w_bits(
+            backend_probe_mode.force_ps_source_depth_w(),
+            draw.fixed_gl.is_some() && pipeline.ps.meta.computed_depth_mode != 0,
+        )
         | (u32::from(backend_probe_mode.force_ps_bary_planes())
             * (PS_EXTRA_REQUIRES_NONPERSPECTIVE_BARY_PLANE
                 | PS_EXTRA_REQUIRES_PERSPECTIVE_BARY_PLANE))

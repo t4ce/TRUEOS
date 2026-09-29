@@ -41,7 +41,32 @@ assert meta['sbe'] == {'read_offset_32b':1,'read_length_32b':2,'attributes':3}
 print('Fixed GL shader source, package ID, embedded binaries, ISA and captured payloads agree.')
 
 import tempfile
-from test_clip_position3_uv_texture import item
+from test_clip_position3_uv_texture import item, constant
+
+# Match the production source-input bits to the compiler's actual payload.
+# Source Z/W and plane coefficients are independent PS_EXTRA fields.
+with tempfile.TemporaryDirectory(prefix='wc3-depth-payload-tests-') as tmp:
+    src = Path(tmp) / 'tests.rs'; exe = Path(tmp) / 'tests'
+    declarations = '\n'.join(constant('src/intel/render/constants.rs', name) for name in (
+        'PS_EXTRA_USES_SOURCE_DEPTH', 'PS_EXTRA_USES_SOURCE_W',
+        'PS_EXTRA_REQUIRES_SOURCE_DEPTH_W_PLANE'))
+    expected = (ps['uses_src_depth'] << 24 | ps['uses_src_w'] << 23 |
+                ps['uses_depth_w_coefficients'] << 21)
+    src.write_text(declarations + '\n' + item('src/intel/render/pipeline.rs', 'ps_source_depth_w_bits') + f'''
+#[test]
+fn wc3_source_inputs_match_compiled_payload() {{
+    assert_eq!(ps_source_depth_w_bits(false, true), {expected});
+}}
+#[test]
+fn ordinary_shader_and_explicit_probe_keep_their_contracts() {{
+    assert_eq!(ps_source_depth_w_bits(false, false), 0);
+    assert_eq!(ps_source_depth_w_bits(true, false),
+        PS_EXTRA_USES_SOURCE_DEPTH | PS_EXTRA_USES_SOURCE_W |
+        PS_EXTRA_REQUIRES_SOURCE_DEPTH_W_PLANE);
+}}
+''')
+    subprocess.run(['rustc','--edition=2024','--test',str(src),'-o',str(exe)],check=True)
+    subprocess.run([str(exe)],check=True)
 
 # Execute the final packet emission block. Earlier correct state is ineffective
 # if a compatibility tail overwrites it immediately before the primitive.
