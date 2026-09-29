@@ -1711,10 +1711,14 @@ fn stage_resident_scene_secondary(
         } } else { TRIANGLE_DEFAULT_FRONT_END_CONTRACT },
         viewport_translation_px,
         BackendProbeMode::MesaLike,
-        // All scene secondaries execute below one primary batch. They only
-        // need command-stream ordering here; the primary emits the single
-        // full render/depth/L3 release fence after the final secondary.
-        PostDrawSyncVariant::LightCsNoPostSync,
+        // WC3 changes computed-depth, alpha discard and blending state
+        // between secondaries. Drain that draw before replacing its state;
+        // retain the primary's final fence as the frame's release proof.
+        if draw.fixed_gl.is_some() {
+            PostDrawSyncVariant::HeavyAll
+        } else {
+            PostDrawSyncVariant::LightCsNoPostSync
+        },
     ).inspect_err(|reason| {
         crate::log_warn!(target: "render";
             "resident-scene: phase=batch-encode-rejected secondary={} textured={} reason={}\n",

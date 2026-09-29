@@ -533,6 +533,25 @@ fn submit_warm_render_batch(
             crate::intel::mmio_read(dev, SAMPLER_INSTDONE), crate::intel::mmio_read(dev, ROW_INSTDONE),
             crate::intel::mmio_read(dev, GEN12_RING_FAULT_REG),
         );
+        let active = u64::from(crate::intel::mmio_read(dev, RCS_RING_ACTHD))
+            | (u64::from(crate::intel::mmio_read(dev, RCS_RING_ACTHD_UDW)) << 32);
+        if let Some(offset) = active.checked_sub(GPU_VA_BATCH_BASE)
+            .and_then(|offset| usize::try_from(offset).ok())
+            .filter(|offset| *offset < warm.batch_len)
+        {
+            let start = (offset & !3).saturating_sub(64);
+            let end = (start + 128).min(warm.batch_len) & !3;
+            for position in (start..end).step_by(16) {
+                if position + 16 > end { break; }
+                let mut words = [0u32; 4];
+                for (i, word) in words.iter_mut().enumerate() {
+                    *word = unsafe { core::ptr::read_volatile(warm.batch_virt.add(position + i * 4).cast::<u32>()) };
+                }
+                crate::log_error!(target: "render";
+                    "resident-scene stalled-batch gpu=0x{:X} words={:08X?}\n",
+                    GPU_VA_BATCH_BASE + position as u64, words);
+            }
+        }
     }
 
     crate::intel::dma_flush(warm.result_virt, warm.result_len);
