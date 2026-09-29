@@ -33,6 +33,32 @@ gets/sets title; for the latter two, arg0 is the window ID and arg1 is 0 for
 get or 1 for set. Set requests carry the record/title as a bounded payload.
 The host validates ownership again after decoding the payload.
 
+## Native display and window handles
+
+The vendored `raw-window-handle` crate exposes `TrueosDisplayHandle` with a
+nonzero `u64` connection token and `TrueosWindowHandle` with a nonzero `u32`
+UI4 scene frame ID. These identify UI4 resources; neither is a framebuffer
+address or an OpenGL context.
+
+| Symbol suffix after `trueos_cabi_ui4_display_` | Contract |
+| --- | --- |
+| `open_v1()` | Opens or retains the caller's connection; returns its token, or zero on failure. |
+| `retain_v1(connection)` | Adds a reference to a live connection owned by the caller. |
+| `close_v1(connection)` | Drops one reference; the last reference invalidates the token. |
+| `validate_window_v1(connection, window)` | Checks that both the connection and scene frame are live and owned by the caller. |
+
+The last three operations return zero on success and a negative error on
+failure. VMCALLs 0x20C–0x20F implement these operations in table order, with
+the connection in arg0 and the window in arg1 for validation. Requests have
+no payload; unused arguments must be zero.
+
+Tokens contain a registry slot and generation. Closing the final reference
+or tearing down the owner revokes the token; reusing a slot does not revive
+an old token. Winit shares a connection through `Arc` between the event loop,
+windows, and owned display handles, and closes it on the final drop. It
+validates the scene frame before exposing a raw window handle. A renderer
+that needs an independently owned connection must retain and later close it.
+
 ## Keyboard transitions
 
 The new stream reuses the 44-byte `TrueosKeyboardOutputEvent` record. Kind 4
@@ -62,15 +88,26 @@ composition/IME are not added by this change.
 
 ## Rendering and version boundaries
 
-UI4 has no raw native OpenGL window/display handle. Winit returns
-`HandleError::NotSupported` for these requests; it never masquerades as an
-X11 or Wayland window. A glutin/OpenGL bridge is still required for Alacritty.
+Winit exposes native TRUEOS handles through the patched `raw-window-handle`
+crate. Consumers must use that same crate version/source to share the new
+enum variants. Context creation, framebuffer leases, GL procedure resolution,
+and presentation belong to the glutin/trueos-gl integration; raw handles alone
+do not implement those operations.
 
 The standalone wgpu workspace is pinned to the GitHub winit fork's compatible
 0.30.13 revision, `e9809ef54b18499bb4f2cac945719ecc2a61061b`. That pin does not
-include this new 0.31 backend. Current Alacritty also uses the 0.30 API; a
-backport or application migration is needed before connecting it to this
-backend.
+include this new 0.31 backend. Alacritty now selects the local 0.31 winit
+workspace and patches glutin and raw-window-handle to their local forks.
+The native glutin backend exists, but its `trueos_gl_get_proc_address` bridge
+is still unresolved and `swap_buffers` currently returns without submitting
+a frame. Context binding and presentation still need to be connected to the
+GL implementation before this path can render.
+
+Alacritty's `res/trueos/bakery-input.json` specifies seven shader stages and
+five linked programs for `Gles2Pure`. The checked-in directory contains the
+input contract, not the baked native packages. Text draws also use several
+blend configurations; five linked shader programs do not imply only five
+complete GPU pipeline states.
 
 ## Validation
 
@@ -84,5 +121,8 @@ cargo test --manifest-path /home/t4ce/Repos/TRUEOS-Blueprints/vendor/winit/Cargo
 
 The kernel changes are checked with the repository's TRUEOS target and pinned
 compiler. The source keyboard module also has host tests covering transitions,
-modifier-only input, rollover, and disconnect recovery. No hardware deployment
-or runtime window test is implied by these compile/unit checks.
+modifier-only input, rollover, and disconnect recovery. Run
+`python3 tools/test_ui4_display_registry.py` for the actual display registry's
+ownership, reference lifetime, stale-token, and teardown tests; `RUSTC` can
+select the compiler. No hardware deployment or runtime window test is implied
+by these compile/unit checks.
