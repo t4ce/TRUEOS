@@ -1077,7 +1077,21 @@ pub(crate) fn submit_local_selector(
     submitted: &str,
 ) {
     match tokenize_app_command(submitted) {
-        Ok(args) if args.len() == 1 => start_app(spawner, io, args),
+        Ok(mut args) if args.len() == 1 => {
+            let selector = args.pop().unwrap();
+            if !is_local_app_name(selector.as_str())
+                && let Some(archive) = crate::r::restart::startup_alias_blueprint(selector.as_str())
+            {
+                if is_local_app_name(archive.strip_suffix(".bp").unwrap_or(archive.as_str())) {
+                    start_app(spawner, io, alloc::vec![archive]);
+                } else {
+                    let online_name = archive.strip_suffix(".bp").unwrap_or(archive.as_str());
+                    online_app(spawner, io, alloc::vec![String::from(online_name)]);
+                }
+            } else {
+                start_app(spawner, io, alloc::vec![selector]);
+            }
+        }
         Ok(_) => line(io, "apps: launch arguments are not supported; enter one app.db id or name"),
         Err(error) => line(io, alloc::format!("apps: {}", error).as_str()),
     }
