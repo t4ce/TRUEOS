@@ -1830,6 +1830,10 @@ fn handle_submit(
     submitted: &str,
 ) -> HandleSubmitResult {
     match mode {
+        ShellMode2::Default if shell2_apps::is_local_app_name(submitted) => {
+            shell2_apps::submit_local_selector(spawner, io, submitted);
+            HandleSubmitResult::None
+        }
         ShellMode2::Default => match shell2_cmd::try_parse(spawner, io, submitted) {
             shell2_cmd::ParseOutcome::StartSession(kind) => HandleSubmitResult::StartSession(kind),
             shell2_cmd::ParseOutcome::NotCommand => {

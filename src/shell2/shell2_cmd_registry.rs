@@ -563,8 +563,8 @@ fn starts_with_command<'a>(submitted: &'a str, name: &str) -> Option<&'a str> {
 #[cfg(test)]
 mod tests {
     use super::{
-        TOOL_JSON_WIN, command_registry_json, starts_with_command, titlebar_right_admin_names_text,
-        titlebar_right_default_names_text,
+        AllocString, TOOL_JSON_WIN, command_registry_json, render_default_titlebar,
+        starts_with_command, titlebar_right_admin_names_text, titlebar_right_default_names_text,
     };
 
     #[test]
@@ -592,15 +592,27 @@ mod tests {
     }
 
     #[test]
-    fn admin_titlebar_paints_first_four_entries_pink() {
+    fn admin_titlebar_omits_appdb_entries_and_paints_commands_pink() {
         let status = titlebar_right_admin_names_text();
-        let positions = ["cry", "os", "backup", "disc"].map(|label| {
+        let positions = ["cry", "disc"].map(|label| {
             let token = alloc::format!("\x1b[1;38;2;255;55;255m{label}\x1b[0m");
             status.find(token.as_str()).unwrap()
         });
 
         assert!(positions.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!(!status.contains("backup"));
+        assert!(!status.contains("m os "));
         assert!(command_registry_json().contains("\"name\":\"backup\""));
+    }
+
+    #[test]
+    fn appdb_os_and_backup_are_pink() {
+        let app_names = [AllocString::from("backup"), AllocString::from("os")];
+        let status = render_default_titlebar(usize::MAX, &app_names);
+        for name in ["backup", "os"] {
+            let token = alloc::format!("\x1b[1;38;2;255;55;255m{name}\x1b[0m");
+            assert!(status.contains(token.as_str()));
+        }
     }
 
     #[test]
@@ -671,7 +683,7 @@ pub(crate) fn try_dispatch(
 
 const TITLEBAR_MEDIA_COMMANDS: &[&str] = &["img", "shot", "vid", "film", "cam"];
 const TITLEBAR_ADMIN_COMMANDS: &[&str] = &[
-    "cry", "os", "backup", "disc", "tlb", "xhci", "ram", "smp", "net", "bios", "vgpu",
+    "cry", "disc", "tlb", "xhci", "ram", "smp", "net", "bios", "vgpu",
 ];
 /// Render Shell2's default aliases, media controls, and live app.db names.
 pub(crate) fn titlebar_right_default_names_text() -> AllocString {
@@ -736,7 +748,11 @@ fn render_default_titlebar(max_entries: usize, app_names: &[AllocString]) -> All
         if !out.ends_with('[') {
             out.push(' ');
         }
-        out.push_str(name.as_str());
+        if matches!(name.as_str(), "os" | "backup") {
+            push_colored_status_token(&mut out, name.as_str(), STATUS_PINK_RGB);
+        } else {
+            out.push_str(name.as_str());
+        }
         rendered += 1;
     }
     out.push(']');
@@ -753,7 +769,7 @@ fn render_admin_titlebar(max_entries: usize) -> AllocString {
         if index != 0 {
             out.push(' ');
         }
-        let color = if matches!(*name, "cry" | "os" | "backup" | "disc") {
+        let color = if matches!(*name, "cry" | "disc") {
             STATUS_PINK_RGB
         } else {
             STATUS_GRAY_RGB

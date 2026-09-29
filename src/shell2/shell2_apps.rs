@@ -1083,6 +1083,20 @@ pub(crate) fn submit_local_selector(
     }
 }
 
+pub(crate) fn is_local_app_name(submitted: &str) -> bool {
+    if submitted.split_whitespace().count() != 1 {
+        return false;
+    }
+    crate::app_db::list().is_ok_and(|apps| {
+        apps.iter().any(|app| {
+            app.archive
+                .strip_suffix(".bp")
+                .unwrap_or(app.archive.as_str())
+                .eq_ignore_ascii_case(submitted)
+        })
+    })
+}
+
 fn tokenize_app_command(input: &str) -> Result<Vec<String>, &'static str> {
     let mut tokens = Vec::new();
     let mut current = String::new();

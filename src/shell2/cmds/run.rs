@@ -1355,6 +1355,13 @@ pub(crate) async fn submit_archive_selector(
             archives.iter().find(|entry| {
                 archive_match_key(entry.archive.as_str()).eq_ignore_ascii_case(requested)
             })
+        })
+        .or_else(|| {
+            let alias = crate::r::restart::startup_alias_blueprint(selector)?;
+            let requested = archive_match_key(alias.as_str());
+            archives.iter().find(|entry| {
+                archive_match_key(entry.archive.as_str()).eq_ignore_ascii_case(requested)
+            })
         });
     let Some(archive) = archive else {
         print_matrix_target_system_line(&target, "apps: unknown app id or name");
