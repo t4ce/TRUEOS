@@ -43,6 +43,11 @@ pub(crate) fn try_parse(
                 )
                 .as_str(),
             );
+            print_shell_line(io, format!(
+                "vcpy: consumer=gridpaper copies={} bytes={} fallbacks={} failures={}",
+                status.consumer_copies, status.consumer_bytes,
+                status.consumer_fallbacks, status.consumer_failures,
+            ).as_str());
             if let Some(failure) = crate::intel::guc_bcs0_last_timeout() {
                 let activity = failure.activity;
                 print_shell_line(io, format!(

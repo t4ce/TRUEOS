@@ -3216,6 +3216,9 @@ fn publish_page(
         Ok(result) => result,
         Err(failure) => {
             if failure.submitted_incomplete() {
+                if let Some(base) = page.static_base.as_ref() {
+                    base.quarantine_backing();
+                }
                 GRIDPAPER_COMPUTE_QUARANTINED.store(true, Ordering::Release);
                 crate::log_error!(
                     target: "gridpaper";
@@ -3811,17 +3814,47 @@ fn render_compute_page_frame(
         page.static_base_cell_patch_serial
             .store(page.cell_patch_serial, core::sync::atomic::Ordering::Release);
     }
-    if !crate::intel::gpgpu::copy_rect_rgba8_complete_mode(
-        static_base,
-        static_base.bounds(),
-        destination,
-        crate::intel::gpgpu::GpgpuPoint::new(0, 0),
-        true,
-    ) {
-        return Err(GridPaperComputeFailure::SubmittedIncomplete(
-            "gridpaper-static-base-copy-incomplete",
-        ));
+    // Font batches already retire an HDC/L3 release. Drain the system lane
+    // used by rectangle worklists as well before BCS reads a changed base.
+    // Cached frames need no extra RCS submission.
+    if static_base_rebuilt || applied_patch_serial != page.cell_patch_serial {
+        match crate::intel::gpgpu::release_compute_writes_for_copy() {
+            GpgpuSubmissionOutcome::Complete => {
+                base_stats.geometry_submits = base_stats.geometry_submits.saturating_add(1);
+            }
+            GpgpuSubmissionOutcome::Unavailable => {
+                // Ensure the next attempt still performs the release.
+                page.invalidate_static_base();
+                return Err(GridPaperComputeFailure::Unavailable("gridpaper-base-release-unavailable"));
+            }
+            GpgpuSubmissionOutcome::SubmittedIncomplete => {
+                return Err(GridPaperComputeFailure::SubmittedIncomplete("gridpaper-base-release-incomplete"));
+            }
+        }
     }
+    match super::vcpy_service::copy_rgba8_complete(static_base, destination) {
+        GpgpuSubmissionOutcome::Complete => {}
+        GpgpuSubmissionOutcome::Unavailable => {
+            // No BCS submission occurred. Keep the reference path for busy or
+            // unsupported requests, including rectangles requiring clipping.
+            if !crate::intel::gpgpu::copy_rect_rgba8_complete_mode(
+                static_base, static_base.bounds(), destination,
+                crate::intel::gpgpu::GpgpuPoint::new(0, 0), true,
+            ) {
+                return Err(GridPaperComputeFailure::SubmittedIncomplete(
+                    "gridpaper-static-base-copy-incomplete",
+                ));
+            }
+        }
+        GpgpuSubmissionOutcome::SubmittedIncomplete => {
+            // Never submit a second writer after ambiguous BCS completion.
+            return Err(GridPaperComputeFailure::SubmittedIncomplete(
+                "gridpaper-static-base-bcs-copy-incomplete",
+            ));
+        }
+    }
+    // The next compute dispatch's prologue invalidates its caches after this
+    // synchronous BCS post-sync marker + context-save retirement boundary.
     let geometry_rects = base_stats.geometry_rects;
     let geometry_submits = base_stats.geometry_submits.saturating_add(1);
     let geometry_finished_ns = crate::chronos::monotonic_nanos();
@@ -4078,6 +4111,10 @@ fn render_print_page(
         )
         .map_err(|failure| {
             if failure.submitted_incomplete() {
+                destination.quarantine_backing();
+                if let Some(base) = page.static_base.as_ref() {
+                    base.quarantine_backing();
+                }
                 GRIDPAPER_COMPUTE_QUARANTINED.store(true, Ordering::Release);
                 crate::log_error!(
                     target: "gridpaper";

@@ -59,6 +59,7 @@ const MI_STORE_DATA_IMM_GGTT_DW1: u32 = 0x1040_0002;
 const MI_FLUSH_DW: u32 = (0x26 << 23) | 3;
 const MI_FLUSH_DW_POST_SYNC_WRITE_IMMEDIATE: u32 = 1 << 14;
 const MI_FLUSH_DW_DEST_GGTT: u32 = 1 << 2;
+const MI_FLUSH_DW_TLB_INVALIDATE: u32 = 1 << 18;
 const MI_ARB_CHECK: u32 = 0x05 << 23;
 
 const DIRECT_BLT_RING_BYTES: usize = 4096;
@@ -67,9 +68,8 @@ const DIRECT_BLT_BATCH_BYTES: usize = 4096;
 const DIRECT_BLT_RESULT_BYTES: usize = 4096;
 const DIRECT_BLT_COPY_BYTES: usize = 4096;
 // Match the direct-RCS address envelope so BCS can consume the same stable,
-// allocation-owned producer and compositor aliases. Reusing one small alias
-// for different physical surfaces would require an explicit Gen12 TLB
-// invalidation between jobs and is not a safe frame contract.
+// allocation-owned producer and compositor aliases. Each copy batch invalidates
+// BCS translations before accessing surfaces, including recycled producer VAs.
 const DIRECT_BLT_PPGTT_PT_COUNT: usize = 512;
 const DIRECT_BLT_PPGTT_BYTES: usize = (3 + DIRECT_BLT_PPGTT_PT_COUNT) * 4096;
 const DIRECT_BLT_PPGTT_LIMIT_BYTES: u64 = DIRECT_BLT_PPGTT_PT_COUNT as u64 * 512 * 4096;
@@ -1508,12 +1508,16 @@ fn guc_blt_valid_surface(surface: GucBcs0RgbaSurface) -> bool {
         .ok()
         .and_then(|bytes| surface.gpu.checked_add(bytes))
         .is_some_and(|end| end <= DIRECT_BLT_PPGTT_LIMIT_BYTES);
-    allocation_valid && gpu_range_valid
+    let physical_range_valid = surface.phys.checked_add(surface.bytes as u64).is_some();
+    let control_overlap = surface.gpu < BCS0_GGTT_LIMIT
+        && surface.gpu.saturating_add(surface.bytes as u64) > BCS0_GGTT_BASE;
+    allocation_valid && gpu_range_valid && physical_range_valid && !control_overlap
 }
 
 fn guc_blt_valid_copy(destination: GucBcs0RgbaSurface, copy: GucBcs0RgbaCopy) -> bool {
     guc_blt_valid_surface(copy.source)
         && !guc_blt_physical_ranges_overlap(destination, copy.source)
+        && !guc_blt_gpu_ranges_overlap(destination, copy.source)
         && copy.width != 0
         && copy.height != 0
         && copy
@@ -1592,7 +1596,19 @@ fn guc_blt_encode_ui4_copy_batch(
         MI_STORE_DATA_IMM_GGTT_DW1, (DIRECT_BLT_GPU_VA_RESULT_BASE + 16) as u32,
         0, BCS_BATCH_COOKIE,
     ]);
-    let mut cursor = 4usize;
+    // Gridpaper allocations recycle VAs. Flush stale BCS translations before
+    // surface access; the GGTT command buffer itself is immutable in address.
+    // TGL Vol 2a pp. 955, 990: TLB invalidate requires a post-sync write.
+    // Disable pre-parser across this boundary (also gen12_emit_flush_xcs).
+    batch[4..12].copy_from_slice(&[
+        MI_ARB_CHECK | (1 << 8) | 1,
+        MI_FLUSH_DW | MI_FLUSH_DW_POST_SYNC_WRITE_IMMEDIATE | MI_FLUSH_DW_TLB_INVALIDATE,
+        (DIRECT_BLT_GPU_VA_RESULT_BASE + 24) as u32 | MI_FLUSH_DW_DEST_GGTT,
+        0, 0, 0,
+        MI_ARB_CHECK | (1 << 8),
+        MI_NOOP,
+    ]);
+    let mut cursor = 12usize;
     let mut copied_bytes = 0u64;
     for copy in copies.iter().copied() {
         if !guc_blt_valid_copy(destination, copy) || cursor.saturating_add(10) > batch.len() {
@@ -1636,6 +1652,18 @@ fn guc_blt_encode_ui4_copy_batch(
     super::dma_flush(state.batch_virt, cursor.saturating_mul(core::mem::size_of::<u32>()));
     super::dma_flush(state.result_virt, core::mem::size_of::<u32>());
     Some((copies.len(), copied_bytes))
+}
+
+fn guc_blt_gpu_ranges_overlap(left: GucBcs0RgbaSurface, right: GucBcs0RgbaSurface) -> bool {
+    // Bases are page aligned; rounding the ends also rejects partial-page aliases.
+    let end = |surface: GucBcs0RgbaSurface| {
+        surface.gpu.checked_add(surface.bytes as u64)?.checked_add(4095)
+            .map(|value| value & !4095)
+    };
+    match (end(left), end(right)) {
+        (Some(left_end), Some(right_end)) => left.gpu < right_end && right.gpu < left_end,
+        _ => true,
+    }
 }
 
 fn guc_blt_physical_ranges_overlap(left: GucBcs0RgbaSurface, right: GucBcs0RgbaSurface) -> bool {

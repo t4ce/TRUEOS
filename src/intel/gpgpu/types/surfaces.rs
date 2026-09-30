@@ -125,19 +125,25 @@ impl GpgpuRgba8Surface {
 /// Persistent linear RGBA8 storage owned by one GPU-side producer.
 ///
 /// Gridpaper uses this for its immutable page base: geometry and static glyph
-/// instances are rendered once through ordinary PAT0/WB mappings, then the C++
-/// copy kernel reads it through the same cache policy to seed each PAT3/UC
+/// instances are rendered once through ordinary PAT0/WB mappings, then the copy
+/// service reads it through the same cache policy to seed each PAT3/UC
 /// scanout buffer before animated font instances are composited.
 pub(crate) struct GpgpuOwnedRgba8Surface {
     surface: GpgpuRgba8Surface,
     virt: *mut u8,
     system_service: bool,
+    quarantined: AtomicBool,
 }
 
 unsafe impl Send for GpgpuOwnedRgba8Surface {}
 unsafe impl Sync for GpgpuOwnedRgba8Surface {}
 
 impl GpgpuOwnedRgba8Surface {
+    /// Ambiguous cross-engine completion must retain backing and its VA.
+    pub(crate) fn quarantine_backing(&self) {
+        self.quarantined.store(true, Ordering::Release);
+    }
+
     pub(crate) const fn surface(&self) -> GpgpuRgba8Surface {
         self.surface
     }
@@ -174,6 +180,12 @@ impl GpgpuOwnedRgba8Surface {
 
 impl Drop for GpgpuOwnedRgba8Surface {
     fn drop(&mut self) {
+        if self.quarantined.load(Ordering::Acquire) {
+            crate::log_error!(target: "gpgpu";
+                "intel/gpgpu: RGBA8 cross-engine backing pinned gpu=0x{:X} bytes={} action=no-unmap-no-free\n",
+                self.surface.gpu, self.surface.bytes);
+            return;
+        }
         let retired = if self.system_service {
             retire_shadertoy_scratch_range(self.surface)
         } else {

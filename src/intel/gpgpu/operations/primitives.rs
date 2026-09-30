@@ -59,6 +59,40 @@ pub(crate) fn copy_rect_rgba8_complete_mode(
     submit_copy_rect_2d(src, dst, params, direct_scanout)
 }
 
+/// Release completed system-compute writes before a different engine reads
+/// them. Uses the existing HDC/L3 drain and ordered PIPE_CONTROL cookie without
+/// changing any surface's PAT policy or issuing a copy walker.
+pub(crate) fn release_compute_writes_for_copy() -> GpgpuSubmissionOutcome {
+    let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
+    let Some(dev) = super::claimed_device() else {
+        return GpgpuSubmissionOutcome::Unavailable;
+    };
+    let Some(state) = direct_rcs_state_once(dev) else {
+        return GpgpuSubmissionOutcome::Unavailable;
+    };
+    if !direct_rcs_forcewake(dev)
+        || !direct_rcs_map_state(dev, state)
+        || !direct_rcs_init_ppgtt(state)
+        || !direct_rcs_encode_rgba8_scanout_release_batch(state)
+    {
+        return GpgpuSubmissionOutcome::Unavailable;
+    }
+    let submission = direct_rcs_submit_batch_state(dev, state);
+    if !submission.may_have_submitted() {
+        return GpgpuSubmissionOutcome::Unavailable;
+    }
+    if submission.can_poll()
+        && direct_rcs_poll_result_slot_timeout_ms(
+            state, RGBA8_SCANOUT_RELEASE_MARKER_SLOT, RGBA8_SCANOUT_RELEASE_MARKER,
+            UI4_COMPUTE_PRODUCER_RETIRE_TIMEOUT_MS,
+        ) == RGBA8_SCANOUT_RELEASE_MARKER
+    {
+        GpgpuSubmissionOutcome::Complete
+    } else {
+        GpgpuSubmissionOutcome::SubmittedIncomplete
+    }
+}
+
 fn reserve_font_coverage_gpu_va(bytes: usize) -> Option<u64> {
     let bytes = align_up(bytes, super::WARM_ALIGN)? as u64;
     {
@@ -245,7 +279,7 @@ pub(crate) fn allocate_font_instance_rgba8_surface_cleared(
         recycle_font_coverage_gpu_va(gpu, bytes);
         return None;
     };
-    Some(GpgpuOwnedRgba8Surface { surface, virt, system_service: false })
+    Some(GpgpuOwnedRgba8Surface { surface, virt, system_service: false, quarantined: AtomicBool::new(false) })
 }
 
 pub(crate) fn allocate_font_instance_state(capacity: usize) -> Option<GpgpuOwnedFontInstanceState> {

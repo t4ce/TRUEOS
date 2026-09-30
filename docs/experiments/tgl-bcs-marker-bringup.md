@@ -83,6 +83,10 @@ first batch contains:
 
 ```
 MI_STORE_DATA_IMM (batch-entry cookie)
+MI_ARB_CHECK (disable pre-parser)
+MI_FLUSH_DW (invalidate BCS TLB, post-sync scratch write to GGTT)
+MI_ARB_CHECK (enable pre-parser)
+MI_NOOP
 MI_FLUSH_DW (write completion cookie to GGTT)
 MI_ARB_CHECK
 MI_BATCH_BUFFER_END
