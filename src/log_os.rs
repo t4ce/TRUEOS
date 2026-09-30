@@ -45,12 +45,12 @@ pub(crate) mod flags {
     /// Render Info is intentionally NOT enabled: font-tessel polling and retry
     /// dumps exhausted the first capture. All areas retain Error/Important/Warn.
     /// See log_os.tgl_gpu_diag_profile.txt for the exact matrix and limitations.
-    pub(crate) const TGL_GPU_DIAG_PROFILE_ENABLED: bool = false;
+    pub(crate) const TGL_GPU_DIAG_PROFILE_ENABLED: bool = true;
 
     /// Blueprint/hypervisor bring-up profile. Keep the semantic Blueprint and
     /// HV lanes fully visible while suppressing display, render, and GPU
     /// chatter that obscures Blueprint loading and VM lifecycle transitions.
-    pub(crate) const BLUEPRINT_HV_DEBUG_PROFILE_ENABLED: bool = true;
+    pub(crate) const BLUEPRINT_HV_DEBUG_PROFILE_ENABLED: bool = false;
 
     /// Compact font warm/coverage breadcrumbs, using the existing Gpgpu/Info
     /// policy and rate limiter. No Render/Info or screen-specific filter.
@@ -64,11 +64,11 @@ pub(crate) mod flags {
     /// current CrabUSB controller/HID handoff capture. Keep this enabled while
     /// the passed-through ASMedia xHCI Heal experiment needs its Info-level
     /// admission, capability, and quarantine records in host captures.
-    pub(crate) const USB_RUNTIME_DIAG_PROFILE_ENABLED: bool = true;
+    pub(crate) const USB_RUNTIME_DIAG_PROFILE_ENABLED: bool = false;
 
     /// Boot/network diagnostic profile for startup timing and first-net-process
     /// operability logs.
-    pub(crate) const BOOT_DIAG_PROFILE_ENABLED: bool = false;
+    pub(crate) const BOOT_DIAG_PROFILE_ENABLED: bool = true;
 
     /// Request-level HTTP diagnostics without per-packet trace traffic.
     pub(crate) const HTTP_FETCH_DIAG_PROFILE_ENABLED: bool = true;

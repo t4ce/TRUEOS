@@ -67,6 +67,7 @@ pub(crate) mod tlb_smbios;
 pub(crate) mod ttstt;
 pub(crate) mod update;
 pub(crate) mod vgpu;
+pub(crate) mod vcpy;
 pub(crate) mod vid;
 #[cfg(feature = "wc3")]
 pub(crate) mod wc3;

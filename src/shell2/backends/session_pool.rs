@@ -425,6 +425,14 @@ pub(crate) fn submit_input(vm_id: u8, bytes: &[u8]) -> Result<usize, i32> {
         return Err(FRONTEND_BUSY_ERROR);
     }
     state.rx.extend(bytes.iter().copied());
+    let handoff_vm = state.handoff_owner.and_then(|owner| {
+        let raw = owner.raw();
+        (raw > 0 && raw <= u8::MAX as u32 + 1).then_some((raw - 1) as u8)
+    });
+    drop(state);
+    if let Some(handoff_vm) = handoff_vm {
+        crate::hv::notify_blueprint_console_input(handoff_vm);
+    }
     Ok(bytes.len())
 }
 

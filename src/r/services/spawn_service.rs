@@ -9,7 +9,7 @@ use trueos_executor::{SpawnError, SpawnToken, Spawner};
 use trueos_time::{Duration as EmbassyDuration, Timer};
 
 use crate::r::spawn_spec::{SpawnAttempt, TaskSpec};
-// NOTE: This file is intended to become the single source of truth for Embassy task startup.
+// NOTE: This file is intended to become the single source of truth for task startup.
 
 const SPAWN_SERVICE_AFTER_START_MS: u64 = 25;
 const SPAWN_SERVICE_PENDING_MS: u64 = 150;
@@ -1635,7 +1635,7 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &FTP_SERVER_STARTED,
         spawn_ftp_server,
     ),
-    TaskSpec::enabled("tga", 0, &TGA_TASK_STARTED, spawn_tga_task),
+    TaskSpec::disabled("tga", 0, &TGA_TASK_STARTED, spawn_tga_task),
     TaskSpec::enabled("tga-rpc", 0, &TGA_RPC_SERVICE_STARTED, spawn_tga_rpc_service),
     TaskSpec::enabled("tga-rpc-heartbeat", 0, &TGA_RPC_HEARTBEAT_STARTED, spawn_tga_rpc_heartbeat),
     TaskSpec::enabled_gated(

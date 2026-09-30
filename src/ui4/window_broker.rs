@@ -72,6 +72,7 @@ impl WindowOwner {
     pub(crate) const SVG_OUTLINE_PROBE: Self = Self::KernelApp(7);
     pub(crate) const START_BUTTON_SERVICE: Self = Self::KernelApp(8);
     pub(crate) const LINK_SERVICE: Self = Self::KernelApp(9);
+    pub(crate) const VCPY_SERVICE: Self = Self::KernelApp(10);
 
     /// Stable, allocation-free producer name for diagnostics. The enum still
     /// carries the application or VM instance where the name is shared.
@@ -85,6 +86,7 @@ impl WindowOwner {
             Self::SVG_OUTLINE_PROBE => "svg-outline-probe",
             Self::START_BUTTON_SERVICE => "start-button-service",
             Self::LINK_SERVICE => "link-service",
+            Self::VCPY_SERVICE => "vcpy-service",
             Self::KernelApp(_) => "kernel-app",
             Self::Vm(_) => "blueprint-vm",
         }

@@ -426,7 +426,7 @@ pub(crate) fn submit_guc_bcs0_fast_copy_probe_now() -> GucBcs0FastCopyProbe {
     };
     core::sync::atomic::fence(Ordering::SeqCst);
     let submission = match crate::gpu::executor::submit_kernel_context(
-        crate::gpu::vgpu::KernelClient::Ui4Blitter,
+        crate::gpu::vgpu::KernelClient::Vcpy,
         descriptor,
     ) {
         Ok(submission) => submission,
@@ -447,7 +447,7 @@ pub(crate) fn submit_guc_bcs0_fast_copy_probe_now() -> GucBcs0FastCopyProbe {
             // host did not observe its response. Do not roll back or reuse.
             let isolation = guc_blt_quarantine("submit-ambiguous");
             crate::log!(
-                "intel/blt: guc-bcs0-fast-copy submitted=0 error={:?} path=guc direct_elsp=0 legacy_fallback=0 action=quarantine-ui4-blitter device_found={} contexts_disabled={} contexts_retained={} storage_released=0\n",
+                "intel/blt: guc-bcs0-fast-copy submitted=0 error={:?} path=guc direct_elsp=0 legacy_fallback=0 action=quarantine-vcpy device_found={} contexts_disabled={} contexts_retained={} storage_released=0\n",
                 error,
                 isolation.device_found as u8,
                 isolation.contexts_disabled,
@@ -609,7 +609,7 @@ fn guc_blt_poll_and_retire(
                 retire_ms,
             };
             crate::log_error!(target: "gfx";
-                "intel/blt: guc-bcs0-fast-copy timeout marker_observed={} context_saved={} observed=0x{:08X} expected=0x{:08X} saved_head={} published_tail={} timeout_ms={} action=quarantine-ui4-blitter device_found={} contexts_disabled={} contexts_retained={} lane_busy=1 storage_released=0\n",
+                "intel/blt: guc-bcs0-fast-copy timeout marker_observed={} context_saved={} observed=0x{:08X} expected=0x{:08X} saved_head={} published_tail={} timeout_ms={} action=quarantine-vcpy device_found={} contexts_disabled={} contexts_retained={} lane_busy=1 storage_released=0\n",
                 marker_observed as u8,
                 save_status.observed as u8,
                 observed,
@@ -772,7 +772,7 @@ pub(crate) fn queue_guc_bcs0_rgba_copies(
     };
     core::sync::atomic::fence(Ordering::SeqCst);
     let submission = match crate::gpu::executor::submit_kernel_context(
-        crate::gpu::vgpu::KernelClient::Ui4Blitter,
+        crate::gpu::vgpu::KernelClient::Vcpy,
         descriptor,
     ) {
         Ok(submission) => submission,
@@ -784,7 +784,7 @@ pub(crate) fn queue_guc_bcs0_rgba_copies(
         Err(error) => {
             let isolation = guc_blt_quarantine("submit-ambiguous");
             crate::log_error!(target: "gfx";
-                "intel/blt: ui4-bcs0 submitted=0 error={:?} copies={} path=guc direct_elsp=0 legacy_fallback=0 action=quarantine-ui4-blitter device_found={} contexts_disabled={} contexts_retained={} storage_released=0\n",
+                "intel/blt: ui4-bcs0 submitted=0 error={:?} copies={} path=guc direct_elsp=0 legacy_fallback=0 action=quarantine-vcpy device_found={} contexts_disabled={} contexts_retained={} storage_released=0\n",
                 error, copy_count, isolation.device_found as u8,
                 isolation.contexts_disabled, isolation.contexts_retained,
             );
@@ -844,14 +844,18 @@ pub(crate) fn poll_guc_bcs0_rgba_copies(
         if let Some(pending) = runtime.pending.take() {
             let _ = crate::gpu::executor::complete_kernel_submission(pending, false);
         }
+        let activity = activity_snapshot();
         crate::log_error!(target: "gfx";
-            "intel/blt: ui4-bcs0 timeout sequence={} copies={} bytes={} marker_observed={} context_saved={} observed=0x{:08X} expected=0x{:08X} saved_head={} published_tail={} timeout_ms={} action=quarantine-ui4-blitter device_found={} contexts_disabled={} contexts_retained={} lane_busy=1 storage_released=0\n",
+            "intel/blt: ui4-bcs0 timeout sequence={} copies={} bytes={} marker_observed={} context_saved={} observed=0x{:08X} expected=0x{:08X} saved_head={} published_tail={} timeout_ms={} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} action=quarantine-vcpy device_found={} contexts_disabled={} contexts_retained={} lane_busy=1 storage_released=0\n",
             runtime.sequence, runtime.copies, runtime.bytes,
             marker_observed as u8, save_status.observed as u8, observed,
             runtime.expected_marker,
             save_status.saved_head & (DIRECT_BLT_RING_BYTES as u32 - 1),
             save_status.published_tail_bytes,
-            GUC_BLT_UI4_TIMEOUT_MS, isolation.device_found as u8,
+            GUC_BLT_UI4_TIMEOUT_MS,
+            activity.head, activity.tail, activity.acthd,
+            activity.ipeir, activity.ipehr, activity.eir,
+            isolation.device_found as u8,
             isolation.contexts_disabled, isolation.contexts_retained,
         );
         return GucBcs0CopyCompletion::Failed;
@@ -891,11 +895,11 @@ fn guc_blt_quarantine(reason: &'static str) -> crate::gpu::vgpu::KernelClientIso
         return crate::gpu::vgpu::KernelClientIsolation::default();
     }
     let isolation =
-        crate::gpu::vgpu::isolate_kernel_context(crate::gpu::vgpu::KernelClient::Ui4Blitter);
+        crate::gpu::vgpu::isolate_kernel_context(crate::gpu::vgpu::KernelClient::Vcpy);
     crate::log_error!(target: "gfx";
         "intel/blt: guc-bcs0 quarantine reason={} client={} device_found={} contexts_disabled={} contexts_retained={} lane_busy=1 storage_released=0 backing_retained=1 direct-engine-reset=0\n",
         reason,
-        crate::gpu::vgpu::KernelClient::Ui4Blitter.name(),
+        crate::gpu::vgpu::KernelClient::Vcpy.name(),
         isolation.device_found as u8,
         isolation.contexts_disabled,
         isolation.contexts_retained,
@@ -1631,7 +1635,7 @@ fn direct_blt_init_context_image(
     lrc[idx] = direct_blt_mi_lri_cmd(13, MI_LRI_FORCE_POSTED);
     idx += 1;
     lrc[idx] = ring_base + RING_CONTEXT_CONTROL as u32;
-    lrc[idx + 1] = direct_blt_ctx_control_value(false);
+    lrc[idx + 1] = direct_blt_ctx_control_value(true);
     lrc[idx + 2] = ring_base + RING_HEAD as u32;
     lrc[idx + 3] = 0;
     lrc[idx + 4] = ring_base + RING_TAIL as u32;
@@ -1656,11 +1660,7 @@ fn direct_blt_init_context_image(
     lrc[idx + 23] = 0;
     lrc[idx + 24] = ring_base + 0x2B4;
     lrc[idx + 25] = 0;
-    lrc[idx + 26] = ring_base + 0x5A8;
-    lrc[idx + 27] = 0;
-    lrc[idx + 28] = ring_base + 0x5AC;
-    lrc[idx + 29] = 0;
-    idx += 30;
+    idx += 26;
     direct_blt_push_nops(lrc, &mut idx, 5);
 
     lrc[idx] = direct_blt_mi_lri_cmd(9, MI_LRI_FORCE_POSTED);
@@ -1680,37 +1680,8 @@ fn direct_blt_init_context_image(
         lrc[idx + 1] = value;
         idx += 2;
     }
-
-    lrc[idx] = direct_blt_mi_lri_cmd(3, MI_LRI_FORCE_POSTED);
-    idx += 1;
-    lrc[idx] = ring_base + 0x1B0;
-    lrc[idx + 1] = 0;
-    lrc[idx + 2] = ring_base + 0x5A8;
-    lrc[idx + 3] = 0;
-    lrc[idx + 4] = ring_base + 0x5AC;
-    lrc[idx + 5] = 0;
-    idx += 6;
-    direct_blt_push_nops(lrc, &mut idx, 6);
-
-    lrc[idx] = direct_blt_mi_lri_cmd(1, MI_LRI_FORCE_POSTED);
-    idx += 1;
-    lrc[idx] = ring_base + 0xC8;
-    lrc[idx + 1] = 0x7FFF_FFFF;
-    idx += 2;
-    direct_blt_push_nops(lrc, &mut idx, 13);
-
-    lrc[idx] = direct_blt_mi_lri_cmd(4, MI_LRI_FORCE_POSTED);
-    idx += 1;
-    lrc[idx] = ring_base + 0x28;
-    lrc[idx + 1] = 0;
-    lrc[idx + 2] = ring_base + RING_MI_MODE as u32;
-    lrc[idx + 3] = direct_blt_masked_bit_disable(STOP_RING);
-    lrc[idx + 4] = ring_base + RING_IPEHR as u32;
-    lrc[idx + 5] = 0;
-    lrc[idx + 6] = ring_base + 0x84;
-    lrc[idx + 7] = 0;
-    idx += 8;
-    direct_blt_push_nops(lrc, &mut idx, 8);
+    // Gen12 XCS ends after the 9-register PDP block. The extra Gen8 XCS
+    // save registers are not part of this engine's context image.
 
     const CTX_RING_TAIL_DW: usize = 7;
     const CTX_RING_START_DW: usize = 9;

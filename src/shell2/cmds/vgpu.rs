@@ -274,7 +274,7 @@ fn print_status(io: &'static dyn ShellBackend2) {
     print_kernel_timeline(io, "gpgpu-font", KernelClient::GpgpuFont);
     print_kernel_timeline(io, "gpgpu-execution", KernelClient::GpgpuExecution);
     print_kernel_timeline(io, "ui4-compositor", KernelClient::Ui4Compositor);
-    print_kernel_timeline(io, "ui4-blitter", KernelClient::Ui4Blitter);
+    print_kernel_timeline(io, "vcpy", KernelClient::Vcpy);
 }
 
 fn print_kernel_timeline(io: &'static dyn ShellBackend2, name: &str, client: KernelClient) {
@@ -445,9 +445,9 @@ fn test_compute(io: &'static dyn ShellBackend2) -> bool {
 }
 
 fn test_blit(io: &'static dyn ShellBackend2) -> bool {
-    let before = vgpu::kernel_timeline(KernelClient::Ui4Blitter).unwrap_or_default();
+    let before = vgpu::kernel_timeline(KernelClient::Vcpy).unwrap_or_default();
     let probe = crate::intel::submit_guc_bcs0_fast_copy_probe_now();
-    let after = vgpu::kernel_timeline(KernelClient::Ui4Blitter).unwrap_or_default();
+    let after = vgpu::kernel_timeline(KernelClient::Vcpy).unwrap_or_default();
     let timeline = after.submitted > 0
         && after.submitted >= before.submitted
         && after.completed == after.submitted

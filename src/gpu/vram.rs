@@ -271,7 +271,7 @@ fn principal_instance_suffix(principal: Principal) -> String {
         | Principal::KernelGpgpuCodec
         | Principal::KernelLfm25
         | Principal::KernelUi4Compositor
-        | Principal::KernelUi4Blitter
+        | Principal::KernelVcpy
         | Principal::HostRuntime => String::new(),
     }
 }

@@ -5229,7 +5229,7 @@ pub(crate) fn queue_ui4_static_primary_composition_bcs0(
         return Err(Ui4AsyncCompositionError::Unavailable);
     }
     let blit =
-        crate::intel::queue_guc_bcs0_rgba_copies(destination, &copies).map_err(
+        crate::r::services::vcpy_service::queue_rgba_copies(destination, &copies).map_err(
             |error| match error {
                 crate::intel::GucBcs0CopySubmitError::Busy => Ui4AsyncCompositionError::Busy,
                 crate::intel::GucBcs0CopySubmitError::Unavailable => {
@@ -5526,7 +5526,7 @@ pub(crate) fn queue_ui4_static_overlay_composition_bcs0(
         pitch_bytes: surface.pitch_bytes,
     };
     let blit =
-        crate::intel::queue_guc_bcs0_rgba_copies(destination, &copies).map_err(
+        crate::r::services::vcpy_service::queue_rgba_copies(destination, &copies).map_err(
             |error| match error {
                 crate::intel::GucBcs0CopySubmitError::Busy => Ui4AsyncCompositionError::Busy,
                 crate::intel::GucBcs0CopySubmitError::Unavailable => {
@@ -5840,7 +5840,7 @@ pub(crate) fn poll_ui4_composition(composition: Ui4AsyncComposition) -> Ui4Async
             }
         }
         Some(Ui4AsyncCompositionWork::GucBcs(blit)) => {
-            match crate::intel::poll_guc_bcs0_rgba_copies(blit) {
+            match crate::r::services::vcpy_service::poll_rgba_copies(blit) {
                 crate::intel::GucBcs0CopyCompletion::Pending => Ui4AsyncCompositionPoll::Pending,
                 crate::intel::GucBcs0CopyCompletion::Complete => Ui4AsyncCompositionPoll::Ready,
                 crate::intel::GucBcs0CopyCompletion::Failed

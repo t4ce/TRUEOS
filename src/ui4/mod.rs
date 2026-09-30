@@ -26,6 +26,7 @@ mod screenshot;
 mod slot4_service;
 mod start_button;
 mod video_frame;
+pub(crate) mod vcpy_demo;
 pub(crate) mod window_arc;
 mod window_broker;
 

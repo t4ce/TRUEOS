@@ -35,6 +35,7 @@ const TOOL_JSON_WIN: &str = r#"{"type":"object","properties":{"action":{"type":"
 const TOOL_JSON_DISC: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["list","format","ramdisc"],"description":"disc action to run."},"disk_id":{"type":"string","description":"Disk id string for action=format."},"size":{"type":"string","description":"Optional ramdisc size like 512MB or 1GiB for action=ramdisc."}},"required":["action"],"additionalProperties":false}"#;
 const TOOL_JSON_GRID: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
 const TOOL_JSON_VGPU: &str = r#"{"type":"object","properties":{"command":{"type":"string","enum":["status","test","material","depth","cull","pipeline","capture","frush"],"description":"Inspect the vGPU broker, run a runtime test, select a Picasso diagnostic view, or control the Font Rush2 demo."},"frush_action":{"type":"string","enum":["start","stop","status"],"description":"Start, stop, or inspect the eight-worker Font Rush2 demo when command=frush; start is the default."},"test":{"type":"string","enum":["broker","abi","guc","compute","blit","all"],"description":"Runtime test selected when command=test."},"view":{"type":"string","enum":["pbr","base","normal","uv","solid"],"description":"Next-frame Picasso output selected when command=material; pbr restores ordinary shading."},"depth":{"type":"string","enum":["on","off"],"description":"Picasso depth test/write diagnostic selected when command=depth; on restores ordinary depth testing."},"cull":{"type":"string","enum":["on","off"],"description":"Picasso face culling diagnostic selected when command=cull; on restores material culling."},"pipeline":{"type":"string","enum":["pbr","uv","uv8"],"description":"Picasso shader pipeline diagnostic selected when command=pipeline; uv uses authored-UV shaders with current mesh buffers, pbr restores full materials. uv8 keeps the authored-UV VS and selects the baked SIMD8 PS."},"capture":{"type":"string","enum":["vue"],"description":"One-shot Picasso pre-clip vertex capture selected when command=capture; keeps rendering enabled and reports bounded diagnostic summaries."}},"required":["command"],"additionalProperties":false}"#;
+const TOOL_JSON_VCPY: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["start","stop","status"],"description":"Start, stop, or inspect the independent Fast Copy Engine bring-up service."}},"required":["action"],"additionalProperties":false}"#;
 #[cfg(feature = "trueos_lumen")]
 const TOOL_JSON_LUM: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
 const TOOL_JSON_NET: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["icmp","irc","nic","hostname"],"description":"net subcommand to run."},"target":{"type":"string","description":"Target host for net icmp."},"selector":{"type":"string","description":"Optional NIC selector like index, vid:pid, or bb:dd.f."},"host":{"type":"string","description":"Host for net irc."},"channel":{"type":"string","description":"Optional channel like #trueos for net irc."},"name":{"type":"string","description":"Optional hostname for net hostname."}},"required":["subcommand"],"additionalProperties":false}"#;
@@ -189,6 +190,10 @@ fn dispatch_vgpu(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> Par
     super::cmds::vgpu::try_parse(io, rest)
 }
 
+fn dispatch_vcpy(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::vcpy::try_parse(spawner, io, rest)
+}
+
 fn dispatch_net(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     let _ = spawner;
     let mut args = rest.split_whitespace();
@@ -336,6 +341,15 @@ const SHELL2_COMMAND_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         handler: dispatch_vgpu,
         tool_description: Some("Inspect and validate the mediated virtual GPU boundary."),
         tool_parameters_json: Some(TOOL_JSON_VGPU),
+    },
+    BuiltinShell2CmdEntry {
+        name: "vcpy",
+        mode: "cmd",
+        color: Some(STATUS_BLUE_RGB),
+        advertised: true,
+        handler: dispatch_vcpy,
+        tool_description: Some("Control the independent Fast Copy Engine bring-up service."),
+        tool_parameters_json: Some(TOOL_JSON_VCPY),
     },
     BuiltinShell2CmdEntry {
         name: "backup",
@@ -683,7 +697,7 @@ pub(crate) fn try_dispatch(
 
 const TITLEBAR_MEDIA_COMMANDS: &[&str] = &["img", "shot", "vid", "film", "cam"];
 const TITLEBAR_ADMIN_COMMANDS: &[&str] = &[
-    "cry", "disc", "tlb", "xhci", "ram", "smp", "net", "bios", "vgpu",
+    "cry", "disc", "tlb", "xhci", "ram", "smp", "net", "bios", "vgpu", "vcpy",
 ];
 /// Render Shell2's default aliases, media controls, and live app.db names.
 pub(crate) fn titlebar_right_default_names_text() -> AllocString {

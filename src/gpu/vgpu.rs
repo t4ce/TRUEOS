@@ -112,10 +112,9 @@ pub(crate) enum KernelClient {
     /// frame in flight while video conversion and application compute continue
     /// through `GpgpuSystem`, and Font Engine work through `GpgpuFont`.
     Ui4Compositor,
-    /// Persistent GuC-owned BCS0 lane for UI4 copies and composition staging.
-    /// Keeping it separate from the RCS compositor lane gives copy work its
-    /// own backpressure and completion timeline.
-    Ui4Blitter,
+    /// Service-owned GuC BCS0 lane for fast copies, including UI4 staging.
+    /// This remains independent of the RCS compositor timeline.
+    Vcpy,
 }
 
 impl KernelClient {
@@ -152,7 +151,7 @@ impl KernelClient {
             Self::GpgpuCodec => "kernel-gpgpu-codec",
             Self::Lfm25 => "kernel-lfm25",
             Self::Ui4Compositor => "kernel-ui4-compositor",
-            Self::Ui4Blitter => "kernel-ui4-blitter",
+            Self::Vcpy => "kernel-vcpy",
         }
     }
 
@@ -167,7 +166,7 @@ impl KernelClient {
             Self::GpgpuCodec => Principal::KernelGpgpuCodec,
             Self::Lfm25 => Principal::KernelLfm25,
             Self::Ui4Compositor => Principal::KernelUi4Compositor,
-            Self::Ui4Blitter => Principal::KernelUi4Blitter,
+            Self::Vcpy => Principal::KernelVcpy,
         }
     }
 
@@ -178,7 +177,7 @@ impl KernelClient {
                 QueueClass::Compute
             }
             Self::Ui4Compositor => QueueClass::Compute,
-            Self::Ui4Blitter => QueueClass::Copy,
+            Self::Vcpy => QueueClass::Copy,
         }
     }
 
@@ -206,13 +205,13 @@ impl KernelClient {
             // runnable even though each request is bounded. Keep them as
             // normal-priority peers so neither side consumer can invert the
             // other, while the downstream compositor can drain a completed
-            // frame promptly. The copy-only blitter is not scanout-critical.
+            // frame promptly. The copy service is not scanout-critical.
             Self::Render
             | Self::Render1
             | Self::Render2
             | Self::GpgpuExecution
             | Self::GpgpuCodec
-            | Self::Ui4Blitter => PhysicalContextPriority::KernelNormal,
+            | Self::Vcpy => PhysicalContextPriority::KernelNormal,
         }
     }
 
@@ -234,7 +233,7 @@ impl KernelClient {
             | Self::Ui4Compositor => {
                 matches!(engine.class, EngineClass::RenderCompute) && engine.instance == 0
             }
-            Self::Ui4Blitter => matches!(engine.class, EngineClass::Copy) && engine.instance == 0,
+            Self::Vcpy => matches!(engine.class, EngineClass::Copy) && engine.instance == 0,
         }
     }
 }
@@ -270,7 +269,7 @@ const _: () = {
     ));
     assert!(matches!(KernelClient::Lfm25.physical_priority(), PhysicalContextPriority::KernelHigh));
     assert!(matches!(
-        KernelClient::Ui4Blitter.physical_priority(),
+        KernelClient::Vcpy.physical_priority(),
         PhysicalContextPriority::KernelNormal
     ));
 };
@@ -304,9 +303,9 @@ mod kernel_client_priority_tests {
     }
 
     #[test]
-    fn copy_only_ui4_blitter_remains_normal_priority() {
+    fn copy_service_remains_normal_priority() {
         assert_eq!(
-            KernelClient::Ui4Blitter.physical_priority(),
+            KernelClient::Vcpy.physical_priority(),
             PhysicalContextPriority::KernelNormal,
         );
     }
@@ -323,7 +322,7 @@ pub(crate) enum Principal {
     KernelGpgpuCodec,
     KernelLfm25,
     KernelUi4Compositor,
-    KernelUi4Blitter,
+    KernelVcpy,
     HostRuntime,
     HullGuest(u16),
     RuntimeTest(u16),
@@ -341,7 +340,7 @@ impl Principal {
             Self::KernelGpgpuCodec => "kernel-gpgpu-codec",
             Self::KernelLfm25 => "kernel-lfm25",
             Self::KernelUi4Compositor => "kernel-ui4-compositor",
-            Self::KernelUi4Blitter => "kernel-ui4-blitter",
+            Self::KernelVcpy => "kernel-vcpy",
             Self::HostRuntime => "host-runtime",
             Self::HullGuest(_) => "hull-guest",
             Self::RuntimeTest(_) => "runtime-test",
@@ -5991,7 +5990,7 @@ const fn kernel_client_for_principal(principal: Principal) -> Option<KernelClien
         Principal::KernelGpgpuCodec => Some(KernelClient::GpgpuCodec),
         Principal::KernelLfm25 => Some(KernelClient::Lfm25),
         Principal::KernelUi4Compositor => Some(KernelClient::Ui4Compositor),
-        Principal::KernelUi4Blitter => Some(KernelClient::Ui4Blitter),
+        Principal::KernelVcpy => Some(KernelClient::Vcpy),
         Principal::HostRuntime | Principal::HullGuest(_) | Principal::RuntimeTest(_) => None,
     }
 }
@@ -6669,7 +6668,7 @@ fn allowed_capabilities(
         | Principal::KernelGpgpuCodec
         | Principal::KernelLfm25
         | Principal::KernelUi4Compositor
-        | Principal::KernelUi4Blitter => caps
+        | Principal::KernelVcpy => caps
             .union(Capabilities::PRESENT)
             .union(Capabilities::KERNEL_CONTEXT),
         Principal::HullGuest(_) => caps.union(Capabilities::PRESENT),
@@ -6688,7 +6687,7 @@ const fn quota_for(principal: Principal) -> Quota {
         | Principal::KernelGpgpuCodec
         | Principal::KernelLfm25
         | Principal::KernelUi4Compositor
-        | Principal::KernelUi4Blitter => Quota::KERNEL,
+        | Principal::KernelVcpy => Quota::KERNEL,
         Principal::HostRuntime => Quota::HOST,
         Principal::HullGuest(_) => Quota::GUEST,
         Principal::RuntimeTest(_) => Quota::TEST,
@@ -6742,7 +6741,7 @@ fn ensure_kernel_device(
     let mut capabilities = Capabilities::CLIENT_BASE
         .union(Capabilities::PRESENT)
         .union(Capabilities::KERNEL_CONTEXT);
-    if client == KernelClient::Ui4Blitter {
+    if client == KernelClient::Vcpy {
         capabilities = capabilities.union(Capabilities::COPY);
     }
     let record = VirtualDevice {
