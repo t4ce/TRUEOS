@@ -80,6 +80,9 @@ pub struct HubSettings {
 }
 
 impl HubOp for HubDevice {
+    fn num_ports(&self) -> Option<u8> {
+        Some(self.data.num_ports)
+    }
     fn slot_id(&self) -> u8 {
         self.data.dev.slot_id()
     }

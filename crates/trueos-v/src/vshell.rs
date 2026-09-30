@@ -624,6 +624,15 @@ pub fn open_images(paths: &[String]) -> Result<(), i32> {
     if rc == 0 { Ok(()) } else { Err(rc) }
 }
 
+/// Queue looping playback through Shell2's `vid fs` player.
+pub fn play_video(path: &str) -> Result<(), i32> {
+    if path.is_empty() || !path.starts_with('/') || path.as_bytes().contains(&0) {
+        return Err(-1);
+    }
+    let rc = unsafe { vcabi::trueos_cabi_vid_open_v1(path.as_ptr(), path.len()) };
+    if rc == 0 { Ok(()) } else { Err(rc) }
+}
+
 pub const KONSOLE_FRAME_TERMINAL_HANDOFF: u32 = 1 << 31;
 
 #[inline]

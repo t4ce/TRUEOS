@@ -280,6 +280,8 @@ pub struct TlbUsbHubPathHop {
 
 #[derive(Clone, Debug, Default)]
 pub struct TlbUsbDevice {
+    pub controller_index: usize,
+    pub hub_ports: Option<u8>,
     pub stable_id: u32,
     pub slot_id: u8,
     pub root_port_id: u8,
@@ -392,25 +394,12 @@ pub fn observe_probed_devices(
     label: &str,
     devices: &[crabusb::ProbedDevice],
 ) {
-    let inferred_root_port = (controller_index == 0)
-        .then(super::lab::latest_snapshot)
-        .flatten()
-        .and_then(|snapshot| {
-            let mut connected = snapshot
-                .ports
-                .iter()
-                .filter(|port| (port.portsc & 1) != 0)
-                .map(|port| port.port_id);
-            let first = connected.next()?;
-            connected.next().is_none().then_some(first)
-        });
-
     let mut observed = OBSERVED_USB_DEVICES[controller_index].lock();
     if label == "initial" {
         observed.clear();
     }
     for probed in devices {
-        let next = tlb_device_from_probed(controller_index, probed, inferred_root_port);
+        let next = tlb_device_from_probed(controller_index, probed);
         if let Some(existing) = observed
             .iter_mut()
             .find(|device| device.stable_id == next.stable_id)
@@ -422,11 +411,7 @@ pub fn observe_probed_devices(
     }
 }
 
-fn tlb_device_from_probed(
-    controller_index: usize,
-    probed: &crabusb::ProbedDevice,
-    inferred_root_port: Option<u8>,
-) -> TlbUsbDevice {
+fn tlb_device_from_probed(controller_index: usize, probed: &crabusb::ProbedDevice) -> TlbUsbDevice {
     let descriptor = probed.descriptor();
     let configurations = probed
         .configurations()
@@ -467,8 +452,11 @@ fn tlb_device_from_probed(
         })
         .collect();
     let slot_id = probed.id().try_into().unwrap_or(u8::MAX);
-    let root_port_id = inferred_root_port.unwrap_or(0);
+    let topology = probed.topology();
+    let root_port_id = topology.map_or(0, |location| location.root_port_id);
     TlbUsbDevice {
+        controller_index,
+        hub_ports: topology.and_then(|location| location.hub_ports),
         stable_id: stable_usb_id(
             controller_index,
             slot_id,
@@ -478,9 +466,17 @@ fn tlb_device_from_probed(
         ),
         slot_id,
         root_port_id,
-        port_id: root_port_id,
-        route_string: 0,
-        speed: "unknown",
+        port_id: topology.map_or(0, |location| location.port_id),
+        route_string: topology.map_or(0, |location| location.route_string),
+        speed: topology.map_or("unknown", |location| match location.speed {
+            crabusb::usb_if::host::hub::Speed::Wireless => "wireless",
+            crabusb::usb_if::host::hub::Speed::Low => "low",
+            crabusb::usb_if::host::hub::Speed::Full => "full",
+            crabusb::usb_if::host::hub::Speed::High => "high",
+            crabusb::usb_if::host::hub::Speed::SuperSpeed => "super",
+            crabusb::usb_if::host::hub::Speed::SuperSpeedPlus => "super+",
+        }),
+        parent_hub_slot_id: topology.and_then(|location| location.parent_hub_slot_id),
         vendor_id: descriptor.vendor_id,
         product_id: descriptor.product_id,
         class: descriptor.class,
@@ -490,7 +486,7 @@ fn tlb_device_from_probed(
         device_version: descriptor.device_version,
         num_configurations: descriptor.num_configurations,
         max_packet_size_0: descriptor.max_packet_size_0,
-        path: inferred_root_port.into_iter().collect(),
+        path: topology.map_or_else(Vec::new, |location| location.path.clone()),
         configurations,
         ..TlbUsbDevice::default()
     }

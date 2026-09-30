@@ -24,6 +24,9 @@ pub(crate) trait EventHandlerOp: Send + Any + Sync + 'static {
 
 #[allow(dead_code)]
 pub(crate) trait DeviceInfoOp: Send + Sync + Any + Debug + 'static {
+    fn topology(&self) -> Option<&crate::device::DeviceTopology> {
+        None
+    }
     fn id(&self) -> usize;
     fn backend_name(&self) -> &str;
     fn descriptor(&self) -> &DeviceDescriptor;

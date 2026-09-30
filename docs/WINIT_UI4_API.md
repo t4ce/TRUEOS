@@ -94,6 +94,16 @@ enum variants. Context creation, framebuffer leases, GL procedure resolution,
 and presentation belong to the glutin/trueos-gl integration; raw handles alone
 do not implement those operations.
 
+Glutin currently imports `trueos_gl_get_proc_address`, but the linked
+Alacritty module leaves it undefined. The resolver needs to live in guest
+executable code and return pointers to guest-side GLES entry points; a host
+kernel function pointer is not callable from a Blueprint VM. Those entry
+points can submit through the existing vGPU C ABI once they implement the
+GLES state, buffers, textures, draw calls, and frame publication. The
+Blueprint packer now rejects this unresolved import before producing another
+package. An earlier `alacritty.bp` was packed and published before that gate
+and is not evidence that Alacritty can render.
+
 The standalone wgpu workspace is pinned to the GitHub winit fork's compatible
 0.30.13 revision, `e9809ef54b18499bb4f2cac945719ecc2a61061b`. That pin does not
 include this new 0.31 backend. Alacritty now selects the local 0.31 winit

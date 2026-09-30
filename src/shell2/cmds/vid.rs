@@ -1,4 +1,6 @@
 use alloc::{string::String, vec::Vec};
+use alloc::collections::VecDeque;
+use spin::Mutex;
 
 use trueos_executor::Spawner;
 
@@ -9,6 +11,37 @@ use super::super::{
 use crate::shell2::shell2_cmd::ParseOutcome;
 
 const VID_SLOTS: [&str; 3] = ["vid", "vid2", "vid3"];
+static BLUEPRINT_VIDEO_QUEUE: Mutex<VecDeque<(u8, String)>> = Mutex::new(VecDeque::new());
+
+pub(crate) fn enqueue_from_blueprint(vm_id: u8, path: String) -> Result<(), ()> {
+    if path.is_empty() || path.as_bytes().contains(&0) || !path.starts_with('/') {
+        return Err(());
+    }
+    let mut queue = BLUEPRINT_VIDEO_QUEUE.lock();
+    if queue.len() >= 16 { return Err(()); }
+    queue.push_back((vm_id, path));
+    Ok(())
+}
+
+pub(crate) fn poll_blueprint_open(spawner: &Spawner) -> bool {
+    let Some((vm_id, path)) = BLUEPRINT_VIDEO_QUEUE.lock().pop_front() else { return false; };
+    let Some(origin) = crate::hv::blueprint_console_target(vm_id) else { return true; };
+    let Some(session) = VidUi4Session::reserve() else {
+        crate::hv::blueprint_control_shell_line(vm_id, "PLY FAILED · all video slots occupied");
+        return true;
+    };
+    let target = switch_matrix_target_slot(&origin, VID_SLOTS[session.id.slot]);
+    set_matrix_target_active(&target, true);
+    let command = VidCommand { source: VidSource::TrueosFs(path), loop_playback: true };
+    match vid_task(target.clone(), command, session) {
+        Ok(token) => spawner.spawn(token),
+        Err(_) => {
+            set_matrix_target_active(&target, false);
+            crate::hv::blueprint_control_shell_line(vm_id, "PLY FAILED · video task unavailable");
+        }
+    }
+    true
+}
 
 struct VidCommand {
     source: VidSource,

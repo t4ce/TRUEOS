@@ -2060,6 +2060,24 @@ pub unsafe extern "C" fn trueos_cabi_img_open_v1(paths_ptr: *const u8, paths_len
     blueprint_img_open_payload(vm_id, payload)
 }
 
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trueos_cabi_vid_open_v1(path_ptr: *const u8, path_len: usize) -> i32 {
+    if path_ptr.is_null() || path_len == 0 || path_len > trueos_vm::vmcall::PAYLOAD_CAP {
+        return -1;
+    }
+    let path = unsafe { core::slice::from_raw_parts(path_ptr, path_len) };
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        let (status, rc) = trueos_vm::vmcall::call_with_payload(
+            trueos_vm::vmcall::OP_BP_VID_OPEN_V1, 0, 0, path, &mut [],
+        );
+        return if status == trueos_vm::vmcall::STATUS_OK { vmcall_signed(rc) as i32 } else { -3 };
+    }
+    let Some(vm_id) = crate::hv::current_guest_execution_context_vm_id() else { return -3; };
+    let Ok(path) = core::str::from_utf8(path) else { return -1; };
+    crate::shell2::cmds::vid::enqueue_from_blueprint(vm_id, alloc::string::String::from(path))
+        .map(|()| 0).unwrap_or(-11)
+}
+
 /// Spawn this Blueprint archive in a hidden child Hull.  The child receives
 /// `--trueos-child-worker` in argv and `initial_*` as its first parent message.
 #[unsafe(no_mangle)]

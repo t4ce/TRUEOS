@@ -16,6 +16,19 @@ use usb_if::{
 use crate::backend::ty::ep::Endpoint;
 use crate::backend::ty::{DeviceInfoOp, DeviceOp};
 
+/// Physical location captured when the kernel backend addresses a device.
+#[derive(Debug, Clone)]
+pub struct DeviceTopology {
+    pub hub_ports: Option<u8>,
+    pub root_port_id: u8,
+    pub port_id: u8,
+    pub route_string: u32,
+    pub speed: usb_if::host::hub::Speed,
+    pub parent_hub_slot_id: Option<u8>,
+    /// Root port followed by downstream hub ports.
+    pub path: Vec<u8>,
+}
+
 pub struct DeviceInfo {
     pub(crate) inner: Box<dyn DeviceInfoOp>,
 }
@@ -30,6 +43,13 @@ pub enum ProbedDevice {
 }
 
 impl ProbedDevice {
+    pub fn topology(&self) -> Option<&DeviceTopology> {
+        match self {
+            Self::Device(info) => info.inner.topology(),
+            Self::Hub(info) => info.inner.topology(),
+        }
+    }
+
     pub fn id(&self) -> usize {
         match self {
             Self::Device(info) => info.id(),

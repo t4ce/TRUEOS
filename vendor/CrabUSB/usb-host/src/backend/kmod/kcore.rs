@@ -91,6 +91,34 @@ impl Core {
                     infos: self.hub_infos(),
                 };
 
+                let mut path = alloc::vec![info.port_id];
+                let mut parent = info.parent_hub;
+                while let Some(id) = parent {
+                    let hub = &info.infos[&id];
+                    if hub.hub_depth < 0 {
+                        break;
+                    }
+                    path.push(hub.port_id);
+                    parent = hub.parent;
+                }
+                path.reverse();
+                let route_string = path
+                    .iter()
+                    .skip(1)
+                    .take(5)
+                    .enumerate()
+                    .fold(0, |route, (depth, port)| {
+                        route | (u32::from((*port).min(15)) << (depth * 4))
+                    });
+                let mut topology = crate::device::DeviceTopology {
+                    hub_ports: None,
+                    root_port_id: info.root_port_id,
+                    port_id: info.port_id,
+                    route_string,
+                    speed: info.port_speed,
+                    parent_hub_slot_id: (parent_hub_id != 0).then_some(parent_hub_id),
+                    path,
+                };
                 let device = self.backend.new_addressed_device(info).await?;
 
                 let device_id = device.id();
@@ -118,11 +146,12 @@ impl Core {
                     );
                     let info = hub.backend.init(hub.info.clone()).await?;
                     hub.info = info;
+                    topology.hub_ports = hub.backend.num_ports();
 
                     let hub_id = self.hubs.alloc(hub);
                     is_have_new_hub = true;
 
-                    let hub_info = Box::new(DeviceInfo::new(device_id, desc, &configs))
+                    let hub_info = Box::new(DeviceInfo::new(device_id, desc, &configs, topology))
                         as Box<dyn DeviceInfoOp>;
                     out.push(ProbedDeviceInfoOp::Hub(hub_info));
 
@@ -133,7 +162,7 @@ impl Core {
 
                     self.inited_devices.insert(device_id, device);
 
-                    let device_info = Box::new(DeviceInfo::new(device_id, desc, &configs))
+                    let device_info = Box::new(DeviceInfo::new(device_id, desc, &configs, topology))
                         as Box<dyn DeviceInfoOp>;
 
                     out.push(ProbedDeviceInfoOp::Device(device_info));
@@ -243,19 +272,29 @@ pub struct DeviceInfo {
     id: usize,
     desc: DeviceDescriptor,
     config_desc: Vec<ConfigurationDescriptor>,
+    topology: crate::device::DeviceTopology,
 }
 
 impl DeviceInfo {
-    pub fn new(id: usize, desc: DeviceDescriptor, config_desc: &[ConfigurationDescriptor]) -> Self {
+    pub fn new(
+        id: usize,
+        desc: DeviceDescriptor,
+        config_desc: &[ConfigurationDescriptor],
+        topology: crate::device::DeviceTopology,
+    ) -> Self {
         Self {
             id,
             desc,
             config_desc: config_desc.to_vec(),
+            topology,
         }
     }
 }
 
 impl DeviceInfoOp for DeviceInfo {
+    fn topology(&self) -> Option<&crate::device::DeviceTopology> {
+        Some(&self.topology)
+    }
     fn id(&self) -> usize {
         self.id
     }

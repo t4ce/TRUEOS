@@ -158,6 +158,7 @@ pub const OP_BP_CHILD_RECEIVE_V1: u32 = 0x13E; // arg0 handle -> one queued mess
 pub const OP_BP_CHILD_STATUS_V1: u32 = 0x13F; // arg0 handle -> lifecycle state/rc
 pub const OP_BP_CHILD_TERMINATE_V1: u32 = 0x140; // arg0 child handle -> rc
 pub const OP_BP_IMG_OPEN_V1: u32 = 0x17B; // NUL-separated TRUEOSFS paths -> queued/rc
+pub const OP_BP_VID_OPEN_V1: u32 = 0x182; // one TRUEOSFS video path -> queued/rc
 pub const OP_BP_VGPU_UI4_INDEXED_BATCH_SUBMIT: u32 = 0x141; // arg0 device,arg1 queue,payload IndexedDrawBatch -> TimelinePoint
 pub const OP_BP_VGPU_UI4_INDEXED_BATCH_SUBMIT_V2: u32 = 0x14C; // arg0 device,arg1 queue,payload IndexedDrawBatchV2 -> TimelinePoint
 pub const OP_BP_VGPU_UI4_PREPARED_RASTER_BATCH_V1: u32 = 0x218; // arg0 device,arg1 queue,payload PreparedRasterBatchV1 -> TimelinePoint
@@ -3393,6 +3394,15 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             };
             let rc = crate::r::io::fs_cabi::blueprint_img_open_payload(vm_id, payload);
             write_response(vm_id, seq, STATUS_OK, (i64::from(rc)) as u64, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_VID_OPEN_V1 => {
+            let rc = request_payload(vm_id, req_len)
+                .and_then(|bytes| core::str::from_utf8(bytes).ok())
+                .map(|path| crate::shell2::cmds::vid::enqueue_from_blueprint(vm_id, alloc::string::String::from(path)))
+                .map(|result| if result.is_ok() { 0i64 } else { -11 })
+                .unwrap_or(-1);
+            write_response(vm_id, seq, STATUS_OK, rc as u64, 0);
             DispatchOutcome::Resume
         }
         OP_BP_GRIDPAPER_SNAPSHOT_SUBMIT => {
