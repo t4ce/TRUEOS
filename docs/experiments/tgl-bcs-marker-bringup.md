@@ -1,5 +1,46 @@
 # Tiger Lake BCS marker bring-up
 
+## Hardware result: 2026-10-01
+
+Verified on the physical Alder Lake-S GT1 rig (`8086:4680`, revision 0C).
+Both classical BLT and GuC Fast Copy now execute:
+
+- A direct-execlist cold-boot `XY_SRC_COPY_BLT` copied one scratch pixel from
+  `0xB17C0000` to a poisoned destination. The destination matched, the completion
+  cookie was `0xC0DEBC50`, and ring head/tail reached `0x50`.
+- After the GGTT correction below, ordinary `vcpy start` retired the marker,
+  completed all 20 rows (450,560 bytes), and continued into subsequent cycles.
+  Status showed zero failures and no pinned allocation at the 250 ms cadence.
+
+The decisive fault was a **GGTT ownership collision**. BCS reserved controls at
+`0x00B00000..0x00B71000`, inside Render0's 2560×1440 RGBA streamout mapping
+`0x00880000..0x01690000`. Later render boot initialization replaced the BCS PTEs.
+GuC then read the wrong backing for the registered context. Its scheduling-enable
+acknowledgement did not prove that it had loaded the intended context.
+
+BCS now reserves `0x01A80000..0x01B00000`, between Picasso Render1 controls and
+system RCS. Compile-time assertions constrain the neighboring reservations;
+submission verifies every BCS control PTE against its original physical page.
+It rejects a changed mapping rather than rewriting shared GGTT entries.
+
+The missing boot setup was also repaired: initialize BCS's status page, set
+Gen12 `GFX_MODE` bit 3 following the required BCS reset, and clear `STOP_RING`.
+That change alone did not fix submission; the old mappings still failed.
+
+The direct classical probe is retained behind `BOOT_BCS_LEGACY_PROBE = false`
+in `src/intel/copy/blt.rs`. It is a cold-boot diagnostic before GuC startup, with
+private scratch operands and a BCS reset before scheduler handoff. The normal
+demo remains GuC-owned and uses Fast Copy.
+
+Local hardware evidence (ignored build artifacts):
+
+- `bld/artifacts/bcs-direct-legacy/boot.log`: classical one-pixel success.
+- `bld/artifacts/bcs-mapping-fix/boot.log`: repeated full Fast Copy cycles.
+- `bld/artifacts/bcs-mapping-fix/vcpy-display.png`: fresh post-blend capture,
+  visually checked for the green MicroFont rows in the demo window.
+- The matching directories' `reset-receipt.json` files verify the runtime ELF
+  hashes and fresh PXE reads for each experiment.
+
 ## Backend selection
 
 TGL PRM Vol 10, pp. 35–36 describes one BCS command streamer dispatching to
@@ -32,14 +73,16 @@ Compared with the local `G12TL_intel_prm` Vol 2a instruction reference:
 - Pages 990–992: explicitly select the GGTT result address for the flush's
   post-sync write, matching the privileged batch and boot-mapped result page.
 
-These are source-level findings. They do not establish which instruction caused
-the reported hardware timeout without a new hardware run.
+These packet corrections are independent of the GGTT collision that prevented
+the first marker from executing.
 
 ## First submission
 
-`vcpy` first submits only:
+Every submission starts with a ring-level store cookie and batch start. The
+first batch contains:
 
 ```
+MI_STORE_DATA_IMM (batch-entry cookie)
 MI_FLUSH_DW (write completion cookie to GGTT)
 MI_ARB_CHECK
 MI_BATCH_BUFFER_END
@@ -65,6 +108,7 @@ kernel in a fresh boot is required to exercise these changes.
 ## Local verification
 
 `python3 tools/testpy/test_tgl_bcs_packets.py` compiles the production encoder
-into a host harness and checks marker-only packets, linear RGBA copy packets,
-and pitch overflow rejection. `cargo check --bin TRUEOS` checks kernel integration.
-Neither test proves hardware execution.
+into a host harness and checks marker packets, linear RGBA copy packets,
+pitch overflow rejection, ring wraparound, and the classical one-pixel packet.
+All five tests and `cargo build --bin TRUEOS` passed. Hardware execution evidence
+is recorded separately above.

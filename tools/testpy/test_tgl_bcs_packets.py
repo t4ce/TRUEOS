@@ -17,7 +17,7 @@ fn dma_flush(_: *mut u8, _: usize) {}
 mod blt {
 '''
     source += '\n'.join(extract.constant(BLT, name) for name in (
-        'DIRECT_BLT_BATCH_BYTES', 'DIRECT_BLT_RESULT_BYTES',
+        'DIRECT_BLT_BATCH_BYTES', 'DIRECT_BLT_RESULT_BYTES', 'BCS0_GGTT_BASE',
         'DIRECT_BLT_PPGTT_PT_COUNT', 'DIRECT_BLT_PPGTT_LIMIT_BYTES',
         'DIRECT_BLT_GPU_VA_RESULT_BASE', 'XY_FAST_COPY_BLT_CMD',
         'XY_FAST_COPY_COLOR_DEPTH_32', 'MI_FLUSH_DW',
@@ -25,13 +25,14 @@ mod blt {
         'MI_ARB_CHECK', 'MI_BATCH_BUFFER_END', 'MI_NOOP',
         'MI_STORE_DATA_IMM_GGTT_DW1', 'BCS_BATCH_COOKIE', 'BCS_RING_COOKIE',
         'DIRECT_BLT_RING_BYTES', 'MI_BATCH_BUFFER_START_GEN8', 'MI_BATCH_GGTT',
-        'DIRECT_BLT_GPU_VA_BATCH_BASE',
+        'DIRECT_BLT_GPU_VA_BATCH_BASE', 'DIRECT_BLT_GPU_VA_SRC_BASE',
+        'DIRECT_BLT_GPU_VA_DST_BASE', 'DIRECT_BLT_SMOKE_MARKER',
     ))
     source += '\n' + '\n'.join(extract.item(BLT, name) for name in (
         'DirectBltState', 'GucBcs0RgbaSurface', 'GucBcs0RgbaCopy',
         'guc_blt_valid_surface', 'guc_blt_valid_copy',
         'guc_blt_physical_ranges_overlap', 'guc_blt_encode_ui4_copy_batch',
-        'guc_blt_append_ring_batch_start',
+        'guc_blt_append_ring_batch_start', 'boot_bcs0_legacy_ring_words',
     ))
     source += r'''
 fn surface(phys: u64) -> GucBcs0RgbaSurface {
@@ -48,8 +49,8 @@ fn first_rung_contains_entry_store_flush_arbitration_and_end() {
     assert_eq!(guc_blt_encode_ui4_copy_batch(state, surface(0x200000), &[],
         0xBC500001), Some((0, 0)));
     // PRM: MI_FLUSH_DW opcode 26h, QWord immediate, GGTT bit in address.
-    assert_eq!(&batch[..4], &[0x10400002, 0x00B50010, 0, 0xBC504242]);
-    assert_eq!(&batch[4..12], &[0x13004003, 0x00B50004, 0, 0xBC500001,
+    assert_eq!(&batch[..4], &[0x10400002, 0x01AD0010, 0, 0xBC504242]);
+    assert_eq!(&batch[4..12], &[0x13004003, 0x01AD0004, 0, 0xBC500001,
         0, 0x02800000, 0x05000000, 0]);
 }
 #[test]
@@ -65,7 +66,7 @@ fn linear_rgba_packet_keeps_reserved_bits_zero_and_orders_completion() {
         0xBC500002), Some((1, 4096)));
     assert_eq!(&batch[4..14], &[0x50800008, 0x03000800, 0, 0x00020200,
         0x200000, 0, 0, 2048, 0x100000, 0]);
-    assert_eq!(&batch[14..22], &[0x13004003, 0x00B50004, 0, 0xBC500002,
+    assert_eq!(&batch[14..22], &[0x13004003, 0x01AD0004, 0, 0xBC500002,
         0, 0x02800000, 0x05000000, 0]);
 }
 #[test]
@@ -74,11 +75,20 @@ fn ring_entry_writes_before_batch_and_wraps_without_overrun() {
     let mut state: DirectBltState = unsafe { core::mem::zeroed() };
     state.ring_virt = ring.as_mut_ptr().cast();
     assert_eq!(guc_blt_append_ring_batch_start(state, 4064), 0);
-    assert_eq!(&ring[1016..1024], &[0x10400002, 0x00B50008, 0, 0xBC505247,
-        0x18800001, 0x00B40000, 0, 0x02800000]);
+    assert_eq!(&ring[1016..1024], &[0x10400002, 0x01AD0008, 0, 0xBC505247,
+        0x18800001, 0x01AC0000, 0, 0x02800000]);
     assert_eq!(&ring[1024..], &[0xdeadbeef, 0xdeadbeef]);
     assert_eq!(guc_blt_append_ring_batch_start(state, 0), 32);
     assert_eq!(&ring[..8], &ring[1016..1024]);
+}
+#[test]
+fn legacy_probe_is_one_pixel_between_ring_entry_and_ordered_completion() {
+    let words = boot_bcs0_legacy_ring_words();
+    assert_eq!(&words[..4], &[0x10400002, 0x01AD0008, 0, 0xBC505247]);
+    assert_eq!(&words[4..14], &[0x54F00008, 0x03CC0010, 0, 0x00010001,
+        0x01AF0000, 0, 0, 16, 0x01AE0000, 0]);
+    assert_eq!(&words[14..], &[0x13004003, 0x01AD0004, 0, 0xC0DEBC50,
+        0, 0x02800000]);
 }
 #[test]
 fn pitch_cannot_spill_into_reserved_bits() {

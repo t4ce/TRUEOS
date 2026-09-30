@@ -20,13 +20,10 @@ const RING_CONTEXT_CONTROL_REF: usize = 0x5A0;
 const RING_EXECLIST_CONTROL: usize = 0x550;
 const RING_EXECLIST_STATUS_LO: usize = 0x234;
 const RING_EXECLIST_STATUS_HI: usize = 0x238;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const RING_EXECLIST_SQ_LO: usize = 0x510;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const RING_EXECLIST_SQ_HI: usize = 0x514;
 
 const RING_VALID: u32 = 1;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const EL_CTRL_LOAD: u32 = 1 << 0;
 const CTX_CTRL_ENGINE_CTX_RESTORE_INHIBIT: u32 = 1 << 0;
 const CTX_CTRL_INHIBIT_SYN_CTX_SWITCH: u32 = 1 << 3;
@@ -77,12 +74,20 @@ const DIRECT_BLT_PPGTT_PT_COUNT: usize = 512;
 const DIRECT_BLT_PPGTT_BYTES: usize = (3 + DIRECT_BLT_PPGTT_PT_COUNT) * 4096;
 const DIRECT_BLT_PPGTT_LIMIT_BYTES: u64 = DIRECT_BLT_PPGTT_PT_COUNT as u64 * 512 * 4096;
 const DIRECT_BLT_LRC_STATE_OFFSET_DWORDS: usize = 4096 / core::mem::size_of::<u32>();
-const DIRECT_BLT_GPU_VA_RING_BASE: u64 = 0x00B0_0000;
-const DIRECT_BLT_GPU_VA_CONTEXT_BASE: u64 = 0x00B1_0000;
-const DIRECT_BLT_GPU_VA_BATCH_BASE: u64 = 0x00B4_0000;
-const DIRECT_BLT_GPU_VA_RESULT_BASE: u64 = 0x00B5_0000;
-const DIRECT_BLT_GPU_VA_SRC_BASE: u64 = 0x00B6_0000;
-const DIRECT_BLT_GPU_VA_DST_BASE: u64 = 0x00B7_0000;
+// The old 0x00B0_0000 window was inside Render0's 0x0088_0000..0x0169_0000
+// streamout GGTT mapping. Its later boot map silently replaced our controls.
+// Reserve the gap after Picasso Render1 controls and before system RCS.
+pub(crate) const BCS0_GGTT_BASE: u64 = 0x01A8_0000;
+pub(crate) const BCS0_GGTT_LIMIT: u64 = 0x01B0_0000;
+const DIRECT_BLT_GPU_VA_RING_BASE: u64 = BCS0_GGTT_BASE;
+const DIRECT_BLT_GPU_VA_CONTEXT_BASE: u64 = BCS0_GGTT_BASE + 0x1_0000;
+const DIRECT_BLT_GPU_VA_BATCH_BASE: u64 = BCS0_GGTT_BASE + 0x4_0000;
+const DIRECT_BLT_GPU_VA_RESULT_BASE: u64 = BCS0_GGTT_BASE + 0x5_0000;
+const DIRECT_BLT_GPU_VA_SRC_BASE: u64 = BCS0_GGTT_BASE + 0x6_0000;
+const DIRECT_BLT_GPU_VA_DST_BASE: u64 = BCS0_GGTT_BASE + 0x7_0000;
+const _: () = assert!(DIRECT_BLT_GPU_VA_DST_BASE + DIRECT_BLT_COPY_BYTES as u64 <= BCS0_GGTT_LIMIT);
+const _: () = assert!(BCS0_GGTT_LIMIT <= super::gpgpu::DIRECT_RCS_GPU_VA_RING_BASE);
+const BOOT_BCS_LEGACY_PROBE: bool = false;
 const GUC_BLT_UI4_MAX_COPIES: usize = 64;
 const GUC_BLT_UI4_TIMEOUT_MS: u64 = 250;
 const GUC_BLT_PROBE_TIMEOUT_MS: u64 = 2_000;
@@ -1142,8 +1147,27 @@ fn direct_blt_state_once() -> Option<DirectBltState> {
 
 /// Runtime compatibility gate. BCS0 consumers may only observe the immutable
 /// boot result; they never install or repair a global control mapping.
-fn direct_blt_map_state(_dev: super::Dev, _state: DirectBltState) -> bool {
-    DIRECT_BLT_GGTT_MAPPING.get().copied() == Some(true)
+fn direct_blt_map_state(dev: super::Dev, state: DirectBltState) -> bool {
+    if DIRECT_BLT_GGTT_MAPPING.get().copied() != Some(true) { return false; }
+    for (gpu, phys, bytes) in [
+        (DIRECT_BLT_GPU_VA_RING_BASE, state.ring_phys, DIRECT_BLT_RING_BYTES),
+        (DIRECT_BLT_GPU_VA_CONTEXT_BASE, state.context_phys, DIRECT_BLT_CONTEXT_BYTES),
+        (DIRECT_BLT_GPU_VA_BATCH_BASE, state.batch_phys, DIRECT_BLT_BATCH_BYTES),
+        (DIRECT_BLT_GPU_VA_RESULT_BASE, state.result_phys, DIRECT_BLT_RESULT_BYTES),
+        (DIRECT_BLT_GPU_VA_SRC_BASE, state.src_phys, DIRECT_BLT_COPY_BYTES),
+        (DIRECT_BLT_GPU_VA_DST_BASE, state.dst_phys, DIRECT_BLT_COPY_BYTES),
+    ] {
+        for offset in (0..bytes).step_by(4096) {
+            let pte = super::read_ggtt_pte(dev, gpu + offset as u64).unwrap_or(0);
+            if pte & 1 == 0 || pte & 0x0000_FFFF_FFFF_F000 != phys + offset as u64 {
+                crate::log_error!(target: "gfx";
+                    "intel/blt: control-mapping changed gpu=0x{:X} expected_phys=0x{:X} pte=0x{:X} action=reject-submit\n",
+                    gpu + offset as u64, phys + offset as u64, pte);
+                return false;
+            }
+        }
+    }
+    true
 }
 
 fn install_direct_blt_control_ggtt_for_boot(dev: super::Dev, state: DirectBltState) -> bool {
@@ -1209,7 +1233,83 @@ pub(crate) fn prewarm_guc_bcs0_control_ggtt(dev: super::Dev) -> bool {
         return false;
     };
     let mapped = install_direct_blt_control_ggtt_for_boot(dev, state);
-    *GUC_BLT_ENGINE_READY.call_once(|| mapped && init_guc_bcs0_engine_for_boot(dev))
+    *GUC_BLT_ENGINE_READY.call_once(|| {
+        if !mapped || !init_guc_bcs0_engine_for_boot(dev) {
+            return false;
+        }
+        !BOOT_BCS_LEGACY_PROBE || boot_bcs0_legacy_probe(dev, state)
+    })
+}
+
+// A bounded cold-boot experiment, before the GuC scheduler exists. All operands
+// are private scratch pages. The blitter is reset before the GuC handoff even
+// when this probe times out; no runtime context or display allocation is used.
+fn boot_bcs0_legacy_probe(dev: super::Dev, state: DirectBltState) -> bool {
+    if !direct_blt_init_ppgtt(state) {
+        return false;
+    }
+    direct_blt_seed_fast_copy_buffers(state);
+    unsafe {
+        core::ptr::write_bytes(state.result_virt, 0, DIRECT_BLT_RESULT_BYTES);
+        core::ptr::write_bytes(state.ring_virt, 0, DIRECT_BLT_RING_BYTES);
+    }
+    let words = boot_bcs0_legacy_ring_words();
+    unsafe {
+        core::ptr::copy_nonoverlapping(words.as_ptr(), state.ring_virt.cast::<u32>(), words.len());
+    }
+    let tail = (words.len() * 4) as u32;
+    if !direct_blt_init_context_image(state, DIRECT_BLT_GPU_VA_RING_BASE as u32, tail, RING_VALID) {
+        return false;
+    }
+    direct_blt_init_csb_pointers(dev, state.context_virt);
+    super::dma_flush(state.ring_virt, DIRECT_BLT_RING_BYTES);
+    super::dma_flush(state.result_virt, DIRECT_BLT_RESULT_BYTES);
+    let (lo, _) = guc_blt_context_descriptor(DIRECT_BLT_GPU_VA_CONTEXT_BASE);
+    direct_blt_execlist_submit_port_push(dev, lo, 1 << 7, 0, 0);
+    super::mmio_write(dev, BCS0_RING_BASE + RING_EXECLIST_CONTROL, EL_CTRL_LOAD);
+    let mut marker = 0;
+    for _ in 0..DIRECT_BLT_SMOKE_POLL_ITERS {
+        super::dma_flush(state.result_virt, 64);
+        marker = unsafe { core::ptr::read_volatile(state.result_virt.cast::<u32>()) };
+        if marker == DIRECT_BLT_SMOKE_MARKER { break; }
+        core::hint::spin_loop();
+    }
+    let entered = unsafe { core::ptr::read_volatile(state.result_virt.add(8).cast::<u32>()) };
+    let (src, dst) = direct_blt_read_fast_copy_buffers(state);
+    crate::log_warn!(target: "gfx";
+        "intel/blt: boot-direct-legacy ring=0x{:08X} marker=0x{:08X} src=0x{:08X} dst=0x{:08X} copy_ok={} head=0x{:X} tail=0x{:X} start=0x{:X} ctl=0x{:X} ipeir=0x{:X} ipehr=0x{:X} el=0x{:X}:0x{:X} ring_pte={:?} context_pte={:?} ring_phys=0x{:X} context_phys=0x{:X}\n",
+        entered, marker, src[0], dst[0], (marker == DIRECT_BLT_SMOKE_MARKER && dst[0] == src[0]) as u8,
+        super::mmio_read(dev, BCS0_RING_BASE + RING_HEAD),
+        super::mmio_read(dev, BCS0_RING_BASE + RING_TAIL),
+        super::mmio_read(dev, BCS0_RING_BASE + RING_START),
+        super::mmio_read(dev, BCS0_RING_BASE + RING_CTL),
+        super::mmio_read(dev, BCS0_RING_BASE + RING_IPEIR),
+        super::mmio_read(dev, BCS0_RING_BASE + RING_IPEHR),
+        super::mmio_read(dev, BCS0_RING_BASE + RING_EXECLIST_STATUS_HI),
+        super::mmio_read(dev, BCS0_RING_BASE + RING_EXECLIST_STATUS_LO),
+        super::read_ggtt_pte(dev, DIRECT_BLT_GPU_VA_RING_BASE),
+        super::read_ggtt_pte(dev, DIRECT_BLT_GPU_VA_CONTEXT_BASE), state.ring_phys, state.context_phys);
+    super::mmio_write(dev, GDRST, GRDOM_BLT);
+    for _ in 0..100_000 {
+        if super::mmio_read(dev, GDRST) & GRDOM_BLT == 0 {
+            return init_guc_bcs0_engine_for_boot(dev);
+        }
+        core::hint::spin_loop();
+    }
+    false
+}
+
+fn boot_bcs0_legacy_ring_words() -> [u32; 20] {
+    [
+        MI_STORE_DATA_IMM_GGTT_DW1, (DIRECT_BLT_GPU_VA_RESULT_BASE + 8) as u32, 0, BCS_RING_COOKIE,
+        // XY_SRC_COPY_BLT: linear 32bpp, RGB+alpha enabled, ROP SRCCOPY (CC).
+        (2 << 29) | (0x53 << 22) | (3 << 20) | 8,
+        (3 << 24) | (0xCC << 16) | 16, 0, (1 << 16) | 1,
+        DIRECT_BLT_GPU_VA_DST_BASE as u32, 0, 0, 16, DIRECT_BLT_GPU_VA_SRC_BASE as u32, 0,
+        MI_FLUSH_DW | MI_FLUSH_DW_POST_SYNC_WRITE_IMMEDIATE,
+        DIRECT_BLT_GPU_VA_RESULT_BASE as u32 | MI_FLUSH_DW_DEST_GGTT,
+        0, DIRECT_BLT_SMOKE_MARKER, 0, MI_ARB_CHECK,
+    ]
 }
 
 // Called before GuC firmware startup and before any BCS context registration.
@@ -1836,7 +1936,6 @@ fn guc_blt_read_lrc_ring_head(state: DirectBltState) -> u32 {
     unsafe { core::ptr::read_volatile(address.cast::<u32>()) }
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn direct_blt_init_csb_pointers(dev: super::Dev, hwsp_virt: *mut u8) {
     const GEN12_HWSP_CSB_WRITE_OFFSET: usize = 0xBC;
     const GEN12_CSB_RESET_VALUE: u32 = 11;
@@ -1897,7 +1996,6 @@ fn direct_blt_context_descriptor(context_gpu_addr: u64) -> (u32, u32) {
     (desc, desc_hi)
 }
 
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 fn direct_blt_execlist_submit_port_push(
     dev: super::Dev,
     context0_lo: u32,
