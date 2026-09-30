@@ -54,12 +54,14 @@ const MI_LOAD_REGISTER_IMM: u32 = 0x1100_0000;
 const MI_LRI_CS_MMIO: u32 = 1 << 19;
 const MI_LRI_FORCE_POSTED: u32 = 1 << 12;
 const MI_BATCH_BUFFER_START_GEN8: u32 = (0x31 << 23) | 1;
-const MI_BATCH_PPGTT: u32 = 0;
+// The boot-mapped command buffer is privileged GGTT (Vol 2a, p. 972).
+const MI_BATCH_GGTT: u32 = 0;
 const MI_BATCH_BUFFER_END: u32 = 0x0500_0000;
 const MI_STORE_DATA_IMM_GGTT_DW1: u32 = 0x1040_0002;
 const MI_FLUSH_DW: u32 = (0x26 << 23) | 3;
 const MI_FLUSH_DW_POST_SYNC_WRITE_IMMEDIATE: u32 = 1 << 14;
-const MI_ARB_CHECK: u32 = 0x0500_0005;
+const MI_FLUSH_DW_DEST_GGTT: u32 = 1 << 2;
+const MI_ARB_CHECK: u32 = 0x05 << 23;
 
 const DIRECT_BLT_RING_BYTES: usize = 4096;
 const DIRECT_BLT_CONTEXT_BYTES: usize = 22 * 4096;
@@ -92,8 +94,8 @@ const DIRECT_BLT_SRC_BASE_PATTERN: u32 = 0xB17C_0000;
 const DIRECT_BLT_DST_POISON_BASE: u32 = 0xD57D_0000;
 const XY_FAST_COPY_BLT_CMD: u32 = (2 << 29) | (0x42 << 22) | 8;
 const XY_FAST_COPY_COLOR_DEPTH_32: u32 = 3 << 24;
-const XY_FAST_COPY_DST_SYSTEM_MEM: u32 = 1 << 28;
-const XY_FAST_COPY_SRC_SYSTEM_MEM: u32 = 1 << 29;
+// TGL Vol 2a pp. 1372-1373: DW1[29:28] are MBZ, pitches are U16.
+// Memory placement comes from the mappings; these bits are not memory flags.
 
 static DIRECT_BLT_STATE: Mutex<Option<DirectBltState>> = Mutex::new(None);
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
@@ -699,6 +701,24 @@ pub(crate) fn queue_guc_bcs0_rgba_copies(
     destination: GucBcs0RgbaSurface,
     copies: &[GucBcs0RgbaCopy],
 ) -> Result<GucBcs0CopySubmission, GucBcs0CopySubmitError> {
+    if copies.is_empty() {
+        return Err(GucBcs0CopySubmitError::InvalidRequest);
+    }
+    queue_guc_bcs0_batch(destination, copies)
+}
+
+/// First bring-up rung: flush/write a completion cookie and end the batch,
+/// without issuing any command to either BLT backend.
+pub(crate) fn queue_guc_bcs0_marker(
+    destination: GucBcs0RgbaSurface,
+) -> Result<GucBcs0CopySubmission, GucBcs0CopySubmitError> {
+    queue_guc_bcs0_batch(destination, &[])
+}
+
+fn queue_guc_bcs0_batch(
+    destination: GucBcs0RgbaSurface,
+    copies: &[GucBcs0RgbaCopy],
+) -> Result<GucBcs0CopySubmission, GucBcs0CopySubmitError> {
     if !guc_blt_state_reuse_permitted(&GUC_BLT_LANE_QUARANTINED) {
         return Err(GucBcs0CopySubmitError::Unavailable);
     }
@@ -709,7 +729,6 @@ pub(crate) fn queue_guc_bcs0_rgba_copies(
         return Err(GucBcs0CopySubmitError::Unavailable);
     };
     if !guc_blt_valid_surface(destination)
-        || copies.is_empty()
         || copies.len() > GUC_BLT_UI4_MAX_COPIES
     {
         return Err(GucBcs0CopySubmitError::InvalidRequest);
@@ -1263,10 +1282,7 @@ fn direct_blt_encode_fast_copy_batch(state: DirectBltState) -> bool {
         core::ptr::write_volatile(batch, XY_FAST_COPY_BLT_CMD);
         core::ptr::write_volatile(
             batch.add(1),
-            DIRECT_BLT_COPY_PITCH_BYTES
-                | XY_FAST_COPY_COLOR_DEPTH_32
-                | XY_FAST_COPY_DST_SYSTEM_MEM
-                | XY_FAST_COPY_SRC_SYSTEM_MEM,
+            DIRECT_BLT_COPY_PITCH_BYTES | XY_FAST_COPY_COLOR_DEPTH_32,
         );
         core::ptr::write_volatile(batch.add(2), 0);
         core::ptr::write_volatile(
@@ -1300,7 +1316,7 @@ fn guc_blt_valid_surface(surface: GucBcs0RgbaSurface) -> bool {
         || surface.height == 0
         || surface.pitch_bytes < surface.width.saturating_mul(4)
         || !surface.pitch_bytes.is_multiple_of(4)
-        || surface.pitch_bytes >= (1 << 18)
+        || surface.pitch_bytes > u16::MAX as u32
     {
         return false;
     }
@@ -1402,10 +1418,7 @@ fn guc_blt_encode_ui4_copy_batch(
         let destination_right = copy.destination_x.checked_add(copy.width)?;
         let destination_bottom = copy.destination_y.checked_add(copy.height)?;
         batch[cursor] = XY_FAST_COPY_BLT_CMD;
-        batch[cursor + 1] = destination.pitch_bytes
-            | XY_FAST_COPY_COLOR_DEPTH_32
-            | XY_FAST_COPY_DST_SYSTEM_MEM
-            | XY_FAST_COPY_SRC_SYSTEM_MEM;
+        batch[cursor + 1] = destination.pitch_bytes | XY_FAST_COPY_COLOR_DEPTH_32;
         batch[cursor + 2] = copy.destination_x | (copy.destination_y << 16);
         batch[cursor + 3] = destination_right | (destination_bottom << 16);
         batch[cursor + 4] = destination.gpu as u32;
@@ -1429,7 +1442,7 @@ fn guc_blt_encode_ui4_copy_batch(
         return None;
     }
     batch[cursor] = MI_FLUSH_DW | MI_FLUSH_DW_POST_SYNC_WRITE_IMMEDIATE;
-    batch[cursor + 1] = DIRECT_BLT_GPU_VA_RESULT_BASE as u32;
+    batch[cursor + 1] = DIRECT_BLT_GPU_VA_RESULT_BASE as u32 | MI_FLUSH_DW_DEST_GGTT;
     batch[cursor + 2] = (DIRECT_BLT_GPU_VA_RESULT_BASE >> 32) as u32;
     batch[cursor + 3] = marker;
     batch[cursor + 4] = 0;
@@ -1563,7 +1576,7 @@ fn direct_blt_submit_batch(dev: super::Dev, state: DirectBltState) -> bool {
 fn direct_blt_build_ring_batch_start(state: DirectBltState) -> Option<usize> {
     unsafe {
         let dwords = core::slice::from_raw_parts_mut(state.ring_virt as *mut u32, 8);
-        dwords[0] = MI_BATCH_BUFFER_START_GEN8 | MI_BATCH_PPGTT;
+        dwords[0] = MI_BATCH_BUFFER_START_GEN8 | MI_BATCH_GGTT;
         dwords[1] = DIRECT_BLT_GPU_VA_BATCH_BASE as u32;
         dwords[2] = (DIRECT_BLT_GPU_VA_BATCH_BASE >> 32) as u32;
         dwords[3] = MI_ARB_CHECK;
@@ -1584,7 +1597,7 @@ fn guc_blt_append_ring_batch_start(state: DirectBltState, tail_bytes: usize) -> 
     let start = tail_bytes / core::mem::size_of::<u32>();
     unsafe {
         let dwords = state.ring_virt.cast::<u32>();
-        core::ptr::write_volatile(dwords.add(start), MI_BATCH_BUFFER_START_GEN8 | MI_BATCH_PPGTT);
+        core::ptr::write_volatile(dwords.add(start), MI_BATCH_BUFFER_START_GEN8 | MI_BATCH_GGTT);
         core::ptr::write_volatile(dwords.add(start + 1), DIRECT_BLT_GPU_VA_BATCH_BASE as u32);
         core::ptr::write_volatile(
             dwords.add(start + 2),

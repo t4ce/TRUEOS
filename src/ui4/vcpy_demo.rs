@@ -65,6 +65,13 @@ pub(crate) fn tick() -> Result<(), &'static str> {
                 return Ok(());
             }
             crate::intel::GucBcs0CopyCompletion::Complete => {
+                if pending.rows == 0 {
+                    cancel_frame_buffer(pending.lease).map_err(|_| "marker-lease-cancel")?;
+                    demo.next_rows = 1;
+                    crate::log_info!(target: "gfx";
+                        "vcpy: marker-only retired=1 context_saved=1 next=xy-fast-copy-blt cadence_ms=250\n");
+                    return Ok(());
+                }
                 // The hardware release is retired. Invalidate CPU aliases before
                 // UI4's ordinary frame reader can inspect the copied pixels.
                 crate::intel::dma_cache_flush_range(pending.view.virt, pending.view.byte_len);
@@ -117,7 +124,12 @@ pub(crate) fn tick() -> Result<(), &'static str> {
         width: WIDTH,
         height: rows * ROW_HEIGHT,
     };
-    match crate::r::services::vcpy_service::queue_rgba_copies(surface(view), &[copy]) {
+    let queued = if rows == 0 {
+        crate::r::services::vcpy_service::queue_marker(surface(view))
+    } else {
+        crate::r::services::vcpy_service::queue_rgba_copies(surface(view), &[copy])
+    };
+    match queued {
         Ok(submission) => {
             demo.pending = Some(Pending { submission, lease, view, rows });
             demo.next_submit_ms = now_ms.saturating_add(COPY_PERIOD_MS);
@@ -145,6 +157,7 @@ pub(crate) fn tick() -> Result<(), &'static str> {
 #[derive(Copy, Clone)]
 pub(crate) struct Status {
     pub(crate) published_rows: u32,
+    pub(crate) marker_retired: bool,
     pub(crate) pending: bool,
     pub(crate) pinned: bool,
 }
@@ -154,10 +167,11 @@ pub(crate) fn status() -> Status {
     match guard.as_ref() {
         Some(demo) => Status {
             published_rows: demo.published_rows,
+            marker_retired: demo.next_rows != 0,
             pending: demo.pending.is_some(),
             pinned: demo.poisoned.is_some(),
         },
-        None => Status { published_rows: 0, pending: false, pinned: false },
+        None => Status { published_rows: 0, marker_retired: false, pending: false, pinned: false },
     }
 }
 
@@ -270,7 +284,7 @@ fn open() -> Result<Demo, &'static str> {
         window.raw(), frame.raw(), source.raw(), WIDTH, HEIGHT,
     );
     Ok(Demo { session, source, source_lease, source_view, frame, window,
-        next_rows: 1, published_rows: 0, next_submit_ms: 0, pending: None, poisoned: None,
+        next_rows: 0, published_rows: 0, next_submit_ms: 0, pending: None, poisoned: None,
         stopping: false })
 }
 

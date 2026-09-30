@@ -7,6 +7,12 @@ use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use trueos_executor::Spawner;
 
+pub(crate) fn queue_marker(
+    destination: crate::intel::GucBcs0RgbaSurface,
+) -> Result<crate::intel::GucBcs0CopySubmission, crate::intel::GucBcs0CopySubmitError> {
+    crate::intel::queue_guc_bcs0_marker(destination)
+}
+
 pub(crate) fn queue_rgba_copies(
     destination: crate::intel::GucBcs0RgbaSurface,
     copies: &[crate::intel::GucBcs0RgbaCopy],

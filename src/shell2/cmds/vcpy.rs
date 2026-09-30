@@ -32,13 +32,14 @@ pub(crate) fn try_parse(
             print_shell_line(
                 io,
                 format!(
-                    "vcpy: running={} polls={} failures={} rows={}/20 pending={} pinned={} copy_cadence_ms=250",
+                    "vcpy: running={} polls={} failures={} rows={}/20 pending={} pinned={} marker_retired={} copy_cadence_ms=250",
                     status.running as u8,
                     status.ticks,
                     status.failures,
                     demo.published_rows,
                     demo.pending as u8,
                     demo.pinned as u8,
+                    demo.marker_retired as u8,
                 )
                 .as_str(),
             );
