@@ -59,7 +59,7 @@ def installation(root: Path) -> dict[Path, str]:
     thread_dir = root / "library/std/src/sys/thread"
     selector_path = thread_dir / "mod.rs"
     backend_path = thread_dir / "trueos.rs"
-    reference_path = Path(__file__).resolve().parent / "rust-std/trueos_thread.rs"
+    reference_path = Path(__file__).resolve().parent.parent / "rust-std/trueos_thread.rs"
 
     reference = reference_path.read_text(encoding="utf-8")
     if backend_path.exists():
