@@ -409,7 +409,7 @@ fn cmd_net_nic(io: &'static dyn ShellBackend2, selector: Option<&str>, extra: Op
         } else {
             alloc::string::String::from("-")
         };
-        let vidpid = if let Some((vid, pid)) = crate::net::pci_id_at(index) {
+        let vidpid = if let Some((vid, pid)) = crate::net::device_id_at(index) {
             alloc::format!("{:04x}:{:04x}", vid, pid)
         } else {
             alloc::string::String::from("-")

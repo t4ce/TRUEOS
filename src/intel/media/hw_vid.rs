@@ -396,10 +396,22 @@ pub(crate) async fn prepare_trueosfs_ui4_video(
         return Err("host heap free list corrupt before TRUEOSFS video load");
     }
 
-    let disk =
-        crate::r::fs::trueosfs::primary_root_handle().ok_or("TRUEOSFS primary root unavailable")?;
+    let (disk, file_path) = if let Some(selector) = path.strip_prefix("trueosfs:disc") {
+        let (raw, relative) = selector.split_once('/').ok_or("invalid TRUEOSFS video path")?;
+        let raw = raw.parse::<u32>().map_err(|_| "invalid TRUEOSFS video disc")?;
+        if relative.is_empty() {
+            return Err("invalid TRUEOSFS video path");
+        }
+        let disk_id = crate::disc::block::DiscId::from_raw(raw);
+        if !crate::r::fs::trueosfs::list_roots().iter().any(|root| root.disk_id == disk_id) {
+            return Err("TRUEOSFS video disc unavailable");
+        }
+        (crate::disc::block::device_handle(disk_id).ok_or("TRUEOSFS video disc unavailable")?, relative)
+    } else {
+        (crate::r::fs::trueosfs::primary_root_handle().ok_or("TRUEOSFS primary root unavailable")?, path)
+    };
     h264_wait_for_fs_index(session, disk).await?;
-    let file = crate::r::fs::trueosfs::file_read_open_async(disk, path)
+    let file = crate::r::fs::trueosfs::file_read_open_async(disk, file_path)
         .await
         .map_err(|_| "TRUEOSFS video stream open failed")?
         .ok_or("video asset missing from TRUEOSFS root")?;

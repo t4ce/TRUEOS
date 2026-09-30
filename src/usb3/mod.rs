@@ -1,4 +1,5 @@
 mod api;
+mod cdc;
 pub mod class;
 mod descriptor;
 mod dev_gears;
@@ -8,6 +9,7 @@ pub mod hid;
 pub(crate) mod lab;
 mod lib;
 mod mass;
+mod net;
 mod pen;
 mod scsi;
 mod skhynix;
@@ -340,6 +342,11 @@ async fn open_and_handoff_devices(
                 let desc = info.descriptor();
                 let vendor_id = desc.vendor_id;
                 let product_id = desc.product_id;
+                if net::maybe_start(host, &info, spawner, controller_id - CRABUSB_CONTROLLER_ID)
+                    .await
+                {
+                    continue;
+                }
                 if hid::boot::maybe_start_hid_boot_streams(
                     host,
                     &info,

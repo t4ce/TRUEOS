@@ -111,7 +111,7 @@ impl VNet {
 
         let selector = if let Some((bus, slot, func)) = crate::net::bdf_at(device_index) {
             format!("{:02x}:{:02x}.{}", bus, slot, func)
-        } else if let Some((vid, pid)) = crate::net::pci_id_at(device_index) {
+        } else if let Some((vid, pid)) = crate::net::device_id_at(device_index) {
             format!("{:04x}:{:04x}", vid, pid)
         } else {
             format!("{}", device_index)

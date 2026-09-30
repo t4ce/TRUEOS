@@ -5324,15 +5324,10 @@ fn owner_device_index(owner: &str) -> Option<usize> {
 
 fn ensure_services(count: usize) {
     let mut guard = NET_SERVICES.lock();
-    let needs_init = guard.as_ref().map(|v| v.len() != count).unwrap_or(true);
-    if needs_init {
-        *guard = Some(
-            (0..count)
-                .map(|index| -> &'static spin::Mutex<NetService> {
-                    Box::leak(Box::new(spin::Mutex::new(NetService::new(index))))
-                })
-                .collect(),
-        );
+    let services = guard.get_or_insert_with(Vec::new);
+    while services.len() < count {
+        let index = services.len();
+        services.push(Box::leak(Box::new(spin::Mutex::new(NetService::new(index)))));
     }
 }
 
@@ -5470,6 +5465,9 @@ pub async fn net_poll_task(index: usize) {
     .await;
 }
 
+static NET_SERVICE_STARTED: [core::sync::atomic::AtomicBool; MAX_NET_DEVICES] =
+    [const { core::sync::atomic::AtomicBool::new(false) }; MAX_NET_DEVICES];
+
 #[task(pool_size = MAX_NET_DEVICES)]
 pub async fn net_service_task(index: usize) {
     async move {
@@ -5479,6 +5477,9 @@ pub async fn net_service_task(index: usize) {
             return;
         }
 
+        if NET_SERVICE_STARTED[index].swap(true, Ordering::AcqRel) {
+            return;
+        }
         ensure_services(count);
 
         loop {

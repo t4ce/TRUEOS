@@ -633,6 +633,18 @@ pub fn play_video(path: &str) -> Result<(), i32> {
     if rc == 0 { Ok(()) } else { Err(rc) }
 }
 
+/// Queue looping playback of a disc-qualified TRUEOSFS video.
+pub fn play_video_qualified(path: &str) -> Result<(), i32> {
+    let Some(rest) = path.strip_prefix("trueosfs:disc") else { return Err(-1); };
+    let Some((raw, file)) = rest.split_once('/') else { return Err(-1); };
+    if raw.is_empty() || !raw.bytes().all(|byte| byte.is_ascii_digit())
+        || file.is_empty() || path.as_bytes().contains(&0) {
+        return Err(-1);
+    }
+    let rc = unsafe { vcabi::trueos_cabi_vid_open_v2(path.as_ptr(), path.len()) };
+    if rc == 0 { Ok(()) } else { Err(rc) }
+}
+
 pub const KONSOLE_FRAME_TERMINAL_HANDOFF: u32 = 1 << 31;
 
 #[inline]

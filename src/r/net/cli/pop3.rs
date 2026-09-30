@@ -68,7 +68,7 @@ impl Pop3Client {
         let seq = POP3_TLS_SEQ.fetch_add(1, Ordering::Relaxed) as u64;
         let selector = if let Some((bus, slot, func)) = crate::net::bdf_at(dev_idx) {
             format!("{:02x}:{:02x}.{}", bus, slot, func)
-        } else if let Some((vid, pid)) = crate::net::pci_id_at(dev_idx) {
+        } else if let Some((vid, pid)) = crate::net::device_id_at(dev_idx) {
             format!("{:04x}:{:04x}", vid, pid)
         } else {
             format!("{}", dev_idx)

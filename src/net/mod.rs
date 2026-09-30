@@ -14,6 +14,7 @@ pub mod ring;
 mod tcp_tx_queue;
 pub mod tls;
 pub mod tls_socket;
+pub(crate) mod usb;
 pub mod vio;
 pub mod wifi;
 
@@ -68,6 +69,7 @@ pub trait NetworkDriver: Driver {
 const ENABLE_R8125: bool = true;
 
 enum ActiveDevice {
+    Usb(usb::UsbNic),
     Virtio(NetCore<VirtioNetAdapter>),
     E1000(NetCore<E1000Adapter>),
     I226(NetCore<I226Adapter>),
@@ -83,6 +85,7 @@ impl NetDevice for ActiveDevice {
             ActiveDevice::I226(dev) => dev.mac(),
             ActiveDevice::Rtl8169(dev) => dev.mac(),
             ActiveDevice::R8125(dev) => dev.mac(),
+            ActiveDevice::Usb(dev) => dev.mac(),
         }
     }
 
@@ -93,6 +96,7 @@ impl NetDevice for ActiveDevice {
             ActiveDevice::I226(dev) => dev.poll_rx(),
             ActiveDevice::Rtl8169(dev) => dev.poll_rx(),
             ActiveDevice::R8125(dev) => dev.poll_rx(),
+            ActiveDevice::Usb(dev) => dev.poll_rx(),
         }
     }
 
@@ -103,6 +107,7 @@ impl NetDevice for ActiveDevice {
             ActiveDevice::I226(dev) => dev.pop_rx(),
             ActiveDevice::Rtl8169(dev) => dev.pop_rx(),
             ActiveDevice::R8125(dev) => dev.pop_rx(),
+            ActiveDevice::Usb(dev) => dev.pop_rx(),
         }
     }
 
@@ -113,6 +118,7 @@ impl NetDevice for ActiveDevice {
             ActiveDevice::I226(dev) => dev.rx_queue_len(),
             ActiveDevice::Rtl8169(dev) => dev.rx_queue_len(),
             ActiveDevice::R8125(dev) => dev.rx_queue_len(),
+            ActiveDevice::Usb(dev) => dev.rx_queue_len(),
         }
     }
 
@@ -123,6 +129,7 @@ impl NetDevice for ActiveDevice {
             ActiveDevice::I226(dev) => dev.drain_rx_each(limit, f),
             ActiveDevice::Rtl8169(dev) => dev.drain_rx_each(limit, f),
             ActiveDevice::R8125(dev) => dev.drain_rx_each(limit, f),
+            ActiveDevice::Usb(dev) => dev.drain_rx_each(limit, f),
         }
     }
 
@@ -133,6 +140,7 @@ impl NetDevice for ActiveDevice {
             ActiveDevice::I226(dev) => dev.transmit(frame),
             ActiveDevice::Rtl8169(dev) => dev.transmit(frame),
             ActiveDevice::R8125(dev) => dev.transmit(frame),
+            ActiveDevice::Usb(dev) => dev.transmit(frame),
         }
     }
 
@@ -143,6 +151,7 @@ impl NetDevice for ActiveDevice {
             ActiveDevice::I226(dev) => dev.transmit_with(len, fill),
             ActiveDevice::Rtl8169(dev) => dev.transmit_with(len, fill),
             ActiveDevice::R8125(dev) => dev.transmit_with(len, fill),
+            ActiveDevice::Usb(dev) => dev.transmit_with(len, fill),
         }
     }
 
@@ -153,6 +162,7 @@ impl NetDevice for ActiveDevice {
             ActiveDevice::I226(dev) => dev.transmit_ready(),
             ActiveDevice::Rtl8169(dev) => dev.transmit_ready(),
             ActiveDevice::R8125(dev) => dev.transmit_ready(),
+            ActiveDevice::Usb(dev) => dev.transmit_ready(),
         }
     }
 
@@ -163,6 +173,7 @@ impl NetDevice for ActiveDevice {
             ActiveDevice::I226(dev) => dev.link_state(),
             ActiveDevice::Rtl8169(dev) => dev.link_state(),
             ActiveDevice::R8125(dev) => dev.link_state(),
+            ActiveDevice::Usb(dev) => dev.link_state(),
         }
     }
 }
@@ -177,6 +188,7 @@ pub fn device_name_at(index: usize) -> Option<&'static str> {
         ActiveDevice::I226(_) => "Intel I226-V (diagnostic)",
         ActiveDevice::Rtl8169(_) => "Realtek RTL8169/8168",
         ActiveDevice::R8125(_) => "Realtek RTL8125",
+        ActiveDevice::Usb(_) => "Realtek RTL8153 USB ECM",
     })
 }
 
@@ -189,7 +201,19 @@ pub fn pci_device_at(index: usize) -> Option<PciDevice> {
         ActiveDevice::I226(n) => n.pci_device(),
         ActiveDevice::Rtl8169(n) => n.pci_device(),
         ActiveDevice::R8125(n) => n.pci_device(),
+        ActiveDevice::Usb(_) => None,
     }
+}
+
+/// Hardware identity for either a PCI NIC or the claimed USB ECM NIC.
+pub fn device_id_at(index: usize) -> Option<(u16, u16)> {
+    {
+        let devices = DEVICES.lock();
+        if matches!(devices.get(index)?, ActiveDevice::Usb(_)) {
+            return Some((0x0bda, 0x8153));
+        }
+    }
+    pci_id_at(index)
 }
 
 pub fn pci_id_at(index: usize) -> Option<(u16, u16)> {
@@ -205,7 +229,7 @@ pub fn bdf_at(index: usize) -> Option<(u8, u8, u8)> {
 pub fn find_device_by_vidpid(vendor: u16, device: u16) -> Option<usize> {
     let count = device_count();
     for idx in 0..count {
-        if pci_id_at(idx) == Some((vendor, device)) {
+        if device_id_at(idx) == Some((vendor, device)) {
             return Some(idx);
         }
     }
@@ -268,7 +292,7 @@ fn parse_u8_dec_or_hex(s: &str) -> Option<u8> {
 ///
 /// Supported suffix formats (after the last '@'):
 /// - `@<index>` (legacy)
-/// - `@vvvv:pppp` (PCI vendor:device, hex)
+/// - `@vvvv:pppp` (PCI or USB vendor:device, hex)
 /// - `@bb:dd.f` (PCI bus:slot.function; bus/slot hex, function dec/hex)
 pub fn device_index_from_owner(owner: &str) -> Option<usize> {
     let (base, suffix) = owner.rsplit_once('@')?;
@@ -603,4 +627,32 @@ fn with_device_at<R>(index: usize, f: impl FnOnce(&mut dyn NetDevice) -> R) -> O
     let mut guard = DEVICES.lock();
     let dev = guard.get_mut(index)?;
     Some(f(dev))
+}
+
+pub(crate) fn register_usb_nic(nic: usb::UsbNic) -> Result<usize, &'static str> {
+    let mut devices = DEVICES.lock();
+    if devices.len() >= adapter::MAX_NET_DEVICES {
+        return Err("network device capacity");
+    }
+    let index = devices.len();
+    devices.push(ActiveDevice::Usb(nic));
+    Ok(index)
+}
+
+/// Keep a working primary NIC; adopt a late USB NIC when the current one is down.
+pub(crate) fn prefer_link_up_device(index: usize) {
+    let devices = DEVICES.lock();
+    let current = PRIMARY_DEVICE_INDEX.load(Ordering::Relaxed);
+    if devices
+        .get(current)
+        .is_some_and(|device| device.link_state().up)
+    {
+        return;
+    }
+    if devices
+        .get(index)
+        .is_some_and(|device| device.link_state().up)
+    {
+        PRIMARY_DEVICE_INDEX.store(index, Ordering::Relaxed);
+    }
 }

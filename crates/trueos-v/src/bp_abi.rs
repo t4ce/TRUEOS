@@ -1665,6 +1665,7 @@ unsafe extern "C" {
     pub fn trueos_cabi_shell2_frontend_detach_v1() -> i32;
     pub fn trueos_cabi_img_open_v1(paths_ptr: *const u8, paths_len: usize) -> i32;
     pub fn trueos_cabi_vid_open_v1(path_ptr: *const u8, path_len: usize) -> i32;
+    pub fn trueos_cabi_vid_open_v2(path_ptr: *const u8, path_len: usize) -> i32;
     pub fn trueos_cabi_blueprint_child_spawn_v1(
         initial_ptr: *const u8,
         initial_len: usize,

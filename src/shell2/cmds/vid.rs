@@ -23,6 +23,19 @@ pub(crate) fn enqueue_from_blueprint(vm_id: u8, path: String) -> Result<(), ()> 
     Ok(())
 }
 
+pub(crate) fn enqueue_qualified_from_blueprint(vm_id: u8, path: String) -> Result<(), ()> {
+    let Some(rest) = path.strip_prefix("trueosfs:disc") else { return Err(()); };
+    let Some((raw, file)) = rest.split_once('/') else { return Err(()); };
+    if raw.is_empty() || !raw.bytes().all(|byte| byte.is_ascii_digit())
+        || raw.parse::<u32>().is_err() || file.is_empty() || path.as_bytes().contains(&0) {
+        return Err(());
+    }
+    let mut queue = BLUEPRINT_VIDEO_QUEUE.lock();
+    if queue.len() >= 16 { return Err(()); }
+    queue.push_back((vm_id, path));
+    Ok(())
+}
+
 pub(crate) fn poll_blueprint_open(spawner: &Spawner) -> bool {
     let Some((vm_id, path)) = BLUEPRINT_VIDEO_QUEUE.lock().pop_front() else { return false; };
     let Some(origin) = crate::hv::blueprint_console_target(vm_id) else { return true; };
