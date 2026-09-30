@@ -1830,7 +1830,10 @@ fn handle_submit(
     submitted: &str,
 ) -> HandleSubmitResult {
     match mode {
-        ShellMode2::Default if shell2_apps::is_local_app_name(submitted) => {
+        ShellMode2::Default
+            if !shell2_cmd_registry::requires_host_admin_dispatch(submitted)
+                && shell2_apps::is_local_app_name(submitted) =>
+        {
             shell2_apps::submit_local_selector(spawner, io, submitted);
             HandleSubmitResult::None
         }

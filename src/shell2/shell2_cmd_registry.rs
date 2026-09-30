@@ -574,12 +574,31 @@ fn starts_with_command<'a>(submitted: &'a str, name: &str) -> Option<&'a str> {
     }
 }
 
+// These Blueprints need the host wrapper to supply disk arguments and consume
+// their exit action. Launching them as ordinary app.db entries skips both.
+pub(crate) fn requires_host_admin_dispatch(submitted: &str) -> bool {
+    ["os", "backup"]
+        .iter()
+        .any(|name| starts_with_command(submitted.trim(), name).is_some())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         AllocString, TOOL_JSON_WIN, command_registry_json, render_default_titlebar,
-        starts_with_command, titlebar_right_admin_names_text, titlebar_right_default_names_text,
+        requires_host_admin_dispatch, starts_with_command, titlebar_right_admin_names_text,
+        titlebar_right_default_names_text,
     };
+
+    #[test]
+    fn admin_blueprints_keep_their_host_dispatch_when_in_appdb() {
+        for submitted in ["os", "OS", " os ", "os help", "backup", "BACKUP", "backup stop"] {
+            assert!(requires_host_admin_dispatch(submitted), "{submitted}");
+        }
+        for submitted in ["shell", "surf", "osmium", "backup-copy", "中国"] {
+            assert!(!requires_host_admin_dispatch(submitted), "{submitted}");
+        }
+    }
 
     #[test]
     fn unrelated_command_length_may_land_inside_utf8() {

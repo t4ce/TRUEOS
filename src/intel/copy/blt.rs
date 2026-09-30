@@ -108,6 +108,19 @@ static GUC_BLT_UI4: Mutex<GucBltUi4Runtime> = Mutex::new(GucBltUi4Runtime::new()
 static GUC_BLT_RING: Mutex<GucBltRingRuntime> = Mutex::new(GucBltRingRuntime::new());
 static GUC_BLT_LANE_BUSY: AtomicBool = AtomicBool::new(false);
 static GUC_BLT_LANE_QUARANTINED: AtomicBool = AtomicBool::new(false);
+static GUC_BLT_LAST_TIMEOUT: Mutex<Option<GucBcs0Timeout>> = Mutex::new(None);
+
+#[derive(Copy, Clone, Debug)]
+pub(crate) struct GucBcs0Timeout {
+    pub(crate) observed: u32,
+    pub(crate) expected: u32,
+    pub(crate) activity: CopyEngineActivitySnapshot,
+    pub(crate) context: Option<super::guc_submission::GucContextStatus>,
+}
+
+pub(crate) fn guc_bcs0_last_timeout() -> Option<GucBcs0Timeout> {
+    *GUC_BLT_LAST_TIMEOUT.lock()
+}
 // The GuC BCS0 control window is process-lifetime immutable. Cache both
 // success and failure so no live context can ever trigger a GGTT remap.
 static DIRECT_BLT_GGTT_MAPPING: spin::Once<bool> = spin::Once::new();
@@ -852,6 +865,23 @@ pub(crate) fn poll_guc_bcs0_rgba_copies(
         if direct_blt_elapsed_ms_since(runtime.started_tick) < GUC_BLT_UI4_TIMEOUT_MS {
             return GucBcs0CopyCompletion::Pending;
         }
+        // Capture evidence before quarantine disables/deregisters the context.
+        // Read saved HEAD even when the marker is absent: the stream may have
+        // finished without writing the expected address/value.
+        let save_status = guc_blt_context_save_status(state);
+        let activity = activity_snapshot();
+        let _ = super::guc_submission::fault_snapshot(); // Drain pending G2H events.
+        let context = super::guc_submission::context_status().into_iter().find(|context| {
+            context.engine == crate::gpu::physical::PhysicalEngineId::BCS0
+                && context.hwlrca_lo & !0xFFF == DIRECT_BLT_GPU_VA_CONTEXT_BASE as u32
+        });
+        *GUC_BLT_LAST_TIMEOUT.lock() = Some(GucBcs0Timeout {
+            observed, expected: runtime.expected_marker, activity, context,
+        });
+        crate::log_error!(target: "gfx";
+            "intel/blt: ui4-bcs0 pre-quarantine activity={:?} context={:?}\n",
+            activity, context,
+        );
         // Quarantine before retiring the software point. A missing marker or
         // saved HEAD is ambiguous ownership: late GuC writes remain possible,
         // so this lane, context, and every backing allocation stay pinned.
@@ -863,7 +893,6 @@ pub(crate) fn poll_guc_bcs0_rgba_copies(
         if let Some(pending) = runtime.pending.take() {
             let _ = crate::gpu::executor::complete_kernel_submission(pending, false);
         }
-        let activity = activity_snapshot();
         crate::log_error!(target: "gfx";
             "intel/blt: ui4-bcs0 timeout sequence={} copies={} bytes={} marker_observed={} context_saved={} observed=0x{:08X} expected=0x{:08X} saved_head={} published_tail={} timeout_ms={} head=0x{:08X} tail=0x{:08X} acthd=0x{:08X} ipeir=0x{:08X} ipehr=0x{:08X} eir=0x{:08X} action=quarantine-vcpy device_found={} contexts_disabled={} contexts_retained={} lane_busy=1 storage_released=0\n",
             runtime.sequence, runtime.copies, runtime.bytes,
