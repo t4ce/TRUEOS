@@ -46,18 +46,29 @@ pub(crate) fn try_parse(
             if let Some(failure) = crate::intel::guc_bcs0_last_timeout() {
                 let activity = failure.activity;
                 print_shell_line(io, format!(
+                    "vcpy: breadcrumbs ring=0x{:08X}/0xBC505247 batch=0x{:08X}/0xBC504242",
+                    failure.ring_cookie, failure.batch_cookie,
+                ).as_str());
+                print_shell_line(io, format!(
                     "vcpy: pre-quarantine marker=0x{:08X}/0x{:08X} saved_head={} published_tail={} head=0x{:X} tail=0x{:X} start=0x{:X} ctl=0x{:X} acthd=0x{:X} ipeir=0x{:X} ipehr=0x{:X} eir=0x{:X}",
                     failure.observed, failure.expected, activity.guc_saved_head,
                     activity.guc_published_tail, activity.head, activity.tail,
                     activity.start, activity.ctl, activity.acthd,
                     activity.ipeir, activity.ipehr, activity.eir,
                 ).as_str());
+                print_shell_line(io, format!(
+                    "vcpy: pre-quarantine mode=0x{:08X} mi_mode=0x{:08X} ctx_ctl=0x{:08X} el_ctl=0x{:08X} el_status=0x{:08X}:0x{:08X}",
+                    activity.mode, activity.mi_mode, activity.context_control,
+                    activity.execlist_control, activity.execlist_status_hi,
+                    activity.execlist_status_lo,
+                ).as_str());
                 if let Some(context) = failure.context {
                     print_shell_line(io, format!(
-                        "vcpy: guc context={} enabled={} pending_enable={} faulted={} submissions={}",
+                        "vcpy: guc context={} enabled={} pending_enable={} faulted={} submissions={} hwlrca=0x{:08X}:0x{:08X}",
                         context.context_id, context.enabled as u8,
                         context.pending_enable as u8, context.faulted as u8,
                         context.submissions,
+                        context.hwlrca_hi, context.hwlrca_lo,
                     ).as_str());
                 } else {
                     print_shell_line(io, "vcpy: guc context=absent-before-quarantine");

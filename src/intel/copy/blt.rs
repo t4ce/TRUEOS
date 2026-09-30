@@ -7,7 +7,6 @@ const RING_HEAD: usize = 0x34;
 const RING_TAIL: usize = 0x30;
 const RING_START: usize = 0x38;
 const RING_CTL: usize = 0x3C;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const RING_HWS_PGA: usize = 0x80;
 const RING_ACTHD: usize = 0x74;
 const RING_IPEIR: usize = 0x64;
@@ -43,11 +42,13 @@ const CTX_DESC_ADDRESSING_MODE_SHIFT: u32 = 3;
 const INTEL_LEGACY_64B_CONTEXT: u32 = 3;
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const GFX_RUN_LIST_ENABLE: u32 = 1 << 15;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const GEN11_GFX_DISABLE_LEGACY_MODE: u32 = 1 << 3;
 const STOP_RING: u32 = 1 << 8;
-#[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 const MODE_IDLE: u32 = 1 << 9;
+const GDRST: usize = 0x941C;
+const GRDOM_BLT: u32 = 1 << 2;
+const BCS_RING_COOKIE: u32 = 0xBC50_5247;
+const BCS_BATCH_COOKIE: u32 = 0xBC50_4242;
 
 const MI_NOOP: u32 = 0;
 const MI_LOAD_REGISTER_IMM: u32 = 0x1100_0000;
@@ -114,6 +115,8 @@ static GUC_BLT_LAST_TIMEOUT: Mutex<Option<GucBcs0Timeout>> = Mutex::new(None);
 pub(crate) struct GucBcs0Timeout {
     pub(crate) observed: u32,
     pub(crate) expected: u32,
+    pub(crate) ring_cookie: u32,
+    pub(crate) batch_cookie: u32,
     pub(crate) activity: CopyEngineActivitySnapshot,
     pub(crate) context: Option<super::guc_submission::GucContextStatus>,
 }
@@ -124,6 +127,7 @@ pub(crate) fn guc_bcs0_last_timeout() -> Option<GucBcs0Timeout> {
 // The GuC BCS0 control window is process-lifetime immutable. Cache both
 // success and failure so no live context can ever trigger a GGTT remap.
 static DIRECT_BLT_GGTT_MAPPING: spin::Once<bool> = spin::Once::new();
+static GUC_BLT_ENGINE_READY: spin::Once<bool> = spin::Once::new();
 
 #[derive(Copy, Clone, Debug)]
 struct DirectBltState {
@@ -877,6 +881,8 @@ pub(crate) fn poll_guc_bcs0_rgba_copies(
         });
         *GUC_BLT_LAST_TIMEOUT.lock() = Some(GucBcs0Timeout {
             observed, expected: runtime.expected_marker, activity, context,
+            ring_cookie: unsafe { core::ptr::read_volatile(state.result_virt.add(8).cast::<u32>()) },
+            batch_cookie: unsafe { core::ptr::read_volatile(state.result_virt.add(16).cast::<u32>()) },
         });
         crate::log_error!(target: "gfx";
             "intel/blt: ui4-bcs0 pre-quarantine activity={:?} context={:?}\n",
@@ -1202,7 +1208,51 @@ pub(crate) fn prewarm_guc_bcs0_control_ggtt(dev: super::Dev) -> bool {
         }
         return false;
     };
-    install_direct_blt_control_ggtt_for_boot(dev, state)
+    let mapped = install_direct_blt_control_ggtt_for_boot(dev, state);
+    *GUC_BLT_ENGINE_READY.call_once(|| mapped && init_guc_bcs0_engine_for_boot(dev))
+}
+
+// Called before GuC firmware startup and before any BCS context registration.
+// TGL Vol 2c GFX_MODE requires a graphics reset before changing bit 3.
+// Reset only the idle blitter domain; GuC owns scheduling after this handoff.
+fn init_guc_bcs0_engine_for_boot(dev: super::Dev) -> bool {
+    if !super::physical_bcs_ready(dev) {
+        return false;
+    }
+    let mode_before = super::mmio_read(dev, BCS0_RING_BASE + RING_MODE_GEN7);
+    let mi_before = super::mmio_read(dev, BCS0_RING_BASE + RING_MI_MODE);
+    if mode_before & GEN11_GFX_DISABLE_LEGACY_MODE == 0 {
+        if mi_before & MODE_IDLE == 0 {
+            crate::log_error!(target: "gfx"; "intel/blt: boot-init accepted=0 reason=engine-not-idle mi_mode=0x{:08X}\n", mi_before);
+            return false;
+        }
+        super::mmio_write(dev, GDRST, GRDOM_BLT);
+        let mut reset_done = false;
+        for _ in 0..100_000 {
+            if super::mmio_read(dev, GDRST) & GRDOM_BLT == 0 {
+                reset_done = true;
+                break;
+            }
+            core::hint::spin_loop();
+        }
+        if !reset_done {
+            crate::log_error!(target: "gfx"; "intel/blt: boot-init accepted=0 reason=blitter-reset-timeout\n");
+            return false;
+        }
+    }
+    super::mmio_write(dev, BCS0_RING_BASE + RING_HWS_PGA, DIRECT_BLT_GPU_VA_CONTEXT_BASE as u32);
+    super::mmio_write(dev, BCS0_RING_BASE + RING_MODE_GEN7,
+        GEN11_GFX_DISABLE_LEGACY_MODE | (GEN11_GFX_DISABLE_LEGACY_MODE << 16));
+    super::mmio_write(dev, BCS0_RING_BASE + RING_MI_MODE, STOP_RING << 16);
+    let mi_after = super::mmio_read(dev, BCS0_RING_BASE + RING_MI_MODE);
+    let mode_after = super::mmio_read(dev, BCS0_RING_BASE + RING_MODE_GEN7);
+    let hws = super::mmio_read(dev, BCS0_RING_BASE + RING_HWS_PGA);
+    let accepted = mode_after & GEN11_GFX_DISABLE_LEGACY_MODE != 0
+        && mi_after & STOP_RING == 0 && hws == DIRECT_BLT_GPU_VA_CONTEXT_BASE as u32;
+    crate::log_warn!(target: "gfx";
+        "intel/blt: boot-init accepted={} mode=0x{:08X}->0x{:08X} mi_mode=0x{:08X}->0x{:08X} hws=0x{:08X} owner=boot next=guc\n",
+        accepted as u8, mode_before, mode_after, mi_before, mi_after, hws);
+    accepted
 }
 
 fn direct_blt_init_ppgtt(state: DirectBltState) -> bool {
@@ -1296,7 +1346,7 @@ fn direct_blt_forcewake(dev: super::Dev) -> bool {
     // BCS consumes only its boot-owned forcewake admission contract. It must
     // not inherit Render/RCS readiness or repair shared GT state from a copy
     // client submission.
-    super::physical_bcs_ready(dev)
+    super::physical_bcs_ready(dev) && GUC_BLT_ENGINE_READY.get().copied().unwrap_or(false)
 }
 
 fn direct_blt_encode_fast_copy_batch(state: DirectBltState) -> bool {
@@ -1438,7 +1488,11 @@ fn guc_blt_encode_ui4_copy_batch(
     unsafe {
         core::ptr::write_bytes(state.result_virt, 0, DIRECT_BLT_RESULT_BYTES);
     }
-    let mut cursor = 0usize;
+    batch[..4].copy_from_slice(&[
+        MI_STORE_DATA_IMM_GGTT_DW1, (DIRECT_BLT_GPU_VA_RESULT_BASE + 16) as u32,
+        0, BCS_BATCH_COOKIE,
+    ]);
+    let mut cursor = 4usize;
     let mut copied_bytes = 0u64;
     for copy in copies.iter().copied() {
         if !guc_blt_valid_copy(destination, copy) || cursor.saturating_add(10) > batch.len() {
@@ -1620,19 +1674,23 @@ fn direct_blt_build_ring_batch_start(state: DirectBltState) -> Option<usize> {
 }
 
 fn guc_blt_append_ring_batch_start(state: DirectBltState, tail_bytes: usize) -> usize {
-    const ENTRY_DWORDS: usize = 4;
+    const ENTRY_DWORDS: usize = 8;
     debug_assert_eq!(tail_bytes % (ENTRY_DWORDS * core::mem::size_of::<u32>()), 0);
     debug_assert!(tail_bytes < DIRECT_BLT_RING_BYTES);
     let start = tail_bytes / core::mem::size_of::<u32>();
     unsafe {
         let dwords = state.ring_virt.cast::<u32>();
-        core::ptr::write_volatile(dwords.add(start), MI_BATCH_BUFFER_START_GEN8 | MI_BATCH_GGTT);
-        core::ptr::write_volatile(dwords.add(start + 1), DIRECT_BLT_GPU_VA_BATCH_BASE as u32);
+        core::ptr::write_volatile(dwords.add(start), MI_STORE_DATA_IMM_GGTT_DW1);
+        core::ptr::write_volatile(dwords.add(start + 1), (DIRECT_BLT_GPU_VA_RESULT_BASE + 8) as u32);
+        core::ptr::write_volatile(dwords.add(start + 2), 0);
+        core::ptr::write_volatile(dwords.add(start + 3), BCS_RING_COOKIE);
+        core::ptr::write_volatile(dwords.add(start + 4), MI_BATCH_BUFFER_START_GEN8 | MI_BATCH_GGTT);
+        core::ptr::write_volatile(dwords.add(start + 5), DIRECT_BLT_GPU_VA_BATCH_BASE as u32);
         core::ptr::write_volatile(
-            dwords.add(start + 2),
+            dwords.add(start + 6),
             (DIRECT_BLT_GPU_VA_BATCH_BASE >> 32) as u32,
         );
-        core::ptr::write_volatile(dwords.add(start + 3), MI_NOOP);
+        core::ptr::write_volatile(dwords.add(start + 7), MI_ARB_CHECK);
         super::dma_flush(
             state.ring_virt.add(tail_bytes),
             ENTRY_DWORDS * core::mem::size_of::<u32>(),

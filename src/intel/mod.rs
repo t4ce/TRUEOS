@@ -356,6 +356,7 @@ fn init_required_guc_transport(dev: Dev) -> bool {
     }
 
     ggtt_invalidate(dev);
+    let bcs0_control_ready = self::blt::prewarm_guc_bcs0_control_ggtt(dev);
     let ready = self::guc::bootstrap(dev, fw, ads, false);
     let status = self::guc::status(dev);
     let (bootrom, ukernel, auth) = self::guc::describe_status(status);
@@ -384,7 +385,6 @@ fn init_required_guc_transport(dev: Dev) -> bool {
     let rcs_controls = registered
         .then(|| self::gpgpu::prewarm_direct_rcs_controls_ggtt(dev))
         .unwrap_or_default();
-    let bcs0_control_ready = registered && self::blt::prewarm_guc_bcs0_control_ggtt(dev);
     crate::log!(
         "intel/guc: admission accepted={} firmware_ready=1 ctb_ready={} physical_gpu_registered={} rcs_controls={} system_rcs_control={} font_rcs_control={} execution_rcs_control={} lfm25_rcs_control={} ui4_rcs_control={} bcs0_control={} control_mapping=boot-exact-once submission_owner=guc fallback=none next=context-register-on-first-submit\n",
         ctb_ready as u8,
