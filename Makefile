@@ -10,7 +10,7 @@ ARTIFACT_BUILD_INFO = $(ARTIFACT_DIR)/BUILD_INFO
 PROVENANCE_DIR := bld/provenance
 PROVENANCE_LATEST := $(PROVENANCE_DIR)/latest.json
 PROVENANCE_LATEST_SOURCE_MANIFEST := $(PROVENANCE_DIR)/latest.source-files.sha256
-PROVENANCE_SCRIPT := tools/provenance_chain.py
+PROVENANCE_SCRIPT := tools/testpy/provenance_chain.py
 PROVENANCE_CLEAN_FLAG ?= --require-clean
 PROVENANCE_SOURCE_MANIFEST ?= git-commit
 # Normal ISO deployment uses the test rig's ESP32-latched physical reset button.

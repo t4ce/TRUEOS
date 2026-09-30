@@ -530,7 +530,7 @@ Formal methods can help, but the proof boundary must be honest. The [seL4 verifi
 - vGPU validation plan: [`docs/vgpu_runtime_validation.md`](vgpu_runtime_validation.md)
 - Intel media/SFC roadmap: [`docs/intel_media_sfc_roadmap.md`](intel_media_sfc_roadmap.md)
 - Release workflow: [`.github/workflows/release.yml`](../.github/workflows/release.yml)
-- Provenance implementation: [`tools/provenance_chain.py`](../tools/provenance_chain.py)
+- Provenance implementation: [`tools/testpy/provenance_chain.py`](../tools/testpy/provenance_chain.py)
 - License: [`LICENSE`](../LICENSE)
 
 ### External primary references
@@ -561,7 +561,7 @@ rg -n 'panic_handler|panic = "abort"' src Cargo.toml
 rg -n 'notify_physical_device_lost' src
 rg -n 'golden reset|DISABLE_ENGINE_RESET' src/intel
 rg -n 'StubOnly|identity|RWX|IBPB' src/hv
-python3 tools/provenance_chain.py verify \
+python3 tools/testpy/provenance_chain.py verify \
   --source-root . \
   --record bld/trueos-release/TRUEOS.provenance.json
 ```
