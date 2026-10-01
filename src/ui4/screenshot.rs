@@ -217,9 +217,13 @@ struct CapturedWindowRgba {
 pub(crate) fn request_wd_postblend_capture(
     target: crate::shell2::MatrixTarget,
 ) -> Result<(), &'static str> {
+    let mut targets = SHOT_TARGETS.lock();
     crate::intel::media::wd_xyuv8888::request_screenshot()
-        .map_err(|_| "WD screenshot slot is busy")?;
-    SHOT_TARGETS.lock().push_back(target);
+        .map_err(|error| match error {
+            crate::intel::media::wd_xyuv8888::ScreenshotRequestError::Busy => "WD screenshot slot is busy",
+            crate::intel::media::wd_xyuv8888::ScreenshotRequestError::Quarantined => "WD screenshot copy is quarantined until reboot",
+        })?;
+    targets.push_back(target);
     Ok(())
 }
 
@@ -239,7 +243,7 @@ fn report_shot_result(
 }
 
 /// Drive Pipe C -> WD for exactly one frame when no RDP session owns it.
-/// A live stream instead notices the armed static slot in its ordinary next
+/// A live stream instead notices the armed snapshot slot in its ordinary next
 /// capture, so this path never submits work to VDBOX.
 async fn drive_manual_wd_capture_if_needed() {
     if !crate::intel::media::wd_xyuv8888::try_claim_manual_screenshot_capture() {
@@ -282,7 +286,7 @@ async fn drive_manual_wd_capture_if_needed() {
                         captured =
                             crate::intel::media::wd_xyuv8888::try_refresh_requested_screenshot(
                                 surface,
-                            );
+                            ).await;
                         if captured {
                             crate::log_info!(target: "ui4/screenshot";
                                 "ui4/screenshot: raw WD frame acquired route=idle standalone-wd-one-frame wd_sequence={} vdbox=0 udp=0\n",
@@ -303,11 +307,13 @@ async fn drive_manual_wd_capture_if_needed() {
             }
         }
     }
-    let _ = crate::intel::stop_ui4_wd_xyuv8888_capture();
+    let stopped = crate::intel::stop_ui4_wd_xyuv8888_capture().is_ok();
     if !captured {
         crate::intel::media::wd_xyuv8888::cancel_requested_screenshot();
     }
-    crate::intel::media::wd_xyuv8888::release_manual_screenshot_capture();
+    if stopped {
+        crate::intel::media::wd_xyuv8888::release_manual_screenshot_capture();
+    }
 }
 
 /// Arm a capture of one exact UI4 window on the next composed frame.
@@ -533,8 +539,10 @@ fn capture_window(window: WindowSnapshot) -> Result<CapturedComposition, Capture
 /// packed XYUV8888 image to an ordinary RGBA PNG source. This is intentionally
 /// a one-shot background screenshot operation, never part of the stream.
 fn take_wd_postblend_capture() -> Option<CapturedComposition> {
-    let shot_target = SHOT_TARGETS.lock().pop_front();
     crate::intel::media::wd_xyuv8888::with_screenshot(|wd_sequence, xyuv| {
+        // A pending async BCS copy must not consume the request's reply target.
+        let shot_target = SHOT_TARGETS.lock().pop_front();
+        let conversion_started = crate::chronos::monotonic_nanos();
         let expected = crate::intel::media::wd_xyuv8888::WD_XYUV8888_BYTES;
         if xyuv.len() != expected {
             crate::log_warn!(target: "ui4/screenshot";
@@ -558,6 +566,9 @@ fn take_wd_postblend_capture() -> Option<CapturedComposition> {
             destination[2] = ((298 * y + 541 * cb + 128) >> 8).clamp(0, 255) as u8;
             destination[3] = 255;
         }
+        crate::log_info!(target: "gfx";
+            "wd-snapshot: conversion wd_sequence={} conversion_us={} bytes={} format=xyuv8888-to-rgba-bt709\n",
+            wd_sequence, crate::chronos::monotonic_nanos().saturating_sub(conversion_started) / 1_000, expected);
         Some(CapturedComposition {
             sequence: CAPTURE_SEQUENCE.fetch_add(1, Ordering::AcqRel) + 1,
             unix_seconds: crate::chronos::best_effort_unix_time_seconds(),
@@ -1081,6 +1092,10 @@ pub(crate) async fn ui4_screenshot_service_task() {
     let mut root_wait_logged = false;
     loop {
         drive_manual_wd_capture_if_needed().await;
+        if crate::intel::media::wd_xyuv8888::take_failed_screenshot() {
+            let target = SHOT_TARGETS.lock().pop_front();
+            report_shot_result(target.as_ref(), false, None);
+        }
         if let Some(capture) = take_wd_postblend_capture() {
             let wd_sequence = match capture.scope {
                 CaptureScope::WdPostBlend { wd_sequence } => wd_sequence,
@@ -1097,6 +1112,7 @@ pub(crate) async fn ui4_screenshot_service_task() {
                 );
                 queue.push_back(capture);
             } else {
+                report_shot_result(capture.shot_target.as_ref(), false, None);
                 crate::log_warn!(target: "ui4/screenshot";
                     "ui4/screenshot: wd snapshot dropped wd_sequence={} reason=encode-queue-full\n",
                     wd_sequence,
@@ -1169,7 +1185,7 @@ pub(crate) async fn ui4_screenshot_service_task() {
         {
             Ok(true) => {
                 report_shot_result(capture.shot_target.as_ref(), true, Some(path.as_str()));
-                crate::log_info!(target: "ui4/screenshot";
+                crate::log_info!(target: "gfx";
                     "ui4/screenshot: saved path=trueosfs:/{} disk_id={} sequence={} format=png-rgba size={}x{} png_bytes={} encode_us={} write_us={}\n",
                     path,
                     disk_id,

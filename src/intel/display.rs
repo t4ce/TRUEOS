@@ -47,6 +47,7 @@ pub(crate) use self::mirror_map_dp_engine::{
     MirrorMapMode, WdCaptureError, WdCapturePoll, WdCaptureStatus, WdXyuv8888Frame,
     begin_ui4_wd_xyuv8888_capture, poll_ui4_wd_xyuv8888_capture, set_mirror_map_mode,
     start_ui4_wd_xyuv8888_capture, stop_ui4_wd_xyuv8888_capture, ui4_wd_xyuv8888_capture_status,
+    pin_ui4_wd_frame_for_copy,
 };
 
 macro_rules! intel_display_focus_log {

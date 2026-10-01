@@ -103,6 +103,7 @@ pub(crate) enum WdCaptureError {
     WdDisableTimeout,
     Quarantined,
     AlreadyCapturing,
+    ConsumerBusy,
     NotRunning,
 }
 
@@ -181,6 +182,7 @@ impl MirrorMapMode {
 struct WdCaptureState {
     running: bool,
     quarantined: bool,
+    copy_pinned: bool,
     pending: bool,
     width: u32,
     height: u32,
@@ -223,6 +225,7 @@ impl WdCaptureState {
         Self {
             running: false,
             quarantined: false,
+            copy_pinned: false,
             pending: false,
             width: 0,
             height: 0,
@@ -250,6 +253,49 @@ impl WdCaptureState {
             virt: self.virt,
         }
     }
+}
+
+/// Exclusive read lease for one completed WD frame. Once a BCS submission may
+/// exist, dropping the lease without retirement quarantines the source.
+pub(crate) struct WdCopyLease {
+    submitted: bool,
+}
+
+impl WdCopyLease {
+    pub(crate) fn mark_submitted(&mut self) { self.submitted = true; }
+    pub(crate) fn mark_retired(&mut self) { self.submitted = false; }
+}
+
+impl Drop for WdCopyLease {
+    fn drop(&mut self) {
+        let mut state = STATE.lock();
+        if self.submitted {
+            state.quarantined = true;
+            crate::log_error!(target: "intel/display";
+                "intel/display: WD copy source quarantined sequence={} action=no-rearm-no-free\n",
+                state.sequence);
+        } else {
+            state.copy_pinned = false;
+        }
+    }
+}
+
+pub(crate) fn pin_ui4_wd_frame_for_copy(
+    phys: u64,
+    sequence: u64,
+) -> Result<WdCopyLease, WdCaptureError> {
+    let mut state = STATE.lock();
+    if state.quarantined {
+        return Err(WdCaptureError::Quarantined);
+    }
+    if !state.running || state.pending || state.phys != phys || state.sequence != sequence {
+        return Err(WdCaptureError::NotRunning);
+    }
+    if state.copy_pinned {
+        return Err(WdCaptureError::ConsumerBusy);
+    }
+    state.copy_pinned = true;
+    Ok(WdCopyLease { submitted: false })
 }
 
 fn pipe_c_output_color_registers() -> (usize, usize, usize, usize, usize) {
@@ -651,6 +697,7 @@ pub(crate) fn start_ui4_wd_xyuv8888_capture() -> Result<WdXyuv8888Frame, WdCaptu
     *state = WdCaptureState {
         running: true,
         quarantined: false,
+        copy_pinned: false,
         pending: false,
         width,
         height,
@@ -692,6 +739,9 @@ pub(crate) fn begin_ui4_wd_xyuv8888_capture() -> Result<u64, WdCaptureError> {
     }
     if state.quarantined {
         return Err(WdCaptureError::Quarantined);
+    }
+    if state.copy_pinned {
+        return Err(WdCaptureError::ConsumerBusy);
     }
     if state.pending {
         return Err(WdCaptureError::AlreadyCapturing);
@@ -747,6 +797,9 @@ fn disable_mirror_planes(dev: crate::intel::Dev) {
 pub(crate) fn stop_ui4_wd_xyuv8888_capture() -> Result<(), WdCaptureError> {
     let dev = crate::intel::claimed_device().ok_or(WdCaptureError::DeviceUnavailable)?;
     let mut state = STATE.lock();
+    if state.copy_pinned {
+        return Err(WdCaptureError::ConsumerBusy);
+    }
     if !state.running {
         return Ok(());
     }

@@ -4,7 +4,10 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
-from test_clip_position3_uv_texture import ROOT, constant, item
+import test_clip_position3_uv_texture as extract
+ROOT = Path(__file__).resolve().parents[2]
+extract.ROOT = ROOT
+constant, item = extract.constant, extract.item
 
 
 def block(path, prefix):
@@ -227,11 +230,11 @@ static EVENTS: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
 static POLLS: Mutex<std::collections::VecDeque<bool>> = Mutex::new(std::collections::VecDeque::new());
 static CAPTURE_TIMEOUTS: AtomicU64 = AtomicU64::new(0);
 struct WdCaptureState {
-    running: bool, pending: bool, quarantined: bool, byte_len: usize, virt: usize,
+    running: bool, pending: bool, quarantined: bool, copy_pinned: bool, phys: u64, sequence: u64, byte_len: usize, virt: usize,
     saved_output_color: u32, saved_dbuf_ctl_s2: u32, saved_power_well_ctl2: u32,
 }
 impl WdCaptureState {
-    const fn new() -> Self { Self { running: false, pending: false, quarantined: false,
+    const fn new() -> Self { Self { running: false, pending: false, quarantined: false, copy_pinned: false, phys: 0x100000, sequence: 7,
         byte_len: 4096, virt: 0, saved_output_color: 0, saved_dbuf_ctl_s2: 0,
         saved_power_well_ctl2: 0 } }
 }
@@ -266,6 +269,9 @@ fn restore_pipe_c_output_color(_: intel::Dev, _: u32) { EVENTS.lock().push("rest
         source += constant(path, name) + '\n'
     source += constant('src/intel/display/regs.rs', 'HSW_PWR_WELL_CTL2').replace('pub(in crate::intel) ', '') + '\n'
     source += item(path, 'WdCaptureError') + '\n'
+    source += item(path, 'WdCopyLease') + block(path, 'impl WdCopyLease')
+    source += block(path, 'impl Drop for WdCopyLease')
+    source += item(path, 'pin_ui4_wd_frame_for_copy')
     source += item(path, 'stop_ui4_wd_xyuv8888_capture') + r'''
 fn setup(pending: bool, polls: &[bool]) {
     *STATE.lock() = WdCaptureState { running: true, pending, ..WdCaptureState::new() };
@@ -295,6 +301,33 @@ fn stuck_transcoder_keeps_target_mapped() {
     assert_eq!(stop_ui4_wd_xyuv8888_capture(), Err(WdCaptureError::WdDisableTimeout));
     assert_eq!(*EVENTS.lock(), ["disable-planes", "disable-transcoder", "wait-idle"]);
     assert!(STATE.lock().quarantined);
+}
+#[test]
+fn exact_frame_lease_quarantines_on_unretired_drop() {
+    setup(false, &[]);
+    assert!(pin_ui4_wd_frame_for_copy(0x100000, 6).is_err());
+    assert!(pin_ui4_wd_frame_for_copy(0x200000, 7).is_err());
+    let lease = pin_ui4_wd_frame_for_copy(0x100000, 7).unwrap();
+    assert!(pin_ui4_wd_frame_for_copy(0x100000, 7).is_err());
+    drop(lease);
+    assert!(!STATE.lock().copy_pinned);
+    let mut lease = pin_ui4_wd_frame_for_copy(0x100000, 7).unwrap();
+    lease.mark_submitted(); lease.mark_retired(); drop(lease);
+    assert!(!STATE.lock().quarantined);
+    let mut lease = pin_ui4_wd_frame_for_copy(0x100000, 7).unwrap();
+    lease.mark_submitted(); drop(lease);
+    assert!(STATE.lock().copy_pinned);
+    assert!(STATE.lock().quarantined);
+    assert_eq!(stop_ui4_wd_xyuv8888_capture(), Err(WdCaptureError::ConsumerBusy));
+    assert!(EVENTS.lock().is_empty());
+}
+#[test]
+fn bcs_reader_blocks_teardown_before_any_mmio_or_free() {
+    setup(false, &[]);
+    STATE.lock().copy_pinned = true;
+    assert_eq!(stop_ui4_wd_xyuv8888_capture(), Err(WdCaptureError::ConsumerBusy));
+    assert!(EVENTS.lock().is_empty());
+    assert!(STATE.lock().running);
 }
 #[test]
 fn stopped_capture_must_retire_before_planes_are_disabled() {

@@ -13,12 +13,13 @@ BLT = 'src/intel/copy/blt.rs'
 def main():
     source = '''#![allow(dead_code)]
 const WARM_ALIGN: usize = 4096;
+const GEN8_PAGE_PRESENT: u64 = 1;
 fn dma_flush(_: *mut u8, _: usize) {}
 mod blt {
 '''
     source += '\n'.join(extract.constant(BLT, name) for name in (
         'DIRECT_BLT_BATCH_BYTES', 'DIRECT_BLT_RESULT_BYTES', 'BCS0_GGTT_BASE', 'BCS0_GGTT_LIMIT',
-        'DIRECT_BLT_PPGTT_PT_COUNT', 'DIRECT_BLT_PPGTT_LIMIT_BYTES',
+        'DIRECT_BLT_PPGTT_PT_COUNT', 'DIRECT_BLT_PPGTT_LIMIT_BYTES', 'DIRECT_BLT_PPGTT_BYTES',
         'DIRECT_BLT_GPU_VA_RESULT_BASE', 'XY_FAST_COPY_BLT_CMD',
         'XY_FAST_COPY_COLOR_DEPTH_32', 'MI_FLUSH_DW',
         'MI_FLUSH_DW_POST_SYNC_WRITE_IMMEDIATE', 'MI_FLUSH_DW_DEST_GGTT', 'MI_FLUSH_DW_TLB_INVALIDATE',
@@ -30,11 +31,25 @@ mod blt {
     ))
     source += '\n' + '\n'.join(extract.item(BLT, name) for name in (
         'DirectBltState', 'GucBcs0RgbaSurface', 'GucBcs0RgbaCopy',
-        'guc_blt_valid_surface', 'guc_blt_valid_copy',
+        'guc_blt_valid_surface', 'guc_blt_valid_copy', 'guc_blt_map_ui4_surfaces',
         'guc_blt_physical_ranges_overlap', 'guc_blt_gpu_ranges_overlap', 'guc_blt_encode_ui4_copy_batch',
         'guc_blt_append_ring_batch_start', 'boot_bcs0_legacy_ring_words',
     ))
     source += r'''
+static MAPPINGS: std::sync::Mutex<Vec<(u64, u64)>> = std::sync::Mutex::new(Vec::new());
+fn direct_blt_map_ppgtt_region(_: DirectBltState, gpu: u64, _: u64, _: usize, flags: u64) -> bool {
+    MAPPINGS.lock().unwrap().push((gpu, flags)); true
+}
+#[test]
+fn device_written_snapshot_source_uses_uc_without_changing_ordinary_sources() {
+    let state: DirectBltState = unsafe { core::mem::zeroed() };
+    let copy = GucBcs0RgbaCopy { source: surface(0x100000), source_x: 0,
+        source_y: 0, destination_x: 0, destination_y: 0, width: 512, height: 2 };
+    assert!(guc_blt_map_ui4_surfaces(state, surface(0x200000), &[copy], true));
+    assert!(guc_blt_map_ui4_surfaces(state, surface(0x200000), &[copy], false));
+    assert_eq!(*MAPPINGS.lock().unwrap(), [(0x200000, 0x1b), (0x100000, 0x1b),
+        (0x200000, 0x1b), (0x100000, 3)]);
+}
 fn surface(phys: u64) -> GucBcs0RgbaSurface {
     GucBcs0RgbaSurface { phys, gpu: phys, bytes: 4096, width: 512,
         height: 2, pitch_bytes: 2048 }

@@ -48,6 +48,13 @@ pub(crate) fn try_parse(
                 status.consumer_copies, status.consumer_bytes,
                 status.consumer_fallbacks, status.consumer_failures,
             ).as_str());
+            let snapshot = crate::intel::media::wd_xyuv8888::snapshot_copy_stats();
+            print_shell_line(io, format!(
+                "vcpy: consumer=wd-snapshot copies={} bytes={} failures={} prepare_us={} admission_us={} submit_us={} retire_us={} acquire_us={} request_to_ready_us={} poll_ms=1",
+                snapshot.copies, snapshot.bytes, snapshot.failures, snapshot.prepare_us,
+                snapshot.admission_us, snapshot.submit_us, snapshot.retire_us,
+                snapshot.acquire_us, snapshot.request_to_ready_us,
+            ).as_str());
             if let Some(failure) = crate::intel::guc_bcs0_last_timeout() {
                 let activity = failure.activity;
                 print_shell_line(io, format!(

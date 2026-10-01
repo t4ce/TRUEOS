@@ -726,7 +726,7 @@ pub(crate) fn queue_guc_bcs0_rgba_copies(
     if copies.is_empty() {
         return Err(GucBcs0CopySubmitError::InvalidRequest);
     }
-    queue_guc_bcs0_batch(destination, copies)
+    queue_guc_bcs0_batch(destination, copies, false)
 }
 
 /// First bring-up rung: flush/write a completion cookie and end the batch,
@@ -734,12 +734,25 @@ pub(crate) fn queue_guc_bcs0_rgba_copies(
 pub(crate) fn queue_guc_bcs0_marker(
     destination: GucBcs0RgbaSurface,
 ) -> Result<GucBcs0CopySubmission, GucBcs0CopySubmitError> {
-    queue_guc_bcs0_batch(destination, &[])
+    queue_guc_bcs0_batch(destination, &[], false)
+}
+
+/// Bit-preserving 32-bit copies from a device-written system-memory source.
+/// Use UC source mappings for display writeback; no RGBA interpretation occurs.
+pub(crate) fn queue_guc_bcs0_uncached_copies(
+    destination: GucBcs0RgbaSurface,
+    copies: &[GucBcs0RgbaCopy],
+) -> Result<GucBcs0CopySubmission, GucBcs0CopySubmitError> {
+    if copies.is_empty() {
+        return Err(GucBcs0CopySubmitError::InvalidRequest);
+    }
+    queue_guc_bcs0_batch(destination, copies, true)
 }
 
 fn queue_guc_bcs0_batch(
     destination: GucBcs0RgbaSurface,
     copies: &[GucBcs0RgbaCopy],
+    uncached_sources: bool,
 ) -> Result<GucBcs0CopySubmission, GucBcs0CopySubmitError> {
     if !guc_blt_state_reuse_permitted(&GUC_BLT_LANE_QUARANTINED) {
         return Err(GucBcs0CopySubmitError::Unavailable);
@@ -774,7 +787,7 @@ fn queue_guc_bcs0_batch(
         let forcewake = direct_blt_forcewake(dev);
         let ggtt = forcewake && direct_blt_map_state(dev, state);
         let ppgtt = ggtt && direct_blt_init_ppgtt(state);
-        if !ppgtt || !guc_blt_map_ui4_surfaces(state, destination, copies) {
+        if !ppgtt || !guc_blt_map_ui4_surfaces(state, destination, copies, uncached_sources) {
             return None;
         }
         let sequence = DIRECT_BLT_SUBMIT_COUNTER
@@ -1542,6 +1555,7 @@ fn guc_blt_map_ui4_surfaces(
     state: DirectBltState,
     destination: GucBcs0RgbaSurface,
     copies: &[GucBcs0RgbaCopy],
+    uncached_sources: bool,
 ) -> bool {
     let pte_present_rw_wb = super::GEN8_PAGE_PRESENT | (1 << 1);
     // PAT3 is the system-memory UC contract used by render-to-scanout targets.
@@ -1567,7 +1581,7 @@ fn guc_blt_map_ui4_surfaces(
             copy.source.gpu,
             copy.source.phys,
             copy.source.bytes,
-            pte_present_rw_wb,
+            if uncached_sources { pte_present_rw_scanout_uc } else { pte_present_rw_wb },
         ) {
             return false;
         }

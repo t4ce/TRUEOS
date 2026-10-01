@@ -20,6 +20,13 @@ pub(crate) fn queue_rgba_copies(
     crate::intel::queue_guc_bcs0_rgba_copies(destination, copies)
 }
 
+pub(crate) fn queue_uncached_copies(
+    destination: crate::intel::GucBcs0RgbaSurface,
+    copies: &[crate::intel::GucBcs0RgbaCopy],
+) -> Result<crate::intel::GucBcs0CopySubmission, crate::intel::GucBcs0CopySubmitError> {
+    crate::intel::queue_guc_bcs0_uncached_copies(destination, copies)
+}
+
 pub(crate) fn poll_rgba_copies(
     submission: crate::intel::GucBcs0CopySubmission,
 ) -> crate::intel::GucBcs0CopyCompletion {
