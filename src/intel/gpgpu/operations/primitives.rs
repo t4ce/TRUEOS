@@ -1,37 +1,21 @@
+/// Compatibility API for the dormant WebGPU clear path. SOLID shares the
+/// existing compositor artifact; there is no dedicated fill kernel.
 pub(crate) fn fill_rect_rgba8_stats(
     dst: GpgpuRgba8Surface,
     rect: GpgpuRect,
     color_rgba: u32,
 ) -> GpgpuSubmitStats {
-    let Some(params) = lower_fill_rect(dst, rect, color_rgba) else {
-        return GpgpuSubmitStats::default();
-    };
-    submit_fill_rect_2d_with_stats(dst, params)
-}
-
-/// Clear one Font Engine destination through the Font-owned GuC context.
-/// This deliberately bypasses the general system-service worklist and its
-/// mutable descriptor page so a font frame cannot serialize or quarantine an
-/// unrelated GPU producer.
-pub(crate) fn font_fill_solid_rect_rgba8_scanout_result(
-    dst: GpgpuRgba8Surface,
-    solid: GpgpuSolidRect,
-) -> GpgpuWorklistSubmitResult {
-    let Some(params) = lower_fill_rect(dst, solid.rect, solid.color_rgba) else {
-        return GpgpuWorklistSubmitResult::default();
-    };
     let started = direct_rcs_now_tick();
-    let outcome = submit_font_fill_rect_2d(dst, params, true);
-    let complete = outcome == GpgpuSubmissionOutcome::Complete;
-    GpgpuWorklistSubmitResult {
-        stats: GpgpuWorklistSubmitStats {
-            descs: usize::from(complete),
-            walkers: usize::from(complete),
-            submits: usize::from(complete),
-            submit_ms: direct_rcs_elapsed_ms_since(started),
-            ..GpgpuWorklistSubmitStats::default()
-        },
-        outcome,
+    if !dst.is_valid() || clip_gpgpu_rect_to_surface(rect, dst.width, dst.height).is_none() {
+        return GpgpuSubmitStats::default();
+    }
+    let result = fill_solid_rects_rgba8_result(dst, &[GpgpuSolidRect { rect, color_rgba }]);
+    GpgpuSubmitStats {
+        spans: result.stats.walkers,
+        submits: result.stats.submits,
+        submit_ms: result.stats.submit_ms,
+        total_ms: direct_rcs_elapsed_ms_since(started),
+        ..Default::default()
     }
 }
 

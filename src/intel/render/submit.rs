@@ -1,3 +1,8 @@
+// A nonretired cross-engine reader can still access Render0 scratch even
+// though the geometry context itself has retired. Keep all warm-storage
+// writers out until reboot, including diagnostics outside the scene gate.
+static RESIDENT_SCENE_COPY_QUARANTINED: AtomicBool = AtomicBool::new(false);
+
 static RESIDENT_SCENE_LAST_GPU_POLL_US: AtomicU64 = AtomicU64::new(0);
 static RESIDENT_SCENE_LAST_GPU_POLL_ITERS: AtomicU64 = AtomicU64::new(0);
 
@@ -102,9 +107,15 @@ fn resident_scene_last_gpu_poll_profile() -> (u64, u64) {
 fn reserve_warm_render_storage(
     submit_name: &'static str,
 ) -> Option<crate::gpu::executor::KernelContextLease> {
+    if RESIDENT_SCENE_COPY_QUARANTINED.load(Ordering::Acquire) {
+        return None;
+    }
     let render_client = crate::gpu::vgpu::KernelClient::Render;
     match crate::gpu::executor::reserve_kernel_context(render_client) {
-        Ok(lease) => Some(lease),
+        // Recheck under the reservation: another owner may have quarantined
+        // scratch between the optimistic check above and our acquisition.
+        Ok(lease) if !RESIDENT_SCENE_COPY_QUARANTINED.load(Ordering::Acquire) => Some(lease),
+        Ok(_) => None,
         Err(error) => {
             crate::log!(
                 "{} render-storage-reserve-failed client={} error={:?} mutable-job-storage-reused=0\n",

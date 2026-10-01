@@ -6,7 +6,7 @@ use super::super::{print_shell_line, ShellBackend2};
 use super::super::shell2_cmd::ParseOutcome;
 
 fn usage(io: &'static dyn ShellBackend2) {
-    print_shell_line(io, "vcpy start|stop|status");
+    print_shell_line(io, "vcpy start|stop|status|fillcheck");
 }
 
 pub(crate) fn try_parse(
@@ -25,6 +25,12 @@ pub(crate) fn try_parse(
         (Some(action), None) if action.eq_ignore_ascii_case("stop") => {
             crate::r::services::vcpy_service::stop();
             print_shell_line(io, "vcpy: stop requested");
+        }
+        (Some(action), None) if action.eq_ignore_ascii_case("fillcheck") => {
+            match crate::r::services::vcpy_service::fill_check() {
+                Ok(()) => print_shell_line(io, "vcpy: fillcheck passed fills=2 pixels_per_fill=51 right_and_bottom_guards=77 colors=80402010,00000000 fallback=0"),
+                Err(reason) => print_shell_line(io, format!("vcpy: fillcheck failed reason={reason}").as_str()),
+            }
         }
         (Some(action), None) if action.eq_ignore_ascii_case("status") => {
             let status = crate::r::services::vcpy_service::status();
@@ -48,6 +54,21 @@ pub(crate) fn try_parse(
                 status.consumer_copies, status.consumer_bytes,
                 status.consumer_fallbacks, status.consumer_failures,
             ).as_str());
+            print_shell_line(io, format!(
+                "vcpy: consumer=resident-scene copies={} bytes={} fallbacks={} failures={}",
+                status.scene_copies, status.scene_bytes,
+                status.scene_fallbacks, status.scene_failures,
+            ).as_str());
+            for (name, consumer) in [
+                ("font-clear", crate::r::services::vcpy_service::RgbaFillConsumer::Font),
+                ("gridpaper-clear", crate::r::services::vcpy_service::RgbaFillConsumer::Gridpaper),
+            ] {
+                let [fills, bytes, fallbacks, failures] = crate::r::services::vcpy_service::fill_stats(consumer);
+                print_shell_line(io, format!(
+                    "vcpy: consumer={} fills={} bytes={} fallbacks={} failures={}",
+                    name, fills, bytes, fallbacks, failures,
+                ).as_str());
+            }
             let snapshot = crate::intel::media::wd_xyuv8888::snapshot_copy_stats();
             print_shell_line(io, format!(
                 "vcpy: consumer=wd-snapshot copies={} bytes={} failures={} prepare_us={} admission_us={} submit_us={} retire_us={} acquire_us={} request_to_ready_us={} poll_ms=1",

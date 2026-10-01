@@ -27,7 +27,7 @@ mod uc_fw;
 
 pub(crate) use self::blt::{
     GucBcs0CopyCompletion, GucBcs0CopySubmission, GucBcs0CopySubmitError, GucBcs0RgbaCopy,
-    GucBcs0RgbaSurface, poll_guc_bcs0_rgba_copies, queue_guc_bcs0_rgba_copies, queue_guc_bcs0_marker,
+    GucBcs0RgbaSurface, poll_guc_bcs0_rgba_copies, queue_guc_bcs0_rgba_copies, queue_guc_bcs0_rgba_fill, queue_guc_bcs0_marker,
     submit_guc_bcs0_fast_copy_probe_now, guc_bcs0_last_timeout, queue_guc_bcs0_uncached_copies,
 };
 pub(crate) use self::media::h264_cmd as xelp_media_avc_decode_recipe;

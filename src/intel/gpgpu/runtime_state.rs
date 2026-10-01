@@ -1,7 +1,6 @@
 static COPY_RECT_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static SUBSET_SUM_COLLAPSE5_MERGE10_UPLOAD: Mutex<Option<UploadedKernelArtifact>> =
     Mutex::new(None);
-static FILL_RECT_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> = Mutex::new(None);
 static GRADIENT_RECT_WORKLIST_RGBA8_UPLOAD: Mutex<Option<UploadedKernelArtifact>> =
     Mutex::new(None);
 
@@ -104,7 +103,6 @@ static UI4_COMPOSITOR_RUNTIME: Mutex<Ui4CompositorRuntime> =
 static SKYBOX_SAMPLE_RGB565_LOG_SEQ: AtomicU64 = AtomicU64::new(0);
 
 static COPY_RECT_2D_INCOMPLETE_SEQ: AtomicU64 = AtomicU64::new(0);
-static FILL_RECT_2D_INCOMPLETE_SEQ: AtomicU64 = AtomicU64::new(0);
 
 static FONT_OUTLINE_COVERAGE_R8_INCOMPLETE_SEQ: AtomicU64 = AtomicU64::new(0);
 static GLYPH_MASK_BATCH_INCOMPLETE_SEQ: AtomicU64 = AtomicU64::new(0);

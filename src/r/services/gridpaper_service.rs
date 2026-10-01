@@ -3638,10 +3638,20 @@ fn rebuild_static_font_base(
         rect: destination.bounds(),
         color_rgba: 0,
     };
-    let clear_result = crate::intel::gpgpu::fill_solid_rects_rgba8_result(
-        destination,
-        core::slice::from_ref(&clear),
+    let outcome = super::vcpy_service::fill_rgba8_complete(
+        destination, 0, super::vcpy_service::RgbaFillConsumer::Gridpaper,
     );
+    let clear_result = if outcome == GpgpuSubmissionOutcome::Unavailable {
+        crate::intel::gpgpu::fill_solid_rects_rgba8_result(destination, core::slice::from_ref(&clear))
+    } else {
+        crate::intel::gpgpu::GpgpuWorklistSubmitResult {
+            outcome,
+            stats: crate::intel::gpgpu::GpgpuWorklistSubmitStats {
+                submits: usize::from(outcome == GpgpuSubmissionOutcome::Complete),
+                ..Default::default()
+            },
+        }
+    };
     match clear_result.outcome {
         GpgpuSubmissionOutcome::Complete => {}
         GpgpuSubmissionOutcome::SubmittedIncomplete => {

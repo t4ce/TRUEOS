@@ -133,7 +133,7 @@ pub(crate) fn trueos_cl_source_build_smoke() -> SourceBuildSmoke {
     let backend = IntelOpenClBackend::new();
     let caps = backend.caps();
     let source_build_error = match backend
-        .build_program_from_source(crate::intel::gpgpu::FILL_RECT_RGBA8_OPENCL_SOURCE, "")
+        .build_program_from_source(crate::intel::gpgpu::COPY_RECT_RGBA8_OPENCL_SOURCE, "")
     {
         Ok(_) => None,
         Err(err) => Some(err),

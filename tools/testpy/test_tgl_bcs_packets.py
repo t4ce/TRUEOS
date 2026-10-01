@@ -34,6 +34,7 @@ mod blt {
         'guc_blt_valid_surface', 'guc_blt_valid_copy', 'guc_blt_map_ui4_surfaces',
         'guc_blt_physical_ranges_overlap', 'guc_blt_gpu_ranges_overlap', 'guc_blt_encode_ui4_copy_batch',
         'guc_blt_append_ring_batch_start', 'boot_bcs0_legacy_ring_words',
+        'guc_blt_valid_fill', 'guc_blt_encode_ui4_fill_batch',
     ))
     source += r'''
 static MAPPINGS: std::sync::Mutex<Vec<(u64, u64)>> = std::sync::Mutex::new(Vec::new());
@@ -85,6 +86,22 @@ fn linear_rgba_packet_keeps_reserved_bits_zero_and_orders_completion() {
         0x200000, 0, 0, 2048, 0x100000, 0]);
     assert_eq!(&batch[22..30], &[0x13004003, 0x01AD0004, 0, 0xBC500002,
         0, 0x02800000, 0x05000000, 0]);
+}
+#[test]
+fn fast_color_has_32bpp_pitch_minus_one_and_ordered_retirement() {
+    let mut batch = vec![0u32; 1024];
+    let mut result = vec![0u32; 1024];
+    let mut state: DirectBltState = unsafe { core::mem::zeroed() };
+    state.batch_virt = batch.as_mut_ptr().cast();
+    state.result_virt = result.as_mut_ptr().cast();
+    let dst = GucBcs0RgbaSurface { width: 17, height: 3, pitch_bytes: 128, ..surface(0x200000) };
+    assert_eq!(guc_blt_encode_ui4_fill_batch(state, dst, 0x80402010, 0xBC500003), Some((1, 204)));
+    assert_eq!(&batch[12..23], &[0x51100009, 127, 0, 0x00030011, 0x200000, 0, 0, 0x80402010, 0, 0, 0]);
+    assert_eq!(&batch[23..31], &[0x13004003, 0x01AD0004, 0, 0xBC500003, 0, 0x02800000, 0x05000000, 0]);
+    assert_eq!(&batch[4..12], &[0x02800101, 0x13044003, 0x01AD001C, 0, 0, 0, 0x02800100, 0]);
+    assert!(!guc_blt_valid_fill(GucBcs0RgbaSurface { height: 32768, bytes: 128*32768, ..dst }));
+    assert!(!guc_blt_valid_fill(GucBcs0RgbaSurface { bytes: 323, ..dst }));
+    assert!(!guc_blt_valid_fill(GucBcs0RgbaSurface { gpu: BCS0_GGTT_BASE, ..dst }));
 }
 #[test]
 fn ring_entry_writes_before_batch_and_wraps_without_overrun() {

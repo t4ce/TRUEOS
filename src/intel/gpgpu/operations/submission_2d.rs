@@ -12,26 +12,6 @@ fn clip_gpgpu_rect_to_surface(rect: GpgpuRect, width: u32, height: u32) -> Optio
     Some(GpgpuRect::new(x0 as i32, y0 as i32, (x1 - x0) as u32, (y1 - y0) as u32))
 }
 
-fn lower_fill_rect(
-    dst: GpgpuRgba8Surface,
-    rect: GpgpuRect,
-    color_rgba: u32,
-) -> Option<FillRectRgba8Params> {
-    if !dst.is_valid() || rect.is_empty() {
-        return None;
-    }
-    let clipped = clip_rect_to_surface(rect, dst)?;
-    Some(FillRectRgba8Params {
-        dst_gpu: dst.gpu,
-        dst_pitch_bytes: dst.pitch_bytes,
-        dst_x: clipped.x as u32,
-        dst_y: clipped.y as u32,
-        width: clipped.width,
-        height: clipped.height,
-        color_rgba,
-    })
-}
-
 fn lower_copy_rect(
     src: GpgpuRgba8Surface,
     src_rect: GpgpuRect,
@@ -140,34 +120,6 @@ fn clip_copy_axis(
     if *len <= 0 { None } else { Some(()) }
 }
 
-fn submit_fill_rect_2d_with_stats(
-    dst: GpgpuRgba8Surface,
-    params: FillRectRgba8Params,
-) -> GpgpuSubmitStats {
-    let total_start_tick = direct_rcs_now_tick();
-    let Some(dispatch) = fill_rect_2d_dispatch(params.width, params.height) else {
-        return GpgpuSubmitStats::default();
-    };
-    let Some(total_spans) = (dispatch.group_x as usize).checked_mul(dispatch.group_y as usize)
-    else {
-        return GpgpuSubmitStats::default();
-    };
-    let submit_start_tick = direct_rcs_now_tick();
-    if !submit_fill_rect_2d(dst, params) {
-        return GpgpuSubmitStats {
-            total_ms: direct_rcs_elapsed_ms_since(total_start_tick),
-            ..GpgpuSubmitStats::default()
-        };
-    }
-    GpgpuSubmitStats {
-        spans: total_spans,
-        submits: 1,
-        submit_ms: direct_rcs_elapsed_ms_since(submit_start_tick),
-        total_ms: direct_rcs_elapsed_ms_since(total_start_tick),
-        ..GpgpuSubmitStats::default()
-    }
-}
-
 fn submit_copy_rect_2d(
     src: GpgpuRgba8Surface,
     dst: GpgpuRgba8Surface,
@@ -249,128 +201,6 @@ fn submit_copy_rect_2d(
         }
     }
     completed
-}
-
-fn submit_fill_rect_2d(dst: GpgpuRgba8Surface, params: FillRectRgba8Params) -> bool {
-    if params.width == 0 || params.height == 0 {
-        return false;
-    }
-    let Some(dispatch) = fill_rect_2d_dispatch(params.width, params.height) else {
-        return false;
-    };
-    let _guard = DIRECT_RCS_SUBMIT_LOCK.lock();
-    let Some(dev) = super::claimed_device() else {
-        return false;
-    };
-    let Some(upload) = upload_fill_rect_rgba8_kernel() else {
-        return false;
-    };
-    let Some(state) = direct_rcs_state_once(dev) else {
-        return false;
-    };
-
-    let forcewake_ok = direct_rcs_forcewake(dev);
-    let mapped_ok = forcewake_ok && direct_rcs_map_state(dev, state);
-    let ppgtt_ok = mapped_ok && direct_rcs_init_ppgtt(state);
-    let kernel_ppgtt_ok = ppgtt_ok
-        && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes);
-    let dst_ppgtt_ok =
-        kernel_ppgtt_ok && direct_rcs_map_ppgtt_kernel(state, dst.gpu, dst.phys, dst.bytes);
-    let batch_ok =
-        dst_ppgtt_ok && direct_rcs_encode_fill_rect_2d_batch(state, upload, params, dst.bytes);
-    let submitted = batch_ok && direct_rcs_submit_batch(dev, state);
-    let observed = if submitted {
-        direct_rcs_poll_result_slot_timeout_ms(
-            state,
-            CLEAR_RECT_POST_MARKER_SLOT,
-            CLEAR_RECT_POST_MARKER,
-            FILL_RECT_2D_COMPLETION_TIMEOUT_MS,
-        )
-    } else {
-        0
-    };
-    let completed = observed == CLEAR_RECT_POST_MARKER;
-    if !completed {
-        let occurrence = FILL_RECT_2D_INCOMPLETE_SEQ.fetch_add(1, Ordering::Relaxed) + 1;
-        if occurrence <= 8 || occurrence.is_multiple_of(20) {
-            let pre_marker = direct_rcs_read_result_slot(state, CLEAR_RECT_PRE_MARKER_SLOT);
-            let potential_reason = if !batch_ok {
-                "batch-prepare"
-            } else if !submitted {
-                "guc-submit"
-            } else if pre_marker != CLEAR_RECT_PRE_MARKER {
-                "batch-not-started"
-            } else {
-                "walker-not-retired-before-timeout"
-            };
-            crate::log_warn!(
-                target: "intel-gpgpu";
-                "fill_rect_rgba8 2d incomplete occurrence={} rect={}x{} groups={}x{} pre=0x{:08X} post=0x{:08X} timeout_ms={} potential_reason={} action=fail-closed\n",
-                occurrence,
-                params.width,
-                params.height,
-                dispatch.group_x,
-                dispatch.group_y,
-                pre_marker,
-                observed,
-                FILL_RECT_2D_COMPLETION_TIMEOUT_MS,
-                potential_reason,
-            );
-        }
-    }
-    completed
-}
-
-fn submit_font_fill_rect_2d(
-    dst: GpgpuRgba8Surface,
-    params: FillRectRgba8Params,
-    direct_scanout: bool,
-) -> GpgpuSubmissionOutcome {
-    if params.width == 0
-        || params.height == 0
-        || fill_rect_2d_dispatch(params.width, params.height).is_none()
-    {
-        return GpgpuSubmissionOutcome::Unavailable;
-    }
-    let _guard = FONT_RCS_SUBMIT_LOCK.lock();
-    let Some(dev) = super::claimed_device() else {
-        return GpgpuSubmissionOutcome::Unavailable;
-    };
-    let Some(upload) = upload_fill_rect_rgba8_kernel() else {
-        return GpgpuSubmissionOutcome::Unavailable;
-    };
-    let Some(state) = font_rcs_state_once(dev) else {
-        return GpgpuSubmissionOutcome::Unavailable;
-    };
-
-    let prepared = direct_rcs_forcewake(dev)
-        && direct_rcs_map_state(dev, state)
-        && font_rcs_init_ppgtt_once(state)
-        && direct_rcs_map_ppgtt_kernel(state, upload.gpu, upload.phys, upload.mapped_bytes)
-        && direct_rcs_map_ppgtt_destination(state, dst.gpu, dst.phys, dst.bytes, direct_scanout)
-        && direct_rcs_encode_fill_rect_2d_batch(state, upload, params, dst.bytes);
-    let submission = if prepared {
-        font_rcs_submit_batch_state(dev, state)
-    } else {
-        DirectRcsSubmissionState::Rejected
-    };
-    let observed = if submission.can_poll() {
-        font_rcs_poll_result_slot_timeout_ms(
-            state,
-            CLEAR_RECT_POST_MARKER_SLOT,
-            CLEAR_RECT_POST_MARKER,
-            FILL_RECT_2D_COMPLETION_TIMEOUT_MS,
-        )
-    } else {
-        0
-    };
-    if observed == CLEAR_RECT_POST_MARKER {
-        GpgpuSubmissionOutcome::Complete
-    } else if submission.may_have_submitted() {
-        GpgpuSubmissionOutcome::SubmittedIncomplete
-    } else {
-        GpgpuSubmissionOutcome::Unavailable
-    }
 }
 
 fn submit_font_outline_coverage_runs_r8_2d(

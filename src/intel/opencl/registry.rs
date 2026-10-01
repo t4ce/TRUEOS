@@ -45,7 +45,6 @@ impl KnownAotKernel {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum KnownKernelRole {
     Copy,
-    Fill,
     WorklistGradient,
     WorklistBlend,
     Glyph,
@@ -198,29 +197,6 @@ const COPY_RECT_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
     consumers: BOOT_UPLOAD_CONSUMERS,
 };
 
-const FILL_RECT_ARGS: &[KernelCallArg<'_>] = &[
-    rw_buf!(0, "dst_rgba", "__global uint*", 0, 12),
-    u32_arg!(1, "dst_pitch_bytes", 14),
-    u32_arg!(2, "dst_x", 15),
-    u32_arg!(3, "dst_y", 16),
-    u32_arg!(4, "width", 17),
-    u32_arg!(5, "height", 18),
-    u32_arg!(6, "color_rgba", 19),
-];
-const FILL_RECT_CONTRACT: GpuKernelContract<'_> = GpuKernelContract {
-    name: gpgpu::FILL_RECT_RGBA8_KERNEL_NAME,
-    source_path: "src/intel/gpgpu/kernels/fill_rect_rgba8.clcpp",
-    producer: IGC,
-    target: ADLS,
-    entry_text_offset_bytes: TEXT_OFFSET,
-    cross_thread_bytes: COPY_CROSS_THREAD_BYTES,
-    per_thread_bytes: COPY_PER_THREAD_BYTES,
-    binding_count: 1,
-    args: FILL_RECT_ARGS,
-    descriptor_layouts: NO_DESCS,
-    launch: KernelLaunchContract::nd_range_2d(None),
-    consumers: BOOT_UPLOAD_CONSUMERS,
-};
 
 const DESTINATION_WORKLIST_ARGS: &[KernelCallArg<'_>] = &[
     rw_buf!(0, "dst_rgba", "__global uint*", 0, 8),
@@ -621,14 +597,6 @@ pub(crate) const KNOWN_AOT_KERNELS: &[KnownAotKernel] = &[
         upload: gpgpu::upload_copy_rect_rgba8_kernel,
         status: gpgpu::copy_rect_rgba8_upload_status,
         role: KnownKernelRole::Copy,
-    },
-    KnownAotKernel {
-        name: gpgpu::FILL_RECT_RGBA8_KERNEL_NAME,
-        artifact: &gpgpu::FILL_RECT_RGBA8_ADLS_ARTIFACT,
-        contract: &FILL_RECT_CONTRACT,
-        upload: gpgpu::upload_fill_rect_rgba8_kernel,
-        status: gpgpu::fill_rect_rgba8_upload_status,
-        role: KnownKernelRole::Fill,
     },
     KnownAotKernel {
         name: gpgpu::GRADIENT_RECT_WORKLIST_RGBA8_KERNEL_NAME,

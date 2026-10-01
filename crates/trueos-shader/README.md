@@ -9,7 +9,7 @@ Alder Lake S artifacts under `gpgpu/kernels/artifacts/adls`. From this
 repository's root, rebuild selected artifacts with:
 
 ```sh
-gpgpu/bake_adls_artifacts.sh copy_rect_rgba8 fill_rect_rgba8
+gpgpu/bake_adls_artifacts.sh copy_rect_rgba8 alpha_blend_worklist_rgba8
 ```
 
 Set `OCLOC` or `IGC_ROOT` when the Intel compiler is not in the default TRUEOS

@@ -94,24 +94,31 @@ enum variants. Context creation, framebuffer leases, GL procedure resolution,
 and presentation belong to the glutin/trueos-gl integration; raw handles alone
 do not implement those operations.
 
-Glutin currently imports `trueos_gl_get_proc_address`, but the linked
-Alacritty module leaves it undefined. The resolver needs to live in guest
-executable code and return pointers to guest-side GLES entry points; a host
-kernel function pointer is not callable from a Blueprint VM. Those entry
-points can submit through the existing vGPU C ABI once they implement the
-GLES state, buffers, textures, draw calls, and frame publication. The
-Blueprint packer now rejects this unresolved import before producing another
-package. An earlier `alacritty.bp` was packed and published before that gate
-and is not evidence that Alacritty can render.
+Glutin links the local `glutin/trueos-gl` crate. Procedure resolution returns
+Blueprint-side code pointers; there is no unresolved `trueos_gl_get_proc_address`
+import and no attempt to call a kernel function pointer from the VM. The
+library maintains per-context buffer, atlas texture, vertex-array, uniform,
+blend, viewport, and clear state for the GLES2Pure entry points.
+
+Glutin retains its display connection, validates window ownership, and binds
+the GL context to a leased UI4 surface. Clear-frame swaps consume that lease
+through the existing vGPU clear submission, wait for its timeline point, and
+acquire the next lease. Unbinding retires unused leases; resize discards the
+old lease, resizes the UI4 frame, and reacquires it. Failed submissions remain
+errors and do not recycle an ambiguously submitted frame. Context switches
+cannot move pending commands into another window.
+
+Native AOT draw execution is still absent. A text or rectangle draw prevents
+swap from publishing a misleading clear-only frame: swap reports unsupported.
+An empty swap and a flush/finish with queued commands are also unsupported.
+This is a clear-frame integration checkpoint, not a complete GLES implementation
+or evidence that terminal text renders. The Bakery modules and corresponding
+native draw submission remain necessary.
 
 The standalone wgpu workspace is pinned to the GitHub winit fork's compatible
 0.30.13 revision, `e9809ef54b18499bb4f2cac945719ecc2a61061b`. That pin does not
 include this new 0.31 backend. Alacritty now selects the local 0.31 winit
 workspace and patches glutin and raw-window-handle to their local forks.
-The native glutin backend exists, but its `trueos_gl_get_proc_address` bridge
-is still unresolved and `swap_buffers` currently returns without submitting
-a frame. Context binding and presentation still need to be connected to the
-GL implementation before this path can render.
 
 Alacritty's `res/trueos/bakery-input.json` specifies seven shader stages and
 five linked programs for `Gles2Pure`. The checked-in directory contains the
@@ -132,7 +139,23 @@ cargo test --manifest-path /home/t4ce/Repos/TRUEOS-Blueprints/vendor/winit/Cargo
 The kernel changes are checked with the repository's TRUEOS target and pinned
 compiler. The source keyboard module also has host tests covering transitions,
 modifier-only input, rollover, and disconnect recovery. Run
-`python3 tools/test_ui4_display_registry.py` for the actual display registry's
+`python3 tools/testpy/test_ui4_display_registry.py` for the actual display registry's
 ownership, reference lifetime, stale-token, and teardown tests; `RUSTC` can
 select the compiler. No hardware deployment or runtime window test is implied
 by these compile/unit checks.
+
+Glutin's TRUEOS backend tests run its real public API and GL procedure pointers
+against a recording vGPU/UI4 ABI double. From the glutin checkout:
+
+```sh
+RUSTFLAGS='--cfg trueos_backend' cargo test -p glutin --lib \
+  --no-default-features --features trueos --target x86_64-unknown-linux-gnu \
+  --config 'patch.crates-io.raw-window-handle.path="../TRUEOS-Blueprints/vendor/raw-window-handle"'
+```
+
+The TRUEOS target check additionally needs the archived compiler, the Blueprint
+application target, `build-std`, and the vendored libc overlay. Host tests check
+submission ordering and resource ownership; only a hardware run can verify
+visible presentation. The Blueprint builder automatically publishes successful
+builds to its configured apps share. Set
+`TRUEOS_BLUEPRINT_SKIP_APPS_PUBLISH=1` for a local-only Blueprint build.

@@ -726,7 +726,7 @@ pub(crate) fn queue_guc_bcs0_rgba_copies(
     if copies.is_empty() {
         return Err(GucBcs0CopySubmitError::InvalidRequest);
     }
-    queue_guc_bcs0_batch(destination, copies, false)
+    queue_guc_bcs0_batch(destination, copies, false, None)
 }
 
 /// First bring-up rung: flush/write a completion cookie and end the batch,
@@ -734,7 +734,7 @@ pub(crate) fn queue_guc_bcs0_rgba_copies(
 pub(crate) fn queue_guc_bcs0_marker(
     destination: GucBcs0RgbaSurface,
 ) -> Result<GucBcs0CopySubmission, GucBcs0CopySubmitError> {
-    queue_guc_bcs0_batch(destination, &[], false)
+    queue_guc_bcs0_batch(destination, &[], false, None)
 }
 
 /// Bit-preserving 32-bit copies from a device-written system-memory source.
@@ -746,13 +746,26 @@ pub(crate) fn queue_guc_bcs0_uncached_copies(
     if copies.is_empty() {
         return Err(GucBcs0CopySubmitError::InvalidRequest);
     }
-    queue_guc_bcs0_batch(destination, copies, true)
+    queue_guc_bcs0_batch(destination, copies, true, None)
+}
+
+/// Fill an entire linear RGBA8 allocation with one packed pixel value.
+/// The caller retains the destination until exact retirement, as for copies.
+pub(crate) fn queue_guc_bcs0_rgba_fill(
+    destination: GucBcs0RgbaSurface,
+    color: u32,
+) -> Result<GucBcs0CopySubmission, GucBcs0CopySubmitError> {
+    if !guc_blt_valid_fill(destination) {
+        return Err(GucBcs0CopySubmitError::InvalidRequest);
+    }
+    queue_guc_bcs0_batch(destination, &[], false, Some(color))
 }
 
 fn queue_guc_bcs0_batch(
     destination: GucBcs0RgbaSurface,
     copies: &[GucBcs0RgbaCopy],
     uncached_sources: bool,
+    fill_color: Option<u32>,
 ) -> Result<GucBcs0CopySubmission, GucBcs0CopySubmitError> {
     if !guc_blt_state_reuse_permitted(&GUC_BLT_LANE_QUARANTINED) {
         return Err(GucBcs0CopySubmitError::Unavailable);
@@ -794,8 +807,10 @@ fn queue_guc_bcs0_batch(
             .fetch_add(1, Ordering::Relaxed)
             .max(1);
         let marker = 0xBC50_0000 | (sequence & 0xFFFF);
-        let (copy_count, copied_bytes) =
-            guc_blt_encode_ui4_copy_batch(state, destination, copies, marker)?;
+        let (copy_count, copied_bytes) = match fill_color {
+            Some(color) => guc_blt_encode_ui4_fill_batch(state, destination, color, marker)?,
+            None => guc_blt_encode_ui4_copy_batch(state, destination, copies, marker)?,
+        };
         Some((sequence, marker, copy_count, copied_bytes))
     })();
     let Some((sequence, marker, copy_count, copied_bytes)) = prepared else {
@@ -1666,6 +1681,41 @@ fn guc_blt_encode_ui4_copy_batch(
     super::dma_flush(state.batch_virt, cursor.saturating_mul(core::mem::size_of::<u32>()));
     super::dma_flush(state.result_virt, core::mem::size_of::<u32>());
     Some((copies.len(), copied_bytes))
+}
+
+fn guc_blt_valid_fill(destination: GucBcs0RgbaSurface) -> bool {
+    guc_blt_valid_surface(destination)
+        && destination.width <= i16::MAX as u32
+        && destination.height <= i16::MAX as u32
+}
+
+fn guc_blt_encode_ui4_fill_batch(
+    state: DirectBltState,
+    destination: GucBcs0RgbaSurface,
+    color: u32,
+    marker: u32,
+) -> Option<(usize, u64)> {
+    if !guc_blt_valid_fill(destination) {
+        return None;
+    }
+    // Reuse the copy lane's TLB/pre-parser boundary and ordered retirement.
+    // Insert one 11-DWord color packet before the marker-only batch's tail.
+    guc_blt_encode_ui4_copy_batch(state, destination, &[], marker)?;
+    let batch = unsafe {
+        core::slice::from_raw_parts_mut(state.batch_virt.cast::<u32>(), DIRECT_BLT_BATCH_BYTES / 4)
+    };
+    batch.copy_within(12..20, 23);
+    // TGL Vol 2a pp.1367-1370: 32bpp is 2<<19; linear pitch is bytes-1
+    // (unlike XY_FAST_COPY_BLT). MOCS0, linear tiling, zero XY offsets.
+    batch[12..23].copy_from_slice(&[
+        (2 << 29) | (0x44 << 22) | (2 << 19) | 9,
+        destination.pitch_bytes - 1,
+        0, destination.width | (destination.height << 16),
+        destination.gpu as u32, (destination.gpu >> 32) as u32,
+        0, color, 0, 0, 0,
+    ]);
+    super::dma_flush(state.batch_virt, 31 * 4);
+    Some((1, u64::from(destination.width) * u64::from(destination.height) * 4))
 }
 
 fn guc_blt_gpu_ranges_overlap(left: GucBcs0RgbaSurface, right: GucBcs0RgbaSurface) -> bool {

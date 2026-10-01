@@ -337,18 +337,6 @@ struct FontOutlineCoverageR8BatchRun {
     ops_bytes: usize,
 }
 
-#[repr(C)]
-#[derive(Copy, Clone, Debug, Default)]
-pub(crate) struct FillRectRgba8Params {
-    pub(crate) dst_gpu: u64,
-    pub(crate) dst_pitch_bytes: u32,
-    pub(crate) dst_x: u32,
-    pub(crate) dst_y: u32,
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-    pub(crate) color_rgba: u32,
-}
-
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 struct FillRect2dDispatch {
     group_x: u32,

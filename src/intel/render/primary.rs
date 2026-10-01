@@ -1391,12 +1391,40 @@ pub(crate) fn capture_resident_triangle_scene_frame_premultiplied_at_extent_msaa
     )
 }
 
+/// Copy a released scratch target. Only an unsubmitted BCS rejection may
+/// use the compute reference. An uncertain retirement retains both buffers.
+fn copy_resident_scene_output(
+    source: crate::intel::gpgpu::GpgpuRgba8Surface,
+    destination: crate::intel::gpgpu::GpgpuRgba8Surface,
+) -> crate::intel::gpgpu::GpgpuSubmissionOutcome {
+    use crate::intel::gpgpu::GpgpuSubmissionOutcome as Outcome;
+    use crate::r::services::vcpy_service::{copy_rgba8_complete_for, RgbaCopyConsumer};
+    match copy_rgba8_complete_for(source, destination, RgbaCopyConsumer::ResidentScene) {
+        Outcome::Unavailable => {
+            if crate::intel::gpgpu::copy_rect_rgba8_complete_mode(
+                source,
+                crate::intel::gpgpu::GpgpuRect::new(0, 0, source.width, source.height),
+                destination,
+                crate::intel::gpgpu::GpgpuPoint::new(0, 0),
+                true,
+            ) {
+                Outcome::Complete
+            } else {
+                Outcome::SubmittedIncomplete
+            }
+        }
+        outcome => outcome,
+    }
+}
+
 /// Render a retained 4x scene directly into a leased UI4 RGBA surface.
 ///
 /// The MSAA resolve and analytical coverage passes write the producer's back
 /// buffer themselves. No full-frame CPU readback or staging allocation is
 /// performed. On hardware without the 4x path, the ordinary linear scratch
-/// target is copied as a compatibility fallback.
+/// target is copied by BCS, with compute fallback on admission rejection.
+/// An incomplete frame provides no release fence: the caller must retain its
+/// destination lease rather than publish, recycle, or free that allocation.
 #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
 pub(crate) fn render_resident_triangle_scene_frame_premultiplied_msaa4_with_coverage_to_surface(
     draws: &[ResidentSceneDraw<'_>],
@@ -3629,6 +3657,7 @@ fn submit_resident_scene_capture_inner_for_carrier(
     // but do not repeat it for every mesh in ordinary scene updates.
     let _summary_only = (!diagnostic_logs).then(RenderSummaryOnlyGuard::enter);
 
+    let mut retain_scratch = false;
     let mut diagnostic_stage = "device-ready";
     let result = (|| {
         let Some(dev) = crate::intel::claimed_device() else {
@@ -3938,18 +3967,28 @@ fn submit_resident_scene_capture_inner_for_carrier(
             && output.gpu != destination.gpu
         {
             present_copy_performed = true;
-            frame_complete = crate::intel::gpgpu::copy_rect_rgba8_complete_mode(
-                output,
-                crate::intel::gpgpu::GpgpuRect::new(
-                    0,
-                    0,
-                    target_width as u32,
-                    target_height as u32,
-                ),
-                destination,
-                crate::intel::gpgpu::GpgpuPoint::new(0, 0),
-                true,
-            );
+            // Hold the source storage against diagnostic writers too. On an
+            // uncertain copy, set quarantine before this reservation drops.
+            let _copy_storage = match carrier {
+                Some(_) => None, // The carrier frame reservation spans this copy.
+                None => Some(reserve_warm_render_storage("resident-scene-copy")
+                    .ok_or("render-storage-busy")?),
+            };
+            // Geometry's RT/tile/HDC/L3 release and any coverage epilogue
+            // have retired before BCS reads the scratch allocation.
+            let outcome = copy_resident_scene_output(output, destination);
+            frame_complete = outcome == crate::intel::gpgpu::GpgpuSubmissionOutcome::Complete;
+            if outcome == crate::intel::gpgpu::GpgpuSubmissionOutcome::SubmittedIncomplete {
+                retain_scratch = true;
+                match carrier {
+                    Some(lease) => quarantine_picasso_render1(lease, "present-copy-retirement-uncertain"),
+                    None => RESIDENT_SCENE_COPY_QUARANTINED.store(true, Ordering::Release),
+                }
+                crate::log_error!(target: "render";
+                    "resident-scene: present-copy retirement uncertain source=0x{:X} destination=0x{:X} action=retain-scratch-and-destination no-publish=1\n",
+                    output.phys, destination.phys,
+                );
+            }
         }
         let present_copy_finished_ns = crate::chronos::monotonic_nanos();
         let incomplete_stage = if !geometry_complete {
@@ -4103,7 +4142,8 @@ fn submit_resident_scene_capture_inner_for_carrier(
     }
     match carrier {
         Some(lease) => finish_picasso_render1_frame(lease),
-        None => PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release),
+        None if !retain_scratch => PRIMARY_PROBE_IN_FLIGHT.store(false, Ordering::Release),
+        None => {},
     }
     result
 }
