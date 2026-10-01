@@ -561,6 +561,23 @@ pub struct TrueosUi4FontSpriteStatusV1 {
     pub origin_y: i32,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+#[repr(C)]
+pub struct TrueosUi4FontMetricsV1 {
+    pub version: u32,
+    pub font_id: u32,
+    pub flags: u32,
+    pub pixels: f32,
+    pub cell_advance: f32,
+    pub line_height: f32,
+    pub ascent: f32,
+    pub descent: f32,
+    pub underline_position: f32,
+    pub underline_thickness: f32,
+    pub strikeout_position: f32,
+    pub strikeout_thickness: f32,
+}
+
 unsafe extern "C" {
     pub fn trueos_cabi_lumen_template_open(system_ptr: *const u8, system_len: usize) -> i32;
     pub fn trueos_cabi_lumen_prompt_submit(
@@ -928,6 +945,10 @@ unsafe extern "C" {
         height: u32,
         data_ptr: *const u8,
         data_len: usize,
+    ) -> i32;
+    /// Metrics from the resolved registered face; flags bit 0 means monospace.
+    pub fn trueos_cabi_ui4_scene_font_metrics_v1(
+        window: u32, font: u32, pixels: f32, out: *mut TrueosUi4FontMetricsV1,
     ) -> i32;
     pub fn trueos_cabi_ui4_scene_font_sprite_request_v1(
         window_id: u32,

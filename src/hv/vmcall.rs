@@ -276,6 +276,7 @@ pub const OP_BP_UI4_SCENE_FRAME_SET_ARC: u32 =
     trueos_vm::vmcall::OP_BP_UI4_SCENE_FRAME_SET_ARC; // arg0 window,arg1 arc-per-mille -> rc
 pub const OP_BP_UI4_SCENE_SET_DISPLAY_BOTTOM_COLOR: u32 =
     trueos_vm::vmcall::OP_BP_UI4_SCENE_SET_DISPLAY_BOTTOM_COLOR;
+pub const OP_BP_UI4_SCENE_FONT_METRICS_V1: u32 = 0x219;
 pub const OP_BP_UI4_SCENE_FONT_SPRITE_REQUEST_V1: u32 = 0x15E; // arg0 window,arg1 scalar,payload font/px/color -> ticket
 pub const OP_BP_UI4_SCENE_FONT_SPRITE_STATUS_V1: u32 = 0x15F; // arg0 window,arg1 ticket -> FontSpriteStatusV1
 pub const OP_BP_VMEDIA_IMAGE_DECODE_BEGIN: u32 = 0x142; // arg0 format,arg1 encoded bytes -> operation id/rc
@@ -2756,6 +2757,23 @@ fn dispatch_inner(vm_id: u8) -> DispatchOutcome {
             );
             let data = if rc == 0 { ticket } else { (rc as i64) as u64 };
             write_response(vm_id, seq, STATUS_OK, data, 0);
+            DispatchOutcome::Resume
+        }
+        OP_BP_UI4_SCENE_FONT_METRICS_V1 => {
+            if req_len != 4 || arg0 > u32::MAX as u64 || arg1 > u32::MAX as u64 {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            }
+            let Some(payload) = request_payload(vm_id, req_len) else {
+                write_response(vm_id, seq, STATUS_BAD_ARG, 0, 0);
+                return DispatchOutcome::Resume;
+            };
+            let pixels = f32::from_le_bytes(payload[..4].try_into().unwrap());
+            let mut record = crate::ui4::blueprint_text::font_api::TrueosUi4FontMetricsV1::default();
+            let rc = crate::ui4::blueprint_text::font_api::metrics(
+                crate::ui4::WindowOwner::Vm(vm_id), arg0 as u32, arg1 as u32, pixels, &mut record);
+            if rc == 0 { write_record_response(vm_id, seq, 0, &record); }
+            else { write_response(vm_id, seq, STATUS_OK, rc as i64 as u64, 0); }
             DispatchOutcome::Resume
         }
         OP_BP_UI4_SCENE_FONT_SPRITE_STATUS_V1 => {

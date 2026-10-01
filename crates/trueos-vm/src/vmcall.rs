@@ -159,6 +159,7 @@ pub const OP_BP_UI4_SCENE_FRAME_SET_OPACITY: u32 = 0x15D;
 pub const OP_BP_UI4_SCENE_FRAME_SET_ARC: u32 = 0x210;
 /// Request one caller-owned asynchronous RGBA glyph resource. The kernel
 /// keeps only opaque ticket/resource state; Blueprint owns glyph cache keys.
+pub const OP_BP_UI4_SCENE_FONT_METRICS_V1: u32 = 0x219;
 pub const OP_BP_UI4_SCENE_FONT_SPRITE_REQUEST_V1: u32 = 0x15E;
 /// Poll one asynchronous glyph ticket. Pending never acquires a frame lease.
 pub const OP_BP_UI4_SCENE_FONT_SPRITE_STATUS_V1: u32 = 0x15F;
