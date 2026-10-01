@@ -1780,7 +1780,7 @@ mod tests {
 
 #[path = "font_metrics.rs"]
 mod terminal_metrics;
-pub(crate) use terminal_metrics::FontMetricsV1;
+pub use terminal_metrics::FontMetricsV1;
 
 /// Metadata only; glyph production continues through the native font service.
 pub(crate) fn terminal_font_metrics(name: &'static str, font_id: u32, pixels: f32)
