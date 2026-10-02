@@ -3,6 +3,7 @@ mod metafmtstr;
 mod update;
 
 pub mod service;
+#[path = "show/show.rs"]
 pub mod show;
 
 pub use metafmtstr::MetaFmtStr;

@@ -124,7 +124,7 @@ impl Show {
         &mut self,
         lines: [&str; 3],
         columns: usize,
-        _rows: usize,
+        rows: usize,
     ) -> Result<(), &'static str> {
         if self.backend != Backend::Copy {
             return Err("shell3-show-backend-not-implemented");
@@ -133,7 +133,7 @@ impl Show {
             return Err("shell3-show-bcs0-allocation-pinned");
         }
 
-        let (width, height) = show_extent(columns)?;
+        let (width, height) = show_extent(columns, rows)?;
         if self
             .surface
             .as_ref()
@@ -251,17 +251,24 @@ impl Drop for Show {
     }
 }
 
-fn show_extent(columns: usize) -> Result<(u32, u32), &'static str> {
+fn show_extent(columns: usize, rows: usize) -> Result<(u32, u32), &'static str> {
     let (screen_width, screen_height) = crate::intel::active_scanout_dimensions()
         .ok_or("shell3-show-scanout-unavailable")?;
-    let width = u32::try_from(columns)
-        .unwrap_or(u32::MAX)
-        .saturating_mul(microfont::FWIDTH as u32)
-        .min(screen_width);
-    let height = (3 * microfont::FHEIGHT as u32).min(screen_height);
-    if width == 0 || height < 3 * microfont::FHEIGHT as u32 {
+    let min_width = (super::MIN_COLUMNS as u32).saturating_mul(microfont::FWIDTH as u32);
+    let min_height = (super::MIN_ROWS as u32).saturating_mul(microfont::FHEIGHT as u32);
+    if screen_width < min_width || screen_height < min_height {
         return Err("shell3-show-invalid-extent");
     }
+    let width = u32::try_from(columns)
+        .unwrap_or(u32::MAX)
+        .max(super::MIN_COLUMNS as u32)
+        .saturating_mul(microfont::FWIDTH as u32)
+        .min(screen_width);
+    let height = u32::try_from(rows)
+        .unwrap_or(u32::MAX)
+        .max(super::MIN_ROWS as u32)
+        .saturating_mul(microfont::FHEIGHT as u32)
+        .min(screen_height);
     Ok((width, height))
 }
 
