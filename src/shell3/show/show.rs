@@ -6,7 +6,7 @@ mod copy;
 mod cpu;
 
 use super::RgbaColor;
-use alloc::string::String;
+use super::update::RenderedLine;
 use crate::ui4::{
     DamageRect, FrameBuffering, FrameCadence, FrameContent, FrameHandle, FrameSpec, OutputId,
     PremultipliedRgba8, ScanoutFormat, Ui4FrameEscapeKeyAction, Ui4InputEvent, WindowCreate,
@@ -41,7 +41,6 @@ pub enum Frontend {
 }
 
 struct Ui4Surface {
-    source: Option<FrameHandle>,
     frame: FrameHandle,
     session: WindowSessionId,
     window: WindowId,
@@ -50,8 +49,7 @@ struct Ui4Surface {
     backend: Backend,
     closing: bool,
     broker_resized: bool,
-    source_contents: [Option<[String; 3]>; 2],
-    frame_contents: [Option<[String; 3]>; 2],
+    frame_contents: [Option<[RenderedLine; 3]>; 2],
 }
 
 /// Per-show backend selection and UI4 publication state.
@@ -111,7 +109,7 @@ impl Show {
         Some((placement.width, placement.height))
     }
 
-    pub(crate) async fn resize_to_current(&mut self, lines: [&str; 3]) -> Result<(), &'static str> {
+    pub(crate) async fn resize_to_current(&mut self, lines: [&[(char, Option<RgbaColor>)]; 3]) -> Result<(), &'static str> {
         if self.poisoned {
             return Err("shell3-show-bcs0-allocation-pinned");
         }
@@ -123,8 +121,7 @@ impl Show {
         }
         let replacement = create_surface_frames(placement.width, placement.height, self.backend)?;
         let mut staged = Ui4Surface {
-            source: replacement.0,
-            frame: replacement.1,
+            frame: replacement,
             session: current.session,
             window: current.window,
             width: placement.width,
@@ -132,7 +129,6 @@ impl Show {
             backend: self.backend,
             closing: false,
             broker_resized: true,
-            source_contents: [None, None],
             frame_contents: [None, None],
         };
         let render_result = match self.backend {
@@ -143,9 +139,6 @@ impl Show {
         if let Err(error) = render_result {
             if !self.poisoned {
                 retire_frame_when_released(staged.frame);
-                if let Some(source) = staged.source {
-                    let _ = destroy_frame(source);
-                }
             }
             return Err(error);
         }
@@ -159,9 +152,6 @@ impl Show {
         );
         if commit.is_err() {
             retire_frame_when_released(staged.frame);
-            if let Some(source) = staged.source {
-                let _ = destroy_frame(source);
-            }
             return Err("shell3-show-resize-commit");
         }
         let old = self
@@ -169,9 +159,6 @@ impl Show {
             .replace(staged)
             .ok_or("shell3-show-surface-missing")?;
         retire_frame_when_released(old.frame);
-        if let Some(source) = old.source {
-            let _ = destroy_frame(source);
-        }
         Ok(())
     }
 
@@ -208,11 +195,10 @@ impl Show {
     }
 
     /// Present the Shell3's three text strips in a UI4 window.
-    /// Non-ASCII symbols currently become `-`; color and formatting metadata
-    /// are intentionally ignored at this stage.
+    /// MetaFmt foreground colors are preserved; bold has no raster effect yet.
     pub(crate) async fn present(
         &mut self,
-        lines: [&str; 3],
+        lines: [&[(char, Option<RgbaColor>)]; 3],
         columns: usize,
         rows: usize,
         batch: &super::UpdateBatch,
@@ -277,9 +263,6 @@ impl Show {
                 WindowSessionCloseRequest::default().animate_and_retire_frames(),
             );
         }
-        if let Some(source) = surface.source {
-            let _ = destroy_frame(source);
-        }
     }
 }
 
@@ -314,14 +297,11 @@ fn create_surface(width: u32, height: u32, backend: Backend) -> Result<Ui4Surfac
     let output = OutputId::from_slot(0).ok_or("shell3-show-output-unavailable")?;
     let (screen_width, screen_height) =
         crate::intel::active_scanout_dimensions().ok_or("shell3-show-scanout-unavailable")?;
-    let (source, frame) = create_surface_frames(width, height, backend)?;
+    let frame = create_surface_frames(width, height, backend)?;
     let session = match begin_additional_window_session(OWNER) {
         Ok(session) => session,
         Err(_) => {
             let _ = destroy_frame(frame);
-            if let Some(source) = source {
-                let _ = destroy_frame(source);
-            }
             return Err("shell3-show-session-create");
         }
     };
@@ -350,9 +330,6 @@ fn create_surface(width: u32, height: u32, backend: Backend) -> Result<Ui4Surfac
                 WindowSessionCloseRequest::default().animate_and_retire_frames(),
             );
             let _ = destroy_frame(frame);
-            if let Some(source) = source {
-                let _ = destroy_frame(source);
-            }
             return Err("shell3-show-window-create");
         }
     };
@@ -364,13 +341,9 @@ fn create_surface(width: u32, height: u32, backend: Backend) -> Result<Ui4Surfac
             session,
             WindowSessionCloseRequest::default().animate_and_retire_frames(),
         );
-        if let Some(source) = source {
-            let _ = destroy_frame(source);
-        }
         return Err("shell3-show-escape-policy");
     }
     Ok(Ui4Surface {
-        source,
         frame,
         session,
         window,
@@ -379,13 +352,12 @@ fn create_surface(width: u32, height: u32, backend: Backend) -> Result<Ui4Surfac
         backend,
         closing: false,
         broker_resized: false,
-        source_contents: [None, None],
         frame_contents: [None, None],
     })
 }
 
-pub(super) fn rendered_lines(lines: [&str; 3]) -> [String; 3] {
-    lines.map(String::from)
+pub(super) fn rendered_lines(lines: [&[(char, Option<RgbaColor>)]; 3]) -> [RenderedLine; 3] {
+    lines.map(|line| line.to_vec())
 }
 
 fn damage_for_segments(
@@ -419,25 +391,8 @@ fn create_surface_frames(
     width: u32,
     height: u32,
     backend: Backend,
-) -> Result<(Option<FrameHandle>, FrameHandle), &'static str> {
+) -> Result<FrameHandle, &'static str> {
     let output = OutputId::from_slot(0).ok_or("shell3-show-output-unavailable")?;
-    let source = if backend == Backend::Copy {
-        Some(
-            create_frame(FrameSpec {
-                output,
-                content: FrameContent::Image,
-                cadence: FrameCadence::Dirty,
-                buffering: FrameBuffering::Double,
-                format: ScanoutFormat::Rgba8888Premultiplied,
-                width,
-                height,
-                base_color: None,
-            })
-            .map_err(|_| "shell3-show-source-frame-create")?,
-        )
-    } else {
-        None
-    };
     let frame = match create_frame(FrameSpec {
         output,
         content: if backend == Backend::Copy {
@@ -459,11 +414,8 @@ fn create_surface_frames(
     }) {
         Ok(frame) => frame,
         Err(_) => {
-            if let Some(source) = source {
-                let _ = destroy_frame(source);
-            }
             return Err("shell3-show-frame-create");
         }
     };
-    Ok((source, frame))
+    Ok(frame)
 }

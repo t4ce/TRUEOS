@@ -11,7 +11,7 @@ use super::{Ui4Surface, rendered_lines};
 
 pub(super) fn present(
     surface: &mut Ui4Surface,
-    lines: [&str; 3],
+    lines: [&[(char, Option<super::super::RgbaColor>)]; 3],
     fallback_segments: &[super::super::SegmentUpdate],
 ) -> Result<Option<crate::ui4::DamageRect>, &'static str> {
     let lease = acquire_frame_buffer(surface.frame).map_err(|_| "shell3-show-cpu-frame-busy")?;
@@ -74,7 +74,6 @@ fn paint_segment(view: FrameRgbaView, segment: &super::super::SegmentUpdate) -> 
     let width = requested_width.min(view.width as usize - x);
     let height = glyph_height.min(view.height as usize - y);
     let background = super::BACKGROUND.rgba();
-    let foreground = super::FOREGROUND.rgba();
     let pixels = unsafe { core::slice::from_raw_parts_mut(view.virt as *mut u8, view.byte_len) };
     for py in y..y + height {
         let row_offset = py.checked_mul(view.pitch as usize).ok_or(())?;
@@ -98,6 +97,8 @@ fn paint_segment(view: FrameRgbaView, segment: &super::super::SegmentUpdate) -> 
             .checked_mul(view.pitch as usize)
             .and_then(|offset| offset.checked_add(px.checked_mul(4)?))
             .ok_or(())?;
+        let foreground = segment.colors.get((px - x) / glyph_width).copied().flatten()
+            .unwrap_or(super::FOREGROUND).rgba();
         pixels.get_mut(offset..offset + 4).ok_or(())?.copy_from_slice(&foreground);
     }
     crate::intel::dma_cache_flush_range(

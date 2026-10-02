@@ -1,8 +1,11 @@
 //! Visible strip snapshots and incremental update generation for Shell3.
 
-use alloc::{string::{String, ToString}, vec::Vec};
+use alloc::{string::String, vec::Vec};
 
-use super::{SpecialRows, StripSide};
+use super::{MetaFmtStr, RgbaColor, SpecialRows, StripSide};
+
+/// One visible cell: Unicode character and optional MetaFmt foreground color.
+pub(super) type RenderedLine = Vec<(char, Option<RgbaColor>)>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SegmentUpdate {
@@ -11,6 +14,7 @@ pub struct SegmentUpdate {
     pub offset: usize,
     pub remove: usize,
     pub text: String,
+    pub colors: Vec<Option<RgbaColor>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -25,12 +29,7 @@ pub type UpdateCallback = fn(&UpdateBatch);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct VisibleRow {
-    rendered: String,
-}
-
-struct VisibleParts {
-    left: String,
-    right: String,
+    rendered: RenderedLine,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -44,14 +43,14 @@ impl Snapshot {
     pub(super) fn new(
         size: (usize, usize),
         layout_generation: usize,
-        strips: [(&str, &str); 3],
+        strips: [(&[MetaFmtStr], &[MetaFmtStr]); 3],
         columns: usize,
     ) -> Self {
         Self {
             size,
             layout_generation,
             rows: strips.map(|(left, right)| VisibleRow {
-                rendered: fit_lr_strips(left, right, columns),
+                rendered: fit_meta_strips(left, right, columns),
             }),
         }
     }
@@ -60,7 +59,7 @@ impl Snapshot {
         self.size
     }
 
-    pub(super) fn rendered_lines(&self) -> [String; 3] {
+    pub(super) fn rendered_lines(&self) -> [RenderedLine; 3] {
         self.rows.each_ref().map(|row| row.rendered.clone())
     }
 }
@@ -111,13 +110,13 @@ pub(super) fn build_updates(
 }
 
 pub(super) fn diff_rendered_lines(
-    previous: Option<&[String; 3]>,
-    current: &[String; 3],
+    previous: Option<&[RenderedLine; 3]>,
+    current: &[RenderedLine; 3],
 ) -> Vec<SegmentUpdate> {
     let mut updates = Vec::new();
     for (index, line) in current.iter().enumerate() {
         let row = row_from_index(index);
-        let old = previous.map(|lines| lines[index].as_str()).unwrap_or("");
+        let old = previous.map(|lines| lines[index].as_slice()).unwrap_or(&[]);
         if let Some(update) = diff_visible_segment(row, StripSide::Left, old, line) {
             updates.push(update);
         }
@@ -125,30 +124,36 @@ pub(super) fn diff_rendered_lines(
     updates
 }
 
-pub(super) fn fit_lr_strips(left: &str, right: &str, columns: usize) -> String {
-    let visible = visible_lr_strips(left, right, columns);
-    let left_len = visible_len(&visible.left);
-    let right_len = visible_len(&visible.right);
-    let original_left_len = visible_len(left);
-    let original_right_len = visible_len(right);
-    let overflowed = original_left_len + original_right_len > columns
-        && original_left_len > 0
-        && original_right_len > 0;
-
-    if overflowed {
-        let mut output = String::with_capacity(columns);
-        output.push_str(&visible.left);
-        output.push(super::SpecialSeperator);
-        output.push_str(&visible.right);
-        return output;
+pub(super) fn fit_meta_strips(left: &[MetaFmtStr], right: &[MetaFmtStr], columns: usize) -> RenderedLine {
+    let cells = |runs: &[MetaFmtStr]| -> RenderedLine {
+        runs.iter().flat_map(|run| run.text.chars().map(|ch| (ch, run.color))).collect()
+    };
+    let mut left = cells(left);
+    let mut right = cells(right);
+    if left.len() + right.len() <= columns {
+        left.resize(columns - right.len(), (' ', None));
+    } else if left.is_empty() {
+        right.truncate(columns);
+    } else if right.is_empty() {
+        left.truncate(columns);
+    } else if columns == 0 {
+        return Vec::new();
+    } else {
+        let usable = columns - 1;
+        let half = usable / 2;
+        let (l, r) = if left.len() < half {
+            (left.len(), usable - left.len())
+        } else if right.len() < usable - half {
+            (usable - right.len(), right.len())
+        } else {
+            (half, usable - half)
+        };
+        left.truncate(l);
+        right.truncate(r);
+        left.push((super::SpecialSeperator, None));
     }
-
-    let gap = columns.saturating_sub(left_len + right_len);
-    let mut output = String::with_capacity(columns);
-    output.push_str(&visible.left);
-    output.extend(core::iter::repeat(' ').take(gap));
-    output.push_str(&visible.right);
-    output
+    left.extend(right);
+    left
 }
 
 fn row_from_index(index: usize) -> SpecialRows {
@@ -159,87 +164,18 @@ fn row_from_index(index: usize) -> SpecialRows {
     }
 }
 
-fn styled_glyphs(text: &str) -> Vec<String> {
-    let mut glyphs = Vec::new();
-    let mut pending = String::new();
-    for ch in text.chars() {
-        pending.push(ch);
-        glyphs.push(core::mem::take(&mut pending));
-    }
-
-    if !pending.is_empty() {
-        if let Some(last) = glyphs.last_mut() {
-            last.push_str(&pending);
-        }
-    }
-
-    glyphs
-}
-
-fn visible_len(text: &str) -> usize {
-    styled_glyphs(text).len()
-}
-
-fn take_visible(text: &str, limit: usize) -> String {
-    styled_glyphs(text)
-        .into_iter()
-        .take(limit)
-        .collect::<Vec<_>>()
-        .concat()
-}
-
-fn visible_lr_strips(left: &str, right: &str, columns: usize) -> VisibleParts {
-    let left_len = visible_len(left);
-    let right_len = visible_len(right);
-
-    if left_len + right_len <= columns {
-        return VisibleParts {
-            left: left.to_string(),
-            right: right.to_string(),
-        };
-    }
-    if left_len == 0 {
-        return VisibleParts {
-            left: String::new(),
-            right: take_visible(right, columns),
-        };
-    }
-    if right_len == 0 {
-        return VisibleParts {
-            left: take_visible(left, columns),
-            right: String::new(),
-        };
-    }
-
-    let usable = columns.saturating_sub(1);
-    let left_half = usable / 2;
-    let right_half = usable - left_half;
-    let (left_limit, right_limit) = if left_len < left_half {
-        (left_len, usable - left_len)
-    } else if right_len < right_half {
-        (usable - right_len, right_len)
-    } else {
-        (left_half, right_half)
-    };
-
-    VisibleParts {
-        left: take_visible(left, left_limit),
-        right: take_visible(right, right_limit),
-    }
-}
-
 fn diff_visible_segment(
     row: SpecialRows,
     side: StripSide,
-    old: &str,
-    new: &str,
+    old: &[(char, Option<RgbaColor>)],
+    new: &[(char, Option<RgbaColor>)],
 ) -> Option<SegmentUpdate> {
     if old == new {
         return None;
     }
 
-    let old_glyphs = styled_glyphs(old);
-    let new_glyphs = styled_glyphs(new);
+    let old_glyphs = old;
+    let new_glyphs = new;
     let mut prefix = 0;
     let prefix_limit = old_glyphs.len().min(new_glyphs.len());
     while prefix < prefix_limit && old_glyphs[prefix] == new_glyphs[prefix] {
@@ -262,6 +198,7 @@ fn diff_visible_segment(
         side,
         offset: prefix,
         remove: old_end - prefix,
-        text: new_glyphs[prefix..new_end].concat(),
+        text: new_glyphs[prefix..new_end].iter().map(|cell| cell.0).collect(),
+        colors: new_glyphs[prefix..new_end].iter().map(|cell| cell.1).collect(),
     })
 }

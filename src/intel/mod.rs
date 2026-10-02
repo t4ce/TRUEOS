@@ -30,6 +30,7 @@ pub(crate) use self::blt::{
     GucBcs0RgbaSurface, poll_guc_bcs0_rgba_copies, queue_guc_bcs0_rgba_copies, queue_guc_bcs0_rgba_fill, queue_guc_bcs0_marker,
     submit_guc_bcs0_fast_copy_probe_now, guc_bcs0_last_timeout, queue_guc_bcs0_uncached_copies,
     queue_guc_bcs0_legacy_rgba_copies,
+    GucBcs0MonoGlyph, GUC_BCS0_MONO_MAX_GLYPHS, queue_guc_bcs0_mono_glyphs,
 };
 pub(crate) use self::media::h264_cmd as xelp_media_avc_decode_recipe;
 pub(crate) use self::media::hw_pic;

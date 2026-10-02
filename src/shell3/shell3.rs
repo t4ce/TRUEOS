@@ -206,15 +206,15 @@ impl MatrixSlots {
 
 #[derive(Clone, Debug)]
 struct RowStrips {
-    left: String,
-    right: String,
+    left: Vec<MetaFmtStr>,
+    right: Vec<MetaFmtStr>,
 }
 
 impl RowStrips {
     fn new(left: &str, right: &str) -> Self {
         Self {
-            left: left.to_string(),
-            right: right.to_string(),
+            left: vec![MetaFmtStr::new(left)],
+            right: vec![MetaFmtStr::new(right)],
         }
     }
 }
@@ -305,7 +305,7 @@ pub struct Shell3 {
     appdb_names: Vec<String>,
     update_callbacks: Vec<UpdateCallback>,
     update_baseline: update::Snapshot,
-    pending_presentation: Option<(update::Snapshot, UpdateBatch, [String; 3])>,
+    pending_presentation: Option<(update::Snapshot, UpdateBatch, [update::RenderedLine; 3])>,
     show: Show,
 }
 
@@ -366,9 +366,9 @@ impl Shell3 {
         let columns = columns.max(MIN_COLUMNS);
         let rows_count = rows.max(MIN_ROWS);
         let mut rows_state = SpecialRowsState::new(&time, &prompt_left);
-        rows_state.title.right = appdb_names_text(&appdb_names);
+        rows_state.title.right = vec![MetaFmtStr::new(appdb_names_text(&appdb_names))];
 
-        let status_left = current_matrix_slots_text();
+        let status_left = MatrixSlots::formatted();
         let initial = update::Snapshot::new(
             (columns, rows_count),
             0,
@@ -438,7 +438,7 @@ impl Shell3 {
             let snapshot = snapshot.clone();
             let batch = batch.clone();
             let lines = lines.clone();
-            let line_refs = [lines[0].as_str(), lines[1].as_str(), lines[2].as_str()];
+            let line_refs = lines.each_ref().map(|line| line.as_slice());
             let (columns, rows) = snapshot.size();
             self.show.present(line_refs, columns, rows, &batch).await?;
             self.pending_presentation = None;
@@ -465,10 +465,8 @@ impl Shell3 {
             (width / microfont::FWIDTH as u32) as usize,
             (height / microfont::FHEIGHT as u32) as usize,
         );
-        let title = self.render_strips(SpecialRows::TitleRow);
-        let status = self.render_strips(SpecialRows::StatusRow);
-        let prompt = self.render_strips(SpecialRows::PromtRow);
-        self.show.resize_to_current([&title, &status, &prompt]).await
+        let lines = self.capture_update_snapshot().rendered_lines();
+        self.show.resize_to_current(lines.each_ref().map(|line| line.as_slice())).await
     }
 
     pub(super) fn ui4_resize_needed(&self) -> bool {
@@ -493,7 +491,7 @@ impl Shell3 {
     pub fn set_time(&mut self, time: &str) {
         self.time.clear();
         self.time.push_str(time);
-        self.rows.title.left = title_left_text(&self.time);
+        self.rows.title.left = vec![MetaFmtStr::new(title_left_text(&self.time))];
     }
 
     pub fn time(&self) -> &str {
@@ -590,7 +588,7 @@ impl Shell3 {
     }
 
     fn refresh_prompt_strip(&mut self) {
-        self.rows.promt.left = self.prompt.render();
+        self.rows.promt.left = vec![MetaFmtStr::new(self.prompt.render())];
     }
 
     pub fn set_strip(&mut self, row: SpecialRows, side: StripSide, text: &str) -> bool {
@@ -598,7 +596,7 @@ impl Shell3 {
             match row {
                 SpecialRows::TitleRow => {
                     self.rows.title.left.clear();
-                    self.rows.title.left.push_str(text);
+                    self.rows.title.left.push(MetaFmtStr::new(text));
                     return true;
                 }
                 SpecialRows::StatusRow => return false,
@@ -611,7 +609,33 @@ impl Shell3 {
 
         let strip = self.rows.row_mut(row);
         strip.right.clear();
-        strip.right.push_str(text);
+        strip.right.push(MetaFmtStr::new(text));
+        true
+    }
+
+    /// Set styled text without flattening its MetaFmt colors. Bold is retained
+    /// in the runs but deliberately has no raster effect yet.
+    pub fn set_strip_formatted(&mut self, row: SpecialRows, side: StripSide, runs: Vec<MetaFmtStr>) -> bool {
+        if side == StripSide::Left && row == SpecialRows::StatusRow {
+            return false;
+        }
+        if side == StripSide::Left && row == SpecialRows::PromtRow {
+            let text: String = runs.iter().map(|run| run.text.as_str()).collect();
+            self.set_prompt(&text);
+            // Keep the prompt cursor cell neutral, including when it is inside a run.
+            let mut cells = runs.iter().flat_map(|run| run.text.chars().map(|ch| (ch, run.color, run.bold)))
+                .collect::<Vec<_>>();
+            cells.insert(self.prompt.cursor, (PROMPT_CURSOR, None, false));
+            self.rows.promt.left = cells.into_iter().map(|(ch, color, bold)| MetaFmtStr {
+                text: ch.to_string(), color, bold,
+            }).collect();
+            return true;
+        }
+        let strip = self.rows.row_mut(row);
+        match side {
+            StripSide::Left => strip.left = runs,
+            StripSide::Right => strip.right = runs,
+        }
         true
     }
 
@@ -622,22 +646,22 @@ impl Shell3 {
 
         let strip = self.rows.row(row);
         match side {
-            StripSide::Left => strip.left.clone(),
-            StripSide::Right => strip.right.clone(),
+            StripSide::Left => strip.left.iter().map(|run| run.text.as_str()).collect(),
+            StripSide::Right => strip.right.iter().map(|run| run.text.as_str()).collect(),
         }
     }
 
     fn row_for_render(&self, row: SpecialRows) -> RowStrips {
         let mut strips = self.rows.row(row).clone();
         if row == SpecialRows::StatusRow {
-            strips.left = current_matrix_slots_text();
+            strips.left = MatrixSlots::formatted();
         }
         strips
     }
 
     pub fn render_strips(&self, row: SpecialRows) -> String {
         let strips = self.row_for_render(row);
-        update::fit_lr_strips(&strips.left, &strips.right, self.columns)
+        update::fit_meta_strips(&strips.left, &strips.right, self.columns).iter().map(|cell| cell.0).collect()
     }
 
     fn capture_update_snapshot(&self) -> update::Snapshot {
@@ -679,7 +703,7 @@ impl Shell3 {
     pub fn set_appdb_names(&mut self, names: &[String]) {
         self.appdb_names.clear();
         self.appdb_names.extend(names.iter().cloned());
-        self.rows.title.right = appdb_names_text(&self.appdb_names);
+        self.rows.title.right = vec![MetaFmtStr::new(appdb_names_text(&self.appdb_names))];
     }
 
     pub fn parse(&self, input: &str) -> bool {

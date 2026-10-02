@@ -742,10 +742,38 @@ pub(crate) fn queue_guc_bcs0_legacy_rgba_copies(
 }
 
 #[derive(Clone, Copy, Debug)]
-enum GucBcs0BatchKind {
+enum GucBcs0BatchKind<'a> {
     FastCopy,
     LegacyCopy,
     FastFill(u32),
+    LegacyMono(&'a [GucBcs0MonoGlyph]),
+}
+
+/// Word-aligned monochrome rows, MSB first in each byte. Each request owns a
+/// 64-byte source slot in the lane until retirement; colors are packed RGBA8.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct GucBcs0MonoGlyph {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+    pub mask: [u8; 64],
+    pub foreground: u32,
+    pub background: u32,
+}
+
+pub(crate) const GUC_BCS0_MONO_MAX_GLYPHS: usize = DIRECT_BLT_COPY_BYTES / 64;
+
+pub(crate) fn queue_guc_bcs0_mono_glyphs(
+    destination: GucBcs0RgbaSurface,
+    glyphs: &[GucBcs0MonoGlyph],
+) -> Result<GucBcs0CopySubmission, GucBcs0CopySubmitError> {
+    if glyphs.is_empty() || glyphs.len() > GUC_BCS0_MONO_MAX_GLYPHS
+        || glyphs.iter().any(|glyph| !guc_blt_valid_mono_glyph(destination, glyph))
+    {
+        return Err(GucBcs0CopySubmitError::InvalidRequest);
+    }
+    queue_guc_bcs0_batch(destination, &[], false, GucBcs0BatchKind::LegacyMono(glyphs))
 }
 
 /// First bring-up rung: flush/write a completion cookie and end the batch,
@@ -784,7 +812,7 @@ fn queue_guc_bcs0_batch(
     destination: GucBcs0RgbaSurface,
     copies: &[GucBcs0RgbaCopy],
     uncached_sources: bool,
-    kind: GucBcs0BatchKind,
+    kind: GucBcs0BatchKind<'_>,
 ) -> Result<GucBcs0CopySubmission, GucBcs0CopySubmitError> {
     if !guc_blt_state_reuse_permitted(&GUC_BLT_LANE_QUARANTINED) {
         return Err(GucBcs0CopySubmitError::Unavailable);
@@ -830,6 +858,14 @@ fn queue_guc_bcs0_batch(
             GucBcs0BatchKind::FastFill(color) => guc_blt_encode_ui4_fill_batch(state, destination, color, marker)?,
             GucBcs0BatchKind::FastCopy => guc_blt_encode_ui4_copy_batch(state, destination, copies, marker)?,
             GucBcs0BatchKind::LegacyCopy => guc_blt_encode_legacy_copy_batch(state, destination, copies, marker)?,
+            GucBcs0BatchKind::LegacyMono(glyphs) => {
+                if !direct_blt_map_ppgtt_region(state, DIRECT_BLT_GPU_VA_SRC_BASE,
+                    state.src_phys, DIRECT_BLT_COPY_BYTES, super::GEN8_PAGE_PRESENT | (1 << 1)) {
+                    return None;
+                }
+                super::dma_flush(state.ppgtt_virt, DIRECT_BLT_PPGTT_BYTES);
+                guc_blt_encode_mono_batch(state, destination, glyphs, marker)?
+            }
         };
         Some((sequence, marker, copy_count, copied_bytes))
     })();
@@ -890,7 +926,12 @@ fn queue_guc_bcs0_batch(
     crate::log_trace!(target: "ui4";
         "ui4/blt: queued sequence={} engine=bcs0 path=guc copies={} bytes={} marker=0x{:08X} destination={}x{} pitch=0x{:X} command={:?} direct_elsp=0 legacy_fallback=0\n",
         sequence, copy_count, copied_bytes, marker, destination.width,
-        destination.height, destination.pitch_bytes, kind,
+        destination.height, destination.pitch_bytes, match kind {
+            GucBcs0BatchKind::FastCopy => "xy-fast-copy-blt",
+            GucBcs0BatchKind::FastFill(_) => "xy-fast-color-blt",
+            GucBcs0BatchKind::LegacyCopy => "xy-src-copy-blt",
+            GucBcs0BatchKind::LegacyMono(_) => "xy-mono-src-copy-blt",
+        },
     );
     Ok(GucBcs0CopySubmission { sequence })
 }
@@ -1749,6 +1790,61 @@ fn guc_blt_encode_copy_batch(
     super::dma_flush(state.batch_virt, cursor.saturating_mul(core::mem::size_of::<u32>()));
     super::dma_flush(state.result_virt, core::mem::size_of::<u32>());
     Some((copies.len(), copied_bytes))
+}
+
+fn guc_blt_valid_mono_glyph(destination: GucBcs0RgbaSurface, glyph: &GucBcs0MonoGlyph) -> bool {
+    guc_blt_valid_surface(destination)
+        && destination.pitch_bytes <= i16::MAX as u32
+        && (1..=16).contains(&glyph.width)
+        && (1..=32).contains(&glyph.height)
+        && glyph.x.checked_add(glyph.width)
+            .is_some_and(|right| right <= destination.width && right <= i16::MAX as u32)
+        && glyph.y.checked_add(glyph.height)
+            .is_some_and(|bottom| bottom <= destination.height && bottom <= i16::MAX as u32)
+}
+
+fn guc_blt_encode_mono_batch(
+    state: DirectBltState,
+    destination: GucBcs0RgbaSurface,
+    glyphs: &[GucBcs0MonoGlyph],
+    marker: u32,
+) -> Option<(usize, u64)> {
+    if glyphs.is_empty() || glyphs.len() > GUC_BCS0_MONO_MAX_GLYPHS
+        || glyphs.iter().any(|glyph| !guc_blt_valid_mono_glyph(destination, glyph))
+    {
+        return None;
+    }
+    // Same TLB invalidation and post-sync retirement as the proven copy lane.
+    guc_blt_encode_ui4_copy_batch(state, destination, &[], marker)?;
+    let batch = unsafe {
+        core::slice::from_raw_parts_mut(state.batch_virt.cast::<u32>(), DIRECT_BLT_BATCH_BYTES / 4)
+    };
+    let end = 12 + glyphs.len() * 10;
+    if end + 8 > batch.len() { return None; }
+    batch.copy_within(12..20, end);
+    let mut bytes = 0u64;
+    for (index, glyph) in glyphs.iter().enumerate() {
+        unsafe {
+            core::ptr::copy_nonoverlapping(glyph.mask.as_ptr(), state.src_virt.add(index * 64), 64);
+        }
+        let source = DIRECT_BLT_GPU_VA_SRC_BASE + (index * 64) as u64;
+        let cursor = 12 + index * 10;
+        // TGL Vol 2a pp.1399-1401: opcode 54h, RGB+alpha, no clipping,
+        // bit 29 clear means USE BACKGROUND for this non-immediate command.
+        batch[cursor..cursor + 10].copy_from_slice(&[
+            (2 << 29) | (0x54 << 22) | (3 << 20) | 8,
+            (3 << 24) | (0xCC << 16) | destination.pitch_bytes,
+            glyph.x | (glyph.y << 16),
+            (glyph.x + glyph.width) | ((glyph.y + glyph.height) << 16),
+            destination.gpu as u32, (destination.gpu >> 32) as u32,
+            source as u32, (source >> 32) as u32,
+            glyph.background, glyph.foreground,
+        ]);
+        bytes += u64::from(glyph.width) * u64::from(glyph.height) * 4;
+    }
+    super::dma_flush(state.src_virt, glyphs.len() * 64);
+    super::dma_flush(state.batch_virt, (end + 8) * 4);
+    Some((glyphs.len(), bytes))
 }
 
 fn guc_blt_valid_fill(destination: GucBcs0RgbaSurface) -> bool {
