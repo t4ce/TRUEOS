@@ -8,6 +8,8 @@ const TOPOLOGY_TASK_POOL_CAPACITY: usize = crate::percpu::CPU_SLOT_LIMIT;
 static DRAW_WORK_AVAILABLE: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
 static SHELL3_ESCAPE_EVENTS: spin::Mutex<heapless::Deque<crate::ui4::Ui4KeyboardEvent, 64>> =
     spin::Mutex::new(heapless::Deque::new());
+static SHELL3_RESIZE_EVENTS: spin::Mutex<heapless::Deque<crate::ui4::Ui4ResizeEvent, 256>> =
+    spin::Mutex::new(heapless::Deque::new());
 
 struct ShellOwnership {
     worker_slots: Vec<u32>,
@@ -438,11 +440,21 @@ async fn draw_worker_task(worker_id: usize, expected_slot: u32) {
         }
 
         for event in crate::ui4::take_owner_input_events(crate::ui4::WindowOwner::SHELL3_SERVICE) {
-            if let crate::ui4::Ui4InputEvent::Keyboard(event) = event
-                && event.event.kind == crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY
-                && event.event.key_code == crate::r::keyboard::KEYBOARD_KEY_ESCAPE
-            {
-                let _ = SHELL3_ESCAPE_EVENTS.lock().push_back(event);
+            match event {
+                crate::ui4::Ui4InputEvent::Keyboard(event)
+                    if event.event.kind == crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY
+                        && event.event.key_code == crate::r::keyboard::KEYBOARD_KEY_ESCAPE =>
+                {
+                    let _ = SHELL3_ESCAPE_EVENTS.lock().push_back(event);
+                }
+                crate::ui4::Ui4InputEvent::Resize(event) => {
+                    let mut events = SHELL3_RESIZE_EVENTS.lock();
+                    if let Some(index) = events.iter().position(|queued| queued.window == event.window) {
+                        let _ = events.swap_remove_front(index);
+                    }
+                    let _ = events.push_back(event);
+                }
+                _ => {}
             }
         }
 
@@ -464,6 +476,46 @@ async fn draw_worker_task(worker_id: usize, expected_slot: u32) {
                 if let Some(shell) = owned_shells.get_mut(index) {
                     shell.show.handle_escape(&input);
                 }
+            }
+        }
+
+        loop {
+            let event = {
+                let mut events = SHELL3_RESIZE_EVENTS.lock();
+                let index = events.iter().position(|event| {
+                    (0..owned_shells.len()).any(|index| {
+                        owned_shells.get(index)
+                            .is_some_and(|shell| shell.show_handles_window(event.window))
+                    })
+                });
+                index.and_then(|index| events.swap_remove_front(index))
+            };
+            let Some(event) = event else { break };
+            for index in 0..owned_shells.len() {
+                if let Some(shell) = owned_shells.get_mut(index)
+                    && shell.show_handles_window(event.window)
+                    && let Err(error) = shell.resize_ui4_to_current().await
+                {
+                    crate::log_warn!(target: "service";
+                        "sh3srv: resize failed slot={} window={} epoch={} extent={}x{} error={}\n",
+                        expected_slot, event.window.raw(), event.resize_epoch,
+                        event.width, event.height, error,
+                    );
+                }
+            }
+        }
+
+        // Reconcile from the broker too, so superseded resize events cannot
+        // leave a shell at an obsolete extent.
+        for index in 0..owned_shells.len() {
+            if let Some(shell) = owned_shells.get_mut(index)
+                && shell.ui4_resize_needed()
+                && let Err(error) = shell.resize_ui4_to_current().await
+            {
+                crate::log_warn!(target: "service";
+                    "sh3srv: resize reconciliation failed slot={} shell={} error={}\n",
+                    expected_slot, index, error,
+                );
             }
         }
 

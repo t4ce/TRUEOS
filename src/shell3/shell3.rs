@@ -424,6 +424,28 @@ impl Shell3 {
             .await
     }
 
+    /// Re-render at UI4's current dock or maximize target on this shell's AP.
+    pub(super) async fn resize_ui4_to_current(&mut self) -> Result<(), &'static str> {
+        let actual_slot = crate::percpu::current_slot() as u32;
+        if actual_slot != self.executor_slot {
+            return Err("shell3-show-wrong-executor");
+        }
+        let (width, height) = self.show.resize_target_extent()
+            .ok_or("shell3-show-resize-state")?;
+        self.set(
+            (width / microfont::FWIDTH as u32) as usize,
+            (height / microfont::FHEIGHT as u32) as usize,
+        );
+        let title = self.render_strips(SpecialRows::TitleRow);
+        let status = self.render_strips(SpecialRows::StatusRow);
+        let prompt = self.render_strips(SpecialRows::PromtRow);
+        self.show.resize_to_current([&title, &status, &prompt]).await
+    }
+
+    pub(super) fn ui4_resize_needed(&self) -> bool {
+        self.show.resize_needed()
+    }
+
     pub fn set(&mut self, columns: usize, rows: usize) {
         self.columns = columns.max(MIN_COLUMNS);
         self.rows_count = rows.max(MIN_ROWS);

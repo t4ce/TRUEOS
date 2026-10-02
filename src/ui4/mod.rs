@@ -110,8 +110,8 @@ pub(crate) use h264_encode_stream::{ui4_h264_encode_prepare_task, ui4_h264_encod
 #[cfg(feature = "trueos_h264_encode_stream")]
 pub(crate) use h264_encode_udp::ui4_h264_encode_udp_egress_task;
 pub(crate) use input_broker::{
-    Ui4ButtonPhase, Ui4InputEvent, Ui4KeyboardEvent, Ui4PanEvent, Ui4PanPhase, Ui4VisualRect,
-    focused_keyboard_state, reselect_window_for_cursor, select_window_for_cursor,
+    Ui4ButtonPhase, Ui4InputEvent, Ui4KeyboardEvent, Ui4PanEvent, Ui4PanPhase, Ui4ResizeEvent,
+    Ui4VisualRect, focused_keyboard_state, reselect_window_for_cursor, select_window_for_cursor,
     show_context_menu, software_cursor_visuals, take_owner_input_events, ui4_input_service_task,
     window_input_routes,
 };
@@ -148,8 +148,8 @@ pub(crate) use window_broker::{
     take_window_first_presentation, ui4_window_broker_snapshot_service_task,
     visible_windows_for_output, wait_for_window_composition_change,
     wait_for_window_first_presentation, window_composition_revision, window_escape_key_action,
-    window_frame_was_presented, window_placement, window_resize_state, window_state, window_title,
-    window_is_closed, window_transitions_active,
+    window_frame_was_presented, window_is_closed, window_placement, window_resize_state,
+    window_state, window_title, window_transitions_active,
 };
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]

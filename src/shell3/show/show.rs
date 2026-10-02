@@ -1,20 +1,20 @@
 //! UI4 frame ownership and plain-text Shell3 presentation.
 
-#[path = "cpu.rs"]
-mod cpu;
 #[path = "copy.rs"]
 mod copy;
+#[path = "cpu.rs"]
+mod cpu;
 
-use crate::ui4::{
-    DamageRect, FrameBuffering, FrameCadence, FrameContent, FrameHandle, FrameSpec,
-    OutputId, PremultipliedRgba8, ScanoutFormat, WindowCreate,
-    WindowId, WindowInteraction, WindowOwner, WindowPlacement, WindowPlane,
-    WindowSessionCloseRequest, WindowSessionId, begin_additional_window_session, create_frame,
-    create_window, destroy_frame, finish_window_session_with_request, publish_window_frame,
-    retire_frame_when_released,
-    set_window_escape_key_action, Ui4FrameEscapeKeyAction, Ui4InputEvent, writable_rgba_view,
-};
 use super::RgbaColor;
+use crate::ui4::{
+    DamageRect, FrameBuffering, FrameCadence, FrameContent, FrameHandle, FrameSpec, OutputId,
+    PremultipliedRgba8, ScanoutFormat, Ui4FrameEscapeKeyAction, Ui4InputEvent, WindowCreate,
+    WindowId, WindowInteraction, WindowOwner, WindowPlacement, WindowPlane,
+    WindowSessionCloseRequest, WindowSessionId, begin_additional_window_session,
+    commit_window_frame_replacement, create_frame, create_window, destroy_frame,
+    finish_window_session_with_request, publish_window_frame, retire_frame_when_released,
+    set_window_escape_key_action, window_resize_state, writable_rgba_view,
+};
 
 const OWNER: WindowOwner = WindowOwner::SHELL3_SERVICE;
 const BACKGROUND: RgbaColor = RgbaColor::Gray;
@@ -28,7 +28,7 @@ pub enum Backend {
     Copy,
     VirGL,
     Headless, // nowhere
-    Network, 
+    Network,
     File,
 }
 
@@ -48,6 +48,7 @@ struct Ui4Surface {
     height: u32,
     backend: Backend,
     closing: bool,
+    broker_resized: bool,
 }
 
 /// Per-show backend selection and UI4 publication state.
@@ -92,9 +93,90 @@ impl Show {
             .is_some_and(|surface| surface.window == window)
     }
 
+    pub(crate) fn resize_needed(&self) -> bool {
+        let Some(surface) = self.surface.as_ref() else {
+            return false;
+        };
+        window_resize_state(OWNER, surface.window).is_ok_and(|(placement, _)| {
+            (placement.width, placement.height) != (surface.width, surface.height)
+        })
+    }
+
+    pub(crate) fn resize_target_extent(&self) -> Option<(u32, u32)> {
+        let surface = self.surface.as_ref()?;
+        let (placement, _) = window_resize_state(OWNER, surface.window).ok()?;
+        Some((placement.width, placement.height))
+    }
+
+    pub(crate) async fn resize_to_current(&mut self, lines: [&str; 3]) -> Result<(), &'static str> {
+        if self.poisoned {
+            return Err("shell3-show-bcs0-allocation-pinned");
+        }
+        let current = self.surface.as_ref().ok_or("shell3-show-surface-missing")?;
+        let (placement, epoch) =
+            window_resize_state(OWNER, current.window).map_err(|_| "shell3-show-resize-state")?;
+        if (placement.width, placement.height) == (current.width, current.height) {
+            return Ok(());
+        }
+        let replacement = create_surface_frames(placement.width, placement.height, self.backend)?;
+        let staged = Ui4Surface {
+            source: replacement.0,
+            frame: replacement.1,
+            session: current.session,
+            window: current.window,
+            width: placement.width,
+            height: placement.height,
+            backend: self.backend,
+            closing: false,
+            broker_resized: true,
+        };
+        let render_result = match self.backend {
+            Backend::Cpu => cpu::present(&staged, lines),
+            Backend::Copy => copy::present(&staged, lines, &mut self.poisoned).await,
+            _ => Err("shell3-show-backend-not-implemented"),
+        };
+        if let Err(error) = render_result {
+            if !self.poisoned {
+                retire_frame_when_released(staged.frame);
+                if let Some(source) = staged.source {
+                    let _ = destroy_frame(source);
+                }
+            }
+            return Err(error);
+        }
+        let commit = commit_window_frame_replacement(
+            OWNER,
+            staged.window,
+            staged.frame,
+            placement,
+            epoch,
+            DamageRect::FULL,
+        );
+        if commit.is_err() {
+            retire_frame_when_released(staged.frame);
+            if let Some(source) = staged.source {
+                let _ = destroy_frame(source);
+            }
+            return Err("shell3-show-resize-commit");
+        }
+        let old = self
+            .surface
+            .replace(staged)
+            .ok_or("shell3-show-surface-missing")?;
+        retire_frame_when_released(old.frame);
+        if let Some(source) = old.source {
+            let _ = destroy_frame(source);
+        }
+        Ok(())
+    }
+
     pub(crate) fn handle_escape(&mut self, event: &Ui4InputEvent) {
-        let Ui4InputEvent::Keyboard(event) = event else { return };
-        let Some(surface) = self.surface.as_ref() else { return };
+        let Ui4InputEvent::Keyboard(event) = event else {
+            return;
+        };
+        let Some(surface) = self.surface.as_ref() else {
+            return;
+        };
         if event.window != surface.window
             || event.event.kind != crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY
             || event.event.key_code != crate::r::keyboard::KEYBOARD_KEY_ESCAPE
@@ -136,16 +218,17 @@ impl Show {
             return Err("shell3-show-bcs0-allocation-pinned");
         }
 
-        let (width, height) = show_extent(columns, rows)?;
-        if self
+        let requested_extent = show_extent(columns, rows)?;
+        let extent = self
             .surface
             .as_ref()
-            .is_none_or(|surface| {
-                surface.width != width
-                    || surface.height != height
-                    || surface.backend != self.backend
-            })
-        {
+            .filter(|surface| surface.broker_resized)
+            .map(|surface| (surface.width, surface.height))
+            .unwrap_or(requested_extent);
+        let (width, height) = extent;
+        if self.surface.as_ref().is_none_or(|surface| {
+            surface.width != width || surface.height != height || surface.backend != self.backend
+        }) {
             self.release_surface();
             self.surface = Some(create_surface(width, height, self.backend)?);
         }
@@ -188,8 +271,8 @@ impl Drop for Show {
 }
 
 fn show_extent(columns: usize, rows: usize) -> Result<(u32, u32), &'static str> {
-    let (screen_width, screen_height) = crate::intel::active_scanout_dimensions()
-        .ok_or("shell3-show-scanout-unavailable")?;
+    let (screen_width, screen_height) =
+        crate::intel::active_scanout_dimensions().ok_or("shell3-show-scanout-unavailable")?;
     let min_width = (super::MIN_COLUMNS as u32).saturating_mul(microfont::FWIDTH as u32);
     let min_height = (super::MIN_ROWS as u32).saturating_mul(microfont::FHEIGHT as u32);
     if screen_width < min_width || screen_height < min_height {
@@ -210,20 +293,96 @@ fn show_extent(columns: usize, rows: usize) -> Result<(u32, u32), &'static str> 
 
 fn create_surface(width: u32, height: u32, backend: Backend) -> Result<Ui4Surface, &'static str> {
     let output = OutputId::from_slot(0).ok_or("shell3-show-output-unavailable")?;
-    let (screen_width, screen_height) = crate::intel::active_scanout_dimensions()
-        .ok_or("shell3-show-scanout-unavailable")?;
-    let source = if backend == Backend::Copy {
-        Some(create_frame(FrameSpec {
-            output,
-            content: FrameContent::Image,
-            cadence: FrameCadence::Immutable,
-            buffering: FrameBuffering::Single,
-            format: ScanoutFormat::Rgba8888Premultiplied,
+    let (screen_width, screen_height) =
+        crate::intel::active_scanout_dimensions().ok_or("shell3-show-scanout-unavailable")?;
+    let (source, frame) = create_surface_frames(width, height, backend)?;
+    let session = match begin_additional_window_session(OWNER) {
+        Ok(session) => session,
+        Err(_) => {
+            let _ = destroy_frame(frame);
+            if let Some(source) = source {
+                let _ = destroy_frame(source);
+            }
+            return Err("shell3-show-session-create");
+        }
+    };
+    let window = match create_window(WindowCreate {
+        owner: OWNER,
+        session,
+        frame,
+        output,
+        plane: WindowPlane::Universal(crate::ui4::ALPHA_OVERLAY_PLANE_SLOT as u8),
+        placement: WindowPlacement {
+            x: screen_width.saturating_sub(width) as i32 / 2,
+            y: screen_height.saturating_sub(height) as i32 / 2,
             width,
             height,
-            base_color: None,
-        })
-        .map_err(|_| "shell3-show-source-frame-create")?)
+            z: 90,
+            opacity: u8::MAX,
+            visible: true,
+        },
+        interaction: WindowInteraction::APPLICATION,
+    }) {
+        Ok(window) => window,
+        Err(_) => {
+            let _ = finish_window_session_with_request(
+                OWNER,
+                session,
+                WindowSessionCloseRequest::default().animate_and_retire_frames(),
+            );
+            let _ = destroy_frame(frame);
+            if let Some(source) = source {
+                let _ = destroy_frame(source);
+            }
+            return Err("shell3-show-window-create");
+        }
+    };
+    if set_window_escape_key_action(OWNER, window, Ui4FrameEscapeKeyAction::DeliverToApplication)
+        .is_err()
+    {
+        let _ = finish_window_session_with_request(
+            OWNER,
+            session,
+            WindowSessionCloseRequest::default().animate_and_retire_frames(),
+        );
+        if let Some(source) = source {
+            let _ = destroy_frame(source);
+        }
+        return Err("shell3-show-escape-policy");
+    }
+    Ok(Ui4Surface {
+        source,
+        frame,
+        session,
+        window,
+        width,
+        height,
+        backend,
+        closing: false,
+        broker_resized: false,
+    })
+}
+
+fn create_surface_frames(
+    width: u32,
+    height: u32,
+    backend: Backend,
+) -> Result<(Option<FrameHandle>, FrameHandle), &'static str> {
+    let output = OutputId::from_slot(0).ok_or("shell3-show-output-unavailable")?;
+    let source = if backend == Backend::Copy {
+        Some(
+            create_frame(FrameSpec {
+                output,
+                content: FrameContent::Image,
+                cadence: FrameCadence::Immutable,
+                buffering: FrameBuffering::Single,
+                format: ScanoutFormat::Rgba8888Premultiplied,
+                width,
+                height,
+                base_color: None,
+            })
+            .map_err(|_| "shell3-show-source-frame-create")?,
+        )
     } else {
         None
     };
@@ -254,66 +413,5 @@ fn create_surface(width: u32, height: u32, backend: Backend) -> Result<Ui4Surfac
             return Err("shell3-show-frame-create");
         }
     };
-    let session = match begin_additional_window_session(OWNER) {
-        Ok(session) => session,
-        Err(_) => {
-            let _ = destroy_frame(frame);
-            if let Some(source) = source {
-                let _ = destroy_frame(source);
-            }
-            return Err("shell3-show-session-create");
-        }
-    };
-    let window = match create_window(WindowCreate {
-        owner: OWNER,
-        session,
-        frame,
-        output,
-        plane: WindowPlane::Universal(crate::ui4::ALPHA_OVERLAY_PLANE_SLOT as u8),
-        placement: WindowPlacement {
-            x: screen_width.saturating_sub(width) as i32 / 2,
-            y: screen_height.saturating_sub(height) as i32 / 2,
-            width,
-            height,
-            z: 90,
-            opacity: u8::MAX,
-            visible: true,
-        },
-        interaction: WindowInteraction::MOVABLE_FRAME,
-    }) {
-        Ok(window) => window,
-        Err(_) => {
-            let _ = finish_window_session_with_request(
-                OWNER,
-                session,
-                WindowSessionCloseRequest::default().animate_and_retire_frames(),
-            );
-            let _ = destroy_frame(frame);
-            if let Some(source) = source {
-                let _ = destroy_frame(source);
-            }
-            return Err("shell3-show-window-create");
-        }
-    };
-    if set_window_escape_key_action(OWNER, window, Ui4FrameEscapeKeyAction::DeliverToApplication).is_err() {
-        let _ = finish_window_session_with_request(
-            OWNER,
-            session,
-            WindowSessionCloseRequest::default().animate_and_retire_frames(),
-        );
-        if let Some(source) = source {
-            let _ = destroy_frame(source);
-        }
-        return Err("shell3-show-escape-policy");
-    }
-    Ok(Ui4Surface {
-        source,
-        frame,
-        session,
-        window,
-        width,
-        height,
-        backend,
-        closing: false,
-    })
+    Ok((source, frame))
 }
