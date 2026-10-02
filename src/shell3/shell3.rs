@@ -70,29 +70,11 @@ pub enum StripSide {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Shell3Error {
     InstanceLimit,
-}
-
-static LIVE_SHELL3_INSTANCES: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
-
-fn reserve_shell3_instance() -> bool {
-    LIVE_SHELL3_INSTANCES
-        .fetch_update(
-            std::sync::atomic::Ordering::AcqRel,
-            std::sync::atomic::Ordering::Acquire,
-            |current| {
-                if current < MAX_SHELL3_INSTANCES {
-                    Some(current + 1)
-                } else {
-                    None
-                }
-            },
-        )
-        .is_ok()
+    WrongExecutor { expected: u32, actual: u32 },
 }
 
 pub fn live_shell3_instances() -> usize {
-    LIVE_SHELL3_INSTANCES.load(std::sync::atomic::Ordering::Acquire)
+    service::live_shell_count()
 }
 
 pub struct TitleTime;
@@ -302,6 +284,7 @@ impl PromptState {
 }
 
 pub struct Shell3 {
+    executor_slot: u32,
     columns: usize,
     rows_count: usize,
     layout_generation: usize,
@@ -318,7 +301,7 @@ pub struct Shell3 {
 
 impl Drop for Shell3 {
     fn drop(&mut self) {
-        LIVE_SHELL3_INSTANCES.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+        service::release_shell_on_executor(self.executor_slot);
     }
 }
 
@@ -330,9 +313,8 @@ impl Shell3 {
         columns: usize,
         rows: usize,
     ) -> Result<Self, Shell3Error> {
-        if !reserve_shell3_instance() {
-            return Err(Shell3Error::InstanceLimit);
-        }
+        let executor_slot = crate::percpu::current_slot() as u32;
+        service::reserve_shell_on_executor(executor_slot)?;
 
         let prompt = PromptState::new();
         let prompt_left = prompt.render();
@@ -354,6 +336,7 @@ impl Shell3 {
         );
 
         Ok(Self {
+            executor_slot,
             columns,
             rows_count,
             layout_generation: 0,
@@ -377,6 +360,11 @@ impl Shell3 {
 
     pub fn get_size(&self) -> (usize, usize) {
         (self.columns, self.rows_count)
+    }
+
+    /// CPU slot of the executor that created this shell.
+    pub const fn executor_slot(&self) -> u32 {
+        self.executor_slot
     }
 
     pub fn set_time(&mut self, time: &str) {
