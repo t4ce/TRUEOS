@@ -153,6 +153,9 @@ impl Show {
                 return Err("shell3-show-bcs0-unavailable");
             }
         };
+        // Keep both leases and the owning session if this future is cancelled
+        // before BCS0 returns the destination allocation.
+        self.poisoned = true;
 
         loop {
             match crate::intel::poll_guc_bcs0_rgba_copies(submission) {
@@ -176,6 +179,7 @@ impl Show {
         }
         publish_window_frame(OWNER, surface.window, DamageRect::FULL)
             .map_err(|_| "shell3-show-window-publish")?;
+        self.poisoned = false;
         Ok(())
     }
 

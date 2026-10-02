@@ -347,7 +347,6 @@ pub(crate) enum FrameContent {
     Image,
     #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     CpuBlit,
-    #[expect(dead_code, reason = "baseline archived in tools/warnings_last")]
     CopyEngine,
     FontScene2d,
     RenderScene3d,
