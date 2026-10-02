@@ -10,6 +10,9 @@ const H264_ONLINE_MEDIA_FETCH_TIMEOUT_MS: u64 = 120_000;
 const H264_ONLINE_MEDIA_FETCH_MAX_BYTES: usize = 160 * 1024 * 1024;
 const H264_TRUEOSFS_VIDEO_SOFT_CAP_BYTES: usize = 1024 * 1024 * 1024;
 const H264_TRUEOSFS_READ_CHUNK_BYTES: usize = 64 * 1024;
+const H264_FS_METADATA_CAP_BYTES: usize = 32 * 1024 * 1024;
+const H264_FS_PICTURE_CAP_BYTES: usize = 8 * 1024 * 1024;
+const H264_FS_READ_ERROR: i32 = -35;
 const H264_MEDIA_SESSION_WAIT_MS: u64 = 5_000;
 const H264_MEDIA_SESSION_RETRY_MS: u64 = 1;
 const H264_UI4_PRESENT_ERROR: i32 = -34;
@@ -355,7 +358,8 @@ async fn h264_wait_for_fs_index(
 }
 
 pub(crate) struct PreparedTrueosFsVideo {
-    annexb: Vec<u8>,
+    reader: H264NalReader,
+    stream_bytes: u64,
     sample_timing: Vec<H264SampleTiming>,
     decode_source: &'static str,
     extent: crate::intel::media::h264_cmd::AvcStreamExtent,
@@ -367,8 +371,9 @@ impl PreparedTrueosFsVideo {
     }
 }
 
-/// Load and inspect an H.264 asset from the published TRUEOSFS primary root.
-/// Raw Annex-B streams pass through unchanged; MP4 assets are demuxed first.
+/// Open an H.264 asset and inspect its initial SPS without loading its payload.
+/// Annex-B and classic MP4 use on-demand range reads; fragmented MP4 retains
+/// the existing buffered compatibility path.
 /// The returned visible extent comes from the same SPS parser used to build
 /// VDBOX commands.
 pub(crate) async fn prepare_trueosfs_ui4_video(
@@ -397,18 +402,32 @@ pub(crate) async fn prepare_trueosfs_ui4_video(
     }
 
     let (disk, file_path) = if let Some(selector) = path.strip_prefix("trueosfs:disc") {
-        let (raw, relative) = selector.split_once('/').ok_or("invalid TRUEOSFS video path")?;
-        let raw = raw.parse::<u32>().map_err(|_| "invalid TRUEOSFS video disc")?;
+        let (raw, relative) = selector
+            .split_once('/')
+            .ok_or("invalid TRUEOSFS video path")?;
+        let raw = raw
+            .parse::<u32>()
+            .map_err(|_| "invalid TRUEOSFS video disc")?;
         if relative.is_empty() {
             return Err("invalid TRUEOSFS video path");
         }
         let disk_id = crate::disc::block::DiscId::from_raw(raw);
-        if !crate::r::fs::trueosfs::list_roots().iter().any(|root| root.disk_id == disk_id) {
+        if !crate::r::fs::trueosfs::list_roots()
+            .iter()
+            .any(|root| root.disk_id == disk_id)
+        {
             return Err("TRUEOSFS video disc unavailable");
         }
-        (crate::disc::block::device_handle(disk_id).ok_or("TRUEOSFS video disc unavailable")?, relative)
+        (
+            crate::disc::block::device_handle(disk_id).ok_or("TRUEOSFS video disc unavailable")?,
+            relative,
+        )
     } else {
-        (crate::r::fs::trueosfs::primary_root_handle().ok_or("TRUEOSFS primary root unavailable")?, path)
+        (
+            crate::r::fs::trueosfs::primary_root_handle()
+                .ok_or("TRUEOSFS primary root unavailable")?,
+            path,
+        )
     };
     h264_wait_for_fs_index(session, disk).await?;
     let file = crate::r::fs::trueosfs::file_read_open_async(disk, file_path)
@@ -422,65 +441,31 @@ pub(crate) async fn prepare_trueosfs_ui4_video(
     if file_bytes == 0 || file_bytes > H264_TRUEOSFS_VIDEO_SOFT_CAP_BYTES {
         return Err("TRUEOSFS video size outside playback limit");
     }
-    let mut asset = Vec::new();
-    asset
-        .try_reserve_exact(file_bytes)
-        .map_err(|_| "TRUEOSFS video asset allocation failed")?;
-    asset.resize(file_bytes, 0);
-    let mut done = 0usize;
-    while done < file_bytes {
-        if session.is_cancelled() {
-            return Err("playback cancelled");
+    let (mut reader, sample_timing, decode_source) = h264_open_fs_reader(session, file).await?;
+    // Inspect only the initial parameter sets, then replay those NALs to the
+    // picture assembler. Payload reads continue on demand during playback.
+    let mut prefix = Vec::new();
+    let extent = loop {
+        let nal = reader
+            .next_nal()
+            .await
+            .ok_or("TRUEOSFS H.264 SPS dimensions unavailable")?;
+        if prefix.len().saturating_add(nal.bytes.len()) > H264_FS_PICTURE_CAP_BYTES {
+            return Err("TRUEOSFS H.264 initial headers exceed picture limit");
         }
-        let end = done
-            .saturating_add(H264_TRUEOSFS_READ_CHUNK_BYTES)
-            .min(file_bytes);
-        let read = crate::r::fs::trueosfs::file_read_handle_range_async(
-            file,
-            done as u64,
-            &mut asset[done..end],
-        )
-        .await
-        .map_err(|_| "TRUEOSFS video range read failed")?
-        .ok_or("TRUEOSFS video disappeared during range read")?;
-        if read == 0 || read > end - done {
-            return Err("TRUEOSFS video range read was short");
+        prefix.extend_from_slice(&nal.bytes);
+        if let Ok(extent) = super::h264_cmd::parse_annexb_stream_extent(&prefix) {
+            break extent;
         }
-        done = done.saturating_add(read);
-    }
-    let heap_after_load = crate::allocators::host_heap_integrity_bounded();
+    };
+    reader.replay(prefix);
     crate::log_info!(target: "ui4";
-        "shell2/vid: stage=heap-after-trueosfs-load healthy={} reason={} nodes={} current=0x{:X} next=0x{:X}\n",
-        heap_after_load.healthy,
-        heap_after_load.reason,
-        heap_after_load.nodes,
-        heap_after_load.current,
-        heap_after_load.next,
+        "shell2/vid: stage=trueosfs-format-selected asset={} decode_source={} file_bytes={} visible={}x{} payload=on-demand next=ui4-frame-open\n",
+        path, decode_source, file_bytes, extent.visible_width, extent.visible_height,
     );
-    if !heap_after_load.healthy {
-        return Err("host heap free list corrupt after TRUEOSFS video load");
-    }
-
-    if session.is_cancelled() {
-        return Err("playback cancelled");
-    }
-    let (annexb, sample_timing, decode_source, container) = h264_prepare_trueosfs_asset(asset)?;
-    let extent = crate::intel::media::h264_cmd::parse_annexb_stream_extent(annexb.as_slice())
-        .map_err(|_| "TRUEOSFS H.264 SPS dimensions unavailable")?;
-    crate::log_info!(target: "ui4";
-        "shell2/vid: stage=trueosfs-format-selected asset={} container={} codec=avc annexb_bytes={} decode_source={} coded={}x{} visible={}x{} next=ui4-frame-open\n",
-        path,
-        container,
-        annexb.len(),
-        decode_source,
-        extent.coded_width,
-        extent.coded_height,
-        extent.visible_width,
-        extent.visible_height,
-    );
-
     Ok(PreparedTrueosFsVideo {
-        annexb,
+        reader,
+        stream_bytes: file.data_len(),
         sample_timing,
         decode_source,
         extent,
@@ -499,9 +484,10 @@ pub(crate) async fn run_prepared_trueosfs_ui4_video(
     let media_session_generation = media_session.generation();
     let decode_engine_name = media_session.engine_name();
     let _diagnostics = H264PlaybackGuard::begin();
-    let report = h264_i_p_playback_probe_annexb_bytes(
+    let report = h264_i_p_playback_probe_with_reader(
         session,
-        prepared.annexb,
+        prepared.reader,
+        prepared.stream_bytes,
         prepared.sample_timing,
         prepared.decode_source,
         path,
@@ -518,7 +504,9 @@ pub(crate) async fn run_prepared_trueosfs_ui4_video(
         report.retired,
         report.presented,
     );
-    if session.is_cancelled() && report.presented == 0 {
+    if report.first_failure_error == H264_FS_READ_ERROR {
+        Err("TRUEOSFS video streaming read failed")
+    } else if session.is_cancelled() && report.presented == 0 {
         Err("playback cancelled")
     } else if report.presented == 0 {
         Err("TRUEOSFS video produced no decodable frames")
@@ -1230,6 +1218,14 @@ fn mp4_build_samples(
 }
 
 fn mp4_parse_avc_track(data: &[u8], trak: Mp4Box) -> Result<Option<Mp4AvcTrack>, &'static str> {
+    mp4_parse_avc_track_with_len(data, trak, data.len())
+}
+
+fn mp4_parse_avc_track_with_len(
+    data: &[u8],
+    trak: Mp4Box,
+    file_len: usize,
+) -> Result<Option<Mp4AvcTrack>, &'static str> {
     let Some(info) = mp4_parse_avc_track_info(data, trak)? else {
         return Ok(None);
     };
@@ -1269,7 +1265,7 @@ fn mp4_parse_avc_track(data: &[u8], trak: Mp4Box) -> Result<Option<Mp4AvcTrack>,
         keyframes.as_slice(),
         durations.as_slice(),
         composition_offsets.as_slice(),
-        data.len(),
+        file_len,
     )?;
     Ok(Some(Mp4AvcTrack {
         track_id: info.track_id,
@@ -1896,14 +1892,389 @@ impl H264MemoryNalReader {
     }
 }
 
+/// Fill a requested range completely; partial reads are legal, EOF is not.
+async fn h264_fs_read_exact(
+    session: crate::ui4::VideoPlaybackSession,
+    file: crate::r::fs::trueosfs::FileReadHandle,
+    offset: u64,
+    out: &mut [u8],
+) -> Result<(), &'static str> {
+    let mut done = 0;
+    while done < out.len() {
+        if session.is_cancelled() {
+            return Err("playback cancelled");
+        }
+        let end = (done + H264_TRUEOSFS_READ_CHUNK_BYTES).min(out.len());
+        let n = crate::r::fs::trueosfs::file_read_handle_range_async(
+            file,
+            offset + done as u64,
+            &mut out[done..end],
+        )
+        .await
+        .map_err(|_| "TRUEOSFS video range read failed")?
+        .ok_or("TRUEOSFS video disappeared during range read")?;
+        if n == 0 || n > end - done {
+            return Err("TRUEOSFS video range read was short");
+        }
+        done += n;
+    }
+    Ok(())
+}
+
+async fn h264_open_fs_reader(
+    session: crate::ui4::VideoPlaybackSession,
+    file: crate::r::fs::trueosfs::FileReadHandle,
+) -> Result<(H264NalReader, Vec<H264SampleTiming>, &'static str), &'static str> {
+    let len = file.data_len() as usize;
+    let mut header = [0u8; 16];
+    h264_fs_read_exact(session, file, 0, &mut header[..len.min(16)]).await?;
+    if h264_has_annexb_start_code(&header[..len.min(16)]) {
+        return Ok((
+            H264NalReader::File(H264FileNalReader::new(session, file, None)),
+            Vec::new(),
+            "trueosfs-stream-annexb",
+        ));
+    }
+    // Box headers let us skip mdat without reading its payload, including when
+    // moov sits at the end of the file. Offsets in sample tables remain absolute.
+    let mut cursor = 0usize;
+    let mut moov_data = None;
+    let mut fragmented = false;
+    while cursor < len {
+        let available = (len - cursor).min(16);
+        if available < 8 {
+            return Err("mp4 truncated box header");
+        }
+        h264_fs_read_exact(session, file, cursor as u64, &mut header[..available]).await?;
+        let size32 = mp4_read_u32(&header, 0).ok_or("mp4 invalid box size")?;
+        let (size, header_len) = if size32 == 1 {
+            if available < 16 {
+                return Err("mp4 truncated extended box header");
+            }
+            (
+                usize::try_from(mp4_read_u64(&header, 8).unwrap())
+                    .map_err(|_| "mp4 box too large")?,
+                16,
+            )
+        } else if size32 == 0 {
+            (len - cursor, 8)
+        } else {
+            (size32 as usize, 8)
+        };
+        let end = cursor
+            .checked_add(size)
+            .filter(|&end| end <= len && size >= header_len)
+            .ok_or("mp4 box outside file")?;
+        match mp4_fourcc(&header, 4) {
+            Some(typ) if typ == *b"moov" => {
+                if size > H264_FS_METADATA_CAP_BYTES {
+                    return Err("mp4 metadata exceeds streaming limit");
+                }
+                let mut bytes = alloc::vec![0; size];
+                h264_fs_read_exact(session, file, cursor as u64, &mut bytes).await?;
+                moov_data = Some(bytes);
+            }
+            Some(typ) if typ == *b"moof" => fragmented = true,
+            _ => {}
+        }
+        cursor = end;
+    }
+    let data = moov_data.ok_or("mp4 missing moov")?;
+    let moov = mp4_next_box(&data, 0, data.len()).ok_or("mp4 invalid moov")?;
+    for trak in mp4_collect_children(&data, moov.payload_start, moov.end, *b"trak") {
+        if let Ok(Some(track)) = mp4_parse_avc_track_with_len(&data, trak, len) {
+            let timing = track
+                .samples
+                .iter()
+                .map(|sample| H264SampleTiming {
+                    dts: sample.decode_time,
+                    pts: i64::try_from(sample.decode_time)
+                        .unwrap_or(i64::MAX)
+                        .saturating_add(sample.composition_offset),
+                    duration: sample.duration,
+                    timescale: track.timescale,
+                    colour: track.colour,
+                })
+                .collect();
+            return Ok((
+                H264NalReader::File(H264FileNalReader::new(session, file, Some(track))),
+                timing,
+                "trueosfs-stream-mp4-avc",
+            ));
+        }
+    }
+    if fragmented {
+        // Preserve existing fragmented MP4 support until its fragment metadata
+        // can be loaded independently. Ordinary MP4 and Annex-B stream above.
+        let mut asset = Vec::new();
+        asset
+            .try_reserve_exact(len)
+            .map_err(|_| "TRUEOSFS video asset allocation failed")?;
+        asset.resize(len, 0);
+        h264_fs_read_exact(session, file, 0, &mut asset).await?;
+        let demuxed = mp4_avc1_to_annexb(&asset)?;
+        return Ok((
+            H264NalReader::Memory(H264MemoryNalReader::new(
+                demuxed.annexb,
+                "trueosfs-fragmented-mp4",
+            )),
+            demuxed.timing,
+            "trueosfs-fragmented-mp4-buffered",
+        ));
+    }
+    Err("mp4 has no supported AVC sample table")
+}
+
+struct H264FileNalReader {
+    session: crate::ui4::VideoPlaybackSession,
+    file: crate::r::fs::trueosfs::FileReadHandle,
+    track: Option<Mp4AvcTrack>,
+    sample: usize,
+    offset: u64,
+    buffer_offset: u64,
+    buffer: Vec<u8>,
+    scan: usize,
+    eof: bool,
+    failed: bool,
+    replay: Option<H264MemoryNalReader>,
+    sample_reader: Option<H264MemoryNalReader>,
+}
+
+impl H264FileNalReader {
+    fn new(
+        session: crate::ui4::VideoPlaybackSession,
+        file: crate::r::fs::trueosfs::FileReadHandle,
+        track: Option<Mp4AvcTrack>,
+    ) -> Self {
+        Self {
+            session,
+            file,
+            track,
+            sample: 0,
+            offset: 0,
+            buffer_offset: 0,
+            buffer: Vec::new(),
+            scan: 0,
+            eof: false,
+            failed: false,
+            replay: None,
+            sample_reader: None,
+        }
+    }
+    async fn next_nal(&mut self) -> Option<H264BufferedNal> {
+        match self.read_nal().await {
+            Ok(nal) => nal,
+            Err(reason) => {
+                if !self.session.is_cancelled() {
+                    crate::log_error!(target: "intel-media"; "intel/hw_vid: streaming-read failed reason={} offset={} sample={}\n", reason, self.offset, self.sample);
+                    self.failed = true;
+                }
+                None
+            }
+        }
+    }
+    async fn read_nal(&mut self) -> Result<Option<H264BufferedNal>, &'static str> {
+        if self.failed || self.session.is_cancelled() {
+            return Ok(None);
+        }
+        if let Some(replay) = &mut self.replay {
+            if let Some(nal) = replay.next_nal().await {
+                return Ok(Some(nal));
+            }
+            self.replay = None;
+        }
+        if let Some(track) = &self.track {
+            loop {
+                if let Some(reader) = &mut self.sample_reader {
+                    if let Some(mut nal) = reader.next_nal().await {
+                        nal.meta.stream_offset += self.buffer_offset;
+                        return Ok(Some(nal));
+                    }
+                    self.sample_reader = None;
+                }
+                let Some(sample) = track.samples.get(self.sample) else {
+                    return Ok(None);
+                };
+                if sample.size > H264_FS_PICTURE_CAP_BYTES {
+                    return Err("mp4 sample exceeds decoder picture limit");
+                }
+                let mut payload = alloc::vec![0; sample.size];
+                h264_fs_read_exact(self.session, self.file, sample.offset as u64, &mut payload)
+                    .await?;
+                let mut annexb = Vec::new();
+                mp4_emit_annexb_aud(&mut annexb);
+                // Parameter sets are cheap; retain the same per-picture header
+                // contract used by the existing decoder, including avc3 updates.
+                if self.sample == 0 || sample.keyframe {
+                    for nal in track.sps.iter().chain(&track.pps) {
+                        mp4_emit_annexb_nal(&mut annexb, nal);
+                    }
+                }
+                let mut cursor = 0;
+                while cursor + track.length_size <= payload.len() {
+                    let n = match track.length_size {
+                        1 => payload[cursor] as usize,
+                        2 => mp4_read_u16(&payload, cursor).unwrap() as usize,
+                        4 => mp4_read_u32(&payload, cursor).unwrap() as usize,
+                        _ => return Err("mp4 unsupported AVC length size"),
+                    };
+                    cursor += track.length_size;
+                    let end = cursor
+                        .checked_add(n)
+                        .filter(|&end| end <= payload.len())
+                        .ok_or("mp4 nal outside sample")?;
+                    if n != 0 {
+                        mp4_emit_annexb_nal(&mut annexb, &payload[cursor..end]);
+                    }
+                    cursor = end;
+                }
+                if cursor != payload.len() {
+                    return Err("mp4 truncated NAL length");
+                }
+                self.buffer_offset = sample.offset as u64;
+                self.sample += 1;
+                self.sample_reader = Some(H264MemoryNalReader::new(annexb, "fs-mp4-sample"));
+            }
+        }
+        loop {
+            if let Some((start, code_len)) = h264_find_start_code(&self.buffer, 0) {
+                // Resume scanning near the last chunk boundary; do not rescan
+                // a large NAL from its start for each disk read.
+                let next = h264_find_start_code(&self.buffer, self.scan.max(start + code_len));
+                if let Some((end, _)) = next.or_else(|| self.eof.then_some((self.buffer.len(), 0)))
+                {
+                    if end - start > H264_FS_PICTURE_CAP_BYTES {
+                        return Err("Annex-B NAL exceeds decoder picture limit");
+                    }
+                    if start + code_len < end {
+                        let nal_type = self.buffer[start + code_len] & 0x1f;
+                        let bytes = self.buffer[start..end].to_vec();
+                        let offset = self.buffer_offset + start as u64;
+                        self.buffer.drain(..end);
+                        self.buffer_offset += end as u64;
+                        self.scan = 0;
+                        return Ok(Some(H264BufferedNal {
+                            meta: H264StreamNal {
+                                stream_offset: offset,
+                                bytes: bytes.len(),
+                                nal_type,
+                            },
+                            bytes,
+                        }));
+                    }
+                    self.buffer.drain(..end);
+                    self.buffer_offset += end as u64;
+                    self.scan = 0;
+                    continue;
+                }
+                self.scan = self.buffer.len().saturating_sub(3).max(start + code_len);
+            } else if self.buffer.len() > 3 {
+                let discard = self.buffer.len() - 3;
+                self.buffer.drain(..discard);
+                self.buffer_offset += discard as u64;
+            }
+            if self.eof {
+                return Ok(None);
+            }
+            if self.buffer.len() > H264_FS_PICTURE_CAP_BYTES {
+                return Err("Annex-B NAL exceeds decoder picture limit");
+            }
+            let n = (self.file.data_len() - self.offset).min(H264_TRUEOSFS_READ_CHUNK_BYTES as u64)
+                as usize;
+            if n == 0 {
+                self.eof = true;
+                continue;
+            }
+            let old_len = self.buffer.len();
+            self.buffer.resize(old_len + n, 0);
+            h264_fs_read_exact(self.session, self.file, self.offset, &mut self.buffer[old_len..])
+                .await?;
+            self.offset += n as u64;
+            self.eof = self.offset == self.file.data_len();
+        }
+    }
+}
+
+async fn h264_next_stream_access_unit(
+    session: crate::ui4::VideoPlaybackSession,
+    reader: &mut H264NalReader,
+    pending: &mut Option<H264AccessUnitBuilder>,
+    sps: &mut Option<Vec<u8>>,
+    pps: &mut Option<Vec<u8>>,
+    missing: &mut usize,
+    nal_count: &mut usize,
+) -> Option<H264AccessUnit> {
+    loop {
+        if session.is_cancelled() {
+            return None;
+        }
+        let Some(nal) = reader.next_nal().await else {
+            if reader.failed() {
+                return None;
+            }
+            return h264_finish_pending_access_unit(pending.take(), sps, pps, missing);
+        };
+        *nal_count += 1;
+        if *nal_count % 64 == 0 {
+            Timer::after_millis(1).await;
+        }
+        let boundary = nal.meta.nal_type == 9
+            || (matches!(nal.meta.nal_type, 1 | 5)
+                && pending.is_some()
+                && h264_slice_first_mb_in_slice(&nal.bytes) == Some(0));
+        let complete = if boundary {
+            h264_finish_pending_access_unit(pending.take(), sps, pps, missing)
+        } else {
+            None
+        };
+        match nal.meta.nal_type {
+            7 => *sps = Some(nal.bytes),
+            8 => *pps = Some(nal.bytes),
+            9 => {}
+            1 | 5 if pending.is_none() => *pending = Some(H264AccessUnitBuilder::new(&nal)),
+            _ => {
+                if let Some(unit) = pending.as_mut() {
+                    unit.push(nal);
+                }
+            }
+        }
+        if pending
+            .as_ref()
+            .is_some_and(|unit| unit.data.len() > H264_FS_PICTURE_CAP_BYTES)
+        {
+            if let H264NalReader::File(r) = reader {
+                r.failed = true;
+            }
+            return None;
+        }
+        if complete.is_some() {
+            return complete;
+        }
+    }
+}
+
 enum H264NalReader {
     Memory(H264MemoryNalReader),
+    File(H264FileNalReader),
 }
 
 impl H264NalReader {
+    fn streaming(&self) -> bool {
+        matches!(self, Self::File(_))
+    }
+    fn failed(&self) -> bool {
+        matches!(self, Self::File(r) if r.failed)
+    }
+    fn replay(&mut self, bytes: Vec<u8>) {
+        match self {
+            Self::File(r) => r.replay = Some(H264MemoryNalReader::new(bytes, "fs-prefix")),
+            Self::Memory(r) => r.scan_offset = 0,
+        }
+    }
     async fn next_nal(&mut self) -> Option<H264BufferedNal> {
         match self {
             Self::Memory(reader) => reader.next_nal().await,
+            Self::File(reader) => reader.next_nal().await,
         }
     }
 }
@@ -2028,7 +2399,11 @@ async fn h264_i_p_playback_probe_with_reader(
         mode.noreset_lite() as u8,
     );
 
-    while let Some(nal) = reader.next_nal().await {
+    let streaming = reader.streaming();
+    while !streaming {
+        let Some(nal) = reader.next_nal().await else {
+            break;
+        };
         if nal_count % 64 == 0 {
             Timer::after_millis(1).await;
         }
@@ -2085,11 +2460,11 @@ async fn h264_i_p_playback_probe_with_reader(
     ) {
         access_units.push(unit);
     }
-    if !sample_timing.is_empty() && sample_timing.len() == access_units.len() {
+    if !streaming && !sample_timing.is_empty() && sample_timing.len() == access_units.len() {
         for (unit, timing) in access_units.iter_mut().zip(sample_timing.iter().copied()) {
             unit.timing = Some(timing);
         }
-    } else if !sample_timing.is_empty() && !session.is_cancelled() {
+    } else if !streaming && !sample_timing.is_empty() && !session.is_cancelled() {
         crate::log_error!(
             "intel/hw_vid: mp4-timing rejected=1 reason=sample-access-unit-count-mismatch samples={} access_units={} action=reject-stream\n",
             sample_timing.len(),
@@ -2115,74 +2490,32 @@ async fn h264_i_p_playback_probe_with_reader(
     }
     let playback_start = EmbassyInstant::now();
     let mut next_frame_deadline = playback_start;
-    let access_unit_count = access_units.len();
-    let presentation_reordering_required = access_units.windows(2).any(|pair| {
-        matches!(
-            (pair[0].timing, pair[1].timing),
-            (Some(previous), Some(next))
-                if (next.pts, next.dts) < (previous.pts, previous.dts)
-        )
+    let timing: Vec<_> = if streaming {
+        sample_timing.iter().copied().map(Some).collect()
+    } else {
+        access_units.iter().map(|unit| unit.timing).collect()
+    };
+    let access_unit_count = timing.len();
+    let presentation_reordering_required = timing.windows(2).any(|pair| {
+        matches!((pair[0], pair[1]), (Some(previous), Some(next))
+            if (next.pts, next.dts) < (previous.pts, previous.dts))
     });
     let mut presentation_rank = Vec::new();
-    let mut base_pts = access_units
+    let mut base_pts = timing
         .first()
-        .and_then(|unit| unit.timing)
-        .map(|timing| timing.pts)
+        .copied()
+        .flatten()
+        .map(|t| t.pts)
         .unwrap_or(0);
-    let reordered_samples = if presentation_reordering_required {
-        let mut presentation_indices: Vec<usize> = (0..access_unit_count).collect();
-        presentation_indices.sort_by(|lhs, rhs| {
-            let lhs_timing = access_units[*lhs].timing;
-            let rhs_timing = access_units[*rhs].timing;
-            match (lhs_timing, rhs_timing) {
-                (Some(lhs_timing), Some(rhs_timing)) => lhs_timing
-                    .pts
-                    .cmp(&rhs_timing.pts)
-                    .then(lhs_timing.dts.cmp(&rhs_timing.dts))
-                    .then(lhs.cmp(rhs)),
-                _ => lhs.cmp(rhs),
-            }
-        });
-        base_pts = presentation_indices
-            .first()
-            .and_then(|index| access_units[*index].timing)
-            .map(|timing| timing.pts)
-            .unwrap_or(0);
+    if presentation_reordering_required {
+        let mut indices: Vec<usize> = (0..access_unit_count).collect();
+        indices.sort_by_key(|&i| timing[i].map(|t| (t.pts, t.dts, i)));
+        base_pts = timing[indices[0]].unwrap().pts;
         presentation_rank.resize(access_unit_count, 0);
-        for (rank, decode_index) in presentation_indices.iter().copied().enumerate() {
-            presentation_rank[decode_index] = rank;
+        for (rank, index) in indices.into_iter().enumerate() {
+            presentation_rank[index] = rank;
         }
-        presentation_indices
-            .iter()
-            .copied()
-            .enumerate()
-            .filter(|(rank, decode_index)| *rank != *decode_index)
-            .count()
-    } else {
-        0
-    };
-    let timed_samples = access_units
-        .iter()
-        .filter(|unit| unit.timing.is_some())
-        .count();
-    let timing_timescale = access_units
-        .iter()
-        .find_map(|unit| unit.timing)
-        .map(|timing| timing.timescale)
-        .unwrap_or(0);
-    crate::log!(
-        "intel/hw_vid: h264-presentation-order samples={} timed={} reordered={} reorder_path={} base_pts={} timescale={} decode_order=dts presentation_order=pts surface_release=rcs-completion\n",
-        access_unit_count,
-        timed_samples,
-        reordered_samples,
-        if presentation_reordering_required {
-            "deferred-pts"
-        } else {
-            "identity-fast"
-        },
-        base_pts,
-        timing_timescale
-    );
+    }
     let mut presentation_slots = if presentation_reordering_required {
         alloc::vec![H264PresentationSlot::Waiting; access_unit_count]
     } else {
@@ -2190,12 +2523,51 @@ async fn h264_i_p_playback_probe_with_reader(
     };
     let mut next_presentation_rank = 0usize;
 
-    for (decode_index, unit) in access_units.into_iter().enumerate() {
+    let mut buffered_units = access_units.into_iter();
+    let mut decode_index = 0usize;
+    loop {
+        let next = if streaming {
+            h264_next_stream_access_unit(
+                session,
+                &mut reader,
+                &mut pending_au,
+                &mut last_sps,
+                &mut last_pps,
+                &mut skipped_missing_headers,
+                &mut nal_count,
+            )
+            .await
+        } else {
+            buffered_units.next()
+        };
+        let Some(mut unit) = next else {
+            if reader.failed()
+                || (streaming
+                    && !session.is_cancelled()
+                    && !sample_timing.is_empty()
+                    && decode_index != sample_timing.len())
+            {
+                first_failure_frame = attempted.saturating_add(1);
+                first_failure_error = H264_FS_READ_ERROR;
+            }
+            break;
+        };
+        if streaming && !sample_timing.is_empty() {
+            let Some(t) = sample_timing.get(decode_index).copied() else {
+                first_failure_frame = attempted.saturating_add(1);
+                first_failure_error = H264_FS_READ_ERROR;
+                break;
+            };
+            unit.timing = Some(t);
+        }
+        stopped_at = unit.stream_offset.saturating_add(unit.bytes as u64);
+        let current_decode_index = decode_index;
+        decode_index += 1;
         if !session.wait_until_playing().await {
             break;
         }
         let rank = if presentation_reordering_required {
-            presentation_rank[decode_index]
+            presentation_rank[current_decode_index]
         } else {
             0
         };
