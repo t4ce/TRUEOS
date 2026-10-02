@@ -127,13 +127,16 @@ fn matrix_slots() -> &'static spin::Mutex<MatrixSlotsState> {
     MATRIX_SLOTS.call_once(|| spin::Mutex::new(MatrixSlotsState::new()))
 }
 
-fn matrix_slots_meta(ids: &[String]) -> Vec<MetaFmtStr> {
+fn matrix_slots_meta(ids: &[String], active: Option<&str>) -> Vec<MetaFmtStr> {
     let mut runs = Vec::with_capacity(ids.len().saturating_mul(3).saturating_add(1));
-    runs.push(MetaFmtStr::new(OPERATOR.to_string()).bold());
+    let active = active.filter(|active| ids.iter().any(|id| id == active));
+    let default_color = if active.is_none() { RgbaColor::Pink } else { RgbaColor::White };
+    runs.push(MetaFmtStr::new(OPERATOR.to_string()).color(default_color).bold());
     for id in ids {
-        runs.push(MetaFmtStr::new(" "));
-        runs.push(MetaFmtStr::new(OPERATOR.to_string()).bold());
-        runs.push(MetaFmtStr::new(id.clone()));
+        let color = if active == Some(id.as_str()) { RgbaColor::Pink } else { RgbaColor::White };
+        runs.push(MetaFmtStr::new(" ").color(RgbaColor::White));
+        runs.push(MetaFmtStr::new(OPERATOR.to_string()).color(color).bold());
+        runs.push(MetaFmtStr::new(id.clone()).color(color));
     }
     runs
 }
@@ -183,7 +186,7 @@ impl MatrixSlots {
     /// Returns the slot strip as text runs carrying style metadata.
     pub fn formatted() -> Vec<MetaFmtStr> {
         let slots = matrix_slots().lock();
-        matrix_slots_meta(&slots.ids)
+        matrix_slots_meta(&slots.ids, None)
     }
 
     // Active selection is per shell, not shared.
@@ -370,7 +373,10 @@ impl Shell3 {
         let mut rows_state = SpecialRowsState::new(&time, &prompt_left);
         rows_state.title.right = vec![MetaFmtStr::new(appdb_names_text(&appdb_names))];
 
-        let status_left = MatrixSlots::formatted();
+        let status_left = {
+            let slots = matrix_slots().lock();
+            matrix_slots_meta(&slots.ids, None)
+        };
         let initial = update::Snapshot::new(
             (columns, rows_count),
             0,
@@ -656,7 +662,8 @@ impl Shell3 {
     fn row_for_render(&self, row: SpecialRows) -> RowStrips {
         let mut strips = self.rows.row(row).clone();
         if row == SpecialRows::StatusRow {
-            strips.left = MatrixSlots::formatted();
+            let slots = matrix_slots().lock();
+            strips.left = matrix_slots_meta(&slots.ids, self.active_matrix_slot.as_deref());
         }
         strips
     }

@@ -21,6 +21,8 @@ use metafmtstr::MetaFmtStr;
 #[path = "{ROOT}/src/shell3/update.rs"] mod update;
 use update::SegmentUpdate;
 const SpecialSeperator: char = '│';
+const OPERATOR: char = '§';
+{extract.item('src/shell3/shell3.rs', 'matrix_slots_meta')}
 mod intel {{
     pub fn dma_cache_flush_range(_: *const u8, _: usize) {{}}
 '''
@@ -94,6 +96,21 @@ fn overflowing_strips_keep_their_own_colors_and_neutral_separator() {
     let right = [MetaFmtStr::new("éXYZ").color(RgbaColor::Pink)];
     assert_eq!(update::fit_meta_strips(&left, &right, 5), [('§',Some(RgbaColor::Green)),('A',Some(RgbaColor::Green)),('│',None),('é',Some(RgbaColor::Pink)),('X',Some(RgbaColor::Pink))]);
     assert!(update::fit_meta_strips(&left, &right, 0).is_empty());
+}
+#[test]
+fn active_slot_color_reaches_a_color_only_patch() {
+    let ids = vec!["id".to_string()];
+    let idle = matrix_slots_meta(&ids, None);
+    let active = matrix_slots_meta(&ids, Some("id"));
+    assert_eq!(idle[0].color, Some(RgbaColor::Pink));
+    assert_eq!(active[0].color, Some(RgbaColor::White));
+    assert_eq!(active[2].color, Some(RgbaColor::Pink));
+    assert_eq!(active[3].color, Some(RgbaColor::Pink));
+    let previous = [update::fit_meta_strips(&idle, &[], 8),vec![],vec![]];
+    let current = [update::fit_meta_strips(&active, &[], 8),vec![],vec![]];
+    assert_eq!(previous[0].iter().map(|c|c.0).collect::<String>(), current[0].iter().map(|c|c.0).collect::<String>());
+    assert!(!update::diff_rendered_lines(Some(&previous), &current).is_empty());
+    assert_eq!(matrix_slots_meta(&ids, Some("absent")), idle);
 }
 #[test]
 fn each_back_buffer_gets_its_own_color_diff() {
