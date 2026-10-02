@@ -114,6 +114,8 @@ pub struct MatrixSlots;
 struct MatrixSlotsState {
     // Raw unique slot IDs only. The default bare § slot is implicit at index 0.
     ids: Vec<String>,
+    lifetimes: Vec<(String, u64)>,
+    next_lifetime: u64,
     echoes: Vec<(Option<String>, VecDeque<String>)>,
     generation: u64,
 }
@@ -122,6 +124,8 @@ impl MatrixSlotsState {
     fn new() -> Self {
         Self {
             ids: vec!["id".to_string(), "123".to_string()],
+            lifetimes: vec![("id".to_string(), 1), ("123".to_string(), 2)],
+            next_lifetime: 3,
             echoes: Vec::new(),
             generation: 0,
         }
@@ -180,6 +184,14 @@ impl MatrixSlots {
             }
         }
 
+        slots.lifetimes.retain(|(id, _)| ids.contains(id));
+        for id in &ids {
+            if !slots.lifetimes.iter().any(|(name, _)| name == id) {
+                let lifetime = slots.next_lifetime;
+                slots.next_lifetime = slots.next_lifetime.wrapping_add(1);
+                slots.lifetimes.push((id.clone(), lifetime));
+            }
+        }
         slots.echoes.retain(|(id, _)| id.as_ref().is_none_or(|id| ids.contains(id)));
         slots.ids = ids;
         slots.generation = slots.generation.wrapping_add(1);
@@ -187,11 +199,43 @@ impl MatrixSlots {
         service::notify_work();
     }
 
+    /// Demand a slot and return its lifetime, so a freed/recreated id cannot
+    /// silently reattach an old Shell3 view to the new slot.
+    fn ensure_named(name: &str) -> u64 {
+        let mut slots = matrix_slots().lock();
+        if let Some((_, lifetime)) = slots.lifetimes.iter().find(|(id, _)| id == name) {
+            return *lifetime;
+        }
+        let lifetime = slots.next_lifetime;
+        slots.next_lifetime = slots.next_lifetime.wrapping_add(1);
+        slots.ids.push(name.to_string());
+        slots.lifetimes.push((name.to_string(), lifetime));
+        slots.generation = slots.generation.wrapping_add(1);
+        drop(slots);
+        service::notify_work();
+        lifetime
+    }
+
+    /// None resets the implicit default slot; named slots disappear entirely.
+    fn drop_slot(name: Option<&str>) -> bool {
+        let mut slots = matrix_slots().lock();
+        if let Some(name) = name {
+            if !slots.ids.iter().any(|id| id == name) { return false; }
+            slots.ids.retain(|id| id != name);
+            slots.lifetimes.retain(|(id, _)| id != name);
+        }
+        slots.echoes.retain(|(id, _)| id.as_deref() != name);
+        slots.generation = slots.generation.wrapping_add(1);
+        drop(slots);
+        service::notify_work();
+        true
+    }
+
     /// Echo text into a named Matrix slot (None is the bare § slot).
     /// Slot selection remains per instance; transcripts are shared Matrix data.
-    fn echo(active: Option<&str>, text: String) {
+    fn echo(active: Option<&str>, lifetime: Option<u64>, text: String) {
         let mut slots = matrix_slots().lock();
-        let active = active.filter(|id| slots.ids.iter().any(|name| name == id)).map(str::to_string);
+        let active = active.filter(|id| slots.lifetimes.iter().any(|(name, current)| name == id && Some(*current) == lifetime)).map(str::to_string);
         let index = slots.echoes.iter().position(|(id, _)| *id == active).unwrap_or_else(|| {
             slots.echoes.push((active, VecDeque::new()));
             slots.echoes.len() - 1
@@ -212,6 +256,14 @@ impl MatrixSlots {
     fn echo_snapshot(active: Option<&str>) -> (u64, Vec<String>) {
         let slots = matrix_slots().lock();
         let active = active.filter(|id| slots.ids.iter().any(|name| name == id));
+        let lines = slots.echoes.iter().find(|(id, _)| id.as_deref() == active)
+            .map(|(_, lines)| lines.iter().cloned().collect()).unwrap_or_default();
+        (slots.generation, lines)
+    }
+
+    fn view_echo_snapshot(active: Option<&str>, lifetime: Option<u64>) -> (u64, Vec<String>) {
+        let slots = matrix_slots().lock();
+        let active = active.filter(|id| slots.lifetimes.iter().any(|(name, current)| name == id && Some(*current) == lifetime));
         let lines = slots.echoes.iter().find(|(id, _)| id.as_deref() == active)
             .map(|(_, lines)| lines.iter().cloned().collect()).unwrap_or_default();
         (slots.generation, lines)
@@ -348,6 +400,7 @@ pub struct Shell3 {
     time: String,
     mode: Mode,
     active_matrix_slot: Option<String>,
+    active_matrix_lifetime: Option<u64>,
     matrix_selection_dirty: bool,
     prompt: PromptState,
     rows: SpecialRowsState,
@@ -453,6 +506,7 @@ impl Shell3 {
             time,
             mode: Mode::HV,
             active_matrix_slot: None,
+            active_matrix_lifetime: None,
             matrix_selection_dirty: false,
             prompt,
             rows: rows_state,
@@ -608,6 +662,7 @@ impl Shell3 {
     pub fn select_matrix_slot_index(&mut self, index: usize) -> bool {
         if index == 0 {
             self.active_matrix_slot = None;
+            self.active_matrix_lifetime = None;
             self.matrix_selection_dirty = true;
             service::notify_work();
             return true;
@@ -619,6 +674,7 @@ impl Shell3 {
         };
 
         self.active_matrix_slot = Some(name.clone());
+        self.active_matrix_lifetime = slots.lifetimes.iter().find(|(id, _)| id == name).map(|(_, lifetime)| *lifetime);
         self.matrix_selection_dirty = true;
         drop(slots);
         service::notify_work();
@@ -632,6 +688,7 @@ impl Shell3 {
         }
 
         self.active_matrix_slot = Some(name.to_string());
+        self.active_matrix_lifetime = slots.lifetimes.iter().find(|(id, _)| id == name).map(|(_, lifetime)| *lifetime);
         self.matrix_selection_dirty = true;
         drop(slots);
         service::notify_work();
@@ -639,23 +696,31 @@ impl Shell3 {
     }
 
     pub fn active_matrix_slot_index(&self) -> usize {
-        let Some(active) = self.active_matrix_slot.as_deref() else {
-            return 0;
-        };
-
-        matrix_slots()
-            .lock()
-            .ids
-            .iter()
-            .position(|id| id == active)
-            .map(|index| index + 1)
-            .unwrap_or(0)
+        let Some(active) = self.active_matrix_slot_name() else { return 0; };
+        matrix_slots().lock().ids.iter().position(|id| *id == active)
+            .map(|index| index + 1).unwrap_or(0)
     }
 
     pub fn active_matrix_slot_name(&self) -> Option<String> {
         let active = self.active_matrix_slot.as_deref()?;
-        let slots = matrix_slots().lock();
-        slots.ids.iter().find(|id| id.as_str() == active).cloned()
+        matrix_slots().lock().lifetimes.iter()
+            .find(|(id, lifetime)| id == active && Some(*lifetime) == self.active_matrix_lifetime)
+            .map(|(id, _)| id.clone())
+    }
+
+    /// Every owner reconciles deletion locally; no cross-AP model mutation.
+    pub(super) fn reconcile_matrix_selection(&mut self) {
+        if self.active_matrix_slot.is_some() && self.active_matrix_slot_name().is_none() {
+            self.select_matrix_slot_index(0);
+        }
+    }
+
+    /// Enter is reserved for operator submission; other prompt text is inert.
+    fn submit_operator_prompt(&mut self) -> bool {
+        let input = self.prompt.text.clone();
+        if !self.parse_operator(&input) { return false; }
+        self.set_prompt("");
+        true
     }
 
     /// UI editing with immediate exact-name echo; command execution stays unwired.
@@ -663,6 +728,7 @@ impl Shell3 {
         use crate::r::keyboard::*;
         if event.kind == KEYBOARD_OUTPUT_KIND_KEY {
             match event.key_code {
+                KEYBOARD_KEY_ENTER => return self.submit_operator_prompt(),
                 KEYBOARD_KEY_TAB => return self.set_mode(self.get_mode() % 3 + 1),
                 KEYBOARD_KEY_BACKSPACE => {
                     if self.prompt.cursor == 0 { return false; }
@@ -694,9 +760,9 @@ impl Shell3 {
     }
 
     fn echo_recognized_prompt(&mut self) {
-        if !self.parse_name(&self.prompt.text) { return; }
+        if self.prompt.text.starts_with(OPERATOR) || !self.parse_name(&self.prompt.text) { return; }
         let text = core::mem::take(&mut self.prompt.text);
-        MatrixSlots::echo(self.active_matrix_slot.as_deref(), text);
+        MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, text);
         self.prompt.colors.clear();
         self.prompt.cursor = 0;
     }
@@ -787,7 +853,7 @@ impl Shell3 {
 
     pub fn get_strip(&self, row: SpecialRows, side: StripSide) -> String {
         if let SpecialRows::MatrixRow(index) = row {
-            return if side == StripSide::Left { MatrixSlots::echo_lines(self.active_matrix_slot.as_deref()).get(index).cloned().unwrap_or_default() } else { String::new() };
+            return if side == StripSide::Left { MatrixSlots::view_echo_snapshot(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime).1.get(index).cloned().unwrap_or_default() } else { String::new() };
         }
         if row == SpecialRows::StatusRow && side == StripSide::Left {
             return current_matrix_slots_text();
@@ -806,8 +872,9 @@ impl Shell3 {
         }
         let mut strips = self.rows.row(row).clone();
         if row == SpecialRows::StatusRow {
+            let active = self.active_matrix_slot_name();
             let slots = matrix_slots().lock();
-            strips.left = matrix_slots_meta(&slots.ids, self.active_matrix_slot.as_deref());
+            strips.left = matrix_slots_meta(&slots.ids, active.as_deref());
         }
         strips
     }
@@ -821,7 +888,7 @@ impl Shell3 {
         let title = self.row_for_render(SpecialRows::TitleRow);
         let status = self.row_for_render(SpecialRows::StatusRow);
         let promt = self.row_for_render(SpecialRows::PromtRow);
-        let (matrix_generation, matrix_lines) = MatrixSlots::echo_snapshot(self.active_matrix_slot.as_deref());
+        let (matrix_generation, matrix_lines) = MatrixSlots::view_echo_snapshot(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime);
 
         update::Snapshot::new(
             (self.columns, self.rows_count),
@@ -862,13 +929,40 @@ impl Shell3 {
 
     pub fn parse(&self, input: &str) -> bool {
         if input.starts_with(OPERATOR) {
-            self.parse_operator(input);
             return false;
         }
         self.parse_name(input)
     }
 
-    pub fn parse_operator(&self, _input: &str) {
+    /// Operator contract: §, §id, §id§, and §§, submitted explicitly.
+    pub fn parse_operator(&mut self, input: &str) -> bool {
+        let Some(rest) = input.strip_prefix(OPERATOR) else { return false; };
+        if rest.is_empty() {
+            return self.select_matrix_slot_index(0);
+        }
+        if rest == "§" {
+            MatrixSlots::drop_slot(None);
+            return true;
+        }
+        let (name, dropping) = match rest.strip_suffix(OPERATOR) {
+            Some(name) => (name, true),
+            None => (rest, false),
+        };
+        // Slot ids are a single token; embedded operators are not patterns.
+        if name.is_empty() || name.chars().any(|ch| ch == OPERATOR || ch.is_whitespace() || ch.is_control()) {
+            return false;
+        }
+        if dropping {
+            if !MatrixSlots::drop_slot(Some(name)) { return false; }
+            self.reconcile_matrix_selection();
+            return true;
+        }
+        let lifetime = MatrixSlots::ensure_named(name);
+        self.active_matrix_slot = Some(name.to_string());
+        self.active_matrix_lifetime = Some(lifetime);
+        self.matrix_selection_dirty = true;
+        service::notify_work();
+        true
     }
 
     pub fn parse_name(&self, name: &str) -> bool {

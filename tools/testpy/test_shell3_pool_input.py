@@ -24,6 +24,7 @@ mod r { pub mod keyboard {
     pub const KEYBOARD_OUTPUT_KIND_TEXT:u8=1;
     pub const KEYBOARD_OUTPUT_KIND_KEY:u8=2;
     pub const KEYBOARD_KEY_TAB:u16=2;
+    pub const KEYBOARD_KEY_ENTER:u16=3;
     pub const KEYBOARD_KEY_BACKSPACE:u16=1;
     pub struct TrueosKeyboardOutputEvent { pub kind:u8,pub key_code:u16,pub codepoint:u32 }
 } }
@@ -51,11 +52,11 @@ mod service {pub fn notify_work(){}}
     source += f'\n#[path="{ROOT}/src/shell3/metafmtstr.rs"] mod metafmtstr;\nuse metafmtstr::MetaFmtStr;\n'
     source += '''struct Row {left:Vec<MetaFmtStr>,right:Vec<MetaFmtStr>}
 struct Rows {promt:Row,title:Row}
-struct Shell3 {prompt:PromptState,rows:Rows,columns:usize,mode:Mode,time:String,aka_names:Vec<String>,appdb_names:Vec<String>,active_matrix_slot:Option<String>,matrix_selection_dirty:bool}
+struct Shell3 {prompt:PromptState,rows:Rows,columns:usize,mode:Mode,time:String,aka_names:Vec<String>,appdb_names:Vec<String>,active_matrix_slot:Option<String>,active_matrix_lifetime:Option<u64>,matrix_selection_dirty:bool}
 impl Shell3 {
-fn new(columns:usize)->Self {Self {prompt:PromptState::new(),rows:Rows {promt:Row {left:vec![],right:vec![]},title:Row {left:vec![MetaFmtStr::new(title_left_text("12:34"))],right:mode_title_meta(Mode::HV,&[],&[])}},columns,mode:Mode::HV,time:"12:34".into(),aka_names:vec![],appdb_names:vec![],active_matrix_slot:None,matrix_selection_dirty:false}}
+fn new(columns:usize)->Self {Self {prompt:PromptState::new(),rows:Rows {promt:Row {left:vec![],right:vec![]},title:Row {left:vec![MetaFmtStr::new(title_left_text("12:34"))],right:mode_title_meta(Mode::HV,&[],&[])}},columns,mode:Mode::HV,time:"12:34".into(),aka_names:vec![],appdb_names:vec![],active_matrix_slot:None,active_matrix_lifetime:None,matrix_selection_dirty:false}}
 '''
-    for name in ('handle_keyboard','refresh_prompt_strip','set_mode','get_mode','refresh_mode_title','echo_recognized_prompt','parse_name','set_appdb_names','select_matrix_slot_index','select_matrix_slot_name','active_matrix_slot_index','active_matrix_slot_name'):
+    for name in ('handle_keyboard','refresh_prompt_strip','set_mode','get_mode','refresh_mode_title','echo_recognized_prompt','parse_name','set_appdb_names','select_matrix_slot_index','select_matrix_slot_name','active_matrix_slot_index','active_matrix_slot_name','reconcile_matrix_selection','submit_operator_prompt','parse_operator','set_prompt'):
         source += method(shell, name).replace("pub(super)","pub(crate)")
     source += '}\n'
     source += extract.item('src/shell3/service.rs', 'ShellOwnership')

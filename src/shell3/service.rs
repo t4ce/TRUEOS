@@ -412,6 +412,7 @@ async fn shell_worker_task(worker_id: usize, expected_slot: u32) {
 
     loop {
         terminals.poll();
+        for shell in &mut owned_shells.shells { shell.reconcile_matrix_selection(); }
         while has_pending_for_executor(expected_slot) && take_pending_for_executor(expected_slot) {
             let aka_names = crate::r::restart::startup_alias_names();
             let appdb_names = appdb_names_snapshot().1;

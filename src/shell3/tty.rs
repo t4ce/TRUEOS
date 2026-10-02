@@ -75,11 +75,14 @@ impl Terminal {
                 self.write(b"Bye.\r\n");
                 self.closing = true;
             }
+            _ if command.starts_with(OPERATOR) => {
+                if !self.shell.parse_operator(command) {
+                    self.write(b"Shell3: invalid or absent Matrix slot operator.\r\n");
+                }
+            }
             _ => {
                 let recognized = self.shell.parse(command);
-                self.write(if command.starts_with(OPERATOR) {
-                    b"Shell3: section operator is not wired yet.\r\n"
-                } else if recognized {
+                self.write(if recognized {
                     b"Shell3: name recognized; execution is not wired yet.\r\n"
                 } else {
                     b"Shell3: unknown name in this mode.\r\n"
