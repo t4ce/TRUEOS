@@ -1,11 +1,19 @@
 mod format;
+pub mod show;
 
 pub use format::{bold, styled};
+pub use show::{Backend as ShowBackend, Show};
 
 pub const OPERATOR: char = '§';
 pub const MODESTEP: char = '\t';
 pub const GROUP_OPEN: char = '[';
 pub const GROUP_CLOSE: char = ']';
+pub const SpecialSeperator: char = '│';
+pub const PROMPT_CURSOR: char = '▏';
+
+pub const MIN_COLUMNS: usize = 20;
+pub const MIN_ROWS: usize = 5;
+pub const MAX_SHELL3_INSTANCES: usize = 256;
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -48,41 +56,6 @@ pub enum SpecialRows {
     PromtRow = 3,
 }
 
-pub const SpecialSeperator: char = '│';
-
-pub struct TitleTime;
-
-static TITLE_TIME: std::sync::OnceLock<std::sync::RwLock<String>> =
-    std::sync::OnceLock::new();
-
-fn title_time() -> &'static std::sync::RwLock<String> {
-    TITLE_TIME.get_or_init(|| std::sync::RwLock::new(TitleTime::DEFAULT.to_string()))
-}
-
-fn title_left_text(time: &str) -> String {
-    format!("TrueOS {} {}", OPERATOR, time)
-}
-
-impl TitleTime {
-    pub const DEFAULT: &'static str = "01:22";
-
-    /// Sets the trusted external time text shown in the left TitleRow strip.
-    /// The caller supplies the fixed HH:MM-style value; time sourcing is out of scope.
-    pub fn set(time: &str) {
-        let mut current = title_time().write().unwrap();
-        current.clear();
-        current.push_str(time);
-
-        let text = title_left_text(&current);
-        drop(current);
-        set_strip(SpecialRows::TitleRow, StripSide::Left, &text);
-    }
-
-    pub fn get() -> String {
-        title_time().read().unwrap().clone()
-    }
-}
-
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StripSide {
@@ -94,42 +67,84 @@ pub enum StripSide {
 pub struct SegmentUpdate {
     pub row: SpecialRows,
     pub side: StripSide,
-    /// Character offset inside the strip's visible text.
     pub offset: usize,
-    /// Number of previously-visible characters replaced/removed at `offset`.
     pub remove: usize,
-    /// Replacement characters. Empty means the segment only became hidden.
     pub text: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UpdateBatch {
-    /// `set()` was called since the last batch, even when the clamped size stayed equal.
     pub layout_changed: bool,
     pub old_size: (usize, usize),
     pub new_size: (usize, usize),
-    /// Smallest per-strip visible edits needed to reach the current state.
     pub segments: Vec<SegmentUpdate>,
+}
+
+pub type UpdateCallback = fn(&UpdateBatch);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Shell3Error {
+    InstanceLimit,
+}
+
+static LIVE_SHELL3_INSTANCES: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+fn reserve_shell3_instance() -> bool {
+    LIVE_SHELL3_INSTANCES
+        .fetch_update(
+            std::sync::atomic::Ordering::AcqRel,
+            std::sync::atomic::Ordering::Acquire,
+            |current| {
+                if current < MAX_SHELL3_INSTANCES {
+                    Some(current + 1)
+                } else {
+                    None
+                }
+            },
+        )
+        .is_ok()
+}
+
+pub fn live_shell3_instances() -> usize {
+    LIVE_SHELL3_INSTANCES.load(std::sync::atomic::Ordering::Acquire)
+}
+
+pub struct TitleTime;
+
+impl TitleTime {
+    pub const DEFAULT: &'static str = "01:22";
+
+    pub fn set(shell: &mut Shell3, time: &str) {
+        shell.set_time(time);
+    }
+
+    pub fn get(shell: &Shell3) -> &str {
+        shell.time()
+    }
+}
+
+fn title_left_text(time: &str) -> String {
+    format!("TrueOS {} {}", OPERATOR, time)
 }
 
 pub struct MatrixSlots;
 
 #[derive(Clone, Debug)]
 struct MatrixSlotsState {
-    // Raw unique slot IDs only. The default slot is implicit at index 0.
+    // Raw unique slot IDs only. The default bare § slot is implicit at index 0.
     ids: Vec<String>,
-    active: usize,
 }
 
 impl MatrixSlotsState {
     fn new() -> Self {
         Self {
             ids: vec!["id".to_string(), "123".to_string()],
-            active: 0,
         }
     }
 }
 
+// MatrixSlots is the one shared shell subsystem.
 static MATRIX_SLOTS: std::sync::OnceLock<std::sync::RwLock<MatrixSlotsState>> =
     std::sync::OnceLock::new();
 
@@ -154,21 +169,20 @@ fn matrix_slots_text(ids: &[String]) -> String {
     text
 }
 
-impl MatrixSlots {
-    pub const DEFAULT: &'static str = "\x1b[1m§\x1b[0m \x1b[1m§\x1b[0mid \x1b[1m§\x1b[0m123";
+fn current_matrix_slots_text() -> String {
+    let slots = matrix_slots().read().unwrap();
+    matrix_slots_text(&slots.ids)
+}
 
-    /// Replaces the named slots. Names are raw IDs without the `§` prefix.
-    /// Duplicate IDs are kept only once, in first-seen order.
+impl MatrixSlots {
+    pub const DEFAULT: &'static str =
+        "\x1b[1m§\x1b[0m \x1b[1m§\x1b[0mid \x1b[1m§\x1b[0m123";
+
+    /// Shared across every Shell3. Names are supplied without the § prefix.
     pub fn set<T: AsRef<str>>(names: &[T]) {
         let mut slots = matrix_slots().write().unwrap();
-
-        let previously_active = if slots.active == 0 {
-            None
-        } else {
-            slots.ids.get(slots.active - 1).cloned()
-        };
-
         let mut ids = Vec::with_capacity(names.len());
+
         for name in names {
             let name = name.as_ref();
             if !ids.iter().any(|existing: &String| existing == name) {
@@ -176,52 +190,7 @@ impl MatrixSlots {
             }
         }
 
-        slots.active = previously_active
-            .as_deref()
-            .and_then(|active| ids.iter().position(|id| id == active))
-            .map(|index| index + 1)
-            .unwrap_or(0);
         slots.ids = ids;
-
-        let text = matrix_slots_text(&slots.ids);
-        drop(slots);
-        set_strip(SpecialRows::StatusRow, StripSide::Left, &text);
-    }
-
-    /// Index 0 is the default bare `§` slot. Named slots begin at index 1.
-    pub fn select_index(index: usize) -> bool {
-        let mut slots = matrix_slots().write().unwrap();
-        if index > slots.ids.len() {
-            return false;
-        }
-
-        slots.active = index;
-        true
-    }
-
-    /// Selects a named slot using its raw ID, without the `§` prefix.
-    pub fn select_name(name: &str) -> bool {
-        let mut slots = matrix_slots().write().unwrap();
-        let Some(index) = slots.ids.iter().position(|id| id == name) else {
-            return false;
-        };
-
-        slots.active = index + 1;
-        true
-    }
-
-    pub fn active_index() -> usize {
-        matrix_slots().read().unwrap().active
-    }
-
-    /// `None` means the default bare `§` slot is active.
-    pub fn active_name() -> Option<String> {
-        let slots = matrix_slots().read().unwrap();
-        if slots.active == 0 {
-            None
-        } else {
-            slots.ids.get(slots.active - 1).cloned()
-        }
     }
 
     pub fn slot_ids() -> Vec<String> {
@@ -229,7 +198,24 @@ impl MatrixSlots {
     }
 
     pub fn get() -> String {
-        get_strip(SpecialRows::StatusRow, StripSide::Left)
+        current_matrix_slots_text()
+    }
+
+    // Active selection is per shell, not shared.
+    pub fn select_index(shell: &mut Shell3, index: usize) -> bool {
+        shell.select_matrix_slot_index(index)
+    }
+
+    pub fn select_name(shell: &mut Shell3, name: &str) -> bool {
+        shell.select_matrix_slot_name(name)
+    }
+
+    pub fn active_index(shell: &Shell3) -> usize {
+        shell.active_matrix_slot_index()
+    }
+
+    pub fn active_name(shell: &Shell3) -> Option<String> {
+        shell.active_matrix_slot_name()
     }
 }
 
@@ -248,7 +234,7 @@ impl RowStrips {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct SpecialRowsState {
     title: RowStrips,
     status: RowStrips,
@@ -256,11 +242,12 @@ struct SpecialRowsState {
 }
 
 impl SpecialRowsState {
-    fn new() -> Self {
+    fn new(time: &str, prompt_left: &str) -> Self {
         Self {
-            title: RowStrips::new("TrueOS § 01:22", ""),
-            status: RowStrips::new(MatrixSlots::DEFAULT, ""),
-            promt: RowStrips::new("", ""),
+            title: RowStrips::new(&title_left_text(time), ""),
+            // StatusRow/Left is read from the shared MatrixSlots system.
+            status: RowStrips::new("", ""),
+            promt: RowStrips::new(prompt_left, ""),
         }
     }
 
@@ -281,76 +268,42 @@ impl SpecialRowsState {
     }
 }
 
-
-pub const MIN_COLUMNS: usize = 20;
-pub const MIN_ROWS: usize = 5;
-
-static CURRENT_COLUMNS: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(MIN_COLUMNS);
-static CURRENT_ROWS: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(MIN_ROWS);
-static LAYOUT_GENERATION: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0);
-
-pub fn set(columns: usize, rows: usize) {
-    ensure_update_baseline();
-
-    CURRENT_COLUMNS.store(columns.max(MIN_COLUMNS), std::sync::atomic::Ordering::Relaxed);
-    CURRENT_ROWS.store(rows.max(MIN_ROWS), std::sync::atomic::Ordering::Relaxed);
-
-    // A call to set() is itself a layout event. This intentionally advances even
-    // when clamping produces the same final size.
-    LAYOUT_GENERATION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+#[derive(Clone, Debug)]
+struct PromptState {
+    text: String,
+    cursor: usize,
 }
 
-pub fn get_size() -> (usize, usize) {
-    (
-        CURRENT_COLUMNS.load(std::sync::atomic::Ordering::Relaxed),
-        CURRENT_ROWS.load(std::sync::atomic::Ordering::Relaxed),
-    )
-}
-
-static SPECIAL_ROWS: std::sync::OnceLock<std::sync::RwLock<SpecialRowsState>> =
-    std::sync::OnceLock::new();
-
-fn special_rows() -> &'static std::sync::RwLock<SpecialRowsState> {
-    SPECIAL_ROWS.get_or_init(|| std::sync::RwLock::new(SpecialRowsState::new()))
-}
-
-pub fn set_strip(row: SpecialRows, side: StripSide, text: &str) {
-    ensure_update_baseline();
-
-    let mut rows = special_rows().write().unwrap();
-    let strip = rows.row_mut(row);
-
-    match side {
-        StripSide::Left => {
-            strip.left.clear();
-            strip.left.push_str(text);
-        }
-        StripSide::Right => {
-            strip.right.clear();
-            strip.right.push_str(text);
+impl PromptState {
+    fn new() -> Self {
+        Self {
+            text: String::new(),
+            cursor: 0,
         }
     }
-}
 
-pub fn get_strip(row: SpecialRows, side: StripSide) -> String {
-    let rows = special_rows().read().unwrap();
-    let strip = rows.row(row);
-
-    match side {
-        StripSide::Left => strip.left.clone(),
-        StripSide::Right => strip.right.clone(),
+    fn char_len(&self) -> usize {
+        self.text.chars().count()
     }
-}
 
-pub fn render_strips(row: SpecialRows) -> String {
-    let columns = CURRENT_COLUMNS.load(std::sync::atomic::Ordering::Relaxed);
-    let rows = special_rows().read().unwrap();
-    let strip = rows.row(row);
+    fn render(&self) -> String {
+        let mut output = String::with_capacity(self.text.len() + PROMPT_CURSOR.len_utf8());
+        let mut inserted = false;
 
-    fit_LR_strips(&strip.left, &strip.right, columns)
+        for (index, ch) in self.text.chars().enumerate() {
+            if index == self.cursor {
+                output.push(PROMPT_CURSOR);
+                inserted = true;
+            }
+            output.push(ch);
+        }
+
+        if !inserted {
+            output.push(PROMPT_CURSOR);
+        }
+
+        output
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -366,8 +319,338 @@ struct UpdateSnapshot {
     rows: [VisibleRow; 3],
 }
 
-static UPDATE_BASELINE: std::sync::OnceLock<std::sync::Mutex<UpdateSnapshot>> =
-    std::sync::OnceLock::new();
+pub struct Shell3 {
+    columns: usize,
+    rows_count: usize,
+    layout_generation: usize,
+    time: String,
+    mode: Mode,
+    active_matrix_slot: Option<String>,
+    prompt: PromptState,
+    rows: SpecialRowsState,
+    aka_names: Vec<String>,
+    appdb_runtime: Vec<RuntimeNameEntry>,
+    update_callbacks: Vec<UpdateCallback>,
+    update_baseline: UpdateSnapshot,
+}
+
+impl Drop for Shell3 {
+    fn drop(&mut self) {
+        LIVE_SHELL3_INSTANCES.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
+}
+
+impl Shell3 {
+    pub fn new(
+        time: &str,
+        aka_names: Vec<String>,
+        update_callbacks: Vec<UpdateCallback>,
+        columns: usize,
+        rows: usize,
+    ) -> Result<Self, Shell3Error> {
+        if !reserve_shell3_instance() {
+            return Err(Shell3Error::InstanceLimit);
+        }
+
+        let prompt = PromptState::new();
+        let prompt_left = prompt.render();
+        let time = time.to_string();
+        let columns = columns.max(MIN_COLUMNS);
+        let rows_count = rows.max(MIN_ROWS);
+        let rows_state = SpecialRowsState::new(&time, &prompt_left);
+
+        let initial = UpdateSnapshot {
+            size: (columns, rows_count),
+            layout_generation: 0,
+            rows: [
+                visible_LR_strips(&rows_state.title.left, &rows_state.title.right, columns),
+                visible_LR_strips(&current_matrix_slots_text(), &rows_state.status.right, columns),
+                visible_LR_strips(&rows_state.promt.left, &rows_state.promt.right, columns),
+            ],
+        };
+
+        Ok(Self {
+            columns,
+            rows_count,
+            layout_generation: 0,
+            time,
+            mode: Mode::HV,
+            active_matrix_slot: None,
+            prompt,
+            rows: rows_state,
+            aka_names,
+            appdb_runtime: Vec::new(),
+            update_callbacks,
+            update_baseline: initial,
+        })
+    }
+
+    pub fn set(&mut self, columns: usize, rows: usize) {
+        self.columns = columns.max(MIN_COLUMNS);
+        self.rows_count = rows.max(MIN_ROWS);
+        self.layout_generation = self.layout_generation.wrapping_add(1);
+    }
+
+    pub fn get_size(&self) -> (usize, usize) {
+        (self.columns, self.rows_count)
+    }
+
+    pub fn set_time(&mut self, time: &str) {
+        self.time.clear();
+        self.time.push_str(time);
+        self.rows.title.left = title_left_text(&self.time);
+    }
+
+    pub fn time(&self) -> &str {
+        &self.time
+    }
+
+    pub fn set_mode(&mut self, mode: u8) -> bool {
+        self.mode = match mode {
+            1 => Mode::HV,
+            2 => Mode::CMD,
+            3 => Mode::ADM,
+            _ => return false,
+        };
+        true
+    }
+
+    pub fn mode(&self) -> Mode {
+        self.mode
+    }
+
+    pub fn get_mode(&self) -> u8 {
+        self.mode as u8
+    }
+
+    pub fn select_matrix_slot_index(&mut self, index: usize) -> bool {
+        if index == 0 {
+            self.active_matrix_slot = None;
+            return true;
+        }
+
+        let slots = matrix_slots().read().unwrap();
+        let Some(name) = slots.ids.get(index - 1) else {
+            return false;
+        };
+
+        self.active_matrix_slot = Some(name.clone());
+        true
+    }
+
+    pub fn select_matrix_slot_name(&mut self, name: &str) -> bool {
+        let slots = matrix_slots().read().unwrap();
+        if !slots.ids.iter().any(|id| id == name) {
+            return false;
+        }
+
+        self.active_matrix_slot = Some(name.to_string());
+        true
+    }
+
+    pub fn active_matrix_slot_index(&self) -> usize {
+        let Some(active) = self.active_matrix_slot.as_deref() else {
+            return 0;
+        };
+
+        matrix_slots()
+            .read()
+            .unwrap()
+            .ids
+            .iter()
+            .position(|id| id == active)
+            .map(|index| index + 1)
+            .unwrap_or(0)
+    }
+
+    pub fn active_matrix_slot_name(&self) -> Option<String> {
+        let active = self.active_matrix_slot.as_deref()?;
+        let slots = matrix_slots().read().unwrap();
+        slots.ids.iter().find(|id| id.as_str() == active).cloned()
+    }
+
+    pub fn set_prompt(&mut self, text: &str) {
+        self.prompt.text.clear();
+        self.prompt.text.push_str(text);
+        let text_len = self.prompt.char_len();
+        self.prompt.cursor = self.prompt.cursor.min(text_len);
+        self.refresh_prompt_strip();
+    }
+
+    pub fn prompt(&self) -> &str {
+        &self.prompt.text
+    }
+
+    pub fn set_cursor(&mut self, index: usize) -> bool {
+        if index > self.prompt.char_len() {
+            return false;
+        }
+
+        self.prompt.cursor = index;
+        self.refresh_prompt_strip();
+        true
+    }
+
+    pub fn cursor(&self) -> usize {
+        self.prompt.cursor
+    }
+
+    fn refresh_prompt_strip(&mut self) {
+        self.rows.promt.left = self.prompt.render();
+    }
+
+    pub fn set_strip(&mut self, row: SpecialRows, side: StripSide, text: &str) -> bool {
+        if side == StripSide::Left {
+            match row {
+                SpecialRows::TitleRow => {
+                    self.rows.title.left.clear();
+                    self.rows.title.left.push_str(text);
+                    return true;
+                }
+                SpecialRows::StatusRow => return false,
+                SpecialRows::PromtRow => {
+                    self.set_prompt(text);
+                    return true;
+                }
+            }
+        }
+
+        let strip = self.rows.row_mut(row);
+        strip.right.clear();
+        strip.right.push_str(text);
+        true
+    }
+
+    pub fn get_strip(&self, row: SpecialRows, side: StripSide) -> String {
+        if row == SpecialRows::StatusRow && side == StripSide::Left {
+            return current_matrix_slots_text();
+        }
+
+        let strip = self.rows.row(row);
+        match side {
+            StripSide::Left => strip.left.clone(),
+            StripSide::Right => strip.right.clone(),
+        }
+    }
+
+    fn row_for_render(&self, row: SpecialRows) -> RowStrips {
+        let mut strips = self.rows.row(row).clone();
+        if row == SpecialRows::StatusRow {
+            strips.left = current_matrix_slots_text();
+        }
+        strips
+    }
+
+    pub fn render_strips(&self, row: SpecialRows) -> String {
+        let strips = self.row_for_render(row);
+        fit_LR_strips(&strips.left, &strips.right, self.columns)
+    }
+
+    fn capture_update_snapshot(&self) -> UpdateSnapshot {
+        let title = self.row_for_render(SpecialRows::TitleRow);
+        let status = self.row_for_render(SpecialRows::StatusRow);
+        let promt = self.row_for_render(SpecialRows::PromtRow);
+
+        UpdateSnapshot {
+            size: (self.columns, self.rows_count),
+            layout_generation: self.layout_generation,
+            rows: [
+                visible_LR_strips(&title.left, &title.right, self.columns),
+                visible_LR_strips(&status.left, &status.right, self.columns),
+                visible_LR_strips(&promt.left, &promt.right, self.columns),
+            ],
+        }
+    }
+
+    pub fn take_updates(&mut self) -> UpdateBatch {
+        let current = self.capture_update_snapshot();
+        let old = std::mem::replace(&mut self.update_baseline, current.clone());
+        let mut segments = Vec::new();
+
+        for index in 0..3 {
+            let row = row_from_index(index);
+            let old_row = &old.rows[row_index(row)];
+            let new_row = &current.rows[row_index(row)];
+
+            if let Some(update) =
+                diff_visible_segment(row, StripSide::Left, &old_row.left, &new_row.left)
+            {
+                segments.push(update);
+            }
+            if let Some(update) =
+                diff_visible_segment(row, StripSide::Right, &old_row.right, &new_row.right)
+            {
+                segments.push(update);
+            }
+        }
+
+        let batch = UpdateBatch {
+            layout_changed: old.layout_generation != current.layout_generation,
+            old_size: old.size,
+            new_size: current.size,
+            segments,
+        };
+
+        if batch.layout_changed || !batch.segments.is_empty() {
+            for callback in &self.update_callbacks {
+                callback(&batch);
+            }
+        }
+
+        batch
+    }
+
+    pub fn add_update_callback(&mut self, callback: UpdateCallback) {
+        self.update_callbacks.push(callback);
+    }
+
+    pub fn set_appdb_names(&mut self, names: &[(&str, RgbaColor)]) {
+        self.appdb_runtime.clear();
+        self.appdb_runtime
+            .extend(names.iter().map(|(name, color)| RuntimeNameEntry {
+                name: (*name).to_string(),
+                color: *color,
+            }));
+    }
+
+    pub fn parse(&self, input: &str) -> bool {
+        if input.starts_with(OPERATOR) {
+            self.parse_operator(input);
+            return false;
+        }
+        self.parse_name(input)
+    }
+
+    pub fn parse_operator(&self, _input: &str) {
+    }
+
+    pub fn parse_name(&self, name: &str) -> bool {
+        match self.mode {
+            Mode::HV => HV_GROUPS
+                .iter()
+                .any(|group| group.names.iter().any(|entry| entry.name == name)),
+            Mode::CMD => {
+                CMD_GROUPS
+                    .iter()
+                    .any(|group| group.names.iter().any(|entry| entry.name == name))
+                    || self.aka_names.iter().any(|alias| alias == name)
+                    || self.appdb_runtime.iter().any(|entry| entry.name == name)
+            }
+            Mode::ADM => ADM_NAMES.iter().any(|entry| entry.name == name),
+        }
+    }
+}
+
+#[allow(non_snake_case)]
+pub fn newShell3(
+    time: &str,
+    aka_names: Vec<String>,
+    updateCallbacks: Vec<UpdateCallback>,
+    col: usize,
+    row: usize,
+) -> Result<Shell3, Shell3Error> {
+    Shell3::new(time, aka_names, updateCallbacks, col, row)
+}
 
 fn row_index(row: SpecialRows) -> usize {
     match row {
@@ -394,7 +677,6 @@ fn styled_glyphs(text: &str) -> Vec<String> {
         if ch == '\x1b' && chars.peek() == Some(&'[') {
             let mut sequence = String::from("\x1b");
             sequence.push(chars.next().unwrap());
-
             while let Some(next) = chars.next() {
                 sequence.push(next);
                 if next == 'm' {
@@ -478,27 +760,6 @@ fn visible_LR_strips(left: &str, right: &str, columns: usize) -> VisibleRow {
     }
 }
 
-fn capture_update_snapshot() -> UpdateSnapshot {
-    let columns = CURRENT_COLUMNS.load(std::sync::atomic::Ordering::Relaxed);
-    let row_count = CURRENT_ROWS.load(std::sync::atomic::Ordering::Relaxed);
-    let layout_generation = LAYOUT_GENERATION.load(std::sync::atomic::Ordering::Relaxed);
-    let rows = special_rows().read().unwrap();
-
-    UpdateSnapshot {
-        size: (columns, row_count),
-        layout_generation,
-        rows: [
-            visible_LR_strips(&rows.title.left, &rows.title.right, columns),
-            visible_LR_strips(&rows.status.left, &rows.status.right, columns),
-            visible_LR_strips(&rows.promt.left, &rows.promt.right, columns),
-        ],
-    }
-}
-
-fn ensure_update_baseline() {
-    UPDATE_BASELINE.get_or_init(|| std::sync::Mutex::new(capture_update_snapshot()));
-}
-
 fn diff_visible_segment(
     row: SpecialRows,
     side: StripSide,
@@ -540,42 +801,6 @@ fn diff_visible_segment(
     })
 }
 
-/// Returns all visible changes since the previous call, then commits the current
-/// state as the new baseline. Updates stay at segment granularity; callers never
-/// need to invalidate a whole strip or row just because several segments changed.
-pub fn take_updates() -> UpdateBatch {
-    ensure_update_baseline();
-
-    let current = capture_update_snapshot();
-    let baseline_lock = UPDATE_BASELINE.get().unwrap();
-    let mut baseline = baseline_lock.lock().unwrap();
-    let old = baseline.clone();
-
-    let mut segments = Vec::new();
-
-    for index in 0..3 {
-        let row = row_from_index(index);
-        let old_row = &old.rows[row_index(row)];
-        let new_row = &current.rows[row_index(row)];
-
-        if let Some(update) = diff_visible_segment(row, StripSide::Left, &old_row.left, &new_row.left) {
-            segments.push(update);
-        }
-        if let Some(update) = diff_visible_segment(row, StripSide::Right, &old_row.right, &new_row.right) {
-            segments.push(update);
-        }
-    }
-
-    *baseline = current.clone();
-
-    UpdateBatch {
-        layout_changed: old.layout_generation != current.layout_generation,
-        old_size: old.size,
-        new_size: current.size,
-        segments,
-    }
-}
-
 fn fit_LR_strips(left: &str, right: &str, columns: usize) -> String {
     let visible = visible_LR_strips(left, right, columns);
     let left_len = visible_len(&visible.left);
@@ -601,9 +826,6 @@ fn fit_LR_strips(left: &str, right: &str, columns: usize) -> String {
     output.push_str(&visible.right);
     output
 }
-
-static CURRENT_MODE: std::sync::atomic::AtomicU8 =
-    std::sync::atomic::AtomicU8::new(Mode::HV as u8);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct NameEntry {
@@ -646,11 +868,7 @@ const HV_GROUPS: [NameGroup; 3] = [
     NameGroup { name: "", names: &HV_GROUP_3 },
 ];
 
-const CMD_AKA_NAMES: [NameEntry; 3] = [
-    NameEntry { name: "cub", color: RgbaColor::White },
-    NameEntry { name: "grid", color: RgbaColor::White },
-    NameEntry { name: "td", color: RgbaColor::White },
-];
+const CMD_AKA_NAMES: [NameEntry; 0] = [];
 
 const CMD_MEDIA_NAMES: [NameEntry; 5] = [
     NameEntry { name: "img", color: RgbaColor::White },
@@ -674,22 +892,6 @@ struct RuntimeNameEntry {
     color: RgbaColor,
 }
 
-static CMD_APPDB_RUNTIME: std::sync::OnceLock<std::sync::RwLock<Vec<RuntimeNameEntry>>> =
-    std::sync::OnceLock::new();
-
-fn cmd_appdb_runtime() -> &'static std::sync::RwLock<Vec<RuntimeNameEntry>> {
-    CMD_APPDB_RUNTIME.get_or_init(|| std::sync::RwLock::new(Vec::new()))
-}
-
-pub fn set_appdb_names(names: &[(&str, RgbaColor)]) {
-    let mut appdb = cmd_appdb_runtime().write().unwrap();
-    appdb.clear();
-    appdb.extend(names.iter().map(|(name, color)| RuntimeNameEntry {
-        name: (*name).to_string(),
-        color: *color,
-    }));
-}
-
 const ADM_NAMES: [NameEntry; 10] = [
     NameEntry { name: "cry", color: RgbaColor::Pink },
     NameEntry { name: "disc", color: RgbaColor::Pink },
@@ -702,51 +904,3 @@ const ADM_NAMES: [NameEntry; 10] = [
     NameEntry { name: "vgpu", color: RgbaColor::White },
     NameEntry { name: "vcpy", color: RgbaColor::White },
 ];
-
-#[no_mangle]
-pub extern "C" fn set_mode(mode: u8) -> bool {
-    match mode {
-        1 | 2 | 3 => {
-            CURRENT_MODE.store(mode, std::sync::atomic::Ordering::Relaxed);
-            true
-        }
-        _ => false,
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn get_mode() -> u8 {
-    CURRENT_MODE.load(std::sync::atomic::Ordering::Relaxed)
-}
-
-pub fn parse(input: &str) -> bool {
-    if input.starts_with(OPERATOR) {
-        parse_operator(input);
-        return false;
-    }
-
-    parse_name(input)
-}
-
-pub fn parse_operator(_input: &str) {
-}
-
-pub fn parse_name(name: &str) -> bool {
-    match get_mode() {
-        1 => HV_GROUPS
-            .iter()
-            .any(|group| group.names.iter().any(|entry| entry.name == name)),
-        2 => {
-            CMD_GROUPS
-                .iter()
-                .any(|group| group.names.iter().any(|entry| entry.name == name))
-                || cmd_appdb_runtime()
-                    .read()
-                    .unwrap()
-                    .iter()
-                    .any(|entry| entry.name == name)
-        },
-        3 => ADM_NAMES.iter().any(|entry| entry.name == name),
-        _ => false,
-    }
-}
