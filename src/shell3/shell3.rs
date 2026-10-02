@@ -299,6 +299,7 @@ pub struct Shell3 {
     appdb_runtime: Vec<RuntimeNameEntry>,
     update_callbacks: Vec<UpdateCallback>,
     update_baseline: update::Snapshot,
+    show: Show,
 }
 
 impl Drop for Shell3 {
@@ -351,7 +352,34 @@ impl Shell3 {
             appdb_runtime: Vec::new(),
             update_callbacks,
             update_baseline: initial,
+            show: Show::default(),
         })
+    }
+
+    pub const fn show_backend(&self) -> ShowBackend {
+        self.show.backend()
+    }
+
+    pub fn set_show_backend(&mut self, backend: ShowBackend) {
+        self.show.set_backend(backend);
+    }
+
+    /// Publish the current title, status, and prompt strips through UI4.
+    pub async fn present(&mut self) -> Result<(), &'static str> {
+        let actual_slot = crate::percpu::current_slot() as u32;
+        if actual_slot != self.executor_slot {
+            return Err("shell3-show-wrong-executor");
+        }
+        let title = self.render_strips(SpecialRows::TitleRow);
+        let status = self.render_strips(SpecialRows::StatusRow);
+        let prompt = self.render_strips(SpecialRows::PromtRow);
+        self.show
+            .present(
+                [&title, &status, &prompt],
+                self.columns,
+                self.rows_count,
+            )
+            .await
     }
 
     pub fn set(&mut self, columns: usize, rows: usize) {

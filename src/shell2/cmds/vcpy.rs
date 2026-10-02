@@ -6,26 +6,16 @@ use super::super::{print_shell_line, ShellBackend2};
 use super::super::shell2_cmd::ParseOutcome;
 
 fn usage(io: &'static dyn ShellBackend2) {
-    print_shell_line(io, "vcpy start|stop|status|fillcheck");
+    print_shell_line(io, "vcpy status|fillcheck");
 }
 
 pub(crate) fn try_parse(
-    spawner: &Spawner,
+    _spawner: &Spawner,
     io: &'static dyn ShellBackend2,
     rest: &str,
 ) -> ParseOutcome {
     let mut args = rest.split_whitespace();
     match (args.next(), args.next()) {
-        (Some(action), None) if action.eq_ignore_ascii_case("start") => {
-            match crate::r::services::vcpy_service::start(spawner) {
-                Ok(()) => print_shell_line(io, "vcpy: service started (250 ms cadence)"),
-                Err(reason) => print_shell_line(io, format!("vcpy: start failed: {reason}").as_str()),
-            }
-        }
-        (Some(action), None) if action.eq_ignore_ascii_case("stop") => {
-            crate::r::services::vcpy_service::stop();
-            print_shell_line(io, "vcpy: stop requested");
-        }
         (Some(action), None) if action.eq_ignore_ascii_case("fillcheck") => {
             match crate::r::services::vcpy_service::fill_check() {
                 Ok(()) => print_shell_line(io, "vcpy: fillcheck passed fills=2 pixels_per_fill=51 right_and_bottom_guards=77 colors=80402010,00000000 fallback=0"),
@@ -34,21 +24,6 @@ pub(crate) fn try_parse(
         }
         (Some(action), None) if action.eq_ignore_ascii_case("status") => {
             let status = crate::r::services::vcpy_service::status();
-            let demo = crate::ui4::vcpy_demo::status();
-            print_shell_line(
-                io,
-                format!(
-                    "vcpy: running={} polls={} failures={} rows={}/20 pending={} pinned={} marker_retired={} copy_cadence_ms=250",
-                    status.running as u8,
-                    status.ticks,
-                    status.failures,
-                    demo.published_rows,
-                    demo.pending as u8,
-                    demo.pinned as u8,
-                    demo.marker_retired as u8,
-                )
-                .as_str(),
-            );
             print_shell_line(io, format!(
                 "vcpy: consumer=gridpaper copies={} bytes={} fallbacks={} failures={}",
                 status.consumer_copies, status.consumer_bytes,
