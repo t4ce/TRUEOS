@@ -1,6 +1,8 @@
 mod names;
 mod metafmtstr;
 mod update;
+mod tty;
+pub mod net;
 
 pub mod service;
 #[path = "show/show.rs"]
@@ -321,6 +323,18 @@ impl Drop for Shell3 {
 }
 
 impl Shell3 {
+    /// A socket-owned model. No UI4 surface is created or presented.
+    pub(super) fn new_terminal() -> Result<Self, Shell3Error> {
+        let slot = crate::percpu::current_slot() as u32;
+        service::reserve_terminal_on_executor(slot)?;
+        let mut shell = Self::new_inner(
+            &TitleTime::current(), crate::r::restart::startup_alias_names(),
+            service::appdb_names_snapshot().1, Vec::new(), 80, MIN_ROWS, slot,
+        );
+        shell.set_show_backend(ShowBackend::Network);
+        Ok(shell)
+    }
+
     pub fn new(
         time: &str,
         aka_names: Vec<String>,

@@ -114,7 +114,7 @@ pub fn refresh_appdb_names() {
     }
 }
 
-fn appdb_names_snapshot() -> (u64, Vec<alloc::string::String>) {
+pub(super) fn appdb_names_snapshot() -> (u64, Vec<alloc::string::String>) {
     let current = APPDB_NAMES.lock();
     (current.generation, current.names.clone())
 }
@@ -213,6 +213,19 @@ pub(super) fn reserve_shell_on_executor(slot: u32) -> Result<(), super::Shell3Er
     {
         ownership.next_round_robin = (index + 1) % ownership.worker_slots.len();
     }
+    Ok(())
+}
+
+/// Terminal models belong to the socket task, without draw-worker placement.
+pub(super) fn reserve_terminal_on_executor(slot: u32) -> Result<(), super::Shell3Error> {
+    let mut ownership = SHELL_OWNERSHIP.lock();
+    if ownership.live_shells + ownership.pending_by_slot.iter().sum::<usize>() >= super::MAX_SHELL3_INSTANCES {
+        return Err(super::Shell3Error::InstanceLimit);
+    }
+    let count = ownership.shells_by_slot.get_mut(slot as usize)
+        .ok_or(super::Shell3Error::NoExecutor)?;
+    *count += 1;
+    ownership.live_shells += 1;
     Ok(())
 }
 

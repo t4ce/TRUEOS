@@ -65,6 +65,7 @@ define_started_flags!(
     LOCAL_SHELL_SESSION_POOL_STARTED,
     GRIDPAPER_SERVICE_STARTED,
     SH3SRV_STARTED,
+    SHELL3_TCP_STARTED,
     HID_UDP_SRV_STARTED,
     HTTP_TRUEOSFS_STARTED,
     WS_TIME_STARTED,
@@ -609,6 +610,10 @@ fn spawn_gridpaper_service(spawner: Spawner) -> SpawnAttempt {
 
 fn spawn_sh3srv(spawner: Spawner) -> SpawnAttempt {
     spawn_local(spawner, |spawner| crate::shell3::service::sh3srv_service_task(spawner))
+}
+
+fn spawn_shell3_tcp(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |_spawner| crate::shell3::net::terminal_task())
 }
 
 fn spawn_hid_udp_srv(spawner: Spawner) -> SpawnAttempt {
@@ -1408,7 +1413,7 @@ const NET_ANY_CONFIGURED_AND_ROOT_READY: u32 =
 const BP_AUTOSTART_READY: u32 = crate::r::readiness::TRUEOSFS_ROOT_MOUNTED
     | crate::r::readiness::BACKGROUND_AP_WORKER_READY
     | crate::r::readiness::VTHREAD_HW_TAG_READY;
-const TASK_COUNT: usize = 78
+const TASK_COUNT: usize = 79
     + cfg!(feature = "trueos_h264_encode_stream") as usize
     + cfg!(feature = "trueos_lumen") as usize
     + 2 * cfg!(feature = "trueos_ttstt") as usize;
@@ -1557,6 +1562,10 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         spawn_sntp_service,
     ),
     TaskSpec::enabled("net-shell-listener", 0, &NET_SHELL_STARTED, spawn_net_shell),
+    TaskSpec::enabled(
+        "shell3-tcp", crate::r::readiness::NET_ANY_CONFIGURED,
+        &SHELL3_TCP_STARTED, spawn_shell3_tcp,
+    ),
     // The current Gridpaper Blueprint still submits snapshots to this
     // consumer, which owns the corresponding UI4 presentation.
     TaskSpec::enabled(

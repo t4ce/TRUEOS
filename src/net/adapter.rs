@@ -679,6 +679,11 @@ pub enum NetCommand {
     Close {
         handle: NetHandle,
     },
+    /// Send FIN after socket-buffered data. Caller must first wait for TcpSent
+    /// for its submitted writes; Close remains the immediate teardown path.
+    FinishTcp {
+        handle: NetHandle,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -2578,7 +2583,7 @@ impl NetService {
         // outstanding segment or delayed ACK before returning keystrokes and
         // small redraw fragments to its LAN peer. Keep bulk TCP defaults for
         // every other owner.
-        if owner == "net-shell" {
+        if owner == "net-shell" || owner == "shell3-tcp" {
             socket.set_nagle_enabled(false);
             socket.set_ack_delay(None);
         }
@@ -4341,6 +4346,17 @@ impl NetService {
                 } else if !self.close_loopback_tcp(handle) {
                     self.remove_record(handle);
                     let _ = push_event(owner, NetEvent::Closed { handle });
+                }
+            }
+            NetCommand::FinishTcp { handle } => {
+                if !self.close_loopback_tcp(handle) {
+                    if let Some(rec) = self.records.iter().find(|rec| rec.handle == handle)
+                        && rec.kind == SocketKind::Tcp
+                    {
+                        self.sockets.get_mut::<tcp::Socket>(rec.socket).close();
+                    } else {
+                        let _ = push_event(owner, NetEvent::Closed { handle });
+                    }
                 }
             }
         }

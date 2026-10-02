@@ -4,6 +4,7 @@
 //! modules. This file is for TCP/UDP service ports and local network endpoints.
 
 pub mod well_known {
+    pub const SSH: u16 = 22;
     pub const DNS: u16 = 53;
     pub const HTTP: u16 = 80;
     pub const MDNS: u16 = 5353;
@@ -38,6 +39,8 @@ pub mod services {
     pub const TRUEOS_RDP_TCP_PORT: u16 = 100;
     pub const TRUEOS_HID_UDP_PORT: u16 = TRUEOS_RDP_TCP_PORT;
     pub const NET_SHELL_TCP_PORT: u16 = 4245;
+    /// Shell3 plaintext TTY bring-up; reserved for the future SSH transport.
+    pub const SHELL3_TCP_PORT: u16 = well_known::SSH;
     pub const FTP_SERVER_PORT: u16 = 21;
     pub const FTP_SERVER_PASV_MIN: u16 = 40_000;
     pub const FTP_SERVER_PASV_MAX: u16 = 40_127;
@@ -76,18 +79,6 @@ pub mod esp {
     pub const BLUEPRINT_RELAY_UDP_PORT: u16 = super::services::SWARM_BLUEPRINT_RELAY_UDP_PORT;
     pub const HTTP_UPLOAD_PORT: u16 = 8080;
     pub const TRUEOS_PEER_TCP_PORT: u16 = 32_344;
-}
-
-pub mod local_assets {
-    pub const HOST_IPV4: [u8; 4] = [192, 168, 178, 111];
-    pub const HTTP_HOST: &str = "192.168.178.111";
-    pub const HTTP_PORT: u16 = super::esp::HTTP_UPLOAD_PORT;
-    pub const HTTP_BASE_URL: &str = "http://192.168.178.111:8080";
-
-    pub const DEMO_YELLY_MP4_URL: &str =
-        "http://192.168.178.111:8080/tools/vid/trueos_h264_diag_mbgrid_2560x1440.mp4";
-    pub const AUDIO_DEMO_URL: &str = "http://192.168.178.111:8080/tools/aud/demo.wav";
-    pub const AUDIO_DEMO_CACHE_PATH: &str = "audio/demo.wav";
 }
 
 pub mod probes {

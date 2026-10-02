@@ -12,7 +12,7 @@ use v::vnet as api;
 
 use crate::r::net::VNet;
 
-const PEER_IPV4: [u8; 4] = crate::allports::local_assets::HOST_IPV4;
+const PEER_IPV4: [u8; 4] = [192, 168, 178, 111];
 const PEER_PORT: u16 = crate::allports::services::NET_THROUGHPUT_BENCH_TCP_PORT;
 const START_DELAY_MS: u64 = crate::allcaps::net::THROUGHPUT_BENCH_START_DELAY_MS;
 const DURATION_MS: u64 = crate::allcaps::net::THROUGHPUT_BENCH_DURATION_MS;
