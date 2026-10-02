@@ -59,7 +59,7 @@ impl Snapshot {
 
     pub(super) fn with_matrix(mut self, lines: &[String], generation: u64) -> Self {
         self.matrix_generation = generation;
-        let count = self.size.1.saturating_sub(3);
+        let count = self.size.1.saturating_sub(3).min(10);
         let first = lines.len().saturating_sub(count);
         for index in 0..count {
             let text = lines.get(first + index).map(String::as_str).unwrap_or("");
@@ -129,11 +129,30 @@ pub(super) fn diff_rendered_lines(
     current: &[RenderedLine],
 ) -> Vec<SegmentUpdate> {
     let mut updates = Vec::new();
-    for (index, line) in current.iter().enumerate() {
+    let count = current.len().max(previous.map_or(0, |lines| lines.len()));
+    for index in 0..count {
         let row = row_from_index(index);
-        let old = previous.and_then(|lines| lines.get(index)).map(|line| line.as_slice()).unwrap_or(&[]);
-        if let Some(update) = diff_visible_segment(row, StripSide::Left, old, line) {
-            updates.push(update);
+        let line = current.get(index).map(Vec::as_slice).unwrap_or(&[]);
+        if previous.is_none() {
+            // A fresh frame (or a cleared retry) already has its background.
+            // Emit only occupied spans, never a blit per padded blank cell.
+            let mut start = 0;
+            while start < line.len() {
+                if line[start].0 == ' ' { start += 1; continue; }
+                let mut end = start + 1;
+                while end < line.len() && line[end].0 != ' ' { end += 1; }
+                if let Some(mut update) = diff_visible_segment(row, StripSide::Left, &[], &line[start..end]) {
+                    update.offset = start;
+                    updates.push(update);
+                }
+                start = end;
+            }
+        } else {
+            // Existing pixels must still be erased when text/rows disappear.
+            let old = previous.and_then(|lines| lines.get(index)).map(Vec::as_slice).unwrap_or(&[]);
+            if let Some(update) = diff_visible_segment(row, StripSide::Left, old, line) {
+                updates.push(update);
+            }
         }
     }
     updates

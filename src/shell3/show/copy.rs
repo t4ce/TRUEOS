@@ -30,8 +30,11 @@ pub(super) async fn present(
     }
     // A later chunk can fail admission after earlier chunks changed pixels.
     // Any retry must then repaint this entire buffer, including erased cells.
-    surface.frame_contents[index] = None;
     let clearing = surface.clear_buffers[index];
+    surface.frame_contents[index] = None;
+    // Sparse fresh-frame painting requires a known background. If a later
+    // chunk fails, the next attempt must clear any partially painted pixels.
+    surface.clear_buffers[index] = true;
     if clearing || !glyphs.is_empty() {
         crate::intel::dma_cache_flush_range(view.virt, view.byte_len);
     }

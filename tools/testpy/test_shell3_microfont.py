@@ -196,6 +196,26 @@ fn matrix_transcripts_render_tail_and_clear_when_selection_changes() {
     assert!(patches.segments.iter().all(|patch|patch.text.chars().all(|ch|ch==' ')));
     let diff=update::diff_rendered_lines(Some(&lines),&blank.rendered_lines());assert_eq!(diff,patches.segments);
 }
+
+#[test]
+fn large_resize_paints_text_only_and_limits_matrix_to_ten_lines() {
+    let title=[MetaFmtStr::new("TrueOS § 12:34")];let legend=[MetaFmtStr::new("[online peer dl]")];
+    let prompt=[MetaFmtStr::new("#")];
+    let history=(0..20).map(|index|format!("cmd{} pause stop",index)).collect::<Vec<_>>();
+    let snapshot=update::Snapshot::new((640,196),0,[(&title,&legend),(&[],&[]),(&prompt,&[])],640).with_matrix(&history,1);
+    let lines=snapshot.rendered_lines();assert_eq!(lines.len(),13);
+    assert_eq!(lines[3].iter().take(5).map(|cell|cell.0).collect::<String>(),"cmd10");
+    let updates=update::diff_rendered_lines(None,&lines);
+    let cells=updates.iter().map(|patch|patch.text.chars().count()).sum::<usize>();
+    let occupied=lines.iter().flatten().filter(|cell|cell.0!=' ').count();
+    assert_eq!(cells,occupied);assert!(cells<200);assert!(cells.div_ceil(64)<=4);
+    assert!(updates.iter().all(|patch|!patch.text.contains(' ')));
+    let empty=update::Snapshot::new((640,196),0,[(&title,&legend),(&[],&[]),(&prompt,&[])],640).with_matrix(&[],2).rendered_lines();
+    assert!(update::diff_rendered_lines(None,&empty).iter().all(|patch|!matches!(patch.row,SpecialRows::MatrixRow(_))));
+    assert!(update::diff_rendered_lines(Some(&lines),&empty).iter().any(|patch|matches!(patch.row,SpecialRows::MatrixRow(_))&&patch.remove>0));
+    // Shorter current row lists must also erase old text, not leave it behind.
+    assert!(update::diff_rendered_lines(Some(&lines),&empty[..3]).iter().any(|patch|matches!(patch.row,SpecialRows::MatrixRow(_))&&patch.remove>0));
+}
 '''
     with tempfile.TemporaryDirectory(prefix='shell3-microfont-') as temporary:
         path = Path(temporary)

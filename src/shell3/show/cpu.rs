@@ -19,7 +19,7 @@ pub(super) fn present(
     let previous = surface.frame_contents[index].clone();
     let current = rendered_lines(lines);
     let mut segments = super::super::update::diff_rendered_lines(previous.as_deref(), &current);
-    if segments.is_empty() {
+    if segments.is_empty() && previous.is_some() {
         segments.extend_from_slice(fallback_segments);
     }
     let view = match writable_rgba_view(lease) {
@@ -30,6 +30,9 @@ pub(super) fn present(
         }
     };
     let clearing = surface.clear_buffers[index];
+    // A failed sparse paint must retry against a freshly cleared background.
+    surface.frame_contents[index] = None;
+    surface.clear_buffers[index] = true;
     if clearing {
         let pixels = unsafe { core::slice::from_raw_parts_mut(view.virt as *mut u8, view.byte_len) };
         for pixel in pixels.chunks_exact_mut(4) { pixel.copy_from_slice(&super::BACKGROUND.rgba()); }
