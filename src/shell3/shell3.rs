@@ -1,3 +1,6 @@
+use alloc::{string::{String, ToString}, vec, vec::Vec};
+use spin::Once;
+
 mod names;
 mod metafmtstr;
 pub mod service;
@@ -22,7 +25,7 @@ pub const MAX_SHELL3_INSTANCES: usize = 256;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
     HV = 1,
-    CMD = 2,1
+    CMD = 2,
     ADM = 3,
 }
 
@@ -112,11 +115,10 @@ impl MatrixSlotsState {
 }
 
 // MatrixSlots is the one shared shell subsystem.
-static MATRIX_SLOTS: std::sync::OnceLock<std::sync::RwLock<MatrixSlotsState>> =
-    std::sync::OnceLock::new();
+static MATRIX_SLOTS: Once<spin::Mutex<MatrixSlotsState>> = Once::new();
 
-fn matrix_slots() -> &'static std::sync::RwLock<MatrixSlotsState> {
-    MATRIX_SLOTS.get_or_init(|| std::sync::RwLock::new(MatrixSlotsState::new()))
+fn matrix_slots() -> &'static spin::Mutex<MatrixSlotsState> {
+    MATRIX_SLOTS.call_once(|| spin::Mutex::new(MatrixSlotsState::new()))
 }
 
 fn matrix_slots_meta(ids: &[String]) -> Vec<MetaFmtStr> {
@@ -142,7 +144,7 @@ fn matrix_slots_text(ids: &[String]) -> String {
 }
 
 fn current_matrix_slots_text() -> String {
-    let slots = matrix_slots().read().unwrap();
+    let slots = matrix_slots().lock();
     matrix_slots_text(&slots.ids)
 }
 
@@ -151,7 +153,7 @@ impl MatrixSlots {
 
     /// Shared across every Shell3. Names are supplied without the § prefix.
     pub fn set<T: AsRef<str>>(names: &[T]) {
-        let mut slots = matrix_slots().write().unwrap();
+        let mut slots = matrix_slots().lock();
         let mut ids = Vec::with_capacity(names.len());
 
         for name in names {
@@ -165,7 +167,7 @@ impl MatrixSlots {
     }
 
     pub fn slot_ids() -> Vec<String> {
-        matrix_slots().read().unwrap().ids.clone()
+        matrix_slots().lock().ids.clone()
     }
 
     pub fn get() -> String {
@@ -174,7 +176,7 @@ impl MatrixSlots {
 
     /// Returns the slot strip as text runs carrying style metadata.
     pub fn formatted() -> Vec<MetaFmtStr> {
-        let slots = matrix_slots().read().unwrap();
+        let slots = matrix_slots().lock();
         matrix_slots_meta(&slots.ids)
     }
 
@@ -401,7 +403,7 @@ impl Shell3 {
             return true;
         }
 
-        let slots = matrix_slots().read().unwrap();
+        let slots = matrix_slots().lock();
         let Some(name) = slots.ids.get(index - 1) else {
             return false;
         };
@@ -411,7 +413,7 @@ impl Shell3 {
     }
 
     pub fn select_matrix_slot_name(&mut self, name: &str) -> bool {
-        let slots = matrix_slots().read().unwrap();
+        let slots = matrix_slots().lock();
         if !slots.ids.iter().any(|id| id == name) {
             return false;
         }
@@ -426,8 +428,7 @@ impl Shell3 {
         };
 
         matrix_slots()
-            .read()
-            .unwrap()
+            .lock()
             .ids
             .iter()
             .position(|id| id == active)
@@ -437,7 +438,7 @@ impl Shell3 {
 
     pub fn active_matrix_slot_name(&self) -> Option<String> {
         let active = self.active_matrix_slot.as_deref()?;
-        let slots = matrix_slots().read().unwrap();
+        let slots = matrix_slots().lock();
         slots.ids.iter().find(|id| id.as_str() == active).cloned()
     }
 

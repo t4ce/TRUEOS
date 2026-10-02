@@ -1,6 +1,6 @@
 //! Visible strip snapshots and incremental update generation for Shell3.
 
-use alloc::{string::String, vec::Vec};
+use alloc::{string::{String, ToString}, vec::Vec};
 
 use super::{SpecialRows, StripSide};
 
