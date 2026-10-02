@@ -6,11 +6,10 @@ pub mod service;
 pub mod show;
 
 pub use metafmtstr::MetaFmtStr;
-pub use names::{GROUP_CLOSE, GROUP_OPEN};
 pub use show::{Backend as ShowBackend, Show};
 pub use update::{SegmentUpdate, UpdateBatch, UpdateCallback};
 
-use names::{ADM_NAMES, CMD_GROUPS, HV_GROUPS, RuntimeNameEntry};
+use names::{ADM_NAMES, CMD_GROUPS, HV_GROUPS};
 use alloc::{string::{String, ToString}, vec, vec::Vec};
 use spin::Once;
 
@@ -39,8 +38,6 @@ pub enum RgbaColor {
     Green = 0x34A853FF,
     Orange = 0xFB8C00FF,
 }
-
-pub use RgbaColor as Color;
 
 impl RgbaColor {
     pub const fn rgba(self) -> [u8; 4] {
@@ -297,7 +294,7 @@ pub struct Shell3 {
     prompt: PromptState,
     rows: SpecialRowsState,
     aka_names: Vec<String>,
-    appdb_runtime: Vec<RuntimeNameEntry>,
+    appdb_names: Vec<String>,
     update_callbacks: Vec<UpdateCallback>,
     update_baseline: update::Snapshot,
     show: Show,
@@ -313,6 +310,7 @@ impl Shell3 {
     pub fn new(
         time: &str,
         aka_names: Vec<String>,
+        appdb_names: Vec<String>,
         update_callbacks: Vec<UpdateCallback>,
         columns: usize,
         rows: usize,
@@ -320,12 +318,15 @@ impl Shell3 {
         let executor_slot = crate::percpu::current_slot() as u32;
         service::reserve_shell_on_executor(executor_slot)?;
 
-        Ok(Self::new_inner(time, aka_names, update_callbacks, columns, rows, executor_slot))
+        Ok(Self::new_inner(
+            time, aka_names, appdb_names, update_callbacks, columns, rows, executor_slot,
+        ))
     }
 
     pub(super) fn new_reserved(
         time: &str,
         aka_names: Vec<String>,
+        appdb_names: Vec<String>,
         update_callbacks: Vec<UpdateCallback>,
         columns: usize,
         rows: usize,
@@ -335,12 +336,15 @@ impl Shell3 {
         if actual != executor_slot {
             return Err(Shell3Error::WrongExecutor { expected: executor_slot, actual });
         }
-        Ok(Self::new_inner(time, aka_names, update_callbacks, columns, rows, executor_slot))
+        Ok(Self::new_inner(
+            time, aka_names, appdb_names, update_callbacks, columns, rows, executor_slot,
+        ))
     }
 
     fn new_inner(
         time: &str,
         aka_names: Vec<String>,
+        appdb_names: Vec<String>,
         update_callbacks: Vec<UpdateCallback>,
         columns: usize,
         rows: usize,
@@ -352,7 +356,8 @@ impl Shell3 {
         let time = time.to_string();
         let columns = columns.max(MIN_COLUMNS);
         let rows_count = rows.max(MIN_ROWS);
-        let rows_state = SpecialRowsState::new(&time, &prompt_left);
+        let mut rows_state = SpecialRowsState::new(&time, &prompt_left);
+        rows_state.title.right = appdb_names_text(&appdb_names);
 
         let status_left = current_matrix_slots_text();
         let initial = update::Snapshot::new(
@@ -377,7 +382,7 @@ impl Shell3 {
             prompt,
             rows: rows_state,
             aka_names,
-            appdb_runtime: Vec::new(),
+            appdb_names,
             update_callbacks,
             update_baseline: initial,
             show: Show::default(),
@@ -609,13 +614,10 @@ impl Shell3 {
         self.update_callbacks.push(callback);
     }
 
-    pub fn set_appdb_names(&mut self, names: &[(&str, RgbaColor)]) {
-        self.appdb_runtime.clear();
-        self.appdb_runtime
-            .extend(names.iter().map(|(name, color)| RuntimeNameEntry {
-                name: (*name).to_string(),
-                color: *color,
-            }));
+    pub fn set_appdb_names(&mut self, names: &[String]) {
+        self.appdb_names.clear();
+        self.appdb_names.extend(names.iter().cloned());
+        self.rows.title.right = appdb_names_text(&self.appdb_names);
     }
 
     pub fn parse(&self, input: &str) -> bool {
@@ -639,7 +641,7 @@ impl Shell3 {
                     .iter()
                     .any(|group| group.names.iter().any(|entry| entry.name == name))
                     || self.aka_names.iter().any(|alias| alias == name)
-                    || self.appdb_runtime.iter().any(|entry| entry.name == name)
+                    || self.appdb_names.iter().any(|entry| entry == name)
             }
             Mode::ADM => ADM_NAMES.iter().any(|entry| entry.name == name),
         }
@@ -650,9 +652,23 @@ impl Shell3 {
 pub fn newShell3(
     time: &str,
     aka_names: Vec<String>,
+    appdb_names: Vec<String>,
     updateCallbacks: Vec<UpdateCallback>,
     col: usize,
     row: usize,
 ) -> Result<Shell3, Shell3Error> {
-    Shell3::new(time, aka_names, updateCallbacks, col, row)
+    Shell3::new(time, aka_names, appdb_names, updateCallbacks, col, row)
+}
+
+fn appdb_names_text(names: &[String]) -> String {
+    let capacity = names.iter().map(String::len).sum::<usize>()
+        + names.len().saturating_sub(1);
+    let mut text = String::with_capacity(capacity);
+    for name in names {
+        if !text.is_empty() {
+            text.push(' ');
+        }
+        text.push_str(name);
+    }
+    text
 }

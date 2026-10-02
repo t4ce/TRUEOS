@@ -17,6 +17,20 @@ struct ShellOwnership {
     next_round_robin: usize,
 }
 
+struct AppDbNames {
+    generation: u64,
+    names: Vec<alloc::string::String>,
+}
+
+impl AppDbNames {
+    const fn new() -> Self {
+        Self {
+            generation: 0,
+            names: Vec::new(),
+        }
+    }
+}
+
 impl ShellOwnership {
     const fn new() -> Self {
         Self {
@@ -67,6 +81,41 @@ impl ShellOwnership {
 }
 
 static SHELL_OWNERSHIP: spin::Mutex<ShellOwnership> = spin::Mutex::new(ShellOwnership::new());
+static APPDB_NAMES: spin::Mutex<AppDbNames> = spin::Mutex::new(AppDbNames::new());
+
+/// Read app names through the current app.db API, using the archive basename
+/// convention shared by the Shell2 titlebar.
+pub fn read_appdb_names() -> Vec<alloc::string::String> {
+    crate::app_db::list()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|entry| {
+            entry
+                .archive
+                .strip_suffix(".bp")
+                .unwrap_or(entry.archive.as_str())
+                .into()
+        })
+        .collect()
+}
+
+/// Refresh the shared app-name list. Active AP executors apply a changed
+/// snapshot to every Shell3 they own on their next service pass.
+pub fn refresh_appdb_names() {
+    let names = read_appdb_names();
+    let mut current = APPDB_NAMES.lock();
+    if current.names != names {
+        current.names = names;
+        current.generation = current.generation.wrapping_add(1);
+        drop(current);
+        DRAW_WORK_AVAILABLE.notify_all();
+    }
+}
+
+fn appdb_names_snapshot() -> (u64, Vec<alloc::string::String>) {
+    let current = APPDB_NAMES.lock();
+    (current.generation, current.names.clone())
+}
 
 /// Runtime worker limit: at most half of all discovered AP cores.
 pub fn worker_limit() -> usize {
@@ -87,6 +136,7 @@ pub fn next_executor_for_shell() -> Option<u32> {
 
 /// Queue a fresh Shell3 on the executor selected by the shell distribution policy.
 pub fn request_shell3() -> Result<u32, super::Shell3Error> {
+    refresh_appdb_names();
     let mut ownership = SHELL_OWNERSHIP.lock();
     if ownership.live_shells + ownership.pending_by_slot.iter().sum::<usize>()
         >= super::MAX_SHELL3_INSTANCES
@@ -251,7 +301,15 @@ impl Shell3Executor {
         rows: usize,
     ) -> Result<usize, super::Shell3Error> {
         self.ensure_current_executor()?;
-        let shell = super::Shell3::new(time, aka_names, update_callbacks, columns, rows)?;
+        refresh_appdb_names();
+        let shell = super::Shell3::new(
+            time,
+            aka_names,
+            appdb_names_snapshot().1,
+            update_callbacks,
+            columns,
+            rows,
+        )?;
         let index = self.shells.len();
         self.shells.push(shell);
         Ok(index)
@@ -261,6 +319,7 @@ impl Shell3Executor {
         &mut self,
         time: &str,
         aka_names: Vec<alloc::string::String>,
+        appdb_names: Vec<alloc::string::String>,
         update_callbacks: Vec<super::UpdateCallback>,
         columns: usize,
         rows: usize,
@@ -269,6 +328,7 @@ impl Shell3Executor {
         let shell = super::Shell3::new_reserved(
             time,
             aka_names,
+            appdb_names,
             update_callbacks,
             columns,
             rows,
@@ -335,11 +395,15 @@ async fn draw_worker_task(worker_id: usize, expected_slot: u32) {
             return;
         }
     };
+    let mut appdb_generation = appdb_names_snapshot().0;
 
     loop {
         while has_pending_for_executor(expected_slot) && take_pending_for_executor(expected_slot) {
             let aka_names = crate::r::restart::startup_alias_names();
-            match owned_shells.create_shell_reserved("01:22", aka_names, Vec::new(), 80, 5) {
+            let appdb_names = appdb_names_snapshot().1;
+            match owned_shells.create_shell_reserved(
+                "01:22", aka_names, appdb_names, Vec::new(), 80, 5,
+            ) {
                 Ok(index) => {
                     if let Some(shell) = owned_shells.get_mut(index)
                         && let Err(error) = shell.present().await
@@ -355,6 +419,22 @@ async fn draw_worker_task(worker_id: usize, expected_slot: u32) {
                     expected_slot, error,
                 ),
             }
+        }
+
+        let (current_appdb_generation, appdb_names) = appdb_names_snapshot();
+        if current_appdb_generation != appdb_generation {
+            for index in 0..owned_shells.len() {
+                if let Some(shell) = owned_shells.get_mut(index) {
+                    shell.set_appdb_names(&appdb_names);
+                    if let Err(error) = shell.present().await {
+                        crate::log_warn!(target: "service";
+                            "sh3srv: appdb title refresh failed slot={} shell={} error={}\n",
+                            expected_slot, index, error,
+                        );
+                    }
+                }
+            }
+            appdb_generation = current_appdb_generation;
         }
 
         for event in crate::ui4::take_owner_input_events(crate::ui4::WindowOwner::SHELL3_SERVICE) {
@@ -376,7 +456,7 @@ async fn draw_worker_task(worker_id: usize, expected_slot: u32) {
                             .is_some_and(|shell| shell.show_handles_window(event.window))
                     })
                 });
-                index.and_then(|index| events.remove(index))
+                index.and_then(|index| events.swap_remove_front(index))
             };
             let Some(event) = event else { break };
             let input = crate::ui4::Ui4InputEvent::Keyboard(event);
@@ -416,6 +496,8 @@ pub async fn sh3srv_service_task(_spawner: Spawner) {
     while !crate::workers::all_topology_spawners_registered() {
         Timer::after(Duration::from_millis(25)).await;
     }
+
+    refresh_appdb_names();
 
     match start(|worker_id, slot| draw_worker_task(worker_id, slot)) {
         Ok(started) => crate::log_info!(target: "service";

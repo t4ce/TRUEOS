@@ -1,5 +1,3 @@
-use alloc::string::String;
-
 use super::RgbaColor;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -137,12 +135,6 @@ pub(super) const CMD_GROUPS: [NameGroup; 3] = [
         names: &CMD_APPDB_NAMES,
     },
 ];
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct RuntimeNameEntry {
-    pub(super) name: String,
-    pub(super) color: RgbaColor,
-}
 
 pub(super) const ADM_NAMES: [NameEntry; 10] = [
     NameEntry {

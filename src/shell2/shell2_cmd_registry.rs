@@ -761,17 +761,7 @@ pub(crate) fn titlebar_right_admin_names_text() -> AllocString {
 }
 
 fn app_db_names() -> alloc::vec::Vec<AllocString> {
-    crate::app_db::list()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|entry| {
-            entry
-                .archive
-                .strip_suffix(".bp")
-                .unwrap_or(entry.archive.as_str())
-                .into()
-        })
-        .collect()
+    crate::shell3::service::read_appdb_names()
 }
 
 fn render_default_titlebar(max_entries: usize, app_names: &[AllocString]) -> AllocString {

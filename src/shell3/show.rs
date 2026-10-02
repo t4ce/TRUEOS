@@ -12,10 +12,11 @@ use crate::ui4::{
     publish_frame_buffer, publish_window_frame, retire_frame_when_released,
     set_window_escape_key_action, Ui4FrameEscapeKeyAction, Ui4InputEvent, writable_rgba_view,
 };
+use super::RgbaColor;
 
 const OWNER: WindowOwner = WindowOwner::SHELL3_SERVICE;
-const BACKGROUND: [u8; 4] = [14, 21, 34, 255];
-const FOREGROUND: [u8; 4] = [255, 255, 255, 255];
+const BACKGROUND: RgbaColor = RgbaColor::Gray;
+const FOREGROUND: RgbaColor = RgbaColor::White;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Backend {
@@ -288,7 +289,10 @@ fn create_surface(width: u32, height: u32) -> Result<Ui4Surface, &'static str> {
         width,
         height,
         base_color: Some(PremultipliedRgba8::from_straight_rgba(
-            BACKGROUND[0], BACKGROUND[1], BACKGROUND[2], BACKGROUND[3],
+            BACKGROUND.rgba()[0],
+            BACKGROUND.rgba()[1],
+            BACKGROUND.rgba()[2],
+            BACKGROUND.rgba()[3],
         )),
     }) {
         Ok(frame) => frame,
@@ -310,7 +314,7 @@ fn create_surface(width: u32, height: u32) -> Result<Ui4Surface, &'static str> {
         session,
         frame,
         output,
-        plane: WindowPlane::Universal(super::ALPHA_OVERLAY_PLANE_SLOT as u8),
+        plane: WindowPlane::Universal(crate::ui4::ALPHA_OVERLAY_PLANE_SLOT as u8),
         placement: WindowPlacement {
             x: screen_width.saturating_sub(width) as i32 / 2,
             y: screen_height.saturating_sub(height) as i32 / 2,
@@ -356,8 +360,10 @@ fn create_surface(width: u32, height: u32) -> Result<Ui4Surface, &'static str> {
 
 fn paint_text(view: crate::ui4::FrameRgbaView, lines: [&str; 3]) -> Result<(), ()> {
     let pixels = unsafe { core::slice::from_raw_parts_mut(view.virt as *mut u8, view.byte_len) };
+    let background = BACKGROUND.rgba();
+    let foreground = FOREGROUND.rgba();
     for pixel in pixels.chunks_exact_mut(4) {
-        pixel.copy_from_slice(&BACKGROUND);
+        pixel.copy_from_slice(&background);
     }
     let width = view.width as usize;
     let height = view.height as usize;
@@ -374,7 +380,10 @@ fn paint_text(view: crate::ui4::FrameRgbaView, lines: [&str; 3]) -> Result<(), (
         let x = index % width;
         let y = index / width;
         let offset = y * view.pitch as usize + x * 4;
-        pixels.get_mut(offset..offset + 4).ok_or(())?.copy_from_slice(&FOREGROUND);
+        pixels
+            .get_mut(offset..offset + 4)
+            .ok_or(())?
+            .copy_from_slice(&foreground);
     }
     Ok(())
 }

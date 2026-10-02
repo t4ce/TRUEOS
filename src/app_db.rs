@@ -269,5 +269,8 @@ pub(crate) fn insert_download(archive: &str, bytes: &[u8]) -> Result<(), String>
     }
     write
         .commit()
-        .map_err(|err| alloc::format!("commit app.db {archive}: {err}"))
+        .map_err(|err| alloc::format!("commit app.db {archive}: {err}"))?;
+    drop(guard);
+    crate::shell3::service::refresh_appdb_names();
+    Ok(())
 }
