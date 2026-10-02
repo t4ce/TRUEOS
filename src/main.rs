@@ -69,6 +69,7 @@ mod release_count;
 mod remote_work_wake;
 mod runtime;
 mod shell2;
+mod shell3;
 mod smp;
 mod spirit;
 mod std_abi_shim;

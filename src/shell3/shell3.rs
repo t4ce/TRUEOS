@@ -1,4 +1,5 @@
 mod format;
+pub mod service;
 pub mod show;
 
 pub use format::{bold, styled};
