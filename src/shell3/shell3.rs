@@ -1,9 +1,11 @@
 mod format;
 pub mod service;
 pub mod show;
+mod update;
 
 pub use format::{bold, styled};
 pub use show::{Backend as ShowBackend, Show};
+pub use update::{SegmentUpdate, UpdateBatch, UpdateCallback};
 
 pub const OPERATOR: char = '§';
 pub const MODESTEP: char = '\t';
@@ -60,25 +62,6 @@ pub enum StripSide {
     Left = 1,
     Right = 2,
 }
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct SegmentUpdate {
-    pub row: SpecialRows,
-    pub side: StripSide,
-    pub offset: usize,
-    pub remove: usize,
-    pub text: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct UpdateBatch {
-    pub layout_changed: bool,
-    pub old_size: (usize, usize),
-    pub new_size: (usize, usize),
-    pub segments: Vec<SegmentUpdate>,
-}
-
-pub type UpdateCallback = fn(&UpdateBatch);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Shell3Error {
@@ -304,19 +287,6 @@ impl PromptState {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct VisibleRow {
-    left: String,
-    right: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct UpdateSnapshot {
-    size: (usize, usize),
-    layout_generation: usize,
-    rows: [VisibleRow; 3],
-}
-
 pub struct Shell3 {
     columns: usize,
     rows_count: usize,
@@ -329,7 +299,7 @@ pub struct Shell3 {
     aka_names: Vec<String>,
     appdb_runtime: Vec<RuntimeNameEntry>,
     update_callbacks: Vec<UpdateCallback>,
-    update_baseline: UpdateSnapshot,
+    update_baseline: update::Snapshot,
 }
 
 impl Drop for Shell3 {
@@ -357,15 +327,17 @@ impl Shell3 {
         let rows_count = rows.max(MIN_ROWS);
         let rows_state = SpecialRowsState::new(&time, &prompt_left);
 
-        let initial = UpdateSnapshot {
-            size: (columns, rows_count),
-            layout_generation: 0,
-            rows: [
-                visible_LR_strips(&rows_state.title.left, &rows_state.title.right, columns),
-                visible_LR_strips(&current_matrix_slots_text(), &rows_state.status.right, columns),
-                visible_LR_strips(&rows_state.promt.left, &rows_state.promt.right, columns),
+        let status_left = current_matrix_slots_text();
+        let initial = update::Snapshot::new(
+            (columns, rows_count),
+            0,
+            [
+                (&rows_state.title.left, &rows_state.title.right),
+                (&status_left, &rows_state.status.right),
+                (&rows_state.promt.left, &rows_state.promt.right),
             ],
-        };
+            columns,
+        );
 
         Ok(Self {
             columns,
@@ -541,61 +513,29 @@ impl Shell3 {
 
     pub fn render_strips(&self, row: SpecialRows) -> String {
         let strips = self.row_for_render(row);
-        fit_LR_strips(&strips.left, &strips.right, self.columns)
+        update::fit_lr_strips(&strips.left, &strips.right, self.columns)
     }
 
-    fn capture_update_snapshot(&self) -> UpdateSnapshot {
+    fn capture_update_snapshot(&self) -> update::Snapshot {
         let title = self.row_for_render(SpecialRows::TitleRow);
         let status = self.row_for_render(SpecialRows::StatusRow);
         let promt = self.row_for_render(SpecialRows::PromtRow);
 
-        UpdateSnapshot {
-            size: (self.columns, self.rows_count),
-            layout_generation: self.layout_generation,
-            rows: [
-                visible_LR_strips(&title.left, &title.right, self.columns),
-                visible_LR_strips(&status.left, &status.right, self.columns),
-                visible_LR_strips(&promt.left, &promt.right, self.columns),
+        update::Snapshot::new(
+            (self.columns, self.rows_count),
+            self.layout_generation,
+            [
+                (&title.left, &title.right),
+                (&status.left, &status.right),
+                (&promt.left, &promt.right),
             ],
-        }
+            self.columns,
+        )
     }
 
     pub fn take_updates(&mut self) -> UpdateBatch {
         let current = self.capture_update_snapshot();
-        let old = std::mem::replace(&mut self.update_baseline, current.clone());
-        let mut segments = Vec::new();
-
-        for index in 0..3 {
-            let row = row_from_index(index);
-            let old_row = &old.rows[row_index(row)];
-            let new_row = &current.rows[row_index(row)];
-
-            if let Some(update) =
-                diff_visible_segment(row, StripSide::Left, &old_row.left, &new_row.left)
-            {
-                segments.push(update);
-            }
-            if let Some(update) =
-                diff_visible_segment(row, StripSide::Right, &old_row.right, &new_row.right)
-            {
-                segments.push(update);
-            }
-        }
-
-        let batch = UpdateBatch {
-            layout_changed: old.layout_generation != current.layout_generation,
-            old_size: old.size,
-            new_size: current.size,
-            segments,
-        };
-
-        if batch.layout_changed || !batch.segments.is_empty() {
-            for callback in &self.update_callbacks {
-                callback(&batch);
-            }
-        }
-
-        batch
+        update::take_updates(&mut self.update_baseline, current, &self.update_callbacks)
     }
 
     pub fn add_update_callback(&mut self, callback: UpdateCallback) {
@@ -649,258 +589,3 @@ pub fn newShell3(
 ) -> Result<Shell3, Shell3Error> {
     Shell3::new(time, aka_names, updateCallbacks, col, row)
 }
-
-fn row_index(row: SpecialRows) -> usize {
-    match row {
-        SpecialRows::TitleRow => 0,
-        SpecialRows::StatusRow => 1,
-        SpecialRows::PromtRow => 2,
-    }
-}
-
-fn row_from_index(index: usize) -> SpecialRows {
-    match index {
-        0 => SpecialRows::TitleRow,
-        1 => SpecialRows::StatusRow,
-        _ => SpecialRows::PromtRow,
-    }
-}
-
-fn styled_glyphs(text: &str) -> Vec<String> {
-    let mut glyphs = Vec::new();
-    let mut pending = String::new();
-    let mut chars = text.chars().peekable();
-
-    while let Some(ch) = chars.next() {
-        if ch == '\x1b' && chars.peek() == Some(&'[') {
-            let mut sequence = String::from("\x1b");
-            sequence.push(chars.next().unwrap());
-            while let Some(next) = chars.next() {
-                sequence.push(next);
-                if next == 'm' {
-                    break;
-                }
-            }
-
-            if sequence == format::RESET && !glyphs.is_empty() && pending.is_empty() {
-                glyphs.last_mut().unwrap().push_str(&sequence);
-            } else {
-                pending.push_str(&sequence);
-            }
-            continue;
-        }
-
-        pending.push(ch);
-        glyphs.push(std::mem::take(&mut pending));
-    }
-
-    if !pending.is_empty() {
-        if let Some(last) = glyphs.last_mut() {
-            last.push_str(&pending);
-        }
-    }
-
-    glyphs
-}
-
-fn visible_len(text: &str) -> usize {
-    styled_glyphs(text).len()
-}
-
-fn take_visible(text: &str, limit: usize) -> String {
-    styled_glyphs(text)
-        .into_iter()
-        .take(limit)
-        .collect::<Vec<_>>()
-        .concat()
-}
-
-fn visible_LR_strips(left: &str, right: &str, columns: usize) -> VisibleRow {
-    let left_len = visible_len(left);
-    let right_len = visible_len(right);
-
-    if left_len + right_len <= columns {
-        return VisibleRow {
-            left: left.to_string(),
-            right: right.to_string(),
-        };
-    }
-
-    if left_len == 0 {
-        return VisibleRow {
-            left: String::new(),
-            right: take_visible(right, columns),
-        };
-    }
-
-    if right_len == 0 {
-        return VisibleRow {
-            left: take_visible(left, columns),
-            right: String::new(),
-        };
-    }
-
-    let usable = columns.saturating_sub(1);
-    let left_half = usable / 2;
-    let right_half = usable - left_half;
-
-    let (left_limit, right_limit) = if left_len < left_half {
-        (left_len, usable - left_len)
-    } else if right_len < right_half {
-        (usable - right_len, right_len)
-    } else {
-        (left_half, right_half)
-    };
-
-    VisibleRow {
-        left: take_visible(left, left_limit),
-        right: take_visible(right, right_limit),
-    }
-}
-
-fn diff_visible_segment(
-    row: SpecialRows,
-    side: StripSide,
-    old: &str,
-    new: &str,
-) -> Option<SegmentUpdate> {
-    if old == new {
-        return None;
-    }
-
-    let old_glyphs = styled_glyphs(old);
-    let new_glyphs = styled_glyphs(new);
-
-    let mut prefix = 0;
-    let prefix_limit = old_glyphs.len().min(new_glyphs.len());
-    while prefix < prefix_limit && old_glyphs[prefix] == new_glyphs[prefix] {
-        prefix += 1;
-    }
-
-    let mut suffix = 0;
-    let old_remaining = old_glyphs.len() - prefix;
-    let new_remaining = new_glyphs.len() - prefix;
-    while suffix < old_remaining.min(new_remaining)
-        && old_glyphs[old_glyphs.len() - 1 - suffix]
-            == new_glyphs[new_glyphs.len() - 1 - suffix]
-    {
-        suffix += 1;
-    }
-
-    let old_end = old_glyphs.len() - suffix;
-    let new_end = new_glyphs.len() - suffix;
-
-    Some(SegmentUpdate {
-        row,
-        side,
-        offset: prefix,
-        remove: old_end - prefix,
-        text: new_glyphs[prefix..new_end].concat(),
-    })
-}
-
-fn fit_LR_strips(left: &str, right: &str, columns: usize) -> String {
-    let visible = visible_LR_strips(left, right, columns);
-    let left_len = visible_len(&visible.left);
-    let right_len = visible_len(&visible.right);
-    let original_left_len = visible_len(left);
-    let original_right_len = visible_len(right);
-    let overflowed = original_left_len + original_right_len > columns
-        && original_left_len > 0
-        && original_right_len > 0;
-
-    if overflowed {
-        let mut output = String::with_capacity(columns);
-        output.push_str(&visible.left);
-        output.push(SpecialSeperator);
-        output.push_str(&visible.right);
-        return output;
-    }
-
-    let gap = columns.saturating_sub(left_len + right_len);
-    let mut output = String::with_capacity(columns);
-    output.push_str(&visible.left);
-    output.extend(std::iter::repeat(' ').take(gap));
-    output.push_str(&visible.right);
-    output
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct NameEntry {
-    name: &'static str,
-    color: RgbaColor,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct NameGroup {
-    name: &'static str,
-    names: &'static [NameEntry],
-}
-pub const GROUP_OPEN: char = '[';
-pub const GROUP_CLOSE: char = ']';
-
-const HV_GROUP_1: [NameEntry; 3] = [
-    NameEntry { name: "online", color: RgbaColor::White },
-    NameEntry { name: "peer", color: RgbaColor::White },
-    NameEntry { name: "dl", color: RgbaColor::White },
-];
-
-const HV_GROUP_2: [NameEntry; 3] = [
-    NameEntry { name: "status", color: RgbaColor::White },
-    NameEntry { name: "pause", color: RgbaColor::White },
-    NameEntry { name: "stop", color: RgbaColor::White },
-];
-
-const HV_GROUP_3: [NameEntry; 8] = [
-    NameEntry { name: "snap", color: RgbaColor::White },
-    NameEntry { name: "preserve", color: RgbaColor::White },
-    NameEntry { name: "eject", color: RgbaColor::White },
-    NameEntry { name: "delete", color: RgbaColor::White },
-    NameEntry { name: "kick", color: RgbaColor::White },
-    NameEntry { name: "load", color: RgbaColor::White },
-    NameEntry { name: "store", color: RgbaColor::White },
-    NameEntry { name: "probe", color: RgbaColor::White },
-];
-
-const HV_GROUPS: [NameGroup; 3] = [
-    NameGroup { name: "", names: &HV_GROUP_1 },
-    NameGroup { name: "", names: &HV_GROUP_2 },
-    NameGroup { name: "", names: &HV_GROUP_3 },
-];
-
-const CMD_AKA_NAMES: [NameEntry; 0] = [];
-
-const CMD_MEDIA_NAMES: [NameEntry; 5] = [
-    NameEntry { name: "img", color: RgbaColor::White },
-    NameEntry { name: "shot", color: RgbaColor::White },
-    NameEntry { name: "vid", color: RgbaColor::White },
-    NameEntry { name: "film", color: RgbaColor::White },
-    NameEntry { name: "cam", color: RgbaColor::White },
-];
-
-const CMD_APPDB_NAMES: [NameEntry; 0] = [];
-
-const CMD_GROUPS: [NameGroup; 3] = [
-    NameGroup { name: "Aka", names: &CMD_AKA_NAMES },
-    NameGroup { name: "Media", names: &CMD_MEDIA_NAMES },
-    NameGroup { name: "AppDB", names: &CMD_APPDB_NAMES },
-];
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct RuntimeNameEntry {
-    name: String,
-    color: RgbaColor,
-}
-
-const ADM_NAMES: [NameEntry; 10] = [
-    NameEntry { name: "cry", color: RgbaColor::Pink },
-    NameEntry { name: "disc", color: RgbaColor::Pink },
-    NameEntry { name: "tlb", color: RgbaColor::White },
-    NameEntry { name: "xhci", color: RgbaColor::White },
-    NameEntry { name: "ram", color: RgbaColor::White },
-    NameEntry { name: "smp", color: RgbaColor::White },
-    NameEntry { name: "net", color: RgbaColor::White },
-    NameEntry { name: "bios", color: RgbaColor::White },
-    NameEntry { name: "vgpu", color: RgbaColor::White },
-    NameEntry { name: "vcpy", color: RgbaColor::White },
-];
