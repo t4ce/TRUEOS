@@ -602,10 +602,14 @@ impl InputBroker {
 
         // Own the complete rectangle gesture before menus, selection or app input.
         if let Some((target, armed_ms)) = self.cursors[index].resize_latch {
-            let expired = trueos_time::Instant::now().as_millis().saturating_sub(armed_ms) >= 10_000;
-            let cancelled = pressed & !PRIMARY_BUTTON_MASK != 0 || event.wheel != 0;
+            let cancelled = resize_latch_cancelled(
+                armed_ms,
+                trueos_time::Instant::now().as_millis(),
+                pressed,
+                event.wheel,
+            );
             let window = window_snapshot_for_target(target);
-            if expired || cancelled || window.is_none() {
+            if cancelled || window.is_none() {
                 self.cursors[index].resize_latch = None;
                 self.cursors[index].selection_anchor = None;
                 // A partially drawn rectangle remains absorbed through release.
@@ -626,12 +630,16 @@ impl InputBroker {
                         if point_travel_reached(anchor, (x, y), FRAME_DRAG_GESTURE_MIN_TRAVEL_PX) {
                             let window = window.unwrap();
                             let placement = WindowPlacement {
-                                x: rect.x as i32, y: rect.y as i32,
-                                width: rect.width, height: rect.height,
+                                x: rect.x as i32,
+                                y: rect.y as i32,
+                                width: rect.width,
+                                height: rect.height,
                                 ..window.placement
                             };
                             if let Err(error) = super::window_broker::set_window_placement(
-                                target.owner, target.window, placement,
+                                target.owner,
+                                target.window,
+                                placement,
                             ) {
                                 crate::log_warn!(target: "ui4";
                                     "ui4/input: generic resize rejected error={:?}\n", error);
@@ -939,20 +947,25 @@ impl InputBroker {
                     });
                 }
             }
-            if secondary_drop && dock_target == Some(super::WindowDockTarget::GenericResize)
+            if secondary_drop
+                && dock_target == Some(super::WindowDockTarget::GenericResize)
                 && buttons_down == 0
             {
                 self.select_frame(index, None, combo_id, vcursor);
-                self.cursors[index].resize_latch = Some((
-                    WindowTarget::from(target), trueos_time::Instant::now().as_millis(),
-                ));
+                self.cursors[index].resize_latch =
+                    Some((WindowTarget::from(target), trueos_time::Instant::now().as_millis()));
                 self.cursors[index].x = width / 2;
                 self.cursors[index].y = height / 2;
                 self.cursors[index].buttons_down = 0;
-                crate::usb2::hid::center_cursor(source.controller_id, source.slot_id, source.ep_target);
+                crate::usb2::hid::center_cursor(
+                    source.controller_id,
+                    source.slot_id,
+                    source.ep_target,
+                );
                 return;
             }
-            if secondary_drop && let Some(dock_target) = dock_target
+            if secondary_drop
+                && let Some(dock_target) = dock_target
                 && dock_target != super::WindowDockTarget::GenericResize
             {
                 match super::dock_window(
@@ -1742,7 +1755,7 @@ pub(crate) async fn ui4_input_service_task(ap1_spawner: crate::workers::WorkerSp
         ),
     }
     crate::log_info!(target: "ui4";
-        "ui4/input: service online source=hid-sequence-rings cursor_wake=producer-signal keyboard_watchdog_hz={} selection=per-cursor-zero-or-one-frame+most-recent-input-focus first-click=absorb-select keyboard=global-hooks-before-ui4/hut-combo/exact-slot/recent-selector-fallback start_key=reveal-menu-button cursor=slot4-software/all-active-sources/per-frame-per-cursor hardware-cursor=preferred-physical-source/concurrent virtual=vcursor frame_drag=secondary-button/per-cursor-selected-frame-only dock=top-center-maximize+center-sides-halves+corners-quadrants/dpi-mm-first outline=primary-button/selected-frame-only desktop_menu=per-cursor/color-picker+shell owner_events=selected-frame-only screenshot=parked\n",
+        "ui4/input: service online source=hid-sequence-rings cursor_wake=producer-signal keyboard_watchdog_hz={} selection=per-cursor-zero-or-one-frame+most-recent-input-focus first-click=absorb-select keyboard=global-hooks-before-ui4/hut-combo/exact-slot/recent-selector-fallback start_key=reveal-menu-button cursor=slot4-software/all-active-sources/per-frame-per-cursor hardware-cursor=preferred-physical-source/concurrent virtual=vcursor frame_drag=secondary-button/per-cursor-selected-frame-only dock=top-center-maximize+center-sides-halves+corners-quadrants+bottom-center-resize-latch-10s/dpi-mm-first outline=primary-button/selected-frame-only desktop_menu=per-cursor/color-picker+shell owner_events=selected-frame-only screenshot=parked\n",
         super::INTERACTION_CADENCE_HZ,
     );
     loop {
@@ -2514,6 +2527,11 @@ fn stepped_cell_rect(
     })
 }
 
+/// Motion and primary input are permitted; other clicks and scrolling discard the latch.
+fn resize_latch_cancelled(armed_ms: u64, now_ms: u64, pressed: u32, wheel: i16) -> bool {
+    now_ms.saturating_sub(armed_ms) >= 10_000 || pressed & !PRIMARY_BUTTON_MASK != 0 || wheel != 0
+}
+
 fn selection_rect_between(anchor: (u32, u32), point: (u32, u32)) -> Ui4VisualRect {
     Ui4VisualRect {
         x: anchor.0.min(point.0),
@@ -2827,7 +2845,9 @@ pub(super) fn dock_zone_column_span(zone: Ui4DockZone, column: u32) -> Option<Ui
             let last = last_true_prefix(zone.rect.height, contains)?;
             (0, last)
         }
-        WindowDockTarget::BottomLeft | WindowDockTarget::BottomRight | WindowDockTarget::GenericResize => {
+        WindowDockTarget::BottomLeft
+        | WindowDockTarget::BottomRight
+        | WindowDockTarget::GenericResize => {
             let first = first_true_suffix(zone.rect.height, contains)?;
             (first, zone.rect.height.saturating_sub(1))
         }
@@ -2930,7 +2950,11 @@ fn dock_zone_local_contains(
         WindowDockTarget::GenericResize => normalized_ellipse_contains(
             x.saturating_mul(2).saturating_add(1).abs_diff(width),
             width,
-            height.saturating_sub(1).saturating_sub(y).saturating_mul(2).saturating_add(1),
+            height
+                .saturating_sub(1)
+                .saturating_sub(y)
+                .saturating_mul(2)
+                .saturating_add(1),
             height.saturating_mul(2),
         ),
         WindowDockTarget::Maximize => normalized_ellipse_contains(
