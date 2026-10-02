@@ -1,15 +1,17 @@
 //! UI4 frame ownership and plain-text Shell3 presentation.
 
-use alloc::{string::String, vec};
-use trueos_time::{Duration, Timer};
+#[path = "cpu.rs"]
+mod cpu;
+#[path = "copy.rs"]
+mod copy;
 
 use crate::ui4::{
     DamageRect, FrameBuffering, FrameCadence, FrameContent, FrameHandle, FrameSpec,
     OutputId, PremultipliedRgba8, ScanoutFormat, WindowCreate,
     WindowId, WindowInteraction, WindowOwner, WindowPlacement, WindowPlane,
-    WindowSessionCloseRequest, WindowSessionId, acquire_frame_buffer, begin_window_session,
-    cancel_frame_buffer, create_frame, create_window, destroy_frame, finish_window_session_with_request,
-    publish_frame_buffer, publish_window_frame, retire_frame_when_released,
+    WindowSessionCloseRequest, WindowSessionId, begin_window_session, create_frame,
+    create_window, destroy_frame, finish_window_session_with_request, publish_window_frame,
+    retire_frame_when_released,
     set_window_escape_key_action, Ui4FrameEscapeKeyAction, Ui4InputEvent, writable_rgba_view,
 };
 use super::RgbaColor;
@@ -38,12 +40,13 @@ pub enum Frontend {
 }
 
 struct Ui4Surface {
-    source: FrameHandle,
+    source: Option<FrameHandle>,
     frame: FrameHandle,
     session: WindowSessionId,
     window: WindowId,
     width: u32,
     height: u32,
+    backend: Backend,
     closing: bool,
 }
 
@@ -117,7 +120,7 @@ impl Show {
         }
     }
 
-    /// Present the Shell3's three text strips in a UI4 window using BCS0.
+    /// Present the Shell3's three text strips in a UI4 window.
     /// Non-ASCII symbols currently become `-`; color and formatting metadata
     /// are intentionally ignored at this stage.
     pub(crate) async fn present(
@@ -126,7 +129,7 @@ impl Show {
         columns: usize,
         rows: usize,
     ) -> Result<(), &'static str> {
-        if self.backend != Backend::Copy {
+        if !matches!(self.backend, Backend::Copy | Backend::Cpu) {
             return Err("shell3-show-backend-not-implemented");
         }
         if self.poisoned {
@@ -137,92 +140,23 @@ impl Show {
         if self
             .surface
             .as_ref()
-            .is_none_or(|surface| surface.width != width || surface.height != height)
+            .is_none_or(|surface| {
+                surface.width != width
+                    || surface.height != height
+                    || surface.backend != self.backend
+            })
         {
             self.release_surface();
-            self.surface = Some(create_surface(width, height)?);
+            self.surface = Some(create_surface(width, height, self.backend)?);
         }
         let surface = self.surface.as_ref().ok_or("shell3-show-surface-missing")?;
-        let source_lease = acquire_frame_buffer(surface.source)
-            .map_err(|_| "shell3-show-source-busy")?;
-        let source_view = match writable_rgba_view(source_lease) {
-            Ok(view) => view,
-            Err(_) => {
-                let _ = cancel_frame_buffer(source_lease);
-                return Err("shell3-show-source-view");
-            }
-        };
-        if paint_text(source_view, lines).is_err() {
-            let _ = cancel_frame_buffer(source_lease);
-            return Err("shell3-show-glyph-paint");
-        }
-        crate::intel::dma_cache_flush_range(source_view.virt, source_view.byte_len);
-
-        let destination_lease = match acquire_frame_buffer(surface.frame) {
-            Ok(lease) => lease,
-            Err(_) => {
-                let _ = cancel_frame_buffer(source_lease);
-                return Err("shell3-show-destination-busy");
-            }
-        };
-        let destination_view = match writable_rgba_view(destination_lease) {
-            Ok(view) => view,
-            Err(_) => {
-                let _ = cancel_frame_buffer(source_lease);
-                let _ = cancel_frame_buffer(destination_lease);
-                return Err("shell3-show-destination-view");
-            }
-        };
-        let source = bcs_surface(source_view);
-        let destination = bcs_surface(destination_view);
-        let copy = crate::intel::GucBcs0RgbaCopy {
-            source,
-            source_x: 0,
-            source_y: 0,
-            destination_x: 0,
-            destination_y: 0,
-            width,
-            height,
-        };
-        let submission = match crate::intel::queue_guc_bcs0_rgba_copies(destination, &[copy]) {
-            Ok(submission) => submission,
-            Err(crate::intel::GucBcs0CopySubmitError::SubmitFailed) => {
-                self.poisoned = true;
-                return Err("shell3-show-bcs0-submit-uncertain");
-            }
-            Err(_) => {
-                let _ = cancel_frame_buffer(source_lease);
-                let _ = cancel_frame_buffer(destination_lease);
-                return Err("shell3-show-bcs0-unavailable");
-            }
-        };
-        // Keep both leases and the owning session if this future is cancelled
-        // before BCS0 returns the destination allocation.
-        self.poisoned = true;
-
-        loop {
-            match crate::intel::poll_guc_bcs0_rgba_copies(submission) {
-                crate::intel::GucBcs0CopyCompletion::Pending => {
-                    Timer::after(Duration::from_millis(1)).await;
-                }
-                crate::intel::GucBcs0CopyCompletion::Complete => break,
-                crate::intel::GucBcs0CopyCompletion::Failed
-                | crate::intel::GucBcs0CopyCompletion::InvalidSubmission => {
-                    self.poisoned = true;
-                    return Err("shell3-show-bcs0-retirement-uncertain");
-                }
-            }
-        }
-
-        let _ = cancel_frame_buffer(source_lease);
-        crate::intel::dma_cache_flush_range(destination_view.virt, destination_view.byte_len);
-        if publish_frame_buffer(destination_lease).is_err() {
-            let _ = cancel_frame_buffer(destination_lease);
-            return Err("shell3-show-frame-publish");
+        match self.backend {
+            Backend::Cpu => cpu::present(surface, lines)?,
+            Backend::Copy => copy::present(surface, lines, &mut self.poisoned).await?,
+            _ => return Err("shell3-show-backend-not-implemented"),
         }
         publish_window_frame(OWNER, surface.window, DamageRect::FULL)
             .map_err(|_| "shell3-show-window-publish")?;
-        self.poisoned = false;
         Ok(())
     }
 
@@ -241,7 +175,9 @@ impl Show {
                 WindowSessionCloseRequest::default().animate_and_retire_frames(),
             );
         }
-        let _ = destroy_frame(surface.source);
+        if let Some(source) = surface.source {
+            let _ = destroy_frame(source);
+        }
     }
 }
 
@@ -272,24 +208,32 @@ fn show_extent(columns: usize, rows: usize) -> Result<(u32, u32), &'static str> 
     Ok((width, height))
 }
 
-fn create_surface(width: u32, height: u32) -> Result<Ui4Surface, &'static str> {
+fn create_surface(width: u32, height: u32, backend: Backend) -> Result<Ui4Surface, &'static str> {
     let output = OutputId::from_slot(0).ok_or("shell3-show-output-unavailable")?;
     let (screen_width, screen_height) = crate::intel::active_scanout_dimensions()
         .ok_or("shell3-show-scanout-unavailable")?;
-    let source = create_frame(FrameSpec {
-        output,
-        content: FrameContent::Image,
-        cadence: FrameCadence::Immutable,
-        buffering: FrameBuffering::Single,
-        format: ScanoutFormat::Rgba8888Premultiplied,
-        width,
-        height,
-        base_color: None,
-    })
-    .map_err(|_| "shell3-show-source-frame-create")?;
+    let source = if backend == Backend::Copy {
+        Some(create_frame(FrameSpec {
+            output,
+            content: FrameContent::Image,
+            cadence: FrameCadence::Immutable,
+            buffering: FrameBuffering::Single,
+            format: ScanoutFormat::Rgba8888Premultiplied,
+            width,
+            height,
+            base_color: None,
+        })
+        .map_err(|_| "shell3-show-source-frame-create")?)
+    } else {
+        None
+    };
     let frame = match create_frame(FrameSpec {
         output,
-        content: FrameContent::CopyEngine,
+        content: if backend == Backend::Copy {
+            FrameContent::CopyEngine
+        } else {
+            FrameContent::Image
+        },
         cadence: FrameCadence::Dirty,
         buffering: FrameBuffering::Double,
         format: ScanoutFormat::Rgba8888Premultiplied,
@@ -304,7 +248,9 @@ fn create_surface(width: u32, height: u32) -> Result<Ui4Surface, &'static str> {
     }) {
         Ok(frame) => frame,
         Err(_) => {
-            let _ = destroy_frame(source);
+            if let Some(source) = source {
+                let _ = destroy_frame(source);
+            }
             return Err("shell3-show-frame-create");
         }
     };
@@ -312,7 +258,9 @@ fn create_surface(width: u32, height: u32) -> Result<Ui4Surface, &'static str> {
         Ok(session) => session,
         Err(_) => {
             let _ = destroy_frame(frame);
-            let _ = destroy_frame(source);
+            if let Some(source) = source {
+                let _ = destroy_frame(source);
+            }
             return Err("shell3-show-session-create");
         }
     };
@@ -341,7 +289,9 @@ fn create_surface(width: u32, height: u32) -> Result<Ui4Surface, &'static str> {
                 WindowSessionCloseRequest::default().animate_and_retire_frames(),
             );
             let _ = destroy_frame(frame);
-            let _ = destroy_frame(source);
+            if let Some(source) = source {
+                let _ = destroy_frame(source);
+            }
             return Err("shell3-show-window-create");
         }
     };
@@ -351,7 +301,9 @@ fn create_surface(width: u32, height: u32) -> Result<Ui4Surface, &'static str> {
             session,
             WindowSessionCloseRequest::default().animate_and_retire_frames(),
         );
-        let _ = destroy_frame(source);
+        if let Some(source) = source {
+            let _ = destroy_frame(source);
+        }
         return Err("shell3-show-escape-policy");
     }
     Ok(Ui4Surface {
@@ -361,59 +313,7 @@ fn create_surface(width: u32, height: u32) -> Result<Ui4Surface, &'static str> {
         window,
         width,
         height,
+        backend,
         closing: false,
     })
-}
-
-fn paint_text(view: crate::ui4::FrameRgbaView, lines: [&str; 3]) -> Result<(), ()> {
-    let pixels = unsafe { core::slice::from_raw_parts_mut(view.virt as *mut u8, view.byte_len) };
-    let background = BACKGROUND.rgba();
-    let foreground = FOREGROUND.rgba();
-    for pixel in pixels.chunks_exact_mut(4) {
-        pixel.copy_from_slice(&background);
-    }
-    let width = view.width as usize;
-    let height = view.height as usize;
-    let mut glyphs = vec![0u8; width.checked_mul(height).ok_or(())?];
-    for (row, line) in lines.iter().enumerate() {
-        let text = ascii_text(line);
-        let y = i32::try_from(row.saturating_mul(microfont::FHEIGHT)).map_err(|_| ())?;
-        microfont::stamp_text(&mut glyphs, width, height, 0, y, &text, 1u8).map_err(|_| ())?;
-    }
-    for (index, alpha) in glyphs.iter().copied().enumerate() {
-        if alpha == 0 {
-            continue;
-        }
-        let x = index % width;
-        let y = index / width;
-        let offset = y * view.pitch as usize + x * 4;
-        pixels
-            .get_mut(offset..offset + 4)
-            .ok_or(())?
-            .copy_from_slice(&foreground);
-    }
-    Ok(())
-}
-
-fn ascii_text(text: &str) -> String {
-    text.chars()
-        .map(|character| {
-            if character.is_ascii_graphic() || character == ' ' {
-                character
-            } else {
-                '-'
-            }
-        })
-        .collect()
-}
-
-fn bcs_surface(view: crate::ui4::FrameRgbaView) -> crate::intel::GucBcs0RgbaSurface {
-    crate::intel::GucBcs0RgbaSurface {
-        phys: view.phys,
-        gpu: view.gpu,
-        bytes: view.byte_len,
-        width: view.width,
-        height: view.height,
-        pitch_bytes: view.pitch,
-    }
 }
