@@ -9,7 +9,8 @@ use crate::ui4::{
     WindowId, WindowInteraction, WindowOwner, WindowPlacement, WindowPlane,
     WindowSessionCloseRequest, WindowSessionId, acquire_frame_buffer, begin_window_session,
     cancel_frame_buffer, create_frame, create_window, destroy_frame, finish_window_session_with_request,
-    publish_frame_buffer, publish_window_frame, retire_frame_when_released, writable_rgba_view,
+    publish_frame_buffer, publish_window_frame, retire_frame_when_released,
+    set_window_escape_key_action, Ui4FrameEscapeKeyAction, Ui4InputEvent, writable_rgba_view,
 };
 
 const OWNER: WindowOwner = WindowOwner::SHELL3_SERVICE;
@@ -42,6 +43,7 @@ struct Ui4Surface {
     window: WindowId,
     width: u32,
     height: u32,
+    closing: bool,
 }
 
 /// Per-show backend selection and UI4 publication state.
@@ -72,6 +74,46 @@ impl Show {
 
     pub fn set_backend(&mut self, backend: Backend) {
         self.backend = backend;
+    }
+
+    pub(crate) fn is_closed(&self) -> bool {
+        self.surface
+            .as_ref()
+            .is_none_or(|surface| crate::ui4::window_is_closed(OWNER, surface.window))
+    }
+
+    pub(crate) fn handles_window(&self, window: WindowId) -> bool {
+        self.surface
+            .as_ref()
+            .is_some_and(|surface| surface.window == window)
+    }
+
+    pub(crate) fn handle_escape(&mut self, event: &Ui4InputEvent) {
+        let Ui4InputEvent::Keyboard(event) = event else { return };
+        let Some(surface) = self.surface.as_ref() else { return };
+        if event.window != surface.window
+            || event.event.kind != crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY
+            || event.event.key_code != crate::r::keyboard::KEYBOARD_KEY_ESCAPE
+        {
+            return;
+        }
+        let session = surface.session;
+        let window = surface.window;
+        if finish_window_session_with_request(
+            OWNER,
+            session,
+            WindowSessionCloseRequest::default().animate_and_retire_frames(),
+        )
+        .is_ok()
+        {
+            if let Some(surface) = self.surface.as_mut() {
+                surface.closing = true;
+            }
+            crate::log_info!(target: "service";
+                "sh3srv: Escape requested graceful UI4 close window={}\n",
+                window.raw(),
+            );
+        }
     }
 
     /// Present the Shell3's three text strips in a UI4 window using BCS0.
@@ -191,11 +233,13 @@ impl Show {
             return;
         };
         retire_frame_when_released(surface.frame);
-        let _ = finish_window_session_with_request(
-            OWNER,
-            surface.session,
-            WindowSessionCloseRequest::default().animate_and_retire_frames(),
-        );
+        if !surface.closing {
+            let _ = finish_window_session_with_request(
+                OWNER,
+                surface.session,
+                WindowSessionCloseRequest::default().animate_and_retire_frames(),
+            );
+        }
         let _ = destroy_frame(surface.source);
     }
 }
@@ -290,6 +334,15 @@ fn create_surface(width: u32, height: u32) -> Result<Ui4Surface, &'static str> {
             return Err("shell3-show-window-create");
         }
     };
+    if set_window_escape_key_action(OWNER, window, Ui4FrameEscapeKeyAction::DeliverToApplication).is_err() {
+        let _ = finish_window_session_with_request(
+            OWNER,
+            session,
+            WindowSessionCloseRequest::default().animate_and_retire_frames(),
+        );
+        let _ = destroy_frame(source);
+        return Err("shell3-show-escape-policy");
+    }
     Ok(Ui4Surface {
         source,
         frame,
@@ -297,6 +350,7 @@ fn create_surface(width: u32, height: u32) -> Result<Ui4Surface, &'static str> {
         window,
         width,
         height,
+        closing: false,
     })
 }
 

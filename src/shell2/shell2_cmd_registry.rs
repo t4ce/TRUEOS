@@ -36,6 +36,7 @@ const TOOL_JSON_DISC: &str = r#"{"type":"object","properties":{"action":{"type":
 const TOOL_JSON_GRID: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
 const TOOL_JSON_VGPU: &str = r#"{"type":"object","properties":{"command":{"type":"string","enum":["status","test","material","depth","cull","pipeline","capture","frush"],"description":"Inspect the vGPU broker, run a runtime test, select a Picasso diagnostic view, or control the Font Rush2 demo."},"frush_action":{"type":"string","enum":["start","stop","status"],"description":"Start, stop, or inspect the eight-worker Font Rush2 demo when command=frush; start is the default."},"test":{"type":"string","enum":["broker","abi","guc","compute","blit","all"],"description":"Runtime test selected when command=test."},"view":{"type":"string","enum":["pbr","base","normal","uv","solid"],"description":"Next-frame Picasso output selected when command=material; pbr restores ordinary shading."},"depth":{"type":"string","enum":["on","off"],"description":"Picasso depth test/write diagnostic selected when command=depth; on restores ordinary depth testing."},"cull":{"type":"string","enum":["on","off"],"description":"Picasso face culling diagnostic selected when command=cull; on restores material culling."},"pipeline":{"type":"string","enum":["pbr","uv","uv8"],"description":"Picasso shader pipeline diagnostic selected when command=pipeline; uv uses authored-UV shaders with current mesh buffers, pbr restores full materials. uv8 keeps the authored-UV VS and selects the baked SIMD8 PS."},"capture":{"type":"string","enum":["vue"],"description":"One-shot Picasso pre-clip vertex capture selected when command=capture; keeps rendering enabled and reports bounded diagnostic summaries."}},"required":["command"],"additionalProperties":false}"#;
 const TOOL_JSON_VCPY: &str = r#"{"type":"object","properties":{"action":{"type":"string","enum":["status","fillcheck"],"description":"Inspect BCS0 consumer counters or verify color fills and guard pixels."}},"required":["action"],"additionalProperties":false}"#;
+const TOOL_JSON_SH3: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
 #[cfg(feature = "trueos_lumen")]
 const TOOL_JSON_LUM: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
 const TOOL_JSON_NET: &str = r#"{"type":"object","properties":{"subcommand":{"type":"string","enum":["icmp","irc","nic","hostname"],"description":"net subcommand to run."},"target":{"type":"string","description":"Target host for net icmp."},"selector":{"type":"string","description":"Optional NIC selector like index, vid:pid, or bb:dd.f."},"host":{"type":"string","description":"Host for net irc."},"channel":{"type":"string","description":"Optional channel like #trueos for net irc."},"name":{"type":"string","description":"Optional hostname for net hostname."}},"required":["subcommand"],"additionalProperties":false}"#;
@@ -192,6 +193,27 @@ fn dispatch_vgpu(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> Par
 
 fn dispatch_vcpy(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
     super::cmds::vcpy::try_parse(spawner, io, rest)
+}
+
+fn dispatch_sh3(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    if !rest.trim().is_empty() {
+        super::print_shell_line(io, "sh3: usage `sh3`");
+        return ParseOutcome::Handled;
+    }
+    match crate::shell3::service::request_shell3() {
+        Ok(slot) => super::print_shell_line(
+            io,
+            alloc::format!("sh3: Shell3 queued on AP slot {slot}; Escape closes its UI4 frame").as_str(),
+        ),
+        Err(crate::shell3::Shell3Error::NoExecutor) => {
+            super::print_shell_line(io, "sh3: no Shell3 AP executor is available")
+        }
+        Err(crate::shell3::Shell3Error::InstanceLimit) => {
+            super::print_shell_line(io, "sh3: Shell3 instance limit reached")
+        }
+        Err(error) => super::print_shell_line(io, alloc::format!("sh3: {error:?}").as_str()),
+    }
+    ParseOutcome::Handled
 }
 
 fn dispatch_net(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -532,6 +554,15 @@ const SHELL2_COMMAND_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         tool_parameters_json: Some(TOOL_JSON_SMP),
     },
     BuiltinShell2CmdEntry {
+        name: "sh3",
+        mode: "cmd",
+        color: Some(STATUS_GRAY_RGB),
+        advertised: true,
+        handler: dispatch_sh3,
+        tool_description: Some("Launch a Shell3 instance on its assigned AP with a UI4 frame; Escape closes it."),
+        tool_parameters_json: Some(TOOL_JSON_SH3),
+    },
+    BuiltinShell2CmdEntry {
         name: "ssh",
         mode: "tui",
         color: Some(STATUS_NETWORK_RGB),
@@ -716,7 +747,7 @@ pub(crate) fn try_dispatch(
 
 const TITLEBAR_MEDIA_COMMANDS: &[&str] = &["img", "shot", "vid", "film", "cam"];
 const TITLEBAR_ADMIN_COMMANDS: &[&str] = &[
-    "cry", "disc", "tlb", "xhci", "ram", "smp", "net", "bios", "vgpu", "vcpy",
+    "cry", "disc", "tlb", "xhci", "ram", "smp", "sh3", "net", "bios", "vgpu", "vcpy",
 ];
 /// Render Shell2's default aliases, media controls, and live app.db names.
 pub(crate) fn titlebar_right_default_names_text() -> AllocString {

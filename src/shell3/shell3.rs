@@ -1,11 +1,9 @@
-use alloc::{string::{String, ToString}, vec, vec::Vec};
-use spin::Once;
-
 mod names;
 mod metafmtstr;
+mod update;
+
 pub mod service;
 pub mod show;
-mod update;
 
 pub use metafmtstr::MetaFmtStr;
 pub use names::{GROUP_CLOSE, GROUP_OPEN};
@@ -13,13 +11,15 @@ pub use show::{Backend as ShowBackend, Show};
 pub use update::{SegmentUpdate, UpdateBatch, UpdateCallback};
 
 use names::{ADM_NAMES, CMD_GROUPS, HV_GROUPS, RuntimeNameEntry};
+use alloc::{string::{String, ToString}, vec, vec::Vec};
+use spin::Once;
 
+pub const MAX_SHELL3_INSTANCES: usize = 256;
 pub const OPERATOR: char = '§';
 pub const MODESTEP: char = '\t';
-pub const PROMPT_CURSOR: char = '▏';
+pub const PROMPT_CURSOR: char = '#';
 pub const MIN_COLUMNS: usize = 20;
 pub const MIN_ROWS: usize = 5;
-pub const MAX_SHELL3_INSTANCES: usize = 256;
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,6 +73,7 @@ pub enum StripSide {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Shell3Error {
     InstanceLimit,
+    NoExecutor,
     WrongExecutor { expected: u32, actual: u32 },
 }
 
@@ -319,6 +320,33 @@ impl Shell3 {
         let executor_slot = crate::percpu::current_slot() as u32;
         service::reserve_shell_on_executor(executor_slot)?;
 
+        Ok(Self::new_inner(time, aka_names, update_callbacks, columns, rows, executor_slot))
+    }
+
+    pub(super) fn new_reserved(
+        time: &str,
+        aka_names: Vec<String>,
+        update_callbacks: Vec<UpdateCallback>,
+        columns: usize,
+        rows: usize,
+        executor_slot: u32,
+    ) -> Result<Self, Shell3Error> {
+        let actual = crate::percpu::current_slot() as u32;
+        if actual != executor_slot {
+            return Err(Shell3Error::WrongExecutor { expected: executor_slot, actual });
+        }
+        Ok(Self::new_inner(time, aka_names, update_callbacks, columns, rows, executor_slot))
+    }
+
+    fn new_inner(
+        time: &str,
+        aka_names: Vec<String>,
+        update_callbacks: Vec<UpdateCallback>,
+        columns: usize,
+        rows: usize,
+        executor_slot: u32,
+    ) -> Self {
+
         let prompt = PromptState::new();
         let prompt_left = prompt.render();
         let time = time.to_string();
@@ -338,7 +366,7 @@ impl Shell3 {
             columns,
         );
 
-        Ok(Self {
+        Self {
             executor_slot,
             columns,
             rows_count,
@@ -353,7 +381,7 @@ impl Shell3 {
             update_callbacks,
             update_baseline: initial,
             show: Show::default(),
-        })
+        }
     }
 
     pub const fn show_backend(&self) -> ShowBackend {
@@ -362,6 +390,14 @@ impl Shell3 {
 
     pub fn set_show_backend(&mut self, backend: ShowBackend) {
         self.show.set_backend(backend);
+    }
+
+    pub(super) fn show_is_closed(&self) -> bool {
+        self.show.is_closed()
+    }
+
+    pub(super) fn show_handles_window(&self, window: crate::ui4::WindowId) -> bool {
+        self.show.handles_window(window)
     }
 
     /// Publish the current title, status, and prompt strips through UI4.

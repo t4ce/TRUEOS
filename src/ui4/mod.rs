@@ -149,7 +149,7 @@ pub(crate) use window_broker::{
     visible_windows_for_output, wait_for_window_composition_change,
     wait_for_window_first_presentation, window_composition_revision, window_escape_key_action,
     window_frame_was_presented, window_placement, window_resize_state, window_state, window_title,
-    window_transitions_active,
+    window_is_closed, window_transitions_active,
 };
 
 #[derive(Copy, Clone, Debug, Default, Eq, PartialEq)]

@@ -6,10 +6,13 @@ use trueos_time::{Duration, Timer};
 
 const TOPOLOGY_TASK_POOL_CAPACITY: usize = crate::percpu::CPU_SLOT_LIMIT;
 static DRAW_WORK_AVAILABLE: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
+static SHELL3_ESCAPE_EVENTS: spin::Mutex<heapless::Deque<crate::ui4::Ui4KeyboardEvent, 64>> =
+    spin::Mutex::new(heapless::Deque::new());
 
 struct ShellOwnership {
     worker_slots: Vec<u32>,
     shells_by_slot: [usize; crate::percpu::CPU_SLOT_LIMIT],
+    pending_by_slot: [usize; crate::percpu::CPU_SLOT_LIMIT],
     live_shells: usize,
     next_round_robin: usize,
 }
@@ -19,6 +22,7 @@ impl ShellOwnership {
         Self {
             worker_slots: Vec::new(),
             shells_by_slot: [0; crate::percpu::CPU_SLOT_LIMIT],
+            pending_by_slot: [0; crate::percpu::CPU_SLOT_LIMIT],
             live_shells: 0,
             next_round_robin: 0,
         }
@@ -35,7 +39,11 @@ impl ShellOwnership {
             .worker_slots
             .iter()
             .copied()
-            .find(|slot| self.shells_by_slot[*slot as usize] < 3)
+            .find(|slot| {
+                self.shells_by_slot[*slot as usize]
+                    + self.pending_by_slot[*slot as usize]
+                    < 3
+            })
         {
             return Some(slot);
         }
@@ -45,12 +53,12 @@ impl ShellOwnership {
         let minimum = self
             .worker_slots
             .iter()
-            .map(|slot| self.shells_by_slot[*slot as usize])
+            .map(|slot| self.shells_by_slot[*slot as usize] + self.pending_by_slot[*slot as usize])
             .min()?;
         for offset in 0..self.worker_slots.len() {
             let index = (self.next_round_robin + offset) % self.worker_slots.len();
             let slot = self.worker_slots[index];
-            if self.shells_by_slot[slot as usize] == minimum {
+            if self.shells_by_slot[slot as usize] + self.pending_by_slot[slot as usize] == minimum {
                 return Some(slot);
             }
         }
@@ -71,9 +79,54 @@ pub fn worker_limit() -> usize {
 /// the least-loaded executor, with ties resolved round-robin.
 pub fn next_executor_for_shell() -> Option<u32> {
     let ownership = SHELL_OWNERSHIP.lock();
-    (ownership.live_shells < super::MAX_SHELL3_INSTANCES)
+    (ownership.live_shells + ownership.pending_by_slot.iter().sum::<usize>()
+        < super::MAX_SHELL3_INSTANCES)
         .then(|| ownership.preferred_slot())
         .flatten()
+}
+
+/// Queue a fresh Shell3 on the executor selected by the shell distribution policy.
+pub fn request_shell3() -> Result<u32, super::Shell3Error> {
+    let mut ownership = SHELL_OWNERSHIP.lock();
+    if ownership.live_shells + ownership.pending_by_slot.iter().sum::<usize>()
+        >= super::MAX_SHELL3_INSTANCES
+    {
+        return Err(super::Shell3Error::InstanceLimit);
+    }
+    let Some(slot) = ownership.preferred_slot() else {
+        return Err(super::Shell3Error::NoExecutor);
+    };
+    ownership.pending_by_slot[slot as usize] += 1;
+    drop(ownership);
+    DRAW_WORK_AVAILABLE.notify_all();
+    Ok(slot)
+}
+
+fn take_pending_for_executor(slot: u32) -> bool {
+    let mut ownership = SHELL_OWNERSHIP.lock();
+    let Some(pending) = ownership.pending_by_slot.get_mut(slot as usize) else {
+        return false;
+    };
+    if *pending == 0 {
+        return false;
+    }
+    *pending -= 1;
+    ownership.shells_by_slot[slot as usize] += 1;
+    ownership.live_shells += 1;
+    if let Some(index) = ownership.worker_slots.iter().position(|worker_slot| *worker_slot == slot)
+        && !ownership.worker_slots.is_empty()
+    {
+        ownership.next_round_robin = (index + 1) % ownership.worker_slots.len();
+    }
+    true
+}
+
+fn has_pending_for_executor(slot: u32) -> bool {
+    SHELL_OWNERSHIP
+        .lock()
+        .pending_by_slot
+        .get(slot as usize)
+        .is_some_and(|pending| *pending != 0)
 }
 
 pub(super) fn live_shell_count() -> usize {
@@ -82,7 +135,9 @@ pub(super) fn live_shell_count() -> usize {
 
 pub(super) fn reserve_shell_on_executor(slot: u32) -> Result<(), super::Shell3Error> {
     let mut ownership = SHELL_OWNERSHIP.lock();
-    if ownership.live_shells >= super::MAX_SHELL3_INSTANCES {
+    if ownership.live_shells + ownership.pending_by_slot.iter().sum::<usize>()
+        >= super::MAX_SHELL3_INSTANCES
+    {
         return Err(super::Shell3Error::InstanceLimit);
     }
     if let Some(expected) = ownership.preferred_slot()
@@ -202,6 +257,28 @@ impl Shell3Executor {
         Ok(index)
     }
 
+    fn create_shell_reserved(
+        &mut self,
+        time: &str,
+        aka_names: Vec<alloc::string::String>,
+        update_callbacks: Vec<super::UpdateCallback>,
+        columns: usize,
+        rows: usize,
+    ) -> Result<usize, super::Shell3Error> {
+        self.ensure_current_executor()?;
+        let shell = super::Shell3::new_reserved(
+            time,
+            aka_names,
+            update_callbacks,
+            columns,
+            rows,
+            self.slot,
+        )?;
+        let index = self.shells.len();
+        self.shells.push(shell);
+        Ok(index)
+    }
+
     pub fn get(&self, index: usize) -> Option<&super::Shell3> {
         self.ensure_current_executor().ok()?;
         self.shells.get(index)
@@ -246,7 +323,7 @@ async fn draw_worker_task(worker_id: usize, expected_slot: u32) {
         return;
     }
 
-    let _owned_shells = match Shell3Executor::new(expected_slot) {
+    let mut owned_shells = match Shell3Executor::new(expected_slot) {
         Ok(owner) => owner,
         Err(error) => {
             crate::log_warn!(target: "service";
@@ -260,9 +337,75 @@ async fn draw_worker_task(worker_id: usize, expected_slot: u32) {
     };
 
     loop {
-        let observed = DRAW_WORK_AVAILABLE.observe();
-        DRAW_WORK_AVAILABLE.wait_after(observed).await;
-        // The draw queue and CPU/render/copy execution paths will be attached here.
+        while has_pending_for_executor(expected_slot) && take_pending_for_executor(expected_slot) {
+            let aka_names = crate::r::restart::startup_alias_names();
+            match owned_shells.create_shell_reserved("01:22", aka_names, Vec::new(), 80, 5) {
+                Ok(index) => {
+                    if let Some(shell) = owned_shells.get_mut(index)
+                        && let Err(error) = shell.present().await
+                    {
+                        crate::log_warn!(target: "service";
+                            "sh3srv: initial presentation failed slot={} shell={} error={}\n",
+                            expected_slot, index, error,
+                        );
+                    }
+                }
+                Err(error) => crate::log_warn!(target: "service";
+                    "sh3srv: queued shell creation failed slot={} error={:?}\n",
+                    expected_slot, error,
+                ),
+            }
+        }
+
+        for event in crate::ui4::take_owner_input_events(crate::ui4::WindowOwner::SHELL3_SERVICE) {
+            if let crate::ui4::Ui4InputEvent::Keyboard(event) = event
+                && event.event.kind == crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY
+                && event.event.key_code == crate::r::keyboard::KEYBOARD_KEY_ESCAPE
+            {
+                let _ = SHELL3_ESCAPE_EVENTS.lock().push_back(event);
+            }
+        }
+
+        loop {
+            let event = {
+                let mut events = SHELL3_ESCAPE_EVENTS.lock();
+                let index = events.iter().position(|event| {
+                    (0..owned_shells.len()).any(|index| {
+                        owned_shells
+                            .get(index)
+                            .is_some_and(|shell| shell.show_handles_window(event.window))
+                    })
+                });
+                index.and_then(|index| events.remove(index))
+            };
+            let Some(event) = event else { break };
+            let input = crate::ui4::Ui4InputEvent::Keyboard(event);
+            for index in 0..owned_shells.len() {
+                if let Some(shell) = owned_shells.get_mut(index) {
+                    shell.show.handle_escape(&input);
+                }
+            }
+        }
+
+        // Keep each owner alive through UI4's close animation, then drop the
+        // Shell3 and its leased frame on the same AP.
+        for index in (0..owned_shells.len()).rev() {
+            let closed = owned_shells
+                .get(index)
+                .is_some_and(super::Shell3::show_is_closed);
+            if closed {
+                owned_shells.drop_shell(index);
+            }
+        }
+
+        if owned_shells.is_empty() {
+            let observed = DRAW_WORK_AVAILABLE.observe();
+            if !has_pending_for_executor(expected_slot) {
+                DRAW_WORK_AVAILABLE.wait_after(observed).await;
+            }
+        } else {
+            Timer::after(Duration::from_millis(50)).await;
+        }
     }
 }
 

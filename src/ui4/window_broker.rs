@@ -2268,6 +2268,17 @@ pub(crate) fn window_state(
     Ok((window.placement, window.interaction))
 }
 
+pub(crate) fn window_is_closed(owner: WindowOwner, id: WindowId) -> bool {
+    let Ok((slot, generation)) = unpack_handle(id.0) else {
+        return true;
+    };
+    WINDOW_BROKER
+        .lock()
+        .windows
+        .get(slot)
+        .is_none_or(|window| window.generation != generation || window.owner != owner || window.state == WindowState::Closed)
+}
+
 /// Atomically apply the Blueprint-visible state fields. Hidden windows remain
 /// non-composable and are excluded from input hit testing by the broker's
 /// normal visible-window snapshot filter.
