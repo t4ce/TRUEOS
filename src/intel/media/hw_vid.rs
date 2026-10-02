@@ -372,7 +372,7 @@ impl PreparedTrueosFsVideo {
 }
 
 /// Open an H.264 asset and inspect its initial SPS without loading its payload.
-/// Annex-B and classic MP4 use on-demand range reads; fragmented MP4 retains
+/// Annex-B, classic MP4, and indexed Matroska AVC use on-demand range reads; fragmented MP4 retains
 /// the existing buffered compatibility path.
 /// The returned visible extent comes from the same SPS parser used to build
 /// VDBOX commands.
@@ -1921,6 +1921,399 @@ async fn h264_fs_read_exact(
     Ok(())
 }
 
+// Matroska AVC indexing uses only element/block headers. Compressed pictures
+// stay in TRUEOSFS and use the same range reader as MP4 (no transcoding).
+fn mkv_vint(data: &[u8], keep_marker: bool) -> Result<(u64, usize), &'static str> {
+    let first = *data.first().ok_or("mkv truncated vint")?;
+    let width = first.leading_zeros() as usize + 1;
+    if width > 8 || data.len() < width {
+        return Err("mkv invalid vint");
+    }
+    let mut value = if keep_marker {
+        first as u64
+    } else {
+        (first as u64) & (0xffu64 >> width)
+    };
+    for byte in &data[1..width] {
+        value = (value << 8) | *byte as u64;
+    }
+    Ok((value, width))
+}
+
+struct MkvIndexReader {
+    session: crate::ui4::VideoPlaybackSession,
+    file: crate::r::fs::trueosfs::FileReadHandle,
+}
+impl MkvIndexReader {
+    async fn bytes(&self, start: usize, end: usize) -> Result<Vec<u8>, &'static str> {
+        if end < start
+            || end as u64 > self.file.data_len()
+            || end - start > H264_FS_METADATA_CAP_BYTES
+        {
+            return Err("mkv metadata outside streaming limit");
+        }
+        let mut data = alloc::vec![0; end - start];
+        h264_fs_read_exact(self.session, self.file, start as u64, &mut data).await?;
+        Ok(data)
+    }
+    async fn element(
+        &self,
+        start: usize,
+        limit: usize,
+    ) -> Result<(u64, usize, usize), &'static str> {
+        let data = self
+            .bytes(start, start.saturating_add(12).min(limit))
+            .await?;
+        let (id, n) = mkv_vint(&data, true)?;
+        if n > 4 {
+            return Err("mkv invalid element id");
+        }
+        let (size, m) = mkv_vint(&data[n..], false)?;
+        let payload = start + n + m;
+        let end = if size == (1u64 << (7 * m)) - 1 {
+            if id != 0x18538067 {
+                return Err("mkv unknown size supported only for Segment");
+            }
+            limit
+        } else {
+            payload
+                .checked_add(usize::try_from(size).map_err(|_| "mkv element too large")?)
+                .filter(|end| *end <= limit)
+                .ok_or("mkv element outside parent")?
+        };
+        Ok((id, payload, end))
+    }
+    async fn uint(&self, start: usize, end: usize) -> Result<u64, &'static str> {
+        if end <= start || end - start > 8 {
+            return Err("mkv invalid unsigned integer");
+        }
+        Ok(self
+            .bytes(start, end)
+            .await?
+            .iter()
+            .fold(0, |v, b| (v << 8) | *b as u64))
+    }
+}
+
+async fn mkv_open_avc_index(
+    session: crate::ui4::VideoPlaybackSession,
+    file: crate::r::fs::trueosfs::FileReadHandle,
+) -> Result<MkvAvcIndex, &'static str> {
+    let r = MkvIndexReader { session, file };
+    let len = usize::try_from(file.data_len()).map_err(|_| "mkv file too large")?;
+    let mut pos = 0;
+    let (segment_start, segment_end) = loop {
+        if pos >= len {
+            return Err("mkv missing Segment");
+        }
+        let (id, start, end) = r.element(pos, len).await?;
+        if id == 0x18538067 {
+            break (start, end);
+        }
+        pos = end;
+    };
+    let mut scale = 1_000_000u64;
+    let mut selected = None;
+    let mut duration = 0u32;
+    pos = segment_start;
+    while pos < segment_end {
+        let (id, start, end) = r.element(pos, segment_end).await?;
+        if id == 0x1549A966 {
+            let mut p = start;
+            while p < end {
+                let (id, a, b) = r.element(p, end).await?;
+                if id == 0x2AD7B1 {
+                    scale = r.uint(a, b).await?;
+                }
+                p = b;
+            }
+        } else if id == 0x1654AE6B {
+            let mut p = start;
+            while p < end {
+                let (id, a, b) = r.element(p, end).await?;
+                if id == 0xAE && selected.is_none() {
+                    let mut q = a;
+                    let mut number = 0;
+                    let mut kind = 0;
+                    let mut codec = Vec::new();
+                    let mut private = Vec::new();
+                    let mut default_duration = 0;
+                    let mut unsupported = false;
+                    while q < b {
+                        let (id, c, d) = r.element(q, b).await?;
+                        match id {
+                            0xD7 => number = r.uint(c, d).await?,
+                            0x83 => kind = r.uint(c, d).await?,
+                            0x86 => codec = r.bytes(c, d).await?,
+                            0x63A2 => private = r.bytes(c, d).await?,
+                            0x23E383 => default_duration = r.uint(c, d).await?,
+                            // Reject transformations rather than silently corrupting samples/timing.
+                            0x6D80 | 0x23314F | 0x56AA | 0x537F => unsupported = true,
+                            _ => {}
+                        }
+                        q = d;
+                    }
+                    if kind == 1 && codec == b"V_MPEG4/ISO/AVC" {
+                        if unsupported {
+                            return Err(
+                                "mkv AVC track has unsupported encoding or timing transform",
+                            );
+                        }
+                        let track_id =
+                            u32::try_from(number).map_err(|_| "mkv track number too large")?;
+                        if track_id == 0 {
+                            return Err("mkv invalid track number");
+                        }
+                        duration = u32::try_from(default_duration)
+                            .map_err(|_| "mkv frame duration too large")?;
+                        if duration == 0 {
+                            return Err("mkv AVC track needs DefaultDuration");
+                        }
+                        let (length_size, sps, pps) = mp4_parse_avcc(&private, 0, private.len())?;
+                        selected = Some(Mp4AvcTrack {
+                            track_id,
+                            timescale: 1_000_000_000,
+                            length_size,
+                            colour: None,
+                            sps,
+                            pps,
+                            samples: Vec::new(),
+                        });
+                    }
+                }
+                p = b;
+            }
+        } else if id == 0x1F43B675 {
+            // Stop at the first cluster: do not scan the episode before UI4 opens.
+            break;
+        }
+        pos = end;
+    }
+    if scale == 0 {
+        return Err("mkv zero TimestampScale");
+    }
+    let track = selected.ok_or("mkv AVC metadata must precede first Cluster")?;
+    Ok(MkvAvcIndex {
+        r,
+        track,
+        scale,
+        duration,
+        pos,
+        segment_end,
+        cluster_end: pos,
+        timestamp: 0,
+        pending: None,
+        finished: false,
+        last_group_max_pts: None,
+    })
+}
+
+struct MkvAvcIndex {
+    r: MkvIndexReader,
+    track: Mp4AvcTrack,
+    scale: u64,
+    duration: u32,
+    pos: usize,
+    segment_end: usize,
+    cluster_end: usize,
+    timestamp: u64,
+    pending: Option<Mp4SampleRef>,
+    finished: bool,
+    last_group_max_pts: Option<i64>,
+}
+
+impl MkvAvcIndex {
+    // Index only the next closed group of pictures. This bounds startup disk
+    // work and supplies a complete PTS order before any picture in that group
+    // is presented. Payloads are still read only by the NAL reader.
+    async fn next_group(&mut self) -> Result<bool, &'static str> {
+        if self.finished {
+            return Ok(false);
+        }
+        let first = self.track.samples.len();
+        if let Some(sample) = self.pending.take() {
+            self.track.samples.push(sample);
+        }
+        loop {
+            let Some(sample) = self.next_sample().await? else {
+                self.finished = true;
+                break;
+            };
+            if sample.keyframe && self.track.samples.len() > first {
+                self.pending = Some(sample);
+                break;
+            }
+            self.track.samples.push(sample);
+            if self.track.samples.len() - first > 4096 {
+                return Err("mkv GOP exceeds streaming lookahead limit");
+            }
+        }
+        let group = &self.track.samples[first..];
+        if group.is_empty() {
+            return Ok(false);
+        }
+        if !group[0].keyframe {
+            return Err("mkv streaming requires a keyframe at each GOP boundary");
+        }
+        let pts = |sample: &Mp4SampleRef| sample.decode_time as i64 + sample.composition_offset;
+        let min = group.iter().map(pts).min().unwrap();
+        let max = group.iter().map(pts).max().unwrap();
+        if self
+            .last_group_max_pts
+            .is_some_and(|previous| min < previous)
+        {
+            return Err("mkv open-GOP presentation overlap unsupported");
+        }
+        self.last_group_max_pts = Some(max);
+        crate::log_info!(target: "intel-media";
+            "intel/hw_vid: mkv-index stage=gop-ready samples={} total_samples={} file_offset={} file_bytes={} complete={} payload=on-demand\n",
+            group.len(), self.track.samples.len(), self.pos,
+            self.r.file.data_len(), self.finished as u8);
+        Ok(true)
+    }
+
+    async fn next_sample(&mut self) -> Result<Option<Mp4SampleRef>, &'static str> {
+        loop {
+            if self.r.session.is_cancelled() {
+                return Err("playback cancelled");
+            }
+            if self.pos >= self.cluster_end {
+                if self.pos >= self.segment_end {
+                    return Ok(None);
+                }
+                let (id, start, end) = self.r.element(self.pos, self.segment_end).await?;
+                self.pos = end;
+                if id != 0x1F43B675 {
+                    continue;
+                }
+                self.cluster_end = end;
+                self.pos = start;
+                let mut p = start;
+                let mut timestamp = None;
+                while p < end {
+                    let (id, a, b) = self.r.element(p, end).await?;
+                    if id == 0xE7 {
+                        timestamp = Some(self.r.uint(a, b).await?);
+                        break;
+                    }
+                    p = b;
+                }
+                self.timestamp = timestamp.ok_or("mkv cluster missing Timestamp")?;
+                Timer::after_millis(1).await;
+            }
+            let (id, a, b) = self.r.element(self.pos, self.cluster_end).await?;
+            self.pos = b;
+            let mut block = if id == 0xA3 { Some((a, b, true)) } else { None };
+            if id == 0xA0 {
+                let mut q = a;
+                let mut reference = false;
+                while q < b {
+                    let (id, c, d) = self.r.element(q, b).await?;
+                    if id == 0xA1 {
+                        block = Some((c, d, true));
+                    }
+                    if id == 0xFB {
+                        reference = true;
+                    }
+                    if id == 0xA4 {
+                        return Err("mkv CodecState changes unsupported");
+                    }
+                    q = d;
+                }
+                if reference {
+                    if let Some(block) = &mut block {
+                        block.2 = false;
+                    }
+                }
+            }
+            let Some((a, b, keyframe_flag)) = block else {
+                continue;
+            };
+            let header = self.r.bytes(a, (a + 11).min(b)).await?;
+            let (number, n) = mkv_vint(&header, false)?;
+            if number != self.track.track_id as u64 {
+                continue;
+            }
+            if header.len() < n + 3 {
+                return Err("mkv truncated block header");
+            }
+            let flags = header[n + 2];
+            if flags & 0x0e != 0 {
+                return Err("mkv laced or invisible AVC blocks unsupported");
+            }
+            let keyframe = if id == 0xA3 {
+                flags & 0x80 != 0
+            } else {
+                keyframe_flag
+            };
+            let relative = i16::from_be_bytes([header[n], header[n + 1]]) as i64;
+            let ticks = i64::try_from(self.timestamp)
+                .map_err(|_| "mkv timestamp too large")?
+                .checked_add(relative)
+                .ok_or("mkv timestamp overflow")?;
+            let pts = ticks
+                .checked_mul(i64::try_from(self.scale).map_err(|_| "mkv scale too large")?)
+                .ok_or("mkv timestamp overflow")?;
+            let offset = a + n + 3;
+            if b <= offset || b - offset > H264_FS_PICTURE_CAP_BYTES {
+                return Err("mkv AVC picture outside decoder limit");
+            }
+            if self.track.samples.len()
+                >= H264_FS_METADATA_CAP_BYTES / core::mem::size_of::<Mp4SampleRef>()
+            {
+                return Err("mkv sample index exceeds streaming limit");
+            }
+            let dts = (self.track.samples.len() as u64)
+                .checked_mul(self.duration as u64)
+                .ok_or("mkv decode time overflow")?;
+            let composition_offset = pts
+                .checked_sub(i64::try_from(dts).map_err(|_| "mkv decode time too large")?)
+                .ok_or("mkv composition time overflow")?;
+            return Ok(Some(Mp4SampleRef {
+                offset,
+                size: b - offset,
+                keyframe,
+                decode_time: dts,
+                duration: self.duration,
+                composition_offset,
+            }));
+        }
+    }
+}
+
+fn h264_extend_mkv_timing(
+    track: &Mp4AvcTrack,
+    timing: &mut Vec<H264SampleTiming>,
+    ranks: &mut Vec<usize>,
+    base_pts: &mut i64,
+) -> bool {
+    let first = timing.len();
+    if first >= track.samples.len() {
+        return false;
+    }
+    let new_timing: Vec<_> = track.samples[first..]
+        .iter()
+        .map(|sample| H264SampleTiming {
+            dts: sample.decode_time,
+            pts: sample.decode_time as i64 + sample.composition_offset,
+            duration: sample.duration,
+            timescale: track.timescale,
+            colour: track.colour,
+        })
+        .collect();
+    if first == 0 {
+        *base_pts = new_timing.iter().map(|t| t.pts).min().unwrap_or(0);
+    }
+    let mut order: Vec<_> = (0..new_timing.len()).collect();
+    order.sort_by_key(|&i| (new_timing[i].pts, new_timing[i].dts, i));
+    ranks.resize(first + new_timing.len(), 0);
+    for (rank, index) in order.into_iter().enumerate() {
+        ranks[first + index] = first + rank;
+    }
+    timing.extend(new_timing);
+    true
+}
+
 async fn h264_open_fs_reader(
     session: crate::ui4::VideoPlaybackSession,
     file: crate::r::fs::trueosfs::FileReadHandle,
@@ -1934,6 +2327,17 @@ async fn h264_open_fs_reader(
             Vec::new(),
             "trueosfs-stream-annexb",
         ));
+    }
+    if header[..len.min(16)].starts_with(&[0x1a, 0x45, 0xdf, 0xa3]) {
+        let index = mkv_open_avc_index(session, file).await?;
+        let mut prefix = Vec::new();
+        for nal in index.track.sps.iter().chain(&index.track.pps) {
+            mp4_emit_annexb_nal(&mut prefix, nal);
+        }
+        let mut reader = H264FileNalReader::new(session, file, None);
+        reader.replay = Some(H264MemoryNalReader::new(prefix, "mkv-headers"));
+        reader.mkv = Some(index);
+        return Ok((H264NalReader::File(reader), Vec::new(), "trueosfs-stream-mkv-avc"));
     }
     // Box headers let us skip mdat without reading its payload, including when
     // moov sits at the end of the file. Offsets in sample tables remain absolute.
@@ -2029,6 +2433,7 @@ struct H264FileNalReader {
     session: crate::ui4::VideoPlaybackSession,
     file: crate::r::fs::trueosfs::FileReadHandle,
     track: Option<Mp4AvcTrack>,
+    mkv: Option<MkvAvcIndex>,
     sample: usize,
     offset: u64,
     buffer_offset: u64,
@@ -2050,6 +2455,7 @@ impl H264FileNalReader {
             session,
             file,
             track,
+            mkv: None,
             sample: 0,
             offset: 0,
             buffer_offset: 0,
@@ -2083,7 +2489,7 @@ impl H264FileNalReader {
             }
             self.replay = None;
         }
-        if let Some(track) = &self.track {
+        if self.track.is_some() || self.mkv.is_some() {
             loop {
                 if let Some(reader) = &mut self.sample_reader {
                     if let Some(mut nal) = reader.next_nal().await {
@@ -2092,6 +2498,17 @@ impl H264FileNalReader {
                     }
                     self.sample_reader = None;
                 }
+                if let Some(index) = &mut self.mkv {
+                    if self.sample >= index.track.samples.len() && !index.next_group().await? {
+                        return Ok(None);
+                    }
+                }
+                let track = self
+                    .mkv
+                    .as_ref()
+                    .map(|index| &index.track)
+                    .or(self.track.as_ref())
+                    .ok_or("missing AVC track")?;
                 let Some(sample) = track.samples.get(self.sample) else {
                     return Ok(None);
                 };
@@ -2259,6 +2676,12 @@ enum H264NalReader {
 }
 
 impl H264NalReader {
+    fn mkv_track(&self) -> Option<&Mp4AvcTrack> {
+        match self {
+            Self::File(reader) => reader.mkv.as_ref().map(|index| &index.track),
+            _ => None,
+        }
+    }
     fn streaming(&self) -> bool {
         matches!(self, Self::File(_))
     }
@@ -2353,7 +2776,7 @@ async fn h264_i_p_playback_probe_with_reader(
     session: crate::ui4::VideoPlaybackSession,
     mut reader: H264NalReader,
     stream_bytes: u64,
-    sample_timing: Vec<H264SampleTiming>,
+    mut sample_timing: Vec<H264SampleTiming>,
     source: &'static str,
     path: &str,
     mode: H264PlaybackOptions,
@@ -2488,7 +2911,7 @@ async fn h264_i_p_playback_probe_with_reader(
             "intel/hw_vid: conversion-batch accepted=0 reason=prior-batch-not-idle action=ordered-wait-no-drop\n"
         );
     }
-    let playback_start = EmbassyInstant::now();
+    let mut playback_start = EmbassyInstant::now();
     let mut next_frame_deadline = playback_start;
     let timing: Vec<_> = if streaming {
         sample_timing.iter().copied().map(Some).collect()
@@ -2496,10 +2919,12 @@ async fn h264_i_p_playback_probe_with_reader(
         access_units.iter().map(|unit| unit.timing).collect()
     };
     let access_unit_count = timing.len();
-    let presentation_reordering_required = timing.windows(2).any(|pair| {
-        matches!((pair[0], pair[1]), (Some(previous), Some(next))
+    let incremental_mkv = reader.mkv_track().is_some();
+    let presentation_reordering_required = incremental_mkv
+        || timing.windows(2).any(|pair| {
+            matches!((pair[0], pair[1]), (Some(previous), Some(next))
             if (next.pts, next.dts) < (previous.pts, previous.dts))
-    });
+        });
     let mut presentation_rank = Vec::new();
     let mut base_pts = timing
         .first()
@@ -2507,7 +2932,7 @@ async fn h264_i_p_playback_probe_with_reader(
         .flatten()
         .map(|t| t.pts)
         .unwrap_or(0);
-    if presentation_reordering_required {
+    if presentation_reordering_required && !incremental_mkv {
         let mut indices: Vec<usize> = (0..access_unit_count).collect();
         indices.sort_by_key(|&i| timing[i].map(|t| (t.pts, t.dts, i)));
         base_pts = timing[indices[0]].unwrap().pts;
@@ -2552,6 +2977,16 @@ async fn h264_i_p_playback_probe_with_reader(
             }
             break;
         };
+        if let Some(track) = reader.mkv_track() {
+            if h264_extend_mkv_timing(
+                track,
+                &mut sample_timing,
+                &mut presentation_rank,
+                &mut base_pts,
+            ) {
+                presentation_slots.resize(sample_timing.len(), H264PresentationSlot::Waiting);
+            }
+        }
         if streaming && !sample_timing.is_empty() {
             let Some(t) = sample_timing.get(decode_index).copied() else {
                 first_failure_frame = attempted.saturating_add(1);
@@ -2559,6 +2994,11 @@ async fn h264_i_p_playback_probe_with_reader(
                 break;
             };
             unit.timing = Some(t);
+        }
+        if incremental_mkv && decode_index == 0 {
+            // Initial GOP lookahead is preparation time, not elapsed movie time.
+            playback_start = EmbassyInstant::now();
+            next_frame_deadline = playback_start;
         }
         stopped_at = unit.stream_offset.saturating_add(unit.bytes as u64);
         let current_decode_index = decode_index;

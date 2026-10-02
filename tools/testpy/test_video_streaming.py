@@ -23,7 +23,7 @@ use alloc::{string::String, vec::Vec};
 use std::{fmt::Write, future::Future, task::{Context, Poll, Waker}, sync::Mutex};
 const H264_TRUEOSFS_READ_CHUNK_BYTES: usize = 16;
 const H264_FS_METADATA_CAP_BYTES: usize = 32 * 1024 * 1024;
-const H264_FS_PICTURE_CAP_BYTES: usize = 4096;
+const H264_FS_PICTURE_CAP_BYTES: usize = 8 * 1024 * 1024;
 struct Rig { bytes: Vec<u8>, read: usize, short: usize, fail_at: usize, cancel: bool }
 static RIG: Mutex<Rig> = Mutex::new(Rig { bytes: Vec::new(), read: 0, short: usize::MAX, fail_at: usize::MAX, cancel: false });
 #[macro_export] macro_rules! log { ($($x:tt)*) => {}; }
@@ -86,7 +86,7 @@ fn annex(nals: &[Vec<u8>]) -> Vec<u8> {
     assert!(RIG.lock().unwrap().read < file.data_len() as usize / 2);
 }
 #[test] fn read_errors_cancel_and_oversized_nals_stop() {
-    let (session, file) = setup(annex(&[vec![0x65; 5000]]));
+    let (session, file) = setup(annex(&[vec![0x65; H264_FS_PICTURE_CAP_BYTES + 32]]));
     let mut r = H264FileNalReader::new(session, file, None);
     assert!(run(r.next_nal()).is_none()); assert!(r.failed);
     let (session, file) = setup(annex(&[vec![0x65; 100]])); RIG.lock().unwrap().fail_at = 16;
@@ -139,6 +139,103 @@ fn annex(nals: &[Vec<u8>]) -> Vec<u8> {
         assert!(timing.windows(2).any(|p| p[1].pts < p[0].pts), "fixture must exercise B-frame timing");
     }
 }
+
+// Host oracle helper: consume the exact same incremental index to EOF.
+async fn mkv_open_avc_track(
+    session: crate::ui4::VideoPlaybackSession,
+    file: crate::r::fs::trueosfs::FileReadHandle,
+) -> Result<Mp4AvcTrack, &'static str> {
+    let mut index = mkv_open_avc_index(session, file).await?;
+    while index.next_group().await? {}
+    if index.track.samples.is_empty() {
+        return Err("mkv AVC track has no pictures");
+    }
+    Ok(index.track)
+}
+
+#[test] fn mkv_vints_reject_truncation_and_zero() {
+    assert_eq!(mkv_vint(&[0x81], false).unwrap(), (1, 1));
+    assert_eq!(mkv_vint(&[0x40, 0x80], false).unwrap(), (128, 2));
+    assert!(mkv_vint(&[0], false).is_err());
+    assert!(mkv_vint(&[0x40], false).is_err());
+}
+#[test] fn real_mkv_matches_ffprobe_timestamps_and_sample_bytes() {
+    let paths = std::env::var("MKV_STREAM_FIXTURES").unwrap_or_default();
+    for path in paths.split('|').filter(|p| !p.is_empty()) {
+        let oracle = std::process::Command::new("ffprobe").args(["-v", "error", "-select_streams", "v:0", "-show_packets", "-show_entries", "packet=pts_time,size", "-of", "csv=p=0", path]).output().unwrap();
+        assert!(oracle.status.success());
+        let expected: Vec<(i64, usize)> = String::from_utf8(oracle.stdout).unwrap().lines().map(|line| {
+            let fields: Vec<_> = line.split(',').collect();
+            (((fields[0].parse::<f64>().unwrap() * 1e9).round()) as i64, fields[1].parse().unwrap())
+        }).collect();
+        let (session, file) = setup(std::fs::read(path).unwrap());
+        let track = run(mkv_open_avc_track(session, file)).unwrap();
+        assert_eq!(track.samples.len(), expected.len());
+        for (sample, (pts, size)) in track.samples.iter().zip(expected) {
+            assert_eq!(sample.decode_time as i64 + sample.composition_offset, pts);
+            assert_eq!(sample.size, size);
+        }
+        assert!(RIG.lock().unwrap().read < file.data_len() as usize / 2 + 4096, "index must skip picture payloads");
+        RIG.lock().unwrap().read = 0;
+        let (mut reader, timing, source) = run(h264_open_fs_reader(session, file)).unwrap();
+        assert_eq!(source, "trueosfs-stream-mkv-avc");
+        assert!(timing.is_empty());
+        assert!(reader.mkv_track().unwrap().samples.is_empty());
+        assert!(RIG.lock().unwrap().read < 64 * 1024, "startup must read metadata only");
+        let mut pending = None; let mut sps = None; let mut pps = None; let mut missing = 0; let mut count = 0;
+        // Check packet conversion against the indexed length-prefixed bytes.
+        for sample in track.samples.iter().take(100) {
+            let unit = run(h264_next_stream_access_unit(session, &mut reader, &mut pending, &mut sps, &mut pps, &mut missing, &mut count)).unwrap();
+            let rig = RIG.lock().unwrap();
+            let payload = &rig.bytes[sample.offset..sample.offset + sample.size];
+            let mut cursor = 0; let mut expected = Vec::new();
+            while cursor < payload.len() {
+                let size = payload[cursor..cursor+track.length_size].iter().fold(0usize, |v, b| (v<<8) | *b as usize);
+                cursor += track.length_size;
+                if matches!(payload[cursor] & 31, 1|5) { mp4_emit_annexb_nal(&mut expected, &payload[cursor..cursor+size]); }
+                cursor += size;
+            }
+            let mut actual = H264MemoryNalReader::new(unit.data, "actual");
+            let mut vcl = Vec::new();
+            while let Some(nal) = run(actual.next_nal()) { if matches!(nal.meta.nal_type, 1|5) { vcl.extend(nal.bytes); } }
+            assert_eq!(vcl, expected);
+        }
+        assert_eq!(missing, 0); assert!(!reader.failed());
+        let mut index = run(mkv_open_avc_index(session, file)).unwrap();
+        let mut incremental_timing = Vec::new(); let mut ranks = Vec::new(); let mut base = 0;
+        let before = RIG.lock().unwrap().read;
+        assert!(run(index.next_group()).unwrap());
+        if track.samples.len() > 1000 {
+            assert!(index.track.samples.len() < track.samples.len() / 10, "first GOP must not scan the episode");
+            assert!(RIG.lock().unwrap().read - before < 64 * 1024, "first GOP header I/O must be bounded");
+        }
+        loop {
+            let old_ranks = ranks.clone();
+            assert!(h264_extend_mkv_timing(&index.track, &mut incremental_timing, &mut ranks, &mut base));
+            assert_eq!(&ranks[..old_ranks.len()], old_ranks.as_slice(), "lookahead must preserve published ranks");
+            assert!(!h264_extend_mkv_timing(&index.track, &mut incremental_timing, &mut ranks, &mut base));
+            if !run(index.next_group()).unwrap() { break; }
+        }
+        let mut ordered = vec![None; ranks.len()];
+        for (i, rank) in ranks.iter().copied().enumerate() {
+            assert!(ordered[rank].replace(incremental_timing[i].pts).is_none());
+        }
+        assert!(ordered.windows(2).all(|pair| pair[0] <= pair[1]), "B frames must present in PTS order across GOPs");
+        assert_eq!(incremental_timing.len(), track.samples.len());
+        // Selected video lacing must fail explicitly, never decode lace headers.
+        let flag_offset = track.samples[0].offset - 1;
+        let original_flags = RIG.lock().unwrap().bytes[flag_offset];
+        RIG.lock().unwrap().bytes[flag_offset] |= 0x02;
+        assert_eq!(run(mkv_open_avc_track(session, file)).err(), Some("mkv laced or invisible AVC blocks unsupported"));
+        RIG.lock().unwrap().bytes[flag_offset] = original_flags;
+        RIG.lock().unwrap().short = 3;
+        assert_eq!(run(mkv_open_avc_track(session, file)).unwrap().samples.len(), track.samples.len());
+        RIG.lock().unwrap().fail_at = 0;
+        assert!(run(mkv_open_avc_track(session, file)).is_err());
+        RIG.lock().unwrap().cancel = true;
+        assert!(run(mkv_open_avc_track(session, file)).is_err());
+    }
+}
 '''
 with tempfile.TemporaryDirectory(prefix='trueos-video-streaming-') as tmp:
     src = Path(tmp) / 'test.rs'; binary = Path(tmp) / 'test'
@@ -151,7 +248,17 @@ with tempfile.TemporaryDirectory(prefix='trueos-video-streaming-') as tmp:
                 command += ['-movflags', '+faststart']
             subprocess.run(command + ['-y', str(fixture)], check=True)
             fixtures.append(str(fixture))
+    mkv_fixtures = []
+    if shutil.which('ffmpeg'):
+        fixture = Path(tmp) / 'bframes.mkv'
+        subprocess.run(['ffmpeg', '-v', 'error', '-f', 'lavfi', '-i',
+                        'color=c=blue:s=32x32:r=24000/1001', '-frames:v', '24',
+                        '-c:v', 'libx264', '-bf', '2', '-g', '4', '-y', str(fixture)], check=True)
+        mkv_fixtures.append(str(fixture))
+    import os
+    if os.environ.get('MKV_STREAM_FIXTURE'):
+        mkv_fixtures.append(os.environ['MKV_STREAM_FIXTURE'])
     src.write_text(harness + production)
     subprocess.run(['rustc', '--edition=2024', '--test', str(src), '-o', str(binary)], check=True)
     import os
-    subprocess.run([str(binary), '--test-threads=1'], check=True, env={**os.environ, 'VIDEO_STREAM_FIXTURES': ':'.join(fixtures)})
+    subprocess.run([str(binary), '--test-threads=1'], check=True, env={**os.environ, 'VIDEO_STREAM_FIXTURES': ':'.join(fixtures), 'MKV_STREAM_FIXTURES': '|'.join(mkv_fixtures)})

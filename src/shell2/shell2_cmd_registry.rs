@@ -43,6 +43,7 @@ const TOOL_JSON_NET: &str = r#"{"type":"object","properties":{"subcommand":{"typ
 const TOOL_JSON_QJS: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
 const TOOL_JSON_RAM: &str = r#"{"type":"object","properties":{"scope":{"type":"string","description":"Optional pmm, host, or numeric VM id. Omit to list all configured RAM scopes."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_SHOT: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
+const TOOL_JSON_REC: &str = r#"{"type":"object","properties":{"minutes":{"type":"integer","minimum":1,"maximum":10,"description":"Optional recording duration in minutes; omit to record until stopped."},"action":{"type":"string","enum":["stop"],"description":"Stop and save the current microphone recording."}},"additionalProperties":false}"#;
 const TOOL_JSON_FILM: &str = r#"{"type":"object","properties":{"minutes":{"type":"integer","minimum":1,"maximum":10,"description":"Screen recording duration in minutes."}},"required":["minutes"],"additionalProperties":false}"#;
 const TOOL_JSON_SMP: &str = r#"{"type":"object","properties":{"slot":{"type":"integer","minimum":0,"description":"Optional SMP slot. Omit to list all slots."}},"required":[],"additionalProperties":false}"#;
 const TOOL_JSON_IMG: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"Optional PNG/JPEG file or folder (for example apps/common/images). Omit to open the default shared gallery or a gray frame."}},"required":[],"additionalProperties":false}"#;
@@ -54,7 +55,7 @@ const TOOL_JSON_TTS: &str = r#"{"type":"object","properties":{"text":{"type":"st
 #[cfg(feature = "trueos_ttstt")]
 const TOOL_JSON_STT: &str = r#"{"type":"object","properties":{"path":{"type":"string","description":"TRUEOSFS path to a mono/stereo signed-16-bit PCM WAV file."},"language":{"type":"string","description":"Whisper language code or auto."},"translate":{"type":"boolean","description":"Translate recognized speech to English."}},"required":["path"],"additionalProperties":false}"#;
 const TOOL_JSON_TD: &str = r#"{"type":"object","properties":{},"additionalProperties":false}"#;
-const TOOL_JSON_VID: &str = r#"{"type":"object","properties":{"source":{"type":"string","enum":["fs","on","online","status","stop"],"description":"Read an AVC MP4 or H.264 Annex-B asset from TRUEOSFS, download the fixed online AVC1 MP4 asset, inspect status, or stop a playback slot."},"path":{"type":"string","description":"Optional TRUEOSFS AVC MP4 or H.264 Annex-B path when source=fs; defaults to x31_head_movie.annexb.h264. For source=stop, pass the playback slot: 1, 2 or 3."},"loop":{"type":"boolean","description":"Repeat playback while retaining the same UI4 Frame and window lifetime. Space pauses or resumes the selected UI4 video frame."}},"required":["source"],"additionalProperties":false}"#;
+const TOOL_JSON_VID: &str = r#"{"type":"object","properties":{"source":{"type":"string","enum":["fs","on","online","status","stop"],"description":"Read an AVC MP4, AVC MKV, or H.264 Annex-B asset from TRUEOSFS, download the fixed online AVC1 MP4 asset, inspect status, or stop a playback slot."},"path":{"type":"string","description":"Optional TRUEOSFS AVC MP4, AVC MKV, or H.264 Annex-B path when source=fs; defaults to x31_head_movie.annexb.h264. For source=stop, pass the playback slot: 1, 2 or 3."},"loop":{"type":"boolean","description":"Repeat playback while retaining the same UI4 Frame and window lifetime. Space pauses or resumes the selected UI4 video frame."}},"required":["source"],"additionalProperties":false}"#;
 const TOOL_JSON_XHCI: &str = r#"{"type":"object","properties":{"command":{"type":"string","enum":["status","journal","stage","read","read64","write","write64","rmw"],"description":"xHCI laboratory operation."},"stage":{"type":"integer","minimum":1,"maximum":5,"description":"Cumulative diagnostic stage."},"port":{"type":"integer","minimum":1,"maximum":255,"description":"Physical root port for mutating stages."},"offset":{"type":"string","description":"BAR-relative register offset, decimal or 0x-prefixed."},"value":{"type":"string","description":"Raw register value, decimal or 0x-prefixed."},"clear_mask":{"type":"string","description":"Raw RMW clear mask."},"set_mask":{"type":"string","description":"Raw RMW set mask."},"arm":{"type":"boolean","description":"Explicitly arm a mutating operation."},"live":{"type":"boolean","description":"Acknowledge disruption of a physically connected target."},"fused":{"type":"boolean","description":"Explicitly permit targeting the fused LED port."},"depth":{"type":"integer","minimum":1,"maximum":3,"description":"Stage-five transition-tree depth."}},"required":["command"],"additionalProperties":false}"#;
 
 fn dispatch_aud(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -139,6 +140,10 @@ fn dispatch_film(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> Par
         super::print_shell_line(io, "film: hardware encoder support is disabled in this build");
     }
     ParseOutcome::Handled
+}
+
+fn dispatch_rec(spawner: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
+    super::cmds::rec::try_parse(spawner, io, rest)
 }
 
 fn dispatch_smp(_: &Spawner, io: &'static dyn ShellBackend2, rest: &str) -> ParseOutcome {
@@ -438,6 +443,15 @@ const SHELL2_COMMAND_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         tool_parameters_json: Some(TOOL_JSON_FILM),
     },
     BuiltinShell2CmdEntry {
+        name: "rec",
+        mode: "cmd",
+        color: Some(STATUS_GREEN_RGB),
+        advertised: true,
+        handler: dispatch_rec,
+        tool_description: Some("Record HDA microphone audio to a PCM WAV in trueosfs:/recordings. rec <1-10> records for minutes; rec records until stopped. rec stop or §rec§ stops and saves."),
+        tool_parameters_json: Some(TOOL_JSON_REC),
+    },
+    BuiltinShell2CmdEntry {
         name: "td",
         mode: "cmd",
         color: Some(STATUS_GREEN_RGB),
@@ -529,7 +543,7 @@ const SHELL2_COMMAND_REGISTRY: &[BuiltinShell2CmdEntry] = &[
         advertised: true,
         handler: dispatch_vid,
         tool_description: Some(
-            "Play up to three AVC MP4 or H.264 Annex-B videos through VDBOX and UI4. Space pauses or resumes the selected window; Escape stops it. vid status inspects slots and vid stop <1|2|3> closes a slot.",
+            "Play up to three AVC MP4, AVC MKV, or H.264 Annex-B videos through VDBOX and UI4. Space pauses or resumes the selected window; Escape stops it. vid status inspects slots and vid stop <1|2|3> closes a slot.",
         ),
         tool_parameters_json: Some(TOOL_JSON_VID),
     },
@@ -745,7 +759,7 @@ pub(crate) fn try_dispatch(
     ParseOutcome::NotCommand
 }
 
-const TITLEBAR_MEDIA_COMMANDS: &[&str] = &["img", "shot", "vid", "film", "cam"];
+const TITLEBAR_MEDIA_COMMANDS: &[&str] = &["img", "shot", "vid", "film", "cam", "rec"];
 const TITLEBAR_ADMIN_COMMANDS: &[&str] = &[
     "cry", "disc", "tlb", "xhci", "ram", "smp", "sh3", "net", "bios", "vgpu", "vcpy",
 ];

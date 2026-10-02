@@ -44,6 +44,7 @@ pub(crate) mod net;
 pub(crate) mod os;
 pub(crate) mod qjs;
 pub(crate) mod ram;
+pub(crate) mod rec;
 pub(crate) mod rapl;
 pub(crate) mod run;
 pub(crate) mod shell;

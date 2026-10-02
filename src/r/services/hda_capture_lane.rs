@@ -1252,6 +1252,82 @@ pub(crate) fn copy_latest_i16(out: &mut [i16]) -> Option<CaptureRead> {
     })
 }
 
+/// Independent sequential tap; never changes the hardware or another reader.
+pub(crate) struct CaptureCursor {
+    last_read_ms: u64,
+    frames: u64,
+    restarts: u32,
+    pub channels: u8,
+}
+
+pub(crate) fn recording_cursor() -> Option<CaptureCursor> {
+    let engine = ENGINE.lock();
+    let engine = engine.as_ref()?;
+    if status().state != CaptureState::Running {
+        return None;
+    }
+    Some(CaptureCursor {
+        last_read_ms: uptime_ms(),
+        frames: engine.total_frames,
+        restarts: engine.restarts,
+        channels: engine.channels,
+    })
+}
+
+/// Copy consecutive completed frames. Stop on discontinuity instead of silently
+/// joining audio across a reset or overwriting unread data with newer samples.
+pub(crate) fn copy_recording_i16(
+    cursor: &mut CaptureCursor,
+    out: &mut [i16],
+) -> Result<CaptureRead, &'static str> {
+    let engine = ENGINE.lock();
+    let engine = engine.as_ref().ok_or("microphone capture disappeared")?;
+    if engine.restarts != cursor.restarts || engine.channels != cursor.channels {
+        return Err("microphone capture restarted; recording stopped at discontinuity");
+    }
+    if status().state != CaptureState::Running {
+        return Err("microphone capture is not running");
+    }
+    let channels = usize::from(engine.channels);
+    let capacity_frames = CAPTURE_DMA_BYTES / (2 * channels);
+    let now_ms = uptime_ms();
+    let safe_frames = capacity_frames - PCM_SAMPLE_RATE_HZ as usize / 10;
+    // LPIB is modulo the DMA ring: if polling/readers were starved for an
+    // entire lap, total_frames cannot reveal that lap. Reject a long read gap
+    // as well as a measured backlog, rather than accepting aliased old audio.
+    let safe_ms = safe_frames as u64 * 1000 / u64::from(PCM_SAMPLE_RATE_HZ);
+    if now_ms.saturating_sub(cursor.last_read_ms) >= safe_ms
+        || now_ms.saturating_sub(engine.last_progress_ms) >= safe_ms
+    {
+        return Err("microphone recording overrun risk; DMA read gap exceeded safe capacity");
+    }
+    let available = engine
+        .total_frames
+        .checked_sub(cursor.frames)
+        .ok_or("microphone capture cursor moved backwards")?;
+    // Leave 100 ms of headroom for DMA progress during the copy.
+    if available > safe_frames as u64 {
+        return Err("microphone recording overrun risk; unread audio approached DMA capacity");
+    }
+    let frames = (available as usize).min(out.len() / channels);
+    let capacity_samples = CAPTURE_DMA_BYTES / 2;
+    let end = (engine.last_lpib as usize / (2 * channels)) % capacity_frames;
+    let start = (end + capacity_frames - available as usize) % capacity_frames;
+    for (index, slot) in out.iter_mut().take(frames * channels).enumerate() {
+        let sample = (start * channels + index) % capacity_samples;
+        *slot = unsafe { core::ptr::read_volatile((engine.dma_virt as *const i16).add(sample)) };
+    }
+    cursor.frames += frames as u64;
+    cursor.last_read_ms = now_ms;
+    Ok(CaptureRead {
+        samples: frames * channels,
+        channels: engine.channels,
+        sample_rate_hz: PCM_SAMPLE_RATE_HZ,
+        sample_bits: PCM_SAMPLE_BITS,
+        total_frames: cursor.frames,
+    })
+}
+
 pub(crate) fn ensure_started_on_current_worker() -> bool {
     if STARTED.load(Ordering::Acquire) {
         return true;

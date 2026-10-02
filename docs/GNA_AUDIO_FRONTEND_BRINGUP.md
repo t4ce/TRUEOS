@@ -13,10 +13,11 @@ HDA microphone
   -> speech-detected handoff
 ```
 
-This milestone does **not** claim the GNA PCI function, program a model, start an
-HDA input stream, or generate synthetic detection results. It remains in
-`awaiting-gna` until a later hardware owner explicitly publishes state and
-observations.
+The original service-boundary milestone did not start an HDA input stream.
+The current implementation starts and observes the separate HDA-owned capture
+lane. It still does **not** claim the GNA PCI function, program a model, or
+generate synthetic detection results. Inference remains in `awaiting-gna`
+until a later hardware/model owner explicitly publishes state and observations.
 
 The central service registry admits the task only after both
 `INTEL_HDA_READY` and `BACKGROUND_AP_WORKER_READY`. The task is assigned through
@@ -54,7 +55,7 @@ A fresh boot for this milestone should establish all of the following:
 2. The system-service snapshot reports `started=1` after HDA and a background
    worker become ready.
 3. One Important record reports the path
-   `hda-microphone->gna3(noise-reduction,vad,wake-word)->speech-detected`,
+   `hda-capture->gna3(noise-reduction,vad,wake-word)->speech-detected`,
    `poll_softcap_ms=100`, `wake_log_softcap_ms=250`, and `fail_closed=1`.
 4. After ten service intervals, one Important `baremetal=poll-cadence` record
    reports observed minimum, maximum, and average interval lengths.
@@ -76,3 +77,57 @@ After the HDA/GNA owner is connected, acceptance extends with:
 Actual GNA/HDA inference validation belongs to the hardware-owner milestone;
 this checklist prevents that later work from bypassing the service, cadence,
 and logging boundary established here.
+
+## Shell2 microphone recording acceptance
+
+`rec` appears beside `img shot vid film cam` in Media. In Default mode:
+
+- `rec` records until stopped.
+- `rec 1` records for one minute; integer durations from 1 through 10 are accepted,
+  matching `film`'s units.
+- `rec stop` or `§rec§` stops and saves completed audio, including the tail.
+
+The exact Matrix slot `rec` reports progress and the final file path. Leaving
+that slot or closing the invoking frontend does not stop recording. Deleting
+or interrupting the slot stops recording; its lifetime prevents late output
+from reaching a replacement slot. Only one microphone recording runs at a time.
+`rec stop` addresses that single recorder, including when invoked from another
+shell. Screen recording and microphone recording use separate capture hardware.
+
+Output is a standard RIFF WAV containing the capture lane's native 48 kHz,
+signed 16-bit PCM, with one or two interleaved channels. Files are written to
+the preferred writable TRUEOSFS root at
+`recordings/microphone-<unix-seconds>-<monotonic-nanoseconds>.wav`.
+The command waits up to ten seconds for microphone readiness; recording duration
+starts when capture becomes ready. It does not publish GNA/VAD/wake-word results.
+
+To verify on hardware:
+
+1. Run `rec`, remain silent briefly, then speak and tap near the microphone.
+2. Check that the `rec` slot reports advancing frames and changing peak/nonzero
+   statistics. These statistics are measured PCM levels, not speech detection.
+3. Run `rec stop` or `§rec§` and check the reported saved WAV path.
+4. Retrieve that exact WAV from TRUEOSFS and play it with a WAV-capable player.
+   Confirm intelligible speech, correct speed, both channels where present,
+   and the last words before stop. A saved all-zero file is not microphone proof.
+5. Run `rec 1` to verify automatic completion; recording should play for roughly
+   one minute. Repeat while `film` runs to check the combined workload.
+
+The recorder uses an independent sequential cursor on completed HDA DMA frames;
+it never consumes another reader's samples or reconfigures capture/playback.
+A capture restart, a long read/poll gap, or an unread backlog approaching the DMA ring capacity stops
+recording and saves the valid prefix with the reason reported. It does not
+silently duplicate, skip, or join samples across that discontinuity.
+
+TRUEOSFS needs a known final length, so bounded raw PCM `.wav.part000000` chunks
+are committed during recording, then pinned reads assemble the WAV with its
+final header. Chunks are removed only after commit and length verification.
+Finalization needs space for a second copy, and the append-only filesystem does
+not reclaim deleted chunk records immediately. If saving fails, retain the
+reported chunks from that exact recording in numeric order; they are raw
+`s16le`, 48000 Hz, with the channel count reported in the error. Do not substitute
+chunks from another recording. An I/O error can prevent saving the buffered tail.
+Indefinite recording also stops before the classic RIFF 32-bit size limit.
+
+Host regression coverage: `python3 tools/testpy/test_audio_recording.py`.
+Bare-metal capture and listening acceptance remain to be performed.

@@ -23,6 +23,7 @@ mod input_broker;
 mod layer_contract;
 mod link_service;
 mod screenshot;
+pub(crate) use screenshot::writable_capture_root_handle;
 mod slot4_service;
 mod start_button;
 mod video_frame;
