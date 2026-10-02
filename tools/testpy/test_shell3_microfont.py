@@ -84,20 +84,21 @@ mod show {
             for scale in [1, 2] {
             for height in [55, 66] {
             for width in [20, 96] {
-                for text in ["§éq─A", "q", "", "Hello §"] {
+                for (row, text) in [(crate::SpecialRows::PromtRow,"§éq─A"), (crate::SpecialRows::PromtRow,"q"), (crate::SpecialRows::PromtRow,""), (crate::SpecialRows::PromtRow,"Hello §"), (crate::SpecialRows::MatrixRow(0),"online"), (crate::SpecialRows::MatrixRow(1),"net")] {
                     let mut pixels = vec![0x5Au8; 512 * 66];
                     let mut expanded = pixels.clone();
                     let view = FrameRgbaView { virt: pixels.as_mut_ptr(), byte_len: pixels.len(),
                         width, height, pitch: 512, phys: 4096, gpu: 4096 };
                     let colors = (0..text.chars().count()).map(|i| Some(if i%2==0 { crate::RgbaColor::Pink } else { crate::RgbaColor::Green })).collect();
-                    let update = crate::SegmentUpdate { row: crate::SpecialRows::PromtRow, side: crate::StripSide::Left,
+                    let update = crate::SegmentUpdate { row, side: crate::StripSide::Left,
                         offset: 1, remove: 8, text: text.into(), colors };
                     super::cpu::paint_segment(view, &update, scale).unwrap();
                     let mut glyphs = Vec::new();
                     glyphs_for_update(view, &update, scale, &mut glyphs);
-                    assert!(!glyphs.is_empty());
+                    let expected_y = match row {crate::SpecialRows::MatrixRow(index)=>(index as u32 + 3)*11*scale,_=>22*scale};
+                    assert_eq!(glyphs.is_empty(),expected_y>=height);
                     for glyph in &glyphs {
-                        assert_eq!(glyph.y, 22 * scale);
+                        assert_eq!(glyph.y, expected_y);
                         for y in 0..glyph.height { for x in 0..glyph.width {
                             let bit = glyph.mask[(y*2+x/8) as usize] & (0x80 >> (x%8)) != 0;
                             let rgba = if bit { glyph.foreground } else { glyph.background };
@@ -176,6 +177,24 @@ fn each_back_buffer_gets_its_own_color_diff() {
     assert_eq!(update::diff_rendered_lines(Some(&white), &pink).len(),1);
     assert!(update::diff_rendered_lines(Some(&pink), &pink).is_empty());
     assert_eq!(update::diff_rendered_lines(None, &pink).len(),1);
+}
+
+#[test]
+fn matrix_transcripts_render_tail_and_clear_when_selection_changes() {
+    let title=[MetaFmtStr::new("TrueOS §")];let prompt=[MetaFmtStr::new("#")];
+    let make=|rows,lines:&[String],generation|update::Snapshot::new((12,rows),0,[(&title,&[]),(&[],&[]),(&prompt,&[])],12).with_matrix(lines,generation);
+    let history=vec!["online".into(),"pause".into(),"stop".into()];
+    let snapshot=make(5,&history,1);let lines=snapshot.rendered_lines();
+    assert_eq!(lines.len(),5);assert_eq!(lines[3].iter().map(|cell|cell.0).collect::<String>(),"pause       ");
+    assert_eq!(lines[4].iter().map(|cell|cell.0).collect::<String>(),"stop        ");
+    let grown=make(6,&history,1).rendered_lines();
+    assert_eq!(grown[3].iter().map(|cell|cell.0).collect::<String>(),"online      ");
+    let blank=make(5,&[],1);let patches=update::build_updates(&snapshot,&blank,&[]);
+    assert_eq!(patches.segments.len(),2);
+    assert_eq!(patches.segments[0].row,SpecialRows::MatrixRow(0));
+    assert_eq!(patches.segments[1].row,SpecialRows::MatrixRow(1));
+    assert!(patches.segments.iter().all(|patch|patch.text.chars().all(|ch|ch==' ')));
+    let diff=update::diff_rendered_lines(Some(&lines),&blank.rendered_lines());assert_eq!(diff,patches.segments);
 }
 '''
     with tempfile.TemporaryDirectory(prefix='shell3-microfont-') as temporary:

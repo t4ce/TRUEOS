@@ -533,7 +533,7 @@ async fn shell_worker_task(worker_id: usize, expected_slot: u32) {
 
         for index in 0..owned_shells.len() {
             if let Some(shell) = owned_shells.get_mut(index)
-                && (shell.presentation_pending() || shell.font_scale_needed())
+                && (shell.presentation_pending() || shell.font_scale_needed() || shell.matrix_output_needed())
                 && let Err(error) = shell.present().await
             {
                 crate::log_warn!(target: "service";

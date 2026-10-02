@@ -11,14 +11,14 @@ use super::{Ui4Surface, rendered_lines};
 
 pub(super) fn present(
     surface: &mut Ui4Surface,
-    lines: [&[(char, Option<super::super::RgbaColor>)]; 3],
+    lines: &[&[(char, Option<super::super::RgbaColor>)]],
     fallback_segments: &[super::super::SegmentUpdate],
 ) -> Result<Option<crate::ui4::DamageRect>, &'static str> {
     let lease = acquire_frame_buffer(surface.frame).map_err(|_| "shell3-show-cpu-frame-busy")?;
     let index = lease.buffer_index as usize;
     let previous = surface.frame_contents[index].clone();
     let current = rendered_lines(lines);
-    let mut segments = super::super::update::diff_rendered_lines(previous.as_ref(), &current);
+    let mut segments = super::super::update::diff_rendered_lines(previous.as_deref(), &current);
     if segments.is_empty() {
         segments.extend_from_slice(fallback_segments);
     }
@@ -69,6 +69,7 @@ fn paint_segment(view: FrameRgbaView, segment: &super::super::SegmentUpdate, sca
         super::super::SpecialRows::TitleRow => 0usize,
         super::super::SpecialRows::StatusRow => 1,
         super::super::SpecialRows::PromtRow => 2,
+        super::super::SpecialRows::MatrixRow(index) => index + 3,
     };
     let scale = scale as usize;
     let glyph_width = microfont::FWIDTH * scale;

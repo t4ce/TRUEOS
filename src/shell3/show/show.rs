@@ -49,7 +49,7 @@ struct Ui4Surface {
     backend: Backend,
     closing: bool,
     broker_resized: bool,
-    frame_contents: [Option<[RenderedLine; 3]>; 2],
+    frame_contents: [Option<alloc::vec::Vec<RenderedLine>>; 2],
     scale: u32,
     clear_buffers: [bool; 2],
 }
@@ -142,7 +142,7 @@ impl Show {
         Some((placement.width, placement.height))
     }
 
-    pub(crate) async fn resize_to_current(&mut self, lines: [&[(char, Option<RgbaColor>)]; 3]) -> Result<(), &'static str> {
+    pub(crate) async fn resize_to_current(&mut self, lines: &[&[(char, Option<RgbaColor>)]]) -> Result<(), &'static str> {
         if self.poisoned {
             return Err("shell3-show-bcs0-allocation-pinned");
         }
@@ -233,7 +233,7 @@ impl Show {
     /// MetaFmt foreground colors are preserved; bold has no raster effect yet.
     pub(crate) async fn present(
         &mut self,
-        lines: [&[(char, Option<RgbaColor>)]; 3],
+        lines: &[&[(char, Option<RgbaColor>)]],
         columns: usize,
         rows: usize,
         batch: &super::UpdateBatch,
@@ -395,8 +395,8 @@ fn create_surface(width: u32, height: u32, backend: Backend) -> Result<Ui4Surfac
     })
 }
 
-pub(super) fn rendered_lines(lines: [&[(char, Option<RgbaColor>)]; 3]) -> [RenderedLine; 3] {
-    lines.map(|line| line.to_vec())
+pub(super) fn rendered_lines(lines: &[&[(char, Option<RgbaColor>)]]) -> alloc::vec::Vec<RenderedLine> {
+    lines.iter().map(|line| line.to_vec()).collect()
 }
 
 fn damage_for_segments(
@@ -410,6 +410,7 @@ fn damage_for_segments(
             super::SpecialRows::TitleRow => 0,
             super::SpecialRows::StatusRow => 1,
             super::SpecialRows::PromtRow => 2,
+            super::SpecialRows::MatrixRow(index) => index + 3,
         };
         let x = u32::try_from(segment.offset).ok()?.saturating_mul((microfont::FWIDTH as u32).saturating_mul(scale));
         let y = (row as u32).saturating_mul((microfont::FHEIGHT as u32).saturating_mul(scale));

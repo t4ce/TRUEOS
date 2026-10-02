@@ -36,7 +36,8 @@ struct VisibleRow {
 pub(super) struct Snapshot {
     size: (usize, usize),
     layout_generation: usize,
-    rows: [VisibleRow; 3],
+    rows: Vec<VisibleRow>,
+    matrix_generation: u64,
 }
 
 impl Snapshot {
@@ -49,18 +50,32 @@ impl Snapshot {
         Self {
             size,
             layout_generation,
+            matrix_generation: 0,
             rows: strips.map(|(left, right)| VisibleRow {
                 rendered: fit_meta_strips(left, right, columns),
-            }),
+            }).into(),
         }
     }
+
+    pub(super) fn with_matrix(mut self, lines: &[String], generation: u64) -> Self {
+        self.matrix_generation = generation;
+        let count = self.size.1.saturating_sub(3);
+        let first = lines.len().saturating_sub(count);
+        for index in 0..count {
+            let text = lines.get(first + index).map(String::as_str).unwrap_or("");
+            self.rows.push(VisibleRow { rendered: fit_meta_strips(&[MetaFmtStr::new(text)], &[], self.size.0) });
+        }
+        self
+    }
+
+    pub(super) fn matrix_generation(&self) -> u64 { self.matrix_generation }
 
     pub(super) fn size(&self) -> (usize, usize) {
         self.size
     }
 
-    pub(super) fn rendered_lines(&self) -> [RenderedLine; 3] {
-        self.rows.each_ref().map(|row| row.rendered.clone())
+    pub(super) fn rendered_lines(&self) -> Vec<RenderedLine> {
+        self.rows.iter().map(|row| row.rendered.clone()).collect()
     }
 }
 
@@ -81,13 +96,13 @@ pub(super) fn build_updates(
     callbacks: &[UpdateCallback],
 ) -> UpdateBatch {
     let mut segments = Vec::new();
-    for index in 0..3 {
+    for index in 0..baseline.rows.len().max(current.rows.len()) {
         let row = row_from_index(index);
         if let Some(update) = diff_visible_segment(
             row,
             StripSide::Left,
-            &baseline.rows[index].rendered,
-            &current.rows[index].rendered,
+            baseline.rows.get(index).map(|row| row.rendered.as_slice()).unwrap_or(&[]),
+            current.rows.get(index).map(|row| row.rendered.as_slice()).unwrap_or(&[]),
         ) {
             segments.push(update);
         }
@@ -110,13 +125,13 @@ pub(super) fn build_updates(
 }
 
 pub(super) fn diff_rendered_lines(
-    previous: Option<&[RenderedLine; 3]>,
-    current: &[RenderedLine; 3],
+    previous: Option<&[RenderedLine]>,
+    current: &[RenderedLine],
 ) -> Vec<SegmentUpdate> {
     let mut updates = Vec::new();
     for (index, line) in current.iter().enumerate() {
         let row = row_from_index(index);
-        let old = previous.map(|lines| lines[index].as_slice()).unwrap_or(&[]);
+        let old = previous.and_then(|lines| lines.get(index)).map(|line| line.as_slice()).unwrap_or(&[]);
         if let Some(update) = diff_visible_segment(row, StripSide::Left, old, line) {
             updates.push(update);
         }
@@ -160,7 +175,8 @@ fn row_from_index(index: usize) -> SpecialRows {
     match index {
         0 => SpecialRows::TitleRow,
         1 => SpecialRows::StatusRow,
-        _ => SpecialRows::PromtRow,
+        2 => SpecialRows::PromtRow,
+        _ => SpecialRows::MatrixRow(index - 3),
     }
 }
 

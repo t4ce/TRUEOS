@@ -8,7 +8,7 @@ use super::{Ui4Surface, rendered_lines};
 
 pub(super) async fn present(
     surface: &mut Ui4Surface,
-    lines: [&[(char, Option<super::super::RgbaColor>)]; 3],
+    lines: &[&[(char, Option<super::super::RgbaColor>)]],
     fallback_segments: &[super::super::SegmentUpdate],
     poisoned: &mut bool,
 ) -> Result<Option<crate::ui4::DamageRect>, &'static str> {
@@ -16,7 +16,7 @@ pub(super) async fn present(
     let index = lease.buffer_index as usize;
     let previous = surface.frame_contents[index].clone();
     let current = rendered_lines(lines);
-    let updates = super::super::update::diff_rendered_lines(previous.as_ref(), &current);
+    let updates = super::super::update::diff_rendered_lines(previous.as_deref(), &current);
     let view = match writable_rgba_view(lease) {
         Ok(view) => view,
         Err(_) => {
@@ -111,6 +111,7 @@ fn glyphs_for_update(
         super::super::SpecialRows::TitleRow => 0,
         super::super::SpecialRows::StatusRow => 1,
         super::super::SpecialRows::PromtRow => 2,
+        super::super::SpecialRows::MatrixRow(index) => index as u32 + 3,
     };
     let y = row * microfont::FHEIGHT as u32 * scale;
     if y >= view.height { return; }

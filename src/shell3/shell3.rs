@@ -13,7 +13,7 @@ pub use show::{Backend as ShowBackend, Show};
 pub use update::{SegmentUpdate, UpdateBatch, UpdateCallback};
 
 use names::{ADM_NAMES, CMD_GROUPS, HV_GROUPS};
-use alloc::{string::{String, ToString}, vec, vec::Vec};
+use alloc::{string::{String, ToString}, collections::VecDeque, vec, vec::Vec};
 use spin::Once;
 
 pub const MAX_SHELL3_INSTANCES: usize = 256;
@@ -60,6 +60,8 @@ pub enum SpecialRows {
     TitleRow = 1,
     StatusRow = 2,
     PromtRow = 3,
+    /// Zero-based line within the visible Matrix transcript.
+    MatrixRow(usize) = 4,
 }
 pub const SpecialSeperator: char = '│';
 
@@ -102,8 +104,8 @@ impl TitleTime {
     }
 }
 
-fn title_left_text(time: &str, mode: Mode) -> String {
-    format!("TrueOS {:?} {} {}", mode, OPERATOR, time)
+fn title_left_text(time: &str) -> String {
+    format!("TrueOS {} {}", OPERATOR, time)
 }
 
 pub struct MatrixSlots;
@@ -112,12 +114,16 @@ pub struct MatrixSlots;
 struct MatrixSlotsState {
     // Raw unique slot IDs only. The default bare § slot is implicit at index 0.
     ids: Vec<String>,
+    echoes: Vec<(Option<String>, VecDeque<String>)>,
+    generation: u64,
 }
 
 impl MatrixSlotsState {
     fn new() -> Self {
         Self {
             ids: vec!["id".to_string(), "123".to_string()],
+            echoes: Vec::new(),
+            generation: 0,
         }
     }
 }
@@ -174,7 +180,41 @@ impl MatrixSlots {
             }
         }
 
+        slots.echoes.retain(|(id, _)| id.as_ref().is_none_or(|id| ids.contains(id)));
         slots.ids = ids;
+        slots.generation = slots.generation.wrapping_add(1);
+        drop(slots);
+        service::notify_work();
+    }
+
+    /// Echo text into a named Matrix slot (None is the bare § slot).
+    /// Slot selection remains per instance; transcripts are shared Matrix data.
+    fn echo(active: Option<&str>, text: String) {
+        let mut slots = matrix_slots().lock();
+        let active = active.filter(|id| slots.ids.iter().any(|name| name == id)).map(str::to_string);
+        let index = slots.echoes.iter().position(|(id, _)| *id == active).unwrap_or_else(|| {
+            slots.echoes.push((active, VecDeque::new()));
+            slots.echoes.len() - 1
+        });
+        let lines = &mut slots.echoes[index].1;
+        if lines.len() == 256 { lines.pop_front(); }
+        lines.push_back(text);
+        slots.generation = slots.generation.wrapping_add(1);
+        drop(slots);
+        service::notify_work();
+    }
+
+    /// Transcript of one Matrix slot, independent of any shell's selection.
+    pub fn echo_lines(active: Option<&str>) -> Vec<String> {
+        Self::echo_snapshot(active).1
+    }
+
+    fn echo_snapshot(active: Option<&str>) -> (u64, Vec<String>) {
+        let slots = matrix_slots().lock();
+        let active = active.filter(|id| slots.ids.iter().any(|name| name == id));
+        let lines = slots.echoes.iter().find(|(id, _)| id.as_deref() == active)
+            .map(|(_, lines)| lines.iter().cloned().collect()).unwrap_or_default();
+        (slots.generation, lines)
     }
 
     pub fn slot_ids() -> Vec<String> {
@@ -234,7 +274,7 @@ struct SpecialRowsState {
 impl SpecialRowsState {
     fn new(time: &str, prompt_left: &str) -> Self {
         Self {
-            title: RowStrips::new(&title_left_text(time, Mode::HV), ""),
+            title: RowStrips::new(&title_left_text(time), ""),
             // StatusRow/Left is read from the shared MatrixSlots system.
             status: RowStrips::new("", ""),
             promt: RowStrips::new(prompt_left, ""),
@@ -246,6 +286,7 @@ impl SpecialRowsState {
             SpecialRows::TitleRow => &self.title,
             SpecialRows::StatusRow => &self.status,
             SpecialRows::PromtRow => &self.promt,
+            SpecialRows::MatrixRow(_) => panic!("Matrix transcript is not a special strip"),
         }
     }
 
@@ -254,6 +295,7 @@ impl SpecialRowsState {
             SpecialRows::TitleRow => &mut self.title,
             SpecialRows::StatusRow => &mut self.status,
             SpecialRows::PromtRow => &mut self.promt,
+            SpecialRows::MatrixRow(_) => panic!("Matrix transcript is not a special strip"),
         }
     }
 }
@@ -306,13 +348,14 @@ pub struct Shell3 {
     time: String,
     mode: Mode,
     active_matrix_slot: Option<String>,
+    matrix_selection_dirty: bool,
     prompt: PromptState,
     rows: SpecialRowsState,
     aka_names: Vec<String>,
     appdb_names: Vec<String>,
     update_callbacks: Vec<UpdateCallback>,
     update_baseline: update::Snapshot,
-    pending_presentation: Option<(update::Snapshot, UpdateBatch, [update::RenderedLine; 3])>,
+    pending_presentation: Option<(update::Snapshot, UpdateBatch, Vec<update::RenderedLine>)>,
     show: Show,
 }
 
@@ -384,12 +427,13 @@ impl Shell3 {
         let columns = columns.max(MIN_COLUMNS);
         let rows_count = rows.max(MIN_ROWS);
         let mut rows_state = SpecialRowsState::new(&time, &prompt_left);
-        rows_state.title.right = vec![MetaFmtStr::new(appdb_names_text(&appdb_names))];
+        rows_state.title.right = mode_title_meta(Mode::HV, &aka_names, &appdb_names);
 
         let status_left = {
             let slots = matrix_slots().lock();
             matrix_slots_meta(&slots.ids, None)
         };
+        let (matrix_generation, matrix_lines) = MatrixSlots::echo_snapshot(None);
         let initial = update::Snapshot::new(
             (columns, rows_count),
             0,
@@ -399,7 +443,7 @@ impl Shell3 {
                 (&rows_state.promt.left, &rows_state.promt.right),
             ],
             columns,
-        );
+        ).with_matrix(&matrix_lines, matrix_generation);
 
         Self {
             executor_slot,
@@ -409,6 +453,7 @@ impl Shell3 {
             time,
             mode: Mode::HV,
             active_matrix_slot: None,
+            matrix_selection_dirty: false,
             prompt,
             rows: rows_state,
             aka_names,
@@ -471,14 +516,15 @@ impl Shell3 {
             let snapshot = snapshot.clone();
             let batch = batch.clone();
             let lines = lines.clone();
-            let line_refs = lines.each_ref().map(|line| line.as_slice());
+            let line_refs: Vec<_> = lines.iter().map(|line| line.as_slice()).collect();
             let (columns, rows) = snapshot.size();
-            self.show.present(line_refs, columns, rows, &batch).await?;
+            self.show.present(&line_refs, columns, rows, &batch).await?;
             self.pending_presentation = None;
             if self.capture_update_snapshot() == snapshot {
                 break;
             }
         }
+        self.matrix_selection_dirty = false;
         Ok(())
     }
 
@@ -503,7 +549,8 @@ impl Shell3 {
             (height / (microfont::FHEIGHT as u32 * self.show.font_scale())) as usize,
         );
         let lines = self.capture_update_snapshot().rendered_lines();
-        self.show.resize_to_current(lines.each_ref().map(|line| line.as_slice())).await
+        let line_refs: Vec<_> = lines.iter().map(|line| line.as_slice()).collect();
+        self.show.resize_to_current(&line_refs).await
     }
 
     pub(super) fn ui4_resize_needed(&self) -> bool {
@@ -528,7 +575,7 @@ impl Shell3 {
     pub fn set_time(&mut self, time: &str) {
         self.time.clear();
         self.time.push_str(time);
-        self.rows.title.left = vec![MetaFmtStr::new(title_left_text(&self.time, self.mode))];
+        self.rows.title.left = vec![MetaFmtStr::new(title_left_text(&self.time))];
     }
 
     pub fn time(&self) -> &str {
@@ -542,8 +589,12 @@ impl Shell3 {
             3 => Mode::ADM,
             _ => return false,
         };
-        self.rows.title.left = vec![MetaFmtStr::new(title_left_text(&self.time, self.mode))];
+        self.refresh_mode_title();
         true
+    }
+
+    fn refresh_mode_title(&mut self) {
+        self.rows.title.right = mode_title_meta(self.mode, &self.aka_names, &self.appdb_names);
     }
 
     pub fn mode(&self) -> Mode {
@@ -557,6 +608,8 @@ impl Shell3 {
     pub fn select_matrix_slot_index(&mut self, index: usize) -> bool {
         if index == 0 {
             self.active_matrix_slot = None;
+            self.matrix_selection_dirty = true;
+            service::notify_work();
             return true;
         }
 
@@ -566,6 +619,9 @@ impl Shell3 {
         };
 
         self.active_matrix_slot = Some(name.clone());
+        self.matrix_selection_dirty = true;
+        drop(slots);
+        service::notify_work();
         true
     }
 
@@ -576,6 +632,9 @@ impl Shell3 {
         }
 
         self.active_matrix_slot = Some(name.to_string());
+        self.matrix_selection_dirty = true;
+        drop(slots);
+        service::notify_work();
         true
     }
 
@@ -599,7 +658,7 @@ impl Shell3 {
         slots.ids.iter().find(|id| id.as_str() == active).cloned()
     }
 
-    /// Basic UI editing only; Enter and command dispatch remain unwired.
+    /// UI editing with immediate exact-name echo; command execution stays unwired.
     pub(super) fn handle_keyboard(&mut self, event: &crate::r::keyboard::TrueosKeyboardOutputEvent) -> bool {
         use crate::r::keyboard::*;
         if event.kind == KEYBOARD_OUTPUT_KIND_KEY {
@@ -629,8 +688,21 @@ impl Shell3 {
         self.prompt.colors.resize(self.prompt.char_len() - 1, None);
         self.prompt.colors.insert(self.prompt.cursor, None);
         self.prompt.cursor += 1;
+        self.echo_recognized_prompt();
         self.refresh_prompt_strip();
         true
+    }
+
+    fn echo_recognized_prompt(&mut self) {
+        if !self.parse_name(&self.prompt.text) { return; }
+        let text = core::mem::take(&mut self.prompt.text);
+        MatrixSlots::echo(self.active_matrix_slot.as_deref(), text);
+        self.prompt.colors.clear();
+        self.prompt.cursor = 0;
+    }
+
+    pub(super) fn matrix_output_needed(&self) -> bool {
+        self.matrix_selection_dirty || matrix_slots().lock().generation != self.update_baseline.matrix_generation()
     }
 
     pub fn set_prompt(&mut self, text: &str) {
@@ -669,6 +741,7 @@ impl Shell3 {
     }
 
     pub fn set_strip(&mut self, row: SpecialRows, side: StripSide, text: &str) -> bool {
+        if matches!(row, SpecialRows::MatrixRow(_)) { return false; }
         if side == StripSide::Left {
             match row {
                 SpecialRows::TitleRow => {
@@ -676,7 +749,7 @@ impl Shell3 {
                     self.rows.title.left.push(MetaFmtStr::new(text));
                     return true;
                 }
-                SpecialRows::StatusRow => return false,
+                SpecialRows::StatusRow | SpecialRows::MatrixRow(_) => return false,
                 SpecialRows::PromtRow => {
                     self.set_prompt(text);
                     return true;
@@ -693,6 +766,7 @@ impl Shell3 {
     /// Set styled text without flattening its MetaFmt colors. Bold is retained
     /// in the runs but deliberately has no raster effect yet.
     pub fn set_strip_formatted(&mut self, row: SpecialRows, side: StripSide, runs: Vec<MetaFmtStr>) -> bool {
+        if matches!(row, SpecialRows::MatrixRow(_)) { return false; }
         if side == StripSide::Left && row == SpecialRows::StatusRow {
             return false;
         }
@@ -712,6 +786,9 @@ impl Shell3 {
     }
 
     pub fn get_strip(&self, row: SpecialRows, side: StripSide) -> String {
+        if let SpecialRows::MatrixRow(index) = row {
+            return if side == StripSide::Left { MatrixSlots::echo_lines(self.active_matrix_slot.as_deref()).get(index).cloned().unwrap_or_default() } else { String::new() };
+        }
         if row == SpecialRows::StatusRow && side == StripSide::Left {
             return current_matrix_slots_text();
         }
@@ -724,6 +801,9 @@ impl Shell3 {
     }
 
     fn row_for_render(&self, row: SpecialRows) -> RowStrips {
+        if matches!(row, SpecialRows::MatrixRow(_)) {
+            return RowStrips::new(&self.get_strip(row, StripSide::Left), "");
+        }
         let mut strips = self.rows.row(row).clone();
         if row == SpecialRows::StatusRow {
             let slots = matrix_slots().lock();
@@ -741,6 +821,7 @@ impl Shell3 {
         let title = self.row_for_render(SpecialRows::TitleRow);
         let status = self.row_for_render(SpecialRows::StatusRow);
         let promt = self.row_for_render(SpecialRows::PromtRow);
+        let (matrix_generation, matrix_lines) = MatrixSlots::echo_snapshot(self.active_matrix_slot.as_deref());
 
         update::Snapshot::new(
             (self.columns, self.rows_count),
@@ -751,7 +832,7 @@ impl Shell3 {
                 (&promt.left, &promt.right),
             ],
             self.columns,
-        )
+        ).with_matrix(&matrix_lines, matrix_generation)
     }
 
     pub fn take_updates(&mut self) -> UpdateBatch {
@@ -776,7 +857,7 @@ impl Shell3 {
     pub fn set_appdb_names(&mut self, names: &[String]) {
         self.appdb_names.clear();
         self.appdb_names.extend(names.iter().cloned());
-        self.rows.title.right = vec![MetaFmtStr::new(appdb_names_text(&self.appdb_names))];
+        self.refresh_mode_title();
     }
 
     pub fn parse(&self, input: &str) -> bool {
@@ -819,15 +900,38 @@ pub fn newShell3(
     Shell3::new(time, aka_names, appdb_names, updateCallbacks, col, row)
 }
 
-fn appdb_names_text(names: &[String]) -> String {
-    let capacity = names.iter().map(String::len).sum::<usize>()
-        + names.len().saturating_sub(1);
-    let mut text = String::with_capacity(capacity);
-    for name in names {
-        if !text.is_empty() {
-            text.push(' ');
+/// The mode legend and exact-name recognizer use the same three registries.
+fn mode_title_meta(mode: Mode, aka_names: &[String], appdb_names: &[String]) -> Vec<MetaFmtStr> {
+    let mut runs = Vec::new();
+    let mut append_group = |group: &names::NameGroup, dynamic: Option<&[String]>| {
+        if !runs.is_empty() { runs.push(MetaFmtStr::new(" ")); }
+        runs.push(MetaFmtStr::new(names::GROUP_OPEN.to_string()));
+        if !group.name.is_empty() { runs.push(MetaFmtStr::new(group.name)); }
+        for (index, entry) in group.names.iter().enumerate() {
+            if !group.name.is_empty() || index != 0 {
+                runs.push(MetaFmtStr::new(" "));
+            }
+            runs.push(MetaFmtStr::new(entry.name).color(entry.color));
         }
-        text.push_str(name);
+        if let Some(entries) = dynamic {
+            for entry in entries { runs.push(MetaFmtStr::new(" ")); runs.push(MetaFmtStr::new(entry)); }
+        }
+        runs.push(MetaFmtStr::new(names::GROUP_CLOSE.to_string()));
+    };
+    match mode {
+        Mode::HV => { for group in &HV_GROUPS { append_group(group, None); } }
+        Mode::CMD => {
+            for group in &CMD_GROUPS {
+                let dynamic = match group.name { "Aka" => Some(aka_names), "AppDB" => Some(appdb_names), _ => None };
+                append_group(group, dynamic);
+            }
+        }
+        Mode::ADM => {
+            for entry in &ADM_NAMES {
+                if !runs.is_empty() { runs.push(MetaFmtStr::new(" ")); }
+                runs.push(MetaFmtStr::new(entry.name).color(entry.color));
+            }
+        }
     }
-    text
+    runs
 }
