@@ -1,13 +1,13 @@
 //! AP-local Shell3 instance pool: UI input, presentation, and network terminals.
 
-use alloc::vec::Vec;
+use alloc::{collections::VecDeque, vec::Vec};
 use trueos_executor::{SpawnError, SpawnToken};
 use trueos_time::{Duration, Timer};
 
 const TOPOLOGY_TASK_POOL_CAPACITY: usize = crate::percpu::CPU_SLOT_LIMIT;
-static DRAW_WORK_AVAILABLE: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
-static SHELL3_KEYBOARD_EVENTS: spin::Mutex<heapless::Deque<crate::ui4::Ui4KeyboardEvent, 256>> =
-    spin::Mutex::new(heapless::Deque::new());
+static SHELL_WORK_AVAILABLE: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
+static SHELL3_KEYBOARD_EVENTS: spin::Mutex<VecDeque<crate::ui4::Ui4KeyboardEvent>> =
+    spin::Mutex::new(VecDeque::new());
 static SHELL3_RESIZE_EVENTS: spin::Mutex<heapless::Deque<crate::ui4::Ui4ResizeEvent, 256>> =
     spin::Mutex::new(heapless::Deque::new());
 
@@ -15,7 +15,7 @@ static MICROFONT_SCALE: core::sync::atomic::AtomicU8 = core::sync::atomic::Atomi
 
 pub(crate) fn set_global_microfont_size(large: bool) {
     MICROFONT_SCALE.store(if large { 2 } else { 1 }, core::sync::atomic::Ordering::Release);
-    DRAW_WORK_AVAILABLE.notify_all();
+    SHELL_WORK_AVAILABLE.notify_all();
 }
 
 pub(super) fn microfont_scale() -> u32 {
@@ -102,7 +102,7 @@ pub fn refresh_appdb_names() {
         current.names = names;
         current.generation = current.generation.wrapping_add(1);
         drop(current);
-        DRAW_WORK_AVAILABLE.notify_all();
+        SHELL_WORK_AVAILABLE.notify_all();
     }
 }
 
@@ -117,7 +117,7 @@ pub fn worker_limit() -> usize {
     ap_cores / 2
 }
 
-/// Choose the next AP according to the live per-executor shell counts.
+/// Preview the next AP in the admission sequence.
 /// Executors receive their first three shells in order; later shells go to
 /// the next executor in a strict round-robin loop.
 pub fn next_executor_for_shell() -> Option<u32> {
@@ -144,7 +144,7 @@ pub fn request_shell3() -> Result<u32, super::Shell3Error> {
     ownership.pending_by_slot[slot as usize] += 1;
     advance_round_robin(&mut ownership, slot);
     drop(ownership);
-    DRAW_WORK_AVAILABLE.notify_all();
+    SHELL_WORK_AVAILABLE.notify_all();
     Ok(slot)
 }
 
@@ -182,9 +182,8 @@ pub(super) fn reserve_shell_on_executor(slot: u32) -> Result<(), super::Shell3Er
         warn_instance_limit();
         return Err(super::Shell3Error::InstanceLimit);
     }
-    if let Some(expected) = ownership.preferred_slot()
-        && expected != slot
-    {
+    let expected = ownership.preferred_slot().ok_or(super::Shell3Error::NoExecutor)?;
+    if expected != slot {
         return Err(super::Shell3Error::WrongExecutor {
             expected,
             actual: slot,
@@ -236,13 +235,6 @@ pub(super) fn release_shell_on_executor(slot: u32) {
     }
 }
 
-fn install_worker_slots(slots: Vec<u32>) {
-    let mut ownership = SHELL_OWNERSHIP.lock();
-    ownership.worker_slots = slots;
-    ownership.next_round_robin = 0;
-    ownership.initial_assignments = 0;
-}
-
 /// Start one caller-provided worker task on each selected background AP.
 ///
 /// Uses the kernel's P-core-first worker policy, filling from E/unknown cores.
@@ -257,21 +249,25 @@ pub fn start<S: Send>(
 
     let spawners = crate::workers::pick_background_spawners_with_slots(target);
 
-    // Acquire all task tokens before publishing the pool. A capacity error
-    // must not expose slots whose owner task was never started.
-    let mut tasks = Vec::new();
+    // Publish only successfully spawned owners. On a retry after a token
+    // capacity error, retain existing owners and skip their stable slots.
     for (worker_id, (slot, _core_kind, spawner)) in spawners.into_iter().enumerate() {
-        tasks.push((slot, spawner, task(worker_id, slot)?));
+        {
+            let ownership = SHELL_OWNERSHIP.lock();
+            if ownership.worker_slots.len() >= target { break; }
+            if ownership.worker_slots.contains(&slot) { continue; }
+        }
+        let token = task(worker_id, slot)?;
+        spawner.spawn(token);
+        SHELL_OWNERSHIP.lock().worker_slots.push(slot);
     }
-    let started = tasks.len();
-    install_worker_slots(tasks.iter().map(|(slot, _, _)| *slot).collect());
-    for (_, spawner, token) in tasks { spawner.spawn(token); }
+    let started = SHELL_OWNERSHIP.lock().worker_slots.len();
     Ok(started)
 }
 
-/// Notify resident workers that draw work may be available.
-pub fn notify_draw_work() {
-    DRAW_WORK_AVAILABLE.notify_all();
+/// Notify resident pool tasks that instance work may be available.
+pub fn notify_work() {
+    SHELL_WORK_AVAILABLE.notify_all();
 }
 
 /// Executor-local collection. Shells created through this owner remain in
@@ -456,20 +452,25 @@ async fn shell_worker_task(worker_id: usize, expected_slot: u32) {
             appdb_generation = current_appdb_generation;
         }
 
-        for event in crate::ui4::take_owner_input_events(crate::ui4::WindowOwner::SHELL3_SERVICE) {
-            match event {
-                crate::ui4::Ui4InputEvent::Keyboard(event) =>
-                {
-                    let _ = SHELL3_KEYBOARD_EVENTS.lock().push_back(event);
-                }
-                crate::ui4::Ui4InputEvent::Resize(event) => {
-                    let mut events = SHELL3_RESIZE_EVENTS.lock();
-                    if let Some(index) = events.iter().position(|queued| queued.window == event.window) {
-                        let _ = events.swap_remove_front(index);
+        // Serialize drain plus enqueue across APs, preserving keyboard order
+        // even when two workers drain successive UI4 batches concurrently.
+        {
+            let mut keyboard_events = SHELL3_KEYBOARD_EVENTS.lock();
+            for event in crate::ui4::take_owner_input_events(crate::ui4::WindowOwner::SHELL3_SERVICE) {
+                match event {
+                    crate::ui4::Ui4InputEvent::Keyboard(event) =>
+                    {
+                        if keyboard_events.len() < 256 { keyboard_events.push_back(event); }
                     }
-                    let _ = events.push_back(event);
+                    crate::ui4::Ui4InputEvent::Resize(event) => {
+                        let mut events = SHELL3_RESIZE_EVENTS.lock();
+                        if let Some(index) = events.iter().position(|queued| queued.window == event.window) {
+                            let _ = events.swap_remove_front(index);
+                        }
+                        let _ = events.push_back(event);
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
         }
 
@@ -483,7 +484,7 @@ async fn shell_worker_task(worker_id: usize, expected_slot: u32) {
                             .is_some_and(|shell| shell.show_handles_window(event.window))
                     })
                 });
-                index.and_then(|index| events.swap_remove_front(index))
+                index.and_then(|index| events.remove(index))
             };
             let Some(event) = event else { break };
             let input = crate::ui4::Ui4InputEvent::Keyboard(event);
@@ -568,9 +569,9 @@ async fn shell_worker_task(worker_id: usize, expected_slot: u32) {
         }
 
         if owned_shells.is_empty() && terminals.is_empty() {
-            let observed = DRAW_WORK_AVAILABLE.observe();
+            let observed = SHELL_WORK_AVAILABLE.observe();
             if !has_pending_for_executor(expected_slot) && !terminals.has_events() {
-                DRAW_WORK_AVAILABLE.wait_after(observed).await;
+                SHELL_WORK_AVAILABLE.wait_after(observed).await;
             }
         } else {
             Timer::after(Duration::from_millis(10)).await;

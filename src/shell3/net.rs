@@ -154,7 +154,7 @@ pub async fn terminal_task() {
         if let Some((slot, event)) = deferred.take() {
             if let Some(queue) = queue_for(slot) {
                 if let Err(event) = queue.try_push(event) { deferred = Some((slot, event)); }
-                else { super::service::notify_draw_work(); }
+                else { super::service::notify_work(); }
             }
         }
         // Retain a full event rather than losing input/close acknowledgements
@@ -186,7 +186,7 @@ pub async fn terminal_task() {
                                             deferred = Some((slot, event));
                                         }
                                     }
-                                    super::service::notify_draw_work();
+                                    super::service::notify_work();
                                     continue;
                                 }
                             }
@@ -205,7 +205,7 @@ pub async fn terminal_task() {
                             if let Err(event) = queue.try_push(WorkerEvent::Socket(event)) {
                                 deferred = Some((slot, event));
                             }
-                            super::service::notify_draw_work();
+                            super::service::notify_work();
                         }
                     }
                 }
