@@ -28,6 +28,7 @@ mod blt {
         'DIRECT_BLT_RING_BYTES', 'MI_BATCH_BUFFER_START_GEN8', 'MI_BATCH_GGTT',
         'DIRECT_BLT_GPU_VA_BATCH_BASE', 'DIRECT_BLT_GPU_VA_SRC_BASE',
         'DIRECT_BLT_GPU_VA_DST_BASE', 'DIRECT_BLT_SMOKE_MARKER',
+        'DIRECT_BLT_COPY_BYTES', 'GUC_BCS0_MONO_MAX_GLYPHS',
     ))
     source += '\n' + '\n'.join(extract.item(BLT, name) for name in (
         'DirectBltState', 'GucBcs0RgbaSurface', 'GucBcs0RgbaCopy',
@@ -36,6 +37,7 @@ mod blt {
         'guc_blt_append_ring_batch_start', 'boot_bcs0_legacy_ring_words',
         'guc_blt_valid_fill', 'guc_blt_encode_ui4_fill_batch',
         'guc_blt_valid_legacy_copy', 'guc_blt_encode_legacy_copy_batch', 'guc_blt_encode_copy_batch',
+        'GucBcs0MonoGlyph', 'guc_blt_valid_mono_glyph', 'guc_blt_encode_mono_batch',
     ))
     source += r'''
 static MAPPINGS: std::sync::Mutex<Vec<(u64, u64)>> = std::sync::Mutex::new(Vec::new());
@@ -108,6 +110,34 @@ fn legacy_rgba_copies_use_byte_pitches_nonzero_origins_and_ordered_retirement() 
     assert!(!guc_blt_valid_legacy_copy(dst, GucBcs0RgbaCopy { source: dst, ..copy }));
     let tall = GucBcs0RgbaSurface { height: 32768, bytes: 320*32768, ..dst };
     assert!(!guc_blt_valid_legacy_copy(tall, GucBcs0RgbaCopy { destination_y: 32757, ..copy }));
+}
+#[test]
+fn legacy_mono_has_colors_word_rows_aligned_source_slots_and_retirement() {
+    let mut batch = vec![0u32; 1024];
+    let mut result = vec![0u32; 1024];
+    let mut masks = vec![0u8; 4096];
+    let mut state: DirectBltState = unsafe { core::mem::zeroed() };
+    state.batch_virt = batch.as_mut_ptr().cast();
+    state.result_virt = result.as_mut_ptr().cast();
+    state.src_virt = masks.as_mut_ptr();
+    let mut glyph = GucBcs0MonoGlyph { x: 6, y: 11, width: 6, height: 11,
+        mask: [0;64], foreground: 0xFFB469FF, background: 0xFF808080 };
+    glyph.mask[0] = 0xA8;
+    glyph.mask[20] = 0x80;
+    let dst = GucBcs0RgbaSurface { width: 40, height: 33, pitch_bytes: 256, bytes: 12288, ..surface(0x200000) };
+    assert_eq!(guc_blt_encode_mono_batch(state, dst, &[glyph,glyph], 0xBC500005), Some((2,528)));
+    assert_eq!(&batch[12..22], &[0x55300008,0x03CC0100,0x000B0006,0x0016000C,
+        0x200000,0,0x01AE0000,0,0xFF808080,0xFFB469FF]);
+    assert_eq!(batch[28],0x01AE0040);
+    assert_eq!(&masks[..64], &glyph.mask);
+    assert_eq!(&masks[64..128], &glyph.mask);
+    assert_eq!(&batch[32..40], &[0x13004003,0x01AD0004,0,0xBC500005,0,0x02800000,0x05000000,0]);
+    assert_eq!(guc_blt_encode_mono_batch(state,dst,&[glyph;64],7),Some((64,64*264)));
+    assert_eq!(guc_blt_encode_mono_batch(state,dst,&[glyph;65],7),None);
+    assert!(!guc_blt_valid_mono_glyph(dst,&GucBcs0MonoGlyph { width:17,..glyph }));
+    assert!(!guc_blt_valid_mono_glyph(dst,&GucBcs0MonoGlyph { height:33,..glyph }));
+    assert!(!guc_blt_valid_mono_glyph(dst,&GucBcs0MonoGlyph { x:u32::MAX,..glyph }));
+    assert!(!guc_blt_valid_mono_glyph(dst,&GucBcs0MonoGlyph { y:30,..glyph }));
 }
 #[test]
 fn fast_color_has_32bpp_pitch_minus_one_and_ordered_retirement() {

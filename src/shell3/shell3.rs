@@ -256,6 +256,7 @@ impl SpecialRowsState {
 #[derive(Clone, Debug)]
 struct PromptState {
     text: String,
+    colors: Vec<Option<RgbaColor>>,
     cursor: usize,
 }
 
@@ -263,6 +264,7 @@ impl PromptState {
     fn new() -> Self {
         Self {
             text: String::new(),
+            colors: Vec::new(),
             cursor: 0,
         }
     }
@@ -564,6 +566,7 @@ impl Shell3 {
     pub fn set_prompt(&mut self, text: &str) {
         self.prompt.text.clear();
         self.prompt.text.push_str(text);
+        self.prompt.colors.clear();
         let text_len = self.prompt.char_len();
         self.prompt.cursor = self.prompt.cursor.min(text_len);
         self.refresh_prompt_strip();
@@ -588,7 +591,11 @@ impl Shell3 {
     }
 
     fn refresh_prompt_strip(&mut self) {
-        self.rows.promt.left = vec![MetaFmtStr::new(self.prompt.render())];
+        let mut colors = self.prompt.colors.clone();
+        colors.resize(self.prompt.char_len(), None);
+        colors.insert(self.prompt.cursor, None);
+        self.rows.promt.left = self.prompt.render().chars().zip(colors)
+            .map(|(ch, color)| MetaFmtStr { text: ch.to_string(), color, bold: false }).collect();
     }
 
     pub fn set_strip(&mut self, row: SpecialRows, side: StripSide, text: &str) -> bool {
@@ -622,13 +629,8 @@ impl Shell3 {
         if side == StripSide::Left && row == SpecialRows::PromtRow {
             let text: String = runs.iter().map(|run| run.text.as_str()).collect();
             self.set_prompt(&text);
-            // Keep the prompt cursor cell neutral, including when it is inside a run.
-            let mut cells = runs.iter().flat_map(|run| run.text.chars().map(|ch| (ch, run.color, run.bold)))
-                .collect::<Vec<_>>();
-            cells.insert(self.prompt.cursor, (PROMPT_CURSOR, None, false));
-            self.rows.promt.left = cells.into_iter().map(|(ch, color, bold)| MetaFmtStr {
-                text: ch.to_string(), color, bold,
-            }).collect();
+            self.prompt.colors = runs.iter().flat_map(|run| run.text.chars().map(|_| run.color)).collect();
+            self.refresh_prompt_strip();
             return true;
         }
         let strip = self.rows.row_mut(row);

@@ -6,7 +6,7 @@ use super::super::{print_shell_line, ShellBackend2};
 use super::super::shell2_cmd::ParseOutcome;
 
 fn usage(io: &'static dyn ShellBackend2) {
-    print_shell_line(io, "vcpy status|fillcheck");
+    print_shell_line(io, "vcpy status|fillcheck|monocheck");
 }
 
 pub(crate) fn try_parse(
@@ -16,6 +16,12 @@ pub(crate) fn try_parse(
 ) -> ParseOutcome {
     let mut args = rest.split_whitespace();
     match (args.next(), args.next()) {
+        (Some(action), None) if action.eq_ignore_ascii_case("monocheck") => {
+            match crate::r::services::vcpy_service::mono_check() {
+                Ok(()) => print_shell_line(io, "vcpy: monocheck passed glyphs=2 pixels=132 guards=380 command=xy-mono-src-copy-blt colors=foreground+background fallback=0"),
+                Err(reason) => print_shell_line(io, format!("vcpy: monocheck failed reason={reason}").as_str()),
+            }
+        }
         (Some(action), None) if action.eq_ignore_ascii_case("fillcheck") => {
             match crate::r::services::vcpy_service::fill_check() {
                 Ok(()) => print_shell_line(io, "vcpy: fillcheck passed fills=2 pixels_per_fill=51 right_and_bottom_guards=77 colors=80402010,00000000 fallback=0"),

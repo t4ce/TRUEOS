@@ -161,6 +161,67 @@ pub(crate) fn fill_rgba8_complete(
     result
 }
 
+/// Exercise monochrome expansion with two colors, background writes, source
+/// slot changes and guards. The probe never falls back to a CPU renderer.
+pub(crate) fn mono_check() -> Result<(), &'static str> {
+    use crate::intel::{GucBcs0CopyCompletion as Completion, GucBcs0CopySubmitError as Error};
+    let poison = 0xA55A_C33Cu32;
+    let owned = crate::intel::gpgpu::allocate_font_instance_rgba8_surface_cleared(32, 16, poison)
+        .ok_or("allocation-unavailable")?;
+    let dst = owned.surface();
+    let mut glyphs = [crate::intel::GucBcs0MonoGlyph {
+        x: 3, y: 2, width: 6, height: 11, mask: [0; 64],
+        foreground: 0xFF34_A853, background: 0xFF80_4020,
+    }; 2];
+    glyphs[1].x = 15;
+    glyphs[1].foreground = 0xFFB4_69FF;
+    glyphs[1].background = 0xFF20_4080;
+    for (glyph, character) in glyphs.iter_mut().zip(['§', 'A']) {
+        let bits = microfont::font_pixels(microfont::glyph_byte(character));
+        for bit in 0..64 {
+            if bits & (1 << (63 - bit)) != 0 {
+                glyph.mask[(bit / 6) * 2] |= 0x80 >> (bit % 6);
+            }
+        }
+    }
+    let submission = match crate::intel::queue_guc_bcs0_mono_glyphs(crate::intel::GucBcs0RgbaSurface {
+        phys: dst.phys, gpu: dst.gpu, bytes: dst.bytes,
+        width: dst.width, height: dst.height, pitch_bytes: dst.pitch_bytes,
+    }, &glyphs) {
+        Ok(submission) => submission,
+        Err(Error::SubmitFailed) => {
+            owned.quarantine_backing();
+            return Err("mono-submit-uncertain-backing-retained");
+        }
+        Err(_) => return Err("mono-not-admitted"),
+    };
+    loop {
+        match poll_rgba_copies(submission) {
+            Completion::Pending => core::hint::spin_loop(),
+            Completion::Complete => break,
+            _ => {
+                owned.quarantine_backing();
+                return Err("mono-retirement-uncertain-backing-retained");
+            }
+        }
+    }
+    let bytes = owned.readback_tight_rgba().ok_or("readback-unavailable")?;
+    for (index, pixel) in bytes.chunks_exact(4).enumerate() {
+        let x = index as u32 % 32;
+        let y = index as u32 / 32;
+        let mut expected = poison;
+        for glyph in &glyphs {
+            if (glyph.x..glyph.x + glyph.width).contains(&x) && (glyph.y..glyph.y + glyph.height).contains(&y) {
+                expected = if glyph.mask[((y - glyph.y) * 2) as usize] & (0x80 >> (x - glyph.x)) != 0 {
+                    glyph.foreground
+                } else { glyph.background };
+            }
+        }
+        if pixel != expected.to_le_bytes() { return Err("mono-color-or-guard-mismatch"); }
+    }
+    Ok(())
+}
+
 /// Explicit hardware check: a nonzero fill followed by zero, with padded
 /// rows and untouched right/bottom guards. No compute fallback can pass it.
 pub(crate) fn fill_check() -> Result<(), &'static str> {
