@@ -854,5 +854,6 @@ pub(crate) fn center_cursor(controller_id: u32, slot_id: u32, ep_target: u32) {
     }) {
         runtime.mouse_x = 0.5;
         runtime.mouse_y = 0.5;
+        sync_runtime_cursor_snapshot(runtime);
     }
 }
