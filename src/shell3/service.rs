@@ -1,15 +1,26 @@
-//! AP-backed worker startup for Shell3 draw execution.
+//! AP-local Shell3 instance pool: UI input, presentation, and network terminals.
 
 use alloc::vec::Vec;
-use trueos_executor::{SpawnError, SpawnToken, Spawner};
+use trueos_executor::{SpawnError, SpawnToken};
 use trueos_time::{Duration, Timer};
 
 const TOPOLOGY_TASK_POOL_CAPACITY: usize = crate::percpu::CPU_SLOT_LIMIT;
 static DRAW_WORK_AVAILABLE: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
-static SHELL3_ESCAPE_EVENTS: spin::Mutex<heapless::Deque<crate::ui4::Ui4KeyboardEvent, 64>> =
+static SHELL3_KEYBOARD_EVENTS: spin::Mutex<heapless::Deque<crate::ui4::Ui4KeyboardEvent, 256>> =
     spin::Mutex::new(heapless::Deque::new());
 static SHELL3_RESIZE_EVENTS: spin::Mutex<heapless::Deque<crate::ui4::Ui4ResizeEvent, 256>> =
     spin::Mutex::new(heapless::Deque::new());
+
+static MICROFONT_SCALE: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(1);
+
+pub(crate) fn set_global_microfont_size(large: bool) {
+    MICROFONT_SCALE.store(if large { 2 } else { 1 }, core::sync::atomic::Ordering::Release);
+    DRAW_WORK_AVAILABLE.notify_all();
+}
+
+pub(super) fn microfont_scale() -> u32 {
+    MICROFONT_SCALE.load(core::sync::atomic::Ordering::Acquire) as u32
+}
 
 struct ShellOwnership {
     worker_slots: Vec<u32>,
@@ -17,6 +28,7 @@ struct ShellOwnership {
     pending_by_slot: [usize; crate::percpu::CPU_SLOT_LIMIT],
     live_shells: usize,
     next_round_robin: usize,
+    initial_assignments: usize,
 }
 
 struct AppDbNames {
@@ -41,6 +53,7 @@ impl ShellOwnership {
             pending_by_slot: [0; crate::percpu::CPU_SLOT_LIMIT],
             live_shells: 0,
             next_round_robin: 0,
+            initial_assignments: 0,
         }
     }
 
@@ -49,36 +62,15 @@ impl ShellOwnership {
             return None;
         }
 
-        // Fill the first selected executor to three shells, then each next
-        // executor, preserving the specified startup distribution.
-        if let Some(slot) = self
-            .worker_slots
-            .iter()
-            .copied()
-            .find(|slot| {
-                self.shells_by_slot[*slot as usize]
-                    + self.pending_by_slot[*slot as usize]
-                    < 3
-            })
-        {
-            return Some(slot);
+        // Initial admission sequence: AP0 x3, AP1 x3, ... . Closing a
+        // shell later never rewinds this sequence or triggers rebalancing.
+        if self.initial_assignments < self.worker_slots.len() * 3 {
+            return Some(self.worker_slots[self.initial_assignments / 3]);
         }
 
-        // Once every executor has three, give the next shell to the least
-        // loaded executor, scanning ties in round-robin order.
-        let minimum = self
-            .worker_slots
-            .iter()
-            .map(|slot| self.shells_by_slot[*slot as usize] + self.pending_by_slot[*slot as usize])
-            .min()?;
-        for offset in 0..self.worker_slots.len() {
-            let index = (self.next_round_robin + offset) % self.worker_slots.len();
-            let slot = self.worker_slots[index];
-            if self.shells_by_slot[slot as usize] + self.pending_by_slot[slot as usize] == minimum {
-                return Some(slot);
-            }
-        }
-        None
+        // Strict modulo after the initial three-per-AP fill. Advance at
+        // admission, so executor polling order cannot change placement.
+        Some(self.worker_slots[self.next_round_robin % self.worker_slots.len()])
     }
 }
 
@@ -127,7 +119,7 @@ pub fn worker_limit() -> usize {
 
 /// Choose the next AP according to the live per-executor shell counts.
 /// Executors receive their first three shells in order; later shells go to
-/// the least-loaded executor, with ties resolved round-robin.
+/// the next executor in a strict round-robin loop.
 pub fn next_executor_for_shell() -> Option<u32> {
     let ownership = SHELL_OWNERSHIP.lock();
     (ownership.live_shells + ownership.pending_by_slot.iter().sum::<usize>()
@@ -143,12 +135,14 @@ pub fn request_shell3() -> Result<u32, super::Shell3Error> {
     if ownership.live_shells + ownership.pending_by_slot.iter().sum::<usize>()
         >= super::MAX_SHELL3_INSTANCES
     {
+        warn_instance_limit();
         return Err(super::Shell3Error::InstanceLimit);
     }
     let Some(slot) = ownership.preferred_slot() else {
         return Err(super::Shell3Error::NoExecutor);
     };
     ownership.pending_by_slot[slot as usize] += 1;
+    advance_round_robin(&mut ownership, slot);
     drop(ownership);
     DRAW_WORK_AVAILABLE.notify_all();
     Ok(slot)
@@ -165,11 +159,6 @@ fn take_pending_for_executor(slot: u32) -> bool {
     *pending -= 1;
     ownership.shells_by_slot[slot as usize] += 1;
     ownership.live_shells += 1;
-    if let Some(index) = ownership.worker_slots.iter().position(|worker_slot| *worker_slot == slot)
-        && !ownership.worker_slots.is_empty()
-    {
-        ownership.next_round_robin = (index + 1) % ownership.worker_slots.len();
-    }
     true
 }
 
@@ -190,6 +179,7 @@ pub(super) fn reserve_shell_on_executor(slot: u32) -> Result<(), super::Shell3Er
     if ownership.live_shells + ownership.pending_by_slot.iter().sum::<usize>()
         >= super::MAX_SHELL3_INSTANCES
     {
+        warn_instance_limit();
         return Err(super::Shell3Error::InstanceLimit);
     }
     if let Some(expected) = ownership.preferred_slot()
@@ -201,32 +191,41 @@ pub(super) fn reserve_shell_on_executor(slot: u32) -> Result<(), super::Shell3Er
         });
     }
     let Some(shell_count) = ownership.shells_by_slot.get_mut(slot as usize) else {
+        warn_instance_limit();
         return Err(super::Shell3Error::InstanceLimit);
     };
     *shell_count += 1;
     ownership.live_shells += 1;
-    if let Some(index) = ownership
-        .worker_slots
-        .iter()
-        .position(|worker_slot| *worker_slot == slot)
-        && !ownership.worker_slots.is_empty()
-    {
-        ownership.next_round_robin = (index + 1) % ownership.worker_slots.len();
-    }
+    advance_round_robin(&mut ownership, slot);
     Ok(())
 }
 
-/// Terminal models belong to the socket task, without draw-worker placement.
-pub(super) fn reserve_terminal_on_executor(slot: u32) -> Result<(), super::Shell3Error> {
+fn warn_instance_limit() {
+    crate::log_warn!(target: "service";
+        "shell3: instance pool full cap={}\n", super::MAX_SHELL3_INSTANCES,
+    );
+}
+
+fn advance_round_robin(ownership: &mut ShellOwnership, slot: u32) {
+    ownership.initial_assignments = (ownership.initial_assignments + 1).min(ownership.worker_slots.len() * 3);
+    if let Some(index) = ownership.worker_slots.iter().position(|s| *s == slot) {
+        ownership.next_round_robin = (index + 1) % ownership.worker_slots.len();
+    }
+}
+
+/// Reserve a terminal on the same pool and admission policy as UI instances.
+/// The model is constructed later by the selected AP, never by the listener.
+pub(super) fn reserve_terminal_slot() -> Result<u32, super::Shell3Error> {
     let mut ownership = SHELL_OWNERSHIP.lock();
     if ownership.live_shells + ownership.pending_by_slot.iter().sum::<usize>() >= super::MAX_SHELL3_INSTANCES {
+        warn_instance_limit();
         return Err(super::Shell3Error::InstanceLimit);
     }
-    let count = ownership.shells_by_slot.get_mut(slot as usize)
-        .ok_or(super::Shell3Error::NoExecutor)?;
-    *count += 1;
+    let slot = ownership.preferred_slot().ok_or(super::Shell3Error::NoExecutor)?;
+    ownership.shells_by_slot[slot as usize] += 1;
     ownership.live_shells += 1;
-    Ok(())
+    advance_round_robin(&mut ownership, slot);
+    Ok(slot)
 }
 
 pub(super) fn release_shell_on_executor(slot: u32) {
@@ -241,6 +240,7 @@ fn install_worker_slots(slots: Vec<u32>) {
     let mut ownership = SHELL_OWNERSHIP.lock();
     ownership.worker_slots = slots;
     ownership.next_round_robin = 0;
+    ownership.initial_assignments = 0;
 }
 
 /// Start one caller-provided worker task on each selected background AP.
@@ -257,14 +257,15 @@ pub fn start<S: Send>(
 
     let spawners = crate::workers::pick_background_spawners_with_slots(target);
 
-    install_worker_slots(spawners.iter().map(|(slot, _, _)| *slot).collect());
-
-    let mut started = 0;
+    // Acquire all task tokens before publishing the pool. A capacity error
+    // must not expose slots whose owner task was never started.
+    let mut tasks = Vec::new();
     for (worker_id, (slot, _core_kind, spawner)) in spawners.into_iter().enumerate() {
-        let token = task(worker_id, slot)?;
-        spawner.spawn(token);
-        started += 1;
+        tasks.push((slot, spawner, task(worker_id, slot)?));
     }
+    let started = tasks.len();
+    install_worker_slots(tasks.iter().map(|(slot, _, _)| *slot).collect());
+    for (_, spawner, token) in tasks { spawner.spawn(token); }
     Ok(started)
 }
 
@@ -386,7 +387,7 @@ impl Shell3Executor {
 }
 
 #[trueos_executor::task(pool_size = TOPOLOGY_TASK_POOL_CAPACITY)]
-async fn draw_worker_task(worker_id: usize, expected_slot: u32) {
+async fn shell_worker_task(worker_id: usize, expected_slot: u32) {
     let actual_slot = u32::try_from(crate::percpu::current_slot()).unwrap_or(u32::MAX);
     if actual_slot != expected_slot {
         crate::log_warn!(target: "service";
@@ -411,8 +412,10 @@ async fn draw_worker_task(worker_id: usize, expected_slot: u32) {
         }
     };
     let mut appdb_generation = appdb_names_snapshot().0;
+    let mut terminals = super::net::WorkerTerminals::new(expected_slot);
 
     loop {
+        terminals.poll();
         while has_pending_for_executor(expected_slot) && take_pending_for_executor(expected_slot) {
             let aka_names = crate::r::restart::startup_alias_names();
             let appdb_names = appdb_names_snapshot().1;
@@ -455,11 +458,9 @@ async fn draw_worker_task(worker_id: usize, expected_slot: u32) {
 
         for event in crate::ui4::take_owner_input_events(crate::ui4::WindowOwner::SHELL3_SERVICE) {
             match event {
-                crate::ui4::Ui4InputEvent::Keyboard(event)
-                    if event.event.kind == crate::r::keyboard::KEYBOARD_OUTPUT_KIND_KEY
-                        && event.event.key_code == crate::r::keyboard::KEYBOARD_KEY_ESCAPE =>
+                crate::ui4::Ui4InputEvent::Keyboard(event) =>
                 {
-                    let _ = SHELL3_ESCAPE_EVENTS.lock().push_back(event);
+                    let _ = SHELL3_KEYBOARD_EVENTS.lock().push_back(event);
                 }
                 crate::ui4::Ui4InputEvent::Resize(event) => {
                     let mut events = SHELL3_RESIZE_EVENTS.lock();
@@ -474,7 +475,7 @@ async fn draw_worker_task(worker_id: usize, expected_slot: u32) {
 
         loop {
             let event = {
-                let mut events = SHELL3_ESCAPE_EVENTS.lock();
+                let mut events = SHELL3_KEYBOARD_EVENTS.lock();
                 let index = events.iter().position(|event| {
                     (0..owned_shells.len()).any(|index| {
                         owned_shells
@@ -488,7 +489,17 @@ async fn draw_worker_task(worker_id: usize, expected_slot: u32) {
             let input = crate::ui4::Ui4InputEvent::Keyboard(event);
             for index in 0..owned_shells.len() {
                 if let Some(shell) = owned_shells.get_mut(index) {
-                    shell.show.handle_escape(&input);
+                    if shell.show_handles_window(event.window) {
+                        shell.show.handle_escape(&input);
+                        if shell.handle_keyboard(&event.event) {
+                            if let Err(error) = shell.present().await {
+                                crate::log_warn!(target: "service";
+                                    "shell3: input presentation failed slot={} error={}\n",
+                                    expected_slot, error,
+                                );
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -521,7 +532,7 @@ async fn draw_worker_task(worker_id: usize, expected_slot: u32) {
 
         for index in 0..owned_shells.len() {
             if let Some(shell) = owned_shells.get_mut(index)
-                && shell.presentation_pending()
+                && (shell.presentation_pending() || shell.font_scale_needed())
                 && let Err(error) = shell.present().await
             {
                 crate::log_warn!(target: "service";
@@ -556,36 +567,24 @@ async fn draw_worker_task(worker_id: usize, expected_slot: u32) {
             }
         }
 
-        if owned_shells.is_empty() {
+        if owned_shells.is_empty() && terminals.is_empty() {
             let observed = DRAW_WORK_AVAILABLE.observe();
-            if !has_pending_for_executor(expected_slot) {
+            if !has_pending_for_executor(expected_slot) && !terminals.has_events() {
                 DRAW_WORK_AVAILABLE.wait_after(observed).await;
             }
         } else {
-            Timer::after(Duration::from_millis(50)).await;
+            Timer::after(Duration::from_millis(10)).await;
         }
     }
 }
 
-/// Resident Shell3 service controller. It waits for the full discovered AP
-/// topology to register, then starts at most half of those APs as draw workers.
-#[trueos_executor::task]
-pub async fn sh3srv_service_task(_spawner: Spawner) {
-    while !crate::workers::all_topology_spawners_registered() {
-        Timer::after(Duration::from_millis(25)).await;
-    }
-
+/// Called once by the kernel boot registry after the complete topology registers.
+pub fn start_pool() -> Result<usize, SpawnError> {
     refresh_appdb_names();
-
-    match start(|worker_id, slot| draw_worker_task(worker_id, slot)) {
-        Ok(started) => crate::log_info!(target: "service";
-            "sh3srv: online workers={} ap_total={} policy=half-ap-topology\n",
-            started,
-            crate::workers::topology_core_slot_count().saturating_sub(1),
-        ),
-        Err(error) => crate::log_error!(target: "service";
-            "sh3srv: worker startup failed error={:?}\n",
-            error,
-        ),
-    }
+    let started = start(|worker_id, slot| shell_worker_task(worker_id, slot))?;
+    crate::log_info!(target: "service";
+        "shell3: online workers={} ap_total={} policy=half-ap-topology\n",
+        started, crate::workers::topology_core_slot_count().saturating_sub(1),
+    );
+    Ok(started)
 }

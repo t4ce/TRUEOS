@@ -609,7 +609,8 @@ fn spawn_gridpaper_service(spawner: Spawner) -> SpawnAttempt {
 }
 
 fn spawn_sh3srv(spawner: Spawner) -> SpawnAttempt {
-    spawn_local(spawner, |spawner| crate::shell3::service::sh3srv_service_task(spawner))
+    let _ = spawner;
+    spawn_bool_result_to_attempt(crate::shell3::service::start_pool().map(|count| count != 0))
 }
 
 fn spawn_shell3_tcp(spawner: Spawner) -> SpawnAttempt {
@@ -1574,9 +1575,10 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         &GRIDPAPER_SERVICE_STARTED,
         spawn_gridpaper_service,
     ),
-    TaskSpec::enabled(
+    TaskSpec::enabled_gated(
         "sh3srv",
         crate::r::readiness::BACKGROUND_AP_WORKER_READY,
+        font_warm_pool_gate,
         &SH3SRV_STARTED,
         spawn_sh3srv,
     ),

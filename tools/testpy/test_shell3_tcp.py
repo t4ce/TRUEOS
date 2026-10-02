@@ -119,13 +119,13 @@ use super::*;
 use super::tty::Terminal;
 '''
     net = (ROOT/'src/shell3/net.rs').read_text()
-    source += net[net.index('const MAX_CONNECTIONS'):net.index('#[trueos_executor::task]')]
+    source += net[net.index('const WRITE_TIMEOUT_MS'):net.index('enum WorkerEvent')]
     source += '''
 #[cfg(test)] mod tests {
     use super::*;
     fn queue() -> NetQueue<NetCommand> { NetQueue { full: Cell::new(false), commands: RefCell::new(Vec::new()) } }
     #[test] fn queue_rejection_preserves_bytes_and_one_write_is_in_flight() {
-        let queue = queue(); let mut connection = Connection::new(NetHandle(1));
+        let queue = queue(); let mut connection = Connection::new(NetHandle(1), Shell3::new_terminal().unwrap());
         let banner = connection.terminal.as_ref().unwrap().output.clone();
         queue.full.set(true); assert!(connection.flush(&queue, Instant(0)));
         assert_eq!(connection.terminal.as_ref().unwrap().output, banner);
@@ -140,7 +140,7 @@ use super::tty::Terminal;
         assert!(matches!(&queue.commands.borrow()[1], NetCommand::SendTcp { handle: NetHandle(1), data } if data == b"x"));
     }
     #[test] fn graceful_finish_waits_for_output_and_has_teardown_deadline() {
-        let queue = queue(); let mut connection = Connection::new(NetHandle(2));
+        let queue = queue(); let mut connection = Connection::new(NetHandle(2), Shell3::new_terminal().unwrap());
         connection.terminal.as_mut().unwrap().input(b"exit\\n");
         assert!(connection.flush(&queue, Instant(0)));
         assert!(matches!(&queue.commands.borrow()[0], NetCommand::SendTcp { .. }));
@@ -151,8 +151,8 @@ use super::tty::Terminal;
         assert!(!connection.flush(&queue, Instant(5002)));
     }
     #[test] fn stalled_peer_does_not_block_another_session() {
-        let queue = queue(); let mut first = Connection::new(NetHandle(1));
-        let mut second = Connection::new(NetHandle(2));
+        let queue = queue(); let mut first = Connection::new(NetHandle(1), Shell3::new_terminal().unwrap());
+        let mut second = Connection::new(NetHandle(2), Shell3::new_terminal().unwrap());
         first.flush(&queue, Instant(0)); second.flush(&queue, Instant(10));
         assert_eq!(queue.commands.borrow().len(), 2);
         queue.full.set(true); assert!(first.flush(&queue, Instant(30000)));

@@ -1029,11 +1029,11 @@ fn queue_async_plane(
             return Err(Ui4CompositorError::PresentFailed);
         }
     }
-    // Preserve the existing direct-only lifecycle for a lone isolated
-    // producer. Immutable single-buffer frames are shareable; released-compute
+    // Slot0 also composes a lone demoted producer. Preserve the existing
+    // direct-only lifecycle for a lone isolated producer on a lease plane. Immutable single-buffer frames are shareable; released-compute
     // Blueprint snapshots (including image-viewer) deliberately continue
     // through the domain-safe static compositor below.
-    if selected.len() == 1 && !all_shared_composable && !has_arc {
+    if selected.len() == 1 && !stack_plane && !all_shared_composable && !has_arc {
         let (window, view) = selected[0];
         return Err(Ui4CompositorError::DirectOnlySource {
             window: window.id.raw(),

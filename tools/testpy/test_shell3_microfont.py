@@ -22,9 +22,12 @@ use metafmtstr::MetaFmtStr;
 use update::SegmentUpdate;
 const SpecialSeperator: char = '│';
 const OPERATOR: char = '§';
+const MIN_COLUMNS: usize = 20;
+const MIN_ROWS: usize = 5;
 {extract.item('src/shell3/shell3.rs', 'matrix_slots_meta')}
 mod intel {{
     pub fn dma_cache_flush_range(_: *const u8, _: usize) {{}}
+    pub fn active_scanout_dimensions() -> Option<(u32,u32)> {{ Some((2560,1440)) }}
 '''
     for name in ('GucBcs0RgbaSurface', 'GucBcs0MonoGlyph'):
         source += extract.item('src/intel/copy/blt.rs', name)
@@ -32,11 +35,43 @@ mod intel {{
 }
 #[derive(Clone, Copy)]
 struct FrameRgbaView { virt: *const u8, byte_len: usize, width: u32, height: u32, pitch: u32, phys: u64, gpu: u64 }
+mod ui4 { pub fn set_window_placement(_:u32,_:u32,_:crate::show::Placement)->Result<(),()> { Ok(()) } }
 mod show {
     const BACKGROUND: crate::RgbaColor = crate::RgbaColor::Gray;
     const FOREGROUND: crate::RgbaColor = crate::RgbaColor::White;
-    mod cpu { use crate::FrameRgbaView;
 '''
+    source += """
+    const OWNER: u32 = 1;
+    #[derive(Clone, Copy)] pub(crate) struct Placement { width:u32,height:u32 }
+    fn window_resize_state(_:u32,_:u32)->Result<(Placement,u64),()> {
+        Ok((Placement {width:480,height:55},1))
+    }
+    struct Ui4Surface { width:u32,height:u32,window:u32,scale:u32,broker_resized:bool,
+        frame_contents:[Option<u8>;2], clear_buffers:[bool;2] }
+    struct Show { surface:Option<Ui4Surface>,font_scale:u32 }
+    impl Show {
+"""
+    source += re.search(r'    pub\(crate\) fn set_font_scale\(.*?^    }', (ROOT/'src/shell3/show/show.rs').read_text(), re.M | re.S).group()
+    source += "}\n"
+    source += extract.item('src/shell3/show/show.rs', 'show_extent')
+    source += """
+    #[test] fn toggle_keeps_extent_except_minimum_and_clears_both_histories() {
+        for (width,height,expected) in [(480,55,(480,110)),(120,55,(240,110)),(601,301,(601,301))] {
+            let surface = Ui4Surface {width,height,window:7,scale:1,broker_resized:false,
+                frame_contents:[Some(1),Some(1)],clear_buffers:[false;2]};
+            let mut show = Show {surface:Some(surface),font_scale:1};
+            assert_eq!(show.set_font_scale(2,80,5).unwrap(),expected);
+            let surface = show.surface.as_ref().unwrap();
+            assert_eq!(surface.window,7);
+            assert_eq!(surface.frame_contents,[None,None]);
+            assert_eq!(surface.clear_buffers,[true;2]);
+            assert_eq!(surface.scale,2);
+        }
+        let mut show = Show {surface:None,font_scale:1};
+        assert_eq!(show.set_font_scale(2,80,5).unwrap(),(480,110));
+    }
+    mod cpu { use crate::FrameRgbaView;
+"""
     source += extract.item('src/shell3/show/cpu.rs', 'paint_segment').replace('fn paint_segment', 'pub(super) fn paint_segment')
     source += '''
     }
@@ -46,21 +81,23 @@ mod show {
     source += '''
         #[test]
         fn mono_expansion_matches_cpu_pixels_colors_clipping_and_erasure() {
+            for scale in [1, 2] {
+            for height in [55, 66] {
             for width in [20, 96] {
                 for text in ["§éq─A", "q", "", "Hello §"] {
-                    let mut pixels = vec![0x5Au8; 512 * 33];
+                    let mut pixels = vec![0x5Au8; 512 * 66];
                     let mut expanded = pixels.clone();
                     let view = FrameRgbaView { virt: pixels.as_mut_ptr(), byte_len: pixels.len(),
-                        width, height: 33, pitch: 512, phys: 4096, gpu: 4096 };
+                        width, height, pitch: 512, phys: 4096, gpu: 4096 };
                     let colors = (0..text.chars().count()).map(|i| Some(if i%2==0 { crate::RgbaColor::Pink } else { crate::RgbaColor::Green })).collect();
                     let update = crate::SegmentUpdate { row: crate::SpecialRows::PromtRow, side: crate::StripSide::Left,
                         offset: 1, remove: 8, text: text.into(), colors };
-                    super::cpu::paint_segment(view, &update).unwrap();
+                    super::cpu::paint_segment(view, &update, scale).unwrap();
                     let mut glyphs = Vec::new();
-                    glyphs_for_update(view, &update, &mut glyphs);
+                    glyphs_for_update(view, &update, scale, &mut glyphs);
                     assert!(!glyphs.is_empty());
                     for glyph in &glyphs {
-                        assert_eq!(glyph.y, 22);
+                        assert_eq!(glyph.y, 22 * scale);
                         for y in 0..glyph.height { for x in 0..glyph.width {
                             let bit = glyph.mask[(y*2+x/8) as usize] & (0x80 >> (x%8)) != 0;
                             let rgba = if bit { glyph.foreground } else { glyph.background };
@@ -68,9 +105,29 @@ mod show {
                             expanded[offset..offset+4].copy_from_slice(&rgba.to_le_bytes());
                         }}
                     }
-                    assert_eq!(expanded, pixels, "text={text} width={width}");
+                    assert_eq!(expanded, pixels, "text={text} width={width} height={height} scale={scale}");
                 }
             }
+            }
+            }
+        }
+        #[test]
+        fn doubled_section_sign_replicates_each_source_pixel_into_four_pixels() {
+            let view = FrameRgbaView { virt: core::ptr::null(), byte_len: 240*110*4,
+                width: 240, height: 110, pitch: 960, phys: 4096, gpu: 4096 };
+            let update = crate::SegmentUpdate { row: crate::SpecialRows::TitleRow,
+                side: crate::StripSide::Left, offset: 0, remove: 1, text: "§".into(), colors: vec![] };
+            let mut glyphs = Vec::new();
+            glyphs_for_update(view, &update, 2, &mut glyphs);
+            let glyph = &glyphs[0];
+            assert_eq!((glyph.width, glyph.height), (12,22));
+            let bits = microfont::font_pixels(microfont::glyph_byte('§'));
+            for y in 0..22 { for x in 0..12 {
+                let bit = (y/2)*6+x/2;
+                let expected = bit < 64 && bits & (1u64 << (63-bit)) != 0;
+                let actual = glyph.mask[y*2+x/8] & (0x80 >> (x%8)) != 0;
+                assert_eq!(actual, expected, "pixel={x},{y}");
+            }}
         }
     }
 }

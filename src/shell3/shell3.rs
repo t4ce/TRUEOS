@@ -102,8 +102,8 @@ impl TitleTime {
     }
 }
 
-fn title_left_text(time: &str) -> String {
-    format!("TrueOS {} {}", OPERATOR, time)
+fn title_left_text(time: &str, mode: Mode) -> String {
+    format!("TrueOS {:?} {} {}", mode, OPERATOR, time)
 }
 
 pub struct MatrixSlots;
@@ -234,7 +234,7 @@ struct SpecialRowsState {
 impl SpecialRowsState {
     fn new(time: &str, prompt_left: &str) -> Self {
         Self {
-            title: RowStrips::new(&title_left_text(time), ""),
+            title: RowStrips::new(&title_left_text(time, Mode::HV), ""),
             // StatusRow/Left is read from the shared MatrixSlots system.
             status: RowStrips::new("", ""),
             promt: RowStrips::new(prompt_left, ""),
@@ -323,16 +323,15 @@ impl Drop for Shell3 {
 }
 
 impl Shell3 {
-    /// A socket-owned model. No UI4 surface is created or presented.
-    pub(super) fn new_terminal() -> Result<Self, Shell3Error> {
-        let slot = crate::percpu::current_slot() as u32;
-        service::reserve_terminal_on_executor(slot)?;
+    /// Construct a previously admitted terminal on its permanent AP owner.
+    pub(super) fn new_terminal_reserved(slot: u32) -> Self {
+        debug_assert_eq!(crate::percpu::current_slot() as u32, slot);
         let mut shell = Self::new_inner(
             &TitleTime::current(), crate::r::restart::startup_alias_names(),
             service::appdb_names_snapshot().1, Vec::new(), 80, MIN_ROWS, slot,
         );
         shell.set_show_backend(ShowBackend::Network);
-        Ok(shell)
+        shell
     }
 
     pub fn new(
@@ -443,6 +442,18 @@ impl Shell3 {
         if actual_slot != self.executor_slot {
             return Err("shell3-show-wrong-executor");
         }
+        if self.font_scale_needed() {
+            let scale = service::microfont_scale();
+            let (width, height) = self.show.set_font_scale(scale, self.columns, self.rows_count)?;
+            self.set((width / (microfont::FWIDTH as u32 * scale)) as usize,
+                (height / (microfont::FHEIGHT as u32 * scale)) as usize);
+            self.pending_presentation = None;
+            if self.show.resize_needed() { self.resize_ui4_to_current().await?; }
+            crate::log_info!(target: "service";
+                "sh3srv: microfont scale={}x slot={} extent={}x{} grid={}x{}\n",
+                scale, self.executor_slot, width, height, self.columns, self.rows_count,
+            );
+        }
         loop {
             if self.pending_presentation.is_none() {
                 let snapshot = self.capture_update_snapshot();
@@ -471,6 +482,10 @@ impl Shell3 {
         Ok(())
     }
 
+    pub(super) fn font_scale_needed(&self) -> bool {
+        self.show.font_scale() != service::microfont_scale()
+    }
+
     pub(super) fn presentation_pending(&self) -> bool {
         self.pending_presentation.is_some()
     }
@@ -484,8 +499,8 @@ impl Shell3 {
         let (width, height) = self.show.resize_target_extent()
             .ok_or("shell3-show-resize-state")?;
         self.set(
-            (width / microfont::FWIDTH as u32) as usize,
-            (height / microfont::FHEIGHT as u32) as usize,
+            (width / (microfont::FWIDTH as u32 * self.show.font_scale())) as usize,
+            (height / (microfont::FHEIGHT as u32 * self.show.font_scale())) as usize,
         );
         let lines = self.capture_update_snapshot().rendered_lines();
         self.show.resize_to_current(lines.each_ref().map(|line| line.as_slice())).await
@@ -513,7 +528,7 @@ impl Shell3 {
     pub fn set_time(&mut self, time: &str) {
         self.time.clear();
         self.time.push_str(time);
-        self.rows.title.left = vec![MetaFmtStr::new(title_left_text(&self.time))];
+        self.rows.title.left = vec![MetaFmtStr::new(title_left_text(&self.time, self.mode))];
     }
 
     pub fn time(&self) -> &str {
@@ -527,6 +542,7 @@ impl Shell3 {
             3 => Mode::ADM,
             _ => return false,
         };
+        self.rows.title.left = vec![MetaFmtStr::new(title_left_text(&self.time, self.mode))];
         true
     }
 
@@ -581,6 +597,40 @@ impl Shell3 {
         let active = self.active_matrix_slot.as_deref()?;
         let slots = matrix_slots().lock();
         slots.ids.iter().find(|id| id.as_str() == active).cloned()
+    }
+
+    /// Basic UI editing only; Enter and command dispatch remain unwired.
+    pub(super) fn handle_keyboard(&mut self, event: &crate::r::keyboard::TrueosKeyboardOutputEvent) -> bool {
+        use crate::r::keyboard::*;
+        if event.kind == KEYBOARD_OUTPUT_KIND_KEY {
+            match event.key_code {
+                KEYBOARD_KEY_TAB => return self.set_mode(self.get_mode() % 3 + 1),
+                KEYBOARD_KEY_BACKSPACE => {
+                    if self.prompt.cursor == 0 { return false; }
+                    let index = self.prompt.cursor - 1;
+                    let byte = self.prompt.text.char_indices().nth(index).unwrap().0;
+                    self.prompt.text.remove(byte);
+                    if index < self.prompt.colors.len() { self.prompt.colors.remove(index); }
+                    self.prompt.cursor = index;
+                    self.refresh_prompt_strip();
+                    return true;
+                }
+                _ => return false,
+            }
+        }
+        if event.kind != KEYBOARD_OUTPUT_KIND_TEXT { return false; }
+        let Some(ch) = char::from_u32(event.codepoint).filter(|ch| !ch.is_control()) else { return false; };
+        let right_len = self.rows.promt.right.iter().map(|run| run.text.chars().count()).sum::<usize>();
+        // Keep all typed glyphs and the cursor visible beside the right strip.
+        if self.prompt.char_len() + 1 >= self.columns.saturating_sub(right_len) { return false; }
+        let byte = self.prompt.text.char_indices().nth(self.prompt.cursor)
+            .map(|(byte, _)| byte).unwrap_or(self.prompt.text.len());
+        self.prompt.text.insert(byte, ch);
+        self.prompt.colors.resize(self.prompt.char_len() - 1, None);
+        self.prompt.colors.insert(self.prompt.cursor, None);
+        self.prompt.cursor += 1;
+        self.refresh_prompt_strip();
+        true
     }
 
     pub fn set_prompt(&mut self, text: &str) {

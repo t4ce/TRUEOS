@@ -782,6 +782,10 @@ impl<T> NetQueue<T> {
     }
 
     #[inline]
+    pub fn is_empty(&self) -> bool {
+        self.inner.lock().is_empty()
+    }
+
     pub fn pop(&self) -> Option<T> {
         self.inner.lock().pop_front()
     }
