@@ -7,11 +7,7 @@ pub use show::{Backend as ShowBackend, Show};
 
 pub const OPERATOR: char = '§';
 pub const MODESTEP: char = '\t';
-pub const GROUP_OPEN: char = '[';
-pub const GROUP_CLOSE: char = ']';
-pub const SpecialSeperator: char = '│';
 pub const PROMPT_CURSOR: char = '▏';
-
 pub const MIN_COLUMNS: usize = 20;
 pub const MIN_ROWS: usize = 5;
 pub const MAX_SHELL3_INSTANCES: usize = 256;
@@ -20,7 +16,7 @@ pub const MAX_SHELL3_INSTANCES: usize = 256;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
     HV = 1,
-    CMD = 2,
+    CMD = 2,1
     ADM = 3,
 }
 
@@ -56,6 +52,7 @@ pub enum SpecialRows {
     StatusRow = 2,
     PromtRow = 3,
 }
+pub const SpecialSeperator: char = '│';
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -839,6 +836,8 @@ struct NameGroup {
     name: &'static str,
     names: &'static [NameEntry],
 }
+pub const GROUP_OPEN: char = '[';
+pub const GROUP_CLOSE: char = ']';
 
 const HV_GROUP_1: [NameEntry; 3] = [
     NameEntry { name: "online", color: RgbaColor::White },

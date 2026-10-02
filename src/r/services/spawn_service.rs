@@ -64,6 +64,7 @@ define_started_flags!(
     NET_SHELL_STARTED,
     LOCAL_SHELL_SESSION_POOL_STARTED,
     GRIDPAPER_SERVICE_STARTED,
+    SH3SRV_STARTED,
     HID_UDP_SRV_STARTED,
     HTTP_TRUEOSFS_STARTED,
     WS_TIME_STARTED,
@@ -604,6 +605,10 @@ fn spawn_gridpaper_service(spawner: Spawner) -> SpawnAttempt {
     spawn_on_worker(spawner, |_worker_spawner| {
         crate::r::services::gridpaper_service::gridpaper_service_task()
     })
+}
+
+fn spawn_sh3srv(spawner: Spawner) -> SpawnAttempt {
+    spawn_local(spawner, |spawner| crate::shell3::service::sh3srv_service_task(spawner))
 }
 
 fn spawn_hid_udp_srv(spawner: Spawner) -> SpawnAttempt {
@@ -1559,6 +1564,12 @@ static TASKS: [TaskSpec; TASK_COUNT] = [
         crate::r::readiness::BACKGROUND_AP_WORKER_READY,
         &GRIDPAPER_SERVICE_STARTED,
         spawn_gridpaper_service,
+    ),
+    TaskSpec::enabled(
+        "sh3srv",
+        crate::r::readiness::BACKGROUND_AP_WORKER_READY,
+        &SH3SRV_STARTED,
+        spawn_sh3srv,
     ),
     TaskSpec::enabled(
         "hid-udp-srv",
