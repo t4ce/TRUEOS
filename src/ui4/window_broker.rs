@@ -21,7 +21,7 @@ const _: () = assert!(MAX_WINDOWS < super::layer_contract::BACKGROUND_TARGET_BIT
 // test windows. Plane assignment is independent of session ownership, while
 // MAX_WINDOWS remains only the broker registry's hard storage bound.
 const MAX_WINDOWS_PER_SESSION: usize = 32;
-const MAX_SESSIONS: usize = 64;
+const MAX_SESSIONS: usize = MAX_WINDOWS;
 /// UI4 presents four hardware-blended application layers per output. Planes
 /// 1-3 are lease planes: one frame each, presented by the display engine and
 /// eligible for direct scanout. Plane 0 is the stack, where every frame which

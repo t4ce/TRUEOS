@@ -9,7 +9,7 @@ use crate::ui4::{
     DamageRect, FrameBuffering, FrameCadence, FrameContent, FrameHandle, FrameSpec,
     OutputId, PremultipliedRgba8, ScanoutFormat, WindowCreate,
     WindowId, WindowInteraction, WindowOwner, WindowPlacement, WindowPlane,
-    WindowSessionCloseRequest, WindowSessionId, begin_window_session, create_frame,
+    WindowSessionCloseRequest, WindowSessionId, begin_additional_window_session, create_frame,
     create_window, destroy_frame, finish_window_session_with_request, publish_window_frame,
     retire_frame_when_released,
     set_window_escape_key_action, Ui4FrameEscapeKeyAction, Ui4InputEvent, writable_rgba_view,
@@ -254,7 +254,7 @@ fn create_surface(width: u32, height: u32, backend: Backend) -> Result<Ui4Surfac
             return Err("shell3-show-frame-create");
         }
     };
-    let session = match begin_window_session(OWNER) {
+    let session = match begin_additional_window_session(OWNER) {
         Ok(session) => session,
         Err(_) => {
             let _ = destroy_frame(frame);
