@@ -843,3 +843,15 @@ pub unsafe extern "C" fn trueos_cabi_hid_hut_read_keyboards(
     let out_slice = core::slice::from_raw_parts_mut(out, out_cap as usize);
     hut::read_keyboards_snapshot(out_slice) as u32
 }
+
+/// Rebase relative motion for exactly one HID cursor without a button event.
+pub(crate) fn center_cursor(controller_id: u32, slot_id: u32, ep_target: u32) {
+    let mut runtimes = HID_RUNTIMES.lock();
+    if let Some(runtime) = runtimes.iter_mut().find(|runtime| {
+        runtime.controller_id == controller_id && runtime.slot_id == slot_id
+            && runtime.ep_target == ep_target
+    }) {
+        runtime.mouse_x = 0.5;
+        runtime.mouse_y = 0.5;
+    }
+}

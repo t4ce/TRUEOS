@@ -461,6 +461,8 @@ pub(crate) struct WindowPlacementTransition {
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub(crate) enum WindowDockTarget {
     Maximize,
+    /// Bottom-center input latch; never committed as a dock placement.
+    GenericResize,
     LeftHalf,
     RightHalf,
     TopLeft,
@@ -2623,6 +2625,7 @@ pub(super) fn docked_window_placement(
     let split_x = output_width / 2;
     let split_y = output_height / 2;
     let (x, y, width, height) = match target {
+        WindowDockTarget::GenericResize => return previous,
         WindowDockTarget::Maximize => (0, 0, output_width, output_height),
         WindowDockTarget::LeftHalf => (0, 0, split_x, output_height),
         WindowDockTarget::RightHalf => {

@@ -311,6 +311,7 @@ struct CursorRoute {
     suppress_context_menu_open: bool,
     selection_anchor: Option<(u32, u32)>,
     absorb_select: bool,
+    resize_latch: Option<(WindowTarget, u64)>,
 }
 
 impl CursorRoute {
@@ -338,10 +339,12 @@ impl CursorRoute {
             suppress_context_menu_open: false,
             selection_anchor: None,
             absorb_select: false,
+            resize_latch: None,
         }
     }
 
     fn clear_frame_interaction(&mut self) {
+        self.resize_latch = None;
         self.capture = None;
         self.keyboard_source = None;
         self.secondary_anchor = None;
@@ -596,6 +599,50 @@ impl InputBroker {
             self.cursors[index].y,
         );
         let hit = snapped_window.or_else(|| topmost_window_at(x, y));
+
+        // Own the complete rectangle gesture before menus, selection or app input.
+        if let Some((target, armed_ms)) = self.cursors[index].resize_latch {
+            let expired = trueos_time::Instant::now().as_millis().saturating_sub(armed_ms) >= 10_000;
+            let cancelled = pressed & !PRIMARY_BUTTON_MASK != 0 || event.wheel != 0;
+            let window = window_snapshot_for_target(target);
+            if expired || cancelled || window.is_none() {
+                self.cursors[index].resize_latch = None;
+                self.cursors[index].selection_anchor = None;
+                // A partially drawn rectangle remains absorbed through release.
+                if previous_buttons & PRIMARY_BUTTON_MASK != 0 {
+                    self.cursors[index].absorb_select = true;
+                }
+            } else {
+                let route = &mut self.cursors[index];
+                route.x = x;
+                route.y = y;
+                route.buttons_down = buttons_down;
+                if pressed & PRIMARY_BUTTON_MASK != 0 {
+                    route.selection_anchor = Some((x, y));
+                }
+                if released & PRIMARY_BUTTON_MASK != 0 {
+                    if let Some(anchor) = route.selection_anchor.take() {
+                        let rect = selection_rect_between(anchor, (x, y));
+                        if point_travel_reached(anchor, (x, y), FRAME_DRAG_GESTURE_MIN_TRAVEL_PX) {
+                            let window = window.unwrap();
+                            let placement = WindowPlacement {
+                                x: rect.x as i32, y: rect.y as i32,
+                                width: rect.width, height: rect.height,
+                                ..window.placement
+                            };
+                            if let Err(error) = super::window_broker::set_window_placement(
+                                target.owner, target.window, placement,
+                            ) {
+                                crate::log_warn!(target: "ui4";
+                                    "ui4/input: generic resize rejected error={:?}\n", error);
+                            }
+                        }
+                    }
+                    route.resize_latch = None;
+                }
+                return;
+            }
+        }
 
         super::context_menu::pointer_moved(source, x, y, width, height);
         if dx != 0 || dy != 0 {
@@ -892,7 +939,22 @@ impl InputBroker {
                     });
                 }
             }
-            if secondary_drop && let Some(dock_target) = dock_target {
+            if secondary_drop && dock_target == Some(super::WindowDockTarget::GenericResize)
+                && buttons_down == 0
+            {
+                self.select_frame(index, None, combo_id, vcursor);
+                self.cursors[index].resize_latch = Some((
+                    WindowTarget::from(target), trueos_time::Instant::now().as_millis(),
+                ));
+                self.cursors[index].x = width / 2;
+                self.cursors[index].y = height / 2;
+                self.cursors[index].buttons_down = 0;
+                crate::usb2::hid::center_cursor(source.controller_id, source.slot_id, source.ep_target);
+                return;
+            }
+            if secondary_drop && let Some(dock_target) = dock_target
+                && dock_target != super::WindowDockTarget::GenericResize
+            {
                 match super::dock_window(
                     target.owner,
                     target.id,
@@ -2583,7 +2645,7 @@ fn clamp_zone_metric(value: u32, limit: u32, screen_extent: u32) -> u32 {
     value.max(1).min(limit.max(1)).min(screen_extent)
 }
 
-pub(super) fn dock_zones(screen_width: u32, screen_height: u32) -> [Ui4DockZone; 7] {
+pub(super) fn dock_zones(screen_width: u32, screen_height: u32) -> [Ui4DockZone; 8] {
     let physical_reference =
         crate::intel::physical_extent_pixels(DOCK_REFERENCE_WIDTH_MM, DOCK_REFERENCE_HEIGHT_MM);
     dock_zones_with_reference(screen_width, screen_height, physical_reference)
@@ -2593,7 +2655,7 @@ fn dock_zones_with_reference(
     screen_width: u32,
     screen_height: u32,
     physical_reference: Option<(u32, u32)>,
-) -> [Ui4DockZone; 7] {
+) -> [Ui4DockZone; 8] {
     use super::WindowDockTarget;
 
     let metrics = dock_zone_metrics(screen_width, screen_height, physical_reference);
@@ -2665,6 +2727,15 @@ fn dock_zones_with_reference(
                 height: metrics.top_depth,
             },
         },
+        Ui4DockZone {
+            target: WindowDockTarget::GenericResize,
+            rect: Ui4VisualRect {
+                x: top_x,
+                y: screen_height.saturating_sub(metrics.top_depth),
+                width: metrics.top_span,
+                height: metrics.top_depth,
+            },
+        },
     ]
 }
 
@@ -2725,7 +2796,7 @@ pub(super) fn dock_zone_row_span(zone: Ui4DockZone, row: u32) -> Option<Ui4Visua
             let first = first_true_suffix(zone.rect.width, contains)?;
             (first, zone.rect.width.saturating_sub(1))
         }
-        WindowDockTarget::Maximize => {
+        WindowDockTarget::Maximize | WindowDockTarget::GenericResize => {
             let left_half = zone.rect.width / 2 + zone.rect.width % 2;
             let first = first_true_suffix(left_half, contains)?;
             (first, zone.rect.width.saturating_sub(1).saturating_sub(first))
@@ -2756,7 +2827,7 @@ pub(super) fn dock_zone_column_span(zone: Ui4DockZone, column: u32) -> Option<Ui
             let last = last_true_prefix(zone.rect.height, contains)?;
             (0, last)
         }
-        WindowDockTarget::BottomLeft | WindowDockTarget::BottomRight => {
+        WindowDockTarget::BottomLeft | WindowDockTarget::BottomRight | WindowDockTarget::GenericResize => {
             let first = first_true_suffix(zone.rect.height, contains)?;
             (first, zone.rect.height.saturating_sub(1))
         }
@@ -2856,6 +2927,12 @@ fn dock_zone_local_contains(
                 height,
             )
         }
+        WindowDockTarget::GenericResize => normalized_ellipse_contains(
+            x.saturating_mul(2).saturating_add(1).abs_diff(width),
+            width,
+            height.saturating_sub(1).saturating_sub(y).saturating_mul(2).saturating_add(1),
+            height.saturating_mul(2),
+        ),
         WindowDockTarget::Maximize => normalized_ellipse_contains(
             x.saturating_mul(2).saturating_add(1).abs_diff(width),
             width,
@@ -2889,6 +2966,7 @@ fn normalized_ellipse_contains(nx: u64, dx: u64, ny: u64, dy: u64) -> bool {
 
 const fn dock_target_label(target: super::WindowDockTarget) -> &'static str {
     match target {
+        super::WindowDockTarget::GenericResize => "generic-resize",
         super::WindowDockTarget::Maximize => "maximize",
         super::WindowDockTarget::LeftHalf => "left-half",
         super::WindowDockTarget::RightHalf => "right-half",
