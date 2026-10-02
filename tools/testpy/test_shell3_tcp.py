@@ -29,12 +29,14 @@ impl Shell3 {
     fn new_terminal() -> Result<Self, ()> {
         Ok(Self { mode: 1, prompt: String::new(), cursor: 0, parsed: RefCell::new(Vec::new()) })
     }
+    fn reconcile_matrix_selection(&mut self) {}
     fn get_strip(&self, _: SpecialRows, _: StripSide) -> String { "TrueOS § 12:34".into() }
     fn mode(&self) -> Mode { match self.mode { 1 => Mode::HV, 2 => Mode::CMD, _ => Mode::ADM } }
     fn get_mode(&self) -> u8 { self.mode }
     fn set_mode(&mut self, mode: u8) { self.mode = mode; }
     fn set_prompt(&mut self, text: &str) { self.prompt = text.into(); }
     fn set_cursor(&mut self, cursor: usize) { self.cursor = cursor; }
+    fn parse_operator(&mut self,text:&str)->bool {self.parsed.borrow_mut().push(text.into());text.starts_with(OPERATOR)}
     fn parse(&self, text: &str) -> bool { self.parsed.borrow_mut().push(text.into()); text == "known" }
 }
 mod tty {
@@ -46,6 +48,16 @@ mod tty {
     fn terminal() -> Terminal {
         let mut tty = Terminal::new(Shell3::new_terminal().unwrap());
         tty.output.clear(); tty
+    }
+    #[test] fn matrix_operator_is_submitted_once_with_enter() {
+        let mut tty = terminal();
+        tty.input("§id§".as_bytes());assert!(tty.shell.parsed.borrow().is_empty());
+        tty.input(b"\\r");tty.input(b"\\n");
+        assert_eq!(&*tty.shell.parsed.borrow(), &["§id§"]);
+        assert_eq!(tty.shell.prompt, "");assert_eq!(tty.shell.cursor,0);
+        let output=String::from_utf8_lossy(&tty.output);
+        assert!(!output.contains("unknown name"));assert!(!output.contains("not wired"));
+        assert_eq!(output.matches("HV § ").count(),1);
     }
     #[test] fn fragmented_unicode_crlf_and_backspace() {
         let mut tty = terminal();

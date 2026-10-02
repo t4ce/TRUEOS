@@ -70,7 +70,7 @@ impl Terminal {
         }
         match command {
             "" => {}
-            "help" => self.write(b"UTF-8 line input; Enter submits; Backspace erases.\r\nTab cycles HV/CMD/ADM; Ctrl-U clears; Ctrl-C cancels.\r\nexit or Ctrl-D on an empty line disconnects.\r\nShell3 currently recognizes names only; command execution and the section operator are not wired yet.\r\n"),
+            "help" => self.write(b"UTF-8 line input; Enter submits; Backspace erases.\r\nTab cycles HV/CMD/ADM; Ctrl-U clears; Ctrl-C cancels.\r\nexit or Ctrl-D on an empty line disconnects.\r\nShell3 recognizes names; command execution is not wired yet. Matrix operators are submitted with Enter.\r\n"),
             "exit" => {
                 self.write(b"Bye.\r\n");
                 self.closing = true;
@@ -98,6 +98,10 @@ impl Terminal {
         if self.line.pop().is_some() {
             self.write(b"\x08 \x08");
         }
+    }
+
+    pub(super) fn reconcile_matrix_selection(&mut self) {
+        self.shell.reconcile_matrix_selection();
     }
 
     pub fn input(&mut self, bytes: &[u8]) {

@@ -127,6 +127,9 @@ impl WorkerTerminals {
                 _ => {}
             }
         }
+        for connection in &mut self.connections {
+            if let Some(tty) = connection.terminal.as_mut() { tty.reconcile_matrix_selection(); }
+        }
         let now = Instant::now();
         self.connections.retain_mut(|connection| connection.flush(commands, now));
     }

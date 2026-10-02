@@ -29,7 +29,7 @@ impl Drop for Shell3 {fn drop(&mut self) {assert_eq!(CURRENT_SLOT.get(),self.slo
 mod tty {
 use super::*;
 pub struct Terminal {pub shell:Shell3,pub input_bytes:Vec<u8>,pub output:Vec<u8>,pub overflow:bool,pub closing:bool}
-impl Terminal {pub fn new(shell:Shell3)->Self {Self {shell,input_bytes:Vec::new(),output:Vec::new(),overflow:false,closing:false}} pub fn input(&mut self,data:&[u8]) {assert_eq!(CURRENT_SLOT.get(),self.shell.slot);self.input_bytes.extend_from_slice(data);self.output.extend_from_slice(data);}}
+impl Terminal {pub fn reconcile_matrix_selection(&mut self) {} pub fn new(shell:Shell3)->Self {Self {shell,input_bytes:Vec::new(),output:Vec::new(),overflow:false,closing:false}} pub fn input(&mut self,data:&[u8]) {assert_eq!(CURRENT_SLOT.get(),self.shell.slot);self.input_bytes.extend_from_slice(data);self.output.extend_from_slice(data);}}
 }
 mod service {}
 #[derive(Clone,Copy,Debug,PartialEq,Eq)] struct NetHandle(u32);

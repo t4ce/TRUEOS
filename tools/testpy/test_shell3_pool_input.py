@@ -172,6 +172,55 @@ fn type_text(shell:&mut Shell3,text:&str) {for ch in text.chars() {assert!(key(s
     assert!(s.rows.title.right.iter().all(|run|run.text!="Demo"));
 }
 '''
+    source += '''
+fn submit(shell:&mut Shell3,input:&str)->bool {shell.set_prompt("");type_text(shell,input);key(shell,2,3,'\\r')}
+#[test] fn operators_wait_for_enter_then_navigate_create_and_clear() {
+    MatrixSlots::set(&["id","123"]);matrix_slots().lock().echoes.clear();
+    let mut a=Shell3::new(80);let mut b=Shell3::new(80);
+    a.set_mode(2);a.aka_names=vec!["§abc".into()];
+    type_text(&mut a,"§abc");assert_eq!(a.prompt.text,"§abc");assert_eq!(a.active_matrix_slot_name(),None);
+    assert!(!MatrixSlots::slot_ids().iter().any(|id|id=="abc"));assert!(MatrixSlots::echo_lines(None).is_empty());
+    assert!(key(&mut a,2,3,'\\r'));assert_eq!(a.active_matrix_slot_name(),Some("abc".into()));assert_eq!(a.prompt.render(),"#");
+    assert_eq!(a.prompt.cursor,0);assert_eq!(a.mode,Mode::CMD);assert_eq!(b.active_matrix_slot_name(),None);
+    assert!(submit(&mut b,"§abc"));assert_eq!(MatrixSlots::slot_ids().iter().filter(|id|id.as_str()=="abc").count(),1);
+    assert!(submit(&mut a,"§"));assert_eq!(a.active_matrix_slot_index(),0);assert_eq!(b.active_matrix_slot_name(),Some("abc".into()));
+    assert!(MatrixSlots::echo_lines(Some("abc")).is_empty());
+}
+#[test] fn dropping_named_slot_frees_shared_data_and_cannot_resurrect_old_views() {
+    MatrixSlots::set(&["id","123"]);matrix_slots().lock().echoes.clear();
+    let mut a=Shell3::new(80);let mut b=Shell3::new(80);let mut c=Shell3::new(80);
+    assert!(submit(&mut a,"§abc"));assert!(submit(&mut b,"§abc"));type_text(&mut a,"online");
+    assert_eq!(MatrixSlots::echo_lines(Some("abc")),vec!["online"]);
+    let old=b.active_matrix_lifetime;let generation=matrix_slots().lock().generation;
+    assert!(submit(&mut c,"§abc§"));assert!(!MatrixSlots::slot_ids().iter().any(|id|id=="abc"));
+    assert!(matrix_slots().lock().echoes.iter().all(|(id,_)|id.as_deref()!=Some("abc")));
+    assert!(matrix_slots().lock().generation>generation);assert_eq!(a.active_matrix_slot_name(),None);assert_eq!(b.active_matrix_slot_index(),0);
+    // Recreate before AP owners reconcile. An old view must still be default.
+    assert!(submit(&mut c,"§abc"));assert_ne!(c.active_matrix_lifetime,old);
+    assert_eq!(b.active_matrix_slot_name(),None);
+    assert!(MatrixSlots::view_echo_snapshot(b.active_matrix_slot.as_deref(),b.active_matrix_lifetime).1.is_empty());
+    type_text(&mut b,"pause");assert_eq!(MatrixSlots::echo_lines(None),vec!["pause"]);assert!(MatrixSlots::echo_lines(Some("abc")).is_empty());
+    a.reconcile_matrix_selection();b.reconcile_matrix_selection();assert_eq!(a.active_matrix_slot,None);assert_eq!(b.active_matrix_slot,None);
+    assert_eq!(a.active_matrix_lifetime,None);assert!(a.matrix_selection_dirty);assert!(b.matrix_selection_dirty);
+}
+#[test] fn double_section_resets_default_and_preserves_other_slots() {
+    MatrixSlots::set(&["id","123"]);matrix_slots().lock().echoes.clear();
+    let mut a=Shell3::new(80);let mut b=Shell3::new(80);
+    type_text(&mut a,"online");assert!(submit(&mut b,"§id"));type_text(&mut b,"pause");
+    assert!(submit(&mut b,"§§"));assert_eq!(b.active_matrix_slot_name(),Some("id".into()));
+    assert!(MatrixSlots::echo_lines(None).is_empty());assert_eq!(MatrixSlots::echo_lines(Some("id")),vec!["pause"]);
+    type_text(&mut a,"stop");assert_eq!(MatrixSlots::echo_lines(None),vec!["stop"]);
+    assert!(submit(&mut a,"§§"));assert_eq!(a.prompt.render(),"#");assert_eq!(a.active_matrix_slot_index(),0);
+    assert!(MatrixSlots::echo_lines(None).is_empty());type_text(&mut a,"dl");assert_eq!(MatrixSlots::echo_lines(None),vec!["dl"]);
+}
+#[test] fn malformed_operator_and_ordinary_enter_are_inert() {
+    MatrixSlots::set(&["id","123"]);matrix_slots().lock().echoes.clear();let mut s=Shell3::new(80);
+    for text in ["unknown","§abc§def","§§abc","§a b","§§§"] {
+        assert!(!submit(&mut s,text));assert_eq!(s.prompt.text,text);assert_eq!(s.active_matrix_slot_name(),None);
+    }
+    assert!(MatrixSlots::echo_lines(None).is_empty());assert_eq!(MatrixSlots::slot_ids(),vec!["id","123"]);
+}
+'''
     with tempfile.TemporaryDirectory(prefix='shell3-pool-input-') as directory:
         path = Path(directory)
         (path/'test.rs').write_text(source)
