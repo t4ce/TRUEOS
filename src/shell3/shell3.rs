@@ -1,11 +1,15 @@
 mod format;
+mod names;
 pub mod service;
 pub mod show;
 mod update;
 
 pub use format::{bold, styled};
+pub use names::{GROUP_CLOSE, GROUP_OPEN};
 pub use show::{Backend as ShowBackend, Show};
 pub use update::{SegmentUpdate, UpdateBatch, UpdateCallback};
+
+use names::{ADM_NAMES, CMD_GROUPS, HV_GROUPS, RuntimeNameEntry};
 
 pub const OPERATOR: char = '§';
 pub const MODESTEP: char = '\t';
