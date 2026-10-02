@@ -82,7 +82,14 @@ pub fn live_shell3_instances() -> usize {
 pub struct TitleTime;
 
 impl TitleTime {
-    pub const DEFAULT: &'static str = "01:22";
+    /// Capture the current civil time for a shell's startup title.
+    pub fn current() -> String {
+        let utc_seconds = crate::chronos::best_effort_unix_time_seconds()
+            .unwrap_or_else(crate::time::uptime_seconds);
+        let local_seconds = crate::locale::local_unix_time_seconds(utc_seconds);
+        let minutes_of_day = (local_seconds / 60) % (24 * 60);
+        alloc::format!("{:02}:{:02}", minutes_of_day / 60, minutes_of_day % 60)
+    }
 
     pub fn set(shell: &mut Shell3, time: &str) {
         shell.set_time(time);
@@ -298,6 +305,7 @@ pub struct Shell3 {
     appdb_names: Vec<String>,
     update_callbacks: Vec<UpdateCallback>,
     update_baseline: update::Snapshot,
+    pending_presentation: Option<(update::Snapshot, UpdateBatch, [String; 3])>,
     show: Show,
 }
 
@@ -386,6 +394,7 @@ impl Shell3 {
             appdb_names,
             update_callbacks,
             update_baseline: initial,
+            pending_presentation: None,
             show: Show::default(),
         }
     }
@@ -412,16 +421,36 @@ impl Shell3 {
         if actual_slot != self.executor_slot {
             return Err("shell3-show-wrong-executor");
         }
-        let title = self.render_strips(SpecialRows::TitleRow);
-        let status = self.render_strips(SpecialRows::StatusRow);
-        let prompt = self.render_strips(SpecialRows::PromtRow);
-        self.show
-            .present(
-                [&title, &status, &prompt],
-                self.columns,
-                self.rows_count,
-            )
-            .await
+        loop {
+            if self.pending_presentation.is_none() {
+                let snapshot = self.capture_update_snapshot();
+                let batch = update::take_updates(
+                    &mut self.update_baseline,
+                    snapshot.clone(),
+                    &self.update_callbacks,
+                );
+                let lines = snapshot.rendered_lines();
+                self.pending_presentation = Some((snapshot, batch, lines));
+            }
+            let Some((snapshot, batch, lines)) = self.pending_presentation.as_ref() else {
+                return Err("shell3-show-pending-update-missing");
+            };
+            let snapshot = snapshot.clone();
+            let batch = batch.clone();
+            let lines = lines.clone();
+            let line_refs = [lines[0].as_str(), lines[1].as_str(), lines[2].as_str()];
+            let (columns, rows) = snapshot.size();
+            self.show.present(line_refs, columns, rows, &batch).await?;
+            self.pending_presentation = None;
+            if self.capture_update_snapshot() == snapshot {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    pub(super) fn presentation_pending(&self) -> bool {
+        self.pending_presentation.is_some()
     }
 
     /// Re-render at UI4's current dock or maximize target on this shell's AP.
@@ -629,8 +658,18 @@ impl Shell3 {
     }
 
     pub fn take_updates(&mut self) -> UpdateBatch {
+        if let Some((_, batch, _)) = &self.pending_presentation {
+            return batch.clone();
+        }
         let current = self.capture_update_snapshot();
-        update::take_updates(&mut self.update_baseline, current, &self.update_callbacks)
+        let batch = update::take_updates(
+            &mut self.update_baseline,
+            current.clone(),
+            &self.update_callbacks,
+        );
+        let lines = current.rendered_lines();
+        self.pending_presentation = Some((current, batch.clone(), lines));
+        batch
     }
 
     pub fn add_update_callback(&mut self, callback: UpdateCallback) {

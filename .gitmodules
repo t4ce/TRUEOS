@@ -6,3 +6,7 @@
 [submodule "vendor/infer"]
 	path = vendor/infer
 	url = https://github.com/t4ce/infer.git
+[submodule "vendor/microfont"]
+	path = vendor/microfont
+	url = https://github.com/t4ce/MicroFont.git
+	branch = true

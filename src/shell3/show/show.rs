@@ -6,6 +6,7 @@ mod copy;
 mod cpu;
 
 use super::RgbaColor;
+use alloc::string::String;
 use crate::ui4::{
     DamageRect, FrameBuffering, FrameCadence, FrameContent, FrameHandle, FrameSpec, OutputId,
     PremultipliedRgba8, ScanoutFormat, Ui4FrameEscapeKeyAction, Ui4InputEvent, WindowCreate,
@@ -13,7 +14,7 @@ use crate::ui4::{
     WindowSessionCloseRequest, WindowSessionId, begin_additional_window_session,
     commit_window_frame_replacement, create_frame, create_window, destroy_frame,
     finish_window_session_with_request, publish_window_frame, retire_frame_when_released,
-    set_window_escape_key_action, window_resize_state, writable_rgba_view,
+    set_window_escape_key_action, window_resize_state,
 };
 
 const OWNER: WindowOwner = WindowOwner::SHELL3_SERVICE;
@@ -49,6 +50,8 @@ struct Ui4Surface {
     backend: Backend,
     closing: bool,
     broker_resized: bool,
+    source_contents: [Option<[String; 3]>; 2],
+    frame_contents: [Option<[String; 3]>; 2],
 }
 
 /// Per-show backend selection and UI4 publication state.
@@ -119,7 +122,7 @@ impl Show {
             return Ok(());
         }
         let replacement = create_surface_frames(placement.width, placement.height, self.backend)?;
-        let staged = Ui4Surface {
+        let mut staged = Ui4Surface {
             source: replacement.0,
             frame: replacement.1,
             session: current.session,
@@ -129,10 +132,12 @@ impl Show {
             backend: self.backend,
             closing: false,
             broker_resized: true,
+            source_contents: [None, None],
+            frame_contents: [None, None],
         };
         let render_result = match self.backend {
-            Backend::Cpu => cpu::present(&staged, lines),
-            Backend::Copy => copy::present(&staged, lines, &mut self.poisoned).await,
+            Backend::Cpu => cpu::present(&mut staged, lines, &[]),
+            Backend::Copy => copy::present(&mut staged, lines, &[], &mut self.poisoned).await,
             _ => Err("shell3-show-backend-not-implemented"),
         };
         if let Err(error) = render_result {
@@ -210,6 +215,7 @@ impl Show {
         lines: [&str; 3],
         columns: usize,
         rows: usize,
+        batch: &super::UpdateBatch,
     ) -> Result<(), &'static str> {
         if !matches!(self.backend, Backend::Copy | Backend::Cpu) {
             return Err("shell3-show-backend-not-implemented");
@@ -226,20 +232,33 @@ impl Show {
             .map(|surface| (surface.width, surface.height))
             .unwrap_or(requested_extent);
         let (width, height) = extent;
-        if self.surface.as_ref().is_none_or(|surface| {
+        let recreate_surface = self.surface.as_ref().is_none_or(|surface| {
             surface.width != width || surface.height != height || surface.backend != self.backend
-        }) {
+        });
+        if recreate_surface {
             self.release_surface();
             self.surface = Some(create_surface(width, height, self.backend)?);
         }
-        let surface = self.surface.as_ref().ok_or("shell3-show-surface-missing")?;
-        match self.backend {
-            Backend::Cpu => cpu::present(surface, lines)?,
-            Backend::Copy => copy::present(surface, lines, &mut self.poisoned).await?,
-            _ => return Err("shell3-show-backend-not-implemented"),
+        if !recreate_surface && batch.segments.is_empty() {
+            return Ok(());
         }
-        publish_window_frame(OWNER, surface.window, DamageRect::FULL)
-            .map_err(|_| "shell3-show-window-publish")?;
+        let surface = self.surface.as_mut().ok_or("shell3-show-surface-missing")?;
+        let damage = match self.backend {
+            Backend::Cpu => cpu::present(surface, lines, &batch.segments)?,
+            Backend::Copy => {
+                copy::present(surface, lines, &batch.segments, &mut self.poisoned).await?
+            }
+            _ => return Err("shell3-show-backend-not-implemented"),
+        };
+        let damage = if recreate_surface {
+            Some(DamageRect::FULL)
+        } else {
+            damage
+        };
+        if let Some(damage) = damage {
+            publish_window_frame(OWNER, surface.window, damage)
+                .map_err(|_| "shell3-show-window-publish")?;
+        }
         Ok(())
     }
 
@@ -360,7 +379,40 @@ fn create_surface(width: u32, height: u32, backend: Backend) -> Result<Ui4Surfac
         backend,
         closing: false,
         broker_resized: false,
+        source_contents: [None, None],
+        frame_contents: [None, None],
     })
+}
+
+pub(super) fn rendered_lines(lines: [&str; 3]) -> [String; 3] {
+    lines.map(String::from)
+}
+
+fn damage_for_segments(
+    segments: &[super::SegmentUpdate],
+    width: u32,
+    height: u32,
+) -> Option<DamageRect> {
+    segments.iter().filter_map(|segment| {
+        let row = match segment.row {
+            super::SpecialRows::TitleRow => 0,
+            super::SpecialRows::StatusRow => 1,
+            super::SpecialRows::PromtRow => 2,
+        };
+        let x = u32::try_from(segment.offset).ok()?.saturating_mul(microfont::FWIDTH as u32);
+        let y = (row as u32).saturating_mul(microfont::FHEIGHT as u32);
+        let columns = segment.remove.max(segment.text.chars().count());
+        let patch_width = u32::try_from(columns).ok()?.saturating_mul(microfont::FWIDTH as u32);
+        if patch_width == 0 || x >= width || y >= height {
+            return None;
+        }
+        Some(DamageRect::new(
+            x,
+            y,
+            patch_width.min(width - x),
+            (microfont::FHEIGHT as u32).min(height - y),
+        ))
+    }).reduce(DamageRect::union)
 }
 
 fn create_surface_frames(
@@ -374,8 +426,8 @@ fn create_surface_frames(
             create_frame(FrameSpec {
                 output,
                 content: FrameContent::Image,
-                cadence: FrameCadence::Immutable,
-                buffering: FrameBuffering::Single,
+                cadence: FrameCadence::Dirty,
+                buffering: FrameBuffering::Double,
                 format: ScanoutFormat::Rgba8888Premultiplied,
                 width,
                 height,

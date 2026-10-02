@@ -25,6 +25,10 @@ pub type UpdateCallback = fn(&UpdateBatch);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct VisibleRow {
+    rendered: String,
+}
+
+struct VisibleParts {
     left: String,
     right: String,
 }
@@ -46,8 +50,18 @@ impl Snapshot {
         Self {
             size,
             layout_generation,
-            rows: strips.map(|(left, right)| visible_lr_strips(left, right, columns)),
+            rows: strips.map(|(left, right)| VisibleRow {
+                rendered: fit_lr_strips(left, right, columns),
+            }),
         }
+    }
+
+    pub(super) fn size(&self) -> (usize, usize) {
+        self.size
+    }
+
+    pub(super) fn rendered_lines(&self) -> [String; 3] {
+        self.rows.each_ref().map(|row| row.rendered.clone())
     }
 }
 
@@ -56,29 +70,33 @@ pub(super) fn take_updates(
     current: Snapshot,
     callbacks: &[UpdateCallback],
 ) -> UpdateBatch {
-    let old = core::mem::replace(baseline, current.clone());
-    let mut segments = Vec::new();
+    let batch = build_updates(baseline, &current, callbacks);
+    *baseline = current;
 
+    batch
+}
+
+pub(super) fn build_updates(
+    baseline: &Snapshot,
+    current: &Snapshot,
+    callbacks: &[UpdateCallback],
+) -> UpdateBatch {
+    let mut segments = Vec::new();
     for index in 0..3 {
         let row = row_from_index(index);
-        let old_row = &old.rows[row_index(row)];
-        let new_row = &current.rows[row_index(row)];
-
-        if let Some(update) =
-            diff_visible_segment(row, StripSide::Left, &old_row.left, &new_row.left)
-        {
-            segments.push(update);
-        }
-        if let Some(update) =
-            diff_visible_segment(row, StripSide::Right, &old_row.right, &new_row.right)
-        {
+        if let Some(update) = diff_visible_segment(
+            row,
+            StripSide::Left,
+            &baseline.rows[index].rendered,
+            &current.rows[index].rendered,
+        ) {
             segments.push(update);
         }
     }
 
     let batch = UpdateBatch {
-        layout_changed: old.layout_generation != current.layout_generation,
-        old_size: old.size,
+        layout_changed: baseline.layout_generation != current.layout_generation,
+        old_size: baseline.size,
         new_size: current.size,
         segments,
     };
@@ -90,6 +108,21 @@ pub(super) fn take_updates(
     }
 
     batch
+}
+
+pub(super) fn diff_rendered_lines(
+    previous: Option<&[String; 3]>,
+    current: &[String; 3],
+) -> Vec<SegmentUpdate> {
+    let mut updates = Vec::new();
+    for (index, line) in current.iter().enumerate() {
+        let row = row_from_index(index);
+        let old = previous.map(|lines| lines[index].as_str()).unwrap_or("");
+        if let Some(update) = diff_visible_segment(row, StripSide::Left, old, line) {
+            updates.push(update);
+        }
+    }
+    updates
 }
 
 pub(super) fn fit_lr_strips(left: &str, right: &str, columns: usize) -> String {
@@ -116,14 +149,6 @@ pub(super) fn fit_lr_strips(left: &str, right: &str, columns: usize) -> String {
     output.extend(core::iter::repeat(' ').take(gap));
     output.push_str(&visible.right);
     output
-}
-
-fn row_index(row: SpecialRows) -> usize {
-    match row {
-        SpecialRows::TitleRow => 0,
-        SpecialRows::StatusRow => 1,
-        SpecialRows::PromtRow => 2,
-    }
 }
 
 fn row_from_index(index: usize) -> SpecialRows {
@@ -163,24 +188,24 @@ fn take_visible(text: &str, limit: usize) -> String {
         .concat()
 }
 
-fn visible_lr_strips(left: &str, right: &str, columns: usize) -> VisibleRow {
+fn visible_lr_strips(left: &str, right: &str, columns: usize) -> VisibleParts {
     let left_len = visible_len(left);
     let right_len = visible_len(right);
 
     if left_len + right_len <= columns {
-        return VisibleRow {
+        return VisibleParts {
             left: left.to_string(),
             right: right.to_string(),
         };
     }
     if left_len == 0 {
-        return VisibleRow {
+        return VisibleParts {
             left: String::new(),
             right: take_visible(right, columns),
         };
     }
     if right_len == 0 {
-        return VisibleRow {
+        return VisibleParts {
             left: take_visible(left, columns),
             right: String::new(),
         };
@@ -197,7 +222,7 @@ fn visible_lr_strips(left: &str, right: &str, columns: usize) -> VisibleRow {
         (left_half, right_half)
     };
 
-    VisibleRow {
+    VisibleParts {
         left: take_visible(left, left_limit),
         right: take_visible(right, right_limit),
     }

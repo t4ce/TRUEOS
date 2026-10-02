@@ -403,8 +403,9 @@ async fn draw_worker_task(worker_id: usize, expected_slot: u32) {
         while has_pending_for_executor(expected_slot) && take_pending_for_executor(expected_slot) {
             let aka_names = crate::r::restart::startup_alias_names();
             let appdb_names = appdb_names_snapshot().1;
+            let startup_time = super::TitleTime::current();
             match owned_shells.create_shell_reserved(
-                "01:22", aka_names, appdb_names, Vec::new(), 80, 5,
+                &startup_time, aka_names, appdb_names, Vec::new(), 80, 5,
             ) {
                 Ok(index) => {
                     if let Some(shell) = owned_shells.get_mut(index)
@@ -502,6 +503,18 @@ async fn draw_worker_task(worker_id: usize, expected_slot: u32) {
                         event.width, event.height, error,
                     );
                 }
+            }
+        }
+
+        for index in 0..owned_shells.len() {
+            if let Some(shell) = owned_shells.get_mut(index)
+                && shell.presentation_pending()
+                && let Err(error) = shell.present().await
+            {
+                crate::log_warn!(target: "service";
+                    "sh3srv: pending presentation retry failed slot={} shell={} error={}\n",
+                    expected_slot, index, error,
+                );
             }
         }
 
