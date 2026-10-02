@@ -418,7 +418,8 @@ async fn shell_worker_task(worker_id: usize, expected_slot: u32) {
             let appdb_names = appdb_names_snapshot().1;
             let startup_time = super::TitleTime::current();
             match owned_shells.create_shell_reserved(
-                &startup_time, aka_names, appdb_names, Vec::new(), 80, 5,
+                &startup_time, aka_names, appdb_names, Vec::new(),
+                super::Default_COLUMNS, super::Default_ROWS,
             ) {
                 Ok(index) => {
                     if let Some(shell) = owned_shells.get_mut(index)

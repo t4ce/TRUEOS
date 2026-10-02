@@ -20,6 +20,8 @@ pub const MAX_SHELL3_INSTANCES: usize = 256;
 pub const OPERATOR: char = '§';
 pub const MODESTEP: char = '\t';
 pub const PROMPT_CURSOR: char = '#';
+pub const Default_COLUMNS: usize = 50;
+pub const Default_ROWS: usize = 25;
 pub const MIN_COLUMNS: usize = 20;
 pub const MIN_ROWS: usize = 5;
 
@@ -424,7 +426,7 @@ impl Shell3 {
         debug_assert_eq!(crate::percpu::current_slot() as u32, slot);
         let mut shell = Self::new_inner(
             &TitleTime::current(), crate::r::restart::startup_alias_names(),
-            service::appdb_names_snapshot().1, Vec::new(), 80, MIN_ROWS, slot,
+            service::appdb_names_snapshot().1, Vec::new(), Default_COLUMNS, Default_ROWS, slot,
         );
         shell.set_show_backend(ShowBackend::Network);
         shell
