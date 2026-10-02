@@ -73,8 +73,8 @@ fn paint_segment(view: FrameRgbaView, segment: &super::super::SegmentUpdate) -> 
     }
     let width = requested_width.min(view.width as usize - x);
     let height = glyph_height.min(view.height as usize - y);
-    let background = super::super::BACKGROUND.rgba();
-    let foreground = super::super::FOREGROUND.rgba();
+    let background = super::BACKGROUND.rgba();
+    let foreground = super::FOREGROUND.rgba();
     let pixels = unsafe { core::slice::from_raw_parts_mut(view.virt as *mut u8, view.byte_len) };
     for py in y..y + height {
         let row_offset = py.checked_mul(view.pitch as usize).ok_or(())?;
