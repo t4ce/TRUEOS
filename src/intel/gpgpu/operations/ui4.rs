@@ -1136,3 +1136,18 @@ pub(crate) async fn gpu_completion_reaper_task() {
         Timer::after(Duration::from_millis(1)).await;
     }
 }
+
+/// Issue a display release only after the blitter's marker and context save.
+pub(crate) fn poll_ui4_bcs0_sprite_copy(
+    submission: crate::intel::GucBcs0CopySubmission,
+    dst: GpgpuRgba8Surface,
+) -> Ui4SpriteSceneCompletion {
+    match crate::intel::poll_guc_bcs0_rgba_copies(submission) {
+        crate::intel::GucBcs0CopyCompletion::Pending => Ui4SpriteSceneCompletion::Pending,
+        crate::intel::GucBcs0CopyCompletion::Complete => Ui4SpriteSceneCompletion::Complete {
+            stats: GpgpuWorklistSubmitStats::default(),
+            release: gpgpu_rgba8_release(dst),
+        },
+        _ => Ui4SpriteSceneCompletion::Failed,
+    }
+}
