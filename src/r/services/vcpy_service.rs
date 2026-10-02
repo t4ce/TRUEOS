@@ -177,7 +177,7 @@ pub(crate) fn mono_check() -> Result<(), &'static str> {
     glyphs[1].foreground = 0xFFB4_69FF;
     glyphs[1].background = 0xFF20_4080;
     for (glyph, character) in glyphs.iter_mut().zip(['§', 'A']) {
-        let bits = microfont::font_pixels(microfont::glyph_byte(character));
+        let bits = microfont::glyph_pixels(character);
         for bit in 0..64 {
             if bits & (1 << (63 - bit)) != 0 {
                 glyph.mask[(bit / 6) * 2] |= 0x80 >> (bit % 6);

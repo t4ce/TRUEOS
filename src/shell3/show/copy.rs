@@ -127,7 +127,7 @@ fn glyphs_for_update(
         if x >= view.width { break; }
         let character = characters.next().unwrap_or(' ');
         let atlas = microfont::glyph_byte(character);
-        let bits = microfont::font_pixels(atlas);
+        let bits = microfont::glyph_pixels(character);
         let mut mask = [0u8; 64];
         let width = (microfont::FWIDTH as u32 * scale).min(view.width - x);
         let height = (microfont::FHEIGHT as u32 * scale).min(view.height - y);

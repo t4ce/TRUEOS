@@ -84,7 +84,7 @@ mod show {
             for scale in [1, 2] {
             for height in [55, 66] {
             for width in [20, 96] {
-                for (row, text) in [(crate::SpecialRows::PromtRow,"§éq─A"), (crate::SpecialRows::PromtRow,"q"), (crate::SpecialRows::PromtRow,""), (crate::SpecialRows::PromtRow,"Hello §"), (crate::SpecialRows::MatrixRow(0),"online"), (crate::SpecialRows::MatrixRow(1),"net")] {
+                for (row, text) in [(crate::SpecialRows::PromtRow,"§éq─A"), (crate::SpecialRows::PromtRow,"q"), (crate::SpecialRows::PromtRow,""), (crate::SpecialRows::PromtRow,"Hello §"), (crate::SpecialRows::MatrixRow(0),"⠁⠂⡀⢀⣿⠀"), (crate::SpecialRows::MatrixRow(1),"net")] {
                     let mut pixels = vec![0x5Au8; 512 * 66];
                     let mut expanded = pixels.clone();
                     let view = FrameRgbaView { virt: pixels.as_mut_ptr(), byte_len: pixels.len(),
