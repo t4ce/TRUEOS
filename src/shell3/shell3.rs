@@ -1,10 +1,10 @@
-mod format;
 mod names;
+mod metafmtstr;
 pub mod service;
 pub mod show;
 mod update;
 
-pub use format::{bold, styled};
+pub use metafmtstr::MetaFmtStr;
 pub use names::{GROUP_CLOSE, GROUP_OPEN};
 pub use show::{Backend as ShowBackend, Show};
 pub use update::{SegmentUpdate, UpdateBatch, UpdateCallback};
@@ -137,20 +137,25 @@ fn matrix_slots() -> &'static std::sync::RwLock<MatrixSlotsState> {
     MATRIX_SLOTS.get_or_init(|| std::sync::RwLock::new(MatrixSlotsState::new()))
 }
 
-fn push_bold_operator(text: &mut String) {
-    text.push_str(&bold(&OPERATOR.to_string()));
+fn matrix_slots_meta(ids: &[String]) -> Vec<MetaFmtStr> {
+    let mut runs = Vec::with_capacity(ids.len().saturating_mul(3).saturating_add(1));
+    runs.push(MetaFmtStr::new(OPERATOR.to_string()).bold());
+    for id in ids {
+        runs.push(MetaFmtStr::new(" "));
+        runs.push(MetaFmtStr::new(OPERATOR.to_string()).bold());
+        runs.push(MetaFmtStr::new(id.clone()));
+    }
+    runs
 }
 
 fn matrix_slots_text(ids: &[String]) -> String {
     let mut text = String::new();
-    push_bold_operator(&mut text);
-
+    text.push(OPERATOR);
     for id in ids {
         text.push(' ');
-        push_bold_operator(&mut text);
+        text.push(OPERATOR);
         text.push_str(id);
     }
-
     text
 }
 
@@ -160,8 +165,7 @@ fn current_matrix_slots_text() -> String {
 }
 
 impl MatrixSlots {
-    pub const DEFAULT: &'static str =
-        "\x1b[1m§\x1b[0m \x1b[1m§\x1b[0mid \x1b[1m§\x1b[0m123";
+    pub const DEFAULT: &'static str = "§ §id §123";
 
     /// Shared across every Shell3. Names are supplied without the § prefix.
     pub fn set<T: AsRef<str>>(names: &[T]) {
@@ -184,6 +188,12 @@ impl MatrixSlots {
 
     pub fn get() -> String {
         current_matrix_slots_text()
+    }
+
+    /// Returns the slot strip as text runs carrying style metadata.
+    pub fn formatted() -> Vec<MetaFmtStr> {
+        let slots = matrix_slots().read().unwrap();
+        matrix_slots_meta(&slots.ids)
     }
 
     // Active selection is per shell, not shared.

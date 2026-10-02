@@ -137,27 +137,7 @@ fn row_from_index(index: usize) -> SpecialRows {
 fn styled_glyphs(text: &str) -> Vec<String> {
     let mut glyphs = Vec::new();
     let mut pending = String::new();
-    let mut chars = text.chars().peekable();
-
-    while let Some(ch) = chars.next() {
-        if ch == '\x1b' && chars.peek() == Some(&'[') {
-            let mut sequence = String::from("\x1b");
-            sequence.push(chars.next().unwrap());
-            while let Some(next) = chars.next() {
-                sequence.push(next);
-                if next == 'm' {
-                    break;
-                }
-            }
-
-            if sequence == super::format::RESET && !glyphs.is_empty() && pending.is_empty() {
-                glyphs.last_mut().unwrap().push_str(&sequence);
-            } else {
-                pending.push_str(&sequence);
-            }
-            continue;
-        }
-
+    for ch in text.chars() {
         pending.push(ch);
         glyphs.push(core::mem::take(&mut pending));
     }
