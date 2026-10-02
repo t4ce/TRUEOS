@@ -117,6 +117,17 @@ pub(crate) fn create_gpu_full_overwrite_surface(
     height: u32,
     format: UiSurfaceFormat,
 ) -> Result<UiSurfaceHandle> {
+    create_uninitialized_surface(width, height, format)
+}
+
+/// Private allocation for UI4 initialization. The caller must initialize all
+/// bytes before exposing the handle, and retain backing if GPU retirement is
+/// uncertain. No surface registry lock is held during that initialization.
+pub(crate) fn create_uninitialized_surface(
+    width: u32,
+    height: u32,
+    format: UiSurfaceFormat,
+) -> Result<UiSurfaceHandle> {
     create_surface_with_initialization(width, height, format, false)
 }
 

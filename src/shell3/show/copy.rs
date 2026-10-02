@@ -1,4 +1,4 @@
-//! BCS0 copy adapter for Shell3's UI4 image frames.
+//! Classical BCS0 XY_SRC_COPY_BLT adapter for Shell3's MicroFont patches.
 
 use alloc::vec::Vec;
 use trueos_time::{Duration, Timer};
@@ -80,7 +80,7 @@ pub(super) async fn present(
         }
     }
     if !copies.is_empty() {
-        let submission = match crate::intel::queue_guc_bcs0_rgba_copies(bcs_surface(destination_view), &copies) {
+        let submission = match crate::intel::queue_guc_bcs0_legacy_rgba_copies(bcs_surface(destination_view), &copies) {
             Ok(submission) => submission,
             Err(crate::intel::GucBcs0CopySubmitError::SubmitFailed) => {
                 *poisoned = true;
@@ -99,7 +99,12 @@ pub(super) async fn present(
                 crate::intel::GucBcs0CopyCompletion::Pending => {
                     Timer::after(Duration::from_millis(1)).await;
                 }
-                crate::intel::GucBcs0CopyCompletion::Complete => break,
+                crate::intel::GucBcs0CopyCompletion::Complete => {
+                    crate::log_once!(target: "apps";
+                        "shell3/show: bcs0-retired backend=legacy command=xy-src-copy-blt rop=cc rgba=all glyphs=microfont\n"
+                    );
+                    break;
+                }
                 crate::intel::GucBcs0CopyCompletion::Failed
                 | crate::intel::GucBcs0CopyCompletion::InvalidSubmission => {
                     return Err("shell3-show-bcs0-retirement-uncertain");

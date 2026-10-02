@@ -1,6 +1,6 @@
 //! Software MicroFont renderer for Shell3's UI4 image frame.
 
-use alloc::{string::String, vec};
+use alloc::vec;
 
 use crate::ui4::{
     FrameRgbaView, acquire_frame_buffer, cancel_frame_buffer,
@@ -84,11 +84,10 @@ fn paint_segment(view: FrameRgbaView, segment: &super::super::SegmentUpdate) -> 
         }
     }
 
-    let text = ascii_text(&segment.text);
     let mask_width = width;
     let mask_height = height;
     let mut glyphs = vec![0u8; mask_width.checked_mul(mask_height).ok_or(())?];
-    microfont::stamp_text(&mut glyphs, mask_width, mask_height, 0, 0, &text, 1u8).map_err(|_| ())?;
+    microfont::stamp_text(&mut glyphs, mask_width, mask_height, 0, 0, &segment.text, 1u8).map_err(|_| ())?;
     for (index, alpha) in glyphs.iter().copied().enumerate() {
         if alpha == 0 {
             continue;
@@ -106,16 +105,4 @@ fn paint_segment(view: FrameRgbaView, segment: &super::super::SegmentUpdate) -> 
         height.saturating_mul(view.pitch as usize),
     );
     Ok(())
-}
-
-fn ascii_text(text: &str) -> String {
-    text.chars()
-        .map(|character| {
-            if character.is_ascii_graphic() || character == ' ' {
-                character
-            } else {
-                '-'
-            }
-        })
-        .collect()
 }

@@ -726,7 +726,26 @@ pub(crate) fn queue_guc_bcs0_rgba_copies(
     if copies.is_empty() {
         return Err(GucBcs0CopySubmitError::InvalidRequest);
     }
-    queue_guc_bcs0_batch(destination, copies, false, None)
+    queue_guc_bcs0_batch(destination, copies, false, GucBcs0BatchKind::FastCopy)
+}
+
+/// Classical BLT backend, linear 32bpp SRCCOPY with RGB and alpha writes.
+/// Scheduling, address spaces and retirement remain owned by the GuC lane.
+pub(crate) fn queue_guc_bcs0_legacy_rgba_copies(
+    destination: GucBcs0RgbaSurface,
+    copies: &[GucBcs0RgbaCopy],
+) -> Result<GucBcs0CopySubmission, GucBcs0CopySubmitError> {
+    if copies.is_empty() || copies.iter().any(|&copy| !guc_blt_valid_legacy_copy(destination, copy)) {
+        return Err(GucBcs0CopySubmitError::InvalidRequest);
+    }
+    queue_guc_bcs0_batch(destination, copies, false, GucBcs0BatchKind::LegacyCopy)
+}
+
+#[derive(Clone, Copy, Debug)]
+enum GucBcs0BatchKind {
+    FastCopy,
+    LegacyCopy,
+    FastFill(u32),
 }
 
 /// First bring-up rung: flush/write a completion cookie and end the batch,
@@ -734,7 +753,7 @@ pub(crate) fn queue_guc_bcs0_rgba_copies(
 pub(crate) fn queue_guc_bcs0_marker(
     destination: GucBcs0RgbaSurface,
 ) -> Result<GucBcs0CopySubmission, GucBcs0CopySubmitError> {
-    queue_guc_bcs0_batch(destination, &[], false, None)
+    queue_guc_bcs0_batch(destination, &[], false, GucBcs0BatchKind::FastCopy)
 }
 
 /// Bit-preserving 32-bit copies from a device-written system-memory source.
@@ -746,7 +765,7 @@ pub(crate) fn queue_guc_bcs0_uncached_copies(
     if copies.is_empty() {
         return Err(GucBcs0CopySubmitError::InvalidRequest);
     }
-    queue_guc_bcs0_batch(destination, copies, true, None)
+    queue_guc_bcs0_batch(destination, copies, true, GucBcs0BatchKind::FastCopy)
 }
 
 /// Fill an entire linear RGBA8 allocation with one packed pixel value.
@@ -758,14 +777,14 @@ pub(crate) fn queue_guc_bcs0_rgba_fill(
     if !guc_blt_valid_fill(destination) {
         return Err(GucBcs0CopySubmitError::InvalidRequest);
     }
-    queue_guc_bcs0_batch(destination, &[], false, Some(color))
+    queue_guc_bcs0_batch(destination, &[], false, GucBcs0BatchKind::FastFill(color))
 }
 
 fn queue_guc_bcs0_batch(
     destination: GucBcs0RgbaSurface,
     copies: &[GucBcs0RgbaCopy],
     uncached_sources: bool,
-    fill_color: Option<u32>,
+    kind: GucBcs0BatchKind,
 ) -> Result<GucBcs0CopySubmission, GucBcs0CopySubmitError> {
     if !guc_blt_state_reuse_permitted(&GUC_BLT_LANE_QUARANTINED) {
         return Err(GucBcs0CopySubmitError::Unavailable);
@@ -807,9 +826,10 @@ fn queue_guc_bcs0_batch(
             .fetch_add(1, Ordering::Relaxed)
             .max(1);
         let marker = 0xBC50_0000 | (sequence & 0xFFFF);
-        let (copy_count, copied_bytes) = match fill_color {
-            Some(color) => guc_blt_encode_ui4_fill_batch(state, destination, color, marker)?,
-            None => guc_blt_encode_ui4_copy_batch(state, destination, copies, marker)?,
+        let (copy_count, copied_bytes) = match kind {
+            GucBcs0BatchKind::FastFill(color) => guc_blt_encode_ui4_fill_batch(state, destination, color, marker)?,
+            GucBcs0BatchKind::FastCopy => guc_blt_encode_ui4_copy_batch(state, destination, copies, marker)?,
+            GucBcs0BatchKind::LegacyCopy => guc_blt_encode_legacy_copy_batch(state, destination, copies, marker)?,
         };
         Some((sequence, marker, copy_count, copied_bytes))
     })();
@@ -868,9 +888,9 @@ fn queue_guc_bcs0_batch(
     runtime.copies = copy_count;
     runtime.bytes = copied_bytes;
     crate::log_trace!(target: "ui4";
-        "ui4/blt: queued sequence={} engine=bcs0 path=guc copies={} bytes={} marker=0x{:08X} destination={}x{} pitch=0x{:X} direct_elsp=0 legacy_fallback=0\n",
+        "ui4/blt: queued sequence={} engine=bcs0 path=guc copies={} bytes={} marker=0x{:08X} destination={}x{} pitch=0x{:X} command={:?} direct_elsp=0 legacy_fallback=0\n",
         sequence, copy_count, copied_bytes, marker, destination.width,
-        destination.height, destination.pitch_bytes,
+        destination.height, destination.pitch_bytes, kind,
     );
     Ok(GucBcs0CopySubmission { sequence })
 }
@@ -1566,6 +1586,19 @@ fn guc_blt_valid_copy(destination: GucBcs0RgbaSurface, copy: GucBcs0RgbaCopy) ->
             .is_some_and(|bottom| bottom <= destination.height && bottom <= u16::MAX as u32)
 }
 
+fn guc_blt_valid_legacy_copy(destination: GucBcs0RgbaSurface, copy: GucBcs0RgbaCopy) -> bool {
+    // XY_SRC_COPY_BLT uses signed 16-bit coordinates and pitches. This first
+    // consumer needs only positive, non-overlapping linear rectangles.
+    guc_blt_valid_surface(destination)
+        && guc_blt_valid_copy(destination, copy)
+        && destination.pitch_bytes <= i16::MAX as u32
+        && copy.source.pitch_bytes <= i16::MAX as u32
+        && copy.source_x + copy.width <= i16::MAX as u32
+        && copy.source_y + copy.height <= i16::MAX as u32
+        && copy.destination_x + copy.width <= i16::MAX as u32
+        && copy.destination_y + copy.height <= i16::MAX as u32
+}
+
 fn guc_blt_map_ui4_surfaces(
     state: DirectBltState,
     destination: GucBcs0RgbaSurface,
@@ -1611,6 +1644,25 @@ fn guc_blt_encode_ui4_copy_batch(
     copies: &[GucBcs0RgbaCopy],
     marker: u32,
 ) -> Option<(usize, u64)> {
+    guc_blt_encode_copy_batch(state, destination, copies, marker, false)
+}
+
+fn guc_blt_encode_legacy_copy_batch(
+    state: DirectBltState,
+    destination: GucBcs0RgbaSurface,
+    copies: &[GucBcs0RgbaCopy],
+    marker: u32,
+) -> Option<(usize, u64)> {
+    guc_blt_encode_copy_batch(state, destination, copies, marker, true)
+}
+
+fn guc_blt_encode_copy_batch(
+    state: DirectBltState,
+    destination: GucBcs0RgbaSurface,
+    copies: &[GucBcs0RgbaCopy],
+    marker: u32,
+    legacy: bool,
+) -> Option<(usize, u64)> {
     let batch = unsafe {
         core::slice::from_raw_parts_mut(
             state.batch_virt.cast::<u32>(),
@@ -1640,13 +1692,29 @@ fn guc_blt_encode_ui4_copy_batch(
     let mut cursor = 12usize;
     let mut copied_bytes = 0u64;
     for copy in copies.iter().copied() {
-        if !guc_blt_valid_copy(destination, copy) || cursor.saturating_add(10) > batch.len() {
+        let valid = if legacy {
+            guc_blt_valid_legacy_copy(destination, copy)
+        } else {
+            guc_blt_valid_copy(destination, copy)
+        };
+        if !valid || cursor.saturating_add(10) > batch.len() {
             return None;
         }
         let destination_right = copy.destination_x.checked_add(copy.width)?;
         let destination_bottom = copy.destination_y.checked_add(copy.height)?;
-        batch[cursor] = XY_FAST_COPY_BLT_CMD;
-        batch[cursor + 1] = destination.pitch_bytes | XY_FAST_COPY_COLOR_DEPTH_32;
+        // TGL Vol 2a pp.1426-1428: XY_SRC_COPY_BLT, both 32bpp byte masks,
+        // clipping disabled, SRCCOPY ROP CC. Vol 10 "BLT Engine Instructions"
+        // specifies BYTE pitches for linear surfaces (DWords only for tiled).
+        batch[cursor] = if legacy {
+            (2 << 29) | (0x53 << 22) | (3 << 20) | 8
+        } else {
+            XY_FAST_COPY_BLT_CMD
+        };
+        batch[cursor + 1] = destination.pitch_bytes | if legacy {
+            (3 << 24) | (0xCC << 16)
+        } else {
+            XY_FAST_COPY_COLOR_DEPTH_32
+        };
         batch[cursor + 2] = copy.destination_x | (copy.destination_y << 16);
         batch[cursor + 3] = destination_right | (destination_bottom << 16);
         batch[cursor + 4] = destination.gpu as u32;

@@ -297,6 +297,8 @@ fn create_frame_admitted(
     for surface in surfaces.iter_mut().take(count) {
         let allocation = if gpu_full_overwrite_required {
             ui_surface::create_gpu_full_overwrite_surface(plan.width, plan.height, format)
+        } else if plan.base_color.is_some() {
+            ui_surface::create_uninitialized_surface(plan.width, plan.height, format)
         } else {
             ui_surface::create_surface(plan.width, plan.height, format)
         };
@@ -309,10 +311,10 @@ fn create_frame_admitted(
         }
     }
     if let Some(color) = plan.base_color
-        && !initialize_rgba_surfaces(surfaces, count, color)
+        && let Err(error) = initialize_rgba_surfaces(&mut surfaces, count, color)
     {
         destroy_surfaces(surfaces);
-        return Err(FramePoolError::UnsupportedFormat);
+        return Err(error);
     }
 
     let mut pool = FRAME_POOL.lock();
@@ -961,33 +963,88 @@ fn destroy_surfaces(surfaces: [Option<UiSurfaceHandle>; FRAME_BUFFER_CAPACITY]) 
 /// zeroed backing buffer when the consumer requested an opaque or translucent
 /// base color.
 fn initialize_rgba_surfaces(
-    surfaces: [Option<UiSurfaceHandle>; FRAME_BUFFER_CAPACITY],
+    surfaces: &mut [Option<UiSurfaceHandle>; FRAME_BUFFER_CAPACITY],
     count: usize,
     color: PremultipliedRgba8,
-) -> bool {
+) -> Result<(), FramePoolError> {
+    use crate::intel::gpgpu::GpgpuSubmissionOutcome as Outcome;
     let pixel = u32::from_le_bytes(color.to_native_bytes());
-    let mut initialized = 0usize;
-    for surface in surfaces.into_iter().take(count) {
-        let Some(surface) = surface else {
-            return false;
-        };
-        let Some(access) = ui_surface::rgba_access(surface) else {
-            return false;
-        };
-        if access.virt.is_null() || access.byte_len % core::mem::size_of::<u32>() != 0 {
-            return false;
-        }
-        let words = access.byte_len / core::mem::size_of::<u32>();
-        let dst = access.virt.cast::<u32>();
-        for offset in 0..words {
-            unsafe {
-                core::ptr::write(dst.add(offset), pixel);
+    for slot in surfaces.iter_mut().take(count) {
+        let surface = slot.ok_or(FramePoolError::UnsupportedFormat)?;
+        let access = ui_surface::rgba_access(surface).ok_or(FramePoolError::UnsupportedFormat)?;
+        match initialize_rgba_surface(access, pixel) {
+            Outcome::Complete => {}
+            Outcome::Unavailable => return Err(FramePoolError::UnsupportedFormat),
+            Outcome::SubmittedIncomplete => {
+                // Keep this registry entry, physical backing and producer VA
+                // reserved until reboot. Cleanup may free only other buffers.
+                *slot = None;
+                crate::log_error!(target: "ui4";
+                    "ui4/base-fill retirement-uncertain phys=0x{:X} bytes={} backing=retained frame=unpublished\n",
+                    access.phys, access.byte_len,
+                );
+                return Err(FramePoolError::Busy);
             }
         }
-        crate::intel::dma_flush(access.virt, access.byte_len);
-        initialized += 1;
     }
-    initialized == count
+    Ok(())
+}
+
+/// Fill pitch padding as well as visible pixels, preserving the previous CPU
+/// initialization contract. Only the allocation's page-alignment tail stays on
+/// the CPU. The frame is still private throughout this synchronous operation.
+fn initialize_rgba_surface(
+    access: ui_surface::UiSurfaceRgbaAccess,
+    pixel: u32,
+) -> crate::intel::gpgpu::GpgpuSubmissionOutcome {
+    use crate::intel::gpgpu::{GpgpuRgba8Surface, GpgpuSubmissionOutcome as Outcome};
+    if access.virt.is_null()
+        || access.byte_len % 4 != 0
+        || access.pitch == 0
+        || access.pitch % 4 != 0
+    {
+        return Outcome::Unavailable;
+    }
+    let Some(destination) = GpgpuRgba8Surface::new(
+        access.phys,
+        access.gpu,
+        access.byte_len,
+        access.pitch / 4,
+        access.height,
+        access.pitch,
+    ) else {
+        return Outcome::Unavailable;
+    };
+    // Remove dirty cache lines from recycled backing before BCS writes via
+    // its UC mapping. The normal allocator's zero-fill is deliberately skipped.
+    crate::intel::dma_flush(access.virt, access.byte_len);
+    let outcome = crate::r::services::vcpy_service::fill_rgba8_complete(
+        destination,
+        pixel,
+        crate::r::services::vcpy_service::RgbaFillConsumer::Ui4,
+    );
+    let first_cpu_word = match outcome {
+        Outcome::Complete => {
+            // Subsequent producers may use the CPU mapping immediately.
+            crate::intel::dma_flush(access.virt, access.byte_len);
+            access.pitch as usize * access.height as usize / 4
+        }
+        Outcome::Unavailable => 0,
+        Outcome::SubmittedIncomplete => return outcome,
+    };
+    let words = access.byte_len / 4;
+    for offset in first_cpu_word..words {
+        unsafe {
+            core::ptr::write(access.virt.cast::<u32>().add(offset), pixel);
+        }
+    }
+    if first_cpu_word < words {
+        crate::intel::dma_flush(
+            unsafe { access.virt.add(first_cpu_word * 4) },
+            (words - first_cpu_word) * 4,
+        );
+    }
+    Outcome::Complete
 }
 
 fn map_surface_error(error: SurfaceError) -> FramePoolError {

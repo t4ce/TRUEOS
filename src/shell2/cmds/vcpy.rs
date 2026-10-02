@@ -37,6 +37,7 @@ pub(crate) fn try_parse(
             for (name, consumer) in [
                 ("font-clear", crate::r::services::vcpy_service::RgbaFillConsumer::Font),
                 ("gridpaper-clear", crate::r::services::vcpy_service::RgbaFillConsumer::Gridpaper),
+                ("ui4-base", crate::r::services::vcpy_service::RgbaFillConsumer::Ui4),
             ] {
                 let [fills, bytes, fallbacks, failures] = crate::r::services::vcpy_service::fill_stats(consumer);
                 print_shell_line(io, format!(

@@ -35,6 +35,7 @@ mod blt {
         'guc_blt_physical_ranges_overlap', 'guc_blt_gpu_ranges_overlap', 'guc_blt_encode_ui4_copy_batch',
         'guc_blt_append_ring_batch_start', 'boot_bcs0_legacy_ring_words',
         'guc_blt_valid_fill', 'guc_blt_encode_ui4_fill_batch',
+        'guc_blt_valid_legacy_copy', 'guc_blt_encode_legacy_copy_batch', 'guc_blt_encode_copy_batch',
     ))
     source += r'''
 static MAPPINGS: std::sync::Mutex<Vec<(u64, u64)>> = std::sync::Mutex::new(Vec::new());
@@ -86,6 +87,27 @@ fn linear_rgba_packet_keeps_reserved_bits_zero_and_orders_completion() {
         0x200000, 0, 0, 2048, 0x100000, 0]);
     assert_eq!(&batch[22..30], &[0x13004003, 0x01AD0004, 0, 0xBC500002,
         0, 0x02800000, 0x05000000, 0]);
+}
+#[test]
+fn legacy_rgba_copies_use_byte_pitches_nonzero_origins_and_ordered_retirement() {
+    let mut batch = vec![0u32; 1024];
+    let mut result = vec![0u32; 1024];
+    let mut state: DirectBltState = unsafe { core::mem::zeroed() };
+    state.batch_virt = batch.as_mut_ptr().cast();
+    state.result_virt = result.as_mut_ptr().cast();
+    let src = GucBcs0RgbaSurface { width: 40, height: 22, pitch_bytes: 256, bytes: 8192, ..surface(0x100000) };
+    let dst = GucBcs0RgbaSurface { width: 64, height: 33, pitch_bytes: 320, bytes: 12288, ..surface(0x200000) };
+    let copy = GucBcs0RgbaCopy { source: src, source_x: 6, source_y: 11,
+        destination_x: 12, destination_y: 22, width: 18, height: 11 };
+    assert_eq!(guc_blt_encode_legacy_copy_batch(state, dst, &[copy, copy], 0xBC500004), Some((2, 1584)));
+    assert_eq!(&batch[12..22], &[0x54F00008, 0x03CC0140, 0x0016000C, 0x0021001E,
+        0x200000, 0, 0x000B0006, 256, 0x100000, 0]);
+    assert_eq!(&batch[22..32], &batch[12..22]);
+    assert_eq!(&batch[32..40], &[0x13004003, 0x01AD0004, 0, 0xBC500004, 0, 0x02800000, 0x05000000, 0]);
+    assert!(!guc_blt_valid_legacy_copy(GucBcs0RgbaSurface { pitch_bytes: 32768, bytes: 32768*33, ..dst }, copy));
+    assert!(!guc_blt_valid_legacy_copy(dst, GucBcs0RgbaCopy { source: dst, ..copy }));
+    let tall = GucBcs0RgbaSurface { height: 32768, bytes: 320*32768, ..dst };
+    assert!(!guc_blt_valid_legacy_copy(tall, GucBcs0RgbaCopy { destination_y: 32757, ..copy }));
 }
 #[test]
 fn fast_color_has_32bpp_pitch_minus_one_and_ordered_retirement() {

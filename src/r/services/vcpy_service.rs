@@ -109,12 +109,13 @@ pub(crate) enum RgbaFillConsumer {
     Font,
     Gridpaper,
     Probe,
+    Ui4,
 }
 
-static FILL_COUNTS: [AtomicU64; 12] = [const { AtomicU64::new(0) }; 12];
+static FILL_COUNTS: [AtomicU64; 16] = [const { AtomicU64::new(0) }; 16];
 
 pub(crate) fn fill_stats(consumer: RgbaFillConsumer) -> [u64; 4] {
-    let base = match consumer { RgbaFillConsumer::Font => 0, RgbaFillConsumer::Gridpaper => 4, RgbaFillConsumer::Probe => 8 };
+    let base = match consumer { RgbaFillConsumer::Font => 0, RgbaFillConsumer::Gridpaper => 4, RgbaFillConsumer::Probe => 8, RgbaFillConsumer::Ui4 => 12 };
     core::array::from_fn(|index| FILL_COUNTS[base + index].load(Ordering::Relaxed))
 }
 
@@ -148,7 +149,7 @@ pub(crate) fn fill_rgba8_complete(
             }
         }
     })();
-    let base = match consumer { RgbaFillConsumer::Font => 0, RgbaFillConsumer::Gridpaper => 4, RgbaFillConsumer::Probe => 8 };
+    let base = match consumer { RgbaFillConsumer::Font => 0, RgbaFillConsumer::Gridpaper => 4, RgbaFillConsumer::Probe => 8, RgbaFillConsumer::Ui4 => 12 };
     match result {
         Outcome::Complete => {
             FILL_COUNTS[base].fetch_add(1, Ordering::Relaxed);

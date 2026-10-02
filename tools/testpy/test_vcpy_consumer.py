@@ -57,7 +57,7 @@ static SCENE_COPIES: AtomicU64 = AtomicU64::new(0);
 static SCENE_BYTES: AtomicU64 = AtomicU64::new(0);
 static SCENE_FALLBACKS: AtomicU64 = AtomicU64::new(0);
 static SCENE_FAILURES: AtomicU64 = AtomicU64::new(0);
-static FILL_COUNTS: [AtomicU64; 12] = [const { AtomicU64::new(0) }; 12];
+static FILL_COUNTS: [AtomicU64; 16] = [const { AtomicU64::new(0) }; 16];
 static COMPUTE_CALLS: AtomicU64 = AtomicU64::new(0);
 static COMPUTE_OK: AtomicBool = AtomicBool::new(true);
 static RESIDENT_SCENE_COPY_QUARANTINED: AtomicBool = AtomicBool::new(false);
@@ -161,6 +161,13 @@ fn completion_and_admission_failures_preserve_the_fallback_boundary() {
         assert_eq!(fill_rgba8_complete(dst, 0x80402010, RgbaFillConsumer::Gridpaper), Outcome::SubmittedIncomplete);
     }
     assert_eq!(fill_stats(RgbaFillConsumer::Gridpaper), [0, 0, 3, 3]);
+    *SCRIPT.lock().unwrap() = (None, vec![Completion::Complete], 0, 0);
+    assert_eq!(fill_rgba8_complete(dst, 0x80402010, RgbaFillConsumer::Ui4), Outcome::Complete);
+    *SCRIPT.lock().unwrap() = (Some(Error::Busy), vec![], 0, 0);
+    assert_eq!(fill_rgba8_complete(dst, 0x80402010, RgbaFillConsumer::Ui4), Outcome::Unavailable);
+    *SCRIPT.lock().unwrap() = (None, vec![Completion::Failed], 0, 0);
+    assert_eq!(fill_rgba8_complete(dst, 0x80402010, RgbaFillConsumer::Ui4), Outcome::SubmittedIncomplete);
+    assert_eq!(fill_stats(RgbaFillConsumer::Ui4), [1, 240, 1, 1]);
     assert_eq!(fill_stats(RgbaFillConsumer::Font), [1, 240, 0, 0]);
     // Exercise the actual renderer dispatch, not a duplicate policy.
     *SCRIPT.lock().unwrap() = (None, vec![Completion::Complete], 0, 0);
