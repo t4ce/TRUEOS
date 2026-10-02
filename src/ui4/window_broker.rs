@@ -2384,12 +2384,16 @@ fn update_window_placement(
         }
         if resize_pending {
             let mut presentation = previous_presentation;
-            presentation = translated_resize_presentation(
-                presentation,
-                i64::from(placement.x) - i64::from(previous.x),
-                i64::from(placement.y) - i64::from(previous.y),
-                output_extent,
-            );
+            // Hold the old front in place until a new extent is committed.
+            // Position-only updates during the hold still follow dragging.
+            if !extent_changed {
+                presentation = translated_resize_presentation(
+                    presentation,
+                    i64::from(placement.x) - i64::from(previous.x),
+                    i64::from(placement.y) - i64::from(previous.y),
+                    output_extent,
+                );
+            }
             presentation.z = placement.z;
             presentation.opacity = placement.opacity;
             presentation.visible = placement.visible;

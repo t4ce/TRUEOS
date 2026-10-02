@@ -311,7 +311,7 @@ pub(crate) async fn ui4_compositor_service_task() {
 
     crate::log_info!(
         target: "ui4";
-        "ui4 compositor frame/window reintegration live idle_wake=broker-signal close_animation_ms={} pending_poll_ms={} broker_planes=slot0-stack+slot1-3-lease/on-demand admission=never-fails lease=one-frame-per-plane/claim-lowest-free/focus-raises-to-top/idle-grace-500ms/lazy-revoke stack=slot0/painter-runs-in-broker-z/premultiplied-src-over/overflow-and-demoted lone-source=direct-scanout-when-eligible mixed_slot=guc-rcs-all-sources/placement-old+new-repair static_single=released-gpu-rcs+cpu-bcs0/cpu-fallback slot4=independent-interaction+software-cursor hardware-cursor=preferred-physical-source/concurrent input=enabled screenshots=parked linked_nv12_planes=off\n",
+        "ui4 compositor frame/window reintegration live idle_wake=broker-signal close_animation_ms={} pending_poll_ms={} broker_planes=slot0-stack+slot1-3-lease/on-demand admission=never-fails lease=one-frame-per-plane/claim-lowest-free/focus-raises-to-top/idle-grace-500ms/lazy-revoke stack=slot0/painter-runs-in-broker-z/topmost-wins/overflow-and-demoted lone-source=direct-scanout-when-eligible mixed_slot=guc-rcs-all-sources/placement-old+new-repair static_single=released-gpu-rcs+cpu-bcs0/cpu-fallback slot4=independent-interaction+software-cursor hardware-cursor=preferred-physical-source/concurrent input=enabled screenshots=parked linked_nv12_planes=off\n",
         CLOSE_TRANSITION_PERIOD_MS,
         PENDING_POLL_PERIOD_MS,
     );
@@ -877,7 +877,7 @@ fn queue_async_plane(
     // Slot0 carries the UI4 stack: every frame which does not hold one of the
     // three hardware lease planes presents here, so its membership is arbitrary
     // in content, cadence and buffering. The layer kernel walks the broker-z
-    // descriptors for each damaged pixel and performs premultiplied source-over.
+    // descriptors in reverse order and selects the topmost covering frame.
     // Plan uniformity is irrelevant; stack membership alone selects the painter.
     let stack_plane = target_plane_slot(plan.target) == super::PRIMARY_PLANE_SLOT;
     let has_arc = selected.iter().any(|(window, _)| window.arc != 0);
@@ -1130,12 +1130,12 @@ fn queue_async_plane(
                 && !STACK_PAINTER_LOGGED.swap(true, Ordering::AcqRel)
             {
                 crate::log_info!(target: "ui4";
-                    "ui4/stack-painter: slot0 backend=guc-rcs-ui4-layer-kernel windows={} order=broker-z pixel_op=premultiplied-src-over layer_kernel=1 cost=one-walker-per-damage-pixel log=once\n",
+                    "ui4/stack-painter: slot0 backend=guc-rcs-ui4-layer-kernel windows={} order=broker-z pixel_op=topmost-wins layer_kernel=1 cost=one-walker-per-damage-pixel log=once\n",
                     tiles.len(),
                 );
             }
             crate::log_trace!(target: "ui4";
-                "ui4/slot0-compose backend=guc-rcs-premultiplied-src-over windows={} order=broker-z frame_blend=source-over alpha=preserved pipe_bottom=visible-where-empty\n",
+                "ui4/slot0-compose backend=guc-rcs-topmost-wins windows={} order=broker-z frame_blend=0 alpha=preserved pipe_bottom=visible-where-empty\n",
                 tiles.len(),
             );
             let primary = crate::intel::queue_ui4_primary_composition(

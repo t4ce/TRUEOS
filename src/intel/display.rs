@@ -1095,9 +1095,9 @@ enum OverlayAlphaMode {
 const UI4_RGBA8_OVERLAY_CONTRACT: OverlayAlphaMode = OverlayAlphaMode::PremultipliedRgba;
 /// Slot0 is an application plane, not an opaque framebuffer. Its composition
 /// starts transparent and remains native premultiplied RGBA through scanout.
-/// Setting an XRGB flag would inject an opaque base or drop destination alpha;
-/// selecting opaque rectangles would skip source-over inside the Slot0 stack.
-const UI4_PRIMARY_COMPOSITION_FLAGS: u32 = 0;
+/// The topmost covering frame supplies the pixel, preserving its alpha for
+/// fixed-function blending with the pipe background. Empty pixels stay clear.
+const UI4_PRIMARY_COMPOSITION_FLAGS: u32 = crate::intel::gpgpu::UI4_COMPOSE_FLAG_OPAQUE_RECTS;
 
 /// Give the firmware-compatible XRGB boot phase deterministic pixels. UI4
 /// discards this boot content when Slot0 becomes its transparent RGBA slice.
@@ -3368,7 +3368,7 @@ pub(crate) fn activate_ui4_application_rgba_planes() -> bool {
     let ready =
         plane_ready && prepare_ui4_primary_swap_surfaces(dev, pipe, primary.width, primary.height);
     crate::log_info!(target: "ui4";
-        "ui4/application-plane-stack slot0=rgba8-transparent/preallocated-double/gpu-premultiplied-src-over pipe_bottom=visible-where-slot0-alpha-zero slots=1-3=rgba8-direct-or-composed slot4=interaction-only ready={} pipe={}\n",
+        "ui4/application-plane-stack slot0=rgba8-transparent/preallocated-double/gpu-topmost-wins pipe_bottom=visible-where-slot0-alpha-zero slots=1-3=rgba8-direct-or-composed slot4=interaction-only ready={} pipe={}\n",
         ready as u8,
         pipe.name,
     );
@@ -6064,7 +6064,7 @@ pub(crate) fn commit_ui4_composition_flip(composition: Ui4AsyncComposition) {
         && !UI4_PRIMARY_STACK_PROOF_LOGGED.swap(true, Ordering::AcqRel)
     {
         crate::log_important!(target: "ui4";
-            "ui4/slot0-composition-proof accepted=1 backend=guc-rcs pixel_op=premultiplied-src-over tiles={} effective_rects={} effective_bounds={}x{}@{},{} guc_retired=1 primary_surflive=1 boundary=slot0-guc-retired-and-primary-surflive elapsed_us={} log=once\n",
+            "ui4/slot0-composition-proof accepted=1 backend=guc-rcs pixel_op=topmost-wins tiles={} effective_rects={} effective_bounds={}x{}@{},{} guc_retired=1 primary_surflive=1 boundary=slot0-guc-retired-and-primary-surflive elapsed_us={} log=once\n",
             composition.tile_count,
             composition.effective.len(),
             effective_bounds.width,
@@ -6166,8 +6166,8 @@ fn compose_premultiplied_rgba_tiles_into_primary_gpgpu(
     _sparse_static_painter: bool,
 ) -> GpgpuCompositionResult {
     // Slot0 has exactly one legal compositor: the asynchronous layer kernel.
-    // It builds a transparent premultiplied-RGBA stack in broker-z order; the
-    // display plane then source-over blends that result with Pipe A.
+    // It selects the topmost covering frame in broker-z order; the display
+    // plane source-over blends the resulting premultiplied RGBA with Pipe A.
     if !asynchronous || surface.byte_len as u64 > native_ui4::compose_capacity(surface.pipe, 0) {
         return GpgpuCompositionResult::Unavailable;
     }
@@ -6207,8 +6207,8 @@ fn compose_premultiplied_rgba_tiles_into_primary_gpgpu(
         return GpgpuCompositionResult::Unavailable;
     }
 
-    // The async Slot0 kernel owns one output pixel at a time and source-over
-    // blends the z-ordered descriptors into a transparent RGBA destination.
+    // The async Slot0 kernel picks the topmost covering descriptor for each
+    // output pixel, leaving uncovered pixels transparent.
     if asynchronous {
         let Some(bounds) = damage
             .bounding_rect()
@@ -7672,8 +7672,12 @@ mod direct_plane_scaler_tests {
         assert_eq!(
             UI4_PRIMARY_COMPOSITION_FLAGS
                 & (crate::intel::gpgpu::UI4_COMPOSE_FLAG_BASE_XRGB
-                    | crate::intel::gpgpu::UI4_COMPOSE_FLAG_DEST_XRGB
-                    | crate::intel::gpgpu::UI4_COMPOSE_FLAG_OPAQUE_RECTS),
+                    | crate::intel::gpgpu::UI4_COMPOSE_FLAG_DEST_XRGB),
+            0
+        );
+
+        assert_ne!(
+            UI4_PRIMARY_COMPOSITION_FLAGS & crate::intel::gpgpu::UI4_COMPOSE_FLAG_OPAQUE_RECTS,
             0
         );
 
