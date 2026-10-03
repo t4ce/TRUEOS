@@ -6,6 +6,7 @@ items and existing Rust tests; host mutexes stand in for the registry locks.
 It does not claim hardware/runtime acceptance.
 """
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 
@@ -16,6 +17,10 @@ SOURCE = str(ROOT / "src/std_abi_shim.rs")
 
 
 def main():
+    source = Path(SOURCE).read_text()
+    errno_impl = re.search(r"^impl ProcessErrno \{.*?^\}", source, re.MULTILINE | re.DOTALL)
+    if errno_impl is None:
+        raise ValueError("missing production ProcessErrno implementation")
     definitions = [constant(SOURCE, name) for name in (
         "PTHREAD_KEY_CAPACITY", "PTHREAD_TLS_VALUE_CAPACITY",
         "PTHREAD_DESTRUCTOR_ITERATIONS", "PTHREAD_MUTEX_SPIN_TRACE_START",
@@ -34,6 +39,7 @@ def main():
         "pthread_cond_notify_key", "pthread_cond_wait_key",
         "pthread_mutex_tests", "pthread_thread_semantics_tests",
     )]
+    definitions += ["pub(crate) struct ProcessErrno;", errno_impl.group(0)]
     support = f'''#![allow(dead_code)]
 extern crate alloc;
 use alloc::vec::Vec;
@@ -52,7 +58,33 @@ static PTHREAD_KEYS: Mutex<FixedKeyMap<usize, PthreadKeyState, PTHREAD_KEY_CAPAC
 static PTHREAD_TLS_VALUES: Mutex<FixedKeyMap<PthreadTlsSlot, PthreadTlsValue, PTHREAD_TLS_VALUE_CAPACITY>> = Mutex::new(FixedKeyMap::new());
 #[macro_export] macro_rules! log_warn {{ ($($tokens:tt)*) => {{}} }}
 mod wait {{ pub fn spin_step() {{ std::thread::yield_now(); }} }}
-mod percpu {{ pub fn current_slot() -> usize {{ 0 }} }}
+mod percpu {{
+    pub const CPU_SLOT_LIMIT: usize = 4;
+    pub fn current_slot() -> usize {{ panic!("GS-backed CPU identity is unavailable in the Hull") }}
+    pub fn current_slot_via_cpuid() -> usize {{ 3 }}
+}}
+struct TestProcessState {{ errno: [AtomicI32; percpu::CPU_SLOT_LIMIT] }}
+static PROCESS_STATE: TestProcessState = TestProcessState {{
+    errno: [const {{ AtomicI32::new(0) }}; percpu::CPU_SLOT_LIMIT],
+}};
+fn process_state() -> &'static TestProcessState {{ &PROCESS_STATE }}
+static TRUEOS_ERRNO: ProcessErrno = ProcessErrno;
+#[cfg(test)] mod errno_tests {{
+    use super::*;
+    #[test] fn hull_errno_uses_cpuid_without_accessing_gs() {{
+        TRUEOS_ERRNO.store(137, Ordering::Relaxed);
+        assert_eq!(TRUEOS_ERRNO.load(Ordering::Relaxed), 137);
+        assert_eq!(PROCESS_STATE.errno[3].load(Ordering::Relaxed), 137);
+        assert_eq!(TRUEOS_ERRNO.as_ptr(), PROCESS_STATE.errno[3].as_ptr());
+    }}
+    #[test] fn logical_errno_uses_the_pinned_thread_cell() {{
+        crate::r::threads::LOGICAL.with(|enabled| enabled.set(true));
+        TRUEOS_ERRNO.store(271, Ordering::Relaxed);
+        assert_eq!(TRUEOS_ERRNO.load(Ordering::Relaxed), 271);
+        assert_eq!(TRUEOS_ERRNO.as_ptr(), crate::r::threads::ERRNO.as_ptr());
+        crate::r::threads::LOGICAL.with(|enabled| enabled.set(false));
+    }}
+}}
 fn pthread_object_host_ptr(ptr: *mut u8, _len: usize) -> Option<*mut u8> {{
     (!ptr.is_null()).then_some(ptr)
 }}
@@ -71,7 +103,12 @@ mod embassy_time_driver {{
         START.elapsed().as_millis() as u64
     }}
 }}
-mod r {{ pub mod platform {{
+mod r {{ pub mod threads {{
+    use core::sync::atomic::AtomicI32;
+    std::thread_local! {{ pub static LOGICAL: core::cell::Cell<bool> = const {{ core::cell::Cell::new(false) }}; }}
+    pub static ERRNO: AtomicI32 = AtomicI32::new(0);
+    pub fn current_errno() -> Option<&'static AtomicI32> {{ LOGICAL.with(|enabled| enabled.get().then_some(&ERRNO)) }}
+}} pub mod platform {{
     use std::sync::{{Arc, Mutex, Condvar, LazyLock}};
     use std::collections::HashMap;
     struct Queue {{ generation: Mutex<u32>, wait: Condvar }}
