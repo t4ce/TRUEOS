@@ -10,6 +10,8 @@ const H264_ONLINE_MEDIA_FETCH_TIMEOUT_MS: u64 = 120_000;
 const H264_ONLINE_MEDIA_FETCH_MAX_BYTES: usize = 160 * 1024 * 1024;
 const H264_TRUEOSFS_VIDEO_SOFT_CAP_BYTES: usize = 1024 * 1024 * 1024;
 const H264_TRUEOSFS_READ_CHUNK_BYTES: usize = 64 * 1024;
+const H264_FS_INDEX_READ_AHEAD_BYTES: usize = 64 * 1024;
+const H264_FS_SAMPLE_READ_AHEAD_BYTES: usize = 1024 * 1024;
 const H264_FS_METADATA_CAP_BYTES: usize = 32 * 1024 * 1024;
 const H264_FS_PICTURE_CAP_BYTES: usize = 8 * 1024 * 1024;
 const H264_FS_READ_ERROR: i32 = -35;
@@ -1940,12 +1942,68 @@ fn mkv_vint(data: &[u8], keep_marker: bool) -> Result<(u64, usize), &'static str
     Ok((value, width))
 }
 
+// Bounded read-ahead belongs to each immutable file handle. Coalesce nearby
+// container headers/pictures instead of paying TRUEOSFS validation and disk
+// submission latency for every tiny read on the decode task.
+struct H264FsReadAhead {
+    offset: u64,
+    valid: usize,
+    budget: usize,
+    buffer: Vec<u8>,
+}
+impl H264FsReadAhead {
+    fn new(budget: usize) -> Self {
+        Self {
+            offset: 0,
+            valid: 0,
+            budget,
+            buffer: Vec::new(),
+        }
+    }
+    async fn read(
+        &mut self,
+        session: crate::ui4::VideoPlaybackSession,
+        file: crate::r::fs::trueosfs::FileReadHandle,
+        offset: u64,
+        out: &mut [u8],
+    ) -> Result<(), &'static str> {
+        if session.is_cancelled() {
+            return Err("playback cancelled");
+        }
+        if !crate::r::fs::trueosfs::file_read_handle_is_current(file) {
+            return Err("TRUEOSFS video read-ahead handle expired");
+        }
+        let end = offset
+            .checked_add(out.len() as u64)
+            .filter(|end| *end <= file.data_len())
+            .ok_or("video read-ahead range outside file")?;
+        if out.is_empty() {
+            return Ok(());
+        }
+        if out.len() > self.budget {
+            return h264_fs_read_exact(session, file, offset, out).await;
+        }
+        if offset < self.offset || end > self.offset + self.valid as u64 {
+            self.valid = 0; // A cancelled/failed refill must never publish partial bytes.
+            let count = (file.data_len() - offset).min(self.budget as u64) as usize;
+            self.buffer.resize(count, 0);
+            h264_fs_read_exact(session, file, offset, &mut self.buffer).await?;
+            self.offset = offset;
+            self.valid = count;
+        }
+        let start = (offset - self.offset) as usize;
+        out.copy_from_slice(&self.buffer[start..start + out.len()]);
+        Ok(())
+    }
+}
+
 struct MkvIndexReader {
     session: crate::ui4::VideoPlaybackSession,
     file: crate::r::fs::trueosfs::FileReadHandle,
+    read_ahead: H264FsReadAhead,
 }
 impl MkvIndexReader {
-    async fn bytes(&self, start: usize, end: usize) -> Result<Vec<u8>, &'static str> {
+    async fn bytes(&mut self, start: usize, end: usize) -> Result<Vec<u8>, &'static str> {
         if end < start
             || end as u64 > self.file.data_len()
             || end - start > H264_FS_METADATA_CAP_BYTES
@@ -1953,11 +2011,13 @@ impl MkvIndexReader {
             return Err("mkv metadata outside streaming limit");
         }
         let mut data = alloc::vec![0; end - start];
-        h264_fs_read_exact(self.session, self.file, start as u64, &mut data).await?;
+        self.read_ahead
+            .read(self.session, self.file, start as u64, &mut data)
+            .await?;
         Ok(data)
     }
     async fn element(
-        &self,
+        &mut self,
         start: usize,
         limit: usize,
     ) -> Result<(u64, usize, usize), &'static str> {
@@ -1983,7 +2043,7 @@ impl MkvIndexReader {
         };
         Ok((id, payload, end))
     }
-    async fn uint(&self, start: usize, end: usize) -> Result<u64, &'static str> {
+    async fn uint(&mut self, start: usize, end: usize) -> Result<u64, &'static str> {
         if end <= start || end - start > 8 {
             return Err("mkv invalid unsigned integer");
         }
@@ -1999,7 +2059,11 @@ async fn mkv_open_avc_index(
     session: crate::ui4::VideoPlaybackSession,
     file: crate::r::fs::trueosfs::FileReadHandle,
 ) -> Result<MkvAvcIndex, &'static str> {
-    let r = MkvIndexReader { session, file };
+    let mut r = MkvIndexReader {
+        session,
+        file,
+        read_ahead: H264FsReadAhead::new(H264_FS_INDEX_READ_AHEAD_BYTES),
+    };
     let len = usize::try_from(file.data_len()).map_err(|_| "mkv file too large")?;
     let mut pos = 0;
     let (segment_start, segment_end) = loop {
@@ -2443,6 +2507,7 @@ struct H264FileNalReader {
     failed: bool,
     replay: Option<H264MemoryNalReader>,
     sample_reader: Option<H264MemoryNalReader>,
+    sample_read_ahead: H264FsReadAhead,
 }
 
 impl H264FileNalReader {
@@ -2465,6 +2530,7 @@ impl H264FileNalReader {
             failed: false,
             replay: None,
             sample_reader: None,
+            sample_read_ahead: H264FsReadAhead::new(H264_FS_SAMPLE_READ_AHEAD_BYTES),
         }
     }
     async fn next_nal(&mut self) -> Option<H264BufferedNal> {
@@ -2516,7 +2582,8 @@ impl H264FileNalReader {
                     return Err("mp4 sample exceeds decoder picture limit");
                 }
                 let mut payload = alloc::vec![0; sample.size];
-                h264_fs_read_exact(self.session, self.file, sample.offset as u64, &mut payload)
+                self.sample_read_ahead
+                    .read(self.session, self.file, sample.offset as u64, &mut payload)
                     .await?;
                 let mut annexb = Vec::new();
                 mp4_emit_annexb_aud(&mut annexb);

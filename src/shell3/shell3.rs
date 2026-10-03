@@ -725,7 +725,7 @@ impl Shell3 {
         true
     }
 
-    /// UI editing with immediate exact-name echo; command execution stays unwired.
+    /// UI editing with immediate exact-name echo and AppDB/AKA launch.
     pub(super) fn handle_keyboard(&mut self, event: &crate::r::keyboard::TrueosKeyboardOutputEvent) -> bool {
         use crate::r::keyboard::*;
         if event.kind == KEYBOARD_OUTPUT_KIND_KEY {
@@ -764,7 +764,20 @@ impl Shell3 {
     fn echo_recognized_prompt(&mut self) {
         if self.prompt.text.starts_with(OPERATOR) || !self.parse_name(&self.prompt.text) { return; }
         let text = core::mem::take(&mut self.prompt.text);
-        MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, text);
+        MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, text.clone());
+        if self.mode == Mode::CMD {
+            let slot = self.active_matrix_slot.as_deref().unwrap_or("");
+            let result = if self.appdb_names.iter().any(|name| name == &text) {
+                service::launch_appdb(&text, slot)
+            } else if self.aka_names.iter().any(|name| name == &text) {
+                service::launch_alias(&text, slot)
+            } else {
+                Ok(())
+            };
+            if let Err(error) = result {
+                MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, error);
+            }
+        }
         self.prompt.colors.clear();
         self.prompt.cursor = 0;
     }

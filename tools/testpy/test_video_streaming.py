@@ -22,10 +22,12 @@ extern crate alloc;
 use alloc::{string::String, vec::Vec};
 use std::{fmt::Write, future::Future, task::{Context, Poll, Waker}, sync::Mutex};
 const H264_TRUEOSFS_READ_CHUNK_BYTES: usize = 16;
+const H264_FS_INDEX_READ_AHEAD_BYTES: usize = 64 * 1024;
+const H264_FS_SAMPLE_READ_AHEAD_BYTES: usize = 1024 * 1024;
 const H264_FS_METADATA_CAP_BYTES: usize = 32 * 1024 * 1024;
 const H264_FS_PICTURE_CAP_BYTES: usize = 8 * 1024 * 1024;
-struct Rig { bytes: Vec<u8>, read: usize, short: usize, fail_at: usize, cancel: bool }
-static RIG: Mutex<Rig> = Mutex::new(Rig { bytes: Vec::new(), read: 0, short: usize::MAX, fail_at: usize::MAX, cancel: false });
+struct Rig { bytes: Vec<u8>, read: usize, short: usize, fail_at: usize, cancel: bool, expired: bool }
+static RIG: Mutex<Rig> = Mutex::new(Rig { bytes: Vec::new(), read: 0, short: usize::MAX, fail_at: usize::MAX, cancel: false, expired: false });
 #[macro_export] macro_rules! log { ($($x:tt)*) => {}; }
 #[macro_export] macro_rules! log_info { ($($x:tt)*) => {}; }
 #[macro_export] macro_rules! log_error { ($($x:tt)*) => {}; }
@@ -42,6 +44,7 @@ impl Timer { async fn after_millis(_: u64) {} }
 mod r { pub mod fs { pub mod trueosfs {
     #[derive(Clone, Copy)] pub struct FileReadHandle(pub u64);
     impl FileReadHandle { pub fn data_len(self) -> u64 { self.0 } }
+    pub fn file_read_handle_is_current(_: FileReadHandle) -> bool { !crate::RIG.lock().unwrap().expired }
     pub async fn file_read_handle_range_async(_: FileReadHandle, offset: u64, out: &mut [u8]) -> Result<Option<usize>, ()> {
         let mut r = crate::RIG.lock().unwrap();
         let offset = offset as usize;
@@ -57,7 +60,7 @@ fn run<T>(future: impl Future<Output=T>) -> T {
 }
 fn setup(bytes: Vec<u8>) -> (ui4::VideoPlaybackSession, r::fs::trueosfs::FileReadHandle) {
     let len = bytes.len() as u64;
-    *RIG.lock().unwrap() = Rig { bytes, read: 0, short: usize::MAX, fail_at: usize::MAX, cancel: false };
+    *RIG.lock().unwrap() = Rig { bytes, read: 0, short: usize::MAX, fail_at: usize::MAX, cancel: false, expired: false };
     (ui4::VideoPlaybackSession, r::fs::trueosfs::FileReadHandle(len))
 }
 fn annex(nals: &[Vec<u8>]) -> Vec<u8> {
@@ -111,7 +114,7 @@ fn annex(nals: &[Vec<u8>]) -> Vec<u8> {
     let track = Mp4AvcTrack { track_id: 1, timescale: 30, length_size: 4, colour: None, sps: vec![vec![0x67,1]], pps: vec![vec![0x68,1]], samples: vec![Mp4SampleRef { offset: 500, size: 7, keyframe: true, decode_time: 0, duration: 1, composition_offset: 0 }] };
     let mut r = H264FileNalReader::new(session, file, Some(track));
     let mut types = Vec::new(); while let Some(n) = run(r.next_nal()) { types.push(n.meta.nal_type); }
-    assert_eq!(types, vec![9,7,8,5]); assert_eq!(RIG.lock().unwrap().read, 7); assert!(!r.failed);
+    assert_eq!(types, vec![9,7,8,5]); assert!(RIG.lock().unwrap().read <= H264_FS_SAMPLE_READ_AHEAD_BYTES); assert!(!r.failed);
 }
 
 #[test] fn real_mp4_moov_head_and_tail_match_buffered_vcl_and_timing() {
@@ -153,6 +156,36 @@ async fn mkv_open_avc_track(
     Ok(index.track)
 }
 
+#[test] fn read_ahead_hits_cancel_refill_failure_and_large_requests() {
+    let (session, file) = setup((0..200).map(|i| i as u8).collect());
+    let mut cache = H264FsReadAhead::new(32);
+    let mut out = [0; 4];
+    run(cache.read(session, file, 10, &mut out)).unwrap();
+    assert_eq!(out, [10,11,12,13]);
+    let read = RIG.lock().unwrap().read;
+    run(cache.read(session, file, 20, &mut out)).unwrap();
+    assert_eq!(out, [20,21,22,23]);
+    assert_eq!(RIG.lock().unwrap().read, read, "nearby headers should share I/O");
+    RIG.lock().unwrap().expired = true;
+    assert!(run(cache.read(session, file, 20, &mut out)).is_err(), "cached bytes cannot bypass filesystem lifetime checks");
+    RIG.lock().unwrap().expired = false;
+    RIG.lock().unwrap().cancel = true;
+    assert!(run(cache.read(session, file, 20, &mut out)).is_err());
+    RIG.lock().unwrap().cancel = false;
+    RIG.lock().unwrap().fail_at = 112;
+    assert!(run(cache.read(session, file, 100, &mut out)).is_err());
+    assert_eq!(cache.valid, 0, "partial refill must never become cached data");
+    RIG.lock().unwrap().fail_at = usize::MAX;
+    RIG.lock().unwrap().short = 3;
+    run(cache.read(session, file, 100, &mut out)).unwrap();
+    assert_eq!(out, [100,101,102,103]);
+    let mut large = [0; 40];
+    run(cache.read(session, file, 150, &mut large)).unwrap();
+    assert_eq!(large[39], 189);
+    assert!(cache.buffer.len() <= 32);
+    assert!(run(cache.read(session, file, 199, &mut out)).is_err());
+}
+
 #[test] fn mkv_vints_reject_truncation_and_zero() {
     assert_eq!(mkv_vint(&[0x81], false).unwrap(), (1, 1));
     assert_eq!(mkv_vint(&[0x40, 0x80], false).unwrap(), (128, 2));
@@ -175,13 +208,13 @@ async fn mkv_open_avc_track(
             assert_eq!(sample.decode_time as i64 + sample.composition_offset, pts);
             assert_eq!(sample.size, size);
         }
-        assert!(RIG.lock().unwrap().read < file.data_len() as usize / 2 + 4096, "index must skip picture payloads");
+        assert!(RIG.lock().unwrap().read <= file.data_len() as usize + H264_FS_INDEX_READ_AHEAD_BYTES, "index reads must remain sequential and bounded");
         RIG.lock().unwrap().read = 0;
         let (mut reader, timing, source) = run(h264_open_fs_reader(session, file)).unwrap();
         assert_eq!(source, "trueosfs-stream-mkv-avc");
         assert!(timing.is_empty());
         assert!(reader.mkv_track().unwrap().samples.is_empty());
-        assert!(RIG.lock().unwrap().read < 64 * 1024, "startup must read metadata only");
+        assert!(RIG.lock().unwrap().read <= 2 * H264_FS_INDEX_READ_AHEAD_BYTES + 16, "startup must remain bounded to metadata read-ahead: {}", RIG.lock().unwrap().read);
         let mut pending = None; let mut sps = None; let mut pps = None; let mut missing = 0; let mut count = 0;
         // Check packet conversion against the indexed length-prefixed bytes.
         for sample in track.samples.iter().take(100) {
@@ -207,7 +240,7 @@ async fn mkv_open_avc_track(
         assert!(run(index.next_group()).unwrap());
         if track.samples.len() > 1000 {
             assert!(index.track.samples.len() < track.samples.len() / 10, "first GOP must not scan the episode");
-            assert!(RIG.lock().unwrap().read - before < 64 * 1024, "first GOP header I/O must be bounded");
+            assert!(RIG.lock().unwrap().read - before < 16 * H264_FS_INDEX_READ_AHEAD_BYTES, "first GOP header I/O must be bounded");
         }
         loop {
             let old_ranks = ranks.clone();

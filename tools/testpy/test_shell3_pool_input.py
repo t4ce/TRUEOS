@@ -45,7 +45,13 @@ mod spin {
 }
 use spin::Once;
 static MATRIX_SLOTS:Once<spin::Mutex<MatrixSlotsState>>=Once::new();
-mod service {pub fn notify_work(){}}
+mod service {
+pub static LAUNCHES:std::sync::Mutex<Vec<(String,String)>>=std::sync::Mutex::new(Vec::new());
+use alloc::{vec::Vec,string::String};
+pub fn notify_work(){}
+pub fn launch_appdb(name: &str, slot: &str)->Result<(),String>{LAUNCHES.lock().unwrap().push((name.into(),slot.into()));Ok(())}
+pub fn launch_alias(name: &str, slot: &str)->Result<(),String>{LAUNCHES.lock().unwrap().push((format!("alias:{name}"),slot.into()));Ok(())}
+}
 """
     source += f'\n#[path="{ROOT}/src/shell3/names.rs"] mod names;\nuse names::{{HV_GROUPS,CMD_GROUPS,ADM_NAMES}};\n'
     source += re.search(r'^impl PromptState \{.*?^}', shell, re.M | re.S).group()
@@ -123,7 +129,7 @@ fn key(shell:&mut Shell3,kind:u8,key_code:u16,ch:char)->bool {shell.handle_keybo
         assert!(key(&mut a,2,2,'\\t')); assert_eq!(a.mode,mode);
         assert_eq!(a.rows.title.left[0].text,"TrueOS § 12:34");
         let legend:String=a.rows.title.right.iter().map(|run|run.text.as_str()).collect();
-        assert_eq!(legend,match mode {Mode::HV=>"[online peer dl] [status pause stop] [snap preserve eject delete kick load store probe]",Mode::CMD=>"[Aka] [Media img shot vid film cam] [AppDB]",Mode::ADM=>"cry disc tlb xhci ram smp net bios vgpu vcpy"});
+        assert_eq!(legend,match mode {Mode::HV=>"[online peer dl] [status pause stop] [snap preserve eject delete kick load store probe]",Mode::CMD=>"[Aka] [Media img shot vid film cam rec] [AppDB]",Mode::ADM=>"cry disc tlb xhci ram smp net bios vgpu vcpy"});
     }
     assert_eq!(b.mode,Mode::HV); assert_eq!(b.prompt.text,"y");
     assert!(!key(&mut a,2,3,'\\r')); assert!(!key(&mut a,1,0,'\\n'));
@@ -156,13 +162,37 @@ fn type_text(shell:&mut Shell3,text:&str) {for ch in text.chars() {assert!(key(s
     assert_eq!(MatrixSlots::echo_lines(None),vec!["dl"]);
     assert_eq!(MatrixSlots::echo_lines(Some("123")),vec!["pause"]);
 }
+#[test] fn appdb_name_launches_once_in_cmd_with_selected_slot() {
+    service::LAUNCHES.lock().unwrap().clear();
+    MatrixSlots::set(&["app"]);
+    let mut s=Shell3::new(80); s.set_appdb_names(&["Demo".into()]);
+    s.select_matrix_slot_name("app"); s.set_mode(2);
+    type_text(&mut s,"Dem"); assert!(service::LAUNCHES.lock().unwrap().is_empty());
+    type_text(&mut s,"o");
+    assert_eq!(*service::LAUNCHES.lock().unwrap(),vec![("Demo".into(),"app".into())]);
+    assert_eq!(MatrixSlots::echo_lines(Some("app")),vec!["Demo"]);
+    assert_eq!(s.prompt.text,"");
+}
+#[test] fn aka_name_launches_once_in_cmd_with_selected_slot() {
+    service::LAUNCHES.lock().unwrap().clear();
+    MatrixSlots::set(&["aka"]);
+    let mut s=Shell3::new(80); s.aka_names=vec!["hello".into()];
+    s.select_matrix_slot_name("aka");
+    type_text(&mut s,"hello"); assert!(service::LAUNCHES.lock().unwrap().is_empty());
+    s.set_prompt(""); s.set_mode(2);
+    type_text(&mut s,"hell"); assert!(service::LAUNCHES.lock().unwrap().is_empty());
+    type_text(&mut s,"o");
+    assert_eq!(*service::LAUNCHES.lock().unwrap(),vec![("alias:hello".into(),"aka".into())]);
+    assert_eq!(MatrixSlots::echo_lines(Some("aka")),vec!["hello"]);
+    assert_eq!(s.prompt.text,"");
+}
 #[test] fn command_legend_uses_live_names_and_preserves_admin_colors() {
     MatrixSlots::set(&["id","123"]); matrix_slots().lock().echoes.clear();
     let mut s=Shell3::new(80); s.aka_names=vec!["hello".into()];
     s.set_appdb_names(&["Demo".into()]);
     assert!(s.rows.title.right.iter().all(|run|run.text!="Demo"));
     s.set_mode(2);
-    assert_eq!(s.rows.title.right.iter().map(|run|run.text.as_str()).collect::<String>(),"[Aka hello] [Media img shot vid film cam] [AppDB Demo]");
+    assert_eq!(s.rows.title.right.iter().map(|run|run.text.as_str()).collect::<String>(),"[Aka hello] [Media img shot vid film cam rec] [AppDB Demo]");
     for name in ["hello","img","Demo"] {type_text(&mut s,name);assert_eq!(s.prompt.render(),"#");}
     assert_eq!(MatrixSlots::echo_lines(None),vec!["hello","img","Demo"]);
     s.set_mode(3); let admin=s.rows.title.right.clone();
