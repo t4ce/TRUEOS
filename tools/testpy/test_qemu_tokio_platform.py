@@ -16,8 +16,8 @@ spec.loader.exec_module(verify)
 EVIDENCE = "\n".join((
     "tokio_mrt: std joined=2 detached=1 tls_destructors=3",
     "tokio_mrt: std scoped=2 borrowed_stack=PASS tls_destructors=2 nested_threads=2",
-    "tokio_mrt: multi_thread wave=0 started=4 stopped=4 tls_destructors=4 blocking=16 socket=PASS",
-    "tokio_mrt: multi_thread wave=1 started=4 stopped=4 tls_destructors=4 blocking=16 socket=PASS",
+    "tokio_mrt: multi_thread wave=0 started=6 stopped=6 tls_destructors=6 blocking=16 socket=PASS",
+    "tokio_mrt: multi_thread wave=1 started=6 stopped=6 tls_destructors=6 blocking=16 socket=PASS",
     "tokio_mrt: wave=0 counts=[512, 512] checksum=524800",
     "tokio_mrt: wave=1 counts=[512, 512] checksum=1573376",
     verify.PASS,
@@ -53,6 +53,12 @@ class ProbeEvidenceTests(unittest.TestCase):
         status, detail = verify.probe_result(EVIDENCE.replace(" nested_threads=2", ""))
         self.assertEqual(status, "FAIL")
         self.assertIn("nested_threads=2", detail)
+
+    def test_runtime_summary_requires_all_thread_cleanup_and_tcp(self):
+        for field in ("started=6", "stopped=6", "tls_destructors=6", "blocking=16", "socket=PASS"):
+            status, detail = verify.probe_result(EVIDENCE.replace(field, field.split("=")[0] + "=missing"))
+            self.assertEqual(status, "FAIL")
+            self.assertIn("multi_thread", detail)
 
     def test_incomplete_probe_keeps_waiting(self):
         self.assertEqual(verify.probe_result("tokio_mrt: start std-and-multi-thread"), (None, None))

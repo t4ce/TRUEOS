@@ -41,6 +41,7 @@ members = [
     "crates/trueos-lfm25-model",
     "crates/trueos-locale",
     "crates/trueos-math",
+    "crates/trueos-terminal",
     "crates/trueos-ttstt-cpu",
     "crates/trueos-v",
     "crates/trueos-vm",
@@ -105,6 +106,7 @@ trueos_ttstt = [
 ]
 
 [dependencies]
+trueos-terminal = { path = "crates/trueos-terminal" }
 # Experimental upstream paging API; see tools/docs/x86_64-next.md.
 # Keep the effective features explicit; do not follow changing upstream defaults.
 x86_64 = { version = "=0.15.5", default-features = false, features = ["instructions", "nightly", "memory_encryption"] }

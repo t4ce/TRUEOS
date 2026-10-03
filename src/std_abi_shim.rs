@@ -99,6 +99,7 @@ pub(crate) const TRUEOS_EBADF: c_int = 9;
 const TRUEOS_EPERM: c_int = 1;
 const TRUEOS_ESRCH: c_int = 3;
 const TRUEOS_ECHILD: c_int = 10;
+const TRUEOS_ENOTDIR: c_int = 20;
 pub(crate) const TRUEOS_ENOTTY: c_int = 25;
 const TRUEOS_EAI_SYSTEM: c_int = 11;
 const TRUEOS_EAI_FAMILY: c_int = 5;
@@ -5683,6 +5684,60 @@ pub unsafe extern "C" fn rename(old_path: *const c_char, new_path: *const c_char
     let _ = unsafe { crate::r::io::cabi::trueos_cabi_fs_remove(old_path.as_ptr(), old_path.len()) };
     TRUEOS_ERRNO.store(0, Ordering::Relaxed);
     0
+}
+
+fn renameat_dirfd_check(dirfd: c_int, path: &str) -> Result<(), c_int> {
+    if path.is_empty() {
+        return Err(TRUEOS_ENOENT);
+    }
+    // Each absolute argument ignores its directory descriptor independently.
+    // AT_FDCWD retains the Blueprint's normal filesystem-root confinement.
+    if path.starts_with('/') || dirfd == TRUEOS_AT_FDCWD {
+        return Ok(());
+    }
+
+    // The current descriptor table exposes files, pipes, sockets and consoles;
+    // directory descriptors are not part of this compatibility surface yet.
+    // Never interpret an ordinary file's saved path as a directory anchor.
+    if (0..=2).contains(&dirfd) {
+        return Err(TRUEOS_ENOTDIR);
+    }
+    let is_file = {
+        let files = OPEN_FILES.lock();
+        files.get(dirfd).is_some()
+    };
+    if is_file {
+        return Err(TRUEOS_ENOTDIR);
+    }
+    let is_socket = {
+        let sockets = SOCKET_FDS.lock();
+        sockets.get(dirfd).is_some()
+    };
+    if is_socket { Err(TRUEOS_ENOTDIR) } else { Err(TRUEOS_EBADF) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn renameat(
+    old_dirfd: c_int,
+    old_path: *const c_char,
+    new_dirfd: c_int,
+    new_path: *const c_char,
+) -> c_int {
+    let Some(old) = abi_cstr_to_string(old_path, 4096) else {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    };
+    let Some(new) = abi_cstr_to_string(new_path, 4096) else {
+        TRUEOS_ERRNO.store(TRUEOS_EINVAL, Ordering::Relaxed);
+        return -1;
+    };
+    if let Err(errno) = renameat_dirfd_check(old_dirfd, old.as_str())
+        .and_then(|()| renameat_dirfd_check(new_dirfd, new.as_str()))
+    {
+        TRUEOS_ERRNO.store(errno, Ordering::Relaxed);
+        return -1;
+    }
+    unsafe { rename(old_path, new_path) }
 }
 
 #[unsafe(no_mangle)]

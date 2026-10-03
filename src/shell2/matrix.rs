@@ -30,6 +30,10 @@ pub(crate) struct MatrixSlotLease {
 }
 
 impl MatrixSlotLease {
+    pub(crate) fn from_identity(id: MatrixSlotId, lifetime_generation: u64) -> Self {
+        Self { id, lifetime_generation }
+    }
+
     pub(crate) fn name(&self) -> &str {
         self.id.as_str()
     }

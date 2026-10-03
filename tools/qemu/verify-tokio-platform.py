@@ -55,7 +55,8 @@ def probe_result(text):
         required = (
             "tokio_mrt: std joined=2 detached=1 tls_destructors=3",
             "tokio_mrt: std scoped=2 borrowed_stack=PASS tls_destructors=2 nested_threads=2",
-            "tokio_mrt: multi_thread wave=0", "tokio_mrt: multi_thread wave=1",
+            "tokio_mrt: multi_thread wave=0 started=6 stopped=6 tls_destructors=6 blocking=16 socket=PASS",
+            "tokio_mrt: multi_thread wave=1 started=6 stopped=6 tls_destructors=6 blocking=16 socket=PASS",
             "tokio_mrt: wave=0 counts=[512, 512]", "tokio_mrt: wave=1 counts=[512, 512]",
         )
         missing = [marker for marker in required if marker not in text]

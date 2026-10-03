@@ -7,9 +7,10 @@ execution object. Rust `std::thread` compatibility is implemented with
 stackful logical threads on shared TRUEOS executor carriers.
 
 The Rust target keeps its real concurrency properties, including atomics and
-`target_has_threads`. Each accepted standard thread owns a stack, an execution
-identity and a keyed TLS namespace. POSIX lifecycle calls use the same platform
-implementation; they do not allocate an exclusive service lane per thread.
+concurrent execution. Each accepted standard thread owns a stack, an execution
+identity and a keyed TLS namespace. The custom Rust std lifecycle uses
+`trueos_cabi_thread_*`; these calls do not allocate an exclusive service lane
+per thread. POSIX synchronization and keyed TLS support the std internals.
 
 Native execution is described separately:
 
@@ -98,8 +99,8 @@ cfg_select! {
 
 The canonical reference backend is
 `tools/rust-std/trueos_thread.rs`. The installer
-`tools/testpy/apply_trueos_rust_std_thread_backend.py` installs this selector and source and gates the Unix pthread-handle
-extensions against a Rust source checkout.
+`tools/testpy/apply_trueos_rust_std_thread_backend.py` installs this selector and
+source and gates the Unix pthread-handle extensions against a Rust source checkout.
 
 The installer selects OS-keyed TLS for TRUEOS before native/no-thread TLS
 selectors. It also restores strict std current-thread initialization, replacing
@@ -168,8 +169,8 @@ Other admission bounds are 256 simultaneously admitted stackful tasks globally,
 64 joinable thread records per process, 128 TLS keys per process, and 512 nonzero
 thread/key TLS values per process. Detaching releases the join record while the
 running task still counts against global admission. Limits and unavailable
-carriers produce explicit creation errors.
-
+carriers produce explicit task/handle creation errors. TLS key and value limits
+are separately reported through the pthread key/set operations.
 
 ## Native Blueprint runtime lanes
 
@@ -227,6 +228,14 @@ Tokio's blocking pool is now available to generic blocking adapters. Constructin
 stdio handles alone does not establish working asynchronous stdio. TRUEOS's
 custom Tokio filesystem adapter retains its asynchronous CABI path.
 
+The supported thread lifecycle is the custom Rust std/TRUEOS CABI path. Explicit
+Unix imports `pthread_create`, `pthread_join`, `pthread_detach` and
+`pthread_kill` remain rejected by the compatibility import classifier. This
+does not affect the tested Rust std/Tokio path, which calls
+`trueos_cabi_thread_spawn`, `trueos_cabi_thread_join` and
+`trueos_cabi_thread_detach`. POSIX-shaped mutex, condition-variable and keyed
+TLS operations used by std are resolved through their corresponding shims.
+
 `tools/testpy/test_trueos_rust_std_thread_backend.py` exercises installer fixtures
 and the actual std backend against a native CABI lifecycle fixture.
 `tools/testpy/test_guarded_thread_stack.py` covers real guard faults and kernel
@@ -235,7 +244,8 @@ production continuation/wait machinery with mocked carrier services.
 `tools/testpy/test_thread_carrier_tables.py` checks selective host/guest branch
 copying, large-page splitting, effective permissions and carrier-table ownership.
 `tools/testpy/test_spin_progress_routing.py` executes the production dispatcher
-to check continuation suspension, Hull VMCALL yielding and ordinary host polling.
+to check continuation suspension, Hull VMCALL yielding, ordinary host polling
+and critical-section paths that must never suspend or reenter an executor.
 `tools/testpy/check_native_worker_contract.py --blueprints ../TRUEOS-Blueprints` compares
 both SDK declarations, native definitions, loader exports, and VMCALL constants.
 The Blueprint `tokio_mrt` production probe covers real multi-thread runtime
@@ -243,3 +253,45 @@ startup, scoped stack borrowing and TLS separation/destructors, parked wakeups,
 blocking-pool work, `block_in_place`, sockets and repeated shutdown/recreation.
 Pinned-toolchain compilation and host execution are separate evidence from rig
 execution; a packed probe alone does not establish success on TRUEOS hardware.
+
+On 2026-10-03, the normal kernel and locally embedded production probe passed
+the full QEMU acceptance run in `bld/thread-acceptance/qemu-run-6`. The recorded
+result is `PASS` in `result.json`; `shell.log` contains the individual coverage
+markers. Total boot and probe time was 12.849 seconds. Observed coverage was:
+
+- Two joined std threads, one detached std thread, remembered and cross-thread
+  park wakeups, and three exit TLS destructors.
+- Two scoped children borrowing the Hull stack and two nested children borrowing
+  guarded carrier stacks; distinct identities and scoped TLS destructors passed.
+- Two independently constructed multi-thread runtimes, each with two scheduler
+  workers, timer/yield tasks, sixteen blocking jobs, `block_in_place`, and a
+  loopback TCP exchange through a listener bound to an ephemeral port. Each wave
+  observed six thread starts, six stops and six TLS destructors before shutdown
+  verification completed.
+- Two native leased lanes across two waves, each reporting `[512, 512]` completed
+  task rounds and the expected checksums.
+
+With an ISO already built containing `tokio_mrt`, reproduce this check from the
+repository root using a fresh evidence directory:
+
+```sh
+python3 tools/qemu/verify-tokio-platform.py \
+  --iso bld/thread-acceptance/trueos.iso \
+  --output bld/thread-acceptance/qemu-run-next --timeout 90
+```
+
+The runner uses an isolated snapshot and private loopback port forwards. It
+submits the probe through legacy Shell2 TCP port 4245; Shell3 port 22 currently
+does not execute Blueprint applications. This evidence establishes the tested
+std/Tokio paths in QEMU, within the capacities above. Physical-machine execution
+has not been verified by this run. Scheduling remains cooperative, and forced
+cancellation and panic/abort recovery are not implemented; the target uses the
+abort panic strategy. Generic file, hostname and stdio adapters remain subject
+to their own compatibility contracts.
+
+The additional `velosrv` smoke run in
+`bld/thread-acceptance/qemu-velosrv-2` reached application initialization after
+filesystem setup and import resolution. It stopped in userdata-directory
+initialization because `std::env::current_exe()` returned `Unsupported`
+(errno 38). Executable-path discovery remains a separate compatibility boundary;
+this run does not establish complete velosrv startup.

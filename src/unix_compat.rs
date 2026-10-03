@@ -170,6 +170,7 @@ pub(crate) fn is_unix_import(name: &str) -> bool {
             | "recv"
             | "recvfrom"
             | "rename"
+            | "renameat"
             | "rmdir"
             | "sched_yield"
             | "send"
@@ -370,6 +371,7 @@ pub(crate) fn resolve_import(name: &str) -> Option<usize> {
         "recv" => Some(crate::std_abi_shim::recv as *const () as usize),
         "recvfrom" => Some(crate::std_abi_shim::recvfrom as *const () as usize),
         "rename" => Some(crate::std_abi_shim::rename as *const () as usize),
+        "renameat" => Some(crate::std_abi_shim::renameat as *const () as usize),
         "rmdir" => Some(crate::std_abi_shim::rmdir as *const () as usize),
         "sched_yield" => Some(crate::std_abi_shim::sched_yield as *const () as usize),
         "send" => Some(crate::std_abi_shim::send as *const () as usize),
@@ -428,6 +430,7 @@ mod tests {
             "mprotect",
             "openat",
             "rename",
+            "renameat",
             "recvfrom",
             "sendto",
             "sigaction",

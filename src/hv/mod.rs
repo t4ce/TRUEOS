@@ -4434,6 +4434,10 @@ pub(crate) fn blueprint_terminal_surface_snapshot(
         });
     }
 
+    if let Some(surface) = target.as_ref().and_then(crate::shell3::tui::surface) {
+        return Ok(surface);
+    }
+
     let (cols, rows) = target
         .as_ref()
         .map(crate::shell2::konsole_viewport_size_for_target)
@@ -4625,6 +4629,17 @@ fn blueprint_console_request_tui(vm_id: u8) -> BlueprintTerminalReentryRequest {
         ));
     }
     request
+}
+
+/// Request the same epoch/ticket handshake used by vmx_tui, without CLI routing.
+pub(crate) fn blueprint_terminal_request_reentry(vm_id: u8) -> Result<(), &'static str> {
+    match blueprint_console_request_tui(vm_id) {
+        BlueprintTerminalReentryRequest::Requested { .. }
+        | BlueprintTerminalReentryRequest::AlreadyRequested
+        | BlueprintTerminalReentryRequest::NotParked => Ok(()),
+        BlueprintTerminalReentryRequest::Detached => Err("tui: Blueprint console detached"),
+        BlueprintTerminalReentryRequest::Unsupported => Err("tui: Blueprint has no terminal UI"),
+    }
 }
 
 fn log_blueprint_terminal_reentry_failed(vm_id: u8, ticket: u64, epoch: u64, reason: &str) {
