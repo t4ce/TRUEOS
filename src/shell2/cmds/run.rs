@@ -1009,6 +1009,35 @@ pub(crate) fn enqueue_blueprint_bytes_with_instance_and_launch_script(
     instance: crate::hv::BlueprintInstanceRequest,
     launch_script: Option<String>,
 ) -> Result<(), String> {
+    enqueue_blueprint_bytes_with_receipt(
+        target,
+        archive,
+        module_bytes,
+        app_args,
+        instance,
+        launch_script,
+        &[],
+    )
+    .map(|_| ())
+}
+
+/// The reserved slot and archive identity, captured before the VM worker runs.
+#[derive(Clone, Debug)]
+pub(crate) struct QueuedBlueprint {
+    pub slot: String,
+    pub app: String,
+    pub sha256: [u8; 32],
+}
+
+pub(crate) fn enqueue_blueprint_bytes_with_receipt(
+    target: MatrixTarget,
+    archive: String,
+    module_bytes: Vec<u8>,
+    app_args: Vec<String>,
+    instance: crate::hv::BlueprintInstanceRequest,
+    launch_script: Option<String>,
+    occupied_slots: &[String],
+) -> Result<QueuedBlueprint, String> {
     let required_readiness = crate::hv::blueprint::prebind_required_readiness(
         module_bytes.as_slice(),
     )
@@ -1030,12 +1059,39 @@ pub(crate) fn enqueue_blueprint_bytes_with_instance_and_launch_script(
     }
 
     let instance = name_occupied_default_instance(&target, archive.as_str(), instance);
-    let target = reserve_target_for_archive(&target, archive.as_str());
+    // Shell3 has its own slot registry. Keep excluded names reserved while
+    // choosing, so the existing five-character allocator advances past them.
+    let mut excluded = Vec::new();
+    let reserved = loop {
+        let candidate = reserve_target_for_archive(&target, archive.as_str());
+        if !occupied_slots.iter().any(|id| id == candidate.slot_id.as_str()) {
+            break candidate;
+        }
+        if excluded
+            .iter()
+            .any(|held: &MatrixTarget| held.slot_id == candidate.slot_id)
+        {
+            for held in excluded {
+                release_matrix_target_vm_reservation(&held);
+            }
+            return Err(String::from("apps: no fresh Matrix slot available"));
+        }
+        excluded.push(candidate);
+    };
+    for excluded_target in excluded {
+        release_matrix_target_vm_reservation(&excluded_target);
+    }
+    let target = reserved;
     let app_label = app_label_for_instance(archive.as_str(), &instance);
     let app_sha256 = Sha256::digest(module_bytes.as_slice()).into();
     set_matrix_target_app_identity(&target, app_label.as_str(), app_sha256);
     let line = alloc::format!("apps: queued {}", app_label);
     log_run_target_line(&target, line.as_str());
+    let receipt = QueuedBlueprint {
+        slot: target.slot_id.as_str().into(),
+        app: app_label_for_archive(&archive).into(),
+        sha256: app_sha256,
+    };
     enqueue_blueprint_request(
         target,
         archive,
@@ -1047,7 +1103,7 @@ pub(crate) fn enqueue_blueprint_bytes_with_instance_and_launch_script(
         false,
         None,
     );
-    Ok(())
+    Ok(receipt)
 }
 
 async fn preflight_archive_name_to_target_async(

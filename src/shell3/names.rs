@@ -182,3 +182,26 @@ pub(super) const ADM_NAMES: [NameEntry; 10] = [
         color: RgbaColor::White,
     },
 ];
+
+/// Slot-specific VM environment controls; not a Tab mode.
+pub(super) const VME_GROUP: NameGroup = NameGroup {
+    name: "VME",
+    names: &[
+        NameEntry {
+            name: "tui",
+            color: RgbaColor::White,
+        },
+        NameEntry {
+            name: "env",
+            color: RgbaColor::White,
+        },
+        NameEntry {
+            name: "smp",
+            color: RgbaColor::White,
+        },
+        NameEntry {
+            name: "esc",
+            color: RgbaColor::White,
+        },
+    ],
+};

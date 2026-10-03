@@ -1,0 +1,130 @@
+#!/usr/bin/env python3
+"""Check acceptance evidence and runner isolation without starting a VM."""
+import importlib.util
+import json
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+import unittest
+
+ROOT = Path(__file__).resolve().parents[2]
+HELPER = ROOT / "tools/qemu/verify-tokio-platform.py"
+spec = importlib.util.spec_from_file_location("tokio_platform_verify", HELPER)
+verify = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(verify)
+EVIDENCE = "\n".join((
+    "tokio_mrt: std joined=2 detached=1 tls_destructors=3",
+    "tokio_mrt: std scoped=2 borrowed_stack=PASS tls_destructors=2",
+    "tokio_mrt: multi_thread wave=0 started=4 stopped=4 tls_destructors=4 blocking=16 socket=PASS",
+    "tokio_mrt: multi_thread wave=1 started=4 stopped=4 tls_destructors=4 blocking=16 socket=PASS",
+    "tokio_mrt: wave=0 counts=[512, 512] checksum=524800",
+    "tokio_mrt: wave=1 counts=[512, 512] checksum=1573376",
+    verify.PASS,
+))
+
+
+class ProbeEvidenceTests(unittest.TestCase):
+    def test_complete_evidence_with_terminal_colours(self):
+        self.assertEqual(verify.probe_result("\x1b[32m" + EVIDENCE + "\x1b[0m")[0], "PASS")
+
+    def test_failure_dominates_later_pass(self):
+        status, detail = verify.probe_result("tokio_mrt: FAIL stage=std.join\n" + EVIDENCE)
+        self.assertEqual(status, "FAIL")
+        self.assertIn("std.join", detail)
+
+    def test_original_worker_panic_cannot_pass(self):
+        self.assertEqual(verify.probe_result("OS can't spawn worker thread\n" + EVIDENCE)[0], "FAIL")
+
+    def test_summary_requires_actual_coverage(self):
+        status, detail = verify.probe_result(verify.PASS)
+        self.assertEqual(status, "FAIL")
+        self.assertIn("scoped", detail)
+
+    def test_incomplete_probe_keeps_waiting(self):
+        self.assertEqual(verify.probe_result("tokio_mrt: start std-and-multi-thread"), (None, None))
+
+    def test_fake_qemu_exercises_local_shell_qmp_and_cleanup(self):
+        # This executable implements only QMP and terminal sockets, never a VM.
+        # Running it through run.sh checks the exact final isolation arguments.
+        with tempfile.TemporaryDirectory(prefix="tokio-verifier-test-") as directory:
+            temp = Path(directory)
+            fake = temp / "fake-qemu.py"
+            fake.write_text('''#!/usr/bin/env python3
+import json, pathlib, re, socket, sys, threading
+args = sys.argv[1:]
+def option(name): return args[args.index(name) + 1]
+assert '-snapshot' in args
+net = option('-netdev')
+assert 'restrict=on' in net and '0.0.0.0' not in net
+assert net.count('hostfwd=') == 2
+serial = pathlib.Path(option('-serial').removeprefix('file:'))
+pathlib.Path(option('-D')).write_text('isolated debug log\\n')
+ports = dict((int(guest), int(host)) for host, guest in re.findall(r'hostfwd=tcp:127.0.0.1:(\\d+)-:(\\d+)', net))
+def terminal(guest):
+    listener = socket.socket()
+    listener.bind(('127.0.0.1', ports[guest]))
+    listener.listen()
+    with listener:
+        while True:
+            connection, _ = listener.accept()
+            with connection:
+                connection.sendall(b'TRUE OS\\r\\n' if guest == 4245 else b'Shell3 plaintext terminal (SSH transport not installed)\\r\\n')
+                pending = bytearray()
+                while True:
+                    data = connection.recv(4096)
+                    if not data: break
+                    pending.extend(data)
+                    if b'help\\r' in pending:
+                        connection.sendall(b'Shell3 recognizes names; command execution is not wired yet.\\r\\n')
+                        pending.clear()
+                    if b'tokio_mrt\\r' in pending:
+                        serial.write_text(EVIDENCE + '\\n')
+                        pending.clear()
+for guest in ports:
+    threading.Thread(target=terminal, args=(guest,), daemon=True).start()
+qmp = socket.socket(socket.AF_UNIX)
+qmp.bind(option('-qmp').split(',')[0].removeprefix('unix:'))
+qmp.listen()
+connection, _ = qmp.accept()
+with connection:
+    stream = connection.makefile('rwb', buffering=0)
+    stream.write(b'{"QMP":{"version":{"qemu":{"major":10,"minor":0,"micro":0}},"capabilities":[]}}\\n')
+    for line in stream:
+        request = json.loads(line)
+        result = {'return': {}, 'id': request['id']}
+        if request['execute'] == 'query-status': result['return'] = {'running':True,'status':'running'}
+        stream.write((json.dumps(result) + '\\n').encode())
+        if request['execute'] == 'quit': break
+'''.replace("import json, pathlib, re, socket, sys, threading", "import json, pathlib, re, socket, sys, threading\nEVIDENCE = " + repr(EVIDENCE)))
+            fake.chmod(0o755)
+            iso = temp / "test.iso"
+            firmware = temp / "test.fd"
+            iso.touch()
+            firmware.touch()
+            output = temp / "evidence"
+            completed = subprocess.run([
+                "python3", str(HELPER), "--iso", str(iso), "--output", str(output), "--timeout", "5",
+            ], env=dict(os.environ, QEMU_BIN=str(fake), QEMU_UEFI_FIRMWARE=str(firmware)),
+                capture_output=True, text=True, timeout=12)
+            self.assertEqual(completed.returncode, 0, completed.stdout + completed.stderr)
+            result = json.loads((output / "result.json").read_text())
+            self.assertEqual(result["status"], "PASS")
+            self.assertTrue(result["shell3"]["observed"])
+            self.assertTrue(result["shell3"]["execution_unwired"])
+            self.assertIn("qmp_final_status", result)
+            self.assertIn('"execute": "quit"', (output / "qmp.jsonl").read_text())
+            self.assertEqual((output / "qemu-debug.log").read_text(), "isolated debug log\n")
+            with self.assertRaises(ProcessLookupError):
+                os.kill(result["pid"], 0)
+            # Output reuse must fail before starting the runner.
+            again = subprocess.run([
+                "python3", str(HELPER), "--iso", str(iso), "--output", str(output),
+            ], env=dict(os.environ, QEMU_BIN=str(fake), QEMU_UEFI_FIRMWARE=str(firmware)),
+                capture_output=True, text=True, timeout=3)
+            self.assertNotEqual(again.returncode, 0)
+            self.assertIn("fresh directory", again.stderr)
+
+
+if __name__ == "__main__":
+    unittest.main()

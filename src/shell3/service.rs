@@ -2,6 +2,7 @@
 
 use alloc::{collections::VecDeque, vec::Vec};
 use trueos_executor::{SpawnError, SpawnToken};
+use crate::shell2::cmds::run::QueuedBlueprint;
 use trueos_time::{Duration, Timer};
 
 const TOPOLOGY_TASK_POOL_CAPACITY: usize = crate::percpu::CPU_SLOT_LIMIT;
@@ -78,23 +79,31 @@ static SHELL_OWNERSHIP: spin::Mutex<ShellOwnership> = spin::Mutex::new(ShellOwne
 static APPDB_NAMES: spin::Mutex<AppDbNames> = spin::Mutex::new(AppDbNames::new());
 
 /// Hand AppDB launches to the existing Matrix/VMX queue.
-pub(super) fn launch_appdb(name: &str, slot: &str) -> Result<(), alloc::string::String> {
+pub(super) fn launch_appdb(name: &str, slot: &str) -> Result<QueuedBlueprint, alloc::string::String> {
     let archive = alloc::format!("{name}.bp");
     launch_archive(archive, slot)
 }
 
-pub(super) fn launch_alias(name: &str, slot: &str) -> Result<(), alloc::string::String> {
+pub(super) fn launch_alias(name: &str, slot: &str) -> Result<QueuedBlueprint, alloc::string::String> {
     let archive = crate::r::restart::startup_alias_blueprint(name)
         .ok_or_else(|| alloc::string::String::from("apps: alias not configured"))?;
     launch_archive(archive, slot)
 }
 
-fn launch_archive(archive: alloc::string::String, slot: &str) -> Result<(), alloc::string::String> {
+fn launch_archive(archive: alloc::string::String, slot: &str) -> Result<QueuedBlueprint, alloc::string::String> {
     let bytes = crate::app_db::get(&archive)?
         .ok_or_else(|| alloc::string::String::from("apps: archive not found"))?;
     let target =
         crate::shell2::matrix_target_for_slot_name(crate::shell2::OUTPUT_SYSTEM_MASK, slot);
-    crate::shell2::cmds::run::enqueue_blueprint_bytes(target, archive, bytes, Vec::new())
+    crate::shell2::cmds::run::enqueue_blueprint_bytes_with_receipt(
+        target,
+        archive,
+        bytes,
+        Vec::new(),
+        crate::hv::BlueprintInstanceRequest::default(),
+        None,
+        &super::MatrixSlots::slot_ids(),
+    )
 }
 
 /// Read app names through the current app.db API, using the archive basename

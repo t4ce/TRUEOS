@@ -20,7 +20,9 @@ def main():
 extern crate alloc;
 use alloc::{string::{String,ToString},collections::VecDeque,vec,vec::Vec};
 mod percpu { pub const CPU_SLOT_LIMIT:usize = 32; }
-mod r { pub mod keyboard {
+mod hv { pub struct BlueprintInstanceRequest; impl BlueprintInstanceRequest {pub fn default()->Self {Self}}
+pub mod blueprint {pub fn prebind_required_readiness(_: &[u8])->Result<u32,String>{Ok(0)}} }
+mod r {pub mod readiness {pub fn mask()->u32 {0}} pub mod keyboard {
     pub const KEYBOARD_OUTPUT_KIND_TEXT:u8=1;
     pub const KEYBOARD_OUTPUT_KIND_KEY:u8=2;
     pub const KEYBOARD_KEY_TAB:u16=2;
@@ -31,7 +33,7 @@ mod r { pub mod keyboard {
 const PROMPT_CURSOR:char='#';
 const OPERATOR:char='§';
 '''
-    for name in ('Mode', 'RgbaColor', 'PromptState', 'title_left_text', 'mode_title_meta', 'MatrixSlotsState', 'matrix_slots', 'matrix_slots_meta', 'matrix_slots_text', 'current_matrix_slots_text'):
+    for name in ('Mode', 'RgbaColor', 'SpecialRows', 'StripSide', 'PromptState', 'vmx_hash_text', 'vmx_title_meta', 'title_left_text', 'mode_title_meta', 'MatrixSlotsState', 'matrix_slots', 'matrix_slots_meta', 'matrix_slots_text', 'current_matrix_slots_text'):
         source += extract.item('src/shell3/shell3.rs', name)
     source += re.search(r'^impl MatrixSlotsState \{.*?^}', shell, re.M | re.S).group()
     source += re.search(r'^impl MatrixSlots \{.*?^}', shell, re.M | re.S).group()
@@ -45,24 +47,40 @@ mod spin {
 }
 use spin::Once;
 static MATRIX_SLOTS:Once<spin::Mutex<MatrixSlotsState>>=Once::new();
+mod shell2 { pub mod cmds { pub mod run {
+#[derive(Clone,Debug)] pub struct QueuedBlueprint { pub slot:alloc::string::String,pub app:alloc::string::String,pub sha256:[u8;32] }
+} } }
 mod service {
+use crate::shell2::cmds::run::QueuedBlueprint;
 pub static LAUNCHES:std::sync::Mutex<Vec<(String,String)>>=std::sync::Mutex::new(Vec::new());
 use alloc::{vec::Vec,string::String};
 pub fn notify_work(){}
-pub fn launch_appdb(name: &str, slot: &str)->Result<(),String>{LAUNCHES.lock().unwrap().push((name.into(),slot.into()));Ok(())}
-pub fn launch_alias(name: &str, slot: &str)->Result<(),String>{LAUNCHES.lock().unwrap().push((format!("alias:{name}"),slot.into()));Ok(())}
+fn launched(name:&str,slot:&str,app:&str)->Result<QueuedBlueprint,String> {
+    if app == "missing" {return Err("apps: archive not found".into());}
+    let mut launches=LAUNCHES.lock().unwrap();
+    let fresh=format!("td{}",launches.len());
+    launches.push((name.into(),slot.into()));
+    Ok(QueuedBlueprint {slot:fresh,app:app.into(),sha256:core::array::from_fn(|i|i as u8)})
+}
+pub fn launch_appdb(name: &str, slot: &str)->Result<QueuedBlueprint,String>{launched(name,slot,name)}
+pub fn launch_alias(name: &str, slot: &str)->Result<QueuedBlueprint,String>{launched(&format!("alias:{name}"),slot,"termdir")}
+
 }
 """
     source += f'\n#[path="{ROOT}/src/shell3/names.rs"] mod names;\nuse names::{{HV_GROUPS,CMD_GROUPS,ADM_NAMES}};\n'
     source += re.search(r'^impl PromptState \{.*?^}', shell, re.M | re.S).group()
     source += f'\n#[path="{ROOT}/src/shell3/metafmtstr.rs"] mod metafmtstr;\nuse metafmtstr::MetaFmtStr;\n'
-    source += '''struct Row {left:Vec<MetaFmtStr>,right:Vec<MetaFmtStr>}
-struct Rows {promt:Row,title:Row}
+    source += '''type Row=RowStrips;
+struct Rows {promt:Row,title:Row,status:Row}
+impl Rows {fn row(&self,row:SpecialRows)->&Row {match row {SpecialRows::TitleRow=>&self.title,SpecialRows::StatusRow=>&self.status,SpecialRows::PromtRow=>&self.promt,_=>panic!()}}}
+#[derive(Clone)] struct RowStrips {left:Vec<MetaFmtStr>,right:Vec<MetaFmtStr>}
+impl RowStrips {fn new(left:&str,right:&str)->Self {Self {left:vec![MetaFmtStr::new(left)],right:vec![MetaFmtStr::new(right)]}}}
+
 struct Shell3 {prompt:PromptState,rows:Rows,columns:usize,mode:Mode,time:String,aka_names:Vec<String>,appdb_names:Vec<String>,active_matrix_slot:Option<String>,active_matrix_lifetime:Option<u64>,matrix_selection_dirty:bool}
 impl Shell3 {
-fn new(columns:usize)->Self {Self {prompt:PromptState::new(),rows:Rows {promt:Row {left:vec![],right:vec![]},title:Row {left:vec![MetaFmtStr::new(title_left_text("12:34"))],right:mode_title_meta(Mode::HV,&[],&[])}},columns,mode:Mode::HV,time:"12:34".into(),aka_names:vec![],appdb_names:vec![],active_matrix_slot:None,active_matrix_lifetime:None,matrix_selection_dirty:false}}
+fn new(columns:usize)->Self {Self {prompt:PromptState::new(),rows:Rows {status:Row {left:vec![],right:vec![]},promt:Row {left:vec![],right:vec![]},title:Row {left:vec![MetaFmtStr::new(title_left_text("12:34"))],right:mode_title_meta(Mode::HV,&[],&[])}},columns,mode:Mode::HV,time:"12:34".into(),aka_names:vec![],appdb_names:vec![],active_matrix_slot:None,active_matrix_lifetime:None,matrix_selection_dirty:false}}
 '''
-    for name in ('handle_keyboard','refresh_prompt_strip','set_mode','get_mode','refresh_mode_title','echo_recognized_prompt','parse_name','set_appdb_names','select_matrix_slot_index','select_matrix_slot_name','active_matrix_slot_index','active_matrix_slot_name','reconcile_matrix_selection','submit_operator_prompt','parse_operator','set_prompt'):
+    for name in ('active_vmx_app','get_strip','row_for_render','handle_keyboard','refresh_prompt_strip','set_mode','get_mode','refresh_mode_title','echo_recognized_prompt','parse_name','set_appdb_names','select_matrix_slot_index','select_matrix_slot_name','active_matrix_slot_index','active_matrix_slot_name','reconcile_matrix_selection','submit_operator_prompt','parse_operator','set_prompt'):
         source += method(shell, name).replace("pub(super)","pub(crate)")
     source += '}\n'
     source += extract.item('src/shell3/service.rs', 'ShellOwnership')
@@ -162,7 +180,7 @@ fn type_text(shell:&mut Shell3,text:&str) {for ch in text.chars() {assert!(key(s
     assert_eq!(MatrixSlots::echo_lines(None),vec!["dl"]);
     assert_eq!(MatrixSlots::echo_lines(Some("123")),vec!["pause"]);
 }
-#[test] fn appdb_name_launches_once_in_cmd_with_selected_slot() {
+#[test] fn appdb_name_launches_once_in_fresh_slot_without_echo() {
     service::LAUNCHES.lock().unwrap().clear();
     MatrixSlots::set(&["app"]);
     let mut s=Shell3::new(80); s.set_appdb_names(&["Demo".into()]);
@@ -170,7 +188,19 @@ fn type_text(shell:&mut Shell3,text:&str) {for ch in text.chars() {assert!(key(s
     type_text(&mut s,"Dem"); assert!(service::LAUNCHES.lock().unwrap().is_empty());
     type_text(&mut s,"o");
     assert_eq!(*service::LAUNCHES.lock().unwrap(),vec![("Demo".into(),"app".into())]);
-    assert_eq!(MatrixSlots::echo_lines(Some("app")),vec!["Demo"]);
+    assert!(MatrixSlots::echo_lines(Some("app")).is_empty());
+    assert_eq!(s.active_matrix_slot_name(),Some("td0".into()));
+    assert!(MatrixSlots::echo_lines(Some("td0")).is_empty());
+    assert_eq!(s.get_strip(SpecialRows::TitleRow,StripSide::Left),"TrueOS § 12:34 Demo 0001020304050607…18191a1b1c1d1e1f");
+    assert_eq!(s.get_strip(SpecialRows::TitleRow,StripSide::Right),"VME tui env smp esc");
+    assert!(!key(&mut s,2,2,'\\t'));assert_eq!(s.mode,Mode::CMD);
+    for name in ["tui","env","smp","esc"] {assert!(s.parse_name(name));}
+    assert!(!s.parse_name("Demo"));assert!(!s.parse_name("online"));
+    assert!(s.parse_operator("§"));
+    assert_eq!(s.get_strip(SpecialRows::TitleRow,StripSide::Left),"TrueOS § 12:34");
+    assert!(key(&mut s,2,2,'\\t'));assert_eq!(s.mode,Mode::ADM);
+    assert!(s.select_matrix_slot_name("td0"));
+    assert_eq!(s.get_strip(SpecialRows::TitleRow,StripSide::Right),"VME tui env smp esc");
     assert_eq!(s.prompt.text,"");
 }
 #[test] fn aka_name_launches_once_in_cmd_with_selected_slot() {
@@ -183,7 +213,9 @@ fn type_text(shell:&mut Shell3,text:&str) {for ch in text.chars() {assert!(key(s
     type_text(&mut s,"hell"); assert!(service::LAUNCHES.lock().unwrap().is_empty());
     type_text(&mut s,"o");
     assert_eq!(*service::LAUNCHES.lock().unwrap(),vec![("alias:hello".into(),"aka".into())]);
-    assert_eq!(MatrixSlots::echo_lines(Some("aka")),vec!["hello"]);
+    assert!(MatrixSlots::echo_lines(Some("aka")).is_empty());
+    assert_eq!(s.active_matrix_slot_name(),Some("td0".into()));
+    assert!(s.get_strip(SpecialRows::TitleRow,StripSide::Left).contains("termdir"));
     assert_eq!(s.prompt.text,"");
 }
 #[test] fn command_legend_uses_live_names_and_preserves_admin_colors() {
@@ -193,13 +225,36 @@ fn type_text(shell:&mut Shell3,text:&str) {for ch in text.chars() {assert!(key(s
     assert!(s.rows.title.right.iter().all(|run|run.text!="Demo"));
     s.set_mode(2);
     assert_eq!(s.rows.title.right.iter().map(|run|run.text.as_str()).collect::<String>(),"[Aka hello] [Media img shot vid film cam rec] [AppDB Demo]");
-    for name in ["hello","img","Demo"] {type_text(&mut s,name);assert_eq!(s.prompt.render(),"#");}
-    assert_eq!(MatrixSlots::echo_lines(None),vec!["Demo","img","hello"]);
+    for name in ["hello","img","Demo"] {type_text(&mut s,name);assert_eq!(s.prompt.render(),"#");s.select_matrix_slot_index(0);}
+    assert_eq!(MatrixSlots::echo_lines(None),vec!["img"]);
     s.set_mode(3); let admin=s.rows.title.right.clone();
     assert_eq!(admin[0].color,Some(RgbaColor::Pink));assert_eq!(admin[2].color,Some(RgbaColor::Pink));
     s.set_appdb_names(&["Other".into()]);assert_eq!(s.rows.title.right,admin);
     s.set_mode(2);assert!(s.rows.title.right.iter().any(|run|run.text=="Other"));
     assert!(s.rows.title.right.iter().all(|run|run.text!="Demo"));
+}
+'''
+    source += '''
+#[test] fn repeated_launch_keeps_previous_slot_identity_and_shared_views() {
+    service::LAUNCHES.lock().unwrap().clear();MatrixSlots::set(&[] as &[&str]);
+    let mut a=Shell3::new(100);a.set_mode(2);a.set_appdb_names(&["termdir".into()]);
+    type_text(&mut a,"termdir");let first=a.active_matrix_slot_name().unwrap();
+    a.select_matrix_slot_index(0);type_text(&mut a,"termdir");let second=a.active_matrix_slot_name().unwrap();
+    assert_ne!(first,second);assert!(first.len()<=5 && second.len()<=5);
+    let mut b=Shell3::new(100);b.select_matrix_slot_name(&first);
+    assert_eq!(b.get_strip(SpecialRows::TitleRow,StripSide::Right),"VME tui env smp esc");
+    assert!(b.row_for_render(SpecialRows::TitleRow).left[1].bold);
+    assert!(!key(&mut b,2,2,'\\t'));assert_eq!(b.mode,Mode::HV);
+    assert!(b.parse_operator(&format!("§{first}§")));b.parse_operator(&format!("§{first}"));
+    assert!(b.active_vmx_app().is_none());assert!(key(&mut b,2,2,'\\t'));
+    assert!(a.active_vmx_app().is_some());
+}
+#[test] fn failed_launch_keeps_selection_and_echoes_only_error() {
+    MatrixSlots::set(&["old"]);let mut s=Shell3::new(80);s.set_mode(2);
+    s.select_matrix_slot_name("old");s.set_appdb_names(&["missing".into()]);
+    type_text(&mut s,"missing");assert_eq!(s.active_matrix_slot_name(),Some("old".into()));
+    assert!(s.active_vmx_app().is_none());
+    assert_eq!(MatrixSlots::echo_lines(Some("old")),vec!["apps: archive not found"]);
 }
 '''
     source += '''
@@ -249,6 +304,41 @@ fn submit(shell:&mut Shell3,input:&str)->bool {shell.set_prompt("");type_text(sh
         assert!(!submit(&mut s,text));assert_eq!(s.prompt.text,text);assert_eq!(s.active_matrix_slot_name(),None);
     }
     assert!(MatrixSlots::echo_lines(None).is_empty());assert_eq!(MatrixSlots::slot_ids(),vec!["id","123"]);
+}
+'''
+    # Exercise the production queue receipt, including a pre-existing Shell3
+    # tag and reservation cleanup, rather than only mocking launch dispatch.
+    source += '''
+mod queue_receipt {
+use super::*;
+use shell2::cmds::run::QueuedBlueprint;
+#[derive(Clone)] pub(crate) struct MatrixTarget {slot_id:String}
+static RESERVED:std::sync::Mutex<Vec<String>>=std::sync::Mutex::new(Vec::new());
+static QUEUED:std::sync::Mutex<Vec<String>>=std::sync::Mutex::new(Vec::new());
+struct Sha256;impl Sha256 {fn digest(bytes:&[u8])->[u8;32] {assert_eq!(bytes,b"archive bytes");[42;32]}}
+fn log_run_target_line(_: &MatrixTarget,_:&str) {}
+fn readiness_mask_text(_:u32)->String {String::new()}
+fn name_occupied_default_instance(_: &MatrixTarget,_:&str,i:hv::BlueprintInstanceRequest)->hv::BlueprintInstanceRequest {i}
+fn reserve_target_for_archive(_: &MatrixTarget,archive:&str)->MatrixTarget {
+    assert_eq!(archive,"termdir.bp");let mut held=RESERVED.lock().unwrap();
+    let id=(0..100).map(|i|format!("td{i}")).find(|id|!held.contains(id)).unwrap();
+    held.push(id.clone());MatrixTarget {slot_id:id}
+}
+fn release_matrix_target_vm_reservation(t:&MatrixTarget) {RESERVED.lock().unwrap().retain(|id|id!=&t.slot_id);}
+fn app_label_for_archive(archive:&str)->&str {archive.trim_end_matches(".bp")}
+fn app_label_for_instance(archive:&str,_:&hv::BlueprintInstanceRequest)->String {app_label_for_archive(archive).into()}
+fn set_matrix_target_app_identity(t:&MatrixTarget,label:&str,hash:[u8;32]) {assert_eq!(t.slot_id,"td1");assert_eq!(label,"termdir");assert_eq!(hash,[42;32]);}
+fn enqueue_blueprint_request(t:MatrixTarget,archive:String,_:&str,bytes:Vec<u8>,_:Vec<String>,_:Option<String>,_:hv::BlueprintInstanceRequest,_:bool,_:Option<()>) {
+    assert_eq!(archive,"termdir.bp");assert_eq!(bytes,b"archive bytes");QUEUED.lock().unwrap().push(t.slot_id);
+}
+'''
+    source += extract.item('src/shell2/cmds/run.rs', 'enqueue_blueprint_bytes_with_receipt')
+    source += '''
+#[test] fn receipt_names_actual_fresh_reserved_slot_and_archive_hash() {
+    let receipt=enqueue_blueprint_bytes_with_receipt(MatrixTarget {slot_id:String::new()},"termdir.bp".into(),b"archive bytes".to_vec(),vec![],hv::BlueprintInstanceRequest::default(),None,&["td0".into()]).unwrap();
+    assert_eq!(receipt.slot,"td1");assert_eq!(receipt.app,"termdir");assert_eq!(receipt.sha256,[42;32]);
+    assert_eq!(*RESERVED.lock().unwrap(),vec!["td1"]);assert_eq!(*QUEUED.lock().unwrap(),vec![receipt.slot]);
+}
 }
 '''
     with tempfile.TemporaryDirectory(prefix='shell3-pool-input-') as directory:

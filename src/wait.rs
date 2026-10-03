@@ -46,7 +46,9 @@ pub fn register_waker_list(list: &mut Vec<Waker>, waker: &Waker) -> bool {
 /// synchronous shell commands like `gfx sw`).
 #[inline]
 pub fn spin_step() {
-    if crate::r::threads::yield_now() { return; }
+    if crate::r::threads::yield_now() {
+        return;
+    }
     crate::time::poll();
     crate::runtime::poll_local_executor();
     core::hint::spin_loop();
@@ -332,7 +334,9 @@ impl WaitQueue {
 
     #[inline]
     pub fn wait_for_event_after_blocking_parked(&self, observed: u32, timeout_ms: u64) -> bool {
-        if let Some(woke) = crate::r::threads::wait(self, observed, timeout_ms) { return woke; }
+        if let Some(woke) = crate::r::threads::wait(self, observed, timeout_ms) {
+            return woke;
+        }
         let hz = TICK_HZ;
         let ticks = if hz == 0 || timeout_ms == 0 {
             0

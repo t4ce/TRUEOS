@@ -33,6 +33,29 @@ readiness in about 10 seconds, including firmware boot.
 its PID and QMP socket; stop it before reusing the runner's forwarded ports.
 `QEMU_UEFI_FIRMWARE` can select a combined OVMF image suitable for `-bios`.
 
+To verify the embedded Tokio platform probe in an already built ISO:
+
+```sh
+python3 tools/qemu/verify-tokio-platform.py \
+  --iso bld/trueos.iso --output bld/emulator-logs/tokio-platform-run1 --timeout 90
+```
+
+The output directory must be new. This verifier uses the existing EGL headless
+runner, a disk snapshot and private loopback forwards. Guest outbound network
+access is disabled. It submits the embedded `tokio_mrt` name through legacy
+Shell2 on guest TCP 4245 and records the separate Shell3 TCP 22 banner when
+available; Shell3 command execution is not wired yet. It requires the std,
+scoped-thread, Tokio multithread and native-lane coverage records and the final
+probe PASS. A probe FAIL, the worker-spawn panic or a deadline expires the run
+with an error. There is no GPU screenshot or readiness gate.
+
+`serial.log`, `shell.log`, `shell3.log`, `qemu.log`, `qemu-debug.log`,
+`qmp.jsonl`, `run.json` and `result.json` preserve the evidence, arguments,
+ports and outcome. The verifier always stops its own VM. `--timeout` limits
+boot and probe execution together and cannot exceed 90 seconds. The runner's
+optional `QEMU_NETDEV_USER` and `QEMU_DEBUG_LOG` overrides provide this
+isolation; normal interactive defaults are unchanged.
+
 For an interactive window, use the normal runner with `QEMU_UEFI_FIRMWARE` set:
 
 ```sh

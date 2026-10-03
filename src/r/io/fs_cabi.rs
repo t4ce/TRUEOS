@@ -330,7 +330,9 @@ pub unsafe extern "C" fn trueos_cabi_write_cstr(stream: u32, cstr: *const u8) {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_poll_once() {
-    if crate::r::threads::yield_now() { return; }
+    if crate::r::threads::yield_now() {
+        return;
+    }
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
         crate::hv::vmcall::guest_yield();
         return;
@@ -344,7 +346,9 @@ pub extern "C" fn trueos_cabi_poll_once() {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn trueos_cabi_sleep_ms(ms: u64) {
-    if crate::r::threads::sleep(ms) { return; }
+    if crate::r::threads::sleep(ms) {
+        return;
+    }
     if crate::hv::current_hull_guest_context_vm_id().is_some() {
         for chunk in sleep_chunks(ms) {
             trueos_vm::vmcall::sleep_ms(chunk);

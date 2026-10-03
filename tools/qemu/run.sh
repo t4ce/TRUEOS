@@ -10,6 +10,7 @@ QEMU_NIC_DEVICE="${QEMU_NIC_DEVICE:-virtio-net-pci,disable-modern=off}"
 QEMU_SERIAL="${QEMU_SERIAL:-tcp:127.0.0.1:5555,server,nowait}"
 QEMU_DISPLAY="${QEMU_DISPLAY:-sdl,gl=on}"
 QEMU_GPU="${QEMU_GPU:-virtio-gpu-gl-pci,xres=1920,yres=1080}"
+QEMU_DEBUG_LOG="${QEMU_DEBUG_LOG:-bld/qemu.log}"
 
 QEMU_MODE="${1:-iso}"
 if [[ "${QEMU_MODE}" == "iso" || "${QEMU_MODE}" == "iso-debug" ]]; then
@@ -30,6 +31,7 @@ QEMU_HOST_TCP_PORT_54321="${QEMU_HOST_TCP_PORT_54321:-15432}"
 QEMU_HOST_TCP_PORT_32123="${QEMU_HOST_TCP_PORT_32123:-32123}"
 QEMU_HOST_TCP_PORT_NET_SHELL="${QEMU_HOST_TCP_PORT_NET_SHELL:-14245}"
 QEMU_HOST_UDP_PORT_32343="${QEMU_HOST_UDP_PORT_32343:-32343}"
+if [[ -z "${QEMU_NETDEV_USER:-}" ]]; then
 QEMU_NETDEV_USER="user,id=net1"
 QEMU_NETDEV_USER+=",hostfwd=tcp:127.0.0.1:${QEMU_HOST_TCP_PORT_8081}-:8081"
 QEMU_NETDEV_USER+=",hostfwd=tcp:127.0.0.1:${QEMU_HOST_TCP_PORT_3}-:3"
@@ -40,6 +42,7 @@ QEMU_NETDEV_USER+=",hostfwd=tcp:0.0.0.0:${QEMU_HOST_TCP_PORT_54321}-:54321"
 QEMU_NETDEV_USER+=",hostfwd=tcp:0.0.0.0:${QEMU_HOST_TCP_PORT_32123}-:32123"
 QEMU_NETDEV_USER+=",hostfwd=tcp:127.0.0.1:${QEMU_HOST_TCP_PORT_NET_SHELL}-:4245"
 QEMU_NETDEV_USER+=",hostfwd=udp:0.0.0.0:${QEMU_HOST_UDP_PORT_32343}-:32343"
+fi
 
 exec env -i \
     "HOME=${HOME:-}" \
@@ -64,7 +67,7 @@ exec env -i \
     -boot order=d \
     -cdrom "${ISO_PATH}" \
     -debugcon stdio \
-    -D bld/qemu.log \
+    -D "${QEMU_DEBUG_LOG}" \
     -d int,guest_errors,cpu_reset,unimp \
     -m "${QEMU_MEMORY}" \
     -smp "cores=${QEMU_SMP}" \

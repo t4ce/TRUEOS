@@ -35,7 +35,7 @@ fn make_thread(id: usize, job: impl FnOnce() + Send + 'static) -> ThreadTask {
         domain: (77, id as u8),
         allocation: [0; 4],
         wls: (0, id as u32),
-        _admission: Admission(None),
+        _admission: Admission { _owner: None },
     }))
 }
 

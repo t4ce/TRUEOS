@@ -125,6 +125,7 @@ struct MatrixSlotsState {
     lifetimes: Vec<(String, u64)>,
     next_lifetime: u64,
     echoes: Vec<(Option<String>, VecDeque<String>)>,
+    vmx_apps: Vec<crate::shell2::cmds::run::QueuedBlueprint>,
     generation: u64,
 }
 
@@ -135,6 +136,7 @@ impl MatrixSlotsState {
             lifetimes: vec![("id".to_string(), 1), ("123".to_string(), 2)],
             next_lifetime: 3,
             echoes: Vec::new(),
+            vmx_apps: Vec::new(),
             generation: 0,
         }
     }
@@ -215,6 +217,7 @@ impl MatrixSlots {
         slots
             .echoes
             .retain(|(id, _)| id.as_ref().is_none_or(|id| ids.contains(id)));
+        slots.vmx_apps.retain(|app| ids.contains(&app.slot));
         slots.ids = ids;
         slots.generation = slots.generation.wrapping_add(1);
         drop(slots);
@@ -247,6 +250,7 @@ impl MatrixSlots {
             }
             slots.ids.retain(|id| id != name);
             slots.lifetimes.retain(|(id, _)| id != name);
+            slots.vmx_apps.retain(|app| app.slot != name);
         }
         slots.echoes.retain(|(id, _)| id.as_deref() != name);
         slots.generation = slots.generation.wrapping_add(1);
@@ -715,6 +719,9 @@ impl Shell3 {
     }
 
     pub fn set_mode(&mut self, mode: u8) -> bool {
+        if self.active_vmx_app().is_some() {
+            return false;
+        }
         self.mode = match mode {
             1 => Mode::HV,
             2 => Mode::CMD,
@@ -821,7 +828,7 @@ impl Shell3 {
         true
     }
 
-    /// UI editing with immediate exact-name echo and AppDB/AKA launch.
+    /// UI editing with immediate exact-name recognition and AppDB/AKA launch.
     pub(super) fn handle_keyboard(
         &mut self,
         event: &crate::r::keyboard::TrueosKeyboardOutputEvent,
@@ -886,27 +893,43 @@ impl Shell3 {
             return;
         }
         let text = core::mem::take(&mut self.prompt.text);
-        MatrixSlots::echo(
-            self.active_matrix_slot.as_deref(),
-            self.active_matrix_lifetime,
-            text.clone(),
-        );
-        if self.mode == Mode::CMD {
+        let can_launch = self.mode == Mode::CMD && self.active_vmx_app().is_none();
+        let is_app = can_launch
+            && self.appdb_names.iter().any(|name| name == &text);
+        let is_alias = can_launch
+            && self.aka_names.iter().any(|name| name == &text);
+        if is_app || is_alias {
             let slot = self.active_matrix_slot.as_deref().unwrap_or("");
-            let result = if self.appdb_names.iter().any(|name| name == &text) {
+            let result = if is_app {
                 service::launch_appdb(&text, slot)
-            } else if self.aka_names.iter().any(|name| name == &text) {
-                service::launch_alias(&text, slot)
             } else {
-                Ok(())
+                service::launch_alias(&text, slot)
             };
-            if let Err(error) = result {
-                MatrixSlots::echo(
+            match result {
+                Ok(app) => {
+                    let lifetime = MatrixSlots::ensure_named(&app.slot);
+                    self.active_matrix_slot = Some(app.slot.clone());
+                    self.active_matrix_lifetime = Some(lifetime);
+                    self.matrix_selection_dirty = true;
+                    let mut slots = matrix_slots().lock();
+                    slots.vmx_apps.retain(|existing| existing.slot != app.slot);
+                    slots.vmx_apps.push(app);
+                    slots.generation = slots.generation.wrapping_add(1);
+                    drop(slots);
+                    service::notify_work();
+                }
+                Err(error) => MatrixSlots::echo(
                     self.active_matrix_slot.as_deref(),
                     self.active_matrix_lifetime,
                     error,
-                );
+                ),
             }
+        } else {
+            MatrixSlots::echo(
+                self.active_matrix_slot.as_deref(),
+                self.active_matrix_lifetime,
+                text,
+            );
         }
         self.prompt.colors.clear();
         self.prompt.cursor = 0;
@@ -1037,7 +1060,7 @@ impl Shell3 {
             return current_matrix_slots_text();
         }
 
-        let strip = self.rows.row(row);
+        let strip = self.row_for_render(row);
         match side {
             StripSide::Left => strip.left.iter().map(|run| run.text.as_str()).collect(),
             StripSide::Right => strip.right.iter().map(|run| run.text.as_str()).collect(),
@@ -1049,6 +1072,13 @@ impl Shell3 {
             return RowStrips::new(&self.get_strip(row, StripSide::Left), "");
         }
         let mut strips = self.rows.row(row).clone();
+        if row == SpecialRows::TitleRow {
+            if let Some(app) = self.active_vmx_app() {
+                strips.left.push(MetaFmtStr::new(format!(" {}", app.app)).bold());
+                strips.left.push(MetaFmtStr::new(format!(" {}", vmx_hash_text(&app.sha256))));
+                strips.right = vmx_title_meta();
+            }
+        }
         if row == SpecialRows::StatusRow {
             let active = self.active_matrix_slot_name();
             let slots = matrix_slots().lock();
@@ -1158,7 +1188,20 @@ impl Shell3 {
         true
     }
 
+    fn active_vmx_app(&self) -> Option<crate::shell2::cmds::run::QueuedBlueprint> {
+        let active = self.active_matrix_slot_name()?;
+        matrix_slots()
+            .lock()
+            .vmx_apps
+            .iter()
+            .find(|app| app.slot == active)
+            .cloned()
+    }
+
     pub fn parse_name(&self, name: &str) -> bool {
+        if self.active_vmx_app().is_some() {
+            return names::VME_GROUP.names.iter().any(|entry| entry.name == name);
+        }
         match self.mode {
             Mode::HV => HV_GROUPS
                 .iter()
@@ -1236,6 +1279,29 @@ fn mode_title_meta(mode: Mode, aka_names: &[String], appdb_names: &[String]) -> 
                 runs.push(MetaFmtStr::new(entry.name).color(entry.color));
             }
         }
+    }
+    runs
+}
+
+fn vmx_hash_text(hash: &[u8; 32]) -> String {
+    use core::fmt::Write;
+    let mut text = String::with_capacity(35);
+    for byte in &hash[..8] {
+        let _ = write!(text, "{byte:02x}");
+    }
+    text.push('…');
+    for byte in &hash[24..] {
+        let _ = write!(text, "{byte:02x}");
+    }
+    text
+}
+
+fn vmx_title_meta() -> Vec<MetaFmtStr> {
+    let group = &names::VME_GROUP;
+    let mut runs = vec![MetaFmtStr::new(group.name).bold()];
+    for entry in group.names {
+        runs.push(MetaFmtStr::new(" "));
+        runs.push(MetaFmtStr::new(entry.name).color(entry.color));
     }
     runs
 }

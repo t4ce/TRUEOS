@@ -30,7 +30,9 @@ enum Job {
     GuestRaw { data: usize, vtable: usize },
 }
 
-struct Admission(Option<GuestJobOwner>);
+struct Admission {
+    _owner: Option<GuestJobOwner>,
+}
 
 impl Drop for Admission {
     fn drop(&mut self) {
@@ -120,7 +122,14 @@ pub(crate) fn sleep(ms: u64) -> bool {
     }
     let timer = crate::allocators::with_host_alloc_domain_strong(|| {
         Box::pin(async move {
-            trueos_time::Timer::after_millis(ms).await;
+            // Keep even very large std durations within the timer driver's
+            // representable interval, preserving every requested millisecond.
+            let mut remaining = ms;
+            while remaining != 0 {
+                let chunk = remaining.min(10_000);
+                trueos_time::Timer::after_millis(chunk).await;
+                remaining -= chunk;
+            }
         })
     });
     suspend(Some(timer))
@@ -248,7 +257,7 @@ fn submit(stack: usize, job: Job, vm_id: Option<u8>, id: usize) -> Result<(), i3
     {
         return Err(11);
     }
-    let admission = Admission(owner);
+    let admission = Admission { _owner: owner };
     // Scheduler storage belongs to the host even when spawned from guest
     // code. Guest closure execution/destruction uses its retained VM realm.
     let prepared = crate::allocators::with_host_alloc_domain_strong(|| {
