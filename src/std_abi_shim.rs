@@ -25,9 +25,10 @@ impl ProcessErrno {
         crate::r::threads::current_errno().unwrap_or_else(|| {
             // Legacy native lanes and the Hull coordinator have separate
             // physical execution slots. Logical std threads use their pinned
-            // errno cell above even when several share one carrier.
+            // errno cell above even when several share one carrier. CPUID
+            // also works in the Hull, whose GS does not name host PerCpu.
             &process_state().errno
-                [crate::percpu::current_slot().min(crate::percpu::CPU_SLOT_LIMIT - 1)]
+                [crate::percpu::current_slot_via_cpuid().min(crate::percpu::CPU_SLOT_LIMIT - 1)]
         })
     }
 
@@ -1064,7 +1065,7 @@ fn pthread_current_id() -> usize {
     if let Some(worker_id) = crate::wls::current_worker_id() {
         return 0x1_0000usize.saturating_add(worker_id);
     }
-    crate::percpu::current_slot().saturating_add(1)
+    crate::percpu::current_slot_via_cpuid().saturating_add(1)
 }
 
 fn pthread_tls_slot(key: usize) -> PthreadTlsSlot {
@@ -1250,7 +1251,7 @@ fn pthread_mutex_lock_state(
                 state.depth.load(Ordering::Relaxed),
                 state.kind.load(Ordering::Relaxed),
                 spins,
-                crate::percpu::current_slot()
+                crate::percpu::current_slot_via_cpuid()
             );
         }
         crate::wait::spin_step();

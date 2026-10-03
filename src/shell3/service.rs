@@ -106,6 +106,12 @@ fn launch_archive(archive: alloc::string::String, slot: &str) -> Result<QueuedBl
     )
 }
 
+/// Retire the launch target too: queued work is cancelled by its expired
+/// lifetime, and a starting/running Blueprint follows normal VM teardown.
+pub(super) fn drop_vmx_slot(name: &str) {
+    crate::shell2::free_matrix_slot(name);
+}
+
 /// Read app names through the current app.db API, using the archive basename
 /// convention shared by the Shell2 titlebar.
 pub fn read_appdb_names() -> Vec<alloc::string::String> {

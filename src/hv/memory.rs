@@ -4,6 +4,9 @@ use crate::r::static_slots::StaticSlots;
 use alloc::vec::Vec;
 use spin::Mutex;
 
+mod carrier;
+pub(crate) use carrier::CarrierAddressSpace;
+
 #[inline]
 fn current_vm_id_for_log() -> u8 {
     crate::hv::current_vm_id().unwrap_or(0)

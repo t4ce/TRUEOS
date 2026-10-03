@@ -48,6 +48,8 @@ sleep suspend the continuation instead of recursively polling an executor or
 occupying one service lane for the whole thread lifetime. Execution is
 cooperative: CPU-bound code must reach a scheduling or waiting operation to
 give other work on its carrier a turn.
+The Hull main stack yields through VMCALL on synchronous contention; it must
+never enter the host executor or access its GS-backed per-CPU state directly.
 
 Before each resume, the scheduler installs the thread's VM/allocation domain,
 WLS identity and errno state. Suspension restores the parent carrier's state
@@ -57,6 +59,17 @@ stack retirement. Stop/preserve closes admission and drains accepted tasks,
 including detached threads, before reclaiming code, heaps or process resources.
 An unfinished cooperative thread keeps teardown pending; cancellation does not
 discard a live continuation or release its executable memory on a timeout.
+
+A VM-owned continuation also owns three PMM pages for a private host CR3 root
+and its low stack branches. These preserve the Hull main stack and communication
+pages at their original addresses, so compiler-generated scoped borrows access
+the same physical bytes on every carrier. The other branches retain the host
+kernel backing, including its globals, guest heap and guarded thread aliases.
+The scheduler switches this view only while the continuation runs, flushing
+global translations as well, and restores the parent CR3 before polling waits
+or unrelated work. The VM reservation keeps the referenced guest leaf tables
+and main-stack backing alive. Retirement frees the owned carrier tables only
+after switching away from them; 256 admitted tasks bound this storage to 3 MiB.
 
 ## Rust std selection
 
@@ -216,6 +229,10 @@ and the actual std backend against a native CABI lifecycle fixture.
 `tools/testpy/test_guarded_thread_stack.py` covers real guard faults and kernel
 backing/ownership rollback. `tools/testpy/test_thread_scheduler.py` runs the
 production continuation/wait machinery with mocked carrier services.
+`tools/testpy/test_thread_carrier_tables.py` checks selective host/guest branch
+copying, large-page splitting, effective permissions and carrier-table ownership.
+`tools/testpy/test_spin_progress_routing.py` executes the production dispatcher
+to check continuation suspension, Hull VMCALL yielding and ordinary host polling.
 `tools/testpy/check_native_worker_contract.py --blueprints ../TRUEOS-Blueprints` compares
 both SDK declarations, native definitions, loader exports, and VMCALL constants.
 The Blueprint `tokio_mrt` production probe covers real multi-thread runtime

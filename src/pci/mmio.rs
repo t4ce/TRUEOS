@@ -375,6 +375,13 @@ fn map_mmio_region_custom(phys_base: u64, map_size: usize) -> Result<NonNull<u8>
     NonNull::new(virt_ptr).ok_or(MapError::InvalidPointer)
 }
 
+/// Serialize a private copy of the active kernel page-table branches with
+/// mappings published by the MMIO and guarded-stack helpers.
+pub(crate) fn with_page_table_lock<T>(f: impl FnOnce() -> T) -> T {
+    let _guard = PAGING_LOCK.lock();
+    f()
+}
+
 fn align_up(value: u64, align: u64) -> u64 {
     if align == 0 {
         return value;

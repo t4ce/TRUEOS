@@ -25,19 +25,36 @@ def plain(text):
     return ANSI.sub("", text)
 
 
+def probe_tail(text, limit=4):
+    """Extract bounded records before ANSI repaint removes line boundaries."""
+    records = []
+    for match in re.finditer(r"tokio_mrt:[^\r\n\x1b]{0,200}", text):
+        record = plain(match.group(0)).strip()
+        # Repaints repeatedly include the same retained transcript. Preserve
+        # its most recent distinct records rather than whole screen redraws.
+        if record in records:
+            records.remove(record)
+        records.append(record)
+        records = records[-limit:]
+    return records
+
+
 def probe_result(text):
     """A PASS cannot hide an earlier probe failure or the reported worker panic."""
     text = plain(text)
-    failure = re.search(r"tokio_mrt: FAIL[^\r\n]*", text)
+    failure = re.search(r"tokio_mrt: FAIL[^\r\n]{0,200}", text)
     if failure:
         return "FAIL", failure.group(0)
+    fault = re.search(r"hv: vm\d+ fault-exc[^\r\n]{0,180}", text)
+    if fault:
+        return "FAIL", fault.group(0)
     for marker in ("OS can't spawn worker thread", "thread '<unnamed>'", "panicked at"):
         if marker in text:
             return "FAIL", marker
     if PASS in text:
         required = (
             "tokio_mrt: std joined=2 detached=1 tls_destructors=3",
-            "tokio_mrt: std scoped=2 borrowed_stack=PASS tls_destructors=2",
+            "tokio_mrt: std scoped=2 borrowed_stack=PASS tls_destructors=2 nested_threads=2",
             "tokio_mrt: multi_thread wave=0", "tokio_mrt: multi_thread wave=1",
             "tokio_mrt: wave=0 counts=[512, 512]", "tokio_mrt: wave=1 counts=[512, 512]",
         )
@@ -176,9 +193,8 @@ def main():
                 raise RuntimeError(f"QEMU exited {process.returncode}; see qemu.log")
             if time.monotonic() >= deadline:
                 observed = serial_path.read_text(errors="replace") + shell_log.decode(errors="replace")
-                markers = [line for line in plain(observed).splitlines() if "tokio_mrt:" in line]
                 raise TimeoutError("Boot/probe deadline expired; latest probe evidence: " +
-                                   (" | ".join(markers[-4:]) or "no tokio_mrt output"))
+                                   (" | ".join(probe_tail(observed)) or "no tokio_mrt output"))
 
         def drain(sock, log, seconds):
             end = min(deadline, time.monotonic() + seconds)
@@ -269,6 +285,9 @@ def main():
         finally:
             shell_path.write_bytes(shell_log)
             (args.output / "shell3.log").write_bytes(shell3_log)
+            result["probe_tail"] = probe_tail(
+                serial_path.read_text(errors="replace") + shell_log.decode(errors="replace")
+            )
             if shell:
                 shell.close()
             if qmp:

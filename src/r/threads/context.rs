@@ -4,6 +4,40 @@
 
 pub(super) use super::stack::Stack;
 
+/// Switch the low-address process view while retaining all host kernel and
+/// guarded-stack mappings. Restore the returned CR3 before polling other work.
+///
+/// The caller owns the new tables and every stack they expose for this entire
+/// interval. Flush global translations too: a host low identity mapping must
+/// never survive as a scoped thread's view of the Hull parent's stack.
+#[cfg(not(target_os = "linux"))]
+pub(super) unsafe fn replace_address_space(next: u64) -> u64 {
+    use x86_64::PhysAddr;
+    use x86_64::registers::control::{Cr3, Cr4, Cr4Flags};
+    use x86_64::structures::paging::PhysFrame;
+
+    let (frame, flags) = Cr3::read_raw();
+    let previous = frame.start_address().as_u64() | u64::from(flags);
+    if previous == next {
+        return previous;
+    }
+    let cr4 = Cr4::read_raw();
+    let global = Cr4Flags::PAGE_GLOBAL.bits();
+    unsafe {
+        if cr4 & global != 0 {
+            Cr4::write_raw(cr4 & !global);
+        }
+        Cr3::write_raw(
+            PhysFrame::containing_address(PhysAddr::new(next & 0x000f_ffff_ffff_f000)),
+            (next & 0xfff) as u16,
+        );
+        if cr4 & global != 0 {
+            Cr4::write_raw(cr4);
+        }
+    }
+    previous
+}
+
 core::arch::global_asm!(
     ".global trueos_thread_context_swap",
     ".type trueos_thread_context_swap,@function",

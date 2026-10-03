@@ -843,6 +843,13 @@ fn start_blueprint_launch(
         return;
     };
 
+    // VM ownership is independent of the app's later terminal-input lease.
+    // A slot drop must also find a Blueprint which has not claimed its TUI.
+    if !crate::shell2::bind_matrix_target_vm(&request.target, vm_id) {
+        log("apps: interrupted before vm ownership bind");
+        return;
+    }
+
     match crate::hv::start_blueprint_app_vm(
         vm_id,
         spawner,
@@ -855,6 +862,13 @@ fn start_blueprint_launch(
         plan.console_surface,
     ) {
         Ok(()) => {
+            // A free between the ownership bind and start may have observed
+            // an idle VM. Cancel that launch once its stop latch is available.
+            if matrix_target_interrupted(&request.target) {
+                let _ = crate::hv::stop(vm_id);
+                log("apps: slot freed during vm start; stop requested");
+                return;
+            }
             crate::log!(
                 "app-vm-run-queue: hv start ok vm={} archive={}\n",
                 vm_id,
@@ -863,6 +877,7 @@ fn start_blueprint_launch(
             log(alloc::format!("apps: vm{} launch requested", vm_id).as_str());
         }
         Err(err) => {
+            let _ = crate::shell2::unbind_matrix_target_vm(&request.target, vm_id);
             crate::log_warn!(
                 target: "service";
                 "app-vm-run-queue: hv start failed vm={} archive={} err={:?}\n",

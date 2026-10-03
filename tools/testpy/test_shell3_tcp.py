@@ -24,12 +24,13 @@ use std::cell::{Cell, RefCell};
         source += extract.item('src/shell3/shell3.rs', name)
     source += '''
 const OPERATOR: char = '§';
-struct Shell3 { mode: u8, prompt: String, cursor: usize, parsed: RefCell<Vec<String>> }
+struct Shell3 { vmx:bool, mode: u8, prompt: String, cursor: usize, parsed: RefCell<Vec<String>> }
 impl Shell3 {
     fn new_terminal() -> Result<Self, ()> {
-        Ok(Self { mode: 1, prompt: String::new(), cursor: 0, parsed: RefCell::new(Vec::new()) })
+        Ok(Self { vmx:false, mode: 1, prompt: String::new(), cursor: 0, parsed: RefCell::new(Vec::new()) })
     }
     fn reconcile_matrix_selection(&mut self) {}
+    fn stop_active_vmx(&mut self)->bool {core::mem::take(&mut self.vmx)}
     fn get_strip(&self, _: SpecialRows, _: StripSide) -> String { "TrueOS § 12:34".into() }
     fn mode(&self) -> Mode { match self.mode { 1 => Mode::HV, 2 => Mode::CMD, _ => Mode::ADM } }
     fn get_mode(&self) -> u8 { self.mode }
@@ -48,6 +49,12 @@ mod tty {
     fn terminal() -> Terminal {
         let mut tty = Terminal::new(Shell3::new_terminal().unwrap());
         tty.output.clear(); tty
+    }
+    #[test] fn stop_dispatches_for_vmx_only_and_returns_to_prompt() {
+        let mut tty=terminal();tty.shell.vmx=true;
+        tty.input(b"stop\\r");assert!(!tty.shell.vmx);assert!(tty.shell.parsed.borrow().is_empty());
+        assert!(!String::from_utf8_lossy(&tty.output).contains("not wired"));
+        tty.input(b"stop\\r");assert_eq!(&*tty.shell.parsed.borrow(),&["stop"]);
     }
     #[test] fn matrix_operator_is_submitted_once_with_enter() {
         let mut tty = terminal();

@@ -203,5 +203,9 @@ pub(super) const VME_GROUP: NameGroup = NameGroup {
             name: "esc",
             color: RgbaColor::White,
         },
+        NameEntry {
+            name: "stop",
+            color: RgbaColor::White,
+        },
     ],
 };

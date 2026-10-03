@@ -244,6 +244,9 @@ impl MatrixSlots {
     /// None resets the implicit default slot; named slots disappear entirely.
     fn drop_slot(name: Option<&str>) -> bool {
         let mut slots = matrix_slots().lock();
+        let vmx_slot = name
+            .filter(|name| slots.vmx_apps.iter().any(|app| app.slot == *name))
+            .map(str::to_string);
         if let Some(name) = name {
             if !slots.ids.iter().any(|id| id == name) {
                 return false;
@@ -255,6 +258,9 @@ impl MatrixSlots {
         slots.echoes.retain(|(id, _)| id.as_deref() != name);
         slots.generation = slots.generation.wrapping_add(1);
         drop(slots);
+        if let Some(name) = vmx_slot {
+            service::drop_vmx_slot(&name);
+        }
         service::notify_work();
         true
     }
@@ -898,7 +904,9 @@ impl Shell3 {
             && self.appdb_names.iter().any(|name| name == &text);
         let is_alias = can_launch
             && self.aka_names.iter().any(|name| name == &text);
-        if is_app || is_alias {
+        if text == "stop" && self.active_vmx_app().is_some() {
+            self.stop_active_vmx();
+        } else if is_app || is_alias {
             let slot = self.active_matrix_slot.as_deref().unwrap_or("");
             let result = if is_app {
                 service::launch_appdb(&text, slot)
@@ -1186,6 +1194,13 @@ impl Shell3 {
         self.matrix_selection_dirty = true;
         service::notify_work();
         true
+    }
+
+    pub(super) fn stop_active_vmx(&mut self) -> bool {
+        let Some(app) = self.active_vmx_app() else { return false };
+        let dropped = MatrixSlots::drop_slot(Some(&app.slot));
+        self.reconcile_matrix_selection();
+        dropped
     }
 
     fn active_vmx_app(&self) -> Option<crate::shell2::cmds::run::QueuedBlueprint> {

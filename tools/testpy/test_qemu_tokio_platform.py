@@ -15,7 +15,7 @@ verify = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(verify)
 EVIDENCE = "\n".join((
     "tokio_mrt: std joined=2 detached=1 tls_destructors=3",
-    "tokio_mrt: std scoped=2 borrowed_stack=PASS tls_destructors=2",
+    "tokio_mrt: std scoped=2 borrowed_stack=PASS tls_destructors=2 nested_threads=2",
     "tokio_mrt: multi_thread wave=0 started=4 stopped=4 tls_destructors=4 blocking=16 socket=PASS",
     "tokio_mrt: multi_thread wave=1 started=4 stopped=4 tls_destructors=4 blocking=16 socket=PASS",
     "tokio_mrt: wave=0 counts=[512, 512] checksum=524800",
@@ -36,13 +36,41 @@ class ProbeEvidenceTests(unittest.TestCase):
     def test_original_worker_panic_cannot_pass(self):
         self.assertEqual(verify.probe_result("OS can't spawn worker thread\n" + EVIDENCE)[0], "FAIL")
 
+    def test_hypervisor_exception_fails_without_waiting_for_probe_timeout(self):
+        status, detail = verify.probe_result(
+            "tokio_mrt: start std-and-multi-thread\n"
+            "[hv] [error] hv: vm0 fault-exc v=14 #PF Page Fault type=3(hw-exc) err=0x0 info=0x80000B0E\n"
+        )
+        self.assertEqual(status, "FAIL")
+        self.assertIn("fault-exc v=14 #PF", detail)
+
     def test_summary_requires_actual_coverage(self):
         status, detail = verify.probe_result(verify.PASS)
         self.assertEqual(status, "FAIL")
         self.assertIn("scoped", detail)
 
+    def test_nested_thread_coverage_is_required(self):
+        status, detail = verify.probe_result(EVIDENCE.replace(" nested_threads=2", ""))
+        self.assertEqual(status, "FAIL")
+        self.assertIn("nested_threads=2", detail)
+
     def test_incomplete_probe_keeps_waiting(self):
         self.assertEqual(verify.probe_result("tokio_mrt: start std-and-multi-thread"), (None, None))
+
+    def test_repaint_without_newlines_has_compact_distinct_probe_tail(self):
+        frame = ("\x1b[2J" + "TRUE OS " * 2000 + "\x1b[12;1H" +
+                 "tokio_mrt: start std-and-multi-thread" + "\x1b[13;1H" +
+                 "tokio_mrt: std joined=2 detached=1 tls_destructors=3" + "\x1b[14;1H" +
+                 "unrelated terminal contents " * 2000)
+        self.assertEqual(verify.probe_tail(frame * 3), [
+            "tokio_mrt: start std-and-multi-thread",
+            "tokio_mrt: std joined=2 detached=1 tls_destructors=3",
+        ])
+
+    def test_failure_detail_is_bounded_without_terminal_line_breaks(self):
+        status, detail = verify.probe_result("tokio_mrt: FAIL stage=scoped.borrow" + "repaint" * 2000)
+        self.assertEqual(status, "FAIL")
+        self.assertLessEqual(len(detail), 215)
 
     def test_fake_qemu_exercises_local_shell_qmp_and_cleanup(self):
         # This executable implements only QMP and terminal sockets, never a VM.

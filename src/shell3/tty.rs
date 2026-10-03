@@ -75,6 +75,7 @@ impl Terminal {
                 self.write(b"Bye.\r\n");
                 self.closing = true;
             }
+            "stop" if self.shell.stop_active_vmx() => {}
             _ if command.starts_with(OPERATOR) => {
                 if !self.shell.parse_operator(command) {
                     self.write(b"Shell3: invalid or absent Matrix slot operator.\r\n");

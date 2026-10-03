@@ -55,6 +55,8 @@ use crate::shell2::cmds::run::QueuedBlueprint;
 pub static LAUNCHES:std::sync::Mutex<Vec<(String,String)>>=std::sync::Mutex::new(Vec::new());
 use alloc::{vec::Vec,string::String};
 pub fn notify_work(){}
+pub static DROPS:std::sync::Mutex<Vec<String>>=std::sync::Mutex::new(Vec::new());
+pub fn drop_vmx_slot(name:&str) {DROPS.lock().unwrap().push(name.into());}
 fn launched(name:&str,slot:&str,app:&str)->Result<QueuedBlueprint,String> {
     if app == "missing" {return Err("apps: archive not found".into());}
     let mut launches=LAUNCHES.lock().unwrap();
@@ -80,7 +82,7 @@ struct Shell3 {prompt:PromptState,rows:Rows,columns:usize,mode:Mode,time:String,
 impl Shell3 {
 fn new(columns:usize)->Self {Self {prompt:PromptState::new(),rows:Rows {status:Row {left:vec![],right:vec![]},promt:Row {left:vec![],right:vec![]},title:Row {left:vec![MetaFmtStr::new(title_left_text("12:34"))],right:mode_title_meta(Mode::HV,&[],&[])}},columns,mode:Mode::HV,time:"12:34".into(),aka_names:vec![],appdb_names:vec![],active_matrix_slot:None,active_matrix_lifetime:None,matrix_selection_dirty:false}}
 '''
-    for name in ('active_vmx_app','get_strip','row_for_render','handle_keyboard','refresh_prompt_strip','set_mode','get_mode','refresh_mode_title','echo_recognized_prompt','parse_name','set_appdb_names','select_matrix_slot_index','select_matrix_slot_name','active_matrix_slot_index','active_matrix_slot_name','reconcile_matrix_selection','submit_operator_prompt','parse_operator','set_prompt'):
+    for name in ('stop_active_vmx','active_vmx_app','get_strip','row_for_render','handle_keyboard','refresh_prompt_strip','set_mode','get_mode','refresh_mode_title','echo_recognized_prompt','parse_name','set_appdb_names','select_matrix_slot_index','select_matrix_slot_name','active_matrix_slot_index','active_matrix_slot_name','reconcile_matrix_selection','submit_operator_prompt','parse_operator','set_prompt'):
         source += method(shell, name).replace("pub(super)","pub(crate)")
     source += '}\n'
     source += extract.item('src/shell3/service.rs', 'ShellOwnership')
@@ -192,15 +194,15 @@ fn type_text(shell:&mut Shell3,text:&str) {for ch in text.chars() {assert!(key(s
     assert_eq!(s.active_matrix_slot_name(),Some("td0".into()));
     assert!(MatrixSlots::echo_lines(Some("td0")).is_empty());
     assert_eq!(s.get_strip(SpecialRows::TitleRow,StripSide::Left),"TrueOS § 12:34 Demo 0001020304050607…18191a1b1c1d1e1f");
-    assert_eq!(s.get_strip(SpecialRows::TitleRow,StripSide::Right),"VME tui env smp esc");
+    assert_eq!(s.get_strip(SpecialRows::TitleRow,StripSide::Right),"VME tui env smp esc stop");
     assert!(!key(&mut s,2,2,'\\t'));assert_eq!(s.mode,Mode::CMD);
-    for name in ["tui","env","smp","esc"] {assert!(s.parse_name(name));}
+    for name in ["tui","env","smp","esc","stop"] {assert!(s.parse_name(name));}
     assert!(!s.parse_name("Demo"));assert!(!s.parse_name("online"));
     assert!(s.parse_operator("§"));
     assert_eq!(s.get_strip(SpecialRows::TitleRow,StripSide::Left),"TrueOS § 12:34");
     assert!(key(&mut s,2,2,'\\t'));assert_eq!(s.mode,Mode::ADM);
     assert!(s.select_matrix_slot_name("td0"));
-    assert_eq!(s.get_strip(SpecialRows::TitleRow,StripSide::Right),"VME tui env smp esc");
+    assert_eq!(s.get_strip(SpecialRows::TitleRow,StripSide::Right),"VME tui env smp esc stop");
     assert_eq!(s.prompt.text,"");
 }
 #[test] fn aka_name_launches_once_in_cmd_with_selected_slot() {
@@ -242,7 +244,7 @@ fn type_text(shell:&mut Shell3,text:&str) {for ch in text.chars() {assert!(key(s
     a.select_matrix_slot_index(0);type_text(&mut a,"termdir");let second=a.active_matrix_slot_name().unwrap();
     assert_ne!(first,second);assert!(first.len()<=5 && second.len()<=5);
     let mut b=Shell3::new(100);b.select_matrix_slot_name(&first);
-    assert_eq!(b.get_strip(SpecialRows::TitleRow,StripSide::Right),"VME tui env smp esc");
+    assert_eq!(b.get_strip(SpecialRows::TitleRow,StripSide::Right),"VME tui env smp esc stop");
     assert!(b.row_for_render(SpecialRows::TitleRow).left[1].bold);
     assert!(!key(&mut b,2,2,'\\t'));assert_eq!(b.mode,Mode::HV);
     assert!(b.parse_operator(&format!("§{first}§")));b.parse_operator(&format!("§{first}"));
@@ -255,6 +257,28 @@ fn type_text(shell:&mut Shell3,text:&str) {for ch in text.chars() {assert!(key(s
     type_text(&mut s,"missing");assert_eq!(s.active_matrix_slot_name(),Some("old".into()));
     assert!(s.active_vmx_app().is_none());
     assert_eq!(MatrixSlots::echo_lines(Some("old")),vec!["apps: archive not found"]);
+}
+'''
+    source += '''
+#[test] fn vme_stop_and_operator_drop_share_cleanup_and_retire_other_views() {
+    service::LAUNCHES.lock().unwrap().clear();service::DROPS.lock().unwrap().clear();
+    MatrixSlots::set(&["plain"]);
+    let mut a=Shell3::new(100);a.set_mode(2);a.set_appdb_names(&["termdir".into()]);
+    type_text(&mut a,"termdir");let first=a.active_matrix_slot_name().unwrap();
+    let mut b=Shell3::new(100);b.select_matrix_slot_name(&first);
+    type_text(&mut a,"stop");
+    assert_eq!(*service::DROPS.lock().unwrap(),vec![first.clone()]);
+    assert_eq!(a.active_matrix_slot_name(),None);assert_eq!(a.prompt.text,"");
+    assert!(!MatrixSlots::slot_ids().contains(&first));assert!(MatrixSlots::echo_lines(None).is_empty());
+    assert!(matrix_slots().lock().vmx_apps.is_empty());
+    b.reconcile_matrix_selection();assert_eq!(b.active_matrix_slot_name(),None);
+    assert!(key(&mut b,2,2,'\\t'));
+    type_text(&mut a,"termdir");let second=a.active_matrix_slot_name().unwrap();
+    assert!(b.parse_operator(&format!("§{second}§")));
+    assert_eq!(*service::DROPS.lock().unwrap(),vec![first,second]);
+    a.reconcile_matrix_selection();assert_eq!(a.active_matrix_slot_name(),None);
+    assert!(b.parse_operator("§plain§"));assert!(b.parse_operator("§§"));
+    assert_eq!(service::DROPS.lock().unwrap().len(),2);
 }
 '''
     source += '''
@@ -338,6 +362,58 @@ fn enqueue_blueprint_request(t:MatrixTarget,archive:String,_:&str,bytes:Vec<u8>,
     let receipt=enqueue_blueprint_bytes_with_receipt(MatrixTarget {slot_id:String::new()},"termdir.bp".into(),b"archive bytes".to_vec(),vec![],hv::BlueprintInstanceRequest::default(),None,&["td0".into()]).unwrap();
     assert_eq!(receipt.slot,"td1");assert_eq!(receipt.app,"termdir");assert_eq!(receipt.sha256,[42;32]);
     assert_eq!(*RESERVED.lock().unwrap(),vec!["td1"]);assert_eq!(*QUEUED.lock().unwrap(),vec![receipt.slot]);
+}
+}
+'''
+    source += '''
+#[macro_export] macro_rules! log {($($args:tt)*)=>{};}
+mod launch_lifecycle {
+use super::*;
+use std::sync::atomic::{AtomicBool,AtomicUsize,Ordering};
+static EXPIRED:AtomicBool=AtomicBool::new(false);
+static STARTS:AtomicUsize=AtomicUsize::new(0);
+static STOPS:AtomicUsize=AtomicUsize::new(0);
+static BINDS:AtomicUsize=AtomicUsize::new(0);
+static UNBINDS:AtomicUsize=AtomicUsize::new(0);
+static CASE:AtomicUsize=AtomicUsize::new(0);
+struct Spawner;
+#[derive(Clone)] struct MatrixTarget;
+#[derive(Clone)] struct Instance;impl Instance {fn is_default(&self)->bool {false}}
+struct AppVmLaunchRequest {instance:Instance,archive:String,module_bytes:Vec<u8>,app_args:Vec<String>,launch_script:Option<String>,target:MatrixTarget}
+struct BlueprintLaunchPlan {console_surface:u8}
+fn app_label_for_archive(a:&str)->&str {a}
+fn matrix_target_interrupted(_: &MatrixTarget)->bool {EXPIRED.load(Ordering::Relaxed)}
+mod matrix {
+use super::*;
+pub fn bind_matrix_target_vm(_: &MatrixTarget,id:u8)->bool {assert_eq!(id,7);BINDS.fetch_add(1,Ordering::Relaxed);!matrix_target_interrupted(&MatrixTarget)}
+pub fn unbind_matrix_target_vm(_: &MatrixTarget,id:u8) {assert_eq!(id,7);UNBINDS.fetch_add(1,Ordering::Relaxed);}
+}
+mod hv {
+use super::*;
+pub fn default_app_instance_vm(_: &str)->Option<u8> {None}
+pub fn named_app_instance_vms(_: &str)->Vec<(u8,String)> {vec![]}
+pub fn first_free_vm_id()->Option<u8> {Some(7)}
+pub fn start_blueprint_app_vm(_:u8,_:&Spawner,_:String,_:Vec<u8>,_:Vec<String>,_:Option<String>,_:Instance,_:Option<MatrixTarget>,_:u8)->Result<(),()> {
+    // Ownership must be published before VM launch, without claiming input.
+    assert_eq!(BINDS.load(Ordering::Relaxed),1);STARTS.fetch_add(1,Ordering::Relaxed);
+    match CASE.load(Ordering::Relaxed) {2=>{EXPIRED.store(true,Ordering::Relaxed);Ok(())},3=>Err(()),_=>Ok(())}
+}
+pub fn stop(id:u8)->Result<bool,()> {assert_eq!(id,7);STOPS.fetch_add(1,Ordering::Relaxed);Ok(true)}
+}
+'''
+    source += extract.item('src/shell2/cmds/run.rs', 'start_blueprint_launch').replace('crate::hv::','hv::').replace('crate::shell2::','matrix::')
+    source += '''
+#[test] fn vm_ownership_precedes_launch_and_freed_target_cancels_start() {
+    let request=AppVmLaunchRequest {instance:Instance,archive:"termdir.bp".into(),module_bytes:vec![],app_args:vec![],launch_script:None,target:MatrixTarget};
+    for (case,expected_starts,expected_stops,expected_unbinds) in [(0,1,0,0),(1,0,0,0),(2,1,1,0),(3,1,0,1)] {
+        CASE.store(case,Ordering::Relaxed);EXPIRED.store(case==1,Ordering::Relaxed);
+        for counter in [&STARTS,&STOPS,&BINDS,&UNBINDS] {counter.store(0,Ordering::Relaxed);}
+        start_blueprint_launch(&Spawner,&request,BlueprintLaunchPlan {console_surface:1},&|_|{});
+        assert_eq!(BINDS.load(Ordering::Relaxed),1);
+        assert_eq!(STARTS.load(Ordering::Relaxed),expected_starts);
+        assert_eq!(STOPS.load(Ordering::Relaxed),expected_stops);
+        assert_eq!(UNBINDS.load(Ordering::Relaxed),expected_unbinds);
+    }
 }
 }
 '''

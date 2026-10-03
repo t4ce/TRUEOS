@@ -42,6 +42,8 @@ impl Drop for Admission {
 
 struct Thread {
     stack: context::Stack,
+    #[cfg(not(target_os = "linux"))]
+    address_space: Option<crate::hv::memory::CarrierAddressSpace>,
     child: usize,
     parent: usize,
     id: usize,
@@ -204,7 +206,16 @@ impl Future for ThreadTask {
         let parent_alloc = crate::allocators::replace_thread_context(thread.allocation);
         let parent_wls = crate::wls::replace_thread_context(thread.wls);
         slot.store(ptr, Ordering::Relaxed);
+        #[cfg(not(target_os = "linux"))]
+        let parent_cr3 = thread
+            .address_space
+            .as_ref()
+            .map(|space| unsafe { context::replace_address_space(space.cr3()) });
         unsafe { context::swap(&mut (*ptr).parent, &(*ptr).child) };
+        #[cfg(not(target_os = "linux"))]
+        if let Some(parent_cr3) = parent_cr3 {
+            unsafe { context::replace_address_space(parent_cr3) };
+        }
         slot.store(core::ptr::null_mut(), Ordering::Relaxed);
         thread.wls = crate::wls::replace_thread_context(parent_wls);
         thread.allocation = crate::allocators::replace_thread_context(parent_alloc);
@@ -262,8 +273,15 @@ fn submit(stack: usize, job: Job, vm_id: Option<u8>, id: usize) -> Result<(), i3
     // code. Guest closure execution/destruction uses its retained VM realm.
     let prepared = crate::allocators::with_host_alloc_domain_strong(|| {
         let stack = context::Stack::new(stack).ok_or(11)?;
+        #[cfg(not(target_os = "linux"))]
+        let address_space = vm_id
+            .map(|vm| unsafe { crate::hv::memory::CarrierAddressSpace::new(vm) })
+            .transpose()
+            .map_err(|_| 11)?;
         let thread = Box::new(Thread {
             stack,
+            #[cfg(not(target_os = "linux"))]
+            address_space,
             child: 0,
             parent: 0,
             id,

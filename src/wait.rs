@@ -49,6 +49,10 @@ pub fn spin_step() {
     if crate::r::threads::yield_now() {
         return;
     }
+    if crate::hv::current_hull_guest_context_vm_id().is_some() {
+        crate::hv::vmcall::guest_yield();
+        return;
+    }
     crate::time::poll();
     crate::runtime::poll_local_executor();
     core::hint::spin_loop();
@@ -61,7 +65,11 @@ pub fn spin_step() {
 /// (e.g. shell invoking `gfx` while the gfx SYSTEM mutex is held).
 #[inline]
 pub fn spin_step_no_exec() {
-    crate::time::poll();
+    // Hull-private timer state must never wake host executor pointers, and
+    // this critical-section path must not schedule while its lock is held.
+    if crate::hv::current_hull_guest_context_vm_id().is_none() {
+        crate::time::poll();
+    }
     core::hint::spin_loop();
 }
 
