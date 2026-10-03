@@ -42,6 +42,7 @@ pub enum RgbaColor {
     Blue = 0x4285F4FF,
     Green = 0x34A853FF,
     Orange = 0xFB8C00FF,
+    BlackTransparent = 0x00000080,
 }
 
 impl RgbaColor {

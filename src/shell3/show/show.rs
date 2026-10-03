@@ -18,7 +18,7 @@ use crate::ui4::{
 };
 
 const OWNER: WindowOwner = WindowOwner::SHELL3_SERVICE;
-const BACKGROUND: RgbaColor = RgbaColor::Gray;
+const BACKGROUND: RgbaColor = RgbaColor::BlackTransparent;
 const FOREGROUND: RgbaColor = RgbaColor::White;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
