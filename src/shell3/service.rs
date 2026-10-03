@@ -9,6 +9,7 @@ const TOPOLOGY_TASK_POOL_CAPACITY: usize = crate::percpu::CPU_SLOT_LIMIT;
 static SHELL_WORK_AVAILABLE: crate::wait::WaitQueue = crate::wait::WaitQueue::new();
 static SHELL3_KEYBOARD_EVENTS: spin::Mutex<VecDeque<crate::ui4::Ui4KeyboardEvent>> =
     spin::Mutex::new(VecDeque::new());
+static SHELL3_POINTER_EVENTS: spin::Mutex<VecDeque<crate::ui4::Ui4PointerEvent>> = spin::Mutex::new(VecDeque::new());
 static SHELL3_RESIZE_EVENTS: spin::Mutex<heapless::Deque<crate::ui4::Ui4ResizeEvent, 256>> =
     spin::Mutex::new(heapless::Deque::new());
 
@@ -79,18 +80,18 @@ static SHELL_OWNERSHIP: spin::Mutex<ShellOwnership> = spin::Mutex::new(ShellOwne
 static APPDB_NAMES: spin::Mutex<AppDbNames> = spin::Mutex::new(AppDbNames::new());
 
 /// Hand AppDB launches to the existing Matrix/VMX queue.
-pub(super) fn launch_appdb(name: &str, slot: &str) -> Result<QueuedBlueprint, alloc::string::String> {
+pub(super) fn launch_appdb(name: &str, slot: &str, frontend: super::tui::Frontend) -> Result<QueuedBlueprint, alloc::string::String> {
     let archive = alloc::format!("{name}.bp");
-    launch_archive(archive, slot)
+    launch_archive(archive, slot, frontend)
 }
 
-pub(super) fn launch_alias(name: &str, slot: &str) -> Result<QueuedBlueprint, alloc::string::String> {
+pub(super) fn launch_alias(name: &str, slot: &str, frontend: super::tui::Frontend) -> Result<QueuedBlueprint, alloc::string::String> {
     let archive = crate::r::restart::startup_alias_blueprint(name)
         .ok_or_else(|| alloc::string::String::from("apps: alias not configured"))?;
-    launch_archive(archive, slot)
+    launch_archive(archive, slot, frontend)
 }
 
-fn launch_archive(archive: alloc::string::String, slot: &str) -> Result<QueuedBlueprint, alloc::string::String> {
+fn launch_archive(archive: alloc::string::String, slot: &str, frontend: super::tui::Frontend) -> Result<QueuedBlueprint, alloc::string::String> {
     let bytes = crate::app_db::get(&archive)?
         .ok_or_else(|| alloc::string::String::from("apps: archive not found"))?;
     let target =
@@ -103,6 +104,7 @@ fn launch_archive(archive: alloc::string::String, slot: &str) -> Result<QueuedBl
         crate::hv::BlueprintInstanceRequest::default(),
         None,
         &super::MatrixSlots::slot_ids(),
+        Some(frontend),
     )
 }
 
@@ -519,6 +521,10 @@ async fn shell_worker_task(worker_id: usize, expected_slot: u32) {
                             keyboard_events.push_back(event);
                         }
                     }
+                    crate::ui4::Ui4InputEvent::Pointer(event) => {
+                        let mut events = SHELL3_POINTER_EVENTS.lock();
+                        if events.len() < 256 {events.push_back(event);}
+                    }
                     crate::ui4::Ui4InputEvent::Resize(event) => {
                         let mut events = SHELL3_RESIZE_EVENTS.lock();
                         if let Some(index) = events
@@ -551,7 +557,7 @@ async fn shell_worker_task(worker_id: usize, expected_slot: u32) {
             for index in 0..owned_shells.len() {
                 if let Some(shell) = owned_shells.get_mut(index) {
                     if shell.show_handles_window(event.window) {
-                        shell.show.handle_escape(&input);
+                        if !super::tui::active(shell.tui_frontend, shell.active_matrix_slot_name().as_deref()) { shell.show.handle_escape(&input); }
                         if shell.handle_keyboard(&event.event) {
                             if let Err(error) = shell.present().await {
                                 crate::log_warn!(target: "service";
@@ -561,6 +567,20 @@ async fn shell_worker_task(worker_id: usize, expected_slot: u32) {
                             }
                         }
                     }
+                }
+            }
+        }
+
+        loop {
+            let event = {
+                let mut events = SHELL3_POINTER_EVENTS.lock();
+                let index = events.iter().position(|event| owned_shells.shells.iter().any(|shell| shell.show_handles_window(event.window)));
+                index.and_then(|index| events.remove(index))
+            };
+            let Some(event) = event else {break};
+            for shell in &owned_shells.shells {
+                if shell.show_handles_window(event.window) {
+                    super::tui::pointer(shell.tui_frontend, shell.active_matrix_slot_name().as_deref(), &event, shell.show.font_scale());
                 }
             }
         }

@@ -1,0 +1,139 @@
+#!/usr/bin/env python3
+"""Compile the production Shell3 terminal bridge with host lifecycle adapters."""
+from pathlib import Path
+import re
+import subprocess
+import tempfile
+import test_clip_position3_uv_texture as extract
+ROOT = Path(__file__).resolve().parents[2]
+extract.ROOT = ROOT
+
+
+def main():
+    shell = (ROOT / 'src/shell3/shell3.rs').read_text()
+    source = '#![allow(dead_code)]\nextern crate alloc;\nuse alloc::{string::String,vec::Vec};\n'
+    source += extract.item('src/shell3/shell3.rs', 'RgbaColor')
+    source += re.search(r'^impl RgbaColor \{.*?^}', shell, re.M | re.S).group()
+    source += '''
+mod allocators {pub fn with_host_alloc_domain<T>(f:impl FnOnce()->T)->T {f()}}
+mod update {pub type RenderedLine=Vec<(char,Option<crate::RgbaColor>)>;}
+mod service {pub fn notify_work(){}}
+struct MatrixSlots;
+impl MatrixSlots {fn drop_slot(name:Option<&str>)->bool {if let Some(name)=name {shell2::free_name(name);}true}}
+mod r {pub mod keyboard {
+'''
+    keyboard = (ROOT/'src/r/keyboard.rs').read_text()
+    source += '\n'.join(re.findall(r'^pub const KEYBOARD_(?:KEY_\w+|OUTPUT_\w+):[^\n]+', keyboard, re.M))
+    source += extract.item('src/r/keyboard.rs', 'TrueosKeyboardOutputEvent')
+    source += '}}\nmod ui4 {type Ui4CursorSource=u8;type WindowId=u32;\n'
+    source += extract.item('src/ui4/input_broker.rs', 'Ui4PointerEvent')
+    source += '''
+}
+mod shell2 {
+use super::*;use alloc::sync::Arc;
+#[derive(Clone,Debug,PartialEq,Eq)] pub struct MatrixSlotLease {pub name:String,pub lifetime:u64}
+impl MatrixSlotLease {pub fn name(&self)->&str {&self.name}}
+#[derive(Clone)] pub struct MatrixTarget {pub lease:MatrixSlotLease}
+pub trait MatrixSlotAttachment:Send+Sync {fn on_matrix_slot_freed(&self,lease:&MatrixSlotLease);}
+static LIVE:std::sync::Mutex<Vec<MatrixSlotLease>>=std::sync::Mutex::new(Vec::new());
+static ATTACHMENTS:std::sync::Mutex<Vec<(MatrixSlotLease,Arc<dyn MatrixSlotAttachment>)>>=std::sync::Mutex::new(Vec::new());
+pub fn target(name:&str,lifetime:u64)->MatrixTarget {let lease=MatrixSlotLease {name:name.into(),lifetime};LIVE.lock().unwrap().push(lease.clone());MatrixTarget {lease}}
+pub fn matrix_target_slot_lease(target:&MatrixTarget)->MatrixSlotLease {target.lease.clone()}
+pub fn matrix_slot_is_live(lease:&MatrixSlotLease)->bool {LIVE.lock().unwrap().contains(lease)}
+pub fn attach_matrix_slot_resource(lease:&MatrixSlotLease,a:Arc<dyn MatrixSlotAttachment>)->Result<(),()> {if !matrix_slot_is_live(lease) {return Err(());}ATTACHMENTS.lock().unwrap().push((lease.clone(),a));Ok(())}
+pub fn free_name(name:&str) {
+    LIVE.lock().unwrap().retain(|lease|lease.name!=name);
+    let callbacks={let mut a=ATTACHMENTS.lock().unwrap();let mut callbacks=Vec::new();let mut i=0;while i<a.len() {if a[i].0.name==name {callbacks.push(a.remove(i));}else {i+=1;}}callbacks};
+    for (lease,a) in callbacks {a.on_matrix_slot_freed(&lease);}
+}
+}
+mod hv {
+use super::*;use std::sync::atomic::{AtomicU64,AtomicUsize,Ordering};
+#[derive(Clone,Copy)] pub struct BlueprintTerminalSurfaceSnapshot {pub generation:u64,pub cols:u32,pub rows:u32}
+pub static RUN:AtomicU64=AtomicU64::new(1);
+pub static REQUESTS:AtomicUsize=AtomicUsize::new(0);
+pub static INPUT:std::sync::Mutex<Vec<u8>>=std::sync::Mutex::new(Vec::new());
+static TARGETS:std::sync::Mutex<Vec<(u8,shell2::MatrixTarget)>>=std::sync::Mutex::new(Vec::new());
+pub fn bind(vm:u8,target:&shell2::MatrixTarget) {TARGETS.lock().unwrap().retain(|e|e.0!=vm);TARGETS.lock().unwrap().push((vm,target.clone()));crate::tui::bind_vm(target,vm);}
+pub fn vm_run_generation(_:u8)->Option<u64> {Some(RUN.load(Ordering::Relaxed))}
+pub fn blueprint_terminal_request_reentry(_:u8)->Result<(),&'static str> {REQUESTS.fetch_add(1,Ordering::Relaxed);Ok(())}
+pub fn blueprint_console_return_to_cli(vm:u8)->bool {let target=TARGETS.lock().unwrap().iter().find(|e|e.0==vm).map(|e|e.1.clone()).unwrap();crate::tui::release(&target,vm)==Some(true)}
+pub fn blueprint_console_submit_stdin_for_target(vm:u8,t:&shell2::MatrixTarget,run:u64,bytes:&[u8])->usize {blueprint_console_submit_stdin_for_lease(vm,&t.lease,run,bytes)}
+pub fn blueprint_console_submit_stdin_for_lease(_:u8,lease:&shell2::MatrixSlotLease,run:u64,bytes:&[u8])->usize {
+    if !shell2::matrix_slot_is_live(lease) || vm_run_generation(0)!=Some(run) {return 0;}
+    INPUT.lock().unwrap().extend_from_slice(bytes);bytes.len()
+}
+}
+'''
+    source += f'#[path="{ROOT}/src/shell3/tui.rs"] mod tui;\n'
+    source += '''
+fn frontend(cols:usize,rows:usize)->tui::Frontend {tui::Frontend {id:tui::new_frontend(),cols,rows}}
+fn session(name:&str,vm:u8,cols:usize,rows:usize)->(tui::Frontend,shell2::MatrixTarget) {
+    hv::RUN.store(1,std::sync::atomic::Ordering::Relaxed);
+    let f=frontend(cols,rows);let t=shell2::target(name,1);tui::attach(f,&t).unwrap();hv::bind(vm,&t);(f,t)
+}
+#[test] fn startup_claim_raw_frame_park_and_reentry_use_one_live_vm() {
+    let (f,t)=session("cycle",1,12,5);assert!(tui::supports(&t));assert!(tui::snapshot(f.id,Some("cycle")).is_none());
+    assert_eq!(tui::claim(&t,1),Some(true));
+    let bytes="\\x1b[?1049h\\x1b[?25l\\x1b[2J\\x1b[2;3H\\x1b[38;2;1;2;3m\\x1b[48;5;196m\\x1b[4mé⣿".as_bytes();
+    for chunk in bytes.chunks(1) {assert_eq!(tui::write(&t,1,chunk),Some(1));}
+    let rows=tui::snapshot(f.id,Some("cycle")).unwrap();assert_eq!(rows.len(),5);assert_eq!(rows[1][2].0,'é');assert_eq!(rows[1][3].0,'⣿');
+    assert_eq!(rows[1][2].1.unwrap().rgba(),[1,2,3,255]);assert_eq!(rows[1][2].1.unwrap().background(),Some([255,0,0,255]));assert!(rows[1][2].1.unwrap().underline());
+    let before=tui::revision(f.id);assert_eq!(tui::release(&t,1),Some(true));assert!(tui::revision(f.id)>before);
+    assert!(tui::snapshot(f.id,Some("cycle")).is_none());assert_eq!(tui::write(&t,1,b"late paint"),Some(0));
+    assert!(tui::supports(&t));tui::request(f,"cycle").unwrap();assert_eq!(tui::claim(&t,1),Some(true));
+    assert_eq!(tui::write(&t,1,b"\\x1b[?25lreentered"),Some(15));assert_eq!(tui::snapshot(f.id,Some("cycle")).unwrap()[0][0].0,'r');
+    shell2::free_name("cycle");assert!(!tui::supports(&t));assert!(tui::snapshot(f.id,Some("cycle")).is_none());
+}
+#[test] fn geometry_generation_changes_on_resize_but_not_on_output() {
+    let (f,t)=session("size",2,20,8);tui::claim(&t,2);let initial=tui::surface(&t).unwrap();
+    tui::write(&t,2,b"frame");assert_eq!(tui::surface(&t).unwrap().generation,initial.generation);
+    assert!(tui::select(tui::Frontend {id:f.id,cols:30,rows:12},Some("size")));
+    let resized=tui::surface(&t).unwrap();assert_eq!((resized.cols,resized.rows),(30,12));assert!(resized.generation>initial.generation);
+    hv::INPUT.lock().unwrap().clear();tui::write(&t,2,b"\\x1b[6n");assert!(!hv::INPUT.lock().unwrap().is_empty());
+    tui::detach(f.id);assert!(!tui::supports(&t));
+}
+#[test] fn exact_owner_run_and_slot_lifetime_prevent_cross_terminal_paint() {
+    let (f,t)=session("own",3,10,4);assert_eq!(tui::claim(&t,3),Some(true));
+    assert_eq!(tui::claim(&t,4),Some(false));assert_eq!(tui::write(&t,4,b"bad"),Some(0));assert_eq!(tui::release(&t,4),Some(false));
+    let other=frontend(10,4);assert!(tui::request(other,"own").is_err());assert!(tui::snapshot(other.id,Some("own")).is_none());
+    hv::RUN.store(2,std::sync::atomic::Ordering::Relaxed);assert_eq!(tui::write(&t,3,b"stale run"),Some(0));hv::RUN.store(1,std::sync::atomic::Ordering::Relaxed);
+    assert!(tui::select(f,None));assert!(tui::snapshot(f.id,Some("own")).is_none());
+    tui::request(other,"own").unwrap();assert_eq!(tui::claim(&t,3),Some(true));assert!(tui::snapshot(other.id,Some("own")).is_some());
+    shell2::free_name("own");let replacement=shell2::target("own",2);assert!(!tui::supports(&replacement));assert_eq!(tui::write(&t,3,b"freed"),None);
+}
+#[test] fn crossterm_keys_mouse_and_replies_reach_only_the_active_owner() {
+    use r::keyboard::*;
+    let (f,t)=session("keys",4,20,8);assert_eq!(tui::claim(&t,4),Some(true));hv::INPUT.lock().unwrap().clear();
+    let mut e=TrueosKeyboardOutputEvent::default();e.flags=KEYBOARD_OUTPUT_FLAG_PRESS;e.kind=KEYBOARD_OUTPUT_KIND_KEY;e.key_code=KEYBOARD_KEY_SPACE;e.codepoint=32;e.device_seq=7;
+    assert!(tui::keyboard(f.id,Some("keys"),&e));e.kind=KEYBOARD_OUTPUT_KIND_TEXT;assert!(tui::keyboard(f.id,Some("keys"),&e));assert_eq!(*hv::INPUT.lock().unwrap(),b" ");
+    e.codepoint='q' as u32;e.modifiers=1;tui::keyboard(f.id,Some("keys"),&e);assert_eq!(*hv::INPUT.lock().unwrap(),b" \\x11");
+    e.kind=KEYBOARD_OUTPUT_KIND_KEY;e.key_code=KEYBOARD_KEY_ARROW_UP;e.codepoint=0;e.modifiers=0;tui::keyboard(f.id,Some("keys"),&e);
+    assert!(hv::INPUT.lock().unwrap().ends_with(b"\\x1b[A"));
+    e.key_code=KEYBOARD_KEY_ESCAPE;tui::keyboard(f.id,Some("keys"),&e);
+    assert!(hv::INPUT.lock().unwrap().ends_with(b"\\x1b"));
+    assert!(tui::active(f.id,Some("keys"))); // The consumer decides whether Esc releases its lease.
+    hv::INPUT.lock().unwrap().clear();e.key_code=0;e.codepoint='a' as u32;
+    tui::keyboard(f.id,Some("keys"),&e);e.kind=KEYBOARD_OUTPUT_KIND_TEXT;tui::keyboard(f.id,Some("keys"),&e);
+    assert_eq!(*hv::INPUT.lock().unwrap(),b"a"); // Unmapped named events must not eat printable text.
+    tui::write(&t,4,b"\\x1b[?1000h\\x1b[?1006h");hv::INPUT.lock().unwrap().clear();
+    let pointer=ui4::Ui4PointerEvent {source:0,window:1,x:0,y:0,local_x:6,local_y:11,dx:0,dy:0,wheel:0,buttons_down:1,buttons_pressed:1,buttons_released:0,combo_id:0,vcursor:false};
+    tui::pointer(f.id,Some("keys"),&pointer,1);assert_eq!(*hv::INPUT.lock().unwrap(),b"\\x1b[<0;2;2M");
+    tui::release(&t,4);hv::INPUT.lock().unwrap().clear();assert!(!tui::keyboard(f.id,Some("keys"),&e));tui::pointer(f.id,Some("keys"),&pointer,1);assert!(hv::INPUT.lock().unwrap().is_empty());
+}
+'''
+    with tempfile.TemporaryDirectory(prefix='shell3-tui-') as directory:
+        path = Path(directory)
+        (path/'spin.rs').write_text('pub struct Mutex<T>(std::sync::Mutex<T>);impl<T> Mutex<T> {pub const fn new(t:T)->Self{Self(std::sync::Mutex::new(t))}pub fn lock(&self)->std::sync::MutexGuard<\'_,T>{self.0.lock().unwrap()}}')
+        for name, file in [('spin', path/'spin.rs'), ('trueos_terminal', ROOT/'crates/trueos-terminal/src/lib.rs'), ('microfont', ROOT/'vendor/microfont/src/lib.rs')]:
+            subprocess.run(['rustc','--edition=2024','--crate-type=rlib','--crate-name',name,str(file),'-o',str(path/f'lib{name}.rlib')],check=True)
+        (path/'test.rs').write_text(source)
+        args = ['rustc','--edition=2024','--test',str(path/'test.rs'),'-o',str(path/'tests')]
+        for name in ('spin','trueos_terminal','microfont'):
+            args += ['--extern',f'{name}={path}/lib{name}.rlib']
+        subprocess.run(args,check=True)
+        subprocess.run([str(path/'tests'),'--test-threads=1'],check=True)
+
+
+if __name__ == '__main__':
+    main()

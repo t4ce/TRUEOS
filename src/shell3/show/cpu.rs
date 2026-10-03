@@ -95,7 +95,7 @@ fn paint_segment(
     }
     let width = requested_width.min(view.width as usize - x);
     let height = glyph_height.min(view.height as usize - y);
-    let background = super::BACKGROUND.rgba();
+
     let pixels = unsafe { core::slice::from_raw_parts_mut(view.virt as *mut u8, view.byte_len) };
     for py in y..y + height {
         let row_offset = py.checked_mul(view.pitch as usize).ok_or(())?;
@@ -106,7 +106,8 @@ fn paint_segment(
             pixels
                 .get_mut(offset..offset + 4)
                 .ok_or(())?
-                .copy_from_slice(&background);
+                .copy_from_slice(&segment.colors.get((px-x) / glyph_width).copied().flatten()
+                    .and_then(super::super::RgbaColor::background).unwrap_or(super::BACKGROUND.rgba()));
         }
     }
 
@@ -117,7 +118,9 @@ fn paint_segment(
         .map_err(|_| ())?;
     for py in 0..height {
         for px in 0..width {
-            if glyphs[(py / scale) * mask_width + px / scale] == 0 {
+            let underline = segment.colors.get(px / glyph_width).copied().flatten()
+                .is_some_and(super::super::RgbaColor::underline) && py / scale == microfont::FHEIGHT - 1;
+            if glyphs[(py / scale) * mask_width + px / scale] == 0 && !underline {
                 continue;
             }
             let offset = (y + py) * view.pitch as usize + (x + px) * 4;

@@ -2,6 +2,7 @@ mod metafmtstr;
 mod names;
 pub mod net;
 mod tty;
+pub(crate) mod tui;
 mod update;
 
 pub mod service;
@@ -48,11 +49,21 @@ pub enum RgbaColor {
     Green = 0x34A853FF,
     Orange = 0xFB8C00FF,
     BlackTransparent = 0x00000080,
+    Terminal { foreground: [u8;4], background: [u8;4], underline: bool },
 }
 
 impl RgbaColor {
     pub const fn rgba(self) -> [u8; 4] {
-        let value = self as u32;
+        let value: u32 = match self {
+            Self::Terminal {foreground, ..} => return foreground,
+            Self::Gray => 0x808080FF,
+            Self::White => 0xFFFFFFFF,
+            Self::Pink => 0xFF69B4FF,
+            Self::Blue => 0x4285F4FF,
+            Self::Green => 0x34A853FF,
+            Self::Orange => 0xFB8C00FF,
+            Self::BlackTransparent => 0x00000080,
+        };
         [
             ((value >> 24) & 0xFF) as u8,
             ((value >> 16) & 0xFF) as u8,
@@ -60,6 +71,13 @@ impl RgbaColor {
             (value & 0xFF) as u8,
         ]
     }
+    pub const fn background(self) -> Option<[u8;4]> {
+        match self { Self::Terminal {background, ..} => Some(background), _ => None }
+    }
+    pub const fn underline(self) -> bool {
+        matches!(self, Self::Terminal {underline: true, ..})
+    }
+
 }
 
 #[repr(u8)]
@@ -453,6 +471,7 @@ impl PromptState {
 }
 
 pub struct Shell3 {
+    tui_frontend: u64,
     executor_slot: u32,
     columns: usize,
     rows_count: usize,
@@ -474,6 +493,7 @@ pub struct Shell3 {
 
 impl Drop for Shell3 {
     fn drop(&mut self) {
+        tui::detach(self.tui_frontend);
         service::release_shell_on_executor(self.executor_slot);
     }
 }
@@ -579,6 +599,7 @@ impl Shell3 {
         .with_matrix(&matrix_lines, matrix_generation);
 
         Self {
+            tui_frontend: tui::new_frontend(),
             executor_slot,
             columns,
             rows_count,
@@ -703,6 +724,11 @@ impl Shell3 {
         self.columns = columns.max(MIN_COLUMNS);
         self.rows_count = rows.max(MIN_ROWS);
         self.layout_generation = self.layout_generation.wrapping_add(1);
+        tui::select(self.tui_frontend(), self.active_matrix_slot_name().as_deref());
+    }
+
+    fn tui_frontend(&self) -> tui::Frontend {
+        tui::Frontend {id: self.tui_frontend, cols: self.columns, rows: self.rows_count}
     }
 
     pub fn get_size(&self) -> (usize, usize) {
@@ -752,6 +778,7 @@ impl Shell3 {
 
     pub fn select_matrix_slot_index(&mut self, index: usize) -> bool {
         if index == 0 {
+            if !tui::select(self.tui_frontend(), None) {return false;}
             self.active_matrix_slot = None;
             self.active_matrix_lifetime = None;
             self.matrix_selection_dirty = true;
@@ -764,14 +791,13 @@ impl Shell3 {
             return false;
         };
 
-        self.active_matrix_slot = Some(name.clone());
-        self.active_matrix_lifetime = slots
-            .lifetimes
-            .iter()
-            .find(|(id, _)| id == name)
-            .map(|(_, lifetime)| *lifetime);
-        self.matrix_selection_dirty = true;
+        let name = name.clone();
+        let lifetime = slots.lifetimes.iter().find(|(id,_)| id == &name).map(|(_,lifetime)| *lifetime);
         drop(slots);
+        if !tui::select(self.tui_frontend(), Some(&name)) {return false;}
+        self.active_matrix_slot = Some(name);
+        self.active_matrix_lifetime = lifetime;
+        self.matrix_selection_dirty = true;
         service::notify_work();
         true
     }
@@ -782,14 +808,12 @@ impl Shell3 {
             return false;
         }
 
-        self.active_matrix_slot = Some(name.to_string());
-        self.active_matrix_lifetime = slots
-            .lifetimes
-            .iter()
-            .find(|(id, _)| id == name)
-            .map(|(_, lifetime)| *lifetime);
-        self.matrix_selection_dirty = true;
+        let lifetime = slots.lifetimes.iter().find(|(id,_)| id == name).map(|(_,lifetime)| *lifetime);
         drop(slots);
+        if !tui::select(self.tui_frontend(), Some(name)) {return false;}
+        self.active_matrix_slot = Some(name.to_string());
+        self.active_matrix_lifetime = lifetime;
+        self.matrix_selection_dirty = true;
         service::notify_work();
         true
     }
@@ -840,6 +864,12 @@ impl Shell3 {
         event: &crate::r::keyboard::TrueosKeyboardOutputEvent,
     ) -> bool {
         use crate::r::keyboard::*;
+        if event.flags & KEYBOARD_OUTPUT_FLAG_PRESS == 0 { return false; }
+        let operator = event.kind == KEYBOARD_OUTPUT_KIND_TEXT && event.codepoint == OPERATOR as u32;
+        if operator && !tui::park(self.tui_frontend) { return false; }
+        if !operator {
+            if tui::keyboard(self.tui_frontend, self.active_matrix_slot_name().as_deref(), event) { return true; }
+        }
         if event.kind == KEYBOARD_OUTPUT_KIND_KEY {
             match event.key_code {
                 KEYBOARD_KEY_ENTER => return self.submit_operator_prompt(),
@@ -906,12 +936,18 @@ impl Shell3 {
             && self.aka_names.iter().any(|name| name == &text);
         if text == "stop" && self.active_vmx_app().is_some() {
             self.stop_active_vmx();
+        } else if text == "tui" && self.active_vmx_app().is_some() {
+            if let Err(error) = tui::request(self.tui_frontend(), self.active_matrix_slot.as_deref().unwrap_or("")) {
+                MatrixSlots::echo(self.active_matrix_slot.as_deref(), self.active_matrix_lifetime, error.into());
+            }
+        } else if text == "esc" && self.active_vmx_app().is_some() {
+            self.select_matrix_slot_index(0);
         } else if is_app || is_alias {
             let slot = self.active_matrix_slot.as_deref().unwrap_or("");
             let result = if is_app {
-                service::launch_appdb(&text, slot)
+                service::launch_appdb(&text, slot, self.tui_frontend())
             } else {
-                service::launch_alias(&text, slot)
+                service::launch_alias(&text, slot, self.tui_frontend())
             };
             match result {
                 Ok(app) => {
@@ -945,7 +981,9 @@ impl Shell3 {
 
     pub(super) fn matrix_output_needed(&self) -> bool {
         self.matrix_selection_dirty
-            || matrix_slots().lock().generation != self.update_baseline.matrix_generation()
+            || tui::revision(self.tui_frontend) != self.update_baseline.tui_revision()
+            || (!self.update_baseline.terminal_active()
+                && matrix_slots().lock().generation != self.update_baseline.matrix_generation())
     }
 
     pub fn set_prompt(&mut self, text: &str) {
@@ -1104,6 +1142,10 @@ impl Shell3 {
     }
 
     fn capture_update_snapshot(&self) -> update::Snapshot {
+        let revision = tui::revision(self.tui_frontend);
+        if let Some(lines) = tui::snapshot(self.tui_frontend, self.active_matrix_slot_name().as_deref()) {
+            return update::Snapshot::terminal((self.columns, self.rows_count), self.layout_generation, lines, revision);
+        }
         let title = self.row_for_render(SpecialRows::TitleRow);
         let status = self.row_for_render(SpecialRows::StatusRow);
         let promt = self.row_for_render(SpecialRows::PromtRow);
@@ -1123,6 +1165,7 @@ impl Shell3 {
             self.columns,
         )
         .with_matrix(&matrix_lines, matrix_generation)
+        .with_tui_revision(revision)
     }
 
     pub fn take_updates(&mut self) -> UpdateBatch {
@@ -1188,10 +1231,12 @@ impl Shell3 {
             self.reconcile_matrix_selection();
             return true;
         }
+        if !tui::park(self.tui_frontend) { return false; }
         let lifetime = MatrixSlots::ensure_named(name);
         self.active_matrix_slot = Some(name.to_string());
         self.active_matrix_lifetime = Some(lifetime);
         self.matrix_selection_dirty = true;
+        tui::select(self.tui_frontend(), Some(name));
         service::notify_work();
         true
     }

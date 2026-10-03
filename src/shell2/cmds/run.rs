@@ -1032,6 +1032,7 @@ pub(crate) fn enqueue_blueprint_bytes_with_instance_and_launch_script(
         instance,
         launch_script,
         &[],
+        None,
     )
     .map(|_| ())
 }
@@ -1052,6 +1053,7 @@ pub(crate) fn enqueue_blueprint_bytes_with_receipt(
     instance: crate::hv::BlueprintInstanceRequest,
     launch_script: Option<String>,
     occupied_slots: &[String],
+    frontend: Option<crate::shell3::tui::Frontend>,
 ) -> Result<QueuedBlueprint, String> {
     let required_readiness = crate::hv::blueprint::prebind_required_readiness(
         module_bytes.as_slice(),
@@ -1102,6 +1104,12 @@ pub(crate) fn enqueue_blueprint_bytes_with_receipt(
     set_matrix_target_app_identity(&target, app_label.as_str(), app_sha256);
     let line = alloc::format!("apps: queued {}", app_label);
     log_run_target_line(&target, line.as_str());
+    if let Some(frontend) = frontend {
+        if let Err(error) = crate::shell3::tui::attach(frontend, &target) {
+            release_matrix_target_vm_reservation(&target);
+            return Err(error);
+        }
+    }
     let receipt = QueuedBlueprint {
         slot: target.slot_id.as_str().into(),
         app: app_label_for_archive(&archive).into(),

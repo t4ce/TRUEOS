@@ -166,11 +166,10 @@ fn glyphs_for_update(
             for px in 0..width as usize {
                 let sx = px / scale as usize;
                 let sy = py / scale as usize;
-                if sx < bias {
-                    continue;
-                }
-                let bit = sy * microfont::FWIDTH + sx - bias;
-                if bit < 64 && bits & (1 << (63 - bit)) != 0 {
+                let bit = sy * microfont::FWIDTH + sx.saturating_sub(bias);
+                let underline = update.colors.get(column).copied().flatten()
+                    .is_some_and(super::super::RgbaColor::underline) && sy == microfont::FHEIGHT - 1;
+                if (sx >= bias && bit < 64 && bits & (1 << (63 - bit)) != 0) || underline {
                     mask[py * 2 + px / 8] |= 0x80 >> (px % 8);
                 }
             }
@@ -190,7 +189,8 @@ fn glyphs_for_update(
                     .unwrap_or(super::FOREGROUND)
                     .rgba(),
             ),
-            background: u32::from_le_bytes(super::BACKGROUND.rgba()),
+            background: u32::from_le_bytes(update.colors.get(column).copied().flatten()
+                .and_then(super::super::RgbaColor::background).unwrap_or(super::BACKGROUND.rgba())),
         });
     }
 }

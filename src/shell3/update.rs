@@ -38,6 +38,8 @@ pub(super) struct Snapshot {
     layout_generation: usize,
     rows: Vec<VisibleRow>,
     matrix_generation: u64,
+    tui_revision: u64,
+    terminal_active: bool,
 }
 
 impl Snapshot {
@@ -51,6 +53,8 @@ impl Snapshot {
             size,
             layout_generation,
             matrix_generation: 0,
+            tui_revision: 0,
+            terminal_active: false,
             rows: strips
                 .map(|(left, right)| VisibleRow {
                     rendered: fit_meta_strips(left, right, columns),
@@ -71,6 +75,13 @@ impl Snapshot {
         }
         self
     }
+
+    pub(super) fn terminal(size: (usize, usize), layout_generation: usize, lines: Vec<RenderedLine>, revision: u64) -> Self {
+        Self {size, layout_generation, rows: lines.into_iter().map(|rendered| VisibleRow {rendered}).collect(), matrix_generation: 0, tui_revision: revision, terminal_active: true}
+    }
+    pub(super) fn with_tui_revision(mut self, revision: u64) -> Self { self.tui_revision = revision; self }
+    pub(super) fn tui_revision(&self) -> u64 { self.tui_revision }
+    pub(super) fn terminal_active(&self) -> bool { self.terminal_active }
 
     pub(super) fn matrix_generation(&self) -> u64 {
         self.matrix_generation
@@ -152,12 +163,12 @@ pub(super) fn diff_rendered_lines(
             // Emit only occupied spans, never a blit per padded blank cell.
             let mut start = 0;
             while start < line.len() {
-                if line[start].0 == ' ' {
+                if line[start].0 == ' ' && line[start].1.and_then(RgbaColor::background).is_none() {
                     start += 1;
                     continue;
                 }
                 let mut end = start + 1;
-                while end < line.len() && line[end].0 != ' ' {
+                while end < line.len() && (line[end].0 != ' ' || line[end].1.and_then(RgbaColor::background).is_some()) {
                     end += 1;
                 }
                 if let Some(mut update) =

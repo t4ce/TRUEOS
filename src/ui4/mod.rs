@@ -111,7 +111,7 @@ pub(crate) use h264_encode_stream::{ui4_h264_encode_prepare_task, ui4_h264_encod
 #[cfg(feature = "trueos_h264_encode_stream")]
 pub(crate) use h264_encode_udp::ui4_h264_encode_udp_egress_task;
 pub(crate) use input_broker::{
-    Ui4ButtonPhase, Ui4InputEvent, Ui4KeyboardEvent, Ui4PanEvent, Ui4PanPhase, Ui4ResizeEvent,
+    Ui4ButtonPhase, Ui4InputEvent, Ui4KeyboardEvent, Ui4PointerEvent, Ui4PanEvent, Ui4PanPhase, Ui4ResizeEvent,
     Ui4VisualRect, focused_keyboard_state, reselect_window_for_cursor, select_window_for_cursor,
     show_context_menu, software_cursor_visuals, take_owner_input_events, ui4_input_service_task,
     window_input_routes,

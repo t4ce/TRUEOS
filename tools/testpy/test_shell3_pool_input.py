@@ -28,7 +28,9 @@ mod r {pub mod readiness {pub fn mask()->u32 {0}} pub mod keyboard {
     pub const KEYBOARD_KEY_TAB:u16=2;
     pub const KEYBOARD_KEY_ENTER:u16=3;
     pub const KEYBOARD_KEY_BACKSPACE:u16=1;
-    pub struct TrueosKeyboardOutputEvent { pub kind:u8,pub key_code:u16,pub codepoint:u32 }
+    pub const KEYBOARD_KEY_ESCAPE:u16=4;
+    pub const KEYBOARD_OUTPUT_FLAG_PRESS:u32=1;
+    pub struct TrueosKeyboardOutputEvent { pub kind:u8,pub key_code:u16,pub codepoint:u32,pub flags:u32 }
 } }
 const PROMPT_CURSOR:char='#';
 const OPERATOR:char='§';
@@ -47,6 +49,15 @@ mod spin {
 }
 use spin::Once;
 static MATRIX_SLOTS:Once<spin::Mutex<MatrixSlotsState>>=Once::new();
+mod tui {
+#[derive(Clone,Copy)] pub struct Frontend {pub id:u64,pub cols:usize,pub rows:usize}
+pub fn select(_:Frontend,_:Option<&str>)->bool {true}
+pub fn park(_:u64)->bool {true}
+pub fn keyboard(_:u64,_:Option<&str>,_:&crate::r::keyboard::TrueosKeyboardOutputEvent)->bool {false}
+pub static REQUESTS:std::sync::Mutex<Vec<String>>=std::sync::Mutex::new(Vec::new());
+pub fn request(_:Frontend,name:&str)->Result<(),&'static str>{REQUESTS.lock().unwrap().push(name.into());Ok(())}
+}
+mod shell3 {pub mod tui {pub use crate::tui::Frontend;pub fn attach<T>(_:Frontend,_:&T)->Result<(),String>{Ok(())}}}
 mod shell2 { pub mod cmds { pub mod run {
 #[derive(Clone,Debug)] pub struct QueuedBlueprint { pub slot:alloc::string::String,pub app:alloc::string::String,pub sha256:[u8;32] }
 } } }
@@ -64,8 +75,8 @@ fn launched(name:&str,slot:&str,app:&str)->Result<QueuedBlueprint,String> {
     launches.push((name.into(),slot.into()));
     Ok(QueuedBlueprint {slot:fresh,app:app.into(),sha256:core::array::from_fn(|i|i as u8)})
 }
-pub fn launch_appdb(name: &str, slot: &str)->Result<QueuedBlueprint,String>{launched(name,slot,name)}
-pub fn launch_alias(name: &str, slot: &str)->Result<QueuedBlueprint,String>{launched(&format!("alias:{name}"),slot,"termdir")}
+pub fn launch_appdb(name: &str, slot: &str,_:crate::tui::Frontend)->Result<QueuedBlueprint,String>{launched(name,slot,name)}
+pub fn launch_alias(name: &str, slot: &str,_:crate::tui::Frontend)->Result<QueuedBlueprint,String>{launched(&format!("alias:{name}"),slot,"termdir")}
 
 }
 """
@@ -78,11 +89,11 @@ impl Rows {fn row(&self,row:SpecialRows)->&Row {match row {SpecialRows::TitleRow
 #[derive(Clone)] struct RowStrips {left:Vec<MetaFmtStr>,right:Vec<MetaFmtStr>}
 impl RowStrips {fn new(left:&str,right:&str)->Self {Self {left:vec![MetaFmtStr::new(left)],right:vec![MetaFmtStr::new(right)]}}}
 
-struct Shell3 {prompt:PromptState,rows:Rows,columns:usize,mode:Mode,time:String,aka_names:Vec<String>,appdb_names:Vec<String>,active_matrix_slot:Option<String>,active_matrix_lifetime:Option<u64>,matrix_selection_dirty:bool}
+struct Shell3 {tui_frontend:u64,rows_count:usize,prompt:PromptState,rows:Rows,columns:usize,mode:Mode,time:String,aka_names:Vec<String>,appdb_names:Vec<String>,active_matrix_slot:Option<String>,active_matrix_lifetime:Option<u64>,matrix_selection_dirty:bool}
 impl Shell3 {
-fn new(columns:usize)->Self {Self {prompt:PromptState::new(),rows:Rows {status:Row {left:vec![],right:vec![]},promt:Row {left:vec![],right:vec![]},title:Row {left:vec![MetaFmtStr::new(title_left_text("12:34"))],right:mode_title_meta(Mode::HV,&[],&[])}},columns,mode:Mode::HV,time:"12:34".into(),aka_names:vec![],appdb_names:vec![],active_matrix_slot:None,active_matrix_lifetime:None,matrix_selection_dirty:false}}
+fn new(columns:usize)->Self {Self {tui_frontend:1,rows_count:25,prompt:PromptState::new(),rows:Rows {status:Row {left:vec![],right:vec![]},promt:Row {left:vec![],right:vec![]},title:Row {left:vec![MetaFmtStr::new(title_left_text("12:34"))],right:mode_title_meta(Mode::HV,&[],&[])}},columns,mode:Mode::HV,time:"12:34".into(),aka_names:vec![],appdb_names:vec![],active_matrix_slot:None,active_matrix_lifetime:None,matrix_selection_dirty:false}}
 '''
-    for name in ('stop_active_vmx','active_vmx_app','get_strip','row_for_render','handle_keyboard','refresh_prompt_strip','set_mode','get_mode','refresh_mode_title','echo_recognized_prompt','parse_name','set_appdb_names','select_matrix_slot_index','select_matrix_slot_name','active_matrix_slot_index','active_matrix_slot_name','reconcile_matrix_selection','submit_operator_prompt','parse_operator','set_prompt'):
+    for name in ('tui_frontend','stop_active_vmx','active_vmx_app','get_strip','row_for_render','handle_keyboard','refresh_prompt_strip','set_mode','get_mode','refresh_mode_title','echo_recognized_prompt','parse_name','set_appdb_names','select_matrix_slot_index','select_matrix_slot_name','active_matrix_slot_index','active_matrix_slot_name','reconcile_matrix_selection','submit_operator_prompt','parse_operator','set_prompt'):
         source += method(shell, name).replace("pub(super)","pub(crate)")
     source += '}\n'
     source += extract.item('src/shell3/service.rs', 'ShellOwnership')
@@ -131,7 +142,7 @@ fn refresh_appdb_names(){}
     o.shells_by_slot[2]=99; o.shells_by_slot[7]=0; o.pending_by_slot[11]=42;
     assert_eq!(o.preferred_slot(),Some(2));
 }
-fn key(shell:&mut Shell3,kind:u8,key_code:u16,ch:char)->bool {shell.handle_keyboard(&r::keyboard::TrueosKeyboardOutputEvent {kind,key_code,codepoint:ch as u32})}
+fn key(shell:&mut Shell3,kind:u8,key_code:u16,ch:char)->bool {shell.handle_keyboard(&r::keyboard::TrueosKeyboardOutputEvent {kind,key_code,codepoint:ch as u32,flags:1})}
 #[test] fn bounded_unicode_input_backspace_and_refill() {
     let mut s=Shell3::new(5);
     for ch in "aé😀z".chars() {assert!(key(&mut s,1,0,ch));}
@@ -282,6 +293,18 @@ fn type_text(shell:&mut Shell3,text:&str) {for ch in text.chars() {assert!(key(s
 }
 '''
     source += '''
+#[test] fn tui_requests_reentry_and_typed_esc_restores_default() {
+    service::LAUNCHES.lock().unwrap().clear();service::DROPS.lock().unwrap().clear();tui::REQUESTS.lock().unwrap().clear();
+    MatrixSlots::set(&[] as &[&str]);let mut s=Shell3::new(100);s.set_mode(2);s.set_appdb_names(&["termdir".into()]);
+    type_text(&mut s,"termdir");let name=s.active_matrix_slot_name().unwrap();
+    type_text(&mut s,"tui");assert_eq!(*tui::REQUESTS.lock().unwrap(),vec![name.clone()]);
+    assert!(service::DROPS.lock().unwrap().is_empty());assert_eq!(s.active_matrix_slot_name(),Some(name.clone()));
+    assert!(!key(&mut s,2,4,'\\0'));assert_eq!(s.active_matrix_slot_name(),Some(name.clone()));
+    type_text(&mut s,"esc");assert_eq!(s.active_matrix_slot_name(),None);
+    assert!(MatrixSlots::slot_ids().contains(&name));assert!(service::DROPS.lock().unwrap().is_empty());
+}
+'''
+    source += '''
 fn submit(shell:&mut Shell3,input:&str)->bool {shell.set_prompt("");type_text(shell,input);key(shell,2,3,'\\r')}
 #[test] fn operators_wait_for_enter_then_navigate_create_and_clear() {
     MatrixSlots::set(&["id","123"]);matrix_slots().lock().echoes.clear();
@@ -359,7 +382,7 @@ fn enqueue_blueprint_request(t:MatrixTarget,archive:String,_:&str,bytes:Vec<u8>,
     source += extract.item('src/shell2/cmds/run.rs', 'enqueue_blueprint_bytes_with_receipt')
     source += '''
 #[test] fn receipt_names_actual_fresh_reserved_slot_and_archive_hash() {
-    let receipt=enqueue_blueprint_bytes_with_receipt(MatrixTarget {slot_id:String::new()},"termdir.bp".into(),b"archive bytes".to_vec(),vec![],hv::BlueprintInstanceRequest::default(),None,&["td0".into()]).unwrap();
+    let receipt=enqueue_blueprint_bytes_with_receipt(MatrixTarget {slot_id:String::new()},"termdir.bp".into(),b"archive bytes".to_vec(),vec![],hv::BlueprintInstanceRequest::default(),None,&["td0".into()],None).unwrap();
     assert_eq!(receipt.slot,"td1");assert_eq!(receipt.app,"termdir");assert_eq!(receipt.sha256,[42;32]);
     assert_eq!(*RESERVED.lock().unwrap(),vec!["td1"]);assert_eq!(*QUEUED.lock().unwrap(),vec![receipt.slot]);
 }

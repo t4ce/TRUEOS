@@ -89,7 +89,7 @@ mod show {
                     let mut expanded = pixels.clone();
                     let view = FrameRgbaView { virt: pixels.as_mut_ptr(), byte_len: pixels.len(),
                         width, height, pitch: 512, phys: 4096, gpu: 4096 };
-                    let colors = (0..text.chars().count()).map(|i| Some(if i%2==0 { crate::RgbaColor::Pink } else { crate::RgbaColor::Green })).collect();
+                    let colors = (0..text.chars().count()).map(|i| Some(match i%3 {0=>crate::RgbaColor::Pink,1=>crate::RgbaColor::Green,_=>crate::RgbaColor::Terminal {foreground:[255,160,90,255],background:[20,45,60,255],underline:true}})).collect();
                     let update = crate::SegmentUpdate { row, side: crate::StripSide::Left,
                         offset: 1, remove: 8, text: text.into(), colors };
                     super::cpu::paint_segment(view, &update, scale).unwrap();

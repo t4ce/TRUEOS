@@ -5418,6 +5418,18 @@ pub(crate) async fn wait_blueprint_console_input(vm_id: u8, timeout_ms: u64) -> 
 }
 
 pub(crate) fn blueprint_console_submit_stdin(vm_id: u8, data: &[u8]) -> usize {
+    blueprint_console_submit_stdin_inner(vm_id, data, None)
+}
+
+pub(crate) fn blueprint_console_submit_stdin_for_target(vm_id: u8, target: &MatrixTarget, run: u64, data: &[u8]) -> usize {
+    blueprint_console_submit_stdin_for_lease(vm_id, &crate::shell2::matrix_target_slot_lease(target), run, data)
+}
+
+pub(crate) fn blueprint_console_submit_stdin_for_lease(vm_id: u8, lease: &crate::shell2::MatrixSlotLease, run: u64, data: &[u8]) -> usize {
+    blueprint_console_submit_stdin_inner(vm_id, data, Some((lease, run)))
+}
+
+fn blueprint_console_submit_stdin_inner(vm_id: u8, data: &[u8], expected: Option<(&crate::shell2::MatrixSlotLease, u64)>) -> usize {
     const MAX_CONSOLE_INPUT: usize = 64 * 1024;
     if data.is_empty() {
         return 0;
@@ -5431,6 +5443,12 @@ pub(crate) fn blueprint_console_submit_stdin(vm_id: u8, data: &[u8]) -> usize {
     };
     if !context.console_attached || context.terminal_lease.suppresses_terminal_output() {
         return 0;
+    }
+    if let Some((lease, run)) = expected {
+        if vm_run_generation(vm_id) != Some(run)
+            || !matches!(context.terminal_lease, BlueprintTerminalLeaseState::Active { .. })
+            || context.console_target.as_ref().map(crate::shell2::matrix_target_slot_lease).as_ref() != Some(lease)
+        { return 0; }
     }
     for &byte in data {
         if context.console_input.len() >= MAX_CONSOLE_INPUT {
